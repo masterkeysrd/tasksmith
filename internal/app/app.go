@@ -26,11 +26,8 @@ type Application struct {
 }
 
 func New(opts *flags.Flags, cancel context.CancelFunc) *Application {
-	ws := workspace.New(opts.CWD)
 	return &Application{
 		opts:   opts,
-		ws:     ws,
-		api:    api.NewService(ws),
 		cancel: cancel,
 	}
 }
@@ -39,6 +36,9 @@ func (app *Application) Run(ctx context.Context) error {
 	if err := app.InitializeLogs(); err != nil {
 		return fmt.Errorf("failed to initialize logs: %w", err)
 	}
+
+	app.ws = workspace.New(app.opts.CWD)
+	app.api = api.NewService(app.ws)
 
 	log.Info("Starting TaskSmith application",
 		log.String("cwd", app.opts.CWD),
