@@ -83,6 +83,11 @@ func Error(msg string, attrs ...Attr) {
 	defaultLogger.Error(msg, attrs...)
 }
 
+// ForComponent returns a new logger with the component attribute set using the default logger.
+func ForComponent(component string) Interface {
+	return defaultLogger.ForComponent(component)
+}
+
 // DefaultLogFilename returns a filename in the format log-YYYY-MM-DD.jsonl.
 func DefaultLogFilename() string {
 	return fmt.Sprintf("log-%s.jsonl", time.Now().Format("2006-01-02"))

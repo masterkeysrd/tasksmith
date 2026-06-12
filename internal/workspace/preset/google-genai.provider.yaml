@@ -1,0 +1,30 @@
+apiVersion: warp/v1alpha1
+kind: ModelProvider
+metadata:
+  name: google-genai
+spec:
+  type: google
+  endpoint: https://generativelanguage.googleapis.com/v1beta
+  defaultModel: gemini-3.1-pro-preview
+  auth:
+    type: env
+    env: GOOGLE_API_KEY
+  models:
+    - id: gemini-3-flash-preview
+      name: gemini-3-flash-preview
+      label: Gemini 3 Flash Preview
+      limits:
+        context: 1000000
+        output: 8192
+    - id: gemini-3.1-flash-lite-preview
+      name: gemini-3.1-flash-lite-preview
+      label: Gemini 3.1 Flash Lite Preview
+      limits:
+        context: 1000000
+        output: 8192
+    - id: gemini-3.1-pro-preview
+      name: gemini-3.1-pro-preview
+      label: Gemini 3.1 Pro Preview
+      limits:
+        context: 2000000
+        output: 8192

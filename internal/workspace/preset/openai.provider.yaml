@@ -1,0 +1,30 @@
+apiVersion: warp/v1alpha1
+kind: ModelProvider
+metadata:
+  name: openai
+spec:
+  type: openai
+  endpoint: https://api.openai.com/v1
+  defaultModel: gpt-5.5
+  auth:
+    type: env
+    env: OPENAI_API_KEY
+  models:
+    - id: gpt-5.4
+      name: gpt-5.4
+      label: GPT-5.4
+      limits:
+        context: 128000
+        output: 4096
+    - id: gpt-5.5
+      name: gpt-5.5
+      label: GPT-5.5
+      limits:
+        context: 128000
+        output: 4096
+    - id: gpt-5.3-codex
+      name: gpt-5.3-codex
+      label: GPT-5.3 Codex
+      limits:
+        context: 128000
+        output: 4096

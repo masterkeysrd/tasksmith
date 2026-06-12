@@ -1,0 +1,48 @@
+apiVersion: warp/v1alpha1
+kind: ModelProvider
+metadata:
+  name: ollama
+spec:
+  type: ollama
+  endpoint: http://localhost:11434
+  defaultModel: llama3.3
+  auth:
+    type: env
+    env: OLLAMA_HOST
+  models:
+    - id: qwen3.6
+      name: qwen3.6
+      label: Qwen 3.6
+      limits:
+        context: 32768
+        output: 4096
+    - id: gemma4
+      name: gemma4
+      label: Gemma 4
+      limits:
+        context: 8192
+        output: 4096
+    - id: mistral
+      name: mistral
+      label: Mistral
+      limits:
+        context: 32768
+        output: 4096
+    - id: llama
+      name: llama
+      label: Llama
+      limits:
+        context: 8192
+        output: 4096
+    - id: llama3.3
+      name: llama3.3
+      label: Llama 3.3
+      limits:
+        context: 128000
+        output: 4096
+    - id: phi4
+      name: phi4
+      label: Phi 4
+      limits:
+        context: 32768
+        output: 4096

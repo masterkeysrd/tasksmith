@@ -1,3 +1,4 @@
+// Package app provides the main application structure and lifecycle management for TaskSmith.
 package app
 
 import (
@@ -7,20 +8,27 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/masterkeysrd/tasksmith/internal/api"
 	"github.com/masterkeysrd/tasksmith/internal/app/flags"
 	"github.com/masterkeysrd/tasksmith/internal/core/fsutil"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
+	"github.com/masterkeysrd/tasksmith/internal/workspace"
 )
 
 type Application struct {
 	opts    *flags.Flags
+	ws      *workspace.Workspace
+	api     *api.Service
 	closers []func(ctx context.Context) error
 }
 
 func New(opts *flags.Flags) *Application {
+	ws := workspace.New(opts.CWD)
 	return &Application{
 		opts: opts,
+		ws:   ws,
+		api:  api.NewService(ws),
 	}
 }
 
@@ -33,7 +41,19 @@ func (app *Application) Run(ctx context.Context) error {
 		log.String("cwd", app.opts.CWD),
 		log.Any("log_level", app.opts.LogLevel))
 
+	if err := app.ws.Load(ctx); err != nil {
+		return fmt.Errorf("failed to load workspace: %w", err)
+	}
+
 	return nil
+}
+
+func (app *Application) Workspace() *workspace.Workspace {
+	return app.ws
+}
+
+func (app *Application) API() *api.Service {
+	return app.api
 }
 
 func (app *Application) InitializeLogs() error {
@@ -64,6 +84,7 @@ func (app *Application) InitializeLogs() error {
 	})
 
 	log.SetDefault(log.New(file, app.opts.LogLevel))
+
 	return nil
 }
 
