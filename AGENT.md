@@ -18,6 +18,7 @@ TaskSmith is a Go-based autonomous agent orchestrator and TUI application. This 
     - `colorscheme`: Management of color themes and palettes.
     - `highlight`: Global registry for highlight groups and style caching.
     - `styles`: Mapping of colorscheme values to Kite styles.
+    - `mode`: Reactive store for managing TUI input modes.
 
 ## 📜 Engineering Rules
 
