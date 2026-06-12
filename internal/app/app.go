@@ -13,6 +13,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/core/fsutil"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
+	"github.com/masterkeysrd/tasksmith/internal/tui"
 	"github.com/masterkeysrd/tasksmith/internal/workspace"
 )
 
@@ -50,7 +51,7 @@ func (app *Application) Run(ctx context.Context) error {
 	app.InitializeCommands()
 	app.InitializeKeymap()
 
-	return nil
+	return tui.Run(ctx, app.api)
 }
 
 func (app *Application) Workspace() *workspace.Workspace {

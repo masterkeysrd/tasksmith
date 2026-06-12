@@ -56,6 +56,9 @@ var defaultLogger Interface = New(os.Stdout, LevelInfo)
 // SetDefault sets the provided logger as the default logger.
 func SetDefault(l Interface) {
 	defaultLogger = l
+	if logger, ok := l.(*Logger); ok {
+		slog.SetDefault(logger.slog)
+	}
 }
 
 // Default returns the current default logger.
