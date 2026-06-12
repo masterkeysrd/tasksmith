@@ -1,0 +1,33 @@
+{
+	"name": "tasksmith-dark",
+	"palette": {
+		"Base":    "#1e1e2e",
+		"Mantle":  "#181825",
+		"Text":    "#c8d0e0",
+		"Subtext": "#a6adc8",
+		"Blue":    "#89b4fa",
+		"Yellow":  "#f9e2af",
+		"Red":     "#f38ba8",
+		"Green":   "#94e2d5",
+		"Surface": "#313244"
+	},
+	"groups": {
+		"Normal":       { "fg": "Text", "bg": "Base" },
+		"NormalNC":     { "fg": "Subtext", "bg": "Mantle" },
+		"Cursor":       { "fg": "Base", "bg": "Text" },
+		"Search":       { "fg": "Base", "bg": "Yellow" },
+		"Visual":       { "bg": "Surface" },
+		"Error":        { "fg": "Red", "bold": true },
+		"Warn":         { "fg": "Yellow" },
+		"Info":         { "fg": "Blue" },
+		"Hint":         { "fg": "Green" },
+		"Directory":    { "fg": "Blue" },
+		"StatusLine":   { "link": "Normal", "reverse": true },
+		"StatusLineNC": { "link": "NormalNC", "reverse": true },
+		"Title":        { "fg": "Blue", "bold": true },
+		"Pmenu":        { "fg": "Text", "bg": "Surface" },
+		"PmenuSel":     { "fg": "Base", "bg": "Blue" },
+		"FloatTitle":   { "fg": "Blue", "bold": true },
+		"WinTitle":     { "link": "Title" }
+	}
+}

@@ -1,0 +1,33 @@
+{
+	"name": "tasksmith-light",
+	"palette": {
+		"Base":    "#fafafa",
+		"Mantle":  "#f0f0f0",
+		"Text":    "#383a42",
+		"Subtext": "#696c77",
+		"Blue":    "#4078f2",
+		"Yellow":  "#c18401",
+		"Red":     "#e45649",
+		"Green":   "#0184bc",
+		"Surface": "#d0d0d0"
+	},
+	"groups": {
+		"Normal":       { "fg": "Text", "bg": "Base" },
+		"NormalNC":     { "fg": "Subtext", "bg": "Mantle" },
+		"Cursor":       { "fg": "Base", "bg": "Text" },
+		"Search":       { "fg": "Base", "bg": "Yellow" },
+		"Visual":       { "bg": "Surface" },
+		"Error":        { "fg": "Red", "bold": true },
+		"Warn":         { "fg": "Yellow" },
+		"Info":         { "fg": "Blue" },
+		"Hint":         { "fg": "Green" },
+		"Directory":    { "fg": "Blue" },
+		"StatusLine":   { "link": "Normal", "reverse": true },
+		"StatusLineNC": { "link": "NormalNC", "reverse": true },
+		"Title":        { "fg": "Blue", "bold": true },
+		"Pmenu":        { "fg": "Text", "bg": "Surface" },
+		"PmenuSel":     { "fg": "Base", "bg": "Blue" },
+		"FloatTitle":   { "fg": "Blue", "bold": true },
+		"WinTitle":     { "link": "Title" }
+	}
+}

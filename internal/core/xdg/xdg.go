@@ -111,3 +111,9 @@ func GetVar(varType VarType) string {
 	varCache[varType] = val
 	return val
 }
+
+// ClearCache clears the internal cache of XDG directory paths.
+// This is primarily used for testing purposes.
+func ClearCache() {
+	varCache = make(map[VarType]string)
+}
