@@ -7,17 +7,21 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/masterkeysrd/tasksmith/internal/app/flags"
 	"github.com/masterkeysrd/tasksmith/internal/core/fsutil"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
 )
 
 type Application struct {
+	opts    *flags.Flags
 	closers []func(ctx context.Context) error
 }
 
-func New() *Application {
-	return &Application{}
+func New(opts *flags.Flags) *Application {
+	return &Application{
+		opts: opts,
+	}
 }
 
 func (app *Application) Run(ctx context.Context) error {
@@ -25,7 +29,10 @@ func (app *Application) Run(ctx context.Context) error {
 		return fmt.Errorf("failed to initialize logs: %w", err)
 	}
 
-	log.Info("Starting TaskSmith application")
+	log.Info("Starting TaskSmith application",
+		log.String("cwd", app.opts.CWD),
+		log.Any("log_level", app.opts.LogLevel))
+
 	return nil
 }
 
@@ -56,7 +63,7 @@ func (app *Application) InitializeLogs() error {
 		return file.Close()
 	})
 
-	log.SetDefault(log.New(file))
+	log.SetDefault(log.New(file, app.opts.LogLevel))
 	return nil
 }
 
@@ -67,8 +74,8 @@ func (app *Application) AddCloser(closer func(ctx context.Context) error) {
 func (app *Application) Close(ctx context.Context) error {
 	var errs []error
 	for i := len(app.closers) - 1; i >= 0; i-- {
-		clodser := app.closers[i]
-		if err := clodser(ctx); err != nil {
+		closer := app.closers[i]
+		if err := closer(ctx); err != nil {
 			errs = append(errs, err)
 		}
 	}

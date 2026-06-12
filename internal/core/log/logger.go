@@ -9,6 +9,16 @@ import (
 	"time"
 )
 
+// Level represents the logging level.
+type Level slog.Level
+
+const (
+	LevelDebug Level = Level(slog.LevelDebug)
+	LevelInfo  Level = Level(slog.LevelInfo)
+	LevelWarn  Level = Level(slog.LevelWarn)
+	LevelError Level = Level(slog.LevelError)
+)
+
 // Interface defines the logging capabilities for the application.
 type Interface interface {
 	// Debug logs a message at the debug level.
@@ -30,21 +40,25 @@ type Logger struct {
 	component string
 }
 
-// New creates a new Logger instance writing to the provided writer.
-func New(w io.Writer) *Logger {
-	logger := slog.New(slog.NewJSONHandler(w, nil))
+// New creates a new Logger instance writing to the provided writer with the given level.
+func New(w io.Writer, level Level) *Logger {
+	opts := &slog.HandlerOptions{
+		Level: slog.Level(level),
+	}
+	logger := slog.New(slog.NewJSONHandler(w, opts))
 	return &Logger{
 		slog: logger,
 	}
 }
 
-var defaultLogger Interface = New(os.Stdout)
+var defaultLogger Interface = New(os.Stdout, LevelInfo)
 
 // SetDefault sets the provided logger as the default logger.
 func SetDefault(l Interface) {
 	defaultLogger = l
 }
 
+// Default returns the current default logger.
 func Default() Interface {
 	return defaultLogger
 }

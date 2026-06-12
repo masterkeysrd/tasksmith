@@ -10,17 +10,17 @@ import (
 
 func TestLogger(t *testing.T) {
 	var buf bytes.Buffer
-	logger := New(&buf)
+	logger := New(&buf, LevelInfo)
 
 	t.Run("Info", func(t *testing.T) {
 		buf.Reset()
 		logger.Info("test message", String("key", "value"))
-		
+
 		var out map[string]any
 		if err := json.Unmarshal(buf.Bytes(), &out); err != nil {
 			t.Fatalf("failed to unmarshal log output: %v", err)
 		}
-		
+
 		if out["msg"] != "test message" {
 			t.Errorf("expected msg 'test message', got %v", out["msg"])
 		}
@@ -32,16 +32,24 @@ func TestLogger(t *testing.T) {
 		}
 	})
 
+	t.Run("DebugHiddenAtInfoLevel", func(t *testing.T) {
+		buf.Reset()
+		logger.Debug("debug message")
+		if buf.Len() > 0 {
+			t.Errorf("expected no output for debug message at info level, got %s", buf.String())
+		}
+	})
+
 	t.Run("ForComponent", func(t *testing.T) {
 		buf.Reset()
 		compLogger := logger.ForComponent("test-comp")
 		compLogger.Info("comp message")
-		
+
 		var out map[string]any
 		if err := json.Unmarshal(buf.Bytes(), &out); err != nil {
 			t.Fatalf("failed to unmarshal log output: %v", err)
 		}
-		
+
 		if out["component"] != "test-comp" {
 			t.Errorf("expected component 'test-comp', got %v", out["component"])
 		}
@@ -49,7 +57,7 @@ func TestLogger(t *testing.T) {
 
 	t.Run("SetDefault", func(t *testing.T) {
 		var defaultBuf bytes.Buffer
-		newLogger := New(&defaultBuf)
+		newLogger := New(&defaultBuf, LevelInfo)
 		SetDefault(newLogger)
 		Info("default message")
 

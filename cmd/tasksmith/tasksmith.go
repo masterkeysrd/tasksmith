@@ -2,25 +2,28 @@ package main
 
 import (
 	"context"
-	"fmt"
-	"os"
 
 	"github.com/masterkeysrd/tasksmith/internal/app"
+	"github.com/masterkeysrd/tasksmith/internal/app/flags"
 )
 
 func main() {
+	opts, err := flags.Load()
+	if err != nil {
+		panic(err)
+	}
+
+	application := app.New(opts)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	app := app.New()
 	defer func() {
-		if err := app.Close(ctx); err != nil {
-			fmt.Fprintln(os.Stderr, "Error during application shutdown:", err)
+		if err := application.Close(ctx); err != nil {
+			panic(err)
 		}
 	}()
 
-	if err := app.Run(ctx); err != nil {
-		fmt.Fprintln(os.Stderr, "Error running application:", err)
-		os.Exit(1)
+	if err := application.Run(ctx); err != nil {
+		panic(err)
 	}
 }
