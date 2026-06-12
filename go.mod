@@ -2,7 +2,10 @@ module github.com/masterkeysrd/tasksmith
 
 go 1.26.4
 
-require github.com/masterkeysrd/warp v0.0.3-0.20260612015155-366b5238ee18
+require (
+	github.com/masterkeysrd/kite v0.0.2-0.20260612031527-743d8664906e
+	github.com/masterkeysrd/warp v0.0.3-0.20260612015155-366b5238ee18
+)
 
 require (
 	dario.cat/mergo v1.0.2 // indirect
@@ -19,6 +22,7 @@ require (
 	github.com/kevinburke/ssh_config v1.6.0 // indirect
 	github.com/klauspost/cpuid/v2 v2.3.0 // indirect
 	github.com/pjbgf/sha1cd v0.6.0 // indirect
+	github.com/rivo/uniseg v0.4.7 // indirect
 	github.com/sergi/go-diff v1.4.0 // indirect
 	github.com/skeema/knownhosts v1.3.2 // indirect
 	github.com/xanzy/ssh-agent v0.3.3 // indirect
