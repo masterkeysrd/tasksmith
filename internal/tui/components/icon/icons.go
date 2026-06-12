@@ -11,4 +11,8 @@ var (
 	Warning = kitex.Text("⚠")
 	// Error is an error icon (✖).
 	Error = kitex.Text("✖")
+	// ChevronRight is a right-pointing chevron (▶).
+	ChevronRight = kitex.Text("▶")
+	// ChevronDown is a down-pointing chevron (▼).
+	ChevronDown = kitex.Text("▼")
 )

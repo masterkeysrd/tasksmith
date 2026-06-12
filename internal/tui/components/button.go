@@ -11,6 +11,10 @@ import (
 type ButtonVariant string
 
 const (
+	// ButtonText is a button with no background or border.
+	ButtonText ButtonVariant = "text"
+	// ButtonSolid is a button with a solid background.
+	ButtonSolid ButtonVariant = "solid"
 	// ButtonOutline is a button with a border.
 	ButtonOutline ButtonVariant = "outline"
 )
