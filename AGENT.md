@@ -21,6 +21,7 @@ TaskSmith is a Go-based autonomous agent orchestrator and TUI application. This 
     - `styles`: Mapping of colorscheme values to Kite styles.
     - `mode`: Reactive store for managing TUI input modes (Normal, Insert, Command) using `kites`.
     - `command`: Global registry and execution mechanism for TUI commands.
+    - `keymap`: Mode-aware keybinding system with sequence resolution.
 
 ## 📜 Engineering Rules
 

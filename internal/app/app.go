@@ -48,6 +48,7 @@ func (app *Application) Run(ctx context.Context) error {
 	}
 
 	app.InitializeCommands()
+	app.InitializeKeymap()
 
 	return nil
 }
