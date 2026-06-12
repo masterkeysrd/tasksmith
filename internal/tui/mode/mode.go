@@ -48,6 +48,11 @@ func Set(m Mode) {
 	})
 }
 
+// Get returns the current mode.
+func Get() Mode {
+	return store.Get().current
+}
+
 // Use returns the current mode.
 // It is a Kite hook and must be called within a component's render function.
 func Use() Mode {

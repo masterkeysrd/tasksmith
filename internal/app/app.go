@@ -21,14 +21,16 @@ type Application struct {
 	ws      *workspace.Workspace
 	api     *api.Service
 	closers []func(ctx context.Context) error
+	cancel  context.CancelFunc
 }
 
-func New(opts *flags.Flags) *Application {
+func New(opts *flags.Flags, cancel context.CancelFunc) *Application {
 	ws := workspace.New(opts.CWD)
 	return &Application{
-		opts: opts,
-		ws:   ws,
-		api:  api.NewService(ws),
+		opts:   opts,
+		ws:     ws,
+		api:    api.NewService(ws),
+		cancel: cancel,
 	}
 }
 
@@ -44,6 +46,8 @@ func (app *Application) Run(ctx context.Context) error {
 	if err := app.ws.Load(ctx); err != nil {
 		return fmt.Errorf("failed to load workspace: %w", err)
 	}
+
+	app.InitializeCommands()
 
 	return nil
 }
@@ -101,4 +105,10 @@ func (app *Application) Close(ctx context.Context) error {
 		}
 	}
 	return errors.Join(errs...)
+}
+
+func (app *Application) Quit() {
+	if app.cancel != nil {
+		app.cancel()
+	}
 }
