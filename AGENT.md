@@ -39,12 +39,21 @@ TaskSmith is a Go-based autonomous agent orchestrator and TUI application. This 
 - **Data Fetching**: Use the `wind` package for reactive queries. Ensure `UseClient` is used to access the API service.
 - **Styling**:
     - Use `highlight.Provider` at the root to propagate themes.
-    - Use `highlight.Use(group)` in components to reactively consume styles.
-    - Define groups using `highlight.Set(name, opts...)`.
+    - Define highlight groups as package-level variables using `highlight.Set(name, opts...)` to ensure stable handles and avoid re-registration during renders.
+    - Pass `highlight.Group` into components via `Props` to allow callers to define the semantic category.
+    - Inside component render functions, use `highlight.Use(group)` to reactively consume the resolved style.
 - **Commands**:
     - Register global actions using `command.Register(id, fn)`.
     - Execute reactively in components using `command.UseCommand(id)`.
 - **Input Modes**: Use `mode.Use()` to react to the current input state and `mode.Set()` to transition.
+- **Component Conventions**:
+    - Use `kitex.FC` for standard components and `kitex.FCC` for components that accept children.
+    - Define a `Props` struct for every component (e.g., `PaperProps`).
+    - Naming: Use `HL` prefix for highlight groups (e.g., `HLNormal`) and `Style` suffix for style variables (e.g., `NormalStyle`).
+    - Declare `style.Style` variables at the package level instead of hardcoding them within component render functions to improve readability.
+    - Components should accept a `highlight.Group` for theme-aware styling.
+    - Components should accept a `style.Style` prop for layout and visual overrides, merged at the end of the render function.
+    - Favor pure style overrides over specific layout props (like padding/margin) to maintain API simplicity.
 
 ## 🛠 Tooling & Environment
 

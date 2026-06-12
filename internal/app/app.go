@@ -51,7 +51,10 @@ func (app *Application) Run(ctx context.Context) error {
 	app.InitializeCommands()
 	app.InitializeKeymap()
 
-	return tui.Run(ctx, app.api)
+	return tui.Run(ctx, tui.RunOptions{
+		Client:       app.api,
+		DevToolsAddr: app.opts.DevToolsAddr,
+	})
 }
 
 func (app *Application) Workspace() *workspace.Workspace {

@@ -12,8 +12,9 @@ import (
 
 // Flags defines the application configuration.
 type Flags struct {
-	CWD      string
-	LogLevel log.Level
+	CWD          string
+	LogLevel     log.Level
+	DevToolsAddr string
 }
 
 // Load parses command-line flags and returns the application options.
@@ -31,6 +32,7 @@ func Load() (*Flags, error) {
 	var logLevelStr string
 	flag.StringVar(&opts.CWD, "cwd", opts.CWD, "Current working directory")
 	flag.StringVar(&logLevelStr, "log-level", "info", "Log level (debug, info, warn, error)")
+	flag.StringVar(&opts.DevToolsAddr, "devtools", "", "DevTools server address (e.g., :8080)")
 	flag.Parse()
 
 	switch strings.ToLower(logLevelStr) {
