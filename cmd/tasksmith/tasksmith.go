@@ -13,9 +13,10 @@ func main() {
 		panic(err)
 	}
 
-	application := app.New(opts)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+
+	application := app.New(opts, cancel)
 
 	defer func() {
 		if err := application.Close(ctx); err != nil {
