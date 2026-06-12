@@ -114,10 +114,10 @@ var CardHeader = kitex.FC("CardHeader", func(props CardHeaderProps) kitex.Node {
 		kitex.If(props.Avatar != nil, func() kitex.Node { return props.Avatar }),
 		kitex.Box(kitex.BoxProps{Style: CardHeaderTextStyle},
 			kitex.If(props.Title != nil, func() kitex.Node {
-				return kitex.Span(kitex.BoxProps{Style: CardHeaderTitleStyle}, props.Title)
+				return kitex.Box(kitex.BoxProps{Style: CardHeaderTitleStyle}, props.Title)
 			}),
 			kitex.If(props.Subheader != nil, func() kitex.Node {
-				return kitex.Span(kitex.BoxProps{Style: CardHeaderSubheaderStyle}, props.Subheader)
+				return kitex.Box(kitex.BoxProps{Style: CardHeaderSubheaderStyle}, props.Subheader)
 			}),
 		),
 		kitex.If(props.Action != nil, func() kitex.Node { return props.Action }),

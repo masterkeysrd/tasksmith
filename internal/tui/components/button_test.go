@@ -11,10 +11,7 @@ func TestButton(t *testing.T) {
 	t.Run("Basic", func(t *testing.T) {
 		node := Button(ButtonProps{
 			Group: highlight.Set("Button"),
-			Children: []kitex.Node{
-				kitex.Text("Click me"),
-			},
-		})
+		}, kitex.Text("Click me"))
 		if node == nil {
 			t.Fatal("Button returned nil node")
 		}
@@ -25,10 +22,7 @@ func TestButton(t *testing.T) {
 			Group:     highlight.Set("Button"),
 			StartIcon: kitex.Text("["),
 			EndIcon:   kitex.Text("]"),
-			Children: []kitex.Node{
-				kitex.Text("Icons"),
-			},
-		})
+		}, kitex.Text("Icons"))
 		if node == nil {
 			t.Fatal("Button with icons returned nil node")
 		}

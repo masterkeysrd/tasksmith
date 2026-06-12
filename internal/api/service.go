@@ -71,10 +71,24 @@ func (s *Service) ListProviders(ctx context.Context, req ListProvidersRequest) (
 		if displayName == "" {
 			displayName = p.Metadata.Name
 		}
+
+		models := make([]Model, 0, len(p.Spec.Models))
+		for _, m := range p.Spec.Models {
+			models = append(models, Model{
+				ID:    m.ID,
+				Name:  m.Name,
+				Label: m.Label,
+			})
+		}
+
 		resp.Providers = append(resp.Providers, Provider{
-			Name:        p.Metadata.Name,
-			DisplayName: displayName,
-			Description: p.Spec.Type,
+			Name:         p.Metadata.Name,
+			DisplayName:  displayName,
+			Description:  p.Spec.Type,
+			DefaultModel: p.Spec.DefaultModel,
+			Endpoint:     p.Spec.Endpoint,
+			// AuthEnv:      p.Spec.Auth.Env,
+			Models: models,
 		})
 	}
 
@@ -93,10 +107,24 @@ func (s *Service) ListProvidersPresets(ctx context.Context, req ListProvidersPre
 		if displayName == "" {
 			displayName = p.Metadata.Name
 		}
+
+		models := make([]Model, 0, len(p.Spec.Models))
+		for _, m := range p.Spec.Models {
+			models = append(models, Model{
+				ID:    m.ID,
+				Name:  m.Name,
+				Label: m.Label,
+			})
+		}
+
 		resp.Providers = append(resp.Providers, Provider{
-			Name:        p.Metadata.Name,
-			DisplayName: displayName,
-			Description: p.Spec.Type,
+			Name:         p.Metadata.Name,
+			DisplayName:  displayName,
+			Description:  p.Spec.Type,
+			DefaultModel: p.Spec.DefaultModel,
+			Endpoint:     p.Spec.Endpoint,
+			// AuthEnv:      p.Spec.Auth.Env,
+			Models: models,
 		})
 	}
 

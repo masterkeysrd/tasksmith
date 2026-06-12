@@ -3,13 +3,15 @@
 	"palette": {
 		"Base":    "#1e1e2e",
 		"Mantle":  "#181825",
+		"Crust":   "#11111b",
 		"Text":    "#c8d0e0",
 		"Subtext": "#a6adc8",
 		"Blue":    "#89b4fa",
 		"Yellow":  "#f9e2af",
 		"Red":     "#f38ba8",
 		"Green":   "#94e2d5",
-		"Surface": "#313244"
+		"Surface": "#313244",
+		"Overlay": "#45475a"
 	},
 	"groups": {
 		"Normal":       { "fg": "Text", "bg": "Base" },
@@ -28,6 +30,16 @@
 		"Pmenu":        { "fg": "Text", "bg": "Surface" },
 		"PmenuSel":     { "fg": "Base", "bg": "Blue" },
 		"FloatTitle":   { "fg": "Blue", "bold": true },
-		"WinTitle":     { "link": "Title" }
+		"WinTitle":     { "link": "Title" },
+
+		"StatusLineTokensInput":  { "fg": "Blue" },
+		"StatusLineTokensOutput": { "fg": "Green" },
+		"StatusLineCost":         { "fg": "Red" },
+		"AppBgDarker":            { "bg": "Mantle" },
+		"AppBgDarkest":           { "bg": "Crust" },
+		"AppBgAlt":               { "bg": "Surface" },
+		"AppBgBlack":             { "bg": "Crust" },
+		"SetupStepPending":       { "fg": "Subtext" },
+		"DiagnosticWarn":         { "fg": "Yellow" }
 	}
 }

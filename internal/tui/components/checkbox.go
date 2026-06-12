@@ -103,7 +103,7 @@ var Checkbox = kitex.FC("Checkbox", func(props CheckboxProps) kitex.Node {
 			},
 		}),
 		kitex.If(props.Label != nil, func() kitex.Node {
-			return kitex.Span(kitex.BoxProps{
+			return kitex.Box(kitex.BoxProps{
 				Style: lStyle,
 			}, props.Label)
 		}),

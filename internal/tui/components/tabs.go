@@ -64,16 +64,30 @@ var Tabs = kitex.FCC("Tabs", func(props TabsProps) kitex.Node {
 	// Organize children into tab list and panels.
 	var tabs []kitex.Node
 	var panels []kitex.Node
-	for _, child := range props.Children {
-		if child == nil {
-			continue
+
+	var unpack func(n kitex.Node)
+	unpack = func(n kitex.Node) {
+		if n == nil {
+			return
 		}
-		switch child.TagName() {
+		tag := n.TagName()
+		switch tag {
 		case "Tab":
-			tabs = append(tabs, child)
+			tabs = append(tabs, n)
 		case "TabPanel":
-			panels = append(panels, child)
+			panels = append(panels, n)
+		case "Fragment", "Map", "If", "Else":
+			for _, c := range n.Children() {
+				unpack(c)
+			}
+		default:
+			// Treat other nodes (Box, Text, etc.) as part of the tab list.
+			tabs = append(tabs, n)
 		}
+	}
+
+	for _, child := range props.Children {
+		unpack(child)
 	}
 
 	return tabsCtx.Provider(state,
@@ -90,18 +104,18 @@ var Tabs = kitex.FCC("Tabs", func(props TabsProps) kitex.Node {
 type TabProps struct {
 	// Value is the unique identifier for this tab.
 	Value any
-	// Label is the text displayed on the tab.
-	Label kitex.Node
 	// Icon is an optional icon displayed before the label.
 	Icon kitex.Node
 	// Disabled indicates if the tab is interactive.
 	Disabled bool
 	// Style allows passing additional style overrides.
 	Style style.Style
+	// Children is the label content.
+	Children []kitex.Node
 }
 
 // Tab is a trigger component that switches the active tab in its parent Tabs.
-var Tab = kitex.FC("Tab", func(props TabProps) kitex.Node {
+var Tab = kitex.FCC("Tab", func(props TabProps) kitex.Node {
 	state := kitex.UseContext(tabsCtx)
 	if state == nil {
 		return kitex.Text("Tab must be used inside Tabs")
@@ -118,8 +132,7 @@ var Tab = kitex.FC("Tab", func(props TabProps) kitex.Node {
 		OnClick: func() {
 			state.setValue(props.Value)
 		},
-		Children: []kitex.Node{props.Label},
-	})
+	}, props.Children...)
 })
 
 // TabPanelProps defines the properties for a Tab's content area.

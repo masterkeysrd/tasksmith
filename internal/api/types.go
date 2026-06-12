@@ -33,9 +33,19 @@ type ListProvidersResponse struct {
 }
 
 type Provider struct {
-	Name        string `json:"name"`
-	DisplayName string `json:"display_name"`
-	Description string `json:"description"`
+	Name         string  `json:"name"`
+	DisplayName  string  `json:"display_name"`
+	Description  string  `json:"description"`
+	DefaultModel string  `json:"default_model"`
+	Endpoint     string  `json:"endpoint"`
+	AuthEnv      string  `json:"auth_env"`
+	Models       []Model `json:"models"`
+}
+
+type Model struct {
+	ID    string `json:"id"`
+	Name  string `json:"name"`
+	Label string `json:"label"`
 }
 
 type ListProvidersPresetsRequest struct {

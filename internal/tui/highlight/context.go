@@ -26,8 +26,31 @@ type Props struct {
 // Provider is a Kite component that resolves a colorscheme and provides
 // the resulting styles to its children.
 func Provider(props Props, children ...kitex.Node) kitex.Node {
+	// Create a copy of the theme to avoid mutating the original
+	cs := &colorscheme.Colorscheme{
+		Name:    props.Theme.Name,
+		Palette: props.Theme.Palette,
+		Groups:  make(map[string]colorscheme.Highlight),
+	}
+
+	// Copy original groups
+	for k, v := range props.Theme.Groups {
+		cs.Groups[k] = v
+	}
+
+	// Inject registered groups that aren't in the theme yet
+	mu.RLock()
+	for name, reg := range registry {
+		if _, ok := cs.Groups[name]; !ok && reg.link != "" {
+			cs.Groups[name] = colorscheme.Highlight{
+				Link: &reg.link,
+			}
+		}
+	}
+	mu.RUnlock()
+
 	// Resolve colorscheme and build styles
-	resolved := colorscheme.Resolve(props.Theme)
+	resolved := colorscheme.Resolve(cs)
 	built := styles.BuildFrom(resolved)
 	if built == nil {
 		built = make(styleMap)

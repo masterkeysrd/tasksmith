@@ -117,8 +117,7 @@ var AccordionSummary = kitex.FCC("AccordionSummary", func(props AccordionSummary
 			state.setExpanded(!state.expanded())
 		},
 		StartIcon: kitex.IfElse(state.expanded(), icon.ChevronDown, icon.ChevronRight),
-		Children:  props.Children,
-	})
+	}, props.Children...)
 })
 
 // AccordionDetailsProps defines the properties for the Accordion content.

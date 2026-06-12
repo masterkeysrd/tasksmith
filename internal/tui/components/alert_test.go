@@ -10,10 +10,7 @@ func TestAlert(t *testing.T) {
 	t.Run("Basic", func(t *testing.T) {
 		node := Alert(AlertProps{
 			Severity: AlertInfo,
-			Children: []kitex.Node{
-				kitex.Text("Something happened"),
-			},
-		})
+		}, kitex.Text("Something happened"))
 		if node == nil {
 			t.Fatal("Alert returned nil node")
 		}
@@ -25,10 +22,7 @@ func TestAlert(t *testing.T) {
 			node := Alert(AlertProps{
 				Severity: s,
 				ShowIcon: true,
-				Children: []kitex.Node{
-					kitex.Text("Status message"),
-				},
-			})
+			}, kitex.Text("Status message"))
 			if node == nil {
 				t.Errorf("Alert with severity %s returned nil node", s)
 			}
@@ -41,10 +35,7 @@ func TestAlert(t *testing.T) {
 			node := Alert(AlertProps{
 				Severity: AlertInfo,
 				Variant:  v,
-				Children: []kitex.Node{
-					kitex.Text("Variant test"),
-				},
-			})
+			}, kitex.Text("Variant test"))
 			if node == nil {
 				t.Errorf("Alert with variant %s returned nil node", v)
 			}
@@ -54,13 +45,8 @@ func TestAlert(t *testing.T) {
 	t.Run("WithAction", func(t *testing.T) {
 		node := Alert(AlertProps{
 			Severity: AlertError,
-			Action: Button(ButtonProps{
-				Children: []kitex.Node{kitex.Text("Retry")},
-			}),
-			Children: []kitex.Node{
-				kitex.Text("Failed to sync"),
-			},
-		})
+			Action:   Button(ButtonProps{}, kitex.Text("Retry")),
+		}, kitex.Text("Failed to sync"))
 		if node == nil {
 			t.Fatal("Alert with action returned nil node")
 		}
@@ -70,10 +56,7 @@ func TestAlert(t *testing.T) {
 		node := Alert(AlertProps{
 			Severity: AlertInfo,
 			Icon:     kitex.Text("?"),
-			Children: []kitex.Node{
-				kitex.Text("Custom icon test"),
-			},
-		})
+		}, kitex.Text("Custom icon test"))
 		if node == nil {
 			t.Fatal("Alert with custom icon returned nil node")
 		}

@@ -28,6 +28,7 @@ var (
 	ButtonBaseStyle = style.S().
 			Display(style.DisplayFlex).
 			AlignItems(style.AlignCenter).
+			Border(false).
 			Gap(1)
 )
 
@@ -59,7 +60,7 @@ type ButtonProps struct {
 	StartIcon kitex.Node
 	// EndIcon is an optional icon to display after the text.
 	EndIcon kitex.Node
-	// Children is the list of child nodes (usually just text).
+	// Children are the contents of the button, typically a Text node.
 	Children []kitex.Node
 }
 
@@ -109,7 +110,7 @@ var Button = kitex.FCC("Button", func(props ButtonProps) kitex.Node {
 		content = append(content, props.StartIcon)
 	}
 	if len(props.Children) > 0 {
-		content = append(content, kitex.Span(kitex.BoxProps{}, props.Children...))
+		content = append(content, props.Children...)
 	}
 	if props.EndIcon != nil {
 		content = append(content, props.EndIcon)
