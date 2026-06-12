@@ -24,3 +24,15 @@ func UseListProviders() wind.Result[*api.ListProvidersResponse] {
 	client := tuiapi.UseClient()
 	return wind.Use(api.ListProvidersRequest{}, promise.WrapWithProps(client.ListProviders))
 }
+
+// UseListProvidersPresets returns a query result for the list of model provider presets.
+func UseListProvidersPresets() wind.Result[*api.ListProvidersPresetsResponse] {
+	client := tuiapi.UseClient()
+	return wind.Use(api.ListProvidersPresetsRequest{}, promise.WrapWithProps(client.ListProvidersPresets))
+}
+
+// UseListToolsPresets returns a query result for the list of tool presets.
+func UseListToolsPresets() wind.Result[*api.ListToolsPresetsResponse] {
+	client := tuiapi.UseClient()
+	return wind.Use(api.ListToolsPresetsRequest{}, promise.WrapWithProps(client.ListToolsPresets))
+}

@@ -13,6 +13,8 @@ type Client interface {
 	ListProjects(ctx context.Context, req api.ListProjectsRequest) (*api.ListProjectsResponse, error)
 	ListAgents(ctx context.Context, req api.ListAgentsRequest) (*api.ListAgentsResponse, error)
 	ListProviders(ctx context.Context, req api.ListProvidersRequest) (*api.ListProvidersResponse, error)
+	ListProvidersPresets(ctx context.Context, req api.ListProvidersPresetsRequest) (*api.ListProvidersPresetsResponse, error)
+	ListToolsPresets(ctx context.Context, req api.ListToolsPresetsRequest) (*api.ListToolsPresetsResponse, error)
 }
 
 var clientCtx = kitex.CreateContext[Client](nil)

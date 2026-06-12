@@ -13,6 +13,8 @@ TaskSmith is a Go-based autonomous agent orchestrator and TUI application. This 
     - `xdg`: XDG Base Directory Specification compliance.
     - `fsutil`: File system helpers.
 - **`internal/workspace`**: Management of agents, projects, and providers using the `warp` library.
+- **`internal/agent`**: Builtin agent resources and tools.
+    - `tools`: Definitions and discovery for builtin tool presets.
 - **`internal/tui`**: Terminal User Interface built with the `kite` framework.
     - `api`: TUI-specific API client context.
     - `queries`: Reactive data hooks using `wind`.
