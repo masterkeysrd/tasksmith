@@ -62,14 +62,14 @@ type AlertProps struct {
 var (
 	// AlertBaseStyle is the base style for the alert container.
 	AlertBaseStyle = style.S().
-		Display(style.DisplayFlex).
-		AlignItems(style.AlignCenter).
-		Padding(0, 1).
-		Gap(1)
+			Display(style.DisplayFlex).
+			AlignItems(style.AlignCenter).
+			Padding(0, 1).
+			Gap(1)
 
 	// AlertContentStyle is the style for the content wrapper.
 	AlertContentStyle = style.S().
-		Flex(1)
+				Flex(1)
 )
 
 // Alert is a component for displaying important messages to the user.

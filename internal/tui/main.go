@@ -24,9 +24,9 @@ type RunOptions struct {
 
 var (
 	RootStyle = style.S().
-			Display(style.DisplayFlex).
-			Width(style.Percent(100)).
-			Height(style.Percent(100))
+		Display(style.DisplayFlex).
+		Width(style.Percent(100)).
+		Height(style.Percent(100))
 )
 
 func Run(ctx context.Context, opts RunOptions) error {

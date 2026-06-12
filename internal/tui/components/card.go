@@ -90,18 +90,18 @@ type CardHeaderProps struct {
 
 var (
 	CardHeaderStyle = style.S().
-		Display(style.DisplayFlex).
-		AlignItems(style.AlignCenter).
-		Padding(1, 1).
-		Gap(1)
+			Display(style.DisplayFlex).
+			AlignItems(style.AlignCenter).
+			Padding(1, 1).
+			Gap(1)
 
 	CardHeaderTextStyle = style.S().
-		Flex(1).
-		Display(style.DisplayFlex).
-		FlexDirection(style.FlexColumn)
+				Flex(1).
+				Display(style.DisplayFlex).
+				FlexDirection(style.FlexColumn)
 
 	CardHeaderTitleStyle = style.S().
-		Bold(true)
+				Bold(true)
 
 	CardHeaderSubheaderStyle = style.S() // TODO: Add dimming style?
 )
