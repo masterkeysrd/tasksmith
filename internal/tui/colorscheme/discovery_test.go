@@ -15,13 +15,13 @@ func TestDiscovery(t *testing.T) {
 	origConfig := os.Getenv("XDG_CONFIG_HOME")
 	defer os.Setenv("HOME", origHome)
 	defer os.Setenv("XDG_CONFIG_HOME", origConfig)
-	
+
 	tempDir, _ := os.MkdirTemp("", "tasksmith-config-*")
 	defer os.RemoveAll(tempDir)
-	
+
 	os.Setenv("HOME", tempDir)
 	os.Unsetenv("XDG_CONFIG_HOME")
-	
+
 	// Reset XDG cache to pick up new HOME
 	xdg.ClearCache()
 

@@ -35,7 +35,7 @@ func TestHighlight(t *testing.T) {
 	t.Run("StyleAndReload", func(t *testing.T) {
 		Reset()
 		g := Set("Normal")
-		
+
 		// Initial style is zero
 		if !reflect.DeepEqual(Style(g), style.S()) {
 			t.Errorf("Initial style not empty: %+v", Style(g))
