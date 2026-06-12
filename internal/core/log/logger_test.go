@@ -3,7 +3,9 @@ package log
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"testing"
+	"time"
 )
 
 func TestLogger(t *testing.T) {
@@ -47,7 +49,8 @@ func TestLogger(t *testing.T) {
 
 	t.Run("SetDefault", func(t *testing.T) {
 		var defaultBuf bytes.Buffer
-		SetDefault(&defaultBuf)
+		newLogger := New(&defaultBuf)
+		SetDefault(newLogger)
 		Info("default message")
 
 		var out map[string]any
@@ -57,6 +60,14 @@ func TestLogger(t *testing.T) {
 
 		if out["msg"] != "default message" {
 			t.Errorf("expected msg 'default message', got %v", out["msg"])
+		}
+	})
+
+	t.Run("DefaultLogFilename", func(t *testing.T) {
+		expected := fmt.Sprintf("log-%s.jsonl", time.Now().Format("2006-01-02"))
+		got := DefaultLogFilename()
+		if got != expected {
+			t.Errorf("expected %s, got %s", expected, got)
 		}
 	})
 }

@@ -2,9 +2,11 @@ package log
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
+	"time"
 )
 
 // Interface defines the logging capabilities for the application.
@@ -36,11 +38,15 @@ func New(w io.Writer) *Logger {
 	}
 }
 
-var defaultLogger = New(os.Stdout)
+var defaultLogger Interface = New(os.Stdout)
 
-// SetDefault updates the default logger to write to the provided writer.
-func SetDefault(w io.Writer) {
-	defaultLogger = New(w)
+// SetDefault sets the provided logger as the default logger.
+func SetDefault(l Interface) {
+	defaultLogger = l
+}
+
+func Default() Interface {
+	return defaultLogger
 }
 
 // Debug logs a message at the debug level using the default logger.
@@ -61,6 +67,11 @@ func Warn(msg string, attrs ...Attr) {
 // Error logs a message at the error level using the default logger.
 func Error(msg string, attrs ...Attr) {
 	defaultLogger.Error(msg, attrs...)
+}
+
+// DefaultLogFilename returns a filename in the format log-YYYY-MM-DD.jsonl.
+func DefaultLogFilename() string {
+	return fmt.Sprintf("log-%s.jsonl", time.Now().Format("2006-01-02"))
 }
 
 // Debug logs a message at the debug level.
