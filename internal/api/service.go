@@ -10,6 +10,8 @@ type Workspace interface {
 	Projects() []*warp.Project
 	Agents() []*warp.Agent
 	Providers() []*warp.ModelProvider
+	ProvidersPresets() []*warp.ModelProvider
+	ToolsPresets() []*warp.Tool
 }
 
 // Service provides methods to interact with the workspace through API types.
@@ -73,6 +75,47 @@ func (s *Service) ListProviders(ctx context.Context, req ListProvidersRequest) (
 			Name:        p.Metadata.Name,
 			DisplayName: displayName,
 			Description: p.Spec.Type,
+		})
+	}
+
+	return resp, nil
+}
+
+// ListProvidersPresets returns a list of model provider presets in the workspace.
+func (s *Service) ListProvidersPresets(ctx context.Context, req ListProvidersPresetsRequest) (*ListProvidersPresetsResponse, error) {
+	providers := s.ws.ProvidersPresets()
+	resp := &ListProvidersPresetsResponse{
+		Providers: make([]Provider, 0, len(providers)),
+	}
+
+	for _, p := range providers {
+		displayName := p.Metadata.DisplayName
+		if displayName == "" {
+			displayName = p.Metadata.Name
+		}
+		resp.Providers = append(resp.Providers, Provider{
+			Name:        p.Metadata.Name,
+			DisplayName: displayName,
+			Description: p.Spec.Type,
+		})
+	}
+
+	return resp, nil
+}
+
+// ListToolsPresets returns a list of tool presets in the workspace.
+func (s *Service) ListToolsPresets(ctx context.Context, req ListToolsPresetsRequest) (*ListToolsPresetsResponse, error) {
+	tools := s.ws.ToolsPresets()
+	resp := &ListToolsPresetsResponse{
+		Tools: make([]Tool, 0, len(tools)),
+	}
+
+	for _, t := range tools {
+		resp.Tools = append(resp.Tools, Tool{
+			Name:        t.Metadata.Name,
+			Description: t.Metadata.Description,
+			Category:    t.Metadata.Labels["category"],
+			Labels:      t.Metadata.Labels,
 		})
 	}
 

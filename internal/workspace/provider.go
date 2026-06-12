@@ -58,30 +58,5 @@ func (p *systemProvider) LoadResources() (*warp.ResourceSet, error) {
 		return nil, err
 	}
 
-	// // Inject dynamic tools from Loom container
-	// container := tools.NewSystemContainer()
-	// for _, def := range container.Definitions() {
-	// 	var params map[string]any
-	// 	if def.InputSchema != nil {
-	// 		data, err := json.Marshal(def.InputSchema)
-	// 		if err == nil {
-	// 			_ = json.Unmarshal(data, &params)
-	// 		}
-	// 	}
-	//
-	// 	tool := &warp.Tool{
-	// 		BaseResource: warp.BaseResource{
-	// 			Kind:       warp.KindTool,
-	// 			APIVersion: warp.APIVersion,
-	// 			Metadata:   warp.Metadata{Name: def.Name},
-	// 		},
-	// 		Spec: warp.ToolSpec{
-	// 			Description: def.Description,
-	// 			Parameters:  params,
-	// 		},
-	// 	}
-	// 	resources.Tools[def.Name] = tool
-	// }
-
 	return resources, nil
 }

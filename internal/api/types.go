@@ -37,3 +37,24 @@ type Provider struct {
 	DisplayName string `json:"display_name"`
 	Description string `json:"description"`
 }
+
+type ListProvidersPresetsRequest struct {
+}
+
+type ListProvidersPresetsResponse struct {
+	Providers []Provider `json:"providers"`
+}
+
+type ListToolsPresetsRequest struct {
+}
+
+type ListToolsPresetsResponse struct {
+	Tools []Tool `json:"tools"`
+}
+
+type Tool struct {
+	Name        string            `json:"name"`
+	Description string            `json:"description"`
+	Category    string            `json:"category"`
+	Labels      map[string]string `json:"labels"`
+}

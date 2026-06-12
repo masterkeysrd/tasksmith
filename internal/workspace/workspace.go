@@ -2,11 +2,18 @@ package workspace
 
 import (
 	"context"
+	"embed"
 	"fmt"
+	"io/fs"
+	"strings"
 
+	"github.com/masterkeysrd/tasksmith/internal/agent/tools"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	"github.com/masterkeysrd/warp"
 )
+
+//go:embed all:preset/*.yaml
+var presetFS embed.FS
 
 type Workspace struct {
 	cwd      string
@@ -85,6 +92,44 @@ func (w *Workspace) Providers() []*warp.ModelProvider {
 		}
 	}
 	return providers
+}
+
+func (w *Workspace) ProvidersPresets() []*warp.ModelProvider {
+	var providers []*warp.ModelProvider
+	err := fs.WalkDir(presetFS, ".", func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		if !strings.HasSuffix(path, ".yaml") {
+			return nil
+		}
+		data, err := presetFS.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		result, err := warp.Parse(path, string(data))
+		if err != nil {
+			return err
+		}
+		if p, ok := result.Resource.(*warp.ModelProvider); ok {
+			providers = append(providers, p)
+		}
+		return nil
+	})
+	if err != nil {
+		w.logger.Error("Failed to load provider presets", log.Err(err))
+	}
+	return providers
+}
+
+func (w *Workspace) ToolsPresets() []*warp.Tool {
+	toolsList, err := tools.Resources()
+	if err != nil {
+		w.logger.Error("Failed to load tool presets", log.Err(err))
+		return nil
+	}
+
+	return toolsList
 }
 
 func (w *Workspace) resolver() warp.Resolver {
