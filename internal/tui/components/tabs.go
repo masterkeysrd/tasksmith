@@ -6,7 +6,7 @@ import (
 )
 
 type tabsState struct {
-	value    func() any
+	value    any
 	setValue func(any)
 }
 
@@ -18,12 +18,23 @@ type TabsProps struct {
 	Value any
 	// DefaultValue is the initial active tab value (uncontrolled).
 	DefaultValue any
+
+	// Separator is an optional node rendered between the tab list and
+	// the panels (e.g., a divider).
+	Separator kitex.Node
+
 	// OnChange is triggered when the active tab changes.
 	OnChange func(any)
+
 	// Style allows passing additional style overrides.
 	Style style.Style
+
 	// Children should contain Tab and TabPanel components.
 	Children []kitex.Node
+}
+
+type TabStyles struct {
+	TabList style.Style
 }
 
 var (
@@ -34,17 +45,17 @@ var (
 	TabListStyle = style.S().
 			Display(style.DisplayFlex).
 			FlexDirection(style.FlexRow).
-			Gap(2).
-			BorderBottom(true, style.BorderSingle)
+			AlignItems(style.AlignCenter).
+			Gap(2)
 )
 
 // Tabs is a top-level component that manages a set of Tab and TabPanel nodes.
 var Tabs = kitex.FCC("Tabs", func(props TabsProps) kitex.Node {
 	active, setActive := kitex.UseState(props.DefaultValue)
 
-	current := active
+	current := active()
 	if props.Value != nil {
-		current = func() any { return props.Value }
+		current = props.Value
 	}
 
 	toggle := func(val any) {
@@ -61,9 +72,12 @@ var Tabs = kitex.FCC("Tabs", func(props TabsProps) kitex.Node {
 		setValue: toggle,
 	}
 
-	// Organize children into tab list and panels.
-	var tabs []kitex.Node
-	var panels []kitex.Node
+	factor := 1
+	if props.Separator != nil {
+		factor = 2
+	}
+	tabs := make([]kitex.Node, 0, len(props.Children)*factor)
+	panels := make([]kitex.Node, 0, len(props.Children))
 
 	var unpack func(n kitex.Node)
 	unpack = func(n kitex.Node) {
@@ -74,6 +88,9 @@ var Tabs = kitex.FCC("Tabs", func(props TabsProps) kitex.Node {
 		switch tag {
 		case "Tab":
 			tabs = append(tabs, n)
+			if props.Separator != nil {
+				tabs = append(tabs, props.Separator)
+			}
 		case "TabPanel":
 			panels = append(panels, n)
 		case "Fragment", "Map", "If", "Else":
@@ -90,11 +107,20 @@ var Tabs = kitex.FCC("Tabs", func(props TabsProps) kitex.Node {
 		unpack(child)
 	}
 
+	// Remove trailing separator if it exists.
+	if props.Separator != nil && len(tabs) > 0 && tabs[len(tabs)-1] == props.Separator {
+		tabs = tabs[:len(tabs)-1]
+	}
+
 	return tabsCtx.Provider(state,
 		kitex.Box(kitex.BoxProps{
 			Style: TabsBaseStyle.Merge(props.Style),
 		},
-			kitex.Box(kitex.BoxProps{Style: TabListStyle}, tabs...),
+			kitex.Box(kitex.BoxProps{
+				Style: TabListStyle,
+			},
+				tabs...,
+			),
 			kitex.Fragment(panels...),
 		),
 	)
@@ -121,8 +147,7 @@ var Tab = kitex.FCC("Tab", func(props TabProps) kitex.Node {
 		return kitex.Text("Tab must be used inside Tabs")
 	}
 
-	isActive := state.value() == props.Value
-
+	isActive := state.value == props.Value
 	return Button(ButtonProps{
 		Variant:   ButtonText,
 		Active:    isActive,
@@ -145,6 +170,13 @@ type TabPanelProps struct {
 	Children []kitex.Node
 }
 
+var (
+	TabPanelStyle = style.S().
+		Display(style.DisplayFlex).
+		FlexDirection(style.FlexColumn).
+		Flex(1)
+)
+
 // TabPanel is a content container that only renders its children when its Value matches the active Tab.
 var TabPanel = kitex.FCC("TabPanel", func(props TabPanelProps) kitex.Node {
 	state := kitex.UseContext(tabsCtx)
@@ -152,9 +184,9 @@ var TabPanel = kitex.FCC("TabPanel", func(props TabPanelProps) kitex.Node {
 		return kitex.Text("TabPanel must be used inside Tabs")
 	}
 
-	return kitex.If(state.value() == props.Value, func() kitex.Node {
+	return kitex.If(state.value == props.Value, func() kitex.Node {
 		return kitex.Box(kitex.BoxProps{
-			Style: style.S().Padding(1).Merge(props.Style),
+			Style: TabPanelStyle.Merge(props.Style),
 		}, props.Children...)
 	})
 })

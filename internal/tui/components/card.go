@@ -39,23 +39,28 @@ var (
 // It organizes its children (Header, Content, Actions) into a consistent layout.
 var Card = kitex.FCC("Card", func(props CardProps) kitex.Node {
 	var header, content, actions kitex.Node
-	for _, child := range props.Children {
-		if child == nil {
-			continue
+
+	var unpack func(n kitex.Node)
+	unpack = func(n kitex.Node) {
+		if n == nil {
+			return
 		}
-		switch child.TagName() {
+		switch n.TagName() {
 		case "CardHeader":
-			header = child
+			header = n
 		case "CardContent":
-			content = child
+			content = n
 		case "CardActions":
-			actions = child
-		default:
-			// If it's not a recognized sub-component, we can either ignore it
-			// or treat it as general content. For now, let's just allow recognized ones
-			// to ensure a strict layout, or wrap others into content?
-			// Modern cards usually expect specific sub-components.
+			actions = n
+		case "Fragment", "Map", "If", "Else":
+			for _, c := range n.Children() {
+				unpack(c)
+			}
 		}
+	}
+
+	for _, child := range props.Children {
+		unpack(child)
 	}
 
 	paperVariant := PaperDefault
@@ -92,7 +97,7 @@ var (
 	CardHeaderStyle = style.S().
 			Display(style.DisplayFlex).
 			AlignItems(style.AlignCenter).
-			Padding(1, 1).
+			PaddingHorizontal(1).
 			Gap(1)
 
 	CardHeaderTextStyle = style.S().
@@ -134,7 +139,8 @@ type CardContentProps struct {
 
 var (
 	CardContentStyle = style.S().
-		Padding(0, 1, 1, 1) // Top 0 because header has padding
+		Display(style.DisplayFlex).
+		FlexDirection(style.FlexColumn)
 )
 
 // CardContent is the primary area for a card's content.
@@ -156,13 +162,32 @@ var (
 	CardActionsStyle = style.S().
 		Display(style.DisplayFlex).
 		AlignItems(style.AlignCenter).
-		Padding(0, 1, 1, 1).
 		Gap(1)
 )
 
 // CardActions provides a horizontal row for buttons or other interactive elements.
 var CardActions = kitex.FCC("CardActions", func(props CardActionsProps) kitex.Node {
+	var children []kitex.Node
+	var unpack func(n kitex.Node)
+	unpack = func(n kitex.Node) {
+		if n == nil {
+			return
+		}
+		switch n.TagName() {
+		case "Fragment", "Map", "If", "Else":
+			for _, c := range n.Children() {
+				unpack(c)
+			}
+		default:
+			children = append(children, n)
+		}
+	}
+
+	for _, child := range props.Children {
+		unpack(child)
+	}
+
 	return kitex.Box(kitex.BoxProps{
 		Style: CardActionsStyle.Merge(props.Style),
-	}, props.Children...)
+	}, children...)
 })

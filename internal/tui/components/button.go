@@ -29,6 +29,7 @@ var (
 			Display(style.DisplayFlex).
 			AlignItems(style.AlignCenter).
 			Border(false).
+			Padding(0).
 			Gap(1)
 )
 
