@@ -24,7 +24,7 @@ var (
 			Width(style.Percent(100)).
 			MaxWidth(style.Cells(120)).
 			Height(style.Percent(100)).
-			MaxHeight(style.Cells(28))
+			MaxHeight(style.Cells(32))
 
 	ContentStyle = style.S().
 			Flex(1).
@@ -39,8 +39,9 @@ var (
 	FooterStyle = style.S().
 			Display(style.DisplayFlex).
 			FlexWrap(style.FlexWrapOn).
-			AlignItems(style.AlignCenter).
+			AlignItems(style.AlignEnd).
 			JustifyContent(style.JustifyBetween).
+			Padding(1).
 			Gap(2)
 
 	FooterButtonGroupStyle = style.S().
@@ -49,14 +50,28 @@ var (
 
 	TabStyle = style.S().
 			Flex(1).
-			JustifyContent(style.JustifyCenter)
+			AlignItems(style.AlignCenter).
+			TextAlign(style.TextAlignCenter).
+			JustifyContent(style.JustifyCenter).
+			Padding(1)
+
+	StepContentStyle = style.S().
+				Display(style.DisplayFlex).
+				Flex(1).
+				FlexDirection(style.FlexColumn).
+				JustifyContent(style.JustifyBetween).
+				Gap(1)
+
+	TabPanelStyle = style.S().
+			Flex(1).
+			Padding(1)
 
 	CloseButtonStyle = style.S().
 				Padding(0)
 )
 
 var View = kitex.SimpleFC("SetupView", func() kitex.Node {
-	currentStep, setCurrentStep := kitex.UseState(1)
+	currentStep, setCurrentStep := kitex.UseState(2)
 
 	return kitex.Box(kitex.BoxProps{
 		Style: RootStyle,
@@ -117,8 +132,9 @@ func Content(props ContentProps) kitex.Node {
 		Style: ContentStyle,
 	},
 		components.Tabs(components.TabsProps{
-			Value: props.Step,
-			Style: style.S().Flex(1),
+			Value:     props.Step,
+			Style:     style.S().Flex(1),
+			Separator: kitex.Text("|"),
 		},
 
 			Tab(TabProps{
@@ -144,17 +160,26 @@ func Content(props ContentProps) kitex.Node {
 
 			components.TabPanel(components.TabPanelProps{
 				Value: 1,
-				Style: style.S().Flex(1),
+				Style: TabPanelStyle,
 			},
 				WelcomeStep(),
 			),
-			components.TabPanel(components.TabPanelProps{Value: 2},
-				kitex.Text("Content for Step 2"),
+			components.TabPanel(components.TabPanelProps{
+				Value: 2,
+				Style: TabPanelStyle,
+			},
+				ProviderStep(),
 			),
-			components.TabPanel(components.TabPanelProps{Value: 3},
+			components.TabPanel(components.TabPanelProps{
+				Value: 3,
+				Style: TabPanelStyle,
+			},
 				kitex.Text("Content for Step 3"),
 			),
-			components.TabPanel(components.TabPanelProps{Value: 4},
+			components.TabPanel(components.TabPanelProps{
+				Value: 4,
+				Style: TabPanelStyle,
+			},
 				kitex.Text("Content for Step 4"),
 			),
 		),
@@ -172,60 +197,58 @@ type FooterProps struct {
 }
 
 func Footer(props FooterProps) kitex.Node {
-	return components.CardActions(components.CardActionsProps{},
+	return components.CardActions(components.CardActionsProps{
+		Style: FooterStyle,
+	},
 		kitex.Box(kitex.BoxProps{
-			Style: FooterStyle,
+			Style: FooterButtonGroupStyle,
 		},
-			kitex.Box(kitex.BoxProps{
-				Style: FooterButtonGroupStyle,
+			kitex.If(props.Step > 1, func() kitex.Node {
+				return components.Button(components.ButtonProps{
+					OnClick: props.OnBack,
+				},
+					kitex.Text("[ < BACK ]"),
+				)
+			}),
+		),
+		kitex.Box(kitex.BoxProps{
+			Style: FooterButtonGroupStyle,
+		},
+			kitex.If(props.Step < 4, func() kitex.Node {
+				return components.Button(components.ButtonProps{
+					OnClick: props.OnNext,
+				},
+					kitex.Text("[ CONTINUE SETUP > ]"),
+				)
+			}),
+			kitex.If(props.Step == 4, func() kitex.Node {
+				return components.Button(components.ButtonProps{
+					OnClick: props.OnConfirm,
+				},
+					kitex.Text("[ CONFIRM & TRUST WORKSPACE ]"),
+				)
+			}),
+		),
+		kitex.Box(kitex.BoxProps{
+			Style: FooterButtonGroupStyle,
+		},
+			components.Button(components.ButtonProps{
+				Variant: components.ButtonText,
+				OnClick: props.OnSkip,
 			},
-				kitex.If(props.Step > 1, func() kitex.Node {
-					return components.Button(components.ButtonProps{
-						OnClick: props.OnBack,
-					},
-						kitex.Text("[ < BACK ]"),
-					)
-				}),
+				kitex.Text("[ SKIP SETUP ]"),
 			),
-			kitex.Box(kitex.BoxProps{
-				Style: FooterButtonGroupStyle,
+			components.Button(components.ButtonProps{
+				Variant: components.ButtonText,
+				OnClick: props.OnDecline,
 			},
-				kitex.If(props.Step < 4, func() kitex.Node {
-					return components.Button(components.ButtonProps{
-						OnClick: props.OnNext,
-					},
-						kitex.Text("[ CONTINUE SETUP > ]"),
-					)
-				}),
-				kitex.If(props.Step == 4, func() kitex.Node {
-					return components.Button(components.ButtonProps{
-						OnClick: props.OnConfirm,
-					},
-						kitex.Text("[ CONFIRM & TRUST WORKSPACE ]"),
-					)
-				}),
+				kitex.Text("[ DECLINE ]"),
 			),
-			kitex.Box(kitex.BoxProps{
-				Style: FooterButtonGroupStyle,
+			components.Button(components.ButtonProps{
+				Variant: components.ButtonText,
+				OnClick: props.OnExit,
 			},
-				components.Button(components.ButtonProps{
-					Variant: components.ButtonText,
-					OnClick: props.OnSkip,
-				},
-					kitex.Text("[ SKIP SETUP ]"),
-				),
-				components.Button(components.ButtonProps{
-					Variant: components.ButtonText,
-					OnClick: props.OnDecline,
-				},
-					kitex.Text("[ DECLINE ]"),
-				),
-				components.Button(components.ButtonProps{
-					Variant: components.ButtonText,
-					OnClick: props.OnExit,
-				},
-					kitex.Text("[ EXIT ]"),
-				),
+				kitex.Text("[ EXIT ]"),
 			),
 		),
 	)
@@ -250,28 +273,5 @@ func Tab(props TabProps) kitex.Node {
 		Style: TabStyle,
 	},
 		kitex.Text(fmt.Sprintf("%s %s", status, props.Label)),
-	)
-}
-
-func WelcomeStep() kitex.Node {
-	return kitex.Box(kitex.BoxProps{
-		Style: style.S().
-			Display(style.DisplayFlex).
-			Flex(1).
-			FlexDirection(style.FlexColumn).
-			JustifyContent(style.JustifyBetween).
-			AlignItems(style.AlignCenter).
-			Gap(1),
-	},
-		kitex.Box(kitex.BoxProps{},
-			kitex.Text("WELCOME TO TASKSMITH CONSOLE!"),
-			kitex.Text("This setup wizard will guide you through the initial configuration of Tasksmith Console. You can skip any step and configure it later in the settings."),
-		),
-		components.Alert(components.AlertProps{
-			Severity: components.AlertInfo,
-			Style:    style.S().TextAlign(style.TextAlignCenter),
-		},
-			kitex.Text("[!] Skipping this wizard allows you to run in ad-hoc mode without writing enviroment configurations on disk."),
-		),
 	)
 }
