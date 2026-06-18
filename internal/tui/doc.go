@@ -6,15 +6,13 @@
 //
 // The root of the interface is the App component, which wraps the entire application
 // in necessary context providers for API access (via the api package) and
-// semantic styling (via the highlight package).
+// theme management (via the theme package).
 //
 // Key sub-packages include:
 //   - api: Reactive client context for workspace interactions.
-//   - colorscheme: Theme definition and resolution logic.
-//   - highlight: Semantic group registry and style propagation.
+//   - theme: Dynamic theme styling, loading, and resolution.
 //   - keymap: Mode-aware input handling and sequence resolution.
 //   - mode: TUI-specific input state management (Normal, Insert, Command).
 //   - command: Global action registry and execution.
 //   - queries: Reactive data hooks for fetching workspace resources.
-//   - styles: Utilities for building Kite styles from colorschemes.
 package tui

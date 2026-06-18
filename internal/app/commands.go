@@ -3,10 +3,9 @@ package app
 import (
 	"fmt"
 
-	"github.com/masterkeysrd/tasksmith/internal/tui/colorscheme"
 	"github.com/masterkeysrd/tasksmith/internal/tui/command"
-	"github.com/masterkeysrd/tasksmith/internal/tui/highlight"
 	"github.com/masterkeysrd/tasksmith/internal/tui/mode"
+	"github.com/masterkeysrd/tasksmith/internal/tui/theme"
 )
 
 // InitializeCommands registers all builtin commands for the application.
@@ -32,12 +31,9 @@ func (app *Application) InitializeCommands() {
 		}
 
 		name := ctx.Args[0]
-		cs, err := colorscheme.Find(name)
-		if err != nil {
+		if err := theme.Set(name); err != nil {
 			return fmt.Errorf("colorscheme: %w", err)
 		}
-
-		highlight.Reload(colorscheme.Resolve(cs))
 		return nil
 	})
 }

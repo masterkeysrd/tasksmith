@@ -5,9 +5,7 @@ import (
 	"github.com/masterkeysrd/kite/extras/wind"
 	"github.com/masterkeysrd/kite/style"
 	"github.com/masterkeysrd/tasksmith/internal/tui/api"
-	"github.com/masterkeysrd/tasksmith/internal/tui/colorscheme"
 	"github.com/masterkeysrd/tasksmith/internal/tui/components"
-	"github.com/masterkeysrd/tasksmith/internal/tui/highlight"
 	"github.com/masterkeysrd/tasksmith/internal/tui/theme"
 	"github.com/masterkeysrd/tasksmith/internal/tui/views/setup"
 )
@@ -25,23 +23,16 @@ var (
 var App = kitex.FC("App", func(props AppProps) kitex.Node {
 	client := wind.NewClient()
 
-	cs, err := colorscheme.Find(colorscheme.Default)
-	if err != nil {
-		cs = &colorscheme.Colorscheme{Name: "empty", Groups: make(map[string]colorscheme.Highlight)}
-	}
-
 	return wind.Provider(wind.ProviderProps{
 		Client: client,
 	},
 		api.Provider(api.Props{Client: props.Client},
 			theme.Provider(theme.Props{},
-				highlight.Provider(highlight.Props{Theme: cs},
-					components.Paper(components.PaperProps{
-						Color: components.PaperBase,
-						Style: SurfaceStyle,
-					},
-						setup.View(),
-					),
+				components.Paper(components.PaperProps{
+					Color: components.PaperBase,
+					Style: SurfaceStyle,
+				},
+					setup.View(),
 				),
 			),
 		),
