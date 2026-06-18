@@ -16,10 +16,6 @@ type AppProps struct {
 }
 
 var (
-	HLSurface = highlight.Set("TasksmithSurface", highlight.Link("Normal"))
-)
-
-var (
 	SurfaceStyle = style.S().
 		Width(style.Percent(100)).
 		Height(style.Percent(100))
@@ -39,10 +35,10 @@ var App = kitex.FC("App", func(props AppProps) kitex.Node {
 		api.Provider(api.Props{Client: props.Client},
 			highlight.Provider(highlight.Props{Theme: cs},
 				components.Paper(components.PaperProps{
-					Group: HLSurface,
+					Group: highlight.TasksmithSurface,
 					Style: SurfaceStyle,
 				},
-					setup.WelcomeView(),
+					setup.View(),
 				),
 			),
 		),

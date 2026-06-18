@@ -139,10 +139,14 @@ func (s *Service) ListToolsPresets(ctx context.Context, req ListToolsPresetsRequ
 	}
 
 	for _, t := range tools {
+		category := t.Metadata.Labels["category"]
+		if category == "" {
+			category = "General"
+		}
 		resp.Tools = append(resp.Tools, Tool{
 			Name:        t.Metadata.Name,
 			Description: t.Metadata.Description,
-			Category:    t.Metadata.Labels["category"],
+			Category:    category,
 			Labels:      t.Metadata.Labels,
 		})
 	}
