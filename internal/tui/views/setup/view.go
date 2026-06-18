@@ -1,10 +1,15 @@
 package setup
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/masterkeysrd/kite/extras/kitex"
+	"github.com/masterkeysrd/kite/promise"
 	"github.com/masterkeysrd/kite/style"
+	"github.com/masterkeysrd/tasksmith/internal/api"
+	tuiapi "github.com/masterkeysrd/tasksmith/internal/tui/api"
+	"github.com/masterkeysrd/tasksmith/internal/tui/command"
 	"github.com/masterkeysrd/tasksmith/internal/tui/components"
 	"github.com/masterkeysrd/tasksmith/internal/tui/queries"
 	"github.com/masterkeysrd/tasksmith/internal/tui/theme"
@@ -76,13 +81,17 @@ var (
 )
 
 var View = kitex.SimpleFC("SetupView", func() kitex.Node {
+	client := tuiapi.UseClient()
 	resp := queries.UseListProjects()
 	currentStep, setCurrentStep := kitex.UseState(3)
 	projectName, setProjectName := kitex.UseState("untrusted-local-repo")
 	selectedProvider, setSelectedProvider := kitex.UseState("")
 	authorizedTools, setAuthorizedTools := kitex.UseState(make(map[string]bool))
+	configs, setConfigs := kitex.UseState(make(map[string]ProviderForm))
 	isExited, setIsExited := kitex.UseState(false)
 	isDeclined, setIsDeclined := kitex.UseState(false)
+
+	_, quit := command.UseCommand("quit")
 
 	kitex.UseEffect(func() {
 		if !resp.IsLoading && len(resp.Data.Projects) > 0 {
@@ -92,7 +101,7 @@ var View = kitex.SimpleFC("SetupView", func() kitex.Node {
 	}, []any{resp.IsLoading})
 
 	if isExited() {
-		return ExitedView(func() { setIsExited(false) })
+		return ExitedView(func() { setIsExited(false) }, func() { quit() })
 	}
 
 	if isDeclined() {
@@ -120,6 +129,8 @@ var View = kitex.SimpleFC("SetupView", func() kitex.Node {
 				SetSelectedProvider: setSelectedProvider,
 				AuthorizedTools:     authorizedTools,
 				SetAuthorizedTools:  setAuthorizedTools,
+				Configs:             configs,
+				SetConfigs:          setConfigs,
 			}),
 			Footer(FooterProps{
 				Step: currentStep(),
@@ -130,7 +141,26 @@ var View = kitex.SimpleFC("SetupView", func() kitex.Node {
 					setCurrentStep(max(currentStep()-1, 1))
 				},
 				OnConfirm: func() {
-					// Finalize setup
+					conf := configs()[selectedProvider()]
+					req := api.InitializeWorkspaceRequest{
+						ProjectName:      projectName(),
+						SelectedProvider: selectedProvider(),
+						APIKey:           conf.APIKey,
+						Endpoint:         conf.Endpoint,
+						DefaultModel:     conf.DefaultModel,
+						Theme:            theme.GetName(),
+						AuthorizedTools:  authorizedTools(),
+					}
+					promise.New(func(ctx context.Context) (any, error) {
+						return client.InitializeWorkspace(ctx, req)
+					}).Then(
+						func(any) {
+							quit()
+						},
+						func(err error) {
+							quit()
+						},
+					)
 				},
 				OnSkip: func() {
 					// Skip setup
@@ -146,7 +176,7 @@ var View = kitex.SimpleFC("SetupView", func() kitex.Node {
 	)
 })
 
-func ExitedView(onRelaunch func()) kitex.Node {
+func ExitedView(onRelaunch func(), onExit func()) kitex.Node {
 	t := theme.UseTheme()
 	whiteColor := t.Color.Text.Primary
 	if c, ok := t.Palette["white"]; ok {
@@ -178,13 +208,24 @@ func ExitedView(onRelaunch func()) kitex.Node {
 				kitex.Box(kitex.BoxProps{
 					Style: bodyStyle,
 				}, kitex.Text("You can now safely navigate away or close this session.")),
-				components.Button(components.ButtonProps{
-					Key:        "relaunch",
-					Variant:    components.ButtonText,
-					Style:      style.S().Foreground(t.Color.Surface.Primary).Bold(true).MarginTop(2),
-					HoverStyle: style.S().Foreground(t.Color.Surface.PrimaryHover),
-					OnClick:    onRelaunch,
-				}, kitex.Text("[ RE-LAUNCH SYSTEM SETUP ]")),
+				kitex.Box(kitex.BoxProps{
+					Style: style.S().Display(style.DisplayFlex).Gap(2).MarginTop(2),
+				},
+					components.Button(components.ButtonProps{
+						Key:        "relaunch",
+						Variant:    components.ButtonText,
+						Style:      style.S().Foreground(t.Color.Surface.Primary).Bold(true),
+						HoverStyle: style.S().Foreground(t.Color.Surface.PrimaryHover),
+						OnClick:    onRelaunch,
+					}, kitex.Text("[ RE-LAUNCH SYSTEM SETUP ]")),
+					components.Button(components.ButtonProps{
+						Key:        "exit_app",
+						Variant:    components.ButtonText,
+						Style:      style.S().Foreground(t.Color.Surface.Error).Bold(true),
+						HoverStyle: style.S().Foreground(t.Color.Surface.ErrorHover),
+						OnClick:    onExit,
+					}, kitex.Text("[ EXIT APPLICATION ]")),
+				),
 			),
 		),
 	)
@@ -324,6 +365,8 @@ type ContentProps struct {
 	SetSelectedProvider func(string)
 	AuthorizedTools     func() map[string]bool
 	SetAuthorizedTools  func(map[string]bool)
+	Configs             func() map[string]ProviderForm
+	SetConfigs          func(map[string]ProviderForm)
 }
 
 func Content(props ContentProps) kitex.Node {
@@ -374,6 +417,8 @@ func Content(props ContentProps) kitex.Node {
 				ProviderStep(ProviderStepProps{
 					SelectedProvider:    props.SelectedProvider(),
 					SetSelectedProvider: props.SetSelectedProvider,
+					Configs:             props.Configs(),
+					SetConfigs:          props.SetConfigs,
 				}),
 			),
 			components.TabPanel(components.TabPanelProps{

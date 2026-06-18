@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 
+	"github.com/masterkeysrd/tasksmith/internal/workspace"
 	"github.com/masterkeysrd/warp"
 )
 
@@ -12,6 +13,7 @@ type Workspace interface {
 	Providers() []*warp.ModelProvider
 	ProvidersPresets() []*warp.ModelProvider
 	ToolsPresets() []*warp.Tool
+	Initialize(ctx context.Context, opts workspace.InitializationOptions) error
 }
 
 // Service provides methods to interact with the workspace through API types.
@@ -22,6 +24,23 @@ type Service struct {
 // NewService creates a new API service.
 func NewService(ws Workspace) *Service {
 	return &Service{ws: ws}
+}
+
+// InitializeWorkspace initializes the workspace with configuration files, theme, and providers.
+func (s *Service) InitializeWorkspace(ctx context.Context, req InitializeWorkspaceRequest) (*InitializeWorkspaceResponse, error) {
+	opts := workspace.InitializationOptions{
+		ProjectName:      req.ProjectName,
+		SelectedProvider: req.SelectedProvider,
+		APIKey:           req.APIKey,
+		Endpoint:         req.Endpoint,
+		DefaultModel:     req.DefaultModel,
+		Theme:            req.Theme,
+		AuthorizedTools:  req.AuthorizedTools,
+	}
+	if err := s.ws.Initialize(ctx, opts); err != nil {
+		return nil, err
+	}
+	return &InitializeWorkspaceResponse{Success: true}, nil
 }
 
 // ListProjects returns a list of projects in the workspace.

@@ -133,6 +133,8 @@ type ProviderForm struct {
 type ProviderStepProps struct {
 	SelectedProvider    string
 	SetSelectedProvider func(string)
+	Configs             map[string]ProviderForm
+	SetConfigs          func(map[string]ProviderForm)
 }
 
 var ProviderStep = kitex.FC("ProviderStep", func(props ProviderStepProps) kitex.Node {
@@ -142,8 +144,10 @@ var ProviderStep = kitex.FC("ProviderStep", func(props ProviderStepProps) kitex.
 	primary := style.S().Foreground(t.Color.Surface.Primary)
 	muted := style.S().Foreground(t.Color.Text.Tertiary)
 
-	// Provider configurations: provider name -> config
-	configs, setConfigs := kitex.UseState(make(map[string]ProviderForm))
+	configs := func() map[string]ProviderForm {
+		return props.Configs
+	}
+	setConfigs := props.SetConfigs
 
 	// Initialize state from presets
 	kitex.UseEffect(func() {

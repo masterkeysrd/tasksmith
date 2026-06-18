@@ -68,3 +68,17 @@ type Tool struct {
 	Category    string            `json:"category"`
 	Labels      map[string]string `json:"labels"`
 }
+
+type InitializeWorkspaceRequest struct {
+	ProjectName      string          `json:"project_name"`
+	SelectedProvider string          `json:"selected_provider"`
+	APIKey           string          `json:"api_key"`
+	Endpoint         string          `json:"endpoint"`
+	DefaultModel     string          `json:"default_model"`
+	Theme            string          `json:"theme"`
+	AuthorizedTools  map[string]bool `json:"authorized_tools"`
+}
+
+type InitializeWorkspaceResponse struct {
+	Success bool `json:"success"`
+}

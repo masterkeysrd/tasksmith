@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/masterkeysrd/tasksmith/internal/workspace"
 	"github.com/masterkeysrd/warp"
 )
 
@@ -33,6 +34,10 @@ func (m *mockWorkspace) ProvidersPresets() []*warp.ModelProvider {
 
 func (m *mockWorkspace) ToolsPresets() []*warp.Tool {
 	return m.toolsPresets
+}
+
+func (m *mockWorkspace) Initialize(ctx context.Context, opts workspace.InitializationOptions) error {
+	return nil
 }
 
 func TestService(t *testing.T) {

@@ -1,7 +1,14 @@
 package workspace
 
 import (
+	"context"
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
 )
 
 func TestWorkspace_Presets(t *testing.T) {
@@ -46,6 +53,108 @@ func TestWorkspace_Presets(t *testing.T) {
 		}
 		if !found {
 			t.Errorf("Tool preset %s not found", name)
+		}
+	}
+}
+
+func TestWorkspace_Initialize(t *testing.T) {
+	tempCWD := t.TempDir()
+	w := New(tempCWD)
+
+	tempConfigDir := t.TempDir()
+	tempDataDir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", tempConfigDir)
+	t.Setenv("XDG_DATA_HOME", tempDataDir)
+	t.Setenv("TASKSMITH_APPNAME", "tasksmith-test")
+	// Clear xdg cache
+	xdg.ClearCache()
+	defer xdg.ClearCache()
+
+	opts := InitializationOptions{
+		ProjectName:      "test-project",
+		SelectedProvider: "openai",
+		APIKey:           "sk-test-api-key",
+		Endpoint:         "https://api.openai.com/v1",
+		DefaultModel:     "gpt-5.5",
+		Theme:            "tokyo-night",
+		AuthorizedTools:  map[string]bool{"ls": true, "write": true},
+	}
+
+	err := w.Initialize(context.Background(), opts)
+	if err != nil {
+		t.Fatalf("unexpected error during Initialize: %v", err)
+	}
+
+	// 1. Verify sentinel setup.json
+	wsDir, err := xdg.WorkspaceDir(tempCWD)
+	if err != nil {
+		t.Fatalf("failed to get workspace dir: %v", err)
+	}
+	sentinelPath := filepath.Join(wsDir, "setup.json")
+	if _, err := os.Stat(sentinelPath); err != nil {
+		t.Errorf("sentinel setup.json not created: %v", err)
+	}
+
+	// 2. Verify global tasksmith.config.json
+	cfgDir, err := xdg.SubConfigDir()
+	if err != nil {
+		t.Fatalf("failed to get config dir: %v", err)
+	}
+	cfgPath := filepath.Join(cfgDir, "tasksmith.config.json")
+	if _, err := os.Stat(cfgPath); err != nil {
+		t.Errorf("global tasksmith.config.json not created: %v", err)
+	}
+	cfgData, err := os.ReadFile(cfgPath)
+	if err == nil {
+		var config struct {
+			Theme string `json:"theme"`
+		}
+		if err := json.Unmarshal(cfgData, &config); err != nil {
+			t.Errorf("failed to unmarshal config json: %v", err)
+		} else if config.Theme != "tokyo-night" {
+			t.Errorf("expected theme tokyo-night, got %s", config.Theme)
+		}
+	}
+
+	// 3. Verify WORKSPACE.md
+	wsPath := filepath.Join(tempCWD, "WORKSPACE.md")
+	if _, err := os.Stat(wsPath); err != nil {
+		t.Errorf("WORKSPACE.md not created: %v", err)
+	} else {
+		wsData, _ := os.ReadFile(wsPath)
+		wsContent := string(wsData)
+		if !strings.Contains(wsContent, "policies:") {
+			t.Errorf("WORKSPACE.md does not contain policies: %s", wsContent)
+		}
+		if !strings.Contains(wsContent, "ls") || !strings.Contains(wsContent, "write") {
+			t.Errorf("WORKSPACE.md policies does not include authorized tools: %s", wsContent)
+		}
+	}
+
+	// 4. Verify .agents/providers/openai.yaml
+	providerPath := filepath.Join(tempCWD, ".agents", "providers", "openai.yaml")
+	if _, err := os.Stat(providerPath); err != nil {
+		t.Errorf("provider yaml not created: %v", err)
+	}
+
+	// 5. Verify .env and .gitignore
+	envPath := filepath.Join(tempCWD, ".env")
+	if _, err := os.Stat(envPath); err != nil {
+		t.Errorf(".env file not created: %v", err)
+	} else {
+		envData, _ := os.ReadFile(envPath)
+		if !strings.Contains(string(envData), "OPENAI_API_KEY=sk-test-api-key") {
+			t.Errorf(".env does not contain API key: %s", string(envData))
+		}
+	}
+
+	gitignorePath := filepath.Join(tempCWD, ".gitignore")
+	if _, err := os.Stat(gitignorePath); err != nil {
+		t.Errorf(".gitignore not created: %v", err)
+	} else {
+		ignoreData, _ := os.ReadFile(gitignorePath)
+		if !strings.Contains(string(ignoreData), ".env") {
+			t.Errorf(".gitignore does not contain .env: %s", string(ignoreData))
 		}
 	}
 }
