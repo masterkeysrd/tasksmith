@@ -32,7 +32,8 @@ var (
 	// CardBaseStyle is the base style for the card container.
 	CardBaseStyle = style.S().
 		Display(style.DisplayFlex).
-		FlexDirection(style.FlexColumn)
+		FlexDirection(style.FlexColumn).
+		MinHeight(style.Cells(0))
 )
 
 // Card is a surface-level container that groups related content and actions.
@@ -98,12 +99,14 @@ var (
 			Display(style.DisplayFlex).
 			AlignItems(style.AlignCenter).
 			PaddingHorizontal(1).
-			Gap(1)
+			Gap(1).
+			MinHeight(style.Cells(0))
 
 	CardHeaderTextStyle = style.S().
 				Flex(1).
 				Display(style.DisplayFlex).
-				FlexDirection(style.FlexColumn)
+				FlexDirection(style.FlexColumn).
+				MinHeight(style.Cells(0))
 
 	CardHeaderTitleStyle = style.S().
 				Bold(true)
@@ -140,7 +143,8 @@ type CardContentProps struct {
 var (
 	CardContentStyle = style.S().
 		Display(style.DisplayFlex).
-		FlexDirection(style.FlexColumn)
+		FlexDirection(style.FlexColumn).
+		MinHeight(style.Cells(0))
 )
 
 // CardContent is the primary area for a card's content.

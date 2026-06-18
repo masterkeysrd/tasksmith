@@ -34,7 +34,7 @@ type InputProps struct {
 var (
 	// InputBaseStyle is the base style for the input field.
 	InputBaseStyle = style.S().
-		Display(style.DisplayFlex).
+		// Display(style.DisplayFlex).
 		AlignItems(style.AlignCenter).
 		Padding(0, 1).
 		Width(style.Percent(100)).

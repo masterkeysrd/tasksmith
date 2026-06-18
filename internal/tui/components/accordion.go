@@ -58,16 +58,25 @@ var Accordion = kitex.FCC("Accordion", func(props AccordionProps) kitex.Node {
 
 	// Lookup summary and details in children to organize layout.
 	var summary, details kitex.Node
-	for _, child := range props.Children {
-		if child == nil {
-			continue
+	var unpack func(n kitex.Node)
+	unpack = func(n kitex.Node) {
+		if n == nil {
+			return
 		}
-		switch child.TagName() {
+		switch n.TagName() {
 		case "AccordionSummary":
-			summary = child
+			summary = n
 		case "AccordionDetails":
-			details = child
+			details = n
+		case "Fragment", "Map", "If", "Else":
+			for _, c := range n.Children() {
+				unpack(c)
+			}
 		}
+	}
+
+	for _, child := range props.Children {
+		unpack(child)
 	}
 
 	return accordionCtx.Provider(state,

@@ -43,6 +43,8 @@ type ButtonGroups struct {
 
 // ButtonProps defines the properties for the Button component.
 type ButtonProps struct {
+	// Key is an optional unique identifier for the component.
+	Key string
 	// Group is the highlight group to use for theme-aware styling.
 	Group highlight.Group
 	// Groups optionally provides specific highlight groups for different states.
@@ -118,6 +120,7 @@ var Button = kitex.FCC("Button", func(props ButtonProps) kitex.Node {
 	}
 
 	return kitex.Button(kitex.ButtonProps{
+		Key:      props.Key,
 		Style:    s,
 		Disabled: props.Disabled,
 		Active:   props.Active,
