@@ -198,7 +198,15 @@ var Button = kitex.FCC("Button", func(props ButtonProps) kitex.Node {
 	case ButtonOutline:
 		s = s.Border(style.SingleBorder().Color(currentColor)).Foreground(currentColor)
 	case ButtonText:
-		s = s.Foreground(currentColor)
+		if props.Color == ButtonBase {
+			if isHovered() {
+				s = s.Foreground(t.Color.Text.Primary)
+			} else {
+				s = s.Foreground(t.Color.Text.Secondary)
+			}
+		} else {
+			s = s.Foreground(currentColor)
+		}
 	default: // Default to Solid
 		s = s.Background(currentColor).Foreground(t.Color.Text.InversePrimary)
 	}
