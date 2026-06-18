@@ -1,10 +1,12 @@
 package components
 
 import (
+	"image/color"
+
 	"github.com/masterkeysrd/kite/extras/kitex"
 	"github.com/masterkeysrd/kite/style"
 	"github.com/masterkeysrd/tasksmith/internal/tui/components/icon"
-	"github.com/masterkeysrd/tasksmith/internal/tui/highlight"
+	"github.com/masterkeysrd/tasksmith/internal/tui/theme"
 )
 
 // AlertSeverity defines the urgency levels for the Alert component.
@@ -27,22 +29,8 @@ const (
 	AlertOutlined AlertVariant = "outlined"
 )
 
-var (
-	// HLAlertSuccess is linked to the Hint theme group.
-	HLAlertSuccess = highlight.Set("AlertSuccess", highlight.Link("Hint"))
-	// HLAlertInfo is linked to the Info theme group.
-	HLAlertInfo = highlight.Set("AlertInfo", highlight.Link("Info"))
-	// HLAlertWarning is linked to the Warn theme group.
-	HLAlertWarning = highlight.Set("AlertWarning", highlight.Link("Warn"))
-	// HLAlertError is linked to the Error theme group.
-	HLAlertError = highlight.Set("AlertError", highlight.Link("Error"))
-)
-
 // AlertProps defines the properties for the Alert component.
 type AlertProps struct {
-	// Group is the highlight group to use for theme-aware styling.
-	// If not provided, it defaults to the group corresponding to the Severity.
-	Group highlight.Group
 	// Severity specifies the urgency level, which determines the default styling and icon.
 	Severity AlertSeverity
 	// Variant specifies the visual variant of the alert.
@@ -65,7 +53,8 @@ var (
 			Display(style.DisplayFlex).
 			AlignItems(style.AlignCenter).
 			Padding(0, 1).
-			Gap(1)
+			Gap(1).
+			Width(style.Percent(100))
 
 	// AlertContentStyle is the style for the content wrapper.
 	AlertContentStyle = style.S().
@@ -75,27 +64,43 @@ var (
 // Alert is a component for displaying important messages to the user.
 // It uses Paper as its base and supports multiple severity levels and optional actions.
 var Alert = kitex.FCC("Alert", func(props AlertProps) kitex.Node {
-	// Resolve the highlight group based on severity if not explicitly provided.
-	severityGroup := props.Group
-	if severityGroup.Empty() {
+	t := theme.UseTheme()
+
+	var bgColor color.Color
+	var fgColor color.Color
+
+	if t != nil {
 		switch props.Severity {
 		case AlertSuccess:
-			severityGroup = HLAlertSuccess
+			bgColor = t.Color.Surface.SuccessFocus
+			fgColor = t.Color.Surface.Success
 		case AlertInfo:
-			severityGroup = HLAlertInfo
+			bgColor = t.Color.Surface.InfoFocus
+			fgColor = t.Color.Surface.Info
 		case AlertWarning:
-			severityGroup = HLAlertWarning
+			bgColor = t.Color.Surface.TertiaryFocus
+			fgColor = t.Color.Surface.Tertiary
 		case AlertError:
-			severityGroup = HLAlertError
+			bgColor = t.Color.Surface.ErrorFocus
+			fgColor = t.Color.Surface.Error
 		default:
-			severityGroup = highlight.Set("Alert", highlight.Link("Normal"))
+			bgColor = t.Color.Surface.Base
+			fgColor = t.Color.Text.Primary
 		}
 	}
 
-	// Map AlertVariant to PaperVariant
-	paperVariant := PaperDefault
-	if props.Variant == AlertOutlined {
-		paperVariant = PaperOutlined
+	alertStyle := AlertBaseStyle
+	if t != nil {
+		if props.Variant == AlertOutlined {
+			alertStyle = alertStyle.
+				Background(t.Color.Surface.Base).
+				Foreground(fgColor).
+				Border(style.SingleBorder().Color(fgColor))
+		} else {
+			alertStyle = alertStyle.
+				Background(bgColor).
+				Foreground(fgColor)
+		}
 	}
 
 	// Determine the icon to display.
@@ -103,6 +108,7 @@ var Alert = kitex.FCC("Alert", func(props AlertProps) kitex.Node {
 	if props.Icon != nil {
 		iconNode = props.Icon
 	} else if props.ShowIcon {
+		// Use the correct styled text (which inherits the fgColor automatically!)
 		switch props.Severity {
 		case AlertSuccess:
 			iconNode = icon.Check
@@ -116,9 +122,9 @@ var Alert = kitex.FCC("Alert", func(props AlertProps) kitex.Node {
 	}
 
 	return Paper(PaperProps{
-		Group:   severityGroup,
-		Variant: paperVariant,
-		Style:   AlertBaseStyle.Merge(props.Style),
+		Color:   PaperBase,
+		Variant: PaperDefault, // Let Alert handle the border styling via alertStyle
+		Style:   alertStyle.Merge(props.Style),
 	},
 		kitex.If(iconNode != nil, func() kitex.Node {
 			return iconNode

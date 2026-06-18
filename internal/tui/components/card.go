@@ -3,7 +3,6 @@ package components
 import (
 	"github.com/masterkeysrd/kite/extras/kitex"
 	"github.com/masterkeysrd/kite/style"
-	"github.com/masterkeysrd/tasksmith/internal/tui/highlight"
 )
 
 // CardVariant defines visual styles for the Card component.
@@ -18,8 +17,8 @@ const (
 
 // CardProps defines the properties for the Card component.
 type CardProps struct {
-	// Group is the highlight group to use for theme-aware styling.
-	Group highlight.Group
+	// Color specifies the color variant of the card background.
+	Color PaperColor
 	// Variant specifies the visual variant of the card.
 	Variant CardVariant
 	// Style allows passing additional style overrides.
@@ -33,7 +32,7 @@ var (
 	CardBaseStyle = style.S().
 		Display(style.DisplayFlex).
 		FlexDirection(style.FlexColumn).
-		MinHeight(style.Cells(0))
+		Width(style.Percent(100))
 )
 
 // Card is a surface-level container that groups related content and actions.
@@ -70,7 +69,7 @@ var Card = kitex.FCC("Card", func(props CardProps) kitex.Node {
 	}
 
 	return Paper(PaperProps{
-		Group:   props.Group,
+		Color:   props.Color,
 		Variant: paperVariant,
 		Style:   CardBaseStyle.Merge(props.Style),
 	},
@@ -99,14 +98,12 @@ var (
 			Display(style.DisplayFlex).
 			AlignItems(style.AlignCenter).
 			PaddingHorizontal(1).
-			Gap(1).
-			MinHeight(style.Cells(0))
+			Gap(1)
 
 	CardHeaderTextStyle = style.S().
 				Flex(1).
 				Display(style.DisplayFlex).
-				FlexDirection(style.FlexColumn).
-				MinHeight(style.Cells(0))
+				FlexDirection(style.FlexColumn)
 
 	CardHeaderTitleStyle = style.S().
 				Bold(true)
@@ -143,8 +140,7 @@ type CardContentProps struct {
 var (
 	CardContentStyle = style.S().
 		Display(style.DisplayFlex).
-		FlexDirection(style.FlexColumn).
-		MinHeight(style.Cells(0))
+		FlexDirection(style.FlexColumn)
 )
 
 // CardContent is the primary area for a card's content.

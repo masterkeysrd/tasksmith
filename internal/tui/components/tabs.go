@@ -18,35 +18,32 @@ type TabsProps struct {
 	Value any
 	// DefaultValue is the initial active tab value (uncontrolled).
 	DefaultValue any
-
+	// Color specifies the color variant of the tabs.
+	Color PaperColor
 	// Separator is an optional node rendered between the tab list and
 	// the panels (e.g., a divider).
 	Separator kitex.Node
-
 	// OnChange is triggered when the active tab changes.
 	OnChange func(any)
-
 	// Style allows passing additional style overrides.
 	Style style.Style
-
 	// Children should contain Tab and TabPanel components.
 	Children []kitex.Node
-}
-
-type TabStyles struct {
-	TabList style.Style
 }
 
 var (
 	TabsBaseStyle = style.S().
 			Display(style.DisplayFlex).
-			FlexDirection(style.FlexColumn)
+			FlexDirection(style.FlexColumn).
+			Width(style.Percent(100)).
+			Height(style.Percent(100))
 
 	TabListStyle = style.S().
 			Display(style.DisplayFlex).
 			FlexDirection(style.FlexRow).
 			AlignItems(style.AlignCenter).
-			Gap(2)
+			Gap(2).
+			Padding(0, 1)
 )
 
 // Tabs is a top-level component that manages a set of Tab and TabPanel nodes.
@@ -84,6 +81,7 @@ var Tabs = kitex.FCC("Tabs", func(props TabsProps) kitex.Node {
 		if n == nil {
 			return
 		}
+
 		tag := n.TagName()
 		switch tag {
 		case "Tab":
@@ -98,8 +96,15 @@ var Tabs = kitex.FCC("Tabs", func(props TabsProps) kitex.Node {
 				unpack(c)
 			}
 		default:
-			// Treat other nodes (Box, Text, etc.) as part of the tab list.
-			tabs = append(tabs, n)
+			// Recurse into component nodes to find Tab/TabPanel if they are wrapped.
+			// This handles FCC/FC wrapped nodes.
+			for _, c := range n.Children() {
+				unpack(c)
+			}
+			// If it's a leaf node that isn't a Tab/TabPanel, treat as part of tab list.
+			if len(n.Children()) == 0 {
+				tabs = append(tabs, n)
+			}
 		}
 	}
 
@@ -113,7 +118,8 @@ var Tabs = kitex.FCC("Tabs", func(props TabsProps) kitex.Node {
 	}
 
 	return tabsCtx.Provider(state,
-		kitex.Box(kitex.BoxProps{
+		Paper(PaperProps{
+			Color: props.Color,
 			Style: TabsBaseStyle.Merge(props.Style),
 		},
 			kitex.Box(kitex.BoxProps{
@@ -134,6 +140,8 @@ type TabProps struct {
 	Icon kitex.Node
 	// Disabled indicates if the tab is interactive.
 	Disabled bool
+	// Color specifies the color variant of the tab.
+	Color ButtonColor
 	// Style allows passing additional style overrides.
 	Style style.Style
 	// Children is the label content.
@@ -152,6 +160,7 @@ var Tab = kitex.FCC("Tab", func(props TabProps) kitex.Node {
 		Variant:   ButtonText,
 		Active:    isActive,
 		Disabled:  props.Disabled,
+		Color:     props.Color,
 		StartIcon: props.Icon,
 		Style:     props.Style,
 		OnClick: func() {
@@ -174,7 +183,10 @@ var (
 	TabPanelStyle = style.S().
 		Display(style.DisplayFlex).
 		FlexDirection(style.FlexColumn).
-		Flex(1)
+		Flex(1, 1, style.Cells(0)).
+		MinHeight(style.Cells(0)).
+		Padding(1).
+		Overflow(style.OverflowAuto)
 )
 
 // TabPanel is a content container that only renders its children when its Value matches the active Tab.

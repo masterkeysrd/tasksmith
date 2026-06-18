@@ -1,23 +1,26 @@
 package components
 
 import (
+	"image/color"
+
 	"github.com/masterkeysrd/kite/extras/kitex"
 	"github.com/masterkeysrd/kite/style"
 	"github.com/masterkeysrd/tasksmith/internal/tui/components/icon"
-	"github.com/masterkeysrd/tasksmith/internal/tui/highlight"
+	"github.com/masterkeysrd/tasksmith/internal/tui/theme"
 )
 
 type accordionState struct {
 	expanded    func() bool
 	setExpanded func(bool)
+	color       PaperColor
 }
 
 var accordionCtx = kitex.CreateContext[*accordionState](nil)
 
 // AccordionProps defines the properties for the Accordion component.
 type AccordionProps struct {
-	// Group is the highlight group to use for theme-aware styling.
-	Group highlight.Group
+	// Color specifies the color variant of the accordion.
+	Color PaperColor
 	// Variant specifies the visual variant of the accordion container.
 	Variant PaperVariant
 	// DefaultExpanded indicates if the accordion should be expanded by default (uncontrolled).
@@ -31,6 +34,14 @@ type AccordionProps struct {
 	// Children should contain exactly one AccordionSummary and one AccordionDetails.
 	Children []kitex.Node
 }
+
+var (
+	// AccordionBaseStyle is the base style for the accordion container.
+	AccordionBaseStyle = style.S().
+		Display(style.DisplayFlex).
+		FlexDirection(style.FlexColumn).
+		Width(style.Percent(100))
+)
 
 // Accordion is a container component that can be expanded or collapsed.
 // It coordinates state between AccordionSummary and AccordionDetails.
@@ -54,6 +65,7 @@ var Accordion = kitex.FCC("Accordion", func(props AccordionProps) kitex.Node {
 	state := &accordionState{
 		expanded:    isExpanded,
 		setExpanded: toggle,
+		color:       props.Color,
 	}
 
 	// Lookup summary and details in children to organize layout.
@@ -81,12 +93,9 @@ var Accordion = kitex.FCC("Accordion", func(props AccordionProps) kitex.Node {
 
 	return accordionCtx.Provider(state,
 		Paper(PaperProps{
-			Group:   props.Group,
+			Color:   props.Color,
 			Variant: props.Variant,
-			Style: style.S().
-				Display(style.DisplayFlex).
-				FlexDirection(style.FlexColumn).
-				Merge(props.Style),
+			Style:   AccordionBaseStyle.Merge(props.Style),
 		},
 			kitex.If(summary != nil, func() kitex.Node {
 				return summary
@@ -100,8 +109,8 @@ var Accordion = kitex.FCC("Accordion", func(props AccordionProps) kitex.Node {
 
 // AccordionSummaryProps defines the properties for the Accordion header.
 type AccordionSummaryProps struct {
-	// Group is the highlight group for the summary.
-	Group highlight.Group
+	// HideExpandIcon disables rendering the default chevron icon.
+	HideExpandIcon bool
 	// Style allows passing additional style overrides.
 	Style style.Style
 	// Children is the content of the summary.
@@ -115,17 +124,36 @@ var AccordionSummary = kitex.FCC("AccordionSummary", func(props AccordionSummary
 		return kitex.Text("AccordionSummary must be used inside Accordion")
 	}
 
+	t := theme.UseTheme()
+	btnStyle := style.S().
+		Width(style.Percent(100)).
+		JustifyContent(style.JustifyStart)
+
+	if t != nil {
+		var fgColor color.Color
+		switch state.color {
+		case PaperPrimary, PaperSecondary, PaperTertiary, PaperSuccess, PaperInfo, PaperError:
+			fgColor = t.Color.Text.InversePrimary
+		default:
+			fgColor = t.Color.Text.Primary
+		}
+		btnStyle = btnStyle.Foreground(fgColor)
+	}
+
+	btnStyle = btnStyle.Merge(props.Style)
+
+	var startIcon kitex.Node
+	if !props.HideExpandIcon {
+		startIcon = kitex.IfElse(state.expanded(), icon.ChevronDown, icon.ChevronRight)
+	}
+
 	return Button(ButtonProps{
-		Group:   props.Group,
 		Variant: ButtonText,
-		Style: style.S().
-			Width(style.Percent(100)).
-			JustifyContent(style.JustifyStart).
-			Merge(props.Style),
+		Style:   btnStyle,
 		OnClick: func() {
 			state.setExpanded(!state.expanded())
 		},
-		StartIcon: kitex.IfElse(state.expanded(), icon.ChevronDown, icon.ChevronRight),
+		StartIcon: startIcon,
 	}, props.Children...)
 })
 

@@ -8,6 +8,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/tui/colorscheme"
 	"github.com/masterkeysrd/tasksmith/internal/tui/components"
 	"github.com/masterkeysrd/tasksmith/internal/tui/highlight"
+	"github.com/masterkeysrd/tasksmith/internal/tui/theme"
 	"github.com/masterkeysrd/tasksmith/internal/tui/views/setup"
 )
 
@@ -33,12 +34,14 @@ var App = kitex.FC("App", func(props AppProps) kitex.Node {
 		Client: client,
 	},
 		api.Provider(api.Props{Client: props.Client},
-			highlight.Provider(highlight.Props{Theme: cs},
-				components.Paper(components.PaperProps{
-					Group: highlight.TasksmithSurface,
-					Style: SurfaceStyle,
-				},
-					setup.View(),
+			theme.Provider(theme.Props{},
+				highlight.Provider(highlight.Props{Theme: cs},
+					components.Paper(components.PaperProps{
+						Color: components.PaperBase,
+						Style: SurfaceStyle,
+					},
+						setup.View(),
+					),
 				),
 			),
 		),

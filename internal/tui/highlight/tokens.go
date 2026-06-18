@@ -2,7 +2,7 @@ package highlight
 
 var (
 	// TasksmithSurface is used for card/container backgrounds.
-	TasksmithSurface = Set("TasksmithSurface", Link("NormalNC"))
+	TasksmithSurface = Set("TasksmithSurface", Link("Normal"))
 	// TasksmithContent is used for the main content area (inner background).
 	TasksmithContent = Set("TasksmithContent", Link("Normal"))
 	// TasksmithContentAlt is used for secondary content areas (e.g. form containers).
