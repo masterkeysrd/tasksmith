@@ -80,7 +80,12 @@ var (
 				PaddingHorizontal(1)
 )
 
-var View = kitex.SimpleFC("SetupView", func() kitex.Node {
+type ViewProps struct {
+	OnComplete func()
+	OnSkip     func()
+}
+
+var View = kitex.FC("SetupView", func(props ViewProps) kitex.Node {
 	client := tuiapi.UseClient()
 	resp := queries.UseListProjects()
 	wsCfg := queries.UseGetWorkspaceConfig()
@@ -127,8 +132,14 @@ var View = kitex.SimpleFC("SetupView", func() kitex.Node {
 			Style:   ContainerStyle,
 		},
 			Header(HeaderProps{
-				Step:    currentStep(),
-				OnClose: func() { setIsExited(true) },
+				Step: currentStep(),
+				OnClose: func() {
+					if props.OnSkip != nil {
+						props.OnSkip()
+					} else {
+						setIsExited(true)
+					}
+				},
 			}),
 			Content(ContentProps{
 				Step:                currentStep(),
@@ -164,21 +175,35 @@ var View = kitex.SimpleFC("SetupView", func() kitex.Node {
 						return client.InitializeWorkspace(ctx, req)
 					}).Then(
 						func(any) {
-							quit()
+							if props.OnComplete != nil {
+								props.OnComplete()
+							} else {
+								quit()
+							}
 						},
 						func(err error) {
-							quit()
+							if props.OnComplete != nil {
+								props.OnComplete()
+							} else {
+								quit()
+							}
 						},
 					)
 				},
 				OnSkip: func() {
-					// Skip setup
+					if props.OnSkip != nil {
+						props.OnSkip()
+					}
 				},
 				OnDecline: func() {
 					setIsDeclined(true)
 				},
 				OnExit: func() {
-					setIsExited(true)
+					if props.OnSkip != nil {
+						props.OnSkip()
+					} else {
+						setIsExited(true)
+					}
 				},
 			}),
 		),
