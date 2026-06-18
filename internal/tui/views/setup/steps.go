@@ -157,6 +157,7 @@ var ProviderStep = kitex.FC("ProviderStep", func(props ProviderStepProps) kitex.
 				newConfigs[p.Name] = ProviderForm{
 					Endpoint:     p.Endpoint,
 					DefaultModel: p.DefaultModel,
+					APIKey:       p.APIKey,
 				}
 			}
 			setConfigs(newConfigs)

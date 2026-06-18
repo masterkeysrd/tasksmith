@@ -83,7 +83,8 @@ var (
 var View = kitex.SimpleFC("SetupView", func() kitex.Node {
 	client := tuiapi.UseClient()
 	resp := queries.UseListProjects()
-	currentStep, setCurrentStep := kitex.UseState(3)
+	wsCfg := queries.UseGetWorkspaceConfig()
+	currentStep, setCurrentStep := kitex.UseState(1)
 	projectName, setProjectName := kitex.UseState("untrusted-local-repo")
 	selectedProvider, setSelectedProvider := kitex.UseState("")
 	authorizedTools, setAuthorizedTools := kitex.UseState(make(map[string]bool))
@@ -94,11 +95,19 @@ var View = kitex.SimpleFC("SetupView", func() kitex.Node {
 	_, quit := command.UseCommand("quit")
 
 	kitex.UseEffect(func() {
-		if !resp.IsLoading && len(resp.Data.Projects) > 0 {
+		if !wsCfg.IsLoading && wsCfg.Data != nil && wsCfg.Data.IsConfigured {
+			setProjectName(wsCfg.Data.Name)
+			if wsCfg.Data.DefaultProvider != "" {
+				setSelectedProvider(wsCfg.Data.DefaultProvider)
+			}
+			if wsCfg.Data.AuthorizedTools != nil {
+				setAuthorizedTools(wsCfg.Data.AuthorizedTools)
+			}
+		} else if !resp.IsLoading && len(resp.Data.Projects) > 0 {
 			// Prefer the first project name if available
 			setProjectName(resp.Data.Projects[0].Name)
 		}
-	}, []any{resp.IsLoading})
+	}, []any{wsCfg.IsLoading, resp.IsLoading})
 
 	if isExited() {
 		return ExitedView(func() { setIsExited(false) }, func() { quit() })

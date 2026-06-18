@@ -39,6 +39,7 @@ type Provider struct {
 	DefaultModel string  `json:"default_model"`
 	Endpoint     string  `json:"endpoint"`
 	AuthEnv      string  `json:"auth_env"`
+	APIKey       string  `json:"api_key"`
 	Models       []Model `json:"models"`
 }
 
@@ -81,4 +82,14 @@ type InitializeWorkspaceRequest struct {
 
 type InitializeWorkspaceResponse struct {
 	Success bool `json:"success"`
+}
+
+type GetWorkspaceConfigRequest struct {
+}
+
+type GetWorkspaceConfigResponse struct {
+	Name            string          `json:"name"`
+	DefaultProvider string          `json:"default_provider"`
+	AuthorizedTools map[string]bool `json:"authorized_tools"`
+	IsConfigured    bool            `json:"is_configured"`
 }

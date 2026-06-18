@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"os"
 
 	"github.com/masterkeysrd/tasksmith/internal/workspace"
 	"github.com/masterkeysrd/warp"
@@ -14,6 +15,7 @@ type Workspace interface {
 	ProvidersPresets() []*warp.ModelProvider
 	ToolsPresets() []*warp.Tool
 	Initialize(ctx context.Context, opts workspace.InitializationOptions) error
+	GetWorkspaceConfig(ctx context.Context) (workspace.WorkspaceConfig, error)
 }
 
 // Service provides methods to interact with the workspace through API types.
@@ -24,6 +26,20 @@ type Service struct {
 // NewService creates a new API service.
 func NewService(ws Workspace) *Service {
 	return &Service{ws: ws}
+}
+
+// GetWorkspaceConfig returns the workspace configuration.
+func (s *Service) GetWorkspaceConfig(ctx context.Context, req GetWorkspaceConfigRequest) (*GetWorkspaceConfigResponse, error) {
+	cfg, err := s.ws.GetWorkspaceConfig(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return &GetWorkspaceConfigResponse{
+		Name:            cfg.Name,
+		DefaultProvider: cfg.DefaultProvider,
+		AuthorizedTools: cfg.AuthorizedTools,
+		IsConfigured:    cfg.IsConfigured,
+	}, nil
 }
 
 // InitializeWorkspace initializes the workspace with configuration files, theme, and providers.
@@ -116,12 +132,19 @@ func (s *Service) ListProviders(ctx context.Context, req ListProvidersRequest) (
 
 // ListProvidersPresets returns a list of model provider presets in the workspace.
 func (s *Service) ListProvidersPresets(ctx context.Context, req ListProvidersPresetsRequest) (*ListProvidersPresetsResponse, error) {
-	providers := s.ws.ProvidersPresets()
-	resp := &ListProvidersPresetsResponse{
-		Providers: make([]Provider, 0, len(providers)),
+	presets := s.ws.ProvidersPresets()
+
+	// Create a map of currently configured providers
+	configured := make(map[string]*warp.ModelProvider)
+	for _, cp := range s.ws.Providers() {
+		configured[cp.Metadata.Name] = cp
 	}
 
-	for _, p := range providers {
+	resp := &ListProvidersPresetsResponse{
+		Providers: make([]Provider, 0, len(presets)),
+	}
+
+	for _, p := range presets {
 		displayName := p.Metadata.DisplayName
 		if displayName == "" {
 			displayName = p.Metadata.Name
@@ -136,14 +159,37 @@ func (s *Service) ListProvidersPresets(ctx context.Context, req ListProvidersPre
 			})
 		}
 
+		defaultModel := p.Spec.DefaultModel
+		endpoint := p.Spec.Endpoint
+
+		// Preload values from configured provider if it exists
+		if cp, ok := configured[p.Metadata.Name]; ok {
+			if cp.Spec.DefaultModel != "" {
+				defaultModel = cp.Spec.DefaultModel
+			}
+			if cp.Spec.Endpoint != "" {
+				endpoint = cp.Spec.Endpoint
+			}
+		}
+
+		var authEnv string
+		var apiKey string
+		if p.Spec.Auth != nil {
+			if envName, ok := p.Spec.Auth["env"]; ok {
+				authEnv = envName
+				apiKey = os.Getenv(envName)
+			}
+		}
+
 		resp.Providers = append(resp.Providers, Provider{
 			Name:         p.Metadata.Name,
 			DisplayName:  displayName,
 			Description:  p.Spec.Type,
-			DefaultModel: p.Spec.DefaultModel,
-			Endpoint:     p.Spec.Endpoint,
-			// AuthEnv:      p.Spec.Auth.Env,
-			Models: models,
+			DefaultModel: defaultModel,
+			Endpoint:     endpoint,
+			AuthEnv:      authEnv,
+			APIKey:       apiKey,
+			Models:       models,
 		})
 	}
 

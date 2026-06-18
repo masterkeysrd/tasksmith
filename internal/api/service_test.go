@@ -40,6 +40,10 @@ func (m *mockWorkspace) Initialize(ctx context.Context, opts workspace.Initializ
 	return nil
 }
 
+func (m *mockWorkspace) GetWorkspaceConfig(ctx context.Context) (workspace.WorkspaceConfig, error) {
+	return workspace.WorkspaceConfig{}, nil
+}
+
 func TestService(t *testing.T) {
 	mockWS := &mockWorkspace{
 		projects: []*warp.Project{

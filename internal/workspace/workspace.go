@@ -143,3 +143,35 @@ func (w *Workspace) resolver() warp.Resolver {
 	}
 	return w.registry
 }
+
+type WorkspaceConfig struct {
+	Name            string
+	DefaultProvider string
+	AuthorizedTools map[string]bool
+	IsConfigured    bool
+}
+
+func (w *Workspace) GetWorkspaceConfig(ctx context.Context) (WorkspaceConfig, error) {
+	if w.registry == nil {
+		return WorkspaceConfig{}, nil
+	}
+	wsSpec := w.registry.WorkspaceSpec()
+	if wsSpec == nil || wsSpec.Def == nil || wsSpec.Synthetic {
+		return WorkspaceConfig{}, nil
+	}
+
+	cfg := WorkspaceConfig{
+		Name:            wsSpec.Def.Metadata.Name,
+		DefaultProvider: wsSpec.Def.Spec.DefaultProvider,
+		IsConfigured:    true,
+		AuthorizedTools: make(map[string]bool),
+	}
+
+	if wsSpec.Def.Spec.Policies != nil && wsSpec.Def.Spec.Policies.Tools != nil {
+		for _, tool := range wsSpec.Def.Spec.Policies.Tools.Include {
+			cfg.AuthorizedTools[tool] = true
+		}
+	}
+
+	return cfg, nil
+}

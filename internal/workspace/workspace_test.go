@@ -157,4 +157,27 @@ func TestWorkspace_Initialize(t *testing.T) {
 			t.Errorf(".gitignore does not contain .env: %s", string(ignoreData))
 		}
 	}
+
+	// 6. Verify reloading workspace returns correct configurations (Preloading check)
+	wReloaded := New(tempCWD)
+	err = wReloaded.Load(context.Background())
+	if err != nil {
+		t.Fatalf("failed to reload initialized workspace: %v", err)
+	}
+	cfg, err := wReloaded.GetWorkspaceConfig(context.Background())
+	if err != nil {
+		t.Fatalf("failed to get workspace config: %v", err)
+	}
+	if !cfg.IsConfigured {
+		t.Error("expected IsConfigured to be true")
+	}
+	if cfg.Name != "test-project" {
+		t.Errorf("expected name test-project, got %s", cfg.Name)
+	}
+	if cfg.DefaultProvider != "openai" {
+		t.Errorf("expected default provider openai, got %s", cfg.DefaultProvider)
+	}
+	if !cfg.AuthorizedTools["ls"] || !cfg.AuthorizedTools["write"] {
+		t.Errorf("expected authorized tools to include ls and write, got %v", cfg.AuthorizedTools)
+	}
 }

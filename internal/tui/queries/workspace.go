@@ -36,3 +36,9 @@ func UseListToolsPresets() wind.Result[*api.ListToolsPresetsResponse] {
 	client := tuiapi.UseClient()
 	return wind.Use(api.ListToolsPresetsRequest{}, promise.WrapWithProps(client.ListToolsPresets))
 }
+
+// UseGetWorkspaceConfig returns a query result for the workspace configuration.
+func UseGetWorkspaceConfig() wind.Result[*api.GetWorkspaceConfigResponse] {
+	client := tuiapi.UseClient()
+	return wind.Use(api.GetWorkspaceConfigRequest{}, promise.WrapWithProps(client.GetWorkspaceConfig))
+}
