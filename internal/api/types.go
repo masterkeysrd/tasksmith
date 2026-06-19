@@ -92,4 +92,5 @@ type GetWorkspaceConfigResponse struct {
 	DefaultProvider string          `json:"default_provider"`
 	AuthorizedTools map[string]bool `json:"authorized_tools"`
 	IsConfigured    bool            `json:"is_configured"`
+	CWD             string          `json:"cwd"`
 }

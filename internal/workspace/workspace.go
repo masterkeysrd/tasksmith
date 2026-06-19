@@ -28,6 +28,10 @@ func New(cwd string) *Workspace {
 	}
 }
 
+func (w *Workspace) CWD() string {
+	return w.cwd
+}
+
 func (w *Workspace) Load(ctx context.Context) error {
 	w.logger.Info("Loading workspace", log.String("cwd", w.cwd))
 	provider := &systemProvider{}
@@ -149,15 +153,16 @@ type WorkspaceConfig struct {
 	DefaultProvider string
 	AuthorizedTools map[string]bool
 	IsConfigured    bool
+	CWD             string
 }
 
 func (w *Workspace) GetWorkspaceConfig(ctx context.Context) (WorkspaceConfig, error) {
 	if w.registry == nil {
-		return WorkspaceConfig{}, nil
+		return WorkspaceConfig{CWD: w.cwd}, nil
 	}
 	wsSpec := w.registry.WorkspaceSpec()
 	if wsSpec == nil || wsSpec.Def == nil || wsSpec.Synthetic {
-		return WorkspaceConfig{}, nil
+		return WorkspaceConfig{CWD: w.cwd}, nil
 	}
 
 	cfg := WorkspaceConfig{
@@ -165,6 +170,7 @@ func (w *Workspace) GetWorkspaceConfig(ctx context.Context) (WorkspaceConfig, er
 		DefaultProvider: wsSpec.Def.Spec.DefaultProvider,
 		IsConfigured:    true,
 		AuthorizedTools: make(map[string]bool),
+		CWD:             w.cwd,
 	}
 
 	if wsSpec.Def.Spec.Policies != nil && wsSpec.Def.Spec.Policies.Tools != nil {

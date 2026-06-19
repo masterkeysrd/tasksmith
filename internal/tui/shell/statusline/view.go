@@ -3,13 +3,13 @@ package statusline
 import (
 	"fmt"
 	"image/color"
-	"os/exec"
 	"strings"
 
 	"github.com/masterkeysrd/kite/extras/kitex"
 	"github.com/masterkeysrd/kite/style"
 	"github.com/masterkeysrd/tasksmith/internal/tui/components/icon"
 	"github.com/masterkeysrd/tasksmith/internal/tui/mode"
+	plugin "github.com/masterkeysrd/tasksmith/internal/tui/plugin/statusline"
 	"github.com/masterkeysrd/tasksmith/internal/tui/queries"
 	"github.com/masterkeysrd/tasksmith/internal/tui/theme"
 )
@@ -65,26 +65,13 @@ var Mode = kitex.FC("Mode", func(props ModeProps) kitex.Node {
 
 // GitBranchProps defines properties for the GitBranch component.
 type GitBranchProps struct {
-	Style style.Style
+	Branch string
+	Style  style.Style
 }
 
 // GitBranch renders the current Git branch fragment.
 var GitBranch = kitex.FC("GitBranch", func(props GitBranchProps) kitex.Node {
 	t := theme.UseTheme()
-
-	gitBranch, setGitBranch := kitex.UseState("MAIN")
-	kitex.UseEffect(func() {
-		go func() {
-			cmd := exec.Command("git", "rev-parse", "--abbrev-ref", "HEAD")
-			out, err := cmd.Output()
-			if err == nil {
-				branch := strings.TrimSpace(string(out))
-				if branch != "" {
-					setGitBranch(strings.ToUpper(branch))
-				}
-			}
-		}()
-	}, []any{})
 
 	var borderPrimary, textMain color.Color = color.Transparent, color.Transparent
 	if t != nil {
@@ -105,7 +92,35 @@ var GitBranch = kitex.FC("GitBranch", func(props GitBranchProps) kitex.Node {
 
 	return kitex.Box(kitex.BoxProps{Style: gitStyle},
 		kitex.Box(kitex.BoxProps{Style: style.S().Foreground(textMain)}, icon.GitBranch),
-		kitex.Text(gitBranch()),
+		kitex.Text(props.Branch),
+	)
+})
+
+// CommandProps defines properties for a custom shell command fragment.
+type CommandProps struct {
+	Output string
+	Style  style.Style
+}
+
+// Command renders the output of a custom shell command.
+var Command = kitex.FC("Command", func(props CommandProps) kitex.Node {
+	t := theme.UseTheme()
+
+	var borderPrimary, textMain color.Color = color.Transparent, color.Transparent
+	if t != nil {
+		borderPrimary = t.Color.Border.Primary
+		textMain = t.Color.Text.Primary
+	}
+
+	cmdStyle := style.S().
+		Background(borderPrimary).
+		Foreground(textMain).
+		Bold(true).
+		PaddingHorizontal(2).
+		Merge(props.Style)
+
+	return kitex.Box(kitex.BoxProps{Style: cmdStyle},
+		kitex.Text(props.Output),
 	)
 })
 
@@ -159,94 +174,142 @@ var Spacer = kitex.SimpleFC("Spacer", func() kitex.Node {
 	return kitex.Box(kitex.BoxProps{Style: spacerStyle})
 })
 
-// StatsProps defines properties for the Stats component.
-type StatsProps struct {
-	Provider       string
+// ProviderProps defines properties for the Provider component.
+type ProviderProps struct {
+	Provider string
+	Style    style.Style
+}
+
+// Provider renders the current model provider.
+var Provider = kitex.FC("Provider", func(props ProviderProps) kitex.Node {
+	t := theme.UseTheme()
+	magentaColor := color.Color(color.Transparent)
+	if t != nil {
+		magentaColor = t.Color.Text.Magenta
+	}
+
+	providerStyle := style.S().
+		Display(style.DisplayFlex).
+		FlexDirection(style.FlexRow).
+		AlignItems(style.AlignCenter).
+		Gap(1).
+		Foreground(magentaColor).
+		PaddingHorizontal(2).
+		Merge(props.Style)
+
+	return kitex.Box(kitex.BoxProps{Style: providerStyle},
+		icon.Server,
+		kitex.Text(props.Provider),
+	)
+})
+
+// ModelProps defines properties for the Model component.
+type ModelProps struct {
 	Model          string
-	CurrentAgent   string
 	ThinkingEffort string
-	InputTokens    int
-	OutputTokens   int
-	Cost           float64
 	Style          style.Style
 }
 
-// Stats renders the system and token statistics fragment.
-var Stats = kitex.FC("Stats", func(props StatsProps) kitex.Node {
+// Model renders the active language model name and thinking effort.
+var Model = kitex.FC("Model", func(props ModelProps) kitex.Node {
 	t := theme.UseTheme()
-	wsCfg := queries.UseGetWorkspaceConfig()
 
-	// Resolve properties with fallbacks
-	provider := props.Provider
-	if provider == "" {
-		if wsCfg.Data != nil && wsCfg.Data.DefaultProvider != "" {
-			provider = wsCfg.Data.DefaultProvider
-		} else {
-			provider = "Loom_Engine"
-		}
-	}
-
-	model := props.Model
-	if model == "" {
-		model = "Gemini 3.5 Flash"
-	}
-
-	currentAgent := props.CurrentAgent
-	if currentAgent == "" {
-		currentAgent = "Loom_Primary"
-	}
-
-	thinkingEffort := props.ThinkingEffort
-	if thinkingEffort == "" {
-		thinkingEffort = "high"
-	}
-
-	inputTokens := props.InputTokens
-	if inputTokens == 0 {
-		inputTokens = 25100
-	}
-
-	outputTokens := props.OutputTokens
-	if outputTokens == 0 {
-		outputTokens = 10400
-	}
-
-	cost := props.Cost
-	if cost == 0.0 {
-		cost = 0.021
-	}
-
-	var bg, textDim, textExtraDim, colorNormal, colorInsert, modelColor, colorInfo color.Color = color.Transparent, color.Transparent, color.Transparent, color.Transparent, color.Transparent, color.Transparent, color.Transparent
-
+	modelColor := color.Color(color.Transparent)
+	colorInsert := color.Color(color.Transparent)
 	if t != nil {
-		bg = t.Color.Surface.BaseHover
-		textDim = t.Color.Text.Secondary
-		textExtraDim = t.Color.Text.Tertiary
-
-		colorNormal = t.Color.Surface.Success
 		colorInsert = t.Color.Surface.Primary
 		modelColor = t.Color.Surface.Tertiary
-		colorInfo = t.Color.Surface.Info
-
-		if val, ok := t.Palette["green"]; ok {
-			colorNormal = val
-		}
 		if val, ok := t.Palette["cyan"]; ok {
 			colorInsert = val
 		}
 		if val, ok := t.Palette["orange"]; ok {
 			modelColor = val
 		}
-		if val, ok := t.Palette["blue"]; ok {
-			colorInfo = val
-		}
 	}
 
 	var modelDisplayColor color.Color
-	if strings.ToLower(thinkingEffort) == "off" {
+	if strings.ToLower(props.ThinkingEffort) == "off" {
 		modelDisplayColor = colorInsert
 	} else {
 		modelDisplayColor = modelColor
+	}
+
+	modelStyle := style.S().
+		Display(style.DisplayFlex).
+		FlexDirection(style.FlexRow).
+		AlignItems(style.AlignCenter).
+		Gap(1).
+		Foreground(modelDisplayColor).
+		Bold(strings.ToLower(props.ThinkingEffort) != "off").
+		PaddingHorizontal(2).
+		Merge(props.Style)
+
+	return kitex.Box(kitex.BoxProps{Style: modelStyle},
+		icon.Cpu,
+		kitex.Text(fmt.Sprintf("%s [%s]", props.Model, strings.ToUpper(props.ThinkingEffort))),
+	)
+})
+
+// AgentProps defines properties for the Agent component.
+type AgentProps struct {
+	Agent string
+	Style style.Style
+}
+
+// Agent renders the active agent name.
+var Agent = kitex.FC("Agent", func(props AgentProps) kitex.Node {
+	t := theme.UseTheme()
+
+	colorNormal := color.Color(color.Transparent)
+	if t != nil {
+		colorNormal = t.Color.Surface.Success
+		if val, ok := t.Palette["green"]; ok {
+			colorNormal = val
+		}
+	}
+
+	agentStyle := style.S().
+		Display(style.DisplayFlex).
+		FlexDirection(style.FlexRow).
+		AlignItems(style.AlignCenter).
+		Gap(1).
+		Foreground(colorNormal).
+		PaddingHorizontal(2).
+		Merge(props.Style)
+
+	return kitex.Box(kitex.BoxProps{Style: agentStyle},
+		icon.Robot,
+		kitex.Text(props.Agent),
+	)
+})
+
+// StatsProps defines properties for the Stats component.
+type StatsProps struct {
+	InputTokens  int
+	OutputTokens int
+	Cost         float64
+	Style        style.Style
+}
+
+// Stats renders token statistics and run cost.
+var Stats = kitex.FC("Stats", func(props StatsProps) kitex.Node {
+	t := theme.UseTheme()
+
+	var bg, textDim, textExtraDim, colorNormal, colorInfo color.Color = color.Transparent, color.Transparent, color.Transparent, color.Transparent, color.Transparent
+
+	if t != nil {
+		bg = t.Color.Surface.BaseHover
+		textDim = t.Color.Text.Secondary
+		textExtraDim = t.Color.Text.Tertiary
+		colorNormal = t.Color.Surface.Success
+		colorInfo = t.Color.Surface.Info
+
+		if val, ok := t.Palette["green"]; ok {
+			colorNormal = val
+		}
+		if val, ok := t.Palette["blue"]; ok {
+			colorInfo = val
+		}
 	}
 
 	statsStyle := style.S().
@@ -258,55 +321,7 @@ var Stats = kitex.FC("Stats", func(props StatsProps) kitex.Node {
 		PaddingHorizontal(2).
 		Merge(props.Style)
 
-	magentaColor := color.Color(color.Transparent)
-	if t != nil {
-		magentaColor = t.Color.Text.Magenta
-	}
-
 	return kitex.Box(kitex.BoxProps{Style: statsStyle},
-		// Provider
-		kitex.Box(kitex.BoxProps{
-			Style: style.S().
-				Display(style.DisplayFlex).
-				FlexDirection(style.FlexRow).
-				AlignItems(style.AlignCenter).
-				Gap(1).
-				Foreground(magentaColor),
-		},
-			icon.Server,
-			kitex.Text(provider),
-		),
-
-		// Model & Effort
-		kitex.Box(kitex.BoxProps{
-			Style: style.S().
-				Display(style.DisplayFlex).
-				FlexDirection(style.FlexRow).
-				AlignItems(style.AlignCenter).
-				Gap(1).
-				Foreground(modelDisplayColor).
-				Bold(strings.ToLower(thinkingEffort) != "off"),
-		},
-			icon.Cpu,
-			kitex.Text(fmt.Sprintf("%s [%s]", model, strings.ToUpper(thinkingEffort))),
-		),
-
-		// Current Agent
-		kitex.Box(kitex.BoxProps{
-			Style: style.S().
-				Display(style.DisplayFlex).
-				FlexDirection(style.FlexRow).
-				AlignItems(style.AlignCenter).
-				Gap(1).
-				Foreground(colorNormal),
-		},
-			icon.Robot,
-			kitex.Text(currentAgent),
-		),
-
-		// Separator
-		kitex.Box(kitex.BoxProps{Style: style.S().Foreground(textExtraDim)}, kitex.Text("│")),
-
 		// Input tokens
 		kitex.Box(kitex.BoxProps{
 			Style: style.S().
@@ -317,7 +332,7 @@ var Stats = kitex.FC("Stats", func(props StatsProps) kitex.Node {
 				Foreground(textDim),
 		},
 			kitex.Box(kitex.BoxProps{Style: style.S().Foreground(colorInfo)}, icon.MoveDown),
-			kitex.Text(formatTokens(inputTokens)),
+			kitex.Text(formatTokens(props.InputTokens)),
 		),
 
 		// Output tokens
@@ -330,7 +345,7 @@ var Stats = kitex.FC("Stats", func(props StatsProps) kitex.Node {
 				Foreground(textDim),
 		},
 			kitex.Box(kitex.BoxProps{Style: style.S().Foreground(colorNormal)}, icon.MoveUp),
-			kitex.Text(formatTokens(outputTokens)),
+			kitex.Text(formatTokens(props.OutputTokens)),
 		),
 
 		// Separator
@@ -338,7 +353,7 @@ var Stats = kitex.FC("Stats", func(props StatsProps) kitex.Node {
 
 		// Cost
 		kitex.Box(kitex.BoxProps{Style: style.S().Foreground(colorNormal)},
-			kitex.Text(fmt.Sprintf("$%.3f", cost)),
+			kitex.Text(fmt.Sprintf("$%.3f", props.Cost)),
 		),
 	)
 })
@@ -411,9 +426,64 @@ type Props struct {
 	Children []kitex.Node
 }
 
+func renderFragment(f plugin.Fragment, state plugin.State) kitex.Node {
+	wsCfg := queries.UseGetWorkspaceConfig()
+
+	providerName := ""
+	if wsCfg.Data != nil && wsCfg.Data.DefaultProvider != "" {
+		providerName = wsCfg.Data.DefaultProvider
+	} else {
+		providerName = "Loom_Engine"
+	}
+
+	modelName := "Gemini 3.5 Flash"
+	thinkingEffort := "high"
+	agentName := "Loom_Primary"
+
+	inputTokens := 25100
+	outputTokens := 10400
+	costValue := 0.021
+
+	switch f.Type {
+	case "builtin":
+		switch f.Name {
+		case "mode":
+			return Mode(ModeProps{})
+		case "git_branch":
+			return GitBranch(GitBranchProps{Branch: state.GitBranch})
+		case "provider":
+			return Provider(ProviderProps{Provider: providerName})
+		case "model":
+			return Model(ModelProps{Model: modelName, ThinkingEffort: thinkingEffort})
+		case "agent":
+			return Agent(AgentProps{Agent: agentName})
+		case "stats":
+			return Stats(StatsProps{InputTokens: inputTokens, OutputTokens: outputTokens, Cost: costValue})
+		case "status":
+			return Status(StatusProps{})
+		default:
+			return nil
+		}
+	case "command":
+		if f.Exec != "" {
+			output := state.CommandOutputs[f.Exec]
+			return Command(CommandProps{Output: output})
+		}
+		return nil
+	default:
+		return nil
+	}
+}
+
 // View is the primary StatusLine component that arranges layout fragments.
 var View = kitex.FCC("StatusLine", func(props Props) kitex.Node {
 	t := theme.UseTheme()
+	state := plugin.Use()
+	wsCfg := queries.UseGetWorkspaceConfig()
+
+	if wsCfg.Data != nil && wsCfg.Data.CWD != "" {
+		plugin.SetCWD(wsCfg.Data.CWD)
+	}
 
 	bg := color.Color(color.Transparent)
 	if t != nil {
@@ -433,14 +503,23 @@ var View = kitex.FCC("StatusLine", func(props Props) kitex.Node {
 	if len(props.Children) > 0 {
 		children = props.Children
 	} else {
-		// Default fragment configuration if no children are specified
-		children = []kitex.Node{
-			Mode(ModeProps{}),
-			GitBranch(GitBranchProps{}),
-			Spacer(),
-			Stats(StatsProps{}),
-			Status(StatusProps{}),
+		var leftNodes []kitex.Node
+		for _, f := range state.Config.Left {
+			if node := renderFragment(f, state); node != nil {
+				leftNodes = append(leftNodes, node)
+			}
 		}
+
+		var rightNodes []kitex.Node
+		for _, f := range state.Config.Right {
+			if node := renderFragment(f, state); node != nil {
+				rightNodes = append(rightNodes, node)
+			}
+		}
+
+		children = append(children, leftNodes...)
+		children = append(children, Spacer())
+		children = append(children, rightNodes...)
 	}
 
 	return kitex.Box(kitex.BoxProps{Style: lineStyle}, children...)
