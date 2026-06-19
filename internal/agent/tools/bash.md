@@ -7,7 +7,6 @@ metadata:
     category: system
 spec:
   command: ["bash", "-c"]
-  description: Execute a bash command.
   parameters:
     type: object
     properties:
@@ -15,4 +14,17 @@ spec:
         type: string
         description: Bash command to execute.
     required: ["command"]
+  outputSchema:
+    type: object
+    properties:
+      stdout:
+        type: string
+        description: Standard output.
+      stderr:
+        type: string
+        description: Standard error.
+      exitCode:
+        type: integer
+        description: Exit code.
 ---
+Execute a bash command.

@@ -7,7 +7,6 @@ metadata:
     category: filesystem
 spec:
   command: ["ls", "-F"]
-  description: List files in a directory with type indicators.
   parameters:
     type: object
     properties:
@@ -15,4 +14,13 @@ spec:
         type: string
         description: Path to the directory.
     required: ["path"]
+  outputSchema:
+    type: object
+    properties:
+      files:
+        type: array
+        items:
+          type: object
+        description: List of files and directories.
 ---
+List files in a directory with type indicators.

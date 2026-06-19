@@ -7,7 +7,6 @@ metadata:
     category: network
 spec:
   command: ["curl", "-O"]
-  description: Download a file from a URL.
   parameters:
     type: object
     properties:
@@ -15,4 +14,14 @@ spec:
         type: string
         description: URL to download from.
     required: ["url"]
+  outputSchema:
+    type: object
+    properties:
+      path:
+        type: string
+        description: Path to the downloaded file.
+      success:
+        type: boolean
+        description: Whether the download succeeded.
 ---
+Download a file from a URL.

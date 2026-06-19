@@ -7,7 +7,6 @@ metadata:
     category: lsp
 spec:
   command: ["lsp-client", "diagnostics"]
-  description: Get LSP diagnostics.
   parameters:
     type: object
     properties:
@@ -15,4 +14,13 @@ spec:
         type: string
         description: Path to the file or directory.
     required: ["path"]
+  outputSchema:
+    type: object
+    properties:
+      diagnostics:
+        type: array
+        items:
+          type: object
+        description: List of LSP diagnostics.
 ---
+Get LSP diagnostics.

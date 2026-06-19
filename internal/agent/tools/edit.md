@@ -7,7 +7,6 @@ metadata:
     category: filesystem
 spec:
   command: ["sed", "-i"]
-  description: Edit a file using sed.
   parameters:
     type: object
     properties:
@@ -18,4 +17,14 @@ spec:
         type: string
         description: Sed expression.
     required: ["path", "expression"]
+  outputSchema:
+    type: object
+    properties:
+      path:
+        type: string
+        description: Path to the edited file.
+      success:
+        type: boolean
+        description: Whether the edit succeeded.
 ---
+Edit a file using sed.

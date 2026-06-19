@@ -7,7 +7,6 @@ metadata:
     category: lsp
 spec:
   command: ["lsp-client", "search"]
-  description: Search using LSP.
   parameters:
     type: object
     properties:
@@ -15,4 +14,13 @@ spec:
         type: string
         description: Search query.
     required: ["query"]
+  outputSchema:
+    type: object
+    properties:
+      results:
+        type: array
+        items:
+          type: object
+        description: List of LSP search results.
 ---
+Search using LSP.

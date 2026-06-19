@@ -7,7 +7,6 @@ metadata:
     category: lsp
 spec:
   command: ["lsp-client", "restart"]
-  description: Restart LSP server.
   parameters:
     type: object
     properties:
@@ -15,4 +14,14 @@ spec:
         type: string
         description: Name of the LSP server to restart.
     required: ["server"]
+  outputSchema:
+    type: object
+    properties:
+      success:
+        type: boolean
+        description: Whether the LSP server restarted successfully.
+      message:
+        type: string
+        description: Description of the restart outcome.
 ---
+Restart LSP server.

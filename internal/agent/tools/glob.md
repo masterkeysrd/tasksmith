@@ -7,7 +7,6 @@ metadata:
     category: filesystem
 spec:
   command: ["find"]
-  description: Find files matching a glob pattern.
   parameters:
     type: object
     properties:
@@ -15,4 +14,13 @@ spec:
         type: string
         description: Glob pattern to match.
     required: ["pattern"]
+  outputSchema:
+    type: object
+    properties:
+      matches:
+        type: array
+        items:
+          type: string
+        description: List of matching file paths.
 ---
+Find files matching a glob pattern.

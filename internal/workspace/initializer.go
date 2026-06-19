@@ -165,8 +165,8 @@ func (w *Workspace) Initialize(ctx context.Context, opts InitializationOptions) 
 	if opts.APIKey != "" {
 		envVarName := "API_KEY"
 		if baseProvider != nil && baseProvider.Spec.Auth != nil {
-			if envName, ok := baseProvider.Spec.Auth["env"]; ok {
-				envVarName = envName
+			if baseProvider.Spec.Auth.Env != "" {
+				envVarName = baseProvider.Spec.Auth.Env
 			}
 		}
 

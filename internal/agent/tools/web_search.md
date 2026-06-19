@@ -7,7 +7,6 @@ metadata:
     category: network
 spec:
   command: ["curl"]
-  description: Search the web.
   parameters:
     type: object
     properties:
@@ -15,4 +14,13 @@ spec:
         type: string
         description: Search query.
     required: ["query"]
+  outputSchema:
+    type: object
+    properties:
+      results:
+        type: array
+        items:
+          type: object
+        description: Search results.
 ---
+Search the web.

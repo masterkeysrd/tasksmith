@@ -7,7 +7,6 @@ metadata:
     category: mcp
 spec:
   command: ["mcp-client", "read"]
-  description: Read resources from MCP.
   parameters:
     type: object
     properties:
@@ -15,4 +14,14 @@ spec:
         type: string
         description: MCP resource URI.
     required: ["uri"]
+  outputSchema:
+    type: object
+    properties:
+      content:
+        type: string
+        description: Content of the MCP resource.
+      success:
+        type: boolean
+        description: Whether reading the resource succeeded.
 ---
+Read resources from MCP.

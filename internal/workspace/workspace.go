@@ -69,7 +69,7 @@ func (w *Workspace) Agents() []*warp.Agent {
 	}
 
 	resources := resolver.ListResources(warp.QueryOptions{
-		Kinds: []string{string(warp.KindAgent)},
+		Kinds: []warp.Kind{warp.KindAgent},
 	})
 	agents := make([]*warp.Agent, 0, len(resources))
 	for _, r := range resources {
@@ -87,7 +87,7 @@ func (w *Workspace) Providers() []*warp.ModelProvider {
 	}
 
 	resources := resolver.ListResources(warp.QueryOptions{
-		Kinds: []string{string(warp.KindModelProvider)},
+		Kinds: []warp.Kind{warp.KindModelProvider},
 	})
 	providers := make([]*warp.ModelProvider, 0, len(resources))
 	for _, r := range resources {

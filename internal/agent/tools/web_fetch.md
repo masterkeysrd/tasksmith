@@ -7,7 +7,6 @@ metadata:
     category: network
 spec:
   command: ["curl", "-L"]
-  description: Fetch a web page content.
   parameters:
     type: object
     properties:
@@ -15,4 +14,14 @@ spec:
         type: string
         description: Web page URL.
     required: ["url"]
+  outputSchema:
+    type: object
+    properties:
+      content:
+        type: string
+        description: Web page content.
+      title:
+        type: string
+        description: Web page title.
 ---
+Fetch a web page content.

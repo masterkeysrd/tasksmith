@@ -7,7 +7,6 @@ metadata:
     category: filesystem
 spec:
   command: ["cat"]
-  description: View the contents of a file.
   parameters:
     type: object
     properties:
@@ -15,4 +14,11 @@ spec:
         type: string
         description: Path to the file.
     required: ["path"]
+  outputSchema:
+    type: object
+    properties:
+      content:
+        type: string
+        description: Content of the file.
 ---
+View the contents of a file.

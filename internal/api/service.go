@@ -175,11 +175,9 @@ func (s *Service) ListProvidersPresets(ctx context.Context, req ListProvidersPre
 
 		var authEnv string
 		var apiKey string
-		if p.Spec.Auth != nil {
-			if envName, ok := p.Spec.Auth["env"]; ok {
-				authEnv = envName
-				apiKey = os.Getenv(envName)
-			}
+		if p.Spec.Auth != nil && p.Spec.Auth.Env != "" {
+			authEnv = p.Spec.Auth.Env
+			apiKey = os.Getenv(authEnv)
 		}
 
 		resp.Providers = append(resp.Providers, Provider{

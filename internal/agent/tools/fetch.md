@@ -7,7 +7,6 @@ metadata:
     category: network
 spec:
   command: ["curl", "-L"]
-  description: Fetch a URL.
   parameters:
     type: object
     properties:
@@ -15,4 +14,14 @@ spec:
         type: string
         description: URL to fetch.
     required: ["url"]
+  outputSchema:
+    type: object
+    properties:
+      content:
+        type: string
+        description: Content of the response.
+      status:
+        type: integer
+        description: HTTP status code.
 ---
+Fetch a URL.

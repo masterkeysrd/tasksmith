@@ -7,7 +7,6 @@ metadata:
     category: filesystem
 spec:
   command: ["grep", "-rn"]
-  description: Search for a pattern in files.
   parameters:
     type: object
     properties:
@@ -18,4 +17,13 @@ spec:
         type: string
         description: Directory or file to search in.
     required: ["pattern", "path"]
+  outputSchema:
+    type: object
+    properties:
+      matches:
+        type: array
+        items:
+          type: object
+        description: List of search matches.
 ---
+Search for a pattern in files.

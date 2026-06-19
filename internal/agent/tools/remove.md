@@ -7,7 +7,6 @@ metadata:
     category: filesystem
 spec:
   command: ["rm", "-rf"]
-  description: Remove a file or directory.
   parameters:
     type: object
     properties:
@@ -15,4 +14,14 @@ spec:
         type: string
         description: Path to remove.
     required: ["path"]
+  outputSchema:
+    type: object
+    properties:
+      path:
+        type: string
+        description: Path that was removed.
+      success:
+        type: boolean
+        description: Whether removal succeeded.
 ---
+Remove a file or directory.

@@ -7,7 +7,6 @@ metadata:
     category: filesystem
 spec:
   command: ["tee"]
-  description: Write content to a file.
   parameters:
     type: object
     properties:
@@ -18,4 +17,11 @@ spec:
         type: string
         description: Content to write.
     required: ["path", "content"]
+  outputSchema:
+    type: object
+    properties:
+      path:
+        type: string
+        description: Path to the written file.
 ---
+Write content to a file.
