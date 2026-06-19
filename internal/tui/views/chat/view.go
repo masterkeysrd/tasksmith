@@ -168,11 +168,24 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 		Display(style.DisplayFlex).
 		FlexDirection(style.FlexColumn)
 
+	bgDark := color.Color(color.RGBA{R: 22, G: 22, B: 30, A: 255})
+	if t != nil {
+		if c, ok := t.Palette["bg_dark"]; ok {
+			bgDark = c
+		} else {
+			bgDark = t.Color.Surface.BaseHover
+		}
+	}
+
 	messagesContainerStyle := style.S().
 		Flex(1, 1, style.Cells(0)).
 		MinHeight(style.Cells(0)).
+		Display(style.DisplayFlex).
+		FlexDirection(style.FlexColumn).
+		Gap(1).
 		Padding(1).
-		Overflow(style.OverflowAuto)
+		Overflow(style.OverflowAuto).
+		Background(bgDark)
 
 	composerContainerStyle := style.S().
 		PaddingHorizontal(1).
@@ -293,14 +306,12 @@ var Bubble = kitex.FC("Bubble", func(props BubbleProps) kitex.Node {
 	if t != nil {
 		bubbleStyle = style.S().
 			Padding(1).
-			MarginBottom(1).
 			MaxWidth(style.Percent(70))
 
 		switch role {
 		case message.RoleUser:
 			align = style.AlignEnd
 			bubbleStyle = bubbleStyle.
-				Background(t.Color.Surface.Primary).
 				Foreground(t.Color.Text.Primary)
 		case message.RoleSystem:
 			align = style.AlignCenter
@@ -310,7 +321,6 @@ var Bubble = kitex.FC("Bubble", func(props BubbleProps) kitex.Node {
 		default:
 			align = style.AlignStart
 			bubbleStyle = bubbleStyle.
-				Background(t.Color.Surface.Secondary).
 				Foreground(t.Color.Text.Primary)
 		}
 	}
@@ -339,8 +349,7 @@ var Bubble = kitex.FC("Bubble", func(props BubbleProps) kitex.Node {
 		AlignItems(style.AlignCenter).
 		Gap(1).
 		Foreground(t.Color.Text.Tertiary).
-		Bold(true).
-		MarginBottom(1)
+		Bold(true)
 
 	senderStyle := style.S().
 		Display(style.DisplayFlex).
@@ -384,23 +393,31 @@ var Message = kitex.FC("Message", func(props MessageProps) kitex.Node {
 	content := props.Content
 
 	if role == message.RoleAssistant {
+		var children []kitex.Node
+		for _, block := range content {
+			var node kitex.Node
+			switch b := block.(type) {
+			case *message.TextBlock:
+				if strings.TrimSpace(b.Text) != "" {
+					node = components.Markdown(components.MarkdownProps{Source: b.Text})
+				}
+			case *message.ThinkingBlock:
+				if strings.TrimSpace(b.Thinking) != "" {
+					node = CollapsibleThinking(CollapsibleThinkingProps{Content: b.Thinking})
+				}
+			}
+			if node != nil {
+				children = append(children, node)
+			}
+		}
+
+		if len(children) == 0 {
+			return nil
+		}
+
 		return kitex.Box(kitex.BoxProps{
 			Style: style.S().Display(style.DisplayFlex).FlexDirection(style.FlexColumn).Gap(1),
-		},
-			kitex.Map(content, func(block message.Block, _ int) kitex.Node {
-				switch b := block.(type) {
-				case *message.TextBlock:
-					if strings.TrimSpace(b.Text) != "" {
-						return kitex.Text(b.Text)
-					}
-				case *message.ThinkingBlock:
-					if strings.TrimSpace(b.Thinking) != "" {
-						return CollapsibleThinking(CollapsibleThinkingProps{Content: b.Thinking})
-					}
-				}
-				return nil
-			}),
-		)
+		}, children...)
 	}
 
 	// Combine all text blocks for other roles
@@ -413,7 +430,7 @@ var Message = kitex.FC("Message", func(props MessageProps) kitex.Node {
 	if len(texts) == 0 {
 		return nil
 	}
-	return kitex.Text(strings.Join(texts, "\n"))
+	return components.Markdown(components.MarkdownProps{Source: strings.Join(texts, "\n")})
 })
 
 func getBubbleRole(role message.Role) message.Role {

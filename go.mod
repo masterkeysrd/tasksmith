@@ -3,11 +3,13 @@ module github.com/masterkeysrd/tasksmith
 go 1.26.4
 
 require (
+	github.com/alecthomas/chroma/v2 v2.27.0
 	github.com/google/uuid v1.6.0
 	github.com/jmoiron/sqlx v1.4.0
 	github.com/masterkeysrd/kite v0.0.2-0.20260612031527-743d8664906e
 	github.com/masterkeysrd/loom v0.0.2
 	github.com/masterkeysrd/warp v0.0.3-0.20260612015155-366b5238ee18
+	github.com/yuin/goldmark v1.8.2
 	gopkg.in/yaml.v3 v3.0.1
 	modernc.org/sqlite v1.52.0
 )
@@ -30,6 +32,7 @@ require (
 	github.com/clipperhouse/uax29/v2 v2.7.0 // indirect
 	github.com/cloudflare/circl v1.6.3 // indirect
 	github.com/cyphar/filepath-securejoin v0.6.1 // indirect
+	github.com/dlclark/regexp2/v2 v2.2.1 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/emirpasic/gods v1.18.1 // indirect
 	github.com/felixge/httpsnoop v1.0.4 // indirect
