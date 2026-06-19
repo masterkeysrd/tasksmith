@@ -25,14 +25,14 @@ func (app *Application) InitializeCommands() {
 		return nil
 	})
 
-	command.Register("colorscheme", func(ctx command.CommandContext) error {
+	command.Register("theme", func(ctx command.CommandContext) error {
 		if len(ctx.Args) == 0 {
-			return fmt.Errorf("colorscheme: missing theme name")
+			return fmt.Errorf("theme: missing theme name")
 		}
 
 		name := ctx.Args[0]
 		if err := theme.Set(name); err != nil {
-			return fmt.Errorf("colorscheme: %w", err)
+			return fmt.Errorf("theme: %w", err)
 		}
 		return nil
 	})

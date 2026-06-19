@@ -3,6 +3,7 @@ package components
 import (
 	"image/color"
 
+	"github.com/masterkeysrd/kite/dom"
 	"github.com/masterkeysrd/kite/event"
 	"github.com/masterkeysrd/kite/extras/kitex"
 	"github.com/masterkeysrd/kite/style"
@@ -53,6 +54,10 @@ type InputProps struct {
 	OnFocus func()
 	// OnBlur is triggered when the input loses focus.
 	OnBlur func()
+	// OnKeyDown is triggered when a key is pressed.
+	OnKeyDown func(event.Event)
+	// Ref allows referencing the underlying input element.
+	Ref kitex.Ref[dom.Element]
 	// Style allows passing additional style overrides.
 	Style style.Style
 	// PlaceholderStyle allows passing additional style overrides for the placeholder.
@@ -190,7 +195,8 @@ var Input = kitex.FC("Input", func(props InputProps) kitex.Node {
 
 	s = s.Merge(props.Style)
 
-	return kitex.Input(kitex.InputProps{
+	inputProps := kitex.InputProps{
+		OnKeyDown:        props.OnKeyDown,
 		Name:             props.Name,
 		Value:            props.Value,
 		Placeholder:      props.Placeholder,
@@ -205,10 +211,10 @@ var Input = kitex.FC("Input", func(props InputProps) kitex.Node {
 		},
 		OnChange: func(e event.Event) {
 			if props.OnChange != nil {
-				if ie, ok := e.(*event.InputEvent); ok {
+				if ie, ok := e.(*event.ChangeEvent); ok {
 					props.OnChange(ie.Value)
-				} else if ce, ok := e.(*event.ChangeEvent); ok {
-					props.OnChange(ce.Value)
+				} else if ie, ok := e.(*event.InputEvent); ok {
+					props.OnChange(ie.Value)
 				}
 			}
 		},
@@ -224,5 +230,11 @@ var Input = kitex.FC("Input", func(props InputProps) kitex.Node {
 				props.OnBlur()
 			}
 		},
-	})
+	}
+
+	if props.Ref != nil {
+		inputProps.Ref = props.Ref
+	}
+
+	return kitex.Input(inputProps)
 })

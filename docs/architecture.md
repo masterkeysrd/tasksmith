@@ -23,7 +23,7 @@ The binary entry point. Parses command-line flags (logs level, workspace path, d
 
 ### `internal/app`
 Coordinates the high-level application lifecycle:
-- Registers terminal command handlers (`quit`, `colorscheme`, `startinsert`, `stopinsert`).
+- Registers terminal command handlers (`quit`, `theme`, `startinsert`, `stopinsert`).
 - Configures workspace paths, loads local workspace registry profiles, and initializes the TUI renderer loop.
 - Manages clean shutdowns by executing deferred cleanup callbacks (closing logs, unmapping unneeded buffers).
 

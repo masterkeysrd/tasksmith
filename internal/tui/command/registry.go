@@ -97,3 +97,19 @@ func (r *registry) execute(ctx context.Context, id string, payload any, args []s
 func ResetForTest() {
 	globalRegistry = newRegistry()
 }
+
+// List returns a list of all registered command names.
+func List() []string {
+	return globalRegistry.list()
+}
+
+func (r *registry) list() []string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	keys := make([]string, 0, len(r.commands))
+	for k := range r.commands {
+		keys = append(keys, k)
+	}
+	return keys
+}

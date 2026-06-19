@@ -219,11 +219,11 @@ var Button = kitex.FCC("Button", func(props ButtonProps) kitex.Node {
 
 	var content []kitex.Node
 	if props.StartIcon != nil {
-		content = append(content, props.StartIcon)
+		content = append(content, kitex.Box(kitex.BoxProps{}, props.StartIcon))
 	}
 	content = append(content, props.Children...)
 	if props.EndIcon != nil {
-		content = append(content, props.EndIcon)
+		content = append(content, kitex.Box(kitex.BoxProps{}, props.EndIcon))
 	}
 
 	return kitex.Button(kitex.ButtonProps{

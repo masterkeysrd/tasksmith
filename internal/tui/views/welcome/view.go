@@ -16,6 +16,8 @@ import (
 // ViewProps defines the properties for the Welcome view.
 type ViewProps struct {
 	OnOpenSetupWizard func()
+	OnNewSession      func()
+	OnOpenSession     func(sessionID string)
 }
 
 // Mock structures to match mockup.tsx expectations since they aren't fully represented in backend API yet.
@@ -327,7 +329,7 @@ var View = kitex.FC("WelcomeView", func(props ViewProps) kitex.Node {
 					// Left Column: Actions
 					kitex.Box(kitex.BoxProps{Style: LeftColumnStyle},
 						ActionBox(ActionBoxProps{Title: "Sessions"},
-							ActionItem(ActionItemProps{Icon: icon.Calendar, Label: "New Session", OnClick: func() { triggerAction("New Session") }}),
+							ActionItem(ActionItemProps{Icon: icon.Calendar, Label: "New Session", OnClick: props.OnNewSession}),
 						),
 						ActionBox(ActionBoxProps{Title: "Agents & Skills"},
 							ActionItem(ActionItemProps{Icon: icon.Robot, Label: "New Agent", OnClick: func() { triggerAction("New Agent") }}),
@@ -445,11 +447,14 @@ var View = kitex.FC("WelcomeView", func(props ViewProps) kitex.Node {
 						InfoSection(InfoSectionProps{Icon: icon.History, Title: "Recent Sessions"},
 							kitex.Map(mockSessions, func(s mockSession, idx int) kitex.Node {
 								hours := fmt.Sprintf("%dh", idx+1)
+								sessionID := s.ID
 								return SessionItem(SessionItemProps{
 									Name:  s.Name,
 									Hours: hours,
 									OnClick: func() {
-										triggerAction(fmt.Sprintf("Switch to session '%s'", s.Name))
+										if props.OnOpenSession != nil {
+											props.OnOpenSession(sessionID)
+										}
 									},
 								})
 							}),
