@@ -2,8 +2,13 @@ package api
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"os"
+	"time"
 
+	"github.com/masterkeysrd/loom/message"
+	"github.com/masterkeysrd/tasksmith/internal/session"
 	"github.com/masterkeysrd/tasksmith/internal/workspace"
 	"github.com/masterkeysrd/warp"
 )
@@ -21,11 +26,15 @@ type Workspace interface {
 // Service provides methods to interact with the workspace through API types.
 type Service struct {
 	ws Workspace
+	sm *session.Manager
 }
 
 // NewService creates a new API service.
-func NewService(ws Workspace) *Service {
-	return &Service{ws: ws}
+func NewService(ws Workspace, sm *session.Manager) *Service {
+	return &Service{
+		ws: ws,
+		sm: sm,
+	}
 }
 
 // GetWorkspaceConfig returns the workspace configuration.
@@ -216,4 +225,107 @@ func (s *Service) ListToolsPresets(ctx context.Context, req ListToolsPresetsRequ
 	}
 
 	return resp, nil
+}
+
+// ListSessions returns a list of all active or saved sessions.
+func (s *Service) ListSessions(ctx context.Context, req ListSessionsRequest) (*ListSessionsResponse, error) {
+	if s.sm == nil {
+		return &ListSessionsResponse{}, nil
+	}
+	sessions, err := s.sm.ListSessions(ctx)
+	if err != nil {
+		return nil, err
+	}
+	resp := &ListSessionsResponse{
+		Sessions: make([]Session, len(sessions)),
+	}
+	for i, sess := range sessions {
+		resp.Sessions[i] = Session{
+			ID:        sess.ID,
+			Title:     sess.Title,
+			CreatedAt: sess.CreatedAt.Format(time.RFC3339),
+			UpdatedAt: sess.UpdatedAt.Format(time.RFC3339),
+		}
+	}
+	return resp, nil
+}
+
+// CreateSession initializes a new session workspace.
+func (s *Service) CreateSession(ctx context.Context, req CreateSessionRequest) (*CreateSessionResponse, error) {
+	if s.sm == nil {
+		return nil, fmt.Errorf("session manager not initialized")
+	}
+	sess, err := s.sm.CreateSession(ctx, req.Title)
+	if err != nil {
+		return nil, err
+	}
+	return &CreateSessionResponse{
+		Session: Session{
+			ID:        sess.ID,
+			Title:     sess.Title,
+			CreatedAt: sess.CreatedAt.Format(time.RFC3339),
+			UpdatedAt: sess.UpdatedAt.Format(time.RFC3339),
+		},
+	}, nil
+}
+
+// DeleteSession terminates and purges a session workspace.
+func (s *Service) DeleteSession(ctx context.Context, req DeleteSessionRequest) (*DeleteSessionResponse, error) {
+	if s.sm == nil {
+		return nil, fmt.Errorf("session manager not initialized")
+	}
+	if err := s.sm.DeleteSession(ctx, req.ID); err != nil {
+		return nil, err
+	}
+	return &DeleteSessionResponse{Success: true}, nil
+}
+
+// SendMessage delivers a message to a session workspace's agent graph.
+func (s *Service) SendMessage(ctx context.Context, req SendMessageRequest) (*SendMessageResponse, error) {
+	if s.sm == nil {
+		return nil, fmt.Errorf("session manager not initialized")
+	}
+	if err := s.sm.SendMessage(ctx, req.SessionID, req.Text); err != nil {
+		return nil, err
+	}
+	return &SendMessageResponse{Success: true}, nil
+}
+
+// GetSessionMessages returns the message log of a session.
+func (s *Service) GetSessionMessages(ctx context.Context, req GetSessionMessagesRequest) (*GetSessionMessagesResponse, error) {
+	if s.sm == nil {
+		return &GetSessionMessagesResponse{}, nil
+	}
+	msgs, err := s.sm.GetMessages(ctx, req.SessionID)
+	if err != nil {
+		return nil, err
+	}
+
+	resp := &GetSessionMessagesResponse{
+		Messages: make([]string, len(msgs)),
+	}
+	for i, msg := range msgs {
+		list := message.MessageList{msg}
+		data, err := json.Marshal(list)
+		if err != nil {
+			return nil, err
+		}
+		if len(data) >= 2 && data[0] == '[' && data[len(data)-1] == ']' {
+			data = data[1 : len(data)-1]
+		}
+		resp.Messages[i] = string(data)
+	}
+	return resp, nil
+}
+
+// GetSessionState queries the active execution status of the session agent.
+func (s *Service) GetSessionState(ctx context.Context, req GetSessionStateRequest) (*GetSessionStateResponse, error) {
+	if s.sm == nil {
+		return &GetSessionStateResponse{Status: "idle"}, nil
+	}
+	status, errStr := s.sm.GetSessionState(req.SessionID)
+	return &GetSessionStateResponse{
+		Status: string(status),
+		Error:  errStr,
+	}, nil
 }

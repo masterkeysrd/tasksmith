@@ -17,6 +17,13 @@ type Client interface {
 	ListToolsPresets(ctx context.Context, req api.ListToolsPresetsRequest) (*api.ListToolsPresetsResponse, error)
 	InitializeWorkspace(ctx context.Context, req api.InitializeWorkspaceRequest) (*api.InitializeWorkspaceResponse, error)
 	GetWorkspaceConfig(ctx context.Context, req api.GetWorkspaceConfigRequest) (*api.GetWorkspaceConfigResponse, error)
+
+	ListSessions(ctx context.Context, req api.ListSessionsRequest) (*api.ListSessionsResponse, error)
+	CreateSession(ctx context.Context, req api.CreateSessionRequest) (*api.CreateSessionResponse, error)
+	DeleteSession(ctx context.Context, req api.DeleteSessionRequest) (*api.DeleteSessionResponse, error)
+	SendMessage(ctx context.Context, req api.SendMessageRequest) (*api.SendMessageResponse, error)
+	GetSessionMessages(ctx context.Context, req api.GetSessionMessagesRequest) (*api.GetSessionMessagesResponse, error)
+	GetSessionState(ctx context.Context, req api.GetSessionStateRequest) (*api.GetSessionStateResponse, error)
 }
 
 var clientCtx = kitex.CreateContext[Client](nil)

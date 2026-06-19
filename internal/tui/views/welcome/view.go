@@ -1,11 +1,15 @@
 package welcome
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/masterkeysrd/kite/extras/kitex"
+	"github.com/masterkeysrd/kite/extras/wind"
+	"github.com/masterkeysrd/kite/promise"
 	"github.com/masterkeysrd/kite/style"
 	"github.com/masterkeysrd/tasksmith/internal/api"
+	tuiapi "github.com/masterkeysrd/tasksmith/internal/tui/api"
 	"github.com/masterkeysrd/tasksmith/internal/tui/command"
 	"github.com/masterkeysrd/tasksmith/internal/tui/components"
 	"github.com/masterkeysrd/tasksmith/internal/tui/components/icon"
@@ -16,7 +20,7 @@ import (
 // ViewProps defines the properties for the Welcome view.
 type ViewProps struct {
 	OnOpenSetupWizard func()
-	OnNewSession      func()
+	OnNewSession      func(sessionID string)
 	OnOpenSession     func(sessionID string)
 }
 
@@ -270,11 +274,9 @@ var View = kitex.FC("WelcomeView", func(props ViewProps) kitex.Node {
 		agentCount = &cnt
 	}
 
-	// Mocking sessions
-	mockSessions := []mockSession{
-		{ID: "session-1", Name: "agentic-refactoring"},
-		{ID: "session-2", Name: "tui-theme-debugging"},
-	}
+	client := tuiapi.UseClient()
+	windClient := wind.UseClient()
+	sessions := queries.UseListSessions()
 
 	return components.Paper(components.PaperProps{
 		Color: components.PaperSurface,
@@ -329,7 +331,26 @@ var View = kitex.FC("WelcomeView", func(props ViewProps) kitex.Node {
 					// Left Column: Actions
 					kitex.Box(kitex.BoxProps{Style: LeftColumnStyle},
 						ActionBox(ActionBoxProps{Title: "Sessions"},
-							ActionItem(ActionItemProps{Icon: icon.Calendar, Label: "New Session", OnClick: props.OnNewSession}),
+							ActionItem(ActionItemProps{
+								Icon:  icon.Calendar,
+								Label: "New Session",
+								OnClick: func() {
+									promise.New(func(ctx context.Context) (string, error) {
+										resp, err := client.CreateSession(ctx, api.CreateSessionRequest{Title: "New Chat"})
+										if err != nil {
+											return "", err
+										}
+										return resp.Session.ID, nil
+									}).Then(func(id string) {
+										windClient.InvalidateQueries(api.ListSessionsRequest{})
+										if props.OnNewSession != nil {
+											props.OnNewSession(id)
+										}
+									}, func(err error) {
+										setActionMessage(fmt.Sprintf("Failed to create session: %v", err))
+									})
+								},
+							}),
 						),
 						ActionBox(ActionBoxProps{Title: "Agents & Skills"},
 							ActionItem(ActionItemProps{Icon: icon.Robot, Label: "New Agent", OnClick: func() { triggerAction("New Agent") }}),
@@ -445,18 +466,28 @@ var View = kitex.FC("WelcomeView", func(props ViewProps) kitex.Node {
 
 						// Recent Sessions
 						InfoSection(InfoSectionProps{Icon: icon.History, Title: "Recent Sessions"},
-							kitex.Map(mockSessions, func(s mockSession, idx int) kitex.Node {
-								hours := fmt.Sprintf("%dh", idx+1)
-								sessionID := s.ID
-								return SessionItem(SessionItemProps{
-									Name:  s.Name,
-									Hours: hours,
-									OnClick: func() {
-										if props.OnOpenSession != nil {
-											props.OnOpenSession(sessionID)
-										}
-									},
-								})
+							kitex.If(sessions.IsLoading, func() kitex.Node {
+								return kitex.Box(kitex.BoxProps{Style: InfoRowStyle.Foreground(t.Color.Text.Secondary)}, kitex.Text("Loading sessions..."))
+							}),
+							kitex.If(!sessions.IsLoading && sessions.Data != nil, func() kitex.Node {
+								sList := sessions.Data.Sessions
+								if len(sList) == 0 {
+									return kitex.Box(kitex.BoxProps{Style: InfoRowStyle.Foreground(t.Color.Text.Secondary)}, kitex.Text("No recent sessions"))
+								}
+								return kitex.Fragment(
+									kitex.Map(sList, func(s api.Session, idx int) kitex.Node {
+										sessionID := s.ID
+										return SessionItem(SessionItemProps{
+											Name:  s.Title,
+											Hours: "",
+											OnClick: func() {
+												if props.OnOpenSession != nil {
+													props.OnOpenSession(sessionID)
+												}
+											},
+										})
+									}),
+								)
 							}),
 						),
 					),

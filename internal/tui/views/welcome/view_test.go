@@ -57,6 +57,32 @@ func (m *mockClient) GetWorkspaceConfig(ctx context.Context, req api.GetWorkspac
 	}, nil
 }
 
+func (m *mockClient) ListSessions(ctx context.Context, req api.ListSessionsRequest) (*api.ListSessionsResponse, error) {
+	return &api.ListSessionsResponse{}, nil
+}
+
+func (m *mockClient) CreateSession(ctx context.Context, req api.CreateSessionRequest) (*api.CreateSessionResponse, error) {
+	return &api.CreateSessionResponse{
+		Session: api.Session{ID: "test-session-id", Title: req.Title},
+	}, nil
+}
+
+func (m *mockClient) DeleteSession(ctx context.Context, req api.DeleteSessionRequest) (*api.DeleteSessionResponse, error) {
+	return &api.DeleteSessionResponse{Success: true}, nil
+}
+
+func (m *mockClient) SendMessage(ctx context.Context, req api.SendMessageRequest) (*api.SendMessageResponse, error) {
+	return &api.SendMessageResponse{Success: true}, nil
+}
+
+func (m *mockClient) GetSessionMessages(ctx context.Context, req api.GetSessionMessagesRequest) (*api.GetSessionMessagesResponse, error) {
+	return &api.GetSessionMessagesResponse{}, nil
+}
+
+func (m *mockClient) GetSessionState(ctx context.Context, req api.GetSessionStateRequest) (*api.GetSessionStateResponse, error) {
+	return &api.GetSessionStateResponse{Status: "idle"}, nil
+}
+
 func TestWelcomeView(t *testing.T) {
 	thm := &theme.Scheme{}
 	client := &mockClient{}

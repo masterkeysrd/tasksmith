@@ -85,7 +85,7 @@ func TestService(t *testing.T) {
 		},
 	}
 
-	svc := NewService(mockWS)
+	svc := NewService(mockWS, nil)
 	ctx := context.Background()
 
 	t.Run("ListProjects", func(t *testing.T) {

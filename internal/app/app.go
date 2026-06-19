@@ -10,9 +10,11 @@ import (
 
 	"github.com/masterkeysrd/tasksmith/internal/api"
 	"github.com/masterkeysrd/tasksmith/internal/app/flags"
+	coredb "github.com/masterkeysrd/tasksmith/internal/core/db"
 	"github.com/masterkeysrd/tasksmith/internal/core/fsutil"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
+	"github.com/masterkeysrd/tasksmith/internal/session"
 	"github.com/masterkeysrd/tasksmith/internal/tui"
 	"github.com/masterkeysrd/tasksmith/internal/workspace"
 )
@@ -37,8 +39,31 @@ func (app *Application) Run(ctx context.Context) error {
 		return fmt.Errorf("failed to initialize logs: %w", err)
 	}
 
+	// Initialize sqlite connections and session manager
+	sqliteConn, err := coredb.Open(app.opts.CWD, "tasksmith.db")
+	if err != nil {
+		return fmt.Errorf("failed to open database: %w", err)
+	}
+	app.AddCloser(func(ctx context.Context) error {
+		return sqliteConn.Close()
+	})
+
+	checkpointsConn, err := coredb.Open(app.opts.CWD, "checkpoints.db")
+	if err != nil {
+		return fmt.Errorf("failed to open checkpoints database: %w", err)
+	}
+	app.AddCloser(func(ctx context.Context) error {
+		return checkpointsConn.Close()
+	})
+
+	store, err := session.NewSQLiteStore(sqliteConn, checkpointsConn)
+	if err != nil {
+		return fmt.Errorf("failed to initialize session store: %w", err)
+	}
+	sessionMgr := session.NewManager(store)
+
 	app.ws = workspace.New(app.opts.CWD)
-	app.api = api.NewService(app.ws)
+	app.api = api.NewService(app.ws, sessionMgr)
 
 	log.Info("Starting TaskSmith application",
 		log.String("cwd", app.opts.CWD),

@@ -50,6 +50,7 @@ var App = kitex.FC("App", func(props AppProps) kitex.Node {
 var Router = kitex.SimpleFC("Router", func() kitex.Node {
 	wsCfg := queries.UseGetWorkspaceConfig()
 	activeView, setActiveView := kitex.UseState(string(viewLoading))
+	activeSessionID, setActiveSessionID := kitex.UseState("")
 	windClient := wind.UseClient()
 
 	kitex.UseEffect(func() {
@@ -77,8 +78,14 @@ var Router = kitex.SimpleFC("Router", func() kitex.Node {
 	case viewWelcome:
 		return welcome.View(welcome.ViewProps{
 			OnOpenSetupWizard: func() { setActiveView(string(viewSetup)) },
-			OnNewSession:      func() { setActiveView(string(viewMain)) },
-			OnOpenSession:     func(_ string) { setActiveView(string(viewMain)) },
+			OnNewSession: func(id string) {
+				setActiveSessionID(id)
+				setActiveView(string(viewMain))
+			},
+			OnOpenSession: func(id string) {
+				setActiveSessionID(id)
+				setActiveView(string(viewMain))
+			},
 		})
 
 	case viewSetup:
@@ -94,7 +101,7 @@ var Router = kitex.SimpleFC("Router", func() kitex.Node {
 		return shell.View(shell.Props{
 			OnOpenSetupWizard: func() { setActiveView(string(viewSetup)) },
 		},
-			chat.View(chat.ViewProps{}),
+			chat.View(chat.ViewProps{SessionID: activeSessionID()}),
 		)
 	}
 })

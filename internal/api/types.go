@@ -94,3 +94,59 @@ type GetWorkspaceConfigResponse struct {
 	IsConfigured    bool            `json:"is_configured"`
 	CWD             string          `json:"cwd"`
 }
+
+type ListSessionsRequest struct {
+}
+
+type ListSessionsResponse struct {
+	Sessions []Session `json:"sessions"`
+}
+
+type Session struct {
+	ID        string `json:"id"`
+	Title     string `json:"title"`
+	CreatedAt string `json:"created_at"`
+	UpdatedAt string `json:"updated_at"`
+}
+
+type CreateSessionRequest struct {
+	Title string `json:"title"`
+}
+
+type CreateSessionResponse struct {
+	Session Session `json:"session"`
+}
+
+type DeleteSessionRequest struct {
+	ID string `json:"id"`
+}
+
+type DeleteSessionResponse struct {
+	Success bool `json:"success"`
+}
+
+type SendMessageRequest struct {
+	SessionID string `json:"session_id"`
+	Text      string `json:"text"`
+}
+
+type SendMessageResponse struct {
+	Success bool `json:"success"`
+}
+
+type GetSessionMessagesRequest struct {
+	SessionID string `json:"session_id"`
+}
+
+type GetSessionMessagesResponse struct {
+	Messages []string `json:"messages"` // Serialized JSON messages
+}
+
+type GetSessionStateRequest struct {
+	SessionID string `json:"session_id"`
+}
+
+type GetSessionStateResponse struct {
+	Status string `json:"status"`
+	Error  string `json:"error,omitempty"`
+}
