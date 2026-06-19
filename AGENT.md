@@ -43,7 +43,8 @@ TaskSmith is a Go-based autonomous agent orchestrator and TUI application. This 
     - For custom default and hover styling, components (such as buttons) should use semantic theme-aware styles or the component's `HoverStyle` prop to handle states dynamically rather than embedding static local wrappers.
 - **Commands**:
     - Register global actions using `command.Register(id, fn)`.
-    - Execute reactively in components using `command.UseCommand(id)`.
+    - Execute reactively in components using `command.UseCommand(id)` or dynamically via `command.Execute(ctx, id, args...)`.
+    - Note: Registered TUI commands do not include the leading `:` prefix; strip it (e.g. using `strings.TrimPrefix`) before dynamic execution.
 - **Input Modes**: Use `mode.Use()` to react to the current input state and `mode.Set()` to transition.
 - **Component Conventions**:
     - Use `kitex.FC` for standard components and `kitex.FCC` for components that accept children.
