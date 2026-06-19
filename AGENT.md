@@ -14,7 +14,8 @@ TaskSmith is a Go-based autonomous agent orchestrator and TUI application. This 
     - `fsutil`: File system helpers.
 - **`internal/workspace`**: Management of agents, projects, and providers using the `warp` library.
 - **`internal/agent`**: Builtin agent resources and tools.
-    - `tools`: Definitions and discovery for builtin tool presets.
+    - `tools`: Definitions and discovery for builtin tool presets. Contains `types.go` generated from markdown tool specs.
+- **`tools/warp-gen`**: Code generator that parses tool specs to produce `types.go` in `internal/agent/tools/`.
 - **`internal/tui`**: Terminal User Interface built with the `kite` framework.
     - `api`: TUI-specific API client context.
     - `queries`: Reactive data hooks using `wind`.
@@ -32,6 +33,8 @@ TaskSmith is a Go-based autonomous agent orchestrator and TUI application. This 
 5. **Types**: Favor explicit interfaces and composition. The `internal/api` package defines the public types used by the TUI.
 6. **Error Handling**: Use structured error wrapping with `%w`.
 7. **Global State**: Use the `kites` library for global, thread-safe state management outside the VDOM.
+8. **Tool Specs**: Builtin agent tools are defined as markdown files in `internal/agent/tools/`. The front-matter defines the schemas (`parameters` and `outputSchema`), while the description must be in the markdown body. Run `go run ./tools/warp-gen` to update `types.go` after changes.
+9. **No Reflection**: Avoid using `reflect` to handle `warp` spec objects. Bind directly to the structs defined by the local `warp` library.
 
 ## 🖥 TUI Development
 
@@ -62,3 +65,4 @@ TaskSmith is a Go-based autonomous agent orchestrator and TUI application. This 
     - `github.com/masterkeysrd/kite`: TUI framework and reactive hooks.
 - **Build**: Use `go build ./cmd/tasksmith/...`.
 - **Test**: Use `go test ./...`.
+- **Warp Code Generator**: Run `go run ./tools/warp-gen` to compile tool markdown specs into Go structures.
