@@ -53,6 +53,8 @@ var (
 	Server = kitex.Text("󰟀")
 	// Cpu is a cpu icon (󰍛).
 	Cpu = kitex.Text("󰍛")
+	// User is a user/profile icon ().
+	User = kitex.Text("")
 	// MoveDown is an input/download arrow icon (↓).
 	MoveDown = kitex.Text("↓")
 	// MoveUp is an output/upload arrow icon (↑).

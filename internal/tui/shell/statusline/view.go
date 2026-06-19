@@ -164,7 +164,7 @@ var Spacer = kitex.SimpleFC("Spacer", func() kitex.Node {
 	t := theme.UseTheme()
 	bg := color.Color(color.Transparent)
 	if t != nil {
-		bg = t.Color.Surface.BaseHover
+		bg = t.Color.Surface.BaseFocus
 	}
 
 	spacerStyle := style.S().
@@ -298,7 +298,7 @@ var Stats = kitex.FC("Stats", func(props StatsProps) kitex.Node {
 	var bg, textDim, textExtraDim, colorNormal, colorInfo color.Color = color.Transparent, color.Transparent, color.Transparent, color.Transparent, color.Transparent
 
 	if t != nil {
-		bg = t.Color.Surface.BaseHover
+		bg = t.Color.Surface.BaseFocus
 		textDim = t.Color.Text.Secondary
 		textExtraDim = t.Color.Text.Tertiary
 		colorNormal = t.Color.Surface.Success
@@ -487,7 +487,7 @@ var View = kitex.FCC("StatusLine", func(props Props) kitex.Node {
 
 	bg := color.Color(color.Transparent)
 	if t != nil {
-		bg = t.Color.Surface.BaseHover
+		bg = t.Color.Surface.BaseFocus
 	}
 
 	lineStyle := style.S().

@@ -340,6 +340,17 @@ func (m *Manager) GetMessages(ctx context.Context, sessionID string) (message.Me
 		return nil, fmt.Errorf("failed to unmarshal message list: %w", err)
 	}
 
+	for i, md := range mds {
+		if i < len(list) {
+			meta := list[i].GetMetadata()
+			if meta == nil {
+				meta = make(map[string]any)
+			}
+			meta["created_at"] = md.CreatedAt.Format("15:04")
+			list[i].SetMetadata(meta)
+		}
+	}
+
 	// If there is an active running agent session, inject the in-progress stream text in-memory
 	m.mu.RLock()
 	sess, ok := m.activeSessions[sessionID]
@@ -353,6 +364,10 @@ func (m *Manager) GetMessages(ctx context.Context, sessionID string) (message.Me
 
 	if ok && status == StatusRunning && streamText != "" {
 		asst := message.NewAssistantText(streamText)
+		meta := map[string]any{
+			"created_at": time.Now().Format("15:04"),
+		}
+		asst.SetMetadata(meta)
 		list = append(list, asst)
 	}
 

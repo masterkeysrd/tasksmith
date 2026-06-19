@@ -16,8 +16,6 @@ type Props struct {
 	WorkspaceName string
 	// IsSidebarOpen indicates whether the explorer sidebar is open.
 	IsSidebarOpen bool
-	// OnOpenSetupWizard is called when the Setup Wizard button is clicked.
-	OnOpenSetupWizard func()
 	// OnToggleSidebar is called when the Explorer button is clicked.
 	OnToggleSidebar func()
 }
@@ -25,23 +23,15 @@ type Props struct {
 // View is the application title bar component.
 var View = kitex.FC("TitleBar", func(props Props) kitex.Node {
 	t := theme.UseTheme()
-
-	// Live clock: tick every second.
 	now, setNow := kitex.UseState(time.Now())
-	kitex.UseEffectCleanup(func() func() {
-		ticker := time.NewTicker(time.Second)
-		go func() {
-			for tick := range ticker.C {
-				setNow(tick)
-			}
-		}()
-		return func() { ticker.Stop() }
-	}, []any{})
+
+	kitex.UseInterval(func() {
+		setNow(time.Now())
+	}, time.Second, []any{})
 
 	clock := now().Format("15:04")
 
 	// ── Styles ────────────────────────────────────────────────────────────
-
 	barStyle := style.S().
 		Width(style.Percent(100)).
 		Height(style.Cells(1)).
@@ -50,8 +40,7 @@ var View = kitex.FC("TitleBar", func(props Props) kitex.Node {
 		JustifyContent(style.JustifyBetween).
 		Background(t.Color.Surface.BaseHover).
 		Foreground(t.Color.Text.Tertiary).
-		PaddingHorizontal(2).
-		Border(style.SingleBorder().Top(false).Left(false).Right(false).Bottom(true).Color(t.Color.Surface.BaseFocus))
+		PaddingHorizontal(2)
 
 	leftStyle := style.S().
 		Display(style.DisplayFlex).
@@ -115,17 +104,6 @@ var View = kitex.FC("TitleBar", func(props Props) kitex.Node {
 
 		// Right: buttons + indicators
 		kitex.Box(kitex.BoxProps{Style: rightStyle},
-			// Setup Wizard
-			components.Button(components.ButtonProps{
-				Variant: components.ButtonText,
-				Style: style.S().
-					Foreground(t.Color.Surface.Tertiary).
-					PaddingHorizontal(0),
-				HoverStyle: style.S().Foreground(t.Color.Text.Primary),
-				StartIcon:  icon.Cog,
-				OnClick:    props.OnOpenSetupWizard,
-			}, kitex.Text("SETUP WIZARD")),
-
 			// Explorer toggle
 			components.Button(components.ButtonProps{
 				Variant: components.ButtonText,

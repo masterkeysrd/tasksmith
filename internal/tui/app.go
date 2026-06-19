@@ -98,9 +98,7 @@ var Router = kitex.SimpleFC("Router", func() kitex.Node {
 		})
 
 	default: // viewMain — shell with active workspace view
-		return shell.View(shell.Props{
-			OnOpenSetupWizard: func() { setActiveView(string(viewSetup)) },
-		},
+		return shell.View(shell.Props{},
 			chat.View(chat.ViewProps{SessionID: activeSessionID()}),
 		)
 	}

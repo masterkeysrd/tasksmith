@@ -11,8 +11,6 @@ import (
 
 // Props defines the properties for the Shell component.
 type Props struct {
-	// OnOpenSetupWizard is called when the title bar Setup Wizard button is clicked.
-	OnOpenSetupWizard func()
 	// Children is the single content view rendered inside the shell.
 	Children []kitex.Node
 }
@@ -45,10 +43,9 @@ var View = kitex.FCC("Shell", func(props Props) kitex.Node {
 
 	return kitex.Box(kitex.BoxProps{Style: shellStyle},
 		titlebar.View(titlebar.Props{
-			WorkspaceName:     workspaceName,
-			IsSidebarOpen:     isSidebarOpen(),
-			OnOpenSetupWizard: props.OnOpenSetupWizard,
-			OnToggleSidebar:   func() { setIsSidebarOpen(!isSidebarOpen()) },
+			WorkspaceName:   workspaceName,
+			IsSidebarOpen:   isSidebarOpen(),
+			OnToggleSidebar: func() { setIsSidebarOpen(!isSidebarOpen()) },
 		}),
 		kitex.Box(kitex.BoxProps{Style: contentStyle}, props.Children...),
 		statusline.View(statusline.Props{}),
