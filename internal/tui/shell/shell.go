@@ -5,6 +5,7 @@ import (
 	"github.com/masterkeysrd/kite/style"
 	"github.com/masterkeysrd/tasksmith/internal/tui/queries"
 	"github.com/masterkeysrd/tasksmith/internal/tui/shell/commandbar"
+	"github.com/masterkeysrd/tasksmith/internal/tui/shell/statusline"
 	"github.com/masterkeysrd/tasksmith/internal/tui/shell/titlebar"
 )
 
@@ -47,6 +48,7 @@ var View = kitex.FCC("Shell", func(props Props) kitex.Node {
 			OnToggleSidebar:   func() { setIsSidebarOpen(!isSidebarOpen()) },
 		}),
 		kitex.Box(kitex.BoxProps{Style: contentStyle}, props.Children...),
+		statusline.View(statusline.Props{}),
 		commandbar.View(commandbar.Props{}),
 	)
 })

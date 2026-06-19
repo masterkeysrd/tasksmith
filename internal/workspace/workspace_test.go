@@ -95,14 +95,14 @@ func TestWorkspace_Initialize(t *testing.T) {
 		t.Errorf("sentinel setup.json not created: %v", err)
 	}
 
-	// 2. Verify global tasksmith.config.json
+	// 2. Verify global theme.json
 	cfgDir, err := xdg.SubConfigDir()
 	if err != nil {
 		t.Fatalf("failed to get config dir: %v", err)
 	}
-	cfgPath := filepath.Join(cfgDir, "tasksmith.config.json")
+	cfgPath := filepath.Join(cfgDir, "theme.json")
 	if _, err := os.Stat(cfgPath); err != nil {
-		t.Errorf("global tasksmith.config.json not created: %v", err)
+		t.Errorf("global theme.json not created: %v", err)
 	}
 	cfgData, err := os.ReadFile(cfgPath)
 	if err == nil {

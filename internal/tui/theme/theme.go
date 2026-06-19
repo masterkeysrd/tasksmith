@@ -438,7 +438,7 @@ var store = kites.Create(state{
 func init() {
 	themeName := Default
 	if dir, err := xdg.SubConfigDir(); err == nil {
-		cfgPath := filepath.Join(dir, "tasksmith.config.json")
+		cfgPath := filepath.Join(dir, "theme.json")
 		if data, err := os.ReadFile(cfgPath); err == nil {
 			var cfg struct {
 				Theme string `json:"theme"`

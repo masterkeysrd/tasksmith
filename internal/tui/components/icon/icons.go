@@ -47,4 +47,14 @@ var (
 	Alert = kitex.Text("󰀦")
 	// Database is a database/provider icon (󰒋).
 	Database = kitex.Text("󰒋")
+	// GitBranch is a git branch icon ().
+	GitBranch = kitex.Text("")
+	// Server is a server icon (󰟀).
+	Server = kitex.Text("󰟀")
+	// Cpu is a cpu icon (󰍛).
+	Cpu = kitex.Text("󰍛")
+	// MoveDown is an input/download arrow icon (↓).
+	MoveDown = kitex.Text("↓")
+	// MoveUp is an output/upload arrow icon (↑).
+	MoveUp = kitex.Text("↑")
 )

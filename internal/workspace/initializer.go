@@ -50,7 +50,7 @@ func (w *Workspace) Initialize(ctx context.Context, opts InitializationOptions) 
 		return fmt.Errorf("failed to write sentinel file: %w", err)
 	}
 
-	// 2. Write global configuration (selected theme) in XDG config directory
+	// 2. Write theme configuration in XDG config directory
 	cfgDir, err := xdg.SubConfigDir()
 	if err != nil {
 		return fmt.Errorf("failed to get XDG config dir: %w", err)
@@ -59,7 +59,7 @@ func (w *Workspace) Initialize(ctx context.Context, opts InitializationOptions) 
 		return fmt.Errorf("failed to ensure XDG config dir exists: %w", err)
 	}
 
-	cfgPath := filepath.Join(cfgDir, "tasksmith.config.json")
+	cfgPath := filepath.Join(cfgDir, "theme.json")
 	cfgData := map[string]any{
 		"theme": opts.Theme,
 	}
@@ -68,7 +68,7 @@ func (w *Workspace) Initialize(ctx context.Context, opts InitializationOptions) 
 		return fmt.Errorf("failed to marshal config data: %w", err)
 	}
 	if err := os.WriteFile(cfgPath, cfgBytes, 0644); err != nil {
-		return fmt.Errorf("failed to write global config file: %w", err)
+		return fmt.Errorf("failed to write theme config file: %w", err)
 	}
 
 	var allowedTools []string
