@@ -26,7 +26,10 @@ var (
 
 	contentStyle = style.S().
 			Width(style.Percent(100)).
-			Flex(1)
+			Display(style.DisplayFlex).
+			FlexDirection(style.FlexColumn).
+			Flex(1, 1, style.Cells(0)).
+			MinHeight(style.Cells(0))
 )
 
 // View is the Shell component. It renders the persistent chrome (title bar,
