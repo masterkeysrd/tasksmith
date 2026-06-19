@@ -243,11 +243,10 @@ var Markdown = kitex.FC("Markdown", func(props MarkdownProps) kitex.Node {
 			case *ast.ThematicBreak:
 				tbStyle := style.S().MarginBottom(1)
 				if t != nil {
-					tbStyle = tbStyle.Foreground(t.Color.Border.Primary)
+					tbStyle = tbStyle.Foreground(t.Color.Border.Primary).
+						BorderBottom(true, style.SingleBorder(), t.Color.Border.Primary)
 				}
-				return kitex.Box(kitex.BoxProps{Style: tbStyle},
-					kitex.Text(strings.Repeat("─", 40)),
-				)
+				return kitex.Box(kitex.BoxProps{Style: tbStyle}) // kitex.Text(strings.Repeat("─", 40)),
 
 			case *extast.Table:
 				return renderTable(node, t, renderInlineChildren)

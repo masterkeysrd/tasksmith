@@ -7,6 +7,7 @@ import (
 
 	"github.com/masterkeysrd/kite/extras/kitex"
 	"github.com/masterkeysrd/kite/style"
+	"github.com/masterkeysrd/tasksmith/internal/tui/active"
 	"github.com/masterkeysrd/tasksmith/internal/tui/components/icon"
 	"github.com/masterkeysrd/tasksmith/internal/tui/mode"
 	plugin "github.com/masterkeysrd/tasksmith/internal/tui/plugin/statusline"
@@ -426,7 +427,7 @@ type Props struct {
 	Children []kitex.Node
 }
 
-func renderFragment(f plugin.Fragment, state plugin.State) kitex.Node {
+func renderFragment(f plugin.Fragment, state plugin.State, sessionID string) kitex.Node {
 	wsCfg := queries.UseGetWorkspaceConfig()
 
 	providerName := ""
@@ -460,7 +461,14 @@ func renderFragment(f plugin.Fragment, state plugin.State) kitex.Node {
 		case "stats":
 			return Stats(StatsProps{InputTokens: inputTokens, OutputTokens: outputTokens, Cost: costValue})
 		case "status":
-			return Status(StatusProps{})
+			status := "idle"
+			if sessionID != "" {
+				stateQuery := queries.UseGetSessionState(sessionID)
+				if stateQuery.Data != nil {
+					status = stateQuery.Data.Status
+				}
+			}
+			return Status(StatusProps{Status: status})
 		default:
 			return nil
 		}
@@ -480,6 +488,7 @@ var View = kitex.FCC("StatusLine", func(props Props) kitex.Node {
 	t := theme.UseTheme()
 	state := plugin.Use()
 	wsCfg := queries.UseGetWorkspaceConfig()
+	sessionID := active.UseSessionID()
 
 	if wsCfg.Data != nil && wsCfg.Data.CWD != "" {
 		plugin.SetCWD(wsCfg.Data.CWD)
@@ -505,14 +514,14 @@ var View = kitex.FCC("StatusLine", func(props Props) kitex.Node {
 	} else {
 		var leftNodes []kitex.Node
 		for _, f := range state.Config.Left {
-			if node := renderFragment(f, state); node != nil {
+			if node := renderFragment(f, state, sessionID); node != nil {
 				leftNodes = append(leftNodes, node)
 			}
 		}
 
 		var rightNodes []kitex.Node
 		for _, f := range state.Config.Right {
-			if node := renderFragment(f, state); node != nil {
+			if node := renderFragment(f, state, sessionID); node != nil {
 				rightNodes = append(rightNodes, node)
 			}
 		}

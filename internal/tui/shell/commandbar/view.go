@@ -83,7 +83,14 @@ var View = kitex.FC("CommandBar", func(props Props) kitex.Node {
 
 	// ── Layout ────────────────────────────────────────────────────────────
 
-	return kitex.Box(kitex.BoxProps{Style: outerStyle},
+	boxProps := kitex.BoxProps{Style: outerStyle}
+	if !isOpen {
+		boxProps.OnClick = func(e event.Event) {
+			mode.Set(mode.Command)
+		}
+	}
+
+	return kitex.Box(boxProps,
 		// Bar Content
 		kitex.Box(kitex.BoxProps{Style: barStyle},
 			kitex.IfElse(isOpen,
@@ -119,6 +126,17 @@ var View = kitex.FC("CommandBar", func(props Props) kitex.Node {
 								Foreground(colorTextDimmed),
 							OnChange: func(v string) {
 								setValue(v)
+							},
+							OnBlur: func() {
+								if isOpen {
+									kitex.PostMacro(func() {
+										if inputRef.Current != nil {
+											if doc := inputRef.Current.OwnerDocument(); doc != nil {
+												doc.Focus(inputRef.Current)
+											}
+										}
+									})
+								}
 							},
 							OnKeyDown: func(e event.Event) {
 								ke, ok := e.(*event.KeyEvent)

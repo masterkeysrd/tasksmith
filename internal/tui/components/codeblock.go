@@ -22,7 +22,7 @@ type CodeBlockProps struct {
 // using the active TUI theme.
 var CodeBlock = kitex.FC("CodeBlock", func(props CodeBlockProps) kitex.Node {
 	t := theme.UseTheme()
-	codeStr := props.Code
+	codeStr := strings.ReplaceAll(props.Code, "\t", "    ")
 	lang := props.Lang
 
 	if strings.TrimSpace(codeStr) == "" {
@@ -46,7 +46,10 @@ var CodeBlock = kitex.FC("CodeBlock", func(props CodeBlockProps) kitex.Node {
 			BorderBottom(true, style.SingleBorder(), t.Color.Border.Primary)
 	}
 
-	codeStyle := style.S().Padding(1)
+	codeStyle := style.S().
+		Padding(1).
+		WhiteSpace(style.WhiteSpacePre).
+		OverflowX(style.OverflowAuto)
 	if t != nil {
 		codeStyle = codeStyle.Foreground(t.Color.Text.Secondary)
 	}
@@ -57,6 +60,7 @@ var CodeBlock = kitex.FC("CodeBlock", func(props CodeBlockProps) kitex.Node {
 		MarginBottom(1).
 		Border(style.SingleBorder()).
 		Width(style.Percent(100)).
+		WhiteSpace(style.WhiteSpacePre).
 		Merge(props.Style)
 	if t != nil {
 		wrapperStyle = wrapperStyle.
@@ -75,7 +79,12 @@ var CodeBlock = kitex.FC("CodeBlock", func(props CodeBlockProps) kitex.Node {
 	iterator, err := lexer.Tokenise(nil, codeStr)
 	var contentNodes []kitex.Node
 	if err != nil {
-		contentNodes = []kitex.Node{kitex.Text(codeStr)}
+		contentNodes = []kitex.Node{
+			kitex.Span(
+				kitex.SpanProps{Style: style.S().WhiteSpace(style.WhiteSpacePre)},
+				kitex.Text(codeStr),
+			),
+		}
 	} else {
 		for tok := iterator(); tok != chroma.EOF; tok = iterator() {
 			tokenStyle := resolveTokenStyle(t, tok.Type)
@@ -129,7 +138,7 @@ func resolveTokenStyle(t *theme.Scheme, tokType chroma.TokenType) style.Style {
 		themeOperator = getThemeColor(t, "cyan", t.Color.Text.Secondary)
 	}
 
-	styled := style.S()
+	styled := style.S().WhiteSpace(style.WhiteSpacePre)
 
 	if tokType.InCategory(chroma.Comment) {
 		styled = styled.Foreground(themeMuted)

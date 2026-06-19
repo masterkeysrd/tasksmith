@@ -3,6 +3,7 @@ package chat
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"image/color"
 	"strings"
 	"time"
@@ -79,43 +80,106 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 	// Focus the input when entering insert mode
 	kitex.UseEffect(func() {
 		if isInsert {
-			if inputRef.Current != nil {
-				if doc := inputRef.Current.OwnerDocument(); doc != nil {
-					doc.Focus(inputRef.Current)
-				}
-			} else {
-				kitex.PostMacro(func() {
-					if inputRef.Current != nil {
-						if doc := inputRef.Current.OwnerDocument(); doc != nil {
-							doc.Focus(inputRef.Current)
-						}
+			kitex.PostMacro(func() {
+				if inputRef.Current != nil {
+					if doc := inputRef.Current.OwnerDocument(); doc != nil {
+						doc.Focus(inputRef.Current)
 					}
-				})
-			}
+				}
+			})
 		}
 	}, []any{isInsert})
 
 	// 4. Polling query updates while the agent is running in the background
-	polling, setPolling := kitex.UseState(false)
+	kitex.UseInterval(func() {
+		if sending {
+			windClient.InvalidateQueries(api.GetSessionMessagesRequest{SessionID: sessionID})
+		}
+	}, 100*time.Millisecond, []any{sending, sessionID})
 
+	kitex.UseInterval(func() {
+		if sending {
+			windClient.InvalidateQueries(api.GetSessionStateRequest{SessionID: sessionID})
+		}
+	}, 1000*time.Millisecond, []any{sending, sessionID})
+
+	// Autoscroll history to bottom if already at bottom
+	historyRef := kitex.UseRef[dom.Element](nil)
+	lastMaxScrollY := kitex.UseRef(0)
+
+	// 5. Reactive states for tracking agent thinking time and animations
+	thinkingTime, setThinkingTime := kitex.UseState(0)
+	lastFinishedTime, setLastFinishedTime := kitex.UseState(-1) // -1 represents null/unset
+	spinnerFrame, setSpinnerFrame := kitex.UseState(0)
+
+	// Keep lastFinishedTime up to date and reset thinkingTime when sending changes
 	kitex.UseEffect(func() {
 		if sending {
-			setPolling(true)
-			go func() {
-				ticker := time.NewTicker(100 * time.Millisecond)
-				defer ticker.Stop()
-				for range ticker.C {
-					if !polling() {
-						return
-					}
-					windClient.InvalidateQueries(api.GetSessionMessagesRequest{SessionID: sessionID})
-					windClient.InvalidateQueries(api.GetSessionStateRequest{SessionID: sessionID})
-				}
-			}()
+			setThinkingTime(0)
 		} else {
-			setPolling(false)
+			if thinkingTime() > 0 {
+				setLastFinishedTime(thinkingTime())
+			}
 		}
-	}, []any{sending, sessionID})
+	}, []any{sending})
+
+	// Increment thinkingTime every second when running
+	kitex.UseInterval(func() {
+		if sending {
+			setThinkingTime(thinkingTime() + 1)
+		}
+	}, 1*time.Second, []any{sending})
+
+	// Rotate spinner frame when running
+	kitex.UseInterval(func() {
+		if sending {
+			setSpinnerFrame((spinnerFrame() + 1) % 4)
+		}
+	}, 250*time.Millisecond, []any{sending})
+
+	pulseDots := []string{"●  ", "●● ", "●●●", "   "}
+	currentDots := pulseDots[spinnerFrame()]
+
+	// Calculate a simple integer key of the messages state to trigger the effect reactively
+	messagesKey := 0
+	for _, msg := range messages {
+		for _, block := range msg.GetContent() {
+			if tb, ok := block.(*message.TextBlock); ok {
+				messagesKey += len(tb.Text)
+			} else if tb, ok := block.(*message.ThinkingBlock); ok {
+				messagesKey += len(tb.Thinking)
+			}
+		}
+	}
+	messagesKey += len(messages)
+
+	kitex.UseLayoutEffect(func() {
+		if historyRef.Current == nil {
+			return
+		}
+
+		el := historyRef.Current
+		doc := el.OwnerDocument()
+		if doc == nil {
+			return
+		}
+		view := doc.DefaultView()
+		if view == nil {
+			return
+		}
+
+		_, maxScrollY := view.GetMaxScroll(el)
+		_, currentY := el.Scroll()
+
+		// If the user was previously scrolled to the bottom (within a 2-cell tolerance),
+		// we scroll to the absolute bottom using a large value (99999).
+		// Kite's paint engine will synchronously clamp this value to the fresh scroll extent at paint time in the current frame.
+		if currentY >= lastMaxScrollY.Current-2 {
+			el.ScrollTo(0, 99999)
+		}
+
+		lastMaxScrollY.Current = maxScrollY
+	}, nil)
 
 	sendMessage := func(text string) {
 		if text == "" || sending {
@@ -189,14 +253,10 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 
 	composerContainerStyle := style.S().
 		PaddingHorizontal(1).
-		PaddingVertical(0).
-		Height(style.Cells(3)).
+		PaddingVertical(1).
 		Display(style.DisplayFlex).
-		AlignItems(style.AlignCenter)
-
-	if t != nil {
-		composerContainerStyle = composerContainerStyle.Border(style.SingleBorder().Top(true).Color(t.Color.Border.Primary))
-	}
+		AlignItems(style.AlignCenter).
+		Background(bgDark)
 
 	return kitex.Box(kitex.BoxProps{Style: outerStyle},
 		// Session Title Bar
@@ -205,46 +265,188 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 		),
 
 		// Message History Section
-		kitex.Box(kitex.BoxProps{Style: messagesContainerStyle},
+		kitex.Box(kitex.BoxProps{Style: messagesContainerStyle, Ref: historyRef},
 			kitex.Fragment(
-				renderBubbles(messages)...,
+				func() []kitex.Node {
+					nodes := renderBubbles(messages)
+					if statusNode := renderAgentStatus(t, sending, thinkingTime(), lastFinishedTime(), currentDots); statusNode != nil {
+						nodes = append(nodes, statusNode)
+					}
+					return nodes
+				}()...,
 			),
 		),
 
 		// Composer Section
 		kitex.Box(kitex.BoxProps{Style: composerContainerStyle},
-			components.Input(components.InputProps{
-				Name:        "composer",
-				Placeholder: "Ask TaskSmith anything... (Press Enter to send)",
-				Value:       inputValue(),
-				Disabled:    sending,
-				Ref:         inputRef,
-				Variant:     components.InputSolid,
+			Composer(ComposerProps{
+				Value:    inputValue(),
+				Disabled: sending,
+				IsInsert: isInsert,
+				Ref:      inputRef,
 				OnChange: func(val string) {
 					setInputValue(val)
 				},
-				OnKeyDown: func(e event.Event) {
-					ke, ok := e.(*event.KeyEvent)
-					if !ok {
-						return
-					}
-
-					if ke.Code == key.KeyEscape {
-						e.PreventDefault()
-						e.StopPropagation()
-						mode.Set(mode.Normal)
-						return
-					}
-
-					if ke.Code == key.KeyEnter {
-						e.PreventDefault()
-						e.StopPropagation()
-						sendMessage(inputValue())
-					}
+				OnSubmit: func() {
+					sendMessage(inputValue())
 				},
-				Style: style.S().Border(false).Flex(1),
 			}),
 		),
+	)
+})
+
+// ComposerProps defines the properties for the Composer component.
+type ComposerProps struct {
+	Value     string
+	Disabled  bool
+	IsInsert  bool
+	Ref       kitex.Ref[dom.Element]
+	OnChange  func(string)
+	OnKeyDown func(event.Event)
+	OnSubmit  func()
+}
+
+// Composer is a multiline composer component styled like a terminal UI box,
+// matching the design mockup in mockup.tsx.
+var Composer = kitex.FC("Composer", func(props ComposerProps) kitex.Node {
+	isFocused, setIsFocused := kitex.UseState(false)
+	t := theme.UseTheme()
+
+	if t == nil {
+		return kitex.Box(kitex.BoxProps{}, kitex.Text("No Theme"))
+	}
+
+	// Resolve the focus blue color from the palette/theme
+	blueColor := t.Color.Surface.Info
+	if c, ok := t.Palette["blue"]; ok {
+		blueColor = c
+	}
+
+	// Border color switches to blue when focused, otherwise comment color
+	borderColor := t.Color.Text.Tertiary // comment: #565f89
+	if isFocused() {
+		borderColor = blueColor // blue: #7aa2f7
+	}
+
+	// Wrapper style with a full single border
+	wrapperStyle := style.S().
+		Width(style.Percent(100)).
+		Display(style.DisplayFlex).
+		FlexDirection(style.FlexRow).
+		AlignItems(style.AlignEnd).
+		Padding(0, 1). // 1 cell padding inside
+		Border(style.SingleBorder().Color(borderColor))
+
+	// Text area style
+	var textCol color.Color
+	if props.Disabled {
+		textCol = t.Color.Text.Tertiary
+	} else {
+		textCol = t.Color.Text.Secondary // fg_dark: #a9b1d6
+	}
+
+	textareaStyle := style.S().
+		Flex(1, 1, style.Cells(0)).
+		MinHeight(style.Cells(1)).
+		MaxHeight(style.Cells(8)).
+		Background(color.Transparent).
+		Foreground(textCol).
+		Border(false)
+
+	// Placeholder style
+	ps := style.S().Foreground(t.Color.Text.Tertiary)
+
+	textareaDisabled := props.Disabled || !props.IsInsert
+
+	textareaProps := kitex.TextAreaProps{
+		Name:             "composer-textarea",
+		Value:            props.Value,
+		Placeholder:      "Message TaskSmith...",
+		PlaceholderStyle: ps,
+		Disabled:         textareaDisabled,
+		Style:            textareaStyle,
+		Ref:              props.Ref,
+		OnChange: func(e event.Event) {
+			if props.OnChange != nil {
+				if ie, ok := e.(*event.ChangeEvent); ok {
+					props.OnChange(ie.Value)
+				} else if ie, ok := e.(*event.InputEvent); ok {
+					props.OnChange(ie.Value)
+				}
+			}
+		},
+		OnFocus: func(e event.Event) {
+			setIsFocused(true)
+		},
+		OnBlur: func(e event.Event) {
+			setIsFocused(false)
+		},
+		OnKeyDown: func(e event.Event) {
+			ke, ok := e.(*event.KeyEvent)
+			if !ok {
+				return
+			}
+
+			if ke.Code == key.KeyEscape {
+				e.PreventDefault()
+				e.StopPropagation()
+				mode.Set(mode.Normal)
+				return
+			}
+
+			// Enter without modifiers submits
+			if ke.Code == key.KeyEnter && (ke.Mod&key.ModShift) == 0 {
+				e.PreventDefault()
+				e.StopPropagation()
+				if props.OnSubmit != nil {
+					props.OnSubmit()
+				}
+				return
+			}
+
+			if props.OnKeyDown != nil {
+				props.OnKeyDown(e)
+			}
+		},
+	}
+
+	// Send button style
+	btnStyle := style.S().
+		Padding(0, 1).
+		Background(color.Transparent).
+		Height(style.Cells(1))
+
+	isSendDisabled := props.Disabled || strings.TrimSpace(props.Value) == ""
+
+	if isSendDisabled {
+		btnStyle = btnStyle.Foreground(t.Color.Text.Tertiary)
+	} else {
+		btnStyle = btnStyle.Foreground(t.Color.Text.Tertiary)
+	}
+
+	btnHoverStyle := style.S()
+	if !isSendDisabled {
+		btnHoverStyle = btnHoverStyle.
+			Background(t.Color.Surface.BaseFocus).
+			Foreground(blueColor)
+	}
+
+	wrapperProps := kitex.BoxProps{Style: wrapperStyle}
+	if !props.Disabled && !props.IsInsert {
+		wrapperProps.OnClick = func(e event.Event) {
+			mode.Set(mode.Insert)
+		}
+	}
+
+	return kitex.Box(wrapperProps,
+		kitex.TextArea(textareaProps),
+		components.Button(components.ButtonProps{
+			Variant:    components.ButtonText,
+			Disabled:   isSendDisabled,
+			OnClick:    props.OnSubmit,
+			Style:      btnStyle,
+			HoverStyle: btnHoverStyle,
+		}, icon.MoveUp),
 	)
 })
 
@@ -306,7 +508,7 @@ var Bubble = kitex.FC("Bubble", func(props BubbleProps) kitex.Node {
 	if t != nil {
 		bubbleStyle = style.S().
 			Padding(1).
-			MaxWidth(style.Percent(70))
+			MaxWidth(style.Percent(90))
 
 		switch role {
 		case message.RoleUser:
@@ -517,4 +719,55 @@ func createBubbleNode(role message.Role, msgs []message.Message) kitex.Node {
 		Timestamp: timestamp,
 		Children:  children,
 	})
+}
+
+func renderAgentStatus(t *theme.Scheme, sending bool, thinkingTime int, lastFinishedTime int, currentDots string) kitex.Node {
+	if t == nil {
+		return nil
+	}
+	blueColor := t.Color.Surface.Info
+	if c, ok := t.Palette["blue"]; ok {
+		blueColor = c
+	}
+	greenColor := t.Color.Surface.Success
+	if c, ok := t.Palette["green"]; ok {
+		greenColor = c
+	}
+	timeStr := fmt.Sprintf("[%02d:%02d]", thinkingTime/60, thinkingTime%60)
+	if sending {
+		containerStyle := style.S().
+			Display(style.DisplayFlex).
+			FlexDirection(style.FlexRow).
+			AlignItems(style.AlignCenter).
+			Gap(1).
+			PaddingLeft(2).
+			Foreground(blueColor)
+		dotsStyle := style.S().Foreground(blueColor).Width(style.Cells(3))
+		labelStyle := style.S().Foreground(blueColor).Bold(true)
+		timeStyle := style.S().Foreground(t.Color.Text.Tertiary)
+		return kitex.Box(kitex.BoxProps{Style: containerStyle},
+			kitex.Box(kitex.BoxProps{Style: dotsStyle}, kitex.Text(currentDots)),
+			kitex.Box(kitex.BoxProps{Style: labelStyle}, kitex.Text("Thinking")),
+			kitex.Box(kitex.BoxProps{Style: timeStyle}, kitex.Text(timeStr)),
+		)
+	}
+	if lastFinishedTime >= 0 {
+		finishedTimeStr := fmt.Sprintf("[%02d:%02d]", lastFinishedTime/60, lastFinishedTime%60)
+		containerStyle := style.S().
+			Display(style.DisplayFlex).
+			FlexDirection(style.FlexRow).
+			AlignItems(style.AlignCenter).
+			Gap(1).
+			PaddingLeft(2).
+			Foreground(t.Color.Text.Secondary)
+		checkStyle := style.S().Foreground(greenColor)
+		labelStyle := style.S().Foreground(t.Color.Text.Secondary)
+		timeStyle := style.S().Foreground(t.Color.Text.Secondary)
+		return kitex.Box(kitex.BoxProps{Style: containerStyle},
+			kitex.Box(kitex.BoxProps{Style: checkStyle}, icon.Checkmark),
+			kitex.Box(kitex.BoxProps{Style: labelStyle}, kitex.Text("Agent completed in")),
+			kitex.Box(kitex.BoxProps{Style: timeStyle}, kitex.Text(finishedTimeStr)),
+		)
+	}
+	return nil
 }

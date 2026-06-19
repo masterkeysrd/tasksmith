@@ -5,6 +5,7 @@ import (
 	"github.com/masterkeysrd/kite/extras/wind"
 	"github.com/masterkeysrd/kite/style"
 	"github.com/masterkeysrd/tasksmith/internal/api"
+	"github.com/masterkeysrd/tasksmith/internal/tui/active"
 	tuiapi "github.com/masterkeysrd/tasksmith/internal/tui/api"
 	"github.com/masterkeysrd/tasksmith/internal/tui/components"
 	"github.com/masterkeysrd/tasksmith/internal/tui/queries"
@@ -50,7 +51,7 @@ var App = kitex.FC("App", func(props AppProps) kitex.Node {
 var Router = kitex.SimpleFC("Router", func() kitex.Node {
 	wsCfg := queries.UseGetWorkspaceConfig()
 	activeView, setActiveView := kitex.UseState(string(viewLoading))
-	activeSessionID, setActiveSessionID := kitex.UseState("")
+	activeSessionID := active.UseSessionID()
 	windClient := wind.UseClient()
 
 	kitex.UseEffect(func() {
@@ -79,11 +80,11 @@ var Router = kitex.SimpleFC("Router", func() kitex.Node {
 		return welcome.View(welcome.ViewProps{
 			OnOpenSetupWizard: func() { setActiveView(string(viewSetup)) },
 			OnNewSession: func(id string) {
-				setActiveSessionID(id)
+				active.SetSessionID(id)
 				setActiveView(string(viewMain))
 			},
 			OnOpenSession: func(id string) {
-				setActiveSessionID(id)
+				active.SetSessionID(id)
 				setActiveView(string(viewMain))
 			},
 		})
@@ -99,7 +100,7 @@ var Router = kitex.SimpleFC("Router", func() kitex.Node {
 
 	default: // viewMain — shell with active workspace view
 		return shell.View(shell.Props{},
-			chat.View(chat.ViewProps{SessionID: activeSessionID()}),
+			chat.View(chat.ViewProps{SessionID: activeSessionID}),
 		)
 	}
 })
