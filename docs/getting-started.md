@@ -64,5 +64,7 @@ Once setup is confirmed, TaskSmith generates the following configuration files:
    Automatically ignores `.env` files to prevent credentials leakage.
 5. **`setup.json`** (XDG Workspaces Directory)
    Stores setup timestamps and versions to enable system migrations.
-6. **`tasksmith.config.json`** (XDG Global Config Directory)
+6. **`theme.json`** (XDG Global Config Directory)
    Persists global preferences such as active color themes.
+7. **`statusline.json`** (XDG Global Config Directory)
+   Defines the status line layout, specifying which builtins and custom commands to render and execute.

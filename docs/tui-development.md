@@ -58,7 +58,7 @@ TaskSmith registers and executes operations using the `internal/tui/command` reg
 
 TaskSmith includes a centralized styling system that is fully responsive to active schemes:
 
-- **Theme Configuration**: Users can select themes during setup, which is saved in `tasksmith.config.json` inside the XDG directory.
+- **Theme Configuration**: Users can select themes during setup, which is saved in `theme.json` inside the XDG directory.
 - **Accessing Theme Colors**: Components consume theme values dynamically:
   ```go
   t := theme.UseTheme()

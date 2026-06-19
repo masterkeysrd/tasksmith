@@ -86,3 +86,53 @@ OPENAI_API_KEY=sk-proj-...
 ```
 
 TaskSmith setup appends `.env` to `.gitignore` to ensure these keys are never committed to version control.
+
+---
+
+## 4. Global Configuration (`~/.config/tasksmith/`)
+
+Global user configurations are stored under the user's home configuration directory:
+
+### Theme Configuration (`theme.json`)
+Saves the currently active color scheme name:
+```json
+{
+  "theme": "tokyo-night"
+}
+```
+
+### Status Line Configuration (`statusline.json`)
+Defines the layout of the status line at the bottom of the shell. It supports built-in indicators and custom shell command executors controlled by a background scheduler:
+```json
+{
+  "statusline": {
+    "left": [
+      { "type": "builtin", "name": "mode" },
+      { "type": "builtin", "name": "git_branch" }
+    ],
+    "right": [
+      {
+        "type": "command",
+        "exec": "date +%H:%M",
+        "interval": "1m"
+      },
+      { "type": "builtin", "name": "stats" },
+      { "type": "builtin", "name": "status" }
+    ]
+  }
+}
+```
+
+#### Config Specifications:
+* **`type: "builtin"`**: Predefined UI indicators.
+  * `mode`: Shows current mode (Normal, Insert, Command).
+  * `git_branch`: Shows active Git branch name.
+  * `provider`: Shows default model provider.
+  * `model`: Shows active model and thinking effort.
+  * `agent`: Shows active orchestrating agent.
+  * `stats`: Shows token metrics and cost metrics.
+  * `status`: Shows system execution loop status.
+* **`type: "command"`**: Runs custom script commands on a background interval timer.
+  * `exec`: Shell command to run (spawned under `/bin/sh -c`).
+  * `interval`: Go duration string specifying how often the command executes (e.g. `10s`, `1m`, `5m`).
+
