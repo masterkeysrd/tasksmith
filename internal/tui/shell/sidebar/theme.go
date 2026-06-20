@@ -26,6 +26,7 @@ type colors struct {
 	warning    color.Color
 	error      color.Color
 	inverse    color.Color
+	magenta    color.Color
 }
 
 func useColors() colors {
@@ -56,6 +57,7 @@ func useColors() colors {
 	warning := palette("yellow", t.Color.Surface.Tertiary)
 	error := palette("red", t.Color.Surface.Error)
 	inverse := palette("bg_dark", t.Color.Text.InversePrimary)
+	magenta := palette("magenta", t.Color.Surface.Secondary)
 
 	return colors{
 		background: background,
@@ -73,6 +75,7 @@ func useColors() colors {
 		warning:    warning,
 		error:      error,
 		inverse:    inverse,
+		magenta:    magenta,
 	}
 }
 
