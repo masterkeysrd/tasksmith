@@ -71,6 +71,14 @@ func (m *mockClient) DeleteSession(ctx context.Context, req api.DeleteSessionReq
 	return &api.DeleteSessionResponse{Success: true}, nil
 }
 
+func (m *mockClient) RenameSession(ctx context.Context, req api.RenameSessionRequest) (*api.RenameSessionResponse, error) {
+	return &api.RenameSessionResponse{Success: true}, nil
+}
+
+func (m *mockClient) ArchiveSession(ctx context.Context, req api.ArchiveSessionRequest) (*api.ArchiveSessionResponse, error) {
+	return &api.ArchiveSessionResponse{Success: true}, nil
+}
+
 func (m *mockClient) SendMessage(ctx context.Context, req api.SendMessageRequest) (*api.SendMessageResponse, error) {
 	return &api.SendMessageResponse{Success: true}, nil
 }

@@ -125,6 +125,23 @@ type DeleteSessionResponse struct {
 	Success bool `json:"success"`
 }
 
+type RenameSessionRequest struct {
+	ID    string `json:"id"`
+	Title string `json:"title"`
+}
+
+type RenameSessionResponse struct {
+	Success bool `json:"success"`
+}
+
+type ArchiveSessionRequest struct {
+	ID string `json:"id"`
+}
+
+type ArchiveSessionResponse struct {
+	Success bool `json:"success"`
+}
+
 type SendMessageRequest struct {
 	SessionID string `json:"session_id"`
 	Text      string `json:"text"`

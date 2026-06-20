@@ -24,6 +24,7 @@ var migrations = []string{
 		created_at DATETIME NOT NULL,
 		FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE
 	);`,
+	`ALTER TABLE sessions ADD COLUMN archived_at DATETIME;`,
 }
 
 type sqliteStore struct {
@@ -47,7 +48,7 @@ func (s *sqliteStore) CreateSession(ctx context.Context, sd SessionData) error {
 
 func (s *sqliteStore) ListSessions(ctx context.Context) ([]SessionData, error) {
 	var sessions []SessionData
-	query := `SELECT id, title, created_at, updated_at FROM sessions ORDER BY updated_at DESC`
+	query := `SELECT id, title, created_at, updated_at FROM sessions WHERE archived_at IS NULL ORDER BY updated_at DESC`
 	err := s.db.SelectContext(ctx, &sessions, query)
 	return sessions, err
 }
@@ -65,6 +66,18 @@ func (s *sqliteStore) GetSession(ctx context.Context, id string) (*SessionData, 
 func (s *sqliteStore) DeleteSession(ctx context.Context, id string) error {
 	query := `DELETE FROM sessions WHERE id = ?`
 	_, err := s.db.ExecContext(ctx, query, id)
+	return err
+}
+
+func (s *sqliteStore) RenameSession(ctx context.Context, id, title string) error {
+	query := `UPDATE sessions SET title = ?, updated_at = ? WHERE id = ?`
+	_, err := s.db.ExecContext(ctx, query, title, time.Now().UTC(), id)
+	return err
+}
+
+func (s *sqliteStore) ArchiveSession(ctx context.Context, id string) error {
+	query := `UPDATE sessions SET archived_at = ? WHERE id = ?`
+	_, err := s.db.ExecContext(ctx, query, time.Now().UTC(), id)
 	return err
 }
 

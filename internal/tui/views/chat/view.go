@@ -537,7 +537,7 @@ var Bubble = kitex.FC("Bubble", func(props BubbleProps) kitex.Node {
 		senderName = " USER"
 	} else {
 		senderColor = t.Color.Surface.Tertiary
-		senderIcon = icon.Cpu
+		senderIcon = icon.CPU
 		if role == message.RoleAssistant {
 			senderName = " AGENT"
 		} else {

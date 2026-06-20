@@ -132,6 +132,25 @@ func (m *Manager) DeleteSession(ctx context.Context, id string) error {
 	return m.store.DeleteSession(ctx, id)
 }
 
+// RenameSession updates the title of a session.
+func (m *Manager) RenameSession(ctx context.Context, id, title string) error {
+	return m.store.RenameSession(ctx, id, title)
+}
+
+// ArchiveSession soft-deletes a session by setting its archived_at timestamp.
+func (m *Manager) ArchiveSession(ctx context.Context, id string) error {
+	m.mu.Lock()
+	if sess, ok := m.activeSessions[id]; ok {
+		if sess.Cancel != nil {
+			sess.Cancel()
+		}
+		delete(m.activeSessions, id)
+	}
+	m.mu.Unlock()
+
+	return m.store.ArchiveSession(ctx, id)
+}
+
 // GetSessionState returns the in-memory runtime execution state of the specified session.
 func (m *Manager) GetSessionState(sessionID string) (SessionStatus, string) {
 	m.mu.RLock()

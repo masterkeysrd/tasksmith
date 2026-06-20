@@ -20,6 +20,8 @@ type Client interface {
 
 	ListSessions(ctx context.Context, req api.ListSessionsRequest) (*api.ListSessionsResponse, error)
 	CreateSession(ctx context.Context, req api.CreateSessionRequest) (*api.CreateSessionResponse, error)
+	RenameSession(ctx context.Context, req api.RenameSessionRequest) (*api.RenameSessionResponse, error)
+	ArchiveSession(ctx context.Context, req api.ArchiveSessionRequest) (*api.ArchiveSessionResponse, error)
 	DeleteSession(ctx context.Context, req api.DeleteSessionRequest) (*api.DeleteSessionResponse, error)
 	SendMessage(ctx context.Context, req api.SendMessageRequest) (*api.SendMessageResponse, error)
 	GetSessionMessages(ctx context.Context, req api.GetSessionMessagesRequest) (*api.GetSessionMessagesResponse, error)

@@ -30,6 +30,8 @@ type Store interface {
 	CreateSession(ctx context.Context, s SessionData) error
 	GetSession(ctx context.Context, id string) (*SessionData, error)
 	ListSessions(ctx context.Context) ([]SessionData, error)
+	RenameSession(ctx context.Context, id, title string) error
+	ArchiveSession(ctx context.Context, id string) error
 	DeleteSession(ctx context.Context, id string) error
 
 	AppendMessage(ctx context.Context, msg MessageData, updatedAt time.Time) error

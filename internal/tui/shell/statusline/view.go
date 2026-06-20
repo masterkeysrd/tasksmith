@@ -246,7 +246,7 @@ var Model = kitex.FC("Model", func(props ModelProps) kitex.Node {
 		Merge(props.Style)
 
 	return kitex.Box(kitex.BoxProps{Style: modelStyle},
-		icon.Cpu,
+		icon.CPU,
 		kitex.Text(fmt.Sprintf("%s [%s]", props.Model, strings.ToUpper(props.ThinkingEffort))),
 	)
 })

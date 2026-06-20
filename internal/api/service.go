@@ -280,6 +280,28 @@ func (s *Service) DeleteSession(ctx context.Context, req DeleteSessionRequest) (
 	return &DeleteSessionResponse{Success: true}, nil
 }
 
+// RenameSession updates the title of an existing session.
+func (s *Service) RenameSession(ctx context.Context, req RenameSessionRequest) (*RenameSessionResponse, error) {
+	if s.sm == nil {
+		return nil, fmt.Errorf("session manager not initialized")
+	}
+	if err := s.sm.RenameSession(ctx, req.ID, req.Title); err != nil {
+		return nil, err
+	}
+	return &RenameSessionResponse{Success: true}, nil
+}
+
+// ArchiveSession soft-removes a session from the active list.
+func (s *Service) ArchiveSession(ctx context.Context, req ArchiveSessionRequest) (*ArchiveSessionResponse, error) {
+	if s.sm == nil {
+		return nil, fmt.Errorf("session manager not initialized")
+	}
+	if err := s.sm.ArchiveSession(ctx, req.ID); err != nil {
+		return nil, err
+	}
+	return &ArchiveSessionResponse{Success: true}, nil
+}
+
 // SendMessage delivers a message to a session workspace's agent graph.
 func (s *Service) SendMessage(ctx context.Context, req SendMessageRequest) (*SendMessageResponse, error) {
 	if s.sm == nil {
