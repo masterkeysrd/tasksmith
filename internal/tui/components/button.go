@@ -64,6 +64,8 @@ type ButtonProps struct {
 	Style style.Style
 	// HoverStyle allows passing additional style overrides for the hovered state.
 	HoverStyle style.Style
+	// ActiveStyle allows passing additional style overrides when the button is active.
+	ActiveStyle style.Style
 	// StartIcon is an optional icon to display before the text.
 	StartIcon kitex.Node
 	// EndIcon is an optional icon to display after the text.
@@ -215,6 +217,9 @@ var Button = kitex.FCC("Button", func(props ButtonProps) kitex.Node {
 	s = s.Merge(props.Style)
 	if isHovered() {
 		s = s.Merge(props.HoverStyle)
+	}
+	if props.Active {
+		s = s.Merge(props.ActiveStyle)
 	}
 
 	var content []kitex.Node

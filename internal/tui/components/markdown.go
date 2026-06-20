@@ -106,7 +106,9 @@ var Markdown = kitex.FC("Markdown", func(props MarkdownProps) kitex.Node {
 				if spanText == "" {
 					spanText = string(node.Text(src))
 				}
-				spanStyle := style.S()
+				spanStyle := style.S().
+					Display(style.DisplayInlineBlock).
+					WhiteSpace(style.WhiteSpaceNoWrap)
 				if t != nil {
 					spanStyle = spanStyle.
 						Background(t.Color.Surface.BaseFocus).
@@ -175,10 +177,31 @@ var Markdown = kitex.FC("Markdown", func(props MarkdownProps) kitex.Node {
 				// Paragraphs inside a ListItem have no extra margin — the
 				// list's own spacing is sufficient.
 				_, inListItem := node.Parent().(*ast.ListItem)
-				if !inListItem {
+				if inListItem {
+					// If it is the first block child of the list item, we render it inline
+					// so it doesn't cause a line break next to the bullet/marker.
+					if node.Parent().FirstChild() == node {
+						return kitex.Fragment(children...)
+					}
+					// Subsequent block children of the list item should stack as block boxes
+					pStyle = pStyle.MarginTop(1)
+				} else {
 					pStyle = pStyle.MarginBottom(1)
 				}
 				return kitex.Box(kitex.BoxProps{Style: pStyle}, children...)
+
+			case *ast.TextBlock:
+				children := renderInlineChildren(node)
+				if len(children) == 0 {
+					return nil
+				}
+				_, inListItem := node.Parent().(*ast.ListItem)
+				if inListItem {
+					if node.Parent().FirstChild() == node {
+						return kitex.Fragment(children...)
+					}
+				}
+				return kitex.Box(kitex.BoxProps{}, children...)
 
 			case *ast.Heading:
 				children := renderInlineChildren(node)
@@ -313,7 +336,7 @@ func renderList(
 			continue
 		}
 
-		bulletStyle := style.S()
+		bulletStyle := style.S().WhiteSpace(style.WhiteSpaceNoWrap)
 		if t != nil {
 			bulletStyle = bulletStyle.Foreground(t.Color.Surface.Primary)
 		}

@@ -51,12 +51,22 @@ var (
 	GitBranch = kitex.Text("")
 	// Server is a server icon (󰟀).
 	Server = kitex.Text("󰟀")
-	// Cpu is a cpu icon (󰍛).
-	Cpu = kitex.Text("󰍛")
+	// CPU is a cpu icon (󰍛).
+	CPU = kitex.Text("󰍛")
 	// User is a user/profile icon ().
 	User = kitex.Text("")
 	// MoveDown is an input/download arrow icon (↓).
 	MoveDown = kitex.Text("↓")
 	// MoveUp is an output/upload arrow icon (↑).
 	MoveUp = kitex.Text("↑")
+	// Lightning is a lightning/fast icon (󱐋).
+	Lightning = kitex.Text("󱐋")
+	// Plus is an add/plus icon (  ).
+	Plus = kitex.Text("")
+	// Search is a search/magnifying glass icon ().
+	Search = kitex.Text("")
+	// Directory is a directory/folder icon ().
+	Directory = kitex.Text("")
+	// DirectoryOpen is an open directory/folder icon ().
+	DirectoryOpen = kitex.Text("")
 )

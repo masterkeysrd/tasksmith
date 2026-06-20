@@ -27,6 +27,8 @@ type TabsProps struct {
 	OnChange func(any)
 	// Style allows passing additional style overrides.
 	Style style.Style
+	// TabListStyle allows customizing the row that contains the tab triggers.
+	TabListStyle style.Style
 	// Children should contain Tab and TabPanel components.
 	Children []kitex.Node
 }
@@ -123,7 +125,7 @@ var Tabs = kitex.FCC("Tabs", func(props TabsProps) kitex.Node {
 			Style: TabsBaseStyle.Merge(props.Style),
 		},
 			kitex.Box(kitex.BoxProps{
-				Style: TabListStyle,
+				Style: TabListStyle.Merge(props.TabListStyle),
 			},
 				tabs...,
 			),
@@ -142,8 +144,14 @@ type TabProps struct {
 	Disabled bool
 	// Color specifies the color variant of the tab.
 	Color ButtonColor
+	// Variant specifies the shared button variant used for the tab trigger.
+	Variant ButtonVariant
 	// Style allows passing additional style overrides.
 	Style style.Style
+	// HoverStyle allows customizing hover state styling for the tab trigger.
+	HoverStyle style.Style
+	// ActiveStyle allows customizing the active tab styling.
+	ActiveStyle style.Style
 	// Children is the label content.
 	Children []kitex.Node
 }
@@ -156,13 +164,19 @@ var Tab = kitex.FCC("Tab", func(props TabProps) kitex.Node {
 	}
 
 	isActive := state.value == props.Value
+	variant := props.Variant
+	if variant == "" {
+		variant = ButtonText
+	}
 	return Button(ButtonProps{
-		Variant:   ButtonText,
-		Active:    isActive,
-		Disabled:  props.Disabled,
-		Color:     props.Color,
-		StartIcon: props.Icon,
-		Style:     props.Style,
+		Variant:     variant,
+		Active:      isActive,
+		Disabled:    props.Disabled,
+		Color:       props.Color,
+		StartIcon:   props.Icon,
+		Style:       props.Style,
+		HoverStyle:  props.HoverStyle,
+		ActiveStyle: props.ActiveStyle,
 		OnClick: func() {
 			state.setValue(props.Value)
 		},
