@@ -34,11 +34,12 @@ type Session struct {
 
 // ActiveSession holds the in-memory execution status of a running Loom agent.
 type ActiveSession struct {
-	ID                string
-	Status            SessionStatus
-	Error             string
-	CurrentStreamText string
-	Cancel            context.CancelFunc
+	ID                    string
+	Status                SessionStatus
+	Error                 string
+	CurrentStreamText     string
+	CurrentStreamThinking string
+	Cancel                context.CancelFunc
 }
 
 // Manager coordinates session business logic and delegates persistence to the Store interface.
@@ -182,6 +183,7 @@ func (m *Manager) SendMessage(ctx context.Context, sessionID string, text string
 	sess.Status = StatusRunning
 	sess.Error = ""
 	sess.CurrentStreamText = ""
+	sess.CurrentStreamThinking = ""
 
 	runCtx, cancel := context.WithCancel(context.Background())
 	sess.Cancel = cancel
@@ -248,6 +250,9 @@ func (m *Manager) SendMessage(ctx context.Context, sessionID string, text string
 			return
 		}
 
+		var asstMsg message.Message
+		hasTypedChunks := false
+
 		// Consume the stream, appending text chunks dynamically in memory
 		for ev, err := range seq {
 			if err != nil {
@@ -256,28 +261,81 @@ func (m *Manager) SendMessage(ctx context.Context, sessionID string, text string
 			}
 
 			if ev.Event == graph.EventLLMChunk {
-				var chunk string
+				var textChunk string
+				var thinkingChunk string
 				switch d := ev.Data.(type) {
 				case message.AssistantChunk:
-					chunk = message.Content(d.Content).Text()
+					hasTypedChunks = true
+					textChunk = message.Content(d.Content).Text()
+					thinkingChunk = message.Content(d.Content).Thought()
 				case *message.AssistantChunk:
-					chunk = message.Content(d.Content).Text()
+					hasTypedChunks = true
+					textChunk = message.Content(d.Content).Text()
+					thinkingChunk = message.Content(d.Content).Thought()
 				case string:
-					chunk = d
+					if !hasTypedChunks {
+						textChunk = d
+					}
 				}
 
-				m.mu.Lock()
-				sess.CurrentStreamText += chunk
-				m.mu.Unlock()
+				if textChunk != "" || thinkingChunk != "" {
+					m.mu.Lock()
+					sess.CurrentStreamText += textChunk
+					sess.CurrentStreamThinking += thinkingChunk
+					m.mu.Unlock()
+				}
+			} else if ev.Event == graph.EventCompleted {
+				var finalState *agentgraph.AgentState
+				if snap, ok := ev.Data.(graph.Snapshot[agentgraph.AgentState]); ok {
+					finalState = &snap.State
+				} else if snapPtr, ok := ev.Data.(*graph.Snapshot[agentgraph.AgentState]); ok {
+					if snapPtr != nil {
+						finalState = &snapPtr.State
+					}
+				}
+				if finalState != nil && len(finalState.Messages) > 0 {
+					lastMsg := finalState.Messages[len(finalState.Messages)-1]
+					if lastMsg.Role() == message.RoleAssistant {
+						asstMsg = lastMsg
+					}
+				}
 			}
 		}
 
 		// Persist the finalized assistant message to the database
-		m.mu.RLock()
-		finalText := sess.CurrentStreamText
-		m.mu.RUnlock()
+		if asstMsg == nil {
+			if snap, err := g.Load(context.Background(), *loc); err == nil && len(snap.State.Messages) > 0 {
+				lastMsg := snap.State.Messages[len(snap.State.Messages)-1]
+				if lastMsg.Role() == message.RoleAssistant {
+					asstMsg = lastMsg
+				}
+			}
+		}
 
-		asstMsg := message.NewAssistantText(finalText)
+		if asstMsg == nil {
+			m.mu.RLock()
+			finalText := sess.CurrentStreamText
+			finalThinking := sess.CurrentStreamThinking
+			m.mu.RUnlock()
+			var content message.Content
+			if finalThinking != "" {
+				content = append(content, &message.ThinkingBlock{Thinking: finalThinking})
+			}
+			if finalText != "" {
+				content = append(content, &message.TextBlock{Text: finalText})
+			}
+			asstMsg = &message.Assistant{
+				Content: content,
+			}
+		}
+
+		// Clear the active stream state before persisting to database, so there is no duplication window
+		m.mu.Lock()
+		sess.Status = StatusIdle
+		sess.CurrentStreamText = ""
+		sess.CurrentStreamThinking = ""
+		m.mu.Unlock()
+
 		if _, err := m.AppendMessage(context.Background(), sessionID, asstMsg); err != nil {
 			m.setSessionError(sessionID, fmt.Errorf("failed to save final assistant message: %w", err))
 			return
@@ -370,19 +428,30 @@ func (m *Manager) GetMessages(ctx context.Context, sessionID string) (message.Me
 		}
 	}
 
-	// If there is an active running agent session, inject the in-progress stream text in-memory
+	// If there is an active running agent session, inject the in-progress stream text and thinking in-memory
 	m.mu.RLock()
 	sess, ok := m.activeSessions[sessionID]
 	var streamText string
+	var streamThinking string
 	var status SessionStatus
 	if ok {
 		streamText = sess.CurrentStreamText
+		streamThinking = sess.CurrentStreamThinking
 		status = sess.Status
 	}
 	m.mu.RUnlock()
 
-	if ok && status == StatusRunning && streamText != "" {
-		asst := message.NewAssistantText(streamText)
+	if ok && status == StatusRunning && (streamText != "" || streamThinking != "") {
+		var content message.Content
+		if streamThinking != "" {
+			content = append(content, &message.ThinkingBlock{Thinking: streamThinking})
+		}
+		if streamText != "" {
+			content = append(content, &message.TextBlock{Text: streamText})
+		}
+		asst := &message.Assistant{
+			Content: content,
+		}
 		meta := map[string]any{
 			"created_at": time.Now().Format("15:04"),
 		}

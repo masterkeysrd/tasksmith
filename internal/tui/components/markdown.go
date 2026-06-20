@@ -177,6 +177,7 @@ var Markdown = kitex.FC("Markdown", func(props MarkdownProps) kitex.Node {
 				// Paragraphs inside a ListItem have no extra margin — the
 				// list's own spacing is sufficient.
 				_, inListItem := node.Parent().(*ast.ListItem)
+				_, inBlockquote := node.Parent().(*ast.Blockquote)
 				if inListItem {
 					// If it is the first block child of the list item, we render it inline
 					// so it doesn't cause a line break next to the bullet/marker.
@@ -185,6 +186,10 @@ var Markdown = kitex.FC("Markdown", func(props MarkdownProps) kitex.Node {
 					}
 					// Subsequent block children of the list item should stack as block boxes
 					pStyle = pStyle.MarginTop(1)
+				} else if inBlockquote {
+					if node.NextSibling() != nil {
+						pStyle = pStyle.MarginBottom(1)
+					}
 				} else {
 					pStyle = pStyle.MarginBottom(1)
 				}
@@ -257,11 +262,12 @@ var Markdown = kitex.FC("Markdown", func(props MarkdownProps) kitex.Node {
 				if len(children) == 0 {
 					return nil
 				}
-				qStyle := style.S().PaddingLeft(1).MarginBottom(1)
+				qStyle := style.S().PaddingLeft(1)
 				if t != nil {
-					qStyle = qStyle.Border(style.SingleBorder().Left(true).Color(t.Color.Border.Primary))
+					qStyle = qStyle.BorderLeft(true, style.SingleBorder(), t.Color.Border.Primary)
 				}
-				return kitex.Box(kitex.BoxProps{Style: qStyle}, children...)
+				innerBox := kitex.Box(kitex.BoxProps{Style: qStyle}, children...)
+				return kitex.Box(kitex.BoxProps{Style: style.S().MarginBottom(1)}, innerBox)
 
 			case *ast.ThematicBreak:
 				tbStyle := style.S().MarginBottom(1)

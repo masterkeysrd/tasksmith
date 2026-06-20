@@ -234,11 +234,7 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 
 	bgDark := color.Color(color.RGBA{R: 22, G: 22, B: 30, A: 255})
 	if t != nil {
-		if c, ok := t.Palette["bg_dark"]; ok {
-			bgDark = c
-		} else {
-			bgDark = t.Color.Surface.BaseHover
-		}
+		bgDark = t.Color.Surface.BaseHover
 	}
 
 	messagesContainerStyle := style.S().
@@ -318,9 +314,6 @@ var Composer = kitex.FC("Composer", func(props ComposerProps) kitex.Node {
 
 	// Resolve the focus blue color from the palette/theme
 	blueColor := t.Color.Surface.Info
-	if c, ok := t.Palette["blue"]; ok {
-		blueColor = c
-	}
 
 	// Border color switches to blue when focused, otherwise comment color
 	borderColor := t.Color.Text.Tertiary // comment: #565f89
@@ -458,35 +451,86 @@ var CollapsibleThinking = kitex.FC("CollapsibleThinking", func(props Collapsible
 	t := theme.UseTheme()
 	isOpen, setIsOpen := kitex.UseState(false)
 
-	toggleText := "[+] Thinking..."
-	if isOpen() {
-		toggleText = "[-] Thinking..."
+	lines := strings.Split(strings.TrimSpace(props.Content), "\n")
+	hasMore := len(lines) > 10
+
+	var showLines []string
+	if isOpen() || len(lines) <= 10 {
+		showLines = lines
+	} else {
+		showLines = lines[:10]
 	}
 
+	containerStyle := style.S().
+		Display(style.DisplayFlex).
+		FlexDirection(style.FlexColumn).
+		Border(true, style.SingleBorder(), t.Color.Border.Primary).
+		Background(t.Color.Surface.BaseHover).
+		MarginVertical(1).
+		Width(style.Percent(100))
+
 	headerStyle := style.S().
-		Foreground(t.Color.Text.Secondary).
-		Bold(true)
+		Display(style.DisplayFlex).
+		FlexDirection(style.FlexRow).
+		AlignItems(style.AlignCenter).
+		JustifyContent(style.JustifyBetween).
+		Padding(0, 1).
+		Background(t.Color.Surface.BaseFocus).
+		Width(style.Percent(100))
 
-	contentStyle := style.S().
-		Foreground(t.Color.Text.Tertiary).
-		PaddingLeft(2).
-		MarginBottom(1)
+	bodyStyle := style.S().
+		Padding(1).
+		Display(style.DisplayFlex).
+		FlexDirection(style.FlexColumn).
+		Background(t.Color.Surface.BaseHover)
 
-	return kitex.Box(kitex.BoxProps{
-		Style: style.S().Display(style.DisplayFlex).FlexDirection(style.FlexColumn).Gap(1),
-	},
+	return kitex.Box(kitex.BoxProps{Style: containerStyle},
 		components.Button(components.ButtonProps{
 			Variant: components.ButtonText,
+			Color:   components.ButtonBase,
 			Style:   headerStyle,
 			OnClick: func() {
 				setIsOpen(!isOpen())
 			},
-		}, kitex.Text(toggleText)),
-		kitex.If(isOpen(), func() kitex.Node {
-			return kitex.Box(kitex.BoxProps{Style: contentStyle},
-				kitex.Text(props.Content),
-			)
-		}),
+		},
+			kitex.Box(kitex.BoxProps{
+				Style: style.S().
+					Display(style.DisplayFlex).
+					FlexDirection(style.FlexRow).
+					AlignItems(style.AlignCenter).
+					Gap(1),
+			},
+				kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Tertiary)}, kitex.Text("≈")),
+				kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Tertiary).Bold(true)}, kitex.Text("THINKING PROCESS")),
+			),
+			kitex.If(hasMore, func() kitex.Node {
+				var label string
+				if isOpen() {
+					label = "▲ COLLAPSE"
+				} else {
+					label = fmt.Sprintf("▼ EXPAND (%d MORE LINES)", len(lines)-10)
+				}
+				return kitex.Span(kitex.SpanProps{
+					Style: style.S().Foreground(t.Color.Text.Secondary),
+				}, kitex.Text(label))
+			}),
+		),
+		kitex.Box(kitex.BoxProps{Style: bodyStyle},
+			kitex.Map(showLines, func(line string, _ int) kitex.Node {
+				return kitex.Box(kitex.BoxProps{
+					Style: style.S().
+						Foreground(t.Color.Text.Tertiary).
+						WhiteSpace(style.WhiteSpacePreWrap),
+				}, kitex.Text(line))
+			}),
+			kitex.If(!isOpen() && hasMore, func() kitex.Node {
+				return kitex.Box(kitex.BoxProps{
+					Style: style.S().
+						Foreground(t.Color.Text.Secondary).
+						MarginTop(1),
+				}, kitex.Text("..."))
+			}),
+		),
 	)
 })
 
@@ -523,6 +567,7 @@ var Bubble = kitex.FC("Bubble", func(props BubbleProps) kitex.Node {
 		default:
 			align = style.AlignStart
 			bubbleStyle = bubbleStyle.
+				Width(style.Percent(100)).
 				Foreground(t.Color.Text.Primary)
 		}
 	}
@@ -726,13 +771,7 @@ func renderAgentStatus(t *theme.Scheme, sending bool, thinkingTime int, lastFini
 		return nil
 	}
 	blueColor := t.Color.Surface.Info
-	if c, ok := t.Palette["blue"]; ok {
-		blueColor = c
-	}
 	greenColor := t.Color.Surface.Success
-	if c, ok := t.Palette["green"]; ok {
-		greenColor = c
-	}
 	timeStr := fmt.Sprintf("[%02d:%02d]", thinkingTime/60, thinkingTime%60)
 	if sending {
 		containerStyle := style.S().
