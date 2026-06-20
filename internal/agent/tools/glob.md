@@ -6,7 +6,6 @@ metadata:
   labels:
     category: filesystem
 spec:
-  command: ["find"]
   parameters:
     type: object
     properties:

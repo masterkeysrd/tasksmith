@@ -6,7 +6,6 @@ metadata:
   labels:
     category: network
 spec:
-  command: ["curl"]
   parameters:
     type: object
     properties:

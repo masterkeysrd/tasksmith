@@ -7,17 +7,17 @@ package tools
 // Execute a bash command.
 type BashArgs struct {
 	// Command: Bash command to execute.
-	Command string `json:"command"`
+	Command string `json:"command" jsonschema:"Bash command to execute."`
 }
 
 // BashOutput defines the output returned by the "bash" tool.
 type BashOutput struct {
 	// ExitCode: Exit code.
-	ExitCode int `json:"exitCode"`
+	ExitCode int `json:"exitCode" jsonschema:"Exit code."`
 	// Stderr: Standard error.
-	Stderr string `json:"stderr"`
+	Stderr string `json:"stderr" jsonschema:"Standard error."`
 	// Stdout: Standard output.
-	Stdout string `json:"stdout"`
+	Stdout string `json:"stdout" jsonschema:"Standard output."`
 }
 
 // DownloadArgs defines the arguments for the "download" tool.
@@ -25,15 +25,15 @@ type BashOutput struct {
 // Download a file from a URL.
 type DownloadArgs struct {
 	// Url: URL to download from.
-	Url string `json:"url"`
+	Url string `json:"url" jsonschema:"URL to download from."`
 }
 
 // DownloadOutput defines the output returned by the "download" tool.
 type DownloadOutput struct {
 	// Path: Path to the downloaded file.
-	Path string `json:"path"`
+	Path string `json:"path" jsonschema:"Path to the downloaded file."`
 	// Success: Whether the download succeeded.
-	Success bool `json:"success"`
+	Success bool `json:"success" jsonschema:"Whether the download succeeded."`
 }
 
 // EditArgs defines the arguments for the "edit" tool.
@@ -41,17 +41,17 @@ type DownloadOutput struct {
 // Edit a file using sed.
 type EditArgs struct {
 	// Expression: Sed expression.
-	Expression string `json:"expression"`
+	Expression string `json:"expression" jsonschema:"Sed expression."`
 	// Path: Path to the file.
-	Path string `json:"path"`
+	Path string `json:"path" jsonschema:"Path to the file."`
 }
 
 // EditOutput defines the output returned by the "edit" tool.
 type EditOutput struct {
 	// Path: Path to the edited file.
-	Path string `json:"path"`
+	Path string `json:"path" jsonschema:"Path to the edited file."`
 	// Success: Whether the edit succeeded.
-	Success bool `json:"success"`
+	Success bool `json:"success" jsonschema:"Whether the edit succeeded."`
 }
 
 // FetchArgs defines the arguments for the "fetch" tool.
@@ -59,15 +59,15 @@ type EditOutput struct {
 // Fetch a URL.
 type FetchArgs struct {
 	// Url: URL to fetch.
-	Url string `json:"url"`
+	Url string `json:"url" jsonschema:"URL to fetch."`
 }
 
 // FetchOutput defines the output returned by the "fetch" tool.
 type FetchOutput struct {
 	// Content: Content of the response.
-	Content string `json:"content"`
+	Content string `json:"content" jsonschema:"Content of the response."`
 	// Status: HTTP status code.
-	Status int `json:"status"`
+	Status int `json:"status" jsonschema:"HTTP status code."`
 }
 
 // GlobArgs defines the arguments for the "glob" tool.
@@ -75,13 +75,13 @@ type FetchOutput struct {
 // Find files matching a glob pattern.
 type GlobArgs struct {
 	// Pattern: Glob pattern to match.
-	Pattern string `json:"pattern"`
+	Pattern string `json:"pattern" jsonschema:"Glob pattern to match."`
 }
 
 // GlobOutput defines the output returned by the "glob" tool.
 type GlobOutput struct {
 	// Matches: List of matching file paths.
-	Matches []string `json:"matches"`
+	Matches []string `json:"matches" jsonschema:"List of matching file paths."`
 }
 
 // GrepArgs defines the arguments for the "grep" tool.
@@ -89,15 +89,15 @@ type GlobOutput struct {
 // Search for a pattern in files.
 type GrepArgs struct {
 	// Path: Directory or file to search in.
-	Path string `json:"path"`
+	Path string `json:"path" jsonschema:"Directory or file to search in."`
 	// Pattern: Regex pattern to search for.
-	Pattern string `json:"pattern"`
+	Pattern string `json:"pattern" jsonschema:"Regex pattern to search for."`
 }
 
 // GrepOutput defines the output returned by the "grep" tool.
 type GrepOutput struct {
 	// Matches: List of search matches.
-	Matches []any `json:"matches"`
+	Matches []any `json:"matches" jsonschema:"List of search matches."`
 }
 
 // LsArgs defines the arguments for the "ls" tool.
@@ -105,13 +105,13 @@ type GrepOutput struct {
 // List files in a directory with type indicators.
 type LsArgs struct {
 	// Path: Path to the directory.
-	Path string `json:"path"`
+	Path string `json:"path" jsonschema:"Path to the directory."`
 }
 
 // LsOutput defines the output returned by the "ls" tool.
 type LsOutput struct {
 	// Files: List of files and directories.
-	Files []any `json:"files"`
+	Files []any `json:"files" jsonschema:"List of files and directories."`
 }
 
 // LspDiagnosticsArgs defines the arguments for the "lsp_diagnostics" tool.
@@ -119,13 +119,13 @@ type LsOutput struct {
 // Get LSP diagnostics.
 type LspDiagnosticsArgs struct {
 	// Path: Path to the file or directory.
-	Path string `json:"path"`
+	Path string `json:"path" jsonschema:"Path to the file or directory."`
 }
 
 // LspDiagnosticsOutput defines the output returned by the "lsp_diagnostics" tool.
 type LspDiagnosticsOutput struct {
 	// Diagnostics: List of LSP diagnostics.
-	Diagnostics []any `json:"diagnostics"`
+	Diagnostics []any `json:"diagnostics" jsonschema:"List of LSP diagnostics."`
 }
 
 // LspRestartArgs defines the arguments for the "lsp_restart" tool.
@@ -133,15 +133,15 @@ type LspDiagnosticsOutput struct {
 // Restart LSP server.
 type LspRestartArgs struct {
 	// Server: Name of the LSP server to restart.
-	Server string `json:"server"`
+	Server string `json:"server" jsonschema:"Name of the LSP server to restart."`
 }
 
 // LspRestartOutput defines the output returned by the "lsp_restart" tool.
 type LspRestartOutput struct {
 	// Message: Description of the restart outcome.
-	Message string `json:"message"`
+	Message string `json:"message" jsonschema:"Description of the restart outcome."`
 	// Success: Whether the LSP server restarted successfully.
-	Success bool `json:"success"`
+	Success bool `json:"success" jsonschema:"Whether the LSP server restarted successfully."`
 }
 
 // LspSearchArgs defines the arguments for the "lsp_search" tool.
@@ -149,13 +149,13 @@ type LspRestartOutput struct {
 // Search using LSP.
 type LspSearchArgs struct {
 	// Query: Search query.
-	Query string `json:"query"`
+	Query string `json:"query" jsonschema:"Search query."`
 }
 
 // LspSearchOutput defines the output returned by the "lsp_search" tool.
 type LspSearchOutput struct {
 	// Results: List of LSP search results.
-	Results []any `json:"results"`
+	Results []any `json:"results" jsonschema:"List of LSP search results."`
 }
 
 // McpReadResourcesArgs defines the arguments for the "mcp_read_resources" tool.
@@ -163,15 +163,15 @@ type LspSearchOutput struct {
 // Read resources from MCP.
 type McpReadResourcesArgs struct {
 	// Uri: MCP resource URI.
-	Uri string `json:"uri"`
+	Uri string `json:"uri" jsonschema:"MCP resource URI."`
 }
 
 // McpReadResourcesOutput defines the output returned by the "mcp_read_resources" tool.
 type McpReadResourcesOutput struct {
 	// Content: Content of the MCP resource.
-	Content string `json:"content"`
+	Content string `json:"content" jsonschema:"Content of the MCP resource."`
 	// Success: Whether reading the resource succeeded.
-	Success bool `json:"success"`
+	Success bool `json:"success" jsonschema:"Whether reading the resource succeeded."`
 }
 
 // RemoveArgs defines the arguments for the "remove" tool.
@@ -179,15 +179,15 @@ type McpReadResourcesOutput struct {
 // Remove a file or directory.
 type RemoveArgs struct {
 	// Path: Path to remove.
-	Path string `json:"path"`
+	Path string `json:"path" jsonschema:"Path to remove."`
 }
 
 // RemoveOutput defines the output returned by the "remove" tool.
 type RemoveOutput struct {
 	// Path: Path that was removed.
-	Path string `json:"path"`
+	Path string `json:"path" jsonschema:"Path that was removed."`
 	// Success: Whether removal succeeded.
-	Success bool `json:"success"`
+	Success bool `json:"success" jsonschema:"Whether removal succeeded."`
 }
 
 // ViewArgs defines the arguments for the "view" tool.
@@ -195,13 +195,13 @@ type RemoveOutput struct {
 // View the contents of a file.
 type ViewArgs struct {
 	// Path: Path to the file.
-	Path string `json:"path"`
+	Path string `json:"path" jsonschema:"Path to the file."`
 }
 
 // ViewOutput defines the output returned by the "view" tool.
 type ViewOutput struct {
 	// Content: Content of the file.
-	Content string `json:"content"`
+	Content string `json:"content" jsonschema:"Content of the file."`
 }
 
 // WebFetchArgs defines the arguments for the "web_fetch" tool.
@@ -209,15 +209,15 @@ type ViewOutput struct {
 // Fetch a web page content.
 type WebFetchArgs struct {
 	// Url: Web page URL.
-	Url string `json:"url"`
+	Url string `json:"url" jsonschema:"Web page URL."`
 }
 
 // WebFetchOutput defines the output returned by the "web_fetch" tool.
 type WebFetchOutput struct {
 	// Content: Web page content.
-	Content string `json:"content"`
+	Content string `json:"content" jsonschema:"Web page content."`
 	// Title: Web page title.
-	Title string `json:"title"`
+	Title string `json:"title" jsonschema:"Web page title."`
 }
 
 // WebSearchArgs defines the arguments for the "web_search" tool.
@@ -225,13 +225,13 @@ type WebFetchOutput struct {
 // Search the web.
 type WebSearchArgs struct {
 	// Query: Search query.
-	Query string `json:"query"`
+	Query string `json:"query" jsonschema:"Search query."`
 }
 
 // WebSearchOutput defines the output returned by the "web_search" tool.
 type WebSearchOutput struct {
 	// Results: Search results.
-	Results []any `json:"results"`
+	Results []any `json:"results" jsonschema:"Search results."`
 }
 
 // WriteArgs defines the arguments for the "write" tool.
@@ -239,13 +239,13 @@ type WebSearchOutput struct {
 // Write content to a file.
 type WriteArgs struct {
 	// Content: Content to write.
-	Content string `json:"content"`
+	Content string `json:"content" jsonschema:"Content to write."`
 	// Path: Path to the file.
-	Path string `json:"path"`
+	Path string `json:"path" jsonschema:"Path to the file."`
 }
 
 // WriteOutput defines the output returned by the "write" tool.
 type WriteOutput struct {
 	// Path: Path to the written file.
-	Path string `json:"path"`
+	Path string `json:"path" jsonschema:"Path to the written file."`
 }

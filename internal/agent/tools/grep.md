@@ -6,7 +6,6 @@ metadata:
   labels:
     category: filesystem
 spec:
-  command: ["grep", "-rn"]
   parameters:
     type: object
     properties:

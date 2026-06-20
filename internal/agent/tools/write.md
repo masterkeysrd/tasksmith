@@ -6,7 +6,6 @@ metadata:
   labels:
     category: filesystem
 spec:
-  command: ["tee"]
   parameters:
     type: object
     properties:

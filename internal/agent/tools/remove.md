@@ -6,7 +6,6 @@ metadata:
   labels:
     category: filesystem
 spec:
-  command: ["rm", "-rf"]
   parameters:
     type: object
     properties:

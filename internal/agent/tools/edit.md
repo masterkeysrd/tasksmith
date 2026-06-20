@@ -6,7 +6,6 @@ metadata:
   labels:
     category: filesystem
 spec:
-  command: ["sed", "-i"]
   parameters:
     type: object
     properties:

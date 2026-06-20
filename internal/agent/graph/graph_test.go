@@ -7,28 +7,46 @@ import (
 
 	"github.com/masterkeysrd/loom/graph"
 	"github.com/masterkeysrd/loom/message"
+	"github.com/masterkeysrd/loom/tool"
 	agentgraph "github.com/masterkeysrd/tasksmith/internal/agent/graph"
 )
+
+type mockLLMModel struct {
+	invokeFn func(ctx context.Context, messages []message.Message) (*message.Assistant, error)
+}
+
+func (m *mockLLMModel) Invoke(ctx context.Context, messages []message.Message) (*message.Assistant, error) {
+	return m.invokeFn(ctx, messages)
+}
+
+func (m *mockLLMModel) BindTools(tools ...*tool.Tool) agentgraph.LLMModel {
+	return m
+}
 
 func TestAgentGraph_Execution(t *testing.T) {
 	// Tracks LLM calls
 	callCount := 0
 
-	// Mock LLM caller
-	mockLLM := func(ctx context.Context, messages []message.Message) (*message.Assistant, error) {
-		callCount++
-		if callCount == 1 {
-			return &message.Assistant{
-				Content: message.Content{
-					&message.TextBlock{Text: "TaskSmith is defined in GEMINI.md and README.md"},
-				},
-			}, nil
-		}
-		return nil, errors.New("unexpected LLM invocation")
+	// Mock LLM Model
+	mockModel := &mockLLMModel{
+		invokeFn: func(ctx context.Context, messages []message.Message) (*message.Assistant, error) {
+			callCount++
+			if callCount == 1 {
+				return &message.Assistant{
+					Content: message.Content{
+						&message.TextBlock{Text: "TaskSmith is defined in GEMINI.md and README.md"},
+					},
+				}, nil
+			}
+			return nil, errors.New("unexpected LLM invocation")
+		},
 	}
 
 	// Construct agent graph
-	ag := agentgraph.New(mockLLM)
+	ag, err := agentgraph.New(context.Background(), mockModel, nil)
+	if err != nil {
+		t.Fatalf("failed to construct agent graph: %v", err)
+	}
 	g, err := ag.Build(nil)
 	if err != nil {
 		t.Fatalf("failed to build graph: %v", err)

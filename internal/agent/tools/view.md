@@ -6,7 +6,6 @@ metadata:
   labels:
     category: filesystem
 spec:
-  command: ["cat"]
   parameters:
     type: object
     properties:

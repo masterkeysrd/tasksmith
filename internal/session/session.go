@@ -13,6 +13,7 @@ import (
 	loomollama "github.com/masterkeysrd/loom/llm/ollama"
 	"github.com/masterkeysrd/loom/message"
 	agentgraph "github.com/masterkeysrd/tasksmith/internal/agent/graph"
+	"github.com/masterkeysrd/tasksmith/internal/workspace"
 )
 
 // SessionStatus represents the runtime execution status of a session thread.
@@ -45,15 +46,17 @@ type ActiveSession struct {
 // Manager coordinates session business logic and delegates persistence to the Store interface.
 type Manager struct {
 	store Store
+	ws    *workspace.Workspace
 
 	mu             sync.RWMutex
 	activeSessions map[string]*ActiveSession
 }
 
-// NewManager creates a new Manager backed by the provided Store.
-func NewManager(store Store) *Manager {
+// NewManager creates a new Manager backed by the provided Store and Workspace.
+func NewManager(store Store, ws *workspace.Workspace) *Manager {
 	return &Manager{
 		store:          store,
+		ws:             ws,
 		activeSessions: make(map[string]*ActiveSession),
 	}
 }
@@ -216,20 +219,23 @@ func (m *Manager) SendMessage(ctx context.Context, sessionID string, text string
 		}
 
 		// Setup Ollama LLM provider & model
-		ollamaCaller := func(c context.Context, msgs []message.Message) (*message.Assistant, error) {
-			provider, err := loomollama.NewDefaultProvider()
-			if err != nil {
-				return nil, fmt.Errorf("failed to create default provider: %w", err)
-			}
-			model, err := llm.NewModel(provider, "qwen3.6:35b-a3b-coding-nvfp4", nil)
-			if err != nil {
-				return nil, fmt.Errorf("failed to create model: %w", err)
-			}
-			return model.Invoke(c, msgs)
+		provider, err := loomollama.NewDefaultProvider()
+		if err != nil {
+			m.setSessionError(sessionID, fmt.Errorf("failed to create default provider: %w", err))
+			return
+		}
+		model, err := llm.NewModel(provider, "qwen3.6:35b-a3b-coding-nvfp4", nil)
+		if err != nil {
+			m.setSessionError(sessionID, fmt.Errorf("failed to create model: %w", err))
+			return
 		}
 
 		// Compile graph
-		ag := agentgraph.New(ollamaCaller)
+		ag, err := agentgraph.New(runCtx, agentgraph.NewLoomModel(model), m.ws)
+		if err != nil {
+			m.setSessionError(sessionID, fmt.Errorf("failed to construct agent graph: %w", err))
+			return
+		}
 		g, err := ag.Build(cp)
 		if err != nil {
 			m.setSessionError(sessionID, fmt.Errorf("failed to build agent graph: %w", err))
@@ -283,6 +289,20 @@ func (m *Manager) SendMessage(ctx context.Context, sessionID string, text string
 					sess.CurrentStreamText += textChunk
 					sess.CurrentStreamThinking += thinkingChunk
 					m.mu.Unlock()
+				}
+			} else if ev.Event == "agent_message" {
+				if agentMsg, ok := ev.Data.(message.Message); ok {
+					if _, err := m.AppendMessage(context.Background(), sessionID, agentMsg); err != nil {
+						m.setSessionError(sessionID, fmt.Errorf("failed to save agent message: %w", err))
+						return
+					}
+				}
+			} else if ev.Event == "tool_message" {
+				if toolMsg, ok := ev.Data.(message.Message); ok {
+					if _, err := m.AppendMessage(context.Background(), sessionID, toolMsg); err != nil {
+						m.setSessionError(sessionID, fmt.Errorf("failed to save tool message: %w", err))
+						return
+					}
 				}
 			} else if ev.Event == graph.EventCompleted {
 				var finalState *agentgraph.AgentState

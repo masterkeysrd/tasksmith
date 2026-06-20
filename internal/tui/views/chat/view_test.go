@@ -113,4 +113,36 @@ func TestChatView(t *testing.T) {
 			t.Fatal("Composer returned nil node")
 		}
 	})
+
+	t.Run("RenderChatViewWithTools", func(t *testing.T) {
+		c := &mockClientWithTools{}
+		renderWithTools := func(node kitex.Node) kitex.Node {
+			return wind.Provider(wind.ProviderProps{Client: windClient},
+				tuiapi.Provider(tuiapi.Props{Client: c},
+					theme.Provider(theme.Props{Theme: thm}, node),
+				),
+			)
+		}
+		node := renderWithTools(View(ViewProps{
+			SessionID: "test-session-id",
+		}))
+		if node == nil {
+			t.Fatal("Chat view with tools returned nil node")
+		}
+	})
+}
+
+type mockClientWithTools struct {
+	mockClient
+}
+
+func (m *mockClientWithTools) GetSessionMessages(ctx context.Context, req api.GetSessionMessagesRequest) (*api.GetSessionMessagesResponse, error) {
+	return &api.GetSessionMessagesResponse{
+		Messages: []string{
+			`{"role":"user","content":[{"type":"text","text":"Run tool"}]}`,
+			`{"role":"assistant","content":[{"type":"text","text":"Thinking..."},{"type":"tool_call","id":"call-1","name":"bash","args":{"CommandLine":"echo hello"}},{"type":"tool_call","id":"call-2","name":"view_file","args":{"AbsolutePath":"/path/to/file.go"}}]}`,
+			`{"role":"tool","tool_call_id":"call-1","name":"bash","content":[{"type":"text","text":"hello\n"}]}`,
+			`{"role":"tool","tool_call_id":"call-2","name":"view_file","content":[{"type":"text","text":"package main"}]}`,
+		},
+	}, nil
 }

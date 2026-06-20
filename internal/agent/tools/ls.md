@@ -6,7 +6,6 @@ metadata:
   labels:
     category: filesystem
 spec:
-  command: ["ls", "-F"]
   parameters:
     type: object
     properties:

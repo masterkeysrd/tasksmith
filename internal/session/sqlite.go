@@ -88,7 +88,7 @@ func (s *sqliteStore) AppendMessage(ctx context.Context, md MessageData, updated
 	}
 	defer tx.Rollback()
 
-	queryMsg := `INSERT INTO messages (id, session_id, role, content, created_at) VALUES (?, ?, ?, ?, ?)`
+	queryMsg := `INSERT OR REPLACE INTO messages (id, session_id, role, content, created_at) VALUES (?, ?, ?, ?, ?)`
 	_, err = tx.ExecContext(ctx, queryMsg, md.ID, md.SessionID, md.Role, md.Content, md.CreatedAt)
 	if err != nil {
 		return err

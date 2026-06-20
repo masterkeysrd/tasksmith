@@ -6,7 +6,6 @@ metadata:
   labels:
     category: lsp
 spec:
-  command: ["lsp-client", "diagnostics"]
   parameters:
     type: object
     properties:

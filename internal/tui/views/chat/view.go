@@ -264,7 +264,15 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 		kitex.Box(kitex.BoxProps{Style: messagesContainerStyle, Ref: historyRef},
 			kitex.Fragment(
 				func() []kitex.Node {
-					nodes := renderBubbles(messages)
+					toolResponses := make(map[string]*message.Tool)
+					for _, m := range messages {
+						if m.Role() == message.RoleTool {
+							if tMsg, ok := m.(*message.Tool); ok {
+								toolResponses[tMsg.ToolCallID] = tMsg
+							}
+						}
+					}
+					nodes := renderBubbles(messages, toolResponses, currentDots)
 					if statusNode := renderAgentStatus(t, sending, thinkingTime(), lastFinishedTime(), currentDots); statusNode != nil {
 						nodes = append(nodes, statusNode)
 					}
@@ -552,7 +560,8 @@ var Bubble = kitex.FC("Bubble", func(props BubbleProps) kitex.Node {
 	if t != nil {
 		bubbleStyle = style.S().
 			Padding(1).
-			MaxWidth(style.Percent(90))
+			MaxWidth(style.Percent(90)).
+			Overflow(style.OverflowHidden)
 
 		switch role {
 		case message.RoleUser:
@@ -624,20 +633,229 @@ var Bubble = kitex.FC("Bubble", func(props BubbleProps) kitex.Node {
 		headerNode,
 		kitex.Box(kitex.BoxProps{Style: bubbleStyle},
 			kitex.Box(kitex.BoxProps{
-				Style: style.S().Display(style.DisplayFlex).FlexDirection(style.FlexColumn).Gap(1),
+				Style: style.S().
+					Display(style.DisplayFlex).
+					FlexDirection(style.FlexColumn).
+					Gap(1).
+					Width(style.Percent(100)).
+					MaxWidth(style.Percent(100)).
+					Overflow(style.OverflowHidden),
 			}, children...),
 		),
 	)
 })
 
 type MessageProps struct {
-	Role    message.Role
-	Content message.Content
+	Role          message.Role
+	Content       message.Content
+	ToolResponses map[string]*message.Tool
+	CurrentDots   string
 }
+
+func getToolOutput(content message.Content) string {
+	var sb strings.Builder
+	for _, block := range content {
+		if tb, ok := block.(*message.TextBlock); ok {
+			sb.WriteString(tb.Text)
+		}
+	}
+	return sb.String()
+}
+
+type ToolExecutionProps struct {
+	ToolCall    *message.ToolCall
+	ToolMessage *message.Tool
+	CurrentDots string
+}
+
+var ToolExecution = kitex.FC("ToolExecution", func(props ToolExecutionProps) kitex.Node {
+	t := theme.UseTheme()
+	isOpen, setIsOpen := kitex.UseState(true)
+
+	tc := props.ToolCall
+	tm := props.ToolMessage
+
+	var argsStr string
+	if len(tc.Args) > 0 {
+		if data, err := json.Marshal(tc.Args); err == nil {
+			argsStr = string(data)
+		}
+	}
+
+	containerStyle := style.S().
+		Display(style.DisplayFlex).
+		FlexDirection(style.FlexColumn).
+		MarginVertical(1).
+		Width(style.Percent(100)).
+		MaxWidth(style.Percent(100)).
+		Overflow(style.OverflowHidden)
+
+	headerStyle := style.S().
+		Display(style.DisplayFlex).
+		FlexDirection(style.FlexRow).
+		AlignItems(style.AlignCenter).
+		JustifyContent(style.JustifyBetween).
+		Padding(0, 1).
+		Width(style.Percent(100)).
+		MaxWidth(style.Percent(100)).
+		Overflow(style.OverflowHidden)
+
+	bodyStyle := style.S().
+		Padding(1).
+		Display(style.DisplayFlex).
+		FlexDirection(style.FlexColumn).
+		Width(style.Percent(100)).
+		MaxWidth(style.Percent(100)).
+		Overflow(style.OverflowHidden)
+
+	var iconNode kitex.Node
+	var statusLabel string
+	var headerBg color.Color
+	var headerFg color.Color
+	var borderCol color.Color
+
+	if t != nil {
+		if tm == nil {
+			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Info)}, kitex.Text(props.CurrentDots))
+			statusLabel = fmt.Sprintf("RUNNING TOOL: %s", tc.Name)
+			headerBg = t.Color.Surface.BaseFocus
+			headerFg = t.Color.Surface.Info
+			borderCol = t.Color.Surface.Info
+		} else if tm.IsError {
+			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Error)}, icon.Error)
+			statusLabel = fmt.Sprintf("TOOL ERROR: %s", tc.Name)
+			headerBg = t.Color.Surface.BaseFocus
+			headerFg = t.Color.Text.Error
+			borderCol = t.Color.Text.Error
+		} else {
+			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Success)}, icon.Checkmark)
+			statusLabel = fmt.Sprintf("TOOL SUCCESS: %s", tc.Name)
+			headerBg = t.Color.Surface.BaseFocus
+			headerFg = t.Color.Surface.Success
+			borderCol = t.Color.Surface.Success
+		}
+
+		containerStyle = containerStyle.
+			Border(true, style.SingleBorder(), borderCol).
+			Background(t.Color.Surface.BaseHover)
+
+		headerStyle = headerStyle.
+			Background(headerBg).
+			Foreground(headerFg)
+
+		bodyStyle = bodyStyle.
+			Background(t.Color.Surface.BaseHover)
+	}
+
+	return kitex.Box(kitex.BoxProps{Style: containerStyle},
+		components.Button(components.ButtonProps{
+			Variant: components.ButtonText,
+			Color:   components.ButtonBase,
+			Style:   headerStyle,
+			OnClick: func() {
+				setIsOpen(!isOpen())
+			},
+		},
+			kitex.Box(kitex.BoxProps{
+				Style: style.S().
+					Display(style.DisplayFlex).
+					FlexDirection(style.FlexRow).
+					AlignItems(style.AlignCenter).
+					Gap(1),
+			},
+				iconNode,
+				kitex.Span(kitex.SpanProps{Style: style.S().Bold(true)}, kitex.Text(statusLabel)),
+			),
+			kitex.If(tm != nil, func() kitex.Node {
+				var label string
+				if isOpen() {
+					label = "▲ COLLAPSE"
+				} else {
+					label = "▼ EXPAND"
+				}
+				var textCol color.Color
+				if t != nil {
+					textCol = t.Color.Text.Secondary
+				}
+				return kitex.Span(kitex.SpanProps{
+					Style: style.S().Foreground(textCol),
+				}, kitex.Text(label))
+			}),
+		),
+		kitex.If(isOpen(), func() kitex.Node {
+			return kitex.Box(kitex.BoxProps{Style: bodyStyle},
+				kitex.If(argsStr != "", func() kitex.Node {
+					var textCol color.Color
+					var valCol color.Color
+					if t != nil {
+						textCol = t.Color.Text.Secondary
+						valCol = t.Color.Text.Tertiary
+					}
+					return kitex.Box(kitex.BoxProps{
+						Style: style.S().
+							MarginBottom(1).
+							Display(style.DisplayFlex).
+							FlexDirection(style.FlexColumn).
+							Gap(0),
+					},
+						kitex.Span(kitex.SpanProps{Style: style.S().Foreground(textCol).Bold(true)}, kitex.Text("Parameters:")),
+						kitex.Span(kitex.SpanProps{Style: style.S().Foreground(valCol).WhiteSpace(style.WhiteSpacePreWrap)}, kitex.Text(argsStr)),
+					)
+				}),
+				kitex.If(tm != nil, func() kitex.Node {
+					outText := getToolOutput(tm.Content)
+					return kitex.Fragment(
+						kitex.If(strings.TrimSpace(outText) != "", func() kitex.Node {
+							lines := strings.Split(strings.TrimRight(outText, "\n"), "\n")
+							var borderCol color.Color
+							if t != nil {
+								borderCol = t.Color.Border.Primary
+							}
+							outputContainerStyle := style.S().
+								Display(style.DisplayFlex).
+								FlexDirection(style.FlexColumn).
+								Border(true, style.SingleBorder(), borderCol).
+								Background(t.Color.Surface.BaseHover).
+								Padding(1).
+								Width(style.Percent(100)).
+								MaxWidth(style.Percent(100)).
+								Overflow(style.OverflowHidden)
+
+							return kitex.Box(kitex.BoxProps{Style: outputContainerStyle},
+								kitex.Map(lines, func(line string, _ int) kitex.Node {
+									var textCol color.Color
+									if t != nil {
+										textCol = t.Color.Text.Secondary
+									}
+									return kitex.Box(kitex.BoxProps{
+										Style: style.S().
+											Foreground(textCol).
+											WhiteSpace(style.WhiteSpacePreWrap),
+									}, kitex.Text(line))
+								}),
+							)
+						}),
+						kitex.If(strings.TrimSpace(outText) == "", func() kitex.Node {
+							var textCol color.Color
+							if t != nil {
+								textCol = t.Color.Text.Tertiary
+							}
+							return kitex.Box(kitex.BoxProps{
+								Style: style.S().Foreground(textCol).Italic(true),
+							}, kitex.Text("(no output)"))
+						}),
+					)
+				}),
+			)
+		}),
+	)
+})
 
 var Message = kitex.FC("Message", func(props MessageProps) kitex.Node {
 	role := props.Role
 	content := props.Content
+	toolResponses := props.ToolResponses
+	currentDots := props.CurrentDots
 
 	if role == message.RoleAssistant {
 		var children []kitex.Node
@@ -652,6 +870,16 @@ var Message = kitex.FC("Message", func(props MessageProps) kitex.Node {
 				if strings.TrimSpace(b.Thinking) != "" {
 					node = CollapsibleThinking(CollapsibleThinkingProps{Content: b.Thinking})
 				}
+			case *message.ToolCall:
+				var toolMsg *message.Tool
+				if toolResponses != nil {
+					toolMsg = toolResponses[b.ID]
+				}
+				node = ToolExecution(ToolExecutionProps{
+					ToolCall:    b,
+					ToolMessage: toolMsg,
+					CurrentDots: currentDots,
+				})
 			}
 			if node != nil {
 				children = append(children, node)
@@ -692,7 +920,7 @@ func getBubbleRole(role message.Role) message.Role {
 	}
 }
 
-func renderBubbles(messages message.MessageList) []kitex.Node {
+func renderBubbles(messages message.MessageList, toolResponses map[string]*message.Tool, currentDots string) []kitex.Node {
 	if len(messages) == 0 {
 		return nil
 	}
@@ -703,7 +931,7 @@ func renderBubbles(messages message.MessageList) []kitex.Node {
 
 	flush := func() {
 		if len(currentGroup) > 0 {
-			if node := createBubbleNode(currentGroupRole, currentGroup); node != nil {
+			if node := createBubbleNode(currentGroupRole, currentGroup, toolResponses, currentDots); node != nil {
 				nodes = append(nodes, node)
 			}
 		}
@@ -730,7 +958,7 @@ func renderBubbles(messages message.MessageList) []kitex.Node {
 	return nodes
 }
 
-func createBubbleNode(role message.Role, msgs []message.Message) kitex.Node {
+func createBubbleNode(role message.Role, msgs []message.Message, toolResponses map[string]*message.Tool, currentDots string) kitex.Node {
 	timestamp := ""
 	if len(msgs) > 0 {
 		meta := msgs[0].GetMetadata()
@@ -746,9 +974,14 @@ func createBubbleNode(role message.Role, msgs []message.Message) kitex.Node {
 
 	var children []kitex.Node
 	for _, msg := range msgs {
+		if msg.Role() == message.RoleTool {
+			continue // Do not render tool messages as separate children. They are rendered inline in the assistant message.
+		}
 		node := Message(MessageProps{
-			Role:    msg.Role(),
-			Content: msg.GetContent(),
+			Role:          msg.Role(),
+			Content:       msg.GetContent(),
+			ToolResponses: toolResponses,
+			CurrentDots:   currentDots,
 		})
 		if node != nil {
 			children = append(children, node)

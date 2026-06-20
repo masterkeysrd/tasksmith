@@ -6,7 +6,6 @@ metadata:
   labels:
     category: system
 spec:
-  command: ["bash", "-c"]
   parameters:
     type: object
     properties:

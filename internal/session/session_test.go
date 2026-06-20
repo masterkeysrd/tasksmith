@@ -37,7 +37,7 @@ func TestSessionManager(t *testing.T) {
 	}
 
 	// 3. Initialize the Manager business logic
-	manager := session.NewManager(store)
+	manager := session.NewManager(store, nil)
 
 	ctx := context.Background()
 

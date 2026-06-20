@@ -6,7 +6,6 @@ metadata:
   labels:
     category: mcp
 spec:
-  command: ["mcp-client", "read"]
   parameters:
     type: object
     properties:

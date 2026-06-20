@@ -6,7 +6,6 @@ metadata:
   labels:
     category: lsp
 spec:
-  command: ["lsp-client", "restart"]
   parameters:
     type: object
     properties:
