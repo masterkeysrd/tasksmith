@@ -102,16 +102,32 @@ type GrepOutput struct {
 
 // LsArgs defines the arguments for the "ls" tool.
 //
-// List files in a directory with type indicators.
+// List files in a directory in ls -l format.
+//
+// Entries are filtered using a two-tier ignore system:
+// 1. **Predefined ignores**: `.git`, `.env`, `node_modules`, `__pycache__`, `vendor`, `dist`, `build`, `target`, `.next`, `.nuxt`, `.DS_Store`, `.venv`, `venv`, `coverage`, and similar noise directories are always excluded.
+// 2. **Gitignore rules**: if the target path is inside a git repository, all `.gitignore` files from the repo root down to the target directory are loaded and applied (full git semantics including nested `.gitignore` files).
+//
+// Use `pattern` to narrow results by filename glob and `type` to restrict to files, directories, or symlinks. Use `limit` (default 200) and check `truncated` + `total_count` to paginate large directories.
 type LsArgs struct {
-	// Path: Path to the directory.
-	Path string `json:"path" jsonschema:"Path to the directory."`
+	// Limit: Maximum number of entries to return. Defaults to 200.
+	Limit int `json:"limit,omitempty" jsonschema:"Maximum number of entries to return. Defaults to 200."`
+	// Path: Path to the directory to list.
+	Path string `json:"path" jsonschema:"Path to the directory to list."`
+	// Pattern: Optional glob pattern to filter entries by name (e.g. "*.go", "test_*").
+	Pattern string `json:"pattern,omitempty" jsonschema:"Optional glob pattern to filter entries by name (e.g. \"*.go\", \"test_*\")."`
+	// Type: Optional entry type filter. One of "file", "dir", or "symlink".
+	Type string `json:"type,omitempty" jsonschema:"Optional entry type filter. One of \"file\", \"dir\", or \"symlink\"."`
 }
 
 // LsOutput defines the output returned by the "ls" tool.
 type LsOutput struct {
-	// Files: List of files and directories.
-	Files []any `json:"files,omitempty" jsonschema:"List of files and directories."`
+	// Files: List of matching directory entries, after filtering and ignore rules.
+	Files []any `json:"files,omitempty" jsonschema:"List of matching directory entries, after filtering and ignore rules."`
+	// TotalCount: Total number of entries after applying ignore and type/pattern filters.
+	TotalCount int `json:"total_count,omitempty" jsonschema:"Total number of entries after applying ignore and type/pattern filters."`
+	// Truncated: True when the result was capped by the limit and more entries exist.
+	Truncated bool `json:"truncated,omitempty" jsonschema:"True when the result was capped by the limit and more entries exist."`
 }
 
 // LspDiagnosticsArgs defines the arguments for the "lsp_diagnostics" tool.

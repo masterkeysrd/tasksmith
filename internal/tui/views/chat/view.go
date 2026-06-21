@@ -461,49 +461,45 @@ type CollapsibleThinkingProps struct {
 
 var CollapsibleThinking = kitex.FC("CollapsibleThinking", func(props CollapsibleThinkingProps) kitex.Node {
 	t := theme.UseTheme()
-	isOpen, setIsOpen := kitex.UseState(false)
 
 	lines := strings.Split(strings.TrimSpace(props.Content), "\n")
-	hasMore := len(lines) > 10
+	const previewLines = 10
+	hasMore := len(lines) > previewLines
 
-	var showLines []string
-	if isOpen() || len(lines) <= 10 {
-		showLines = lines
-	} else {
-		showLines = lines[:10]
+	lineNodes := func(ls []string) []kitex.Node {
+		nodes := make([]kitex.Node, len(ls))
+		for i, line := range ls {
+			var fg color.Color
+			if t != nil {
+				fg = t.Color.Text.Tertiary
+			}
+			nodes[i] = kitex.Box(kitex.BoxProps{
+				Style: style.S().Foreground(fg).WhiteSpace(style.WhiteSpacePreWrap),
+			}, kitex.Text(line))
+		}
+		return nodes
 	}
-
-	containerStyle := style.S().
-		Display(style.DisplayFlex).
-		FlexDirection(style.FlexColumn).
-		Border(true, style.SingleBorder(), t.Color.Border.Primary).
-		Background(t.Color.Surface.BaseHover).
-		MarginVertical(1).
-		Width(style.Percent(100))
-
-	headerStyle := style.S().
-		Display(style.DisplayFlex).
-		FlexDirection(style.FlexRow).
-		AlignItems(style.AlignCenter).
-		JustifyContent(style.JustifyBetween).
-		Padding(0, 1).
-		Background(t.Color.Surface.BaseFocus).
-		Width(style.Percent(100))
 
 	bodyStyle := style.S().
 		Padding(1).
 		Display(style.DisplayFlex).
-		FlexDirection(style.FlexColumn).
-		Background(t.Color.Surface.BaseHover)
+		FlexDirection(style.FlexColumn)
 
-	return kitex.Box(kitex.BoxProps{Style: containerStyle},
-		components.Button(components.ButtonProps{
-			Variant: components.ButtonText,
-			Color:   components.ButtonBase,
-			Style:   headerStyle,
-			OnClick: func() {
-				setIsOpen(!isOpen())
-			},
+	return components.Accordion(components.AccordionProps{
+		Color:   components.PaperHover,
+		Variant: components.PaperOutlined,
+		Style:   style.S().MarginVertical(1),
+	},
+		components.AccordionSummary(components.AccordionSummaryProps{
+			HideExpandIcon: !hasMore,
+			EndContent: kitex.If(hasMore, func() kitex.Node {
+				var fg color.Color
+				if t != nil {
+					fg = t.Color.Text.Secondary
+				}
+				label := fmt.Sprintf("%d more lines", len(lines)-previewLines)
+				return kitex.Span(kitex.SpanProps{Style: style.S().Foreground(fg)}, kitex.Text(label))
+			}),
 		},
 			kitex.Box(kitex.BoxProps{
 				Style: style.S().
@@ -512,37 +508,29 @@ var CollapsibleThinking = kitex.FC("CollapsibleThinking", func(props Collapsible
 					AlignItems(style.AlignCenter).
 					Gap(1),
 			},
-				kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Tertiary)}, kitex.Text("≈")),
-				kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Tertiary).Bold(true)}, kitex.Text("THINKING PROCESS")),
+				kitex.If(t != nil, func() kitex.Node {
+					return kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Tertiary)}, kitex.Text("≈"))
+				}),
+				kitex.If(t != nil, func() kitex.Node {
+					return kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Tertiary).Bold(true)}, kitex.Text("THINKING PROCESS"))
+				}),
 			),
-			kitex.If(hasMore, func() kitex.Node {
-				var label string
-				if isOpen() {
-					label = "▲ COLLAPSE"
-				} else {
-					label = fmt.Sprintf("▼ EXPAND (%d MORE LINES)", len(lines)-10)
+		),
+		// Preview: first N lines, always visible.
+		components.AccordionPreview(components.AccordionPreviewProps{Style: bodyStyle},
+			lineNodes(func() []string {
+				if hasMore {
+					return lines[:previewLines]
 				}
-				return kitex.Span(kitex.SpanProps{
-					Style: style.S().Foreground(t.Color.Text.Secondary),
-				}, kitex.Text(label))
-			}),
+				return lines
+			}())...,
 		),
-		kitex.Box(kitex.BoxProps{Style: bodyStyle},
-			kitex.Map(showLines, func(line string, _ int) kitex.Node {
-				return kitex.Box(kitex.BoxProps{
-					Style: style.S().
-						Foreground(t.Color.Text.Tertiary).
-						WhiteSpace(style.WhiteSpacePreWrap),
-				}, kitex.Text(line))
-			}),
-			kitex.If(!isOpen() && hasMore, func() kitex.Node {
-				return kitex.Box(kitex.BoxProps{
-					Style: style.S().
-						Foreground(t.Color.Text.Secondary).
-						MarginTop(1),
-				}, kitex.Text("..."))
-			}),
-		),
+		// Details: overflow lines, only visible when expanded.
+		kitex.If(hasMore, func() kitex.Node {
+			return components.AccordionDetails(components.AccordionDetailsProps{Style: bodyStyle},
+				lineNodes(lines[previewLines:])...,
+			)
+		}),
 	)
 })
 
@@ -703,11 +691,11 @@ func detectLang(filename string) string {
 }
 
 func parseRangeFromHeader(text string) (startLine, endLine int) {
-	idx := strings.Index(text, "\n")
-	if idx == -1 {
+	before, _, ok := strings.Cut(text, "\n")
+	if !ok {
 		return
 	}
-	firstLine := text[:idx]
+	firstLine := before
 	openParen := strings.Index(firstLine, " (")
 	if openParen == -1 {
 		return
@@ -755,10 +743,10 @@ func parseViewStructuredOutput(structured any) (tools.ViewOutput, bool) {
 func stripLinePrefixes(content string) string {
 	lines := strings.Split(content, "\n")
 	for i, line := range lines {
-		idx := strings.Index(line, " | ")
-		if idx != -1 {
+		before, after, ok := strings.Cut(line, " | ")
+		if ok {
 			isNum := true
-			prefix := line[:idx]
+			prefix := before
 			if len(prefix) == 0 {
 				isNum = false
 			}
@@ -769,7 +757,7 @@ func stripLinePrefixes(content string) string {
 				}
 			}
 			if isNum {
-				lines[i] = line[idx+3:]
+				lines[i] = after
 			}
 		}
 	}
@@ -920,9 +908,9 @@ var ViewToolWidget = kitex.FC("ViewToolWidget", func(props ToolExecutionProps) k
 				outText := getToolOutput(tm.Content)
 				actualStart, _ := parseRangeFromHeader(outText)
 				if actualStart > 0 {
-					idx := strings.Index(outText, "\n")
-					if idx != -1 {
-						cleanCode = stripLinePrefixes(outText[idx+1:])
+					_, after, ok := strings.Cut(outText, "\n")
+					if ok {
+						cleanCode = stripLinePrefixes(after)
 					} else {
 						cleanCode = outText
 					}
@@ -1047,10 +1035,240 @@ type ToolExecutionProps struct {
 	CurrentDots string
 }
 
+const lsPreviewLines = 10
+
+// parseLsOutput extracts FileEntry values and metadata from a tool's StructuredContent.
+// It handles both same-process typed values and JSON-deserialized map[string]any forms.
+func parseLsOutput(structured any) (files []tools.FileEntry, totalCount int, truncated bool) {
+	if structured == nil {
+		return
+	}
+
+	// Same-process: StructuredContent is already a typed LsOutput.
+	if out, ok := structured.(tools.LsOutput); ok {
+		for _, f := range out.Files {
+			if fe, ok := f.(tools.FileEntry); ok {
+				files = append(files, fe)
+			}
+		}
+		return files, out.TotalCount, out.Truncated
+	}
+
+	// Cross-process / deserialized: round-trip through JSON.
+	data, err := json.Marshal(structured)
+	if err != nil {
+		return
+	}
+	var raw struct {
+		Files      []json.RawMessage `json:"files"`
+		TotalCount int               `json:"total_count"`
+		Truncated  bool              `json:"truncated"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return
+	}
+	totalCount = raw.TotalCount
+	truncated = raw.Truncated
+	for _, f := range raw.Files {
+		var fe tools.FileEntry
+		if err := json.Unmarshal(f, &fe); err == nil {
+			files = append(files, fe)
+		}
+	}
+	return
+}
+
+// lsEntryRow renders a single FileEntry as a table row (kitex.TR).
+// Each metadata field occupies its own TD so the table layout engine
+// distributes column widths automatically — no manual Sprintf padding needed.
+func lsEntryRow(t *theme.Scheme, fe tools.FileEntry) kitex.Node {
+	var metaColor color.Color
+	var nameColor color.Color
+
+	if t != nil {
+		metaColor = t.Color.Text.Tertiary
+		switch {
+		case fe.IsDir:
+			nameColor = t.Color.Surface.Info
+		case fe.IsSymlink:
+			nameColor = t.Color.Surface.Tertiary
+		default:
+			nameColor = t.Color.Text.Primary
+		}
+	}
+
+	displayName := fe.Name
+	if fe.NameTruncated && len(fe.Name) > tools.MaxFilenameChars {
+		displayName = fe.Name[:tools.MaxFilenameChars] + "…"
+	}
+
+	// metaCell shrinks to its content width and adds a right padding gap.
+	metaCell := func(text string, s style.Style) kitex.Node {
+		tdStyle := s.Width(style.MaxContent).PaddingRight(1)
+		return kitex.TD(kitex.TDProps{Style: tdStyle},
+			kitex.Span(kitex.SpanProps{Style: s}, kitex.Text(text)),
+		)
+	}
+
+	metaStyle := style.S().Foreground(metaColor).Width(style.Percent(1)) // shrink to content
+
+	nameStyle := style.S().Foreground(nameColor)
+	if fe.IsDir {
+		nameStyle = nameStyle.Bold(true)
+	}
+
+	nameText := displayName
+	if fe.IsSymlink && fe.LinkTarget != "" {
+		nameText += " → " + fe.LinkTarget
+	}
+
+	// Name cell takes all remaining width.
+	nameTDStyle := nameStyle.Width(style.Percent(100))
+
+	return kitex.TR(kitex.TRProps{},
+		metaCell(fe.Permissions, metaStyle),
+		metaCell(fmt.Sprintf("%d", fe.Links), metaStyle),
+		metaCell(fe.Owner, metaStyle),
+		metaCell(fe.Group, metaStyle),
+		metaCell(tools.FormatSize(fe.Size), metaStyle),
+		metaCell(fe.Modified.Format("Jan _2 15:04"), metaStyle),
+		kitex.TD(kitex.TDProps{Style: nameTDStyle},
+			kitex.Span(kitex.SpanProps{Style: nameStyle}, kitex.Text(nameText)),
+		),
+	)
+}
+
+// LsToolWidget renders the result of an ls tool call inline — no modal.
+// Results beyond lsPreviewLines are hidden behind an expand toggle.
+var LsToolWidget = kitex.FC("LsToolWidget", func(props ToolExecutionProps) kitex.Node {
+	t := theme.UseTheme()
+
+	tc := props.ToolCall
+	tm := props.ToolMessage
+
+	var dirPath string
+	if tc.Args != nil {
+		dirPath, _ = tc.Args["path"].(string)
+	}
+	dirName := filepath.Base(dirPath)
+	if dirName == "" {
+		dirName = dirPath
+	}
+
+	var statusLabel string
+	var iconNode kitex.Node
+	var borderCol color.Color
+
+	var lsFiles []tools.FileEntry
+	var totalCount int
+	var truncated bool
+
+	if t != nil {
+		if tm == nil {
+			statusLabel = fmt.Sprintf("Listing [%s]", dirName)
+			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Info)}, kitex.Text(props.CurrentDots))
+			borderCol = t.Color.Surface.Info
+		} else if tm.IsError {
+			statusLabel = fmt.Sprintf("Error Listing [%s]", dirName)
+			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Error)}, icon.Error)
+			borderCol = t.Color.Text.Error
+		} else {
+			lsFiles, totalCount, truncated = parseLsOutput(tm.StructuredContent)
+			entryWord := "entries"
+			if totalCount == 1 {
+				entryWord = "entry"
+			}
+			statusLabel = fmt.Sprintf("Listed [%s] — %d %s", dirName, totalCount, entryWord)
+			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Success)}, icon.Checkmark)
+			borderCol = t.Color.Surface.Success
+		}
+	}
+
+	// The Accordion Outlined variant handles border + BaseFocus header + BaseHover body.
+	// We override the border color via style to reflect the current status.
+	accordionStyle := style.S().MarginVertical(1)
+	if t != nil {
+		accordionStyle = accordionStyle.Border(borderCol)
+	}
+
+	return components.Accordion(components.AccordionProps{
+		Color:   components.PaperHover,
+		Variant: components.PaperOutlined,
+		Style:   accordionStyle,
+	},
+		components.AccordionSummary(components.AccordionSummaryProps{
+			HideExpandIcon: tm == nil || tm.IsError,
+			EndContent: kitex.If(tm != nil && !tm.IsError, func() kitex.Node {
+				var fg color.Color
+				if t != nil {
+					fg = t.Color.Text.Secondary
+				}
+				return kitex.Span(kitex.SpanProps{Style: style.S().Foreground(fg)},
+					kitex.Text("Click to expand/collapse"),
+				)
+			}),
+		},
+			kitex.Box(kitex.BoxProps{
+				Style: style.S().
+					Display(style.DisplayFlex).
+					FlexDirection(style.FlexRow).
+					AlignItems(style.AlignCenter).
+					Gap(1),
+			},
+				iconNode,
+				kitex.Span(kitex.SpanProps{Style: style.S().Bold(true)}, kitex.Text(statusLabel)),
+			),
+		),
+		components.AccordionDetails(components.AccordionDetailsProps{},
+			// Entry list as a borderless table for natural column alignment
+			kitex.If(tm != nil && !tm.IsError && len(lsFiles) > 0, func() kitex.Node {
+
+				rows := make([]kitex.Node, 0, lsPreviewLines)
+				limit := len(lsFiles)
+				for i := range limit {
+					rows = append(rows, lsEntryRow(t, lsFiles[i]))
+				}
+
+				var textCol color.Color
+				if t != nil {
+					textCol = t.Color.Text.Tertiary
+				}
+				return kitex.Box(kitex.BoxProps{
+					Style: style.S().Display(style.DisplayFlex).FlexDirection(style.FlexColumn),
+				},
+					kitex.Table(kitex.TableProps{},
+						kitex.TBody(kitex.TBodyProps{}, rows...),
+					),
+					kitex.If(truncated, func() kitex.Node {
+						return kitex.Box(kitex.BoxProps{
+							Style: style.S().Foreground(textCol).Italic(true).MarginTop(1),
+						}, kitex.Text(fmt.Sprintf("[Showing %d of %d — use limit parameter to paginate]", len(lsFiles), totalCount)))
+					}),
+				)
+			}),
+
+			// Empty directory notice
+			kitex.If(tm != nil && !tm.IsError && len(lsFiles) == 0, func() kitex.Node {
+				var textCol color.Color
+				if t != nil {
+					textCol = t.Color.Text.Tertiary
+				}
+				return kitex.Box(kitex.BoxProps{
+					Style: style.S().Foreground(textCol).Italic(true),
+				}, kitex.Text("(empty directory)"))
+			}),
+		),
+	)
+})
+
 var ToolExecution = kitex.FC("ToolExecution", func(props ToolExecutionProps) kitex.Node {
 	if props.ToolCall != nil && props.ToolCall.Name == "view" {
 		return ViewToolWidget(props)
 	}
+	if props.ToolCall != nil && props.ToolCall.Name == "ls" {
+		return LsToolWidget(props)
+	}
+
 	t := theme.UseTheme()
 	isOpen, setIsOpen := kitex.UseState(true)
 

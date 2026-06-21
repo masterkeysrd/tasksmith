@@ -13,6 +13,7 @@ type accordionState struct {
 	expanded    func() bool
 	setExpanded func(bool)
 	color       PaperColor
+	variant     PaperVariant
 }
 
 var accordionCtx = kitex.CreateContext[*accordionState](nil)
@@ -66,10 +67,11 @@ var Accordion = kitex.FCC("Accordion", func(props AccordionProps) kitex.Node {
 		expanded:    isExpanded,
 		setExpanded: toggle,
 		color:       props.Color,
+		variant:     props.Variant,
 	}
 
-	// Lookup summary and details in children to organize layout.
-	var summary, details kitex.Node
+	// Lookup summary, preview and details in children to organize layout.
+	var summary, preview, details kitex.Node
 	var unpack func(n kitex.Node)
 	unpack = func(n kitex.Node) {
 		if n == nil {
@@ -78,6 +80,8 @@ var Accordion = kitex.FCC("Accordion", func(props AccordionProps) kitex.Node {
 		switch n.TagName() {
 		case "AccordionSummary":
 			summary = n
+		case "AccordionPreview":
+			preview = n
 		case "AccordionDetails":
 			details = n
 		case "Fragment", "Map", "If", "Else":
@@ -100,6 +104,9 @@ var Accordion = kitex.FCC("Accordion", func(props AccordionProps) kitex.Node {
 			kitex.If(summary != nil, func() kitex.Node {
 				return summary
 			}),
+			kitex.If(preview != nil, func() kitex.Node {
+				return preview
+			}),
 			kitex.If(details != nil, func() kitex.Node {
 				return details
 			}),
@@ -111,6 +118,8 @@ var Accordion = kitex.FCC("Accordion", func(props AccordionProps) kitex.Node {
 type AccordionSummaryProps struct {
 	// HideExpandIcon disables rendering the default chevron icon.
 	HideExpandIcon bool
+	// EndContent is optional content rendered on the right side of the header (only in PaperOutlined).
+	EndContent kitex.Node
 	// Style allows passing additional style overrides.
 	Style style.Style
 	// Children is the content of the summary.
@@ -138,6 +147,15 @@ var AccordionSummary = kitex.FCC("AccordionSummary", func(props AccordionSummary
 			fgColor = t.Color.Text.Primary
 		}
 		btnStyle = btnStyle.Foreground(fgColor)
+		if state.variant == PaperOutlined {
+			btnStyle = btnStyle.
+				Background(t.Color.Surface.BaseFocus).
+				Padding(0, 1)
+			// JustifyBetween only when there is end content to push to the right.
+			if props.EndContent != nil {
+				btnStyle = btnStyle.JustifyContent(style.JustifyBetween)
+			}
+		}
 	}
 
 	btnStyle = btnStyle.Merge(props.Style)
@@ -147,14 +165,23 @@ var AccordionSummary = kitex.FCC("AccordionSummary", func(props AccordionSummary
 		startIcon = kitex.IfElse(state.expanded(), icon.ChevronDown, icon.ChevronRight)
 	}
 
+	children := make([]kitex.Node, 0, len(props.Children)+1)
+	if startIcon != nil {
+		children = append(children, startIcon)
+	}
+	children = append(children, props.Children...)
+
 	return Button(ButtonProps{
 		Variant: ButtonText,
 		Style:   btnStyle,
+		// StartIcon: startIcon,
+		EndIcon: props.EndContent,
 		OnClick: func() {
 			state.setExpanded(!state.expanded())
 		},
-		StartIcon: startIcon,
-	}, props.Children...)
+	}, kitex.Box(kitex.BoxProps{
+		Style: style.S().Display(style.DisplayFlex).AlignItems(style.AlignCenter).Gap(1),
+	}, children...))
 })
 
 // AccordionDetailsProps defines the properties for the Accordion content.
@@ -179,4 +206,24 @@ var AccordionDetails = kitex.FCC("AccordionDetails", func(props AccordionDetails
 				Merge(props.Style),
 		}, props.Children...)
 	})
+})
+
+// AccordionPreviewProps defines the properties for the always-visible preview area.
+type AccordionPreviewProps struct {
+	// Style allows passing additional style overrides.
+	Style style.Style
+	// Children is the content always shown regardless of expanded state.
+	Children []kitex.Node
+}
+
+// AccordionPreview is always rendered — even when the accordion is collapsed.
+// Use it to show a preview of the content alongside AccordionDetails for the overflow.
+var AccordionPreview = kitex.FCC("AccordionPreview", func(props AccordionPreviewProps) kitex.Node {
+	if kitex.UseContext(accordionCtx) == nil {
+		return kitex.Text("AccordionPreview must be used inside Accordion")
+	}
+
+	return kitex.Box(kitex.BoxProps{
+		Style: style.S().Padding(0, 1).Merge(props.Style),
+	}, props.Children...)
 })

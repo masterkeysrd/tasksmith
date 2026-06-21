@@ -24,6 +24,7 @@ type PaperColor string
 const (
 	PaperBase       PaperColor = "base"
 	PaperSurface    PaperColor = "surface"
+	PaperHover      PaperColor = "hover"
 	PaperContent    PaperColor = "content"
 	PaperContentAlt PaperColor = "content_alt"
 	PaperFooter     PaperColor = "footer"
@@ -62,6 +63,9 @@ var Paper = kitex.FCC("Paper", func(props PaperProps) kitex.Node {
 	var fgColor color.Color
 
 	switch props.Color {
+	case PaperHover:
+		bgColor = t.Color.Surface.BaseHover
+		fgColor = t.Color.Text.Primary
 	case PaperSurface:
 		bgColor = t.Color.Surface.BaseHover
 		fgColor = t.Color.Text.Primary

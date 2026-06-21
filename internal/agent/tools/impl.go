@@ -71,21 +71,6 @@ func (h *ToolHandlers) Grep(ctx context.Context, in GrepArgs) (GrepOutput, error
 	return GrepOutput{Matches: matches}, nil
 }
 
-// Ls lists files in a directory.
-func (h *ToolHandlers) Ls(ctx context.Context, in LsArgs) (LsOutput, error) {
-	cmd := exec.CommandContext(ctx, "ls", "-la", in.Path)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return LsOutput{}, nil
-	}
-	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
-	files := make([]any, len(lines))
-	for i, l := range lines {
-		files[i] = l
-	}
-	return LsOutput{Files: files}, nil
-}
-
 // LspDiagnostics gets LSP diagnostics.
 func (h *ToolHandlers) LspDiagnostics(ctx context.Context, in LspDiagnosticsArgs) (LspDiagnosticsOutput, error) {
 	cmd := exec.CommandContext(ctx, "echo", "lsp_diagnostics", in.Path)
