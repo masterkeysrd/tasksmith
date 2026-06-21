@@ -665,6 +665,27 @@ func parseViewStructuredOutput(structured any) (tools.ViewOutput, bool) {
 	return out, true
 }
 
+func parseWriteStructuredOutput(structured any) (tools.WriteOutput, bool) {
+	if structured == nil {
+		return tools.WriteOutput{}, false
+	}
+	if val, ok := structured.(tools.WriteOutput); ok {
+		return val, true
+	}
+	if val, ok := structured.(*tools.WriteOutput); ok && val != nil {
+		return *val, true
+	}
+	data, err := json.Marshal(structured)
+	if err != nil {
+		return tools.WriteOutput{}, false
+	}
+	var out tools.WriteOutput
+	if err := json.Unmarshal(data, &out); err != nil {
+		return tools.WriteOutput{}, false
+	}
+	return out, true
+}
+
 func stripLinePrefixes(content string) string {
 	lines := strings.Split(content, "\n")
 	for i, line := range lines {
@@ -896,6 +917,9 @@ var ToolExecution = kitex.FC("ToolExecution", func(props ToolExecutionProps) kit
 	}
 	if props.ToolCall != nil && props.ToolCall.Name == "grep" {
 		return GrepToolWidget(props)
+	}
+	if props.ToolCall != nil && props.ToolCall.Name == "write" {
+		return WriteToolWidget(props)
 	}
 
 	t := theme.UseTheme()

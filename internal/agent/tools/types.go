@@ -297,6 +297,10 @@ type WriteArgs struct {
 
 // WriteOutput defines the output returned by the "write" tool.
 type WriteOutput struct {
+	// BytesWritten: The number of bytes written to the file.
+	BytesWritten int `json:"bytes_written,omitempty" jsonschema:"The number of bytes written to the file."`
 	// Path: Path to the written file.
 	Path string `json:"path,omitempty" jsonschema:"Path to the written file."`
+	// Success: Whether the file was written successfully.
+	Success bool `json:"success,omitempty" jsonschema:"Whether the file was written successfully."`
 }

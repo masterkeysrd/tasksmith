@@ -778,3 +778,163 @@ func grepEntryRow(t *theme.Scheme, match tools.GrepMatch) kitex.Node {
 		}),
 	)
 }
+
+// WriteToolWidget renders the result of a write tool call inline.
+var WriteToolWidget = kitex.FC("WriteToolWidget", func(props ToolExecutionProps) kitex.Node {
+	t := theme.UseTheme()
+	showModal, setShowModal := kitex.UseState(false)
+	modalRef := kitex.CreateRef[dom.Element]()
+
+	tc := props.ToolCall
+	tm := props.ToolMessage
+
+	var path string
+	var content string
+	if tc.Args != nil {
+		path, _ = tc.Args["path"].(string)
+		content, _ = tc.Args["content"].(string)
+	}
+	filename := filepath.Base(path)
+
+	var statusLabel string
+	var iconNode kitex.Node
+	var themeColor color.Color
+
+	if t != nil {
+		if tm == nil {
+			statusLabel = fmt.Sprintf("Pending Write [%s]", filename)
+			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Info)}, kitex.Text(props.CurrentDots))
+			themeColor = t.Color.Surface.Info
+		} else if tm.IsError {
+			statusLabel = fmt.Sprintf("Error Writing [%s]", filename)
+			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Error)}, icon.Error)
+			themeColor = t.Color.Text.Error
+		} else {
+			wOut, ok := parseWriteStructuredOutput(tm.StructuredContent)
+			if ok && wOut.Success {
+				statusLabel = fmt.Sprintf("Wrote [%s] (%d bytes)", filename, wOut.BytesWritten)
+			} else {
+				statusLabel = fmt.Sprintf("Wrote [%s]", filename)
+			}
+			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Success)}, icon.Checkmark)
+			themeColor = t.Color.Surface.Success
+		}
+	}
+
+	boxStyle := style.S().
+		Display(style.DisplayFlex).
+		FlexDirection(style.FlexRow).
+		AlignItems(style.AlignCenter).
+		AlignSelf(style.AlignStart).
+		Padding(0, 1).
+		Gap(1).
+		Height(style.Cells(1)).
+		MarginVertical(1)
+
+	if t != nil {
+		boxStyle = boxStyle.
+			Background(t.Color.Surface.BaseHover).
+			Foreground(themeColor)
+	}
+
+	kitex.UseEffect(func() {
+		if showModal() {
+			kitex.PostMacro(func() {
+				if modalRef.Current != nil {
+					if doc := modalRef.Current.OwnerDocument(); doc != nil {
+						doc.Focus(modalRef.Current)
+					}
+				}
+			})
+		}
+	}, []any{showModal()})
+
+	var badgeNode kitex.Node
+	if content != "" {
+		badgeNode = components.Button(components.ButtonProps{
+			Variant: components.ButtonText,
+			Color:   components.ButtonBase,
+			Style:   boxStyle,
+			OnClick: func() {
+				setShowModal(true)
+			},
+		},
+			iconNode,
+			kitex.Span(kitex.SpanProps{Style: style.S().Bold(true)}, kitex.Text(statusLabel)),
+		)
+	} else {
+		badgeNode = kitex.Box(kitex.BoxProps{Style: boxStyle},
+			iconNode,
+			kitex.Span(kitex.SpanProps{Style: style.S().Bold(true)}, kitex.Text(statusLabel)),
+		)
+	}
+
+	modalStyle := style.S().
+		Display(style.DisplayFlex).
+		FlexDirection(style.FlexColumn).
+		Width(style.Percent(80)).
+		Height(style.Percent(80)).
+		Padding(1).
+		Overflow(style.OverflowHidden)
+
+	return kitex.Fragment(
+		badgeNode,
+		kitex.If(showModal(), func() kitex.Node {
+			return kitex.Dialog(kitex.DialogProps{
+				ZIndex: 100,
+				Ref:    modalRef,
+				OnKeyDown: func(e event.Event) {
+					ke, ok := e.(*event.KeyEvent)
+					if !ok {
+						return
+					}
+					if ke.Code == key.KeyEscape || ke.Text == "q" {
+						e.PreventDefault()
+						e.StopPropagation()
+						setShowModal(false)
+					}
+				},
+			},
+				components.Paper(components.PaperProps{
+					Color:   components.PaperBase,
+					Variant: components.PaperOutlined,
+					Style:   modalStyle,
+				},
+					kitex.Box(kitex.BoxProps{
+						Style: style.S().
+							Display(style.DisplayFlex).
+							FlexDirection(style.FlexRow).
+							JustifyContent(style.JustifyBetween).
+							AlignItems(style.AlignCenter).
+							PaddingBottom(1).
+							BorderBottom(true, style.SingleBorder()),
+					},
+						kitex.Span(kitex.SpanProps{Style: style.S().Bold(true)}, kitex.Text(fmt.Sprintf("Wrote Content for %s", filename))),
+						components.Button(components.ButtonProps{
+							Variant: components.ButtonText,
+							Color:   components.ButtonBase,
+							OnClick: func() {
+								setShowModal(false)
+							},
+						}, kitex.Text("Close [Esc/q]")),
+					),
+					kitex.Box(kitex.BoxProps{
+						Style: style.S().
+							Flex(1, 1, style.Cells(0)).
+							MinHeight(style.Cells(0)).
+							OverflowY(style.OverflowAuto).
+							MarginTop(1),
+					},
+						components.CodeBlock(components.CodeBlockProps{
+							Code:            content,
+							Lang:            detectLang(filename),
+							HideHeader:      true,
+							ShowLineNumbers: true,
+							StartLine:       1,
+						}),
+					),
+				),
+			)
+		}),
+	)
+})

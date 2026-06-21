@@ -3,7 +3,6 @@ package tools
 import (
 	"context"
 	"os/exec"
-	"strings"
 )
 
 // Bash executes a bash command.
@@ -112,14 +111,4 @@ func (h *ToolHandlers) WebSearch(ctx context.Context, in WebSearchArgs) (WebSear
 		return WebSearchOutput{}, nil
 	}
 	return WebSearchOutput{Results: []any{string(out)}}, nil
-}
-
-// Write writes content to a file.
-func (h *ToolHandlers) Write(ctx context.Context, in WriteArgs) (WriteOutput, error) {
-	cmd := exec.CommandContext(ctx, "tee", in.Path)
-	cmd.Stdin = strings.NewReader(in.Content)
-	if err := cmd.Run(); err != nil {
-		return WriteOutput{Path: in.Path}, nil
-	}
-	return WriteOutput{Path: in.Path}, nil
 }
