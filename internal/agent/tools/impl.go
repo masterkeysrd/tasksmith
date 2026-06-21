@@ -27,8 +27,6 @@ func (h *ToolHandlers) Download(ctx context.Context, in DownloadArgs) (DownloadO
 	return DownloadOutput{Path: path, Success: true}, nil
 }
 
-
-
 // Fetch fetches a URL.
 func (h *ToolHandlers) Fetch(ctx context.Context, in FetchArgs) (FetchOutput, error) {
 	cmd := exec.CommandContext(ctx, "curl", "-i", in.Url)
@@ -67,15 +65,6 @@ func (h *ToolHandlers) McpReadResources(ctx context.Context, in McpReadResources
 		return McpReadResourcesOutput{Success: false}, nil
 	}
 	return McpReadResourcesOutput{Content: string(out), Success: true}, nil
-}
-
-// Remove removes a file or directory.
-func (h *ToolHandlers) Remove(ctx context.Context, in RemoveArgs) (RemoveOutput, error) {
-	cmd := exec.CommandContext(ctx, "rm", "-rf", in.Path)
-	if err := cmd.Run(); err != nil {
-		return RemoveOutput{Path: in.Path, Success: false}, nil
-	}
-	return RemoveOutput{Path: in.Path, Success: true}, nil
 }
 
 // WebFetch fetches web page content.

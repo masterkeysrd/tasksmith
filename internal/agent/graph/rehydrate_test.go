@@ -103,3 +103,48 @@ func TestRehydrateMessagesForLLM(t *testing.T) {
 		t.Errorf("expected cloned image block to have re-hydrated data %q, got %q", string(dummyBytes), string(clonedImageBlock.Data))
 	}
 }
+
+func TestRehydrateRemoveTool(t *testing.T) {
+	removeToolMsg := &message.Tool{
+		ToolCallID: "call-remove-1",
+		Name:       "remove",
+		Content: message.Content{
+			&message.TextBlock{
+				Text: "Successfully removed ./file.txt",
+			},
+		},
+		StructuredContent: tools.RemoveOutput{
+			Path:    "./file.txt",
+			Success: true,
+			Content: "file content that should be removed to save tokens",
+		},
+	}
+
+	rehydrated := tools.RehydrateMessagesForLLM([]message.Message{removeToolMsg})
+	if len(rehydrated) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(rehydrated))
+	}
+
+	cloned, ok := rehydrated[0].(*message.Tool)
+	if !ok {
+		t.Fatalf("expected *message.Tool, got %T", rehydrated[0])
+	}
+
+	out, ok := cloned.StructuredContent.(tools.RemoveOutput)
+	if !ok {
+		t.Fatalf("expected tools.RemoveOutput in StructuredContent, got %T", cloned.StructuredContent)
+	}
+
+	if out.Content != "" {
+		t.Errorf("expected Content field to be blanked out, got %q", out.Content)
+	}
+	if out.Path != "./file.txt" {
+		t.Errorf("expected Path to remain './file.txt', got %q", out.Path)
+	}
+
+	// Verify the original message was NOT modified (deep copy / no mutation of original structured content)
+	origOut := removeToolMsg.StructuredContent.(tools.RemoveOutput)
+	if origOut.Content == "" {
+		t.Error("expected original message to preserve Content field, but it was mutated")
+	}
+}

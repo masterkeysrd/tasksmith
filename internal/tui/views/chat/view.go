@@ -728,6 +728,27 @@ func parseMultiEditStructuredOutput(structured any) (tools.MultiEditOutput, bool
 	return out, true
 }
 
+func parseRemoveStructuredOutput(structured any) (tools.RemoveOutput, bool) {
+	if structured == nil {
+		return tools.RemoveOutput{}, false
+	}
+	if val, ok := structured.(tools.RemoveOutput); ok {
+		return val, true
+	}
+	if val, ok := structured.(*tools.RemoveOutput); ok && val != nil {
+		return *val, true
+	}
+	data, err := json.Marshal(structured)
+	if err != nil {
+		return tools.RemoveOutput{}, false
+	}
+	var out tools.RemoveOutput
+	if err := json.Unmarshal(data, &out); err != nil {
+		return tools.RemoveOutput{}, false
+	}
+	return out, true
+}
+
 func stripLinePrefixes(content string) string {
 	lines := strings.Split(content, "\n")
 	for i, line := range lines {
@@ -968,6 +989,9 @@ var ToolExecution = kitex.FC("ToolExecution", func(props ToolExecutionProps) kit
 	}
 	if props.ToolCall != nil && props.ToolCall.Name == "multi_edit" {
 		return MultiEditToolWidget(props)
+	}
+	if props.ToolCall != nil && props.ToolCall.Name == "remove" {
+		return RemoveToolWidget(props)
 	}
 
 	t := theme.UseTheme()

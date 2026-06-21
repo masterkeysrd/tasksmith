@@ -4,58 +4,18 @@ import (
 	"bufio"
 	"context"
 	"fmt"
-	"mime"
-	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/masterkeysrd/loom/message"
+	"github.com/masterkeysrd/tasksmith/internal/core/fs"
 )
 
 const (
 	MaxTotalChars = 16000
 	MaxLineChars  = 500
 )
-
-func detectMIMEType(path string) string {
-	ext := filepath.Ext(path)
-	if ext != "" {
-		mimeType := mime.TypeByExtension(ext)
-		if mimeType != "" {
-			if parts := strings.Split(mimeType, ";"); len(parts) > 0 {
-				return strings.TrimSpace(parts[0])
-			}
-		}
-	}
-
-	file, err := os.Open(path)
-	if err != nil {
-		return "application/octet-stream"
-	}
-	defer file.Close()
-
-	buf := make([]byte, 512)
-	n, _ := file.Read(buf)
-	if n > 0 {
-		mimeType := http.DetectContentType(buf[:n])
-		if parts := strings.Split(mimeType, ";"); len(parts) > 0 {
-			return strings.TrimSpace(parts[0])
-		}
-	}
-
-	return "application/octet-stream"
-}
-
-func isBinaryMIME(mime string) bool {
-	if strings.HasPrefix(mime, "text/") {
-		return false
-	}
-	if mime == "application/json" || mime == "application/yaml" || mime == "application/x-sh" {
-		return false
-	}
-	return true
-}
 
 func cleanPath(path string) string {
 	// 1. Trim surrounding quotes
@@ -125,8 +85,8 @@ func (h *ToolHandlers) View(ctx context.Context, in ViewArgs) (ViewOutput, error
 		}
 	}
 
-	mimeType := detectMIMEType(path)
-	isBinary := isBinaryMIME(mimeType)
+	mimeType := fs.DetectMIMEType(path)
+	isBinary := fs.IsBinaryMIME(mimeType)
 	filename := filepath.Base(path)
 
 	var cachedPath string

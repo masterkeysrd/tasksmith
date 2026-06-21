@@ -12,6 +12,9 @@ spec:
       path:
         type: string
         description: Path to remove.
+      recursive:
+        type: boolean
+        description: Must be set to true to remove directories recursively. Defaults to false.
     required: ["path"]
   outputSchema:
     type: object

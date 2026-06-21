@@ -304,10 +304,18 @@ type MultiEditOutputResultsItem struct {
 type RemoveArgs struct {
 	// Path: Path to remove.
 	Path string `json:"path" jsonschema:"Path to remove."`
+	// Recursive: Must be set to true to remove directories recursively. Defaults to false.
+	Recursive bool `json:"recursive,omitempty" jsonschema:"Must be set to true to remove directories recursively. Defaults to false."`
 }
 
 // RemoveOutput defines the output returned by the "remove" tool.
 type RemoveOutput struct {
+	// Content: The content of the deleted file.
+	Content string `json:"content,omitempty" jsonschema:"The content of the deleted file."`
+	// IsBinary: Whether the deleted file is binary.
+	IsBinary bool `json:"is_binary,omitempty" jsonschema:"Whether the deleted file is binary."`
+	// MimeType: The MIME type of the deleted file.
+	MimeType string `json:"mime_type,omitempty" jsonschema:"The MIME type of the deleted file."`
 	// Path: Path that was removed.
 	Path string `json:"path,omitempty" jsonschema:"Path that was removed."`
 	// Success: Whether removal succeeded.

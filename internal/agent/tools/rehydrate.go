@@ -44,6 +44,7 @@ func RehydrateMessage(msg message.Message) message.Message {
 	}
 
 	meta, ok := ParseFileCacheMetadata(tMsg.StructuredContent)
+
 	if !ok || !meta.IsBinary {
 		return msg
 	}
@@ -101,7 +102,28 @@ func RehydrateMessagesForLLM(messages []message.Message) []message.Message {
 	}
 	rehydrated := make([]message.Message, len(messages))
 	for i, m := range messages {
-		rehydrated[i] = RehydrateMessage(m)
+		msg := RehydrateMessage(m)
+		if tMsg, ok := msg.(*message.Tool); ok && tMsg.Name == "remove" && tMsg.StructuredContent != nil {
+			var out RemoveOutput
+			if val, ok := tMsg.StructuredContent.(RemoveOutput); ok {
+				out = val
+			} else if val, ok := tMsg.StructuredContent.(*RemoveOutput); ok && val != nil {
+				out = *val
+			} else {
+				data, _ := json.Marshal(tMsg.StructuredContent)
+				_ = json.Unmarshal(data, &out)
+			}
+			out.Content = ""
+			msg = &message.Tool{
+				Base:              tMsg.Base,
+				ToolCallID:        tMsg.ToolCallID,
+				Name:              tMsg.Name,
+				Content:           tMsg.Content,
+				IsError:           tMsg.IsError,
+				StructuredContent: out,
+			}
+		}
+		rehydrated[i] = msg
 	}
 	return rehydrated
 }

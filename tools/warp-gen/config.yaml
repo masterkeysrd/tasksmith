@@ -13,3 +13,17 @@ tools:
           type: string
           json_tag: "-"
           description: "The full untruncated unified diff."
+  remove:
+    output:
+      properties:
+        content:
+          type: string
+          description: "The content of the deleted file."
+        is_binary:
+          type: boolean
+          description: "Whether the deleted file is binary."
+        mime_type:
+          type: string
+          description: "The MIME type of the deleted file."
+
+

@@ -127,21 +127,21 @@ var DiffBlock = kitex.FC("DiffBlock", func(props DiffBlockProps) kitex.Node {
 		Merge(props.Style)
 
 	var renderedRows []kitex.Node
- 
+
 	gutterStyle := style.S().
 		Width(style.Cells(12)).
 		WhiteSpace(style.WhiteSpacePre)
 	if t != nil {
 		gutterStyle = gutterStyle.Foreground(t.Color.Text.Tertiary)
 	}
- 
+
 	separatorStyle := style.S().
 		Width(style.Cells(1)).
 		WhiteSpace(style.WhiteSpacePre)
 	if t != nil {
 		separatorStyle = separatorStyle.Foreground(t.Color.Border.Primary)
 	}
- 
+
 	codeBoxStyle := style.S().
 		Flex(1, 1, style.Cells(0)).
 		MinHeight(style.Cells(0)).
@@ -150,13 +150,13 @@ var DiffBlock = kitex.FC("DiffBlock", func(props DiffBlockProps) kitex.Node {
 	if t != nil {
 		codeBoxStyle = codeBoxStyle.Foreground(t.Color.Text.Secondary)
 	}
- 
+
 	if !props.Split {
 		// Unified inline layout
 		var gutterSpans []kitex.Node
 		var sepSpans []kitex.Node
 		var codeSpans []kitex.Node
- 
+
 		for _, r := range rows {
 			if r.IsHeader {
 				var bg color.Color
@@ -164,12 +164,12 @@ var DiffBlock = kitex.FC("DiffBlock", func(props DiffBlockProps) kitex.Node {
 				if strings.HasPrefix(r.HeaderText, "@@") {
 					bg = cyanBg
 				}
- 
+
 				gutterSpans = append(gutterSpans, kitex.Span(
 					kitex.SpanProps{Style: style.S().Background(bg).Foreground(textFg)},
 					kitex.Text("            \n"), // 12 spaces
 				))
- 
+
 				var sepCol color.Color
 				if t != nil {
 					sepCol = borderCol
@@ -178,7 +178,7 @@ var DiffBlock = kitex.FC("DiffBlock", func(props DiffBlockProps) kitex.Node {
 					kitex.SpanProps{Style: style.S().Background(bg).Foreground(sepCol)},
 					kitex.Text("│\n"),
 				))
- 
+
 				codeSpans = append(codeSpans, kitex.Span(
 					kitex.SpanProps{Style: style.S().Background(bg).Foreground(textFg).Bold(true)},
 					kitex.Text(r.HeaderText),
@@ -198,7 +198,7 @@ var DiffBlock = kitex.FC("DiffBlock", func(props DiffBlockProps) kitex.Node {
 				))
 				continue
 			}
- 
+
 			var line *DiffLine
 			var numAStr, numBStr, sign string
 			var bg color.Color
@@ -219,11 +219,11 @@ var DiffBlock = kitex.FC("DiffBlock", func(props DiffBlockProps) kitex.Node {
 				numBStr = fmt.Sprintf("%d", r.Right.NumB)
 				sign = " "
 			}
- 
+
 			if line == nil {
 				continue
 			}
- 
+
 			// Gutter span
 			gutterText := fmt.Sprintf("%5s%5s %s\n", numAStr, numBStr, sign)
 			var currGutterStyle style.Style
@@ -237,7 +237,7 @@ var DiffBlock = kitex.FC("DiffBlock", func(props DiffBlockProps) kitex.Node {
 				kitex.SpanProps{Style: currGutterStyle},
 				kitex.Text(gutterText),
 			))
- 
+
 			// Separator span
 			var sepCol color.Color
 			if t != nil {
@@ -247,10 +247,10 @@ var DiffBlock = kitex.FC("DiffBlock", func(props DiffBlockProps) kitex.Node {
 				kitex.SpanProps{Style: style.S().Background(bg).Foreground(sepCol)},
 				kitex.Text("│\n"),
 			))
- 
+
 			// Code spans (highlighted)
 			codeSpans = append(codeSpans, highlightLine(line.Content, bg)...)
- 
+
 			// Padding to stretch background color
 			if bg != nil {
 				paddingLength := 500 - len(line.Content)
@@ -266,7 +266,7 @@ var DiffBlock = kitex.FC("DiffBlock", func(props DiffBlockProps) kitex.Node {
 				kitex.Text("\n"),
 			))
 		}
- 
+
 		renderedRows = append(renderedRows, kitex.Box(kitex.BoxProps{Style: rowStyle},
 			kitex.Box(kitex.BoxProps{Style: gutterStyle}, gutterSpans...),
 			kitex.Box(kitex.BoxProps{Style: separatorStyle}, sepSpans...),
@@ -281,7 +281,7 @@ var DiffBlock = kitex.FC("DiffBlock", func(props DiffBlockProps) kitex.Node {
 		var rightGutterSpans []kitex.Node
 		var rightSepSpans []kitex.Node
 		var rightCodeSpans []kitex.Node
- 
+
 		for _, r := range rows {
 			if r.IsHeader {
 				var bg color.Color
@@ -289,13 +289,13 @@ var DiffBlock = kitex.FC("DiffBlock", func(props DiffBlockProps) kitex.Node {
 				if strings.HasPrefix(r.HeaderText, "@@") {
 					bg = cyanBg
 				}
- 
+
 				// Left Gutter
 				leftGutterSpans = append(leftGutterSpans, kitex.Span(
 					kitex.SpanProps{Style: style.S().Background(bg).Foreground(textFg)},
 					kitex.Text("       \n"), // 7 spaces
 				))
- 
+
 				// Left Separator
 				var sepCol color.Color
 				if t != nil {
@@ -305,7 +305,7 @@ var DiffBlock = kitex.FC("DiffBlock", func(props DiffBlockProps) kitex.Node {
 					kitex.SpanProps{Style: style.S().Background(bg).Foreground(sepCol)},
 					kitex.Text("│\n"),
 				))
- 
+
 				// Left Code
 				leftCodeSpans = append(leftCodeSpans, kitex.Span(
 					kitex.SpanProps{Style: style.S().Background(bg).Foreground(textFg).Bold(true)},
@@ -324,25 +324,25 @@ var DiffBlock = kitex.FC("DiffBlock", func(props DiffBlockProps) kitex.Node {
 					kitex.SpanProps{Style: style.S().Background(bg)},
 					kitex.Text("\n"),
 				))
- 
+
 				// Middle Pane Separator
 				sepSpans = append(sepSpans, kitex.Span(
 					kitex.SpanProps{Style: style.S().Background(bg).Foreground(sepCol)},
 					kitex.Text("│\n"),
 				))
- 
+
 				// Right Gutter
 				rightGutterSpans = append(rightGutterSpans, kitex.Span(
 					kitex.SpanProps{Style: style.S().Background(bg).Foreground(textFg)},
 					kitex.Text("       \n"), // 7 spaces
 				))
- 
+
 				// Right Separator
 				rightSepSpans = append(rightSepSpans, kitex.Span(
 					kitex.SpanProps{Style: style.S().Background(bg).Foreground(sepCol)},
 					kitex.Text("│\n"),
 				))
- 
+
 				// Right Code
 				if bg != nil {
 					rightCodeSpans = append(rightCodeSpans, kitex.Span(
@@ -356,12 +356,12 @@ var DiffBlock = kitex.FC("DiffBlock", func(props DiffBlockProps) kitex.Node {
 				))
 				continue
 			}
- 
+
 			// Render Left side (Original)
 			var leftGNum, leftSign string
 			var leftBg color.Color
 			var leftLine *DiffLine
- 
+
 			if r.Left != nil {
 				leftLine = r.Left
 				leftGNum = fmt.Sprintf("%d", r.Left.NumA)
@@ -372,12 +372,12 @@ var DiffBlock = kitex.FC("DiffBlock", func(props DiffBlockProps) kitex.Node {
 					leftSign = " "
 				}
 			}
- 
+
 			// Render Right side (Modified)
 			var rightGNum, rightSign string
 			var rightBg color.Color
 			var rightLine *DiffLine
- 
+
 			if r.Right != nil {
 				rightLine = r.Right
 				rightGNum = fmt.Sprintf("%d", r.Right.NumB)
@@ -388,7 +388,7 @@ var DiffBlock = kitex.FC("DiffBlock", func(props DiffBlockProps) kitex.Node {
 					rightSign = " "
 				}
 			}
- 
+
 			// 1. Left Gutter
 			var lgStyle style.Style
 			if leftBg != nil {
@@ -401,7 +401,7 @@ var DiffBlock = kitex.FC("DiffBlock", func(props DiffBlockProps) kitex.Node {
 				kitex.SpanProps{Style: lgStyle},
 				kitex.Text(fmt.Sprintf("%5s %s\n", leftGNum, leftSign)),
 			))
- 
+
 			// 2. Left Separator
 			var sepCol color.Color
 			if t != nil {
@@ -411,7 +411,7 @@ var DiffBlock = kitex.FC("DiffBlock", func(props DiffBlockProps) kitex.Node {
 				kitex.SpanProps{Style: style.S().Background(leftBg).Foreground(sepCol)},
 				kitex.Text("│\n"),
 			))
- 
+
 			// 3. Left Code
 			if leftLine != nil {
 				leftCodeSpans = append(leftCodeSpans, highlightLine(leftLine.Content, leftBg)...)
@@ -436,13 +436,13 @@ var DiffBlock = kitex.FC("DiffBlock", func(props DiffBlockProps) kitex.Node {
 				kitex.SpanProps{Style: style.S().Background(leftBg)},
 				kitex.Text("\n"),
 			))
- 
+
 			// 4. Middle Pane Separator
 			sepSpans = append(sepSpans, kitex.Span(
 				kitex.SpanProps{Style: style.S().Foreground(sepCol)},
 				kitex.Text("│\n"),
 			))
- 
+
 			// 5. Right Gutter
 			var rgStyle style.Style
 			if rightBg != nil {
@@ -455,13 +455,13 @@ var DiffBlock = kitex.FC("DiffBlock", func(props DiffBlockProps) kitex.Node {
 				kitex.SpanProps{Style: rgStyle},
 				kitex.Text(fmt.Sprintf("%5s %s\n", rightGNum, rightSign)),
 			))
- 
+
 			// 6. Right Separator
 			rightSepSpans = append(rightSepSpans, kitex.Span(
 				kitex.SpanProps{Style: style.S().Background(rightBg).Foreground(sepCol)},
 				kitex.Text("│\n"),
 			))
- 
+
 			// 7. Right Code
 			if rightLine != nil {
 				rightCodeSpans = append(rightCodeSpans, highlightLine(rightLine.Content, rightBg)...)
@@ -487,7 +487,7 @@ var DiffBlock = kitex.FC("DiffBlock", func(props DiffBlockProps) kitex.Node {
 				kitex.Text("\n"),
 			))
 		}
- 
+
 		leftPane := kitex.Box(kitex.BoxProps{
 			Style: style.S().
 				Display(style.DisplayFlex).
@@ -499,9 +499,9 @@ var DiffBlock = kitex.FC("DiffBlock", func(props DiffBlockProps) kitex.Node {
 			kitex.Box(kitex.BoxProps{Style: separatorStyle}, leftSepSpans...),
 			kitex.Box(kitex.BoxProps{Style: codeBoxStyle}, leftCodeSpans...),
 		)
- 
+
 		middleSep := kitex.Box(kitex.BoxProps{Style: separatorStyle}, sepSpans...)
- 
+
 		rightPane := kitex.Box(kitex.BoxProps{
 			Style: style.S().
 				Display(style.DisplayFlex).
@@ -513,14 +513,14 @@ var DiffBlock = kitex.FC("DiffBlock", func(props DiffBlockProps) kitex.Node {
 			kitex.Box(kitex.BoxProps{Style: separatorStyle}, rightSepSpans...),
 			kitex.Box(kitex.BoxProps{Style: codeBoxStyle}, rightCodeSpans...),
 		)
- 
+
 		renderedRows = append(renderedRows, kitex.Box(kitex.BoxProps{Style: rowStyle},
 			leftPane,
 			middleSep,
 			rightPane,
 		))
 	}
- 
+
 	return kitex.Box(kitex.BoxProps{Style: wrapperStyle}, renderedRows...)
 })
 
