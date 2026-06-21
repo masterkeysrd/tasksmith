@@ -22,7 +22,7 @@ func TestViewHandler(t *testing.T) {
 	defer os.RemoveAll(tmpDir)
 
 	ctx := context.Background()
-	handlers := NewHandlers(nil)
+	handlers := NewHandlers(nil, "")
 
 	t.Run("read small file to EOF", func(t *testing.T) {
 		filePath := filepath.Join(tmpDir, "small.txt")
@@ -177,7 +177,7 @@ func TestViewBinary(t *testing.T) {
 
 	ctx := context.WithValue(context.Background(), "tool_call_id", "call-test-1")
 	storage := &mockStorage{}
-	handlers := NewHandlers(storage)
+	handlers := NewHandlers(storage, "")
 
 	filePath := filepath.Join(tmpDir, "image.png")
 	dummyBytes := []byte("fake-png-bytes")
@@ -230,7 +230,7 @@ func TestViewPathCleaningAndSpacing(t *testing.T) {
 	defer os.RemoveAll(tmpDir)
 
 	ctx := context.Background()
-	handlers := NewHandlers(nil)
+	handlers := NewHandlers(nil, "")
 
 	// 1. Create a file on disk with spaces and a narrow non-breaking space U+202F
 	// E.g. "Screenshot 2026-06-20 at 10.13.29[NNBSP]PM.png"

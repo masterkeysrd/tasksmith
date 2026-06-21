@@ -73,7 +73,11 @@ func New(ctx context.Context, model LLMModel, ws *workspace.Workspace, storage t
 		allowedTools = cfg.AuthorizedTools
 	}
 
-	handlers := tools.NewHandlers(storage)
+	var cwd string
+	if ws != nil {
+		cwd = ws.CWD()
+	}
+	handlers := tools.NewHandlers(storage, cwd)
 	allLoomTools, err := tools.LoomTools(handlers)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load loom tools: %w", err)

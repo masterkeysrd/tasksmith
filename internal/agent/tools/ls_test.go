@@ -18,7 +18,7 @@ func TestLsBasicListing(t *testing.T) {
 		t.Fatalf("mkdir: %v", err)
 	}
 
-	handlers := NewHandlers(nil)
+	handlers := NewHandlers(nil, "")
 	out, err := handlers.Ls(context.Background(), LsArgs{Path: dir})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -40,7 +40,7 @@ func TestLsFormattedOutput(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, "hello.txt"), "world")
 
-	handlers := NewHandlers(nil)
+	handlers := NewHandlers(nil, "")
 	out, err := handlers.Ls(context.Background(), LsArgs{Path: dir})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -73,7 +73,7 @@ func TestLsDirectoryEntry(t *testing.T) {
 		t.Fatalf("mkdir: %v", err)
 	}
 
-	handlers := NewHandlers(nil)
+	handlers := NewHandlers(nil, "")
 	out, err := handlers.Ls(context.Background(), LsArgs{Path: dir})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -97,7 +97,7 @@ func TestLsSymlink(t *testing.T) {
 		t.Fatalf("symlink: %v", err)
 	}
 
-	handlers := NewHandlers(nil)
+	handlers := NewHandlers(nil, "")
 	out, err := handlers.Ls(context.Background(), LsArgs{Path: dir})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -130,7 +130,7 @@ func TestLsDefaultIgnores(t *testing.T) {
 	}
 	writeFile(t, filepath.Join(dir, "visible.txt"), "hello")
 
-	handlers := NewHandlers(nil)
+	handlers := NewHandlers(nil, "")
 	out, err := handlers.Ls(context.Background(), LsArgs{Path: dir})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -154,7 +154,7 @@ func TestLsGitignoreRules(t *testing.T) {
 		t.Fatalf("mkdir secrets: %v", err)
 	}
 
-	handlers := NewHandlers(nil)
+	handlers := NewHandlers(nil, "")
 	out, err := handlers.Ls(context.Background(), LsArgs{Path: repoDir})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -182,7 +182,7 @@ func TestLsNestedGitignore(t *testing.T) {
 	writeFile(t, filepath.Join(subDir, "app.go"), "package app")
 	writeFile(t, filepath.Join(subDir, "scratch.tmp"), "temp")
 
-	handlers := NewHandlers(nil)
+	handlers := NewHandlers(nil, "")
 	out, err := handlers.Ls(context.Background(), LsArgs{Path: subDir})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -200,7 +200,7 @@ func TestLsPatternFilter(t *testing.T) {
 	writeFile(t, filepath.Join(dir, "README.md"), "")
 	writeFile(t, filepath.Join(dir, "Makefile"), "")
 
-	handlers := NewHandlers(nil)
+	handlers := NewHandlers(nil, "")
 	out, err := handlers.Ls(context.Background(), LsArgs{Path: dir, Pattern: "*.go"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -223,7 +223,7 @@ func TestLsTypeFilter(t *testing.T) {
 		t.Fatalf("mkdir: %v", err)
 	}
 
-	handlers := NewHandlers(nil)
+	handlers := NewHandlers(nil, "")
 
 	// filter to dirs only
 	outDirs, err := handlers.Ls(context.Background(), LsArgs{Path: dir, Type: "dir"})
@@ -250,7 +250,7 @@ func TestLsLimit(t *testing.T) {
 		writeFile(t, filepath.Join(dir, strings.Repeat("a", i+1)+".txt"), "")
 	}
 
-	handlers := NewHandlers(nil)
+	handlers := NewHandlers(nil, "")
 	out, err := handlers.Ls(context.Background(), LsArgs{Path: dir, Limit: 3})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -273,7 +273,7 @@ func TestLsLongFilename(t *testing.T) {
 	longName := strings.Repeat("a", 200) + ".txt"
 	writeFile(t, filepath.Join(dir, longName), "")
 
-	handlers := NewHandlers(nil)
+	handlers := NewHandlers(nil, "")
 	out, err := handlers.Ls(context.Background(), LsArgs{Path: dir})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -303,7 +303,7 @@ func TestLsTextContent(t *testing.T) {
 	writeFile(t, filepath.Join(dir, "main.go"), "package main")
 	writeFile(t, filepath.Join(dir, "util.go"), "package main")
 
-	handlers := NewHandlers(nil)
+	handlers := NewHandlers(nil, "")
 	out, err := handlers.Ls(context.Background(), LsArgs{Path: dir})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -330,7 +330,7 @@ func TestLsTextContentTruncated(t *testing.T) {
 		writeFile(t, filepath.Join(dir, fmt.Sprintf("file%d.go", i)), "")
 	}
 
-	handlers := NewHandlers(nil)
+	handlers := NewHandlers(nil, "")
 	out, err := handlers.Ls(context.Background(), LsArgs{Path: dir, Limit: 2})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -346,7 +346,7 @@ func TestLsTextContentTruncated(t *testing.T) {
 }
 
 func TestLsInvalidPath(t *testing.T) {
-	handlers := NewHandlers(nil)
+	handlers := NewHandlers(nil, "")
 	_, err := handlers.Ls(context.Background(), LsArgs{Path: "/this/does/not/exist/at/all"})
 	if err == nil {
 		t.Fatal("expected error for non-existent directory, got nil")

@@ -74,6 +74,8 @@ type FetchOutput struct {
 //
 // Find files matching a glob pattern.
 type GlobArgs struct {
+	// Path: Base directory to search from. Defaults to the workspace directory.
+	Path string `json:"path,omitempty" jsonschema:"Base directory to search from. Defaults to the workspace directory."`
 	// Pattern: Glob pattern to match.
 	Pattern string `json:"pattern" jsonschema:"Glob pattern to match."`
 }
@@ -82,6 +84,10 @@ type GlobArgs struct {
 type GlobOutput struct {
 	// Matches: List of matching file paths.
 	Matches []string `json:"matches,omitempty" jsonschema:"List of matching file paths."`
+	// TotalCount: Total number of matches after applying ignore filters.
+	TotalCount int `json:"total_count,omitempty" jsonschema:"Total number of matches after applying ignore filters."`
+	// Truncated: True when the result was capped by the limit.
+	Truncated bool `json:"truncated,omitempty" jsonschema:"True when the result was capped by the limit."`
 }
 
 // GrepArgs defines the arguments for the "grep" tool.

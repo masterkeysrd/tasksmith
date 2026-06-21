@@ -45,17 +45,6 @@ func (h *ToolHandlers) Fetch(ctx context.Context, in FetchArgs) (FetchOutput, er
 	return FetchOutput{Status: 200, Content: string(out)}, nil
 }
 
-// Glob finds files matching a glob pattern.
-func (h *ToolHandlers) Glob(ctx context.Context, in GlobArgs) (GlobOutput, error) {
-	cmd := exec.CommandContext(ctx, "find", ".", "-name", in.Pattern)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return GlobOutput{}, nil
-	}
-	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
-	return GlobOutput{Matches: lines}, nil
-}
-
 // Grep searches for a pattern in files.
 func (h *ToolHandlers) Grep(ctx context.Context, in GrepArgs) (GrepOutput, error) {
 	cmd := exec.CommandContext(ctx, "grep", "-rn", in.Pattern, in.Path)
