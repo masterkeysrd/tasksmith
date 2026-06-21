@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"image/color"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -16,6 +17,7 @@ import (
 	"github.com/masterkeysrd/kite/promise"
 	"github.com/masterkeysrd/kite/style"
 	"github.com/masterkeysrd/loom/message"
+	"github.com/masterkeysrd/tasksmith/internal/agent/tools"
 	"github.com/masterkeysrd/tasksmith/internal/api"
 	tuiapi "github.com/masterkeysrd/tasksmith/internal/tui/api"
 	"github.com/masterkeysrd/tasksmith/internal/tui/components"
@@ -662,6 +664,321 @@ func getToolOutput(content message.Content) string {
 	return sb.String()
 }
 
+func getIntField(m map[string]any, key string) int {
+	val, ok := m[key]
+	if !ok {
+		return 0
+	}
+	switch v := val.(type) {
+	case float64:
+		return int(v)
+	case int:
+		return v
+	case int64:
+		return int(v)
+	}
+	return 0
+}
+
+func parseViewOutput(structured any) (startLine, endLine, totalLines int, truncated bool) {
+	m, ok := structured.(map[string]any)
+	if !ok {
+		return
+	}
+	startLine = getIntField(m, "start_line")
+	endLine = getIntField(m, "end_line")
+	totalLines = getIntField(m, "total_lines")
+	truncated, _ = m["truncated"].(bool)
+	return
+}
+
+func detectLang(filename string) string {
+	ext := filepath.Ext(filename)
+	if ext == "" {
+		return "txt"
+	}
+	return strings.ToLower(ext[1:])
+}
+
+func parseRangeFromHeader(text string) (startLine, endLine int) {
+	idx := strings.Index(text, "\n")
+	if idx == -1 {
+		return
+	}
+	firstLine := text[:idx]
+	openParen := strings.Index(firstLine, " (")
+	if openParen == -1 {
+		return
+	}
+	dash := strings.Index(firstLine[openParen:], "-")
+	if dash == -1 {
+		return
+	}
+	dash = openParen + dash
+	ofWord := strings.Index(firstLine[dash:], " of ")
+	if ofWord == -1 {
+		return
+	}
+	ofWord = dash + ofWord
+
+	startStr := strings.TrimSpace(firstLine[openParen+2 : dash])
+	endStr := strings.TrimSpace(firstLine[dash+1 : ofWord])
+
+	_, _ = fmt.Sscan(startStr, &startLine)
+	_, _ = fmt.Sscan(endStr, &endLine)
+	return
+}
+
+func parseViewStructuredOutput(structured any) (tools.ViewOutput, bool) {
+	if structured == nil {
+		return tools.ViewOutput{}, false
+	}
+	if val, ok := structured.(tools.ViewOutput); ok {
+		return val, true
+	}
+	if val, ok := structured.(*tools.ViewOutput); ok && val != nil {
+		return *val, true
+	}
+	data, err := json.Marshal(structured)
+	if err != nil {
+		return tools.ViewOutput{}, false
+	}
+	var out tools.ViewOutput
+	if err := json.Unmarshal(data, &out); err != nil {
+		return tools.ViewOutput{}, false
+	}
+	return out, true
+}
+
+func stripLinePrefixes(content string) string {
+	lines := strings.Split(content, "\n")
+	for i, line := range lines {
+		idx := strings.Index(line, " | ")
+		if idx != -1 {
+			isNum := true
+			prefix := line[:idx]
+			if len(prefix) == 0 {
+				isNum = false
+			}
+			for _, r := range prefix {
+				if r < '0' || r > '9' {
+					isNum = false
+					break
+				}
+			}
+			if isNum {
+				lines[i] = line[idx+3:]
+			}
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+var ViewToolWidget = kitex.FC("ViewToolWidget", func(props ToolExecutionProps) kitex.Node {
+	t := theme.UseTheme()
+	showModal, setShowModal := kitex.UseState(false)
+	modalRef := kitex.CreateRef[dom.Element]()
+
+	tc := props.ToolCall
+	tm := props.ToolMessage
+
+	var path string
+	if tc.Args != nil {
+		path, _ = tc.Args["path"].(string)
+	}
+	filename := filepath.Base(path)
+
+	var statusLabel string
+	var iconNode kitex.Node
+	var themeColor color.Color
+
+	if t != nil {
+		if tm == nil {
+			var rangeStr string
+			startLine := getIntField(tc.Args, "start_line")
+			endLine := getIntField(tc.Args, "end_line")
+			if startLine > 0 {
+				if endLine > 0 {
+					rangeStr = fmt.Sprintf(" (%d-%d)", startLine, endLine)
+				} else {
+					rangeStr = fmt.Sprintf(" (%d+)", startLine)
+				}
+			}
+			statusLabel = fmt.Sprintf("Pending [%s%s]", filename, rangeStr)
+			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Info)}, kitex.Text(props.CurrentDots))
+			themeColor = t.Color.Surface.Info
+		} else if tm.IsError {
+			statusLabel = fmt.Sprintf("Error Reading [%s]", filename)
+			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Error)}, icon.Error)
+			themeColor = t.Color.Text.Error
+		} else {
+			actualStart, actualEnd, _, _ := parseViewOutput(tm.StructuredContent)
+			if actualStart == 0 {
+				outText := getToolOutput(tm.Content)
+				actualStart, actualEnd = parseRangeFromHeader(outText)
+			}
+			if actualStart == 0 {
+				actualStart = getIntField(tc.Args, "start_line")
+				if actualStart == 0 {
+					actualStart = 1
+				}
+				actualEnd = getIntField(tc.Args, "end_line")
+			}
+			var rangeStr string
+			if actualStart > 0 && actualEnd > 0 {
+				rangeStr = fmt.Sprintf(" %d-%d", actualStart, actualEnd)
+			}
+			statusLabel = fmt.Sprintf("Read [%s%s]", filename, rangeStr)
+			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Success)}, icon.Checkmark)
+			themeColor = t.Color.Surface.Success
+		}
+	}
+
+	boxStyle := style.S().
+		Display(style.DisplayFlex).
+		FlexDirection(style.FlexRow).
+		AlignItems(style.AlignCenter).
+		AlignSelf(style.AlignStart).
+		Padding(0, 1).
+		Gap(1).
+		Height(style.Cells(1)).
+		MarginVertical(1)
+
+	if t != nil {
+		boxStyle = boxStyle.
+			Background(t.Color.Surface.BaseHover).
+			Foreground(themeColor)
+	}
+
+	kitex.UseEffect(func() {
+		if showModal() {
+			kitex.PostMacro(func() {
+				if modalRef.Current != nil {
+					if doc := modalRef.Current.OwnerDocument(); doc != nil {
+						doc.Focus(modalRef.Current)
+					}
+				}
+			})
+		}
+	}, []any{showModal()})
+
+	var badgeNode kitex.Node
+	if tm != nil && !tm.IsError {
+		badgeNode = components.Button(components.ButtonProps{
+			Variant: components.ButtonText,
+			Color:   components.ButtonBase,
+			Style:   boxStyle,
+			OnClick: func() {
+				setShowModal(true)
+			},
+		},
+			iconNode,
+			kitex.Span(kitex.SpanProps{Style: style.S().Bold(true)}, kitex.Text(statusLabel)),
+		)
+	} else {
+		badgeNode = kitex.Box(kitex.BoxProps{Style: boxStyle},
+			iconNode,
+			kitex.Span(kitex.SpanProps{Style: style.S().Bold(true)}, kitex.Text(statusLabel)),
+		)
+	}
+
+	return kitex.Fragment(
+		badgeNode,
+		kitex.If(showModal(), func() kitex.Node {
+			var cleanCode string
+			var startLine int
+			var showLines bool
+
+			vOut, ok := parseViewStructuredOutput(tm.StructuredContent)
+			if ok {
+				cleanCode = stripLinePrefixes(vOut.Content)
+				startLine = vOut.StartLine
+				showLines = true
+			} else {
+				outText := getToolOutput(tm.Content)
+				actualStart, _ := parseRangeFromHeader(outText)
+				if actualStart > 0 {
+					idx := strings.Index(outText, "\n")
+					if idx != -1 {
+						cleanCode = stripLinePrefixes(outText[idx+1:])
+					} else {
+						cleanCode = outText
+					}
+					startLine = actualStart
+					showLines = true
+				} else {
+					cleanCode = outText
+					showLines = false
+				}
+			}
+
+			modalStyle := style.S().
+				Display(style.DisplayFlex).
+				FlexDirection(style.FlexColumn).
+				Width(style.Percent(80)).
+				Height(style.Percent(80)).
+				Padding(1).
+				Overflow(style.OverflowHidden)
+
+			return kitex.Dialog(kitex.DialogProps{
+				ZIndex: 100,
+				Ref:    modalRef,
+				OnKeyDown: func(e event.Event) {
+					ke, ok := e.(*event.KeyEvent)
+					if !ok {
+						return
+					}
+					if ke.Code == key.KeyEscape || ke.Text == "q" {
+						e.PreventDefault()
+						e.StopPropagation()
+						setShowModal(false)
+					}
+				},
+			},
+				components.Paper(components.PaperProps{
+					Color:   components.PaperBase,
+					Variant: components.PaperOutlined,
+					Style:   modalStyle,
+				},
+					kitex.Box(kitex.BoxProps{
+						Style: style.S().
+							Display(style.DisplayFlex).
+							FlexDirection(style.FlexRow).
+							JustifyContent(style.JustifyBetween).
+							AlignItems(style.AlignCenter).
+							PaddingBottom(1).
+							BorderBottom(true, style.SingleBorder()),
+					},
+						kitex.Span(kitex.SpanProps{Style: style.S().Bold(true)}, kitex.Text(fmt.Sprintf("Viewing %s", filename))),
+						components.Button(components.ButtonProps{
+							Variant: components.ButtonText,
+							Color:   components.ButtonBase,
+							OnClick: func() {
+								setShowModal(false)
+							},
+						}, kitex.Text("Close [Esc/q]")),
+					),
+					kitex.Box(kitex.BoxProps{
+						Style: style.S().
+							Flex(1, 1, style.Cells(0)).
+							MinHeight(style.Cells(0)).
+							OverflowY(style.OverflowAuto).
+							MarginTop(1),
+					},
+						components.CodeBlock(components.CodeBlockProps{
+							Code:            cleanCode,
+							Lang:            detectLang(filename),
+							HideHeader:      true,
+							ShowLineNumbers: showLines,
+							StartLine:       startLine,
+						}),
+					),
+				),
+			)
+		}),
+	)
+})
+
 type ToolExecutionProps struct {
 	ToolCall    *message.ToolCall
 	ToolMessage *message.Tool
@@ -669,6 +986,9 @@ type ToolExecutionProps struct {
 }
 
 var ToolExecution = kitex.FC("ToolExecution", func(props ToolExecutionProps) kitex.Node {
+	if props.ToolCall != nil && props.ToolCall.Name == "view" {
+		return ViewToolWidget(props)
+	}
 	t := theme.UseTheme()
 	isOpen, setIsOpen := kitex.UseState(true)
 

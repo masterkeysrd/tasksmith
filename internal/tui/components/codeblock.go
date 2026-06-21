@@ -1,6 +1,7 @@
 package components
 
 import (
+	"fmt"
 	"image/color"
 	"strings"
 
@@ -13,9 +14,12 @@ import (
 
 // CodeBlockProps defines properties for the CodeBlock rendering component.
 type CodeBlockProps struct {
-	Code  string
-	Lang  string
-	Style style.Style
+	Code            string
+	Lang            string
+	Style           style.Style
+	HideHeader      bool
+	ShowLineNumbers bool
+	StartLine       int
 }
 
 // CodeBlock renders a syntax-highlighted code block using chroma, fully styled
@@ -57,15 +61,21 @@ var CodeBlock = kitex.FC("CodeBlock", func(props CodeBlockProps) kitex.Node {
 	wrapperStyle := style.S().
 		Display(style.DisplayFlex).
 		FlexDirection(style.FlexColumn).
-		MarginBottom(1).
-		Border(style.SingleBorder()).
 		Width(style.Percent(100)).
 		WhiteSpace(style.WhiteSpacePre).
 		Merge(props.Style)
-	if t != nil {
+
+	if !props.HideHeader {
 		wrapperStyle = wrapperStyle.
-			Background(t.Color.Surface.BaseHover).
-			Border(true, style.SingleBorder(), t.Color.Border.Primary)
+			MarginBottom(1).
+			Border(style.SingleBorder())
+		if t != nil {
+			wrapperStyle = wrapperStyle.
+				Background(t.Color.Surface.BaseHover).
+				Border(true, style.SingleBorder(), t.Color.Border.Primary)
+		}
+	} else if t != nil {
+		wrapperStyle = wrapperStyle.Background(t.Color.Surface.BaseHover)
 	}
 
 	// Fetch and coalesce lexer
@@ -95,14 +105,88 @@ var CodeBlock = kitex.FC("CodeBlock", func(props CodeBlockProps) kitex.Node {
 		}
 	}
 
-	return kitex.Box(kitex.BoxProps{Style: wrapperStyle},
-		kitex.Box(kitex.BoxProps{Style: titleStyle},
-			kitex.Span(kitex.SpanProps{}, kitex.Text(strings.ToUpper(lang))),
-			kitex.Span(kitex.SpanProps{}, kitex.Text("READONLY")),
-		),
-		kitex.Box(kitex.BoxProps{Style: codeStyle},
+	// Line numbers rendering styles
+	rowStyle := style.S().
+		Display(style.DisplayFlex).
+		FlexDirection(style.FlexRow).
+		Width(style.Percent(100))
+
+	gutterStyle := style.S().
+		PaddingVertical(1).
+		PaddingLeft(1).
+		PaddingRight(1).
+		TextAlign(style.TextAlignRight).
+		WhiteSpace(style.WhiteSpacePre)
+	if t != nil {
+		gutterStyle = gutterStyle.Foreground(t.Color.Text.Tertiary)
+	}
+
+	separatorStyle := style.S().
+		PaddingVertical(1)
+	if t != nil {
+		separatorStyle = separatorStyle.Foreground(t.Color.Border.Primary)
+	}
+
+	codeBoxStyle := style.S().
+		PaddingVertical(1).
+		PaddingLeft(1).
+		PaddingRight(1).
+		Flex(1, 1, style.Cells(0)).
+		MinHeight(style.Cells(0)).
+		WhiteSpace(style.WhiteSpacePre).
+		OverflowX(style.OverflowAuto)
+	if t != nil {
+		codeBoxStyle = codeBoxStyle.Foreground(t.Color.Text.Secondary)
+	}
+
+	var gutterText string
+	var separatorText string
+	if props.ShowLineNumbers {
+		start := props.StartLine
+		if start <= 0 {
+			start = 1
+		}
+		lineCount := 0
+		if codeStr != "" {
+			lineCount = strings.Count(codeStr, "\n") + 1
+		}
+		var gutterBuilder strings.Builder
+		var sepBuilder strings.Builder
+		for i := 0; i < lineCount; i++ {
+			fmt.Fprintf(&gutterBuilder, "%d\n", start+i)
+			sepBuilder.WriteString("│\n")
+		}
+		gutterText = gutterBuilder.String()
+		separatorText = sepBuilder.String()
+	}
+
+	var codeContainer kitex.Node
+	if props.ShowLineNumbers {
+		codeContainer = kitex.Box(kitex.BoxProps{Style: rowStyle},
+			kitex.Box(kitex.BoxProps{Style: gutterStyle},
+				kitex.Text(gutterText),
+			),
+			kitex.Box(kitex.BoxProps{Style: separatorStyle},
+				kitex.Text(separatorText),
+			),
+			kitex.Box(kitex.BoxProps{Style: codeBoxStyle},
+				contentNodes...,
+			),
+		)
+	} else {
+		codeContainer = kitex.Box(kitex.BoxProps{Style: codeStyle},
 			contentNodes...,
-		),
+		)
+	}
+
+	return kitex.Box(kitex.BoxProps{Style: wrapperStyle},
+		kitex.If(!props.HideHeader, func() kitex.Node {
+			return kitex.Box(kitex.BoxProps{Style: titleStyle},
+				kitex.Span(kitex.SpanProps{}, kitex.Text(strings.ToUpper(lang))),
+				kitex.Span(kitex.SpanProps{}, kitex.Text("READONLY")),
+			)
+		}),
+		codeContainer,
 	)
 })
 

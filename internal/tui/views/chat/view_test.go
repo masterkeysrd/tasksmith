@@ -6,6 +6,7 @@ import (
 
 	"github.com/masterkeysrd/kite/extras/kitex"
 	"github.com/masterkeysrd/kite/extras/wind"
+	"github.com/masterkeysrd/tasksmith/internal/agent/tools"
 	"github.com/masterkeysrd/tasksmith/internal/api"
 	tuiapi "github.com/masterkeysrd/tasksmith/internal/tui/api"
 	"github.com/masterkeysrd/tasksmith/internal/tui/theme"
@@ -145,4 +146,86 @@ func (m *mockClientWithTools) GetSessionMessages(ctx context.Context, req api.Ge
 			`{"role":"tool","tool_call_id":"call-2","name":"view_file","content":[{"type":"text","text":"package main"}]}`,
 		},
 	}, nil
+}
+
+func TestParseRangeFromHeader(t *testing.T) {
+	tests := []struct {
+		input     string
+		wantStart int
+		wantEnd   int
+	}{
+		{
+			input:     "README.md (1-100 of 100)\n1 | line1\n2 | line2",
+			wantStart: 1,
+			wantEnd:   100,
+		},
+		{
+			input:     "main.go (15-45 of 200)\n15 | main",
+			wantStart: 15,
+			wantEnd:   45,
+		},
+		{
+			input:     "no_paren_match\n",
+			wantStart: 0,
+			wantEnd:   0,
+		},
+	}
+
+	for _, tc := range tests {
+		gotStart, gotEnd := parseRangeFromHeader(tc.input)
+		if gotStart != tc.wantStart || gotEnd != tc.wantEnd {
+			t.Errorf("parseRangeFromHeader(%q) = (%d, %d), want (%d, %d)", tc.input, gotStart, gotEnd, tc.wantStart, tc.wantEnd)
+		}
+	}
+}
+
+func TestParseViewStructuredOutput(t *testing.T) {
+	t.Run("tools.ViewOutput type assertion", func(t *testing.T) {
+		val := tools.ViewOutput{
+			Content:   "test",
+			StartLine: 5,
+		}
+		got, ok := parseViewStructuredOutput(val)
+		if !ok || got.Content != "test" || got.StartLine != 5 {
+			t.Errorf("expected view output, got %v (ok: %v)", got, ok)
+		}
+	})
+
+	t.Run("map representation conversion", func(t *testing.T) {
+		val := map[string]any{
+			"content":    "test2",
+			"start_line": float64(10),
+		}
+		got, ok := parseViewStructuredOutput(val)
+		if !ok || got.Content != "test2" || got.StartLine != 10 {
+			t.Errorf("expected conversion, got %v (ok: %v)", got, ok)
+		}
+	})
+}
+
+func TestStripLinePrefixes(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{
+			input: "1 | line1\n2 | line2\n3 | line3",
+			want:  "line1\nline2\nline3",
+		},
+		{
+			input: "15 | func main() {\n16 | \tprintln()\n17 | }",
+			want:  "func main() {\n\tprintln()\n}",
+		},
+		{
+			input: "no_prefix\n10 | prefixed",
+			want:  "no_prefix\nprefixed",
+		},
+	}
+
+	for _, tc := range tests {
+		got := stripLinePrefixes(tc.input)
+		if got != tc.want {
+			t.Errorf("stripLinePrefixes(%q) = %q, want %q", tc.input, got, tc.want)
+		}
+	}
 }

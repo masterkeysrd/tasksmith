@@ -188,6 +188,16 @@ func writeStruct(buf *bytes.Buffer, name string, schema map[string]any, doc stri
 		return
 	}
 
+	requiredList, _ := schema["required"].([]any)
+	isRequired := func(field string) bool {
+		for _, r := range requiredList {
+			if rStr, ok := r.(string); ok && rStr == field {
+				return true
+			}
+		}
+		return false
+	}
+
 	var keys []string
 	for k := range props {
 		keys = append(keys, k)
@@ -233,11 +243,16 @@ func writeStruct(buf *bytes.Buffer, name string, schema map[string]any, doc stri
 		desc, _ := propVal["description"].(string)
 		fieldName := toCamelCase(k)
 
+		jsonTag := k
+		if !isRequired(k) {
+			jsonTag += ",omitempty"
+		}
+
 		if desc != "" {
 			buf.WriteString(fmt.Sprintf("\t// %s: %s\n", fieldName, desc))
-			buf.WriteString(fmt.Sprintf("\t%s %s `json:\"%s\" jsonschema:\"%s\"`\n", fieldName, goType, k, strings.ReplaceAll(desc, "\"", "\\\"")))
+			buf.WriteString(fmt.Sprintf("\t%s %s `json:\"%s\" jsonschema:\"%s\"`\n", fieldName, goType, jsonTag, strings.ReplaceAll(desc, "\"", "\\\"")))
 		} else {
-			buf.WriteString(fmt.Sprintf("\t%s %s `json:\"%s\"`\n", fieldName, goType, k))
+			buf.WriteString(fmt.Sprintf("\t%s %s `json:\"%s\"`\n", fieldName, goType, jsonTag))
 		}
 	}
 

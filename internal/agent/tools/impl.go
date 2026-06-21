@@ -135,16 +135,6 @@ func RemoveHandler(ctx context.Context, in RemoveArgs) (RemoveOutput, error) {
 	return RemoveOutput{Path: in.Path, Success: true}, nil
 }
 
-// ViewHandler views the contents of a file.
-func ViewHandler(ctx context.Context, in ViewArgs) (ViewOutput, error) {
-	cmd := exec.CommandContext(ctx, "cat", in.Path)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return ViewOutput{Content: err.Error()}, nil
-	}
-	return ViewOutput{Content: string(out)}, nil
-}
-
 // WebFetchHandler fetches web page content.
 func WebFetchHandler(ctx context.Context, in WebFetchArgs) (WebFetchOutput, error) {
 	cmd := exec.CommandContext(ctx, "curl", "-sL", in.Url)

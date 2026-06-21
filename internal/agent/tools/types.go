@@ -13,11 +13,11 @@ type BashArgs struct {
 // BashOutput defines the output returned by the "bash" tool.
 type BashOutput struct {
 	// ExitCode: Exit code.
-	ExitCode int `json:"exitCode" jsonschema:"Exit code."`
+	ExitCode int `json:"exitCode,omitempty" jsonschema:"Exit code."`
 	// Stderr: Standard error.
-	Stderr string `json:"stderr" jsonschema:"Standard error."`
+	Stderr string `json:"stderr,omitempty" jsonschema:"Standard error."`
 	// Stdout: Standard output.
-	Stdout string `json:"stdout" jsonschema:"Standard output."`
+	Stdout string `json:"stdout,omitempty" jsonschema:"Standard output."`
 }
 
 // DownloadArgs defines the arguments for the "download" tool.
@@ -31,9 +31,9 @@ type DownloadArgs struct {
 // DownloadOutput defines the output returned by the "download" tool.
 type DownloadOutput struct {
 	// Path: Path to the downloaded file.
-	Path string `json:"path" jsonschema:"Path to the downloaded file."`
+	Path string `json:"path,omitempty" jsonschema:"Path to the downloaded file."`
 	// Success: Whether the download succeeded.
-	Success bool `json:"success" jsonschema:"Whether the download succeeded."`
+	Success bool `json:"success,omitempty" jsonschema:"Whether the download succeeded."`
 }
 
 // EditArgs defines the arguments for the "edit" tool.
@@ -49,9 +49,9 @@ type EditArgs struct {
 // EditOutput defines the output returned by the "edit" tool.
 type EditOutput struct {
 	// Path: Path to the edited file.
-	Path string `json:"path" jsonschema:"Path to the edited file."`
+	Path string `json:"path,omitempty" jsonschema:"Path to the edited file."`
 	// Success: Whether the edit succeeded.
-	Success bool `json:"success" jsonschema:"Whether the edit succeeded."`
+	Success bool `json:"success,omitempty" jsonschema:"Whether the edit succeeded."`
 }
 
 // FetchArgs defines the arguments for the "fetch" tool.
@@ -65,9 +65,9 @@ type FetchArgs struct {
 // FetchOutput defines the output returned by the "fetch" tool.
 type FetchOutput struct {
 	// Content: Content of the response.
-	Content string `json:"content" jsonschema:"Content of the response."`
+	Content string `json:"content,omitempty" jsonschema:"Content of the response."`
 	// Status: HTTP status code.
-	Status int `json:"status" jsonschema:"HTTP status code."`
+	Status int `json:"status,omitempty" jsonschema:"HTTP status code."`
 }
 
 // GlobArgs defines the arguments for the "glob" tool.
@@ -81,7 +81,7 @@ type GlobArgs struct {
 // GlobOutput defines the output returned by the "glob" tool.
 type GlobOutput struct {
 	// Matches: List of matching file paths.
-	Matches []string `json:"matches" jsonschema:"List of matching file paths."`
+	Matches []string `json:"matches,omitempty" jsonschema:"List of matching file paths."`
 }
 
 // GrepArgs defines the arguments for the "grep" tool.
@@ -97,7 +97,7 @@ type GrepArgs struct {
 // GrepOutput defines the output returned by the "grep" tool.
 type GrepOutput struct {
 	// Matches: List of search matches.
-	Matches []any `json:"matches" jsonschema:"List of search matches."`
+	Matches []any `json:"matches,omitempty" jsonschema:"List of search matches."`
 }
 
 // LsArgs defines the arguments for the "ls" tool.
@@ -111,7 +111,7 @@ type LsArgs struct {
 // LsOutput defines the output returned by the "ls" tool.
 type LsOutput struct {
 	// Files: List of files and directories.
-	Files []any `json:"files" jsonschema:"List of files and directories."`
+	Files []any `json:"files,omitempty" jsonschema:"List of files and directories."`
 }
 
 // LspDiagnosticsArgs defines the arguments for the "lsp_diagnostics" tool.
@@ -125,7 +125,7 @@ type LspDiagnosticsArgs struct {
 // LspDiagnosticsOutput defines the output returned by the "lsp_diagnostics" tool.
 type LspDiagnosticsOutput struct {
 	// Diagnostics: List of LSP diagnostics.
-	Diagnostics []any `json:"diagnostics" jsonschema:"List of LSP diagnostics."`
+	Diagnostics []any `json:"diagnostics,omitempty" jsonschema:"List of LSP diagnostics."`
 }
 
 // LspRestartArgs defines the arguments for the "lsp_restart" tool.
@@ -139,9 +139,9 @@ type LspRestartArgs struct {
 // LspRestartOutput defines the output returned by the "lsp_restart" tool.
 type LspRestartOutput struct {
 	// Message: Description of the restart outcome.
-	Message string `json:"message" jsonschema:"Description of the restart outcome."`
+	Message string `json:"message,omitempty" jsonschema:"Description of the restart outcome."`
 	// Success: Whether the LSP server restarted successfully.
-	Success bool `json:"success" jsonschema:"Whether the LSP server restarted successfully."`
+	Success bool `json:"success,omitempty" jsonschema:"Whether the LSP server restarted successfully."`
 }
 
 // LspSearchArgs defines the arguments for the "lsp_search" tool.
@@ -155,7 +155,7 @@ type LspSearchArgs struct {
 // LspSearchOutput defines the output returned by the "lsp_search" tool.
 type LspSearchOutput struct {
 	// Results: List of LSP search results.
-	Results []any `json:"results" jsonschema:"List of LSP search results."`
+	Results []any `json:"results,omitempty" jsonschema:"List of LSP search results."`
 }
 
 // McpReadResourcesArgs defines the arguments for the "mcp_read_resources" tool.
@@ -169,9 +169,9 @@ type McpReadResourcesArgs struct {
 // McpReadResourcesOutput defines the output returned by the "mcp_read_resources" tool.
 type McpReadResourcesOutput struct {
 	// Content: Content of the MCP resource.
-	Content string `json:"content" jsonschema:"Content of the MCP resource."`
+	Content string `json:"content,omitempty" jsonschema:"Content of the MCP resource."`
 	// Success: Whether reading the resource succeeded.
-	Success bool `json:"success" jsonschema:"Whether reading the resource succeeded."`
+	Success bool `json:"success,omitempty" jsonschema:"Whether reading the resource succeeded."`
 }
 
 // RemoveArgs defines the arguments for the "remove" tool.
@@ -185,23 +185,42 @@ type RemoveArgs struct {
 // RemoveOutput defines the output returned by the "remove" tool.
 type RemoveOutput struct {
 	// Path: Path that was removed.
-	Path string `json:"path" jsonschema:"Path that was removed."`
+	Path string `json:"path,omitempty" jsonschema:"Path that was removed."`
 	// Success: Whether removal succeeded.
-	Success bool `json:"success" jsonschema:"Whether removal succeeded."`
+	Success bool `json:"success,omitempty" jsonschema:"Whether removal succeeded."`
 }
 
 // ViewArgs defines the arguments for the "view" tool.
 //
-// View the contents of a file.
+// Reads the contents of a file.
+//
+// Important Usage Rules:
+// - Large files will be automatically truncated to fit your context window.
+// - Extremely long single lines (like base64 strings or minified code) will be automatically omitted to protect your context.
+// - If the output ends with a [SYSTEM NOTE] stating the file was truncated, do not assume you have the full file context. You must call `view` again using the `start_line` parameter provided in the system note to paginate and read the remainder of the file before making final decisions or edits.
 type ViewArgs struct {
+	// EndLine: The 1-indexed line number to stop reading at (optional).
+	EndLine int `json:"end_line,omitempty" jsonschema:"The 1-indexed line number to stop reading at (optional)."`
 	// Path: Path to the file.
 	Path string `json:"path" jsonschema:"Path to the file."`
+	// StartLine: The 1-indexed line number to start reading from (optional, defaults to 1).
+	StartLine int `json:"start_line,omitempty" jsonschema:"The 1-indexed line number to start reading from (optional, defaults to 1)."`
 }
 
 // ViewOutput defines the output returned by the "view" tool.
 type ViewOutput struct {
 	// Content: Content of the file.
-	Content string `json:"content" jsonschema:"Content of the file."`
+	Content string `json:"content,omitempty" jsonschema:"Content of the file."`
+	// EndLine: The end line of the returned content.
+	EndLine int `json:"end_line,omitempty" jsonschema:"The end line of the returned content."`
+	// Path: Path to the file.
+	Path string `json:"path,omitempty" jsonschema:"Path to the file."`
+	// StartLine: The start line of the returned content.
+	StartLine int `json:"start_line,omitempty" jsonschema:"The start line of the returned content."`
+	// TotalLines: Total number of lines in the file.
+	TotalLines int `json:"total_lines,omitempty" jsonschema:"Total number of lines in the file."`
+	// Truncated: Whether the file content was truncated due to size limits.
+	Truncated bool `json:"truncated,omitempty" jsonschema:"Whether the file content was truncated due to size limits."`
 }
 
 // WebFetchArgs defines the arguments for the "web_fetch" tool.
@@ -215,9 +234,9 @@ type WebFetchArgs struct {
 // WebFetchOutput defines the output returned by the "web_fetch" tool.
 type WebFetchOutput struct {
 	// Content: Web page content.
-	Content string `json:"content" jsonschema:"Web page content."`
+	Content string `json:"content,omitempty" jsonschema:"Web page content."`
 	// Title: Web page title.
-	Title string `json:"title" jsonschema:"Web page title."`
+	Title string `json:"title,omitempty" jsonschema:"Web page title."`
 }
 
 // WebSearchArgs defines the arguments for the "web_search" tool.
@@ -231,7 +250,7 @@ type WebSearchArgs struct {
 // WebSearchOutput defines the output returned by the "web_search" tool.
 type WebSearchOutput struct {
 	// Results: Search results.
-	Results []any `json:"results" jsonschema:"Search results."`
+	Results []any `json:"results,omitempty" jsonschema:"Search results."`
 }
 
 // WriteArgs defines the arguments for the "write" tool.
@@ -247,5 +266,5 @@ type WriteArgs struct {
 // WriteOutput defines the output returned by the "write" tool.
 type WriteOutput struct {
 	// Path: Path to the written file.
-	Path string `json:"path" jsonschema:"Path to the written file."`
+	Path string `json:"path,omitempty" jsonschema:"Path to the written file."`
 }
