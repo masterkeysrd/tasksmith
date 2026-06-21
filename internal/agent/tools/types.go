@@ -38,16 +38,30 @@ type DownloadOutput struct {
 
 // EditArgs defines the arguments for the "edit" tool.
 //
-// Edit a file using sed.
+// Edit a file by replacing a target block of text with a replacement block.
 type EditArgs struct {
-	// Expression: Sed expression.
-	Expression string `json:"expression" jsonschema:"Sed expression."`
 	// Path: Path to the file.
 	Path string `json:"path" jsonschema:"Path to the file."`
+	// ReplaceAll: If true, replaces all occurrences of the target block. If false (default), fails if the target block is not unique.
+	ReplaceAll bool `json:"replace_all,omitempty" jsonschema:"If true, replaces all occurrences of the target block. If false (default), fails if the target block is not unique."`
+	// Replacement: The replacement content for the target block.
+	Replacement string `json:"replacement" jsonschema:"The replacement content for the target block."`
+	// Target: The exact block of code to edit. This must match a unique sequence of lines in the existing file.
+	Target string `json:"target" jsonschema:"The exact block of code to edit. This must match a unique sequence of lines in the existing file."`
 }
 
 // EditOutput defines the output returned by the "edit" tool.
 type EditOutput struct {
+	// Additions: The number of lines added.
+	Additions int `json:"additions,omitempty" jsonschema:"The number of lines added."`
+	// Deletions: The number of lines deleted.
+	Deletions int `json:"deletions,omitempty" jsonschema:"The number of lines deleted."`
+	// Diff: The unified diff showing the changes made.
+	Diff string `json:"diff,omitempty" jsonschema:"The unified diff showing the changes made."`
+	// FullDiff: The full untruncated unified diff.
+	FullDiff string `json:"-" jsonschema:"The full untruncated unified diff."`
+	// Message: Error or status message if the edit failed.
+	Message string `json:"message,omitempty" jsonschema:"Error or status message if the edit failed."`
 	// Path: Path to the edited file.
 	Path string `json:"path,omitempty" jsonschema:"Path to the edited file."`
 	// Success: Whether the edit succeeded.
@@ -103,11 +117,20 @@ type GrepArgs struct {
 // GrepOutput defines the output returned by the "grep" tool.
 type GrepOutput struct {
 	// Matches: List of search matches.
-	Matches []any `json:"matches,omitempty" jsonschema:"List of search matches."`
+	Matches []GrepOutputMatchesItem `json:"matches,omitempty" jsonschema:"List of search matches."`
 	// TotalCount: Total number of matches found.
 	TotalCount int `json:"total_count,omitempty" jsonschema:"Total number of matches found."`
 	// Truncated: True when the result was capped by the limit.
 	Truncated bool `json:"truncated,omitempty" jsonschema:"True when the result was capped by the limit."`
+}
+
+type GrepOutputMatchesItem struct {
+	// Content: Content of the matching line.
+	Content string `json:"content,omitempty" jsonschema:"Content of the matching line."`
+	// Line: 1-indexed line number of the match.
+	Line int `json:"line,omitempty" jsonschema:"1-indexed line number of the match."`
+	// Path: File path containing the match.
+	Path string `json:"path,omitempty" jsonschema:"File path containing the match."`
 }
 
 // LsArgs defines the arguments for the "ls" tool.
@@ -133,11 +156,36 @@ type LsArgs struct {
 // LsOutput defines the output returned by the "ls" tool.
 type LsOutput struct {
 	// Files: List of matching directory entries, after filtering and ignore rules.
-	Files []any `json:"files,omitempty" jsonschema:"List of matching directory entries, after filtering and ignore rules."`
+	Files []LsOutputFilesItem `json:"files,omitempty" jsonschema:"List of matching directory entries, after filtering and ignore rules."`
 	// TotalCount: Total number of entries after applying ignore and type/pattern filters.
 	TotalCount int `json:"total_count,omitempty" jsonschema:"Total number of entries after applying ignore and type/pattern filters."`
 	// Truncated: True when the result was capped by the limit and more entries exist.
 	Truncated bool `json:"truncated,omitempty" jsonschema:"True when the result was capped by the limit and more entries exist."`
+}
+
+type LsOutputFilesItem struct {
+	// Group: Group name.
+	Group string `json:"group,omitempty" jsonschema:"Group name."`
+	// IsDir: Whether the entry is a directory.
+	IsDir bool `json:"is_dir,omitempty" jsonschema:"Whether the entry is a directory."`
+	// IsSymlink: Whether the entry is a symbolic link.
+	IsSymlink bool `json:"is_symlink,omitempty" jsonschema:"Whether the entry is a symbolic link."`
+	// LinkTarget: Symlink target path (only present when is_symlink is true).
+	LinkTarget string `json:"link_target,omitempty" jsonschema:"Symlink target path (only present when is_symlink is true)."`
+	// Links: Number of hard links.
+	Links int `json:"links,omitempty" jsonschema:"Number of hard links."`
+	// Modified: Last modification time (RFC3339).
+	Modified string `json:"modified,omitempty" jsonschema:"Last modification time (RFC3339)."`
+	// Name: File or directory name.
+	Name string `json:"name,omitempty" jsonschema:"File or directory name."`
+	// NameTruncated: Whether the name was truncated in the formatted field due to excessive length.
+	NameTruncated bool `json:"name_truncated,omitempty" jsonschema:"Whether the name was truncated in the formatted field due to excessive length."`
+	// Owner: Owner username.
+	Owner string `json:"owner,omitempty" jsonschema:"Owner username."`
+	// Permissions: File mode string (e.g. -rw-r--r-- or drwxr-xr-x).
+	Permissions string `json:"permissions,omitempty" jsonschema:"File mode string (e.g. -rw-r--r-- or drwxr-xr-x)."`
+	// Size: Size in bytes.
+	Size int `json:"size,omitempty" jsonschema:"Size in bytes."`
 }
 
 // LspDiagnosticsArgs defines the arguments for the "lsp_diagnostics" tool.
@@ -151,7 +199,10 @@ type LspDiagnosticsArgs struct {
 // LspDiagnosticsOutput defines the output returned by the "lsp_diagnostics" tool.
 type LspDiagnosticsOutput struct {
 	// Diagnostics: List of LSP diagnostics.
-	Diagnostics []any `json:"diagnostics,omitempty" jsonschema:"List of LSP diagnostics."`
+	Diagnostics []LspDiagnosticsOutputDiagnosticsItem `json:"diagnostics,omitempty" jsonschema:"List of LSP diagnostics."`
+}
+
+type LspDiagnosticsOutputDiagnosticsItem struct {
 }
 
 // LspRestartArgs defines the arguments for the "lsp_restart" tool.
@@ -181,7 +232,10 @@ type LspSearchArgs struct {
 // LspSearchOutput defines the output returned by the "lsp_search" tool.
 type LspSearchOutput struct {
 	// Results: List of LSP search results.
-	Results []any `json:"results,omitempty" jsonschema:"List of LSP search results."`
+	Results []LspSearchOutputResultsItem `json:"results,omitempty" jsonschema:"List of LSP search results."`
+}
+
+type LspSearchOutputResultsItem struct {
 }
 
 // McpReadResourcesArgs defines the arguments for the "mcp_read_resources" tool.
@@ -198,6 +252,50 @@ type McpReadResourcesOutput struct {
 	Content string `json:"content,omitempty" jsonschema:"Content of the MCP resource."`
 	// Success: Whether reading the resource succeeded.
 	Success bool `json:"success,omitempty" jsonschema:"Whether reading the resource succeeded."`
+}
+
+// MultiEditArgs defines the arguments for the "multi_edit" tool.
+//
+// Apply multiple, non-contiguous edits to a single file. This is highly useful for making multiple related changes across a file in a single turn.
+type MultiEditArgs struct {
+	// Edits: A list of edits to apply to the file.
+	Edits []MultiEditArgsEditsItem `json:"edits" jsonschema:"A list of edits to apply to the file."`
+	// Path: Path to the file.
+	Path string `json:"path" jsonschema:"Path to the file."`
+}
+
+type MultiEditArgsEditsItem struct {
+	// ReplaceAll: If true, replaces all occurrences of the target block. If false (default), fails if the target block is not unique.
+	ReplaceAll bool `json:"replace_all,omitempty" jsonschema:"If true, replaces all occurrences of the target block. If false (default), fails if the target block is not unique."`
+	// Replacement: The replacement content for the target block.
+	Replacement string `json:"replacement" jsonschema:"The replacement content for the target block."`
+	// Target: The exact block of code to edit.
+	Target string `json:"target" jsonschema:"The exact block of code to edit."`
+}
+
+// MultiEditOutput defines the output returned by the "multi_edit" tool.
+type MultiEditOutput struct {
+	// Additions: The total number of lines added.
+	Additions int `json:"additions,omitempty" jsonschema:"The total number of lines added."`
+	// Deletions: The total number of lines deleted.
+	Deletions int `json:"deletions,omitempty" jsonschema:"The total number of lines deleted."`
+	// Diff: The unified diff showing all successfully applied changes.
+	Diff string `json:"diff,omitempty" jsonschema:"The unified diff showing all successfully applied changes."`
+	// FullDiff: The full untruncated unified diff.
+	FullDiff string `json:"-" jsonschema:"The full untruncated unified diff."`
+	// Path: Path to the file.
+	Path string `json:"path,omitempty" jsonschema:"Path to the file."`
+	// Results: The status of each edit in the edits list.
+	Results []MultiEditOutputResultsItem `json:"results,omitempty" jsonschema:"The status of each edit in the edits list."`
+	// Success: Whether any edits were successfully applied.
+	Success bool `json:"success,omitempty" jsonschema:"Whether any edits were successfully applied."`
+}
+
+type MultiEditOutputResultsItem struct {
+	// Message: Failure reason if this specific edit failed.
+	Message string `json:"message,omitempty" jsonschema:"Failure reason if this specific edit failed."`
+	// Success: Whether this specific edit was applied.
+	Success bool `json:"success" jsonschema:"Whether this specific edit was applied."`
 }
 
 // RemoveArgs defines the arguments for the "remove" tool.
@@ -282,7 +380,10 @@ type WebSearchArgs struct {
 // WebSearchOutput defines the output returned by the "web_search" tool.
 type WebSearchOutput struct {
 	// Results: Search results.
-	Results []any `json:"results,omitempty" jsonschema:"Search results."`
+	Results []WebSearchOutputResultsItem `json:"results,omitempty" jsonschema:"Search results."`
+}
+
+type WebSearchOutputResultsItem struct {
 }
 
 // WriteArgs defines the arguments for the "write" tool.

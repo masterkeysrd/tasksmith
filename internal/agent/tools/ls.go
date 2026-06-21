@@ -56,7 +56,7 @@ func (h *ToolHandlers) Ls(ctx context.Context, in LsArgs) (LsOutput, error) {
 		limit = DefaultLsLimit
 	}
 
-	var files []any
+	var files []FileEntry
 	totalCount := 0
 
 	for _, entry := range entries {
@@ -141,8 +141,25 @@ func (h *ToolHandlers) Ls(ctx context.Context, in LsArgs) (LsOutput, error) {
 		files = append(files, fe)
 	}
 
+	var outFiles []LsOutputFilesItem
+	for _, f := range files {
+		outFiles = append(outFiles, LsOutputFilesItem{
+			Name:          f.Name,
+			Permissions:   f.Permissions,
+			Links:         int(f.Links),
+			Owner:         f.Owner,
+			Group:         f.Group,
+			Size:          int(f.Size),
+			Modified:      f.Modified.Format(time.RFC3339),
+			IsDir:         f.IsDir,
+			IsSymlink:     f.IsSymlink,
+			NameTruncated: f.NameTruncated,
+			LinkTarget:    f.LinkTarget,
+		})
+	}
+
 	return LsOutput{
-		Files:      files,
+		Files:      outFiles,
 		TotalCount: totalCount,
 		Truncated:  totalCount > limit,
 	}, nil
@@ -155,10 +172,23 @@ func (o LsOutput) TextContent() string {
 	var sb strings.Builder
 
 	for _, f := range o.Files {
-		if fe, ok := f.(FileEntry); ok {
-			sb.WriteString(formatLsLine(fe))
-			sb.WriteByte('\n')
+		fe := FileEntry{
+			Name:          f.Name,
+			Permissions:   f.Permissions,
+			Links:         uint64(f.Links),
+			Owner:         f.Owner,
+			Group:         f.Group,
+			Size:          int64(f.Size),
+			IsDir:         f.IsDir,
+			IsSymlink:     f.IsSymlink,
+			NameTruncated: f.NameTruncated,
+			LinkTarget:    f.LinkTarget,
 		}
+		if t, err := time.Parse(time.RFC3339, f.Modified); err == nil {
+			fe.Modified = t
+		}
+		sb.WriteString(formatLsLine(fe))
+		sb.WriteByte('\n')
 	}
 
 	if o.Truncated {

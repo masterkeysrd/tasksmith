@@ -19,13 +19,6 @@ const (
 	MaxGrepMatches = 1000
 )
 
-// GrepMatch represents a single search match structured under tool Output.
-type GrepMatch struct {
-	Path    string `json:"path"`
-	Line    int    `json:"line"`
-	Content string `json:"content"`
-}
-
 // Grep searches for a regex pattern in files using ripgrep if available, falling back
 // to a recursive directory scanner that respects ignore rules.
 func (h *ToolHandlers) Grep(ctx context.Context, in GrepArgs) (GrepOutput, error) {
@@ -76,7 +69,7 @@ func (h *ToolHandlers) Grep(ctx context.Context, in GrepArgs) (GrepOutput, error
 				return ig
 			}
 
-			var matches []any
+			var matches []GrepOutputMatchesItem
 			var totalCount int
 			for _, match := range rawMatches {
 				var absPath string
@@ -95,7 +88,7 @@ func (h *ToolHandlers) Grep(ctx context.Context, in GrepArgs) (GrepOutput, error
 
 				totalCount++
 				if len(matches) < MaxGrepMatches {
-					matches = append(matches, GrepMatch{
+					matches = append(matches, GrepOutputMatchesItem{
 						Path:    match.Path,
 						Line:    match.Line,
 						Content: match.Content,
@@ -130,7 +123,7 @@ func (h *ToolHandlers) Grep(ctx context.Context, in GrepArgs) (GrepOutput, error
 		return ig
 	}
 
-	var matches []any
+	var matches []GrepOutputMatchesItem
 
 	fi, err := os.Stat(searchAbs)
 	if err != nil {
@@ -231,14 +224,14 @@ func (h *ToolHandlers) Grep(ctx context.Context, in GrepArgs) (GrepOutput, error
 }
 
 // searchFile scans a single file line-by-line for matches against the compiled regex.
-func searchFile(ctx context.Context, path, relPath string, re *regexp.Regexp) ([]GrepMatch, error) {
+func searchFile(ctx context.Context, path, relPath string, re *regexp.Regexp) ([]GrepOutputMatchesItem, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, nil
 	}
 	defer f.Close()
 
-	var matches []GrepMatch
+	var matches []GrepOutputMatchesItem
 	scanner := bufio.NewScanner(f)
 
 	const maxCapacity = 1024 * 1024 // 1MB
@@ -256,7 +249,7 @@ func searchFile(ctx context.Context, path, relPath string, re *regexp.Regexp) ([
 		lineNum++
 		text := scanner.Text()
 		if re.MatchString(text) {
-			matches = append(matches, GrepMatch{
+			matches = append(matches, GrepOutputMatchesItem{
 				Path:    relPath,
 				Line:    lineNum,
 				Content: text,
@@ -286,38 +279,10 @@ func (o GrepOutput) TextContent() string {
 			break
 		}
 
-		var matchPath string
-		var matchLine int
-		var matchChar int
-		var matchContent string
-
-		if gm, ok := m.(GrepMatch); ok {
-			matchPath = gm.Path
-			matchLine = gm.Line
-			matchContent = gm.Content
-		} else if rawMap, ok := m.(map[string]any); ok {
-			matchPath, _ = rawMap["path"].(string)
-			if fl, ok := rawMap["line"].(float64); ok {
-				matchLine = int(fl)
-			}
-			matchContent, _ = rawMap["content"].(string)
-			// check for line_number or other fields just in case
-			if matchLine == 0 {
-				if fl, ok := rawMap["line_number"].(float64); ok {
-					matchLine = int(fl)
-				}
-			}
-			if matchContent == "" {
-				matchContent, _ = rawMap["line_text"].(string)
-			}
-			if fc, ok := rawMap["char_number"].(float64); ok {
-				matchChar = int(fc)
-			}
-		} else {
-			fmt.Fprintf(&sb, "%v\n", m)
-			renderedCount++
-			continue
-		}
+		matchPath := m.Path
+		matchLine := m.Line
+		matchContent := m.Content
+		matchChar := 0
 
 		if matchPath != currentFile {
 			if currentFile != "" {

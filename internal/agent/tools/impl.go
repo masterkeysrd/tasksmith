@@ -2,7 +2,9 @@ package tools
 
 import (
 	"context"
+	"fmt"
 	"os/exec"
+	"strings"
 )
 
 // Bash executes a bash command.
@@ -25,14 +27,7 @@ func (h *ToolHandlers) Download(ctx context.Context, in DownloadArgs) (DownloadO
 	return DownloadOutput{Path: path, Success: true}, nil
 }
 
-// Edit edits a file using sed.
-func (h *ToolHandlers) Edit(ctx context.Context, in EditArgs) (EditOutput, error) {
-	cmd := exec.CommandContext(ctx, "sed", "-i", in.Expression, in.Path)
-	if err := cmd.Run(); err != nil {
-		return EditOutput{Path: in.Path, Success: false}, nil
-	}
-	return EditOutput{Path: in.Path, Success: true}, nil
-}
+
 
 // Fetch fetches a URL.
 func (h *ToolHandlers) Fetch(ctx context.Context, in FetchArgs) (FetchOutput, error) {
@@ -46,12 +41,7 @@ func (h *ToolHandlers) Fetch(ctx context.Context, in FetchArgs) (FetchOutput, er
 
 // LspDiagnostics gets LSP diagnostics.
 func (h *ToolHandlers) LspDiagnostics(ctx context.Context, in LspDiagnosticsArgs) (LspDiagnosticsOutput, error) {
-	cmd := exec.CommandContext(ctx, "echo", "lsp_diagnostics", in.Path)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return LspDiagnosticsOutput{}, nil
-	}
-	return LspDiagnosticsOutput{Diagnostics: []any{string(out)}}, nil
+	return LspDiagnosticsOutput{Diagnostics: []LspDiagnosticsOutputDiagnosticsItem{}}, nil
 }
 
 // LspRestart restarts LSP server.
@@ -66,12 +56,7 @@ func (h *ToolHandlers) LspRestart(ctx context.Context, in LspRestartArgs) (LspRe
 
 // LspSearch searches using LSP.
 func (h *ToolHandlers) LspSearch(ctx context.Context, in LspSearchArgs) (LspSearchOutput, error) {
-	cmd := exec.CommandContext(ctx, "echo", "lsp_search", in.Query)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return LspSearchOutput{}, nil
-	}
-	return LspSearchOutput{Results: []any{string(out)}}, nil
+	return LspSearchOutput{Results: []LspSearchOutputResultsItem{}}, nil
 }
 
 // McpReadResources reads resources from MCP.
@@ -105,10 +90,16 @@ func (h *ToolHandlers) WebFetch(ctx context.Context, in WebFetchArgs) (WebFetchO
 
 // WebSearch searches the web.
 func (h *ToolHandlers) WebSearch(ctx context.Context, in WebSearchArgs) (WebSearchOutput, error) {
-	cmd := exec.CommandContext(ctx, "echo", "web_search", in.Query)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return WebSearchOutput{}, nil
+	return WebSearchOutput{Results: []WebSearchOutputResultsItem{}}, nil
+}
+
+const MaxEditDiffLines = 500
+
+func truncateDiff(diffStr string) (string, string) {
+	lines := strings.Split(diffStr, "\n")
+	if len(lines) <= MaxEditDiffLines {
+		return diffStr, ""
 	}
-	return WebSearchOutput{Results: []any{string(out)}}, nil
+	truncated := strings.Join(lines[:MaxEditDiffLines], "\n")
+	return fmt.Sprintf("%s\n\n[SYSTEM NOTE: Diff truncated to save tokens. Showing first %d of %d lines of diff. The full diff was successfully applied to the file.]", truncated, MaxEditDiffLines, len(lines)), diffStr
 }

@@ -26,7 +26,24 @@ type localTool struct {
 	} `yaml:"spec"`
 }
 
+type genConfig struct {
+	Tools map[string]struct {
+		Parameters map[string]any `yaml:"parameters"`
+		Output     map[string]any `yaml:"output"`
+	} `yaml:"tools"`
+}
+
 func main() {
+	// Load config.yaml if exists
+	var config genConfig
+	configPath := "tools/warp-gen/config.yaml"
+	if configData, err := os.ReadFile(configPath); err == nil {
+		if err := yaml.Unmarshal(configData, &config); err != nil {
+			fmt.Printf("Error parsing generator config: %v\n", err)
+			os.Exit(1)
+		}
+	}
+
 	toolsDir := "internal/agent/tools"
 
 	entries, err := os.ReadDir(toolsDir)
@@ -78,6 +95,22 @@ func main() {
 			continue
 		}
 
+		// Merge overrides/additions from config
+		if toolCfg, ok := config.Tools[tool.Metadata.Name]; ok {
+			if len(toolCfg.Parameters) > 0 {
+				if tool.Spec.Parameters == nil {
+					tool.Spec.Parameters = make(map[string]any)
+				}
+				mergeMaps(tool.Spec.Parameters, toolCfg.Parameters)
+			}
+			if len(toolCfg.Output) > 0 {
+				if tool.Spec.OutputSchema == nil {
+					tool.Spec.OutputSchema = make(map[string]any)
+				}
+				mergeMaps(tool.Spec.OutputSchema, toolCfg.Output)
+			}
+		}
+
 		toolNames = append(toolNames, tool.Metadata.Name)
 
 		description := tool.Spec.Description
@@ -88,15 +121,23 @@ func main() {
 		// Generate Arguments Struct
 		structName := toCamelCase(tool.Metadata.Name) + "Args"
 		argsDoc := fmt.Sprintf("%s defines the arguments for the %q tool.\n\n%s", structName, tool.Metadata.Name, description)
-		writeStruct(&buf, structName, tool.Spec.Parameters, argsDoc)
+		generateStructs(&buf, structJob{
+			name:   structName,
+			schema: tool.Spec.Parameters,
+			doc:    argsDoc,
+		})
 
 		// Generate Output Struct
 		outputStructName := toCamelCase(tool.Metadata.Name) + "Output"
 		if len(tool.Spec.OutputSchema) > 0 {
 			outputDoc := fmt.Sprintf("%s defines the output returned by the %q tool.", outputStructName, tool.Metadata.Name)
-			writeStruct(&buf, outputStructName, tool.Spec.OutputSchema, outputDoc)
+			generateStructs(&buf, structJob{
+				name:   outputStructName,
+				schema: tool.Spec.OutputSchema,
+				doc:    outputDoc,
+			})
 		} else {
-			buf.WriteString(fmt.Sprintf("// %s defines the output returned by the %q tool.\ntype %s struct{}\n\n", outputStructName, tool.Metadata.Name, outputStructName))
+			fmt.Fprintf(&buf, "// %s defines the output returned by the %q tool.\ntype %s struct{}\n\n", outputStructName, tool.Metadata.Name, outputStructName)
 		}
 	}
 
@@ -173,7 +214,53 @@ func main() {
 	fmt.Printf("Successfully generated handlers for %d tools in %s\n", len(toolNames), handlersPath)
 }
 
-func writeStruct(buf *bytes.Buffer, name string, schema map[string]any, doc string) {
+type structJob struct {
+	name   string
+	schema map[string]any
+	doc    string
+}
+
+func generateStructs(buf *bytes.Buffer, initialJob structJob) {
+	queue := []structJob{initialJob}
+	for i := 0; i < len(queue); i++ {
+		job := queue[i]
+		writeStruct(buf, job.name, job.schema, job.doc, &queue)
+	}
+}
+
+func resolveType(parentName, propName string, propVal map[string]any, queue *[]structJob) string {
+	propType, _ := propVal["type"].(string)
+	switch propType {
+	case "string":
+		return "string"
+	case "integer":
+		return "int"
+	case "number":
+		return "float64"
+	case "boolean":
+		return "bool"
+	case "object":
+		subStructName := parentName + toCamelCase(propName)
+		desc, _ := propVal["description"].(string)
+		*queue = append(*queue, structJob{
+			name:   subStructName,
+			schema: propVal,
+			doc:    desc,
+		})
+		return subStructName
+	case "array":
+		itemVal, ok := propVal["items"].(map[string]any)
+		if !ok {
+			return "[]any"
+		}
+		itemTypeStr := resolveType(parentName, propName+"Item", itemVal, queue)
+		return "[]" + itemTypeStr
+	default:
+		return "any"
+	}
+}
+
+func writeStruct(buf *bytes.Buffer, name string, schema map[string]any, doc string, queue *[]structJob) {
 	if doc != "" {
 		lines := strings.Split(doc, "\n")
 		for _, line := range lines {
@@ -210,41 +297,15 @@ func writeStruct(buf *bytes.Buffer, name string, schema map[string]any, doc stri
 			continue
 		}
 
-		propType, _ := propVal["type"].(string)
-		goType := "string"
-		switch propType {
-		case "string":
-			goType = "string"
-		case "integer":
-			goType = "int"
-		case "number":
-			goType = "float64"
-		case "boolean":
-			goType = "bool"
-		case "array":
-			itemType := "any"
-			if itemsMap, ok := props[k].(map[string]any)["items"].(map[string]any); ok {
-				if it, ok := itemsMap["type"].(string); ok {
-					switch it {
-					case "string":
-						itemType = "string"
-					case "integer":
-						itemType = "int"
-					case "number":
-						itemType = "float64"
-					case "boolean":
-						itemType = "bool"
-					}
-				}
-			}
-			goType = "[]" + itemType
-		}
+		goType := resolveType(name, k, propVal, queue)
 
 		desc, _ := propVal["description"].(string)
 		fieldName := toCamelCase(k)
 
 		jsonTag := k
-		if !isRequired(k) {
+		if customTag, ok := propVal["json_tag"].(string); ok {
+			jsonTag = customTag
+		} else if !isRequired(k) {
 			jsonTag += ",omitempty"
 		}
 
@@ -267,4 +328,16 @@ func toCamelCase(s string) string {
 		}
 	}
 	return strings.Join(parts, "")
+}
+
+func mergeMaps(dst, src map[string]any) {
+	for k, v := range src {
+		if srcMap, ok := v.(map[string]any); ok {
+			if dstMap, ok := dst[k].(map[string]any); ok {
+				mergeMaps(dstMap, srcMap)
+				continue
+			}
+		}
+		dst[k] = v
+	}
 }

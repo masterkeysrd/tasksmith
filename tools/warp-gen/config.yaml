@@ -1,0 +1,15 @@
+tools:
+  edit:
+    output:
+      properties:
+        full_diff:
+          type: string
+          json_tag: "-"
+          description: "The full untruncated unified diff."
+  multi_edit:
+    output:
+      properties:
+        full_diff:
+          type: string
+          json_tag: "-"
+          description: "The full untruncated unified diff."

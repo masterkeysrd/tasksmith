@@ -49,10 +49,7 @@ func TestLsFormattedOutput(t *testing.T) {
 	if len(out.Files) != 1 {
 		t.Fatalf("expected 1 file, got %d", len(out.Files))
 	}
-	fe, ok := out.Files[0].(FileEntry)
-	if !ok {
-		t.Fatalf("expected FileEntry, got %T", out.Files[0])
-	}
+	fe := out.Files[0]
 	if fe.Name != "hello.txt" {
 		t.Errorf("expected Name=hello.txt, got %q", fe.Name)
 	}
@@ -62,7 +59,7 @@ func TestLsFormattedOutput(t *testing.T) {
 	if fe.IsSymlink {
 		t.Error("expected IsSymlink=false for a regular file")
 	}
-	if fe.Size != int64(len("world")) {
+	if fe.Size != len("world") {
 		t.Errorf("expected Size=%d, got %d", len("world"), fe.Size)
 	}
 }
@@ -82,7 +79,7 @@ func TestLsDirectoryEntry(t *testing.T) {
 	if len(out.Files) != 1 {
 		t.Fatalf("expected 1 entry, got %d", len(out.Files))
 	}
-	fe := out.Files[0].(FileEntry)
+	fe := out.Files[0]
 	if !fe.IsDir {
 		t.Error("expected IsDir=true for a directory")
 	}
@@ -108,7 +105,7 @@ func TestLsSymlink(t *testing.T) {
 	assertContains(t, names, "target.txt")
 
 	for _, f := range out.Files {
-		fe := f.(FileEntry)
+		fe := f
 		if fe.Name == "link.txt" {
 			if !fe.IsSymlink {
 				t.Error("expected IsSymlink=true for symbolic link")
@@ -282,7 +279,7 @@ func TestLsLongFilename(t *testing.T) {
 	if len(out.Files) != 1 {
 		t.Fatalf("expected 1 file, got %d", len(out.Files))
 	}
-	fe := out.Files[0].(FileEntry)
+	fe := out.Files[0]
 	if !fe.NameTruncated {
 		t.Error("expected NameTruncated=true for very long filename")
 	}
@@ -387,10 +384,8 @@ func writeFile(t *testing.T, path, content string) {
 
 func extractNames(out LsOutput) []string {
 	var names []string
-	for _, f := range out.Files {
-		if fe, ok := f.(FileEntry); ok {
-			names = append(names, fe.Name)
-		}
+	for _, fe := range out.Files {
+		names = append(names, fe.Name)
 	}
 	return names
 }

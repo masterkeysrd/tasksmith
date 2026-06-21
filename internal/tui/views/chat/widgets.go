@@ -634,7 +634,7 @@ var GrepToolWidget = kitex.FC("GrepToolWidget", func(props ToolExecutionProps) k
 	var iconNode kitex.Node
 	var borderCol color.Color
 
-	var matches []tools.GrepMatch
+	var matches []tools.GrepOutputMatchesItem
 	var totalCount int
 	var truncated bool
 
@@ -758,7 +758,7 @@ var GrepToolWidget = kitex.FC("GrepToolWidget", func(props ToolExecutionProps) k
 })
 
 // grepEntryRow renders a single grep match line using components.CodeBlock with Compact styling.
-func grepEntryRow(t *theme.Scheme, match tools.GrepMatch) kitex.Node {
+func grepEntryRow(t *theme.Scheme, match tools.GrepOutputMatchesItem) kitex.Node {
 	ext := filepath.Ext(match.Path)
 	lang := strings.TrimPrefix(ext, ".")
 
@@ -931,6 +931,364 @@ var WriteToolWidget = kitex.FC("WriteToolWidget", func(props ToolExecutionProps)
 							HideHeader:      true,
 							ShowLineNumbers: true,
 							StartLine:       1,
+						}),
+					),
+				),
+			)
+		}),
+	)
+})
+
+// EditToolWidget renders the result of an edit tool call inline.
+var EditToolWidget = kitex.FC("EditToolWidget", func(props ToolExecutionProps) kitex.Node {
+	t := theme.UseTheme()
+	showModal, setShowModal := kitex.UseState(false)
+	split, setSplit := kitex.UseState(false)
+	modalRef := kitex.CreateRef[dom.Element]()
+
+	tc := props.ToolCall
+	tm := props.ToolMessage
+
+	var path string
+	if tc.Args != nil {
+		path, _ = tc.Args["path"].(string)
+	}
+	filename := filepath.Base(path)
+
+	var statusLabel string
+	var iconNode kitex.Node
+	var themeColor color.Color
+	var diffContent string
+
+	if t != nil {
+		if tm == nil {
+			statusLabel = fmt.Sprintf("Pending Edit [%s]", filename)
+			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Info)}, kitex.Text(props.CurrentDots))
+			themeColor = t.Color.Surface.Info
+		} else if tm.IsError {
+			statusLabel = fmt.Sprintf("Error Editing [%s]", filename)
+			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Error)}, icon.Error)
+			themeColor = t.Color.Text.Error
+		} else {
+			eOut, ok := parseEditStructuredOutput(tm.StructuredContent)
+			if ok && eOut.Success {
+				statusLabel = fmt.Sprintf("Edited [%s +%d -%d]", filename, eOut.Additions, eOut.Deletions)
+				diffContent = eOut.Diff
+			} else {
+				statusLabel = fmt.Sprintf("Edited [%s]", filename)
+				diffContent = getToolOutput(tm.Content)
+			}
+			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Success)}, icon.Checkmark)
+			themeColor = t.Color.Surface.Success
+		}
+	}
+
+	boxStyle := style.S().
+		Display(style.DisplayFlex).
+		FlexDirection(style.FlexRow).
+		AlignItems(style.AlignCenter).
+		AlignSelf(style.AlignStart).
+		Padding(0, 1).
+		Gap(1).
+		Height(style.Cells(1)).
+		MarginVertical(1)
+
+	if t != nil {
+		boxStyle = boxStyle.
+			Background(t.Color.Surface.BaseHover).
+			Foreground(themeColor)
+	}
+
+	kitex.UseEffect(func() {
+		if showModal() {
+			kitex.PostMacro(func() {
+				if modalRef.Current != nil {
+					if doc := modalRef.Current.OwnerDocument(); doc != nil {
+						doc.Focus(modalRef.Current)
+					}
+				}
+			})
+		}
+	}, []any{showModal()})
+
+	var badgeNode kitex.Node
+	if tm != nil && !tm.IsError && diffContent != "" {
+		badgeNode = components.Button(components.ButtonProps{
+			Variant: components.ButtonText,
+			Color:   components.ButtonBase,
+			Style:   boxStyle,
+			OnClick: func() {
+				setShowModal(true)
+			},
+		},
+			iconNode,
+			kitex.Span(kitex.SpanProps{Style: style.S().Bold(true)}, kitex.Text(statusLabel)),
+		)
+	} else {
+		badgeNode = kitex.Box(kitex.BoxProps{Style: boxStyle},
+			iconNode,
+			kitex.Span(kitex.SpanProps{Style: style.S().Bold(true)}, kitex.Text(statusLabel)),
+		)
+	}
+
+	modalStyle := style.S().
+		Display(style.DisplayFlex).
+		FlexDirection(style.FlexColumn).
+		Width(style.Percent(80)).
+		Height(style.Percent(80)).
+		Padding(1).
+		Overflow(style.OverflowHidden)
+
+	return kitex.Fragment(
+		badgeNode,
+		kitex.If(showModal(), func() kitex.Node {
+			return kitex.Dialog(kitex.DialogProps{
+				ZIndex: 100,
+				Ref:    modalRef,
+				OnKeyDown: func(e event.Event) {
+					ke, ok := e.(*event.KeyEvent)
+					if !ok {
+						return
+					}
+					if ke.Code == key.KeyEscape || ke.Text == "q" {
+						e.PreventDefault()
+						e.StopPropagation()
+						setShowModal(false)
+					}
+				},
+			},
+				components.Paper(components.PaperProps{
+					Color:   components.PaperBase,
+					Variant: components.PaperOutlined,
+					Style:   modalStyle,
+				},
+					kitex.Box(kitex.BoxProps{
+						Style: style.S().
+							Display(style.DisplayFlex).
+							FlexDirection(style.FlexRow).
+							JustifyContent(style.JustifyBetween).
+							AlignItems(style.AlignCenter).
+							PaddingBottom(1).
+							BorderBottom(true, style.SingleBorder()),
+					},
+						kitex.Span(kitex.SpanProps{Style: style.S().Bold(true)}, kitex.Text(fmt.Sprintf("Changes in %s", filename))),
+						kitex.Box(kitex.BoxProps{
+							Style: style.S().
+								Display(style.DisplayFlex).
+								FlexDirection(style.FlexRow).
+								Gap(1),
+						},
+							components.Button(components.ButtonProps{
+								Variant: components.ButtonText,
+								Color:   components.ButtonBase,
+								OnClick: func() {
+									setSplit(!split())
+								},
+							}, func() kitex.Node {
+								if split() {
+									return kitex.Text("Show Unified")
+								}
+								return kitex.Text("Show Split")
+							}()),
+							components.Button(components.ButtonProps{
+								Variant: components.ButtonText,
+								Color:   components.ButtonBase,
+								OnClick: func() {
+									setShowModal(false)
+								},
+							}, kitex.Text("Close [Esc/q]")),
+						),
+					),
+					kitex.Box(kitex.BoxProps{
+						Style: style.S().
+							Flex(1, 1, style.Cells(0)).
+							MinHeight(style.Cells(0)).
+							OverflowY(style.OverflowAuto).
+							MarginTop(1),
+					},
+						components.DiffBlock(components.DiffBlockProps{
+							Diff:  diffContent,
+							Lang:  detectLang(filename),
+							Split: split(),
+						}),
+					),
+				),
+			)
+		}),
+	)
+})
+
+// MultiEditToolWidget renders the result of a multi_edit tool call inline.
+var MultiEditToolWidget = kitex.FC("MultiEditToolWidget", func(props ToolExecutionProps) kitex.Node {
+	t := theme.UseTheme()
+	showModal, setShowModal := kitex.UseState(false)
+	split, setSplit := kitex.UseState(false)
+	modalRef := kitex.CreateRef[dom.Element]()
+
+	tc := props.ToolCall
+	tm := props.ToolMessage
+
+	var path string
+	if tc.Args != nil {
+		path, _ = tc.Args["path"].(string)
+	}
+	filename := filepath.Base(path)
+
+	var statusLabel string
+	var iconNode kitex.Node
+	var themeColor color.Color
+	var diffContent string
+
+	if t != nil {
+		if tm == nil {
+			statusLabel = fmt.Sprintf("Pending Multi-Edit [%s]", filename)
+			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Info)}, kitex.Text(props.CurrentDots))
+			themeColor = t.Color.Surface.Info
+		} else if tm.IsError {
+			statusLabel = fmt.Sprintf("Error Multi-Editing [%s]", filename)
+			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Error)}, icon.Error)
+			themeColor = t.Color.Text.Error
+		} else {
+			meOut, ok := parseMultiEditStructuredOutput(tm.StructuredContent)
+			if ok && meOut.Success {
+				statusLabel = fmt.Sprintf("Multi-Edited [%s +%d -%d]", filename, meOut.Additions, meOut.Deletions)
+				diffContent = meOut.Diff
+			} else {
+				statusLabel = fmt.Sprintf("Multi-Edited (No Changes) [%s]", filename)
+				diffContent = getToolOutput(tm.Content)
+			}
+			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Success)}, icon.Checkmark)
+			themeColor = t.Color.Surface.Success
+		}
+	}
+
+	boxStyle := style.S().
+		Display(style.DisplayFlex).
+		FlexDirection(style.FlexRow).
+		AlignItems(style.AlignCenter).
+		AlignSelf(style.AlignStart).
+		Padding(0, 1).
+		Gap(1).
+		Height(style.Cells(1)).
+		MarginVertical(1)
+
+	if t != nil {
+		boxStyle = boxStyle.
+			Background(t.Color.Surface.BaseHover).
+			Foreground(themeColor)
+	}
+
+	kitex.UseEffect(func() {
+		if showModal() {
+			kitex.PostMacro(func() {
+				if modalRef.Current != nil {
+					if doc := modalRef.Current.OwnerDocument(); doc != nil {
+						doc.Focus(modalRef.Current)
+					}
+				}
+			})
+		}
+	}, []any{showModal()})
+
+	var badgeNode kitex.Node
+	if tm != nil && !tm.IsError && diffContent != "" {
+		badgeNode = components.Button(components.ButtonProps{
+			Variant: components.ButtonText,
+			Color:   components.ButtonBase,
+			Style:   boxStyle,
+			OnClick: func() {
+				setShowModal(true)
+			},
+		},
+			iconNode,
+			kitex.Span(kitex.SpanProps{Style: style.S().Bold(true)}, kitex.Text(statusLabel)),
+		)
+	} else {
+		badgeNode = kitex.Box(kitex.BoxProps{Style: boxStyle},
+			iconNode,
+			kitex.Span(kitex.SpanProps{Style: style.S().Bold(true)}, kitex.Text(statusLabel)),
+		)
+	}
+
+	modalStyle := style.S().
+		Display(style.DisplayFlex).
+		FlexDirection(style.FlexColumn).
+		Width(style.Percent(80)).
+		Height(style.Percent(80)).
+		Padding(1).
+		Overflow(style.OverflowHidden)
+
+	return kitex.Fragment(
+		badgeNode,
+		kitex.If(showModal(), func() kitex.Node {
+			return kitex.Dialog(kitex.DialogProps{
+				ZIndex: 100,
+				Ref:    modalRef,
+				OnKeyDown: func(e event.Event) {
+					ke, ok := e.(*event.KeyEvent)
+					if !ok {
+						return
+					}
+					if ke.Code == key.KeyEscape || ke.Text == "q" {
+						e.PreventDefault()
+						e.StopPropagation()
+						setShowModal(false)
+					}
+				},
+			},
+				components.Paper(components.PaperProps{
+					Color:   components.PaperBase,
+					Variant: components.PaperOutlined,
+					Style:   modalStyle,
+				},
+					kitex.Box(kitex.BoxProps{
+						Style: style.S().
+							Display(style.DisplayFlex).
+							FlexDirection(style.FlexRow).
+							JustifyContent(style.JustifyBetween).
+							AlignItems(style.AlignCenter).
+							PaddingBottom(1).
+							BorderBottom(true, style.SingleBorder()),
+					},
+						kitex.Span(kitex.SpanProps{Style: style.S().Bold(true)}, kitex.Text(fmt.Sprintf("Multi-Edit Changes in %s", filename))),
+						kitex.Box(kitex.BoxProps{
+							Style: style.S().
+								Display(style.DisplayFlex).
+								FlexDirection(style.FlexRow).
+								Gap(1),
+						},
+							components.Button(components.ButtonProps{
+								Variant: components.ButtonText,
+								Color:   components.ButtonBase,
+								OnClick: func() {
+									setSplit(!split())
+								},
+							}, func() kitex.Node {
+								if split() {
+									return kitex.Text("Show Unified")
+								}
+								return kitex.Text("Show Split")
+							}()),
+							components.Button(components.ButtonProps{
+								Variant: components.ButtonText,
+								Color:   components.ButtonBase,
+								OnClick: func() {
+									setShowModal(false)
+								},
+							}, kitex.Text("Close [Esc/q]")),
+						),
+					),
+					kitex.Box(kitex.BoxProps{
+						Style: style.S().
+							Flex(1, 1, style.Cells(0)).
+							MinHeight(style.Cells(0)).
+							OverflowY(style.OverflowAuto).
+							MarginTop(1),
+					},
+						components.DiffBlock(components.DiffBlockProps{
+							Diff:  diffContent,
+							Lang:  detectLang(filename),
+							Split: split(),
 						}),
 					),
 				),

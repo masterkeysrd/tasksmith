@@ -165,6 +165,19 @@ func LoomTools(handlers *ToolHandlers) ([]*tool.Tool, error) {
 		list = append(list, t)
 	}
 
+	if res, ok := resMap["multi_edit"]; ok {
+		t, err := tool.New(
+			"multi_edit",
+			res.Metadata.DisplayName,
+			res.Metadata.Description,
+			handlers.MultiEdit,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create tool multi_edit: %w", err)
+		}
+		list = append(list, t)
+	}
+
 	if res, ok := resMap["remove"]; ok {
 		t, err := tool.New(
 			"remove",

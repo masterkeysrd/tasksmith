@@ -25,10 +25,7 @@ func TestGrepBasic(t *testing.T) {
 		t.Fatalf("expected 1 match, got %d", len(out.Matches))
 	}
 
-	match, ok := out.Matches[0].(GrepMatch)
-	if !ok {
-		t.Fatalf("expected GrepMatch, got %T", out.Matches[0])
-	}
+	match := out.Matches[0]
 
 	if match.Path != "./main.go" {
 		t.Errorf("expected Path='./main.go', got %q", match.Path)
@@ -67,14 +64,12 @@ func TestGrepRecursiveAndIgnores(t *testing.T) {
 
 	// Should match main.go but not .env or ignored/foo.go
 	var foundMain bool
-	for _, m := range out.Matches {
-		if gm, ok := m.(GrepMatch); ok {
-			if gm.Path == "./main.go" {
-				foundMain = true
-			}
-			if gm.Path == "./.env" || gm.Path == "./ignored/foo.go" {
-				t.Errorf("unwanted match in ignored file: %s", gm.Path)
-			}
+	for _, gm := range out.Matches {
+		if gm.Path == "./main.go" {
+			foundMain = true
+		}
+		if gm.Path == "./.env" || gm.Path == "./ignored/foo.go" {
+			t.Errorf("unwanted match in ignored file: %s", gm.Path)
 		}
 	}
 
@@ -90,10 +85,10 @@ func TestGrepTextContent(t *testing.T) {
 	}
 
 	out := GrepOutput{
-		Matches: []any{
-			GrepMatch{Path: "./main.go", Line: 10, Content: "some code"},
-			GrepMatch{Path: "./main.go", Line: 20, Content: "other code"},
-			GrepMatch{Path: "./utils.go", Line: 5, Content: "helper func"},
+		Matches: []GrepOutputMatchesItem{
+			{Path: "./main.go", Line: 10, Content: "some code"},
+			{Path: "./main.go", Line: 20, Content: "other code"},
+			{Path: "./utils.go", Line: 5, Content: "helper func"},
 		},
 		TotalCount: 3,
 		Truncated:  false,
@@ -109,8 +104,8 @@ func TestGrepTextContent(t *testing.T) {
 		longContent[i] = 'a'
 	}
 	outLong := GrepOutput{
-		Matches: []any{
-			GrepMatch{Path: "./long.go", Line: 1, Content: string(longContent)},
+		Matches: []GrepOutputMatchesItem{
+			{Path: "./long.go", Line: 1, Content: string(longContent)},
 		},
 		TotalCount: 1,
 		Truncated:  false,
@@ -121,9 +116,9 @@ func TestGrepTextContent(t *testing.T) {
 	}
 
 	// Test total matches truncation (max 100 rendered)
-	matches := make([]any, 105)
+	matches := make([]GrepOutputMatchesItem, 105)
 	for i := 0; i < 105; i++ {
-		matches[i] = GrepMatch{Path: "./main.go", Line: i + 1, Content: "code"}
+		matches[i] = GrepOutputMatchesItem{Path: "./main.go", Line: i + 1, Content: "code"}
 	}
 	outTruncated := GrepOutput{
 		Matches:    matches,

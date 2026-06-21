@@ -422,6 +422,19 @@ func (m *Manager) AppendMessage(ctx context.Context, sessionID string, msg messa
 		}
 	}
 
+	if tMsg, ok := msgToSave.(*message.Tool); ok && tMsg.StructuredContent != nil {
+		if overrider, ok := tMsg.StructuredContent.(interface{ OverrideForHistory() any }); ok {
+			msgToSave = &message.Tool{
+				Base:              tMsg.Base,
+				ToolCallID:        tMsg.ToolCallID,
+				Name:              tMsg.Name,
+				Content:           tMsg.Content,
+				IsError:           tMsg.IsError,
+				StructuredContent: overrider.OverrideForHistory(),
+			}
+		}
+	}
+
 	// Serialize the message using Loom's serialization structure (as a single-element MessageList)
 	list := message.MessageList{msgToSave}
 	data, err := json.Marshal(list)

@@ -686,6 +686,48 @@ func parseWriteStructuredOutput(structured any) (tools.WriteOutput, bool) {
 	return out, true
 }
 
+func parseEditStructuredOutput(structured any) (tools.EditOutput, bool) {
+	if structured == nil {
+		return tools.EditOutput{}, false
+	}
+	if val, ok := structured.(tools.EditOutput); ok {
+		return val, true
+	}
+	if val, ok := structured.(*tools.EditOutput); ok && val != nil {
+		return *val, true
+	}
+	data, err := json.Marshal(structured)
+	if err != nil {
+		return tools.EditOutput{}, false
+	}
+	var out tools.EditOutput
+	if err := json.Unmarshal(data, &out); err != nil {
+		return tools.EditOutput{}, false
+	}
+	return out, true
+}
+
+func parseMultiEditStructuredOutput(structured any) (tools.MultiEditOutput, bool) {
+	if structured == nil {
+		return tools.MultiEditOutput{}, false
+	}
+	if val, ok := structured.(tools.MultiEditOutput); ok {
+		return val, true
+	}
+	if val, ok := structured.(*tools.MultiEditOutput); ok && val != nil {
+		return *val, true
+	}
+	data, err := json.Marshal(structured)
+	if err != nil {
+		return tools.MultiEditOutput{}, false
+	}
+	var out tools.MultiEditOutput
+	if err := json.Unmarshal(data, &out); err != nil {
+		return tools.MultiEditOutput{}, false
+	}
+	return out, true
+}
+
 func stripLinePrefixes(content string) string {
 	lines := strings.Split(content, "\n")
 	for i, line := range lines {
@@ -743,9 +785,22 @@ func parseLsOutput(structured any) (files []tools.FileEntry, totalCount int, tru
 	// Same-process: StructuredContent is already a typed LsOutput.
 	if out, ok := structured.(tools.LsOutput); ok {
 		for _, f := range out.Files {
-			if fe, ok := f.(tools.FileEntry); ok {
-				files = append(files, fe)
+			fe := tools.FileEntry{
+				Name:          f.Name,
+				Permissions:   f.Permissions,
+				Links:         uint64(f.Links),
+				Owner:         f.Owner,
+				Group:         f.Group,
+				Size:          int64(f.Size),
+				IsDir:         f.IsDir,
+				IsSymlink:     f.IsSymlink,
+				NameTruncated: f.NameTruncated,
+				LinkTarget:    f.LinkTarget,
 			}
+			if t, err := time.Parse(time.RFC3339, f.Modified); err == nil {
+				fe.Modified = t
+			}
+			files = append(files, fe)
 		}
 		return files, out.TotalCount, out.Truncated
 	}
@@ -804,27 +859,14 @@ func parseGlobOutput(structured any) (matches []string, totalCount int, truncate
 }
 
 // parseGrepOutput extracts structured matches, count, and truncation from a grep tool result.
-func parseGrepOutput(structured any) (matches []tools.GrepMatch, totalCount int, truncated bool) {
+func parseGrepOutput(structured any) (matches []tools.GrepOutputMatchesItem, totalCount int, truncated bool) {
 	if structured == nil {
 		return
 	}
 
 	// Same-process: StructuredContent is already a typed GrepOutput.
 	if out, ok := structured.(tools.GrepOutput); ok {
-		for _, m := range out.Matches {
-			if gm, ok := m.(tools.GrepMatch); ok {
-				matches = append(matches, gm)
-			} else if rawMap, ok := m.(map[string]any); ok {
-				var gm tools.GrepMatch
-				gm.Path, _ = rawMap["path"].(string)
-				if fl, ok := rawMap["line"].(float64); ok {
-					gm.Line = int(fl)
-				}
-				gm.Content, _ = rawMap["content"].(string)
-				matches = append(matches, gm)
-			}
-		}
-		return matches, out.TotalCount, out.Truncated
+		return out.Matches, out.TotalCount, out.Truncated
 	}
 
 	// Cross-process / deserialized: round-trip through JSON.
@@ -833,9 +875,9 @@ func parseGrepOutput(structured any) (matches []tools.GrepMatch, totalCount int,
 		return
 	}
 	var raw struct {
-		Matches    []tools.GrepMatch `json:"matches"`
-		TotalCount int               `json:"total_count"`
-		Truncated  bool              `json:"truncated"`
+		Matches    []tools.GrepOutputMatchesItem `json:"matches"`
+		TotalCount int                           `json:"total_count"`
+		Truncated  bool                          `json:"truncated"`
 	}
 	if err := json.Unmarshal(data, &raw); err == nil {
 		matches = raw.Matches
@@ -920,6 +962,12 @@ var ToolExecution = kitex.FC("ToolExecution", func(props ToolExecutionProps) kit
 	}
 	if props.ToolCall != nil && props.ToolCall.Name == "write" {
 		return WriteToolWidget(props)
+	}
+	if props.ToolCall != nil && props.ToolCall.Name == "edit" {
+		return EditToolWidget(props)
+	}
+	if props.ToolCall != nil && props.ToolCall.Name == "multi_edit" {
+		return MultiEditToolWidget(props)
 	}
 
 	t := theme.UseTheme()
