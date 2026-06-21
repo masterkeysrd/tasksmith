@@ -610,3 +610,171 @@ func globEntryRow(t *theme.Scheme, match string) kitex.Node {
 		kitex.Span(kitex.SpanProps{Style: style.S().Foreground(nameColor).Bold(true)}, kitex.Text(filePart)),
 	)
 }
+
+// GrepToolWidget renders the result of a grep tool call inline.
+var GrepToolWidget = kitex.FC("GrepToolWidget", func(props ToolExecutionProps) kitex.Node {
+	t := theme.UseTheme()
+
+	tc := props.ToolCall
+	tm := props.ToolMessage
+
+	var pattern string
+	var path string
+	if tc.Args != nil {
+		pattern, _ = tc.Args["pattern"].(string)
+		path, _ = tc.Args["path"].(string)
+	}
+
+	var scope string
+	if path != "" {
+		scope = fmt.Sprintf(" in %s", path)
+	}
+
+	var statusLabel string
+	var iconNode kitex.Node
+	var borderCol color.Color
+
+	var matches []tools.GrepMatch
+	var totalCount int
+	var truncated bool
+
+	if t != nil {
+		if tm == nil {
+			statusLabel = fmt.Sprintf("Grep: Searching%s for [%s]", scope, pattern)
+			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Info)}, kitex.Text(props.CurrentDots))
+			borderCol = t.Color.Surface.Info
+		} else if tm.IsError {
+			statusLabel = fmt.Sprintf("Grep: Error searching%s for [%s]", scope, pattern)
+			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Error)}, icon.Error)
+			borderCol = t.Color.Text.Error
+		} else {
+			matches, totalCount, truncated = parseGrepOutput(tm.StructuredContent)
+			matchWord := "matches"
+			if totalCount == 1 {
+				matchWord = "match"
+			}
+			statusLabel = fmt.Sprintf("Grep: Found %d %s%s for [%s]", totalCount, matchWord, scope, pattern)
+			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Success)}, icon.Checkmark)
+			borderCol = t.Color.Surface.Success
+		}
+	}
+
+	accordionStyle := style.S().MarginVertical(1)
+	if t != nil {
+		accordionStyle = accordionStyle.Border(borderCol)
+	}
+
+	return components.Accordion(components.AccordionProps{
+		Color:   components.PaperHover,
+		Variant: components.PaperOutlined,
+		Style:   accordionStyle,
+	},
+		components.AccordionSummary(components.AccordionSummaryProps{
+			HideExpandIcon: tm == nil || tm.IsError || len(matches) == 0,
+			EndContent: kitex.If(tm != nil && !tm.IsError && len(matches) > 0, func() kitex.Node {
+				var fg color.Color
+				if t != nil {
+					fg = t.Color.Text.Secondary
+				}
+				return kitex.Span(kitex.SpanProps{Style: style.S().Foreground(fg)},
+					kitex.Text("Click to expand/collapse"),
+				)
+			}),
+		},
+			kitex.Box(kitex.BoxProps{
+				Style: style.S().
+					Display(style.DisplayFlex).
+					FlexDirection(style.FlexRow).
+					AlignItems(style.AlignCenter).
+					Gap(1),
+			},
+				iconNode,
+				kitex.Span(kitex.SpanProps{Style: style.S().Bold(true)}, kitex.Text(statusLabel)),
+			),
+		),
+		components.AccordionDetails(components.AccordionDetailsProps{},
+			kitex.If(tm != nil && !tm.IsError && len(matches) > 0, func() kitex.Node {
+				rows := make([]kitex.Node, 0, len(matches))
+				var currentFile string
+				firstFile := true
+				for _, match := range matches {
+					if match.Path != currentFile {
+						currentFile = match.Path
+						var fg color.Color
+						if t != nil {
+							fg = t.Color.Surface.Info
+						}
+						var headerStyle style.Style
+						if firstFile {
+							headerStyle = style.S().
+								Foreground(fg).
+								Bold(true).
+								PaddingHorizontal(0)
+							firstFile = false
+						} else {
+							headerStyle = style.S().
+								Foreground(fg).
+								Bold(true).
+								PaddingTop(1).
+								PaddingHorizontal(0)
+						}
+						rows = append(rows, kitex.Box(kitex.BoxProps{
+							Style: headerStyle,
+						}, kitex.Text(filepath.ToSlash(match.Path)+":")))
+					}
+
+					rows = append(rows, grepEntryRow(t, match))
+				}
+
+				var textCol color.Color
+				if t != nil {
+					textCol = t.Color.Text.Tertiary
+				}
+				return kitex.Box(kitex.BoxProps{
+					Style: style.S().Display(style.DisplayFlex).FlexDirection(style.FlexColumn),
+				},
+					kitex.Box(kitex.BoxProps{
+						Style: style.S().Display(style.DisplayFlex).FlexDirection(style.FlexColumn).Gap(0),
+					}, rows...),
+					kitex.If(truncated, func() kitex.Node {
+						return kitex.Box(kitex.BoxProps{
+							Style: style.S().Foreground(textCol).Italic(true).MarginTop(1).PaddingHorizontal(1),
+						}, kitex.Text(fmt.Sprintf("[Showing %d of %d matches]", len(matches), totalCount)))
+					}),
+				)
+			}),
+
+			kitex.If(tm != nil && !tm.IsError && len(matches) == 0, func() kitex.Node {
+				var textCol color.Color
+				if t != nil {
+					textCol = t.Color.Text.Tertiary
+				}
+				return kitex.Box(kitex.BoxProps{
+					Style: style.S().Foreground(textCol).Italic(true).PaddingHorizontal(1),
+				}, kitex.Text("(no matches found)"))
+			}),
+		),
+	)
+})
+
+// grepEntryRow renders a single grep match line using components.CodeBlock with Compact styling.
+func grepEntryRow(t *theme.Scheme, match tools.GrepMatch) kitex.Node {
+	ext := filepath.Ext(match.Path)
+	lang := strings.TrimPrefix(ext, ".")
+
+	return kitex.Box(kitex.BoxProps{
+		Style: style.S().
+			PaddingVertical(0).
+			PaddingHorizontal(1),
+	},
+		components.CodeBlock(components.CodeBlockProps{
+			Code:            match.Content,
+			Lang:            lang,
+			HideHeader:      true,
+			ShowLineNumbers: true,
+			StartLine:       match.Line,
+			Compact:         true,
+			Style:           style.S().Margin(0).Padding(0),
+		}),
+	)
+}

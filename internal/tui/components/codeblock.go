@@ -20,6 +20,7 @@ type CodeBlockProps struct {
 	HideHeader      bool
 	ShowLineNumbers bool
 	StartLine       int
+	Compact         bool
 }
 
 // CodeBlock renders a syntax-highlighted code block using chroma, fully styled
@@ -50,8 +51,12 @@ var CodeBlock = kitex.FC("CodeBlock", func(props CodeBlockProps) kitex.Node {
 			BorderBottom(true, style.SingleBorder(), t.Color.Border.Primary)
 	}
 
+	padCode := 1
+	if props.Compact {
+		padCode = 0
+	}
 	codeStyle := style.S().
-		Padding(1).
+		Padding(padCode).
 		WhiteSpace(style.WhiteSpacePre).
 		OverflowX(style.OverflowAuto)
 	if t != nil {
@@ -74,7 +79,7 @@ var CodeBlock = kitex.FC("CodeBlock", func(props CodeBlockProps) kitex.Node {
 				Background(t.Color.Surface.BaseHover).
 				Border(true, style.SingleBorder(), t.Color.Border.Primary)
 		}
-	} else if t != nil {
+	} else if t != nil && !props.Compact {
 		wrapperStyle = wrapperStyle.Background(t.Color.Surface.BaseHover)
 	}
 
@@ -97,7 +102,7 @@ var CodeBlock = kitex.FC("CodeBlock", func(props CodeBlockProps) kitex.Node {
 		}
 	} else {
 		for tok := iterator(); tok != chroma.EOF; tok = iterator() {
-			tokenStyle := resolveTokenStyle(t, tok.Type)
+			tokenStyle := ResolveTokenStyle(t, tok.Type)
 			contentNodes = append(contentNodes, kitex.Span(
 				kitex.SpanProps{Style: tokenStyle},
 				kitex.Text(tok.Value),
@@ -111,8 +116,13 @@ var CodeBlock = kitex.FC("CodeBlock", func(props CodeBlockProps) kitex.Node {
 		FlexDirection(style.FlexRow).
 		Width(style.Percent(100))
 
+	padY := 1
+	if props.Compact {
+		padY = 0
+	}
+
 	gutterStyle := style.S().
-		PaddingVertical(1).
+		PaddingVertical(padY).
 		PaddingLeft(1).
 		PaddingRight(1).
 		TextAlign(style.TextAlignRight).
@@ -122,13 +132,13 @@ var CodeBlock = kitex.FC("CodeBlock", func(props CodeBlockProps) kitex.Node {
 	}
 
 	separatorStyle := style.S().
-		PaddingVertical(1)
+		PaddingVertical(padY)
 	if t != nil {
 		separatorStyle = separatorStyle.Foreground(t.Color.Border.Primary)
 	}
 
 	codeBoxStyle := style.S().
-		PaddingVertical(1).
+		PaddingVertical(padY).
 		PaddingLeft(1).
 		PaddingRight(1).
 		Flex(1, 1, style.Cells(0)).
@@ -153,8 +163,12 @@ var CodeBlock = kitex.FC("CodeBlock", func(props CodeBlockProps) kitex.Node {
 		var gutterBuilder strings.Builder
 		var sepBuilder strings.Builder
 		for i := 0; i < lineCount; i++ {
-			fmt.Fprintf(&gutterBuilder, "%d\n", start+i)
-			sepBuilder.WriteString("│\n")
+			if i > 0 {
+				gutterBuilder.WriteByte('\n')
+				sepBuilder.WriteByte('\n')
+			}
+			fmt.Fprintf(&gutterBuilder, "%d", start+i)
+			sepBuilder.WriteString("│")
 		}
 		gutterText = gutterBuilder.String()
 		separatorText = sepBuilder.String()
@@ -199,8 +213,8 @@ func getThemeColor(t *theme.Scheme, key string, fallback color.Color) color.Colo
 	return fallback
 }
 
-// resolveTokenStyle maps a chroma.TokenType to an editor color dynamically from the active theme.
-func resolveTokenStyle(t *theme.Scheme, tokType chroma.TokenType) style.Style {
+// ResolveTokenStyle maps a chroma.TokenType to an editor color dynamically from the active theme.
+func ResolveTokenStyle(t *theme.Scheme, tokType chroma.TokenType) style.Style {
 	// Fallbacks match the One Dark color palette
 	themeText := color.Color(color.RGBA{R: 171, G: 178, B: 191, A: 255})
 	themeMuted := color.Color(color.RGBA{R: 92, G: 99, B: 112, A: 255})

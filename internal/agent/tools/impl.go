@@ -45,21 +45,6 @@ func (h *ToolHandlers) Fetch(ctx context.Context, in FetchArgs) (FetchOutput, er
 	return FetchOutput{Status: 200, Content: string(out)}, nil
 }
 
-// Grep searches for a pattern in files.
-func (h *ToolHandlers) Grep(ctx context.Context, in GrepArgs) (GrepOutput, error) {
-	cmd := exec.CommandContext(ctx, "grep", "-rn", in.Pattern, in.Path)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return GrepOutput{}, nil
-	}
-	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
-	matches := make([]any, len(lines))
-	for i, l := range lines {
-		matches[i] = l
-	}
-	return GrepOutput{Matches: matches}, nil
-}
-
 // LspDiagnostics gets LSP diagnostics.
 func (h *ToolHandlers) LspDiagnostics(ctx context.Context, in LspDiagnosticsArgs) (LspDiagnosticsOutput, error) {
 	cmd := exec.CommandContext(ctx, "echo", "lsp_diagnostics", in.Path)

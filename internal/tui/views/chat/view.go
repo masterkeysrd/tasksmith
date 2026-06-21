@@ -782,6 +782,48 @@ func parseGlobOutput(structured any) (matches []string, totalCount int, truncate
 	return
 }
 
+// parseGrepOutput extracts structured matches, count, and truncation from a grep tool result.
+func parseGrepOutput(structured any) (matches []tools.GrepMatch, totalCount int, truncated bool) {
+	if structured == nil {
+		return
+	}
+
+	// Same-process: StructuredContent is already a typed GrepOutput.
+	if out, ok := structured.(tools.GrepOutput); ok {
+		for _, m := range out.Matches {
+			if gm, ok := m.(tools.GrepMatch); ok {
+				matches = append(matches, gm)
+			} else if rawMap, ok := m.(map[string]any); ok {
+				var gm tools.GrepMatch
+				gm.Path, _ = rawMap["path"].(string)
+				if fl, ok := rawMap["line"].(float64); ok {
+					gm.Line = int(fl)
+				}
+				gm.Content, _ = rawMap["content"].(string)
+				matches = append(matches, gm)
+			}
+		}
+		return matches, out.TotalCount, out.Truncated
+	}
+
+	// Cross-process / deserialized: round-trip through JSON.
+	data, err := json.Marshal(structured)
+	if err != nil {
+		return
+	}
+	var raw struct {
+		Matches    []tools.GrepMatch `json:"matches"`
+		TotalCount int               `json:"total_count"`
+		Truncated  bool              `json:"truncated"`
+	}
+	if err := json.Unmarshal(data, &raw); err == nil {
+		matches = raw.Matches
+		totalCount = raw.TotalCount
+		truncated = raw.Truncated
+	}
+	return
+}
+
 // lsEntryRow renders a single FileEntry as a table row (kitex.TR).
 // Each metadata field occupies its own TD so the table layout engine
 // distributes column widths automatically — no manual Sprintf padding needed.
@@ -851,6 +893,9 @@ var ToolExecution = kitex.FC("ToolExecution", func(props ToolExecutionProps) kit
 	}
 	if props.ToolCall != nil && props.ToolCall.Name == "glob" {
 		return GlobToolWidget(props)
+	}
+	if props.ToolCall != nil && props.ToolCall.Name == "grep" {
+		return GrepToolWidget(props)
 	}
 
 	t := theme.UseTheme()

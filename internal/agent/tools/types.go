@@ -104,6 +104,10 @@ type GrepArgs struct {
 type GrepOutput struct {
 	// Matches: List of search matches.
 	Matches []any `json:"matches,omitempty" jsonschema:"List of search matches."`
+	// TotalCount: Total number of matches found.
+	TotalCount int `json:"total_count,omitempty" jsonschema:"Total number of matches found."`
+	// Truncated: True when the result was capped by the limit.
+	Truncated bool `json:"truncated,omitempty" jsonschema:"True when the result was capped by the limit."`
 }
 
 // LsArgs defines the arguments for the "ls" tool.
