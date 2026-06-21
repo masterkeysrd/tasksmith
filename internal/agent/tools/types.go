@@ -209,10 +209,16 @@ type ViewArgs struct {
 
 // ViewOutput defines the output returned by the "view" tool.
 type ViewOutput struct {
+	// CachedPath: Cached path in workspace session storage.
+	CachedPath string `json:"cached_path,omitempty" jsonschema:"Cached path in workspace session storage."`
 	// Content: Content of the file.
 	Content string `json:"content,omitempty" jsonschema:"Content of the file."`
 	// EndLine: The end line of the returned content.
 	EndLine int `json:"end_line,omitempty" jsonschema:"The end line of the returned content."`
+	// IsBinary: Whether the file is binary.
+	IsBinary bool `json:"is_binary,omitempty" jsonschema:"Whether the file is binary."`
+	// MimeType: Detected MIME type of the file.
+	MimeType string `json:"mime_type,omitempty" jsonschema:"Detected MIME type of the file."`
 	// Path: Path to the file.
 	Path string `json:"path,omitempty" jsonschema:"Path to the file."`
 	// StartLine: The start line of the returned content.

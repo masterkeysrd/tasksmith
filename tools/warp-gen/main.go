@@ -127,7 +127,7 @@ func main() {
 	hBuf.WriteString(")\n\n")
 
 	hBuf.WriteString("// LoomTools returns all builtin tools as Loom tools.\n")
-	hBuf.WriteString("func LoomTools() ([]*tool.Tool, error) {\n")
+	hBuf.WriteString("func LoomTools(handlers *ToolHandlers) ([]*tool.Tool, error) {\n")
 	hBuf.WriteString("\tresources, err := Resources()\n")
 	hBuf.WriteString("\tif err != nil {\n")
 	hBuf.WriteString("\t\treturn nil, fmt.Errorf(\"failed to load tool resources: %w\", err)\n")
@@ -145,7 +145,7 @@ func main() {
 		hBuf.WriteString(fmt.Sprintf("\t\t\t%q,\n", name))
 		hBuf.WriteString(fmt.Sprintf("\t\t\tres.Metadata.DisplayName,\n"))
 		hBuf.WriteString(fmt.Sprintf("\t\t\tres.Metadata.Description,\n"))
-		hBuf.WriteString(fmt.Sprintf("\t\t\t%sHandler,\n", camelName))
+		hBuf.WriteString(fmt.Sprintf("\t\t\thandlers.%s,\n", camelName))
 		hBuf.WriteString(fmt.Sprintf("\t\t)\n"))
 		hBuf.WriteString(fmt.Sprintf("\t\tif err != nil {\n"))
 		hBuf.WriteString(fmt.Sprintf("\t\t\treturn nil, fmt.Errorf(\"failed to create tool %s: %%w\", err)\n", name))

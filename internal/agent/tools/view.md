@@ -40,6 +40,15 @@ spec:
       truncated:
         type: boolean
         description: Whether the file content was truncated due to size limits.
+      cached_path:
+        type: string
+        description: Cached path in workspace session storage.
+      mime_type:
+        type: string
+        description: Detected MIME type of the file.
+      is_binary:
+        type: boolean
+        description: Whether the file is binary.
 ---
 Reads the contents of a file.
 

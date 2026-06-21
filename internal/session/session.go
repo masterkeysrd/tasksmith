@@ -13,6 +13,7 @@ import (
 	loomollama "github.com/masterkeysrd/loom/llm/ollama"
 	"github.com/masterkeysrd/loom/message"
 	agentgraph "github.com/masterkeysrd/tasksmith/internal/agent/graph"
+	"github.com/masterkeysrd/tasksmith/internal/agent/tools"
 	"github.com/masterkeysrd/tasksmith/internal/workspace"
 )
 
@@ -231,7 +232,8 @@ func (m *Manager) SendMessage(ctx context.Context, sessionID string, text string
 		}
 
 		// Compile graph
-		ag, err := agentgraph.New(runCtx, agentgraph.NewLoomModel(model), m.ws)
+		storage := NewLocalFileStorage(m.ws.CWD(), sessionID)
+		ag, err := agentgraph.New(runCtx, agentgraph.NewLoomModel(model), m.ws, storage)
 		if err != nil {
 			m.setSessionError(sessionID, fmt.Errorf("failed to construct agent graph: %w", err))
 			return
@@ -386,8 +388,42 @@ func (m *Manager) AppendMessage(ctx context.Context, sessionID string, msg messa
 		msg.SetID(msgID)
 	}
 
+	var msgToSave message.Message = msg
+	if tMsg, ok := msg.(*message.Tool); ok && tMsg.Name == "view" {
+		var clonedContent message.Content
+		for _, b := range tMsg.Content {
+			switch block := b.(type) {
+			case *message.ImageBlock:
+				clonedContent = append(clonedContent, &message.ImageBlock{
+					MIMEType: block.MIMEType,
+					URL:      block.URL,
+					Extras:   block.Extras,
+					// Data set to nil to avoid saving raw bytes in SQLite
+				})
+			case *message.DocumentBlock:
+				clonedContent = append(clonedContent, &message.DocumentBlock{
+					MIMEType: block.MIMEType,
+					URL:      block.URL,
+					Extras:   block.Extras,
+					// Data set to nil to avoid saving raw bytes in SQLite
+				})
+			default:
+				clonedContent = append(clonedContent, b)
+			}
+		}
+
+		msgToSave = &message.Tool{
+			Base:              tMsg.Base,
+			ToolCallID:        tMsg.ToolCallID,
+			Name:              tMsg.Name,
+			Content:           clonedContent,
+			IsError:           tMsg.IsError,
+			StructuredContent: tMsg.StructuredContent,
+		}
+	}
+
 	// Serialize the message using Loom's serialization structure (as a single-element MessageList)
-	list := message.MessageList{msg}
+	list := message.MessageList{msgToSave}
 	data, err := json.Marshal(list)
 	if err != nil {
 		return "", fmt.Errorf("failed to marshal message: %w", err)
@@ -435,6 +471,11 @@ func (m *Manager) GetMessages(ctx context.Context, sessionID string) (message.Me
 	var list message.MessageList
 	if err := json.Unmarshal(buf, &list); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal message list: %w", err)
+	}
+
+	// Re-hydrate raw binary block data from cached file for tool messages
+	for i, m := range list {
+		list[i] = tools.RehydrateMessage(m)
 	}
 
 	for i, md := range mds {

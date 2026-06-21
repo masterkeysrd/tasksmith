@@ -1,8 +1,10 @@
 package tools
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -20,6 +22,7 @@ func TestViewHandler(t *testing.T) {
 	defer os.RemoveAll(tmpDir)
 
 	ctx := context.Background()
+	handlers := NewHandlers(nil)
 
 	t.Run("read small file to EOF", func(t *testing.T) {
 		filePath := filepath.Join(tmpDir, "small.txt")
@@ -31,7 +34,7 @@ func TestViewHandler(t *testing.T) {
 			t.Fatalf("failed to write test file: %v", err)
 		}
 
-		out, err := ViewHandler(ctx, ViewArgs{Path: filePath})
+		out, err := handlers.View(ctx, ViewArgs{Path: filePath})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -65,7 +68,7 @@ func TestViewHandler(t *testing.T) {
 			t.Fatalf("failed to write test file: %v", err)
 		}
 
-		out, err := ViewHandler(ctx, ViewArgs{Path: filePath})
+		out, err := handlers.View(ctx, ViewArgs{Path: filePath})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -96,7 +99,7 @@ func TestViewHandler(t *testing.T) {
 			t.Fatalf("failed to write test file: %v", err)
 		}
 
-		out, err := ViewHandler(ctx, ViewArgs{Path: filePath})
+		out, err := handlers.View(ctx, ViewArgs{Path: filePath})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -136,7 +139,7 @@ func TestViewHandler(t *testing.T) {
 	})
 
 	t.Run("missing file handles gracefully", func(t *testing.T) {
-		_, err := ViewHandler(ctx, ViewArgs{Path: "does-not-exist.txt"})
+		_, err := handlers.View(ctx, ViewArgs{Path: "does-not-exist.txt"})
 		if err == nil {
 			t.Fatalf("expected handler error for missing file, got nil")
 		}
@@ -144,4 +147,124 @@ func TestViewHandler(t *testing.T) {
 			t.Errorf("expected error string to contain 'no such file or directory', got: %q", err.Error())
 		}
 	})
+}
+
+type mockStorage struct {
+	savedPath string
+	savedData []byte
+}
+
+func (m *mockStorage) Save(ctx context.Context, relativePath string, r io.Reader) (string, error) {
+	data, err := io.ReadAll(r)
+	if err != nil {
+		return "", err
+	}
+	m.savedData = data
+	m.savedPath = "/mock/dest/" + relativePath
+	return m.savedPath, nil
+}
+
+func (m *mockStorage) Get(ctx context.Context, relativePath string) (io.ReadCloser, error) {
+	return io.NopCloser(bytes.NewReader(m.savedData)), nil
+}
+
+func TestViewBinary(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "tasksmith-view-binary-test-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	ctx := context.WithValue(context.Background(), "tool_call_id", "call-test-1")
+	storage := &mockStorage{}
+	handlers := NewHandlers(storage)
+
+	filePath := filepath.Join(tmpDir, "image.png")
+	dummyBytes := []byte("fake-png-bytes")
+	if err := os.WriteFile(filePath, dummyBytes, 0644); err != nil {
+		t.Fatalf("failed to write test file: %v", err)
+	}
+
+	out, err := handlers.View(ctx, ViewArgs{Path: filePath})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if !out.IsBinary {
+		t.Errorf("expected IsBinary to be true")
+	}
+	if out.MimeType != "image/png" {
+		t.Errorf("expected MimeType to be image/png, got %q", out.MimeType)
+	}
+	expectedSavedPath := "/mock/dest/call-test-1_image.png"
+	if out.CachedPath != expectedSavedPath {
+		t.Errorf("expected CachedPath to be %q, got %q", expectedSavedPath, out.CachedPath)
+	}
+	if !bytes.Equal(storage.savedData, dummyBytes) {
+		t.Errorf("expected saved data to match dummy bytes")
+	}
+
+	// Since we mock and the cached path "/mock/dest/call-test-1_image.png" doesn't exist on disk,
+	// ToolContent() will try to read from out.Path (fallback) and return ImageBlock successfully.
+	toolContent := out.ToolContent()
+	if len(toolContent) != 1 {
+		t.Fatalf("expected 1 block, got %d", len(toolContent))
+	}
+	imageBlock, ok := toolContent[0].(*message.ImageBlock)
+	if !ok {
+		t.Fatalf("expected ImageBlock, got %T", toolContent[0])
+	}
+	if imageBlock.Data != nil {
+		t.Errorf("expected image data to be nil, got %q", string(imageBlock.Data))
+	}
+	if imageBlock.MIMEType != "image/png" {
+		t.Errorf("expected image MIMEType to be image/png, got %q", imageBlock.MIMEType)
+	}
+}
+
+func TestViewPathCleaningAndSpacing(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "tasksmith-view-spacing-test-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	ctx := context.Background()
+	handlers := NewHandlers(nil)
+
+	// 1. Create a file on disk with spaces and a narrow non-breaking space U+202F
+	// E.g. "Screenshot 2026-06-20 at 10.13.29[NNBSP]PM.png"
+	fileNameOnDisk := "Screenshot 2026-06-20 at 10.13.29\u202fPM.png"
+	filePathOnDisk := filepath.Join(tmpDir, fileNameOnDisk)
+	dummyBytes := []byte("fake-image-data")
+	if err := os.WriteFile(filePathOnDisk, dummyBytes, 0644); err != nil {
+		t.Fatalf("failed to write test file: %v", err)
+	}
+
+	// Case A: Path has backslash-escaped spaces (using standard spaces)
+	// E.g. "Screenshot\ 2026-06-20\ at\ 10.13.29\ PM.png"
+	escapedPathInput := filepath.Join(tmpDir, "Screenshot\\ 2026-06-20\\ at\\ 10.13.29\\ PM.png")
+	out, err := handlers.View(ctx, ViewArgs{Path: escapedPathInput})
+	if err != nil {
+		t.Fatalf("Case A failed: unexpected error viewing file: %v", err)
+	}
+	if !out.IsBinary {
+		t.Errorf("Case A: expected IsBinary to be true")
+	}
+	if filepath.Base(out.Path) != fileNameOnDisk {
+		t.Errorf("Case A: expected resolved path to be %q, got %q", fileNameOnDisk, filepath.Base(out.Path))
+	}
+
+	// Case B: Path is quoted with surrounding double quotes (using standard spaces)
+	quotedPathInput := `"` + filepath.Join(tmpDir, "Screenshot 2026-06-20 at 10.13.29 PM.png") + `"`
+	out, err = handlers.View(ctx, ViewArgs{Path: quotedPathInput})
+	if err != nil {
+		t.Fatalf("Case B failed: unexpected error viewing file: %v", err)
+	}
+	if !out.IsBinary {
+		t.Errorf("Case B: expected IsBinary to be true")
+	}
+	if filepath.Base(out.Path) != fileNameOnDisk {
+		t.Errorf("Case B: expected resolved path to be %q, got %q", fileNameOnDisk, filepath.Base(out.Path))
+	}
 }

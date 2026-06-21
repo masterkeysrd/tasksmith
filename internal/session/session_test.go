@@ -1,7 +1,9 @@
 package session_test
 
 import (
+	"bytes"
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/masterkeysrd/loom/message"
@@ -135,5 +137,112 @@ func TestSessionManager(t *testing.T) {
 	}
 	if len(msgs) != 0 {
 		t.Errorf("expected 0 messages, got %d", len(msgs))
+	}
+}
+
+func TestSessionBinaryRehydration(t *testing.T) {
+	tmpCwd := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", tmpCwd)
+	t.Setenv("TASKSMITH_APPNAME", "tasksmith-test-binary")
+
+	db, err := coredb.Open(tmpCwd, "tasksmith.db")
+	if err != nil {
+		t.Fatalf("failed to open database: %v", err)
+	}
+	defer db.Close()
+
+	checkpointsDb, err := coredb.Open(tmpCwd, "checkpoints.db")
+	if err != nil {
+		t.Fatalf("failed to open checkpoints database: %v", err)
+	}
+	defer checkpointsDb.Close()
+
+	store, err := session.NewSQLiteStore(db, checkpointsDb)
+	if err != nil {
+		t.Fatalf("failed to initialize sqlite store: %v", err)
+	}
+
+	manager := session.NewManager(store, nil)
+	ctx := context.Background()
+
+	s, err := manager.CreateSession(ctx, "binary-test-session")
+	if err != nil {
+		t.Fatalf("failed to create session: %v", err)
+	}
+
+	// 1. Create a dummy binary file in the session storage directory
+	storage := session.NewLocalFileStorage(tmpCwd, s.ID)
+	dummyBytes := []byte("image-data-payload-12345")
+
+	// Save the file in the storage directory
+	toolCallID := "call-bin-1"
+	storagePath := "call-bin-1_logo.png"
+
+	cachedPath, err := storage.Save(ctx, storagePath, bytes.NewReader(dummyBytes))
+	if err != nil {
+		t.Fatalf("failed to save cached binary file: %v", err)
+	}
+
+	// 2. Create the tool message with an ImageBlock containing raw data
+	toolMsg := &message.Tool{
+		ToolCallID: toolCallID,
+		Name:       "view",
+		Content: message.Content{
+			&message.ImageBlock{
+				MIMEType: "image/png",
+				Data:     dummyBytes, // Pass raw bytes to in-memory block
+			},
+		},
+		StructuredContent: map[string]any{
+			"path":        "logo.png",
+			"cached_path": cachedPath,
+			"mime_type":   "image/png",
+			"is_binary":   true,
+		},
+	}
+
+	// 3. Append message (Save to SQLite DB)
+	msgID, err := manager.AppendMessage(ctx, s.ID, toolMsg)
+	if err != nil {
+		t.Fatalf("failed to append tool message: %v", err)
+	}
+
+	// 4. Query the raw database content directly to verify the raw bytes are NOT stored
+	var rawContent string
+	err = db.Get(&rawContent, "SELECT content FROM messages WHERE id = ?", msgID)
+	if err != nil {
+		t.Fatalf("failed to query raw DB message record: %v", err)
+	}
+
+	if strings.Contains(rawContent, "image-data-payload-12345") || strings.Contains(rawContent, "aW1hZ2UtZGF0YS1wYXlsb2FkLTEyMzQ1") {
+		t.Errorf("expected SQLite message content to not contain raw bytes/base64 payload, but found it: %s", rawContent)
+	}
+
+	// 5. Retrieve messages and verify re-hydration of raw bytes from disk cache
+	msgs, err := manager.GetMessages(ctx, s.ID)
+	if err != nil {
+		t.Fatalf("failed to get messages: %v", err)
+	}
+
+	if len(msgs) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(msgs))
+	}
+
+	toolMsgResult, ok := msgs[0].(*message.Tool)
+	if !ok {
+		t.Fatalf("expected Tool message, got %T", msgs[0])
+	}
+
+	if len(toolMsgResult.Content) != 1 {
+		t.Fatalf("expected 1 block in Content, got %d", len(toolMsgResult.Content))
+	}
+
+	imageBlock, ok := toolMsgResult.Content[0].(*message.ImageBlock)
+	if !ok {
+		t.Fatalf("expected ImageBlock, got %T", toolMsgResult.Content[0])
+	}
+
+	if !bytes.Equal(imageBlock.Data, dummyBytes) {
+		t.Errorf("expected ImageBlock Data to be re-hydrated to %q, got %q", string(dummyBytes), string(imageBlock.Data))
 	}
 }

@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"mime"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -16,11 +18,150 @@ const (
 	MaxLineChars  = 500
 )
 
-// ViewHandler views the contents of a file.
-func ViewHandler(ctx context.Context, in ViewArgs) (ViewOutput, error) {
-	file, err := os.Open(in.Path)
+func detectMIMEType(path string) string {
+	ext := filepath.Ext(path)
+	if ext != "" {
+		mimeType := mime.TypeByExtension(ext)
+		if mimeType != "" {
+			if parts := strings.Split(mimeType, ";"); len(parts) > 0 {
+				return strings.TrimSpace(parts[0])
+			}
+		}
+	}
+
+	file, err := os.Open(path)
 	if err != nil {
-		return ViewOutput{}, fmt.Errorf("failed to open file %s: %w", in.Path, err)
+		return "application/octet-stream"
+	}
+	defer file.Close()
+
+	buf := make([]byte, 512)
+	n, _ := file.Read(buf)
+	if n > 0 {
+		mimeType := http.DetectContentType(buf[:n])
+		if parts := strings.Split(mimeType, ";"); len(parts) > 0 {
+			return strings.TrimSpace(parts[0])
+		}
+	}
+
+	return "application/octet-stream"
+}
+
+func isBinaryMIME(mime string) bool {
+	if strings.HasPrefix(mime, "text/") {
+		return false
+	}
+	if mime == "application/json" || mime == "application/yaml" || mime == "application/x-sh" {
+		return false
+	}
+	return true
+}
+
+func cleanPath(path string) string {
+	// 1. Trim surrounding quotes
+	path = strings.Trim(path, "\"'` ")
+
+	// 2. Unescape backslashes before spaces and other common characters
+	path = strings.ReplaceAll(path, "\\ ", " ")
+	path = strings.ReplaceAll(path, "\\(", "(")
+	path = strings.ReplaceAll(path, "\\)", ")")
+	path = strings.ReplaceAll(path, "\\[", "[")
+	path = strings.ReplaceAll(path, "\\]", "]")
+	path = strings.ReplaceAll(path, "\\&", "&")
+	path = strings.ReplaceAll(path, "\\*", "*")
+	path = strings.ReplaceAll(path, "\\?", "?")
+	path = strings.ReplaceAll(path, "\\|", "|")
+	path = strings.ReplaceAll(path, "\\;", ";")
+	path = strings.ReplaceAll(path, "\\<", "<")
+	path = strings.ReplaceAll(path, "\\>", ">")
+	path = strings.ReplaceAll(path, "\\'", "'")
+	path = strings.ReplaceAll(path, "\\\"", "\"")
+
+	return path
+}
+
+func normalizeSpacing(s string) string {
+	var sb strings.Builder
+	for _, r := range s {
+		if r == ' ' || r == '\u202f' || r == '\u00a0' || (r >= '\u2000' && r <= '\u200a') {
+			sb.WriteRune(' ')
+		} else {
+			sb.WriteRune(r)
+		}
+	}
+	return sb.String()
+}
+
+// View views the contents of a file.
+func (h *ToolHandlers) View(ctx context.Context, in ViewArgs) (ViewOutput, error) {
+	path := cleanPath(in.Path)
+
+	// If path doesn't exist, try to find a matching file in the same directory by normalizing spacing
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		dir := filepath.Dir(path)
+		base := filepath.Base(path)
+
+		normalizedBase := normalizeSpacing(base)
+		normalizedBaseLower := strings.ToLower(normalizedBase)
+
+		files, readErr := os.ReadDir(dir)
+		if readErr == nil {
+			var bestMatch string
+			for _, f := range files {
+				if !f.IsDir() {
+					normalizedName := normalizeSpacing(f.Name())
+					if normalizedName == normalizedBase {
+						bestMatch = filepath.Join(dir, f.Name())
+						break // Exact casing matches are preferred
+					}
+					if strings.ToLower(normalizedName) == normalizedBaseLower {
+						bestMatch = filepath.Join(dir, f.Name())
+					}
+				}
+			}
+			if bestMatch != "" {
+				path = bestMatch
+			}
+		}
+	}
+
+	mimeType := detectMIMEType(path)
+	isBinary := isBinaryMIME(mimeType)
+	filename := filepath.Base(path)
+
+	var cachedPath string
+	if isBinary {
+		if h.Storage != nil {
+			file, err := os.Open(path)
+			if err != nil {
+				return ViewOutput{}, fmt.Errorf("failed to open binary file %s: %w", path, err)
+			}
+			defer file.Close()
+
+			toolCallID, _ := ctx.Value("tool_call_id").(string)
+			if toolCallID == "" {
+				toolCallID = "unknown"
+			}
+			storagePath := fmt.Sprintf("%s_%s", toolCallID, filename)
+
+			var errSave error
+			cachedPath, errSave = h.Storage.Save(ctx, storagePath, file)
+			if errSave != nil {
+				return ViewOutput{}, fmt.Errorf("failed to cache binary file: %w", errSave)
+			}
+		}
+
+		return ViewOutput{
+			Path:       path,
+			CachedPath: cachedPath,
+			MimeType:   mimeType,
+			IsBinary:   true,
+		}, nil
+	}
+
+	file, err := os.Open(path)
+	if err != nil {
+		return ViewOutput{}, fmt.Errorf("failed to open file %s: %w", path, err)
 	}
 	defer file.Close()
 
@@ -85,11 +226,42 @@ func ViewHandler(ctx context.Context, in ViewArgs) (ViewOutput, error) {
 		TotalLines: currentLine,
 		Path:       in.Path,
 		Truncated:  truncated,
+		MimeType:   mimeType,
+		IsBinary:   false,
 	}, nil
 }
 
 // ToolContent implements the loom tool.ContentProvider interface.
 func (v ViewOutput) ToolContent() message.Content {
+	if v.IsBinary {
+		if strings.HasPrefix(v.MimeType, "image/") {
+			return message.Content{
+				&message.ImageBlock{
+					MIMEType: v.MimeType,
+					// Data is left as nil to prevent DB/checkpoint bloat.
+					// It will be dynamically populated (re-hydrated) when calling the LLM.
+				},
+			}
+		}
+
+		if v.MimeType == "application/pdf" {
+			return message.Content{
+				&message.DocumentBlock{
+					MIMEType: v.MimeType,
+					// Data is left as nil to prevent DB/checkpoint bloat.
+					// It will be dynamically populated (re-hydrated) when calling the LLM.
+				},
+			}
+		}
+
+		// Fallback for other documents or unsupported binaries
+		return message.Content{
+			&message.TextBlock{
+				Text: fmt.Sprintf("[Binary document: %s (%s)]", filepath.Base(v.Path), v.MimeType),
+			},
+		}
+	}
+
 	if v.TotalLines == 0 {
 		return message.Content{
 			&message.TextBlock{

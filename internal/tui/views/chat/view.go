@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"image/color"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -774,6 +776,21 @@ func stripLinePrefixes(content string) string {
 	return strings.Join(lines, "\n")
 }
 
+func openWithSystemViewer(path string) {
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "darwin":
+		cmd = exec.Command("open", path)
+	case "linux":
+		cmd = exec.Command("xdg-open", path)
+	case "windows":
+		cmd = exec.Command("cmd", "/c", "start", path)
+	default:
+		return
+	}
+	_ = cmd.Start()
+}
+
 var ViewToolWidget = kitex.FC("ViewToolWidget", func(props ToolExecutionProps) kitex.Node {
 	t := theme.UseTheme()
 	showModal, setShowModal := kitex.UseState(false)
@@ -812,23 +829,28 @@ var ViewToolWidget = kitex.FC("ViewToolWidget", func(props ToolExecutionProps) k
 			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Error)}, icon.Error)
 			themeColor = t.Color.Text.Error
 		} else {
-			actualStart, actualEnd, _, _ := parseViewOutput(tm.StructuredContent)
-			if actualStart == 0 {
-				outText := getToolOutput(tm.Content)
-				actualStart, actualEnd = parseRangeFromHeader(outText)
-			}
-			if actualStart == 0 {
-				actualStart = getIntField(tc.Args, "start_line")
+			vOut, ok := parseViewStructuredOutput(tm.StructuredContent)
+			if ok && vOut.IsBinary {
+				statusLabel = fmt.Sprintf("Binary [%s] (%s)", filename, vOut.MimeType)
+			} else {
+				actualStart, actualEnd, _, _ := parseViewOutput(tm.StructuredContent)
 				if actualStart == 0 {
-					actualStart = 1
+					outText := getToolOutput(tm.Content)
+					actualStart, actualEnd = parseRangeFromHeader(outText)
 				}
-				actualEnd = getIntField(tc.Args, "end_line")
+				if actualStart == 0 {
+					actualStart = getIntField(tc.Args, "start_line")
+					if actualStart == 0 {
+						actualStart = 1
+					}
+					actualEnd = getIntField(tc.Args, "end_line")
+				}
+				var rangeStr string
+				if actualStart > 0 && actualEnd > 0 {
+					rangeStr = fmt.Sprintf(" %d-%d", actualStart, actualEnd)
+				}
+				statusLabel = fmt.Sprintf("Read [%s%s]", filename, rangeStr)
 			}
-			var rangeStr string
-			if actualStart > 0 && actualEnd > 0 {
-				rangeStr = fmt.Sprintf(" %d-%d", actualStart, actualEnd)
-			}
-			statusLabel = fmt.Sprintf("Read [%s%s]", filename, rangeStr)
 			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Success)}, icon.Checkmark)
 			themeColor = t.Color.Surface.Success
 		}
@@ -965,12 +987,52 @@ var ViewToolWidget = kitex.FC("ViewToolWidget", func(props ToolExecutionProps) k
 							OverflowY(style.OverflowAuto).
 							MarginTop(1),
 					},
-						components.CodeBlock(components.CodeBlockProps{
-							Code:            cleanCode,
-							Lang:            detectLang(filename),
-							HideHeader:      true,
-							ShowLineNumbers: showLines,
-							StartLine:       startLine,
+						kitex.If(ok && vOut.IsBinary, func() kitex.Node {
+							var textPrimary color.Color
+							var textSecondary color.Color
+							if t != nil {
+								textPrimary = t.Color.Text.Primary
+								textSecondary = t.Color.Text.Secondary
+							}
+							return kitex.Box(kitex.BoxProps{
+								Style: style.S().
+									Display(style.DisplayFlex).
+									FlexDirection(style.FlexColumn).
+									Gap(1).
+									Padding(1),
+							},
+								kitex.Box(kitex.BoxProps{
+									Style: style.S().
+										Display(style.DisplayFlex).
+										FlexDirection(style.FlexColumn).
+										Gap(0),
+								},
+									kitex.Span(kitex.SpanProps{Style: style.S().Bold(true).Foreground(textPrimary)}, kitex.Text("Binary File Details:")),
+									kitex.Span(kitex.SpanProps{Style: style.S().Foreground(textSecondary)}, kitex.Text(fmt.Sprintf("  • Name:      %s", filename))),
+									kitex.Span(kitex.SpanProps{Style: style.S().Foreground(textSecondary)}, kitex.Text(fmt.Sprintf("  • MIME Type: %s", vOut.MimeType))),
+									kitex.Span(kitex.SpanProps{Style: style.S().Foreground(textSecondary)}, kitex.Text(fmt.Sprintf("  • Path:      %s", vOut.Path))),
+								),
+								components.Button(components.ButtonProps{
+									Variant: components.ButtonSolid,
+									Color:   components.ButtonPrimary,
+									Style: style.S().
+										AlignSelf(style.AlignStart).
+										MarginTop(1).
+										Padding(0, 2),
+									OnClick: func() {
+										openWithSystemViewer(vOut.Path)
+									},
+								}, kitex.Text("Open with System Viewer")),
+							)
+						}),
+						kitex.If(!ok || !vOut.IsBinary, func() kitex.Node {
+							return components.CodeBlock(components.CodeBlockProps{
+								Code:            cleanCode,
+								Lang:            detectLang(filename),
+								HideHeader:      true,
+								ShowLineNumbers: showLines,
+								StartLine:       startLine,
+							})
 						}),
 					),
 				),

@@ -63,7 +63,7 @@ type AgentGraph struct {
 }
 
 // New creates a new AgentGraph orchestrator by loading/binding tools outside of the execution nodes.
-func New(ctx context.Context, model LLMModel, ws *workspace.Workspace) (*AgentGraph, error) {
+func New(ctx context.Context, model LLMModel, ws *workspace.Workspace, storage tools.FileStorage) (*AgentGraph, error) {
 	var allowedTools map[string]bool
 	if ws != nil {
 		cfg, err := ws.GetWorkspaceConfig(ctx)
@@ -73,7 +73,8 @@ func New(ctx context.Context, model LLMModel, ws *workspace.Workspace) (*AgentGr
 		allowedTools = cfg.AuthorizedTools
 	}
 
-	allLoomTools, err := tools.LoomTools()
+	handlers := tools.NewHandlers(storage)
+	allLoomTools, err := tools.LoomTools(handlers)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load loom tools: %w", err)
 	}
@@ -140,7 +141,8 @@ func (a *AgentGraph) think(ctx context.Context, s AgentState) (graph.Command[Age
 		return nil, fmt.Errorf("no model configured in graph")
 	}
 
-	msg, err := a.model.Invoke(ctx, s.Messages)
+	rehydratedMessages := tools.RehydrateMessagesForLLM(s.Messages)
+	msg, err := a.model.Invoke(ctx, rehydratedMessages)
 	if err != nil {
 		return nil, fmt.Errorf("llm call failed: %w", err)
 	}
@@ -173,7 +175,8 @@ func (a *AgentGraph) executeTools(ctx context.Context, s AgentState) (graph.Comm
 	for _, block := range lastMsg.GetContent() {
 		if tc, ok := block.(*message.ToolCall); ok {
 			var toolMsg *message.Tool
-			toolResp, err := a.container.Call(ctx, tc)
+			toolCallCtx := context.WithValue(ctx, "tool_call_id", tc.ID)
+			toolResp, err := a.container.Call(toolCallCtx, tc)
 			if err != nil {
 				toolMsg = &message.Tool{
 					ToolCallID: tc.ID,

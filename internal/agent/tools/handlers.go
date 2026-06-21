@@ -10,7 +10,7 @@ import (
 )
 
 // LoomTools returns all builtin tools as Loom tools.
-func LoomTools() ([]*tool.Tool, error) {
+func LoomTools(handlers *ToolHandlers) ([]*tool.Tool, error) {
 	resources, err := Resources()
 	if err != nil {
 		return nil, fmt.Errorf("failed to load tool resources: %w", err)
@@ -27,7 +27,7 @@ func LoomTools() ([]*tool.Tool, error) {
 			"bash",
 			res.Metadata.DisplayName,
 			res.Metadata.Description,
-			BashHandler,
+			handlers.Bash,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create tool bash: %w", err)
@@ -40,7 +40,7 @@ func LoomTools() ([]*tool.Tool, error) {
 			"download",
 			res.Metadata.DisplayName,
 			res.Metadata.Description,
-			DownloadHandler,
+			handlers.Download,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create tool download: %w", err)
@@ -53,7 +53,7 @@ func LoomTools() ([]*tool.Tool, error) {
 			"edit",
 			res.Metadata.DisplayName,
 			res.Metadata.Description,
-			EditHandler,
+			handlers.Edit,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create tool edit: %w", err)
@@ -66,7 +66,7 @@ func LoomTools() ([]*tool.Tool, error) {
 			"fetch",
 			res.Metadata.DisplayName,
 			res.Metadata.Description,
-			FetchHandler,
+			handlers.Fetch,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create tool fetch: %w", err)
@@ -79,7 +79,7 @@ func LoomTools() ([]*tool.Tool, error) {
 			"glob",
 			res.Metadata.DisplayName,
 			res.Metadata.Description,
-			GlobHandler,
+			handlers.Glob,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create tool glob: %w", err)
@@ -92,7 +92,7 @@ func LoomTools() ([]*tool.Tool, error) {
 			"grep",
 			res.Metadata.DisplayName,
 			res.Metadata.Description,
-			GrepHandler,
+			handlers.Grep,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create tool grep: %w", err)
@@ -105,7 +105,7 @@ func LoomTools() ([]*tool.Tool, error) {
 			"ls",
 			res.Metadata.DisplayName,
 			res.Metadata.Description,
-			LsHandler,
+			handlers.Ls,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create tool ls: %w", err)
@@ -118,7 +118,7 @@ func LoomTools() ([]*tool.Tool, error) {
 			"lsp_diagnostics",
 			res.Metadata.DisplayName,
 			res.Metadata.Description,
-			LspDiagnosticsHandler,
+			handlers.LspDiagnostics,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create tool lsp_diagnostics: %w", err)
@@ -131,7 +131,7 @@ func LoomTools() ([]*tool.Tool, error) {
 			"lsp_restart",
 			res.Metadata.DisplayName,
 			res.Metadata.Description,
-			LspRestartHandler,
+			handlers.LspRestart,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create tool lsp_restart: %w", err)
@@ -144,7 +144,7 @@ func LoomTools() ([]*tool.Tool, error) {
 			"lsp_search",
 			res.Metadata.DisplayName,
 			res.Metadata.Description,
-			LspSearchHandler,
+			handlers.LspSearch,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create tool lsp_search: %w", err)
@@ -157,7 +157,7 @@ func LoomTools() ([]*tool.Tool, error) {
 			"mcp_read_resources",
 			res.Metadata.DisplayName,
 			res.Metadata.Description,
-			McpReadResourcesHandler,
+			handlers.McpReadResources,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create tool mcp_read_resources: %w", err)
@@ -170,7 +170,7 @@ func LoomTools() ([]*tool.Tool, error) {
 			"remove",
 			res.Metadata.DisplayName,
 			res.Metadata.Description,
-			RemoveHandler,
+			handlers.Remove,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create tool remove: %w", err)
@@ -183,7 +183,7 @@ func LoomTools() ([]*tool.Tool, error) {
 			"view",
 			res.Metadata.DisplayName,
 			res.Metadata.Description,
-			ViewHandler,
+			handlers.View,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create tool view: %w", err)
@@ -196,7 +196,7 @@ func LoomTools() ([]*tool.Tool, error) {
 			"web_fetch",
 			res.Metadata.DisplayName,
 			res.Metadata.Description,
-			WebFetchHandler,
+			handlers.WebFetch,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create tool web_fetch: %w", err)
@@ -209,7 +209,7 @@ func LoomTools() ([]*tool.Tool, error) {
 			"web_search",
 			res.Metadata.DisplayName,
 			res.Metadata.Description,
-			WebSearchHandler,
+			handlers.WebSearch,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create tool web_search: %w", err)
@@ -222,7 +222,7 @@ func LoomTools() ([]*tool.Tool, error) {
 			"write",
 			res.Metadata.DisplayName,
 			res.Metadata.Description,
-			WriteHandler,
+			handlers.Write,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create tool write: %w", err)
