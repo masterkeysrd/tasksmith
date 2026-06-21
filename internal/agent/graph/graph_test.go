@@ -43,7 +43,7 @@ func TestAgentGraph_Execution(t *testing.T) {
 	}
 
 	// Construct agent graph
-	ag, err := agentgraph.New(context.Background(), mockModel, nil, nil)
+	ag, err := agentgraph.New(context.Background(), mockModel, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("failed to construct agent graph: %v", err)
 	}

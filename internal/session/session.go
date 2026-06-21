@@ -14,6 +14,7 @@ import (
 	"github.com/masterkeysrd/loom/message"
 	agentgraph "github.com/masterkeysrd/tasksmith/internal/agent/graph"
 	"github.com/masterkeysrd/tasksmith/internal/agent/tools"
+	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	"github.com/masterkeysrd/tasksmith/internal/workspace"
 )
 
@@ -42,6 +43,8 @@ type ActiveSession struct {
 	CurrentStreamText     string
 	CurrentStreamThinking string
 	Cancel                context.CancelFunc
+	Inbox                 []message.Message
+	InboxMu               sync.Mutex
 }
 
 // Manager coordinates session business logic and delegates persistence to the Store interface.
@@ -180,8 +183,19 @@ func (m *Manager) SendMessage(ctx context.Context, sessionID string, text string
 	}
 
 	if sess.Status == StatusRunning {
+		userMsg := message.NewUserText(text)
+		u, err := uuid.NewV7()
+		if err != nil {
+			m.mu.Unlock()
+			return fmt.Errorf("failed to generate message UUID: %w", err)
+		}
+		userMsg.SetID(fmt.Sprintf("msg_%s", u.String()))
+
+		sess.InboxMu.Lock()
+		sess.Inbox = append(sess.Inbox, userMsg)
+		sess.InboxMu.Unlock()
 		m.mu.Unlock()
-		return fmt.Errorf("session is already running an agent execution")
+		return nil
 	}
 
 	sess.Status = StatusRunning
@@ -233,7 +247,7 @@ func (m *Manager) SendMessage(ctx context.Context, sessionID string, text string
 
 		// Compile graph
 		storage := NewLocalFileStorage(m.ws.CWD(), sessionID)
-		ag, err := agentgraph.New(runCtx, agentgraph.NewLoomModel(model), m.ws, storage)
+		ag, err := agentgraph.New(runCtx, agentgraph.NewLoomModel(model), m.ws, storage, &sessionInbox{sess: sess, m: m})
 		if err != nil {
 			m.setSessionError(sessionID, fmt.Errorf("failed to construct agent graph: %w", err))
 			return
@@ -298,7 +312,16 @@ func (m *Manager) SendMessage(ctx context.Context, sessionID string, text string
 						m.setSessionError(sessionID, fmt.Errorf("failed to save agent message: %w", err))
 						return
 					}
+					m.mu.Lock()
+					sess.CurrentStreamText = ""
+					sess.CurrentStreamThinking = ""
+					m.mu.Unlock()
 				}
+			} else if ev.Event == "user_message" {
+				m.mu.Lock()
+				sess.CurrentStreamText = ""
+				sess.CurrentStreamThinking = ""
+				m.mu.Unlock()
 			} else if ev.Event == "tool_message" {
 				if toolMsg, ok := ev.Data.(message.Message); ok {
 					if _, err := m.AppendMessage(context.Background(), sessionID, toolMsg); err != nil {
@@ -534,4 +557,55 @@ func (m *Manager) GetMessages(ctx context.Context, sessionID string) (message.Me
 	}
 
 	return list, nil
+}
+
+// GetQueuedMessages returns a copy of the in-memory queued messages for a session.
+func (m *Manager) GetQueuedMessages(sessionID string) (message.MessageList, error) {
+	m.mu.RLock()
+	sess, ok := m.activeSessions[sessionID]
+	var inboxMsgs []message.Message
+	if ok {
+		sess.InboxMu.Lock()
+		if len(sess.Inbox) > 0 {
+			inboxMsgs = make([]message.Message, len(sess.Inbox))
+			copy(inboxMsgs, sess.Inbox)
+		}
+		sess.InboxMu.Unlock()
+	}
+	m.mu.RUnlock()
+	return inboxMsgs, nil
+}
+
+type sessionInbox struct {
+	sess *ActiveSession
+	m    *Manager
+}
+
+func (si *sessionInbox) PopMessages() []message.Message {
+	if si.sess == nil {
+		return nil
+	}
+	si.sess.InboxMu.Lock()
+	defer si.sess.InboxMu.Unlock()
+	msgs := si.sess.Inbox
+	if len(msgs) == 0 {
+		return nil
+	}
+	si.sess.Inbox = nil
+
+	// Save these messages to the database conversation history now that they are being processed
+	ctx := context.Background()
+	for _, msg := range msgs {
+		// Regenerate message ID using a fresh UUID v7 to ensure it is sorted chronologically
+		// after the messages that were generated while this message was queued.
+		u, err := uuid.NewV7()
+		if err == nil {
+			msg.SetID(fmt.Sprintf("msg_%s", u.String()))
+		}
+		if _, err := si.m.AppendMessage(ctx, si.sess.ID, msg); err != nil {
+			log.Error("Failed to save popped inbox message to database", log.Err(err))
+		}
+	}
+
+	return msgs
 }

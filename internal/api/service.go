@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/masterkeysrd/loom/message"
+	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	"github.com/masterkeysrd/tasksmith/internal/session"
 	"github.com/masterkeysrd/tasksmith/internal/workspace"
 	"github.com/masterkeysrd/warp"
@@ -337,6 +338,32 @@ func (s *Service) GetSessionMessages(ctx context.Context, req GetSessionMessages
 		}
 		resp.Messages[i] = string(data)
 	}
+
+	// Fetch in-memory queued messages
+	queuedMsgs, err := s.sm.GetQueuedMessages(req.SessionID)
+	if err != nil {
+		return nil, err
+	}
+	if len(queuedMsgs) > 0 {
+		resp.QueuedMessages = make([]string, len(queuedMsgs))
+		for i, msg := range queuedMsgs {
+			list := message.MessageList{msg}
+			data, err := json.Marshal(list)
+			if err != nil {
+				return nil, err
+			}
+			if len(data) >= 2 && data[0] == '[' && data[len(data)-1] == ']' {
+				data = data[1 : len(data)-1]
+			}
+			resp.QueuedMessages[i] = string(data)
+		}
+	}
+
+	log.Info("GetSessionMessages debug",
+		log.String("session", req.SessionID),
+		log.Int("history", len(resp.Messages)),
+		log.Int("queued", len(resp.QueuedMessages)))
+
 	return resp, nil
 }
 

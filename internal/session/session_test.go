@@ -246,3 +246,65 @@ func TestSessionBinaryRehydration(t *testing.T) {
 		t.Errorf("expected ImageBlock Data to be re-hydrated to %q, got %q", string(dummyBytes), string(imageBlock.Data))
 	}
 }
+
+func TestSessionInboxQueue(t *testing.T) {
+	tmpCwd := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", tmpCwd)
+	t.Setenv("TASKSMITH_APPNAME", "tasksmith-test-inbox")
+
+	db, err := coredb.Open(tmpCwd, "tasksmith.db")
+	if err != nil {
+		t.Fatalf("failed to open database: %v", err)
+	}
+	defer db.Close()
+
+	checkpointsDb, err := coredb.Open(tmpCwd, "checkpoints.db")
+	if err != nil {
+		t.Fatalf("failed to open checkpoints database: %v", err)
+	}
+	defer checkpointsDb.Close()
+
+	store, err := session.NewSQLiteStore(db, checkpointsDb)
+	if err != nil {
+		t.Fatalf("failed to initialize sqlite store: %v", err)
+	}
+
+	manager := session.NewManager(store, nil)
+	ctx := context.Background()
+
+	s, err := manager.CreateSession(ctx, "inbox-queue-test")
+	if err != nil {
+		t.Fatalf("failed to create session: %v", err)
+	}
+
+	// 1. Initially, queued messages list should be empty
+	queued, err := manager.GetQueuedMessages(s.ID)
+	if err != nil {
+		t.Fatalf("failed to get queued messages: %v", err)
+	}
+	if len(queued) != 0 {
+		t.Errorf("expected 0 queued messages initially, got %d", len(queued))
+	}
+
+	// 2. Call SendMessage twice immediately
+	// The first call starts the run, and the second call will find it running and queue the message.
+	_ = manager.SendMessage(ctx, s.ID, "Initial message to start runner")
+	err = manager.SendMessage(ctx, s.ID, "Queued feedback message")
+	if err != nil {
+		t.Fatalf("failed to send queued feedback message: %v", err)
+	}
+
+	// 3. Verify that the message is in the queued messages list
+	queued, err = manager.GetQueuedMessages(s.ID)
+	if err != nil {
+		t.Fatalf("failed to get queued messages: %v", err)
+	}
+	if len(queued) != 1 {
+		t.Errorf("expected 1 queued message, got %d", len(queued))
+	} else {
+		text := queued[0].GetContent().Text()
+		if text != "Queued feedback message" {
+			t.Errorf("expected queued message text 'Queued feedback message', got %q", text)
+		}
+	}
+}

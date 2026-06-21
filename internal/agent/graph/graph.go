@@ -56,14 +56,20 @@ func NewLoomModel(m *llm.Model) LLMModel {
 	return loomModel{model: m}
 }
 
+// InboxProvider defines the interface to retrieve pending user messages.
+type InboxProvider interface {
+	PopMessages() []message.Message
+}
+
 // AgentGraph orchestrates the flow of model invocation.
 type AgentGraph struct {
 	model     LLM
 	container *tool.Container
+	inbox     InboxProvider
 }
 
 // New creates a new AgentGraph orchestrator by loading/binding tools outside of the execution nodes.
-func New(ctx context.Context, model LLMModel, ws *workspace.Workspace, storage tools.FileStorage) (*AgentGraph, error) {
+func New(ctx context.Context, model LLMModel, ws *workspace.Workspace, storage tools.FileStorage, inbox InboxProvider) (*AgentGraph, error) {
 	var allowedTools map[string]bool
 	if ws != nil {
 		cfg, err := ws.GetWorkspaceConfig(ctx)
@@ -103,6 +109,7 @@ func New(ctx context.Context, model LLMModel, ws *workspace.Workspace, storage t
 	return &AgentGraph{
 		model:     boundModel,
 		container: container,
+		inbox:     inbox,
 	}, nil
 }
 
@@ -110,13 +117,28 @@ func New(ctx context.Context, model LLMModel, ws *workspace.Workspace, storage t
 func (a *AgentGraph) Build(cp graph.Checkpointer) (*graph.Graph[AgentState], error) {
 	builder := graph.New[AgentState]().
 		WithName("agent_loop").
+		AddNode("check_inbox", graph.NodeFunc(a.checkInbox)).
 		AddNode("think", graph.NodeFunc(a.think)).
 		AddNode("execute_tools", graph.NodeFunc(a.executeTools)).
-		AddEdge(graph.START, "think")
+		AddEdge(graph.START, "check_inbox")
+
+	builder.AddRouteEdge("check_inbox", func(s AgentState) (string, error) {
+		if len(s.Messages) == 0 {
+			return graph.END, nil
+		}
+		lastMsg := s.Messages[len(s.Messages)-1]
+		if lastMsg.Role() == message.RoleAssistant {
+			return graph.END, nil
+		}
+		return "think", nil
+	}, map[string]string{
+		"think":   "think",
+		graph.END: graph.END,
+	})
 
 	builder.AddRouteEdge("think", func(s AgentState) (string, error) {
 		if len(s.Messages) == 0 {
-			return graph.END, nil
+			return "check_inbox", nil
 		}
 		lastMsg := s.Messages[len(s.Messages)-1]
 		for _, block := range lastMsg.GetContent() {
@@ -124,13 +146,13 @@ func (a *AgentGraph) Build(cp graph.Checkpointer) (*graph.Graph[AgentState], err
 				return "execute_tools", nil
 			}
 		}
-		return graph.END, nil
+		return "check_inbox", nil
 	}, map[string]string{
 		"execute_tools": "execute_tools",
-		graph.END:       graph.END,
+		"check_inbox":   "check_inbox",
 	})
 
-	builder.AddEdge("execute_tools", "think")
+	builder.AddEdge("execute_tools", "check_inbox")
 
 	if cp != nil {
 		builder.WithCheckpointer(cp)
@@ -204,6 +226,37 @@ func (a *AgentGraph) executeTools(ctx context.Context, s AgentState) (graph.Comm
 
 	return graph.Update[AgentState](func(state AgentState) AgentState {
 		state.Messages = append(state.Messages, toolResults...)
+		return state
+	}), nil
+}
+
+// checkInbox checks for new user messages in the inbox and appends them to the execution state.
+func (a *AgentGraph) checkInbox(ctx context.Context, s AgentState) (graph.Command[AgentState], error) {
+	if a.inbox == nil {
+		return graph.Update[AgentState](func(state AgentState) AgentState {
+			return state
+		}), nil
+	}
+
+	msgs := a.inbox.PopMessages()
+	if len(msgs) == 0 {
+		return graph.Update[AgentState](func(state AgentState) AgentState {
+			return state
+		}), nil
+	}
+
+	sw, hasWriter := stream.WriterFromContext(ctx)
+	if hasWriter {
+		for _, msg := range msgs {
+			_ = sw.Write(ctx, stream.Event{
+				Name: "user_message",
+				Data: msg,
+			})
+		}
+	}
+
+	return graph.Update[AgentState](func(state AgentState) AgentState {
+		state.Messages = append(state.Messages, msgs...)
 		return state
 	}), nil
 }

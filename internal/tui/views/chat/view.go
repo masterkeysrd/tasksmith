@@ -67,14 +67,21 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 		_ = json.Unmarshal([]byte(rawArray), &messages)
 	}
 
+	var queuedMessages message.MessageList
+	if msgsQuery.Data != nil && len(msgsQuery.Data.QueuedMessages) > 0 {
+		rawArray := "[" + strings.Join(msgsQuery.Data.QueuedMessages, ",") + "]"
+		_ = json.Unmarshal([]byte(rawArray), &queuedMessages)
+	}
+
 	status := "idle"
 	if stateQuery.Data != nil {
 		status = stateQuery.Data.Status
 	}
 	sending := status == "running"
 
-	// 3. Reactive state for input composer
+	// 3. Reactive state for input composer and submitting state
 	inputValue, setInputValue := kitex.UseState("")
+	submitting, setSubmitting := kitex.UseState(false)
 
 	// Mode handling & Focus management
 	m := mode.Use()
@@ -106,6 +113,13 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 			windClient.InvalidateQueries(api.GetSessionStateRequest{SessionID: sessionID})
 		}
 	}, 1000*time.Millisecond, []any{sending, sessionID})
+
+	// Invalidate messages query when the agent finishes execution (sending transitions to false)
+	kitex.UseEffect(func() {
+		if !sending {
+			windClient.InvalidateQueries(api.GetSessionMessagesRequest{SessionID: sessionID})
+		}
+	}, []any{sending, sessionID})
 
 	// Autoscroll history to bottom if already at bottom
 	historyRef := kitex.UseRef[dom.Element](nil)
@@ -183,16 +197,15 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 		}
 
 		lastMaxScrollY.Current = maxScrollY
-	}, nil)
+	}, []any{messagesKey})
 
 	sendMessage := func(text string) {
-		if text == "" || sending {
+		if text == "" || submitting() {
 			return
 		}
 
-		// Exit insert mode upon sending
-		mode.Set(mode.Normal)
 		setInputValue("")
+		setSubmitting(true)
 
 		// Trigger SendMessage on the backend asynchronously
 		promise.New(func(ctx context.Context) (bool, error) {
@@ -205,10 +218,12 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 			}
 			return true, nil
 		}).Then(func(success bool) {
+			setSubmitting(false)
 			// Immediately invalidate queries to trigger a reload of messages and state
 			windClient.InvalidateQueries(api.GetSessionMessagesRequest{SessionID: sessionID})
 			windClient.InvalidateQueries(api.GetSessionStateRequest{SessionID: sessionID})
 		}, func(err error) {
+			setSubmitting(false)
 			// Error handling (e.g. log or show message)
 		})
 	}
@@ -280,6 +295,9 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 					if statusNode := renderAgentStatus(t, sending, thinkingTime(), lastFinishedTime(), currentDots); statusNode != nil {
 						nodes = append(nodes, statusNode)
 					}
+					if queuedWidget := renderQueuedMessages(t, queuedMessages); queuedWidget != nil {
+						nodes = append(nodes, queuedWidget)
+					}
 					return nodes
 				}()...,
 			),
@@ -289,7 +307,7 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 		kitex.Box(kitex.BoxProps{Style: composerContainerStyle},
 			Composer(ComposerProps{
 				Value:    inputValue(),
-				Disabled: sending,
+				Disabled: submitting(),
 				IsInsert: isInsert,
 				Ref:      inputRef,
 				OnChange: func(val string) {
@@ -385,6 +403,7 @@ var Composer = kitex.FC("Composer", func(props ComposerProps) kitex.Node {
 		},
 		OnBlur: func(e event.Event) {
 			setIsFocused(false)
+			mode.Set(mode.Normal)
 		},
 		OnKeyDown: func(e event.Event) {
 			ke, ok := e.(*event.KeyEvent)
@@ -1367,4 +1386,57 @@ func renderAgentStatus(t *theme.Scheme, sending bool, thinkingTime int, lastFini
 		)
 	}
 	return nil
+}
+
+func renderQueuedMessages(t *theme.Scheme, queuedMessages message.MessageList) kitex.Node {
+	if len(queuedMessages) == 0 || t == nil {
+		return nil
+	}
+
+	blueColor := t.Color.Surface.Info
+	containerStyle := style.S().
+		Display(style.DisplayFlex).
+		FlexDirection(style.FlexColumn).
+		Gap(0).
+		PaddingVertical(1).
+		PaddingHorizontal(2).
+		Border(style.DoubleBorder().Color(t.Color.Text.Tertiary)).
+		Background(t.Color.Surface.BaseHover).
+		MarginTop(1).
+		MarginBottom(1)
+
+	titleStyle := style.S().
+		Foreground(blueColor).
+		Bold(true).
+		MarginBottom(1)
+
+	var msgNodes []kitex.Node
+	for _, msg := range queuedMessages {
+		text := ""
+		for _, block := range msg.GetContent() {
+			if tb, ok := block.(*message.TextBlock); ok {
+				text += tb.Text
+			}
+		}
+		if text == "" {
+			continue
+		}
+
+		msgStyle := style.S().
+			Foreground(t.Color.Text.Secondary).
+			MarginLeft(2)
+
+		msgNodes = append(msgNodes, kitex.Box(kitex.BoxProps{Style: msgStyle}, kitex.Text("󰑮  "+text)))
+	}
+
+	if len(msgNodes) == 0 {
+		return nil
+	}
+
+	children := []kitex.Node{
+		kitex.Box(kitex.BoxProps{Style: titleStyle}, kitex.Text("󰑮 Queued Feedback")),
+	}
+	children = append(children, msgNodes...)
+
+	return kitex.Box(kitex.BoxProps{Style: containerStyle}, children...)
 }

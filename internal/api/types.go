@@ -156,7 +156,8 @@ type GetSessionMessagesRequest struct {
 }
 
 type GetSessionMessagesResponse struct {
-	Messages []string `json:"messages"` // Serialized JSON messages
+	Messages       []string `json:"messages"`                  // Serialized JSON messages
+	QueuedMessages []string `json:"queued_messages,omitempty"` // Serialized JSON queued messages
 }
 
 type GetSessionStateRequest struct {

@@ -28,10 +28,11 @@ func Open(workspacePath, filename string) (*sqlx.DB, error) {
 		return nil, fmt.Errorf("failed to connect to database: %w", err)
 	}
 
-	// Apply tuning pragmas for SQLite (WAL and Foreign Keys)
+	// Apply tuning pragmas for SQLite (WAL, busy timeout, and Foreign Keys)
 	pragmas := []string{
 		"PRAGMA journal_mode = WAL;",
 		"PRAGMA foreign_keys = ON;",
+		"PRAGMA busy_timeout = 5000;",
 	}
 	for _, pragma := range pragmas {
 		if _, err := db.Exec(pragma); err != nil {
