@@ -7,16 +7,6 @@ import (
 	"strings"
 )
 
-// Download downloads a file from a URL.
-func (h *ToolHandlers) Download(ctx context.Context, in DownloadArgs) (DownloadOutput, error) {
-	path := "downloaded_file"
-	cmd := exec.CommandContext(ctx, "curl", "-o", path, in.Url)
-	if err := cmd.Run(); err != nil {
-		return DownloadOutput{Path: "", Success: false}, nil
-	}
-	return DownloadOutput{Path: path, Success: true}, nil
-}
-
 // Fetch fetches a URL.
 func (h *ToolHandlers) Fetch(ctx context.Context, in FetchArgs) (FetchOutput, error) {
 	cmd := exec.CommandContext(ctx, "curl", "-i", in.Url)

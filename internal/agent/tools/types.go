@@ -36,18 +36,28 @@ type BashOutput struct {
 
 // DownloadArgs defines the arguments for the "download" tool.
 //
-// Download a file from a URL.
+// Download a file from a URL. If it takes longer than wait_ms, it automatically transitions to a background task.
 type DownloadArgs struct {
+	// Destination: Local file path to save the downloaded file (optional, defaults to the filename in the URL in workspace root).
+	Destination string `json:"destination,omitempty" jsonschema:"Local file path to save the downloaded file (optional, defaults to the filename in the URL in workspace root)."`
 	// Url: URL to download from.
 	Url string `json:"url" jsonschema:"URL to download from."`
+	// WaitMs: Time (in milliseconds) to wait for synchronous completion before shifting to background execution. Defaults to 5000.
+	WaitMs int `json:"wait_ms,omitempty" jsonschema:"Time (in milliseconds) to wait for synchronous completion before shifting to background execution. Defaults to 5000."`
 }
 
 // DownloadOutput defines the output returned by the "download" tool.
 type DownloadOutput struct {
+	// Message: A human-readable description of the execution status.
+	Message string `json:"message,omitempty" jsonschema:"A human-readable description of the execution status."`
 	// Path: Path to the downloaded file.
 	Path string `json:"path,omitempty" jsonschema:"Path to the downloaded file."`
+	// SizeBytes: Size of the downloaded file.
+	SizeBytes int `json:"size_bytes,omitempty" jsonschema:"Size of the downloaded file."`
 	// Success: Whether the download succeeded.
 	Success bool `json:"success,omitempty" jsonschema:"Whether the download succeeded."`
+	// TaskId: The ID of the background task if execution transitioned to background.
+	TaskId string `json:"taskId,omitempty" jsonschema:"The ID of the background task if execution transitioned to background."`
 }
 
 // EditArgs defines the arguments for the "edit" tool.

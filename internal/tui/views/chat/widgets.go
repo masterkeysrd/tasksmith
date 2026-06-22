@@ -2734,3 +2734,195 @@ var WebFetchToolWidget = kitex.FC("WebFetchToolWidget", func(props ToolExecution
 		}),
 	)
 })
+
+// DownloadToolWidget renders the execution state and results of a download tool call.
+var DownloadToolWidget = kitex.FC("DownloadToolWidget", func(props ToolExecutionProps) kitex.Node {
+	t := theme.UseTheme()
+	isOpen, setIsOpen := kitex.UseState(false)
+
+	tc := props.ToolCall
+	tm := props.ToolMessage
+
+	var urlVal string
+	var destVal string
+	if tc.Args != nil {
+		urlVal, _ = tc.Args["url"].(string)
+		destVal, _ = tc.Args["destination"].(string)
+	}
+
+	var statusLabel string
+	var iconNode kitex.Node
+	var headerBg color.Color
+	var headerFg color.Color
+	var borderCol color.Color
+
+	isFinished := tm != nil
+	hasErr := tm != nil && tm.IsError
+
+	if t != nil {
+		if !isFinished {
+			statusLabel = fmt.Sprintf("DOWNLOADING [%s]", filepath.Base(urlVal))
+			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Info)}, kitex.Text(props.CurrentDots))
+			headerBg = t.Color.Surface.BaseFocus
+			headerFg = t.Color.Surface.Info
+			borderCol = t.Color.Surface.Info
+		} else if hasErr {
+			statusLabel = fmt.Sprintf("DOWNLOAD ERROR [%s]", filepath.Base(urlVal))
+			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Error)}, icon.Error)
+			headerBg = t.Color.Surface.BaseFocus
+			headerFg = t.Color.Text.Error
+			borderCol = t.Color.Text.Error
+		} else {
+			dOut, ok := parseDownloadOutput(tm.StructuredContent)
+			if ok && dOut.TaskId != "" {
+				statusLabel = fmt.Sprintf("DOWNLOAD BG STARTED [%s]", filepath.Base(urlVal))
+				iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Info)}, icon.Info)
+				headerBg = t.Color.Surface.BaseFocus
+				headerFg = t.Color.Surface.Info
+				borderCol = t.Color.Surface.Info
+			} else {
+				statusLabel = fmt.Sprintf("DOWNLOAD SUCCESS [%s]", filepath.Base(urlVal))
+				iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Success)}, icon.Checkmark)
+				headerBg = t.Color.Surface.BaseFocus
+				headerFg = t.Color.Surface.Success
+				borderCol = t.Color.Surface.Success
+			}
+		}
+	}
+
+	containerStyle := style.S().
+		Display(style.DisplayFlex).
+		FlexDirection(style.FlexColumn).
+		MarginVertical(1).
+		Width(style.Percent(100)).
+		MaxWidth(style.Percent(100)).
+		Overflow(style.OverflowHidden)
+
+	headerStyle := style.S().
+		Display(style.DisplayFlex).
+		FlexDirection(style.FlexRow).
+		AlignItems(style.AlignCenter).
+		JustifyContent(style.JustifyBetween).
+		Padding(0, 1).
+		Height(style.Cells(1)).
+		Width(style.Percent(100)).
+		MaxWidth(style.Percent(100)).
+		Overflow(style.OverflowHidden)
+
+	bodyStyle := style.S().
+		Padding(1).
+		Display(style.DisplayFlex).
+		FlexDirection(style.FlexColumn).
+		Gap(1).
+		Width(style.Percent(100)).
+		MaxWidth(style.Percent(100)).
+		Overflow(style.OverflowHidden)
+
+	if t != nil {
+		containerStyle = containerStyle.
+			Border(true, style.SingleBorder(), borderCol).
+			Background(t.Color.Surface.BaseHover)
+
+		headerStyle = headerStyle.
+			Background(headerBg).
+			Foreground(headerFg)
+	}
+
+	return kitex.Box(kitex.BoxProps{Style: containerStyle},
+		components.Button(components.ButtonProps{
+			Variant: components.ButtonText,
+			Color:   components.ButtonBase,
+			Style:   headerStyle,
+			OnClick: func() {
+				setIsOpen(!isOpen())
+			},
+		},
+			kitex.Box(kitex.BoxProps{
+				Style: style.S().
+					Display(style.DisplayFlex).
+					FlexDirection(style.FlexRow).
+					AlignItems(style.AlignCenter).
+					Gap(1),
+			},
+				iconNode,
+				kitex.Span(kitex.SpanProps{Style: style.S().Bold(true)}, kitex.Text(statusLabel)),
+			),
+			func() kitex.Node {
+				var label string
+				if isOpen() {
+					label = "▲ COLLAPSE"
+				} else {
+					label = "▼ EXPAND"
+				}
+				var textCol color.Color
+				if t != nil {
+					textCol = t.Color.Text.Secondary
+				}
+				return kitex.Span(kitex.SpanProps{
+					Style: style.S().Foreground(textCol),
+				}, kitex.Text(label))
+			}(),
+		),
+		kitex.If(isOpen(), func() kitex.Node {
+			var finalDest string
+			var sizeStr string
+			var bgTaskStr string
+			var successVal bool
+			var detailsMsg string
+
+			if tm != nil {
+				dOut, ok := parseDownloadOutput(tm.StructuredContent)
+				if ok {
+					finalDest = dOut.Path
+					sizeStr = fmt.Sprintf("%.2f MB (%d bytes)", float64(dOut.SizeBytes)/(1024*1024), dOut.SizeBytes)
+					bgTaskStr = dOut.TaskId
+					successVal = dOut.Success
+					detailsMsg = dOut.Message
+				}
+			}
+			if finalDest == "" {
+				finalDest = destVal
+			}
+
+			return kitex.Box(kitex.BoxProps{Style: bodyStyle},
+				kitex.Box(kitex.BoxProps{Style: style.S().WhiteSpace(style.WhiteSpacePreWrap)},
+					kitex.Span(kitex.SpanProps{Style: style.S().Bold(true)}, kitex.Text("URL: ")),
+					kitex.Text(urlVal),
+				),
+				kitex.Box(kitex.BoxProps{},
+					kitex.Span(kitex.SpanProps{Style: style.S().Bold(true)}, kitex.Text("Destination: ")),
+					kitex.Text(finalDest),
+				),
+				kitex.If(bgTaskStr != "", func() kitex.Node {
+					return kitex.Box(kitex.BoxProps{},
+						kitex.Span(kitex.SpanProps{Style: style.S().Bold(true)}, kitex.Text("Background Task ID: ")),
+						kitex.Text(bgTaskStr),
+					)
+				}),
+				kitex.If(sizeStr != "" && bgTaskStr == "", func() kitex.Node {
+					return kitex.Box(kitex.BoxProps{},
+						kitex.Span(kitex.SpanProps{Style: style.S().Bold(true)}, kitex.Text("Size: ")),
+						kitex.Text(sizeStr),
+					)
+				}),
+				kitex.If(isFinished, func() kitex.Node {
+					return kitex.Box(kitex.BoxProps{},
+						kitex.Span(kitex.SpanProps{Style: style.S().Bold(true)}, kitex.Text("Status: ")),
+						kitex.If(successVal, func() kitex.Node {
+							return kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Success)}, kitex.Text("Success"))
+						}),
+						kitex.If(!successVal, func() kitex.Node {
+							return kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Error)}, kitex.Text("Failed"))
+						}),
+					)
+				}),
+				kitex.If(detailsMsg != "", func() kitex.Node {
+					return kitex.Box(kitex.BoxProps{Style: style.S().WhiteSpace(style.WhiteSpacePreWrap)},
+						kitex.Span(kitex.SpanProps{Style: style.S().Bold(true)}, kitex.Text("Message: ")),
+						kitex.Text(detailsMsg),
+					)
+				}),
+			)
+		}),
+	)
+})
