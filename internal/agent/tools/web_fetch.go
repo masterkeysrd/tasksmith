@@ -7,17 +7,16 @@ import (
 	"encoding/json"
 	"encoding/xml"
 	"fmt"
-	"html"
 	"io"
 	"mime"
 	"net"
 	"net/http"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"time"
 
 	htmlmarkdown "github.com/JohannesKaufmann/html-to-markdown"
+	"github.com/PuerkitoBio/goquery"
 	"github.com/masterkeysrd/loom/message"
 	"github.com/masterkeysrd/tasksmith/internal/core/fs"
 	utls "github.com/refraction-networking/utls"
@@ -249,12 +248,11 @@ func (h *ToolHandlers) WebFetch(ctx context.Context, in WebFetchArgs) (WebFetchO
 }
 
 func extractTitle(htmlContent string) string {
-	re := regexp.MustCompile(`(?is)<title[^>]*>(.*?)</title>`)
-	matches := re.FindStringSubmatch(htmlContent)
-	if len(matches) > 1 {
-		return strings.TrimSpace(html.UnescapeString(matches[1]))
+	doc, err := goquery.NewDocumentFromReader(strings.NewReader(htmlContent))
+	if err != nil {
+		return ""
 	}
-	return ""
+	return strings.TrimSpace(doc.Find("title").Text())
 }
 
 // ToolContent implements the loom tool.ContentProvider interface.
