@@ -7,10 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/masterkeysrd/kite/dom"
-	"github.com/masterkeysrd/kite/event"
 	"github.com/masterkeysrd/kite/extras/kitex"
-	"github.com/masterkeysrd/kite/key"
 	"github.com/masterkeysrd/kite/style"
 	"github.com/masterkeysrd/tasksmith/internal/agent/tools"
 	"github.com/masterkeysrd/tasksmith/internal/tui/components"
@@ -96,7 +93,6 @@ var CollapsibleThinking = kitex.FC("CollapsibleThinking", func(props Collapsible
 var ViewToolWidget = kitex.FC("ViewToolWidget", func(props ToolExecutionProps) kitex.Node {
 	t := theme.UseTheme()
 	showModal, setShowModal := kitex.UseState(false)
-	modalRef := kitex.CreateRef[dom.Element]()
 
 	tc := props.ToolCall
 	tm := props.ToolMessage
@@ -113,45 +109,33 @@ var ViewToolWidget = kitex.FC("ViewToolWidget", func(props ToolExecutionProps) k
 
 	if t != nil {
 		if tm == nil {
-			var rangeStr string
-			startLine := getIntField(tc.Args, "start_line")
-			endLine := getIntField(tc.Args, "end_line")
-			if startLine > 0 {
-				if endLine > 0 {
-					rangeStr = fmt.Sprintf(" (%d-%d)", startLine, endLine)
-				} else {
-					rangeStr = fmt.Sprintf(" (%d+)", startLine)
-				}
-			}
-			statusLabel = fmt.Sprintf("Pending [%s%s]", filename, rangeStr)
+			statusLabel = fmt.Sprintf("Pending View [%s]", filename)
 			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Info)}, kitex.Text(props.CurrentDots))
 			themeColor = t.Color.Surface.Info
 		} else if tm.IsError {
-			statusLabel = fmt.Sprintf("Error Reading [%s]", filename)
+			statusLabel = fmt.Sprintf("Error Viewing [%s]", filename)
 			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Error)}, icon.Error)
 			themeColor = t.Color.Text.Error
 		} else {
 			vOut, ok := parseViewStructuredOutput(tm.StructuredContent)
-			if ok && vOut.IsBinary {
-				statusLabel = fmt.Sprintf("Binary [%s] (%s)", filename, vOut.MimeType)
+			if ok {
+				var rangeStr string
+				if vOut.StartLine > 0 && vOut.EndLine > 0 {
+					rangeStr = fmt.Sprintf(" (Lines %d-%d)", vOut.StartLine, vOut.EndLine)
+				}
+				if vOut.IsBinary {
+					statusLabel = fmt.Sprintf("Viewed Binary [%s] (%s)", filename, vOut.MimeType)
+				} else {
+					statusLabel = fmt.Sprintf("Viewed [%s]%s", filename, rangeStr)
+				}
 			} else {
-				actualStart, actualEnd, _, _ := parseViewOutput(tm.StructuredContent)
-				if actualStart == 0 {
-					outText := getToolOutput(tm.Content)
-					actualStart, actualEnd = parseRangeFromHeader(outText)
-				}
-				if actualStart == 0 {
-					actualStart = getIntField(tc.Args, "start_line")
-					if actualStart == 0 {
-						actualStart = 1
-					}
-					actualEnd = getIntField(tc.Args, "end_line")
-				}
+				outText := getToolOutput(tm.Content)
+				actualStart, actualEnd := parseRangeFromHeader(outText)
 				var rangeStr string
 				if actualStart > 0 && actualEnd > 0 {
-					rangeStr = fmt.Sprintf(" %d-%d", actualStart, actualEnd)
+					rangeStr = fmt.Sprintf(" (Lines %d-%d)", actualStart, actualEnd)
 				}
-				statusLabel = fmt.Sprintf("Read [%s%s]", filename, rangeStr)
+				statusLabel = fmt.Sprintf("Viewed [%s]%s", filename, rangeStr)
 			}
 			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Success)}, icon.Checkmark)
 			themeColor = t.Color.Surface.Success
@@ -173,18 +157,6 @@ var ViewToolWidget = kitex.FC("ViewToolWidget", func(props ToolExecutionProps) k
 			Background(t.Color.Surface.BaseHover).
 			Foreground(themeColor)
 	}
-
-	kitex.UseEffect(func() {
-		if showModal() {
-			kitex.PostMacro(func() {
-				if modalRef.Current != nil {
-					if doc := modalRef.Current.OwnerDocument(); doc != nil {
-						doc.Focus(modalRef.Current)
-					}
-				}
-			})
-		}
-	}, []any{showModal()})
 
 	var badgeNode kitex.Node
 	if tm != nil && !tm.IsError {
@@ -208,138 +180,90 @@ var ViewToolWidget = kitex.FC("ViewToolWidget", func(props ToolExecutionProps) k
 
 	return kitex.Fragment(
 		badgeNode,
-		kitex.If(showModal(), func() kitex.Node {
-			var cleanCode string
-			var startLine int
-			var showLines bool
+		components.Modal(components.ModalProps{
+			IsOpen:  showModal(),
+			Title:   kitex.Text(fmt.Sprintf("Viewing %s", filename)),
+			OnClose: func() { setShowModal(false) },
+		},
+			kitex.If(showModal(), func() kitex.Node {
+				var cleanCode string
+				var startLine int
+				var showLines bool
 
-			vOut, ok := parseViewStructuredOutput(tm.StructuredContent)
-			if ok {
-				cleanCode = stripLinePrefixes(vOut.Content)
-				startLine = vOut.StartLine
-				showLines = true
-			} else {
-				outText := getToolOutput(tm.Content)
-				actualStart, _ := parseRangeFromHeader(outText)
-				if actualStart > 0 {
-					_, after, ok := strings.Cut(outText, "\n")
-					if ok {
-						cleanCode = stripLinePrefixes(after)
-					} else {
-						cleanCode = outText
-					}
-					startLine = actualStart
+				vOut, ok := parseViewStructuredOutput(tm.StructuredContent)
+				if ok {
+					cleanCode = stripLinePrefixes(vOut.Content)
+					startLine = vOut.StartLine
 					showLines = true
 				} else {
-					cleanCode = outText
-					showLines = false
+					outText := getToolOutput(tm.Content)
+					actualStart, _ := parseRangeFromHeader(outText)
+					if actualStart > 0 {
+						_, after, ok := strings.Cut(outText, "\n")
+						if ok {
+							cleanCode = stripLinePrefixes(after)
+						} else {
+							cleanCode = outText
+						}
+						startLine = actualStart
+						showLines = true
+					} else {
+						cleanCode = outText
+						showLines = false
+					}
 				}
-			}
 
-			modalStyle := style.S().
-				Display(style.DisplayFlex).
-				FlexDirection(style.FlexColumn).
-				Width(style.Percent(80)).
-				Height(style.Percent(80)).
-				Padding(1).
-				Overflow(style.OverflowHidden)
-
-			return kitex.Dialog(kitex.DialogProps{
-				ZIndex: 100,
-				Ref:    modalRef,
-				OnKeyDown: func(e event.Event) {
-					ke, ok := e.(*event.KeyEvent)
-					if !ok {
-						return
-					}
-					if ke.Code == key.KeyEscape || ke.Text == "q" {
-						e.PreventDefault()
-						e.StopPropagation()
-						setShowModal(false)
-					}
-				},
-			},
-				components.Paper(components.PaperProps{
-					Color:   components.PaperBase,
-					Variant: components.PaperOutlined,
-					Style:   modalStyle,
-				},
-					kitex.Box(kitex.BoxProps{
-						Style: style.S().
-							Display(style.DisplayFlex).
-							FlexDirection(style.FlexRow).
-							JustifyContent(style.JustifyBetween).
-							AlignItems(style.AlignCenter).
-							PaddingBottom(1).
-							BorderBottom(true, style.SingleBorder()),
-					},
-						kitex.Span(kitex.SpanProps{Style: style.S().Bold(true)}, kitex.Text(fmt.Sprintf("Viewing %s", filename))),
-						components.Button(components.ButtonProps{
-							Variant: components.ButtonText,
-							Color:   components.ButtonBase,
-							OnClick: func() {
-								setShowModal(false)
-							},
-						}, kitex.Text("Close [Esc/q]")),
-					),
-					kitex.Box(kitex.BoxProps{
-						Style: style.S().
-							Flex(1, 1, style.Cells(0)).
-							MinHeight(style.Cells(0)).
-							OverflowY(style.OverflowAuto).
-							MarginTop(1),
-					},
-						kitex.If(ok && vOut.IsBinary, func() kitex.Node {
-							var textPrimary color.Color
-							var textSecondary color.Color
-							if t != nil {
-								textPrimary = t.Color.Text.Primary
-								textSecondary = t.Color.Text.Secondary
-							}
-							return kitex.Box(kitex.BoxProps{
+				return kitex.Fragment(
+					kitex.If(ok && vOut.IsBinary, func() kitex.Node {
+						var textPrimary color.Color
+						var textSecondary color.Color
+						if t != nil {
+							textPrimary = t.Color.Text.Primary
+							textSecondary = t.Color.Text.Secondary
+						}
+						return kitex.Box(kitex.BoxProps{
+							Style: style.S().
+								Display(style.DisplayFlex).
+								FlexDirection(style.FlexColumn).
+								Gap(1).
+								Padding(1),
+						},
+							kitex.Box(kitex.BoxProps{
 								Style: style.S().
 									Display(style.DisplayFlex).
 									FlexDirection(style.FlexColumn).
-									Gap(1).
-									Padding(1),
+									Gap(0),
 							},
-								kitex.Box(kitex.BoxProps{
-									Style: style.S().
-										Display(style.DisplayFlex).
-										FlexDirection(style.FlexColumn).
-										Gap(0),
+								kitex.Span(kitex.SpanProps{Style: style.S().Bold(true).Foreground(textPrimary)}, kitex.Text("Binary File Details:")),
+								kitex.Span(kitex.SpanProps{Style: style.S().Foreground(textSecondary)}, kitex.Text(fmt.Sprintf("  • Name:      %s", filename))),
+								kitex.Span(kitex.SpanProps{Style: style.S().Foreground(textSecondary)}, kitex.Text(fmt.Sprintf("  • MIME Type: %s", vOut.MimeType))),
+								kitex.Span(kitex.SpanProps{Style: style.S().Foreground(textSecondary)}, kitex.Text(fmt.Sprintf("  • Path:      %s", vOut.Source))),
+							),
+							components.Button(components.ButtonProps{
+								Variant: components.ButtonSolid,
+								Color:   components.ButtonPrimary,
+								Style: style.S().
+									AlignSelf(style.AlignStart).
+									MarginTop(1).
+									Padding(0, 2),
+								OnClick: func() {
+									openWithSystemViewer(vOut.Source)
 								},
-									kitex.Span(kitex.SpanProps{Style: style.S().Bold(true).Foreground(textPrimary)}, kitex.Text("Binary File Details:")),
-									kitex.Span(kitex.SpanProps{Style: style.S().Foreground(textSecondary)}, kitex.Text(fmt.Sprintf("  • Name:      %s", filename))),
-									kitex.Span(kitex.SpanProps{Style: style.S().Foreground(textSecondary)}, kitex.Text(fmt.Sprintf("  • MIME Type: %s", vOut.MimeType))),
-									kitex.Span(kitex.SpanProps{Style: style.S().Foreground(textSecondary)}, kitex.Text(fmt.Sprintf("  • Path:      %s", vOut.Source))),
-								),
-								components.Button(components.ButtonProps{
-									Variant: components.ButtonSolid,
-									Color:   components.ButtonPrimary,
-									Style: style.S().
-										AlignSelf(style.AlignStart).
-										MarginTop(1).
-										Padding(0, 2),
-									OnClick: func() {
-										openWithSystemViewer(vOut.Source)
-									},
-								}, kitex.Text("Open with System Viewer")),
-							)
-						}),
-						kitex.If(!ok || !vOut.IsBinary, func() kitex.Node {
-							return components.CodeBlock(components.CodeBlockProps{
-								Code:            cleanCode,
-								Lang:            detectLang(filename),
-								HideHeader:      true,
-								ShowLineNumbers: showLines,
-								StartLine:       startLine,
-							})
-						}),
-					),
-				),
-			)
-		}),
+							}, kitex.Text("Open with System Viewer")),
+						)
+					}),
+					kitex.If(!ok || !vOut.IsBinary, func() kitex.Node {
+						return components.CodeBlock(components.CodeBlockProps{
+							Code:            cleanCode,
+							Lang:            detectLang(filename),
+							HideHeader:      true,
+							ShowLineNumbers: showLines,
+							StartLine:       startLine,
+						})
+					}),
+				)
+			}),
+		),
 	)
 })
 
@@ -784,7 +708,6 @@ func grepEntryRow(t *theme.Scheme, match tools.GrepOutputMatchesItem) kitex.Node
 var WriteToolWidget = kitex.FC("WriteToolWidget", func(props ToolExecutionProps) kitex.Node {
 	t := theme.UseTheme()
 	showModal, setShowModal := kitex.UseState(false)
-	modalRef := kitex.CreateRef[dom.Element]()
 
 	tc := props.ToolCall
 	tm := props.ToolMessage
@@ -838,18 +761,6 @@ var WriteToolWidget = kitex.FC("WriteToolWidget", func(props ToolExecutionProps)
 			Foreground(themeColor)
 	}
 
-	kitex.UseEffect(func() {
-		if showModal() {
-			kitex.PostMacro(func() {
-				if modalRef.Current != nil {
-					if doc := modalRef.Current.OwnerDocument(); doc != nil {
-						doc.Focus(modalRef.Current)
-					}
-				}
-			})
-		}
-	}, []any{showModal()})
-
 	var badgeNode kitex.Node
 	if content != "" {
 		badgeNode = components.Button(components.ButtonProps{
@@ -870,73 +781,23 @@ var WriteToolWidget = kitex.FC("WriteToolWidget", func(props ToolExecutionProps)
 		)
 	}
 
-	modalStyle := style.S().
-		Display(style.DisplayFlex).
-		FlexDirection(style.FlexColumn).
-		Width(style.Percent(80)).
-		Height(style.Percent(80)).
-		Padding(1).
-		Overflow(style.OverflowHidden)
-
 	return kitex.Fragment(
 		badgeNode,
-		kitex.If(showModal(), func() kitex.Node {
-			return kitex.Dialog(kitex.DialogProps{
-				ZIndex: 100,
-				Ref:    modalRef,
-				OnKeyDown: func(e event.Event) {
-					ke, ok := e.(*event.KeyEvent)
-					if !ok {
-						return
-					}
-					if ke.Code == key.KeyEscape || ke.Text == "q" {
-						e.PreventDefault()
-						e.StopPropagation()
-						setShowModal(false)
-					}
-				},
-			},
-				components.Paper(components.PaperProps{
-					Color:   components.PaperBase,
-					Variant: components.PaperOutlined,
-					Style:   modalStyle,
-				},
-					kitex.Box(kitex.BoxProps{
-						Style: style.S().
-							Display(style.DisplayFlex).
-							FlexDirection(style.FlexRow).
-							JustifyContent(style.JustifyBetween).
-							AlignItems(style.AlignCenter).
-							PaddingBottom(1).
-							BorderBottom(true, style.SingleBorder()),
-					},
-						kitex.Span(kitex.SpanProps{Style: style.S().Bold(true)}, kitex.Text(fmt.Sprintf("Wrote Content for %s", filename))),
-						components.Button(components.ButtonProps{
-							Variant: components.ButtonText,
-							Color:   components.ButtonBase,
-							OnClick: func() {
-								setShowModal(false)
-							},
-						}, kitex.Text("Close [Esc/q]")),
-					),
-					kitex.Box(kitex.BoxProps{
-						Style: style.S().
-							Flex(1, 1, style.Cells(0)).
-							MinHeight(style.Cells(0)).
-							OverflowY(style.OverflowAuto).
-							MarginTop(1),
-					},
-						components.CodeBlock(components.CodeBlockProps{
-							Code:            content,
-							Lang:            detectLang(filename),
-							HideHeader:      true,
-							ShowLineNumbers: true,
-							StartLine:       1,
-						}),
-					),
-				),
-			)
-		}),
+		components.Modal(components.ModalProps{
+			IsOpen:  showModal(),
+			Title:   kitex.Text(fmt.Sprintf("Wrote Content for %s", filename)),
+			OnClose: func() { setShowModal(false) },
+		},
+			kitex.If(showModal(), func() kitex.Node {
+				return components.CodeBlock(components.CodeBlockProps{
+					Code:            content,
+					Lang:            detectLang(filename),
+					HideHeader:      true,
+					ShowLineNumbers: true,
+					StartLine:       1,
+				})
+			}),
+		),
 	)
 })
 
@@ -945,7 +806,6 @@ var EditToolWidget = kitex.FC("EditToolWidget", func(props ToolExecutionProps) k
 	t := theme.UseTheme()
 	showModal, setShowModal := kitex.UseState(false)
 	split, setSplit := kitex.UseState(false)
-	modalRef := kitex.CreateRef[dom.Element]()
 
 	tc := props.ToolCall
 	tm := props.ToolMessage
@@ -1000,18 +860,6 @@ var EditToolWidget = kitex.FC("EditToolWidget", func(props ToolExecutionProps) k
 			Foreground(themeColor)
 	}
 
-	kitex.UseEffect(func() {
-		if showModal() {
-			kitex.PostMacro(func() {
-				if modalRef.Current != nil {
-					if doc := modalRef.Current.OwnerDocument(); doc != nil {
-						doc.Focus(modalRef.Current)
-					}
-				}
-			})
-		}
-	}, []any{showModal()})
-
 	var badgeNode kitex.Node
 	if tm != nil && !tm.IsError && diffContent != "" {
 		badgeNode = components.Button(components.ButtonProps{
@@ -1032,90 +880,33 @@ var EditToolWidget = kitex.FC("EditToolWidget", func(props ToolExecutionProps) k
 		)
 	}
 
-	modalStyle := style.S().
-		Display(style.DisplayFlex).
-		FlexDirection(style.FlexColumn).
-		Width(style.Percent(80)).
-		Height(style.Percent(80)).
-		Padding(1).
-		Overflow(style.OverflowHidden)
-
 	return kitex.Fragment(
 		badgeNode,
-		kitex.If(showModal(), func() kitex.Node {
-			return kitex.Dialog(kitex.DialogProps{
-				ZIndex: 100,
-				Ref:    modalRef,
-				OnKeyDown: func(e event.Event) {
-					ke, ok := e.(*event.KeyEvent)
-					if !ok {
-						return
-					}
-					if ke.Code == key.KeyEscape || ke.Text == "q" {
-						e.PreventDefault()
-						e.StopPropagation()
-						setShowModal(false)
-					}
+		components.Modal(components.ModalProps{
+			IsOpen:  showModal(),
+			Title:   kitex.Text(fmt.Sprintf("Changes in %s", filename)),
+			OnClose: func() { setShowModal(false) },
+			HeaderActions: components.Button(components.ButtonProps{
+				Variant: components.ButtonText,
+				Color:   components.ButtonBase,
+				OnClick: func() {
+					setSplit(!split())
 				},
-			},
-				components.Paper(components.PaperProps{
-					Color:   components.PaperBase,
-					Variant: components.PaperOutlined,
-					Style:   modalStyle,
-				},
-					kitex.Box(kitex.BoxProps{
-						Style: style.S().
-							Display(style.DisplayFlex).
-							FlexDirection(style.FlexRow).
-							JustifyContent(style.JustifyBetween).
-							AlignItems(style.AlignCenter).
-							PaddingBottom(1).
-							BorderBottom(true, style.SingleBorder()),
-					},
-						kitex.Span(kitex.SpanProps{Style: style.S().Bold(true)}, kitex.Text(fmt.Sprintf("Changes in %s", filename))),
-						kitex.Box(kitex.BoxProps{
-							Style: style.S().
-								Display(style.DisplayFlex).
-								FlexDirection(style.FlexRow).
-								Gap(1),
-						},
-							components.Button(components.ButtonProps{
-								Variant: components.ButtonText,
-								Color:   components.ButtonBase,
-								OnClick: func() {
-									setSplit(!split())
-								},
-							}, func() kitex.Node {
-								if split() {
-									return kitex.Text("Show Unified")
-								}
-								return kitex.Text("Show Split")
-							}()),
-							components.Button(components.ButtonProps{
-								Variant: components.ButtonText,
-								Color:   components.ButtonBase,
-								OnClick: func() {
-									setShowModal(false)
-								},
-							}, kitex.Text("Close [Esc/q]")),
-						),
-					),
-					kitex.Box(kitex.BoxProps{
-						Style: style.S().
-							Flex(1, 1, style.Cells(0)).
-							MinHeight(style.Cells(0)).
-							OverflowY(style.OverflowAuto).
-							MarginTop(1),
-					},
-						components.DiffBlock(components.DiffBlockProps{
-							Diff:  diffContent,
-							Lang:  detectLang(filename),
-							Split: split(),
-						}),
-					),
-				),
-			)
-		}),
+			}, func() kitex.Node {
+				if split() {
+					return kitex.Text("Show Unified")
+				}
+				return kitex.Text("Show Split")
+			}()),
+		},
+			kitex.If(showModal(), func() kitex.Node {
+				return components.DiffBlock(components.DiffBlockProps{
+					Diff:  diffContent,
+					Lang:  detectLang(filename),
+					Split: split(),
+				})
+			}),
+		),
 	)
 })
 
@@ -1124,7 +915,6 @@ var MultiEditToolWidget = kitex.FC("MultiEditToolWidget", func(props ToolExecuti
 	t := theme.UseTheme()
 	showModal, setShowModal := kitex.UseState(false)
 	split, setSplit := kitex.UseState(false)
-	modalRef := kitex.CreateRef[dom.Element]()
 
 	tc := props.ToolCall
 	tm := props.ToolMessage
@@ -1179,18 +969,6 @@ var MultiEditToolWidget = kitex.FC("MultiEditToolWidget", func(props ToolExecuti
 			Foreground(themeColor)
 	}
 
-	kitex.UseEffect(func() {
-		if showModal() {
-			kitex.PostMacro(func() {
-				if modalRef.Current != nil {
-					if doc := modalRef.Current.OwnerDocument(); doc != nil {
-						doc.Focus(modalRef.Current)
-					}
-				}
-			})
-		}
-	}, []any{showModal()})
-
 	var badgeNode kitex.Node
 	if tm != nil && !tm.IsError && diffContent != "" {
 		badgeNode = components.Button(components.ButtonProps{
@@ -1211,90 +989,33 @@ var MultiEditToolWidget = kitex.FC("MultiEditToolWidget", func(props ToolExecuti
 		)
 	}
 
-	modalStyle := style.S().
-		Display(style.DisplayFlex).
-		FlexDirection(style.FlexColumn).
-		Width(style.Percent(80)).
-		Height(style.Percent(80)).
-		Padding(1).
-		Overflow(style.OverflowHidden)
-
 	return kitex.Fragment(
 		badgeNode,
-		kitex.If(showModal(), func() kitex.Node {
-			return kitex.Dialog(kitex.DialogProps{
-				ZIndex: 100,
-				Ref:    modalRef,
-				OnKeyDown: func(e event.Event) {
-					ke, ok := e.(*event.KeyEvent)
-					if !ok {
-						return
-					}
-					if ke.Code == key.KeyEscape || ke.Text == "q" {
-						e.PreventDefault()
-						e.StopPropagation()
-						setShowModal(false)
-					}
+		components.Modal(components.ModalProps{
+			IsOpen:  showModal(),
+			Title:   kitex.Text(fmt.Sprintf("Multi-Edit Changes in %s", filename)),
+			OnClose: func() { setShowModal(false) },
+			HeaderActions: components.Button(components.ButtonProps{
+				Variant: components.ButtonText,
+				Color:   components.ButtonBase,
+				OnClick: func() {
+					setSplit(!split())
 				},
-			},
-				components.Paper(components.PaperProps{
-					Color:   components.PaperBase,
-					Variant: components.PaperOutlined,
-					Style:   modalStyle,
-				},
-					kitex.Box(kitex.BoxProps{
-						Style: style.S().
-							Display(style.DisplayFlex).
-							FlexDirection(style.FlexRow).
-							JustifyContent(style.JustifyBetween).
-							AlignItems(style.AlignCenter).
-							PaddingBottom(1).
-							BorderBottom(true, style.SingleBorder()),
-					},
-						kitex.Span(kitex.SpanProps{Style: style.S().Bold(true)}, kitex.Text(fmt.Sprintf("Multi-Edit Changes in %s", filename))),
-						kitex.Box(kitex.BoxProps{
-							Style: style.S().
-								Display(style.DisplayFlex).
-								FlexDirection(style.FlexRow).
-								Gap(1),
-						},
-							components.Button(components.ButtonProps{
-								Variant: components.ButtonText,
-								Color:   components.ButtonBase,
-								OnClick: func() {
-									setSplit(!split())
-								},
-							}, func() kitex.Node {
-								if split() {
-									return kitex.Text("Show Unified")
-								}
-								return kitex.Text("Show Split")
-							}()),
-							components.Button(components.ButtonProps{
-								Variant: components.ButtonText,
-								Color:   components.ButtonBase,
-								OnClick: func() {
-									setShowModal(false)
-								},
-							}, kitex.Text("Close [Esc/q]")),
-						),
-					),
-					kitex.Box(kitex.BoxProps{
-						Style: style.S().
-							Flex(1, 1, style.Cells(0)).
-							MinHeight(style.Cells(0)).
-							OverflowY(style.OverflowAuto).
-							MarginTop(1),
-					},
-						components.DiffBlock(components.DiffBlockProps{
-							Diff:  diffContent,
-							Lang:  detectLang(filename),
-							Split: split(),
-						}),
-					),
-				),
-			)
-		}),
+			}, func() kitex.Node {
+				if split() {
+					return kitex.Text("Show Unified")
+				}
+				return kitex.Text("Show Split")
+			}()),
+		},
+			kitex.If(showModal(), func() kitex.Node {
+				return components.DiffBlock(components.DiffBlockProps{
+					Diff:  diffContent,
+					Lang:  detectLang(filename),
+					Split: split(),
+				})
+			}),
+		),
 	)
 })
 
@@ -1302,7 +1023,6 @@ var MultiEditToolWidget = kitex.FC("MultiEditToolWidget", func(props ToolExecuti
 var RemoveToolWidget = kitex.FC("RemoveToolWidget", func(props ToolExecutionProps) kitex.Node {
 	t := theme.UseTheme()
 	showModal, setShowModal := kitex.UseState(false)
-	modalRef := kitex.CreateRef[dom.Element]()
 
 	tc := props.ToolCall
 	tm := props.ToolMessage
@@ -1354,18 +1074,6 @@ var RemoveToolWidget = kitex.FC("RemoveToolWidget", func(props ToolExecutionProp
 			Foreground(themeColor)
 	}
 
-	kitex.UseEffect(func() {
-		if showModal() {
-			kitex.PostMacro(func() {
-				if modalRef.Current != nil {
-					if doc := modalRef.Current.OwnerDocument(); doc != nil {
-						doc.Focus(modalRef.Current)
-					}
-				}
-			})
-		}
-	}, []any{showModal()})
-
 	var badgeNode kitex.Node
 	if tm != nil && !tm.IsError {
 		badgeNode = components.Button(components.ButtonProps{
@@ -1386,139 +1094,89 @@ var RemoveToolWidget = kitex.FC("RemoveToolWidget", func(props ToolExecutionProp
 		)
 	}
 
-	modalStyle := style.S().
-		Display(style.DisplayFlex).
-		FlexDirection(style.FlexColumn).
-		Width(style.Percent(80)).
-		Height(style.Percent(80)).
-		Padding(1).
-		Overflow(style.OverflowHidden)
-
 	return kitex.Fragment(
 		badgeNode,
-		kitex.If(showModal(), func() kitex.Node {
-			rOut, ok := parseRemoveStructuredOutput(tm.StructuredContent)
-			return kitex.Dialog(kitex.DialogProps{
-				ZIndex: 100,
-				Ref:    modalRef,
-				OnKeyDown: func(e event.Event) {
-					ke, ok := e.(*event.KeyEvent)
-					if !ok {
-						return
-					}
-					if ke.Code == key.KeyEscape || ke.Text == "q" {
-						e.PreventDefault()
-						e.StopPropagation()
-						setShowModal(false)
-					}
-				},
-			},
-				components.Paper(components.PaperProps{
-					Color:   components.PaperBase,
-					Variant: components.PaperOutlined,
-					Style:   modalStyle,
+		components.Modal(components.ModalProps{
+			IsOpen:  showModal(),
+			Title:   kitex.Text(fmt.Sprintf("Remove Result for %s", filename)),
+			OnClose: func() { setShowModal(false) },
+		},
+			kitex.If(showModal(), func() kitex.Node {
+				rOut, ok := parseRemoveStructuredOutput(tm.StructuredContent)
+				return kitex.Box(kitex.BoxProps{
+					Style: style.S().
+						Display(style.DisplayFlex).
+						FlexDirection(style.FlexColumn).
+						Gap(1).
+						Padding(1),
 				},
 					kitex.Box(kitex.BoxProps{
 						Style: style.S().
 							Display(style.DisplayFlex).
 							FlexDirection(style.FlexRow).
-							JustifyContent(style.JustifyBetween).
-							AlignItems(style.AlignCenter).
-							PaddingBottom(1).
-							BorderBottom(true, style.SingleBorder()),
+							Gap(1),
 					},
-						kitex.Span(kitex.SpanProps{Style: style.S().Bold(true)}, kitex.Text(fmt.Sprintf("Remove Result for %s", filename))),
-						components.Button(components.ButtonProps{
-							Variant: components.ButtonText,
-							Color:   components.ButtonBase,
-							OnClick: func() {
-								setShowModal(false)
-							},
-						}, kitex.Text("Close [Esc/q]")),
+						kitex.Span(kitex.SpanProps{Style: style.S().Bold(true)}, kitex.Text("Path:")),
+						kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Tertiary)}, kitex.Text(path)),
 					),
-					kitex.Box(kitex.BoxProps{
-						Style: style.S().
-							Flex(1, 1, style.Cells(0)).
-							MinHeight(style.Cells(0)).
-							OverflowY(style.OverflowAuto).
-							MarginTop(1),
-					},
-						kitex.Box(kitex.BoxProps{
+					kitex.If(ok && rOut.IsBinary, func() kitex.Node {
+						var textPrimary color.Color
+						var textSecondary color.Color
+						if t != nil {
+							textPrimary = t.Color.Text.Primary
+							textSecondary = t.Color.Text.Secondary
+						}
+						return kitex.Box(kitex.BoxProps{
 							Style: style.S().
 								Display(style.DisplayFlex).
 								FlexDirection(style.FlexColumn).
+								AlignItems(style.AlignCenter).
+								JustifyContent(style.JustifyCenter).
 								Gap(1).
+								MarginTop(2).
 								Padding(1),
 						},
+							kitex.Span(kitex.SpanProps{Style: style.S().Bold(true).Foreground(textPrimary)}, kitex.Text("Binary File Removed")),
+							kitex.Span(kitex.SpanProps{Style: style.S().Foreground(textSecondary)}, kitex.Text(fmt.Sprintf("MimeType: %s (Text preview is not available)", rOut.MimeType))),
+						)
+					}),
+					kitex.If(ok && !rOut.IsBinary && rOut.Content != "", func() kitex.Node {
+						return kitex.Fragment(
 							kitex.Box(kitex.BoxProps{
 								Style: style.S().
-									Display(style.DisplayFlex).
-									FlexDirection(style.FlexRow).
-									Gap(1),
+									MarginTop(1).
+									PaddingBottom(1),
 							},
-								kitex.Span(kitex.SpanProps{Style: style.S().Bold(true)}, kitex.Text("Path:")),
-								kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Tertiary)}, kitex.Text(path)),
+								kitex.Span(kitex.SpanProps{Style: style.S().Bold(true)}, kitex.Text("Deleted File Content:")),
 							),
-							kitex.If(ok && rOut.IsBinary, func() kitex.Node {
-								var textPrimary color.Color
-								var textSecondary color.Color
-								if t != nil {
-									textPrimary = t.Color.Text.Primary
-									textSecondary = t.Color.Text.Secondary
-								}
-								return kitex.Box(kitex.BoxProps{
-									Style: style.S().
-										Display(style.DisplayFlex).
-										FlexDirection(style.FlexColumn).
-										AlignItems(style.AlignCenter).
-										JustifyContent(style.JustifyCenter).
-										Gap(1).
-										MarginTop(2).
-										Padding(1),
-								},
-									kitex.Span(kitex.SpanProps{Style: style.S().Bold(true).Foreground(textPrimary)}, kitex.Text("Binary File Removed")),
-									kitex.Span(kitex.SpanProps{Style: style.S().Foreground(textSecondary)}, kitex.Text(fmt.Sprintf("MimeType: %s (Text preview is not available)", rOut.MimeType))),
-								)
+							components.CodeBlock(components.CodeBlockProps{
+								Code:            rOut.Content,
+								Lang:            detectLang(filename),
+								HideHeader:      true,
+								ShowLineNumbers: true,
+								StartLine:       1,
 							}),
-							kitex.If(ok && !rOut.IsBinary && rOut.Content != "", func() kitex.Node {
-								return kitex.Fragment(
-									kitex.Box(kitex.BoxProps{
-										Style: style.S().
-											MarginTop(1).
-											PaddingBottom(1),
-									},
-										kitex.Span(kitex.SpanProps{Style: style.S().Bold(true)}, kitex.Text("Deleted File Content:")),
-									),
-									components.CodeBlock(components.CodeBlockProps{
-										Code:            rOut.Content,
-										Lang:            detectLang(filename),
-										HideHeader:      true,
-										ShowLineNumbers: true,
-										StartLine:       1,
-									}),
-								)
-							}),
-							kitex.If(!ok || (!rOut.IsBinary && rOut.Content == ""), func() kitex.Node {
-								var statusMsg string
-								if tm.IsError {
-									statusMsg = "Failed to remove target (see error)."
-								} else if ok && rOut.Success {
-									statusMsg = "Successfully removed directory/target."
-								} else {
-									statusMsg = "Failed to remove target."
-								}
-								return kitex.Box(kitex.BoxProps{
-									Style: style.S().
-										MarginTop(1),
-								},
-									kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Secondary)}, kitex.Text(statusMsg)),
-								)
-							}),
-						),
-					),
-				),
-			)
-		}),
+						)
+					}),
+					kitex.If(!ok || (!rOut.IsBinary && rOut.Content == ""), func() kitex.Node {
+						var statusMsg string
+						if tm.IsError {
+							statusMsg = "Failed to remove target (see error)."
+						} else if ok && rOut.Success {
+							statusMsg = "Successfully removed directory/target."
+						} else {
+							statusMsg = "Failed to remove target."
+						}
+						return kitex.Box(kitex.BoxProps{
+							Style: style.S().
+								MarginTop(1),
+						},
+							kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Secondary)}, kitex.Text(statusMsg)),
+						)
+					}),
+				)
+			}),
+		),
 	)
 })
 
@@ -1527,19 +1185,6 @@ var BashToolWidget = kitex.FC("BashToolWidget", func(props ToolExecutionProps) k
 	t := theme.UseTheme()
 	isOpen, setIsOpen := kitex.UseState(true)
 	showModal, setShowModal := kitex.UseState(false)
-	modalRef := kitex.CreateRef[dom.Element]()
-
-	kitex.UseEffect(func() {
-		if showModal() {
-			kitex.PostMacro(func() {
-				if modalRef.Current != nil {
-					if doc := modalRef.Current.OwnerDocument(); doc != nil {
-						doc.Focus(modalRef.Current)
-					}
-				}
-			})
-		}
-	}, []any{showModal()})
 
 	tc := props.ToolCall
 	tm := props.ToolMessage
@@ -1815,108 +1460,63 @@ var BashToolWidget = kitex.FC("BashToolWidget", func(props ToolExecutionProps) k
 				)
 			}),
 		),
-		kitex.If(showModal(), func() kitex.Node {
-			outText := getToolOutput(tm.Content)
-			parts := strings.Split(outText, "[stderr]\n")
-			var elements []kitex.Node
+		components.Modal(components.ModalProps{
+			IsOpen: showModal(),
+			Title:  kitex.Span(kitex.SpanProps{Style: style.S().Bold(true)}, kitex.Text("Command Output")),
+			OnClose: func() {
+				setShowModal(false)
+			},
+			Style: style.S().
+				Width(style.Percent(90)).
+				Height(style.Percent(80)),
+		},
+			kitex.If(showModal(), func() kitex.Node {
+				outText := getToolOutput(tm.Content)
+				parts := strings.Split(outText, "[stderr]\n")
+				var elements []kitex.Node
 
-			var textCol color.Color
-			if t != nil {
-				textCol = t.Color.Text.Primary
-			}
+				var textCol color.Color
+				if t != nil {
+					textCol = t.Color.Text.Primary
+				}
 
-			outputContainerStyle := style.S().
-				Display(style.DisplayFlex).
-				FlexDirection(style.FlexColumn).
-				Background(t.Color.Surface.BaseHover).
-				Padding(1).
-				Width(style.Percent(100)).
-				MaxWidth(style.Percent(100)).
-				Overflow(style.OverflowHidden)
+				outputContainerStyle := style.S().
+					Display(style.DisplayFlex).
+					FlexDirection(style.FlexColumn).
+					Background(t.Color.Surface.BaseHover).
+					Padding(1).
+					Width(style.Percent(100)).
+					MaxWidth(style.Percent(100)).
+					Overflow(style.OverflowHidden)
 
-			// First part is stdout
-			stdoutText := strings.TrimSpace(parts[0])
-			if stdoutText != "" {
-				stdoutText = strings.ReplaceAll(stdoutText, "\t", "    ")
-				elements = append(elements, kitex.Box(kitex.BoxProps{
-					Style: style.S().
-						Foreground(textCol).
-						WhiteSpace(style.WhiteSpacePreWrap),
-				}, kitex.Text(stdoutText)))
-			}
-
-			// Subsequent parts are stderr
-			if len(parts) > 1 {
-				stderrText := strings.TrimSpace(strings.Join(parts[1:], ""))
-				if stderrText != "" {
-					stderrText = strings.ReplaceAll(stderrText, "\t", "    ")
+				// First part is stdout
+				stdoutText := strings.TrimSpace(parts[0])
+				if stdoutText != "" {
+					stdoutText = strings.ReplaceAll(stdoutText, "\t", "    ")
 					elements = append(elements, kitex.Box(kitex.BoxProps{
 						Style: style.S().
-							Foreground(t.Color.Text.Error).
-							WhiteSpace(style.WhiteSpacePreWrap).
-							MarginTop(1),
-					}, kitex.Text("[stderr]\n"+stderrText)))
+							Foreground(textCol).
+							WhiteSpace(style.WhiteSpacePreWrap),
+					}, kitex.Text(stdoutText)))
 				}
-			}
 
-			modalStyle := style.S().
-				Display(style.DisplayFlex).
-				FlexDirection(style.FlexColumn).
-				Width(style.Percent(90)).
-				Height(style.Percent(80)).
-				Padding(1).
-				Overflow(style.OverflowHidden)
+				// Subsequent parts are stderr
+				if len(parts) > 1 {
+					stderrText := strings.TrimSpace(strings.Join(parts[1:], ""))
+					if stderrText != "" {
+						stderrText = strings.ReplaceAll(stderrText, "\t", "    ")
+						elements = append(elements, kitex.Box(kitex.BoxProps{
+							Style: style.S().
+								Foreground(t.Color.Text.Error).
+								WhiteSpace(style.WhiteSpacePreWrap).
+								MarginTop(1),
+						}, kitex.Text("[stderr]\n"+stderrText)))
+					}
+				}
 
-			return kitex.Dialog(kitex.DialogProps{
-				ZIndex: 100,
-				Ref:    modalRef,
-				OnKeyDown: func(e event.Event) {
-					ke, ok := e.(*event.KeyEvent)
-					if !ok {
-						return
-					}
-					if ke.Code == key.KeyEscape || ke.Text == "q" {
-						e.PreventDefault()
-						e.StopPropagation()
-						setShowModal(false)
-					}
-				},
-			},
-				components.Paper(components.PaperProps{
-					Color:   components.PaperBase,
-					Variant: components.PaperOutlined,
-					Style:   modalStyle,
-				},
-					kitex.Box(kitex.BoxProps{
-						Style: style.S().
-							Display(style.DisplayFlex).
-							FlexDirection(style.FlexRow).
-							JustifyContent(style.JustifyBetween).
-							AlignItems(style.AlignCenter).
-							PaddingBottom(1).
-							BorderBottom(true, style.SingleBorder()),
-					},
-						kitex.Span(kitex.SpanProps{Style: style.S().Bold(true)}, kitex.Text("Command Output")),
-						components.Button(components.ButtonProps{
-							Variant: components.ButtonText,
-							Color:   components.ButtonBase,
-							OnClick: func() {
-								setShowModal(false)
-							},
-						}, kitex.Text("Close [Esc/q]")),
-					),
-					kitex.Box(kitex.BoxProps{
-						Style: style.S().
-							Flex(1, 1, style.Cells(0)).
-							MinHeight(style.Cells(0)).
-							OverflowY(style.OverflowAuto).
-							MarginTop(1),
-					},
-						kitex.Box(kitex.BoxProps{Style: outputContainerStyle}, elements...),
-					),
-				),
-			)
-		}),
+				return kitex.Box(kitex.BoxProps{Style: outputContainerStyle}, elements...)
+			}),
+		),
 	)
 })
 
@@ -1926,19 +1526,6 @@ var TasksToolWidget = kitex.FC("TasksToolWidget", func(props ToolExecutionProps)
 	t := theme.UseTheme()
 	isOpen, setIsOpen := kitex.UseState(true)
 	showModal, setShowModal := kitex.UseState(false)
-	modalRef := kitex.CreateRef[dom.Element]()
-
-	kitex.UseEffect(func() {
-		if showModal() {
-			kitex.PostMacro(func() {
-				if modalRef.Current != nil {
-					if doc := modalRef.Current.OwnerDocument(); doc != nil {
-						doc.Focus(modalRef.Current)
-					}
-				}
-			})
-		}
-	}, []any{showModal()})
 
 	tc := props.ToolCall
 	tm := props.ToolMessage
@@ -2268,97 +1855,52 @@ var TasksToolWidget = kitex.FC("TasksToolWidget", func(props ToolExecutionProps)
 				)
 			}),
 		),
-		kitex.If(showModal(), func() kitex.Node {
-			modalStyle := style.S().
-				Display(style.DisplayFlex).
-				FlexDirection(style.FlexColumn).
-				Width(style.Percent(90)).
-				Height(style.Percent(80)).
-				Padding(1).
-				Overflow(style.OverflowHidden)
-
-			var modalLogElements []kitex.Node
-
-			if strings.TrimSpace(out.StdoutTail) != "" {
-				modalLogElements = append(modalLogElements,
-					kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Secondary).Bold(true).MarginBottom(1)}, kitex.Text("FULL STDOUT:")),
-					kitex.Box(kitex.BoxProps{
-						Style: style.S().
-							Foreground(t.Color.Text.Primary).
-							Background(t.Color.Surface.BaseHover).
-							Border(true, style.SingleBorder(), t.Color.Border.Primary).
-							Padding(1).
-							MarginBottom(1).
-							WhiteSpace(style.WhiteSpacePreWrap),
-					}, kitex.Text(strings.ReplaceAll(out.StdoutTail, "\t", "    "))),
-				)
-			}
-
-			if strings.TrimSpace(out.StderrTail) != "" {
-				modalLogElements = append(modalLogElements,
-					kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Error).Bold(true).MarginBottom(1)}, kitex.Text("FULL STDERR:")),
-					kitex.Box(kitex.BoxProps{
-						Style: style.S().
-							Foreground(t.Color.Text.Error).
-							Background(t.Color.Surface.BaseHover).
-							Border(true, style.SingleBorder(), t.Color.Text.Error).
-							Padding(1).
-							MarginBottom(1).
-							WhiteSpace(style.WhiteSpacePreWrap),
-					}, kitex.Text(strings.ReplaceAll(out.StderrTail, "\t", "    "))),
-				)
-			}
-
-			return kitex.Dialog(kitex.DialogProps{
-				ZIndex: 100,
-				Ref:    modalRef,
-				OnKeyDown: func(e event.Event) {
-					ke, ok := e.(*event.KeyEvent)
-					if !ok {
-						return
-					}
-					if ke.Code == key.KeyEscape || ke.Text == "q" {
-						e.PreventDefault()
-						e.StopPropagation()
-						setShowModal(false)
-					}
-				},
+		components.Modal(components.ModalProps{
+			IsOpen: showModal(),
+			Title:  kitex.Span(kitex.SpanProps{Style: style.S().Bold(true)}, kitex.Text(fmt.Sprintf("Task Logs: %s", targetTaskId))),
+			OnClose: func() {
+				setShowModal(false)
 			},
-				components.Paper(components.PaperProps{
-					Color:   components.PaperBase,
-					Variant: components.PaperOutlined,
-					Style:   modalStyle,
-				},
-					kitex.Box(kitex.BoxProps{
-						Style: style.S().
-							Display(style.DisplayFlex).
-							FlexDirection(style.FlexRow).
-							JustifyContent(style.JustifyBetween).
-							AlignItems(style.AlignCenter).
-							PaddingBottom(1).
-							BorderBottom(true, style.SingleBorder()),
-					},
-						kitex.Span(kitex.SpanProps{Style: style.S().Bold(true)}, kitex.Text(fmt.Sprintf("Task Logs: %s", targetTaskId))),
-						components.Button(components.ButtonProps{
-							Variant: components.ButtonText,
-							Color:   components.ButtonBase,
-							OnClick: func() {
-								setShowModal(false)
-							},
-						}, kitex.Text("Close [Esc/q]")),
-					),
-					kitex.Box(kitex.BoxProps{
-						Style: style.S().
-							Flex(1, 1, style.Cells(0)).
-							MinHeight(style.Cells(0)).
-							OverflowY(style.OverflowAuto).
-							MarginTop(1),
-					},
-						modalLogElements...,
-					),
-				),
-			)
-		}),
+			Style: style.S().
+				Width(style.Percent(90)).
+				Height(style.Percent(80)),
+		},
+			kitex.If(showModal(), func() kitex.Node {
+				var modalLogElements []kitex.Node
+
+				if strings.TrimSpace(out.StdoutTail) != "" {
+					modalLogElements = append(modalLogElements,
+						kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Secondary).Bold(true).MarginBottom(1)}, kitex.Text("FULL STDOUT:")),
+						kitex.Box(kitex.BoxProps{
+							Style: style.S().
+								Foreground(t.Color.Text.Primary).
+								Background(t.Color.Surface.BaseHover).
+								Border(true, style.SingleBorder(), t.Color.Border.Primary).
+								Padding(1).
+								MarginBottom(1).
+								WhiteSpace(style.WhiteSpacePreWrap),
+						}, kitex.Text(strings.ReplaceAll(out.StdoutTail, "\t", "    "))),
+					)
+				}
+
+				if strings.TrimSpace(out.StderrTail) != "" {
+					modalLogElements = append(modalLogElements,
+						kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Error).Bold(true).MarginBottom(1)}, kitex.Text("FULL STDERR:")),
+						kitex.Box(kitex.BoxProps{
+							Style: style.S().
+								Foreground(t.Color.Text.Error).
+								Background(t.Color.Surface.BaseHover).
+								Border(true, style.SingleBorder(), t.Color.Text.Error).
+								Padding(1).
+								MarginBottom(1).
+								WhiteSpace(style.WhiteSpacePreWrap),
+						}, kitex.Text(strings.ReplaceAll(out.StderrTail, "\t", "    "))),
+					)
+				}
+
+				return kitex.Fragment(modalLogElements...)
+			}),
+		),
 	)
 })
 
@@ -2481,7 +2023,6 @@ var WebSearchToolWidget = kitex.FC("WebSearchToolWidget", func(props ToolExecuti
 var WebFetchToolWidget = kitex.FC("WebFetchToolWidget", func(props ToolExecutionProps) kitex.Node {
 	t := theme.UseTheme()
 	showModal, setShowModal := kitex.UseState(false)
-	modalRef := kitex.CreateRef[dom.Element]()
 
 	tc := props.ToolCall
 	tm := props.ToolMessage
@@ -2538,18 +2079,6 @@ var WebFetchToolWidget = kitex.FC("WebFetchToolWidget", func(props ToolExecution
 			Foreground(themeColor)
 	}
 
-	kitex.UseEffect(func() {
-		if showModal() {
-			kitex.PostMacro(func() {
-				if modalRef.Current != nil {
-					if doc := modalRef.Current.OwnerDocument(); doc != nil {
-						doc.Focus(modalRef.Current)
-					}
-				}
-			})
-		}
-	}, []any{showModal()})
-
 	var badgeNode kitex.Node
 	if tm != nil && !tm.IsError {
 		badgeNode = components.Button(components.ButtonProps{
@@ -2572,166 +2101,123 @@ var WebFetchToolWidget = kitex.FC("WebFetchToolWidget", func(props ToolExecution
 
 	return kitex.Fragment(
 		badgeNode,
-		kitex.If(showModal(), func() kitex.Node {
-			vOut, ok := parseWebFetchStructuredOutput(tm.StructuredContent)
-
-			var cleanCode string
-			var truncated bool
-			var cachedPath string
-			var mimeType string
-			var isBinary bool
-			var title string
-
-			if ok {
-				cleanCode = vOut.Content
-				truncated = vOut.Truncated
-				cachedPath = vOut.CachedPath
-				mimeType = vOut.MimeType
-				isBinary = vOut.IsBinary
-				title = vOut.Title
-			} else {
-				cleanCode = getToolOutput(tm.Content)
-			}
-
-			filename := filepath.Base(url)
-			if idx := strings.Index(filename, "?"); idx != -1 {
-				filename = filename[:idx]
-			}
-			if filename == "" || filename == "." || filename == "/" {
-				filename = "download"
-			}
-
-			modalStyle := style.S().
-				Display(style.DisplayFlex).
-				FlexDirection(style.FlexColumn).
-				Width(style.Percent(80)).
-				Height(style.Percent(80)).
-				Padding(1).
-				Overflow(style.OverflowHidden)
-
-			return kitex.Dialog(kitex.DialogProps{
-				ZIndex: 100,
-				Ref:    modalRef,
-				OnKeyDown: func(e event.Event) {
-					ke, ok := e.(*event.KeyEvent)
-					if !ok {
-						return
-					}
-					if ke.Code == key.KeyEscape || ke.Text == "q" {
-						e.PreventDefault()
-						e.StopPropagation()
-						setShowModal(false)
-					}
-				},
+		components.Modal(components.ModalProps{
+			IsOpen: showModal(),
+			Title:  kitex.Span(kitex.SpanProps{Style: style.S().Bold(true)}, kitex.Text("Web Fetch Details")),
+			OnClose: func() {
+				setShowModal(false)
 			},
-				components.Paper(components.PaperProps{
-					Color:   components.PaperBase,
-					Variant: components.PaperOutlined,
-					Style:   modalStyle,
-				},
+			Style: style.S().
+				Width(style.Percent(80)).
+				Height(style.Percent(80)),
+		},
+			kitex.If(showModal(), func() kitex.Node {
+				vOut, ok := parseWebFetchStructuredOutput(tm.StructuredContent)
+
+				var cleanCode string
+				var truncated bool
+				var cachedPath string
+				var mimeType string
+				var isBinary bool
+				var title string
+
+				if ok {
+					cleanCode = vOut.Content
+					truncated = vOut.Truncated
+					cachedPath = vOut.CachedPath
+					mimeType = vOut.MimeType
+					isBinary = vOut.IsBinary
+					title = vOut.Title
+				} else {
+					cleanCode = getToolOutput(tm.Content)
+				}
+
+				filename := filepath.Base(url)
+				if idx := strings.Index(filename, "?"); idx != -1 {
+					filename = filename[:idx]
+				}
+				if filename == "" || filename == "." || filename == "/" {
+					filename = "download"
+				}
+
+				return kitex.Fragment(
+					// Fetch metadata
 					kitex.Box(kitex.BoxProps{
 						Style: style.S().
 							Display(style.DisplayFlex).
-							FlexDirection(style.FlexRow).
-							JustifyContent(style.JustifyBetween).
-							AlignItems(style.AlignCenter).
-							PaddingBottom(1).
-							BorderBottom(true, style.SingleBorder()),
+							FlexDirection(style.FlexColumn).
+							Gap(0).
+							MarginBottom(1).
+							Padding(1).
+							Background(t.Color.Surface.BaseHover),
 					},
-						kitex.Span(kitex.SpanProps{Style: style.S().Bold(true)}, kitex.Text("Web Fetch Details")),
-						components.Button(components.ButtonProps{
-							Variant: components.ButtonText,
-							Color:   components.ButtonBase,
-							OnClick: func() {
-								setShowModal(false)
+						kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Secondary)}, kitex.Text(fmt.Sprintf("  • URL:       %s", url))),
+						kitex.If(title != "", func() kitex.Node {
+							return kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Secondary)}, kitex.Text(fmt.Sprintf("  • Title:     %s", title)))
+						}),
+						kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Secondary)}, kitex.Text(fmt.Sprintf("  • MIME Type: %s", mimeType))),
+						kitex.If(truncated, func() kitex.Node {
+							return kitex.Box(kitex.BoxProps{
+								Style: style.S().
+									Foreground(t.Color.Text.Error).
+									Bold(true).
+									MarginTop(1),
 							},
-						}, kitex.Text("Close [Esc/q]")),
+								kitex.Text(fmt.Sprintf("[TRUNCATED] Content exceeded 16,000 chars. Full saved to: %s", cachedPath)),
+							)
+						}),
 					),
-					kitex.Box(kitex.BoxProps{
-						Style: style.S().
-							Flex(1, 1, style.Cells(0)).
-							MinHeight(style.Cells(0)).
-							OverflowY(style.OverflowAuto).
-							MarginTop(1),
-					},
-						// Fetch metadata
-						kitex.Box(kitex.BoxProps{
+
+					// Binary vs Text Content
+					kitex.If(isBinary, func() kitex.Node {
+						return kitex.Box(kitex.BoxProps{
 							Style: style.S().
 								Display(style.DisplayFlex).
 								FlexDirection(style.FlexColumn).
-								Gap(0).
-								MarginBottom(1).
-								Padding(1).
-								Background(t.Color.Surface.BaseHover),
+								Gap(1).
+								Padding(1),
 						},
-							kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Secondary)}, kitex.Text(fmt.Sprintf("  • URL:       %s", url))),
-							kitex.If(title != "", func() kitex.Node {
-								return kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Secondary)}, kitex.Text(fmt.Sprintf("  • Title:     %s", title)))
-							}),
-							kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Secondary)}, kitex.Text(fmt.Sprintf("  • MIME Type: %s", mimeType))),
-							kitex.If(truncated, func() kitex.Node {
-								return kitex.Box(kitex.BoxProps{
-									Style: style.S().
-										Foreground(t.Color.Text.Error).
-										Bold(true).
-										MarginTop(1),
-								},
-									kitex.Text(fmt.Sprintf("[TRUNCATED] Content exceeded 16,000 chars. Full saved to: %s", cachedPath)),
-								)
-							}),
-						),
-
-						// Binary vs Text Content
-						kitex.If(isBinary, func() kitex.Node {
-							return kitex.Box(kitex.BoxProps{
+							kitex.Box(kitex.BoxProps{
 								Style: style.S().
 									Display(style.DisplayFlex).
 									FlexDirection(style.FlexColumn).
-									Gap(1).
-									Padding(1),
+									Gap(0),
 							},
-								kitex.Box(kitex.BoxProps{
-									Style: style.S().
-										Display(style.DisplayFlex).
-										FlexDirection(style.FlexColumn).
-										Gap(0),
+								kitex.Span(kitex.SpanProps{Style: style.S().Bold(true)}, kitex.Text("Binary Document:")),
+								kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Secondary)}, kitex.Text(fmt.Sprintf("  • Cached Path: %s", cachedPath))),
+							),
+							components.Button(components.ButtonProps{
+								Variant: components.ButtonSolid,
+								Color:   components.ButtonPrimary,
+								Style: style.S().
+									AlignSelf(style.AlignStart).
+									MarginTop(1).
+									Padding(0, 2),
+								OnClick: func() {
+									openWithSystemViewer(cachedPath)
 								},
-									kitex.Span(kitex.SpanProps{Style: style.S().Bold(true)}, kitex.Text("Binary Document:")),
-									kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Secondary)}, kitex.Text(fmt.Sprintf("  • Cached Path: %s", cachedPath))),
-								),
-								components.Button(components.ButtonProps{
-									Variant: components.ButtonSolid,
-									Color:   components.ButtonPrimary,
-									Style: style.S().
-										AlignSelf(style.AlignStart).
-										MarginTop(1).
-										Padding(0, 2),
-									OnClick: func() {
-										openWithSystemViewer(cachedPath)
-									},
-								}, kitex.Text("Open with System Viewer")),
-							)
-						}),
-						kitex.If(!isBinary, func() kitex.Node {
-							var lang string
-							if strings.Contains(mimeType, "json") {
-								lang = "json"
-							} else if strings.Contains(mimeType, "xml") {
-								lang = "xml"
-							} else if strings.Contains(mimeType, "html") || strings.HasSuffix(filename, ".md") {
-								lang = "markdown"
-							}
-							return components.CodeBlock(components.CodeBlockProps{
-								Code:            cleanCode,
-								Lang:            lang,
-								HideHeader:      true,
-								ShowLineNumbers: false,
-							})
-						}),
-					),
-				),
-			)
-		}),
+							}, kitex.Text("Open with System Viewer")),
+						)
+					}),
+					kitex.If(!isBinary, func() kitex.Node {
+						var lang string
+						if strings.Contains(mimeType, "json") {
+							lang = "json"
+						} else if strings.Contains(mimeType, "xml") {
+							lang = "xml"
+						} else if strings.Contains(mimeType, "html") || strings.HasSuffix(filename, ".md") {
+							lang = "markdown"
+						}
+						return components.CodeBlock(components.CodeBlockProps{
+							Code:            cleanCode,
+							Lang:            lang,
+							HideHeader:      true,
+							ShowLineNumbers: false,
+						})
+					}),
+				)
+			}),
+		),
 	)
 })
 
@@ -2931,7 +2417,6 @@ var DownloadToolWidget = kitex.FC("DownloadToolWidget", func(props ToolExecution
 var FetchToolWidget = kitex.FC("FetchToolWidget", func(props ToolExecutionProps) kitex.Node {
 	t := theme.UseTheme()
 	showModal, setShowModal := kitex.UseState(false)
-	modalRef := kitex.CreateRef[dom.Element]()
 
 	tc := props.ToolCall
 	tm := props.ToolMessage
@@ -2992,18 +2477,6 @@ var FetchToolWidget = kitex.FC("FetchToolWidget", func(props ToolExecutionProps)
 			Foreground(themeColor)
 	}
 
-	kitex.UseEffect(func() {
-		if showModal() {
-			kitex.PostMacro(func() {
-				if modalRef.Current != nil {
-					if doc := modalRef.Current.OwnerDocument(); doc != nil {
-						doc.Focus(modalRef.Current)
-					}
-				}
-			})
-		}
-	}, []any{showModal()})
-
 	var badgeNode kitex.Node
 	if tm != nil && !tm.IsError {
 		badgeNode = components.Button(components.ButtonProps{
@@ -3026,134 +2499,91 @@ var FetchToolWidget = kitex.FC("FetchToolWidget", func(props ToolExecutionProps)
 
 	return kitex.Fragment(
 		badgeNode,
-		kitex.If(showModal(), func() kitex.Node {
-			fOut, ok := parseFetchOutput(tm.StructuredContent)
-			var cleanCode string
-			var truncated bool
-			var cachedPath string
-			var status int
+		components.Modal(components.ModalProps{
+			IsOpen: showModal(),
+			Title:  kitex.Span(kitex.SpanProps{Style: style.S().Bold(true)}, kitex.Text("Fetch Details")),
+			OnClose: func() {
+				setShowModal(false)
+			},
+			Style: style.S().
+				Width(style.Percent(80)).
+				Height(style.Percent(80)),
+		},
+			kitex.If(showModal(), func() kitex.Node {
+				fOut, ok := parseFetchOutput(tm.StructuredContent)
+				var cleanCode string
+				var truncated bool
+				var cachedPath string
+				var status int
 
-			if ok {
-				cleanCode = fOut.Content
-				truncated = fOut.Truncated
-				cachedPath = fOut.CachedPath
-				status = fOut.Status
-			} else {
-				cleanCode = getToolOutput(tm.Content)
-			}
+				if ok {
+					cleanCode = fOut.Content
+					truncated = fOut.Truncated
+					cachedPath = fOut.CachedPath
+					status = fOut.Status
+				} else {
+					cleanCode = getToolOutput(tm.Content)
+				}
 
-			var formatVal string
-			if tc.Args != nil {
-				formatVal, _ = tc.Args["format"].(string)
-			}
+				var formatVal string
+				if tc.Args != nil {
+					formatVal, _ = tc.Args["format"].(string)
+				}
 
-			var lang string
-			if formatVal == "markdown" {
-				lang = "markdown"
-			} else if formatVal == "html" {
-				lang = "html"
-			} else {
-				trimmed := strings.TrimSpace(cleanCode)
-				if strings.HasPrefix(trimmed, "{") || strings.HasPrefix(trimmed, "[") {
-					lang = "json"
-				} else if strings.HasPrefix(trimmed, "<") {
-					if strings.Contains(strings.ToLower(trimmed), "html") {
-						lang = "html"
-					} else {
-						lang = "xml"
+				var lang string
+				if formatVal == "markdown" {
+					lang = "markdown"
+				} else if formatVal == "html" {
+					lang = "html"
+				} else {
+					trimmed := strings.TrimSpace(cleanCode)
+					if strings.HasPrefix(trimmed, "{") || strings.HasPrefix(trimmed, "[") {
+						lang = "json"
+					} else if strings.HasPrefix(trimmed, "<") {
+						if strings.Contains(strings.ToLower(trimmed), "html") {
+							lang = "html"
+						} else {
+							lang = "xml"
+						}
 					}
 				}
-			}
 
-			modalStyle := style.S().
-				Display(style.DisplayFlex).
-				FlexDirection(style.FlexColumn).
-				Width(style.Percent(80)).
-				Height(style.Percent(80)).
-				Padding(1).
-				Overflow(style.OverflowHidden)
-
-			return kitex.Dialog(kitex.DialogProps{
-				ZIndex: 100,
-				Ref:    modalRef,
-				OnKeyDown: func(e event.Event) {
-					ke, ok := e.(*event.KeyEvent)
-					if !ok {
-						return
-					}
-					if ke.Code == key.KeyEscape || ke.Text == "q" {
-						e.PreventDefault()
-						e.StopPropagation()
-						setShowModal(false)
-					}
-				},
-			},
-				components.Paper(components.PaperProps{
-					Color:   components.PaperBase,
-					Variant: components.PaperOutlined,
-					Style:   modalStyle,
-				},
+				return kitex.Fragment(
+					// Fetch metadata
 					kitex.Box(kitex.BoxProps{
 						Style: style.S().
 							Display(style.DisplayFlex).
-							FlexDirection(style.FlexRow).
-							JustifyContent(style.JustifyBetween).
-							AlignItems(style.AlignCenter).
-							PaddingBottom(1).
-							BorderBottom(true, style.SingleBorder()),
+							FlexDirection(style.FlexColumn).
+							Gap(0).
+							MarginBottom(1).
+							Padding(1).
+							Background(t.Color.Surface.BaseHover),
 					},
-						kitex.Span(kitex.SpanProps{Style: style.S().Bold(true)}, kitex.Text("Fetch Details")),
-						components.Button(components.ButtonProps{
-							Variant: components.ButtonText,
-							Color:   components.ButtonBase,
-							OnClick: func() {
-								setShowModal(false)
+						kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Secondary)}, kitex.Text(fmt.Sprintf("  • URL:    %s", urlVal))),
+						kitex.If(status > 0, func() kitex.Node {
+							return kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Secondary)}, kitex.Text(fmt.Sprintf("  • Status: %d", status)))
+						}),
+						kitex.If(truncated, func() kitex.Node {
+							return kitex.Box(kitex.BoxProps{
+								Style: style.S().
+									Foreground(t.Color.Text.Error).
+									Bold(true).
+									MarginTop(1),
 							},
-						}, kitex.Text("Close [Esc/q]")),
-					),
-					kitex.Box(kitex.BoxProps{
-						Style: style.S().
-							Flex(1, 1, style.Cells(0)).
-							MinHeight(style.Cells(0)).
-							OverflowY(style.OverflowAuto).
-							MarginTop(1),
-					},
-						// Fetch metadata
-						kitex.Box(kitex.BoxProps{
-							Style: style.S().
-								Display(style.DisplayFlex).
-								FlexDirection(style.FlexColumn).
-								Gap(0).
-								MarginBottom(1).
-								Padding(1).
-								Background(t.Color.Surface.BaseHover),
-						},
-							kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Secondary)}, kitex.Text(fmt.Sprintf("  • URL:    %s", urlVal))),
-							kitex.If(status > 0, func() kitex.Node {
-								return kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Secondary)}, kitex.Text(fmt.Sprintf("  • Status: %d", status)))
-							}),
-							kitex.If(truncated, func() kitex.Node {
-								return kitex.Box(kitex.BoxProps{
-									Style: style.S().
-										Foreground(t.Color.Text.Error).
-										Bold(true).
-										MarginTop(1),
-								},
-									kitex.Text(fmt.Sprintf("[TRUNCATED] Content exceeded 16,000 chars. Full saved to: %s", cachedPath)),
-								)
-							}),
-						),
-
-						// Content pretty printed in code block
-						components.CodeBlock(components.CodeBlockProps{
-							Code:            cleanCode,
-							Lang:            lang,
-							HideHeader:      true,
-							ShowLineNumbers: false,
+								kitex.Text(fmt.Sprintf("[TRUNCATED] Content exceeded 16,000 chars. Full saved to: %s", cachedPath)),
+							)
 						}),
 					),
-				),
-			)
-		}),
+
+					// Content pretty printed in code block
+					components.CodeBlock(components.CodeBlockProps{
+						Code:            cleanCode,
+						Lang:            lang,
+						HideHeader:      true,
+						ShowLineNumbers: false,
+					}),
+				)
+			}),
+		),
 	)
 })
