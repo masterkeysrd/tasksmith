@@ -827,109 +827,50 @@ func parseRangeFromHeader(text string) (startLine, endLine int) {
 	return
 }
 
-func parseViewStructuredOutput(structured any) (tools.ViewOutput, bool) {
+// parseStructuredOutput converts a generic interface to a structured type T.
+// Handles both same-process typed assertions and cross-process JSON fallback.
+func parseStructuredOutput[T any](structured any) (T, bool) {
 	if structured == nil {
-		return tools.ViewOutput{}, false
+		var zero T
+		return zero, false
 	}
-	if val, ok := structured.(tools.ViewOutput); ok {
+	if val, ok := structured.(T); ok {
 		return val, true
 	}
-	if val, ok := structured.(*tools.ViewOutput); ok && val != nil {
+	if val, ok := structured.(*T); ok && val != nil {
 		return *val, true
 	}
 	data, err := json.Marshal(structured)
 	if err != nil {
-		return tools.ViewOutput{}, false
+		var zero T
+		return zero, false
 	}
-	var out tools.ViewOutput
+	var out T
 	if err := json.Unmarshal(data, &out); err != nil {
-		return tools.ViewOutput{}, false
+		var zero T
+		return zero, false
 	}
 	return out, true
+}
+
+func parseViewStructuredOutput(structured any) (tools.ViewOutput, bool) {
+	return parseStructuredOutput[tools.ViewOutput](structured)
 }
 
 func parseWriteStructuredOutput(structured any) (tools.WriteOutput, bool) {
-	if structured == nil {
-		return tools.WriteOutput{}, false
-	}
-	if val, ok := structured.(tools.WriteOutput); ok {
-		return val, true
-	}
-	if val, ok := structured.(*tools.WriteOutput); ok && val != nil {
-		return *val, true
-	}
-	data, err := json.Marshal(structured)
-	if err != nil {
-		return tools.WriteOutput{}, false
-	}
-	var out tools.WriteOutput
-	if err := json.Unmarshal(data, &out); err != nil {
-		return tools.WriteOutput{}, false
-	}
-	return out, true
+	return parseStructuredOutput[tools.WriteOutput](structured)
 }
 
 func parseEditStructuredOutput(structured any) (tools.EditOutput, bool) {
-	if structured == nil {
-		return tools.EditOutput{}, false
-	}
-	if val, ok := structured.(tools.EditOutput); ok {
-		return val, true
-	}
-	if val, ok := structured.(*tools.EditOutput); ok && val != nil {
-		return *val, true
-	}
-	data, err := json.Marshal(structured)
-	if err != nil {
-		return tools.EditOutput{}, false
-	}
-	var out tools.EditOutput
-	if err := json.Unmarshal(data, &out); err != nil {
-		return tools.EditOutput{}, false
-	}
-	return out, true
+	return parseStructuredOutput[tools.EditOutput](structured)
 }
 
 func parseMultiEditStructuredOutput(structured any) (tools.MultiEditOutput, bool) {
-	if structured == nil {
-		return tools.MultiEditOutput{}, false
-	}
-	if val, ok := structured.(tools.MultiEditOutput); ok {
-		return val, true
-	}
-	if val, ok := structured.(*tools.MultiEditOutput); ok && val != nil {
-		return *val, true
-	}
-	data, err := json.Marshal(structured)
-	if err != nil {
-		return tools.MultiEditOutput{}, false
-	}
-	var out tools.MultiEditOutput
-	if err := json.Unmarshal(data, &out); err != nil {
-		return tools.MultiEditOutput{}, false
-	}
-	return out, true
+	return parseStructuredOutput[tools.MultiEditOutput](structured)
 }
 
 func parseRemoveStructuredOutput(structured any) (tools.RemoveOutput, bool) {
-	if structured == nil {
-		return tools.RemoveOutput{}, false
-	}
-	if val, ok := structured.(tools.RemoveOutput); ok {
-		return val, true
-	}
-	if val, ok := structured.(*tools.RemoveOutput); ok && val != nil {
-		return *val, true
-	}
-	data, err := json.Marshal(structured)
-	if err != nil {
-		return tools.RemoveOutput{}, false
-	}
-	var out tools.RemoveOutput
-	if err := json.Unmarshal(data, &out); err != nil {
-		return tools.RemoveOutput{}, false
-	}
-	return out, true
+	return parseStructuredOutput[tools.RemoveOutput](structured)
 }
 
 func stripLinePrefixes(content string) string {
@@ -982,223 +923,76 @@ const lsPreviewLines = 10
 // parseLsOutput extracts FileEntry values and metadata from a tool's StructuredContent.
 // It handles both same-process typed values and JSON-deserialized map[string]any forms.
 func parseLsOutput(structured any) (files []tools.FileEntry, totalCount int, truncated bool) {
-	if structured == nil {
+	out, ok := parseStructuredOutput[tools.LsOutput](structured)
+	if !ok {
 		return
 	}
-
-	// Same-process: StructuredContent is already a typed LsOutput.
-	if out, ok := structured.(tools.LsOutput); ok {
-		for _, f := range out.Files {
-			fe := tools.FileEntry{
-				Name:          f.Name,
-				Permissions:   f.Permissions,
-				Links:         uint64(f.Links),
-				Owner:         f.Owner,
-				Group:         f.Group,
-				Size:          int64(f.Size),
-				IsDir:         f.IsDir,
-				IsSymlink:     f.IsSymlink,
-				NameTruncated: f.NameTruncated,
-				LinkTarget:    f.LinkTarget,
-			}
-			if t, err := time.Parse(time.RFC3339, f.Modified); err == nil {
-				fe.Modified = t
-			}
-			files = append(files, fe)
+	for _, f := range out.Files {
+		fe := tools.FileEntry{
+			Name:          f.Name,
+			Permissions:   f.Permissions,
+			Links:         uint64(f.Links),
+			Owner:         f.Owner,
+			Group:         f.Group,
+			Size:          int64(f.Size),
+			IsDir:         f.IsDir,
+			IsSymlink:     f.IsSymlink,
+			NameTruncated: f.NameTruncated,
+			LinkTarget:    f.LinkTarget,
 		}
-		return files, out.TotalCount, out.Truncated
-	}
-
-	// Cross-process / deserialized: round-trip through JSON.
-	data, err := json.Marshal(structured)
-	if err != nil {
-		return
-	}
-	var raw struct {
-		Files      []json.RawMessage `json:"files"`
-		TotalCount int               `json:"total_count"`
-		Truncated  bool              `json:"truncated"`
-	}
-	if err := json.Unmarshal(data, &raw); err != nil {
-		return
-	}
-	totalCount = raw.TotalCount
-	truncated = raw.Truncated
-	for _, f := range raw.Files {
-		var fe tools.FileEntry
-		if err := json.Unmarshal(f, &fe); err == nil {
-			files = append(files, fe)
+		if t, err := time.Parse(time.RFC3339, f.Modified); err == nil {
+			fe.Modified = t
 		}
+		files = append(files, fe)
 	}
-	return
+	return files, out.TotalCount, out.Truncated
 }
 
 // parseGlobOutput extracts structured file lists, count, and truncation from a glob tool result.
 func parseGlobOutput(structured any) (matches []string, totalCount int, truncated bool) {
-	if structured == nil {
-		return
-	}
-
-	// Same-process: StructuredContent is already a typed GlobOutput.
-	if out, ok := structured.(tools.GlobOutput); ok {
+	out, ok := parseStructuredOutput[tools.GlobOutput](structured)
+	if ok {
 		return out.Matches, out.TotalCount, out.Truncated
-	}
-
-	// Cross-process / deserialized: round-trip through JSON.
-	data, err := json.Marshal(structured)
-	if err != nil {
-		return
-	}
-	var raw struct {
-		Matches    []string `json:"matches"`
-		TotalCount int      `json:"total_count"`
-		Truncated  bool     `json:"truncated"`
-	}
-	if err := json.Unmarshal(data, &raw); err == nil {
-		matches = raw.Matches
-		totalCount = raw.TotalCount
-		truncated = raw.Truncated
 	}
 	return
 }
 
 // parseGrepOutput extracts structured matches, count, and truncation from a grep tool result.
 func parseGrepOutput(structured any) (matches []tools.GrepOutputMatchesItem, totalCount int, truncated bool) {
-	if structured == nil {
-		return
-	}
-
-	// Same-process: StructuredContent is already a typed GrepOutput.
-	if out, ok := structured.(tools.GrepOutput); ok {
+	out, ok := parseStructuredOutput[tools.GrepOutput](structured)
+	if ok {
 		return out.Matches, out.TotalCount, out.Truncated
-	}
-
-	// Cross-process / deserialized: round-trip through JSON.
-	data, err := json.Marshal(structured)
-	if err != nil {
-		return
-	}
-	var raw struct {
-		Matches    []tools.GrepOutputMatchesItem `json:"matches"`
-		TotalCount int                           `json:"total_count"`
-		Truncated  bool                          `json:"truncated"`
-	}
-	if err := json.Unmarshal(data, &raw); err == nil {
-		matches = raw.Matches
-		totalCount = raw.TotalCount
-		truncated = raw.Truncated
 	}
 	return
 }
 
 // parseWebSearchOutput extracts structured results from a web_search tool result.
 func parseWebSearchOutput(structured any) (results []tools.WebSearchOutputResultsItem) {
-	if structured == nil {
-		return
-	}
-
-	// Same-process: StructuredContent is already a typed WebSearchOutput.
-	if out, ok := structured.(tools.WebSearchOutput); ok {
+	out, ok := parseStructuredOutput[tools.WebSearchOutput](structured)
+	if ok {
 		return out.Results
 	}
-
-	// Cross-process / deserialized: round-trip through JSON.
-	data, err := json.Marshal(structured)
-	if err != nil {
-		return
-	}
-	var raw struct {
-		Results []tools.WebSearchOutputResultsItem `json:"results"`
-	}
-	if err := json.Unmarshal(data, &raw); err == nil {
-		results = raw.Results
-	}
-	return
+	return nil
 }
 
 // parseWebFetchStructuredOutput extracts structured WebFetchOutput fields from a web_fetch tool result.
 func parseWebFetchStructuredOutput(structured any) (out tools.WebFetchOutput, ok bool) {
-	if structured == nil {
-		return
-	}
-	if val, ok := structured.(tools.WebFetchOutput); ok {
-		return val, true
-	}
-	if val, ok := structured.(*tools.WebFetchOutput); ok && val != nil {
-		return *val, true
-	}
-	data, err := json.Marshal(structured)
-	if err != nil {
-		return
-	}
-	if err := json.Unmarshal(data, &out); err == nil {
-		ok = true
-	}
-	return
+	return parseStructuredOutput[tools.WebFetchOutput](structured)
 }
 
 // parseDownloadOutput extracts structured DownloadOutput fields from a download tool result.
 func parseDownloadOutput(structured any) (out tools.DownloadOutput, ok bool) {
-	if structured == nil {
-		return
-	}
-	if val, ok := structured.(tools.DownloadOutput); ok {
-		return val, true
-	}
-	if val, ok := structured.(*tools.DownloadOutput); ok && val != nil {
-		return *val, true
-	}
-	data, err := json.Marshal(structured)
-	if err != nil {
-		return
-	}
-	if err := json.Unmarshal(data, &out); err == nil {
-		ok = true
-	}
-	return
+	return parseStructuredOutput[tools.DownloadOutput](structured)
 }
 
 // parseFetchOutput extracts structured FetchOutput fields from a fetch tool result.
 func parseFetchOutput(structured any) (out tools.FetchOutput, ok bool) {
-	if structured == nil {
-		return
-	}
-	if val, ok := structured.(tools.FetchOutput); ok {
-		return val, true
-	}
-	if val, ok := structured.(*tools.FetchOutput); ok && val != nil {
-		return *val, true
-	}
-	data, err := json.Marshal(structured)
-	if err != nil {
-		return
-	}
-	if err := json.Unmarshal(data, &out); err == nil {
-		ok = true
-	}
-	return
+	return parseStructuredOutput[tools.FetchOutput](structured)
 }
 
 // parseTasksOutput extracts structured TasksOutput fields from a tasks tool result.
 func parseTasksOutput(structured any) (out tools.TasksOutput, ok bool) {
-	if structured == nil {
-		return
-	}
-
-	// Same-process: StructuredContent is already a typed TasksOutput.
-	if val, ok := structured.(tools.TasksOutput); ok {
-		return val, true
-	}
-
-	// Cross-process / deserialized: round-trip through JSON.
-	data, err := json.Marshal(structured)
-	if err != nil {
-		return
-	}
-	if err := json.Unmarshal(data, &out); err == nil {
-		return out, true
-	}
-	return
+	return parseStructuredOutput[tools.TasksOutput](structured)
 }
 
 // lsEntryRow renders a single FileEntry as a table row (kitex.TR).
