@@ -427,6 +427,9 @@ var Composer = kitex.FC("Composer", func(props ComposerProps) kitex.Node {
 			if ke.Code == key.KeyEscape {
 				e.PreventDefault()
 				e.StopPropagation()
+				if props.Ref != nil && props.Ref.Current != nil {
+					props.Ref.Current.Blur()
+				}
 				mode.Set(mode.Normal)
 				return
 			}
@@ -1791,8 +1794,9 @@ var RunningTasksWidget = kitex.FC("RunningTasksWidget", func(props RunningTasksW
 		Style: style.S().
 			MarginTop(1).
 			MarginBottom(1).
-			Width(style.Percent(90)).
-			AlignSelf(style.AlignCenter),
+			Width(style.Percent(100)).
+			MaxWidth(style.Percent(90)).
+			AlignSelf(style.AlignStart),
 	},
 		components.Accordion(components.AccordionProps{
 			Color:   components.PaperSurface,
