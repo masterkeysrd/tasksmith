@@ -96,16 +96,24 @@ type EditOutput struct {
 //
 // Fetch a URL.
 type FetchArgs struct {
+	// Format: Output format. Must be one of text, markdown, html. Defaults to text.
+	Format string `json:"format,omitempty" jsonschema:"Output format. Must be one of text, markdown, html. Defaults to text."`
+	// Timeout: Request timeout in seconds (up to 120). Defaults to 30.
+	Timeout int `json:"timeout,omitempty" jsonschema:"Request timeout in seconds (up to 120). Defaults to 30."`
 	// Url: URL to fetch.
 	Url string `json:"url" jsonschema:"URL to fetch."`
 }
 
 // FetchOutput defines the output returned by the "fetch" tool.
 type FetchOutput struct {
+	// CachedPath: Cached path in workspace session storage.
+	CachedPath string `json:"cached_path,omitempty" jsonschema:"Cached path in workspace session storage."`
 	// Content: Content of the response.
 	Content string `json:"content,omitempty" jsonschema:"Content of the response."`
 	// Status: HTTP status code.
 	Status int `json:"status,omitempty" jsonschema:"HTTP status code."`
+	// Truncated: Whether the content was truncated due to context limits.
+	Truncated bool `json:"truncated,omitempty" jsonschema:"Whether the content was truncated due to context limits."`
 }
 
 // GlobArgs defines the arguments for the "glob" tool.

@@ -2926,3 +2926,234 @@ var DownloadToolWidget = kitex.FC("DownloadToolWidget", func(props ToolExecution
 		}),
 	)
 })
+
+// FetchToolWidget renders the result of a raw fetch tool call.
+var FetchToolWidget = kitex.FC("FetchToolWidget", func(props ToolExecutionProps) kitex.Node {
+	t := theme.UseTheme()
+	showModal, setShowModal := kitex.UseState(false)
+	modalRef := kitex.CreateRef[dom.Element]()
+
+	tc := props.ToolCall
+	tm := props.ToolMessage
+
+	var urlVal string
+	if tc.Args != nil {
+		urlVal, _ = tc.Args["url"].(string)
+	}
+
+	var statusLabel string
+	var iconNode kitex.Node
+	var themeColor color.Color
+
+	isFinished := tm != nil
+	hasErr := tm != nil && tm.IsError
+
+	if t != nil {
+		if !isFinished {
+			statusLabel = fmt.Sprintf("Fetching [%s]", urlVal)
+			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Info)}, kitex.Text(props.CurrentDots))
+			themeColor = t.Color.Surface.Info
+		} else if hasErr {
+			statusLabel = fmt.Sprintf("Error Fetching [%s]", urlVal)
+			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Error)}, icon.Error)
+			themeColor = t.Color.Text.Error
+		} else {
+			fOut, ok := parseFetchOutput(tm.StructuredContent)
+			if ok {
+				statusLabel = fmt.Sprintf("Fetched [%s] (Status: %d)", urlVal, fOut.Status)
+				if fOut.Status >= 400 {
+					iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Error)}, icon.Error)
+					themeColor = t.Color.Text.Error
+				} else {
+					iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Success)}, icon.Checkmark)
+					themeColor = t.Color.Surface.Success
+				}
+			} else {
+				statusLabel = fmt.Sprintf("Fetched [%s]", urlVal)
+				iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Success)}, icon.Checkmark)
+				themeColor = t.Color.Surface.Success
+			}
+		}
+	}
+
+	boxStyle := style.S().
+		Display(style.DisplayFlex).
+		FlexDirection(style.FlexRow).
+		AlignItems(style.AlignCenter).
+		AlignSelf(style.AlignStart).
+		Padding(0, 1).
+		Gap(1).
+		Height(style.Cells(1)).
+		MarginVertical(1)
+
+	if t != nil {
+		boxStyle = boxStyle.
+			Background(t.Color.Surface.BaseHover).
+			Foreground(themeColor)
+	}
+
+	kitex.UseEffect(func() {
+		if showModal() {
+			kitex.PostMacro(func() {
+				if modalRef.Current != nil {
+					if doc := modalRef.Current.OwnerDocument(); doc != nil {
+						doc.Focus(modalRef.Current)
+					}
+				}
+			})
+		}
+	}, []any{showModal()})
+
+	var badgeNode kitex.Node
+	if tm != nil && !tm.IsError {
+		badgeNode = components.Button(components.ButtonProps{
+			Variant: components.ButtonText,
+			Color:   components.ButtonBase,
+			Style:   boxStyle,
+			OnClick: func() {
+				setShowModal(true)
+			},
+		},
+			iconNode,
+			kitex.Span(kitex.SpanProps{Style: style.S().Bold(true)}, kitex.Text(statusLabel)),
+		)
+	} else {
+		badgeNode = kitex.Box(kitex.BoxProps{Style: boxStyle},
+			iconNode,
+			kitex.Span(kitex.SpanProps{Style: style.S().Bold(true)}, kitex.Text(statusLabel)),
+		)
+	}
+
+	return kitex.Fragment(
+		badgeNode,
+		kitex.If(showModal(), func() kitex.Node {
+			fOut, ok := parseFetchOutput(tm.StructuredContent)
+			var cleanCode string
+			var truncated bool
+			var cachedPath string
+			var status int
+
+			if ok {
+				cleanCode = fOut.Content
+				truncated = fOut.Truncated
+				cachedPath = fOut.CachedPath
+				status = fOut.Status
+			} else {
+				cleanCode = getToolOutput(tm.Content)
+			}
+
+			var formatVal string
+			if tc.Args != nil {
+				formatVal, _ = tc.Args["format"].(string)
+			}
+
+			var lang string
+			if formatVal == "markdown" {
+				lang = "markdown"
+			} else if formatVal == "html" {
+				lang = "html"
+			} else {
+				trimmed := strings.TrimSpace(cleanCode)
+				if strings.HasPrefix(trimmed, "{") || strings.HasPrefix(trimmed, "[") {
+					lang = "json"
+				} else if strings.HasPrefix(trimmed, "<") {
+					if strings.Contains(strings.ToLower(trimmed), "html") {
+						lang = "html"
+					} else {
+						lang = "xml"
+					}
+				}
+			}
+
+			modalStyle := style.S().
+				Display(style.DisplayFlex).
+				FlexDirection(style.FlexColumn).
+				Width(style.Percent(80)).
+				Height(style.Percent(80)).
+				Padding(1).
+				Overflow(style.OverflowHidden)
+
+			return kitex.Dialog(kitex.DialogProps{
+				ZIndex: 100,
+				Ref:    modalRef,
+				OnKeyDown: func(e event.Event) {
+					ke, ok := e.(*event.KeyEvent)
+					if !ok {
+						return
+					}
+					if ke.Code == key.KeyEscape || ke.Text == "q" {
+						e.PreventDefault()
+						e.StopPropagation()
+						setShowModal(false)
+					}
+				},
+			},
+				components.Paper(components.PaperProps{
+					Color:   components.PaperBase,
+					Variant: components.PaperOutlined,
+					Style:   modalStyle,
+				},
+					kitex.Box(kitex.BoxProps{
+						Style: style.S().
+							Display(style.DisplayFlex).
+							FlexDirection(style.FlexRow).
+							JustifyContent(style.JustifyBetween).
+							AlignItems(style.AlignCenter).
+							PaddingBottom(1).
+							BorderBottom(true, style.SingleBorder()),
+					},
+						kitex.Span(kitex.SpanProps{Style: style.S().Bold(true)}, kitex.Text("Fetch Details")),
+						components.Button(components.ButtonProps{
+							Variant: components.ButtonText,
+							Color:   components.ButtonBase,
+							OnClick: func() {
+								setShowModal(false)
+							},
+						}, kitex.Text("Close [Esc/q]")),
+					),
+					kitex.Box(kitex.BoxProps{
+						Style: style.S().
+							Flex(1, 1, style.Cells(0)).
+							MinHeight(style.Cells(0)).
+							OverflowY(style.OverflowAuto).
+							MarginTop(1),
+					},
+						// Fetch metadata
+						kitex.Box(kitex.BoxProps{
+							Style: style.S().
+								Display(style.DisplayFlex).
+								FlexDirection(style.FlexColumn).
+								Gap(0).
+								MarginBottom(1).
+								Padding(1).
+								Background(t.Color.Surface.BaseHover),
+						},
+							kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Secondary)}, kitex.Text(fmt.Sprintf("  • URL:    %s", urlVal))),
+							kitex.If(status > 0, func() kitex.Node {
+								return kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Secondary)}, kitex.Text(fmt.Sprintf("  • Status: %d", status)))
+							}),
+							kitex.If(truncated, func() kitex.Node {
+								return kitex.Box(kitex.BoxProps{
+									Style: style.S().
+										Foreground(t.Color.Text.Error).
+										Bold(true).
+										MarginTop(1),
+								},
+									kitex.Text(fmt.Sprintf("[TRUNCATED] Content exceeded 16,000 chars. Full saved to: %s", cachedPath)),
+								)
+							}),
+						),
+
+						// Content pretty printed in code block
+						components.CodeBlock(components.CodeBlockProps{
+							Code:            cleanCode,
+							Lang:            lang,
+							HideHeader:      true,
+							ShowLineNumbers: false,
+						}),
+					),
+				),
+			)
+		}),
+	)
+})

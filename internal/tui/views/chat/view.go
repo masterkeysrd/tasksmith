@@ -1158,6 +1158,27 @@ func parseDownloadOutput(structured any) (out tools.DownloadOutput, ok bool) {
 	return
 }
 
+// parseFetchOutput extracts structured FetchOutput fields from a fetch tool result.
+func parseFetchOutput(structured any) (out tools.FetchOutput, ok bool) {
+	if structured == nil {
+		return
+	}
+	if val, ok := structured.(tools.FetchOutput); ok {
+		return val, true
+	}
+	if val, ok := structured.(*tools.FetchOutput); ok && val != nil {
+		return *val, true
+	}
+	data, err := json.Marshal(structured)
+	if err != nil {
+		return
+	}
+	if err := json.Unmarshal(data, &out); err == nil {
+		ok = true
+	}
+	return
+}
+
 // parseTasksOutput extracts structured TasksOutput fields from a tasks tool result.
 func parseTasksOutput(structured any) (out tools.TasksOutput, ok bool) {
 	if structured == nil {
@@ -1279,6 +1300,9 @@ var ToolExecution = kitex.FC("ToolExecution", func(props ToolExecutionProps) kit
 	}
 	if props.ToolCall != nil && props.ToolCall.Name == "download" {
 		return DownloadToolWidget(props)
+	}
+	if props.ToolCall != nil && props.ToolCall.Name == "fetch" {
+		return FetchToolWidget(props)
 	}
 
 	t := theme.UseTheme()

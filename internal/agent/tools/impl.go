@@ -7,16 +7,6 @@ import (
 	"strings"
 )
 
-// Fetch fetches a URL.
-func (h *ToolHandlers) Fetch(ctx context.Context, in FetchArgs) (FetchOutput, error) {
-	cmd := exec.CommandContext(ctx, "curl", "-i", in.Url)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return FetchOutput{Status: 500, Content: err.Error()}, nil
-	}
-	return FetchOutput{Status: 200, Content: string(out)}, nil
-}
-
 // LspDiagnostics gets LSP diagnostics.
 func (h *ToolHandlers) LspDiagnostics(ctx context.Context, in LspDiagnosticsArgs) (LspDiagnosticsOutput, error) {
 	return LspDiagnosticsOutput{Diagnostics: []LspDiagnosticsOutputDiagnosticsItem{}}, nil
