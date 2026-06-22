@@ -243,10 +243,13 @@ func (s *Service) ListSessions(ctx context.Context, req ListSessionsRequest) (*L
 	}
 	for i, sess := range sessions {
 		resp.Sessions[i] = Session{
-			ID:        sess.ID,
-			Title:     sess.Title,
-			CreatedAt: sess.CreatedAt.Format(time.RFC3339),
-			UpdatedAt: sess.UpdatedAt.Format(time.RFC3339),
+			ID:           sess.ID,
+			Title:        sess.Title,
+			AgentName:    sess.AgentName,
+			ProviderName: sess.ProviderName,
+			ModelName:    sess.ModelName,
+			CreatedAt:    sess.CreatedAt.Format(time.RFC3339),
+			UpdatedAt:    sess.UpdatedAt.Format(time.RFC3339),
 		}
 	}
 	return resp, nil
@@ -263,10 +266,13 @@ func (s *Service) CreateSession(ctx context.Context, req CreateSessionRequest) (
 	}
 	return &CreateSessionResponse{
 		Session: Session{
-			ID:        sess.ID,
-			Title:     sess.Title,
-			CreatedAt: sess.CreatedAt.Format(time.RFC3339),
-			UpdatedAt: sess.UpdatedAt.Format(time.RFC3339),
+			ID:           sess.ID,
+			Title:        sess.Title,
+			AgentName:    sess.AgentName,
+			ProviderName: sess.ProviderName,
+			ModelName:    sess.ModelName,
+			CreatedAt:    sess.CreatedAt.Format(time.RFC3339),
+			UpdatedAt:    sess.UpdatedAt.Format(time.RFC3339),
 		},
 	}, nil
 }

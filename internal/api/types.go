@@ -103,10 +103,13 @@ type ListSessionsResponse struct {
 }
 
 type Session struct {
-	ID        string `json:"id"`
-	Title     string `json:"title"`
-	CreatedAt string `json:"created_at"`
-	UpdatedAt string `json:"updated_at"`
+	ID           string `json:"id"`
+	Title        string `json:"title"`
+	AgentName    string `json:"agent_name"`
+	ProviderName string `json:"provider_name"`
+	ModelName    string `json:"model_name"`
+	CreatedAt    string `json:"created_at"`
+	UpdatedAt    string `json:"updated_at"`
 }
 
 type CreateSessionRequest struct {

@@ -357,6 +357,14 @@ var ProviderStep = kitex.FC("ProviderStep", func(props ProviderStepProps) kitex.
 								colorVal = components.ButtonInfo
 							}
 
+							buttonLabel := m.Label
+							if buttonLabel == "" {
+								buttonLabel = m.Name
+							}
+							if buttonLabel == "" {
+								buttonLabel = modelID
+							}
+
 							return components.Button(components.ButtonProps{
 								Key:     modelID,
 								Variant: components.ButtonTonal,
@@ -372,7 +380,7 @@ var ProviderStep = kitex.FC("ProviderStep", func(props ProviderStepProps) kitex.
 									setConfigs(next)
 								},
 							},
-								kitex.Text(modelID),
+								kitex.Text(buttonLabel),
 							)
 						}),
 					),

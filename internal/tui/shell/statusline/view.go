@@ -427,23 +427,11 @@ type Props struct {
 	Children []kitex.Node
 }
 
-func renderFragment(f plugin.Fragment, state plugin.State, sessionID string) kitex.Node {
-	wsCfg := queries.UseGetWorkspaceConfig()
-
-	providerName := ""
-	if wsCfg.Data != nil && wsCfg.Data.DefaultProvider != "" {
-		providerName = wsCfg.Data.DefaultProvider
-	} else {
-		providerName = "Loom_Engine"
-	}
-
-	modelName := "Gemini 3.5 Flash"
-	thinkingEffort := "high"
-	agentName := "Loom_Primary"
-
+func renderFragment(f plugin.Fragment, state plugin.State, sessionID string, activeAgent, activeProvider, activeModel string) kitex.Node {
 	inputTokens := 25100
 	outputTokens := 10400
 	costValue := 0.021
+	thinkingEffort := "off"
 
 	switch f.Type {
 	case "builtin":
@@ -453,11 +441,11 @@ func renderFragment(f plugin.Fragment, state plugin.State, sessionID string) kit
 		case "git_branch":
 			return GitBranch(GitBranchProps{Branch: state.GitBranch})
 		case "provider":
-			return Provider(ProviderProps{Provider: providerName})
+			return Provider(ProviderProps{Provider: activeProvider})
 		case "model":
-			return Model(ModelProps{Model: modelName, ThinkingEffort: thinkingEffort})
+			return Model(ModelProps{Model: activeModel, ThinkingEffort: thinkingEffort})
 		case "agent":
-			return Agent(AgentProps{Agent: agentName})
+			return Agent(AgentProps{Agent: activeAgent})
 		case "stats":
 			return Stats(StatsProps{InputTokens: inputTokens, OutputTokens: outputTokens, Cost: costValue})
 		case "status":
@@ -488,6 +476,8 @@ var View = kitex.FCC("StatusLine", func(props Props) kitex.Node {
 	t := theme.UseTheme()
 	state := plugin.Use()
 	wsCfg := queries.UseGetWorkspaceConfig()
+	sessionsQuery := queries.UseListSessions()
+	providersQuery := queries.UseListProviders()
 	sessionID := active.UseSessionID()
 
 	if wsCfg.Data != nil && wsCfg.Data.CWD != "" {
@@ -508,20 +498,72 @@ var View = kitex.FCC("StatusLine", func(props Props) kitex.Node {
 		Background(bg).
 		Merge(props.Style)
 
+	// Resolve active agent, provider, and model from query cache
+	agentName := ""
+	providerName := ""
+	modelName := ""
+
+	if sessionsQuery.Data != nil && sessionID != "" {
+		for _, s := range sessionsQuery.Data.Sessions {
+			if s.ID == sessionID {
+				agentName = s.AgentName
+				providerName = s.ProviderName
+				modelName = s.ModelName
+				break
+			}
+		}
+	}
+
+	// Resolve human-friendly provider and model labels
+	providerLabel := providerName
+	modelLabel := modelName
+
+	if providersQuery.Data != nil {
+		if providerName != "" {
+			for _, p := range providersQuery.Data.Providers {
+				if p.Name == providerName {
+					if p.DisplayName != "" {
+						providerLabel = p.DisplayName
+					}
+					break
+				}
+			}
+		}
+		if modelName != "" {
+			foundModel := false
+			for _, p := range providersQuery.Data.Providers {
+				for _, m := range p.Models {
+					if m.ID == modelName {
+						if m.Label != "" {
+							modelLabel = m.Label
+						} else if m.Name != "" {
+							modelLabel = m.Name
+						}
+						foundModel = true
+						break
+					}
+				}
+				if foundModel {
+					break
+				}
+			}
+		}
+	}
+
 	var children []kitex.Node
 	if len(props.Children) > 0 {
 		children = props.Children
 	} else {
 		var leftNodes []kitex.Node
 		for _, f := range state.Config.Left {
-			if node := renderFragment(f, state, sessionID); node != nil {
+			if node := renderFragment(f, state, sessionID, agentName, providerLabel, modelLabel); node != nil {
 				leftNodes = append(leftNodes, node)
 			}
 		}
 
 		var rightNodes []kitex.Node
 		for _, f := range state.Config.Right {
-			if node := renderFragment(f, state, sessionID); node != nil {
+			if node := renderFragment(f, state, sessionID, agentName, providerLabel, modelLabel); node != nil {
 				rightNodes = append(rightNodes, node)
 			}
 		}

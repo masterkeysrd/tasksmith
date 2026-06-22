@@ -63,19 +63,21 @@ type InboxProvider interface {
 
 // AgentGraph orchestrates the flow of model invocation.
 type AgentGraph struct {
-	model     LLM
-	container *tool.Container
-	inbox     InboxProvider
+	model        LLM
+	container    *tool.Container
+	inbox        InboxProvider
+	systemPrompt string
 }
 
 // Options defines the configurations and dependencies to initialize the AgentGraph.
 type Options struct {
-	Model       LLMModel
-	Workspace   *workspace.Workspace
-	Storage     tools.FileStorage
-	Inbox       InboxProvider
-	TaskManager *tools.TaskManager
-	SessionID   string
+	Model        LLMModel
+	Workspace    *workspace.Workspace
+	Storage      tools.FileStorage
+	Inbox        InboxProvider
+	TaskManager  *tools.TaskManager
+	SessionID    string
+	SystemPrompt string
 }
 
 // New creates a new AgentGraph orchestrator by loading/binding tools outside of the execution nodes.
@@ -117,9 +119,10 @@ func New(ctx context.Context, opts Options) (*AgentGraph, error) {
 	}
 
 	return &AgentGraph{
-		model:     boundModel,
-		container: container,
-		inbox:     opts.Inbox,
+		model:        boundModel,
+		container:    container,
+		inbox:        opts.Inbox,
+		systemPrompt: opts.SystemPrompt,
 	}, nil
 }
 
@@ -178,6 +181,11 @@ func (a *AgentGraph) think(ctx context.Context, s AgentState) (graph.Command[Age
 	}
 
 	rehydratedMessages := tools.RehydrateMessagesForLLM(s.Messages)
+	if a.systemPrompt != "" {
+		systemMsg := message.NewSystemText(a.systemPrompt)
+		rehydratedMessages = append([]message.Message{systemMsg}, rehydratedMessages...)
+	}
+
 	msg, err := a.model.Invoke(ctx, rehydratedMessages)
 	if err != nil {
 		return nil, fmt.Errorf("llm call failed: %w", err)

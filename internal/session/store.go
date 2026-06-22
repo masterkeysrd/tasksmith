@@ -9,10 +9,13 @@ import (
 
 // SessionData represents the raw persistent session record.
 type SessionData struct {
-	ID        string    `db:"id"`
-	Title     string    `db:"title"`
-	CreatedAt time.Time `db:"created_at"`
-	UpdatedAt time.Time `db:"updated_at"`
+	ID           string    `db:"id"`
+	Title        string    `db:"title"`
+	AgentName    *string   `db:"agent_name"`
+	ProviderName *string   `db:"provider_name"`
+	ModelName    *string   `db:"model_name"`
+	CreatedAt    time.Time `db:"created_at"`
+	UpdatedAt    time.Time `db:"updated_at"`
 }
 
 // MessageData represents the raw persistent message record.
@@ -24,6 +27,13 @@ type MessageData struct {
 	CreatedAt time.Time `db:"created_at"`
 }
 
+// SessionConfig represents the LLM configuration details of a session.
+type SessionConfig struct {
+	AgentName    string `db:"agent_name"`
+	ProviderName string `db:"provider_name"`
+	ModelName    string `db:"model_name"`
+}
+
 // Store defines the storage repository contract.
 // It remains completely decoupled from Loom-specific logic, UUID formatting, and validation.
 type Store interface {
@@ -31,6 +41,7 @@ type Store interface {
 	GetSession(ctx context.Context, id string) (*SessionData, error)
 	ListSessions(ctx context.Context) ([]SessionData, error)
 	RenameSession(ctx context.Context, id, title string) error
+	UpdateSessionConfig(ctx context.Context, id string, cfg SessionConfig) error
 	ArchiveSession(ctx context.Context, id string) error
 	DeleteSession(ctx context.Context, id string) error
 

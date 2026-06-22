@@ -4,18 +4,23 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"sync"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/masterkeysrd/loom/graph"
 	"github.com/masterkeysrd/loom/llm"
+	loomanthropic "github.com/masterkeysrd/loom/llm/anthropic"
+	loomgenai "github.com/masterkeysrd/loom/llm/genai"
 	loomollama "github.com/masterkeysrd/loom/llm/ollama"
+	loomopenai "github.com/masterkeysrd/loom/llm/openai"
 	"github.com/masterkeysrd/loom/message"
 	agentgraph "github.com/masterkeysrd/tasksmith/internal/agent/graph"
 	"github.com/masterkeysrd/tasksmith/internal/agent/tools"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	"github.com/masterkeysrd/tasksmith/internal/workspace"
+	"github.com/masterkeysrd/warp"
 )
 
 // SessionStatus represents the runtime execution status of a session thread.
@@ -29,10 +34,13 @@ const (
 
 // Session represents a domain session.
 type Session struct {
-	ID        string    `json:"id"`
-	Title     string    `json:"title"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	ID           string    `json:"id"`
+	Title        string    `json:"title"`
+	AgentName    string    `json:"agent_name"`
+	ProviderName string    `json:"provider_name"`
+	ModelName    string    `json:"model_name"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
 }
 
 // ActiveSession holds the in-memory execution status of a running Loom agent.
@@ -107,11 +115,19 @@ func (m *Manager) CreateSession(ctx context.Context, title string) (*Session, er
 	id := fmt.Sprintf("sess_%s", u.String())
 	now := time.Now().UTC()
 
+	agentName, providerName, modelName, err := m.resolveDefaults(ctx)
+	if err != nil {
+		return nil, err
+	}
+
 	sd := SessionData{
-		ID:        id,
-		Title:     title,
-		CreatedAt: now,
-		UpdatedAt: now,
+		ID:           id,
+		Title:        title,
+		AgentName:    &agentName,
+		ProviderName: &providerName,
+		ModelName:    &modelName,
+		CreatedAt:    now,
+		UpdatedAt:    now,
 	}
 
 	if err := m.store.CreateSession(ctx, sd); err != nil {
@@ -119,10 +135,13 @@ func (m *Manager) CreateSession(ctx context.Context, title string) (*Session, er
 	}
 
 	return &Session{
-		ID:        id,
-		Title:     title,
-		CreatedAt: now,
-		UpdatedAt: now,
+		ID:           id,
+		Title:        title,
+		AgentName:    agentName,
+		ProviderName: providerName,
+		ModelName:    modelName,
+		CreatedAt:    now,
+		UpdatedAt:    now,
 	}, nil
 }
 
@@ -135,11 +154,42 @@ func (m *Manager) ListSessions(ctx context.Context) ([]Session, error) {
 
 	sessions := make([]Session, len(sds))
 	for i, sd := range sds {
+		agentName := ""
+		if sd.AgentName != nil {
+			agentName = *sd.AgentName
+		}
+		providerName := ""
+		if sd.ProviderName != nil {
+			providerName = *sd.ProviderName
+		}
+		modelName := ""
+		if sd.ModelName != nil {
+			modelName = *sd.ModelName
+		}
+
+		if agentName == "" || providerName == "" || modelName == "" {
+			defAgent, defProvider, defModel, err := m.resolveDefaults(ctx)
+			if err == nil {
+				if agentName == "" {
+					agentName = defAgent
+				}
+				if providerName == "" {
+					providerName = defProvider
+				}
+				if modelName == "" {
+					modelName = defModel
+				}
+			}
+		}
+
 		sessions[i] = Session{
-			ID:        sd.ID,
-			Title:     sd.Title,
-			CreatedAt: sd.CreatedAt,
-			UpdatedAt: sd.UpdatedAt,
+			ID:           sd.ID,
+			Title:        sd.Title,
+			AgentName:    agentName,
+			ProviderName: providerName,
+			ModelName:    modelName,
+			CreatedAt:    sd.CreatedAt,
+			UpdatedAt:    sd.UpdatedAt,
 		}
 	}
 	return sessions, nil
@@ -151,11 +201,43 @@ func (m *Manager) GetSession(ctx context.Context, id string) (*Session, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	agentName := ""
+	if sd.AgentName != nil {
+		agentName = *sd.AgentName
+	}
+	providerName := ""
+	if sd.ProviderName != nil {
+		providerName = *sd.ProviderName
+	}
+	modelName := ""
+	if sd.ModelName != nil {
+		modelName = *sd.ModelName
+	}
+
+	if agentName == "" || providerName == "" || modelName == "" {
+		defAgent, defProvider, defModel, err := m.resolveDefaults(ctx)
+		if err == nil {
+			if agentName == "" {
+				agentName = defAgent
+			}
+			if providerName == "" {
+				providerName = defProvider
+			}
+			if modelName == "" {
+				modelName = defModel
+			}
+		}
+	}
+
 	return &Session{
-		ID:        sd.ID,
-		Title:     sd.Title,
-		CreatedAt: sd.CreatedAt,
-		UpdatedAt: sd.UpdatedAt,
+		ID:           sd.ID,
+		Title:        sd.Title,
+		AgentName:    agentName,
+		ProviderName: providerName,
+		ModelName:    modelName,
+		CreatedAt:    sd.CreatedAt,
+		UpdatedAt:    sd.UpdatedAt,
 	}, nil
 }
 
@@ -176,6 +258,11 @@ func (m *Manager) DeleteSession(ctx context.Context, id string) error {
 // RenameSession updates the title of a session.
 func (m *Manager) RenameSession(ctx context.Context, id, title string) error {
 	return m.store.RenameSession(ctx, id, title)
+}
+
+// UpdateSessionConfig updates the agent and model configurations of a session.
+func (m *Manager) UpdateSessionConfig(ctx context.Context, id string, cfg SessionConfig) error {
+	return m.store.UpdateSessionConfig(ctx, id, cfg)
 }
 
 // ArchiveSession soft-deletes a session by setting its archived_at timestamp.
@@ -287,13 +374,85 @@ func (m *Manager) sendMessage(ctx context.Context, sessionID string, text string
 			return
 		}
 
-		// Setup Ollama LLM provider & model
-		provider, err := loomollama.NewDefaultProvider()
+		// Load session config
+		sessData, err := m.store.GetSession(runCtx, sessionID)
 		if err != nil {
-			m.setSessionError(sessionID, fmt.Errorf("failed to create default provider: %w", err))
+			m.setSessionError(sessionID, fmt.Errorf("failed to load session data: %w", err))
 			return
 		}
-		model, err := llm.NewModel(provider, "qwen3.6:35b-a3b-coding-nvfp4", nil)
+
+		agentName := ""
+		if sessData.AgentName != nil {
+			agentName = *sessData.AgentName
+		}
+		providerName := ""
+		if sessData.ProviderName != nil {
+			providerName = *sessData.ProviderName
+		}
+		modelName := ""
+		if sessData.ModelName != nil {
+			modelName = *sessData.ModelName
+		}
+
+		if agentName == "" || providerName == "" || modelName == "" {
+			defAgent, defProvider, defModel, err := m.resolveDefaults(runCtx)
+			if err == nil {
+				if agentName == "" {
+					agentName = defAgent
+				}
+				if providerName == "" {
+					providerName = defProvider
+				}
+				if modelName == "" {
+					modelName = defModel
+				}
+			}
+		}
+
+		// Resolve agent system prompt
+		var systemPrompt string
+		if m.ws != nil && agentName != "" {
+			for _, a := range m.ws.Agents() {
+				if a.GetName() == agentName {
+					systemPrompt = a.Spec.Instructions
+					break
+				}
+			}
+		}
+
+		// Resolve LLM Provider
+		var provider llm.Provider
+		if m.ws != nil && providerName != "" {
+			var matchingProvider *warp.ModelProvider
+			for _, p := range m.ws.Providers() {
+				if p.GetName() == providerName {
+					matchingProvider = p
+					break
+				}
+			}
+			if matchingProvider != nil {
+				provider, err = createLoomProvider(runCtx, matchingProvider)
+				if err != nil {
+					m.setSessionError(sessionID, fmt.Errorf("failed to create provider %q: %w", providerName, err))
+					return
+				}
+			}
+		}
+
+		// If no provider resolved, fallback to ollama default provider
+		if provider == nil {
+			provider, err = loomollama.NewDefaultProvider()
+			if err != nil {
+				m.setSessionError(sessionID, fmt.Errorf("failed to create default provider: %w", err))
+				return
+			}
+		}
+
+		// Instantiate Model
+		if modelName == "" {
+			modelName = "qwen3.6:35b-a3b-coding-nvfp4" // default fallback
+		}
+		model, err := llm.NewModel(provider, modelName, nil)
 		if err != nil {
 			m.setSessionError(sessionID, fmt.Errorf("failed to create model: %w", err))
 			return
@@ -302,12 +461,13 @@ func (m *Manager) sendMessage(ctx context.Context, sessionID string, text string
 		// Compile graph
 		storage := NewLocalFileStorage(m.ws.CWD(), sessionID)
 		ag, err := agentgraph.New(runCtx, agentgraph.Options{
-			Model:       agentgraph.NewLoomModel(model),
-			Workspace:   m.ws,
-			Storage:     storage,
-			Inbox:       &sessionInbox{sess: sess, m: m},
-			TaskManager: m.taskMgr,
-			SessionID:   sessionID,
+			Model:        agentgraph.NewLoomModel(model),
+			Workspace:    m.ws,
+			Storage:      storage,
+			Inbox:        &sessionInbox{sess: sess, m: m},
+			TaskManager:  m.taskMgr,
+			SessionID:    sessionID,
+			SystemPrompt: systemPrompt,
 		})
 		if err != nil {
 			m.setSessionError(sessionID, fmt.Errorf("failed to construct agent graph: %w", err))
@@ -759,5 +919,52 @@ func (m *Manager) SetToolStreamDebug(sessionID string, toolCallID string, text s
 		}
 		sess.CurrentToolStreams[toolCallID] = text
 		sess.Status = StatusRunning // Force running status for injection test
+	}
+}
+
+func (m *Manager) resolveDefaults(ctx context.Context) (agentName, providerName, modelName string, err error) {
+	if m.ws == nil {
+		return "main", "ollama", "qwen3.6:35b-a3b-coding-nvfp4", nil
+	}
+	return m.ws.ResolveDefaults(ctx)
+}
+
+func createLoomProvider(ctx context.Context, p *warp.ModelProvider) (llm.Provider, error) {
+	// Set endpoints and auth env variables dynamically
+	if p.Spec.Endpoint != "" {
+		switch p.Spec.Type {
+		case "ollama":
+			os.Setenv("OLLAMA_HOST", p.Spec.Endpoint)
+		case "openai":
+			os.Setenv("OPENAI_BASE_URL", p.Spec.Endpoint)
+		case "anthropic":
+			os.Setenv("ANTHROPIC_BASE_URL", p.Spec.Endpoint)
+		}
+	}
+	if p.Spec.Auth != nil && p.Spec.Auth.Env != "" {
+		val := os.Getenv(p.Spec.Auth.Env)
+		if val != "" {
+			switch p.Spec.Type {
+			case "openai":
+				os.Setenv("OPENAI_API_KEY", val)
+			case "anthropic":
+				os.Setenv("ANTHROPIC_API_KEY", val)
+			case "google-genai":
+				os.Setenv("GEMINI_API_KEY", val)
+			}
+		}
+	}
+
+	switch p.Spec.Type {
+	case "ollama":
+		return loomollama.NewDefaultProvider()
+	case "openai":
+		return loomopenai.NewDefaultProvider()
+	case "anthropic":
+		return loomanthropic.NewDefaultProvider()
+	case "google-genai":
+		return loomgenai.NewDefaultProvider(ctx)
+	default:
+		return nil, fmt.Errorf("unknown provider type: %s", p.Spec.Type)
 	}
 }

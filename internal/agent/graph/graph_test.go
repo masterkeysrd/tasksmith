@@ -91,3 +91,53 @@ func TestAgentGraph_Execution(t *testing.T) {
 		t.Errorf("msg 1 role: expected assistant, got %s", snapshot.State.Messages[1].Role())
 	}
 }
+
+func TestAgentGraph_SystemPrompt(t *testing.T) {
+	promptVerified := false
+
+	mockModel := &mockLLMModel{
+		invokeFn: func(ctx context.Context, messages []message.Message) (*message.Assistant, error) {
+			if len(messages) > 0 && messages[0].Role() == message.RoleSystem {
+				if messages[0].GetContent().Text() == "You are a helpful assistant" {
+					promptVerified = true
+				}
+			}
+			return &message.Assistant{
+				Content: message.Content{
+					&message.TextBlock{Text: "Response"},
+				},
+			}, nil
+		},
+	}
+
+	ag, err := agentgraph.New(context.Background(), agentgraph.Options{
+		Model:        mockModel,
+		SystemPrompt: "You are a helpful assistant",
+	})
+	if err != nil {
+		t.Fatalf("failed to construct agent graph: %v", err)
+	}
+	g, err := ag.Build(nil)
+	if err != nil {
+		t.Fatalf("failed to build graph: %v", err)
+	}
+
+	initialState := agentgraph.AgentState{
+		Messages: message.MessageList{
+			message.NewUserText("Hello"),
+		},
+	}
+
+	initCmd := graph.Update[agentgraph.AgentState](func(s agentgraph.AgentState) agentgraph.AgentState {
+		return initialState
+	})
+
+	_, err = g.Execute(context.Background(), initCmd, nil)
+	if err != nil {
+		t.Fatalf("graph execution failed: %v", err)
+	}
+
+	if !promptVerified {
+		t.Error("expected system prompt to be injected as the first message")
+	}
+}

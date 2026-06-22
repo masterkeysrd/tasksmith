@@ -181,3 +181,14 @@ func TestWorkspace_Initialize(t *testing.T) {
 		t.Errorf("expected authorized tools to include ls and write, got %v", cfg.AuthorizedTools)
 	}
 }
+
+func TestWorkspace_ResolveDefaults(t *testing.T) {
+	w := New(".")
+	agent, provider, model, err := w.ResolveDefaults(context.Background())
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if agent != "main" || provider != "ollama" || model != "qwen3.6:35b-a3b-coding-nvfp4" {
+		t.Errorf("expected defaults, got %s, %s, %s", agent, provider, model)
+	}
+}

@@ -181,3 +181,64 @@ func (w *Workspace) GetWorkspaceConfig(ctx context.Context) (WorkspaceConfig, er
 
 	return cfg, nil
 }
+
+func (w *Workspace) ResolveDefaults(ctx context.Context) (agentName, providerName, modelName string, err error) {
+	// Default values in case nothing is configured
+	agentName = "main"
+	providerName = "ollama"
+	modelName = "qwen3.6:35b-a3b-coding-nvfp4"
+
+	cfg, err := w.GetWorkspaceConfig(ctx)
+	if err != nil {
+		return agentName, providerName, modelName, err
+	}
+
+	// 1. Find the "main" agent (or first agent if main doesn't exist)
+	var mainAgent *warp.Agent
+	agents := w.Agents()
+	for _, a := range agents {
+		if a.GetName() == "main" {
+			mainAgent = a
+			break
+		}
+	}
+	if mainAgent == nil && len(agents) > 0 {
+		mainAgent = agents[0]
+	}
+
+	if mainAgent != nil {
+		agentName = mainAgent.GetName()
+		// Try to resolve provider and model from agent's models list
+		if len(mainAgent.Spec.Models) > 0 {
+			providers := w.Providers()
+			for _, modelID := range mainAgent.Spec.Models {
+				for _, p := range providers {
+					for _, mInfo := range p.Spec.Models {
+						if mInfo.ID == modelID {
+							return agentName, p.GetName(), modelID, nil
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// 2. Fallback to default provider in workspace config
+	if cfg.DefaultProvider != "" {
+		providers := w.Providers()
+		for _, p := range providers {
+			if p.GetName() == cfg.DefaultProvider {
+				pName := p.GetName()
+				mName := p.Spec.DefaultModel
+				if mName == "" && len(p.Spec.Models) > 0 {
+					mName = p.Spec.Models[0].ID
+				}
+				if mName != "" {
+					return agentName, pName, mName, nil
+				}
+			}
+		}
+	}
+
+	return agentName, providerName, modelName, nil
+}
