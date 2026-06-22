@@ -67,11 +67,6 @@ func (h *ToolHandlers) WebFetch(ctx context.Context, in WebFetchArgs) (WebFetchO
 	return WebFetchOutput{Content: string(out), Title: in.Url}, nil
 }
 
-// WebSearch searches the web.
-func (h *ToolHandlers) WebSearch(ctx context.Context, in WebSearchArgs) (WebSearchOutput, error) {
-	return WebSearchOutput{Results: []WebSearchOutputResultsItem{}}, nil
-}
-
 const MaxEditDiffLines = 500
 
 func truncateDiff(diffStr string) (string, string) {

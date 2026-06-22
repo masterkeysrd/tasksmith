@@ -365,6 +365,8 @@ type TasksOutput struct {
 }
 
 type TasksOutputTasksItem struct {
+	// Details: Extra generic task execution details.
+	Details string `json:"details,omitempty" jsonschema:"Extra generic task execution details."`
 	// Error: Error message if the task failed.
 	Error string `json:"error,omitempty" jsonschema:"Error message if the task failed."`
 	// ExitCode: The exit code of the task (if finished).
@@ -381,8 +383,6 @@ type TasksOutputTasksItem struct {
 	TaskId string `json:"taskId,omitempty" jsonschema:"The ID of the task."`
 	// Type: The type of task (e.g. bash).
 	Type string `json:"type,omitempty" jsonschema:"The type of task (e.g. bash)."`
-	// Details: Extra generic task execution details.
-	Details string `json:"details,omitempty" jsonschema:"Extra generic task execution details."`
 }
 
 // ViewArgs defines the arguments for the "view" tool.
@@ -444,6 +444,8 @@ type WebFetchOutput struct {
 //
 // Search the web.
 type WebSearchArgs struct {
+	// MaxResults: Maximum number of search results to return (default 10, max 20).
+	MaxResults int `json:"max_results,omitempty" jsonschema:"Maximum number of search results to return (default 10, max 20)."`
 	// Query: Search query.
 	Query string `json:"query" jsonschema:"Search query."`
 }
@@ -455,6 +457,12 @@ type WebSearchOutput struct {
 }
 
 type WebSearchOutputResultsItem struct {
+	// Snippet: Description or snippet of the search result.
+	Snippet string `json:"snippet,omitempty" jsonschema:"Description or snippet of the search result."`
+	// Title: Title of the search result.
+	Title string `json:"title,omitempty" jsonschema:"Title of the search result."`
+	// Url: URL of the search result.
+	Url string `json:"url,omitempty" jsonschema:"URL of the search result."`
 }
 
 // WriteArgs defines the arguments for the "write" tool.

@@ -2361,3 +2361,118 @@ var TasksToolWidget = kitex.FC("TasksToolWidget", func(props ToolExecutionProps)
 		}),
 	)
 })
+
+// WebSearchToolWidget renders the result of a web_search tool call inline.
+var WebSearchToolWidget = kitex.FC("WebSearchToolWidget", func(props ToolExecutionProps) kitex.Node {
+	t := theme.UseTheme()
+
+	tc := props.ToolCall
+	tm := props.ToolMessage
+
+	var query string
+	if tc.Args != nil {
+		query, _ = tc.Args["query"].(string)
+	}
+
+	var statusLabel string
+	var iconNode kitex.Node
+	var borderCol color.Color
+
+	var results []tools.WebSearchOutputResultsItem
+
+	if t != nil {
+		if tm == nil {
+			statusLabel = fmt.Sprintf("Web Search: Searching for %q", query)
+			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Info)}, kitex.Text(props.CurrentDots))
+			borderCol = t.Color.Surface.Info
+		} else if tm.IsError {
+			statusLabel = fmt.Sprintf("Web Search: Error searching for %q", query)
+			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Error)}, icon.Error)
+			borderCol = t.Color.Text.Error
+		} else {
+			results = parseWebSearchOutput(tm.StructuredContent)
+			resWord := "results"
+			if len(results) == 1 {
+				resWord = "result"
+			}
+			statusLabel = fmt.Sprintf("Web Search: Found %d %s for %q", len(results), resWord, query)
+			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Success)}, icon.Checkmark)
+			borderCol = t.Color.Surface.Success
+		}
+	}
+
+	accordionStyle := style.S().MarginVertical(1)
+	if t != nil {
+		accordionStyle = accordionStyle.Border(borderCol)
+	}
+
+	return components.Accordion(components.AccordionProps{
+		Color:   components.PaperHover,
+		Variant: components.PaperOutlined,
+		Style:   accordionStyle,
+	},
+		components.AccordionSummary(components.AccordionSummaryProps{
+			HideExpandIcon: tm == nil || tm.IsError,
+			EndContent: kitex.If(tm != nil && !tm.IsError, func() kitex.Node {
+				var fg color.Color
+				if t != nil {
+					fg = t.Color.Text.Secondary
+				}
+				return kitex.Span(kitex.SpanProps{Style: style.S().Foreground(fg)},
+					kitex.Text("Click to expand/collapse"),
+				)
+			}),
+		},
+			kitex.Box(kitex.BoxProps{
+				Style: style.S().
+					Display(style.DisplayFlex).
+					FlexDirection(style.FlexRow).
+					AlignItems(style.AlignCenter).
+					Gap(1),
+			},
+				iconNode,
+				kitex.Span(kitex.SpanProps{Style: style.S().Bold(true)}, kitex.Text(statusLabel)),
+			),
+		),
+		components.AccordionDetails(components.AccordionDetailsProps{},
+			kitex.If(tm != nil && !tm.IsError && len(results) > 0, func() kitex.Node {
+				var listNodes []kitex.Node
+				for i, res := range results {
+					var titleStyle, urlStyle, snippetStyle style.Style
+					if t != nil {
+						titleStyle = style.S().Bold(true).Foreground(t.Color.Surface.Primary)
+						urlStyle = style.S().Italic(true).Foreground(t.Color.Text.Secondary)
+						snippetStyle = style.S().Foreground(t.Color.Text.Primary)
+					}
+
+					listNodes = append(listNodes, kitex.Box(kitex.BoxProps{
+						Style: style.S().MarginBottom(1),
+					},
+						kitex.Box(kitex.BoxProps{Style: style.S().Display(style.DisplayFlex).FlexDirection(style.FlexRow).Gap(1)},
+							kitex.Span(kitex.SpanProps{Style: titleStyle}, kitex.Text(fmt.Sprintf("%d. %s", i+1, res.Title))),
+						),
+						kitex.Box(kitex.BoxProps{Style: style.S().MarginLeft(3)},
+							kitex.Span(kitex.SpanProps{Style: urlStyle}, kitex.Text(res.Url)),
+						),
+						kitex.Box(kitex.BoxProps{Style: style.S().MarginLeft(3)},
+							kitex.Span(kitex.SpanProps{Style: snippetStyle}, kitex.Text(res.Snippet)),
+						),
+					))
+				}
+				return kitex.Box(kitex.BoxProps{
+					Style: style.S().Display(style.DisplayFlex).FlexDirection(style.FlexColumn),
+				}, listNodes...)
+			}),
+
+			kitex.If(tm != nil && !tm.IsError && len(results) == 0, func() kitex.Node {
+				var textCol color.Color
+				if t != nil {
+					textCol = t.Color.Text.Tertiary
+				}
+				return kitex.Box(kitex.BoxProps{
+					Style: style.S().Foreground(textCol).Italic(true),
+				}, kitex.Text("(no results found)"))
+			}),
+		),
+	)
+})

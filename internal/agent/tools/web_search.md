@@ -12,6 +12,9 @@ spec:
       query:
         type: string
         description: Search query.
+      max_results:
+        type: integer
+        description: Maximum number of search results to return (default 10, max 20).
     required: ["query"]
   outputSchema:
     type: object
@@ -20,6 +23,16 @@ spec:
         type: array
         items:
           type: object
+          properties:
+            title:
+              type: string
+              description: "Title of the search result."
+            url:
+              type: string
+              description: "URL of the search result."
+            snippet:
+              type: string
+              description: "Description or snippet of the search result."
         description: Search results.
 ---
 Search the web.

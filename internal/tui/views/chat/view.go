@@ -1091,6 +1091,31 @@ func parseGrepOutput(structured any) (matches []tools.GrepOutputMatchesItem, tot
 	return
 }
 
+// parseWebSearchOutput extracts structured results from a web_search tool result.
+func parseWebSearchOutput(structured any) (results []tools.WebSearchOutputResultsItem) {
+	if structured == nil {
+		return
+	}
+
+	// Same-process: StructuredContent is already a typed WebSearchOutput.
+	if out, ok := structured.(tools.WebSearchOutput); ok {
+		return out.Results
+	}
+
+	// Cross-process / deserialized: round-trip through JSON.
+	data, err := json.Marshal(structured)
+	if err != nil {
+		return
+	}
+	var raw struct {
+		Results []tools.WebSearchOutputResultsItem `json:"results"`
+	}
+	if err := json.Unmarshal(data, &raw); err == nil {
+		results = raw.Results
+	}
+	return
+}
+
 // parseTasksOutput extracts structured TasksOutput fields from a tasks tool result.
 func parseTasksOutput(structured any) (out tools.TasksOutput, ok bool) {
 	if structured == nil {
@@ -1203,6 +1228,9 @@ var ToolExecution = kitex.FC("ToolExecution", func(props ToolExecutionProps) kit
 	}
 	if props.ToolCall != nil && props.ToolCall.Name == "tasks" {
 		return TasksToolWidget(props)
+	}
+	if props.ToolCall != nil && props.ToolCall.Name == "web_search" {
+		return WebSearchToolWidget(props)
 	}
 
 	t := theme.UseTheme()
