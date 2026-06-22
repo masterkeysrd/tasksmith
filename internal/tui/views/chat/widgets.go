@@ -142,41 +142,16 @@ var ViewToolWidget = kitex.FC("ViewToolWidget", func(props ToolExecutionProps) k
 		}
 	}
 
-	boxStyle := style.S().
-		Display(style.DisplayFlex).
-		FlexDirection(style.FlexRow).
-		AlignItems(style.AlignCenter).
-		AlignSelf(style.AlignStart).
-		Padding(0, 1).
-		Gap(1).
-		Height(style.Cells(1)).
-		MarginVertical(1)
-
-	if t != nil {
-		boxStyle = boxStyle.
-			Background(t.Color.Surface.BaseHover).
-			Foreground(themeColor)
-	}
-
-	var badgeNode kitex.Node
+	var onClick func()
 	if tm != nil && !tm.IsError {
-		badgeNode = components.Button(components.ButtonProps{
-			Variant: components.ButtonText,
-			Color:   components.ButtonBase,
-			Style:   boxStyle,
-			OnClick: func() {
-				setShowModal(true)
-			},
-		},
-			iconNode,
-			kitex.Span(kitex.SpanProps{Style: style.S().Bold(true)}, kitex.Text(statusLabel)),
-		)
-	} else {
-		badgeNode = kitex.Box(kitex.BoxProps{Style: boxStyle},
-			iconNode,
-			kitex.Span(kitex.SpanProps{Style: style.S().Bold(true)}, kitex.Text(statusLabel)),
-		)
+		onClick = func() { setShowModal(true) }
 	}
+	badgeNode := components.ToolBadge(components.ToolBadgeProps{
+		Icon:    iconNode,
+		Label:   statusLabel,
+		Color:   themeColor,
+		OnClick: onClick,
+	})
 
 	return kitex.Fragment(
 		badgeNode,
@@ -745,41 +720,16 @@ var WriteToolWidget = kitex.FC("WriteToolWidget", func(props ToolExecutionProps)
 		}
 	}
 
-	boxStyle := style.S().
-		Display(style.DisplayFlex).
-		FlexDirection(style.FlexRow).
-		AlignItems(style.AlignCenter).
-		AlignSelf(style.AlignStart).
-		Padding(0, 1).
-		Gap(1).
-		Height(style.Cells(1)).
-		MarginVertical(1)
-
-	if t != nil {
-		boxStyle = boxStyle.
-			Background(t.Color.Surface.BaseHover).
-			Foreground(themeColor)
-	}
-
-	var badgeNode kitex.Node
+	var onClick func()
 	if content != "" {
-		badgeNode = components.Button(components.ButtonProps{
-			Variant: components.ButtonText,
-			Color:   components.ButtonBase,
-			Style:   boxStyle,
-			OnClick: func() {
-				setShowModal(true)
-			},
-		},
-			iconNode,
-			kitex.Span(kitex.SpanProps{Style: style.S().Bold(true)}, kitex.Text(statusLabel)),
-		)
-	} else {
-		badgeNode = kitex.Box(kitex.BoxProps{Style: boxStyle},
-			iconNode,
-			kitex.Span(kitex.SpanProps{Style: style.S().Bold(true)}, kitex.Text(statusLabel)),
-		)
+		onClick = func() { setShowModal(true) }
 	}
+	badgeNode := components.ToolBadge(components.ToolBadgeProps{
+		Icon:    iconNode,
+		Label:   statusLabel,
+		Color:   themeColor,
+		OnClick: onClick,
+	})
 
 	return kitex.Fragment(
 		badgeNode,
@@ -844,41 +794,16 @@ var EditToolWidget = kitex.FC("EditToolWidget", func(props ToolExecutionProps) k
 		}
 	}
 
-	boxStyle := style.S().
-		Display(style.DisplayFlex).
-		FlexDirection(style.FlexRow).
-		AlignItems(style.AlignCenter).
-		AlignSelf(style.AlignStart).
-		Padding(0, 1).
-		Gap(1).
-		Height(style.Cells(1)).
-		MarginVertical(1)
-
-	if t != nil {
-		boxStyle = boxStyle.
-			Background(t.Color.Surface.BaseHover).
-			Foreground(themeColor)
-	}
-
-	var badgeNode kitex.Node
+	var onClick func()
 	if tm != nil && !tm.IsError && diffContent != "" {
-		badgeNode = components.Button(components.ButtonProps{
-			Variant: components.ButtonText,
-			Color:   components.ButtonBase,
-			Style:   boxStyle,
-			OnClick: func() {
-				setShowModal(true)
-			},
-		},
-			iconNode,
-			kitex.Span(kitex.SpanProps{Style: style.S().Bold(true)}, kitex.Text(statusLabel)),
-		)
-	} else {
-		badgeNode = kitex.Box(kitex.BoxProps{Style: boxStyle},
-			iconNode,
-			kitex.Span(kitex.SpanProps{Style: style.S().Bold(true)}, kitex.Text(statusLabel)),
-		)
+		onClick = func() { setShowModal(true) }
 	}
+	badgeNode := components.ToolBadge(components.ToolBadgeProps{
+		Icon:    iconNode,
+		Label:   statusLabel,
+		Color:   themeColor,
+		OnClick: onClick,
+	})
 
 	return kitex.Fragment(
 		badgeNode,
@@ -953,41 +878,16 @@ var MultiEditToolWidget = kitex.FC("MultiEditToolWidget", func(props ToolExecuti
 		}
 	}
 
-	boxStyle := style.S().
-		Display(style.DisplayFlex).
-		FlexDirection(style.FlexRow).
-		AlignItems(style.AlignCenter).
-		AlignSelf(style.AlignStart).
-		Padding(0, 1).
-		Gap(1).
-		Height(style.Cells(1)).
-		MarginVertical(1)
-
-	if t != nil {
-		boxStyle = boxStyle.
-			Background(t.Color.Surface.BaseHover).
-			Foreground(themeColor)
-	}
-
-	var badgeNode kitex.Node
+	var onClick func()
 	if tm != nil && !tm.IsError && diffContent != "" {
-		badgeNode = components.Button(components.ButtonProps{
-			Variant: components.ButtonText,
-			Color:   components.ButtonBase,
-			Style:   boxStyle,
-			OnClick: func() {
-				setShowModal(true)
-			},
-		},
-			iconNode,
-			kitex.Span(kitex.SpanProps{Style: style.S().Bold(true)}, kitex.Text(statusLabel)),
-		)
-	} else {
-		badgeNode = kitex.Box(kitex.BoxProps{Style: boxStyle},
-			iconNode,
-			kitex.Span(kitex.SpanProps{Style: style.S().Bold(true)}, kitex.Text(statusLabel)),
-		)
+		onClick = func() { setShowModal(true) }
 	}
+	badgeNode := components.ToolBadge(components.ToolBadgeProps{
+		Icon:    iconNode,
+		Label:   statusLabel,
+		Color:   themeColor,
+		OnClick: onClick,
+	})
 
 	return kitex.Fragment(
 		badgeNode,
@@ -1058,41 +958,16 @@ var RemoveToolWidget = kitex.FC("RemoveToolWidget", func(props ToolExecutionProp
 		}
 	}
 
-	boxStyle := style.S().
-		Display(style.DisplayFlex).
-		FlexDirection(style.FlexRow).
-		AlignItems(style.AlignCenter).
-		AlignSelf(style.AlignStart).
-		Padding(0, 1).
-		Gap(1).
-		Height(style.Cells(1)).
-		MarginVertical(1)
-
-	if t != nil {
-		boxStyle = boxStyle.
-			Background(t.Color.Surface.BaseHover).
-			Foreground(themeColor)
-	}
-
-	var badgeNode kitex.Node
+	var onClick func()
 	if tm != nil && !tm.IsError {
-		badgeNode = components.Button(components.ButtonProps{
-			Variant: components.ButtonText,
-			Color:   components.ButtonBase,
-			Style:   boxStyle,
-			OnClick: func() {
-				setShowModal(true)
-			},
-		},
-			iconNode,
-			kitex.Span(kitex.SpanProps{Style: style.S().Bold(true)}, kitex.Text(statusLabel)),
-		)
-	} else {
-		badgeNode = kitex.Box(kitex.BoxProps{Style: boxStyle},
-			iconNode,
-			kitex.Span(kitex.SpanProps{Style: style.S().Bold(true)}, kitex.Text(statusLabel)),
-		)
+		onClick = func() { setShowModal(true) }
 	}
+	badgeNode := components.ToolBadge(components.ToolBadgeProps{
+		Icon:    iconNode,
+		Label:   statusLabel,
+		Color:   themeColor,
+		OnClick: onClick,
+	})
 
 	return kitex.Fragment(
 		badgeNode,
@@ -2063,41 +1938,16 @@ var WebFetchToolWidget = kitex.FC("WebFetchToolWidget", func(props ToolExecution
 		}
 	}
 
-	boxStyle := style.S().
-		Display(style.DisplayFlex).
-		FlexDirection(style.FlexRow).
-		AlignItems(style.AlignCenter).
-		AlignSelf(style.AlignStart).
-		Padding(0, 1).
-		Gap(1).
-		Height(style.Cells(1)).
-		MarginVertical(1)
-
-	if t != nil {
-		boxStyle = boxStyle.
-			Background(t.Color.Surface.BaseHover).
-			Foreground(themeColor)
-	}
-
-	var badgeNode kitex.Node
+	var onClick func()
 	if tm != nil && !tm.IsError {
-		badgeNode = components.Button(components.ButtonProps{
-			Variant: components.ButtonText,
-			Color:   components.ButtonBase,
-			Style:   boxStyle,
-			OnClick: func() {
-				setShowModal(true)
-			},
-		},
-			iconNode,
-			kitex.Span(kitex.SpanProps{Style: style.S().Bold(true)}, kitex.Text(statusLabel)),
-		)
-	} else {
-		badgeNode = kitex.Box(kitex.BoxProps{Style: boxStyle},
-			iconNode,
-			kitex.Span(kitex.SpanProps{Style: style.S().Bold(true)}, kitex.Text(statusLabel)),
-		)
+		onClick = func() { setShowModal(true) }
 	}
+	badgeNode := components.ToolBadge(components.ToolBadgeProps{
+		Icon:    iconNode,
+		Label:   statusLabel,
+		Color:   themeColor,
+		OnClick: onClick,
+	})
 
 	return kitex.Fragment(
 		badgeNode,
@@ -2461,41 +2311,16 @@ var FetchToolWidget = kitex.FC("FetchToolWidget", func(props ToolExecutionProps)
 		}
 	}
 
-	boxStyle := style.S().
-		Display(style.DisplayFlex).
-		FlexDirection(style.FlexRow).
-		AlignItems(style.AlignCenter).
-		AlignSelf(style.AlignStart).
-		Padding(0, 1).
-		Gap(1).
-		Height(style.Cells(1)).
-		MarginVertical(1)
-
-	if t != nil {
-		boxStyle = boxStyle.
-			Background(t.Color.Surface.BaseHover).
-			Foreground(themeColor)
-	}
-
-	var badgeNode kitex.Node
+	var onClick func()
 	if tm != nil && !tm.IsError {
-		badgeNode = components.Button(components.ButtonProps{
-			Variant: components.ButtonText,
-			Color:   components.ButtonBase,
-			Style:   boxStyle,
-			OnClick: func() {
-				setShowModal(true)
-			},
-		},
-			iconNode,
-			kitex.Span(kitex.SpanProps{Style: style.S().Bold(true)}, kitex.Text(statusLabel)),
-		)
-	} else {
-		badgeNode = kitex.Box(kitex.BoxProps{Style: boxStyle},
-			iconNode,
-			kitex.Span(kitex.SpanProps{Style: style.S().Bold(true)}, kitex.Text(statusLabel)),
-		)
+		onClick = func() { setShowModal(true) }
 	}
+	badgeNode := components.ToolBadge(components.ToolBadgeProps{
+		Icon:    iconNode,
+		Label:   statusLabel,
+		Color:   themeColor,
+		OnClick: onClick,
+	})
 
 	return kitex.Fragment(
 		badgeNode,
