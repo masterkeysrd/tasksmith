@@ -218,10 +218,8 @@ func TestTaskManager_Submit_Timeout(t *testing.T) {
 
 	runner := &DummyRunner{
 		startFunc: func(ctx context.Context, stdout, stderr io.Writer) error {
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			}
+			<-ctx.Done()
+			return ctx.Err()
 		},
 	}
 
@@ -331,7 +329,7 @@ func TestTaskManager_KillTaskGroup(t *testing.T) {
 	// Wait for child.pid to be written
 	var childPid string
 	pidPath := filepath.Join(tmpDir, "child.pid")
-	for i := 0; i < 20; i++ {
+	for range 20 {
 		data, err := os.ReadFile(pidPath)
 		if err == nil && len(data) > 0 {
 			childPid = strings.TrimSpace(string(data))

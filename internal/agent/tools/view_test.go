@@ -28,7 +28,7 @@ func TestViewHandler(t *testing.T) {
 		filePath := filepath.Join(tmpDir, "small.txt")
 		var sb strings.Builder
 		for i := 1; i <= 50; i++ {
-			sb.WriteString(fmt.Sprintf("Line %d\n", i))
+			fmt.Fprintf(&sb, "Line %d\n", i)
 		}
 		if err := os.WriteFile(filePath, []byte(sb.String()), 0644); err != nil {
 			t.Fatalf("failed to write test file: %v", err)
@@ -93,7 +93,7 @@ func TestViewHandler(t *testing.T) {
 		filePath := filepath.Join(tmpDir, "large.txt")
 		var sb strings.Builder
 		for i := 1; i <= 1000; i++ {
-			sb.WriteString(fmt.Sprintf("Line %d: %s\n", i, strings.Repeat("x", 20)))
+			fmt.Fprintf(&sb, "Line %d: %s\n", i, strings.Repeat("x", 20))
 		}
 		if err := os.WriteFile(filePath, []byte(sb.String()), 0644); err != nil {
 			t.Fatalf("failed to write test file: %v", err)

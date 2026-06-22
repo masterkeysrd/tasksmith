@@ -72,6 +72,9 @@ func NewManager(store Store, ws *workspace.Workspace) *Manager {
 	}
 
 	m.taskMgr = tools.NewTaskManager(cwd, func(sessionID, taskID string, task *tools.Task) {
+		if task.Status == tools.StatusRunning || task.Status == tools.StatusKilled {
+			return // Ignore mid-run details/ports updates and killed tasks in the chat history
+		}
 		statusStr := string(task.Status)
 		msgText := fmt.Sprintf("[System: Background task %s (\"%s\") completed with status %s (exit code %d).\nYou can inspect the command output/logs by calling the 'tasks' tool with action: 'status' and taskId: '%s'.]", taskID, task.Name, statusStr, task.ExitCode, taskID)
 		if task.Error != "" {
@@ -198,6 +201,14 @@ func (m *Manager) GetSessionState(sessionID string) (SessionStatus, string) {
 		return StatusIdle, ""
 	}
 	return sess.Status, sess.Error
+}
+
+// ListTasks retrieves all tasks for a session from the task manager.
+func (m *Manager) ListTasks(sessionID string) []*tools.Task {
+	if m.taskMgr == nil {
+		return nil
+	}
+	return m.taskMgr.ListTasks(sessionID)
 }
 
 // SendMessage appends the user message and initiates the background Loom agent execution.

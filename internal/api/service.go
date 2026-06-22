@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/masterkeysrd/loom/message"
+	"github.com/masterkeysrd/tasksmith/internal/agent/tools"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	"github.com/masterkeysrd/tasksmith/internal/session"
 	"github.com/masterkeysrd/tasksmith/internal/workspace"
@@ -373,8 +374,23 @@ func (s *Service) GetSessionState(ctx context.Context, req GetSessionStateReques
 		return &GetSessionStateResponse{Status: "idle"}, nil
 	}
 	status, errStr := s.sm.GetSessionState(req.SessionID)
+
+	var runningTasks []RunningTaskInfo
+	tasks := s.sm.ListTasks(req.SessionID)
+	for _, t := range tasks {
+		if t.Status == tools.StatusRunning {
+			runningTasks = append(runningTasks, RunningTaskInfo{
+				ID:      t.ID,
+				Name:    t.Name,
+				Type:    t.Type,
+				Details: t.Details,
+			})
+		}
+	}
+
 	return &GetSessionStateResponse{
-		Status: string(status),
-		Error:  errStr,
+		Status:       string(status),
+		Error:        errStr,
+		RunningTasks: runningTasks,
 	}, nil
 }

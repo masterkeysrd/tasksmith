@@ -381,6 +381,8 @@ type TasksOutputTasksItem struct {
 	TaskId string `json:"taskId,omitempty" jsonschema:"The ID of the task."`
 	// Type: The type of task (e.g. bash).
 	Type string `json:"type,omitempty" jsonschema:"The type of task (e.g. bash)."`
+	// Details: Extra generic task execution details.
+	Details string `json:"details,omitempty" jsonschema:"Extra generic task execution details."`
 }
 
 // ViewArgs defines the arguments for the "view" tool.

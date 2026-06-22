@@ -2051,7 +2051,7 @@ var TasksToolWidget = kitex.FC("TasksToolWidget", func(props ToolExecutionProps)
 					iconNode,
 					kitex.Span(kitex.SpanProps{Style: style.S().Bold(true)}, kitex.Text(" "+statusLabel)),
 				),
-				kitex.If(isFinished, func() kitex.Node {
+				kitex.If(isFinished && action != "kill", func() kitex.Node {
 					var label string
 					if isOpen() {
 						label = "▲ COLLAPSE"
@@ -2250,13 +2250,7 @@ var TasksToolWidget = kitex.FC("TasksToolWidget", func(props ToolExecutionProps)
 							}
 
 							if action == "kill" {
-								return kitex.Box(kitex.BoxProps{
-									Style: style.S().Display(style.DisplayFlex).FlexDirection(style.FlexRow).AlignItems(style.AlignCenter).Gap(1),
-								},
-									kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Secondary).Bold(true)}, kitex.Text("Action:")),
-									kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Primary)}, kitex.Text("KILL")),
-									kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Secondary)}, kitex.Text(" — "+out.Message)),
-								)
+								return kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Primary)}, kitex.Text(out.Message))
 							}
 						}
 

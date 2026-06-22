@@ -319,3 +319,70 @@ func TestToolHandlers_BashAmpersandStripping(t *testing.T) {
 		taskMgr.KillTask(res.TaskId)
 	}
 }
+
+func TestTextContentProviders(t *testing.T) {
+	// Test BashOutput TextContent
+	boRunning := BashOutput{
+		TaskId: "task_123",
+		Status: "running",
+		Stdout: "server starting...",
+		Stderr: "port check...",
+	}
+	tcRunning := boRunning.TextContent()
+	if !strings.Contains(tcRunning, "running in the background") {
+		t.Errorf("expected 'running in the background' in text content, got %q", tcRunning)
+	}
+	if !strings.Contains(tcRunning, "must use the 'tasks' tool") {
+		t.Errorf("expected tasks tool instructions, got %q", tcRunning)
+	}
+	if !strings.Contains(tcRunning, "[stdout]\nserver starting...") {
+		t.Errorf("expected stdout in text content, got %q", tcRunning)
+	}
+
+	boCompleted := BashOutput{
+		ExitCode: 0,
+		Status:   "completed",
+		Stdout:   "hello",
+	}
+	tcCompleted := boCompleted.TextContent()
+	if !strings.Contains(tcCompleted, "completed successfully") {
+		t.Errorf("expected 'completed successfully', got %q", tcCompleted)
+	}
+
+	boFailed := BashOutput{
+		ExitCode: 1,
+		Status:   "failed",
+		Message:  "some error",
+	}
+	tcFailed := boFailed.TextContent()
+	if !strings.Contains(tcFailed, "failed with exit code 1") || !strings.Contains(tcFailed, "some error") {
+		t.Errorf("expected failed status and message, got %q", tcFailed)
+	}
+
+	// Test TasksOutput TextContent
+	toStatus := TasksOutput{
+		Status:     "running",
+		StdoutTail: "log tail line",
+		Message:    "checking status",
+	}
+	tcStatus := toStatus.TextContent()
+	if !strings.Contains(tcStatus, "checking status") || !strings.Contains(tcStatus, "Task Status: running") || !strings.Contains(tcStatus, "[stdout tail]\nlog tail line") {
+		t.Errorf("expected message, status, and stdout tail, got %q", tcStatus)
+	}
+
+	toTasks := TasksOutput{
+		Message: "Success listing",
+		Tasks: []TasksOutputTasksItem{
+			{
+				TaskId: "task_123",
+				Name:   "my server",
+				Type:   "bash",
+				Status: "running",
+			},
+		},
+	}
+	tcTasks := toTasks.TextContent()
+	if !strings.Contains(tcTasks, "Background Tasks:") || !strings.Contains(tcTasks, "ID: task_123 | Name: \"my server\"") {
+		t.Errorf("expected background task list format, got %q", tcTasks)
+	}
+}

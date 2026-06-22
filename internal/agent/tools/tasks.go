@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -31,6 +32,7 @@ func (h *ToolHandlers) Tasks(ctx context.Context, in TasksArgs) (TasksOutput, er
 				StartedAt:  t.StartedAt.Format(time.RFC3339),
 				FinishedAt: finishedAtStr,
 				Error:      t.Error,
+				Details:    t.Details,
 			})
 		}
 		return TasksOutput{
@@ -118,4 +120,63 @@ func (h *ToolHandlers) Tasks(ctx context.Context, in TasksArgs) (TasksOutput, er
 	default:
 		return TasksOutput{Message: fmt.Sprintf("Unsupported action %q.", in.Action)}, nil
 	}
+}
+
+// TextContent implements tool.TextContentProvider so loom renders a human-readable summary
+// of background task lists or task status checks instead of raw JSON.
+func (o TasksOutput) TextContent() string {
+	var sb strings.Builder
+
+	if o.Message != "" {
+		sb.WriteString(o.Message)
+		sb.WriteString("\n")
+	}
+
+	// Case 1: Status query result
+	if o.Status != "" {
+		if sb.Len() > 0 {
+			sb.WriteString("\n")
+		}
+		fmt.Fprintf(&sb, "Task Status: %s\n", o.Status)
+		if o.Status == "completed" || o.Status == "failed" {
+			fmt.Fprintf(&sb, "Exit Code: %d\n", o.ExitCode)
+		}
+		if o.StdoutTail != "" {
+			sb.WriteString("\n[stdout tail]\n")
+			sb.WriteString(o.StdoutTail)
+			sb.WriteString("\n")
+		}
+		if o.StderrTail != "" {
+			sb.WriteString("\n[stderr tail]\n")
+			sb.WriteString(o.StderrTail)
+			sb.WriteString("\n")
+		}
+		return sb.String()
+	}
+
+	// Case 2: List query result
+	if len(o.Tasks) > 0 {
+		sb.WriteString("\nBackground Tasks:\n")
+		for _, t := range o.Tasks {
+			fmt.Fprintf(&sb, "- ID: %s | Name: %q | Type: %s | Status: %s", t.TaskId, t.Name, t.Type, t.Status)
+			if t.Details != "" {
+				fmt.Fprintf(&sb, " (%s)", t.Details)
+			}
+			if t.Status == "completed" || t.Status == "failed" {
+				fmt.Fprintf(&sb, " | Exit Code: %d", t.ExitCode)
+			}
+			if t.FinishedAt != "" {
+				fmt.Fprintf(&sb, " | Finished: %s", t.FinishedAt)
+			} else {
+				fmt.Fprintf(&sb, " | Started: %s", t.StartedAt)
+			}
+			if t.Error != "" {
+				fmt.Fprintf(&sb, " | Error: %s", t.Error)
+			}
+			sb.WriteString("\n")
+		}
+		return sb.String()
+	}
+
+	return sb.String()
 }

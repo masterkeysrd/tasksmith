@@ -53,6 +53,9 @@ spec:
             error:
               type: string
               description: "Error message if the task failed."
+            details:
+              type: string
+              description: "Extra generic task execution details."
       status:
         type: string
         description: "The status of the requested task."

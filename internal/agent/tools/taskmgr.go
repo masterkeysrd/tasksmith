@@ -45,11 +45,12 @@ type Task struct {
 	Status       TaskStatus `json:"status"`   // running, completed, failed, killed
 	ExitCode     int        `json:"exitCode"` // Exit status code
 	StartedAt    time.Time  `json:"startedAt"`
-	FinishedAt   time.Time  `json:"finishedAt,omitempty"`
+	FinishedAt   time.Time  `json:"finishedAt,omitzero"`
 	Error        string     `json:"error,omitempty"`
 	StdoutPath   string     `json:"stdoutPath"`
 	StderrPath   string     `json:"stderrPath"`
 	IsBackground bool       `json:"isBackground"`
+	Details      string     `json:"details,omitempty"` // Extra generic human-readable task details
 
 	runner TaskRunner
 	cancel context.CancelFunc
@@ -75,11 +76,13 @@ type TaskManager struct {
 
 // NewTaskManager creates a new centralized TaskManager for the workspace.
 func NewTaskManager(workspacePath string, notifyCallback func(sessionID, taskID string, task *Task)) *TaskManager {
-	return &TaskManager{
+	tm := &TaskManager{
 		tasks:          make(map[string]*Task),
 		workspacePath:  workspacePath,
 		notifyCallback: notifyCallback,
 	}
+	go tm.startPortPoller()
+	return tm
 }
 
 // Submit registers and starts a task. If it completes within waitMs, it returns the finished task state.
@@ -163,13 +166,13 @@ func (tm *TaskManager) Submit(ctx context.Context, opts SubmitOptions) (*Task, e
 	}()
 
 	// Monitor completion or sync-wait timeout
-	go func() {
-		// Wait for completion goroutine or context cancellation
-		select {
-		case <-taskCtx.Done():
-			// If context finishes, task is finalized by the inner goroutine.
-		}
-	}()
+	// go func() {
+	// 	// Wait for completion goroutine or context cancellation
+	// 	select {
+	// 	case <-taskCtx.Done():
+	// 		// If context finishes, task is finalized by the inner goroutine.
+	// 	}
+	// }()
 
 	// Watch for completion within the wait period
 	go func() {
@@ -346,5 +349,45 @@ func (tm *TaskManager) finalizeTask(taskID string, err error) {
 	} else {
 		t.Status = StatusCompleted
 		t.ExitCode = 0
+	}
+}
+
+// StateReporter defines the optional interface for runners that support reporting generic runtime execution state details.
+type StateReporter interface {
+	State() string
+}
+
+func (tm *TaskManager) startPortPoller() {
+	ticker := time.NewTicker(2 * time.Second)
+	for range ticker.C {
+		tm.pollState()
+	}
+}
+
+func (tm *TaskManager) pollState() {
+	tm.mu.Lock()
+	var runningTasks []*Task
+	for _, t := range tm.tasks {
+		if t.Status == StatusRunning {
+			runningTasks = append(runningTasks, t)
+		}
+	}
+	tm.mu.Unlock()
+
+	for _, t := range runningTasks {
+		if reporter, ok := t.runner.(StateReporter); ok {
+			state := reporter.State()
+
+			tm.mu.Lock()
+			changed := t.Details != state
+			if changed {
+				t.Details = state
+			}
+			tm.mu.Unlock()
+
+			if changed && tm.notifyCallback != nil {
+				tm.notifyCallback(t.SessionID, t.ID, t)
+			}
+		}
 	}
 }

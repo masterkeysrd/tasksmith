@@ -14,6 +14,7 @@ import (
 	"github.com/masterkeysrd/loom/message"
 	"github.com/masterkeysrd/loom/tool"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
+	"github.com/masterkeysrd/tasksmith/internal/core/process"
 )
 
 // BashRunner implements TaskRunner for OS shell commands.
@@ -32,11 +33,11 @@ func (br *BashRunner) Start(ctx context.Context, stdout io.Writer, stderr io.Wri
 	cmd.Stderr = stderr
 
 	// Set process group so we can terminate all subprocesses
-	prepareCmd(cmd)
+	process.Prepare(cmd)
 
 	// Configure graceful termination before SIGKILL
 	cmd.Cancel = func() error {
-		return killProcessGroup(cmd)
+		return process.Kill(cmd)
 	}
 	cmd.WaitDelay = 5 * time.Second
 	br.cmd = cmd
@@ -48,10 +49,79 @@ func (br *BashRunner) Start(ctx context.Context, stdout io.Writer, stderr io.Wri
 func (br *BashRunner) Stop() error {
 	br.mu.Lock()
 	defer br.mu.Unlock()
-	if br.cmd != nil && br.cmd.Process != nil {
-		return killProcessGroup(br.cmd)
+	if br.cmd != nil {
+		return process.Kill(br.cmd)
 	}
 	return nil
+}
+
+// State implements the StateReporter interface to report dynamic task details.
+func (br *BashRunner) State() string {
+	br.mu.Lock()
+	cmd := br.cmd
+	br.mu.Unlock()
+
+	if cmd == nil || cmd.Process == nil {
+		return ""
+	}
+
+	ports, _ := process.FindPorts(cmd.Process.Pid)
+	if len(ports) > 0 {
+		var pstrs []string
+		for _, p := range ports {
+			pstrs = append(pstrs, fmt.Sprintf(":%d", p))
+		}
+		return strings.Join(pstrs, ", ")
+	}
+	return ""
+}
+
+const (
+	bashLogSizeThreshold = 100000 // 100KB threshold
+	bashLogPreviewLimit  = 30000  // 30KB preview limit
+	bashBgPreviewLimit   = 5000   // 5KB preview limit for background task logs
+)
+
+func readAndTruncateBgLog(logPath string) string {
+	if logPath == "" {
+		return ""
+	}
+	f, err := os.Open(logPath)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+
+	info, err := f.Stat()
+	if err != nil {
+		return ""
+	}
+	if info.Size() == 0 {
+		return ""
+	}
+
+	if info.Size() <= bashBgPreviewLimit {
+		data, err := os.ReadFile(logPath)
+		if err != nil {
+			return ""
+		}
+		return string(data)
+	}
+
+	// Read last bashBgPreviewLimit bytes
+	offset := info.Size() - bashBgPreviewLimit
+	_, err = f.Seek(offset, io.SeekStart)
+	if err != nil {
+		return ""
+	}
+
+	buf := make([]byte, bashBgPreviewLimit)
+	n, err := f.Read(buf)
+	if err != nil && err != io.EOF {
+		return ""
+	}
+
+	return "[... truncated to protect context window. Use the 'tasks' tool with action 'status' to view more/latest logs ...]\n" + string(buf[:n])
 }
 
 // saveAndTruncate checks the size of the log file at logPath. If it exceeds a threshold (20,000 bytes),
@@ -67,10 +137,7 @@ func (h *ToolHandlers) saveAndTruncate(ctx context.Context, logPath string, suff
 		return "", err
 	}
 
-	const threshold = 100000 // 100KB threshold
-	const limit = 30000      // 30KB preview limit
-
-	if fileInfo.Size() <= threshold {
+	if fileInfo.Size() <= bashLogSizeThreshold {
 		data, err := os.ReadFile(logPath)
 		if err != nil {
 			return "", err
@@ -95,9 +162,9 @@ func (h *ToolHandlers) saveAndTruncate(ctx context.Context, logPath string, suff
 		}
 	}
 
-	// Read first 5,000 characters from logPath
+	// Read first preview limit characters from logPath
 	_, _ = logFile.Seek(0, io.SeekStart)
-	reader := io.LimitReader(logFile, limit)
+	reader := io.LimitReader(logFile, bashLogPreviewLimit)
 	buf := new(strings.Builder)
 	_, _ = io.Copy(buf, reader)
 
@@ -117,7 +184,7 @@ func (h *ToolHandlers) Bash(ctx context.Context, in BashArgs) (tool.ToolStream, 
 			cmd.Dir = h.CWD
 			out, err := cmd.CombinedOutput()
 			var exitCode int
-			var status string = "completed"
+			var status = "completed"
 			var stderrMsg string
 			if err != nil {
 				exitCode = 1
@@ -311,14 +378,24 @@ func (h *ToolHandlers) Bash(ctx context.Context, in BashArgs) (tool.ToolStream, 
 
 				// If the TaskManager transitioned the task to background, yield running chunk and stop streaming
 				if isBg {
+					stdoutSoFar := readAndTruncateBgLog(task.StdoutPath)
+					stderrSoFar := readAndTruncateBgLog(task.StderrPath)
+
+					var content message.Content
+					hintText := fmt.Sprintf("\nCommand is running in the background (Task ID: %s).\nTo manage or monitor this task, you must use the 'tasks' tool (e.g., action: 'status' or 'kill' with taskId: '%s').\n", task.ID, task.ID)
+					content = append(content, &message.TextBlock{Text: hintText})
+
 					// Yield background status chunk
 					outObj := BashOutput{
 						TaskId:  task.ID,
 						Status:  "running",
 						Message: "Command took longer than wait threshold; running in background.",
+						Stdout:  stdoutSoFar,
+						Stderr:  stderrSoFar,
 					}
 					yield(message.ToolChunk{
 						BaseChunk:         message.BaseChunk{ID: toolCallID},
+						Content:           content,
 						StructuredContent: outObj,
 					}, nil)
 					return
@@ -326,4 +403,38 @@ func (h *ToolHandlers) Bash(ctx context.Context, in BashArgs) (tool.ToolStream, 
 			}
 		}
 	}, nil
+}
+
+// TextContent implements tool.TextContentProvider so loom renders the result
+// as a human-readable message instead of a raw JSON blob.
+func (o BashOutput) TextContent() string {
+	var sb strings.Builder
+
+	switch o.Status {
+	case "running":
+		fmt.Fprintf(&sb, "Command is running in the background (Task ID: %s).\n", o.TaskId)
+		fmt.Fprintf(&sb, "To manage or monitor this task, you must use the 'tasks' tool (e.g., action: 'status' or 'kill' with taskId: '%s').\n", o.TaskId)
+	case "completed":
+		fmt.Fprintf(&sb, "Command completed successfully (exit code %d).\n", o.ExitCode)
+	case "failed":
+		fmt.Fprintf(&sb, "Command failed with exit code %d.\n", o.ExitCode)
+		if o.Message != "" {
+			fmt.Fprintf(&sb, "Error: %s\n", o.Message)
+		}
+	case "killed":
+		sb.WriteString("Command was terminated/killed.\n")
+	default:
+		fmt.Fprintf(&sb, "Command status: %s\n", o.Status)
+	}
+
+	if o.Stdout != "" {
+		sb.WriteString("\n[stdout]\n")
+		sb.WriteString(o.Stdout)
+	}
+	if o.Stderr != "" {
+		sb.WriteString("\n[stderr]\n")
+		sb.WriteString(o.Stderr)
+	}
+
+	return sb.String()
 }

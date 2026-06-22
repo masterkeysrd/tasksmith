@@ -108,11 +108,16 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 		}
 	}, 100*time.Millisecond, []any{sending, sessionID})
 
+	hasRunningTasks := false
+	if stateQuery.Data != nil && len(stateQuery.Data.RunningTasks) > 0 {
+		hasRunningTasks = true
+	}
+
 	kitex.UseInterval(func() {
-		if sending {
+		if sending || hasRunningTasks {
 			windClient.InvalidateQueries(api.GetSessionStateRequest{SessionID: sessionID})
 		}
-	}, 1000*time.Millisecond, []any{sending, sessionID})
+	}, 1000*time.Millisecond, []any{sending, hasRunningTasks, sessionID})
 
 	// Invalidate messages query when the agent finishes execution (sending transitions to false)
 	kitex.UseEffect(func() {
@@ -300,6 +305,11 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 					}
 					if queuedWidget := renderQueuedMessages(t, queuedMessages); queuedWidget != nil {
 						nodes = append(nodes, queuedWidget)
+					}
+					if stateQuery.Data != nil && len(stateQuery.Data.RunningTasks) > 0 {
+						nodes = append(nodes, RunningTasksWidget(RunningTasksWidgetProps{
+							Tasks: stateQuery.Data.RunningTasks,
+						}))
 					}
 					return nodes
 				}()...,
@@ -490,6 +500,7 @@ type BubbleProps struct {
 	TaskName             string
 	TaskStatus           string
 	ExitCode             int
+	TaskError            string
 }
 
 var Bubble = kitex.FC("Bubble", func(props BubbleProps) kitex.Node {
@@ -512,6 +523,7 @@ var Bubble = kitex.FC("Bubble", func(props BubbleProps) kitex.Node {
 		cardStyle := style.S().
 			Padding(1).
 			Width(style.Percent(100)).
+			MaxWidth(style.Percent(90)).
 			Background(t.Color.Surface.BaseDisabled).
 			Border(true, style.SingleBorder(), borderCol).
 			Display(style.DisplayFlex).
@@ -548,11 +560,65 @@ var Bubble = kitex.FC("Bubble", func(props BubbleProps) kitex.Node {
 		// A nice label line showing Name and ID
 		var detailsNode kitex.Node
 		if props.TaskID != "" {
-			detailsStyle := style.S().
+			var statText string
+			var statCol color.Color
+			switch props.TaskStatus {
+			case "running":
+				statText = "● RUNNING"
+				statCol = t.Color.Surface.Info
+			case "finished", "completed":
+				if props.ExitCode == 0 {
+					statText = "✔ COMPLETED"
+					statCol = t.Color.Surface.Success
+				} else {
+					statText = fmt.Sprintf("✘ FAILED (%d)", props.ExitCode)
+					statCol = t.Color.Text.Error
+				}
+			case "killed":
+				statText = "⏹ KILLED"
+				statCol = t.Color.Text.Secondary
+			default:
+				statText = strings.ToUpper(props.TaskStatus)
+				statCol = t.Color.Text.Primary
+			}
+
+			statusBadgeStyle := style.S().
+				Foreground(statCol).
+				Bold(true)
+
+			idStyle := style.S().
 				Foreground(t.Color.Text.Secondary).
 				Italic(true)
-			detailsText := fmt.Sprintf("Task: %s (ID: %s) Status: %s (Exit Code: %d)", props.TaskName, props.TaskID, props.TaskStatus, props.ExitCode)
-			detailsNode = kitex.Box(kitex.BoxProps{Style: detailsStyle}, kitex.Text(detailsText))
+
+			nameStyle := style.S().
+				Bold(true).
+				Foreground(t.Color.Text.Primary)
+
+			metaRowStyle := style.S().
+				Display(style.DisplayFlex).
+				FlexDirection(style.FlexRow).
+				AlignItems(style.AlignCenter).
+				Gap(1).
+				MarginTop(1)
+
+			detailsNode = kitex.Box(kitex.BoxProps{
+				Style: style.S().Display(style.DisplayFlex).FlexDirection(style.FlexColumn).Width(style.Percent(100)),
+			},
+				kitex.Box(kitex.BoxProps{Style: nameStyle}, kitex.Text(props.TaskName)),
+				kitex.Box(kitex.BoxProps{Style: metaRowStyle},
+					kitex.Span(kitex.SpanProps{Style: idStyle}, kitex.Text("ID: "+props.TaskID)),
+					kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Tertiary)}, kitex.Text("─")),
+					kitex.Span(kitex.SpanProps{Style: statusBadgeStyle}, kitex.Text(statText)),
+				),
+			)
+		}
+
+		var errorNode kitex.Node
+		if props.TaskError != "" {
+			errStyle := style.S().
+				Foreground(t.Color.Text.Error).
+				MarginTop(1)
+			errorNode = kitex.Box(kitex.BoxProps{Style: errStyle}, kitex.Text("Error: "+props.TaskError))
 		}
 
 		contentStyle := style.S().
@@ -563,7 +629,12 @@ var Bubble = kitex.FC("Bubble", func(props BubbleProps) kitex.Node {
 		if detailsNode != nil {
 			contentNodes = append(contentNodes, detailsNode)
 		}
-		contentNodes = append(contentNodes, children...)
+		if errorNode != nil {
+			contentNodes = append(contentNodes, errorNode)
+		}
+		if props.TaskID == "" {
+			contentNodes = append(contentNodes, children...)
+		}
 
 		return kitex.Box(kitex.BoxProps{
 			Style: style.S().
@@ -1521,7 +1592,7 @@ func createBubbleNode(role message.Role, msgs []message.Message, toolResponses m
 	}
 
 	isSys := len(msgs) > 0 && isSystemNotification(msgs[0])
-	var taskID, taskName, taskStatus string
+	var taskID, taskName, taskStatus, taskError string
 	var exitCode int
 	if isSys {
 		meta := msgs[0].GetMetadata()
@@ -1538,6 +1609,15 @@ func createBubbleNode(role message.Role, msgs []message.Message, toolResponses m
 				exitCode = int(ec)
 			}
 		}
+
+		// Extract error from the text block of the message if any
+		for _, block := range msgs[0].GetContent() {
+			if tb, ok := block.(*message.TextBlock); ok {
+				if idx := strings.Index(tb.Text, "\nError: "); idx != -1 {
+					taskError = strings.TrimSpace(tb.Text[idx+len("\nError: "):])
+				}
+			}
+		}
 	}
 
 	return Bubble(BubbleProps{
@@ -1549,6 +1629,7 @@ func createBubbleNode(role message.Role, msgs []message.Message, toolResponses m
 		TaskName:             taskName,
 		TaskStatus:           taskStatus,
 		ExitCode:             exitCode,
+		TaskError:            taskError,
 	})
 }
 
@@ -1621,6 +1702,14 @@ func renderQueuedMessages(t *theme.Scheme, queuedMessages message.MessageList) k
 
 	var msgNodes []kitex.Node
 	for _, msg := range queuedMessages {
+		if meta := msg.GetMetadata(); meta != nil {
+			if isSys, ok := meta["is_system_notification"]; ok {
+				if b, ok := isSys.(bool); ok && b {
+					continue // Skip system notification messages
+				}
+			}
+		}
+
 		text := ""
 		for _, block := range msg.GetContent() {
 			if tb, ok := block.(*message.TextBlock); ok {
@@ -1649,3 +1738,78 @@ func renderQueuedMessages(t *theme.Scheme, queuedMessages message.MessageList) k
 
 	return kitex.Box(kitex.BoxProps{Style: containerStyle}, children...)
 }
+
+type RunningTasksWidgetProps struct {
+	Tasks []api.RunningTaskInfo
+}
+
+var RunningTasksWidget = kitex.FC("RunningTasksWidget", func(props RunningTasksWidgetProps) kitex.Node {
+	t := theme.UseTheme()
+	if len(props.Tasks) == 0 {
+		return nil
+	}
+
+	taskWord := "task"
+	if len(props.Tasks) > 1 {
+		taskWord = "tasks"
+	}
+
+	summaryText := fmt.Sprintf("%d %s running", len(props.Tasks), taskWord)
+
+	var taskRows []kitex.Node
+	for _, task := range props.Tasks {
+		dispDetails := task.Details
+		if dispDetails == "" {
+			dispDetails = "-"
+		}
+
+		// Truncate task command if too long
+		dispName := task.Name
+		if len(dispName) > 40 {
+			dispName = dispName[:37] + "..."
+		}
+
+		taskRows = append(taskRows, kitex.TR(kitex.TRProps{},
+			kitex.TD(kitex.TDProps{Style: style.S().Foreground(t.Color.Text.Secondary).PaddingRight(1).Width(style.MaxContent)}, kitex.Text(task.ID)),
+			kitex.TD(kitex.TDProps{Style: style.S().Foreground(t.Color.Surface.Info).PaddingRight(1).Width(style.MaxContent)}, kitex.Text(strings.ToUpper(task.Type))),
+			kitex.TD(kitex.TDProps{Style: style.S().Foreground(t.Color.Surface.Success).PaddingRight(1).Width(style.MaxContent)}, kitex.Text(dispDetails)),
+			kitex.TD(kitex.TDProps{Style: style.S().Foreground(t.Color.Text.Primary).Width(style.Percent(100))}, kitex.Text(dispName)),
+		))
+	}
+
+	headerRow := kitex.TR(kitex.TRProps{},
+		// Columns: TASK ID | TYPE | DETAILS | COMMAND / NAME
+		kitex.TD(kitex.TDProps{Style: style.S().Bold(true).Foreground(t.Color.Text.Secondary).PaddingRight(1).Width(style.MaxContent)}, kitex.Text("TASK ID")),
+		kitex.TD(kitex.TDProps{Style: style.S().Bold(true).Foreground(t.Color.Text.Secondary).PaddingRight(1).Width(style.MaxContent)}, kitex.Text("TYPE")),
+		kitex.TD(kitex.TDProps{Style: style.S().Bold(true).Foreground(t.Color.Text.Secondary).PaddingRight(1).Width(style.MaxContent)}, kitex.Text("DETAILS")),
+		kitex.TD(kitex.TDProps{Style: style.S().Bold(true).Foreground(t.Color.Text.Secondary).Width(style.Percent(100))}, kitex.Text("COMMAND / NAME")),
+	)
+
+	allRows := append([]kitex.Node{headerRow}, taskRows...)
+
+	return kitex.Box(kitex.BoxProps{
+		Style: style.S().
+			MarginTop(1).
+			MarginBottom(1).
+			Width(style.Percent(90)).
+			AlignSelf(style.AlignCenter),
+	},
+		components.Accordion(components.AccordionProps{
+			Color:   components.PaperSurface,
+			Variant: components.PaperOutlined,
+		},
+			components.AccordionSummary(components.AccordionSummaryProps{},
+				kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Primary).Bold(true)}, kitex.Text(summaryText)),
+			),
+			components.AccordionDetails(components.AccordionDetailsProps{
+				Style: style.S().Padding(1, 1),
+			},
+				kitex.Table(kitex.TableProps{},
+					kitex.TBody(kitex.TBodyProps{},
+						allRows...,
+					),
+				),
+			),
+		),
+	)
+})

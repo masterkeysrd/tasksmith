@@ -164,7 +164,15 @@ type GetSessionStateRequest struct {
 	SessionID string `json:"session_id"`
 }
 
+type RunningTaskInfo struct {
+	ID      string `json:"id"`
+	Name    string `json:"name"`
+	Type    string `json:"type"`
+	Details string `json:"details,omitempty"`
+}
+
 type GetSessionStateResponse struct {
-	Status string `json:"status"`
-	Error  string `json:"error,omitempty"`
+	Status       string            `json:"status"`
+	Error        string            `json:"error,omitempty"`
+	RunningTasks []RunningTaskInfo `json:"running_tasks,omitempty"`
 }
