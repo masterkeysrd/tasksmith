@@ -5,6 +5,7 @@ import (
 	"embed"
 	"fmt"
 	"io/fs"
+	"path/filepath"
 	"strings"
 
 	"github.com/masterkeysrd/tasksmith/internal/agent/tools"
@@ -22,6 +23,10 @@ type Workspace struct {
 }
 
 func New(cwd string) *Workspace {
+	abs, err := filepath.Abs(cwd)
+	if err == nil {
+		cwd = abs
+	}
 	return &Workspace{
 		cwd:    cwd,
 		logger: log.ForComponent("workspace"),
@@ -78,6 +83,24 @@ func (w *Workspace) Agents() []*warp.Agent {
 		}
 	}
 	return agents
+}
+
+func (w *Workspace) Contexts() []*warp.Context {
+	resolver := w.resolver()
+	if resolver == nil {
+		return nil
+	}
+
+	resources := resolver.ListResources(warp.QueryOptions{
+		Kinds: []warp.Kind{warp.KindContext},
+	})
+	contexts := make([]*warp.Context, 0, len(resources))
+	for _, r := range resources {
+		if ctx, ok := r.(*warp.Context); ok {
+			contexts = append(contexts, ctx)
+		}
+	}
+	return contexts
 }
 
 func (w *Workspace) Providers() []*warp.ModelProvider {

@@ -192,3 +192,25 @@ func TestWorkspace_ResolveDefaults(t *testing.T) {
 		t.Errorf("expected defaults, got %s, %s, %s", agent, provider, model)
 	}
 }
+
+func TestWorkspace_Contexts(t *testing.T) {
+	w := New("../..")
+	err := w.Load(context.Background())
+	if err != nil {
+		t.Fatalf("failed to load workspace: %v", err)
+	}
+
+	contexts := w.Contexts()
+	if len(contexts) == 0 {
+		t.Error("Expected at least one Context resource, got 0")
+	}
+	foundLocal := false
+	for _, c := range contexts {
+		if strings.Contains(c.Spec.Instructions, "TaskSmith") {
+			foundLocal = true
+		}
+	}
+	if !foundLocal {
+		t.Error("Expected local AGENT.md context to be loaded")
+	}
+}
