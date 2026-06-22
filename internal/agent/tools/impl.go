@@ -57,16 +57,6 @@ func (h *ToolHandlers) McpReadResources(ctx context.Context, in McpReadResources
 	return McpReadResourcesOutput{Content: string(out), Success: true}, nil
 }
 
-// WebFetch fetches web page content.
-func (h *ToolHandlers) WebFetch(ctx context.Context, in WebFetchArgs) (WebFetchOutput, error) {
-	cmd := exec.CommandContext(ctx, "curl", "-sL", in.Url)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return WebFetchOutput{}, nil
-	}
-	return WebFetchOutput{Content: string(out), Title: in.Url}, nil
-}
-
 const MaxEditDiffLines = 500
 
 func truncateDiff(diffStr string) (string, string) {

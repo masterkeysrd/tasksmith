@@ -414,8 +414,8 @@ type ViewOutput struct {
 	IsBinary bool `json:"is_binary,omitempty" jsonschema:"Whether the file is binary."`
 	// MimeType: Detected MIME type of the file.
 	MimeType string `json:"mime_type,omitempty" jsonschema:"Detected MIME type of the file."`
-	// Path: Path to the file.
-	Path string `json:"path,omitempty" jsonschema:"Path to the file."`
+	// Source: The source path or resource.
+	Source string `json:"source,omitempty" jsonschema:"The source path or resource."`
 	// StartLine: The start line of the returned content.
 	StartLine int `json:"start_line,omitempty" jsonschema:"The start line of the returned content."`
 	// TotalLines: Total number of lines in the file.
@@ -434,10 +434,20 @@ type WebFetchArgs struct {
 
 // WebFetchOutput defines the output returned by the "web_fetch" tool.
 type WebFetchOutput struct {
+	// CachedPath: Cached path in workspace session storage.
+	CachedPath string `json:"cached_path,omitempty" jsonschema:"Cached path in workspace session storage."`
 	// Content: Web page content.
 	Content string `json:"content,omitempty" jsonschema:"Web page content."`
+	// IsBinary: Whether the fetched file is binary.
+	IsBinary bool `json:"is_binary,omitempty" jsonschema:"Whether the fetched file is binary."`
+	// MimeType: Detected MIME type.
+	MimeType string `json:"mime_type,omitempty" jsonschema:"Detected MIME type."`
 	// Title: Web page title.
 	Title string `json:"title,omitempty" jsonschema:"Web page title."`
+	// Truncated: Whether the content was truncated due to context limits.
+	Truncated bool `json:"truncated,omitempty" jsonschema:"Whether the content was truncated due to context limits."`
+	// Url: The fetched URL.
+	Url string `json:"url,omitempty" jsonschema:"The fetched URL."`
 }
 
 // WebSearchArgs defines the arguments for the "web_search" tool.

@@ -9,30 +9,57 @@ import (
 
 // FileCacheMetadata represents generic file caching metadata returned by tools.
 type FileCacheMetadata struct {
-	Path       string `json:"path"`
+	Source     string `json:"source"`
 	CachedPath string `json:"cached_path"`
 	MimeType   string `json:"mime_type"`
 	IsBinary   bool   `json:"is_binary"`
 }
 
-// ParseFileCacheMetadata parses structured content into FileCacheMetadata.
-func ParseFileCacheMetadata(structured any) (FileCacheMetadata, bool) {
+// FileCacheProvider is implemented by tools that cache files.
+type FileCacheProvider interface {
+	GetFileCacheMetadata() []FileCacheMetadata
+}
+
+// ParseFileCacheMetadata parses structured content into a slice of FileCacheMetadata.
+func ParseFileCacheMetadata(structured any) ([]FileCacheMetadata, bool) {
 	if structured == nil {
-		return FileCacheMetadata{}, false
+		return nil, false
 	}
+
+	// Fast path: assert FileCacheProvider
+	if provider, ok := structured.(FileCacheProvider); ok {
+		return provider.GetFileCacheMetadata(), true
+	}
+
+	// Slow path: try unmarshalling JSON
 	data, err := json.Marshal(structured)
 	if err != nil {
-		return FileCacheMetadata{}, false
+		return nil, false
 	}
-	var out FileCacheMetadata
-	if err := json.Unmarshal(data, &out); err != nil {
-		return FileCacheMetadata{}, false
+
+	// Try as a slice
+	var sliceOut []FileCacheMetadata
+	if err := json.Unmarshal(data, &sliceOut); err == nil {
+		var valid []FileCacheMetadata
+		for _, m := range sliceOut {
+			if m.Source != "" || m.CachedPath != "" {
+				valid = append(valid, m)
+			}
+		}
+		if len(valid) > 0 {
+			return valid, true
+		}
 	}
-	// A valid metadata should at least have a Path or CachedPath
-	if out.Path == "" && out.CachedPath == "" {
-		return FileCacheMetadata{}, false
+
+	// Try as a single metadata struct
+	var singleOut FileCacheMetadata
+	if err := json.Unmarshal(data, &singleOut); err == nil {
+		if singleOut.Source != "" || singleOut.CachedPath != "" {
+			return []FileCacheMetadata{singleOut}, true
+		}
 	}
-	return out, true
+
+	return nil, false
 }
 
 // RehydrateMessage populates binary data from the disk cache on a cloned message if necessary.
@@ -43,43 +70,130 @@ func RehydrateMessage(msg message.Message) message.Message {
 		return msg
 	}
 
-	meta, ok := ParseFileCacheMetadata(tMsg.StructuredContent)
-
-	if !ok || !meta.IsBinary {
+	metaList, ok := ParseFileCacheMetadata(tMsg.StructuredContent)
+	if !ok {
 		return msg
 	}
 
-	readPath := meta.CachedPath
-	if readPath == "" {
-		readPath = meta.Path
+	hasBinary := false
+	for _, m := range metaList {
+		if m.IsBinary {
+			hasBinary = true
+			break
+		}
 	}
-	if readPath == "" {
+	if !hasBinary {
 		return msg
 	}
 
-	data, err := os.ReadFile(readPath)
-	if err != nil {
+	// Pre-read file data for each binary metadata
+	cachedData := make(map[string][]byte)
+	for _, meta := range metaList {
+		if !meta.IsBinary {
+			continue
+		}
+		readPath := meta.CachedPath
+		if readPath == "" {
+			readPath = meta.Source
+		}
+		if readPath == "" {
+			continue
+		}
+		if _, ok := cachedData[readPath]; !ok {
+			if data, err := os.ReadFile(readPath); err == nil {
+				cachedData[readPath] = data
+			}
+		}
+	}
+
+	var binaryMetas []FileCacheMetadata
+	for _, meta := range metaList {
+		if !meta.IsBinary {
+			continue
+		}
+		readPath := meta.CachedPath
+		if readPath == "" {
+			readPath = meta.Source
+		}
+		if _, ok := cachedData[readPath]; ok {
+			binaryMetas = append(binaryMetas, meta)
+		}
+	}
+
+	if len(binaryMetas) == 0 {
 		return msg
 	}
 
-	// Clone the content blocks and populate binary data
 	clonedContent := make(message.Content, len(tMsg.Content))
+	binaryBlockIndex := 0
 	for j, b := range tMsg.Content {
 		switch block := b.(type) {
 		case *message.ImageBlock:
-			clonedContent[j] = &message.ImageBlock{
-				MIMEType: block.MIMEType,
-				URL:      block.URL,
-				Extras:   block.Extras,
-				Data:     data,
+			var bestMeta *FileCacheMetadata
+			if block.URL != "" {
+				for i := range binaryMetas {
+					if binaryMetas[i].CachedPath == block.URL || binaryMetas[i].Source == block.URL {
+						bestMeta = &binaryMetas[i]
+						break
+					}
+				}
 			}
+			if bestMeta == nil && len(binaryMetas) == 1 {
+				bestMeta = &binaryMetas[0]
+			}
+			if bestMeta == nil && binaryBlockIndex < len(binaryMetas) {
+				bestMeta = &binaryMetas[binaryBlockIndex]
+			}
+
+			if bestMeta != nil {
+				readPath := bestMeta.CachedPath
+				if readPath == "" {
+					readPath = bestMeta.Source
+				}
+				clonedContent[j] = &message.ImageBlock{
+					MIMEType: block.MIMEType,
+					URL:      block.URL,
+					Extras:   block.Extras,
+					Data:     cachedData[readPath],
+				}
+			} else {
+				clonedContent[j] = b
+			}
+			binaryBlockIndex++
+
 		case *message.DocumentBlock:
-			clonedContent[j] = &message.DocumentBlock{
-				MIMEType: block.MIMEType,
-				URL:      block.URL,
-				Extras:   block.Extras,
-				Data:     data,
+			var bestMeta *FileCacheMetadata
+			if block.URL != "" {
+				for i := range binaryMetas {
+					if binaryMetas[i].CachedPath == block.URL || binaryMetas[i].Source == block.URL {
+						bestMeta = &binaryMetas[i]
+						break
+					}
+				}
 			}
+			if bestMeta == nil && len(binaryMetas) == 1 {
+				bestMeta = &binaryMetas[0]
+			}
+			if bestMeta == nil && binaryBlockIndex < len(binaryMetas) {
+				bestMeta = &binaryMetas[binaryBlockIndex]
+			}
+
+			if bestMeta != nil {
+				readPath := bestMeta.CachedPath
+				if readPath == "" {
+					readPath = bestMeta.Source
+				}
+				clonedContent[j] = &message.DocumentBlock{
+					MIMEType: block.MIMEType,
+					URL:      block.URL,
+					Extras:   block.Extras,
+					Data:     cachedData[readPath],
+				}
+			} else {
+				clonedContent[j] = b
+			}
+			binaryBlockIndex++
+
 		default:
 			clonedContent[j] = b
 		}

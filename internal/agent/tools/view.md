@@ -28,9 +28,9 @@ spec:
       end_line:
         type: integer
         description: The end line of the returned content.
-      path:
+      source:
         type: string
-        description: Path to the file.
+        description: The source path or resource.
       start_line:
         type: integer
         description: The start line of the returned content.

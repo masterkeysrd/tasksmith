@@ -112,7 +112,7 @@ func (h *ToolHandlers) View(ctx context.Context, in ViewArgs) (ViewOutput, error
 		}
 
 		return ViewOutput{
-			Path:       path,
+			Source:     path,
 			CachedPath: cachedPath,
 			MimeType:   mimeType,
 			IsBinary:   true,
@@ -184,7 +184,7 @@ func (h *ToolHandlers) View(ctx context.Context, in ViewArgs) (ViewOutput, error
 		StartLine:  actualStartLine,
 		EndLine:    actualEndLine,
 		TotalLines: currentLine,
-		Path:       in.Path,
+		Source:     in.Path,
 		Truncated:  truncated,
 		MimeType:   mimeType,
 		IsBinary:   false,
@@ -217,7 +217,7 @@ func (v ViewOutput) ToolContent() message.Content {
 		// Fallback for other documents or unsupported binaries
 		return message.Content{
 			&message.TextBlock{
-				Text: fmt.Sprintf("[Binary document: %s (%s)]", filepath.Base(v.Path), v.MimeType),
+				Text: fmt.Sprintf("[Binary document: %s (%s)]", filepath.Base(v.Source), v.MimeType),
 			},
 		}
 	}
@@ -230,7 +230,7 @@ func (v ViewOutput) ToolContent() message.Content {
 		}
 	}
 
-	filename := filepath.Base(v.Path)
+	filename := filepath.Base(v.Source)
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "%s (%d-%d of %d)\n", filename, v.StartLine, v.EndLine, v.TotalLines)
 	sb.WriteString(v.Content)
@@ -242,6 +242,18 @@ func (v ViewOutput) ToolContent() message.Content {
 	return message.Content{
 		&message.TextBlock{
 			Text: sb.String(),
+		},
+	}
+}
+
+// GetFileCacheMetadata implements the FileCacheProvider interface.
+func (v ViewOutput) GetFileCacheMetadata() []FileCacheMetadata {
+	return []FileCacheMetadata{
+		{
+			Source:     v.Source,
+			CachedPath: v.CachedPath,
+			MimeType:   v.MimeType,
+			IsBinary:   v.IsBinary,
 		},
 	}
 }

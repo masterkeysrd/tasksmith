@@ -36,7 +36,7 @@ func TestRehydrateMessagesForLLM(t *testing.T) {
 			},
 		},
 		StructuredContent: map[string]any{
-			"path":        filePath,
+			"source":      filePath,
 			"cached_path": filePath,
 			"mime_type":   "image/png",
 			"is_binary":   true,
@@ -53,7 +53,7 @@ func TestRehydrateMessagesForLLM(t *testing.T) {
 			},
 		},
 		StructuredContent: map[string]any{
-			"path":      "info.txt",
+			"source":    "info.txt",
 			"mime_type": "text/plain",
 			"is_binary": false,
 		},

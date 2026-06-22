@@ -251,8 +251,8 @@ func TestViewPathCleaningAndSpacing(t *testing.T) {
 	if !out.IsBinary {
 		t.Errorf("Case A: expected IsBinary to be true")
 	}
-	if filepath.Base(out.Path) != fileNameOnDisk {
-		t.Errorf("Case A: expected resolved path to be %q, got %q", fileNameOnDisk, filepath.Base(out.Path))
+	if filepath.Base(out.Source) != fileNameOnDisk {
+		t.Errorf("Case A: expected resolved path to be %q, got %q", fileNameOnDisk, filepath.Base(out.Source))
 	}
 
 	// Case B: Path is quoted with surrounding double quotes (using standard spaces)
@@ -264,7 +264,7 @@ func TestViewPathCleaningAndSpacing(t *testing.T) {
 	if !out.IsBinary {
 		t.Errorf("Case B: expected IsBinary to be true")
 	}
-	if filepath.Base(out.Path) != fileNameOnDisk {
-		t.Errorf("Case B: expected resolved path to be %q, got %q", fileNameOnDisk, filepath.Base(out.Path))
+	if filepath.Base(out.Source) != fileNameOnDisk {
+		t.Errorf("Case B: expected resolved path to be %q, got %q", fileNameOnDisk, filepath.Base(out.Source))
 	}
 }
