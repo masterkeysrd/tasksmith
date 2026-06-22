@@ -7,16 +7,6 @@ import (
 	"strings"
 )
 
-// Bash executes a bash command.
-func (h *ToolHandlers) Bash(ctx context.Context, in BashArgs) (BashOutput, error) {
-	cmd := exec.CommandContext(ctx, "bash", "-c", in.Command)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return BashOutput{ExitCode: 1, Stderr: err.Error(), Stdout: string(out)}, nil
-	}
-	return BashOutput{ExitCode: 0, Stdout: string(out)}, nil
-}
-
 // Download downloads a file from a URL.
 func (h *ToolHandlers) Download(ctx context.Context, in DownloadArgs) (DownloadOutput, error) {
 	path := "downloaded_file"

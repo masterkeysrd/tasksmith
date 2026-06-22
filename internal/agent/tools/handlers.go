@@ -23,7 +23,7 @@ func LoomTools(handlers *ToolHandlers) ([]*tool.Tool, error) {
 
 	var list []*tool.Tool
 	if res, ok := resMap["bash"]; ok {
-		t, err := tool.New(
+		t, err := tool.NewStreaming(
 			"bash",
 			res.Metadata.DisplayName,
 			res.Metadata.Description,
@@ -187,6 +187,19 @@ func LoomTools(handlers *ToolHandlers) ([]*tool.Tool, error) {
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create tool remove: %w", err)
+		}
+		list = append(list, t)
+	}
+
+	if res, ok := resMap["tasks"]; ok {
+		t, err := tool.New(
+			"tasks",
+			res.Metadata.DisplayName,
+			res.Metadata.Description,
+			handlers.Tasks,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create tool tasks: %w", err)
 		}
 		list = append(list, t)
 	}

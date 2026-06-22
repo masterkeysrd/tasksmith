@@ -1,0 +1,350 @@
+package tools
+
+import (
+	"bufio"
+	"context"
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/google/uuid"
+	"github.com/masterkeysrd/tasksmith/internal/core/fsutil"
+	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
+)
+
+// TaskRunner defines the interface for executing a process or command.
+type TaskRunner interface {
+	// Start begins execution of the runner, directing standard output and error to the provided writers.
+	// It must block until completion or context cancellation.
+	Start(ctx context.Context, stdout io.Writer, stderr io.Writer) error
+
+	// Stop gracefully terminates the running process/operation.
+	Stop() error
+}
+
+// TaskStatus represents the runtime execution state of a background task.
+type TaskStatus string
+
+const (
+	StatusRunning   TaskStatus = "running"
+	StatusCompleted TaskStatus = "completed"
+	StatusFailed    TaskStatus = "failed"
+	StatusKilled    TaskStatus = "killed"
+)
+
+// Task holds the runtime execution state and metadata of a task.
+type Task struct {
+	ID           string     `json:"id"`
+	SessionID    string     `json:"sessionId"`
+	Type         string     `json:"type"`     // e.g. "bash", "mcp"
+	Name         string     `json:"name"`     // User-friendly label or command string
+	Status       TaskStatus `json:"status"`   // running, completed, failed, killed
+	ExitCode     int        `json:"exitCode"` // Exit status code
+	StartedAt    time.Time  `json:"startedAt"`
+	FinishedAt   time.Time  `json:"finishedAt,omitempty"`
+	Error        string     `json:"error,omitempty"`
+	StdoutPath   string     `json:"stdoutPath"`
+	StderrPath   string     `json:"stderrPath"`
+	IsBackground bool       `json:"isBackground"`
+
+	runner TaskRunner
+	cancel context.CancelFunc
+}
+
+// SubmitOptions defines the arguments for submitting a task to the TaskManager.
+type SubmitOptions struct {
+	SessionID  string
+	TaskType   string
+	Name       string
+	Runner     TaskRunner
+	WaitMs     int
+	TimeoutSec int
+}
+
+// TaskManager orchestrates thread-safe creation, execution, and termination of background processes.
+type TaskManager struct {
+	mu             sync.RWMutex
+	tasks          map[string]*Task
+	workspacePath  string
+	notifyCallback func(sessionID string, taskID string, task *Task)
+}
+
+// NewTaskManager creates a new centralized TaskManager for the workspace.
+func NewTaskManager(workspacePath string, notifyCallback func(sessionID, taskID string, task *Task)) *TaskManager {
+	return &TaskManager{
+		tasks:          make(map[string]*Task),
+		workspacePath:  workspacePath,
+		notifyCallback: notifyCallback,
+	}
+}
+
+// Submit registers and starts a task. If it completes within waitMs, it returns the finished task state.
+// Otherwise, it transitions the task to background execution and returns a running task state.
+func (tm *TaskManager) Submit(ctx context.Context, opts SubmitOptions) (*Task, error) {
+	// Generate unique task ID
+	u, err := uuid.NewV7()
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate task UUID: %w", err)
+	}
+	taskID := fmt.Sprintf("task_%s", u.String())
+
+	// Resolve directories and create stdout/stderr log files
+	wsDir, err := xdg.WorkspaceDir(tm.workspacePath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get workspace data directory: %w", err)
+	}
+
+	tasksDir := filepath.Join(wsDir, "sessions", opts.SessionID, "tasks")
+	if err := fsutil.EnsureDir(tasksDir); err != nil {
+		return nil, fmt.Errorf("failed to create tasks directory: %w", err)
+	}
+
+	stdoutPath := filepath.Join(tasksDir, fmt.Sprintf("%s_stdout.log", taskID))
+	stderrPath := filepath.Join(tasksDir, fmt.Sprintf("%s_stderr.log", taskID))
+
+	stdoutFile, err := os.Create(stdoutPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create stdout log file: %w", err)
+	}
+
+	stderrFile, err := os.Create(stderrPath)
+	if err != nil {
+		stdoutFile.Close()
+		return nil, fmt.Errorf("failed to create stderr log file: %w", err)
+	}
+
+	// Create sub-context for execution
+	taskCtx, cancel := context.WithCancel(context.Background())
+	if opts.TimeoutSec > 0 {
+		taskCtx, cancel = context.WithTimeout(taskCtx, time.Duration(opts.TimeoutSec)*time.Second)
+	}
+
+	task := &Task{
+		ID:         taskID,
+		SessionID:  opts.SessionID,
+		Type:       opts.TaskType,
+		Name:       opts.Name,
+		Status:     StatusRunning,
+		StartedAt:  time.Now().UTC(),
+		StdoutPath: stdoutPath,
+		StderrPath: stderrPath,
+		runner:     opts.Runner,
+		cancel:     cancel,
+	}
+
+	tm.mu.Lock()
+	tm.tasks[taskID] = task
+	tm.mu.Unlock()
+
+	doneChan := make(chan error, 1)
+
+	// Run the TaskRunner asynchronously
+	go func() {
+		defer stdoutFile.Close()
+		defer stderrFile.Close()
+
+		err := opts.Runner.Start(taskCtx, stdoutFile, stderrFile)
+		cancel() // Ensure cancellation context cleanup
+
+		tm.finalizeTask(taskID, err)
+
+		// Execute notification callback only if task actually transitioned to background
+		tm.mu.RLock()
+		isBg := task.IsBackground
+		tm.mu.RUnlock()
+
+		if isBg && tm.notifyCallback != nil {
+			tm.notifyCallback(opts.SessionID, taskID, task)
+		}
+	}()
+
+	// Monitor completion or sync-wait timeout
+	go func() {
+		// Wait for completion goroutine or context cancellation
+		select {
+		case <-taskCtx.Done():
+			// If context finishes, task is finalized by the inner goroutine.
+		}
+	}()
+
+	// Watch for completion within the wait period
+	go func() {
+		// Wait on runner completion
+		// To safely check if the process completed, we poll task status
+		ticker := time.NewTicker(10 * time.Millisecond)
+		defer ticker.Stop()
+
+		timeout := time.After(time.Duration(opts.WaitMs) * time.Millisecond)
+		for {
+			select {
+			case <-ticker.C:
+				tm.mu.RLock()
+				status := task.Status
+				tm.mu.RUnlock()
+				if status != StatusRunning {
+					doneChan <- nil
+					return
+				}
+			case <-timeout:
+				tm.mu.RLock()
+				status := task.Status
+				tm.mu.RUnlock()
+				if status != StatusRunning {
+					doneChan <- nil
+				} else {
+					doneChan <- context.DeadlineExceeded
+				}
+				return
+			}
+		}
+	}()
+
+	// Race wait period
+	raceErr := <-doneChan
+	if raceErr == nil {
+		// Completed synchronously
+		return task, nil
+	}
+
+	// Transitioned to background
+	tm.mu.Lock()
+	if task.Status == StatusRunning {
+		task.IsBackground = true
+	}
+	tm.mu.Unlock()
+	return task, nil
+}
+
+// GetTask retrieves a task by ID.
+func (tm *TaskManager) GetTask(taskID string) (*Task, bool) {
+	tm.mu.RLock()
+	defer tm.mu.RUnlock()
+	t, ok := tm.tasks[taskID]
+	return t, ok
+}
+
+// ListTasks returns a list of tasks filtered by session ID.
+func (tm *TaskManager) ListTasks(sessionID string) []*Task {
+	tm.mu.RLock()
+	defer tm.mu.RUnlock()
+
+	var result []*Task
+	for _, t := range tm.tasks {
+		if t.SessionID == sessionID {
+			result = append(result, t)
+		}
+	}
+	return result
+}
+
+// KillTask gracefully stops a running task.
+func (tm *TaskManager) KillTask(taskID string) error {
+	tm.mu.Lock()
+	t, ok := tm.tasks[taskID]
+	tm.mu.Unlock()
+
+	if !ok {
+		return fmt.Errorf("task %q not found", taskID)
+	}
+
+	tm.mu.RLock()
+	status := t.Status
+	tm.mu.RUnlock()
+
+	if status != StatusRunning {
+		return nil
+	}
+
+	// Trigger runner stop sequence
+	if err := t.runner.Stop(); err != nil {
+		return fmt.Errorf("failed to stop runner: %w", err)
+	}
+
+	t.cancel()
+
+	tm.mu.Lock()
+	t.Status = StatusKilled
+	t.FinishedAt = time.Now().UTC()
+	tm.mu.Unlock()
+
+	return nil
+}
+
+// ReadLog returns the tail of the log file for stdout or stderr.
+func (tm *TaskManager) ReadLog(taskID string, isStderr bool, limitLines int) (string, error) {
+	tm.mu.RLock()
+	t, ok := tm.tasks[taskID]
+	tm.mu.RUnlock()
+
+	if !ok {
+		return "", fmt.Errorf("task %q not found", taskID)
+	}
+
+	path := t.StdoutPath
+	if isStderr {
+		path = t.StderrPath
+	}
+
+	file, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer file.Close()
+
+	var lines []string
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		lines = append(lines, scanner.Text())
+	}
+
+	if err := scanner.Err(); err != nil {
+		return "", err
+	}
+
+	if limitLines > 0 && len(lines) > limitLines {
+		lines = lines[len(lines)-limitLines:]
+	}
+
+	return strings.Join(lines, "\n"), nil
+}
+
+func (tm *TaskManager) finalizeTask(taskID string, err error) {
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
+
+	t, ok := tm.tasks[taskID]
+	if !ok {
+		return
+	}
+
+	if t.Status == StatusKilled {
+		return // Already handled by KillTask
+	}
+
+	t.FinishedAt = time.Now().UTC()
+	if err != nil {
+		t.Status = StatusFailed
+		t.Error = err.Error()
+		t.ExitCode = 1 // Default error code
+
+		// Extract exit code if possible
+		type exitCoder interface {
+			ExitCode() int
+		}
+		if ec, ok := err.(exitCoder); ok {
+			t.ExitCode = ec.ExitCode()
+		} else if strings.Contains(err.Error(), "exit status") {
+			var code int
+			if _, scanErr := fmt.Sscanf(err.Error(), "exit status %d", &code); scanErr == nil {
+				t.ExitCode = code
+			}
+		}
+	} else {
+		t.Status = StatusCompleted
+		t.ExitCode = 0
+	}
+}

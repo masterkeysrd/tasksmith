@@ -158,6 +158,9 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 	pulseDots := []string{"●  ", "●● ", "●●●", "   "}
 	currentDots := pulseDots[spinnerFrame()]
 
+	oneDotPulseDots := []string{"●", " ", "●", " "}
+	oneDotCurrentDots := oneDotPulseDots[spinnerFrame()]
+
 	// Calculate a simple integer key of the messages state to trigger the effect reactively
 	messagesKey := 0
 	for _, msg := range messages {
@@ -291,7 +294,7 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 							}
 						}
 					}
-					nodes := renderBubbles(messages, toolResponses, currentDots)
+					nodes := renderBubbles(messages, toolResponses, currentDots, oneDotCurrentDots)
 					if statusNode := renderAgentStatus(t, sending, thinkingTime(), lastFinishedTime(), currentDots); statusNode != nil {
 						nodes = append(nodes, statusNode)
 					}
@@ -479,9 +482,14 @@ type CollapsibleThinkingProps struct {
 }
 
 type BubbleProps struct {
-	Role      message.Role
-	Timestamp string
-	Children  []kitex.Node
+	Role                 message.Role
+	Timestamp            string
+	Children             []kitex.Node
+	IsSystemNotification bool
+	TaskID               string
+	TaskName             string
+	TaskStatus           string
+	ExitCode             int
 }
 
 var Bubble = kitex.FC("Bubble", func(props BubbleProps) kitex.Node {
@@ -489,6 +497,87 @@ var Bubble = kitex.FC("Bubble", func(props BubbleProps) kitex.Node {
 	role := props.Role
 	timestamp := props.Timestamp
 	children := props.Children
+
+	if props.IsSystemNotification && t != nil {
+		align := style.AlignStart
+		borderCol := t.Color.Surface.Tertiary
+		if props.TaskStatus != "" {
+			if props.ExitCode == 0 {
+				borderCol = t.Color.Surface.Success
+			} else {
+				borderCol = t.Color.Surface.Error
+			}
+		}
+
+		cardStyle := style.S().
+			Padding(1).
+			Width(style.Percent(100)).
+			Background(t.Color.Surface.BaseDisabled).
+			Border(true, style.SingleBorder(), borderCol).
+			Display(style.DisplayFlex).
+			FlexDirection(style.FlexColumn).
+			Gap(1).
+			Overflow(style.OverflowHidden)
+
+		titleStyle := style.S().
+			Display(style.DisplayFlex).
+			FlexDirection(style.FlexRow).
+			AlignItems(style.AlignCenter).
+			Gap(1).
+			Bold(true).
+			Foreground(borderCol)
+
+		var titleIcon kitex.Node = icon.Info
+		titleText := "SYSTEM NOTIFICATION"
+		if props.TaskStatus != "" {
+			titleText = "BACKGROUND TASK COMPLETED"
+			if props.ExitCode == 0 {
+				titleIcon = icon.Checkmark
+			} else {
+				titleIcon = icon.Alert
+			}
+		}
+
+		cardHeader := kitex.Box(kitex.BoxProps{Style: titleStyle},
+			titleIcon,
+			kitex.Text(" "+titleText),
+			kitex.Text(" ─ "),
+			kitex.Text(timestamp),
+		)
+
+		// A nice label line showing Name and ID
+		var detailsNode kitex.Node
+		if props.TaskID != "" {
+			detailsStyle := style.S().
+				Foreground(t.Color.Text.Secondary).
+				Italic(true)
+			detailsText := fmt.Sprintf("Task: %s (ID: %s) Status: %s (Exit Code: %d)", props.TaskName, props.TaskID, props.TaskStatus, props.ExitCode)
+			detailsNode = kitex.Box(kitex.BoxProps{Style: detailsStyle}, kitex.Text(detailsText))
+		}
+
+		contentStyle := style.S().
+			Foreground(t.Color.Text.Primary).
+			PaddingLeft(2)
+
+		var contentNodes []kitex.Node
+		if detailsNode != nil {
+			contentNodes = append(contentNodes, detailsNode)
+		}
+		contentNodes = append(contentNodes, children...)
+
+		return kitex.Box(kitex.BoxProps{
+			Style: style.S().
+				Width(style.Percent(100)).
+				Display(style.DisplayFlex).
+				FlexDirection(style.FlexColumn).
+				AlignItems(align),
+		},
+			kitex.Box(kitex.BoxProps{Style: cardStyle},
+				cardHeader,
+				kitex.Box(kitex.BoxProps{Style: contentStyle}, contentNodes...),
+			),
+		)
+	}
 
 	var align style.Align
 	var bubbleStyle style.Style
@@ -582,10 +671,11 @@ var Bubble = kitex.FC("Bubble", func(props BubbleProps) kitex.Node {
 })
 
 type MessageProps struct {
-	Role          message.Role
-	Content       message.Content
-	ToolResponses map[string]*message.Tool
-	CurrentDots   string
+	Role              message.Role
+	Content           message.Content
+	ToolResponses     map[string]*message.Tool
+	CurrentDots       string
+	OneDotCurrentDots string
 }
 
 func getToolOutput(content message.Content) string {
@@ -927,6 +1017,28 @@ func parseGrepOutput(structured any) (matches []tools.GrepOutputMatchesItem, tot
 	return
 }
 
+// parseTasksOutput extracts structured TasksOutput fields from a tasks tool result.
+func parseTasksOutput(structured any) (out tools.TasksOutput, ok bool) {
+	if structured == nil {
+		return
+	}
+
+	// Same-process: StructuredContent is already a typed TasksOutput.
+	if val, ok := structured.(tools.TasksOutput); ok {
+		return val, true
+	}
+
+	// Cross-process / deserialized: round-trip through JSON.
+	data, err := json.Marshal(structured)
+	if err != nil {
+		return
+	}
+	if err := json.Unmarshal(data, &out); err == nil {
+		return out, true
+	}
+	return
+}
+
 // lsEntryRow renders a single FileEntry as a table row (kitex.TR).
 // Each metadata field occupies its own TD so the table layout engine
 // distributes column widths automatically — no manual Sprintf padding needed.
@@ -1011,6 +1123,12 @@ var ToolExecution = kitex.FC("ToolExecution", func(props ToolExecutionProps) kit
 	}
 	if props.ToolCall != nil && props.ToolCall.Name == "remove" {
 		return RemoveToolWidget(props)
+	}
+	if props.ToolCall != nil && props.ToolCall.Name == "bash" {
+		return BashToolWidget(props)
+	}
+	if props.ToolCall != nil && props.ToolCall.Name == "tasks" {
+		return TasksToolWidget(props)
 	}
 
 	t := theme.UseTheme()
@@ -1150,10 +1268,11 @@ var ToolExecution = kitex.FC("ToolExecution", func(props ToolExecutionProps) kit
 					outText := getToolOutput(tm.Content)
 					return kitex.Fragment(
 						kitex.If(strings.TrimSpace(outText) != "", func() kitex.Node {
-							lines := strings.Split(strings.TrimRight(outText, "\n"), "\n")
 							var borderCol color.Color
+							var textCol color.Color
 							if t != nil {
 								borderCol = t.Color.Border.Primary
+								textCol = t.Color.Text.Secondary
 							}
 							outputContainerStyle := style.S().
 								Display(style.DisplayFlex).
@@ -1163,20 +1282,13 @@ var ToolExecution = kitex.FC("ToolExecution", func(props ToolExecutionProps) kit
 								Padding(1).
 								Width(style.Percent(100)).
 								MaxWidth(style.Percent(100)).
-								Overflow(style.OverflowHidden)
+								Overflow(style.OverflowHidden).
+								Foreground(textCol).
+								WhiteSpace(style.WhiteSpacePreWrap)
 
+							cleanText := strings.ReplaceAll(outText, "\t", "    ")
 							return kitex.Box(kitex.BoxProps{Style: outputContainerStyle},
-								kitex.Map(lines, func(line string, _ int) kitex.Node {
-									var textCol color.Color
-									if t != nil {
-										textCol = t.Color.Text.Secondary
-									}
-									return kitex.Box(kitex.BoxProps{
-										Style: style.S().
-											Foreground(textCol).
-											WhiteSpace(style.WhiteSpacePreWrap),
-									}, kitex.Text(line))
-								}),
+								kitex.Text(cleanText),
 							)
 						}),
 						kitex.If(strings.TrimSpace(outText) == "", func() kitex.Node {
@@ -1219,10 +1331,14 @@ var Message = kitex.FC("Message", func(props MessageProps) kitex.Node {
 				if toolResponses != nil {
 					toolMsg = toolResponses[b.ID]
 				}
+				dots := currentDots
+				if b.Name == "bash" {
+					dots = props.OneDotCurrentDots
+				}
 				node = ToolExecution(ToolExecutionProps{
 					ToolCall:    b,
 					ToolMessage: toolMsg,
-					CurrentDots: currentDots,
+					CurrentDots: dots,
 				})
 			}
 			if node != nil {
@@ -1243,7 +1359,8 @@ var Message = kitex.FC("Message", func(props MessageProps) kitex.Node {
 	var texts []string
 	for _, block := range content {
 		if tb, ok := block.(*message.TextBlock); ok {
-			texts = append(texts, tb.Text)
+			cleaned := tryExtractTextFromJSON(tb.Text)
+			texts = append(texts, cleaned)
 		}
 	}
 	if len(texts) == 0 {
@@ -1251,6 +1368,52 @@ var Message = kitex.FC("Message", func(props MessageProps) kitex.Node {
 	}
 	return components.Markdown(components.MarkdownProps{Source: strings.Join(texts, "\n")})
 })
+
+func tryExtractTextFromJSON(input string) string {
+	input = strings.TrimSpace(input)
+	if !strings.HasPrefix(input, "{") && !strings.HasPrefix(input, "[") {
+		return input
+	}
+
+	// Try to unmarshal as a full message struct
+	var msgObj struct {
+		Role    string `json:"role"`
+		Content []struct {
+			Kind string `json:"kind"`
+			Text string `json:"text"`
+		} `json:"content"`
+	}
+	if err := json.Unmarshal([]byte(input), &msgObj); err == nil && len(msgObj.Content) > 0 {
+		var parts []string
+		for _, b := range msgObj.Content {
+			if (b.Kind == "text" || b.Kind == "") && b.Text != "" {
+				parts = append(parts, b.Text)
+			}
+		}
+		if len(parts) > 0 {
+			return strings.Join(parts, "\n")
+		}
+	}
+
+	// Try to unmarshal as a content array
+	var contentArr []struct {
+		Kind string `json:"kind"`
+		Text string `json:"text"`
+	}
+	if err := json.Unmarshal([]byte(input), &contentArr); err == nil && len(contentArr) > 0 {
+		var parts []string
+		for _, b := range contentArr {
+			if (b.Kind == "text" || b.Kind == "") && b.Text != "" {
+				parts = append(parts, b.Text)
+			}
+		}
+		if len(parts) > 0 {
+			return strings.Join(parts, "\n")
+		}
+	}
+
+	return input
+}
 
 func getBubbleRole(role message.Role) message.Role {
 	switch role {
@@ -1264,7 +1427,16 @@ func getBubbleRole(role message.Role) message.Role {
 	}
 }
 
-func renderBubbles(messages message.MessageList, toolResponses map[string]*message.Tool, currentDots string) []kitex.Node {
+func isSystemNotification(msg message.Message) bool {
+	meta := msg.GetMetadata()
+	if meta == nil {
+		return false
+	}
+	val, ok := meta["is_system_notification"].(bool)
+	return ok && val
+}
+
+func renderBubbles(messages message.MessageList, toolResponses map[string]*message.Tool, currentDots string, oneDotCurrentDots string) []kitex.Node {
 	if len(messages) == 0 {
 		return nil
 	}
@@ -1275,20 +1447,31 @@ func renderBubbles(messages message.MessageList, toolResponses map[string]*messa
 
 	flush := func() {
 		if len(currentGroup) > 0 {
-			if node := createBubbleNode(currentGroupRole, currentGroup, toolResponses, currentDots); node != nil {
+			if node := createBubbleNode(currentGroupRole, currentGroup, toolResponses, currentDots, oneDotCurrentDots); node != nil {
 				nodes = append(nodes, node)
 			}
 		}
 	}
 
 	for _, msg := range messages {
+		isSys := isSystemNotification(msg)
 		role := msg.Role()
 		groupRole := getBubbleRole(role)
+
+		if isSys {
+			flush()
+			currentGroup = []message.Message{msg}
+			currentGroupRole = "system_notification"
+			flush()
+			currentGroup = nil
+			currentGroupRole = ""
+			continue
+		}
 
 		if len(currentGroup) == 0 {
 			currentGroup = append(currentGroup, msg)
 			currentGroupRole = groupRole
-		} else if groupRole == currentGroupRole {
+		} else if groupRole == currentGroupRole && currentGroupRole != "system_notification" {
 			currentGroup = append(currentGroup, msg)
 		} else {
 			flush()
@@ -1302,7 +1485,7 @@ func renderBubbles(messages message.MessageList, toolResponses map[string]*messa
 	return nodes
 }
 
-func createBubbleNode(role message.Role, msgs []message.Message, toolResponses map[string]*message.Tool, currentDots string) kitex.Node {
+func createBubbleNode(role message.Role, msgs []message.Message, toolResponses map[string]*message.Tool, currentDots string, oneDotCurrentDots string) kitex.Node {
 	timestamp := ""
 	if len(msgs) > 0 {
 		meta := msgs[0].GetMetadata()
@@ -1322,10 +1505,11 @@ func createBubbleNode(role message.Role, msgs []message.Message, toolResponses m
 			continue // Do not render tool messages as separate children. They are rendered inline in the assistant message.
 		}
 		node := Message(MessageProps{
-			Role:          msg.Role(),
-			Content:       msg.GetContent(),
-			ToolResponses: toolResponses,
-			CurrentDots:   currentDots,
+			Role:              msg.Role(),
+			Content:           msg.GetContent(),
+			ToolResponses:     toolResponses,
+			CurrentDots:       currentDots,
+			OneDotCurrentDots: oneDotCurrentDots,
 		})
 		if node != nil {
 			children = append(children, node)
@@ -1336,10 +1520,35 @@ func createBubbleNode(role message.Role, msgs []message.Message, toolResponses m
 		return nil
 	}
 
+	isSys := len(msgs) > 0 && isSystemNotification(msgs[0])
+	var taskID, taskName, taskStatus string
+	var exitCode int
+	if isSys {
+		meta := msgs[0].GetMetadata()
+		taskID, _ = meta["task_id"].(string)
+		taskName, _ = meta["task_name"].(string)
+		taskStatus, _ = meta["task_status"].(string)
+		if ecVal, ok := meta["exit_code"]; ok {
+			switch ec := ecVal.(type) {
+			case float64:
+				exitCode = int(ec)
+			case int:
+				exitCode = ec
+			case int64:
+				exitCode = int(ec)
+			}
+		}
+	}
+
 	return Bubble(BubbleProps{
-		Role:      role,
-		Timestamp: timestamp,
-		Children:  children,
+		Role:                 role,
+		Timestamp:            timestamp,
+		Children:             children,
+		IsSystemNotification: isSys,
+		TaskID:               taskID,
+		TaskName:             taskName,
+		TaskStatus:           taskStatus,
+		ExitCode:             exitCode,
 	})
 }
 

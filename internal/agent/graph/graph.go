@@ -68,11 +68,21 @@ type AgentGraph struct {
 	inbox     InboxProvider
 }
 
+// Options defines the configurations and dependencies to initialize the AgentGraph.
+type Options struct {
+	Model       LLMModel
+	Workspace   *workspace.Workspace
+	Storage     tools.FileStorage
+	Inbox       InboxProvider
+	TaskManager *tools.TaskManager
+	SessionID   string
+}
+
 // New creates a new AgentGraph orchestrator by loading/binding tools outside of the execution nodes.
-func New(ctx context.Context, model LLMModel, ws *workspace.Workspace, storage tools.FileStorage, inbox InboxProvider) (*AgentGraph, error) {
+func New(ctx context.Context, opts Options) (*AgentGraph, error) {
 	var allowedTools map[string]bool
-	if ws != nil {
-		cfg, err := ws.GetWorkspaceConfig(ctx)
+	if opts.Workspace != nil {
+		cfg, err := opts.Workspace.GetWorkspaceConfig(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get workspace config: %w", err)
 		}
@@ -80,10 +90,10 @@ func New(ctx context.Context, model LLMModel, ws *workspace.Workspace, storage t
 	}
 
 	var cwd string
-	if ws != nil {
-		cwd = ws.CWD()
+	if opts.Workspace != nil {
+		cwd = opts.Workspace.CWD()
 	}
-	handlers := tools.NewHandlers(storage, cwd)
+	handlers := tools.NewHandlers(opts.Storage, cwd).WithTaskManager(opts.TaskManager, opts.SessionID)
 	allLoomTools, err := tools.LoomTools(handlers)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load loom tools: %w", err)
@@ -96,9 +106,9 @@ func New(ctx context.Context, model LLMModel, ws *workspace.Workspace, storage t
 		}
 	}
 
-	var boundModel LLM = model
-	if len(activeTools) > 0 && model != nil {
-		boundModel = model.BindTools(activeTools...)
+	var boundModel LLM = opts.Model
+	if len(activeTools) > 0 && opts.Model != nil {
+		boundModel = opts.Model.BindTools(activeTools...)
 	}
 
 	var container *tool.Container
@@ -109,7 +119,7 @@ func New(ctx context.Context, model LLMModel, ws *workspace.Workspace, storage t
 	return &AgentGraph{
 		model:     boundModel,
 		container: container,
-		inbox:     inbox,
+		inbox:     opts.Inbox,
 	}, nil
 }
 

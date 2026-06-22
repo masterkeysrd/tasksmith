@@ -42,6 +42,7 @@ type ActiveSession struct {
 	Error                 string
 	CurrentStreamText     string
 	CurrentStreamThinking string
+	CurrentToolStreams    map[string]string // toolCallID -> accumulated stream text
 	Cancel                context.CancelFunc
 	Inbox                 []message.Message
 	InboxMu               sync.Mutex
@@ -54,15 +55,44 @@ type Manager struct {
 
 	mu             sync.RWMutex
 	activeSessions map[string]*ActiveSession
+	taskMgr        *tools.TaskManager
 }
 
 // NewManager creates a new Manager backed by the provided Store and Workspace.
 func NewManager(store Store, ws *workspace.Workspace) *Manager {
-	return &Manager{
+	m := &Manager{
 		store:          store,
 		ws:             ws,
 		activeSessions: make(map[string]*ActiveSession),
 	}
+
+	var cwd string
+	if ws != nil {
+		cwd = ws.CWD()
+	}
+
+	m.taskMgr = tools.NewTaskManager(cwd, func(sessionID, taskID string, task *tools.Task) {
+		statusStr := string(task.Status)
+		msgText := fmt.Sprintf("[System: Background task %s (\"%s\") completed with status %s (exit code %d).\nYou can inspect the command output/logs by calling the 'tasks' tool with action: 'status' and taskId: '%s'.]", taskID, task.Name, statusStr, task.ExitCode, taskID)
+		if task.Error != "" {
+			msgText += "\nError: " + task.Error
+		}
+
+		meta := map[string]any{
+			"is_system_notification": true,
+			"notification_type":      "task_completion",
+			"task_id":                taskID,
+			"task_name":              task.Name,
+			"task_status":            statusStr,
+			"exit_code":              task.ExitCode,
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_ = m.SendSystemNotification(ctx, sessionID, msgText, meta)
+	})
+
+	return m
 }
 
 // CreateSession generates IDs, timestamps, and persists a session.
@@ -172,6 +202,15 @@ func (m *Manager) GetSessionState(sessionID string) (SessionStatus, string) {
 
 // SendMessage appends the user message and initiates the background Loom agent execution.
 func (m *Manager) SendMessage(ctx context.Context, sessionID string, text string) error {
+	return m.sendMessage(ctx, sessionID, text, nil)
+}
+
+// SendSystemNotification appends a system notification message with metadata and starts/queues execution.
+func (m *Manager) SendSystemNotification(ctx context.Context, sessionID string, text string, meta map[string]any) error {
+	return m.sendMessage(ctx, sessionID, text, meta)
+}
+
+func (m *Manager) sendMessage(ctx context.Context, sessionID string, text string, meta map[string]any) error {
 	m.mu.Lock()
 	sess, exists := m.activeSessions[sessionID]
 	if !exists {
@@ -182,17 +221,21 @@ func (m *Manager) SendMessage(ctx context.Context, sessionID string, text string
 		m.activeSessions[sessionID] = sess
 	}
 
+	msg := message.NewUserText(text)
+	if len(meta) > 0 {
+		msg.SetMetadata(meta)
+	}
+
 	if sess.Status == StatusRunning {
-		userMsg := message.NewUserText(text)
 		u, err := uuid.NewV7()
 		if err != nil {
 			m.mu.Unlock()
 			return fmt.Errorf("failed to generate message UUID: %w", err)
 		}
-		userMsg.SetID(fmt.Sprintf("msg_%s", u.String()))
+		msg.SetID(fmt.Sprintf("msg_%s", u.String()))
 
 		sess.InboxMu.Lock()
-		sess.Inbox = append(sess.Inbox, userMsg)
+		sess.Inbox = append(sess.Inbox, msg)
 		sess.InboxMu.Unlock()
 		m.mu.Unlock()
 		return nil
@@ -202,14 +245,14 @@ func (m *Manager) SendMessage(ctx context.Context, sessionID string, text string
 	sess.Error = ""
 	sess.CurrentStreamText = ""
 	sess.CurrentStreamThinking = ""
+	sess.CurrentToolStreams = make(map[string]string)
 
 	runCtx, cancel := context.WithCancel(context.Background())
 	sess.Cancel = cancel
 	m.mu.Unlock()
 
-	// 1. Append user message to database
-	userMsg := message.NewUserText(text)
-	if _, err := m.AppendMessage(ctx, sessionID, userMsg); err != nil {
+	// 1. Append message to database
+	if _, err := m.AppendMessage(ctx, sessionID, msg); err != nil {
 		m.setSessionError(sessionID, err)
 		cancel()
 		return err
@@ -247,7 +290,14 @@ func (m *Manager) SendMessage(ctx context.Context, sessionID string, text string
 
 		// Compile graph
 		storage := NewLocalFileStorage(m.ws.CWD(), sessionID)
-		ag, err := agentgraph.New(runCtx, agentgraph.NewLoomModel(model), m.ws, storage, &sessionInbox{sess: sess, m: m})
+		ag, err := agentgraph.New(runCtx, agentgraph.Options{
+			Model:       agentgraph.NewLoomModel(model),
+			Workspace:   m.ws,
+			Storage:     storage,
+			Inbox:       &sessionInbox{sess: sess, m: m},
+			TaskManager: m.taskMgr,
+			SessionID:   sessionID,
+		})
 		if err != nil {
 			m.setSessionError(sessionID, fmt.Errorf("failed to construct agent graph: %w", err))
 			return
@@ -258,9 +308,9 @@ func (m *Manager) SendMessage(ctx context.Context, sessionID string, text string
 			return
 		}
 
-		// Setup input command to load current state and append new user message
+		// Setup input command to load current state and append new message
 		inputCmd := graph.Update[agentgraph.AgentState](func(state agentgraph.AgentState) agentgraph.AgentState {
-			state.Messages = append(state.Messages, userMsg)
+			state.Messages = append(state.Messages, msg)
 			return state
 		})
 
@@ -322,11 +372,41 @@ func (m *Manager) SendMessage(ctx context.Context, sessionID string, text string
 				sess.CurrentStreamText = ""
 				sess.CurrentStreamThinking = ""
 				m.mu.Unlock()
+			} else if ev.Event == "on_tool_chunk" {
+				var chunk message.ToolChunk
+				switch d := ev.Data.(type) {
+				case message.ToolChunk:
+					chunk = d
+				case *message.ToolChunk:
+					if d != nil {
+						chunk = *d
+					}
+				}
+				toolCallID := chunk.ID
+				if toolCallID == "" {
+					toolCallID = ev.Source
+				}
+				text := chunk.Content.Text()
+				if text != "" {
+					m.mu.Lock()
+					if sess.CurrentToolStreams == nil {
+						sess.CurrentToolStreams = make(map[string]string)
+					}
+					sess.CurrentToolStreams[toolCallID] += text
+					m.mu.Unlock()
+				}
 			} else if ev.Event == "tool_message" {
 				if toolMsg, ok := ev.Data.(message.Message); ok {
 					if _, err := m.AppendMessage(context.Background(), sessionID, toolMsg); err != nil {
 						m.setSessionError(sessionID, fmt.Errorf("failed to save tool message: %w", err))
 						return
+					}
+					if tMsg, ok := toolMsg.(*message.Tool); ok {
+						m.mu.Lock()
+						if sess.CurrentToolStreams != nil {
+							delete(sess.CurrentToolStreams, tMsg.ToolCallID)
+						}
+						m.mu.Unlock()
 					}
 				}
 			} else if ev.Event == graph.EventCompleted {
@@ -379,6 +459,7 @@ func (m *Manager) SendMessage(ctx context.Context, sessionID string, text string
 		sess.Status = StatusIdle
 		sess.CurrentStreamText = ""
 		sess.CurrentStreamThinking = ""
+		sess.CurrentToolStreams = nil
 		m.mu.Unlock()
 
 		if _, err := m.AppendMessage(context.Background(), sessionID, asstMsg); err != nil {
@@ -525,35 +606,81 @@ func (m *Manager) GetMessages(ctx context.Context, sessionID string) (message.Me
 		}
 	}
 
-	// If there is an active running agent session, inject the in-progress stream text and thinking in-memory
+	// If there is an active running agent session, inject the in-progress stream text and thinking in-memory,
+	// as well as any active in-progress tool stream outputs.
 	m.mu.RLock()
 	sess, ok := m.activeSessions[sessionID]
 	var streamText string
 	var streamThinking string
 	var status SessionStatus
+	var toolStreams map[string]string
 	if ok {
 		streamText = sess.CurrentStreamText
 		streamThinking = sess.CurrentStreamThinking
 		status = sess.Status
+		if len(sess.CurrentToolStreams) > 0 {
+			toolStreams = make(map[string]string)
+			for k, v := range sess.CurrentToolStreams {
+				toolStreams[k] = v
+			}
+		}
 	}
 	m.mu.RUnlock()
 
-	if ok && status == StatusRunning && (streamText != "" || streamThinking != "") {
-		var content message.Content
-		if streamThinking != "" {
-			content = append(content, &message.ThinkingBlock{Thinking: streamThinking})
+	if ok && status == StatusRunning {
+		// 1. Inject active tool streams
+		completedTools := make(map[string]bool)
+		for _, msg := range list {
+			if msg.Role() == message.RoleTool {
+				if tMsg, ok := msg.(*message.Tool); ok {
+					completedTools[tMsg.ToolCallID] = true
+				}
+			}
 		}
-		if streamText != "" {
-			content = append(content, &message.TextBlock{Text: streamText})
+
+		for _, msg := range list {
+			if msg.Role() == message.RoleAssistant {
+				for _, block := range msg.GetContent() {
+					if tc, ok := block.(*message.ToolCall); ok {
+						if !completedTools[tc.ID] {
+							tStreamText := ""
+							if toolStreams != nil {
+								tStreamText = toolStreams[tc.ID]
+							}
+							tempTool := &message.Tool{
+								ToolCallID: tc.ID,
+								Name:       tc.Name,
+								Content:    message.Content{&message.TextBlock{Text: tStreamText}},
+							}
+							tempTool.SetMetadata(map[string]any{
+								"status":     "running",
+								"created_at": time.Now().Format("15:04"),
+							})
+							list = append(list, tempTool)
+						}
+					}
+				}
+			}
 		}
-		asst := &message.Assistant{
-			Content: content,
+
+		// 2. Inject active LLM text/thinking stream
+		if streamText != "" || streamThinking != "" {
+			var content message.Content
+			if streamThinking != "" {
+				content = append(content, &message.ThinkingBlock{Thinking: streamThinking})
+			}
+			if streamText != "" {
+				content = append(content, &message.TextBlock{Text: streamText})
+			}
+			asst := &message.Assistant{
+				Content: content,
+			}
+			meta := map[string]any{
+				"created_at": time.Now().Format("15:04"),
+			}
+			asst.SetMetadata(meta)
+			list = append(list, asst)
 		}
-		meta := map[string]any{
-			"created_at": time.Now().Format("15:04"),
-		}
-		asst.SetMetadata(meta)
-		list = append(list, asst)
 	}
 
 	return list, nil
@@ -608,4 +735,18 @@ func (si *sessionInbox) PopMessages() []message.Message {
 	}
 
 	return msgs
+}
+
+// SetToolStreamDebug sets active tool stream content for unit testing.
+func (m *Manager) SetToolStreamDebug(sessionID string, toolCallID string, text string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	sess, ok := m.activeSessions[sessionID]
+	if ok {
+		if sess.CurrentToolStreams == nil {
+			sess.CurrentToolStreams = make(map[string]string)
+		}
+		sess.CurrentToolStreams[toolCallID] = text
+		sess.Status = StatusRunning // Force running status for injection test
+	}
 }

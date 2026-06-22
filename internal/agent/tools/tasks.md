@@ -1,0 +1,72 @@
+---
+apiVersion: warp/v1alpha1
+kind: Tool
+metadata:
+  name: tasks
+  labels:
+    category: system
+spec:
+  parameters:
+    type: object
+    properties:
+      action:
+        type: string
+        description: "The action to perform. One of: 'list' (list all active and completed background tasks in the session), 'status' (retrieve the execution state and log tail of a specific task), 'kill' (terminate a running task)."
+        enum: ["list", "status", "kill"]
+      taskId:
+        type: string
+        description: "The ID of the background task (required for 'status' and 'kill')."
+      limit:
+        type: integer
+        description: "The maximum number of lines from the end of the log to return for 'status' action (defaults to 100)."
+    required: ["action"]
+  outputSchema:
+    type: object
+    properties:
+      tasks:
+        type: array
+        description: "List of background tasks (only returned for 'list' action)."
+        items:
+          type: object
+          properties:
+            taskId:
+              type: string
+              description: "The ID of the task."
+            name:
+              type: string
+              description: "The friendly name or command of the task."
+            type:
+              type: string
+              description: "The type of task (e.g. bash)."
+            status:
+              type: string
+              description: "The current status of the task."
+            exitCode:
+              type: integer
+              description: "The exit code of the task (if finished)."
+            startedAt:
+              type: string
+              description: "Timestamp when the task started."
+            finishedAt:
+              type: string
+              description: "Timestamp when the task finished."
+            error:
+              type: string
+              description: "Error message if the task failed."
+      status:
+        type: string
+        description: "The status of the requested task."
+      exitCode:
+        type: integer
+        description: "The exit code of the requested task (if finished)."
+      stdoutTail:
+        type: string
+        description: "The tail of the standard output log (for 'status' action)."
+      stderrTail:
+        type: string
+        description: "The tail of the standard error log (for 'status' action)."
+      message:
+        type: string
+        description: "A human-readable result or error message."
+---
+Manage and monitor background tasks.

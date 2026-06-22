@@ -5,6 +5,7 @@ import (
 	"image/color"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/masterkeysrd/kite/dom"
 	"github.com/masterkeysrd/kite/event"
@@ -1514,6 +1515,852 @@ var RemoveToolWidget = kitex.FC("RemoveToolWidget", func(props ToolExecutionProp
 								)
 							}),
 						),
+					),
+				),
+			)
+		}),
+	)
+})
+
+// BashToolWidget renders bash execution status, command input, and formatted stdout/stderr output.
+var BashToolWidget = kitex.FC("BashToolWidget", func(props ToolExecutionProps) kitex.Node {
+	t := theme.UseTheme()
+	isOpen, setIsOpen := kitex.UseState(true)
+	showModal, setShowModal := kitex.UseState(false)
+	modalRef := kitex.CreateRef[dom.Element]()
+
+	kitex.UseEffect(func() {
+		if showModal() {
+			kitex.PostMacro(func() {
+				if modalRef.Current != nil {
+					if doc := modalRef.Current.OwnerDocument(); doc != nil {
+						doc.Focus(modalRef.Current)
+					}
+				}
+			})
+		}
+	}, []any{showModal()})
+
+	tc := props.ToolCall
+	tm := props.ToolMessage
+
+	// Extract command and description from args
+	command := ""
+	description := ""
+	if tc != nil && len(tc.Args) > 0 {
+		if cmdVal, ok := tc.Args["command"]; ok {
+			command, _ = cmdVal.(string)
+		}
+		if descVal, ok := tc.Args["description"]; ok {
+			description, _ = descVal.(string)
+		}
+	}
+
+	containerStyle := style.S().
+		Display(style.DisplayFlex).
+		FlexDirection(style.FlexColumn).
+		MarginVertical(1).
+		Width(style.Percent(100)).
+		MaxWidth(style.Percent(100)).
+		Overflow(style.OverflowHidden)
+
+	headerStyle := style.S().
+		Display(style.DisplayFlex).
+		FlexDirection(style.FlexRow).
+		AlignItems(style.AlignCenter).
+		JustifyContent(style.JustifyBetween).
+		Padding(0, 1).
+		Width(style.Percent(100)).
+		MaxWidth(style.Percent(100)).
+		Overflow(style.OverflowHidden)
+
+	bodyStyle := style.S().
+		Padding(1).
+		Display(style.DisplayFlex).
+		FlexDirection(style.FlexColumn).
+		Width(style.Percent(100)).
+		MaxWidth(style.Percent(100)).
+		Overflow(style.OverflowHidden)
+
+	var iconNode kitex.Node
+	var statusLabel string
+	var headerBg color.Color
+	var headerFg color.Color
+	var borderCol color.Color
+
+	// Determine status and widget color
+	isFinished := tm != nil && (tm.GetMetadata() == nil || tm.GetMetadata()["status"] != "running")
+	hasErr := false
+	statusMsg := ""
+
+	if isFinished {
+		if tm.IsError {
+			hasErr = true
+		}
+		// Try parsing exit code from structured content
+		var exitCode int
+		if tm.StructuredContent != nil {
+			if m, ok := tm.StructuredContent.(map[string]any); ok {
+				if ecVal, ok := m["exitCode"]; ok {
+					switch ec := ecVal.(type) {
+					case float64:
+						exitCode = int(ec)
+					case int:
+						exitCode = ec
+					case int64:
+						exitCode = int(ec)
+					}
+					if exitCode != 0 {
+						hasErr = true
+					}
+				}
+				if statusVal, ok := m["status"]; ok {
+					statusMsg, _ = statusVal.(string)
+				}
+			}
+		}
+
+		if statusMsg == "running" {
+			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Info)}, icon.Info)
+			statusLabel = "BASH RUNNING IN BACKGROUND"
+			headerBg = t.Color.Surface.BaseFocus
+			headerFg = t.Color.Surface.Info
+			borderCol = t.Color.Surface.Info
+		} else if hasErr {
+			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Error)}, icon.Error)
+			statusLabel = "BASH ERROR"
+			if statusMsg != "" {
+				statusLabel += fmt.Sprintf(" (%s)", strings.ToUpper(statusMsg))
+			}
+			headerBg = t.Color.Surface.BaseFocus
+			headerFg = t.Color.Text.Error
+			borderCol = t.Color.Text.Error
+		} else {
+			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Success)}, icon.Checkmark)
+			statusLabel = "BASH SUCCESS"
+			headerBg = t.Color.Surface.BaseFocus
+			headerFg = t.Color.Surface.Success
+			borderCol = t.Color.Surface.Success
+		}
+	} else {
+		iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Info)}, kitex.Text(props.CurrentDots))
+		statusLabel = "RUNNING BASH COMMAND"
+		headerBg = t.Color.Surface.BaseFocus
+		headerFg = t.Color.Surface.Info
+		borderCol = t.Color.Surface.Info
+	}
+
+	if t != nil {
+		containerStyle = containerStyle.
+			Border(true, style.SingleBorder(), borderCol).
+			Background(t.Color.Surface.BaseHover)
+
+		headerStyle = headerStyle.
+			Background(headerBg).
+			Foreground(headerFg)
+
+		bodyStyle = bodyStyle.
+			Background(t.Color.Surface.BaseHover)
+	}
+
+	return kitex.Fragment(
+		kitex.Box(kitex.BoxProps{Style: containerStyle},
+			components.Button(components.ButtonProps{
+				Variant: components.ButtonText,
+				Color:   components.ButtonBase,
+				Style:   headerStyle,
+				OnClick: func() {
+					setIsOpen(!isOpen())
+				},
+			},
+				kitex.Box(kitex.BoxProps{
+					Style: style.S().
+						Display(style.DisplayFlex).
+						FlexDirection(style.FlexRow).
+						AlignItems(style.AlignCenter).
+						Gap(1),
+				},
+					iconNode,
+					kitex.Span(kitex.SpanProps{Style: style.S().Bold(true)}, kitex.Text(" "+statusLabel)),
+				),
+				kitex.If(isFinished, func() kitex.Node {
+					var label string
+					if isOpen() {
+						label = "▲ COLLAPSE"
+					} else {
+						label = "▼ EXPAND"
+					}
+					var textCol color.Color
+					if t != nil {
+						textCol = t.Color.Text.Secondary
+					}
+					return kitex.Span(kitex.SpanProps{
+						Style: style.S().Foreground(textCol),
+					}, kitex.Text(label))
+				}),
+			),
+			kitex.If(isOpen(), func() kitex.Node {
+				return kitex.Box(kitex.BoxProps{Style: bodyStyle},
+					// Description
+					kitex.If(description != "", func() kitex.Node {
+						var textCol color.Color
+						if t != nil {
+							textCol = t.Color.Text.Primary
+						}
+						return kitex.Box(kitex.BoxProps{
+							Style: style.S().
+								MarginBottom(1).
+								Foreground(textCol).
+								Italic(true),
+						}, kitex.Text(description))
+					}),
+					// Input: codeblock without header or borders
+					kitex.If(command != "", func() kitex.Node {
+						return kitex.Box(kitex.BoxProps{
+							Style: style.S().MarginBottom(1),
+						},
+							components.CodeBlock(components.CodeBlockProps{
+								Code:       command,
+								Lang:       "bash",
+								HideHeader: true,
+							}),
+						)
+					}),
+					// Output (stdout/stderr) without outer header or borders
+					kitex.If(tm != nil, func() kitex.Node {
+						outText := getToolOutput(tm.Content)
+						return kitex.Fragment(
+							kitex.If(strings.TrimSpace(outText) != "", func() kitex.Node {
+								lines := strings.Split(outText, "\n")
+								isTruncated := len(lines) > 10
+
+								var inlineText string
+								if isTruncated {
+									inlineText = strings.Join(lines[len(lines)-10:], "\n")
+								} else {
+									inlineText = outText
+								}
+
+								parts := strings.Split(inlineText, "[stderr]\n")
+								var elements []kitex.Node
+
+								var textCol color.Color
+								if t != nil {
+									textCol = t.Color.Text.Primary
+								}
+
+								outputContainerStyle := style.S().
+									Display(style.DisplayFlex).
+									FlexDirection(style.FlexColumn).
+									Background(t.Color.Surface.BaseHover).
+									Padding(1).
+									Width(style.Percent(100)).
+									MaxWidth(style.Percent(100)).
+									Overflow(style.OverflowHidden)
+
+								// First part is stdout
+								stdoutText := strings.TrimSpace(parts[0])
+								if stdoutText != "" {
+									stdoutText = strings.ReplaceAll(stdoutText, "\t", "    ")
+									elements = append(elements, kitex.Box(kitex.BoxProps{
+										Style: style.S().
+											Foreground(textCol).
+											WhiteSpace(style.WhiteSpacePreWrap),
+									}, kitex.Text(stdoutText)))
+								}
+
+								// Subsequent parts are stderr
+								if len(parts) > 1 {
+									stderrText := strings.TrimSpace(strings.Join(parts[1:], ""))
+									if stderrText != "" {
+										stderrText = strings.ReplaceAll(stderrText, "\t", "    ")
+										elements = append(elements, kitex.Box(kitex.BoxProps{
+											Style: style.S().
+												Foreground(t.Color.Text.Error).
+												WhiteSpace(style.WhiteSpacePreWrap).
+												MarginTop(1),
+										}, kitex.Text("[stderr]\n"+stderrText)))
+									}
+								}
+
+								var buttonNode kitex.Node
+								if isTruncated {
+									buttonNode = components.Button(components.ButtonProps{
+										Variant: components.ButtonText,
+										Color:   components.ButtonBase,
+										Style: style.S().
+											Foreground(t.Color.Surface.Info).
+											MarginTop(1).
+											Bold(true),
+										OnClick: func() {
+											setShowModal(true)
+										},
+									}, kitex.Text("🔍 VIEW FULL OUTPUT"))
+								}
+
+								return kitex.Box(kitex.BoxProps{
+									Style: style.S().
+										Display(style.DisplayFlex).
+										FlexDirection(style.FlexColumn).
+										Width(style.Percent(100)).
+										MaxWidth(style.Percent(100)).
+										Overflow(style.OverflowHidden),
+								},
+									kitex.Box(kitex.BoxProps{Style: outputContainerStyle}, elements...),
+									buttonNode,
+								)
+							}),
+						)
+					}),
+				)
+			}),
+		),
+		kitex.If(showModal(), func() kitex.Node {
+			outText := getToolOutput(tm.Content)
+			parts := strings.Split(outText, "[stderr]\n")
+			var elements []kitex.Node
+
+			var textCol color.Color
+			if t != nil {
+				textCol = t.Color.Text.Primary
+			}
+
+			outputContainerStyle := style.S().
+				Display(style.DisplayFlex).
+				FlexDirection(style.FlexColumn).
+				Background(t.Color.Surface.BaseHover).
+				Padding(1).
+				Width(style.Percent(100)).
+				MaxWidth(style.Percent(100)).
+				Overflow(style.OverflowHidden)
+
+			// First part is stdout
+			stdoutText := strings.TrimSpace(parts[0])
+			if stdoutText != "" {
+				stdoutText = strings.ReplaceAll(stdoutText, "\t", "    ")
+				elements = append(elements, kitex.Box(kitex.BoxProps{
+					Style: style.S().
+						Foreground(textCol).
+						WhiteSpace(style.WhiteSpacePreWrap),
+				}, kitex.Text(stdoutText)))
+			}
+
+			// Subsequent parts are stderr
+			if len(parts) > 1 {
+				stderrText := strings.TrimSpace(strings.Join(parts[1:], ""))
+				if stderrText != "" {
+					stderrText = strings.ReplaceAll(stderrText, "\t", "    ")
+					elements = append(elements, kitex.Box(kitex.BoxProps{
+						Style: style.S().
+							Foreground(t.Color.Text.Error).
+							WhiteSpace(style.WhiteSpacePreWrap).
+							MarginTop(1),
+					}, kitex.Text("[stderr]\n"+stderrText)))
+				}
+			}
+
+			modalStyle := style.S().
+				Display(style.DisplayFlex).
+				FlexDirection(style.FlexColumn).
+				Width(style.Percent(90)).
+				Height(style.Percent(80)).
+				Padding(1).
+				Overflow(style.OverflowHidden)
+
+			return kitex.Dialog(kitex.DialogProps{
+				ZIndex: 100,
+				Ref:    modalRef,
+				OnKeyDown: func(e event.Event) {
+					ke, ok := e.(*event.KeyEvent)
+					if !ok {
+						return
+					}
+					if ke.Code == key.KeyEscape || ke.Text == "q" {
+						e.PreventDefault()
+						e.StopPropagation()
+						setShowModal(false)
+					}
+				},
+			},
+				components.Paper(components.PaperProps{
+					Color:   components.PaperBase,
+					Variant: components.PaperOutlined,
+					Style:   modalStyle,
+				},
+					kitex.Box(kitex.BoxProps{
+						Style: style.S().
+							Display(style.DisplayFlex).
+							FlexDirection(style.FlexRow).
+							JustifyContent(style.JustifyBetween).
+							AlignItems(style.AlignCenter).
+							PaddingBottom(1).
+							BorderBottom(true, style.SingleBorder()),
+					},
+						kitex.Span(kitex.SpanProps{Style: style.S().Bold(true)}, kitex.Text("Command Output")),
+						components.Button(components.ButtonProps{
+							Variant: components.ButtonText,
+							Color:   components.ButtonBase,
+							OnClick: func() {
+								setShowModal(false)
+							},
+						}, kitex.Text("Close [Esc/q]")),
+					),
+					kitex.Box(kitex.BoxProps{
+						Style: style.S().
+							Flex(1, 1, style.Cells(0)).
+							MinHeight(style.Cells(0)).
+							OverflowY(style.OverflowAuto).
+							MarginTop(1),
+					},
+						kitex.Box(kitex.BoxProps{Style: outputContainerStyle}, elements...),
+					),
+				),
+			)
+		}),
+	)
+})
+
+// TasksToolWidget renders background task queries action and result output.
+// TasksToolWidget renders background task queries action and result output.
+var TasksToolWidget = kitex.FC("TasksToolWidget", func(props ToolExecutionProps) kitex.Node {
+	t := theme.UseTheme()
+	isOpen, setIsOpen := kitex.UseState(true)
+	showModal, setShowModal := kitex.UseState(false)
+	modalRef := kitex.CreateRef[dom.Element]()
+
+	kitex.UseEffect(func() {
+		if showModal() {
+			kitex.PostMacro(func() {
+				if modalRef.Current != nil {
+					if doc := modalRef.Current.OwnerDocument(); doc != nil {
+						doc.Focus(modalRef.Current)
+					}
+				}
+			})
+		}
+	}, []any{showModal()})
+
+	tc := props.ToolCall
+	tm := props.ToolMessage
+
+	action := ""
+	targetTaskId := ""
+	if tc != nil && len(tc.Args) > 0 {
+		if actVal, ok := tc.Args["action"]; ok {
+			action, _ = actVal.(string)
+		}
+		if tidVal, ok := tc.Args["taskId"]; ok {
+			targetTaskId, _ = tidVal.(string)
+		}
+	}
+
+	containerStyle := style.S().
+		Display(style.DisplayFlex).
+		FlexDirection(style.FlexColumn).
+		MarginVertical(1).
+		Width(style.Percent(100)).
+		MaxWidth(style.Percent(100)).
+		Overflow(style.OverflowHidden)
+
+	headerStyle := style.S().
+		Display(style.DisplayFlex).
+		FlexDirection(style.FlexRow).
+		AlignItems(style.AlignCenter).
+		JustifyContent(style.JustifyBetween).
+		Padding(0, 1).
+		Width(style.Percent(100)).
+		MaxWidth(style.Percent(100)).
+		Overflow(style.OverflowHidden)
+
+	bodyStyle := style.S().
+		Padding(1).
+		Display(style.DisplayFlex).
+		FlexDirection(style.FlexColumn).
+		Width(style.Percent(100)).
+		MaxWidth(style.Percent(100)).
+		Overflow(style.OverflowHidden)
+
+	var iconNode kitex.Node
+	var statusLabel string
+	var headerBg color.Color
+	var headerFg color.Color
+	var borderCol color.Color
+
+	isFinished := tm != nil
+	hasErr := tm != nil && tm.IsError
+
+	// Parse structured result
+	var out tools.TasksOutput
+	var hasStructured bool
+	if tm != nil {
+		out, hasStructured = parseTasksOutput(tm.StructuredContent)
+	}
+
+	if isFinished {
+		if hasErr {
+			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Error)}, icon.Error)
+			statusLabel = fmt.Sprintf("TASKS %s ERROR", strings.ToUpper(action))
+			headerBg = t.Color.Surface.BaseFocus
+			headerFg = t.Color.Text.Error
+			borderCol = t.Color.Text.Error
+		} else {
+			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Success)}, icon.Checkmark)
+			statusLabel = fmt.Sprintf("TASKS %s SUCCESS", strings.ToUpper(action))
+			headerBg = t.Color.Surface.BaseFocus
+			headerFg = t.Color.Surface.Success
+			borderCol = t.Color.Surface.Success
+		}
+	} else {
+		iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Info)}, kitex.Text(props.CurrentDots))
+		statusLabel = fmt.Sprintf("RUNNING TASKS %s", strings.ToUpper(action))
+		headerBg = t.Color.Surface.BaseFocus
+		headerFg = t.Color.Surface.Info
+		borderCol = t.Color.Surface.Info
+	}
+
+	if t != nil {
+		containerStyle = containerStyle.
+			Border(true, style.SingleBorder(), borderCol).
+			Background(t.Color.Surface.BaseHover)
+
+		headerStyle = headerStyle.
+			Background(headerBg).
+			Foreground(headerFg)
+
+		bodyStyle = bodyStyle.
+			Background(t.Color.Surface.BaseHover)
+	}
+
+	return kitex.Fragment(
+		kitex.Box(kitex.BoxProps{Style: containerStyle},
+			components.Button(components.ButtonProps{
+				Variant: components.ButtonText,
+				Color:   components.ButtonBase,
+				Style:   headerStyle,
+				OnClick: func() {
+					setIsOpen(!isOpen())
+				},
+			},
+				kitex.Box(kitex.BoxProps{
+					Style: style.S().
+						Display(style.DisplayFlex).
+						FlexDirection(style.FlexRow).
+						AlignItems(style.AlignCenter).
+						Gap(1),
+				},
+					iconNode,
+					kitex.Span(kitex.SpanProps{Style: style.S().Bold(true)}, kitex.Text(" "+statusLabel)),
+				),
+				kitex.If(isFinished, func() kitex.Node {
+					var label string
+					if isOpen() {
+						label = "▲ COLLAPSE"
+					} else {
+						label = "▼ EXPAND"
+					}
+					var textCol color.Color
+					if t != nil {
+						textCol = t.Color.Text.Secondary
+					}
+					return kitex.Span(kitex.SpanProps{
+						Style: style.S().Foreground(textCol),
+					}, kitex.Text(label))
+				}),
+			),
+			kitex.If(isOpen(), func() kitex.Node {
+				return kitex.Box(kitex.BoxProps{Style: bodyStyle},
+					// Result Output depending on action
+					kitex.If(tm != nil, func() kitex.Node {
+						if hasStructured {
+							if action == "list" {
+								if len(out.Tasks) == 0 {
+									return kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Secondary).Italic(true)}, kitex.Text("No active or background tasks found in this session."))
+								}
+
+								// Header row for table
+								headerRow := kitex.TR(kitex.TRProps{},
+									kitex.TD(kitex.TDProps{Style: style.S().Bold(true).Foreground(t.Color.Text.Secondary).PaddingRight(1).Width(style.MaxContent)}, kitex.Text("TASK ID")),
+									kitex.TD(kitex.TDProps{Style: style.S().Bold(true).Foreground(t.Color.Text.Secondary).PaddingRight(1).Width(style.MaxContent)}, kitex.Text("STATUS")),
+									kitex.TD(kitex.TDProps{Style: style.S().Bold(true).Foreground(t.Color.Text.Secondary).PaddingRight(1).Width(style.MaxContent)}, kitex.Text("STARTED")),
+									kitex.TD(kitex.TDProps{Style: style.S().Bold(true).Foreground(t.Color.Text.Secondary).Width(style.Percent(100))}, kitex.Text("COMMAND / NAME")),
+								)
+
+								var taskRows []kitex.Node
+								taskRows = append(taskRows, headerRow)
+
+								for _, task := range out.Tasks {
+									var statText string
+									var statCol color.Color
+									switch task.Status {
+									case "running":
+										statText = "● RUNNING"
+										statCol = t.Color.Surface.Info
+									case "finished", "completed":
+										if task.ExitCode == 0 {
+											statText = "✔ COMPLETED"
+											statCol = t.Color.Surface.Success
+										} else {
+											statText = fmt.Sprintf("✘ FAILED (%d)", task.ExitCode)
+											statCol = t.Color.Text.Error
+										}
+									case "killed":
+										statText = "⏹ KILLED"
+										statCol = t.Color.Text.Secondary
+									default:
+										statText = strings.ToUpper(task.Status)
+										statCol = t.Color.Text.Primary
+									}
+
+									startedTime := task.StartedAt
+									if pt, err := time.Parse(time.RFC3339, task.StartedAt); err == nil {
+										startedTime = pt.Format("15:04:05")
+									}
+
+									shortId := task.TaskId
+									if len(shortId) > 12 {
+										shortId = shortId[:12] + "…"
+									}
+
+									taskRows = append(taskRows, kitex.TR(kitex.TRProps{},
+										kitex.TD(kitex.TDProps{Style: style.S().Foreground(t.Color.Text.Secondary).PaddingRight(1).Width(style.MaxContent)}, kitex.Text(shortId)),
+										kitex.TD(kitex.TDProps{Style: style.S().Foreground(statCol).PaddingRight(1).Width(style.MaxContent)}, kitex.Text(statText)),
+										kitex.TD(kitex.TDProps{Style: style.S().Foreground(t.Color.Text.Secondary).PaddingRight(1).Width(style.MaxContent)}, kitex.Text(startedTime)),
+										kitex.TD(kitex.TDProps{Style: style.S().Foreground(t.Color.Text.Primary).Width(style.Percent(100))}, kitex.Text(task.Name)),
+									))
+								}
+
+								return kitex.Box(kitex.BoxProps{
+									Style: style.S().Display(style.DisplayFlex).FlexDirection(style.FlexColumn).Width(style.Percent(100)),
+								},
+									kitex.Table(kitex.TableProps{},
+										kitex.TBody(kitex.TBodyProps{}, taskRows...),
+									),
+								)
+							}
+
+							if action == "status" {
+								var statusText string
+								var statusCol color.Color
+								switch out.Status {
+								case "running":
+									statusText = "● RUNNING"
+									statusCol = t.Color.Surface.Info
+								case "finished", "completed":
+									if out.ExitCode == 0 {
+										statusText = "✔ COMPLETED"
+										statusCol = t.Color.Surface.Success
+									} else {
+										statusText = fmt.Sprintf("✘ FAILED (%d)", out.ExitCode)
+										statusCol = t.Color.Text.Error
+									}
+								case "killed":
+									statusText = "⏹ KILLED"
+									statusCol = t.Color.Text.Secondary
+								default:
+									statusText = strings.ToUpper(out.Status)
+									statusCol = t.Color.Text.Primary
+								}
+
+								stdoutLines := strings.Split(out.StdoutTail, "\n")
+								stderrLines := strings.Split(out.StderrTail, "\n")
+
+								isStdoutTruncated := len(stdoutLines) > 10
+								isStderrTruncated := len(stderrLines) > 10
+								hasAnyTruncation := isStdoutTruncated || isStderrTruncated
+
+								var displayStdout string
+								if isStdoutTruncated {
+									displayStdout = strings.Join(stdoutLines[len(stdoutLines)-10:], "\n")
+								} else {
+									displayStdout = out.StdoutTail
+								}
+
+								var displayStderr string
+								if isStderrTruncated {
+									displayStderr = strings.Join(stderrLines[len(stderrLines)-10:], "\n")
+								} else {
+									displayStderr = out.StderrTail
+								}
+
+								var logElements []kitex.Node
+
+								if strings.TrimSpace(displayStdout) != "" {
+									logElements = append(logElements,
+										kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Secondary).Bold(true).MarginBottom(1)}, kitex.Text("STDOUT:")),
+										kitex.Box(kitex.BoxProps{
+											Style: style.S().
+												Foreground(t.Color.Text.Primary).
+												Background(t.Color.Surface.BaseHover).
+												Border(true, style.SingleBorder(), t.Color.Border.Primary).
+												Padding(1).
+												MarginBottom(1).
+												WhiteSpace(style.WhiteSpacePreWrap),
+										}, kitex.Text(strings.ReplaceAll(displayStdout, "\t", "    "))),
+									)
+								}
+
+								if strings.TrimSpace(displayStderr) != "" {
+									logElements = append(logElements,
+										kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Error).Bold(true).MarginBottom(1)}, kitex.Text("STDERR:")),
+										kitex.Box(kitex.BoxProps{
+											Style: style.S().
+												Foreground(t.Color.Text.Error).
+												Background(t.Color.Surface.BaseHover).
+												Border(true, style.SingleBorder(), t.Color.Text.Error).
+												Padding(1).
+												MarginBottom(1).
+												WhiteSpace(style.WhiteSpacePreWrap),
+										}, kitex.Text(strings.ReplaceAll(displayStderr, "\t", "    "))),
+									)
+								}
+
+								if len(logElements) == 0 {
+									logElements = append(logElements, kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Secondary).Italic(true)}, kitex.Text("No command output logged yet.")))
+								}
+
+								return kitex.Box(kitex.BoxProps{
+									Style: style.S().Display(style.DisplayFlex).FlexDirection(style.FlexColumn).Width(style.Percent(100)),
+								},
+									kitex.Box(kitex.BoxProps{
+										Style: style.S().Display(style.DisplayFlex).FlexDirection(style.FlexRow).AlignItems(style.AlignCenter).Gap(1).MarginBottom(1),
+									},
+										kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Secondary).Bold(true)}, kitex.Text("Status:")),
+										kitex.Span(kitex.SpanProps{Style: style.S().Foreground(statusCol).Bold(true)}, kitex.Text(statusText)),
+										kitex.If(out.Message != "", func() kitex.Node {
+											return kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Secondary)}, kitex.Text(" — "+out.Message))
+										}),
+									),
+									kitex.Box(kitex.BoxProps{
+										Style: style.S().Display(style.DisplayFlex).FlexDirection(style.FlexColumn),
+									}, logElements...),
+									kitex.If(hasAnyTruncation, func() kitex.Node {
+										return components.Button(components.ButtonProps{
+											Variant: components.ButtonText,
+											Color:   components.ButtonBase,
+											Style: style.S().
+												Foreground(t.Color.Surface.Info).
+												MarginTop(1).
+												Bold(true),
+											OnClick: func() {
+												setShowModal(true)
+											},
+										}, kitex.Text("🔍 VIEW FULL OUTPUT"))
+									}),
+								)
+							}
+
+							if action == "kill" {
+								return kitex.Box(kitex.BoxProps{
+									Style: style.S().Display(style.DisplayFlex).FlexDirection(style.FlexRow).AlignItems(style.AlignCenter).Gap(1),
+								},
+									kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Secondary).Bold(true)}, kitex.Text("Action:")),
+									kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Primary)}, kitex.Text("KILL")),
+									kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Secondary)}, kitex.Text(" — "+out.Message)),
+								)
+							}
+						}
+
+						// Fallback to text blocks
+						outText := getToolOutput(tm.Content)
+						if strings.TrimSpace(outText) != "" {
+							return kitex.Box(kitex.BoxProps{
+								Style: style.S().
+									Foreground(t.Color.Text.Primary).
+									WhiteSpace(style.WhiteSpacePreWrap),
+							}, kitex.Text(outText))
+						}
+						return nil
+					}),
+				)
+			}),
+		),
+		kitex.If(showModal(), func() kitex.Node {
+			modalStyle := style.S().
+				Display(style.DisplayFlex).
+				FlexDirection(style.FlexColumn).
+				Width(style.Percent(90)).
+				Height(style.Percent(80)).
+				Padding(1).
+				Overflow(style.OverflowHidden)
+
+			var modalLogElements []kitex.Node
+
+			if strings.TrimSpace(out.StdoutTail) != "" {
+				modalLogElements = append(modalLogElements,
+					kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Secondary).Bold(true).MarginBottom(1)}, kitex.Text("FULL STDOUT:")),
+					kitex.Box(kitex.BoxProps{
+						Style: style.S().
+							Foreground(t.Color.Text.Primary).
+							Background(t.Color.Surface.BaseHover).
+							Border(true, style.SingleBorder(), t.Color.Border.Primary).
+							Padding(1).
+							MarginBottom(1).
+							WhiteSpace(style.WhiteSpacePreWrap),
+					}, kitex.Text(strings.ReplaceAll(out.StdoutTail, "\t", "    "))),
+				)
+			}
+
+			if strings.TrimSpace(out.StderrTail) != "" {
+				modalLogElements = append(modalLogElements,
+					kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Error).Bold(true).MarginBottom(1)}, kitex.Text("FULL STDERR:")),
+					kitex.Box(kitex.BoxProps{
+						Style: style.S().
+							Foreground(t.Color.Text.Error).
+							Background(t.Color.Surface.BaseHover).
+							Border(true, style.SingleBorder(), t.Color.Text.Error).
+							Padding(1).
+							MarginBottom(1).
+							WhiteSpace(style.WhiteSpacePreWrap),
+					}, kitex.Text(strings.ReplaceAll(out.StderrTail, "\t", "    "))),
+				)
+			}
+
+			return kitex.Dialog(kitex.DialogProps{
+				ZIndex: 100,
+				Ref:    modalRef,
+				OnKeyDown: func(e event.Event) {
+					ke, ok := e.(*event.KeyEvent)
+					if !ok {
+						return
+					}
+					if ke.Code == key.KeyEscape || ke.Text == "q" {
+						e.PreventDefault()
+						e.StopPropagation()
+						setShowModal(false)
+					}
+				},
+			},
+				components.Paper(components.PaperProps{
+					Color:   components.PaperBase,
+					Variant: components.PaperOutlined,
+					Style:   modalStyle,
+				},
+					kitex.Box(kitex.BoxProps{
+						Style: style.S().
+							Display(style.DisplayFlex).
+							FlexDirection(style.FlexRow).
+							JustifyContent(style.JustifyBetween).
+							AlignItems(style.AlignCenter).
+							PaddingBottom(1).
+							BorderBottom(true, style.SingleBorder()),
+					},
+						kitex.Span(kitex.SpanProps{Style: style.S().Bold(true)}, kitex.Text(fmt.Sprintf("Task Logs: %s", targetTaskId))),
+						components.Button(components.ButtonProps{
+							Variant: components.ButtonText,
+							Color:   components.ButtonBase,
+							OnClick: func() {
+								setShowModal(false)
+							},
+						}, kitex.Text("Close [Esc/q]")),
+					),
+					kitex.Box(kitex.BoxProps{
+						Style: style.S().
+							Flex(1, 1, style.Cells(0)).
+							MinHeight(style.Cells(0)).
+							OverflowY(style.OverflowAuto).
+							MarginTop(1),
+					},
+						modalLogElements...,
 					),
 				),
 			)

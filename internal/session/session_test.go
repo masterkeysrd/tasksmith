@@ -308,3 +308,158 @@ func TestSessionInboxQueue(t *testing.T) {
 		}
 	}
 }
+
+func TestSendSystemNotification(t *testing.T) {
+	tmpCwd := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", tmpCwd)
+	t.Setenv("TASKSMITH_APPNAME", "tasksmith-test-notification")
+
+	db, err := coredb.Open(tmpCwd, "tasksmith.db")
+	if err != nil {
+		t.Fatalf("failed to open database: %v", err)
+	}
+	defer db.Close()
+
+	checkpointsDb, err := coredb.Open(tmpCwd, "checkpoints.db")
+	if err != nil {
+		t.Fatalf("failed to open checkpoints database: %v", err)
+	}
+	defer checkpointsDb.Close()
+
+	store, err := session.NewSQLiteStore(db, checkpointsDb)
+	if err != nil {
+		t.Fatalf("failed to initialize sqlite store: %v", err)
+	}
+
+	manager := session.NewManager(store, nil)
+	ctx := context.Background()
+
+	s, err := manager.CreateSession(ctx, "notification-test")
+	if err != nil {
+		t.Fatalf("failed to create session: %v", err)
+	}
+
+	meta := map[string]any{
+		"is_system_notification": true,
+		"notification_type":      "task_completion",
+		"task_id":                "task-123",
+	}
+
+	err = manager.SendSystemNotification(ctx, s.ID, "Wake up agent", meta)
+	if err != nil {
+		t.Fatalf("failed to send system notification: %v", err)
+	}
+
+	msgs, err := manager.GetMessages(ctx, s.ID)
+	if err != nil {
+		t.Fatalf("failed to get messages: %v", err)
+	}
+
+	if len(msgs) != 1 {
+		t.Fatalf("expected 1 message in database, got %d", len(msgs))
+	}
+
+	msg := msgs[0]
+	if msg.Role() != message.RoleUser {
+		t.Errorf("expected role user, got %s", msg.Role())
+	}
+
+	if msg.GetContent().Text() != "Wake up agent" {
+		t.Errorf("expected message text 'Wake up agent', got %q", msg.GetContent().Text())
+	}
+
+	msgMeta := msg.GetMetadata()
+	if msgMeta == nil {
+		t.Fatalf("expected metadata to be non-nil")
+	}
+
+	if val, ok := msgMeta["is_system_notification"].(bool); !ok || !val {
+		t.Errorf("expected is_system_notification to be true, got %v", msgMeta["is_system_notification"])
+	}
+
+	if val, ok := msgMeta["notification_type"].(string); !ok || val != "task_completion" {
+		t.Errorf("expected notification_type 'task_completion', got %v", msgMeta["notification_type"])
+	}
+
+	if val, ok := msgMeta["task_id"].(string); !ok || val != "task-123" {
+		t.Errorf("expected task_id 'task-123', got %v", msgMeta["task_id"])
+	}
+}
+
+func TestActiveToolStreamInjection(t *testing.T) {
+	tmpCwd := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", tmpCwd)
+	t.Setenv("TASKSMITH_APPNAME", "tasksmith-test-toolstream")
+
+	db, err := coredb.Open(tmpCwd, "tasksmith.db")
+	if err != nil {
+		t.Fatalf("failed to open database: %v", err)
+	}
+	defer db.Close()
+
+	checkpointsDb, err := coredb.Open(tmpCwd, "checkpoints.db")
+	if err != nil {
+		t.Fatalf("failed to open checkpoints database: %v", err)
+	}
+	defer checkpointsDb.Close()
+
+	store, err := session.NewSQLiteStore(db, checkpointsDb)
+	if err != nil {
+		t.Fatalf("failed to initialize sqlite store: %v", err)
+	}
+
+	manager := session.NewManager(store, nil)
+	ctx := context.Background()
+
+	s, err := manager.CreateSession(ctx, "toolstream-test")
+	if err != nil {
+		t.Fatalf("failed to create session: %v", err)
+	}
+
+	// 1. Manually add an assistant message containing a tool call to the database
+	asstMsg := &message.Assistant{
+		Content: message.Content{
+			&message.TextBlock{Text: "Running a command..."},
+			&message.ToolCall{ID: "call_abc", Name: "bash"},
+		},
+	}
+	_, err = manager.AppendMessage(ctx, s.ID, asstMsg)
+	if err != nil {
+		t.Fatalf("failed to append assistant message: %v", err)
+	}
+
+	// 2. Set active running session state with a tool stream chunk in memory
+	_ = manager.SendMessage(ctx, s.ID, "Wake up agent") // starts runner state
+
+	// Inject stream content manually into the manager's active sessions map
+	manager.SetToolStreamDebug(s.ID, "call_abc", "Hello from streaming tool output!")
+
+	// 3. Retrieve messages and assert that the temporary tool message has been injected
+	msgs, err := manager.GetMessages(ctx, s.ID)
+	if err != nil {
+		t.Fatalf("failed to get messages: %v", err)
+	}
+
+	foundTool := false
+	for _, m := range msgs {
+		if m.Role() == message.RoleTool {
+			tMsg, ok := m.(*message.Tool)
+			if !ok {
+				continue
+			}
+			if tMsg.ToolCallID == "call_abc" {
+				foundTool = true
+				if tMsg.Content.Text() != "Hello from streaming tool output!" {
+					t.Errorf("expected streaming tool output 'Hello from streaming tool output!', got %q", tMsg.Content.Text())
+				}
+				if tMsg.GetMetadata()["status"] != "running" {
+					t.Errorf("expected metadata status 'running', got %v", tMsg.GetMetadata()["status"])
+				}
+			}
+		}
+	}
+
+	if !foundTool {
+		t.Errorf("expected temporary running tool message to be injected in message list")
+	}
+}

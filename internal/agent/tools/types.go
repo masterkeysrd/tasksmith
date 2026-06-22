@@ -4,20 +4,34 @@ package tools
 
 // BashArgs defines the arguments for the "bash" tool.
 //
-// Execute a bash command.
+// Execute a bash command. If it takes longer than wait_ms, it automatically transitions to a background task.
+//
+// IMPORTANT: Do NOT run commands in the background of the shell yourself (e.g. by appending '&' or using background commands). The TaskManager handles background execution automatically. If you background the command yourself, the TaskManager will immediately mark it as finished and lose track of it, preventing you from managing or stopping it.
 type BashArgs struct {
 	// Command: Bash command to execute.
 	Command string `json:"command" jsonschema:"Bash command to execute."`
+	// Description: A short description of what you are trying to accomplish by running this command.
+	Description string `json:"description" jsonschema:"A short description of what you are trying to accomplish by running this command."`
+	// Timeout: Maximum duration (in seconds) for the command execution before forced termination.
+	Timeout int `json:"timeout,omitempty" jsonschema:"Maximum duration (in seconds) for the command execution before forced termination."`
+	// WaitMs: Time (in milliseconds) to wait for synchronous completion before shifting to background execution. Defaults to 10000.
+	WaitMs int `json:"wait_ms,omitempty" jsonschema:"Time (in milliseconds) to wait for synchronous completion before shifting to background execution. Defaults to 10000."`
 }
 
 // BashOutput defines the output returned by the "bash" tool.
 type BashOutput struct {
-	// ExitCode: Exit code.
-	ExitCode int `json:"exitCode,omitempty" jsonschema:"Exit code."`
-	// Stderr: Standard error.
-	Stderr string `json:"stderr,omitempty" jsonschema:"Standard error."`
-	// Stdout: Standard output.
-	Stdout string `json:"stdout,omitempty" jsonschema:"Standard output."`
+	// ExitCode: Exit code of the command (if finished synchronously).
+	ExitCode int `json:"exitCode,omitempty" jsonschema:"Exit code of the command (if finished synchronously)."`
+	// Message: A human-readable description of the execution status.
+	Message string `json:"message,omitempty" jsonschema:"A human-readable description of the execution status."`
+	// Status: The current status of the task ('running', 'completed', 'failed', 'killed').
+	Status string `json:"status,omitempty" jsonschema:"The current status of the task ('running', 'completed', 'failed', 'killed')."`
+	// Stderr: Standard error of the command (if finished synchronously).
+	Stderr string `json:"stderr,omitempty" jsonschema:"Standard error of the command (if finished synchronously)."`
+	// Stdout: Standard output of the command (if finished synchronously).
+	Stdout string `json:"stdout,omitempty" jsonschema:"Standard output of the command (if finished synchronously)."`
+	// TaskId: The ID of the background task if execution transitioned to background.
+	TaskId string `json:"taskId,omitempty" jsonschema:"The ID of the background task if execution transitioned to background."`
 }
 
 // DownloadArgs defines the arguments for the "download" tool.
@@ -320,6 +334,53 @@ type RemoveOutput struct {
 	Path string `json:"path,omitempty" jsonschema:"Path that was removed."`
 	// Success: Whether removal succeeded.
 	Success bool `json:"success,omitempty" jsonschema:"Whether removal succeeded."`
+}
+
+// TasksArgs defines the arguments for the "tasks" tool.
+//
+// Manage and monitor background tasks.
+type TasksArgs struct {
+	// Action: The action to perform. One of: 'list' (list all active and completed background tasks in the session), 'status' (retrieve the execution state and log tail of a specific task), 'kill' (terminate a running task).
+	Action string `json:"action" jsonschema:"The action to perform. One of: 'list' (list all active and completed background tasks in the session), 'status' (retrieve the execution state and log tail of a specific task), 'kill' (terminate a running task)."`
+	// Limit: The maximum number of lines from the end of the log to return for 'status' action (defaults to 100).
+	Limit int `json:"limit,omitempty" jsonschema:"The maximum number of lines from the end of the log to return for 'status' action (defaults to 100)."`
+	// TaskId: The ID of the background task (required for 'status' and 'kill').
+	TaskId string `json:"taskId,omitempty" jsonschema:"The ID of the background task (required for 'status' and 'kill')."`
+}
+
+// TasksOutput defines the output returned by the "tasks" tool.
+type TasksOutput struct {
+	// ExitCode: The exit code of the requested task (if finished).
+	ExitCode int `json:"exitCode,omitempty" jsonschema:"The exit code of the requested task (if finished)."`
+	// Message: A human-readable result or error message.
+	Message string `json:"message,omitempty" jsonschema:"A human-readable result or error message."`
+	// Status: The status of the requested task.
+	Status string `json:"status,omitempty" jsonschema:"The status of the requested task."`
+	// StderrTail: The tail of the standard error log (for 'status' action).
+	StderrTail string `json:"stderrTail,omitempty" jsonschema:"The tail of the standard error log (for 'status' action)."`
+	// StdoutTail: The tail of the standard output log (for 'status' action).
+	StdoutTail string `json:"stdoutTail,omitempty" jsonschema:"The tail of the standard output log (for 'status' action)."`
+	// Tasks: List of background tasks (only returned for 'list' action).
+	Tasks []TasksOutputTasksItem `json:"tasks,omitempty" jsonschema:"List of background tasks (only returned for 'list' action)."`
+}
+
+type TasksOutputTasksItem struct {
+	// Error: Error message if the task failed.
+	Error string `json:"error,omitempty" jsonschema:"Error message if the task failed."`
+	// ExitCode: The exit code of the task (if finished).
+	ExitCode int `json:"exitCode,omitempty" jsonschema:"The exit code of the task (if finished)."`
+	// FinishedAt: Timestamp when the task finished.
+	FinishedAt string `json:"finishedAt,omitempty" jsonschema:"Timestamp when the task finished."`
+	// Name: The friendly name or command of the task.
+	Name string `json:"name,omitempty" jsonschema:"The friendly name or command of the task."`
+	// StartedAt: Timestamp when the task started.
+	StartedAt string `json:"startedAt,omitempty" jsonschema:"Timestamp when the task started."`
+	// Status: The current status of the task.
+	Status string `json:"status,omitempty" jsonschema:"The current status of the task."`
+	// TaskId: The ID of the task.
+	TaskId string `json:"taskId,omitempty" jsonschema:"The ID of the task."`
+	// Type: The type of task (e.g. bash).
+	Type string `json:"type,omitempty" jsonschema:"The type of task (e.g. bash)."`
 }
 
 // ViewArgs defines the arguments for the "view" tool.

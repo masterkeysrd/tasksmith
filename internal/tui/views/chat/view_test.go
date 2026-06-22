@@ -144,6 +144,7 @@ func (m *mockClientWithTools) GetSessionMessages(ctx context.Context, req api.Ge
 			`{"role":"assistant","content":[{"type":"text","text":"Thinking..."},{"type":"tool_call","id":"call-1","name":"bash","args":{"CommandLine":"echo hello"}},{"type":"tool_call","id":"call-2","name":"view_file","args":{"AbsolutePath":"/path/to/file.go"}}]}`,
 			`{"role":"tool","tool_call_id":"call-1","name":"bash","content":[{"type":"text","text":"hello\n"}]}`,
 			`{"role":"tool","tool_call_id":"call-2","name":"view_file","content":[{"type":"text","text":"package main"}]}`,
+			`{"role":"user","content":[{"type":"text","text":"Wake up"}],"metadata":{"is_system_notification":true,"task_id":"task-123","task_name":"run tests","task_status":"completed","exit_code":0}}`,
 		},
 	}, nil
 }
