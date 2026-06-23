@@ -130,10 +130,11 @@ func (s *Service) ListProviders(ctx context.Context, req ListProvidersRequest) (
 		models := make([]Model, 0, len(p.Spec.Models))
 		for _, m := range p.Spec.Models {
 			models = append(models, Model{
-				ID:            m.ID,
-				Name:          m.Name,
-				Label:         m.Label,
-				ContextWindow: m.Limits.Context,
+				ID:              m.ID,
+				Name:            m.Name,
+				Label:           m.Label,
+				ContextWindow:   m.Limits.Context,
+				MaxOutputTokens: m.Limits.Output,
 			})
 		}
 
@@ -174,10 +175,11 @@ func (s *Service) ListProvidersPresets(ctx context.Context, req ListProvidersPre
 		models := make([]Model, 0, len(p.Spec.Models))
 		for _, m := range p.Spec.Models {
 			models = append(models, Model{
-				ID:            m.ID,
-				Name:          m.Name,
-				Label:         m.Label,
-				ContextWindow: m.Limits.Context,
+				ID:              m.ID,
+				Name:            m.Name,
+				Label:           m.Label,
+				ContextWindow:   m.Limits.Context,
+				MaxOutputTokens: m.Limits.Output,
 			})
 		}
 

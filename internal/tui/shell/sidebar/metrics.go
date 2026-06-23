@@ -30,6 +30,7 @@ func metricsPanel(data Data) kitex.Node {
 
 	tokensUsed := 0
 	tokenLimit := 131072 // Default fallback
+	outputLimit := 4096  // Default fallback
 
 	if activeSession != nil {
 		for _, p := range data.Providers {
@@ -37,6 +38,9 @@ func metricsPanel(data Data) kitex.Node {
 				for _, m := range p.Models {
 					if (m.ID == activeSession.ModelName || m.Name == activeSession.ModelName) && m.ContextWindow > 0 {
 						tokenLimit = m.ContextWindow
+						if m.MaxOutputTokens > 0 {
+							outputLimit = m.MaxOutputTokens
+						}
 					}
 				}
 			}
@@ -103,7 +107,17 @@ func metricsPanel(data Data) kitex.Node {
 	}
 
 	totalUsedCells := systemCells + toolCells + messageCells + toolResultCells + filesCells + otherCells
-	unusedCells := barLength - totalUsedCells
+	outputCells := int(float64(outputLimit) * float64(barLength) / float64(tokenLimit))
+	if outputLimit > 0 && outputCells == 0 {
+		outputCells = 1
+	}
+
+	renderedOutputCells := outputCells
+	if totalUsedCells+renderedOutputCells > barLength {
+		renderedOutputCells = barLength - totalUsedCells
+	}
+
+	unusedCells := barLength - totalUsedCells - renderedOutputCells
 	if unusedCells < 0 {
 		unusedCells = 0
 	}
@@ -178,6 +192,9 @@ func metricsPanel(data Data) kitex.Node {
 			kitex.If(unusedCells > 0, func() kitex.Node {
 				return kitex.Span(kitex.SpanProps{Style: style.S().Foreground(c.surface)}, kitex.Text(strings.Repeat("░", unusedCells)))
 			}),
+			kitex.If(renderedOutputCells > 0, func() kitex.Node {
+				return kitex.Span(kitex.SpanProps{Style: style.S().Foreground(c.border)}, kitex.Text(strings.Repeat("▒", renderedOutputCells)))
+			}),
 		),
 
 		// Avail dynamic head
@@ -185,12 +202,32 @@ func metricsPanel(data Data) kitex.Node {
 			Style: style.S().
 				Display(style.DisplayFlex).
 				FlexDirection(style.FlexRow).
-				JustifyContent(style.JustifyBetween).
-				MarginBottom(1),
+				JustifyContent(style.JustifyBetween),
 		},
 			kitex.Box(kitex.BoxProps{Style: style.S().Foreground(c.subtle)}, kitex.Text("Available Context Window")),
 			kitex.Box(kitex.BoxProps{Style: style.S().Foreground(c.muted)}, kitex.Text(fmt.Sprintf("%.1f%%", 100.0-float64(tokensUsed)*100.0/float64(tokenLimit)))),
 		),
+
+		// Output Reserved Limit
+		func() kitex.Node {
+			outputPct := float64(outputLimit) * 100.0 / float64(tokenLimit)
+			outputStr := fmt.Sprintf("%.1fK", float64(outputLimit)/1024.0)
+			return kitex.Box(kitex.BoxProps{
+				Style: style.S().
+					Display(style.DisplayFlex).
+					FlexDirection(style.FlexRow).
+					JustifyContent(style.JustifyBetween).
+					MarginBottom(1),
+			},
+				kitex.Box(kitex.BoxProps{Style: style.S().Foreground(c.subtle)}, kitex.Text("Reserved for Output")),
+				kitex.Box(kitex.BoxProps{
+					Style: style.S().Display(style.DisplayFlex).FlexDirection(style.FlexRow).Gap(1),
+				},
+					kitex.Box(kitex.BoxProps{Style: style.S().Foreground(c.subtle)}, kitex.Text(outputStr)),
+					kitex.Box(kitex.BoxProps{Style: style.S().Foreground(c.muted)}, kitex.Text(fmt.Sprintf("(%.1f%%)", outputPct))),
+				),
+			)
+		}(),
 
 		// System Allocations
 		metricSectionHeader(icon.CPU, "SYSTEM PROMPT & DEFINITIONS", c.info),

@@ -47,10 +47,11 @@ type Provider struct {
 }
 
 type Model struct {
-	ID            string `json:"id"`
-	Name          string `json:"name"`
-	Label         string `json:"label"`
-	ContextWindow int    `json:"context_window"`
+	ID              string `json:"id"`
+	Name            string `json:"name"`
+	Label           string `json:"label"`
+	ContextWindow   int    `json:"context_window"`
+	MaxOutputTokens int    `json:"max_output_tokens"`
 }
 
 type ListProvidersPresetsRequest struct {

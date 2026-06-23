@@ -473,12 +473,56 @@ var View = kitex.FC("TokenAnalytics", func(props Props) kitex.Node {
 			kitex.Box(kitex.BoxProps{
 				Style: style.S().Display(style.DisplayFlex).FlexDirection(style.FlexRow).Gap(3),
 			},
-				kitex.Box(kitex.BoxProps{Style: style.S().Foreground(c.text)}, kitex.Text("[1] TODAY")),
-				kitex.Box(kitex.BoxProps{Style: style.S().Foreground(c.text)}, kitex.Text("[2] 7 DAYS")),
-				kitex.Box(kitex.BoxProps{Style: style.S().Foreground(c.text)}, kitex.Text("[3] 30 DAYS")),
-				kitex.Box(kitex.BoxProps{Style: style.S().Foreground(c.info)}, kitex.Text("[P] CYCLE PROVIDER")),
-				kitex.Box(kitex.BoxProps{Style: style.S().Foreground(c.success)}, kitex.Text("[T] TOGGLE METRIC")),
-				kitex.Box(kitex.BoxProps{Style: style.S().Foreground(c.error)}, kitex.Text("[Q/ESC] QUIT")),
+				components.Button(components.ButtonProps{
+					Variant: components.ButtonText,
+					Color:   components.ButtonBase,
+					Style:   style.S().Foreground(c.text),
+					OnClick: func() {
+						SetTimeframe("today")
+					},
+				}, kitex.Text("[1] TODAY")),
+				components.Button(components.ButtonProps{
+					Variant: components.ButtonText,
+					Color:   components.ButtonBase,
+					Style:   style.S().Foreground(c.text),
+					OnClick: func() {
+						SetTimeframe("7days")
+					},
+				}, kitex.Text("[2] 7 DAYS")),
+				components.Button(components.ButtonProps{
+					Variant: components.ButtonText,
+					Color:   components.ButtonBase,
+					Style:   style.S().Foreground(c.text),
+					OnClick: func() {
+						SetTimeframe("30days")
+					},
+				}, kitex.Text("[3] 30 DAYS")),
+				components.Button(components.ButtonProps{
+					Variant: components.ButtonText,
+					Color:   components.ButtonInfo,
+					Style:   style.S().Foreground(c.info),
+					OnClick: func() {
+						CycleProviderFilter()
+					},
+				}, kitex.Text("[P] CYCLE PROVIDER")),
+				components.Button(components.ButtonProps{
+					Variant: components.ButtonText,
+					Color:   components.ButtonSuccess,
+					Style:   style.S().Foreground(c.success),
+					OnClick: func() {
+						ToggleMetricUnit()
+					},
+				}, kitex.Text("[T] TOGGLE METRIC")),
+				components.Button(components.ButtonProps{
+					Variant: components.ButtonText,
+					Color:   components.ButtonError,
+					Style:   style.S().Foreground(c.error),
+					OnClick: func() {
+						if props.OnClose != nil {
+							props.OnClose()
+						}
+					},
+				}, kitex.Text("[Q/ESC] QUIT")),
 			),
 		),
 	)
