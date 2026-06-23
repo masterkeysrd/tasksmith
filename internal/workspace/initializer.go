@@ -79,10 +79,10 @@ func (w *Workspace) Initialize(ctx context.Context, opts InitializationOptions) 
 	}
 	sort.Strings(allowedTools)
 
-	var policies *warp.WorkspacePolicies
+	var policies *warp.Policies
 	if len(allowedTools) > 0 {
-		policies = &warp.WorkspacePolicies{
-			Tools: &warp.WorkspaceToolPolicies{
+		policies = &warp.Policies{
+			Tools: &warp.ToolPolicies{
 				Include: allowedTools,
 			},
 		}

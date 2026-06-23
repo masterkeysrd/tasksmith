@@ -18,6 +18,7 @@ import (
 	loomopenai "github.com/masterkeysrd/loom/llm/openai"
 	"github.com/masterkeysrd/loom/message"
 	agentgraph "github.com/masterkeysrd/tasksmith/internal/agent/graph"
+	"github.com/masterkeysrd/tasksmith/internal/agent/prompt"
 	"github.com/masterkeysrd/tasksmith/internal/agent/tools"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	"github.com/masterkeysrd/tasksmith/internal/workspace"
@@ -413,40 +414,40 @@ func (m *Manager) sendMessage(ctx context.Context, sessionID string, text string
 		// Resolve agent system prompt
 		var systemPrompt string
 		if m.ws != nil && agentName != "" {
-			var activeAgent *warp.Agent
-			for _, a := range m.ws.Agents() {
-				if a.GetName() == agentName {
-					activeAgent = a
-					break
-				}
+			resolvedAgent, err := m.ws.ResolveAgent(runCtx, agentName)
+			if err != nil {
+				m.setSessionError(sessionID, fmt.Errorf("failed to resolve agent %q: %w", agentName, err))
+				return
 			}
-			if activeAgent != nil {
-				var contextInstructions string
-				var contextPath string
-				contexts := m.ws.Contexts()
-				if len(contexts) > 0 {
-					var parts []string
-					for _, ctxRes := range contexts {
-						if inst := ctxRes.Spec.Instructions; inst != "" {
-							parts = append(parts, inst)
-						}
-					}
-					contextInstructions = strings.Join(parts, "\n\n")
-					contextPath = contexts[0].Directory
-				}
 
-				rendered, err := warp.Render(activeAgent, &warp.RenderOptions{
-					Globals: map[string]any{
-						"Context":     contextInstructions,
-						"ContextPath": contextPath,
-					},
-				})
-				if err != nil {
-					m.setSessionError(sessionID, fmt.Errorf("failed to render system prompt template: %w", err))
-					return
+			var contextInstructions string
+			var contextPath string
+			contexts := m.ws.Contexts()
+			if len(contexts) > 0 {
+				var parts []string
+				for _, ctxRes := range contexts {
+					if inst := ctxRes.Spec.Instructions; inst != "" {
+						parts = append(parts, inst)
+					}
 				}
-				systemPrompt = rendered
+				contextInstructions = strings.Join(parts, "\n\n")
+				contextPath = contexts[0].Directory
 			}
+
+			rendered, err := prompt.RenderAgent(
+				resolvedAgent,
+				m.ws.WorkspaceSpec(),
+				m.ws.Project(),
+				map[string]any{
+					"Context":     contextInstructions,
+					"ContextPath": contextPath,
+				},
+			)
+			if err != nil {
+				m.setSessionError(sessionID, fmt.Errorf("failed to render system prompt template: %w", err))
+				return
+			}
+			systemPrompt = rendered
 		}
 
 		// Resolve LLM Provider
@@ -672,6 +673,7 @@ func (m *Manager) sendMessage(ctx context.Context, sessionID string, text string
 }
 
 func (m *Manager) setSessionError(sessionID string, err error) {
+	log.Error(fmt.Sprintf("Session error [%s]: %v", sessionID, err))
 	m.mu.Lock()
 	if sess, ok := m.activeSessions[sessionID]; ok {
 		sess.Status = StatusError

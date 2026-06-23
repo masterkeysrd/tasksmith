@@ -23,6 +23,11 @@ func GetBranch(dir string) (string, error) {
 	return runGit(dir, "rev-parse", "--abbrev-ref", "HEAD")
 }
 
+// GetCommit retrieves the latest commit hash (SHA-1) for the repository in the specified directory.
+func GetCommit(dir string) (string, error) {
+	return runGit(dir, "rev-parse", "HEAD")
+}
+
 // GetDiff returns the combined staged and unstaged diff relative to HEAD.
 // If the repository has no commits yet, it falls back to a simple unstaged diff.
 func GetDiff(dir string) (string, error) {

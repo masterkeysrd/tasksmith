@@ -109,8 +109,13 @@ func (s *Service) ListAgents(ctx context.Context, req ListAgentsRequest) (*ListA
 // ListProviders returns a list of model providers in the workspace.
 func (s *Service) ListProviders(ctx context.Context, req ListProvidersRequest) (*ListProvidersResponse, error) {
 	providers := s.ws.Providers()
+	cfg, _ := s.ws.GetWorkspaceConfig(ctx)
+
 	resp := &ListProvidersResponse{
 		Providers: make([]Provider, 0, len(providers)),
+	}
+	if cfg.DefaultProvider != "" {
+		resp.DefaultProvider = cfg.DefaultProvider
 	}
 
 	for _, p := range providers {

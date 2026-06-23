@@ -205,6 +205,43 @@ func (w *Workspace) GetWorkspaceConfig(ctx context.Context) (WorkspaceConfig, er
 	return cfg, nil
 }
 
+// ResolveAgent resolves an agent by ref within this workspace scope, applying
+// recursive inheritance merging.
+func (w *Workspace) ResolveAgent(ctx context.Context, ref string) (*warp.ResolvedAgent, error) {
+	resolver := w.resolver()
+	if resolver == nil {
+		return nil, fmt.Errorf("workspace resolver not available")
+	}
+	switch r := resolver.(type) {
+	case *warp.ScopedRegistry:
+		return r.ResolveAgent(ref)
+	case *warp.Registry:
+		return r.ResolveAgent(ref)
+	default:
+		return nil, fmt.Errorf("unsupported registry type %T", resolver)
+	}
+}
+
+// WorkspaceSpec returns the underlying warp Workspace spec.
+func (w *Workspace) WorkspaceSpec() *warp.Workspace {
+	if w.registry == nil {
+		return nil
+	}
+	return w.registry.WorkspaceSpec()
+}
+
+// Project returns the current project metadata if the workspace is scoped to a project path.
+func (w *Workspace) Project() *warp.Project {
+	if w.registry == nil {
+		return nil
+	}
+	p, ok := w.registry.ProjectFromPath(w.cwd)
+	if !ok {
+		return nil
+	}
+	return p
+}
+
 func (w *Workspace) ResolveDefaults(ctx context.Context) (agentName, providerName, modelName string, err error) {
 	// Default values in case nothing is configured
 	agentName = "main"

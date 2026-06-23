@@ -29,7 +29,8 @@ type ListProvidersRequest struct {
 }
 
 type ListProvidersResponse struct {
-	Providers []Provider `json:"providers"`
+	Providers       []Provider `json:"providers"`
+	DefaultProvider string     `json:"default_provider,omitempty"`
 }
 
 type Provider struct {
