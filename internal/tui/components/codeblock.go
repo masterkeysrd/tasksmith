@@ -67,8 +67,7 @@ var CodeBlock = kitex.FC("CodeBlock", func(props CodeBlockProps) kitex.Node {
 		Display(style.DisplayFlex).
 		FlexDirection(style.FlexColumn).
 		Width(style.Percent(100)).
-		WhiteSpace(style.WhiteSpacePre).
-		Merge(props.Style)
+		WhiteSpace(style.WhiteSpacePre)
 
 	if !props.HideHeader {
 		wrapperStyle = wrapperStyle.
@@ -82,6 +81,8 @@ var CodeBlock = kitex.FC("CodeBlock", func(props CodeBlockProps) kitex.Node {
 	} else if t != nil && !props.Compact {
 		wrapperStyle = wrapperStyle.Background(t.Color.Surface.BaseHover)
 	}
+
+	wrapperStyle = wrapperStyle.Merge(props.Style)
 
 	// Fetch and coalesce lexer
 	lexer := lexers.Get(lang)

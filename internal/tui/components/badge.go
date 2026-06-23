@@ -32,8 +32,7 @@ var ToolBadge = kitex.FCC("ToolBadge", func(props ToolBadgeProps) kitex.Node {
 		AlignSelf(style.AlignStart).
 		Padding(0, 1).
 		Gap(1).
-		Height(style.Cells(1)).
-		MarginVertical(1)
+		Height(style.Cells(1))
 
 	if t != nil {
 		boxStyle = boxStyle.

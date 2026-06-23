@@ -191,7 +191,9 @@ var Markdown = kitex.FC("Markdown", func(props MarkdownProps) kitex.Node {
 						pStyle = pStyle.MarginBottom(1)
 					}
 				} else {
-					pStyle = pStyle.MarginBottom(1)
+					if node.NextSibling() != nil {
+						pStyle = pStyle.MarginBottom(1)
+					}
 				}
 				return kitex.Box(kitex.BoxProps{Style: pStyle}, children...)
 
@@ -217,7 +219,12 @@ var Markdown = kitex.FC("Markdown", func(props MarkdownProps) kitex.Node {
 				if node.Level == 1 {
 					marginBottom = 2
 				}
-				hStyle := style.S().MarginBottom(marginBottom)
+				var hStyle style.Style
+				if node.NextSibling() != nil {
+					hStyle = style.S().MarginBottom(marginBottom)
+				} else {
+					hStyle = style.S()
+				}
 				spanStyle := style.S().Bold(true)
 				if t != nil {
 					spanStyle = spanStyle.Foreground(t.Color.Text.Primary)
@@ -232,9 +239,14 @@ var Markdown = kitex.FC("Markdown", func(props MarkdownProps) kitex.Node {
 					seg := node.Lines().At(i)
 					b.Write(seg.Value(src))
 				}
+				marginBottom := 1
+				if node.NextSibling() == nil {
+					marginBottom = 0
+				}
 				return CodeBlock(CodeBlockProps{
-					Code: strings.TrimRight(b.String(), "\n"),
-					Lang: "code",
+					Code:  strings.TrimRight(b.String(), "\n"),
+					Lang:  "code",
+					Style: style.S().MarginBottom(marginBottom),
 				})
 
 			case *ast.FencedCodeBlock:
@@ -249,9 +261,14 @@ var Markdown = kitex.FC("Markdown", func(props MarkdownProps) kitex.Node {
 						lang = parts[0]
 					}
 				}
+				marginBottom := 1
+				if node.NextSibling() == nil {
+					marginBottom = 0
+				}
 				return CodeBlock(CodeBlockProps{
-					Code: strings.TrimRight(b.String(), "\n"),
-					Lang: lang,
+					Code:  strings.TrimRight(b.String(), "\n"),
+					Lang:  lang,
+					Style: style.S().MarginBottom(marginBottom),
 				})
 
 			case *ast.List:
@@ -267,10 +284,18 @@ var Markdown = kitex.FC("Markdown", func(props MarkdownProps) kitex.Node {
 					qStyle = qStyle.BorderLeft(true, style.SingleBorder(), t.Color.Border.Primary)
 				}
 				innerBox := kitex.Box(kitex.BoxProps{Style: qStyle}, children...)
-				return kitex.Box(kitex.BoxProps{Style: style.S().MarginBottom(1)}, innerBox)
+				marginBottom := 1
+				if node.NextSibling() == nil {
+					marginBottom = 0
+				}
+				return kitex.Box(kitex.BoxProps{Style: style.S().MarginBottom(marginBottom)}, innerBox)
 
 			case *ast.ThematicBreak:
-				tbStyle := style.S().MarginBottom(1)
+				marginBottom := 1
+				if node.NextSibling() == nil {
+					marginBottom = 0
+				}
+				tbStyle := style.S().MarginBottom(marginBottom)
 				if t != nil {
 					tbStyle = tbStyle.Foreground(t.Color.Border.Primary).
 						BorderBottom(true, style.SingleBorder(), t.Color.Border.Primary)
@@ -361,11 +386,15 @@ func renderList(
 		return nil
 	}
 
+	marginBottom := 1
+	if list.NextSibling() == nil {
+		marginBottom = 0
+	}
 	return kitex.Box(kitex.BoxProps{
 		Style: style.S().
 			Display(style.DisplayFlex).
 			FlexDirection(style.FlexColumn).
-			MarginBottom(1).
+			MarginBottom(marginBottom).
 			PaddingLeft(2),
 	}, items...)
 }
@@ -434,7 +463,11 @@ func renderTable(
 		return nil
 	}
 
-	tableStyle := style.S().MarginBottom(1)
+	marginBottom := 1
+	if table.NextSibling() == nil {
+		marginBottom = 0
+	}
+	tableStyle := style.S().MarginBottom(marginBottom)
 	return kitex.Table(kitex.TableProps{Style: tableStyle}, tableChildren...)
 }
 
