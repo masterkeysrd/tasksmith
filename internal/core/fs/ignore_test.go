@@ -92,6 +92,42 @@ func TestIgnorerNonGitDir(t *testing.T) {
 	}
 }
 
+func TestIgnorerPredefinedNamesRecursive(t *testing.T) {
+	dir := t.TempDir()
+
+	// 1. Outside git repo (fallbackRoot)
+	ig, err := NewIgnorer(dir)
+	if err != nil {
+		t.Fatalf("NewIgnorer: %v", err)
+	}
+
+	nestedNodeModules := filepath.Join(dir, "node_modules", "lodash", "package.json")
+	if !ig.ShouldIgnore("package.json", nestedNodeModules, false) {
+		t.Error("expected nested package.json inside node_modules to be ignored recursively outside git repo")
+	}
+
+	nestedGitFile := filepath.Join(dir, ".git", "logs", "HEAD")
+	if !ig.ShouldIgnore("HEAD", nestedGitFile, false) {
+		t.Error("expected nested HEAD inside .git to be ignored recursively outside git repo")
+	}
+
+	normalFile := filepath.Join(dir, "src", "index.js")
+	if ig.ShouldIgnore("index.js", normalFile, false) {
+		t.Error("expected normal src/index.js NOT to be ignored")
+	}
+
+	// 2. Inside git repo (repoRoot)
+	mustMkdir(t, filepath.Join(dir, ".git"))
+	igGit, err := NewIgnorer(filepath.Join(dir, "src"))
+	if err != nil {
+		t.Fatalf("NewIgnorer: %v", err)
+	}
+
+	if !igGit.ShouldIgnore("HEAD", nestedGitFile, false) {
+		t.Error("expected nested HEAD inside .git to be ignored recursively inside git repo")
+	}
+}
+
 // --- helpers ---
 
 func mustMkdir(t *testing.T, path string) {

@@ -42,25 +42,38 @@ type Ignorer interface {
 // enforces the predefined rules.
 func NewIgnorer(dir string) (Ignorer, error) {
 	repoRoot, err := findGitRoot(dir)
-	if err != nil || repoRoot == "" {
-		return &ignorer{}, nil
+
+	// Clean dir path to absolute
+	absDir := dir
+	if abs, err := filepath.Abs(dir); err == nil {
+		absDir = abs
 	}
 
-	patterns, err := loadGitignorePatternsForDir(repoRoot, dir)
+	ignoreAll := isDirIgnored(absDir, repoRoot)
+
+	if err != nil || repoRoot == "" {
+		return &ignorer{scanDir: absDir, ignoreAll: ignoreAll}, nil
+	}
+
+	patterns, err := loadGitignorePatternsForDir(repoRoot, absDir)
 	if err != nil || len(patterns) == 0 {
-		return &ignorer{repoRoot: repoRoot}, nil
+		return &ignorer{repoRoot: repoRoot, scanDir: absDir, ignoreAll: ignoreAll}, nil
 	}
 
 	return &ignorer{
-		matcher:  gitignore.NewMatcher(patterns),
-		repoRoot: repoRoot,
+		matcher:   gitignore.NewMatcher(patterns),
+		repoRoot:  repoRoot,
+		scanDir:   absDir,
+		ignoreAll: ignoreAll,
 	}, nil
 }
 
 // ignorer is the concrete implementation of Ignorer.
 type ignorer struct {
-	matcher  gitignore.Matcher
-	repoRoot string
+	matcher   gitignore.Matcher
+	repoRoot  string
+	scanDir   string
+	ignoreAll bool
 }
 
 // ShouldIgnore implements Ignorer.
@@ -69,17 +82,100 @@ func (ig *ignorer) ShouldIgnore(name, fullPath string, isDir bool) bool {
 		return true
 	}
 
+	if ig.ignoreAll {
+		return true
+	}
+
+	absPath := fullPath
+	if abs, err := filepath.Abs(fullPath); err == nil {
+		absPath = abs
+	}
+
+	if ig.repoRoot != "" {
+		rel, err := filepath.Rel(ig.repoRoot, absPath)
+		if err == nil && !strings.HasPrefix(rel, "..") {
+			parts := strings.Split(filepath.ToSlash(rel), "/")
+			for _, part := range parts {
+				if _, ok := defaultIgnoreNames[part]; ok {
+					return true
+				}
+			}
+		}
+	} else if ig.scanDir != "" {
+		rel, err := filepath.Rel(ig.scanDir, absPath)
+		if err == nil && !strings.HasPrefix(rel, "..") {
+			parts := strings.Split(filepath.ToSlash(rel), "/")
+			for _, part := range parts {
+				if _, ok := defaultIgnoreNames[part]; ok {
+					return true
+				}
+			}
+		}
+	}
+
 	if ig.matcher == nil || ig.repoRoot == "" {
 		return false
 	}
 
-	rel, err := filepath.Rel(ig.repoRoot, fullPath)
+	rel, err := filepath.Rel(ig.repoRoot, absPath)
 	if err != nil {
 		return false
 	}
 
 	parts := strings.Split(filepath.ToSlash(rel), "/")
 	return ig.matcher.Match(parts, isDir)
+}
+
+func isDescendant(path, parent string) bool {
+	rel, err := filepath.Rel(parent, path)
+	if err != nil {
+		return false
+	}
+	return rel == "." || (!strings.HasPrefix(rel, "..") && rel != "")
+}
+
+func isDirIgnored(dir, repoRoot string) bool {
+	if repoRoot != "" {
+		rel, err := filepath.Rel(repoRoot, dir)
+		if err == nil && !strings.HasPrefix(rel, "..") {
+			parts := strings.Split(filepath.ToSlash(rel), "/")
+			for _, part := range parts {
+				if _, ok := defaultIgnoreNames[part]; ok {
+					return true
+				}
+			}
+			return false
+		}
+	}
+
+	cwd, err := os.Getwd()
+	var boundary string
+	if err == nil && isDescendant(dir, cwd) {
+		boundary = cwd
+	} else if home, err := os.UserHomeDir(); err == nil && isDescendant(dir, home) {
+		boundary = home
+	}
+
+	current := dir
+	for {
+		if current == "" || current == "." || current == string(filepath.Separator) {
+			break
+		}
+		if boundary != "" && (current == boundary || isDescendant(boundary, current)) {
+			break
+		}
+		name := filepath.Base(current)
+		if _, ok := defaultIgnoreNames[name]; ok {
+			return true
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			break
+		}
+		current = parent
+	}
+
+	return false
 }
 
 // findGitRoot walks upward from dir until it finds a directory containing .git.
