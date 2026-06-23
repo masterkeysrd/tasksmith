@@ -18,6 +18,8 @@ import (
 	"github.com/masterkeysrd/kite/key"
 	"github.com/masterkeysrd/kite/promise"
 	"github.com/masterkeysrd/kite/style"
+
+	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	"github.com/masterkeysrd/loom/message"
 	"github.com/masterkeysrd/tasksmith/internal/agent/tools"
 	"github.com/masterkeysrd/tasksmith/internal/api"
@@ -232,7 +234,7 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 			windClient.InvalidateQueries(api.GetSessionStateRequest{SessionID: sessionID})
 		}, func(err error) {
 			setSubmitting(false)
-			// Error handling (e.g. log or show message)
+			log.Error(fmt.Sprintf("Failed to send message to backend: %v", err))
 		})
 	}
 

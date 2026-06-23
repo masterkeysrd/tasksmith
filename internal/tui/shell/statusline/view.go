@@ -200,7 +200,7 @@ var Provider = kitex.FC("Provider", func(props ProviderProps) kitex.Node {
 
 	return kitex.Box(kitex.BoxProps{Style: providerStyle},
 		icon.Server,
-		kitex.Text(props.Provider),
+		kitex.Text(fmt.Sprintf(" %s", props.Provider)),
 	)
 })
 
@@ -247,7 +247,7 @@ var Model = kitex.FC("Model", func(props ModelProps) kitex.Node {
 
 	return kitex.Box(kitex.BoxProps{Style: modelStyle},
 		icon.CPU,
-		kitex.Text(fmt.Sprintf("%s [%s]", props.Model, strings.ToUpper(props.ThinkingEffort))),
+		kitex.Text(fmt.Sprintf(" %s [%s]", props.Model, strings.ToUpper(props.ThinkingEffort))),
 	)
 })
 
@@ -280,7 +280,7 @@ var Agent = kitex.FC("Agent", func(props AgentProps) kitex.Node {
 
 	return kitex.Box(kitex.BoxProps{Style: agentStyle},
 		icon.Robot,
-		kitex.Text(props.Agent),
+		kitex.Text(fmt.Sprintf(" %s", props.Agent)),
 	)
 })
 
@@ -317,9 +317,9 @@ var Stats = kitex.FC("Stats", func(props StatsProps) kitex.Node {
 		Display(style.DisplayFlex).
 		FlexDirection(style.FlexRow).
 		AlignItems(style.AlignCenter).
-		Gap(2).
+		Gap(1).
 		Background(bg).
-		PaddingHorizontal(2).
+		PaddingHorizontal(1).
 		Merge(props.Style)
 
 	return kitex.Box(kitex.BoxProps{Style: statsStyle},
@@ -491,7 +491,7 @@ var View = kitex.FCC("StatusLine", func(props Props) kitex.Node {
 
 	lineStyle := style.S().
 		Width(style.Percent(100)).
-		Height(style.Cells(1)).
+		MinHeight(style.Cells(1)).
 		Display(style.DisplayFlex).
 		FlexDirection(style.FlexRow).
 		AlignItems(style.AlignCenter).
@@ -570,7 +570,15 @@ var View = kitex.FCC("StatusLine", func(props Props) kitex.Node {
 
 		children = append(children, leftNodes...)
 		children = append(children, Spacer())
-		children = append(children, rightNodes...)
+
+		// Wrap right-side components with a gap container for spacing between them
+		var rightContainer kitex.Node
+		if len(rightNodes) > 0 {
+			rightContainer = kitex.Box(kitex.BoxProps{
+				Style: style.S().Display(style.DisplayFlex).FlexDirection(style.FlexRow).AlignItems(style.AlignCenter).Gap(1),
+			}, rightNodes...)
+		}
+		children = append(children, rightContainer)
 	}
 
 	return kitex.Box(kitex.BoxProps{Style: lineStyle}, children...)
