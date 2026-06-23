@@ -22,6 +22,19 @@ func LoomTools(handlers *ToolHandlers) ([]*tool.Tool, error) {
 	}
 
 	var list []*tool.Tool
+	if res, ok := resMap["activate_skill"]; ok {
+		t, err := tool.New(
+			"activate_skill",
+			res.Metadata.DisplayName,
+			res.Metadata.Description,
+			handlers.ActivateSkill,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create tool activate_skill: %w", err)
+		}
+		list = append(list, t)
+	}
+
 	if res, ok := resMap["bash"]; ok {
 		t, err := tool.NewStreaming(
 			"bash",
@@ -200,6 +213,19 @@ func LoomTools(handlers *ToolHandlers) ([]*tool.Tool, error) {
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create tool tasks: %w", err)
+		}
+		list = append(list, t)
+	}
+
+	if res, ok := resMap["todos"]; ok {
+		t, err := tool.New(
+			"todos",
+			res.Metadata.DisplayName,
+			res.Metadata.Description,
+			handlers.Todos,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create tool todos: %w", err)
 		}
 		list = append(list, t)
 	}

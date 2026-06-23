@@ -62,8 +62,11 @@ var View = kitex.FC("ShellSidebar", func(props Props) kitex.Node {
 		data.IsConfigured = wsCfg.Data.IsConfigured
 	}
 
-	if sessionState.Data != nil && sessionState.Data.Status != "" {
-		data.ActiveSessionStatus = sessionState.Data.Status
+	if sessionState.Data != nil {
+		if sessionState.Data.Status != "" {
+			data.ActiveSessionStatus = sessionState.Data.Status
+		}
+		data.Todos = sessionState.Data.Todos
 	}
 	if projects.Data != nil {
 		data.Projects = projects.Data.Projects

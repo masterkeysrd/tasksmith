@@ -10,21 +10,6 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/tui/components"
 )
 
-// agentTodo is a mock subtask item shown inside an agent card.
-type agentTodo struct {
-	ID        string
-	Task      string
-	Completed bool
-}
-
-// mockAgentTodos provides sample data to demonstrate the subtask UI.
-var mockAgentTodos = []agentTodo{
-	{ID: "1", Task: "Analyze workspace configuration", Completed: true},
-	{ID: "2", Task: "Generate agent specification", Completed: true},
-	{ID: "3", Task: "Validate tool permissions", Completed: false},
-	{ID: "4", Task: "Initialize agent runtime", Completed: false},
-}
-
 var (
 	agentCardStyle = style.S().
 			Display(style.DisplayFlex).
@@ -58,7 +43,7 @@ var (
 				JustifyContent(style.JustifyCenter)
 )
 
-func agentCard(agent api.Agent) kitex.Node {
+func agentCard(agent api.Agent, todos []api.Todo) kitex.Node {
 	c := useColors()
 
 	task := strings.TrimSpace(agent.Description)
@@ -66,10 +51,9 @@ func agentCard(agent api.Agent) kitex.Node {
 		task = "No description provided."
 	}
 
-	todos := mockAgentTodos
 	doneTodos := 0
 	for _, t := range todos {
-		if t.Completed {
+		if t.Status == "completed" {
 			doneTodos++
 		}
 	}
@@ -139,22 +123,51 @@ func agentCard(agent api.Agent) kitex.Node {
 						Gap(1).
 						Background(c.surface),
 				},
-					kitex.Map(todos, func(todo agentTodo, _ int) kitex.Node {
+					kitex.If(len(todos) == 0, func() kitex.Node {
+						return kitex.Box(kitex.BoxProps{
+							Style: style.S().Foreground(c.muted).Padding(1),
+						}, kitex.Text("No active subtasks."))
+					}),
+					kitex.Map(todos, func(todo api.Todo, _ int) kitex.Node {
 						checkIcon := "󰄱"
 						iconColor := c.subtle
 						textColor := c.muted
-						if todo.Completed {
+						var activeTextNode kitex.Node
+
+						if todo.Status == "completed" {
 							checkIcon = "󰄲"
 							iconColor = c.success
 							textColor = c.subtle
+						} else if todo.Status == "in_progress" {
+							checkIcon = "󰄰"
+							iconColor = c.accent
+							textColor = c.text
+							if todo.ActiveText != "" {
+								activeTextNode = kitex.Box(kitex.BoxProps{
+									Style: style.S().
+										Foreground(c.info).
+										PaddingLeft(3).
+										Italic(true),
+								}, kitex.Text(todo.ActiveText))
+							}
 						}
-						return kitex.Box(kitex.BoxProps{Style: agentTodoRowStyle},
-							kitex.Box(kitex.BoxProps{
-								Style: style.S().Foreground(iconColor),
-							}, kitex.Text(checkIcon)),
-							kitex.Box(kitex.BoxProps{
-								Style: style.S().Foreground(textColor),
-							}, kitex.Text(todo.Task)),
+
+						return kitex.Box(kitex.BoxProps{
+							Style: style.S().
+								Display(style.DisplayFlex).
+								FlexDirection(style.FlexColumn),
+						},
+							kitex.Box(kitex.BoxProps{Style: agentTodoRowStyle},
+								kitex.Box(kitex.BoxProps{
+									Style: style.S().Foreground(iconColor),
+								}, kitex.Text(checkIcon)),
+								kitex.Box(kitex.BoxProps{
+									Style: style.S().Foreground(textColor),
+								}, kitex.Text(todo.Description)),
+							),
+							kitex.If(activeTextNode != nil, func() kitex.Node {
+								return activeTextNode
+							}),
 						)
 					}),
 				),
@@ -185,7 +198,7 @@ func orchestratorPanel(data Data, onCreateAgent func()) kitex.Node {
 		}),
 
 		kitex.Map(data.Agents, func(agent api.Agent, _ int) kitex.Node {
-			return agentCard(agent)
+			return agentCard(agent, data.Todos)
 		}),
 	)
 }

@@ -19,10 +19,10 @@ import (
 	"github.com/masterkeysrd/kite/promise"
 	"github.com/masterkeysrd/kite/style"
 
-	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	"github.com/masterkeysrd/loom/message"
 	"github.com/masterkeysrd/tasksmith/internal/agent/tools"
 	"github.com/masterkeysrd/tasksmith/internal/api"
+	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	tuiapi "github.com/masterkeysrd/tasksmith/internal/tui/api"
 	"github.com/masterkeysrd/tasksmith/internal/tui/components"
 	"github.com/masterkeysrd/tasksmith/internal/tui/components/icon"
@@ -1100,6 +1100,12 @@ var ToolExecution = kitex.FC("ToolExecution", func(props ToolExecutionProps) kit
 	if props.ToolCall != nil && props.ToolCall.Name == "fetch" {
 		return FetchToolWidget(props)
 	}
+	if props.ToolCall != nil && props.ToolCall.Name == "activate_skill" {
+		return ActivateSkillToolWidget(props)
+	}
+	if props.ToolCall != nil && props.ToolCall.Name == "todos" {
+		return TodosToolWidget(props)
+	}
 
 	t := theme.UseTheme()
 	isOpen, setIsOpen := kitex.UseState(true)
@@ -1117,7 +1123,6 @@ var ToolExecution = kitex.FC("ToolExecution", func(props ToolExecutionProps) kit
 	containerStyle := style.S().
 		Display(style.DisplayFlex).
 		FlexDirection(style.FlexColumn).
-		MarginVertical(1).
 		Width(style.Percent(100)).
 		MaxWidth(style.Percent(100)).
 		Overflow(style.OverflowHidden)

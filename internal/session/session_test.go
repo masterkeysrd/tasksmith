@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/masterkeysrd/loom/message"
+	"github.com/masterkeysrd/tasksmith/internal/agent/tools"
 	coredb "github.com/masterkeysrd/tasksmith/internal/core/db"
 	"github.com/masterkeysrd/tasksmith/internal/session"
 )
@@ -97,6 +98,39 @@ func TestSessionManager(t *testing.T) {
 	}
 	if gotS1Updated.ModelName != "gpt-4o" {
 		t.Errorf("expected model 'gpt-4o', got %q", gotS1Updated.ModelName)
+	}
+
+	// Test Todos Persistence
+	todosList, err := manager.ListTodos(ctx, s1.ID)
+	if err != nil {
+		t.Fatalf("failed to list todos initially: %v", err)
+	}
+	if len(todosList) != 0 {
+		t.Errorf("expected 0 todos initially, got %d", len(todosList))
+	}
+
+	testTodos := []tools.Todo{
+		{Description: "Test Task 1", Status: "pending"},
+		{Description: "Test Task 2", Status: "in_progress", ActiveText: "doing tests"},
+	}
+
+	err = manager.UpdateTodos(ctx, s1.ID, testTodos)
+	if err != nil {
+		t.Fatalf("failed to update todos: %v", err)
+	}
+
+	todosListUpdated, err := manager.ListTodos(ctx, s1.ID)
+	if err != nil {
+		t.Fatalf("failed to list todos after update: %v", err)
+	}
+	if len(todosListUpdated) != 2 {
+		t.Fatalf("expected 2 todos, got %d", len(todosListUpdated))
+	}
+	if todosListUpdated[0].Description != "Test Task 1" || todosListUpdated[0].Status != "pending" {
+		t.Errorf("incorrect todo [0]: %+v", todosListUpdated[0])
+	}
+	if todosListUpdated[1].ActiveText != "doing tests" {
+		t.Errorf("incorrect todo [1]: %+v", todosListUpdated[1])
 	}
 
 	// 6. Append messages

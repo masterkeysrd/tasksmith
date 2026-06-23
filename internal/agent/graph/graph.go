@@ -15,7 +15,9 @@ import (
 
 // AgentState represents the state passed between nodes in the agent loop.
 type AgentState struct {
-	Messages message.MessageList `json:"messages"`
+	Messages        message.MessageList `json:"messages"`
+	Todos           []tools.Todo        `json:"todos"`
+	ActivatedSkills []string            `json:"activated_skills"`
 }
 
 // Copy performs a deep copy of AgentState to satisfy the loom graph.State interface.
@@ -24,6 +26,14 @@ func (s AgentState) Copy() AgentState {
 	if s.Messages != nil {
 		copied.Messages = make(message.MessageList, len(s.Messages))
 		copy(copied.Messages, s.Messages)
+	}
+	if s.Todos != nil {
+		copied.Todos = make([]tools.Todo, len(s.Todos))
+		copy(copied.Todos, s.Todos)
+	}
+	if s.ActivatedSkills != nil {
+		copied.ActivatedSkills = make([]string, len(s.ActivatedSkills))
+		copy(copied.ActivatedSkills, s.ActivatedSkills)
 	}
 	return copied
 }
@@ -63,21 +73,24 @@ type InboxProvider interface {
 
 // AgentGraph orchestrates the flow of model invocation.
 type AgentGraph struct {
-	model        LLM
-	container    *tool.Container
-	inbox        InboxProvider
-	systemPrompt string
+	model          LLM
+	container      *tool.Container
+	inbox          InboxProvider
+	systemPrompt   string
+	onTodosUpdated func(ctx context.Context, todos []tools.Todo) error
 }
 
 // Options defines the configurations and dependencies to initialize the AgentGraph.
 type Options struct {
-	Model        LLMModel
-	Workspace    *workspace.Workspace
-	Storage      tools.FileStorage
-	Inbox        InboxProvider
-	TaskManager  *tools.TaskManager
-	SessionID    string
-	SystemPrompt string
+	Model          LLMModel
+	Workspace      *workspace.Workspace
+	Storage        tools.FileStorage
+	Inbox          InboxProvider
+	TaskManager    *tools.TaskManager
+	SessionID      string
+	SystemPrompt   string
+	AgentName      string
+	OnTodosUpdated func(ctx context.Context, todos []tools.Todo) error
 }
 
 // New creates a new AgentGraph orchestrator by loading/binding tools outside of the execution nodes.
@@ -95,7 +108,9 @@ func New(ctx context.Context, opts Options) (*AgentGraph, error) {
 	if opts.Workspace != nil {
 		cwd = opts.Workspace.CWD()
 	}
-	handlers := tools.NewHandlers(opts.Storage, cwd).WithTaskManager(opts.TaskManager, opts.SessionID)
+	handlers := tools.NewHandlers(opts.Storage, cwd).
+		WithTaskManager(opts.TaskManager, opts.SessionID).
+		WithSkillResolver(&skillResolver{ws: opts.Workspace, agentName: opts.AgentName})
 	allLoomTools, err := tools.LoomTools(handlers)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load loom tools: %w", err)
@@ -119,10 +134,11 @@ func New(ctx context.Context, opts Options) (*AgentGraph, error) {
 	}
 
 	return &AgentGraph{
-		model:        boundModel,
-		container:    container,
-		inbox:        opts.Inbox,
-		systemPrompt: opts.SystemPrompt,
+		model:          boundModel,
+		container:      container,
+		inbox:          opts.Inbox,
+		systemPrompt:   opts.SystemPrompt,
+		onTodosUpdated: opts.OnTodosUpdated,
 	}, nil
 }
 
@@ -244,6 +260,26 @@ func (a *AgentGraph) executeTools(ctx context.Context, s AgentState) (graph.Comm
 
 	return graph.Update[AgentState](func(state AgentState) AgentState {
 		state.Messages = append(state.Messages, toolResults...)
+
+		// Apply hooks for successful tool executions
+		for _, res := range toolResults {
+			if tMsg, ok := res.(*message.Tool); ok {
+				if tMsg.IsError {
+					continue
+				}
+				// Find corresponding tool call
+				for _, block := range lastMsg.GetContent() {
+					if tc, ok := block.(*message.ToolCall); ok && tc.ID == tMsg.ToolCallID {
+						if hook, ok := toolStateHooks[tc.Name]; ok {
+							if updateFn, err := hook(ctx, tc.Args, a); err == nil && updateFn != nil {
+								state = updateFn(state)
+							}
+						}
+					}
+				}
+			}
+		}
+
 		return state
 	}), nil
 }

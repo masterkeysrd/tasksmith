@@ -26,6 +26,7 @@ type Data struct {
 	Agents              []api.Agent
 	Providers           []api.Provider
 	Sessions            []api.Session
+	Todos               []api.Todo
 }
 
 // ContentProps configures the presentational sidebar content.

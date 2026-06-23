@@ -179,4 +179,11 @@ type GetSessionStateResponse struct {
 	Status       string            `json:"status"`
 	Error        string            `json:"error,omitempty"`
 	RunningTasks []RunningTaskInfo `json:"running_tasks,omitempty"`
+	Todos        []Todo            `json:"todos,omitempty"`
+}
+
+type Todo struct {
+	Description string `json:"description"`
+	Status      string `json:"status"`
+	ActiveText  string `json:"active_text,omitempty"`
 }

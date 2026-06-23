@@ -2,6 +2,37 @@
 
 package tools
 
+// ActivateSkillArgs defines the arguments for the "activate_skill" tool.
+//
+// # Activate Skill
+//
+// Use this tool to dynamically load specialized domain-specific instructions, conventions, style guides, and scripts into your conversation context.
+//
+// ## When to Call
+// - Look at the **Available Skills** section in your system prompt. Every skill lists a name and a description that acts as a trigger.
+// - If your current objective or any subtask involves the concepts mentioned in a skill's trigger description, you **MUST** call `activate_skill` to load its instructions before proceeding with the task.
+// - Call this tool early in your plan so that the guidelines are active when you write code.
+//
+// ## Interpreting Output
+// - This tool returns the full rendered text of the skill's instructions, which will automatically be injected into your conversation history. Read these instructions carefully.
+// - The tool also returns the absolute directory `path` where the skill is located. You can run scripts from its `scripts/` directory or read files from its `references/` or `assets/` subdirectories by using standard shell/view tools relative to this absolute path.
+type ActivateSkillArgs struct {
+	// Skill: The name of the skill to activate (e.g. 'git-expert').
+	Skill string `json:"skill" jsonschema:"The name of the skill to activate (e.g. 'git-expert')."`
+}
+
+// ActivateSkillOutput defines the output returned by the "activate_skill" tool.
+type ActivateSkillOutput struct {
+	// Instructions: The rendered instructions and guidelines of the activated skill.
+	Instructions string `json:"instructions,omitempty" jsonschema:"The rendered instructions and guidelines of the activated skill."`
+	// Message: A human-readable result or error message.
+	Message string `json:"message,omitempty" jsonschema:"A human-readable result or error message."`
+	// Path: The absolute filesystem directory path where the skill's resources, scripts, and files are stored.
+	Path string `json:"path,omitempty" jsonschema:"The absolute filesystem directory path where the skill's resources, scripts, and files are stored."`
+	// Success: Whether the skill was successfully activated.
+	Success bool `json:"success,omitempty" jsonschema:"Whether the skill was successfully activated."`
+}
+
 // BashArgs defines the arguments for the "bash" tool.
 //
 // Execute a bash command. If it takes longer than wait_ms, it automatically transitions to a background task.
@@ -401,6 +432,50 @@ type TasksOutputTasksItem struct {
 	TaskId string `json:"taskId,omitempty" jsonschema:"The ID of the task."`
 	// Type: The type of task (e.g. bash).
 	Type string `json:"type,omitempty" jsonschema:"The type of task (e.g. bash)."`
+}
+
+// TodosArgs defines the arguments for the "todos" tool.
+//
+// # Manage Subtasks and Todos
+//
+// Use this tool to plan, organize, and update your step-by-step progress checklist for the current session.
+//
+// ## Strategic Guidelines
+// - **Always initialize early:** As soon as you receive your main objective and have planned your technical approach, call `todos` to establish your initial subtask checklist.
+// - **Authoritative Replace-All Strategy:** This tool completely overwrites the checklist on every call. Whenever you want to add, complete, delete, or reorder tasks, you **MUST** provide the entire list of tasks in the order you want them displayed.
+// - **Maintain status in real time:**
+//   - Transition a task's status to `in_progress` when you start working on it.
+//   - Set `active_text` for `in_progress` tasks to give the user a clear hint of what you are doing (e.g. "writing unit tests" or "resolving LSP diagnostics").
+//   - Transition a task's status to `completed` once the code changes are written, compiled, and successfully tested.
+//   - Omit items from the array to delete them.
+//
+// ## Supported Statuses
+// - `pending`: The subtask is planned but execution has not started.
+// - `in_progress`: The subtask is currently being executed. Provide a helpful summary in `active_text`.
+// - `completed`: The subtask is completely done and validated.
+type TodosArgs struct {
+	// Todos: The complete, authoritative list of tasks. It replaces the current task list in its entirety on every update.
+	Todos []TodosArgsTodosItem `json:"todos" jsonschema:"The complete, authoritative list of tasks. It replaces the current task list in its entirety on every update."`
+}
+
+type TodosArgsTodosItem struct {
+	// ActiveText: Optional text describing the current activity for in_progress tasks, e.g. 'writing code' or 'waiting for response from database'.
+	ActiveText string `json:"active_text,omitempty" jsonschema:"Optional text describing the current activity for in_progress tasks, e.g. 'writing code' or 'waiting for response from database'."`
+	// Description: A brief description of the task.
+	Description string `json:"description" jsonschema:"A brief description of the task."`
+	// Status: The status of the task. Must be one of: 'pending', 'in_progress', 'completed'.
+	Status string `json:"status" jsonschema:"The status of the task. Must be one of: 'pending', 'in_progress', 'completed'."`
+}
+
+// TodosOutput defines the output returned by the "todos" tool.
+type TodosOutput struct {
+	Todos []TodosOutputTodosItem `json:"todos,omitempty"`
+}
+
+type TodosOutputTodosItem struct {
+	ActiveText  string `json:"active_text,omitempty"`
+	Description string `json:"description,omitempty"`
+	Status      string `json:"status,omitempty"`
 }
 
 // ViewArgs defines the arguments for the "view" tool.

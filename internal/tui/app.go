@@ -50,19 +50,24 @@ var App = kitex.FC("App", func(props AppProps) kitex.Node {
 // The main workspace view renders inside the Shell.
 var Router = kitex.SimpleFC("Router", func() kitex.Node {
 	wsCfg := queries.UseGetWorkspaceConfig()
+	providers := queries.UseListProviders()
 	activeView, setActiveView := kitex.UseState(string(viewLoading))
 	activeSessionID := active.UseSessionID()
 	windClient := wind.UseClient()
 
 	kitex.UseEffect(func() {
-		if !wsCfg.IsLoading {
-			if wsCfg.Data != nil && wsCfg.Data.IsConfigured {
+		if !wsCfg.IsLoading && !providers.IsLoading {
+			hasConfiguredProvider := providers.Data != nil && len(providers.Data.Providers) > 0
+			hasSelectedProvider := wsCfg.Data != nil && wsCfg.Data.DefaultProvider != ""
+			isConfigured := wsCfg.Data != nil && wsCfg.Data.IsConfigured
+
+			if isConfigured && hasSelectedProvider && hasConfiguredProvider {
 				setActiveView(string(viewWelcome))
 			} else {
 				setActiveView(string(viewSetup))
 			}
 		}
-	}, []any{wsCfg.IsLoading})
+	}, []any{wsCfg.IsLoading, providers.IsLoading, wsCfg.Data, providers.Data})
 
 	switch viewType(activeView()) {
 	case viewLoading:

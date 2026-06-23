@@ -498,6 +498,10 @@ func (m *Manager) sendMessage(ctx context.Context, sessionID string, text string
 			TaskManager:  m.taskMgr,
 			SessionID:    sessionID,
 			SystemPrompt: systemPrompt,
+			AgentName:    agentName,
+			OnTodosUpdated: func(ctx context.Context, todos []tools.Todo) error {
+				return m.UpdateTodos(ctx, sessionID, todos)
+			},
 		})
 		if err != nil {
 			m.setSessionError(sessionID, fmt.Errorf("failed to construct agent graph: %w", err))
@@ -509,9 +513,15 @@ func (m *Manager) sendMessage(ctx context.Context, sessionID string, text string
 			return
 		}
 
+		// Load existing todos from database to initialize graph state if empty
+		existingTodos, _ := m.ListTodos(runCtx, sessionID)
+
 		// Setup input command to load current state and append new message
 		inputCmd := graph.Update[agentgraph.AgentState](func(state agentgraph.AgentState) agentgraph.AgentState {
 			state.Messages = append(state.Messages, msg)
+			if len(state.Todos) == 0 && len(existingTodos) > 0 {
+				state.Todos = existingTodos
+			}
 			return state
 		})
 
@@ -998,4 +1008,29 @@ func createLoomProvider(ctx context.Context, p *warp.ModelProvider) (llm.Provide
 	default:
 		return nil, fmt.Errorf("unknown provider type: %s", p.Spec.Type)
 	}
+}
+
+// ListTodos retrieves the todos for a session from the SQLite store.
+func (m *Manager) ListTodos(ctx context.Context, sessionID string) ([]tools.Todo, error) {
+	sd, err := m.store.GetSession(ctx, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	if sd.Todos == nil || *sd.Todos == "" {
+		return []tools.Todo{}, nil
+	}
+	var todos []tools.Todo
+	if err := json.Unmarshal([]byte(*sd.Todos), &todos); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal session todos: %w", err)
+	}
+	return todos, nil
+}
+
+// UpdateTodos persists the updated list of todos as JSON.
+func (m *Manager) UpdateTodos(ctx context.Context, sessionID string, todos []tools.Todo) error {
+	data, err := json.Marshal(todos)
+	if err != nil {
+		return fmt.Errorf("failed to marshal todos: %w", err)
+	}
+	return m.store.UpdateSessionTodos(ctx, sessionID, string(data))
 }

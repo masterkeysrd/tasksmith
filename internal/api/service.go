@@ -399,9 +399,22 @@ func (s *Service) GetSessionState(ctx context.Context, req GetSessionStateReques
 		}
 	}
 
+	var apiTodos []Todo
+	todos, err := s.sm.ListTodos(ctx, req.SessionID)
+	if err == nil {
+		for _, t := range todos {
+			apiTodos = append(apiTodos, Todo{
+				Description: t.Description,
+				Status:      t.Status,
+				ActiveText:  t.ActiveText,
+			})
+		}
+	}
+
 	return &GetSessionStateResponse{
 		Status:       string(status),
 		Error:        errStr,
 		RunningTasks: runningTasks,
+		Todos:        apiTodos,
 	}, nil
 }

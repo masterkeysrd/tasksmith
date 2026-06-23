@@ -44,7 +44,6 @@ var CollapsibleThinking = kitex.FC("CollapsibleThinking", func(props Collapsible
 	return components.Accordion(components.AccordionProps{
 		Color:   components.PaperHover,
 		Variant: components.PaperOutlined,
-		Style:   style.S().MarginVertical(1),
 	},
 		components.AccordionSummary(components.AccordionSummaryProps{
 			HideExpandIcon: !hasMore,
@@ -290,7 +289,7 @@ var LsToolWidget = kitex.FC("LsToolWidget", func(props ToolExecutionProps) kitex
 
 	// The Accordion Outlined variant handles border + BaseFocus header + BaseHover body.
 	// We override the border color via style to reflect the current status.
-	accordionStyle := style.S().MarginVertical(1)
+	accordionStyle := style.S()
 	if t != nil {
 		accordionStyle = accordionStyle.Border(borderCol)
 	}
@@ -413,7 +412,7 @@ var GlobToolWidget = kitex.FC("GlobToolWidget", func(props ToolExecutionProps) k
 		}
 	}
 
-	accordionStyle := style.S().MarginVertical(1)
+	accordionStyle := style.S()
 	if t != nil {
 		accordionStyle = accordionStyle.Border(borderCol)
 	}
@@ -559,7 +558,7 @@ var GrepToolWidget = kitex.FC("GrepToolWidget", func(props ToolExecutionProps) k
 		}
 	}
 
-	accordionStyle := style.S().MarginVertical(1)
+	accordionStyle := style.S()
 	if t != nil {
 		accordionStyle = accordionStyle.Border(borderCol)
 	}
@@ -1079,7 +1078,6 @@ var BashToolWidget = kitex.FC("BashToolWidget", func(props ToolExecutionProps) k
 	containerStyle := style.S().
 		Display(style.DisplayFlex).
 		FlexDirection(style.FlexColumn).
-		MarginVertical(1).
 		Width(style.Percent(100)).
 		MaxWidth(style.Percent(100)).
 		Overflow(style.OverflowHidden)
@@ -1419,7 +1417,6 @@ var TasksToolWidget = kitex.FC("TasksToolWidget", func(props ToolExecutionProps)
 	containerStyle := style.S().
 		Display(style.DisplayFlex).
 		FlexDirection(style.FlexColumn).
-		MarginVertical(1).
 		Width(style.Percent(100)).
 		MaxWidth(style.Percent(100)).
 		Overflow(style.OverflowHidden)
@@ -1818,7 +1815,7 @@ var WebSearchToolWidget = kitex.FC("WebSearchToolWidget", func(props ToolExecuti
 		}
 	}
 
-	accordionStyle := style.S().MarginVertical(1)
+	accordionStyle := style.S()
 	if t != nil {
 		accordionStyle = accordionStyle.Border(borderCol)
 	}
@@ -2129,7 +2126,6 @@ var DownloadToolWidget = kitex.FC("DownloadToolWidget", func(props ToolExecution
 	containerStyle := style.S().
 		Display(style.DisplayFlex).
 		FlexDirection(style.FlexColumn).
-		MarginVertical(1).
 		Width(style.Percent(100)).
 		MaxWidth(style.Percent(100)).
 		Overflow(style.OverflowHidden)
@@ -2412,3 +2408,301 @@ var FetchToolWidget = kitex.FC("FetchToolWidget", func(props ToolExecutionProps)
 		),
 	)
 })
+
+// ActivateSkillToolWidget renders the result of an activate_skill tool call inline, opening a modal on click.
+var ActivateSkillToolWidget = kitex.FC("ActivateSkillToolWidget", func(props ToolExecutionProps) kitex.Node {
+	t := theme.UseTheme()
+	showModal, setShowModal := kitex.UseState(false)
+
+	tc := props.ToolCall
+	tm := props.ToolMessage
+
+	var skillName string
+	if tc != nil && tc.Args != nil {
+		skillName, _ = tc.Args["skill"].(string)
+	}
+
+	var statusLabel string
+	var iconNode kitex.Node
+	var themeColor color.Color
+	var instructions string
+	var hasInstructions bool
+
+	if t != nil {
+		if tm == nil {
+			statusLabel = fmt.Sprintf("Activating Skill [%s]", skillName)
+			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Info)}, kitex.Text(props.CurrentDots))
+			themeColor = t.Color.Surface.Info
+		} else if tm.IsError {
+			statusLabel = fmt.Sprintf("Error Activating Skill [%s]", skillName)
+			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Error)}, icon.Error)
+			themeColor = t.Color.Text.Error
+		} else {
+			out, ok := parseStructuredOutput[tools.ActivateSkillOutput](tm.StructuredContent)
+			if ok && out.Success {
+				statusLabel = fmt.Sprintf("Activated Skill [%s]", skillName)
+				iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Success)}, icon.Checkmark)
+				themeColor = t.Color.Surface.Success
+				instructions = out.Instructions
+				hasInstructions = instructions != ""
+			} else {
+				statusLabel = fmt.Sprintf("Failed to Activate Skill [%s]", skillName)
+				iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Error)}, icon.Error)
+				themeColor = t.Color.Text.Error
+			}
+		}
+	}
+
+	var onClick func()
+	if hasInstructions {
+		onClick = func() { setShowModal(true) }
+	}
+
+	badgeNode := components.ToolBadge(components.ToolBadgeProps{
+		Icon:    iconNode,
+		Label:   statusLabel,
+		Color:   themeColor,
+		OnClick: onClick,
+	})
+
+	return kitex.Fragment(
+		badgeNode,
+		components.Modal(components.ModalProps{
+			IsOpen:  showModal(),
+			Title:   kitex.Text(fmt.Sprintf("Instructions for %s Skill", skillName)),
+			OnClose: func() { setShowModal(false) },
+		},
+			kitex.If(showModal() && hasInstructions, func() kitex.Node {
+				return components.Markdown(components.MarkdownProps{
+					Source: instructions,
+				})
+			}),
+		),
+	)
+})
+
+type localTodo struct {
+	Description string
+	Status      string
+	ActiveText  string
+}
+
+func todoRow(t *theme.Scheme, description string, status string, activeText string) kitex.Node {
+	checkIcon := "󰄱"
+	var iconColor color.Color
+	var textColor color.Color
+	var activeTextNode kitex.Node
+
+	if t != nil {
+		iconColor = t.Color.Text.Tertiary
+		textColor = t.Color.Text.Secondary
+
+		if status == "completed" {
+			checkIcon = "󰄲"
+			iconColor = t.Color.Surface.Success
+			textColor = t.Color.Text.Secondary
+		} else if status == "in_progress" {
+			checkIcon = "󰄰"
+			iconColor = t.Color.Surface.Info
+			textColor = t.Color.Text.Primary
+			if activeText != "" {
+				activeTextNode = kitex.Box(kitex.BoxProps{
+					Style: style.S().
+						Foreground(t.Color.Surface.Info).
+						PaddingLeft(3).
+						Italic(true),
+				}, kitex.Text(activeText))
+			}
+		}
+	}
+
+	rowStyle := style.S().
+		Display(style.DisplayFlex).
+		AlignItems(style.AlignCenter).
+		Gap(1)
+
+	var iconSpan kitex.Node
+	if t != nil {
+		iconSpan = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(iconColor)}, kitex.Text(checkIcon))
+	} else {
+		iconSpan = kitex.Text(checkIcon)
+	}
+
+	var textSpan kitex.Node
+	if t != nil {
+		textSpan = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(textColor)}, kitex.Text(description))
+	} else {
+		textSpan = kitex.Text(description)
+	}
+
+	return kitex.Box(kitex.BoxProps{
+		Style: style.S().
+			Display(style.DisplayFlex).
+			FlexDirection(style.FlexColumn),
+	},
+		kitex.Box(kitex.BoxProps{Style: rowStyle},
+			iconSpan,
+			textSpan,
+		),
+		kitex.If(activeTextNode != nil, func() kitex.Node {
+			return activeTextNode
+		}),
+	)
+}
+
+// TodosToolWidget renders the list of subtasks as a collapsible accordion showing the in-progress status.
+var TodosToolWidget = kitex.FC("TodosToolWidget", func(props ToolExecutionProps) kitex.Node {
+	t := theme.UseTheme()
+
+	tc := props.ToolCall
+	tm := props.ToolMessage
+
+	var todos []localTodo
+	if tm != nil && !tm.IsError {
+		out, ok := parseStructuredOutput[tools.TodosOutput](tm.StructuredContent)
+		if ok {
+			for _, item := range out.Todos {
+				todos = append(todos, localTodo{
+					Description: item.Description,
+					Status:      item.Status,
+					ActiveText:  item.ActiveText,
+				})
+			}
+		}
+	}
+	if len(todos) == 0 && tc != nil && tc.Args != nil {
+		inputArgs, ok := parseStructuredOutput[tools.TodosArgs](tc.Args)
+		if ok {
+			for _, item := range inputArgs.Todos {
+				todos = append(todos, localTodo{
+					Description: item.Description,
+					Status:      item.Status,
+					ActiveText:  item.ActiveText,
+				})
+			}
+		}
+	}
+
+	// Calculate counts and identify active/in-progress task
+	pendings := 0
+	inProgress := 0
+	completed := 0
+	var activeTaskDesc string
+
+	for _, item := range todos {
+		switch item.Status {
+		case "pending":
+			pendings++
+		case "in_progress":
+			inProgress++
+			if activeTaskDesc == "" {
+				activeTaskDesc = item.Description
+			}
+		case "completed":
+			completed++
+		}
+	}
+
+	// Build status counts suffix
+	var countParts []string
+	if completed > 0 {
+		countParts = append(countParts, fmt.Sprintf("%d completed", completed))
+	}
+	if inProgress > 0 {
+		countParts = append(countParts, fmt.Sprintf("%d in progress", inProgress))
+	}
+	if pendings > 0 {
+		countParts = append(countParts, fmt.Sprintf("%d pending", pendings))
+	}
+
+	var statusLabel string
+	var iconNode kitex.Node
+	var borderCol color.Color
+
+	if t != nil {
+		if tm == nil {
+			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Info)}, kitex.Text(props.CurrentDots))
+			borderCol = t.Color.Surface.Info
+		} else if tm.IsError {
+			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Error)}, icon.Error)
+			borderCol = t.Color.Text.Error
+		} else {
+			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Success)}, icon.Checkmark)
+			borderCol = t.Color.Surface.Success
+		}
+	}
+
+	// Build label text: e.g. "Checklist: Active: \"Implement plan\" (2 completed, 1 pending)"
+	var prefix string
+	if tm == nil {
+		prefix = "Updating Checklist"
+	} else if tm.IsError {
+		prefix = "Checklist Error"
+	} else {
+		prefix = "Checklist"
+	}
+
+	if activeTaskDesc != "" {
+		statusLabel = fmt.Sprintf("%s: Active: %q", prefix, activeTaskDesc)
+	} else {
+		statusLabel = prefix
+	}
+
+	if len(countParts) > 0 {
+		statusLabel = fmt.Sprintf("%s (%s)", statusLabel, strings.Join(countParts, ", "))
+	} else {
+		statusLabel = fmt.Sprintf("%s (empty)", statusLabel)
+	}
+
+	accordionStyle := style.S()
+	if t != nil {
+		accordionStyle = accordionStyle.Border(borderCol)
+	}
+
+	return components.Accordion(components.AccordionProps{
+		Color:           components.PaperHover,
+		Variant:         components.PaperOutlined,
+		DefaultExpanded: false,
+		Style:           accordionStyle,
+	},
+		components.AccordionSummary(components.AccordionSummaryProps{
+			HideExpandIcon: len(todos) == 0,
+			EndContent: kitex.If(len(todos) > 0, func() kitex.Node {
+				var fg color.Color
+				if t != nil {
+					fg = t.Color.Text.Secondary
+				}
+				return kitex.Span(kitex.SpanProps{Style: style.S().Foreground(fg)},
+					kitex.Text("Click to view tasks"),
+				)
+			}),
+		},
+			kitex.Box(kitex.BoxProps{
+				Style: style.S().
+					Display(style.DisplayFlex).
+					FlexDirection(style.FlexRow).
+					AlignItems(style.AlignCenter).
+					Gap(1),
+			},
+				iconNode,
+				kitex.Span(kitex.SpanProps{Style: style.S().Bold(true)}, kitex.Text(statusLabel)),
+			),
+		),
+		components.AccordionDetails(components.AccordionDetailsProps{},
+			kitex.If(len(todos) > 0, func() kitex.Node {
+				rows := make([]kitex.Node, len(todos))
+				for i, item := range todos {
+					rows[i] = todoRow(t, item.Description, item.Status, item.ActiveText)
+				}
+				return kitex.Box(kitex.BoxProps{
+					Style: style.S().
+						Display(style.DisplayFlex).
+						FlexDirection(style.FlexColumn).
+						Padding(1).
+						Gap(0),
+				}, rows...)
+			}),
+		),
+	)
+})
+

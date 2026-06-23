@@ -14,6 +14,7 @@ type SessionData struct {
 	AgentName    *string   `db:"agent_name"`
 	ProviderName *string   `db:"provider_name"`
 	ModelName    *string   `db:"model_name"`
+	Todos        *string   `db:"todos"`
 	CreatedAt    time.Time `db:"created_at"`
 	UpdatedAt    time.Time `db:"updated_at"`
 }
@@ -42,6 +43,7 @@ type Store interface {
 	ListSessions(ctx context.Context) ([]SessionData, error)
 	RenameSession(ctx context.Context, id, title string) error
 	UpdateSessionConfig(ctx context.Context, id string, cfg SessionConfig) error
+	UpdateSessionTodos(ctx context.Context, id string, todosJSON string) error
 	ArchiveSession(ctx context.Context, id string) error
 	DeleteSession(ctx context.Context, id string) error
 
