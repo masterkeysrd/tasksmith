@@ -60,8 +60,17 @@ func (app *Application) Run(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("failed to initialize session store: %w", err)
 	}
+
+	metricsDB, err := coredb.InitMetricsDB()
+	if err != nil {
+		return fmt.Errorf("failed to initialize metrics database: %w", err)
+	}
+	app.AddCloser(func(ctx context.Context) error {
+		return metricsDB.Close()
+	})
+
 	app.ws = workspace.New(app.opts.CWD)
-	sessionMgr := session.NewManager(store, app.ws)
+	sessionMgr := session.NewManager(store, app.ws, metricsDB)
 	app.api = api.NewService(app.ws, sessionMgr)
 
 	log.Info("Starting TaskSmith application",

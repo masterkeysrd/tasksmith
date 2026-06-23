@@ -6,6 +6,7 @@ import (
 
 	"github.com/masterkeysrd/kite/extras/kitex"
 	"github.com/masterkeysrd/kite/style"
+	"github.com/masterkeysrd/tasksmith/internal/api"
 	"github.com/masterkeysrd/tasksmith/internal/tui/components"
 	"github.com/masterkeysrd/tasksmith/internal/tui/components/icon"
 )
@@ -149,10 +150,41 @@ func sidebarFooter(data Data) kitex.Node {
 	contextValue := "0%"
 	if data.IsConfigured {
 		statusLabel = " SYS: READY"
-		total := len(data.AuthorizedTools)
-		if total > 0 {
-			contextValue = fmt.Sprintf("%d%%", (countEnabledTools(data.AuthorizedTools)*100)/total)
+
+		// Calculate context usage percentage
+		var activeSession *api.Session
+		for _, s := range data.Sessions {
+			if s.ID == data.ActiveSessionID {
+				sess := s
+				activeSession = &sess
+				break
+			}
 		}
+
+		tokenLimit := 131072
+		tokensUsed := 0
+
+		if activeSession != nil {
+			for _, p := range data.Providers {
+				if p.Name == activeSession.ProviderName {
+					for _, m := range p.Models {
+						if (m.ID == activeSession.ModelName || m.Name == activeSession.ModelName) && m.ContextWindow > 0 {
+							tokenLimit = m.ContextWindow
+						}
+					}
+				}
+			}
+			if activeSession.LastTurnMetrics != nil {
+				tokensUsed = activeSession.LastTurnMetrics.TotalTokens
+			}
+		}
+
+		usedPercent := int(float64(tokensUsed) * 100.0 / float64(tokenLimit))
+		if usedPercent > 100 {
+			usedPercent = 100
+		}
+
+		contextValue = fmt.Sprintf("%d%%", usedPercent)
 	}
 	if !data.IsConfigured {
 		statusLabel = " SYS: SETUP"

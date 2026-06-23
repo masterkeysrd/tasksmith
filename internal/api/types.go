@@ -45,9 +45,10 @@ type Provider struct {
 }
 
 type Model struct {
-	ID    string `json:"id"`
-	Name  string `json:"name"`
-	Label string `json:"label"`
+	ID            string `json:"id"`
+	Name          string `json:"name"`
+	Label         string `json:"label"`
+	ContextWindow int    `json:"context_window"`
 }
 
 type ListProvidersPresetsRequest struct {
@@ -104,13 +105,30 @@ type ListSessionsResponse struct {
 }
 
 type Session struct {
-	ID           string `json:"id"`
-	Title        string `json:"title"`
-	AgentName    string `json:"agent_name"`
-	ProviderName string `json:"provider_name"`
-	ModelName    string `json:"model_name"`
-	CreatedAt    string `json:"created_at"`
-	UpdatedAt    string `json:"updated_at"`
+	ID              string          `json:"id"`
+	Title           string          `json:"title"`
+	AgentName       string          `json:"agent_name"`
+	ProviderName    string          `json:"provider_name"`
+	ModelName       string          `json:"model_name"`
+	LastTurnMetrics *SessionMetrics `json:"last_turn_metrics,omitempty"`
+	CreatedAt       string          `json:"created_at"`
+	UpdatedAt       string          `json:"updated_at"`
+}
+
+type SessionMetrics struct {
+	SystemTokens               int     `json:"system_tokens"`
+	ToolsTokens                int     `json:"tools_tokens"`
+	ToolResultTokens           int     `json:"tool_result_tokens"`
+	WorkspaceFileTokens        int     `json:"workspace_file_tokens"`
+	ChatTokens                 int     `json:"chat_tokens"`
+	PromptTokens               int     `json:"prompt_tokens"`
+	CompletionTokens           int     `json:"completion_tokens"`
+	TotalTokens                int     `json:"total_tokens"`
+	EstimatedCostUSD           float64 `json:"estimated_cost_usd"`
+	CumulativePromptTokens     int     `json:"cumulative_prompt_tokens"`
+	CumulativeCompletionTokens int     `json:"cumulative_completion_tokens"`
+	CumulativeTotalTokens      int     `json:"cumulative_total_tokens"`
+	CumulativeCostUSD          float64 `json:"cumulative_cost_usd"`
 }
 
 type CreateSessionRequest struct {
@@ -178,6 +196,7 @@ type RunningTaskInfo struct {
 type GetSessionStateResponse struct {
 	Status       string            `json:"status"`
 	Error        string            `json:"error,omitempty"`
+	IsGenerating bool              `json:"is_generating"`
 	RunningTasks []RunningTaskInfo `json:"running_tasks,omitempty"`
 	Todos        []Todo            `json:"todos,omitempty"`
 }

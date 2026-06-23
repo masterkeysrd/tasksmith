@@ -7,6 +7,7 @@ import (
 
 	"github.com/masterkeysrd/kite/extras/kitex"
 	"github.com/masterkeysrd/kite/style"
+	"github.com/masterkeysrd/tasksmith/internal/api"
 	"github.com/masterkeysrd/tasksmith/internal/tui/active"
 	"github.com/masterkeysrd/tasksmith/internal/tui/components/icon"
 	"github.com/masterkeysrd/tasksmith/internal/tui/mode"
@@ -427,11 +428,35 @@ type Props struct {
 	Children []kitex.Node
 }
 
-func renderFragment(f plugin.Fragment, state plugin.State, sessionID string, activeAgent, activeProvider, activeModel string) kitex.Node {
-	inputTokens := 25100
-	outputTokens := 10400
-	costValue := 0.021
+func renderFragment(f plugin.Fragment, state plugin.State, sessionID string, activeAgent, activeProvider, activeModel string, metrics *api.SessionMetrics) kitex.Node {
+	inputTokens := 0
+	outputTokens := 0
+	costValue := 0.0
 	thinkingEffort := "off"
+
+	if metrics != nil {
+		inputTokens = metrics.CumulativePromptTokens
+		if inputTokens == 0 {
+			inputTokens = metrics.PromptTokens
+		}
+
+		outputTokens = metrics.CumulativeCompletionTokens
+		if outputTokens == 0 {
+			outputTokens = metrics.CompletionTokens
+		}
+
+		if inputTokens == 0 && outputTokens == 0 {
+			inputTokens = metrics.CumulativeTotalTokens
+			if inputTokens == 0 {
+				inputTokens = metrics.TotalTokens
+			}
+		}
+
+		costValue = metrics.CumulativeCostUSD
+		if costValue == 0 {
+			costValue = metrics.EstimatedCostUSD
+		}
+	}
 
 	switch f.Type {
 	case "builtin":
@@ -502,6 +527,7 @@ var View = kitex.FCC("StatusLine", func(props Props) kitex.Node {
 	agentName := ""
 	providerName := ""
 	modelName := ""
+	var metrics *api.SessionMetrics
 
 	if sessionsQuery.Data != nil && sessionID != "" {
 		for _, s := range sessionsQuery.Data.Sessions {
@@ -509,6 +535,7 @@ var View = kitex.FCC("StatusLine", func(props Props) kitex.Node {
 				agentName = s.AgentName
 				providerName = s.ProviderName
 				modelName = s.ModelName
+				metrics = s.LastTurnMetrics
 				break
 			}
 		}
@@ -556,14 +583,14 @@ var View = kitex.FCC("StatusLine", func(props Props) kitex.Node {
 	} else {
 		var leftNodes []kitex.Node
 		for _, f := range state.Config.Left {
-			if node := renderFragment(f, state, sessionID, agentName, providerLabel, modelLabel); node != nil {
+			if node := renderFragment(f, state, sessionID, agentName, providerLabel, modelLabel, metrics); node != nil {
 				leftNodes = append(leftNodes, node)
 			}
 		}
 
 		var rightNodes []kitex.Node
 		for _, f := range state.Config.Right {
-			if node := renderFragment(f, state, sessionID, agentName, providerLabel, modelLabel); node != nil {
+			if node := renderFragment(f, state, sessionID, agentName, providerLabel, modelLabel, metrics); node != nil {
 				rightNodes = append(rightNodes, node)
 			}
 		}

@@ -127,9 +127,10 @@ func (s *Service) ListProviders(ctx context.Context, req ListProvidersRequest) (
 		models := make([]Model, 0, len(p.Spec.Models))
 		for _, m := range p.Spec.Models {
 			models = append(models, Model{
-				ID:    m.ID,
-				Name:  m.Name,
-				Label: m.Label,
+				ID:            m.ID,
+				Name:          m.Name,
+				Label:         m.Label,
+				ContextWindow: m.Limits.Context,
 			})
 		}
 
@@ -170,9 +171,10 @@ func (s *Service) ListProvidersPresets(ctx context.Context, req ListProvidersPre
 		models := make([]Model, 0, len(p.Spec.Models))
 		for _, m := range p.Spec.Models {
 			models = append(models, Model{
-				ID:    m.ID,
-				Name:  m.Name,
-				Label: m.Label,
+				ID:            m.ID,
+				Name:          m.Name,
+				Label:         m.Label,
+				ContextWindow: m.Limits.Context,
 			})
 		}
 
@@ -247,14 +249,34 @@ func (s *Service) ListSessions(ctx context.Context, req ListSessionsRequest) (*L
 		Sessions: make([]Session, len(sessions)),
 	}
 	for i, sess := range sessions {
+		var apiMetrics *SessionMetrics
+		if sess.LastTurnMetrics != nil {
+			apiMetrics = &SessionMetrics{
+				SystemTokens:               sess.LastTurnMetrics.SystemTokens,
+				ToolsTokens:                sess.LastTurnMetrics.ToolsTokens,
+				ToolResultTokens:           sess.LastTurnMetrics.ToolResultTokens,
+				WorkspaceFileTokens:        sess.LastTurnMetrics.WorkspaceFileTokens,
+				ChatTokens:                 sess.LastTurnMetrics.ChatTokens,
+				PromptTokens:               sess.LastTurnMetrics.PromptTokens,
+				CompletionTokens:           sess.LastTurnMetrics.CompletionTokens,
+				TotalTokens:                sess.LastTurnMetrics.TotalTokens,
+				EstimatedCostUSD:           sess.LastTurnMetrics.EstimatedCostUSD,
+				CumulativePromptTokens:     sess.LastTurnMetrics.CumulativePromptTokens,
+				CumulativeCompletionTokens: sess.LastTurnMetrics.CumulativeCompletionTokens,
+				CumulativeTotalTokens:      sess.LastTurnMetrics.CumulativeTotalTokens,
+				CumulativeCostUSD:          sess.LastTurnMetrics.CumulativeCostUSD,
+			}
+		}
+
 		resp.Sessions[i] = Session{
-			ID:           sess.ID,
-			Title:        sess.Title,
-			AgentName:    sess.AgentName,
-			ProviderName: sess.ProviderName,
-			ModelName:    sess.ModelName,
-			CreatedAt:    sess.CreatedAt.Format(time.RFC3339),
-			UpdatedAt:    sess.UpdatedAt.Format(time.RFC3339),
+			ID:              sess.ID,
+			Title:           sess.Title,
+			AgentName:       sess.AgentName,
+			ProviderName:    sess.ProviderName,
+			ModelName:       sess.ModelName,
+			LastTurnMetrics: apiMetrics,
+			CreatedAt:       sess.CreatedAt.Format(time.RFC3339),
+			UpdatedAt:       sess.UpdatedAt.Format(time.RFC3339),
 		}
 	}
 	return resp, nil
@@ -384,7 +406,7 @@ func (s *Service) GetSessionState(ctx context.Context, req GetSessionStateReques
 	if s.sm == nil {
 		return &GetSessionStateResponse{Status: "idle"}, nil
 	}
-	status, errStr := s.sm.GetSessionState(req.SessionID)
+	status, errStr, isGen := s.sm.GetSessionState(req.SessionID)
 
 	var runningTasks []RunningTaskInfo
 	tasks := s.sm.ListTasks(req.SessionID)
@@ -414,6 +436,7 @@ func (s *Service) GetSessionState(ctx context.Context, req GetSessionStateReques
 	return &GetSessionStateResponse{
 		Status:       string(status),
 		Error:        errStr,
+		IsGenerating: isGen,
 		RunningTasks: runningTasks,
 		Todos:        apiTodos,
 	}, nil

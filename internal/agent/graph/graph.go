@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/masterkeysrd/loom/graph"
 	"github.com/masterkeysrd/loom/llm"
@@ -248,7 +249,11 @@ func (a *AgentGraph) executeTools(ctx context.Context, s AgentState) (graph.Comm
 		if tc, ok := block.(*message.ToolCall); ok {
 			var toolMsg *message.Tool
 			toolCallCtx := context.WithValue(ctx, "tool_call_id", tc.ID)
+
+			start := time.Now()
 			toolResp, err := a.container.Call(toolCallCtx, tc)
+			execTime := time.Since(start).Milliseconds()
+
 			if err != nil {
 				toolMsg = &message.Tool{
 					ToolCallID: tc.ID,
@@ -259,6 +264,14 @@ func (a *AgentGraph) executeTools(ctx context.Context, s AgentState) (graph.Comm
 			} else {
 				toolMsg = toolResp
 			}
+
+			meta := toolMsg.GetMetadata()
+			if meta == nil {
+				meta = make(map[string]any)
+			}
+			meta["execution_time_ms"] = execTime
+			toolMsg.SetMetadata(meta)
+
 			toolResults = append(toolResults, toolMsg)
 
 			if hasWriter {

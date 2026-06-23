@@ -120,6 +120,7 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 	kitex.UseInterval(func() {
 		if sending || hasRunningTasks {
 			windClient.InvalidateQueries(api.GetSessionStateRequest{SessionID: sessionID})
+			windClient.InvalidateQueries(api.ListSessionsRequest{})
 		}
 	}, 1000*time.Millisecond, []any{sending, hasRunningTasks, sessionID})
 
@@ -127,6 +128,7 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 	kitex.UseEffect(func() {
 		if !sending {
 			windClient.InvalidateQueries(api.GetSessionMessagesRequest{SessionID: sessionID})
+			windClient.InvalidateQueries(api.ListSessionsRequest{}) // Update sidebar session states (like metrics)
 		}
 	}, []any{sending, sessionID})
 
@@ -303,8 +305,44 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 							}
 						}
 					}
-					nodes := renderBubbles(messages, toolResponses, currentDots, oneDotCurrentDots, mainAgentName)
-					if statusNode := renderAgentStatus(t, sending, thinkingTime(), lastFinishedTime(), currentDots); statusNode != nil {
+					var isGenerating bool
+					if stateQuery.Data != nil {
+						isGenerating = stateQuery.Data.IsGenerating
+					}
+					nodes := renderBubbles(messages, toolResponses, currentDots, oneDotCurrentDots, mainAgentName, isGenerating, thinkingTime())
+
+					var runPromptTokens, runCompletionTokens, runTotalTokens int
+					for i := len(messages) - 1; i >= 0; i-- {
+						msg := messages[i]
+						if msg.Role() == message.RoleUser {
+							break
+						}
+						if asstMsg, ok := msg.(*message.Assistant); ok {
+							if asstMsg.Metrics != nil {
+								runPromptTokens += asstMsg.Metrics.Tokens.Input
+								runCompletionTokens += asstMsg.Metrics.Tokens.Output
+								runTotalTokens += asstMsg.Metrics.TotalTokens
+							} else if meta := asstMsg.GetMetadata(); meta != nil {
+								if promptToks, ok := meta["prompt_tokens"].(int); ok {
+									runPromptTokens += promptToks
+								} else if promptToksFloat, ok := meta["prompt_tokens"].(float64); ok {
+									runPromptTokens += int(promptToksFloat)
+								}
+								if compToks, ok := meta["completion_tokens"].(int); ok {
+									runCompletionTokens += compToks
+								} else if compToksFloat, ok := meta["completion_tokens"].(float64); ok {
+									runCompletionTokens += int(compToksFloat)
+								}
+								if totalToks, ok := meta["total_tokens"].(int); ok {
+									runTotalTokens += totalToks
+								} else if totalToksFloat, ok := meta["total_tokens"].(float64); ok {
+									runTotalTokens += int(totalToksFloat)
+								}
+							}
+						}
+					}
+
+					if statusNode := renderAgentStatus(t, sending, thinkingTime(), lastFinishedTime(), currentDots, runPromptTokens, runCompletionTokens, runTotalTokens, isGenerating); statusNode != nil {
 						nodes = append(nodes, statusNode)
 					}
 					if queuedWidget := renderQueuedMessages(t, queuedMessages); queuedWidget != nil {
@@ -495,7 +533,9 @@ var Composer = kitex.FC("Composer", func(props ComposerProps) kitex.Node {
 })
 
 type CollapsibleThinkingProps struct {
-	Content string
+	Content  string
+	Duration time.Duration
+	Tokens   int
 }
 
 type BubbleProps struct {
@@ -510,6 +550,9 @@ type BubbleProps struct {
 	TaskError            string
 	AgentName            string
 	MainAgentName        string
+	TokensInput          int
+	TokensOutput         int
+	TokensTotal          int
 }
 
 var Bubble = kitex.FC("Bubble", func(props BubbleProps) kitex.Node {
@@ -731,6 +774,29 @@ var Bubble = kitex.FC("Bubble", func(props BubbleProps) kitex.Node {
 		kitex.Text(timestamp),
 	)
 
+	// Add right-aligned dimmed token metrics if present
+	if props.TokensInput > 0 || props.TokensOutput > 0 || props.TokensTotal > 0 {
+		var tokenStr string
+		if props.TokensInput > 0 || props.TokensOutput > 0 {
+			tokenStr = fmt.Sprintf("↑ %s ↓ %s", formatTokens(props.TokensInput), formatTokens(props.TokensOutput))
+		} else {
+			tokenStr = fmt.Sprintf("%s TOTAL", formatTokens(props.TokensTotal))
+		}
+
+		tokenStyle := style.S().Foreground(t.Color.Text.Tertiary).Italic(true)
+		headerContainerStyle := style.S().
+			Display(style.DisplayFlex).
+			FlexDirection(style.FlexRow).
+			AlignItems(style.AlignCenter).
+			JustifyContent(style.JustifyBetween).
+			Width(style.Percent(100))
+
+		headerNode = kitex.Box(kitex.BoxProps{Style: headerContainerStyle},
+			headerNode,
+			kitex.Box(kitex.BoxProps{Style: tokenStyle}, kitex.Text(tokenStr)),
+		)
+	}
+
 	return kitex.Box(kitex.BoxProps{
 		Style: style.S().
 			Width(style.Percent(100)).
@@ -759,6 +825,8 @@ type MessageProps struct {
 	ToolResponses     map[string]*message.Tool
 	CurrentDots       string
 	OneDotCurrentDots string
+	ReasoningTokens   int
+	ThinkingDuration  time.Duration
 }
 
 func getToolOutput(content message.Content) string {
@@ -1306,7 +1374,11 @@ var Message = kitex.FC("Message", func(props MessageProps) kitex.Node {
 				}
 			case *message.ThinkingBlock:
 				if strings.TrimSpace(b.Thinking) != "" {
-					node = CollapsibleThinking(CollapsibleThinkingProps{Content: b.Thinking})
+					node = CollapsibleThinking(CollapsibleThinkingProps{
+						Content:  b.Thinking,
+						Duration: props.ThinkingDuration,
+						Tokens:   props.ReasoningTokens,
+					})
 				}
 			case *message.ToolCall:
 				var toolMsg *message.Tool
@@ -1418,7 +1490,7 @@ func isSystemNotification(msg message.Message) bool {
 	return ok && val
 }
 
-func renderBubbles(messages message.MessageList, toolResponses map[string]*message.Tool, currentDots string, oneDotCurrentDots string, mainAgentName string) []kitex.Node {
+func renderBubbles(messages message.MessageList, toolResponses map[string]*message.Tool, currentDots string, oneDotCurrentDots string, mainAgentName string, isGenerating bool, liveThinkingTime int) []kitex.Node {
 	if len(messages) == 0 {
 		return nil
 	}
@@ -1429,7 +1501,11 @@ func renderBubbles(messages message.MessageList, toolResponses map[string]*messa
 
 	flush := func() {
 		if len(currentGroup) > 0 {
-			if node := createBubbleNode(currentGroupRole, currentGroup, toolResponses, currentDots, oneDotCurrentDots, mainAgentName); node != nil {
+			groupIsGenerating := false
+			if isGenerating && len(messages) > 0 && currentGroup[len(currentGroup)-1] == messages[len(messages)-1] {
+				groupIsGenerating = true
+			}
+			if node := createBubbleNode(currentGroupRole, currentGroup, toolResponses, currentDots, oneDotCurrentDots, mainAgentName, groupIsGenerating, liveThinkingTime); node != nil {
 				nodes = append(nodes, node)
 			}
 		}
@@ -1467,7 +1543,7 @@ func renderBubbles(messages message.MessageList, toolResponses map[string]*messa
 	return nodes
 }
 
-func createBubbleNode(role message.Role, msgs []message.Message, toolResponses map[string]*message.Tool, currentDots string, oneDotCurrentDots string, mainAgentName string) kitex.Node {
+func createBubbleNode(role message.Role, msgs []message.Message, toolResponses map[string]*message.Tool, currentDots string, oneDotCurrentDots string, mainAgentName string, isGenerating bool, liveThinkingTime int) kitex.Node {
 	timestamp := ""
 	var msgAgentName string
 	if len(msgs) > 0 {
@@ -1485,17 +1561,70 @@ func createBubbleNode(role message.Role, msgs []message.Message, toolResponses m
 		timestamp = time.Now().Format("15:04")
 	}
 
-	var children []kitex.Node
+	var tokensInput, tokensOutput, tokensTotal int
 	for _, msg := range msgs {
+		if asstMsg, ok := msg.(*message.Assistant); ok {
+			if asstMsg.Metrics != nil {
+				tokensInput += asstMsg.Metrics.Tokens.Input
+				tokensOutput += asstMsg.Metrics.Tokens.Output
+				tokensTotal += asstMsg.Metrics.TotalTokens
+			} else if meta := asstMsg.GetMetadata(); meta != nil {
+				if promptToks, ok := meta["prompt_tokens"].(int); ok {
+					tokensInput += promptToks
+				} else if promptToksFloat, ok := meta["prompt_tokens"].(float64); ok {
+					tokensInput += int(promptToksFloat)
+				}
+				if compToks, ok := meta["completion_tokens"].(int); ok {
+					tokensOutput += compToks
+				} else if compToksFloat, ok := meta["completion_tokens"].(float64); ok {
+					tokensOutput += int(compToksFloat)
+				}
+				if totalToks, ok := meta["total_tokens"].(int); ok {
+					tokensTotal += totalToks
+				} else if totalToksFloat, ok := meta["total_tokens"].(float64); ok {
+					tokensTotal += int(totalToksFloat)
+				}
+			}
+		}
+	}
+
+	var children []kitex.Node
+	for i, msg := range msgs {
 		if msg.Role() == message.RoleTool {
 			continue // Do not render tool messages as separate children. They are rendered inline in the assistant message.
 		}
+
+		var reasoningTokens int
+		var thinkingDuration time.Duration
+		if asstMsg, ok := msg.(*message.Assistant); ok {
+			if asstMsg.Metrics != nil {
+				reasoningTokens = asstMsg.Metrics.Tokens.Reasoning
+				if asstMsg.Metrics.Timing.Generation > 0 {
+					thinkingDuration = asstMsg.Metrics.Timing.Generation
+				}
+			}
+			if thinkingDuration == 0 {
+				if meta := asstMsg.GetMetadata(); meta != nil {
+					if durSec, ok := meta["thinking_duration"].(int); ok {
+						thinkingDuration = time.Duration(durSec) * time.Second
+					} else if durSecFloat, ok := meta["thinking_duration"].(float64); ok {
+						thinkingDuration = time.Duration(durSecFloat) * time.Second
+					}
+				}
+			}
+			if isGenerating && i == len(msgs)-1 {
+				thinkingDuration = time.Duration(liveThinkingTime) * time.Second
+			}
+		}
+
 		node := Message(MessageProps{
 			Role:              msg.Role(),
 			Content:           msg.GetContent(),
 			ToolResponses:     toolResponses,
 			CurrentDots:       currentDots,
 			OneDotCurrentDots: oneDotCurrentDots,
+			ReasoningTokens:   reasoningTokens,
+			ThinkingDuration:  thinkingDuration,
 		})
 		if node != nil {
 			children = append(children, node)
@@ -1547,16 +1676,37 @@ func createBubbleNode(role message.Role, msgs []message.Message, toolResponses m
 		TaskError:            taskError,
 		AgentName:            msgAgentName,
 		MainAgentName:        mainAgentName,
+		TokensInput:          tokensInput,
+		TokensOutput:         tokensOutput,
+		TokensTotal:          tokensTotal,
 	})
 }
 
-func renderAgentStatus(t *theme.Scheme, sending bool, thinkingTime int, lastFinishedTime int, currentDots string) kitex.Node {
+func formatTokens(count int) string {
+	if count < 1000 {
+		return fmt.Sprintf("%d", count)
+	}
+	return fmt.Sprintf("%.1fk", float64(count)/1000.0)
+}
+
+func renderAgentStatus(t *theme.Scheme, sending bool, thinkingTime int, lastFinishedTime int, currentDots string, runPromptTokens, runCompletionTokens, runTotalTokens int, isGenerating bool) kitex.Node {
 	if t == nil {
 		return nil
 	}
 	blueColor := t.Color.Surface.Info
 	greenColor := t.Color.Surface.Success
 	timeStr := fmt.Sprintf("[%02d:%02d]", thinkingTime/60, thinkingTime%60)
+
+	upColor := t.Color.Text.Tertiary
+	downColor := t.Color.Text.Tertiary
+	if sending {
+		if isGenerating {
+			downColor = t.Color.Surface.Success // highlight down when streaming text
+		} else {
+			upColor = t.Color.Surface.Info // highlight up when processing/waiting
+		}
+	}
+
 	if sending {
 		containerStyle := style.S().
 			Display(style.DisplayFlex).
@@ -1568,10 +1718,28 @@ func renderAgentStatus(t *theme.Scheme, sending bool, thinkingTime int, lastFini
 		dotsStyle := style.S().Foreground(blueColor).Width(style.Cells(3))
 		labelStyle := style.S().Foreground(blueColor).Bold(true)
 		timeStyle := style.S().Foreground(t.Color.Text.Tertiary)
+
+		var cumNodes []kitex.Node
+		if runPromptTokens > 0 || runCompletionTokens > 0 || runTotalTokens > 0 {
+			if runPromptTokens > 0 || runCompletionTokens > 0 {
+				cumNodes = append(cumNodes, kitex.Box(kitex.BoxProps{
+					Style: style.S().Display(style.DisplayFlex).FlexDirection(style.FlexRow).Gap(1).Foreground(t.Color.Text.Tertiary),
+				},
+					kitex.Text("("),
+					kitex.Span(kitex.SpanProps{Style: style.S().Foreground(upColor)}, kitex.Text(fmt.Sprintf("↑ %s", formatTokens(runPromptTokens)))),
+					kitex.Span(kitex.SpanProps{Style: style.S().Foreground(downColor)}, kitex.Text(fmt.Sprintf("↓ %s", formatTokens(runCompletionTokens)))),
+					kitex.Text(")"),
+				))
+			} else {
+				cumNodes = append(cumNodes, kitex.Box(kitex.BoxProps{Style: style.S().Foreground(t.Color.Text.Tertiary)}, kitex.Text(fmt.Sprintf("(%s TOTAL)", formatTokens(runTotalTokens)))))
+			}
+		}
+
 		return kitex.Box(kitex.BoxProps{Style: containerStyle},
 			kitex.Box(kitex.BoxProps{Style: dotsStyle}, kitex.Text(currentDots)),
 			kitex.Box(kitex.BoxProps{Style: labelStyle}, kitex.Text("Thinking")),
 			kitex.Box(kitex.BoxProps{Style: timeStyle}, kitex.Text(timeStr)),
+			kitex.If(len(cumNodes) > 0, func() kitex.Node { return cumNodes[0] }),
 		)
 	}
 	if lastFinishedTime >= 0 {
@@ -1586,10 +1754,23 @@ func renderAgentStatus(t *theme.Scheme, sending bool, thinkingTime int, lastFini
 		checkStyle := style.S().Foreground(greenColor)
 		labelStyle := style.S().Foreground(t.Color.Text.Secondary)
 		timeStyle := style.S().Foreground(t.Color.Text.Secondary)
+
+		var cumNodes []kitex.Node
+		if runPromptTokens > 0 || runCompletionTokens > 0 || runTotalTokens > 0 {
+			var tokenStr string
+			if runPromptTokens > 0 || runCompletionTokens > 0 {
+				tokenStr = fmt.Sprintf("(↑ %s ↓ %s)", formatTokens(runPromptTokens), formatTokens(runCompletionTokens))
+			} else {
+				tokenStr = fmt.Sprintf("(%s TOTAL)", formatTokens(runTotalTokens))
+			}
+			cumNodes = append(cumNodes, kitex.Box(kitex.BoxProps{Style: style.S().Foreground(t.Color.Text.Secondary)}, kitex.Text(" "+tokenStr)))
+		}
+
 		return kitex.Box(kitex.BoxProps{Style: containerStyle},
 			kitex.Box(kitex.BoxProps{Style: checkStyle}, icon.Checkmark),
 			kitex.Box(kitex.BoxProps{Style: labelStyle}, kitex.Text("Agent completed in")),
 			kitex.Box(kitex.BoxProps{Style: timeStyle}, kitex.Text(finishedTimeStr)),
+			kitex.If(len(cumNodes) > 0, func() kitex.Node { return cumNodes[0] }),
 		)
 	}
 	return nil

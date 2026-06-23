@@ -67,7 +67,20 @@ var CollapsibleThinking = kitex.FC("CollapsibleThinking", func(props Collapsible
 					return kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Tertiary)}, kitex.Text("≈"))
 				}),
 				kitex.If(t != nil, func() kitex.Node {
-					return kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Tertiary).Bold(true)}, kitex.Text("THINKING PROCESS"))
+					titleStr := "Thought"
+					durStr := formatThinkingDuration(props.Duration)
+					if durStr != "" {
+						titleStr += " for " + durStr
+					}
+					if props.Tokens > 0 {
+						if durStr != "" {
+							titleStr += ", "
+						} else {
+							titleStr += " for "
+						}
+						titleStr += fmt.Sprintf("%d tokens", props.Tokens)
+					}
+					return kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Tertiary).Bold(true)}, kitex.Text(titleStr))
 				}),
 			),
 		),
@@ -88,6 +101,22 @@ var CollapsibleThinking = kitex.FC("CollapsibleThinking", func(props Collapsible
 		}),
 	)
 })
+
+func formatThinkingDuration(d time.Duration) string {
+	if d <= 0 {
+		return ""
+	}
+	secs := int(d.Round(time.Second).Seconds())
+	if secs < 60 {
+		return fmt.Sprintf("%ds", secs)
+	}
+	mins := secs / 60
+	remSecs := secs % 60
+	if remSecs == 0 {
+		return fmt.Sprintf("%dm", mins)
+	}
+	return fmt.Sprintf("%dm %ds", mins, remSecs)
+}
 
 var ViewToolWidget = kitex.FC("ViewToolWidget", func(props ToolExecutionProps) kitex.Node {
 	t := theme.UseTheme()
@@ -2705,4 +2734,3 @@ var TodosToolWidget = kitex.FC("TodosToolWidget", func(props ToolExecutionProps)
 		),
 	)
 })
-

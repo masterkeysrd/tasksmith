@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jmoiron/sqlx"
 	"github.com/masterkeysrd/loom/graph"
 	"github.com/masterkeysrd/loom/llm"
 	loomanthropic "github.com/masterkeysrd/loom/llm/anthropic"
@@ -20,6 +21,7 @@ import (
 	agentgraph "github.com/masterkeysrd/tasksmith/internal/agent/graph"
 	"github.com/masterkeysrd/tasksmith/internal/agent/prompt"
 	"github.com/masterkeysrd/tasksmith/internal/agent/tools"
+	coredb "github.com/masterkeysrd/tasksmith/internal/core/db"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	"github.com/masterkeysrd/tasksmith/internal/workspace"
 	"github.com/masterkeysrd/warp"
@@ -36,13 +38,14 @@ const (
 
 // Session represents a domain session.
 type Session struct {
-	ID           string    `json:"id"`
-	Title        string    `json:"title"`
-	AgentName    string    `json:"agent_name"`
-	ProviderName string    `json:"provider_name"`
-	ModelName    string    `json:"model_name"`
-	CreatedAt    time.Time `json:"created_at"`
-	UpdatedAt    time.Time `json:"updated_at"`
+	ID              string          `json:"id"`
+	Title           string          `json:"title"`
+	AgentName       string          `json:"agent_name"`
+	ProviderName    string          `json:"provider_name"`
+	ModelName       string          `json:"model_name"`
+	LastTurnMetrics *SessionMetrics `json:"last_turn_metrics,omitempty"`
+	CreatedAt       time.Time       `json:"created_at"`
+	UpdatedAt       time.Time       `json:"updated_at"`
 }
 
 // ActiveSession holds the in-memory execution status of a running Loom agent.
@@ -56,6 +59,9 @@ type ActiveSession struct {
 	Cancel                context.CancelFunc
 	Inbox                 []message.Message
 	InboxMu               sync.Mutex
+	ThinkingStart         time.Time
+	ThinkingDuration      time.Duration
+	CurrentStreamMetrics  *message.TokenMetrics
 }
 
 // Manager coordinates session business logic and delegates persistence to the Store interface.
@@ -66,13 +72,15 @@ type Manager struct {
 	mu             sync.RWMutex
 	activeSessions map[string]*ActiveSession
 	taskMgr        *tools.TaskManager
+	metricsDB      *sqlx.DB
 }
 
 // NewManager creates a new Manager backed by the provided Store and Workspace.
-func NewManager(store Store, ws *workspace.Workspace) *Manager {
+func NewManager(store Store, ws *workspace.Workspace, metricsDB *sqlx.DB) *Manager {
 	m := &Manager{
 		store:          store,
 		ws:             ws,
+		metricsDB:      metricsDB,
 		activeSessions: make(map[string]*ActiveSession),
 	}
 
@@ -184,14 +192,23 @@ func (m *Manager) ListSessions(ctx context.Context) ([]Session, error) {
 			}
 		}
 
+		var metrics *SessionMetrics
+		if sd.LastTurnMetrics != nil {
+			var m SessionMetrics
+			if err := json.Unmarshal([]byte(*sd.LastTurnMetrics), &m); err == nil {
+				metrics = &m
+			}
+		}
+
 		sessions[i] = Session{
-			ID:           sd.ID,
-			Title:        sd.Title,
-			AgentName:    agentName,
-			ProviderName: providerName,
-			ModelName:    modelName,
-			CreatedAt:    sd.CreatedAt,
-			UpdatedAt:    sd.UpdatedAt,
+			ID:              sd.ID,
+			Title:           sd.Title,
+			AgentName:       agentName,
+			ProviderName:    providerName,
+			ModelName:       modelName,
+			LastTurnMetrics: metrics,
+			CreatedAt:       sd.CreatedAt,
+			UpdatedAt:       sd.UpdatedAt,
 		}
 	}
 	return sessions, nil
@@ -282,14 +299,15 @@ func (m *Manager) ArchiveSession(ctx context.Context, id string) error {
 }
 
 // GetSessionState returns the in-memory runtime execution state of the specified session.
-func (m *Manager) GetSessionState(sessionID string) (SessionStatus, string) {
+func (m *Manager) GetSessionState(sessionID string) (SessionStatus, string, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	sess, ok := m.activeSessions[sessionID]
 	if !ok {
-		return StatusIdle, ""
+		return StatusIdle, "", false
 	}
-	return sess.Status, sess.Error
+	isGenerating := len(sess.CurrentStreamText) > 0 || len(sess.CurrentStreamThinking) > 0
+	return sess.Status, sess.Error, isGenerating
 }
 
 // ListTasks retrieves all tasks for a session from the task manager.
@@ -346,6 +364,9 @@ func (m *Manager) sendMessage(ctx context.Context, sessionID string, text string
 	sess.CurrentStreamText = ""
 	sess.CurrentStreamThinking = ""
 	sess.CurrentToolStreams = make(map[string]string)
+	sess.ThinkingStart = time.Time{}
+	sess.ThinkingDuration = 0
+	sess.CurrentStreamMetrics = nil
 
 	runCtx, cancel := context.WithCancel(context.Background())
 	sess.Cancel = cancel
@@ -535,7 +556,6 @@ func (m *Manager) sendMessage(ctx context.Context, sessionID string, text string
 		}
 
 		var asstMsg message.Message
-		hasTypedChunks := false
 
 		// Consume the stream, appending text chunks dynamically in memory
 		for ev, err := range seq {
@@ -545,39 +565,11 @@ func (m *Manager) sendMessage(ctx context.Context, sessionID string, text string
 			}
 
 			if ev.Event == graph.EventLLMChunk {
-				var textChunk string
-				var thinkingChunk string
-				switch d := ev.Data.(type) {
-				case message.AssistantChunk:
-					hasTypedChunks = true
-					textChunk = message.Content(d.Content).Text()
-					thinkingChunk = message.Content(d.Content).Thought()
-				case *message.AssistantChunk:
-					hasTypedChunks = true
-					textChunk = message.Content(d.Content).Text()
-					thinkingChunk = message.Content(d.Content).Thought()
-				case string:
-					if !hasTypedChunks {
-						textChunk = d
-					}
-				}
-
-				if textChunk != "" || thinkingChunk != "" {
-					m.mu.Lock()
-					sess.CurrentStreamText += textChunk
-					sess.CurrentStreamThinking += thinkingChunk
-					m.mu.Unlock()
-				}
+				m.handleLLMChunk(sess, ev)
 			} else if ev.Event == "agent_message" {
-				if agentMsg, ok := ev.Data.(message.Message); ok {
-					if _, err := m.AppendMessage(context.Background(), sessionID, agentMsg); err != nil {
-						m.setSessionError(sessionID, fmt.Errorf("failed to save agent message: %w", err))
-						return
-					}
-					m.mu.Lock()
-					sess.CurrentStreamText = ""
-					sess.CurrentStreamThinking = ""
-					m.mu.Unlock()
+				if err := m.handleAgentMessage(runCtx, sessionID, sess, ev, systemPrompt, agentName, providerName, modelName); err != nil {
+					m.setSessionError(sessionID, err)
+					return
 				}
 			} else if ev.Event == "user_message" {
 				m.mu.Lock()
@@ -585,41 +577,11 @@ func (m *Manager) sendMessage(ctx context.Context, sessionID string, text string
 				sess.CurrentStreamThinking = ""
 				m.mu.Unlock()
 			} else if ev.Event == "on_tool_chunk" {
-				var chunk message.ToolChunk
-				switch d := ev.Data.(type) {
-				case message.ToolChunk:
-					chunk = d
-				case *message.ToolChunk:
-					if d != nil {
-						chunk = *d
-					}
-				}
-				toolCallID := chunk.ID
-				if toolCallID == "" {
-					toolCallID = ev.Source
-				}
-				text := chunk.Content.Text()
-				if text != "" {
-					m.mu.Lock()
-					if sess.CurrentToolStreams == nil {
-						sess.CurrentToolStreams = make(map[string]string)
-					}
-					sess.CurrentToolStreams[toolCallID] += text
-					m.mu.Unlock()
-				}
+				m.handleToolChunk(sess, ev)
 			} else if ev.Event == "tool_message" {
-				if toolMsg, ok := ev.Data.(message.Message); ok {
-					if _, err := m.AppendMessage(context.Background(), sessionID, toolMsg); err != nil {
-						m.setSessionError(sessionID, fmt.Errorf("failed to save tool message: %w", err))
-						return
-					}
-					if tMsg, ok := toolMsg.(*message.Tool); ok {
-						m.mu.Lock()
-						if sess.CurrentToolStreams != nil {
-							delete(sess.CurrentToolStreams, tMsg.ToolCallID)
-						}
-						m.mu.Unlock()
-					}
+				if err := m.handleToolMessage(runCtx, sessionID, sess, ev, agentName); err != nil {
+					m.setSessionError(sessionID, err)
+					return
 				}
 			} else if ev.Event == graph.EventCompleted {
 				var finalState *agentgraph.AgentState
@@ -663,6 +625,21 @@ func (m *Manager) sendMessage(ctx context.Context, sessionID string, text string
 			}
 			asstMsg = &message.Assistant{
 				Content: content,
+			}
+		}
+
+		if asstMsg != nil {
+			m.mu.Lock()
+			durationSecs := int(sess.ThinkingDuration.Seconds())
+			m.mu.Unlock()
+
+			meta := asstMsg.GetMetadata()
+			if meta == nil {
+				meta = make(map[string]any)
+			}
+			if _, exists := meta["thinking_duration"]; !exists && durationSecs > 0 {
+				meta["thinking_duration"] = durationSecs
+				asstMsg.SetMetadata(meta)
 			}
 		}
 
@@ -877,20 +854,36 @@ func (m *Manager) GetMessages(ctx context.Context, sessionID string) (message.Me
 		}
 
 		// 2. Inject active LLM text/thinking stream
+		// 2. Inject active LLM text/thinking stream
 		if streamText != "" || streamThinking != "" {
 			var content message.Content
+			var contentLen int
 			if streamThinking != "" {
 				content = append(content, &message.ThinkingBlock{Thinking: streamThinking})
+				contentLen += len(streamThinking)
 			}
 			if streamText != "" {
 				content = append(content, &message.TextBlock{Text: streamText})
+				contentLen += len(streamText)
 			}
 			asst := &message.Assistant{
 				Content: content,
 			}
+
+			m.mu.RLock()
+			streamMetrics := sess.CurrentStreamMetrics
+			m.mu.RUnlock()
+
 			meta := map[string]any{
 				"created_at": time.Now().Format("15:04"),
 			}
+
+			if streamMetrics != nil {
+				meta["prompt_tokens"] = streamMetrics.Tokens.Input
+				meta["completion_tokens"] = streamMetrics.Tokens.Output
+				meta["total_tokens"] = streamMetrics.TotalTokens
+			}
+
 			asst.SetMetadata(meta)
 			list = append(list, asst)
 		}
@@ -1034,4 +1027,279 @@ func (m *Manager) UpdateTodos(ctx context.Context, sessionID string, todos []too
 		return fmt.Errorf("failed to marshal todos: %w", err)
 	}
 	return m.store.UpdateSessionTodos(ctx, sessionID, string(data))
+}
+
+func (m *Manager) handleLLMChunk(sess *ActiveSession, ev graph.StreamEvent) {
+	var textChunk string
+	var thinkingChunk string
+	var chunkMetrics *message.TokenMetrics
+	hasTypedChunks := false
+	switch d := ev.Data.(type) {
+	case message.AssistantChunk:
+		hasTypedChunks = true
+		textChunk = message.Content(d.Content).Text()
+		thinkingChunk = message.Content(d.Content).Thought()
+		chunkMetrics = d.Metrics
+	case *message.AssistantChunk:
+		hasTypedChunks = true
+		textChunk = message.Content(d.Content).Text()
+		thinkingChunk = message.Content(d.Content).Thought()
+		chunkMetrics = d.Metrics
+	case string:
+		if !hasTypedChunks {
+			textChunk = d
+		}
+	}
+
+	m.mu.Lock()
+	if chunkMetrics != nil {
+		sess.CurrentStreamMetrics = chunkMetrics
+	}
+	if textChunk != "" || thinkingChunk != "" {
+		if thinkingChunk != "" {
+			if sess.ThinkingStart.IsZero() {
+				sess.ThinkingStart = time.Now()
+			}
+			sess.ThinkingDuration = time.Since(sess.ThinkingStart)
+		}
+		sess.CurrentStreamText += textChunk
+		sess.CurrentStreamThinking += thinkingChunk
+	}
+	m.mu.Unlock()
+}
+
+func (m *Manager) countToolTokens(ctx context.Context, sessionID string, agentName string) int {
+	var allowedTools map[string]bool
+	if m.ws != nil {
+		cfg, err := m.ws.GetWorkspaceConfig(ctx)
+		if err == nil {
+			allowedTools = cfg.AuthorizedTools
+		}
+	}
+
+	allLoomTools, err := tools.Resources()
+	if err != nil {
+		return 0
+	}
+
+	var activeTools []any
+	for _, lt := range allLoomTools {
+		if allowedTools == nil || allowedTools[lt.Metadata.Name] {
+			activeTools = append(activeTools, lt)
+		}
+	}
+
+	b, err := json.Marshal(activeTools)
+	if err != nil {
+		return 0
+	}
+	return len(string(b)) / 4
+}
+
+func (m *Manager) handleAgentMessage(ctx context.Context, sessionID string, sess *ActiveSession, ev graph.StreamEvent, systemPrompt, agentName, providerName, modelName string) error {
+	agentMsg, ok := ev.Data.(message.Message)
+	if !ok {
+		return nil
+	}
+	if asstMsg, ok := agentMsg.(*message.Assistant); ok {
+		m.mu.Lock()
+		durationSecs := int(sess.ThinkingDuration.Seconds())
+		m.mu.Unlock()
+
+		meta := asstMsg.GetMetadata()
+		if meta == nil {
+			meta = make(map[string]any)
+		}
+		if _, exists := meta["thinking_duration"]; !exists && durationSecs > 0 {
+			meta["thinking_duration"] = durationSecs
+			asstMsg.SetMetadata(meta)
+		}
+	}
+	if _, err := m.AppendMessage(context.Background(), sessionID, agentMsg); err != nil {
+		return fmt.Errorf("failed to save agent message: %w", err)
+	}
+
+	if asstMsg, ok := agentMsg.(*message.Assistant); ok && asstMsg.Metrics != nil && m.metricsDB != nil {
+		var wsPath, projName string
+		if m.ws != nil {
+			wsPath = m.ws.CWD()
+			if p := m.ws.Project(); p != nil {
+				projName = p.Name
+			}
+		}
+
+		sysTokens, _ := llm.ApproximateTokenCounter{}.CountTokens(ctx, message.MessageList{message.NewSystemText(systemPrompt)})
+		toolsTokens := m.countToolTokens(ctx, sessionID, agentName)
+
+		var toolResultTokens, workspaceFileTokens, chatTokens int
+		if msgs, err := m.GetMessages(ctx, sessionID); err == nil {
+			for _, msg := range msgs {
+				toks, _ := llm.ApproximateTokenCounter{}.CountTokens(ctx, message.MessageList{msg})
+				if tr, ok := msg.(*message.Tool); ok {
+					switch tr.Name {
+					case "view", "ls", "grep", "glob", "read_file", "list_dir", "grep_search":
+						workspaceFileTokens += toks
+					default:
+						toolResultTokens += toks
+					}
+				} else {
+					chatTokens += toks
+				}
+			}
+		}
+
+		event := coredb.MetricsEvent{
+			SessionID:     sessionID,
+			WorkspacePath: wsPath,
+			ProjectName:   projName,
+			AgentName:     agentName,
+			NodeName:      func(s string) *string { return &s }("think"),
+			CreatedAt:     time.Now(),
+		}
+		payload := coredb.LLMCallPayload{
+			Provider:            providerName,
+			Model:               modelName,
+			SystemTokens:        sysTokens,
+			PromptTokens:        asstMsg.Metrics.Tokens.Input,
+			CompletionTokens:    asstMsg.Metrics.Tokens.Output,
+			TotalTokens:         asstMsg.Metrics.TotalTokens,
+			CacheCreationTokens: asstMsg.Metrics.Tokens.CacheWrite,
+			CacheReadTokens:     asstMsg.Metrics.Tokens.CacheRead,
+			EstimatedCostUSD:    asstMsg.Metrics.TotalCost.AsUSD(),
+		}
+		_ = coredb.LogLLMCall(m.metricsDB, event, payload)
+
+		cumPromptTokens := asstMsg.Metrics.Tokens.Input
+		cumCompletionTokens := asstMsg.Metrics.Tokens.Output
+		cumTotalTokens := asstMsg.Metrics.TotalTokens
+		cumCost := asstMsg.Metrics.TotalCost.AsUSD()
+		if prevSession, err := m.store.GetSession(ctx, sessionID); err == nil && prevSession != nil && prevSession.LastTurnMetrics != nil {
+			var prevMetrics SessionMetrics
+			if err := json.Unmarshal([]byte(*prevSession.LastTurnMetrics), &prevMetrics); err == nil {
+				cumPromptTokens += prevMetrics.CumulativePromptTokens
+				cumCompletionTokens += prevMetrics.CumulativeCompletionTokens
+				cumTotalTokens += prevMetrics.CumulativeTotalTokens
+				cumCost += prevMetrics.CumulativeCostUSD
+			}
+		}
+
+		// Persist the latest metrics to the session table for quick UI lookup
+		m.store.UpdateSessionMetrics(ctx, sessionID, SessionMetrics{
+			SystemTokens:               sysTokens,
+			ToolsTokens:                toolsTokens,
+			ToolResultTokens:           toolResultTokens,
+			WorkspaceFileTokens:        workspaceFileTokens,
+			ChatTokens:                 chatTokens,
+			PromptTokens:               asstMsg.Metrics.Tokens.Input,
+			CompletionTokens:           asstMsg.Metrics.Tokens.Output,
+			TotalTokens:                asstMsg.Metrics.TotalTokens,
+			EstimatedCostUSD:           asstMsg.Metrics.TotalCost.AsUSD(),
+			CumulativePromptTokens:     cumPromptTokens,
+			CumulativeCompletionTokens: cumCompletionTokens,
+			CumulativeTotalTokens:      cumTotalTokens,
+			CumulativeCostUSD:          cumCost,
+		})
+	}
+
+	m.mu.Lock()
+	sess.CurrentStreamText = ""
+	sess.CurrentStreamThinking = ""
+	m.mu.Unlock()
+	return nil
+}
+
+func (m *Manager) handleToolChunk(sess *ActiveSession, ev graph.StreamEvent) {
+	var chunk message.ToolChunk
+	switch d := ev.Data.(type) {
+	case message.ToolChunk:
+		chunk = d
+	case *message.ToolChunk:
+		if d != nil {
+			chunk = *d
+		}
+	}
+	toolCallID := chunk.ID
+	if toolCallID == "" {
+		toolCallID = ev.Source
+	}
+	text := chunk.Content.Text()
+	if text != "" {
+		m.mu.Lock()
+		if sess.CurrentToolStreams == nil {
+			sess.CurrentToolStreams = make(map[string]string)
+		}
+		sess.CurrentToolStreams[toolCallID] += text
+		m.mu.Unlock()
+	}
+}
+
+func (m *Manager) handleToolMessage(ctx context.Context, sessionID string, sess *ActiveSession, ev graph.StreamEvent, agentName string) error {
+	toolMsg, ok := ev.Data.(message.Message)
+	if !ok {
+		return nil
+	}
+	if _, err := m.AppendMessage(context.Background(), sessionID, toolMsg); err != nil {
+		return fmt.Errorf("failed to save tool message: %w", err)
+	}
+	if tMsg, ok := toolMsg.(*message.Tool); ok {
+		m.mu.Lock()
+		if sess.CurrentToolStreams != nil {
+			delete(sess.CurrentToolStreams, tMsg.ToolCallID)
+		}
+		m.mu.Unlock()
+
+		if m.metricsDB != nil {
+			var wsPath, projName string
+			if m.ws != nil {
+				wsPath = m.ws.CWD()
+				if p := m.ws.Project(); p != nil {
+					projName = p.Name
+				}
+			}
+
+			outputTokens := 0
+			for _, b := range tMsg.Content {
+				if txt, ok := b.(*message.TextBlock); ok {
+					outputTokens += len(txt.Text) / 4
+				}
+			}
+
+			status := "success"
+			var errMsg *string
+			if tMsg.IsError {
+				status = "error"
+				if len(tMsg.Content) > 0 {
+					if txt, ok := tMsg.Content[0].(*message.TextBlock); ok {
+						e := txt.Text
+						errMsg = &e
+					}
+				}
+			}
+
+			var execTime int64
+			if meta := tMsg.GetMetadata(); meta != nil {
+				if t, ok := meta["execution_time_ms"].(int64); ok {
+					execTime = t
+				}
+			}
+
+			event := coredb.MetricsEvent{
+				SessionID:     sessionID,
+				WorkspacePath: wsPath,
+				ProjectName:   projName,
+				AgentName:     agentName,
+				NodeName:      func(s string) *string { return &s }("execute_tools"),
+				CreatedAt:     time.Now(),
+			}
+			payload := coredb.ToolCallPayload{
+				ToolName:        tMsg.Name,
+				ExecutionTimeMs: execTime,
+				Status:          status,
+				ErrorMessage:    errMsg,
+				OutputTokens:    outputTokens,
+			}
+			_ = coredb.LogToolCall(m.metricsDB, event, payload)
+		}
+	}
+	return nil
 }

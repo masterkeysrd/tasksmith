@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"encoding/json"
 	"time"
 
 	"github.com/jmoiron/sqlx"
@@ -29,6 +30,7 @@ var migrations = []string{
 	`ALTER TABLE sessions ADD COLUMN provider_name TEXT;`,
 	`ALTER TABLE sessions ADD COLUMN model_name TEXT;`,
 	`ALTER TABLE sessions ADD COLUMN todos TEXT DEFAULT '[]';`,
+	`ALTER TABLE sessions ADD COLUMN last_turn_metrics TEXT;`,
 }
 
 type sqliteStore struct {
@@ -52,14 +54,14 @@ func (s *sqliteStore) CreateSession(ctx context.Context, sd SessionData) error {
 
 func (s *sqliteStore) ListSessions(ctx context.Context) ([]SessionData, error) {
 	var sessions []SessionData
-	query := `SELECT id, title, agent_name, provider_name, model_name, todos, created_at, updated_at FROM sessions WHERE archived_at IS NULL ORDER BY updated_at DESC`
+	query := `SELECT id, title, agent_name, provider_name, model_name, todos, last_turn_metrics, created_at, updated_at FROM sessions WHERE archived_at IS NULL ORDER BY updated_at DESC`
 	err := s.db.SelectContext(ctx, &sessions, query)
 	return sessions, err
 }
 
 func (s *sqliteStore) GetSession(ctx context.Context, id string) (*SessionData, error) {
 	var sd SessionData
-	query := `SELECT id, title, agent_name, provider_name, model_name, todos, created_at, updated_at FROM sessions WHERE id = ?`
+	query := `SELECT id, title, agent_name, provider_name, model_name, todos, last_turn_metrics, created_at, updated_at FROM sessions WHERE id = ?`
 	err := s.db.GetContext(ctx, &sd, query, id)
 	if err != nil {
 		return nil, err
@@ -88,6 +90,16 @@ func (s *sqliteStore) UpdateSessionConfig(ctx context.Context, id string, cfg Se
 func (s *sqliteStore) UpdateSessionTodos(ctx context.Context, id string, todosJSON string) error {
 	query := `UPDATE sessions SET todos = ?, updated_at = ? WHERE id = ?`
 	_, err := s.db.ExecContext(ctx, query, todosJSON, time.Now().UTC(), id)
+	return err
+}
+
+func (s *sqliteStore) UpdateSessionMetrics(ctx context.Context, id string, metrics SessionMetrics) error {
+	data, err := json.Marshal(metrics)
+	if err != nil {
+		return err
+	}
+	query := `UPDATE sessions SET last_turn_metrics = ?, updated_at = ? WHERE id = ?`
+	_, err = s.db.ExecContext(ctx, query, string(data), time.Now().UTC(), id)
 	return err
 }
 

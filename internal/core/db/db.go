@@ -44,6 +44,39 @@ func Open(workspacePath, filename string) (*sqlx.DB, error) {
 	return db, nil
 }
 
+// OpenGlobal opens a SQLite connection in the global application data directory.
+func OpenGlobal(filename string) (*sqlx.DB, error) {
+	dataDir, err := xdg.SubDataDir()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get global data dir: %w", err)
+	}
+
+	if err := fsutil.EnsureDir(dataDir); err != nil {
+		return nil, fmt.Errorf("failed to ensure global data dir: %w", err)
+	}
+
+	dbPath := filepath.Join(dataDir, filename)
+	db, err := sqlx.Connect("sqlite", dbPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to connect to global database: %w", err)
+	}
+
+	// Apply tuning pragmas
+	pragmas := []string{
+		"PRAGMA journal_mode = WAL;",
+		"PRAGMA foreign_keys = ON;",
+		"PRAGMA busy_timeout = 5000;",
+	}
+	for _, pragma := range pragmas {
+		if _, err := db.Exec(pragma); err != nil {
+			db.Close()
+			return nil, fmt.Errorf("failed to set pragma %q: %w", pragma, err)
+		}
+	}
+
+	return db, nil
+}
+
 // Migrate applies sequential SQL statements for a given group in the schema_migrations table.
 // Each query inside the migrations slice is version-tracked by index (0-indexed).
 func Migrate(db *sqlx.DB, group string, migrations []string) error {

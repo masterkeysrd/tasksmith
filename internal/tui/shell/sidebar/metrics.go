@@ -7,6 +7,7 @@ import (
 
 	"github.com/masterkeysrd/kite/extras/kitex"
 	"github.com/masterkeysrd/kite/style"
+	"github.com/masterkeysrd/tasksmith/internal/api"
 	"github.com/masterkeysrd/tasksmith/internal/tui/components"
 	"github.com/masterkeysrd/tasksmith/internal/tui/components/icon"
 )
@@ -14,15 +15,59 @@ import (
 func metricsPanel(data Data) kitex.Node {
 	c := useColors()
 
-	// Mock stats data as per mockup.tsx / instructions
-	tokensUsed := 35500
-	tokenLimit := 131072
-	systemTokens := 6528
-	toolTokens := 10496
-	messageTokens := 11264
-	toolResultTokens := 3584
-	filesTokens := 2048
-	otherTokens := 1628
+	var activeSession *api.Session
+	var metrics *api.SessionMetrics
+	for _, s := range data.Sessions {
+		if s.ID == data.ActiveSessionID {
+			// We only want a pointer or value. data.Sessions returns copies, so we copy it
+			sess := s
+			activeSession = &sess
+			metrics = s.LastTurnMetrics
+			break
+		}
+	}
+
+	tokensUsed := 0
+	tokenLimit := 131072 // Default fallback
+
+	if activeSession != nil {
+		for _, p := range data.Providers {
+			if p.Name == activeSession.ProviderName {
+				for _, m := range p.Models {
+					if (m.ID == activeSession.ModelName || m.Name == activeSession.ModelName) && m.ContextWindow > 0 {
+						tokenLimit = m.ContextWindow
+					}
+				}
+			}
+		}
+	}
+	systemTokens := 0
+	toolTokens := 0
+	messageTokens := 0
+	toolResultTokens := 0
+	filesTokens := 0
+	otherTokens := 0
+
+	if metrics != nil {
+		tokensUsed = metrics.TotalTokens
+
+		totalApprox := metrics.SystemTokens + metrics.ToolsTokens + metrics.WorkspaceFileTokens + metrics.ToolResultTokens + metrics.ChatTokens
+		if totalApprox > 0 {
+			factor := float64(metrics.PromptTokens) / float64(totalApprox)
+			systemTokens = int(float64(metrics.SystemTokens) * factor)
+			toolTokens = int(float64(metrics.ToolsTokens) * factor)
+			toolResultTokens = int(float64(metrics.ToolResultTokens) * factor)
+			filesTokens = int(float64(metrics.WorkspaceFileTokens) * factor)
+			messageTokens = metrics.PromptTokens - systemTokens - toolTokens - toolResultTokens - filesTokens
+			if messageTokens < 0 {
+				messageTokens = 0
+			}
+		} else {
+			messageTokens = metrics.PromptTokens
+		}
+
+		otherTokens = metrics.CompletionTokens
+	}
 
 	usedPercent := int(float64(tokensUsed) * 100.0 / float64(tokenLimit))
 	tokensStr := fmt.Sprintf("%.1fK / %dK TOKENS", float64(tokensUsed)/1000.0, tokenLimit/1024)
@@ -94,7 +139,7 @@ func metricsPanel(data Data) kitex.Node {
 					Bold(true),
 			},
 				icon.Fire,
-				kitex.Text(" CONTEXT_RESOURCES_STATUS"),
+				kitex.Text(" CONTEXT RESOURCES"),
 			),
 			kitex.Box(kitex.BoxProps{
 				Style: style.S().
@@ -142,28 +187,28 @@ func metricsPanel(data Data) kitex.Node {
 				JustifyContent(style.JustifyBetween).
 				MarginBottom(1),
 		},
-			kitex.Box(kitex.BoxProps{Style: style.S().Foreground(c.subtle)}, kitex.Text("Avail dynamic head")),
+			kitex.Box(kitex.BoxProps{Style: style.S().Foreground(c.subtle)}, kitex.Text("Available Context Window")),
 			kitex.Box(kitex.BoxProps{Style: style.S().Foreground(c.muted)}, kitex.Text(fmt.Sprintf("%.1f%%", 100.0-float64(tokensUsed)*100.0/float64(tokenLimit)))),
 		),
 
 		// System Allocations
-		metricSectionHeader(icon.CPU, "SYSTEM STRUCTURE CODES", c.info),
-		metricRow(c.info, "System Directives", systemPct, c),
-		metricRow(c.magenta, "Tool Call Defs", toolPct, c),
+		metricSectionHeader(icon.CPU, "SYSTEM PROMPT & DEFINITIONS", c.info),
+		metricRow(c.info, "System Instructions", systemPct, c),
+		metricRow(c.magenta, "Tool Definitions", toolPct, c),
 
 		// User Content Allocations
 		kitex.Box(kitex.BoxProps{Style: style.S().MarginTop(1)},
-			metricSectionHeader(icon.Robot, "ACTIVE WORKER PAYLOADS", c.success),
+			metricSectionHeader(icon.Robot, "CHAT HISTORY & CONTEXT", c.success),
 		),
-		metricRow(c.success, "Messages Matrix", messagePct, c),
-		metricRow(c.warning, "Tool Result Buff", toolResultPct, c),
-		metricRow(c.error, "Codebase Inject", filesPct, c),
+		metricRow(c.success, "Chat Messages", messagePct, c),
+		metricRow(c.warning, "Tool Execution Results", toolResultPct, c),
+		metricRow(c.error, "Workspace Files Context", filesPct, c),
 
 		// Uncategorized
 		kitex.Box(kitex.BoxProps{Style: style.S().MarginTop(1)},
-			metricSectionHeader(kitex.Text(" "), "OTHER ARTIFACTS", c.muted),
+			metricSectionHeader(kitex.Text(" "), "MODEL OUTPUTS", c.muted),
 		),
-		metricRow(c.subtle, "Misc Overhead", otherPct, c),
+		metricRow(c.subtle, "Agent Generations", otherPct, c),
 
 		// Action Button
 		components.Button(components.ButtonProps{
