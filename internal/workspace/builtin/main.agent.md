@@ -266,7 +266,7 @@ You have access to <system_reminders> those are important notes left to help kee
 
 {{if .Context}}
 {{if .Context.Instructions}}
-<project_context>
+<project_context path="{{.Context.Path}}">
 You have access to the following project context which may contain important information about the project, instructions, or guidelines. Always refer to this context when making decisions or taking actions related to the project. If you need to refresh your memory on the project details, you can review this context at any time.
 
 {{.Context.Instructions}}

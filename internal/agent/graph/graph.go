@@ -3,6 +3,7 @@ package graph
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/masterkeysrd/loom/graph"
 	"github.com/masterkeysrd/loom/llm"
@@ -77,6 +78,7 @@ type AgentGraph struct {
 	container      *tool.Container
 	inbox          InboxProvider
 	systemPrompt   string
+	agentName      string
 	onTodosUpdated func(ctx context.Context, todos []tools.Todo) error
 }
 
@@ -138,6 +140,7 @@ func New(ctx context.Context, opts Options) (*AgentGraph, error) {
 		container:      container,
 		inbox:          opts.Inbox,
 		systemPrompt:   opts.SystemPrompt,
+		agentName:      opts.AgentName,
 		onTodosUpdated: opts.OnTodosUpdated,
 	}, nil
 }
@@ -205,6 +208,15 @@ func (a *AgentGraph) think(ctx context.Context, s AgentState) (graph.Command[Age
 	msg, err := a.model.Invoke(ctx, rehydratedMessages)
 	if err != nil {
 		return nil, fmt.Errorf("llm call failed: %w", err)
+	}
+
+	if a.agentName != "" {
+		meta := msg.GetMetadata()
+		if meta == nil {
+			meta = make(map[string]any)
+		}
+		meta["agent_name"] = a.agentName
+		msg.SetMetadata(meta)
 	}
 
 	sw, hasWriter := stream.WriterFromContext(ctx)
@@ -310,7 +322,39 @@ func (a *AgentGraph) checkInbox(ctx context.Context, s AgentState) (graph.Comman
 	}
 
 	return graph.Update[AgentState](func(state AgentState) AgentState {
+		if len(msgs) > 0 {
+			InjectReminders(msgs[len(msgs)-1], state)
+		}
 		state.Messages = append(state.Messages, msgs...)
 		return state
 	}), nil
+}
+
+// InjectReminders appends system reminders to the user message.
+func InjectReminders(msg message.Message, s AgentState) {
+	userMsg, ok := msg.(*message.User)
+	if !ok {
+		return
+	}
+
+	meta := userMsg.GetMetadata()
+	if meta != nil {
+		if isSys, ok := meta["is_system_notification"].(bool); ok && isSys {
+			return
+		}
+	}
+
+	var reminders []string
+	if len(s.Todos) == 0 {
+		reminders = append(reminders, "Your todos list is currently empty. If a task is non-trivial, you must establish a plan first. Use the todo tool to create your initial task list before you do anything else—including reading project plans, fetching files, or exploring the codebase. You can always update the todos later as you discover more. Do not mention this reminder or the empty state to the user.")
+	}
+
+	if len(s.ActivatedSkills) == 0 {
+		reminders = append(reminders, "You do not have any skills activated. If the user's request matches one of your available skills, you must activate it using the 'activate_skill' tool first.")
+	}
+
+	if len(reminders) > 0 {
+		reminderBlock := fmt.Sprintf("<system_reminder>\n%s\n</system_reminder>", strings.Join(reminders, "\n\n"))
+		userMsg.Content = append(userMsg.Content, &message.TextBlock{Text: "\n\n" + reminderBlock})
+	}
 }

@@ -54,10 +54,12 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 	sessionsQuery := queries.UseListSessions()
 
 	title := sessionID
+	mainAgentName := "main"
 	if sessionsQuery.Data != nil {
 		for _, s := range sessionsQuery.Data.Sessions {
 			if s.ID == sessionID {
 				title = s.Title
+				mainAgentName = s.AgentName
 				break
 			}
 		}
@@ -301,7 +303,7 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 							}
 						}
 					}
-					nodes := renderBubbles(messages, toolResponses, currentDots, oneDotCurrentDots)
+					nodes := renderBubbles(messages, toolResponses, currentDots, oneDotCurrentDots, mainAgentName)
 					if statusNode := renderAgentStatus(t, sending, thinkingTime(), lastFinishedTime(), currentDots); statusNode != nil {
 						nodes = append(nodes, statusNode)
 					}
@@ -506,6 +508,8 @@ type BubbleProps struct {
 	TaskStatus           string
 	ExitCode             int
 	TaskError            string
+	AgentName            string
+	MainAgentName        string
 }
 
 var Bubble = kitex.FC("Bubble", func(props BubbleProps) kitex.Node {
@@ -695,6 +699,9 @@ var Bubble = kitex.FC("Bubble", func(props BubbleProps) kitex.Node {
 		senderIcon = icon.CPU
 		if role == message.RoleAssistant {
 			senderName = " AGENT"
+			if props.AgentName != "" && props.AgentName != props.MainAgentName {
+				senderName = fmt.Sprintf(" AGENT (%s)", props.AgentName)
+			}
 		} else {
 			senderName = strings.ToUpper(string(role))
 		}
@@ -1411,7 +1418,7 @@ func isSystemNotification(msg message.Message) bool {
 	return ok && val
 }
 
-func renderBubbles(messages message.MessageList, toolResponses map[string]*message.Tool, currentDots string, oneDotCurrentDots string) []kitex.Node {
+func renderBubbles(messages message.MessageList, toolResponses map[string]*message.Tool, currentDots string, oneDotCurrentDots string, mainAgentName string) []kitex.Node {
 	if len(messages) == 0 {
 		return nil
 	}
@@ -1422,7 +1429,7 @@ func renderBubbles(messages message.MessageList, toolResponses map[string]*messa
 
 	flush := func() {
 		if len(currentGroup) > 0 {
-			if node := createBubbleNode(currentGroupRole, currentGroup, toolResponses, currentDots, oneDotCurrentDots); node != nil {
+			if node := createBubbleNode(currentGroupRole, currentGroup, toolResponses, currentDots, oneDotCurrentDots, mainAgentName); node != nil {
 				nodes = append(nodes, node)
 			}
 		}
@@ -1460,13 +1467,17 @@ func renderBubbles(messages message.MessageList, toolResponses map[string]*messa
 	return nodes
 }
 
-func createBubbleNode(role message.Role, msgs []message.Message, toolResponses map[string]*message.Tool, currentDots string, oneDotCurrentDots string) kitex.Node {
+func createBubbleNode(role message.Role, msgs []message.Message, toolResponses map[string]*message.Tool, currentDots string, oneDotCurrentDots string, mainAgentName string) kitex.Node {
 	timestamp := ""
+	var msgAgentName string
 	if len(msgs) > 0 {
 		meta := msgs[0].GetMetadata()
 		if meta != nil {
 			if val, ok := meta["created_at"].(string); ok {
 				timestamp = val
+			}
+			if val, ok := meta["agent_name"].(string); ok {
+				msgAgentName = val
 			}
 		}
 	}
@@ -1534,6 +1545,8 @@ func createBubbleNode(role message.Role, msgs []message.Message, toolResponses m
 		TaskStatus:           taskStatus,
 		ExitCode:             exitCode,
 		TaskError:            taskError,
+		AgentName:            msgAgentName,
+		MainAgentName:        mainAgentName,
 	})
 }
 

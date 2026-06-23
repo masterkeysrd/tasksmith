@@ -518,10 +518,11 @@ func (m *Manager) sendMessage(ctx context.Context, sessionID string, text string
 
 		// Setup input command to load current state and append new message
 		inputCmd := graph.Update[agentgraph.AgentState](func(state agentgraph.AgentState) agentgraph.AgentState {
-			state.Messages = append(state.Messages, msg)
 			if len(state.Todos) == 0 && len(existingTodos) > 0 {
 				state.Todos = existingTodos
 			}
+			agentgraph.InjectReminders(msg, state)
+			state.Messages = append(state.Messages, msg)
 			return state
 		})
 
