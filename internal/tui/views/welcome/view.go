@@ -418,7 +418,7 @@ var View = kitex.FC("WelcomeView", func(props ViewProps) kitex.Node {
 										}
 										return kitex.Box(kitex.BoxProps{Style: InfoRowStyle},
 											kitex.Text(name),
-											kitex.If(idx == 0, func() kitex.Node {
+											kitex.If(wsCfg.Data != nil && p.Name == wsCfg.Data.DefaultProvider, func() kitex.Node {
 												return kitex.Box(kitex.BoxProps{
 													Style: style.S().Foreground(t.Color.Text.Tertiary),
 												}, kitex.Text("(default)"))
@@ -428,14 +428,7 @@ var View = kitex.FC("WelcomeView", func(props ViewProps) kitex.Node {
 								)
 							}),
 							kitex.If(providers.IsLoading || providers.Data == nil || len(providers.Data.Providers) == 0, func() kitex.Node {
-								return kitex.Fragment(
-									kitex.Box(kitex.BoxProps{Style: InfoRowStyle.Foreground(t.Color.Text.Secondary)}, kitex.Text("anthropic")),
-									kitex.Box(kitex.BoxProps{Style: InfoRowStyle},
-										kitex.Box(kitex.BoxProps{Style: style.S().Foreground(t.Color.Text.Secondary)}, kitex.Text("genai")),
-										kitex.Box(kitex.BoxProps{Style: style.S().Foreground(t.Color.Text.Tertiary)}, kitex.Text("(default)")),
-									),
-									kitex.Box(kitex.BoxProps{Style: InfoRowStyle.Foreground(t.Color.Text.Secondary)}, kitex.Text("ollama")),
-								)
+								return kitex.Box(kitex.BoxProps{Style: InfoRowStyle.Foreground(t.Color.Text.Secondary)}, kitex.Text("Loading..."))
 							}),
 						),
 
