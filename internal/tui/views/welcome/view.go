@@ -9,6 +9,7 @@ import (
 	"github.com/masterkeysrd/kite/promise"
 	"github.com/masterkeysrd/kite/style"
 	"github.com/masterkeysrd/tasksmith/internal/api"
+	"github.com/masterkeysrd/tasksmith/internal/tui/active"
 	tuiapi "github.com/masterkeysrd/tasksmith/internal/tui/api"
 	"github.com/masterkeysrd/tasksmith/internal/tui/command"
 	"github.com/masterkeysrd/tasksmith/internal/tui/components"
@@ -374,7 +375,7 @@ var View = kitex.FC("WelcomeView", func(props ViewProps) kitex.Node {
 							}),
 						),
 						ActionBox(ActionBoxProps{Title: "Telemetry & Performance"},
-							ActionItem(ActionItemProps{Icon: icon.Fire, Label: "CodeBurn Analytics", OnClick: func() { triggerAction("CodeBurn Analytics") }}),
+							ActionItem(ActionItemProps{Icon: icon.Fire, Label: "CodeBurn Analytics", OnClick: func() { active.SetScreen("analytics") }}),
 						),
 						ActionBox(ActionBoxProps{Title: "App"},
 							ActionItem(ActionItemProps{Icon: icon.Exit, Label: "Quit", OnClick: func() { quit() }}),

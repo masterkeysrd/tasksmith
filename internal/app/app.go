@@ -14,6 +14,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/core/fsutil"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
+	"github.com/masterkeysrd/tasksmith/internal/metrics"
 	"github.com/masterkeysrd/tasksmith/internal/session"
 	"github.com/masterkeysrd/tasksmith/internal/tui"
 	"github.com/masterkeysrd/tasksmith/internal/workspace"
@@ -70,8 +71,13 @@ func (app *Application) Run(ctx context.Context) error {
 	})
 
 	app.ws = workspace.New(app.opts.CWD)
-	sessionMgr := session.NewManager(store, app.ws, metricsDB)
-	app.api = api.NewService(app.ws, sessionMgr)
+	metricsStore := metrics.NewStore(metricsDB)
+	sessionMgr := session.NewManager(session.ManagerConfig{
+		Store:        store,
+		Workspace:    app.ws,
+		MetricsStore: metricsStore,
+	})
+	app.api = api.NewService(app.ws, sessionMgr, metricsStore)
 
 	log.Info("Starting TaskSmith application",
 		log.String("cwd", app.opts.CWD),

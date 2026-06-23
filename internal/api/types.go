@@ -1,5 +1,7 @@
 package api
 
+import "github.com/masterkeysrd/tasksmith/internal/metrics"
+
 type ListProjectsRequest struct {
 }
 
@@ -205,4 +207,28 @@ type Todo struct {
 	Description string `json:"description"`
 	Status      string `json:"status"`
 	ActiveText  string `json:"active_text,omitempty"`
+}
+
+type GetTokenAnalyticsRequest struct {
+	Timeframe      string `json:"timeframe"`       // "today", "7days", "30days"
+	ProviderFilter string `json:"provider_filter"` // optional provider instance name
+}
+
+type TokenAnalyticsStats = metrics.TokenAnalyticsStats
+type DailyActivity = metrics.DailyActivity
+type AnalyticsSummaryBreakdown = metrics.AnalyticsSummaryBreakdown
+type ByProjectStats = metrics.ByProjectStats
+type ByModelStats = metrics.ByModelStats
+type ByAgentStats = metrics.ByAgentStats
+type ToolAnalytics = metrics.ToolAnalytics
+
+type GetTokenAnalyticsResponse struct {
+	GlobalStats      TokenAnalyticsStats       `json:"global_stats"`
+	DailyActivity    []DailyActivity           `json:"daily_activity"`
+	SummaryBreakdown AnalyticsSummaryBreakdown `json:"summary_breakdown"`
+	ByProject        []ByProjectStats          `json:"by_project"`
+	ByModel          []ByModelStats            `json:"by_model"`
+	ByAgent          []ByAgentStats            `json:"by_agent"`
+	Tools            []ToolAnalytics           `json:"tools"`
+	ProvidersList    []string                  `json:"providers_list"`
 }

@@ -11,6 +11,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/tui/queries"
 	"github.com/masterkeysrd/tasksmith/internal/tui/shell"
 	"github.com/masterkeysrd/tasksmith/internal/tui/theme"
+	"github.com/masterkeysrd/tasksmith/internal/tui/views/analytics"
 	"github.com/masterkeysrd/tasksmith/internal/tui/views/chat"
 	"github.com/masterkeysrd/tasksmith/internal/tui/views/setup"
 	"github.com/masterkeysrd/tasksmith/internal/tui/views/welcome"
@@ -53,6 +54,7 @@ var Router = kitex.SimpleFC("Router", func() kitex.Node {
 	providers := queries.UseListProviders()
 	activeView, setActiveView := kitex.UseState(string(viewLoading))
 	activeSessionID := active.UseSessionID()
+	activeScreen := active.UseScreen()
 	windClient := wind.UseClient()
 
 	kitex.UseEffect(func() {
@@ -82,6 +84,11 @@ var Router = kitex.SimpleFC("Router", func() kitex.Node {
 		}, kitex.Text("Loading workspace..."))
 
 	case viewWelcome:
+		if activeScreen == "analytics" {
+			return analytics.View(analytics.Props{
+				OnClose: func() { active.SetScreen("chat") },
+			})
+		}
 		return welcome.View(welcome.ViewProps{
 			OnOpenSetupWizard: func() { setActiveView(string(viewSetup)) },
 			OnNewSession: func(id string) {
@@ -104,6 +111,13 @@ var Router = kitex.SimpleFC("Router", func() kitex.Node {
 		})
 
 	default: // viewMain — shell with active workspace view
+		if activeScreen == "analytics" {
+			return shell.View(shell.Props{},
+				analytics.View(analytics.Props{
+					OnClose: func() { active.SetScreen("chat") },
+				}),
+			)
+		}
 		return shell.View(shell.Props{},
 			chat.View(chat.ViewProps{SessionID: activeSessionID}),
 		)

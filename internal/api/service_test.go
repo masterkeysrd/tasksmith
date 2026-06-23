@@ -85,7 +85,7 @@ func TestService(t *testing.T) {
 		},
 	}
 
-	svc := NewService(mockWS, nil)
+	svc := NewService(mockWS, nil, nil)
 	ctx := context.Background()
 
 	t.Run("ListProjects", func(t *testing.T) {
@@ -153,6 +153,24 @@ func TestService(t *testing.T) {
 		}
 		if resp.Tools[0].Category != "cat1" {
 			t.Errorf("expected category cat1, got %s", resp.Tools[0].Category)
+		}
+	})
+
+	t.Run("GetTokenAnalytics", func(t *testing.T) {
+		resp, err := svc.GetTokenAnalytics(ctx, GetTokenAnalyticsRequest{
+			Timeframe: "7days",
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if resp == nil {
+			t.Fatal("expected non-nil response")
+		}
+		if len(resp.ProvidersList) != 0 {
+			t.Errorf("expected empty providers list, got %v", resp.ProvidersList)
+		}
+		if resp.GlobalStats.TotalCalls != 0 {
+			t.Errorf("expected 0 total calls, got %d", resp.GlobalStats.TotalCalls)
 		}
 	})
 }

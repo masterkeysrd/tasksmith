@@ -40,7 +40,7 @@ func TestSessionManager(t *testing.T) {
 	}
 
 	// 3. Initialize the Manager business logic
-	manager := session.NewManager(store, nil, nil)
+	manager := session.NewManager(session.ManagerConfig{Store: store})
 
 	ctx := context.Background()
 
@@ -229,7 +229,7 @@ func TestSessionBinaryRehydration(t *testing.T) {
 		t.Fatalf("failed to initialize sqlite store: %v", err)
 	}
 
-	manager := session.NewManager(store, nil, nil)
+	manager := session.NewManager(session.ManagerConfig{Store: store})
 	ctx := context.Background()
 
 	s, err := manager.CreateSession(ctx, "binary-test-session")
@@ -336,7 +336,7 @@ func TestSessionInboxQueue(t *testing.T) {
 		t.Fatalf("failed to initialize sqlite store: %v", err)
 	}
 
-	manager := session.NewManager(store, nil, nil)
+	manager := session.NewManager(session.ManagerConfig{Store: store})
 	ctx := context.Background()
 
 	s, err := manager.CreateSession(ctx, "inbox-queue-test")
@@ -398,7 +398,7 @@ func TestSendSystemNotification(t *testing.T) {
 		t.Fatalf("failed to initialize sqlite store: %v", err)
 	}
 
-	manager := session.NewManager(store, nil, nil)
+	manager := session.NewManager(session.ManagerConfig{Store: store})
 	ctx := context.Background()
 
 	s, err := manager.CreateSession(ctx, "notification-test")
@@ -475,7 +475,7 @@ func TestActiveToolStreamInjection(t *testing.T) {
 		t.Fatalf("failed to initialize sqlite store: %v", err)
 	}
 
-	manager := session.NewManager(store, nil, nil)
+	manager := session.NewManager(session.ManagerConfig{Store: store})
 	ctx := context.Background()
 
 	s, err := manager.CreateSession(ctx, "toolstream-test")

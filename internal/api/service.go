@@ -10,6 +10,7 @@ import (
 	"github.com/masterkeysrd/loom/message"
 	"github.com/masterkeysrd/tasksmith/internal/agent/tools"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
+	"github.com/masterkeysrd/tasksmith/internal/metrics"
 	"github.com/masterkeysrd/tasksmith/internal/session"
 	"github.com/masterkeysrd/tasksmith/internal/workspace"
 	"github.com/masterkeysrd/warp"
@@ -27,15 +28,17 @@ type Workspace interface {
 
 // Service provides methods to interact with the workspace through API types.
 type Service struct {
-	ws Workspace
-	sm *session.Manager
+	ws           Workspace
+	sm           *session.Manager
+	metricsStore *metrics.Store
 }
 
 // NewService creates a new API service.
-func NewService(ws Workspace, sm *session.Manager) *Service {
+func NewService(ws Workspace, sm *session.Manager, metricsStore *metrics.Store) *Service {
 	return &Service{
-		ws: ws,
-		sm: sm,
+		ws:           ws,
+		sm:           sm,
+		metricsStore: metricsStore,
 	}
 }
 
@@ -440,4 +443,36 @@ func (s *Service) GetSessionState(ctx context.Context, req GetSessionStateReques
 		RunningTasks: runningTasks,
 		Todos:        apiTodos,
 	}, nil
+}
+
+// GetTokenAnalytics aggregates token usage statistics.
+func (s *Service) GetTokenAnalytics(ctx context.Context, req GetTokenAnalyticsRequest) (*GetTokenAnalyticsResponse, error) {
+	resp := &GetTokenAnalyticsResponse{
+		ProvidersList: []string{},
+		DailyActivity: []DailyActivity{},
+		ByProject:     []ByProjectStats{},
+		ByModel:       []ByModelStats{},
+		ByAgent:       []ByAgentStats{},
+		Tools:         []ToolAnalytics{},
+	}
+
+	if s.metricsStore == nil {
+		return resp, nil
+	}
+
+	result, err := s.metricsStore.GetTokenAnalytics(ctx, req.Timeframe, req.ProviderFilter)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch token analytics: %w", err)
+	}
+
+	resp.GlobalStats = result.GlobalStats
+	resp.DailyActivity = result.DailyActivity
+	resp.SummaryBreakdown = result.SummaryBreakdown
+	resp.ByProject = result.ByProject
+	resp.ByModel = result.ByModel
+	resp.ByAgent = result.ByAgent
+	resp.Tools = result.Tools
+	resp.ProvidersList = result.ProvidersList
+
+	return resp, nil
 }

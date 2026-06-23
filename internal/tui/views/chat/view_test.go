@@ -82,6 +82,10 @@ func (m *mockClient) GetSessionState(ctx context.Context, req api.GetSessionStat
 	return &api.GetSessionStateResponse{Status: "idle"}, nil
 }
 
+func (m *mockClient) GetTokenAnalytics(ctx context.Context, req api.GetTokenAnalyticsRequest) (*api.GetTokenAnalyticsResponse, error) {
+	return &api.GetTokenAnalyticsResponse{}, nil
+}
+
 func TestChatView(t *testing.T) {
 	thm := &theme.Scheme{}
 	client := &mockClient{}

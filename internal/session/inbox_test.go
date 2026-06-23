@@ -30,7 +30,7 @@ func TestSessionInboxPopAndPersist(t *testing.T) {
 		t.Fatalf("failed to initialize sqlite store: %v", err)
 	}
 
-	manager := NewManager(store, nil, nil)
+	manager := NewManager(ManagerConfig{Store: store})
 	ctx := context.Background()
 
 	s, err := manager.CreateSession(ctx, "inbox-pop-test")

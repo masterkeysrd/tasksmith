@@ -13,12 +13,14 @@ import (
 	"github.com/masterkeysrd/kite/key"
 
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
+	"github.com/masterkeysrd/tasksmith/internal/tui/active"
 	"github.com/masterkeysrd/tasksmith/internal/tui/mode"
 )
 
 // Options holds metadata for a keymap binding.
 type Options struct {
 	Description string
+	Screen      string
 }
 
 // Option is a functional option for configuring a keymap binding.
@@ -28,6 +30,13 @@ type Option func(*Options)
 func Description(desc string) Option {
 	return func(o *Options) {
 		o.Description = desc
+	}
+}
+
+// Screen returns an Option that restricts the binding to a specific screen.
+func Screen(scr string) Option {
+	return func(o *Options) {
+		o.Screen = scr
 	}
 }
 
@@ -57,10 +66,14 @@ func Default() *Keymap {
 type binding struct {
 	target      any
 	description string
+	screen      string
 }
 
 // Description returns the binding's description.
 func (b binding) Description() string { return b.description }
+
+// Screen returns the binding's screen option.
+func (b binding) Screen() string { return b.screen }
 
 // Keymap is a mode-aware binding table with escape-timeout sequence resolution.
 type Keymap struct {
@@ -110,6 +123,7 @@ func (km *Keymap) Set(modes []mode.Mode, lhs string, rhs any, opts ...Option) {
 		opt(o)
 	}
 	b.description = o.Description
+	b.screen = o.Screen
 
 	for _, m := range modes {
 		km.ensureModesLocked()
@@ -251,6 +265,9 @@ func (km *Keymap) effectiveTimeoutLocked() time.Duration {
 func (km *Keymap) resolveLocked(m mode.Mode, key string) (any, bool) {
 	if bindings, ok := km.Modes[m]; ok {
 		if b, ok := bindings[key]; ok {
+			if b.screen != "" && active.GetScreen() != b.screen {
+				return nil, false
+			}
 			return b.target, true
 		}
 	}
@@ -264,7 +281,10 @@ func (km *Keymap) resolveSequenceLocked(m mode.Mode, keys []string) (any, bool) 
 func (km *Keymap) isPrefixLocked(m mode.Mode, seq []string) bool {
 	prefix := strings.Join(seq, "")
 	if bindings, ok := km.Modes[m]; ok {
-		for key := range bindings {
+		for key, b := range bindings {
+			if b.screen != "" && active.GetScreen() != b.screen {
+				continue
+			}
 			if strings.HasPrefix(key, prefix) && key != prefix {
 				return true
 			}
@@ -364,6 +384,9 @@ func (km *Keymap) ExecuteTarget(ctx context.Context, m mode.Mode, ke *event.KeyE
 
 	// 1. Try MatchString (robust, handles synonyms)
 	for lhs, b := range bindings {
+		if b.screen != "" && active.GetScreen() != b.screen {
+			continue
+		}
 		if ke.MatchString(lhs) {
 			target = b.target
 			matchedKey = lhs
@@ -375,8 +398,10 @@ func (km *Keymap) ExecuteTarget(ctx context.Context, m mode.Mode, ke *event.KeyE
 	if target == nil {
 		keyStr := KeyToString(ke)
 		if b, ok := bindings[keyStr]; ok {
-			target = b.target
-			matchedKey = keyStr
+			if b.screen == "" || active.GetScreen() == b.screen {
+				target = b.target
+				matchedKey = keyStr
+			}
 		}
 	}
 

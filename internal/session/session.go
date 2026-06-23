@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jmoiron/sqlx"
 	"github.com/masterkeysrd/loom/graph"
 	"github.com/masterkeysrd/loom/llm"
 	loomanthropic "github.com/masterkeysrd/loom/llm/anthropic"
@@ -23,6 +22,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/agent/tools"
 	coredb "github.com/masterkeysrd/tasksmith/internal/core/db"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
+	"github.com/masterkeysrd/tasksmith/internal/metrics"
 	"github.com/masterkeysrd/tasksmith/internal/workspace"
 	"github.com/masterkeysrd/warp"
 )
@@ -64,6 +64,13 @@ type ActiveSession struct {
 	CurrentStreamMetrics  *message.TokenMetrics
 }
 
+// ManagerConfig defines configuration parameters and dependencies for Manager.
+type ManagerConfig struct {
+	Store        Store
+	Workspace    *workspace.Workspace
+	MetricsStore *metrics.Store
+}
+
 // Manager coordinates session business logic and delegates persistence to the Store interface.
 type Manager struct {
 	store Store
@@ -72,21 +79,21 @@ type Manager struct {
 	mu             sync.RWMutex
 	activeSessions map[string]*ActiveSession
 	taskMgr        *tools.TaskManager
-	metricsDB      *sqlx.DB
+	metricsStore   *metrics.Store
 }
 
-// NewManager creates a new Manager backed by the provided Store and Workspace.
-func NewManager(store Store, ws *workspace.Workspace, metricsDB *sqlx.DB) *Manager {
+// NewManager creates a new Manager using the provided configuration.
+func NewManager(cfg ManagerConfig) *Manager {
 	m := &Manager{
-		store:          store,
-		ws:             ws,
-		metricsDB:      metricsDB,
+		store:          cfg.Store,
+		ws:             cfg.Workspace,
+		metricsStore:   cfg.MetricsStore,
 		activeSessions: make(map[string]*ActiveSession),
 	}
 
 	var cwd string
-	if ws != nil {
-		cwd = ws.CWD()
+	if cfg.Workspace != nil {
+		cwd = cfg.Workspace.CWD()
 	}
 
 	m.taskMgr = tools.NewTaskManager(cwd, func(sessionID, taskID string, task *tools.Task) {
@@ -1119,7 +1126,7 @@ func (m *Manager) handleAgentMessage(ctx context.Context, sessionID string, sess
 		return fmt.Errorf("failed to save agent message: %w", err)
 	}
 
-	if asstMsg, ok := agentMsg.(*message.Assistant); ok && asstMsg.Metrics != nil && m.metricsDB != nil {
+	if asstMsg, ok := agentMsg.(*message.Assistant); ok && asstMsg.Metrics != nil && m.metricsStore != nil {
 		var wsPath, projName string
 		if m.ws != nil {
 			wsPath = m.ws.CWD()
@@ -1167,7 +1174,7 @@ func (m *Manager) handleAgentMessage(ctx context.Context, sessionID string, sess
 			CacheReadTokens:     asstMsg.Metrics.Tokens.CacheRead,
 			EstimatedCostUSD:    asstMsg.Metrics.TotalCost.AsUSD(),
 		}
-		_ = coredb.LogLLMCall(m.metricsDB, event, payload)
+		_ = m.metricsStore.LogLLMCall(event, payload)
 
 		cumPromptTokens := asstMsg.Metrics.Tokens.Input
 		cumCompletionTokens := asstMsg.Metrics.Tokens.Output
@@ -1248,7 +1255,7 @@ func (m *Manager) handleToolMessage(ctx context.Context, sessionID string, sess 
 		}
 		m.mu.Unlock()
 
-		if m.metricsDB != nil {
+		if m.metricsStore != nil {
 			var wsPath, projName string
 			if m.ws != nil {
 				wsPath = m.ws.CWD()
@@ -1298,7 +1305,7 @@ func (m *Manager) handleToolMessage(ctx context.Context, sessionID string, sess 
 				ErrorMessage:    errMsg,
 				OutputTokens:    outputTokens,
 			}
-			_ = coredb.LogToolCall(m.metricsDB, event, payload)
+			_ = m.metricsStore.LogToolCall(event, payload)
 		}
 	}
 	return nil

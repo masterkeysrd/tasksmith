@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/masterkeysrd/kite/event"
+	"github.com/masterkeysrd/tasksmith/internal/tui/active"
 	"github.com/masterkeysrd/tasksmith/internal/tui/mode"
 )
 
@@ -776,4 +778,84 @@ func BenchmarkInput(b *testing.B) {
 			}
 		}
 	})
+}
+
+// TestScreenOption verifies that key resolution, ExecuteTarget, and Input processing
+// respect the Screen option, resolving only when the active screen matches.
+func TestScreenOption(t *testing.T) {
+	// Save the original screen and restore it later.
+	origScreen := active.GetScreen()
+	defer active.SetScreen(origScreen)
+
+	active.SetScreen("chat")
+
+	km := New()
+	km.Set([]mode.Mode{mode.Normal}, "a", func(context.Context) {}, Screen("analytics"))
+	km.Set([]mode.Mode{mode.Normal}, "b", func(context.Context) {}) // global/no screen constraint
+	km.Set([]mode.Mode{mode.Normal}, "ab", func(context.Context) {}, Screen("analytics"))
+
+	// Test Resolve
+	if _, ok := km.Resolve(mode.Normal, "a"); ok {
+		t.Error("expected key 'a' (restricted to analytics) not to resolve on 'chat' screen")
+	}
+	if _, ok := km.Resolve(mode.Normal, "b"); !ok {
+		t.Error("expected key 'b' (global) to resolve on 'chat' screen")
+	}
+
+	// Test Input
+	if _, ok := km.Input(mode.Normal, "a"); ok {
+		t.Error("expected key 'a' input not to resolve on 'chat' screen")
+	}
+	// Note: 'a' is a prefix of 'ab' on 'analytics', but since we are on 'chat',
+	// 'a' is not active. So 'a' shouldn't even register as a prefix on 'chat' screen.
+	if km.isPrefix(mode.Normal, []string{"a"}) {
+		t.Error("expected 'a' not to be considered a prefix on 'chat' screen")
+	}
+
+	// Test ExecuteTarget
+	keA := &event.KeyEvent{}
+	keA.Text = "a"
+	keB := &event.KeyEvent{}
+	keB.Text = "b"
+
+	ok, err := km.ExecuteTarget(context.Background(), mode.Normal, keA)
+	if err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+	if ok {
+		t.Error("expected ExecuteTarget for 'a' to return false on 'chat' screen")
+	}
+
+	ok, err = km.ExecuteTarget(context.Background(), mode.Normal, keB)
+	if err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+	if !ok {
+		t.Error("expected ExecuteTarget for 'b' to return true on 'chat' screen")
+	}
+
+	// Change screen to "analytics"
+	active.SetScreen("analytics")
+
+	// Test Resolve again
+	if _, ok := km.Resolve(mode.Normal, "a"); !ok {
+		t.Error("expected key 'a' to resolve on 'analytics' screen")
+	}
+	if _, ok := km.Resolve(mode.Normal, "b"); !ok {
+		t.Error("expected key 'b' to resolve on 'analytics' screen")
+	}
+
+	// Test Prefix check on analytics
+	if !km.isPrefix(mode.Normal, []string{"a"}) {
+		t.Error("expected 'a' to be a prefix of 'ab' on 'analytics' screen")
+	}
+
+	// Test ExecuteTarget again
+	ok, err = km.ExecuteTarget(context.Background(), mode.Normal, keA)
+	if err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+	if !ok {
+		t.Error("expected ExecuteTarget for 'a' to return true on 'analytics' screen")
+	}
 }

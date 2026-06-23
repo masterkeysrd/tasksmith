@@ -8,6 +8,7 @@ import (
 	"github.com/masterkeysrd/kite/extras/kitex"
 	"github.com/masterkeysrd/kite/style"
 	"github.com/masterkeysrd/tasksmith/internal/api"
+	"github.com/masterkeysrd/tasksmith/internal/tui/active"
 	"github.com/masterkeysrd/tasksmith/internal/tui/components"
 	"github.com/masterkeysrd/tasksmith/internal/tui/components/icon"
 )
@@ -216,7 +217,7 @@ func metricsPanel(data Data) kitex.Node {
 			Color:   components.ButtonInfo,
 			Style:   style.S().Width(style.Percent(100)).JustifyContent(style.JustifyCenter).MarginTop(1),
 			OnClick: func() {
-				// Click action
+				active.SetScreen("analytics")
 			},
 		},
 			kitex.Box(kitex.BoxProps{
