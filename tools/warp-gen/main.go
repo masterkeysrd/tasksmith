@@ -192,6 +192,16 @@ func main() {
 		name := tInfo.Name
 		camelName := toCamelCase(name)
 		hBuf.WriteString(fmt.Sprintf("\tif res, ok := resMap[%q]; ok {\n", name))
+		hBuf.WriteString(fmt.Sprintf("\t\tvar opts []tool.Option\n"))
+		hBuf.WriteString(fmt.Sprintf("\t\tif res.Spec.Annotations != nil {\n"))
+		hBuf.WriteString(fmt.Sprintf("\t\t\topts = append(opts, tool.WithAnnotation(tool.Annotation{\n"))
+		hBuf.WriteString(fmt.Sprintf("\t\t\t\tIsOpenWorld:  res.Spec.Annotations.IsOpenWorld,\n"))
+		hBuf.WriteString(fmt.Sprintf("\t\t\t\tIsDangerous:  res.Spec.Annotations.IsDangerous,\n"))
+		hBuf.WriteString(fmt.Sprintf("\t\t\t\tIsReadOnly:   res.Spec.Annotations.IsReadOnly,\n"))
+		hBuf.WriteString(fmt.Sprintf("\t\t\t\tIsIdempotent: res.Spec.Annotations.IsIdempotent,\n"))
+		hBuf.WriteString(fmt.Sprintf("\t\t\t\tUserHint:     res.Spec.Annotations.UserHint,\n"))
+		hBuf.WriteString(fmt.Sprintf("\t\t\t}))\n"))
+		hBuf.WriteString(fmt.Sprintf("\t\t}\n"))
 		if tInfo.IsStreaming {
 			hBuf.WriteString(fmt.Sprintf("\t\tt, err := tool.NewStreaming(\n"))
 		} else {
@@ -201,6 +211,7 @@ func main() {
 		hBuf.WriteString(fmt.Sprintf("\t\t\tres.Metadata.DisplayName,\n"))
 		hBuf.WriteString(fmt.Sprintf("\t\t\tres.Metadata.Description,\n"))
 		hBuf.WriteString(fmt.Sprintf("\t\t\thandlers.%s,\n", camelName))
+		hBuf.WriteString(fmt.Sprintf("\t\t\topts...,\n"))
 		hBuf.WriteString(fmt.Sprintf("\t\t)\n"))
 		hBuf.WriteString(fmt.Sprintf("\t\tif err != nil {\n"))
 		hBuf.WriteString(fmt.Sprintf("\t\t\treturn nil, fmt.Errorf(\"failed to create tool %s: %%w\", err)\n", name))
