@@ -8,18 +8,21 @@ import (
 type state struct {
 	sessionID string
 	screen    string // "chat" or "analytics"
+	modal     string // active modal overlay identifier, "" if none
 }
 
 var store = kites.Create(state{
 	sessionID: "",
 	screen:    "chat",
+	modal:     "",
 })
 
-// SetSessionID updates the active session ID and switches the screen back to chat.
+// SetSessionID updates the active session ID and switches the screen back to chat, closing any modal.
 func SetSessionID(id string) {
 	store.Set(func(s state) state {
 		s.sessionID = id
 		s.screen = "chat"
+		s.modal = ""
 		return s
 	})
 }
@@ -54,5 +57,25 @@ func GetSessionID() string {
 func UseSessionID() string {
 	return kites.Use(store, func(s state) string {
 		return s.sessionID
+	})
+}
+
+// SetModal updates the active modal overlay. Set to "" to close modals.
+func SetModal(modal string) {
+	store.Set(func(s state) state {
+		s.modal = modal
+		return s
+	})
+}
+
+// GetModal returns the active modal.
+func GetModal() string {
+	return store.Get().modal
+}
+
+// UseModal returns the active modal reactively.
+func UseModal() string {
+	return kites.Use(store, func(s state) string {
+		return s.modal
 	})
 }

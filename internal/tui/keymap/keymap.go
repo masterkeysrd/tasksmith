@@ -17,10 +17,11 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/tui/mode"
 )
 
-// Options holds metadata for a keymap binding.
+// Options holds metadata for a keybinding.
 type Options struct {
 	Description string
 	Screen      string
+	Modal       string
 }
 
 // Option is a functional option for configuring a keymap binding.
@@ -37,6 +38,13 @@ func Description(desc string) Option {
 func Screen(scr string) Option {
 	return func(o *Options) {
 		o.Screen = scr
+	}
+}
+
+// Modal returns an Option that restricts the binding to a specific modal.
+func Modal(mod string) Option {
+	return func(o *Options) {
+		o.Modal = mod
 	}
 }
 
@@ -67,6 +75,7 @@ type binding struct {
 	target      any
 	description string
 	screen      string
+	modal       string
 }
 
 // Description returns the binding's description.
@@ -74,6 +83,9 @@ func (b binding) Description() string { return b.description }
 
 // Screen returns the binding's screen option.
 func (b binding) Screen() string { return b.screen }
+
+// Modal returns the binding's modal option.
+func (b binding) Modal() string { return b.modal }
 
 // Keymap is a mode-aware binding table with escape-timeout sequence resolution.
 type Keymap struct {
@@ -124,6 +136,7 @@ func (km *Keymap) Set(modes []mode.Mode, lhs string, rhs any, opts ...Option) {
 	}
 	b.description = o.Description
 	b.screen = o.Screen
+	b.modal = o.Modal
 
 	for _, m := range modes {
 		km.ensureModesLocked()
@@ -268,6 +281,9 @@ func (km *Keymap) resolveLocked(m mode.Mode, key string) (any, bool) {
 			if b.screen != "" && active.GetScreen() != b.screen {
 				return nil, false
 			}
+			if active.GetModal() != b.modal {
+				return nil, false
+			}
 			return b.target, true
 		}
 	}
@@ -283,6 +299,9 @@ func (km *Keymap) isPrefixLocked(m mode.Mode, seq []string) bool {
 	if bindings, ok := km.Modes[m]; ok {
 		for key, b := range bindings {
 			if b.screen != "" && active.GetScreen() != b.screen {
+				continue
+			}
+			if active.GetModal() != b.modal {
 				continue
 			}
 			if strings.HasPrefix(key, prefix) && key != prefix {
@@ -387,6 +406,9 @@ func (km *Keymap) ExecuteTarget(ctx context.Context, m mode.Mode, ke *event.KeyE
 		if b.screen != "" && active.GetScreen() != b.screen {
 			continue
 		}
+		if active.GetModal() != b.modal {
+			continue
+		}
 		if ke.MatchString(lhs) {
 			target = b.target
 			matchedKey = lhs
@@ -398,7 +420,7 @@ func (km *Keymap) ExecuteTarget(ctx context.Context, m mode.Mode, ke *event.KeyE
 	if target == nil {
 		keyStr := KeyToString(ke)
 		if b, ok := bindings[keyStr]; ok {
-			if b.screen == "" || active.GetScreen() == b.screen {
+			if (b.screen == "" || active.GetScreen() == b.screen) && active.GetModal() == b.modal {
 				target = b.target
 				matchedKey = keyStr
 			}
