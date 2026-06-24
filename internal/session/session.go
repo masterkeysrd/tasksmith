@@ -23,6 +23,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/agent/tools"
 	coredb "github.com/masterkeysrd/tasksmith/internal/core/db"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
+	"github.com/masterkeysrd/tasksmith/internal/core/lsp"
 	"github.com/masterkeysrd/tasksmith/internal/metrics"
 	"github.com/masterkeysrd/tasksmith/internal/workspace"
 	"github.com/masterkeysrd/warp"
@@ -71,6 +72,7 @@ type ManagerConfig struct {
 	Store        Store
 	Workspace    *workspace.Workspace
 	MetricsStore *metrics.Store
+	LspManager   *lsp.Manager
 }
 
 // Manager coordinates session business logic and delegates persistence to the Store interface.
@@ -82,6 +84,7 @@ type Manager struct {
 	activeSessions map[string]*ActiveSession
 	taskMgr        *tools.TaskManager
 	metricsStore   *metrics.Store
+	lspManager     *lsp.Manager
 }
 
 // NewManager creates a new Manager using the provided configuration.
@@ -90,6 +93,7 @@ func NewManager(cfg ManagerConfig) *Manager {
 		store:          cfg.Store,
 		ws:             cfg.Workspace,
 		metricsStore:   cfg.MetricsStore,
+		lspManager:     cfg.LspManager,
 		activeSessions: make(map[string]*ActiveSession),
 	}
 
@@ -332,6 +336,7 @@ func (m *Manager) GetSessionState(ctx context.Context, sessionID string) (Sessio
 				Storage:     storage,
 				TaskManager: m.taskMgr,
 				SessionID:   sessionID,
+				LspManager:  m.lspManager,
 			}); err == nil {
 				if g, err := ag.Build(cp); err == nil {
 					loc := &graph.Location{ThreadID: sessionID}
@@ -424,13 +429,17 @@ func (m *Manager) sendMessage(ctx context.Context, sessionID string, text string
 
 	// Load existing todos from database to initialize graph state if empty
 	existingTodos, _ := m.ListTodos(runCtx, sessionID)
+	cfg, _ := m.ws.GetWorkspaceConfig(runCtx)
 
 	// Setup input command to load current state and append new message
 	inputCmd := graph.Update[agentgraph.AgentState](func(state agentgraph.AgentState) agentgraph.AgentState {
 		if len(state.Todos) == 0 && len(existingTodos) > 0 {
 			state.Todos = existingTodos
 		}
-		agentgraph.InjectReminders(msg, state)
+
+		cwd := cfg.CWD
+		agentgraph.InjectReminders(runCtx, msg, state, m.lspManager, cwd)
+
 		state.Messages = append(state.Messages, msg)
 		return state
 	})
@@ -627,6 +636,7 @@ func (m *Manager) runAgentLoop(runCtx context.Context, sessionID string, sess *A
 		OnTodosUpdated: func(ctx context.Context, todos []tools.Todo) error {
 			return m.UpdateTodos(ctx, sessionID, todos)
 		},
+		LspManager: m.lspManager,
 	})
 	if err != nil {
 		m.setSessionError(sessionID, fmt.Errorf("failed to construct agent graph: %w", err))

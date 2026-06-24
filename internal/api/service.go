@@ -5,12 +5,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"sort"
 	"time"
 
 	"github.com/masterkeysrd/loom/message"
 	"github.com/masterkeysrd/tasksmith/internal/agent/permissions"
 	"github.com/masterkeysrd/tasksmith/internal/agent/tools"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
+	"github.com/masterkeysrd/tasksmith/internal/core/lsp"
 	"github.com/masterkeysrd/tasksmith/internal/metrics"
 	"github.com/masterkeysrd/tasksmith/internal/session"
 	"github.com/masterkeysrd/tasksmith/internal/workspace"
@@ -32,14 +34,16 @@ type Service struct {
 	ws           Workspace
 	sm           *session.Manager
 	metricsStore *metrics.Store
+	lspManager   *lsp.Manager
 }
 
 // NewService creates a new API service.
-func NewService(ws Workspace, sm *session.Manager, metricsStore *metrics.Store) *Service {
+func NewService(ws Workspace, sm *session.Manager, metricsStore *metrics.Store, lspManager *lsp.Manager) *Service {
 	return &Service{
 		ws:           ws,
 		sm:           sm,
 		metricsStore: metricsStore,
+		lspManager:   lspManager,
 	}
 }
 
@@ -90,6 +94,10 @@ func (s *Service) ListProjects(ctx context.Context, req ListProjectsRequest) (*L
 		})
 	}
 
+	sort.Slice(resp.Projects, func(i, j int) bool {
+		return resp.Projects[i].Name < resp.Projects[j].Name
+	})
+
 	return resp, nil
 }
 
@@ -106,6 +114,10 @@ func (s *Service) ListAgents(ctx context.Context, req ListAgentsRequest) (*ListA
 			Description: a.Metadata.Description,
 		})
 	}
+
+	sort.Slice(resp.Agents, func(i, j int) bool {
+		return resp.Agents[i].Name < resp.Agents[j].Name
+	})
 
 	return resp, nil
 }
@@ -149,6 +161,10 @@ func (s *Service) ListProviders(ctx context.Context, req ListProvidersRequest) (
 			Models: models,
 		})
 	}
+
+	sort.Slice(resp.Providers, func(i, j int) bool {
+		return resp.Providers[i].Name < resp.Providers[j].Name
+	})
 
 	return resp, nil
 }
@@ -216,6 +232,10 @@ func (s *Service) ListProvidersPresets(ctx context.Context, req ListProvidersPre
 		})
 	}
 
+	sort.Slice(resp.Providers, func(i, j int) bool {
+		return resp.Providers[i].Name < resp.Providers[j].Name
+	})
+
 	return resp, nil
 }
 
@@ -238,6 +258,13 @@ func (s *Service) ListToolsPresets(ctx context.Context, req ListToolsPresetsRequ
 			Labels:      t.Metadata.Labels,
 		})
 	}
+
+	sort.Slice(resp.Tools, func(i, j int) bool {
+		if resp.Tools[i].Category != resp.Tools[j].Category {
+			return resp.Tools[i].Category < resp.Tools[j].Category
+		}
+		return resp.Tools[i].Name < resp.Tools[j].Name
+	})
 
 	return resp, nil
 }
@@ -410,7 +437,21 @@ func (s *Service) GetSessionMessages(ctx context.Context, req GetSessionMessages
 // GetSessionState queries the active execution status of the session agent.
 func (s *Service) GetSessionState(ctx context.Context, req GetSessionStateRequest) (*GetSessionStateResponse, error) {
 	if s.sm == nil {
-		return &GetSessionStateResponse{Status: "idle"}, nil
+		var apiSuggestions []LspSuggestion
+		if s.lspManager != nil {
+			suggs := s.lspManager.GetSuggestions()
+			for _, sug := range suggs {
+				apiSuggestions = append(apiSuggestions, LspSuggestion{
+					Language:   sug.Language,
+					ServerName: sug.ServerName,
+					Command:    sug.Command,
+				})
+			}
+		}
+		return &GetSessionStateResponse{
+			Status:                "idle",
+			PendingLspSuggestions: apiSuggestions,
+		}, nil
 	}
 	status, errStr, isGen, pendingAuths := s.sm.GetSessionState(ctx, req.SessionID)
 
@@ -439,6 +480,18 @@ func (s *Service) GetSessionState(ctx context.Context, req GetSessionStateReques
 		}
 	}
 
+	var apiSuggestions []LspSuggestion
+	if s.lspManager != nil {
+		suggs := s.lspManager.GetSuggestions()
+		for _, sug := range suggs {
+			apiSuggestions = append(apiSuggestions, LspSuggestion{
+				Language:   sug.Language,
+				ServerName: sug.ServerName,
+				Command:    sug.Command,
+			})
+		}
+	}
+
 	return &GetSessionStateResponse{
 		Status:                string(status),
 		Error:                 errStr,
@@ -446,6 +499,7 @@ func (s *Service) GetSessionState(ctx context.Context, req GetSessionStateReques
 		RunningTasks:          runningTasks,
 		Todos:                 apiTodos,
 		PendingAuthorizations: pendingAuths,
+		PendingLspSuggestions: apiSuggestions,
 	}, nil
 }
 
@@ -494,4 +548,120 @@ func (s *Service) GetTokenAnalytics(ctx context.Context, req GetTokenAnalyticsRe
 	resp.ProvidersList = result.ProvidersList
 
 	return resp, nil
+}
+
+// ConfigureLsp configures the LSP preset for a given language.
+func (s *Service) ConfigureLsp(ctx context.Context, req ConfigureLspRequest) (*ConfigureLspResponse, error) {
+	if s.lspManager == nil {
+		return nil, fmt.Errorf("LSP manager is not initialized")
+	}
+
+	preset, ok := lsp.Presets[req.Language]
+	if !ok {
+		return nil, fmt.Errorf("unknown language preset: %s", req.Language)
+	}
+
+	cfg, err := lsp.LoadConfig()
+	if err != nil {
+		return nil, fmt.Errorf("failed to load LSP config: %w", err)
+	}
+
+	// Check if already configured
+	alreadyConfigured := false
+	for _, srv := range cfg.Servers {
+		if srv.Name == preset.Name {
+			alreadyConfigured = true
+			break
+		}
+	}
+
+	if !alreadyConfigured {
+		cfg.Servers = append(cfg.Servers, preset)
+		if err := lsp.SaveConfig(cfg); err != nil {
+			return nil, fmt.Errorf("failed to save LSP config: %w", err)
+		}
+	}
+
+	// Dismiss the suggestion since it's now configured
+	s.lspManager.DismissSuggestion(req.Language)
+
+	// Restart client
+	wsCfg, err := s.ws.GetWorkspaceConfig(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get workspace config: %w", err)
+	}
+	if err := s.lspManager.RestartClient(ctx, wsCfg.CWD); err != nil {
+		return nil, fmt.Errorf("failed to restart LSP client: %w", err)
+	}
+
+	return &ConfigureLspResponse{Success: true}, nil
+}
+
+// DismissLspSuggestion dismisses a pending LSP suggestion so it won't be recommended again.
+func (s *Service) DismissLspSuggestion(ctx context.Context, req DismissLspSuggestionRequest) (*DismissLspSuggestionResponse, error) {
+	if s.lspManager == nil {
+		return nil, fmt.Errorf("LSP manager is not initialized")
+	}
+	s.lspManager.DismissSuggestion(req.Language)
+	return &DismissLspSuggestionResponse{Success: true, Message: "Suggestion dismissed"}, nil
+}
+
+// GetLspStatus retrieves the status of all configured LSP servers.
+func (s *Service) GetLspStatus(ctx context.Context, req GetLspStatusRequest) (*GetLspStatusResponse, error) {
+	if s.lspManager == nil {
+		return &GetLspStatusResponse{Servers: []LspServerInfo{}}, nil
+	}
+
+	statusList := s.lspManager.GetStatus()
+	var servers []LspServerInfo
+	for _, st := range statusList {
+		servers = append(servers, LspServerInfo{
+			Name:      st.Name,
+			Command:   st.Command,
+			FileTypes: st.FileTypes,
+			IsRunning: st.IsRunning,
+		})
+	}
+	return &GetLspStatusResponse{Servers: servers}, nil
+}
+
+// RestartLsp shuts down and recreates all active LSP clients for the workspace.
+func (s *Service) RestartLsp(ctx context.Context, req RestartLspRequest) (*RestartLspResponse, error) {
+	if s.lspManager == nil {
+		return &RestartLspResponse{Success: false}, fmt.Errorf("LSP manager is not initialized")
+	}
+
+	cfg, err := s.ws.GetWorkspaceConfig(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get workspace config: %w", err)
+	}
+
+	if err := s.lspManager.RestartClient(ctx, cfg.CWD); err != nil {
+		return nil, fmt.Errorf("failed to restart LSP client: %w", err)
+	}
+
+	return &RestartLspResponse{Success: true}, nil
+}
+
+// GetLspDiagnosticCounts retrieves diagnostic counts for the workspace.
+func (s *Service) GetLspDiagnosticCounts(ctx context.Context, req GetLspDiagnosticCountsRequest) (*GetLspDiagnosticCountsResponse, error) {
+	if s.lspManager == nil {
+		return &GetLspDiagnosticCountsResponse{}, nil
+	}
+
+	cfg, err := s.ws.GetWorkspaceConfig(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get workspace config: %w", err)
+	}
+
+	errors, warnings, infos, err := s.lspManager.GetDiagnosticCounts(ctx, cfg.CWD)
+	if err != nil {
+		return &GetLspDiagnosticCountsResponse{}, nil
+	}
+
+	return &GetLspDiagnosticCountsResponse{
+		Errors:   errors,
+		Warnings: warnings,
+		Infos:    infos,
+	}, nil
 }

@@ -63,6 +63,7 @@ func init() {
 				{Type: "builtin", Name: "model"},
 				{Type: "builtin", Name: "agent"},
 				{Type: "builtin", Name: "stats"},
+				{Type: "builtin", Name: "diagnostics"},
 				{Type: "builtin", Name: "status"},
 			},
 		},

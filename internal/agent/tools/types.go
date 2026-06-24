@@ -111,6 +111,8 @@ type EditOutput struct {
 	Additions int `json:"additions,omitempty" jsonschema:"The number of lines added."`
 	// Deletions: The number of lines deleted.
 	Deletions int `json:"deletions,omitempty" jsonschema:"The number of lines deleted."`
+	// Diagnostics: LSP diagnostics for this file.
+	Diagnostics string `json:"diagnostics,omitempty" jsonschema:"LSP diagnostics for this file."`
 	// Diff: The unified diff showing the changes made.
 	Diff string `json:"diff,omitempty" jsonschema:"The unified diff showing the changes made."`
 	// FullDiff: The full untruncated unified diff.
@@ -263,9 +265,45 @@ type LspDiagnosticsArgs struct {
 type LspDiagnosticsOutput struct {
 	// Diagnostics: List of LSP diagnostics.
 	Diagnostics []LspDiagnosticsOutputDiagnosticsItem `json:"diagnostics,omitempty" jsonschema:"List of LSP diagnostics."`
+	// TotalCount: Total number of diagnostics found.
+	TotalCount int `json:"total_count,omitempty" jsonschema:"Total number of diagnostics found."`
+	// Truncated: True if diagnostics were truncated due to length limits.
+	Truncated bool `json:"truncated,omitempty" jsonschema:"True if diagnostics were truncated due to length limits."`
 }
 
 type LspDiagnosticsOutputDiagnosticsItem struct {
+	// Message: Diagnostic message.
+	Message string `json:"message,omitempty" jsonschema:"Diagnostic message."`
+	// Path: File path containing the diagnostic.
+	Path string `json:"path,omitempty" jsonschema:"File path containing the diagnostic."`
+	// Range: The range in the file.
+	Range LspDiagnosticsOutputDiagnosticsItemRange `json:"range,omitempty" jsonschema:"The range in the file."`
+	// Severity: Severity level: error, warning, info, hint.
+	Severity string `json:"severity,omitempty" jsonschema:"Severity level: error, warning, info, hint."`
+}
+
+// The range in the file.
+type LspDiagnosticsOutputDiagnosticsItemRange struct {
+	// End: End position.
+	End LspDiagnosticsOutputDiagnosticsItemRangeEnd `json:"end,omitempty" jsonschema:"End position."`
+	// Start: Start position.
+	Start LspDiagnosticsOutputDiagnosticsItemRangeStart `json:"start,omitempty" jsonschema:"Start position."`
+}
+
+// End position.
+type LspDiagnosticsOutputDiagnosticsItemRangeEnd struct {
+	// Character: Zero-based character offset.
+	Character int `json:"character,omitempty" jsonschema:"Zero-based character offset."`
+	// Line: Zero-based line number.
+	Line int `json:"line,omitempty" jsonschema:"Zero-based line number."`
+}
+
+// Start position.
+type LspDiagnosticsOutputDiagnosticsItemRangeStart struct {
+	// Character: Zero-based character offset.
+	Character int `json:"character,omitempty" jsonschema:"Zero-based character offset."`
+	// Line: Zero-based line number.
+	Line int `json:"line,omitempty" jsonschema:"Zero-based line number."`
 }
 
 // LspRestartArgs defines the arguments for the "lsp_restart" tool.
@@ -299,6 +337,40 @@ type LspSearchOutput struct {
 }
 
 type LspSearchOutputResultsItem struct {
+	// ContainerName: Name of the parent container symbol.
+	ContainerName string `json:"container_name,omitempty" jsonschema:"Name of the parent container symbol."`
+	// Kind: Symbol kind (e.g. Class, Method, Function).
+	Kind string `json:"kind,omitempty" jsonschema:"Symbol kind (e.g. Class, Method, Function)."`
+	// Name: Symbol name.
+	Name string `json:"name,omitempty" jsonschema:"Symbol name."`
+	// Path: File path containing the symbol.
+	Path string `json:"path,omitempty" jsonschema:"File path containing the symbol."`
+	// Range: The range in the file.
+	Range LspSearchOutputResultsItemRange `json:"range,omitempty" jsonschema:"The range in the file."`
+}
+
+// The range in the file.
+type LspSearchOutputResultsItemRange struct {
+	// End: End position.
+	End LspSearchOutputResultsItemRangeEnd `json:"end,omitempty" jsonschema:"End position."`
+	// Start: Start position.
+	Start LspSearchOutputResultsItemRangeStart `json:"start,omitempty" jsonschema:"Start position."`
+}
+
+// End position.
+type LspSearchOutputResultsItemRangeEnd struct {
+	// Character: Zero-based character offset.
+	Character int `json:"character,omitempty" jsonschema:"Zero-based character offset."`
+	// Line: Zero-based line number.
+	Line int `json:"line,omitempty" jsonschema:"Zero-based line number."`
+}
+
+// Start position.
+type LspSearchOutputResultsItemRangeStart struct {
+	// Character: Zero-based character offset.
+	Character int `json:"character,omitempty" jsonschema:"Zero-based character offset."`
+	// Line: Zero-based line number.
+	Line int `json:"line,omitempty" jsonschema:"Zero-based line number."`
 }
 
 // McpReadResourcesArgs defines the arguments for the "mcp_read_resources" tool.
@@ -342,6 +414,8 @@ type MultiEditOutput struct {
 	Additions int `json:"additions,omitempty" jsonschema:"The total number of lines added."`
 	// Deletions: The total number of lines deleted.
 	Deletions int `json:"deletions,omitempty" jsonschema:"The total number of lines deleted."`
+	// Diagnostics: LSP diagnostics for this file.
+	Diagnostics string `json:"diagnostics,omitempty" jsonschema:"LSP diagnostics for this file."`
 	// Diff: The unified diff showing all successfully applied changes.
 	Diff string `json:"diff,omitempty" jsonschema:"The unified diff showing all successfully applied changes."`
 	// FullDiff: The full untruncated unified diff.
@@ -539,6 +613,8 @@ type ViewOutput struct {
 	CachedPath string `json:"cached_path,omitempty" jsonschema:"Cached path in workspace session storage."`
 	// Content: Content of the file.
 	Content string `json:"content,omitempty" jsonschema:"Content of the file."`
+	// Diagnostics: LSP diagnostics for this file.
+	Diagnostics string `json:"diagnostics,omitempty" jsonschema:"LSP diagnostics for this file."`
 	// EndLine: The end line of the returned content.
 	EndLine int `json:"end_line,omitempty" jsonschema:"The end line of the returned content."`
 	// IsBinary: Whether the file is binary.
@@ -620,6 +696,8 @@ type WriteArgs struct {
 type WriteOutput struct {
 	// BytesWritten: The number of bytes written to the file.
 	BytesWritten int `json:"bytes_written,omitempty" jsonschema:"The number of bytes written to the file."`
+	// Diagnostics: LSP diagnostics for this file.
+	Diagnostics string `json:"diagnostics,omitempty" jsonschema:"LSP diagnostics for this file."`
 	// Path: Path to the written file.
 	Path string `json:"path,omitempty" jsonschema:"Path to the written file."`
 	// Success: Whether the file was written successfully.

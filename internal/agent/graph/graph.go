@@ -13,6 +13,7 @@ import (
 	"github.com/masterkeysrd/loom/tool"
 	"github.com/masterkeysrd/tasksmith/internal/agent/permissions"
 	"github.com/masterkeysrd/tasksmith/internal/agent/tools"
+	"github.com/masterkeysrd/tasksmith/internal/core/lsp"
 	"github.com/masterkeysrd/tasksmith/internal/workspace"
 )
 
@@ -94,6 +95,7 @@ type AgentGraph struct {
 	onTodosUpdated    func(ctx context.Context, todos []tools.Todo) error
 	permissionManager permissions.PermissionManager
 	cwd               string
+	lspManager        *lsp.Manager
 }
 
 // Options defines the configurations and dependencies to initialize the AgentGraph.
@@ -108,6 +110,7 @@ type Options struct {
 	AgentName         string
 	OnTodosUpdated    func(ctx context.Context, todos []tools.Todo) error
 	PermissionManager permissions.PermissionManager
+	LspManager        *lsp.Manager
 }
 
 // New creates a new AgentGraph orchestrator by loading/binding tools outside of the execution nodes.
@@ -138,7 +141,8 @@ func New(ctx context.Context, opts Options) (*AgentGraph, error) {
 	handlers := tools.NewHandlers(opts.Storage, cwd).
 		WithTaskManager(opts.TaskManager, opts.SessionID).
 		WithSkillResolver(&skillResolver{ws: opts.Workspace, agentName: opts.AgentName}).
-		WithPermissionManager(pm)
+		WithPermissionManager(pm).
+		WithLspManager(opts.LspManager)
 	allLoomTools, err := tools.LoomTools(handlers)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load loom tools: %w", err)
@@ -170,6 +174,7 @@ func New(ctx context.Context, opts Options) (*AgentGraph, error) {
 		onTodosUpdated:    opts.OnTodosUpdated,
 		permissionManager: pm,
 		cwd:               cwd,
+		lspManager:        opts.LspManager,
 	}, nil
 }
 
@@ -228,8 +233,11 @@ func (a *AgentGraph) think(ctx context.Context, s AgentState) (graph.Command[Age
 	}
 
 	rehydratedMessages := tools.RehydrateMessagesForLLM(s.Messages)
-	if a.systemPrompt != "" {
-		systemMsg := message.NewSystemText(a.systemPrompt)
+
+	sp := a.systemPrompt
+
+	if sp != "" {
+		systemMsg := message.NewSystemText(sp)
 		rehydratedMessages = append([]message.Message{systemMsg}, rehydratedMessages...)
 	}
 
@@ -534,7 +542,7 @@ func (a *AgentGraph) checkInbox(ctx context.Context, s AgentState) (graph.Comman
 
 	return graph.Update[AgentState](func(state AgentState) AgentState {
 		if len(msgs) > 0 {
-			InjectReminders(msgs[len(msgs)-1], state)
+			InjectReminders(ctx, msgs[len(msgs)-1], state, a.lspManager, a.cwd)
 		}
 		state.Messages = append(state.Messages, msgs...)
 		return state
@@ -542,7 +550,7 @@ func (a *AgentGraph) checkInbox(ctx context.Context, s AgentState) (graph.Comman
 }
 
 // InjectReminders appends system reminders to the user message.
-func InjectReminders(msg message.Message, s AgentState) {
+func InjectReminders(ctx context.Context, msg message.Message, s AgentState, lspManager *lsp.Manager, cwd string) {
 	userMsg, ok := msg.(*message.User)
 	if !ok {
 		return
@@ -562,6 +570,13 @@ func InjectReminders(msg message.Message, s AgentState) {
 
 	if len(s.ActivatedSkills) == 0 {
 		reminders = append(reminders, "You do not have any skills activated. If the user's request matches one of your available skills, you must activate it using the 'activate_skill' tool first.")
+	}
+
+	if lspManager != nil && cwd != "" {
+		diagStr := tools.GetTopWorkspaceDiagnosticsString(ctx, lspManager, cwd)
+		if diagStr != "" {
+			reminders = append(reminders, "Current Workspace Diagnostics (if you fix any of these, do not repeatedly call LspDiagnostics unless necessary, trust the live feedback if available):\n"+diagStr)
+		}
 	}
 
 	if len(reminders) > 0 {

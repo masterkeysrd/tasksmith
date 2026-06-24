@@ -81,6 +81,12 @@ func (h *ToolHandlers) Edit(ctx context.Context, in EditArgs) (EditOutput, error
 		}, nil
 	}
 
+	var diagsStr string
+	if h.LspManager != nil {
+		h.LspManager.NotifyFileChanged(ctx, editAbs, newContent)
+		diagsStr = GetFileDiagnosticsString(ctx, h.LspManager, h.CWD, editAbs)
+	}
+
 	// Generate clean relative path
 	relPath, err := filepath.Rel(baseDir, editAbs)
 	if err != nil {
@@ -108,12 +114,13 @@ func (h *ToolHandlers) Edit(ctx context.Context, in EditArgs) (EditOutput, error
 	diffVal, fullDiffVal := truncateDiff(diffStr)
 
 	return EditOutput{
-		Path:      relSlash,
-		Success:   true,
-		Diff:      diffVal,
-		FullDiff:  fullDiffVal,
-		Additions: additions,
-		Deletions: deletions,
+		Path:        relSlash,
+		Success:     true,
+		Diff:        diffVal,
+		FullDiff:    fullDiffVal,
+		Additions:   additions,
+		Deletions:   deletions,
+		Diagnostics: diagsStr,
 	}, nil
 }
 
@@ -134,8 +141,12 @@ func (o EditOutput) TextContent() string {
 		}
 		return fmt.Sprintf("Failed to edit file %s", o.Path)
 	}
+	msg := o.Diff
 	if o.Diff == "" {
-		return fmt.Sprintf("No changes made to %s", o.Path)
+		msg = fmt.Sprintf("No changes made to %s", o.Path)
 	}
-	return o.Diff
+	if o.Diagnostics != "" {
+		msg += "\n" + o.Diagnostics
+	}
+	return msg
 }

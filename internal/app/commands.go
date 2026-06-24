@@ -3,6 +3,7 @@ package app
 import (
 	"fmt"
 
+	"github.com/masterkeysrd/tasksmith/internal/tui/active"
 	"github.com/masterkeysrd/tasksmith/internal/tui/command"
 	"github.com/masterkeysrd/tasksmith/internal/tui/mode"
 	"github.com/masterkeysrd/tasksmith/internal/tui/theme"
@@ -35,5 +36,30 @@ func (app *Application) InitializeCommands() {
 			return fmt.Errorf("theme: %w", err)
 		}
 		return nil
+	})
+
+	command.Register("lspinfo", func(ctx command.CommandContext) error {
+		active.SetModal("lspinfo")
+		return nil
+	})
+
+	command.Register("lsp", func(ctx command.CommandContext) error {
+		if len(ctx.Args) == 0 {
+			return fmt.Errorf("lsp: missing subcommand (try 'info' or 'restart')")
+		}
+		switch ctx.Args[0] {
+		case "info":
+			active.SetModal("lspinfo")
+			return nil
+		case "restart":
+			if app.lspManager != nil {
+				go func() {
+					app.lspManager.RestartClient(ctx.Ctx, app.opts.CWD)
+				}()
+			}
+			return nil
+		default:
+			return fmt.Errorf("lsp: unknown subcommand %q", ctx.Args[0])
+		}
 	})
 }

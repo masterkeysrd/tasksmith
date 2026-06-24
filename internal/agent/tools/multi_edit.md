@@ -60,5 +60,8 @@ spec:
               description: Failure reason if this specific edit failed.
           required: ["success"]
         description: The status of each edit in the edits list.
+      diagnostics:
+        type: string
+        description: LSP diagnostics for this file.
 ---
 Apply multiple, non-contiguous edits to a single file. This is highly useful for making multiple related changes across a file in a single turn.

@@ -91,6 +91,8 @@ func (h *ToolHandlers) MultiEdit(ctx context.Context, in MultiEditArgs) (MultiEd
 	}
 	relSlash := "./" + filepath.ToSlash(relPath)
 
+	var diagsStr string
+
 	if modified {
 		// Write the partially or fully modified content back
 		if err := os.WriteFile(editAbs, []byte(contentNorm), 0644); err != nil {
@@ -98,6 +100,11 @@ func (h *ToolHandlers) MultiEdit(ctx context.Context, in MultiEditArgs) (MultiEd
 				Path:    relSlash,
 				Success: false,
 			}, fmt.Errorf("failed to write edited file: %w", err)
+		}
+
+		if h.LspManager != nil {
+			h.LspManager.NotifyFileChanged(ctx, editAbs, contentNorm)
+			diagsStr = GetFileDiagnosticsString(ctx, h.LspManager, h.CWD, editAbs)
 		}
 
 		diffStr = diff.FormatUnified(relSlash, relSlash, originalContent, contentNorm)
@@ -118,13 +125,14 @@ func (h *ToolHandlers) MultiEdit(ctx context.Context, in MultiEditArgs) (MultiEd
 	diffVal, fullDiffVal := truncateDiff(diffStr)
 
 	return MultiEditOutput{
-		Path:      relSlash,
-		Success:   modified,
-		Diff:      diffVal,
-		FullDiff:  fullDiffVal,
-		Additions: additions,
-		Deletions: deletions,
-		Results:   results,
+		Path:        relSlash,
+		Success:     modified,
+		Diff:        diffVal,
+		FullDiff:    fullDiffVal,
+		Additions:   additions,
+		Deletions:   deletions,
+		Results:     results,
+		Diagnostics: diagsStr,
 	}, nil
 }
 
@@ -159,5 +167,10 @@ func (o MultiEditOutput) TextContent() string {
 		}
 		return fmt.Sprintf("Failed to edit file %s", o.Path)
 	}
-	return sb.String()
+
+	msg := sb.String()
+	if o.Diagnostics != "" {
+		msg += "\n" + o.Diagnostics
+	}
+	return msg
 }

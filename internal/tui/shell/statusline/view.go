@@ -422,6 +422,74 @@ var Status = kitex.FC("Status", func(props StatusProps) kitex.Node {
 	)
 })
 
+// DiagnosticsProps defines properties for the Diagnostics component.
+type DiagnosticsProps struct {
+	Errors   int
+	Warnings int
+	Infos    int
+	Style    style.Style
+}
+
+// Diagnostics renders the LSP diagnostic counts.
+var Diagnostics = kitex.FC("Diagnostics", func(props DiagnosticsProps) kitex.Node {
+	t := theme.UseTheme()
+
+	var bg, textDim, colorError, colorWarn, colorInfo color.Color = color.Transparent, color.Transparent, color.Transparent, color.Transparent, color.Transparent
+
+	if t != nil {
+		bg = t.Color.Surface.BaseFocus
+		textDim = t.Color.Text.Secondary
+		colorError = t.Color.Text.Error
+		colorWarn = t.Color.Text.Secondary
+		colorInfo = t.Color.Text.Secondary
+
+		if val, ok := t.Palette["red"]; ok {
+			colorError = val
+		}
+		if val, ok := t.Palette["yellow"]; ok {
+			colorWarn = val
+		}
+		if val, ok := t.Palette["cyan"]; ok {
+			colorInfo = val
+		}
+	}
+
+	diagStyle := style.S().
+		Display(style.DisplayFlex).
+		FlexDirection(style.FlexRow).
+		AlignItems(style.AlignCenter).
+		Gap(2).
+		Background(bg).
+		PaddingHorizontal(1).
+		Merge(props.Style)
+
+	var children []kitex.Node
+
+	if props.Errors > 0 {
+		children = append(children, kitex.Box(kitex.BoxProps{
+			Style: style.S().Display(style.DisplayFlex).FlexDirection(style.FlexRow).Gap(1).AlignItems(style.AlignCenter).Foreground(textDim),
+		}, kitex.Box(kitex.BoxProps{Style: style.S().Foreground(colorError)}, icon.Error), kitex.Text(fmt.Sprintf("%d", props.Errors))))
+	}
+
+	if props.Warnings > 0 {
+		children = append(children, kitex.Box(kitex.BoxProps{
+			Style: style.S().Display(style.DisplayFlex).FlexDirection(style.FlexRow).Gap(1).AlignItems(style.AlignCenter).Foreground(textDim),
+		}, kitex.Box(kitex.BoxProps{Style: style.S().Foreground(colorWarn)}, icon.Warning), kitex.Text(fmt.Sprintf("%d", props.Warnings))))
+	}
+
+	if props.Infos > 0 {
+		children = append(children, kitex.Box(kitex.BoxProps{
+			Style: style.S().Display(style.DisplayFlex).FlexDirection(style.FlexRow).Gap(1).AlignItems(style.AlignCenter).Foreground(textDim),
+		}, kitex.Box(kitex.BoxProps{Style: style.S().Foreground(colorInfo)}, icon.Info), kitex.Text(fmt.Sprintf("%d", props.Infos))))
+	}
+
+	if len(children) == 0 {
+		return nil
+	}
+
+	return kitex.Box(kitex.BoxProps{Style: diagStyle}, children...)
+})
+
 // Props defines the properties for the main StatusLine container.
 type Props struct {
 	Style    style.Style
@@ -482,6 +550,16 @@ func renderFragment(f plugin.Fragment, state plugin.State, sessionID string, act
 				}
 			}
 			return Status(StatusProps{Status: status})
+		case "diagnostics":
+			query := queries.UseGetLspDiagnosticCounts()
+			if query.Data != nil {
+				return Diagnostics(DiagnosticsProps{
+					Errors:   query.Data.Errors,
+					Warnings: query.Data.Warnings,
+					Infos:    query.Data.Infos,
+				})
+			}
+			return nil
 		default:
 			return nil
 		}

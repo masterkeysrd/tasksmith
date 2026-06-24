@@ -7,26 +7,6 @@ import (
 	"strings"
 )
 
-// LspDiagnostics gets LSP diagnostics.
-func (h *ToolHandlers) LspDiagnostics(ctx context.Context, in LspDiagnosticsArgs) (LspDiagnosticsOutput, error) {
-	return LspDiagnosticsOutput{Diagnostics: []LspDiagnosticsOutputDiagnosticsItem{}}, nil
-}
-
-// LspRestart restarts LSP server.
-func (h *ToolHandlers) LspRestart(ctx context.Context, in LspRestartArgs) (LspRestartOutput, error) {
-	cmd := exec.CommandContext(ctx, "echo", "lsp_restart", in.Server)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return LspRestartOutput{Message: err.Error(), Success: false}, nil
-	}
-	return LspRestartOutput{Message: string(out), Success: true}, nil
-}
-
-// LspSearch searches using LSP.
-func (h *ToolHandlers) LspSearch(ctx context.Context, in LspSearchArgs) (LspSearchOutput, error) {
-	return LspSearchOutput{Results: []LspSearchOutputResultsItem{}}, nil
-}
-
 // McpReadResources reads resources from MCP.
 func (h *ToolHandlers) McpReadResources(ctx context.Context, in McpReadResourcesArgs) (McpReadResourcesOutput, error) {
 	cmd := exec.CommandContext(ctx, "echo", "mcp_read_resources", in.Uri)

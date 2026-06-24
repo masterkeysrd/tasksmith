@@ -13,6 +13,7 @@ import (
 	coredb "github.com/masterkeysrd/tasksmith/internal/core/db"
 	"github.com/masterkeysrd/tasksmith/internal/core/fsutil"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
+	"github.com/masterkeysrd/tasksmith/internal/core/lsp"
 	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
 	"github.com/masterkeysrd/tasksmith/internal/metrics"
 	"github.com/masterkeysrd/tasksmith/internal/session"
@@ -21,11 +22,12 @@ import (
 )
 
 type Application struct {
-	opts    *flags.Flags
-	ws      *workspace.Workspace
-	api     *api.Service
-	closers []func(ctx context.Context) error
-	cancel  context.CancelFunc
+	opts       *flags.Flags
+	ws         *workspace.Workspace
+	api        *api.Service
+	lspManager *lsp.Manager
+	closers    []func(ctx context.Context) error
+	cancel     context.CancelFunc
 }
 
 func New(opts *flags.Flags, cancel context.CancelFunc) *Application {
@@ -70,14 +72,21 @@ func (app *Application) Run(ctx context.Context) error {
 		return metricsDB.Close()
 	})
 
+	app.lspManager = lsp.NewManager()
+	app.AddCloser(func(ctx context.Context) error {
+		app.lspManager.CloseAll()
+		return nil
+	})
+
 	app.ws = workspace.New(app.opts.CWD)
 	metricsStore := metrics.NewStore(metricsDB)
 	sessionMgr := session.NewManager(session.ManagerConfig{
 		Store:        store,
 		Workspace:    app.ws,
 		MetricsStore: metricsStore,
+		LspManager:   app.lspManager,
 	})
-	app.api = api.NewService(app.ws, sessionMgr, metricsStore)
+	app.api = api.NewService(app.ws, sessionMgr, metricsStore, app.lspManager)
 
 	log.Info("Starting TaskSmith application",
 		log.String("cwd", app.opts.CWD),
@@ -86,6 +95,12 @@ func (app *Application) Run(ctx context.Context) error {
 	if err := app.ws.Load(ctx); err != nil {
 		return fmt.Errorf("failed to load workspace: %w", err)
 	}
+
+	go func() {
+		if err := app.lspManager.RestartClient(context.Background(), app.opts.CWD); err != nil {
+			log.Error("Failed to start LSP client on startup", log.Err(err))
+		}
+	}()
 
 	app.InitializeCommands()
 	app.InitializeKeymap()

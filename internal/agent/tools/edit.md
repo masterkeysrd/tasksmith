@@ -43,5 +43,8 @@ spec:
       message:
         type: string
         description: Error or status message if the edit failed.
+      diagnostics:
+        type: string
+        description: LSP diagnostics for this file.
 ---
 Edit a file by replacing a target block of text with a replacement block.

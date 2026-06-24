@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/masterkeysrd/tasksmith/internal/agent/permissions"
+	"github.com/masterkeysrd/tasksmith/internal/core/lsp"
 )
 
 // Todo represents a single task in the agent's todo checklist.
@@ -26,6 +27,7 @@ type ToolHandlers struct {
 	SessionID         string
 	SkillResolver     SkillResolver
 	PermissionManager permissions.PermissionManager
+	LspManager        *lsp.Manager
 }
 
 // NewHandlers creates a new ToolHandlers instance with the given dependencies.
@@ -52,5 +54,11 @@ func (h *ToolHandlers) WithSkillResolver(resolver SkillResolver) *ToolHandlers {
 // WithPermissionManager configures the PermissionManager on ToolHandlers.
 func (h *ToolHandlers) WithPermissionManager(pm permissions.PermissionManager) *ToolHandlers {
 	h.PermissionManager = pm
+	return h
+}
+
+// WithLspManager configures the LspManager on ToolHandlers.
+func (h *ToolHandlers) WithLspManager(mgr *lsp.Manager) *ToolHandlers {
+	h.LspManager = mgr
 	return h
 }

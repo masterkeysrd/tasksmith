@@ -13,6 +13,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/tui/theme"
 	"github.com/masterkeysrd/tasksmith/internal/tui/views/analytics"
 	"github.com/masterkeysrd/tasksmith/internal/tui/views/chat"
+	"github.com/masterkeysrd/tasksmith/internal/tui/views/lspinfo"
 	"github.com/masterkeysrd/tasksmith/internal/tui/views/setup"
 	"github.com/masterkeysrd/tasksmith/internal/tui/views/welcome"
 )
@@ -119,7 +120,10 @@ var Router = kitex.SimpleFC("Router", func() kitex.Node {
 			)
 		}
 		return shell.View(shell.Props{},
-			chat.View(chat.ViewProps{SessionID: activeSessionID}),
+			kitex.Fragment(
+				chat.View(chat.ViewProps{SessionID: activeSessionID}),
+				lspinfo.View(lspinfo.ViewProps{}),
+			),
 		)
 	}
 })

@@ -28,5 +28,8 @@ spec:
       success:
         type: boolean
         description: Whether the file was written successfully.
+      diagnostics:
+        type: string
+        description: LSP diagnostics for this file.
 ---
 Write content to a file.

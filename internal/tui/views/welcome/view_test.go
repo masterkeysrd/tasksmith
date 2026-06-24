@@ -99,6 +99,22 @@ func (m *mockClient) GetTokenAnalytics(ctx context.Context, req api.GetTokenAnal
 	return &api.GetTokenAnalyticsResponse{}, nil
 }
 
+func (m *mockClient) ConfigureLsp(ctx context.Context, req api.ConfigureLspRequest) (*api.ConfigureLspResponse, error) {
+	return &api.ConfigureLspResponse{Success: true}, nil
+}
+
+func (m *mockClient) DismissLspSuggestion(ctx context.Context, req api.DismissLspSuggestionRequest) (*api.DismissLspSuggestionResponse, error) {
+	return &api.DismissLspSuggestionResponse{Success: true}, nil
+}
+
+func (m *mockClient) GetLspStatus(ctx context.Context, req api.GetLspStatusRequest) (*api.GetLspStatusResponse, error) {
+	return &api.GetLspStatusResponse{}, nil
+}
+
+func (m *mockClient) RestartLsp(ctx context.Context, req api.RestartLspRequest) (*api.RestartLspResponse, error) {
+	return &api.RestartLspResponse{Success: true}, nil
+}
+
 func TestWelcomeView(t *testing.T) {
 	thm := &theme.Scheme{}
 	client := &mockClient{}

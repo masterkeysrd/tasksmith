@@ -46,6 +46,12 @@ func (h *ToolHandlers) Write(ctx context.Context, in WriteArgs) (WriteOutput, er
 		}, fmt.Errorf("failed to write file %q: %w", path, err)
 	}
 
+	var diagsStr string
+	if h.LspManager != nil {
+		h.LspManager.NotifyFileChanged(ctx, writeAbs, in.Content)
+		diagsStr = GetFileDiagnosticsString(ctx, h.LspManager, h.CWD, writeAbs)
+	}
+
 	// Return clean relative path with "./" prefix
 	relPath, err := filepath.Rel(baseDir, writeAbs)
 	if err != nil {
@@ -57,6 +63,7 @@ func (h *ToolHandlers) Write(ctx context.Context, in WriteArgs) (WriteOutput, er
 		Path:         relSlash,
 		BytesWritten: len(contentBytes),
 		Success:      true,
+		Diagnostics:  diagsStr,
 	}, nil
 }
 
@@ -65,5 +72,9 @@ func (o WriteOutput) TextContent() string {
 	if !o.Success {
 		return fmt.Sprintf("Failed to write file to %s", o.Path)
 	}
-	return fmt.Sprintf("Successfully wrote %d bytes to %s", o.BytesWritten, o.Path)
+	msg := fmt.Sprintf("Successfully wrote %d bytes to %s", o.BytesWritten, o.Path)
+	if o.Diagnostics != "" {
+		msg += "\n" + o.Diagnostics
+	}
+	return msg
 }

@@ -125,6 +125,12 @@ func (h *ToolHandlers) View(ctx context.Context, in ViewArgs) (ViewOutput, error
 	}
 	defer file.Close()
 
+	if absPath, errAbs := filepath.Abs(path); errAbs == nil {
+		if h.LspManager != nil {
+			h.LspManager.NotifyFileOpened(ctx, absPath)
+		}
+	}
+
 	startLine := max(in.StartLine, 1)
 	endLine := in.EndLine
 
@@ -179,15 +185,21 @@ func (h *ToolHandlers) View(ctx context.Context, in ViewArgs) (ViewOutput, error
 		actualEndLine = lastAppendedLine
 	}
 
+	var diagsStr string
+	if absPath, errAbs := filepath.Abs(path); errAbs == nil {
+		diagsStr = GetFileDiagnosticsString(ctx, h.LspManager, h.CWD, absPath)
+	}
+
 	return ViewOutput{
-		Content:    content,
-		StartLine:  actualStartLine,
-		EndLine:    actualEndLine,
-		TotalLines: currentLine,
-		Source:     in.Path,
-		Truncated:  truncated,
-		MimeType:   mimeType,
-		IsBinary:   false,
+		Content:     content,
+		StartLine:   actualStartLine,
+		EndLine:     actualEndLine,
+		TotalLines:  currentLine,
+		Source:      in.Path,
+		Truncated:   truncated,
+		MimeType:    mimeType,
+		IsBinary:    false,
+		Diagnostics: diagsStr,
 	}, nil
 }
 
@@ -237,6 +249,10 @@ func (v ViewOutput) ToolContent() message.Content {
 
 	if v.Truncated {
 		fmt.Fprintf(&sb, "\n[SYSTEM NOTE: File truncated at line %d due to size limits. To read further, call view_file again with start_line=%d]", v.EndLine, v.EndLine+1)
+	}
+
+	if v.Diagnostics != "" {
+		sb.WriteString("\n" + v.Diagnostics)
 	}
 
 	return message.Content{

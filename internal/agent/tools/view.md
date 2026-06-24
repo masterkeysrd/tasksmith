@@ -49,6 +49,9 @@ spec:
       is_binary:
         type: boolean
         description: Whether the file is binary.
+      diagnostics:
+        type: string
+        description: LSP diagnostics for this file.
 ---
 Reads the contents of a file.
 

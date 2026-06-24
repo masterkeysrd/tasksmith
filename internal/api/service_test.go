@@ -2,8 +2,12 @@ package api
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 
+	"github.com/masterkeysrd/tasksmith/internal/core/lsp"
+	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
 	"github.com/masterkeysrd/tasksmith/internal/workspace"
 	"github.com/masterkeysrd/warp"
 )
@@ -14,6 +18,7 @@ type mockWorkspace struct {
 	providers        []*warp.ModelProvider
 	providersPresets []*warp.ModelProvider
 	toolsPresets     []*warp.Tool
+	cwd              string
 }
 
 func (m *mockWorkspace) Projects() []*warp.Project {
@@ -41,11 +46,14 @@ func (m *mockWorkspace) Initialize(ctx context.Context, opts workspace.Initializ
 }
 
 func (m *mockWorkspace) GetWorkspaceConfig(ctx context.Context) (workspace.WorkspaceConfig, error) {
-	return workspace.WorkspaceConfig{}, nil
+	return workspace.WorkspaceConfig{
+		CWD: m.cwd,
+	}, nil
 }
 
 func TestService(t *testing.T) {
 	mockWS := &mockWorkspace{
+		cwd: t.TempDir(),
 		projects: []*warp.Project{
 			{Name: "p1", Path: "/path/1"},
 		},
@@ -85,7 +93,7 @@ func TestService(t *testing.T) {
 		},
 	}
 
-	svc := NewService(mockWS, nil, nil)
+	svc := NewService(mockWS, nil, nil, nil)
 	ctx := context.Background()
 
 	t.Run("ListProjects", func(t *testing.T) {
@@ -190,6 +198,89 @@ func TestService(t *testing.T) {
 		})
 		if err == nil {
 			t.Fatal("expected error, got nil")
+		}
+	})
+
+	t.Run("ConfigureAndDismissLsp", func(t *testing.T) {
+		origXDG := os.Getenv("XDG_CONFIG_HOME")
+		tempConfigDir := t.TempDir()
+		os.Setenv("XDG_CONFIG_HOME", tempConfigDir)
+		defer os.Setenv("XDG_CONFIG_HOME", origXDG)
+
+		xdg.ClearCache()
+
+		mgr := lsp.NewManager()
+		svcWithLsp := NewService(mockWS, nil, nil, mgr)
+
+		// Add dummy file change to trigger suggestion for "go"
+		absGo, _ := filepath.Abs("main.go")
+		t.Logf("absGo: %s", absGo)
+		mgr.NotifyFileChanged(ctx, "main.go", "package main")
+
+		// Retrieve session state and verify suggestion is present
+		stateResp, err := svcWithLsp.GetSessionState(ctx, GetSessionStateRequest{SessionID: "s1"})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		t.Logf("PendingLspSuggestions: %+v", stateResp.PendingLspSuggestions)
+		foundGo := false
+		for _, sug := range stateResp.PendingLspSuggestions {
+			if sug.Language == "go" {
+				foundGo = true
+				break
+			}
+		}
+		if !foundGo {
+			t.Error("expected 'go' suggestion in session state")
+		}
+
+		// Configure LSP
+		confResp, err := svcWithLsp.ConfigureLsp(ctx, ConfigureLspRequest{Language: "go"})
+		if err != nil {
+			t.Fatalf("unexpected error configuring lsp: %v", err)
+		}
+		if !confResp.Success {
+			t.Error("expected configuration success")
+		}
+
+		// Check suggestion is dismissed after configuration
+		stateResp2, err := svcWithLsp.GetSessionState(ctx, GetSessionStateRequest{SessionID: "s1"})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		for _, sug := range stateResp2.PendingLspSuggestions {
+			if sug.Language == "go" {
+				t.Error("expected 'go' suggestion to be dismissed after configuration")
+			}
+		}
+
+		// Configure unknown language preset
+		_, err = svcWithLsp.ConfigureLsp(ctx, ConfigureLspRequest{Language: "unknown_lang"})
+		if err == nil {
+			t.Error("expected error configuring unknown preset")
+		}
+
+		// Trigger suggestion for another language, e.g. "python"
+		mgr.NotifyFileChanged(ctx, "main.py", "import sys")
+
+		// Dismiss suggestion
+		dismissResp, err := svcWithLsp.DismissLspSuggestion(ctx, DismissLspSuggestionRequest{Language: "python"})
+		if err != nil {
+			t.Fatalf("unexpected error dismissing: %v", err)
+		}
+		if !dismissResp.Success {
+			t.Error("expected dismiss success")
+		}
+
+		// Check suggestion is dismissed
+		stateResp3, err := svcWithLsp.GetSessionState(ctx, GetSessionStateRequest{SessionID: "s1"})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		for _, sug := range stateResp3.PendingLspSuggestions {
+			if sug.Language == "python" {
+				t.Error("expected 'python' suggestion to be dismissed")
+			}
 		}
 	})
 }

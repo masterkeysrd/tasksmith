@@ -206,6 +206,57 @@ type GetSessionStateResponse struct {
 	RunningTasks          []RunningTaskInfo                  `json:"running_tasks,omitempty"`
 	Todos                 []Todo                             `json:"todos,omitempty"`
 	PendingAuthorizations []permissions.AuthorizationRequest `json:"pending_authorizations,omitempty"`
+	PendingLspSuggestions []LspSuggestion                    `json:"pending_lsp_suggestions,omitempty"`
+}
+
+type LspSuggestion struct {
+	Language   string   `json:"language"`
+	ServerName string   `json:"server_name"`
+	Command    []string `json:"command"`
+}
+
+type ConfigureLspRequest struct {
+	Language string `json:"language"`
+}
+
+type ConfigureLspResponse struct {
+	Success bool `json:"success"`
+}
+
+type DismissLspSuggestionRequest struct {
+	Language string `json:"language"`
+}
+
+type DismissLspSuggestionResponse struct {
+	Success bool   `json:"success"`
+	Message string `json:"message"`
+}
+
+type GetLspStatusRequest struct{}
+
+type LspServerInfo struct {
+	Name      string   `json:"name"`
+	Command   []string `json:"command"`
+	FileTypes []string `json:"file_types"`
+	IsRunning bool     `json:"is_running"`
+}
+
+type GetLspStatusResponse struct {
+	Servers []LspServerInfo `json:"servers"`
+}
+
+type GetLspDiagnosticCountsRequest struct{}
+
+type GetLspDiagnosticCountsResponse struct {
+	Errors   int `json:"errors"`
+	Warnings int `json:"warnings"`
+	Infos    int `json:"infos"`
+}
+
+type RestartLspRequest struct{}
+
+type RestartLspResponse struct {
+	Success bool `json:"success"`
 }
 
 type SubmitAuthorizationDecisionRequest struct {

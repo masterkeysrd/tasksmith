@@ -129,6 +129,31 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 		pendingAuthorizations = stateQuery.Data.PendingAuthorizations
 	}
 
+	var pendingLspSuggestions []api.LspSuggestion
+	if stateQuery.Data != nil {
+		pendingLspSuggestions = stateQuery.Data.PendingLspSuggestions
+	}
+
+	handleConfigureLsp := func(lang string) {
+		go func() {
+			_, err := client.ConfigureLsp(context.Background(), api.ConfigureLspRequest{Language: lang})
+			if err != nil {
+				log.Error(fmt.Sprintf("Failed to configure LSP for %s: %v", lang, err))
+			}
+			stateQuery.Refetch()
+		}()
+	}
+
+	handleDismissLsp := func(lang string) {
+		go func() {
+			_, err := client.DismissLspSuggestion(context.Background(), api.DismissLspSuggestionRequest{Language: lang})
+			if err != nil {
+				log.Error(fmt.Sprintf("Failed to dismiss LSP suggestion for %s: %v", lang, err))
+			}
+			stateQuery.Refetch()
+		}()
+	}
+
 	kitex.UseEffect(func() {
 		setSelectedIndex(0)
 		setSelectedScopeIndex(0)
@@ -659,6 +684,13 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 					if stateQuery.Data != nil && len(stateQuery.Data.RunningTasks) > 0 {
 						nodes = append(nodes, RunningTasksWidget(RunningTasksWidgetProps{
 							Tasks: stateQuery.Data.RunningTasks,
+						}))
+					}
+					if len(pendingLspSuggestions) > 0 {
+						nodes = append(nodes, LspSuggestionWidget(LspSuggestionWidgetProps{
+							Suggestions: pendingLspSuggestions,
+							OnConfigure: handleConfigureLsp,
+							OnDismiss:   handleDismissLsp,
 						}))
 					}
 					return nodes
@@ -2472,4 +2504,51 @@ var RunningTasksWidget = kitex.FC("RunningTasksWidget", func(props RunningTasksW
 			),
 		),
 	)
+})
+
+type LspSuggestionWidgetProps struct {
+	Suggestions []api.LspSuggestion
+	OnConfigure func(lang string)
+	OnDismiss   func(lang string)
+}
+
+var LspSuggestionWidget = kitex.FC("LspSuggestionWidget", func(props LspSuggestionWidgetProps) kitex.Node {
+	if len(props.Suggestions) == 0 {
+		return nil
+	}
+
+	var boxes []kitex.Node
+	for _, sug := range props.Suggestions {
+		sugLang := sug.Language // capture loop variable
+		boxes = append(boxes, kitex.Box(kitex.BoxProps{
+			Style: style.S().
+				MarginBottom(1).
+				Width(style.Percent(100)).
+				MaxWidth(style.Percent(90)),
+		},
+			components.Alert(components.AlertProps{
+				Severity: components.AlertInfo,
+				Variant:  components.AlertOutlined,
+				ShowIcon: true,
+				Action: kitex.Box(kitex.BoxProps{
+					Style: style.S().Display(style.DisplayFlex).FlexDirection(style.FlexRow).Gap(1),
+				},
+					components.Button(components.ButtonProps{
+						Variant: components.ButtonSolid,
+						Color:   components.ButtonInfo,
+						OnClick: func() { props.OnConfigure(sugLang) },
+					}, kitex.Text("Configure")),
+					components.Button(components.ButtonProps{
+						Variant: components.ButtonText,
+						Color:   components.ButtonBase,
+						OnClick: func() { props.OnDismiss(sugLang) },
+					}, kitex.Text("Dismiss")),
+				),
+			}, kitex.Text(fmt.Sprintf("Enable %s language server for %s?", sug.ServerName, sug.Language))),
+		))
+	}
+
+	return kitex.Box(kitex.BoxProps{
+		Style: style.S().Display(style.DisplayFlex).FlexDirection(style.FlexColumn).MarginTop(1).MarginBottom(1).AlignSelf(style.AlignStart).Width(style.Percent(100)),
+	}, boxes...)
 })
