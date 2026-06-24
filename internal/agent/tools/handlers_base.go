@@ -1,6 +1,10 @@
 package tools
 
-import "context"
+import (
+	"context"
+
+	"github.com/masterkeysrd/tasksmith/internal/agent/permissions"
+)
 
 // Todo represents a single task in the agent's todo checklist.
 type Todo struct {
@@ -16,11 +20,12 @@ type SkillResolver interface {
 
 // ToolHandlers consolidates all session dependencies and implements the handler methods.
 type ToolHandlers struct {
-	Storage       FileStorage
-	CWD           string
-	TaskManager   *TaskManager
-	SessionID     string
-	SkillResolver SkillResolver
+	Storage           FileStorage
+	CWD               string
+	TaskManager       *TaskManager
+	SessionID         string
+	SkillResolver     SkillResolver
+	PermissionManager permissions.PermissionManager
 }
 
 // NewHandlers creates a new ToolHandlers instance with the given dependencies.
@@ -41,5 +46,11 @@ func (h *ToolHandlers) WithTaskManager(taskMgr *TaskManager, sessionID string) *
 // WithSkillResolver configures the SkillResolver on ToolHandlers.
 func (h *ToolHandlers) WithSkillResolver(resolver SkillResolver) *ToolHandlers {
 	h.SkillResolver = resolver
+	return h
+}
+
+// WithPermissionManager configures the PermissionManager on ToolHandlers.
+func (h *ToolHandlers) WithPermissionManager(pm permissions.PermissionManager) *ToolHandlers {
+	h.PermissionManager = pm
 	return h
 }

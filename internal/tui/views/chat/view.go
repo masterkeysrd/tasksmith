@@ -20,6 +20,7 @@ import (
 	"github.com/masterkeysrd/kite/style"
 
 	"github.com/masterkeysrd/loom/message"
+	"github.com/masterkeysrd/tasksmith/internal/agent/permissions"
 	"github.com/masterkeysrd/tasksmith/internal/agent/tools"
 	"github.com/masterkeysrd/tasksmith/internal/api"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
@@ -34,6 +35,19 @@ import (
 // ViewProps defines the properties for the Chat view.
 type ViewProps struct {
 	SessionID string
+}
+
+func getTargetOptionForHorizontal(options []permissions.PermissionOption, hIdx int) permissions.PermissionOption {
+	if len(options) == 0 {
+		return permissions.PermissionOption{}
+	}
+	if hIdx < 0 {
+		hIdx = 0
+	}
+	if hIdx >= len(options) {
+		hIdx = len(options) - 1
+	}
+	return options[hIdx]
 }
 
 // View is the main Chat view component.
@@ -91,8 +105,97 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 	m := mode.Use()
 	isInsert := m == mode.Insert
 	inputRef := kitex.CreateRef[dom.Element]()
+	outerRef := kitex.CreateRef[dom.Element]()
 
-	// Focus the input when entering insert mode
+	// Authorization choices state
+	selectedIndex, setSelectedIndex := kitex.UseState(0)
+	selectedScopeIndex, setSelectedScopeIndex := kitex.UseState(0)
+	showPreviewModal, setShowPreviewModal := kitex.UseState(false)
+	currentPendingIndex, setCurrentPendingIndex := kitex.UseState(0)
+	localDecisions, setLocalDecisions := kitex.UseState(map[string]permissions.AuthorizationDecision{})
+
+	handleSelectVertical := func(idx int) {
+		setSelectedIndex(idx)
+		mode.Set(mode.Normal)
+	}
+
+	handleSelectHorizontal := func(idx int) {
+		setSelectedScopeIndex(idx)
+		mode.Set(mode.Normal)
+	}
+
+	var pendingAuthorizations []permissions.AuthorizationRequest
+	if stateQuery.Data != nil {
+		pendingAuthorizations = stateQuery.Data.PendingAuthorizations
+	}
+
+	kitex.UseEffect(func() {
+		setSelectedIndex(0)
+		setSelectedScopeIndex(0)
+		setShowPreviewModal(false)
+		setCurrentPendingIndex(0)
+		setLocalDecisions(map[string]permissions.AuthorizationDecision{})
+		if len(pendingAuthorizations) > 0 {
+			mode.Set(mode.Normal)
+		}
+	}, []any{len(pendingAuthorizations)})
+
+	recordDecision := func(toolCallID string, approved bool, target string, scope permissions.PermissionScope) {
+		dec := permissions.AuthorizationDecision{
+			ToolCallID:     toolCallID,
+			Approved:       approved,
+			Scope:          scope,
+			SelectedTarget: target,
+		}
+
+		newDecisions := make(map[string]permissions.AuthorizationDecision)
+		for k, v := range localDecisions() {
+			newDecisions[k] = v
+		}
+		newDecisions[toolCallID] = dec
+		setLocalDecisions(newDecisions)
+
+		nextIdx := currentPendingIndex() + 1
+		if nextIdx < len(pendingAuthorizations) {
+			setCurrentPendingIndex(nextIdx)
+			setSelectedIndex(0)
+			setSelectedScopeIndex(0)
+			setShowPreviewModal(false)
+		} else {
+			if submitting() {
+				return
+			}
+			setSubmitting(true)
+			setShowPreviewModal(false)
+
+			promise.New(func(ctx context.Context) (bool, error) {
+				var decisionList []permissions.AuthorizationDecision
+				for _, d := range pendingAuthorizations {
+					if res, ok := newDecisions[d.ToolCallID]; ok {
+						decisionList = append(decisionList, res)
+					}
+				}
+				_, err := client.SubmitAuthorizationDecision(ctx, api.SubmitAuthorizationDecisionRequest{
+					SessionID: sessionID,
+					Decisions: decisionList,
+				})
+				if err != nil {
+					return false, err
+				}
+				return true, nil
+			}).Then(func(success bool) {
+				setSubmitting(false)
+				windClient.InvalidateQueries(api.GetSessionStateRequest{SessionID: sessionID})
+				windClient.InvalidateQueries(api.GetSessionMessagesRequest{SessionID: sessionID})
+			}, func(err error) {
+				setSubmitting(false)
+				log.Error(fmt.Sprintf("Failed to submit authorization decisions: %v", err))
+			})
+		}
+	}
+
+	// Focus management: when insert mode is active, focus composer input.
+	// When normal mode is active, focus the outer container so we can receive global hotkeys.
 	kitex.UseEffect(func() {
 		if isInsert {
 			kitex.PostMacro(func() {
@@ -102,8 +205,190 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 					}
 				}
 			})
+		} else {
+			kitex.PostMacro(func() {
+				if outerRef.Current != nil {
+					outerRef.Current.SetTabIndex(0)
+					if doc := outerRef.Current.OwnerDocument(); doc != nil {
+						doc.Focus(outerRef.Current)
+					}
+				}
+			})
 		}
 	}, []any{isInsert})
+
+	// Refs to bridge latest react states to the single-registration document listener
+	pendingAuthsRef := kitex.UseRef[[]permissions.AuthorizationRequest](nil)
+	pendingAuthsRef.Current = pendingAuthorizations
+
+	selectedIndexRef := kitex.UseRef(0)
+	selectedIndexRef.Current = selectedIndex()
+
+	selectedScopeIndexRef := kitex.UseRef(0)
+	selectedScopeIndexRef.Current = selectedScopeIndex()
+
+	showPreviewModalRef := kitex.UseRef(false)
+	showPreviewModalRef.Current = showPreviewModal()
+
+	modeRef := kitex.UseRef(mode.Normal)
+	modeRef.Current = m
+
+	currentPendingIndexRef := kitex.UseRef(0)
+	currentPendingIndexRef.Current = currentPendingIndex()
+
+	recordDecisionRef := kitex.UseRef[func(string, bool, string, permissions.PermissionScope)](nil)
+	recordDecisionRef.Current = recordDecision
+
+	handleApprove := func() {
+		currIdx := currentPendingIndexRef.Current
+		if currIdx >= len(pendingAuthsRef.Current) {
+			return
+		}
+		req := pendingAuthsRef.Current[currIdx]
+		vIdx := selectedIndexRef.Current
+		hIdx := selectedScopeIndexRef.Current
+
+		if vIdx == 4 { // Deny
+			if recordDecisionRef.Current != nil {
+				recordDecisionRef.Current(req.ToolCallID, false, "", permissions.ScopeOnce)
+			}
+			return
+		}
+
+		var target string
+		if len(req.Options) > 0 {
+			target = getTargetOptionForHorizontal(req.Options, hIdx).Target
+		}
+
+		var scope permissions.PermissionScope
+		switch vIdx {
+		case 0:
+			scope = permissions.ScopeOnce
+			if len(req.Options) > 0 {
+				target = req.Options[0].Target
+			}
+		case 1:
+			scope = permissions.ScopeSession
+		case 2:
+			scope = permissions.ScopeWorkspace
+		case 3:
+			scope = permissions.ScopeGlobal
+		}
+
+		if recordDecisionRef.Current != nil {
+			recordDecisionRef.Current(req.ToolCallID, true, target, scope)
+		}
+	}
+
+	handleDeny := func() {
+		currIdx := currentPendingIndexRef.Current
+		if currIdx >= len(pendingAuthsRef.Current) {
+			return
+		}
+		req := pendingAuthsRef.Current[currIdx]
+		if recordDecisionRef.Current != nil {
+			recordDecisionRef.Current(req.ToolCallID, false, "", permissions.ScopeOnce)
+		}
+	}
+
+	// Document-level KeyDown listener registered when outerRef is available
+	kitex.UseEffectCleanup(func() func() {
+		if outerRef.Current == nil {
+			return nil
+		}
+		doc := outerRef.Current.OwnerDocument()
+		if doc == nil {
+			return nil
+		}
+
+		sub := doc.AddEventListener(event.EventKeyDown, func(e event.Event) {
+			isModalOpen := showPreviewModalRef.Current
+			if !isModalOpen && modeRef.Current != mode.Normal {
+				return
+			}
+			if len(pendingAuthsRef.Current) == 0 {
+				return
+			}
+
+			ke, ok := e.(*event.KeyEvent)
+			if !ok {
+				return
+			}
+
+			currIdx := currentPendingIndexRef.Current
+			if currIdx >= len(pendingAuthsRef.Current) {
+				return
+			}
+
+			req := pendingAuthsRef.Current[currIdx]
+			optsCount := len(req.Options)
+
+			// Vertical Scope Index: 0: Once, 1: Session, 2: Workspace, 3: Global, 4: Deny
+			if ke.Text == "j" || ke.Code == key.KeyDown {
+				e.PreventDefault()
+				e.StopPropagation()
+				setSelectedIndex((selectedIndexRef.Current + 1) % 5)
+				return
+			}
+			if ke.Text == "k" || ke.Code == key.KeyUp {
+				e.PreventDefault()
+				e.StopPropagation()
+				setSelectedIndex((selectedIndexRef.Current - 1 + 5) % 5)
+				return
+			}
+
+			// Horizontal Target Index (only active for Session, Workspace, Global)
+			hasHorizontal := selectedIndexRef.Current == 1 || selectedIndexRef.Current == 2 || selectedIndexRef.Current == 3
+			if hasHorizontal && optsCount > 1 {
+				if ke.Text == "h" || ke.Code == key.KeyLeft {
+					e.PreventDefault()
+					e.StopPropagation()
+					setSelectedScopeIndex((selectedScopeIndexRef.Current - 1 + optsCount) % optsCount)
+					return
+				}
+				if ke.Text == "l" || ke.Code == key.KeyRight {
+					e.PreventDefault()
+					e.StopPropagation()
+					setSelectedScopeIndex((selectedScopeIndexRef.Current + 1) % optsCount)
+					return
+				}
+			}
+
+			if ke.Code == key.KeyEnter || ke.Text == "\r" || ke.Text == "\n" {
+				e.PreventDefault()
+				e.StopPropagation()
+				handleApprove()
+				return
+			}
+			if ke.Code == key.KeyEscape || ke.Text == "q" {
+				e.PreventDefault()
+				e.StopPropagation()
+				if showPreviewModalRef.Current {
+					setShowPreviewModal(false)
+				} else {
+					handleDeny()
+				}
+				return
+			}
+			if ke.Text == "d" {
+				e.PreventDefault()
+				e.StopPropagation()
+				handleDeny()
+				return
+			}
+			if ke.Text == "p" || ke.Text == "P" {
+				if req.Preview != "" {
+					e.PreventDefault()
+					e.StopPropagation()
+					setShowPreviewModal(!showPreviewModalRef.Current)
+				}
+				return
+			}
+		})
+		return func() {
+			sub.Cancel()
+		}
+	}, []any{outerRef.Current != nil})
 
 	// 4. Polling query updates while the agent is running in the background
 	kitex.UseInterval(func() {
@@ -287,7 +572,12 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 		AlignItems(style.AlignCenter).
 		Background(bgDark)
 
-	return kitex.Box(kitex.BoxProps{Style: outerStyle},
+	outerProps := kitex.BoxProps{
+		Style: outerStyle,
+		Ref:   outerRef,
+	}
+
+	return kitex.Box(outerProps,
 		// Session Title Bar
 		kitex.Box(kitex.BoxProps{Style: sessionTitleBarStyle},
 			kitex.Text(title),
@@ -309,7 +599,25 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 					if stateQuery.Data != nil {
 						isGenerating = stateQuery.Data.IsGenerating
 					}
-					nodes := renderBubbles(messages, toolResponses, currentDots, oneDotCurrentDots, mainAgentName, isGenerating, thinkingTime())
+					nodes := renderBubbles(
+						messages,
+						toolResponses,
+						currentDots,
+						oneDotCurrentDots,
+						mainAgentName,
+						isGenerating,
+						thinkingTime(),
+						pendingAuthorizations,
+						selectedIndex(),
+						selectedScopeIndex(),
+						func() { setShowPreviewModal(true) },
+						currentPendingIndex(),
+						isInsert,
+						handleSelectVertical,
+						handleSelectHorizontal,
+						handleApprove,
+						handleDeny,
+					)
 
 					var runPromptTokens, runCompletionTokens, runTotalTokens int
 					for i := len(messages) - 1; i >= 0; i-- {
@@ -373,8 +681,159 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 				},
 			}),
 		),
+
+		// Modal Section for Authorization Preview
+		components.Modal(components.ModalProps{
+			IsOpen:  showPreviewModal(),
+			Title:   kitex.Text("Authorization Preview"),
+			OnClose: func() { setShowPreviewModal(false) },
+		},
+			kitex.If(showPreviewModal() && len(pendingAuthorizations) > 0 && currentPendingIndex() < len(pendingAuthorizations), func() kitex.Node {
+				req := pendingAuthorizations[currentPendingIndex()]
+				var leftNode kitex.Node
+				if isDiff(req.Preview) {
+					leftNode = components.DiffBlock(components.DiffBlockProps{
+						Diff:  req.Preview,
+						Split: false,
+					})
+				} else {
+					leftNode = components.CodeBlock(components.CodeBlockProps{
+						Code:            req.Preview,
+						HideHeader:      true,
+						ShowLineNumbers: false,
+					})
+				}
+
+				return kitex.Box(kitex.BoxProps{
+					Style: style.S().
+						Display(style.DisplayFlex).
+						FlexDirection(style.FlexRow).
+						Width(style.Percent(100)).
+						Height(style.Percent(100)).
+						Gap(2),
+				},
+					// Left Panel: Preview
+					kitex.Box(kitex.BoxProps{
+						Style: style.S().
+							Flex(2, 2, style.Cells(0)).
+							MinWidth(style.Cells(0)).
+							Height(style.Percent(100)).
+							Display(style.DisplayFlex).
+							FlexDirection(style.FlexColumn).
+							Padding(1).
+							Overflow(style.OverflowAuto),
+					},
+						leftNode,
+					),
+					// Right Panel: Options & Scopes
+					kitex.Box(kitex.BoxProps{
+						Style: style.S().
+							Flex(1, 1, style.Cells(0)).
+							MinWidth(style.Cells(0)).
+							Height(style.Percent(100)).
+							Display(style.DisplayFlex).
+							FlexDirection(style.FlexColumn).
+							BorderLeft(true, style.SingleBorder(), t.Color.Border.Primary).
+							Background(t.Color.Surface.BaseFocus).
+							Padding(1).
+							Gap(1).
+							Overflow(style.OverflowAuto),
+					},
+						// Target Details
+						kitex.Box(kitex.BoxProps{Style: style.S().Bold(true).PaddingVertical(1).Foreground(t.Color.Text.Primary)},
+							kitex.Text("Authorization Details:"),
+						),
+						kitex.Box(kitex.BoxProps{
+							Style: style.S().
+								Display(style.DisplayFlex).
+								FlexDirection(style.FlexRow).
+								Gap(1).
+								PaddingBottom(1),
+						},
+							kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Secondary)}, kitex.Text("Tool:")),
+							kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Magenta).Bold(true)}, kitex.Text(req.ToolName)),
+						),
+						kitex.If(len(req.Options) > 0, func() kitex.Node {
+							return kitex.Box(kitex.BoxProps{
+								Style: style.S().
+									Display(style.DisplayFlex).
+									FlexDirection(style.FlexRow).
+									Gap(1).
+									PaddingBottom(1),
+							},
+								kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Secondary)}, kitex.Text("Target:")),
+								kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Purple).Bold(true)}, kitex.Text(req.Options[0].Target)),
+							)
+						}),
+
+						// Hybrid Selector
+						kitex.Box(kitex.BoxProps{
+							Style: style.S().PaddingBottom(0),
+						},
+							AuthorizationHybridSelector(AuthorizationHybridSelectorProps{
+								Options:            req.Options,
+								VerticalIndex:      selectedIndex(),
+								HorizontalIndex:    selectedScopeIndex(),
+								IsActive:           true,
+								OnSelectVertical:   handleSelectVertical,
+								OnSelectHorizontal: handleSelectHorizontal,
+							}),
+						),
+
+						// Action Buttons
+						kitex.Box(kitex.BoxProps{
+							Style: style.S().
+								Display(style.DisplayFlex).
+								FlexDirection(style.FlexRow).
+								AlignItems(style.AlignCenter).
+								MarginTop(1).
+								MarginBottom(0),
+						},
+							components.Button(components.ButtonProps{
+								Variant: components.ButtonText,
+								Color:   components.ButtonSuccess,
+								Style:   style.S().MarginRight(1),
+								OnClick: func() {
+									handleApprove()
+								},
+							}, kitex.Text("Approve [Enter]")),
+							components.Button(components.ButtonProps{
+								Variant: components.ButtonText,
+								Color:   components.ButtonError,
+								OnClick: func() {
+									handleDeny()
+								},
+							}, kitex.Text("Deny [d]")),
+						),
+
+						// Instructions
+						kitex.Box(kitex.BoxProps{
+							Style: style.S().
+								Border(style.SingleBorder().Color(t.Color.Border.Primary)).
+								Padding(1).
+								MarginTop(1).
+								Foreground(t.Color.Text.Secondary).
+								Width(style.Percent(100)),
+						},
+							func() kitex.Node {
+								text := "[j/k] Navigate Scope"
+								if len(req.Options) > 1 && (selectedIndex() == 1 || selectedIndex() == 2 || selectedIndex() == 3) {
+									text += "\n[h/l] Limit Target"
+								}
+								text += "\n[Enter] Approve Choice\n[d] Deny request\n[Esc/q] Close Preview"
+								return kitex.Text(text)
+							}(),
+						),
+					),
+				)
+			}),
+		),
 	)
 })
+
+func isDiff(preview string) bool {
+	return strings.Contains(preview, "@@ ") || strings.HasPrefix(preview, "--- ") || strings.HasPrefix(preview, "+++ ")
+}
 
 // ComposerProps defines the properties for the Composer component.
 type ComposerProps struct {
@@ -820,13 +1279,23 @@ var Bubble = kitex.FC("Bubble", func(props BubbleProps) kitex.Node {
 })
 
 type MessageProps struct {
-	Role              message.Role
-	Content           message.Content
-	ToolResponses     map[string]*message.Tool
-	CurrentDots       string
-	OneDotCurrentDots string
-	ReasoningTokens   int
-	ThinkingDuration  time.Duration
+	Role                  message.Role
+	Content               message.Content
+	ToolResponses         map[string]*message.Tool
+	CurrentDots           string
+	OneDotCurrentDots     string
+	ReasoningTokens       int
+	ThinkingDuration      time.Duration
+	PendingAuthorizations []permissions.AuthorizationRequest
+	SelectedIndex         int
+	SelectedScopeIndex    int
+	OnPreview             func()
+	CurrentPendingIndex   int
+	IsInsert              bool
+	OnSelectVertical      func(int)
+	OnSelectHorizontal    func(int)
+	OnApprove             func()
+	OnDeny                func()
 }
 
 func getToolOutput(content message.Content) string {
@@ -1381,19 +1850,45 @@ var Message = kitex.FC("Message", func(props MessageProps) kitex.Node {
 					})
 				}
 			case *message.ToolCall:
-				var toolMsg *message.Tool
-				if toolResponses != nil {
-					toolMsg = toolResponses[b.ID]
+				var pendingReq *permissions.AuthorizationRequest
+				for _, req := range props.PendingAuthorizations {
+					if req.ToolCallID == b.ID {
+						pendingReq = &req
+						break
+					}
 				}
-				dots := currentDots
-				if b.Name == "bash" {
-					dots = props.OneDotCurrentDots
+
+				if pendingReq != nil {
+					isActive := len(props.PendingAuthorizations) > 0 &&
+						props.CurrentPendingIndex < len(props.PendingAuthorizations) &&
+						pendingReq.ToolCallID == props.PendingAuthorizations[props.CurrentPendingIndex].ToolCallID
+					node = AuthorizationWidget(AuthorizationWidgetProps{
+						Request:            *pendingReq,
+						SelectedIndex:      props.SelectedIndex,
+						SelectedScopeIndex: props.SelectedScopeIndex,
+						OnPreview:          props.OnPreview,
+						IsActive:           isActive,
+						IsFocused:          isActive && !props.IsInsert,
+						OnSelectVertical:   props.OnSelectVertical,
+						OnSelectHorizontal: props.OnSelectHorizontal,
+						OnApprove:          props.OnApprove,
+						OnDeny:             props.OnDeny,
+					})
+				} else {
+					var toolMsg *message.Tool
+					if toolResponses != nil {
+						toolMsg = toolResponses[b.ID]
+					}
+					dots := currentDots
+					if b.Name == "bash" {
+						dots = props.OneDotCurrentDots
+					}
+					node = ToolExecution(ToolExecutionProps{
+						ToolCall:    b,
+						ToolMessage: toolMsg,
+						CurrentDots: dots,
+					})
 				}
-				node = ToolExecution(ToolExecutionProps{
-					ToolCall:    b,
-					ToolMessage: toolMsg,
-					CurrentDots: dots,
-				})
 			}
 			if node != nil {
 				children = append(children, node)
@@ -1490,7 +1985,25 @@ func isSystemNotification(msg message.Message) bool {
 	return ok && val
 }
 
-func renderBubbles(messages message.MessageList, toolResponses map[string]*message.Tool, currentDots string, oneDotCurrentDots string, mainAgentName string, isGenerating bool, liveThinkingTime int) []kitex.Node {
+func renderBubbles(
+	messages message.MessageList,
+	toolResponses map[string]*message.Tool,
+	currentDots string,
+	oneDotCurrentDots string,
+	mainAgentName string,
+	isGenerating bool,
+	liveThinkingTime int,
+	pendingAuthorizations []permissions.AuthorizationRequest,
+	selectedIndex int,
+	selectedScopeIndex int,
+	onPreview func(),
+	currentPendingIndex int,
+	isInsert bool,
+	onSelectVertical func(int),
+	onSelectHorizontal func(int),
+	onApprove func(),
+	onDeny func(),
+) []kitex.Node {
 	if len(messages) == 0 {
 		return nil
 	}
@@ -1505,7 +2018,26 @@ func renderBubbles(messages message.MessageList, toolResponses map[string]*messa
 			if isGenerating && len(messages) > 0 && currentGroup[len(currentGroup)-1] == messages[len(messages)-1] {
 				groupIsGenerating = true
 			}
-			if node := createBubbleNode(currentGroupRole, currentGroup, toolResponses, currentDots, oneDotCurrentDots, mainAgentName, groupIsGenerating, liveThinkingTime); node != nil {
+			if node := createBubbleNode(
+				currentGroupRole,
+				currentGroup,
+				toolResponses,
+				currentDots,
+				oneDotCurrentDots,
+				mainAgentName,
+				groupIsGenerating,
+				liveThinkingTime,
+				pendingAuthorizations,
+				selectedIndex,
+				selectedScopeIndex,
+				onPreview,
+				currentPendingIndex,
+				isInsert,
+				onSelectVertical,
+				onSelectHorizontal,
+				onApprove,
+				onDeny,
+			); node != nil {
 				nodes = append(nodes, node)
 			}
 		}
@@ -1543,7 +2075,26 @@ func renderBubbles(messages message.MessageList, toolResponses map[string]*messa
 	return nodes
 }
 
-func createBubbleNode(role message.Role, msgs []message.Message, toolResponses map[string]*message.Tool, currentDots string, oneDotCurrentDots string, mainAgentName string, isGenerating bool, liveThinkingTime int) kitex.Node {
+func createBubbleNode(
+	role message.Role,
+	msgs []message.Message,
+	toolResponses map[string]*message.Tool,
+	currentDots string,
+	oneDotCurrentDots string,
+	mainAgentName string,
+	isGenerating bool,
+	liveThinkingTime int,
+	pendingAuthorizations []permissions.AuthorizationRequest,
+	selectedIndex int,
+	selectedScopeIndex int,
+	onPreview func(),
+	currentPendingIndex int,
+	isInsert bool,
+	onSelectVertical func(int),
+	onSelectHorizontal func(int),
+	onApprove func(),
+	onDeny func(),
+) kitex.Node {
 	timestamp := ""
 	var msgAgentName string
 	if len(msgs) > 0 {
@@ -1618,13 +2169,23 @@ func createBubbleNode(role message.Role, msgs []message.Message, toolResponses m
 		}
 
 		node := Message(MessageProps{
-			Role:              msg.Role(),
-			Content:           msg.GetContent(),
-			ToolResponses:     toolResponses,
-			CurrentDots:       currentDots,
-			OneDotCurrentDots: oneDotCurrentDots,
-			ReasoningTokens:   reasoningTokens,
-			ThinkingDuration:  thinkingDuration,
+			Role:                  msg.Role(),
+			Content:               msg.GetContent(),
+			ToolResponses:         toolResponses,
+			CurrentDots:           currentDots,
+			OneDotCurrentDots:     oneDotCurrentDots,
+			ReasoningTokens:       reasoningTokens,
+			ThinkingDuration:      thinkingDuration,
+			PendingAuthorizations: pendingAuthorizations,
+			SelectedIndex:         selectedIndex,
+			SelectedScopeIndex:    selectedScopeIndex,
+			OnPreview:             onPreview,
+			CurrentPendingIndex:   currentPendingIndex,
+			IsInsert:              isInsert,
+			OnSelectVertical:      onSelectVertical,
+			OnSelectHorizontal:    onSelectHorizontal,
+			OnApprove:             onApprove,
+			OnDeny:                onDeny,
 		})
 		if node != nil {
 			children = append(children, node)

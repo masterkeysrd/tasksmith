@@ -82,6 +82,10 @@ func (m *mockClient) GetSessionState(ctx context.Context, req api.GetSessionStat
 	return &api.GetSessionStateResponse{Status: "idle"}, nil
 }
 
+func (m *mockClient) SubmitAuthorizationDecision(ctx context.Context, req api.SubmitAuthorizationDecisionRequest) (*api.SubmitAuthorizationDecisionResponse, error) {
+	return &api.SubmitAuthorizationDecisionResponse{Success: true}, nil
+}
+
 func (m *mockClient) GetTokenAnalytics(ctx context.Context, req api.GetTokenAnalyticsRequest) (*api.GetTokenAnalyticsResponse, error) {
 	return &api.GetTokenAnalyticsResponse{}, nil
 }

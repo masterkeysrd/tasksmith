@@ -1,6 +1,9 @@
 package api
 
-import "github.com/masterkeysrd/tasksmith/internal/metrics"
+import (
+	"github.com/masterkeysrd/tasksmith/internal/agent/permissions"
+	"github.com/masterkeysrd/tasksmith/internal/metrics"
+)
 
 type ListProjectsRequest struct {
 }
@@ -197,11 +200,22 @@ type RunningTaskInfo struct {
 }
 
 type GetSessionStateResponse struct {
-	Status       string            `json:"status"`
-	Error        string            `json:"error,omitempty"`
-	IsGenerating bool              `json:"is_generating"`
-	RunningTasks []RunningTaskInfo `json:"running_tasks,omitempty"`
-	Todos        []Todo            `json:"todos,omitempty"`
+	Status                string                             `json:"status"`
+	Error                 string                             `json:"error,omitempty"`
+	IsGenerating          bool                               `json:"is_generating"`
+	RunningTasks          []RunningTaskInfo                  `json:"running_tasks,omitempty"`
+	Todos                 []Todo                             `json:"todos,omitempty"`
+	PendingAuthorizations []permissions.AuthorizationRequest `json:"pending_authorizations,omitempty"`
+}
+
+type SubmitAuthorizationDecisionRequest struct {
+	SessionID string                              `json:"session_id"`
+	Decision  permissions.AuthorizationDecision   `json:"decision"`
+	Decisions []permissions.AuthorizationDecision `json:"decisions,omitempty"`
+}
+
+type SubmitAuthorizationDecisionResponse struct {
+	Success bool `json:"success"`
 }
 
 type Todo struct {

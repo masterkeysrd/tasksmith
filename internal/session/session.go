@@ -18,6 +18,7 @@ import (
 	loomopenai "github.com/masterkeysrd/loom/llm/openai"
 	"github.com/masterkeysrd/loom/message"
 	agentgraph "github.com/masterkeysrd/tasksmith/internal/agent/graph"
+	"github.com/masterkeysrd/tasksmith/internal/agent/permissions"
 	"github.com/masterkeysrd/tasksmith/internal/agent/prompt"
 	"github.com/masterkeysrd/tasksmith/internal/agent/tools"
 	coredb "github.com/masterkeysrd/tasksmith/internal/core/db"
@@ -62,6 +63,7 @@ type ActiveSession struct {
 	ThinkingStart         time.Time
 	ThinkingDuration      time.Duration
 	CurrentStreamMetrics  *message.TokenMetrics
+	PendingAuthorizations []permissions.AuthorizationRequest
 }
 
 // ManagerConfig defines configuration parameters and dependencies for Manager.
@@ -306,15 +308,48 @@ func (m *Manager) ArchiveSession(ctx context.Context, id string) error {
 }
 
 // GetSessionState returns the in-memory runtime execution state of the specified session.
-func (m *Manager) GetSessionState(sessionID string) (SessionStatus, string, bool) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
+func (m *Manager) GetSessionState(ctx context.Context, sessionID string) (SessionStatus, string, bool, []permissions.AuthorizationRequest) {
+	m.mu.Lock()
 	sess, ok := m.activeSessions[sessionID]
 	if !ok {
-		return StatusIdle, "", false
+		sess = &ActiveSession{
+			ID:     sessionID,
+			Status: StatusIdle,
+		}
+		m.activeSessions[sessionID] = sess
 	}
+	m.mu.Unlock()
+
 	isGenerating := len(sess.CurrentStreamText) > 0 || len(sess.CurrentStreamThinking) > 0
-	return sess.Status, sess.Error, isGenerating
+
+	m.mu.Lock()
+	if sess.Status == StatusIdle && sess.PendingAuthorizations == nil {
+		m.mu.Unlock() // release lock before doing checkpointer load
+		if cp, err := m.store.NewCheckpointer(); err == nil {
+			storage := NewLocalFileStorage(m.ws.CWD(), sessionID)
+			if ag, err := agentgraph.New(ctx, agentgraph.Options{
+				Workspace:   m.ws,
+				Storage:     storage,
+				TaskManager: m.taskMgr,
+				SessionID:   sessionID,
+			}); err == nil {
+				if g, err := ag.Build(cp); err == nil {
+					loc := &graph.Location{ThreadID: sessionID}
+					if snap, err := g.Load(ctx, *loc); err == nil {
+						m.mu.Lock()
+						sess.PendingAuthorizations = snap.State.PendingAuthorizations
+						m.mu.Unlock()
+					}
+				}
+			}
+		}
+	} else {
+		m.mu.Unlock()
+	}
+
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return sess.Status, sess.Error, isGenerating, sess.PendingAuthorizations
 }
 
 // ListTasks retrieves all tasks for a session from the task manager.
@@ -374,6 +409,7 @@ func (m *Manager) sendMessage(ctx context.Context, sessionID string, text string
 	sess.ThinkingStart = time.Time{}
 	sess.ThinkingDuration = 0
 	sess.CurrentStreamMetrics = nil
+	sess.PendingAuthorizations = nil
 
 	runCtx, cancel := context.WithCancel(context.Background())
 	sess.Cancel = cancel
@@ -386,285 +422,336 @@ func (m *Manager) sendMessage(ctx context.Context, sessionID string, text string
 		return err
 	}
 
+	// Load existing todos from database to initialize graph state if empty
+	existingTodos, _ := m.ListTodos(runCtx, sessionID)
+
+	// Setup input command to load current state and append new message
+	inputCmd := graph.Update[agentgraph.AgentState](func(state agentgraph.AgentState) agentgraph.AgentState {
+		if len(state.Todos) == 0 && len(existingTodos) > 0 {
+			state.Todos = existingTodos
+		}
+		agentgraph.InjectReminders(msg, state)
+		state.Messages = append(state.Messages, msg)
+		return state
+	})
+
 	// 2. Start running Loom agent workflow asynchronously in background
-	go func() {
-		defer func() {
-			m.mu.Lock()
-			if sess.Status == StatusRunning {
-				sess.Status = StatusIdle
-			}
-			m.mu.Unlock()
-			cancel()
-		}()
+	go m.runAgentLoop(runCtx, sessionID, sess, inputCmd, cancel)
 
-		// Load checkpointer
-		cp, err := m.store.NewCheckpointer()
+	return nil
+}
+
+// SubmitAuthorizationDecision submits a user permission decision and resumes the agent.
+func (m *Manager) SubmitAuthorizationDecision(ctx context.Context, sessionID string, decisions ...permissions.AuthorizationDecision) error {
+	m.mu.Lock()
+	sess, exists := m.activeSessions[sessionID]
+	if !exists {
+		sess = &ActiveSession{
+			ID:     sessionID,
+			Status: StatusIdle,
+		}
+		m.activeSessions[sessionID] = sess
+	}
+
+	if sess.Status == StatusRunning {
+		m.mu.Unlock()
+		return fmt.Errorf("session is currently running")
+	}
+
+	sess.Status = StatusRunning
+	sess.Error = ""
+	sess.CurrentStreamText = ""
+	sess.CurrentStreamThinking = ""
+	sess.CurrentToolStreams = make(map[string]string)
+	sess.ThinkingStart = time.Time{}
+	sess.ThinkingDuration = 0
+	sess.CurrentStreamMetrics = nil
+	sess.PendingAuthorizations = nil
+
+	runCtx, cancel := context.WithCancel(context.Background())
+	sess.Cancel = cancel
+	m.mu.Unlock()
+
+	// Setup input command to load current state and inject user's decisions
+	inputCmd := graph.Update[agentgraph.AgentState](func(state agentgraph.AgentState) agentgraph.AgentState {
+		state.Decisions = append(state.Decisions, decisions...)
+		return state
+	})
+
+	// Start running Loom agent workflow asynchronously in background
+	go m.runAgentLoop(runCtx, sessionID, sess, inputCmd, cancel)
+
+	return nil
+}
+
+func (m *Manager) runAgentLoop(runCtx context.Context, sessionID string, sess *ActiveSession, inputCmd graph.Command[agentgraph.AgentState], cancel context.CancelFunc) {
+	defer func() {
+		m.mu.Lock()
+		if sess.Status == StatusRunning {
+			sess.Status = StatusIdle
+		}
+		m.mu.Unlock()
+		cancel()
+	}()
+
+	// Load checkpointer
+	cp, err := m.store.NewCheckpointer()
+	if err != nil {
+		m.setSessionError(sessionID, fmt.Errorf("failed to load checkpointer: %w", err))
+		return
+	}
+
+	// Load session config
+	sessData, err := m.store.GetSession(runCtx, sessionID)
+	if err != nil {
+		m.setSessionError(sessionID, fmt.Errorf("failed to load session data: %w", err))
+		return
+	}
+
+	agentName := ""
+	if sessData.AgentName != nil {
+		agentName = *sessData.AgentName
+	}
+	providerName := ""
+	if sessData.ProviderName != nil {
+		providerName = *sessData.ProviderName
+	}
+	modelName := ""
+	if sessData.ModelName != nil {
+		modelName = *sessData.ModelName
+	}
+
+	if agentName == "" || providerName == "" || modelName == "" {
+		defAgent, defProvider, defModel, err := m.resolveDefaults(runCtx)
+		if err == nil {
+			if agentName == "" {
+				agentName = defAgent
+			}
+			if providerName == "" {
+				providerName = defProvider
+			}
+			if modelName == "" {
+				modelName = defModel
+			}
+		}
+	}
+
+	// Resolve agent system prompt
+	var systemPrompt string
+	if m.ws != nil && agentName != "" {
+		resolvedAgent, err := m.ws.ResolveAgent(runCtx, agentName)
 		if err != nil {
-			m.setSessionError(sessionID, fmt.Errorf("failed to load checkpointer: %w", err))
+			m.setSessionError(sessionID, fmt.Errorf("failed to resolve agent %q: %w", agentName, err))
 			return
 		}
 
-		// Load session config
-		sessData, err := m.store.GetSession(runCtx, sessionID)
-		if err != nil {
-			m.setSessionError(sessionID, fmt.Errorf("failed to load session data: %w", err))
-			return
-		}
-
-		agentName := ""
-		if sessData.AgentName != nil {
-			agentName = *sessData.AgentName
-		}
-		providerName := ""
-		if sessData.ProviderName != nil {
-			providerName = *sessData.ProviderName
-		}
-		modelName := ""
-		if sessData.ModelName != nil {
-			modelName = *sessData.ModelName
-		}
-
-		if agentName == "" || providerName == "" || modelName == "" {
-			defAgent, defProvider, defModel, err := m.resolveDefaults(runCtx)
-			if err == nil {
-				if agentName == "" {
-					agentName = defAgent
-				}
-				if providerName == "" {
-					providerName = defProvider
-				}
-				if modelName == "" {
-					modelName = defModel
+		var contextInstructions string
+		var contextPath string
+		contexts := m.ws.Contexts()
+		if len(contexts) > 0 {
+			var parts []string
+			for _, ctxRes := range contexts {
+				if inst := ctxRes.Spec.Instructions; inst != "" {
+					parts = append(parts, inst)
 				}
 			}
+			contextInstructions = strings.Join(parts, "\n\n")
+			contextPath = contexts[0].Directory
 		}
 
-		// Resolve agent system prompt
-		var systemPrompt string
-		if m.ws != nil && agentName != "" {
-			resolvedAgent, err := m.ws.ResolveAgent(runCtx, agentName)
-			if err != nil {
-				m.setSessionError(sessionID, fmt.Errorf("failed to resolve agent %q: %w", agentName, err))
-				return
-			}
-
-			var contextInstructions string
-			var contextPath string
-			contexts := m.ws.Contexts()
-			if len(contexts) > 0 {
-				var parts []string
-				for _, ctxRes := range contexts {
-					if inst := ctxRes.Spec.Instructions; inst != "" {
-						parts = append(parts, inst)
-					}
-				}
-				contextInstructions = strings.Join(parts, "\n\n")
-				contextPath = contexts[0].Directory
-			}
-
-			rendered, err := prompt.RenderAgent(
-				resolvedAgent,
-				m.ws.WorkspaceSpec(),
-				m.ws.Project(),
-				map[string]any{
-					"Context":     contextInstructions,
-					"ContextPath": contextPath,
-				},
-			)
-			if err != nil {
-				m.setSessionError(sessionID, fmt.Errorf("failed to render system prompt template: %w", err))
-				return
-			}
-			systemPrompt = rendered
-		}
-
-		// Resolve LLM Provider
-		var provider llm.Provider
-		if m.ws != nil && providerName != "" {
-			var matchingProvider *warp.ModelProvider
-			for _, p := range m.ws.Providers() {
-				if p.GetName() == providerName {
-					matchingProvider = p
-					break
-				}
-			}
-			if matchingProvider != nil {
-				provider, err = createLoomProvider(runCtx, matchingProvider)
-				if err != nil {
-					m.setSessionError(sessionID, fmt.Errorf("failed to create provider %q: %w", providerName, err))
-					return
-				}
-			}
-		}
-
-		// If no provider resolved, fallback to ollama default provider
-		if provider == nil {
-			provider, err = loomollama.NewDefaultProvider()
-			if err != nil {
-				m.setSessionError(sessionID, fmt.Errorf("failed to create default provider: %w", err))
-				return
-			}
-		}
-
-		// Instantiate Model
-		if modelName == "" {
-			modelName = "qwen3.6:35b-a3b-coding-nvfp4" // default fallback
-		}
-		model, err := llm.NewModel(provider, modelName, nil)
-		if err != nil {
-			m.setSessionError(sessionID, fmt.Errorf("failed to create model: %w", err))
-			return
-		}
-
-		// Compile graph
-		storage := NewLocalFileStorage(m.ws.CWD(), sessionID)
-		ag, err := agentgraph.New(runCtx, agentgraph.Options{
-			Model:        agentgraph.NewLoomModel(model),
-			Workspace:    m.ws,
-			Storage:      storage,
-			Inbox:        &sessionInbox{sess: sess, m: m},
-			TaskManager:  m.taskMgr,
-			SessionID:    sessionID,
-			SystemPrompt: systemPrompt,
-			AgentName:    agentName,
-			OnTodosUpdated: func(ctx context.Context, todos []tools.Todo) error {
-				return m.UpdateTodos(ctx, sessionID, todos)
+		rendered, err := prompt.RenderAgent(
+			resolvedAgent,
+			m.ws.WorkspaceSpec(),
+			m.ws.Project(),
+			map[string]any{
+				"Context":     contextInstructions,
+				"ContextPath": contextPath,
 			},
-		})
+		)
 		if err != nil {
-			m.setSessionError(sessionID, fmt.Errorf("failed to construct agent graph: %w", err))
+			m.setSessionError(sessionID, fmt.Errorf("failed to render system prompt template: %w", err))
 			return
 		}
-		g, err := ag.Build(cp)
-		if err != nil {
-			m.setSessionError(sessionID, fmt.Errorf("failed to build agent graph: %w", err))
-			return
-		}
+		systemPrompt = rendered
+	}
 
-		// Load existing todos from database to initialize graph state if empty
-		existingTodos, _ := m.ListTodos(runCtx, sessionID)
-
-		// Setup input command to load current state and append new message
-		inputCmd := graph.Update[agentgraph.AgentState](func(state agentgraph.AgentState) agentgraph.AgentState {
-			if len(state.Todos) == 0 && len(existingTodos) > 0 {
-				state.Todos = existingTodos
+	// Resolve LLM Provider
+	var provider llm.Provider
+	if m.ws != nil && providerName != "" {
+		var matchingProvider *warp.ModelProvider
+		for _, p := range m.ws.Providers() {
+			if p.GetName() == providerName {
+				matchingProvider = p
+				break
 			}
-			agentgraph.InjectReminders(msg, state)
-			state.Messages = append(state.Messages, msg)
-			return state
-		})
-
-		// Run the graph streaming loop
-		loc := &graph.Location{ThreadID: sessionID}
-		seq, err := g.Stream(runCtx, inputCmd, loc)
-		if err != nil {
-			m.setSessionError(sessionID, fmt.Errorf("failed to start agent stream: %w", err))
-			return
 		}
-
-		var asstMsg message.Message
-
-		// Consume the stream, appending text chunks dynamically in memory
-		for ev, err := range seq {
+		if matchingProvider != nil {
+			provider, err = createLoomProvider(runCtx, matchingProvider)
 			if err != nil {
-				m.setSessionError(sessionID, fmt.Errorf("stream execution error: %w", err))
+				m.setSessionError(sessionID, fmt.Errorf("failed to create provider %q: %w", providerName, err))
 				return
 			}
+		}
+	}
 
-			if ev.Event == graph.EventLLMChunk {
-				m.handleLLMChunk(sess, ev)
-			} else if ev.Event == "agent_message" {
-				if err := m.handleAgentMessage(runCtx, sessionID, sess, ev, systemPrompt, agentName, providerName, modelName); err != nil {
-					m.setSessionError(sessionID, err)
-					return
-				}
-			} else if ev.Event == "user_message" {
-				m.mu.Lock()
-				sess.CurrentStreamText = ""
-				sess.CurrentStreamThinking = ""
-				m.mu.Unlock()
-			} else if ev.Event == "on_tool_chunk" {
-				m.handleToolChunk(sess, ev)
-			} else if ev.Event == "tool_message" {
-				if err := m.handleToolMessage(runCtx, sessionID, sess, ev, agentName); err != nil {
-					m.setSessionError(sessionID, err)
-					return
-				}
-			} else if ev.Event == graph.EventCompleted {
-				var finalState *agentgraph.AgentState
-				if snap, ok := ev.Data.(graph.Snapshot[agentgraph.AgentState]); ok {
-					finalState = &snap.State
-				} else if snapPtr, ok := ev.Data.(*graph.Snapshot[agentgraph.AgentState]); ok {
-					if snapPtr != nil {
-						finalState = &snapPtr.State
-					}
-				}
-				if finalState != nil && len(finalState.Messages) > 0 {
-					lastMsg := finalState.Messages[len(finalState.Messages)-1]
-					if lastMsg.Role() == message.RoleAssistant {
-						asstMsg = lastMsg
-					}
-				}
-			}
+	// If no provider resolved, fallback to ollama default provider
+	if provider == nil {
+		provider, err = loomollama.NewDefaultProvider()
+		if err != nil {
+			m.setSessionError(sessionID, fmt.Errorf("failed to create default provider: %w", err))
+			return
+		}
+	}
+
+	// Instantiate Model
+	if modelName == "" {
+		modelName = "qwen3.6:35b-a3b-coding-nvfp4" // default fallback
+	}
+	model, err := llm.NewModel(provider, modelName, nil)
+	if err != nil {
+		m.setSessionError(sessionID, fmt.Errorf("failed to create model: %w", err))
+		return
+	}
+
+	// Compile graph
+	storage := NewLocalFileStorage(m.ws.CWD(), sessionID)
+	ag, err := agentgraph.New(runCtx, agentgraph.Options{
+		Model:        agentgraph.NewLoomModel(model),
+		Workspace:    m.ws,
+		Storage:      storage,
+		Inbox:        &sessionInbox{sess: sess, m: m},
+		TaskManager:  m.taskMgr,
+		SessionID:    sessionID,
+		SystemPrompt: systemPrompt,
+		AgentName:    agentName,
+		OnTodosUpdated: func(ctx context.Context, todos []tools.Todo) error {
+			return m.UpdateTodos(ctx, sessionID, todos)
+		},
+	})
+	if err != nil {
+		m.setSessionError(sessionID, fmt.Errorf("failed to construct agent graph: %w", err))
+		return
+	}
+	g, err := ag.Build(cp)
+	if err != nil {
+		m.setSessionError(sessionID, fmt.Errorf("failed to build agent graph: %w", err))
+		return
+	}
+
+	// Run the graph streaming loop
+	loc := &graph.Location{ThreadID: sessionID}
+	seq, err := g.Stream(runCtx, inputCmd, loc)
+	if err != nil {
+		m.setSessionError(sessionID, fmt.Errorf("failed to start agent stream: %w", err))
+		return
+	}
+
+	var asstMsg message.Message
+
+	// Consume the stream, appending text chunks dynamically in memory
+	for ev, err := range seq {
+		if err != nil {
+			m.setSessionError(sessionID, fmt.Errorf("stream execution error: %w", err))
+			return
 		}
 
-		// Persist the finalized assistant message to the database
-		if asstMsg == nil {
-			if snap, err := g.Load(context.Background(), *loc); err == nil && len(snap.State.Messages) > 0 {
-				lastMsg := snap.State.Messages[len(snap.State.Messages)-1]
+		if ev.Event == graph.EventLLMChunk {
+			m.handleLLMChunk(sess, ev)
+		} else if ev.Event == "agent_message" {
+			if err := m.handleAgentMessage(runCtx, sessionID, sess, ev, systemPrompt, agentName, providerName, modelName); err != nil {
+				m.setSessionError(sessionID, err)
+				return
+			}
+		} else if ev.Event == "user_message" {
+			m.mu.Lock()
+			sess.CurrentStreamText = ""
+			sess.CurrentStreamThinking = ""
+			m.mu.Unlock()
+		} else if ev.Event == "on_tool_chunk" {
+			m.handleToolChunk(sess, ev)
+		} else if ev.Event == "tool_message" {
+			if err := m.handleToolMessage(runCtx, sessionID, sess, ev, agentName); err != nil {
+				m.setSessionError(sessionID, err)
+				return
+			}
+		} else if ev.Event == graph.EventCompleted {
+			var finalState *agentgraph.AgentState
+			if snap, ok := ev.Data.(graph.Snapshot[agentgraph.AgentState]); ok {
+				finalState = &snap.State
+			} else if snapPtr, ok := ev.Data.(*graph.Snapshot[agentgraph.AgentState]); ok {
+				if snapPtr != nil {
+					finalState = &snapPtr.State
+				}
+			}
+			if finalState != nil && len(finalState.Messages) > 0 {
+				lastMsg := finalState.Messages[len(finalState.Messages)-1]
 				if lastMsg.Role() == message.RoleAssistant {
 					asstMsg = lastMsg
 				}
 			}
 		}
+	}
 
-		if asstMsg == nil {
-			m.mu.RLock()
-			finalText := sess.CurrentStreamText
-			finalThinking := sess.CurrentStreamThinking
-			m.mu.RUnlock()
-			var content message.Content
-			if finalThinking != "" {
-				content = append(content, &message.ThinkingBlock{Thinking: finalThinking})
-			}
-			if finalText != "" {
-				content = append(content, &message.TextBlock{Text: finalText})
-			}
-			asstMsg = &message.Assistant{
-				Content: content,
+	// Persist the finalized assistant message to the database
+	if asstMsg == nil {
+		if snap, err := g.Load(context.Background(), *loc); err == nil && len(snap.State.Messages) > 0 {
+			lastMsg := snap.State.Messages[len(snap.State.Messages)-1]
+			if lastMsg.Role() == message.RoleAssistant {
+				asstMsg = lastMsg
 			}
 		}
+	}
 
-		if asstMsg != nil {
-			m.mu.Lock()
-			durationSecs := int(sess.ThinkingDuration.Seconds())
-			m.mu.Unlock()
-
-			meta := asstMsg.GetMetadata()
-			if meta == nil {
-				meta = make(map[string]any)
-			}
-			if _, exists := meta["thinking_duration"]; !exists && durationSecs > 0 {
-				meta["thinking_duration"] = durationSecs
-				asstMsg.SetMetadata(meta)
-			}
+	if asstMsg == nil {
+		m.mu.RLock()
+		finalText := sess.CurrentStreamText
+		finalThinking := sess.CurrentStreamThinking
+		m.mu.RUnlock()
+		var content message.Content
+		if finalThinking != "" {
+			content = append(content, &message.ThinkingBlock{Thinking: finalThinking})
 		}
+		if finalText != "" {
+			content = append(content, &message.TextBlock{Text: finalText})
+		}
+		asstMsg = &message.Assistant{
+			Content: content,
+		}
+	}
 
-		// Clear the active stream state before persisting to database, so there is no duplication window
+	if asstMsg != nil {
 		m.mu.Lock()
-		sess.Status = StatusIdle
-		sess.CurrentStreamText = ""
-		sess.CurrentStreamThinking = ""
-		sess.CurrentToolStreams = nil
+		durationSecs := int(sess.ThinkingDuration.Seconds())
 		m.mu.Unlock()
 
-		if _, err := m.AppendMessage(context.Background(), sessionID, asstMsg); err != nil {
-			m.setSessionError(sessionID, fmt.Errorf("failed to save final assistant message: %w", err))
-			return
+		meta := asstMsg.GetMetadata()
+		if meta == nil {
+			meta = make(map[string]any)
 		}
-	}()
+		if _, exists := meta["thinking_duration"]; !exists && durationSecs > 0 {
+			meta["thinking_duration"] = durationSecs
+			asstMsg.SetMetadata(meta)
+		}
+	}
 
-	return nil
+	var pendingAuths []permissions.AuthorizationRequest
+	if snap, err := g.Load(context.Background(), *loc); err == nil {
+		pendingAuths = snap.State.PendingAuthorizations
+	}
+
+	// Clear the active stream state before persisting to database, so there is no duplication window
+	m.mu.Lock()
+	sess.Status = StatusIdle
+	sess.CurrentStreamText = ""
+	sess.CurrentStreamThinking = ""
+	sess.CurrentToolStreams = nil
+	sess.PendingAuthorizations = pendingAuths
+	m.mu.Unlock()
+
+	if _, err := m.AppendMessage(context.Background(), sessionID, asstMsg); err != nil {
+		m.setSessionError(sessionID, fmt.Errorf("failed to save final assistant message: %w", err))
+		return
+	}
 }
 
 func (m *Manager) setSessionError(sessionID string, err error) {

@@ -173,4 +173,23 @@ func TestService(t *testing.T) {
 			t.Errorf("expected 0 total calls, got %d", resp.GlobalStats.TotalCalls)
 		}
 	})
+
+	t.Run("GetSessionStateNilManager", func(t *testing.T) {
+		resp, err := svc.GetSessionState(ctx, GetSessionStateRequest{SessionID: "s1"})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if resp.Status != "idle" {
+			t.Errorf("expected status idle, got %s", resp.Status)
+		}
+	})
+
+	t.Run("SubmitAuthorizationDecisionNilManager", func(t *testing.T) {
+		_, err := svc.SubmitAuthorizationDecision(ctx, SubmitAuthorizationDecisionRequest{
+			SessionID: "s1",
+		})
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+	})
 }

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/masterkeysrd/loom/message"
+	"github.com/masterkeysrd/tasksmith/internal/agent/permissions"
 	"github.com/masterkeysrd/tasksmith/internal/agent/tools"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	"github.com/masterkeysrd/tasksmith/internal/metrics"
@@ -411,7 +412,7 @@ func (s *Service) GetSessionState(ctx context.Context, req GetSessionStateReques
 	if s.sm == nil {
 		return &GetSessionStateResponse{Status: "idle"}, nil
 	}
-	status, errStr, isGen := s.sm.GetSessionState(req.SessionID)
+	status, errStr, isGen, pendingAuths := s.sm.GetSessionState(ctx, req.SessionID)
 
 	var runningTasks []RunningTaskInfo
 	tasks := s.sm.ListTasks(req.SessionID)
@@ -439,12 +440,28 @@ func (s *Service) GetSessionState(ctx context.Context, req GetSessionStateReques
 	}
 
 	return &GetSessionStateResponse{
-		Status:       string(status),
-		Error:        errStr,
-		IsGenerating: isGen,
-		RunningTasks: runningTasks,
-		Todos:        apiTodos,
+		Status:                string(status),
+		Error:                 errStr,
+		IsGenerating:          isGen,
+		RunningTasks:          runningTasks,
+		Todos:                 apiTodos,
+		PendingAuthorizations: pendingAuths,
 	}, nil
+}
+
+// SubmitAuthorizationDecision submits a user permission decision and resumes the agent.
+func (s *Service) SubmitAuthorizationDecision(ctx context.Context, req SubmitAuthorizationDecisionRequest) (*SubmitAuthorizationDecisionResponse, error) {
+	if s.sm == nil {
+		return nil, fmt.Errorf("session manager not initialized")
+	}
+	decisions := req.Decisions
+	if len(decisions) == 0 {
+		decisions = []permissions.AuthorizationDecision{req.Decision}
+	}
+	if err := s.sm.SubmitAuthorizationDecision(ctx, req.SessionID, decisions...); err != nil {
+		return nil, err
+	}
+	return &SubmitAuthorizationDecisionResponse{Success: true}, nil
 }
 
 // GetTokenAnalytics aggregates token usage statistics.

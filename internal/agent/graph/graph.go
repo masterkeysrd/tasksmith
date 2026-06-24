@@ -11,15 +11,18 @@ import (
 	"github.com/masterkeysrd/loom/message"
 	"github.com/masterkeysrd/loom/stream"
 	"github.com/masterkeysrd/loom/tool"
+	"github.com/masterkeysrd/tasksmith/internal/agent/permissions"
 	"github.com/masterkeysrd/tasksmith/internal/agent/tools"
 	"github.com/masterkeysrd/tasksmith/internal/workspace"
 )
 
 // AgentState represents the state passed between nodes in the agent loop.
 type AgentState struct {
-	Messages        message.MessageList `json:"messages"`
-	Todos           []tools.Todo        `json:"todos"`
-	ActivatedSkills []string            `json:"activated_skills"`
+	Messages              message.MessageList                 `json:"messages"`
+	Todos                 []tools.Todo                        `json:"todos"`
+	ActivatedSkills       []string                            `json:"activated_skills"`
+	PendingAuthorizations []permissions.AuthorizationRequest  `json:"pending_authorizations,omitempty"`
+	Decisions             []permissions.AuthorizationDecision `json:"decisions,omitempty"`
 }
 
 // Copy performs a deep copy of AgentState to satisfy the loom graph.State interface.
@@ -36,6 +39,14 @@ func (s AgentState) Copy() AgentState {
 	if s.ActivatedSkills != nil {
 		copied.ActivatedSkills = make([]string, len(s.ActivatedSkills))
 		copy(copied.ActivatedSkills, s.ActivatedSkills)
+	}
+	if s.PendingAuthorizations != nil {
+		copied.PendingAuthorizations = make([]permissions.AuthorizationRequest, len(s.PendingAuthorizations))
+		copy(copied.PendingAuthorizations, s.PendingAuthorizations)
+	}
+	if s.Decisions != nil {
+		copied.Decisions = make([]permissions.AuthorizationDecision, len(s.Decisions))
+		copy(copied.Decisions, s.Decisions)
 	}
 	return copied
 }
@@ -75,25 +86,28 @@ type InboxProvider interface {
 
 // AgentGraph orchestrates the flow of model invocation.
 type AgentGraph struct {
-	model          LLM
-	container      *tool.Container
-	inbox          InboxProvider
-	systemPrompt   string
-	agentName      string
-	onTodosUpdated func(ctx context.Context, todos []tools.Todo) error
+	model             LLM
+	container         *tool.Container
+	inbox             InboxProvider
+	systemPrompt      string
+	agentName         string
+	onTodosUpdated    func(ctx context.Context, todos []tools.Todo) error
+	permissionManager permissions.PermissionManager
+	cwd               string
 }
 
 // Options defines the configurations and dependencies to initialize the AgentGraph.
 type Options struct {
-	Model          LLMModel
-	Workspace      *workspace.Workspace
-	Storage        tools.FileStorage
-	Inbox          InboxProvider
-	TaskManager    *tools.TaskManager
-	SessionID      string
-	SystemPrompt   string
-	AgentName      string
-	OnTodosUpdated func(ctx context.Context, todos []tools.Todo) error
+	Model             LLMModel
+	Workspace         *workspace.Workspace
+	Storage           tools.FileStorage
+	Inbox             InboxProvider
+	TaskManager       *tools.TaskManager
+	SessionID         string
+	SystemPrompt      string
+	AgentName         string
+	OnTodosUpdated    func(ctx context.Context, todos []tools.Todo) error
+	PermissionManager permissions.PermissionManager
 }
 
 // New creates a new AgentGraph orchestrator by loading/binding tools outside of the execution nodes.
@@ -111,9 +125,20 @@ func New(ctx context.Context, opts Options) (*AgentGraph, error) {
 	if opts.Workspace != nil {
 		cwd = opts.Workspace.CWD()
 	}
+
+	pm := opts.PermissionManager
+	if pm == nil {
+		var err error
+		pm, err = permissions.NewFSManager(cwd, opts.SessionID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create permission manager: %w", err)
+		}
+	}
+
 	handlers := tools.NewHandlers(opts.Storage, cwd).
 		WithTaskManager(opts.TaskManager, opts.SessionID).
-		WithSkillResolver(&skillResolver{ws: opts.Workspace, agentName: opts.AgentName})
+		WithSkillResolver(&skillResolver{ws: opts.Workspace, agentName: opts.AgentName}).
+		WithPermissionManager(pm)
 	allLoomTools, err := tools.LoomTools(handlers)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load loom tools: %w", err)
@@ -137,12 +162,14 @@ func New(ctx context.Context, opts Options) (*AgentGraph, error) {
 	}
 
 	return &AgentGraph{
-		model:          boundModel,
-		container:      container,
-		inbox:          opts.Inbox,
-		systemPrompt:   opts.SystemPrompt,
-		agentName:      opts.AgentName,
-		onTodosUpdated: opts.OnTodosUpdated,
+		model:             boundModel,
+		container:         container,
+		inbox:             opts.Inbox,
+		systemPrompt:      opts.SystemPrompt,
+		agentName:         opts.AgentName,
+		onTodosUpdated:    opts.OnTodosUpdated,
+		permissionManager: pm,
+		cwd:               cwd,
 	}, nil
 }
 
@@ -234,6 +261,17 @@ func (a *AgentGraph) think(ctx context.Context, s AgentState) (graph.Command[Age
 	}), nil
 }
 
+// interruptUpdate implements graph.Command and graph.Interruptable.
+type interruptUpdate struct {
+	fn func(AgentState) AgentState
+}
+
+func (c interruptUpdate) Apply(s AgentState) AgentState {
+	return c.fn(s)
+}
+
+func (c interruptUpdate) Interrupt() {}
+
 // executeTools executes any tool calls from the last assistant message.
 func (a *AgentGraph) executeTools(ctx context.Context, s AgentState) (graph.Command[AgentState], error) {
 	if a.container == nil {
@@ -245,54 +283,214 @@ func (a *AgentGraph) executeTools(ctx context.Context, s AgentState) (graph.Comm
 
 	sw, hasWriter := stream.WriterFromContext(ctx)
 
+	var pendingRequests []permissions.AuthorizationRequest
+	interruptRequired := false
+
+	decisionMap := make(map[string]permissions.AuthorizationDecision)
+	for _, dec := range s.Decisions {
+		decisionMap[dec.ToolCallID] = dec
+	}
+
+	completedResults := make(map[string]message.Message)
+	for _, msg := range s.Messages {
+		if tMsg, ok := msg.(*message.Tool); ok {
+			completedResults[tMsg.ToolCallID] = tMsg
+		}
+	}
+
+	type evalResult struct {
+		toolCall   *message.ToolCall
+		permState  permissions.PermissionState
+		finalArgs  map[string]any
+		targetTool *tool.Tool
+	}
+	var toExecute []evalResult
+
 	for _, block := range lastMsg.GetContent() {
-		if tc, ok := block.(*message.ToolCall); ok {
-			var toolMsg *message.Tool
-			toolCallCtx := context.WithValue(ctx, "tool_call_id", tc.ID)
+		tc, ok := block.(*message.ToolCall)
+		if !ok {
+			continue
+		}
 
-			start := time.Now()
-			toolResp, err := a.container.Call(toolCallCtx, tc)
-			execTime := time.Since(start).Milliseconds()
+		if existingResult, ok := completedResults[tc.ID]; ok {
+			toolResults = append(toolResults, existingResult)
+			continue
+		}
 
-			if err != nil {
-				toolMsg = &message.Tool{
+		args := tc.Args
+		var decision *permissions.AuthorizationDecision
+		if dec, ok := decisionMap[tc.ID]; ok {
+			decision = &dec
+		}
+
+		var targetTool *tool.Tool
+		for _, t := range a.container.ListTools() {
+			if t.Definition.Name == tc.Name {
+				targetTool = t
+				break
+			}
+		}
+		if targetTool == nil {
+			return nil, fmt.Errorf("tool %q not found in container", tc.Name)
+		}
+
+		permState, finalArgs, _, authReq := permissions.EvaluateToolCall(
+			permissions.ContextWithWorkspaceCWD(ctx, a.cwd),
+			a.permissionManager,
+			permissions.ToolCallRequest{
+				ToolName:    tc.Name,
+				Args:        args,
+				Description: targetTool.Definition.Description,
+				IsDangerous: targetTool.Annotation.IsDangerous,
+				IsOpenWorld: targetTool.Annotation.IsOpenWorld,
+				IsReadOnly:  targetTool.Annotation.IsReadOnly,
+			},
+			decision,
+		)
+		if authReq != nil {
+			authReq.ToolCallID = tc.ID
+		}
+
+		if permState == permissions.StateRequiresAuth {
+			if authReq != nil {
+				pendingRequests = append(pendingRequests, *authReq)
+			}
+			interruptRequired = true
+		} else {
+			toExecute = append(toExecute, evalResult{
+				toolCall:   tc,
+				permState:  permState,
+				finalArgs:  finalArgs,
+				targetTool: targetTool,
+			})
+		}
+	}
+
+	if !interruptRequired {
+		for _, er := range toExecute {
+			tc := er.toolCall
+			switch er.permState {
+			case permissions.StateExplicitDeny:
+				toolMsg := &message.Tool{
 					ToolCallID: tc.ID,
 					Name:       tc.Name,
 					IsError:    true,
-					Content:    message.Content{&message.TextBlock{Text: err.Error()}},
+					Content:    message.Content{&message.TextBlock{Text: fmt.Sprintf("Authorization denied by user for tool %q", tc.Name)}},
 				}
-			} else {
-				toolMsg = toolResp
-			}
+				toolResults = append(toolResults, toolMsg)
+				if hasWriter {
+					_ = sw.Write(ctx, stream.Event{
+						Name: "tool_message",
+						Data: toolMsg,
+					})
+				}
 
-			meta := toolMsg.GetMetadata()
-			if meta == nil {
-				meta = make(map[string]any)
-			}
-			meta["execution_time_ms"] = execTime
-			toolMsg.SetMetadata(meta)
+			default: // StateExplicitAllow / StateAuto
+				tc.Args = er.finalArgs
+				var toolMsg *message.Tool
+				toolCallCtx := context.WithValue(ctx, "tool_call_id", tc.ID)
 
-			toolResults = append(toolResults, toolMsg)
+				start := time.Now()
+				toolResp, err := a.container.Call(toolCallCtx, tc)
+				execTime := time.Since(start).Milliseconds()
 
-			if hasWriter {
-				_ = sw.Write(ctx, stream.Event{
-					Name: "tool_message",
-					Data: toolMsg,
-				})
+				if err != nil {
+					toolMsg = &message.Tool{
+						ToolCallID: tc.ID,
+						Name:       tc.Name,
+						IsError:    true,
+						Content:    message.Content{&message.TextBlock{Text: err.Error()}},
+					}
+				} else {
+					toolMsg = toolResp
+				}
+
+				meta := toolMsg.GetMetadata()
+				if meta == nil {
+					meta = make(map[string]any)
+				}
+				meta["execution_time_ms"] = execTime
+				toolMsg.SetMetadata(meta)
+
+				toolResults = append(toolResults, toolMsg)
+
+				if hasWriter {
+					_ = sw.Write(ctx, stream.Event{
+						Name: "tool_message",
+						Data: toolMsg,
+					})
+				}
 			}
 		}
 	}
 
-	return graph.Update[AgentState](func(state AgentState) AgentState {
-		state.Messages = append(state.Messages, toolResults...)
+	if interruptRequired {
+		return interruptUpdate{
+			fn: func(state AgentState) AgentState {
+				for _, res := range toolResults {
+					found := false
+					for _, msg := range state.Messages {
+						if tMsg, ok := msg.(*message.Tool); ok && tMsg.ToolCallID == res.(*message.Tool).ToolCallID {
+							found = true
+							break
+						}
+					}
+					if !found {
+						state.Messages = append(state.Messages, res)
+					}
+				}
 
-		// Apply hooks for successful tool executions
+				state.PendingAuthorizations = pendingRequests
+
+				// Filter out decisions that were handled
+				var remainingDecisions []permissions.AuthorizationDecision
+				for _, dec := range state.Decisions {
+					resolved := false
+					for _, req := range pendingRequests {
+						if req.ToolCallID == dec.ToolCallID {
+							resolved = true
+							break
+						}
+					}
+					for _, res := range toolResults {
+						if res.(*message.Tool).ToolCallID == dec.ToolCallID {
+							resolved = true
+							break
+						}
+					}
+					if !resolved {
+						remainingDecisions = append(remainingDecisions, dec)
+					}
+				}
+				state.Decisions = remainingDecisions
+
+				return state
+			},
+		}, nil
+	}
+
+	return graph.Update[AgentState](func(state AgentState) AgentState {
+		for _, res := range toolResults {
+			found := false
+			for _, msg := range state.Messages {
+				if tMsg, ok := msg.(*message.Tool); ok && tMsg.ToolCallID == res.(*message.Tool).ToolCallID {
+					found = true
+					break
+				}
+			}
+			if !found {
+				state.Messages = append(state.Messages, res)
+			}
+		}
+
+		state.PendingAuthorizations = nil
+		state.Decisions = nil
+
 		for _, res := range toolResults {
 			if tMsg, ok := res.(*message.Tool); ok {
 				if tMsg.IsError {
 					continue
 				}
-				// Find corresponding tool call
 				for _, block := range lastMsg.GetContent() {
 					if tc, ok := block.(*message.ToolCall); ok && tc.ID == tMsg.ToolCallID {
 						if hook, ok := toolStateHooks[tc.Name]; ok {

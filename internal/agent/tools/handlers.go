@@ -23,11 +23,22 @@ func LoomTools(handlers *ToolHandlers) ([]*tool.Tool, error) {
 
 	var list []*tool.Tool
 	if res, ok := resMap["activate_skill"]; ok {
+		var opts []tool.Option
+		if res.Spec.Annotations != nil {
+			opts = append(opts, tool.WithAnnotation(tool.Annotation{
+				IsOpenWorld:  res.Spec.Annotations.IsOpenWorld,
+				IsDangerous:  res.Spec.Annotations.IsDangerous,
+				IsReadOnly:   res.Spec.Annotations.IsReadOnly,
+				IsIdempotent: res.Spec.Annotations.IsIdempotent,
+				UserHint:     res.Spec.Annotations.UserHint,
+			}))
+		}
 		t, err := tool.New(
 			"activate_skill",
 			res.Metadata.DisplayName,
 			res.Metadata.Description,
 			handlers.ActivateSkill,
+			opts...,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create tool activate_skill: %w", err)
@@ -36,11 +47,22 @@ func LoomTools(handlers *ToolHandlers) ([]*tool.Tool, error) {
 	}
 
 	if res, ok := resMap["bash"]; ok {
+		var opts []tool.Option
+		if res.Spec.Annotations != nil {
+			opts = append(opts, tool.WithAnnotation(tool.Annotation{
+				IsOpenWorld:  res.Spec.Annotations.IsOpenWorld,
+				IsDangerous:  res.Spec.Annotations.IsDangerous,
+				IsReadOnly:   res.Spec.Annotations.IsReadOnly,
+				IsIdempotent: res.Spec.Annotations.IsIdempotent,
+				UserHint:     res.Spec.Annotations.UserHint,
+			}))
+		}
 		t, err := tool.NewStreaming(
 			"bash",
 			res.Metadata.DisplayName,
 			res.Metadata.Description,
 			handlers.Bash,
+			opts...,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create tool bash: %w", err)
@@ -49,11 +71,22 @@ func LoomTools(handlers *ToolHandlers) ([]*tool.Tool, error) {
 	}
 
 	if res, ok := resMap["download"]; ok {
+		var opts []tool.Option
+		if res.Spec.Annotations != nil {
+			opts = append(opts, tool.WithAnnotation(tool.Annotation{
+				IsOpenWorld:  res.Spec.Annotations.IsOpenWorld,
+				IsDangerous:  res.Spec.Annotations.IsDangerous,
+				IsReadOnly:   res.Spec.Annotations.IsReadOnly,
+				IsIdempotent: res.Spec.Annotations.IsIdempotent,
+				UserHint:     res.Spec.Annotations.UserHint,
+			}))
+		}
 		t, err := tool.New(
 			"download",
 			res.Metadata.DisplayName,
 			res.Metadata.Description,
 			handlers.Download,
+			opts...,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create tool download: %w", err)
@@ -62,11 +95,22 @@ func LoomTools(handlers *ToolHandlers) ([]*tool.Tool, error) {
 	}
 
 	if res, ok := resMap["edit"]; ok {
+		var opts []tool.Option
+		if res.Spec.Annotations != nil {
+			opts = append(opts, tool.WithAnnotation(tool.Annotation{
+				IsOpenWorld:  res.Spec.Annotations.IsOpenWorld,
+				IsDangerous:  res.Spec.Annotations.IsDangerous,
+				IsReadOnly:   res.Spec.Annotations.IsReadOnly,
+				IsIdempotent: res.Spec.Annotations.IsIdempotent,
+				UserHint:     res.Spec.Annotations.UserHint,
+			}))
+		}
 		t, err := tool.New(
 			"edit",
 			res.Metadata.DisplayName,
 			res.Metadata.Description,
 			handlers.Edit,
+			opts...,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create tool edit: %w", err)
@@ -75,11 +119,22 @@ func LoomTools(handlers *ToolHandlers) ([]*tool.Tool, error) {
 	}
 
 	if res, ok := resMap["fetch"]; ok {
+		var opts []tool.Option
+		if res.Spec.Annotations != nil {
+			opts = append(opts, tool.WithAnnotation(tool.Annotation{
+				IsOpenWorld:  res.Spec.Annotations.IsOpenWorld,
+				IsDangerous:  res.Spec.Annotations.IsDangerous,
+				IsReadOnly:   res.Spec.Annotations.IsReadOnly,
+				IsIdempotent: res.Spec.Annotations.IsIdempotent,
+				UserHint:     res.Spec.Annotations.UserHint,
+			}))
+		}
 		t, err := tool.New(
 			"fetch",
 			res.Metadata.DisplayName,
 			res.Metadata.Description,
 			handlers.Fetch,
+			opts...,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create tool fetch: %w", err)
@@ -88,11 +143,22 @@ func LoomTools(handlers *ToolHandlers) ([]*tool.Tool, error) {
 	}
 
 	if res, ok := resMap["glob"]; ok {
+		var opts []tool.Option
+		if res.Spec.Annotations != nil {
+			opts = append(opts, tool.WithAnnotation(tool.Annotation{
+				IsOpenWorld:  res.Spec.Annotations.IsOpenWorld,
+				IsDangerous:  res.Spec.Annotations.IsDangerous,
+				IsReadOnly:   res.Spec.Annotations.IsReadOnly,
+				IsIdempotent: res.Spec.Annotations.IsIdempotent,
+				UserHint:     res.Spec.Annotations.UserHint,
+			}))
+		}
 		t, err := tool.New(
 			"glob",
 			res.Metadata.DisplayName,
 			res.Metadata.Description,
 			handlers.Glob,
+			opts...,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create tool glob: %w", err)
@@ -101,11 +167,22 @@ func LoomTools(handlers *ToolHandlers) ([]*tool.Tool, error) {
 	}
 
 	if res, ok := resMap["grep"]; ok {
+		var opts []tool.Option
+		if res.Spec.Annotations != nil {
+			opts = append(opts, tool.WithAnnotation(tool.Annotation{
+				IsOpenWorld:  res.Spec.Annotations.IsOpenWorld,
+				IsDangerous:  res.Spec.Annotations.IsDangerous,
+				IsReadOnly:   res.Spec.Annotations.IsReadOnly,
+				IsIdempotent: res.Spec.Annotations.IsIdempotent,
+				UserHint:     res.Spec.Annotations.UserHint,
+			}))
+		}
 		t, err := tool.New(
 			"grep",
 			res.Metadata.DisplayName,
 			res.Metadata.Description,
 			handlers.Grep,
+			opts...,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create tool grep: %w", err)
@@ -114,11 +191,22 @@ func LoomTools(handlers *ToolHandlers) ([]*tool.Tool, error) {
 	}
 
 	if res, ok := resMap["ls"]; ok {
+		var opts []tool.Option
+		if res.Spec.Annotations != nil {
+			opts = append(opts, tool.WithAnnotation(tool.Annotation{
+				IsOpenWorld:  res.Spec.Annotations.IsOpenWorld,
+				IsDangerous:  res.Spec.Annotations.IsDangerous,
+				IsReadOnly:   res.Spec.Annotations.IsReadOnly,
+				IsIdempotent: res.Spec.Annotations.IsIdempotent,
+				UserHint:     res.Spec.Annotations.UserHint,
+			}))
+		}
 		t, err := tool.New(
 			"ls",
 			res.Metadata.DisplayName,
 			res.Metadata.Description,
 			handlers.Ls,
+			opts...,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create tool ls: %w", err)
@@ -127,11 +215,22 @@ func LoomTools(handlers *ToolHandlers) ([]*tool.Tool, error) {
 	}
 
 	if res, ok := resMap["lsp_diagnostics"]; ok {
+		var opts []tool.Option
+		if res.Spec.Annotations != nil {
+			opts = append(opts, tool.WithAnnotation(tool.Annotation{
+				IsOpenWorld:  res.Spec.Annotations.IsOpenWorld,
+				IsDangerous:  res.Spec.Annotations.IsDangerous,
+				IsReadOnly:   res.Spec.Annotations.IsReadOnly,
+				IsIdempotent: res.Spec.Annotations.IsIdempotent,
+				UserHint:     res.Spec.Annotations.UserHint,
+			}))
+		}
 		t, err := tool.New(
 			"lsp_diagnostics",
 			res.Metadata.DisplayName,
 			res.Metadata.Description,
 			handlers.LspDiagnostics,
+			opts...,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create tool lsp_diagnostics: %w", err)
@@ -140,11 +239,22 @@ func LoomTools(handlers *ToolHandlers) ([]*tool.Tool, error) {
 	}
 
 	if res, ok := resMap["lsp_restart"]; ok {
+		var opts []tool.Option
+		if res.Spec.Annotations != nil {
+			opts = append(opts, tool.WithAnnotation(tool.Annotation{
+				IsOpenWorld:  res.Spec.Annotations.IsOpenWorld,
+				IsDangerous:  res.Spec.Annotations.IsDangerous,
+				IsReadOnly:   res.Spec.Annotations.IsReadOnly,
+				IsIdempotent: res.Spec.Annotations.IsIdempotent,
+				UserHint:     res.Spec.Annotations.UserHint,
+			}))
+		}
 		t, err := tool.New(
 			"lsp_restart",
 			res.Metadata.DisplayName,
 			res.Metadata.Description,
 			handlers.LspRestart,
+			opts...,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create tool lsp_restart: %w", err)
@@ -153,11 +263,22 @@ func LoomTools(handlers *ToolHandlers) ([]*tool.Tool, error) {
 	}
 
 	if res, ok := resMap["lsp_search"]; ok {
+		var opts []tool.Option
+		if res.Spec.Annotations != nil {
+			opts = append(opts, tool.WithAnnotation(tool.Annotation{
+				IsOpenWorld:  res.Spec.Annotations.IsOpenWorld,
+				IsDangerous:  res.Spec.Annotations.IsDangerous,
+				IsReadOnly:   res.Spec.Annotations.IsReadOnly,
+				IsIdempotent: res.Spec.Annotations.IsIdempotent,
+				UserHint:     res.Spec.Annotations.UserHint,
+			}))
+		}
 		t, err := tool.New(
 			"lsp_search",
 			res.Metadata.DisplayName,
 			res.Metadata.Description,
 			handlers.LspSearch,
+			opts...,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create tool lsp_search: %w", err)
@@ -166,11 +287,22 @@ func LoomTools(handlers *ToolHandlers) ([]*tool.Tool, error) {
 	}
 
 	if res, ok := resMap["mcp_read_resources"]; ok {
+		var opts []tool.Option
+		if res.Spec.Annotations != nil {
+			opts = append(opts, tool.WithAnnotation(tool.Annotation{
+				IsOpenWorld:  res.Spec.Annotations.IsOpenWorld,
+				IsDangerous:  res.Spec.Annotations.IsDangerous,
+				IsReadOnly:   res.Spec.Annotations.IsReadOnly,
+				IsIdempotent: res.Spec.Annotations.IsIdempotent,
+				UserHint:     res.Spec.Annotations.UserHint,
+			}))
+		}
 		t, err := tool.New(
 			"mcp_read_resources",
 			res.Metadata.DisplayName,
 			res.Metadata.Description,
 			handlers.McpReadResources,
+			opts...,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create tool mcp_read_resources: %w", err)
@@ -179,11 +311,22 @@ func LoomTools(handlers *ToolHandlers) ([]*tool.Tool, error) {
 	}
 
 	if res, ok := resMap["multi_edit"]; ok {
+		var opts []tool.Option
+		if res.Spec.Annotations != nil {
+			opts = append(opts, tool.WithAnnotation(tool.Annotation{
+				IsOpenWorld:  res.Spec.Annotations.IsOpenWorld,
+				IsDangerous:  res.Spec.Annotations.IsDangerous,
+				IsReadOnly:   res.Spec.Annotations.IsReadOnly,
+				IsIdempotent: res.Spec.Annotations.IsIdempotent,
+				UserHint:     res.Spec.Annotations.UserHint,
+			}))
+		}
 		t, err := tool.New(
 			"multi_edit",
 			res.Metadata.DisplayName,
 			res.Metadata.Description,
 			handlers.MultiEdit,
+			opts...,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create tool multi_edit: %w", err)
@@ -192,11 +335,22 @@ func LoomTools(handlers *ToolHandlers) ([]*tool.Tool, error) {
 	}
 
 	if res, ok := resMap["remove"]; ok {
+		var opts []tool.Option
+		if res.Spec.Annotations != nil {
+			opts = append(opts, tool.WithAnnotation(tool.Annotation{
+				IsOpenWorld:  res.Spec.Annotations.IsOpenWorld,
+				IsDangerous:  res.Spec.Annotations.IsDangerous,
+				IsReadOnly:   res.Spec.Annotations.IsReadOnly,
+				IsIdempotent: res.Spec.Annotations.IsIdempotent,
+				UserHint:     res.Spec.Annotations.UserHint,
+			}))
+		}
 		t, err := tool.New(
 			"remove",
 			res.Metadata.DisplayName,
 			res.Metadata.Description,
 			handlers.Remove,
+			opts...,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create tool remove: %w", err)
@@ -205,11 +359,22 @@ func LoomTools(handlers *ToolHandlers) ([]*tool.Tool, error) {
 	}
 
 	if res, ok := resMap["tasks"]; ok {
+		var opts []tool.Option
+		if res.Spec.Annotations != nil {
+			opts = append(opts, tool.WithAnnotation(tool.Annotation{
+				IsOpenWorld:  res.Spec.Annotations.IsOpenWorld,
+				IsDangerous:  res.Spec.Annotations.IsDangerous,
+				IsReadOnly:   res.Spec.Annotations.IsReadOnly,
+				IsIdempotent: res.Spec.Annotations.IsIdempotent,
+				UserHint:     res.Spec.Annotations.UserHint,
+			}))
+		}
 		t, err := tool.New(
 			"tasks",
 			res.Metadata.DisplayName,
 			res.Metadata.Description,
 			handlers.Tasks,
+			opts...,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create tool tasks: %w", err)
@@ -218,11 +383,22 @@ func LoomTools(handlers *ToolHandlers) ([]*tool.Tool, error) {
 	}
 
 	if res, ok := resMap["todos"]; ok {
+		var opts []tool.Option
+		if res.Spec.Annotations != nil {
+			opts = append(opts, tool.WithAnnotation(tool.Annotation{
+				IsOpenWorld:  res.Spec.Annotations.IsOpenWorld,
+				IsDangerous:  res.Spec.Annotations.IsDangerous,
+				IsReadOnly:   res.Spec.Annotations.IsReadOnly,
+				IsIdempotent: res.Spec.Annotations.IsIdempotent,
+				UserHint:     res.Spec.Annotations.UserHint,
+			}))
+		}
 		t, err := tool.New(
 			"todos",
 			res.Metadata.DisplayName,
 			res.Metadata.Description,
 			handlers.Todos,
+			opts...,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create tool todos: %w", err)
@@ -231,11 +407,22 @@ func LoomTools(handlers *ToolHandlers) ([]*tool.Tool, error) {
 	}
 
 	if res, ok := resMap["view"]; ok {
+		var opts []tool.Option
+		if res.Spec.Annotations != nil {
+			opts = append(opts, tool.WithAnnotation(tool.Annotation{
+				IsOpenWorld:  res.Spec.Annotations.IsOpenWorld,
+				IsDangerous:  res.Spec.Annotations.IsDangerous,
+				IsReadOnly:   res.Spec.Annotations.IsReadOnly,
+				IsIdempotent: res.Spec.Annotations.IsIdempotent,
+				UserHint:     res.Spec.Annotations.UserHint,
+			}))
+		}
 		t, err := tool.New(
 			"view",
 			res.Metadata.DisplayName,
 			res.Metadata.Description,
 			handlers.View,
+			opts...,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create tool view: %w", err)
@@ -244,11 +431,22 @@ func LoomTools(handlers *ToolHandlers) ([]*tool.Tool, error) {
 	}
 
 	if res, ok := resMap["web_fetch"]; ok {
+		var opts []tool.Option
+		if res.Spec.Annotations != nil {
+			opts = append(opts, tool.WithAnnotation(tool.Annotation{
+				IsOpenWorld:  res.Spec.Annotations.IsOpenWorld,
+				IsDangerous:  res.Spec.Annotations.IsDangerous,
+				IsReadOnly:   res.Spec.Annotations.IsReadOnly,
+				IsIdempotent: res.Spec.Annotations.IsIdempotent,
+				UserHint:     res.Spec.Annotations.UserHint,
+			}))
+		}
 		t, err := tool.New(
 			"web_fetch",
 			res.Metadata.DisplayName,
 			res.Metadata.Description,
 			handlers.WebFetch,
+			opts...,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create tool web_fetch: %w", err)
@@ -257,11 +455,22 @@ func LoomTools(handlers *ToolHandlers) ([]*tool.Tool, error) {
 	}
 
 	if res, ok := resMap["web_search"]; ok {
+		var opts []tool.Option
+		if res.Spec.Annotations != nil {
+			opts = append(opts, tool.WithAnnotation(tool.Annotation{
+				IsOpenWorld:  res.Spec.Annotations.IsOpenWorld,
+				IsDangerous:  res.Spec.Annotations.IsDangerous,
+				IsReadOnly:   res.Spec.Annotations.IsReadOnly,
+				IsIdempotent: res.Spec.Annotations.IsIdempotent,
+				UserHint:     res.Spec.Annotations.UserHint,
+			}))
+		}
 		t, err := tool.New(
 			"web_search",
 			res.Metadata.DisplayName,
 			res.Metadata.Description,
 			handlers.WebSearch,
+			opts...,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create tool web_search: %w", err)
@@ -270,11 +479,22 @@ func LoomTools(handlers *ToolHandlers) ([]*tool.Tool, error) {
 	}
 
 	if res, ok := resMap["write"]; ok {
+		var opts []tool.Option
+		if res.Spec.Annotations != nil {
+			opts = append(opts, tool.WithAnnotation(tool.Annotation{
+				IsOpenWorld:  res.Spec.Annotations.IsOpenWorld,
+				IsDangerous:  res.Spec.Annotations.IsDangerous,
+				IsReadOnly:   res.Spec.Annotations.IsReadOnly,
+				IsIdempotent: res.Spec.Annotations.IsIdempotent,
+				UserHint:     res.Spec.Annotations.UserHint,
+			}))
+		}
 		t, err := tool.New(
 			"write",
 			res.Metadata.DisplayName,
 			res.Metadata.Description,
 			handlers.Write,
+			opts...,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create tool write: %w", err)
