@@ -1259,7 +1259,6 @@ var BashToolWidget = kitex.FC("BashToolWidget", func(props ToolExecutionProps) k
 						}
 						return kitex.Box(kitex.BoxProps{
 							Style: style.S().
-								MarginBottom(1).
 								Foreground(textCol).
 								Italic(true),
 						}, kitex.Text(description))
@@ -1267,7 +1266,7 @@ var BashToolWidget = kitex.FC("BashToolWidget", func(props ToolExecutionProps) k
 					// Input: codeblock without header or borders
 					kitex.If(command != "", func() kitex.Node {
 						return kitex.Box(kitex.BoxProps{
-							Style: style.S().MarginBottom(1),
+							Style: style.S(),
 						},
 							components.CodeBlock(components.CodeBlockProps{
 								Code:       command,
@@ -1302,8 +1301,6 @@ var BashToolWidget = kitex.FC("BashToolWidget", func(props ToolExecutionProps) k
 								outputContainerStyle := style.S().
 									Display(style.DisplayFlex).
 									FlexDirection(style.FlexColumn).
-									Background(t.Color.Surface.BaseHover).
-									Padding(1).
 									Width(style.Percent(100)).
 									MaxWidth(style.Percent(100)).
 									Overflow(style.OverflowHidden)
@@ -1345,7 +1342,11 @@ var BashToolWidget = kitex.FC("BashToolWidget", func(props ToolExecutionProps) k
 										OnClick: func() {
 											setShowModal(true)
 										},
-									}, kitex.Text("🔍 VIEW FULL OUTPUT"))
+									}, kitex.Fragment(
+										kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Info)}, icon.Terminal),
+										kitex.Text(" VIEW FULL OUTPUT"),
+									),
+									)
 								}
 
 								return kitex.Box(kitex.BoxProps{
@@ -1732,7 +1733,11 @@ var TasksToolWidget = kitex.FC("TasksToolWidget", func(props ToolExecutionProps)
 											OnClick: func() {
 												setShowModal(true)
 											},
-										}, kitex.Text("🔍 VIEW FULL OUTPUT"))
+										}, kitex.Fragment(
+											kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Info)}, icon.Terminal),
+											kitex.Text(" VIEW FULL OUTPUT"),
+										),
+										)
 									}),
 								)
 							}
