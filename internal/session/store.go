@@ -5,6 +5,7 @@ import (
 	"time"
 
 	loomsqlite "github.com/masterkeysrd/loom/checkpoint/sqlite"
+	"github.com/masterkeysrd/tasksmith/internal/session/resource"
 )
 
 // SessionData represents the raw persistent session record.
@@ -70,4 +71,5 @@ type Store interface {
 	GetMessages(ctx context.Context, sessionID string) ([]MessageData, error)
 
 	NewCheckpointer() (*loomsqlite.Checkpointer, error)
+	ResourceStore() *resource.Store
 }

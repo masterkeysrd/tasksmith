@@ -118,6 +118,18 @@ func (m *mockClient) LspSearch(ctx context.Context, req api.LspSearchRequest) (*
 	return &api.LspSearchResponse{}, nil
 }
 
+func (m *mockClient) GetFileChanges(ctx context.Context, req api.GetFileChangesRequest) (*api.GetFileChangesResponse, error) {
+	return &api.GetFileChangesResponse{}, nil
+}
+
+func (m *mockClient) GetFileJournal(ctx context.Context, req api.GetFileJournalRequest) (*api.GetFileJournalResponse, error) {
+	return &api.GetFileJournalResponse{}, nil
+}
+
+func (m *mockClient) RevertFile(ctx context.Context, req api.RevertFileRequest) (*api.RevertFileResponse, error) {
+	return &api.RevertFileResponse{Success: true}, nil
+}
+
 func TestChatView(t *testing.T) {
 	thm := &theme.Scheme{}
 	client := &mockClient{}

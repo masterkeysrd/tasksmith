@@ -24,9 +24,12 @@ import (
 	coredb "github.com/masterkeysrd/tasksmith/internal/core/db"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	"github.com/masterkeysrd/tasksmith/internal/core/lsp"
+	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
 	"github.com/masterkeysrd/tasksmith/internal/metrics"
+	"github.com/masterkeysrd/tasksmith/internal/session/filetrack"
 	"github.com/masterkeysrd/tasksmith/internal/workspace"
 	"github.com/masterkeysrd/warp"
+	"path/filepath"
 )
 
 // SessionStatus represents the runtime execution status of a session thread.
@@ -85,6 +88,19 @@ type Manager struct {
 	taskMgr        *tools.TaskManager
 	metricsStore   *metrics.Store
 	lspManager     *lsp.Manager
+}
+
+// FileTracker returns a session-scoped FileTracker instance.
+func (m *Manager) FileTracker(sessionID string) (filetrack.FileTracker, error) {
+	if m.ws == nil {
+		return nil, fmt.Errorf("workspace not initialized")
+	}
+	wsDir, err := xdg.WorkspaceDir(m.ws.CWD())
+	if err != nil {
+		return nil, err
+	}
+	changesDir := filepath.Join(wsDir, "sessions", sessionID, "changes")
+	return filetrack.NewTracker(m.store.ResourceStore(), sessionID, changesDir, m.ws.CWD()), nil
 }
 
 // NewManager creates a new Manager using the provided configuration.
@@ -628,6 +644,11 @@ func (m *Manager) runAgentLoop(runCtx context.Context, sessionID string, sess *A
 
 	// Compile graph
 	storage := NewLocalFileStorage(m.ws.CWD(), sessionID)
+	ft, err := m.FileTracker(sessionID)
+	if err != nil {
+		m.setSessionError(sessionID, fmt.Errorf("failed to initialize file tracker: %w", err))
+		return
+	}
 	ag, err := agentgraph.New(runCtx, agentgraph.Options{
 		Model:        agentgraph.NewLoomModel(model),
 		Workspace:    m.ws,
@@ -640,7 +661,8 @@ func (m *Manager) runAgentLoop(runCtx context.Context, sessionID string, sess *A
 		OnTodosUpdated: func(ctx context.Context, todos []tools.Todo) error {
 			return m.UpdateTodos(ctx, sessionID, todos)
 		},
-		LspManager: m.lspManager,
+		LspManager:  m.lspManager,
+		FileTracker: ft,
 	})
 	if err != nil {
 		m.setSessionError(sessionID, fmt.Errorf("failed to construct agent graph: %w", err))

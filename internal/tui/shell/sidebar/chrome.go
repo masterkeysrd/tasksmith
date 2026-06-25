@@ -95,7 +95,7 @@ var Content = kitex.FC("ShellSidebarContent", func(props ContentProps) kitex.Nod
 			components.TabPanel(components.TabPanelProps{
 				Value: TabExplorer,
 				Style: bodyStyle,
-			}, explorerPanel(props.Data, props.ExpandedPaths, props.OnTogglePath)),
+			}, explorerPanel(props.Data, props.ExpandedPaths, props.OnTogglePath, props.OnSelectFile)),
 			components.TabPanel(components.TabPanelProps{
 				Value: TabOrchestrator,
 				Style: bodyStyle,

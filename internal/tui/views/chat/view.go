@@ -212,6 +212,7 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 				setSubmitting(false)
 				windClient.InvalidateQueries(api.GetSessionStateRequest{SessionID: sessionID})
 				windClient.InvalidateQueries(api.GetSessionMessagesRequest{SessionID: sessionID})
+				windClient.InvalidateQueries(api.GetFileChangesRequest{SessionID: sessionID})
 			}, func(err error) {
 				setSubmitting(false)
 				log.Error(fmt.Sprintf("Failed to submit authorization decisions: %v", err))
@@ -431,6 +432,7 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 		if sending || hasRunningTasks {
 			windClient.InvalidateQueries(api.GetSessionStateRequest{SessionID: sessionID})
 			windClient.InvalidateQueries(api.ListSessionsRequest{})
+			windClient.InvalidateQueries(api.GetFileChangesRequest{SessionID: sessionID})
 		}
 	}, 1000*time.Millisecond, []any{sending, hasRunningTasks, sessionID})
 
@@ -439,6 +441,7 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 		if !sending {
 			windClient.InvalidateQueries(api.GetSessionMessagesRequest{SessionID: sessionID})
 			windClient.InvalidateQueries(api.ListSessionsRequest{}) // Update sidebar session states (like metrics)
+			windClient.InvalidateQueries(api.GetFileChangesRequest{SessionID: sessionID})
 		}
 	}, []any{sending, sessionID})
 
@@ -546,6 +549,7 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 			// Immediately invalidate queries to trigger a reload of messages and state
 			windClient.InvalidateQueries(api.GetSessionMessagesRequest{SessionID: sessionID})
 			windClient.InvalidateQueries(api.GetSessionStateRequest{SessionID: sessionID})
+			windClient.InvalidateQueries(api.GetFileChangesRequest{SessionID: sessionID})
 		}, func(err error) {
 			setSubmitting(false)
 			log.Error(fmt.Sprintf("Failed to send message to backend: %v", err))

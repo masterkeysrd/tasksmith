@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/masterkeysrd/tasksmith/internal/core/diff"
+	"github.com/masterkeysrd/tasksmith/internal/session/filetrack"
 )
 
 // MultiEdit applies multiple edits to a file, allowing partial success.
@@ -31,6 +32,35 @@ func (h *ToolHandlers) MultiEdit(ctx context.Context, in MultiEditArgs) (MultiEd
 	editAbs, err = filepath.Abs(editAbs)
 	if err != nil {
 		return MultiEditOutput{}, fmt.Errorf("failed to resolve target path: %w", err)
+	}
+
+	if h.isProtectedPath(editAbs) {
+		return MultiEditOutput{
+			Path:    path,
+			Success: false,
+		}, fmt.Errorf("cannot modify TaskSmith internal path: %q", path)
+	}
+
+	relPath, err := filepath.Rel(baseDir, editAbs)
+	if err != nil {
+		relPath = editAbs
+	}
+	relSlash := "./" + filepath.ToSlash(relPath)
+
+	if h.FileTracker != nil {
+		known, err := h.FileTracker.IsKnown(ctx, relSlash)
+		if err != nil {
+			return MultiEditOutput{
+				Path:    path,
+				Success: false,
+			}, fmt.Errorf("failed to verify file status: %w", err)
+		}
+		if !known {
+			return MultiEditOutput{
+				Path:    path,
+				Success: false,
+			}, fmt.Errorf("the file %q has been modified externally since you last read or wrote it; you must view the file content before editing", path)
+		}
 	}
 
 	// Read current file content
@@ -84,13 +114,6 @@ func (h *ToolHandlers) MultiEdit(ctx context.Context, in MultiEditArgs) (MultiEd
 
 	var diffStr string
 	var additions, deletions int
-
-	relPath, err := filepath.Rel(baseDir, editAbs)
-	if err != nil {
-		relPath = editAbs
-	}
-	relSlash := "./" + filepath.ToSlash(relPath)
-
 	var diagsStr string
 
 	if modified {
@@ -119,6 +142,16 @@ func (h *ToolHandlers) MultiEdit(ctx context.Context, in MultiEditArgs) (MultiEd
 			} else if strings.HasPrefix(l, "-") {
 				deletions++
 			}
+		}
+
+		if h.FileTracker != nil {
+			_ = h.FileTracker.Record(ctx, filetrack.Change{
+				ToolName:  "multi_edit",
+				Path:      relSlash,
+				Kind:      filetrack.Modified,
+				Additions: additions,
+				Deletions: deletions,
+			}, diffStr, content)
 		}
 	}
 

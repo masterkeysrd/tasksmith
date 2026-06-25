@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/masterkeysrd/tasksmith/internal/session/filetrack"
 )
 
 func TestEditBasic(t *testing.T) {
@@ -126,5 +128,74 @@ func TestEditBasic(t *testing.T) {
 	}
 	if string(multiData) != "bar\nbar\n" {
 		t.Errorf("expected 'bar\\nbar\\n', got %q", string(multiData))
+	}
+}
+
+type mockFileTracker struct {
+	filetrack.FileTracker
+	knownMap map[string]bool
+	readMap  map[string]bool
+}
+
+func (m *mockFileTracker) IsKnown(ctx context.Context, path string) (bool, error) {
+	return m.knownMap[path], nil
+}
+
+func (m *mockFileTracker) Record(ctx context.Context, change filetrack.Change, diff string, oldContent string) error {
+	m.knownMap["./"+change.Path] = true
+	return nil
+}
+
+func (m *mockFileTracker) RecordRead(ctx context.Context, path string) error {
+	m.readMap[path] = true
+	m.knownMap[path] = true
+	return nil
+}
+
+func TestEditKnownValidation(t *testing.T) {
+	dir := t.TempDir()
+
+	filename := "main.go"
+	content := "package main\n\nfunc main() {\n\t// old comment\n}\n"
+	writeFile(t, filepath.Join(dir, filename), content)
+
+	ft := &mockFileTracker{
+		knownMap: make(map[string]bool),
+		readMap:  make(map[string]bool),
+	}
+
+	handlers := NewHandlers(nil, dir).WithFileTracker(ft)
+	ctx := context.Background()
+
+	// 1. Try to edit without reading -> should fail with stale content error
+	_, err := handlers.Edit(ctx, EditArgs{
+		Path:        filename,
+		Target:      "\t// old comment",
+		Replacement: "\t// new comment",
+	})
+	if err == nil {
+		t.Error("expected error due to unknown file content, got nil")
+	}
+	if err != nil && !strings.Contains(err.Error(), "modified externally") && !strings.Contains(err.Error(), "must view the file") {
+		t.Errorf("unexpected error message: %v", err)
+	}
+
+	// 2. Mark as read / simulate view tool recording read
+	err = ft.RecordRead(ctx, "./"+filename)
+	if err != nil {
+		t.Fatalf("RecordRead failed: %v", err)
+	}
+
+	// 3. Try to edit again -> should succeed
+	out, err := handlers.Edit(ctx, EditArgs{
+		Path:        filename,
+		Target:      "\t// old comment",
+		Replacement: "\t// new comment",
+	})
+	if err != nil {
+		t.Fatalf("Edit failed: %v", err)
+	}
+	if !out.Success {
+		t.Error("expected Success = true after file is known")
 	}
 }

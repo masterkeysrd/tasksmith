@@ -5,6 +5,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
+
+	"github.com/masterkeysrd/tasksmith/internal/session/filetrack"
 )
 
 // Write writes content to a file. It creates any parent directories if they
@@ -31,6 +34,44 @@ func (h *ToolHandlers) Write(ctx context.Context, in WriteArgs) (WriteOutput, er
 		return WriteOutput{}, fmt.Errorf("failed to resolve target path: %w", err)
 	}
 
+	if h.isProtectedPath(writeAbs) {
+		return WriteOutput{
+			Path:    path,
+			Success: false,
+		}, fmt.Errorf("cannot modify TaskSmith internal path: %q", path)
+	}
+
+	relPath, err := filepath.Rel(baseDir, writeAbs)
+	if err != nil {
+		relPath = writeAbs
+	}
+	relSlash := "./" + filepath.ToSlash(relPath)
+
+	var existedBefore bool
+	var oldContent string
+	if info, statErr := os.Stat(writeAbs); statErr == nil && !info.IsDir() {
+		existedBefore = true
+		if oldBytes, readErr := os.ReadFile(writeAbs); readErr == nil {
+			oldContent = string(oldBytes)
+		}
+
+		if h.FileTracker != nil {
+			known, err := h.FileTracker.IsKnown(ctx, relSlash)
+			if err != nil {
+				return WriteOutput{
+					Path:    path,
+					Success: false,
+				}, fmt.Errorf("failed to verify file status: %w", err)
+			}
+			if !known {
+				return WriteOutput{
+					Path:    path,
+					Success: false,
+				}, fmt.Errorf("the file %q has been modified externally since you last read or wrote it; you must view the file content before overwriting it", path)
+			}
+		}
+	}
+
 	// Create parent directories if they don't exist
 	parentDir := filepath.Dir(writeAbs)
 	if err := os.MkdirAll(parentDir, 0755); err != nil {
@@ -52,12 +93,27 @@ func (h *ToolHandlers) Write(ctx context.Context, in WriteArgs) (WriteOutput, er
 		diagsStr = GetFileDiagnosticsString(ctx, h.LspManager, h.CWD, writeAbs)
 	}
 
-	// Return clean relative path with "./" prefix
-	relPath, err := filepath.Rel(baseDir, writeAbs)
-	if err != nil {
-		relPath = writeAbs
+	if h.FileTracker != nil {
+		kind := filetrack.Created
+		if existedBefore {
+			kind = filetrack.Modified
+		}
+		var additions, deletions int
+		if in.Content != "" {
+			additions = strings.Count(in.Content, "\n") + 1
+		}
+		if existedBefore && oldContent != "" {
+			deletions = strings.Count(oldContent, "\n") + 1
+		}
+
+		_ = h.FileTracker.Record(ctx, filetrack.Change{
+			ToolName:  "write",
+			Path:      relSlash,
+			Kind:      kind,
+			Additions: additions,
+			Deletions: deletions,
+		}, "", oldContent)
 	}
-	relSlash := "./" + filepath.ToSlash(relPath)
 
 	return WriteOutput{
 		Path:         relSlash,

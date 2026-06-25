@@ -8,6 +8,7 @@ import (
 	"github.com/jmoiron/sqlx"
 	loomsqlite "github.com/masterkeysrd/loom/checkpoint/sqlite"
 	coredb "github.com/masterkeysrd/tasksmith/internal/core/db"
+	"github.com/masterkeysrd/tasksmith/internal/session/resource"
 )
 
 var migrations = []string{
@@ -31,6 +32,17 @@ var migrations = []string{
 	`ALTER TABLE sessions ADD COLUMN model_name TEXT;`,
 	`ALTER TABLE sessions ADD COLUMN todos TEXT DEFAULT '[]';`,
 	`ALTER TABLE sessions ADD COLUMN last_turn_metrics TEXT;`,
+	`CREATE TABLE IF NOT EXISTS session_resources (
+		id         TEXT PRIMARY KEY,
+		session_id TEXT NOT NULL,
+		kind       TEXT NOT NULL,
+		key        TEXT NOT NULL DEFAULT '',
+		data       TEXT NOT NULL DEFAULT '{}',
+		created_at DATETIME NOT NULL,
+		FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE
+	);`,
+	`CREATE INDEX IF NOT EXISTS idx_sr_session_kind ON session_resources(session_id, kind);`,
+	`CREATE INDEX IF NOT EXISTS idx_sr_key ON session_resources(session_id, kind, key);`,
 }
 
 type sqliteStore struct {
@@ -140,4 +152,8 @@ func (s *sqliteStore) GetMessages(ctx context.Context, sessionID string) ([]Mess
 
 func (s *sqliteStore) NewCheckpointer() (*loomsqlite.Checkpointer, error) {
 	return loomsqlite.NewCheckpointer(s.checkDB.DB)
+}
+
+func (s *sqliteStore) ResourceStore() *resource.Store {
+	return resource.NewStore(s.db)
 }

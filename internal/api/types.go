@@ -1,6 +1,8 @@
 package api
 
 import (
+	"time"
+
 	"github.com/masterkeysrd/tasksmith/internal/agent/permissions"
 	"github.com/masterkeysrd/tasksmith/internal/metrics"
 )
@@ -330,4 +332,51 @@ type LspSearchItem struct {
 
 type LspSearchResponse struct {
 	Results []LspSearchItem `json:"results"`
+}
+
+type FileChangeSummary struct {
+	Path          string    `json:"path"`
+	Kind          string    `json:"kind"`
+	TotalEdits    int       `json:"total_edits"`
+	NetAdditions  int       `json:"net_additions"`
+	NetDeletions  int       `json:"net_deletions"`
+	LastChangedAt time.Time `json:"last_changed_at"`
+}
+
+type GetFileChangesRequest struct {
+	SessionID string `json:"session_id"`
+}
+
+type GetFileChangesResponse struct {
+	Changes []FileChangeSummary `json:"changes"`
+}
+
+type JournalEntryItem struct {
+	Timestamp time.Time `json:"ts"`
+	ToolName  string    `json:"tool,omitempty"`
+	Kind      string    `json:"kind"`
+	Content   string    `json:"content,omitempty"`
+	Additions int       `json:"additions,omitempty"`
+	Deletions int       `json:"deletions,omitempty"`
+	Diff      string    `json:"diff,omitempty"`
+}
+
+type GetFileJournalRequest struct {
+	SessionID string `json:"session_id"`
+	Path      string `json:"path"`
+}
+
+type GetFileJournalResponse struct {
+	Entries []JournalEntryItem `json:"entries"`
+}
+
+type RevertFileRequest struct {
+	SessionID string `json:"session_id"`
+	Path      string `json:"path"`
+	Force     bool   `json:"force,omitempty"`
+}
+
+type RevertFileResponse struct {
+	Success bool   `json:"success"`
+	Error   string `json:"error,omitempty"`
 }

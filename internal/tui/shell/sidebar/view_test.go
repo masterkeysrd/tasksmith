@@ -23,6 +23,10 @@ func TestContentExplorerPanel(t *testing.T) {
 			AuthorizedTools:     map[string]bool{"bash": true, "view": true},
 			ActiveSessionID:     "s1",
 			ActiveSessionStatus: "idle",
+			ChangedFiles: []api.FileChangeSummary{
+				{Path: "src/components/FakeComponent.tsx", Kind: "modified", NetAdditions: 3, NetDeletions: 1},
+				{Path: "src/utils/fakeMock.ts", Kind: "created", NetAdditions: 10, NetDeletions: 0},
+			},
 		},
 		ExpandedPaths: map[string]bool{},
 	}))

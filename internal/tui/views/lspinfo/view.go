@@ -143,4 +143,3 @@ var View = kitex.FC("LspInfoView", func(props ViewProps) kitex.Node {
 		),
 	)
 })
-

@@ -24,3 +24,9 @@ func UseGetSessionState(sessionID string) wind.Result[*api.GetSessionStateRespon
 	client := tuiapi.UseClient()
 	return wind.Use(api.GetSessionStateRequest{SessionID: sessionID}, promise.WrapWithProps(client.GetSessionState))
 }
+
+// UseGetFileChanges retrieves the list of file changes for the active session.
+func UseGetFileChanges(sessionID string) wind.Result[*api.GetFileChangesResponse] {
+	client := tuiapi.UseClient()
+	return wind.Use(api.GetFileChangesRequest{SessionID: sessionID}, promise.WrapWithProps(client.GetFileChanges))
+}

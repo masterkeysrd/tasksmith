@@ -58,3 +58,32 @@ func TestFormatUnifiedHunks(t *testing.T) {
 		t.Error("expected second hunk starting at line 7")
 	}
 }
+
+func TestMerge3(t *testing.T) {
+	t.Run("Clean merge", func(t *testing.T) {
+		ancestor := []string{"line 1", "line 2", "line 3"}
+		left := []string{"line 1", "line 2", "line 3 modified"}
+		right := []string{"line 1 modified", "line 2", "line 3"}
+
+		got, hasConflict := Merge3(ancestor, left, right)
+		if hasConflict {
+			t.Error("expected no conflict")
+		}
+
+		expected := []string{"line 1 modified", "line 2", "line 3 modified"}
+		if !equalSlices(got, expected) {
+			t.Errorf("expected merged content: %v, got %v", expected, got)
+		}
+	})
+
+	t.Run("Conflicting merge", func(t *testing.T) {
+		ancestor := []string{"line 1", "line 2", "line 3"}
+		left := []string{"line 1", "line 2", "line 3 left"}
+		right := []string{"line 1", "line 2", "line 3 right"}
+
+		_, hasConflict := Merge3(ancestor, left, right)
+		if !hasConflict {
+			t.Error("expected conflict")
+		}
+	})
+}

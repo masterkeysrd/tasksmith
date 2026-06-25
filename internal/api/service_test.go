@@ -6,8 +6,11 @@ import (
 	"path/filepath"
 	"testing"
 
+	coredb "github.com/masterkeysrd/tasksmith/internal/core/db"
 	"github.com/masterkeysrd/tasksmith/internal/core/lsp"
 	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
+	"github.com/masterkeysrd/tasksmith/internal/session"
+	"github.com/masterkeysrd/tasksmith/internal/session/filetrack"
 	"github.com/masterkeysrd/tasksmith/internal/workspace"
 	"github.com/masterkeysrd/warp"
 )
@@ -283,4 +286,112 @@ func TestService(t *testing.T) {
 			}
 		}
 	})
+}
+
+func TestRevertFileAPI(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	t.Setenv("XDG_DATA_HOME", tmpDir)
+	t.Setenv("TASKSMITH_APPNAME", "tasksmith-test-api")
+
+	db, err := coredb.Open(tmpDir, "tasksmith.db")
+	if err != nil {
+		t.Fatalf("failed to open database: %v", err)
+	}
+	defer db.Close()
+
+	checkpointsDb, err := coredb.Open(tmpDir, "checkpoints.db")
+	if err != nil {
+		t.Fatalf("failed to open checkpoints database: %v", err)
+	}
+	defer checkpointsDb.Close()
+
+	store, err := session.NewSQLiteStore(db, checkpointsDb)
+	if err != nil {
+		t.Fatalf("failed to initialize sqlite store: %v", err)
+	}
+
+	wsMock := &mockWorkspace{cwd: tmpDir}
+	ws := workspace.New(tmpDir)
+	wsMock.cwd = ws.CWD()
+
+	manager := session.NewManager(session.ManagerConfig{
+		Store:     store,
+		Workspace: ws,
+	})
+
+	svc := NewService(wsMock, manager, nil, nil)
+	ctx := context.Background()
+
+	sess, err := manager.CreateSession(ctx, "Test Session")
+	if err != nil {
+		t.Fatalf("failed to create session: %v", err)
+	}
+
+	filePath := "test.txt"
+	absPath := filepath.Join(tmpDir, filePath)
+	if err := os.WriteFile(absPath, []byte("original content"), 0644); err != nil {
+		t.Fatalf("failed to write original content: %v", err)
+	}
+
+	ft, err := manager.FileTracker(sess.ID)
+	if err != nil {
+		t.Fatalf("failed to get file tracker: %v", err)
+	}
+
+	// Modify file on disk to simulate agent edit
+	if err := os.WriteFile(absPath, []byte("agent edited content"), 0644); err != nil {
+		t.Fatalf("failed to write agent content: %v", err)
+	}
+
+	err = ft.Record(ctx, filetrack.Change{
+		ToolName:  "edit",
+		Path:      filePath,
+		Kind:      filetrack.Modified,
+		Additions: 1,
+		Deletions: 1,
+	}, "diff content", "original content")
+	if err != nil {
+		t.Fatalf("failed to record change: %v", err)
+	}
+
+	// Simulate user manual edit
+	if err := os.WriteFile(absPath, []byte("user manual edited content"), 0644); err != nil {
+		t.Fatalf("failed to write user content: %v", err)
+	}
+
+	// Try to revert without forcing - should return conflict error
+	revertResp, err := svc.RevertFile(ctx, RevertFileRequest{
+		SessionID: sess.ID,
+		Path:      filePath,
+		Force:     false,
+	})
+	if err != nil {
+		t.Fatalf("RevertFile failed: %v", err)
+	}
+	if revertResp.Success || revertResp.Error != "conflict" {
+		t.Errorf("expected conflict error, got success=%t, err=%q", revertResp.Success, revertResp.Error)
+	}
+
+	// Force revert - should succeed and restore original content
+	revertResp2, err := svc.RevertFile(ctx, RevertFileRequest{
+		SessionID: sess.ID,
+		Path:      filePath,
+		Force:     true,
+	})
+	if err != nil {
+		t.Fatalf("RevertFile with force failed: %v", err)
+	}
+	if !revertResp2.Success {
+		t.Errorf("expected force revert success, got error: %s", revertResp2.Error)
+	}
+
+	// Verify file is restored to baseline
+	data, err := os.ReadFile(absPath)
+	if err != nil {
+		t.Fatalf("failed to read reverted file: %v", err)
+	}
+	if string(data) != "original content" {
+		t.Errorf("expected 'original content', got %q", string(data))
+	}
 }

@@ -1,6 +1,7 @@
 package sidebar
 
 import (
+	"fmt"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -12,12 +13,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/tui/components/icon"
 )
 
-var mockChangedFiles = []string{
-	"/src/components/FakeComponent.tsx",
-	"/src/utils/fakeMock.ts",
-}
-
-func explorerPanel(data Data, expandedPaths map[string]bool, onTogglePath func(string)) kitex.Node {
+func explorerPanel(data Data, expandedPaths map[string]bool, onTogglePath func(string), onSelectFile func(string)) kitex.Node {
 	c := useColors()
 
 	projectRows := kitex.Map(data.Projects, func(project api.Project, idx int) kitex.Node {
@@ -55,11 +51,7 @@ func explorerPanel(data Data, expandedPaths map[string]bool, onTogglePath func(s
 		)
 	})
 
-	changedFiles := mockChangedFiles
-	if len(changedFiles) == 0 {
-		changedFiles = mockChangedFiles
-	}
-	fileTree := buildFileTree(changedFiles)
+	fileTree := buildFileTree(data.ChangedFiles)
 
 	return kitex.Box(kitex.BoxProps{
 		Style: style.S().
@@ -114,7 +106,7 @@ func explorerPanel(data Data, expandedPaths map[string]bool, onTogglePath func(s
 			}, kitex.Text("CHANGED FILES [SESSION]")),
 			kitex.Box(kitex.BoxProps{
 				Style: style.S(),
-			}, changedFileTree(fileTree, expandedPaths, onTogglePath, 0)),
+			}, kitex.IfElse(len(data.ChangedFiles) == 0, emptyState("No changes in this session."), changedFileTree(fileTree, expandedPaths, onTogglePath, onSelectFile, 0))),
 		),
 	)
 }
@@ -145,15 +137,21 @@ func emptyState(message string) kitex.Node {
 }
 
 type fileNode struct {
-	Name     string
-	FullPath string
-	IsDir    bool
-	Children map[string]*fileNode
+	Name         string
+	FullPath     string
+	IsDir        bool
+	Children     map[string]*fileNode
+	HasMetadata  bool
+	Kind         string
+	Additions    int
+	Deletions    int
+	OriginalPath string
 }
 
-func buildFileTree(paths []string) *fileNode {
+func buildFileTree(changes []api.FileChangeSummary) *fileNode {
 	root := &fileNode{IsDir: true, Children: map[string]*fileNode{}}
-	for _, path := range paths {
+	for _, change := range changes {
+		path := change.Path
 		cleaned := filepath.Clean(path)
 		if cleaned == "." || cleaned == "" {
 			continue
@@ -169,7 +167,7 @@ func buildFileTree(paths []string) *fileNode {
 		var fullParts []string
 		for i, part := range parts {
 			fullParts = append(fullParts, part)
-			fullPath := string(filepath.Separator) + filepath.Join(fullParts...)
+			fullPath := "/" + strings.Join(fullParts, "/")
 			child, ok := current.Children[part]
 			if !ok {
 				child = &fileNode{
@@ -182,6 +180,11 @@ func buildFileTree(paths []string) *fileNode {
 			}
 			if i == len(parts)-1 {
 				child.IsDir = false
+				child.HasMetadata = true
+				child.Kind = change.Kind
+				child.Additions = change.NetAdditions
+				child.Deletions = change.NetDeletions
+				child.OriginalPath = change.Path
 			}
 			current = child
 		}
@@ -203,7 +206,7 @@ func sortedFileChildren(node *fileNode) []*fileNode {
 	return children
 }
 
-func changedFileTree(root *fileNode, expandedPaths map[string]bool, onTogglePath func(string), depth int) kitex.Node {
+func changedFileTree(root *fileNode, expandedPaths map[string]bool, onTogglePath func(string), onSelectFile func(string), depth int) kitex.Node {
 	c := useColors()
 	children := sortedFileChildren(root)
 	if len(children) == 0 {
@@ -215,23 +218,65 @@ func changedFileTree(root *fileNode, expandedPaths map[string]bool, onTogglePath
 	}, kitex.Map(children, func(child *fileNode, _ int) kitex.Node {
 		isExpanded := expandedPaths[child.FullPath]
 		if !child.IsDir {
-			return kitex.Box(kitex.BoxProps{
+			badge := "M"
+			badgeColor := c.warning
+			if child.Kind == "created" {
+				badge = "A"
+				badgeColor = c.success
+			} else if child.Kind == "deleted" {
+				badge = "D"
+				badgeColor = c.error
+			}
+
+			linesText := ""
+			if child.Additions > 0 || child.Deletions > 0 {
+				linesText = fmt.Sprintf(" +%d -%d", child.Additions, child.Deletions)
+			}
+
+			return components.Button(components.ButtonProps{
+				Key:     child.FullPath,
+				Variant: components.ButtonText,
+				Color:   components.ButtonBase,
 				Style: style.S().
-					Display(style.DisplayFlex).
-					AlignItems(style.AlignCenter).
-					Gap(1).
-					PaddingLeft(depth).
-					PaddingRight(2),
+					Width(style.Percent(100)).
+					JustifyContent(style.JustifyStart).
+					PaddingHorizontal(0).
+					Background(c.panel),
+				HoverStyle: style.S().
+					Background(c.surface),
+				OnClick: func() {
+					if onSelectFile != nil && child.OriginalPath != "" {
+						onSelectFile(child.OriginalPath)
+					}
+				},
 			},
 				kitex.Box(kitex.BoxProps{
-					Style: style.S().Width(style.Cells(1)),
-				}, kitex.Text(" ")),
-				kitex.Box(kitex.BoxProps{
-					Style: style.S().Foreground(c.subtle),
-				}, kitex.Text("󰈙")),
-				kitex.Box(kitex.BoxProps{
-					Style: style.S().Foreground(c.text),
-				}, kitex.Text(child.Name)),
+					Style: style.S().
+						Display(style.DisplayFlex).
+						AlignItems(style.AlignCenter).
+						Gap(1).
+						PaddingLeft(depth).
+						PaddingRight(2),
+				},
+					kitex.Box(kitex.BoxProps{
+						Style: style.S().
+							Width(style.Cells(2)).
+							Foreground(badgeColor).
+							Bold(true).
+							TextAlign(style.TextAlignCenter),
+					}, kitex.Text(badge)),
+					kitex.Box(kitex.BoxProps{
+						Style: style.S().Foreground(c.subtle),
+					}, kitex.Text("󰈙")),
+					kitex.Box(kitex.BoxProps{
+						Style: style.S().Foreground(c.text),
+					}, kitex.Text(child.Name)),
+					kitex.If(linesText != "", func() kitex.Node {
+						return kitex.Box(kitex.BoxProps{
+							Style: style.S().Foreground(c.subtle),
+						}, kitex.Text(linesText))
+					}),
+				),
 			)
 		}
 
@@ -277,7 +322,7 @@ func changedFileTree(root *fileNode, expandedPaths map[string]bool, onTogglePath
 				return kitex.Box(kitex.BoxProps{
 					Style: style.S().
 						MarginLeft(depth),
-				}, changedFileTree(child, expandedPaths, onTogglePath, depth+1))
+				}, changedFileTree(child, expandedPaths, onTogglePath, onSelectFile, depth+1))
 			}),
 		)
 	}))

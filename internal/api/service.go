@@ -856,3 +856,87 @@ func (s *Service) LspSearch(ctx context.Context, req LspSearchRequest) (*LspSear
 
 	return &LspSearchResponse{Results: items}, nil
 }
+
+// GetFileChanges returns summaries of all modified files for a session.
+func (s *Service) GetFileChanges(ctx context.Context, req GetFileChangesRequest) (*GetFileChangesResponse, error) {
+	ft, err := s.sm.FileTracker(req.SessionID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get file tracker: %w", err)
+	}
+
+	sums, err := ft.Summary(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get summary: %w", err)
+	}
+
+	// Sort summaries by path for deterministic UI
+	sort.Slice(sums, func(i, j int) bool {
+		return sums[i].Path < sums[j].Path
+	})
+
+	apiSums := make([]FileChangeSummary, len(sums))
+	for i, sum := range sums {
+		apiSums[i] = FileChangeSummary{
+			Path:          sum.Path,
+			Kind:          string(sum.Kind),
+			TotalEdits:    sum.TotalEdits,
+			NetAdditions:  sum.NetAdditions,
+			NetDeletions:  sum.NetDeletions,
+			LastChangedAt: sum.LastChangedAt,
+		}
+	}
+
+	return &GetFileChangesResponse{Changes: apiSums}, nil
+}
+
+// GetFileJournal returns all journal entries (history of changes) for a specific file.
+func (s *Service) GetFileJournal(ctx context.Context, req GetFileJournalRequest) (*GetFileJournalResponse, error) {
+	ft, err := s.sm.FileTracker(req.SessionID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get file tracker: %w", err)
+	}
+
+	entries, err := ft.ReadJournal(ctx, req.Path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read journal: %w", err)
+	}
+
+	apiEntries := make([]JournalEntryItem, len(entries))
+	for i, entry := range entries {
+		apiEntries[i] = JournalEntryItem{
+			Timestamp: entry.Timestamp,
+			ToolName:  entry.ToolName,
+			Kind:      string(entry.Kind),
+			Content:   entry.Content,
+			Additions: entry.Additions,
+			Deletions: entry.Deletions,
+			Diff:      entry.Diff,
+		}
+	}
+
+	return &GetFileJournalResponse{Entries: apiEntries}, nil
+}
+
+// RevertFile reverts a file to its pre-session state.
+func (s *Service) RevertFile(ctx context.Context, req RevertFileRequest) (*RevertFileResponse, error) {
+	ft, err := s.sm.FileTracker(req.SessionID)
+	if err != nil {
+		return &RevertFileResponse{Success: false, Error: err.Error()}, nil
+	}
+
+	if !req.Force {
+		conflict, err := ft.CheckConflict(ctx, req.Path)
+		if err != nil {
+			return &RevertFileResponse{Success: false, Error: err.Error()}, nil
+		}
+		if conflict {
+			return &RevertFileResponse{Success: false, Error: "conflict"}, nil
+		}
+	}
+
+	if err := ft.RevertToBaseline(ctx, req.Path, req.Force); err != nil {
+		return &RevertFileResponse{Success: false, Error: err.Error()}, nil
+	}
+
+	return &RevertFileResponse{Success: true}, nil
+}

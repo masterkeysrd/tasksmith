@@ -14,6 +14,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/agent/permissions"
 	"github.com/masterkeysrd/tasksmith/internal/agent/tools"
 	"github.com/masterkeysrd/tasksmith/internal/core/lsp"
+	"github.com/masterkeysrd/tasksmith/internal/session/filetrack"
 	"github.com/masterkeysrd/tasksmith/internal/workspace"
 )
 
@@ -111,6 +112,7 @@ type Options struct {
 	OnTodosUpdated    func(ctx context.Context, todos []tools.Todo) error
 	PermissionManager permissions.PermissionManager
 	LspManager        *lsp.Manager
+	FileTracker       filetrack.FileTracker
 }
 
 // New creates a new AgentGraph orchestrator by loading/binding tools outside of the execution nodes.
@@ -142,7 +144,8 @@ func New(ctx context.Context, opts Options) (*AgentGraph, error) {
 		WithTaskManager(opts.TaskManager, opts.SessionID).
 		WithSkillResolver(&skillResolver{ws: opts.Workspace, agentName: opts.AgentName}).
 		WithPermissionManager(pm).
-		WithLspManager(opts.LspManager)
+		WithLspManager(opts.LspManager).
+		WithFileTracker(opts.FileTracker)
 	allLoomTools, err := tools.LoomTools(handlers)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load loom tools: %w", err)

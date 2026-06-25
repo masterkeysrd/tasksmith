@@ -35,6 +35,9 @@ type Client interface {
 	RestartLsp(ctx context.Context, req api.RestartLspRequest) (*api.RestartLspResponse, error)
 	GetLspDiagnostics(ctx context.Context, req api.GetLspDiagnosticsRequest) (*api.GetLspDiagnosticsResponse, error)
 	LspSearch(ctx context.Context, req api.LspSearchRequest) (*api.LspSearchResponse, error)
+	GetFileChanges(ctx context.Context, req api.GetFileChangesRequest) (*api.GetFileChangesResponse, error)
+	GetFileJournal(ctx context.Context, req api.GetFileJournalRequest) (*api.GetFileJournalResponse, error)
+	RevertFile(ctx context.Context, req api.RevertFileRequest) (*api.RevertFileResponse, error)
 }
 
 var clientCtx = kitex.CreateContext[Client](nil)

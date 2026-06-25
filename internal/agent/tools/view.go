@@ -111,6 +111,20 @@ func (h *ToolHandlers) View(ctx context.Context, in ViewArgs) (ViewOutput, error
 			}
 		}
 
+		if h.FileTracker != nil {
+			baseDir := h.CWD
+			if baseDir == "" {
+				baseDir = "."
+			}
+			if baseDirAbs, errBase := filepath.Abs(baseDir); errBase == nil {
+				if absPath, errAbs := filepath.Abs(path); errAbs == nil {
+					if relPath, errRel := filepath.Rel(baseDirAbs, absPath); errRel == nil {
+						_ = h.FileTracker.RecordRead(ctx, "./"+filepath.ToSlash(relPath))
+					}
+				}
+			}
+		}
+
 		return ViewOutput{
 			Source:     path,
 			CachedPath: cachedPath,
@@ -188,6 +202,20 @@ func (h *ToolHandlers) View(ctx context.Context, in ViewArgs) (ViewOutput, error
 	var diagsStr string
 	if absPath, errAbs := filepath.Abs(path); errAbs == nil {
 		diagsStr = GetFileDiagnosticsString(ctx, h.LspManager, h.CWD, absPath)
+	}
+
+	if h.FileTracker != nil {
+		baseDir := h.CWD
+		if baseDir == "" {
+			baseDir = "."
+		}
+		if baseDirAbs, errBase := filepath.Abs(baseDir); errBase == nil {
+			if absPath, errAbs := filepath.Abs(path); errAbs == nil {
+				if relPath, errRel := filepath.Rel(baseDirAbs, absPath); errRel == nil {
+					_ = h.FileTracker.RecordRead(ctx, "./"+filepath.ToSlash(relPath))
+				}
+			}
+		}
 	}
 
 	return ViewOutput{

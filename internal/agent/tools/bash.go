@@ -15,6 +15,8 @@ import (
 	"github.com/masterkeysrd/loom/tool"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	"github.com/masterkeysrd/tasksmith/internal/core/process"
+	"github.com/masterkeysrd/tasksmith/internal/core/vcs"
+	"github.com/masterkeysrd/tasksmith/internal/session/filetrack"
 )
 
 // BashRunner implements TaskRunner for OS shell commands.
@@ -180,6 +182,7 @@ func (h *ToolHandlers) Bash(ctx context.Context, in BashArgs) (tool.ToolStream, 
 	return func(yield func(message.ToolChunk, error) bool) {
 		// If task manager is nil, fallback to synchronous one-shot combined execution
 		if h.TaskManager == nil {
+			detector := newChangeDetector(h.CWD)
 			cmd := exec.CommandContext(ctx, "bash", "-c", in.Command)
 			cmd.Dir = h.CWD
 			out, err := cmd.CombinedOutput()
@@ -190,6 +193,10 @@ func (h *ToolHandlers) Bash(ctx context.Context, in BashArgs) (tool.ToolStream, 
 				exitCode = 1
 				status = "failed"
 				stderrMsg = err.Error()
+			}
+			if err == nil {
+				cdChanges := detector.DetectChanges()
+				recordBashChanges(ctx, h.FileTracker, h.CWD, cdChanges)
 			}
 			outObj := BashOutput{
 				ExitCode: exitCode,
@@ -229,6 +236,7 @@ func (h *ToolHandlers) Bash(ctx context.Context, in BashArgs) (tool.ToolStream, 
 			waitMs = 10000 // Default: 10 seconds
 		}
 
+		detector := newChangeDetector(h.CWD)
 		task, err := h.TaskManager.Submit(ctx, SubmitOptions{
 			SessionID:  h.SessionID,
 			TaskType:   "bash",
@@ -360,6 +368,9 @@ func (h *ToolHandlers) Bash(ctx context.Context, in BashArgs) (tool.ToolStream, 
 						stderrFinal = fmt.Sprintf("Failed to read stderr log: %v", err)
 					}
 
+					cdChanges := detector.DetectChanges()
+					recordBashChanges(ctx, h.FileTracker, h.CWD, cdChanges)
+
 					// Yield final aggregated structured content chunk
 					outObj := BashOutput{
 						ExitCode: task.ExitCode,
@@ -437,4 +448,207 @@ func (o BashOutput) TextContent() string {
 	}
 
 	return sb.String()
+}
+
+type bashChangeDetector struct {
+	cwd       string
+	isGit     bool
+	preStatus map[string]string
+	preMtimes map[string]time.Time
+}
+
+func newChangeDetector(cwd string) *bashChangeDetector {
+	cd := &bashChangeDetector{
+		cwd:       cwd,
+		preMtimes: make(map[string]time.Time),
+	}
+	if vcs.IsGitAvailable() && vcs.IsRepo(cwd) {
+		cd.isGit = true
+		status, err := vcs.GetStatus(cwd)
+		if err == nil {
+			cd.preStatus = parseGitStatusLines(status)
+		}
+	}
+	cd.scanMtimes()
+	return cd
+}
+
+func parseGitStatusLines(statusOutput string) map[string]string {
+	m := make(map[string]string)
+	lines := strings.Split(statusOutput, "\n")
+	for _, l := range lines {
+		if len(l) < 4 {
+			continue
+		}
+		status := l[:2]
+		path := strings.TrimSpace(l[2:])
+		m[path] = status
+	}
+	return m
+}
+
+func (cd *bashChangeDetector) scanMtimes() {
+	_ = filepath.Walk(cd.cwd, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return nil
+		}
+		if info.IsDir() {
+			name := info.Name()
+			if strings.HasPrefix(name, ".") && name != "." {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		rel, err := filepath.Rel(cd.cwd, path)
+		if err == nil {
+			cd.preMtimes[rel] = info.ModTime()
+		}
+		return nil
+	})
+}
+
+func (cd *bashChangeDetector) DetectChanges() []filetrack.Change {
+	var changes []filetrack.Change
+
+	postMtimes := make(map[string]time.Time)
+	_ = filepath.Walk(cd.cwd, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return nil
+		}
+		if info.IsDir() {
+			name := info.Name()
+			if strings.HasPrefix(name, ".") && name != "." {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		rel, err := filepath.Rel(cd.cwd, path)
+		if err == nil {
+			postMtimes[rel] = info.ModTime()
+		}
+		return nil
+	})
+
+	for rel, postTime := range postMtimes {
+		preTime, existed := cd.preMtimes[rel]
+		if !existed {
+			changes = append(changes, filetrack.Change{
+				ToolName: "bash",
+				Path:     "./" + filepath.ToSlash(rel),
+				Kind:     filetrack.Created,
+			})
+		} else if postTime.After(preTime) {
+			changes = append(changes, filetrack.Change{
+				ToolName: "bash",
+				Path:     "./" + filepath.ToSlash(rel),
+				Kind:     filetrack.Modified,
+			})
+		}
+	}
+
+	for rel := range cd.preMtimes {
+		if _, existed := postMtimes[rel]; !existed {
+			changes = append(changes, filetrack.Change{
+				ToolName: "bash",
+				Path:     "./" + filepath.ToSlash(rel),
+				Kind:     filetrack.Deleted,
+			})
+		}
+	}
+
+	if cd.isGit {
+		status, err := vcs.GetStatus(cd.cwd)
+		if err == nil {
+			postStatus := parseGitStatusLines(status)
+			for rel, postStat := range postStatus {
+				preStat, existed := cd.preStatus[rel]
+				if !existed || preStat != postStat {
+					relSlash := "./" + filepath.ToSlash(rel)
+					found := false
+					for _, ch := range changes {
+						if ch.Path == relSlash {
+							found = true
+							break
+						}
+					}
+					if !found {
+						kind := filetrack.Modified
+						if strings.Contains(postStat, "D") {
+							kind = filetrack.Deleted
+						} else if strings.Contains(postStat, "?") || strings.Contains(postStat, "A") {
+							kind = filetrack.Created
+						}
+						changes = append(changes, filetrack.Change{
+							ToolName: "bash",
+							Path:     relSlash,
+							Kind:     kind,
+						})
+					}
+				}
+			}
+		}
+	}
+
+	return changes
+}
+
+func countLinesInFile(path string) int {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return 0
+	}
+	return strings.Count(string(data), "\n") + 1
+}
+
+func runGitCmd(cwd string, args ...string) string {
+	cmd := exec.Command("git", append([]string{"-C", cwd}, args...)...)
+	out, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
+func recordBashChanges(ctx context.Context, ft filetrack.FileTracker, cwd string, changes []filetrack.Change) {
+	if ft == nil {
+		return
+	}
+	for _, change := range changes {
+		rel := strings.TrimPrefix(change.Path, "./")
+		absPath := filepath.Join(cwd, rel)
+
+		var diffStr string
+		var oldContent string
+		var additions, deletions int
+
+		if change.Kind == filetrack.Created {
+			additions = countLinesInFile(absPath)
+		} else if change.Kind == filetrack.Deleted {
+			// Deletions count is 0 as file content is gone and not tracked here
+		} else if change.Kind == filetrack.Modified {
+			newBytes, err := os.ReadFile(absPath)
+			var newContent string
+			if err == nil {
+				newContent = string(newBytes)
+				additions = strings.Count(newContent, "\n") + 1
+			}
+
+			if vcs.IsGitAvailable() && vcs.IsRepo(cwd) {
+				diffStr = runGitCmd(cwd, "diff", "--", rel)
+				showOut := runGitCmd(cwd, "show", ":"+rel)
+				if showOut == "" {
+					showOut = runGitCmd(cwd, "show", "HEAD:"+rel)
+				}
+				if showOut != "" {
+					oldContent = showOut
+					deletions = strings.Count(oldContent, "\n") + 1
+				}
+			}
+		}
+
+		change.Additions = additions
+		change.Deletions = deletions
+
+		_ = ft.Record(ctx, change, diffStr, oldContent)
+	}
 }

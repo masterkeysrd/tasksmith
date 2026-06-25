@@ -2,9 +2,13 @@ package tools
 
 import (
 	"context"
+	"path/filepath"
+	"strings"
 
 	"github.com/masterkeysrd/tasksmith/internal/agent/permissions"
 	"github.com/masterkeysrd/tasksmith/internal/core/lsp"
+	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
+	"github.com/masterkeysrd/tasksmith/internal/session/filetrack"
 )
 
 // Todo represents a single task in the agent's todo checklist.
@@ -28,6 +32,7 @@ type ToolHandlers struct {
 	SkillResolver     SkillResolver
 	PermissionManager permissions.PermissionManager
 	LspManager        *lsp.Manager
+	FileTracker       filetrack.FileTracker
 }
 
 // NewHandlers creates a new ToolHandlers instance with the given dependencies.
@@ -61,4 +66,27 @@ func (h *ToolHandlers) WithPermissionManager(pm permissions.PermissionManager) *
 func (h *ToolHandlers) WithLspManager(mgr *lsp.Manager) *ToolHandlers {
 	h.LspManager = mgr
 	return h
+}
+
+// WithFileTracker configures the FileTracker on ToolHandlers.
+func (h *ToolHandlers) WithFileTracker(ft filetrack.FileTracker) *ToolHandlers {
+	h.FileTracker = ft
+	return h
+}
+
+// isProtectedPath returns true if the path points to or is inside TaskSmith internal directories.
+func (h *ToolHandlers) isProtectedPath(absPath string) bool {
+	dataDir, _ := xdg.Home(xdg.VarTypeData)
+	logsDir, _ := xdg.LogsDir()
+	configDir, _ := xdg.Home(xdg.VarTypeConfig)
+
+	for _, protected := range []string{dataDir, logsDir, configDir} {
+		if protected != "" {
+			rel, err := filepath.Rel(protected, absPath)
+			if err == nil && !strings.HasPrefix(rel, "..") {
+				return true
+			}
+		}
+	}
+	return false
 }

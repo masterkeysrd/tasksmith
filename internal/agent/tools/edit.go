@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/masterkeysrd/tasksmith/internal/core/diff"
+	"github.com/masterkeysrd/tasksmith/internal/session/filetrack"
 )
 
 // Edit edits a file by replacing a target block of text with a replacement block.
@@ -31,6 +32,38 @@ func (h *ToolHandlers) Edit(ctx context.Context, in EditArgs) (EditOutput, error
 	editAbs, err = filepath.Abs(editAbs)
 	if err != nil {
 		return EditOutput{}, fmt.Errorf("failed to resolve target path: %w", err)
+	}
+
+	if h.isProtectedPath(editAbs) {
+		return EditOutput{
+			Path:    path,
+			Success: false,
+			Message: fmt.Sprintf("cannot modify TaskSmith internal path: %q", path),
+		}, fmt.Errorf("cannot modify TaskSmith internal path: %q", path)
+	}
+
+	relPath, err := filepath.Rel(baseDir, editAbs)
+	if err != nil {
+		relPath = editAbs
+	}
+	relSlash := "./" + filepath.ToSlash(relPath)
+
+	if h.FileTracker != nil {
+		known, err := h.FileTracker.IsKnown(ctx, relSlash)
+		if err != nil {
+			return EditOutput{
+				Path:    path,
+				Success: false,
+				Message: fmt.Sprintf("failed to verify file status: %v", err),
+			}, fmt.Errorf("failed to verify file status: %w", err)
+		}
+		if !known {
+			return EditOutput{
+				Path:    path,
+				Success: false,
+				Message: fmt.Sprintf("The file %q has been modified externally since you last read or wrote it. You must use the view tool to read the updated file content before editing.", path),
+			}, fmt.Errorf("the file %q has been modified externally since you last read or wrote it; you must view the file content before editing", path)
+		}
 	}
 
 	// Read current file content
@@ -87,13 +120,6 @@ func (h *ToolHandlers) Edit(ctx context.Context, in EditArgs) (EditOutput, error
 		diagsStr = GetFileDiagnosticsString(ctx, h.LspManager, h.CWD, editAbs)
 	}
 
-	// Generate clean relative path
-	relPath, err := filepath.Rel(baseDir, editAbs)
-	if err != nil {
-		relPath = editAbs
-	}
-	relSlash := "./" + filepath.ToSlash(relPath)
-
 	// Generate unified diff
 	diffStr := diff.FormatUnified(relSlash, relSlash, contentNorm, newContent)
 
@@ -109,6 +135,16 @@ func (h *ToolHandlers) Edit(ctx context.Context, in EditArgs) (EditOutput, error
 		} else if strings.HasPrefix(l, "-") {
 			deletions++
 		}
+	}
+
+	if h.FileTracker != nil {
+		_ = h.FileTracker.Record(ctx, filetrack.Change{
+			ToolName:  "edit",
+			Path:      relSlash,
+			Kind:      filetrack.Modified,
+			Additions: additions,
+			Deletions: deletions,
+		}, diffStr, content)
 	}
 
 	diffVal, fullDiffVal := truncateDiff(diffStr)

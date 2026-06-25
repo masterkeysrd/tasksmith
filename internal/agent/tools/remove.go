@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/masterkeysrd/tasksmith/internal/core/fs"
+	"github.com/masterkeysrd/tasksmith/internal/session/filetrack"
 )
 
 // Remove removes a file or directory.
@@ -32,6 +34,19 @@ func (h *ToolHandlers) Remove(ctx context.Context, in RemoveArgs) (RemoveOutput,
 		return RemoveOutput{}, fmt.Errorf("failed to resolve target path: %w", err)
 	}
 
+	if h.isProtectedPath(removeAbs) {
+		return RemoveOutput{
+			Path:    path,
+			Success: false,
+		}, fmt.Errorf("cannot modify TaskSmith internal path: %q", path)
+	}
+
+	relPath, err := filepath.Rel(baseDir, removeAbs)
+	if err != nil {
+		relPath = removeAbs
+	}
+	relSlash := "./" + filepath.ToSlash(relPath)
+
 	// For safety, verify if the path exists and check if it is a directory
 	info, err := os.Lstat(removeAbs)
 	if os.IsNotExist(err) {
@@ -46,6 +61,22 @@ func (h *ToolHandlers) Remove(ctx context.Context, in RemoveArgs) (RemoveOutput,
 		}, fmt.Errorf("failed to access path %q: %w", path, err)
 	}
 
+	if h.FileTracker != nil && !info.IsDir() {
+		known, err := h.FileTracker.IsKnown(ctx, relSlash)
+		if err != nil {
+			return RemoveOutput{
+				Path:    path,
+				Success: false,
+			}, fmt.Errorf("failed to verify file status: %w", err)
+		}
+		if !known {
+			return RemoveOutput{
+				Path:    path,
+				Success: false,
+			}, fmt.Errorf("the file %q has been modified externally since you last read or wrote it; you must view the file content before deleting", path)
+		}
+	}
+
 	if info.IsDir() && !in.Recursive {
 		return RemoveOutput{
 			Path:    path,
@@ -53,6 +84,7 @@ func (h *ToolHandlers) Remove(ctx context.Context, in RemoveArgs) (RemoveOutput,
 		}, fmt.Errorf("path %q is a directory; use recursive=true to remove", path)
 	}
 
+	// Read content before deletion for baseline and diagnostics
 	var fileContent string
 	var isBinary bool
 	var mimeType string
@@ -74,12 +106,18 @@ func (h *ToolHandlers) Remove(ctx context.Context, in RemoveArgs) (RemoveOutput,
 		}, fmt.Errorf("failed to remove path %q: %w", path, err)
 	}
 
-	// Return clean relative path with "./" prefix
-	relPath, err := filepath.Rel(baseDir, removeAbs)
-	if err != nil {
-		relPath = removeAbs
+	if h.FileTracker != nil {
+		var deletions int
+		if fileContent != "" {
+			deletions = strings.Count(fileContent, "\n") + 1
+		}
+		_ = h.FileTracker.Record(ctx, filetrack.Change{
+			ToolName:  "remove",
+			Path:      relSlash,
+			Kind:      filetrack.Deleted,
+			Deletions: deletions,
+		}, "", fileContent)
 	}
-	relSlash := "./" + filepath.ToSlash(relPath)
 
 	return RemoveOutput{
 		Path:     relSlash,

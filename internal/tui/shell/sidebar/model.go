@@ -27,6 +27,7 @@ type Data struct {
 	Providers           []api.Provider
 	Sessions            []api.Session
 	Todos               []api.Todo
+	ChangedFiles        []api.FileChangeSummary
 }
 
 // ContentProps configures the presentational sidebar content.
@@ -42,4 +43,5 @@ type ContentProps struct {
 	OnArchiveSession func(id string)
 	OnDeleteSession  func(id string)
 	OnCreateAgent    func()
+	OnSelectFile     func(string)
 }
