@@ -209,7 +209,7 @@ func main() {
 		}
 		hBuf.WriteString(fmt.Sprintf("\t\t\t%q,\n", name))
 		hBuf.WriteString(fmt.Sprintf("\t\t\tres.Metadata.DisplayName,\n"))
-		hBuf.WriteString(fmt.Sprintf("\t\t\tres.Metadata.Description,\n"))
+		hBuf.WriteString(fmt.Sprintf("\t\t\tres.Spec.Instructions,\n"))
 		hBuf.WriteString(fmt.Sprintf("\t\t\thandlers.%s,\n", camelName))
 		hBuf.WriteString(fmt.Sprintf("\t\t\topts...,\n"))
 		hBuf.WriteString(fmt.Sprintf("\t\t)\n"))

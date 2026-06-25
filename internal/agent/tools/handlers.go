@@ -36,7 +36,7 @@ func LoomTools(handlers *ToolHandlers) ([]*tool.Tool, error) {
 		t, err := tool.New(
 			"activate_skill",
 			res.Metadata.DisplayName,
-			res.Metadata.Description,
+			res.Spec.Instructions,
 			handlers.ActivateSkill,
 			opts...,
 		)
@@ -60,7 +60,7 @@ func LoomTools(handlers *ToolHandlers) ([]*tool.Tool, error) {
 		t, err := tool.New(
 			"agent_define",
 			res.Metadata.DisplayName,
-			res.Metadata.Description,
+			res.Spec.Instructions,
 			handlers.AgentDefine,
 			opts...,
 		)
@@ -84,7 +84,7 @@ func LoomTools(handlers *ToolHandlers) ([]*tool.Tool, error) {
 		t, err := tool.New(
 			"agent_invoke",
 			res.Metadata.DisplayName,
-			res.Metadata.Description,
+			res.Spec.Instructions,
 			handlers.AgentInvoke,
 			opts...,
 		)
@@ -108,7 +108,7 @@ func LoomTools(handlers *ToolHandlers) ([]*tool.Tool, error) {
 		t, err := tool.New(
 			"agent_manage",
 			res.Metadata.DisplayName,
-			res.Metadata.Description,
+			res.Spec.Instructions,
 			handlers.AgentManage,
 			opts...,
 		)
@@ -132,7 +132,7 @@ func LoomTools(handlers *ToolHandlers) ([]*tool.Tool, error) {
 		t, err := tool.New(
 			"agent_send_message",
 			res.Metadata.DisplayName,
-			res.Metadata.Description,
+			res.Spec.Instructions,
 			handlers.AgentSendMessage,
 			opts...,
 		)
@@ -156,7 +156,7 @@ func LoomTools(handlers *ToolHandlers) ([]*tool.Tool, error) {
 		t, err := tool.New(
 			"ask_question",
 			res.Metadata.DisplayName,
-			res.Metadata.Description,
+			res.Spec.Instructions,
 			handlers.AskQuestion,
 			opts...,
 		)
@@ -180,7 +180,7 @@ func LoomTools(handlers *ToolHandlers) ([]*tool.Tool, error) {
 		t, err := tool.NewStreaming(
 			"bash",
 			res.Metadata.DisplayName,
-			res.Metadata.Description,
+			res.Spec.Instructions,
 			handlers.Bash,
 			opts...,
 		)
@@ -204,7 +204,7 @@ func LoomTools(handlers *ToolHandlers) ([]*tool.Tool, error) {
 		t, err := tool.New(
 			"download",
 			res.Metadata.DisplayName,
-			res.Metadata.Description,
+			res.Spec.Instructions,
 			handlers.Download,
 			opts...,
 		)
@@ -228,7 +228,7 @@ func LoomTools(handlers *ToolHandlers) ([]*tool.Tool, error) {
 		t, err := tool.New(
 			"edit",
 			res.Metadata.DisplayName,
-			res.Metadata.Description,
+			res.Spec.Instructions,
 			handlers.Edit,
 			opts...,
 		)
@@ -252,7 +252,7 @@ func LoomTools(handlers *ToolHandlers) ([]*tool.Tool, error) {
 		t, err := tool.New(
 			"fetch",
 			res.Metadata.DisplayName,
-			res.Metadata.Description,
+			res.Spec.Instructions,
 			handlers.Fetch,
 			opts...,
 		)
@@ -276,7 +276,7 @@ func LoomTools(handlers *ToolHandlers) ([]*tool.Tool, error) {
 		t, err := tool.New(
 			"glob",
 			res.Metadata.DisplayName,
-			res.Metadata.Description,
+			res.Spec.Instructions,
 			handlers.Glob,
 			opts...,
 		)
@@ -300,7 +300,7 @@ func LoomTools(handlers *ToolHandlers) ([]*tool.Tool, error) {
 		t, err := tool.New(
 			"grep",
 			res.Metadata.DisplayName,
-			res.Metadata.Description,
+			res.Spec.Instructions,
 			handlers.Grep,
 			opts...,
 		)
@@ -324,7 +324,7 @@ func LoomTools(handlers *ToolHandlers) ([]*tool.Tool, error) {
 		t, err := tool.New(
 			"ls",
 			res.Metadata.DisplayName,
-			res.Metadata.Description,
+			res.Spec.Instructions,
 			handlers.Ls,
 			opts...,
 		)
@@ -348,7 +348,7 @@ func LoomTools(handlers *ToolHandlers) ([]*tool.Tool, error) {
 		t, err := tool.New(
 			"lsp_diagnostics",
 			res.Metadata.DisplayName,
-			res.Metadata.Description,
+			res.Spec.Instructions,
 			handlers.LspDiagnostics,
 			opts...,
 		)
@@ -372,7 +372,7 @@ func LoomTools(handlers *ToolHandlers) ([]*tool.Tool, error) {
 		t, err := tool.New(
 			"lsp_restart",
 			res.Metadata.DisplayName,
-			res.Metadata.Description,
+			res.Spec.Instructions,
 			handlers.LspRestart,
 			opts...,
 		)
@@ -396,7 +396,7 @@ func LoomTools(handlers *ToolHandlers) ([]*tool.Tool, error) {
 		t, err := tool.New(
 			"lsp_search",
 			res.Metadata.DisplayName,
-			res.Metadata.Description,
+			res.Spec.Instructions,
 			handlers.LspSearch,
 			opts...,
 		)
@@ -420,7 +420,7 @@ func LoomTools(handlers *ToolHandlers) ([]*tool.Tool, error) {
 		t, err := tool.New(
 			"mcp_list_resources",
 			res.Metadata.DisplayName,
-			res.Metadata.Description,
+			res.Spec.Instructions,
 			handlers.McpListResources,
 			opts...,
 		)
@@ -444,7 +444,7 @@ func LoomTools(handlers *ToolHandlers) ([]*tool.Tool, error) {
 		t, err := tool.New(
 			"mcp_read_resources",
 			res.Metadata.DisplayName,
-			res.Metadata.Description,
+			res.Spec.Instructions,
 			handlers.McpReadResources,
 			opts...,
 		)
@@ -468,7 +468,7 @@ func LoomTools(handlers *ToolHandlers) ([]*tool.Tool, error) {
 		t, err := tool.New(
 			"multi_edit",
 			res.Metadata.DisplayName,
-			res.Metadata.Description,
+			res.Spec.Instructions,
 			handlers.MultiEdit,
 			opts...,
 		)
@@ -492,7 +492,7 @@ func LoomTools(handlers *ToolHandlers) ([]*tool.Tool, error) {
 		t, err := tool.New(
 			"remove",
 			res.Metadata.DisplayName,
-			res.Metadata.Description,
+			res.Spec.Instructions,
 			handlers.Remove,
 			opts...,
 		)
@@ -516,7 +516,7 @@ func LoomTools(handlers *ToolHandlers) ([]*tool.Tool, error) {
 		t, err := tool.New(
 			"schedule",
 			res.Metadata.DisplayName,
-			res.Metadata.Description,
+			res.Spec.Instructions,
 			handlers.Schedule,
 			opts...,
 		)
@@ -540,7 +540,7 @@ func LoomTools(handlers *ToolHandlers) ([]*tool.Tool, error) {
 		t, err := tool.New(
 			"tasks",
 			res.Metadata.DisplayName,
-			res.Metadata.Description,
+			res.Spec.Instructions,
 			handlers.Tasks,
 			opts...,
 		)
@@ -564,7 +564,7 @@ func LoomTools(handlers *ToolHandlers) ([]*tool.Tool, error) {
 		t, err := tool.New(
 			"todos",
 			res.Metadata.DisplayName,
-			res.Metadata.Description,
+			res.Spec.Instructions,
 			handlers.Todos,
 			opts...,
 		)
@@ -588,7 +588,7 @@ func LoomTools(handlers *ToolHandlers) ([]*tool.Tool, error) {
 		t, err := tool.New(
 			"view",
 			res.Metadata.DisplayName,
-			res.Metadata.Description,
+			res.Spec.Instructions,
 			handlers.View,
 			opts...,
 		)
@@ -612,7 +612,7 @@ func LoomTools(handlers *ToolHandlers) ([]*tool.Tool, error) {
 		t, err := tool.New(
 			"web_fetch",
 			res.Metadata.DisplayName,
-			res.Metadata.Description,
+			res.Spec.Instructions,
 			handlers.WebFetch,
 			opts...,
 		)
@@ -636,7 +636,7 @@ func LoomTools(handlers *ToolHandlers) ([]*tool.Tool, error) {
 		t, err := tool.New(
 			"web_search",
 			res.Metadata.DisplayName,
-			res.Metadata.Description,
+			res.Spec.Instructions,
 			handlers.WebSearch,
 			opts...,
 		)
@@ -660,7 +660,7 @@ func LoomTools(handlers *ToolHandlers) ([]*tool.Tool, error) {
 		t, err := tool.New(
 			"write",
 			res.Metadata.DisplayName,
-			res.Metadata.Description,
+			res.Spec.Instructions,
 			handlers.Write,
 			opts...,
 		)
