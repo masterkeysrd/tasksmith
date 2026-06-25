@@ -1,6 +1,9 @@
 ---
-name: agent-tooling
-description: The exact process and scaffolding required to create a new builtin AI agent tool for TaskSmith.
+apiVersion: warp/v1alpha1
+kind: Skill
+metadata:
+    name: agent-tooling
+    description: The exact process and scaffolding required to create a new builtin AI agent tool for TaskSmith.
 ---
 
 # Creating Agent Tools
