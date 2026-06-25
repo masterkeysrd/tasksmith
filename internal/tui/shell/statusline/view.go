@@ -336,7 +336,7 @@ var Stats = kitex.FC("Stats", func(props StatsProps) kitex.Node {
 				Gap(1).
 				Foreground(textDim),
 		},
-			kitex.Box(kitex.BoxProps{Style: style.S().Foreground(colorInfo)}, icon.MoveDown),
+			kitex.Box(kitex.BoxProps{Style: style.S().Foreground(colorInfo)}, icon.MoveUp),
 			kitex.Text(tokenutils.FormatTokens(props.InputTokens)),
 		),
 
@@ -349,7 +349,7 @@ var Stats = kitex.FC("Stats", func(props StatsProps) kitex.Node {
 				Gap(1).
 				Foreground(textDim),
 		},
-			kitex.Box(kitex.BoxProps{Style: style.S().Foreground(colorNormal)}, icon.MoveUp),
+			kitex.Box(kitex.BoxProps{Style: style.S().Foreground(colorNormal)}, icon.MoveDown),
 			kitex.Text(tokenutils.FormatTokens(props.OutputTokens)),
 		),
 
