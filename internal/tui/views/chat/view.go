@@ -31,6 +31,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/tui/mode"
 	"github.com/masterkeysrd/tasksmith/internal/tui/queries"
 	"github.com/masterkeysrd/tasksmith/internal/tui/theme"
+	"github.com/masterkeysrd/tasksmith/internal/tui/tokenutils"
 )
 
 // ViewProps defines the properties for the Chat view.
@@ -1336,9 +1337,9 @@ var Bubble = kitex.FC("Bubble", func(props BubbleProps) kitex.Node {
 	if props.TokensInput > 0 || props.TokensOutput > 0 || props.TokensTotal > 0 {
 		var tokenStr string
 		if props.TokensInput > 0 || props.TokensOutput > 0 {
-			tokenStr = fmt.Sprintf("↑ %s ↓ %s", formatTokens(props.TokensInput), formatTokens(props.TokensOutput))
+			tokenStr = fmt.Sprintf("↑ %s ↓ %s", tokenutils.FormatTokens(props.TokensInput), tokenutils.FormatTokens(props.TokensOutput))
 		} else {
-			tokenStr = fmt.Sprintf("%s TOTAL", formatTokens(props.TokensTotal))
+			tokenStr = fmt.Sprintf("%s TOTAL", tokenutils.FormatTokens(props.TokensTotal))
 		}
 
 		tokenStyle := style.S().Foreground(t.Color.Text.Tertiary).Italic(true)
@@ -2472,13 +2473,6 @@ func createBubbleNode(
 	})
 }
 
-func formatTokens(count int) string {
-	if count < 1000 {
-		return fmt.Sprintf("%d", count)
-	}
-	return fmt.Sprintf("%.1fk", float64(count)/1000.0)
-}
-
 func renderAgentStatus(t *theme.Scheme, sending bool, thinkingTime int, lastFinishedTime int, currentDots string, runPromptTokens, runCompletionTokens, runTotalTokens int, isGenerating bool) kitex.Node {
 	if t == nil {
 		return nil
@@ -2516,12 +2510,12 @@ func renderAgentStatus(t *theme.Scheme, sending bool, thinkingTime int, lastFini
 					Style: style.S().Display(style.DisplayFlex).FlexDirection(style.FlexRow).Gap(1).Foreground(t.Color.Text.Tertiary),
 				},
 					kitex.Text("("),
-					kitex.Span(kitex.SpanProps{Style: style.S().Foreground(upColor)}, kitex.Text(fmt.Sprintf("↑ %s", formatTokens(runPromptTokens)))),
-					kitex.Span(kitex.SpanProps{Style: style.S().Foreground(downColor)}, kitex.Text(fmt.Sprintf("↓ %s", formatTokens(runCompletionTokens)))),
+					kitex.Span(kitex.SpanProps{Style: style.S().Foreground(upColor)}, kitex.Text(fmt.Sprintf("↑ %s", tokenutils.FormatTokens(runPromptTokens)))),
+					kitex.Span(kitex.SpanProps{Style: style.S().Foreground(downColor)}, kitex.Text(fmt.Sprintf("↓ %s", tokenutils.FormatTokens(runCompletionTokens)))),
 					kitex.Text(")"),
 				))
 			} else {
-				cumNodes = append(cumNodes, kitex.Box(kitex.BoxProps{Style: style.S().Foreground(t.Color.Text.Tertiary)}, kitex.Text(fmt.Sprintf("(%s TOTAL)", formatTokens(runTotalTokens)))))
+				cumNodes = append(cumNodes, kitex.Box(kitex.BoxProps{Style: style.S().Foreground(t.Color.Text.Tertiary)}, kitex.Text(fmt.Sprintf("(%s TOTAL)", tokenutils.FormatTokens(runTotalTokens)))))
 			}
 		}
 
@@ -2549,9 +2543,9 @@ func renderAgentStatus(t *theme.Scheme, sending bool, thinkingTime int, lastFini
 		if runPromptTokens > 0 || runCompletionTokens > 0 || runTotalTokens > 0 {
 			var tokenStr string
 			if runPromptTokens > 0 || runCompletionTokens > 0 {
-				tokenStr = fmt.Sprintf("(↑ %s ↓ %s)", formatTokens(runPromptTokens), formatTokens(runCompletionTokens))
+				tokenStr = fmt.Sprintf("(↑ %s ↓ %s)", tokenutils.FormatTokens(runPromptTokens), tokenutils.FormatTokens(runCompletionTokens))
 			} else {
-				tokenStr = fmt.Sprintf("(%s TOTAL)", formatTokens(runTotalTokens))
+				tokenStr = fmt.Sprintf("(%s TOTAL)", tokenutils.FormatTokens(runTotalTokens))
 			}
 			cumNodes = append(cumNodes, kitex.Box(kitex.BoxProps{Style: style.S().Foreground(t.Color.Text.Secondary)}, kitex.Text(" "+tokenStr)))
 		}

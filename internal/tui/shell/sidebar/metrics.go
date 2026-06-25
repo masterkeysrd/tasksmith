@@ -11,6 +11,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/tui/active"
 	"github.com/masterkeysrd/tasksmith/internal/tui/components"
 	"github.com/masterkeysrd/tasksmith/internal/tui/components/icon"
+	"github.com/masterkeysrd/tasksmith/internal/tui/tokenutils"
 )
 
 func metricsPanel(data Data) kitex.Node {
@@ -75,7 +76,7 @@ func metricsPanel(data Data) kitex.Node {
 	}
 
 	usedPercent := int(float64(tokensUsed) * 100.0 / float64(tokenLimit))
-	tokensStr := fmt.Sprintf("%.1fK / %dK TOKENS", float64(tokensUsed)/1000.0, tokenLimit/1024)
+	tokensStr := tokenutils.FormatTokens(tokensUsed) + " / " + tokenutils.FormatTokens(tokenLimit) + " TOKENS"
 
 	// Calculate bar cells (total bar length is 30)
 	barLength := 30

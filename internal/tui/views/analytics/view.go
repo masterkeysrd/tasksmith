@@ -12,6 +12,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/tui/components"
 	"github.com/masterkeysrd/tasksmith/internal/tui/queries"
 	"github.com/masterkeysrd/tasksmith/internal/tui/theme"
+	"github.com/masterkeysrd/tasksmith/internal/tui/tokenutils"
 )
 
 type Props struct {
@@ -828,13 +829,5 @@ func formatVal(val int, unit string) string {
 	if unit == "calls" {
 		return strconv.Itoa(val)
 	}
-	if val >= 1000000 {
-		f := float64(val) / 1000000.0
-		return fmt.Sprintf("%.1fM", f)
-	}
-	if val >= 1000 {
-		f := float64(val) / 1000.0
-		return fmt.Sprintf("%.1fK", f)
-	}
-	return strconv.Itoa(val)
+	return tokenutils.FormatTokens(val)
 }

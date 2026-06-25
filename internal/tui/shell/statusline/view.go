@@ -16,6 +16,7 @@ import (
 	plugin "github.com/masterkeysrd/tasksmith/internal/tui/plugin/statusline"
 	"github.com/masterkeysrd/tasksmith/internal/tui/queries"
 	"github.com/masterkeysrd/tasksmith/internal/tui/theme"
+	"github.com/masterkeysrd/tasksmith/internal/tui/tokenutils"
 )
 
 // ModeProps defines properties for the Mode component.
@@ -336,7 +337,7 @@ var Stats = kitex.FC("Stats", func(props StatsProps) kitex.Node {
 				Foreground(textDim),
 		},
 			kitex.Box(kitex.BoxProps{Style: style.S().Foreground(colorInfo)}, icon.MoveDown),
-			kitex.Text(formatTokens(props.InputTokens)),
+			kitex.Text(tokenutils.FormatTokens(props.InputTokens)),
 		),
 
 		// Output tokens
@@ -349,7 +350,7 @@ var Stats = kitex.FC("Stats", func(props StatsProps) kitex.Node {
 				Foreground(textDim),
 		},
 			kitex.Box(kitex.BoxProps{Style: style.S().Foreground(colorNormal)}, icon.MoveUp),
-			kitex.Text(formatTokens(props.OutputTokens)),
+			kitex.Text(tokenutils.FormatTokens(props.OutputTokens)),
 		),
 
 		// Separator
@@ -695,10 +696,3 @@ var View = kitex.FCC("StatusLine", func(props Props) kitex.Node {
 
 	return kitex.Box(kitex.BoxProps{Style: lineStyle}, children...)
 })
-
-func formatTokens(tokens int) string {
-	if tokens >= 1000 {
-		return fmt.Sprintf("%.1fK", float64(tokens)/1000.0)
-	}
-	return fmt.Sprintf("%d", tokens)
-}
