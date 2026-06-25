@@ -185,6 +185,11 @@ func (h *ToolHandlers) Bash(ctx context.Context, in BashArgs) (tool.ToolStream, 
 			detector := newChangeDetector(h.CWD)
 			cmd := exec.CommandContext(ctx, "bash", "-c", in.Command)
 			cmd.Dir = h.CWD
+			process.Prepare(cmd)
+			cmd.Cancel = func() error {
+				return process.Kill(cmd)
+			}
+			cmd.WaitDelay = 5 * time.Second
 			out, err := cmd.CombinedOutput()
 			var exitCode int
 			var status = "completed"
