@@ -6,6 +6,8 @@ metadata:
   labels:
     category: system
 spec:
+  annotations:
+    isReadOnly: true
   parameters:
     type: object
     properties:
