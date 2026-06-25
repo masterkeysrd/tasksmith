@@ -33,6 +33,134 @@ type ActivateSkillOutput struct {
 	Success bool `json:"success,omitempty" jsonschema:"Whether the skill was successfully activated."`
 }
 
+// AgentDefineArgs defines the arguments for the "agent_define" tool.
+//
+// Define a new type of specialized subagent that can be spawned via agent_invoke.
+type AgentDefineArgs struct {
+	// Description: Description of the subagent's role.
+	Description string `json:"description" jsonschema:"Description of the subagent's role."`
+	// EnableMcpTools: Allow the subagent to interact with Model Context Protocol (MCP) servers.
+	EnableMcpTools bool `json:"enable_mcp_tools,omitempty" jsonschema:"Allow the subagent to interact with Model Context Protocol (MCP) servers."`
+	// EnableSubagentTools: Allow the subagent to define and spawn its own subagents.
+	EnableSubagentTools bool `json:"enable_subagent_tools,omitempty" jsonschema:"Allow the subagent to define and spawn its own subagents."`
+	// EnableWriteTools: Equip the subagent with tools to write/edit files and run terminal commands.
+	EnableWriteTools bool `json:"enable_write_tools,omitempty" jsonschema:"Equip the subagent with tools to write/edit files and run terminal commands."`
+	// Name: Unique name identifier for the new subagent type.
+	Name string `json:"name" jsonschema:"Unique name identifier for the new subagent type."`
+	// SystemPrompt: The detailed instructions/prompt for the subagent.
+	SystemPrompt string `json:"system_prompt" jsonschema:"The detailed instructions/prompt for the subagent."`
+}
+
+// AgentDefineOutput defines the output returned by the "agent_define" tool.
+type AgentDefineOutput struct {
+	// Error: Error message if the operation failed.
+	Error string `json:"error,omitempty" jsonschema:"Error message if the operation failed."`
+	// Success: Whether defining the subagent succeeded.
+	Success bool `json:"success,omitempty" jsonschema:"Whether defining the subagent succeeded."`
+}
+
+// AgentInvokeArgs defines the arguments for the "agent_invoke" tool.
+//
+// Invoke one or more subagents concurrently to perform background tasks.
+type AgentInvokeArgs struct {
+	Subagents []AgentInvokeArgsSubagentsItem `json:"subagents"`
+}
+
+type AgentInvokeArgsSubagentsItem struct {
+	// Prompt: The specific instruction task description for the subagent to start.
+	Prompt string `json:"prompt" jsonschema:"The specific instruction task description for the subagent to start."`
+	// Role: A brief role/job title for this invocation (e.g. Code Researcher).
+	Role string `json:"role" jsonschema:"A brief role/job title for this invocation (e.g. Code Researcher)."`
+	// TypeName: The defined type name of the subagent to invoke.
+	TypeName string `json:"type_name" jsonschema:"The defined type name of the subagent to invoke."`
+	// Workspace: Workspace isolation mode. Defaults to inherit.
+	Workspace string `json:"workspace,omitempty" jsonschema:"Workspace isolation mode. Defaults to inherit."`
+}
+
+// AgentInvokeOutput defines the output returned by the "agent_invoke" tool.
+type AgentInvokeOutput struct {
+	// Error: Error message if the invocation failed.
+	Error     string                           `json:"error,omitempty" jsonschema:"Error message if the invocation failed."`
+	Subagents []AgentInvokeOutputSubagentsItem `json:"subagents,omitempty"`
+	// Success: Whether invoking the subagents succeeded.
+	Success bool `json:"success,omitempty" jsonschema:"Whether invoking the subagents succeeded."`
+}
+
+type AgentInvokeOutputSubagentsItem struct {
+	// ConversationId: The unique ID assigned to this subagent conversation thread.
+	ConversationId string `json:"conversation_id,omitempty" jsonschema:"The unique ID assigned to this subagent conversation thread."`
+	// Role: Role description.
+	Role string `json:"role,omitempty" jsonschema:"Role description."`
+	// TypeName: Subagent type.
+	TypeName string `json:"type_name,omitempty" jsonschema:"Subagent type."`
+}
+
+// AgentManageArgs defines the arguments for the "agent_manage" tool.
+//
+// Manage active subagent threads (list, kill, or kill all).
+type AgentManageArgs struct {
+	// Action: The management action to perform.
+	Action string `json:"action" jsonschema:"The management action to perform."`
+	// ConversationIds: Conversation IDs of subagents to terminate (required for 'kill').
+	ConversationIds []string `json:"conversation_ids,omitempty" jsonschema:"Conversation IDs of subagents to terminate (required for 'kill')."`
+}
+
+// AgentManageOutput defines the output returned by the "agent_manage" tool.
+type AgentManageOutput struct {
+	// Error: Error message if the action failed.
+	Error     string                           `json:"error,omitempty" jsonschema:"Error message if the action failed."`
+	Subagents []AgentManageOutputSubagentsItem `json:"subagents,omitempty"`
+	// Success: Whether the management action succeeded.
+	Success bool `json:"success,omitempty" jsonschema:"Whether the management action succeeded."`
+}
+
+type AgentManageOutputSubagentsItem struct {
+	ConversationId string `json:"conversation_id,omitempty"`
+	Role           string `json:"role,omitempty"`
+	Status         string `json:"status,omitempty"`
+	TypeName       string `json:"type_name,omitempty"`
+}
+
+// AgentSendMessageArgs defines the arguments for the "agent_send_message" tool.
+//
+// Send an instruction or status query message to an active subagent.
+type AgentSendMessageArgs struct {
+	// Message: The content/instruction message to send.
+	Message string `json:"message" jsonschema:"The content/instruction message to send."`
+	// RecipientId: The conversation ID of the target subagent.
+	RecipientId string `json:"recipient_id" jsonschema:"The conversation ID of the target subagent."`
+}
+
+// AgentSendMessageOutput defines the output returned by the "agent_send_message" tool.
+type AgentSendMessageOutput struct {
+	// Error: Error message if sending failed.
+	Error string `json:"error,omitempty" jsonschema:"Error message if sending failed."`
+	// Success: Whether sending the message succeeded.
+	Success bool `json:"success,omitempty" jsonschema:"Whether sending the message succeeded."`
+}
+
+// AskQuestionArgs defines the arguments for the "ask_question" tool.
+//
+// Ask the user one or more multiple-choice questions for clarification or design decisions.
+type AskQuestionArgs struct {
+	// IsMultiSelect: If true, the user can select multiple choices.
+	IsMultiSelect bool `json:"is_multi_select,omitempty" jsonschema:"If true, the user can select multiple choices."`
+	// Options: The list of multiple-choice options.
+	Options []string `json:"options" jsonschema:"The list of multiple-choice options."`
+	// Question: The question to present to the user.
+	Question string `json:"question" jsonschema:"The question to present to the user."`
+}
+
+// AskQuestionOutput defines the output returned by the "ask_question" tool.
+type AskQuestionOutput struct {
+	// Selected: The selected option(s).
+	Selected []string `json:"selected,omitempty" jsonschema:"The selected option(s)."`
+	// Success: Whether the interaction succeeded.
+	Success bool `json:"success,omitempty" jsonschema:"Whether the interaction succeeded."`
+	// WriteIn: Custom text written by the user.
+	WriteIn string `json:"write_in,omitempty" jsonschema:"Custom text written by the user."`
+}
+
 // BashArgs defines the arguments for the "bash" tool.
 //
 // Execute a bash command. If it takes longer than wait_ms, it automatically transitions to a background task.
@@ -487,6 +615,32 @@ type RemoveOutput struct {
 	Path string `json:"path,omitempty" jsonschema:"Path that was removed."`
 	// Success: Whether removal succeeded.
 	Success bool `json:"success,omitempty" jsonschema:"Whether removal succeeded."`
+}
+
+// ScheduleArgs defines the arguments for the "schedule" tool.
+//
+// Schedule a one-shot notification timer or recurring cron job.
+type ScheduleArgs struct {
+	// CronExpression: A standard 5-field cron pattern (e.g. '*/5 * * * *') for recurring notifications.
+	CronExpression string `json:"cron_expression,omitempty" jsonschema:"A standard 5-field cron pattern (e.g. '*/5 * * * *') for recurring notifications."`
+	// DurationSeconds: Number of seconds to wait (one-shot timer). Mutually exclusive with cron_expression.
+	DurationSeconds string `json:"duration_seconds,omitempty" jsonschema:"Number of seconds to wait (one-shot timer). Mutually exclusive with cron_expression."`
+	// MaxIterations: Optional limit on triggers for recurring schedules.
+	MaxIterations string `json:"max_iterations,omitempty" jsonschema:"Optional limit on triggers for recurring schedules."`
+	// Prompt: The notification prompt text that will be sent back when triggered.
+	Prompt string `json:"prompt" jsonschema:"The notification prompt text that will be sent back when triggered."`
+	// TimerCondition: Controls timer early termination. 'never' (default), 'any', or a specific subagent/task ID.
+	TimerCondition string `json:"timer_condition,omitempty" jsonschema:"Controls timer early termination. 'never' (default), 'any', or a specific subagent/task ID."`
+}
+
+// ScheduleOutput defines the output returned by the "schedule" tool.
+type ScheduleOutput struct {
+	// Error: Error message if scheduling failed.
+	Error string `json:"error,omitempty" jsonschema:"Error message if scheduling failed."`
+	// Success: Whether scheduling succeeded.
+	Success bool `json:"success,omitempty" jsonschema:"Whether scheduling succeeded."`
+	// TaskId: The scheduled task ID.
+	TaskId string `json:"task_id,omitempty" jsonschema:"The scheduled task ID."`
 }
 
 // TasksArgs defines the arguments for the "tasks" tool.
