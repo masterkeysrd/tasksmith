@@ -14,8 +14,10 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/agent/permissions"
 	"github.com/masterkeysrd/tasksmith/internal/agent/tools"
 	"github.com/masterkeysrd/tasksmith/internal/core/lsp"
+	"github.com/masterkeysrd/tasksmith/internal/mcp"
 	"github.com/masterkeysrd/tasksmith/internal/session/filetrack"
 	"github.com/masterkeysrd/tasksmith/internal/workspace"
+	"github.com/masterkeysrd/warp"
 )
 
 // AgentState represents the state passed between nodes in the agent loop.
@@ -97,6 +99,7 @@ type AgentGraph struct {
 	permissionManager permissions.PermissionManager
 	cwd               string
 	lspManager        *lsp.Manager
+	storage           tools.FileStorage
 }
 
 // Options defines the configurations and dependencies to initialize the AgentGraph.
@@ -113,6 +116,7 @@ type Options struct {
 	PermissionManager permissions.PermissionManager
 	LspManager        *lsp.Manager
 	FileTracker       filetrack.FileTracker
+	McpManager        *mcp.Manager
 }
 
 // New creates a new AgentGraph orchestrator by loading/binding tools outside of the execution nodes.
@@ -140,22 +144,22 @@ func New(ctx context.Context, opts Options) (*AgentGraph, error) {
 		}
 	}
 
+	var mcps []*warp.MCP
+	if opts.Workspace != nil {
+		mcps = opts.Workspace.MCPs()
+	}
+
 	handlers := tools.NewHandlers(opts.Storage, cwd).
 		WithTaskManager(opts.TaskManager, opts.SessionID).
 		WithSkillResolver(&skillResolver{ws: opts.Workspace, agentName: opts.AgentName}).
 		WithPermissionManager(pm).
 		WithLspManager(opts.LspManager).
-		WithFileTracker(opts.FileTracker)
-	allLoomTools, err := tools.LoomTools(handlers)
-	if err != nil {
-		return nil, fmt.Errorf("failed to load loom tools: %w", err)
-	}
+		WithFileTracker(opts.FileTracker).
+		WithMcpManager(opts.McpManager)
 
-	var activeTools []*tool.Tool
-	for _, lt := range allLoomTools {
-		if allowedTools == nil || allowedTools[lt.Definition.Name] {
-			activeTools = append(activeTools, lt)
-		}
+	activeTools, err := tools.LoadActiveTools(ctx, handlers, allowedTools, mcps)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load active tools: %w", err)
 	}
 
 	var boundModel LLM = opts.Model
@@ -178,6 +182,7 @@ func New(ctx context.Context, opts Options) (*AgentGraph, error) {
 		permissionManager: pm,
 		cwd:               cwd,
 		lspManager:        opts.LspManager,
+		storage:           opts.Storage,
 	}, nil
 }
 
@@ -413,7 +418,7 @@ func (a *AgentGraph) executeTools(ctx context.Context, s AgentState) (graph.Comm
 						Content:    message.Content{&message.TextBlock{Text: err.Error()}},
 					}
 				} else {
-					toolMsg = toolResp
+					toolMsg = tools.ProcessMcpOutput(ctx, tc, toolResp, a.storage)
 				}
 
 				meta := toolMsg.GetMetadata()

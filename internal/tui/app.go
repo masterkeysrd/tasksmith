@@ -14,6 +14,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/tui/views/analytics"
 	"github.com/masterkeysrd/tasksmith/internal/tui/views/chat"
 	"github.com/masterkeysrd/tasksmith/internal/tui/views/lspinfo"
+	"github.com/masterkeysrd/tasksmith/internal/tui/views/mcpinfo"
 	"github.com/masterkeysrd/tasksmith/internal/tui/views/setup"
 	"github.com/masterkeysrd/tasksmith/internal/tui/views/welcome"
 )
@@ -123,6 +124,7 @@ var Router = kitex.SimpleFC("Router", func() kitex.Node {
 			kitex.Fragment(
 				chat.View(chat.ViewProps{SessionID: activeSessionID}),
 				lspinfo.View(lspinfo.ViewProps{}),
+				mcpinfo.View(mcpinfo.ViewProps{}),
 			),
 		)
 	}

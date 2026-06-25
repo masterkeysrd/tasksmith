@@ -25,6 +25,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	"github.com/masterkeysrd/tasksmith/internal/core/lsp"
 	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
+	"github.com/masterkeysrd/tasksmith/internal/mcp"
 	"github.com/masterkeysrd/tasksmith/internal/metrics"
 	"github.com/masterkeysrd/tasksmith/internal/session/filetrack"
 	"github.com/masterkeysrd/tasksmith/internal/workspace"
@@ -88,6 +89,7 @@ type Manager struct {
 	taskMgr        *tools.TaskManager
 	metricsStore   *metrics.Store
 	lspManager     *lsp.Manager
+	mcpManager     *mcp.Manager
 }
 
 // FileTracker returns a session-scoped FileTracker instance.
@@ -103,14 +105,26 @@ func (m *Manager) FileTracker(sessionID string) (filetrack.FileTracker, error) {
 	return filetrack.NewTracker(m.store.ResourceStore(), sessionID, changesDir, m.ws.CWD()), nil
 }
 
+// McpManager returns the session-scoped MCP manager.
+func (m *Manager) McpManager() *mcp.Manager {
+	return m.mcpManager
+}
+
 // NewManager creates a new Manager using the provided configuration.
 func NewManager(cfg ManagerConfig) *Manager {
+	var mcps []*warp.MCP
+	if cfg.Workspace != nil {
+		mcps = cfg.Workspace.MCPs()
+	}
+	mcpMgr := mcp.NewManager(mcps)
+
 	m := &Manager{
 		store:          cfg.Store,
 		ws:             cfg.Workspace,
 		metricsStore:   cfg.MetricsStore,
 		lspManager:     cfg.LspManager,
 		activeSessions: make(map[string]*ActiveSession),
+		mcpManager:     mcpMgr,
 	}
 
 	var cwd string
@@ -353,6 +367,7 @@ func (m *Manager) GetSessionState(ctx context.Context, sessionID string) (Sessio
 				TaskManager: m.taskMgr,
 				SessionID:   sessionID,
 				LspManager:  m.lspManager,
+				McpManager:  m.mcpManager,
 			}); err == nil {
 				if g, err := ag.Build(cp); err == nil {
 					loc := &graph.Location{ThreadID: sessionID}
@@ -663,6 +678,7 @@ func (m *Manager) runAgentLoop(runCtx context.Context, sessionID string, sess *A
 		},
 		LspManager:  m.lspManager,
 		FileTracker: ft,
+		McpManager:  m.mcpManager,
 	})
 	if err != nil {
 		m.setSessionError(sessionID, fmt.Errorf("failed to construct agent graph: %w", err))

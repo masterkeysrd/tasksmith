@@ -24,6 +24,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/agent/tools"
 	"github.com/masterkeysrd/tasksmith/internal/api"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
+	"github.com/masterkeysrd/tasksmith/internal/mcp"
 	tuiapi "github.com/masterkeysrd/tasksmith/internal/tui/api"
 	"github.com/masterkeysrd/tasksmith/internal/tui/components"
 	"github.com/masterkeysrd/tasksmith/internal/tui/components/icon"
@@ -111,6 +112,24 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 	selectedIndex, setSelectedIndex := kitex.UseState(0)
 	selectedScopeIndex, setSelectedScopeIndex := kitex.UseState(0)
 	showPreviewModal, setShowPreviewModal := kitex.UseState(false)
+	showFullOutputModal, setShowFullOutputModal := kitex.UseState(false)
+	fullOutputTitle, setFullOutputTitle := kitex.UseState("")
+	fullOutputContent, setFullOutputContent := kitex.UseState("")
+
+	openFullOutputModal := func(title, cachedPath string) {
+		go func() {
+			resp, err := client.GetCachedFile(context.Background(), api.GetCachedFileRequest{
+				SessionID: props.SessionID,
+				Path:      cachedPath,
+			})
+			if err == nil {
+				setFullOutputTitle(title)
+				setFullOutputContent(resp.Content)
+				setShowFullOutputModal(true)
+			}
+		}()
+	}
+
 	currentPendingIndex, setCurrentPendingIndex := kitex.UseState(0)
 	localDecisions, setLocalDecisions := kitex.UseState(map[string]permissions.AuthorizationDecision{})
 
@@ -646,6 +665,7 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 						handleSelectHorizontal,
 						handleApprove,
 						handleDeny,
+						openFullOutputModal,
 					)
 
 					var runPromptTokens, runCompletionTokens, runTotalTokens int
@@ -695,6 +715,25 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 							Suggestions: pendingLspSuggestions,
 							OnConfigure: handleConfigureLsp,
 							OnDismiss:   handleDismissLsp,
+						}))
+					}
+					if stateQuery.Data != nil && len(stateQuery.Data.PendingMcpRequests) > 0 {
+						nodes = append(nodes, McpRequestWidget(McpRequestWidgetProps{
+							Requests: stateQuery.Data.PendingMcpRequests,
+							OnResolve: func(reqID string, action string, code string, content map[string]interface{}) {
+								go func() {
+									_, err := client.ResolveMcpRequest(context.Background(), api.ResolveMcpRequest{
+										RequestID: reqID,
+										Action:    action,
+										Code:      code,
+										Content:   content,
+									})
+									if err != nil {
+										log.Error(fmt.Sprintf("Failed to resolve MCP request: %v", err))
+									}
+									stateQuery.Refetch()
+								}()
+							},
 						}))
 					}
 					return nodes
@@ -861,6 +900,30 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 							}(),
 						),
 					),
+				)
+			}),
+		),
+
+		// Modal Section for Full Output View
+		components.Modal(components.ModalProps{
+			IsOpen:  showFullOutputModal(),
+			Title:   kitex.Text(fullOutputTitle()),
+			OnClose: func() { setShowFullOutputModal(false) },
+		},
+			kitex.If(showFullOutputModal(), func() kitex.Node {
+				var textCol color.Color
+				if t != nil {
+					textCol = t.Color.Text.Secondary
+				}
+				outputStyle := style.S().
+					Width(style.Percent(100)).
+					Height(style.Percent(100)).
+					Foreground(textCol).
+					WhiteSpace(style.WhiteSpacePreWrap).
+					OverflowY(style.OverflowAuto)
+
+				return kitex.Box(kitex.BoxProps{Style: outputStyle},
+					kitex.Text(fullOutputContent()),
 				)
 			}),
 		),
@@ -1332,6 +1395,7 @@ type MessageProps struct {
 	OnSelectHorizontal    func(int)
 	OnApprove             func()
 	OnDeny                func()
+	OnViewFullOutput      func(title, cachedPath string)
 }
 
 func getToolOutput(content message.Content) string {
@@ -1495,9 +1559,10 @@ func openWithSystemViewer(path string) {
 }
 
 type ToolExecutionProps struct {
-	ToolCall    *message.ToolCall
-	ToolMessage *message.Tool
-	CurrentDots string
+	ToolCall         *message.ToolCall
+	ToolMessage      *message.Tool
+	CurrentDots      string
+	OnViewFullOutput func(title, cachedPath string)
 }
 
 const lsPreviewLines = 10
@@ -1698,9 +1763,21 @@ var ToolExecution = kitex.FC("ToolExecution", func(props ToolExecutionProps) kit
 
 	t := theme.UseTheme()
 	isOpen, setIsOpen := kitex.UseState(true)
+	hasAutoCollapsed, setHasAutoCollapsed := kitex.UseState(false)
+	showFullOutput, setShowFullOutput := kitex.UseState(false)
 
 	tc := props.ToolCall
 	tm := props.ToolMessage
+
+	if tm != nil && !tm.IsError && !hasAutoCollapsed() {
+		setIsOpen(false)
+		setHasAutoCollapsed(true)
+	}
+
+	var outText string
+	if tm != nil {
+		outText = getToolOutput(tm.Content)
+	}
 
 	var argsStr string
 	if len(tc.Args) > 0 {
@@ -1773,101 +1850,203 @@ var ToolExecution = kitex.FC("ToolExecution", func(props ToolExecutionProps) kit
 			Background(t.Color.Surface.BaseHover)
 	}
 
-	return kitex.Box(kitex.BoxProps{Style: containerStyle},
-		components.Button(components.ButtonProps{
-			Variant: components.ButtonText,
-			Color:   components.ButtonBase,
-			Style:   headerStyle,
-			OnClick: func() {
-				setIsOpen(!isOpen())
+	return kitex.Fragment(
+		kitex.Box(kitex.BoxProps{Style: containerStyle},
+			components.Button(components.ButtonProps{
+				Variant: components.ButtonText,
+				Color:   components.ButtonBase,
+				Style:   headerStyle,
+				OnClick: func() {
+					setIsOpen(!isOpen())
+				},
 			},
-		},
-			kitex.Box(kitex.BoxProps{
-				Style: style.S().
-					Display(style.DisplayFlex).
-					FlexDirection(style.FlexRow).
-					AlignItems(style.AlignCenter).
-					Gap(1),
-			},
-				iconNode,
-				kitex.Span(kitex.SpanProps{Style: style.S().Bold(true)}, kitex.Text(statusLabel)),
-			),
-			kitex.If(tm != nil, func() kitex.Node {
-				var label string
-				if isOpen() {
-					label = "▲ COLLAPSE"
-				} else {
-					label = "▼ EXPAND"
-				}
-				var textCol color.Color
-				if t != nil {
-					textCol = t.Color.Text.Secondary
-				}
-				return kitex.Span(kitex.SpanProps{
-					Style: style.S().Foreground(textCol),
-				}, kitex.Text(label))
-			}),
-		),
-		kitex.If(isOpen(), func() kitex.Node {
-			return kitex.Box(kitex.BoxProps{Style: bodyStyle},
-				kitex.If(argsStr != "", func() kitex.Node {
+				kitex.Box(kitex.BoxProps{
+					Style: style.S().
+						Display(style.DisplayFlex).
+						FlexDirection(style.FlexRow).
+						AlignItems(style.AlignCenter).
+						Gap(1),
+				},
+					iconNode,
+					kitex.Span(kitex.SpanProps{Style: style.S().Bold(true)}, kitex.Text(statusLabel)),
+				),
+				kitex.If(tm != nil, func() kitex.Node {
+					var label string
+					if isOpen() {
+						label = "▲ COLLAPSE"
+					} else {
+						label = "▼ EXPAND"
+					}
 					var textCol color.Color
-					var valCol color.Color
 					if t != nil {
 						textCol = t.Color.Text.Secondary
-						valCol = t.Color.Text.Tertiary
 					}
-					return kitex.Box(kitex.BoxProps{
-						Style: style.S().
-							MarginBottom(1).
-							Display(style.DisplayFlex).
-							FlexDirection(style.FlexColumn).
-							Gap(0),
-					},
-						kitex.Span(kitex.SpanProps{Style: style.S().Foreground(textCol).Bold(true)}, kitex.Text("Parameters:")),
-						kitex.Span(kitex.SpanProps{Style: style.S().Foreground(valCol).WhiteSpace(style.WhiteSpacePreWrap)}, kitex.Text(argsStr)),
-					)
+					return kitex.Span(kitex.SpanProps{
+						Style: style.S().Foreground(textCol),
+					}, kitex.Text(label))
 				}),
-				kitex.If(tm != nil, func() kitex.Node {
-					outText := getToolOutput(tm.Content)
-					return kitex.Fragment(
-						kitex.If(strings.TrimSpace(outText) != "", func() kitex.Node {
-							var borderCol color.Color
-							var textCol color.Color
-							if t != nil {
-								borderCol = t.Color.Border.Primary
-								textCol = t.Color.Text.Secondary
-							}
-							outputContainerStyle := style.S().
+			),
+			kitex.If(isOpen(), func() kitex.Node {
+				return kitex.Box(kitex.BoxProps{Style: bodyStyle},
+					kitex.If(argsStr != "", func() kitex.Node {
+						var textCol color.Color
+						var valCol color.Color
+						if t != nil {
+							textCol = t.Color.Text.Secondary
+							valCol = t.Color.Text.Tertiary
+						}
+						return kitex.Box(kitex.BoxProps{
+							Style: style.S().
+								MarginBottom(1).
 								Display(style.DisplayFlex).
 								FlexDirection(style.FlexColumn).
-								Border(true, style.SingleBorder(), borderCol).
-								Background(t.Color.Surface.BaseHover).
-								Padding(1).
-								Width(style.Percent(100)).
-								MaxWidth(style.Percent(100)).
-								Overflow(style.OverflowHidden).
-								Foreground(textCol).
-								WhiteSpace(style.WhiteSpacePreWrap)
+								Gap(0),
+						},
+							kitex.Span(kitex.SpanProps{Style: style.S().Foreground(textCol).Bold(true)}, kitex.Text("Parameters:")),
+							kitex.Span(kitex.SpanProps{Style: style.S().Foreground(valCol).WhiteSpace(style.WhiteSpacePreWrap)}, kitex.Text(argsStr)),
+						)
+					}),
+					kitex.If(tm != nil, func() kitex.Node {
 
-							cleanText := strings.ReplaceAll(outText, "\t", "    ")
-							return kitex.Box(kitex.BoxProps{Style: outputContainerStyle},
-								kitex.Text(cleanText),
-							)
-						}),
-						kitex.If(strings.TrimSpace(outText) == "", func() kitex.Node {
-							var textCol color.Color
-							if t != nil {
-								textCol = t.Color.Text.Tertiary
+						meta := tm.GetMetadata()
+						isTruncated := false
+						var cachedPath string
+						if meta != nil {
+							if tr, ok := meta["truncated"].(bool); ok && tr {
+								isTruncated = true
 							}
-							return kitex.Box(kitex.BoxProps{
-								Style: style.S().Foreground(textCol).Italic(true),
-							}, kitex.Text("(no output)"))
-						}),
-					)
-				}),
-			)
-		}),
+							if cp, ok := meta["full_content_path"].(string); ok {
+								cachedPath = cp
+							}
+						}
+						return kitex.Fragment(
+							kitex.If(isTruncated && cachedPath != "" && props.OnViewFullOutput != nil, func() kitex.Node {
+								return kitex.Box(kitex.BoxProps{
+									Style: style.S().MarginBottom(1),
+								},
+									components.Button(components.ButtonProps{
+										Variant: components.ButtonSolid,
+										Color:   components.ButtonPrimary,
+										OnClick: func() {
+											props.OnViewFullOutput(fmt.Sprintf("Full Output: %s", tc.Name), cachedPath)
+										},
+									}, kitex.Box(kitex.BoxProps{
+										Style: style.S().
+											Display(style.DisplayFlex).
+											FlexDirection(style.FlexRow).
+											AlignItems(style.AlignCenter).
+											Gap(1),
+									},
+										icon.Search,
+										kitex.Text("VIEW FULL OUTPUT IN MODAL"),
+									)),
+								)
+							}),
+							kitex.If(strings.TrimSpace(outText) != "", func() kitex.Node {
+								var borderCol color.Color
+								var textCol color.Color
+								if t != nil {
+									borderCol = t.Color.Border.Primary
+									textCol = t.Color.Text.Secondary
+								}
+								outputContainerStyle := style.S().
+									Display(style.DisplayFlex).
+									FlexDirection(style.FlexColumn).
+									Border(true, style.SingleBorder(), borderCol).
+									Background(t.Color.Surface.BaseHover).
+									Padding(1).
+									Width(style.Percent(100)).
+									MaxWidth(style.Percent(100)).
+									Overflow(style.OverflowHidden).
+									Foreground(textCol).
+									WhiteSpace(style.WhiteSpacePreWrap)
+
+								// Count lines and check length
+								lines := strings.Split(outText, "\n")
+								isInlineTruncated := len(lines) > 15 || len(outText) > 1000
+								var displayText string
+								if isInlineTruncated {
+									if len(lines) > 15 {
+										displayText = strings.Join(lines[:15], "\n") + "\n\n... (truncated for display, click button below to view full output)"
+									} else {
+										displayText = outText[:1000] + "\n\n... (truncated for display, click button below to view full output)"
+									}
+								} else {
+									displayText = outText
+								}
+
+								cleanText := strings.ReplaceAll(displayText, "\t", "    ")
+								return kitex.Fragment(
+									kitex.Box(kitex.BoxProps{Style: outputContainerStyle},
+										kitex.Text(cleanText),
+									),
+									kitex.If(isInlineTruncated, func() kitex.Node {
+										return kitex.Box(kitex.BoxProps{
+											Style: style.S().MarginTop(1),
+										},
+											components.Button(components.ButtonProps{
+												Variant: components.ButtonSolid,
+												Color:   components.ButtonPrimary,
+												OnClick: func() {
+													setShowFullOutput(true)
+												},
+											}, kitex.Box(kitex.BoxProps{
+												Style: style.S().
+													Display(style.DisplayFlex).
+													FlexDirection(style.FlexRow).
+													AlignItems(style.AlignCenter).
+													Gap(1),
+											},
+												icon.Search,
+												kitex.Text(" VIEW ENTIRE OUTPUT"),
+											)),
+										)
+									}),
+								)
+							}),
+							kitex.If(strings.TrimSpace(outText) == "", func() kitex.Node {
+								var textCol color.Color
+								if t != nil {
+									textCol = t.Color.Text.Tertiary
+								}
+								return kitex.Box(kitex.BoxProps{
+									Style: style.S().Foreground(textCol).Italic(true),
+								}, kitex.Text("(no output)"))
+							}),
+						)
+					}),
+				)
+			}),
+		),
+		components.Modal(components.ModalProps{
+			IsOpen:  showFullOutput(),
+			Title:   kitex.Text(fmt.Sprintf("Full Output: %s", tc.Name)),
+			OnClose: func() { setShowFullOutput(false) },
+		},
+			kitex.If(showFullOutput(), func() kitex.Node {
+				var borderCol color.Color
+				var textCol color.Color
+				if t != nil {
+					borderCol = t.Color.Border.Primary
+					textCol = t.Color.Text.Secondary
+				}
+				outputStyle := style.S().
+					Display(style.DisplayFlex).
+					FlexDirection(style.FlexColumn).
+					Border(true, style.SingleBorder(), borderCol).
+					Background(t.Color.Surface.BaseHover).
+					Padding(1).
+					Width(style.Percent(100)).
+					MaxWidth(style.Percent(100)).
+					Foreground(textCol).
+					WhiteSpace(style.WhiteSpacePreWrap)
+
+				cleanText := strings.ReplaceAll(outText, "\t", "    ")
+				return kitex.Box(kitex.BoxProps{Style: outputStyle},
+					kitex.Text(cleanText),
+				)
+			}),
+		),
 	)
 })
 
@@ -1929,9 +2108,10 @@ var Message = kitex.FC("Message", func(props MessageProps) kitex.Node {
 						dots = props.OneDotCurrentDots
 					}
 					node = ToolExecution(ToolExecutionProps{
-						ToolCall:    b,
-						ToolMessage: toolMsg,
-						CurrentDots: dots,
+						ToolCall:         b,
+						ToolMessage:      toolMsg,
+						CurrentDots:      dots,
+						OnViewFullOutput: props.OnViewFullOutput,
 					})
 				}
 			}
@@ -2048,6 +2228,7 @@ func renderBubbles(
 	onSelectHorizontal func(int),
 	onApprove func(),
 	onDeny func(),
+	onViewFullOutput func(title, cachedPath string),
 ) []kitex.Node {
 	if len(messages) == 0 {
 		return nil
@@ -2082,6 +2263,7 @@ func renderBubbles(
 				onSelectHorizontal,
 				onApprove,
 				onDeny,
+				onViewFullOutput,
 			); node != nil {
 				nodes = append(nodes, node)
 			}
@@ -2139,6 +2321,7 @@ func createBubbleNode(
 	onSelectHorizontal func(int),
 	onApprove func(),
 	onDeny func(),
+	onViewFullOutput func(title, cachedPath string),
 ) kitex.Node {
 	timestamp := ""
 	var msgAgentName string
@@ -2231,6 +2414,7 @@ func createBubbleNode(
 			OnSelectHorizontal:    onSelectHorizontal,
 			OnApprove:             onApprove,
 			OnDeny:                onDeny,
+			OnViewFullOutput:      onViewFullOutput,
 		})
 		if node != nil {
 			children = append(children, node)
@@ -2558,6 +2742,78 @@ var LspSuggestionWidget = kitex.FC("LspSuggestionWidget", func(props LspSuggesti
 					}, kitex.Text("Dismiss")),
 				),
 			}, kitex.Text(fmt.Sprintf("Enable %s language server for %s?", sug.ServerName, sug.Language))),
+		))
+	}
+
+	return kitex.Box(kitex.BoxProps{
+		Style: style.S().Display(style.DisplayFlex).FlexDirection(style.FlexColumn).MarginTop(1).MarginBottom(1).AlignSelf(style.AlignStart).Width(style.Percent(100)),
+	}, boxes...)
+})
+
+type McpRequestWidgetProps struct {
+	Requests  []api.PendingMcpRequest
+	OnResolve func(reqID string, action string, code string, content map[string]interface{})
+}
+
+var McpRequestWidget = kitex.FC("McpRequestWidget", func(props McpRequestWidgetProps) kitex.Node {
+	if len(props.Requests) == 0 {
+		return nil
+	}
+
+	var boxes []kitex.Node
+	for _, req := range props.Requests {
+		reqID := req.ID
+		reqServer := req.ServerName
+		reqType := req.Type
+		reqURL := req.URL
+
+		var msgText string
+		if reqType == "oauth" {
+			msgText = fmt.Sprintf("MCP Server %q needs browser authentication.", reqServer)
+		} else {
+			msgText = fmt.Sprintf("MCP %q: %s", reqServer, req.Message)
+		}
+
+		boxes = append(boxes, kitex.Box(kitex.BoxProps{
+			Style: style.S().
+				MarginBottom(1).
+				Width(style.Percent(100)).
+				MaxWidth(style.Percent(90)),
+		},
+			components.Alert(components.AlertProps{
+				Severity: components.AlertWarning,
+				Variant:  components.AlertOutlined,
+				ShowIcon: true,
+				Action: kitex.Box(kitex.BoxProps{
+					Style: style.S().Display(style.DisplayFlex).FlexDirection(style.FlexRow).Gap(1),
+				},
+					kitex.If(reqType == "oauth", func() kitex.Node {
+						return components.Button(components.ButtonProps{
+							Variant: components.ButtonSolid,
+							Color:   components.ButtonPrimary,
+							OnClick: func() {
+								_ = mcp.OpenBrowser(reqURL)
+							},
+						}, kitex.Text("Open Link"))
+					}),
+					kitex.If(reqType == "elicitation", func() kitex.Node {
+						return components.Button(components.ButtonProps{
+							Variant: components.ButtonSolid,
+							Color:   components.ButtonSuccess,
+							OnClick: func() {
+								props.OnResolve(reqID, "accept", "", nil)
+							},
+						}, kitex.Text("Accept"))
+					}),
+					components.Button(components.ButtonProps{
+						Variant: components.ButtonText,
+						Color:   components.ButtonBase,
+						OnClick: func() {
+							props.OnResolve(reqID, "cancel", "", nil)
+						},
+					}, kitex.Text("Cancel")),
+				),
+			}, kitex.Text(msgText)),
 		))
 	}
 

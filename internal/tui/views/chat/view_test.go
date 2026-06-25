@@ -86,6 +86,10 @@ func (m *mockClient) SubmitAuthorizationDecision(ctx context.Context, req api.Su
 	return &api.SubmitAuthorizationDecisionResponse{Success: true}, nil
 }
 
+func (m *mockClient) ResolveMcpRequest(ctx context.Context, req api.ResolveMcpRequest) (*api.ResolveMcpResponse, error) {
+	return &api.ResolveMcpResponse{Success: true}, nil
+}
+
 func (m *mockClient) GetTokenAnalytics(ctx context.Context, req api.GetTokenAnalyticsRequest) (*api.GetTokenAnalyticsResponse, error) {
 	return &api.GetTokenAnalyticsResponse{}, nil
 }
@@ -104,6 +108,10 @@ func (m *mockClient) GetLspStatus(ctx context.Context, req api.GetLspStatusReque
 
 func (m *mockClient) RestartLsp(ctx context.Context, req api.RestartLspRequest) (*api.RestartLspResponse, error) {
 	return &api.RestartLspResponse{Success: true}, nil
+}
+
+func (m *mockClient) RestartMcp(ctx context.Context, req api.RestartMcpRequest) (*api.RestartMcpResponse, error) {
+	return &api.RestartMcpResponse{Success: true}, nil
 }
 
 func (m *mockClient) GetLspDiagnosticCounts(ctx context.Context, req api.GetLspDiagnosticCountsRequest) (*api.GetLspDiagnosticCountsResponse, error) {
@@ -128,6 +136,14 @@ func (m *mockClient) GetFileJournal(ctx context.Context, req api.GetFileJournalR
 
 func (m *mockClient) RevertFile(ctx context.Context, req api.RevertFileRequest) (*api.RevertFileResponse, error) {
 	return &api.RevertFileResponse{Success: true}, nil
+}
+
+func (m *mockClient) GetCachedFile(ctx context.Context, req api.GetCachedFileRequest) (*api.GetCachedFileResponse, error) {
+	return &api.GetCachedFileResponse{Content: "mock cached file content"}, nil
+}
+
+func (m *mockClient) GetMcpStatus(ctx context.Context, req api.GetMcpStatusRequest) (*api.GetMcpStatusResponse, error) {
+	return &api.GetMcpStatusResponse{}, nil
 }
 
 func TestChatView(t *testing.T) {

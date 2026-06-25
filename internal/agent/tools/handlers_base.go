@@ -8,6 +8,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/agent/permissions"
 	"github.com/masterkeysrd/tasksmith/internal/core/lsp"
 	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
+	"github.com/masterkeysrd/tasksmith/internal/mcp"
 	"github.com/masterkeysrd/tasksmith/internal/session/filetrack"
 )
 
@@ -33,6 +34,7 @@ type ToolHandlers struct {
 	PermissionManager permissions.PermissionManager
 	LspManager        *lsp.Manager
 	FileTracker       filetrack.FileTracker
+	McpManager        *mcp.Manager
 }
 
 // NewHandlers creates a new ToolHandlers instance with the given dependencies.
@@ -71,6 +73,12 @@ func (h *ToolHandlers) WithLspManager(mgr *lsp.Manager) *ToolHandlers {
 // WithFileTracker configures the FileTracker on ToolHandlers.
 func (h *ToolHandlers) WithFileTracker(ft filetrack.FileTracker) *ToolHandlers {
 	h.FileTracker = ft
+	return h
+}
+
+// WithMcpManager configures the McpManager on ToolHandlers.
+func (h *ToolHandlers) WithMcpManager(mgr *mcp.Manager) *ToolHandlers {
+	h.McpManager = mgr
 	return h
 }
 

@@ -286,6 +286,30 @@ func LoomTools(handlers *ToolHandlers) ([]*tool.Tool, error) {
 		list = append(list, t)
 	}
 
+	if res, ok := resMap["mcp_list_resources"]; ok {
+		var opts []tool.Option
+		if res.Spec.Annotations != nil {
+			opts = append(opts, tool.WithAnnotation(tool.Annotation{
+				IsOpenWorld:  res.Spec.Annotations.IsOpenWorld,
+				IsDangerous:  res.Spec.Annotations.IsDangerous,
+				IsReadOnly:   res.Spec.Annotations.IsReadOnly,
+				IsIdempotent: res.Spec.Annotations.IsIdempotent,
+				UserHint:     res.Spec.Annotations.UserHint,
+			}))
+		}
+		t, err := tool.New(
+			"mcp_list_resources",
+			res.Metadata.DisplayName,
+			res.Metadata.Description,
+			handlers.McpListResources,
+			opts...,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create tool mcp_list_resources: %w", err)
+		}
+		list = append(list, t)
+	}
+
 	if res, ok := resMap["mcp_read_resources"]; ok {
 		var opts []tool.Option
 		if res.Spec.Annotations != nil {

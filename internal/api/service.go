@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -11,14 +12,18 @@ import (
 	"time"
 
 	"github.com/masterkeysrd/loom/message"
+	"github.com/masterkeysrd/loom/tool"
 	"github.com/masterkeysrd/tasksmith/internal/agent/permissions"
 	"github.com/masterkeysrd/tasksmith/internal/agent/tools"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	"github.com/masterkeysrd/tasksmith/internal/core/lsp"
+	"github.com/masterkeysrd/tasksmith/internal/mcp"
 	"github.com/masterkeysrd/tasksmith/internal/metrics"
 	"github.com/masterkeysrd/tasksmith/internal/session"
 	"github.com/masterkeysrd/tasksmith/internal/workspace"
 	"github.com/masterkeysrd/warp"
+	"github.com/modelcontextprotocol/go-sdk/auth"
+	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 type Workspace interface {
@@ -27,6 +32,7 @@ type Workspace interface {
 	Providers() []*warp.ModelProvider
 	ProvidersPresets() []*warp.ModelProvider
 	ToolsPresets() []*warp.Tool
+	MCPs() []*warp.MCP
 	Initialize(ctx context.Context, opts workspace.InitializationOptions) error
 	GetWorkspaceConfig(ctx context.Context) (workspace.WorkspaceConfig, error)
 }
@@ -451,9 +457,21 @@ func (s *Service) GetSessionState(ctx context.Context, req GetSessionStateReques
 				})
 			}
 		}
+		var apiMcpRequests []PendingMcpRequest
+		for _, pr := range mcp.ActiveRequests.List() {
+			apiMcpRequests = append(apiMcpRequests, PendingMcpRequest{
+				ID:         pr.ID,
+				Type:       pr.Type,
+				ServerName: pr.ServerName,
+				Message:    pr.Message,
+				URL:        pr.URL,
+				Schema:     pr.Schema,
+			})
+		}
 		return &GetSessionStateResponse{
 			Status:                "idle",
 			PendingLspSuggestions: apiSuggestions,
+			PendingMcpRequests:    apiMcpRequests,
 		}, nil
 	}
 	status, errStr, isGen, pendingAuths := s.sm.GetSessionState(ctx, req.SessionID)
@@ -495,6 +513,18 @@ func (s *Service) GetSessionState(ctx context.Context, req GetSessionStateReques
 		}
 	}
 
+	var apiMcpRequests []PendingMcpRequest
+	for _, pr := range mcp.ActiveRequests.List() {
+		apiMcpRequests = append(apiMcpRequests, PendingMcpRequest{
+			ID:         pr.ID,
+			Type:       pr.Type,
+			ServerName: pr.ServerName,
+			Message:    pr.Message,
+			URL:        pr.URL,
+			Schema:     pr.Schema,
+		})
+	}
+
 	return &GetSessionStateResponse{
 		Status:                string(status),
 		Error:                 errStr,
@@ -503,7 +533,47 @@ func (s *Service) GetSessionState(ctx context.Context, req GetSessionStateReques
 		Todos:                 apiTodos,
 		PendingAuthorizations: pendingAuths,
 		PendingLspSuggestions: apiSuggestions,
+		PendingMcpRequests:    apiMcpRequests,
 	}, nil
+}
+
+// ResolveMcpRequest resolves a pending MCP authorization or elicitation request.
+func (s *Service) ResolveMcpRequest(ctx context.Context, req ResolveMcpRequest) (*ResolveMcpResponse, error) {
+	pr := mcp.ActiveRequests.Get(req.RequestID)
+	if pr == nil {
+		return nil, fmt.Errorf("pending MCP request %q not found", req.RequestID)
+	}
+
+	if pr.Type == "oauth" {
+		if req.Action == "cancel" {
+			pr.ResponseChan <- fmt.Errorf("oauth flow cancelled by user")
+			return &ResolveMcpResponse{Success: true}, nil
+		}
+		// If custom manual authorization code is provided, try returning it
+		if req.Code != "" {
+			pr.ResponseChan <- &auth.AuthorizationResult{
+				Code:  req.Code,
+				State: req.State,
+			}
+			return &ResolveMcpResponse{Success: true}, nil
+		}
+		pr.ResponseChan <- fmt.Errorf("oauth flow cancelled by user")
+		return &ResolveMcpResponse{Success: true}, nil
+	} else if pr.Type == "elicitation" {
+		if req.Action == "reject" || req.Action == "cancel" {
+			pr.ResponseChan <- fmt.Errorf("elicitation cancelled by user")
+			return &ResolveMcpResponse{Success: true}, nil
+		}
+
+		res := &mcpsdk.ElicitResult{
+			Action:  req.Action,
+			Content: req.Content,
+		}
+		pr.ResponseChan <- res
+		return &ResolveMcpResponse{Success: true}, nil
+	}
+
+	return nil, fmt.Errorf("unknown pending request type %q", pr.Type)
 }
 
 // SubmitAuthorizationDecision submits a user permission decision and resumes the agent.
@@ -626,6 +696,162 @@ func (s *Service) GetLspStatus(ctx context.Context, req GetLspStatusRequest) (*G
 		})
 	}
 	return &GetLspStatusResponse{Servers: servers}, nil
+}
+
+// GetMcpStatus retrieves the status of all configured MCP servers.
+func (s *Service) GetMcpStatus(ctx context.Context, req GetMcpStatusRequest) (*GetMcpStatusResponse, error) {
+	mcpMgr := s.sm.McpManager()
+	if mcpMgr == nil {
+		return &GetMcpStatusResponse{Servers: []McpServerInfo{}}, nil
+	}
+
+	mcps := s.ws.MCPs()
+	var servers []McpServerInfo
+
+	for _, mcpResource := range mcps {
+		serverName := mcpResource.GetName()
+		spec := mcpResource.Spec
+
+		var transport string
+		if strings.ToLower(spec.Type) == "sse" {
+			transport = "http"
+		} else {
+			transport = "stdio"
+		}
+
+		var envKeys []string
+		for k := range spec.Env {
+			envKeys = append(envKeys, k)
+		}
+		sort.Strings(envKeys)
+
+		configYAML, _ := warp.Format(mcpResource)
+
+		info := McpServerInfo{
+			Name:        serverName,
+			Type:        transport,
+			Command:     spec.Command,
+			URL:         spec.Endpoint,
+			EnvKeys:     envKeys,
+			Description: mcpResource.Metadata.Description,
+			Config:      string(configYAML),
+		}
+
+		if spec.Annotations != nil {
+			info.IsDangerous = spec.Annotations.IsDangerous
+			info.IsReadOnly = spec.Annotations.IsReadOnly
+			info.IsOpenWorld = spec.Annotations.IsOpenWorld
+			info.IsIdempotent = spec.Annotations.IsIdempotent
+			info.UserHint = spec.Annotations.UserHint
+		}
+
+		if mcpMgr.MultiClient() != nil {
+			// Try to query tools to see if it is running and what tools it exposes
+			fetchedTools, err := mcpMgr.MultiClient().Tools(ctx, serverName)
+			if err != nil {
+				info.IsRunning = false
+				info.Error = err.Error()
+			} else {
+				info.IsRunning = true
+				cleanName := func(s string) string {
+					return strings.ReplaceAll(s, "-", "_")
+				}
+				sNameCleaned := cleanName(serverName)
+				for _, lt := range fetchedTools {
+					var anno tool.Annotation
+					if mcpResource.Spec.Annotations != nil {
+						anno.IsDangerous = mcpResource.Spec.Annotations.IsDangerous
+						anno.IsOpenWorld = mcpResource.Spec.Annotations.IsOpenWorld
+						anno.IsReadOnly = mcpResource.Spec.Annotations.IsReadOnly
+						anno.IsIdempotent = mcpResource.Spec.Annotations.IsIdempotent
+						anno.UserHint = mcpResource.Spec.Annotations.UserHint
+					}
+					if override, ok := mcpResource.Spec.Overrides[lt.Definition.Name]; ok {
+						anno.IsDangerous = override.IsDangerous
+						anno.IsOpenWorld = override.IsOpenWorld
+						anno.IsReadOnly = override.IsReadOnly
+						anno.IsIdempotent = override.IsIdempotent
+						anno.UserHint = override.UserHint
+					}
+
+					info.Tools = append(info.Tools, McpTool{
+						Name:         fmt.Sprintf("mcp__%s__%s", sNameCleaned, lt.Definition.Name),
+						Description:  lt.Definition.Description,
+						IsDangerous:  anno.IsDangerous,
+						IsReadOnly:   anno.IsReadOnly,
+						IsOpenWorld:  anno.IsOpenWorld,
+						IsIdempotent: anno.IsIdempotent,
+						UserHint:     anno.UserHint,
+					})
+				}
+
+				if srvInfo, err := mcpMgr.MultiClient().Info(ctx, serverName); err == nil && srvInfo != nil {
+					info.Title = srvInfo.Title
+					info.Version = srvInfo.Version
+					info.WebsiteURL = srvInfo.WebsiteURL
+					info.Instructions = srvInfo.Instructions
+					info.Capabilities = McpCapabilities{
+						Completions: srvInfo.Capabilities.Completions,
+						Logging:     srvInfo.Capabilities.Logging,
+						Prompts:     srvInfo.Capabilities.Prompts != nil,
+						Resources:   srvInfo.Capabilities.Resources != nil,
+						Tools:       srvInfo.Capabilities.Tools != nil,
+					}
+
+					if srvInfo.Capabilities.Prompts != nil {
+						if fetchedPrompts, err := mcpMgr.MultiClient().Prompts(ctx, serverName); err == nil {
+							for _, p := range fetchedPrompts {
+								var args []McpPromptArgument
+								for _, arg := range p.Arguments {
+									args = append(args, McpPromptArgument{
+										Name:        arg.Name,
+										Title:       arg.Title,
+										Description: arg.Description,
+										Required:    arg.Required,
+									})
+								}
+								info.Prompts = append(info.Prompts, McpPrompt{
+									Name:        p.Name,
+									Title:       p.Title,
+									Description: p.Description,
+									Arguments:   args,
+								})
+							}
+						}
+					}
+
+					if srvInfo.Capabilities.Resources != nil {
+						if fetchedResources, err := mcpMgr.MultiClient().Resources(ctx, serverName); err == nil {
+							for _, r := range fetchedResources {
+								info.Resources = append(info.Resources, McpResource{
+									Name:        r.Name,
+									Title:       r.Title,
+									Description: r.Description,
+									MIMEType:    r.MIMEType,
+									URI:         r.URI,
+								})
+							}
+						}
+						if fetchedTemplates, err := mcpMgr.MultiClient().ResourceTemplates(ctx, serverName); err == nil {
+							for _, rt := range fetchedTemplates {
+								info.ResourceTemplates = append(info.ResourceTemplates, McpResourceTemplate{
+									Name:        rt.Name,
+									Title:       rt.Title,
+									Description: rt.Description,
+									MIMEType:    rt.MIMEType,
+									URITemplate: rt.URITemplate,
+								})
+							}
+						}
+					}
+				}
+			}
+		}
+
+		servers = append(servers, info)
+	}
+
+	return &GetMcpStatusResponse{Servers: servers}, nil
 }
 
 // RestartLsp shuts down and recreates all active LSP clients for the workspace.
@@ -939,4 +1165,45 @@ func (s *Service) RevertFile(ctx context.Context, req RevertFileRequest) (*Rever
 	}
 
 	return &RevertFileResponse{Success: true}, nil
+}
+
+// GetCachedFile returns the contents of a session-cached file.
+func (s *Service) GetCachedFile(ctx context.Context, req GetCachedFileRequest) (*GetCachedFileResponse, error) {
+	cfg, err := s.ws.GetWorkspaceConfig(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get workspace config: %w", err)
+	}
+
+	storage := session.NewLocalFileStorage(cfg.CWD, req.SessionID)
+	rc, err := storage.Get(ctx, req.Path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get cached file: %w", err)
+	}
+	defer rc.Close()
+
+	data, err := io.ReadAll(rc)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read cached file: %w", err)
+	}
+
+	return &GetCachedFileResponse{Content: string(data)}, nil
+}
+
+// RestartMcp restarts a specific MCP server by name.
+func (s *Service) RestartMcp(ctx context.Context, req RestartMcpRequest) (*RestartMcpResponse, error) {
+	mcpMgr := s.sm.McpManager()
+	if mcpMgr == nil {
+		return nil, fmt.Errorf("MCP manager is not initialized")
+	}
+
+	if mcpMgr.MultiClient() == nil {
+		return nil, fmt.Errorf("MCP MultiClient is not initialized")
+	}
+
+	err := mcpMgr.MultiClient().Restart(ctx, req.ServerName)
+	if err != nil {
+		return &RestartMcpResponse{Success: false, Error: err.Error()}, nil
+	}
+
+	return &RestartMcpResponse{Success: true}, nil
 }

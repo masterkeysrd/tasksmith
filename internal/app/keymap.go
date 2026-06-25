@@ -25,6 +25,10 @@ func (app *Application) InitializeKeymap() {
 		active.SetModal("lspinfo")
 	}, keymap.Description("Open LSP Panel"))
 
+	keymap.Set([]mode.Mode{mode.Normal}, "<C-p>", func(ctx context.Context) {
+		active.SetModal("mcp")
+	}, keymap.Description("Open MCP Panel"))
+
 	// Normal Mode Keybindings
 	keymap.Set([]mode.Mode{mode.Normal}, "q", func(ctx context.Context) {
 		if active.GetScreen() == "analytics" {

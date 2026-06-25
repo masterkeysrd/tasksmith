@@ -121,6 +121,24 @@ func (w *Workspace) Providers() []*warp.ModelProvider {
 	return providers
 }
 
+func (w *Workspace) MCPs() []*warp.MCP {
+	resolver := w.resolver()
+	if resolver == nil {
+		return nil
+	}
+
+	resources := resolver.ListResources(warp.QueryOptions{
+		Kinds: []warp.Kind{warp.KindMCP},
+	})
+	mcps := make([]*warp.MCP, 0, len(resources))
+	for _, r := range resources {
+		if mcp, ok := r.(*warp.MCP); ok {
+			mcps = append(mcps, mcp)
+		}
+	}
+	return mcps
+}
+
 func (w *Workspace) ProvidersPresets() []*warp.ModelProvider {
 	var providers []*warp.ModelProvider
 	err := fs.WalkDir(presetFS, ".", func(path string, d fs.DirEntry, err error) error {

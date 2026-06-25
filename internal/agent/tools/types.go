@@ -373,6 +373,36 @@ type LspSearchOutputResultsItemRangeStart struct {
 	Line int `json:"line,omitempty" jsonschema:"Zero-based line number."`
 }
 
+// McpListResourcesArgs defines the arguments for the "mcp_list_resources" tool.
+//
+// List resources from MCP servers.
+type McpListResourcesArgs struct {
+	// ServerName: Optional MCP server name to list resources from. If omitted, lists resources from all configured/running servers.
+	ServerName string `json:"server_name,omitempty" jsonschema:"Optional MCP server name to list resources from. If omitted, lists resources from all configured/running servers."`
+}
+
+// McpListResourcesOutput defines the output returned by the "mcp_list_resources" tool.
+type McpListResourcesOutput struct {
+	// Error: Error message if the operation failed.
+	Error     string                                `json:"error,omitempty" jsonschema:"Error message if the operation failed."`
+	Resources []McpListResourcesOutputResourcesItem `json:"resources,omitempty"`
+	// Success: Whether listing the resources succeeded.
+	Success bool `json:"success,omitempty" jsonschema:"Whether listing the resources succeeded."`
+}
+
+type McpListResourcesOutputResourcesItem struct {
+	// Description: The resource description.
+	Description string `json:"description,omitempty" jsonschema:"The resource description."`
+	// MimeType: The resource MIME type.
+	MimeType string `json:"mime_type,omitempty" jsonschema:"The resource MIME type."`
+	// Name: The resource name.
+	Name string `json:"name,omitempty" jsonschema:"The resource name."`
+	// Server: The MCP server name.
+	Server string `json:"server,omitempty" jsonschema:"The MCP server name."`
+	// Uri: The resource URI.
+	Uri string `json:"uri,omitempty" jsonschema:"The resource URI."`
+}
+
 // McpReadResourcesArgs defines the arguments for the "mcp_read_resources" tool.
 //
 // Read resources from MCP.

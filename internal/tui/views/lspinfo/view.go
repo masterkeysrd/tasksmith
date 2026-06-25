@@ -19,14 +19,14 @@ type ViewProps struct{}
 
 var View = kitex.FC("LspInfoView", func(props ViewProps) kitex.Node {
 	isOpen := active.UseModal() == "lspinfo"
-	if !isOpen {
-		return nil
-	}
-
 	t := theme.UseTheme()
 	client := tuiapi.UseClient()
 	statusQuery := queries.UseGetLspStatus()
 	isRestarting, setRestarting := kitex.UseState(false)
+
+	if !isOpen {
+		return nil
+	}
 
 	var content kitex.Node
 

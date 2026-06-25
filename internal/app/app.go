@@ -79,6 +79,10 @@ func (app *Application) Run(ctx context.Context) error {
 	})
 
 	app.ws = workspace.New(app.opts.CWD)
+	if err := app.ws.Load(ctx); err != nil {
+		return fmt.Errorf("failed to load workspace: %w", err)
+	}
+
 	metricsStore := metrics.NewStore(metricsDB)
 	sessionMgr := session.NewManager(session.ManagerConfig{
 		Store:        store,
@@ -86,15 +90,17 @@ func (app *Application) Run(ctx context.Context) error {
 		MetricsStore: metricsStore,
 		LspManager:   app.lspManager,
 	})
+	app.AddCloser(func(ctx context.Context) error {
+		if sessionMgr.McpManager() != nil {
+			return sessionMgr.McpManager().Close()
+		}
+		return nil
+	})
 	app.api = api.NewService(app.ws, sessionMgr, metricsStore, app.lspManager)
 
 	log.Info("Starting TaskSmith application",
 		log.String("cwd", app.opts.CWD),
 		log.Any("log_level", app.opts.LogLevel))
-
-	if err := app.ws.Load(ctx); err != nil {
-		return fmt.Errorf("failed to load workspace: %w", err)
-	}
 
 	go func() {
 		if err := app.lspManager.RestartClient(context.Background(), app.opts.CWD); err != nil {

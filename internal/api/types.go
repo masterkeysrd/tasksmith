@@ -201,6 +201,15 @@ type RunningTaskInfo struct {
 	Details string `json:"details,omitempty"`
 }
 
+type PendingMcpRequest struct {
+	ID         string      `json:"id"`
+	Type       string      `json:"type"` // "oauth" or "elicitation"
+	ServerName string      `json:"server_name"`
+	Message    string      `json:"message"`
+	URL        string      `json:"url,omitempty"`
+	Schema     interface{} `json:"schema,omitempty"`
+}
+
 type GetSessionStateResponse struct {
 	Status                string                             `json:"status"`
 	Error                 string                             `json:"error,omitempty"`
@@ -209,6 +218,20 @@ type GetSessionStateResponse struct {
 	Todos                 []Todo                             `json:"todos,omitempty"`
 	PendingAuthorizations []permissions.AuthorizationRequest `json:"pending_authorizations,omitempty"`
 	PendingLspSuggestions []LspSuggestion                    `json:"pending_lsp_suggestions,omitempty"`
+	PendingMcpRequests    []PendingMcpRequest                `json:"pending_mcp_requests,omitempty"`
+}
+
+type ResolveMcpRequest struct {
+	RequestID string                 `json:"request_id"`
+	Action    string                 `json:"action"`            // "accept", "reject" (for elicitation) or "cancel"
+	Content   map[string]interface{} `json:"content,omitempty"` // Form content for elicitation
+	Code      string                 `json:"code,omitempty"`    // For OAuth fallback code
+	State     string                 `json:"state,omitempty"`   // For OAuth fallback state
+}
+
+type ResolveMcpResponse struct {
+	Success bool   `json:"success"`
+	Error   string `json:"error,omitempty"`
 }
 
 type LspSuggestion struct {
@@ -259,6 +282,86 @@ type RestartLspRequest struct{}
 
 type RestartLspResponse struct {
 	Success bool `json:"success"`
+}
+
+type GetMcpStatusRequest struct{}
+
+type McpCapabilities struct {
+	Completions bool `json:"completions"`
+	Logging     bool `json:"logging"`
+	Prompts     bool `json:"prompts"`
+	Resources   bool `json:"resources"`
+	Tools       bool `json:"tools"`
+}
+
+type McpTool struct {
+	Name         string `json:"name"`
+	Description  string `json:"description"`
+	IsDangerous  bool   `json:"is_dangerous,omitempty"`
+	IsReadOnly   bool   `json:"is_read_only,omitempty"`
+	IsOpenWorld  bool   `json:"is_open_world,omitempty"`
+	IsIdempotent bool   `json:"is_idempotent,omitempty"`
+	UserHint     string `json:"user_hint,omitempty"`
+}
+
+type McpPromptArgument struct {
+	Name        string `json:"name"`
+	Title       string `json:"title,omitempty"`
+	Description string `json:"description,omitempty"`
+	Required    bool   `json:"required"`
+}
+
+type McpPrompt struct {
+	Name        string              `json:"name"`
+	Title       string              `json:"title,omitempty"`
+	Description string              `json:"description,omitempty"`
+	Arguments   []McpPromptArgument `json:"arguments,omitempty"`
+}
+
+type McpResource struct {
+	Name        string `json:"name"`
+	Title       string `json:"title,omitempty"`
+	Description string `json:"description,omitempty"`
+	MIMEType    string `json:"mime_type,omitempty"`
+	URI         string `json:"uri"`
+}
+
+type McpResourceTemplate struct {
+	Name        string `json:"name"`
+	Title       string `json:"title,omitempty"`
+	Description string `json:"description,omitempty"`
+	MIMEType    string `json:"mime_type,omitempty"`
+	URITemplate string `json:"uri_template"`
+}
+
+type McpServerInfo struct {
+	Name              string                `json:"name"`
+	Type              string                `json:"type"`
+	Command           []string              `json:"command,omitempty"`
+	URL               string                `json:"url,omitempty"`
+	IsRunning         bool                  `json:"is_running"`
+	Tools             []McpTool             `json:"tools,omitempty"`
+	Prompts           []McpPrompt           `json:"prompts,omitempty"`
+	Resources         []McpResource         `json:"resources,omitempty"`
+	ResourceTemplates []McpResourceTemplate `json:"resource_templates,omitempty"`
+	Error             string                `json:"error,omitempty"`
+	Title             string                `json:"title,omitempty"`
+	Version           string                `json:"version,omitempty"`
+	WebsiteURL        string                `json:"website_url,omitempty"`
+	Instructions      string                `json:"instructions,omitempty"`
+	Capabilities      McpCapabilities       `json:"capabilities,omitempty"`
+	EnvKeys           []string              `json:"env_keys,omitempty"`
+	Description       string                `json:"description,omitempty"`
+	IsDangerous       bool                  `json:"is_dangerous,omitempty"`
+	IsReadOnly        bool                  `json:"is_read_only,omitempty"`
+	IsOpenWorld       bool                  `json:"is_open_world,omitempty"`
+	IsIdempotent      bool                  `json:"is_idempotent,omitempty"`
+	UserHint          string                `json:"user_hint,omitempty"`
+	Config            string                `json:"config,omitempty"`
+}
+
+type GetMcpStatusResponse struct {
+	Servers []McpServerInfo `json:"servers"`
 }
 
 type SubmitAuthorizationDecisionRequest struct {
@@ -377,6 +480,24 @@ type RevertFileRequest struct {
 }
 
 type RevertFileResponse struct {
+	Success bool   `json:"success"`
+	Error   string `json:"error,omitempty"`
+}
+
+type GetCachedFileRequest struct {
+	SessionID string `json:"session_id"`
+	Path      string `json:"path"`
+}
+
+type GetCachedFileResponse struct {
+	Content string `json:"content"`
+}
+
+type RestartMcpRequest struct {
+	ServerName string `json:"server_name"`
+}
+
+type RestartMcpResponse struct {
 	Success bool   `json:"success"`
 	Error   string `json:"error,omitempty"`
 }

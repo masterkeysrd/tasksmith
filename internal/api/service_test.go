@@ -21,6 +21,7 @@ type mockWorkspace struct {
 	providers        []*warp.ModelProvider
 	providersPresets []*warp.ModelProvider
 	toolsPresets     []*warp.Tool
+	mcps             []*warp.MCP
 	cwd              string
 }
 
@@ -42,6 +43,10 @@ func (m *mockWorkspace) ProvidersPresets() []*warp.ModelProvider {
 
 func (m *mockWorkspace) ToolsPresets() []*warp.Tool {
 	return m.toolsPresets
+}
+
+func (m *mockWorkspace) MCPs() []*warp.MCP {
+	return m.mcps
 }
 
 func (m *mockWorkspace) Initialize(ctx context.Context, opts workspace.InitializationOptions) error {
