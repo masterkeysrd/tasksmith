@@ -33,6 +33,8 @@ type Client interface {
 	GetLspStatus(ctx context.Context, req api.GetLspStatusRequest) (*api.GetLspStatusResponse, error)
 	GetLspDiagnosticCounts(ctx context.Context, req api.GetLspDiagnosticCountsRequest) (*api.GetLspDiagnosticCountsResponse, error)
 	RestartLsp(ctx context.Context, req api.RestartLspRequest) (*api.RestartLspResponse, error)
+	GetLspDiagnostics(ctx context.Context, req api.GetLspDiagnosticsRequest) (*api.GetLspDiagnosticsResponse, error)
+	LspSearch(ctx context.Context, req api.LspSearchRequest) (*api.LspSearchResponse, error)
 }
 
 var clientCtx = kitex.CreateContext[Client](nil)

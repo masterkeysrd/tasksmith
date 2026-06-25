@@ -429,7 +429,12 @@ func (m *Manager) sendMessage(ctx context.Context, sessionID string, text string
 
 	// Load existing todos from database to initialize graph state if empty
 	existingTodos, _ := m.ListTodos(runCtx, sessionID)
-	cfg, _ := m.ws.GetWorkspaceConfig(runCtx)
+	var cwd string
+	if m.ws != nil {
+		if cfg, err := m.ws.GetWorkspaceConfig(runCtx); err == nil {
+			cwd = cfg.CWD
+		}
+	}
 
 	// Setup input command to load current state and append new message
 	inputCmd := graph.Update[agentgraph.AgentState](func(state agentgraph.AgentState) agentgraph.AgentState {
@@ -437,7 +442,6 @@ func (m *Manager) sendMessage(ctx context.Context, sessionID string, text string
 			state.Todos = existingTodos
 		}
 
-		cwd := cfg.CWD
 		agentgraph.InjectReminders(runCtx, msg, state, m.lspManager, cwd)
 
 		state.Messages = append(state.Messages, msg)

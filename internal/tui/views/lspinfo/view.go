@@ -58,8 +58,7 @@ var View = kitex.FC("LspInfoView", func(props ViewProps) kitex.Node {
 				Style: style.S().
 					Display(style.DisplayFlex).
 					FlexDirection(style.FlexColumn).
-					MarginBottom(1).
-					Padding(1).
+					Padding(0, 1).
 					BorderLeft(true, style.SingleBorder(), statusColor).
 					Background(t.Color.Surface.BaseHover),
 			},
@@ -77,7 +76,7 @@ var View = kitex.FC("LspInfoView", func(props ViewProps) kitex.Node {
 					}, kitex.Text(statusStr)),
 				),
 				kitex.Box(kitex.BoxProps{
-					Style: style.S().Display(style.DisplayFlex).FlexDirection(style.FlexRow).MarginTop(1).Gap(1),
+					Style: style.S().Display(style.DisplayFlex).FlexDirection(style.FlexRow).Gap(1),
 				},
 					kitex.Box(kitex.BoxProps{Style: style.S().Foreground(t.Color.Text.Tertiary)}, kitex.Text("Command:")),
 					kitex.Box(kitex.BoxProps{Style: style.S().Foreground(t.Color.Text.Secondary)}, kitex.Text(strings.Join(server.Command, " "))),
@@ -144,3 +143,4 @@ var View = kitex.FC("LspInfoView", func(props ViewProps) kitex.Node {
 		),
 	)
 })
+

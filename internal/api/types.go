@@ -298,3 +298,36 @@ type GetTokenAnalyticsResponse struct {
 	Tools            []ToolAnalytics           `json:"tools"`
 	ProvidersList    []string                  `json:"providers_list"`
 }
+
+type GetLspDiagnosticsRequest struct {
+	Path string `json:"path"`
+}
+
+type LspDiagnosticItem struct {
+	Path     string `json:"path"`
+	Message  string `json:"message"`
+	Severity string `json:"severity"`
+	Line     int    `json:"line"`
+	Char     int    `json:"character"`
+}
+
+type GetLspDiagnosticsResponse struct {
+	Diagnostics []LspDiagnosticItem `json:"diagnostics"`
+}
+
+type LspSearchRequest struct {
+	Query string `json:"query"`
+}
+
+type LspSearchItem struct {
+	Name          string `json:"name"`
+	Kind          string `json:"kind"`
+	Path          string `json:"path"`
+	Line          int    `json:"line"`
+	Char          int    `json:"character"`
+	ContainerName string `json:"container_name,omitempty"`
+}
+
+type LspSearchResponse struct {
+	Results []LspSearchItem `json:"results"`
+}

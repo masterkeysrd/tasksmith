@@ -3090,3 +3090,316 @@ var AuthorizationWidget = kitex.FC("AuthorizationWidget", func(props Authorizati
 		),
 	)
 })
+
+// parseLspDiagnosticsOutput extracts diagnostics from the tool's StructuredContent.
+func parseLspDiagnosticsOutput(structured any) (diags []tools.LspDiagnosticsOutputDiagnosticsItem, totalCount int, truncated bool) {
+	out, ok := parseStructuredOutput[tools.LspDiagnosticsOutput](structured)
+	if ok {
+		return out.Diagnostics, out.TotalCount, out.Truncated
+	}
+	return
+}
+
+// parseLspRestartOutput extracts restart output from the tool's StructuredContent.
+func parseLspRestartOutput(structured any) (out tools.LspRestartOutput, ok bool) {
+	return parseStructuredOutput[tools.LspRestartOutput](structured)
+}
+
+// parseLspSearchOutput extracts search results from the tool's StructuredContent.
+func parseLspSearchOutput(structured any) (results []tools.LspSearchOutputResultsItem) {
+	out, ok := parseStructuredOutput[tools.LspSearchOutput](structured)
+	if ok {
+		return out.Results
+	}
+	return nil
+}
+
+// LspDiagnosticsToolWidget renders the result of an lsp_diagnostics tool call inline.
+var LspDiagnosticsToolWidget = kitex.FC("LspDiagnosticsToolWidget", func(props ToolExecutionProps) kitex.Node {
+	t := theme.UseTheme()
+
+	tc := props.ToolCall
+	tm := props.ToolMessage
+
+	var targetPath string
+	if tc.Args != nil {
+		targetPath, _ = tc.Args["path"].(string)
+	}
+
+	var statusLabel string
+	var iconNode kitex.Node
+	var borderCol color.Color
+
+	var diags []tools.LspDiagnosticsOutputDiagnosticsItem
+	var totalCount int
+	var truncated bool
+
+	if t != nil {
+		if tm == nil {
+			statusLabel = fmt.Sprintf("LSP Diagnostics: Fetching diagnostics for [%s]", targetPath)
+			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Info)}, kitex.Text(props.CurrentDots))
+			borderCol = t.Color.Surface.Info
+		} else if tm.IsError {
+			statusLabel = fmt.Sprintf("LSP Diagnostics: Error fetching diagnostics for [%s]", targetPath)
+			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Error)}, icon.Error)
+			borderCol = t.Color.Text.Error
+		} else {
+			diags, totalCount, truncated = parseLspDiagnosticsOutput(tm.StructuredContent)
+			statusLabel = fmt.Sprintf("LSP Diagnostics: Found %d diagnostics for [%s]", totalCount, targetPath)
+			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Success)}, icon.Checkmark)
+			borderCol = t.Color.Surface.Success
+		}
+	}
+
+	accordionStyle := style.S()
+	if t != nil {
+		accordionStyle = accordionStyle.Border(borderCol)
+	}
+
+	return components.Accordion(components.AccordionProps{
+		Color:           components.PaperHover,
+		Variant:         components.PaperOutlined,
+		DefaultExpanded: false,
+		Style:           accordionStyle,
+	},
+		components.AccordionSummary(components.AccordionSummaryProps{},
+			kitex.Box(kitex.BoxProps{
+				Style: style.S().Display(style.DisplayFlex).FlexDirection(style.FlexRow).Gap(1).AlignItems(style.AlignCenter),
+			},
+				iconNode,
+				kitex.Span(kitex.SpanProps{Style: style.S().Bold(true).Foreground(t.Color.Text.Primary)}, kitex.Text(statusLabel)),
+			),
+		),
+		components.AccordionDetails(components.AccordionDetailsProps{},
+			kitex.If(len(diags) > 0, func() kitex.Node {
+				var rows []kitex.Node
+				for _, d := range diags {
+					var severityColor color.Color
+					var severityIcon kitex.Node
+					var severityName string
+
+					switch d.Severity {
+					case "error":
+						severityColor = t.Color.Text.Error
+						severityIcon = icon.Error
+						severityName = "ERROR"
+					case "warning":
+						severityColor = t.Color.Text.Purple
+						severityIcon = icon.Warning
+						severityName = "WARNING"
+					case "info":
+						severityColor = t.Color.Surface.Info
+						if severityColor == nil {
+							severityColor = t.Color.Text.Secondary
+						}
+						severityIcon = icon.Info
+						severityName = "INFO"
+					default:
+						severityColor = t.Color.Text.Tertiary
+						severityIcon = icon.Info
+						severityName = "HINT"
+					}
+
+					rows = append(rows, kitex.Box(kitex.BoxProps{
+						Style: style.S().
+							Display(style.DisplayFlex).
+							FlexDirection(style.FlexColumn).
+							Padding(0, 1).
+							BorderLeft(true, style.SingleBorder(), severityColor).
+							Background(t.Color.Surface.BaseHover),
+					},
+						kitex.Box(kitex.BoxProps{
+							Style: style.S().Display(style.DisplayFlex).FlexDirection(style.FlexRow).Gap(1).AlignItems(style.AlignCenter),
+						},
+							kitex.Box(kitex.BoxProps{Style: style.S().Foreground(severityColor).Bold(true)}, severityIcon),
+							kitex.Box(kitex.BoxProps{Style: style.S().Foreground(severityColor).Bold(true)}, kitex.Text(severityName)),
+							kitex.Box(kitex.BoxProps{Style: style.S().Foreground(t.Color.Text.Secondary)}, kitex.Text(fmt.Sprintf("%s:%d:%d", d.Path, d.Range.Start.Line+1, d.Range.Start.Character+1))),
+						),
+						kitex.Box(kitex.BoxProps{
+							Style: style.S().Foreground(t.Color.Text.Primary),
+						}, kitex.Text(d.Message)),
+					))
+				}
+
+				if truncated {
+					rows = append(rows, kitex.Box(kitex.BoxProps{
+						Style: style.S().Padding(1).Foreground(t.Color.Text.Tertiary),
+					}, kitex.Text("... diagnostics truncated ...")))
+				}
+
+				return kitex.Box(kitex.BoxProps{
+					Style: style.S().Display(style.DisplayFlex).FlexDirection(style.FlexColumn).Gap(1).Padding(1),
+				}, rows...)
+			}),
+			kitex.If(len(diags) == 0 && tm != nil && !tm.IsError, func() kitex.Node {
+				return kitex.Box(kitex.BoxProps{
+					Style: style.S().Padding(2).Foreground(t.Color.Surface.Success),
+				}, kitex.Text("No LSP diagnostics found for this path."))
+			}),
+		),
+	)
+})
+
+// LspRestartToolWidget renders the result of an lsp_restart tool call inline.
+var LspRestartToolWidget = kitex.FC("LspRestartToolWidget", func(props ToolExecutionProps) kitex.Node {
+	t := theme.UseTheme()
+
+	tc := props.ToolCall
+	tm := props.ToolMessage
+
+	var serverName string
+	if tc.Args != nil {
+		serverName, _ = tc.Args["server"].(string)
+	}
+
+	var statusLabel string
+	var iconNode kitex.Node
+	var borderCol color.Color
+	var details string
+
+	if t != nil {
+		if tm == nil {
+			statusLabel = fmt.Sprintf("LSP Restart: Restarting %s", serverName)
+			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Info)}, kitex.Text(props.CurrentDots))
+			borderCol = t.Color.Surface.Info
+		} else if tm.IsError {
+			statusLabel = fmt.Sprintf("LSP Restart: Failed to restart %s", serverName)
+			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Error)}, icon.Error)
+			borderCol = t.Color.Text.Error
+			details = getToolOutput(tm.Content)
+		} else {
+			out, _ := parseLspRestartOutput(tm.StructuredContent)
+			if out.Success {
+				statusLabel = fmt.Sprintf("LSP Restart: Successfully restarted %s", serverName)
+				iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Success)}, icon.Checkmark)
+				borderCol = t.Color.Surface.Success
+			} else {
+				statusLabel = fmt.Sprintf("LSP Restart: Failed to restart %s", serverName)
+				iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Error)}, icon.Error)
+				borderCol = t.Color.Text.Error
+			}
+			details = out.Message
+		}
+	}
+
+	accordionStyle := style.S()
+	if t != nil {
+		accordionStyle = accordionStyle.Border(borderCol)
+	}
+
+	return components.Accordion(components.AccordionProps{
+		Color:           components.PaperHover,
+		Variant:         components.PaperOutlined,
+		DefaultExpanded: false,
+		Style:           accordionStyle,
+	},
+		components.AccordionSummary(components.AccordionSummaryProps{},
+			kitex.Box(kitex.BoxProps{
+				Style: style.S().Display(style.DisplayFlex).FlexDirection(style.FlexRow).Gap(1).AlignItems(style.AlignCenter),
+			},
+				iconNode,
+				kitex.Span(kitex.SpanProps{Style: style.S().Bold(true).Foreground(t.Color.Text.Primary)}, kitex.Text(statusLabel)),
+			),
+		),
+		components.AccordionDetails(components.AccordionDetailsProps{},
+			kitex.If(details != "", func() kitex.Node {
+				return kitex.Box(kitex.BoxProps{
+					Style: style.S().Padding(1).Foreground(t.Color.Text.Secondary),
+				}, kitex.Text(details))
+			}),
+		),
+	)
+})
+
+// LspSearchToolWidget renders the result of an lsp_search tool call inline.
+var LspSearchToolWidget = kitex.FC("LspSearchToolWidget", func(props ToolExecutionProps) kitex.Node {
+	t := theme.UseTheme()
+
+	tc := props.ToolCall
+	tm := props.ToolMessage
+
+	var query string
+	if tc.Args != nil {
+		query, _ = tc.Args["query"].(string)
+	}
+
+	var statusLabel string
+	var iconNode kitex.Node
+	var borderCol color.Color
+
+	var results []tools.LspSearchOutputResultsItem
+
+	if t != nil {
+		if tm == nil {
+			statusLabel = fmt.Sprintf("LSP Search: Searching for [%s]", query)
+			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Info)}, kitex.Text(props.CurrentDots))
+			borderCol = t.Color.Surface.Info
+		} else if tm.IsError {
+			statusLabel = fmt.Sprintf("LSP Search: Error searching for [%s]", query)
+			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Error)}, icon.Error)
+			borderCol = t.Color.Text.Error
+		} else {
+			results = parseLspSearchOutput(tm.StructuredContent)
+			statusLabel = fmt.Sprintf("LSP Search: Found %d symbols for [%s]", len(results), query)
+			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Success)}, icon.Checkmark)
+			borderCol = t.Color.Surface.Success
+		}
+	}
+
+	accordionStyle := style.S()
+	if t != nil {
+		accordionStyle = accordionStyle.Border(borderCol)
+	}
+
+	return components.Accordion(components.AccordionProps{
+		Color:           components.PaperHover,
+		Variant:         components.PaperOutlined,
+		DefaultExpanded: false,
+		Style:           accordionStyle,
+	},
+		components.AccordionSummary(components.AccordionSummaryProps{},
+			kitex.Box(kitex.BoxProps{
+				Style: style.S().Display(style.DisplayFlex).FlexDirection(style.FlexRow).Gap(1).AlignItems(style.AlignCenter),
+			},
+				iconNode,
+				kitex.Span(kitex.SpanProps{Style: style.S().Bold(true).Foreground(t.Color.Text.Primary)}, kitex.Text(statusLabel)),
+			),
+		),
+		components.AccordionDetails(components.AccordionDetailsProps{},
+			kitex.If(len(results) > 0, func() kitex.Node {
+				var rows []kitex.Node
+				for _, item := range results {
+					rows = append(rows, kitex.Box(kitex.BoxProps{
+						Style: style.S().
+							Display(style.DisplayFlex).
+							FlexDirection(style.FlexColumn).
+							Padding(0, 1).
+							Background(t.Color.Surface.BaseHover).
+							BorderLeft(true, style.SingleBorder(), t.Color.Border.Primary),
+					},
+						kitex.Box(kitex.BoxProps{
+							Style: style.S().Display(style.DisplayFlex).FlexDirection(style.FlexRow).Gap(1).AlignItems(style.AlignCenter),
+						},
+							kitex.Box(kitex.BoxProps{Style: style.S().Foreground(t.Color.Text.Purple).Bold(true)}, kitex.Text(item.Kind)),
+							kitex.Box(kitex.BoxProps{Style: style.S().Bold(true).Foreground(t.Color.Text.Primary)}, kitex.Text(item.Name)),
+							kitex.If(item.ContainerName != "", func() kitex.Node {
+								return kitex.Box(kitex.BoxProps{Style: style.S().Foreground(t.Color.Text.Tertiary)}, kitex.Text("in "+item.ContainerName))
+							}),
+						),
+						kitex.Box(kitex.BoxProps{
+							Style: style.S().Foreground(t.Color.Text.Secondary),
+						}, kitex.Text(fmt.Sprintf("%s:%d:%d", item.Path, item.Range.Start.Line+1, item.Range.Start.Character+1))),
+					))
+				}
+				return kitex.Box(kitex.BoxProps{
+					Style: style.S().Display(style.DisplayFlex).FlexDirection(style.FlexColumn).Gap(1).Padding(1),
+				}, rows...)
+			}),
+			kitex.If(len(results) == 0 && tm != nil && !tm.IsError, func() kitex.Node {
+				return kitex.Box(kitex.BoxProps{
+					Style: style.S().Padding(2).Foreground(t.Color.Text.Tertiary),
+				}, kitex.Text("No matching workspace symbols found."))
+			}),
+		),
+	)
+})

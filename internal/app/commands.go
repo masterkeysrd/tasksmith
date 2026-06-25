@@ -54,7 +54,7 @@ func (app *Application) InitializeCommands() {
 		case "restart":
 			if app.lspManager != nil {
 				go func() {
-					app.lspManager.RestartClient(ctx.Ctx, app.opts.CWD)
+					_ = app.lspManager.RestartClient(ctx.Ctx, app.opts.CWD)
 				}()
 			}
 			return nil

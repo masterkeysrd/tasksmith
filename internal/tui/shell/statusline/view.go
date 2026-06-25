@@ -4,8 +4,10 @@ import (
 	"fmt"
 	"image/color"
 	"strings"
+	"time"
 
 	"github.com/masterkeysrd/kite/extras/kitex"
+	"github.com/masterkeysrd/kite/extras/wind"
 	"github.com/masterkeysrd/kite/style"
 	"github.com/masterkeysrd/tasksmith/internal/api"
 	"github.com/masterkeysrd/tasksmith/internal/tui/active"
@@ -582,6 +584,11 @@ var View = kitex.FCC("StatusLine", func(props Props) kitex.Node {
 	sessionsQuery := queries.UseListSessions()
 	providersQuery := queries.UseListProviders()
 	sessionID := active.UseSessionID()
+
+	windClient := wind.UseClient()
+	kitex.UseInterval(func() {
+		windClient.InvalidateQueries(api.GetLspDiagnosticCountsRequest{})
+	}, 2*time.Second, []any{windClient})
 
 	if wsCfg.Data != nil && wsCfg.Data.CWD != "" {
 		plugin.SetCWD(wsCfg.Data.CWD)

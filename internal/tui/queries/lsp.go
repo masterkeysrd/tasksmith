@@ -23,3 +23,17 @@ func UseGetLspDiagnosticCounts() wind.Result[*api.GetLspDiagnosticCountsResponse
 		StaleTime: 5 * time.Second,
 	})
 }
+
+// UseGetLspDiagnostics retrieves detailed LSP diagnostics.
+func UseGetLspDiagnostics(req api.GetLspDiagnosticsRequest) wind.Result[*api.GetLspDiagnosticsResponse] {
+	client := tuiapi.UseClient()
+	return wind.Use(req, promise.WrapWithProps(client.GetLspDiagnostics))
+}
+
+// UseLspSearch performs an LSP symbol search.
+func UseLspSearch(req api.LspSearchRequest) wind.Result[*api.LspSearchResponse] {
+	client := tuiapi.UseClient()
+	return wind.Use(req, promise.WrapWithProps(client.LspSearch), wind.Options{
+		Enabled: req.Query != "",
+	})
+}

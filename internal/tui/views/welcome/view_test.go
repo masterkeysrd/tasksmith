@@ -115,6 +115,18 @@ func (m *mockClient) RestartLsp(ctx context.Context, req api.RestartLspRequest) 
 	return &api.RestartLspResponse{Success: true}, nil
 }
 
+func (m *mockClient) GetLspDiagnosticCounts(ctx context.Context, req api.GetLspDiagnosticCountsRequest) (*api.GetLspDiagnosticCountsResponse, error) {
+	return &api.GetLspDiagnosticCountsResponse{}, nil
+}
+
+func (m *mockClient) GetLspDiagnostics(ctx context.Context, req api.GetLspDiagnosticsRequest) (*api.GetLspDiagnosticsResponse, error) {
+	return &api.GetLspDiagnosticsResponse{}, nil
+}
+
+func (m *mockClient) LspSearch(ctx context.Context, req api.LspSearchRequest) (*api.LspSearchResponse, error) {
+	return &api.LspSearchResponse{}, nil
+}
+
 func TestWelcomeView(t *testing.T) {
 	thm := &theme.Scheme{}
 	client := &mockClient{}

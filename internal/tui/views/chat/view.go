@@ -1643,6 +1643,15 @@ var ToolExecution = kitex.FC("ToolExecution", func(props ToolExecutionProps) kit
 	if props.ToolCall != nil && props.ToolCall.Name == "glob" {
 		return GlobToolWidget(props)
 	}
+	if props.ToolCall != nil && props.ToolCall.Name == "lsp_diagnostics" {
+		return LspDiagnosticsToolWidget(props)
+	}
+	if props.ToolCall != nil && props.ToolCall.Name == "lsp_restart" {
+		return LspRestartToolWidget(props)
+	}
+	if props.ToolCall != nil && props.ToolCall.Name == "lsp_search" {
+		return LspSearchToolWidget(props)
+	}
 	if props.ToolCall != nil && props.ToolCall.Name == "grep" {
 		return GrepToolWidget(props)
 	}

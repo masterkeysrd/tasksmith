@@ -21,6 +21,10 @@ func (app *Application) InitializeKeymap() {
 		}
 	}, keymap.Description("Toggle Token Analytics View"))
 
+	keymap.Set([]mode.Mode{mode.Normal}, "<C-l>", func(ctx context.Context) {
+		active.SetModal("lspinfo")
+	}, keymap.Description("Open LSP Panel"))
+
 	// Normal Mode Keybindings
 	keymap.Set([]mode.Mode{mode.Normal}, "q", func(ctx context.Context) {
 		if active.GetScreen() == "analytics" {

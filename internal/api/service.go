@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/masterkeysrd/loom/message"
@@ -363,6 +365,7 @@ func (s *Service) RenameSession(ctx context.Context, req RenameSessionRequest) (
 func (s *Service) ArchiveSession(ctx context.Context, req ArchiveSessionRequest) (*ArchiveSessionResponse, error) {
 	if s.sm == nil {
 		return nil, fmt.Errorf("session manager not initialized")
+
 	}
 	if err := s.sm.ArchiveSession(ctx, req.ID); err != nil {
 		return nil, err
@@ -664,4 +667,192 @@ func (s *Service) GetLspDiagnosticCounts(ctx context.Context, req GetLspDiagnost
 		Warnings: warnings,
 		Infos:    infos,
 	}, nil
+}
+
+// GetLspDiagnostics retrieves detailed LSP diagnostics.
+func (s *Service) GetLspDiagnostics(ctx context.Context, req GetLspDiagnosticsRequest) (*GetLspDiagnosticsResponse, error) {
+	if s.lspManager == nil {
+		return &GetLspDiagnosticsResponse{Diagnostics: []LspDiagnosticItem{}}, nil
+	}
+
+	cfg, err := s.ws.GetWorkspaceConfig(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get workspace config: %w", err)
+	}
+
+	targetPath := req.Path
+	if targetPath == "" {
+		targetPath = cfg.CWD
+	} else if !filepath.IsAbs(targetPath) {
+		targetPath = filepath.Join(cfg.CWD, targetPath)
+	}
+
+	client, err := s.lspManager.GetClient(ctx, cfg.CWD)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get LSP client: %w", err)
+	}
+
+	diags, err := client.GetDiagnostics(ctx, targetPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get diagnostics: %w", err)
+	}
+
+	var items []LspDiagnosticItem
+	for _, d := range diags {
+		var severity string
+		if d.Severity != nil {
+			switch *d.Severity {
+			case 1:
+				severity = "error"
+			case 2:
+				severity = "warning"
+			case 3:
+				severity = "info"
+			case 4:
+				severity = "hint"
+			}
+		}
+
+		relPath, err := filepath.Rel(cfg.CWD, d.Path)
+		if err != nil {
+			relPath = d.Path
+		}
+
+		var msg string
+		if d.Message.String != nil {
+			msg = *d.Message.String
+		} else if d.Message.MarkupContent != nil {
+			msg = d.Message.MarkupContent.Value
+		}
+
+		items = append(items, LspDiagnosticItem{
+			Path:     relPath,
+			Message:  msg,
+			Severity: severity,
+			Line:     int(d.Range.Start.Line),
+			Char:     int(d.Range.Start.Character),
+		})
+	}
+
+	return &GetLspDiagnosticsResponse{Diagnostics: items}, nil
+}
+
+// LspSearch searches using LSP.
+func (s *Service) LspSearch(ctx context.Context, req LspSearchRequest) (*LspSearchResponse, error) {
+	if s.lspManager == nil {
+		return &LspSearchResponse{Results: []LspSearchItem{}}, nil
+	}
+
+	cfg, err := s.ws.GetWorkspaceConfig(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get workspace config: %w", err)
+	}
+
+	client, err := s.lspManager.GetClient(ctx, cfg.CWD)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get LSP client: %w", err)
+	}
+
+	results, err := client.Search(ctx, req.Query)
+	if err != nil {
+		return nil, fmt.Errorf("failed to search LSP: %w", err)
+	}
+
+	var items []LspSearchItem
+	for _, sym := range results {
+		var docURI string
+		var line, char int
+
+		if sym.Location.Location != nil {
+			docURI = sym.Location.Location.URI
+			line = int(sym.Location.Location.Range.Start.Line)
+			char = int(sym.Location.Location.Range.Start.Character)
+		} else if sym.Location.LocationUriOnly != nil {
+			docURI = sym.Location.LocationUriOnly.URI
+		}
+
+		var filePath string
+		if strings.HasPrefix(docURI, "file://") {
+			filePath = filepath.FromSlash(docURI[7:])
+		} else {
+			filePath = docURI
+		}
+
+		relPath, err := filepath.Rel(cfg.CWD, filePath)
+		if err != nil {
+			relPath = filePath
+		}
+
+		var containerName string
+		if sym.ContainerName != nil {
+			containerName = *sym.ContainerName
+		}
+
+		kindStr := fmt.Sprintf("Kind(%d)", sym.Kind)
+		switch sym.Kind {
+		case 1:
+			kindStr = "File"
+		case 2:
+			kindStr = "Module"
+		case 3:
+			kindStr = "Namespace"
+		case 4:
+			kindStr = "Package"
+		case 5:
+			kindStr = "Class"
+		case 6:
+			kindStr = "Method"
+		case 7:
+			kindStr = "Property"
+		case 8:
+			kindStr = "Field"
+		case 9:
+			kindStr = "Constructor"
+		case 10:
+			kindStr = "Enum"
+		case 11:
+			kindStr = "Interface"
+		case 12:
+			kindStr = "Function"
+		case 13:
+			kindStr = "Variable"
+		case 14:
+			kindStr = "Constant"
+		case 15:
+			kindStr = "String"
+		case 16:
+			kindStr = "Number"
+		case 17:
+			kindStr = "Boolean"
+		case 18:
+			kindStr = "Array"
+		case 19:
+			kindStr = "Object"
+		case 20:
+			kindStr = "Key"
+		case 21:
+			kindStr = "Null"
+		case 22:
+			kindStr = "EnumMember"
+		case 23:
+			kindStr = "Struct"
+		case 24:
+			kindStr = "Event"
+		case 25:
+			kindStr = "Operator"
+		case 26:
+			kindStr = "TypeParameter"
+		}
+
+		items = append(items, LspSearchItem{
+			Name:          sym.Name,
+			Kind:          kindStr,
+			Path:          relPath,
+			Line:          line,
+			Char:          char,
+			ContainerName: containerName,
+		})
+	}
+
+	return &LspSearchResponse{Results: items}, nil
 }
