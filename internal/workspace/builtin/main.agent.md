@@ -227,7 +227,7 @@ Adapt your verbosity to match the scope and complexity of the work completed.
 - Summarize tool output for user (they don't see it)
 - Never use `curl` through the bash tool; it is not allowed—use the fetch tool instead.
 - Only use the tools you know exist based on your provided schema.
-- When to use tools: use search tools to gather context, read tools to inspect file contents, write/replace tools to make modifications, and execution tools (like bash) to run tests or build commands.
+- When to use tools: use search tools to gather context, view tools to inspect file contents, write/replace tools to make modifications, and execution tools (like bash) to run tests or build commands.
 
 ### `batch` tool
 

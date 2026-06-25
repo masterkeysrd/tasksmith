@@ -347,7 +347,14 @@ func (a *AgentGraph) executeTools(ctx context.Context, s AgentState) (graph.Comm
 			}
 		}
 		if targetTool == nil {
-			return nil, fmt.Errorf("tool %q not found in container", tc.Name)
+			toolMsg := &message.Tool{
+				ToolCallID: tc.ID,
+				Name:       tc.Name,
+				IsError:    true,
+				Content:    message.Content{&message.TextBlock{Text: fmt.Sprintf("tool %q not found in container", tc.Name)}},
+			}
+			toolResults = append(toolResults, toolMsg)
+			continue
 		}
 
 		permState, finalArgs, _, authReq := permissions.EvaluateToolCall(
