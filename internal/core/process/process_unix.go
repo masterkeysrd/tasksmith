@@ -25,6 +25,19 @@ func Kill(cmd *exec.Cmd) error {
 	if cmd == nil || cmd.Process == nil {
 		return nil
 	}
+	if cmd.Process.Pid <= 0 {
+		return fmt.Errorf("invalid pid %d", cmd.Process.Pid)
+	}
+
+	// Safety check: ensure we do not kill our own process group
+	selfPgid, err := syscall.Getpgid(0)
+	if err == nil {
+		targetPgid, err := syscall.Getpgid(cmd.Process.Pid)
+		if err == nil && targetPgid == selfPgid {
+			return fmt.Errorf("refusing to kill parent process group %d", selfPgid)
+		}
+	}
+
 	// Use negative PID to target the process group
 	return syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
 }
