@@ -5,8 +5,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
+	_ "net/http/pprof"
 	"os"
 	"path/filepath"
+	"syscall"
 
 	"github.com/masterkeysrd/tasksmith/internal/api"
 	"github.com/masterkeysrd/tasksmith/internal/app/flags"
@@ -40,6 +43,26 @@ func New(opts *flags.Flags, cancel context.CancelFunc) *Application {
 func (app *Application) Run(ctx context.Context) error {
 	if err := app.InitializeLogs(); err != nil {
 		return fmt.Errorf("failed to initialize logs: %w", err)
+	}
+
+	if app.opts.Debug {
+		addr := "localhost:6060"
+		if envAddr := os.Getenv("TASKSMITH_PPROF_ADDR"); envAddr != "" {
+			addr = envAddr
+		}
+		srv := &http.Server{
+			Addr: addr,
+		}
+		go func() {
+			log.Info("Starting pprof server on http://" + addr + "/debug/pprof/")
+			if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				log.Error("pprof server error", log.Err(err))
+			}
+		}()
+		app.AddCloser(func(ctx context.Context) error {
+			log.Info("Stopping pprof server")
+			return srv.Shutdown(ctx)
+		})
 	}
 
 	// Initialize sqlite connections and session manager
@@ -153,6 +176,12 @@ func (app *Application) InitializeLogs() error {
 	})
 
 	log.SetDefault(log.New(file, app.opts.LogLevel))
+
+	// Redirect fd 2 (stderr) to the log file so that Go runtime panic stack traces
+	// from all goroutines are captured in the log file.
+	if err := syscall.Dup2(int(file.Fd()), 2); err != nil {
+		log.Warn("Failed to redirect stderr to log file", log.Err(err))
+	}
 
 	return nil
 }

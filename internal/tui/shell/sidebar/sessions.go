@@ -96,11 +96,16 @@ var sessionRow = kitex.FC("SessionRow", func(props sessionRowProps) kitex.Node {
 		}
 	}, []any{isEditing()})
 
+	interval := 100 * time.Millisecond
+	if !props.IsLoading {
+		interval = 24 * time.Hour
+	}
+
 	kitex.UseInterval(func() {
 		if props.IsLoading {
 			setSpinnerFrame((spinnerFrame() + 1) % len(spinnerFrames))
 		}
-	}, 100*time.Millisecond, []any{props.IsLoading})
+	}, interval, []any{props.IsLoading})
 
 	borderColor := c.border
 	if props.IsActive {

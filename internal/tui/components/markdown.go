@@ -159,8 +159,11 @@ var Markdown = kitex.FC("Markdown", func(props MarkdownProps) kitex.Node {
 			switch node := n.(type) {
 			case *ast.Document:
 				docStyle := style.S().
+					Width(style.Percent(100)).
+					MinWidth(style.Percent(0)).
 					Display(style.DisplayFlex).
 					FlexDirection(style.FlexColumn).
+					WhiteSpace(style.WhiteSpacePreWrap).
 					Merge(props.Style)
 				if t != nil {
 					docStyle = docStyle.Foreground(t.Color.Text.Secondary)
@@ -195,7 +198,7 @@ var Markdown = kitex.FC("Markdown", func(props MarkdownProps) kitex.Node {
 						pStyle = pStyle.MarginBottom(1)
 					}
 				}
-				return kitex.Box(kitex.BoxProps{Style: pStyle}, children...)
+				return kitex.Box(kitex.BoxProps{Style: pStyle.MinWidth(style.Percent(0))}, children...)
 
 			case *ast.TextBlock:
 				children := renderInlineChildren(node)
@@ -208,7 +211,7 @@ var Markdown = kitex.FC("Markdown", func(props MarkdownProps) kitex.Node {
 						return kitex.Fragment(children...)
 					}
 				}
-				return kitex.Box(kitex.BoxProps{}, children...)
+				return kitex.Box(kitex.BoxProps{Style: style.S().MinWidth(style.Percent(0))}, children...)
 
 			case *ast.Heading:
 				children := renderInlineChildren(node)
@@ -229,7 +232,7 @@ var Markdown = kitex.FC("Markdown", func(props MarkdownProps) kitex.Node {
 				if t != nil {
 					spanStyle = spanStyle.Foreground(t.Color.Text.Primary)
 				}
-				return kitex.Box(kitex.BoxProps{Style: hStyle},
+				return kitex.Box(kitex.BoxProps{Style: hStyle.MinWidth(style.Percent(0))},
 					kitex.Span(kitex.SpanProps{Style: spanStyle}, children...),
 				)
 
@@ -288,7 +291,7 @@ var Markdown = kitex.FC("Markdown", func(props MarkdownProps) kitex.Node {
 				if node.NextSibling() == nil {
 					marginBottom = 0
 				}
-				return kitex.Box(kitex.BoxProps{Style: style.S().MarginBottom(marginBottom)}, innerBox)
+				return kitex.Box(kitex.BoxProps{Style: style.S().MinWidth(style.Percent(0)).MarginBottom(marginBottom)}, innerBox)
 
 			case *ast.ThematicBreak:
 				marginBottom := 1
@@ -395,7 +398,8 @@ func renderList(
 			Display(style.DisplayFlex).
 			FlexDirection(style.FlexColumn).
 			MarginBottom(marginBottom).
-			PaddingLeft(2),
+			PaddingLeft(2).
+			MinWidth(style.Percent(0)),
 	}, items...)
 }
 
@@ -468,7 +472,7 @@ func renderTable(
 		marginBottom = 0
 	}
 	tableStyle := style.S().MarginBottom(marginBottom)
-	return kitex.Table(kitex.TableProps{Style: tableStyle}, tableChildren...)
+	return kitex.Table(kitex.TableProps{Style: tableStyle.MinWidth(style.Percent(0))}, tableChildren...)
 }
 
 func getHeaderCellStyle(align extast.Alignment) style.Style {

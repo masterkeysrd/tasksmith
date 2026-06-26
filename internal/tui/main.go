@@ -34,6 +34,10 @@ func Run(ctx context.Context, opts RunOptions) error {
 	if err != nil {
 		return fmt.Errorf("failed to create backend: %w", err)
 	}
+	defer func() {
+		b.Restore()
+		b.Stop()
+	}()
 
 	eng := engine.New(b, engine.Options{})
 

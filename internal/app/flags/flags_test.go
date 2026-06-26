@@ -25,3 +25,20 @@ func TestFlagsLoad(t *testing.T) {
 		t.Errorf("expected default cwd %s, got %s", cwd, opts.CWD)
 	}
 }
+
+func TestFlagsLoad_DebugEnv(t *testing.T) {
+	t.Setenv("TASKSMITH_DEBUG", "1")
+
+	opts, err := Load()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if !opts.Debug {
+		t.Errorf("expected Debug to be true when TASKSMITH_DEBUG is set")
+	}
+
+	if opts.LogLevel != log.LevelDebug {
+		t.Errorf("expected LogLevel to be debug when Debug is true, got %v", opts.LogLevel)
+	}
+}

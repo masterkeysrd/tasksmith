@@ -9,10 +9,11 @@ require (
 	github.com/go-git/go-git/v5 v5.19.1
 	github.com/google/uuid v1.6.0
 	github.com/jmoiron/sqlx v1.4.0
-	github.com/masterkeysrd/kite v0.0.2-0.20260612031527-743d8664906e
-	github.com/masterkeysrd/loom v0.0.2
+	github.com/lrstanley/go-nf v0.0.0-20260418212552-215ab243b591
+	github.com/masterkeysrd/kite v0.0.2-0.20260626040937-2f6ff6ed6d06
+	github.com/masterkeysrd/loom v0.0.3-0.20260625175623-7cfb391c9b07
 	github.com/masterkeysrd/lspx v0.0.0-20260611065943-6cf2ef01a123
-	github.com/masterkeysrd/warp v0.0.3-0.20260612015155-366b5238ee18
+	github.com/masterkeysrd/warp v0.0.3-0.20260625214537-f28a1c7000bc
 	github.com/modelcontextprotocol/go-sdk v1.6.1
 	github.com/refraction-networking/utls v1.8.2
 	github.com/yuin/goldmark v1.8.2
@@ -43,8 +44,8 @@ require (
 	github.com/charmbracelet/x/windows v0.2.2 // indirect
 	github.com/clipperhouse/displaywidth v0.11.0 // indirect
 	github.com/clipperhouse/uax29/v2 v2.7.0 // indirect
-	github.com/cloudflare/circl v1.6.3 // indirect
-	github.com/cyphar/filepath-securejoin v0.6.1 // indirect
+	github.com/cloudflare/circl v1.6.4 // indirect
+	github.com/cyphar/filepath-securejoin v0.7.0 // indirect
 	github.com/dlclark/regexp2/v2 v2.2.1 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/emirpasic/gods v1.18.1 // indirect
@@ -117,9 +118,3 @@ require (
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
 )
-
-replace github.com/masterkeysrd/kite => ../kite
-
-replace github.com/masterkeysrd/warp => ../warp
-
-replace github.com/masterkeysrd/loom => ../loom

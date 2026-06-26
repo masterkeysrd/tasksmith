@@ -365,8 +365,9 @@ var Stats = kitex.FC("Stats", func(props StatsProps) kitex.Node {
 
 // StatusProps defines properties for the Status component.
 type StatusProps struct {
-	Status string
-	Style  style.Style
+	Status    string
+	SessionID string
+	Style     style.Style
 }
 
 // Status renders the agent run status fragment.
@@ -374,6 +375,12 @@ var Status = kitex.FC("Status", func(props StatusProps) kitex.Node {
 	t := theme.UseTheme()
 
 	status := props.Status
+	if status == "" && props.SessionID != "" {
+		stateQuery := queries.UseGetSessionState(props.SessionID)
+		if stateQuery.Data != nil {
+			status = stateQuery.Data.Status
+		}
+	}
 	if status == "" {
 		status = "idle"
 	}
@@ -427,15 +434,22 @@ var Status = kitex.FC("Status", func(props StatusProps) kitex.Node {
 
 // DiagnosticsProps defines properties for the Diagnostics component.
 type DiagnosticsProps struct {
-	Errors   int
-	Warnings int
-	Infos    int
-	Style    style.Style
+	Style style.Style
 }
 
 // Diagnostics renders the LSP diagnostic counts.
 var Diagnostics = kitex.FC("Diagnostics", func(props DiagnosticsProps) kitex.Node {
 	t := theme.UseTheme()
+	query := queries.UseGetLspDiagnosticCounts()
+
+	errors := 0
+	warnings := 0
+	infos := 0
+	if query.Data != nil {
+		errors = query.Data.Errors
+		warnings = query.Data.Warnings
+		infos = query.Data.Infos
+	}
 
 	var bg, textDim, colorError, colorWarn, colorInfo color.Color = color.Transparent, color.Transparent, color.Transparent, color.Transparent, color.Transparent
 
@@ -468,22 +482,22 @@ var Diagnostics = kitex.FC("Diagnostics", func(props DiagnosticsProps) kitex.Nod
 
 	var children []kitex.Node
 
-	if props.Errors > 0 {
+	if errors > 0 {
 		children = append(children, kitex.Box(kitex.BoxProps{
 			Style: style.S().Display(style.DisplayFlex).FlexDirection(style.FlexRow).Gap(1).AlignItems(style.AlignCenter).Foreground(textDim),
-		}, kitex.Box(kitex.BoxProps{Style: style.S().Foreground(colorError)}, icon.Error), kitex.Text(fmt.Sprintf("%d", props.Errors))))
+		}, kitex.Box(kitex.BoxProps{Style: style.S().Foreground(colorError)}, icon.Error), kitex.Text(fmt.Sprintf("%d", errors))))
 	}
 
-	if props.Warnings > 0 {
+	if warnings > 0 {
 		children = append(children, kitex.Box(kitex.BoxProps{
 			Style: style.S().Display(style.DisplayFlex).FlexDirection(style.FlexRow).Gap(1).AlignItems(style.AlignCenter).Foreground(textDim),
-		}, kitex.Box(kitex.BoxProps{Style: style.S().Foreground(colorWarn)}, icon.Warning), kitex.Text(fmt.Sprintf("%d", props.Warnings))))
+		}, kitex.Box(kitex.BoxProps{Style: style.S().Foreground(colorWarn)}, icon.Warning), kitex.Text(fmt.Sprintf("%d", warnings))))
 	}
 
-	if props.Infos > 0 {
+	if infos > 0 {
 		children = append(children, kitex.Box(kitex.BoxProps{
 			Style: style.S().Display(style.DisplayFlex).FlexDirection(style.FlexRow).Gap(1).AlignItems(style.AlignCenter).Foreground(textDim),
-		}, kitex.Box(kitex.BoxProps{Style: style.S().Foreground(colorInfo)}, icon.Info), kitex.Text(fmt.Sprintf("%d", props.Infos))))
+		}, kitex.Box(kitex.BoxProps{Style: style.S().Foreground(colorInfo)}, icon.Info), kitex.Text(fmt.Sprintf("%d", infos))))
 	}
 
 	if len(children) == 0 {
@@ -545,24 +559,9 @@ func renderFragment(f plugin.Fragment, state plugin.State, sessionID string, act
 		case "stats":
 			return Stats(StatsProps{InputTokens: inputTokens, OutputTokens: outputTokens, Cost: costValue})
 		case "status":
-			status := "idle"
-			if sessionID != "" {
-				stateQuery := queries.UseGetSessionState(sessionID)
-				if stateQuery.Data != nil {
-					status = stateQuery.Data.Status
-				}
-			}
-			return Status(StatusProps{Status: status})
+			return Status(StatusProps{SessionID: sessionID})
 		case "diagnostics":
-			query := queries.UseGetLspDiagnosticCounts()
-			if query.Data != nil {
-				return Diagnostics(DiagnosticsProps{
-					Errors:   query.Data.Errors,
-					Warnings: query.Data.Warnings,
-					Infos:    query.Data.Infos,
-				})
-			}
-			return nil
+			return Diagnostics(DiagnosticsProps{})
 		default:
 			return nil
 		}

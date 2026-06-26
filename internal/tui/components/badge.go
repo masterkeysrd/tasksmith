@@ -14,6 +14,9 @@ type ToolBadgeProps struct {
 	Icon kitex.Node
 	// Label is the status text displayed.
 	Label string
+	// LabelNode is an optional fully custom node representing the label.
+	// If provided, it overrides the default Label text rendering.
+	LabelNode kitex.Node
 	// Color is the foreground color of the badge.
 	Color color.Color
 	// OnClick is triggered when the badge is clicked.
@@ -40,7 +43,12 @@ var ToolBadge = kitex.FCC("ToolBadge", func(props ToolBadgeProps) kitex.Node {
 			Foreground(props.Color)
 	}
 
-	labelNode := kitex.Span(kitex.SpanProps{Style: style.S().Bold(true)}, kitex.Text(props.Label))
+	var labelNode kitex.Node
+	if props.LabelNode != nil {
+		labelNode = props.LabelNode
+	} else {
+		labelNode = kitex.Span(kitex.SpanProps{Style: style.S().Bold(true)}, kitex.Text(props.Label))
+	}
 
 	if props.OnClick != nil {
 		return Button(ButtonProps{

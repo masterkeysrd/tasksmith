@@ -364,7 +364,7 @@ var View = kitex.FC("WelcomeView", func(props ViewProps) kitex.Node {
 						),
 						ActionBox(ActionBoxProps{Title: "Workspace"},
 							ActionItem(ActionItemProps{Icon: icon.Folder, Label: "New Project", OnClick: func() { triggerAction("New Project") }}),
-							ActionItem(ActionItemProps{Icon: icon.Terminal, Label: "New Command", OnClick: func() { triggerAction("New Command") }}),
+							ActionItem(ActionItemProps{Icon: icon.AppleKeyboardCommand, Label: "New Command", OnClick: func() { triggerAction("New Command") }}),
 							ActionItem(ActionItemProps{Icon: icon.Plugin, Label: "Install Plugin", OnClick: func() { triggerAction("Install Plugin") }}),
 							kitex.If(props.OnOpenSetupWizard != nil, func() kitex.Node {
 								return ActionItem(ActionItemProps{

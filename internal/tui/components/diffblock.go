@@ -123,6 +123,7 @@ var DiffBlock = kitex.FC("DiffBlock", func(props DiffBlockProps) kitex.Node {
 		Display(style.DisplayFlex).
 		FlexDirection(style.FlexColumn).
 		Width(style.Percent(100)).
+		MinWidth(style.Percent(0)).
 		WhiteSpace(style.WhiteSpacePre).
 		Merge(props.Style)
 

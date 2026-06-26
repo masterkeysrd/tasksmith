@@ -4,10 +4,13 @@ import (
 	"context"
 	"testing"
 
+	"github.com/masterkeysrd/kite/element"
 	"github.com/masterkeysrd/kite/extras/kitex"
 	"github.com/masterkeysrd/kite/extras/wind"
+	"github.com/masterkeysrd/kite/testenv"
 	"github.com/masterkeysrd/tasksmith/internal/agent/tools"
 	"github.com/masterkeysrd/tasksmith/internal/api"
+	"github.com/masterkeysrd/tasksmith/internal/tui/active"
 	tuiapi "github.com/masterkeysrd/tasksmith/internal/tui/api"
 	"github.com/masterkeysrd/tasksmith/internal/tui/theme"
 )
@@ -292,5 +295,44 @@ func TestStripLinePrefixes(t *testing.T) {
 		if got != tc.want {
 			t.Errorf("stripLinePrefixes(%q) = %q, want %q", tc.input, got, tc.want)
 		}
+	}
+}
+
+func BenchmarkSwitchSessions(b *testing.B) {
+	thm := &theme.Scheme{}
+	client := &mockClient{}
+	windClient := wind.NewClient()
+
+	env := testenv.Default(120, 40)
+	defer env.Close()
+
+	container := element.NewBox(env.Document())
+	env.Mount(container)
+
+	activeSessionID := "session-1"
+
+	node := wind.Provider(wind.ProviderProps{Client: windClient},
+		tuiapi.Provider(tuiapi.Props{Client: client},
+			theme.Provider(theme.Props{Theme: thm},
+				kitex.SimpleFC("TestRoot", func() kitex.Node {
+					sessID := active.UseSessionID()
+					return View(ViewProps{SessionID: sessID})
+				})(),
+			),
+		),
+	)
+
+	kitex.Render(node, container)
+	env.Flush()
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if activeSessionID == "session-1" {
+			activeSessionID = "session-2"
+		} else {
+			activeSessionID = "session-1"
+		}
+		active.SetSessionID(activeSessionID)
+		env.Flush()
 	}
 }

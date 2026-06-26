@@ -21,6 +21,7 @@ type CodeBlockProps struct {
 	ShowLineNumbers bool
 	StartLine       int
 	Compact         bool
+	Wrap            bool
 }
 
 // CodeBlock renders a syntax-highlighted code block using chroma, fully styled
@@ -55,9 +56,13 @@ var CodeBlock = kitex.FC("CodeBlock", func(props CodeBlockProps) kitex.Node {
 	if props.Compact {
 		padCode = 0
 	}
+	whiteSpace := style.WhiteSpacePre
+	if props.Wrap {
+		whiteSpace = style.WhiteSpacePreWrap
+	}
 	codeStyle := style.S().
 		Padding(padCode).
-		WhiteSpace(style.WhiteSpacePre).
+		WhiteSpace(whiteSpace).
 		OverflowX(style.OverflowAuto)
 	if t != nil {
 		codeStyle = codeStyle.Foreground(t.Color.Text.Secondary)
@@ -67,7 +72,8 @@ var CodeBlock = kitex.FC("CodeBlock", func(props CodeBlockProps) kitex.Node {
 		Display(style.DisplayFlex).
 		FlexDirection(style.FlexColumn).
 		Width(style.Percent(100)).
-		WhiteSpace(style.WhiteSpacePre)
+		MinWidth(style.Percent(0)).
+		WhiteSpace(whiteSpace)
 
 	if !props.HideHeader {
 		wrapperStyle = wrapperStyle.
@@ -97,13 +103,16 @@ var CodeBlock = kitex.FC("CodeBlock", func(props CodeBlockProps) kitex.Node {
 	if err != nil {
 		contentNodes = []kitex.Node{
 			kitex.Span(
-				kitex.SpanProps{Style: style.S().WhiteSpace(style.WhiteSpacePre)},
+				kitex.SpanProps{Style: style.S().WhiteSpace(whiteSpace)},
 				kitex.Text(codeStr),
 			),
 		}
 	} else {
 		for tok := iterator(); tok != chroma.EOF; tok = iterator() {
 			tokenStyle := ResolveTokenStyle(t, tok.Type)
+			if props.Wrap {
+				tokenStyle = tokenStyle.WhiteSpace(style.WhiteSpacePreWrap)
+			}
 			contentNodes = append(contentNodes, kitex.Span(
 				kitex.SpanProps{Style: tokenStyle},
 				kitex.Text(tok.Value),
@@ -144,7 +153,7 @@ var CodeBlock = kitex.FC("CodeBlock", func(props CodeBlockProps) kitex.Node {
 		PaddingRight(1).
 		Flex(1, 1, style.Cells(0)).
 		MinHeight(style.Cells(0)).
-		WhiteSpace(style.WhiteSpacePre).
+		WhiteSpace(whiteSpace).
 		OverflowX(style.OverflowAuto)
 	if t != nil {
 		codeBoxStyle = codeBoxStyle.Foreground(t.Color.Text.Secondary)

@@ -168,9 +168,73 @@ var ViewToolWidget = kitex.FC("ViewToolWidget", func(props ToolExecutionProps) k
 				}
 				statusLabel = fmt.Sprintf("Viewed [%s]%s", filename, rangeStr)
 			}
-			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Success)}, icon.Checkmark)
+			iconNode = nil
 			themeColor = t.Color.Surface.Success
 		}
+	}
+
+	var labelNode kitex.Node
+	if t != nil {
+		actionText := "Pending View "
+		var detailsText string
+		if tm != nil {
+			if tm.IsError {
+				actionText = "Error Viewing "
+			} else {
+				actionText = "Viewed "
+				vOut, ok := parseViewStructuredOutput(tm.StructuredContent)
+				if ok {
+					if vOut.IsBinary {
+						detailsText = "binary"
+					} else if vOut.StartLine > 0 && vOut.EndLine > 0 {
+						detailsText = fmt.Sprintf("%d-%d", vOut.StartLine, vOut.EndLine)
+					}
+				} else {
+					outText := getToolOutput(tm.Content)
+					actualStart, actualEnd := parseRangeFromHeader(outText)
+					if actualStart > 0 && actualEnd > 0 {
+						detailsText = fmt.Sprintf("%d-%d", actualStart, actualEnd)
+					}
+				}
+			}
+		}
+
+		labelNode = kitex.Box(kitex.BoxProps{
+			Style: style.S().
+				Display(style.DisplayFlex).
+				FlexDirection(style.FlexRow).
+				AlignItems(style.AlignCenter),
+		},
+			kitex.Span(kitex.SpanProps{
+				Style: style.S().
+					Bold(true).
+					Foreground(color.RGBA{255, 255, 255, 255}),
+			}, kitex.Text(actionText)),
+			kitex.Box(kitex.BoxProps{
+				Style: style.S().
+					Display(style.DisplayFlex).
+					FlexDirection(style.FlexRow).
+					AlignItems(style.AlignCenter).
+					Background(t.Color.Surface.BaseFocus).
+					PaddingHorizontal(1).
+					Gap(1),
+			},
+				icon.FileIcon(icon.FileIconProps{Path: path}),
+				kitex.Span(kitex.SpanProps{
+					Style: style.S().
+						Foreground(color.RGBA{255, 255, 255, 255}).
+						Bold(true),
+				}, kitex.Text(filename)),
+				kitex.If(detailsText != "", func() kitex.Node {
+					return kitex.Span(kitex.SpanProps{
+						Style: style.S().
+							Foreground(t.Color.Text.Secondary).
+							Bold(true).
+							MarginLeft(1),
+					}, kitex.Text(detailsText))
+				}),
+			),
+		)
 	}
 
 	var onClick func()
@@ -178,17 +242,27 @@ var ViewToolWidget = kitex.FC("ViewToolWidget", func(props ToolExecutionProps) k
 		onClick = func() { setShowModal(true) }
 	}
 	badgeNode := components.ToolBadge(components.ToolBadgeProps{
-		Icon:    iconNode,
-		Label:   statusLabel,
-		Color:   themeColor,
-		OnClick: onClick,
+		Icon:      iconNode,
+		Label:     statusLabel,
+		LabelNode: labelNode,
+		Color:     themeColor,
+		OnClick:   onClick,
 	})
 
 	return kitex.Fragment(
 		badgeNode,
 		components.Modal(components.ModalProps{
-			IsOpen:  showModal(),
-			Title:   kitex.Text(fmt.Sprintf("Viewing %s", filename)),
+			IsOpen: showModal(),
+			Title: kitex.Box(kitex.BoxProps{
+				Style: style.S().
+					Display(style.DisplayFlex).
+					FlexDirection(style.FlexRow).
+					AlignItems(style.AlignCenter).
+					Gap(1),
+			},
+				icon.FileIcon(icon.FileIconProps{Path: path}),
+				kitex.Text(fmt.Sprintf("Viewing %s", filename)),
+			),
 			OnClose: func() { setShowModal(false) },
 		},
 			kitex.If(showModal(), func() kitex.Node {
@@ -399,6 +473,7 @@ var LsToolWidget = kitex.FC("LsToolWidget", func(props ToolExecutionProps) kitex
 // GlobToolWidget renders the result of a glob tool call inline — no modal.
 var GlobToolWidget = kitex.FC("GlobToolWidget", func(props ToolExecutionProps) kitex.Node {
 	t := theme.UseTheme()
+	showModal, setShowModal := kitex.UseState(false)
 
 	tc := props.ToolCall
 	tm := props.ToolMessage
@@ -416,69 +491,199 @@ var GlobToolWidget = kitex.FC("GlobToolWidget", func(props ToolExecutionProps) k
 	}
 
 	var statusLabel string
+	var labelNode kitex.Node
 	var iconNode kitex.Node
-	var borderCol color.Color
+	var themeColor color.Color
 
 	var matches []string
 	var totalCount int
 	var truncated bool
+	var details string
+
+	var isDir bool
+	if path != "" {
+		if fi, err := os.Stat(path); err == nil {
+			isDir = fi.IsDir()
+		} else {
+			isDir = filepath.Ext(path) == ""
+		}
+	}
 
 	if t != nil {
+		var actionText string
 		if tm == nil {
+			if path != "" {
+				actionText = "Glob: Searching in "
+			} else {
+				actionText = "Glob: Searching for "
+			}
 			statusLabel = fmt.Sprintf("Glob: Searching%s for [%s]", scope, pattern)
 			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Info)}, kitex.Text(props.CurrentDots))
-			borderCol = t.Color.Surface.Info
+			themeColor = t.Color.Surface.Info
 		} else if tm.IsError {
+			if path != "" {
+				actionText = "Glob: Error searching in "
+			} else {
+				actionText = "Glob: Error searching for "
+			}
 			statusLabel = fmt.Sprintf("Glob: Error searching%s for [%s]", scope, pattern)
 			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Error)}, icon.Error)
-			borderCol = t.Color.Text.Error
+			themeColor = t.Color.Text.Error
+			details = getToolOutput(tm.Content)
 		} else {
 			matches, totalCount, truncated = parseGlobOutput(tm.StructuredContent)
 			matchWord := "matches"
 			if totalCount == 1 {
 				matchWord = "match"
 			}
-			statusLabel = fmt.Sprintf("Glob: Found %d %s%s for [%s]", totalCount, matchWord, scope, pattern)
-			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Success)}, icon.Checkmark)
-			borderCol = t.Color.Surface.Success
-		}
-	}
-
-	accordionStyle := style.S()
-	if t != nil {
-		accordionStyle = accordionStyle.Border(borderCol)
-	}
-
-	return components.Accordion(components.AccordionProps{
-		Color:   components.PaperHover,
-		Variant: components.PaperOutlined,
-		Style:   accordionStyle,
-	},
-		components.AccordionSummary(components.AccordionSummaryProps{
-			HideExpandIcon: tm == nil || tm.IsError || len(matches) == 0,
-			EndContent: kitex.If(tm != nil && !tm.IsError && len(matches) > 0, func() kitex.Node {
-				var fg color.Color
-				if t != nil {
-					fg = t.Color.Text.Secondary
+			if totalCount > 0 {
+				if path != "" {
+					actionText = fmt.Sprintf("Glob: Found %d %s in ", totalCount, matchWord)
+				} else {
+					actionText = fmt.Sprintf("Glob: Found %d %s for ", totalCount, matchWord)
 				}
-				return kitex.Span(kitex.SpanProps{Style: style.S().Foreground(fg)},
-					kitex.Text("Click to expand/collapse"),
+				statusLabel = fmt.Sprintf("Glob: Found %d %s%s for [%s]", totalCount, matchWord, scope, pattern)
+				iconNode = nil // remove checkmark completely on success
+				themeColor = color.RGBA{R: 255, G: 255, B: 255, A: 255}
+			} else {
+				if path != "" {
+					actionText = "Glob: No matches in "
+				} else {
+					actionText = "Glob: No matches for "
+				}
+				statusLabel = fmt.Sprintf("Glob: No matches found%s for [%s]", scope, pattern)
+				iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Secondary)}, icon.Info)
+				themeColor = t.Color.Text.Secondary
+			}
+		}
+
+		baseFocusBg := t.Color.Surface.BaseFocus
+		searchIconColor := t.Color.Surface.Info
+
+		labelNode = kitex.Box(kitex.BoxProps{
+			Style: style.S().
+				Display(style.DisplayFlex).
+				FlexDirection(style.FlexRow).
+				AlignItems(style.AlignCenter),
+		},
+			kitex.Span(kitex.SpanProps{
+				Style: style.S().
+					Bold(true).
+					Foreground(color.RGBA{255, 255, 255, 255}),
+			}, kitex.Text(actionText)),
+			kitex.If(path != "", func() kitex.Node {
+				return kitex.Box(kitex.BoxProps{
+					Style: style.S().
+						Display(style.DisplayFlex).
+						FlexDirection(style.FlexRow).
+						AlignItems(style.AlignCenter).
+						Background(baseFocusBg).
+						PaddingHorizontal(1).
+						Gap(1).
+						MarginRight(1),
+				},
+					kitex.If(isDir, func() kitex.Node {
+						return kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Info)}, icon.Folder)
+					}),
+					kitex.If(!isDir, func() kitex.Node {
+						return icon.FileIcon(icon.FileIconProps{Path: path})
+					}),
+					kitex.Span(kitex.SpanProps{
+						Style: style.S().
+							Foreground(color.RGBA{255, 255, 255, 255}).
+							Bold(true),
+					}, kitex.Text(filepath.Base(path))),
 				)
 			}),
-		},
+			kitex.If(path != "", func() kitex.Node {
+				return kitex.Span(kitex.SpanProps{
+					Style: style.S().
+						Bold(true).
+						Foreground(color.RGBA{255, 255, 255, 255}).
+						MarginRight(1),
+				}, kitex.Text("for"))
+			}),
 			kitex.Box(kitex.BoxProps{
+				Style: style.S().
+					Display(style.DisplayFlex).
+					FlexDirection(style.FlexRow).
+					AlignItems(style.AlignCenter).
+					Background(baseFocusBg).
+					PaddingHorizontal(1).
+					Gap(1),
+			},
+				kitex.Span(kitex.SpanProps{Style: style.S().Foreground(searchIconColor)}, icon.Search),
+				kitex.Span(kitex.SpanProps{
+					Style: style.S().
+						Foreground(color.RGBA{255, 255, 255, 255}).
+						Bold(true),
+				}, kitex.Text(pattern)),
+			),
+		)
+	}
+
+	var onClick func()
+	if tm != nil && (tm.IsError || totalCount > 0) {
+		onClick = func() { setShowModal(true) }
+	}
+
+	badgeNode := components.ToolBadge(components.ToolBadgeProps{
+		Icon:      iconNode,
+		Label:     statusLabel,
+		LabelNode: labelNode,
+		Color:     themeColor,
+		OnClick:   onClick,
+	})
+
+	return kitex.Fragment(
+		badgeNode,
+		components.Modal(components.ModalProps{
+			IsOpen: showModal(),
+			Title: kitex.Box(kitex.BoxProps{
 				Style: style.S().
 					Display(style.DisplayFlex).
 					FlexDirection(style.FlexRow).
 					AlignItems(style.AlignCenter).
 					Gap(1),
 			},
-				iconNode,
-				kitex.Span(kitex.SpanProps{Style: style.S().Bold(true)}, kitex.Text(statusLabel)),
+				kitex.If(t != nil && tm != nil && tm.IsError, func() kitex.Node {
+					return kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Error)}, icon.Error)
+				}),
+				kitex.If(tm != nil && tm.IsError, func() kitex.Node {
+					return kitex.Span(kitex.SpanProps{}, kitex.Text(fmt.Sprintf("Glob Error for %s", pattern)))
+				}),
+				kitex.If(tm != nil && !tm.IsError, func() kitex.Node {
+					return kitex.Fragment(
+						kitex.If(path != "", func() kitex.Node {
+							return kitex.Fragment(
+								kitex.If(isDir, func() kitex.Node {
+									return kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Info)}, icon.Folder)
+								}),
+								kitex.If(!isDir, func() kitex.Node {
+									return icon.FileIcon(icon.FileIconProps{Path: path})
+								}),
+							)
+						}),
+						kitex.If(path == "", func() kitex.Node {
+							return kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Info)}, icon.Search)
+						}),
+						kitex.Span(kitex.SpanProps{}, kitex.Text(fmt.Sprintf("Found %d matches for %s", totalCount, pattern))),
+					)
+				}),
 			),
-		),
-		components.AccordionDetails(components.AccordionDetailsProps{},
-			kitex.If(tm != nil && !tm.IsError && len(matches) > 0, func() kitex.Node {
+			OnClose: func() { setShowModal(false) },
+		},
+			kitex.If(showModal() && tm != nil && tm.IsError && details != "", func() kitex.Node {
+				return kitex.Box(kitex.BoxProps{
+					Style: style.S().
+						Padding(1).
+						Width(style.Percent(100)).
+						MinWidth(style.Percent(0)).
+						Foreground(t.Color.Text.Secondary).
+						WhiteSpace(style.WhiteSpacePreWrap),
+				}, kitex.Text(details))
+			}),
+			kitex.If(showModal() && tm != nil && !tm.IsError && len(matches) > 0, func() kitex.Node {
 				rows := make([]kitex.Node, 0, len(matches))
 				for _, match := range matches {
 					rows = append(rows, globEntryRow(t, match))
@@ -489,7 +694,12 @@ var GlobToolWidget = kitex.FC("GlobToolWidget", func(props ToolExecutionProps) k
 					textCol = t.Color.Text.Tertiary
 				}
 				return kitex.Box(kitex.BoxProps{
-					Style: style.S().Display(style.DisplayFlex).FlexDirection(style.FlexColumn),
+					Style: style.S().
+						Display(style.DisplayFlex).
+						FlexDirection(style.FlexColumn).
+						Padding(1).
+						Width(style.Percent(100)).
+						MinWidth(style.Percent(0)),
 				},
 					kitex.Box(kitex.BoxProps{
 						Style: style.S().Display(style.DisplayFlex).FlexDirection(style.FlexColumn).Gap(0),
@@ -501,16 +711,6 @@ var GlobToolWidget = kitex.FC("GlobToolWidget", func(props ToolExecutionProps) k
 					}),
 				)
 			}),
-
-			kitex.If(tm != nil && !tm.IsError && len(matches) == 0, func() kitex.Node {
-				var textCol color.Color
-				if t != nil {
-					textCol = t.Color.Text.Tertiary
-				}
-				return kitex.Box(kitex.BoxProps{
-					Style: style.S().Foreground(textCol).Italic(true).PaddingHorizontal(1),
-				}, kitex.Text("(no matches found)"))
-			}),
 		),
 	)
 })
@@ -521,7 +721,7 @@ func globEntryRow(t *theme.Scheme, match string) kitex.Node {
 	var dirColor color.Color
 	if t != nil {
 		nameColor = t.Color.Text.Primary
-		dirColor = t.Color.Text.Tertiary
+		dirColor = t.Color.Text.Secondary
 	}
 
 	dirPart, filePart := filepath.Split(match)
@@ -537,14 +737,19 @@ func globEntryRow(t *theme.Scheme, match string) kitex.Node {
 			PaddingVertical(0).
 			PaddingHorizontal(1),
 	},
-		kitex.Span(kitex.SpanProps{Style: style.S().Foreground(dirColor)}, kitex.Text(dirPart)),
+		kitex.Span(kitex.SpanProps{Style: style.S().MarginRight(1)}, icon.FileIcon(icon.FileIconProps{Path: match})),
+		kitex.If(dirPart != "", func() kitex.Node {
+			return kitex.Span(kitex.SpanProps{Style: style.S().Foreground(dirColor)}, kitex.Text(dirPart))
+		}),
 		kitex.Span(kitex.SpanProps{Style: style.S().Foreground(nameColor).Bold(true)}, kitex.Text(filePart)),
 	)
 }
 
 // GrepToolWidget renders the result of a grep tool call inline.
+// GrepToolWidget renders the result of a grep tool call inline.
 var GrepToolWidget = kitex.FC("GrepToolWidget", func(props ToolExecutionProps) kitex.Node {
 	t := theme.UseTheme()
+	showModal, setShowModal := kitex.UseState(false)
 
 	tc := props.ToolCall
 	tm := props.ToolMessage
@@ -562,96 +767,235 @@ var GrepToolWidget = kitex.FC("GrepToolWidget", func(props ToolExecutionProps) k
 	}
 
 	var statusLabel string
+	var labelNode kitex.Node
 	var iconNode kitex.Node
-	var borderCol color.Color
+	var themeColor color.Color
 
 	var matches []tools.GrepOutputMatchesItem
 	var totalCount int
 	var truncated bool
+	var details string
 
-	if t != nil {
-		if tm == nil {
-			statusLabel = fmt.Sprintf("Grep: Searching%s for [%s]", scope, pattern)
-			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Info)}, kitex.Text(props.CurrentDots))
-			borderCol = t.Color.Surface.Info
-		} else if tm.IsError {
-			statusLabel = fmt.Sprintf("Grep: Error searching%s for [%s]", scope, pattern)
-			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Error)}, icon.Error)
-			borderCol = t.Color.Text.Error
+	var isDir bool
+	if path != "" {
+		if fi, err := os.Stat(path); err == nil {
+			isDir = fi.IsDir()
 		} else {
-			matches, totalCount, truncated = parseGrepOutput(tm.StructuredContent)
-			matchWord := "matches"
-			if totalCount == 1 {
-				matchWord = "match"
-			}
-			statusLabel = fmt.Sprintf("Grep: Found %d %s%s for [%s]", totalCount, matchWord, scope, pattern)
-			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Success)}, icon.Checkmark)
-			borderCol = t.Color.Surface.Success
+			isDir = filepath.Ext(path) == ""
 		}
 	}
 
-	accordionStyle := style.S()
 	if t != nil {
-		accordionStyle = accordionStyle.Border(borderCol)
-	}
-
-	return components.Accordion(components.AccordionProps{
-		Color:   components.PaperHover,
-		Variant: components.PaperOutlined,
-		Style:   accordionStyle,
-	},
-		components.AccordionSummary(components.AccordionSummaryProps{
-			HideExpandIcon: tm == nil || tm.IsError || len(matches) == 0,
-			EndContent: kitex.If(tm != nil && !tm.IsError && len(matches) > 0, func() kitex.Node {
-				var fg color.Color
-				if t != nil {
-					fg = t.Color.Text.Secondary
+		var actionText string
+		if tm == nil {
+			if path != "" {
+				actionText = "Searching in "
+			} else {
+				actionText = "Searching for "
+			}
+			statusLabel = fmt.Sprintf("Searching%s for %s", scope, pattern)
+			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Info)}, kitex.Text(props.CurrentDots))
+			themeColor = t.Color.Surface.Info
+		} else if tm.IsError {
+			if path != "" {
+				actionText = "Error searching in "
+			} else {
+				actionText = "Error searching for "
+			}
+			statusLabel = fmt.Sprintf("Error searching%s for %s", scope, pattern)
+			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Error)}, icon.Error)
+			themeColor = t.Color.Text.Error
+			details = getToolOutput(tm.Content)
+		} else {
+			matches, totalCount, truncated = parseGrepOutput(tm.StructuredContent)
+			if totalCount > 0 {
+				matchWord := "matches"
+				if totalCount == 1 {
+					matchWord = "match"
 				}
-				return kitex.Span(kitex.SpanProps{Style: style.S().Foreground(fg)},
-					kitex.Text("Click to expand/collapse"),
+				if path != "" {
+					actionText = fmt.Sprintf("Found %d %s in ", totalCount, matchWord)
+				} else {
+					actionText = fmt.Sprintf("Found %d %s for ", totalCount, matchWord)
+				}
+				statusLabel = fmt.Sprintf("Found %d %s%s for %s", totalCount, matchWord, scope, pattern)
+				iconNode = nil // remove checkmark completely on success
+				themeColor = color.RGBA{R: 255, G: 255, B: 255, A: 255}
+			} else {
+				if path != "" {
+					actionText = "No matches in "
+				} else {
+					actionText = "No matches for "
+				}
+				statusLabel = fmt.Sprintf("No matches found%s for %s", scope, pattern)
+				iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Secondary)}, icon.Info)
+				themeColor = t.Color.Text.Secondary
+			}
+		}
+
+		baseFocusBg := t.Color.Surface.BaseFocus
+		searchIconColor := t.Color.Surface.Info
+
+		labelNode = kitex.Box(kitex.BoxProps{
+			Style: style.S().
+				Display(style.DisplayFlex).
+				FlexDirection(style.FlexRow).
+				AlignItems(style.AlignCenter),
+		},
+			kitex.Span(kitex.SpanProps{
+				Style: style.S().
+					Bold(true).
+					Foreground(color.RGBA{255, 255, 255, 255}),
+			}, kitex.Text(actionText)),
+			kitex.If(path != "", func() kitex.Node {
+				return kitex.Box(kitex.BoxProps{
+					Style: style.S().
+						Display(style.DisplayFlex).
+						FlexDirection(style.FlexRow).
+						AlignItems(style.AlignCenter).
+						Background(baseFocusBg).
+						PaddingHorizontal(1).
+						Gap(1).
+						MarginRight(1),
+				},
+					kitex.If(isDir, func() kitex.Node {
+						return kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Info)}, icon.Folder)
+					}),
+					kitex.If(!isDir, func() kitex.Node {
+						return icon.FileIcon(icon.FileIconProps{Path: path})
+					}),
+					kitex.Span(kitex.SpanProps{
+						Style: style.S().
+							Foreground(color.RGBA{255, 255, 255, 255}).
+							Bold(true),
+					}, kitex.Text(filepath.Base(path))),
 				)
 			}),
-		},
+			kitex.If(path != "", func() kitex.Node {
+				return kitex.Span(kitex.SpanProps{
+					Style: style.S().
+						Bold(true).
+						Foreground(color.RGBA{255, 255, 255, 255}).
+						MarginRight(1),
+				}, kitex.Text("for"))
+			}),
 			kitex.Box(kitex.BoxProps{
+				Style: style.S().
+					Display(style.DisplayFlex).
+					FlexDirection(style.FlexRow).
+					AlignItems(style.AlignCenter).
+					Background(baseFocusBg).
+					PaddingHorizontal(1).
+					Gap(1),
+			},
+				kitex.Span(kitex.SpanProps{Style: style.S().Foreground(searchIconColor)}, icon.Search),
+				kitex.Span(kitex.SpanProps{
+					Style: style.S().
+						Foreground(color.RGBA{255, 255, 255, 255}).
+						Bold(true),
+				}, kitex.Text(pattern)),
+			),
+		)
+	}
+
+	var onClick func()
+	if tm != nil && (tm.IsError || totalCount > 0) {
+		onClick = func() { setShowModal(true) }
+	}
+
+	badgeNode := components.ToolBadge(components.ToolBadgeProps{
+		Icon:      iconNode,
+		Label:     statusLabel,
+		LabelNode: labelNode,
+		Color:     themeColor,
+		OnClick:   onClick,
+	})
+
+	return kitex.Fragment(
+		badgeNode,
+		components.Modal(components.ModalProps{
+			IsOpen: showModal(),
+			Title: kitex.Box(kitex.BoxProps{
 				Style: style.S().
 					Display(style.DisplayFlex).
 					FlexDirection(style.FlexRow).
 					AlignItems(style.AlignCenter).
 					Gap(1),
 			},
-				iconNode,
-				kitex.Span(kitex.SpanProps{Style: style.S().Bold(true)}, kitex.Text(statusLabel)),
+				kitex.If(t != nil && tm != nil && tm.IsError, func() kitex.Node {
+					return kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Error)}, icon.Error)
+				}),
+				kitex.If(tm != nil && tm.IsError, func() kitex.Node {
+					return kitex.Span(kitex.SpanProps{}, kitex.Text(fmt.Sprintf("Grep Error for %s", pattern)))
+				}),
+				kitex.If(tm != nil && !tm.IsError, func() kitex.Node {
+					return kitex.Fragment(
+						kitex.If(path != "", func() kitex.Node {
+							return kitex.Fragment(
+								kitex.If(isDir, func() kitex.Node {
+									return kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Info)}, icon.Folder)
+								}),
+								kitex.If(!isDir, func() kitex.Node {
+									return icon.FileIcon(icon.FileIconProps{Path: path})
+								}),
+							)
+						}),
+						kitex.If(path == "", func() kitex.Node {
+							return kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Info)}, icon.Search)
+						}),
+						kitex.Span(kitex.SpanProps{}, kitex.Text(fmt.Sprintf("Found %d matches for %s", totalCount, pattern))),
+					)
+				}),
 			),
-		),
-		components.AccordionDetails(components.AccordionDetailsProps{},
-			kitex.If(tm != nil && !tm.IsError && len(matches) > 0, func() kitex.Node {
+			OnClose: func() { setShowModal(false) },
+		},
+			kitex.If(showModal() && tm != nil && tm.IsError && details != "", func() kitex.Node {
+				return kitex.Box(kitex.BoxProps{
+					Style: style.S().
+						Padding(1).
+						Width(style.Percent(100)).
+						MinWidth(style.Percent(0)).
+						Foreground(t.Color.Text.Secondary).
+						WhiteSpace(style.WhiteSpacePreWrap),
+				}, kitex.Text(details))
+			}),
+			kitex.If(showModal() && tm != nil && !tm.IsError && len(matches) > 0, func() kitex.Node {
 				rows := make([]kitex.Node, 0, len(matches))
 				var currentFile string
 				firstFile := true
 				for _, match := range matches {
 					if match.Path != currentFile {
 						currentFile = match.Path
-						var fg color.Color
-						if t != nil {
-							fg = t.Color.Surface.Info
+						dirPart := filepath.Dir(match.Path)
+						filePart := filepath.Base(match.Path)
+						if dirPart == "." {
+							dirPart = ""
+						} else if !strings.HasSuffix(dirPart, "/") {
+							dirPart += "/"
 						}
-						var headerStyle style.Style
+
+						headerStyle := style.S().
+							Display(style.DisplayFlex).
+							FlexDirection(style.FlexRow).
+							AlignItems(style.AlignCenter)
+
 						if firstFile {
-							headerStyle = style.S().
-								Foreground(fg).
-								Bold(true).
-								PaddingHorizontal(0)
+							headerStyle = headerStyle.PaddingHorizontal(0)
 							firstFile = false
 						} else {
-							headerStyle = style.S().
-								Foreground(fg).
-								Bold(true).
-								PaddingTop(1).
-								PaddingHorizontal(0)
+							headerStyle = headerStyle.PaddingTop(1).PaddingHorizontal(0)
 						}
+
 						rows = append(rows, kitex.Box(kitex.BoxProps{
 							Style: headerStyle,
-						}, kitex.Text(filepath.ToSlash(match.Path)+":")))
+						},
+							kitex.Span(kitex.SpanProps{Style: style.S().MarginRight(1)}, icon.FileIcon(icon.FileIconProps{Path: match.Path})),
+							kitex.If(dirPart != "", func() kitex.Node {
+								return kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Secondary)}, kitex.Text(dirPart))
+							}),
+							kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Primary)}, kitex.Text(filePart)),
+							kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Tertiary)}, kitex.Text(":")),
+						))
 					}
 
 					rows = append(rows, grepEntryRow(t, match))
@@ -662,7 +1006,12 @@ var GrepToolWidget = kitex.FC("GrepToolWidget", func(props ToolExecutionProps) k
 					textCol = t.Color.Text.Tertiary
 				}
 				return kitex.Box(kitex.BoxProps{
-					Style: style.S().Display(style.DisplayFlex).FlexDirection(style.FlexColumn),
+					Style: style.S().
+						Display(style.DisplayFlex).
+						FlexDirection(style.FlexColumn).
+						Padding(1).
+						Width(style.Percent(100)).
+						MinWidth(style.Percent(0)),
 				},
 					kitex.Box(kitex.BoxProps{
 						Style: style.S().Display(style.DisplayFlex).FlexDirection(style.FlexColumn).Gap(0),
@@ -673,16 +1022,6 @@ var GrepToolWidget = kitex.FC("GrepToolWidget", func(props ToolExecutionProps) k
 						}, kitex.Text(fmt.Sprintf("[Showing %d of %d matches]", len(matches), totalCount)))
 					}),
 				)
-			}),
-
-			kitex.If(tm != nil && !tm.IsError && len(matches) == 0, func() kitex.Node {
-				var textCol color.Color
-				if t != nil {
-					textCol = t.Color.Text.Tertiary
-				}
-				return kitex.Box(kitex.BoxProps{
-					Style: style.S().Foreground(textCol).Italic(true).PaddingHorizontal(1),
-				}, kitex.Text("(no matches found)"))
 			}),
 		),
 	)
@@ -746,27 +1085,91 @@ var WriteToolWidget = kitex.FC("WriteToolWidget", func(props ToolExecutionProps)
 			} else {
 				statusLabel = fmt.Sprintf("Wrote [%s]", filename)
 			}
-			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Success)}, icon.Checkmark)
+			iconNode = nil
 			themeColor = t.Color.Surface.Success
 		}
 	}
 
+	var labelNode kitex.Node
+	if t != nil {
+		actionText := "Pending Write "
+		var detailsText string
+		if tm != nil {
+			if tm.IsError {
+				actionText = "Error Writing "
+			} else {
+				actionText = "Wrote "
+				wOut, ok := parseWriteStructuredOutput(tm.StructuredContent)
+				if ok && wOut.Success {
+					detailsText = fmt.Sprintf("(%d bytes)", wOut.BytesWritten)
+				}
+			}
+		}
+
+		labelNode = kitex.Box(kitex.BoxProps{
+			Style: style.S().
+				Display(style.DisplayFlex).
+				FlexDirection(style.FlexRow).
+				AlignItems(style.AlignCenter),
+		},
+			kitex.Span(kitex.SpanProps{
+				Style: style.S().
+					Bold(true).
+					Foreground(color.RGBA{255, 255, 255, 255}),
+			}, kitex.Text(actionText)),
+			kitex.Box(kitex.BoxProps{
+				Style: style.S().
+					Display(style.DisplayFlex).
+					FlexDirection(style.FlexRow).
+					AlignItems(style.AlignCenter).
+					Background(t.Color.Surface.BaseFocus).
+					PaddingHorizontal(1).
+					Gap(1),
+			},
+				icon.FileIcon(icon.FileIconProps{Path: path}),
+				kitex.Span(kitex.SpanProps{
+					Style: style.S().
+						Foreground(color.RGBA{255, 255, 255, 255}).
+						Bold(true),
+				}, kitex.Text(filename)),
+				kitex.If(detailsText != "", func() kitex.Node {
+					return kitex.Span(kitex.SpanProps{
+						Style: style.S().
+							Foreground(t.Color.Text.Secondary).
+							Bold(true).
+							MarginLeft(1),
+					}, kitex.Text(detailsText))
+				}),
+			),
+		)
+	}
+
 	var onClick func()
-	if content != "" {
+	if tm != nil && !tm.IsError && content != "" {
 		onClick = func() { setShowModal(true) }
 	}
 	badgeNode := components.ToolBadge(components.ToolBadgeProps{
-		Icon:    iconNode,
-		Label:   statusLabel,
-		Color:   themeColor,
-		OnClick: onClick,
+		Icon:      iconNode,
+		Label:     statusLabel,
+		LabelNode: labelNode,
+		Color:     themeColor,
+		OnClick:   onClick,
 	})
 
 	return kitex.Fragment(
 		badgeNode,
 		components.Modal(components.ModalProps{
-			IsOpen:  showModal(),
-			Title:   kitex.Text(fmt.Sprintf("Wrote Content for %s", filename)),
+			IsOpen: showModal(),
+			Title: kitex.Box(kitex.BoxProps{
+				Style: style.S().
+					Display(style.DisplayFlex).
+					FlexDirection(style.FlexRow).
+					AlignItems(style.AlignCenter).
+					Gap(1),
+			},
+				icon.FileIcon(icon.FileIconProps{Path: path}),
+				kitex.Text(fmt.Sprintf("Writing %s", filename)),
+			),
 			OnClose: func() { setShowModal(false) },
 		},
 			kitex.If(showModal(), func() kitex.Node {
@@ -820,9 +1223,91 @@ var EditToolWidget = kitex.FC("EditToolWidget", func(props ToolExecutionProps) k
 				statusLabel = fmt.Sprintf("Edited [%s]", filename)
 				diffContent = getToolOutput(tm.Content)
 			}
-			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Success)}, icon.Checkmark)
+			iconNode = nil
 			themeColor = t.Color.Surface.Success
 		}
+	}
+
+	var labelNode kitex.Node
+	if t != nil {
+		actionText := "Pending Edit "
+		var additions, deletions int
+		var hasDiffStats bool
+		if tm != nil {
+			if tm.IsError {
+				actionText = "Error Editing "
+			} else {
+				actionText = "Wrote "
+				eOut, ok := parseEditStructuredOutput(tm.StructuredContent)
+				if ok && eOut.Success {
+					additions = eOut.Additions
+					deletions = eOut.Deletions
+					hasDiffStats = true
+				}
+			}
+		}
+
+		labelNode = kitex.Box(kitex.BoxProps{
+			Style: style.S().
+				Display(style.DisplayFlex).
+				FlexDirection(style.FlexRow).
+				AlignItems(style.AlignCenter),
+		},
+			kitex.Span(kitex.SpanProps{
+				Style: style.S().
+					Bold(true).
+					Foreground(color.RGBA{255, 255, 255, 255}),
+			}, kitex.Text(actionText)),
+			kitex.Box(kitex.BoxProps{
+				Style: style.S().
+					Display(style.DisplayFlex).
+					FlexDirection(style.FlexRow).
+					AlignItems(style.AlignCenter).
+					Background(t.Color.Surface.BaseFocus).
+					PaddingHorizontal(1).
+					Gap(1),
+			},
+				icon.FileIcon(icon.FileIconProps{Path: path}),
+				kitex.Span(kitex.SpanProps{
+					Style: style.S().
+						Foreground(color.RGBA{255, 255, 255, 255}).
+						Bold(true),
+				}, kitex.Text(filename)),
+				kitex.If(hasDiffStats, func() kitex.Node {
+					return kitex.Box(kitex.BoxProps{
+						Style: style.S().
+							Display(style.DisplayFlex).
+							FlexDirection(style.FlexRow).
+							AlignItems(style.AlignCenter).
+							Gap(1).
+							MarginLeft(1),
+					},
+						kitex.Box(kitex.BoxProps{
+							Style: style.S().
+								Display(style.DisplayFlex).
+								FlexDirection(style.FlexRow).
+								AlignItems(style.AlignCenter).
+								Foreground(t.Color.Surface.Success).
+								Bold(true),
+						},
+							icon.Plus,
+							kitex.Span(kitex.SpanProps{Style: style.S().MarginLeft(1)}, kitex.Text(fmt.Sprintf("%d", additions))),
+						),
+						kitex.Box(kitex.BoxProps{
+							Style: style.S().
+								Display(style.DisplayFlex).
+								FlexDirection(style.FlexRow).
+								AlignItems(style.AlignCenter).
+								Foreground(t.Color.Text.Error).
+								Bold(true),
+						},
+							kitex.Text(""),
+							kitex.Span(kitex.SpanProps{Style: style.S().MarginLeft(1)}, kitex.Text(fmt.Sprintf("%d", deletions))),
+						),
+					)
+				}),
+			),
+		)
 	}
 
 	var onClick func()
@@ -830,17 +1315,27 @@ var EditToolWidget = kitex.FC("EditToolWidget", func(props ToolExecutionProps) k
 		onClick = func() { setShowModal(true) }
 	}
 	badgeNode := components.ToolBadge(components.ToolBadgeProps{
-		Icon:    iconNode,
-		Label:   statusLabel,
-		Color:   themeColor,
-		OnClick: onClick,
+		Icon:      iconNode,
+		Label:     statusLabel,
+		LabelNode: labelNode,
+		Color:     themeColor,
+		OnClick:   onClick,
 	})
 
 	return kitex.Fragment(
 		badgeNode,
 		components.Modal(components.ModalProps{
-			IsOpen:  showModal(),
-			Title:   kitex.Text(fmt.Sprintf("Changes in %s", filename)),
+			IsOpen: showModal(),
+			Title: kitex.Box(kitex.BoxProps{
+				Style: style.S().
+					Display(style.DisplayFlex).
+					FlexDirection(style.FlexRow).
+					AlignItems(style.AlignCenter).
+					Gap(1),
+			},
+				icon.FileIcon(icon.FileIconProps{Path: path}),
+				kitex.Text(fmt.Sprintf("Changes in %s", filename)),
+			),
 			OnClose: func() { setShowModal(false) },
 			HeaderActions: components.Button(components.ButtonProps{
 				Variant: components.ButtonText,
@@ -904,9 +1399,91 @@ var MultiEditToolWidget = kitex.FC("MultiEditToolWidget", func(props ToolExecuti
 				statusLabel = fmt.Sprintf("Multi-Edited (No Changes) [%s]", filename)
 				diffContent = getToolOutput(tm.Content)
 			}
-			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Success)}, icon.Checkmark)
+			iconNode = nil
 			themeColor = t.Color.Surface.Success
 		}
+	}
+
+	var labelNode kitex.Node
+	if t != nil {
+		actionText := "Pending Multi-Edit "
+		var additions, deletions int
+		var hasDiffStats bool
+		if tm != nil {
+			if tm.IsError {
+				actionText = "Error Multi-Editing "
+			} else {
+				actionText = "Wrote "
+				meOut, ok := parseMultiEditStructuredOutput(tm.StructuredContent)
+				if ok && meOut.Success {
+					additions = meOut.Additions
+					deletions = meOut.Deletions
+					hasDiffStats = true
+				}
+			}
+		}
+
+		labelNode = kitex.Box(kitex.BoxProps{
+			Style: style.S().
+				Display(style.DisplayFlex).
+				FlexDirection(style.FlexRow).
+				AlignItems(style.AlignCenter),
+		},
+			kitex.Span(kitex.SpanProps{
+				Style: style.S().
+					Bold(true).
+					Foreground(color.RGBA{255, 255, 255, 255}),
+			}, kitex.Text(actionText)),
+			kitex.Box(kitex.BoxProps{
+				Style: style.S().
+					Display(style.DisplayFlex).
+					FlexDirection(style.FlexRow).
+					AlignItems(style.AlignCenter).
+					Background(t.Color.Surface.BaseFocus).
+					PaddingHorizontal(1).
+					Gap(1),
+			},
+				icon.FileIcon(icon.FileIconProps{Path: path}),
+				kitex.Span(kitex.SpanProps{
+					Style: style.S().
+						Foreground(color.RGBA{255, 255, 255, 255}).
+						Bold(true),
+				}, kitex.Text(filename)),
+				kitex.If(hasDiffStats, func() kitex.Node {
+					return kitex.Box(kitex.BoxProps{
+						Style: style.S().
+							Display(style.DisplayFlex).
+							FlexDirection(style.FlexRow).
+							AlignItems(style.AlignCenter).
+							Gap(1).
+							MarginLeft(1),
+					},
+						kitex.Box(kitex.BoxProps{
+							Style: style.S().
+								Display(style.DisplayFlex).
+								FlexDirection(style.FlexRow).
+								AlignItems(style.AlignCenter).
+								Foreground(t.Color.Surface.Success).
+								Bold(true),
+						},
+							icon.Plus,
+							kitex.Span(kitex.SpanProps{Style: style.S().MarginLeft(1)}, kitex.Text(fmt.Sprintf("%d", additions))),
+						),
+						kitex.Box(kitex.BoxProps{
+							Style: style.S().
+								Display(style.DisplayFlex).
+								FlexDirection(style.FlexRow).
+								AlignItems(style.AlignCenter).
+								Foreground(t.Color.Text.Error).
+								Bold(true),
+						},
+							kitex.Text(""),
+							kitex.Span(kitex.SpanProps{Style: style.S().MarginLeft(1)}, kitex.Text(fmt.Sprintf("%d", deletions))),
+						),
+					)
+				}),
+			),
+		)
 	}
 
 	var onClick func()
@@ -914,17 +1491,27 @@ var MultiEditToolWidget = kitex.FC("MultiEditToolWidget", func(props ToolExecuti
 		onClick = func() { setShowModal(true) }
 	}
 	badgeNode := components.ToolBadge(components.ToolBadgeProps{
-		Icon:    iconNode,
-		Label:   statusLabel,
-		Color:   themeColor,
-		OnClick: onClick,
+		Icon:      iconNode,
+		Label:     statusLabel,
+		LabelNode: labelNode,
+		Color:     themeColor,
+		OnClick:   onClick,
 	})
 
 	return kitex.Fragment(
 		badgeNode,
 		components.Modal(components.ModalProps{
-			IsOpen:  showModal(),
-			Title:   kitex.Text(fmt.Sprintf("Multi-Edit Changes in %s", filename)),
+			IsOpen: showModal(),
+			Title: kitex.Box(kitex.BoxProps{
+				Style: style.S().
+					Display(style.DisplayFlex).
+					FlexDirection(style.FlexRow).
+					AlignItems(style.AlignCenter).
+					Gap(1),
+			},
+				icon.FileIcon(icon.FileIconProps{Path: path}),
+				kitex.Text(fmt.Sprintf("Multi-Edit Changes in %s", filename)),
+			),
 			OnClose: func() { setShowModal(false) },
 			HeaderActions: components.Button(components.ButtonProps{
 				Variant: components.ButtonText,
@@ -965,49 +1552,119 @@ var RemoveToolWidget = kitex.FC("RemoveToolWidget", func(props ToolExecutionProp
 	filename := filepath.Base(path)
 
 	var statusLabel string
+	var labelNode kitex.Node
 	var iconNode kitex.Node
 	var themeColor color.Color
+	var details string
 
 	if t != nil {
+		var actionText string
 		if tm == nil {
+			actionText = "Pending Remove "
 			statusLabel = fmt.Sprintf("Pending Remove [%s]", filename)
 			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Info)}, kitex.Text(props.CurrentDots))
 			themeColor = t.Color.Surface.Info
 		} else if tm.IsError {
+			actionText = "Error Removing "
 			statusLabel = fmt.Sprintf("Error Removing [%s]", filename)
 			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Error)}, icon.Error)
 			themeColor = t.Color.Text.Error
+			details = getToolOutput(tm.Content)
 		} else {
 			rOut, ok := parseRemoveStructuredOutput(tm.StructuredContent)
 			if ok && rOut.Success {
+				actionText = "Removed "
 				statusLabel = fmt.Sprintf("Removed [%s]", filename)
+				themeColor = t.Color.Surface.Success
 			} else {
+				actionText = "Failed to Remove "
 				statusLabel = fmt.Sprintf("Failed to Remove [%s]", filename)
+				themeColor = t.Color.Text.Error
 			}
-			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Success)}, icon.Checkmark)
-			themeColor = t.Color.Surface.Success
+			iconNode = nil // remove checkmark completely on success
 		}
+
+		baseFocusBg := t.Color.Surface.BaseFocus
+
+		labelNode = kitex.Box(kitex.BoxProps{
+			Style: style.S().
+				Display(style.DisplayFlex).
+				FlexDirection(style.FlexRow).
+				AlignItems(style.AlignCenter),
+		},
+			kitex.Span(kitex.SpanProps{
+				Style: style.S().
+					Bold(true).
+					Foreground(color.RGBA{255, 255, 255, 255}),
+			}, kitex.Text(actionText)),
+			kitex.Box(kitex.BoxProps{
+				Style: style.S().
+					Display(style.DisplayFlex).
+					FlexDirection(style.FlexRow).
+					AlignItems(style.AlignCenter).
+					Background(baseFocusBg).
+					PaddingHorizontal(1).
+					Gap(1),
+			},
+				icon.FileIcon(icon.FileIconProps{Path: path}),
+				kitex.Span(kitex.SpanProps{
+					Style: style.S().
+						Foreground(color.RGBA{255, 255, 255, 255}).
+						Bold(true),
+				}, kitex.Text(filename)),
+			),
+		)
 	}
 
 	var onClick func()
-	if tm != nil && !tm.IsError {
+	if tm != nil {
 		onClick = func() { setShowModal(true) }
 	}
 	badgeNode := components.ToolBadge(components.ToolBadgeProps{
-		Icon:    iconNode,
-		Label:   statusLabel,
-		Color:   themeColor,
-		OnClick: onClick,
+		Icon:      iconNode,
+		Label:     statusLabel,
+		LabelNode: labelNode,
+		Color:     themeColor,
+		OnClick:   onClick,
 	})
 
 	return kitex.Fragment(
 		badgeNode,
 		components.Modal(components.ModalProps{
-			IsOpen:  showModal(),
-			Title:   kitex.Text(fmt.Sprintf("Remove Result for %s", filename)),
+			IsOpen: showModal(),
+			Title: kitex.Box(kitex.BoxProps{
+				Style: style.S().
+					Display(style.DisplayFlex).
+					FlexDirection(style.FlexRow).
+					AlignItems(style.AlignCenter).
+					Gap(1),
+			},
+				kitex.If(t != nil && tm != nil && tm.IsError, func() kitex.Node {
+					return kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Error)}, icon.Error)
+				}),
+				kitex.If(tm != nil && tm.IsError, func() kitex.Node {
+					return kitex.Span(kitex.SpanProps{}, kitex.Text(fmt.Sprintf("Error Removing %s", filename)))
+				}),
+				kitex.If(tm != nil && !tm.IsError, func() kitex.Node {
+					return kitex.Fragment(
+						icon.FileIcon(icon.FileIconProps{Path: path}),
+						kitex.Span(kitex.SpanProps{}, kitex.Text(fmt.Sprintf("Removed %s", filename))),
+					)
+				}),
+			),
 			OnClose: func() { setShowModal(false) },
 		},
-			kitex.If(showModal(), func() kitex.Node {
+			kitex.If(showModal() && tm != nil && tm.IsError && details != "", func() kitex.Node {
+				return kitex.Box(kitex.BoxProps{
+					Style: style.S().
+						Padding(1).
+						Width(style.Percent(100)).
+						MinWidth(style.Percent(0)).
+						Foreground(t.Color.Text.Secondary).
+						WhiteSpace(style.WhiteSpacePreWrap),
+				}, kitex.Text(details))
+			}),
+			kitex.If(showModal() && tm != nil && !tm.IsError, func() kitex.Node {
 				rOut, ok := parseRemoveStructuredOutput(tm.StructuredContent)
 				return kitex.Box(kitex.BoxProps{
 					Style: style.S().
@@ -1112,6 +1769,7 @@ var BashToolWidget = kitex.FC("BashToolWidget", func(props ToolExecutionProps) k
 		FlexDirection(style.FlexColumn).
 		Width(style.Percent(100)).
 		MaxWidth(style.Percent(100)).
+		MinWidth(style.Percent(0)).
 		Overflow(style.OverflowHidden)
 
 	headerStyle := style.S().
@@ -1128,8 +1786,10 @@ var BashToolWidget = kitex.FC("BashToolWidget", func(props ToolExecutionProps) k
 		Padding(1).
 		Display(style.DisplayFlex).
 		FlexDirection(style.FlexColumn).
+		Gap(1).
 		Width(style.Percent(100)).
 		MaxWidth(style.Percent(100)).
+		MinWidth(style.Percent(0)).
 		Overflow(style.OverflowHidden)
 
 	var iconNode kitex.Node
@@ -1186,7 +1846,7 @@ var BashToolWidget = kitex.FC("BashToolWidget", func(props ToolExecutionProps) k
 			headerFg = t.Color.Text.Error
 			borderCol = t.Color.Text.Error
 		} else {
-			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Success)}, icon.Checkmark)
+			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Success)}, icon.FontAwesomeTerminal)
 			statusLabel = "BASH SUCCESS"
 			headerBg = t.Color.Surface.BaseFocus
 			headerFg = t.Color.Surface.Success
@@ -1265,13 +1925,22 @@ var BashToolWidget = kitex.FC("BashToolWidget", func(props ToolExecutionProps) k
 					}),
 					// Input: codeblock without header or borders
 					kitex.If(command != "", func() kitex.Node {
+						var cbStyle style.Style
+						if t != nil {
+							cbStyle = style.S().Background(t.Color.Surface.Base)
+						}
 						return kitex.Box(kitex.BoxProps{
-							Style: style.S(),
+							Style: style.S().
+								Width(style.Percent(100)).
+								MinWidth(style.Percent(0)),
 						},
 							components.CodeBlock(components.CodeBlockProps{
-								Code:       command,
+								Code:       "$ " + command,
 								Lang:       "bash",
 								HideHeader: true,
+								Wrap:       true,
+								Compact:    true,
+								Style:      cbStyle.Padding(1),
 							}),
 						)
 					}),
@@ -1303,6 +1972,7 @@ var BashToolWidget = kitex.FC("BashToolWidget", func(props ToolExecutionProps) k
 									FlexDirection(style.FlexColumn).
 									Width(style.Percent(100)).
 									MaxWidth(style.Percent(100)).
+									MinWidth(style.Percent(0)).
 									Overflow(style.OverflowHidden)
 
 								// First part is stdout
@@ -1312,6 +1982,8 @@ var BashToolWidget = kitex.FC("BashToolWidget", func(props ToolExecutionProps) k
 									elements = append(elements, kitex.Box(kitex.BoxProps{
 										Style: style.S().
 											Foreground(textCol).
+											Width(style.Percent(100)).
+											MinWidth(style.Percent(0)).
 											WhiteSpace(style.WhiteSpacePreWrap),
 									}, kitex.Text(stdoutText)))
 								}
@@ -1324,6 +1996,8 @@ var BashToolWidget = kitex.FC("BashToolWidget", func(props ToolExecutionProps) k
 										elements = append(elements, kitex.Box(kitex.BoxProps{
 											Style: style.S().
 												Foreground(t.Color.Text.Error).
+												Width(style.Percent(100)).
+												MinWidth(style.Percent(0)).
 												WhiteSpace(style.WhiteSpacePreWrap).
 												MarginTop(1),
 										}, kitex.Text("[stderr]\n"+stderrText)))
@@ -1343,7 +2017,7 @@ var BashToolWidget = kitex.FC("BashToolWidget", func(props ToolExecutionProps) k
 											setShowModal(true)
 										},
 									}, kitex.Fragment(
-										kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Info)}, icon.Terminal),
+										kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Info)}, icon.FontAwesomeTerminal),
 										kitex.Text(" VIEW FULL OUTPUT"),
 									),
 									)
@@ -1390,6 +2064,7 @@ var BashToolWidget = kitex.FC("BashToolWidget", func(props ToolExecutionProps) k
 					Padding(1).
 					Width(style.Percent(100)).
 					MaxWidth(style.Percent(100)).
+					MinWidth(style.Percent(0)).
 					Overflow(style.OverflowHidden)
 
 				// First part is stdout
@@ -1399,6 +2074,8 @@ var BashToolWidget = kitex.FC("BashToolWidget", func(props ToolExecutionProps) k
 					elements = append(elements, kitex.Box(kitex.BoxProps{
 						Style: style.S().
 							Foreground(textCol).
+							Width(style.Percent(100)).
+							MinWidth(style.Percent(0)).
 							WhiteSpace(style.WhiteSpacePreWrap),
 					}, kitex.Text(stdoutText)))
 				}
@@ -1411,6 +2088,8 @@ var BashToolWidget = kitex.FC("BashToolWidget", func(props ToolExecutionProps) k
 						elements = append(elements, kitex.Box(kitex.BoxProps{
 							Style: style.S().
 								Foreground(t.Color.Text.Error).
+								Width(style.Percent(100)).
+								MinWidth(style.Percent(0)).
 								WhiteSpace(style.WhiteSpacePreWrap).
 								MarginTop(1),
 						}, kitex.Text("[stderr]\n"+stderrText)))
@@ -1734,7 +2413,7 @@ var TasksToolWidget = kitex.FC("TasksToolWidget", func(props ToolExecutionProps)
 												setShowModal(true)
 											},
 										}, kitex.Fragment(
-											kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Info)}, icon.Terminal),
+											kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Info)}, icon.FontAwesomeTerminal),
 											kitex.Text(" VIEW FULL OUTPUT"),
 										),
 										)
@@ -1806,6 +2485,7 @@ var TasksToolWidget = kitex.FC("TasksToolWidget", func(props ToolExecutionProps)
 // WebSearchToolWidget renders the result of a web_search tool call inline.
 var WebSearchToolWidget = kitex.FC("WebSearchToolWidget", func(props ToolExecutionProps) kitex.Node {
 	t := theme.UseTheme()
+	showModal, setShowModal := kitex.UseState(false)
 
 	tc := props.ToolCall
 	tm := props.ToolMessage
@@ -1816,67 +2496,128 @@ var WebSearchToolWidget = kitex.FC("WebSearchToolWidget", func(props ToolExecuti
 	}
 
 	var statusLabel string
+	var labelNode kitex.Node
 	var iconNode kitex.Node
-	var borderCol color.Color
+	var themeColor color.Color
+	var details string
 
 	var results []tools.WebSearchOutputResultsItem
 
 	if t != nil {
+		var actionText string
 		if tm == nil {
+			actionText = "Web Search: Searching for "
 			statusLabel = fmt.Sprintf("Web Search: Searching for %q", query)
 			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Info)}, kitex.Text(props.CurrentDots))
-			borderCol = t.Color.Surface.Info
+			themeColor = t.Color.Surface.Info
 		} else if tm.IsError {
+			actionText = "Web Search: Error searching for "
 			statusLabel = fmt.Sprintf("Web Search: Error searching for %q", query)
 			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Error)}, icon.Error)
-			borderCol = t.Color.Text.Error
+			themeColor = t.Color.Text.Error
+			details = getToolOutput(tm.Content)
 		} else {
 			results = parseWebSearchOutput(tm.StructuredContent)
 			resWord := "results"
 			if len(results) == 1 {
 				resWord = "result"
 			}
-			statusLabel = fmt.Sprintf("Web Search: Found %d %s for %q", len(results), resWord, query)
-			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Success)}, icon.Checkmark)
-			borderCol = t.Color.Surface.Success
+			if len(results) > 0 {
+				actionText = fmt.Sprintf("Web Search: Found %d %s for ", len(results), resWord)
+				statusLabel = fmt.Sprintf("Web Search: Found %d %s for %q", len(results), resWord, query)
+				iconNode = nil // remove checkmark completely on success
+				themeColor = color.RGBA{R: 255, G: 255, B: 255, A: 255}
+			} else {
+				actionText = "Web Search: No results for "
+				statusLabel = fmt.Sprintf("Web Search: No results found for %q", query)
+				iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Secondary)}, icon.Info)
+				themeColor = t.Color.Text.Secondary
+			}
 		}
-	}
 
-	accordionStyle := style.S()
-	if t != nil {
-		accordionStyle = accordionStyle.Border(borderCol)
-	}
+		baseFocusBg := t.Color.Surface.BaseFocus
+		searchIconColor := t.Color.Surface.Info
 
-	return components.Accordion(components.AccordionProps{
-		Color:   components.PaperHover,
-		Variant: components.PaperOutlined,
-		Style:   accordionStyle,
-	},
-		components.AccordionSummary(components.AccordionSummaryProps{
-			HideExpandIcon: tm == nil || tm.IsError,
-			EndContent: kitex.If(tm != nil && !tm.IsError, func() kitex.Node {
-				var fg color.Color
-				if t != nil {
-					fg = t.Color.Text.Secondary
-				}
-				return kitex.Span(kitex.SpanProps{Style: style.S().Foreground(fg)},
-					kitex.Text("Click to expand/collapse"),
-				)
-			}),
+		labelNode = kitex.Box(kitex.BoxProps{
+			Style: style.S().
+				Display(style.DisplayFlex).
+				FlexDirection(style.FlexRow).
+				AlignItems(style.AlignCenter),
 		},
+			kitex.Span(kitex.SpanProps{
+				Style: style.S().
+					Bold(true).
+					Foreground(color.RGBA{255, 255, 255, 255}),
+			}, kitex.Text(actionText)),
 			kitex.Box(kitex.BoxProps{
+				Style: style.S().
+					Display(style.DisplayFlex).
+					FlexDirection(style.FlexRow).
+					AlignItems(style.AlignCenter).
+					Background(baseFocusBg).
+					PaddingHorizontal(1).
+					Gap(1),
+			},
+				kitex.Span(kitex.SpanProps{Style: style.S().Foreground(searchIconColor)}, icon.Search),
+				kitex.Span(kitex.SpanProps{
+					Style: style.S().
+						Foreground(color.RGBA{255, 255, 255, 255}).
+						Bold(true),
+				}, kitex.Text(query)),
+			),
+		)
+	}
+
+	var onClick func()
+	if tm != nil && (tm.IsError || len(results) > 0) {
+		onClick = func() { setShowModal(true) }
+	}
+
+	badgeNode := components.ToolBadge(components.ToolBadgeProps{
+		Icon:      iconNode,
+		Label:     statusLabel,
+		LabelNode: labelNode,
+		Color:     themeColor,
+		OnClick:   onClick,
+	})
+
+	return kitex.Fragment(
+		badgeNode,
+		components.Modal(components.ModalProps{
+			IsOpen: showModal(),
+			Title: kitex.Box(kitex.BoxProps{
 				Style: style.S().
 					Display(style.DisplayFlex).
 					FlexDirection(style.FlexRow).
 					AlignItems(style.AlignCenter).
 					Gap(1),
 			},
-				iconNode,
-				kitex.Span(kitex.SpanProps{Style: style.S().Bold(true)}, kitex.Text(statusLabel)),
+				kitex.If(t != nil && tm != nil && tm.IsError, func() kitex.Node {
+					return kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Error)}, icon.Error)
+				}),
+				kitex.If(tm != nil && tm.IsError, func() kitex.Node {
+					return kitex.Span(kitex.SpanProps{}, kitex.Text(fmt.Sprintf("Web Search Error for %q", query)))
+				}),
+				kitex.If(tm != nil && !tm.IsError, func() kitex.Node {
+					return kitex.Fragment(
+						kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Info)}, icon.Search),
+						kitex.Span(kitex.SpanProps{}, kitex.Text(fmt.Sprintf("Web Search: Found %d results for %q", len(results), query))),
+					)
+				}),
 			),
-		),
-		components.AccordionDetails(components.AccordionDetailsProps{},
-			kitex.If(tm != nil && !tm.IsError && len(results) > 0, func() kitex.Node {
+			OnClose: func() { setShowModal(false) },
+		},
+			kitex.If(showModal() && tm != nil && tm.IsError && details != "", func() kitex.Node {
+				return kitex.Box(kitex.BoxProps{
+					Style: style.S().
+						Padding(1).
+						Width(style.Percent(100)).
+						MinWidth(style.Percent(0)).
+						Foreground(t.Color.Text.Secondary).
+						WhiteSpace(style.WhiteSpacePreWrap),
+				}, kitex.Text(details))
+			}),
+			kitex.If(showModal() && tm != nil && !tm.IsError && len(results) > 0, func() kitex.Node {
 				var listNodes []kitex.Node
 				for i, res := range results {
 					var titleStyle, urlStyle, snippetStyle style.Style
@@ -1901,18 +2642,13 @@ var WebSearchToolWidget = kitex.FC("WebSearchToolWidget", func(props ToolExecuti
 					))
 				}
 				return kitex.Box(kitex.BoxProps{
-					Style: style.S().Display(style.DisplayFlex).FlexDirection(style.FlexColumn),
+					Style: style.S().
+						Display(style.DisplayFlex).
+						FlexDirection(style.FlexColumn).
+						Padding(1).
+						Width(style.Percent(100)).
+						MinWidth(style.Percent(0)),
 				}, listNodes...)
-			}),
-
-			kitex.If(tm != nil && !tm.IsError && len(results) == 0, func() kitex.Node {
-				var textCol color.Color
-				if t != nil {
-					textCol = t.Color.Text.Tertiary
-				}
-				return kitex.Box(kitex.BoxProps{
-					Style: style.S().Foreground(textCol).Italic(true),
-				}, kitex.Text("(no results found)"))
 			}),
 		),
 	)
@@ -1932,85 +2668,155 @@ var WebFetchToolWidget = kitex.FC("WebFetchToolWidget", func(props ToolExecution
 	}
 
 	var statusLabel string
+	var labelNode kitex.Node
 	var iconNode kitex.Node
 	var themeColor color.Color
+	var details string
+
+	var cleanCode string
+	var truncated bool
+	var cachedPath string
+	var mimeType string
+	var isBinary bool
+	var title string
+	var displayTarget string = url
+
+	if tm != nil {
+		vOut, ok := parseWebFetchStructuredOutput(tm.StructuredContent)
+		if ok {
+			cleanCode = vOut.Content
+			truncated = vOut.Truncated
+			cachedPath = vOut.CachedPath
+			mimeType = vOut.MimeType
+			isBinary = vOut.IsBinary
+			title = vOut.Title
+		} else {
+			cleanCode = getToolOutput(tm.Content)
+		}
+		if title != "" {
+			displayTarget = title
+		}
+	}
 
 	if t != nil {
+		var actionText string
 		if tm == nil {
+			actionText = "Fetching "
 			statusLabel = fmt.Sprintf("Fetching [%s]", url)
 			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Info)}, kitex.Text(props.CurrentDots))
 			themeColor = t.Color.Surface.Info
 		} else if tm.IsError {
+			actionText = "Error Fetching "
 			statusLabel = fmt.Sprintf("Error Fetching [%s]", url)
 			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Error)}, icon.Error)
 			themeColor = t.Color.Text.Error
+			details = getToolOutput(tm.Content)
 		} else {
-			vOut, ok := parseWebFetchStructuredOutput(tm.StructuredContent)
-			if ok {
-				if vOut.IsBinary {
-					statusLabel = fmt.Sprintf("Fetched Binary [%s] (%s)", filepath.Base(url), vOut.MimeType)
-				} else if vOut.Title != "" {
-					statusLabel = fmt.Sprintf("Fetched [%s]", vOut.Title)
-				} else {
-					statusLabel = fmt.Sprintf("Fetched [%s]", url)
-				}
+			if isBinary {
+				actionText = "Fetched Binary "
+				statusLabel = fmt.Sprintf("Fetched Binary [%s] (%s)", filepath.Base(url), mimeType)
+			} else if title != "" {
+				actionText = "Fetched "
+				statusLabel = fmt.Sprintf("Fetched [%s]", title)
 			} else {
+				actionText = "Fetched "
 				statusLabel = fmt.Sprintf("Fetched [%s]", url)
 			}
-			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Success)}, icon.Checkmark)
+			iconNode = nil // remove checkmark completely on success
 			themeColor = t.Color.Surface.Success
 		}
+
+		baseFocusBg := t.Color.Surface.BaseFocus
+		globeIconColor := t.Color.Surface.Info
+
+		labelNode = kitex.Box(kitex.BoxProps{
+			Style: style.S().
+				Display(style.DisplayFlex).
+				FlexDirection(style.FlexRow).
+				AlignItems(style.AlignCenter),
+		},
+			kitex.Span(kitex.SpanProps{
+				Style: style.S().
+					Bold(true).
+					Foreground(color.RGBA{255, 255, 255, 255}),
+			}, kitex.Text(actionText)),
+			kitex.Box(kitex.BoxProps{
+				Style: style.S().
+					Display(style.DisplayFlex).
+					FlexDirection(style.FlexRow).
+					AlignItems(style.AlignCenter).
+					Background(baseFocusBg).
+					PaddingHorizontal(1).
+					Gap(1),
+			},
+				kitex.Span(kitex.SpanProps{Style: style.S().Foreground(globeIconColor)}, icon.Globe),
+				kitex.Span(kitex.SpanProps{
+					Style: style.S().
+						Foreground(color.RGBA{255, 255, 255, 255}).
+						Bold(true),
+				}, kitex.Text(displayTarget)),
+			),
+		)
 	}
 
 	var onClick func()
-	if tm != nil && !tm.IsError {
+	if tm != nil {
 		onClick = func() { setShowModal(true) }
 	}
+
 	badgeNode := components.ToolBadge(components.ToolBadgeProps{
-		Icon:    iconNode,
-		Label:   statusLabel,
-		Color:   themeColor,
-		OnClick: onClick,
+		Icon:      iconNode,
+		Label:     statusLabel,
+		LabelNode: labelNode,
+		Color:     themeColor,
+		OnClick:   onClick,
 	})
+
+	filename := filepath.Base(url)
+	if idx := strings.Index(filename, "?"); idx != -1 {
+		filename = filename[:idx]
+	}
+	if filename == "" || filename == "." || filename == "/" {
+		filename = "download"
+	}
 
 	return kitex.Fragment(
 		badgeNode,
 		components.Modal(components.ModalProps{
 			IsOpen: showModal(),
-			Title:  kitex.Text("Web Fetch Details"),
-			OnClose: func() {
-				setShowModal(false)
+			Title: kitex.Box(kitex.BoxProps{
+				Style: style.S().
+					Display(style.DisplayFlex).
+					FlexDirection(style.FlexRow).
+					AlignItems(style.AlignCenter).
+					Gap(1),
 			},
+				kitex.If(t != nil && tm != nil && tm.IsError, func() kitex.Node {
+					return kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Error)}, icon.Error)
+				}),
+				kitex.If(tm != nil && tm.IsError, func() kitex.Node {
+					return kitex.Span(kitex.SpanProps{}, kitex.Text(fmt.Sprintf("Web Fetch Error for %s", url)))
+				}),
+				kitex.If(tm != nil && !tm.IsError, func() kitex.Node {
+					return kitex.Fragment(
+						kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Info)}, icon.Globe),
+						kitex.Span(kitex.SpanProps{}, kitex.Text(fmt.Sprintf("Fetched %s", displayTarget))),
+					)
+				}),
+			),
+			OnClose: func() { setShowModal(false) },
 		},
-			kitex.If(showModal(), func() kitex.Node {
-				vOut, ok := parseWebFetchStructuredOutput(tm.StructuredContent)
-
-				var cleanCode string
-				var truncated bool
-				var cachedPath string
-				var mimeType string
-				var isBinary bool
-				var title string
-
-				if ok {
-					cleanCode = vOut.Content
-					truncated = vOut.Truncated
-					cachedPath = vOut.CachedPath
-					mimeType = vOut.MimeType
-					isBinary = vOut.IsBinary
-					title = vOut.Title
-				} else {
-					cleanCode = getToolOutput(tm.Content)
-				}
-
-				filename := filepath.Base(url)
-				if idx := strings.Index(filename, "?"); idx != -1 {
-					filename = filename[:idx]
-				}
-				if filename == "" || filename == "." || filename == "/" {
-					filename = "download"
-				}
-
+			kitex.If(showModal() && tm != nil && tm.IsError && details != "", func() kitex.Node {
+				return kitex.Box(kitex.BoxProps{
+					Style: style.S().
+						Padding(1).
+						Width(style.Percent(100)).
+						MinWidth(style.Percent(0)).
+						Foreground(t.Color.Text.Secondary).
+						WhiteSpace(style.WhiteSpacePreWrap),
+				}, kitex.Text(details))
+			}),
+			kitex.If(showModal() && tm != nil && !tm.IsError, func() kitex.Node {
 				return kitex.Fragment(
 					// Fetch metadata
 					kitex.Box(kitex.BoxProps{
@@ -2095,7 +2901,7 @@ var WebFetchToolWidget = kitex.FC("WebFetchToolWidget", func(props ToolExecution
 // DownloadToolWidget renders the execution state and results of a download tool call.
 var DownloadToolWidget = kitex.FC("DownloadToolWidget", func(props ToolExecutionProps) kitex.Node {
 	t := theme.UseTheme()
-	isOpen, setIsOpen := kitex.UseState(false)
+	showModal, setShowModal := kitex.UseState(false)
 
 	tc := props.ToolCall
 	tm := props.ToolMessage
@@ -2108,161 +2914,174 @@ var DownloadToolWidget = kitex.FC("DownloadToolWidget", func(props ToolExecution
 	}
 
 	var statusLabel string
+	var labelNode kitex.Node
 	var iconNode kitex.Node
-	var headerBg color.Color
-	var headerFg color.Color
-	var borderCol color.Color
+	var themeColor color.Color
+	var details string
 
-	isFinished := tm != nil
-	hasErr := tm != nil && tm.IsError
+	var finalDest string
+	var sizeStr string
+	var bgTaskStr string
+	var successVal bool
+	var detailsMsg string
 
-	if t != nil {
-		if !isFinished {
-			statusLabel = fmt.Sprintf("DOWNLOADING [%s]", filepath.Base(urlVal))
-			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Info)}, kitex.Text(props.CurrentDots))
-			headerBg = t.Color.Surface.BaseFocus
-			headerFg = t.Color.Surface.Info
-			borderCol = t.Color.Surface.Info
-		} else if hasErr {
-			statusLabel = fmt.Sprintf("DOWNLOAD ERROR [%s]", filepath.Base(urlVal))
-			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Error)}, icon.Error)
-			headerBg = t.Color.Surface.BaseFocus
-			headerFg = t.Color.Text.Error
-			borderCol = t.Color.Text.Error
-		} else {
-			dOut, ok := parseDownloadOutput(tm.StructuredContent)
-			if ok && dOut.TaskId != "" {
-				statusLabel = fmt.Sprintf("DOWNLOAD BG STARTED [%s]", filepath.Base(urlVal))
-				iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Info)}, icon.Info)
-				headerBg = t.Color.Surface.BaseFocus
-				headerFg = t.Color.Surface.Info
-				borderCol = t.Color.Surface.Info
-			} else {
-				statusLabel = fmt.Sprintf("DOWNLOAD SUCCESS [%s]", filepath.Base(urlVal))
-				iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Success)}, icon.Checkmark)
-				headerBg = t.Color.Surface.BaseFocus
-				headerFg = t.Color.Surface.Success
-				borderCol = t.Color.Surface.Success
-			}
+	if tm != nil {
+		dOut, ok := parseDownloadOutput(tm.StructuredContent)
+		if ok {
+			finalDest = dOut.Path
+			sizeStr = fmt.Sprintf("%.2f MB (%d bytes)", float64(dOut.SizeBytes)/(1024*1024), dOut.SizeBytes)
+			bgTaskStr = dOut.TaskId
+			successVal = dOut.Success
+			detailsMsg = dOut.Message
 		}
 	}
-
-	containerStyle := style.S().
-		Display(style.DisplayFlex).
-		FlexDirection(style.FlexColumn).
-		Width(style.Percent(100)).
-		MaxWidth(style.Percent(100)).
-		Overflow(style.OverflowHidden)
-
-	headerStyle := style.S().
-		Display(style.DisplayFlex).
-		FlexDirection(style.FlexRow).
-		AlignItems(style.AlignCenter).
-		JustifyContent(style.JustifyBetween).
-		Padding(0, 1).
-		Height(style.Cells(1)).
-		Width(style.Percent(100)).
-		MaxWidth(style.Percent(100)).
-		Overflow(style.OverflowHidden)
-
-	bodyStyle := style.S().
-		Padding(1).
-		Display(style.DisplayFlex).
-		FlexDirection(style.FlexColumn).
-		Gap(1).
-		Width(style.Percent(100)).
-		MaxWidth(style.Percent(100)).
-		Overflow(style.OverflowHidden)
-
-	if t != nil {
-		containerStyle = containerStyle.
-			Border(true, style.SingleBorder(), borderCol).
-			Background(t.Color.Surface.BaseHover)
-
-		headerStyle = headerStyle.
-			Background(headerBg).
-			Foreground(headerFg)
+	if finalDest == "" {
+		finalDest = destVal
 	}
 
-	return kitex.Box(kitex.BoxProps{Style: containerStyle},
-		components.Button(components.ButtonProps{
-			Variant: components.ButtonText,
-			Color:   components.ButtonBase,
-			Style:   headerStyle,
-			OnClick: func() {
-				setIsOpen(!isOpen())
-			},
+	if t != nil {
+		var actionText string
+		if tm == nil {
+			actionText = "Downloading "
+			statusLabel = fmt.Sprintf("Downloading [%s]", filepath.Base(urlVal))
+			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Info)}, kitex.Text(props.CurrentDots))
+			themeColor = t.Color.Surface.Info
+		} else if tm.IsError {
+			actionText = "Download Error "
+			statusLabel = fmt.Sprintf("Download Error [%s]", filepath.Base(urlVal))
+			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Error)}, icon.Error)
+			themeColor = t.Color.Text.Error
+			details = getToolOutput(tm.Content)
+		} else {
+			if bgTaskStr != "" {
+				actionText = "Download BG Started "
+				statusLabel = fmt.Sprintf("Download BG Started [%s]", filepath.Base(urlVal))
+				iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Info)}, icon.Info)
+				themeColor = t.Color.Surface.Info
+			} else if successVal {
+				actionText = "Downloaded "
+				statusLabel = fmt.Sprintf("Downloaded [%s]", filepath.Base(urlVal))
+				iconNode = nil // remove checkmark completely on success
+				themeColor = t.Color.Surface.Success
+			} else {
+				actionText = "Download Failed "
+				statusLabel = fmt.Sprintf("Download Failed [%s]", filepath.Base(urlVal))
+				iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Error)}, icon.Error)
+				themeColor = t.Color.Text.Error
+			}
+		}
+
+		baseFocusBg := t.Color.Surface.BaseFocus
+		globeIconColor := t.Color.Surface.Info
+
+		labelNode = kitex.Box(kitex.BoxProps{
+			Style: style.S().
+				Display(style.DisplayFlex).
+				FlexDirection(style.FlexRow).
+				AlignItems(style.AlignCenter),
 		},
+			kitex.Span(kitex.SpanProps{
+				Style: style.S().
+					Bold(true).
+					Foreground(color.RGBA{255, 255, 255, 255}),
+			}, kitex.Text(actionText)),
 			kitex.Box(kitex.BoxProps{
+				Style: style.S().
+					Display(style.DisplayFlex).
+					FlexDirection(style.FlexRow).
+					AlignItems(style.AlignCenter).
+					Background(baseFocusBg).
+					PaddingHorizontal(1).
+					Gap(1),
+			},
+				kitex.Span(kitex.SpanProps{Style: style.S().Foreground(globeIconColor)}, icon.Globe),
+				kitex.Span(kitex.SpanProps{
+					Style: style.S().
+						Foreground(color.RGBA{255, 255, 255, 255}).
+						Bold(true),
+				}, kitex.Text(filepath.Base(urlVal))),
+			),
+		)
+	}
+
+	var onClick func()
+	if tm != nil {
+		onClick = func() { setShowModal(true) }
+	}
+
+	badgeNode := components.ToolBadge(components.ToolBadgeProps{
+		Icon:      iconNode,
+		Label:     statusLabel,
+		LabelNode: labelNode,
+		Color:     themeColor,
+		OnClick:   onClick,
+	})
+
+	return kitex.Fragment(
+		badgeNode,
+		components.Modal(components.ModalProps{
+			IsOpen: showModal(),
+			Title: kitex.Box(kitex.BoxProps{
 				Style: style.S().
 					Display(style.DisplayFlex).
 					FlexDirection(style.FlexRow).
 					AlignItems(style.AlignCenter).
 					Gap(1),
 			},
-				iconNode,
-				kitex.Span(kitex.SpanProps{Style: style.S().Bold(true)}, kitex.Text(statusLabel)),
+				kitex.If(t != nil && tm != nil && tm.IsError, func() kitex.Node {
+					return kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Error)}, icon.Error)
+				}),
+				kitex.If(tm != nil && tm.IsError, func() kitex.Node {
+					return kitex.Span(kitex.SpanProps{}, kitex.Text(fmt.Sprintf("Download Error for %s", urlVal)))
+				}),
+				kitex.If(tm != nil && !tm.IsError, func() kitex.Node {
+					return kitex.Fragment(
+						kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Info)}, icon.Globe),
+						kitex.Span(kitex.SpanProps{}, kitex.Text(fmt.Sprintf("Downloaded %s", filepath.Base(urlVal)))),
+					)
+				}),
 			),
-			func() kitex.Node {
-				var label string
-				if isOpen() {
-					label = "▲ COLLAPSE"
-				} else {
-					label = "▼ EXPAND"
-				}
-				var textCol color.Color
-				if t != nil {
-					textCol = t.Color.Text.Secondary
-				}
-				return kitex.Span(kitex.SpanProps{
-					Style: style.S().Foreground(textCol),
-				}, kitex.Text(label))
-			}(),
-		),
-		kitex.If(isOpen(), func() kitex.Node {
-			var finalDest string
-			var sizeStr string
-			var bgTaskStr string
-			var successVal bool
-			var detailsMsg string
-
-			if tm != nil {
-				dOut, ok := parseDownloadOutput(tm.StructuredContent)
-				if ok {
-					finalDest = dOut.Path
-					sizeStr = fmt.Sprintf("%.2f MB (%d bytes)", float64(dOut.SizeBytes)/(1024*1024), dOut.SizeBytes)
-					bgTaskStr = dOut.TaskId
-					successVal = dOut.Success
-					detailsMsg = dOut.Message
-				}
-			}
-			if finalDest == "" {
-				finalDest = destVal
-			}
-
-			return kitex.Box(kitex.BoxProps{Style: bodyStyle},
-				kitex.Box(kitex.BoxProps{Style: style.S().WhiteSpace(style.WhiteSpacePreWrap)},
-					kitex.Span(kitex.SpanProps{Style: style.S().Bold(true)}, kitex.Text("URL: ")),
-					kitex.Text(urlVal),
-				),
-				kitex.Box(kitex.BoxProps{},
-					kitex.Span(kitex.SpanProps{Style: style.S().Bold(true)}, kitex.Text("Destination: ")),
-					kitex.Text(finalDest),
-				),
-				kitex.If(bgTaskStr != "", func() kitex.Node {
-					return kitex.Box(kitex.BoxProps{},
-						kitex.Span(kitex.SpanProps{Style: style.S().Bold(true)}, kitex.Text("Background Task ID: ")),
-						kitex.Text(bgTaskStr),
-					)
-				}),
-				kitex.If(sizeStr != "" && bgTaskStr == "", func() kitex.Node {
-					return kitex.Box(kitex.BoxProps{},
-						kitex.Span(kitex.SpanProps{Style: style.S().Bold(true)}, kitex.Text("Size: ")),
-						kitex.Text(sizeStr),
-					)
-				}),
-				kitex.If(isFinished, func() kitex.Node {
-					return kitex.Box(kitex.BoxProps{},
+			OnClose: func() { setShowModal(false) },
+		},
+			kitex.If(showModal() && tm != nil && tm.IsError && details != "", func() kitex.Node {
+				return kitex.Box(kitex.BoxProps{
+					Style: style.S().
+						Padding(1).
+						Width(style.Percent(100)).
+						MinWidth(style.Percent(0)).
+						Foreground(t.Color.Text.Secondary).
+						WhiteSpace(style.WhiteSpacePreWrap),
+				}, kitex.Text(details))
+			}),
+			kitex.If(showModal() && tm != nil && !tm.IsError, func() kitex.Node {
+				return kitex.Box(kitex.BoxProps{
+					Style: style.S().
+						Display(style.DisplayFlex).
+						FlexDirection(style.FlexColumn).
+						Gap(1).
+						Padding(1),
+				},
+					kitex.Box(kitex.BoxProps{Style: style.S().WhiteSpace(style.WhiteSpacePreWrap)},
+						kitex.Span(kitex.SpanProps{Style: style.S().Bold(true)}, kitex.Text("URL: ")),
+						kitex.Text(urlVal),
+					),
+					kitex.Box(kitex.BoxProps{},
+						kitex.Span(kitex.SpanProps{Style: style.S().Bold(true)}, kitex.Text("Destination: ")),
+						kitex.Text(finalDest),
+					),
+					kitex.If(bgTaskStr != "", func() kitex.Node {
+						return kitex.Box(kitex.BoxProps{},
+							kitex.Span(kitex.SpanProps{Style: style.S().Bold(true)}, kitex.Text("Background Task ID: ")),
+							kitex.Text(bgTaskStr),
+						)
+					}),
+					kitex.If(sizeStr != "" && bgTaskStr == "", func() kitex.Node {
+						return kitex.Box(kitex.BoxProps{},
+							kitex.Span(kitex.SpanProps{Style: style.S().Bold(true)}, kitex.Text("Size: ")),
+							kitex.Text(sizeStr),
+						)
+					}),
+					kitex.Box(kitex.BoxProps{},
 						kitex.Span(kitex.SpanProps{Style: style.S().Bold(true)}, kitex.Text("Status: ")),
 						kitex.If(successVal, func() kitex.Node {
 							return kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Success)}, kitex.Text("Success"))
@@ -2270,16 +3089,16 @@ var DownloadToolWidget = kitex.FC("DownloadToolWidget", func(props ToolExecution
 						kitex.If(!successVal, func() kitex.Node {
 							return kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Error)}, kitex.Text("Failed"))
 						}),
-					)
-				}),
-				kitex.If(detailsMsg != "", func() kitex.Node {
-					return kitex.Box(kitex.BoxProps{Style: style.S().WhiteSpace(style.WhiteSpacePreWrap)},
-						kitex.Span(kitex.SpanProps{Style: style.S().Bold(true)}, kitex.Text("Message: ")),
-						kitex.Text(detailsMsg),
-					)
-				}),
-			)
-		}),
+					),
+					kitex.If(detailsMsg != "", func() kitex.Node {
+						return kitex.Box(kitex.BoxProps{Style: style.S().WhiteSpace(style.WhiteSpacePreWrap)},
+							kitex.Span(kitex.SpanProps{Style: style.S().Bold(true)}, kitex.Text("Message: ")),
+							kitex.Text(detailsMsg),
+						)
+					}),
+				)
+			}),
+		),
 	)
 })
 
@@ -2297,76 +3116,143 @@ var FetchToolWidget = kitex.FC("FetchToolWidget", func(props ToolExecutionProps)
 	}
 
 	var statusLabel string
+	var labelNode kitex.Node
 	var iconNode kitex.Node
 	var themeColor color.Color
+	var details string
 
-	isFinished := tm != nil
-	hasErr := tm != nil && tm.IsError
+	var cleanCode string
+	var truncated bool
+	var cachedPath string
+	var status int
 
-	if t != nil {
-		if !isFinished {
-			statusLabel = fmt.Sprintf("Fetching [%s]", urlVal)
-			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Info)}, kitex.Text(props.CurrentDots))
-			themeColor = t.Color.Surface.Info
-		} else if hasErr {
-			statusLabel = fmt.Sprintf("Error Fetching [%s]", urlVal)
-			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Error)}, icon.Error)
-			themeColor = t.Color.Text.Error
+	if tm != nil {
+		fOut, ok := parseFetchOutput(tm.StructuredContent)
+		if ok {
+			cleanCode = fOut.Content
+			truncated = fOut.Truncated
+			cachedPath = fOut.CachedPath
+			status = fOut.Status
 		} else {
-			fOut, ok := parseFetchOutput(tm.StructuredContent)
-			if ok {
-				statusLabel = fmt.Sprintf("Fetched [%s] (Status: %d)", urlVal, fOut.Status)
-				if fOut.Status >= 400 {
-					iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Error)}, icon.Error)
-					themeColor = t.Color.Text.Error
-				} else {
-					iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Success)}, icon.Checkmark)
-					themeColor = t.Color.Surface.Success
-				}
-			} else {
-				statusLabel = fmt.Sprintf("Fetched [%s]", urlVal)
-				iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Success)}, icon.Checkmark)
-				themeColor = t.Color.Surface.Success
-			}
+			cleanCode = getToolOutput(tm.Content)
 		}
 	}
 
+	if t != nil {
+		var actionText string
+		if tm == nil {
+			actionText = "Fetching "
+			statusLabel = fmt.Sprintf("Fetching [%s]", urlVal)
+			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Info)}, kitex.Text(props.CurrentDots))
+			themeColor = t.Color.Surface.Info
+		} else if tm.IsError {
+			actionText = "Error Fetching "
+			statusLabel = fmt.Sprintf("Error Fetching [%s]", urlVal)
+			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Error)}, icon.Error)
+			themeColor = t.Color.Text.Error
+			details = getToolOutput(tm.Content)
+		} else {
+			if status >= 400 {
+				actionText = fmt.Sprintf("Fetched (%d) ", status)
+				statusLabel = fmt.Sprintf("Fetched [%s] (Status: %d)", urlVal, status)
+				iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Error)}, icon.Error)
+				themeColor = t.Color.Text.Error
+			} else {
+				if status > 0 {
+					actionText = fmt.Sprintf("Fetched (%d) ", status)
+					statusLabel = fmt.Sprintf("Fetched [%s] (Status: %d)", urlVal, status)
+				} else {
+					actionText = "Fetched "
+					statusLabel = fmt.Sprintf("Fetched [%s]", urlVal)
+				}
+				iconNode = nil // remove checkmark completely on success
+				themeColor = t.Color.Surface.Success
+			}
+		}
+
+		baseFocusBg := t.Color.Surface.BaseFocus
+		globeIconColor := t.Color.Surface.Info
+
+		labelNode = kitex.Box(kitex.BoxProps{
+			Style: style.S().
+				Display(style.DisplayFlex).
+				FlexDirection(style.FlexRow).
+				AlignItems(style.AlignCenter),
+		},
+			kitex.Span(kitex.SpanProps{
+				Style: style.S().
+					Bold(true).
+					Foreground(color.RGBA{255, 255, 255, 255}),
+			}, kitex.Text(actionText)),
+			kitex.Box(kitex.BoxProps{
+				Style: style.S().
+					Display(style.DisplayFlex).
+					FlexDirection(style.FlexRow).
+					AlignItems(style.AlignCenter).
+					Background(baseFocusBg).
+					PaddingHorizontal(1).
+					Gap(1),
+			},
+				kitex.Span(kitex.SpanProps{Style: style.S().Foreground(globeIconColor)}, icon.Globe),
+				kitex.Span(kitex.SpanProps{
+					Style: style.S().
+						Foreground(color.RGBA{255, 255, 255, 255}).
+						Bold(true),
+				}, kitex.Text(urlVal)),
+			),
+		)
+	}
+
 	var onClick func()
-	if tm != nil && !tm.IsError {
+	if tm != nil {
 		onClick = func() { setShowModal(true) }
 	}
+
 	badgeNode := components.ToolBadge(components.ToolBadgeProps{
-		Icon:    iconNode,
-		Label:   statusLabel,
-		Color:   themeColor,
-		OnClick: onClick,
+		Icon:      iconNode,
+		Label:     statusLabel,
+		LabelNode: labelNode,
+		Color:     themeColor,
+		OnClick:   onClick,
 	})
 
 	return kitex.Fragment(
 		badgeNode,
 		components.Modal(components.ModalProps{
 			IsOpen: showModal(),
-			Title:  kitex.Text("Fetch Details"),
-			OnClose: func() {
-				setShowModal(false)
+			Title: kitex.Box(kitex.BoxProps{
+				Style: style.S().
+					Display(style.DisplayFlex).
+					FlexDirection(style.FlexRow).
+					AlignItems(style.AlignCenter).
+					Gap(1),
 			},
+				kitex.If(t != nil && tm != nil && tm.IsError, func() kitex.Node {
+					return kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Error)}, icon.Error)
+				}),
+				kitex.If(tm != nil && tm.IsError, func() kitex.Node {
+					return kitex.Span(kitex.SpanProps{}, kitex.Text(fmt.Sprintf("Fetch Error for %s", urlVal)))
+				}),
+				kitex.If(tm != nil && !tm.IsError, func() kitex.Node {
+					return kitex.Fragment(
+						kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Info)}, icon.Globe),
+						kitex.Span(kitex.SpanProps{}, kitex.Text(fmt.Sprintf("Fetched %s", urlVal))),
+					)
+				}),
+			),
+			OnClose: func() { setShowModal(false) },
 		},
-			kitex.If(showModal(), func() kitex.Node {
-				fOut, ok := parseFetchOutput(tm.StructuredContent)
-				var cleanCode string
-				var truncated bool
-				var cachedPath string
-				var status int
-
-				if ok {
-					cleanCode = fOut.Content
-					truncated = fOut.Truncated
-					cachedPath = fOut.CachedPath
-					status = fOut.Status
-				} else {
-					cleanCode = getToolOutput(tm.Content)
-				}
-
+			kitex.If(showModal() && tm != nil && tm.IsError && details != "", func() kitex.Node {
+				return kitex.Box(kitex.BoxProps{
+					Style: style.S().
+						Padding(1).
+						Width(style.Percent(100)).
+						MinWidth(style.Percent(0)).
+						Foreground(t.Color.Text.Secondary).
+						WhiteSpace(style.WhiteSpacePreWrap),
+				}, kitex.Text(details))
+			}),
+			kitex.If(showModal() && tm != nil && !tm.IsError, func() kitex.Node {
 				var formatVal string
 				if tc.Args != nil {
 					formatVal, _ = tc.Args["format"].(string)
@@ -2390,7 +3276,14 @@ var FetchToolWidget = kitex.FC("FetchToolWidget", func(props ToolExecutionProps)
 					}
 				}
 
-				return kitex.Fragment(
+				return kitex.Box(kitex.BoxProps{
+					Style: style.S().
+						Display(style.DisplayFlex).
+						FlexDirection(style.FlexColumn).
+						Padding(1).
+						Width(style.Percent(100)).
+						MinWidth(style.Percent(0)),
+				},
 					// Fetch metadata
 					kitex.Box(kitex.BoxProps{
 						Style: style.S().
@@ -2444,59 +3337,142 @@ var ActivateSkillToolWidget = kitex.FC("ActivateSkillToolWidget", func(props Too
 	}
 
 	var statusLabel string
+	var labelNode kitex.Node
 	var iconNode kitex.Node
 	var themeColor color.Color
 	var instructions string
 	var hasInstructions bool
+	var details string
+
+	if tm != nil {
+		out, ok := parseStructuredOutput[tools.ActivateSkillOutput](tm.StructuredContent)
+		if ok && out.Success {
+			instructions = out.Instructions
+			hasInstructions = instructions != ""
+		}
+	}
 
 	if t != nil {
+		var actionText string
 		if tm == nil {
+			actionText = "Activating Skill "
 			statusLabel = fmt.Sprintf("Activating Skill [%s]", skillName)
 			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Info)}, kitex.Text(props.CurrentDots))
 			themeColor = t.Color.Surface.Info
 		} else if tm.IsError {
+			actionText = "Error Activating Skill "
 			statusLabel = fmt.Sprintf("Error Activating Skill [%s]", skillName)
 			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Error)}, icon.Error)
 			themeColor = t.Color.Text.Error
+			details = getToolOutput(tm.Content)
 		} else {
 			out, ok := parseStructuredOutput[tools.ActivateSkillOutput](tm.StructuredContent)
 			if ok && out.Success {
+				actionText = "Activated Skill "
 				statusLabel = fmt.Sprintf("Activated Skill [%s]", skillName)
-				iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Success)}, icon.Checkmark)
+				iconNode = nil // remove checkmark completely on success
 				themeColor = t.Color.Surface.Success
-				instructions = out.Instructions
-				hasInstructions = instructions != ""
 			} else {
+				actionText = "Failed to Activate Skill "
 				statusLabel = fmt.Sprintf("Failed to Activate Skill [%s]", skillName)
 				iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Error)}, icon.Error)
 				themeColor = t.Color.Text.Error
 			}
 		}
+
+		baseFocusBg := t.Color.Surface.BaseFocus
+		pencilIconColor := t.Color.Surface.Info
+
+		labelNode = kitex.Box(kitex.BoxProps{
+			Style: style.S().
+				Display(style.DisplayFlex).
+				FlexDirection(style.FlexRow).
+				AlignItems(style.AlignCenter),
+		},
+			kitex.Span(kitex.SpanProps{
+				Style: style.S().
+					Bold(true).
+					Foreground(color.RGBA{255, 255, 255, 255}),
+			}, kitex.Text(actionText)),
+			kitex.Box(kitex.BoxProps{
+				Style: style.S().
+					Display(style.DisplayFlex).
+					FlexDirection(style.FlexRow).
+					AlignItems(style.AlignCenter).
+					Background(baseFocusBg).
+					PaddingHorizontal(1).
+					Gap(1),
+			},
+				kitex.Span(kitex.SpanProps{Style: style.S().Foreground(pencilIconColor)}, icon.Pencil),
+				kitex.Span(kitex.SpanProps{
+					Style: style.S().
+						Foreground(color.RGBA{255, 255, 255, 255}).
+						Bold(true),
+				}, kitex.Text(skillName)),
+			),
+		)
 	}
 
 	var onClick func()
-	if hasInstructions {
+	if tm != nil && (tm.IsError || hasInstructions) {
 		onClick = func() { setShowModal(true) }
 	}
 
 	badgeNode := components.ToolBadge(components.ToolBadgeProps{
-		Icon:    iconNode,
-		Label:   statusLabel,
-		Color:   themeColor,
-		OnClick: onClick,
+		Icon:      iconNode,
+		Label:     statusLabel,
+		LabelNode: labelNode,
+		Color:     themeColor,
+		OnClick:   onClick,
 	})
 
 	return kitex.Fragment(
 		badgeNode,
 		components.Modal(components.ModalProps{
-			IsOpen:  showModal(),
-			Title:   kitex.Text(fmt.Sprintf("Instructions for %s Skill", skillName)),
+			IsOpen: showModal(),
+			Title: kitex.Box(kitex.BoxProps{
+				Style: style.S().
+					Display(style.DisplayFlex).
+					FlexDirection(style.FlexRow).
+					AlignItems(style.AlignCenter).
+					Gap(1),
+			},
+				kitex.If(t != nil && tm != nil && tm.IsError, func() kitex.Node {
+					return kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Error)}, icon.Error)
+				}),
+				kitex.If(tm != nil && tm.IsError, func() kitex.Node {
+					return kitex.Span(kitex.SpanProps{}, kitex.Text(fmt.Sprintf("Error Activating Skill %s", skillName)))
+				}),
+				kitex.If(tm != nil && !tm.IsError, func() kitex.Node {
+					return kitex.Fragment(
+						kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Info)}, icon.Pencil),
+						kitex.Span(kitex.SpanProps{}, kitex.Text(fmt.Sprintf("Instructions for %s Skill", skillName))),
+					)
+				}),
+			),
 			OnClose: func() { setShowModal(false) },
 		},
-			kitex.If(showModal() && hasInstructions, func() kitex.Node {
-				return components.Markdown(components.MarkdownProps{
-					Source: instructions,
-				})
+			kitex.If(showModal() && tm != nil && tm.IsError && details != "", func() kitex.Node {
+				return kitex.Box(kitex.BoxProps{
+					Style: style.S().
+						Padding(1).
+						Width(style.Percent(100)).
+						MinWidth(style.Percent(0)).
+						Foreground(t.Color.Text.Secondary).
+						WhiteSpace(style.WhiteSpacePreWrap),
+				}, kitex.Text(details))
+			}),
+			kitex.If(showModal() && tm != nil && !tm.IsError && hasInstructions, func() kitex.Node {
+				return kitex.Box(kitex.BoxProps{
+					Style: style.S().
+						Padding(1).
+						Width(style.Percent(100)).
+						MinWidth(style.Percent(0)),
+				},
+					components.Markdown(components.MarkdownProps{
+						Source: instructions,
+					}),
+				)
 			}),
 		),
 	)
@@ -2574,6 +3550,7 @@ func todoRow(t *theme.Scheme, description string, status string, activeText stri
 // TodosToolWidget renders the list of subtasks as a collapsible accordion showing the in-progress status.
 var TodosToolWidget = kitex.FC("TodosToolWidget", func(props ToolExecutionProps) kitex.Node {
 	t := theme.UseTheme()
+	showModal, setShowModal := kitex.UseState(false)
 
 	tc := props.ToolCall
 	tm := props.ToolMessage
@@ -2637,80 +3614,124 @@ var TodosToolWidget = kitex.FC("TodosToolWidget", func(props ToolExecutionProps)
 	}
 
 	var statusLabel string
+	var labelNode kitex.Node
 	var iconNode kitex.Node
-	var borderCol color.Color
+	var themeColor color.Color
+	var details string
+
+	if tm != nil && tm.IsError {
+		details = getToolOutput(tm.Content)
+	}
 
 	if t != nil {
+		var actionText string
 		if tm == nil {
+			actionText = "Updating Checklist "
+			statusLabel = "Updating Checklist"
 			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Info)}, kitex.Text(props.CurrentDots))
-			borderCol = t.Color.Surface.Info
+			themeColor = t.Color.Surface.Info
 		} else if tm.IsError {
+			actionText = "Checklist Error "
+			statusLabel = "Checklist Error"
 			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Error)}, icon.Error)
-			borderCol = t.Color.Text.Error
+			themeColor = t.Color.Text.Error
 		} else {
-			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Success)}, icon.Checkmark)
-			borderCol = t.Color.Surface.Success
+			actionText = "Updated Checklist "
+			statusLabel = "Checklist"
+			iconNode = nil // remove checkmark completely on success
+			themeColor = t.Color.Surface.Success
 		}
-	}
 
-	// Build label text: e.g. "Checklist: Active: \"Implement plan\" (2 completed, 1 pending)"
-	var prefix string
-	if tm == nil {
-		prefix = "Updating Checklist"
-	} else if tm.IsError {
-		prefix = "Checklist Error"
-	} else {
-		prefix = "Checklist"
-	}
+		baseFocusBg := t.Color.Surface.BaseFocus
+		calendarIconColor := t.Color.Surface.Info
 
-	if activeTaskDesc != "" {
-		statusLabel = fmt.Sprintf("%s: Active: %q", prefix, activeTaskDesc)
-	} else {
-		statusLabel = prefix
-	}
-
-	if len(countParts) > 0 {
-		statusLabel = fmt.Sprintf("%s (%s)", statusLabel, strings.Join(countParts, ", "))
-	} else {
-		statusLabel = fmt.Sprintf("%s (empty)", statusLabel)
-	}
-
-	accordionStyle := style.S()
-	if t != nil {
-		accordionStyle = accordionStyle.Border(borderCol)
-	}
-
-	return components.Accordion(components.AccordionProps{
-		Color:           components.PaperHover,
-		Variant:         components.PaperOutlined,
-		DefaultExpanded: false,
-		Style:           accordionStyle,
-	},
-		components.AccordionSummary(components.AccordionSummaryProps{
-			HideExpandIcon: len(todos) == 0,
-			EndContent: kitex.If(len(todos) > 0, func() kitex.Node {
-				var fg color.Color
-				if t != nil {
-					fg = t.Color.Text.Secondary
-				}
-				return kitex.Span(kitex.SpanProps{Style: style.S().Foreground(fg)},
-					kitex.Text("Click to view tasks"),
-				)
-			}),
+		labelNode = kitex.Box(kitex.BoxProps{
+			Style: style.S().
+				Display(style.DisplayFlex).
+				FlexDirection(style.FlexRow).
+				AlignItems(style.AlignCenter),
 		},
+			kitex.Span(kitex.SpanProps{
+				Style: style.S().
+					Bold(true).
+					Foreground(color.RGBA{255, 255, 255, 255}),
+			}, kitex.Text(actionText)),
 			kitex.Box(kitex.BoxProps{
+				Style: style.S().
+					Display(style.DisplayFlex).
+					FlexDirection(style.FlexRow).
+					AlignItems(style.AlignCenter).
+					Background(baseFocusBg).
+					PaddingHorizontal(1).
+					Gap(1),
+			},
+				kitex.Span(kitex.SpanProps{Style: style.S().Foreground(calendarIconColor)}, icon.Calendar),
+				kitex.Span(kitex.SpanProps{
+					Style: style.S().
+						Foreground(color.RGBA{255, 255, 255, 255}).
+						Bold(true),
+				}, kitex.Text("Checklist")),
+			),
+			kitex.If(len(countParts) > 0, func() kitex.Node {
+				return kitex.Span(kitex.SpanProps{
+					Style: style.S().
+						Foreground(t.Color.Text.Secondary).
+						PaddingLeft(1),
+				}, kitex.Text(fmt.Sprintf("(%s)", strings.Join(countParts, ", "))))
+			}),
+		)
+	}
+
+	var onClick func()
+	if tm != nil {
+		onClick = func() { setShowModal(true) }
+	}
+
+	badgeNode := components.ToolBadge(components.ToolBadgeProps{
+		Icon:      iconNode,
+		Label:     statusLabel,
+		LabelNode: labelNode,
+		Color:     themeColor,
+		OnClick:   onClick,
+	})
+
+	return kitex.Fragment(
+		badgeNode,
+		components.Modal(components.ModalProps{
+			IsOpen: showModal(),
+			Title: kitex.Box(kitex.BoxProps{
 				Style: style.S().
 					Display(style.DisplayFlex).
 					FlexDirection(style.FlexRow).
 					AlignItems(style.AlignCenter).
 					Gap(1),
 			},
-				iconNode,
-				kitex.Span(kitex.SpanProps{Style: style.S().Bold(true)}, kitex.Text(statusLabel)),
+				kitex.If(t != nil && tm != nil && tm.IsError, func() kitex.Node {
+					return kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Error)}, icon.Error)
+				}),
+				kitex.If(tm != nil && tm.IsError, func() kitex.Node {
+					return kitex.Span(kitex.SpanProps{}, kitex.Text("Checklist Error"))
+				}),
+				kitex.If(tm != nil && !tm.IsError, func() kitex.Node {
+					return kitex.Fragment(
+						kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Info)}, icon.Calendar),
+						kitex.Span(kitex.SpanProps{}, kitex.Text("Checklist")),
+					)
+				}),
 			),
-		),
-		components.AccordionDetails(components.AccordionDetailsProps{},
-			kitex.If(len(todos) > 0, func() kitex.Node {
+			OnClose: func() { setShowModal(false) },
+		},
+			kitex.If(showModal() && tm != nil && tm.IsError && details != "", func() kitex.Node {
+				return kitex.Box(kitex.BoxProps{
+					Style: style.S().
+						Padding(1).
+						Width(style.Percent(100)).
+						MinWidth(style.Percent(0)).
+						Foreground(t.Color.Text.Secondary).
+						WhiteSpace(style.WhiteSpacePreWrap),
+				}, kitex.Text(details))
+			}),
+			kitex.If(showModal() && tm != nil && !tm.IsError && len(todos) > 0, func() kitex.Node {
 				rows := make([]kitex.Node, len(todos))
 				for i, item := range todos {
 					rows[i] = todoRow(t, item.Description, item.Status, item.ActiveText)
@@ -3122,6 +4143,7 @@ func parseLspSearchOutput(structured any) (results []tools.LspSearchOutputResult
 // LspDiagnosticsToolWidget renders the result of an lsp_diagnostics tool call inline.
 var LspDiagnosticsToolWidget = kitex.FC("LspDiagnosticsToolWidget", func(props ToolExecutionProps) kitex.Node {
 	t := theme.UseTheme()
+	showModal, setShowModal := kitex.UseState(false)
 
 	tc := props.ToolCall
 	tm := props.ToolMessage
@@ -3131,52 +4153,114 @@ var LspDiagnosticsToolWidget = kitex.FC("LspDiagnosticsToolWidget", func(props T
 		targetPath, _ = tc.Args["path"].(string)
 	}
 
+	folderName := filepath.Base(targetPath)
+	if folderName == "." || folderName == "/" {
+		folderName = targetPath
+	}
+
 	var statusLabel string
+	var labelNode kitex.Node
 	var iconNode kitex.Node
-	var borderCol color.Color
+	var themeColor color.Color
 
 	var diags []tools.LspDiagnosticsOutputDiagnosticsItem
 	var totalCount int
 	var truncated bool
+	var details string
 
 	if t != nil {
 		if tm == nil {
-			statusLabel = fmt.Sprintf("LSP Diagnostics: Fetching diagnostics for [%s]", targetPath)
+			statusLabel = fmt.Sprintf("Fetching diagnostics for %s", folderName)
 			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Info)}, kitex.Text(props.CurrentDots))
-			borderCol = t.Color.Surface.Info
+			themeColor = t.Color.Surface.Info
 		} else if tm.IsError {
-			statusLabel = fmt.Sprintf("LSP Diagnostics: Error fetching diagnostics for [%s]", targetPath)
+			statusLabel = fmt.Sprintf("Error fetching diagnostics for %s", folderName)
 			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Error)}, icon.Error)
-			borderCol = t.Color.Text.Error
+			themeColor = t.Color.Text.Error
+			details = getToolOutput(tm.Content)
 		} else {
 			diags, totalCount, truncated = parseLspDiagnosticsOutput(tm.StructuredContent)
-			statusLabel = fmt.Sprintf("LSP Diagnostics: Found %d diagnostics for [%s]", totalCount, targetPath)
-			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Success)}, icon.Checkmark)
-			borderCol = t.Color.Surface.Success
+			if totalCount > 0 {
+				baseFocusBg := t.Color.Surface.BaseFocus
+				folderIconColor := t.Color.Surface.Info
+				labelNode = kitex.Box(kitex.BoxProps{
+					Style: style.S().
+						Display(style.DisplayFlex).
+						FlexDirection(style.FlexRow).
+						AlignItems(style.AlignCenter).
+						Bold(true),
+				},
+					kitex.Span(kitex.SpanProps{}, kitex.Text(fmt.Sprintf("Found %d diagnostics for ", totalCount))),
+					kitex.Box(kitex.BoxProps{
+						Style: style.S().
+							Display(style.DisplayFlex).
+							FlexDirection(style.FlexRow).
+							AlignItems(style.AlignCenter).
+							Background(baseFocusBg).
+							PaddingHorizontal(1).
+							Gap(1),
+					},
+						kitex.Span(kitex.SpanProps{Style: style.S().Foreground(folderIconColor)}, icon.Folder),
+						kitex.Span(kitex.SpanProps{}, kitex.Text(folderName)),
+					),
+				)
+				iconNode = nil // remove checkmark completely on success
+				themeColor = color.RGBA{R: 255, G: 255, B: 255, A: 255}
+			} else {
+				statusLabel = fmt.Sprintf("No diagnostics found for %s", folderName)
+				iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Success)}, icon.Checkmark)
+				themeColor = t.Color.Surface.Success
+			}
 		}
 	}
 
-	accordionStyle := style.S()
-	if t != nil {
-		accordionStyle = accordionStyle.Border(borderCol)
+	var onClick func()
+	if tm != nil && (tm.IsError || totalCount > 0) {
+		onClick = func() { setShowModal(true) }
 	}
 
-	return components.Accordion(components.AccordionProps{
-		Color:           components.PaperHover,
-		Variant:         components.PaperOutlined,
-		DefaultExpanded: false,
-		Style:           accordionStyle,
-	},
-		components.AccordionSummary(components.AccordionSummaryProps{},
-			kitex.Box(kitex.BoxProps{
-				Style: style.S().Display(style.DisplayFlex).FlexDirection(style.FlexRow).Gap(1).AlignItems(style.AlignCenter),
+	badgeNode := components.ToolBadge(components.ToolBadgeProps{
+		Icon:      iconNode,
+		Label:     statusLabel,
+		LabelNode: labelNode,
+		Color:     themeColor,
+		OnClick:   onClick,
+	})
+
+	return kitex.Fragment(
+		badgeNode,
+		components.Modal(components.ModalProps{
+			IsOpen: showModal(),
+			Title: kitex.Box(kitex.BoxProps{
+				Style: style.S().
+					Display(style.DisplayFlex).
+					FlexDirection(style.FlexRow).
+					AlignItems(style.AlignCenter).
+					Gap(1),
 			},
-				iconNode,
-				kitex.Span(kitex.SpanProps{Style: style.S().Bold(true).Foreground(t.Color.Text.Primary)}, kitex.Text(statusLabel)),
+				kitex.If(t != nil && tm != nil && tm.IsError, func() kitex.Node {
+					return kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Error)}, icon.Error)
+				}),
+				kitex.If(tm != nil && tm.IsError, func() kitex.Node {
+					return kitex.Span(kitex.SpanProps{}, kitex.Text(fmt.Sprintf("LSP Diagnostics Error for %s", folderName)))
+				}),
+				kitex.If(tm != nil && !tm.IsError, func() kitex.Node {
+					return kitex.Span(kitex.SpanProps{}, kitex.Text(fmt.Sprintf("Found %d diagnostics for %s", totalCount, folderName)))
+				}),
 			),
-		),
-		components.AccordionDetails(components.AccordionDetailsProps{},
-			kitex.If(len(diags) > 0, func() kitex.Node {
+			OnClose: func() { setShowModal(false) },
+		},
+			kitex.If(showModal() && tm != nil && tm.IsError && details != "", func() kitex.Node {
+				return kitex.Box(kitex.BoxProps{
+					Style: style.S().
+						Padding(1).
+						Width(style.Percent(100)).
+						MinWidth(style.Percent(0)).
+						Foreground(t.Color.Text.Secondary).
+						WhiteSpace(style.WhiteSpacePreWrap),
+				}, kitex.Text(details))
+			}),
+			kitex.If(showModal() && tm != nil && !tm.IsError && len(diags) > 0, func() kitex.Node {
 				var rows []kitex.Node
 				for _, d := range diags {
 					var severityColor color.Color
@@ -3205,6 +4289,14 @@ var LspDiagnosticsToolWidget = kitex.FC("LspDiagnosticsToolWidget", func(props T
 						severityName = "HINT"
 					}
 
+					dirPart := filepath.Dir(d.Path)
+					filePart := filepath.Base(d.Path)
+					if dirPart == "." {
+						dirPart = ""
+					} else if !strings.HasSuffix(dirPart, "/") {
+						dirPart += "/"
+					}
+
 					rows = append(rows, kitex.Box(kitex.BoxProps{
 						Style: style.S().
 							Display(style.DisplayFlex).
@@ -3214,11 +4306,30 @@ var LspDiagnosticsToolWidget = kitex.FC("LspDiagnosticsToolWidget", func(props T
 							Background(t.Color.Surface.BaseHover),
 					},
 						kitex.Box(kitex.BoxProps{
-							Style: style.S().Display(style.DisplayFlex).FlexDirection(style.FlexRow).Gap(1).AlignItems(style.AlignCenter),
+							Style: style.S().
+								Display(style.DisplayFlex).
+								FlexDirection(style.FlexRow).
+								AlignItems(style.AlignCenter).
+								Gap(1),
 						},
 							kitex.Box(kitex.BoxProps{Style: style.S().Foreground(severityColor).Bold(true)}, severityIcon),
 							kitex.Box(kitex.BoxProps{Style: style.S().Foreground(severityColor).Bold(true)}, kitex.Text(severityName)),
-							kitex.Box(kitex.BoxProps{Style: style.S().Foreground(t.Color.Text.Secondary)}, kitex.Text(fmt.Sprintf("%s:%d:%d", d.Path, d.Range.Start.Line+1, d.Range.Start.Character+1))),
+							kitex.Box(kitex.BoxProps{
+								Style: style.S().
+									Display(style.DisplayFlex).
+									FlexDirection(style.FlexRow).
+									AlignItems(style.AlignCenter),
+							},
+								kitex.Span(kitex.SpanProps{Style: style.S().MarginRight(1)}, icon.FileIcon(icon.FileIconProps{Path: d.Path})),
+								kitex.If(dirPart != "", func() kitex.Node {
+									return kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Secondary)}, kitex.Text(dirPart))
+								}),
+								kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Primary)}, kitex.Text(filePart)),
+								kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Tertiary)}, kitex.Text(":")),
+								kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Purple)}, kitex.Text(fmt.Sprintf("%d", d.Range.Start.Line+1))),
+								kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Tertiary)}, kitex.Text(":")),
+								kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Secondary)}, kitex.Text(fmt.Sprintf("%d", d.Range.Start.Character+1))),
+							),
 						),
 						kitex.Box(kitex.BoxProps{
 							Style: style.S().Foreground(t.Color.Text.Primary),
@@ -3233,13 +4344,14 @@ var LspDiagnosticsToolWidget = kitex.FC("LspDiagnosticsToolWidget", func(props T
 				}
 
 				return kitex.Box(kitex.BoxProps{
-					Style: style.S().Display(style.DisplayFlex).FlexDirection(style.FlexColumn).Gap(1).Padding(1),
+					Style: style.S().
+						Display(style.DisplayFlex).
+						FlexDirection(style.FlexColumn).
+						Gap(1).
+						Padding(1).
+						Width(style.Percent(100)).
+						MinWidth(style.Percent(0)),
 				}, rows...)
-			}),
-			kitex.If(len(diags) == 0 && tm != nil && !tm.IsError, func() kitex.Node {
-				return kitex.Box(kitex.BoxProps{
-					Style: style.S().Padding(2).Foreground(t.Color.Surface.Success),
-				}, kitex.Text("No LSP diagnostics found for this path."))
 			}),
 		),
 	)
@@ -3248,6 +4360,7 @@ var LspDiagnosticsToolWidget = kitex.FC("LspDiagnosticsToolWidget", func(props T
 // LspRestartToolWidget renders the result of an lsp_restart tool call inline.
 var LspRestartToolWidget = kitex.FC("LspRestartToolWidget", func(props ToolExecutionProps) kitex.Node {
 	t := theme.UseTheme()
+	showModal, setShowModal := kitex.UseState(false)
 
 	tc := props.ToolCall
 	tm := props.ToolMessage
@@ -3258,58 +4371,105 @@ var LspRestartToolWidget = kitex.FC("LspRestartToolWidget", func(props ToolExecu
 	}
 
 	var statusLabel string
+	var labelNode kitex.Node
 	var iconNode kitex.Node
-	var borderCol color.Color
+	var themeColor color.Color
 	var details string
+	isError := false
 
 	if t != nil {
 		if tm == nil {
-			statusLabel = fmt.Sprintf("LSP Restart: Restarting %s", serverName)
+			statusLabel = "Restarting"
 			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Info)}, kitex.Text(props.CurrentDots))
-			borderCol = t.Color.Surface.Info
+			themeColor = t.Color.Surface.Info
 		} else if tm.IsError {
-			statusLabel = fmt.Sprintf("LSP Restart: Failed to restart %s", serverName)
+			statusLabel = "Failed to restart"
 			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Error)}, icon.Error)
-			borderCol = t.Color.Text.Error
+			themeColor = t.Color.Text.Error
 			details = getToolOutput(tm.Content)
+			isError = true
 		} else {
 			out, _ := parseLspRestartOutput(tm.StructuredContent)
-			if out.Success {
-				statusLabel = fmt.Sprintf("LSP Restart: Successfully restarted %s", serverName)
-				iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Success)}, icon.Checkmark)
-				borderCol = t.Color.Surface.Success
-			} else {
-				statusLabel = fmt.Sprintf("LSP Restart: Failed to restart %s", serverName)
-				iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Error)}, icon.Error)
-				borderCol = t.Color.Text.Error
-			}
 			details = out.Message
+			if out.Success {
+				baseFocusBg := t.Color.Surface.BaseFocus
+				serverIconColor := t.Color.Surface.Info
+				labelNode = kitex.Box(kitex.BoxProps{
+					Style: style.S().
+						Display(style.DisplayFlex).
+						FlexDirection(style.FlexRow).
+						AlignItems(style.AlignCenter).
+						Bold(true),
+				},
+					kitex.Span(kitex.SpanProps{}, kitex.Text("Successfully restarted ")),
+					kitex.Box(kitex.BoxProps{
+						Style: style.S().
+							Display(style.DisplayFlex).
+							FlexDirection(style.FlexRow).
+							AlignItems(style.AlignCenter).
+							Background(baseFocusBg).
+							PaddingHorizontal(1).
+							Gap(1),
+					},
+						kitex.Span(kitex.SpanProps{Style: style.S().Foreground(serverIconColor)}, icon.Server),
+						kitex.Span(kitex.SpanProps{}, kitex.Text(serverName)),
+					),
+				)
+				iconNode = nil // Remove the checkmark completely on success
+				themeColor = color.RGBA{R: 255, G: 255, B: 255, A: 255}
+			} else {
+				statusLabel = "Failed to restart"
+				iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Error)}, icon.Error)
+				themeColor = t.Color.Text.Error
+				isError = true
+			}
 		}
 	}
 
-	accordionStyle := style.S()
-	if t != nil {
-		accordionStyle = accordionStyle.Border(borderCol)
+	var onClick func()
+	if tm != nil && (tm.IsError || details != "") {
+		onClick = func() { setShowModal(true) }
 	}
 
-	return components.Accordion(components.AccordionProps{
-		Color:           components.PaperHover,
-		Variant:         components.PaperOutlined,
-		DefaultExpanded: false,
-		Style:           accordionStyle,
-	},
-		components.AccordionSummary(components.AccordionSummaryProps{},
-			kitex.Box(kitex.BoxProps{
-				Style: style.S().Display(style.DisplayFlex).FlexDirection(style.FlexRow).Gap(1).AlignItems(style.AlignCenter),
+	badgeNode := components.ToolBadge(components.ToolBadgeProps{
+		Icon:      iconNode,
+		Label:     statusLabel,
+		LabelNode: labelNode,
+		Color:     themeColor,
+		OnClick:   onClick,
+	})
+
+	return kitex.Fragment(
+		badgeNode,
+		components.Modal(components.ModalProps{
+			IsOpen: showModal(),
+			Title: kitex.Box(kitex.BoxProps{
+				Style: style.S().
+					Display(style.DisplayFlex).
+					FlexDirection(style.FlexRow).
+					AlignItems(style.AlignCenter).
+					Gap(1),
 			},
-				iconNode,
-				kitex.Span(kitex.SpanProps{Style: style.S().Bold(true).Foreground(t.Color.Text.Primary)}, kitex.Text(statusLabel)),
+				kitex.If(t != nil && isError, func() kitex.Node {
+					return kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Error)}, icon.Error)
+				}),
+				kitex.If(isError, func() kitex.Node {
+					return kitex.Span(kitex.SpanProps{}, kitex.Text(fmt.Sprintf("Failed to restart %s", serverName)))
+				}),
+				kitex.If(!isError, func() kitex.Node {
+					return kitex.Span(kitex.SpanProps{}, kitex.Text(fmt.Sprintf("Successfully restarted %s", serverName)))
+				}),
 			),
-		),
-		components.AccordionDetails(components.AccordionDetailsProps{},
-			kitex.If(details != "", func() kitex.Node {
+			OnClose: func() { setShowModal(false) },
+		},
+			kitex.If(showModal() && details != "", func() kitex.Node {
 				return kitex.Box(kitex.BoxProps{
-					Style: style.S().Padding(1).Foreground(t.Color.Text.Secondary),
+					Style: style.S().
+						Padding(1).
+						Width(style.Percent(100)).
+						MinWidth(style.Percent(0)).
+						Foreground(t.Color.Text.Secondary).
+						WhiteSpace(style.WhiteSpacePreWrap),
 				}, kitex.Text(details))
 			}),
 		),
@@ -3319,6 +4479,7 @@ var LspRestartToolWidget = kitex.FC("LspRestartToolWidget", func(props ToolExecu
 // LspSearchToolWidget renders the result of an lsp_search tool call inline.
 var LspSearchToolWidget = kitex.FC("LspSearchToolWidget", func(props ToolExecutionProps) kitex.Node {
 	t := theme.UseTheme()
+	showModal, setShowModal := kitex.UseState(false)
 
 	tc := props.ToolCall
 	tm := props.ToolMessage
@@ -3329,51 +4490,122 @@ var LspSearchToolWidget = kitex.FC("LspSearchToolWidget", func(props ToolExecuti
 	}
 
 	var statusLabel string
+	var labelNode kitex.Node
 	var iconNode kitex.Node
-	var borderCol color.Color
+	var themeColor color.Color
 
 	var results []tools.LspSearchOutputResultsItem
+	var details string
 
 	if t != nil {
 		if tm == nil {
-			statusLabel = fmt.Sprintf("LSP Search: Searching for [%s]", query)
+			statusLabel = fmt.Sprintf("Searching for %s", query)
 			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Info)}, kitex.Text(props.CurrentDots))
-			borderCol = t.Color.Surface.Info
+			themeColor = t.Color.Surface.Info
 		} else if tm.IsError {
-			statusLabel = fmt.Sprintf("LSP Search: Error searching for [%s]", query)
+			statusLabel = fmt.Sprintf("Error searching for %s", query)
 			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Error)}, icon.Error)
-			borderCol = t.Color.Text.Error
+			themeColor = t.Color.Text.Error
+			details = getToolOutput(tm.Content)
 		} else {
 			results = parseLspSearchOutput(tm.StructuredContent)
-			statusLabel = fmt.Sprintf("LSP Search: Found %d symbols for [%s]", len(results), query)
-			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Success)}, icon.Checkmark)
-			borderCol = t.Color.Surface.Success
+			if len(results) > 0 {
+				baseFocusBg := t.Color.Surface.BaseFocus
+				searchIconColor := t.Color.Surface.Info
+				labelNode = kitex.Box(kitex.BoxProps{
+					Style: style.S().
+						Display(style.DisplayFlex).
+						FlexDirection(style.FlexRow).
+						AlignItems(style.AlignCenter).
+						Bold(true),
+				},
+					kitex.Span(kitex.SpanProps{}, kitex.Text(fmt.Sprintf("Found %d symbols for ", len(results)))),
+					kitex.Box(kitex.BoxProps{
+						Style: style.S().
+							Display(style.DisplayFlex).
+							FlexDirection(style.FlexRow).
+							AlignItems(style.AlignCenter).
+							Background(baseFocusBg).
+							PaddingHorizontal(1).
+							Gap(1),
+					},
+						kitex.Span(kitex.SpanProps{Style: style.S().Foreground(searchIconColor)}, icon.Search),
+						kitex.Span(kitex.SpanProps{}, kitex.Text(query)),
+					),
+				)
+				iconNode = nil // remove checkmark completely on success
+				themeColor = color.RGBA{R: 255, G: 255, B: 255, A: 255}
+			} else {
+				statusLabel = fmt.Sprintf("No symbols found for %s", query)
+				iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Secondary)}, icon.Info)
+				themeColor = t.Color.Text.Secondary
+			}
 		}
 	}
 
-	accordionStyle := style.S()
-	if t != nil {
-		accordionStyle = accordionStyle.Border(borderCol)
+	var onClick func()
+	if tm != nil && (tm.IsError || len(results) > 0) {
+		onClick = func() { setShowModal(true) }
 	}
 
-	return components.Accordion(components.AccordionProps{
-		Color:           components.PaperHover,
-		Variant:         components.PaperOutlined,
-		DefaultExpanded: false,
-		Style:           accordionStyle,
-	},
-		components.AccordionSummary(components.AccordionSummaryProps{},
-			kitex.Box(kitex.BoxProps{
-				Style: style.S().Display(style.DisplayFlex).FlexDirection(style.FlexRow).Gap(1).AlignItems(style.AlignCenter),
+	badgeNode := components.ToolBadge(components.ToolBadgeProps{
+		Icon:      iconNode,
+		Label:     statusLabel,
+		LabelNode: labelNode,
+		Color:     themeColor,
+		OnClick:   onClick,
+	})
+
+	return kitex.Fragment(
+		badgeNode,
+		components.Modal(components.ModalProps{
+			IsOpen: showModal(),
+			Title: kitex.Box(kitex.BoxProps{
+				Style: style.S().
+					Display(style.DisplayFlex).
+					FlexDirection(style.FlexRow).
+					AlignItems(style.AlignCenter).
+					Gap(1),
 			},
-				iconNode,
-				kitex.Span(kitex.SpanProps{Style: style.S().Bold(true).Foreground(t.Color.Text.Primary)}, kitex.Text(statusLabel)),
+				kitex.If(t != nil && tm != nil && tm.IsError, func() kitex.Node {
+					return kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Error)}, icon.Error)
+				}),
+				kitex.If(tm != nil && tm.IsError, func() kitex.Node {
+					return kitex.Span(kitex.SpanProps{}, kitex.Text(fmt.Sprintf("LSP Search Error for %s", query)))
+				}),
+				kitex.If(tm != nil && !tm.IsError, func() kitex.Node {
+					return kitex.Span(kitex.SpanProps{}, kitex.Text(fmt.Sprintf("Found %d symbols for %s", len(results), query)))
+				}),
 			),
-		),
-		components.AccordionDetails(components.AccordionDetailsProps{},
-			kitex.If(len(results) > 0, func() kitex.Node {
+			OnClose: func() { setShowModal(false) },
+		},
+			kitex.If(showModal() && tm != nil && tm.IsError && details != "", func() kitex.Node {
+				return kitex.Box(kitex.BoxProps{
+					Style: style.S().
+						Padding(1).
+						Width(style.Percent(100)).
+						MinWidth(style.Percent(0)).
+						Foreground(t.Color.Text.Secondary).
+						WhiteSpace(style.WhiteSpacePreWrap),
+				}, kitex.Text(details))
+			}),
+			kitex.If(showModal() && tm != nil && !tm.IsError && len(results) > 0, func() kitex.Node {
 				var rows []kitex.Node
 				for _, item := range results {
+					dirPart := filepath.Dir(item.Path)
+					filePart := filepath.Base(item.Path)
+					if dirPart == "." {
+						dirPart = ""
+					} else if !strings.HasSuffix(dirPart, "/") {
+						dirPart += "/"
+					}
+
+					var kindIconNode kitex.Node
+					var kindColor color.Color
+					if t != nil {
+						kindIconNode, kindColor = icon.LspKindIcon(item.Kind, t)
+					}
+
 					rows = append(rows, kitex.Box(kitex.BoxProps{
 						Style: style.S().
 							Display(style.DisplayFlex).
@@ -3383,27 +4615,48 @@ var LspSearchToolWidget = kitex.FC("LspSearchToolWidget", func(props ToolExecuti
 							BorderLeft(true, style.SingleBorder(), t.Color.Border.Primary),
 					},
 						kitex.Box(kitex.BoxProps{
-							Style: style.S().Display(style.DisplayFlex).FlexDirection(style.FlexRow).Gap(1).AlignItems(style.AlignCenter),
+							Style: style.S().
+								Display(style.DisplayFlex).
+								FlexDirection(style.FlexRow).
+								AlignItems(style.AlignCenter).
+								Gap(1),
 						},
-							kitex.Box(kitex.BoxProps{Style: style.S().Foreground(t.Color.Text.Purple).Bold(true)}, kitex.Text(item.Kind)),
+							kitex.If(kindIconNode != nil, func() kitex.Node {
+								return kindIconNode
+							}),
+							kitex.Box(kitex.BoxProps{Style: style.S().Foreground(kindColor).Bold(true)}, kitex.Text(strings.ToUpper(item.Kind))),
 							kitex.Box(kitex.BoxProps{Style: style.S().Bold(true).Foreground(t.Color.Text.Primary)}, kitex.Text(item.Name)),
 							kitex.If(item.ContainerName != "", func() kitex.Node {
 								return kitex.Box(kitex.BoxProps{Style: style.S().Foreground(t.Color.Text.Tertiary)}, kitex.Text("in "+item.ContainerName))
 							}),
 						),
 						kitex.Box(kitex.BoxProps{
-							Style: style.S().Foreground(t.Color.Text.Secondary),
-						}, kitex.Text(fmt.Sprintf("%s:%d:%d", item.Path, item.Range.Start.Line+1, item.Range.Start.Character+1))),
+							Style: style.S().
+								Display(style.DisplayFlex).
+								FlexDirection(style.FlexRow).
+								AlignItems(style.AlignCenter),
+						},
+							kitex.Span(kitex.SpanProps{Style: style.S().MarginRight(1)}, icon.FileIcon(icon.FileIconProps{Path: item.Path})),
+							kitex.If(dirPart != "", func() kitex.Node {
+								return kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Secondary)}, kitex.Text(dirPart))
+							}),
+							kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Primary)}, kitex.Text(filePart)),
+							kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Tertiary)}, kitex.Text(":")),
+							kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Purple)}, kitex.Text(fmt.Sprintf("%d", item.Range.Start.Line+1))),
+							kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Tertiary)}, kitex.Text(":")),
+							kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Secondary)}, kitex.Text(fmt.Sprintf("%d", item.Range.Start.Character+1))),
+						),
 					))
 				}
 				return kitex.Box(kitex.BoxProps{
-					Style: style.S().Display(style.DisplayFlex).FlexDirection(style.FlexColumn).Gap(1).Padding(1),
+					Style: style.S().
+						Display(style.DisplayFlex).
+						FlexDirection(style.FlexColumn).
+						Gap(1).
+						Padding(1).
+						Width(style.Percent(100)).
+						MinWidth(style.Percent(0)),
 				}, rows...)
-			}),
-			kitex.If(len(results) == 0 && tm != nil && !tm.IsError, func() kitex.Node {
-				return kitex.Box(kitex.BoxProps{
-					Style: style.S().Padding(2).Foreground(t.Color.Text.Tertiary),
-				}, kitex.Text("No matching workspace symbols found."))
 			}),
 		),
 	)

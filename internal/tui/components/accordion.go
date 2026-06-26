@@ -41,7 +41,8 @@ var (
 	AccordionBaseStyle = style.S().
 		Display(style.DisplayFlex).
 		FlexDirection(style.FlexColumn).
-		Width(style.Percent(100))
+		Width(style.Percent(100)).
+		MinWidth(style.Percent(0))
 )
 
 // Accordion is a container component that can be expanded or collapsed.

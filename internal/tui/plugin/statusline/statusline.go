@@ -177,7 +177,6 @@ func SetCWD(path string) {
 				} else {
 					output = strings.TrimSpace(string(out))
 				}
-
 				store.Set(func(s State) State {
 					if s.CommandOutputs == nil {
 						s.CommandOutputs = make(map[string]string)

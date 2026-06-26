@@ -700,17 +700,26 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 						}
 					}
 
+					// Exercise: comment the widgets and enable them one by one to see which one causes the chat view to overflow.
+
+					// 1. Agent Status Widget
 					if statusNode := renderAgentStatus(t, sending, thinkingTime(), lastFinishedTime(), currentDots, runPromptTokens, runCompletionTokens, runTotalTokens, isGenerating); statusNode != nil {
 						nodes = append(nodes, statusNode)
 					}
+
+					// 2. Queued Messages Widget
 					if queuedWidget := renderQueuedMessages(t, queuedMessages); queuedWidget != nil {
 						nodes = append(nodes, queuedWidget)
 					}
+
+					// 3. Running Tasks Widget
 					if stateQuery.Data != nil && len(stateQuery.Data.RunningTasks) > 0 {
 						nodes = append(nodes, RunningTasksWidget(RunningTasksWidgetProps{
 							Tasks: stateQuery.Data.RunningTasks,
 						}))
 					}
+
+					// 4. LSP Suggestion Widget
 					if len(pendingLspSuggestions) > 0 {
 						nodes = append(nodes, LspSuggestionWidget(LspSuggestionWidgetProps{
 							Suggestions: pendingLspSuggestions,
@@ -718,6 +727,8 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 							OnDismiss:   handleDismissLsp,
 						}))
 					}
+
+					// 5. MCP Request Widget
 					if stateQuery.Data != nil && len(stateQuery.Data.PendingMcpRequests) > 0 {
 						nodes = append(nodes, McpRequestWidget(McpRequestWidgetProps{
 							Requests: stateQuery.Data.PendingMcpRequests,
@@ -737,6 +748,7 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 							},
 						}))
 					}
+
 					return nodes
 				}()...,
 			),
@@ -1268,6 +1280,7 @@ var Bubble = kitex.FC("Bubble", func(props BubbleProps) kitex.Node {
 		bubbleStyle = style.S().
 			Padding(1).
 			MaxWidth(style.Percent(90)).
+			MinWidth(style.Percent(0)).
 			Overflow(style.OverflowHidden)
 
 		switch role {
@@ -1690,6 +1703,13 @@ func lsEntryRow(t *theme.Scheme, fe tools.FileEntry) kitex.Node {
 	// Name cell takes all remaining width.
 	nameTDStyle := nameStyle.Width(style.Percent(100))
 
+	var iconNode kitex.Node
+	if fe.IsDir {
+		iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(nameColor)}, icon.Folder)
+	} else {
+		iconNode = icon.FileIcon(icon.FileIconProps{Path: fe.Name})
+	}
+
 	return kitex.TR(kitex.TRProps{},
 		metaCell(fe.Permissions, metaStyle),
 		metaCell(fmt.Sprintf("%d", fe.Links), metaStyle),
@@ -1698,12 +1718,24 @@ func lsEntryRow(t *theme.Scheme, fe tools.FileEntry) kitex.Node {
 		metaCell(tools.FormatSize(fe.Size), metaStyle),
 		metaCell(fe.Modified.Format("Jan _2 15:04"), metaStyle),
 		kitex.TD(kitex.TDProps{Style: nameTDStyle},
-			kitex.Span(kitex.SpanProps{Style: nameStyle}, kitex.Text(nameText)),
+			kitex.Box(kitex.BoxProps{
+				Style: style.S().
+					Display(style.DisplayFlex).
+					FlexDirection(style.FlexRow).
+					AlignItems(style.AlignCenter).
+					Gap(1),
+			},
+				iconNode,
+				kitex.Span(kitex.SpanProps{Style: nameStyle}, kitex.Text(nameText)),
+			),
 		),
 	)
 }
 
 var ToolExecution = kitex.FC("ToolExecution", func(props ToolExecutionProps) kitex.Node {
+	if props.ToolCall != nil && props.ToolCall.Name == "bash" {
+		return BashToolWidget(props)
+	}
 	if props.ToolCall != nil && props.ToolCall.Name == "view" {
 		return ViewToolWidget(props)
 	}
@@ -1737,9 +1769,6 @@ var ToolExecution = kitex.FC("ToolExecution", func(props ToolExecutionProps) kit
 	if props.ToolCall != nil && props.ToolCall.Name == "remove" {
 		return RemoveToolWidget(props)
 	}
-	if props.ToolCall != nil && props.ToolCall.Name == "bash" {
-		return BashToolWidget(props)
-	}
 	if props.ToolCall != nil && props.ToolCall.Name == "tasks" {
 		return TasksToolWidget(props)
 	}
@@ -1761,6 +1790,72 @@ var ToolExecution = kitex.FC("ToolExecution", func(props ToolExecutionProps) kit
 	if props.ToolCall != nil && props.ToolCall.Name == "todos" {
 		return TodosToolWidget(props)
 	}
+	if props.ToolCall != nil || props.ToolCall == nil {
+		return nil
+	}
+	// 1. view
+	// if props.ToolCall != nil && props.ToolCall.Name == "view" {
+	// 	return ViewToolWidget(props)
+	// }
+	// 2. ls
+	// if props.ToolCall != nil && props.ToolCall.Name == "ls" {
+	// 	return LsToolWidget(props)
+	// }
+	// 3. glob
+	// if props.ToolCall != nil && props.ToolCall.Name == "glob" {
+	// 	return GlobToolWidget(props)
+	// }
+	// 4. lsp_diagnostics
+	// if props.ToolCall != nil && props.ToolCall.Name == "lsp_diagnostics" {
+	// 	return LspDiagnosticsToolWidget(props)
+	// }
+	// 5. lsp_restart
+	// if props.ToolCall != nil && props.ToolCall.Name == "lsp_restart" {
+	// 	return LspRestartToolWidget(props)
+	// }
+	// 6. lsp_search
+	// 7. grep
+	// 8. write
+	// 9. edit
+	// 10. multi_edit
+	// 11. remove
+	// if props.ToolCall != nil && props.ToolCall.Name == "remove" {
+	// 	return RemoveToolWidget(props)
+	// }
+
+	// 12. bash (Keep enabled)
+	if props.ToolCall != nil && props.ToolCall.Name == "bash" {
+		return BashToolWidget(props)
+	}
+
+	// 13. tasks
+	// if props.ToolCall != nil && props.ToolCall.Name == "tasks" {
+	// 	return TasksToolWidget(props)
+	// }
+	// 14. web_search
+	// if props.ToolCall != nil && props.ToolCall.Name == "web_search" {
+	// 	return WebSearchToolWidget(props)
+	// }
+	// 15. web_fetch
+	// if props.ToolCall != nil && props.ToolCall.Name == "web_fetch" {
+	// 	return WebFetchToolWidget(props)
+	// }
+	// 16. download
+	// if props.ToolCall != nil && props.ToolCall.Name == "download" {
+	// 	return DownloadToolWidget(props)
+	// }
+	// 17. fetch
+	// if props.ToolCall != nil && props.ToolCall.Name == "fetch" {
+	// 	return FetchToolWidget(props)
+	// }
+	// 18. activate_skill
+	// if props.ToolCall != nil && props.ToolCall.Name == "activate_skill" {
+	// 	return ActivateSkillToolWidget(props)
+	// }
+	// 19. todos
+	// if props.ToolCall != nil && props.ToolCall.Name == "todos" {
+	// 	return TodosToolWidget(props)
+	// }
 
 	t := theme.UseTheme()
 	isOpen, setIsOpen := kitex.UseState(true)
@@ -2126,7 +2221,12 @@ var Message = kitex.FC("Message", func(props MessageProps) kitex.Node {
 		}
 
 		return kitex.Box(kitex.BoxProps{
-			Style: style.S().Display(style.DisplayFlex).FlexDirection(style.FlexColumn).Gap(1),
+			Style: style.S().
+				Display(style.DisplayFlex).
+				FlexDirection(style.FlexColumn).
+				Width(style.Percent(100)).
+				MinWidth(style.Percent(0)).
+				Gap(1),
 		}, children...)
 	}
 

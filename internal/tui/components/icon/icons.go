@@ -23,6 +23,8 @@ var (
 	Robot = kitex.Text("󰚩")
 	// Pencil is a pencil/ruler icon (󰅩).
 	Pencil = kitex.Text("󰅩")
+	// File is a default file/document icon (󰈔).
+	File = kitex.Text("󰈔")
 	// Wrench is a wrench/hammer icon (󰦌).
 	Wrench = kitex.Text("󰦌")
 	// Package is a package/box icon (󰏗).
@@ -31,8 +33,8 @@ var (
 	Network = kitex.Text("󰚯")
 	// Folder is a folder/project icon (󰉋).
 	Folder = kitex.Text("󰉋")
-	// Terminal is a terminal/command icon (󰘳).
-	Terminal = kitex.Text("󰘳")
+	// AppleKeyboardCommand is a terminal/command icon (󰘳).
+	AppleKeyboardCommand = kitex.Text("󰘳")
 	// Plugin is a plugin/puzzle icon (󰚰).
 	Plugin = kitex.Text("󰚰")
 	// Cog is a settings gear icon (󰒓).
@@ -69,4 +71,8 @@ var (
 	Directory = kitex.Text("")
 	// DirectoryOpen is an open directory/folder icon ().
 	DirectoryOpen = kitex.Text("")
+	// FontAwesomeTerminal ().
+	FontAwesomeTerminal = kitex.Text("")
+	// Globe is a globe/web/internet icon (󰖟).
+	Globe = kitex.Text("󰖟")
 )
