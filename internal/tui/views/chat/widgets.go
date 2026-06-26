@@ -1290,8 +1290,7 @@ var EditToolWidget = kitex.FC("EditToolWidget", func(props ToolExecutionProps) k
 								Foreground(t.Color.Surface.Success).
 								Bold(true),
 						},
-							icon.Plus,
-							kitex.Span(kitex.SpanProps{Style: style.S().MarginLeft(1)}, kitex.Text(fmt.Sprintf("%d", additions))),
+							kitex.Text(fmt.Sprintf("+%d", additions)),
 						),
 						kitex.Box(kitex.BoxProps{
 							Style: style.S().
@@ -1301,8 +1300,7 @@ var EditToolWidget = kitex.FC("EditToolWidget", func(props ToolExecutionProps) k
 								Foreground(t.Color.Text.Error).
 								Bold(true),
 						},
-							kitex.Text(""),
-							kitex.Span(kitex.SpanProps{Style: style.S().MarginLeft(1)}, kitex.Text(fmt.Sprintf("%d", deletions))),
+							kitex.Text(fmt.Sprintf("-%d", deletions)),
 						),
 					)
 				}),
@@ -1466,8 +1464,7 @@ var MultiEditToolWidget = kitex.FC("MultiEditToolWidget", func(props ToolExecuti
 								Foreground(t.Color.Surface.Success).
 								Bold(true),
 						},
-							icon.Plus,
-							kitex.Span(kitex.SpanProps{Style: style.S().MarginLeft(1)}, kitex.Text(fmt.Sprintf("%d", additions))),
+							kitex.Text(fmt.Sprintf("+%d", additions)),
 						),
 						kitex.Box(kitex.BoxProps{
 							Style: style.S().
@@ -1477,8 +1474,7 @@ var MultiEditToolWidget = kitex.FC("MultiEditToolWidget", func(props ToolExecuti
 								Foreground(t.Color.Text.Error).
 								Bold(true),
 						},
-							kitex.Text(""),
-							kitex.Span(kitex.SpanProps{Style: style.S().MarginLeft(1)}, kitex.Text(fmt.Sprintf("%d", deletions))),
+							kitex.Text(fmt.Sprintf("-%d", deletions)),
 						),
 					)
 				}),
