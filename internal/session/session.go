@@ -342,7 +342,7 @@ func (m *Manager) ArchiveSession(ctx context.Context, id string) error {
 }
 
 // GetSessionState returns the in-memory runtime execution state of the specified session.
-func (m *Manager) GetSessionState(ctx context.Context, sessionID string) (SessionStatus, string, bool, []permissions.AuthorizationRequest) {
+func (m *Manager) GetSessionState(ctx context.Context, sessionID string) (SessionStatus, string, bool, []permissions.AuthorizationRequest, time.Duration) {
 	m.mu.Lock()
 	sess, ok := m.activeSessions[sessionID]
 	if !ok {
@@ -385,7 +385,11 @@ func (m *Manager) GetSessionState(ctx context.Context, sessionID string) (Sessio
 
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	return sess.Status, sess.Error, isGenerating, sess.PendingAuthorizations
+	var elapsed time.Duration
+	if !sess.ThinkingStart.IsZero() {
+		elapsed = time.Since(sess.ThinkingStart)
+	}
+	return sess.Status, sess.Error, isGenerating, sess.PendingAuthorizations, elapsed
 }
 
 // ListTasks retrieves all tasks for a session from the task manager.

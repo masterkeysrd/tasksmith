@@ -469,28 +469,24 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 	historyRef := kitex.UseRef[dom.Element](nil)
 	lastMaxScrollY := kitex.UseRef(0)
 
-	// 5. Reactive states for tracking agent thinking time and animations
-	thinkingTime, setThinkingTime := kitex.UseState(0)
+	// 5. Reactive state for tracking the last completed session's thinking time
 	lastFinishedTime, setLastFinishedTime := kitex.UseState(-1) // -1 represents null/unset
 	spinnerFrame, setSpinnerFrame := kitex.UseState(0)
 
-	// Keep lastFinishedTime up to date and reset thinkingTime when sending changes
+	// Derive thinking time from the backend's ThinkingDuration
+	thinkingTime := 0
+	if stateQuery.Data != nil {
+		thinkingTime = int(stateQuery.Data.ThinkingDuration)
+	}
+
+	// Save thinkingTime to lastFinishedTime when sending transitions to false
 	kitex.UseEffect(func() {
-		if sending {
-			setThinkingTime(0)
-		} else {
-			if thinkingTime() > 0 {
-				setLastFinishedTime(thinkingTime())
+		if !sending {
+			if thinkingTime > 0 {
+				setLastFinishedTime(thinkingTime)
 			}
 		}
 	}, []any{sending})
-
-	// Increment thinkingTime every second when running
-	kitex.UseInterval(func() {
-		if sending {
-			setThinkingTime(thinkingTime() + 1)
-		}
-	}, 1*time.Second, []any{sending})
 
 	// Rotate spinner frame when running
 	kitex.UseInterval(func() {
@@ -655,7 +651,7 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 						oneDotCurrentDots,
 						mainAgentName,
 						isGenerating,
-						thinkingTime(),
+						thinkingTime,
 						pendingAuthorizations,
 						selectedIndex(),
 						selectedScopeIndex(),
@@ -703,7 +699,7 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 					// Exercise: comment the widgets and enable them one by one to see which one causes the chat view to overflow.
 
 					// 1. Agent Status Widget
-					if statusNode := renderAgentStatus(t, sending, thinkingTime(), lastFinishedTime(), currentDots, runPromptTokens, runCompletionTokens, runTotalTokens, isGenerating); statusNode != nil {
+					if statusNode := renderAgentStatus(t, sending, thinkingTime, lastFinishedTime(), currentDots, runPromptTokens, runCompletionTokens, runTotalTokens, isGenerating); statusNode != nil {
 						nodes = append(nodes, statusNode)
 					}
 

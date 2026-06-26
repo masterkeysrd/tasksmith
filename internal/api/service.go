@@ -474,7 +474,7 @@ func (s *Service) GetSessionState(ctx context.Context, req GetSessionStateReques
 			PendingMcpRequests:    apiMcpRequests,
 		}, nil
 	}
-	status, errStr, isGen, pendingAuths := s.sm.GetSessionState(ctx, req.SessionID)
+	status, errStr, isGen, pendingAuths, elapsed := s.sm.GetSessionState(ctx, req.SessionID)
 
 	var runningTasks []RunningTaskInfo
 	tasks := s.sm.ListTasks(req.SessionID)
@@ -525,10 +525,13 @@ func (s *Service) GetSessionState(ctx context.Context, req GetSessionStateReques
 		})
 	}
 
+	elapsedSeconds := int64(elapsed.Seconds())
+
 	return &GetSessionStateResponse{
 		Status:                string(status),
 		Error:                 errStr,
 		IsGenerating:          isGen,
+		ThinkingDuration:      elapsedSeconds,
 		RunningTasks:          runningTasks,
 		Todos:                 apiTodos,
 		PendingAuthorizations: pendingAuths,

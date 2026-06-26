@@ -214,6 +214,7 @@ type GetSessionStateResponse struct {
 	Status                string                             `json:"status"`
 	Error                 string                             `json:"error,omitempty"`
 	IsGenerating          bool                               `json:"is_generating"`
+	ThinkingDuration      int64                              `json:"thinking_duration,omitempty"` // seconds elapsed since agent started thinking
 	RunningTasks          []RunningTaskInfo                  `json:"running_tasks,omitempty"`
 	Todos                 []Todo                             `json:"todos,omitempty"`
 	PendingAuthorizations []permissions.AuthorizationRequest `json:"pending_authorizations,omitempty"`
