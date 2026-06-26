@@ -2,6 +2,8 @@ package filetrack_test
 
 import (
 	"context"
+	"crypto/sha256"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -324,5 +326,251 @@ func TestFileTracker(t *testing.T) {
 	}
 	if !known {
 		t.Errorf("expected file to be known again after second RecordRead")
+	}
+}
+
+func TestFileTracker_Summary_SkipBinaryAndLarge(t *testing.T) {
+	db, err := sqlx.Connect("sqlite", ":memory:")
+	if err != nil {
+		t.Fatalf("failed to connect to in-memory sqlite: %v", err)
+	}
+	defer db.Close()
+
+	if err := coredb.Migrate(db, "session", testMigrations); err != nil {
+		t.Fatalf("failed to run migrations: %v", err)
+	}
+
+	_, err = db.Exec("INSERT INTO sessions (id, title, created_at, updated_at) VALUES ('session-1', 'Test', datetime('now'), datetime('now'))")
+	if err != nil {
+		t.Fatalf("failed to insert test session: %v", err)
+	}
+
+	store := resource.NewStore(db)
+	tmpDir := t.TempDir()
+	workspaceDir := filepath.Join(tmpDir, "workspace")
+	changesDir := filepath.Join(tmpDir, "changes")
+
+	if err := os.MkdirAll(workspaceDir, 0755); err != nil {
+		t.Fatalf("failed to create workspace: %v", err)
+	}
+
+	ft := filetrack.NewTracker(store, "session-1", changesDir, workspaceDir)
+	ctx := context.Background()
+
+	// Create binary file (PNG signature)
+	pngPath := "test.png"
+	absPngPath := filepath.Join(workspaceDir, pngPath)
+	if err := os.WriteFile(absPngPath, []byte("\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR"), 0644); err != nil {
+		t.Fatalf("failed to write test png: %v", err)
+	}
+
+	if err := ft.Record(ctx, filetrack.Change{
+		ToolName: "write",
+		Path:     pngPath,
+		Kind:     filetrack.Created,
+	}, "", ""); err != nil {
+		t.Fatalf("failed to record change: %v", err)
+	}
+
+	// Create a very large text file (> 1MB)
+	largePath := "large.txt"
+	absLargePath := filepath.Join(workspaceDir, largePath)
+	largeBytes := make([]byte, 1000005)
+	for i := range largeBytes {
+		largeBytes[i] = 'a'
+	}
+	if err := os.WriteFile(absLargePath, largeBytes, 0644); err != nil {
+		t.Fatalf("failed to write large file: %v", err)
+	}
+
+	if err := ft.Record(ctx, filetrack.Change{
+		ToolName: "write",
+		Path:     largePath,
+		Kind:     filetrack.Created,
+	}, "", ""); err != nil {
+		t.Fatalf("failed to record change: %v", err)
+	}
+
+	summaries, err := ft.Summary(ctx)
+	if err != nil {
+		t.Fatalf("Summary failed: %v", err)
+	}
+
+	if len(summaries) != 2 {
+		t.Fatalf("expected 2 summaries, got %d", len(summaries))
+	}
+
+	for _, sum := range summaries {
+		if sum.NetAdditions != 0 || sum.NetDeletions != 0 {
+			t.Errorf("expected 0 additions/deletions for binary or large file %s, got %+v", sum.Path, sum)
+		}
+	}
+}
+
+func TestFileTracker_ReadJournal_LargeLines(t *testing.T) {
+	db, err := sqlx.Connect("sqlite", ":memory:")
+	if err != nil {
+		t.Fatalf("failed to connect to in-memory sqlite: %v", err)
+	}
+	defer db.Close()
+
+	if err := coredb.Migrate(db, "session", testMigrations); err != nil {
+		t.Fatalf("failed to run migrations: %v", err)
+	}
+
+	_, err = db.Exec("INSERT INTO sessions (id, title, created_at, updated_at) VALUES ('session-1', 'Test', datetime('now'), datetime('now'))")
+	if err != nil {
+		t.Fatalf("failed to insert test session: %v", err)
+	}
+
+	store := resource.NewStore(db)
+	tmpDir := t.TempDir()
+	workspaceDir := filepath.Join(tmpDir, "workspace")
+	changesDir := filepath.Join(tmpDir, "changes")
+
+	if err := os.MkdirAll(workspaceDir, 0755); err != nil {
+		t.Fatalf("failed to create workspace: %v", err)
+	}
+
+	ft := filetrack.NewTracker(store, "session-1", changesDir, workspaceDir)
+	ctx := context.Background()
+
+	// Record a file modification where the baseline content is larger than 64KB (e.g. 100KB)
+	filePath := "large_baseline.txt"
+	absPath := filepath.Join(workspaceDir, filePath)
+	baselineBytes := make([]byte, 100000) // 100KB
+	for i := range baselineBytes {
+		baselineBytes[i] = 'a'
+	}
+	if err := os.WriteFile(absPath, baselineBytes, 0644); err != nil {
+		t.Fatalf("failed to write baseline: %v", err)
+	}
+
+	// This records a baseline entry in journal with 100KB line
+	if err := ft.Record(ctx, filetrack.Change{
+		ToolName: "write",
+		Path:     filePath,
+		Kind:     filetrack.Modified,
+	}, "diff", string(baselineBytes)); err != nil {
+		t.Fatalf("failed to record modification: %v", err)
+	}
+
+	// Read journal should read it successfully without "token too long" error
+	entries, err := ft.ReadJournal(ctx, filePath)
+	if err != nil {
+		t.Fatalf("ReadJournal failed on 100KB line: %v", err)
+	}
+
+	if len(entries) != 2 { // baseline + change
+		t.Errorf("expected 2 entries, got %d", len(entries))
+	}
+}
+
+func TestFileTracker_Binary_MetadataOnly(t *testing.T) {
+	db, err := sqlx.Connect("sqlite", ":memory:")
+	if err != nil {
+		t.Fatalf("failed to connect to in-memory sqlite: %v", err)
+	}
+	defer db.Close()
+
+	if err := coredb.Migrate(db, "session", testMigrations); err != nil {
+		t.Fatalf("failed to run migrations: %v", err)
+	}
+
+	_, err = db.Exec("INSERT INTO sessions (id, title, created_at, updated_at) VALUES ('session-1', 'Test', datetime('now'), datetime('now'))")
+	if err != nil {
+		t.Fatalf("failed to insert test session: %v", err)
+	}
+
+	store := resource.NewStore(db)
+	tmpDir := t.TempDir()
+	workspaceDir := filepath.Join(tmpDir, "workspace")
+	changesDir := filepath.Join(tmpDir, "changes")
+
+	if err := os.MkdirAll(workspaceDir, 0755); err != nil {
+		t.Fatalf("failed to create workspace: %v", err)
+	}
+
+	ft := filetrack.NewTracker(store, "session-1", changesDir, workspaceDir)
+	ctx := context.Background()
+
+	// 1. Record creation of a binary file
+	pngPath := "test.png"
+	absPngPath := filepath.Join(workspaceDir, pngPath)
+	pngBytes := []byte("\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR")
+	if err := os.WriteFile(absPngPath, pngBytes, 0644); err != nil {
+		t.Fatalf("failed to write test png: %v", err)
+	}
+
+	if err := ft.Record(ctx, filetrack.Change{
+		ToolName: "write",
+		Path:     pngPath,
+		Kind:     filetrack.Created,
+	}, "", ""); err != nil {
+		t.Fatalf("failed to record created binary change: %v", err)
+	}
+
+	// Verify that the journal has IsBinary = true
+	entries, err := ft.ReadJournal(ctx, pngPath)
+	if err != nil {
+		t.Fatalf("ReadJournal failed: %v", err)
+	}
+	if len(entries) < 1 || !entries[0].IsBinary {
+		t.Errorf("expected baseline entry to have IsBinary = true, got %+v", entries[0])
+	}
+
+	// Verify that NO .last file was written
+	h := sha256.Sum256([]byte(pngPath))
+	lastFile := filepath.Join(changesDir, fmt.Sprintf("%x.last", h[:8]))
+	if _, err := os.Stat(lastFile); err == nil || !os.IsNotExist(err) {
+		t.Error("expected no .last backup file to be written for binary file")
+	}
+
+	// 2. Reverting a created binary file should delete it (no backup needed for deletion)
+	if err := ft.RevertToBaseline(ctx, pngPath, false); err != nil {
+		t.Errorf("expected reverting created binary to succeed, got error: %v", err)
+	}
+	if _, err := os.Stat(absPngPath); !os.IsNotExist(err) {
+		t.Error("expected created binary file to be deleted on revert")
+	}
+
+	// 3. Record modification of a binary file
+	if err := os.WriteFile(absPngPath, pngBytes, 0644); err != nil {
+		t.Fatalf("failed to write test png again: %v", err)
+	}
+	ft2 := filetrack.NewTracker(store, "session-1", changesDir, workspaceDir)
+	if err := ft2.Record(ctx, filetrack.Change{
+		ToolName: "write",
+		Path:     pngPath,
+		Kind:     filetrack.Modified,
+	}, "", ""); err != nil {
+		t.Fatalf("failed to record modified binary change: %v", err)
+	}
+
+	// Reverting modified binary should fail since no backup exists
+	if err := ft2.RevertToBaseline(ctx, pngPath, false); err == nil {
+		t.Error("expected reverting modified binary to fail (no backup), but got nil")
+	}
+
+	// 4. Test conflict detection for binary files
+	conflict, err := ft2.CheckConflict(ctx, pngPath)
+	if err != nil {
+		t.Fatalf("CheckConflict failed: %v", err)
+	}
+	if conflict {
+		t.Error("expected no conflict initially")
+	}
+
+	// Mutate on disk externally
+	if err := os.WriteFile(absPngPath, append(pngBytes, 'x'), 0644); err != nil {
+		t.Fatalf("failed to mutate png externally: %v", err)
+	}
+
+	conflict, err = ft2.CheckConflict(ctx, pngPath)
+	if err != nil {
+		t.Fatalf("CheckConflict failed: %v", err)
+	}
+	if !conflict {
+		t.Error("expected conflict after external modification of binary file")
 	}
 }

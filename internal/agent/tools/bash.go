@@ -13,6 +13,7 @@ import (
 
 	"github.com/masterkeysrd/loom/message"
 	"github.com/masterkeysrd/loom/tool"
+	"github.com/masterkeysrd/tasksmith/internal/core/fs"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	"github.com/masterkeysrd/tasksmith/internal/core/process"
 	"github.com/masterkeysrd/tasksmith/internal/core/vcs"
@@ -458,13 +459,16 @@ func (o BashOutput) TextContent() string {
 type bashChangeDetector struct {
 	cwd       string
 	isGit     bool
+	ignorer   fs.Ignorer
 	preStatus map[string]string
 	preMtimes map[string]time.Time
 }
 
 func newChangeDetector(cwd string) *bashChangeDetector {
+	ign, _ := fs.NewIgnorer(cwd)
 	cd := &bashChangeDetector{
 		cwd:       cwd,
+		ignorer:   ign,
 		preMtimes: make(map[string]time.Time),
 	}
 	if vcs.IsGitAvailable() && vcs.IsRepo(cwd) {
@@ -497,17 +501,25 @@ func (cd *bashChangeDetector) scanMtimes() {
 		if err != nil {
 			return nil
 		}
-		if info.IsDir() {
-			name := info.Name()
+		rel, err := filepath.Rel(cd.cwd, path)
+		if err != nil {
+			return nil
+		}
+		name := info.Name()
+		isDir := info.IsDir()
+		if cd.ignorer != nil && cd.ignorer.ShouldIgnore(name, path, isDir) {
+			if isDir {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if isDir {
 			if strings.HasPrefix(name, ".") && name != "." {
 				return filepath.SkipDir
 			}
 			return nil
 		}
-		rel, err := filepath.Rel(cd.cwd, path)
-		if err == nil {
-			cd.preMtimes[rel] = info.ModTime()
-		}
+		cd.preMtimes[rel] = info.ModTime()
 		return nil
 	})
 }
@@ -520,17 +532,25 @@ func (cd *bashChangeDetector) DetectChanges() []filetrack.Change {
 		if err != nil {
 			return nil
 		}
-		if info.IsDir() {
-			name := info.Name()
+		rel, err := filepath.Rel(cd.cwd, path)
+		if err != nil {
+			return nil
+		}
+		name := info.Name()
+		isDir := info.IsDir()
+		if cd.ignorer != nil && cd.ignorer.ShouldIgnore(name, path, isDir) {
+			if isDir {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if isDir {
 			if strings.HasPrefix(name, ".") && name != "." {
 				return filepath.SkipDir
 			}
 			return nil
 		}
-		rel, err := filepath.Rel(cd.cwd, path)
-		if err == nil {
-			postMtimes[rel] = info.ModTime()
-		}
+		postMtimes[rel] = info.ModTime()
 		return nil
 	})
 
@@ -622,31 +642,39 @@ func recordBashChanges(ctx context.Context, ft filetrack.FileTracker, cwd string
 		rel := strings.TrimPrefix(change.Path, "./")
 		absPath := filepath.Join(cwd, rel)
 
+		isBinary := false
+		if change.Kind != filetrack.Deleted {
+			mimeType := fs.DetectMIMEType(absPath)
+			isBinary = fs.IsBinaryMIME(mimeType)
+		}
+
 		var diffStr string
 		var oldContent string
 		var additions, deletions int
 
-		if change.Kind == filetrack.Created {
-			additions = countLinesInFile(absPath)
-		} else if change.Kind == filetrack.Deleted {
-			// Deletions count is 0 as file content is gone and not tracked here
-		} else if change.Kind == filetrack.Modified {
-			newBytes, err := os.ReadFile(absPath)
-			var newContent string
-			if err == nil {
-				newContent = string(newBytes)
-				additions = strings.Count(newContent, "\n") + 1
-			}
-
-			if vcs.IsGitAvailable() && vcs.IsRepo(cwd) {
-				diffStr = runGitCmd(cwd, "diff", "--", rel)
-				showOut := runGitCmd(cwd, "show", ":"+rel)
-				if showOut == "" {
-					showOut = runGitCmd(cwd, "show", "HEAD:"+rel)
+		if !isBinary {
+			if change.Kind == filetrack.Created {
+				additions = countLinesInFile(absPath)
+			} else if change.Kind == filetrack.Deleted {
+				// Deletions count is 0 as file content is gone and not tracked here
+			} else if change.Kind == filetrack.Modified {
+				newBytes, err := os.ReadFile(absPath)
+				var newContent string
+				if err == nil {
+					newContent = string(newBytes)
+					additions = strings.Count(newContent, "\n") + 1
 				}
-				if showOut != "" {
-					oldContent = showOut
-					deletions = strings.Count(oldContent, "\n") + 1
+
+				if vcs.IsGitAvailable() && vcs.IsRepo(cwd) {
+					diffStr = runGitCmd(cwd, "diff", "--", rel)
+					showOut := runGitCmd(cwd, "show", ":"+rel)
+					if showOut == "" {
+						showOut = runGitCmd(cwd, "show", "HEAD:"+rel)
+					}
+					if showOut != "" {
+						oldContent = showOut
+						deletions = strings.Count(oldContent, "\n") + 1
+					}
 				}
 			}
 		}

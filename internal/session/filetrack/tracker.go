@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/masterkeysrd/tasksmith/internal/core/diff"
+	"github.com/masterkeysrd/tasksmith/internal/core/fs"
 	"github.com/masterkeysrd/tasksmith/internal/session/resource"
 )
 
@@ -52,6 +53,7 @@ type JournalEntry struct {
 	Additions int        `json:"additions,omitempty"`
 	Deletions int        `json:"deletions,omitempty"`
 	Diff      string     `json:"diff,omitempty"` // only for changes
+	IsBinary  bool       `json:"is_binary,omitempty"`
 }
 
 type resourceData struct {
@@ -128,11 +130,23 @@ func (t *tracker) Record(ctx context.Context, change Change, diff string, oldCon
 
 	now := time.Now().UTC()
 
+	absPath := filepath.Join(t.workspaceDir, change.Path)
+	isBinary := false
+	if change.Kind != Deleted {
+		mimeType := fs.DetectMIMEType(absPath)
+		isBinary = fs.IsBinaryMIME(mimeType)
+	}
+
 	if !touched {
+		baselineContent := ""
+		if !isBinary {
+			baselineContent = oldContent
+		}
 		baselineEntry := JournalEntry{
 			Timestamp: now,
 			Kind:      "baseline",
-			Content:   oldContent,
+			Content:   baselineContent,
+			IsBinary:  isBinary,
 		}
 		baselineBytes, err := json.Marshal(baselineEntry)
 		if err != nil {
@@ -189,12 +203,13 @@ func (t *tracker) Record(ctx context.Context, change Change, diff string, oldCon
 		hashVal = "deleted"
 		_ = os.Remove(lastPath)
 	} else {
-		absPath := filepath.Join(t.workspaceDir, change.Path)
 		data, err := os.ReadFile(absPath)
 		if err == nil {
 			hashVal = fmt.Sprintf("%x", sha256.Sum256(data))
-			if err := os.WriteFile(lastPath, data, 0644); err != nil {
-				return fmt.Errorf("failed to write .last file: %w", err)
+			if !isBinary {
+				if err := os.WriteFile(lastPath, data, 0644); err != nil {
+					return fmt.Errorf("failed to write .last file: %w", err)
+				}
 			}
 		}
 	}
@@ -257,23 +272,28 @@ func (t *tracker) Summary(ctx context.Context) ([]FileSummary, error) {
 		}
 
 		currentContent := ""
+		isBinary := false
 		if s.Kind != Deleted {
 			absPath := filepath.Join(t.workspaceDir, s.Path)
+			mimeType := fs.DetectMIMEType(absPath)
+			isBinary = fs.IsBinaryMIME(mimeType)
 			if bytes, err := os.ReadFile(absPath); err == nil {
 				currentContent = string(bytes)
 			}
 		}
 
-		baselineLines := splitLines(baselineContent)
-		currentLines := splitLines(currentContent)
-
-		edits := diff.MyersDiff(baselineLines, currentLines)
 		var additions, deletions int
-		for _, e := range edits {
-			if e.Op == diff.OpInsert {
-				additions++
-			} else if e.Op == diff.OpDelete {
-				deletions++
+		if !isBinary && len(currentContent) <= 1000000 && len(baselineContent) <= 1000000 {
+			baselineLines := splitLines(baselineContent)
+			currentLines := splitLines(currentContent)
+
+			edits := diff.MyersDiff(baselineLines, currentLines)
+			for _, e := range edits {
+				if e.Op == diff.OpInsert {
+					additions++
+				} else if e.Op == diff.OpDelete {
+					deletions++
+				}
 			}
 		}
 
@@ -298,6 +318,10 @@ func (t *tracker) ReadJournal(ctx context.Context, path string) ([]JournalEntry,
 
 	var entries []JournalEntry
 	scanner := bufio.NewScanner(file)
+	// Allow scanning lines up to 16MB to support baseline entries of larger files
+	const maxCapacity = 16 * 1024 * 1024
+	buf := make([]byte, 0, 64*1024)
+	scanner.Buffer(buf, maxCapacity)
 	for scanner.Scan() {
 		line := scanner.Bytes()
 		if len(line) == 0 {
@@ -323,6 +347,40 @@ func (t *tracker) checkConflictLocked(ctx context.Context, path string) (bool, e
 	}
 
 	baseline := entries[0]
+	if baseline.IsBinary {
+		// Binary conflict detection based on SHA-256 hash.
+		hashes, err := t.store.QueryByKey(ctx, t.sessionID, "file_hash", path)
+		if err != nil {
+			return false, err
+		}
+		var lastHash string
+		if len(hashes) > 0 {
+			var latestRes *resource.Resource
+			for _, r := range hashes {
+				if latestRes == nil || r.CreatedAt.After(latestRes.CreatedAt) {
+					rCopy := r
+					latestRes = &rCopy
+				}
+			}
+			if latestRes != nil {
+				lastHash = latestRes.Data
+			}
+		}
+
+		absPath := filepath.Join(t.workspaceDir, path)
+		data, err := os.ReadFile(absPath)
+		var currentHash string
+		if err == nil {
+			currentHash = fmt.Sprintf("%x", sha256.Sum256(data))
+		} else if os.IsNotExist(err) {
+			currentHash = "deleted"
+		} else {
+			return false, err
+		}
+
+		return currentHash != lastHash, nil
+	}
+
 	aLines := splitLines(baseline.Content)
 
 	// Get ancestor B (last agent content)
@@ -396,98 +454,111 @@ func (t *tracker) RevertToBaseline(ctx context.Context, path string, force bool)
 	baseline := entries[0]
 	absPath := filepath.Join(t.workspaceDir, path)
 
-	if force {
-		// Just restore baseline directly, overwriting any manual edits.
-		if baseline.Content == "" {
-			if err := os.Remove(absPath); err != nil && !os.IsNotExist(err) {
-				return fmt.Errorf("failed to delete created file on revert: %w", err)
-			}
-		} else {
-			if err := os.MkdirAll(filepath.Dir(absPath), 0755); err != nil {
-				return fmt.Errorf("failed to create directory for revert: %w", err)
-			}
-			if err := os.WriteFile(absPath, []byte(baseline.Content), 0644); err != nil {
-				return fmt.Errorf("failed to restore baseline file content: %w", err)
-			}
+	if baseline.IsBinary {
+		firstChangeIsCreation := false
+		if len(entries) > 1 && entries[1].Kind == Created {
+			firstChangeIsCreation = true
+		}
+		if !firstChangeIsCreation {
+			return fmt.Errorf("cannot revert binary file: no backup available")
+		}
+		if err := os.Remove(absPath); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("failed to delete created binary file on revert: %w", err)
 		}
 	} else {
-		// Non-forced revert: check conflict and perform three-way merge.
-		conflict, err := t.checkConflictLocked(ctx, path)
-		if err != nil {
-			return err
-		}
-		if conflict {
-			return fmt.Errorf("conflict")
-		}
-
-		aLines := splitLines(baseline.Content)
-
-		// Get ancestor B (last agent content)
-		var bLines []string
-		lastPath := t.lastPath(path)
-		bBytes, err := os.ReadFile(lastPath)
-		if err == nil {
-			bLines = splitLines(string(bBytes))
-		} else if os.IsNotExist(err) {
-			if len(entries) > 0 && entries[len(entries)-1].Kind == Deleted {
-				bLines = nil
+		if force {
+			// Just restore baseline directly, overwriting any manual edits.
+			if baseline.Content == "" {
+				if err := os.Remove(absPath); err != nil && !os.IsNotExist(err) {
+					return fmt.Errorf("failed to delete created file on revert: %w", err)
+				}
 			} else {
-				bLines = aLines
+				if err := os.MkdirAll(filepath.Dir(absPath), 0755); err != nil {
+					return fmt.Errorf("failed to create directory for revert: %w", err)
+				}
+				if err := os.WriteFile(absPath, []byte(baseline.Content), 0644); err != nil {
+					return fmt.Errorf("failed to restore baseline file content: %w", err)
+				}
 			}
 		} else {
-			return err
-		}
-
-		// Get current content C
-		cBytes, err := os.ReadFile(absPath)
-		var cLines []string
-		cExists := false
-		if err == nil {
-			cLines = splitLines(string(cBytes))
-			cExists = true
-		} else if !os.IsNotExist(err) {
-			return err
-		}
-
-		// Re-run the merge logic to get the merged content.
-		// Note: since conflict is false, this is guaranteed to merge cleanly.
-		var merged []string
-		if bLines == nil {
-			// both deleted
-			merged = nil
-		} else if !cExists {
-			// A is empty, so merged is also empty
-			merged = nil
-		} else {
-			merged, _ = diff.Merge3(bLines, aLines, cLines)
-		}
-
-		// Determine if we need a trailing newline.
-		hasTrailing := false
-		if len(cBytes) > 0 && cBytes[len(cBytes)-1] == '\n' {
-			hasTrailing = true
-		} else if len(baseline.Content) > 0 && baseline.Content[len(baseline.Content)-1] == '\n' {
-			hasTrailing = true
-		}
-
-		var newContent string
-		if len(merged) > 0 {
-			newContent = strings.Join(merged, "\n")
-			if hasTrailing {
-				newContent += "\n"
+			// Non-forced revert: check conflict and perform three-way merge.
+			conflict, err := t.checkConflictLocked(ctx, path)
+			if err != nil {
+				return err
 			}
-		}
+			if conflict {
+				return fmt.Errorf("conflict")
+			}
 
-		if newContent == "" {
-			if err := os.Remove(absPath); err != nil && !os.IsNotExist(err) {
-				return fmt.Errorf("failed to remove file: %w", err)
+			aLines := splitLines(baseline.Content)
+
+			// Get ancestor B (last agent content)
+			var bLines []string
+			lastPath := t.lastPath(path)
+			bBytes, err := os.ReadFile(lastPath)
+			if err == nil {
+				bLines = splitLines(string(bBytes))
+			} else if os.IsNotExist(err) {
+				if len(entries) > 0 && entries[len(entries)-1].Kind == Deleted {
+					bLines = nil
+				} else {
+					bLines = aLines
+				}
+			} else {
+				return err
 			}
-		} else {
-			if err := os.MkdirAll(filepath.Dir(absPath), 0755); err != nil {
-				return fmt.Errorf("failed to create directory for revert: %w", err)
+
+			// Get current content C
+			cBytes, err := os.ReadFile(absPath)
+			var cLines []string
+			cExists := false
+			if err == nil {
+				cLines = splitLines(string(cBytes))
+				cExists = true
+			} else if !os.IsNotExist(err) {
+				return err
 			}
-			if err := os.WriteFile(absPath, []byte(newContent), 0644); err != nil {
-				return fmt.Errorf("failed to write merged file: %w", err)
+
+			// Re-run the merge logic to get the merged content.
+			// Note: since conflict is false, this is guaranteed to merge cleanly.
+			var merged []string
+			if bLines == nil {
+				// both deleted
+				merged = nil
+			} else if !cExists {
+				// A is empty, so merged is also empty
+				merged = nil
+			} else {
+				merged, _ = diff.Merge3(bLines, aLines, cLines)
+			}
+
+			// Determine if we need a trailing newline.
+			hasTrailing := false
+			if len(cBytes) > 0 && cBytes[len(cBytes)-1] == '\n' {
+				hasTrailing = true
+			} else if len(baseline.Content) > 0 && baseline.Content[len(baseline.Content)-1] == '\n' {
+				hasTrailing = true
+			}
+
+			var newContent string
+			if len(merged) > 0 {
+				newContent = strings.Join(merged, "\n")
+				if hasTrailing {
+					newContent += "\n"
+				}
+			}
+
+			if newContent == "" {
+				if err := os.Remove(absPath); err != nil && !os.IsNotExist(err) {
+					return fmt.Errorf("failed to remove file: %w", err)
+				}
+			} else {
+				if err := os.MkdirAll(filepath.Dir(absPath), 0755); err != nil {
+					return fmt.Errorf("failed to create directory for revert: %w", err)
+				}
+				if err := os.WriteFile(absPath, []byte(newContent), 0644); err != nil {
+					return fmt.Errorf("failed to write merged file: %w", err)
+				}
 			}
 		}
 	}
