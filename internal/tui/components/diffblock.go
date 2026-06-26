@@ -77,16 +77,17 @@ var DiffBlock = kitex.FC("DiffBlock", func(props DiffBlockProps) kitex.Node {
 
 	// Helper function to tokenize and highlight a line of code.
 	highlightLine := func(line string, bg color.Color) []kitex.Node {
+		line = strings.ReplaceAll(line, "\t", "    ")
 		iterator, err := lexer.Tokenise(nil, line)
 		var spans []kitex.Node
 		if err != nil {
 			spans = []kitex.Node{kitex.Span(
-				kitex.SpanProps{Style: style.S().Background(bg).Foreground(textCol)},
+				kitex.SpanProps{Style: style.S().Background(bg).Foreground(textCol).WhiteSpace(style.WhiteSpacePre)},
 				kitex.Text(line),
 			)}
 		} else {
 			for tok := iterator(); tok != chroma.EOF; tok = iterator() {
-				tokenStyle := ResolveTokenStyle(t, tok.Type)
+				tokenStyle := ResolveTokenStyle(t, tok.Type).WhiteSpace(style.WhiteSpacePre)
 				if bg != nil {
 					tokenStyle = tokenStyle.Background(bg)
 				}
@@ -188,13 +189,13 @@ var DiffBlock = kitex.FC("DiffBlock", func(props DiffBlockProps) kitex.Node {
 					paddingLength := 500 - len(r.HeaderText)
 					if paddingLength > 0 {
 						codeSpans = append(codeSpans, kitex.Span(
-							kitex.SpanProps{Style: style.S().Background(bg)},
+							kitex.SpanProps{Style: style.S().Background(bg).WhiteSpace(style.WhiteSpacePre)},
 							kitex.Text(strings.Repeat(" ", paddingLength)),
 						))
 					}
 				}
 				codeSpans = append(codeSpans, kitex.Span(
-					kitex.SpanProps{Style: style.S().Background(bg)},
+					kitex.SpanProps{Style: style.S().Background(bg).WhiteSpace(style.WhiteSpacePre)},
 					kitex.Text("\n"),
 				))
 				continue
@@ -257,13 +258,13 @@ var DiffBlock = kitex.FC("DiffBlock", func(props DiffBlockProps) kitex.Node {
 				paddingLength := 500 - len(line.Content)
 				if paddingLength > 0 {
 					codeSpans = append(codeSpans, kitex.Span(
-						kitex.SpanProps{Style: style.S().Background(bg)},
+						kitex.SpanProps{Style: style.S().Background(bg).WhiteSpace(style.WhiteSpacePre)},
 						kitex.Text(strings.Repeat(" ", paddingLength)),
 					))
 				}
 			}
 			codeSpans = append(codeSpans, kitex.Span(
-				kitex.SpanProps{Style: style.S().Background(bg)},
+				kitex.SpanProps{Style: style.S().Background(bg).WhiteSpace(style.WhiteSpacePre)},
 				kitex.Text("\n"),
 			))
 		}
@@ -316,13 +317,13 @@ var DiffBlock = kitex.FC("DiffBlock", func(props DiffBlockProps) kitex.Node {
 					paddingLength := 500 - len(r.HeaderText)
 					if paddingLength > 0 {
 						leftCodeSpans = append(leftCodeSpans, kitex.Span(
-							kitex.SpanProps{Style: style.S().Background(bg)},
+							kitex.SpanProps{Style: style.S().Background(bg).WhiteSpace(style.WhiteSpacePre)},
 							kitex.Text(strings.Repeat(" ", paddingLength)),
 						))
 					}
 				}
 				leftCodeSpans = append(leftCodeSpans, kitex.Span(
-					kitex.SpanProps{Style: style.S().Background(bg)},
+					kitex.SpanProps{Style: style.S().Background(bg).WhiteSpace(style.WhiteSpacePre)},
 					kitex.Text("\n"),
 				))
 
@@ -347,12 +348,12 @@ var DiffBlock = kitex.FC("DiffBlock", func(props DiffBlockProps) kitex.Node {
 				// Right Code
 				if bg != nil {
 					rightCodeSpans = append(rightCodeSpans, kitex.Span(
-						kitex.SpanProps{Style: style.S().Background(bg)},
+						kitex.SpanProps{Style: style.S().Background(bg).WhiteSpace(style.WhiteSpacePre)},
 						kitex.Text(strings.Repeat(" ", 500)),
 					))
 				}
 				rightCodeSpans = append(rightCodeSpans, kitex.Span(
-					kitex.SpanProps{Style: style.S().Background(bg)},
+					kitex.SpanProps{Style: style.S().Background(bg).WhiteSpace(style.WhiteSpacePre)},
 					kitex.Text("\n"),
 				))
 				continue
@@ -420,7 +421,7 @@ var DiffBlock = kitex.FC("DiffBlock", func(props DiffBlockProps) kitex.Node {
 					paddingLength := 500 - len(leftLine.Content)
 					if paddingLength > 0 {
 						leftCodeSpans = append(leftCodeSpans, kitex.Span(
-							kitex.SpanProps{Style: style.S().Background(leftBg)},
+							kitex.SpanProps{Style: style.S().Background(leftBg).WhiteSpace(style.WhiteSpacePre)},
 							kitex.Text(strings.Repeat(" ", paddingLength)),
 						))
 					}
@@ -428,13 +429,13 @@ var DiffBlock = kitex.FC("DiffBlock", func(props DiffBlockProps) kitex.Node {
 			} else {
 				if leftBg != nil {
 					leftCodeSpans = append(leftCodeSpans, kitex.Span(
-						kitex.SpanProps{Style: style.S().Background(leftBg)},
+						kitex.SpanProps{Style: style.S().Background(leftBg).WhiteSpace(style.WhiteSpacePre)},
 						kitex.Text(strings.Repeat(" ", 500)),
 					))
 				}
 			}
 			leftCodeSpans = append(leftCodeSpans, kitex.Span(
-				kitex.SpanProps{Style: style.S().Background(leftBg)},
+				kitex.SpanProps{Style: style.S().Background(leftBg).WhiteSpace(style.WhiteSpacePre)},
 				kitex.Text("\n"),
 			))
 
@@ -470,7 +471,7 @@ var DiffBlock = kitex.FC("DiffBlock", func(props DiffBlockProps) kitex.Node {
 					paddingLength := 500 - len(rightLine.Content)
 					if paddingLength > 0 {
 						rightCodeSpans = append(rightCodeSpans, kitex.Span(
-							kitex.SpanProps{Style: style.S().Background(rightBg)},
+							kitex.SpanProps{Style: style.S().Background(rightBg).WhiteSpace(style.WhiteSpacePre)},
 							kitex.Text(strings.Repeat(" ", paddingLength)),
 						))
 					}
@@ -478,13 +479,13 @@ var DiffBlock = kitex.FC("DiffBlock", func(props DiffBlockProps) kitex.Node {
 			} else {
 				if rightBg != nil {
 					rightCodeSpans = append(rightCodeSpans, kitex.Span(
-						kitex.SpanProps{Style: style.S().Background(rightBg)},
+						kitex.SpanProps{Style: style.S().Background(rightBg).WhiteSpace(style.WhiteSpacePre)},
 						kitex.Text(strings.Repeat(" ", 500)),
 					))
 				}
 			}
 			rightCodeSpans = append(rightCodeSpans, kitex.Span(
-				kitex.SpanProps{Style: style.S().Background(rightBg)},
+				kitex.SpanProps{Style: style.S().Background(rightBg).WhiteSpace(style.WhiteSpacePre)},
 				kitex.Text("\n"),
 			))
 		}

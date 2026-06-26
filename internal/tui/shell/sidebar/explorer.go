@@ -5,18 +5,48 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/masterkeysrd/kite/extras/kitex"
 	"github.com/masterkeysrd/kite/style"
 	"github.com/masterkeysrd/tasksmith/internal/api"
 	"github.com/masterkeysrd/tasksmith/internal/tui/components"
 	"github.com/masterkeysrd/tasksmith/internal/tui/components/icon"
+	"github.com/masterkeysrd/tasksmith/internal/tui/theme"
 )
 
-func explorerPanel(data Data, expandedPaths map[string]bool, onTogglePath func(string), onSelectFile func(string)) kitex.Node {
-	c := useColors()
+type ExplorerPanelProps struct {
+	Data          Data
+	ExpandedPaths map[string]bool
+	OnTogglePath  func(string)
+	OnSelectFile  func(string)
+}
 
-	projectRows := kitex.Map(data.Projects, func(project api.Project, idx int) kitex.Node {
+func computeExplorerCacheKey(changes []api.FileChangeSummary, expanded map[string]bool) string {
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "c:%d;", len(changes))
+	for _, c := range changes {
+		fmt.Fprintf(&sb, "%s:%d:%s;", c.Path, c.TotalEdits, c.LastChangedAt.Format(time.RFC3339Nano))
+	}
+	var expKeys []string
+	for k, v := range expanded {
+		if v {
+			expKeys = append(expKeys, k)
+		}
+	}
+	sort.Strings(expKeys)
+	for _, k := range expKeys {
+		fmt.Fprintf(&sb, "e:%s;", k)
+	}
+	return sb.String()
+}
+
+// ExplorerPanel renders the sidebar file tree explorer reactively.
+var ExplorerPanel = kitex.FC("ExplorerPanel", func(props ExplorerPanelProps) kitex.Node {
+	c := useColors()
+	t := theme.UseTheme()
+
+	projectRows := kitex.Map(props.Data.Projects, func(project api.Project, idx int) kitex.Node {
 		name := project.DisplayName
 		if name == "" {
 			name = project.Name
@@ -51,7 +81,19 @@ func explorerPanel(data Data, expandedPaths map[string]bool, onTogglePath func(s
 		)
 	})
 
-	fileTree := buildFileTree(data.ChangedFiles)
+	var themeType string
+	if t != nil {
+		themeType = t.Type
+	}
+	cacheKey := computeExplorerCacheKey(props.Data.ChangedFiles, props.ExpandedPaths) + ":" + themeType
+
+	fileTreeContent := kitex.UseMemo(func() kitex.Node {
+		fileTree := buildFileTree(props.Data.ChangedFiles)
+		if len(props.Data.ChangedFiles) == 0 {
+			return emptyState("No changes in this session.")
+		}
+		return changedFileTree(fileTree, props.ExpandedPaths, props.OnTogglePath, props.OnSelectFile)
+	}, []any{cacheKey})
 
 	return kitex.Box(kitex.BoxProps{
 		Style: style.S().
@@ -70,7 +112,7 @@ func explorerPanel(data Data, expandedPaths map[string]bool, onTogglePath func(s
 				Style: style.S().
 					Foreground(c.subtle).
 					Bold(true),
-			}, kitex.Text(data.WorkspaceName)),
+			}, kitex.Text(props.Data.WorkspaceName)),
 			kitex.Box(kitex.BoxProps{
 				Style: style.S().
 					Display(style.DisplayFlex).
@@ -87,10 +129,10 @@ func explorerPanel(data Data, expandedPaths map[string]bool, onTogglePath func(s
 				FlexDirection(style.FlexColumn).
 				Background(c.panel),
 		},
-			kitex.If(len(data.Projects) > 0, func() kitex.Node {
+			kitex.If(len(props.Data.Projects) > 0, func() kitex.Node {
 				return projectRows
 			}),
-			kitex.If(len(data.Projects) == 0, func() kitex.Node {
+			kitex.If(len(props.Data.Projects) == 0, func() kitex.Node {
 				return emptyState("No projects configured yet.")
 			}),
 		),
@@ -104,12 +146,10 @@ func explorerPanel(data Data, expandedPaths map[string]bool, onTogglePath func(s
 					Foreground(c.warning).
 					Bold(true),
 			}, kitex.Text("CHANGED FILES [SESSION]")),
-			kitex.Box(kitex.BoxProps{
-				Style: style.S(),
-			}, kitex.IfElse(len(data.ChangedFiles) == 0, emptyState("No changes in this session."), changedFileTree(fileTree, expandedPaths, onTogglePath, onSelectFile, 0))),
+			fileTreeContent,
 		),
 	)
-}
+})
 
 func explorerActionButton(icon kitex.Node) kitex.Node {
 	c := useColors()
@@ -206,17 +246,44 @@ func sortedFileChildren(node *fileNode) []*fileNode {
 	return children
 }
 
-func changedFileTree(root *fileNode, expandedPaths map[string]bool, onTogglePath func(string), onSelectFile func(string), depth int) kitex.Node {
+type flatNode struct {
+	node       *fileNode
+	depth      int
+	isExpanded bool
+}
+
+func flattenTree(node *fileNode, expandedPaths map[string]bool, depth int, result *[]flatNode) {
+	children := sortedFileChildren(node)
+	for _, child := range children {
+		isExpanded := expandedPaths[child.FullPath]
+		*result = append(*result, flatNode{
+			node:       child,
+			depth:      depth,
+			isExpanded: isExpanded,
+		})
+		if child.IsDir && isExpanded {
+			flattenTree(child, expandedPaths, depth+1, result)
+		}
+	}
+}
+
+func changedFileTree(root *fileNode, expandedPaths map[string]bool, onTogglePath func(string), onSelectFile func(string)) kitex.Node {
 	c := useColors()
-	children := sortedFileChildren(root)
-	if len(children) == 0 {
+
+	var flatList []flatNode
+	flattenTree(root, expandedPaths, 0, &flatList)
+
+	if len(flatList) == 0 {
 		return nil
 	}
 
 	return kitex.Box(kitex.BoxProps{
 		Style: style.S().Display(style.DisplayFlex).FlexDirection(style.FlexColumn),
-	}, kitex.Map(children, func(child *fileNode, _ int) kitex.Node {
-		isExpanded := expandedPaths[child.FullPath]
+	}, kitex.Map(flatList, func(item flatNode, _ int) kitex.Node {
+		child := item.node
+		depth := item.depth
+		isExpanded := item.isExpanded
+
 		if !child.IsDir {
 			badge := "M"
 			badgeColor := c.warning
@@ -265,9 +332,7 @@ func changedFileTree(root *fileNode, expandedPaths map[string]bool, onTogglePath
 							Bold(true).
 							TextAlign(style.TextAlignCenter),
 					}, kitex.Text(badge)),
-					kitex.Box(kitex.BoxProps{
-						Style: style.S().Foreground(c.subtle),
-					}, kitex.Text("󰈙")),
+					kitex.Span(kitex.SpanProps{Style: style.S().Foreground(c.subtle)}, icon.FileIcon(icon.FileIconProps{Path: child.OriginalPath})),
 					kitex.Box(kitex.BoxProps{
 						Style: style.S().Foreground(c.text),
 					}, kitex.Text(child.Name)),
@@ -280,50 +345,40 @@ func changedFileTree(root *fileNode, expandedPaths map[string]bool, onTogglePath
 			)
 		}
 
-		return kitex.Box(kitex.BoxProps{
-			Style: style.S().Display(style.DisplayFlex).FlexDirection(style.FlexColumn),
+		return components.Button(components.ButtonProps{
+			Key:     child.FullPath,
+			Variant: components.ButtonText,
+			Color:   components.ButtonBase,
+			Style: style.S().
+				Width(style.Percent(100)).
+				JustifyContent(style.JustifyStart).
+				PaddingHorizontal(0).
+				Background(c.panel),
+			HoverStyle: style.S().
+				Background(c.surface),
+			OnClick: func() {
+				if onTogglePath != nil {
+					onTogglePath(child.FullPath)
+				}
+			},
 		},
-			components.Button(components.ButtonProps{
-				Key:     child.FullPath,
-				Variant: components.ButtonText,
-				Color:   components.ButtonBase,
+			kitex.Box(kitex.BoxProps{
 				Style: style.S().
-					Width(style.Percent(100)).
-					JustifyContent(style.JustifyStart).
-					PaddingHorizontal(0).
-					Background(c.panel),
-				HoverStyle: style.S().
-					Background(c.surface),
-				OnClick: func() {
-					if onTogglePath != nil {
-						onTogglePath(child.FullPath)
-					}
-				},
+					Display(style.DisplayFlex).
+					AlignItems(style.AlignCenter).
+					Gap(1).
+					PaddingLeft(depth),
 			},
 				kitex.Box(kitex.BoxProps{
-					Style: style.S().
-						Display(style.DisplayFlex).
-						AlignItems(style.AlignCenter).
-						Gap(1).
-						PaddingLeft(depth),
-				},
-					kitex.Box(kitex.BoxProps{
-						Style: style.S().Foreground(c.subtle),
-					}, kitex.IfElse(isExpanded, icon.ChevronDown, icon.ChevronRight)),
-					kitex.Box(kitex.BoxProps{
-						Style: style.S().Foreground(c.info),
-					}, kitex.IfElse(isExpanded, icon.DirectoryOpen, icon.Folder)),
-					kitex.Box(kitex.BoxProps{
-						Style: style.S().Foreground(c.text).Bold(true),
-					}, kitex.Text(child.Name)),
-				),
+					Style: style.S().Foreground(c.subtle),
+				}, kitex.IfElse(isExpanded, icon.ChevronDown, icon.ChevronRight)),
+				kitex.Box(kitex.BoxProps{
+					Style: style.S().Foreground(c.info),
+				}, kitex.IfElse(isExpanded, icon.DirectoryOpen, icon.Folder)),
+				kitex.Box(kitex.BoxProps{
+					Style: style.S().Foreground(c.text).Bold(true),
+				}, kitex.Text(child.Name)),
 			),
-			kitex.If(isExpanded, func() kitex.Node {
-				return kitex.Box(kitex.BoxProps{
-					Style: style.S().
-						MarginLeft(depth),
-				}, changedFileTree(child, expandedPaths, onTogglePath, onSelectFile, depth+1))
-			}),
 		)
 	}))
 }
