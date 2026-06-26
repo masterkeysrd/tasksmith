@@ -57,13 +57,13 @@ func init() {
 			Left: []Fragment{
 				{Type: "builtin", Name: "mode"},
 				{Type: "builtin", Name: "git_branch"},
+				{Type: "builtin", Name: "diagnostics"},
 			},
 			Right: []Fragment{
 				{Type: "builtin", Name: "provider"},
 				{Type: "builtin", Name: "model"},
 				{Type: "builtin", Name: "agent"},
 				{Type: "builtin", Name: "stats"},
-				{Type: "builtin", Name: "diagnostics"},
 				{Type: "builtin", Name: "status"},
 			},
 		},

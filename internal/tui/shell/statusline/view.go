@@ -62,7 +62,7 @@ var Mode = kitex.FC("Mode", func(props ModeProps) kitex.Node {
 		Background(modeBg).
 		Foreground(colorTextDark).
 		Bold(true).
-		PaddingHorizontal(2).
+		PaddingHorizontal(1).
 		Merge(props.Style)
 
 	return kitex.Box(kitex.BoxProps{Style: modeStyle}, kitex.Text(modeStr))
@@ -88,7 +88,7 @@ var GitBranch = kitex.FC("GitBranch", func(props GitBranchProps) kitex.Node {
 		Background(borderPrimary).
 		Foreground(textMain).
 		Bold(true).
-		PaddingHorizontal(2).
+		PaddingHorizontal(1).
 		Display(style.DisplayFlex).
 		FlexDirection(style.FlexRow).
 		AlignItems(style.AlignCenter).
@@ -121,7 +121,7 @@ var Command = kitex.FC("Command", func(props CommandProps) kitex.Node {
 		Background(borderPrimary).
 		Foreground(textMain).
 		Bold(true).
-		PaddingHorizontal(2).
+		PaddingHorizontal(1).
 		Merge(props.Style)
 
 	return kitex.Box(kitex.BoxProps{Style: cmdStyle},
@@ -156,7 +156,7 @@ var Project = kitex.FC("Project", func(props ProjectProps) kitex.Node {
 
 	projectStyle := style.S().
 		Foreground(textDim).
-		PaddingHorizontal(2).
+		PaddingHorizontal(1).
 		Merge(props.Style)
 
 	return kitex.Box(kitex.BoxProps{Style: projectStyle},
@@ -199,7 +199,7 @@ var Provider = kitex.FC("Provider", func(props ProviderProps) kitex.Node {
 		AlignItems(style.AlignCenter).
 		Gap(1).
 		Foreground(magentaColor).
-		PaddingHorizontal(2).
+		PaddingHorizontal(1).
 		Merge(props.Style)
 
 	return kitex.Box(kitex.BoxProps{Style: providerStyle},
@@ -246,7 +246,7 @@ var Model = kitex.FC("Model", func(props ModelProps) kitex.Node {
 		Gap(1).
 		Foreground(modelDisplayColor).
 		Bold(strings.ToLower(props.ThinkingEffort) != "off").
-		PaddingHorizontal(2).
+		PaddingHorizontal(1).
 		Merge(props.Style)
 
 	return kitex.Box(kitex.BoxProps{Style: modelStyle},
@@ -279,7 +279,7 @@ var Agent = kitex.FC("Agent", func(props AgentProps) kitex.Node {
 		AlignItems(style.AlignCenter).
 		Gap(1).
 		Foreground(colorNormal).
-		PaddingHorizontal(2).
+		PaddingHorizontal(1).
 		Merge(props.Style)
 
 	return kitex.Box(kitex.BoxProps{Style: agentStyle},
@@ -424,7 +424,7 @@ var Status = kitex.FC("Status", func(props StatusProps) kitex.Node {
 		Background(statusBg).
 		Foreground(colorTextDark).
 		Bold(true).
-		PaddingHorizontal(2).
+		PaddingHorizontal(1).
 		Merge(props.Style)
 
 	return kitex.Box(kitex.BoxProps{Style: statusStyle},
