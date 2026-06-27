@@ -502,8 +502,9 @@ type LspDiagnosticsOutputDiagnosticsItemRangeStart struct {
 //
 // <guidelines>
 // - Use this when you know a symbol exists and want to understand how it works or where it is used.
-// - The inline response is highly compact and limits the number of docs/references shown to save tokens.
-// - **Critical:** A complete, untruncated markdown report is automatically saved to disk. Check the `full_report_path` field and use the `view` tool on that file if you need to read the complete docs or see every single reference.
+// - The inline output returns structured data: `docs` (plain text, truncated to 8000 chars if needed), `references` (capped at 10), and `implementations` (capped at 10).
+// - If any field exceeds its budget, the full report is saved to file storage and `full_report_path` is populated. Use the `view` tool to read the complete report.
+// - The tool returns a compact structured response — not the full markdown dump.
 // </guidelines>
 type LspInspectArgs struct {
 	// Query: The name of the symbol to inspect (e.g. "MultiEdit", "LspManager").
@@ -525,8 +526,8 @@ type LspInspectOutputResultsItem struct {
 	Docs string `json:"docs,omitempty" jsonschema:"Documentation string for the symbol."`
 	// DocsTruncated: True if the documentation was truncated for the inline response.
 	DocsTruncated bool `json:"docs_truncated,omitempty" jsonschema:"True if the documentation was truncated for the inline response."`
-	// FullReportPath: Absolute path to the saved markdown file containing the full, untruncated report.
-	FullReportPath string `json:"full_report_path,omitempty" jsonschema:"Absolute path to the saved markdown file containing the full, untruncated report."`
+	// FullReportPath: Absolute path to the saved markdown file containing the full, untruncated report (empty if no truncation occurred).
+	FullReportPath string `json:"full_report_path,omitempty" jsonschema:"Absolute path to the saved markdown file containing the full, untruncated report (empty if no truncation occurred)."`
 	// Implementations: List of file:line locations where the interface is implemented or base class is extended.
 	Implementations []string `json:"implementations,omitempty" jsonschema:"List of file:line locations where the interface is implemented or base class is extended."`
 	// ImplementationsTotal: Total number of implementations found.
