@@ -69,6 +69,7 @@ type ActiveSession struct {
 	ThinkingDuration      time.Duration
 	CurrentStreamMetrics  *message.TokenMetrics
 	PendingAuthorizations []permissions.AuthorizationRequest
+	MessageSubscribers    []chan struct{}
 }
 
 // ManagerConfig defines configuration parameters and dependencies for Manager.
@@ -77,6 +78,7 @@ type ManagerConfig struct {
 	Workspace    *workspace.Workspace
 	MetricsStore *metrics.Store
 	LspManager   *lsp.Manager
+	Context      context.Context
 }
 
 // Manager coordinates session business logic and delegates persistence to the Store interface.
@@ -90,6 +92,9 @@ type Manager struct {
 	metricsStore   *metrics.Store
 	lspManager     *lsp.Manager
 	mcpManager     *mcp.Manager
+	wg             sync.WaitGroup
+	ctx            context.Context
+	cancel         context.CancelFunc
 }
 
 // FileTracker returns a session-scoped FileTracker instance.
@@ -125,6 +130,11 @@ func NewManager(cfg ManagerConfig) *Manager {
 		lspManager:     cfg.LspManager,
 		activeSessions: make(map[string]*ActiveSession),
 		mcpManager:     mcpMgr,
+	}
+	if cfg.Context != nil {
+		m.ctx, m.cancel = context.WithCancel(cfg.Context)
+	} else {
+		m.ctx, m.cancel = context.WithCancel(context.Background())
 	}
 
 	var cwd string
@@ -446,7 +456,7 @@ func (m *Manager) sendMessage(ctx context.Context, sessionID string, text string
 	sess.CurrentStreamText = ""
 	sess.CurrentStreamThinking = ""
 	sess.CurrentToolStreams = make(map[string]string)
-	sess.ThinkingStart = time.Time{}
+	sess.ThinkingStart = time.Now()
 	sess.ThinkingDuration = 0
 	sess.CurrentStreamMetrics = nil
 	sess.PendingAuthorizations = nil
@@ -484,7 +494,11 @@ func (m *Manager) sendMessage(ctx context.Context, sessionID string, text string
 	})
 
 	// 2. Start running Loom agent workflow asynchronously in background
-	go m.runAgentLoop(runCtx, sessionID, sess, inputCmd, cancel)
+	m.wg.Add(1)
+	go func() {
+		defer m.wg.Done()
+		m.runAgentLoop(runCtx, sessionID, sess, inputCmd, cancel)
+	}()
 
 	return nil
 }
@@ -511,7 +525,7 @@ func (m *Manager) SubmitAuthorizationDecision(ctx context.Context, sessionID str
 	sess.CurrentStreamText = ""
 	sess.CurrentStreamThinking = ""
 	sess.CurrentToolStreams = make(map[string]string)
-	sess.ThinkingStart = time.Time{}
+	sess.ThinkingStart = time.Now()
 	sess.ThinkingDuration = 0
 	sess.CurrentStreamMetrics = nil
 	sess.PendingAuthorizations = nil
@@ -527,7 +541,11 @@ func (m *Manager) SubmitAuthorizationDecision(ctx context.Context, sessionID str
 	})
 
 	// Start running Loom agent workflow asynchronously in background
-	go m.runAgentLoop(runCtx, sessionID, sess, inputCmd, cancel)
+	m.wg.Add(1)
+	go func() {
+		defer m.wg.Done()
+		m.runAgentLoop(runCtx, sessionID, sess, inputCmd, cancel)
+	}()
 
 	return nil
 }
@@ -537,6 +555,9 @@ func (m *Manager) runAgentLoop(runCtx context.Context, sessionID string, sess *A
 		m.mu.Lock()
 		if sess.Status == StatusRunning {
 			sess.Status = StatusIdle
+		}
+		if !sess.ThinkingStart.IsZero() {
+			sess.ThinkingDuration = time.Since(sess.ThinkingStart)
 		}
 		m.mu.Unlock()
 		cancel()
@@ -723,6 +744,7 @@ func (m *Manager) runAgentLoop(runCtx context.Context, sessionID string, sess *A
 			sess.CurrentStreamText = ""
 			sess.CurrentStreamThinking = ""
 			m.mu.Unlock()
+			m.notifySubscribers(sessionID)
 		} else if ev.Event == "on_tool_chunk" {
 			m.handleToolChunk(sess, ev)
 		} else if ev.Event == "tool_message" {
@@ -777,6 +799,9 @@ func (m *Manager) runAgentLoop(runCtx context.Context, sessionID string, sess *A
 
 	if asstMsg != nil {
 		m.mu.Lock()
+		if !sess.ThinkingStart.IsZero() {
+			sess.ThinkingDuration = time.Since(sess.ThinkingStart)
+		}
 		durationSecs := int(sess.ThinkingDuration.Seconds())
 		m.mu.Unlock()
 
@@ -797,7 +822,6 @@ func (m *Manager) runAgentLoop(runCtx context.Context, sessionID string, sess *A
 
 	// Clear the active stream state before persisting to database, so there is no duplication window
 	m.mu.Lock()
-	sess.Status = StatusIdle
 	sess.CurrentStreamText = ""
 	sess.CurrentStreamThinking = ""
 	sess.CurrentToolStreams = nil
@@ -904,7 +928,68 @@ func (m *Manager) AppendMessage(ctx context.Context, sessionID string, msg messa
 		return "", err
 	}
 
+	m.notifySubscribers(sessionID)
 	return msgID, nil
+}
+
+// SubscribeMessages registers a listener channel to receive a signal whenever session messages are updated.
+// It returns the channel and a cleanup function to unregister the channel.
+func (m *Manager) SubscribeMessages(sessionID string) (<-chan struct{}, func()) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	sess, ok := m.activeSessions[sessionID]
+	if !ok {
+		sess = &ActiveSession{
+			ID:                 sessionID,
+			Status:             StatusIdle,
+			CurrentToolStreams: make(map[string]string),
+		}
+		m.activeSessions[sessionID] = sess
+	}
+
+	ch := make(chan struct{}, 1)
+	// Seed with an initial update so the client fetches initially
+	ch <- struct{}{}
+
+	sess.MessageSubscribers = append(sess.MessageSubscribers, ch)
+
+	cleanup := func() {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		s, ok := m.activeSessions[sessionID]
+		if !ok {
+			return
+		}
+		for i, sub := range s.MessageSubscribers {
+			if sub == ch {
+				s.MessageSubscribers = append(s.MessageSubscribers[:i], s.MessageSubscribers[i+1:]...)
+				break
+			}
+		}
+	}
+
+	return ch, cleanup
+}
+
+func (m *Manager) notifySubscribers(sessionID string) {
+	m.mu.RLock()
+	sess, ok := m.activeSessions[sessionID]
+	if !ok || len(sess.MessageSubscribers) == 0 {
+		m.mu.RUnlock()
+		return
+	}
+	chans := make([]chan struct{}, len(sess.MessageSubscribers))
+	copy(chans, sess.MessageSubscribers)
+	m.mu.RUnlock()
+
+	for _, ch := range chans {
+		select {
+		case ch <- struct{}{}:
+		default:
+			// Non-blocking if channel already flagged
+		}
+	}
 }
 
 // GetMessages retrieves all Loom messages for a session.
@@ -1069,12 +1154,13 @@ func (si *sessionInbox) PopMessages() []message.Message {
 		return nil
 	}
 	si.sess.InboxMu.Lock()
-	defer si.sess.InboxMu.Unlock()
 	msgs := si.sess.Inbox
 	if len(msgs) == 0 {
+		si.sess.InboxMu.Unlock()
 		return nil
 	}
 	si.sess.Inbox = nil
+	si.sess.InboxMu.Unlock()
 
 	// Save these messages to the database conversation history now that they are being processed
 	ctx := context.Background()
@@ -1216,6 +1302,7 @@ func (m *Manager) handleLLMChunk(sess *ActiveSession, ev graph.StreamEvent) {
 		sess.CurrentStreamThinking += thinkingChunk
 	}
 	m.mu.Unlock()
+	m.notifySubscribers(sess.ID)
 }
 
 func (m *Manager) countToolTokens(ctx context.Context, sessionID string, agentName string) int {
@@ -1355,6 +1442,7 @@ func (m *Manager) handleAgentMessage(ctx context.Context, sessionID string, sess
 	sess.CurrentStreamText = ""
 	sess.CurrentStreamThinking = ""
 	m.mu.Unlock()
+	m.notifySubscribers(sessionID)
 	return nil
 }
 
@@ -1380,6 +1468,7 @@ func (m *Manager) handleToolChunk(sess *ActiveSession, ev graph.StreamEvent) {
 		}
 		sess.CurrentToolStreams[toolCallID] += text
 		m.mu.Unlock()
+		m.notifySubscribers(sess.ID)
 	}
 }
 
@@ -1451,5 +1540,29 @@ func (m *Manager) handleToolMessage(ctx context.Context, sessionID string, sess 
 			_ = m.metricsStore.LogToolCall(event, payload)
 		}
 	}
+	m.notifySubscribers(sessionID)
+	return nil
+}
+
+// Done returns a channel that is closed when the Manager is closed.
+func (m *Manager) Done() <-chan struct{} {
+	return m.ctx.Done()
+}
+
+// Close cancels all active sessions and waits for them to terminate.
+func (m *Manager) Close() error {
+	if m.cancel != nil {
+		m.cancel()
+	}
+
+	m.mu.Lock()
+	for _, sess := range m.activeSessions {
+		if sess.Cancel != nil {
+			sess.Cancel()
+		}
+	}
+	m.mu.Unlock()
+
+	m.wg.Wait()
 	return nil
 }

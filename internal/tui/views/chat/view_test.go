@@ -2,6 +2,7 @@ package chat
 
 import (
 	"context"
+	"iter"
 	"testing"
 
 	"github.com/masterkeysrd/kite/element"
@@ -81,6 +82,10 @@ func (m *mockClient) GetSessionMessages(ctx context.Context, req api.GetSessionM
 	}, nil
 }
 
+func (m *mockClient) WatchSessionMessages(ctx context.Context, req api.GetSessionMessagesRequest) iter.Seq2[*api.GetSessionMessagesResponse, error] {
+	return func(yield func(*api.GetSessionMessagesResponse, error) bool) {}
+}
+
 func (m *mockClient) GetSessionState(ctx context.Context, req api.GetSessionStateRequest) (*api.GetSessionStateResponse, error) {
 	return &api.GetSessionStateResponse{Status: "idle"}, nil
 }
@@ -125,8 +130,8 @@ func (m *mockClient) GetLspDiagnostics(ctx context.Context, req api.GetLspDiagno
 	return &api.GetLspDiagnosticsResponse{}, nil
 }
 
-func (m *mockClient) LspSearch(ctx context.Context, req api.LspSearchRequest) (*api.LspSearchResponse, error) {
-	return &api.LspSearchResponse{}, nil
+func (m *mockClient) LspSymbols(ctx context.Context, req api.LspSymbolsRequest) (*api.LspSymbolsResponse, error) {
+	return &api.LspSymbolsResponse{}, nil
 }
 
 func (m *mockClient) GetFileChanges(ctx context.Context, req api.GetFileChangesRequest) (*api.GetFileChangesResponse, error) {

@@ -5,9 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"image/color"
-	"os/exec"
-	"path/filepath"
-	"runtime"
+	"maps"
 	"strings"
 	"time"
 
@@ -21,35 +19,21 @@ import (
 
 	"github.com/masterkeysrd/loom/message"
 	"github.com/masterkeysrd/tasksmith/internal/agent/permissions"
-	"github.com/masterkeysrd/tasksmith/internal/agent/tools"
 	"github.com/masterkeysrd/tasksmith/internal/api"
+	"github.com/masterkeysrd/tasksmith/internal/core/diff"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
-	"github.com/masterkeysrd/tasksmith/internal/mcp"
 	tuiapi "github.com/masterkeysrd/tasksmith/internal/tui/api"
 	"github.com/masterkeysrd/tasksmith/internal/tui/components"
 	"github.com/masterkeysrd/tasksmith/internal/tui/components/icon"
 	"github.com/masterkeysrd/tasksmith/internal/tui/mode"
+	"github.com/masterkeysrd/tasksmith/internal/tui/plugin/tips"
 	"github.com/masterkeysrd/tasksmith/internal/tui/queries"
 	"github.com/masterkeysrd/tasksmith/internal/tui/theme"
-	"github.com/masterkeysrd/tasksmith/internal/tui/tokenutils"
 )
 
 // ViewProps defines the properties for the Chat view.
 type ViewProps struct {
 	SessionID string
-}
-
-func getTargetOptionForHorizontal(options []permissions.PermissionOption, hIdx int) permissions.PermissionOption {
-	if len(options) == 0 {
-		return permissions.PermissionOption{}
-	}
-	if hIdx < 0 {
-		hIdx = 0
-	}
-	if hIdx >= len(options) {
-		hIdx = len(options) - 1
-	}
-	return options[hIdx]
 }
 
 // View is the main Chat view component.
@@ -98,6 +82,8 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 		status = stateQuery.Data.Status
 	}
 	sending := status == "running"
+
+	activeTip := tips.Use(sending)
 
 	// 3. Reactive state for input composer and submitting state
 	inputValue, setInputValue := kitex.UseState("")
@@ -194,9 +180,7 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 		}
 
 		newDecisions := make(map[string]permissions.AuthorizationDecision)
-		for k, v := range localDecisions() {
-			newDecisions[k] = v
-		}
+		maps.Copy(newDecisions, localDecisions())
 		newDecisions[toolCallID] = dec
 		setLocalDecisions(newDecisions)
 
@@ -230,8 +214,8 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 				return true, nil
 			}).Then(func(success bool) {
 				setSubmitting(false)
-				windClient.InvalidateQueries(api.GetSessionStateRequest{SessionID: sessionID})
 				windClient.InvalidateQueries(api.GetSessionMessagesRequest{SessionID: sessionID})
+				windClient.InvalidateQueries(api.GetSessionStateRequest{SessionID: sessionID})
 				windClient.InvalidateQueries(api.GetFileChangesRequest{SessionID: sessionID})
 			}, func(err error) {
 				setSubmitting(false)
@@ -436,30 +420,15 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 		}
 	}, []any{outerRef.Current != nil})
 
-	// 4. Polling query updates while the agent is running in the background
-	kitex.UseInterval(func() {
-		if sending {
-			windClient.InvalidateQueries(api.GetSessionMessagesRequest{SessionID: sessionID})
-		}
-	}, 100*time.Millisecond, []any{sending, sessionID})
-
-	hasRunningTasks := false
-	if stateQuery.Data != nil && len(stateQuery.Data.RunningTasks) > 0 {
-		hasRunningTasks = true
-	}
-
+	hasRunningTasks := stateQuery.Data != nil && len(stateQuery.Data.RunningTasks) > 0
 	kitex.UseInterval(func() {
 		if sending || hasRunningTasks {
 			windClient.InvalidateQueries(api.GetSessionStateRequest{SessionID: sessionID})
-			windClient.InvalidateQueries(api.ListSessionsRequest{})
-			windClient.InvalidateQueries(api.GetFileChangesRequest{SessionID: sessionID})
 		}
-	}, 1000*time.Millisecond, []any{sending, hasRunningTasks, sessionID})
+	}, 5000*time.Millisecond, []any{sending, hasRunningTasks, sessionID})
 
-	// Invalidate messages query when the agent finishes execution (sending transitions to false)
 	kitex.UseEffect(func() {
 		if !sending {
-			windClient.InvalidateQueries(api.GetSessionMessagesRequest{SessionID: sessionID})
 			windClient.InvalidateQueries(api.ListSessionsRequest{}) // Update sidebar session states (like metrics)
 			windClient.InvalidateQueries(api.GetFileChangesRequest{SessionID: sessionID})
 		}
@@ -471,22 +440,51 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 
 	// 5. Reactive state for tracking the last completed session's thinking time
 	lastFinishedTime, setLastFinishedTime := kitex.UseState(-1) // -1 represents null/unset
+	thinkingTime, setThinkingTime := kitex.UseState(0)
 	spinnerFrame, setSpinnerFrame := kitex.UseState(0)
 
-	// Derive thinking time from the backend's ThinkingDuration
-	thinkingTime := 0
-	if stateQuery.Data != nil {
-		thinkingTime = int(stateQuery.Data.ThinkingDuration)
-	}
-
-	// Save thinkingTime to lastFinishedTime when sending transitions to false
+	// Reset thinking time and other transient states when switching sessions
 	kitex.UseEffect(func() {
-		if !sending {
-			if thinkingTime > 0 {
-				setLastFinishedTime(thinkingTime)
-			}
+		setLastFinishedTime(-1)
+		setThinkingTime(0)
+		setInputValue("")
+		setSubmitting(false)
+		setShowFullOutputModal(false)
+		setSelectedIndex(0)
+		setSelectedScopeIndex(0)
+		setShowPreviewModal(false)
+		setCurrentPendingIndex(0)
+		setLocalDecisions(map[string]permissions.AuthorizationDecision{})
+		windClient.InvalidateQueries(api.GetSessionMessagesRequest{SessionID: sessionID})
+	}, []any{sessionID})
+
+	// Sync local thinking time with the backend's official timing
+	kitex.UseEffect(func() {
+		if stateQuery.Data != nil {
+			setThinkingTime(int(stateQuery.Data.ThinkingDuration))
 		}
-	}, []any{sending})
+	}, []any{stateQuery.Data})
+
+	// Increment thinking time locally every 1 second when running
+	kitex.UseInterval(func() {
+		if sending {
+			setThinkingTime(thinkingTime() + 1)
+		}
+	}, 1000*time.Millisecond, []any{sending})
+
+	// Save the most recent non-zero thinkingTime while the agent is running
+	prevSending := kitex.UseRef(false)
+	kitex.UseEffect(func() {
+		if sending {
+			if thinkingTime() > 0 {
+				setLastFinishedTime(thinkingTime())
+			}
+		} else if prevSending.Current && lastFinishedTime() == -1 {
+			// Completed immediately (0 seconds)
+			setLastFinishedTime(0)
+		}
+		prevSending.Current = sending
+	}, []any{sending, thinkingTime()})
 
 	// Rotate spinner frame when running
 	kitex.UseInterval(func() {
@@ -501,10 +499,12 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 	oneDotPulseDots := []string{"●", " ", "●", " "}
 	oneDotCurrentDots := oneDotPulseDots[spinnerFrame()]
 
-	// Calculate a simple integer key of the messages state to trigger the effect reactively
-	messagesKey := 0
-	for _, msg := range messages {
-		for _, block := range msg.GetContent() {
+	// Calculate a simple integer key of the messages state to trigger the effect reactively.
+	// Only calculate the length of the last message to avoid O(N) traversal of all message blocks on every render.
+	messagesKey := len(messages)
+	if len(messages) > 0 {
+		lastMsg := messages[len(messages)-1]
+		for _, block := range lastMsg.GetContent() {
 			if tb, ok := block.(*message.TextBlock); ok {
 				messagesKey += len(tb.Text)
 			} else if tb, ok := block.(*message.ThinkingBlock); ok {
@@ -512,7 +512,6 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 			}
 		}
 	}
-	messagesKey += len(messages)
 
 	kitex.UseLayoutEffect(func() {
 		if historyRef.Current == nil {
@@ -562,7 +561,6 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 			return true, nil
 		}).Then(func(success bool) {
 			setSubmitting(false)
-			// Immediately invalidate queries to trigger a reload of messages and state
 			windClient.InvalidateQueries(api.GetSessionMessagesRequest{SessionID: sessionID})
 			windClient.InvalidateQueries(api.GetSessionStateRequest{SessionID: sessionID})
 			windClient.InvalidateQueries(api.GetFileChangesRequest{SessionID: sessionID})
@@ -612,10 +610,78 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 
 	composerContainerStyle := style.S().
 		PaddingHorizontal(1).
-		PaddingVertical(1).
+		PaddingTop(0).
+		PaddingBottom(1).
 		Display(style.DisplayFlex).
 		AlignItems(style.AlignCenter).
 		Background(bgDark)
+
+	toolResponses := make(map[string]*message.Tool)
+	for _, m := range messages {
+		if m.Role() == message.RoleTool {
+			if tMsg, ok := m.(*message.Tool); ok {
+				toolResponses[tMsg.ToolCallID] = tMsg
+			}
+		}
+	}
+	var isGenerating bool
+	if stateQuery.Data != nil {
+		isGenerating = stateQuery.Data.IsGenerating
+	}
+
+	var runPromptTokens, runCompletionTokens, runTotalTokens int
+	for i := len(messages) - 1; i >= 0; i-- {
+		msg := messages[i]
+		if msg.Role() == message.RoleUser {
+			break
+		}
+		if asstMsg, ok := msg.(*message.Assistant); ok {
+			if asstMsg.Metrics != nil {
+				runPromptTokens += asstMsg.Metrics.Tokens.Input
+				runCompletionTokens += asstMsg.Metrics.Tokens.Output
+				runTotalTokens += asstMsg.Metrics.TotalTokens
+			} else if meta := asstMsg.GetMetadata(); meta != nil {
+				if promptToks, ok := meta["prompt_tokens"].(int); ok {
+					runPromptTokens += promptToks
+				} else if promptToksFloat, ok := meta["prompt_tokens"].(float64); ok {
+					runPromptTokens += int(promptToksFloat)
+				}
+				if compToks, ok := meta["completion_tokens"].(int); ok {
+					runCompletionTokens += compToks
+				} else if compToksFloat, ok := meta["completion_tokens"].(float64); ok {
+					runCompletionTokens += int(compToksFloat)
+				}
+				if totalToks, ok := meta["total_tokens"].(int); ok {
+					runTotalTokens += totalToks
+				} else if totalToksFloat, ok := meta["total_tokens"].(float64); ok {
+					runTotalTokens += int(totalToksFloat)
+				}
+			}
+		}
+	}
+
+	phase := "processing"
+	if sending {
+		if len(messages) > 0 {
+			lastMsg := messages[len(messages)-1]
+			if lastMsg.Role() == message.RoleAssistant {
+				hasThinking := false
+				hasText := false
+				for _, block := range lastMsg.GetContent() {
+					if tb, ok := block.(*message.ThinkingBlock); ok && len(tb.Thinking) > 0 {
+						hasThinking = true
+					} else if tb, ok := block.(*message.TextBlock); ok && len(tb.Text) > 0 {
+						hasText = true
+					}
+				}
+				if hasText {
+					phase = "answering"
+				} else if hasThinking {
+					phase = "thinking"
+				}
+			}
+		}
+	}
 
 	outerProps := kitex.BoxProps{
 		Style: outerStyle,
@@ -630,124 +696,76 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 
 		// Message History Section
 		kitex.Box(kitex.BoxProps{Style: messagesContainerStyle, Ref: historyRef},
+			// Bubbles
 			kitex.Fragment(
-				func() []kitex.Node {
-					toolResponses := make(map[string]*message.Tool)
-					for _, m := range messages {
-						if m.Role() == message.RoleTool {
-							if tMsg, ok := m.(*message.Tool); ok {
-								toolResponses[tMsg.ToolCallID] = tMsg
-							}
-						}
-					}
-					var isGenerating bool
-					if stateQuery.Data != nil {
-						isGenerating = stateQuery.Data.IsGenerating
-					}
-					nodes := renderBubbles(
-						messages,
-						toolResponses,
-						currentDots,
-						oneDotCurrentDots,
-						mainAgentName,
-						isGenerating,
-						thinkingTime,
-						pendingAuthorizations,
-						selectedIndex(),
-						selectedScopeIndex(),
-						func() { setShowPreviewModal(true) },
-						currentPendingIndex(),
-						isInsert,
-						handleSelectVertical,
-						handleSelectHorizontal,
-						handleApprove,
-						handleDeny,
-						openFullOutputModal,
-					)
-
-					var runPromptTokens, runCompletionTokens, runTotalTokens int
-					for i := len(messages) - 1; i >= 0; i-- {
-						msg := messages[i]
-						if msg.Role() == message.RoleUser {
-							break
-						}
-						if asstMsg, ok := msg.(*message.Assistant); ok {
-							if asstMsg.Metrics != nil {
-								runPromptTokens += asstMsg.Metrics.Tokens.Input
-								runCompletionTokens += asstMsg.Metrics.Tokens.Output
-								runTotalTokens += asstMsg.Metrics.TotalTokens
-							} else if meta := asstMsg.GetMetadata(); meta != nil {
-								if promptToks, ok := meta["prompt_tokens"].(int); ok {
-									runPromptTokens += promptToks
-								} else if promptToksFloat, ok := meta["prompt_tokens"].(float64); ok {
-									runPromptTokens += int(promptToksFloat)
-								}
-								if compToks, ok := meta["completion_tokens"].(int); ok {
-									runCompletionTokens += compToks
-								} else if compToksFloat, ok := meta["completion_tokens"].(float64); ok {
-									runCompletionTokens += int(compToksFloat)
-								}
-								if totalToks, ok := meta["total_tokens"].(int); ok {
-									runTotalTokens += totalToks
-								} else if totalToksFloat, ok := meta["total_tokens"].(float64); ok {
-									runTotalTokens += int(totalToksFloat)
-								}
-							}
-						}
-					}
-
-					// Exercise: comment the widgets and enable them one by one to see which one causes the chat view to overflow.
-
-					// 1. Agent Status Widget
-					if statusNode := renderAgentStatus(t, sending, thinkingTime, lastFinishedTime(), currentDots, runPromptTokens, runCompletionTokens, runTotalTokens, isGenerating); statusNode != nil {
-						nodes = append(nodes, statusNode)
-					}
-
-					// 2. Queued Messages Widget
-					if queuedWidget := renderQueuedMessages(t, queuedMessages); queuedWidget != nil {
-						nodes = append(nodes, queuedWidget)
-					}
-
-					// 3. Running Tasks Widget
-					if stateQuery.Data != nil && len(stateQuery.Data.RunningTasks) > 0 {
-						nodes = append(nodes, RunningTasksWidget(RunningTasksWidgetProps{
-							Tasks: stateQuery.Data.RunningTasks,
-						}))
-					}
-
-					// 4. LSP Suggestion Widget
-					if len(pendingLspSuggestions) > 0 {
-						nodes = append(nodes, LspSuggestionWidget(LspSuggestionWidgetProps{
-							Suggestions: pendingLspSuggestions,
-							OnConfigure: handleConfigureLsp,
-							OnDismiss:   handleDismissLsp,
-						}))
-					}
-
-					// 5. MCP Request Widget
-					if stateQuery.Data != nil && len(stateQuery.Data.PendingMcpRequests) > 0 {
-						nodes = append(nodes, McpRequestWidget(McpRequestWidgetProps{
-							Requests: stateQuery.Data.PendingMcpRequests,
-							OnResolve: func(reqID string, action string, code string, content map[string]interface{}) {
-								go func() {
-									_, err := client.ResolveMcpRequest(context.Background(), api.ResolveMcpRequest{
-										RequestID: reqID,
-										Action:    action,
-										Code:      code,
-										Content:   content,
-									})
-									if err != nil {
-										log.Error(fmt.Sprintf("Failed to resolve MCP request: %v", err))
-									}
-									stateQuery.Refetch()
-								}()
-							},
-						}))
-					}
-
-					return nodes
-				}()...,
+				renderBubbles(
+					messages,
+					toolResponses,
+					currentDots,
+					oneDotCurrentDots,
+					mainAgentName,
+					isGenerating,
+					thinkingTime(),
+					pendingAuthorizations,
+					selectedIndex(),
+					selectedScopeIndex(),
+					func() { setShowPreviewModal(true) },
+					currentPendingIndex(),
+					isInsert,
+					handleSelectVertical,
+					handleSelectHorizontal,
+					handleApprove,
+					handleDeny,
+					openFullOutputModal,
+				)...,
 			),
+
+			// Agent Status Widget
+			kitex.If(sending || lastFinishedTime() >= 0, func() kitex.Node {
+				return renderAgentStatus(t, sending, thinkingTime(), lastFinishedTime(), currentDots, runPromptTokens, runCompletionTokens, runTotalTokens, isGenerating, phase, activeTip)
+			}),
+
+			// Queued Messages Widget
+			kitex.If(len(queuedMessages) > 0, func() kitex.Node {
+				return renderQueuedMessages(t, queuedMessages)
+			}),
+
+			// Running Tasks Widget
+			kitex.If(stateQuery.Data != nil && len(stateQuery.Data.RunningTasks) > 0, func() kitex.Node {
+				return RunningTasksWidget(RunningTasksWidgetProps{
+					Tasks: stateQuery.Data.RunningTasks,
+				})
+			}),
+
+			// LSP Suggestion Widget
+			kitex.If(len(pendingLspSuggestions) > 0, func() kitex.Node {
+				return LspSuggestionWidget(LspSuggestionWidgetProps{
+					Suggestions: pendingLspSuggestions,
+					OnConfigure: handleConfigureLsp,
+					OnDismiss:   handleDismissLsp,
+				})
+			}),
+
+			// MCP Request Widget
+			kitex.If(stateQuery.Data != nil && len(stateQuery.Data.PendingMcpRequests) > 0, func() kitex.Node {
+				return McpRequestWidget(McpRequestWidgetProps{
+					Requests: stateQuery.Data.PendingMcpRequests,
+					OnResolve: func(reqID string, action string, code string, content map[string]any) {
+						go func() {
+							_, err := client.ResolveMcpRequest(context.Background(), api.ResolveMcpRequest{
+								RequestID: reqID,
+								Action:    action,
+								Code:      code,
+								Content:   content,
+							})
+							if err != nil {
+								log.Error(fmt.Sprintf("Failed to resolve MCP request: %v", err))
+							}
+							stateQuery.Refetch()
+						}()
+					},
+				})
+			}),
 		),
 
 		// Composer Section
@@ -775,7 +793,7 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 			kitex.If(showPreviewModal() && len(pendingAuthorizations) > 0 && currentPendingIndex() < len(pendingAuthorizations), func() kitex.Node {
 				req := pendingAuthorizations[currentPendingIndex()]
 				var leftNode kitex.Node
-				if isDiff(req.Preview) {
+				if diff.IsDiff(req.Preview) {
 					leftNode = components.DiffBlock(components.DiffBlockProps{
 						Diff:  req.Preview,
 						Split: false,
@@ -939,793 +957,11 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 	)
 })
 
-func isDiff(preview string) bool {
-	return strings.Contains(preview, "@@ ") || strings.HasPrefix(preview, "--- ") || strings.HasPrefix(preview, "+++ ")
-}
-
-// ComposerProps defines the properties for the Composer component.
-type ComposerProps struct {
-	Value     string
-	Disabled  bool
-	IsInsert  bool
-	Ref       kitex.Ref[dom.Element]
-	OnChange  func(string)
-	OnKeyDown func(event.Event)
-	OnSubmit  func()
-}
-
-// Composer is a multiline composer component styled like a terminal UI box,
-// matching the design mockup in mockup.tsx.
-var Composer = kitex.FC("Composer", func(props ComposerProps) kitex.Node {
-	isFocused, setIsFocused := kitex.UseState(false)
-	t := theme.UseTheme()
-
-	if t == nil {
-		return kitex.Box(kitex.BoxProps{}, kitex.Text("No Theme"))
-	}
-
-	// Resolve the focus blue color from the palette/theme
-	blueColor := t.Color.Surface.Info
-
-	// Border color switches to blue when focused, otherwise comment color
-	borderColor := t.Color.Text.Tertiary // comment: #565f89
-	if isFocused() {
-		borderColor = blueColor // blue: #7aa2f7
-	}
-
-	// Wrapper style with a full single border
-	wrapperStyle := style.S().
-		Width(style.Percent(100)).
-		Display(style.DisplayFlex).
-		FlexDirection(style.FlexRow).
-		AlignItems(style.AlignEnd).
-		Padding(0, 1). // 1 cell padding inside
-		Border(style.SingleBorder().Color(borderColor))
-
-	// Text area style
-	var textCol color.Color
-	if props.Disabled {
-		textCol = t.Color.Text.Tertiary
-	} else {
-		textCol = t.Color.Text.Secondary // fg_dark: #a9b1d6
-	}
-
-	textareaStyle := style.S().
-		Flex(1, 1, style.Cells(0)).
-		MinHeight(style.Cells(1)).
-		MaxHeight(style.Cells(8)).
-		Background(color.Transparent).
-		Foreground(textCol).
-		Border(false)
-
-	// Placeholder style
-	ps := style.S().Foreground(t.Color.Text.Tertiary)
-
-	textareaDisabled := props.Disabled || !props.IsInsert
-
-	textareaProps := kitex.TextAreaProps{
-		Name:             "composer-textarea",
-		Value:            props.Value,
-		Placeholder:      "Message TaskSmith...",
-		PlaceholderStyle: ps,
-		Disabled:         textareaDisabled,
-		Style:            textareaStyle,
-		Ref:              props.Ref,
-		OnChange: func(e event.Event) {
-			if props.OnChange != nil {
-				if ie, ok := e.(*event.ChangeEvent); ok {
-					props.OnChange(ie.Value)
-				} else if ie, ok := e.(*event.InputEvent); ok {
-					props.OnChange(ie.Value)
-				}
-			}
-		},
-		OnFocus: func(e event.Event) {
-			setIsFocused(true)
-		},
-		OnBlur: func(e event.Event) {
-			setIsFocused(false)
-			mode.Set(mode.Normal)
-		},
-		OnKeyDown: func(e event.Event) {
-			ke, ok := e.(*event.KeyEvent)
-			if !ok {
-				return
-			}
-
-			if ke.Code == key.KeyEscape {
-				e.PreventDefault()
-				e.StopPropagation()
-				if props.Ref != nil && props.Ref.Current != nil {
-					props.Ref.Current.Blur()
-				}
-				mode.Set(mode.Normal)
-				return
-			}
-
-			// Enter without modifiers submits
-			if ke.Code == key.KeyEnter && (ke.Mod&key.ModShift) == 0 {
-				e.PreventDefault()
-				e.StopPropagation()
-				if props.OnSubmit != nil {
-					props.OnSubmit()
-				}
-				return
-			}
-
-			if props.OnKeyDown != nil {
-				props.OnKeyDown(e)
-			}
-		},
-	}
-
-	// Send button style
-	btnStyle := style.S().
-		Padding(0, 1).
-		Background(color.Transparent).
-		Height(style.Cells(1))
-
-	isSendDisabled := props.Disabled || strings.TrimSpace(props.Value) == ""
-
-	if isSendDisabled {
-		btnStyle = btnStyle.Foreground(t.Color.Text.Tertiary)
-	} else {
-		btnStyle = btnStyle.Foreground(t.Color.Text.Tertiary)
-	}
-
-	btnHoverStyle := style.S()
-	if !isSendDisabled {
-		btnHoverStyle = btnHoverStyle.
-			Background(t.Color.Surface.BaseFocus).
-			Foreground(blueColor)
-	}
-
-	wrapperProps := kitex.BoxProps{Style: wrapperStyle}
-	if !props.Disabled && !props.IsInsert {
-		wrapperProps.OnClick = func(e event.Event) {
-			mode.Set(mode.Insert)
-		}
-	}
-
-	return kitex.Box(wrapperProps,
-		kitex.TextArea(textareaProps),
-		components.Button(components.ButtonProps{
-			Variant:    components.ButtonText,
-			Disabled:   isSendDisabled,
-			OnClick:    props.OnSubmit,
-			Style:      btnStyle,
-			HoverStyle: btnHoverStyle,
-		}, icon.MoveUp),
-	)
-})
-
-type CollapsibleThinkingProps struct {
-	Content  string
-	Duration time.Duration
-	Tokens   int
-}
-
-type BubbleProps struct {
-	Role                 message.Role
-	Timestamp            string
-	Children             []kitex.Node
-	IsSystemNotification bool
-	TaskID               string
-	TaskName             string
-	TaskStatus           string
-	ExitCode             int
-	TaskError            string
-	AgentName            string
-	MainAgentName        string
-	TokensInput          int
-	TokensOutput         int
-	TokensTotal          int
-}
-
-var Bubble = kitex.FC("Bubble", func(props BubbleProps) kitex.Node {
-	t := theme.UseTheme()
-	role := props.Role
-	timestamp := props.Timestamp
-	children := props.Children
-
-	if props.IsSystemNotification && t != nil {
-		align := style.AlignStart
-		borderCol := t.Color.Surface.Tertiary
-		if props.TaskStatus != "" {
-			if props.ExitCode == 0 {
-				borderCol = t.Color.Surface.Success
-			} else {
-				borderCol = t.Color.Surface.Error
-			}
-		}
-
-		cardStyle := style.S().
-			Padding(1).
-			Width(style.Percent(100)).
-			MaxWidth(style.Percent(90)).
-			Background(t.Color.Surface.BaseDisabled).
-			Border(true, style.SingleBorder(), borderCol).
-			Display(style.DisplayFlex).
-			FlexDirection(style.FlexColumn).
-			Gap(1).
-			Overflow(style.OverflowHidden)
-
-		titleStyle := style.S().
-			Display(style.DisplayFlex).
-			FlexDirection(style.FlexRow).
-			AlignItems(style.AlignCenter).
-			Gap(1).
-			Bold(true).
-			Foreground(borderCol)
-
-		var titleIcon kitex.Node = icon.Info
-		titleText := "SYSTEM NOTIFICATION"
-		if props.TaskStatus != "" {
-			titleText = "BACKGROUND TASK COMPLETED"
-			if props.ExitCode == 0 {
-				titleIcon = icon.Checkmark
-			} else {
-				titleIcon = icon.Alert
-			}
-		}
-
-		cardHeader := kitex.Box(kitex.BoxProps{Style: titleStyle},
-			titleIcon,
-			kitex.Text(" "+titleText),
-			kitex.Text(" ─ "),
-			kitex.Text(timestamp),
-		)
-
-		// A nice label line showing Name and ID
-		var detailsNode kitex.Node
-		if props.TaskID != "" {
-			var statText string
-			var statCol color.Color
-			switch props.TaskStatus {
-			case "running":
-				statText = "● RUNNING"
-				statCol = t.Color.Surface.Info
-			case "finished", "completed":
-				if props.ExitCode == 0 {
-					statText = "✔ COMPLETED"
-					statCol = t.Color.Surface.Success
-				} else {
-					statText = fmt.Sprintf("✘ FAILED (%d)", props.ExitCode)
-					statCol = t.Color.Text.Error
-				}
-			case "killed":
-				statText = "⏹ KILLED"
-				statCol = t.Color.Text.Secondary
-			default:
-				statText = strings.ToUpper(props.TaskStatus)
-				statCol = t.Color.Text.Primary
-			}
-
-			statusBadgeStyle := style.S().
-				Foreground(statCol).
-				Bold(true)
-
-			idStyle := style.S().
-				Foreground(t.Color.Text.Secondary).
-				Italic(true)
-
-			nameStyle := style.S().
-				Bold(true).
-				Foreground(t.Color.Text.Primary)
-
-			metaRowStyle := style.S().
-				Display(style.DisplayFlex).
-				FlexDirection(style.FlexRow).
-				AlignItems(style.AlignCenter).
-				Gap(1).
-				MarginTop(1)
-
-			detailsNode = kitex.Box(kitex.BoxProps{
-				Style: style.S().Display(style.DisplayFlex).FlexDirection(style.FlexColumn).Width(style.Percent(100)),
-			},
-				kitex.Box(kitex.BoxProps{Style: nameStyle}, kitex.Text(props.TaskName)),
-				kitex.Box(kitex.BoxProps{Style: metaRowStyle},
-					kitex.Span(kitex.SpanProps{Style: idStyle}, kitex.Text("ID: "+props.TaskID)),
-					kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Tertiary)}, kitex.Text("─")),
-					kitex.Span(kitex.SpanProps{Style: statusBadgeStyle}, kitex.Text(statText)),
-				),
-			)
-		}
-
-		var errorNode kitex.Node
-		if props.TaskError != "" {
-			errStyle := style.S().
-				Foreground(t.Color.Text.Error).
-				MarginTop(1)
-			errorNode = kitex.Box(kitex.BoxProps{Style: errStyle}, kitex.Text("Error: "+props.TaskError))
-		}
-
-		contentStyle := style.S().
-			Foreground(t.Color.Text.Primary).
-			PaddingLeft(2)
-
-		var contentNodes []kitex.Node
-		if detailsNode != nil {
-			contentNodes = append(contentNodes, detailsNode)
-		}
-		if errorNode != nil {
-			contentNodes = append(contentNodes, errorNode)
-		}
-		if props.TaskID == "" {
-			contentNodes = append(contentNodes, children...)
-		}
-
-		return kitex.Box(kitex.BoxProps{
-			Style: style.S().
-				Width(style.Percent(100)).
-				Display(style.DisplayFlex).
-				FlexDirection(style.FlexColumn).
-				AlignItems(align),
-		},
-			kitex.Box(kitex.BoxProps{Style: cardStyle},
-				cardHeader,
-				kitex.Box(kitex.BoxProps{Style: contentStyle}, contentNodes...),
-			),
-		)
-	}
-
-	var align style.Align
-	var bubbleStyle style.Style
-
-	if t != nil {
-		bubbleStyle = style.S().
-			Padding(1).
-			MaxWidth(style.Percent(90)).
-			MinWidth(style.Percent(0)).
-			Overflow(style.OverflowHidden)
-
-		switch role {
-		case message.RoleUser:
-			align = style.AlignEnd
-			bubbleStyle = bubbleStyle.
-				Foreground(t.Color.Text.Primary)
-		case message.RoleSystem:
-			align = style.AlignCenter
-			bubbleStyle = bubbleStyle.
-				Background(t.Color.Surface.BaseDisabled).
-				Foreground(t.Color.Text.Tertiary)
-		default:
-			align = style.AlignStart
-			bubbleStyle = bubbleStyle.
-				Width(style.Percent(100)).
-				Foreground(t.Color.Text.Primary)
-		}
-	}
-
-	var senderColor color.Color
-	var senderIcon kitex.Node
-	senderName := ""
-
-	if role == message.RoleUser {
-		senderColor = t.Color.Surface.Primary
-		senderIcon = icon.User
-		senderName = " USER"
-	} else {
-		senderColor = t.Color.Surface.Tertiary
-		senderIcon = icon.CPU
-		if role == message.RoleAssistant {
-			senderName = " AGENT"
-			if props.AgentName != "" && props.AgentName != props.MainAgentName {
-				senderName = fmt.Sprintf(" AGENT (%s)", props.AgentName)
-			}
-		} else {
-			senderName = strings.ToUpper(string(role))
-		}
-	}
-
-	headerStyle := style.S().
-		Display(style.DisplayFlex).
-		FlexDirection(style.FlexRow).
-		AlignItems(style.AlignCenter).
-		Gap(1).
-		Foreground(t.Color.Text.Tertiary).
-		Bold(true)
-
-	senderStyle := style.S().
-		Display(style.DisplayFlex).
-		FlexDirection(style.FlexRow).
-		AlignItems(style.AlignCenter).
-		Gap(1).
-		Foreground(senderColor)
-
-	headerNode := kitex.Box(kitex.BoxProps{Style: headerStyle},
-		kitex.Box(kitex.BoxProps{Style: senderStyle},
-			senderIcon,
-			kitex.Text(senderName),
-		),
-		kitex.Text("─ "),
-		kitex.Text(timestamp),
-	)
-
-	// Add right-aligned dimmed token metrics if present
-	if props.TokensInput > 0 || props.TokensOutput > 0 || props.TokensTotal > 0 {
-		var tokenStr string
-		if props.TokensInput > 0 || props.TokensOutput > 0 {
-			tokenStr = fmt.Sprintf("↑ %s ↓ %s", tokenutils.FormatTokens(props.TokensInput), tokenutils.FormatTokens(props.TokensOutput))
-		} else {
-			tokenStr = fmt.Sprintf("%s TOTAL", tokenutils.FormatTokens(props.TokensTotal))
-		}
-
-		tokenStyle := style.S().Foreground(t.Color.Text.Tertiary).Italic(true)
-		headerContainerStyle := style.S().
-			Display(style.DisplayFlex).
-			FlexDirection(style.FlexRow).
-			AlignItems(style.AlignCenter).
-			JustifyContent(style.JustifyBetween).
-			Width(style.Percent(100))
-
-		headerNode = kitex.Box(kitex.BoxProps{Style: headerContainerStyle},
-			headerNode,
-			kitex.Box(kitex.BoxProps{Style: tokenStyle}, kitex.Text(tokenStr)),
-		)
-	}
-
-	return kitex.Box(kitex.BoxProps{
-		Style: style.S().
-			Width(style.Percent(100)).
-			Display(style.DisplayFlex).
-			FlexDirection(style.FlexColumn).
-			AlignItems(align),
-	},
-		headerNode,
-		kitex.Box(kitex.BoxProps{Style: bubbleStyle},
-			kitex.Box(kitex.BoxProps{
-				Style: style.S().
-					Display(style.DisplayFlex).
-					FlexDirection(style.FlexColumn).
-					Gap(1).
-					Width(style.Percent(100)).
-					MaxWidth(style.Percent(100)).
-					Overflow(style.OverflowHidden),
-			}, children...),
-		),
-	)
-})
-
-type MessageProps struct {
-	Role                  message.Role
-	Content               message.Content
-	ToolResponses         map[string]*message.Tool
-	CurrentDots           string
-	OneDotCurrentDots     string
-	ReasoningTokens       int
-	ThinkingDuration      time.Duration
-	PendingAuthorizations []permissions.AuthorizationRequest
-	SelectedIndex         int
-	SelectedScopeIndex    int
-	OnPreview             func()
-	CurrentPendingIndex   int
-	IsInsert              bool
-	OnSelectVertical      func(int)
-	OnSelectHorizontal    func(int)
-	OnApprove             func()
-	OnDeny                func()
-	OnViewFullOutput      func(title, cachedPath string)
-}
-
-func getToolOutput(content message.Content) string {
-	var sb strings.Builder
-	for _, block := range content {
-		if tb, ok := block.(*message.TextBlock); ok {
-			sb.WriteString(tb.Text)
-		}
-	}
-	return sb.String()
-}
-
-func getIntField(m map[string]any, key string) int {
-	val, ok := m[key]
-	if !ok {
-		return 0
-	}
-	switch v := val.(type) {
-	case float64:
-		return int(v)
-	case int:
-		return v
-	case int64:
-		return int(v)
-	}
-	return 0
-}
-
-func parseViewOutput(structured any) (startLine, endLine, totalLines int, truncated bool) {
-	m, ok := structured.(map[string]any)
-	if !ok {
-		return
-	}
-	startLine = getIntField(m, "start_line")
-	endLine = getIntField(m, "end_line")
-	totalLines = getIntField(m, "total_lines")
-	truncated, _ = m["truncated"].(bool)
-	return
-}
-
-func detectLang(filename string) string {
-	ext := filepath.Ext(filename)
-	if ext == "" {
-		return "txt"
-	}
-	return strings.ToLower(ext[1:])
-}
-
-func parseRangeFromHeader(text string) (startLine, endLine int) {
-	before, _, ok := strings.Cut(text, "\n")
-	if !ok {
-		return
-	}
-	firstLine := before
-	openParen := strings.Index(firstLine, " (")
-	if openParen == -1 {
-		return
-	}
-	dash := strings.Index(firstLine[openParen:], "-")
-	if dash == -1 {
-		return
-	}
-	dash = openParen + dash
-	ofWord := strings.Index(firstLine[dash:], " of ")
-	if ofWord == -1 {
-		return
-	}
-	ofWord = dash + ofWord
-
-	startStr := strings.TrimSpace(firstLine[openParen+2 : dash])
-	endStr := strings.TrimSpace(firstLine[dash+1 : ofWord])
-
-	_, _ = fmt.Sscan(startStr, &startLine)
-	_, _ = fmt.Sscan(endStr, &endLine)
-	return
-}
-
-// parseStructuredOutput converts a generic interface to a structured type T.
-// Handles both same-process typed assertions and cross-process JSON fallback.
-func parseStructuredOutput[T any](structured any) (T, bool) {
-	if structured == nil {
-		var zero T
-		return zero, false
-	}
-	if val, ok := structured.(T); ok {
-		return val, true
-	}
-	if val, ok := structured.(*T); ok && val != nil {
-		return *val, true
-	}
-	data, err := json.Marshal(structured)
-	if err != nil {
-		var zero T
-		return zero, false
-	}
-	var out T
-	if err := json.Unmarshal(data, &out); err != nil {
-		var zero T
-		return zero, false
-	}
-	return out, true
-}
-
-func parseViewStructuredOutput(structured any) (tools.ViewOutput, bool) {
-	return parseStructuredOutput[tools.ViewOutput](structured)
-}
-
-func parseWriteStructuredOutput(structured any) (tools.WriteOutput, bool) {
-	return parseStructuredOutput[tools.WriteOutput](structured)
-}
-
-func parseEditStructuredOutput(structured any) (tools.EditOutput, bool) {
-	return parseStructuredOutput[tools.EditOutput](structured)
-}
-
-func parseMultiEditStructuredOutput(structured any) (tools.MultiEditOutput, bool) {
-	return parseStructuredOutput[tools.MultiEditOutput](structured)
-}
-
-func parseRemoveStructuredOutput(structured any) (tools.RemoveOutput, bool) {
-	return parseStructuredOutput[tools.RemoveOutput](structured)
-}
-
-func stripLinePrefixes(content string) string {
-	lines := strings.Split(content, "\n")
-	for i, line := range lines {
-		before, after, ok := strings.Cut(line, " | ")
-		if ok {
-			isNum := true
-			prefix := before
-			if len(prefix) == 0 {
-				isNum = false
-			}
-			for _, r := range prefix {
-				if r < '0' || r > '9' {
-					isNum = false
-					break
-				}
-			}
-			if isNum {
-				lines[i] = after
-			}
-		}
-	}
-	return strings.Join(lines, "\n")
-}
-
-func openWithSystemViewer(path string) {
-	var cmd *exec.Cmd
-	switch runtime.GOOS {
-	case "darwin":
-		cmd = exec.Command("open", path)
-	case "linux":
-		cmd = exec.Command("xdg-open", path)
-	case "windows":
-		cmd = exec.Command("cmd", "/c", "start", path)
-	default:
-		return
-	}
-	_ = cmd.Start()
-}
-
 type ToolExecutionProps struct {
 	ToolCall         *message.ToolCall
 	ToolMessage      *message.Tool
 	CurrentDots      string
 	OnViewFullOutput func(title, cachedPath string)
-}
-
-const lsPreviewLines = 10
-
-// parseLsOutput extracts FileEntry values and metadata from a tool's StructuredContent.
-// It handles both same-process typed values and JSON-deserialized map[string]any forms.
-func parseLsOutput(structured any) (files []tools.FileEntry, totalCount int, truncated bool) {
-	out, ok := parseStructuredOutput[tools.LsOutput](structured)
-	if !ok {
-		return
-	}
-	for _, f := range out.Files {
-		fe := tools.FileEntry{
-			Name:          f.Name,
-			Permissions:   f.Permissions,
-			Links:         uint64(f.Links),
-			Owner:         f.Owner,
-			Group:         f.Group,
-			Size:          int64(f.Size),
-			IsDir:         f.IsDir,
-			IsSymlink:     f.IsSymlink,
-			NameTruncated: f.NameTruncated,
-			LinkTarget:    f.LinkTarget,
-		}
-		if t, err := time.Parse(time.RFC3339, f.Modified); err == nil {
-			fe.Modified = t
-		}
-		files = append(files, fe)
-	}
-	return files, out.TotalCount, out.Truncated
-}
-
-// parseGlobOutput extracts structured file lists, count, and truncation from a glob tool result.
-func parseGlobOutput(structured any) (matches []string, totalCount int, truncated bool) {
-	out, ok := parseStructuredOutput[tools.GlobOutput](structured)
-	if ok {
-		return out.Matches, out.TotalCount, out.Truncated
-	}
-	return
-}
-
-// parseGrepOutput extracts structured matches, count, and truncation from a grep tool result.
-func parseGrepOutput(structured any) (matches []tools.GrepOutputMatchesItem, totalCount int, truncated bool) {
-	out, ok := parseStructuredOutput[tools.GrepOutput](structured)
-	if ok {
-		return out.Matches, out.TotalCount, out.Truncated
-	}
-	return
-}
-
-// parseWebSearchOutput extracts structured results from a web_search tool result.
-func parseWebSearchOutput(structured any) (results []tools.WebSearchOutputResultsItem) {
-	out, ok := parseStructuredOutput[tools.WebSearchOutput](structured)
-	if ok {
-		return out.Results
-	}
-	return nil
-}
-
-// parseWebFetchStructuredOutput extracts structured WebFetchOutput fields from a web_fetch tool result.
-func parseWebFetchStructuredOutput(structured any) (out tools.WebFetchOutput, ok bool) {
-	return parseStructuredOutput[tools.WebFetchOutput](structured)
-}
-
-// parseDownloadOutput extracts structured DownloadOutput fields from a download tool result.
-func parseDownloadOutput(structured any) (out tools.DownloadOutput, ok bool) {
-	return parseStructuredOutput[tools.DownloadOutput](structured)
-}
-
-// parseFetchOutput extracts structured FetchOutput fields from a fetch tool result.
-func parseFetchOutput(structured any) (out tools.FetchOutput, ok bool) {
-	return parseStructuredOutput[tools.FetchOutput](structured)
-}
-
-// parseTasksOutput extracts structured TasksOutput fields from a tasks tool result.
-func parseTasksOutput(structured any) (out tools.TasksOutput, ok bool) {
-	return parseStructuredOutput[tools.TasksOutput](structured)
-}
-
-// lsEntryRow renders a single FileEntry as a table row (kitex.TR).
-// Each metadata field occupies its own TD so the table layout engine
-// distributes column widths automatically — no manual Sprintf padding needed.
-func lsEntryRow(t *theme.Scheme, fe tools.FileEntry) kitex.Node {
-	var metaColor color.Color
-	var nameColor color.Color
-
-	if t != nil {
-		metaColor = t.Color.Text.Tertiary
-		switch {
-		case fe.IsDir:
-			nameColor = t.Color.Surface.Info
-		case fe.IsSymlink:
-			nameColor = t.Color.Surface.Tertiary
-		default:
-			nameColor = t.Color.Text.Primary
-		}
-	}
-
-	displayName := fe.Name
-	if fe.NameTruncated && len(fe.Name) > tools.MaxFilenameChars {
-		displayName = fe.Name[:tools.MaxFilenameChars] + "…"
-	}
-
-	// metaCell shrinks to its content width and adds a right padding gap.
-	metaCell := func(text string, s style.Style) kitex.Node {
-		tdStyle := s.Width(style.MaxContent).PaddingRight(1)
-		return kitex.TD(kitex.TDProps{Style: tdStyle},
-			kitex.Span(kitex.SpanProps{Style: s}, kitex.Text(text)),
-		)
-	}
-
-	metaStyle := style.S().Foreground(metaColor).Width(style.Percent(1)) // shrink to content
-
-	nameStyle := style.S().Foreground(nameColor)
-	if fe.IsDir {
-		nameStyle = nameStyle.Bold(true)
-	}
-
-	nameText := displayName
-	if fe.IsSymlink && fe.LinkTarget != "" {
-		nameText += " → " + fe.LinkTarget
-	}
-
-	// Name cell takes all remaining width.
-	nameTDStyle := nameStyle.Width(style.Percent(100))
-
-	var iconNode kitex.Node
-	if fe.IsDir {
-		iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(nameColor)}, icon.Folder)
-	} else {
-		iconNode = icon.FileIcon(icon.FileIconProps{Path: fe.Name})
-	}
-
-	return kitex.TR(kitex.TRProps{},
-		metaCell(fe.Permissions, metaStyle),
-		metaCell(fmt.Sprintf("%d", fe.Links), metaStyle),
-		metaCell(fe.Owner, metaStyle),
-		metaCell(fe.Group, metaStyle),
-		metaCell(tools.FormatSize(fe.Size), metaStyle),
-		metaCell(fe.Modified.Format("Jan _2 15:04"), metaStyle),
-		kitex.TD(kitex.TDProps{Style: nameTDStyle},
-			kitex.Box(kitex.BoxProps{
-				Style: style.S().
-					Display(style.DisplayFlex).
-					FlexDirection(style.FlexRow).
-					AlignItems(style.AlignCenter).
-					Gap(1),
-			},
-				iconNode,
-				kitex.Span(kitex.SpanProps{Style: nameStyle}, kitex.Text(nameText)),
-			),
-		),
-	)
 }
 
 var ToolExecution = kitex.FC("ToolExecution", func(props ToolExecutionProps) kitex.Node {
@@ -1747,8 +983,8 @@ var ToolExecution = kitex.FC("ToolExecution", func(props ToolExecutionProps) kit
 	if props.ToolCall != nil && props.ToolCall.Name == "lsp_restart" {
 		return LspRestartToolWidget(props)
 	}
-	if props.ToolCall != nil && props.ToolCall.Name == "lsp_search" {
-		return LspSearchToolWidget(props)
+	if props.ToolCall != nil && props.ToolCall.Name == "lsp_symbols" {
+		return LspSymbolsToolWidget(props)
 	}
 	if props.ToolCall != nil && props.ToolCall.Name == "grep" {
 		return GrepToolWidget(props)
@@ -1789,69 +1025,6 @@ var ToolExecution = kitex.FC("ToolExecution", func(props ToolExecutionProps) kit
 	if props.ToolCall != nil || props.ToolCall == nil {
 		return nil
 	}
-	// 1. view
-	// if props.ToolCall != nil && props.ToolCall.Name == "view" {
-	// 	return ViewToolWidget(props)
-	// }
-	// 2. ls
-	// if props.ToolCall != nil && props.ToolCall.Name == "ls" {
-	// 	return LsToolWidget(props)
-	// }
-	// 3. glob
-	// if props.ToolCall != nil && props.ToolCall.Name == "glob" {
-	// 	return GlobToolWidget(props)
-	// }
-	// 4. lsp_diagnostics
-	// if props.ToolCall != nil && props.ToolCall.Name == "lsp_diagnostics" {
-	// 	return LspDiagnosticsToolWidget(props)
-	// }
-	// 5. lsp_restart
-	// if props.ToolCall != nil && props.ToolCall.Name == "lsp_restart" {
-	// 	return LspRestartToolWidget(props)
-	// }
-	// 6. lsp_search
-	// 7. grep
-	// 8. write
-	// 9. edit
-	// 10. multi_edit
-	// 11. remove
-	// if props.ToolCall != nil && props.ToolCall.Name == "remove" {
-	// 	return RemoveToolWidget(props)
-	// }
-
-	// 12. bash (Keep enabled)
-	if props.ToolCall != nil && props.ToolCall.Name == "bash" {
-		return BashToolWidget(props)
-	}
-
-	// 13. tasks
-	// if props.ToolCall != nil && props.ToolCall.Name == "tasks" {
-	// 	return TasksToolWidget(props)
-	// }
-	// 14. web_search
-	// if props.ToolCall != nil && props.ToolCall.Name == "web_search" {
-	// 	return WebSearchToolWidget(props)
-	// }
-	// 15. web_fetch
-	// if props.ToolCall != nil && props.ToolCall.Name == "web_fetch" {
-	// 	return WebFetchToolWidget(props)
-	// }
-	// 16. download
-	// if props.ToolCall != nil && props.ToolCall.Name == "download" {
-	// 	return DownloadToolWidget(props)
-	// }
-	// 17. fetch
-	// if props.ToolCall != nil && props.ToolCall.Name == "fetch" {
-	// 	return FetchToolWidget(props)
-	// }
-	// 18. activate_skill
-	// if props.ToolCall != nil && props.ToolCall.Name == "activate_skill" {
-	// 	return ActivateSkillToolWidget(props)
-	// }
-	// 19. todos
-	// if props.ToolCall != nil && props.ToolCall.Name == "todos" {
-	// 	return TodosToolWidget(props)
-	// }
 
 	t := theme.UseTheme()
 	isOpen, setIsOpen := kitex.UseState(true)
@@ -2142,150 +1315,6 @@ var ToolExecution = kitex.FC("ToolExecution", func(props ToolExecutionProps) kit
 	)
 })
 
-var Message = kitex.FC("Message", func(props MessageProps) kitex.Node {
-	role := props.Role
-	content := props.Content
-	toolResponses := props.ToolResponses
-	currentDots := props.CurrentDots
-
-	if role == message.RoleAssistant {
-		var children []kitex.Node
-		for _, block := range content {
-			var node kitex.Node
-			switch b := block.(type) {
-			case *message.TextBlock:
-				if strings.TrimSpace(b.Text) != "" {
-					node = components.Markdown(components.MarkdownProps{Source: b.Text})
-				}
-			case *message.ThinkingBlock:
-				if strings.TrimSpace(b.Thinking) != "" {
-					node = CollapsibleThinking(CollapsibleThinkingProps{
-						Content:  b.Thinking,
-						Duration: props.ThinkingDuration,
-						Tokens:   props.ReasoningTokens,
-					})
-				}
-			case *message.ToolCall:
-				var pendingReq *permissions.AuthorizationRequest
-				for _, req := range props.PendingAuthorizations {
-					if req.ToolCallID == b.ID {
-						pendingReq = &req
-						break
-					}
-				}
-
-				if pendingReq != nil {
-					isActive := len(props.PendingAuthorizations) > 0 &&
-						props.CurrentPendingIndex < len(props.PendingAuthorizations) &&
-						pendingReq.ToolCallID == props.PendingAuthorizations[props.CurrentPendingIndex].ToolCallID
-					node = AuthorizationWidget(AuthorizationWidgetProps{
-						Request:            *pendingReq,
-						SelectedIndex:      props.SelectedIndex,
-						SelectedScopeIndex: props.SelectedScopeIndex,
-						OnPreview:          props.OnPreview,
-						IsActive:           isActive,
-						IsFocused:          isActive && !props.IsInsert,
-						OnSelectVertical:   props.OnSelectVertical,
-						OnSelectHorizontal: props.OnSelectHorizontal,
-						OnApprove:          props.OnApprove,
-						OnDeny:             props.OnDeny,
-					})
-				} else {
-					var toolMsg *message.Tool
-					if toolResponses != nil {
-						toolMsg = toolResponses[b.ID]
-					}
-					dots := currentDots
-					if b.Name == "bash" {
-						dots = props.OneDotCurrentDots
-					}
-					node = ToolExecution(ToolExecutionProps{
-						ToolCall:         b,
-						ToolMessage:      toolMsg,
-						CurrentDots:      dots,
-						OnViewFullOutput: props.OnViewFullOutput,
-					})
-				}
-			}
-			if node != nil {
-				children = append(children, node)
-			}
-		}
-
-		if len(children) == 0 {
-			return nil
-		}
-
-		return kitex.Box(kitex.BoxProps{
-			Style: style.S().
-				Display(style.DisplayFlex).
-				FlexDirection(style.FlexColumn).
-				Width(style.Percent(100)).
-				MinWidth(style.Percent(0)).
-				Gap(1),
-		}, children...)
-	}
-
-	// Combine all text blocks for other roles
-	var texts []string
-	for _, block := range content {
-		if tb, ok := block.(*message.TextBlock); ok {
-			cleaned := tryExtractTextFromJSON(tb.Text)
-			texts = append(texts, cleaned)
-		}
-	}
-	if len(texts) == 0 {
-		return nil
-	}
-	return components.Markdown(components.MarkdownProps{Source: strings.Join(texts, "\n")})
-})
-
-func tryExtractTextFromJSON(input string) string {
-	input = strings.TrimSpace(input)
-	if !strings.HasPrefix(input, "{") && !strings.HasPrefix(input, "[") {
-		return input
-	}
-
-	// Try to unmarshal as a full message struct
-	var msgObj struct {
-		Role    string `json:"role"`
-		Content []struct {
-			Kind string `json:"kind"`
-			Text string `json:"text"`
-		} `json:"content"`
-	}
-	if err := json.Unmarshal([]byte(input), &msgObj); err == nil && len(msgObj.Content) > 0 {
-		var parts []string
-		for _, b := range msgObj.Content {
-			if (b.Kind == "text" || b.Kind == "") && b.Text != "" {
-				parts = append(parts, b.Text)
-			}
-		}
-		if len(parts) > 0 {
-			return strings.Join(parts, "\n")
-		}
-	}
-
-	// Try to unmarshal as a content array
-	var contentArr []struct {
-		Kind string `json:"kind"`
-		Text string `json:"text"`
-	}
-	if err := json.Unmarshal([]byte(input), &contentArr); err == nil && len(contentArr) > 0 {
-		var parts []string
-		for _, b := range contentArr {
-			if (b.Kind == "text" || b.Kind == "") && b.Text != "" {
-				parts = append(parts, b.Text)
-			}
-		}
-		if len(parts) > 0 {
-			return strings.Join(parts, "\n")
-		}
-	}
-
-	return input
-}
-
 func getBubbleRole(role message.Role) message.Role {
 	switch role {
 	case message.RoleUser:
@@ -2341,29 +1370,28 @@ func renderBubbles(
 			if isGenerating && len(messages) > 0 && currentGroup[len(currentGroup)-1] == messages[len(messages)-1] {
 				groupIsGenerating = true
 			}
-			if node := createBubbleNode(
-				currentGroupRole,
-				currentGroup,
-				toolResponses,
-				currentDots,
-				oneDotCurrentDots,
-				mainAgentName,
-				groupIsGenerating,
-				liveThinkingTime,
-				pendingAuthorizations,
-				selectedIndex,
-				selectedScopeIndex,
-				onPreview,
-				currentPendingIndex,
-				isInsert,
-				onSelectVertical,
-				onSelectHorizontal,
-				onApprove,
-				onDeny,
-				onViewFullOutput,
-			); node != nil {
-				nodes = append(nodes, node)
-			}
+			nodes = append(nodes, BubbleGroup(BubbleGroupProps{
+				Key:                   fmt.Sprintf("group-%s-%d", currentGroupRole, len(nodes)),
+				Role:                  currentGroupRole,
+				Msgs:                  currentGroup,
+				ToolResponses:         toolResponses,
+				CurrentDots:           currentDots,
+				OneDotCurrentDots:     oneDotCurrentDots,
+				MainAgentName:         mainAgentName,
+				IsGenerating:          groupIsGenerating,
+				LiveThinkingTime:      liveThinkingTime,
+				PendingAuthorizations: pendingAuthorizations,
+				SelectedIndex:         selectedIndex,
+				SelectedScopeIndex:    selectedScopeIndex,
+				OnPreview:             onPreview,
+				CurrentPendingIndex:   currentPendingIndex,
+				IsInsert:              isInsert,
+				OnSelectVertical:      onSelectVertical,
+				OnSelectHorizontal:    onSelectHorizontal,
+				OnApprove:             onApprove,
+				OnDeny:                onDeny,
+				OnViewFullOutput:      onViewFullOutput,
+			}))
 		}
 	}
 
@@ -2399,263 +1427,6 @@ func renderBubbles(
 	return nodes
 }
 
-func createBubbleNode(
-	role message.Role,
-	msgs []message.Message,
-	toolResponses map[string]*message.Tool,
-	currentDots string,
-	oneDotCurrentDots string,
-	mainAgentName string,
-	isGenerating bool,
-	liveThinkingTime int,
-	pendingAuthorizations []permissions.AuthorizationRequest,
-	selectedIndex int,
-	selectedScopeIndex int,
-	onPreview func(),
-	currentPendingIndex int,
-	isInsert bool,
-	onSelectVertical func(int),
-	onSelectHorizontal func(int),
-	onApprove func(),
-	onDeny func(),
-	onViewFullOutput func(title, cachedPath string),
-) kitex.Node {
-	timestamp := ""
-	var msgAgentName string
-	if len(msgs) > 0 {
-		meta := msgs[0].GetMetadata()
-		if meta != nil {
-			if val, ok := meta["created_at"].(string); ok {
-				timestamp = val
-			}
-			if val, ok := meta["agent_name"].(string); ok {
-				msgAgentName = val
-			}
-		}
-	}
-	if timestamp == "" {
-		timestamp = time.Now().Format("15:04")
-	}
-
-	var tokensInput, tokensOutput, tokensTotal int
-	for _, msg := range msgs {
-		if asstMsg, ok := msg.(*message.Assistant); ok {
-			if asstMsg.Metrics != nil {
-				tokensInput += asstMsg.Metrics.Tokens.Input
-				tokensOutput += asstMsg.Metrics.Tokens.Output
-				tokensTotal += asstMsg.Metrics.TotalTokens
-			} else if meta := asstMsg.GetMetadata(); meta != nil {
-				if promptToks, ok := meta["prompt_tokens"].(int); ok {
-					tokensInput += promptToks
-				} else if promptToksFloat, ok := meta["prompt_tokens"].(float64); ok {
-					tokensInput += int(promptToksFloat)
-				}
-				if compToks, ok := meta["completion_tokens"].(int); ok {
-					tokensOutput += compToks
-				} else if compToksFloat, ok := meta["completion_tokens"].(float64); ok {
-					tokensOutput += int(compToksFloat)
-				}
-				if totalToks, ok := meta["total_tokens"].(int); ok {
-					tokensTotal += totalToks
-				} else if totalToksFloat, ok := meta["total_tokens"].(float64); ok {
-					tokensTotal += int(totalToksFloat)
-				}
-			}
-		}
-	}
-
-	var children []kitex.Node
-	for i, msg := range msgs {
-		if msg.Role() == message.RoleTool {
-			continue // Do not render tool messages as separate children. They are rendered inline in the assistant message.
-		}
-
-		var reasoningTokens int
-		var thinkingDuration time.Duration
-		if asstMsg, ok := msg.(*message.Assistant); ok {
-			if asstMsg.Metrics != nil {
-				reasoningTokens = asstMsg.Metrics.Tokens.Reasoning
-				if asstMsg.Metrics.Timing.Generation > 0 {
-					thinkingDuration = asstMsg.Metrics.Timing.Generation
-				}
-			}
-			if thinkingDuration == 0 {
-				if meta := asstMsg.GetMetadata(); meta != nil {
-					if durSec, ok := meta["thinking_duration"].(int); ok {
-						thinkingDuration = time.Duration(durSec) * time.Second
-					} else if durSecFloat, ok := meta["thinking_duration"].(float64); ok {
-						thinkingDuration = time.Duration(durSecFloat) * time.Second
-					}
-				}
-			}
-			if isGenerating && i == len(msgs)-1 {
-				thinkingDuration = time.Duration(liveThinkingTime) * time.Second
-			}
-		}
-
-		node := Message(MessageProps{
-			Role:                  msg.Role(),
-			Content:               msg.GetContent(),
-			ToolResponses:         toolResponses,
-			CurrentDots:           currentDots,
-			OneDotCurrentDots:     oneDotCurrentDots,
-			ReasoningTokens:       reasoningTokens,
-			ThinkingDuration:      thinkingDuration,
-			PendingAuthorizations: pendingAuthorizations,
-			SelectedIndex:         selectedIndex,
-			SelectedScopeIndex:    selectedScopeIndex,
-			OnPreview:             onPreview,
-			CurrentPendingIndex:   currentPendingIndex,
-			IsInsert:              isInsert,
-			OnSelectVertical:      onSelectVertical,
-			OnSelectHorizontal:    onSelectHorizontal,
-			OnApprove:             onApprove,
-			OnDeny:                onDeny,
-			OnViewFullOutput:      onViewFullOutput,
-		})
-		if node != nil {
-			children = append(children, node)
-		}
-	}
-
-	if len(children) == 0 {
-		return nil
-	}
-
-	isSys := len(msgs) > 0 && isSystemNotification(msgs[0])
-	var taskID, taskName, taskStatus, taskError string
-	var exitCode int
-	if isSys {
-		meta := msgs[0].GetMetadata()
-		taskID, _ = meta["task_id"].(string)
-		taskName, _ = meta["task_name"].(string)
-		taskStatus, _ = meta["task_status"].(string)
-		if ecVal, ok := meta["exit_code"]; ok {
-			switch ec := ecVal.(type) {
-			case float64:
-				exitCode = int(ec)
-			case int:
-				exitCode = ec
-			case int64:
-				exitCode = int(ec)
-			}
-		}
-
-		// Extract error from the text block of the message if any
-		for _, block := range msgs[0].GetContent() {
-			if tb, ok := block.(*message.TextBlock); ok {
-				if idx := strings.Index(tb.Text, "\nError: "); idx != -1 {
-					taskError = strings.TrimSpace(tb.Text[idx+len("\nError: "):])
-				}
-			}
-		}
-	}
-
-	return Bubble(BubbleProps{
-		Role:                 role,
-		Timestamp:            timestamp,
-		Children:             children,
-		IsSystemNotification: isSys,
-		TaskID:               taskID,
-		TaskName:             taskName,
-		TaskStatus:           taskStatus,
-		ExitCode:             exitCode,
-		TaskError:            taskError,
-		AgentName:            msgAgentName,
-		MainAgentName:        mainAgentName,
-		TokensInput:          tokensInput,
-		TokensOutput:         tokensOutput,
-		TokensTotal:          tokensTotal,
-	})
-}
-
-func renderAgentStatus(t *theme.Scheme, sending bool, thinkingTime int, lastFinishedTime int, currentDots string, runPromptTokens, runCompletionTokens, runTotalTokens int, isGenerating bool) kitex.Node {
-	if t == nil {
-		return nil
-	}
-	blueColor := t.Color.Surface.Info
-	greenColor := t.Color.Surface.Success
-	timeStr := fmt.Sprintf("[%02d:%02d]", thinkingTime/60, thinkingTime%60)
-
-	upColor := t.Color.Text.Tertiary
-	downColor := t.Color.Text.Tertiary
-	if sending {
-		if isGenerating {
-			downColor = t.Color.Surface.Success // highlight down when streaming text
-		} else {
-			upColor = t.Color.Surface.Info // highlight up when processing/waiting
-		}
-	}
-
-	if sending {
-		containerStyle := style.S().
-			Display(style.DisplayFlex).
-			FlexDirection(style.FlexRow).
-			AlignItems(style.AlignCenter).
-			Gap(1).
-			PaddingLeft(2).
-			Foreground(blueColor)
-		dotsStyle := style.S().Foreground(blueColor).Width(style.Cells(3))
-		labelStyle := style.S().Foreground(blueColor).Bold(true)
-		timeStyle := style.S().Foreground(t.Color.Text.Tertiary)
-
-		var cumNodes []kitex.Node
-		if runPromptTokens > 0 || runCompletionTokens > 0 || runTotalTokens > 0 {
-			if runPromptTokens > 0 || runCompletionTokens > 0 {
-				cumNodes = append(cumNodes, kitex.Box(kitex.BoxProps{
-					Style: style.S().Display(style.DisplayFlex).FlexDirection(style.FlexRow).Gap(1).Foreground(t.Color.Text.Tertiary),
-				},
-					kitex.Text("("),
-					kitex.Span(kitex.SpanProps{Style: style.S().Foreground(upColor)}, kitex.Text(fmt.Sprintf("↑ %s", tokenutils.FormatTokens(runPromptTokens)))),
-					kitex.Span(kitex.SpanProps{Style: style.S().Foreground(downColor)}, kitex.Text(fmt.Sprintf("↓ %s", tokenutils.FormatTokens(runCompletionTokens)))),
-					kitex.Text(")"),
-				))
-			} else {
-				cumNodes = append(cumNodes, kitex.Box(kitex.BoxProps{Style: style.S().Foreground(t.Color.Text.Tertiary)}, kitex.Text(fmt.Sprintf("(%s TOTAL)", tokenutils.FormatTokens(runTotalTokens)))))
-			}
-		}
-
-		return kitex.Box(kitex.BoxProps{Style: containerStyle},
-			kitex.Box(kitex.BoxProps{Style: dotsStyle}, kitex.Text(currentDots)),
-			kitex.Box(kitex.BoxProps{Style: labelStyle}, kitex.Text("Thinking")),
-			kitex.Box(kitex.BoxProps{Style: timeStyle}, kitex.Text(timeStr)),
-			kitex.If(len(cumNodes) > 0, func() kitex.Node { return cumNodes[0] }),
-		)
-	}
-	if lastFinishedTime >= 0 {
-		finishedTimeStr := fmt.Sprintf("[%02d:%02d]", lastFinishedTime/60, lastFinishedTime%60)
-		containerStyle := style.S().
-			Display(style.DisplayFlex).
-			FlexDirection(style.FlexRow).
-			AlignItems(style.AlignCenter).
-			Gap(1).
-			PaddingLeft(2).
-			Foreground(t.Color.Text.Secondary)
-		checkStyle := style.S().Foreground(greenColor)
-		labelStyle := style.S().Foreground(t.Color.Text.Secondary)
-		timeStyle := style.S().Foreground(t.Color.Text.Secondary)
-
-		var cumNodes []kitex.Node
-		if runPromptTokens > 0 || runCompletionTokens > 0 || runTotalTokens > 0 {
-			var tokenStr string
-			if runPromptTokens > 0 || runCompletionTokens > 0 {
-				tokenStr = fmt.Sprintf("(↑ %s ↓ %s)", tokenutils.FormatTokens(runPromptTokens), tokenutils.FormatTokens(runCompletionTokens))
-			} else {
-				tokenStr = fmt.Sprintf("(%s TOTAL)", tokenutils.FormatTokens(runTotalTokens))
-			}
-			cumNodes = append(cumNodes, kitex.Box(kitex.BoxProps{Style: style.S().Foreground(t.Color.Text.Secondary)}, kitex.Text(" "+tokenStr)))
-		}
-
-		return kitex.Box(kitex.BoxProps{Style: containerStyle},
-			kitex.Box(kitex.BoxProps{Style: checkStyle}, icon.Checkmark),
-			kitex.Box(kitex.BoxProps{Style: labelStyle}, kitex.Text("Agent completed in")),
-			kitex.Box(kitex.BoxProps{Style: timeStyle}, kitex.Text(finishedTimeStr)),
-			kitex.If(len(cumNodes) > 0, func() kitex.Node { return cumNodes[0] }),
-		)
-	}
-	return nil
-}
-
 func renderQueuedMessages(t *theme.Scheme, queuedMessages message.MessageList) kitex.Node {
 	if len(queuedMessages) == 0 || t == nil {
 		return nil
@@ -2688,13 +1459,13 @@ func renderQueuedMessages(t *theme.Scheme, queuedMessages message.MessageList) k
 			}
 		}
 
-		text := ""
+		var text strings.Builder
 		for _, block := range msg.GetContent() {
 			if tb, ok := block.(*message.TextBlock); ok {
-				text += tb.Text
+				text.WriteString(tb.Text)
 			}
 		}
-		if text == "" {
+		if text.String() == "" {
 			continue
 		}
 
@@ -2702,7 +1473,7 @@ func renderQueuedMessages(t *theme.Scheme, queuedMessages message.MessageList) k
 			Foreground(t.Color.Text.Secondary).
 			MarginLeft(2)
 
-		msgNodes = append(msgNodes, kitex.Box(kitex.BoxProps{Style: msgStyle}, kitex.Text("󰑮  "+text)))
+		msgNodes = append(msgNodes, kitex.Box(kitex.BoxProps{Style: msgStyle}, kitex.Text("󰑮  "+text.String())))
 	}
 
 	if len(msgNodes) == 0 {
@@ -2717,197 +1488,15 @@ func renderQueuedMessages(t *theme.Scheme, queuedMessages message.MessageList) k
 	return kitex.Box(kitex.BoxProps{Style: containerStyle}, children...)
 }
 
-type RunningTasksWidgetProps struct {
-	Tasks []api.RunningTaskInfo
+func getTargetOptionForHorizontal(options []permissions.PermissionOption, hIdx int) permissions.PermissionOption {
+	if len(options) == 0 {
+		return permissions.PermissionOption{}
+	}
+	if hIdx < 0 {
+		hIdx = 0
+	}
+	if hIdx >= len(options) {
+		hIdx = len(options) - 1
+	}
+	return options[hIdx]
 }
-
-var RunningTasksWidget = kitex.FC("RunningTasksWidget", func(props RunningTasksWidgetProps) kitex.Node {
-	t := theme.UseTheme()
-	if len(props.Tasks) == 0 {
-		return nil
-	}
-
-	taskWord := "task"
-	if len(props.Tasks) > 1 {
-		taskWord = "tasks"
-	}
-
-	summaryText := fmt.Sprintf("%d %s running", len(props.Tasks), taskWord)
-
-	var taskRows []kitex.Node
-	for _, task := range props.Tasks {
-		dispDetails := task.Details
-		if dispDetails == "" {
-			dispDetails = "-"
-		}
-
-		// Truncate task command if too long
-		dispName := task.Name
-		if len(dispName) > 40 {
-			dispName = dispName[:37] + "..."
-		}
-
-		taskRows = append(taskRows, kitex.TR(kitex.TRProps{},
-			kitex.TD(kitex.TDProps{Style: style.S().Foreground(t.Color.Text.Secondary).PaddingRight(1).Width(style.MaxContent)}, kitex.Text(task.ID)),
-			kitex.TD(kitex.TDProps{Style: style.S().Foreground(t.Color.Surface.Info).PaddingRight(1).Width(style.MaxContent)}, kitex.Text(strings.ToUpper(task.Type))),
-			kitex.TD(kitex.TDProps{Style: style.S().Foreground(t.Color.Surface.Success).PaddingRight(1).Width(style.MaxContent)}, kitex.Text(dispDetails)),
-			kitex.TD(kitex.TDProps{Style: style.S().Foreground(t.Color.Text.Primary).Width(style.Percent(100))}, kitex.Text(dispName)),
-		))
-	}
-
-	headerRow := kitex.TR(kitex.TRProps{},
-		// Columns: TASK ID | TYPE | DETAILS | COMMAND / NAME
-		kitex.TD(kitex.TDProps{Style: style.S().Bold(true).Foreground(t.Color.Text.Secondary).PaddingRight(1).Width(style.MaxContent)}, kitex.Text("TASK ID")),
-		kitex.TD(kitex.TDProps{Style: style.S().Bold(true).Foreground(t.Color.Text.Secondary).PaddingRight(1).Width(style.MaxContent)}, kitex.Text("TYPE")),
-		kitex.TD(kitex.TDProps{Style: style.S().Bold(true).Foreground(t.Color.Text.Secondary).PaddingRight(1).Width(style.MaxContent)}, kitex.Text("DETAILS")),
-		kitex.TD(kitex.TDProps{Style: style.S().Bold(true).Foreground(t.Color.Text.Secondary).Width(style.Percent(100))}, kitex.Text("COMMAND / NAME")),
-	)
-
-	allRows := append([]kitex.Node{headerRow}, taskRows...)
-
-	return kitex.Box(kitex.BoxProps{
-		Style: style.S().
-			MarginTop(1).
-			MarginBottom(1).
-			Width(style.Percent(100)).
-			MaxWidth(style.Percent(90)).
-			AlignSelf(style.AlignStart),
-	},
-		components.Accordion(components.AccordionProps{
-			Color:   components.PaperSurface,
-			Variant: components.PaperOutlined,
-		},
-			components.AccordionSummary(components.AccordionSummaryProps{},
-				kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Primary).Bold(true)}, kitex.Text(summaryText)),
-			),
-			components.AccordionDetails(components.AccordionDetailsProps{
-				Style: style.S().Padding(1, 1),
-			},
-				kitex.Table(kitex.TableProps{},
-					kitex.TBody(kitex.TBodyProps{},
-						allRows...,
-					),
-				),
-			),
-		),
-	)
-})
-
-type LspSuggestionWidgetProps struct {
-	Suggestions []api.LspSuggestion
-	OnConfigure func(lang string)
-	OnDismiss   func(lang string)
-}
-
-var LspSuggestionWidget = kitex.FC("LspSuggestionWidget", func(props LspSuggestionWidgetProps) kitex.Node {
-	if len(props.Suggestions) == 0 {
-		return nil
-	}
-
-	var boxes []kitex.Node
-	for _, sug := range props.Suggestions {
-		sugLang := sug.Language // capture loop variable
-		boxes = append(boxes, kitex.Box(kitex.BoxProps{
-			Style: style.S().
-				MarginBottom(1).
-				Width(style.Percent(100)).
-				MaxWidth(style.Percent(90)),
-		},
-			components.Alert(components.AlertProps{
-				Severity: components.AlertInfo,
-				Variant:  components.AlertOutlined,
-				ShowIcon: true,
-				Action: kitex.Box(kitex.BoxProps{
-					Style: style.S().Display(style.DisplayFlex).FlexDirection(style.FlexRow).Gap(1),
-				},
-					components.Button(components.ButtonProps{
-						Variant: components.ButtonSolid,
-						Color:   components.ButtonInfo,
-						OnClick: func() { props.OnConfigure(sugLang) },
-					}, kitex.Text("Configure")),
-					components.Button(components.ButtonProps{
-						Variant: components.ButtonText,
-						Color:   components.ButtonBase,
-						OnClick: func() { props.OnDismiss(sugLang) },
-					}, kitex.Text("Dismiss")),
-				),
-			}, kitex.Text(fmt.Sprintf("Enable %s language server for %s?", sug.ServerName, sug.Language))),
-		))
-	}
-
-	return kitex.Box(kitex.BoxProps{
-		Style: style.S().Display(style.DisplayFlex).FlexDirection(style.FlexColumn).MarginTop(1).MarginBottom(1).AlignSelf(style.AlignStart).Width(style.Percent(100)),
-	}, boxes...)
-})
-
-type McpRequestWidgetProps struct {
-	Requests  []api.PendingMcpRequest
-	OnResolve func(reqID string, action string, code string, content map[string]interface{})
-}
-
-var McpRequestWidget = kitex.FC("McpRequestWidget", func(props McpRequestWidgetProps) kitex.Node {
-	if len(props.Requests) == 0 {
-		return nil
-	}
-
-	var boxes []kitex.Node
-	for _, req := range props.Requests {
-		reqID := req.ID
-		reqServer := req.ServerName
-		reqType := req.Type
-		reqURL := req.URL
-
-		var msgText string
-		if reqType == "oauth" {
-			msgText = fmt.Sprintf("MCP Server %q needs browser authentication.", reqServer)
-		} else {
-			msgText = fmt.Sprintf("MCP %q: %s", reqServer, req.Message)
-		}
-
-		boxes = append(boxes, kitex.Box(kitex.BoxProps{
-			Style: style.S().
-				MarginBottom(1).
-				Width(style.Percent(100)).
-				MaxWidth(style.Percent(90)),
-		},
-			components.Alert(components.AlertProps{
-				Severity: components.AlertWarning,
-				Variant:  components.AlertOutlined,
-				ShowIcon: true,
-				Action: kitex.Box(kitex.BoxProps{
-					Style: style.S().Display(style.DisplayFlex).FlexDirection(style.FlexRow).Gap(1),
-				},
-					kitex.If(reqType == "oauth", func() kitex.Node {
-						return components.Button(components.ButtonProps{
-							Variant: components.ButtonSolid,
-							Color:   components.ButtonPrimary,
-							OnClick: func() {
-								_ = mcp.OpenBrowser(reqURL)
-							},
-						}, kitex.Text("Open Link"))
-					}),
-					kitex.If(reqType == "elicitation", func() kitex.Node {
-						return components.Button(components.ButtonProps{
-							Variant: components.ButtonSolid,
-							Color:   components.ButtonSuccess,
-							OnClick: func() {
-								props.OnResolve(reqID, "accept", "", nil)
-							},
-						}, kitex.Text("Accept"))
-					}),
-					components.Button(components.ButtonProps{
-						Variant: components.ButtonText,
-						Color:   components.ButtonBase,
-						OnClick: func() {
-							props.OnResolve(reqID, "cancel", "", nil)
-						},
-					}, kitex.Text("Cancel")),
-				),
-			}, kitex.Text(msgText)),
-		))
-	}
-
-	return kitex.Box(kitex.BoxProps{
-		Style: style.S().Display(style.DisplayFlex).FlexDirection(style.FlexColumn).MarginTop(1).MarginBottom(1).AlignSelf(style.AlignStart).Width(style.Percent(100)),
-	}, boxes...)
-})

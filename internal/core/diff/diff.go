@@ -451,3 +451,7 @@ func equalSlices(a, b []string) bool {
 	}
 	return true
 }
+
+func IsDiff(preview string) bool {
+	return strings.Contains(preview, "@@ ") || strings.HasPrefix(preview, "--- ") || strings.HasPrefix(preview, "+++ ")
+}

@@ -4,6 +4,7 @@ package api
 
 import (
 	"context"
+	"iter"
 
 	"github.com/masterkeysrd/kite/extras/kitex"
 	"github.com/masterkeysrd/tasksmith/internal/api"
@@ -25,6 +26,7 @@ type Client interface {
 	DeleteSession(ctx context.Context, req api.DeleteSessionRequest) (*api.DeleteSessionResponse, error)
 	SendMessage(ctx context.Context, req api.SendMessageRequest) (*api.SendMessageResponse, error)
 	GetSessionMessages(ctx context.Context, req api.GetSessionMessagesRequest) (*api.GetSessionMessagesResponse, error)
+	WatchSessionMessages(ctx context.Context, req api.GetSessionMessagesRequest) iter.Seq2[*api.GetSessionMessagesResponse, error]
 	GetSessionState(ctx context.Context, req api.GetSessionStateRequest) (*api.GetSessionStateResponse, error)
 	SubmitAuthorizationDecision(ctx context.Context, req api.SubmitAuthorizationDecisionRequest) (*api.SubmitAuthorizationDecisionResponse, error)
 	ResolveMcpRequest(ctx context.Context, req api.ResolveMcpRequest) (*api.ResolveMcpResponse, error)
@@ -37,7 +39,7 @@ type Client interface {
 	RestartLsp(ctx context.Context, req api.RestartLspRequest) (*api.RestartLspResponse, error)
 	RestartMcp(ctx context.Context, req api.RestartMcpRequest) (*api.RestartMcpResponse, error)
 	GetLspDiagnostics(ctx context.Context, req api.GetLspDiagnosticsRequest) (*api.GetLspDiagnosticsResponse, error)
-	LspSearch(ctx context.Context, req api.LspSearchRequest) (*api.LspSearchResponse, error)
+	LspSymbols(ctx context.Context, req api.LspSymbolsRequest) (*api.LspSymbolsResponse, error)
 	GetFileChanges(ctx context.Context, req api.GetFileChangesRequest) (*api.GetFileChangesResponse, error)
 	GetFileJournal(ctx context.Context, req api.GetFileJournalRequest) (*api.GetFileJournalResponse, error)
 	RevertFile(ctx context.Context, req api.RevertFileRequest) (*api.RevertFileResponse, error)
