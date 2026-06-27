@@ -478,7 +478,7 @@ var Bubble = kitex.FC("Bubble", func(props BubbleProps) kitex.Node {
 	if props.TokensInput > 0 || props.TokensOutput > 0 || props.TokensTotal > 0 {
 		var tokenStr string
 		if props.TokensInput > 0 || props.TokensOutput > 0 {
-			tokenStr = fmt.Sprintf("↑ %s ↓ %s", tokenutils.FormatTokens(props.TokensInput), tokenutils.FormatTokens(props.TokensOutput))
+			tokenStr = fmt.Sprintf("↑%s ↓%s", tokenutils.FormatTokens(props.TokensInput), tokenutils.FormatTokens(props.TokensOutput))
 		} else {
 			tokenStr = fmt.Sprintf("%s TOTAL", tokenutils.FormatTokens(props.TokensTotal))
 		}

@@ -339,7 +339,6 @@ var Stats = kitex.FC("Stats", func(props StatsProps) kitex.Node {
 				Display(style.DisplayFlex).
 				FlexDirection(style.FlexRow).
 				AlignItems(style.AlignCenter).
-				Gap(1).
 				Foreground(textDim),
 		},
 			kitex.Box(kitex.BoxProps{Style: style.S().Foreground(colorInfo)}, icon.MoveUp),
@@ -352,7 +351,6 @@ var Stats = kitex.FC("Stats", func(props StatsProps) kitex.Node {
 				Display(style.DisplayFlex).
 				FlexDirection(style.FlexRow).
 				AlignItems(style.AlignCenter).
-				Gap(1).
 				Foreground(textDim),
 		},
 			kitex.Box(kitex.BoxProps{Style: style.S().Foreground(colorNormal)}, icon.MoveDown),

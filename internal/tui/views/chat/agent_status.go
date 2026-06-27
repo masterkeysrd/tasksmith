@@ -62,8 +62,8 @@ func renderAgentStatus(t *theme.Scheme, sending bool, thinkingTime int, lastFini
 					Style: style.S().Display(style.DisplayFlex).FlexDirection(style.FlexRow).Gap(1).Foreground(t.Color.Text.Tertiary),
 				},
 					kitex.Text("("),
-					kitex.Span(kitex.SpanProps{Style: style.S().Foreground(upColor)}, kitex.Text(fmt.Sprintf("↑ %s", tokenutils.FormatTokens(runPromptTokens)))),
-					kitex.Span(kitex.SpanProps{Style: style.S().Foreground(downColor)}, kitex.Text(fmt.Sprintf("↓ %s", tokenutils.FormatTokens(runCompletionTokens)))),
+					kitex.Span(kitex.SpanProps{Style: style.S().Foreground(upColor)}, kitex.Text(fmt.Sprintf("↑%s", tokenutils.FormatTokens(runPromptTokens)))),
+					kitex.Span(kitex.SpanProps{Style: style.S().Foreground(downColor)}, kitex.Text(fmt.Sprintf("↓%s", tokenutils.FormatTokens(runCompletionTokens)))),
 					kitex.Text(")"),
 				))
 			} else {
@@ -112,7 +112,7 @@ func renderAgentStatus(t *theme.Scheme, sending bool, thinkingTime int, lastFini
 		if runPromptTokens > 0 || runCompletionTokens > 0 || runTotalTokens > 0 {
 			var tokenStr string
 			if runPromptTokens > 0 || runCompletionTokens > 0 {
-				tokenStr = fmt.Sprintf("(↑ %s ↓ %s)", tokenutils.FormatTokens(runPromptTokens), tokenutils.FormatTokens(runCompletionTokens))
+				tokenStr = fmt.Sprintf("(↑%s ↓%s)", tokenutils.FormatTokens(runPromptTokens), tokenutils.FormatTokens(runCompletionTokens))
 			} else {
 				tokenStr = fmt.Sprintf("(%s TOTAL)", tokenutils.FormatTokens(runTotalTokens))
 			}
