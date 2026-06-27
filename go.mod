@@ -10,7 +10,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/jmoiron/sqlx v1.4.0
 	github.com/lrstanley/go-nf v0.0.0-20260418212552-215ab243b591
-	github.com/masterkeysrd/kite v0.0.2-0.20260627042617-e3e1eb319653
+	github.com/masterkeysrd/kite v0.0.2-0.20260627095513-e99641be1eff
 	github.com/masterkeysrd/loom v0.0.3-0.20260625175623-7cfb391c9b07
 	github.com/masterkeysrd/lspx v0.0.0-20260611065943-6cf2ef01a123
 	github.com/masterkeysrd/warp v0.0.3-0.20260625214537-f28a1c7000bc
@@ -77,6 +77,7 @@ require (
 	github.com/ollama/ollama v0.24.0 // indirect
 	github.com/openai/openai-go/v3 v3.37.0 // indirect
 	github.com/pjbgf/sha1cd v0.6.0 // indirect
+	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
 	github.com/segmentio/asm v1.1.3 // indirect

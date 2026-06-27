@@ -208,6 +208,11 @@ func (c *Client) Close() error {
 	return c.lspClient.Close()
 }
 
+// RawClient returns the underlying lspx client.
+func (c *Client) RawClient() *lspx.Client {
+	return c.lspClient
+}
+
 // EnsureOpened makes sure a file is registered with the LSP server.
 func (c *Client) EnsureOpened(ctx context.Context, path string) error {
 	uri := pathToURI(path)

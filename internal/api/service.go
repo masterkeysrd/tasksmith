@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"iter"
 	"os"
 	"path/filepath"
 	"sort"
@@ -441,6 +442,86 @@ func (s *Service) GetSessionMessages(ctx context.Context, req GetSessionMessages
 		log.Int("queued", len(resp.QueuedMessages)))
 
 	return resp, nil
+}
+
+// WatchSessionMessages establishes a stream that yields updated message lists.
+func (s *Service) WatchSessionMessages(ctx context.Context, req GetSessionMessagesRequest) iter.Seq2[*GetSessionMessagesResponse, error] {
+	return func(yield func(*GetSessionMessagesResponse, error) bool) {
+		ch, cleanup := s.sm.SubscribeMessages(req.SessionID)
+		notifyCh := make(chan struct{}, 1)
+		const throttleDuration = 100 * time.Millisecond
+		var lastYield time.Time
+		var timer *time.Timer
+		var pendingUpdate bool
+
+		defer func() {
+			if timer != nil {
+				timer.Stop()
+			}
+			cleanup()
+		}()
+
+		// Helper function to perform the yield on the stream loop goroutine
+		doYield := func() bool {
+			resp, err := s.GetSessionMessages(ctx, req)
+			if err != nil {
+				return yield(nil, err)
+			}
+			lastYield = time.Now()
+			pendingUpdate = false
+			return yield(resp, nil)
+		}
+
+		processUpdate := func() bool {
+			now := time.Now()
+			elapsed := now.Sub(lastYield)
+
+			if elapsed >= throttleDuration {
+				if timer != nil {
+					timer.Stop()
+					timer = nil
+				}
+				if !doYield() {
+					return false
+				}
+			} else {
+				if !pendingUpdate {
+					pendingUpdate = true
+					remaining := throttleDuration - elapsed
+					if timer != nil {
+						timer.Stop()
+					}
+					timer = time.AfterFunc(remaining, func() {
+						select {
+						case notifyCh <- struct{}{}:
+						default:
+						}
+					})
+				}
+			}
+			return true
+		}
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-s.sm.Done():
+				return
+			case _, ok := <-ch:
+				if !ok {
+					return
+				}
+				if !processUpdate() {
+					return
+				}
+			case <-notifyCh:
+				if !processUpdate() {
+					return
+				}
+			}
+		}
+	}
 }
 
 // GetSessionState queries the active execution status of the session agent.
@@ -966,10 +1047,10 @@ func (s *Service) GetLspDiagnostics(ctx context.Context, req GetLspDiagnosticsRe
 	return &GetLspDiagnosticsResponse{Diagnostics: items}, nil
 }
 
-// LspSearch searches using LSP.
-func (s *Service) LspSearch(ctx context.Context, req LspSearchRequest) (*LspSearchResponse, error) {
+// LspSymbols searches using LSP.
+func (s *Service) LspSymbols(ctx context.Context, req LspSymbolsRequest) (*LspSymbolsResponse, error) {
 	if s.lspManager == nil {
-		return &LspSearchResponse{Results: []LspSearchItem{}}, nil
+		return &LspSymbolsResponse{Results: []LspSymbolsItem{}}, nil
 	}
 
 	cfg, err := s.ws.GetWorkspaceConfig(ctx)
@@ -987,7 +1068,7 @@ func (s *Service) LspSearch(ctx context.Context, req LspSearchRequest) (*LspSear
 		return nil, fmt.Errorf("failed to search LSP: %w", err)
 	}
 
-	var items []LspSearchItem
+	var items []LspSymbolsItem
 	for _, sym := range results {
 		var docURI string
 		var line, char int
@@ -1073,7 +1154,7 @@ func (s *Service) LspSearch(ctx context.Context, req LspSearchRequest) (*LspSear
 			kindStr = "TypeParameter"
 		}
 
-		items = append(items, LspSearchItem{
+		items = append(items, LspSymbolsItem{
 			Name:          sym.Name,
 			Kind:          kindStr,
 			Path:          relPath,
@@ -1083,7 +1164,7 @@ func (s *Service) LspSearch(ctx context.Context, req LspSearchRequest) (*LspSear
 		})
 	}
 
-	return &LspSearchResponse{Results: items}, nil
+	return &LspSymbolsResponse{Results: items}, nil
 }
 
 // GetFileChanges returns summaries of all modified files for a session.

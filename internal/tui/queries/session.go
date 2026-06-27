@@ -1,6 +1,9 @@
 package queries
 
 import (
+	"context"
+	"iter"
+
 	"github.com/masterkeysrd/kite/extras/wind"
 	"github.com/masterkeysrd/kite/promise"
 	"github.com/masterkeysrd/tasksmith/internal/api"
@@ -14,9 +17,11 @@ func UseListSessions() wind.Result[*api.ListSessionsResponse] {
 }
 
 // UseGetSessionMessages retrieves a reactive message log for the given session.
-func UseGetSessionMessages(sessionID string) wind.Result[*api.GetSessionMessagesResponse] {
+func UseGetSessionMessages(sessionID string) wind.StreamResult[*api.GetSessionMessagesResponse] {
 	client := tuiapi.UseClient()
-	return wind.Use(api.GetSessionMessagesRequest{SessionID: sessionID}, promise.WrapWithProps(client.GetSessionMessages))
+	return wind.UseStream(api.GetSessionMessagesRequest{SessionID: sessionID}, func(ctx context.Context, req api.GetSessionMessagesRequest) iter.Seq2[*api.GetSessionMessagesResponse, error] {
+		return client.WatchSessionMessages(ctx, req)
+	})
 }
 
 // UseGetSessionState retrieves the active execution status of the session agent.

@@ -79,10 +79,10 @@ func main() {
 		t.Logf("LspDiagnostics returned %d diagnostics", len(out.Diagnostics))
 	})
 
-	t.Run("LspSearch", func(t *testing.T) {
-		out, err := handlers.LspSearch(ctx, LspSearchArgs{Query: "TestStruct"})
+	t.Run("LspSymbols", func(t *testing.T) {
+		out, err := handlers.LspSymbols(ctx, LspSymbolsArgs{Query: "TestStruct"})
 		if err != nil {
-			t.Fatalf("LspSearch failed: %v", err)
+			t.Fatalf("LspSymbols failed: %v", err)
 		}
 
 		found := false
@@ -97,7 +97,7 @@ func main() {
 		}
 
 		if !found {
-			t.Logf("LspSearch did not find TestStruct (this can happen if gopls hasn't finished indexing, results: %+v)", out.Results)
+			t.Logf("LspSymbols did not find TestStruct (this can happen if gopls hasn't finished indexing, results: %+v)", out.Results)
 		}
 	})
 
@@ -108,6 +108,35 @@ func main() {
 		}
 		if !out.Success {
 			t.Errorf("LspRestart failed: %s", out.Message)
+		}
+	})
+
+	t.Run("LspInspect", func(t *testing.T) {
+		out, err := handlers.LspInspect(ctx, LspInspectArgs{Query: "TestStruct"})
+		if err != nil {
+			t.Fatalf("LspInspect failed: %v", err)
+		}
+
+		if out.TotalMatches == 0 {
+			t.Logf("LspInspect returned 0 matches (this can happen if gopls hasn't finished indexing)")
+			return
+		}
+
+		if len(out.Results) == 0 {
+			t.Error("expected at least one result, got none")
+			return
+		}
+
+		for _, sym := range out.Results {
+			if sym.Name == "TestStruct" {
+				if sym.DeclaredAt == "" {
+					t.Error("expected DeclaredAt to be set")
+				}
+				if sym.Kind == "" {
+					t.Error("expected Kind to be set")
+				}
+				break
+			}
 		}
 	})
 }
@@ -159,17 +188,17 @@ func TestLspTextContentProviders(t *testing.T) {
 		}
 	})
 
-	t.Run("LspSearchOutput", func(t *testing.T) {
-		out := LspSearchOutput{
-			Results: []LspSearchOutputResultsItem{
+	t.Run("LspSymbolsOutput", func(t *testing.T) {
+		out := LspSymbolsOutput{
+			Results: []LspSymbolsOutputResultsItem{
 				{
 					Name:          "MyStruct",
 					Kind:          "Struct",
 					Path:          "models.go",
 					ContainerName: "db",
-					Range: LspSearchOutputResultsItemRange{
-						Start: LspSearchOutputResultsItemRangeStart{Line: 5, Character: 10},
-						End:   LspSearchOutputResultsItemRangeEnd{Line: 5, Character: 18},
+					Range: LspSymbolsOutputResultsItemRange{
+						Start: LspSymbolsOutputResultsItemRangeStart{Line: 5, Character: 10},
+						End:   LspSymbolsOutputResultsItemRangeEnd{Line: 5, Character: 18},
 					},
 				},
 			},
@@ -206,21 +235,21 @@ func TestLspTextContentProviders(t *testing.T) {
 		}
 	})
 
-	t.Run("LspSearchTruncation", func(t *testing.T) {
-		var list []LspSearchOutputResultsItem
+	t.Run("LspSymbolsTruncation", func(t *testing.T) {
+		var list []LspSymbolsOutputResultsItem
 		for i := 0; i < 200; i++ {
-			list = append(list, LspSearchOutputResultsItem{
+			list = append(list, LspSymbolsOutputResultsItem{
 				Name:          fmt.Sprintf("MySymbol%d", i),
 				Kind:          "Function",
 				Path:          "main.go",
 				ContainerName: "main",
-				Range: LspSearchOutputResultsItemRange{
-					Start: LspSearchOutputResultsItemRangeStart{Line: i, Character: 1},
-					End:   LspSearchOutputResultsItemRangeEnd{Line: i, Character: 10},
+				Range: LspSymbolsOutputResultsItemRange{
+					Start: LspSymbolsOutputResultsItemRangeStart{Line: i, Character: 1},
+					End:   LspSymbolsOutputResultsItemRangeEnd{Line: i, Character: 10},
 				},
 			})
 		}
-		out := LspSearchOutput{Results: list}
+		out := LspSymbolsOutput{Results: list}
 		text := out.TextContent()
 
 		if !strings.Contains(text, "[SYSTEM NOTE: Results truncated") {
@@ -254,6 +283,92 @@ func TestLspTextContentProviders(t *testing.T) {
 
 		if diags[0].Message != "e2" || diags[1].Message != "e1" || diags[2].Message != "w1" || diags[3].Message != "i1" || diags[4].Message != "h1" {
 			t.Errorf("unexpected sorted order: %+v", diags)
+		}
+	})
+}
+
+func TestLspInspectTextContent(t *testing.T) {
+	t.Run("EmptyResults", func(t *testing.T) {
+		out := LspInspectOutput{TotalMatches: 0}
+		text := out.TextContent()
+		if !strings.Contains(text, "No symbols found") {
+			t.Errorf("expected 'No symbols found', got %q", text)
+		}
+	})
+
+	t.Run("SingleResult", func(t *testing.T) {
+		out := LspInspectOutput{
+			TotalMatches: 1,
+			Results: []LspInspectOutputResultsItem{
+				{
+					Name:            "TestFunc",
+					Kind:            "Function",
+					DeclaredAt:      "main.go:10",
+					TypeDefinedAt:   "types.go:5",
+					Signature:       "func TestFunc() {}",
+					Docs:            "This is a test function.",
+					References:      []string{"main.go:20"},
+					Implementations: []string{"impl.go:15"},
+					FullReportPath:  "",
+				},
+			},
+		}
+		text := out.TextContent()
+		if !strings.Contains(text, "TestFunc") {
+			t.Error("expected 'TestFunc' in text content")
+		}
+		if !strings.Contains(text, "Function") {
+			t.Error("expected 'Function' in text content")
+		}
+		if !strings.Contains(text, "Declared at:") {
+			t.Error("expected 'Declared at:' in text content")
+		}
+		if !strings.Contains(text, "Type Defined at:") {
+			t.Error("expected 'Type Defined at:' in text content")
+		}
+		if !strings.Contains(text, "References") {
+			t.Error("expected 'References' in text content")
+		}
+		if !strings.Contains(text, "Implementations") {
+			t.Error("expected 'Implementations' in text content")
+		}
+	})
+
+	t.Run("SingleResultWithTruncation", func(t *testing.T) {
+		out := LspInspectOutput{
+			TotalMatches: 1,
+			Results: []LspInspectOutputResultsItem{
+				{
+					Name:           "LargeFunc",
+					Kind:           "Function",
+					DeclaredAt:     "main.go:10",
+					Docs:           "This is large documentation that was truncated.",
+					DocsTruncated:  true,
+					FullReportPath: "lsp_inspect/abc123_LargeFunc.md",
+				},
+			},
+		}
+		text := out.TextContent()
+		if !strings.Contains(text, "LargeFunc") {
+			t.Error("expected 'LargeFunc' in text content")
+		}
+		if !strings.Contains(text, "Truncated") {
+			t.Error("expected 'Truncated' in text content")
+		}
+		if !strings.Contains(text, "lsp_inspect/abc123_LargeFunc.md") {
+			t.Error("expected full report path in text content")
+		}
+	})
+
+	t.Run("ToolContent", func(t *testing.T) {
+		out := LspInspectOutput{
+			Results: []LspInspectOutputResultsItem{
+				{Name: "MySymbol", Kind: "Struct", DeclaredAt: "main.go:1"},
+			},
+		}
+		content := out.ToolContent()
+		if len(content) != 1 {
+			t.Fatalf("expected 1 content block, got %d", len(content))
 		}
 	})
 }

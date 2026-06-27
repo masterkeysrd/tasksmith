@@ -358,6 +358,30 @@ func LoomTools(handlers *ToolHandlers) ([]*tool.Tool, error) {
 		list = append(list, t)
 	}
 
+	if res, ok := resMap["lsp_inspect"]; ok {
+		var opts []tool.Option
+		if res.Spec.Annotations != nil {
+			opts = append(opts, tool.WithAnnotation(tool.Annotation{
+				IsOpenWorld:  res.Spec.Annotations.IsOpenWorld,
+				IsDangerous:  res.Spec.Annotations.IsDangerous,
+				IsReadOnly:   res.Spec.Annotations.IsReadOnly,
+				IsIdempotent: res.Spec.Annotations.IsIdempotent,
+				UserHint:     res.Spec.Annotations.UserHint,
+			}))
+		}
+		t, err := tool.New(
+			"lsp_inspect",
+			res.Metadata.DisplayName,
+			res.Spec.Instructions,
+			handlers.LspInspect,
+			opts...,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create tool lsp_inspect: %w", err)
+		}
+		list = append(list, t)
+	}
+
 	if res, ok := resMap["lsp_restart"]; ok {
 		var opts []tool.Option
 		if res.Spec.Annotations != nil {
@@ -382,7 +406,7 @@ func LoomTools(handlers *ToolHandlers) ([]*tool.Tool, error) {
 		list = append(list, t)
 	}
 
-	if res, ok := resMap["lsp_search"]; ok {
+	if res, ok := resMap["lsp_symbols"]; ok {
 		var opts []tool.Option
 		if res.Spec.Annotations != nil {
 			opts = append(opts, tool.WithAnnotation(tool.Annotation{
@@ -394,14 +418,14 @@ func LoomTools(handlers *ToolHandlers) ([]*tool.Tool, error) {
 			}))
 		}
 		t, err := tool.New(
-			"lsp_search",
+			"lsp_symbols",
 			res.Metadata.DisplayName,
 			res.Spec.Instructions,
-			handlers.LspSearch,
+			handlers.LspSymbols,
 			opts...,
 		)
 		if err != nil {
-			return nil, fmt.Errorf("failed to create tool lsp_search: %w", err)
+			return nil, fmt.Errorf("failed to create tool lsp_symbols: %w", err)
 		}
 		list = append(list, t)
 	}

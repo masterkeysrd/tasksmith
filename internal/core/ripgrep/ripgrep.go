@@ -27,6 +27,14 @@ type Match struct {
 	Content string `json:"content"`
 }
 
+// SearchOptions configures optional behaviour for Search.
+type SearchOptions struct {
+	// Literal treats the pattern as a fixed string instead of a regex.
+	Literal bool
+	// Include is a glob pattern to restrict which files are searched (e.g. "*.go").
+	Include string
+}
+
 // Available checks if the ripgrep binary (rg) is available on the system.
 // It caches the result. If rg was not found, it will re-check at most once
 // every 30 seconds to dynamically detect new installations.
@@ -119,12 +127,24 @@ func Glob(ctx context.Context, cwd, searchPath, pattern string) ([]string, error
 
 // Search executes ripgrep to search for pattern inside searchPath.
 // All matched file paths are returned relative to cwd.
-func Search(ctx context.Context, cwd, searchPath, pattern string) ([]Match, error) {
+func Search(ctx context.Context, cwd, searchPath, pattern string, opts ...SearchOptions) ([]Match, error) {
 	if !Available() {
 		return nil, fmt.Errorf("ripgrep is not available")
 	}
 
-	args := []string{"--line-number", "--json", "--hidden", "-H", "-L", "-e", pattern}
+	var opt SearchOptions
+	if len(opts) > 0 {
+		opt = opts[0]
+	}
+
+	args := []string{"--line-number", "--json", "--hidden", "-H", "-L"}
+	if opt.Literal {
+		args = append(args, "--fixed-strings")
+	}
+	if opt.Include != "" {
+		args = append(args, "--glob", opt.Include)
+	}
+	args = append(args, "-e", pattern)
 	targetDir := "."
 	if searchPath != "" {
 		targetDir = searchPath

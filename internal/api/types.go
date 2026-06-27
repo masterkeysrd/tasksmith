@@ -421,11 +421,11 @@ type GetLspDiagnosticsResponse struct {
 	Diagnostics []LspDiagnosticItem `json:"diagnostics"`
 }
 
-type LspSearchRequest struct {
+type LspSymbolsRequest struct {
 	Query string `json:"query"`
 }
 
-type LspSearchItem struct {
+type LspSymbolsItem struct {
 	Name          string `json:"name"`
 	Kind          string `json:"kind"`
 	Path          string `json:"path"`
@@ -434,8 +434,8 @@ type LspSearchItem struct {
 	ContainerName string `json:"container_name,omitempty"`
 }
 
-type LspSearchResponse struct {
-	Results []LspSearchItem `json:"results"`
+type LspSymbolsResponse struct {
+	Results []LspSymbolsItem `json:"results"`
 }
 
 type FileChangeSummary struct {

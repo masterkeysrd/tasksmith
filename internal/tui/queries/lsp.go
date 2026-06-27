@@ -30,10 +30,10 @@ func UseGetLspDiagnostics(req api.GetLspDiagnosticsRequest) wind.Result[*api.Get
 	return wind.Use(req, promise.WrapWithProps(client.GetLspDiagnostics))
 }
 
-// UseLspSearch performs an LSP symbol search.
-func UseLspSearch(req api.LspSearchRequest) wind.Result[*api.LspSearchResponse] {
+// UseLspSymbols performs an LSP symbol search.
+func UseLspSymbols(req api.LspSymbolsRequest) wind.Result[*api.LspSymbolsResponse] {
 	client := tuiapi.UseClient()
-	return wind.Use(req, promise.WrapWithProps(client.LspSearch), wind.Options{
+	return wind.Use(req, promise.WrapWithProps(client.LspSymbols), wind.Options{
 		Enabled: req.Query != "",
 	})
 }

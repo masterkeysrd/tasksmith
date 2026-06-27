@@ -24,12 +24,17 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/workspace"
 )
 
+type closerEntry struct {
+	name string
+	fn   func(ctx context.Context) error
+}
+
 type Application struct {
 	opts       *flags.Flags
 	ws         *workspace.Workspace
 	api        *api.Service
 	lspManager *lsp.Manager
-	closers    []func(ctx context.Context) error
+	closers    []closerEntry
 	cancel     context.CancelFunc
 }
 
@@ -59,7 +64,7 @@ func (app *Application) Run(ctx context.Context) error {
 				log.Error("pprof server error", log.Err(err))
 			}
 		}()
-		app.AddCloser(func(ctx context.Context) error {
+		app.AddCloser("pprof server", func(ctx context.Context) error {
 			log.Info("Stopping pprof server")
 			return srv.Shutdown(ctx)
 		})
@@ -70,7 +75,7 @@ func (app *Application) Run(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("failed to open database: %w", err)
 	}
-	app.AddCloser(func(ctx context.Context) error {
+	app.AddCloser("sqliteConn", func(ctx context.Context) error {
 		return sqliteConn.Close()
 	})
 
@@ -78,7 +83,7 @@ func (app *Application) Run(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("failed to open checkpoints database: %w", err)
 	}
-	app.AddCloser(func(ctx context.Context) error {
+	app.AddCloser("checkpointsConn", func(ctx context.Context) error {
 		return checkpointsConn.Close()
 	})
 
@@ -91,12 +96,12 @@ func (app *Application) Run(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("failed to initialize metrics database: %w", err)
 	}
-	app.AddCloser(func(ctx context.Context) error {
+	app.AddCloser("metricsDB", func(ctx context.Context) error {
 		return metricsDB.Close()
 	})
 
 	app.lspManager = lsp.NewManager()
-	app.AddCloser(func(ctx context.Context) error {
+	app.AddCloser("lspManager", func(ctx context.Context) error {
 		app.lspManager.CloseAll()
 		return nil
 	})
@@ -112,8 +117,10 @@ func (app *Application) Run(ctx context.Context) error {
 		Workspace:    app.ws,
 		MetricsStore: metricsStore,
 		LspManager:   app.lspManager,
+		Context:      ctx,
 	})
-	app.AddCloser(func(ctx context.Context) error {
+	app.AddCloser("sessionMgr & mcpManager", func(ctx context.Context) error {
+		_ = sessionMgr.Close()
 		if sessionMgr.McpManager() != nil {
 			return sessionMgr.McpManager().Close()
 		}
@@ -166,12 +173,12 @@ func (app *Application) InitializeLogs() error {
 	}
 
 	prevLogger := log.Default()
-	app.AddCloser(func(ctx context.Context) error {
+	app.AddCloser("prevLogger", func(ctx context.Context) error {
 		log.SetDefault(prevLogger)
 		return nil
 	})
 
-	app.AddCloser(func(ctx context.Context) error {
+	app.AddCloser("log file", func(ctx context.Context) error {
 		return file.Close()
 	})
 
@@ -186,16 +193,20 @@ func (app *Application) InitializeLogs() error {
 	return nil
 }
 
-func (app *Application) AddCloser(closer func(ctx context.Context) error) {
-	app.closers = append(app.closers, closer)
+func (app *Application) AddCloser(name string, closer func(ctx context.Context) error) {
+	app.closers = append(app.closers, closerEntry{name: name, fn: closer})
 }
 
 func (app *Application) Close(ctx context.Context) error {
 	var errs []error
 	for i := len(app.closers) - 1; i >= 0; i-- {
-		closer := app.closers[i]
-		if err := closer(ctx); err != nil {
+		entry := app.closers[i]
+		fmt.Fprintf(os.Stderr, "[Closer Trace] Running closer: %s\n", entry.name)
+		if err := entry.fn(ctx); err != nil {
+			fmt.Fprintf(os.Stderr, "[Closer Trace] Closer %s failed: %v\n", entry.name, err)
 			errs = append(errs, err)
+		} else {
+			fmt.Fprintf(os.Stderr, "[Closer Trace] Closer %s succeeded\n", entry.name)
 		}
 	}
 	return errors.Join(errs...)
