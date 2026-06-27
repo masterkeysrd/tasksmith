@@ -39,7 +39,7 @@ func TestWorkspace_Presets(t *testing.T) {
 		"ls", "view", "write", "grep", "glob", "remove", "edit",
 		"fetch", "web_fetch", "web_search", "download",
 		"bash",
-		"lsp_diagnostics", "lsp_search", "lsp_restart",
+		"lsp_diagnostics", "lsp_symbols", "lsp_restart",
 		"mcp_read_resources",
 	}
 

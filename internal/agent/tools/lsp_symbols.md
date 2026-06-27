@@ -2,7 +2,7 @@
 apiVersion: warp/v1alpha1
 kind: Tool
 metadata:
-  name: lsp_search
+  name: lsp_symbols
   labels:
     category: lsp
 spec:
@@ -59,4 +59,11 @@ spec:
                       type: integer
                       description: Zero-based character offset.
 ---
-Search using LSP.
+Search for symbol declarations across the workspace by name. Returns the declaration location, kind, and container for each match. Prefer this over `grep` for navigating to a known symbol — it is language-aware and does not require knowing the exact file.
+
+<guidelines>
+- Supports partial and fuzzy matching — `MultiEd` will find `MultiEdit`.
+- Results are declarations only; use `lsp_inspect` to get the full picture including references and signature.
+- If results are ambiguous (e.g. many symbols share a name), make the query more specific (e.g. include the package or container name).
+- `range` positions are zero-based — add 1 to `line` to get the line number for `view`.
+</guidelines>

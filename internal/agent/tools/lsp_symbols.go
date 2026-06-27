@@ -9,34 +9,34 @@ import (
 	"github.com/masterkeysrd/loom/message"
 )
 
-// LspSearch searches using LSP.
-func (h *ToolHandlers) LspSearch(ctx context.Context, in LspSearchArgs) (LspSearchOutput, error) {
+// LspSymbols searches using LSP.
+func (h *ToolHandlers) LspSymbols(ctx context.Context, in LspSymbolsArgs) (LspSymbolsOutput, error) {
 	if h.LspManager == nil {
-		return LspSearchOutput{}, fmt.Errorf("LSP manager is not initialized")
+		return LspSymbolsOutput{}, fmt.Errorf("LSP manager is not initialized")
 	}
 	client, err := h.LspManager.GetClient(ctx, h.CWD)
 	if err != nil {
-		return LspSearchOutput{}, fmt.Errorf("failed to get LSP client: %w", err)
+		return LspSymbolsOutput{}, fmt.Errorf("failed to get LSP client: %w", err)
 	}
 
 	results, err := client.Search(ctx, in.Query)
 	if err != nil {
-		return LspSearchOutput{}, err
+		return LspSymbolsOutput{}, err
 	}
 
-	outputResults := make([]LspSearchOutputResultsItem, len(results))
+	outputResults := make([]LspSymbolsOutputResultsItem, len(results))
 	for i, sym := range results {
 		var docURI string
-		var rangeVal LspSearchOutputResultsItemRange
+		var rangeVal LspSymbolsOutputResultsItemRange
 
 		if sym.Location.Location != nil {
 			docURI = sym.Location.Location.URI
-			rangeVal = LspSearchOutputResultsItemRange{
-				Start: LspSearchOutputResultsItemRangeStart{
+			rangeVal = LspSymbolsOutputResultsItemRange{
+				Start: LspSymbolsOutputResultsItemRangeStart{
 					Line:      int(sym.Location.Location.Range.Start.Line),
 					Character: int(sym.Location.Location.Range.Start.Character),
 				},
-				End: LspSearchOutputResultsItemRangeEnd{
+				End: LspSymbolsOutputResultsItemRangeEnd{
 					Line:      int(sym.Location.Location.Range.End.Line),
 					Character: int(sym.Location.Location.Range.End.Character),
 				},
@@ -118,7 +118,7 @@ func (h *ToolHandlers) LspSearch(ctx context.Context, in LspSearchArgs) (LspSear
 			kindStr = "TypeParameter"
 		}
 
-		outputResults[i] = LspSearchOutputResultsItem{
+		outputResults[i] = LspSymbolsOutputResultsItem{
 			Name:          sym.Name,
 			Kind:          kindStr,
 			Path:          relPath,
@@ -127,11 +127,11 @@ func (h *ToolHandlers) LspSearch(ctx context.Context, in LspSearchArgs) (LspSear
 		}
 	}
 
-	return LspSearchOutput{Results: outputResults}, nil
+	return LspSymbolsOutput{Results: outputResults}, nil
 }
 
 // TextContent implements the loom tool.TextContentProvider interface.
-func (o LspSearchOutput) TextContent() string {
+func (o LspSymbolsOutput) TextContent() string {
 	if len(o.Results) == 0 {
 		return "No symbols found matching the query."
 	}
@@ -173,7 +173,7 @@ func (o LspSearchOutput) TextContent() string {
 }
 
 // ToolContent implements the loom tool.ContentProvider interface.
-func (o LspSearchOutput) ToolContent() message.Content {
+func (o LspSymbolsOutput) ToolContent() message.Content {
 	return message.Content{
 		&message.TextBlock{
 			Text: o.TextContent(),
