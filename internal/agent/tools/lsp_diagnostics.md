@@ -62,4 +62,12 @@ spec:
         type: boolean
         description: True if diagnostics were truncated due to length limits.
 ---
-Get LSP diagnostics.
+Retrieve LSP diagnostics (errors, warnings, hints) for a file or directory. Use this to verify correctness after edits or to investigate existing issues before making changes.
+
+<guidelines>
+- `path` can be a single file or a directory — directory mode aggregates diagnostics across all open files within it.
+- Severity levels: `error` (must fix), `warning` (should review), `info`, `hint`.
+- Diagnostics are also returned inline by `edit`, `multi_edit`, and `write` — call this tool explicitly when you need a broader view or want to check before editing.
+- If the LSP server has just started, diagnostics may be incomplete; use `lsp_restart` if results appear stale or empty unexpectedly.
+- `range` positions are zero-based — add 1 to `line` to get the line number for `view`.
+</guidelines>

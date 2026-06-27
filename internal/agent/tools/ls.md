@@ -71,10 +71,17 @@ spec:
         type: boolean
         description: True when the result was capped by the limit and more entries exist.
 ---
-List files in a directory in ls -l format.
+List the direct contents of a directory. Use `view` for file contents and `glob`/`grep` for recursive or pattern-based searches across the workspace.
 
-Entries are filtered using a two-tier ignore system:
-1. **Predefined ignores**: `.git`, `.env`, `node_modules`, `__pycache__`, `vendor`, `dist`, `build`, `target`, `.next`, `.nuxt`, `.DS_Store`, `.venv`, `venv`, `coverage`, and similar noise directories are always excluded.
-2. **Gitignore rules**: if the target path is inside a git repository, all `.gitignore` files from the repo root down to the target directory are loaded and applied (full git semantics including nested `.gitignore` files).
+<ignore_rules>
+Entries are filtered through two tiers automatically:
 
-Use `pattern` to narrow results by filename glob and `type` to restrict to files, directories, or symlinks. Use `limit` (default 200) and check `truncated` + `total_count` to paginate large directories.
+- **Predefined**: `.git`, `node_modules`, `vendor`, `dist`, `build`, `.next`, `.venv`, `__pycache__`, `.DS_Store`, and similar noise directories are always excluded.
+- **Gitignore**: all `.gitignore` files from the repo root down to the target directory are applied (full git semantics).
+</ignore_rules>
+
+<guidelines>
+- Use `pattern` to filter entries by filename glob (e.g. `*.go`, `test_*`).
+- Use `type` to restrict results to `file`, `dir`, or `symlink`.
+- If `truncated` is true, increase `limit` or narrow with `pattern`/`type` to see the rest.
+</guidelines>

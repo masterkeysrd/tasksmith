@@ -25,4 +25,9 @@ spec:
         type: boolean
         description: Whether reading the resource succeeded.
 ---
-Read resources from MCP.
+Read the content of a specific MCP (Model Context Protocol) resource.
+
+<guidelines>
+- Use this to fetch the data exposed by an MCP resource.
+- You must provide the exact `uri` discovered via the `mcp_list_resources` tool.
+</guidelines>

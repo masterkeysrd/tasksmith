@@ -47,4 +47,4 @@ spec:
         type: string
         description: LSP diagnostics for this file.
 ---
-Edit a file by replacing a target block of text with a replacement block.
+Edit a file by replacing a target block of text with a replacement. You MUST `view` the file first — unviewed or externally modified files will be rejected. The `target` must be copied verbatim from the file (exact whitespace and indentation) and must be unique unless `replace_all` is set.

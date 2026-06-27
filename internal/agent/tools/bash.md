@@ -45,7 +45,21 @@ spec:
         type: string
         description: A human-readable description of the execution status.
 ---
-Execute a bash command. If it takes longer than wait_ms, it automatically transitions to a background task.
+Execute a bash command. If the command takes longer than `wait_ms`, it transitions to a background task and returns a `taskId`.
 
-IMPORTANT: Do NOT run commands in the background of the shell yourself (e.g. by appending '&' or using background commands). The TaskManager handles background execution automatically. If you background the command yourself, the TaskManager will immediately mark it as finished and lose track of it, preventing you from managing or stopping it.
+<background_execution>
+- Never append `&` or background commands yourself — the TaskManager handles it automatically.
+- Self-backgrounded commands are immediately lost and cannot be managed or stopped.
+</background_execution>
 
+<scheduling>
+- For long-running processes (dev servers, watchers, builds), set a low `wait_ms` (e.g. 1000–3000) to transition quickly.
+- Use the `tasks` tool to monitor (`status`), list (`list`), or terminate (`kill`) background tasks.
+</scheduling>
+
+<cross_platform>
+- Prefer POSIX syntax: `[ ]` over `[[ ]]`, `$(...)` over backticks.
+- Avoid GNU-specific flags; use `uname` to detect the OS when behavior differs (e.g. `sed -i ''` on macOS vs `sed -i` on Linux).
+- Use `command -v` instead of `which` to check for executables.
+- Do not rely on shell aliases or user profiles; use full paths or explicit `env` invocations.
+</cross_platform>

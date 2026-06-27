@@ -72,4 +72,22 @@ spec:
         type: string
         description: "A human-readable result or error message."
 ---
-Manage and monitor background tasks.
+Manage and monitor background tasks created by the `bash` tool.
+
+<actions>
+- `list` — list all background tasks in the session with their status and exit codes.
+- `status` — retrieve the current state and log tail of a specific task; use `limit` to control how many lines are returned.
+- `kill` — terminate a running task.
+</actions>
+
+<when_to_use>
+- After launching a long-running command with `bash`, use `status` to check progress or wait for completion.
+- Use `list` to get an overview of all running and finished tasks before starting new ones.
+- Use `kill` to stop a task that is stuck, no longer needed, or producing errors.
+</when_to_use>
+
+<guidelines>
+- Do not poll `status` in a tight loop; wait for output or a reasonable interval before checking again.
+- A task with status `completed` and `exitCode` != 0 means it finished with an error — check `stderrTail` for details.
+- `taskId` is returned by `bash` when a command transitions to background; always save it if you need to track the task.
+</guidelines>

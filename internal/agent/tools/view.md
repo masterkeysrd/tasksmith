@@ -53,9 +53,10 @@ spec:
         type: string
         description: LSP diagnostics for this file.
 ---
-Reads the contents of a file.
+Read the contents of a file. Also registers the file as known in the session, which is required before using `edit`, `multi_edit`, or `write` on existing files. Renders images inline. For directories, use `ls` instead.
 
-Important Usage Rules:
-- Large files will be automatically truncated to fit your context window.
-- Extremely long single lines (like base64 strings or minified code) will be automatically omitted to protect your context.
-- If the output ends with a [SYSTEM NOTE] stating the file was truncated, do not assume you have the full file context. You must call `view` again using the `start_line` parameter provided in the system note to paginate and read the remainder of the file before making final decisions or edits.
+<guidelines>
+- Use `start_line` and `end_line` to read a specific range; omit both to read from the beginning.
+- If `truncated` is true, a `[SYSTEM NOTE]` at the end will provide the next `start_line` — paginate with another `view` call before making edits or decisions.
+- Extremely long single lines (e.g. base64 strings, minified code) are automatically omitted to protect context.
+</guidelines>

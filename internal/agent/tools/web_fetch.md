@@ -38,4 +38,10 @@ spec:
         type: boolean
         description: Whether the fetched file is binary.
 ---
-Fetch a web page content.
+Fetch the full content of a URL, returned as converted text. Use this to read a specific page in full after finding it via `web_search`, or to fetch any known URL directly.
+
+<guidelines>
+- If `truncated` is true, the content was cut due to size limits — focus on the most relevant section.
+- Binary files (e.g. images, PDFs) are stored at `cached_path` rather than returned inline.
+- Does not execute JavaScript; pages that require it may return incomplete content.
+</guidelines>

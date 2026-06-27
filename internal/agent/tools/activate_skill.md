@@ -31,15 +31,15 @@ spec:
         type: string
         description: "A human-readable result or error message."
 ---
-# Activate Skill
+Load specialized instructions for a skill into the conversation context.
 
-Use this tool to dynamically load specialized domain-specific instructions, conventions, style guides, and scripts into your conversation context.
+<when_to_use>
+- Check the **Available Skills** in your system prompt — each has a name and trigger description.
+- If your task matches a skill's trigger, you MUST call this before proceeding.
+- Call early in your plan so the guidelines are active when you do the work.
+</when_to_use>
 
-## When to Call
-- Look at the **Available Skills** section in your system prompt. Every skill lists a name and a description that acts as a trigger.
-- If your current objective or any subtask involves the concepts mentioned in a skill's trigger description, you **MUST** call `activate_skill` to load its instructions before proceeding with the task.
-- Call this tool early in your plan so that the guidelines are active when you write code.
-
-## Interpreting Output
-- This tool returns the full rendered text of the skill's instructions, which will automatically be injected into your conversation history. Read these instructions carefully.
-- The tool also returns the absolute directory `path` where the skill is located. You can run scripts from its `scripts/` directory or read files from its `references/` or `assets/` subdirectories by using standard shell/view tools relative to this absolute path.
+<guidelines>
+- The returned `instructions` are automatically injected into context — read them carefully before continuing.
+- Use the returned `path` to access the skill's subdirectories with standard tools if needed.
+</guidelines>

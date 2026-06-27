@@ -23,4 +23,4 @@ spec:
         type: string
         description: Description of the restart outcome.
 ---
-Restart LSP server.
+Restart an LSP server. Use when `lsp_diagnostics` returns stale, empty, or unexpected results. Pass the server name as registered in the workspace (e.g. `gopls`, `typescript-language-server`).

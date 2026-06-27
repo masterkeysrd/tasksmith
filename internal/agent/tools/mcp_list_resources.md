@@ -44,4 +44,9 @@ spec:
         type: string
         description: Error message if the operation failed.
 ---
-List resources from MCP servers.
+List available resources from connected MCP (Model Context Protocol) servers.
+
+<guidelines>
+- Use this to discover datasets, files, or state exposed by connected MCP servers.
+- You can filter by `server_name` or omit it to list resources from all servers.
+</guidelines>

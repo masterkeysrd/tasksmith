@@ -36,4 +36,10 @@ spec:
         type: string
         description: Cached path in workspace session storage.
 ---
-Fetch a URL.
+Make an HTTP GET request to a URL and return the response content. Prefer `web_fetch` for reading web pages — use this tool when you need raw control over the output format or are fetching non-HTML resources (e.g. JSON APIs, XML feeds, plain text files).
+
+<guidelines>
+- `format` controls how the response is returned: `text` (default), `markdown` (HTML converted), or `html` (raw markup).
+- If `truncated` is true, the full content has been saved to `cached_path` — read it from there rather than relying on the inline response.
+- Check `status` for HTTP errors (4xx/5xx) before using the content.
+</guidelines>

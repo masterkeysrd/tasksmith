@@ -38,4 +38,10 @@ spec:
         type: string
         description: A human-readable description of the execution status.
 ---
-Download a file from a URL. If it takes longer than wait_ms, it automatically transitions to a background task.
+Download a file from a URL to the local filesystem. If the download takes longer than `wait_ms`, it transitions to a background task and returns a `taskId` — use the `tasks` tool to monitor progress.
+
+<guidelines>
+- `destination` defaults to the filename extracted from the URL, saved in the workspace root.
+- For large files, set a low `wait_ms` to transition to background quickly and avoid blocking.
+- Check `size_bytes` in the result to confirm the full file was received.
+</guidelines>

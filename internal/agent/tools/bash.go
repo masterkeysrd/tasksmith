@@ -484,8 +484,8 @@ func newChangeDetector(cwd string) *bashChangeDetector {
 
 func parseGitStatusLines(statusOutput string) map[string]string {
 	m := make(map[string]string)
-	lines := strings.Split(statusOutput, "\n")
-	for _, l := range lines {
+	lines := strings.SplitSeq(statusOutput, "\n")
+	for l := range lines {
 		if len(l) < 4 {
 			continue
 		}

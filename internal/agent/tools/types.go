@@ -4,18 +4,18 @@ package tools
 
 // ActivateSkillArgs defines the arguments for the "activate_skill" tool.
 //
-// # Activate Skill
+// Load specialized instructions for a skill into the conversation context.
 //
-// Use this tool to dynamically load specialized domain-specific instructions, conventions, style guides, and scripts into your conversation context.
+// <when_to_use>
+// - Check the **Available Skills** in your system prompt — each has a name and trigger description.
+// - If your task matches a skill's trigger, you MUST call this before proceeding.
+// - Call early in your plan so the guidelines are active when you do the work.
+// </when_to_use>
 //
-// ## When to Call
-// - Look at the **Available Skills** section in your system prompt. Every skill lists a name and a description that acts as a trigger.
-// - If your current objective or any subtask involves the concepts mentioned in a skill's trigger description, you **MUST** call `activate_skill` to load its instructions before proceeding with the task.
-// - Call this tool early in your plan so that the guidelines are active when you write code.
-//
-// ## Interpreting Output
-// - This tool returns the full rendered text of the skill's instructions, which will automatically be injected into your conversation history. Read these instructions carefully.
-// - The tool also returns the absolute directory `path` where the skill is located. You can run scripts from its `scripts/` directory or read files from its `references/` or `assets/` subdirectories by using standard shell/view tools relative to this absolute path.
+// <guidelines>
+// - The returned `instructions` are automatically injected into context — read them carefully before continuing.
+// - Use the returned `path` to access the skill's subdirectories with standard tools if needed.
+// </guidelines>
 type ActivateSkillArgs struct {
 	// Skill: The name of the skill to activate (e.g. 'git-expert').
 	Skill string `json:"skill" jsonschema:"The name of the skill to activate (e.g. 'git-expert')."`
@@ -163,9 +163,24 @@ type AskQuestionOutput struct {
 
 // BashArgs defines the arguments for the "bash" tool.
 //
-// Execute a bash command. If it takes longer than wait_ms, it automatically transitions to a background task.
+// Execute a bash command. If the command takes longer than `wait_ms`, it transitions to a background task and returns a `taskId`.
 //
-// IMPORTANT: Do NOT run commands in the background of the shell yourself (e.g. by appending '&' or using background commands). The TaskManager handles background execution automatically. If you background the command yourself, the TaskManager will immediately mark it as finished and lose track of it, preventing you from managing or stopping it.
+// <background_execution>
+// - Never append `&` or background commands yourself — the TaskManager handles it automatically.
+// - Self-backgrounded commands are immediately lost and cannot be managed or stopped.
+// </background_execution>
+//
+// <scheduling>
+// - For long-running processes (dev servers, watchers, builds), set a low `wait_ms` (e.g. 1000–3000) to transition quickly.
+// - Use the `tasks` tool to monitor (`status`), list (`list`), or terminate (`kill`) background tasks.
+// </scheduling>
+//
+// <cross_platform>
+// - Prefer POSIX syntax: `[ ]` over `[[ ]]`, `$(...)` over backticks.
+// - Avoid GNU-specific flags; use `uname` to detect the OS when behavior differs (e.g. `sed -i ”` on macOS vs `sed -i` on Linux).
+// - Use `command -v` instead of `which` to check for executables.
+// - Do not rely on shell aliases or user profiles; use full paths or explicit `env` invocations.
+// </cross_platform>
 type BashArgs struct {
 	// Command: Bash command to execute.
 	Command string `json:"command" jsonschema:"Bash command to execute."`
@@ -195,7 +210,13 @@ type BashOutput struct {
 
 // DownloadArgs defines the arguments for the "download" tool.
 //
-// Download a file from a URL. If it takes longer than wait_ms, it automatically transitions to a background task.
+// Download a file from a URL to the local filesystem. If the download takes longer than `wait_ms`, it transitions to a background task and returns a `taskId` — use the `tasks` tool to monitor progress.
+//
+// <guidelines>
+// - `destination` defaults to the filename extracted from the URL, saved in the workspace root.
+// - For large files, set a low `wait_ms` to transition to background quickly and avoid blocking.
+// - Check `size_bytes` in the result to confirm the full file was received.
+// </guidelines>
 type DownloadArgs struct {
 	// Destination: Local file path to save the downloaded file (optional, defaults to the filename in the URL in workspace root).
 	Destination string `json:"destination,omitempty" jsonschema:"Local file path to save the downloaded file (optional, defaults to the filename in the URL in workspace root)."`
@@ -221,7 +242,7 @@ type DownloadOutput struct {
 
 // EditArgs defines the arguments for the "edit" tool.
 //
-// Edit a file by replacing a target block of text with a replacement block.
+// Edit a file by replacing a target block of text with a replacement. You MUST `view` the file first — unviewed or externally modified files will be rejected. The `target` must be copied verbatim from the file (exact whitespace and indentation) and must be unique unless `replace_all` is set.
 type EditArgs struct {
 	// Path: Path to the file.
 	Path string `json:"path" jsonschema:"Path to the file."`
@@ -255,7 +276,13 @@ type EditOutput struct {
 
 // FetchArgs defines the arguments for the "fetch" tool.
 //
-// Fetch a URL.
+// Make an HTTP GET request to a URL and return the response content. Prefer `web_fetch` for reading web pages — use this tool when you need raw control over the output format or are fetching non-HTML resources (e.g. JSON APIs, XML feeds, plain text files).
+//
+// <guidelines>
+// - `format` controls how the response is returned: `text` (default), `markdown` (HTML converted), or `html` (raw markup).
+// - If `truncated` is true, the full content has been saved to `cached_path` — read it from there rather than relying on the inline response.
+// - Check `status` for HTTP errors (4xx/5xx) before using the content.
+// </guidelines>
 type FetchArgs struct {
 	// Format: Output format. Must be one of text, markdown, html. Defaults to text.
 	Format string `json:"format,omitempty" jsonschema:"Output format. Must be one of text, markdown, html. Defaults to text."`
@@ -279,7 +306,15 @@ type FetchOutput struct {
 
 // GlobArgs defines the arguments for the "glob" tool.
 //
-// Find files matching a glob pattern.
+// Find files matching a glob pattern. Prefer this over `bash` (e.g. `find`, `ls`) for file discovery — it is faster, safer, and automatically respects `.gitignore` rules.
+//
+// <guidelines>
+// - A bare `*` is automatically expanded to `**/*` — it will match all files recursively.
+// - Use `**` for explicit recursive matching (e.g. `**/*.go`, `src/**/*.ts`).
+// - Use `path` to scope the search to a subdirectory instead of the entire workspace.
+// - If `truncated` is true, results were capped — narrow the pattern or scope with `path`.
+// - Combine with `grep` to first find files then search their contents.
+// </guidelines>
 type GlobArgs struct {
 	// Path: Base directory to search from. Defaults to the workspace directory.
 	Path string `json:"path,omitempty" jsonschema:"Base directory to search from. Defaults to the workspace directory."`
@@ -299,10 +334,22 @@ type GlobOutput struct {
 
 // GrepArgs defines the arguments for the "grep" tool.
 //
-// Search for a pattern in files.
+// Search for a regex pattern across files. Prefer this over `bash grep`/`bash rg` — it is faster, respects `.gitignore`, and returns structured results with file paths and line numbers.
+//
+// <guidelines>
+// - `path` is optional — omit it to search the entire workspace.
+// - `pattern` is a regex; escape special characters as needed (e.g. `\.` for a literal dot) — or set `literal: true` to skip escaping entirely.
+// - Use `include` to restrict the search to specific file types (e.g. `*.go`, `**/*.ts`).
+// - If `truncated` is true, narrow the pattern or scope `path` to a subdirectory.
+// - Use `glob` first to find relevant files, then `grep` to search within them.
+// </guidelines>
 type GrepArgs struct {
-	// Path: Directory or file to search in.
-	Path string `json:"path" jsonschema:"Directory or file to search in."`
+	// Include: Glob pattern to restrict which files are searched (e.g. "*.go", "**/*.ts").
+	Include string `json:"include,omitempty" jsonschema:"Glob pattern to restrict which files are searched (e.g. \"*.go\", \"**/*.ts\")."`
+	// Literal: If true, treats the pattern as a fixed string instead of a regex. No escaping needed.
+	Literal bool `json:"literal,omitempty" jsonschema:"If true, treats the pattern as a fixed string instead of a regex. No escaping needed."`
+	// Path: Directory or file to search in. Defaults to the workspace root.
+	Path string `json:"path,omitempty" jsonschema:"Directory or file to search in. Defaults to the workspace root."`
 	// Pattern: Regex pattern to search for.
 	Pattern string `json:"pattern" jsonschema:"Regex pattern to search for."`
 }
@@ -328,13 +375,20 @@ type GrepOutputMatchesItem struct {
 
 // LsArgs defines the arguments for the "ls" tool.
 //
-// List files in a directory in ls -l format.
+// List the direct contents of a directory. Use `view` for file contents and `glob`/`grep` for recursive or pattern-based searches across the workspace.
 //
-// Entries are filtered using a two-tier ignore system:
-// 1. **Predefined ignores**: `.git`, `.env`, `node_modules`, `__pycache__`, `vendor`, `dist`, `build`, `target`, `.next`, `.nuxt`, `.DS_Store`, `.venv`, `venv`, `coverage`, and similar noise directories are always excluded.
-// 2. **Gitignore rules**: if the target path is inside a git repository, all `.gitignore` files from the repo root down to the target directory are loaded and applied (full git semantics including nested `.gitignore` files).
+// <ignore_rules>
+// Entries are filtered through two tiers automatically:
 //
-// Use `pattern` to narrow results by filename glob and `type` to restrict to files, directories, or symlinks. Use `limit` (default 200) and check `truncated` + `total_count` to paginate large directories.
+// - **Predefined**: `.git`, `node_modules`, `vendor`, `dist`, `build`, `.next`, `.venv`, `__pycache__`, `.DS_Store`, and similar noise directories are always excluded.
+// - **Gitignore**: all `.gitignore` files from the repo root down to the target directory are applied (full git semantics).
+// </ignore_rules>
+//
+// <guidelines>
+// - Use `pattern` to filter entries by filename glob (e.g. `*.go`, `test_*`).
+// - Use `type` to restrict results to `file`, `dir`, or `symlink`.
+// - If `truncated` is true, increase `limit` or narrow with `pattern`/`type` to see the rest.
+// </guidelines>
 type LsArgs struct {
 	// Limit: Maximum number of entries to return. Defaults to 200.
 	Limit int `json:"limit,omitempty" jsonschema:"Maximum number of entries to return. Defaults to 200."`
@@ -383,7 +437,15 @@ type LsOutputFilesItem struct {
 
 // LspDiagnosticsArgs defines the arguments for the "lsp_diagnostics" tool.
 //
-// Get LSP diagnostics.
+// Retrieve LSP diagnostics (errors, warnings, hints) for a file or directory. Use this to verify correctness after edits or to investigate existing issues before making changes.
+//
+// <guidelines>
+// - `path` can be a single file or a directory — directory mode aggregates diagnostics across all open files within it.
+// - Severity levels: `error` (must fix), `warning` (should review), `info`, `hint`.
+// - Diagnostics are also returned inline by `edit`, `multi_edit`, and `write` — call this tool explicitly when you need a broader view or want to check before editing.
+// - If the LSP server has just started, diagnostics may be incomplete; use `lsp_restart` if results appear stale or empty unexpectedly.
+// - `range` positions are zero-based — add 1 to `line` to get the line number for `view`.
+// </guidelines>
 type LspDiagnosticsArgs struct {
 	// Path: Path to the file or directory.
 	Path string `json:"path" jsonschema:"Path to the file or directory."`
@@ -434,9 +496,58 @@ type LspDiagnosticsOutputDiagnosticsItemRangeStart struct {
 	Line int `json:"line,omitempty" jsonschema:"Zero-based line number."`
 }
 
+// LspInspectArgs defines the arguments for the "lsp_inspect" tool.
+//
+// Perform a deep-dive inspection on a specific symbol (function, class, struct, interface, variable) to get its signature, documentation, declaration, type definition, and references/implementations all in one call.
+//
+// <guidelines>
+// - Use this when you know a symbol exists and want to understand how it works or where it is used.
+// - The inline response is highly compact and limits the number of docs/references shown to save tokens.
+// - **Critical:** A complete, untruncated markdown report is automatically saved to disk. Check the `full_report_path` field and use the `view` tool on that file if you need to read the complete docs or see every single reference.
+// </guidelines>
+type LspInspectArgs struct {
+	// Query: The name of the symbol to inspect (e.g. "MultiEdit", "LspManager").
+	Query string `json:"query" jsonschema:"The name of the symbol to inspect (e.g. \"MultiEdit\", \"LspManager\")."`
+}
+
+// LspInspectOutput defines the output returned by the "lsp_inspect" tool.
+type LspInspectOutput struct {
+	// Results: Detailed inspection reports for the top matches.
+	Results []LspInspectOutputResultsItem `json:"results,omitempty" jsonschema:"Detailed inspection reports for the top matches."`
+	// TotalMatches: Total number of symbols matching the query. Only the top few are deeply inspected.
+	TotalMatches int `json:"total_matches,omitempty" jsonschema:"Total number of symbols matching the query. Only the top few are deeply inspected."`
+}
+
+type LspInspectOutputResultsItem struct {
+	// DeclaredAt: File path and line where the symbol is declared.
+	DeclaredAt string `json:"declared_at,omitempty" jsonschema:"File path and line where the symbol is declared."`
+	// Docs: Documentation string for the symbol.
+	Docs string `json:"docs,omitempty" jsonschema:"Documentation string for the symbol."`
+	// DocsTruncated: True if the documentation was truncated for the inline response.
+	DocsTruncated bool `json:"docs_truncated,omitempty" jsonschema:"True if the documentation was truncated for the inline response."`
+	// FullReportPath: Absolute path to the saved markdown file containing the full, untruncated report.
+	FullReportPath string `json:"full_report_path,omitempty" jsonschema:"Absolute path to the saved markdown file containing the full, untruncated report."`
+	// Implementations: List of file:line locations where the interface is implemented or base class is extended.
+	Implementations []string `json:"implementations,omitempty" jsonschema:"List of file:line locations where the interface is implemented or base class is extended."`
+	// ImplementationsTotal: Total number of implementations found.
+	ImplementationsTotal int `json:"implementations_total,omitempty" jsonschema:"Total number of implementations found."`
+	// Kind: Symbol kind (e.g. Method, Struct, Variable).
+	Kind string `json:"kind,omitempty" jsonschema:"Symbol kind (e.g. Method, Struct, Variable)."`
+	// Name: Symbol name.
+	Name string `json:"name,omitempty" jsonschema:"Symbol name."`
+	// References: List of file:line locations where the symbol is referenced.
+	References []string `json:"references,omitempty" jsonschema:"List of file:line locations where the symbol is referenced."`
+	// ReferencesTotal: Total number of references found.
+	ReferencesTotal int `json:"references_total,omitempty" jsonschema:"Total number of references found."`
+	// Signature: Code signature of the symbol.
+	Signature string `json:"signature,omitempty" jsonschema:"Code signature of the symbol."`
+	// TypeDefinedAt: File path and line where the symbol's underlying type is defined (if applicable).
+	TypeDefinedAt string `json:"type_defined_at,omitempty" jsonschema:"File path and line where the symbol's underlying type is defined (if applicable)."`
+}
+
 // LspRestartArgs defines the arguments for the "lsp_restart" tool.
 //
-// Restart LSP server.
+// Restart an LSP server. Use when `lsp_diagnostics` returns stale, empty, or unexpected results. Pass the server name as registered in the workspace (e.g. `gopls`, `typescript-language-server`).
 type LspRestartArgs struct {
 	// Server: Name of the LSP server to restart.
 	Server string `json:"server" jsonschema:"Name of the LSP server to restart."`
@@ -450,21 +561,28 @@ type LspRestartOutput struct {
 	Success bool `json:"success,omitempty" jsonschema:"Whether the LSP server restarted successfully."`
 }
 
-// LspSearchArgs defines the arguments for the "lsp_search" tool.
+// LspSymbolsArgs defines the arguments for the "lsp_symbols" tool.
 //
-// Search using LSP.
-type LspSearchArgs struct {
+// Search for symbol declarations across the workspace by name. Returns the declaration location, kind, and container for each match. Prefer this over `grep` for navigating to a known symbol — it is language-aware and does not require knowing the exact file.
+//
+// <guidelines>
+// - Supports partial and fuzzy matching — `MultiEd` will find `MultiEdit`.
+// - Results are declarations only; use `lsp_inspect` to get the full picture including references and signature.
+// - If results are ambiguous (e.g. many symbols share a name), make the query more specific (e.g. include the package or container name).
+// - `range` positions are zero-based — add 1 to `line` to get the line number for `view`.
+// </guidelines>
+type LspSymbolsArgs struct {
 	// Query: Search query.
 	Query string `json:"query" jsonschema:"Search query."`
 }
 
-// LspSearchOutput defines the output returned by the "lsp_search" tool.
-type LspSearchOutput struct {
+// LspSymbolsOutput defines the output returned by the "lsp_symbols" tool.
+type LspSymbolsOutput struct {
 	// Results: List of LSP search results.
-	Results []LspSearchOutputResultsItem `json:"results,omitempty" jsonschema:"List of LSP search results."`
+	Results []LspSymbolsOutputResultsItem `json:"results,omitempty" jsonschema:"List of LSP search results."`
 }
 
-type LspSearchOutputResultsItem struct {
+type LspSymbolsOutputResultsItem struct {
 	// ContainerName: Name of the parent container symbol.
 	ContainerName string `json:"container_name,omitempty" jsonschema:"Name of the parent container symbol."`
 	// Kind: Symbol kind (e.g. Class, Method, Function).
@@ -474,19 +592,19 @@ type LspSearchOutputResultsItem struct {
 	// Path: File path containing the symbol.
 	Path string `json:"path,omitempty" jsonschema:"File path containing the symbol."`
 	// Range: The range in the file.
-	Range LspSearchOutputResultsItemRange `json:"range,omitempty" jsonschema:"The range in the file."`
+	Range LspSymbolsOutputResultsItemRange `json:"range,omitempty" jsonschema:"The range in the file."`
 }
 
 // The range in the file.
-type LspSearchOutputResultsItemRange struct {
+type LspSymbolsOutputResultsItemRange struct {
 	// End: End position.
-	End LspSearchOutputResultsItemRangeEnd `json:"end,omitempty" jsonschema:"End position."`
+	End LspSymbolsOutputResultsItemRangeEnd `json:"end,omitempty" jsonschema:"End position."`
 	// Start: Start position.
-	Start LspSearchOutputResultsItemRangeStart `json:"start,omitempty" jsonschema:"Start position."`
+	Start LspSymbolsOutputResultsItemRangeStart `json:"start,omitempty" jsonschema:"Start position."`
 }
 
 // End position.
-type LspSearchOutputResultsItemRangeEnd struct {
+type LspSymbolsOutputResultsItemRangeEnd struct {
 	// Character: Zero-based character offset.
 	Character int `json:"character,omitempty" jsonschema:"Zero-based character offset."`
 	// Line: Zero-based line number.
@@ -494,7 +612,7 @@ type LspSearchOutputResultsItemRangeEnd struct {
 }
 
 // Start position.
-type LspSearchOutputResultsItemRangeStart struct {
+type LspSymbolsOutputResultsItemRangeStart struct {
 	// Character: Zero-based character offset.
 	Character int `json:"character,omitempty" jsonschema:"Zero-based character offset."`
 	// Line: Zero-based line number.
@@ -549,7 +667,7 @@ type McpReadResourcesOutput struct {
 
 // MultiEditArgs defines the arguments for the "multi_edit" tool.
 //
-// Apply multiple, non-contiguous edits to a single file. This is highly useful for making multiple related changes across a file in a single turn.
+// Apply multiple, non-contiguous edits to a single file in a single turn. You MUST `view` the file first — unviewed or externally modified files will be rejected. Each `target` must be copied verbatim from the file (exact whitespace and indentation). Edits are applied sequentially, so order them to avoid targeting text already replaced by a prior edit.
 type MultiEditArgs struct {
 	// Edits: A list of edits to apply to the file.
 	Edits []MultiEditArgsEditsItem `json:"edits" jsonschema:"A list of edits to apply to the file."`
@@ -645,7 +763,25 @@ type ScheduleOutput struct {
 
 // TasksArgs defines the arguments for the "tasks" tool.
 //
-// Manage and monitor background tasks.
+// Manage and monitor background tasks created by the `bash` tool.
+//
+// <actions>
+// - `list` — list all background tasks in the session with their status and exit codes.
+// - `status` — retrieve the current state and log tail of a specific task; use `limit` to control how many lines are returned.
+// - `kill` — terminate a running task.
+// </actions>
+//
+// <when_to_use>
+// - After launching a long-running command with `bash`, use `status` to check progress or wait for completion.
+// - Use `list` to get an overview of all running and finished tasks before starting new ones.
+// - Use `kill` to stop a task that is stuck, no longer needed, or producing errors.
+// </when_to_use>
+//
+// <guidelines>
+// - Do not poll `status` in a tight loop; wait for output or a reasonable interval before checking again.
+// - A task with status `completed` and `exitCode` != 0 means it finished with an error — check `stderrTail` for details.
+// - `taskId` is returned by `bash` when a command transitions to background; always save it if you need to track the task.
+// </guidelines>
 type TasksArgs struct {
 	// Action: The action to perform. One of: 'list' (list all active and completed background tasks in the session), 'status' (retrieve the execution state and log tail of a specific task), 'kill' (terminate a running task).
 	Action string `json:"action" jsonschema:"The action to perform. One of: 'list' (list all active and completed background tasks in the session), 'status' (retrieve the execution state and log tail of a specific task), 'kill' (terminate a running task)."`
@@ -694,87 +830,26 @@ type TasksOutputTasksItem struct {
 
 // TodosArgs defines the arguments for the "todos" tool.
 //
-// Manages a structured task list for multi-step work. Call this tool to create, update, or complete tasks. Every call **replaces the entire task list** — always include all existing tasks when making an update.
+// Manage a structured task list for multi-step work. Every call **replaces the entire list** — always include all tasks, not just the ones being changed.
 //
-// ## How to Use
+// <when_to_use>
+// - When the user gives multi-step instructions — create the full plan upfront before doing any work.
+// - When a task starts, completes, or needs to be broken into subtasks.
+// - Skip for trivial single-step requests.
+// </when_to_use>
 //
-// Call the tool by providing an array of the **complete, updated list of tasks**. This list will overwrite the current task state entirely. Omitting a task from the array will permanently remove it. Only one task should be `in_progress` at a time to keep work focused — update immediately after state changes for accurate tracking.
+// <workflow>
+// 1. Receive request → call `todos` with all tasks as `pending`.
+// 2. Mark the first task `in_progress`, execute it, then update status.
+// 3. Only mark `completed` when fully verified — never prematurely.
+// 4. If blocked, add new tasks to unblock rather than using a blocked state.
+// </workflow>
 //
-// ## When to Use
-//
-// Use this tool whenever:
-//
-// **Initial triggers**
-// - After receiving new instructions to capture requirements
-// - When the user provides multiple tasks (numbered, comma-separated list)
-// - When the user requests todos list management
-//
-// **Creating and updating**
-// - A new task is identified or created
-// - An existing task changes status (e.g., starts, completes, gets blocked)
-// - A task's description or `active_text` needs to be updated
-//
-// **Restructuring**
-// - A task is broken down into smaller subtasks
-// - Non-trivial tasks that require careful planning and multiple operations
-//
-// **Completion**
-// - After completing a task (mark it `completed` and add any follow-up tasks)
-//
-// ## When NOT to Use
-//
-// - Trivial tasks with no organizational benefit
-// - Simple yes/no answers or single-line responses that don't require tracking
-//
-// ## Agent Self-Tracking
-//
-// You should use this tool to track your own workflow, not just tasks assigned by the user.
-// When you begin any multi-step work — including investigation, debugging, code review,
-// planning, or implementation — call `todos` with a plan before doing any
-// file reads or code changes.
-//
-// **Recommended workflow:**
-// 1. Receive the user's request
-// 2. Call `todos` to establish the full plan (all tasks as `pending`)
-// 3. Mark the first task `in_progress` and execute it
-// 4. Update statuses as you complete each step
-// 5. Only mark a task `completed` when you have verified it
-//
-// This is good practice for non-trivial work. Even investigative steps (reading files, searching
-// codebases, understanding designs) count as tasks that should be tracked. Use
-// this tool to stay organized — structured tracking is part of the work, not overhead.
-//
-// ## Task Status Values
-//
-// | Status       | Meaning                                              |
-// |--------------|------------------------------------------------------|
-// | `pending`    | The task has not been started yet.                   |
-// | `in_progress`| The task is actively being worked on.                |
-// | `completed`  | The task is finished and all requirements are met.   |
-//
-// ## State Management
-//
-// The agent is the **single source of truth** for the task list. Every invocation of this tool replaces the entire list in application state. You must always pass every task — both unchanged ones and any newly added or modified ones.
-//
-// ## Completion Requirement
-//
-// A task may only be marked `completed` when **all** of its subtasks and associated requirements have been thoroughly verified and resolved. Do not mark a task complete prematurely.
-//
-// Never mark a task as `completed` if:
-// - Tests or verification steps are failed or incomplete
-// - Implementation is partial or missing critical components
-// - Encountered unresolved errors or blockers that prevent full completion
-// - Cannot find files or dependencies required to complete the task
-//
-// ## Handling Blockers or Failures
-//
-// If a task cannot proceed or fails, do not use a blocked state. Instead, create new todos with the tasks required to unblock the work. If you cannot complete the task, leave the todos in their current state and output to the user explaining the situation.
-//
-// ## Breaking Down Tasks
-//
-// Complex or large tasks must be decomposed into smaller, actionable subtasks. When a task is broken down, add the new subtasks to the array alongside the parent task (which may be left `in_progress` or removed, depending on context).
-//
-// **IMPORTANT**: Never print or list the todos in your response text. The user already has the full list of tasks in the application state.
+// <guidelines>
+// - Only one task should be `in_progress` at a time.
+// - Never print the todo list in your response — the user sees it in the UI.
+// - Complex tasks must be broken into smaller actionable subtasks.
+// </guidelines>
 type TodosArgs struct {
 	// Todos: The complete, authoritative list of tasks. It replaces the current task list in its entirety on every update.
 	Todos []TodosArgsTodosItem `json:"todos" jsonschema:"The complete, authoritative list of tasks. It replaces the current task list in its entirety on every update."`
@@ -802,12 +877,13 @@ type TodosOutputTodosItem struct {
 
 // ViewArgs defines the arguments for the "view" tool.
 //
-// Reads the contents of a file.
+// Read the contents of a file. Also registers the file as known in the session, which is required before using `edit`, `multi_edit`, or `write` on existing files. Renders images inline. For directories, use `ls` instead.
 //
-// Important Usage Rules:
-// - Large files will be automatically truncated to fit your context window.
-// - Extremely long single lines (like base64 strings or minified code) will be automatically omitted to protect your context.
-// - If the output ends with a [SYSTEM NOTE] stating the file was truncated, do not assume you have the full file context. You must call `view` again using the `start_line` parameter provided in the system note to paginate and read the remainder of the file before making final decisions or edits.
+// <guidelines>
+// - Use `start_line` and `end_line` to read a specific range; omit both to read from the beginning.
+// - If `truncated` is true, a `[SYSTEM NOTE]` at the end will provide the next `start_line` — paginate with another `view` call before making edits or decisions.
+// - Extremely long single lines (e.g. base64 strings, minified code) are automatically omitted to protect context.
+// </guidelines>
 type ViewArgs struct {
 	// EndLine: The 1-indexed line number to stop reading at (optional).
 	EndLine int `json:"end_line,omitempty" jsonschema:"The 1-indexed line number to stop reading at (optional)."`
@@ -843,7 +919,13 @@ type ViewOutput struct {
 
 // WebFetchArgs defines the arguments for the "web_fetch" tool.
 //
-// Fetch a web page content.
+// Fetch the full content of a URL, returned as converted text. Use this to read a specific page in full after finding it via `web_search`, or to fetch any known URL directly.
+//
+// <guidelines>
+// - If `truncated` is true, the content was cut due to size limits — focus on the most relevant section.
+// - Binary files (e.g. images, PDFs) are stored at `cached_path` rather than returned inline.
+// - Does not execute JavaScript; pages that require it may return incomplete content.
+// </guidelines>
 type WebFetchArgs struct {
 	// Url: Web page URL.
 	Url string `json:"url" jsonschema:"Web page URL."`
@@ -869,7 +951,7 @@ type WebFetchOutput struct {
 
 // WebSearchArgs defines the arguments for the "web_search" tool.
 //
-// Search the web.
+// Search the web and return a list of results with titles, URLs, and snippets. Results are summaries only — use `web_fetch` on a result URL to retrieve the full page content.
 type WebSearchArgs struct {
 	// MaxResults: Maximum number of search results to return (default 10, max 20).
 	MaxResults int `json:"max_results,omitempty" jsonschema:"Maximum number of search results to return (default 10, max 20)."`
@@ -894,7 +976,7 @@ type WebSearchOutputResultsItem struct {
 
 // WriteArgs defines the arguments for the "write" tool.
 //
-// Write content to a file.
+// Write content to a file, creating it if it does not exist or overwriting it entirely if it does. You MUST `view` the file first when overwriting an existing one — externally modified files will be rejected. For partial changes to an existing file, prefer `edit` or `multi_edit` over a full rewrite.
 type WriteArgs struct {
 	// Content: Content to write.
 	Content string `json:"content" jsonschema:"Content to write."`

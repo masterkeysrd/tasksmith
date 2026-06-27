@@ -35,4 +35,4 @@ spec:
               description: "Description or snippet of the search result."
         description: Search results.
 ---
-Search the web.
+Search the web and return a list of results with titles, URLs, and snippets. Results are summaries only — use `web_fetch` on a result URL to retrieve the full page content.

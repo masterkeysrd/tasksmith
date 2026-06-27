@@ -76,33 +76,21 @@ func (h *ToolHandlers) Edit(ctx context.Context, in EditArgs) (EditOutput, error
 	}
 	content := string(data)
 
-	// Ensure Target is exactly matched in content
-	targetNorm := strings.ReplaceAll(in.Target, "\r\n", "\n")
 	contentNorm := strings.ReplaceAll(content, "\r\n", "\n")
-
-	count := strings.Count(contentNorm, targetNorm)
+	newContent, count, err := SmartReplace(contentNorm, in.Target, in.Replacement, in.ReplaceAll)
 	if count == 0 {
 		return EditOutput{
 			Path:    path,
 			Success: false,
-			Message: "edit failed: target block not found in file",
+			Message: "edit failed: target block not found in file (even with normalized whitespace matching)",
 		}, nil
 	}
-	if count > 1 && !in.ReplaceAll {
+	if err != nil {
 		return EditOutput{
 			Path:    path,
 			Success: false,
-			Message: fmt.Sprintf("edit failed: target block matches %d occurrences (must be unique or replace_all must be true)", count),
+			Message: fmt.Sprintf("edit failed: %v", err),
 		}, nil
-	}
-
-	// Perform replacement
-	replacementNorm := strings.ReplaceAll(in.Replacement, "\r\n", "\n")
-	var newContent string
-	if in.ReplaceAll {
-		newContent = strings.ReplaceAll(contentNorm, targetNorm, replacementNorm)
-	} else {
-		newContent = strings.Replace(contentNorm, targetNorm, replacementNorm, 1)
 	}
 
 	// Write new content back
