@@ -61,7 +61,14 @@ func (h *ToolHandlers) Remove(ctx context.Context, in RemoveArgs) (RemoveOutput,
 		}, fmt.Errorf("failed to access path %q: %w", path, err)
 	}
 
-	if h.FileTracker != nil && !info.IsDir() {
+	var isBinary bool
+	var mimeType string
+	if !info.IsDir() {
+		mimeType = fs.DetectMIMEType(removeAbs)
+		isBinary = fs.IsBinaryMIME(mimeType)
+	}
+
+	if h.FileTracker != nil && !info.IsDir() && !isBinary {
 		known, err := h.FileTracker.IsKnown(ctx, relSlash)
 		if err != nil {
 			return RemoveOutput{
@@ -86,15 +93,9 @@ func (h *ToolHandlers) Remove(ctx context.Context, in RemoveArgs) (RemoveOutput,
 
 	// Read content before deletion for baseline and diagnostics
 	var fileContent string
-	var isBinary bool
-	var mimeType string
-	if !info.IsDir() {
-		mimeType = fs.DetectMIMEType(removeAbs)
-		isBinary = fs.IsBinaryMIME(mimeType)
-		if !isBinary {
-			if data, err := os.ReadFile(removeAbs); err == nil {
-				fileContent = string(data)
-			}
+	if !info.IsDir() && !isBinary {
+		if data, err := os.ReadFile(removeAbs); err == nil {
+			fileContent = string(data)
 		}
 	}
 
