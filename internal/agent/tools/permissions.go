@@ -273,21 +273,20 @@ func (h *FileModificationPermissionHandler) GetPreview(ctx context.Context, req 
 	case "edit":
 		target, _ := args["target"].(string)
 		replacement, _ := args["replacement"].(string)
-		if !strings.Contains(oldContent, target) {
-			return fmt.Sprintf("Edit file %q:\nWarning: Target block not found in file.\nReplace %q\nWith %q", rawPath, target, replacement), nil
-		}
 		replaceAll, _ := args["replace_all"].(bool)
-		if replaceAll {
-			newContent = strings.ReplaceAll(oldContent, target, replacement)
-		} else {
-			newContent = strings.Replace(oldContent, target, replacement, 1)
+
+		contentNorm := strings.ReplaceAll(oldContent, "\r\n", "\n")
+		var count int
+		newContent, count, _ = SmartReplace(contentNorm, target, replacement, replaceAll)
+		if count == 0 {
+			return fmt.Sprintf("Edit file %q:\nWarning: Target block not found in file (even with smart replace).\nReplace %q\nWith %q", rawPath, target, replacement), nil
 		}
 	case "multi_edit":
 		rawEdits, ok := args["edits"].([]any)
 		if !ok {
 			return fmt.Sprintf("Multi-edit file %q", rawPath), nil
 		}
-		current := oldContent
+		current := strings.ReplaceAll(oldContent, "\r\n", "\n")
 		for _, eVal := range rawEdits {
 			eMap, ok := eVal.(map[string]any)
 			if !ok {
@@ -299,11 +298,7 @@ func (h *FileModificationPermissionHandler) GetPreview(ctx context.Context, req 
 			if target == "" {
 				continue
 			}
-			if replaceAll {
-				current = strings.ReplaceAll(current, target, replacement)
-			} else {
-				current = strings.Replace(current, target, replacement, 1)
-			}
+			current, _, _ = SmartReplace(current, target, replacement, replaceAll)
 		}
 		newContent = current
 	default:
