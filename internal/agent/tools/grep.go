@@ -54,7 +54,10 @@ func (h *ToolHandlers) Grep(ctx context.Context, in GrepArgs) (GrepOutput, error
 			relSearch = searchPath
 		}
 
-		rawMatches, err := ripgrep.Search(ctx, baseDir, relSearch, in.Pattern)
+		rawMatches, err := ripgrep.Search(ctx, baseDir, relSearch, in.Pattern, ripgrep.SearchOptions{
+			Literal: in.Literal,
+			Include: in.Include,
+		})
 		if err == nil {
 			ignorers := make(map[string]corefs.Ignorer)
 			getIgnorer := func(dir string) corefs.Ignorer {
@@ -105,9 +108,21 @@ func (h *ToolHandlers) Grep(ctx context.Context, in GrepArgs) (GrepOutput, error
 	}
 
 	// 2. Go-based regex search fallback.
-	re, err := regexp.Compile(in.Pattern)
-	if err != nil {
-		return GrepOutput{}, fmt.Errorf("invalid regex pattern: %w", err)
+	var re *regexp.Regexp
+	if !in.Literal {
+		re, err = regexp.Compile(in.Pattern)
+		if err != nil {
+			return GrepOutput{}, fmt.Errorf("invalid regex pattern: %w", err)
+		}
+	}
+
+	// Compile include glob if provided.
+	var includeGlob *corefs.Glob
+	if in.Include != "" {
+		includeGlob, err = corefs.Compile(in.Include)
+		if err != nil {
+			return GrepOutput{}, fmt.Errorf("invalid include pattern: %w", err)
+		}
 	}
 
 	ignorers := make(map[string]corefs.Ignorer)
@@ -136,6 +151,9 @@ func (h *ToolHandlers) Grep(ctx context.Context, in GrepArgs) (GrepOutput, error
 		if ig.ShouldIgnore(name, searchAbs, false) {
 			return GrepOutput{}, nil
 		}
+		if includeGlob != nil && !includeGlob.Match(name) {
+			return GrepOutput{}, nil
+		}
 
 		rel, err := filepath.Rel(baseDir, searchAbs)
 		if err != nil {
@@ -143,7 +161,7 @@ func (h *ToolHandlers) Grep(ctx context.Context, in GrepArgs) (GrepOutput, error
 		}
 		relSlash := "./" + filepath.ToSlash(rel)
 
-		fileMatches, err := searchFile(ctx, searchAbs, relSlash, re)
+		fileMatches, err := searchFile(ctx, searchAbs, relSlash, re, in.Literal, in.Pattern)
 		if err != nil {
 			return GrepOutput{}, err
 		}
@@ -191,13 +209,17 @@ func (h *ToolHandlers) Grep(ctx context.Context, in GrepArgs) (GrepOutput, error
 			return nil
 		}
 
+		if includeGlob != nil && !includeGlob.Match(name) {
+			return nil
+		}
+
 		rel, err := filepath.Rel(baseDir, path)
 		if err != nil {
 			return nil
 		}
 		relSlash := "./" + filepath.ToSlash(rel)
 
-		fileMatches, err := searchFile(ctx, path, relSlash, re)
+		fileMatches, err := searchFile(ctx, path, relSlash, re, in.Literal, in.Pattern)
 		if err != nil {
 			return nil
 		}
@@ -223,8 +245,9 @@ func (h *ToolHandlers) Grep(ctx context.Context, in GrepArgs) (GrepOutput, error
 	}, nil
 }
 
-// searchFile scans a single file line-by-line for matches against the compiled regex.
-func searchFile(ctx context.Context, path, relPath string, re *regexp.Regexp) ([]GrepOutputMatchesItem, error) {
+// searchFile scans a single file line-by-line for matches.
+// If re is non-nil, it matches via regex; otherwise it falls back to literal string search.
+func searchFile(ctx context.Context, path, relPath string, re *regexp.Regexp, literal bool, literalPattern string) ([]GrepOutputMatchesItem, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, nil
@@ -248,7 +271,13 @@ func searchFile(ctx context.Context, path, relPath string, re *regexp.Regexp) ([
 
 		lineNum++
 		text := scanner.Text()
-		if re.MatchString(text) {
+		var matched bool
+		if literal {
+			matched = strings.Contains(text, literalPattern)
+		} else {
+			matched = re.MatchString(text)
+		}
+		if matched {
 			matches = append(matches, GrepOutputMatchesItem{
 				Path:    relPath,
 				Line:    lineNum,
@@ -312,10 +341,7 @@ func (o GrepOutput) TextContent() string {
 	res := sb.String()
 	res = strings.TrimSuffix(res, "\n")
 
-	totalCount := o.TotalCount
-	if totalCount < len(o.Matches) {
-		totalCount = len(o.Matches)
-	}
+	totalCount := max(o.TotalCount, len(o.Matches))
 
 	if totalCount > maxRendered {
 		res += fmt.Sprintf("\n\n[SYSTEM NOTE: Showing %d of %d matches. Call grep again with a more specific pattern.]", maxRendered, totalCount)
