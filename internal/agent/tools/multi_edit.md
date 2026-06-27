@@ -71,4 +71,5 @@ Apply multiple, non-contiguous edits to a single file in a single turn.
 - Each `target` must be copied verbatim from the file (exact whitespace and indentation).
 - Edits are applied sequentially — order them to avoid targeting text already replaced by a prior edit.
 - For large files, use targeted `target` blocks rather than rewriting entire functions.
+- If changes are large enough to touch most of the file, prefer `write` for a clean full rewrite instead.
 </guidelines>

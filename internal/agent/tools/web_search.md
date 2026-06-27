@@ -35,4 +35,17 @@ spec:
               description: "Description or snippet of the search result."
         description: Search results.
 ---
-Search the web and return a list of results with titles, URLs, and snippets. Results are summaries only — use `web_fetch` on a result URL to retrieve the full page content.
+Search the web and return a list of results with titles, URLs, and snippets.
+
+<when-to-use>
+- Looking up external libraries, APIs, or tools you are unfamiliar with.
+- Finding documentation, changelogs, or release notes for a dependency.
+- Researching error messages or issues that are not explained by the codebase.
+- Verifying facts or current best practices that may have changed over time.
+</when-to-use>
+
+<guidelines>
+- Results are summaries only — use `web_fetch` on a result URL to retrieve the full page content.
+- Prefer codebase tools (`lsp_inspect`, `grep`, `view`) over web search for anything that can be answered from the project itself.
+</guidelines>
+

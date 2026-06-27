@@ -32,4 +32,15 @@ spec:
         type: string
         description: LSP diagnostics for this file.
 ---
-Write content to a file, creating it if it does not exist or overwriting it entirely if it does. You MUST `view` the file first when overwriting an existing one — externally modified files will be rejected. For partial changes to an existing file, prefer `edit` or `multi_edit` over a full rewrite.
+Write content to a file, creating it if it does not exist or overwriting it entirely if it does.
+
+<when-to-use>
+- Creating a new file from scratch.
+- Replacing the entire content of an existing file when most of it is changing.
+</when-to-use>
+
+<guidelines>
+- You MUST `view` the file first when overwriting an existing one — externally modified files will be rejected.
+- For partial changes to an existing file, prefer `edit` or `multi_edit` over a full rewrite.
+</guidelines>
+
