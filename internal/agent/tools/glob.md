@@ -31,4 +31,12 @@ spec:
         type: boolean
         description: True when the result was capped by the limit.
 ---
-Find files matching a glob pattern.
+Find files matching a glob pattern. Prefer this over `bash` (e.g. `find`, `ls`) for file discovery — it is faster, safer, and automatically respects `.gitignore` rules.
+
+<guidelines>
+- A bare `*` is automatically expanded to `**/*` — it will match all files recursively.
+- Use `**` for explicit recursive matching (e.g. `**/*.go`, `src/**/*.ts`).
+- Use `path` to scope the search to a subdirectory instead of the entire workspace.
+- If `truncated` is true, results were capped — narrow the pattern or scope with `path`.
+- Combine with `grep` to first find files then search their contents.
+</guidelines>

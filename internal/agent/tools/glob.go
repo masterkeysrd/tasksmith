@@ -46,18 +46,18 @@ func (h *ToolHandlers) Glob(ctx context.Context, in GlobArgs) (GlobOutput, error
 	if strings.HasPrefix(pattern, "./") {
 		pattern = pattern[2:]
 	}
-
+	// If the pattern doesn't contain a directory separator, assume the agent
+	// wants to find it anywhere in the tree (like bash find -name).
+	if !strings.Contains(pattern, "/") {
+		pattern = "**/" + pattern
+	}
 	g, err := corefs.Compile(pattern)
 	if err != nil {
 		return GlobOutput{}, fmt.Errorf("invalid pattern %q: %w", in.Pattern, err)
 	}
 
 	if ripgrep.Available() {
-		rgPattern := pattern
-		if !strings.Contains(pattern, "/") {
-			rgPattern = "/" + pattern
-		}
-		rawMatches, err := ripgrep.Glob(ctx, baseDir, in.Path, rgPattern)
+		rawMatches, err := ripgrep.Glob(ctx, baseDir, in.Path, pattern)
 		if err == nil {
 			ignorers := make(map[string]corefs.Ignorer)
 			getIgnorer := func(dir string) corefs.Ignorer {

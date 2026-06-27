@@ -36,18 +36,18 @@ func TestGlobBasic(t *testing.T) {
 
 	handlers := NewHandlers(nil, dir)
 
-	// Test 1: Match all Go files in current directory (non-recursive)
+	// Test 1: Match all Go files (recursive by default now for slash-less patterns)
 	out, err := handlers.Glob(context.Background(), GlobArgs{Pattern: "*.go"})
 	if err != nil {
 		t.Fatalf("glob failed: %v", err)
 	}
 	assertContains(t, out.Matches, "./main.go")
-	assertNotContains(t, out.Matches, "./subdir/helper.go")
+	assertContains(t, out.Matches, "./subdir/helper.go")
 	assertNotContains(t, out.Matches, "./README.md")
 	assertNotContains(t, out.Matches, "./config.json")
 	assertNotContains(t, out.Matches, "./subdir/notes.txt")
 
-	// Test 1b: Match all Go files recursively
+	// Test 1b: Match all Go files recursively (explicit)
 	outRec, err := handlers.Glob(context.Background(), GlobArgs{Pattern: "**/*.go"})
 	if err != nil {
 		t.Fatalf("glob failed: %v", err)
