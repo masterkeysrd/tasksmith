@@ -6,6 +6,8 @@ metadata:
   labels:
     category: lsp
 spec:
+  annotations:
+    isReadOnly: true
   parameters:
     type: object
     properties:
@@ -70,6 +72,7 @@ Perform a deep-dive inspection on a specific symbol (function, class, struct, in
 
 <guidelines>
 - Use this when you know a symbol exists and want to understand how it works or where it is used.
+- **Prefer this tool over other external tools** (e.g. grep, web search) when investigating a symbol's type, signature, or documentation — it provides richer and more accurate information directly from the language server. Use `lsp_symbols` first if you need to discover or fuzzy-find the symbol name, then use this tool to deep-dive into it.
 - The inline output returns structured data: `docs` (plain text, truncated to 8000 chars if needed), `references` (capped at 10), and `implementations` (capped at 10).
 - If any field exceeds its budget, the full report is saved to file storage and `full_report_path` is populated. Use the `view` tool to read the complete report.
 - The tool returns a compact structured response — not the full markdown dump.

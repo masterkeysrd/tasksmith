@@ -212,7 +212,7 @@ func TestLspTextContentProviders(t *testing.T) {
 
 	t.Run("LspDiagnosticsTruncation", func(t *testing.T) {
 		var list []LspDiagnosticsOutputDiagnosticsItem
-		for i := 0; i < 2; i++ {
+		for i := range 2 {
 			list = append(list, LspDiagnosticsOutputDiagnosticsItem{
 				Path:     "main.go",
 				Message:  fmt.Sprintf("some error message number %d which is very detailed", i),
@@ -237,7 +237,7 @@ func TestLspTextContentProviders(t *testing.T) {
 
 	t.Run("LspSymbolsTruncation", func(t *testing.T) {
 		var list []LspSymbolsOutputResultsItem
-		for i := 0; i < 200; i++ {
+		for i := range 200 {
 			list = append(list, LspSymbolsOutputResultsItem{
 				Name:          fmt.Sprintf("MySymbol%d", i),
 				Kind:          "Function",
@@ -357,18 +357,6 @@ func TestLspInspectTextContent(t *testing.T) {
 		}
 		if !strings.Contains(text, "lsp_inspect/abc123_LargeFunc.md") {
 			t.Error("expected full report path in text content")
-		}
-	})
-
-	t.Run("ToolContent", func(t *testing.T) {
-		out := LspInspectOutput{
-			Results: []LspInspectOutputResultsItem{
-				{Name: "MySymbol", Kind: "Struct", DeclaredAt: "main.go:1"},
-			},
-		}
-		content := out.ToolContent()
-		if len(content) != 1 {
-			t.Fatalf("expected 1 content block, got %d", len(content))
 		}
 	})
 }

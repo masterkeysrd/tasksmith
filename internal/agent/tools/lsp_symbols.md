@@ -6,6 +6,8 @@ metadata:
   labels:
     category: lsp
 spec:
+  annotations:
+    isReadOnly: true
   parameters:
     type: object
     properties:

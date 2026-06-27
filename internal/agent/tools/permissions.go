@@ -38,8 +38,6 @@ func init() {
 	permissions.RegisterHandler("bash", &BashPermissionHandler{})
 }
 
-// --- Common Helper Functions ---
-
 func resolveAbsPath(ctx context.Context, rawPath string) (string, error) {
 	wsCWD := permissions.GetWorkspaceCWD(ctx)
 	if wsCWD == "" {

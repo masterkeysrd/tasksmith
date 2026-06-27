@@ -7,10 +7,12 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/masterkeysrd/loom/message"
+	"github.com/masterkeysrd/loom/tool"
 	"github.com/masterkeysrd/lspx"
 	"github.com/masterkeysrd/tasksmith/internal/core/lsp"
 )
+
+var _ tool.TextContentProvider = LspDiagnosticsOutput{}
 
 const (
 	// MaxDocsChars is the maximum character budget for documentation text in the inline output.
@@ -186,7 +188,7 @@ func (h *ToolHandlers) inspectSymbol(ctx context.Context, client *lsp.Client, sy
 	}
 
 	// Inline phase: build compact output
-	inline := buildInlineOutput(sym.Name, kindStr, relPath, typeDefinedAt, signature, docs, references, implementations)
+	inline := buildInlineOutput(docs, references, implementations)
 
 	return LspInspectOutputResultsItem{
 		Name:                 sym.Name,
@@ -211,7 +213,7 @@ type inlineResult struct {
 	implementations []string
 }
 
-func buildInlineOutput(name, kind, declaredAt, typeDefinedAt, signature, docs string, references, implementations []string) inlineResult {
+func buildInlineOutput(docs string, references, implementations []string) inlineResult {
 	// Docs: plain text, truncated to budget
 	docsText := docs
 	docsTruncated := false
@@ -241,13 +243,13 @@ func buildInlineOutput(name, kind, declaredAt, typeDefinedAt, signature, docs st
 func buildFullReport(name, kind, declaredAt, typeDefinedAt, signature, docs string, references, implementations []string) string {
 	var sb strings.Builder
 
-	sb.WriteString(fmt.Sprintf("# %s (%s)\n\n", name, kind))
+	fmt.Fprintf(&sb, "# %s (%s)\n\n", name, kind)
 	sb.WriteString("```go\n")
 	sb.WriteString(signature)
 	sb.WriteString("\n```\n\n")
-	sb.WriteString(fmt.Sprintf("**Declared at:** `%s`\n\n", declaredAt))
+	fmt.Fprintf(&sb, "**Declared at:** `%s`\n\n", declaredAt)
 	if typeDefinedAt != "" {
-		sb.WriteString(fmt.Sprintf("**Type Defined at:** `%s`\n\n", typeDefinedAt))
+		fmt.Fprintf(&sb, "**Type Defined at:** `%s`\n\n", typeDefinedAt)
 	}
 
 	if docs != "" {
@@ -256,22 +258,22 @@ func buildFullReport(name, kind, declaredAt, typeDefinedAt, signature, docs stri
 		sb.WriteString("\n\n")
 	}
 
-	sb.WriteString(fmt.Sprintf("## References (%d total)\n\n", len(references)))
+	fmt.Fprintf(&sb, "## References (%d total)\n\n", len(references))
 	if len(references) == 0 {
 		sb.WriteString("No references found.\n\n")
 	} else {
 		for i, ref := range references {
-			sb.WriteString(fmt.Sprintf("%d. `%s`\n", i+1, ref))
+			fmt.Fprintf(&sb, "%d. `%s`\n", i+1, ref)
 		}
 		sb.WriteString("\n")
 	}
 
-	sb.WriteString(fmt.Sprintf("## Implementations (%d total)\n\n", len(implementations)))
+	fmt.Fprintf(&sb, "## Implementations (%d total)\n\n", len(implementations))
 	if len(implementations) == 0 {
 		sb.WriteString("No implementations found.\n\n")
 	} else {
 		for i, impl := range implementations {
-			sb.WriteString(fmt.Sprintf("%d. `%s`\n", i+1, impl))
+			fmt.Fprintf(&sb, "%d. `%s`\n", i+1, impl)
 		}
 		sb.WriteString("\n")
 	}
@@ -330,7 +332,7 @@ func extractSignature(docs string) string {
 	return ""
 }
 
-func extractLocationsFromResult(result interface{}, cwd string) []string {
+func extractLocationsFromResult(result any, cwd string) []string {
 	var locs []lspx.Location
 
 	switch r := result.(type) {
@@ -439,7 +441,7 @@ func minInt(a, b int) int {
 }
 
 func sortStrings(s []string) {
-	for i := 0; i < len(s); i++ {
+	for i := range s {
 		for j := i + 1; j < len(s); j++ {
 			if s[i] > s[j] {
 				s[i], s[j] = s[j], s[i]
@@ -464,10 +466,10 @@ func (o LspInspectOutput) TextContent() string {
 		if i > 0 {
 			sb.WriteString("\n---\n\n")
 		}
-		sb.WriteString(fmt.Sprintf("## %s (%s)\n\n", r.Name, r.Kind))
-		sb.WriteString(fmt.Sprintf("**Declared at:** `%s`\n\n", r.DeclaredAt))
+		fmt.Fprintf(&sb, "## %s (%s)\n\n", r.Name, r.Kind)
+		fmt.Fprintf(&sb, "**Declared at:** `%s`\n\n", r.DeclaredAt)
 		if r.TypeDefinedAt != "" {
-			sb.WriteString(fmt.Sprintf("**Type Defined at:** `%s`\n\n", r.TypeDefinedAt))
+			fmt.Fprintf(&sb, "**Type Defined at:** `%s`\n\n", r.TypeDefinedAt)
 		}
 		if r.Signature != "" {
 			sb.WriteString("```go\n")
@@ -485,31 +487,22 @@ func (o LspInspectOutput) TextContent() string {
 		}
 		if len(r.References) > 0 {
 			sb.WriteString("**References** (")
-			sb.WriteString(fmt.Sprintf("%d total", r.ReferencesTotal))
+			fmt.Fprintf(&sb, "%d total", r.ReferencesTotal)
 			sb.WriteString("):\n")
 			for _, ref := range r.References {
-				sb.WriteString(fmt.Sprintf("- `%s`\n", ref))
+				fmt.Fprintf(&sb, "- `%s`\n", ref)
 			}
 			sb.WriteString("\n")
 		}
 		if len(r.Implementations) > 0 {
 			sb.WriteString("**Implementations** (")
-			sb.WriteString(fmt.Sprintf("%d total", r.ImplementationsTotal))
+			fmt.Fprintf(&sb, "%d total", r.ImplementationsTotal)
 			sb.WriteString("):\n")
 			for _, impl := range r.Implementations {
-				sb.WriteString(fmt.Sprintf("- `%s`\n", impl))
+				fmt.Fprintf(&sb, "- `%s`\n", impl)
 			}
 			sb.WriteString("\n")
 		}
 	}
 	return sb.String()
-}
-
-// ToolContent implements the loom tool.ContentProvider interface.
-func (o LspInspectOutput) ToolContent() message.Content {
-	return message.Content{
-		&message.TextBlock{
-			Text: o.TextContent(),
-		},
-	}
 }
