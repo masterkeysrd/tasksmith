@@ -539,20 +539,13 @@ func quickStat(lblColor color.Color, label string, val string) kitex.Node {
 }
 
 func tabButton(tab string, activeTab string, c colors, baseStyle style.Style, activeStyle style.Style) kitex.Node {
-	styleToUse := baseStyle
-	if activeTab == tab {
-		styleToUse = style.S().
-			PaddingHorizontal(2).
-			PaddingVertical(0).
-			Bold(true).
-			Background(c.info).
-			Foreground(c.inverse)
-	}
-
+	isActive := activeTab == tab
 	return components.Button(components.ButtonProps{
-		Variant: components.ButtonText,
-		Color:   components.ButtonBase,
-		Style:   styleToUse,
+		Variant:     components.ButtonText,
+		Color:       components.ButtonBase,
+		Active:      isActive,
+		Style:       baseStyle,
+		ActiveStyle: activeStyle,
 		OnClick: func() {
 			SetActiveTab(tab)
 		},
@@ -705,9 +698,10 @@ var MetricsRow = kitex.FC("MetricsRow", func(props MetricsRowProps) kitex.Node {
 
 			if cell.Render != nil {
 				wrapperStyle := s.Display(style.DisplayFlex)
-				if col.Align == style.TextAlignCenter {
+				switch col.Align {
+				case style.TextAlignCenter:
 					wrapperStyle = wrapperStyle.JustifyContent(style.JustifyCenter)
-				} else if col.Align == style.TextAlignRight {
+				case style.TextAlignRight:
 					wrapperStyle = wrapperStyle.JustifyContent(style.JustifyEnd)
 				}
 				return kitex.Box(kitex.BoxProps{Style: wrapperStyle}, content)
@@ -791,7 +785,7 @@ func mapToolPerformanceToCells(
 	return rows
 }
 
-func drawBlockBar(pct int, maxBlocks int, color color.Color, c colors) kitex.Node {
+func drawBlockBar(pct int, _ int, color color.Color, c colors) kitex.Node {
 	return kitex.Box(kitex.BoxProps{
 		Style: style.S().
 			Display(style.DisplayFlex).
@@ -801,10 +795,7 @@ func drawBlockBar(pct int, maxBlocks int, color color.Color, c colors) kitex.Nod
 			Background(c.border),
 	},
 		kitex.If(pct > 0, func() kitex.Node {
-			valPct := pct
-			if valPct < 1 {
-				valPct = 1
-			}
+			valPct := max(pct, 1)
 			return kitex.Box(kitex.BoxProps{
 				Style: style.S().
 					Height(style.Cells(1)).
