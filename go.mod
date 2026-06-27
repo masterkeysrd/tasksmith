@@ -10,7 +10,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/jmoiron/sqlx v1.4.0
 	github.com/lrstanley/go-nf v0.0.0-20260418212552-215ab243b591
-	github.com/masterkeysrd/kite v0.0.2-0.20260626040937-2f6ff6ed6d06
+	github.com/masterkeysrd/kite v0.0.2-0.20260627042617-e3e1eb319653
 	github.com/masterkeysrd/loom v0.0.3-0.20260625175623-7cfb391c9b07
 	github.com/masterkeysrd/lspx v0.0.0-20260611065943-6cf2ef01a123
 	github.com/masterkeysrd/warp v0.0.3-0.20260625214537-f28a1c7000bc
@@ -20,6 +20,7 @@ require (
 	golang.org/x/net v0.56.0
 	gopkg.in/yaml.v3 v3.0.1
 	modernc.org/sqlite v1.52.0
+	mvdan.cc/sh/v3 v3.13.1
 )
 
 require (
