@@ -621,7 +621,12 @@ type LspSymbolsOutputResultsItemRangeStart struct {
 
 // McpListResourcesArgs defines the arguments for the "mcp_list_resources" tool.
 //
-// List resources from MCP servers.
+// List available resources from connected MCP (Model Context Protocol) servers.
+//
+// <guidelines>
+// - Use this to discover datasets, files, or state exposed by connected MCP servers.
+// - You can filter by `server_name` or omit it to list resources from all servers.
+// </guidelines>
 type McpListResourcesArgs struct {
 	// ServerName: Optional MCP server name to list resources from. If omitted, lists resources from all configured/running servers.
 	ServerName string `json:"server_name,omitempty" jsonschema:"Optional MCP server name to list resources from. If omitted, lists resources from all configured/running servers."`
@@ -651,7 +656,12 @@ type McpListResourcesOutputResourcesItem struct {
 
 // McpReadResourcesArgs defines the arguments for the "mcp_read_resources" tool.
 //
-// Read resources from MCP.
+// Read the content of a specific MCP (Model Context Protocol) resource.
+//
+// <guidelines>
+// - Use this to fetch the data exposed by an MCP resource.
+// - You must provide the exact `uri` discovered via the `mcp_list_resources` tool.
+// </guidelines>
 type McpReadResourcesArgs struct {
 	// Uri: MCP resource URI.
 	Uri string `json:"uri" jsonschema:"MCP resource URI."`
@@ -667,7 +677,14 @@ type McpReadResourcesOutput struct {
 
 // MultiEditArgs defines the arguments for the "multi_edit" tool.
 //
-// Apply multiple, non-contiguous edits to a single file in a single turn. You MUST `view` the file first — unviewed or externally modified files will be rejected. Each `target` must be copied verbatim from the file (exact whitespace and indentation). Edits are applied sequentially, so order them to avoid targeting text already replaced by a prior edit.
+// Apply multiple, non-contiguous edits to a single file in a single turn.
+//
+// <guidelines>
+// - You MUST `view` the file first — unviewed or externally modified files will be rejected.
+// - Each `target` must be copied verbatim from the file (exact whitespace and indentation).
+// - Edits are applied sequentially — order them to avoid targeting text already replaced by a prior edit.
+// - For large files, use targeted `target` blocks rather than rewriting entire functions.
+// </guidelines>
 type MultiEditArgs struct {
 	// Edits: A list of edits to apply to the file.
 	Edits []MultiEditArgsEditsItem `json:"edits" jsonschema:"A list of edits to apply to the file."`
@@ -714,6 +731,12 @@ type MultiEditOutputResultsItem struct {
 // RemoveArgs defines the arguments for the "remove" tool.
 //
 // Remove a file or directory.
+//
+// <guidelines>
+// - **Text Files**: You MUST view the contents of a text file (using the `view` tool) before deleting it. This ensures you don't accidentally delete important code you haven't inspected.
+// - **Binary Files**: The view requirement is waived for binary files (e.g., images, compiled binaries). You can delete them directly.
+// - **Directories**: To remove a directory and all its contents, you MUST set `recursive: true`. Use this with extreme caution.
+// </guidelines>
 type RemoveArgs struct {
 	// Path: Path to remove.
 	Path string `json:"path" jsonschema:"Path to remove."`

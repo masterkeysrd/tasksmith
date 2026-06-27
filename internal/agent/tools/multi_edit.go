@@ -80,30 +80,24 @@ func (h *ToolHandlers) MultiEdit(ctx context.Context, in MultiEditArgs) (MultiEd
 	results := make([]MultiEditOutputResultsItem, len(in.Edits))
 
 	for i, edit := range in.Edits {
-		targetNorm := strings.ReplaceAll(edit.Target, "\r\n", "\n")
-		count := strings.Count(contentNorm, targetNorm)
+		var err error
+		var count int
+		contentNorm, count, err = SmartReplace(contentNorm, edit.Target, edit.Replacement, edit.ReplaceAll)
 
 		if count == 0 {
 			results[i] = MultiEditOutputResultsItem{
 				Success: false,
-				Message: "target block not found in file",
+				Message: "target block not found in file (even with normalized whitespace matching)",
 			}
 			continue
 		}
 
-		if count > 1 && !edit.ReplaceAll {
+		if err != nil {
 			results[i] = MultiEditOutputResultsItem{
 				Success: false,
-				Message: fmt.Sprintf("target block matches %d occurrences (must be unique or replace_all must be true)", count),
+				Message: fmt.Sprintf("edit failed: %v", err),
 			}
 			continue
-		}
-
-		replacementNorm := strings.ReplaceAll(edit.Replacement, "\r\n", "\n")
-		if edit.ReplaceAll {
-			contentNorm = strings.ReplaceAll(contentNorm, targetNorm, replacementNorm)
-		} else {
-			contentNorm = strings.Replace(contentNorm, targetNorm, replacementNorm, 1)
 		}
 
 		results[i] = MultiEditOutputResultsItem{

@@ -64,4 +64,11 @@ spec:
         type: string
         description: LSP diagnostics for this file.
 ---
-Apply multiple, non-contiguous edits to a single file. This is highly useful for making multiple related changes across a file in a single turn.
+Apply multiple, non-contiguous edits to a single file in a single turn.
+
+<guidelines>
+- You MUST `view` the file first — unviewed or externally modified files will be rejected.
+- Each `target` must be copied verbatim from the file (exact whitespace and indentation).
+- Edits are applied sequentially — order them to avoid targeting text already replaced by a prior edit.
+- For large files, use targeted `target` blocks rather than rewriting entire functions.
+</guidelines>
