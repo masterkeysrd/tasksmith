@@ -19,7 +19,7 @@ spec:
           properties:
             target:
               type: string
-              description: The exact block of code to edit.
+              description: A block of code copied verbatim from the viewed file. Must be a unique, contiguous sequence of lines.
             replacement:
               type: string
               description: The replacement content for the target block.
@@ -68,8 +68,8 @@ Apply multiple, non-contiguous edits to a single file in a single turn.
 
 <guidelines>
 - You MUST `view` the file first — unviewed or externally modified files will be rejected.
-- Each `target` must be copied verbatim from the file (exact whitespace and indentation).
-- Edits are applied sequentially — order them to avoid targeting text already replaced by a prior edit.
-- For large files, use targeted `target` blocks rather than rewriting entire functions.
+- Each `target` must be copied character-for-character from the viewed file output — do not re-type or reformat it.
+- Edits are applied top-to-bottom — each `target` must match the file as it exists *after* prior edits. Avoid overlapping targets.
+- Keep each `target` to the smallest unique block (3-20 lines) — never target an entire function.
 - If changes are large enough to touch most of the file, prefer `write` for a clean full rewrite instead.
 </guidelines>

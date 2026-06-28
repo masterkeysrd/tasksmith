@@ -82,7 +82,7 @@ func (h *ToolHandlers) Edit(ctx context.Context, in EditArgs) (EditOutput, error
 		return EditOutput{
 			Path:    path,
 			Success: false,
-			Message: "edit failed: target block not found in file (even with normalized whitespace matching)",
+			Message: "edit failed: target block not found in file",
 		}, nil
 	}
 	if err != nil {

@@ -14,7 +14,7 @@ spec:
         description: Path to the file.
       target:
         type: string
-        description: The exact block of code to edit. This must match a unique sequence of lines in the existing file.
+        description: A block of code copied verbatim from the viewed file. Must be a unique, contiguous sequence of lines.
       replacement:
         type: string
         description: The replacement content for the target block.
@@ -51,7 +51,7 @@ Edit a file by replacing a target block of text with a replacement.
 
 <guidelines>
 - You MUST `view` the file first — unviewed or externally modified files will be rejected.
-- The `target` must be copied verbatim from the file (exact whitespace and indentation).
-- The `target` must be unique in the file unless `replace_all` is set.
+- The `target` must be copied character-for-character from the viewed file output — do not re-type or reformat it.
+- Include enough surrounding context in `target` (3-5 lines) to ensure uniqueness — avoid single-line targets.
 - If changes are large enough to touch most of the file, prefer `write` for a clean full rewrite instead.
 </guidelines>

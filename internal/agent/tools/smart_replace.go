@@ -2,6 +2,7 @@ package tools
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/pmezard/go-difflib/difflib"
@@ -15,6 +16,27 @@ func SmartReplace(content, target, replacement string, replaceAll bool) (string,
 	contentNorm := strings.ReplaceAll(content, "\r\n", "\n")
 	replacementNorm := strings.ReplaceAll(replacement, "\r\n", "\n")
 
+	if strings.TrimSpace(targetNorm) == "" {
+		return content, 0, fmt.Errorf("target block cannot be empty or all-whitespace")
+	}
+
+	// Detect original line endings
+	isCRLF := strings.Contains(content, "\r\n")
+
+	finalize := func(result string, count int, err error) (string, int, error) {
+		if err != nil {
+			return content, count, err
+		}
+		if isCRLF {
+			lines := strings.Split(result, "\n")
+			for idx, l := range lines {
+				lines[idx] = strings.TrimSuffix(l, "\r")
+			}
+			result = strings.Join(lines, "\r\n")
+		}
+		return result, count, nil
+	}
+
 	// STAGE 1: Exact Match (Fast Path)
 	count := strings.Count(contentNorm, targetNorm)
 	if count > 0 {
@@ -27,7 +49,7 @@ func SmartReplace(content, target, replacement string, replaceAll bool) (string,
 		} else {
 			newContent = strings.Replace(contentNorm, targetNorm, replacementNorm, 1)
 		}
-		return newContent, count, nil
+		return finalize(newContent, count, nil)
 	}
 
 	// STAGE 2: Normalized Whitespace Match (Line-by-line)
@@ -44,14 +66,10 @@ func SmartReplace(content, target, replacement string, replaceAll bool) (string,
 	for endIdx > startIdx && strings.TrimSpace(rawTargetLines[endIdx-1]) == "" {
 		endIdx--
 	}
-	if startIdx >= endIdx {
-		return content, 0, nil // Target is effectively empty, 0 matches
-	}
 	targetLines := rawTargetLines[startIdx:endIdx]
 
-	// Find matches by comparing TrimSpace on each line
 	var matchIndices []int
-	for i := 0; i <= len(contentLines)-len(targetLines); i++ {
+	for i := 0; i <= len(contentLines)-len(targetLines); {
 		match := true
 		for j := 0; j < len(targetLines); j++ {
 			if strings.TrimSpace(contentLines[i+j]) != strings.TrimSpace(targetLines[j]) {
@@ -61,11 +79,21 @@ func SmartReplace(content, target, replacement string, replaceAll bool) (string,
 		}
 		if match {
 			matchIndices = append(matchIndices, i)
+			if replaceAll {
+				// Advance past the match to skip overlapping occurrences in replaceAll mode
+				i += len(targetLines)
+			} else {
+				// Increment by 1 when replaceAll is false to scan all indices
+				// for accurate error-reporting count of duplicate/ambiguous matches
+				i++
+			}
+		} else {
+			i++
 		}
 	}
 
 	if len(matchIndices) > 1 && !replaceAll {
-		return content, len(matchIndices), fmt.Errorf("normalized target block matches %d occurrences", len(matchIndices))
+		return content, len(matchIndices), fmt.Errorf("target block matches %d occurrences", len(matchIndices))
 	}
 
 	if len(matchIndices) > 0 {
@@ -82,14 +110,17 @@ func SmartReplace(content, target, replacement string, replaceAll bool) (string,
 
 			// Adjust the replacement block's indentation to match origIndent
 			adjustedReplacement := adjustIndentation(replacementNorm, origIndent)
-			adjustedReplLines := strings.Split(adjustedReplacement, "\n")
+			var adjustedReplLines []string
+			if adjustedReplacement != "" {
+				adjustedReplLines = strings.Split(adjustedReplacement, "\n")
+			}
 
 			// Splice the adjusted replacement lines into the array
-			spliced := append(newLines[:matchStart], adjustedReplLines...)
+			spliced := append(newLines[:matchStart:matchStart], adjustedReplLines...)
 			newLines = append(spliced, newLines[matchEnd:]...)
 		}
 
-		return strings.Join(newLines, "\n"), len(matchIndices), nil
+		return finalize(strings.Join(newLines, "\n"), len(matchIndices), nil)
 	}
 
 	// STAGE 3: Fuzzy SequenceMatcher (Sliding Window)
@@ -105,9 +136,18 @@ func SmartReplace(content, target, replacement string, replaceAll bool) (string,
 		trimmedTargetLines[i] = strings.TrimSpace(l)
 	}
 
+	targetLineIndex := make(map[string]int)
+	var targetLineCounts []int
+	for _, tl := range trimmedTargetLines {
+		if idx, exists := targetLineIndex[tl]; exists {
+			targetLineCounts[idx]++
+		} else {
+			targetLineIndex[tl] = len(targetLineCounts)
+			targetLineCounts = append(targetLineCounts, 1)
+		}
+	}
+
 	bestRatio := 0.0
-	bestStart := -1
-	bestEnd := -1
 
 	// Slide a window across the file.
 	// We allow the window to be slightly larger than the target to account for insertions/deletions.
@@ -116,6 +156,11 @@ func SmartReplace(content, target, replacement string, replaceAll bool) (string,
 		windowSize = len(contentLines)
 	}
 
+	var candidates []scanCandidate
+	threshold := 0.65 // Strict threshold requiring 65% match of target lines (equivalent to original 0.60 difflib ratio but clean)
+
+	windowCounts := make([]int, len(targetLineCounts))
+
 	for i := 0; i < len(contentLines); i++ {
 		endIdx := i + windowSize
 		if endIdx > len(contentLines) {
@@ -123,39 +168,140 @@ func SmartReplace(content, target, replacement string, replaceAll bool) (string,
 		}
 
 		windowContent := trimmedContentLines[i:endIdx]
+
+		// Early-exit pre-filter: skip windows that cannot possibly reach the similarity threshold.
+		// Track frequencies using a pre-allocated slice to avoid heap allocations inside the loop.
+		for j := range windowCounts {
+			windowCounts[j] = 0
+		}
+		for _, wl := range windowContent {
+			if idx, exists := targetLineIndex[wl]; exists {
+				windowCounts[idx]++
+			}
+		}
+		possibleMatches := 0
+		for idx, count := range windowCounts {
+			tc := targetLineCounts[idx]
+			if count > tc {
+				possibleMatches += tc
+			} else {
+				possibleMatches += count
+			}
+		}
+		if float64(possibleMatches)/float64(len(trimmedTargetLines)) < threshold {
+			continue
+		}
+
 		m := difflib.NewMatcher(windowContent, trimmedTargetLines)
-		r := m.Ratio()
+
+		// Calculate ratio relative only to target length to avoid window size penalty
+		matches := 0
+		blocks := m.GetMatchingBlocks()
+		for _, b := range blocks {
+			matches += b.Size
+		}
+		r := float64(matches) / float64(len(trimmedTargetLines))
+		if r > 1.0 {
+			r = 1.0
+		}
 
 		if r > bestRatio {
 			bestRatio = r
+		}
 
-			// Find exactly where the match starts and ends within this window
-			blocks := m.GetMatchingBlocks()
-			if len(blocks) >= 2 {
-				first := blocks[0]
-				last := blocks[len(blocks)-2] // second to last is the final actual match block
-				bestStart = i + first.A
-				bestEnd = i + last.A + last.Size
+		if len(blocks) >= 2 {
+			first := blocks[0]
+			last := blocks[len(blocks)-2] // second to last is the final actual match block
+
+			// Reconstruct the full boundaries of the target block, including unmatched prefix/suffix
+			start := i + (first.A - first.B)
+			if start < 0 {
+				start = 0
+			}
+			end := i + last.A + last.Size + (len(targetLines) - (last.B + last.Size))
+			if end > len(contentLines) {
+				end = len(contentLines)
+			}
+
+			// Deduplicate candidates by exact (start, end) ranges
+			found := false
+			for idx, existing := range candidates {
+				if existing.start == start && existing.end == end {
+					if r > existing.ratio {
+						candidates[idx].ratio = r
+					}
+					found = true
+					break
+				}
+			}
+			if !found {
+				candidates = append(candidates, scanCandidate{
+					start: start,
+					end:   end,
+					ratio: r,
+				})
 			}
 		}
 	}
 
-	// 0.6 ratio threshold is a safe standard for block replacement confidence
-	if bestRatio >= 0.6 && bestStart != -1 {
-		origIndent := getIndentation(contentLines[bestStart])
-		adjustedReplacement := adjustIndentation(replacementNorm, origIndent)
-		adjustedReplLines := strings.Split(adjustedReplacement, "\n")
+	if bestRatio >= threshold {
+		// Sort candidates by ratio descending so that highest quality matches
+		// are evaluated first and win overlap conflicts during filtering
+		sort.Slice(candidates, func(i, j int) bool {
+			return candidates[i].ratio > candidates[j].ratio
+		})
 
-		newLines := make([]string, len(contentLines))
-		copy(newLines, contentLines)
+		type fuzzyMatch struct {
+			start, end int
+		}
+		var matches []fuzzyMatch
 
-		spliced := append(newLines[:bestStart], adjustedReplLines...)
-		newLines = append(spliced, newLines[bestEnd:]...)
+		for _, cand := range candidates {
+			// Match must be within 0.02 of the best ratio
+			if cand.ratio >= bestRatio-0.02 {
+				// Avoid overlapping matches
+				overlap := false
+				for _, existing := range matches {
+					if cand.start < existing.end && cand.end > existing.start {
+						overlap = true
+						break
+					}
+				}
+				if !overlap {
+					matches = append(matches, fuzzyMatch{start: cand.start, end: cand.end})
+				}
+			}
+		}
 
-		return strings.Join(newLines, "\n"), 1, nil
+		if len(matches) > 1 && !replaceAll {
+			return content, len(matches), fmt.Errorf("target block matches %d occurrences", len(matches))
+		}
+
+		if len(matches) > 0 {
+			// Sort matches by start index descending to safely apply replacements
+			// bottom-to-top without shifting remaining target indices
+			sort.Slice(matches, func(i, j int) bool {
+				return matches[i].start > matches[j].start
+			})
+
+			newLines := make([]string, len(contentLines))
+			copy(newLines, contentLines)
+
+			for idx := range matches {
+				m := matches[idx]
+				origIndent := getIndentation(newLines[m.start])
+				adjustedReplacement := adjustIndentation(replacementNorm, origIndent)
+				var adjustedReplLines []string
+				if adjustedReplacement != "" {
+					adjustedReplLines = strings.Split(adjustedReplacement, "\n")
+				}
+				spliced := append(newLines[:m.start:m.start], adjustedReplLines...)
+				newLines = append(spliced, newLines[m.end:]...)
+			}
+			return finalize(strings.Join(newLines, "\n"), len(matches), nil)
+		}
 	}
 
-	fmt.Printf("DEBUG: bestRatio=%v bestStart=%v len(matchIndices)=%v\n", bestRatio, bestStart, len(matchIndices))
 	return content, 0, nil // 0 matches found in all stages
 }
 
@@ -168,11 +314,40 @@ func getIndentation(line string) string {
 	return line // entirely whitespace
 }
 
+func normalizeIndent(indent string, useTabs bool) string {
+	if useTabs {
+		// Replace every 4 spaces with a tab, keeping remaining spaces intact
+		return strings.ReplaceAll(indent, "    ", "\t")
+	}
+	// Convert tabs to spaces.
+	return strings.ReplaceAll(indent, "\t", "    ")
+}
+
+type scanCandidate struct {
+	start, end int
+	ratio      float64
+}
+
+// isTrulyFlat returns true if the trimmed line is a comment or directive
+// that is meant to remain unindented (flat) at column 0.
+func isTrulyFlat(trimmed string, agentBaseIndent string) bool {
+	// If the base block itself is not heavily indented, we treat flat lines as agent formatting errors.
+	if len(agentBaseIndent) < 4 && !strings.Contains(agentBaseIndent, "\t") {
+		return false
+	}
+	return strings.HasPrefix(trimmed, "//") ||
+		strings.HasPrefix(trimmed, "#") ||
+		strings.HasPrefix(trimmed, "/*") ||
+		strings.HasPrefix(trimmed, "* ") ||
+		strings.HasPrefix(trimmed, "*/") ||
+		strings.HasPrefix(trimmed, "package ") ||
+		strings.HasPrefix(trimmed, "import ")
+}
+
 func adjustIndentation(block string, targetBaseIndent string) string {
 	lines := strings.Split(block, "\n")
-	if len(lines) == 0 {
-		return block
-	}
+
+	useTabs := strings.Contains(targetBaseIndent, "\t") || (targetBaseIndent == "" && strings.Contains(block, "\t"))
 
 	// Find the base indentation of the agent's replacement block
 	var agentBaseIndent string
@@ -189,23 +364,25 @@ func adjustIndentation(block string, targetBaseIndent string) string {
 		return block // Block is entirely empty lines
 	}
 
-	// If the agent's base indent matches what we want, do nothing
-	if agentBaseIndent == targetBaseIndent {
-		return block
-	}
-
 	// Adjust all lines
 	for i, l := range lines {
 		if strings.TrimSpace(l) == "" {
 			lines[i] = "" // clear empty lines
 			continue
 		}
-		// If the line starts with the agent's base indent, swap it for targetBaseIndent
-		if strings.HasPrefix(l, agentBaseIndent) {
-			lines[i] = targetBaseIndent + strings.TrimPrefix(l, agentBaseIndent)
+		trimmed := strings.TrimLeft(l, " \t")
+		lineIndent := l[:len(l)-len(trimmed)]
+
+		if lineIndent == "" && agentBaseIndent != "" && isTrulyFlat(trimmed, agentBaseIndent) {
+			// Keep intentionally flat lines unindented
+			lines[i] = trimmed
+		} else if strings.HasPrefix(lineIndent, agentBaseIndent) {
+			relIndent := strings.TrimPrefix(lineIndent, agentBaseIndent)
+			normRelIndent := normalizeIndent(relIndent, useTabs)
+			lines[i] = targetBaseIndent + normRelIndent + trimmed
 		} else {
-			// Best effort fallback: just prepend targetBaseIndent
-			lines[i] = targetBaseIndent + strings.TrimLeft(l, " \t")
+			normIndent := normalizeIndent(lineIndent, useTabs)
+			lines[i] = targetBaseIndent + normIndent + trimmed
 		}
 	}
 

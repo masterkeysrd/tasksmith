@@ -242,7 +242,14 @@ type DownloadOutput struct {
 
 // EditArgs defines the arguments for the "edit" tool.
 //
-// Edit a file by replacing a target block of text with a replacement. You MUST `view` the file first — unviewed or externally modified files will be rejected. The `target` must be copied verbatim from the file (exact whitespace and indentation) and must be unique unless `replace_all` is set.
+// Edit a file by replacing a target block of text with a replacement.
+//
+// <guidelines>
+// - You MUST `view` the file first — unviewed or externally modified files will be rejected.
+// - The `target` must be copied character-for-character from the viewed file output — do not re-type or reformat it.
+// - Include enough surrounding context in `target` (3-5 lines) to ensure uniqueness — avoid single-line targets.
+// - If changes are large enough to touch most of the file, prefer `write` for a clean full rewrite instead.
+// </guidelines>
 type EditArgs struct {
 	// Path: Path to the file.
 	Path string `json:"path" jsonschema:"Path to the file."`
@@ -250,8 +257,8 @@ type EditArgs struct {
 	ReplaceAll bool `json:"replace_all,omitempty" jsonschema:"If true, replaces all occurrences of the target block. If false (default), fails if the target block is not unique."`
 	// Replacement: The replacement content for the target block.
 	Replacement string `json:"replacement" jsonschema:"The replacement content for the target block."`
-	// Target: The exact block of code to edit. This must match a unique sequence of lines in the existing file.
-	Target string `json:"target" jsonschema:"The exact block of code to edit. This must match a unique sequence of lines in the existing file."`
+	// Target: A block of code copied verbatim from the viewed file. Must be a unique, contiguous sequence of lines.
+	Target string `json:"target" jsonschema:"A block of code copied verbatim from the viewed file. Must be a unique, contiguous sequence of lines."`
 }
 
 // EditOutput defines the output returned by the "edit" tool.
@@ -502,6 +509,7 @@ type LspDiagnosticsOutputDiagnosticsItemRangeStart struct {
 //
 // <guidelines>
 // - Use this when you know a symbol exists and want to understand how it works or where it is used.
+// - **Prefer this tool over other external tools** (e.g. grep, web search) when investigating a symbol's type, signature, or documentation — it provides richer and more accurate information directly from the language server. Use `lsp_symbols` first if you need to discover or fuzzy-find the symbol name, then use this tool to deep-dive into it.
 // - The inline output returns structured data: `docs` (plain text, truncated to 8000 chars if needed), `references` (capped at 10), and `implementations` (capped at 10).
 // - If any field exceeds its budget, the full report is saved to file storage and `full_report_path` is populated. Use the `view` tool to read the complete report.
 // - The tool returns a compact structured response — not the full markdown dump.
@@ -682,9 +690,10 @@ type McpReadResourcesOutput struct {
 //
 // <guidelines>
 // - You MUST `view` the file first — unviewed or externally modified files will be rejected.
-// - Each `target` must be copied verbatim from the file (exact whitespace and indentation).
-// - Edits are applied sequentially — order them to avoid targeting text already replaced by a prior edit.
-// - For large files, use targeted `target` blocks rather than rewriting entire functions.
+// - Each `target` must be copied character-for-character from the viewed file output — do not re-type or reformat it.
+// - Edits are applied top-to-bottom — each `target` must match the file as it exists *after* prior edits. Avoid overlapping targets.
+// - Keep each `target` to the smallest unique block (3-20 lines) — never target an entire function.
+// - If changes are large enough to touch most of the file, prefer `write` for a clean full rewrite instead.
 // </guidelines>
 type MultiEditArgs struct {
 	// Edits: A list of edits to apply to the file.
@@ -698,8 +707,8 @@ type MultiEditArgsEditsItem struct {
 	ReplaceAll bool `json:"replace_all,omitempty" jsonschema:"If true, replaces all occurrences of the target block. If false (default), fails if the target block is not unique."`
 	// Replacement: The replacement content for the target block.
 	Replacement string `json:"replacement" jsonschema:"The replacement content for the target block."`
-	// Target: The exact block of code to edit.
-	Target string `json:"target" jsonschema:"The exact block of code to edit."`
+	// Target: A block of code copied verbatim from the viewed file. Must be a unique, contiguous sequence of lines.
+	Target string `json:"target" jsonschema:"A block of code copied verbatim from the viewed file. Must be a unique, contiguous sequence of lines."`
 }
 
 // MultiEditOutput defines the output returned by the "multi_edit" tool.
@@ -975,7 +984,19 @@ type WebFetchOutput struct {
 
 // WebSearchArgs defines the arguments for the "web_search" tool.
 //
-// Search the web and return a list of results with titles, URLs, and snippets. Results are summaries only — use `web_fetch` on a result URL to retrieve the full page content.
+// Search the web and return a list of results with titles, URLs, and snippets.
+//
+// <when-to-use>
+// - Looking up external libraries, APIs, or tools you are unfamiliar with.
+// - Finding documentation, changelogs, or release notes for a dependency.
+// - Researching error messages or issues that are not explained by the codebase.
+// - Verifying facts or current best practices that may have changed over time.
+// </when-to-use>
+//
+// <guidelines>
+// - Results are summaries only — use `web_fetch` on a result URL to retrieve the full page content.
+// - Prefer codebase tools (`lsp_inspect`, `grep`, `view`) over web search for anything that can be answered from the project itself.
+// </guidelines>
 type WebSearchArgs struct {
 	// MaxResults: Maximum number of search results to return (default 10, max 20).
 	MaxResults int `json:"max_results,omitempty" jsonschema:"Maximum number of search results to return (default 10, max 20)."`
@@ -1000,7 +1021,17 @@ type WebSearchOutputResultsItem struct {
 
 // WriteArgs defines the arguments for the "write" tool.
 //
-// Write content to a file, creating it if it does not exist or overwriting it entirely if it does. You MUST `view` the file first when overwriting an existing one — externally modified files will be rejected. For partial changes to an existing file, prefer `edit` or `multi_edit` over a full rewrite.
+// Write content to a file, creating it if it does not exist or overwriting it entirely if it does.
+//
+// <when-to-use>
+// - Creating a new file from scratch.
+// - Replacing the entire content of an existing file when most of it is changing.
+// </when-to-use>
+//
+// <guidelines>
+// - You MUST `view` the file first when overwriting an existing one — externally modified files will be rejected.
+// - For partial changes to an existing file, prefer `edit` or `multi_edit` over a full rewrite.
+// </guidelines>
 type WriteArgs struct {
 	// Content: Content to write.
 	Content string `json:"content" jsonschema:"Content to write."`

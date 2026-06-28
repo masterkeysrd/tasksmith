@@ -87,7 +87,7 @@ func (h *ToolHandlers) MultiEdit(ctx context.Context, in MultiEditArgs) (MultiEd
 		if count == 0 {
 			results[i] = MultiEditOutputResultsItem{
 				Success: false,
-				Message: "target block not found in file (even with normalized whitespace matching)",
+				Message: "target block not found in file",
 			}
 			continue
 		}
