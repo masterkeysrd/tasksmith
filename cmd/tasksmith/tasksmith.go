@@ -47,7 +47,8 @@ func main() {
 		// Use a background context for closing to ensure cleanup tasks
 		// can complete even if the main context was canceled.
 		if err := application.Close(context.Background()); err != nil {
-			panic(err)
+			log.Error("Error during application cleanup", log.Err(err))
+			fmt.Fprintf(os.Stderr, "Error during application cleanup: %v\n", err)
 		}
 	}()
 
