@@ -119,6 +119,7 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 
 	currentPendingIndex, setCurrentPendingIndex := kitex.UseState(0)
 	localDecisions, setLocalDecisions := kitex.UseState(map[string]permissions.AuthorizationDecision{})
+	showResolutionDialog, setShowResolutionDialog := kitex.UseState(false)
 
 	handleSelectVertical := func(idx int) {
 		setSelectedIndex(idx)
@@ -541,8 +542,16 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 		lastMaxScrollY.Current = maxScrollY
 	}, []any{messagesKey})
 
-	sendMessage := func(text string) {
+	sendMessage := func(text string, force ...bool) {
 		if text == "" || submitting() {
+			return
+		}
+
+		isForced := len(force) > 0 && force[0]
+
+		if status == "pending_auth" && !isForced {
+			setInputValue(text)
+			setShowResolutionDialog(true)
 			return
 		}
 
@@ -567,6 +576,72 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 		}, func(err error) {
 			setSubmitting(false)
 			log.Error(fmt.Sprintf("Failed to send message to backend: %v", err))
+		})
+	}
+
+	// Resolve pending authorizations and optionally send the queued message
+	handleAuthorizeAll := func() {
+		promise.New(func(ctx context.Context) (bool, error) {
+			var decisionList []permissions.AuthorizationDecision
+			for _, d := range pendingAuthorizations {
+				decisionList = append(decisionList, permissions.AuthorizationDecision{
+					ToolCallID: d.ToolCallID,
+					Approved:   true,
+					Scope:      permissions.ScopeOnce,
+				})
+			}
+			_, err := client.SubmitAuthorizationDecision(ctx, api.SubmitAuthorizationDecisionRequest{
+				SessionID: sessionID,
+				Decisions: decisionList,
+			})
+			if err != nil {
+				return false, err
+			}
+			return true, nil
+		}).Then(func(success bool) {
+			setShowResolutionDialog(false)
+			setSubmitting(false)
+			windClient.InvalidateQueries(api.GetSessionMessagesRequest{SessionID: sessionID})
+			windClient.InvalidateQueries(api.GetSessionStateRequest{SessionID: sessionID})
+			windClient.InvalidateQueries(api.GetFileChangesRequest{SessionID: sessionID})
+			if inputValue() != "" {
+				sendMessage(inputValue(), true)
+			}
+		}, func(err error) {
+			setShowResolutionDialog(false)
+			log.Error(fmt.Sprintf("Failed to submit authorization decisions: %v", err))
+		})
+	}
+
+	handleRejectAll := func() {
+		promise.New(func(ctx context.Context) (bool, error) {
+			var decisionList []permissions.AuthorizationDecision
+			for _, d := range pendingAuthorizations {
+				decisionList = append(decisionList, permissions.AuthorizationDecision{
+					ToolCallID: d.ToolCallID,
+					Approved:   false,
+				})
+			}
+			_, err := client.SubmitAuthorizationDecision(ctx, api.SubmitAuthorizationDecisionRequest{
+				SessionID: sessionID,
+				Decisions: decisionList,
+			})
+			if err != nil {
+				return false, err
+			}
+			return true, nil
+		}).Then(func(success bool) {
+			setShowResolutionDialog(false)
+			setSubmitting(false)
+			windClient.InvalidateQueries(api.GetSessionMessagesRequest{SessionID: sessionID})
+			windClient.InvalidateQueries(api.GetSessionStateRequest{SessionID: sessionID})
+			windClient.InvalidateQueries(api.GetFileChangesRequest{SessionID: sessionID})
+			if inputValue() != "" {
+				sendMessage(inputValue(), true)
+			}
+		}, func(err error) {
+			setShowResolutionDialog(false)
+			log.Error(fmt.Sprintf("Failed to submit authorization decisions: %v", err))
 		})
 	}
 
@@ -712,6 +787,8 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 					func() { setShowPreviewModal(true) },
 					currentPendingIndex(),
 					isInsert,
+					localDecisions(),
+					submitting(),
 					handleSelectVertical,
 					handleSelectHorizontal,
 					handleApprove,
@@ -930,6 +1007,21 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 				)
 			}),
 		),
+
+		// Resolution Dialog for Pending Authorizations
+		kitex.If(showResolutionDialog(), func() kitex.Node {
+			return components.ConfirmDialog(components.ConfirmDialogProps{
+				Message:        "There are pending tool authorizations. How would you like to proceed?",
+				ConfirmLabel:   "Authorize All",
+				ConfirmColor:   components.ButtonSuccess,
+				OnConfirm:      handleAuthorizeAll,
+				SecondaryLabel: "Reject All",
+				SecondaryColor: components.ButtonError,
+				OnSecondary:    handleRejectAll,
+				CancelLabel:    "Cancel",
+				OnCancel:       func() { setShowResolutionDialog(false) },
+			})
+		}),
 
 		// Modal Section for Full Output View
 		components.Modal(components.ModalProps{
@@ -1350,6 +1442,8 @@ func renderBubbles(
 	onPreview func(),
 	currentPendingIndex int,
 	isInsert bool,
+	localDecisions map[string]permissions.AuthorizationDecision,
+	isSubmitting bool,
 	onSelectVertical func(int),
 	onSelectHorizontal func(int),
 	onApprove func(),
@@ -1386,6 +1480,8 @@ func renderBubbles(
 				OnPreview:             onPreview,
 				CurrentPendingIndex:   currentPendingIndex,
 				IsInsert:              isInsert,
+				LocalDecisions:        localDecisions,
+				IsSubmitting:          isSubmitting,
 				OnSelectVertical:      onSelectVertical,
 				OnSelectHorizontal:    onSelectHorizontal,
 				OnApprove:             onApprove,

@@ -357,6 +357,11 @@ func (a *AgentGraph) executeTools(ctx context.Context, s AgentState) (graph.Comm
 			continue
 		}
 
+		userHint := targetTool.Annotation.UserHint
+		if d, ok := args["description"].(string); ok && d != "" {
+			userHint = d
+		}
+
 		permState, finalArgs, _, authReq := permissions.EvaluateToolCall(
 			permissions.ContextWithWorkspaceCWD(ctx, a.cwd),
 			a.permissionManager,
@@ -364,6 +369,7 @@ func (a *AgentGraph) executeTools(ctx context.Context, s AgentState) (graph.Comm
 				ToolName:    tc.Name,
 				Args:        args,
 				Description: targetTool.Definition.Description,
+				UserHint:    userHint,
 				IsDangerous: targetTool.Annotation.IsDangerous,
 				IsOpenWorld: targetTool.Annotation.IsOpenWorld,
 				IsReadOnly:  targetTool.Annotation.IsReadOnly,

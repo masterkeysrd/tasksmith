@@ -176,6 +176,7 @@ type ToolCallRequest struct {
 	ToolName    string
 	Args        map[string]any
 	Description string
+	UserHint    string
 	IsDangerous bool
 	IsOpenWorld bool
 	IsReadOnly  bool

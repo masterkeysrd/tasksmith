@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 )
 
 // GenericPermissionHandler evaluates permissions for tools that do not have custom handlers.
@@ -188,9 +189,20 @@ func EvaluateToolCall(
 		if resPreview, err := handler.GetPreview(ctx, req); err == nil {
 			preview = resPreview
 		}
+
+		desc := req.UserHint
+		if desc == "" {
+			desc = req.Description
+		}
+
+		// Ensure we only show the first line of the description/hint
+		if idx := strings.Index(desc, "\n"); idx != -1 {
+			desc = strings.TrimSpace(desc[:idx])
+		}
+
 		return StateRequiresAuth, req.Args, res.Hints, &AuthorizationRequest{
 			ToolName:    req.ToolName,
-			Description: req.Description,
+			Description: desc,
 			Payload:     req.Args,
 			Preview:     preview,
 			SystemHints: res.Hints,

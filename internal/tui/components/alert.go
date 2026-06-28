@@ -52,7 +52,7 @@ var (
 	AlertBaseStyle = style.S().
 			Display(style.DisplayFlex).
 			AlignItems(style.AlignCenter).
-			Padding(0, 1).
+			Padding(1).
 			Gap(1).
 			Width(style.Percent(100))
 

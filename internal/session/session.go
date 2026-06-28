@@ -37,9 +37,10 @@ import (
 type SessionStatus string
 
 const (
-	StatusIdle    SessionStatus = "idle"
-	StatusRunning SessionStatus = "running"
-	StatusError   SessionStatus = "error"
+	StatusIdle        SessionStatus = "idle"
+	StatusRunning     SessionStatus = "running"
+	StatusError       SessionStatus = "error"
+	StatusPendingAuth SessionStatus = "pending_auth"
 )
 
 // Session represents a domain session.
@@ -351,6 +352,51 @@ func (m *Manager) ArchiveSession(ctx context.Context, id string) error {
 	return m.store.ArchiveSession(ctx, id)
 }
 
+func (m *Manager) tryRehydrateSession(ctx context.Context, sess *ActiveSession) {
+	m.mu.Lock()
+	if sess.Status != StatusIdle || sess.PendingAuthorizations != nil || m.ws == nil {
+		m.mu.Unlock()
+		return
+	}
+	m.mu.Unlock()
+
+	cp, err := m.store.NewCheckpointer()
+	if err != nil {
+		return
+	}
+	storage := NewLocalFileStorage(m.ws.CWD(), sess.ID)
+	ag, err := agentgraph.New(ctx, agentgraph.Options{
+		Workspace:   m.ws,
+		Storage:     storage,
+		TaskManager: m.taskMgr,
+		SessionID:   sess.ID,
+		LspManager:  m.lspManager,
+		McpManager:  m.mcpManager,
+	})
+	if err != nil {
+		return
+	}
+	g, err := ag.Build(cp)
+	if err != nil {
+		return
+	}
+	loc := &graph.Location{ThreadID: sess.ID}
+	snap, err := g.Load(ctx, *loc)
+	if err != nil {
+		return
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	// Double check under lock
+	if sess.Status == StatusIdle && sess.PendingAuthorizations == nil {
+		sess.PendingAuthorizations = snap.State.PendingAuthorizations
+		if len(sess.PendingAuthorizations) > 0 {
+			sess.Status = StatusPendingAuth
+		}
+	}
+}
+
 // GetSessionState returns the in-memory runtime execution state of the specified session.
 func (m *Manager) GetSessionState(ctx context.Context, sessionID string) (SessionStatus, string, bool, []permissions.AuthorizationRequest, time.Duration) {
 	m.mu.Lock()
@@ -364,34 +410,9 @@ func (m *Manager) GetSessionState(ctx context.Context, sessionID string) (Sessio
 	}
 	m.mu.Unlock()
 
-	isGenerating := len(sess.CurrentStreamText) > 0 || len(sess.CurrentStreamThinking) > 0
+	m.tryRehydrateSession(ctx, sess)
 
-	m.mu.Lock()
-	if sess.Status == StatusIdle && sess.PendingAuthorizations == nil {
-		m.mu.Unlock() // release lock before doing checkpointer load
-		if cp, err := m.store.NewCheckpointer(); err == nil {
-			storage := NewLocalFileStorage(m.ws.CWD(), sessionID)
-			if ag, err := agentgraph.New(ctx, agentgraph.Options{
-				Workspace:   m.ws,
-				Storage:     storage,
-				TaskManager: m.taskMgr,
-				SessionID:   sessionID,
-				LspManager:  m.lspManager,
-				McpManager:  m.mcpManager,
-			}); err == nil {
-				if g, err := ag.Build(cp); err == nil {
-					loc := &graph.Location{ThreadID: sessionID}
-					if snap, err := g.Load(ctx, *loc); err == nil {
-						m.mu.Lock()
-						sess.PendingAuthorizations = snap.State.PendingAuthorizations
-						m.mu.Unlock()
-					}
-				}
-			}
-		}
-	} else {
-		m.mu.Unlock()
-	}
+	isGenerating := len(sess.CurrentStreamText) > 0 || len(sess.CurrentStreamThinking) > 0
 
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -430,10 +451,19 @@ func (m *Manager) sendMessage(ctx context.Context, sessionID string, text string
 		}
 		m.activeSessions[sessionID] = sess
 	}
+	m.mu.Unlock()
 
+	m.tryRehydrateSession(ctx, sess)
+
+	m.mu.Lock()
 	msg := message.NewUserText(text)
 	if len(meta) > 0 {
 		msg.SetMetadata(meta)
+	}
+
+	if sess.Status == StatusPendingAuth {
+		m.mu.Unlock()
+		return fmt.Errorf("cannot send message while tool authorization is pending")
 	}
 
 	if sess.Status == StatusRunning {
@@ -514,10 +544,14 @@ func (m *Manager) SubmitAuthorizationDecision(ctx context.Context, sessionID str
 		}
 		m.activeSessions[sessionID] = sess
 	}
+	m.mu.Unlock()
 
-	if sess.Status == StatusRunning {
+	m.tryRehydrateSession(ctx, sess)
+
+	m.mu.Lock()
+	if sess.Status != StatusPendingAuth && sess.Status != StatusIdle {
 		m.mu.Unlock()
-		return fmt.Errorf("session is currently running")
+		return fmt.Errorf("session is in an invalid state for submitting decisions: %s", sess.Status)
 	}
 
 	sess.Status = StatusRunning
@@ -676,6 +710,21 @@ func (m *Manager) runAgentLoop(runCtx context.Context, sessionID string, sess *A
 	if modelName == "" {
 		modelName = "qwen3.6:35b-a3b-coding-nvfp4" // default fallback
 	}
+	if _, found := provider.GetProfile(modelName); !found {
+		// If the model name is prefixed (e.g. "genai/gemini-3-flash-preview"), try stripping the prefix.
+		cleanedName := modelName
+		if idx := strings.Index(modelName, "/"); idx != -1 {
+			cleanedName = modelName[idx+1:]
+		}
+		if _, foundCleaned := provider.GetProfile(cleanedName); foundCleaned {
+			modelName = cleanedName
+		} else {
+			provider.OverrideProfile(modelName, llm.ModelProfile{
+				ID:   modelName,
+				Name: modelName,
+			})
+		}
+	}
 	model, err := llm.NewModel(provider, modelName, nil)
 	if err != nil {
 		m.setSessionError(sessionID, fmt.Errorf("failed to create model: %w", err))
@@ -826,6 +875,11 @@ func (m *Manager) runAgentLoop(runCtx context.Context, sessionID string, sess *A
 	sess.CurrentStreamThinking = ""
 	sess.CurrentToolStreams = nil
 	sess.PendingAuthorizations = pendingAuths
+	if len(pendingAuths) > 0 {
+		sess.Status = StatusPendingAuth
+	} else {
+		sess.Status = StatusIdle
+	}
 	m.mu.Unlock()
 
 	if _, err := m.AppendMessage(context.Background(), sessionID, asstMsg); err != nil {
@@ -947,7 +1001,11 @@ func (m *Manager) SubscribeMessages(sessionID string) (<-chan struct{}, func()) 
 		}
 		m.activeSessions[sessionID] = sess
 	}
+	m.mu.Unlock()
 
+	m.tryRehydrateSession(context.Background(), sess)
+
+	m.mu.Lock()
 	ch := make(chan struct{}, 1)
 	// Seed with an initial update so the client fetches initially
 	ch <- struct{}{}
@@ -1191,6 +1249,35 @@ func (m *Manager) SetToolStreamDebug(sessionID string, toolCallID string, text s
 		sess.CurrentToolStreams[toolCallID] = text
 		sess.Status = StatusRunning // Force running status for injection test
 	}
+}
+
+// SetPendingAuthorizationsDebug sets pending authorizations for a session (test helper).
+func (m *Manager) SetPendingAuthorizationsDebug(sessionID string, auths []permissions.AuthorizationRequest) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	sess, ok := m.activeSessions[sessionID]
+	if !ok {
+		sess = &ActiveSession{
+			ID: sessionID,
+		}
+		m.activeSessions[sessionID] = sess
+	}
+	sess.PendingAuthorizations = auths
+	sess.Status = StatusPendingAuth
+}
+
+// SetStatusDebug sets the session status directly (test helper).
+func (m *Manager) SetStatusDebug(sessionID string, status SessionStatus) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	sess, ok := m.activeSessions[sessionID]
+	if !ok {
+		sess = &ActiveSession{
+			ID: sessionID,
+		}
+		m.activeSessions[sessionID] = sess
+	}
+	sess.Status = status
 }
 
 func (m *Manager) resolveDefaults(ctx context.Context) (agentName, providerName, modelName string, err error) {

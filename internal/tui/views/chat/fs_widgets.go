@@ -126,9 +126,12 @@ var RemoveToolWidget = kitex.FC("RemoveToolWidget", func(props ToolExecutionProp
 					return kitex.Span(kitex.SpanProps{}, kitex.Text(fmt.Sprintf("Error Removing %s", filename)))
 				}),
 				kitex.If(tm != nil && !tm.IsError, func() kitex.Node {
-					return kitex.Fragment(
+					return kitex.Box(kitex.BoxProps{
+						Style: style.S().Display(style.DisplayFlex).FlexDirection(style.FlexRow).AlignItems(style.AlignCenter).Gap(1),
+					},
+						kitex.Text("Removed "),
 						icon.FileIcon(icon.FileIconProps{Path: path}),
-						kitex.Span(kitex.SpanProps{}, kitex.Text(fmt.Sprintf("Removed %s", filename))),
+						kitex.Text(filename),
 					)
 				}),
 			),
@@ -340,7 +343,7 @@ var ViewToolWidget = kitex.FC("ViewToolWidget", func(props ToolExecutionProps) k
 	}
 
 	var onClick func()
-	if tm != nil && !tm.IsError {
+	if tm != nil {
 		onClick = func() { setShowModal(true) }
 	}
 	badgeNode := components.ToolBadge(components.ToolBadgeProps{
@@ -362,12 +365,25 @@ var ViewToolWidget = kitex.FC("ViewToolWidget", func(props ToolExecutionProps) k
 					AlignItems(style.AlignCenter).
 					Gap(1),
 			},
+				kitex.Text("Viewing "),
 				icon.FileIcon(icon.FileIconProps{Path: path}),
-				kitex.Text(fmt.Sprintf("Viewing %s", filename)),
+				kitex.Text(filename),
 			),
 			OnClose: func() { setShowModal(false) },
 		},
-			kitex.If(showModal(), func() kitex.Node {
+			kitex.If(showModal() && tm != nil && tm.IsError, func() kitex.Node {
+				details := getToolOutput(tm.Content)
+				return kitex.Box(kitex.BoxProps{
+					Style: style.S().
+						Padding(1).
+						Width(style.Percent(100)).
+						MinWidth(style.Percent(0)).
+						Foreground(t.Color.Text.Secondary).
+						WhiteSpace(style.WhiteSpacePreWrap),
+				}, kitex.Text(details))
+			}),
+			kitex.If(showModal() && tm != nil && !tm.IsError, func() kitex.Node {
+
 				var cleanCode string
 				var startLine int
 				var showLines bool
@@ -531,6 +547,17 @@ var LsToolWidget = kitex.FC("LsToolWidget", func(props ToolExecutionProps) kitex
 			),
 		),
 		components.AccordionDetails(components.AccordionDetailsProps{},
+			kitex.If(tm != nil && tm.IsError, func() kitex.Node {
+				details := getToolOutput(tm.Content)
+				return kitex.Box(kitex.BoxProps{
+					Style: style.S().
+						Padding(1).
+						Width(style.Percent(100)).
+						MinWidth(style.Percent(0)).
+						Foreground(t.Color.Text.Secondary).
+						WhiteSpace(style.WhiteSpacePreWrap),
+				}, kitex.Text(details))
+			}),
 			// Entry list as a borderless table for natural column alignment
 			kitex.If(tm != nil && !tm.IsError && len(lsFiles) > 0, func() kitex.Node {
 
@@ -615,18 +642,18 @@ var GlobToolWidget = kitex.FC("GlobToolWidget", func(props ToolExecutionProps) k
 		var actionText string
 		if tm == nil {
 			if path != "" {
-				actionText = "Glob: Searching in "
+				actionText = "Glob searching in "
 			} else {
-				actionText = "Glob: Searching for "
+				actionText = "Glob searching for "
 			}
 			statusLabel = fmt.Sprintf("Glob: Searching%s for [%s]", scope, pattern)
 			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Info)}, kitex.Text(props.CurrentDots))
 			themeColor = t.Color.Surface.Info
 		} else if tm.IsError {
 			if path != "" {
-				actionText = "Glob: Error searching in "
+				actionText = "Glob error searching in "
 			} else {
-				actionText = "Glob: Error searching for "
+				actionText = "Glob error searching for "
 			}
 			statusLabel = fmt.Sprintf("Glob: Error searching%s for [%s]", scope, pattern)
 			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Error)}, icon.Error)
@@ -640,18 +667,18 @@ var GlobToolWidget = kitex.FC("GlobToolWidget", func(props ToolExecutionProps) k
 			}
 			if totalCount > 0 {
 				if path != "" {
-					actionText = fmt.Sprintf("Glob: Found %d %s in ", totalCount, matchWord)
+					actionText = fmt.Sprintf("Glob found %d %s in ", totalCount, matchWord)
 				} else {
-					actionText = fmt.Sprintf("Glob: Found %d %s for ", totalCount, matchWord)
+					actionText = fmt.Sprintf("Glob found %d %s for ", totalCount, matchWord)
 				}
 				statusLabel = fmt.Sprintf("Glob: Found %d %s%s for [%s]", totalCount, matchWord, scope, pattern)
 				iconNode = nil // remove checkmark completely on success
 				themeColor = color.RGBA{R: 255, G: 255, B: 255, A: 255}
 			} else {
 				if path != "" {
-					actionText = "Glob: No matches in "
+					actionText = "Glob no matches in "
 				} else {
-					actionText = "Glob: No matches for "
+					actionText = "Glob no matches for "
 				}
 				statusLabel = fmt.Sprintf("Glob: No matches found%s for [%s]", scope, pattern)
 				iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Secondary)}, icon.Info)
@@ -891,18 +918,18 @@ var GrepToolWidget = kitex.FC("GrepToolWidget", func(props ToolExecutionProps) k
 		var actionText string
 		if tm == nil {
 			if path != "" {
-				actionText = "Searching in "
+				actionText = "Grep searching in "
 			} else {
-				actionText = "Searching for "
+				actionText = "Grep searching for "
 			}
 			statusLabel = fmt.Sprintf("Searching%s for %s", scope, pattern)
 			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Info)}, kitex.Text(props.CurrentDots))
 			themeColor = t.Color.Surface.Info
 		} else if tm.IsError {
 			if path != "" {
-				actionText = "Error searching in "
+				actionText = "Grep error searching in "
 			} else {
-				actionText = "Error searching for "
+				actionText = "Grep error searching for "
 			}
 			statusLabel = fmt.Sprintf("Error searching%s for %s", scope, pattern)
 			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Error)}, icon.Error)
@@ -916,18 +943,18 @@ var GrepToolWidget = kitex.FC("GrepToolWidget", func(props ToolExecutionProps) k
 					matchWord = "match"
 				}
 				if path != "" {
-					actionText = fmt.Sprintf("Found %d %s in ", totalCount, matchWord)
+					actionText = fmt.Sprintf("Grep found %d %s in ", totalCount, matchWord)
 				} else {
-					actionText = fmt.Sprintf("Found %d %s for ", totalCount, matchWord)
+					actionText = fmt.Sprintf("Grep found %d %s for ", totalCount, matchWord)
 				}
 				statusLabel = fmt.Sprintf("Found %d %s%s for %s", totalCount, matchWord, scope, pattern)
 				iconNode = nil // remove checkmark completely on success
 				themeColor = color.RGBA{R: 255, G: 255, B: 255, A: 255}
 			} else {
 				if path != "" {
-					actionText = "No matches in "
+					actionText = "Grep no matches in "
 				} else {
-					actionText = "No matches for "
+					actionText = "Grep no matches for "
 				}
 				statusLabel = fmt.Sprintf("No matches found%s for %s", scope, pattern)
 				iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Secondary)}, icon.Info)
@@ -1247,7 +1274,7 @@ var WriteToolWidget = kitex.FC("WriteToolWidget", func(props ToolExecutionProps)
 	}
 
 	var onClick func()
-	if tm != nil && !tm.IsError && content != "" {
+	if tm != nil {
 		onClick = func() { setShowModal(true) }
 	}
 	badgeNode := components.ToolBadge(components.ToolBadgeProps{
@@ -1269,12 +1296,24 @@ var WriteToolWidget = kitex.FC("WriteToolWidget", func(props ToolExecutionProps)
 					AlignItems(style.AlignCenter).
 					Gap(1),
 			},
+				kitex.Text("Writing "),
 				icon.FileIcon(icon.FileIconProps{Path: path}),
-				kitex.Text(fmt.Sprintf("Writing %s", filename)),
+				kitex.Text(filename),
 			),
 			OnClose: func() { setShowModal(false) },
 		},
-			kitex.If(showModal(), func() kitex.Node {
+			kitex.If(showModal() && tm != nil && tm.IsError, func() kitex.Node {
+				details := getToolOutput(tm.Content)
+				return kitex.Box(kitex.BoxProps{
+					Style: style.S().
+						Padding(1).
+						Width(style.Percent(100)).
+						MinWidth(style.Percent(0)).
+						Foreground(t.Color.Text.Secondary).
+						WhiteSpace(style.WhiteSpacePreWrap),
+				}, kitex.Text(details))
+			}),
+			kitex.If(showModal() && tm != nil && !tm.IsError, func() kitex.Node {
 				return components.CodeBlock(components.CodeBlockProps{
 					Code:            content,
 					Lang:            detectLang(filename),
@@ -1339,7 +1378,7 @@ var EditToolWidget = kitex.FC("EditToolWidget", func(props ToolExecutionProps) k
 			if tm.IsError {
 				actionText = "Error Editing "
 			} else {
-				actionText = "Wrote "
+				actionText = "Edited "
 				eOut, ok := parseEditStructuredOutput(tm.StructuredContent)
 				if ok && eOut.Success {
 					additions = eOut.Additions
@@ -1411,7 +1450,7 @@ var EditToolWidget = kitex.FC("EditToolWidget", func(props ToolExecutionProps) k
 	}
 
 	var onClick func()
-	if tm != nil && !tm.IsError && diffContent != "" {
+	if tm != nil {
 		onClick = func() { setShowModal(true) }
 	}
 	badgeNode := components.ToolBadge(components.ToolBadgeProps{
@@ -1433,8 +1472,9 @@ var EditToolWidget = kitex.FC("EditToolWidget", func(props ToolExecutionProps) k
 					AlignItems(style.AlignCenter).
 					Gap(1),
 			},
+				kitex.Text("Changes in "),
 				icon.FileIcon(icon.FileIconProps{Path: path}),
-				kitex.Text(fmt.Sprintf("Changes in %s", filename)),
+				kitex.Text(filename),
 			),
 			OnClose: func() { setShowModal(false) },
 			HeaderActions: components.Button(components.ButtonProps{
@@ -1450,7 +1490,18 @@ var EditToolWidget = kitex.FC("EditToolWidget", func(props ToolExecutionProps) k
 				return kitex.Text("Show Split")
 			}()),
 		},
-			kitex.If(showModal(), func() kitex.Node {
+			kitex.If(showModal() && tm != nil && tm.IsError, func() kitex.Node {
+				details := getToolOutput(tm.Content)
+				return kitex.Box(kitex.BoxProps{
+					Style: style.S().
+						Padding(1).
+						Width(style.Percent(100)).
+						MinWidth(style.Percent(0)).
+						Foreground(t.Color.Text.Secondary).
+						WhiteSpace(style.WhiteSpacePreWrap),
+				}, kitex.Text(details))
+			}),
+			kitex.If(showModal() && tm != nil && !tm.IsError, func() kitex.Node {
 				return components.DiffBlock(components.DiffBlockProps{
 					Diff:  diffContent,
 					Lang:  detectLang(filename),
@@ -1513,7 +1564,7 @@ var MultiEditToolWidget = kitex.FC("MultiEditToolWidget", func(props ToolExecuti
 			if tm.IsError {
 				actionText = "Error Multi-Editing "
 			} else {
-				actionText = "Wrote "
+				actionText = "Multi-Edited "
 				meOut, ok := parseMultiEditStructuredOutput(tm.StructuredContent)
 				if ok && meOut.Success {
 					additions = meOut.Additions
@@ -1585,7 +1636,7 @@ var MultiEditToolWidget = kitex.FC("MultiEditToolWidget", func(props ToolExecuti
 	}
 
 	var onClick func()
-	if tm != nil && !tm.IsError && diffContent != "" {
+	if tm != nil {
 		onClick = func() { setShowModal(true) }
 	}
 	badgeNode := components.ToolBadge(components.ToolBadgeProps{
@@ -1607,8 +1658,9 @@ var MultiEditToolWidget = kitex.FC("MultiEditToolWidget", func(props ToolExecuti
 					AlignItems(style.AlignCenter).
 					Gap(1),
 			},
+				kitex.Text("Multi-Edit Changes in "),
 				icon.FileIcon(icon.FileIconProps{Path: path}),
-				kitex.Text(fmt.Sprintf("Multi-Edit Changes in %s", filename)),
+				kitex.Text(filename),
 			),
 			OnClose: func() { setShowModal(false) },
 			HeaderActions: components.Button(components.ButtonProps{
@@ -1624,7 +1676,18 @@ var MultiEditToolWidget = kitex.FC("MultiEditToolWidget", func(props ToolExecuti
 				return kitex.Text("Show Split")
 			}()),
 		},
-			kitex.If(showModal(), func() kitex.Node {
+			kitex.If(showModal() && tm != nil && tm.IsError, func() kitex.Node {
+				details := getToolOutput(tm.Content)
+				return kitex.Box(kitex.BoxProps{
+					Style: style.S().
+						Padding(1).
+						Width(style.Percent(100)).
+						MinWidth(style.Percent(0)).
+						Foreground(t.Color.Text.Secondary).
+						WhiteSpace(style.WhiteSpacePreWrap),
+				}, kitex.Text(details))
+			}),
+			kitex.If(showModal() && tm != nil && !tm.IsError, func() kitex.Node {
 				return components.DiffBlock(components.DiffBlockProps{
 					Diff:  diffContent,
 					Lang:  detectLang(filename),

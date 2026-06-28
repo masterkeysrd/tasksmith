@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/masterkeysrd/loom/message"
+	"github.com/masterkeysrd/tasksmith/internal/agent/permissions"
 	"github.com/masterkeysrd/tasksmith/internal/agent/tools"
 	coredb "github.com/masterkeysrd/tasksmith/internal/core/db"
 	"github.com/masterkeysrd/tasksmith/internal/session"
@@ -450,6 +451,265 @@ func TestSendSystemNotification(t *testing.T) {
 
 	if val, ok := msgMeta["task_id"].(string); !ok || val != "task-123" {
 		t.Errorf("expected task_id 'task-123', got %v", msgMeta["task_id"])
+	}
+}
+
+func TestSendMessageRejectionOnPendingAuth(t *testing.T) {
+	tmpCwd := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", tmpCwd)
+	t.Setenv("TASKSMITH_APPNAME", "tasksmith-test-pending-auth")
+
+	db, err := coredb.Open(tmpCwd, "tasksmith.db")
+	if err != nil {
+		t.Fatalf("failed to open database: %v", err)
+	}
+	defer db.Close()
+
+	checkpointsDb, err := coredb.Open(tmpCwd, "checkpoints.db")
+	if err != nil {
+		t.Fatalf("failed to open checkpoints database: %v", err)
+	}
+	defer checkpointsDb.Close()
+
+	store, err := session.NewSQLiteStore(db, checkpointsDb)
+	if err != nil {
+		t.Fatalf("failed to initialize sqlite store: %v", err)
+	}
+
+	manager := session.NewManager(session.ManagerConfig{Store: store})
+	ctx := context.Background()
+
+	s, err := manager.CreateSession(ctx, "pending-auth-test")
+	if err != nil {
+		t.Fatalf("failed to create session: %v", err)
+	}
+
+	// Manually set the session to pending_auth state with pending authorizations
+	manager.SetPendingAuthorizationsDebug(s.ID, []permissions.AuthorizationRequest{
+		{
+			ToolCallID:  "call_123",
+			ToolName:    "bash",
+			Description: "Run a command",
+			Preview:     "ls -la",
+			Options: []permissions.PermissionOption{
+				{Target: "all", Label: "Allow"},
+			},
+		},
+	})
+
+	// Attempt to send a message — should be rejected
+	err = manager.SendMessage(ctx, s.ID, "Hello agent")
+	if err == nil {
+		t.Fatal("expected error when sending message while pending auth, got nil")
+	}
+
+	expectedMsg := "cannot send message while tool authorization is pending"
+	if err.Error() != expectedMsg {
+		t.Errorf("expected error message %q, got %q", expectedMsg, err.Error())
+	}
+
+	// Verify the session status is still pending_auth
+	status, _, _, pendingAuths, _ := manager.GetSessionState(ctx, s.ID)
+	if status != session.StatusPendingAuth {
+		t.Errorf("expected session status %q, got %q", session.StatusPendingAuth, status)
+	}
+	if len(pendingAuths) != 1 {
+		t.Errorf("expected 1 pending authorization, got %d", len(pendingAuths))
+	}
+}
+
+func TestSubmitAuthorizationDecisionTransitionsStatus(t *testing.T) {
+	tmpCwd := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", tmpCwd)
+	t.Setenv("TASKSMITH_APPNAME", "tasksmith-test-auth-transition")
+
+	db, err := coredb.Open(tmpCwd, "tasksmith.db")
+	if err != nil {
+		t.Fatalf("failed to open database: %v", err)
+	}
+	defer db.Close()
+
+	checkpointsDb, err := coredb.Open(tmpCwd, "checkpoints.db")
+	if err != nil {
+		t.Fatalf("failed to open checkpoints database: %v", err)
+	}
+	defer checkpointsDb.Close()
+
+	store, err := session.NewSQLiteStore(db, checkpointsDb)
+	if err != nil {
+		t.Fatalf("failed to initialize sqlite store: %v", err)
+	}
+
+	manager := session.NewManager(session.ManagerConfig{Store: store})
+	ctx := context.Background()
+
+	s, err := manager.CreateSession(ctx, "auth-transition-test")
+	if err != nil {
+		t.Fatalf("failed to create session: %v", err)
+	}
+
+	// Set the session to pending_auth state
+	manager.SetPendingAuthorizationsDebug(s.ID, []permissions.AuthorizationRequest{
+		{
+			ToolCallID:  "call_456",
+			ToolName:    "edit",
+			Description: "Edit a file",
+			Preview:     "@@ -1,1 +1,2 @@",
+		},
+	})
+
+	// Verify status is pending_auth
+	status, _, _, pendingAuths, _ := manager.GetSessionState(ctx, s.ID)
+	if status != session.StatusPendingAuth {
+		t.Fatalf("expected session status %q, got %q", session.StatusPendingAuth, status)
+	}
+	if len(pendingAuths) != 1 {
+		t.Fatalf("expected 1 pending authorization, got %d", len(pendingAuths))
+	}
+
+	// Submit an approval decision
+	err = manager.SubmitAuthorizationDecision(ctx, s.ID, permissions.AuthorizationDecision{
+		ToolCallID: "call_456",
+		Approved:   true,
+		Scope:      permissions.ScopeOnce,
+	})
+	if err != nil {
+		t.Fatalf("failed to submit authorization decision: %v", err)
+	}
+
+	// Verify the session status transitioned to running
+	status, _, _, _, _ = manager.GetSessionState(ctx, s.ID)
+	if status != session.StatusRunning {
+		t.Errorf("expected session status %q after submitting decision, got %q", session.StatusRunning, status)
+	}
+
+	// Verify pending authorizations are cleared
+	_, _, _, pendingAuths, _ = manager.GetSessionState(ctx, s.ID)
+	if len(pendingAuths) != 0 {
+		t.Errorf("expected 0 pending authorizations after submitting decision, got %d", len(pendingAuths))
+	}
+}
+
+func TestSubmitDecisionInvalidState(t *testing.T) {
+	tmpCwd := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", tmpCwd)
+	t.Setenv("TASKSMITH_APPNAME", "tasksmith-test-invalid-state")
+
+	db, err := coredb.Open(tmpCwd, "tasksmith.db")
+	if err != nil {
+		t.Fatalf("failed to open database: %v", err)
+	}
+	defer db.Close()
+
+	checkpointsDb, err := coredb.Open(tmpCwd, "checkpoints.db")
+	if err != nil {
+		t.Fatalf("failed to open checkpoints database: %v", err)
+	}
+	defer checkpointsDb.Close()
+
+	store, err := session.NewSQLiteStore(db, checkpointsDb)
+	if err != nil {
+		t.Fatalf("failed to initialize sqlite store: %v", err)
+	}
+
+	manager := session.NewManager(session.ManagerConfig{Store: store})
+	ctx := context.Background()
+
+	s, err := manager.CreateSession(ctx, "invalid-state-test")
+	if err != nil {
+		t.Fatalf("failed to create session: %v", err)
+	}
+
+	// Set the session to error state
+	manager.SetStatusDebug(s.ID, session.StatusError)
+
+	// Try to submit a decision — should fail
+	err = manager.SubmitAuthorizationDecision(ctx, s.ID, permissions.AuthorizationDecision{
+		ToolCallID: "call_789",
+		Approved:   true,
+		Scope:      permissions.ScopeOnce,
+	})
+	if err == nil {
+		t.Fatal("expected error when submitting decision in error state, got nil")
+	}
+
+	expectedMsg := "session is in an invalid state for submitting decisions: error"
+	if err.Error() != expectedMsg {
+		t.Errorf("expected error message %q, got %q", expectedMsg, err.Error())
+	}
+}
+
+func TestMessageQueueAfterDecisionSubmission(t *testing.T) {
+	tmpCwd := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", tmpCwd)
+	t.Setenv("TASKSMITH_APPNAME", "tasksmith-test-queue-after-decision")
+
+	db, err := coredb.Open(tmpCwd, "tasksmith.db")
+	if err != nil {
+		t.Fatalf("failed to open database: %v", err)
+	}
+	defer db.Close()
+
+	checkpointsDb, err := coredb.Open(tmpCwd, "checkpoints.db")
+	if err != nil {
+		t.Fatalf("failed to open checkpoints database: %v", err)
+	}
+	defer checkpointsDb.Close()
+
+	store, err := session.NewSQLiteStore(db, checkpointsDb)
+	if err != nil {
+		t.Fatalf("failed to initialize sqlite store: %v", err)
+	}
+
+	manager := session.NewManager(session.ManagerConfig{Store: store})
+	ctx := context.Background()
+
+	s, err := manager.CreateSession(ctx, "queue-after-decision-test")
+	if err != nil {
+		t.Fatalf("failed to create session: %v", err)
+	}
+
+	// Set the session to pending_auth state
+	manager.SetPendingAuthorizationsDebug(s.ID, []permissions.AuthorizationRequest{
+		{
+			ToolCallID:  "call_q1",
+			ToolName:    "bash",
+			Description: "Test command",
+		},
+	})
+
+	// Submit a decision to transition to running
+	err = manager.SubmitAuthorizationDecision(ctx, s.ID, permissions.AuthorizationDecision{
+		ToolCallID: "call_q1",
+		Approved:   true,
+		Scope:      permissions.ScopeOnce,
+	})
+	if err != nil {
+		t.Fatalf("failed to submit authorization decision: %v", err)
+	}
+
+	// Verify status is running
+	status, _, _, _, _ := manager.GetSessionState(ctx, s.ID)
+	if status != session.StatusRunning {
+		t.Fatalf("expected session status %q after submitting decision, got %q", session.StatusRunning, status)
+	}
+
+	// Now send a message — should be queued (since status is running)
+	err = manager.SendMessage(ctx, s.ID, "Queued message after decision")
+	if err != nil {
+		t.Fatalf("failed to send queued message: %v", err)
+	}
+
+	// Verify the message is in the queued list
+	queued, err := manager.GetQueuedMessages(s.ID)
+	if err != nil {
+		t.Fatalf("failed to get queued messages: %v", err)
+	}
+	if len(queued) != 1 {
+		t.Fatalf("expected 1 queued message, got %d", len(queued))
+	}
+	if queued[0].GetContent().Text() != "Queued message after decision" {
+		t.Errorf("expected queued message text 'Queued message after decision', got %q", queued[0].GetContent().Text())
 	}
 }
 

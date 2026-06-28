@@ -32,6 +32,8 @@ type BubbleGroupProps struct {
 	OnPreview             func()
 	CurrentPendingIndex   int
 	IsInsert              bool
+	LocalDecisions        map[string]permissions.AuthorizationDecision
+	IsSubmitting          bool
 	OnSelectVertical      func(int)
 	OnSelectHorizontal    func(int)
 	OnApprove             func()
@@ -140,6 +142,8 @@ var BubbleGroup = kitex.FC("BubbleGroup", func(props BubbleGroupProps) kitex.Nod
 				OnViewFullOutput:      props.OnViewFullOutput,
 				CurrentPendingIndex:   props.CurrentPendingIndex,
 				IsInsert:              props.IsInsert,
+				LocalDecisions:        props.LocalDecisions,
+				IsSubmitting:          props.IsSubmitting,
 				OnSelectVertical:      props.OnSelectVertical,
 				OnSelectHorizontal:    props.OnSelectHorizontal,
 				OnApprove:             props.OnApprove,

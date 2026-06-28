@@ -48,7 +48,7 @@ var DiffBlock = kitex.FC("DiffBlock", func(props DiffBlockProps) kitex.Node {
 		return nil
 	}
 
-	rows := parseUnifiedDiff(diffStr)
+	rows := parseUnifiedDiff(diffStr, props.Split)
 	if len(rows) == 0 {
 		return nil
 	}
@@ -527,7 +527,7 @@ var DiffBlock = kitex.FC("DiffBlock", func(props DiffBlockProps) kitex.Node {
 })
 
 // parseUnifiedDiff parses a unified diff string and aligns the operations line-by-line.
-func parseUnifiedDiff(diffStr string) []AlignedRow {
+func parseUnifiedDiff(diffStr string, split bool) []AlignedRow {
 	var rows []AlignedRow
 	lines := strings.Split(diffStr, "\n")
 	if len(lines) > 0 && lines[len(lines)-1] == "" {
@@ -539,6 +539,22 @@ func parseUnifiedDiff(diffStr string) []AlignedRow {
 	var pendingInserts []*DiffLine
 
 	flushPending := func() {
+		if !split {
+			for _, del := range pendingDeletes {
+				rows = append(rows, AlignedRow{
+					Left: del,
+				})
+			}
+			for _, ins := range pendingInserts {
+				rows = append(rows, AlignedRow{
+					Right: ins,
+				})
+			}
+			pendingDeletes = nil
+			pendingInserts = nil
+			return
+		}
+
 		nDel := len(pendingDeletes)
 		nIns := len(pendingInserts)
 		maxRows := nDel

@@ -13,12 +13,18 @@ type ConfirmDialogProps struct {
 	ConfirmLabel string
 	// CancelLabel is the label for the cancel button (default: "Cancel").
 	CancelLabel string
+	// SecondaryLabel is the label for an optional secondary action button.
+	SecondaryLabel string
 	// ConfirmColor is the color of the confirm button.
 	ConfirmColor ButtonColor
+	// SecondaryColor is the color of the secondary action button.
+	SecondaryColor ButtonColor
 	// OnConfirm is called when the user confirms the action.
 	OnConfirm func()
 	// OnCancel is called when the user cancels.
 	OnCancel func()
+	// OnSecondary is called when the user triggers the secondary action.
+	OnSecondary func()
 }
 
 // ConfirmDialog renders a centered full-screen dialog asking the user to confirm or cancel an action.
@@ -35,6 +41,10 @@ var ConfirmDialog = kitex.FC("ConfirmDialog", func(props ConfirmDialogProps) kit
 	if confirmColor == "" {
 		confirmColor = ButtonError
 	}
+	secondaryColor := props.SecondaryColor
+	if secondaryColor == "" {
+		secondaryColor = ButtonBase
+	}
 
 	return kitex.Dialog(kitex.DialogProps{ZIndex: 100},
 		Paper(PaperProps{
@@ -44,41 +54,38 @@ var ConfirmDialog = kitex.FC("ConfirmDialog", func(props ConfirmDialogProps) kit
 				Display(style.DisplayFlex).
 				FlexDirection(style.FlexColumn).
 				Gap(1).
-				Padding(2).
-				MinWidth(style.Cells(36)),
+				Padding(1).
+				MinWidth(style.Cells(40)),
 		},
 			kitex.If(props.Message != "", func() kitex.Node {
 				return kitex.Box(kitex.BoxProps{
 					Style: style.S().
-						PaddingBottom(1),
+						PaddingVertical(1).
+						PaddingHorizontal(1),
 				}, kitex.Text(props.Message))
 			}),
 			kitex.Box(kitex.BoxProps{
 				Style: style.S().
 					Display(style.DisplayFlex).
-					AlignItems(style.AlignCenter).
+					FlexDirection(style.FlexRow).
+					JustifyContent(style.JustifyEnd).
 					Gap(1),
 			},
+				kitex.If(props.SecondaryLabel != "", func() kitex.Node {
+					return Button(ButtonProps{
+						Variant: ButtonText,
+						Color:   secondaryColor,
+						OnClick: props.OnSecondary,
+					}, kitex.Text(props.SecondaryLabel))
+				}),
 				Button(ButtonProps{
-					Variant: ButtonSolid,
+					Variant: ButtonText,
 					Color:   confirmColor,
-					Style: style.S().
-						Flex(1).
-						JustifyContent(style.JustifyCenter).
-						TextAlign(style.TextAlignCenter).
-						AlignItems(style.AlignCenter).
-						PaddingVertical(1),
 					OnClick: props.OnConfirm,
 				}, kitex.Text(confirmLabel)),
 				Button(ButtonProps{
 					Variant: ButtonText,
 					Color:   ButtonBase,
-					Style: style.S().
-						Flex(1).
-						JustifyContent(style.JustifyCenter).
-						AlignItems(style.AlignCenter).
-						TextAlign(style.TextAlignCenter).
-						PaddingVertical(1),
 					OnClick: props.OnCancel,
 				}, kitex.Text(cancelLabel)),
 			),

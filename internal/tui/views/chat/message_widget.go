@@ -25,6 +25,8 @@ type MessageProps struct {
 	OnPreview             func()
 	CurrentPendingIndex   int
 	IsInsert              bool
+	LocalDecisions        map[string]permissions.AuthorizationDecision
+	IsSubmitting          bool
 	OnSelectVertical      func(int)
 	OnSelectHorizontal    func(int)
 	OnApprove             func()
@@ -68,6 +70,9 @@ var Message = kitex.FC("Message", func(props MessageProps) kitex.Node {
 					isActive := len(props.PendingAuthorizations) > 0 &&
 						props.CurrentPendingIndex < len(props.PendingAuthorizations) &&
 						pendingReq.ToolCallID == props.PendingAuthorizations[props.CurrentPendingIndex].ToolCallID
+
+					decision, isDecided := props.LocalDecisions[pendingReq.ToolCallID]
+
 					node = AuthorizationWidget(AuthorizationWidgetProps{
 						Request:            *pendingReq,
 						SelectedIndex:      props.SelectedIndex,
@@ -75,6 +80,9 @@ var Message = kitex.FC("Message", func(props MessageProps) kitex.Node {
 						OnPreview:          props.OnPreview,
 						IsActive:           isActive,
 						IsFocused:          isActive && !props.IsInsert,
+						IsDecided:          isDecided,
+						Decision:           decision,
+						IsSubmitting:       props.IsSubmitting,
 						OnSelectVertical:   props.OnSelectVertical,
 						OnSelectHorizontal: props.OnSelectHorizontal,
 						OnApprove:          props.OnApprove,
