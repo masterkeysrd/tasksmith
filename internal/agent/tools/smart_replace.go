@@ -57,16 +57,19 @@ func SmartReplace(content, target, replacement string, replaceAll bool) (string,
 	contentLines := strings.Split(contentNorm, "\n")
 	rawTargetLines := strings.Split(targetNorm, "\n")
 
-	// Strip leading/trailing empty lines from target to be forgiving
-	startIdx := 0
-	for startIdx < len(rawTargetLines) && strings.TrimSpace(rawTargetLines[startIdx]) == "" {
-		startIdx++
+	// Strip leading/trailing empty lines from both target and replacement to prevent multiplication
+	stripEmpty := func(lines []string) []string {
+		s, e := 0, len(lines)
+		for s < e && strings.TrimSpace(lines[s]) == "" {
+			s++
+		}
+		for e > s && strings.TrimSpace(lines[e-1]) == "" {
+			e--
+		}
+		return lines[s:e]
 	}
-	endIdx := len(rawTargetLines)
-	for endIdx > startIdx && strings.TrimSpace(rawTargetLines[endIdx-1]) == "" {
-		endIdx--
-	}
-	targetLines := rawTargetLines[startIdx:endIdx]
+	targetLines := stripEmpty(rawTargetLines)
+	replacementNorm = strings.Join(stripEmpty(strings.Split(replacementNorm, "\n")), "\n")
 
 	var matchIndices []int
 	for i := 0; i <= len(contentLines)-len(targetLines); {
@@ -213,14 +216,19 @@ func SmartReplace(content, target, replacement string, replaceAll bool) (string,
 			first := blocks[0]
 			last := blocks[len(blocks)-2] // second to last is the final actual match block
 
-			// Reconstruct the full boundaries of the target block, including unmatched prefix/suffix
+			// Reconstruct boundaries with projection to catch typos at the edges,
+			// but strictly clamp them to the current sliding window to prevent massive over-deletion.
 			start := i + (first.A - first.B)
-			if start < 0 {
-				start = 0
+			if start < i {
+				start = i
 			}
 			end := i + last.A + last.Size + (len(targetLines) - (last.B + last.Size))
-			if end > len(contentLines) {
-				end = len(contentLines)
+			endLimit := i + windowSize
+			if endLimit > len(contentLines) {
+				endLimit = len(contentLines)
+			}
+			if end > endLimit {
+				end = endLimit
 			}
 
 			// Deduplicate candidates by exact (start, end) ranges
@@ -349,14 +357,28 @@ func adjustIndentation(block string, targetBaseIndent string) string {
 
 	useTabs := strings.Contains(targetBaseIndent, "\t") || (targetBaseIndent == "" && strings.Contains(block, "\t"))
 
-	// Find the base indentation of the agent's replacement block
+	// Find the minimum base indentation of the agent's replacement block, ignoring intentionally flat lines
 	var agentBaseIndent string
 	found := false
 	for _, l := range lines {
-		if strings.TrimSpace(l) != "" {
-			agentBaseIndent = getIndentation(l)
-			found = true
-			break
+		trimmed := strings.TrimLeft(l, " \t")
+		if trimmed != "" {
+			if isTrulyFlat(trimmed, "        ") {
+				continue
+			}
+			indent := getIndentation(l)
+			if !found || len(indent) < len(agentBaseIndent) {
+				agentBaseIndent = indent
+				found = true
+			}
+		}
+	}
+	if !found {
+		for _, l := range lines {
+			if strings.TrimSpace(l) != "" {
+				agentBaseIndent = getIndentation(l)
+				break
+			}
 		}
 	}
 
