@@ -271,6 +271,11 @@ func (r *DownloadRunner) State() string {
 	return fmt.Sprintf("Downloading: %.1f MB (unknown size)", float64(downloaded)/(1024*1024))
 }
 
+// WriteStdin writes standard input to the download runner. It is not supported for downloads.
+func (r *DownloadRunner) WriteStdin(data string) error {
+	return fmt.Errorf("stdin write not supported for downloads")
+}
+
 // Download handles tool execution for downloading a file.
 func (h *ToolHandlers) Download(ctx context.Context, in DownloadArgs) (DownloadOutput, error) {
 	if h.TaskManager == nil {
@@ -373,4 +378,9 @@ func (h *ToolHandlers) Download(ctx context.Context, in DownloadArgs) (DownloadO
 		Message: fmt.Sprintf("Download failed: %s", errMsg),
 		Path:    finalPath,
 	}, nil
+}
+
+// TextContent returns a human-readable representation of DownloadOutput.
+func (o DownloadOutput) TextContent() string {
+	return o.Message
 }

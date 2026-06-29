@@ -24,6 +24,12 @@ spec:
       success:
         type: boolean
         description: Whether reading the resource succeeded.
+      cached_path:
+        type: string
+        description: Cached path in workspace session storage.
+      truncated:
+        type: boolean
+        description: Whether the content was truncated due to context limits.
 ---
 Read the content of a specific MCP (Model Context Protocol) resource.
 

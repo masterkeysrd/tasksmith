@@ -103,12 +103,16 @@ var TasksToolWidget = kitex.FC("TasksToolWidget", func(props ToolExecutionProps)
 
 	action := ""
 	targetTaskId := ""
+	inputVal := ""
 	if tc != nil && len(tc.Args) > 0 {
 		if actVal, ok := tc.Args["action"]; ok {
 			action, _ = actVal.(string)
 		}
 		if tidVal, ok := tc.Args["taskId"]; ok {
 			targetTaskId, _ = tidVal.(string)
+		}
+		if inputValVal, ok := tc.Args["input"]; ok {
+			inputVal, _ = inputValVal.(string)
 		}
 	}
 
@@ -412,6 +416,37 @@ var TasksToolWidget = kitex.FC("TasksToolWidget", func(props ToolExecutionProps)
 
 							if action == "kill" {
 								return kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Primary)}, kitex.Text(out.Message))
+							}
+
+							if action == "send_input" {
+								var statusCol color.Color
+								switch out.Status {
+								case "running":
+									statusCol = t.Color.Surface.Info
+								case "finished", "completed":
+									statusCol = t.Color.Surface.Success
+								default:
+									statusCol = t.Color.Text.Primary
+								}
+
+								return kitex.Box(kitex.BoxProps{
+									Style: style.S().Display(style.DisplayFlex).FlexDirection(style.FlexColumn).Gap(1),
+								},
+									kitex.Box(kitex.BoxProps{
+										Style: style.S().Display(style.DisplayFlex).FlexDirection(style.FlexRow).AlignItems(style.AlignCenter).Gap(1),
+									},
+										kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Secondary).Bold(true)}, kitex.Text("Stdin Input:")),
+										kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Primary).Italic(true)}, kitex.Text(fmt.Sprintf("%q", inputVal))),
+									),
+									kitex.Box(kitex.BoxProps{
+										Style: style.S().Display(style.DisplayFlex).FlexDirection(style.FlexRow).AlignItems(style.AlignCenter).Gap(1),
+									},
+										kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Primary)}, kitex.Text(out.Message)),
+										kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Secondary)}, kitex.Text(" (Task Status: ")),
+										kitex.Span(kitex.SpanProps{Style: style.S().Foreground(statusCol).Bold(true)}, kitex.Text(strings.ToUpper(out.Status))),
+										kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Secondary)}, kitex.Text(")")),
+									),
+								)
 							}
 						}
 

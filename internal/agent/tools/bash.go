@@ -25,6 +25,7 @@ type BashRunner struct {
 	Command string
 	CWD     string
 	cmd     *exec.Cmd
+	stdin   io.WriteCloser
 	mu      sync.Mutex
 }
 
@@ -35,6 +36,13 @@ func (br *BashRunner) Start(ctx context.Context, stdout io.Writer, stderr io.Wri
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
 
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		br.mu.Unlock()
+		return fmt.Errorf("failed to create stdin pipe: %w", err)
+	}
+	br.stdin = stdin
+
 	// Set process group so we can terminate all subprocesses
 	process.Prepare(cmd)
 
@@ -42,16 +50,29 @@ func (br *BashRunner) Start(ctx context.Context, stdout io.Writer, stderr io.Wri
 	cmd.Cancel = func() error {
 		return process.Kill(cmd)
 	}
-	cmd.WaitDelay = 5 * time.Second
+	cmd.WaitDelay = defaultWaitDelay
 	br.cmd = cmd
 	br.mu.Unlock()
 
 	return cmd.Run()
 }
 
+func (br *BashRunner) WriteStdin(data string) error {
+	br.mu.Lock()
+	defer br.mu.Unlock()
+	if br.stdin == nil {
+		return fmt.Errorf("stdin pipe not available")
+	}
+	_, err := io.WriteString(br.stdin, data)
+	return err
+}
+
 func (br *BashRunner) Stop() error {
 	br.mu.Lock()
 	defer br.mu.Unlock()
+	if br.stdin != nil {
+		br.stdin.Close()
+	}
 	if br.cmd != nil {
 		return process.Kill(br.cmd)
 	}
@@ -80,9 +101,13 @@ func (br *BashRunner) State() string {
 }
 
 const (
-	bashLogSizeThreshold = 100000 // 100KB threshold
-	bashLogPreviewLimit  = 30000  // 30KB preview limit
-	bashBgPreviewLimit   = 5000   // 5KB preview limit for background task logs
+	logSizeThresholdBytes  = 100000 // 100KB threshold
+	logPreviewLimitBytes   = 8000   // 8KB preview limit
+	bgLogPreviewLimitBytes = 5000   // 5KB preview limit for background task logs
+
+	defaultWaitDelay      = 5 * time.Second
+	defaultBashWaitMs     = 10000
+	logStreamPollInterval = 50 * time.Millisecond
 )
 
 func readAndTruncateBgLog(logPath string) string {
@@ -103,7 +128,7 @@ func readAndTruncateBgLog(logPath string) string {
 		return ""
 	}
 
-	if info.Size() <= bashBgPreviewLimit {
+	if info.Size() <= bgLogPreviewLimitBytes {
 		data, err := os.ReadFile(logPath)
 		if err != nil {
 			return ""
@@ -111,14 +136,14 @@ func readAndTruncateBgLog(logPath string) string {
 		return string(data)
 	}
 
-	// Read last bashBgPreviewLimit bytes
-	offset := info.Size() - bashBgPreviewLimit
+	// Read last bgLogPreviewLimitBytes bytes
+	offset := info.Size() - bgLogPreviewLimitBytes
 	_, err = f.Seek(offset, io.SeekStart)
 	if err != nil {
 		return ""
 	}
 
-	buf := make([]byte, bashBgPreviewLimit)
+	buf := make([]byte, bgLogPreviewLimitBytes)
 	n, err := f.Read(buf)
 	if err != nil && err != io.EOF {
 		return ""
@@ -127,9 +152,9 @@ func readAndTruncateBgLog(logPath string) string {
 	return "[... truncated to protect context window. Use the 'tasks' tool with action 'status' to view more/latest logs ...]\n" + string(buf[:n])
 }
 
-// saveAndTruncate checks the size of the log file at logPath. If it exceeds a threshold (20,000 bytes),
+// saveAndTruncate checks the size of the log file at logPath. If it exceeds logSizeThresholdBytes,
 // it saves the full output in h.Storage (if available) under a name containing toolCallID and suffix,
-// reads a truncated preview (5,000 bytes) of the output, and appends a warning note.
+// reads a truncated tail preview of logPreviewLimitBytes bytes, and appends a warning note.
 // Otherwise, it returns the full file content.
 func (h *ToolHandlers) saveAndTruncate(ctx context.Context, logPath string, suffix string, toolCallID string) (string, error) {
 	fileInfo, err := os.Stat(logPath)
@@ -140,7 +165,7 @@ func (h *ToolHandlers) saveAndTruncate(ctx context.Context, logPath string, suff
 		return "", err
 	}
 
-	if fileInfo.Size() <= bashLogSizeThreshold {
+	if fileInfo.Size() <= logSizeThresholdBytes {
 		data, err := os.ReadFile(logPath)
 		if err != nil {
 			return "", err
@@ -165,11 +190,12 @@ func (h *ToolHandlers) saveAndTruncate(ctx context.Context, logPath string, suff
 		}
 	}
 
-	// Read first preview limit characters from logPath
-	_, _ = logFile.Seek(0, io.SeekStart)
-	reader := io.LimitReader(logFile, bashLogPreviewLimit)
+	// Read last preview limit characters from logPath
+	offset := fileInfo.Size() - logPreviewLimitBytes
+	_, _ = logFile.Seek(offset, io.SeekStart)
 	buf := new(strings.Builder)
-	_, _ = io.Copy(buf, reader)
+	buf.WriteString("[... truncated to protect context window. View the full file for complete logs ...]\n")
+	_, _ = io.Copy(buf, logFile)
 
 	truncated := buf.String()
 	note := fmt.Sprintf("\n\n[SYSTEM NOTE: The %s output was too long and was truncated. The complete output is saved at: %s. You can view the full file using 'view' or search it using 'grep'.]", suffix, savedPath)
@@ -190,7 +216,7 @@ func (h *ToolHandlers) Bash(ctx context.Context, in BashArgs) (tool.ToolStream, 
 			cmd.Cancel = func() error {
 				return process.Kill(cmd)
 			}
-			cmd.WaitDelay = 5 * time.Second
+			cmd.WaitDelay = defaultWaitDelay
 			out, err := cmd.CombinedOutput()
 			var exitCode int
 			var status = "completed"
@@ -239,7 +265,7 @@ func (h *ToolHandlers) Bash(ctx context.Context, in BashArgs) (tool.ToolStream, 
 
 		waitMs := in.WaitMs
 		if waitMs <= 0 {
-			waitMs = 10000 // Default: 10 seconds
+			waitMs = defaultBashWaitMs
 		}
 
 		detector := newChangeDetector(h.CWD)
@@ -312,7 +338,7 @@ func (h *ToolHandlers) Bash(ctx context.Context, in BashArgs) (tool.ToolStream, 
 		}
 
 		// Stream logs during WaitMs window or until completion
-		ticker := time.NewTicker(50 * time.Millisecond)
+		ticker := time.NewTicker(logStreamPollInterval)
 		defer ticker.Stop()
 
 		for {
@@ -482,20 +508,6 @@ func newChangeDetector(cwd string) *bashChangeDetector {
 	return cd
 }
 
-func parseGitStatusLines(statusOutput string) map[string]string {
-	m := make(map[string]string)
-	lines := strings.SplitSeq(statusOutput, "\n")
-	for l := range lines {
-		if len(l) < 4 {
-			continue
-		}
-		status := l[:2]
-		path := strings.TrimSpace(l[2:])
-		m[path] = status
-	}
-	return m
-}
-
 func (cd *bashChangeDetector) scanMtimes() {
 	_ = filepath.Walk(cd.cwd, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
@@ -505,16 +517,8 @@ func (cd *bashChangeDetector) scanMtimes() {
 		if err != nil {
 			return nil
 		}
-		name := info.Name()
-		isDir := info.IsDir()
-		if cd.ignorer != nil && cd.ignorer.ShouldIgnore(name, path, isDir) {
-			if isDir {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if isDir {
-			if strings.HasPrefix(name, ".") && name != "." {
+		if cd.ignorer.ShouldIgnore(filepath.Base(path), path, info.IsDir()) {
+			if info.IsDir() {
 				return filepath.SkipDir
 			}
 			return nil
@@ -526,8 +530,7 @@ func (cd *bashChangeDetector) scanMtimes() {
 
 func (cd *bashChangeDetector) DetectChanges() []filetrack.Change {
 	var changes []filetrack.Change
-
-	postMtimes := make(map[string]time.Time)
+	currentMtimes := make(map[string]time.Time)
 	_ = filepath.Walk(cd.cwd, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return nil
@@ -536,48 +539,27 @@ func (cd *bashChangeDetector) DetectChanges() []filetrack.Change {
 		if err != nil {
 			return nil
 		}
-		name := info.Name()
-		isDir := info.IsDir()
-		if cd.ignorer != nil && cd.ignorer.ShouldIgnore(name, path, isDir) {
-			if isDir {
+		if cd.ignorer.ShouldIgnore(filepath.Base(path), path, info.IsDir()) {
+			if info.IsDir() {
 				return filepath.SkipDir
 			}
 			return nil
 		}
-		if isDir {
-			if strings.HasPrefix(name, ".") && name != "." {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		postMtimes[rel] = info.ModTime()
+		currentMtimes[rel] = info.ModTime()
 		return nil
 	})
 
-	for rel, postTime := range postMtimes {
-		preTime, existed := cd.preMtimes[rel]
-		if !existed {
-			changes = append(changes, filetrack.Change{
-				ToolName: "bash",
-				Path:     "./" + filepath.ToSlash(rel),
-				Kind:     filetrack.Created,
-			})
-		} else if postTime.After(preTime) {
-			changes = append(changes, filetrack.Change{
-				ToolName: "bash",
-				Path:     "./" + filepath.ToSlash(rel),
-				Kind:     filetrack.Modified,
-			})
+	for rel, mtime := range currentMtimes {
+		preMtime, ok := cd.preMtimes[rel]
+		if !ok {
+			changes = append(changes, filetrack.Change{Path: "./" + rel, Kind: filetrack.Created})
+		} else if mtime.After(preMtime) {
+			changes = append(changes, filetrack.Change{Path: "./" + rel, Kind: filetrack.Modified})
 		}
 	}
-
 	for rel := range cd.preMtimes {
-		if _, existed := postMtimes[rel]; !existed {
-			changes = append(changes, filetrack.Change{
-				ToolName: "bash",
-				Path:     "./" + filepath.ToSlash(rel),
-				Kind:     filetrack.Deleted,
-			})
+		if _, ok := currentMtimes[rel]; !ok {
+			changes = append(changes, filetrack.Change{Path: "./" + rel, Kind: filetrack.Deleted})
 		}
 	}
 
@@ -585,29 +567,27 @@ func (cd *bashChangeDetector) DetectChanges() []filetrack.Change {
 		status, err := vcs.GetStatus(cd.cwd)
 		if err == nil {
 			postStatus := parseGitStatusLines(status)
-			for rel, postStat := range postStatus {
-				preStat, existed := cd.preStatus[rel]
-				if !existed || preStat != postStat {
-					relSlash := "./" + filepath.ToSlash(rel)
+			for rel, post := range postStatus {
+				pre, ok := cd.preStatus[rel]
+				if !ok || pre != post {
 					found := false
-					for _, ch := range changes {
-						if ch.Path == relSlash {
+					for i, c := range changes {
+						if c.Path == "./"+rel {
 							found = true
+							if c.Kind == filetrack.Modified && (post == "D" || post == "DR") {
+								changes[i].Kind = filetrack.Deleted
+							}
 							break
 						}
 					}
 					if !found {
 						kind := filetrack.Modified
-						if strings.Contains(postStat, "D") {
-							kind = filetrack.Deleted
-						} else if strings.Contains(postStat, "?") || strings.Contains(postStat, "A") {
+						if post == "A" || post == "?? project" {
 							kind = filetrack.Created
+						} else if post == "D" {
+							kind = filetrack.Deleted
 						}
-						changes = append(changes, filetrack.Change{
-							ToolName: "bash",
-							Path:     relSlash,
-							Kind:     kind,
-						})
+						changes = append(changes, filetrack.Change{Path: "./" + rel, Kind: kind})
 					}
 				}
 			}
@@ -617,71 +597,40 @@ func (cd *bashChangeDetector) DetectChanges() []filetrack.Change {
 	return changes
 }
 
-func countLinesInFile(path string) int {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return 0
+func parseGitStatusLines(status string) map[string]string {
+	res := make(map[string]string)
+	lines := strings.Split(status, "\n")
+	for _, l := range lines {
+		if len(l) < 4 {
+			continue
+		}
+		state := strings.TrimSpace(l[:2])
+		file := strings.TrimSpace(l[3:])
+		res[file] = state
 	}
-	return strings.Count(string(data), "\n") + 1
-}
-
-func runGitCmd(cwd string, args ...string) string {
-	cmd := exec.Command("git", append([]string{"-C", cwd}, args...)...)
-	out, err := cmd.Output()
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(out))
+	return res
 }
 
 func recordBashChanges(ctx context.Context, ft filetrack.FileTracker, cwd string, changes []filetrack.Change) {
 	if ft == nil {
 		return
 	}
-	for _, change := range changes {
-		rel := strings.TrimPrefix(change.Path, "./")
-		absPath := filepath.Join(cwd, rel)
-
-		isBinary := false
-		if change.Kind != filetrack.Deleted {
-			mimeType := fs.DetectMIMEType(absPath)
-			isBinary = fs.IsBinaryMIME(mimeType)
+	for _, c := range changes {
+		absPath := filepath.Join(cwd, c.Path)
+		mimeType := fs.DetectMIMEType(absPath)
+		if fs.IsBinaryMIME(mimeType) {
+			_ = ft.Record(ctx, c, "", "")
+			continue
 		}
 
-		var diffStr string
-		var oldContent string
-		var additions, deletions int
-
-		if !isBinary {
-			if change.Kind == filetrack.Created {
-				additions = countLinesInFile(absPath)
-			} else if change.Kind == filetrack.Deleted {
-				// Deletions count is 0 as file content is gone and not tracked here
-			} else if change.Kind == filetrack.Modified {
-				newBytes, err := os.ReadFile(absPath)
-				var newContent string
-				if err == nil {
-					newContent = string(newBytes)
-					additions = strings.Count(newContent, "\n") + 1
-				}
-
-				if vcs.IsGitAvailable() && vcs.IsRepo(cwd) {
-					diffStr = runGitCmd(cwd, "diff", "--", rel)
-					showOut := runGitCmd(cwd, "show", ":"+rel)
-					if showOut == "" {
-						showOut = runGitCmd(cwd, "show", "HEAD:"+rel)
-					}
-					if showOut != "" {
-						oldContent = showOut
-						deletions = strings.Count(oldContent, "\n") + 1
-					}
-				}
+		if c.Kind == filetrack.Created || c.Kind == filetrack.Modified {
+			content, err := os.ReadFile(absPath)
+			if err == nil {
+				c.Additions = strings.Count(string(content), "\n") + 1
+				_ = ft.Record(ctx, c, "", string(content))
 			}
+		} else {
+			_ = ft.Record(ctx, c, "", "")
 		}
-
-		change.Additions = additions
-		change.Deletions = deletions
-
-		_ = ft.Record(ctx, change, diffStr, oldContent)
 	}
 }

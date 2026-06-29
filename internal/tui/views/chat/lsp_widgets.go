@@ -583,3 +583,170 @@ var LspDiagnosticsToolWidget = kitex.FC("LspDiagnosticsToolWidget", func(props T
 		),
 	)
 })
+
+// LspInspectToolWidget renders the result of an lsp_inspect tool call inline.
+var LspInspectToolWidget = kitex.FC("LspInspectToolWidget", func(props ToolExecutionProps) kitex.Node {
+	t := theme.UseTheme()
+	showModal, setShowModal := kitex.UseState(false)
+
+	tc := props.ToolCall
+	tm := props.ToolMessage
+
+	var query string
+	if tc.Args != nil {
+		query, _ = tc.Args["query"].(string)
+	}
+
+	var statusLabel string
+	var labelNode kitex.Node
+	var iconNode kitex.Node
+	var themeColor color.Color
+
+	var out tools.LspInspectOutput
+	var hasStructured bool
+	if tm != nil {
+		out, hasStructured = parseLspInspectOutput(tm.StructuredContent)
+	}
+
+	hasResult := hasStructured && out.Result.Name != ""
+	totalInspected := 0
+	if hasResult {
+		totalInspected = 1 + len(out.SimilarSymbols)
+	}
+
+	if t != nil {
+		if tm == nil {
+			statusLabel = fmt.Sprintf("Inspecting symbol %s", query)
+			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Info)}, kitex.Text(props.CurrentDots))
+			themeColor = t.Color.Surface.Info
+		} else if tm.IsError {
+			statusLabel = fmt.Sprintf("Error inspecting symbol %s", query)
+			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Error)}, icon.Error)
+			themeColor = t.Color.Text.Error
+		} else {
+			if hasResult {
+				baseFocusBg := t.Color.Surface.BaseFocus
+				searchIconColor := t.Color.Surface.Info
+				labelNode = kitex.Box(kitex.BoxProps{
+					Style: style.S().
+						Display(style.DisplayFlex).
+						FlexDirection(style.FlexRow).
+						AlignItems(style.AlignCenter).
+						Bold(true),
+				},
+					kitex.Span(kitex.SpanProps{}, kitex.Text(fmt.Sprintf("Inspected %d symbol(s) for ", totalInspected))),
+					kitex.Box(kitex.BoxProps{
+						Style: style.S().
+							Display(style.DisplayFlex).
+							FlexDirection(style.FlexRow).
+							AlignItems(style.AlignCenter).
+							Background(baseFocusBg).
+							PaddingHorizontal(1).
+							Gap(1),
+					},
+						kitex.Span(kitex.SpanProps{Style: style.S().Foreground(searchIconColor)}, icon.Search),
+						kitex.Span(kitex.SpanProps{}, kitex.Text(query)),
+					),
+				)
+				iconNode = nil
+				themeColor = color.RGBA{R: 255, G: 255, B: 255, A: 255}
+				statusLabel = fmt.Sprintf("Inspected symbol %s (%d matches)", query, totalInspected)
+			} else {
+				statusLabel = fmt.Sprintf("No matches found for symbol %s", query)
+				iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Secondary)}, icon.Info)
+				themeColor = t.Color.Text.Secondary
+			}
+		}
+	}
+
+	var onClick func()
+	if tm != nil && (tm.IsError || hasResult) {
+		onClick = func() { setShowModal(true) }
+	}
+
+	badgeNode := components.ToolBadge(components.ToolBadgeProps{
+		Icon:      iconNode,
+		Label:     statusLabel,
+		LabelNode: labelNode,
+		Color:     themeColor,
+		OnClick:   onClick,
+	})
+
+	var fullReportPath string
+	if hasResult {
+		fullReportPath = out.Result.FullReportPath
+	}
+
+	var markdownSource string
+	if showModal() && tm != nil && !tm.IsError && hasResult {
+		markdownSource = out.TextContent()
+	}
+
+	var details string
+	if tm != nil && tm.IsError {
+		details = getToolOutput(tm.Content)
+	}
+
+	return kitex.Fragment(
+		badgeNode,
+		components.Modal(components.ModalProps{
+			IsOpen: showModal(),
+			Title: kitex.Box(kitex.BoxProps{
+				Style: style.S().
+					Display(style.DisplayFlex).
+					FlexDirection(style.FlexRow).
+					AlignItems(style.AlignCenter).
+					Gap(1),
+			},
+				kitex.If(t != nil && tm != nil && tm.IsError, func() kitex.Node {
+					return kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Error)}, icon.Error)
+				}),
+				kitex.If(tm != nil && tm.IsError, func() kitex.Node {
+					return kitex.Span(kitex.SpanProps{}, kitex.Text(fmt.Sprintf("Inspection Error for %s", query)))
+				}),
+				kitex.If(tm != nil && !tm.IsError, func() kitex.Node {
+					return kitex.Span(kitex.SpanProps{}, kitex.Text(fmt.Sprintf("Inspection Report: %s", query)))
+				}),
+			),
+			OnClose: func() { setShowModal(false) },
+		},
+			kitex.If(showModal() && tm != nil && tm.IsError && details != "", func() kitex.Node {
+				return kitex.Box(kitex.BoxProps{
+					Style: style.S().
+						Padding(1).
+						Width(style.Percent(100)).
+						MinWidth(style.Percent(0)).
+						Foreground(t.Color.Text.Secondary).
+						WhiteSpace(style.WhiteSpacePreWrap),
+				}, kitex.Text(details))
+			}),
+			kitex.If(showModal() && tm != nil && !tm.IsError && markdownSource != "", func() kitex.Node {
+				return kitex.Box(kitex.BoxProps{
+					Style: style.S().
+						Display(style.DisplayFlex).
+						FlexDirection(style.FlexColumn).
+						Padding(1).
+						Width(style.Percent(100)).
+						MinWidth(style.Percent(0)),
+				},
+					kitex.If(fullReportPath != "", func() kitex.Node {
+						return components.Button(components.ButtonProps{
+							Variant: components.ButtonSolid,
+							Color:   components.ButtonPrimary,
+							Style: style.S().
+								MarginBottom(1).
+								Width(style.MaxContent),
+							OnClick: func() {
+								openWithSystemViewer(fullReportPath)
+							},
+						}, kitex.Fragment(
+							kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Primary)}, icon.Search),
+							kitex.Text(" VIEW FULL REPORT"),
+						))
+					}),
+					components.Markdown(components.MarkdownProps{Source: markdownSource}),
+				)
+			}),
+		),
+	)
+})

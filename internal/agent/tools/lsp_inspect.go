@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/masterkeysrd/loom/tool"
@@ -43,22 +44,79 @@ func (h *ToolHandlers) LspInspect(ctx context.Context, in LspInspectArgs) (LspIn
 		return LspInspectOutput{TotalMatches: 0}, nil
 	}
 
-	// Step 2: Inspect the top matches
-	results := make([]LspInspectOutputResultsItem, 0, 1)
-	for i, sym := range symbols {
-		if i > 3 {
+	// Prioritize exact matches (both case-sensitive and case-insensitive)
+	sort.Slice(symbols, func(i, j int) bool {
+		iExact := symbols[i].Name == in.Query
+		jExact := symbols[j].Name == in.Query
+		if iExact != jExact {
+			return iExact
+		}
+		iLowerExact := strings.EqualFold(symbols[i].Name, in.Query)
+		jLowerExact := strings.EqualFold(symbols[j].Name, in.Query)
+		if iLowerExact != jLowerExact {
+			return iLowerExact
+		}
+		return i < j
+	})
+
+	var result LspInspectOutputResult
+
+	// Deeply inspect only the first (best) match
+	firstSym := symbols[0]
+	firstItem, err := h.inspectSymbol(ctx, client, firstSym)
+	if err == nil {
+		result = firstItem
+	} else {
+		// Fallback: if deep inspection fails, still try to populate basic info
+		var relPath string
+		if firstSym.Location.Location != nil {
+			filePath := uriToPath(firstSym.Location.Location.URI)
+			if rel, relErr := filepath.Rel(h.CWD, filePath); relErr == nil {
+				relPath = rel
+			} else {
+				relPath = filePath
+			}
+			relPath = fmt.Sprintf("%s:%d", relPath, firstSym.Location.Location.Range.Start.Line+1)
+		} else if firstSym.Location.LocationUriOnly != nil {
+			relPath = uriToPath(firstSym.Location.LocationUriOnly.URI)
+		}
+		result = LspInspectOutputResult{
+			Name:       firstSym.Name,
+			Kind:       symbolKindToString(uint32(firstSym.Kind)),
+			DeclaredAt: relPath,
+		}
+	}
+
+	similarSymbols := make([]LspInspectOutputSimilarSymbolsItem, 0)
+	// For the next matches (up to 20 similar symbols), gather basic info from WorkspaceSymbol without deep inspection
+	for i := 1; i < len(symbols); i++ {
+		if i > 20 {
 			break
 		}
-		item, err := h.inspectSymbol(ctx, client, sym)
-		if err != nil {
-			continue
+		sym := symbols[i]
+		var relPath string
+		if sym.Location.Location != nil {
+			filePath := uriToPath(sym.Location.Location.URI)
+			if rel, relErr := filepath.Rel(h.CWD, filePath); relErr == nil {
+				relPath = rel
+			} else {
+				relPath = filePath
+			}
+			relPath = fmt.Sprintf("%s:%d", relPath, sym.Location.Location.Range.Start.Line+1)
+		} else if sym.Location.LocationUriOnly != nil {
+			relPath = uriToPath(sym.Location.LocationUriOnly.URI)
 		}
-		results = append(results, item)
+		similarSymbols = append(similarSymbols, LspInspectOutputSimilarSymbolsItem{
+			Name:       sym.Name,
+			Kind:       symbolKindToString(uint32(sym.Kind)),
+			DeclaredAt: relPath,
+		})
 	}
 
 	return LspInspectOutput{
-		Results:      results,
-		TotalMatches: len(symbols),
+		Result:         result,
+		SimilarSymbols: similarSymbols,
+		TotalMatches:   len(symbols),
 	}, nil
 }
 
@@ -71,7 +129,7 @@ func uriToPath(uri string) string {
 }
 
 // inspectSymbol performs deep inspection on a single symbol.
-func (h *ToolHandlers) inspectSymbol(ctx context.Context, client *lsp.Client, sym lspx.WorkspaceSymbol) (LspInspectOutputResultsItem, error) {
+func (h *ToolHandlers) inspectSymbol(ctx context.Context, client *lsp.Client, sym lspx.WorkspaceSymbol) (LspInspectOutputResult, error) {
 	var docURI string
 	var rangeVal lspx.Range
 
@@ -81,13 +139,13 @@ func (h *ToolHandlers) inspectSymbol(ctx context.Context, client *lsp.Client, sy
 	} else if sym.Location.LocationUriOnly != nil {
 		docURI = sym.Location.LocationUriOnly.URI
 	} else {
-		return LspInspectOutputResultsItem{}, fmt.Errorf("no location found for symbol %s", sym.Name)
+		return LspInspectOutputResult{}, fmt.Errorf("no location found for symbol %s", sym.Name)
 	}
 
 	filePath := uriToPath(docURI)
 	_, err := os.Stat(filePath)
 	if err != nil {
-		return LspInspectOutputResultsItem{}, fmt.Errorf("symbol file not found: %s", filePath)
+		return LspInspectOutputResult{}, fmt.Errorf("symbol file not found: %s", filePath)
 	}
 	relPath, err := filepath.Rel(h.CWD, filePath)
 	if err != nil {
@@ -190,7 +248,7 @@ func (h *ToolHandlers) inspectSymbol(ctx context.Context, client *lsp.Client, sy
 	// Inline phase: build compact output
 	inline := buildInlineOutput(docs, references, implementations)
 
-	return LspInspectOutputResultsItem{
+	return LspInspectOutputResult{
 		Name:                 sym.Name,
 		Kind:                 kindStr,
 		DeclaredAt:           fmt.Sprintf("%s:%d", relPath, rangeVal.Start.Line+1),
@@ -457,52 +515,68 @@ func sanitizeFilename(name string) string {
 // TextContent implements tool.TextContentProvider so loom renders the result
 // as a human-readable summary instead of a raw JSON blob.
 func (o LspInspectOutput) TextContent() string {
-	if len(o.Results) == 0 {
+	if o.Result.Name == "" {
 		return fmt.Sprintf("No symbols found matching the query (total: %d).", o.TotalMatches)
 	}
 
 	var sb strings.Builder
-	for i, r := range o.Results {
-		if i > 0 {
-			sb.WriteString("\n---\n\n")
+
+	// Primary match
+	r := o.Result
+	fmt.Fprintf(&sb, "## %s (%s)\n\n", r.Name, r.Kind)
+	fmt.Fprintf(&sb, "**Declared at:** `%s`\n\n", r.DeclaredAt)
+	if r.TypeDefinedAt != "" {
+		fmt.Fprintf(&sb, "**Type Defined at:** `%s`\n\n", r.TypeDefinedAt)
+	}
+	if r.Signature != "" {
+		sb.WriteString("```go\n")
+		sb.WriteString(r.Signature)
+		sb.WriteString("\n```\n\n")
+	}
+	if r.Docs != "" {
+		sb.WriteString(r.Docs)
+		if r.DocsTruncated {
+			sb.WriteString("\n\n[Truncated — full report available at: `")
+			sb.WriteString(r.FullReportPath)
+			sb.WriteString("`]")
 		}
-		fmt.Fprintf(&sb, "## %s (%s)\n\n", r.Name, r.Kind)
-		fmt.Fprintf(&sb, "**Declared at:** `%s`\n\n", r.DeclaredAt)
-		if r.TypeDefinedAt != "" {
-			fmt.Fprintf(&sb, "**Type Defined at:** `%s`\n\n", r.TypeDefinedAt)
+		sb.WriteString("\n\n")
+	}
+	if len(r.References) > 0 {
+		sb.WriteString("**References** (")
+		fmt.Fprintf(&sb, "%d total", r.ReferencesTotal)
+		sb.WriteString("):\n")
+		for _, ref := range r.References {
+			sb.WriteString("- `" + ref + "`\n")
 		}
-		if r.Signature != "" {
-			sb.WriteString("```go\n")
-			sb.WriteString(r.Signature)
-			sb.WriteString("\n```\n\n")
+		sb.WriteString("\n")
+	}
+	if len(r.Implementations) > 0 {
+		sb.WriteString("**Implementations** (")
+		fmt.Fprintf(&sb, "%d total", r.ImplementationsTotal)
+		sb.WriteString("):\n")
+		for _, impl := range r.Implementations {
+			sb.WriteString("- `" + impl + "`\n")
 		}
-		if r.Docs != "" {
-			sb.WriteString(r.Docs)
-			if r.DocsTruncated {
-				sb.WriteString("\n\n[Truncated — full report available at: `")
-				sb.WriteString(r.FullReportPath)
-				sb.WriteString("`]")
-			}
-			sb.WriteString("\n\n")
+		sb.WriteString("\n")
+	}
+
+	// Other matching symbols (up to 20)
+	if len(o.SimilarSymbols) > 0 {
+		sb.WriteString("\n---\n\n### Other matching symbols\n\n")
+		for _, other := range o.SimilarSymbols {
+			fmt.Fprintf(&sb, "* **%s** (%s) declared at `%s`\n", other.Name, other.Kind, other.DeclaredAt)
 		}
-		if len(r.References) > 0 {
-			sb.WriteString("**References** (")
-			fmt.Fprintf(&sb, "%d total", r.ReferencesTotal)
-			sb.WriteString("):\n")
-			for _, ref := range r.References {
-				fmt.Fprintf(&sb, "- `%s`\n", ref)
-			}
-			sb.WriteString("\n")
-		}
-		if len(r.Implementations) > 0 {
-			sb.WriteString("**Implementations** (")
-			fmt.Fprintf(&sb, "%d total", r.ImplementationsTotal)
-			sb.WriteString("):\n")
-			for _, impl := range r.Implementations {
-				fmt.Fprintf(&sb, "- `%s`\n", impl)
-			}
-			sb.WriteString("\n")
+
+		// 1 primary + len(o.SimilarSymbols)
+		totalRendered := 1 + len(o.SimilarSymbols)
+		if o.TotalMatches > totalRendered {
+			remaining := o.TotalMatches - totalRendered
+			fmt.Fprintf(&sb, "\n*... and %d more matching symbols. (Use a more specific query to inspect one of these).* \n", remaining)
+		} else {
+			sb.WriteString("\n*(Use a more specific query to inspect one of these).*\n")
 		}
 	}
+
 	return sb.String()
 }

@@ -4,8 +4,14 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 	"time"
+)
+
+const (
+	defaultCompletedListLimit = 5
+	defaultLogLimitLines      = 100
 )
 
 // Tasks manages background tasks (listing, checking status/logs, terminating).
@@ -18,7 +24,22 @@ func (h *ToolHandlers) Tasks(ctx context.Context, in TasksArgs) (TasksOutput, er
 	case "list":
 		tasks := h.TaskManager.ListTasks(h.SessionID)
 		var items []TasksOutputTasksItem
+
+		// Sort tasks by startedAt descending
+		sort.Slice(tasks, func(i, j int) bool {
+			return tasks[i].StartedAt.After(tasks[j].StartedAt)
+		})
+
+		completedCount := 0
 		for _, t := range tasks {
+			isRunning := t.Status == StatusRunning
+			if !in.IncludeCompleted && !isRunning {
+				if completedCount >= defaultCompletedListLimit {
+					continue
+				}
+				completedCount++
+			}
+
 			var finishedAtStr string
 			if !t.FinishedAt.IsZero() {
 				finishedAtStr = t.FinishedAt.Format(time.RFC3339)
@@ -40,6 +61,27 @@ func (h *ToolHandlers) Tasks(ctx context.Context, in TasksArgs) (TasksOutput, er
 			Message: fmt.Sprintf("Successfully retrieved %d task(s).", len(items)),
 		}, nil
 
+	case "send_input":
+		if in.TaskId == "" {
+			return TasksOutput{Message: "Task ID is required for send_input action."}, nil
+		}
+		if in.Input == "" {
+			return TasksOutput{Message: "Input is required for send_input action."}, nil
+		}
+		t, ok := h.TaskManager.GetTask(in.TaskId)
+		if !ok || t.SessionID != h.SessionID {
+			return TasksOutput{Message: fmt.Sprintf("Task %q not found in this session.", in.TaskId)}, nil
+		}
+
+		if err := h.TaskManager.WriteStdin(in.TaskId, in.Input); err != nil {
+			return TasksOutput{Message: fmt.Sprintf("Failed to send input to task: %v", err)}, nil
+		}
+
+		return TasksOutput{
+			Status:  string(t.Status),
+			Message: fmt.Sprintf("Successfully sent input to task %s.", in.TaskId),
+		}, nil
+
 	case "status":
 		if in.TaskId == "" {
 			return TasksOutput{Message: "Task ID is required for status action."}, nil
@@ -49,7 +91,7 @@ func (h *ToolHandlers) Tasks(ctx context.Context, in TasksArgs) (TasksOutput, er
 			return TasksOutput{Message: fmt.Sprintf("Task %q not found in this session.", in.TaskId)}, nil
 		}
 
-		limit := 100
+		limit := defaultLogLimitLines
 		if in.Limit > 0 {
 			limit = in.Limit
 		}
@@ -57,7 +99,7 @@ func (h *ToolHandlers) Tasks(ctx context.Context, in TasksArgs) (TasksOutput, er
 		var stdoutTail string
 		var err error
 		stdoutInfo, statErr := os.Stat(t.StdoutPath)
-		if statErr == nil && stdoutInfo.Size() > 100000 {
+		if statErr == nil && stdoutInfo.Size() > logSizeThresholdBytes {
 			toolCallID, _ := ctx.Value("tool_call_id").(string)
 			if toolCallID == "" {
 				toolCallID = in.TaskId
@@ -75,7 +117,7 @@ func (h *ToolHandlers) Tasks(ctx context.Context, in TasksArgs) (TasksOutput, er
 
 		var stderrTail string
 		stderrInfo, statErr := os.Stat(t.StderrPath)
-		if statErr == nil && stderrInfo.Size() > 100000 {
+		if statErr == nil && stderrInfo.Size() > logSizeThresholdBytes {
 			toolCallID, _ := ctx.Value("tool_call_id").(string)
 			if toolCallID == "" {
 				toolCallID = in.TaskId

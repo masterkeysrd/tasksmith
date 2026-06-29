@@ -2,6 +2,8 @@ package tools
 
 import (
 	"context"
+	"fmt"
+	"path/filepath"
 	"strings"
 )
 
@@ -65,5 +67,54 @@ func (h *ToolHandlers) McpReadResources(ctx context.Context, in McpReadResources
 		return McpReadResourcesOutput{Success: false, Content: "Resource not found or empty"}, nil
 	}
 
-	return McpReadResourcesOutput{Content: content, Success: true}, nil
+	truncated := false
+	var cachedPath string
+	if len(content) > MaxTotalChars {
+		truncated = true
+		fullContent := content
+		content = fullContent[:MaxTotalChars]
+
+		if h.Storage != nil {
+			filename := filepath.Base(in.Uri)
+			if filename == "" || filename == "." || filename == "/" {
+				filename = "resource.txt"
+			}
+			if !strings.HasSuffix(filename, ".txt") && !strings.HasSuffix(filename, ".md") {
+				filename += ".txt"
+			}
+			toolCallID, _ := ctx.Value("tool_call_id").(string)
+			if toolCallID == "" {
+				toolCallID = "unknown"
+			}
+			storagePath := fmt.Sprintf("%s_%s", toolCallID, filename)
+			var errSave error
+			cachedPath, errSave = h.Storage.Save(ctx, storagePath, strings.NewReader(fullContent))
+			if errSave != nil {
+				return McpReadResourcesOutput{Success: false, Content: fmt.Sprintf("failed to cache truncated content: %v", errSave)}, nil
+			}
+		}
+	}
+
+	return McpReadResourcesOutput{
+		Content:    content,
+		Success:    true,
+		Truncated:  truncated,
+		CachedPath: cachedPath,
+	}, nil
+}
+
+// TextContent formats the read resource content.
+func (o McpReadResourcesOutput) TextContent() string {
+	if !o.Success {
+		return fmt.Sprintf("Error: %s", o.Content)
+	}
+
+	var sb strings.Builder
+	sb.WriteString(o.Content)
+
+	if o.Truncated {
+		fmt.Fprintf(&sb, "\n\n[SYSTEM NOTE: Content truncated due to size limits. Full content saved to cache. To read further, use the view tool with path=%s]", o.CachedPath)
+	}
+
+	return sb.String()
 }

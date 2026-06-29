@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/masterkeysrd/loom/tool"
 	corefs "github.com/masterkeysrd/tasksmith/internal/core/fs"
 )
 
@@ -17,9 +18,11 @@ const (
 	// MaxFilenameChars is the maximum number of characters shown in the formatted
 	// ls -l line before the name is truncated with a marker.
 	MaxFilenameChars = 128
+	// MaxRecursionDepth is the maximum allowed depth for ls.
+	MaxRecursionDepth = 4
 )
 
-// FileEntry represents a single directory entry in ls -l format.
+// FileEntry represents a single directory entry.
 type FileEntry struct {
 	Name          string    `json:"name"`
 	Permissions   string    `json:"permissions"`
@@ -30,25 +33,25 @@ type FileEntry struct {
 	Modified      time.Time `json:"modified"`
 	IsDir         bool      `json:"is_dir"`
 	IsSymlink     bool      `json:"is_symlink"`
+	Depth         int       `json:"depth"`
 	NameTruncated bool      `json:"name_truncated,omitempty"`
 	LinkTarget    string    `json:"link_target,omitempty"`
 }
 
 // Ls lists files in a directory, respecting gitignore and predefined ignore rules.
 func (h *ToolHandlers) Ls(ctx context.Context, in LsArgs) (LsOutput, error) {
+	depth := in.Depth
+	if depth <= 0 {
+		depth = 1
+	}
+
+	if depth > MaxRecursionDepth {
+		return LsOutput{}, tool.NewError(fmt.Sprintf("recursion depth %d exceeds maximum allowed depth of %d; please use the 'glob' tool for deep recursive searches", depth, MaxRecursionDepth))
+	}
+
 	abs, err := filepath.Abs(in.Path)
 	if err != nil {
 		return LsOutput{}, fmt.Errorf("failed to resolve path %s: %w", in.Path, err)
-	}
-
-	entries, err := os.ReadDir(abs)
-	if err != nil {
-		return LsOutput{}, fmt.Errorf("failed to read directory %s: %w", abs, err)
-	}
-
-	ig, err := corefs.NewIgnorer(abs)
-	if err != nil {
-		ig, _ = corefs.NewIgnorer("") // fallback: predefined rules only
 	}
 
 	limit := in.Limit
@@ -56,93 +59,128 @@ func (h *ToolHandlers) Ls(ctx context.Context, in LsArgs) (LsOutput, error) {
 		limit = DefaultLsLimit
 	}
 
-	var files []FileEntry
+	var allEntries []FileEntry
 	totalCount := 0
 
-	for _, entry := range entries {
-		name := entry.Name()
-		fullPath := filepath.Join(abs, name)
-
-		if ig.ShouldIgnore(name, fullPath, entry.IsDir()) {
-			continue
+	// Recursive walk function
+	var walk func(currentPath string, currentDepth int) error
+	walk = func(currentPath string, currentDepth int) error {
+		if currentDepth >= depth {
+			return nil
 		}
 
-		// Type filter.
-		if in.Type != "" {
-			switch in.Type {
-			case "file":
-				if entry.IsDir() {
-					continue
-				}
-			case "dir":
-				if !entry.IsDir() {
-					continue
-				}
-			case "symlink":
-				linfo, lerr := os.Lstat(fullPath)
-				if lerr != nil || linfo.Mode()&os.ModeSymlink == 0 {
-					continue
-				}
-			}
+		entries, err := os.ReadDir(currentPath)
+		if err != nil {
+			return fmt.Errorf("failed to read directory %s: %w", currentPath, err)
 		}
 
-		// Pattern filter.
-		if in.Pattern != "" {
-			matched, matchErr := filepath.Match(in.Pattern, name)
-			if matchErr != nil || !matched {
+		ig, err := corefs.NewIgnorer(currentPath)
+		if err != nil {
+			ig, _ = corefs.NewIgnorer("") // fallback: predefined rules only
+		}
+
+		for _, entry := range entries {
+			name := entry.Name()
+			fullPath := filepath.Join(currentPath, name)
+
+			if ig.ShouldIgnore(name, fullPath, entry.IsDir()) {
 				continue
 			}
-		}
 
-		totalCount++
+			// Type filter.
+			if in.Type != "" {
+				switch in.Type {
+				case "file":
+					if entry.IsDir() {
+						continue
+					}
+				case "dir":
+					if !entry.IsDir() {
+						continue
+					}
+				case "symlink":
+					if entry.Type()&os.ModeSymlink == 0 {
+						continue
+					}
+				}
+			}
 
-		if len(files) >= limit {
-			continue // keep counting but don't build entries
-		}
+			// Pattern filter.
+			if in.Pattern != "" {
+				matched, matchErr := filepath.Match(in.Pattern, name)
+				if matchErr != nil || !matched {
+					continue
+				}
+			}
 
-		linfo, lerr := os.Lstat(fullPath)
-		if lerr != nil {
-			continue
-		}
+			totalCount++
 
-		isSymlink := linfo.Mode()&os.ModeSymlink != 0
+			if len(allEntries) < limit {
+				isSymlink := entry.Type()&os.ModeSymlink != 0
+				var fe FileEntry
 
-		sizeInfo := linfo
-		if isSymlink {
-			if target, serr := os.Stat(fullPath); serr == nil {
-				sizeInfo = target
+				if in.Detailed {
+					linfo, lerr := os.Lstat(fullPath)
+					if lerr == nil {
+						sizeInfo := linfo
+						if isSymlink {
+							if target, serr := os.Stat(fullPath); serr == nil {
+								sizeInfo = target
+							}
+						}
+
+						owner, group := getFileOwnerGroup(linfo)
+						links := getHardLinkCount(linfo)
+
+						fe = FileEntry{
+							Name:          name,
+							Permissions:   linfo.Mode().String(),
+							Links:         links,
+							Owner:         owner,
+							Group:         group,
+							Size:          sizeInfo.Size(),
+							Modified:      sizeInfo.ModTime(),
+							IsDir:         entry.IsDir(),
+							IsSymlink:     isSymlink,
+							Depth:         currentDepth,
+							NameTruncated: len(name) > MaxFilenameChars,
+						}
+						if isSymlink {
+							if linkTarget, serr := os.Readlink(fullPath); serr == nil {
+								fe.LinkTarget = linkTarget
+							}
+						}
+					}
+				} else {
+					fe = FileEntry{
+						Name:      name,
+						IsDir:     entry.IsDir(),
+						IsSymlink: isSymlink,
+						Depth:     currentDepth,
+					}
+				}
+
+				if fe.Name != "" {
+					allEntries = append(allEntries, fe)
+				}
+			}
+
+			// Recurse into directories if within depth limit
+			if entry.IsDir() && currentDepth+1 < depth {
+				if err := walk(fullPath, currentDepth+1); err != nil {
+					return err
+				}
 			}
 		}
+		return nil
+	}
 
-		owner, group := getFileOwnerGroup(linfo)
-		links := getHardLinkCount(linfo)
-
-		nameTruncated := len(name) > MaxFilenameChars
-
-		fe := FileEntry{
-			Name:          name,
-			Permissions:   linfo.Mode().String(),
-			Links:         links,
-			Owner:         owner,
-			Group:         group,
-			Size:          sizeInfo.Size(),
-			Modified:      sizeInfo.ModTime(),
-			IsDir:         entry.IsDir(),
-			IsSymlink:     isSymlink,
-			NameTruncated: nameTruncated,
-		}
-
-		if isSymlink {
-			if linkTarget, serr := os.Readlink(fullPath); serr == nil {
-				fe.LinkTarget = linkTarget
-			}
-		}
-
-		files = append(files, fe)
+	if err := walk(abs, 0); err != nil {
+		return LsOutput{}, err
 	}
 
 	var outFiles []LsOutputFilesItem
-	for _, f := range files {
+	for _, f := range allEntries {
 		outFiles = append(outFiles, LsOutputFilesItem{
 			Name:          f.Name,
 			Permissions:   f.Permissions,
@@ -153,6 +191,7 @@ func (h *ToolHandlers) Ls(ctx context.Context, in LsArgs) (LsOutput, error) {
 			Modified:      f.Modified.Format(time.RFC3339),
 			IsDir:         f.IsDir,
 			IsSymlink:     f.IsSymlink,
+			Depth:         f.Depth,
 			NameTruncated: f.NameTruncated,
 			LinkTarget:    f.LinkTarget,
 		})
@@ -162,32 +201,42 @@ func (h *ToolHandlers) Ls(ctx context.Context, in LsArgs) (LsOutput, error) {
 		Files:      outFiles,
 		TotalCount: totalCount,
 		Truncated:  totalCount > limit,
+		Detailed:   in.Detailed,
 	}, nil
 }
 
 // TextContent implements tool.TextContentProvider so loom renders the result
-// as a human-readable ls -l listing instead of a raw JSON blob.
-// The full structured LsOutput is still available via message.Tool.Structured.
+// as a human-readable tree-like listing instead of a raw JSON blob.
 func (o LsOutput) TextContent() string {
 	var sb strings.Builder
 
 	for _, f := range o.Files {
-		fe := FileEntry{
-			Name:          f.Name,
-			Permissions:   f.Permissions,
-			Links:         uint64(f.Links),
-			Owner:         f.Owner,
-			Group:         f.Group,
-			Size:          int64(f.Size),
-			IsDir:         f.IsDir,
-			IsSymlink:     f.IsSymlink,
-			NameTruncated: f.NameTruncated,
-			LinkTarget:    f.LinkTarget,
+		indent := strings.Repeat("  ", f.Depth)
+		if o.Detailed {
+			fe := FileEntry{
+				Name:          f.Name,
+				Permissions:   f.Permissions,
+				Links:         uint64(f.Links),
+				Owner:         f.Owner,
+				Group:         f.Group,
+				Size:          int64(f.Size),
+				IsDir:         f.IsDir,
+				IsSymlink:     f.IsSymlink,
+				NameTruncated: f.NameTruncated,
+				LinkTarget:    f.LinkTarget,
+			}
+			if t, err := time.Parse(time.RFC3339, f.Modified); err == nil {
+				fe.Modified = t
+			}
+			sb.WriteString(indent)
+			sb.WriteString(formatLsLine(fe))
+		} else {
+			sb.WriteString(indent)
+			sb.WriteString(f.Name)
+			if f.IsDir {
+				sb.WriteByte('/')
+			}
 		}
-		if t, err := time.Parse(time.RFC3339, f.Modified); err == nil {
-			fe.Modified = t
-		}
-		sb.WriteString(formatLsLine(fe))
 		sb.WriteByte('\n')
 	}
 
@@ -202,13 +251,6 @@ func (o LsOutput) TextContent() string {
 }
 
 // FormatSize returns a compact, human-readable representation of a byte count.
-// The result is always at most 6 characters, suitable for a fixed-width column.
-//
-//	< 1 KiB  →  "18B"
-//	< 1 MiB  →  "1.2K"
-//	< 1 GiB  →  "4.5M"
-//	< 1 TiB  →  "2.1G"
-//	≥ 1 TiB  →  "1.3T"
 func FormatSize(b int64) string {
 	const (
 		kib = 1024
@@ -231,7 +273,6 @@ func FormatSize(b int64) string {
 }
 
 // formatLsLine renders a FileEntry as a single ls -l line.
-// Size is displayed in human-readable form (e.g. "18B", "1.2K", "4.5M").
 func formatLsLine(e FileEntry) string {
 	displayName := e.Name
 	if e.NameTruncated {

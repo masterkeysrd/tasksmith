@@ -280,7 +280,8 @@ func (v ViewOutput) ToolContent() message.Content {
 	}
 
 	if v.Diagnostics != "" {
-		sb.WriteString("\n" + v.Diagnostics)
+		sb.WriteByte('\n')
+		sb.WriteString(v.Diagnostics)
 	}
 
 	return message.Content{

@@ -122,20 +122,18 @@ func main() {
 			return
 		}
 
-		if len(out.Results) == 0 {
+		if out.Result.Name == "" {
 			t.Error("expected at least one result, got none")
 			return
 		}
 
-		for _, sym := range out.Results {
-			if sym.Name == "TestStruct" {
-				if sym.DeclaredAt == "" {
-					t.Error("expected DeclaredAt to be set")
-				}
-				if sym.Kind == "" {
-					t.Error("expected Kind to be set")
-				}
-				break
+		sym := out.Result
+		if sym.Name == "TestStruct" {
+			if sym.DeclaredAt == "" {
+				t.Error("expected DeclaredAt to be set")
+			}
+			if sym.Kind == "" {
+				t.Error("expected Kind to be set")
 			}
 		}
 	})
@@ -299,18 +297,16 @@ func TestLspInspectTextContent(t *testing.T) {
 	t.Run("SingleResult", func(t *testing.T) {
 		out := LspInspectOutput{
 			TotalMatches: 1,
-			Results: []LspInspectOutputResultsItem{
-				{
-					Name:            "TestFunc",
-					Kind:            "Function",
-					DeclaredAt:      "main.go:10",
-					TypeDefinedAt:   "types.go:5",
-					Signature:       "func TestFunc() {}",
-					Docs:            "This is a test function.",
-					References:      []string{"main.go:20"},
-					Implementations: []string{"impl.go:15"},
-					FullReportPath:  "",
-				},
+			Result: LspInspectOutputResult{
+				Name:            "TestFunc",
+				Kind:            "Function",
+				DeclaredAt:      "main.go:10",
+				TypeDefinedAt:   "types.go:5",
+				Signature:       "func TestFunc() {}",
+				Docs:            "This is a test function.",
+				References:      []string{"main.go:20"},
+				Implementations: []string{"impl.go:15"},
+				FullReportPath:  "",
 			},
 		}
 		text := out.TextContent()
@@ -337,15 +333,13 @@ func TestLspInspectTextContent(t *testing.T) {
 	t.Run("SingleResultWithTruncation", func(t *testing.T) {
 		out := LspInspectOutput{
 			TotalMatches: 1,
-			Results: []LspInspectOutputResultsItem{
-				{
-					Name:           "LargeFunc",
-					Kind:           "Function",
-					DeclaredAt:     "main.go:10",
-					Docs:           "This is large documentation that was truncated.",
-					DocsTruncated:  true,
-					FullReportPath: "lsp_inspect/abc123_LargeFunc.md",
-				},
+			Result: LspInspectOutputResult{
+				Name:           "LargeFunc",
+				Kind:           "Function",
+				DeclaredAt:     "main.go:10",
+				Docs:           "This is large documentation that was truncated.",
+				DocsTruncated:  true,
+				FullReportPath: "lsp_inspect/abc123_LargeFunc.md",
 			},
 		}
 		text := out.TextContent()

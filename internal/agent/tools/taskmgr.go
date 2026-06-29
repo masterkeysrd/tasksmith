@@ -1,7 +1,6 @@
 package tools
 
 import (
-	"bufio"
 	"context"
 	"fmt"
 	"io"
@@ -24,6 +23,9 @@ type TaskRunner interface {
 
 	// Stop gracefully terminates the running process/operation.
 	Stop() error
+
+	// WriteStdin writes the provided data to the runner's standard input.
+	WriteStdin(data string) error
 }
 
 // TaskStatus represents the runtime execution state of a background task.
@@ -34,6 +36,12 @@ const (
 	StatusCompleted TaskStatus = "completed"
 	StatusFailed    TaskStatus = "failed"
 	StatusKilled    TaskStatus = "killed"
+
+	statusPollInterval   = 10 * time.Millisecond
+	portPollInterval     = 2 * time.Second
+	bytesPerLineEstimate = 256
+	defaultExitCodeError = 1
+	exitCodeSuccess      = 0
 )
 
 // Task holds the runtime execution state and metadata of a task.
@@ -165,20 +173,11 @@ func (tm *TaskManager) Submit(ctx context.Context, opts SubmitOptions) (*Task, e
 		}
 	}()
 
-	// Monitor completion or sync-wait timeout
-	// go func() {
-	// 	// Wait for completion goroutine or context cancellation
-	// 	select {
-	// 	case <-taskCtx.Done():
-	// 		// If context finishes, task is finalized by the inner goroutine.
-	// 	}
-	// }()
-
 	// Watch for completion within the wait period
 	go func() {
 		// Wait on runner completion
 		// To safely check if the process completed, we poll task status
-		ticker := time.NewTicker(10 * time.Millisecond)
+		ticker := time.NewTicker(statusPollInterval)
 		defer ticker.Stop()
 
 		timeout := time.After(time.Duration(opts.WaitMs) * time.Millisecond)
@@ -298,21 +297,59 @@ func (tm *TaskManager) ReadLog(taskID string, isStderr bool, limitLines int) (st
 	}
 	defer file.Close()
 
-	var lines []string
-	scanner := bufio.NewScanner(file)
-	for scanner.Scan() {
-		lines = append(lines, scanner.Text())
-	}
-
-	if err := scanner.Err(); err != nil {
+	info, err := file.Stat()
+	if err != nil {
 		return "", err
 	}
 
+	if info.Size() == 0 {
+		return "", nil
+	}
+
+	// Estimate how many bytes we need to read from the end.
+	// Average line length ~100-200 chars.
+	// We'll read (limitLines * bytesPerLineEstimate) bytes or the whole file, whichever is smaller.
+	readSize := int64(limitLines) * bytesPerLineEstimate
+	if readSize > info.Size() || readSize <= 0 {
+		readSize = info.Size()
+	}
+
+	offset := info.Size() - readSize
+	_, err = file.Seek(offset, io.SeekStart)
+	if err != nil {
+		return "", err
+	}
+
+	contentBytes := make([]byte, readSize)
+	n, err := file.Read(contentBytes)
+	if err != nil && err != io.EOF {
+		return "", err
+	}
+	content := string(contentBytes[:n])
+
+	lines := strings.Split(content, "\n")
 	if limitLines > 0 && len(lines) > limitLines {
 		lines = lines[len(lines)-limitLines:]
 	}
 
 	return strings.Join(lines, "\n"), nil
+}
+
+// WriteStdin writes the provided data to the task's standard input.
+func (tm *TaskManager) WriteStdin(taskID string, data string) error {
+	tm.mu.RLock()
+	t, ok := tm.tasks[taskID]
+	tm.mu.RUnlock()
+
+	if !ok {
+		return fmt.Errorf("task %q not found", taskID)
+	}
+
+	if t.Status != StatusRunning {
+		return fmt.Errorf("cannot write to task %q: status is %s", taskID, t.Status)
+	}
+
+	return t.runner.WriteStdin(data)
 }
 
 func (tm *TaskManager) finalizeTask(taskID string, err error) {
@@ -332,7 +369,7 @@ func (tm *TaskManager) finalizeTask(taskID string, err error) {
 	if err != nil {
 		t.Status = StatusFailed
 		t.Error = err.Error()
-		t.ExitCode = 1 // Default error code
+		t.ExitCode = defaultExitCodeError
 
 		// Extract exit code if possible
 		type exitCoder interface {
@@ -348,7 +385,7 @@ func (tm *TaskManager) finalizeTask(taskID string, err error) {
 		}
 	} else {
 		t.Status = StatusCompleted
-		t.ExitCode = 0
+		t.ExitCode = exitCodeSuccess
 	}
 }
 
@@ -358,7 +395,7 @@ type StateReporter interface {
 }
 
 func (tm *TaskManager) startPortPoller() {
-	ticker := time.NewTicker(2 * time.Second)
+	ticker := time.NewTicker(portPollInterval)
 	for range ticker.C {
 		tm.pollState()
 	}

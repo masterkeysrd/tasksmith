@@ -16,6 +16,7 @@ spec:
         description: "The complete, authoritative list of tasks. It replaces the current task list in its entirety on every update."
         items:
           type: object
+          additionalProperties: true
           properties:
             description:
               type: string

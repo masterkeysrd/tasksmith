@@ -43,6 +43,12 @@ spec:
       error:
         type: string
         description: Error message if the operation failed.
+      total_count:
+        type: integer
+        description: Total number of resources found.
+      truncated:
+        type: boolean
+        description: True when the result was capped by the limit.
 ---
 List available resources from connected MCP (Model Context Protocol) servers.
 

@@ -207,6 +207,10 @@ func (d *DummyRunner) Stop() error {
 	return nil
 }
 
+func (d *DummyRunner) WriteStdin(data string) error {
+	return nil
+}
+
 func TestTaskManager_Submit_Timeout(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "taskmgr-test-*")
 	if err != nil {

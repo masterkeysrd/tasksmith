@@ -14,7 +14,7 @@ import (
 const (
 	// MaxGlobMatches is the maximum number of matches returned by the glob tool
 	// to prevent resource exhaustion and huge payloads.
-	MaxGlobMatches = 1000
+	MaxGlobMatches = 200
 )
 
 // Glob finds files matching a glob pattern using gitignore and predefined ignore rules.
@@ -42,10 +42,7 @@ func (h *ToolHandlers) Glob(ctx context.Context, in GlobArgs) (GlobOutput, error
 	}
 
 	// Clean/normalize the pattern.
-	pattern := in.Pattern
-	if strings.HasPrefix(pattern, "./") {
-		pattern = pattern[2:]
-	}
+	pattern := strings.TrimPrefix(in.Pattern, "./")
 	// If the pattern doesn't contain a directory separator, assume the agent
 	// wants to find it anywhere in the tree (like bash find -name).
 	if !strings.Contains(pattern, "/") {
@@ -186,7 +183,7 @@ func (o GlobOutput) TextContent() string {
 	}
 	var sb strings.Builder
 	for _, match := range o.Matches {
-		sb.WriteString(truncateFilename(match))
+		sb.WriteString(match)
 		sb.WriteByte('\n')
 	}
 
@@ -198,24 +195,4 @@ func (o GlobOutput) TextContent() string {
 	}
 
 	return sb.String()
-}
-
-// truncateFilename caps the base filename of a path if it exceeds 128 characters.
-func truncateFilename(path string) string {
-	hasDotSlash := strings.HasPrefix(path, "./")
-	cleanPath := path
-	if hasDotSlash {
-		cleanPath = path[2:]
-	}
-	base := filepath.Base(cleanPath)
-	if len(base) <= 128 {
-		return path
-	}
-	dir := filepath.Dir(cleanPath)
-	truncatedBase := base[:128] + fmt.Sprintf(" ... [name truncated: %d chars]", len(base))
-	res := filepath.ToSlash(filepath.Clean(filepath.Join(dir, truncatedBase)))
-	if hasDotSlash {
-		res = "./" + res
-	}
-	return res
 }

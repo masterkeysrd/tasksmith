@@ -12,8 +12,8 @@ import (
 )
 
 const (
-	MaxLspDiagnosticsItems             = 100
-	MaxLspFileDiagnosticsItems         = 50
+	MaxLspDiagnosticsItems             = 40
+	MaxLspFileDiagnosticsItems         = 10
 	MaxLspTopWorkspaceDiagnosticsItems = 10
 )
 

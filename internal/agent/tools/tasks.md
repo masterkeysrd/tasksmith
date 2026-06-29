@@ -11,14 +11,20 @@ spec:
     properties:
       action:
         type: string
-        description: "The action to perform. One of: 'list' (list all active and completed background tasks in the session), 'status' (retrieve the execution state and log tail of a specific task), 'kill' (terminate a running task)."
-        enum: ["list", "status", "kill"]
+        description: "The action to perform. One of: 'list' (list background tasks), 'status' (retrieve the execution state and log tail), 'kill' (terminate a running task), 'send_input' (write data to the task's standard input)."
+        enum: ["list", "status", "kill", "send_input"]
       taskId:
         type: string
-        description: "The ID of the background task (required for 'status' and 'kill')."
+        description: "The ID of the background task (required for 'status', 'kill', and 'send_input')."
+      input:
+        type: string
+        description: "The input string to write to the task's stdin (required for 'send_input')."
       limit:
         type: integer
         description: "The maximum number of lines from the end of the log to return for 'status' action (defaults to 100)."
+      include_completed:
+        type: boolean
+        description: "If true, 'list' will include all completed tasks in the session. By default, it only returns running tasks and the last few completed ones."
     required: ["action"]
   outputSchema:
     type: object
@@ -75,9 +81,10 @@ spec:
 Manage and monitor background tasks created by the `bash` tool.
 
 <actions>
-- `list` — list all background tasks in the session with their status and exit codes.
-- `status` — retrieve the current state and log tail of a specific task; use `limit` to control how many lines are returned.
+- `list` — list background tasks in the session. By default, only running tasks and the last 5 completed tasks are shown.
+- `status` — retrieve the execution state and log tail of a specific task; use `limit` to control how many lines are returned.
 - `kill` — terminate a running task.
+- `send_input` — write data to the standard input (stdin) of a running task. Use this to respond to interactive prompts.
 </actions>
 
 <when_to_use>

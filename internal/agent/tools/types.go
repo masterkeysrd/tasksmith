@@ -343,6 +343,15 @@ type GlobOutput struct {
 //
 // Search for a regex pattern across files. Prefer this over `bash grep`/`bash rg` — it is faster, respects `.gitignore`, and returns structured results with file paths and line numbers.
 //
+// <when_to_use>
+// - When searching for string literals, error messages, or comments.
+// - When searching non-code files (e.g. markdown, config files).
+// </when_to_use>
+//
+// <when_not_to_use>
+// - When searching for a code symbol (function, struct, class) definition or usage. Use `lsp_symbols` or `lsp_inspect` instead.
+// </when_not_to_use>
+//
 // <guidelines>
 // - `path` is optional — omit it to search the entire workspace.
 // - `pattern` is a regex; escape special characters as needed (e.g. `\.` for a literal dot) — or set `literal: true` to skip escaping entirely.
@@ -382,7 +391,7 @@ type GrepOutputMatchesItem struct {
 
 // LsArgs defines the arguments for the "ls" tool.
 //
-// List the direct contents of a directory. Use `view` for file contents and `glob`/`grep` for recursive or pattern-based searches across the workspace.
+// List the direct contents of a directory (optionally recursive up to depth 4). By default, it returns a simple tree-like list of names to save context space. Use the `detailed` flag when you need information such as permissions, sizes, and modification times. Use `view` for file contents and `glob`/`grep` for recursive or pattern-based searches across the workspace.
 //
 // <ignore_rules>
 // Entries are filtered through two tiers automatically:
@@ -394,9 +403,14 @@ type GrepOutputMatchesItem struct {
 // <guidelines>
 // - Use `pattern` to filter entries by filename glob (e.g. `*.go`, `test_*`).
 // - Use `type` to restrict results to `file`, `dir`, or `symlink`.
+// - Use `detailed: true` only when you specifically need metadata like permissions, owners, or sizes.
 // - If `truncated` is true, increase `limit` or narrow with `pattern`/`type` to see the rest.
 // </guidelines>
 type LsArgs struct {
+	// Depth: Recursion depth. Defaults to 1 (current directory only). Maximum is 4. Use for shallow directory exploration. For deep searches, use glob.
+	Depth int `json:"depth,omitempty" jsonschema:"Recursion depth. Defaults to 1 (current directory only). Maximum is 4. Use for shallow directory exploration. For deep searches, use glob."`
+	// Detailed: If true, includes detailed information such as permissions, owner, group, and modification time. Use this only when necessary as it is more verbose.
+	Detailed bool `json:"detailed,omitempty" jsonschema:"If true, includes detailed information such as permissions, owner, group, and modification time. Use this only when necessary as it is more verbose."`
 	// Limit: Maximum number of entries to return. Defaults to 200.
 	Limit int `json:"limit,omitempty" jsonschema:"Maximum number of entries to return. Defaults to 200."`
 	// Path: Path to the directory to list.
@@ -409,6 +423,8 @@ type LsArgs struct {
 
 // LsOutput defines the output returned by the "ls" tool.
 type LsOutput struct {
+	// Detailed: True if the result contains detailed information.
+	Detailed bool `json:"detailed,omitempty" jsonschema:"True if the result contains detailed information."`
 	// Files: List of matching directory entries, after filtering and ignore rules.
 	Files []LsOutputFilesItem `json:"files,omitempty" jsonschema:"List of matching directory entries, after filtering and ignore rules."`
 	// TotalCount: Total number of entries after applying ignore and type/pattern filters.
@@ -418,6 +434,8 @@ type LsOutput struct {
 }
 
 type LsOutputFilesItem struct {
+	// Depth: Relative depth of the entry (0 for the direct content of the path).
+	Depth int `json:"depth,omitempty" jsonschema:"Relative depth of the entry (0 for the direct content of the path)."`
 	// Group: Group name.
 	Group string `json:"group,omitempty" jsonschema:"Group name."`
 	// IsDir: Whether the entry is a directory.
@@ -507,8 +525,17 @@ type LspDiagnosticsOutputDiagnosticsItemRangeStart struct {
 //
 // Perform a deep-dive inspection on a specific symbol (function, class, struct, interface, variable) to get its signature, documentation, declaration, type definition, and references/implementations all in one call.
 //
+// <when_to_use>
+// - When you need to read a symbol's definition, signature, or documentation.
+// - When you need to find all references or implementations of a known symbol.
+// </when_to_use>
+//
+// <when_not_to_use>
+// - When you don't know the symbol name yet (use `lsp_symbols` first).
+// - For simple text or string literal searches (use `grep`).
+// </when_not_to_use>
+//
 // <guidelines>
-// - Use this when you know a symbol exists and want to understand how it works or where it is used.
 // - **Prefer this tool over other external tools** (e.g. grep, web search) when investigating a symbol's type, signature, or documentation — it provides richer and more accurate information directly from the language server. Use `lsp_symbols` first if you need to discover or fuzzy-find the symbol name, then use this tool to deep-dive into it.
 // - The inline output returns structured data: `docs` (plain text, truncated to 8000 chars if needed), `references` (capped at 10), and `implementations` (capped at 10).
 // - If any field exceeds its budget, the full report is saved to file storage and `full_report_path` is populated. Use the `view` tool to read the complete report.
@@ -521,13 +548,16 @@ type LspInspectArgs struct {
 
 // LspInspectOutput defines the output returned by the "lsp_inspect" tool.
 type LspInspectOutput struct {
-	// Results: Detailed inspection reports for the top matches.
-	Results []LspInspectOutputResultsItem `json:"results,omitempty" jsonschema:"Detailed inspection reports for the top matches."`
+	// Result: The deeply inspected primary symbol.
+	Result LspInspectOutputResult `json:"result,omitempty" jsonschema:"The deeply inspected primary symbol."`
+	// SimilarSymbols: Basic metadata for other matching symbols.
+	SimilarSymbols []LspInspectOutputSimilarSymbolsItem `json:"similar_symbols,omitempty" jsonschema:"Basic metadata for other matching symbols."`
 	// TotalMatches: Total number of symbols matching the query. Only the top few are deeply inspected.
 	TotalMatches int `json:"total_matches,omitempty" jsonschema:"Total number of symbols matching the query. Only the top few are deeply inspected."`
 }
 
-type LspInspectOutputResultsItem struct {
+// The deeply inspected primary symbol.
+type LspInspectOutputResult struct {
 	// DeclaredAt: File path and line where the symbol is declared.
 	DeclaredAt string `json:"declared_at,omitempty" jsonschema:"File path and line where the symbol is declared."`
 	// Docs: Documentation string for the symbol.
@@ -554,6 +584,15 @@ type LspInspectOutputResultsItem struct {
 	TypeDefinedAt string `json:"type_defined_at,omitempty" jsonschema:"File path and line where the symbol's underlying type is defined (if applicable)."`
 }
 
+type LspInspectOutputSimilarSymbolsItem struct {
+	// DeclaredAt: File path and line where the symbol is declared.
+	DeclaredAt string `json:"declared_at,omitempty" jsonschema:"File path and line where the symbol is declared."`
+	// Kind: Symbol kind (e.g. Method, Struct, Variable).
+	Kind string `json:"kind,omitempty" jsonschema:"Symbol kind (e.g. Method, Struct, Variable)."`
+	// Name: Symbol name.
+	Name string `json:"name,omitempty" jsonschema:"Symbol name."`
+}
+
 // LspRestartArgs defines the arguments for the "lsp_restart" tool.
 //
 // Restart an LSP server. Use when `lsp_diagnostics` returns stale, empty, or unexpected results. Pass the server name as registered in the workspace (e.g. `gopls`, `typescript-language-server`).
@@ -573,6 +612,16 @@ type LspRestartOutput struct {
 // LspSymbolsArgs defines the arguments for the "lsp_symbols" tool.
 //
 // Search for symbol declarations across the workspace by name. Returns the declaration location, kind, and container for each match. Prefer this over `grep` for navigating to a known symbol — it is language-aware and does not require knowing the exact file.
+//
+// <when_to_use>
+// - When you want to find where a class, function, or interface is declared.
+// - When you know a partial symbol name and need to find the exact match.
+// </when_to_use>
+//
+// <when_not_to_use>
+// - When you need to read the symbol's signature, docs, or find references (use `lsp_inspect` instead).
+// - For string literals or comments (use `grep`).
+// </when_not_to_use>
 //
 // <guidelines>
 // - Supports partial and fuzzy matching — `MultiEd` will find `MultiEdit`.
@@ -648,6 +697,10 @@ type McpListResourcesOutput struct {
 	Resources []McpListResourcesOutputResourcesItem `json:"resources,omitempty"`
 	// Success: Whether listing the resources succeeded.
 	Success bool `json:"success,omitempty" jsonschema:"Whether listing the resources succeeded."`
+	// TotalCount: Total number of resources found.
+	TotalCount int `json:"total_count,omitempty" jsonschema:"Total number of resources found."`
+	// Truncated: True when the result was capped by the limit.
+	Truncated bool `json:"truncated,omitempty" jsonschema:"True when the result was capped by the limit."`
 }
 
 type McpListResourcesOutputResourcesItem struct {
@@ -678,10 +731,14 @@ type McpReadResourcesArgs struct {
 
 // McpReadResourcesOutput defines the output returned by the "mcp_read_resources" tool.
 type McpReadResourcesOutput struct {
+	// CachedPath: Cached path in workspace session storage.
+	CachedPath string `json:"cached_path,omitempty" jsonschema:"Cached path in workspace session storage."`
 	// Content: Content of the MCP resource.
 	Content string `json:"content,omitempty" jsonschema:"Content of the MCP resource."`
 	// Success: Whether reading the resource succeeded.
 	Success bool `json:"success,omitempty" jsonschema:"Whether reading the resource succeeded."`
+	// Truncated: Whether the content was truncated due to context limits.
+	Truncated bool `json:"truncated,omitempty" jsonschema:"Whether the content was truncated due to context limits."`
 }
 
 // MultiEditArgs defines the arguments for the "multi_edit" tool.
@@ -799,9 +856,10 @@ type ScheduleOutput struct {
 // Manage and monitor background tasks created by the `bash` tool.
 //
 // <actions>
-// - `list` — list all background tasks in the session with their status and exit codes.
-// - `status` — retrieve the current state and log tail of a specific task; use `limit` to control how many lines are returned.
+// - `list` — list background tasks in the session. By default, only running tasks and the last 5 completed tasks are shown.
+// - `status` — retrieve the execution state and log tail of a specific task; use `limit` to control how many lines are returned.
 // - `kill` — terminate a running task.
+// - `send_input` — write data to the standard input (stdin) of a running task. Use this to respond to interactive prompts.
 // </actions>
 //
 // <when_to_use>
@@ -816,12 +874,16 @@ type ScheduleOutput struct {
 // - `taskId` is returned by `bash` when a command transitions to background; always save it if you need to track the task.
 // </guidelines>
 type TasksArgs struct {
-	// Action: The action to perform. One of: 'list' (list all active and completed background tasks in the session), 'status' (retrieve the execution state and log tail of a specific task), 'kill' (terminate a running task).
-	Action string `json:"action" jsonschema:"The action to perform. One of: 'list' (list all active and completed background tasks in the session), 'status' (retrieve the execution state and log tail of a specific task), 'kill' (terminate a running task)."`
+	// Action: The action to perform. One of: 'list' (list background tasks), 'status' (retrieve the execution state and log tail), 'kill' (terminate a running task), 'send_input' (write data to the task's standard input).
+	Action string `json:"action" jsonschema:"The action to perform. One of: 'list' (list background tasks), 'status' (retrieve the execution state and log tail), 'kill' (terminate a running task), 'send_input' (write data to the task's standard input)."`
+	// IncludeCompleted: If true, 'list' will include all completed tasks in the session. By default, it only returns running tasks and the last few completed ones.
+	IncludeCompleted bool `json:"include_completed,omitempty" jsonschema:"If true, 'list' will include all completed tasks in the session. By default, it only returns running tasks and the last few completed ones."`
+	// Input: The input string to write to the task's stdin (required for 'send_input').
+	Input string `json:"input,omitempty" jsonschema:"The input string to write to the task's stdin (required for 'send_input')."`
 	// Limit: The maximum number of lines from the end of the log to return for 'status' action (defaults to 100).
 	Limit int `json:"limit,omitempty" jsonschema:"The maximum number of lines from the end of the log to return for 'status' action (defaults to 100)."`
-	// TaskId: The ID of the background task (required for 'status' and 'kill').
-	TaskId string `json:"taskId,omitempty" jsonschema:"The ID of the background task (required for 'status' and 'kill')."`
+	// TaskId: The ID of the background task (required for 'status', 'kill', and 'send_input').
+	TaskId string `json:"taskId,omitempty" jsonschema:"The ID of the background task (required for 'status', 'kill', and 'send_input')."`
 }
 
 // TasksOutput defines the output returned by the "tasks" tool.

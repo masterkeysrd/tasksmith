@@ -63,6 +63,16 @@ spec:
 ---
 Search for symbol declarations across the workspace by name. Returns the declaration location, kind, and container for each match. Prefer this over `grep` for navigating to a known symbol — it is language-aware and does not require knowing the exact file.
 
+<when_to_use>
+- When you want to find where a class, function, or interface is declared.
+- When you know a partial symbol name and need to find the exact match.
+</when_to_use>
+
+<when_not_to_use>
+- When you need to read the symbol's signature, docs, or find references (use `lsp_inspect` instead).
+- For string literals or comments (use `grep`).
+</when_not_to_use>
+
 <guidelines>
 - Supports partial and fuzzy matching — `MultiEd` will find `MultiEdit`.
 - Results are declarations only; use `lsp_inspect` to get the full picture including references and signature.

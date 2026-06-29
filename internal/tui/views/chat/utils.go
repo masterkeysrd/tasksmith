@@ -13,7 +13,7 @@ import (
 
 // parseLsOutput extracts FileEntry values and metadata from a tool's StructuredContent.
 // It handles both same-process typed values and JSON-deserialized map[string]any forms.
-func parseLsOutput(structured any) (files []tools.FileEntry, totalCount int, truncated bool) {
+func parseLsOutput(structured any) (files []tools.FileEntry, totalCount int, truncated bool, detailed bool) {
 	out, ok := parseStructuredOutput[tools.LsOutput](structured)
 	if !ok {
 		return
@@ -28,6 +28,7 @@ func parseLsOutput(structured any) (files []tools.FileEntry, totalCount int, tru
 			Size:          int64(f.Size),
 			IsDir:         f.IsDir,
 			IsSymlink:     f.IsSymlink,
+			Depth:         f.Depth,
 			NameTruncated: f.NameTruncated,
 			LinkTarget:    f.LinkTarget,
 		}
@@ -36,7 +37,7 @@ func parseLsOutput(structured any) (files []tools.FileEntry, totalCount int, tru
 		}
 		files = append(files, fe)
 	}
-	return files, out.TotalCount, out.Truncated
+	return files, out.TotalCount, out.Truncated, out.Detailed
 }
 
 // parseGlobOutput extracts structured file lists, count, and truncation from a glob tool result.
@@ -163,6 +164,11 @@ func parseLspSymbolsOutput(structured any) (results []tools.LspSymbolsOutputResu
 		return out.Results
 	}
 	return nil
+}
+
+// parseLspInspectOutput extracts inspection results from the tool's StructuredContent.
+func parseLspInspectOutput(structured any) (out tools.LspInspectOutput, ok bool) {
+	return parseStructuredOutput[tools.LspInspectOutput](structured)
 }
 
 func tryExtractTextFromJSON(input string) string {

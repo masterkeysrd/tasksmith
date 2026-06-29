@@ -49,6 +49,15 @@ spec:
 ---
 Search for a regex pattern across files. Prefer this over `bash grep`/`bash rg` — it is faster, respects `.gitignore`, and returns structured results with file paths and line numbers.
 
+<when_to_use>
+- When searching for string literals, error messages, or comments.
+- When searching non-code files (e.g. markdown, config files).
+</when_to_use>
+
+<when_not_to_use>
+- When searching for a code symbol (function, struct, class) definition or usage. Use `lsp_symbols` or `lsp_inspect` instead.
+</when_not_to_use>
+
 <guidelines>
 - `path` is optional — omit it to search the entire workspace.
 - `pattern` is a regex; escape special characters as needed (e.g. `\.` for a literal dot) — or set `literal: true` to skip escaping entirely.

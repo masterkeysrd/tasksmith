@@ -1078,6 +1078,9 @@ var ToolExecution = kitex.FC("ToolExecution", func(props ToolExecutionProps) kit
 	if props.ToolCall != nil && props.ToolCall.Name == "lsp_symbols" {
 		return LspSymbolsToolWidget(props)
 	}
+	if props.ToolCall != nil && props.ToolCall.Name == "lsp_inspect" {
+		return LspInspectToolWidget(props)
+	}
 	if props.ToolCall != nil && props.ToolCall.Name == "grep" {
 		return GrepToolWidget(props)
 	}

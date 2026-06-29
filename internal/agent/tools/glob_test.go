@@ -232,14 +232,14 @@ func TestGlobTextContent(t *testing.T) {
 		t.Errorf("expected:\n%q\ngot:\n%q", expectedTruncated, got)
 	}
 
-	// Test long filename capping
+	// Test long filename (no capping)
 	longName := strings.Repeat("a", 130) + ".go"
 	outLong := GlobOutput{
 		Matches:    []string{"./subdir/" + longName},
 		TotalCount: 1,
 		Truncated:  false,
 	}
-	expectedLong := "./subdir/" + strings.Repeat("a", 128) + " ... [name truncated: 133 chars]\n\n[1 matches]"
+	expectedLong := "./subdir/" + longName + "\n\n[1 matches]"
 	if got := outLong.TextContent(); got != expectedLong {
 		t.Errorf("expected:\n%q\ngot:\n%q", expectedLong, got)
 	}

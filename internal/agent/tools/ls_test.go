@@ -41,7 +41,7 @@ func TestLsFormattedOutput(t *testing.T) {
 	writeFile(t, filepath.Join(dir, "hello.txt"), "world")
 
 	handlers := NewHandlers(nil, "")
-	out, err := handlers.Ls(context.Background(), LsArgs{Path: dir})
+	out, err := handlers.Ls(context.Background(), LsArgs{Path: dir, Detailed: true})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -95,7 +95,7 @@ func TestLsSymlink(t *testing.T) {
 	}
 
 	handlers := NewHandlers(nil, "")
-	out, err := handlers.Ls(context.Background(), LsArgs{Path: dir})
+	out, err := handlers.Ls(context.Background(), LsArgs{Path: dir, Detailed: true})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -271,7 +271,7 @@ func TestLsLongFilename(t *testing.T) {
 	writeFile(t, filepath.Join(dir, longName), "")
 
 	handlers := NewHandlers(nil, "")
-	out, err := handlers.Ls(context.Background(), LsArgs{Path: dir})
+	out, err := handlers.Ls(context.Background(), LsArgs{Path: dir, Detailed: true})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -340,6 +340,80 @@ func TestLsTextContentTruncated(t *testing.T) {
 	if !strings.Contains(text, "2 of 5") {
 		t.Errorf("expected '2 of 5' in TextContent, got:\n%s", text)
 	}
+}
+
+func TestLsNonDetailed(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "file.txt"), "hello")
+	if err := os.Mkdir(filepath.Join(dir, "subdir"), 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	handlers := NewHandlers(nil, "")
+	out, err := handlers.Ls(context.Background(), LsArgs{Path: dir, Detailed: false})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if out.Detailed {
+		t.Error("expected Detailed=false")
+	}
+	text := out.TextContent()
+	if !strings.Contains(text, "file.txt\n") {
+		t.Errorf("expected text to contain file.txt, got %q", text)
+	}
+	if !strings.Contains(text, "subdir/\n") {
+		t.Errorf("expected text to contain subdir/, got %q", text)
+	}
+	// Should NOT contain size/permissions
+	if strings.Contains(text, "drwxr") || strings.Contains(text, "0B") {
+		t.Errorf("expected text NOT to contain details, got %q", text)
+	}
+}
+
+func TestLsDepth(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "a/b/c/d/e"), 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	writeFile(t, filepath.Join(dir, "top.txt"), "top")
+	writeFile(t, filepath.Join(dir, "a/level1.txt"), "1")
+	writeFile(t, filepath.Join(dir, "a/b/level2.txt"), "2")
+
+	handlers := NewHandlers(nil, "")
+
+	t.Run("Depth 1", func(t *testing.T) {
+		out, err := handlers.Ls(context.Background(), LsArgs{Path: dir, Depth: 1})
+		if err != nil {
+			t.Fatal(err)
+		}
+		names := extractNames(out)
+		assertContains(t, names, "top.txt")
+		assertContains(t, names, "a")
+		assertNotContains(t, names, "level1.txt")
+	})
+
+	t.Run("Depth 2", func(t *testing.T) {
+		out, err := handlers.Ls(context.Background(), LsArgs{Path: dir, Depth: 2})
+		if err != nil {
+			t.Fatal(err)
+		}
+		names := extractNames(out)
+		assertContains(t, names, "top.txt")
+		assertContains(t, names, "level1.txt")
+		assertContains(t, names, "b")
+		assertNotContains(t, names, "level2.txt")
+	})
+
+	t.Run("Max Depth exceeded", func(t *testing.T) {
+		_, err := handlers.Ls(context.Background(), LsArgs{Path: dir, Depth: 5})
+		if err == nil {
+			t.Error("expected error for depth > 4, got nil")
+		}
+		if !strings.Contains(err.Error(), "glob") {
+			t.Errorf("expected error message to suggest glob, got: %v", err)
+		}
+	})
 }
 
 func TestLsInvalidPath(t *testing.T) {
