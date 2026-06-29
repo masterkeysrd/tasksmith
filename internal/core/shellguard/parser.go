@@ -1,4 +1,4 @@
-package cmdparse
+package shellguard
 
 import (
 	"fmt"
@@ -7,39 +7,6 @@ import (
 
 	"mvdan.cc/sh/v3/syntax"
 )
-
-// CommandChain represents a sequence of command groups (pipelines) at the top level.
-type CommandChain struct {
-	Pipelines []Pipeline
-}
-
-// Pipeline represents commands connected by a single operator.
-type Pipeline struct {
-	Commands []ParsedCommand
-	Operator string // "&&", "||", ";", "|", "&", or "" for a single command
-}
-
-// ParsedCommand represents a single command invocation.
-type ParsedCommand struct {
-	Env        []EnvVar
-	Executable string
-	Args       []string
-	Redirects  []Redirect
-	SubCommand *ParsedCommand
-}
-
-// EnvVar represents an environment variable assignment (e.g. PORT=8080).
-type EnvVar struct {
-	Name  string
-	Value string
-}
-
-// Redirect represents a shell redirection (e.g. > out.log, < input.txt).
-type Redirect struct {
-	Op     string
-	Fd     int
-	Target string
-}
 
 // Parse parses a raw shell command string into a CommandChain.
 func Parse(commandStr string) (CommandChain, error) {
@@ -141,6 +108,9 @@ func parseCallExpr(node *syntax.CallExpr) (ParsedCommand, error) {
 		var value string
 		if assign.Value != nil {
 			value = assign.Value.Lit()
+			if hasCmdSubst(assign.Value) {
+				pcmd.HasCmdSubst = true
+			}
 		}
 		pcmd.Env = append(pcmd.Env, EnvVar{Name: name, Value: value})
 	}
@@ -150,11 +120,18 @@ func parseCallExpr(node *syntax.CallExpr) (ParsedCommand, error) {
 		return pcmd, nil
 	}
 	pcmd.Executable = node.Args[0].Lit()
+	if hasCmdSubst(node.Args[0]) {
+		pcmd.HasCmdSubst = true
+	}
 
 	// Collect remaining arguments.
 	for _, word := range node.Args[1:] {
 		if word != nil {
 			pcmd.Args = append(pcmd.Args, wordString(word))
+			pcmd.ArgsIsDynamic = append(pcmd.ArgsIsDynamic, hasVariableOrCmdSubst(word))
+			if hasCmdSubst(word) {
+				pcmd.HasCmdSubst = true
+			}
 		}
 	}
 
@@ -228,12 +205,56 @@ func parseRedirect(redir *syntax.Redirect) Redirect {
 	}
 	op := redir.Op.String()
 	target := ""
+	var isDynamic bool
 	if redir.Word != nil {
 		target = redir.Word.Lit()
+		isDynamic = hasVariableOrCmdSubst(redir.Word)
 	}
 	fd := 1 // default stdout
 	if redir.N != nil {
 		fd, _ = strconv.Atoi(redir.N.Value)
 	}
-	return Redirect{Op: op, Fd: fd, Target: target}
+	return Redirect{Op: op, Fd: fd, Target: target, IsDynamic: isDynamic}
+}
+
+func hasCmdSubst(word *syntax.Word) bool {
+	if word == nil {
+		return false
+	}
+	var walk func(parts []syntax.WordPart) bool
+	walk = func(parts []syntax.WordPart) bool {
+		for _, part := range parts {
+			switch p := part.(type) {
+			case *syntax.CmdSubst:
+				return true
+			case *syntax.DblQuoted:
+				if walk(p.Parts) {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	return walk(word.Parts)
+}
+
+func hasVariableOrCmdSubst(word *syntax.Word) bool {
+	if word == nil {
+		return false
+	}
+	var walk func(parts []syntax.WordPart) bool
+	walk = func(parts []syntax.WordPart) bool {
+		for _, part := range parts {
+			switch p := part.(type) {
+			case *syntax.ParamExp, *syntax.CmdSubst:
+				return true
+			case *syntax.DblQuoted:
+				if walk(p.Parts) {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	return walk(word.Parts)
 }

@@ -156,7 +156,8 @@ func (m *FSManager) SavePermission(ctx context.Context, scope PermissionScope, p
 		if p.Group == perm.Group &&
 			p.Target == perm.Target &&
 			p.MatchMethod == perm.MatchMethod &&
-			p.Action == perm.Action {
+			p.Action == perm.Action &&
+			p.AllowedDirectory == perm.AllowedDirectory {
 			exists = true
 			break
 		}

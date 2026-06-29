@@ -16,6 +16,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/core/fs"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	"github.com/masterkeysrd/tasksmith/internal/core/process"
+	"github.com/masterkeysrd/tasksmith/internal/core/shellguard"
 	"github.com/masterkeysrd/tasksmith/internal/core/vcs"
 	"github.com/masterkeysrd/tasksmith/internal/session/filetrack"
 )
@@ -207,9 +208,23 @@ func (h *ToolHandlers) Bash(ctx context.Context, in BashArgs) (tool.ToolStream, 
 	toolCallID, _ := ctx.Value("tool_call_id").(string)
 
 	return func(yield func(message.ToolChunk, error) bool) {
+		ops, err := shellguard.Analyze(in.Command, h.CWD)
+		isSafeToBypassTracker := err == nil
+		if err == nil {
+			for _, op := range ops {
+				if op.Action != shellguard.ActionRead || op.Safety != shellguard.SafetySafe {
+					isSafeToBypassTracker = false
+					break
+				}
+			}
+		}
+
 		// If task manager is nil, fallback to synchronous one-shot combined execution
 		if h.TaskManager == nil {
-			detector := newChangeDetector(h.CWD)
+			var detector *bashChangeDetector
+			if !isSafeToBypassTracker {
+				detector = newChangeDetector(h.CWD)
+			}
 			cmd := exec.CommandContext(ctx, "bash", "-c", in.Command)
 			cmd.Dir = h.CWD
 			process.Prepare(cmd)
@@ -226,7 +241,7 @@ func (h *ToolHandlers) Bash(ctx context.Context, in BashArgs) (tool.ToolStream, 
 				status = "failed"
 				stderrMsg = err.Error()
 			}
-			if err == nil {
+			if err == nil && !isSafeToBypassTracker && detector != nil {
 				cdChanges := detector.DetectChanges()
 				recordBashChanges(ctx, h.FileTracker, h.CWD, cdChanges)
 			}
@@ -268,7 +283,10 @@ func (h *ToolHandlers) Bash(ctx context.Context, in BashArgs) (tool.ToolStream, 
 			waitMs = defaultBashWaitMs
 		}
 
-		detector := newChangeDetector(h.CWD)
+		var detector *bashChangeDetector
+		if !isSafeToBypassTracker {
+			detector = newChangeDetector(h.CWD)
+		}
 		task, err := h.TaskManager.Submit(ctx, SubmitOptions{
 			SessionID:  h.SessionID,
 			TaskType:   "bash",
@@ -400,8 +418,10 @@ func (h *ToolHandlers) Bash(ctx context.Context, in BashArgs) (tool.ToolStream, 
 						stderrFinal = fmt.Sprintf("Failed to read stderr log: %v", err)
 					}
 
-					cdChanges := detector.DetectChanges()
-					recordBashChanges(ctx, h.FileTracker, h.CWD, cdChanges)
+					if !isSafeToBypassTracker && detector != nil {
+						cdChanges := detector.DetectChanges()
+						recordBashChanges(ctx, h.FileTracker, h.CWD, cdChanges)
+					}
 
 					// Yield final aggregated structured content chunk
 					outObj := BashOutput{

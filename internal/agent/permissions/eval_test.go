@@ -3,6 +3,8 @@ package permissions
 import (
 	"context"
 	"testing"
+
+	"github.com/masterkeysrd/tasksmith/internal/core/preview"
 )
 
 func TestGenericPermissionHandler(t *testing.T) {
@@ -49,5 +51,101 @@ func TestGenericPermissionHandler(t *testing.T) {
 	res = h.Evaluate(context.Background(), ToolCallRequest{Args: map[string]any{"path": "foo"}}, ModeDefault, grants)
 	if res.State != StateExplicitAllow {
 		t.Errorf("saved allow grant should override default prompt, got %v", res.State)
+	}
+}
+
+type mockPermissionManager struct {
+	mode   PermissionMode
+	grants []Permission
+	saved  []Permission
+}
+
+func (m *mockPermissionManager) GetGrants(ctx context.Context, group string) []Permission {
+	return m.grants
+}
+
+func (m *mockPermissionManager) GetMode(ctx context.Context) PermissionMode {
+	return m.mode
+}
+
+func (m *mockPermissionManager) SavePermission(ctx context.Context, scope PermissionScope, perm Permission) error {
+	m.saved = append(m.saved, perm)
+	return nil
+}
+
+func TestEvaluateToolCallMultiGrant(t *testing.T) {
+	mockHandler := &mockMultiGrantHandler{}
+	RegisterHandler("multi_mock", mockHandler)
+
+	pm := &mockPermissionManager{
+		mode: ModeDefault,
+	}
+
+	decision := &AuthorizationDecision{
+		Approved: true,
+		Scope:    ScopeSession,
+		GrantDecisions: []GrantDecision{
+			{RequestID: "cmd_1", SelectedTarget: "git status"},
+			{RequestID: "cmd_2", SelectedTarget: "rm -rf tmp"},
+		},
+	}
+
+	req := ToolCallRequest{
+		ToolName: "multi_mock",
+		Args:     map[string]any{"command": "git status && rm -rf tmp"},
+	}
+
+	state, _, _, _ := EvaluateToolCall(context.Background(), pm, req, decision)
+	if state != StateExplicitAllow {
+		t.Errorf("expected StateExplicitAllow, got %v", state)
+	}
+
+	if len(pm.saved) != 2 {
+		t.Fatalf("expected 2 saved permissions, got %d", len(pm.saved))
+	}
+
+	if pm.saved[0].Target != "git status" || pm.saved[0].Action != ActionAllow {
+		t.Errorf("expected first saved permission to be 'git status' allow, got %+v", pm.saved[0])
+	}
+
+	if pm.saved[1].Target != "rm -rf tmp" || pm.saved[1].Action != ActionAllow {
+		t.Errorf("expected second saved permission to be 'rm -rf tmp' allow, got %+v", pm.saved[1])
+	}
+}
+
+type mockMultiGrantHandler struct{}
+
+func (h *mockMultiGrantHandler) GetPermissionGroup() string {
+	return "mock_group"
+}
+
+func (h *mockMultiGrantHandler) Evaluate(ctx context.Context, req ToolCallRequest, mode PermissionMode, grants []Permission) EvaluationResult {
+	return EvaluationResult{State: StateRequiresAuth}
+}
+
+func (h *mockMultiGrantHandler) GetOptions(req ToolCallRequest) []PermissionOption {
+	return nil
+}
+
+func (h *mockMultiGrantHandler) GetPreview(ctx context.Context, req ToolCallRequest) (preview.ToolPreview, error) {
+	return preview.DefaultTextPreview{Text: "preview"}, nil
+}
+
+func (h *mockMultiGrantHandler) GetGrantRequests(ctx context.Context, req ToolCallRequest, mode PermissionMode, grants []Permission) []PermissionGrantRequest {
+	return []PermissionGrantRequest{
+		{
+			ID:          "cmd_1",
+			Description: "Permission required for: git status",
+			Options: []PermissionOption{
+				{Target: "git status", MatchMethod: "exact", Action: ActionAllow},
+			},
+		},
+		{
+			ID:          "cmd_2",
+			Description: "Permission required for: rm -rf tmp",
+			Options: []PermissionOption{
+				{Target: "rm -rf tmp", MatchMethod: "exact", Action: ActionAllow},
+			},
+		},
 	}
 }

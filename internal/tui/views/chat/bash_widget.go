@@ -7,6 +7,7 @@ import (
 
 	"github.com/masterkeysrd/kite/extras/kitex"
 	"github.com/masterkeysrd/kite/style"
+	"github.com/masterkeysrd/tasksmith/internal/core/preview"
 	"github.com/masterkeysrd/tasksmith/internal/tui/components"
 	"github.com/masterkeysrd/tasksmith/internal/tui/components/icon"
 	"github.com/masterkeysrd/tasksmith/internal/tui/theme"
@@ -16,7 +17,6 @@ import (
 var BashToolWidget = kitex.FC("BashToolWidget", func(props ToolExecutionProps) kitex.Node {
 	t := theme.UseTheme()
 	isOpen, setIsOpen := kitex.UseState(true)
-	showModal, setShowModal := kitex.UseState(false)
 
 	tc := props.ToolCall
 	tm := props.ToolMessage
@@ -283,7 +283,12 @@ var BashToolWidget = kitex.FC("BashToolWidget", func(props ToolExecutionProps) k
 											MarginTop(1).
 											Bold(true),
 										OnClick: func() {
-											setShowModal(true)
+											if props.OnViewPreview != nil {
+												props.OnViewPreview(
+													"Command Output",
+													preview.DefaultTextPreview{Text: outText},
+												)
+											}
 										},
 									}, kitex.Fragment(
 										kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Info)}, icon.FontAwesomeTerminal),
@@ -307,65 +312,6 @@ var BashToolWidget = kitex.FC("BashToolWidget", func(props ToolExecutionProps) k
 						)
 					}),
 				)
-			}),
-		),
-		components.Modal(components.ModalProps{
-			IsOpen: showModal(),
-			Title:  kitex.Text("Command Output"),
-			OnClose: func() {
-				setShowModal(false)
-			},
-		},
-			kitex.If(showModal(), func() kitex.Node {
-				outText := getToolOutput(tm.Content)
-				parts := strings.Split(outText, "[stderr]\n")
-				var elements []kitex.Node
-
-				var textCol color.Color
-				if t != nil {
-					textCol = t.Color.Text.Primary
-				}
-
-				outputContainerStyle := style.S().
-					Display(style.DisplayFlex).
-					FlexDirection(style.FlexColumn).
-					Background(t.Color.Surface.BaseHover).
-					Padding(1).
-					Width(style.Percent(100)).
-					MaxWidth(style.Percent(100)).
-					MinWidth(style.Percent(0)).
-					Overflow(style.OverflowHidden)
-
-				// First part is stdout
-				stdoutText := strings.TrimSpace(parts[0])
-				if stdoutText != "" {
-					stdoutText = strings.ReplaceAll(stdoutText, "\t", "    ")
-					elements = append(elements, kitex.Box(kitex.BoxProps{
-						Style: style.S().
-							Foreground(textCol).
-							Width(style.Percent(100)).
-							MinWidth(style.Percent(0)).
-							WhiteSpace(style.WhiteSpacePreWrap),
-					}, kitex.Text(stdoutText)))
-				}
-
-				// Subsequent parts are stderr
-				if len(parts) > 1 {
-					stderrText := strings.TrimSpace(strings.Join(parts[1:], ""))
-					if stderrText != "" {
-						stderrText = strings.ReplaceAll(stderrText, "\t", "    ")
-						elements = append(elements, kitex.Box(kitex.BoxProps{
-							Style: style.S().
-								Foreground(t.Color.Text.Error).
-								Width(style.Percent(100)).
-								MinWidth(style.Percent(0)).
-								WhiteSpace(style.WhiteSpacePreWrap).
-								MarginTop(1),
-						}, kitex.Text("[stderr]\n"+stderrText)))
-					}
-				}
-
-				return kitex.Box(kitex.BoxProps{Style: outputContainerStyle}, elements...)
 			}),
 		),
 	)

@@ -10,6 +10,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/agent/permissions"
 	"github.com/masterkeysrd/tasksmith/internal/agent/tools"
 	coredb "github.com/masterkeysrd/tasksmith/internal/core/db"
+	"github.com/masterkeysrd/tasksmith/internal/core/preview"
 	"github.com/masterkeysrd/tasksmith/internal/session"
 )
 
@@ -490,9 +491,15 @@ func TestSendMessageRejectionOnPendingAuth(t *testing.T) {
 			ToolCallID:  "call_123",
 			ToolName:    "bash",
 			Description: "Run a command",
-			Preview:     "ls -la",
-			Options: []permissions.PermissionOption{
-				{Target: "all", Label: "Allow"},
+			Preview:     preview.DefaultTextPreview{Text: "ls -la"},
+			GrantRequests: []permissions.PermissionGrantRequest{
+				{
+					ID:          "default",
+					Description: "Run a command",
+					Options: []permissions.PermissionOption{
+						{Target: "all", Label: "Allow"},
+					},
+				},
 			},
 		},
 	})
@@ -554,7 +561,7 @@ func TestSubmitAuthorizationDecisionTransitionsStatus(t *testing.T) {
 			ToolCallID:  "call_456",
 			ToolName:    "edit",
 			Description: "Edit a file",
-			Preview:     "@@ -1,1 +1,2 @@",
+			Preview:     preview.DefaultTextPreview{Text: "@@ -1,1 +1,2 @@"},
 		},
 	})
 

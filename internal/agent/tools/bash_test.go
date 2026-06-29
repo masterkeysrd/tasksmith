@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/masterkeysrd/loom/message"
 	"github.com/masterkeysrd/tasksmith/internal/session/filetrack"
 )
 
@@ -95,5 +96,56 @@ func TestRecordBashChanges_BinaryMetadataOnly(t *testing.T) {
 	}
 	if pngChange.Additions != 0 || pngChange.Deletions != 0 {
 		t.Errorf("expected 0 additions/deletions for binary file, got %+v", pngChange)
+	}
+}
+
+func TestBashReadOnlyBypass(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "bash-bypass-test-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	ft := &mockBashFileTracker{}
+	h := &ToolHandlers{
+		CWD:         tmpDir,
+		FileTracker: ft,
+		TaskManager: nil, // force synchronous path
+	}
+
+	ctx := context.Background()
+	in := BashArgs{
+		Command: "echo hello",
+	}
+
+	stream, err := h.Bash(ctx, in)
+	if err != nil {
+		t.Fatalf("Bash failed: %v", err)
+	}
+
+	// Consume stream
+	stream(func(chunk message.ToolChunk, err error) bool {
+		return true
+	})
+
+	if len(ft.recorded) > 0 {
+		t.Errorf("expected no files to be recorded for read-only command 'echo hello', got %d", len(ft.recorded))
+	}
+
+	// Run a command that writes inside the workspace: touch test.txt.
+	inWrite := BashArgs{
+		Command: "touch test.txt",
+	}
+	ft.recorded = nil // reset
+	streamWrite, err := h.Bash(ctx, inWrite)
+	if err != nil {
+		t.Fatalf("Bash failed: %v", err)
+	}
+	streamWrite(func(chunk message.ToolChunk, err error) bool {
+		return true
+	})
+
+	if len(ft.recorded) == 0 {
+		t.Errorf("expected file changes to be recorded for write command 'touch test.txt'")
 	}
 }

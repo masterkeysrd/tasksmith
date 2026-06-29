@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+
+	"github.com/masterkeysrd/tasksmith/internal/core/preview"
 )
 
 // GenericPermissionHandler evaluates permissions for tools that do not have custom handlers.
@@ -33,7 +35,7 @@ func (h *GenericPermissionHandler) Evaluate(ctx context.Context, req ToolCallReq
 		if h.IsDangerous || h.IsOpenWorld {
 			return EvaluationResult{
 				State: StateRequiresAuth,
-				Hints: []string{fmt.Sprintf("⚠️ Auto mode prompt: tool %q is sensitive", h.ToolName)},
+				Hints: []string{fmt.Sprintf("Auto mode prompt: tool %q is sensitive", h.ToolName)},
 			}
 		}
 		return EvaluationResult{State: StateExplicitAllow}
@@ -41,7 +43,7 @@ func (h *GenericPermissionHandler) Evaluate(ctx context.Context, req ToolCallReq
 	case ModeStrict:
 		return EvaluationResult{
 			State: StateRequiresAuth,
-			Hints: []string{fmt.Sprintf("🔒 Strict mode: authorization required for %q", h.ToolName)},
+			Hints: nil,
 		}
 
 	case ModeDefault:
@@ -70,12 +72,12 @@ func (h *GenericPermissionHandler) GetOptions(req ToolCallRequest) []PermissionO
 }
 
 // GetPreview generates a generic arguments preview.
-func (h *GenericPermissionHandler) GetPreview(ctx context.Context, req ToolCallRequest) (string, error) {
+func (h *GenericPermissionHandler) GetPreview(ctx context.Context, req ToolCallRequest) (preview.ToolPreview, error) {
 	prettyArgs, err := json.MarshalIndent(req.Args, "", "  ")
 	if err != nil {
-		return fmt.Sprintf("Execute tool %q with arguments: %v", h.ToolName, req.Args), nil
+		return preview.DefaultTextPreview{Text: fmt.Sprintf("Execute tool %q with arguments: %v", h.ToolName, req.Args)}, nil
 	}
-	return fmt.Sprintf("Execute tool %q with arguments:\n%s", h.ToolName, string(prettyArgs)), nil
+	return preview.DefaultTextPreview{Text: fmt.Sprintf("Execute tool %q with arguments:\n%s", h.ToolName, string(prettyArgs))}, nil
 }
 
 // EvaluateGrants checks if any saved grants match using the provided match function.
@@ -104,65 +106,104 @@ func EvaluateToolCall(
 		if decision.ModifiedPayload != nil {
 			finalArgs = decision.ModifiedPayload
 		}
+
+		handler, _ := GetHandler(req.ToolName)
+		if handler == nil {
+			handler = &GenericPermissionHandler{
+				ToolName:    req.ToolName,
+				IsDangerous: req.IsDangerous,
+				IsOpenWorld: req.IsOpenWorld,
+				IsReadOnly:  req.IsReadOnly,
+			}
+		}
+
 		if decision.Approved {
 			if decision.Scope != ScopeOnce {
-				matchMethod := "exact"
-				if decision.SelectedTarget == "*" {
-					matchMethod = "wildcard"
+				desc := req.UserHint
+				if desc == "" {
+					desc = req.Description
 				}
-				action := ActionAllow
+				if idx := strings.Index(desc, "\n"); idx != -1 {
+					desc = strings.TrimSpace(desc[:idx])
+				}
 
-				handler, _ := GetHandler(req.ToolName)
-				if handler == nil {
-					handler = &GenericPermissionHandler{
-						ToolName:    req.ToolName,
-						IsDangerous: req.IsDangerous,
-						IsOpenWorld: req.IsOpenWorld,
-						IsReadOnly:  req.IsReadOnly,
+				var grantRequests []PermissionGrantRequest
+				if multiHandler, ok := handler.(interface {
+					GetGrantRequests(ctx context.Context, req ToolCallRequest, mode PermissionMode, grants []Permission) []PermissionGrantRequest
+				}); ok {
+					grantRequests = multiHandler.GetGrantRequests(ctx, req, pm.GetMode(ctx), pm.GetGrants(ctx, handler.GetPermissionGroup()))
+				} else {
+					grantRequests = []PermissionGrantRequest{
+						{
+							ID:          "default",
+							Description: desc,
+							Options:     handler.GetOptions(req),
+						},
 					}
 				}
 
-				options := handler.GetOptions(req)
-				for _, opt := range options {
-					if opt.Target == decision.SelectedTarget {
-						matchMethod = opt.MatchMethod
-						action = opt.Action
-						break
+				for _, dec := range decision.GrantDecisions {
+					matchMethod := "exact"
+					if dec.SelectedTarget == "*" {
+						matchMethod = "wildcard"
 					}
-				}
+					action := ActionAllow
 
-				perm := Permission{
-					Group:       handler.GetPermissionGroup(),
-					Target:      decision.SelectedTarget,
-					MatchMethod: matchMethod,
-					Action:      action,
+					found := false
+					for _, gr := range grantRequests {
+						if gr.ID == dec.RequestID {
+							for _, opt := range gr.Options {
+								if opt.Target == dec.SelectedTarget {
+									matchMethod = opt.MatchMethod
+									action = opt.Action
+									found = true
+									break
+								}
+							}
+						}
+						if found {
+							break
+						}
+					}
+
+					perm := Permission{
+						Group:            handler.GetPermissionGroup(),
+						Target:           dec.SelectedTarget,
+						MatchMethod:      matchMethod,
+						Action:           action,
+						AllowedDirectory: dec.AllowedDirectory,
+					}
+					_ = pm.SavePermission(ctx, decision.Scope, perm)
 				}
-				_ = pm.SavePermission(ctx, decision.Scope, perm)
 			}
 			return StateExplicitAllow, finalArgs, nil, nil
 		} else {
 			if decision.Scope != ScopeOnce {
-				matchMethod := "exact"
-				if decision.SelectedTarget == "*" {
-					matchMethod = "wildcard"
-				}
-				handler, _ := GetHandler(req.ToolName)
-				if handler == nil {
-					handler = &GenericPermissionHandler{
-						ToolName:    req.ToolName,
-						IsDangerous: req.IsDangerous,
-						IsOpenWorld: req.IsOpenWorld,
-						IsReadOnly:  req.IsReadOnly,
+				if len(decision.GrantDecisions) > 0 {
+					for _, dec := range decision.GrantDecisions {
+						matchMethod := "exact"
+						if dec.SelectedTarget == "*" {
+							matchMethod = "wildcard"
+						}
+						perm := Permission{
+							Group:            handler.GetPermissionGroup(),
+							Target:           dec.SelectedTarget,
+							MatchMethod:      matchMethod,
+							Action:           ActionDeny,
+							AllowedDirectory: dec.AllowedDirectory,
+						}
+						_ = pm.SavePermission(ctx, decision.Scope, perm)
 					}
+				} else {
+					perm := Permission{
+						Group:            handler.GetPermissionGroup(),
+						Target:           "*",
+						MatchMethod:      "wildcard",
+						Action:           ActionDeny,
+						AllowedDirectory: "*",
+					}
+					_ = pm.SavePermission(ctx, decision.Scope, perm)
 				}
-
-				perm := Permission{
-					Group:       handler.GetPermissionGroup(),
-					Target:      decision.SelectedTarget,
-					MatchMethod: matchMethod,
-					Action:      ActionDeny,
-				}
-				_ = pm.SavePermission(ctx, decision.Scope, perm)
 			}
 			return StateExplicitDeny, finalArgs, nil, nil
 		}
@@ -185,7 +226,7 @@ func EvaluateToolCall(
 
 	res := handler.Evaluate(ctx, req, mode, grants)
 	if res.State == StateRequiresAuth {
-		var preview string
+		var preview preview.ToolPreview
 		if resPreview, err := handler.GetPreview(ctx, req); err == nil {
 			preview = resPreview
 		}
@@ -200,14 +241,64 @@ func EvaluateToolCall(
 			desc = strings.TrimSpace(desc[:idx])
 		}
 
+		var grantRequests []PermissionGrantRequest
+		if multiHandler, ok := handler.(interface {
+			GetGrantRequests(ctx context.Context, req ToolCallRequest, mode PermissionMode, grants []Permission) []PermissionGrantRequest
+		}); ok {
+			grantRequests = multiHandler.GetGrantRequests(ctx, req, mode, grants)
+		} else {
+			grantRequests = []PermissionGrantRequest{
+				{
+					ID:          "default",
+					Description: getFallbackActionDescription(req),
+					Options:     handler.GetOptions(req),
+				},
+			}
+		}
+
 		return StateRequiresAuth, req.Args, res.Hints, &AuthorizationRequest{
-			ToolName:    req.ToolName,
-			Description: desc,
-			Payload:     req.Args,
-			Preview:     preview,
-			SystemHints: res.Hints,
-			Options:     handler.GetOptions(req),
+			ToolName:      req.ToolName,
+			Description:   desc,
+			Payload:       req.Args,
+			Preview:       preview,
+			SystemHints:   res.Hints,
+			GrantRequests: grantRequests,
 		}
 	}
 	return res.State, req.Args, nil, nil
+}
+
+func getFallbackActionDescription(req ToolCallRequest) string {
+	switch req.ToolName {
+	case "edit_file", "write_to_file":
+		if path, ok := req.Args["path"].(string); ok {
+			return fmt.Sprintf("Modify file: %s", path)
+		}
+		return "Modify file"
+	case "write":
+		if path, ok := req.Args["path"].(string); ok {
+			return fmt.Sprintf("Write: %s", path)
+		}
+		return "Write file"
+	case "read_file", "view_file", "view":
+		if path, ok := req.Args["path"].(string); ok {
+			return fmt.Sprintf("Read file: %s", path)
+		}
+		if path, ok := req.Args["AbsolutePath"].(string); ok {
+			return fmt.Sprintf("Read file: %s", path)
+		}
+		return "Read file"
+	case "grep_search":
+		if path, ok := req.Args["SearchPath"].(string); ok {
+			return fmt.Sprintf("Search path: %s", path)
+		}
+		return "Search files"
+	case "list_dir":
+		if path, ok := req.Args["DirectoryPath"].(string); ok {
+			return fmt.Sprintf("List directory: %s", path)
+		}
+		return "List directory"
+	default:
+		return fmt.Sprintf("Call tool: %s", req.ToolName)
+	}
 }

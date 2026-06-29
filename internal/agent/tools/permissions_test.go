@@ -49,8 +49,8 @@ func TestWebFetchPermissionHandler(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if prev == "" {
-		t.Error("preview should not be empty")
+	if prev == nil {
+		t.Error("preview should not be nil")
 	}
 }
 
@@ -164,5 +164,100 @@ func TestMatchHelpers(t *testing.T) {
 		if res != tc.expected {
 			t.Errorf("matchGeneric(%q, %q, %q) = %v; expected %v", tc.grantTarget, tc.matchMethod, tc.targetValue, res, tc.expected)
 		}
+	}
+}
+
+func TestBashPermissionHandler(t *testing.T) {
+	h := &BashPermissionHandler{}
+	ctx := permissions.ContextWithWorkspaceCWD(context.Background(), "/test/workspace")
+
+	// 1. Running a normal command with no grants, ModeDefault -> should generate a grant request
+	req := permissions.ToolCallRequest{
+		ToolName: "bash",
+		Args:     map[string]any{"command": "git status"},
+	}
+	reqs := h.GetGrantRequests(ctx, req, permissions.ModeDefault, nil)
+	if len(reqs) != 1 {
+		t.Fatalf("expected 1 grant request, got %d", len(reqs))
+	}
+	if reqs[0].Options[0].Target != "git status" {
+		t.Errorf("expected target 'git status', got %q", reqs[0].Options[0].Target)
+	}
+
+	// 2. git status with matching grant -> should NOT generate any request (auto-approved via grant)
+	grants := []permissions.Permission{
+		{Group: "command", Target: "git *", MatchMethod: "wildcard", Action: permissions.ActionAllow},
+	}
+	reqs = h.GetGrantRequests(ctx, req, permissions.ModeDefault, grants)
+	if len(reqs) != 0 {
+		t.Errorf("expected 0 grant requests for git status with git * grant, got %d", len(reqs))
+	}
+
+	// 3. Running rm -rf in ModeAuto (no grants) -> should be intercepted because it is Destructive
+	reqRM := permissions.ToolCallRequest{
+		ToolName: "bash",
+		Args:     map[string]any{"command": "rm -rf tmp"},
+	}
+	reqsRM := h.GetGrantRequests(ctx, reqRM, permissions.ModeAuto, nil)
+	if len(reqsRM) != 1 {
+		t.Fatalf("expected rm -rf in ModeAuto to be intercepted, got %d requests", len(reqsRM))
+	}
+	if reqsRM[0].Options[0].Target != "rm -rf tmp" {
+		t.Errorf("expected target 'rm -rf tmp', got %q", reqsRM[0].Options[0].Target)
+	}
+
+	// 4. Running a chained command like echo hi && sudo rm -rf / -> should identify the destructive wrapper and request rm
+	reqChain := permissions.ToolCallRequest{
+		ToolName: "bash",
+		Args:     map[string]any{"command": "echo hi && sudo rm -rf /"},
+	}
+	grantsEcho := []permissions.Permission{
+		{Group: "command", Target: "echo hi", MatchMethod: "exact", Action: permissions.ActionAllow},
+	}
+	reqsChain := h.GetGrantRequests(ctx, reqChain, permissions.ModeDefault, grantsEcho)
+	if len(reqsChain) != 1 {
+		t.Fatalf("expected 1 request for chained command, got %d", len(reqsChain))
+	}
+	if reqsChain[0].Description != "Permission required for: rm -rf /" {
+		t.Errorf("expected request description for rm -rf /, got %q", reqsChain[0].Description)
+	}
+
+	// 5. Chained command with cd /test/workspace && go test ./... -> should ignore cd and only request go test ./...
+	reqCd := permissions.ToolCallRequest{
+		ToolName: "bash",
+		Args:     map[string]any{"command": "cd /test/workspace && go test ./..."},
+	}
+	reqsCd := h.GetGrantRequests(ctx, reqCd, permissions.ModeDefault, nil)
+	if len(reqsCd) != 1 {
+		t.Fatalf("expected 1 request for command chain with cd, got %d", len(reqsCd))
+	}
+	if reqsCd[0].Options[0].Target != "go test ./..." {
+		t.Errorf("expected target 'go test ./...', got %q", reqsCd[0].Options[0].Target)
+	}
+
+	// 6. cd /etc -> should NOT be ignored because it is outside the workspace
+	reqUnsafeCd := permissions.ToolCallRequest{
+		ToolName: "bash",
+		Args:     map[string]any{"command": "cd /etc"},
+	}
+	reqsUnsafeCd := h.GetGrantRequests(ctx, reqUnsafeCd, permissions.ModeDefault, nil)
+	if len(reqsUnsafeCd) != 1 {
+		t.Fatalf("expected 1 request for cd outside workspace, got %d", len(reqsUnsafeCd))
+	}
+	if reqsUnsafeCd[0].Options[0].Target != "cd /etc" {
+		t.Errorf("expected target 'cd /etc', got %q", reqsUnsafeCd[0].Options[0].Target)
+	}
+
+	// 7. cd .. -> should NOT be ignored because it goes outside /test/workspace
+	reqCdParent := permissions.ToolCallRequest{
+		ToolName: "bash",
+		Args:     map[string]any{"command": "cd .."},
+	}
+	reqsCdParent := h.GetGrantRequests(ctx, reqCdParent, permissions.ModeDefault, nil)
+	if len(reqsCdParent) != 1 {
+		t.Fatalf("expected 1 request for cd .., got %d", len(reqsCdParent))
+	}
+	if reqsCdParent[0].Options[0].Target != "cd .." {
+		t.Errorf("expected target 'cd ..', got %q", reqsCdParent[0].Options[0].Target)
 	}
 }

@@ -22,6 +22,8 @@ type ModalProps struct {
 	Style style.Style
 	// HeaderActions contains custom elements injected next to the close button.
 	HeaderActions kitex.Node
+	// Footer contains custom elements to display in the modal footer statusrail.
+	Footer kitex.Node
 	// Children is the list of child elements displayed in the body.
 	Children []kitex.Node
 }
@@ -148,15 +150,22 @@ var Modal = kitex.FCC("Modal", func(props ModalProps) kitex.Node {
 			kitex.Box(kitex.BoxProps{
 				Style: statusStyle,
 			},
-				kitex.Span(kitex.SpanProps{
-					Style: style.S().Foreground(commentColor).Bold(true),
-				}, kitex.Text("INTERACTIVE")),
-				kitex.Box(kitex.BoxProps{
-					Style: style.S().Flex(1, 1, style.Cells(0)),
+				kitex.If(props.Footer != nil, func() kitex.Node {
+					return props.Footer
 				}),
-				kitex.Span(kitex.SpanProps{
-					Style: style.S().Foreground(successColor).Bold(true),
-				}, kitex.Text("ESC TO CLOSE")),
+				kitex.If(props.Footer == nil, func() kitex.Node {
+					return kitex.Fragment(
+						kitex.Span(kitex.SpanProps{
+							Style: style.S().Foreground(commentColor).Bold(true),
+						}, kitex.Text("INTERACTIVE")),
+						kitex.Box(kitex.BoxProps{
+							Style: style.S().Flex(1, 1, style.Cells(0)),
+						}),
+						kitex.Span(kitex.SpanProps{
+							Style: style.S().Foreground(successColor).Bold(true),
+						}, kitex.Text("ESC TO CLOSE")),
+					)
+				}),
 			),
 		),
 	)

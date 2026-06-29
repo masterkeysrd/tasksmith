@@ -10,6 +10,7 @@ import (
 	"github.com/masterkeysrd/kite/style"
 	"github.com/masterkeysrd/tasksmith/internal/agent/tools"
 	"github.com/masterkeysrd/tasksmith/internal/api"
+	"github.com/masterkeysrd/tasksmith/internal/core/preview"
 	"github.com/masterkeysrd/tasksmith/internal/tui/components"
 	"github.com/masterkeysrd/tasksmith/internal/tui/components/icon"
 	"github.com/masterkeysrd/tasksmith/internal/tui/theme"
@@ -96,7 +97,6 @@ var RunningTasksWidget = kitex.FC("RunningTasksWidget", func(props RunningTasksW
 var TasksToolWidget = kitex.FC("TasksToolWidget", func(props ToolExecutionProps) kitex.Node {
 	t := theme.UseTheme()
 	isOpen, setIsOpen := kitex.UseState(true)
-	showModal, setShowModal := kitex.UseState(false)
 
 	tc := props.ToolCall
 	tm := props.ToolMessage
@@ -403,7 +403,19 @@ var TasksToolWidget = kitex.FC("TasksToolWidget", func(props ToolExecutionProps)
 												MarginTop(1).
 												Bold(true),
 											OnClick: func() {
-												setShowModal(true)
+												if props.OnViewPreview != nil {
+													var modalLogText string
+													if strings.TrimSpace(out.StdoutTail) != "" {
+														modalLogText += "FULL STDOUT:\n" + strings.ReplaceAll(out.StdoutTail, "\t", "    ") + "\n\n"
+													}
+													if strings.TrimSpace(out.StderrTail) != "" {
+														modalLogText += "FULL STDERR:\n" + strings.ReplaceAll(out.StderrTail, "\t", "    ") + "\n"
+													}
+													props.OnViewPreview(
+														fmt.Sprintf("Task Logs: %s", targetTaskId),
+														preview.DefaultTextPreview{Text: modalLogText},
+													)
+												}
 											},
 										}, kitex.Fragment(
 											kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Info)}, icon.FontAwesomeTerminal),
@@ -462,45 +474,6 @@ var TasksToolWidget = kitex.FC("TasksToolWidget", func(props ToolExecutionProps)
 						return nil
 					}),
 				)
-			}),
-		),
-		components.Modal(components.ModalProps{
-			IsOpen: showModal(),
-			Title:  kitex.Text(fmt.Sprintf("Task Logs: %s", targetTaskId)),
-			OnClose: func() {
-				setShowModal(false)
-			},
-		},
-			kitex.If(showModal(), func() kitex.Node {
-				var modalLogElements []kitex.Node
-
-				if strings.TrimSpace(out.StdoutTail) != "" {
-					modalLogElements = append(modalLogElements,
-						kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Secondary).Bold(true).MarginBottom(1)}, kitex.Text("FULL STDOUT:")),
-						kitex.Box(kitex.BoxProps{
-							Style: style.S().
-								Foreground(t.Color.Text.Primary).
-								Padding(1).
-								MarginBottom(1).
-								WhiteSpace(style.WhiteSpacePreWrap),
-						}, kitex.Text(strings.ReplaceAll(out.StdoutTail, "\t", "    "))),
-					)
-				}
-
-				if strings.TrimSpace(out.StderrTail) != "" {
-					modalLogElements = append(modalLogElements,
-						kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Error).Bold(true).MarginBottom(1)}, kitex.Text("FULL STDERR:")),
-						kitex.Box(kitex.BoxProps{
-							Style: style.S().
-								Foreground(t.Color.Text.Error).
-								Padding(1).
-								MarginBottom(1).
-								WhiteSpace(style.WhiteSpacePreWrap),
-						}, kitex.Text(strings.ReplaceAll(out.StderrTail, "\t", "    "))),
-					)
-				}
-
-				return kitex.Fragment(modalLogElements...)
 			}),
 		),
 	)

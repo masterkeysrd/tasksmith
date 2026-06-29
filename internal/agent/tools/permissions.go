@@ -11,6 +11,8 @@ import (
 
 	"github.com/masterkeysrd/tasksmith/internal/agent/permissions"
 	"github.com/masterkeysrd/tasksmith/internal/core/diff"
+	"github.com/masterkeysrd/tasksmith/internal/core/preview"
+	"github.com/masterkeysrd/tasksmith/internal/core/shellguard"
 )
 
 func init() {
@@ -70,8 +72,8 @@ func isSafeWorkspacePath(ctx context.Context, absPath string) bool {
 	if err != nil {
 		return false
 	}
-	parts := strings.Split(filepath.ToSlash(rel), "/")
-	for _, part := range parts {
+	parts := strings.SplitSeq(filepath.ToSlash(rel), "/")
+	for part := range parts {
 		if part == ".git" {
 			return false
 		}
@@ -222,20 +224,20 @@ func (h *FileModificationPermissionHandler) Evaluate(ctx context.Context, req pe
 		}
 		return permissions.EvaluationResult{
 			State: permissions.StateRequiresAuth,
-			Hints: []string{fmt.Sprintf("⚠️ Auto mode blocked: editing path %q is outside the workspace or inside .git", rawPath)},
+			Hints: []string{fmt.Sprintf("Auto mode blocked: editing path %q is outside the workspace or inside .git", rawPath)},
 		}
 	}
 
 	if mode == permissions.ModeStrict {
 		return permissions.EvaluationResult{
 			State: permissions.StateRequiresAuth,
-			Hints: []string{fmt.Sprintf("🔒 Strict mode: authorization required to modify file %q", rawPath)},
+			Hints: nil,
 		}
 	}
 
 	return permissions.EvaluationResult{
 		State: permissions.StateRequiresAuth,
-		Hints: []string{fmt.Sprintf("Authorization required to modify file %q", rawPath)},
+		Hints: nil,
 	}
 }
 
@@ -245,12 +247,12 @@ func (h *FileModificationPermissionHandler) GetOptions(req permissions.ToolCallR
 	return getFileOptions(req.ToolName, rawPath)
 }
 
-func (h *FileModificationPermissionHandler) GetPreview(ctx context.Context, req permissions.ToolCallRequest) (string, error) {
+func (h *FileModificationPermissionHandler) GetPreview(ctx context.Context, req permissions.ToolCallRequest) (preview.ToolPreview, error) {
 	args := req.Args
 	rawPath, _ := args["path"].(string)
 	absPath, err := resolveAbsPath(ctx, rawPath)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 
 	var oldContent string
@@ -277,12 +279,12 @@ func (h *FileModificationPermissionHandler) GetPreview(ctx context.Context, req 
 		var count int
 		newContent, count, _ = SmartReplace(contentNorm, target, replacement, replaceAll)
 		if count == 0 {
-			return fmt.Sprintf("Edit file %q:\nWarning: Target block not found in file (even with smart replace).\nReplace %q\nWith %q", rawPath, target, replacement), nil
+			return preview.DefaultTextPreview{Text: fmt.Sprintf("Edit file %q:\nWarning: Target block not found in file (even with smart replace).\nReplace %q\nWith %q", rawPath, target, replacement)}, nil
 		}
 	case "multi_edit":
 		rawEdits, ok := args["edits"].([]any)
 		if !ok {
-			return fmt.Sprintf("Multi-edit file %q", rawPath), nil
+			return preview.DefaultTextPreview{Text: fmt.Sprintf("Multi-edit file %q", rawPath)}, nil
 		}
 		current := strings.ReplaceAll(oldContent, "\r\n", "\n")
 		for _, eVal := range rawEdits {
@@ -300,14 +302,17 @@ func (h *FileModificationPermissionHandler) GetPreview(ctx context.Context, req 
 		}
 		newContent = current
 	default:
-		return fmt.Sprintf("Modify file: %q", rawPath), nil
+		return preview.DefaultTextPreview{Text: fmt.Sprintf("Modify file: %q", rawPath)}, nil
 	}
 
 	unifiedDiff := diff.FormatUnified(relPath, relPath, oldContent, newContent)
 	if unifiedDiff == "" {
-		return "No changes made (target and replacement are identical).", nil
+		return preview.DefaultTextPreview{Text: "No changes made (target and replacement are identical)."}, nil
 	}
-	return unifiedDiff, nil
+	return preview.FileEditPreview{
+		Path: rawPath,
+		Diff: unifiedDiff,
+	}, nil
 }
 
 // --- Standalone: RemovePermissionHandler ---
@@ -359,7 +364,7 @@ func (h *RemovePermissionHandler) GetOptions(req permissions.ToolCallRequest) []
 	return getFileOptions("remove", rawPath)
 }
 
-func (h *RemovePermissionHandler) GetPreview(ctx context.Context, req permissions.ToolCallRequest) (string, error) {
+func (h *RemovePermissionHandler) GetPreview(ctx context.Context, req permissions.ToolCallRequest) (preview.ToolPreview, error) {
 	args := req.Args
 	rawPath, _ := args["path"].(string)
 	recursive, _ := args["recursive"].(bool)
@@ -367,7 +372,7 @@ func (h *RemovePermissionHandler) GetPreview(ctx context.Context, req permission
 	if recursive {
 		label = "file/directory recursively"
 	}
-	return fmt.Sprintf("Remove %s: %q", label, rawPath), nil
+	return preview.DefaultTextPreview{Text: fmt.Sprintf("Remove %s: %q", label, rawPath)}, nil
 }
 
 // --- Standalone: ViewPermissionHandler ---
@@ -396,7 +401,7 @@ func (h *ViewPermissionHandler) Evaluate(ctx context.Context, req permissions.To
 		}
 		return permissions.EvaluationResult{
 			State: permissions.StateRequiresAuth,
-			Hints: []string{fmt.Sprintf("⚠️ Auto mode blocked: viewing path %q outside the workspace or inside .git", rawPath)},
+			Hints: []string{fmt.Sprintf("Auto mode blocked: viewing path %q outside the workspace or inside .git", rawPath)},
 		}
 	}
 
@@ -408,7 +413,7 @@ func (h *ViewPermissionHandler) Evaluate(ctx context.Context, req permissions.To
 
 	return permissions.EvaluationResult{
 		State: permissions.StateRequiresAuth,
-		Hints: []string{fmt.Sprintf("Authorization required to view file %q", rawPath)},
+		Hints: nil,
 	}
 }
 
@@ -418,7 +423,7 @@ func (h *ViewPermissionHandler) GetOptions(req permissions.ToolCallRequest) []pe
 	return getFileOptions("view", rawPath)
 }
 
-func (h *ViewPermissionHandler) GetPreview(ctx context.Context, req permissions.ToolCallRequest) (string, error) {
+func (h *ViewPermissionHandler) GetPreview(ctx context.Context, req permissions.ToolCallRequest) (preview.ToolPreview, error) {
 	args := req.Args
 	rawPath, _ := args["path"].(string)
 	start, _ := args["start_line"].(float64)
@@ -428,7 +433,7 @@ func (h *ViewPermissionHandler) GetPreview(ctx context.Context, req permissions.
 	if start > 0 || end > 0 {
 		details = fmt.Sprintf(" (lines %.0f-%.0f)", start, end)
 	}
-	return fmt.Sprintf("View file: %q%s", rawPath, details), nil
+	return preview.DefaultTextPreview{Text: fmt.Sprintf("View file: %q%s", rawPath, details)}, nil
 }
 
 // --- Group 2: FileSearchPermissionHandler (ls, grep, glob) ---
@@ -473,7 +478,7 @@ func (h *FileSearchPermissionHandler) Evaluate(ctx context.Context, req permissi
 		}
 		return permissions.EvaluationResult{
 			State: permissions.StateRequiresAuth,
-			Hints: []string{fmt.Sprintf("⚠️ Auto mode blocked: searching path %q outside workspace or inside .git", targetVal)},
+			Hints: []string{fmt.Sprintf("Auto mode blocked: searching path %q outside workspace or inside .git", targetVal)},
 		}
 	}
 
@@ -485,7 +490,7 @@ func (h *FileSearchPermissionHandler) Evaluate(ctx context.Context, req permissi
 
 	return permissions.EvaluationResult{
 		State: permissions.StateRequiresAuth,
-		Hints: []string{fmt.Sprintf("Authorization required to execute %s in %q", req.ToolName, targetVal)},
+		Hints: nil,
 	}
 }
 
@@ -517,7 +522,7 @@ func (h *FileSearchPermissionHandler) GetOptions(req permissions.ToolCallRequest
 	return getFileOptions(req.ToolName, rawPath)
 }
 
-func (h *FileSearchPermissionHandler) GetPreview(ctx context.Context, req permissions.ToolCallRequest) (string, error) {
+func (h *FileSearchPermissionHandler) GetPreview(ctx context.Context, req permissions.ToolCallRequest) (preview.ToolPreview, error) {
 	args := req.Args
 	switch req.ToolName {
 	case "ls":
@@ -525,19 +530,19 @@ func (h *FileSearchPermissionHandler) GetPreview(ctx context.Context, req permis
 		if rawPath == "" {
 			rawPath = "."
 		}
-		return fmt.Sprintf("List directory contents: %q", rawPath), nil
+		return preview.DefaultTextPreview{Text: fmt.Sprintf("List directory contents: %q", rawPath)}, nil
 	case "grep":
 		rawPath, _ := args["path"].(string)
 		pattern, _ := args["pattern"].(string)
 		if rawPath == "" {
 			rawPath = "."
 		}
-		return fmt.Sprintf("Grep files for pattern %q in path %q", pattern, rawPath), nil
+		return preview.DefaultTextPreview{Text: fmt.Sprintf("Grep files for pattern %q in path %q", pattern, rawPath)}, nil
 	case "glob":
 		pattern, _ := args["pattern"].(string)
-		return fmt.Sprintf("Find files matching glob pattern: %q", pattern), nil
+		return preview.DefaultTextPreview{Text: fmt.Sprintf("Find files matching glob pattern: %q", pattern)}, nil
 	default:
-		return fmt.Sprintf("Search files via %s", req.ToolName), nil
+		return preview.DefaultTextPreview{Text: fmt.Sprintf("Search files via %s", req.ToolName)}, nil
 	}
 }
 
@@ -573,10 +578,10 @@ func (h *WebFetchPermissionHandler) GetOptions(req permissions.ToolCallRequest) 
 	return getWebOptions(req.ToolName, urlVal)
 }
 
-func (h *WebFetchPermissionHandler) GetPreview(ctx context.Context, req permissions.ToolCallRequest) (string, error) {
+func (h *WebFetchPermissionHandler) GetPreview(ctx context.Context, req permissions.ToolCallRequest) (preview.ToolPreview, error) {
 	args := req.Args
 	urlVal, _ := args["url"].(string)
-	return fmt.Sprintf("Fetch web page content: %q", urlVal), nil
+	return preview.DefaultTextPreview{Text: fmt.Sprintf("Fetch web page content: %q", urlVal)}, nil
 }
 
 type DownloadPermissionHandler struct{}
@@ -701,7 +706,7 @@ func (h *DownloadPermissionHandler) GetOptions(req permissions.ToolCallRequest) 
 	return options
 }
 
-func (h *DownloadPermissionHandler) GetPreview(ctx context.Context, req permissions.ToolCallRequest) (string, error) {
+func (h *DownloadPermissionHandler) GetPreview(ctx context.Context, req permissions.ToolCallRequest) (preview.ToolPreview, error) {
 	args := req.Args
 	urlVal, _ := args["url"].(string)
 	destVal, _ := args["destination"].(string)
@@ -709,7 +714,7 @@ func (h *DownloadPermissionHandler) GetPreview(ctx context.Context, req permissi
 	if destVal != "" {
 		destText = fmt.Sprintf(" to %q", destVal)
 	}
-	return fmt.Sprintf("Download file from URL: %q%s", urlVal, destText), nil
+	return preview.DefaultTextPreview{Text: fmt.Sprintf("Download file from URL: %q%s", urlVal, destText)}, nil
 }
 
 type WebSearchPermissionHandler struct{}
@@ -756,10 +761,10 @@ func (h *WebSearchPermissionHandler) GetOptions(req permissions.ToolCallRequest)
 	}
 }
 
-func (h *WebSearchPermissionHandler) GetPreview(ctx context.Context, req permissions.ToolCallRequest) (string, error) {
+func (h *WebSearchPermissionHandler) GetPreview(ctx context.Context, req permissions.ToolCallRequest) (preview.ToolPreview, error) {
 	args := req.Args
 	query, _ := args["query"].(string)
-	return fmt.Sprintf("Web Search query: %q", query), nil
+	return preview.DefaultTextPreview{Text: fmt.Sprintf("Web Search query: %q", query)}, nil
 }
 
 // --- Standalone: BashPermissionHandler ---
@@ -771,25 +776,51 @@ func (h *BashPermissionHandler) GetPermissionGroup() string {
 }
 
 func (h *BashPermissionHandler) Evaluate(ctx context.Context, req permissions.ToolCallRequest, mode permissions.PermissionMode, grants []permissions.Permission) permissions.EvaluationResult {
-	args := req.Args
-	cmd, _ := args["command"].(string)
-	if state, found := evaluateGenericGrants(grants, cmd); found {
-		return permissions.EvaluationResult{State: state}
-	}
+	reqs := h.GetGrantRequests(ctx, req, mode, grants)
+	if len(reqs) > 0 {
+		var hints []string
+		cmd, _ := req.Args["command"].(string)
+		wsCWD := permissions.GetWorkspaceCWD(ctx)
+		ops, err := shellguard.Analyze(cmd, wsCWD)
+		if err == nil {
+			for _, op := range ops {
+				if op.Action == shellguard.ActionDelete {
+					hints = append(hints, "WARNING: Command classified as Destructive.")
+					break
+				}
+			}
+			for _, op := range ops {
+				if op.Safety == shellguard.SafetyUnsafe {
+					hints = append(hints, "WARNING: Command classified as Unsafe.")
+					break
+				}
+			}
+		} else {
+			hints = append(hints, fmt.Sprintf("Authorization required to run bash command: %q", cmd))
+		}
 
-	if mode == permissions.ModeAuto {
-		return permissions.EvaluationResult{State: permissions.StateExplicitAllow}
+		return permissions.EvaluationResult{
+			State: permissions.StateRequiresAuth,
+			Hints: hints,
+		}
 	}
 
 	return permissions.EvaluationResult{
-		State: permissions.StateRequiresAuth,
-		Hints: []string{fmt.Sprintf("Authorization required to run bash command: %q", cmd)},
+		State: permissions.StateExplicitAllow,
 	}
 }
 
 func (h *BashPermissionHandler) GetOptions(req permissions.ToolCallRequest) []permissions.PermissionOption {
-	args := req.Args
-	cmd, _ := args["command"].(string)
+	cmd, _ := req.Args["command"].(string)
+	words := strings.Fields(cmd)
+	exec := ""
+	if len(words) > 0 {
+		exec = words[0]
+	}
+	return h.GetOptionsForCommand(cmd, exec)
+}
+
+func (h *BashPermissionHandler) GetOptionsForCommand(cmd, exec string) []permissions.PermissionOption {
 	var options []permissions.PermissionOption
 
 	options = append(options, permissions.PermissionOption{
@@ -799,12 +830,10 @@ func (h *BashPermissionHandler) GetOptions(req permissions.ToolCallRequest) []pe
 		Action:      permissions.ActionAllow,
 	})
 
-	words := strings.Fields(cmd)
-	if len(words) > 0 {
-		prefix := words[0]
+	if exec != "" {
 		options = append(options, permissions.PermissionOption{
-			Label:       fmt.Sprintf("Allow all commands starting with %q", prefix),
-			Target:      prefix,
+			Label:       fmt.Sprintf("Allow all commands starting with %q", exec),
+			Target:      exec,
 			MatchMethod: "prefix",
 			Action:      permissions.ActionAllow,
 		})
@@ -821,14 +850,168 @@ func (h *BashPermissionHandler) GetOptions(req permissions.ToolCallRequest) []pe
 	return options
 }
 
-func (h *BashPermissionHandler) GetPreview(ctx context.Context, req permissions.ToolCallRequest) (string, error) {
+func (h *BashPermissionHandler) GetGrantRequests(
+	ctx context.Context,
+	req permissions.ToolCallRequest,
+	mode permissions.PermissionMode,
+	grants []permissions.Permission,
+) []permissions.PermissionGrantRequest {
 	args := req.Args
 	cmd, _ := args["command"].(string)
-	desc, _ := args["description"].(string)
+	wsCWD := permissions.GetWorkspaceCWD(ctx)
 
-	var descText string
-	if desc != "" {
-		descText = fmt.Sprintf("\nIntended action: %q", desc)
+	chain, err := shellguard.Parse(cmd)
+	if err != nil {
+		return []permissions.PermissionGrantRequest{
+			{
+				ID:          "raw_command",
+				Description: fmt.Sprintf("Authorization required to run bash command: %q", cmd),
+				Options:     h.GetOptionsForCommand(cmd, ""),
+			},
+		}
 	}
-	return fmt.Sprintf("Execute shell command:\n%s%s", cmd, descText), nil
+
+	ops, err := shellguard.Analyze(cmd, wsCWD)
+	if err != nil {
+		return []permissions.PermissionGrantRequest{
+			{
+				ID:          "raw_command",
+				Description: fmt.Sprintf("Authorization required to run bash command: %q", cmd),
+				Options:     h.GetOptionsForCommand(cmd, ""),
+			},
+		}
+	}
+
+	var reqs []permissions.PermissionGrantRequest
+	cmdCount := 0
+
+	for _, pipeline := range chain.Pipelines {
+		for _, parsedCmd := range pipeline.Commands {
+			curr := &parsedCmd
+			for curr.SubCommand != nil {
+				curr = curr.SubCommand
+			}
+
+			if curr.Executable == "" || curr.Executable == "pwd" {
+				continue
+			}
+
+			if curr.Executable == "cd" {
+				targetDir := ""
+				if len(curr.Args) > 0 {
+					targetDir = curr.Args[0]
+				} else {
+					if home, err := os.UserHomeDir(); err == nil {
+						targetDir = home
+					}
+				}
+				absTarget, err := resolveAbsPath(ctx, targetDir)
+				if err == nil && isSafeWorkspacePath(ctx, absTarget) {
+					continue
+				}
+			}
+
+			effectiveCmdStr := strings.Join(append([]string{curr.Executable}, curr.Args...), " ")
+			if effectiveCmdStr == "" {
+				continue
+			}
+
+			var op *shellguard.Operation
+			for i := range ops {
+				if ops[i].Command != nil {
+					if ops[i].Command == &parsedCmd || (ops[i].Command.Executable == parsedCmd.Executable && len(ops[i].Command.Args) == len(parsedCmd.Args)) {
+						op = &ops[i]
+						break
+					}
+				}
+			}
+
+			hasGrant := false
+			for _, grant := range grants {
+				if shellguard.MatchParsedCommand(grant.Target, grant.MatchMethod, parsedCmd) {
+					cmdCWD := wsCWD
+					if op != nil && op.CWD != "" {
+						cmdCWD = op.CWD
+					}
+					if matchAllowedDirectory(cmdCWD, grant.AllowedDirectory) {
+						if grant.Action == permissions.ActionAllow {
+							hasGrant = true
+							break
+						}
+					}
+				}
+			}
+
+			if hasGrant {
+				continue
+			}
+
+			requiresPrompt := false
+			if curr.Executable == "cd" {
+				requiresPrompt = true
+			} else {
+				if op == nil {
+					requiresPrompt = true
+				} else {
+					if mode == permissions.ModeAuto {
+						if op.Action == shellguard.ActionDelete || op.Safety == shellguard.SafetyUnsafe {
+							requiresPrompt = true
+						}
+					} else {
+						requiresPrompt = true
+					}
+				}
+			}
+
+			if requiresPrompt {
+				cmdCount++
+				cmdCWD := wsCWD
+				if op != nil && op.CWD != "" {
+					cmdCWD = op.CWD
+				}
+
+				dirOpts := []permissions.PermissionOption{
+					{
+						Label:       fmt.Sprintf("Restrict to %s", cmdCWD),
+						Target:      cmdCWD,
+						MatchMethod: "path",
+						Action:      permissions.ActionAllow,
+					},
+					{
+						Label:       "Anywhere (*)",
+						Target:      "*",
+						MatchMethod: "wildcard",
+						Action:      permissions.ActionAllow,
+					},
+				}
+
+				reqs = append(reqs, permissions.PermissionGrantRequest{
+					ID:               fmt.Sprintf("cmd_%d", cmdCount),
+					Description:      fmt.Sprintf("Permission required for: %s", effectiveCmdStr),
+					Options:          h.GetOptionsForCommand(effectiveCmdStr, curr.Executable),
+					DirectoryOptions: dirOpts,
+				})
+			}
+		}
+	}
+
+	return reqs
+}
+
+func matchAllowedDirectory(cmdCWD, allowedDir string) bool {
+	if allowedDir == "" || allowedDir == "*" {
+		return true
+	}
+	cClean := filepath.Clean(cmdCWD)
+	aClean := filepath.Clean(allowedDir)
+	if cClean == aClean {
+		return true
+	}
+	return strings.HasPrefix(cClean, aClean+string(filepath.Separator))
+}
+
+func (h *BashPermissionHandler) GetPreview(ctx context.Context, req permissions.ToolCallRequest) (preview.ToolPreview, error) {
+	args := req.Args
+	cmd, _ := args["command"].(string)
+	return preview.BashPreview{Command: cmd}, nil
 }

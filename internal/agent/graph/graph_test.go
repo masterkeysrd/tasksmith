@@ -11,6 +11,7 @@ import (
 	"github.com/masterkeysrd/loom/tool"
 	agentgraph "github.com/masterkeysrd/tasksmith/internal/agent/graph"
 	"github.com/masterkeysrd/tasksmith/internal/agent/permissions"
+	"github.com/masterkeysrd/tasksmith/internal/core/preview"
 )
 
 type mockLLMModel struct {
@@ -190,8 +191,8 @@ func (h *dummyToolHandler) GetOptions(req permissions.ToolCallRequest) []permiss
 	return []permissions.PermissionOption{{Label: "Allow todos", Target: "*", MatchMethod: "wildcard", Action: permissions.ActionAllow}}
 }
 
-func (h *dummyToolHandler) GetPreview(ctx context.Context, req permissions.ToolCallRequest) (string, error) {
-	return "Dummy Preview", nil
+func (h *dummyToolHandler) GetPreview(ctx context.Context, req permissions.ToolCallRequest) (preview.ToolPreview, error) {
+	return preview.DefaultTextPreview{Text: "Dummy Preview"}, nil
 }
 
 type mockCheckpointer struct {

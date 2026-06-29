@@ -20,8 +20,8 @@ import (
 	"github.com/masterkeysrd/loom/message"
 	"github.com/masterkeysrd/tasksmith/internal/agent/permissions"
 	"github.com/masterkeysrd/tasksmith/internal/api"
-	"github.com/masterkeysrd/tasksmith/internal/core/diff"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
+	"github.com/masterkeysrd/tasksmith/internal/core/preview"
 	tuiapi "github.com/masterkeysrd/tasksmith/internal/tui/api"
 	"github.com/masterkeysrd/tasksmith/internal/tui/components"
 	"github.com/masterkeysrd/tasksmith/internal/tui/components/icon"
@@ -96,12 +96,25 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 	outerRef := kitex.CreateRef[dom.Element]()
 
 	// Authorization choices state
-	selectedIndex, setSelectedIndex := kitex.UseState(0)
-	selectedScopeIndex, setSelectedScopeIndex := kitex.UseState(0)
+	selectedScopeIndex, setSelectedScopeIndex := kitex.UseState(1) // Default to Session (1)
+	currentPageIndex, setCurrentPageIndex := kitex.UseState(0)
+	focusedItem, setFocusedItem := kitex.UseState(FocusItemSession)
+	selectedOptions, setSelectedOptions := kitex.UseState(map[string]int{})
+	selectedDirs, setSelectedDirs := kitex.UseState(map[string]int{})
 	showPreviewModal, setShowPreviewModal := kitex.UseState(false)
 	showFullOutputModal, setShowFullOutputModal := kitex.UseState(false)
 	fullOutputTitle, setFullOutputTitle := kitex.UseState("")
 	fullOutputContent, setFullOutputContent := kitex.UseState("")
+
+	showResultPreview, setShowResultPreview := kitex.UseState(false)
+	resultPreviewTitle, setResultPreviewTitle := kitex.UseState("")
+	resultPreview, setResultPreview := kitex.UseState[preview.ToolPreview](nil)
+
+	onViewPreview := func(title string, p preview.ToolPreview) {
+		setResultPreviewTitle(title)
+		setResultPreview(p)
+		setShowResultPreview(true)
+	}
 
 	openFullOutputModal := func(title, cachedPath string) {
 		go func() {
@@ -121,19 +134,68 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 	localDecisions, setLocalDecisions := kitex.UseState(map[string]permissions.AuthorizationDecision{})
 	showResolutionDialog, setShowResolutionDialog := kitex.UseState(false)
 
-	handleSelectVertical := func(idx int) {
-		setSelectedIndex(idx)
-		mode.Set(mode.Normal)
-	}
-
-	handleSelectHorizontal := func(idx int) {
-		setSelectedScopeIndex(idx)
+	handleSelectVertical := func(item FocusItem) {
+		setFocusedItem(item)
 		mode.Set(mode.Normal)
 	}
 
 	var pendingAuthorizations []permissions.AuthorizationRequest
 	if stateQuery.Data != nil {
 		pendingAuthorizations = stateQuery.Data.PendingAuthorizations
+	}
+
+	handleSelectScope := func(idx int) {
+		setSelectedScopeIndex(idx)
+		switch idx {
+		case 0:
+			setFocusedItem(FocusItemOnce)
+		case 1:
+			setFocusedItem(FocusItemSession)
+		case 2:
+			setFocusedItem(FocusItemWorkspace)
+		case 3:
+			setFocusedItem(FocusItemGlobal)
+		}
+		mode.Set(mode.Normal)
+	}
+
+	handleSelectOption := func(idx int) {
+		currIdx := currentPendingIndex()
+		if currIdx < len(pendingAuthorizations) {
+			req := pendingAuthorizations[currIdx]
+			if len(req.GrantRequests) > currentPageIndex() {
+				gr := req.GrantRequests[currentPageIndex()]
+				newOpts := make(map[string]int)
+				maps.Copy(newOpts, selectedOptions())
+				newOpts[gr.ID] = idx
+				setSelectedOptions(newOpts)
+				switch selectedScopeIndex() {
+				case 1:
+					setFocusedItem(FocusItemSessionCmd)
+				case 2:
+					setFocusedItem(FocusItemWorkspaceCmd)
+				case 3:
+					setFocusedItem(FocusItemGlobalCmd)
+				}
+				mode.Set(mode.Normal)
+			}
+		}
+	}
+
+	handleSelectDir := func(idx int) {
+		currIdx := currentPendingIndex()
+		if currIdx < len(pendingAuthorizations) {
+			req := pendingAuthorizations[currIdx]
+			if len(req.GrantRequests) > currentPageIndex() {
+				gr := req.GrantRequests[currentPageIndex()]
+				newDirs := make(map[string]int)
+				maps.Copy(newDirs, selectedDirs())
+				newDirs[gr.ID] = idx
+				setSelectedDirs(newDirs)
+				setFocusedItem(FocusItemDirectory)
+				mode.Set(mode.Normal)
+			}
+		}
 	}
 
 	var pendingLspSuggestions []api.LspSuggestion
@@ -162,8 +224,11 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 	}
 
 	kitex.UseEffect(func() {
-		setSelectedIndex(0)
-		setSelectedScopeIndex(0)
+		setSelectedScopeIndex(1) // Default to Session (1)
+		setFocusedItem(FocusItemSession)
+		setCurrentPageIndex(0)
+		setSelectedOptions(map[string]int{})
+		setSelectedDirs(map[string]int{})
 		setShowPreviewModal(false)
 		setCurrentPendingIndex(0)
 		setLocalDecisions(map[string]permissions.AuthorizationDecision{})
@@ -172,12 +237,12 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 		}
 	}, []any{len(pendingAuthorizations)})
 
-	recordDecision := func(toolCallID string, approved bool, target string, scope permissions.PermissionScope) {
+	recordDecision := func(toolCallID string, approved bool, scope permissions.PermissionScope, grantDecisions []permissions.GrantDecision) {
 		dec := permissions.AuthorizationDecision{
 			ToolCallID:     toolCallID,
 			Approved:       approved,
 			Scope:          scope,
-			SelectedTarget: target,
+			GrantDecisions: grantDecisions,
 		}
 
 		newDecisions := make(map[string]permissions.AuthorizationDecision)
@@ -188,8 +253,11 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 		nextIdx := currentPendingIndex() + 1
 		if nextIdx < len(pendingAuthorizations) {
 			setCurrentPendingIndex(nextIdx)
-			setSelectedIndex(0)
-			setSelectedScopeIndex(0)
+			setSelectedScopeIndex(1) // default to Session
+			setFocusedItem(FocusItemSession)
+			setCurrentPageIndex(0)
+			setSelectedOptions(map[string]int{})
+			setSelectedDirs(map[string]int{})
 			setShowPreviewModal(false)
 		} else {
 			if submitting() {
@@ -252,11 +320,20 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 	pendingAuthsRef := kitex.UseRef[[]permissions.AuthorizationRequest](nil)
 	pendingAuthsRef.Current = pendingAuthorizations
 
-	selectedIndexRef := kitex.UseRef(0)
-	selectedIndexRef.Current = selectedIndex()
-
-	selectedScopeIndexRef := kitex.UseRef(0)
+	selectedScopeIndexRef := kitex.UseRef(1)
 	selectedScopeIndexRef.Current = selectedScopeIndex()
+
+	currentPageIndexRef := kitex.UseRef(0)
+	currentPageIndexRef.Current = currentPageIndex()
+
+	focusedItemRef := kitex.UseRef(FocusItemSession)
+	focusedItemRef.Current = focusedItem()
+
+	selectedOptionsRef := kitex.UseRef[map[string]int](nil)
+	selectedOptionsRef.Current = selectedOptions()
+
+	selectedDirsRef := kitex.UseRef[map[string]int](nil)
+	selectedDirsRef.Current = selectedDirs()
 
 	showPreviewModalRef := kitex.UseRef(false)
 	showPreviewModalRef.Current = showPreviewModal()
@@ -267,7 +344,7 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 	currentPendingIndexRef := kitex.UseRef(0)
 	currentPendingIndexRef.Current = currentPendingIndex()
 
-	recordDecisionRef := kitex.UseRef[func(string, bool, string, permissions.PermissionScope)](nil)
+	recordDecisionRef := kitex.UseRef[func(string, bool, permissions.PermissionScope, []permissions.GrantDecision)](nil)
 	recordDecisionRef.Current = recordDecision
 
 	handleApprove := func() {
@@ -276,28 +353,38 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 			return
 		}
 		req := pendingAuthsRef.Current[currIdx]
-		vIdx := selectedIndexRef.Current
-		hIdx := selectedScopeIndexRef.Current
 
-		if vIdx == 4 { // Deny
-			if recordDecisionRef.Current != nil {
-				recordDecisionRef.Current(req.ToolCallID, false, "", permissions.ScopeOnce)
+		var decisions []permissions.GrantDecision
+		for _, gr := range req.GrantRequests {
+			optIdx := selectedOptionsRef.Current[gr.ID]
+			if optIdx < 0 || optIdx >= len(gr.Options) {
+				optIdx = 0
 			}
-			return
+			target := "*"
+			if len(gr.Options) > 0 {
+				target = gr.Options[optIdx].Target
+			}
+
+			dirIdx := selectedDirsRef.Current[gr.ID]
+			if dirIdx < 0 || dirIdx >= len(gr.DirectoryOptions) {
+				dirIdx = 0
+			}
+			allowedDir := "*"
+			if len(gr.DirectoryOptions) > 0 {
+				allowedDir = gr.DirectoryOptions[dirIdx].Target
+			}
+
+			decisions = append(decisions, permissions.GrantDecision{
+				RequestID:        gr.ID,
+				SelectedTarget:   target,
+				AllowedDirectory: allowedDir,
+			})
 		}
 
-		var target string
-		if len(req.Options) > 0 {
-			target = getTargetOptionForHorizontal(req.Options, hIdx).Target
-		}
-
-		var scope permissions.PermissionScope
-		switch vIdx {
+		scope := permissions.ScopeOnce
+		switch selectedScopeIndexRef.Current {
 		case 0:
 			scope = permissions.ScopeOnce
-			if len(req.Options) > 0 {
-				target = req.Options[0].Target
-			}
 		case 1:
 			scope = permissions.ScopeSession
 		case 2:
@@ -307,7 +394,7 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 		}
 
 		if recordDecisionRef.Current != nil {
-			recordDecisionRef.Current(req.ToolCallID, true, target, scope)
+			recordDecisionRef.Current(req.ToolCallID, true, scope, decisions)
 		}
 	}
 
@@ -318,7 +405,7 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 		}
 		req := pendingAuthsRef.Current[currIdx]
 		if recordDecisionRef.Current != nil {
-			recordDecisionRef.Current(req.ToolCallID, false, "", permissions.ScopeOnce)
+			recordDecisionRef.Current(req.ToolCallID, false, permissions.ScopeOnce, nil)
 		}
 	}
 
@@ -352,45 +439,177 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 			}
 
 			req := pendingAuthsRef.Current[currIdx]
-			optsCount := len(req.Options)
 
-			// Vertical Scope Index: 0: Once, 1: Session, 2: Workspace, 3: Global, 4: Deny
+			getVisibleItems := func(scopeIdx int, req permissions.AuthorizationRequest, page int) []FocusItem {
+				items := []FocusItem{FocusItemOnce, FocusItemSession}
+				if len(req.GrantRequests) > page {
+					gr := req.GrantRequests[page]
+					if scopeIdx == 1 && len(gr.Options) > 0 {
+						items = append(items, FocusItemSessionCmd)
+					}
+					items = append(items, FocusItemWorkspace)
+					if scopeIdx == 2 && len(gr.Options) > 0 {
+						items = append(items, FocusItemWorkspaceCmd)
+					}
+					items = append(items, FocusItemGlobal)
+					if scopeIdx == 3 && len(gr.Options) > 0 {
+						items = append(items, FocusItemGlobalCmd)
+					}
+					if scopeIdx > 0 && len(gr.DirectoryOptions) > 0 {
+						items = append(items, FocusItemDirectory)
+					}
+				} else {
+					items = append(items, FocusItemWorkspace, FocusItemGlobal)
+				}
+				return items
+			}
+
+			// j/k vertical row navigation
+			currPage := currentPageIndexRef.Current
 			if ke.Text == "j" || ke.Code == key.KeyDown {
 				e.PreventDefault()
 				e.StopPropagation()
-				setSelectedIndex((selectedIndexRef.Current + 1) % 5)
+				items := getVisibleItems(selectedScopeIndexRef.Current, req, currPage)
+				currItem := focusedItemRef.Current
+				currIdx := 0
+				for idx, it := range items {
+					if it == currItem {
+						currIdx = idx
+						break
+					}
+				}
+				newIdx := (currIdx + 1) % len(items)
+				newItem := items[newIdx]
+				setFocusedItem(newItem)
+
+				switch newItem {
+				case FocusItemOnce:
+					setSelectedScopeIndex(0)
+				case FocusItemSession:
+					setSelectedScopeIndex(1)
+				case FocusItemWorkspace:
+					setSelectedScopeIndex(2)
+				case FocusItemGlobal:
+					setSelectedScopeIndex(3)
+				}
 				return
 			}
 			if ke.Text == "k" || ke.Code == key.KeyUp {
 				e.PreventDefault()
 				e.StopPropagation()
-				setSelectedIndex((selectedIndexRef.Current - 1 + 5) % 5)
+				items := getVisibleItems(selectedScopeIndexRef.Current, req, currPage)
+				currItem := focusedItemRef.Current
+				currIdx := 0
+				for idx, it := range items {
+					if it == currItem {
+						currIdx = idx
+						break
+					}
+				}
+				newIdx := (currIdx - 1 + len(items)) % len(items)
+				newItem := items[newIdx]
+				setFocusedItem(newItem)
+
+				switch newItem {
+				case FocusItemOnce:
+					setSelectedScopeIndex(0)
+				case FocusItemSession:
+					setSelectedScopeIndex(1)
+				case FocusItemWorkspace:
+					setSelectedScopeIndex(2)
+				case FocusItemGlobal:
+					setSelectedScopeIndex(3)
+				}
 				return
 			}
 
-			// Horizontal Target Index (only active for Session, Workspace, Global)
-			hasHorizontal := selectedIndexRef.Current == 1 || selectedIndexRef.Current == 2 || selectedIndexRef.Current == 3
-			if hasHorizontal && optsCount > 1 {
-				if ke.Text == "h" || ke.Code == key.KeyLeft {
-					e.PreventDefault()
-					e.StopPropagation()
-					setSelectedScopeIndex((selectedScopeIndexRef.Current - 1 + optsCount) % optsCount)
-					return
-				}
-				if ke.Text == "l" || ke.Code == key.KeyRight {
-					e.PreventDefault()
-					e.StopPropagation()
-					setSelectedScopeIndex((selectedScopeIndexRef.Current + 1) % optsCount)
-					return
+			// h/l horizontal option navigation based on focused row
+			if currPage < len(req.GrantRequests) {
+				currReq := req.GrantRequests[currPage]
+				currItem := focusedItemRef.Current
+
+				switch currItem {
+				case FocusItemSessionCmd, FocusItemWorkspaceCmd, FocusItemGlobalCmd:
+					optsCount := len(currReq.Options)
+					if optsCount > 1 {
+						currentOptIdx := selectedOptionsRef.Current[currReq.ID]
+						if ke.Text == "h" || ke.Code == key.KeyLeft {
+							e.PreventDefault()
+							e.StopPropagation()
+							newOpts := make(map[string]int)
+							maps.Copy(newOpts, selectedOptionsRef.Current)
+							newOpts[currReq.ID] = (currentOptIdx - 1 + optsCount) % optsCount
+							setSelectedOptions(newOpts)
+							return
+						}
+						if ke.Text == "l" || ke.Code == key.KeyRight {
+							e.PreventDefault()
+							e.StopPropagation()
+							newOpts := make(map[string]int)
+							maps.Copy(newOpts, selectedOptionsRef.Current)
+							newOpts[currReq.ID] = (currentOptIdx + 1) % optsCount
+							setSelectedOptions(newOpts)
+							return
+						}
+					}
+				case FocusItemDirectory:
+					dirOptsCount := len(currReq.DirectoryOptions)
+					if dirOptsCount > 1 {
+						currentDirIdx := selectedDirsRef.Current[currReq.ID]
+						if ke.Text == "h" || ke.Code == key.KeyLeft {
+							e.PreventDefault()
+							e.StopPropagation()
+							newDirs := make(map[string]int)
+							maps.Copy(newDirs, selectedDirsRef.Current)
+							newDirs[currReq.ID] = (currentDirIdx - 1 + dirOptsCount) % dirOptsCount
+							setSelectedDirs(newDirs)
+							return
+						}
+						if ke.Text == "l" || ke.Code == key.KeyRight {
+							e.PreventDefault()
+							e.StopPropagation()
+							newDirs := make(map[string]int)
+							maps.Copy(newDirs, selectedDirsRef.Current)
+							newDirs[currReq.ID] = (currentDirIdx + 1) % dirOptsCount
+							setSelectedDirs(newDirs)
+							return
+						}
+					}
 				}
 			}
 
+			// Enter next/allow
 			if ke.Code == key.KeyEnter || ke.Text == "\r" || ke.Text == "\n" {
 				e.PreventDefault()
 				e.StopPropagation()
-				handleApprove()
+
+				currPage := currentPageIndexRef.Current
+				totalPages := len(req.GrantRequests)
+				if totalPages == 0 {
+					totalPages = 1
+				}
+
+				if currPage < totalPages-1 {
+					setCurrentPageIndex(currPage + 1)
+					setFocusedItem(FocusItemSession)
+				} else {
+					handleApprove()
+				}
 				return
 			}
+
+			// Prev/Back b/Backspace
+			if ke.Text == "b" || ke.Code == key.KeyBackspace {
+				currPage := currentPageIndexRef.Current
+				if currPage > 0 {
+					e.PreventDefault()
+					e.StopPropagation()
+					setCurrentPageIndex(currPage - 1)
+					setFocusedItem(FocusItemSession)
+					return
+				}
+			}
+
 			if ke.Code == key.KeyEscape || ke.Text == "q" {
 				e.PreventDefault()
 				e.StopPropagation()
@@ -408,7 +627,7 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 				return
 			}
 			if ke.Text == "p" || ke.Text == "P" {
-				if req.Preview != "" {
+				if req.Preview != nil {
 					e.PreventDefault()
 					e.StopPropagation()
 					setShowPreviewModal(!showPreviewModalRef.Current)
@@ -451,8 +670,11 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 		setInputValue("")
 		setSubmitting(false)
 		setShowFullOutputModal(false)
-		setSelectedIndex(0)
-		setSelectedScopeIndex(0)
+		setSelectedScopeIndex(1) // Default to Session (1)
+		setFocusedItem(FocusItemSession)
+		setCurrentPageIndex(0)
+		setSelectedOptions(map[string]int{})
+		setSelectedDirs(map[string]int{})
 		setShowPreviewModal(false)
 		setCurrentPendingIndex(0)
 		setLocalDecisions(map[string]permissions.AuthorizationDecision{})
@@ -782,18 +1004,24 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 					isGenerating,
 					thinkingTime(),
 					pendingAuthorizations,
-					selectedIndex(),
+					currentPageIndex(),
+					focusedItem(),
 					selectedScopeIndex(),
+					selectedOptions(),
+					selectedDirs(),
 					func() { setShowPreviewModal(true) },
 					currentPendingIndex(),
 					isInsert,
 					localDecisions(),
 					submitting(),
 					handleSelectVertical,
-					handleSelectHorizontal,
+					handleSelectScope,
+					handleSelectOption,
+					handleSelectDir,
 					handleApprove,
 					handleDeny,
 					openFullOutputModal,
+					onViewPreview,
 				)...,
 			),
 
@@ -862,151 +1090,25 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 		),
 
 		// Modal Section for Authorization Preview
-		components.Modal(components.ModalProps{
-			IsOpen:  showPreviewModal(),
-			Title:   kitex.Text("Authorization Preview"),
-			OnClose: func() { setShowPreviewModal(false) },
-		},
-			kitex.If(showPreviewModal() && len(pendingAuthorizations) > 0 && currentPendingIndex() < len(pendingAuthorizations), func() kitex.Node {
-				req := pendingAuthorizations[currentPendingIndex()]
-				var leftNode kitex.Node
-				if diff.IsDiff(req.Preview) {
-					leftNode = components.DiffBlock(components.DiffBlockProps{
-						Diff:  req.Preview,
-						Split: false,
-					})
-				} else {
-					leftNode = components.CodeBlock(components.CodeBlockProps{
-						Code:            req.Preview,
-						HideHeader:      true,
-						ShowLineNumbers: false,
-					})
-				}
-
-				return kitex.Box(kitex.BoxProps{
-					Style: style.S().
-						Display(style.DisplayFlex).
-						FlexDirection(style.FlexRow).
-						Width(style.Percent(100)).
-						Height(style.Percent(100)).
-						Gap(2),
-				},
-					// Left Panel: Preview
-					kitex.Box(kitex.BoxProps{
-						Style: style.S().
-							Flex(2, 2, style.Cells(0)).
-							MinWidth(style.Cells(0)).
-							Height(style.Percent(100)).
-							Display(style.DisplayFlex).
-							FlexDirection(style.FlexColumn).
-							Padding(1).
-							Overflow(style.OverflowAuto),
-					},
-						leftNode,
-					),
-					// Right Panel: Options & Scopes
-					kitex.Box(kitex.BoxProps{
-						Style: style.S().
-							Flex(1, 1, style.Cells(0)).
-							MinWidth(style.Cells(0)).
-							Height(style.Percent(100)).
-							Display(style.DisplayFlex).
-							FlexDirection(style.FlexColumn).
-							BorderLeft(true, style.SingleBorder(), t.Color.Border.Primary).
-							Background(t.Color.Surface.BaseFocus).
-							Padding(1).
-							Gap(1).
-							Overflow(style.OverflowAuto),
-					},
-						// Target Details
-						kitex.Box(kitex.BoxProps{Style: style.S().Bold(true).PaddingVertical(1).Foreground(t.Color.Text.Primary)},
-							kitex.Text("Authorization Details:"),
-						),
-						kitex.Box(kitex.BoxProps{
-							Style: style.S().
-								Display(style.DisplayFlex).
-								FlexDirection(style.FlexRow).
-								Gap(1).
-								PaddingBottom(1),
-						},
-							kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Secondary)}, kitex.Text("Tool:")),
-							kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Magenta).Bold(true)}, kitex.Text(req.ToolName)),
-						),
-						kitex.If(len(req.Options) > 0, func() kitex.Node {
-							return kitex.Box(kitex.BoxProps{
-								Style: style.S().
-									Display(style.DisplayFlex).
-									FlexDirection(style.FlexRow).
-									Gap(1).
-									PaddingBottom(1),
-							},
-								kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Secondary)}, kitex.Text("Target:")),
-								kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Purple).Bold(true)}, kitex.Text(req.Options[0].Target)),
-							)
-						}),
-
-						// Hybrid Selector
-						kitex.Box(kitex.BoxProps{
-							Style: style.S().PaddingBottom(0),
-						},
-							AuthorizationHybridSelector(AuthorizationHybridSelectorProps{
-								Options:            req.Options,
-								VerticalIndex:      selectedIndex(),
-								HorizontalIndex:    selectedScopeIndex(),
-								IsActive:           true,
-								OnSelectVertical:   handleSelectVertical,
-								OnSelectHorizontal: handleSelectHorizontal,
-							}),
-						),
-
-						// Action Buttons
-						kitex.Box(kitex.BoxProps{
-							Style: style.S().
-								Display(style.DisplayFlex).
-								FlexDirection(style.FlexRow).
-								AlignItems(style.AlignCenter).
-								MarginTop(1).
-								MarginBottom(0),
-						},
-							components.Button(components.ButtonProps{
-								Variant: components.ButtonText,
-								Color:   components.ButtonSuccess,
-								Style:   style.S().MarginRight(1),
-								OnClick: func() {
-									handleApprove()
-								},
-							}, kitex.Text("Approve [Enter]")),
-							components.Button(components.ButtonProps{
-								Variant: components.ButtonText,
-								Color:   components.ButtonError,
-								OnClick: func() {
-									handleDeny()
-								},
-							}, kitex.Text("Deny [d]")),
-						),
-
-						// Instructions
-						kitex.Box(kitex.BoxProps{
-							Style: style.S().
-								Border(style.SingleBorder().Color(t.Color.Border.Primary)).
-								Padding(1).
-								MarginTop(1).
-								Foreground(t.Color.Text.Secondary).
-								Width(style.Percent(100)),
-						},
-							func() kitex.Node {
-								text := "[j/k] Navigate Scope"
-								if len(req.Options) > 1 && (selectedIndex() == 1 || selectedIndex() == 2 || selectedIndex() == 3) {
-									text += "\n[h/l] Limit Target"
-								}
-								text += "\n[Enter] Approve Choice\n[d] Deny request\n[Esc/q] Close Preview"
-								return kitex.Text(text)
-							}(),
-						),
-					),
-				)
-			}),
-		),
+		AuthorizationPreviewModal(AuthorizationPreviewModalProps{
+			IsOpen:              showPreviewModal(),
+			PendingRequests:     pendingAuthorizations,
+			CurrentPendingIndex: currentPendingIndex(),
+			CurrentPageIndex:    currentPageIndex(),
+			FocusedItem:         focusedItem(),
+			SelectedScopeIndex:  selectedScopeIndex(),
+			SelectedOptions:     selectedOptions(),
+			SelectedDirs:        selectedDirs(),
+			IsSubmitting:        submitting(),
+			OnClose:             func() { setShowPreviewModal(false) },
+			OnApprove:           handleApprove,
+			OnDeny:              handleDeny,
+			OnSelectVertical:    handleSelectVertical,
+			OnSelectScope:       handleSelectScope,
+			OnSelectOption:      handleSelectOption,
+			OnSelectDir:         handleSelectDir,
+			OnSetCurrentPage:    setCurrentPageIndex,
+		}),
 
 		// Resolution Dialog for Pending Authorizations
 		kitex.If(showResolutionDialog(), func() kitex.Node {
@@ -1046,6 +1148,14 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 				)
 			}),
 		),
+
+		// Modal Section for Generic Result Preview
+		GenericPreviewModal(GenericPreviewModalProps{
+			IsOpen:  showResultPreview(),
+			Title:   resultPreviewTitle(),
+			Preview: resultPreview(),
+			OnClose: func() { setShowResultPreview(false) },
+		}),
 	)
 })
 
@@ -1054,6 +1164,7 @@ type ToolExecutionProps struct {
 	ToolMessage      *message.Tool
 	CurrentDots      string
 	OnViewFullOutput func(title, cachedPath string)
+	OnViewPreview    func(title string, p preview.ToolPreview)
 }
 
 var ToolExecution = kitex.FC("ToolExecution", func(props ToolExecutionProps) kitex.Node {
@@ -1440,18 +1551,24 @@ func renderBubbles(
 	isGenerating bool,
 	liveThinkingTime int,
 	pendingAuthorizations []permissions.AuthorizationRequest,
-	selectedIndex int,
+	currentPageIndex int,
+	focusedItem FocusItem,
 	selectedScopeIndex int,
+	selectedOptions map[string]int,
+	selectedDirs map[string]int,
 	onPreview func(),
 	currentPendingIndex int,
 	isInsert bool,
 	localDecisions map[string]permissions.AuthorizationDecision,
 	isSubmitting bool,
-	onSelectVertical func(int),
-	onSelectHorizontal func(int),
+	onSelectVertical func(FocusItem),
+	onSelectScope func(int),
+	onSelectOption func(int),
+	onSelectDir func(int),
 	onApprove func(),
 	onDeny func(),
 	onViewFullOutput func(title, cachedPath string),
+	onViewPreview func(title string, p preview.ToolPreview),
 ) []kitex.Node {
 	if len(messages) == 0 {
 		return nil
@@ -1478,18 +1595,24 @@ func renderBubbles(
 				IsGenerating:          groupIsGenerating,
 				LiveThinkingTime:      liveThinkingTime,
 				PendingAuthorizations: pendingAuthorizations,
-				SelectedIndex:         selectedIndex,
+				CurrentPageIndex:      currentPageIndex,
+				FocusedItem:           focusedItem,
 				SelectedScopeIndex:    selectedScopeIndex,
+				SelectedOptions:       selectedOptions,
+				SelectedDirs:          selectedDirs,
 				OnPreview:             onPreview,
 				CurrentPendingIndex:   currentPendingIndex,
 				IsInsert:              isInsert,
 				LocalDecisions:        localDecisions,
 				IsSubmitting:          isSubmitting,
 				OnSelectVertical:      onSelectVertical,
-				OnSelectHorizontal:    onSelectHorizontal,
+				OnSelectScope:         onSelectScope,
+				OnSelectOption:        onSelectOption,
+				OnSelectDir:           onSelectDir,
 				OnApprove:             onApprove,
 				OnDeny:                onDeny,
 				OnViewFullOutput:      onViewFullOutput,
+				OnViewPreview:         onViewPreview,
 			}))
 		}
 	}

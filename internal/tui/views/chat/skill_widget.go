@@ -7,6 +7,7 @@ import (
 	"github.com/masterkeysrd/kite/extras/kitex"
 	"github.com/masterkeysrd/kite/style"
 	"github.com/masterkeysrd/tasksmith/internal/agent/tools"
+	"github.com/masterkeysrd/tasksmith/internal/core/preview"
 	"github.com/masterkeysrd/tasksmith/internal/tui/components"
 	"github.com/masterkeysrd/tasksmith/internal/tui/components/icon"
 	"github.com/masterkeysrd/tasksmith/internal/tui/theme"
@@ -15,7 +16,6 @@ import (
 // ActivateSkillToolWidget renders the result of an activate_skill tool call inline, opening a modal on click.
 var ActivateSkillToolWidget = kitex.FC("ActivateSkillToolWidget", func(props ToolExecutionProps) kitex.Node {
 	t := theme.UseTheme()
-	showModal, setShowModal := kitex.UseState(false)
 
 	tc := props.ToolCall
 	tm := props.ToolMessage
@@ -103,66 +103,27 @@ var ActivateSkillToolWidget = kitex.FC("ActivateSkillToolWidget", func(props Too
 	}
 
 	var onClick func()
-	if tm != nil && (tm.IsError || hasInstructions) {
-		onClick = func() { setShowModal(true) }
+	if tm != nil && props.OnViewPreview != nil {
+		onClick = func() {
+			if tm.IsError {
+				props.OnViewPreview(
+					fmt.Sprintf("Error Activating Skill %s", skillName),
+					preview.DefaultTextPreview{Text: details},
+				)
+			} else if hasInstructions {
+				props.OnViewPreview(
+					fmt.Sprintf("Instructions for %s Skill", skillName),
+					preview.MarkdownPreview{Markdown: instructions},
+				)
+			}
+		}
 	}
 
-	badgeNode := components.ToolBadge(components.ToolBadgeProps{
+	return components.ToolBadge(components.ToolBadgeProps{
 		Icon:      iconNode,
 		Label:     statusLabel,
 		LabelNode: labelNode,
 		Color:     themeColor,
 		OnClick:   onClick,
 	})
-
-	return kitex.Fragment(
-		badgeNode,
-		components.Modal(components.ModalProps{
-			IsOpen: showModal(),
-			Title: kitex.Box(kitex.BoxProps{
-				Style: style.S().
-					Display(style.DisplayFlex).
-					FlexDirection(style.FlexRow).
-					AlignItems(style.AlignCenter).
-					Gap(1),
-			},
-				kitex.If(t != nil && tm != nil && tm.IsError, func() kitex.Node {
-					return kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Error)}, icon.Error)
-				}),
-				kitex.If(tm != nil && tm.IsError, func() kitex.Node {
-					return kitex.Span(kitex.SpanProps{}, kitex.Text(fmt.Sprintf("Error Activating Skill %s", skillName)))
-				}),
-				kitex.If(tm != nil && !tm.IsError, func() kitex.Node {
-					return kitex.Fragment(
-						kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Info)}, icon.Pencil),
-						kitex.Span(kitex.SpanProps{}, kitex.Text(fmt.Sprintf("Instructions for %s Skill", skillName))),
-					)
-				}),
-			),
-			OnClose: func() { setShowModal(false) },
-		},
-			kitex.If(showModal() && tm != nil && tm.IsError && details != "", func() kitex.Node {
-				return kitex.Box(kitex.BoxProps{
-					Style: style.S().
-						Padding(1).
-						Width(style.Percent(100)).
-						MinWidth(style.Percent(0)).
-						Foreground(t.Color.Text.Secondary).
-						WhiteSpace(style.WhiteSpacePreWrap),
-				}, kitex.Text(details))
-			}),
-			kitex.If(showModal() && tm != nil && !tm.IsError && hasInstructions, func() kitex.Node {
-				return kitex.Box(kitex.BoxProps{
-					Style: style.S().
-						Padding(1).
-						Width(style.Percent(100)).
-						MinWidth(style.Percent(0)),
-				},
-					components.Markdown(components.MarkdownProps{
-						Source: instructions,
-					}),
-				)
-			}),
-		),
-	)
 })

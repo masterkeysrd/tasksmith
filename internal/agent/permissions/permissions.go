@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"sync"
+
+	"github.com/masterkeysrd/tasksmith/internal/core/preview"
 )
 
 var (
@@ -75,27 +77,38 @@ type PermissionOption struct {
 	IsDanger    bool             `json:"is_danger"`    // UI hint for dangerous options
 }
 
+// PermissionGrantRequest represents a single requirement within a tool call.
+type PermissionGrantRequest struct {
+	ID               string             `json:"id"`                // Unique ID for this specific grant request
+	Description      string             `json:"description"`       // e.g., "Permission required for: git commit"
+	Options          []PermissionOption `json:"options"`           // Granular options (exact, prefix, wildcard)
+	DirectoryOptions []PermissionOption `json:"directory_options"` // Optional directory constraints (Restrict vs Anywhere)
+}
+
 // AuthorizationRequest is returned by tools and saved to PendingAuthorizations in the graph state.
 type AuthorizationRequest struct {
-	ToolCallID  string         `json:"tool_call_id"`
-	ToolName    string         `json:"tool_name"`
-	Description string         `json:"description"`
-	Payload     map[string]any `json:"payload"`
-	// Preview contains a human-readable preview of the action (e.g. a Unified Diff for file edits)
-	Preview     string             `json:"preview,omitempty"`
-	SystemHints []string           `json:"system_hints,omitempty"`
-	Options     []PermissionOption `json:"options"`
+	ToolCallID    string                   `json:"tool_call_id"`
+	ToolName      string                   `json:"tool_name"`
+	Description   string                   `json:"description"`
+	Payload       map[string]any           `json:"payload"`
+	Preview       any                      `json:"preview,omitempty"`
+	SystemHints   []string                 `json:"system_hints,omitempty"`
+	GrantRequests []PermissionGrantRequest `json:"grant_requests"` // Replaces flat []PermissionOption
+}
+
+type GrantDecision struct {
+	RequestID        string `json:"request_id"`
+	SelectedTarget   string `json:"selected_target"`
+	AllowedDirectory string `json:"allowed_directory"`
 }
 
 // AuthorizationDecision is what the UI returns to the graph to resume execution.
 type AuthorizationDecision struct {
-	ToolCallID     string          `json:"tool_call_id"`
-	Approved       bool            `json:"approved"`
-	Scope          PermissionScope `json:"scope"`
-	SelectedTarget string          `json:"selected_target,omitempty"`
-	// ModifiedPayload contains the tool arguments if the user edited them.
-	// If nil, the graph uses the original arguments.
-	ModifiedPayload map[string]any `json:"modified_payload,omitempty"`
+	ToolCallID      string          `json:"tool_call_id"`
+	Approved        bool            `json:"approved"` // Overall approval; false aborts the execution
+	Scope           PermissionScope `json:"scope"`
+	GrantDecisions  []GrantDecision `json:"grant_decisions,omitempty"`
+	ModifiedPayload map[string]any  `json:"modified_payload,omitempty"`
 }
 
 // AuthorizationRequiredError is the error returned by tools when they lack permission.
@@ -117,10 +130,11 @@ const (
 
 // Permission represents an active grant or block.
 type Permission struct {
-	Group       string           `json:"group"`
-	Target      string           `json:"target"`
-	MatchMethod string           `json:"match_method"` // "exact", "prefix", "path", "wildcard"
-	Action      PermissionAction `json:"action"`       // "allow" or "deny"
+	Group            string           `json:"group"`
+	Target           string           `json:"target"`
+	MatchMethod      string           `json:"match_method"`      // "exact", "prefix", "path", "wildcard"
+	Action           PermissionAction `json:"action"`            // "allow" or "deny"
+	AllowedDirectory string           `json:"allowed_directory"` // e.g., "/var/www/frontend", or "*" for anywhere
 }
 
 // PermissionState is returned by the PermissionManager to tell the tool how to proceed.
@@ -154,9 +168,9 @@ type ToolPermissionHandler interface {
 	// to present if authorization is required.
 	GetOptions(req ToolCallRequest) []PermissionOption
 
-	// GetPreview returns a human-readable summary of the action (e.g., a unified diff).
+	// GetPreview returns a generic structured preview for the action.
 	// The orchestrator only calls this if Evaluate returns StateRequiresAuth.
-	GetPreview(ctx context.Context, req ToolCallRequest) (string, error)
+	GetPreview(ctx context.Context, req ToolCallRequest) (preview.ToolPreview, error)
 }
 
 // PermissionManager handles reading and storing permissions across scopes.

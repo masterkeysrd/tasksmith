@@ -9,6 +9,7 @@ import (
 	"github.com/masterkeysrd/kite/extras/kitex"
 	"github.com/masterkeysrd/kite/style"
 	"github.com/masterkeysrd/tasksmith/internal/agent/tools"
+	"github.com/masterkeysrd/tasksmith/internal/core/preview"
 	"github.com/masterkeysrd/tasksmith/internal/tui/components"
 	"github.com/masterkeysrd/tasksmith/internal/tui/components/icon"
 	"github.com/masterkeysrd/tasksmith/internal/tui/theme"
@@ -17,7 +18,6 @@ import (
 // WebSearchToolWidget renders the result of a web_search tool call inline.
 var WebSearchToolWidget = kitex.FC("WebSearchToolWidget", func(props ToolExecutionProps) kitex.Node {
 	t := theme.UseTheme()
-	showModal, setShowModal := kitex.UseState(false)
 
 	tc := props.ToolCall
 	tm := props.ToolMessage
@@ -101,95 +101,41 @@ var WebSearchToolWidget = kitex.FC("WebSearchToolWidget", func(props ToolExecuti
 	}
 
 	var onClick func()
-	if tm != nil && (tm.IsError || len(results) > 0) {
-		onClick = func() { setShowModal(true) }
+	if tm != nil && props.OnViewPreview != nil && (tm.IsError || len(results) > 0) {
+		onClick = func() {
+			if tm.IsError {
+				props.OnViewPreview(
+					fmt.Sprintf("Web Search Error for %q", query),
+					preview.DefaultTextPreview{Text: details},
+				)
+			} else {
+				var sb strings.Builder
+				sb.WriteString(fmt.Sprintf("## Search Results for %q\n\n", query))
+				for i, res := range results {
+					sb.WriteString(fmt.Sprintf("### %d. %s\n", i+1, res.Title))
+					sb.WriteString(fmt.Sprintf("*URL: [%s](%s)*\n\n", res.Url, res.Url))
+					sb.WriteString(fmt.Sprintf("> %s\n\n", res.Snippet))
+				}
+				props.OnViewPreview(
+					fmt.Sprintf("Web Search Results for %q", query),
+					preview.MarkdownPreview{Markdown: sb.String()},
+				)
+			}
+		}
 	}
 
-	badgeNode := components.ToolBadge(components.ToolBadgeProps{
+	return components.ToolBadge(components.ToolBadgeProps{
 		Icon:      iconNode,
 		Label:     statusLabel,
 		LabelNode: labelNode,
 		Color:     themeColor,
 		OnClick:   onClick,
 	})
-
-	return kitex.Fragment(
-		badgeNode,
-		components.Modal(components.ModalProps{
-			IsOpen: showModal(),
-			Title: kitex.Box(kitex.BoxProps{
-				Style: style.S().
-					Display(style.DisplayFlex).
-					FlexDirection(style.FlexRow).
-					AlignItems(style.AlignCenter).
-					Gap(1),
-			},
-				kitex.If(t != nil && tm != nil && tm.IsError, func() kitex.Node {
-					return kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Error)}, icon.Error)
-				}),
-				kitex.If(tm != nil && tm.IsError, func() kitex.Node {
-					return kitex.Span(kitex.SpanProps{}, kitex.Text(fmt.Sprintf("Web Search Error for %q", query)))
-				}),
-				kitex.If(tm != nil && !tm.IsError, func() kitex.Node {
-					return kitex.Fragment(
-						kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Info)}, icon.Search),
-						kitex.Span(kitex.SpanProps{}, kitex.Text(fmt.Sprintf("Web Search: Found %d results for %q", len(results), query))),
-					)
-				}),
-			),
-			OnClose: func() { setShowModal(false) },
-		},
-			kitex.If(showModal() && tm != nil && tm.IsError && details != "", func() kitex.Node {
-				return kitex.Box(kitex.BoxProps{
-					Style: style.S().
-						Padding(1).
-						Width(style.Percent(100)).
-						MinWidth(style.Percent(0)).
-						Foreground(t.Color.Text.Secondary).
-						WhiteSpace(style.WhiteSpacePreWrap),
-				}, kitex.Text(details))
-			}),
-			kitex.If(showModal() && tm != nil && !tm.IsError && len(results) > 0, func() kitex.Node {
-				var listNodes []kitex.Node
-				for i, res := range results {
-					var titleStyle, urlStyle, snippetStyle style.Style
-					if t != nil {
-						titleStyle = style.S().Bold(true).Foreground(t.Color.Surface.Primary)
-						urlStyle = style.S().Italic(true).Foreground(t.Color.Text.Secondary)
-						snippetStyle = style.S().Foreground(t.Color.Text.Primary)
-					}
-
-					listNodes = append(listNodes, kitex.Box(kitex.BoxProps{
-						Style: style.S().MarginBottom(1),
-					},
-						kitex.Box(kitex.BoxProps{Style: style.S().Display(style.DisplayFlex).FlexDirection(style.FlexRow).Gap(1)},
-							kitex.Span(kitex.SpanProps{Style: titleStyle}, kitex.Text(fmt.Sprintf("%d. %s", i+1, res.Title))),
-						),
-						kitex.Box(kitex.BoxProps{Style: style.S().MarginLeft(3)},
-							kitex.Span(kitex.SpanProps{Style: urlStyle}, kitex.Text(res.Url)),
-						),
-						kitex.Box(kitex.BoxProps{Style: style.S().MarginLeft(3)},
-							kitex.Span(kitex.SpanProps{Style: snippetStyle}, kitex.Text(res.Snippet)),
-						),
-					))
-				}
-				return kitex.Box(kitex.BoxProps{
-					Style: style.S().
-						Display(style.DisplayFlex).
-						FlexDirection(style.FlexColumn).
-						Padding(1).
-						Width(style.Percent(100)).
-						MinWidth(style.Percent(0)),
-				}, listNodes...)
-			}),
-		),
-	)
 })
 
-// WebFetchToolWidget renders the result of a web_fetch tool call.
+// WebFetchToolWidget renders the result of a web_fetch tool call inline.
 var WebFetchToolWidget = kitex.FC("WebFetchToolWidget", func(props ToolExecutionProps) kitex.Node {
 	t := theme.UseTheme()
-	showModal, setShowModal := kitex.UseState(false)
 
 	tc := props.ToolCall
 	tm := props.ToolMessage
@@ -292,148 +238,45 @@ var WebFetchToolWidget = kitex.FC("WebFetchToolWidget", func(props ToolExecution
 	}
 
 	var onClick func()
-	if tm != nil {
-		onClick = func() { setShowModal(true) }
+	if tm != nil && props.OnViewPreview != nil {
+		onClick = func() {
+			if tm.IsError {
+				props.OnViewPreview(
+					fmt.Sprintf("Web Fetch Error for %s", url),
+					preview.DefaultTextPreview{Text: details},
+				)
+			} else {
+				var contentToView string
+				if truncated {
+					contentToView = fmt.Sprintf("[TRUNCATED] Content exceeded 16,000 chars. Full saved to: %s\n\n%s", cachedPath, cleanCode)
+				} else {
+					contentToView = cleanCode
+				}
+				props.OnViewPreview(
+					fmt.Sprintf("Fetched %s", displayTarget),
+					preview.FileViewPreview{
+						Path:     url,
+						Content:  contentToView,
+						IsBinary: isBinary,
+						MimeType: mimeType,
+					},
+				)
+			}
+		}
 	}
 
-	badgeNode := components.ToolBadge(components.ToolBadgeProps{
+	return components.ToolBadge(components.ToolBadgeProps{
 		Icon:      iconNode,
 		Label:     statusLabel,
 		LabelNode: labelNode,
 		Color:     themeColor,
 		OnClick:   onClick,
 	})
-
-	filename := filepath.Base(url)
-	if idx := strings.Index(filename, "?"); idx != -1 {
-		filename = filename[:idx]
-	}
-	if filename == "" || filename == "." || filename == "/" {
-		filename = "download"
-	}
-
-	return kitex.Fragment(
-		badgeNode,
-		components.Modal(components.ModalProps{
-			IsOpen: showModal(),
-			Title: kitex.Box(kitex.BoxProps{
-				Style: style.S().
-					Display(style.DisplayFlex).
-					FlexDirection(style.FlexRow).
-					AlignItems(style.AlignCenter).
-					Gap(1),
-			},
-				kitex.If(t != nil && tm != nil && tm.IsError, func() kitex.Node {
-					return kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Error)}, icon.Error)
-				}),
-				kitex.If(tm != nil && tm.IsError, func() kitex.Node {
-					return kitex.Span(kitex.SpanProps{}, kitex.Text(fmt.Sprintf("Web Fetch Error for %s", url)))
-				}),
-				kitex.If(tm != nil && !tm.IsError, func() kitex.Node {
-					return kitex.Fragment(
-						kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Info)}, icon.Globe),
-						kitex.Span(kitex.SpanProps{}, kitex.Text(fmt.Sprintf("Fetched %s", displayTarget))),
-					)
-				}),
-			),
-			OnClose: func() { setShowModal(false) },
-		},
-			kitex.If(showModal() && tm != nil && tm.IsError && details != "", func() kitex.Node {
-				return kitex.Box(kitex.BoxProps{
-					Style: style.S().
-						Padding(1).
-						Width(style.Percent(100)).
-						MinWidth(style.Percent(0)).
-						Foreground(t.Color.Text.Secondary).
-						WhiteSpace(style.WhiteSpacePreWrap),
-				}, kitex.Text(details))
-			}),
-			kitex.If(showModal() && tm != nil && !tm.IsError, func() kitex.Node {
-				return kitex.Fragment(
-					// Fetch metadata
-					kitex.Box(kitex.BoxProps{
-						Style: style.S().
-							Display(style.DisplayFlex).
-							FlexDirection(style.FlexColumn).
-							Gap(0).
-							MarginBottom(1).
-							Padding(1).
-							Background(t.Color.Surface.BaseHover),
-					},
-						kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Secondary)}, kitex.Text(fmt.Sprintf("  • URL:       %s", url))),
-						kitex.If(title != "", func() kitex.Node {
-							return kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Secondary)}, kitex.Text(fmt.Sprintf("  • Title:     %s", title)))
-						}),
-						kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Secondary)}, kitex.Text(fmt.Sprintf("  • MIME Type: %s", mimeType))),
-						kitex.If(truncated, func() kitex.Node {
-							return kitex.Box(kitex.BoxProps{
-								Style: style.S().
-									Foreground(t.Color.Text.Error).
-									Bold(true).
-									MarginTop(1),
-							},
-								kitex.Text(fmt.Sprintf("[TRUNCATED] Content exceeded 16,000 chars. Full saved to: %s", cachedPath)),
-							)
-						}),
-					),
-
-					// Binary vs Text Content
-					kitex.If(isBinary, func() kitex.Node {
-						return kitex.Box(kitex.BoxProps{
-							Style: style.S().
-								Display(style.DisplayFlex).
-								FlexDirection(style.FlexColumn).
-								Gap(1).
-								Padding(1),
-						},
-							kitex.Box(kitex.BoxProps{
-								Style: style.S().
-									Display(style.DisplayFlex).
-									FlexDirection(style.FlexColumn).
-									Gap(0),
-							},
-								kitex.Span(kitex.SpanProps{Style: style.S().Bold(true)}, kitex.Text("Binary Document:")),
-								kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Secondary)}, kitex.Text(fmt.Sprintf("  • Cached Path: %s", cachedPath))),
-							),
-							components.Button(components.ButtonProps{
-								Variant: components.ButtonSolid,
-								Color:   components.ButtonPrimary,
-								Style: style.S().
-									AlignSelf(style.AlignStart).
-									MarginTop(1).
-									Padding(0, 2),
-								OnClick: func() {
-									openWithSystemViewer(cachedPath)
-								},
-							}, kitex.Text("Open with System Viewer")),
-						)
-					}),
-					kitex.If(!isBinary, func() kitex.Node {
-						var lang string
-						if strings.Contains(mimeType, "json") {
-							lang = "json"
-						} else if strings.Contains(mimeType, "xml") {
-							lang = "xml"
-						} else if strings.Contains(mimeType, "html") || strings.HasSuffix(filename, ".md") {
-							lang = "markdown"
-						}
-						return components.CodeBlock(components.CodeBlockProps{
-							Code:            cleanCode,
-							Lang:            lang,
-							HideHeader:      true,
-							ShowLineNumbers: false,
-						})
-					}),
-				)
-			}),
-		),
-	)
 })
 
 // DownloadToolWidget renders the execution state and results of a download tool call.
 var DownloadToolWidget = kitex.FC("DownloadToolWidget", func(props ToolExecutionProps) kitex.Node {
 	t := theme.UseTheme()
-	showModal, setShowModal := kitex.UseState(false)
 
 	tc := props.ToolCall
 	tm := props.ToolMessage
@@ -537,107 +380,52 @@ var DownloadToolWidget = kitex.FC("DownloadToolWidget", func(props ToolExecution
 	}
 
 	var onClick func()
-	if tm != nil {
-		onClick = func() { setShowModal(true) }
+	if tm != nil && props.OnViewPreview != nil {
+		onClick = func() {
+			if tm.IsError {
+				props.OnViewPreview(
+					fmt.Sprintf("Download Error for %s", urlVal),
+					preview.DefaultTextPreview{Text: details},
+				)
+			} else {
+				var sb strings.Builder
+				sb.WriteString(fmt.Sprintf("## Download Details for %s\n\n", filepath.Base(urlVal)))
+				sb.WriteString(fmt.Sprintf("- **URL**: %s\n", urlVal))
+				sb.WriteString(fmt.Sprintf("- **Destination**: %s\n", finalDest))
+				if bgTaskStr != "" {
+					sb.WriteString(fmt.Sprintf("- **Background Task ID**: %s\n", bgTaskStr))
+				}
+				if sizeStr != "" && bgTaskStr == "" {
+					sb.WriteString(fmt.Sprintf("- **Size**: %s\n", sizeStr))
+				}
+				statusStr := "Failed"
+				if successVal {
+					statusStr = "Success"
+				}
+				sb.WriteString(fmt.Sprintf("- **Status**: %s\n", statusStr))
+				if detailsMsg != "" {
+					sb.WriteString(fmt.Sprintf("- **Message**: %s\n", detailsMsg))
+				}
+				props.OnViewPreview(
+					fmt.Sprintf("Downloaded %s", filepath.Base(urlVal)),
+					preview.MarkdownPreview{Markdown: sb.String()},
+				)
+			}
+		}
 	}
 
-	badgeNode := components.ToolBadge(components.ToolBadgeProps{
+	return components.ToolBadge(components.ToolBadgeProps{
 		Icon:      iconNode,
 		Label:     statusLabel,
 		LabelNode: labelNode,
 		Color:     themeColor,
 		OnClick:   onClick,
 	})
-
-	return kitex.Fragment(
-		badgeNode,
-		components.Modal(components.ModalProps{
-			IsOpen: showModal(),
-			Title: kitex.Box(kitex.BoxProps{
-				Style: style.S().
-					Display(style.DisplayFlex).
-					FlexDirection(style.FlexRow).
-					AlignItems(style.AlignCenter).
-					Gap(1),
-			},
-				kitex.If(t != nil && tm != nil && tm.IsError, func() kitex.Node {
-					return kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Error)}, icon.Error)
-				}),
-				kitex.If(tm != nil && tm.IsError, func() kitex.Node {
-					return kitex.Span(kitex.SpanProps{}, kitex.Text(fmt.Sprintf("Download Error for %s", urlVal)))
-				}),
-				kitex.If(tm != nil && !tm.IsError, func() kitex.Node {
-					return kitex.Fragment(
-						kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Info)}, icon.Globe),
-						kitex.Span(kitex.SpanProps{}, kitex.Text(fmt.Sprintf("Downloaded %s", filepath.Base(urlVal)))),
-					)
-				}),
-			),
-			OnClose: func() { setShowModal(false) },
-		},
-			kitex.If(showModal() && tm != nil && tm.IsError && details != "", func() kitex.Node {
-				return kitex.Box(kitex.BoxProps{
-					Style: style.S().
-						Padding(1).
-						Width(style.Percent(100)).
-						MinWidth(style.Percent(0)).
-						Foreground(t.Color.Text.Secondary).
-						WhiteSpace(style.WhiteSpacePreWrap),
-				}, kitex.Text(details))
-			}),
-			kitex.If(showModal() && tm != nil && !tm.IsError, func() kitex.Node {
-				return kitex.Box(kitex.BoxProps{
-					Style: style.S().
-						Display(style.DisplayFlex).
-						FlexDirection(style.FlexColumn).
-						Gap(1).
-						Padding(1),
-				},
-					kitex.Box(kitex.BoxProps{Style: style.S().WhiteSpace(style.WhiteSpacePreWrap)},
-						kitex.Span(kitex.SpanProps{Style: style.S().Bold(true)}, kitex.Text("URL: ")),
-						kitex.Text(urlVal),
-					),
-					kitex.Box(kitex.BoxProps{},
-						kitex.Span(kitex.SpanProps{Style: style.S().Bold(true)}, kitex.Text("Destination: ")),
-						kitex.Text(finalDest),
-					),
-					kitex.If(bgTaskStr != "", func() kitex.Node {
-						return kitex.Box(kitex.BoxProps{},
-							kitex.Span(kitex.SpanProps{Style: style.S().Bold(true)}, kitex.Text("Background Task ID: ")),
-							kitex.Text(bgTaskStr),
-						)
-					}),
-					kitex.If(sizeStr != "" && bgTaskStr == "", func() kitex.Node {
-						return kitex.Box(kitex.BoxProps{},
-							kitex.Span(kitex.SpanProps{Style: style.S().Bold(true)}, kitex.Text("Size: ")),
-							kitex.Text(sizeStr),
-						)
-					}),
-					kitex.Box(kitex.BoxProps{},
-						kitex.Span(kitex.SpanProps{Style: style.S().Bold(true)}, kitex.Text("Status: ")),
-						kitex.If(successVal, func() kitex.Node {
-							return kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Success)}, kitex.Text("Success"))
-						}),
-						kitex.If(!successVal, func() kitex.Node {
-							return kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Error)}, kitex.Text("Failed"))
-						}),
-					),
-					kitex.If(detailsMsg != "", func() kitex.Node {
-						return kitex.Box(kitex.BoxProps{Style: style.S().WhiteSpace(style.WhiteSpacePreWrap)},
-							kitex.Span(kitex.SpanProps{Style: style.S().Bold(true)}, kitex.Text("Message: ")),
-							kitex.Text(detailsMsg),
-						)
-					}),
-				)
-			}),
-		),
-	)
 })
 
 // FetchToolWidget renders the result of a raw fetch tool call.
 var FetchToolWidget = kitex.FC("FetchToolWidget", func(props ToolExecutionProps) kitex.Node {
 	t := theme.UseTheme()
-	showModal, setShowModal := kitex.UseState(false)
 
 	tc := props.ToolCall
 	tm := props.ToolMessage
@@ -736,121 +524,38 @@ var FetchToolWidget = kitex.FC("FetchToolWidget", func(props ToolExecutionProps)
 	}
 
 	var onClick func()
-	if tm != nil {
-		onClick = func() { setShowModal(true) }
+	if tm != nil && props.OnViewPreview != nil {
+		onClick = func() {
+			if tm.IsError {
+				props.OnViewPreview(
+					fmt.Sprintf("Fetch Error for %s", urlVal),
+					preview.DefaultTextPreview{Text: details},
+				)
+			} else {
+				var contentToView string
+				if truncated {
+					contentToView = fmt.Sprintf("[TRUNCATED] Content exceeded 16,000 chars. Full saved to: %s\n\n%s", cachedPath, cleanCode)
+				} else {
+					contentToView = cleanCode
+				}
+				props.OnViewPreview(
+					fmt.Sprintf("Fetched %s", urlVal),
+					preview.FileViewPreview{
+						Path:     urlVal,
+						Content:  contentToView,
+						IsBinary: false,
+						MimeType: "text/plain",
+					},
+				)
+			}
+		}
 	}
 
-	badgeNode := components.ToolBadge(components.ToolBadgeProps{
+	return components.ToolBadge(components.ToolBadgeProps{
 		Icon:      iconNode,
 		Label:     statusLabel,
 		LabelNode: labelNode,
 		Color:     themeColor,
 		OnClick:   onClick,
 	})
-
-	return kitex.Fragment(
-		badgeNode,
-		components.Modal(components.ModalProps{
-			IsOpen: showModal(),
-			Title: kitex.Box(kitex.BoxProps{
-				Style: style.S().
-					Display(style.DisplayFlex).
-					FlexDirection(style.FlexRow).
-					AlignItems(style.AlignCenter).
-					Gap(1),
-			},
-				kitex.If(t != nil && tm != nil && tm.IsError, func() kitex.Node {
-					return kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Error)}, icon.Error)
-				}),
-				kitex.If(tm != nil && tm.IsError, func() kitex.Node {
-					return kitex.Span(kitex.SpanProps{}, kitex.Text(fmt.Sprintf("Fetch Error for %s", urlVal)))
-				}),
-				kitex.If(tm != nil && !tm.IsError, func() kitex.Node {
-					return kitex.Fragment(
-						kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Info)}, icon.Globe),
-						kitex.Span(kitex.SpanProps{}, kitex.Text(fmt.Sprintf("Fetched %s", urlVal))),
-					)
-				}),
-			),
-			OnClose: func() { setShowModal(false) },
-		},
-			kitex.If(showModal() && tm != nil && tm.IsError && details != "", func() kitex.Node {
-				return kitex.Box(kitex.BoxProps{
-					Style: style.S().
-						Padding(1).
-						Width(style.Percent(100)).
-						MinWidth(style.Percent(0)).
-						Foreground(t.Color.Text.Secondary).
-						WhiteSpace(style.WhiteSpacePreWrap),
-				}, kitex.Text(details))
-			}),
-			kitex.If(showModal() && tm != nil && !tm.IsError, func() kitex.Node {
-				var formatVal string
-				if tc.Args != nil {
-					formatVal, _ = tc.Args["format"].(string)
-				}
-
-				var lang string
-				if formatVal == "markdown" {
-					lang = "markdown"
-				} else if formatVal == "html" {
-					lang = "html"
-				} else {
-					trimmed := strings.TrimSpace(cleanCode)
-					if strings.HasPrefix(trimmed, "{") || strings.HasPrefix(trimmed, "[") {
-						lang = "json"
-					} else if strings.HasPrefix(trimmed, "<") {
-						if strings.Contains(strings.ToLower(trimmed), "html") {
-							lang = "html"
-						} else {
-							lang = "xml"
-						}
-					}
-				}
-
-				return kitex.Box(kitex.BoxProps{
-					Style: style.S().
-						Display(style.DisplayFlex).
-						FlexDirection(style.FlexColumn).
-						Padding(1).
-						Width(style.Percent(100)).
-						MinWidth(style.Percent(0)),
-				},
-					// Fetch metadata
-					kitex.Box(kitex.BoxProps{
-						Style: style.S().
-							Display(style.DisplayFlex).
-							FlexDirection(style.FlexColumn).
-							Gap(0).
-							MarginBottom(1).
-							Padding(1).
-							Background(t.Color.Surface.BaseHover),
-					},
-						kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Secondary)}, kitex.Text(fmt.Sprintf("  • URL:    %s", urlVal))),
-						kitex.If(status > 0, func() kitex.Node {
-							return kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Secondary)}, kitex.Text(fmt.Sprintf("  • Status: %d", status)))
-						}),
-						kitex.If(truncated, func() kitex.Node {
-							return kitex.Box(kitex.BoxProps{
-								Style: style.S().
-									Foreground(t.Color.Text.Error).
-									Bold(true).
-									MarginTop(1),
-							},
-								kitex.Text(fmt.Sprintf("[TRUNCATED] Content exceeded 16,000 chars. Full saved to: %s", cachedPath)),
-							)
-						}),
-					),
-
-					// Content pretty printed in code block
-					components.CodeBlock(components.CodeBlockProps{
-						Code:            cleanCode,
-						Lang:            lang,
-						HideHeader:      true,
-						ShowLineNumbers: false,
-					}),
-				)
-			}),
-		),
-	)
 })

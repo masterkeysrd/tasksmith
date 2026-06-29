@@ -11,6 +11,7 @@ import (
 	"github.com/masterkeysrd/kite/style"
 	"github.com/masterkeysrd/loom/message"
 	"github.com/masterkeysrd/tasksmith/internal/agent/permissions"
+	"github.com/masterkeysrd/tasksmith/internal/core/preview"
 	"github.com/masterkeysrd/tasksmith/internal/tui/components/icon"
 	"github.com/masterkeysrd/tasksmith/internal/tui/theme"
 	"github.com/masterkeysrd/tasksmith/internal/tui/tokenutils"
@@ -27,18 +28,24 @@ type BubbleGroupProps struct {
 	IsGenerating          bool
 	LiveThinkingTime      int
 	PendingAuthorizations []permissions.AuthorizationRequest
-	SelectedIndex         int
+	CurrentPageIndex      int
+	FocusedItem           FocusItem
 	SelectedScopeIndex    int
+	SelectedOptions       map[string]int
+	SelectedDirs          map[string]int
 	OnPreview             func()
 	CurrentPendingIndex   int
 	IsInsert              bool
 	LocalDecisions        map[string]permissions.AuthorizationDecision
 	IsSubmitting          bool
-	OnSelectVertical      func(int)
-	OnSelectHorizontal    func(int)
+	OnSelectVertical      func(FocusItem)
+	OnSelectScope         func(int)
+	OnSelectOption        func(int)
+	OnSelectDir           func(int)
 	OnApprove             func()
 	OnDeny                func()
 	OnViewFullOutput      func(title, cachedPath string)
+	OnViewPreview         func(title string, p preview.ToolPreview)
 }
 
 var BubbleGroup = kitex.FC("BubbleGroup", func(props BubbleGroupProps) kitex.Node {
@@ -136,16 +143,22 @@ var BubbleGroup = kitex.FC("BubbleGroup", func(props BubbleGroupProps) kitex.Nod
 				ReasoningTokens:       reasoningTokens,
 				ThinkingDuration:      thinkingDuration,
 				PendingAuthorizations: props.PendingAuthorizations,
-				SelectedIndex:         props.SelectedIndex,
+				CurrentPageIndex:      props.CurrentPageIndex,
+				FocusedItem:           props.FocusedItem,
 				SelectedScopeIndex:    props.SelectedScopeIndex,
+				SelectedOptions:       props.SelectedOptions,
+				SelectedDirs:          props.SelectedDirs,
 				OnPreview:             props.OnPreview,
 				OnViewFullOutput:      props.OnViewFullOutput,
+				OnViewPreview:         props.OnViewPreview,
 				CurrentPendingIndex:   props.CurrentPendingIndex,
 				IsInsert:              props.IsInsert,
 				LocalDecisions:        props.LocalDecisions,
 				IsSubmitting:          props.IsSubmitting,
 				OnSelectVertical:      props.OnSelectVertical,
-				OnSelectHorizontal:    props.OnSelectHorizontal,
+				OnSelectScope:         props.OnSelectScope,
+				OnSelectOption:        props.OnSelectOption,
+				OnSelectDir:           props.OnSelectDir,
 				OnApprove:             props.OnApprove,
 				OnDeny:                props.OnDeny,
 			})
@@ -209,8 +222,11 @@ var BubbleGroup = kitex.FC("BubbleGroup", func(props BubbleGroupProps) kitex.Nod
 		msgKey,
 		props.IsGenerating,
 		props.LiveThinkingTime,
-		props.SelectedIndex,
+		props.CurrentPageIndex,
+		props.FocusedItem,
 		props.SelectedScopeIndex,
+		props.SelectedOptions,
+		props.SelectedDirs,
 		props.CurrentPendingIndex,
 		props.IsInsert,
 		props.CurrentDots,
