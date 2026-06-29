@@ -147,6 +147,17 @@ type CreateSessionResponse struct {
 	Session Session `json:"session"`
 }
 
+type ConfigureSessionRequest struct {
+	SessionID    string `json:"session_id"`
+	AgentName    string `json:"agent_name,omitempty"`
+	ProviderName string `json:"provider_name,omitempty"`
+	ModelName    string `json:"model_name,omitempty"`
+}
+
+type ConfigureSessionResponse struct {
+	Success bool `json:"success"`
+}
+
 type DeleteSessionRequest struct {
 	ID string `json:"id"`
 }

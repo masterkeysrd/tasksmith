@@ -58,6 +58,10 @@ func (m *mockClient) CreateSession(ctx context.Context, req api.CreateSessionReq
 	return &api.CreateSessionResponse{}, nil
 }
 
+func (m *mockClient) ConfigureSession(ctx context.Context, req api.ConfigureSessionRequest) (*api.ConfigureSessionResponse, error) {
+	return &api.ConfigureSessionResponse{Success: true}, nil
+}
+
 func (m *mockClient) DeleteSession(ctx context.Context, req api.DeleteSessionRequest) (*api.DeleteSessionResponse, error) {
 	return &api.DeleteSessionResponse{Success: true}, nil
 }

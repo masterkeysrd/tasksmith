@@ -1,4 +1,4 @@
-package welcome
+package modelpicker
 
 import (
 	"context"
@@ -8,6 +8,7 @@ import (
 	"github.com/masterkeysrd/kite/extras/kitex"
 	"github.com/masterkeysrd/kite/extras/wind"
 	"github.com/masterkeysrd/tasksmith/internal/api"
+	"github.com/masterkeysrd/tasksmith/internal/tui/active"
 	tuiapi "github.com/masterkeysrd/tasksmith/internal/tui/api"
 	"github.com/masterkeysrd/tasksmith/internal/tui/theme"
 )
@@ -15,25 +16,23 @@ import (
 type mockClient struct{}
 
 func (m *mockClient) ListProjects(ctx context.Context, req api.ListProjectsRequest) (*api.ListProjectsResponse, error) {
-	return &api.ListProjectsResponse{
-		Projects: []api.Project{
-			{Name: "test-project", DisplayName: "Test Project", Path: "/path/to/test"},
-		},
-	}, nil
+	return &api.ListProjectsResponse{}, nil
 }
 
 func (m *mockClient) ListAgents(ctx context.Context, req api.ListAgentsRequest) (*api.ListAgentsResponse, error) {
-	return &api.ListAgentsResponse{
-		Agents: []api.Agent{
-			{Name: "test-agent", Description: "Test Agent Desc"},
-		},
-	}, nil
+	return &api.ListAgentsResponse{}, nil
 }
 
 func (m *mockClient) ListProviders(ctx context.Context, req api.ListProvidersRequest) (*api.ListProvidersResponse, error) {
 	return &api.ListProvidersResponse{
 		Providers: []api.Provider{
-			{Name: "test-provider", DisplayName: "Test Provider"},
+			{
+				Name:        "genai",
+				DisplayName: "Google GenAI",
+				Models: []api.Model{
+					{ID: "gemini-3.5-flash", Name: "Gemini 3.5 Flash", ContextWindow: 1048576},
+				},
+			},
 		},
 	}, nil
 }
@@ -51,11 +50,7 @@ func (m *mockClient) InitializeWorkspace(ctx context.Context, req api.Initialize
 }
 
 func (m *mockClient) GetWorkspaceConfig(ctx context.Context, req api.GetWorkspaceConfigRequest) (*api.GetWorkspaceConfigResponse, error) {
-	return &api.GetWorkspaceConfigResponse{
-		Name:            "test-workspace",
-		DefaultProvider: "test-provider",
-		IsConfigured:    true,
-	}, nil
+	return &api.GetWorkspaceConfigResponse{}, nil
 }
 
 func (m *mockClient) ListSessions(ctx context.Context, req api.ListSessionsRequest) (*api.ListSessionsResponse, error) {
@@ -63,17 +58,11 @@ func (m *mockClient) ListSessions(ctx context.Context, req api.ListSessionsReque
 }
 
 func (m *mockClient) CreateSession(ctx context.Context, req api.CreateSessionRequest) (*api.CreateSessionResponse, error) {
-	return &api.CreateSessionResponse{
-		Session: api.Session{ID: "test-session-id", Title: req.Title},
-	}, nil
+	return &api.CreateSessionResponse{}, nil
 }
 
 func (m *mockClient) ConfigureSession(ctx context.Context, req api.ConfigureSessionRequest) (*api.ConfigureSessionResponse, error) {
 	return &api.ConfigureSessionResponse{Success: true}, nil
-}
-
-func (m *mockClient) DeleteSession(ctx context.Context, req api.DeleteSessionRequest) (*api.DeleteSessionResponse, error) {
-	return &api.DeleteSessionResponse{Success: true}, nil
 }
 
 func (m *mockClient) RenameSession(ctx context.Context, req api.RenameSessionRequest) (*api.RenameSessionResponse, error) {
@@ -82,6 +71,10 @@ func (m *mockClient) RenameSession(ctx context.Context, req api.RenameSessionReq
 
 func (m *mockClient) ArchiveSession(ctx context.Context, req api.ArchiveSessionRequest) (*api.ArchiveSessionResponse, error) {
 	return &api.ArchiveSessionResponse{Success: true}, nil
+}
+
+func (m *mockClient) DeleteSession(ctx context.Context, req api.DeleteSessionRequest) (*api.DeleteSessionResponse, error) {
+	return &api.DeleteSessionResponse{Success: true}, nil
 }
 
 func (m *mockClient) SendMessage(ctx context.Context, req api.SendMessageRequest) (*api.SendMessageResponse, error) {
@@ -164,7 +157,7 @@ func (m *mockClient) GetMcpStatus(ctx context.Context, req api.GetMcpStatusReque
 	return &api.GetMcpStatusResponse{}, nil
 }
 
-func TestWelcomeView(t *testing.T) {
+func TestModelPickerView(t *testing.T) {
 	thm := &theme.Scheme{}
 	client := &mockClient{}
 	windClient := wind.NewClient()
@@ -177,12 +170,19 @@ func TestWelcomeView(t *testing.T) {
 		)
 	}
 
-	t.Run("RenderWelcome", func(t *testing.T) {
-		node := render(View(ViewProps{
-			OnOpenSetupWizard: func() {},
-		}))
+	t.Run("Not Open", func(t *testing.T) {
+		active.SetModal("")
+		node := render(View(ViewProps{}))
 		if node == nil {
-			t.Fatal("Welcome view returned nil node")
+			t.Fatal("Render returned nil node when closed (provider wrapper itself is non-nil)")
+		}
+	})
+
+	t.Run("Open", func(t *testing.T) {
+		active.SetModal("modelpicker")
+		node := render(View(ViewProps{}))
+		if node == nil {
+			t.Fatal("Render returned nil node when open")
 		}
 	})
 }

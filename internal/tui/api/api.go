@@ -21,6 +21,7 @@ type Client interface {
 
 	ListSessions(ctx context.Context, req api.ListSessionsRequest) (*api.ListSessionsResponse, error)
 	CreateSession(ctx context.Context, req api.CreateSessionRequest) (*api.CreateSessionResponse, error)
+	ConfigureSession(ctx context.Context, req api.ConfigureSessionRequest) (*api.ConfigureSessionResponse, error)
 	RenameSession(ctx context.Context, req api.RenameSessionRequest) (*api.RenameSessionResponse, error)
 	ArchiveSession(ctx context.Context, req api.ArchiveSessionRequest) (*api.ArchiveSessionResponse, error)
 	DeleteSession(ctx context.Context, req api.DeleteSessionRequest) (*api.DeleteSessionResponse, error)

@@ -29,6 +29,10 @@ func (app *Application) InitializeKeymap() {
 		active.SetModal("mcp")
 	}, keymap.Description("Open MCP Panel"))
 
+	keymap.Set([]mode.Mode{mode.Normal}, "<C-m>", func(ctx context.Context) {
+		active.SetModal("modelpicker")
+	}, keymap.Description("Open Model Picker"))
+
 	// Normal Mode Keybindings
 	keymap.Set([]mode.Mode{mode.Normal}, "q", func(ctx context.Context) {
 		if active.GetScreen() == "analytics" {

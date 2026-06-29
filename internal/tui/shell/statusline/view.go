@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/masterkeysrd/kite/event"
 	"github.com/masterkeysrd/kite/extras/kitex"
 	"github.com/masterkeysrd/kite/extras/wind"
 	"github.com/masterkeysrd/kite/style"
@@ -249,7 +250,12 @@ var Model = kitex.FC("Model", func(props ModelProps) kitex.Node {
 		PaddingHorizontal(1).
 		Merge(props.Style)
 
-	return kitex.Box(kitex.BoxProps{Style: modelStyle},
+	return kitex.Box(kitex.BoxProps{
+		Style: modelStyle,
+		OnClick: func(e event.Event) {
+			active.SetModal("modelpicker")
+		},
+	},
 		icon.CPU,
 		kitex.Text(fmt.Sprintf(" %s [%s]", props.Model, strings.ToUpper(props.ThinkingEffort))),
 	)

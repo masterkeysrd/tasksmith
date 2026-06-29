@@ -346,6 +346,45 @@ func (s *Service) CreateSession(ctx context.Context, req CreateSessionRequest) (
 	}, nil
 }
 
+// ConfigureSession updates the agent/provider/model configuration for an active session.
+func (s *Service) ConfigureSession(ctx context.Context, req ConfigureSessionRequest) (*ConfigureSessionResponse, error) {
+	if s.sm == nil {
+		return nil, fmt.Errorf("session manager not initialized")
+	}
+
+	sess, err := s.sm.GetSession(ctx, req.SessionID)
+	if err != nil {
+		return nil, err
+	}
+
+	agentName := req.AgentName
+	if agentName == "" {
+		agentName = sess.AgentName
+	}
+
+	providerName := req.ProviderName
+	if providerName == "" {
+		providerName = sess.ProviderName
+	}
+
+	modelName := req.ModelName
+	if modelName == "" {
+		modelName = sess.ModelName
+	}
+
+	cfg := session.SessionConfig{
+		AgentName:    agentName,
+		ProviderName: providerName,
+		ModelName:    modelName,
+	}
+
+	if err := s.sm.UpdateSessionConfig(ctx, req.SessionID, cfg); err != nil {
+		return nil, err
+	}
+
+	return &ConfigureSessionResponse{Success: true}, nil
+}
+
 // DeleteSession terminates and purges a session workspace.
 func (s *Service) DeleteSession(ctx context.Context, req DeleteSessionRequest) (*DeleteSessionResponse, error) {
 	if s.sm == nil {

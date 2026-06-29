@@ -48,6 +48,11 @@ func (app *Application) InitializeCommands() {
 		return nil
 	})
 
+	command.Register("model", func(ctx command.CommandContext) error {
+		active.SetModal("modelpicker")
+		return nil
+	})
+
 	command.Register("lsp", func(ctx command.CommandContext) error {
 		if len(ctx.Args) == 0 {
 			return fmt.Errorf("lsp: missing subcommand (try 'info' or 'restart')")
