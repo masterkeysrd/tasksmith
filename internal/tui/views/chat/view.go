@@ -29,6 +29,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/tui/plugin/tips"
 	"github.com/masterkeysrd/tasksmith/internal/tui/queries"
 	"github.com/masterkeysrd/tasksmith/internal/tui/theme"
+	"github.com/masterkeysrd/tasksmith/internal/tui/toast"
 )
 
 // ViewProps defines the properties for the Chat view.
@@ -82,6 +83,13 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 		status = stateQuery.Data.Status
 	}
 	sending := status == "running"
+
+	// Trigger a toast notification if the background agent execution fails
+	kitex.UseEffect(func() {
+		if stateQuery.Data != nil && stateQuery.Data.Error != "" {
+			toast.AddErrorMessage("Agent Run Failed", stateQuery.Data.Error)
+		}
+	}, []any{stateQuery.Data != nil, stateQuery.Data != nil && stateQuery.Data.Error != ""})
 
 	activeTip := tips.Use(sending)
 

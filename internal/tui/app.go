@@ -11,6 +11,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/tui/queries"
 	"github.com/masterkeysrd/tasksmith/internal/tui/shell"
 	"github.com/masterkeysrd/tasksmith/internal/tui/theme"
+	"github.com/masterkeysrd/tasksmith/internal/tui/toast"
 	"github.com/masterkeysrd/tasksmith/internal/tui/views/analytics"
 	"github.com/masterkeysrd/tasksmith/internal/tui/views/chat"
 	"github.com/masterkeysrd/tasksmith/internal/tui/views/lspinfo"
@@ -43,7 +44,10 @@ var App = kitex.FC("App", func(props AppProps) kitex.Node {
 					Color: components.PaperBase,
 					Style: style.S().Width(style.Percent(100)).Height(style.Percent(100)),
 				},
-					Router(),
+					kitex.Fragment(
+						Router(),
+						toast.ToastContainer(),
+					),
 				),
 			),
 		),
