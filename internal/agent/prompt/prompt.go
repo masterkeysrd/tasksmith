@@ -2,8 +2,10 @@ package prompt
 
 import (
 	"fmt"
+	"maps"
 	"os"
 	"runtime"
+	"time"
 
 	"github.com/masterkeysrd/tasksmith/internal/core/vcs"
 	"github.com/masterkeysrd/warp"
@@ -24,6 +26,14 @@ func RenderAgent(resolvedAgent *warp.ResolvedAgent, ws *warp.Workspace, proj *wa
 	}
 
 	globals := buildGlobals(cwd, extraGlobals)
+	globals["HasTool"] = func(name string) bool {
+		for _, t := range resolvedAgent.Tools {
+			if t.Metadata.Name == name {
+				return true
+			}
+		}
+		return false
+	}
 
 	opts := &warp.AgentRenderOptions{
 		Workspace: ws,
@@ -91,6 +101,8 @@ func buildGlobals(cwd string, extra map[string]any) map[string]any {
 	globals := make(map[string]any)
 
 	// Inject defaults
+	globals["Date"] = time.Now().Format("2006-01-02")
+
 	if cwd == "" {
 		if dir, err := os.Getwd(); err == nil {
 			cwd = dir
@@ -153,9 +165,7 @@ func buildGlobals(cwd string, extra map[string]any) map[string]any {
 	}
 
 	// Merge extra globals
-	for k, v := range extra {
-		globals[k] = v
-	}
+	maps.Copy(globals, extra)
 
 	return globals
 }
