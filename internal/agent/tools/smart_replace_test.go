@@ -312,3 +312,22 @@ func TestSmartReplace_NormalizeIndentLossless(t *testing.T) {
 		t.Errorf("got:\n%q\nwant:\n%q (5 spaces relative indent was promoted to 2 tabs instead of tab+space)", out, expected)
 	}
 }
+
+func TestSmartReplace_BoundaryProjectionUnrelatedDeletion(t *testing.T) {
+	// Original code has hooks block first, then theme check
+	content := "var Composer = kitex.FC(\"Composer\", func() {\n\tState1 := 1\n\tState2 := 2\n\tState3 := 3\n\tState4 := 4\n\tState5 := 5\n\tif t == nil {\n\t\treturn\n\t}\n\tblueColor := 1\n})"
+	// Agent swapped the order: theme check is placed before hooks in target
+	target := "if t == nil {\n\treturn\n}\nState1 := 1\nState2 := 2\nState3 := 3\nState4 := 4\nState5 := 5\nblueColor := 1"
+	repl := "if t == nil {\n\treturn\n}\nblueColor := 1"
+
+	// This should fail to match (count = 0) because:
+	// 1. The bad match at i=0 is rejected by prefix/suffix similarity validation.
+	// 2. The correct match at the end has too low of a ratio (4/9 = 44%) to meet the 65% threshold.
+	out, count, err := SmartReplace(content, target, repl, false)
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("expected 0 matches due to similarity check, but got %d (output: %q)", count, out)
+	}
+}

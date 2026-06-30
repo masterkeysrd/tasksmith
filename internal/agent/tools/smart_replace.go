@@ -231,6 +231,33 @@ func SmartReplace(content, target, replacement string, replaceAll bool) (string,
 				end = endLimit
 			}
 
+			// Validate prefix similarity to prevent deleting unrelated code
+			if first.B > 0 {
+				prefixTarget := strings.Join(trimmedTargetLines[0:first.B], "\n")
+				prefixEnd := start + first.B
+				if prefixEnd > len(trimmedContentLines) {
+					prefixEnd = len(trimmedContentLines)
+				}
+				prefixContent := strings.Join(trimmedContentLines[start:prefixEnd], "\n")
+				if stringSimilarity(prefixTarget, prefixContent) < 0.5 {
+					continue // Reject candidate due to dissimilar prefix
+				}
+			}
+
+			// Validate suffix similarity to prevent deleting unrelated code
+			suffixTargetLen := len(targetLines) - (last.B + last.Size)
+			if suffixTargetLen > 0 {
+				suffixTarget := strings.Join(trimmedTargetLines[last.B+last.Size:len(targetLines)], "\n")
+				suffixStart := end - suffixTargetLen
+				if suffixStart < 0 {
+					suffixStart = 0
+				}
+				suffixContent := strings.Join(trimmedContentLines[suffixStart:end], "\n")
+				if stringSimilarity(suffixTarget, suffixContent) < 0.5 {
+					continue // Reject candidate due to dissimilar suffix
+				}
+			}
+
 			// Deduplicate candidates by exact (start, end) ranges
 			found := false
 			for idx, existing := range candidates {
@@ -320,6 +347,24 @@ func getIndentation(line string) string {
 		}
 	}
 	return line // entirely whitespace
+}
+
+func stringSimilarity(s1, s2 string) float64 {
+	a := strings.Split(s1, "")
+	b := strings.Split(s2, "")
+	m := difflib.NewMatcher(a, b)
+	matches := 0
+	for _, block := range m.GetMatchingBlocks() {
+		matches += block.Size
+	}
+	maxLen := len(a)
+	if len(b) > maxLen {
+		maxLen = len(b)
+	}
+	if maxLen == 0 {
+		return 1.0
+	}
+	return float64(matches) / float64(maxLen)
 }
 
 func normalizeIndent(indent string, useTabs bool) string {
