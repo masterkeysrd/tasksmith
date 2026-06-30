@@ -26,6 +26,7 @@ var View = kitex.FC("CommandBar", func(props Props) kitex.Node {
 	m := mode.Use()
 
 	value, setValue := kitex.UseState("")
+	commandError, setCommandError := kitex.UseState("")
 	inputRef := kitex.UseRef[dom.Element](nil)
 
 	isOpen := m == mode.Command
@@ -34,6 +35,7 @@ var View = kitex.FC("CommandBar", func(props Props) kitex.Node {
 	kitex.UseEffect(func() {
 		if isOpen {
 			setValue("")
+			setCommandError("")
 			if inputRef.Current != nil {
 				if doc := inputRef.Current.OwnerDocument(); doc != nil {
 					doc.Focus(inputRef.Current)
@@ -163,6 +165,7 @@ var View = kitex.FC("CommandBar", func(props Props) kitex.Node {
 										go func() {
 											if err := command.Execute(context.Background(), cmdName, p[1:]...); err != nil {
 												log.Error("failed to execute command", log.String("command", cmdName), log.Err(err))
+												setCommandError(err.Error())
 											}
 										}()
 									}
@@ -198,16 +201,31 @@ var View = kitex.FC("CommandBar", func(props Props) kitex.Node {
 						AlignItems(style.AlignCenter).
 						Flex(1),
 				},
-					kitex.Box(kitex.BoxProps{
-						Style: style.S().
-							Foreground(colorTextDimmed).
-							MarginRight(1),
-					}, kitex.Text("●")),
-
-					kitex.Box(kitex.BoxProps{
-						Style: style.S().
-							Foreground(colorTextDimmed),
-					}, kitex.Text("READY_FOR_DIRECTIVE")),
+					kitex.IfElse(commandError() != "",
+						kitex.Fragment(
+							kitex.Box(kitex.BoxProps{
+								Style: style.S().
+									Foreground(t.Color.Text.Error).
+									MarginRight(1),
+							}, kitex.Text("✖")),
+							kitex.Box(kitex.BoxProps{
+								Style: style.S().
+									Foreground(t.Color.Text.Error).
+									Bold(true),
+							}, kitex.Text("ERROR: "+commandError())),
+						),
+						kitex.Fragment(
+							kitex.Box(kitex.BoxProps{
+								Style: style.S().
+									Foreground(colorTextDimmed).
+									MarginRight(1),
+							}, kitex.Text("●")),
+							kitex.Box(kitex.BoxProps{
+								Style: style.S().
+									Foreground(colorTextDimmed),
+							}, kitex.Text("READY_FOR_DIRECTIVE")),
+						),
+					),
 
 					kitex.Box(kitex.BoxProps{
 						Style: style.S().Flex(1),
