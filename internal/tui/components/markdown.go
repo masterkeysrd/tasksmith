@@ -164,6 +164,7 @@ var Markdown = kitex.FC("Markdown", func(props MarkdownProps) kitex.Node {
 					Display(style.DisplayFlex).
 					FlexDirection(style.FlexColumn).
 					WhiteSpace(style.WhiteSpacePreWrap).
+					OverflowWrap(style.OverflowWrapBreakWord).
 					Merge(props.Style)
 				if t != nil {
 					docStyle = docStyle.Foreground(t.Color.Text.Secondary)

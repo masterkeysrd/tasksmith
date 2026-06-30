@@ -67,6 +67,9 @@ var CodeBlock = kitex.FC("CodeBlock", func(props CodeBlockProps) kitex.Node {
 	if t != nil {
 		codeStyle = codeStyle.Foreground(t.Color.Text.Secondary)
 	}
+	if props.Wrap {
+		codeStyle = codeStyle.OverflowWrap(style.OverflowWrapBreakWord)
+	}
 
 	wrapperStyle := style.S().
 		Display(style.DisplayFlex).
@@ -74,6 +77,9 @@ var CodeBlock = kitex.FC("CodeBlock", func(props CodeBlockProps) kitex.Node {
 		Width(style.Percent(100)).
 		MinWidth(style.Percent(0)).
 		WhiteSpace(whiteSpace)
+	if props.Wrap {
+		wrapperStyle = wrapperStyle.OverflowWrap(style.OverflowWrapBreakWord)
+	}
 
 	if !props.HideHeader {
 		wrapperStyle = wrapperStyle.
@@ -111,7 +117,8 @@ var CodeBlock = kitex.FC("CodeBlock", func(props CodeBlockProps) kitex.Node {
 		for tok := iterator(); tok != chroma.EOF; tok = iterator() {
 			tokenStyle := ResolveTokenStyle(t, tok.Type)
 			if props.Wrap {
-				tokenStyle = tokenStyle.WhiteSpace(style.WhiteSpacePreWrap)
+				tokenStyle = tokenStyle.WhiteSpace(style.WhiteSpacePreWrap).
+					OverflowWrap(style.OverflowWrapBreakWord)
 			}
 			contentNodes = append(contentNodes, kitex.Span(
 				kitex.SpanProps{Style: tokenStyle},
@@ -157,6 +164,9 @@ var CodeBlock = kitex.FC("CodeBlock", func(props CodeBlockProps) kitex.Node {
 		OverflowX(style.OverflowAuto)
 	if t != nil {
 		codeBoxStyle = codeBoxStyle.Foreground(t.Color.Text.Secondary)
+	}
+	if props.Wrap {
+		codeBoxStyle = codeBoxStyle.OverflowWrap(style.OverflowWrapBreakWord)
 	}
 
 	var gutterText string
