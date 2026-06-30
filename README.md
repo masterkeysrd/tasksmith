@@ -7,7 +7,7 @@ TaskSmith is a terminal-based IDE that combines the keyboard-driven efficiency o
 ## Features
 
 - **Neovim-inspired TUI** — Full keyboard navigation and modal editing for fast, hands-on-keyboard workflows.
-- **Multi-provider AI support** — Seamlessly switch between Anthropic (Claude), Google (Gemini), and local models via Ollama.
+- **Multi-provider AI support** — Seamlessly switch between Anthropic (Claude), Google (Gemini), OpenAI, and local models via Ollama.
 - **Agentic task management** — Define, track, and automate development tasks with AI-driven assistance.
 - **Configurable workspace system** — YAML-based workspace configuration with support for multiple model providers and custom model definitions.
 - **Fully local mode** — Run entirely offline using local Ollama models for privacy-sensitive workflows.
@@ -75,6 +75,7 @@ Providers are configured as YAML files under `.agents/providers/`. Each provider
 |---|---|---|
 | **Anthropic** | Claude Sonnet 4.6, Claude Opus 4.7 | `ANTHROPIC_API_KEY` env var |
 | **Google GenAI** | Gemini 3 Flash Preview, Gemini 3.1 Pro Preview | `GOOGLE_API_KEY` env var |
+| **OpenAI** | GPT-4, GPT-4o, GPT-4.1 | `OPENAI_API_KEY` env var |
 | **Ollama** | Qwen3.6, Llama4 Scout, Qwen3-Coder-Next | Local (no key needed) |
 
 Example provider config (`.agents/providers/ollama.yaml`):
@@ -105,6 +106,7 @@ Set provider API keys in an `env.sh` file or your shell profile:
 ```bash
 export ANTHROPIC_API_KEY="your-key-here"
 export GOOGLE_API_KEY="your-key-here"
+export OPENAI_API_KEY="your-key-here"
 ```
 
 ## Project Structure
