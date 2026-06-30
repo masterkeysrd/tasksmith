@@ -12,8 +12,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/masterkeysrd/loom/llm"
 	"github.com/masterkeysrd/loom/message"
 	"github.com/masterkeysrd/loom/tool"
+	"github.com/masterkeysrd/tasksmith/internal/agent/model"
 	"github.com/masterkeysrd/tasksmith/internal/agent/permissions"
 	"github.com/masterkeysrd/tasksmith/internal/agent/tools"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
@@ -149,14 +151,118 @@ func (s *Service) ListProviders(ctx context.Context, req ListProvidersRequest) (
 			displayName = p.Metadata.Name
 		}
 
+		// Try to instantiate the Loom provider to fetch model profiles/capabilities
+		var loomProvider llm.Provider
+		if lp, err := model.CreateProvider(ctx, p); err == nil {
+			loomProvider = lp
+		}
+
 		models := make([]Model, 0, len(p.Spec.Models))
 		for _, m := range p.Spec.Models {
+			var family string
+			var openWeights bool
+			var caps ModelCapabilities
+			var pricing ModelPricing
+			var modalities ModelModalities
+
+			knowledgeCutoff := "n/a"
+			lastUpdated := "n/a"
+
+			if loomProvider != nil {
+				if prof, ok := loomProvider.GetProfile(m.ID); ok {
+					family = prof.Family
+					openWeights = prof.OpenWeights
+					if prof.Knowledge != "" {
+						knowledgeCutoff = prof.Knowledge
+					}
+					if prof.LastUpdated != "" {
+						lastUpdated = prof.LastUpdated
+					}
+					caps = ModelCapabilities{
+						Attachment:  prof.Capabilities.Attachment,
+						Reasoning:   prof.Capabilities.Reasoning,
+						ToolCall:    prof.Capabilities.ToolCall,
+						Temperature: prof.Capabilities.Temperature,
+					}
+					if len(prof.Capabilities.ReasoningOptions) > 0 {
+						caps.ReasoningOptions = make([]ModelReasoningOption, 0, len(prof.Capabilities.ReasoningOptions))
+						for _, ro := range prof.Capabilities.ReasoningOptions {
+							caps.ReasoningOptions = append(caps.ReasoningOptions, ModelReasoningOption{
+								Type:   ro.Type,
+								Values: ro.Values,
+							})
+						}
+					}
+					pricing = ModelPricing{
+						Input:      prof.Pricing.Input,
+						Output:     prof.Pricing.Output,
+						CacheRead:  prof.Pricing.CacheRead,
+						CacheWrite: prof.Pricing.CacheWrite,
+						Reasoning:  prof.Pricing.Reasoning,
+					}
+					if len(prof.Pricing.TieredLimits) > 0 {
+						pricing.TieredLimits = make([]TierPricing, 0, len(prof.Pricing.TieredLimits))
+						for _, tp := range prof.Pricing.TieredLimits {
+							pricing.TieredLimits = append(pricing.TieredLimits, TierPricing{
+								Input:      tp.Input,
+								Output:     tp.Output,
+								CacheRead:  tp.CacheRead,
+								CacheWrite: tp.CacheWrite,
+								Reasoning:  tp.Reasoning,
+								TierLimit:  tp.TierLimit,
+							})
+						}
+					}
+					for _, mod := range prof.Modalities.Inputs {
+						modalities.Inputs = append(modalities.Inputs, string(mod))
+					}
+					for _, mod := range prof.Modalities.Outputs {
+						modalities.Outputs = append(modalities.Outputs, string(mod))
+					}
+				}
+			}
+
+			contextWindow := m.Limits.Context
+			maxOutputTokens := m.Limits.Output
+			// Fallback to Loom profile limits if not configured in Warp
+			if contextWindow == 0 && loomProvider != nil {
+				if prof, ok := loomProvider.GetProfile(m.ID); ok {
+					contextWindow = prof.Limits.Context
+				}
+			}
+			if maxOutputTokens == 0 && loomProvider != nil {
+				if prof, ok := loomProvider.GetProfile(m.ID); ok {
+					maxOutputTokens = prof.Limits.Output
+				}
+			}
+
+			label := m.Label
+			if label == "" && loomProvider != nil {
+				if prof, ok := loomProvider.GetProfile(m.ID); ok && prof.Name != "" {
+					label = prof.Name
+				}
+			}
+			if label == "" {
+				label = m.Name
+			}
+			if label == "" {
+				label = m.ID
+			}
+
 			models = append(models, Model{
 				ID:              m.ID,
 				Name:            m.Name,
-				Label:           m.Label,
-				ContextWindow:   m.Limits.Context,
-				MaxOutputTokens: m.Limits.Output,
+				Label:           label,
+				ContextWindow:   contextWindow,
+				MaxOutputTokens: maxOutputTokens,
+				Family:          family,
+				OpenWeights:     openWeights,
+				Capabilities:    caps,
+				Pricing:         pricing,
+				Modalities:      modalities,
+				IsDefault:       m.ID == p.Spec.DefaultModel,
+				KnowledgeCutoff: knowledgeCutoff,
+				LastUpdated:     lastUpdated,
 			})
 		}
 
@@ -313,9 +419,7 @@ func (s *Service) ListSessions(ctx context.Context, req ListSessionsRequest) (*L
 		resp.Sessions[i] = Session{
 			ID:              sess.ID,
 			Title:           sess.Title,
-			AgentName:       sess.AgentName,
-			ProviderName:    sess.ProviderName,
-			ModelName:       sess.ModelName,
+			Settings:        sess.Settings,
 			LastTurnMetrics: apiMetrics,
 			CreatedAt:       sess.CreatedAt.Format(time.RFC3339),
 			UpdatedAt:       sess.UpdatedAt.Format(time.RFC3339),
@@ -335,13 +439,11 @@ func (s *Service) CreateSession(ctx context.Context, req CreateSessionRequest) (
 	}
 	return &CreateSessionResponse{
 		Session: Session{
-			ID:           sess.ID,
-			Title:        sess.Title,
-			AgentName:    sess.AgentName,
-			ProviderName: sess.ProviderName,
-			ModelName:    sess.ModelName,
-			CreatedAt:    sess.CreatedAt.Format(time.RFC3339),
-			UpdatedAt:    sess.UpdatedAt.Format(time.RFC3339),
+			ID:        sess.ID,
+			Title:     sess.Title,
+			Settings:  sess.Settings,
+			CreatedAt: sess.CreatedAt.Format(time.RFC3339),
+			UpdatedAt: sess.UpdatedAt.Format(time.RFC3339),
 		},
 	}, nil
 }
@@ -357,25 +459,26 @@ func (s *Service) ConfigureSession(ctx context.Context, req ConfigureSessionRequ
 		return nil, err
 	}
 
-	agentName := req.AgentName
-	if agentName == "" {
-		agentName = sess.AgentName
+	// Read existing or incoming settings config
+	var newSettings model.SessionSettings
+	if req.Settings != nil {
+		newSettings = *req.Settings
+	} else {
+		newSettings = sess.Settings
 	}
 
-	providerName := req.ProviderName
-	if providerName == "" {
-		providerName = sess.ProviderName
+	if req.AgentName != "" {
+		newSettings.AgentName = req.AgentName
 	}
-
-	modelName := req.ModelName
-	if modelName == "" {
-		modelName = sess.ModelName
+	if req.ProviderName != "" {
+		newSettings.ProviderName = req.ProviderName
+	}
+	if req.ModelName != "" {
+		newSettings.ModelName = req.ModelName
 	}
 
 	cfg := session.SessionConfig{
-		AgentName:    agentName,
-		ProviderName: providerName,
-		ModelName:    modelName,
+		Settings: newSettings,
 	}
 
 	if err := s.sm.UpdateSessionConfig(ctx, req.SessionID, cfg); err != nil {

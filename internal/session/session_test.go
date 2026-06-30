@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/masterkeysrd/loom/message"
+	"github.com/masterkeysrd/tasksmith/internal/agent/model"
 	"github.com/masterkeysrd/tasksmith/internal/agent/permissions"
 	"github.com/masterkeysrd/tasksmith/internal/agent/tools"
 	coredb "github.com/masterkeysrd/tasksmith/internal/core/db"
@@ -68,21 +69,23 @@ func TestSessionManager(t *testing.T) {
 	if gotS1.Title != "test-session-1" {
 		t.Errorf("expected session title test-session-1, got %s", gotS1.Title)
 	}
-	if gotS1.AgentName != "main" {
-		t.Errorf("expected default agent 'main', got %q", gotS1.AgentName)
+	if gotS1.Settings.AgentName != "main" {
+		t.Errorf("expected default agent 'main', got %q", gotS1.Settings.AgentName)
 	}
-	if gotS1.ProviderName != "ollama" {
-		t.Errorf("expected default provider 'ollama', got %q", gotS1.ProviderName)
+	if gotS1.Settings.ProviderName != "ollama" {
+		t.Errorf("expected default provider 'ollama', got %q", gotS1.Settings.ProviderName)
 	}
-	if gotS1.ModelName != "qwen3.6:35b-a3b-coding-nvfp4" {
-		t.Errorf("expected default model 'qwen3.6:35b-a3b-coding-nvfp4', got %q", gotS1.ModelName)
+	if gotS1.Settings.ModelName != "qwen3.6:35b-a3b-coding-nvfp4" {
+		t.Errorf("expected default model 'qwen3.6:35b-a3b-coding-nvfp4', got %q", gotS1.Settings.ModelName)
 	}
 
 	// Test UpdateSessionConfig
 	err = manager.UpdateSessionConfig(ctx, s1.ID, session.SessionConfig{
-		AgentName:    "research",
-		ProviderName: "openai",
-		ModelName:    "gpt-4o",
+		Settings: model.SessionSettings{
+			AgentName:    "research",
+			ProviderName: "openai",
+			ModelName:    "gpt-4o",
+		},
 	})
 	if err != nil {
 		t.Fatalf("failed to update session config: %v", err)
@@ -92,14 +95,14 @@ func TestSessionManager(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to get updated session: %v", err)
 	}
-	if gotS1Updated.AgentName != "research" {
-		t.Errorf("expected agent 'research', got %q", gotS1Updated.AgentName)
+	if gotS1Updated.Settings.AgentName != "research" {
+		t.Errorf("expected agent 'research', got %q", gotS1Updated.Settings.AgentName)
 	}
-	if gotS1Updated.ProviderName != "openai" {
-		t.Errorf("expected provider 'openai', got %q", gotS1Updated.ProviderName)
+	if gotS1Updated.Settings.ProviderName != "openai" {
+		t.Errorf("expected provider 'openai', got %q", gotS1Updated.Settings.ProviderName)
 	}
-	if gotS1Updated.ModelName != "gpt-4o" {
-		t.Errorf("expected model 'gpt-4o', got %q", gotS1Updated.ModelName)
+	if gotS1Updated.Settings.ModelName != "gpt-4o" {
+		t.Errorf("expected model 'gpt-4o', got %q", gotS1Updated.Settings.ModelName)
 	}
 
 	// Test Todos Persistence

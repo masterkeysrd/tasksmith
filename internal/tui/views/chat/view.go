@@ -59,7 +59,7 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 		for _, s := range sessionsQuery.Data.Sessions {
 			if s.ID == sessionID {
 				title = s.Title
-				mainAgentName = s.AgentName
+				mainAgentName = s.Settings.AgentName
 				break
 			}
 		}

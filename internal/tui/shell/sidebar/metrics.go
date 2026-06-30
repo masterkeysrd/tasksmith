@@ -35,9 +35,9 @@ func metricsPanel(data Data) kitex.Node {
 
 	if activeSession != nil {
 		for _, p := range data.Providers {
-			if p.Name == activeSession.ProviderName {
+			if p.Name == activeSession.Settings.ProviderName {
 				for _, m := range p.Models {
-					if (m.ID == activeSession.ModelName || m.Name == activeSession.ModelName) && m.ContextWindow > 0 {
+					if (m.ID == activeSession.Settings.ModelName || m.Name == activeSession.Settings.ModelName) && m.ContextWindow > 0 {
 						tokenLimit = m.ContextWindow
 						if m.MaxOutputTokens > 0 {
 							outputLimit = m.MaxOutputTokens

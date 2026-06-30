@@ -6,7 +6,7 @@ metadata:
   labels:
     category: workflow
 spec:
-  parameters:
+  inputSchema:
     type: object
     properties:
       subagents:

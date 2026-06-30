@@ -6,7 +6,7 @@ metadata:
   labels:
     category: system
 spec:
-  parameters:
+  inputSchema:
     type: object
     properties:
       action:

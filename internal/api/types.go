@@ -3,6 +3,7 @@ package api
 import (
 	"time"
 
+	"github.com/masterkeysrd/tasksmith/internal/agent/model"
 	"github.com/masterkeysrd/tasksmith/internal/agent/permissions"
 	"github.com/masterkeysrd/tasksmith/internal/metrics"
 )
@@ -52,11 +53,55 @@ type Provider struct {
 }
 
 type Model struct {
-	ID              string `json:"id"`
-	Name            string `json:"name"`
-	Label           string `json:"label"`
-	ContextWindow   int    `json:"context_window"`
-	MaxOutputTokens int    `json:"max_output_tokens"`
+	ID              string            `json:"id"`
+	Name            string            `json:"name"`
+	Label           string            `json:"label"`
+	ContextWindow   int               `json:"context_window"`
+	MaxOutputTokens int               `json:"max_output_tokens"`
+	Family          string            `json:"family,omitempty"`
+	OpenWeights     bool              `json:"open_weights,omitempty"`
+	Capabilities    ModelCapabilities `json:"capabilities"`
+	Pricing         ModelPricing      `json:"pricing"`
+	Modalities      ModelModalities   `json:"modalities"`
+	IsDefault       bool              `json:"is_default,omitempty"`
+	KnowledgeCutoff string            `json:"knowledge_cutoff,omitempty"`
+	LastUpdated     string            `json:"last_updated,omitempty"`
+}
+
+type ModelCapabilities struct {
+	Attachment       bool                   `json:"attachment"`
+	Reasoning        bool                   `json:"reasoning"`
+	ToolCall         bool                   `json:"tool_call"`
+	Temperature      bool                   `json:"temperature"`
+	ReasoningOptions []ModelReasoningOption `json:"reasoning_options,omitempty"`
+}
+
+type ModelReasoningOption struct {
+	Type   string   `json:"type"`
+	Values []string `json:"values,omitempty"`
+}
+
+type ModelPricing struct {
+	Input        float64       `json:"input"`
+	Output       float64       `json:"output"`
+	CacheRead    float64       `json:"cache_read,omitempty"`
+	CacheWrite   float64       `json:"cache_write,omitempty"`
+	Reasoning    float64       `json:"reasoning,omitempty"`
+	TieredLimits []TierPricing `json:"tiered_limits,omitempty"`
+}
+
+type TierPricing struct {
+	Input      float64 `json:"input"`
+	Output     float64 `json:"output"`
+	CacheRead  float64 `json:"cache_read,omitempty"`
+	CacheWrite float64 `json:"cache_write,omitempty"`
+	Reasoning  float64 `json:"reasoning,omitempty"`
+	TierLimit  int     `json:"limit"`
+}
+
+type ModelModalities struct {
+	Inputs  []string `json:"inputs,omitempty"`
+	Outputs []string `json:"outputs,omitempty"`
 }
 
 type ListProvidersPresetsRequest struct {
@@ -113,14 +158,12 @@ type ListSessionsResponse struct {
 }
 
 type Session struct {
-	ID              string          `json:"id"`
-	Title           string          `json:"title"`
-	AgentName       string          `json:"agent_name"`
-	ProviderName    string          `json:"provider_name"`
-	ModelName       string          `json:"model_name"`
-	LastTurnMetrics *SessionMetrics `json:"last_turn_metrics,omitempty"`
-	CreatedAt       string          `json:"created_at"`
-	UpdatedAt       string          `json:"updated_at"`
+	ID              string                `json:"id"`
+	Title           string                `json:"title"`
+	Settings        model.SessionSettings `json:"settings"`
+	LastTurnMetrics *SessionMetrics       `json:"last_turn_metrics,omitempty"`
+	CreatedAt       string                `json:"created_at"`
+	UpdatedAt       string                `json:"updated_at"`
 }
 
 type SessionMetrics struct {
@@ -148,10 +191,11 @@ type CreateSessionResponse struct {
 }
 
 type ConfigureSessionRequest struct {
-	SessionID    string `json:"session_id"`
-	AgentName    string `json:"agent_name,omitempty"`
-	ProviderName string `json:"provider_name,omitempty"`
-	ModelName    string `json:"model_name,omitempty"`
+	SessionID    string                 `json:"session_id"`
+	AgentName    string                 `json:"agent_name,omitempty"`
+	ProviderName string                 `json:"provider_name,omitempty"`
+	ModelName    string                 `json:"model_name,omitempty"`
+	Settings     *model.SessionSettings `json:"settings,omitempty"`
 }
 
 type ConfigureSessionResponse struct {

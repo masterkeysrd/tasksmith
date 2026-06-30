@@ -43,6 +43,7 @@ var migrations = []string{
 	);`,
 	`CREATE INDEX IF NOT EXISTS idx_sr_session_kind ON session_resources(session_id, kind);`,
 	`CREATE INDEX IF NOT EXISTS idx_sr_key ON session_resources(session_id, kind, key);`,
+	`ALTER TABLE sessions ADD COLUMN settings TEXT DEFAULT '{}';`,
 }
 
 type sqliteStore struct {
@@ -59,21 +60,21 @@ func NewSQLiteStore(db *sqlx.DB, checkDB *sqlx.DB) (Store, error) {
 }
 
 func (s *sqliteStore) CreateSession(ctx context.Context, sd SessionData) error {
-	query := `INSERT INTO sessions (id, title, agent_name, provider_name, model_name, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`
-	_, err := s.db.ExecContext(ctx, query, sd.ID, sd.Title, sd.AgentName, sd.ProviderName, sd.ModelName, sd.CreatedAt, sd.UpdatedAt)
+	query := `INSERT INTO sessions (id, title, settings, created_at, updated_at) VALUES (?, ?, ?, ?, ?)`
+	_, err := s.db.ExecContext(ctx, query, sd.ID, sd.Title, sd.Settings, sd.CreatedAt, sd.UpdatedAt)
 	return err
 }
 
 func (s *sqliteStore) ListSessions(ctx context.Context) ([]SessionData, error) {
 	var sessions []SessionData
-	query := `SELECT id, title, agent_name, provider_name, model_name, todos, last_turn_metrics, created_at, updated_at FROM sessions WHERE archived_at IS NULL ORDER BY updated_at DESC`
+	query := `SELECT id, title, todos, last_turn_metrics, settings, created_at, updated_at FROM sessions WHERE archived_at IS NULL ORDER BY updated_at DESC`
 	err := s.db.SelectContext(ctx, &sessions, query)
 	return sessions, err
 }
 
 func (s *sqliteStore) GetSession(ctx context.Context, id string) (*SessionData, error) {
 	var sd SessionData
-	query := `SELECT id, title, agent_name, provider_name, model_name, todos, last_turn_metrics, created_at, updated_at FROM sessions WHERE id = ?`
+	query := `SELECT id, title, todos, last_turn_metrics, settings, created_at, updated_at FROM sessions WHERE id = ?`
 	err := s.db.GetContext(ctx, &sd, query, id)
 	if err != nil {
 		return nil, err
@@ -94,8 +95,13 @@ func (s *sqliteStore) RenameSession(ctx context.Context, id, title string) error
 }
 
 func (s *sqliteStore) UpdateSessionConfig(ctx context.Context, id string, cfg SessionConfig) error {
-	query := `UPDATE sessions SET agent_name = ?, provider_name = ?, model_name = ?, updated_at = ? WHERE id = ?`
-	_, err := s.db.ExecContext(ctx, query, cfg.AgentName, cfg.ProviderName, cfg.ModelName, time.Now().UTC(), id)
+	data, err := json.Marshal(cfg.Settings)
+	if err != nil {
+		return err
+	}
+	settingsJSON := string(data)
+	query := `UPDATE sessions SET settings = ?, updated_at = ? WHERE id = ?`
+	_, err = s.db.ExecContext(ctx, query, settingsJSON, time.Now().UTC(), id)
 	return err
 }
 

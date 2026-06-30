@@ -6,7 +6,7 @@ metadata:
   labels:
     category: network
 spec:
-  parameters:
+  inputSchema:
     type: object
     properties:
       query:

@@ -21,7 +21,8 @@ spec:
         - ls
         - lsp_diagnostics
         - lsp_restart
-        - lsp_search
+        - lsp_symbols
+        - lsp_inspect
         - mcp_read_resources
         - remove
         - view

@@ -3,7 +3,10 @@ apiVersion: warp/v1alpha1
 kind: Skill
 metadata:
     name: warp
-    description: Guidelines for reading, validating, and interacting with Warp YAML manifests (workspace configuration, agent definitions, MCPs, and LLM providers).
+    description: "Guidelines for reading, validating, and interacting with Warp YAML manifests (workspace configuration, agent definitions, MCPs, and LLM providers)."
+spec:
+    useWhen: "writing or editing Warp resource manifests, configuring agents or skills, setting up LLM providers, defining MCP servers, managing workspace policies, or using template variables in resource definitions"
+    keywords: [warp, yaml, manifests, configuration, workspace]
 ---
 
 # Warp Manifests

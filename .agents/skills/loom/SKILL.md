@@ -3,7 +3,10 @@ apiVersion: warp/v1alpha1
 kind: Skill
 metadata:
     name: loom
-    description: Instructions and architectural patterns for building LangGraph-style AI agent workflows using the Loom framework.
+    description: "Instructions and architectural patterns for building LangGraph-style AI agent workflows using the Loom framework."
+spec:
+    useWhen: "designing agent workflows or state machines, implementing graph nodes and routing logic, managing agent conversation memory, configuring LLM streaming or persistence, integrating external tools or MCP servers, or setting up human-in-the-loop checkpoints"
+    keywords: [loom, workflows, langgraph, state-machines, agent-graph]
 ---
 
 # Loom Agent Workflows

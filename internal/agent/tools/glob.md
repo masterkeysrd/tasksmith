@@ -6,7 +6,7 @@ metadata:
   labels:
     category: filesystem
 spec:
-  parameters:
+  inputSchema:
     type: object
     properties:
       pattern:

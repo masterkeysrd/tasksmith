@@ -7,7 +7,7 @@ metadata:
     category: system
     streaming: "true"
 spec:
-  parameters:
+  inputSchema:
     type: object
     properties:
       command:

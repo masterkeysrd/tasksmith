@@ -8,7 +8,7 @@ metadata:
 spec:
   annotations:
     isReadOnly: true
-  parameters:
+  inputSchema:
     type: object
     properties:
       todos:

@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
 	"strings"
 	"sync"
 	"time"
@@ -12,12 +11,9 @@ import (
 	"github.com/google/uuid"
 	"github.com/masterkeysrd/loom/graph"
 	"github.com/masterkeysrd/loom/llm"
-	loomanthropic "github.com/masterkeysrd/loom/llm/anthropic"
-	loomgenai "github.com/masterkeysrd/loom/llm/genai"
-	loomollama "github.com/masterkeysrd/loom/llm/ollama"
-	loomopenai "github.com/masterkeysrd/loom/llm/openai"
 	"github.com/masterkeysrd/loom/message"
 	agentgraph "github.com/masterkeysrd/tasksmith/internal/agent/graph"
+	"github.com/masterkeysrd/tasksmith/internal/agent/model"
 	"github.com/masterkeysrd/tasksmith/internal/agent/permissions"
 	"github.com/masterkeysrd/tasksmith/internal/agent/prompt"
 	"github.com/masterkeysrd/tasksmith/internal/agent/tools"
@@ -45,14 +41,12 @@ const (
 
 // Session represents a domain session.
 type Session struct {
-	ID              string          `json:"id"`
-	Title           string          `json:"title"`
-	AgentName       string          `json:"agent_name"`
-	ProviderName    string          `json:"provider_name"`
-	ModelName       string          `json:"model_name"`
-	LastTurnMetrics *SessionMetrics `json:"last_turn_metrics,omitempty"`
-	CreatedAt       time.Time       `json:"created_at"`
-	UpdatedAt       time.Time       `json:"updated_at"`
+	ID              string                `json:"id"`
+	Title           string                `json:"title"`
+	Settings        model.SessionSettings `json:"settings"`
+	LastTurnMetrics *SessionMetrics       `json:"last_turn_metrics,omitempty"`
+	CreatedAt       time.Time             `json:"created_at"`
+	UpdatedAt       time.Time             `json:"updated_at"`
 }
 
 // ActiveSession holds the in-memory execution status of a running Loom agent.
@@ -184,14 +178,23 @@ func (m *Manager) CreateSession(ctx context.Context, title string) (*Session, er
 		return nil, err
 	}
 
+	settings := model.SessionSettings{
+		AgentName:    agentName,
+		ProviderName: providerName,
+		ModelName:    modelName,
+	}
+	settingsBytes, err := json.Marshal(settings)
+	if err != nil {
+		return nil, err
+	}
+	settingsStr := string(settingsBytes)
+
 	sd := SessionData{
-		ID:           id,
-		Title:        title,
-		AgentName:    &agentName,
-		ProviderName: &providerName,
-		ModelName:    &modelName,
-		CreatedAt:    now,
-		UpdatedAt:    now,
+		ID:        id,
+		Title:     title,
+		Settings:  &settingsStr,
+		CreatedAt: now,
+		UpdatedAt: now,
 	}
 
 	if err := m.store.CreateSession(ctx, sd); err != nil {
@@ -199,13 +202,11 @@ func (m *Manager) CreateSession(ctx context.Context, title string) (*Session, er
 	}
 
 	return &Session{
-		ID:           id,
-		Title:        title,
-		AgentName:    agentName,
-		ProviderName: providerName,
-		ModelName:    modelName,
-		CreatedAt:    now,
-		UpdatedAt:    now,
+		ID:        id,
+		Title:     title,
+		Settings:  settings,
+		CreatedAt: now,
+		UpdatedAt: now,
 	}, nil
 }
 
@@ -218,30 +219,22 @@ func (m *Manager) ListSessions(ctx context.Context) ([]Session, error) {
 
 	sessions := make([]Session, len(sds))
 	for i, sd := range sds {
-		agentName := ""
-		if sd.AgentName != nil {
-			agentName = *sd.AgentName
-		}
-		providerName := ""
-		if sd.ProviderName != nil {
-			providerName = *sd.ProviderName
-		}
-		modelName := ""
-		if sd.ModelName != nil {
-			modelName = *sd.ModelName
+		var settings model.SessionSettings
+		if sd.Settings != nil && *sd.Settings != "" {
+			_ = json.Unmarshal([]byte(*sd.Settings), &settings)
 		}
 
-		if agentName == "" || providerName == "" || modelName == "" {
+		if settings.AgentName == "" || settings.ProviderName == "" || settings.ModelName == "" {
 			defAgent, defProvider, defModel, err := m.resolveDefaults(ctx)
 			if err == nil {
-				if agentName == "" {
-					agentName = defAgent
+				if settings.AgentName == "" {
+					settings.AgentName = defAgent
 				}
-				if providerName == "" {
-					providerName = defProvider
+				if settings.ProviderName == "" {
+					settings.ProviderName = defProvider
 				}
-				if modelName == "" {
-					modelName = defModel
+				if settings.ModelName == "" {
+					settings.ModelName = defModel
 				}
 			}
 		}
@@ -257,9 +250,7 @@ func (m *Manager) ListSessions(ctx context.Context) ([]Session, error) {
 		sessions[i] = Session{
 			ID:              sd.ID,
 			Title:           sd.Title,
-			AgentName:       agentName,
-			ProviderName:    providerName,
-			ModelName:       modelName,
+			Settings:        settings,
 			LastTurnMetrics: metrics,
 			CreatedAt:       sd.CreatedAt,
 			UpdatedAt:       sd.UpdatedAt,
@@ -275,42 +266,32 @@ func (m *Manager) GetSession(ctx context.Context, id string) (*Session, error) {
 		return nil, err
 	}
 
-	agentName := ""
-	if sd.AgentName != nil {
-		agentName = *sd.AgentName
-	}
-	providerName := ""
-	if sd.ProviderName != nil {
-		providerName = *sd.ProviderName
-	}
-	modelName := ""
-	if sd.ModelName != nil {
-		modelName = *sd.ModelName
+	var settings model.SessionSettings
+	if sd.Settings != nil && *sd.Settings != "" {
+		_ = json.Unmarshal([]byte(*sd.Settings), &settings)
 	}
 
-	if agentName == "" || providerName == "" || modelName == "" {
+	if settings.AgentName == "" || settings.ProviderName == "" || settings.ModelName == "" {
 		defAgent, defProvider, defModel, err := m.resolveDefaults(ctx)
 		if err == nil {
-			if agentName == "" {
-				agentName = defAgent
+			if settings.AgentName == "" {
+				settings.AgentName = defAgent
 			}
-			if providerName == "" {
-				providerName = defProvider
+			if settings.ProviderName == "" {
+				settings.ProviderName = defProvider
 			}
-			if modelName == "" {
-				modelName = defModel
+			if settings.ModelName == "" {
+				settings.ModelName = defModel
 			}
 		}
 	}
 
 	return &Session{
-		ID:           sd.ID,
-		Title:        sd.Title,
-		AgentName:    agentName,
-		ProviderName: providerName,
-		ModelName:    modelName,
-		CreatedAt:    sd.CreatedAt,
-		UpdatedAt:    sd.UpdatedAt,
+		ID:        sd.ID,
+		Title:     sd.Title,
+		Settings:  settings,
+		CreatedAt: sd.CreatedAt,
+		UpdatedAt: sd.UpdatedAt,
 	}, nil
 }
 
@@ -611,18 +592,14 @@ func (m *Manager) runAgentLoop(runCtx context.Context, sessionID string, sess *A
 		return
 	}
 
-	agentName := ""
-	if sessData.AgentName != nil {
-		agentName = *sessData.AgentName
+	var sessionSettings model.SessionSettings
+	if sessData.Settings != nil && *sessData.Settings != "" {
+		_ = json.Unmarshal([]byte(*sessData.Settings), &sessionSettings)
 	}
-	providerName := ""
-	if sessData.ProviderName != nil {
-		providerName = *sessData.ProviderName
-	}
-	modelName := ""
-	if sessData.ModelName != nil {
-		modelName = *sessData.ModelName
-	}
+
+	agentName := sessionSettings.AgentName
+	providerName := sessionSettings.ProviderName
+	modelName := sessionSettings.ModelName
 
 	if agentName == "" || providerName == "" || modelName == "" {
 		defAgent, defProvider, defModel, err := m.resolveDefaults(runCtx)
@@ -639,10 +616,14 @@ func (m *Manager) runAgentLoop(runCtx context.Context, sessionID string, sess *A
 		}
 	}
 
+	var resolvedAgent *warp.ResolvedAgent
+	var matchingProvider *warp.ModelProvider
+
 	// Resolve agent system prompt
 	var systemPrompt string
 	if m.ws != nil && agentName != "" {
-		resolvedAgent, err := m.ws.ResolveAgent(runCtx, agentName)
+		var err error
+		resolvedAgent, err = m.ws.ResolveAgent(runCtx, agentName)
 		if err != nil {
 			m.setSessionError(sessionID, fmt.Errorf("failed to resolve agent %q: %w", agentName, err))
 			return
@@ -681,7 +662,6 @@ func (m *Manager) runAgentLoop(runCtx context.Context, sessionID string, sess *A
 	// Resolve LLM Provider
 	var provider llm.Provider
 	if m.ws != nil && providerName != "" {
-		var matchingProvider *warp.ModelProvider
 		for _, p := range m.ws.Providers() {
 			if p.GetName() == providerName {
 				matchingProvider = p
@@ -689,7 +669,7 @@ func (m *Manager) runAgentLoop(runCtx context.Context, sessionID string, sess *A
 			}
 		}
 		if matchingProvider != nil {
-			provider, err = createLoomProvider(runCtx, matchingProvider)
+			provider, err = model.CreateProvider(runCtx, matchingProvider)
 			if err != nil {
 				m.setSessionError(sessionID, fmt.Errorf("failed to create provider %q: %w", providerName, err))
 				return
@@ -697,9 +677,9 @@ func (m *Manager) runAgentLoop(runCtx context.Context, sessionID string, sess *A
 		}
 	}
 
-	// If no provider resolved, fallback to ollama default provider
+	// If no provider resolved, fallback to default provider
 	if provider == nil {
-		provider, err = loomollama.NewDefaultProvider()
+		provider, err = model.DefaultProvider()
 		if err != nil {
 			m.setSessionError(sessionID, fmt.Errorf("failed to create default provider: %w", err))
 			return
@@ -725,7 +705,14 @@ func (m *Manager) runAgentLoop(runCtx context.Context, sessionID string, sess *A
 			})
 		}
 	}
-	model, err := llm.NewModel(provider, modelName, nil)
+
+	model, err := model.New(runCtx, model.Config{
+		Provider:      provider,
+		ModelName:     modelName,
+		ModelProvider: matchingProvider,
+		Agent:         resolvedAgent,
+		Settings:      sessionSettings,
+	})
 	if err != nil {
 		m.setSessionError(sessionID, fmt.Errorf("failed to create model: %w", err))
 		return
@@ -1285,46 +1272,6 @@ func (m *Manager) resolveDefaults(ctx context.Context) (agentName, providerName,
 		return "main", "ollama", "qwen3.6:35b-a3b-coding-nvfp4", nil
 	}
 	return m.ws.ResolveDefaults(ctx)
-}
-
-func createLoomProvider(ctx context.Context, p *warp.ModelProvider) (llm.Provider, error) {
-	// Set endpoints and auth env variables dynamically
-	if p.Spec.Endpoint != "" {
-		switch p.Spec.Type {
-		case "ollama":
-			os.Setenv("OLLAMA_HOST", p.Spec.Endpoint)
-		case "openai":
-			os.Setenv("OPENAI_BASE_URL", p.Spec.Endpoint)
-		case "anthropic":
-			os.Setenv("ANTHROPIC_BASE_URL", p.Spec.Endpoint)
-		}
-	}
-	if p.Spec.Auth != nil && p.Spec.Auth.Env != "" {
-		val := os.Getenv(p.Spec.Auth.Env)
-		if val != "" {
-			switch p.Spec.Type {
-			case "openai":
-				os.Setenv("OPENAI_API_KEY", val)
-			case "anthropic":
-				os.Setenv("ANTHROPIC_API_KEY", val)
-			case "google-genai":
-				os.Setenv("GEMINI_API_KEY", val)
-			}
-		}
-	}
-
-	switch p.Spec.Type {
-	case "ollama":
-		return loomollama.NewDefaultProvider()
-	case "openai":
-		return loomopenai.NewDefaultProvider()
-	case "anthropic":
-		return loomanthropic.NewDefaultProvider()
-	case "google-genai":
-		return loomgenai.NewDefaultProvider(ctx)
-	default:
-		return nil, fmt.Errorf("unknown provider type: %s", p.Spec.Type)
-	}
 }
 
 // ListTodos retrieves the todos for a session from the SQLite store.

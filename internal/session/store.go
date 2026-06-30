@@ -5,6 +5,7 @@ import (
 	"time"
 
 	loomsqlite "github.com/masterkeysrd/loom/checkpoint/sqlite"
+	"github.com/masterkeysrd/tasksmith/internal/agent/model"
 	"github.com/masterkeysrd/tasksmith/internal/session/resource"
 )
 
@@ -12,11 +13,9 @@ import (
 type SessionData struct {
 	ID              string    `db:"id"`
 	Title           string    `db:"title"`
-	AgentName       *string   `db:"agent_name"`
-	ProviderName    *string   `db:"provider_name"`
-	ModelName       *string   `db:"model_name"`
 	Todos           *string   `db:"todos"`
 	LastTurnMetrics *string   `db:"last_turn_metrics"`
+	Settings        *string   `db:"settings"`
 	CreatedAt       time.Time `db:"created_at"`
 	UpdatedAt       time.Time `db:"updated_at"`
 }
@@ -49,9 +48,7 @@ type MessageData struct {
 
 // SessionConfig represents the LLM configuration details of a session.
 type SessionConfig struct {
-	AgentName    string `db:"agent_name"`
-	ProviderName string `db:"provider_name"`
-	ModelName    string `db:"model_name"`
+	Settings model.SessionSettings `db:"settings"`
 }
 
 // Store defines the storage repository contract.

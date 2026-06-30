@@ -623,9 +623,9 @@ var View = kitex.FCC("StatusLine", func(props Props) kitex.Node {
 	if sessionsQuery.Data != nil && sessionID != "" {
 		for _, s := range sessionsQuery.Data.Sessions {
 			if s.ID == sessionID {
-				agentName = s.AgentName
-				providerName = s.ProviderName
-				modelName = s.ModelName
+				agentName = s.Settings.AgentName
+				providerName = s.Settings.ProviderName
+				modelName = s.Settings.ModelName
 				metrics = s.LastTurnMetrics
 				break
 			}

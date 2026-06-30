@@ -249,6 +249,8 @@ You have access to specialized knowledge modules called "Skills". Each skill pro
 The following list defines the skills you can load. Treat the description of each skill as a **trigger**: if your current task or sub-task involves the concepts mentioned in a skill's description, you must activate that skill to access the required knowledge.
 {{range .Agent.Skills}}
 - **{{.Name}}**: {{.Description}}
+  {{if .Spec.UseWhen}}*Use when*: {{.Spec.UseWhen}}{{end}}
+  {{if .Spec.Keywords}}*Keywords*: {{range $index, $el := .Spec.Keywords}}{{if $index}}, {{end}}{{$el}}{{end}}{{end}}
 {{end}}
 
 ## Skill Usage

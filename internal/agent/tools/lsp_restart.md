@@ -6,7 +6,7 @@ metadata:
   labels:
     category: lsp
 spec:
-  parameters:
+  inputSchema:
     type: object
     properties:
       server:

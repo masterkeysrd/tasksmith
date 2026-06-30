@@ -69,10 +69,17 @@ var (
 				AlignItems(style.AlignCenter).
 				JustifyContent(style.JustifyBetween).
 				PaddingHorizontal(1).
-				PaddingVertical(0).
-				MarginBottom(1)
+				PaddingVertical(0)
 
 	PickerInputContainerStyle = style.S().
+					Display(style.DisplayFlex).
+					FlexDirection(style.FlexRow).
+					AlignItems(style.AlignCenter).
+					PaddingHorizontal(1).
+					PaddingVertical(0).
+					MarginTop(0)
+
+	PickerInputBorderedStyle = style.S().
 					Display(style.DisplayFlex).
 					FlexDirection(style.FlexRow).
 					AlignItems(style.AlignCenter).
@@ -89,7 +96,7 @@ var (
 				FlexDirection(style.FlexRow).
 				AlignItems(style.AlignCenter).
 				JustifyContent(style.JustifyBetween).
-				Padding(1)
+				PaddingHorizontal(1)
 
 	PickerFooterTipStyle = style.S().
 				Display(style.DisplayFlex).
@@ -478,7 +485,6 @@ var Picker = kitex.FC("Picker", func(props PickerProps) kitex.Node {
 	groupHeaderFg := t.Color.Text.Tertiary
 	footerBg := t.Color.Surface.BaseDisabled
 	textPrimary := t.Color.Text.Primary
-	textSecondary := t.Color.Text.Secondary
 	textTertiary := t.Color.Text.Tertiary
 	textTertiaryHover := t.Color.Text.Tertiary
 
@@ -508,11 +514,15 @@ var Picker = kitex.FC("Picker", func(props PickerProps) kitex.Node {
 	},
 		inputNode,
 		Input(InputProps{
-			Ref:              inputRef,
-			Value:            query(),
-			Placeholder:      props.Placeholder,
-			Variant:          InputSolid,
-			Style:            style.S().Background(inputBg).Border(false).Padding(0).Height(style.Cells(1)),
+			Ref:         inputRef,
+			Value:       query(),
+			Placeholder: props.Placeholder,
+			Variant:     InputSolid,
+			Style: style.S().
+				Background(inputBg).
+				Border(false).
+				Padding(0).
+				Height(style.Cells(1)),
 			PlaceholderStyle: style.S().Foreground(textTertiary),
 			OnChange: func(v string) {
 				setQuery(v)
@@ -531,7 +541,7 @@ var Picker = kitex.FC("Picker", func(props PickerProps) kitex.Node {
 			var groupItemsNodes []kitex.Node
 			for _, item := range group.Items {
 				if flatIndex >= start && flatIndex < end {
-					groupItemsNodes = append(groupItemsNodes, renderPickerItem(t, item, flatIndex, selectedIndex(), scrollOffset(), props.RenderItem))
+					groupItemsNodes = append(groupItemsNodes, renderPickerItem(t, item, flatIndex, selectedIndex(), props.RenderItem))
 					groupVisibleItems++
 				}
 				flatIndex++
@@ -564,7 +574,7 @@ var Picker = kitex.FC("Picker", func(props PickerProps) kitex.Node {
 	} else {
 		for _, item := range visibleItems {
 			if flatIndex >= start && flatIndex < end {
-				bodyNodes = append(bodyNodes, renderPickerItem(t, item, flatIndex, selectedIndex(), scrollOffset(), props.RenderItem))
+				bodyNodes = append(bodyNodes, renderPickerItem(t, item, flatIndex, selectedIndex(), props.RenderItem))
 			}
 			flatIndex++
 		}
@@ -640,6 +650,60 @@ var Picker = kitex.FC("Picker", func(props PickerProps) kitex.Node {
 	footerStyle := PickerFooterStyle.Merge(props.FooterStyle).
 		Background(footerBg)
 
+	footerNavStyle := style.S().
+		Display(style.DisplayFlex).
+		FlexDirection(style.FlexRow).
+		Foreground(textTertiary).
+		AlignItems(style.AlignCenter).
+		Flex(1).
+		Gap(2)
+
+	footerNav := kitex.Box(kitex.BoxProps{
+		Style: footerNavStyle,
+	},
+		kitex.Box(kitex.BoxProps{
+			Style: style.S().
+				Display(style.DisplayFlex).
+				Gap(1),
+		},
+			kitex.Box(kitex.BoxProps{
+				Style: style.S().
+					Background(t.Color.Surface.BaseFocus).
+					TextAlign(style.TextAlignCenter)}, kitex.Text("↑"),
+			),
+			kitex.Box(kitex.BoxProps{
+				Style: style.S().
+					Background(t.Color.Surface.BaseFocus).
+					TextAlign(style.TextAlignCenter)}, kitex.Text("↓"),
+			),
+			kitex.Text("NAVIGATE"),
+		),
+		kitex.Box(kitex.BoxProps{
+			Style: style.S().
+				Display(style.DisplayFlex).
+				Gap(1),
+		},
+			kitex.Box(kitex.BoxProps{
+				Style: style.S().
+					Background(t.Color.Surface.BaseFocus).
+					TextAlign(style.TextAlignCenter)}, kitex.Text("↵"),
+			),
+			kitex.Text("SELECT"),
+		),
+		kitex.Box(kitex.BoxProps{
+			Style: style.S().
+				Display(style.DisplayFlex).
+				Gap(1),
+		},
+			kitex.Box(kitex.BoxProps{
+				Style: style.S().
+					Background(t.Color.Surface.BaseFocus).
+					TextAlign(style.TextAlignCenter)}, kitex.Text("Esc"),
+			),
+			kitex.Text("CLOSE"),
+		),
+	)
+
 	var previewNode kitex.Node
 	if props.RenderPreview != nil && props.PreviewWidth > 0 && total > 0 && selectedIndex() < len(flatVisible) {
 		item := flatVisible[selectedIndex()]
@@ -647,12 +711,9 @@ var Picker = kitex.FC("Picker", func(props PickerProps) kitex.Node {
 			Style: style.S().
 				Flex(6, 6, style.Cells(0)).
 				MinWidth(style.Cells(props.PreviewWidth)).
-				BorderLeft(true, style.SingleBorder().Color(t.Color.Border.Primary)).
-				Background(t.Color.Surface.Base),
+				// BorderLeft(true, style.SingleBorder().Color(t.Color.Border.Primary)).
+				Background(t.Color.Surface.BaseFocus),
 		},
-			kitex.Box(kitex.BoxProps{
-				Style: style.S().Foreground(textSecondary).Bold(true).MarginBottom(1),
-			}, kitex.Text("DETAILS")),
 			props.RenderPreview(item),
 		)
 	}
@@ -672,12 +733,19 @@ var Picker = kitex.FC("Picker", func(props PickerProps) kitex.Node {
 				headerRight,
 			),
 			kitex.Box(kitex.BoxProps{
-				Style: PickerInputContainerStyle.BorderBottom(true, style.SingleBorder(), borderColor),
+				Style: PickerInputBorderedStyle.Border(true, style.SingleBorder().Color(borderColor)),
 			},
 				inputNode,
+				kitex.Box(kitex.BoxProps{
+					Style: style.S().Display(style.DisplayFlex).AlignItems(style.AlignCenter).PaddingHorizontal(1).MinWidth(style.Cells(10)),
+				},
+					kitex.Box(kitex.BoxProps{Style: style.S().Foreground(textTertiary)},
+						kitex.Text(strconv.Itoa(total)+" MATCHES"),
+					),
+				),
 			),
 			kitex.Box(kitex.BoxProps{
-				Style: style.S().Display(style.DisplayFlex).Flex(1, 1, style.Cells(0)).MinHeight(style.Cells(0)),
+				Style: style.S().Display(style.DisplayFlex).Flex(1, 1, style.Cells(0)).MinHeight(style.Cells(0)).PaddingVertical(1),
 			},
 				kitex.Box(kitex.BoxProps{
 					Style: PickerBodyStyle,
@@ -692,13 +760,27 @@ var Picker = kitex.FC("Picker", func(props PickerProps) kitex.Node {
 				return kitex.Fragment(footerNodes...)
 			}),
 			kitex.Box(kitex.BoxProps{
-				Style: footerStyle.BorderTop(true, style.SingleBorder(), borderColor),
-			}, footerContent),
+				Style: footerStyle,
+			},
+				kitex.Box(kitex.BoxProps{
+					Style: style.S().Display(style.DisplayFlex).
+						FlexDirection(style.FlexRow).
+						Flex(1).
+						Gap(2).JustifyContent(style.JustifyBetween),
+				},
+					footerNav,
+					kitex.Box(kitex.BoxProps{
+						Style: style.S().Display(style.DisplayFlex).FlexDirection(style.FlexRow).Gap(2),
+					},
+						footerContent,
+					),
+				),
+			),
 		),
 	)
 })
 
-func renderPickerItem(t *theme.Scheme, item PickerItem, index, selectedIndex, scrollOffset int, customRenderer func(PickerItem) kitex.Node) kitex.Node {
+func renderPickerItem(t *theme.Scheme, item PickerItem, index, selectedIndex int, customRenderer func(PickerItem) kitex.Node) kitex.Node {
 	if customRenderer != nil {
 		return customRenderer(item)
 	}

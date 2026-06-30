@@ -4,6 +4,9 @@ kind: Skill
 metadata:
   name: golang
   description: "Go coding conventions, best practices, formatting rules, testing guidelines, and circular import avoidance strategies."
+spec:
+  useWhen: "writing or reviewing Go code, designing interfaces, resolving package dependencies, wrapping errors, managing context for async operations, writing unit tests, or formatting and linting Go source files"
+  keywords: [go, golang, conventions, testing, formatting]
 ---
 # Go (Golang) Development Skill
 

@@ -21,15 +21,15 @@ type localTool struct {
 	} `yaml:"metadata"`
 	Spec struct {
 		Description  string         `yaml:"description"`
-		Parameters   map[string]any `yaml:"parameters"`
+		InputSchema  map[string]any `yaml:"inputSchema"`
 		OutputSchema map[string]any `yaml:"outputSchema"`
 	} `yaml:"spec"`
 }
 
 type genConfig struct {
 	Tools map[string]struct {
-		Parameters map[string]any `yaml:"parameters"`
-		Output     map[string]any `yaml:"output"`
+		InputSchema map[string]any `yaml:"inputSchema"`
+		Output      map[string]any `yaml:"output"`
 	} `yaml:"tools"`
 }
 
@@ -102,11 +102,11 @@ func main() {
 
 		// Merge overrides/additions from config
 		if toolCfg, ok := config.Tools[tool.Metadata.Name]; ok {
-			if len(toolCfg.Parameters) > 0 {
-				if tool.Spec.Parameters == nil {
-					tool.Spec.Parameters = make(map[string]any)
+			if len(toolCfg.InputSchema) > 0 {
+				if tool.Spec.InputSchema == nil {
+					tool.Spec.InputSchema = make(map[string]any)
 				}
-				mergeMaps(tool.Spec.Parameters, toolCfg.Parameters)
+				mergeMaps(tool.Spec.InputSchema, toolCfg.InputSchema)
 			}
 			if len(toolCfg.Output) > 0 {
 				if tool.Spec.OutputSchema == nil {
@@ -132,7 +132,7 @@ func main() {
 		argsDoc := fmt.Sprintf("%s defines the arguments for the %q tool.\n\n%s", structName, tool.Metadata.Name, description)
 		generateStructs(&buf, structJob{
 			name:   structName,
-			schema: tool.Spec.Parameters,
+			schema: tool.Spec.InputSchema,
 			doc:    argsDoc,
 		})
 
