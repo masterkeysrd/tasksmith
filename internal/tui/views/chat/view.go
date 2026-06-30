@@ -245,8 +245,26 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 	}
 
 	kitex.UseEffect(func() {
-		setSelectedScopeIndex(1) // Default to Session (1)
-		setFocusedItem(FocusItemSession)
+		defaultIdx := 1
+		defaultFocusedItem := FocusItemSession
+		if len(pendingAuthorizations) > 0 {
+			defaultIdx = getDefaultScopeIndex(pendingAuthorizations[0], 0)
+			allowed := getAllowedScopes(pendingAuthorizations[0], 0)
+			if len(allowed) > 0 {
+				switch allowed[defaultIdx] {
+				case permissions.ScopeOnce:
+					defaultFocusedItem = FocusItemOnce
+				case permissions.ScopeSession:
+					defaultFocusedItem = FocusItemSession
+				case permissions.ScopeWorkspace:
+					defaultFocusedItem = FocusItemWorkspace
+				case permissions.ScopeGlobal:
+					defaultFocusedItem = FocusItemGlobal
+				}
+			}
+		}
+		setSelectedScopeIndex(defaultIdx)
+		setFocusedItem(defaultFocusedItem)
 		setCurrentPageIndex(0)
 		setSelectedOptions(map[string]int{})
 		setSelectedDirs(map[string]int{})
@@ -274,8 +292,24 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 		nextIdx := currentPendingIndex() + 1
 		if nextIdx < len(pendingAuthorizations) {
 			setCurrentPendingIndex(nextIdx)
-			setSelectedScopeIndex(1) // default to Session
-			setFocusedItem(FocusItemSession)
+			nextReq := pendingAuthorizations[nextIdx]
+			defaultIdx := getDefaultScopeIndex(nextReq, 0)
+			defaultFocusedItem := FocusItemSession
+			allowed := getAllowedScopes(nextReq, 0)
+			if len(allowed) > 0 {
+				switch allowed[defaultIdx] {
+				case permissions.ScopeOnce:
+					defaultFocusedItem = FocusItemOnce
+				case permissions.ScopeSession:
+					defaultFocusedItem = FocusItemSession
+				case permissions.ScopeWorkspace:
+					defaultFocusedItem = FocusItemWorkspace
+				case permissions.ScopeGlobal:
+					defaultFocusedItem = FocusItemGlobal
+				}
+			}
+			setSelectedScopeIndex(defaultIdx)
+			setFocusedItem(defaultFocusedItem)
 			setCurrentPageIndex(0)
 			setSelectedOptions(map[string]int{})
 			setSelectedDirs(map[string]int{})
@@ -375,6 +409,13 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 		}
 		req := pendingAuthsRef.Current[currIdx]
 
+		scope := permissions.ScopeOnce
+		allowed := getAllowedScopes(req, 0)
+		idx := selectedScopeIndexRef.Current
+		if idx >= 0 && idx < len(allowed) {
+			scope = allowed[idx]
+		}
+
 		var decisions []permissions.GrantDecision
 		for _, gr := range req.GrantRequests {
 			optIdx := selectedOptionsRef.Current[gr.ID]
@@ -399,19 +440,8 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 				RequestID:        gr.ID,
 				SelectedTarget:   target,
 				AllowedDirectory: allowedDir,
+				Scope:            scope,
 			})
-		}
-
-		scope := permissions.ScopeOnce
-		switch selectedScopeIndexRef.Current {
-		case 0:
-			scope = permissions.ScopeOnce
-		case 1:
-			scope = permissions.ScopeSession
-		case 2:
-			scope = permissions.ScopeWorkspace
-		case 3:
-			scope = permissions.ScopeGlobal
 		}
 
 		if recordDecisionRef.Current != nil {
@@ -462,25 +492,52 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 			req := pendingAuthsRef.Current[currIdx]
 
 			getVisibleItems := func(scopeIdx int, req permissions.AuthorizationRequest, page int) []FocusItem {
-				items := []FocusItem{FocusItemOnce, FocusItemSession}
+				var items []FocusItem
+				allowed := getAllowedScopes(req, page)
+
+				for idx, scope := range allowed {
+					switch scope {
+					case permissions.ScopeOnce:
+						items = append(items, FocusItemOnce)
+					case permissions.ScopeSession:
+						items = append(items, FocusItemSession)
+						if len(req.GrantRequests) > page {
+							gr := req.GrantRequests[page]
+							if scopeIdx == idx && len(gr.Options) > 0 {
+								items = append(items, FocusItemSessionCmd)
+							}
+						}
+					case permissions.ScopeWorkspace:
+						items = append(items, FocusItemWorkspace)
+						if len(req.GrantRequests) > page {
+							gr := req.GrantRequests[page]
+							if scopeIdx == idx && len(gr.Options) > 0 {
+								items = append(items, FocusItemWorkspaceCmd)
+							}
+						}
+					case permissions.ScopeGlobal:
+						items = append(items, FocusItemGlobal)
+						if len(req.GrantRequests) > page {
+							gr := req.GrantRequests[page]
+							if scopeIdx == idx && len(gr.Options) > 0 {
+								items = append(items, FocusItemGlobalCmd)
+							}
+						}
+					}
+				}
+
 				if len(req.GrantRequests) > page {
 					gr := req.GrantRequests[page]
-					if scopeIdx == 1 && len(gr.Options) > 0 {
-						items = append(items, FocusItemSessionCmd)
+					onceIdx := -1
+					for idx, scope := range allowed {
+						if scope == permissions.ScopeOnce {
+							onceIdx = idx
+							break
+						}
 					}
-					items = append(items, FocusItemWorkspace)
-					if scopeIdx == 2 && len(gr.Options) > 0 {
-						items = append(items, FocusItemWorkspaceCmd)
-					}
-					items = append(items, FocusItemGlobal)
-					if scopeIdx == 3 && len(gr.Options) > 0 {
-						items = append(items, FocusItemGlobalCmd)
-					}
-					if scopeIdx > 0 && len(gr.DirectoryOptions) > 0 {
+					if scopeIdx != onceIdx && len(gr.DirectoryOptions) > 0 {
 						items = append(items, FocusItemDirectory)
 					}
-				} else {
-					items = append(items, FocusItemWorkspace, FocusItemGlobal)
 				}
 				return items
 			}
@@ -503,15 +560,22 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 				newItem := items[newIdx]
 				setFocusedItem(newItem)
 
+				var targetScope permissions.PermissionScope
 				switch newItem {
 				case FocusItemOnce:
-					setSelectedScopeIndex(0)
+					targetScope = permissions.ScopeOnce
 				case FocusItemSession:
-					setSelectedScopeIndex(1)
+					targetScope = permissions.ScopeSession
 				case FocusItemWorkspace:
-					setSelectedScopeIndex(2)
+					targetScope = permissions.ScopeWorkspace
 				case FocusItemGlobal:
-					setSelectedScopeIndex(3)
+					targetScope = permissions.ScopeGlobal
+				}
+				if targetScope != "" {
+					targetScopeIdx := getScopeIndex(req, currPage, targetScope)
+					if targetScopeIdx != -1 {
+						setSelectedScopeIndex(targetScopeIdx)
+					}
 				}
 				return
 			}
@@ -531,15 +595,22 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 				newItem := items[newIdx]
 				setFocusedItem(newItem)
 
+				var targetScope permissions.PermissionScope
 				switch newItem {
 				case FocusItemOnce:
-					setSelectedScopeIndex(0)
+					targetScope = permissions.ScopeOnce
 				case FocusItemSession:
-					setSelectedScopeIndex(1)
+					targetScope = permissions.ScopeSession
 				case FocusItemWorkspace:
-					setSelectedScopeIndex(2)
+					targetScope = permissions.ScopeWorkspace
 				case FocusItemGlobal:
-					setSelectedScopeIndex(3)
+					targetScope = permissions.ScopeGlobal
+				}
+				if targetScope != "" {
+					targetScopeIdx := getScopeIndex(req, currPage, targetScope)
+					if targetScopeIdx != -1 {
+						setSelectedScopeIndex(targetScopeIdx)
+					}
 				}
 				return
 			}
@@ -787,6 +858,43 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 
 	sendMessage := func(text string, force ...bool) {
 		if text == "" || submitting() {
+			return
+		}
+
+		if strings.HasPrefix(text, "/mode ") {
+			modeStr := strings.TrimSpace(strings.TrimPrefix(text, "/mode "))
+			var mode permissions.PermissionMode
+			switch modeStr {
+			case "auto":
+				mode = permissions.ModeAuto
+			case "default":
+				mode = permissions.ModeDefault
+			case "strict":
+				mode = permissions.ModeStrict
+			default:
+				toast.AddErrorMessage("Invalid Mode", fmt.Sprintf("Unknown permission mode %q. Use 'auto', 'default', or 'strict'.", modeStr))
+				setInputValue("")
+				return
+			}
+
+			setInputValue("")
+			setSubmitting(true)
+			promise.New(func(ctx context.Context) (bool, error) {
+				_, err := client.SetPermissionMode(ctx, api.SetPermissionModeRequest{
+					SessionID: sessionID,
+					Mode:      mode,
+					Scope:     permissions.ScopeSession,
+				})
+				if err != nil {
+					return false, err
+				}
+				return true, nil
+			}).Then(func(success bool) {
+				setSubmitting(false)
+				windClient.InvalidateQueries(api.GetSessionStateRequest{SessionID: sessionID})
+			}, func(err error) {
+				setSubmitting(false)
+			})
 			return
 		}
 
@@ -1195,70 +1303,99 @@ type ToolExecutionProps struct {
 }
 
 var ToolExecution = kitex.FC("ToolExecution", func(props ToolExecutionProps) kitex.Node {
-	if props.ToolCall != nil && props.ToolCall.Name == "bash" {
-		return BashToolWidget(props)
+	var node kitex.Node
+
+	if props.ToolCall != nil {
+		switch props.ToolCall.Name {
+		case "bash":
+			node = BashToolWidget(props)
+		case "view":
+			node = ViewToolWidget(props)
+		case "ls":
+			node = LsToolWidget(props)
+		case "glob":
+			node = GlobToolWidget(props)
+		case "lsp_diagnostics":
+			node = LspDiagnosticsToolWidget(props)
+		case "lsp_restart":
+			node = LspRestartToolWidget(props)
+		case "lsp_symbols":
+			node = LspSymbolsToolWidget(props)
+		case "lsp_inspect":
+			node = LspInspectToolWidget(props)
+		case "grep":
+			node = GrepToolWidget(props)
+		case "write":
+			node = WriteToolWidget(props)
+		case "edit":
+			node = EditToolWidget(props)
+		case "multi_edit":
+			node = MultiEditToolWidget(props)
+		case "remove":
+			node = RemoveToolWidget(props)
+		case "tasks":
+			node = TasksToolWidget(props)
+		case "web_search":
+			node = WebSearchToolWidget(props)
+		case "web_fetch":
+			node = WebFetchToolWidget(props)
+		case "download":
+			node = DownloadToolWidget(props)
+		case "fetch":
+			node = FetchToolWidget(props)
+		case "activate_skill":
+			node = ActivateSkillToolWidget(props)
+		case "todos":
+			node = TodosToolWidget(props)
+		default:
+			node = genericToolWidget(props)
+		}
 	}
-	if props.ToolCall != nil && props.ToolCall.Name == "view" {
-		return ViewToolWidget(props)
-	}
-	if props.ToolCall != nil && props.ToolCall.Name == "ls" {
-		return LsToolWidget(props)
-	}
-	if props.ToolCall != nil && props.ToolCall.Name == "glob" {
-		return GlobToolWidget(props)
-	}
-	if props.ToolCall != nil && props.ToolCall.Name == "lsp_diagnostics" {
-		return LspDiagnosticsToolWidget(props)
-	}
-	if props.ToolCall != nil && props.ToolCall.Name == "lsp_restart" {
-		return LspRestartToolWidget(props)
-	}
-	if props.ToolCall != nil && props.ToolCall.Name == "lsp_symbols" {
-		return LspSymbolsToolWidget(props)
-	}
-	if props.ToolCall != nil && props.ToolCall.Name == "lsp_inspect" {
-		return LspInspectToolWidget(props)
-	}
-	if props.ToolCall != nil && props.ToolCall.Name == "grep" {
-		return GrepToolWidget(props)
-	}
-	if props.ToolCall != nil && props.ToolCall.Name == "write" {
-		return WriteToolWidget(props)
-	}
-	if props.ToolCall != nil && props.ToolCall.Name == "edit" {
-		return EditToolWidget(props)
-	}
-	if props.ToolCall != nil && props.ToolCall.Name == "multi_edit" {
-		return MultiEditToolWidget(props)
-	}
-	if props.ToolCall != nil && props.ToolCall.Name == "remove" {
-		return RemoveToolWidget(props)
-	}
-	if props.ToolCall != nil && props.ToolCall.Name == "tasks" {
-		return TasksToolWidget(props)
-	}
-	if props.ToolCall != nil && props.ToolCall.Name == "web_search" {
-		return WebSearchToolWidget(props)
-	}
-	if props.ToolCall != nil && props.ToolCall.Name == "web_fetch" {
-		return WebFetchToolWidget(props)
-	}
-	if props.ToolCall != nil && props.ToolCall.Name == "download" {
-		return DownloadToolWidget(props)
-	}
-	if props.ToolCall != nil && props.ToolCall.Name == "fetch" {
-		return FetchToolWidget(props)
-	}
-	if props.ToolCall != nil && props.ToolCall.Name == "activate_skill" {
-		return ActivateSkillToolWidget(props)
-	}
-	if props.ToolCall != nil && props.ToolCall.Name == "todos" {
-		return TodosToolWidget(props)
-	}
-	if props.ToolCall != nil || props.ToolCall == nil {
+
+	if node == nil {
 		return nil
 	}
 
+	t := theme.UseTheme()
+	if t == nil {
+		return node
+	}
+
+	isAutoApproved := false
+	if props.ToolMessage != nil {
+		meta := props.ToolMessage.GetMetadata()
+		log.Info(fmt.Sprintf("[TUI] ToolExecution for %q: metadata=%+v", props.ToolCall.Name, meta))
+		if meta != nil {
+			if val, ok := meta["auto_approved"].(bool); ok && val {
+				isAutoApproved = true
+			} else if val, ok := meta["auto_approved"].(string); ok && val == "true" {
+				isAutoApproved = true
+			}
+		}
+	} else {
+		log.Info(fmt.Sprintf("[TUI] ToolExecution for %q: ToolMessage is nil", props.ToolCall.Name))
+	}
+
+	if isAutoApproved && props.ToolCall.Name != "bash" {
+		return kitex.Box(kitex.BoxProps{
+			Style: style.S().
+				Display(style.DisplayFlex).
+				FlexDirection(style.FlexRow).
+				AlignItems(style.AlignCenter).
+				JustifyContent(style.JustifyBetween).
+				Width(style.Percent(100)),
+		},
+			node,
+			kitex.Span(kitex.SpanProps{
+				Style: style.S().Foreground(t.Color.Text.Magenta).Bold(true).MarginRight(1),
+			}, kitex.Text("[󰚩 Auto-Approved]")),
+		)
+	}
+
+	return node
+})
+
+var genericToolWidget = kitex.FC("genericToolWidget", func(props ToolExecutionProps) kitex.Node {
 	t := theme.UseTheme()
 	isOpen, setIsOpen := kitex.UseState(true)
 	hasAutoCollapsed, setHasAutoCollapsed := kitex.UseState(false)
@@ -1750,4 +1887,24 @@ func getTargetOptionForHorizontal(options []permissions.PermissionOption, hIdx i
 		hIdx = len(options) - 1
 	}
 	return options[hIdx]
+}
+
+func getScopeIndex(req permissions.AuthorizationRequest, page int, scope permissions.PermissionScope) int {
+	allowed := getAllowedScopes(req, page)
+	for idx, s := range allowed {
+		if s == scope {
+			return idx
+		}
+	}
+	return -1
+}
+
+func getDefaultScopeIndex(req permissions.AuthorizationRequest, page int) int {
+	allowed := getAllowedScopes(req, page)
+	for idx, s := range allowed {
+		if s == permissions.ScopeSession {
+			return idx
+		}
+	}
+	return 0
 }

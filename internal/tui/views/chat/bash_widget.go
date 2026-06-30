@@ -21,6 +21,15 @@ var BashToolWidget = kitex.FC("BashToolWidget", func(props ToolExecutionProps) k
 	tc := props.ToolCall
 	tm := props.ToolMessage
 
+	isAutoApproved := false
+	if tm != nil && tm.GetMetadata() != nil {
+		if val, ok := tm.GetMetadata()["auto_approved"].(bool); ok && val {
+			isAutoApproved = true
+		} else if val, ok := tm.GetMetadata()["auto_approved"].(string); ok && val == "true" {
+			isAutoApproved = true
+		}
+	}
+
 	// Extract command and description from args
 	command := ""
 	description := ""
@@ -162,21 +171,34 @@ var BashToolWidget = kitex.FC("BashToolWidget", func(props ToolExecutionProps) k
 					iconNode,
 					kitex.Span(kitex.SpanProps{Style: style.S().Bold(true)}, kitex.Text(" "+statusLabel)),
 				),
-				kitex.If(isFinished, func() kitex.Node {
-					var label string
-					if isOpen() {
-						label = "▲ COLLAPSE"
-					} else {
-						label = "▼ EXPAND"
-					}
-					var textCol color.Color
-					if t != nil {
-						textCol = t.Color.Text.Secondary
-					}
-					return kitex.Span(kitex.SpanProps{
-						Style: style.S().Foreground(textCol),
-					}, kitex.Text(label))
-				}),
+				kitex.Box(kitex.BoxProps{
+					Style: style.S().
+						Display(style.DisplayFlex).
+						FlexDirection(style.FlexRow).
+						AlignItems(style.AlignCenter).
+						Gap(2),
+				},
+					kitex.If(isAutoApproved, func() kitex.Node {
+						return kitex.Span(kitex.SpanProps{
+							Style: style.S().Foreground(t.Color.Text.Magenta).Bold(true),
+						}, kitex.Text("[󰚩 Auto-Approved]"))
+					}),
+					kitex.If(isFinished, func() kitex.Node {
+						var label string
+						if isOpen() {
+							label = "▲ COLLAPSE"
+						} else {
+							label = "▼ EXPAND"
+						}
+						var textCol color.Color
+						if t != nil {
+							textCol = t.Color.Text.Secondary
+						}
+						return kitex.Span(kitex.SpanProps{
+							Style: style.S().Foreground(textCol),
+						}, kitex.Text(label))
+					}),
+				),
 			),
 			kitex.If(isOpen(), func() kitex.Node {
 				return kitex.Box(kitex.BoxProps{Style: bodyStyle},

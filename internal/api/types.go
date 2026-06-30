@@ -275,6 +275,18 @@ type GetSessionStateResponse struct {
 	PendingAuthorizations []permissions.AuthorizationRequest `json:"pending_authorizations,omitempty"`
 	PendingLspSuggestions []LspSuggestion                    `json:"pending_lsp_suggestions,omitempty"`
 	PendingMcpRequests    []PendingMcpRequest                `json:"pending_mcp_requests,omitempty"`
+	PermissionMode        permissions.PermissionMode         `json:"permission_mode,omitempty"`
+}
+
+type SetPermissionModeRequest struct {
+	SessionID string                      `json:"session_id"`
+	Mode      permissions.PermissionMode  `json:"mode"`
+	Scope     permissions.PermissionScope `json:"scope"`
+}
+
+type SetPermissionModeResponse struct {
+	Success bool   `json:"success"`
+	Error   string `json:"error,omitempty"`
 }
 
 type ResolveMcpRequest struct {

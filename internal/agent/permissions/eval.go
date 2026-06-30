@@ -24,6 +24,13 @@ func (h *GenericPermissionHandler) GetPermissionGroup() string {
 
 // Evaluate performs the standard evaluation based on tool settings and permission mode.
 func (h *GenericPermissionHandler) Evaluate(ctx context.Context, req ToolCallRequest, mode PermissionMode, grants []Permission) EvaluationResult {
+	if mode == ModeStrict {
+		return EvaluationResult{
+			State: StateRequiresAuth,
+			Hints: nil,
+		}
+	}
+
 	if state, found := EvaluateGrants(grants, func(p Permission) bool {
 		return p.Target == "*"
 	}); found {
@@ -38,8 +45,7 @@ func (h *GenericPermissionHandler) Evaluate(ctx context.Context, req ToolCallReq
 				Hints: []string{fmt.Sprintf("Auto mode prompt: tool %q is sensitive", h.ToolName)},
 			}
 		}
-		return EvaluationResult{State: StateExplicitAllow}
-
+		return EvaluationResult{State: StateAuto}
 	case ModeStrict:
 		return EvaluationResult{
 			State: StateRequiresAuth,
@@ -118,91 +124,85 @@ func EvaluateToolCall(
 		}
 
 		if decision.Approved {
-			if decision.Scope != ScopeOnce {
-				desc := req.UserHint
-				if desc == "" {
-					desc = req.Description
+			desc := req.UserHint
+			if desc == "" {
+				desc = req.Description
+			}
+			if idx := strings.Index(desc, "\n"); idx != -1 {
+				desc = strings.TrimSpace(desc[:idx])
+			}
+
+			var grantRequests []PermissionGrantRequest
+			if multiHandler, ok := handler.(interface {
+				GetGrantRequests(ctx context.Context, req ToolCallRequest, mode PermissionMode, grants []Permission) []PermissionGrantRequest
+			}); ok {
+				grantRequests = multiHandler.GetGrantRequests(ctx, req, pm.GetMode(ctx), pm.GetGrants(ctx, handler.GetPermissionGroup()))
+			} else {
+				grantRequests = []PermissionGrantRequest{
+					{
+						ID:          "default",
+						Description: desc,
+						Options:     handler.GetOptions(req),
+					},
 				}
-				if idx := strings.Index(desc, "\n"); idx != -1 {
-					desc = strings.TrimSpace(desc[:idx])
+			}
+
+			for _, dec := range decision.GrantDecisions {
+				if dec.Scope == ScopeOnce {
+					continue
 				}
 
-				var grantRequests []PermissionGrantRequest
-				if multiHandler, ok := handler.(interface {
-					GetGrantRequests(ctx context.Context, req ToolCallRequest, mode PermissionMode, grants []Permission) []PermissionGrantRequest
-				}); ok {
-					grantRequests = multiHandler.GetGrantRequests(ctx, req, pm.GetMode(ctx), pm.GetGrants(ctx, handler.GetPermissionGroup()))
-				} else {
-					grantRequests = []PermissionGrantRequest{
-						{
-							ID:          "default",
-							Description: desc,
-							Options:     handler.GetOptions(req),
-						},
+				matchMethod := "exact"
+				if dec.SelectedTarget == "*" {
+					matchMethod = "wildcard"
+				}
+				action := ActionAllow
+
+				found := false
+				for _, gr := range grantRequests {
+					if gr.ID == dec.RequestID {
+						for _, opt := range gr.Options {
+							if opt.Target == dec.SelectedTarget {
+								matchMethod = opt.MatchMethod
+								action = opt.Action
+								found = true
+								break
+							}
+						}
+					}
+					if found {
+						break
 					}
 				}
 
+				perm := Permission{
+					Group:            handler.GetPermissionGroup(),
+					Target:           dec.SelectedTarget,
+					MatchMethod:      matchMethod,
+					Action:           action,
+					AllowedDirectory: dec.AllowedDirectory,
+				}
+				_ = pm.SavePermission(ctx, dec.Scope, perm)
+			}
+			return StateExplicitAllow, finalArgs, nil, nil
+		} else {
+			if len(decision.GrantDecisions) > 0 {
 				for _, dec := range decision.GrantDecisions {
+					if dec.Scope == ScopeOnce {
+						continue
+					}
 					matchMethod := "exact"
 					if dec.SelectedTarget == "*" {
 						matchMethod = "wildcard"
 					}
-					action := ActionAllow
-
-					found := false
-					for _, gr := range grantRequests {
-						if gr.ID == dec.RequestID {
-							for _, opt := range gr.Options {
-								if opt.Target == dec.SelectedTarget {
-									matchMethod = opt.MatchMethod
-									action = opt.Action
-									found = true
-									break
-								}
-							}
-						}
-						if found {
-							break
-						}
-					}
-
 					perm := Permission{
 						Group:            handler.GetPermissionGroup(),
 						Target:           dec.SelectedTarget,
 						MatchMethod:      matchMethod,
-						Action:           action,
+						Action:           ActionDeny,
 						AllowedDirectory: dec.AllowedDirectory,
 					}
-					_ = pm.SavePermission(ctx, decision.Scope, perm)
-				}
-			}
-			return StateExplicitAllow, finalArgs, nil, nil
-		} else {
-			if decision.Scope != ScopeOnce {
-				if len(decision.GrantDecisions) > 0 {
-					for _, dec := range decision.GrantDecisions {
-						matchMethod := "exact"
-						if dec.SelectedTarget == "*" {
-							matchMethod = "wildcard"
-						}
-						perm := Permission{
-							Group:            handler.GetPermissionGroup(),
-							Target:           dec.SelectedTarget,
-							MatchMethod:      matchMethod,
-							Action:           ActionDeny,
-							AllowedDirectory: dec.AllowedDirectory,
-						}
-						_ = pm.SavePermission(ctx, decision.Scope, perm)
-					}
-				} else {
-					perm := Permission{
-						Group:            handler.GetPermissionGroup(),
-						Target:           "*",
-						MatchMethod:      "wildcard",
-						Action:           ActionDeny,
-						AllowedDirectory: "*",
-					}
-					_ = pm.SavePermission(ctx, decision.Scope, perm)
+					_ = pm.SavePermission(ctx, dec.Scope, perm)
 				}
 			}
 			return StateExplicitDeny, finalArgs, nil, nil
@@ -223,6 +223,9 @@ func EvaluateToolCall(
 
 	groupName := handler.GetPermissionGroup()
 	grants := pm.GetGrants(ctx, groupName)
+	if mode == ModeStrict {
+		grants = nil
+	}
 
 	res := handler.Evaluate(ctx, req, mode, grants)
 	if res.State == StateRequiresAuth {
@@ -241,27 +244,62 @@ func EvaluateToolCall(
 			desc = strings.TrimSpace(desc[:idx])
 		}
 
+		// Determine allowed scopes based on mode
+		allowedScopes := []PermissionScope{ScopeOnce, ScopeSession, ScopeWorkspace, ScopeGlobal}
+		if mode == ModeStrict {
+			allowedScopes = []PermissionScope{ScopeOnce}
+		}
+
 		var grantRequests []PermissionGrantRequest
 		if multiHandler, ok := handler.(interface {
 			GetGrantRequests(ctx context.Context, req ToolCallRequest, mode PermissionMode, grants []Permission) []PermissionGrantRequest
 		}); ok {
 			grantRequests = multiHandler.GetGrantRequests(ctx, req, mode, grants)
+			for i := range grantRequests {
+				if len(grantRequests[i].AllowedScopes) == 0 {
+					grantRequests[i].AllowedScopes = allowedScopes
+				}
+			}
 		} else {
 			grantRequests = []PermissionGrantRequest{
 				{
-					ID:          "default",
-					Description: getFallbackActionDescription(req),
-					Options:     handler.GetOptions(req),
+					ID:            "default",
+					Description:   getFallbackActionDescription(req),
+					Options:       handler.GetOptions(req),
+					AllowedScopes: allowedScopes,
 				},
 			}
 		}
 
-		return StateRequiresAuth, req.Args, res.Hints, &AuthorizationRequest{
+		// Adapt options based on mode (e.g. Strict Mode omits "Allow Always" or "Allow Globally" / wildcard targets)
+		if mode == ModeStrict {
+			for i := range grantRequests {
+				var filteredOpts []PermissionOption
+				for _, opt := range grantRequests[i].Options {
+					if opt.Target == "*" || opt.MatchMethod == "wildcard" {
+						continue
+					}
+					filteredOpts = append(filteredOpts, opt)
+				}
+				grantRequests[i].Options = filteredOpts
+			}
+		}
+
+		// Adapt hints based on mode
+		var hints []string
+		if mode == ModeStrict {
+			hints = append(hints, "Strict Mode is active. Broad grants are ignored.")
+		} else if mode == ModeAuto && (req.IsDangerous || req.IsOpenWorld) {
+			hints = append(hints, "Auto Mode Alert: Intercepted a dangerous action.")
+		}
+		hints = append(hints, res.Hints...)
+
+		return StateRequiresAuth, req.Args, hints, &AuthorizationRequest{
 			ToolName:      req.ToolName,
 			Description:   desc,
 			Payload:       req.Args,
 			Preview:       preview,
-			SystemHints:   res.Hints,
+			SystemHints:   hints,
 			GrantRequests: grantRequests,
 		}
 	}

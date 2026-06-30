@@ -102,17 +102,34 @@ func (m *FSManager) GetGrants(ctx context.Context, toolName string) []Permission
 
 // GetMode returns the current operating mode of the permission system.
 // It searches in order of specificity: Session, Workspace, then Global.
-// If no mode is configured, it falls back to the default mode.
+// If a workspace is present but has no configured mode, it defaults to Strict mode
+// as a safety fallback, overriding any global mode configuration.
 func (m *FSManager) GetMode(ctx context.Context) PermissionMode {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	paths := []string{m.sessionPath, m.workspacePath, m.globalPath}
-	for _, path := range paths {
-		if path == "" {
-			continue
+	// 1. Session scope check (TUI runtime overrides)
+	if m.sessionPath != "" {
+		content, err := m.readFile(m.sessionPath)
+		if err == nil && content.Mode != "" {
+			return content.Mode
 		}
-		content, err := m.readFile(path)
+	}
+
+	// 2. Workspace scope check
+	if m.workspacePath != "" {
+		content, err := m.readFile(m.workspacePath)
+		if err == nil && content.Mode != "" {
+			return content.Mode
+		}
+		// Graceful Degradation: workspace exists but has no mode configured in permissions.json.
+		// Default to Strict mode to guarantee user safety in new/untrusted workspaces.
+		return ModeStrict
+	}
+
+	// 3. Global scope check (only if outside a workspace context)
+	if m.globalPath != "" {
+		content, err := m.readFile(m.globalPath)
 		if err == nil && content.Mode != "" {
 			return content.Mode
 		}

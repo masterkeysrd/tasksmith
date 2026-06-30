@@ -3,6 +3,9 @@ package app
 import (
 	"context"
 
+	"github.com/masterkeysrd/tasksmith/internal/agent/permissions"
+	"github.com/masterkeysrd/tasksmith/internal/api"
+	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	"github.com/masterkeysrd/tasksmith/internal/tui/active"
 	"github.com/masterkeysrd/tasksmith/internal/tui/command"
 	"github.com/masterkeysrd/tasksmith/internal/tui/keymap"
@@ -94,4 +97,53 @@ func (app *Application) InitializeKeymap() {
 	keymap.Set([]mode.Mode{mode.Command}, "<Esc>", func(ctx context.Context) {
 		mode.Set(mode.Normal)
 	}, keymap.Description("Exit command mode"))
+
+	// Permission Mode cycling keybindings
+	cyclePermissionMode := func(ctx context.Context) {
+		sessionID := active.GetSessionID()
+		if sessionID == "" {
+			return
+		}
+
+		state, err := app.api.GetSessionState(ctx, api.GetSessionStateRequest{SessionID: sessionID})
+		if err != nil {
+			log.Error("failed to get session state to cycle permission mode", log.Err(err))
+			return
+		}
+
+		currMode := state.PermissionMode
+		if currMode == "" {
+			currMode = permissions.ModeDefault
+		}
+
+		var nextMode permissions.PermissionMode
+		switch currMode {
+		case permissions.ModeDefault:
+			nextMode = permissions.ModeStrict
+		case permissions.ModeStrict:
+			nextMode = permissions.ModeAuto
+		case permissions.ModeAuto:
+			fallthrough
+		default:
+			nextMode = permissions.ModeDefault
+		}
+
+		_, err = app.api.SetPermissionMode(ctx, api.SetPermissionModeRequest{
+			SessionID: sessionID,
+			Mode:      nextMode,
+			Scope:     permissions.ScopeSession,
+		})
+		if err != nil {
+			log.Error("failed to set permission mode during cycle", log.Err(err))
+			return
+		}
+
+		if active.InvalidateSessionState != nil {
+			active.InvalidateSessionState(sessionID)
+		}
+	}
+
+	keymap.Set([]mode.Mode{mode.Normal}, "\\pm", cyclePermissionMode, keymap.Description("Cycle Permission Mode"))
+	keymap.Set([]mode.Mode{mode.Normal}, " pm", cyclePermissionMode, keymap.Description("Cycle Permission Mode"))
+	keymap.Set([]mode.Mode{mode.Normal}, "<Space>pm", cyclePermissionMode, keymap.Description("Cycle Permission Mode"))
 }

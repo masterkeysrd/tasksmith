@@ -83,6 +83,7 @@ type PermissionGrantRequest struct {
 	Description      string             `json:"description"`       // e.g., "Permission required for: git commit"
 	Options          []PermissionOption `json:"options"`           // Granular options (exact, prefix, wildcard)
 	DirectoryOptions []PermissionOption `json:"directory_options"` // Optional directory constraints (Restrict vs Anywhere)
+	AllowedScopes    []PermissionScope  `json:"allowed_scopes"`    // Scopes allowed for this specific grant request
 }
 
 // AuthorizationRequest is returned by tools and saved to PendingAuthorizations in the graph state.
@@ -97,9 +98,10 @@ type AuthorizationRequest struct {
 }
 
 type GrantDecision struct {
-	RequestID        string `json:"request_id"`
-	SelectedTarget   string `json:"selected_target"`
-	AllowedDirectory string `json:"allowed_directory"`
+	RequestID        string          `json:"request_id"`
+	SelectedTarget   string          `json:"selected_target"`
+	AllowedDirectory string          `json:"allowed_directory"`
+	Scope            PermissionScope `json:"scope"`
 }
 
 // AuthorizationDecision is what the UI returns to the graph to resume execution.

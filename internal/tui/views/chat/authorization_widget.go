@@ -53,10 +53,11 @@ type AuthorizationHybridSelectorProps struct {
 	Options             []permissions.PermissionOption
 	DirectoryOptions    []permissions.PermissionOption
 	FocusedItem         FocusItem
-	SelectedScopeIndex  int // 0 = Once, 1 = Session, 2 = Workspace, 3 = Global
+	SelectedScopeIndex  int // Index in AllowedScopes slice
 	SelectedOptionIndex int // Index of selected command option
 	SelectedDirIndex    int // Index of selected directory option
 	IsActive            bool
+	AllowedScopes       []permissions.PermissionScope
 	OnSelectVertical    func(FocusItem)
 	OnSelectScope       func(int)
 	OnSelectOption      func(int)
@@ -69,7 +70,7 @@ var AuthorizationHybridSelector = kitex.FC("AuthorizationHybridSelector", func(p
 		return nil
 	}
 
-	scopesList := []struct {
+	allScopes := []struct {
 		Name        string
 		Description string
 		Scope       permissions.PermissionScope
@@ -81,6 +82,28 @@ var AuthorizationHybridSelector = kitex.FC("AuthorizationHybridSelector", func(p
 		{Name: "Session", Description: "For this session only", Scope: permissions.ScopeSession, FocusType: FocusItemSession, CmdFocus: FocusItemSessionCmd},
 		{Name: "Workspace", Description: "Save to workspace config", Scope: permissions.ScopeWorkspace, Icon: icon.Cog, FocusType: FocusItemWorkspace, CmdFocus: FocusItemWorkspaceCmd},
 		{Name: "Global", Description: "Save to global config", Scope: permissions.ScopeGlobal, Icon: icon.Warning, FocusType: FocusItemGlobal, CmdFocus: FocusItemGlobalCmd},
+	}
+
+	var scopesList []struct {
+		Name        string
+		Description string
+		Scope       permissions.PermissionScope
+		Icon        kitex.Node
+		FocusType   FocusItem
+		CmdFocus    FocusItem
+	}
+
+	if len(props.AllowedScopes) > 0 {
+		for _, allowed := range props.AllowedScopes {
+			for _, s := range allScopes {
+				if s.Scope == allowed {
+					scopesList = append(scopesList, s)
+					break
+				}
+			}
+		}
+	} else {
+		scopesList = allScopes
 	}
 
 	var rows []kitex.Node
@@ -473,7 +496,7 @@ var AuthorizationWidget = kitex.FC("AuthorizationWidget", func(props Authorizati
 			// Pending Grants (if we are on page > 0)
 			kitex.If(currentPage > 0 && len(req.GrantRequests) > 0, func() kitex.Node {
 				var pendingNodes []kitex.Node
-				scopeNames := []string{"Once", "Session", "Workspace", "Global"}
+				scopeNames := getScopeNames(props.Request, currentPage)
 				scopeName := "Once"
 				if props.SelectedScopeIndex >= 0 && props.SelectedScopeIndex < len(scopeNames) {
 					scopeName = scopeNames[props.SelectedScopeIndex]
@@ -545,8 +568,11 @@ var AuthorizationWidget = kitex.FC("AuthorizationWidget", func(props Authorizati
 			kitex.If(props.IsActive, func() kitex.Node {
 				if !props.IsFocused {
 					// Collapsed summary for unfocused state
-					scopeNames := []string{"Once", "Session", "Workspace", "Global"}
-					summary := scopeNames[props.SelectedScopeIndex]
+					scopeNames := getScopeNames(props.Request, currentPage)
+					summary := "Once"
+					if props.SelectedScopeIndex >= 0 && props.SelectedScopeIndex < len(scopeNames) {
+						summary = scopeNames[props.SelectedScopeIndex]
+					}
 					if currReq != nil && len(currReq.Options) > props.SelectedOptions[currReq.ID] && props.SelectedScopeIndex > 0 {
 						summary += " · [" + formatTargetLabel(currReq.Options[props.SelectedOptions[currReq.ID]]) + "]"
 					}
@@ -631,6 +657,7 @@ var AuthorizationWidget = kitex.FC("AuthorizationWidget", func(props Authorizati
 						SelectedOptionIndex: activeOptIdx,
 						SelectedDirIndex:    activeDirIdx,
 						IsActive:            props.IsActive,
+						AllowedScopes:       getAllowedScopes(props.Request, currentPage),
 						OnSelectVertical:    props.OnSelectVertical,
 						OnSelectScope:       props.OnSelectScope,
 						OnSelectOption:      props.OnSelectOption,
@@ -856,7 +883,7 @@ var AuthorizationPreviewModal = kitex.FCC("AuthorizationPreviewModal", func(prop
 				// Pending Grants list for page > 0
 				kitex.If(currentPage > 0 && len(req.GrantRequests) > 0, func() kitex.Node {
 					var pendingNodes []kitex.Node
-					scopeNames := []string{"Once", "Session", "Workspace", "Global"}
+					scopeNames := getScopeNames(req, currentPage)
 					scopeName := "Once"
 					if props.SelectedScopeIndex >= 0 && props.SelectedScopeIndex < len(scopeNames) {
 						scopeName = scopeNames[props.SelectedScopeIndex]
@@ -938,6 +965,7 @@ var AuthorizationPreviewModal = kitex.FCC("AuthorizationPreviewModal", func(prop
 					SelectedOptionIndex: activeOptIdx,
 					SelectedDirIndex:    activeDirIdx,
 					IsActive:            true,
+					AllowedScopes:       getAllowedScopes(req, currentPage),
 					OnSelectVertical:    props.OnSelectVertical,
 					OnSelectScope:       props.OnSelectScope,
 					OnSelectOption:      props.OnSelectOption,
@@ -947,3 +975,36 @@ var AuthorizationPreviewModal = kitex.FCC("AuthorizationPreviewModal", func(prop
 		),
 	)
 })
+
+func getAllowedScopes(req permissions.AuthorizationRequest, page int) []permissions.PermissionScope {
+	if page > 0 && len(req.GrantRequests) >= page {
+		return req.GrantRequests[page-1].AllowedScopes
+	}
+	if len(req.GrantRequests) > 0 {
+		return req.GrantRequests[0].AllowedScopes
+	}
+	return []permissions.PermissionScope{
+		permissions.ScopeOnce,
+		permissions.ScopeSession,
+		permissions.ScopeWorkspace,
+		permissions.ScopeGlobal,
+	}
+}
+
+func getScopeNames(req permissions.AuthorizationRequest, page int) []string {
+	allowed := getAllowedScopes(req, page)
+	names := make([]string, len(allowed))
+	for idx, s := range allowed {
+		switch s {
+		case permissions.ScopeOnce:
+			names[idx] = "Once"
+		case permissions.ScopeSession:
+			names[idx] = "Session"
+		case permissions.ScopeWorkspace:
+			names[idx] = "Workspace"
+		case permissions.ScopeGlobal:
+			names[idx] = "Global"
+		}
+	}
+	return names
+}

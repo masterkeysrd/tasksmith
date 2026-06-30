@@ -79,10 +79,10 @@ func TestDownloadPermissionHandler(t *testing.T) {
 		t.Errorf("expected StateRequiresAuth, got %v", res.State)
 	}
 
-	// 3. Evaluate safe destination, ModeAuto -> StateExplicitAllow
+	// 3. Evaluate safe destination, ModeAuto -> StateAuto
 	res = h.Evaluate(ctx, permissions.ToolCallRequest{ToolName: "web_fetch", Args: map[string]any{"url": "https://example.com/foo", "destination": "safe/file.zip"}}, permissions.ModeAuto, nil)
-	if res.State != permissions.StateExplicitAllow {
-		t.Errorf("expected StateExplicitAllow in auto mode, got %v", res.State)
+	if res.State != permissions.StateAuto {
+		t.Errorf("expected StateAuto in auto mode, got %v", res.State)
 	}
 
 	// 4. Options check

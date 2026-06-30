@@ -1,6 +1,7 @@
 package components
 
 import (
+	"image/color"
 	"slices"
 	"strconv"
 	"strings"
@@ -53,6 +54,8 @@ type PickerProps struct {
 	RenderItem    func(PickerItem) kitex.Node
 	RenderPreview func(PickerItem) kitex.Node
 	PreviewWidth  int
+	Style         style.Style
+	DisableSearch bool
 	Actions       []PickerAction
 }
 
@@ -110,7 +113,7 @@ var (
 			Display(style.DisplayFlex).
 			FlexDirection(style.FlexRow).
 			AlignItems(style.AlignCenter).
-			Height(style.Cells(1)).
+			MinHeight(style.Cells(1)).
 			PaddingHorizontal(1).
 			Gap(1)
 
@@ -330,13 +333,18 @@ var Picker = kitex.FC("Picker", func(props PickerProps) kitex.Node {
 	var visibleItems []PickerItem
 	var visibleGroups []PickerGroup
 
+	q := query()
+	if props.DisableSearch {
+		q = ""
+	}
+
 	if len(props.Groups) > 0 {
-		visibleGroups = filterGroups(props.Groups, query())
+		visibleGroups = filterGroups(props.Groups, q)
 		for _, g := range visibleGroups {
 			totalItemsRef.Current += len(g.Items)
 		}
 	} else {
-		visibleItems = filterItems(props.Items, query())
+		visibleItems = filterItems(props.Items, q)
 		totalItemsRef.Current = len(visibleItems)
 	}
 
@@ -496,39 +504,69 @@ var Picker = kitex.FC("Picker", func(props PickerProps) kitex.Node {
 		Style: style.S().Foreground(textTertiary),
 	}, kitex.Text("ESC TO CLOSE"))
 
-	inputNode := kitex.Box(kitex.BoxProps{
-		Style: style.S().
-			Display(style.DisplayFlex).
-			AlignItems(style.AlignCenter).
-			Foreground(textTertiary).
-			MarginRight(1),
-	}, kitex.Text(">"))
+	total := totalItemsRef.Current
 
-	inputNode = kitex.Box(kitex.BoxProps{
-		Style: style.S().
-			Display(style.DisplayFlex).
-			FlexDirection(style.FlexRow).
-			AlignItems(style.AlignCenter).
-			Flex(1, 1, style.Cells(0)).
-			MinWidth(style.Cells(0)),
-	},
-		inputNode,
-		Input(InputProps{
-			Ref:         inputRef,
-			Value:       query(),
-			Placeholder: props.Placeholder,
-			Variant:     InputSolid,
+	var searchBarNode kitex.Node
+	if !props.DisableSearch {
+		chevronNode := kitex.Box(kitex.BoxProps{
 			Style: style.S().
-				Background(inputBg).
-				Border(false).
-				Padding(0).
-				Height(style.Cells(1)),
-			PlaceholderStyle: style.S().Foreground(textTertiary),
-			OnChange: func(v string) {
-				setQuery(v)
+				Display(style.DisplayFlex).
+				AlignItems(style.AlignCenter).
+				Foreground(textTertiary).
+				MarginRight(1),
+		}, kitex.Text(">"))
+
+		inputNode := kitex.Box(kitex.BoxProps{
+			Style: style.S().
+				Display(style.DisplayFlex).
+				FlexDirection(style.FlexRow).
+				AlignItems(style.AlignCenter).
+				Flex(1, 1, style.Cells(0)).
+				MinWidth(style.Cells(0)),
+		},
+			chevronNode,
+			Input(InputProps{
+				Ref:         inputRef,
+				Value:       query(),
+				Placeholder: props.Placeholder,
+				Variant:     InputSolid,
+				Style: style.S().
+					Background(inputBg).
+					Border(false).
+					Padding(0).
+					Height(style.Cells(1)),
+				PlaceholderStyle: style.S().Foreground(textTertiary),
+				OnChange: func(v string) {
+					setQuery(v)
+				},
+			}),
+		)
+
+		searchBarNode = kitex.Box(kitex.BoxProps{
+			Style: PickerInputBorderedStyle.Border(true, style.SingleBorder().Color(borderColor)),
+		},
+			inputNode,
+			kitex.Box(kitex.BoxProps{
+				Style: style.S().Display(style.DisplayFlex).AlignItems(style.AlignCenter).PaddingHorizontal(1).MinWidth(style.Cells(10)),
 			},
-		}),
-	)
+				kitex.Box(kitex.BoxProps{Style: style.S().Foreground(textTertiary)},
+					kitex.Text(strconv.Itoa(total)+" MATCHES"),
+				),
+			),
+		)
+	} else {
+		searchBarNode = kitex.Box(kitex.BoxProps{
+			Style: style.S().Width(style.Cells(0)).Height(style.Cells(0)).Overflow(style.OverflowHidden),
+		},
+			Input(InputProps{
+				Ref:      inputRef,
+				Value:    query(),
+				Variant:  InputSolid,
+				Style:    style.S().Background(color.Transparent).Border(false),
+				OnChange: func(v string) {},
+			}),
+		)
+	}
 
 	var bodyNodes []kitex.Node
 	flatIndex := 0
@@ -598,7 +636,7 @@ var Picker = kitex.FC("Picker", func(props PickerProps) kitex.Node {
 	}
 
 	var actionHints kitex.Node
-	total := totalItemsRef.Current
+	total = totalItemsRef.Current
 	if total > 0 {
 		var actionHintsNodes []kitex.Node
 		actionHintsNodes = append(actionHintsNodes,
@@ -724,7 +762,7 @@ var Picker = kitex.FC("Picker", func(props PickerProps) kitex.Node {
 		Paper(PaperProps{
 			Color:   PaperBase,
 			Variant: PaperOutlined,
-			Style:   PickerContainerStyle,
+			Style:   PickerContainerStyle.Merge(props.Style),
 		},
 			kitex.Box(kitex.BoxProps{
 				Style: PickerHeaderStyle.Background(headerBg),
@@ -732,18 +770,7 @@ var Picker = kitex.FC("Picker", func(props PickerProps) kitex.Node {
 				headerLeft,
 				headerRight,
 			),
-			kitex.Box(kitex.BoxProps{
-				Style: PickerInputBorderedStyle.Border(true, style.SingleBorder().Color(borderColor)),
-			},
-				inputNode,
-				kitex.Box(kitex.BoxProps{
-					Style: style.S().Display(style.DisplayFlex).AlignItems(style.AlignCenter).PaddingHorizontal(1).MinWidth(style.Cells(10)),
-				},
-					kitex.Box(kitex.BoxProps{Style: style.S().Foreground(textTertiary)},
-						kitex.Text(strconv.Itoa(total)+" MATCHES"),
-					),
-				),
-			),
+			searchBarNode,
 			kitex.Box(kitex.BoxProps{
 				Style: style.S().Display(style.DisplayFlex).Flex(1, 1, style.Cells(0)).MinHeight(style.Cells(0)).PaddingVertical(1),
 			},

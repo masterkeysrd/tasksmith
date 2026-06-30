@@ -62,12 +62,6 @@ var View = kitex.FC("TitleBar", func(props Props) kitex.Node {
 		AlignItems(style.AlignCenter).
 		Gap(2)
 
-	authStyle := style.S().
-		Display(style.DisplayFlex).
-		AlignItems(style.AlignCenter).
-		Gap(2).
-		Foreground(t.Color.Text.Purple)
-
 	// Explorer button changes color when sidebar is open.
 	explorerFg := t.Color.Text.Tertiary
 	if props.IsSidebarOpen {
@@ -125,11 +119,8 @@ var View = kitex.FC("TitleBar", func(props Props) kitex.Node {
 				Style: style.S().Foreground(t.Color.Border.Primary),
 			}, kitex.Text("│")),
 
-			// Auth indicator
-			kitex.Box(kitex.BoxProps{Style: authStyle},
-				icon.Checkmark,
-				kitex.Text(" AUTH_ENHANCED"),
-			),
+			// Permission Mode indicator
+			PermissionMode(struct{}{}),
 
 			// Clock
 			kitex.Box(kitex.BoxProps{

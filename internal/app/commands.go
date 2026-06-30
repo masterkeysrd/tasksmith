@@ -3,6 +3,8 @@ package app
 import (
 	"fmt"
 
+	"github.com/masterkeysrd/tasksmith/internal/agent/permissions"
+	"github.com/masterkeysrd/tasksmith/internal/api"
 	"github.com/masterkeysrd/tasksmith/internal/tui/active"
 	"github.com/masterkeysrd/tasksmith/internal/tui/command"
 	"github.com/masterkeysrd/tasksmith/internal/tui/mode"
@@ -71,5 +73,40 @@ func (app *Application) InitializeCommands() {
 		default:
 			return fmt.Errorf("lsp: unknown subcommand %q", ctx.Args[0])
 		}
+	})
+
+	command.Register("perm", func(ctx command.CommandContext) error {
+		if len(ctx.Args) == 0 {
+			active.SetModal("permissionpicker")
+			return nil
+		}
+
+		modeStr := ctx.Args[0]
+		var mode permissions.PermissionMode
+		switch modeStr {
+		case "auto":
+			mode = permissions.ModeAuto
+		case "default":
+			mode = permissions.ModeDefault
+		case "strict":
+			mode = permissions.ModeStrict
+		default:
+			return fmt.Errorf("perm: unknown mode %q (try 'auto', 'default', or 'strict')", modeStr)
+		}
+
+		sessionID := active.GetSessionID()
+		_, err := app.api.SetPermissionMode(ctx.Ctx, api.SetPermissionModeRequest{
+			SessionID: sessionID,
+			Mode:      mode,
+			Scope:     permissions.ScopeSession,
+		})
+		if err != nil {
+			return fmt.Errorf("perm: failed to set mode: %w", err)
+		}
+
+		if active.InvalidateSessionState != nil {
+			active.InvalidateSessionState(sessionID)
+		}
+		return nil
 	})
 }

@@ -32,7 +32,7 @@ func TestGenericPermissionHandler(t *testing.T) {
 	// 4. Check auto mode allows non-dangerous tools
 	h = &GenericPermissionHandler{ToolName: "ls", IsDangerous: false, IsOpenWorld: false, IsReadOnly: true}
 	res = h.Evaluate(context.Background(), ToolCallRequest{Args: map[string]any{"path": "."}}, ModeAuto, nil)
-	if res.State != StateExplicitAllow {
+	if res.State != StateAuto {
 		t.Errorf("auto mode should approve non-dangerous tools, got %v", res.State)
 	}
 
@@ -51,6 +51,13 @@ func TestGenericPermissionHandler(t *testing.T) {
 	res = h.Evaluate(context.Background(), ToolCallRequest{Args: map[string]any{"path": "foo"}}, ModeDefault, grants)
 	if res.State != StateExplicitAllow {
 		t.Errorf("saved allow grant should override default prompt, got %v", res.State)
+	}
+
+	// 7. Check saved grants do NOT override ModeStrict
+	h = &GenericPermissionHandler{ToolName: "write", IsDangerous: true, IsOpenWorld: false, IsReadOnly: false}
+	res = h.Evaluate(context.Background(), ToolCallRequest{Args: map[string]any{"path": "foo"}}, ModeStrict, grants)
+	if res.State != StateRequiresAuth {
+		t.Errorf("saved allow grant should NOT override strict mode, got %v", res.State)
 	}
 }
 
@@ -85,8 +92,8 @@ func TestEvaluateToolCallMultiGrant(t *testing.T) {
 		Approved: true,
 		Scope:    ScopeSession,
 		GrantDecisions: []GrantDecision{
-			{RequestID: "cmd_1", SelectedTarget: "git status"},
-			{RequestID: "cmd_2", SelectedTarget: "rm -rf tmp"},
+			{RequestID: "cmd_1", SelectedTarget: "git status", Scope: ScopeSession},
+			{RequestID: "cmd_2", SelectedTarget: "rm -rf tmp", Scope: ScopeSession},
 		},
 	}
 

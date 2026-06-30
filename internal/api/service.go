@@ -691,10 +691,23 @@ func (s *Service) GetSessionState(ctx context.Context, req GetSessionStateReques
 				Schema:     pr.Schema,
 			})
 		}
+		cwd := ""
+		if s.ws != nil {
+			if cfg, err := s.ws.GetWorkspaceConfig(ctx); err == nil {
+				cwd = cfg.CWD
+			}
+		}
+		var mode permissions.PermissionMode
+		if pm, err := permissions.NewFSManager(cwd, ""); err == nil {
+			mode = pm.GetMode(ctx)
+		} else {
+			mode = permissions.ModeDefault
+		}
 		return &GetSessionStateResponse{
 			Status:                "idle",
 			PendingLspSuggestions: apiSuggestions,
 			PendingMcpRequests:    apiMcpRequests,
+			PermissionMode:        mode,
 		}, nil
 	}
 	status, errStr, isGen, pendingAuths, elapsed := s.sm.GetSessionState(ctx, req.SessionID)
@@ -750,6 +763,19 @@ func (s *Service) GetSessionState(ctx context.Context, req GetSessionStateReques
 
 	elapsedSeconds := int64(elapsed.Seconds())
 
+	cwd := ""
+	if s.ws != nil {
+		if cfg, err := s.ws.GetWorkspaceConfig(ctx); err == nil {
+			cwd = cfg.CWD
+		}
+	}
+	var mode permissions.PermissionMode
+	if pm, err := permissions.NewFSManager(cwd, req.SessionID); err == nil {
+		mode = pm.GetMode(ctx)
+	} else {
+		mode = permissions.ModeDefault
+	}
+
 	return &GetSessionStateResponse{
 		Status:                string(status),
 		Error:                 errStr,
@@ -760,6 +786,7 @@ func (s *Service) GetSessionState(ctx context.Context, req GetSessionStateReques
 		PendingAuthorizations: pendingAuths,
 		PendingLspSuggestions: apiSuggestions,
 		PendingMcpRequests:    apiMcpRequests,
+		PermissionMode:        mode,
 	}, nil
 }
 
@@ -815,6 +842,26 @@ func (s *Service) SubmitAuthorizationDecision(ctx context.Context, req SubmitAut
 		return nil, err
 	}
 	return &SubmitAuthorizationDecisionResponse{Success: true}, nil
+}
+
+// SetPermissionMode updates the active permission mode for a session or workspace/global.
+func (s *Service) SetPermissionMode(ctx context.Context, req SetPermissionModeRequest) (*SetPermissionModeResponse, error) {
+	cwd := ""
+	if s.ws != nil {
+		if cfg, err := s.ws.GetWorkspaceConfig(ctx); err == nil {
+			cwd = cfg.CWD
+		}
+	}
+	pm, err := permissions.NewFSManager(cwd, req.SessionID)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := pm.SaveMode(ctx, req.Scope, req.Mode); err != nil {
+		return nil, err
+	}
+
+	return &SetPermissionModeResponse{Success: true}, nil
 }
 
 // GetTokenAnalytics aggregates token usage statistics.

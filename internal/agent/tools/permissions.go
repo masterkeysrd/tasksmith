@@ -207,6 +207,13 @@ func (h *FileModificationPermissionHandler) GetPermissionGroup() string {
 }
 
 func (h *FileModificationPermissionHandler) Evaluate(ctx context.Context, req permissions.ToolCallRequest, mode permissions.PermissionMode, grants []permissions.Permission) permissions.EvaluationResult {
+	if mode == permissions.ModeStrict {
+		return permissions.EvaluationResult{
+			State: permissions.StateRequiresAuth,
+			Hints: nil,
+		}
+	}
+
 	args := req.Args
 	rawPath, _ := args["path"].(string)
 	if state, found := evaluateFileGrants(grants, rawPath); found {
@@ -220,18 +227,11 @@ func (h *FileModificationPermissionHandler) Evaluate(ctx context.Context, req pe
 
 	if mode == permissions.ModeAuto {
 		if isSafeWorkspacePath(ctx, absPath) {
-			return permissions.EvaluationResult{State: permissions.StateExplicitAllow}
+			return permissions.EvaluationResult{State: permissions.StateAuto}
 		}
 		return permissions.EvaluationResult{
 			State: permissions.StateRequiresAuth,
 			Hints: []string{fmt.Sprintf("Auto mode blocked: editing path %q is outside the workspace or inside .git", rawPath)},
-		}
-	}
-
-	if mode == permissions.ModeStrict {
-		return permissions.EvaluationResult{
-			State: permissions.StateRequiresAuth,
-			Hints: nil,
 		}
 	}
 
@@ -324,6 +324,13 @@ func (h *RemovePermissionHandler) GetPermissionGroup() string {
 }
 
 func (h *RemovePermissionHandler) Evaluate(ctx context.Context, req permissions.ToolCallRequest, mode permissions.PermissionMode, grants []permissions.Permission) permissions.EvaluationResult {
+	if mode == permissions.ModeStrict {
+		return permissions.EvaluationResult{
+			State: permissions.StateRequiresAuth,
+			Hints: []string{fmt.Sprintf("Strict mode: authorization required to remove file/dir %q", req.Args["path"])},
+		}
+	}
+
 	args := req.Args
 	rawPath, _ := args["path"].(string)
 	if state, found := evaluateFileGrants(grants, rawPath); found {
@@ -337,18 +344,11 @@ func (h *RemovePermissionHandler) Evaluate(ctx context.Context, req permissions.
 
 	if mode == permissions.ModeAuto {
 		if isSafeWorkspacePath(ctx, absPath) {
-			return permissions.EvaluationResult{State: permissions.StateExplicitAllow}
+			return permissions.EvaluationResult{State: permissions.StateAuto}
 		}
 		return permissions.EvaluationResult{
 			State: permissions.StateRequiresAuth,
 			Hints: []string{fmt.Sprintf("Auto mode blocked: removing path %q is outside the workspace or inside .git", rawPath)},
-		}
-	}
-
-	if mode == permissions.ModeStrict {
-		return permissions.EvaluationResult{
-			State: permissions.StateRequiresAuth,
-			Hints: []string{fmt.Sprintf("Strict mode: authorization required to remove file/dir %q", rawPath)},
 		}
 	}
 
@@ -384,6 +384,13 @@ func (h *ViewPermissionHandler) GetPermissionGroup() string {
 }
 
 func (h *ViewPermissionHandler) Evaluate(ctx context.Context, req permissions.ToolCallRequest, mode permissions.PermissionMode, grants []permissions.Permission) permissions.EvaluationResult {
+	if mode == permissions.ModeStrict {
+		return permissions.EvaluationResult{
+			State: permissions.StateRequiresAuth,
+			Hints: nil,
+		}
+	}
+
 	args := req.Args
 	rawPath, _ := args["path"].(string)
 	if state, found := evaluateFileGrants(grants, rawPath); found {
@@ -397,7 +404,7 @@ func (h *ViewPermissionHandler) Evaluate(ctx context.Context, req permissions.To
 
 	if mode == permissions.ModeAuto {
 		if isSafeWorkspacePath(ctx, absPath) {
-			return permissions.EvaluationResult{State: permissions.StateExplicitAllow}
+			return permissions.EvaluationResult{State: permissions.StateAuto}
 		}
 		return permissions.EvaluationResult{
 			State: permissions.StateRequiresAuth,
@@ -474,7 +481,7 @@ func (h *FileSearchPermissionHandler) Evaluate(ctx context.Context, req permissi
 
 	if mode == permissions.ModeAuto {
 		if isSafe {
-			return permissions.EvaluationResult{State: permissions.StateExplicitAllow}
+			return permissions.EvaluationResult{State: permissions.StateAuto}
 		}
 		return permissions.EvaluationResult{
 			State: permissions.StateRequiresAuth,
@@ -555,6 +562,13 @@ func (h *WebFetchPermissionHandler) GetPermissionGroup() string {
 }
 
 func (h *WebFetchPermissionHandler) Evaluate(ctx context.Context, req permissions.ToolCallRequest, mode permissions.PermissionMode, grants []permissions.Permission) permissions.EvaluationResult {
+	if mode == permissions.ModeStrict {
+		return permissions.EvaluationResult{
+			State: permissions.StateRequiresAuth,
+			Hints: []string{fmt.Sprintf("Strict mode: authorization required to perform %s: %q", req.ToolName, req.Args["url"])},
+		}
+	}
+
 	args := req.Args
 	urlVal, _ := args["url"].(string)
 
@@ -563,7 +577,7 @@ func (h *WebFetchPermissionHandler) Evaluate(ctx context.Context, req permission
 	}
 
 	if mode == permissions.ModeAuto {
-		return permissions.EvaluationResult{State: permissions.StateExplicitAllow}
+		return permissions.EvaluationResult{State: permissions.StateAuto}
 	}
 
 	return permissions.EvaluationResult{
@@ -606,6 +620,13 @@ func (h *DownloadPermissionHandler) GetPermissionGroup() string {
 }
 
 func (h *DownloadPermissionHandler) Evaluate(ctx context.Context, req permissions.ToolCallRequest, mode permissions.PermissionMode, grants []permissions.Permission) permissions.EvaluationResult {
+	if mode == permissions.ModeStrict {
+		return permissions.EvaluationResult{
+			State: permissions.StateRequiresAuth,
+			Hints: nil,
+		}
+	}
+
 	args := req.Args
 	urlVal, _ := args["url"].(string)
 	destVal, _ := args["destination"].(string)
@@ -630,7 +651,7 @@ func (h *DownloadPermissionHandler) Evaluate(ctx context.Context, req permission
 	}
 
 	if mode == permissions.ModeAuto {
-		return permissions.EvaluationResult{State: permissions.StateExplicitAllow}
+		return permissions.EvaluationResult{State: permissions.StateAuto}
 	}
 
 	return permissions.EvaluationResult{
@@ -724,6 +745,13 @@ func (h *WebSearchPermissionHandler) GetPermissionGroup() string {
 }
 
 func (h *WebSearchPermissionHandler) Evaluate(ctx context.Context, req permissions.ToolCallRequest, mode permissions.PermissionMode, grants []permissions.Permission) permissions.EvaluationResult {
+	if mode == permissions.ModeStrict {
+		return permissions.EvaluationResult{
+			State: permissions.StateRequiresAuth,
+			Hints: []string{fmt.Sprintf("Strict mode: authorization required to perform web_search: %q", req.Args["query"])},
+		}
+	}
+
 	args := req.Args
 	query, _ := args["query"].(string)
 
@@ -732,7 +760,7 @@ func (h *WebSearchPermissionHandler) Evaluate(ctx context.Context, req permissio
 	}
 
 	if mode == permissions.ModeAuto {
-		return permissions.EvaluationResult{State: permissions.StateExplicitAllow}
+		return permissions.EvaluationResult{State: permissions.StateAuto}
 	}
 
 	return permissions.EvaluationResult{
@@ -776,6 +804,14 @@ func (h *BashPermissionHandler) GetPermissionGroup() string {
 }
 
 func (h *BashPermissionHandler) Evaluate(ctx context.Context, req permissions.ToolCallRequest, mode permissions.PermissionMode, grants []permissions.Permission) permissions.EvaluationResult {
+	if mode == permissions.ModeStrict {
+		cmd, _ := req.Args["command"].(string)
+		return permissions.EvaluationResult{
+			State: permissions.StateRequiresAuth,
+			Hints: []string{fmt.Sprintf("Strict mode: authorization required to run bash command: %q", cmd)},
+		}
+	}
+
 	reqs := h.GetGrantRequests(ctx, req, mode, grants)
 	if len(reqs) > 0 {
 		var hints []string
@@ -802,6 +838,12 @@ func (h *BashPermissionHandler) Evaluate(ctx context.Context, req permissions.To
 		return permissions.EvaluationResult{
 			State: permissions.StateRequiresAuth,
 			Hints: hints,
+		}
+	}
+
+	if mode == permissions.ModeAuto {
+		return permissions.EvaluationResult{
+			State: permissions.StateAuto,
 		}
 	}
 

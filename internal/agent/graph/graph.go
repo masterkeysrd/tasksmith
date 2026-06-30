@@ -439,6 +439,9 @@ func (a *AgentGraph) executeTools(ctx context.Context, s AgentState) (graph.Comm
 					meta = make(map[string]any)
 				}
 				meta["execution_time_ms"] = execTime
+				if er.permState == permissions.StateAuto {
+					meta["auto_approved"] = true
+				}
 				toolMsg.SetMetadata(meta)
 
 				toolResults = append(toolResults, toolMsg)

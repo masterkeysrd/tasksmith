@@ -79,3 +79,6 @@ func UseModal() string {
 		return s.modal
 	})
 }
+
+// InvalidateSessionState is a callback registered by the App to invalidate session state queries.
+var InvalidateSessionState func(sessionID string)

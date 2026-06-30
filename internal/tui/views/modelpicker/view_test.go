@@ -157,6 +157,10 @@ func (m *mockClient) GetMcpStatus(ctx context.Context, req api.GetMcpStatusReque
 	return &api.GetMcpStatusResponse{}, nil
 }
 
+func (m *mockClient) SetPermissionMode(ctx context.Context, req api.SetPermissionModeRequest) (*api.SetPermissionModeResponse, error) {
+	return &api.SetPermissionModeResponse{Success: true}, nil
+}
+
 func TestModelPickerView(t *testing.T) {
 	thm := &theme.Scheme{}
 	client := &mockClient{}

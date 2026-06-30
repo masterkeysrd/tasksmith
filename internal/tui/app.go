@@ -17,6 +17,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/tui/views/lspinfo"
 	"github.com/masterkeysrd/tasksmith/internal/tui/views/mcpinfo"
 	"github.com/masterkeysrd/tasksmith/internal/tui/views/modelpicker"
+	permissionsview "github.com/masterkeysrd/tasksmith/internal/tui/views/permissions"
 	"github.com/masterkeysrd/tasksmith/internal/tui/views/setup"
 	"github.com/masterkeysrd/tasksmith/internal/tui/views/welcome"
 )
@@ -63,6 +64,12 @@ var Router = kitex.SimpleFC("Router", func() kitex.Node {
 	activeSessionID := active.UseSessionID()
 	activeScreen := active.UseScreen()
 	windClient := wind.UseClient()
+
+	kitex.UseEffect(func() {
+		active.InvalidateSessionState = func(sessionID string) {
+			windClient.InvalidateQueries(api.GetSessionStateRequest{SessionID: sessionID})
+		}
+	}, []any{windClient})
 
 	kitex.UseEffect(func() {
 		if !wsCfg.IsLoading && !providers.IsLoading {
@@ -131,6 +138,7 @@ var Router = kitex.SimpleFC("Router", func() kitex.Node {
 				lspinfo.View(lspinfo.ViewProps{}),
 				mcpinfo.View(mcpinfo.ViewProps{}),
 				modelpicker.View(modelpicker.ViewProps{}),
+				permissionsview.View(permissionsview.ViewProps{}),
 			),
 		)
 	}

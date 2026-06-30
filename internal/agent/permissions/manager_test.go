@@ -17,12 +17,12 @@ func TestFSManager_Permissions(t *testing.T) {
 
 	ctx := context.Background()
 
-	// Initial checks should be empty/default
+	// Initial checks should be empty/Strict (due to graceful degradation safety fallback)
 	if grants := mgr.GetGrants(ctx, "bash"); len(grants) != 0 {
 		t.Errorf("expected 0 grants initially, got %d", len(grants))
 	}
-	if mode := mgr.GetMode(ctx); mode != ModeDefault {
-		t.Errorf("expected initial mode %q, got %q", ModeDefault, mode)
+	if mode := mgr.GetMode(ctx); mode != ModeStrict {
+		t.Errorf("expected initial fallback mode %q, got %q", ModeStrict, mode)
 	}
 
 	// 1. Save global permission
@@ -86,44 +86,61 @@ func TestFSManager_Permissions(t *testing.T) {
 }
 
 func TestFSManager_Mode(t *testing.T) {
-	tmpDir := t.TempDir()
-
-	globalPath := filepath.Join(tmpDir, "global_perms.json")
-	workspacePath := filepath.Join(tmpDir, "ws_perms.json")
-	sessionPath := filepath.Join(tmpDir, "sess_perms.json")
-
-	mgr := NewFSManagerWithPaths(globalPath, workspacePath, sessionPath)
-
 	ctx := context.Background()
 
-	// Default
-	if mode := mgr.GetMode(ctx); mode != ModeDefault {
-		t.Errorf("expected default mode %q, got %q", ModeDefault, mode)
-	}
+	t.Run("without workspace context", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		globalPath := filepath.Join(tmpDir, "global_perms.json")
+		mgr := NewFSManagerWithPaths(globalPath, "", "")
 
-	// Set global mode to Auto
-	if err := mgr.SaveMode(ctx, ScopeGlobal, ModeAuto); err != nil {
-		t.Fatalf("failed to save global mode: %v", err)
-	}
-	if mode := mgr.GetMode(ctx); mode != ModeAuto {
-		t.Errorf("expected mode %q, got %q", ModeAuto, mode)
-	}
+		// Falls back to defaultMode
+		if mode := mgr.GetMode(ctx); mode != ModeDefault {
+			t.Errorf("expected default mode %q, got %q", ModeDefault, mode)
+		}
 
-	// Set workspace mode to Strict (should override global)
-	if err := mgr.SaveMode(ctx, ScopeWorkspace, ModeStrict); err != nil {
-		t.Fatalf("failed to save workspace mode: %v", err)
-	}
-	if mode := mgr.GetMode(ctx); mode != ModeStrict {
-		t.Errorf("expected mode %q, got %q", ModeStrict, mode)
-	}
+		// Set global mode to Auto
+		if err := mgr.SaveMode(ctx, ScopeGlobal, ModeAuto); err != nil {
+			t.Fatalf("failed to save global mode: %v", err)
+		}
+		if mode := mgr.GetMode(ctx); mode != ModeAuto {
+			t.Errorf("expected global mode %q, got %q", ModeAuto, mode)
+		}
+	})
 
-	// Set session mode to Default (should override workspace)
-	if err := mgr.SaveMode(ctx, ScopeSession, ModeDefault); err != nil {
-		t.Fatalf("failed to save session mode: %v", err)
-	}
-	if mode := mgr.GetMode(ctx); mode != ModeDefault {
-		t.Errorf("expected mode %q, got %q", ModeDefault, mode)
-	}
+	t.Run("with workspace context - graceful degradation", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		globalPath := filepath.Join(tmpDir, "global_perms.json")
+		workspacePath := filepath.Join(tmpDir, "ws_perms.json")
+		sessionPath := filepath.Join(tmpDir, "sess_perms.json")
+
+		mgr := NewFSManagerWithPaths(globalPath, workspacePath, sessionPath)
+
+		// Set global mode to Auto (should be overridden by workspace safety fallback)
+		if err := mgr.SaveMode(ctx, ScopeGlobal, ModeAuto); err != nil {
+			t.Fatalf("failed to save global mode: %v", err)
+		}
+
+		// Since workspace is present but has no mode, GetMode MUST degrade gracefully to Strict
+		if mode := mgr.GetMode(ctx); mode != ModeStrict {
+			t.Errorf("expected safety fallback mode %q, got %q", ModeStrict, mode)
+		}
+
+		// Explicitly configure workspace mode to Default
+		if err := mgr.SaveMode(ctx, ScopeWorkspace, ModeDefault); err != nil {
+			t.Fatalf("failed to save workspace mode: %v", err)
+		}
+		if mode := mgr.GetMode(ctx); mode != ModeDefault {
+			t.Errorf("expected workspace mode %q, got %q", ModeDefault, mode)
+		}
+
+		// Set session mode override to Auto
+		if err := mgr.SaveMode(ctx, ScopeSession, ModeAuto); err != nil {
+			t.Fatalf("failed to save session mode: %v", err)
+		}
+		if mode := mgr.GetMode(ctx); mode != ModeAuto {
+			t.Errorf("expected session override %q, got %q", ModeAuto, mode)
+		}
+	})
 }
 
 func TestFSManager_NewFSManagerPaths(t *testing.T) {

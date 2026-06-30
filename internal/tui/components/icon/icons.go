@@ -39,6 +39,10 @@ var (
 	Plugin = kitex.Text("󰚰")
 	// Cog is a settings gear icon (󰒓).
 	Cog = kitex.Text("󰒓")
+	// Shield is a shield/security icon (󰒃).
+	Shield = kitex.Text("󰒃")
+	// Lock is a lock/strict icon (󰌆).
+	Lock = kitex.Text("󰌆")
 	// Fire is an analytics/fire icon (󰈸).
 	Fire = kitex.Text("󰈸")
 	// Exit is an exit/quit icon (󰗼).
