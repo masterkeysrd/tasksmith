@@ -14,11 +14,19 @@ import (
 
 // FSManager implements PermissionManager storing configuration in JSON files.
 type FSManager struct {
-	globalPath    string
-	workspacePath string
-	sessionPath   string
-	defaultMode   PermissionMode
-	mu            sync.RWMutex
+	globalPath             string
+	workspacePath          string
+	sessionPath            string
+	defaultMode            PermissionMode
+	isWorkspaceInitialized func() bool
+	mu                     sync.RWMutex
+}
+
+// SetWorkspaceInitializedFn configures a callback to check if the workspace is initialized.
+func (m *FSManager) SetWorkspaceInitializedFn(fn func() bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.isWorkspaceInitialized = fn
 }
 
 // Ensure FSManager implements PermissionManager.
@@ -123,8 +131,15 @@ func (m *FSManager) GetMode(ctx context.Context) PermissionMode {
 			return content.Mode
 		}
 		// Graceful Degradation: workspace exists but has no mode configured in permissions.json.
-		// Default to Strict mode to guarantee user safety in new/untrusted workspaces.
-		return ModeStrict
+		// If workspace is not initialized, default to Strict mode to guarantee user safety.
+		// Otherwise, fall through to Global/Default.
+		initialized := false
+		if m.isWorkspaceInitialized != nil {
+			initialized = m.isWorkspaceInitialized()
+		}
+		if !initialized {
+			return ModeStrict
+		}
 	}
 
 	// 3. Global scope check (only if outside a workspace context)

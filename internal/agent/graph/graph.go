@@ -143,6 +143,18 @@ func New(ctx context.Context, opts Options) (*AgentGraph, error) {
 			return nil, fmt.Errorf("failed to create permission manager: %w", err)
 		}
 	}
+	if fsm, ok := pm.(*permissions.FSManager); ok {
+		fsm.SetWorkspaceInitializedFn(func() bool {
+			if opts.Workspace == nil {
+				return false
+			}
+			cfg, err := opts.Workspace.GetWorkspaceConfig(ctx)
+			if err != nil {
+				return false
+			}
+			return cfg.IsConfigured
+		})
+	}
 
 	var mcps []*warp.MCP
 	if opts.Workspace != nil {

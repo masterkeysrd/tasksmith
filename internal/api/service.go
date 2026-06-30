@@ -58,6 +58,25 @@ func NewService(ws Workspace, sm *session.Manager, metricsStore *metrics.Store, 
 	}
 }
 
+func (s *Service) newPermissionManager(ctx context.Context, sessionID string) (*permissions.FSManager, error) {
+	cwd := ""
+	var isConfigured bool
+	if s.ws != nil {
+		if cfg, err := s.ws.GetWorkspaceConfig(ctx); err == nil {
+			cwd = cfg.CWD
+			isConfigured = cfg.IsConfigured
+		}
+	}
+	pm, err := permissions.NewFSManager(cwd, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	pm.SetWorkspaceInitializedFn(func() bool {
+		return isConfigured
+	})
+	return pm, nil
+}
+
 // GetWorkspaceConfig returns the workspace configuration.
 func (s *Service) GetWorkspaceConfig(ctx context.Context, req GetWorkspaceConfigRequest) (*GetWorkspaceConfigResponse, error) {
 	cfg, err := s.ws.GetWorkspaceConfig(ctx)
@@ -691,14 +710,8 @@ func (s *Service) GetSessionState(ctx context.Context, req GetSessionStateReques
 				Schema:     pr.Schema,
 			})
 		}
-		cwd := ""
-		if s.ws != nil {
-			if cfg, err := s.ws.GetWorkspaceConfig(ctx); err == nil {
-				cwd = cfg.CWD
-			}
-		}
 		var mode permissions.PermissionMode
-		if pm, err := permissions.NewFSManager(cwd, ""); err == nil {
+		if pm, err := s.newPermissionManager(ctx, ""); err == nil {
 			mode = pm.GetMode(ctx)
 		} else {
 			mode = permissions.ModeDefault
@@ -763,14 +776,8 @@ func (s *Service) GetSessionState(ctx context.Context, req GetSessionStateReques
 
 	elapsedSeconds := int64(elapsed.Seconds())
 
-	cwd := ""
-	if s.ws != nil {
-		if cfg, err := s.ws.GetWorkspaceConfig(ctx); err == nil {
-			cwd = cfg.CWD
-		}
-	}
 	var mode permissions.PermissionMode
-	if pm, err := permissions.NewFSManager(cwd, req.SessionID); err == nil {
+	if pm, err := s.newPermissionManager(ctx, req.SessionID); err == nil {
 		mode = pm.GetMode(ctx)
 	} else {
 		mode = permissions.ModeDefault
@@ -846,13 +853,7 @@ func (s *Service) SubmitAuthorizationDecision(ctx context.Context, req SubmitAut
 
 // SetPermissionMode updates the active permission mode for a session or workspace/global.
 func (s *Service) SetPermissionMode(ctx context.Context, req SetPermissionModeRequest) (*SetPermissionModeResponse, error) {
-	cwd := ""
-	if s.ws != nil {
-		if cfg, err := s.ws.GetWorkspaceConfig(ctx); err == nil {
-			cwd = cfg.CWD
-		}
-	}
-	pm, err := permissions.NewFSManager(cwd, req.SessionID)
+	pm, err := s.newPermissionManager(ctx, req.SessionID)
 	if err != nil {
 		return nil, err
 	}

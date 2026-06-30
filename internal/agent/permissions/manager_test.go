@@ -141,6 +141,27 @@ func TestFSManager_Mode(t *testing.T) {
 			t.Errorf("expected session override %q, got %q", ModeAuto, mode)
 		}
 	})
+
+	t.Run("with workspace context - initialized workspace fallback", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		globalPath := filepath.Join(tmpDir, "global_perms.json")
+		workspacePath := filepath.Join(tmpDir, "ws_perms.json")
+		sessionPath := filepath.Join(tmpDir, "sess_perms.json")
+
+		mgr := NewFSManagerWithPaths(globalPath, workspacePath, sessionPath)
+		mgr.SetWorkspaceInitializedFn(func() bool { return true })
+
+		// Set global mode to Auto
+		if err := mgr.SaveMode(ctx, ScopeGlobal, ModeAuto); err != nil {
+			t.Fatalf("failed to save global mode: %v", err)
+		}
+
+		// Since workspace is initialized but has no mode,
+		// it should NOT default to Strict, but instead fall back to Global (Auto)
+		if mode := mgr.GetMode(ctx); mode != ModeAuto {
+			t.Errorf("expected fallback to global mode %q, got %q", ModeAuto, mode)
+		}
+	})
 }
 
 func TestFSManager_NewFSManagerPaths(t *testing.T) {
