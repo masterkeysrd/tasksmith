@@ -142,9 +142,19 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 	localDecisions, setLocalDecisions := kitex.UseState(map[string]permissions.AuthorizationDecision{})
 	showResolutionDialog, setShowResolutionDialog := kitex.UseState(false)
 
+	focusSelf := func() {
+		if outerRef.Current != nil {
+			outerRef.Current.SetTabIndex(0)
+			if doc := outerRef.Current.OwnerDocument(); doc != nil {
+				doc.Focus(outerRef.Current)
+			}
+		}
+	}
+
 	handleSelectVertical := func(item FocusItem) {
 		setFocusedItem(item)
 		mode.Set(mode.Normal)
+		focusSelf()
 	}
 
 	var pendingAuthorizations []permissions.AuthorizationRequest
@@ -165,6 +175,7 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 			setFocusedItem(FocusItemGlobal)
 		}
 		mode.Set(mode.Normal)
+		focusSelf()
 	}
 
 	handleSelectOption := func(idx int) {
@@ -186,6 +197,7 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 					setFocusedItem(FocusItemGlobalCmd)
 				}
 				mode.Set(mode.Normal)
+				focusSelf()
 			}
 		}
 	}
@@ -202,6 +214,7 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 				setSelectedDirs(newDirs)
 				setFocusedItem(FocusItemDirectory)
 				mode.Set(mode.Normal)
+				focusSelf()
 			}
 		}
 	}
@@ -429,7 +442,7 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 
 		sub := doc.AddEventListener(event.EventKeyDown, func(e event.Event) {
 			isModalOpen := showPreviewModalRef.Current
-			if !isModalOpen && modeRef.Current != mode.Normal {
+			if !isModalOpen && modeRef.Current != mode.Normal && len(pendingAuthsRef.Current) == 0 {
 				return
 			}
 			if len(pendingAuthsRef.Current) == 0 {
@@ -991,6 +1004,11 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 	outerProps := kitex.BoxProps{
 		Style: outerStyle,
 		Ref:   outerRef,
+		OnClick: func(e event.Event) {
+			if !isInsert {
+				focusSelf()
+			}
+		},
 	}
 
 	return kitex.Box(outerProps,
