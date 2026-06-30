@@ -415,15 +415,26 @@ var LsToolWidget = kitex.FC("LsToolWidget", func(props ToolExecutionProps) kitex
 		var previewEntries []preview.LsEntry
 		for _, entry := range lsFiles {
 			previewEntries = append(previewEntries, preview.LsEntry{
-				Name:      entry.Name,
-				IsDir:     entry.IsDir,
-				SizeBytes: entry.Size,
+				Name:        entry.Name,
+				IsDir:       entry.IsDir,
+				SizeBytes:   entry.Size,
+				IsSymlink:   entry.IsSymlink,
+				Depth:       entry.Depth,
+				LinkTarget:  entry.LinkTarget,
+				Permissions: entry.Permissions,
+				Links:       entry.Links,
+				Owner:       entry.Owner,
+				Group:       entry.Group,
+				Modified:    entry.Modified,
 			})
 		}
 		onClick = func() {
 			props.OnViewPreview(
 				fmt.Sprintf("Listed %d entries in %s", totalCount, dirName),
-				preview.LsPreview{Entries: previewEntries},
+				preview.LsPreview{
+					Detailed: isDetailed,
+					Entries:  previewEntries,
+				},
 			)
 		}
 	}
@@ -806,16 +817,46 @@ var GrepToolWidget = kitex.FC("GrepToolWidget", func(props ToolExecutionProps) k
 	})
 })
 
-// grepEntryRow renders a single grep match line using components.CodeBlock with Compact styling.
-func grepEntryRow(match tools.GrepOutputMatchesItem) kitex.Node {
+// grepEntryRow renders a single grep match line with its file path header and matching line content using components.CodeBlock.
+func grepEntryRow(t *theme.Scheme, match tools.GrepOutputMatchesItem) kitex.Node {
+	var nameColor color.Color
+	var dirColor color.Color
+	var lineNumColor color.Color
+	if t != nil {
+		nameColor = t.Color.Text.Primary
+		dirColor = t.Color.Text.Secondary
+		lineNumColor = t.Color.Text.Tertiary
+	}
+
+	dirPart, filePart := filepath.Split(match.Path)
+	if len(filePart) > tools.MaxFilenameChars {
+		filePart = filePart[:tools.MaxFilenameChars] + "…"
+	}
+
 	ext := filepath.Ext(match.Path)
 	lang := strings.TrimPrefix(ext, ".")
 
 	return kitex.Box(kitex.BoxProps{
 		Style: style.S().
+			Display(style.DisplayFlex).
+			FlexDirection(style.FlexColumn).
 			PaddingVertical(0).
 			PaddingHorizontal(1),
 	},
+		kitex.Box(kitex.BoxProps{
+			Style: style.S().
+				Display(style.DisplayFlex).
+				FlexDirection(style.FlexRow).
+				AlignItems(style.AlignCenter).
+				MarginBottom(0),
+		},
+			kitex.Span(kitex.SpanProps{Style: style.S().MarginRight(1)}, icon.FileIcon(icon.FileIconProps{Path: match.Path})),
+			kitex.If(dirPart != "", func() kitex.Node {
+				return kitex.Span(kitex.SpanProps{Style: style.S().Foreground(dirColor)}, kitex.Text(dirPart))
+			}),
+			kitex.Span(kitex.SpanProps{Style: style.S().Foreground(nameColor).Bold(true)}, kitex.Text(filePart)),
+			kitex.Span(kitex.SpanProps{Style: style.S().Foreground(lineNumColor).MarginLeft(1)}, kitex.Text(fmt.Sprintf(":%d", match.Line))),
+		),
 		components.CodeBlock(components.CodeBlockProps{
 			Code:            match.Content,
 			Lang:            lang,
@@ -823,6 +864,7 @@ func grepEntryRow(match tools.GrepOutputMatchesItem) kitex.Node {
 			ShowLineNumbers: true,
 			StartLine:       match.Line,
 			Compact:         true,
+			GutterMinWidth:  6,
 			Style:           style.S().Margin(0).Padding(0),
 		}),
 	)

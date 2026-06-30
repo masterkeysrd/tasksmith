@@ -1,6 +1,9 @@
 package preview
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"time"
+)
 
 // ToolPreview represents a generic structured preview for a tool's execution or result.
 type ToolPreview interface {
@@ -90,14 +93,23 @@ func (p GrepMatchesPreview) MarshalJSON() ([]byte, error) {
 
 // LsEntry represents a single directory listing entry.
 type LsEntry struct {
-	Name      string `json:"name"`
-	IsDir     bool   `json:"is_dir"`
-	SizeBytes int64  `json:"size_bytes"`
+	Name        string    `json:"name"`
+	IsDir       bool      `json:"is_dir"`
+	SizeBytes   int64     `json:"size_bytes"`
+	IsSymlink   bool      `json:"is_symlink"`
+	Depth       int       `json:"depth"`
+	LinkTarget  string    `json:"link_target"`
+	Permissions string    `json:"permissions"`
+	Links       uint64    `json:"links"`
+	Owner       string    `json:"owner"`
+	Group       string    `json:"group"`
+	Modified    time.Time `json:"modified"`
 }
 
 // LsPreview represents a directory listing.
 type LsPreview struct {
-	Entries []LsEntry `json:"entries"`
+	Detailed bool      `json:"detailed"`
+	Entries  []LsEntry `json:"entries"`
 }
 
 func (LsPreview) Type() string { return "ls_entries" }

@@ -5,6 +5,7 @@ import (
 	"image/color"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/masterkeysrd/kite/extras/kitex"
 	"github.com/masterkeysrd/kite/style"
@@ -159,21 +160,43 @@ func reconstructPreviewFromMap(previewType string, m map[string]any) preview.Too
 		return preview.GrepMatchesPreview{Matches: grepMatches}
 	case "ls_entries":
 		var lsEntries []preview.LsEntry
+		detailed, _ := m["detailed"].(bool)
 		if rawEntries, ok := m["entries"].([]any); ok {
 			for _, re := range rawEntries {
 				if rMap, ok := re.(map[string]any); ok {
 					name, _ := rMap["name"].(string)
 					isDir, _ := rMap["is_dir"].(bool)
 					sizeVal, _ := rMap["size_bytes"].(float64)
+					isSymlink, _ := rMap["is_symlink"].(bool)
+					depthVal, _ := rMap["depth"].(float64)
+					linkTarget, _ := rMap["link_target"].(string)
+					permissions, _ := rMap["permissions"].(string)
+					linksVal, _ := rMap["links"].(float64)
+					owner, _ := rMap["owner"].(string)
+					group, _ := rMap["group"].(string)
+					var modified time.Time
+					if modStr, ok := rMap["modified"].(string); ok {
+						if parsed, err := time.Parse(time.RFC3339, modStr); err == nil {
+							modified = parsed
+						}
+					}
 					lsEntries = append(lsEntries, preview.LsEntry{
-						Name:      name,
-						IsDir:     isDir,
-						SizeBytes: int64(sizeVal),
+						Name:        name,
+						IsDir:       isDir,
+						SizeBytes:   int64(sizeVal),
+						IsSymlink:   isSymlink,
+						Depth:       int(depthVal),
+						LinkTarget:  linkTarget,
+						Permissions: permissions,
+						Links:       uint64(linksVal),
+						Owner:       owner,
+						Group:       group,
+						Modified:    modified,
 					})
 				}
 			}
 		}
-		return preview.LsPreview{Entries: lsEntries}
+		return preview.LsPreview{Detailed: detailed, Entries: lsEntries}
 	case "default_text":
 		text, _ := m["text"].(string)
 		return preview.DefaultTextPreview{Text: text}
@@ -241,7 +264,7 @@ func renderGrepMatchesPreview(t *theme.Scheme, payload map[string]any, previewDa
 	}
 	var rows []kitex.Node
 	for _, m := range grepPrev.Matches {
-		rows = append(rows, grepEntryRow(tools.GrepOutputMatchesItem{
+		rows = append(rows, grepEntryRow(t, tools.GrepOutputMatchesItem{
 			Path:    m.Path,
 			Line:    m.LineNumber,
 			Content: m.Content,
@@ -258,10 +281,25 @@ func renderLsPreview(t *theme.Scheme, payload map[string]any, previewData previe
 	var rows []kitex.Node
 	for _, entry := range lsPrev.Entries {
 		rows = append(rows, lsEntryRow(t, tools.FileEntry{
-			Name:  entry.Name,
-			IsDir: entry.IsDir,
-			Size:  entry.SizeBytes,
-		}, true, 0))
+			Name:        entry.Name,
+			IsDir:       entry.IsDir,
+			Size:        entry.SizeBytes,
+			IsSymlink:   entry.IsSymlink,
+			Depth:       entry.Depth,
+			LinkTarget:  entry.LinkTarget,
+			Permissions: entry.Permissions,
+			Links:       entry.Links,
+			Owner:       entry.Owner,
+			Group:       entry.Group,
+			Modified:    entry.Modified,
+		}, lsPrev.Detailed, 0))
+	}
+	if lsPrev.Detailed {
+		return kitex.Table(kitex.TableProps{Style: style.S().MinWidth(style.Percent(0))},
+			kitex.TBody(kitex.TBodyProps{},
+				rows...,
+			),
+		)
 	}
 	return kitex.Box(kitex.BoxProps{Style: style.S().Display(style.DisplayFlex).FlexDirection(style.FlexColumn).Gap(0)}, rows...)
 }

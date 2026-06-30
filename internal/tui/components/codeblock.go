@@ -22,6 +22,7 @@ type CodeBlockProps struct {
 	StartLine       int
 	Compact         bool
 	Wrap            bool
+	GutterMinWidth  int
 }
 
 // CodeBlock renders a syntax-highlighted code block using chroma, fully styled
@@ -144,6 +145,9 @@ var CodeBlock = kitex.FC("CodeBlock", func(props CodeBlockProps) kitex.Node {
 		PaddingRight(1).
 		TextAlign(style.TextAlignRight).
 		WhiteSpace(style.WhiteSpacePre)
+	if props.GutterMinWidth > 0 {
+		gutterStyle = gutterStyle.MinWidth(style.Cells(props.GutterMinWidth))
+	}
 	if t != nil {
 		gutterStyle = gutterStyle.Foreground(t.Color.Text.Tertiary)
 	}
