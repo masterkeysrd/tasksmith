@@ -1141,6 +1141,7 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 					Height(style.Percent(100)).
 					Foreground(textCol).
 					WhiteSpace(style.WhiteSpacePreWrap).
+					OverflowWrap(style.OverflowWrapBreakWord).
 					OverflowY(style.OverflowAuto)
 
 				return kitex.Box(kitex.BoxProps{Style: outputStyle},
@@ -1374,7 +1375,7 @@ var ToolExecution = kitex.FC("ToolExecution", func(props ToolExecutionProps) kit
 								Gap(0),
 						},
 							kitex.Span(kitex.SpanProps{Style: style.S().Foreground(textCol).Bold(true)}, kitex.Text("Parameters:")),
-							kitex.Span(kitex.SpanProps{Style: style.S().Foreground(valCol).WhiteSpace(style.WhiteSpacePreWrap)}, kitex.Text(argsStr)),
+							kitex.Span(kitex.SpanProps{Style: style.S().Foreground(valCol).WhiteSpace(style.WhiteSpacePreWrap).OverflowWrap(style.OverflowWrapBreakWord)}, kitex.Text(argsStr)),
 						)
 					}),
 					kitex.If(tm != nil, func() kitex.Node {
@@ -1430,7 +1431,8 @@ var ToolExecution = kitex.FC("ToolExecution", func(props ToolExecutionProps) kit
 									MaxWidth(style.Percent(100)).
 									Overflow(style.OverflowHidden).
 									Foreground(textCol).
-									WhiteSpace(style.WhiteSpacePreWrap)
+									WhiteSpace(style.WhiteSpacePreWrap).
+									OverflowWrap(style.OverflowWrapBreakWord)
 
 								// Count lines and check length
 								lines := strings.Split(outText, "\n")
@@ -1510,7 +1512,8 @@ var ToolExecution = kitex.FC("ToolExecution", func(props ToolExecutionProps) kit
 					Width(style.Percent(100)).
 					MaxWidth(style.Percent(100)).
 					Foreground(textCol).
-					WhiteSpace(style.WhiteSpacePreWrap)
+					WhiteSpace(style.WhiteSpacePreWrap).
+					OverflowWrap(style.OverflowWrapBreakWord)
 
 				cleanText := strings.ReplaceAll(outText, "\t", "    ")
 				return kitex.Box(kitex.BoxProps{Style: outputStyle},
