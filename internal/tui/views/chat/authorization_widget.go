@@ -920,9 +920,10 @@ var AuthorizationPreviewModal = kitex.FCC("AuthorizationPreviewModal", func(prop
 	}
 
 	return components.Modal(components.ModalProps{
-		IsOpen:  props.IsOpen,
-		Title:   kitex.Text("Authorization Preview"),
-		OnClose: props.OnClose,
+		IsOpen:     props.IsOpen,
+		Title:      kitex.Text("Authorization Preview"),
+		OnClose:    props.OnClose,
+		Attributes: map[string]string{"data-context": "modal:auth"},
 		Footer: kitex.Box(kitex.BoxProps{
 			Style: style.S().
 				Display(style.DisplayFlex).

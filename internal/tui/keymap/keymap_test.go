@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/masterkeysrd/kite/event"
-	"github.com/masterkeysrd/tasksmith/internal/tui/active"
 	"github.com/masterkeysrd/tasksmith/internal/tui/mode"
 )
 
@@ -587,23 +586,23 @@ func TestDescriptionOption(t *testing.T) {
 	// This test accesses internal state directly.
 	km.Set([]mode.Mode{mode.Normal}, "d", func(_ context.Context) {}, Description("debug command"))
 
-	binding, ok := km.Modes[mode.Normal]["d"]
-	if !ok {
+	bindings, ok := km.Modes[mode.Normal]["d"]
+	if !ok || len(bindings) == 0 {
 		t.Fatal("expected binding to be set")
 	}
-	if binding.Description() != "debug command" {
-		t.Errorf("description = %q, want %q", binding.Description(), "debug command")
+	if bindings[0].Description() != "debug command" {
+		t.Errorf("description = %q, want %q", bindings[0].Description(), "debug command")
 	}
 
 	// Also test with string target.
 	km.Set([]mode.Mode{mode.Normal}, "m", "my_macro", Description("my macro"))
 
-	binding2, ok := km.Modes[mode.Normal]["m"]
-	if !ok {
+	bindings2, ok := km.Modes[mode.Normal]["m"]
+	if !ok || len(bindings2) == 0 {
 		t.Fatal("expected string binding to be set")
 	}
-	if binding2.Description() != "my macro" {
-		t.Errorf("description = %q, want %q", binding2.Description(), "my macro")
+	if bindings2[0].Description() != "my macro" {
+		t.Errorf("description = %q, want %q", bindings2[0].Description(), "my macro")
 	}
 }
 
@@ -780,82 +779,136 @@ func BenchmarkInput(b *testing.B) {
 	})
 }
 
-// TestScreenOption verifies that key resolution, ExecuteTarget, and Input processing
-// respect the Screen option, resolving only when the active screen matches.
-func TestScreenOption(t *testing.T) {
-	// Save the original screen and restore it later.
-	origScreen := active.GetScreen()
-	defer active.SetScreen(origScreen)
+// TestFocusContextOption verifies that key resolution, ExecuteTarget, and Input processing
+// respect the Context option, resolving based on the active focus context.
+func TestFocusContextOption(t *testing.T) {
+	origContext := testFocusContext
+	defer func() {
+		testFocusContext = origContext
+	}()
 
-	active.SetScreen("chat")
+	testFocusContext = ""
 
 	km := New()
-	km.Set([]mode.Mode{mode.Normal}, "a", func(context.Context) {}, Screen("analytics"))
-	km.Set([]mode.Mode{mode.Normal}, "b", func(context.Context) {}) // global/no screen constraint
-	km.Set([]mode.Mode{mode.Normal}, "ab", func(context.Context) {}, Screen("analytics"))
 
-	// Test Resolve
-	if _, ok := km.Resolve(mode.Normal, "a"); ok {
-		t.Error("expected key 'a' (restricted to analytics) not to resolve on 'chat' screen")
-	}
-	if _, ok := km.Resolve(mode.Normal, "b"); !ok {
-		t.Error("expected key 'b' (global) to resolve on 'chat' screen")
-	}
+	var explorerCalled, chatCalled, fallbackCalled bool
 
-	// Test Input
-	if _, ok := km.Input(mode.Normal, "a"); ok {
-		t.Error("expected key 'a' input not to resolve on 'chat' screen")
-	}
-	// Note: 'a' is a prefix of 'ab' on 'analytics', but since we are on 'chat',
-	// 'a' is not active. So 'a' shouldn't even register as a prefix on 'chat' screen.
-	if km.isPrefix(mode.Normal, []string{"a"}) {
-		t.Error("expected 'a' not to be considered a prefix on 'chat' screen")
-	}
+	// Register multiple actions for the same key 'j' under different contexts
+	km.Set([]mode.Mode{mode.Normal}, "j", func(context.Context) { explorerCalled = true }, Context("explorer"))
+	km.Set([]mode.Mode{mode.Normal}, "j", func(context.Context) { chatCalled = true }, Context("chat"))
+	km.Set([]mode.Mode{mode.Normal}, "j", func(context.Context) { fallbackCalled = true }) // general screen-level fallback
 
-	// Test ExecuteTarget
-	keA := &event.KeyEvent{}
-	keA.Text = "a"
-	keB := &event.KeyEvent{}
-	keB.Text = "b"
+	keJ := &event.KeyEvent{}
+	keJ.Text = "j"
 
-	ok, err := km.ExecuteTarget(context.Background(), mode.Normal, keA)
+	// 1. Focus Explorer
+	testFocusContext = "explorer"
+	explorerCalled = false
+	chatCalled = false
+	fallbackCalled = false
+
+	ok, err := km.ExecuteTarget(context.Background(), mode.Normal, keJ)
 	if err != nil {
-		t.Errorf("unexpected error: %v", err)
+		t.Fatalf("unexpected error: %v", err)
 	}
+	if !ok || !explorerCalled || chatCalled || fallbackCalled {
+		t.Errorf("expected only explorer action to run, ok=%v, explorer=%v, chat=%v, fallback=%v", ok, explorerCalled, chatCalled, fallbackCalled)
+	}
+
+	// 2. Focus Chat
+	testFocusContext = "chat"
+	explorerCalled = false
+	chatCalled = false
+	fallbackCalled = false
+
+	ok, err = km.ExecuteTarget(context.Background(), mode.Normal, keJ)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !ok || explorerCalled || !chatCalled || fallbackCalled {
+		t.Errorf("expected only chat action to run, ok=%v, explorer=%v, chat=%v, fallback=%v", ok, explorerCalled, chatCalled, fallbackCalled)
+	}
+
+	// 3. Focus Unknown (should trigger fallback)
+	testFocusContext = "unknown"
+	explorerCalled = false
+	chatCalled = false
+	fallbackCalled = false
+
+	ok, err = km.ExecuteTarget(context.Background(), mode.Normal, keJ)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !ok || explorerCalled || chatCalled || !fallbackCalled {
+		t.Errorf("expected only fallback action to run, ok=%v, explorer=%v, chat=%v, fallback=%v", ok, explorerCalled, chatCalled, fallbackCalled)
+	}
+}
+
+// TestModalBarrier verifies that non-modal keybindings are blocked when a modal is active,
+// but specific modal or wildcard 'modal' keybindings can execute.
+func TestModalBarrier(t *testing.T) {
+	origContext := testFocusContext
+	defer func() {
+		testFocusContext = origContext
+	}()
+
+	testFocusContext = "chat"
+
+	km := New()
+
+	var normalCalled, authCalled, wildcardCalled bool
+
+	km.Set([]mode.Mode{mode.Normal}, "x", func(context.Context) { normalCalled = true })
+	km.Set([]mode.Mode{mode.Normal}, "x", func(context.Context) { authCalled = true }, Context("modal:auth"))
+	km.Set([]mode.Mode{mode.Normal}, "y", func(context.Context) { wildcardCalled = true }, Context("modal"))
+
+	keX := &event.KeyEvent{}
+	keX.Text = "x"
+	keY := &event.KeyEvent{}
+	keY.Text = "y"
+
+	// 1. With NO modal active
+	testFocusContext = "chat"
+	normalCalled = false
+	authCalled = false
+	wildcardCalled = false
+
+	// 'x' should resolve to normalCalled
+	ok, err := km.ExecuteTarget(context.Background(), mode.Normal, keX)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !ok || !normalCalled || authCalled {
+		t.Errorf("expected only normal mapping, ok=%v, normal=%v, auth=%v", ok, normalCalled, authCalled)
+	}
+
+	// 'y' should NOT resolve since it expects a modal to be open
+	ok, _ = km.ExecuteTarget(context.Background(), mode.Normal, keY)
 	if ok {
-		t.Error("expected ExecuteTarget for 'a' to return false on 'chat' screen")
+		t.Error("expected 'y' to be blocked with no active modal")
 	}
 
-	ok, err = km.ExecuteTarget(context.Background(), mode.Normal, keB)
+	// 2. With 'auth' modal active
+	testFocusContext = "modal:auth"
+	normalCalled = false
+	authCalled = false
+	wildcardCalled = false
+
+	// 'x' should resolve to authCalled (normal mapping is blocked by barrier)
+	ok, err = km.ExecuteTarget(context.Background(), mode.Normal, keX)
 	if err != nil {
-		t.Errorf("unexpected error: %v", err)
+		t.Fatalf("unexpected error: %v", err)
 	}
-	if !ok {
-		t.Error("expected ExecuteTarget for 'b' to return true on 'chat' screen")
-	}
-
-	// Change screen to "analytics"
-	active.SetScreen("analytics")
-
-	// Test Resolve again
-	if _, ok := km.Resolve(mode.Normal, "a"); !ok {
-		t.Error("expected key 'a' to resolve on 'analytics' screen")
-	}
-	if _, ok := km.Resolve(mode.Normal, "b"); !ok {
-		t.Error("expected key 'b' to resolve on 'analytics' screen")
+	if !ok || normalCalled || !authCalled {
+		t.Errorf("expected only auth mapping, ok=%v, normal=%v, auth=%v", ok, normalCalled, authCalled)
 	}
 
-	// Test Prefix check on analytics
-	if !km.isPrefix(mode.Normal, []string{"a"}) {
-		t.Error("expected 'a' to be a prefix of 'ab' on 'analytics' screen")
-	}
-
-	// Test ExecuteTarget again
-	ok, err = km.ExecuteTarget(context.Background(), mode.Normal, keA)
+	// 'y' should resolve because wildcard 'modal' matches any active modal
+	ok, err = km.ExecuteTarget(context.Background(), mode.Normal, keY)
 	if err != nil {
-		t.Errorf("unexpected error: %v", err)
+		t.Fatalf("unexpected error: %v", err)
 	}
-	if !ok {
-		t.Error("expected ExecuteTarget for 'a' to return true on 'analytics' screen")
+	if !ok || !wildcardCalled {
+		t.Errorf("expected wildcard modal mapping to execute, ok=%v, wildcard=%v", ok, wildcardCalled)
 	}
 }

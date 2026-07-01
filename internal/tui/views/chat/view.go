@@ -1377,8 +1377,9 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 	}
 
 	outerProps := kitex.BoxProps{
-		Style: outerStyle,
-		Ref:   outerRef,
+		Style:      outerStyle,
+		Ref:        outerRef,
+		Attributes: map[string]string{"data-context": "chat"},
 		OnClick: func(e event.Event) {
 			if !isInsert {
 				focusSelf()
@@ -1500,7 +1501,10 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 		),
 
 		// Composer Section
-		kitex.Box(kitex.BoxProps{Style: composerContainerStyle},
+		kitex.Box(kitex.BoxProps{
+			Style:      composerContainerStyle,
+			Attributes: map[string]string{"data-context": "composer"},
+		},
 			// Queue actions row (above Composer)
 			kitex.If((len(queuedMessages) > 0 || len(localEditingMessages()) > 0) && status == "idle", func() kitex.Node {
 				isEditing := len(localEditingMessages()) > 0

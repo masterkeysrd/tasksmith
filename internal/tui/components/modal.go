@@ -24,6 +24,8 @@ type ModalProps struct {
 	HeaderActions kitex.Node
 	// Footer contains custom elements to display in the modal footer statusrail.
 	Footer kitex.Node
+	// Attributes contains custom DOM attributes.
+	Attributes map[string]string
 	// Children is the list of child elements displayed in the body.
 	Children []kitex.Node
 }
@@ -111,9 +113,10 @@ var Modal = kitex.FCC("Modal", func(props ModalProps) kitex.Node {
 		},
 	},
 		Paper(PaperProps{
-			Color:   PaperHover,
-			Variant: PaperOutlined,
-			Style:   baseStyle,
+			Color:      PaperHover,
+			Variant:    PaperOutlined,
+			Style:      baseStyle,
+			Attributes: props.Attributes,
 		},
 			// Header Row
 			kitex.Box(kitex.BoxProps{

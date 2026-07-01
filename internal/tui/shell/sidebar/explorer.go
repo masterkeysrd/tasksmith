@@ -101,6 +101,7 @@ var ExplorerPanel = kitex.FC("ExplorerPanel", func(props ExplorerPanelProps) kit
 			FlexDirection(style.FlexColumn).
 			Background(c.panel).
 			MinHeight(style.Percent(100)),
+		Attributes: map[string]string{"data-context": "explorer"},
 	},
 		kitex.Box(kitex.BoxProps{
 			Style: style.S().

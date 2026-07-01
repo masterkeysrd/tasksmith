@@ -211,7 +211,10 @@ var View = kitex.FC("TokenAnalytics", func(props Props) kitex.Node {
 		timeframeLabel = "This Month"
 	}
 
-	return kitex.Box(kitex.BoxProps{Style: rootStyle},
+	return kitex.Box(kitex.BoxProps{
+		Style:      rootStyle,
+		Attributes: map[string]string{"data-context": "analytics"},
+	},
 		// Header Panel
 		kitex.Box(kitex.BoxProps{Style: headerBoxStyle},
 			kitex.Box(kitex.BoxProps{Style: headerRowStyle},

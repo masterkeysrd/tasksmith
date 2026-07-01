@@ -57,6 +57,7 @@ type PickerProps struct {
 	Style         style.Style
 	DisableSearch bool
 	Actions       []PickerAction
+	Attributes    map[string]string
 }
 
 var (
@@ -760,9 +761,10 @@ var Picker = kitex.FC("Picker", func(props PickerProps) kitex.Node {
 		ZIndex: 100,
 	},
 		Paper(PaperProps{
-			Color:   PaperBase,
-			Variant: PaperOutlined,
-			Style:   PickerContainerStyle.Merge(props.Style),
+			Color:      PaperBase,
+			Variant:    PaperOutlined,
+			Style:      PickerContainerStyle.Merge(props.Style),
+			Attributes: props.Attributes,
 		},
 			kitex.Box(kitex.BoxProps{
 				Style: PickerHeaderStyle.Background(headerBg),

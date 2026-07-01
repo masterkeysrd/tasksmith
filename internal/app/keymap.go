@@ -66,27 +66,27 @@ func (app *Application) InitializeKeymap() {
 	// Analytics-specific keybindings (only active when on analytics screen)
 	keymap.Set([]mode.Mode{mode.Normal}, "1", func(ctx context.Context) {
 		analytics.SetTimeframe("today")
-	}, keymap.Description("Analytics: Timeframe Today"), keymap.Screen("analytics"))
+	}, keymap.Description("Analytics: Timeframe Today"), keymap.Context("analytics"))
 
 	keymap.Set([]mode.Mode{mode.Normal}, "2", func(ctx context.Context) {
 		analytics.SetTimeframe("7days")
-	}, keymap.Description("Analytics: Timeframe 7 Days"), keymap.Screen("analytics"))
+	}, keymap.Description("Analytics: Timeframe 7 Days"), keymap.Context("analytics"))
 
 	keymap.Set([]mode.Mode{mode.Normal}, "3", func(ctx context.Context) {
 		analytics.SetTimeframe("30days")
-	}, keymap.Description("Analytics: Timeframe This Month"), keymap.Screen("analytics"))
+	}, keymap.Description("Analytics: Timeframe This Month"), keymap.Context("analytics"))
 
 	keymap.Set([]mode.Mode{mode.Normal}, "p", func(ctx context.Context) {
 		analytics.CycleProviderFilter()
-	}, keymap.Description("Analytics: Cycle Provider Filter"), keymap.Screen("analytics"))
+	}, keymap.Description("Analytics: Cycle Provider Filter"), keymap.Context("analytics"))
 
 	keymap.Set([]mode.Mode{mode.Normal}, "t", func(ctx context.Context) {
 		analytics.ToggleMetricUnit()
-	}, keymap.Description("Analytics: Toggle Metric Unit"), keymap.Screen("analytics"))
+	}, keymap.Description("Analytics: Toggle Metric Unit"), keymap.Context("analytics"))
 
 	keymap.Set([]mode.Mode{mode.Normal}, "<Tab>", func(ctx context.Context) {
 		analytics.CycleActiveTab()
-	}, keymap.Description("Analytics: Cycle Active Tab"), keymap.Screen("analytics"))
+	}, keymap.Description("Analytics: Cycle Active Tab"), keymap.Context("analytics"))
 
 	// Insert Mode
 	keymap.Set([]mode.Mode{mode.Insert}, "<Esc>", func(ctx context.Context) {

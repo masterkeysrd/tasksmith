@@ -44,6 +44,8 @@ type PaperProps struct {
 	Variant PaperVariant
 	// Style allows passing additional style overrides (e.g., padding, margin).
 	Style style.Style
+	// Attributes contains custom DOM attributes.
+	Attributes map[string]string
 	// Children is the list of child nodes to render inside the paper.
 	Children []kitex.Node
 }
@@ -55,7 +57,8 @@ var Paper = kitex.FCC("Paper", func(props PaperProps) kitex.Node {
 
 	if t == nil {
 		return kitex.Box(kitex.BoxProps{
-			Style: props.Style,
+			Style:      props.Style,
+			Attributes: props.Attributes,
 		}, props.Children...)
 	}
 
@@ -116,6 +119,7 @@ var Paper = kitex.FCC("Paper", func(props PaperProps) kitex.Node {
 	s = s.Merge(props.Style)
 
 	return kitex.Box(kitex.BoxProps{
-		Style: s,
+		Style:      s,
+		Attributes: props.Attributes,
 	}, props.Children...)
 })

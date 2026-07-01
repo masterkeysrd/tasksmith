@@ -460,5 +460,6 @@ var View = kitex.FC("ModelPickerView", func(props ViewProps) kitex.Node {
 		RenderPreview: renderPreview,
 		OnSelect:      onSelect,
 		OnClose:       onClose,
+		Attributes:    map[string]string{"data-context": "modal:modelpicker"},
 	})
 })

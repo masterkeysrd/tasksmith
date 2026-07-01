@@ -13,15 +13,13 @@ import (
 	"github.com/masterkeysrd/kite/key"
 
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
-	"github.com/masterkeysrd/tasksmith/internal/tui/active"
 	"github.com/masterkeysrd/tasksmith/internal/tui/mode"
 )
 
 // Options holds metadata for a keybinding.
 type Options struct {
 	Description string
-	Screen      string
-	Modal       string
+	Context     string
 }
 
 // Option is a functional option for configuring a keymap binding.
@@ -34,17 +32,10 @@ func Description(desc string) Option {
 	}
 }
 
-// Screen returns an Option that restricts the binding to a specific screen.
-func Screen(scr string) Option {
+// Context returns an Option that restricts the binding to a specific focus context/pane.
+func Context(ctx string) Option {
 	return func(o *Options) {
-		o.Screen = scr
-	}
-}
-
-// Modal returns an Option that restricts the binding to a specific modal.
-func Modal(mod string) Option {
-	return func(o *Options) {
-		o.Modal = mod
+		o.Context = ctx
 	}
 }
 
@@ -74,23 +65,19 @@ func Default() *Keymap {
 type binding struct {
 	target      any
 	description string
-	screen      string
-	modal       string
+	context     string
 }
 
 // Description returns the binding's description.
 func (b binding) Description() string { return b.description }
 
-// Screen returns the binding's screen option.
-func (b binding) Screen() string { return b.screen }
-
-// Modal returns the binding's modal option.
-func (b binding) Modal() string { return b.modal }
+// Context returns the binding's context option.
+func (b binding) Context() string { return b.context }
 
 // Keymap is a mode-aware binding table with escape-timeout sequence resolution.
 type Keymap struct {
 	// Modes maps each mode to its binding table.
-	Modes map[mode.Mode]map[string]binding
+	Modes map[mode.Mode]map[string][]binding
 
 	timeout time.Duration
 
@@ -108,7 +95,7 @@ type Keymap struct {
 // New returns an empty Keymap with a 500ms escape timeout for sequence resolution.
 func New() *Keymap {
 	return &Keymap{
-		Modes:   make(map[mode.Mode]map[string]binding),
+		Modes:   make(map[mode.Mode]map[string][]binding),
 		timeout: defaultTimeout,
 		logger:  log.ForComponent("keymap"),
 	}
@@ -135,15 +122,28 @@ func (km *Keymap) Set(modes []mode.Mode, lhs string, rhs any, opts ...Option) {
 		opt(o)
 	}
 	b.description = o.Description
-	b.screen = o.Screen
-	b.modal = o.Modal
+	b.context = o.Context
 
 	for _, m := range modes {
 		km.ensureModesLocked()
 		if km.Modes[m] == nil {
-			km.Modes[m] = make(map[string]binding)
+			km.Modes[m] = make(map[string][]binding)
 		}
-		km.Modes[m][lhs] = b
+
+		// Overwrite duplicate mapping in same scope if exists
+		list := km.Modes[m][lhs]
+		found := false
+		for idx, existing := range list {
+			if existing.context == b.context {
+				list[idx] = b
+				found = true
+				break
+			}
+		}
+		if !found {
+			list = append(list, b)
+		}
+		km.Modes[m][lhs] = list
 	}
 }
 
@@ -264,7 +264,7 @@ func (km *Keymap) isPrefix(m mode.Mode, seq []string) bool {
 
 func (km *Keymap) ensureModesLocked() {
 	if km.Modes == nil {
-		km.Modes = make(map[mode.Mode]map[string]binding)
+		km.Modes = make(map[mode.Mode]map[string][]binding)
 	}
 }
 
@@ -275,16 +275,56 @@ func (km *Keymap) effectiveTimeoutLocked() time.Duration {
 	return km.timeout
 }
 
+// testFocusContext allows unit tests to mock the focused DOM context.
+var testFocusContext string
+
+func (km *Keymap) getActiveFocusContextLocked() string {
+	if testFocusContext != "" {
+		return testFocusContext
+	}
+	if document == nil {
+		return ""
+	}
+	el := document.CurrentFocus()
+	for el != nil {
+		if val, ok := el.Attribute("data-context"); ok {
+			return val
+		}
+		el = el.ParentElement()
+	}
+	return ""
+}
+
 func (km *Keymap) resolveLocked(m mode.Mode, key string) (any, bool) {
 	if bindings, ok := km.Modes[m]; ok {
-		if b, ok := bindings[key]; ok {
-			if b.screen != "" && active.GetScreen() != b.screen {
-				return nil, false
+		if list, ok := bindings[key]; ok {
+			activeContext := km.getActiveFocusContextLocked()
+			isModal := strings.HasPrefix(activeContext, "modal:")
+
+			// Pass 1: Check specific context matches (e.g. "modal:auth" or "explorer")
+			for _, b := range list {
+				if b.context != "" && b.context == activeContext {
+					return b.target, true
+				}
 			}
-			if active.GetModal() != b.modal {
-				return nil, false
+
+			// Pass 2: Wildcard modal matches
+			if isModal {
+				for _, b := range list {
+					if b.context == "modal" {
+						return b.target, true
+					}
+				}
 			}
-			return b.target, true
+
+			// Pass 3: General fallback (b.context == "")
+			if !isModal {
+				for _, b := range list {
+					if b.context == "" {
+						return b.target, true
+					}
+				}
+			}
 		}
 	}
 	return nil, false
@@ -297,15 +337,27 @@ func (km *Keymap) resolveSequenceLocked(m mode.Mode, keys []string) (any, bool) 
 func (km *Keymap) isPrefixLocked(m mode.Mode, seq []string) bool {
 	prefix := strings.Join(seq, "")
 	if bindings, ok := km.Modes[m]; ok {
-		for key, b := range bindings {
-			if b.screen != "" && active.GetScreen() != b.screen {
-				continue
-			}
-			if active.GetModal() != b.modal {
-				continue
-			}
+		activeContext := km.getActiveFocusContextLocked()
+		isModal := strings.HasPrefix(activeContext, "modal:")
+
+		for key, list := range bindings {
 			if strings.HasPrefix(key, prefix) && key != prefix {
-				return true
+				for _, b := range list {
+					if b.context != "" {
+						if b.context == "modal" {
+							if !isModal {
+								continue
+							}
+						} else if b.context != activeContext {
+							continue
+						}
+					} else {
+						if isModal {
+							continue
+						}
+					}
+					return true
+				}
 			}
 		}
 	}
@@ -401,27 +453,53 @@ func (km *Keymap) ExecuteTarget(ctx context.Context, m mode.Mode, ke *event.KeyE
 	var target any
 	var matchedKey string
 
+	activeContext := km.getActiveFocusContextLocked()
+	isModal := strings.HasPrefix(activeContext, "modal:")
+
+	// Helper to find best matching binding in a list
+	findMatchInList := func(list []binding) (any, bool) {
+		// Pass 1: Check specific context matches
+		for _, b := range list {
+			if b.context != "" && b.context == activeContext {
+				return b.target, true
+			}
+		}
+		// Pass 2: Wildcard modal matches
+		if isModal {
+			for _, b := range list {
+				if b.context == "modal" {
+					return b.target, true
+				}
+			}
+		}
+		// Pass 3: General fallback (b.context == "")
+		if !isModal {
+			for _, b := range list {
+				if b.context == "" {
+					return b.target, true
+				}
+			}
+		}
+		return nil, false
+	}
+
 	// 1. Try MatchString (robust, handles synonyms)
-	for lhs, b := range bindings {
-		if b.screen != "" && active.GetScreen() != b.screen {
-			continue
-		}
-		if active.GetModal() != b.modal {
-			continue
-		}
+	for lhs, list := range bindings {
 		if ke.MatchString(lhs) {
-			target = b.target
-			matchedKey = lhs
-			break
+			if val, ok := findMatchInList(list); ok {
+				target = val
+				matchedKey = lhs
+				break
+			}
 		}
 	}
 
 	// 2. Fallback to exact string match using KeyToString
 	if target == nil {
 		keyStr := KeyToString(ke)
-		if b, ok := bindings[keyStr]; ok {
-			if (b.screen == "" || active.GetScreen() == b.screen) && active.GetModal() == b.modal {
-				target = b.target
+		if list, ok := bindings[keyStr]; ok {
+			if val, ok := findMatchInList(list); ok {
+				target = val
 				matchedKey = keyStr
 			}
 		}
