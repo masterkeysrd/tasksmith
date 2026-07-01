@@ -13,6 +13,7 @@ import (
 	"github.com/masterkeysrd/kite/key"
 
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
+	"github.com/masterkeysrd/tasksmith/internal/tui/focus"
 	"github.com/masterkeysrd/tasksmith/internal/tui/mode"
 )
 
@@ -278,47 +279,33 @@ func (km *Keymap) effectiveTimeoutLocked() time.Duration {
 // testFocusContext allows unit tests to mock the focused DOM context.
 var testFocusContext string
 
-func (km *Keymap) getActiveFocusContextLocked() string {
-	if testFocusContext != "" {
-		return testFocusContext
-	}
-	if document == nil {
-		return ""
-	}
-	el := document.CurrentFocus()
-	for el != nil {
-		if val, ok := el.Attribute("data-context"); ok {
-			return val
-		}
-		el = el.ParentElement()
-	}
-	return ""
-}
-
 func (km *Keymap) resolveLocked(m mode.Mode, key string) (any, bool) {
 	if bindings, ok := km.Modes[m]; ok {
 		if list, ok := bindings[key]; ok {
-			activeContext := km.getActiveFocusContextLocked()
-			isModal := strings.HasPrefix(activeContext, "modal:")
+			focus.TestFocusContext = testFocusContext
+			var matchedTarget any
+			var found bool
+			var hasModal bool
 
-			// Pass 1: Check specific context matches (e.g. "modal:auth" or "explorer")
-			for _, b := range list {
-				if b.context != "" && b.context == activeContext {
-					return b.target, true
+			focus.WalkContextChain(func(ctxName string) bool {
+				if strings.HasPrefix(ctxName, "modal:") || ctxName == "modal" {
+					hasModal = true
 				}
-			}
-
-			// Pass 2: Wildcard modal matches
-			if isModal {
 				for _, b := range list {
-					if b.context == "modal" {
-						return b.target, true
+					if b.context != "" && b.context == ctxName {
+						matchedTarget = b.target
+						found = true
+						return false // Found matching context, stop
 					}
 				}
+				return true // Continue up the tree
+			})
+			if found {
+				return matchedTarget, true
 			}
 
-			// Pass 3: General fallback (b.context == "")
-			if !isModal {
+			// General fallback (b.context == "") only if no modal is focused
+			if !hasModal {
 				for _, b := range list {
 					if b.context == "" {
 						return b.target, true
@@ -337,26 +324,32 @@ func (km *Keymap) resolveSequenceLocked(m mode.Mode, keys []string) (any, bool) 
 func (km *Keymap) isPrefixLocked(m mode.Mode, seq []string) bool {
 	prefix := strings.Join(seq, "")
 	if bindings, ok := km.Modes[m]; ok {
-		activeContext := km.getActiveFocusContextLocked()
-		isModal := strings.HasPrefix(activeContext, "modal:")
+		focus.TestFocusContext = testFocusContext
+		var matched bool
+		focus.WalkContextChain(func(ctxName string) bool {
+			for key, list := range bindings {
+				if strings.HasPrefix(key, prefix) && key != prefix {
+					for _, b := range list {
+						if b.context != "" && b.context == ctxName {
+							matched = true
+							return false // Stop walking
+						}
+					}
+				}
+			}
+			return true // Continue up
+		})
+		if matched {
+			return true
+		}
 
+		// Fallback to global prefixes
 		for key, list := range bindings {
 			if strings.HasPrefix(key, prefix) && key != prefix {
 				for _, b := range list {
-					if b.context != "" {
-						if b.context == "modal" {
-							if !isModal {
-								continue
-							}
-						} else if b.context != activeContext {
-							continue
-						}
-					} else {
-						if isModal {
-							continue
-						}
+					if b.context == "" {
+						return true
 					}
-					return true
 				}
 			}
 		}
@@ -453,27 +446,30 @@ func (km *Keymap) ExecuteTarget(ctx context.Context, m mode.Mode, ke *event.KeyE
 	var target any
 	var matchedKey string
 
-	activeContext := km.getActiveFocusContextLocked()
-	isModal := strings.HasPrefix(activeContext, "modal:")
-
 	// Helper to find best matching binding in a list
 	findMatchInList := func(list []binding) (any, bool) {
-		// Pass 1: Check specific context matches
-		for _, b := range list {
-			if b.context != "" && b.context == activeContext {
-				return b.target, true
+		focus.TestFocusContext = testFocusContext
+		var matchedTarget any
+		var found bool
+		var hasModal bool
+		focus.WalkContextChain(func(ctxName string) bool {
+			if strings.HasPrefix(ctxName, "modal:") || ctxName == "modal" {
+				hasModal = true
 			}
-		}
-		// Pass 2: Wildcard modal matches
-		if isModal {
 			for _, b := range list {
-				if b.context == "modal" {
-					return b.target, true
+				if b.context != "" && b.context == ctxName {
+					matchedTarget = b.target
+					found = true
+					return false // Stop walking
 				}
 			}
+			return true // Continue up
+		})
+		if found {
+			return matchedTarget, true
 		}
-		// Pass 3: General fallback (b.context == "")
-		if !isModal {
+		// General fallback (b.context == "") only if no modal is focused
+		if !hasModal {
 			for _, b := range list {
 				if b.context == "" {
 					return b.target, true

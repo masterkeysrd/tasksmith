@@ -15,6 +15,7 @@ import (
 	"github.com/masterkeysrd/kite/style"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	"github.com/masterkeysrd/tasksmith/internal/tui/api"
+	"github.com/masterkeysrd/tasksmith/internal/tui/focus"
 	"github.com/masterkeysrd/tasksmith/internal/tui/keymap"
 	"github.com/masterkeysrd/tasksmith/internal/tui/mode"
 )
@@ -62,6 +63,8 @@ func Run(ctx context.Context, opts RunOptions) error {
 	keymap.SetDocument(eng.Document(), func() mode.Mode {
 		return mode.Get()
 	})
+
+	focus.SetDocument(eng.Document())
 
 	main := element.NewBox(eng.Document())
 	main.Style(RootStyle)

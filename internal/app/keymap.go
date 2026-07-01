@@ -89,9 +89,7 @@ func (app *Application) InitializeKeymap() {
 	}, keymap.Description("Analytics: Cycle Active Tab"), keymap.Context("analytics"))
 
 	// Insert Mode
-	keymap.Set([]mode.Mode{mode.Insert}, "<Esc>", func(ctx context.Context) {
-		_ = command.Execute(ctx, "stopinsert")
-	}, keymap.Description("Exit insert mode"))
+	keymap.Set([]mode.Mode{mode.Insert}, "<Esc>", command.ExecFunc("stopinsert"), keymap.Description("Exit insert mode"))
 
 	// Command Mode
 	keymap.Set([]mode.Mode{mode.Command}, "<Esc>", func(ctx context.Context) {
