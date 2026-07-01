@@ -11,35 +11,52 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/tui/tokenutils"
 )
 
-func renderAgentStatus(t *theme.Scheme, sending bool, thinkingTime int, lastFinishedTime int, currentDots string, runPromptTokens, runCompletionTokens, runTotalTokens int, isGenerating bool, phase string, activeTip string) kitex.Node {
+// AgentStatusProps defines the properties for the AgentStatus widget.
+type AgentStatusProps struct {
+	Sending             bool
+	ThinkingTime        int
+	LastFinishedTime    int
+	CurrentDots         string
+	RunPromptTokens     int
+	RunCompletionTokens int
+	RunTotalTokens      int
+	IsGenerating        bool
+	Phase               string
+	ActiveTip           string
+}
+
+// AgentStatus renders the agent thinking/streaming/completed status bar.
+var AgentStatus = kitex.FC("AgentStatus", func(props AgentStatusProps) kitex.Node {
+	t := theme.UseTheme()
 	if t == nil {
 		return nil
 	}
+
 	blueColor := t.Color.Surface.Info
 	greenColor := t.Color.Surface.Success
-	timeStr := fmt.Sprintf("[%02d:%02d]", thinkingTime/60, thinkingTime%60)
+	timeStr := fmt.Sprintf("[%02d:%02d]", props.ThinkingTime/60, props.ThinkingTime%60)
 
 	upColor := t.Color.Text.Tertiary
 	downColor := t.Color.Text.Tertiary
-	if sending {
-		if isGenerating {
-			downColor = t.Color.Surface.Success // highlight down when streaming text
+	if props.Sending {
+		if props.IsGenerating {
+			downColor = t.Color.Surface.Success
 		} else {
-			upColor = t.Color.Surface.Info // highlight up when processing/waiting
+			upColor = t.Color.Surface.Info
 		}
 	}
 
-	if sending {
+	if props.Sending {
 		var statusText string
 		var statusColor color.Color
-		switch phase {
+		switch props.Phase {
 		case "thinking":
 			statusText = "Thinking"
 			statusColor = blueColor
 		case "answering":
 			statusText = "Answering"
 			statusColor = greenColor
-		default: // "processing"
+		default:
 			statusText = "Processing"
 			statusColor = t.Color.Text.Tertiary
 		}
@@ -56,29 +73,29 @@ func renderAgentStatus(t *theme.Scheme, sending bool, thinkingTime int, lastFini
 		timeStyle := style.S().Foreground(t.Color.Text.Tertiary)
 
 		var cumNodes []kitex.Node
-		if runPromptTokens > 0 || runCompletionTokens > 0 || runTotalTokens > 0 {
-			if runPromptTokens > 0 || runCompletionTokens > 0 {
+		if props.RunPromptTokens > 0 || props.RunCompletionTokens > 0 || props.RunTotalTokens > 0 {
+			if props.RunPromptTokens > 0 || props.RunCompletionTokens > 0 {
 				cumNodes = append(cumNodes, kitex.Box(kitex.BoxProps{
 					Style: style.S().Display(style.DisplayFlex).FlexDirection(style.FlexRow).Gap(1).Foreground(t.Color.Text.Tertiary),
 				},
 					kitex.Text("("),
-					kitex.Span(kitex.SpanProps{Style: style.S().Foreground(upColor)}, kitex.Text(fmt.Sprintf("↑%s", tokenutils.FormatTokens(runPromptTokens)))),
-					kitex.Span(kitex.SpanProps{Style: style.S().Foreground(downColor)}, kitex.Text(fmt.Sprintf("↓%s", tokenutils.FormatTokens(runCompletionTokens)))),
+					kitex.Span(kitex.SpanProps{Style: style.S().Foreground(upColor)}, kitex.Text(fmt.Sprintf("↑%s", tokenutils.FormatTokens(props.RunPromptTokens)))),
+					kitex.Span(kitex.SpanProps{Style: style.S().Foreground(downColor)}, kitex.Text(fmt.Sprintf("↓%s", tokenutils.FormatTokens(props.RunCompletionTokens)))),
 					kitex.Text(")"),
 				))
 			} else {
-				cumNodes = append(cumNodes, kitex.Box(kitex.BoxProps{Style: style.S().Foreground(t.Color.Text.Tertiary)}, kitex.Text(fmt.Sprintf("(%s TOTAL)", tokenutils.FormatTokens(runTotalTokens)))))
+				cumNodes = append(cumNodes, kitex.Box(kitex.BoxProps{Style: style.S().Foreground(t.Color.Text.Tertiary)}, kitex.Text(fmt.Sprintf("(%s TOTAL)", tokenutils.FormatTokens(props.RunTotalTokens)))))
 			}
 		}
 
 		statusRow := kitex.Box(kitex.BoxProps{Style: containerStyle},
-			kitex.Box(kitex.BoxProps{Style: dotsStyle}, kitex.Text(currentDots)),
+			kitex.Box(kitex.BoxProps{Style: dotsStyle}, kitex.Text(props.CurrentDots)),
 			kitex.Box(kitex.BoxProps{Style: labelStyle}, kitex.Text(statusText)),
 			kitex.Box(kitex.BoxProps{Style: timeStyle}, kitex.Text(timeStr)),
 			kitex.If(len(cumNodes) > 0, func() kitex.Node { return cumNodes[0] }),
 		)
 
-		if activeTip != "" {
+		if props.ActiveTip != "" {
 			tipStyle := style.S().
 				Foreground(t.Color.Text.Tertiary).
 				Italic(true).
@@ -89,14 +106,15 @@ func renderAgentStatus(t *theme.Scheme, sending bool, thinkingTime int, lastFini
 				Style: style.S().Display(style.DisplayFlex).FlexDirection(style.FlexColumn),
 			},
 				statusRow,
-				kitex.Box(kitex.BoxProps{Style: tipStyle}, kitex.Text("Tip: "+activeTip)),
+				kitex.Box(kitex.BoxProps{Style: tipStyle}, kitex.Text("Tip: "+props.ActiveTip)),
 			)
 		}
 
 		return statusRow
 	}
-	if lastFinishedTime >= 0 {
-		finishedTimeStr := fmt.Sprintf("[%02d:%02d]", lastFinishedTime/60, lastFinishedTime%60)
+
+	if props.LastFinishedTime >= 0 {
+		finishedTimeStr := fmt.Sprintf("[%02d:%02d]", props.LastFinishedTime/60, props.LastFinishedTime%60)
 		containerStyle := style.S().
 			Display(style.DisplayFlex).
 			FlexDirection(style.FlexRow).
@@ -109,12 +127,12 @@ func renderAgentStatus(t *theme.Scheme, sending bool, thinkingTime int, lastFini
 		timeStyle := style.S().Foreground(t.Color.Text.Secondary)
 
 		var cumNodes []kitex.Node
-		if runPromptTokens > 0 || runCompletionTokens > 0 || runTotalTokens > 0 {
+		if props.RunPromptTokens > 0 || props.RunCompletionTokens > 0 || props.RunTotalTokens > 0 {
 			var tokenStr string
-			if runPromptTokens > 0 || runCompletionTokens > 0 {
-				tokenStr = fmt.Sprintf("(↑%s ↓%s)", tokenutils.FormatTokens(runPromptTokens), tokenutils.FormatTokens(runCompletionTokens))
+			if props.RunPromptTokens > 0 || props.RunCompletionTokens > 0 {
+				tokenStr = fmt.Sprintf("(↑%s ↓%s)", tokenutils.FormatTokens(props.RunPromptTokens), tokenutils.FormatTokens(props.RunCompletionTokens))
 			} else {
-				tokenStr = fmt.Sprintf("(%s TOTAL)", tokenutils.FormatTokens(runTotalTokens))
+				tokenStr = fmt.Sprintf("(%s TOTAL)", tokenutils.FormatTokens(props.RunTotalTokens))
 			}
 			cumNodes = append(cumNodes, kitex.Box(kitex.BoxProps{Style: style.S().Foreground(t.Color.Text.Secondary)}, kitex.Text(" "+tokenStr)))
 		}
@@ -126,5 +144,6 @@ func renderAgentStatus(t *theme.Scheme, sending bool, thinkingTime int, lastFini
 			kitex.If(len(cumNodes) > 0, func() kitex.Node { return cumNodes[0] }),
 		)
 	}
+
 	return nil
-}
+})

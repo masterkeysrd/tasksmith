@@ -4,6 +4,7 @@ import (
 	"github.com/masterkeysrd/kite/extras/kitex"
 	"github.com/masterkeysrd/kite/extras/stage"
 	"github.com/masterkeysrd/kite/style"
+	"github.com/masterkeysrd/loom/message"
 	"github.com/masterkeysrd/tasksmith/internal/tui/components"
 	"github.com/masterkeysrd/tasksmith/internal/tui/theme"
 	"github.com/masterkeysrd/tasksmith/internal/tui/views/chat"
@@ -322,20 +323,257 @@ func main() {
 						Height(style.Percent(100)),
 				},
 					chat.QueuedBubble(chat.QueuedBubbleProps{
-						ID:   "msg-001",
-						Text: "Can you add dark mode support to the settings panel?",
-						OnEdit: func(id string) { c.Log("Edit: " + id) },
+						ID:       "msg-001",
+						Text:     "Can you add dark mode support to the settings panel?",
+						OnEdit:   func(id string) { c.Log("Edit: " + id) },
 						OnRemove: func(id string) { c.Log("Remove: " + id) },
 					}),
 					chat.QueuedBubble(chat.QueuedBubbleProps{
-						ID:   "msg-002",
-						Text: "Also update the README with the new instructions.",
-						OnEdit: func(id string) { c.Log("Edit: " + id) },
+						ID:       "msg-002",
+						Text:     "Also update the README with the new instructions.",
+						OnEdit:   func(id string) { c.Log("Edit: " + id) },
 						OnRemove: func(id string) { c.Log("Remove: " + id) },
 					}),
 					chat.QueuedBubble(chat.QueuedBubbleProps{
 						ID:   "opt_msg-003",
 						Text: "This one is optimistic — no Edit/Remove actions.",
+					}),
+				)
+			},
+		},
+	})
+
+	stg.Register("DeniedToolWidget", []stage.Scene{
+		{
+			Name: "Default",
+			Render: func(c *stage.Context) kitex.Node {
+				toolName := c.Text("Tool Name", "bash")
+				denyReason := c.Text("Deny Reason", "User rejected the action")
+
+				tc := &message.ToolCall{Name: toolName}
+				tm := &message.Tool{}
+				tm.SetMetadata(map[string]any{"deny_reason": denyReason})
+
+				return kitex.Box(kitex.BoxProps{
+					Style: style.S().Padding(2).Width(style.Percent(100)).Height(style.Percent(100)),
+				},
+					chat.DeniedToolWidget(chat.ToolExecutionProps{
+						ToolCall:    tc,
+						ToolMessage: tm,
+					}),
+				)
+			},
+		},
+		{
+			Name: "No Reason",
+			Render: func(c *stage.Context) kitex.Node {
+				tc := &message.ToolCall{Name: "write"}
+				tm := &message.Tool{}
+
+				return kitex.Box(kitex.BoxProps{
+					Style: style.S().Padding(2).Width(style.Percent(100)).Height(style.Percent(100)),
+				},
+					chat.DeniedToolWidget(chat.ToolExecutionProps{
+						ToolCall:    tc,
+						ToolMessage: tm,
+					}),
+				)
+			},
+		},
+	})
+
+	stg.Register("GenericToolWidget", []stage.Scene{
+		{
+			Name: "Running",
+			Render: func(c *stage.Context) kitex.Node {
+				toolName := c.Text("Tool Name", "my_custom_tool")
+				dots := c.Select("Dots", []string{".", "..", "..."}, ".")
+
+				tc := &message.ToolCall{
+					Name: toolName,
+					Args: map[string]any{"param": "value"},
+				}
+
+				return kitex.Box(kitex.BoxProps{
+					Style: style.S().Padding(2).Width(style.Percent(100)).Height(style.Percent(100)),
+				},
+					chat.GenericToolWidget(chat.ToolExecutionProps{
+						ToolCall:    tc,
+						CurrentDots: dots,
+					}),
+				)
+			},
+		},
+		{
+			Name: "Success",
+			Render: func(c *stage.Context) kitex.Node {
+				tc := &message.ToolCall{
+					Name: "my_custom_tool",
+					Args: map[string]any{"param": "value"},
+				}
+				tm := &message.Tool{
+					Content: message.Content{
+						&message.TextBlock{Text: "Tool executed successfully.\nOutput line 2.\nOutput line 3."},
+					},
+				}
+
+				return kitex.Box(kitex.BoxProps{
+					Style: style.S().Padding(2).Width(style.Percent(100)).Height(style.Percent(100)),
+				},
+					chat.GenericToolWidget(chat.ToolExecutionProps{
+						ToolCall:    tc,
+						ToolMessage: tm,
+					}),
+				)
+			},
+		},
+		{
+			Name: "Error",
+			Render: func(c *stage.Context) kitex.Node {
+				tc := &message.ToolCall{Name: "my_custom_tool"}
+				tm := &message.Tool{
+					IsError: true,
+					Content: message.Content{
+						&message.TextBlock{Text: "something went wrong: exit code 1"},
+					},
+				}
+
+				return kitex.Box(kitex.BoxProps{
+					Style: style.S().Padding(2).Width(style.Percent(100)).Height(style.Percent(100)),
+				},
+					chat.GenericToolWidget(chat.ToolExecutionProps{
+						ToolCall:    tc,
+						ToolMessage: tm,
+					}),
+				)
+			},
+		},
+	})
+
+	stg.Register("AgentStatus", []stage.Scene{
+		{
+			Name: "Processing",
+			Render: func(c *stage.Context) kitex.Node {
+				phase := c.Select("Phase", []string{"processing", "thinking", "answering"}, "processing")
+				dots := c.Select("Dots", []string{".", "..", "..."}, ".")
+				tip := c.Text("Active Tip", "")
+				seconds := 42
+
+				return kitex.Box(kitex.BoxProps{
+					Style: style.S().Padding(2).Width(style.Percent(100)).Height(style.Percent(100)),
+				},
+					chat.AgentStatus(chat.AgentStatusProps{
+						Sending:             true,
+						ThinkingTime:        seconds,
+						LastFinishedTime:    -1,
+						CurrentDots:         dots,
+						RunPromptTokens:     1200,
+						RunCompletionTokens: 340,
+						IsGenerating:        phase == "answering",
+						Phase:               phase,
+						ActiveTip:           tip,
+					}),
+				)
+			},
+		},
+		{
+			Name: "Completed",
+			Render: func(c *stage.Context) kitex.Node {
+				return kitex.Box(kitex.BoxProps{
+					Style: style.S().Padding(2).Width(style.Percent(100)).Height(style.Percent(100)),
+				},
+					chat.AgentStatus(chat.AgentStatusProps{
+						Sending:             false,
+						LastFinishedTime:    73,
+						RunPromptTokens:     4800,
+						RunCompletionTokens: 1200,
+					}),
+				)
+			},
+		},
+	})
+
+	stg.Register("Bubble", []stage.Scene{
+		{
+			Name: "User",
+			Render: func(c *stage.Context) kitex.Node {
+				text := c.Text("Message", "Can you refactor the auth module to use JWT?")
+				return kitex.Box(kitex.BoxProps{
+					Style: style.S().Padding(2).Width(style.Percent(100)).Height(style.Percent(100)),
+				},
+					chat.Bubble(chat.BubbleProps{
+						Role:      message.RoleUser,
+						Timestamp: "14:32",
+						Children:  []kitex.Node{kitex.Text(text)},
+					}),
+				)
+			},
+		},
+		{
+			Name: "Assistant",
+			Render: func(c *stage.Context) kitex.Node {
+				text := c.Text("Message", "Sure! I'll refactor the auth module to use JWT tokens.")
+				tokensIn := 800
+				tokensOut := 240
+				return kitex.Box(kitex.BoxProps{
+					Style: style.S().Padding(2).Width(style.Percent(100)).Height(style.Percent(100)),
+				},
+					chat.Bubble(chat.BubbleProps{
+						Role:         message.RoleAssistant,
+						Timestamp:    "14:32",
+						TokensInput:  tokensIn,
+						TokensOutput: tokensOut,
+						Children:     []kitex.Node{kitex.Text(text)},
+					}),
+				)
+			},
+		},
+		{
+			Name: "System Notification",
+			Render: func(c *stage.Context) kitex.Node {
+				return kitex.Box(kitex.BoxProps{
+					Style: style.S().Padding(2).Width(style.Percent(100)).Height(style.Percent(100)),
+				},
+					chat.Bubble(chat.BubbleProps{
+						Role:                 message.RoleSystem,
+						Timestamp:            "14:33",
+						IsSystemNotification: true,
+						Children:             []kitex.Node{kitex.Text("Session restored.")},
+					}),
+				)
+			},
+		},
+	})
+
+	stg.Register("BubbleGroup", []stage.Scene{
+		{
+			Name: "User",
+			Render: func(c *stage.Context) kitex.Node {
+				text := c.Text("Message", "Can you add dark mode support to the settings panel?")
+				msg := message.NewUserText(text)
+				return kitex.Box(kitex.BoxProps{
+					Style: style.S().Padding(2).Width(style.Percent(100)).Height(style.Percent(100)),
+				},
+					chat.BubbleGroup(chat.BubbleGroupProps{
+						Key:  "group-user-1",
+						Role: message.RoleUser,
+						Msgs: []message.Message{msg},
+					}),
+				)
+			},
+		},
+		{
+			Name: "Assistant",
+			Render: func(c *stage.Context) kitex.Node {
+				text := c.Text("Message", "I'll add dark mode support. Let me start by updating the theme configuration.")
+				msg := message.NewAssistantText(text)
+				return kitex.Box(kitex.BoxProps{
+					Style: style.S().Padding(2).Width(style.Percent(100)).Height(style.Percent(100)),
+				},
+					chat.BubbleGroup(chat.BubbleGroupProps{
+						Key:  "group-assistant-1",
+						Role: message.RoleAssistant,
+						Msgs: []message.Message{msg},
 					}),
 				)
 			},
