@@ -27,7 +27,7 @@ spec:
               type: boolean
               description: If true, replaces all occurrences of the target block. If false (default), fails if the target block is not unique.
           required: ["target", "replacement"]
-        description: A list of edits to apply to the file.
+        description: A list of edits to apply to the file. Note that individual edit items in this list must NOT contain the "path" property.
     required: ["path", "edits"]
   outputSchema:
     type: object
@@ -67,6 +67,7 @@ spec:
 Apply multiple, non-contiguous edits to a single file in a single turn.
 
 <guidelines>
+- **CRITICAL FORMATTING:** The `path` parameter is a top-level argument. Do NOT nest the `path` parameter inside the individual objects of the `edits` array.
 - You MUST `view` the file first — unviewed or externally modified files will be rejected.
 - Each `target` must be copied character-for-character from the viewed file output — do not re-type or reformat it.
 - Edits are applied top-to-bottom — each `target` must match the file as it exists *after* prior edits. Avoid overlapping targets.

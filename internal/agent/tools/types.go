@@ -746,6 +746,7 @@ type McpReadResourcesOutput struct {
 // Apply multiple, non-contiguous edits to a single file in a single turn.
 //
 // <guidelines>
+// - **CRITICAL FORMATTING:** The `path` parameter is a top-level argument. Do NOT nest the `path` parameter inside the individual objects of the `edits` array.
 // - You MUST `view` the file first — unviewed or externally modified files will be rejected.
 // - Each `target` must be copied character-for-character from the viewed file output — do not re-type or reformat it.
 // - Edits are applied top-to-bottom — each `target` must match the file as it exists *after* prior edits. Avoid overlapping targets.
@@ -753,8 +754,8 @@ type McpReadResourcesOutput struct {
 // - If changes are large enough to touch most of the file, prefer `write` for a clean full rewrite instead.
 // </guidelines>
 type MultiEditArgs struct {
-	// Edits: A list of edits to apply to the file.
-	Edits []MultiEditArgsEditsItem `json:"edits" jsonschema:"A list of edits to apply to the file."`
+	// Edits: A list of edits to apply to the file. Note that individual edit items in this list must NOT contain the "path" property.
+	Edits []MultiEditArgsEditsItem `json:"edits" jsonschema:"A list of edits to apply to the file. Note that individual edit items in this list must NOT contain the \"path\" property."`
 	// Path: Path to the file.
 	Path string `json:"path" jsonschema:"Path to the file."`
 }
