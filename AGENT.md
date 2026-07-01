@@ -4,54 +4,54 @@ TaskSmith is a Go-based autonomous agent orchestrator and TUI application. This 
 
 ## 🏗 Architecture Overview
 
-- **`cmd/tasksmith`**: Entry point. Orchestrates flag loading, application initialization, and lifecycle management.
-- **`cmd/stage`**: Staging binary entry point (separate build target).
+- **`cmd/tasksmith/`**: Entry point. Orchestrates flag loading, application initialization, and lifecycle management.
+- **`cmd/stage/`**: Staging binary entry point (separate build target).
 - **`internal/app`**: Core application logic and lifecycle (Run, Close, InitializeLogs). Registers builtin commands.
-      - `flags`: Command-line flag parsing and options loading.
+      - `flags/`: Command-line flag parsing and options loading.
       - `keymap.go`: Root-level keybinding configuration.
-- **`internal/api`**: Public service interface and data mapping. Connects workspace resources to application-level types.
-- **`internal/session`**: Session management with SQLite-backed persistence.
+- **`internal/api/`**: Public service interface and data mapping. Connects workspace resources to application-level types.
+- **`internal/session/`**: Session management with SQLite-backed persistence.
       - `storage.go`: Session storage interfaces.
       - `sqlite.go`: SQLite persistence implementation.
       - `store.go`: Session store coordination.
-- **`internal/agent`**: Builtin agent resources, tools, and graph-based orchestration.
-      - `tools`: Definitions and discovery for builtin tool presets. Contains `types.go` generated from markdown tool specs.
-      - `graph`: Agent execution graph with hooks and rehydration support.
-      - `prompt`: Prompt formatting and management utilities.
-- **`internal/workspace`**: Management of agents, projects, and providers using the `warp` library.
-      - `builtin`: Builtin workspace resources.
-      - `preset`: Provider presets (OpenAI, Anthropic, Google GenAI, Ollama).
+- **`internal/agent/`**: Builtin agent resources, tools, and graph-based orchestration.
+      - `tools/`: Definitions and discovery for builtin tool presets. Contains `types.go` generated from markdown tool specs.
+      - `graph/`: Agent execution graph with hooks and rehydration support.
+      - `prompt/`: Prompt formatting and management utilities.
+- **`internal/workspace/`**: Management of agents, projects, and providers using the `warp` library.
+      - `builtin/`: Builtin workspace resources.
+      - `preset/`: Provider presets (OpenAI, Anthropic, Google GenAI, Ollama).
 - **`internal/core`**: Essential utilities and domain packages:
-      - `log`: Structured `slog` wrapper with level support and custom writers.
-      - `xdg`: XDG Base Directory Specification compliance.
-      - `fsutil`: File system helpers.
-      - `db`: Database utilities.
-      - `diff`: Diff computation and display helpers.
-      - `fs`: File system operations with glob support and `.gitignore`-aware ignore patterns.
-      - `process`: Cross-platform process management (unix, windows implementations).
-      - `ripgrep`: Ripgrep integration for fast text search.
-      - `scheduler`: Task scheduling utilities.
-      - `vcs`: Version control system helpers (Git).
-- **`internal/tui`**: Terminal User Interface built with the `kite` framework.
-      - `api`: TUI-specific API client context.
-      - `plugin`: Plugin system for extending TUI functionality.
-      - `queries`: Reactive data hooks using `wind`.
-      - `theme`: Dynamic theme styling, loading, and resolution.
-      - `mode`: Reactive store for managing TUI input modes (Normal, Insert, Command) using `kite`'s reactive primitives.
-      - `command`: Global registry and execution mechanism for TUI commands.
-      - `keymap`: Mode-aware keybinding system with sequence resolution.
-      - `shell`: Shell-level TUI components.
-          - `commandbar`: Command input bar.
-          - `sidebar`: Sidebar navigation and listing.
-          - `statusline`: Status line display.
-          - `titlebar`: Window title bar.
-      - `views`: Top-level TUI views.
-          - `chat`: Chat view for agent interactions.
-          - `setup`: Setup/onboarding view.
-          - `welcome`: Welcome/landing view.
-      - `components`: Reusable UI components (accordion, alert, badge, button, card, checkbox, codeblock, confirm_dialog, diffblock, input, markdown, modal, paper, tabs, etc.).
-          - `icon`: Icon definitions.
-- **`tools/warp-gen`**: Code generator that parses tool specs to produce `types.go` in `internal/agent/tools/`.
+      - `log/`: Structured `slog` wrapper with level support and custom writers.
+      - `xdg/`: XDG Base Directory Specification compliance.
+      - `fsutil/`: File system helpers.
+      - `db/`: Database utilities.
+      - `diff/`: Diff computation and display helpers.
+      - `fs/`: File system operations with glob support and `.gitignore`-aware ignore patterns.
+      - `process/`: Cross-platform process management (unix, windows implementations).
+      - `ripgrep/`: Ripgrep integration for fast text search.
+      - `scheduler/`: Task scheduling utilities.
+      - `vcs/`: Version control system helpers (Git).
+- **`internal/tui/`**: Terminal User Interface built with the `kite` framework.
+      - `api/`: TUI-specific API client context.
+      - `plugin/`: Plugin system for extending TUI functionality.
+      - `queries/`: Reactive data hooks using `wind`.
+      - `theme/`: Dynamic theme styling, loading, and resolution.
+      - `mode/`: Reactive store for managing TUI input modes (Normal, Insert, Command) using `kite`'s reactive primitives.
+      - `command/`: Global registry and execution mechanism for TUI commands.
+      - `keymap/`: Mode-aware keybinding system with sequence resolution.
+      - `shell/`: Shell-level TUI components.
+          - `commandbar/`: Command input bar.
+          - `sidebar/`: Sidebar navigation and listing.
+          - `statusline/`: Status line display.
+          - `titlebar/`: Window title bar.
+      - `views/`: Top-level TUI views.
+          - `chat/`: Chat view for agent interactions.
+          - `setup/`: Setup/onboarding view.
+          - `welcome/`: Welcome/landing view.
+      - `components/`: Reusable UI components (accordion, alert, badge, button, card, checkbox, codeblock, confirm_dialog, diffblock, input, markdown, modal, paper, tabs, etc.).
+          - `icon/`: Icon definitions.
+- **`tools/warp-gen/`**: Code generator that parses tool specs to produce `types.go` in `internal/agent/tools/`.
 
 ## 📜 Engineering Rules
 
@@ -109,4 +109,3 @@ TaskSmith is a Go-based autonomous agent orchestrator and TUI application. This 
 - **Build**: Use `go build ./cmd/tasksmith/...`.
 - **Test**: Use `go test ./...`.
 - **Warp Code Generator**: Run `go run ./tools/warp-gen` to compile tool markdown specs into Go structures.
-- **Local Replace Directives**: `kite`, `warp`, and `loom` are local dependencies with `replace` directives pointing to sibling directories (`../kite`, `../warp`, `../loom`).
