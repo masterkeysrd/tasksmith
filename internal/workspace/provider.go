@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"strings"
 
+	"github.com/masterkeysrd/tasksmith/internal/agent/tools"
 	"github.com/masterkeysrd/warp"
 )
 
@@ -56,6 +57,14 @@ func (p *systemProvider) LoadResources() (*warp.ResourceSet, error) {
 	})
 	if err != nil {
 		return nil, err
+	}
+
+	builtins, err := tools.Resources()
+	if err != nil {
+		return nil, fmt.Errorf("load builtin tools: %w", err)
+	}
+	for _, t := range builtins {
+		resources.Tools[t.GetName()] = t
 	}
 
 	return resources, nil

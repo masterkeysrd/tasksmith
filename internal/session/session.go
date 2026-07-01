@@ -702,8 +702,19 @@ func (m *Manager) runAgentLoop(runCtx context.Context, sessionID string, sess *A
 		if idx := strings.Index(modelName, "/"); idx != -1 {
 			cleanedName = modelName[idx+1:]
 		}
+		// If the model has a tag (e.g. "qwen3.6:35b-a3b-coding-nvfp4"), try matching by base name.
+		baseName := cleanedName
+		if idx := strings.Index(cleanedName, ":"); idx != -1 {
+			baseName = cleanedName[:idx]
+		}
+
 		if _, foundCleaned := provider.GetProfile(cleanedName); foundCleaned {
 			modelName = cleanedName
+		} else if prof, foundBase := provider.GetProfile(baseName); foundBase {
+			// Inherit limits/capabilities from the base model configuration.
+			prof.ID = modelName
+			prof.Name = modelName
+			provider.OverrideProfile(modelName, prof)
 		} else {
 			provider.OverrideProfile(modelName, llm.ModelProfile{
 				ID:   modelName,

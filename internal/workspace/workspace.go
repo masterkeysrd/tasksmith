@@ -5,11 +5,13 @@ import (
 	"embed"
 	"fmt"
 	"io/fs"
+	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/masterkeysrd/tasksmith/internal/agent/tools"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
+	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
 	"github.com/masterkeysrd/warp"
 )
 
@@ -206,15 +208,24 @@ func (w *Workspace) GetWorkspaceConfig(ctx context.Context) (WorkspaceConfig, er
 		return WorkspaceConfig{CWD: w.cwd}, nil
 	}
 
+	var isConfigured bool
+	wsDir, err := xdg.WorkspaceDir(w.cwd)
+	if err == nil {
+		sentinelPath := filepath.Join(wsDir, "setup.json")
+		if _, err := os.Stat(sentinelPath); err == nil {
+			isConfigured = true
+		}
+	}
+
 	cfg := WorkspaceConfig{
 		Name:            wsSpec.Def.Metadata.Name,
 		DefaultProvider: wsSpec.Def.Spec.DefaultProvider,
-		IsConfigured:    true,
-		AuthorizedTools: make(map[string]bool),
+		IsConfigured:    isConfigured,
 		CWD:             w.cwd,
 	}
 
 	if wsSpec.Def.Spec.Policies != nil && wsSpec.Def.Spec.Policies.Tools != nil {
+		cfg.AuthorizedTools = make(map[string]bool)
 		for _, tool := range wsSpec.Def.Spec.Policies.Tools.Include {
 			cfg.AuthorizedTools[tool] = true
 		}

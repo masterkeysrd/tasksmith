@@ -214,3 +214,36 @@ func TestWorkspace_Contexts(t *testing.T) {
 		t.Error("Expected local AGENT.md context to be loaded")
 	}
 }
+
+func TestWorkspace_SyntheticResolveAgentTools(t *testing.T) {
+	tempCWD := t.TempDir()
+	w := New(tempCWD)
+	err := w.Load(context.Background())
+	if err != nil {
+		t.Fatalf("failed to load workspace: %v", err)
+	}
+
+	resolved, err := w.ResolveAgent(context.Background(), "main")
+	if err != nil {
+		t.Fatalf("failed to resolve main agent: %v", err)
+	}
+
+	if resolved == nil {
+		t.Fatal("expected resolved agent to be non-nil")
+	}
+
+	if len(resolved.Tools) == 0 {
+		t.Error("expected resolved agent in synthetic workspace to have tools loaded, got 0")
+	}
+
+	foundBash := false
+	for _, tool := range resolved.Tools {
+		if tool.Metadata.Name == "bash" {
+			foundBash = true
+			break
+		}
+	}
+	if !foundBash {
+		t.Error("expected resolved agent to include 'bash' tool")
+	}
+}
