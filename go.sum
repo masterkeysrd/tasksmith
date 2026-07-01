@@ -151,6 +151,8 @@ github.com/lucasb-eyer/go-colorful v1.4.0 h1:UtrWVfLdarDgc44HcS7pYloGHJUjHV/4FwW
 github.com/lucasb-eyer/go-colorful v1.4.0/go.mod h1:R4dSotOR9KMtayYi1e77YzuveK+i7ruzyGqttikkLy0=
 github.com/mailru/easyjson v0.9.2 h1:dX8U45hQsZpxd80nLvDGihsQ/OxlvTkVUXH2r/8cb2M=
 github.com/mailru/easyjson v0.9.2/go.mod h1:1+xMtQp2MRNVL/V1bOzuP3aP8VNwRW55fQUto+XFtTU=
+github.com/masterkeysrd/kite v0.0.2 h1:pIChJmxkVeu9j1UO/hIZK2TNTMoE9QbdK/zuClZestU=
+github.com/masterkeysrd/kite v0.0.2/go.mod h1:qZ99zwRPtPPVF4CIZJX2DroO0eesJt3dip1Q+RIFWS0=
 github.com/masterkeysrd/loom v0.0.3-0.20260630045231-7614987158fe h1:Dsqa+21GuINVsk/JzuleFWPl0U0mi5CAw9VDta8popI=
 github.com/masterkeysrd/loom v0.0.3-0.20260630045231-7614987158fe/go.mod h1:9uuoypt6YOCGCWqi60FBxjANUL1FXRyBIVgUZo0kNvs=
 github.com/masterkeysrd/lspx v0.0.0-20260611065943-6cf2ef01a123 h1:AXKvP/sFrGJAzKnsAzXQk4pFz9ZZNXE4GrioZEJsS+I=
