@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"log/slog"
 	"os"
 	"time"
@@ -13,6 +14,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	"github.com/masterkeysrd/tasksmith/internal/tui/components"
 	"github.com/masterkeysrd/tasksmith/internal/tui/theme"
+	"github.com/masterkeysrd/tasksmith/internal/tui/toast"
 	"github.com/masterkeysrd/tasksmith/internal/tui/views/chat"
 )
 
@@ -804,6 +806,54 @@ func main() {
 						LoopStyle: components.LoopReset,
 						Interval:  120 * time.Millisecond,
 					}),
+				)
+			},
+		},
+	})
+
+	stg.Register("Toast", []stage.Scene{
+		{
+			Name: "Default",
+			Render: func(c *stage.Context) kitex.Node {
+				title := c.Text("Title", "Success")
+				msg := c.Text("Message", "Operation completed successfully!")
+				severityVal := c.Select("Severity", []string{"success", "warning", "error", "info"}, "success")
+				durationSec := c.Int("Duration (seconds)", 5)
+
+				severity := toast.Success
+				switch severityVal {
+				case "success":
+					severity = toast.Success
+				case "warning":
+					severity = toast.Warning
+				case "error":
+					severity = toast.Error
+				case "info":
+					severity = toast.Info
+				}
+
+				toastCount, setToastCount := kitex.UseState(1)
+
+				// Button to trigger toast
+				triggerBtn := components.Button(components.ButtonProps{
+					OnClick: func() {
+						toast.Add(severity, fmt.Sprintf("%s #%d", title, toastCount()), msg, time.Duration(durationSec)*time.Second)
+						setToastCount(toastCount() + 1)
+					},
+				}, kitex.Text("Trigger Toast"))
+
+				return kitex.Box(kitex.BoxProps{
+					Style: style.S().
+						Padding(2).
+						Display(style.DisplayFlex).
+						FlexDirection(style.FlexColumn).
+						JustifyContent(style.JustifyCenter).
+						AlignItems(style.AlignCenter).
+						Width(style.Percent(100)).
+						Height(style.Percent(100)),
+				},
+					triggerBtn,
+					toast.ToastContainer(),
 				)
 			},
 		},
