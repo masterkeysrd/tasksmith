@@ -13,6 +13,7 @@ import (
 	"github.com/masterkeysrd/loom/tool"
 	"github.com/masterkeysrd/tasksmith/internal/agent/permissions"
 	"github.com/masterkeysrd/tasksmith/internal/agent/tools"
+	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	"github.com/masterkeysrd/tasksmith/internal/core/lsp"
 	"github.com/masterkeysrd/tasksmith/internal/mcp"
 	"github.com/masterkeysrd/tasksmith/internal/session/filetrack"
@@ -27,6 +28,7 @@ type AgentState struct {
 	ActivatedSkills       []string                            `json:"activated_skills"`
 	PendingAuthorizations []permissions.AuthorizationRequest  `json:"pending_authorizations,omitempty"`
 	Decisions             []permissions.AuthorizationDecision `json:"decisions,omitempty"`
+	ExecutionCancelled    bool                                `json:"execution_cancelled,omitempty"`
 }
 
 // Copy performs a deep copy of AgentState to satisfy the loom graph.State interface.
@@ -52,6 +54,7 @@ func (s AgentState) Copy() AgentState {
 		copied.Decisions = make([]permissions.AuthorizationDecision, len(s.Decisions))
 		copy(copied.Decisions, s.Decisions)
 	}
+	copied.ExecutionCancelled = s.ExecutionCancelled
 	return copied
 }
 
@@ -208,13 +211,21 @@ func (a *AgentGraph) Build(cp graph.Checkpointer) (*graph.Graph[AgentState], err
 		AddEdge(graph.START, "check_inbox")
 
 	builder.AddRouteEdge("check_inbox", func(s AgentState) (string, error) {
+		log.Info(fmt.Sprintf("[AgentGraph] check_inbox router: s.ExecutionCancelled=%t s.Messages=%d", s.ExecutionCancelled, len(s.Messages)))
+		if s.ExecutionCancelled {
+			log.Info("[AgentGraph] check_inbox router: returning graph.END because s.ExecutionCancelled is true")
+			return graph.END, nil
+		}
 		if len(s.Messages) == 0 {
+			log.Info("[AgentGraph] check_inbox router: returning graph.END because s.Messages is empty")
 			return graph.END, nil
 		}
 		lastMsg := s.Messages[len(s.Messages)-1]
 		if lastMsg.Role() == message.RoleAssistant {
+			log.Info("[AgentGraph] check_inbox router: returning graph.END because lastMsg is Assistant")
 			return graph.END, nil
 		}
+		log.Info("[AgentGraph] check_inbox router: returning think")
 		return "think", nil
 	}, map[string]string{
 		"think":   "think",
@@ -315,8 +326,42 @@ func (a *AgentGraph) executeTools(ctx context.Context, s AgentState) (graph.Comm
 	interruptRequired := false
 
 	decisionMap := make(map[string]permissions.AuthorizationDecision)
-	for _, dec := range s.Decisions {
+	log.Info(fmt.Sprintf("[AgentGraph] executeTools: s.Decisions count=%d", len(s.Decisions)))
+	for i, dec := range s.Decisions {
+		log.Info(fmt.Sprintf("[AgentGraph] decision %d: ToolCallID=%q, Approved=%t, CancelExecution=%t, Reason=%q", i, dec.ToolCallID, dec.Approved, dec.CancelExecution, dec.Reason))
 		decisionMap[dec.ToolCallID] = dec
+	}
+
+	// Check for hard cancel: if any decision requests execution cancellation,
+	// generate cancellation messages for all tool calls and halt the graph.
+	for _, dec := range s.Decisions {
+		if dec.CancelExecution {
+			for _, block := range lastMsg.GetContent() {
+				if tc, ok := block.(*message.ToolCall); ok {
+					toolMsg := &message.Tool{
+						ToolCallID: tc.ID,
+						Name:       tc.Name,
+						IsError:    true,
+						Content:    message.Content{&message.TextBlock{Text: "Execution cancelled by user."}},
+					}
+					toolResults = append(toolResults, toolMsg)
+					if hasWriter {
+						_ = sw.Write(ctx, stream.Event{
+							Name: "tool_message",
+							Data: toolMsg,
+						})
+					}
+				}
+			}
+			return graph.Update[AgentState](func(state AgentState) AgentState {
+				log.Info("[AgentGraph] executeTools update function running: setting ExecutionCancelled = true")
+				state.Messages = append(state.Messages, toolResults...)
+				state.PendingAuthorizations = nil
+				state.Decisions = nil
+				state.ExecutionCancelled = true
+				return state
+			}), nil
+		}
 	}
 
 	completedResults := make(map[string]message.Message)
@@ -412,11 +457,24 @@ func (a *AgentGraph) executeTools(ctx context.Context, s AgentState) (graph.Comm
 			tc := er.toolCall
 			switch er.permState {
 			case permissions.StateExplicitDeny:
+				text := fmt.Sprintf("Authorization denied by user for tool %q", tc.Name)
+				dec := decisionMap[tc.ID]
+				if dec.Reason != "" {
+					text = fmt.Sprintf("Authorization denied by user for tool %q: %s", tc.Name, dec.Reason)
+				}
 				toolMsg := &message.Tool{
 					ToolCallID: tc.ID,
 					Name:       tc.Name,
 					IsError:    true,
-					Content:    message.Content{&message.TextBlock{Text: fmt.Sprintf("Authorization denied by user for tool %q", tc.Name)}},
+					Content:    message.Content{&message.TextBlock{Text: text}},
+				}
+				if dec.Reason != "" {
+					meta := toolMsg.GetMetadata()
+					if meta == nil {
+						meta = make(map[string]any)
+					}
+					meta["deny_reason"] = dec.Reason
+					toolMsg.SetMetadata(meta)
 				}
 				toolResults = append(toolResults, toolMsg)
 				if hasWriter {
@@ -553,6 +611,13 @@ func (a *AgentGraph) executeTools(ctx context.Context, s AgentState) (graph.Comm
 
 // checkInbox checks for new user messages in the inbox and appends them to the execution state.
 func (a *AgentGraph) checkInbox(ctx context.Context, s AgentState) (graph.Command[AgentState], error) {
+	log.Info(fmt.Sprintf("[AgentGraph] checkInbox node: s.ExecutionCancelled=%t s.Messages=%d", s.ExecutionCancelled, len(s.Messages)))
+	if s.ExecutionCancelled {
+		log.Info("[AgentGraph] checkInbox node: returning immediately because s.ExecutionCancelled is true")
+		return graph.Update[AgentState](func(state AgentState) AgentState {
+			return state
+		}), nil
+	}
 	if a.inbox == nil {
 		return graph.Update[AgentState](func(state AgentState) AgentState {
 			return state

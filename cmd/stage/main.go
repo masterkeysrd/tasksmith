@@ -6,6 +6,7 @@ import (
 	"github.com/masterkeysrd/kite/style"
 	"github.com/masterkeysrd/tasksmith/internal/tui/components"
 	"github.com/masterkeysrd/tasksmith/internal/tui/theme"
+	"github.com/masterkeysrd/tasksmith/internal/tui/views/chat"
 )
 
 func main() {
@@ -273,6 +274,69 @@ func main() {
 							}, kitex.Text("Action")),
 						),
 					),
+				)
+			},
+		},
+	})
+
+	stg.Register("QueuedBubble", []stage.Scene{
+		{
+			Name: "Default",
+			Render: func(c *stage.Context) kitex.Node {
+				text := c.Text("Message", "Can you add dark mode support to the settings panel?")
+				isOptimistic := c.Bool("Optimistic", false)
+
+				id := "msg-001"
+				if isOptimistic {
+					id = "opt_msg-001"
+				}
+
+				return kitex.Box(kitex.BoxProps{
+					Style: style.S().
+						Padding(2).
+						Width(style.Percent(100)).
+						Height(style.Percent(100)),
+				},
+					chat.QueuedBubble(chat.QueuedBubbleProps{
+						ID:   id,
+						Text: text,
+						OnEdit: func(msgID string) {
+							c.Log("Edit clicked: " + msgID)
+						},
+						OnRemove: func(msgID string) {
+							c.Log("Remove clicked: " + msgID)
+						},
+					}),
+				)
+			},
+		},
+		{
+			Name: "Multiple",
+			Render: func(c *stage.Context) kitex.Node {
+				return kitex.Box(kitex.BoxProps{
+					Style: style.S().
+						Padding(2).
+						Display(style.DisplayFlex).
+						FlexDirection(style.FlexColumn).
+						Width(style.Percent(100)).
+						Height(style.Percent(100)),
+				},
+					chat.QueuedBubble(chat.QueuedBubbleProps{
+						ID:   "msg-001",
+						Text: "Can you add dark mode support to the settings panel?",
+						OnEdit: func(id string) { c.Log("Edit: " + id) },
+						OnRemove: func(id string) { c.Log("Remove: " + id) },
+					}),
+					chat.QueuedBubble(chat.QueuedBubbleProps{
+						ID:   "msg-002",
+						Text: "Also update the README with the new instructions.",
+						OnEdit: func(id string) { c.Log("Edit: " + id) },
+						OnRemove: func(id string) { c.Log("Remove: " + id) },
+					}),
+					chat.QueuedBubble(chat.QueuedBubbleProps{
+						ID:   "opt_msg-003",
+						Text: "This one is optimistic — no Edit/Remove actions.",
+					}),
 				)
 			},
 		},

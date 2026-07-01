@@ -358,3 +358,130 @@ func TestAgentGraph_PermissionsInterception(t *testing.T) {
 		t.Errorf("expected final answer, got %q", lastMsg.GetContent().Text())
 	}
 }
+
+func TestAgentGraph_PermissionsInterceptionDenyWithFeedback(t *testing.T) {
+	// Register a dummy handler for the "todos" tool to trigger interception
+	dh := &dummyToolHandler{
+		evalRes: permissions.EvaluationResult{
+			State: permissions.StateRequiresAuth,
+			Hints: []string{"Todos requires authorization"},
+		},
+	}
+	permissions.RegisterHandler("todos", dh)
+
+	// Mock LLM model returning a tool call
+	mockModel := &mockLLMModel{
+		invokeFn: func(ctx context.Context, messages []message.Message) (*message.Assistant, error) {
+			hasToolCall := false
+			for _, m := range messages {
+				if m.Role() == message.RoleAssistant {
+					hasToolCall = true
+					break
+				}
+			}
+			if !hasToolCall {
+				return &message.Assistant{
+					Content: message.Content{
+						&message.ToolCall{
+							ID:   "call_todos_456",
+							Name: "todos",
+							Args: map[string]any{"action": "list"},
+						},
+					},
+				}, nil
+			}
+			// When resumed and completed, return final text
+			return &message.Assistant{
+				Content: message.Content{
+					&message.TextBlock{Text: "Final answer after denial feedback"},
+				},
+			}, nil
+		},
+	}
+
+	pm := &mockPermissionManager{mode: permissions.ModeDefault}
+	ag, err := agentgraph.New(context.Background(), agentgraph.Options{
+		Model:             mockModel,
+		PermissionManager: pm,
+	})
+	if err != nil {
+		t.Fatalf("failed to construct agent graph: %v", err)
+	}
+	cp := newMockCheckpointer()
+	g, err := ag.Build(cp)
+	if err != nil {
+		t.Fatalf("failed to build graph: %v", err)
+	}
+
+	initialState := agentgraph.AgentState{
+		Messages: message.MessageList{
+			message.NewUserText("List todos"),
+		},
+	}
+
+	initCmd := graph.Update[agentgraph.AgentState](func(s agentgraph.AgentState) agentgraph.AgentState {
+		return initialState
+	})
+
+	// Run graph - should halt on todos tool call
+	snapshot, err := g.Execute(context.Background(), initCmd, nil)
+	if err != nil {
+		t.Fatalf("graph execution failed: %v", err)
+	}
+
+	if snapshot.IsDone() {
+		t.Error("expected execution to be halted, but it completed")
+	}
+
+	// Resume execution with Approved = false and a Reason
+	resumeCmd := graph.Update[agentgraph.AgentState](func(state agentgraph.AgentState) agentgraph.AgentState {
+		state.Decisions = []permissions.AuthorizationDecision{
+			{
+				ToolCallID: "call_todos_456",
+				Approved:   false,
+				Reason:     "unsafe execution directory",
+			},
+		}
+		return state
+	})
+
+	finalSnapshot, err := g.Execute(context.Background(), resumeCmd, &snapshot.Location)
+	if err != nil {
+		t.Fatalf("resumed graph execution failed: %v", err)
+	}
+
+	if !finalSnapshot.IsDone() {
+		t.Error("expected resumed execution to be completed")
+	}
+
+	// Verify that the tool was denied and the reason was recorded
+	var toolMsg *message.Tool
+	for _, msg := range finalSnapshot.State.Messages {
+		if tm, ok := msg.(*message.Tool); ok && tm.ToolCallID == "call_todos_456" {
+			toolMsg = tm
+			break
+		}
+	}
+	if toolMsg == nil {
+		t.Fatal("expected tool message result for call_todos_456 in final messages list")
+	}
+
+	if !toolMsg.IsError {
+		t.Error("expected denied tool message to have IsError = true")
+	}
+
+	expectedText := `Authorization denied by user for tool "todos": unsafe execution directory`
+	if toolMsg.GetContent().Text() != expectedText {
+		t.Errorf("expected text %q, got %q", expectedText, toolMsg.GetContent().Text())
+	}
+
+	meta := toolMsg.GetMetadata()
+	if meta == nil {
+		t.Fatal("expected metadata on denied tool message")
+	}
+
+	denyReason, ok := meta["deny_reason"].(string)
+	if !ok || denyReason != "unsafe execution directory" {
+		t.Errorf("expected metadata deny_reason 'unsafe execution directory', got %v", meta["deny_reason"])
+	}
+}

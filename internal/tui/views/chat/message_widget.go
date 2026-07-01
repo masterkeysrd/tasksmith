@@ -37,8 +37,15 @@ type MessageProps struct {
 	OnSelectDir           func(int)
 	OnApprove             func()
 	OnDeny                func()
+	OnHardCancel          func()
 	OnViewFullOutput      func(title, cachedPath string)
 	OnViewPreview         func(title string, p preview.ToolPreview)
+	IsProvidingFeedback   bool
+	FeedbackText          string
+	OnFeedbackChange      func(string)
+	OnDenyWithFeedback    func(string)
+	OnCancelFeedback      func()
+	OnStartFeedback       func()
 }
 
 var Message = kitex.FC("Message", func(props MessageProps) kitex.Node {
@@ -81,24 +88,31 @@ var Message = kitex.FC("Message", func(props MessageProps) kitex.Node {
 					decision, isDecided := props.LocalDecisions[pendingReq.ToolCallID]
 
 					node = AuthorizationWidget(AuthorizationWidgetProps{
-						Request:            *pendingReq,
-						CurrentPageIndex:   props.CurrentPageIndex,
-						FocusedItem:        props.FocusedItem,
-						SelectedScopeIndex: props.SelectedScopeIndex,
-						SelectedOptions:    props.SelectedOptions,
-						SelectedDirs:       props.SelectedDirs,
-						OnPreview:          props.OnPreview,
-						IsActive:           isActive,
-						IsFocused:          isActive && !props.IsInsert,
-						IsDecided:          isDecided,
-						Decision:           decision,
-						IsSubmitting:       props.IsSubmitting,
-						OnSelectVertical:   props.OnSelectVertical,
-						OnSelectScope:      props.OnSelectScope,
-						OnSelectOption:     props.OnSelectOption,
-						OnSelectDir:        props.OnSelectDir,
-						OnApprove:          props.OnApprove,
-						OnDeny:             props.OnDeny,
+						Request:             *pendingReq,
+						CurrentPageIndex:    props.CurrentPageIndex,
+						FocusedItem:         props.FocusedItem,
+						SelectedScopeIndex:  props.SelectedScopeIndex,
+						SelectedOptions:     props.SelectedOptions,
+						SelectedDirs:        props.SelectedDirs,
+						OnPreview:           props.OnPreview,
+						IsActive:            isActive,
+						IsFocused:           isActive && (!props.IsInsert || props.IsProvidingFeedback),
+						IsDecided:           isDecided,
+						Decision:            decision,
+						IsSubmitting:        props.IsSubmitting,
+						OnSelectVertical:    props.OnSelectVertical,
+						OnSelectScope:       props.OnSelectScope,
+						OnSelectOption:      props.OnSelectOption,
+						OnSelectDir:         props.OnSelectDir,
+						OnApprove:           props.OnApprove,
+						OnDeny:              props.OnDeny,
+						OnHardCancel:        props.OnHardCancel,
+						IsProvidingFeedback: props.IsProvidingFeedback,
+						FeedbackText:        props.FeedbackText,
+						OnFeedbackChange:    props.OnFeedbackChange,
+						OnDenyWithFeedback:  props.OnDenyWithFeedback,
+						OnCancelFeedback:    props.OnCancelFeedback,
+						OnStartFeedback:     props.OnStartFeedback,
 					})
 				} else {
 					var toolMsg *message.Tool

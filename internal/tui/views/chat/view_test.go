@@ -16,7 +16,9 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/tui/theme"
 )
 
-type mockClient struct{}
+type mockClient struct {
+	tuiapi.Client
+}
 
 func (m *mockClient) ListProjects(ctx context.Context, req api.ListProjectsRequest) (*api.ListProjectsResponse, error) {
 	return &api.ListProjectsResponse{}, nil
@@ -211,6 +213,23 @@ func TestChatView(t *testing.T) {
 			t.Fatal("Chat view with tools returned nil node")
 		}
 	})
+
+	t.Run("RenderChatViewWithDeniedTool", func(t *testing.T) {
+		c := &mockClientWithDeniedTool{}
+		renderWithDenied := func(node kitex.Node) kitex.Node {
+			return wind.Provider(wind.ProviderProps{Client: windClient},
+				tuiapi.Provider(tuiapi.Props{Client: c},
+					theme.Provider(theme.Props{Theme: thm}, node),
+				),
+			)
+		}
+		node := renderWithDenied(View(ViewProps{
+			SessionID: "test-session-id",
+		}))
+		if node == nil {
+			t.Fatal("Chat view with denied tool returned nil node")
+		}
+	})
 }
 
 type mockClientWithTools struct {
@@ -225,6 +244,20 @@ func (m *mockClientWithTools) GetSessionMessages(ctx context.Context, req api.Ge
 			`{"role":"tool","tool_call_id":"call-1","name":"bash","content":[{"type":"text","text":"hello\n"}]}`,
 			`{"role":"tool","tool_call_id":"call-2","name":"view_file","content":[{"type":"text","text":"package main"}]}`,
 			`{"role":"user","content":[{"type":"text","text":"Wake up"}],"metadata":{"is_system_notification":true,"task_id":"task-123","task_name":"run tests","task_status":"completed","exit_code":0}}`,
+		},
+	}, nil
+}
+
+type mockClientWithDeniedTool struct {
+	mockClient
+}
+
+func (m *mockClientWithDeniedTool) GetSessionMessages(ctx context.Context, req api.GetSessionMessagesRequest) (*api.GetSessionMessagesResponse, error) {
+	return &api.GetSessionMessagesResponse{
+		Messages: []string{
+			`{"role":"user","content":[{"type":"text","text":"Run tool"}]}`,
+			`{"role":"assistant","content":[{"type":"tool_call","id":"call-denied","name":"write","args":{"path":"test.txt"}}]}`,
+			`{"role":"tool","tool_call_id":"call-denied","name":"write","is_error":true,"content":[{"type":"text","text":"Authorization denied by user for tool \"write\": security policy"}],"metadata":{"deny_reason":"security policy"}}`,
 		},
 	}, nil
 }

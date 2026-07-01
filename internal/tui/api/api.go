@@ -49,6 +49,12 @@ type Client interface {
 	GetFileJournal(ctx context.Context, req api.GetFileJournalRequest) (*api.GetFileJournalResponse, error)
 	RevertFile(ctx context.Context, req api.RevertFileRequest) (*api.RevertFileResponse, error)
 	GetCachedFile(ctx context.Context, req api.GetCachedFileRequest) (*api.GetCachedFileResponse, error)
+
+	DequeueFrom(ctx context.Context, req api.DequeueFromRequest) (*api.DequeueFromResponse, error)
+	EnqueueMessages(ctx context.Context, req api.EnqueueMessagesRequest) (*api.EnqueueMessagesResponse, error)
+	ClearQueue(ctx context.Context, req api.ClearQueueRequest) (*api.ClearQueueResponse, error)
+	RemoveQueuedMessage(ctx context.Context, req api.RemoveQueuedMessageRequest) (*api.RemoveQueuedMessageResponse, error)
+	SendQueued(ctx context.Context, req api.SendQueuedRequest) (*api.SendQueuedResponse, error)
 }
 
 var clientCtx = kitex.CreateContext[Client](nil)
@@ -296,5 +302,35 @@ func (w *toastClient) RevertFile(ctx context.Context, req api.RevertFileRequest)
 func (w *toastClient) GetCachedFile(ctx context.Context, req api.GetCachedFileRequest) (*api.GetCachedFileResponse, error) {
 	res, err := w.delegate.GetCachedFile(ctx, req)
 	toastError("Failed to Get Cached File", err)
+	return res, err
+}
+
+func (w *toastClient) DequeueFrom(ctx context.Context, req api.DequeueFromRequest) (*api.DequeueFromResponse, error) {
+	res, err := w.delegate.DequeueFrom(ctx, req)
+	toastError("Failed to Dequeue Messages", err)
+	return res, err
+}
+
+func (w *toastClient) EnqueueMessages(ctx context.Context, req api.EnqueueMessagesRequest) (*api.EnqueueMessagesResponse, error) {
+	res, err := w.delegate.EnqueueMessages(ctx, req)
+	toastError("Failed to Enqueue Messages", err)
+	return res, err
+}
+
+func (w *toastClient) ClearQueue(ctx context.Context, req api.ClearQueueRequest) (*api.ClearQueueResponse, error) {
+	res, err := w.delegate.ClearQueue(ctx, req)
+	toastError("Failed to Clear Queue", err)
+	return res, err
+}
+
+func (w *toastClient) RemoveQueuedMessage(ctx context.Context, req api.RemoveQueuedMessageRequest) (*api.RemoveQueuedMessageResponse, error) {
+	res, err := w.delegate.RemoveQueuedMessage(ctx, req)
+	toastError("Failed to Remove Queued Message", err)
+	return res, err
+}
+
+func (w *toastClient) SendQueued(ctx context.Context, req api.SendQueuedRequest) (*api.SendQueuedResponse, error) {
+	res, err := w.delegate.SendQueued(ctx, req)
+	toastError("Failed to Send Queued Messages", err)
 	return res, err
 }

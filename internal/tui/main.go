@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"fmt"
+	"log/slog"
 
 	"github.com/masterkeysrd/kite/backend/uv"
 	"github.com/masterkeysrd/kite/devtools"
@@ -10,6 +11,7 @@ import (
 	"github.com/masterkeysrd/kite/engine"
 	"github.com/masterkeysrd/kite/extras/kitex"
 	"github.com/masterkeysrd/kite/extras/kitex/kitexdt"
+	kitelog "github.com/masterkeysrd/kite/log"
 	"github.com/masterkeysrd/kite/style"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	"github.com/masterkeysrd/tasksmith/internal/tui/api"
@@ -34,6 +36,10 @@ func Run(ctx context.Context, opts RunOptions) error {
 	if err != nil {
 		return fmt.Errorf("failed to create backend: %w", err)
 	}
+
+	// Wire our slog logger into Kite so its internal warnings (e.g. keyless node
+	// shifting) are visible in the tasksmith log output.
+	kitelog.SetLogger(slog.Default())
 
 	eng := engine.New(b, engine.Options{})
 

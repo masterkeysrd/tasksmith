@@ -569,3 +569,46 @@ type RestartMcpResponse struct {
 	Success bool   `json:"success"`
 	Error   string `json:"error,omitempty"`
 }
+
+type DequeueFromRequest struct {
+	SessionID string `json:"session_id"`
+	MessageID string `json:"message_id"`
+}
+
+type DequeueFromResponse struct {
+	Messages []string `json:"messages"` // Serialized JSON messages
+}
+
+type EnqueueMessagesRequest struct {
+	SessionID string   `json:"session_id"`
+	Messages  []string `json:"messages"` // Serialized JSON messages
+}
+
+type EnqueueMessagesResponse struct {
+	Success bool `json:"success"`
+}
+
+type ClearQueueRequest struct {
+	SessionID string `json:"session_id"`
+}
+
+type ClearQueueResponse struct {
+	Success bool `json:"success"`
+}
+
+type RemoveQueuedMessageRequest struct {
+	SessionID string `json:"session_id"`
+	MessageID string `json:"message_id"`
+}
+
+type RemoveQueuedMessageResponse struct {
+	Success bool `json:"success"`
+}
+
+type SendQueuedRequest struct {
+	SessionID string `json:"session_id"`
+}
+
+type SendQueuedResponse struct {
+	Success bool `json:"success"`
+}

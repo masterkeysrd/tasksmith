@@ -459,6 +459,7 @@ func (m *Manager) sendMessage(ctx context.Context, sessionID string, text string
 		sess.Inbox = append(sess.Inbox, msg)
 		sess.InboxMu.Unlock()
 		m.mu.Unlock()
+		m.notifySubscribers(sessionID)
 		return nil
 	}
 
@@ -501,6 +502,7 @@ func (m *Manager) sendMessage(ctx context.Context, sessionID string, text string
 		agentgraph.InjectReminders(runCtx, msg, state, m.lspManager, cwd)
 
 		state.Messages = append(state.Messages, msg)
+		state.ExecutionCancelled = false
 		return state
 	})
 
@@ -550,6 +552,10 @@ func (m *Manager) SubmitAuthorizationDecision(ctx context.Context, sessionID str
 	m.mu.Unlock()
 
 	// Setup input command to load current state and inject user's decisions
+	log.Info(fmt.Sprintf("[Session] SubmitAuthorizationDecision: sessionID=%s decisionsCount=%d", sessionID, len(decisions)))
+	for i, d := range decisions {
+		log.Info(fmt.Sprintf("[Session] decision %d: ToolCallID=%q Approved=%t CancelExecution=%t Reason=%q", i, d.ToolCallID, d.Approved, d.CancelExecution, d.Reason))
+	}
 	inputCmd := graph.Update[agentgraph.AgentState](func(state agentgraph.AgentState) agentgraph.AgentState {
 		state.Decisions = append(state.Decisions, decisions...)
 		return state
@@ -1187,6 +1193,137 @@ func (m *Manager) GetQueuedMessages(sessionID string) (message.MessageList, erro
 	}
 	m.mu.RUnlock()
 	return inboxMsgs, nil
+}
+
+// DequeueFrom removes the message with the given messageID and all subsequent messages from the inbox,
+// returning them to the caller. Returns an error if the messageID is not found.
+func (m *Manager) DequeueFrom(sessionID string, messageID string) ([]message.Message, error) {
+	m.mu.Lock()
+	sess, ok := m.activeSessions[sessionID]
+	if !ok {
+		m.mu.Unlock()
+		return nil, fmt.Errorf("session %q not found", sessionID)
+	}
+	sess.InboxMu.Lock()
+	defer sess.InboxMu.Unlock()
+	m.mu.Unlock()
+
+	for i, msg := range sess.Inbox {
+		if msg.GetID() == messageID {
+			dequeued := make([]message.Message, len(sess.Inbox)-i)
+			copy(dequeued, sess.Inbox[i:])
+			sess.Inbox = sess.Inbox[:i]
+			m.notifySubscribers(sessionID)
+			return dequeued, nil
+		}
+	}
+	return nil, fmt.Errorf("message %q not found in queue", messageID)
+}
+
+// EnqueueMessages appends the provided messages to the end of the session's inbox.
+func (m *Manager) EnqueueMessages(sessionID string, msgs []message.Message) error {
+	m.mu.Lock()
+	sess, ok := m.activeSessions[sessionID]
+	if !ok {
+		m.mu.Unlock()
+		return fmt.Errorf("session %q not found", sessionID)
+	}
+	sess.InboxMu.Lock()
+	sess.Inbox = append(sess.Inbox, msgs...)
+	sess.InboxMu.Unlock()
+	m.mu.Unlock()
+	m.notifySubscribers(sessionID)
+	return nil
+}
+
+// ClearQueue removes all queued messages from the session's inbox.
+func (m *Manager) ClearQueue(sessionID string) error {
+	m.mu.Lock()
+	sess, ok := m.activeSessions[sessionID]
+	if !ok {
+		m.mu.Unlock()
+		return fmt.Errorf("session %q not found", sessionID)
+	}
+	sess.InboxMu.Lock()
+	sess.Inbox = nil
+	sess.InboxMu.Unlock()
+	m.mu.Unlock()
+	m.notifySubscribers(sessionID)
+	return nil
+}
+
+// RemoveQueuedMessage filters out the specific message ID from the session's inbox.
+func (m *Manager) RemoveQueuedMessage(sessionID string, messageID string) error {
+	m.mu.Lock()
+	sess, ok := m.activeSessions[sessionID]
+	if !ok {
+		m.mu.Unlock()
+		return fmt.Errorf("session %q not found", sessionID)
+	}
+	sess.InboxMu.Lock()
+	defer sess.InboxMu.Unlock()
+	m.mu.Unlock()
+
+	filtered := make([]message.Message, 0, len(sess.Inbox))
+	for _, msg := range sess.Inbox {
+		if msg.GetID() != messageID {
+			filtered = append(filtered, msg)
+		}
+	}
+	sess.Inbox = filtered
+	m.notifySubscribers(sessionID)
+	return nil
+}
+
+// SendQueued triggers the graph to resume if the session is in StatusIdle and has queued messages.
+func (m *Manager) SendQueued(ctx context.Context, sessionID string) error {
+	m.mu.Lock()
+	sess, ok := m.activeSessions[sessionID]
+	if !ok {
+		m.mu.Unlock()
+		return fmt.Errorf("session %q not found", sessionID)
+	}
+	if sess.Status != StatusIdle {
+		m.mu.Unlock()
+		return fmt.Errorf("session is not idle (status: %s)", sess.Status)
+	}
+	// Check if there are queued messages
+	sess.InboxMu.Lock()
+	hasQueued := len(sess.Inbox) > 0
+	sess.InboxMu.Unlock()
+	if !hasQueued {
+		m.mu.Unlock()
+		return fmt.Errorf("no queued messages")
+	}
+	m.mu.Unlock()
+
+	// Rehydrate and start the agent loop
+	m.tryRehydrateSession(ctx, sess)
+
+	sess.Status = StatusRunning
+	sess.Error = ""
+	sess.CurrentStreamText = ""
+	sess.CurrentStreamThinking = ""
+	sess.CurrentToolStreams = make(map[string]string)
+	sess.ThinkingStart = time.Now()
+	sess.ThinkingDuration = 0
+	sess.CurrentStreamMetrics = nil
+
+	runCtx, cancel := context.WithCancel(context.Background())
+	sess.Cancel = cancel
+
+	inputCmd := graph.Update[agentgraph.AgentState](func(state agentgraph.AgentState) agentgraph.AgentState {
+		state.ExecutionCancelled = false
+		return state
+	})
+
+	m.wg.Add(1)
+	go func() {
+		defer m.wg.Done()
+		m.runAgentLoop(runCtx, sessionID, sess, inputCmd, cancel)
+	}()
+
+	return nil
 }
 
 type sessionInbox struct {

@@ -13,6 +13,7 @@ import (
 	"github.com/masterkeysrd/kite/event"
 	"github.com/masterkeysrd/kite/extras/kitex"
 	"github.com/masterkeysrd/kite/extras/wind"
+	"github.com/masterkeysrd/kite/geom"
 	"github.com/masterkeysrd/kite/key"
 	"github.com/masterkeysrd/kite/promise"
 	"github.com/masterkeysrd/kite/style"
@@ -118,6 +119,128 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 	resultPreviewTitle, setResultPreviewTitle := kitex.UseState("")
 	resultPreview, setResultPreview := kitex.UseState[preview.ToolPreview](nil)
 
+	localEditingMessages, setLocalEditingMessages := kitex.UseState([]message.Message(nil))
+	optimisticMessages, setOptimisticMessages := kitex.UseState([]message.Message(nil))
+	scrollAnchorRef := kitex.CreateRef[dom.Element]()
+
+	handleRemoveQueuedMessage := func(messageID string) {
+		promise.New(func(ctx context.Context) (bool, error) {
+			_, err := client.RemoveQueuedMessage(ctx, api.RemoveQueuedMessageRequest{
+				SessionID: props.SessionID,
+				MessageID: messageID,
+			})
+			return err == nil, err
+		}).Then(func(success bool) {
+			windClient.InvalidateQueries(api.GetSessionMessagesRequest{SessionID: props.SessionID})
+		}, func(err error) {
+			log.Error(fmt.Sprintf("Failed to remove queued message: %v", err))
+		})
+	}
+
+	handleEditQueuedMessage := func(messageID string) {
+		promise.New(func(ctx context.Context) ([]message.Message, error) {
+			resp, err := client.DequeueFrom(ctx, api.DequeueFromRequest{
+				SessionID: props.SessionID,
+				MessageID: messageID,
+			})
+			if err != nil {
+				return nil, err
+			}
+			var list message.MessageList
+			if len(resp.Messages) > 0 {
+				rawArray := "[" + strings.Join(resp.Messages, ",") + "]"
+				if err := json.Unmarshal([]byte(rawArray), &list); err != nil {
+					return nil, err
+				}
+			}
+			return list, nil
+		}).Then(func(msgs []message.Message) {
+			if len(msgs) == 0 {
+				return
+			}
+			setLocalEditingMessages(msgs)
+			var text strings.Builder
+			for _, block := range msgs[0].GetContent() {
+				if tb, ok := block.(*message.TextBlock); ok {
+					text.WriteString(tb.Text)
+				}
+			}
+			setInputValue(text.String())
+			if inputRef.Current != nil {
+				if doc := inputRef.Current.OwnerDocument(); doc != nil {
+					doc.Focus(inputRef.Current)
+				}
+			}
+			windClient.InvalidateQueries(api.GetSessionMessagesRequest{SessionID: props.SessionID})
+		}, func(err error) {
+			toast.AddErrorMessage("Failed to Edit", "Message might have already been processed by the agent.")
+			log.Error(fmt.Sprintf("Failed to dequeue message for edit: %v", err))
+		})
+	}
+
+	handleCancelQueuedEdit := func() {
+		msgs := localEditingMessages()
+		if len(msgs) == 0 {
+			setInputValue("")
+			return
+		}
+		promise.New(func(ctx context.Context) (bool, error) {
+			var serialized []string
+			for _, m := range msgs {
+				list := message.MessageList{m}
+				data, err := json.Marshal(list)
+				if err != nil {
+					return false, err
+				}
+				s := string(data)
+				if len(s) >= 2 && s[0] == '[' && s[len(s)-1] == ']' {
+					s = s[1 : len(s)-1]
+				}
+				serialized = append(serialized, s)
+			}
+			_, err := client.EnqueueMessages(ctx, api.EnqueueMessagesRequest{
+				SessionID: props.SessionID,
+				Messages:  serialized,
+			})
+			return err == nil, err
+		}).Then(func(success bool) {
+			setLocalEditingMessages(nil)
+			setInputValue("")
+			windClient.InvalidateQueries(api.GetSessionMessagesRequest{SessionID: props.SessionID})
+		}, func(err error) {
+			setLocalEditingMessages(nil)
+			setInputValue("")
+			log.Error(fmt.Sprintf("Failed to cancel queued edit: %v", err))
+		})
+	}
+
+	handleClearQueue := func() {
+		promise.New(func(ctx context.Context) (bool, error) {
+			_, err := client.ClearQueue(ctx, api.ClearQueueRequest{
+				SessionID: props.SessionID,
+			})
+			return err == nil, err
+		}).Then(func(success bool) {
+			windClient.InvalidateQueries(api.GetSessionMessagesRequest{SessionID: props.SessionID})
+		}, func(err error) {
+			log.Error(fmt.Sprintf("Failed to clear queue: %v", err))
+		})
+	}
+
+	handleSendQueued := func() {
+		promise.New(func(ctx context.Context) (bool, error) {
+			_, err := client.SendQueued(ctx, api.SendQueuedRequest{
+				SessionID: props.SessionID,
+			})
+			return err == nil, err
+		}).Then(func(success bool) {
+			windClient.InvalidateQueries(api.GetSessionMessagesRequest{SessionID: props.SessionID})
+			windClient.InvalidateQueries(api.GetSessionStateRequest{SessionID: props.SessionID})
+		}, func(err error) {
+			log.Error(fmt.Sprintf("Failed to send queued messages: %v", err))
+		})
+	}
+
 	onViewPreview := func(title string, p preview.ToolPreview) {
 		setResultPreviewTitle(title)
 		setResultPreview(p)
@@ -140,7 +263,10 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 
 	currentPendingIndex, setCurrentPendingIndex := kitex.UseState(0)
 	localDecisions, setLocalDecisions := kitex.UseState(map[string]permissions.AuthorizationDecision{})
+	isProvidingFeedback, setIsProvidingFeedback := kitex.UseState(false)
+	feedbackText, setFeedbackText := kitex.UseState("")
 	showResolutionDialog, setShowResolutionDialog := kitex.UseState(false)
+	showCancelConfirmDialog, setShowCancelConfirmDialog := kitex.UseState(false)
 
 	focusSelf := func() {
 		if outerRef.Current != nil {
@@ -276,13 +402,17 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 		}
 	}, []any{len(pendingAuthorizations)})
 
-	recordDecision := func(toolCallID string, approved bool, scope permissions.PermissionScope, grantDecisions []permissions.GrantDecision) {
+	recordDecision := func(toolCallID string, approved bool, scope permissions.PermissionScope, grantDecisions []permissions.GrantDecision, reason string) {
+		log.Info(fmt.Sprintf("[TUI] recordDecision: toolCallID=%q approved=%t scope=%v reason=%q", toolCallID, approved, scope, reason))
 		dec := permissions.AuthorizationDecision{
 			ToolCallID:     toolCallID,
 			Approved:       approved,
 			Scope:          scope,
 			GrantDecisions: grantDecisions,
+			Reason:         reason,
 		}
+		setIsProvidingFeedback(false)
+		setFeedbackText("")
 
 		newDecisions := make(map[string]permissions.AuthorizationDecision)
 		maps.Copy(newDecisions, localDecisions())
@@ -350,7 +480,12 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 
 	// Focus management: when insert mode is active, focus composer input.
 	// When normal mode is active, focus the outer container so we can receive global hotkeys.
+	// If feedback mode is active, block focus theft and let the feedback widget handle its own focus.
 	kitex.UseEffect(func() {
+		if isProvidingFeedback() {
+			return
+		}
+
 		if isInsert {
 			kitex.PostMacro(func() {
 				if inputRef.Current != nil {
@@ -369,7 +504,7 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 				}
 			})
 		}
-	}, []any{isInsert})
+	}, []any{isInsert, isProvidingFeedback()})
 
 	// Refs to bridge latest react states to the single-registration document listener
 	pendingAuthsRef := kitex.UseRef[[]permissions.AuthorizationRequest](nil)
@@ -396,10 +531,25 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 	modeRef := kitex.UseRef(mode.Normal)
 	modeRef.Current = m
 
+	queuedMessagesRef := kitex.UseRef[message.MessageList](nil)
+	queuedMessagesRef.Current = queuedMessages
+
+	statusRef := kitex.UseRef("")
+	statusRef.Current = status
+
 	currentPendingIndexRef := kitex.UseRef(0)
 	currentPendingIndexRef.Current = currentPendingIndex()
 
-	recordDecisionRef := kitex.UseRef[func(string, bool, permissions.PermissionScope, []permissions.GrantDecision)](nil)
+	isProvidingFeedbackRef := kitex.UseRef(false)
+	isProvidingFeedbackRef.Current = isProvidingFeedback()
+
+	feedbackTextRef := kitex.UseRef("")
+	feedbackTextRef.Current = feedbackText()
+
+	showCancelConfirmDialogRef := kitex.UseRef(false)
+	showCancelConfirmDialogRef.Current = showCancelConfirmDialog()
+
+	recordDecisionRef := kitex.UseRef[func(string, bool, permissions.PermissionScope, []permissions.GrantDecision, string)](nil)
 	recordDecisionRef.Current = recordDecision
 
 	handleApprove := func() {
@@ -445,7 +595,7 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 		}
 
 		if recordDecisionRef.Current != nil {
-			recordDecisionRef.Current(req.ToolCallID, true, scope, decisions)
+			recordDecisionRef.Current(req.ToolCallID, true, scope, decisions, "")
 		}
 	}
 
@@ -456,8 +606,65 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 		}
 		req := pendingAuthsRef.Current[currIdx]
 		if recordDecisionRef.Current != nil {
-			recordDecisionRef.Current(req.ToolCallID, false, permissions.ScopeOnce, nil)
+			recordDecisionRef.Current(req.ToolCallID, false, permissions.ScopeOnce, nil, "")
 		}
+	}
+
+	handleDenyWithFeedback := func(reason string) {
+		currIdx := currentPendingIndexRef.Current
+		if currIdx >= len(pendingAuthsRef.Current) {
+			return
+		}
+		req := pendingAuthsRef.Current[currIdx]
+		if recordDecisionRef.Current != nil {
+			recordDecisionRef.Current(req.ToolCallID, false, permissions.ScopeOnce, nil, reason)
+		}
+		setIsProvidingFeedback(false)
+		setFeedbackText("")
+		mode.Set(mode.Normal)
+	}
+
+	handleStartFeedback := func() {
+		setIsProvidingFeedback(true)
+		setFeedbackText("")
+		mode.Set(mode.Insert)
+	}
+
+	handleCancelFeedback := func() {
+		setIsProvidingFeedback(false)
+		setFeedbackText("")
+		mode.Set(mode.Normal)
+	}
+
+	handleHardCancel := func() {
+		promise.New(func(ctx context.Context) (bool, error) {
+			var decisionList []permissions.AuthorizationDecision
+			for _, d := range pendingAuthorizations {
+				decisionList = append(decisionList, permissions.AuthorizationDecision{
+					ToolCallID:      d.ToolCallID,
+					Approved:        false,
+					CancelExecution: true,
+				})
+			}
+			_, err := client.SubmitAuthorizationDecision(ctx, api.SubmitAuthorizationDecisionRequest{
+				SessionID: sessionID,
+				Decisions: decisionList,
+			})
+			if err != nil {
+				return false, err
+			}
+			return true, nil
+		}).Then(func(success bool) {
+			setShowCancelConfirmDialog(false)
+			setShowPreviewModal(false)
+			setSubmitting(false)
+			windClient.InvalidateQueries(api.GetSessionMessagesRequest{SessionID: sessionID})
+			windClient.InvalidateQueries(api.GetSessionStateRequest{SessionID: sessionID})
+		}, func(err error) {
+			setShowCancelConfirmDialog(false)
+			setSubmitting(false)
+			log.Error(fmt.Sprintf("Failed to submit cancellation decisions: %v", err))
+		})
 	}
 
 	// Document-level KeyDown listener registered when outerRef is available
@@ -471,16 +678,54 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 		}
 
 		sub := doc.AddEventListener(event.EventKeyDown, func(e event.Event) {
-			isModalOpen := showPreviewModalRef.Current
-			if !isModalOpen && modeRef.Current != mode.Normal && len(pendingAuthsRef.Current) == 0 {
-				return
-			}
-			if len(pendingAuthsRef.Current) == 0 {
+			if modeRef.Current != mode.Normal {
 				return
 			}
 
 			ke, ok := e.(*event.KeyEvent)
 			if !ok {
+				return
+			}
+
+			// Handle queue keys if queue is non-empty and idle
+			if len(queuedMessagesRef.Current) > 0 && statusRef.Current == "idle" {
+				if ke.Text == "s" {
+					e.PreventDefault()
+					e.StopPropagation()
+					handleSendQueued()
+					return
+				}
+				if ke.Text == "c" {
+					e.PreventDefault()
+					e.StopPropagation()
+					handleClearQueue()
+					return
+				}
+			}
+
+			if len(pendingAuthsRef.Current) == 0 {
+				return
+			}
+
+			if showCancelConfirmDialogRef.Current {
+				if ke.Code == key.KeyEnter || ke.Text == "\r" || ke.Text == "\n" {
+					e.PreventDefault()
+					e.StopPropagation()
+					handleHardCancel()
+					return
+				}
+				if ke.Code == key.KeyEscape || ke.Text == "q" {
+					e.PreventDefault()
+					e.StopPropagation()
+					setShowCancelConfirmDialog(false)
+					return
+				}
+				e.PreventDefault()
+				e.StopPropagation()
+				return
+			}
+
+			if isProvidingFeedbackRef.Current {
 				return
 			}
 
@@ -702,7 +947,13 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 				}
 			}
 
-			if ke.Code == key.KeyEscape || ke.Text == "q" {
+			if ke.Text == "x" || ke.Code == key.KeyEscape {
+				e.PreventDefault()
+				e.StopPropagation()
+				setShowCancelConfirmDialog(true)
+				return
+			}
+			if ke.Text == "q" {
 				e.PreventDefault()
 				e.StopPropagation()
 				if showPreviewModalRef.Current {
@@ -716,6 +967,12 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 				e.PreventDefault()
 				e.StopPropagation()
 				handleDeny()
+				return
+			}
+			if ke.Text == "D" {
+				e.PreventDefault()
+				e.StopPropagation()
+				handleStartFeedback()
 				return
 			}
 			if ke.Text == "p" || ke.Text == "P" {
@@ -847,10 +1104,23 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 		_, currentY := el.Scroll()
 
 		// If the user was previously scrolled to the bottom (within a 2-cell tolerance),
-		// we scroll to the absolute bottom using a large value (99999).
-		// Kite's paint engine will synchronously clamp this value to the fresh scroll extent at paint time in the current frame.
+		// we scroll to either the scroll anchor or the absolute bottom.
 		if currentY >= lastMaxScrollY.Current-2 {
-			el.ScrollTo(0, 99999)
+			rectParent, okParent := view.GetBoundingClientRect(el)
+			var rectAnchor geom.Rect
+			var okAnchor bool
+			if scrollAnchorRef.Current != nil {
+				rectAnchor, okAnchor = view.GetBoundingClientRect(scrollAnchorRef.Current)
+			}
+			if okParent && okAnchor {
+				deltaY := (rectAnchor.Origin.Y - rectParent.Origin.Y) - (rectParent.Size.Height - 1)
+				targetY := currentY + deltaY
+				if targetY != currentY {
+					el.ScrollTo(0, targetY)
+				}
+			} else {
+				el.ScrollTo(0, 99999)
+			}
 		}
 
 		lastMaxScrollY.Current = maxScrollY
@@ -909,6 +1179,11 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 		setInputValue("")
 		setSubmitting(true)
 
+		optMsgID := "opt_" + fmt.Sprintf("%d", time.Now().UnixNano())
+		optMsg := message.NewUserText(text)
+		optMsg.SetID(optMsgID)
+		setOptimisticMessages(append(optimisticMessages(), optMsg))
+
 		// Trigger SendMessage on the backend asynchronously
 		promise.New(func(ctx context.Context) (bool, error) {
 			_, err := client.SendMessage(ctx, api.SendMessageRequest{
@@ -920,11 +1195,56 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 			}
 			return true, nil
 		}).Then(func(success bool) {
+			filtered := make([]message.Message, 0)
+			for _, m := range optimisticMessages() {
+				if m.GetID() != optMsgID {
+					filtered = append(filtered, m)
+				}
+			}
+			setOptimisticMessages(filtered)
+
+			// Re-enqueue any tail messages from a queued edit (msgs after the one being edited)
+			if tail := localEditingMessages(); len(tail) > 1 {
+				var serialized []string
+				for _, m := range tail[1:] {
+					list := message.MessageList{m}
+					data, err := json.Marshal(list)
+					if err == nil {
+						s := string(data)
+						if len(s) >= 2 && s[0] == '[' && s[len(s)-1] == ']' {
+							s = s[1 : len(s)-1]
+						}
+						serialized = append(serialized, s)
+					}
+				}
+				if len(serialized) > 0 {
+					go func() {
+						_, err := client.EnqueueMessages(context.Background(), api.EnqueueMessagesRequest{
+							SessionID: sessionID,
+							Messages:  serialized,
+						})
+						if err != nil {
+							log.Error(fmt.Sprintf("Failed to re-enqueue tail messages after edit: %v", err))
+						}
+						windClient.InvalidateQueries(api.GetSessionMessagesRequest{SessionID: sessionID})
+					}()
+				}
+			}
+			setLocalEditingMessages(nil)
+
 			setSubmitting(false)
 			windClient.InvalidateQueries(api.GetSessionMessagesRequest{SessionID: sessionID})
 			windClient.InvalidateQueries(api.GetSessionStateRequest{SessionID: sessionID})
 			windClient.InvalidateQueries(api.GetFileChangesRequest{SessionID: sessionID})
 		}, func(err error) {
+			filtered := make([]message.Message, 0)
+			for _, m := range optimisticMessages() {
+				if m.GetID() != optMsgID {
+					filtered = append(filtered, m)
+				}
+			}
+			setOptimisticMessages(filtered)
+
 			setSubmitting(false)
 			log.Error(fmt.Sprintf("Failed to send message to backend: %v", err))
 		})
@@ -1127,7 +1447,6 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 
 		// Message History Section
 		kitex.Box(kitex.BoxProps{Style: messagesContainerStyle, Ref: historyRef},
-			// Bubbles
 			kitex.Fragment(
 				renderBubbles(
 					messages,
@@ -1154,8 +1473,15 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 					handleSelectDir,
 					handleApprove,
 					handleDeny,
+					handleHardCancel,
 					openFullOutputModal,
 					onViewPreview,
+					isProvidingFeedback(),
+					feedbackText(),
+					func(val string) { setFeedbackText(val) },
+					handleDenyWithFeedback,
+					handleCancelFeedback,
+					handleStartFeedback,
 				)...,
 			),
 
@@ -1164,9 +1490,10 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 				return renderAgentStatus(t, sending, thinkingTime(), lastFinishedTime(), currentDots, runPromptTokens, runCompletionTokens, runTotalTokens, isGenerating, phase, activeTip)
 			}),
 
-			// Queued Messages Widget
-			kitex.If(len(queuedMessages) > 0, func() kitex.Node {
-				return renderQueuedMessages(t, queuedMessages)
+			// Scroll Anchor Box — keeps auto-scroll focused on the stream, above queued messages
+			kitex.Box(kitex.BoxProps{
+				Ref:   scrollAnchorRef,
+				Style: style.S().Height(style.Cells(0)),
 			}),
 
 			// Running Tasks Widget
@@ -1205,10 +1532,60 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 					},
 				})
 			}),
+
+			// Queued messages
+			kitex.Fragment(
+				renderQueuedBubbles(
+					t,
+					append(queuedMessages, optimisticMessages()...),
+					handleEditQueuedMessage,
+					handleRemoveQueuedMessage,
+				)...,
+			),
 		),
 
 		// Composer Section
 		kitex.Box(kitex.BoxProps{Style: composerContainerStyle},
+			// Queue actions row (above Composer)
+			kitex.If((len(queuedMessages) > 0 || len(localEditingMessages()) > 0) && status == "idle", func() kitex.Node {
+				isEditing := len(localEditingMessages()) > 0
+				children := []kitex.Node{
+					kitex.Text("Queue Actions:"),
+				}
+				if !isEditing {
+					children = append(children,
+						kitex.Span(kitex.SpanProps{
+							Style: style.S().Foreground(t.Color.Surface.Success).Bold(true).Underline(true),
+							OnClick: func(e event.Event) {
+								handleSendQueued()
+							},
+						}, kitex.Text("s: Send Queued")),
+						kitex.Span(kitex.SpanProps{
+							Style: style.S().Foreground(t.Color.Text.Secondary).Underline(true),
+							OnClick: func(e event.Event) {
+								handleClearQueue()
+							},
+						}, kitex.Text("c: Clear Queue")),
+					)
+				} else {
+					children = append(children,
+						kitex.Span(kitex.SpanProps{
+							Style: style.S().Foreground(t.Color.Text.Secondary).Underline(true),
+							OnClick: func(e event.Event) {
+								handleCancelQueuedEdit()
+							},
+						}, kitex.Text("x: Cancel Edit")),
+					)
+				}
+				return kitex.Box(kitex.BoxProps{
+					Style: style.S().
+						Display(style.DisplayFlex).
+						FlexDirection(style.FlexRow).
+						Gap(2).
+						PaddingHorizontal(1).
+						MarginBottom(1),
+				}, children...)
+			}),
 			Composer(ComposerProps{
 				Value:    inputValue(),
 				Disabled: submitting(),
@@ -1237,11 +1614,30 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 			OnClose:             func() { setShowPreviewModal(false) },
 			OnApprove:           handleApprove,
 			OnDeny:              handleDeny,
+			OnHardCancel:        func() { setShowCancelConfirmDialog(true) },
 			OnSelectVertical:    handleSelectVertical,
 			OnSelectScope:       handleSelectScope,
 			OnSelectOption:      handleSelectOption,
 			OnSelectDir:         handleSelectDir,
 			OnSetCurrentPage:    setCurrentPageIndex,
+			IsProvidingFeedback: isProvidingFeedback(),
+			FeedbackText:        feedbackText(),
+			OnFeedbackChange:    func(val string) { setFeedbackText(val) },
+			OnDenyWithFeedback:  handleDenyWithFeedback,
+			OnCancelFeedback:    handleCancelFeedback,
+			OnStartFeedback:     handleStartFeedback,
+		}),
+
+		// Cancel Confirmation Dialog
+		kitex.If(showCancelConfirmDialog(), func() kitex.Node {
+			return components.ConfirmDialog(components.ConfirmDialogProps{
+				Message:      "Are you sure you want to cancel all tool calls and stop execution?",
+				ConfirmLabel: "Confirm",
+				ConfirmColor: components.ButtonError,
+				OnConfirm:    handleHardCancel,
+				CancelLabel:  "Cancel",
+				OnCancel:     func() { setShowCancelConfirmDialog(false) },
+			})
 		}),
 
 		// Resolution Dialog for Pending Authorizations
@@ -1302,10 +1698,84 @@ type ToolExecutionProps struct {
 	OnViewPreview    func(title string, p preview.ToolPreview)
 }
 
+var DeniedToolWidget = kitex.FC("DeniedToolWidget", func(props ToolExecutionProps) kitex.Node {
+	t := theme.UseTheme()
+	if t == nil {
+		return nil
+	}
+
+	tc := props.ToolCall
+	tm := props.ToolMessage
+
+	var denyReason string
+	if tm != nil {
+		meta := tm.GetMetadata()
+		if meta != nil {
+			if val, ok := meta["deny_reason"].(string); ok {
+				denyReason = val
+			}
+		}
+		if denyReason == "" {
+			outText := getToolOutput(tm.Content)
+			if strings.HasPrefix(outText, "Authorization denied by user") {
+				if idx := strings.Index(outText, `": `); idx != -1 {
+					denyReason = outText[idx+3:]
+				}
+			}
+		}
+	}
+
+	containerStyle := style.S().
+		Display(style.DisplayFlex).
+		FlexDirection(style.FlexRow).
+		AlignItems(style.AlignCenter).
+		JustifyContent(style.JustifyBetween).
+		Padding(0, 1).
+		Border(true, style.SingleBorder(), t.Color.Text.Error).
+		Background(t.Color.Surface.BaseHover).
+		Width(style.Percent(100))
+
+	label := fmt.Sprintf("DENIED: %s", tc.Name)
+	if denyReason != "" {
+		label = fmt.Sprintf("DENIED: %s (%s)", tc.Name, denyReason)
+	}
+
+	return kitex.Box(kitex.BoxProps{Style: containerStyle},
+		kitex.Box(kitex.BoxProps{
+			Style: style.S().
+				Display(style.DisplayFlex).
+				FlexDirection(style.FlexRow).
+				AlignItems(style.AlignCenter).
+				Gap(1),
+		},
+			kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Error)}, icon.Error),
+			kitex.Span(kitex.SpanProps{Style: style.S().Bold(true).Foreground(t.Color.Text.Error)}, kitex.Text(label)),
+		),
+	)
+})
+
 var ToolExecution = kitex.FC("ToolExecution", func(props ToolExecutionProps) kitex.Node {
 	var node kitex.Node
 
-	if props.ToolCall != nil {
+	isDenied := false
+	if props.ToolMessage != nil {
+		meta := props.ToolMessage.GetMetadata()
+		if meta != nil {
+			if _, ok := meta["deny_reason"].(string); ok {
+				isDenied = true
+			}
+		}
+		if !isDenied {
+			outText := getToolOutput(props.ToolMessage.Content)
+			if strings.HasPrefix(outText, "Authorization denied by user") {
+				isDenied = true
+			}
+		}
+	}
+
+	if isDenied {
+		node = DeniedToolWidget(props)
+	} else if props.ToolCall != nil {
 		switch props.ToolCall.Name {
 		case "bash":
 			node = BashToolWidget(props)
@@ -1733,8 +2203,15 @@ func renderBubbles(
 	onSelectDir func(int),
 	onApprove func(),
 	onDeny func(),
+	onHardCancel func(),
 	onViewFullOutput func(title, cachedPath string),
 	onViewPreview func(title string, p preview.ToolPreview),
+	isProvidingFeedback bool,
+	feedbackText string,
+	onFeedbackChange func(string),
+	onDenyWithFeedback func(string),
+	onCancelFeedback func(),
+	onStartFeedback func(),
 ) []kitex.Node {
 	if len(messages) == 0 {
 		return nil
@@ -1751,7 +2228,7 @@ func renderBubbles(
 				groupIsGenerating = true
 			}
 			nodes = append(nodes, BubbleGroup(BubbleGroupProps{
-				Key:                   fmt.Sprintf("group-%s-%d", currentGroupRole, len(nodes)),
+				Key:                   fmt.Sprintf("group-%s-%s", currentGroupRole, currentGroup[0].GetID()),
 				Role:                  currentGroupRole,
 				Msgs:                  currentGroup,
 				ToolResponses:         toolResponses,
@@ -1777,8 +2254,15 @@ func renderBubbles(
 				OnSelectDir:           onSelectDir,
 				OnApprove:             onApprove,
 				OnDeny:                onDeny,
+				OnHardCancel:          onHardCancel,
 				OnViewFullOutput:      onViewFullOutput,
 				OnViewPreview:         onViewPreview,
+				IsProvidingFeedback:   isProvidingFeedback,
+				FeedbackText:          feedbackText,
+				OnFeedbackChange:      onFeedbackChange,
+				OnDenyWithFeedback:    onDenyWithFeedback,
+				OnCancelFeedback:      onCancelFeedback,
+				OnStartFeedback:       onStartFeedback,
 			}))
 		}
 	}
@@ -1815,65 +2299,50 @@ func renderBubbles(
 	return nodes
 }
 
-func renderQueuedMessages(t *theme.Scheme, queuedMessages message.MessageList) kitex.Node {
-	if len(queuedMessages) == 0 || t == nil {
+func renderQueuedBubbles(
+	_ *theme.Scheme,
+	queuedMessages message.MessageList,
+	onEdit func(string),
+	onRemove func(string),
+) []kitex.Node {
+	if len(queuedMessages) == 0 {
 		return nil
 	}
 
-	blueColor := t.Color.Surface.Info
-	containerStyle := style.S().
-		Display(style.DisplayFlex).
-		FlexDirection(style.FlexColumn).
-		Gap(0).
-		PaddingVertical(1).
-		PaddingHorizontal(2).
-		Border(style.DoubleBorder().Color(t.Color.Text.Tertiary)).
-		Background(t.Color.Surface.BaseHover).
-		MarginTop(1).
-		MarginBottom(1)
+	var nodes []kitex.Node
 
-	titleStyle := style.S().
-		Foreground(blueColor).
-		Bold(true).
-		MarginBottom(1)
-
-	var msgNodes []kitex.Node
 	for _, msg := range queuedMessages {
 		if meta := msg.GetMetadata(); meta != nil {
 			if isSys, ok := meta["is_system_notification"]; ok {
 				if b, ok := isSys.(bool); ok && b {
-					continue // Skip system notification messages
+					continue
 				}
 			}
 		}
 
-		var text strings.Builder
+		msgID := msg.GetID()
+
+		var texts []string
 		for _, block := range msg.GetContent() {
 			if tb, ok := block.(*message.TextBlock); ok {
-				text.WriteString(tb.Text)
+				cleaned := tryExtractTextFromJSON(tb.Text)
+				texts = append(texts, cleaned)
 			}
 		}
-		if text.String() == "" {
+		if len(texts) == 0 {
 			continue
 		}
 
-		msgStyle := style.S().
-			Foreground(t.Color.Text.Secondary).
-			MarginLeft(2)
-
-		msgNodes = append(msgNodes, kitex.Box(kitex.BoxProps{Style: msgStyle}, kitex.Text("󰑮  "+text.String())))
+		nodes = append(nodes, QueuedBubble(QueuedBubbleProps{
+			Key:      "queued-" + msgID,
+			ID:       msgID,
+			Text:     strings.Join(texts, "\n"),
+			OnEdit:   onEdit,
+			OnRemove: onRemove,
+		}))
 	}
 
-	if len(msgNodes) == 0 {
-		return nil
-	}
-
-	children := []kitex.Node{
-		kitex.Box(kitex.BoxProps{Style: titleStyle}, kitex.Text("󰑮 Queued Feedback")),
-	}
-	children = append(children, msgNodes...)
-
-	return kitex.Box(kitex.BoxProps{Style: containerStyle}, children...)
+	return nodes
 }
 
 func getScopeIndex(req permissions.AuthorizationRequest, page int, scope permissions.PermissionScope) int {

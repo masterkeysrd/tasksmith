@@ -76,13 +76,13 @@ var Composer = kitex.FC("Composer", func(props ComposerProps) kitex.Node {
 	textareaDisabled := props.Disabled || !props.IsInsert
 
 	textareaProps := kitex.TextAreaProps{
-		Name:              "composer-textarea",
-		Value:             props.Value,
-		Placeholder:       "Message TaskSmith...",
-		PlaceholderStyle:  ps,
-		Disabled:          textareaDisabled,
-		Style:             textareaStyle,
-		Ref:               props.Ref,
+		Name:             "composer-textarea",
+		Value:            props.Value,
+		Placeholder:      "Message TaskSmith...",
+		PlaceholderStyle: ps,
+		Disabled:         textareaDisabled,
+		Style:            textareaStyle,
+		Ref:              props.Ref,
 		OnChange: func(e event.Event) {
 			val := ""
 			if ie, ok := e.(*event.ChangeEvent); ok {

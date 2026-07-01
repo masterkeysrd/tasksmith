@@ -44,8 +44,15 @@ type BubbleGroupProps struct {
 	OnSelectDir           func(int)
 	OnApprove             func()
 	OnDeny                func()
+	OnHardCancel          func()
 	OnViewFullOutput      func(title, cachedPath string)
 	OnViewPreview         func(title string, p preview.ToolPreview)
+	IsProvidingFeedback   bool
+	FeedbackText          string
+	OnFeedbackChange      func(string)
+	OnDenyWithFeedback    func(string)
+	OnCancelFeedback      func()
+	OnStartFeedback       func()
 }
 
 var BubbleGroup = kitex.FC("BubbleGroup", func(props BubbleGroupProps) kitex.Node {
@@ -161,6 +168,13 @@ var BubbleGroup = kitex.FC("BubbleGroup", func(props BubbleGroupProps) kitex.Nod
 				OnSelectDir:           props.OnSelectDir,
 				OnApprove:             props.OnApprove,
 				OnDeny:                props.OnDeny,
+				OnHardCancel:          props.OnHardCancel,
+				IsProvidingFeedback:   props.IsProvidingFeedback,
+				FeedbackText:          props.FeedbackText,
+				OnFeedbackChange:      props.OnFeedbackChange,
+				OnDenyWithFeedback:    props.OnDenyWithFeedback,
+				OnCancelFeedback:      props.OnCancelFeedback,
+				OnStartFeedback:       props.OnStartFeedback,
 			})
 			if node != nil {
 				children = append(children, node)
@@ -232,6 +246,8 @@ var BubbleGroup = kitex.FC("BubbleGroup", func(props BubbleGroupProps) kitex.Nod
 		props.CurrentDots,
 		props.OneDotCurrentDots,
 		authKey,
+		props.IsProvidingFeedback,
+		props.FeedbackText,
 	})
 })
 

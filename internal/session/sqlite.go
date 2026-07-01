@@ -151,7 +151,7 @@ func (s *sqliteStore) AppendMessage(ctx context.Context, md MessageData, updated
 
 func (s *sqliteStore) GetMessages(ctx context.Context, sessionID string) ([]MessageData, error) {
 	var messages []MessageData
-	query := `SELECT id, session_id, role, content, created_at FROM messages WHERE session_id = ? ORDER BY id ASC`
+	query := `SELECT id, session_id, role, content, created_at FROM messages WHERE session_id = ? ORDER BY created_at ASC, id ASC`
 	err := s.db.SelectContext(ctx, &messages, query, sessionID)
 	return messages, err
 }

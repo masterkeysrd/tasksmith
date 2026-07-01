@@ -6,8 +6,10 @@ import (
 	"os"
 	"strings"
 
+	"github.com/masterkeysrd/kite/dom"
 	"github.com/masterkeysrd/kite/event"
 	"github.com/masterkeysrd/kite/extras/kitex"
+	"github.com/masterkeysrd/kite/key"
 	"github.com/masterkeysrd/kite/style"
 	"github.com/masterkeysrd/tasksmith/internal/agent/permissions"
 	"github.com/masterkeysrd/tasksmith/internal/tui/components"
@@ -29,24 +31,31 @@ const (
 )
 
 type AuthorizationWidgetProps struct {
-	Request            permissions.AuthorizationRequest
-	CurrentPageIndex   int
-	FocusedItem        FocusItem
-	SelectedScopeIndex int            // 0 = Once, 1 = Session, 2 = Workspace, 3 = Global
-	SelectedOptions    map[string]int // Maps GrantRequestID -> OptionIndex
-	SelectedDirs       map[string]int // Maps GrantRequestID -> Directory Option Index
-	OnPreview          func()
-	IsActive           bool
-	IsFocused          bool
-	IsDecided          bool
-	Decision           permissions.AuthorizationDecision // valid when IsDecided == true
-	IsSubmitting       bool                              // true while the batch API call is in flight
-	OnSelectVertical   func(FocusItem)
-	OnSelectScope      func(int)
-	OnSelectOption     func(int)
-	OnSelectDir        func(int)
-	OnApprove          func()
-	OnDeny             func()
+	Request             permissions.AuthorizationRequest
+	CurrentPageIndex    int
+	FocusedItem         FocusItem
+	SelectedScopeIndex  int            // 0 = Once, 1 = Session, 2 = Workspace, 3 = Global
+	SelectedOptions     map[string]int // Maps GrantRequestID -> OptionIndex
+	SelectedDirs        map[string]int // Maps GrantRequestID -> Directory Option Index
+	OnPreview           func()
+	IsActive            bool
+	IsFocused           bool
+	IsDecided           bool
+	Decision            permissions.AuthorizationDecision // valid when IsDecided == true
+	IsSubmitting        bool                              // true while the batch API call is in flight
+	OnSelectVertical    func(FocusItem)
+	OnSelectScope       func(int)
+	OnSelectOption      func(int)
+	OnSelectDir         func(int)
+	OnApprove           func()
+	OnDeny              func()
+	OnHardCancel        func()
+	IsProvidingFeedback bool
+	FeedbackText        string
+	OnFeedbackChange    func(string)
+	OnDenyWithFeedback  func(string)
+	OnCancelFeedback    func()
+	OnStartFeedback     func()
 }
 
 type AuthorizationHybridSelectorProps struct {
@@ -308,6 +317,22 @@ var AuthorizationWidget = kitex.FC("AuthorizationWidget", func(props Authorizati
 	if t == nil {
 		return nil
 	}
+
+	localInputRef := kitex.CreateRef[dom.Element]()
+	kitex.UseEffect(func() {
+		if props.IsProvidingFeedback {
+			kitex.PostMacro(func() {
+				if localInputRef.Current != nil {
+					if doc := localInputRef.Current.OwnerDocument(); doc != nil {
+						doc.Focus(localInputRef.Current)
+					}
+				}
+			})
+		}
+	}, []any{props.IsProvidingFeedback})
+
+	textRef := kitex.UseRef("")
+	textRef.Current = props.FeedbackText
 
 	req := props.Request
 	warningColor := color.Color(color.RGBA{R: 224, G: 153, B: 36, A: 255})
@@ -613,6 +638,18 @@ var AuthorizationWidget = kitex.FC("AuthorizationWidget", func(props Authorizati
 						StartIcon: icon.Error,
 						OnClick:   props.OnDeny,
 					}, kitex.Text("Deny (d)")),
+					components.Button(components.ButtonProps{
+						Variant:   components.ButtonText,
+						Color:     components.ButtonError,
+						StartIcon: icon.Pencil,
+						OnClick:   props.OnStartFeedback,
+					}, kitex.Text("Deny with Feedback (D)")),
+					components.Button(components.ButtonProps{
+						Variant:   components.ButtonText,
+						Color:     components.ButtonError,
+						StartIcon: icon.Exit,
+						OnClick:   props.OnHardCancel,
+					}, kitex.Text("Hard Cancel (x)")),
 				}
 
 				// Back Button (if currentPage > 0)
@@ -644,27 +681,118 @@ var AuthorizationWidget = kitex.FC("AuthorizationWidget", func(props Authorizati
 						return kitex.Fragment(kitex.Text(" · "), renderHint(t, "p", "preview"))
 					}),
 					kitex.Text(" · "),
-					renderHint(t, "Esc", "deny"),
+					renderHint(t, "d", "deny"),
+					kitex.Text(" · "),
+					renderHint(t, "D", "deny with feedback"),
+					kitex.Text(" · "),
+					renderHint(t, "x", "hard cancel"),
 				)
 
 				return kitex.Box(kitex.BoxProps{Style: style.S().Display(style.DisplayFlex).FlexDirection(style.FlexColumn)},
-					kitex.Box(kitex.BoxProps{Style: style.S().PaddingBottom(0).Foreground(t.Color.Text.Primary)}, kitex.Text("Grant permission...")),
-					AuthorizationHybridSelector(AuthorizationHybridSelectorProps{
-						Options:             currReqOptions,
-						DirectoryOptions:    currReqDirOptions,
-						FocusedItem:         props.FocusedItem,
-						SelectedScopeIndex:  props.SelectedScopeIndex,
-						SelectedOptionIndex: activeOptIdx,
-						SelectedDirIndex:    activeDirIdx,
-						IsActive:            props.IsActive,
-						AllowedScopes:       getAllowedScopes(props.Request, currentPage),
-						OnSelectVertical:    props.OnSelectVertical,
-						OnSelectScope:       props.OnSelectScope,
-						OnSelectOption:      props.OnSelectOption,
-						OnSelectDir:         props.OnSelectDir,
+					kitex.If(props.IsProvidingFeedback, func() kitex.Node {
+						textareaStyle := style.S().
+							Width(style.Percent(100)).
+							Height(style.Cells(4)).
+							Background(color.Transparent).
+							Foreground(t.Color.Text.Primary).
+							Border(true, style.SingleBorder(), t.Color.Border.Primary).
+							Padding(0, 1)
+
+						return kitex.Box(kitex.BoxProps{
+							Style: style.S().
+								Display(style.DisplayFlex).
+								FlexDirection(style.FlexColumn).
+								Gap(1).
+								MarginTop(1),
+						},
+							kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Secondary).Bold(true)}, kitex.Text("Reason for denial (optional):")),
+							kitex.TextArea(kitex.TextAreaProps{
+								Name:             "deny-feedback-textarea",
+								Value:            props.FeedbackText,
+								Placeholder:      "Type why you are denying this request...",
+								PlaceholderStyle: style.S().Foreground(t.Color.Text.Tertiary),
+								Style:            textareaStyle,
+								Ref:              localInputRef,
+								OnChange: func(e event.Event) {
+									val := ""
+									if ie, ok := e.(*event.ChangeEvent); ok {
+										val = ie.Value
+									} else if ie, ok := e.(*event.InputEvent); ok {
+										val = ie.Value
+									}
+									if props.OnFeedbackChange != nil {
+										props.OnFeedbackChange(val)
+									}
+								},
+								OnKeyDown: func(e event.Event) {
+									ke, ok := e.(*event.KeyEvent)
+									if !ok {
+										return
+									}
+									if ke.Code == key.KeyEscape {
+										e.PreventDefault()
+										e.StopPropagation()
+										if props.OnCancelFeedback != nil {
+											props.OnCancelFeedback()
+										}
+										return
+									}
+									if ke.Code == key.KeyEnter && (ke.Mod&key.ModShift) == 0 {
+										e.PreventDefault()
+										e.StopPropagation()
+										if props.OnDenyWithFeedback != nil {
+											props.OnDenyWithFeedback(textRef.Current)
+										}
+										return
+									}
+								},
+							}),
+							kitex.Box(kitex.BoxProps{
+								Style: style.S().Display(style.DisplayFlex).FlexDirection(style.FlexRow).Gap(1).MarginTop(1),
+							},
+								components.Button(components.ButtonProps{
+									Variant:   components.ButtonText,
+									Color:     components.ButtonError,
+									StartIcon: icon.Error,
+									OnClick: func() {
+										if props.OnDenyWithFeedback != nil {
+											props.OnDenyWithFeedback(textRef.Current)
+										}
+									},
+								}, kitex.Text("Submit Denial (Enter)")),
+								components.Button(components.ButtonProps{
+									Variant: components.ButtonText,
+									Color:   components.ButtonPrimary,
+									OnClick: func() {
+										if props.OnCancelFeedback != nil {
+											props.OnCancelFeedback()
+										}
+									},
+								}, kitex.Text("Cancel (Esc)")),
+							),
+						)
 					}),
-					buttonsRow,
-					hintNode,
+					kitex.If(!props.IsProvidingFeedback, func() kitex.Node {
+						return kitex.Fragment(
+							kitex.Box(kitex.BoxProps{Style: style.S().PaddingBottom(0).Foreground(t.Color.Text.Primary)}, kitex.Text("Grant permission...")),
+							AuthorizationHybridSelector(AuthorizationHybridSelectorProps{
+								Options:             currReqOptions,
+								DirectoryOptions:    currReqDirOptions,
+								FocusedItem:         props.FocusedItem,
+								SelectedScopeIndex:  props.SelectedScopeIndex,
+								SelectedOptionIndex: activeOptIdx,
+								SelectedDirIndex:    activeDirIdx,
+								IsActive:            props.IsActive,
+								AllowedScopes:       getAllowedScopes(props.Request, currentPage),
+								OnSelectVertical:    props.OnSelectVertical,
+								OnSelectScope:       props.OnSelectScope,
+								OnSelectOption:      props.OnSelectOption,
+								OnSelectDir:         props.OnSelectDir,
+							}),
+							buttonsRow,
+							hintNode,
+						)
+					}),
 				)
 			}),
 		),
@@ -716,11 +844,18 @@ type AuthorizationPreviewModalProps struct {
 	OnClose             func()
 	OnApprove           func()
 	OnDeny              func()
+	OnHardCancel        func()
 	OnSelectVertical    func(FocusItem)
 	OnSelectScope       func(int)
 	OnSelectOption      func(int)
 	OnSelectDir         func(int)
 	OnSetCurrentPage    func(int)
+	IsProvidingFeedback bool
+	FeedbackText        string
+	OnFeedbackChange    func(string)
+	OnDenyWithFeedback  func(string)
+	OnCancelFeedback    func()
+	OnStartFeedback     func()
 }
 
 var AuthorizationPreviewModal = kitex.FCC("AuthorizationPreviewModal", func(props AuthorizationPreviewModalProps) kitex.Node {
@@ -729,6 +864,22 @@ var AuthorizationPreviewModal = kitex.FCC("AuthorizationPreviewModal", func(prop
 	}
 
 	t := theme.UseTheme()
+	localInputRef := kitex.CreateRef[dom.Element]()
+	kitex.UseEffect(func() {
+		if props.IsProvidingFeedback {
+			kitex.PostMacro(func() {
+				if localInputRef.Current != nil {
+					if doc := localInputRef.Current.OwnerDocument(); doc != nil {
+						doc.Focus(localInputRef.Current)
+					}
+				}
+			})
+		}
+	}, []any{props.IsProvidingFeedback})
+
+	textRef := kitex.UseRef("")
+	textRef.Current = props.FeedbackText
+
 	req := props.PendingRequests[props.CurrentPendingIndex]
 
 	leftNode := PreviewPanel(PreviewPanelProps{
@@ -797,6 +948,18 @@ var AuthorizationPreviewModal = kitex.FCC("AuthorizationPreviewModal", func(prop
 					StartIcon: icon.Error,
 					OnClick:   props.OnDeny,
 				}, kitex.Text("Deny (d)")),
+				components.Button(components.ButtonProps{
+					Variant:   components.ButtonText,
+					Color:     components.ButtonError,
+					StartIcon: icon.Pencil,
+					OnClick:   props.OnStartFeedback,
+				}, kitex.Text("Deny with Feedback (D)")),
+				components.Button(components.ButtonProps{
+					Variant:   components.ButtonText,
+					Color:     components.ButtonError,
+					StartIcon: icon.Exit,
+					OnClick:   props.OnHardCancel,
+				}, kitex.Text("Hard Cancel (x)")),
 				kitex.If(currentPage > 0, func() kitex.Node {
 					return components.Button(components.ButtonProps{
 						Variant: components.ButtonText,
@@ -815,6 +978,12 @@ var AuthorizationPreviewModal = kitex.FCC("AuthorizationPreviewModal", func(prop
 				renderHint(t, "j/k", "navigate"),
 				kitex.Text(" · "),
 				renderHint(t, "h/l", "select"),
+				kitex.Text(" · "),
+				renderHint(t, "d", "deny"),
+				kitex.Text(" · "),
+				renderHint(t, "D", "deny with feedback"),
+				kitex.Text(" · "),
+				renderHint(t, "x", "hard cancel"),
 				kitex.Text(" · "),
 				renderHint(t, "Esc", "close"),
 			),
@@ -956,20 +1125,105 @@ var AuthorizationPreviewModal = kitex.FCC("AuthorizationPreviewModal", func(prop
 					Style: style.S().BorderBottom(true, style.SingleBorder(), t.Color.Border.Primary).MarginVertical(1),
 				}),
 
-				// Scope Hybrid Selector
-				AuthorizationHybridSelector(AuthorizationHybridSelectorProps{
-					Options:             currReqOptions,
-					DirectoryOptions:    currReqDirOptions,
-					FocusedItem:         props.FocusedItem,
-					SelectedScopeIndex:  props.SelectedScopeIndex,
-					SelectedOptionIndex: activeOptIdx,
-					SelectedDirIndex:    activeDirIdx,
-					IsActive:            true,
-					AllowedScopes:       getAllowedScopes(req, currentPage),
-					OnSelectVertical:    props.OnSelectVertical,
-					OnSelectScope:       props.OnSelectScope,
-					OnSelectOption:      props.OnSelectOption,
-					OnSelectDir:         props.OnSelectDir,
+				// Scope Hybrid Selector OR Feedback Text Area
+				kitex.If(props.IsProvidingFeedback, func() kitex.Node {
+					textareaStyle := style.S().
+						Width(style.Percent(100)).
+						Height(style.Cells(4)).
+						Background(color.Transparent).
+						Foreground(t.Color.Text.Primary).
+						Border(true, style.SingleBorder(), t.Color.Border.Primary).
+						Padding(0, 1)
+
+					return kitex.Box(kitex.BoxProps{
+						Style: style.S().
+							Display(style.DisplayFlex).
+							FlexDirection(style.FlexColumn).
+							Gap(1).
+							MarginTop(1),
+					},
+						kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Secondary).Bold(true)}, kitex.Text("Reason for denial (optional):")),
+						kitex.TextArea(kitex.TextAreaProps{
+							Name:             "deny-feedback-textarea-modal",
+							Value:            props.FeedbackText,
+							Placeholder:      "Type why you are denying this request...",
+							PlaceholderStyle: style.S().Foreground(t.Color.Text.Tertiary),
+							Style:            textareaStyle,
+							Ref:              localInputRef,
+							OnChange: func(e event.Event) {
+								val := ""
+								if ie, ok := e.(*event.ChangeEvent); ok {
+									val = ie.Value
+								} else if ie, ok := e.(*event.InputEvent); ok {
+									val = ie.Value
+								}
+								if props.OnFeedbackChange != nil {
+									props.OnFeedbackChange(val)
+								}
+							},
+							OnKeyDown: func(e event.Event) {
+								ke, ok := e.(*event.KeyEvent)
+								if !ok {
+									return
+								}
+								if ke.Code == key.KeyEscape {
+									e.PreventDefault()
+									e.StopPropagation()
+									if props.OnCancelFeedback != nil {
+										props.OnCancelFeedback()
+									}
+									return
+								}
+								if ke.Code == key.KeyEnter && (ke.Mod&key.ModShift) == 0 {
+									e.PreventDefault()
+									e.StopPropagation()
+									if props.OnDenyWithFeedback != nil {
+										props.OnDenyWithFeedback(textRef.Current)
+									}
+									return
+								}
+							},
+						}),
+						kitex.Box(kitex.BoxProps{
+							Style: style.S().Display(style.DisplayFlex).FlexDirection(style.FlexRow).Gap(1).MarginTop(1),
+						},
+							components.Button(components.ButtonProps{
+								Variant:   components.ButtonText,
+								Color:     components.ButtonError,
+								StartIcon: icon.Error,
+								OnClick: func() {
+									if props.OnDenyWithFeedback != nil {
+										props.OnDenyWithFeedback(textRef.Current)
+									}
+								},
+							}, kitex.Text("Submit Denial (Enter)")),
+							components.Button(components.ButtonProps{
+								Variant: components.ButtonText,
+								Color:   components.ButtonPrimary,
+								OnClick: func() {
+									if props.OnCancelFeedback != nil {
+										props.OnCancelFeedback()
+									}
+								},
+							}, kitex.Text("Cancel (Esc)")),
+						),
+					)
+				}),
+				kitex.If(!props.IsProvidingFeedback, func() kitex.Node {
+					return AuthorizationHybridSelector(AuthorizationHybridSelectorProps{
+						Options:             currReqOptions,
+						DirectoryOptions:    currReqDirOptions,
+						FocusedItem:         props.FocusedItem,
+						SelectedScopeIndex:  props.SelectedScopeIndex,
+						SelectedOptionIndex: activeOptIdx,
+						SelectedDirIndex:    activeDirIdx,
+						IsActive:            true,
+						AllowedScopes:       getAllowedScopes(req, currentPage),
+						OnSelectVertical:    props.OnSelectVertical,
+						OnSelectScope:       props.OnSelectScope,
+						OnSelectOption:      props.OnSelectOption,
+						OnSelectDir:         props.OnSelectDir,
+					})
 				}),
 			),
 		),

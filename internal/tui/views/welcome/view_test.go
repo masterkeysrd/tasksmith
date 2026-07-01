@@ -12,7 +12,9 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/tui/theme"
 )
 
-type mockClient struct{}
+type mockClient struct {
+	tuiapi.Client
+}
 
 func (m *mockClient) ListProjects(ctx context.Context, req api.ListProjectsRequest) (*api.ListProjectsResponse, error) {
 	return &api.ListProjectsResponse{

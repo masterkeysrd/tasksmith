@@ -1481,3 +1481,106 @@ func (s *Service) RestartMcp(ctx context.Context, req RestartMcpRequest) (*Resta
 
 	return &RestartMcpResponse{Success: true}, nil
 }
+
+// DequeueFrom removes the message with the given messageID and all subsequent messages from the inbox.
+func (s *Service) DequeueFrom(ctx context.Context, req DequeueFromRequest) (*DequeueFromResponse, error) {
+	if s.sm == nil {
+		return nil, fmt.Errorf("session manager not initialized")
+	}
+	msgs, err := s.sm.DequeueFrom(req.SessionID, req.MessageID)
+	if err != nil {
+		return nil, err
+	}
+	serialized, err := serializeMessages(msgs)
+	if err != nil {
+		return nil, err
+	}
+	return &DequeueFromResponse{Messages: serialized}, nil
+}
+
+// EnqueueMessages appends the provided messages to the end of the session's inbox.
+func (s *Service) EnqueueMessages(ctx context.Context, req EnqueueMessagesRequest) (*EnqueueMessagesResponse, error) {
+	if s.sm == nil {
+		return nil, fmt.Errorf("session manager not initialized")
+	}
+	msgs, err := parseJSONMessages(req.Messages)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.sm.EnqueueMessages(req.SessionID, msgs); err != nil {
+		return nil, err
+	}
+	return &EnqueueMessagesResponse{Success: true}, nil
+}
+
+// ClearQueue removes all queued messages from the session's inbox.
+func (s *Service) ClearQueue(ctx context.Context, req ClearQueueRequest) (*ClearQueueResponse, error) {
+	if s.sm == nil {
+		return nil, fmt.Errorf("session manager not initialized")
+	}
+	if err := s.sm.ClearQueue(req.SessionID); err != nil {
+		return nil, err
+	}
+	return &ClearQueueResponse{Success: true}, nil
+}
+
+// RemoveQueuedMessage filters out the specific message ID from the session's inbox.
+func (s *Service) RemoveQueuedMessage(ctx context.Context, req RemoveQueuedMessageRequest) (*RemoveQueuedMessageResponse, error) {
+	if s.sm == nil {
+		return nil, fmt.Errorf("session manager not initialized")
+	}
+	if err := s.sm.RemoveQueuedMessage(req.SessionID, req.MessageID); err != nil {
+		return nil, err
+	}
+	return &RemoveQueuedMessageResponse{Success: true}, nil
+}
+
+// SendQueued triggers the graph to resume if the session is in StatusIdle and has queued messages.
+func (s *Service) SendQueued(ctx context.Context, req SendQueuedRequest) (*SendQueuedResponse, error) {
+	if s.sm == nil {
+		return nil, fmt.Errorf("session manager not initialized")
+	}
+	if err := s.sm.SendQueued(ctx, req.SessionID); err != nil {
+		return nil, err
+	}
+	return &SendQueuedResponse{Success: true}, nil
+}
+
+func parseJSONMessages(serialized []string) ([]message.Message, error) {
+	if len(serialized) == 0 {
+		return nil, nil
+	}
+	var buf []byte
+	buf = append(buf, '[')
+	for i, s := range serialized {
+		if i > 0 {
+			buf = append(buf, ',')
+		}
+		buf = append(buf, s...)
+	}
+	buf = append(buf, ']')
+	var list message.MessageList
+	if err := json.Unmarshal(buf, &list); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal message list: %w", err)
+	}
+	return list, nil
+}
+
+func serializeMessages(msgs []message.Message) ([]string, error) {
+	if len(msgs) == 0 {
+		return nil, nil
+	}
+	res := make([]string, len(msgs))
+	for i, msg := range msgs {
+		list := message.MessageList{msg}
+		data, err := json.Marshal(list)
+		if err != nil {
+			return nil, err
+		}
+		if len(data) >= 2 && data[0] == '[' && data[len(data)-1] == ']' {
+			data = data[1 : len(data)-1]
+		}
+		res[i] = string(data)
+	}
+	return res, nil
+}

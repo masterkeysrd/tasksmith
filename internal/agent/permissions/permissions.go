@@ -108,9 +108,11 @@ type GrantDecision struct {
 type AuthorizationDecision struct {
 	ToolCallID      string          `json:"tool_call_id"`
 	Approved        bool            `json:"approved"` // Overall approval; false aborts the execution
+	CancelExecution bool            `json:"cancel_execution,omitempty"`
 	Scope           PermissionScope `json:"scope"`
 	GrantDecisions  []GrantDecision `json:"grant_decisions,omitempty"`
 	ModifiedPayload map[string]any  `json:"modified_payload,omitempty"`
+	Reason          string          `json:"reason,omitempty"`
 }
 
 // AuthorizationRequiredError is the error returned by tools when they lack permission.
