@@ -40,7 +40,7 @@ var RemoveToolWidget = kitex.FC("RemoveToolWidget", func(props ToolExecutionProp
 		if tm == nil {
 			actionText = "Pending Remove "
 			statusLabel = fmt.Sprintf("Pending Remove [%s]", filename)
-			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Info)}, kitex.Text(props.CurrentDots))
+			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Info)}, toolPulse())
 			themeColor = t.Color.Surface.Info
 		} else if tm.IsError {
 			actionText = "Error Removing "
@@ -146,7 +146,7 @@ var ViewToolWidget = kitex.FC("ViewToolWidget", func(props ToolExecutionProps) k
 	if t != nil {
 		if tm == nil {
 			statusLabel = fmt.Sprintf("Pending View [%s]", filename)
-			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Info)}, kitex.Text(props.CurrentDots))
+			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Info)}, toolPulse())
 			themeColor = t.Color.Surface.Info
 		} else if tm.IsError {
 			statusLabel = fmt.Sprintf("Error Viewing [%s]", filename)
@@ -339,7 +339,7 @@ var LsToolWidget = kitex.FC("LsToolWidget", func(props ToolExecutionProps) kitex
 		if tm == nil {
 			actionText = "Listing "
 			statusLabel = fmt.Sprintf("Listing [%s]", dirName)
-			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Info)}, kitex.Text(props.CurrentDots))
+			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Info)}, toolPulse())
 			borderCol = t.Color.Surface.Info
 		} else if tm.IsError {
 			actionText = "Error listing "
@@ -491,7 +491,7 @@ var GlobToolWidget = kitex.FC("GlobToolWidget", func(props ToolExecutionProps) k
 				actionText = "Glob searching for "
 			}
 			statusLabel = fmt.Sprintf("Glob: Searching%s for [%s]", scope, pattern)
-			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Info)}, kitex.Text(props.CurrentDots))
+			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Info)}, toolPulse())
 			themeColor = t.Color.Surface.Info
 		} else if tm.IsError {
 			if path != "" {
@@ -688,7 +688,7 @@ var GrepToolWidget = kitex.FC("GrepToolWidget", func(props ToolExecutionProps) k
 				actionText = "Grep searching for "
 			}
 			statusLabel = fmt.Sprintf("Grep: Searching%s for [%s]", scope, pattern)
-			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Info)}, kitex.Text(props.CurrentDots))
+			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Info)}, toolPulse())
 			themeColor = t.Color.Surface.Info
 		} else if tm.IsError {
 			if path != "" {
@@ -890,7 +890,7 @@ var WriteToolWidget = kitex.FC("WriteToolWidget", func(props ToolExecutionProps)
 	if t != nil {
 		if tm == nil {
 			statusLabel = fmt.Sprintf("Pending Write [%s]", filename)
-			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Info)}, kitex.Text(props.CurrentDots))
+			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Info)}, toolPulse())
 			themeColor = t.Color.Surface.Info
 		} else if tm.IsError {
 			statusLabel = fmt.Sprintf("Error Writing [%s]", filename)
@@ -1014,7 +1014,7 @@ var EditToolWidget = kitex.FC("EditToolWidget", func(props ToolExecutionProps) k
 	if t != nil {
 		if tm == nil {
 			statusLabel = fmt.Sprintf("Pending Edit [%s]", filename)
-			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Info)}, kitex.Text(props.CurrentDots))
+			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Info)}, toolPulse())
 			themeColor = t.Color.Surface.Info
 		} else if tm.IsError {
 			statusLabel = fmt.Sprintf("Error Editing [%s]", filename)
@@ -1165,7 +1165,7 @@ var MultiEditToolWidget = kitex.FC("MultiEditToolWidget", func(props ToolExecuti
 	if t != nil {
 		if tm == nil {
 			statusLabel = fmt.Sprintf("Pending Multi-Edit [%s]", filename)
-			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Info)}, kitex.Text(props.CurrentDots))
+			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Info)}, toolPulse())
 			themeColor = t.Color.Surface.Info
 		} else if tm.IsError {
 			statusLabel = fmt.Sprintf("Error Multi-Editing [%s]", filename)

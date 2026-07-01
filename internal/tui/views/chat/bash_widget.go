@@ -131,7 +131,7 @@ var BashToolWidget = kitex.FC("BashToolWidget", func(props ToolExecutionProps) k
 			borderCol = t.Color.Surface.Success
 		}
 	} else {
-		iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Info)}, kitex.Text(props.CurrentDots))
+		iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Info)}, toolPulse())
 		statusLabel = "RUNNING BASH COMMAND"
 		headerBg = t.Color.Surface.BaseFocus
 		headerFg = t.Color.Surface.Info

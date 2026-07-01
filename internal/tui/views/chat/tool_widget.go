@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"image/color"
 	"strings"
+	"time"
 
 	"github.com/masterkeysrd/kite/extras/kitex"
 	"github.com/masterkeysrd/kite/style"
@@ -20,9 +21,17 @@ import (
 type ToolExecutionProps struct {
 	ToolCall         *message.ToolCall
 	ToolMessage      *message.Tool
-	CurrentDots      string
 	OnViewFullOutput func(title, cachedPath string)
 	OnViewPreview    func(title string, p preview.ToolPreview)
+}
+
+func toolPulse() kitex.Node {
+	return components.Pulse(components.PulseProps{
+		Stages:    []string{"○", "⊙", "◎", "◉", "●"},
+		Count:     1,
+		LoopStyle: components.LoopBreathe,
+		Interval:  120 * time.Millisecond,
+	})
 }
 
 // DeniedToolWidget renders a denied tool call badge.
@@ -256,7 +265,7 @@ var GenericToolWidget = kitex.FC("genericToolWidget", func(props ToolExecutionPr
 
 	if t != nil {
 		if tm == nil {
-			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Info)}, kitex.Text(props.CurrentDots))
+			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Info)}, toolPulse())
 			statusLabel = fmt.Sprintf("RUNNING TOOL: %s", tc.Name)
 			headerBg = t.Color.Surface.BaseFocus
 			headerFg = t.Color.Surface.Info

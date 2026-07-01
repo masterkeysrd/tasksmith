@@ -46,7 +46,7 @@ var ActivateSkillToolWidget = kitex.FC("ActivateSkillToolWidget", func(props Too
 		if tm == nil {
 			actionText = "Activating Skill "
 			statusLabel = fmt.Sprintf("Activating Skill [%s]", skillName)
-			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Info)}, kitex.Text(props.CurrentDots))
+			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Info)}, toolPulse())
 			themeColor = t.Color.Surface.Info
 		} else if tm.IsError {
 			actionText = "Error Activating Skill "

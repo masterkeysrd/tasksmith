@@ -172,7 +172,7 @@ var TasksToolWidget = kitex.FC("TasksToolWidget", func(props ToolExecutionProps)
 			borderCol = t.Color.Surface.Success
 		}
 	} else {
-		iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Info)}, kitex.Text(props.CurrentDots))
+		iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Info)}, toolPulse())
 		statusLabel = fmt.Sprintf("RUNNING TASKS %s", strings.ToUpper(action))
 		headerBg = t.Color.Surface.BaseFocus
 		headerFg = t.Color.Surface.Info

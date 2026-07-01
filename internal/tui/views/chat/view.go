@@ -1008,7 +1008,6 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 	// 5. Reactive state for tracking the last completed session's thinking time
 	lastFinishedTime, setLastFinishedTime := kitex.UseState(-1) // -1 represents null/unset
 	thinkingTime, setThinkingTime := kitex.UseState(0)
-	spinnerFrame, setSpinnerFrame := kitex.UseState(0)
 
 	// Reset thinking time and other transient states when switching sessions
 	kitex.UseEffect(func() {
@@ -1055,19 +1054,6 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 		}
 		prevSending.Current = sending
 	}, []any{sending, thinkingTime()})
-
-	// Rotate spinner frame when running
-	kitex.UseInterval(func() {
-		if sending {
-			setSpinnerFrame((spinnerFrame() + 1) % 4)
-		}
-	}, 250*time.Millisecond, []any{sending})
-
-	pulseDots := []string{"●  ", "●● ", "●●●", "   "}
-	currentDots := pulseDots[spinnerFrame()]
-
-	oneDotPulseDots := []string{"●", " ", "●", " "}
-	oneDotCurrentDots := oneDotPulseDots[spinnerFrame()]
 
 	// Calculate a simple integer key of the messages state to trigger the effect reactively.
 	// Only calculate the length of the last message to avoid O(N) traversal of all message blocks on every render.
@@ -1126,43 +1112,6 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 
 	sendMessage := func(text string, force ...bool) {
 		if text == "" || submitting() {
-			return
-		}
-
-		if strings.HasPrefix(text, "/mode ") {
-			modeStr := strings.TrimSpace(strings.TrimPrefix(text, "/mode "))
-			var mode permissions.PermissionMode
-			switch modeStr {
-			case "auto":
-				mode = permissions.ModeAuto
-			case "default":
-				mode = permissions.ModeDefault
-			case "strict":
-				mode = permissions.ModeStrict
-			default:
-				toast.AddErrorMessage("Invalid Mode", fmt.Sprintf("Unknown permission mode %q. Use 'auto', 'default', or 'strict'.", modeStr))
-				setInputValue("")
-				return
-			}
-
-			setInputValue("")
-			setSubmitting(true)
-			promise.New(func(ctx context.Context) (bool, error) {
-				_, err := client.SetPermissionMode(ctx, api.SetPermissionModeRequest{
-					SessionID: sessionID,
-					Mode:      mode,
-					Scope:     permissions.ScopeSession,
-				})
-				if err != nil {
-					return false, err
-				}
-				return true, nil
-			}).Then(func(success bool) {
-				setSubmitting(false)
-				windClient.InvalidateQueries(api.GetSessionStateRequest{SessionID: sessionID})
-			}, func(err error) {
-				setSubmitting(false)
-			})
 			return
 		}
 
@@ -1449,8 +1398,6 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 				renderBubbles(
 					messages,
 					toolResponses,
-					currentDots,
-					oneDotCurrentDots,
 					mainAgentName,
 					isGenerating,
 					thinkingTime(),
@@ -1489,7 +1436,6 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 					Sending:             sending,
 					ThinkingTime:        thinkingTime(),
 					LastFinishedTime:    lastFinishedTime(),
-					CurrentDots:         currentDots,
 					RunPromptTokens:     runPromptTokens,
 					RunCompletionTokens: runCompletionTokens,
 					RunTotalTokens:      runTotalTokens,
@@ -1723,8 +1669,6 @@ func isSystemNotification(msg message.Message) bool {
 func renderBubbles(
 	messages message.MessageList,
 	toolResponses map[string]*message.Tool,
-	currentDots string,
-	oneDotCurrentDots string,
 	mainAgentName string,
 	isGenerating bool,
 	liveThinkingTime int,
@@ -1774,8 +1718,6 @@ func renderBubbles(
 				Role:                  currentGroupRole,
 				Msgs:                  currentGroup,
 				ToolResponses:         toolResponses,
-				CurrentDots:           currentDots,
-				OneDotCurrentDots:     oneDotCurrentDots,
 				MainAgentName:         mainAgentName,
 				IsGenerating:          groupIsGenerating,
 				LiveThinkingTime:      liveThinkingTime,

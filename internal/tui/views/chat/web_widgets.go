@@ -40,7 +40,7 @@ var WebSearchToolWidget = kitex.FC("WebSearchToolWidget", func(props ToolExecuti
 		if tm == nil {
 			actionText = "Web Search: Searching for "
 			statusLabel = fmt.Sprintf("Web Search: Searching for %q", query)
-			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Info)}, kitex.Text(props.CurrentDots))
+			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Info)}, toolPulse())
 			themeColor = t.Color.Surface.Info
 		} else if tm.IsError {
 			actionText = "Web Search: Error searching for "
@@ -181,7 +181,7 @@ var WebFetchToolWidget = kitex.FC("WebFetchToolWidget", func(props ToolExecution
 		if tm == nil {
 			actionText = "Fetching "
 			statusLabel = fmt.Sprintf("Fetching [%s]", url)
-			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Info)}, kitex.Text(props.CurrentDots))
+			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Info)}, toolPulse())
 			themeColor = t.Color.Surface.Info
 		} else if tm.IsError {
 			actionText = "Error Fetching "
@@ -319,7 +319,7 @@ var DownloadToolWidget = kitex.FC("DownloadToolWidget", func(props ToolExecution
 		if tm == nil {
 			actionText = "Downloading "
 			statusLabel = fmt.Sprintf("Downloading [%s]", filepath.Base(urlVal))
-			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Info)}, kitex.Text(props.CurrentDots))
+			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Info)}, toolPulse())
 			themeColor = t.Color.Surface.Info
 		} else if tm.IsError {
 			actionText = "Download Error "
@@ -463,7 +463,7 @@ var FetchToolWidget = kitex.FC("FetchToolWidget", func(props ToolExecutionProps)
 		if tm == nil {
 			actionText = "Fetching "
 			statusLabel = fmt.Sprintf("Fetching [%s]", urlVal)
-			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Info)}, kitex.Text(props.CurrentDots))
+			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Info)}, toolPulse())
 			themeColor = t.Color.Surface.Info
 		} else if tm.IsError {
 			actionText = "Error Fetching "

@@ -40,9 +40,9 @@ var Composer = kitex.FC("Composer", func(props ComposerProps) kitex.Node {
 	blueColor := t.Color.Surface.Info
 
 	// Border color switches to blue when focused, otherwise comment color
-	borderColor := t.Color.Text.Tertiary // comment: #565f89
+	borderColor := t.Color.Text.Tertiary
 	if isFocused() {
-		borderColor = blueColor // blue: #7aa2f7
+		borderColor = blueColor
 	}
 
 	// Wrapper style with a full single border
@@ -51,7 +51,7 @@ var Composer = kitex.FC("Composer", func(props ComposerProps) kitex.Node {
 		Display(style.DisplayFlex).
 		FlexDirection(style.FlexRow).
 		AlignItems(style.AlignEnd).
-		Padding(0, 1). // 1 cell padding inside
+		Padding(0, 1).
 		Border(style.SingleBorder().Color(borderColor))
 
 	// Text area style

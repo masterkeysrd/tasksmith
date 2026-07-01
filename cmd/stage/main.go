@@ -3,6 +3,7 @@ package main
 import (
 	"log/slog"
 	"os"
+	"time"
 
 	"github.com/masterkeysrd/kite/extras/kitex"
 	"github.com/masterkeysrd/kite/extras/stage"
@@ -399,7 +400,6 @@ func main() {
 			Name: "Running",
 			Render: func(c *stage.Context) kitex.Node {
 				toolName := c.Text("Tool Name", "my_custom_tool")
-				dots := c.Select("Dots", []string{".", "..", "..."}, ".")
 
 				tc := &message.ToolCall{
 					Name: toolName,
@@ -410,8 +410,7 @@ func main() {
 					Style: style.S().Padding(2).Width(style.Percent(100)).Height(style.Percent(100)),
 				},
 					chat.GenericToolWidget(chat.ToolExecutionProps{
-						ToolCall:    tc,
-						CurrentDots: dots,
+						ToolCall: tc,
 					}),
 				)
 			},
@@ -467,7 +466,6 @@ func main() {
 			Name: "Processing",
 			Render: func(c *stage.Context) kitex.Node {
 				phase := c.Select("Phase", []string{"processing", "thinking", "answering"}, "processing")
-				dots := c.Select("Dots", []string{".", "..", "..."}, ".")
 				tip := c.Text("Active Tip", "")
 				seconds := 42
 
@@ -478,7 +476,6 @@ func main() {
 						Sending:             true,
 						ThinkingTime:        seconds,
 						LastFinishedTime:    -1,
-						CurrentDots:         dots,
 						RunPromptTokens:     1200,
 						RunCompletionTokens: 340,
 						IsGenerating:        phase == "answering",
@@ -618,10 +615,8 @@ func main() {
 			{
 				Name: "Running",
 				Render: func(c *stage.Context) kitex.Node {
-					dots := c.Select("Dots", []string{".", "..", "..."}, ".")
 					return wrap(chat.ToolExecution(chat.ToolExecutionProps{
-						ToolCall:    tc(runningArgs),
-						CurrentDots: dots,
+						ToolCall: tc(runningArgs),
 					}))
 				},
 			},
@@ -743,6 +738,76 @@ func main() {
 		"Skill 'golang' activated successfully.",
 		"skill 'unknown' not found",
 	))
+
+	stg.Register("Pulse", []stage.Scene{
+		{
+			Name: "Default (3 dots)",
+			Render: func(c *stage.Context) kitex.Node {
+				return kitex.Box(kitex.BoxProps{
+					Style: style.S().Padding(2),
+				},
+					components.Pulse(components.PulseProps{}),
+				)
+			},
+		},
+		{
+			Name: "Blinking (1 dot)",
+			Render: func(c *stage.Context) kitex.Node {
+				return kitex.Box(kitex.BoxProps{
+					Style: style.S().Padding(2),
+				},
+					components.Pulse(components.PulseProps{
+						Count: 1,
+					}),
+				)
+			},
+		},
+		{
+			Name: "Custom Dot Count",
+			Render: func(c *stage.Context) kitex.Node {
+				count := c.Int("Dot Count", 5)
+				return kitex.Box(kitex.BoxProps{
+					Style: style.S().Padding(2),
+				},
+					components.Pulse(components.PulseProps{
+						Count: count,
+					}),
+				)
+			},
+		},
+		{
+			Name: "Circle Staggered (Breathe)",
+			Render: func(c *stage.Context) kitex.Node {
+				count := c.Int("Count", 3)
+				return kitex.Box(kitex.BoxProps{
+					Style: style.S().Padding(2),
+				},
+					components.Pulse(components.PulseProps{
+						Stages:    []string{"○", "⊙", "◎", "◉", "●"},
+						Count:     count,
+						LoopStyle: components.LoopBreathe,
+						Interval:  120 * time.Millisecond,
+					}),
+				)
+			},
+		},
+		{
+			Name: "Circle Staggered (Reset)",
+			Render: func(c *stage.Context) kitex.Node {
+				count := c.Int("Count", 3)
+				return kitex.Box(kitex.BoxProps{
+					Style: style.S().Padding(2),
+				},
+					components.Pulse(components.PulseProps{
+						Stages:    []string{"○", "⊙", "◎", "◉", "●"},
+						Count:     count,
+						LoopStyle: components.LoopReset,
+						Interval:  120 * time.Millisecond,
+					}),
+				)
+			},
+		},
+	})
 
 	stg.Run()
 }

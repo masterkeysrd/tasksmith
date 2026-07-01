@@ -84,7 +84,7 @@ var LspSymbolsToolWidget = kitex.FC("LspSymbolsToolWidget", func(props ToolExecu
 	if t != nil {
 		if tm == nil {
 			statusLabel = fmt.Sprintf("Searching for %s", query)
-			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Info)}, kitex.Text(props.CurrentDots))
+			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Info)}, toolPulse())
 			themeColor = t.Color.Surface.Info
 		} else if tm.IsError {
 			statusLabel = fmt.Sprintf("Error searching for %s", query)
@@ -172,7 +172,7 @@ var LspRestartToolWidget = kitex.FC("LspRestartToolWidget", func(props ToolExecu
 	if t != nil {
 		if tm == nil {
 			statusLabel = "Restarting"
-			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Info)}, kitex.Text(props.CurrentDots))
+			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Info)}, toolPulse())
 			themeColor = t.Color.Surface.Info
 		} else if tm.IsError {
 			statusLabel = "Failed to restart"
@@ -269,7 +269,7 @@ var LspDiagnosticsToolWidget = kitex.FC("LspDiagnosticsToolWidget", func(props T
 	if t != nil {
 		if tm == nil {
 			statusLabel = fmt.Sprintf("Fetching diagnostics for %s", folderName)
-			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Info)}, kitex.Text(props.CurrentDots))
+			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Info)}, toolPulse())
 			themeColor = t.Color.Surface.Info
 		} else if tm.IsError {
 			statusLabel = fmt.Sprintf("Error fetching diagnostics for %s", folderName)
@@ -365,7 +365,7 @@ var LspInspectToolWidget = kitex.FC("LspInspectToolWidget", func(props ToolExecu
 	if t != nil {
 		if tm == nil {
 			statusLabel = fmt.Sprintf("Inspecting symbol %s", query)
-			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Info)}, kitex.Text(props.CurrentDots))
+			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Info)}, toolPulse())
 			themeColor = t.Color.Surface.Info
 		} else if tm.IsError {
 			statusLabel = fmt.Sprintf("Error inspecting symbol %s", query)

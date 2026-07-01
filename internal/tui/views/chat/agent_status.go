@@ -3,9 +3,11 @@ package chat
 import (
 	"fmt"
 	"image/color"
+	"time"
 
 	"github.com/masterkeysrd/kite/extras/kitex"
 	"github.com/masterkeysrd/kite/style"
+	"github.com/masterkeysrd/tasksmith/internal/tui/components"
 	"github.com/masterkeysrd/tasksmith/internal/tui/components/icon"
 	"github.com/masterkeysrd/tasksmith/internal/tui/theme"
 	"github.com/masterkeysrd/tasksmith/internal/tui/tokenutils"
@@ -16,7 +18,6 @@ type AgentStatusProps struct {
 	Sending             bool
 	ThinkingTime        int
 	LastFinishedTime    int
-	CurrentDots         string
 	RunPromptTokens     int
 	RunCompletionTokens int
 	RunTotalTokens      int
@@ -68,7 +69,7 @@ var AgentStatus = kitex.FC("AgentStatus", func(props AgentStatusProps) kitex.Nod
 			Gap(1).
 			PaddingLeft(2).
 			Foreground(statusColor)
-		dotsStyle := style.S().Foreground(statusColor).Width(style.Cells(3))
+		dotsStyle := style.S().Foreground(statusColor).Width(style.Cells(5))
 		labelStyle := style.S().Foreground(statusColor).Bold(true)
 		timeStyle := style.S().Foreground(t.Color.Text.Tertiary)
 
@@ -89,7 +90,12 @@ var AgentStatus = kitex.FC("AgentStatus", func(props AgentStatusProps) kitex.Nod
 		}
 
 		statusRow := kitex.Box(kitex.BoxProps{Style: containerStyle},
-			kitex.Box(kitex.BoxProps{Style: dotsStyle}, kitex.Text(props.CurrentDots)),
+			kitex.Box(kitex.BoxProps{Style: dotsStyle}, components.Pulse(components.PulseProps{
+				Stages:    []string{"○", "⊙", "◎", "◉", "●"},
+				Count:     3,
+				LoopStyle: components.LoopBreathe,
+				Interval:  120 * time.Millisecond,
+			})),
 			kitex.Box(kitex.BoxProps{Style: labelStyle}, kitex.Text(statusText)),
 			kitex.Box(kitex.BoxProps{Style: timeStyle}, kitex.Text(timeStr)),
 			kitex.If(len(cumNodes) > 0, func() kitex.Node { return cumNodes[0] }),
@@ -99,14 +105,14 @@ var AgentStatus = kitex.FC("AgentStatus", func(props AgentStatusProps) kitex.Nod
 			tipStyle := style.S().
 				Foreground(t.Color.Text.Tertiary).
 				Italic(true).
-				MarginTop(1).
-				PaddingLeft(6)
+				MarginTop(0).
+				PaddingLeft(3) // Slightly indented relative to the 2-cell statusRow padding
 
 			return kitex.Box(kitex.BoxProps{
 				Style: style.S().Display(style.DisplayFlex).FlexDirection(style.FlexColumn),
 			},
 				statusRow,
-				kitex.Box(kitex.BoxProps{Style: tipStyle}, kitex.Text("Tip: "+props.ActiveTip)),
+				kitex.Box(kitex.BoxProps{Style: tipStyle}, kitex.Text("⤷ Tip: "+props.ActiveTip)),
 			)
 		}
 

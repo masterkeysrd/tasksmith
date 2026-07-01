@@ -16,8 +16,6 @@ type MessageProps struct {
 	Role                  message.Role
 	Content               message.Content
 	ToolResponses         map[string]*message.Tool
-	CurrentDots           string
-	OneDotCurrentDots     string
 	ReasoningTokens       int
 	ThinkingDuration      time.Duration
 	PendingAuthorizations []permissions.AuthorizationRequest
@@ -52,7 +50,6 @@ var Message = kitex.FC("Message", func(props MessageProps) kitex.Node {
 	role := props.Role
 	content := props.Content
 	toolResponses := props.ToolResponses
-	currentDots := props.CurrentDots
 
 	if role == message.RoleAssistant {
 		var children []kitex.Node
@@ -119,14 +116,9 @@ var Message = kitex.FC("Message", func(props MessageProps) kitex.Node {
 					if toolResponses != nil {
 						toolMsg = toolResponses[b.ID]
 					}
-					dots := currentDots
-					if b.Name == "bash" {
-						dots = props.OneDotCurrentDots
-					}
 					node = ToolExecution(ToolExecutionProps{
 						ToolCall:         b,
 						ToolMessage:      toolMsg,
-						CurrentDots:      dots,
 						OnViewFullOutput: props.OnViewFullOutput,
 						OnViewPreview:    props.OnViewPreview,
 					})

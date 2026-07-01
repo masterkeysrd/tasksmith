@@ -22,8 +22,6 @@ type BubbleGroupProps struct {
 	Role                  message.Role
 	Msgs                  []message.Message
 	ToolResponses         map[string]*message.Tool
-	CurrentDots           string
-	OneDotCurrentDots     string
 	MainAgentName         string
 	IsGenerating          bool
 	LiveThinkingTime      int
@@ -145,8 +143,6 @@ var BubbleGroup = kitex.FC("BubbleGroup", func(props BubbleGroupProps) kitex.Nod
 				Role:                  msg.Role(),
 				Content:               msg.GetContent(),
 				ToolResponses:         props.ToolResponses,
-				CurrentDots:           props.CurrentDots,
-				OneDotCurrentDots:     props.OneDotCurrentDots,
 				ReasoningTokens:       reasoningTokens,
 				ThinkingDuration:      thinkingDuration,
 				PendingAuthorizations: props.PendingAuthorizations,
@@ -243,8 +239,6 @@ var BubbleGroup = kitex.FC("BubbleGroup", func(props BubbleGroupProps) kitex.Nod
 		props.SelectedDirs,
 		props.CurrentPendingIndex,
 		props.IsInsert,
-		props.CurrentDots,
-		props.OneDotCurrentDots,
 		authKey,
 		props.IsProvidingFeedback,
 		props.FeedbackText,

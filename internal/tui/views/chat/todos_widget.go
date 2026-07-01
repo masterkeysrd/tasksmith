@@ -65,7 +65,7 @@ var TodosToolWidget = kitex.FC("TodosToolWidget", func(props ToolExecutionProps)
 	if t != nil {
 		if tm == nil {
 			statusLabel = "Updating Checklist"
-			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Info)}, kitex.Text(props.CurrentDots))
+			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Info)}, toolPulse())
 			borderCol = t.Color.Surface.Info
 		} else if tm.IsError {
 			statusLabel = "Checklist Error"
