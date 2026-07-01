@@ -402,7 +402,6 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 	}, []any{len(pendingAuthorizations)})
 
 	recordDecision := func(toolCallID string, approved bool, scope permissions.PermissionScope, grantDecisions []permissions.GrantDecision, reason string) {
-		log.Info(fmt.Sprintf("[TUI] recordDecision: toolCallID=%q approved=%t scope=%v reason=%q", toolCallID, approved, scope, reason))
 		dec := permissions.AuthorizationDecision{
 			ToolCallID:     toolCallID,
 			Approved:       approved,
