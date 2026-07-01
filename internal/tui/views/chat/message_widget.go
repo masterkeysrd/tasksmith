@@ -19,31 +19,9 @@ type MessageProps struct {
 	ReasoningTokens       int
 	ThinkingDuration      time.Duration
 	PendingAuthorizations []permissions.AuthorizationRequest
-	CurrentPageIndex      int
-	FocusedItem           FocusItem
-	SelectedScopeIndex    int
-	SelectedOptions       map[string]int
-	SelectedDirs          map[string]int
-	OnPreview             func()
-	CurrentPendingIndex   int
-	IsInsert              bool
-	LocalDecisions        map[string]permissions.AuthorizationDecision
-	IsSubmitting          bool
-	OnSelectVertical      func(FocusItem)
-	OnSelectScope         func(int)
-	OnSelectOption        func(int)
-	OnSelectDir           func(int)
-	OnApprove             func()
-	OnDeny                func()
-	OnHardCancel          func()
+	SessionID             string
 	OnViewFullOutput      func(title, cachedPath string)
 	OnViewPreview         func(title string, p preview.ToolPreview)
-	IsProvidingFeedback   bool
-	FeedbackText          string
-	OnFeedbackChange      func(string)
-	OnDenyWithFeedback    func(string)
-	OnCancelFeedback      func()
-	OnStartFeedback       func()
 }
 
 var Message = kitex.FC("Message", func(props MessageProps) kitex.Node {
@@ -79,37 +57,12 @@ var Message = kitex.FC("Message", func(props MessageProps) kitex.Node {
 
 				if pendingReq != nil {
 					isActive := len(props.PendingAuthorizations) > 0 &&
-						props.CurrentPendingIndex < len(props.PendingAuthorizations) &&
-						pendingReq.ToolCallID == props.PendingAuthorizations[props.CurrentPendingIndex].ToolCallID
-
-					decision, isDecided := props.LocalDecisions[pendingReq.ToolCallID]
+						pendingReq.ToolCallID == props.PendingAuthorizations[0].ToolCallID
 
 					node = AuthorizationWidget(AuthorizationWidgetProps{
-						Request:             *pendingReq,
-						CurrentPageIndex:    props.CurrentPageIndex,
-						FocusedItem:         props.FocusedItem,
-						SelectedScopeIndex:  props.SelectedScopeIndex,
-						SelectedOptions:     props.SelectedOptions,
-						SelectedDirs:        props.SelectedDirs,
-						OnPreview:           props.OnPreview,
-						IsActive:            isActive,
-						IsFocused:           isActive && (!props.IsInsert || props.IsProvidingFeedback),
-						IsDecided:           isDecided,
-						Decision:            decision,
-						IsSubmitting:        props.IsSubmitting,
-						OnSelectVertical:    props.OnSelectVertical,
-						OnSelectScope:       props.OnSelectScope,
-						OnSelectOption:      props.OnSelectOption,
-						OnSelectDir:         props.OnSelectDir,
-						OnApprove:           props.OnApprove,
-						OnDeny:              props.OnDeny,
-						OnHardCancel:        props.OnHardCancel,
-						IsProvidingFeedback: props.IsProvidingFeedback,
-						FeedbackText:        props.FeedbackText,
-						OnFeedbackChange:    props.OnFeedbackChange,
-						OnDenyWithFeedback:  props.OnDenyWithFeedback,
-						OnCancelFeedback:    props.OnCancelFeedback,
-						OnStartFeedback:     props.OnStartFeedback,
+						Request:   *pendingReq,
+						SessionID: props.SessionID,
+						IsActive:  isActive,
 					})
 				} else {
 					var toolMsg *message.Tool
@@ -128,11 +81,9 @@ var Message = kitex.FC("Message", func(props MessageProps) kitex.Node {
 				children = append(children, node)
 			}
 		}
-
 		if len(children) == 0 {
 			return nil
 		}
-
 		return kitex.Box(kitex.BoxProps{
 			Style: style.S().
 				Display(style.DisplayFlex).

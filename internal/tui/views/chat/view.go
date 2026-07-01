@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"image/color"
-	"maps"
 	"strings"
 	"time"
 
@@ -14,7 +13,6 @@ import (
 	"github.com/masterkeysrd/kite/extras/kitex"
 	"github.com/masterkeysrd/kite/extras/wind"
 	"github.com/masterkeysrd/kite/geom"
-	"github.com/masterkeysrd/kite/key"
 	"github.com/masterkeysrd/kite/promise"
 	"github.com/masterkeysrd/kite/style"
 
@@ -103,13 +101,6 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 	inputRef := kitex.CreateRef[dom.Element]()
 	outerRef := kitex.CreateRef[dom.Element]()
 
-	// Authorization choices state
-	selectedScopeIndex, setSelectedScopeIndex := kitex.UseState(1) // Default to Session (1)
-	currentPageIndex, setCurrentPageIndex := kitex.UseState(0)
-	focusedItem, setFocusedItem := kitex.UseState(FocusItemSession)
-	selectedOptions, setSelectedOptions := kitex.UseState(map[string]int{})
-	selectedDirs, setSelectedDirs := kitex.UseState(map[string]int{})
-	showPreviewModal, setShowPreviewModal := kitex.UseState(false)
 	showFullOutputModal, setShowFullOutputModal := kitex.UseState(false)
 	fullOutputTitle, setFullOutputTitle := kitex.UseState("")
 	fullOutputContent, setFullOutputContent := kitex.UseState("")
@@ -260,12 +251,7 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 		}()
 	}
 
-	currentPendingIndex, setCurrentPendingIndex := kitex.UseState(0)
-	localDecisions, setLocalDecisions := kitex.UseState(map[string]permissions.AuthorizationDecision{})
-	isProvidingFeedback, setIsProvidingFeedback := kitex.UseState(false)
-	feedbackText, setFeedbackText := kitex.UseState("")
 	showResolutionDialog, setShowResolutionDialog := kitex.UseState(false)
-	showCancelConfirmDialog, setShowCancelConfirmDialog := kitex.UseState(false)
 
 	focusSelf := func() {
 		if outerRef.Current != nil {
@@ -276,72 +262,9 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 		}
 	}
 
-	handleSelectVertical := func(item FocusItem) {
-		setFocusedItem(item)
-		mode.Set(mode.Normal)
-		focusSelf()
-	}
-
 	var pendingAuthorizations []permissions.AuthorizationRequest
 	if stateQuery.Data != nil {
 		pendingAuthorizations = stateQuery.Data.PendingAuthorizations
-	}
-
-	handleSelectScope := func(idx int) {
-		setSelectedScopeIndex(idx)
-		switch idx {
-		case 0:
-			setFocusedItem(FocusItemOnce)
-		case 1:
-			setFocusedItem(FocusItemSession)
-		case 2:
-			setFocusedItem(FocusItemWorkspace)
-		case 3:
-			setFocusedItem(FocusItemGlobal)
-		}
-		mode.Set(mode.Normal)
-		focusSelf()
-	}
-
-	handleSelectOption := func(idx int) {
-		currIdx := currentPendingIndex()
-		if currIdx < len(pendingAuthorizations) {
-			req := pendingAuthorizations[currIdx]
-			if len(req.GrantRequests) > currentPageIndex() {
-				gr := req.GrantRequests[currentPageIndex()]
-				newOpts := make(map[string]int)
-				maps.Copy(newOpts, selectedOptions())
-				newOpts[gr.ID] = idx
-				setSelectedOptions(newOpts)
-				switch selectedScopeIndex() {
-				case 1:
-					setFocusedItem(FocusItemSessionCmd)
-				case 2:
-					setFocusedItem(FocusItemWorkspaceCmd)
-				case 3:
-					setFocusedItem(FocusItemGlobalCmd)
-				}
-				mode.Set(mode.Normal)
-				focusSelf()
-			}
-		}
-	}
-
-	handleSelectDir := func(idx int) {
-		currIdx := currentPendingIndex()
-		if currIdx < len(pendingAuthorizations) {
-			req := pendingAuthorizations[currIdx]
-			if len(req.GrantRequests) > currentPageIndex() {
-				gr := req.GrantRequests[currentPageIndex()]
-				newDirs := make(map[string]int)
-				maps.Copy(newDirs, selectedDirs())
-				newDirs[gr.ID] = idx
-				setSelectedDirs(newDirs)
-				setFocusedItem(FocusItemDirectory)
-				mode.Set(mode.Normal)
-				focusSelf()
-			}
-		}
 	}
 
 	var pendingLspSuggestions []api.LspSuggestion
@@ -369,122 +292,13 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 		}()
 	}
 
-	kitex.UseEffect(func() {
-		defaultIdx := 1
-		defaultFocusedItem := FocusItemSession
-		if len(pendingAuthorizations) > 0 {
-			defaultIdx = getDefaultScopeIndex(pendingAuthorizations[0], 0)
-			allowed := getAllowedScopes(pendingAuthorizations[0], 0)
-			if len(allowed) > 0 {
-				switch allowed[defaultIdx] {
-				case permissions.ScopeOnce:
-					defaultFocusedItem = FocusItemOnce
-				case permissions.ScopeSession:
-					defaultFocusedItem = FocusItemSession
-				case permissions.ScopeWorkspace:
-					defaultFocusedItem = FocusItemWorkspace
-				case permissions.ScopeGlobal:
-					defaultFocusedItem = FocusItemGlobal
-				}
-			}
-		}
-		setSelectedScopeIndex(defaultIdx)
-		setFocusedItem(defaultFocusedItem)
-		setCurrentPageIndex(0)
-		setSelectedOptions(map[string]int{})
-		setSelectedDirs(map[string]int{})
-		setShowPreviewModal(false)
-		setCurrentPendingIndex(0)
-		setLocalDecisions(map[string]permissions.AuthorizationDecision{})
-		if len(pendingAuthorizations) > 0 {
-			mode.Set(mode.Normal)
-		}
-	}, []any{len(pendingAuthorizations)})
-
-	recordDecision := func(toolCallID string, approved bool, scope permissions.PermissionScope, grantDecisions []permissions.GrantDecision, reason string) {
-		dec := permissions.AuthorizationDecision{
-			ToolCallID:     toolCallID,
-			Approved:       approved,
-			Scope:          scope,
-			GrantDecisions: grantDecisions,
-			Reason:         reason,
-		}
-		setIsProvidingFeedback(false)
-		setFeedbackText("")
-
-		newDecisions := make(map[string]permissions.AuthorizationDecision)
-		maps.Copy(newDecisions, localDecisions())
-		newDecisions[toolCallID] = dec
-		setLocalDecisions(newDecisions)
-
-		nextIdx := currentPendingIndex() + 1
-		if nextIdx < len(pendingAuthorizations) {
-			setCurrentPendingIndex(nextIdx)
-			nextReq := pendingAuthorizations[nextIdx]
-			defaultIdx := getDefaultScopeIndex(nextReq, 0)
-			defaultFocusedItem := FocusItemSession
-			allowed := getAllowedScopes(nextReq, 0)
-			if len(allowed) > 0 {
-				switch allowed[defaultIdx] {
-				case permissions.ScopeOnce:
-					defaultFocusedItem = FocusItemOnce
-				case permissions.ScopeSession:
-					defaultFocusedItem = FocusItemSession
-				case permissions.ScopeWorkspace:
-					defaultFocusedItem = FocusItemWorkspace
-				case permissions.ScopeGlobal:
-					defaultFocusedItem = FocusItemGlobal
-				}
-			}
-			setSelectedScopeIndex(defaultIdx)
-			setFocusedItem(defaultFocusedItem)
-			setCurrentPageIndex(0)
-			setSelectedOptions(map[string]int{})
-			setSelectedDirs(map[string]int{})
-			setShowPreviewModal(false)
-		} else {
-			if submitting() {
-				return
-			}
-			setSubmitting(true)
-			setShowPreviewModal(false)
-
-			promise.New(func(ctx context.Context) (bool, error) {
-				var decisionList []permissions.AuthorizationDecision
-				for _, d := range pendingAuthorizations {
-					if res, ok := newDecisions[d.ToolCallID]; ok {
-						decisionList = append(decisionList, res)
-					}
-				}
-				_, err := client.SubmitAuthorizationDecision(ctx, api.SubmitAuthorizationDecisionRequest{
-					SessionID: sessionID,
-					Decisions: decisionList,
-				})
-				if err != nil {
-					return false, err
-				}
-				return true, nil
-			}).Then(func(success bool) {
-				setSubmitting(false)
-				windClient.InvalidateQueries(api.GetSessionMessagesRequest{SessionID: sessionID})
-				windClient.InvalidateQueries(api.GetSessionStateRequest{SessionID: sessionID})
-				windClient.InvalidateQueries(api.GetFileChangesRequest{SessionID: sessionID})
-			}, func(err error) {
-				setSubmitting(false)
-				log.Error(fmt.Sprintf("Failed to submit authorization decisions: %v", err))
-			})
-		}
-	}
-
 	// Focus management: when insert mode is active, focus composer input.
 	// When normal mode is active, focus the outer container so we can receive global hotkeys.
-	// If feedback mode is active, block focus theft and let the feedback widget handle its own focus.
 	kitex.UseEffect(func() {
-		if isProvidingFeedback() {
-			return
-		}
-
 		if isInsert {
+			if IsFeedbackActive {
+				return
+			}
 			kitex.PostMacro(func() {
 				if inputRef.Current != nil {
 					if doc := inputRef.Current.OwnerDocument(); doc != nil {
@@ -502,490 +316,76 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 				}
 			})
 		}
-	}, []any{isInsert, isProvidingFeedback()})
+	}, []any{isInsert})
 
-	// Refs to bridge latest react states to the single-registration document listener
-	pendingAuthsRef := kitex.UseRef[[]permissions.AuthorizationRequest](nil)
-	pendingAuthsRef.Current = pendingAuthorizations
+	// Autoscroll history to bottom if already at bottom
+	historyRef := kitex.UseRef[dom.Element](nil)
+	lastMaxScrollY := kitex.UseRef(0)
+	isFirstRenderOfSession := kitex.UseRef(true)
 
-	selectedScopeIndexRef := kitex.UseRef(1)
-	selectedScopeIndexRef.Current = selectedScopeIndex()
-
-	currentPageIndexRef := kitex.UseRef(0)
-	currentPageIndexRef.Current = currentPageIndex()
-
-	focusedItemRef := kitex.UseRef(FocusItemSession)
-	focusedItemRef.Current = focusedItem()
-
-	selectedOptionsRef := kitex.UseRef[map[string]int](nil)
-	selectedOptionsRef.Current = selectedOptions()
-
-	selectedDirsRef := kitex.UseRef[map[string]int](nil)
-	selectedDirsRef.Current = selectedDirs()
-
-	showPreviewModalRef := kitex.UseRef(false)
-	showPreviewModalRef.Current = showPreviewModal()
-
-	modeRef := kitex.UseRef(mode.Normal)
-	modeRef.Current = m
-
-	queuedMessagesRef := kitex.UseRef[message.MessageList](nil)
-	queuedMessagesRef.Current = queuedMessages
-
-	statusRef := kitex.UseRef("")
-	statusRef.Current = status
-
-	currentPendingIndexRef := kitex.UseRef(0)
-	currentPendingIndexRef.Current = currentPendingIndex()
-
-	isProvidingFeedbackRef := kitex.UseRef(false)
-	isProvidingFeedbackRef.Current = isProvidingFeedback()
-
-	feedbackTextRef := kitex.UseRef("")
-	feedbackTextRef.Current = feedbackText()
-
-	showCancelConfirmDialogRef := kitex.UseRef(false)
-	showCancelConfirmDialogRef.Current = showCancelConfirmDialog()
-
-	recordDecisionRef := kitex.UseRef[func(string, bool, permissions.PermissionScope, []permissions.GrantDecision, string)](nil)
-	recordDecisionRef.Current = recordDecision
-
-	handleApprove := func() {
-		currIdx := currentPendingIndexRef.Current
-		if currIdx >= len(pendingAuthsRef.Current) {
-			return
-		}
-		req := pendingAuthsRef.Current[currIdx]
-
-		scope := permissions.ScopeOnce
-		allowed := getAllowedScopes(req, 0)
-		idx := selectedScopeIndexRef.Current
-		if idx >= 0 && idx < len(allowed) {
-			scope = allowed[idx]
-		}
-
-		var decisions []permissions.GrantDecision
-		for _, gr := range req.GrantRequests {
-			optIdx := selectedOptionsRef.Current[gr.ID]
-			if optIdx < 0 || optIdx >= len(gr.Options) {
-				optIdx = 0
-			}
-			target := "*"
-			if len(gr.Options) > 0 {
-				target = gr.Options[optIdx].Target
-			}
-
-			dirIdx := selectedDirsRef.Current[gr.ID]
-			if dirIdx < 0 || dirIdx >= len(gr.DirectoryOptions) {
-				dirIdx = 0
-			}
-			allowedDir := "*"
-			if len(gr.DirectoryOptions) > 0 {
-				allowedDir = gr.DirectoryOptions[dirIdx].Target
-			}
-
-			decisions = append(decisions, permissions.GrantDecision{
-				RequestID:        gr.ID,
-				SelectedTarget:   target,
-				AllowedDirectory: allowedDir,
-				Scope:            scope,
-			})
-		}
-
-		if recordDecisionRef.Current != nil {
-			recordDecisionRef.Current(req.ToolCallID, true, scope, decisions, "")
+	// Bind handlers to the persistent static controller
+	Controller.SendQueued = func() {
+		if len(queuedMessages) > 0 && status == "idle" {
+			handleSendQueued()
 		}
 	}
-
-	handleDeny := func() {
-		currIdx := currentPendingIndexRef.Current
-		if currIdx >= len(pendingAuthsRef.Current) {
-			return
-		}
-		req := pendingAuthsRef.Current[currIdx]
-		if recordDecisionRef.Current != nil {
-			recordDecisionRef.Current(req.ToolCallID, false, permissions.ScopeOnce, nil, "")
+	Controller.ClearQueue = func() {
+		if len(queuedMessages) > 0 && status == "idle" {
+			handleClearQueue()
 		}
 	}
+	Controller.ScrollDown = func() {
+		log.Info("ScrollDown invoked", log.Bool("historyRef_nil", historyRef.Current == nil))
+		if historyRef.Current != nil {
+			el := historyRef.Current
+			doc := el.OwnerDocument()
+			if doc == nil {
+				return
+			}
+			view := doc.DefaultView()
+			if view == nil {
+				return
+			}
+			_, maxScrollY := view.GetMaxScroll(el)
+			x, y := el.Scroll()
+			log.Info("ScrollDown current position", log.Int("x", x), log.Int("y", y), log.Int("maxScrollY", maxScrollY))
 
-	handleDenyWithFeedback := func(reason string) {
-		currIdx := currentPendingIndexRef.Current
-		if currIdx >= len(pendingAuthsRef.Current) {
-			return
+			if y > maxScrollY {
+				y = maxScrollY
+			}
+			targetY := min(y+3, maxScrollY)
+
+			el.ScrollTo(x, targetY)
+			newX, newY := el.Scroll()
+			log.Info("ScrollDown new position", log.Int("x", newX), log.Int("y", newY))
 		}
-		req := pendingAuthsRef.Current[currIdx]
-		if recordDecisionRef.Current != nil {
-			recordDecisionRef.Current(req.ToolCallID, false, permissions.ScopeOnce, nil, reason)
-		}
-		setIsProvidingFeedback(false)
-		setFeedbackText("")
-		mode.Set(mode.Normal)
 	}
-
-	handleStartFeedback := func() {
-		setIsProvidingFeedback(true)
-		setFeedbackText("")
-		mode.Set(mode.Insert)
-	}
-
-	handleCancelFeedback := func() {
-		setIsProvidingFeedback(false)
-		setFeedbackText("")
-		mode.Set(mode.Normal)
-	}
-
-	handleHardCancel := func() {
-		promise.New(func(ctx context.Context) (bool, error) {
-			var decisionList []permissions.AuthorizationDecision
-			for _, d := range pendingAuthorizations {
-				decisionList = append(decisionList, permissions.AuthorizationDecision{
-					ToolCallID:      d.ToolCallID,
-					Approved:        false,
-					CancelExecution: true,
-				})
+	Controller.ScrollUp = func() {
+		log.Info("ScrollUp invoked", log.Bool("historyRef_nil", historyRef.Current == nil))
+		if historyRef.Current != nil {
+			el := historyRef.Current
+			doc := el.OwnerDocument()
+			if doc == nil {
+				return
 			}
-			_, err := client.SubmitAuthorizationDecision(ctx, api.SubmitAuthorizationDecisionRequest{
-				SessionID: sessionID,
-				Decisions: decisionList,
-			})
-			if err != nil {
-				return false, err
+			view := doc.DefaultView()
+			if view == nil {
+				return
 			}
-			return true, nil
-		}).Then(func(success bool) {
-			setShowCancelConfirmDialog(false)
-			setShowPreviewModal(false)
-			setSubmitting(false)
-			windClient.InvalidateQueries(api.GetSessionMessagesRequest{SessionID: sessionID})
-			windClient.InvalidateQueries(api.GetSessionStateRequest{SessionID: sessionID})
-		}, func(err error) {
-			setShowCancelConfirmDialog(false)
-			setSubmitting(false)
-			log.Error(fmt.Sprintf("Failed to submit cancellation decisions: %v", err))
-		})
-	}
+			_, maxScrollY := view.GetMaxScroll(el)
+			x, y := el.Scroll()
+			log.Info("ScrollUp current position", log.Int("x", x), log.Int("y", y), log.Int("maxScrollY", maxScrollY))
 
-	// Document-level KeyDown listener registered when outerRef is available
-	kitex.UseEffectCleanup(func() func() {
-		if outerRef.Current == nil {
-			return nil
+			if y > maxScrollY {
+				y = maxScrollY
+			}
+
+			targetY := max(y-3, 0)
+			el.ScrollTo(x, targetY)
+			newX, newY := el.Scroll()
+			log.Info("ScrollUp new position", log.Int("x", newX), log.Int("y", newY))
 		}
-		doc := outerRef.Current.OwnerDocument()
-		if doc == nil {
-			return nil
-		}
-
-		sub := doc.AddEventListener(event.EventKeyDown, func(e event.Event) {
-			if modeRef.Current != mode.Normal {
-				return
-			}
-
-			ke, ok := e.(*event.KeyEvent)
-			if !ok {
-				return
-			}
-
-			// Handle queue keys if queue is non-empty and idle
-			if len(queuedMessagesRef.Current) > 0 && statusRef.Current == "idle" {
-				if ke.Text == "s" {
-					e.PreventDefault()
-					e.StopPropagation()
-					handleSendQueued()
-					return
-				}
-				if ke.Text == "c" {
-					e.PreventDefault()
-					e.StopPropagation()
-					handleClearQueue()
-					return
-				}
-			}
-
-			if len(pendingAuthsRef.Current) == 0 {
-				return
-			}
-
-			if showCancelConfirmDialogRef.Current {
-				if ke.Code == key.KeyEnter || ke.Text == "\r" || ke.Text == "\n" {
-					e.PreventDefault()
-					e.StopPropagation()
-					handleHardCancel()
-					return
-				}
-				if ke.Code == key.KeyEscape || ke.Text == "q" {
-					e.PreventDefault()
-					e.StopPropagation()
-					setShowCancelConfirmDialog(false)
-					return
-				}
-				e.PreventDefault()
-				e.StopPropagation()
-				return
-			}
-
-			if isProvidingFeedbackRef.Current {
-				return
-			}
-
-			currIdx := currentPendingIndexRef.Current
-			if currIdx >= len(pendingAuthsRef.Current) {
-				return
-			}
-
-			req := pendingAuthsRef.Current[currIdx]
-
-			getVisibleItems := func(scopeIdx int, req permissions.AuthorizationRequest, page int) []FocusItem {
-				var items []FocusItem
-				allowed := getAllowedScopes(req, page)
-
-				for idx, scope := range allowed {
-					switch scope {
-					case permissions.ScopeOnce:
-						items = append(items, FocusItemOnce)
-					case permissions.ScopeSession:
-						items = append(items, FocusItemSession)
-						if len(req.GrantRequests) > page {
-							gr := req.GrantRequests[page]
-							if scopeIdx == idx && len(gr.Options) > 0 {
-								items = append(items, FocusItemSessionCmd)
-							}
-						}
-					case permissions.ScopeWorkspace:
-						items = append(items, FocusItemWorkspace)
-						if len(req.GrantRequests) > page {
-							gr := req.GrantRequests[page]
-							if scopeIdx == idx && len(gr.Options) > 0 {
-								items = append(items, FocusItemWorkspaceCmd)
-							}
-						}
-					case permissions.ScopeGlobal:
-						items = append(items, FocusItemGlobal)
-						if len(req.GrantRequests) > page {
-							gr := req.GrantRequests[page]
-							if scopeIdx == idx && len(gr.Options) > 0 {
-								items = append(items, FocusItemGlobalCmd)
-							}
-						}
-					}
-				}
-
-				if len(req.GrantRequests) > page {
-					gr := req.GrantRequests[page]
-					onceIdx := -1
-					for idx, scope := range allowed {
-						if scope == permissions.ScopeOnce {
-							onceIdx = idx
-							break
-						}
-					}
-					if scopeIdx != onceIdx && len(gr.DirectoryOptions) > 0 {
-						items = append(items, FocusItemDirectory)
-					}
-				}
-				return items
-			}
-
-			// j/k vertical row navigation
-			currPage := currentPageIndexRef.Current
-			if ke.Text == "j" || ke.Code == key.KeyDown {
-				e.PreventDefault()
-				e.StopPropagation()
-				items := getVisibleItems(selectedScopeIndexRef.Current, req, currPage)
-				currItem := focusedItemRef.Current
-				currIdx := 0
-				for idx, it := range items {
-					if it == currItem {
-						currIdx = idx
-						break
-					}
-				}
-				newIdx := (currIdx + 1) % len(items)
-				newItem := items[newIdx]
-				setFocusedItem(newItem)
-
-				var targetScope permissions.PermissionScope
-				switch newItem {
-				case FocusItemOnce:
-					targetScope = permissions.ScopeOnce
-				case FocusItemSession:
-					targetScope = permissions.ScopeSession
-				case FocusItemWorkspace:
-					targetScope = permissions.ScopeWorkspace
-				case FocusItemGlobal:
-					targetScope = permissions.ScopeGlobal
-				}
-				if targetScope != "" {
-					targetScopeIdx := getScopeIndex(req, currPage, targetScope)
-					if targetScopeIdx != -1 {
-						setSelectedScopeIndex(targetScopeIdx)
-					}
-				}
-				return
-			}
-			if ke.Text == "k" || ke.Code == key.KeyUp {
-				e.PreventDefault()
-				e.StopPropagation()
-				items := getVisibleItems(selectedScopeIndexRef.Current, req, currPage)
-				currItem := focusedItemRef.Current
-				currIdx := 0
-				for idx, it := range items {
-					if it == currItem {
-						currIdx = idx
-						break
-					}
-				}
-				newIdx := (currIdx - 1 + len(items)) % len(items)
-				newItem := items[newIdx]
-				setFocusedItem(newItem)
-
-				var targetScope permissions.PermissionScope
-				switch newItem {
-				case FocusItemOnce:
-					targetScope = permissions.ScopeOnce
-				case FocusItemSession:
-					targetScope = permissions.ScopeSession
-				case FocusItemWorkspace:
-					targetScope = permissions.ScopeWorkspace
-				case FocusItemGlobal:
-					targetScope = permissions.ScopeGlobal
-				}
-				if targetScope != "" {
-					targetScopeIdx := getScopeIndex(req, currPage, targetScope)
-					if targetScopeIdx != -1 {
-						setSelectedScopeIndex(targetScopeIdx)
-					}
-				}
-				return
-			}
-
-			// h/l horizontal option navigation based on focused row
-			if currPage < len(req.GrantRequests) {
-				currReq := req.GrantRequests[currPage]
-				currItem := focusedItemRef.Current
-
-				switch currItem {
-				case FocusItemSessionCmd, FocusItemWorkspaceCmd, FocusItemGlobalCmd:
-					optsCount := len(currReq.Options)
-					if optsCount > 1 {
-						currentOptIdx := selectedOptionsRef.Current[currReq.ID]
-						if ke.Text == "h" || ke.Code == key.KeyLeft {
-							e.PreventDefault()
-							e.StopPropagation()
-							newOpts := make(map[string]int)
-							maps.Copy(newOpts, selectedOptionsRef.Current)
-							newOpts[currReq.ID] = (currentOptIdx - 1 + optsCount) % optsCount
-							setSelectedOptions(newOpts)
-							return
-						}
-						if ke.Text == "l" || ke.Code == key.KeyRight {
-							e.PreventDefault()
-							e.StopPropagation()
-							newOpts := make(map[string]int)
-							maps.Copy(newOpts, selectedOptionsRef.Current)
-							newOpts[currReq.ID] = (currentOptIdx + 1) % optsCount
-							setSelectedOptions(newOpts)
-							return
-						}
-					}
-				case FocusItemDirectory:
-					dirOptsCount := len(currReq.DirectoryOptions)
-					if dirOptsCount > 1 {
-						currentDirIdx := selectedDirsRef.Current[currReq.ID]
-						if ke.Text == "h" || ke.Code == key.KeyLeft {
-							e.PreventDefault()
-							e.StopPropagation()
-							newDirs := make(map[string]int)
-							maps.Copy(newDirs, selectedDirsRef.Current)
-							newDirs[currReq.ID] = (currentDirIdx - 1 + dirOptsCount) % dirOptsCount
-							setSelectedDirs(newDirs)
-							return
-						}
-						if ke.Text == "l" || ke.Code == key.KeyRight {
-							e.PreventDefault()
-							e.StopPropagation()
-							newDirs := make(map[string]int)
-							maps.Copy(newDirs, selectedDirsRef.Current)
-							newDirs[currReq.ID] = (currentDirIdx + 1) % dirOptsCount
-							setSelectedDirs(newDirs)
-							return
-						}
-					}
-				}
-			}
-
-			// Enter next/allow
-			if ke.Code == key.KeyEnter || ke.Text == "\r" || ke.Text == "\n" {
-				e.PreventDefault()
-				e.StopPropagation()
-
-				currPage := currentPageIndexRef.Current
-				totalPages := len(req.GrantRequests)
-				if totalPages == 0 {
-					totalPages = 1
-				}
-
-				if currPage < totalPages-1 {
-					setCurrentPageIndex(currPage + 1)
-					setFocusedItem(FocusItemSession)
-				} else {
-					handleApprove()
-				}
-				return
-			}
-
-			// Prev/Back b/Backspace
-			if ke.Text == "b" || ke.Code == key.KeyBackspace {
-				currPage := currentPageIndexRef.Current
-				if currPage > 0 {
-					e.PreventDefault()
-					e.StopPropagation()
-					setCurrentPageIndex(currPage - 1)
-					setFocusedItem(FocusItemSession)
-					return
-				}
-			}
-
-			if ke.Text == "x" || ke.Code == key.KeyEscape {
-				e.PreventDefault()
-				e.StopPropagation()
-				setShowCancelConfirmDialog(true)
-				return
-			}
-			if ke.Text == "q" {
-				e.PreventDefault()
-				e.StopPropagation()
-				if showPreviewModalRef.Current {
-					setShowPreviewModal(false)
-				} else {
-					handleDeny()
-				}
-				return
-			}
-			if ke.Text == "d" {
-				e.PreventDefault()
-				e.StopPropagation()
-				handleDeny()
-				return
-			}
-			if ke.Text == "D" {
-				e.PreventDefault()
-				e.StopPropagation()
-				handleStartFeedback()
-				return
-			}
-			if ke.Text == "p" || ke.Text == "P" {
-				if req.Preview != nil {
-					e.PreventDefault()
-					e.StopPropagation()
-					setShowPreviewModal(!showPreviewModalRef.Current)
-				}
-				return
-			}
-		})
-		return func() {
-			sub.Cancel()
-		}
-	}, []any{outerRef.Current != nil})
+	}
 
 	hasRunningTasks := stateQuery.Data != nil && len(stateQuery.Data.RunningTasks) > 0
 	kitex.UseInterval(func() {
@@ -1001,10 +401,6 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 		}
 	}, []any{sending, sessionID})
 
-	// Autoscroll history to bottom if already at bottom
-	historyRef := kitex.UseRef[dom.Element](nil)
-	lastMaxScrollY := kitex.UseRef(0)
-
 	// 5. Reactive state for tracking the last completed session's thinking time
 	lastFinishedTime, setLastFinishedTime := kitex.UseState(-1) // -1 represents null/unset
 	thinkingTime, setThinkingTime := kitex.UseState(0)
@@ -1016,14 +412,8 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 		setInputValue("")
 		setSubmitting(false)
 		setShowFullOutputModal(false)
-		setSelectedScopeIndex(1) // Default to Session (1)
-		setFocusedItem(FocusItemSession)
-		setCurrentPageIndex(0)
-		setSelectedOptions(map[string]int{})
-		setSelectedDirs(map[string]int{})
-		setShowPreviewModal(false)
-		setCurrentPendingIndex(0)
-		setLocalDecisions(map[string]permissions.AuthorizationDecision{})
+		isFirstRenderOfSession.Current = true
+		lastMaxScrollY.Current = 0
 		windClient.InvalidateQueries(api.GetSessionMessagesRequest{SessionID: sessionID})
 	}, []any{sessionID})
 
@@ -1087,9 +477,10 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 		_, maxScrollY := view.GetMaxScroll(el)
 		_, currentY := el.Scroll()
 
-		// If the user was previously scrolled to the bottom (within a 2-cell tolerance),
-		// we scroll to either the scroll anchor or the absolute bottom.
-		if currentY >= lastMaxScrollY.Current-2 {
+		if isFirstRenderOfSession.Current {
+			isFirstRenderOfSession.Current = false
+			el.ScrollTo(0, maxScrollY)
+		} else if currentY >= lastMaxScrollY.Current-2 {
 			rectParent, okParent := view.GetBoundingClientRect(el)
 			var rectAnchor geom.Rect
 			var okAnchor bool
@@ -1103,7 +494,7 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 					el.ScrollTo(0, targetY)
 				}
 			} else {
-				el.ScrollTo(0, 99999)
+				el.ScrollTo(0, maxScrollY)
 			}
 		}
 
@@ -1403,31 +794,9 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 					isGenerating,
 					thinkingTime(),
 					pendingAuthorizations,
-					currentPageIndex(),
-					focusedItem(),
-					selectedScopeIndex(),
-					selectedOptions(),
-					selectedDirs(),
-					func() { setShowPreviewModal(true) },
-					currentPendingIndex(),
-					isInsert,
-					localDecisions(),
-					submitting(),
-					handleSelectVertical,
-					handleSelectScope,
-					handleSelectOption,
-					handleSelectDir,
-					handleApprove,
-					handleDeny,
-					handleHardCancel,
+					sessionID,
 					openFullOutputModal,
 					onViewPreview,
-					isProvidingFeedback(),
-					feedbackText(),
-					func(val string) { setFeedbackText(val) },
-					handleDenyWithFeedback,
-					handleCancelFeedback,
-					handleStartFeedback,
 				)...,
 			),
 
@@ -1559,46 +928,6 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 			}),
 		),
 
-		// Modal Section for Authorization Preview
-		AuthorizationPreviewModal(AuthorizationPreviewModalProps{
-			IsOpen:              showPreviewModal(),
-			PendingRequests:     pendingAuthorizations,
-			CurrentPendingIndex: currentPendingIndex(),
-			CurrentPageIndex:    currentPageIndex(),
-			FocusedItem:         focusedItem(),
-			SelectedScopeIndex:  selectedScopeIndex(),
-			SelectedOptions:     selectedOptions(),
-			SelectedDirs:        selectedDirs(),
-			IsSubmitting:        submitting(),
-			OnClose:             func() { setShowPreviewModal(false) },
-			OnApprove:           handleApprove,
-			OnDeny:              handleDeny,
-			OnHardCancel:        func() { setShowCancelConfirmDialog(true) },
-			OnSelectVertical:    handleSelectVertical,
-			OnSelectScope:       handleSelectScope,
-			OnSelectOption:      handleSelectOption,
-			OnSelectDir:         handleSelectDir,
-			OnSetCurrentPage:    setCurrentPageIndex,
-			IsProvidingFeedback: isProvidingFeedback(),
-			FeedbackText:        feedbackText(),
-			OnFeedbackChange:    func(val string) { setFeedbackText(val) },
-			OnDenyWithFeedback:  handleDenyWithFeedback,
-			OnCancelFeedback:    handleCancelFeedback,
-			OnStartFeedback:     handleStartFeedback,
-		}),
-
-		// Cancel Confirmation Dialog
-		kitex.If(showCancelConfirmDialog(), func() kitex.Node {
-			return components.ConfirmDialog(components.ConfirmDialogProps{
-				Message:      "Are you sure you want to cancel all tool calls and stop execution?",
-				ConfirmLabel: "Confirm",
-				ConfirmColor: components.ButtonError,
-				OnConfirm:    handleHardCancel,
-				CancelLabel:  "Cancel",
-				OnCancel:     func() { setShowCancelConfirmDialog(false) },
-			})
-		}),
-
 		// Resolution Dialog for Pending Authorizations
 		kitex.If(showResolutionDialog(), func() kitex.Node {
 			return components.ConfirmDialog(components.ConfirmDialogProps{
@@ -1661,15 +990,6 @@ func getBubbleRole(role message.Role) message.Role {
 	}
 }
 
-func isSystemNotification(msg message.Message) bool {
-	meta := msg.GetMetadata()
-	if meta == nil {
-		return false
-	}
-	val, ok := meta["is_system_notification"].(bool)
-	return ok && val
-}
-
 func renderBubbles(
 	messages message.MessageList,
 	toolResponses map[string]*message.Tool,
@@ -1677,31 +997,9 @@ func renderBubbles(
 	isGenerating bool,
 	liveThinkingTime int,
 	pendingAuthorizations []permissions.AuthorizationRequest,
-	currentPageIndex int,
-	focusedItem FocusItem,
-	selectedScopeIndex int,
-	selectedOptions map[string]int,
-	selectedDirs map[string]int,
-	onPreview func(),
-	currentPendingIndex int,
-	isInsert bool,
-	localDecisions map[string]permissions.AuthorizationDecision,
-	isSubmitting bool,
-	onSelectVertical func(FocusItem),
-	onSelectScope func(int),
-	onSelectOption func(int),
-	onSelectDir func(int),
-	onApprove func(),
-	onDeny func(),
-	onHardCancel func(),
+	sessionID string,
 	onViewFullOutput func(title, cachedPath string),
 	onViewPreview func(title string, p preview.ToolPreview),
-	isProvidingFeedback bool,
-	feedbackText string,
-	onFeedbackChange func(string),
-	onDenyWithFeedback func(string),
-	onCancelFeedback func(),
-	onStartFeedback func(),
 ) []kitex.Node {
 	if len(messages) == 0 {
 		return nil
@@ -1726,31 +1024,9 @@ func renderBubbles(
 				IsGenerating:          groupIsGenerating,
 				LiveThinkingTime:      liveThinkingTime,
 				PendingAuthorizations: pendingAuthorizations,
-				CurrentPageIndex:      currentPageIndex,
-				FocusedItem:           focusedItem,
-				SelectedScopeIndex:    selectedScopeIndex,
-				SelectedOptions:       selectedOptions,
-				SelectedDirs:          selectedDirs,
-				OnPreview:             onPreview,
-				CurrentPendingIndex:   currentPendingIndex,
-				IsInsert:              isInsert,
-				LocalDecisions:        localDecisions,
-				IsSubmitting:          isSubmitting,
-				OnSelectVertical:      onSelectVertical,
-				OnSelectScope:         onSelectScope,
-				OnSelectOption:        onSelectOption,
-				OnSelectDir:           onSelectDir,
-				OnApprove:             onApprove,
-				OnDeny:                onDeny,
-				OnHardCancel:          onHardCancel,
+				SessionID:             sessionID,
 				OnViewFullOutput:      onViewFullOutput,
 				OnViewPreview:         onViewPreview,
-				IsProvidingFeedback:   isProvidingFeedback,
-				FeedbackText:          feedbackText,
-				OnFeedbackChange:      onFeedbackChange,
-				OnDenyWithFeedback:    onDenyWithFeedback,
-				OnCancelFeedback:      onCancelFeedback,
-				OnStartFeedback:       onStartFeedback,
 			}))
 		}
 	}
@@ -1831,24 +1107,4 @@ func renderQueuedBubbles(
 	}
 
 	return nodes
-}
-
-func getScopeIndex(req permissions.AuthorizationRequest, page int, scope permissions.PermissionScope) int {
-	allowed := getAllowedScopes(req, page)
-	for idx, s := range allowed {
-		if s == scope {
-			return idx
-		}
-	}
-	return -1
-}
-
-func getDefaultScopeIndex(req permissions.AuthorizationRequest, page int) int {
-	allowed := getAllowedScopes(req, page)
-	for idx, s := range allowed {
-		if s == permissions.ScopeSession {
-			return idx
-		}
-	}
-	return 0
 }

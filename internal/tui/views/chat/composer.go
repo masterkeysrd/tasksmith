@@ -118,7 +118,7 @@ var Composer = kitex.FC("Composer", func(props ComposerProps) kitex.Node {
 			}
 
 			// Enter without modifiers submits
-			if ke.Code == key.KeyEnter && (ke.Mod&key.ModShift) == 0 {
+			if (ke.Code == key.KeyEnter || ke.Text == "\r" || ke.Text == "\n") && (ke.Mod&key.ModShift) == 0 {
 				e.PreventDefault()
 				e.StopPropagation()
 				if props.OnSubmit != nil {

@@ -26,31 +26,9 @@ type BubbleGroupProps struct {
 	IsGenerating          bool
 	LiveThinkingTime      int
 	PendingAuthorizations []permissions.AuthorizationRequest
-	CurrentPageIndex      int
-	FocusedItem           FocusItem
-	SelectedScopeIndex    int
-	SelectedOptions       map[string]int
-	SelectedDirs          map[string]int
-	OnPreview             func()
-	CurrentPendingIndex   int
-	IsInsert              bool
-	LocalDecisions        map[string]permissions.AuthorizationDecision
-	IsSubmitting          bool
-	OnSelectVertical      func(FocusItem)
-	OnSelectScope         func(int)
-	OnSelectOption        func(int)
-	OnSelectDir           func(int)
-	OnApprove             func()
-	OnDeny                func()
-	OnHardCancel          func()
+	SessionID             string
 	OnViewFullOutput      func(title, cachedPath string)
 	OnViewPreview         func(title string, p preview.ToolPreview)
-	IsProvidingFeedback   bool
-	FeedbackText          string
-	OnFeedbackChange      func(string)
-	OnDenyWithFeedback    func(string)
-	OnCancelFeedback      func()
-	OnStartFeedback       func()
 }
 
 var BubbleGroup = kitex.FC("BubbleGroup", func(props BubbleGroupProps) kitex.Node {
@@ -146,31 +124,9 @@ var BubbleGroup = kitex.FC("BubbleGroup", func(props BubbleGroupProps) kitex.Nod
 				ReasoningTokens:       reasoningTokens,
 				ThinkingDuration:      thinkingDuration,
 				PendingAuthorizations: props.PendingAuthorizations,
-				CurrentPageIndex:      props.CurrentPageIndex,
-				FocusedItem:           props.FocusedItem,
-				SelectedScopeIndex:    props.SelectedScopeIndex,
-				SelectedOptions:       props.SelectedOptions,
-				SelectedDirs:          props.SelectedDirs,
-				OnPreview:             props.OnPreview,
+				SessionID:             props.SessionID,
 				OnViewFullOutput:      props.OnViewFullOutput,
 				OnViewPreview:         props.OnViewPreview,
-				CurrentPendingIndex:   props.CurrentPendingIndex,
-				IsInsert:              props.IsInsert,
-				LocalDecisions:        props.LocalDecisions,
-				IsSubmitting:          props.IsSubmitting,
-				OnSelectVertical:      props.OnSelectVertical,
-				OnSelectScope:         props.OnSelectScope,
-				OnSelectOption:        props.OnSelectOption,
-				OnSelectDir:           props.OnSelectDir,
-				OnApprove:             props.OnApprove,
-				OnDeny:                props.OnDeny,
-				OnHardCancel:          props.OnHardCancel,
-				IsProvidingFeedback:   props.IsProvidingFeedback,
-				FeedbackText:          props.FeedbackText,
-				OnFeedbackChange:      props.OnFeedbackChange,
-				OnDenyWithFeedback:    props.OnDenyWithFeedback,
-				OnCancelFeedback:      props.OnCancelFeedback,
-				OnStartFeedback:       props.OnStartFeedback,
 			})
 			if node != nil {
 				children = append(children, node)
@@ -232,16 +188,7 @@ var BubbleGroup = kitex.FC("BubbleGroup", func(props BubbleGroupProps) kitex.Nod
 		msgKey,
 		props.IsGenerating,
 		props.LiveThinkingTime,
-		props.CurrentPageIndex,
-		props.FocusedItem,
-		props.SelectedScopeIndex,
-		props.SelectedOptions,
-		props.SelectedDirs,
-		props.CurrentPendingIndex,
-		props.IsInsert,
 		authKey,
-		props.IsProvidingFeedback,
-		props.FeedbackText,
 	})
 })
 
@@ -550,4 +497,13 @@ func computeMsgsKey(msgs []message.Message) string {
 		}
 	}
 	return sb.String()
+}
+
+func isSystemNotification(msg message.Message) bool {
+	meta := msg.GetMetadata()
+	if meta == nil {
+		return false
+	}
+	_, hasType := meta["type"]
+	return hasType
 }

@@ -1,6 +1,7 @@
 package chat
 
 import (
+	"context"
 	"fmt"
 	"image/color"
 	"os"
@@ -9,11 +10,17 @@ import (
 	"github.com/masterkeysrd/kite/dom"
 	"github.com/masterkeysrd/kite/event"
 	"github.com/masterkeysrd/kite/extras/kitex"
+	"github.com/masterkeysrd/kite/extras/wind"
 	"github.com/masterkeysrd/kite/key"
+	"github.com/masterkeysrd/kite/promise"
 	"github.com/masterkeysrd/kite/style"
 	"github.com/masterkeysrd/tasksmith/internal/agent/permissions"
+	"github.com/masterkeysrd/tasksmith/internal/api"
+	"github.com/masterkeysrd/tasksmith/internal/core/log"
+	tuiapi "github.com/masterkeysrd/tasksmith/internal/tui/api"
 	"github.com/masterkeysrd/tasksmith/internal/tui/components"
 	"github.com/masterkeysrd/tasksmith/internal/tui/components/icon"
+	"github.com/masterkeysrd/tasksmith/internal/tui/mode"
 	"github.com/masterkeysrd/tasksmith/internal/tui/theme"
 )
 
@@ -29,34 +36,6 @@ const (
 	FocusItemGlobalCmd    FocusItem = "global_cmd"
 	FocusItemDirectory    FocusItem = "directory"
 )
-
-type AuthorizationWidgetProps struct {
-	Request             permissions.AuthorizationRequest
-	CurrentPageIndex    int
-	FocusedItem         FocusItem
-	SelectedScopeIndex  int            // 0 = Once, 1 = Session, 2 = Workspace, 3 = Global
-	SelectedOptions     map[string]int // Maps GrantRequestID -> OptionIndex
-	SelectedDirs        map[string]int // Maps GrantRequestID -> Directory Option Index
-	OnPreview           func()
-	IsActive            bool
-	IsFocused           bool
-	IsDecided           bool
-	Decision            permissions.AuthorizationDecision // valid when IsDecided == true
-	IsSubmitting        bool                              // true while the batch API call is in flight
-	OnSelectVertical    func(FocusItem)
-	OnSelectScope       func(int)
-	OnSelectOption      func(int)
-	OnSelectDir         func(int)
-	OnApprove           func()
-	OnDeny              func()
-	OnHardCancel        func()
-	IsProvidingFeedback bool
-	FeedbackText        string
-	OnFeedbackChange    func(string)
-	OnDenyWithFeedback  func(string)
-	OnCancelFeedback    func()
-	OnStartFeedback     func()
-}
 
 type AuthorizationHybridSelectorProps struct {
 	Options             []permissions.PermissionOption
@@ -122,7 +101,7 @@ var AuthorizationHybridSelector = kitex.FC("AuthorizationHybridSelector", func(p
 		isScopeFocused := props.FocusedItem == s.FocusType && props.IsActive
 
 		// Risk-aware colors
-		var rowFg color.Color = t.Color.Text.Secondary
+		var rowFg = t.Color.Text.Secondary
 		var selectedFg color.Color
 		var selectedBg color.Color
 
@@ -312,44 +291,345 @@ var AuthorizationHybridSelector = kitex.FC("AuthorizationHybridSelector", func(p
 	)
 })
 
+type AuthorizationWidgetProps struct {
+	Request   permissions.AuthorizationRequest
+	SessionID string
+	IsActive  bool
+}
+
 var AuthorizationWidget = kitex.FC("AuthorizationWidget", func(props AuthorizationWidgetProps) kitex.Node {
 	t := theme.UseTheme()
 	if t == nil {
 		return nil
 	}
 
-	localInputRef := kitex.CreateRef[dom.Element]()
+	client := tuiapi.UseClient()
+	windClient := wind.UseClient()
+
+	req := props.Request
+
+	// Local states for interactive selection
+	selectedScopeIndex, setSelectedScopeIndex := kitex.UseState(0) // Default to Once (0)
+	focusedItem, setFocusedItem := kitex.UseState(FocusItemOnce)
+	selectedOptionIndex, setSelectedOptionIndex := kitex.UseState(0)
+	selectedDirIndex, setSelectedDirIndex := kitex.UseState(0)
+	showPreviewModal, setShowPreviewModal := kitex.UseState(false)
+	showCancelConfirmDialog, setShowCancelConfirmDialog := kitex.UseState(false)
+	isProvidingFeedback, setIsProvidingFeedback := kitex.UseState(false)
+	feedbackText, setFeedbackText := kitex.UseState("")
+	submitting, setSubmitting := kitex.UseState(false)
+
+	// Autofocus inline feedback textarea when opened
+	textareaRef := kitex.CreateRef[dom.Element]()
 	kitex.UseEffect(func() {
-		if props.IsProvidingFeedback {
+		if isProvidingFeedback() {
 			kitex.PostMacro(func() {
-				if localInputRef.Current != nil {
-					if doc := localInputRef.Current.OwnerDocument(); doc != nil {
-						doc.Focus(localInputRef.Current)
+				if textareaRef.Current != nil {
+					if doc := textareaRef.Current.OwnerDocument(); doc != nil {
+						doc.Focus(textareaRef.Current)
 					}
 				}
 			})
 		}
-	}, []any{props.IsProvidingFeedback})
+	}, []any{isProvidingFeedback()})
 
-	textRef := kitex.UseRef("")
-	textRef.Current = props.FeedbackText
+	// Decision recorder & submitter
+	submitDecision := func(approved bool, scope permissions.PermissionScope, grantDecisions []permissions.GrantDecision, reason string) {
+		setSubmitting(true)
+		setIsProvidingFeedback(false)
+		IsFeedbackActive = false
+		setFeedbackText("")
 
-	req := props.Request
-	warningColor := color.Color(color.RGBA{R: 224, G: 153, B: 36, A: 255})
+		promise.New(func(ctx context.Context) (bool, error) {
+			_, err := client.SubmitAuthorizationDecision(ctx, api.SubmitAuthorizationDecisionRequest{
+				SessionID: props.SessionID,
+				Decisions: []permissions.AuthorizationDecision{
+					{
+						ToolCallID:      req.ToolCallID,
+						Approved:        approved,
+						Scope:           scope,
+						GrantDecisions:  grantDecisions,
+						Reason:          reason,
+						CancelExecution: false,
+					},
+				},
+			})
+			return err == nil, err
+		}).Then(func(success bool) {
+			setSubmitting(false)
+			setShowPreviewModal(false)
+			windClient.InvalidateQueries(api.GetSessionMessagesRequest{SessionID: props.SessionID})
+			windClient.InvalidateQueries(api.GetSessionStateRequest{SessionID: props.SessionID})
+			windClient.InvalidateQueries(api.GetFileChangesRequest{SessionID: props.SessionID})
+		}, func(err error) {
+			setSubmitting(false)
+			log.Error(fmt.Sprintf("Failed to submit authorization decision: %v", err))
+		})
+	}
+
+	handleApprove := func() {
+		scope := permissions.ScopeOnce
+		allowed := getAllowedScopes(req, 0)
+		idx := selectedScopeIndex()
+		if idx >= 0 && idx < len(allowed) {
+			scope = allowed[idx]
+		}
+
+		var decisions []permissions.GrantDecision
+		for _, gr := range req.GrantRequests {
+			optIdx := selectedOptionIndex()
+			if optIdx < 0 || optIdx >= len(gr.Options) {
+				optIdx = 0
+			}
+			target := "*"
+			if len(gr.Options) > 0 {
+				target = gr.Options[optIdx].Target
+			}
+
+			dirIdx := selectedDirIndex()
+			if dirIdx < 0 || dirIdx >= len(gr.DirectoryOptions) {
+				dirIdx = 0
+			}
+			allowedDir := "*"
+			if len(gr.DirectoryOptions) > 0 {
+				allowedDir = gr.DirectoryOptions[dirIdx].Target
+			}
+
+			decisions = append(decisions, permissions.GrantDecision{
+				RequestID:        gr.ID,
+				SelectedTarget:   target,
+				AllowedDirectory: allowedDir,
+				Scope:            scope,
+			})
+		}
+
+		submitDecision(true, scope, decisions, "")
+	}
+
+	handleDeny := func() {
+		submitDecision(false, permissions.ScopeOnce, nil, "")
+	}
+
+	handleDenyWithFeedback := func(reason string) {
+		submitDecision(false, permissions.ScopeOnce, nil, reason)
+	}
+
+	handleHardCancel := func() {
+		setSubmitting(true)
+		promise.New(func(ctx context.Context) (bool, error) {
+			_, err := client.SubmitAuthorizationDecision(ctx, api.SubmitAuthorizationDecisionRequest{
+				SessionID: props.SessionID,
+				Decisions: []permissions.AuthorizationDecision{
+					{
+						ToolCallID:      req.ToolCallID,
+						Approved:        false,
+						CancelExecution: true,
+					},
+				},
+			})
+			return err == nil, err
+		}).Then(func(success bool) {
+			setShowCancelConfirmDialog(false)
+			setShowPreviewModal(false)
+			setSubmitting(false)
+			windClient.InvalidateQueries(api.GetSessionMessagesRequest{SessionID: props.SessionID})
+			windClient.InvalidateQueries(api.GetSessionStateRequest{SessionID: props.SessionID})
+		}, func(err error) {
+			setShowCancelConfirmDialog(false)
+			setSubmitting(false)
+			log.Error(fmt.Sprintf("Failed to submit cancellation decision: %v", err))
+		})
+	}
+
+	// Bind handlers to the persistent static AuthCtrl if this widget is active
+	if props.IsActive {
+		AuthCtrl.MoveDown = func() {
+			if isProvidingFeedback() || showCancelConfirmDialog() {
+				return
+			}
+			items := getVisibleItems(selectedScopeIndex(), req, 0)
+			currItem := focusedItem()
+			currIdx := 0
+			for idx, it := range items {
+				if it == currItem {
+					currIdx = idx
+					break
+				}
+			}
+			newIdx := (currIdx + 1) % len(items)
+			newItem := items[newIdx]
+			setFocusedItem(newItem)
+
+			var targetScope permissions.PermissionScope
+			switch newItem {
+			case FocusItemOnce:
+				targetScope = permissions.ScopeOnce
+			case FocusItemSession, FocusItemSessionCmd:
+				targetScope = permissions.ScopeSession
+			case FocusItemWorkspace, FocusItemWorkspaceCmd:
+				targetScope = permissions.ScopeWorkspace
+			case FocusItemGlobal, FocusItemGlobalCmd:
+				targetScope = permissions.ScopeGlobal
+			}
+			if targetScope != "" {
+				targetScopeIdx := getScopeIndex(req, 0, targetScope)
+				if targetScopeIdx != -1 {
+					setSelectedScopeIndex(targetScopeIdx)
+				}
+			}
+		}
+
+		AuthCtrl.MoveUp = func() {
+			if isProvidingFeedback() || showCancelConfirmDialog() {
+				return
+			}
+			items := getVisibleItems(selectedScopeIndex(), req, 0)
+			currItem := focusedItem()
+			currIdx := 0
+			for idx, it := range items {
+				if it == currItem {
+					currIdx = idx
+					break
+				}
+			}
+			newIdx := (currIdx - 1 + len(items)) % len(items)
+			newItem := items[newIdx]
+			setFocusedItem(newItem)
+
+			var targetScope permissions.PermissionScope
+			switch newItem {
+			case FocusItemOnce:
+				targetScope = permissions.ScopeOnce
+			case FocusItemSession, FocusItemSessionCmd:
+				targetScope = permissions.ScopeSession
+			case FocusItemWorkspace, FocusItemWorkspaceCmd:
+				targetScope = permissions.ScopeWorkspace
+			case FocusItemGlobal, FocusItemGlobalCmd:
+				targetScope = permissions.ScopeGlobal
+			}
+			if targetScope != "" {
+				targetScopeIdx := getScopeIndex(req, 0, targetScope)
+				if targetScopeIdx != -1 {
+					setSelectedScopeIndex(targetScopeIdx)
+				}
+			}
+		}
+
+		AuthCtrl.SelectPrevOption = func() {
+			if isProvidingFeedback() || showCancelConfirmDialog() {
+				return
+			}
+			if len(req.GrantRequests) > 0 {
+				currReq := req.GrantRequests[0]
+				currItem := focusedItem()
+
+				switch currItem {
+				case FocusItemSessionCmd, FocusItemWorkspaceCmd, FocusItemGlobalCmd:
+					optsCount := len(currReq.Options)
+					if optsCount > 1 {
+						setSelectedOptionIndex((selectedOptionIndex() - 1 + optsCount) % optsCount)
+					}
+				case FocusItemDirectory:
+					dirOptsCount := len(currReq.DirectoryOptions)
+					if dirOptsCount > 1 {
+						setSelectedDirIndex((selectedDirIndex() - 1 + dirOptsCount) % dirOptsCount)
+					}
+				}
+			}
+		}
+
+		AuthCtrl.SelectNextOption = func() {
+			if isProvidingFeedback() || showCancelConfirmDialog() {
+				return
+			}
+			if len(req.GrantRequests) > 0 {
+				currReq := req.GrantRequests[0]
+				currItem := focusedItem()
+
+				switch currItem {
+				case FocusItemSessionCmd, FocusItemWorkspaceCmd, FocusItemGlobalCmd:
+					optsCount := len(currReq.Options)
+					if optsCount > 1 {
+						setSelectedOptionIndex((selectedOptionIndex() + 1) % optsCount)
+					}
+				case FocusItemDirectory:
+					dirOptsCount := len(currReq.DirectoryOptions)
+					if dirOptsCount > 1 {
+						setSelectedDirIndex((selectedDirIndex() + 1) % dirOptsCount)
+					}
+				}
+			}
+		}
+
+		AuthCtrl.Approve = func() {
+			if isProvidingFeedback() {
+				return
+			}
+			if showCancelConfirmDialog() {
+				handleHardCancel()
+				return
+			}
+			handleApprove()
+		}
+
+		AuthCtrl.Deny = func() {
+			if isProvidingFeedback() || showCancelConfirmDialog() {
+				return
+			}
+			handleDeny()
+		}
+
+		AuthCtrl.StartFeedback = func() {
+			if isProvidingFeedback() || showCancelConfirmDialog() {
+				return
+			}
+			IsFeedbackActive = true
+			setIsProvidingFeedback(true)
+			setFeedbackText("")
+			mode.Set(mode.Insert)
+		}
+
+		AuthCtrl.ToggleCancelDialog = func() {
+			if isProvidingFeedback() {
+				return
+			}
+			if showCancelConfirmDialog() {
+				setShowCancelConfirmDialog(false)
+				return
+			}
+			setShowCancelConfirmDialog(true)
+		}
+
+		AuthCtrl.ShowPreview = func() {
+			if isProvidingFeedback() || showCancelConfirmDialog() {
+				return
+			}
+			if req.Preview != nil {
+				setShowPreviewModal(true)
+			}
+		}
+
+	}
+
+	kitex.UseEffectCleanup(func() func() {
+		return func() {
+			if props.IsActive {
+				AuthCtrl.MoveDown = nil
+				AuthCtrl.MoveUp = nil
+				AuthCtrl.SelectPrevOption = nil
+				AuthCtrl.SelectNextOption = nil
+				AuthCtrl.Approve = nil
+				AuthCtrl.Deny = nil
+				AuthCtrl.StartFeedback = nil
+				AuthCtrl.ToggleCancelDialog = nil
+				AuthCtrl.ShowPreview = nil
+			}
+		}
+	}, []any{props.IsActive})
 
 	borderColor := t.Color.Border.Primary
-	if props.IsDecided {
-		if props.Decision.Approved {
-			borderColor = t.Color.Surface.Success
-		} else {
-			borderColor = t.Color.Surface.Error
-		}
-	} else if props.IsActive {
-		if props.IsFocused {
-			borderColor = t.Color.Surface.Info
-		} else {
-			borderColor = t.Color.Border.Primary
-		}
+	if props.IsActive {
+		borderColor = t.Color.Surface.Info
 	}
 
 	containerStyle := style.S().
@@ -360,107 +640,15 @@ var AuthorizationWidget = kitex.FC("AuthorizationWidget", func(props Authorizati
 		Background(t.Color.Surface.BaseHover)
 
 	titleColor := t.Color.Text.Secondary
-	if props.IsActive && props.IsFocused {
-		titleColor = warningColor
-	}
-
-	// 1. Decided State
-	if props.IsDecided {
-		statusText := "APPROVED"
-		statusCol := t.Color.Surface.Success
-		if !props.Decision.Approved {
-			statusText = "DENIED"
-			statusCol = t.Color.Surface.Error
-		}
-
-		return kitex.Box(kitex.BoxProps{Style: containerStyle},
-			kitex.Box(kitex.BoxProps{
-				Style: style.S().
-					PaddingTop(0).
-					PaddingHorizontal(1).
-					PaddingBottom(1).
-					Gap(1).
-					Display(style.DisplayFlex).
-					FlexDirection(style.FlexColumn),
-			},
-				// Header row
-				kitex.Box(kitex.BoxProps{
-					Style: style.S().Display(style.DisplayFlex).FlexDirection(style.FlexRow).JustifyContent(style.JustifyBetween),
-				},
-					kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Tertiary)}, kitex.Text("Authorization request has been recorded.")),
-					kitex.Span(kitex.SpanProps{Style: style.S().Foreground(statusCol).Bold(true)}, kitex.Text(statusText)),
-				),
-				// Identity
-				renderIdentity(t, req),
-				// Decision summary for each grant
-				kitex.If(props.Decision.Approved, func() kitex.Node {
-					var decisionNodes []kitex.Node
-					scopeNames := []string{"Once", "Session", "Workspace", "Global"}
-					scopeName := string(props.Decision.Scope)
-					for _, name := range scopeNames {
-						if strings.EqualFold(name, string(props.Decision.Scope)) {
-							scopeName = name
-							break
-						}
-					}
-
-					for _, dec := range props.Decision.GrantDecisions {
-						summary := scopeName + " · " + dec.SelectedTarget
-						if dec.AllowedDirectory != "" && dec.AllowedDirectory != "*" {
-							summary += " (in " + dec.AllowedDirectory + ")"
-						}
-						decisionNodes = append(decisionNodes, kitex.Span(kitex.SpanProps{
-							Style: style.S().Foreground(t.Color.Text.Tertiary).Italic(true),
-						}, kitex.Text("+ "+summary)))
-					}
-
-					if len(decisionNodes) == 0 {
-						summary := scopeName
-						decisionNodes = append(decisionNodes, kitex.Span(kitex.SpanProps{
-							Style: style.S().Foreground(t.Color.Text.Tertiary).Italic(true),
-						}, kitex.Text("+ "+summary)))
-					}
-
-					return kitex.Box(kitex.BoxProps{
-						Style: style.S().Display(style.DisplayFlex).FlexDirection(style.FlexColumn).Gap(0),
-					}, decisionNodes...)
-				}),
-				kitex.If(props.IsSubmitting, func() kitex.Node {
-					return kitex.Span(kitex.SpanProps{
-						Style: style.S().Foreground(t.Color.Text.Tertiary).Italic(true).MarginTop(1),
-					}, kitex.Text("Sending..."))
-				}),
-			),
-		)
-	}
-
-	// 2. Interactive Wizard Flow
-	totalPages := len(req.GrantRequests)
-	if totalPages == 0 {
-		totalPages = 1
-	}
-
-	currentPage := props.CurrentPageIndex
-	if currentPage >= totalPages {
-		currentPage = 0
-	}
-
-	stateText := "○ QUEUED"
-	stateCol := t.Color.Text.Tertiary
 	if props.IsActive {
-		if props.IsFocused {
-			stateText = fmt.Sprintf("● ACTIVE [%d/%d]", currentPage+1, totalPages)
-			stateCol = t.Color.Surface.Info
-		} else {
-			stateText = "○ UNFOCUSED"
-		}
+		titleColor = color.Color(color.RGBA{R: 224, G: 153, B: 36, A: 255})
 	}
 
 	var currReq *permissions.PermissionGrantRequest
 	var currReqOptions []permissions.PermissionOption
 	var currReqDirOptions []permissions.PermissionOption
 	if len(req.GrantRequests) > 0 {
-		currReq = &req.GrantRequests[currentPage]
+		currReq = &req.GrantRequests[0]
 		currReqOptions = currReq.Options
 		currReqDirOptions = currReq.DirectoryOptions
 	}
@@ -483,23 +671,21 @@ var AuthorizationWidget = kitex.FC("AuthorizationWidget", func(props Authorizati
 					kitex.Span(kitex.SpanProps{Style: style.S().Foreground(titleColor)}, icon.Alert),
 					kitex.Span(kitex.SpanProps{Style: style.S().Bold(true).Foreground(titleColor)}, kitex.Text("Authorization Required")),
 				),
-				kitex.Span(kitex.SpanProps{Style: style.S().Foreground(stateCol).Bold(props.IsFocused)}, kitex.Text(stateText)),
+				kitex.Span(kitex.SpanProps{
+					Style: style.S().Foreground(t.Color.Surface.Info).Bold(props.IsActive),
+				}, kitex.Text(func() string {
+					if props.IsActive {
+						return "● ACTIVE"
+					}
+					return "○ UNFOCUSED"
+				}())),
 			),
 
 			// Identity details
 			kitex.Box(kitex.BoxProps{Style: style.S().MarginTop(0)}, renderIdentity(t, req)),
 
-			// Context (surfacing req.Description - tool hint or default)
+			// Context details
 			kitex.If(req.Description != "", func() kitex.Node {
-				var actionDesc string
-				if currReq != nil {
-					actionDesc = currReq.Description
-				}
-				if strings.Contains(strings.ToLower(actionDesc), strings.ToLower(req.Description)) ||
-					strings.Contains(strings.ToLower(req.Description), strings.ToLower(actionDesc)) {
-					return nil
-				}
-
 				return kitex.Box(kitex.BoxProps{
 					Style: style.S().Display(style.DisplayFlex).FlexDirection(style.FlexRow).Gap(1).MarginBottom(1),
 				},
@@ -508,7 +694,7 @@ var AuthorizationWidget = kitex.FC("AuthorizationWidget", func(props Authorizati
 				)
 			}),
 
-			// Action (current page grant details)
+			// Action details
 			kitex.If(currReq != nil, func() kitex.Node {
 				return kitex.Box(kitex.BoxProps{
 					Style: style.S().Display(style.DisplayFlex).FlexDirection(style.FlexRow).Gap(1).MarginBottom(1),
@@ -518,61 +704,7 @@ var AuthorizationWidget = kitex.FC("AuthorizationWidget", func(props Authorizati
 				)
 			}),
 
-			// Pending Grants (if we are on page > 0)
-			kitex.If(currentPage > 0 && len(req.GrantRequests) > 0, func() kitex.Node {
-				var pendingNodes []kitex.Node
-				scopeNames := getScopeNames(props.Request, currentPage)
-				scopeName := "Once"
-				if props.SelectedScopeIndex >= 0 && props.SelectedScopeIndex < len(scopeNames) {
-					scopeName = scopeNames[props.SelectedScopeIndex]
-				}
-
-				for p := 0; p < currentPage; p++ {
-					gr := req.GrantRequests[p]
-					optIdx := props.SelectedOptions[gr.ID]
-					if optIdx < 0 || optIdx >= len(gr.Options) {
-						optIdx = 0
-					}
-					target := "*"
-					if len(gr.Options) > 0 {
-						target = gr.Options[optIdx].Target
-					}
-
-					dirIdx := props.SelectedDirs[gr.ID]
-					if dirIdx < 0 || dirIdx >= len(gr.DirectoryOptions) {
-						dirIdx = 0
-					}
-					dirTarget := "*"
-					if len(gr.DirectoryOptions) > 0 {
-						dirTarget = gr.DirectoryOptions[dirIdx].Target
-					}
-
-					summary := fmt.Sprintf("+ %s · %s", scopeName, target)
-					if dirTarget != "" && dirTarget != "*" {
-						summary += fmt.Sprintf(" (in %s)", dirTarget)
-					}
-
-					pendingNodes = append(pendingNodes, kitex.Span(kitex.SpanProps{
-						Style: style.S().Foreground(t.Color.Surface.Success),
-					}, kitex.Text(summary)))
-				}
-
-				return kitex.Box(kitex.BoxProps{
-					Style: style.S().
-						Display(style.DisplayFlex).
-						FlexDirection(style.FlexColumn).
-						Gap(0).
-						MarginBottom(1).
-						Padding(0, 1).
-						Border(true, style.SingleBorder(), t.Color.Border.Primary),
-				},
-					append([]kitex.Node{
-						kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Secondary).Bold(true)}, kitex.Text("Pending Grants:")),
-					}, pendingNodes...)...,
-				)
-			}),
-
-			// System Hints / Warnings
+			// System Warnings
 			kitex.If(len(req.SystemHints) > 0, func() kitex.Node {
 				var hintNodes []kitex.Node
 				for _, hint := range req.SystemHints {
@@ -591,104 +723,615 @@ var AuthorizationWidget = kitex.FC("AuthorizationWidget", func(props Authorizati
 
 			// Interactive Selector Area (only if active)
 			kitex.If(props.IsActive, func() kitex.Node {
-				if !props.IsFocused {
-					// Collapsed summary for unfocused state
-					scopeNames := getScopeNames(props.Request, currentPage)
-					summary := "Once"
-					if props.SelectedScopeIndex >= 0 && props.SelectedScopeIndex < len(scopeNames) {
-						summary = scopeNames[props.SelectedScopeIndex]
-					}
-					if currReq != nil && len(currReq.Options) > props.SelectedOptions[currReq.ID] && props.SelectedScopeIndex > 0 {
-						summary += " · [" + formatTargetLabel(currReq.Options[props.SelectedOptions[currReq.ID]]) + "]"
-					}
-					return kitex.Box(kitex.BoxProps{Style: style.S().MarginTop(1)},
-						kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Info)}, kitex.Text("● "+summary)),
-						kitex.Box(kitex.BoxProps{Style: style.S().Foreground(t.Color.Text.Tertiary).PaddingTop(1)},
-							kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Primary)}, kitex.Text("Composer focused")),
-							kitex.Text("    "),
-							kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Primary)}, kitex.Text("[Esc]")),
-							kitex.Text(" Focus widget"),
-						),
-					)
-				}
-
-				var activeOptIdx int
-				var activeDirIdx int
-				if currReq != nil {
-					activeOptIdx = props.SelectedOptions[currReq.ID]
-					activeDirIdx = props.SelectedDirs[currReq.ID]
-				}
-
-				// Buttons Node
 				enterLabel := "Allow"
-				if currentPage == totalPages-1 {
-					enterLabel = "Allow All"
-				}
-
 				buttons := []kitex.Node{
 					components.Button(components.ButtonProps{
 						Variant:   components.ButtonText,
 						Color:     components.ButtonSuccess,
 						StartIcon: icon.Check,
-						OnClick:   props.OnApprove,
+						OnClick:   handleApprove,
 					}, kitex.Text(fmt.Sprintf("%s (Enter)", enterLabel))),
 					components.Button(components.ButtonProps{
 						Variant:   components.ButtonText,
 						Color:     components.ButtonError,
 						StartIcon: icon.Error,
-						OnClick:   props.OnDeny,
+						OnClick:   handleDeny,
 					}, kitex.Text("Deny (d)")),
 					components.Button(components.ButtonProps{
 						Variant:   components.ButtonText,
 						Color:     components.ButtonError,
 						StartIcon: icon.Pencil,
-						OnClick:   props.OnStartFeedback,
+						OnClick: func() {
+							setIsProvidingFeedback(true)
+							setFeedbackText("")
+							mode.Set(mode.Insert)
+						},
 					}, kitex.Text("Deny with Feedback (D)")),
 					components.Button(components.ButtonProps{
 						Variant:   components.ButtonText,
 						Color:     components.ButtonError,
 						StartIcon: icon.Exit,
-						OnClick:   props.OnHardCancel,
+						OnClick:   func() { setShowCancelConfirmDialog(true) },
 					}, kitex.Text("Hard Cancel (x)")),
-				}
-
-				// Back Button (if currentPage > 0)
-				if currentPage > 0 {
-					buttons = append(buttons, components.Button(components.ButtonProps{
-						Variant: components.ButtonText,
-						Color:   components.ButtonPrimary,
-					}, kitex.Text("Prev (b)")))
 				}
 
 				if req.Preview != nil {
 					buttons = append(buttons, components.Button(components.ButtonProps{
-						Variant: components.ButtonText,
-						Color:   components.ButtonPrimary,
-						OnClick: props.OnPreview,
+						Variant:   components.ButtonText,
+						Color:     components.ButtonPrimary,
+						StartIcon: icon.History,
+						OnClick:   func() { setShowPreviewModal(true) },
 					}, kitex.Text("Preview (p)")))
 				}
 
-				buttonsRow := kitex.Box(kitex.BoxProps{
-					Style: style.S().Display(style.DisplayFlex).FlexDirection(style.FlexRow).Gap(1).MarginTop(1),
-				}, buttons...)
+				return kitex.Box(kitex.BoxProps{
+					Style: style.S().Display(style.DisplayFlex).FlexDirection(style.FlexColumn).Gap(1).MarginTop(1),
+				},
+					// Scope Selection & Restrictions
+					kitex.If(isProvidingFeedback(), func() kitex.Node {
+						textareaStyle := style.S().
+							Width(style.Percent(100)).
+							Height(style.Cells(3)).
+							Background(color.Transparent).
+							Foreground(t.Color.Text.Primary).
+							Border(true, style.SingleBorder(), t.Color.Border.Primary).
+							Padding(0, 1)
 
-				// Hint Bar
-				hintNode := kitex.Box(kitex.BoxProps{Style: style.S().PaddingTop(1)},
-					renderHint(t, "j/k", "navigate"),
-					kitex.Text(" · "),
-					renderHint(t, "h/l", "select"),
-					kitex.If(req.Preview != nil, func() kitex.Node {
-						return kitex.Fragment(kitex.Text(" · "), renderHint(t, "p", "preview"))
+						return kitex.Box(kitex.BoxProps{
+							Style: style.S().Display(style.DisplayFlex).FlexDirection(style.FlexColumn).Gap(1),
+						},
+							kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Secondary).Bold(true)}, kitex.Text("Reason for denial (optional):")),
+							kitex.TextArea(kitex.TextAreaProps{
+								Name:             "deny-feedback-textarea-inline",
+								Ref:              textareaRef,
+								Value:            feedbackText(),
+								Placeholder:      "Type why you are denying this request...",
+								PlaceholderStyle: style.S().Foreground(t.Color.Text.Tertiary),
+								Style:            textareaStyle,
+								OnChange: func(e event.Event) {
+									val := ""
+									if ie, ok := e.(*event.ChangeEvent); ok {
+										val = ie.Value
+									} else if ie, ok := e.(*event.InputEvent); ok {
+										val = ie.Value
+									}
+									setFeedbackText(val)
+								},
+								OnKeyDown: func(e event.Event) {
+									ke, ok := e.(*event.KeyEvent)
+									if !ok {
+										return
+									}
+									if ke.Code == key.KeyEscape {
+										e.PreventDefault()
+										e.StopPropagation()
+										setIsProvidingFeedback(false)
+										IsFeedbackActive = false
+										setFeedbackText("")
+										mode.Set(mode.Normal)
+										return
+									}
+									if (ke.Code == key.KeyEnter || ke.Text == "\r" || ke.Text == "\n") && (ke.Mod&key.ModShift) == 0 {
+										e.PreventDefault()
+										e.StopPropagation()
+										handleDenyWithFeedback(feedbackText())
+										IsFeedbackActive = false
+										mode.Set(mode.Normal)
+										return
+									}
+								},
+							}),
+							kitex.Box(kitex.BoxProps{
+								Style: style.S().Display(style.DisplayFlex).FlexDirection(style.FlexRow).Gap(1),
+							},
+								components.Button(components.ButtonProps{
+									Variant:   components.ButtonText,
+									Color:     components.ButtonError,
+									StartIcon: icon.Error,
+									OnClick: func() {
+										handleDenyWithFeedback(feedbackText())
+										IsFeedbackActive = false
+										mode.Set(mode.Normal)
+									},
+								}, kitex.Text("Submit Denial (Enter)")),
+								components.Button(components.ButtonProps{
+									Variant: components.ButtonText,
+									Color:   components.ButtonPrimary,
+									OnClick: func() {
+										setIsProvidingFeedback(false)
+										setFeedbackText("")
+										mode.Set(mode.Normal)
+									},
+								}, kitex.Text("Cancel (Esc)")),
+							),
+						)
 					}),
-					kitex.Text(" · "),
-					renderHint(t, "d", "deny"),
-					kitex.Text(" · "),
-					renderHint(t, "D", "deny with feedback"),
-					kitex.Text(" · "),
-					renderHint(t, "x", "hard cancel"),
-				)
 
-				return kitex.Box(kitex.BoxProps{Style: style.S().Display(style.DisplayFlex).FlexDirection(style.FlexColumn)},
+					kitex.If(!isProvidingFeedback(), func() kitex.Node {
+						return kitex.Fragment(
+							AuthorizationHybridSelector(AuthorizationHybridSelectorProps{
+								Options:             currReqOptions,
+								DirectoryOptions:    currReqDirOptions,
+								FocusedItem:         focusedItem(),
+								SelectedScopeIndex:  selectedScopeIndex(),
+								SelectedOptionIndex: selectedOptionIndex(),
+								SelectedDirIndex:    selectedDirIndex(),
+								IsActive:            true,
+								AllowedScopes:       getAllowedScopes(req, 0),
+								OnSelectVertical:    setFocusedItem,
+								OnSelectScope:       setSelectedScopeIndex,
+								OnSelectOption:      setSelectedOptionIndex,
+								OnSelectDir:         setSelectedDirIndex,
+							}),
+							// Action Buttons Bar
+							kitex.Box(kitex.BoxProps{
+								Style: style.S().
+									Display(style.DisplayFlex).
+									FlexDirection(style.FlexRow).
+									Gap(1).
+									BorderTop(true, style.SingleBorder(), t.Color.Border.Primary).
+									PaddingTop(1).
+									MarginTop(1),
+							},
+								buttons...,
+							),
+						)
+					}),
+				)
+			}),
+
+			// Overlay Modal
+			AuthorizationPreviewModal(AuthorizationPreviewModalProps{
+				IsOpen:              showPreviewModal(),
+				Request:             req,
+				FocusedItem:         focusedItem(),
+				SelectedScopeIndex:  selectedScopeIndex(),
+				SelectedOptionIndex: selectedOptionIndex(),
+				SelectedDirIndex:    selectedDirIndex(),
+				IsSubmitting:        submitting(),
+				OnClose: func() {
+					setShowPreviewModal(false)
+					setIsProvidingFeedback(false)
+					IsFeedbackActive = false
+				},
+				OnApprove:           handleApprove,
+				OnDeny:              handleDeny,
+				OnHardCancel:        handleHardCancel,
+				OnSelectVertical:    setFocusedItem,
+				OnSelectScope:       setSelectedScopeIndex,
+				OnSelectOption:      setSelectedOptionIndex,
+				OnSelectDir:         setSelectedDirIndex,
+				IsProvidingFeedback: isProvidingFeedback(),
+				FeedbackText:        feedbackText(),
+				OnFeedbackChange:    setFeedbackText,
+				OnDenyWithFeedback:  handleDenyWithFeedback,
+				OnCancelFeedback: func() {
+					setIsProvidingFeedback(false)
+					IsFeedbackActive = false
+					setFeedbackText("")
+				},
+				OnStartFeedback: func() {
+					setIsProvidingFeedback(true)
+					IsFeedbackActive = true
+					setFeedbackText("")
+				},
+			}),
+
+			// Inline Hard Cancel Dialog
+			kitex.If(showCancelConfirmDialog(), func() kitex.Node {
+				return components.ConfirmDialog(components.ConfirmDialogProps{
+					Message:      "Are you sure you want to cancel all tool calls and stop execution?",
+					ConfirmLabel: "Confirm",
+					ConfirmColor: components.ButtonError,
+					OnConfirm:    handleHardCancel,
+					CancelLabel:  "Cancel",
+					OnCancel:     func() { setShowCancelConfirmDialog(false) },
+				})
+			}),
+		),
+	)
+})
+
+type AuthorizationPreviewModalProps struct {
+	IsOpen              bool
+	Request             permissions.AuthorizationRequest
+	FocusedItem         FocusItem
+	SelectedScopeIndex  int
+	SelectedOptionIndex int
+	SelectedDirIndex    int
+	IsSubmitting        bool
+	OnClose             func()
+	OnApprove           func()
+	OnDeny              func()
+	OnHardCancel        func()
+	OnSelectVertical    func(FocusItem)
+	OnSelectScope       func(int)
+	OnSelectOption      func(int)
+	OnSelectDir         func(int)
+	IsProvidingFeedback bool
+	FeedbackText        string
+	OnFeedbackChange    func(string)
+	OnDenyWithFeedback  func(string)
+	OnCancelFeedback    func()
+	OnStartFeedback     func()
+}
+
+var AuthorizationPreviewModal = kitex.FCC("AuthorizationPreviewModal", func(props AuthorizationPreviewModalProps) kitex.Node {
+	if !props.IsOpen {
+		return nil
+	}
+
+	t := theme.UseTheme()
+	localInputRef := kitex.CreateRef[dom.Element]()
+	kitex.UseEffect(func() {
+		if props.IsProvidingFeedback {
+			kitex.PostMacro(func() {
+				if localInputRef.Current != nil {
+					if doc := localInputRef.Current.OwnerDocument(); doc != nil {
+						doc.Focus(localInputRef.Current)
+					}
+				}
+			})
+		}
+	}, []any{props.IsProvidingFeedback})
+
+	textRef := kitex.UseRef("")
+	textRef.Current = props.FeedbackText
+
+	req := props.Request
+
+	leftNode := PreviewPanel(PreviewPanelProps{
+		Preview: req.Preview,
+		Payload: req.Payload,
+		Border:  false,
+	})
+
+	var currReq *permissions.PermissionGrantRequest
+	var currReqOptions []permissions.PermissionOption
+	var currReqDirOptions []permissions.PermissionOption
+	if len(req.GrantRequests) > 0 {
+		currReq = &req.GrantRequests[0]
+		currReqOptions = currReq.Options
+		currReqDirOptions = currReq.DirectoryOptions
+	}
+
+	// Refs to bridge latest states to keymap callbacks
+	selectedScopeIndexRef := kitex.UseRef(1)
+	selectedScopeIndexRef.Current = props.SelectedScopeIndex
+
+	focusedItemRef := kitex.UseRef(FocusItemSession)
+	focusedItemRef.Current = props.FocusedItem
+
+	selectedOptionIndexRef := kitex.UseRef(0)
+	selectedOptionIndexRef.Current = props.SelectedOptionIndex
+
+	selectedDirIndexRef := kitex.UseRef(0)
+	selectedDirIndexRef.Current = props.SelectedDirIndex
+
+	isProvidingFeedbackRef := kitex.UseRef(false)
+	isProvidingFeedbackRef.Current = props.IsProvidingFeedback
+
+	// Bind handlers to the persistent static ModalAuthCtrl if this modal is open
+	if props.IsOpen {
+		ModalAuthCtrl.MoveDown = func() {
+			if props.IsProvidingFeedback {
+				return
+			}
+			items := getVisibleItems(props.SelectedScopeIndex, req, 0)
+			currItem := props.FocusedItem
+			currIdxItem := 0
+			for idx, it := range items {
+				if it == currItem {
+					currIdxItem = idx
+					break
+				}
+			}
+			newIdx := (currIdxItem + 1) % len(items)
+			newItem := items[newIdx]
+			if props.OnSelectVertical != nil {
+				props.OnSelectVertical(newItem)
+			}
+
+			var targetScope permissions.PermissionScope
+			switch newItem {
+			case FocusItemOnce:
+				targetScope = permissions.ScopeOnce
+			case FocusItemSession, FocusItemSessionCmd:
+				targetScope = permissions.ScopeSession
+			case FocusItemWorkspace, FocusItemWorkspaceCmd:
+				targetScope = permissions.ScopeWorkspace
+			case FocusItemGlobal, FocusItemGlobalCmd:
+				targetScope = permissions.ScopeGlobal
+			}
+			if targetScope != "" {
+				targetScopeIdx := getScopeIndex(req, 0, targetScope)
+				if targetScopeIdx != -1 && props.OnSelectScope != nil {
+					props.OnSelectScope(targetScopeIdx)
+				}
+			}
+		}
+
+		ModalAuthCtrl.MoveUp = func() {
+			if props.IsProvidingFeedback {
+				return
+			}
+			items := getVisibleItems(props.SelectedScopeIndex, req, 0)
+			currItem := props.FocusedItem
+			currIdxItem := 0
+			for idx, it := range items {
+				if it == currItem {
+					currIdxItem = idx
+					break
+				}
+			}
+			newIdx := (currIdxItem - 1 + len(items)) % len(items)
+			newItem := items[newIdx]
+			if props.OnSelectVertical != nil {
+				props.OnSelectVertical(newItem)
+			}
+
+			var targetScope permissions.PermissionScope
+			switch newItem {
+			case FocusItemOnce:
+				targetScope = permissions.ScopeOnce
+			case FocusItemSession, FocusItemSessionCmd:
+				targetScope = permissions.ScopeSession
+			case FocusItemWorkspace, FocusItemWorkspaceCmd:
+				targetScope = permissions.ScopeWorkspace
+			case FocusItemGlobal, FocusItemGlobalCmd:
+				targetScope = permissions.ScopeGlobal
+			}
+			if targetScope != "" {
+				targetScopeIdx := getScopeIndex(req, 0, targetScope)
+				if targetScopeIdx != -1 && props.OnSelectScope != nil {
+					props.OnSelectScope(targetScopeIdx)
+				}
+			}
+		}
+
+		ModalAuthCtrl.SelectPrevOption = func() {
+			if props.IsProvidingFeedback {
+				return
+			}
+			if len(req.GrantRequests) > 0 {
+				currReq := req.GrantRequests[0]
+				currItem := props.FocusedItem
+
+				switch currItem {
+				case FocusItemSessionCmd, FocusItemWorkspaceCmd, FocusItemGlobalCmd:
+					optsCount := len(currReq.Options)
+					if optsCount > 1 && props.OnSelectOption != nil {
+						props.OnSelectOption((props.SelectedOptionIndex - 1 + optsCount) % optsCount)
+					}
+				case FocusItemDirectory:
+					dirOptsCount := len(currReq.DirectoryOptions)
+					if dirOptsCount > 1 && props.OnSelectDir != nil {
+						props.OnSelectDir((props.SelectedDirIndex - 1 + dirOptsCount) % dirOptsCount)
+					}
+				}
+			}
+		}
+
+		ModalAuthCtrl.SelectNextOption = func() {
+			if props.IsProvidingFeedback {
+				return
+			}
+			if len(req.GrantRequests) > 0 {
+				currReq := req.GrantRequests[0]
+				currItem := props.FocusedItem
+
+				switch currItem {
+				case FocusItemSessionCmd, FocusItemWorkspaceCmd, FocusItemGlobalCmd:
+					optsCount := len(currReq.Options)
+					if optsCount > 1 && props.OnSelectOption != nil {
+						props.OnSelectOption((props.SelectedOptionIndex + 1) % optsCount)
+					}
+				case FocusItemDirectory:
+					dirOptsCount := len(currReq.DirectoryOptions)
+					if dirOptsCount > 1 && props.OnSelectDir != nil {
+						props.OnSelectDir((props.SelectedDirIndex + 1) % dirOptsCount)
+					}
+				}
+			}
+		}
+
+		ModalAuthCtrl.Approve = func() {
+			if props.IsProvidingFeedback {
+				return
+			}
+			if props.OnApprove != nil {
+				props.OnApprove()
+			}
+		}
+
+		ModalAuthCtrl.Deny = func() {
+			if props.IsProvidingFeedback {
+				return
+			}
+			if props.OnDeny != nil {
+				props.OnDeny()
+			}
+		}
+
+		ModalAuthCtrl.StartFeedback = func() {
+			if props.IsProvidingFeedback {
+				return
+			}
+			IsFeedbackActive = true
+			if props.OnStartFeedback != nil {
+				props.OnStartFeedback()
+			}
+		}
+
+		ModalAuthCtrl.ToggleCancelDialog = func() {
+			if props.IsProvidingFeedback {
+				return
+			}
+			if props.OnHardCancel != nil {
+				props.OnHardCancel()
+			}
+		}
+
+	}
+
+	kitex.UseEffectCleanup(func() func() {
+		return func() {
+			if props.IsOpen {
+				ModalAuthCtrl.MoveDown = nil
+				ModalAuthCtrl.MoveUp = nil
+				ModalAuthCtrl.SelectPrevOption = nil
+				ModalAuthCtrl.SelectNextOption = nil
+				ModalAuthCtrl.Approve = nil
+				ModalAuthCtrl.Deny = nil
+				ModalAuthCtrl.StartFeedback = nil
+				ModalAuthCtrl.ToggleCancelDialog = nil
+			}
+		}
+	}, []any{props.IsOpen})
+
+	return components.Modal(components.ModalProps{
+		IsOpen:     props.IsOpen,
+		Title:      kitex.Text("Authorization Preview"),
+		OnClose:    props.OnClose,
+		Attributes: map[string]string{"data-context": "modal:auth"},
+		Footer: kitex.Box(kitex.BoxProps{
+			Style: style.S().
+				Display(style.DisplayFlex).
+				FlexDirection(style.FlexRow).
+				JustifyContent(style.JustifyBetween).
+				AlignItems(style.AlignCenter).
+				Width(style.Percent(100)).
+				Height(style.Percent(100)),
+		},
+			// Action Buttons
+			kitex.Box(kitex.BoxProps{
+				Style: style.S().Display(style.DisplayFlex).FlexDirection(style.FlexRow).Gap(1),
+			},
+				components.Button(components.ButtonProps{
+					Variant:   components.ButtonText,
+					Color:     components.ButtonSuccess,
+					StartIcon: icon.Check,
+					OnClick:   props.OnApprove,
+				}, kitex.Text("Allow (Enter)")),
+				components.Button(components.ButtonProps{
+					Variant:   components.ButtonText,
+					Color:     components.ButtonError,
+					StartIcon: icon.Error,
+					OnClick:   props.OnDeny,
+				}, kitex.Text("Deny (d)")),
+				components.Button(components.ButtonProps{
+					Variant:   components.ButtonText,
+					Color:     components.ButtonError,
+					StartIcon: icon.Pencil,
+					OnClick:   props.OnStartFeedback,
+				}, kitex.Text("Deny with Feedback (D)")),
+				components.Button(components.ButtonProps{
+					Variant:   components.ButtonText,
+					Color:     components.ButtonError,
+					StartIcon: icon.Exit,
+					OnClick:   props.OnHardCancel,
+				}, kitex.Text("Hard Cancel (x)")),
+			),
+
+			// Hint Bar
+			kitex.Box(kitex.BoxProps{
+				Style: style.S().Foreground(t.Color.Text.Secondary),
+			},
+				renderHint(t, "j/k", "navigate"),
+				kitex.Text(" · "),
+				renderHint(t, "h/l", "select"),
+				kitex.Text(" · "),
+				renderHint(t, "d", "deny"),
+				kitex.Text(" · "),
+				renderHint(t, "D", "deny with feedback"),
+				kitex.Text(" · "),
+				renderHint(t, "x", "hard cancel"),
+				kitex.Text(" · "),
+				renderHint(t, "Esc", "close"),
+			),
+		),
+	},
+		kitex.Box(kitex.BoxProps{
+			Style: style.S().
+				Display(style.DisplayFlex).
+				FlexDirection(style.FlexRow).
+				Width(style.Percent(100)).
+				Height(style.Percent(100)).
+				Gap(2),
+		},
+			// Left Preview Panel
+			kitex.Box(kitex.BoxProps{
+				Style: style.S().
+					Flex(7, 7, style.Cells(0)).
+					MinHeight(style.Cells(0)).
+					Height(style.Percent(100)).
+					BorderRight(true, style.SingleBorder(), t.Color.Border.Primary).
+					PaddingRight(2),
+			},
+				leftNode,
+			),
+
+			// Right Detail Panel
+			kitex.Box(kitex.BoxProps{
+				Style: style.S().
+					Flex(5, 5, style.Cells(0)).
+					Display(style.DisplayFlex).
+					FlexDirection(style.FlexColumn).
+					MinHeight(style.Cells(0)).
+					Height(style.Percent(100)),
+			},
+				// Details Body Scroller
+				kitex.Box(kitex.BoxProps{
+					Style: style.S().Flex(1, 1, style.Cells(0)).MinHeight(style.Cells(0)).OverflowY(style.OverflowAuto),
+				},
+					kitex.If(currReq != nil, func() kitex.Node {
+						var pendingNodes []kitex.Node
+						pendingNodes = append(pendingNodes, renderMetadataRow(t, "Request ID", currReq.ID))
+						pendingNodes = append(pendingNodes, renderMetadataRow(t, "Description", currReq.Description))
+
+						if len(currReq.Options) > 0 {
+							opt := currReq.Options[props.SelectedOptionIndex]
+							pendingNodes = append(pendingNodes, renderMetadataRow(t, "Action", string(opt.Action)))
+							pendingNodes = append(pendingNodes, renderMetadataRow(t, "Target", opt.Target))
+						}
+
+						if len(currReq.DirectoryOptions) > 0 {
+							dirOpt := currReq.DirectoryOptions[props.SelectedDirIndex]
+							pendingNodes = append(pendingNodes, renderMetadataRow(t, "Scope Dir", dirOpt.Target))
+						}
+
+						return kitex.Box(kitex.BoxProps{
+							Style: style.S().Display(style.DisplayFlex).FlexDirection(style.FlexColumn).Gap(0),
+						},
+							append([]kitex.Node{
+								kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Secondary).Bold(true)}, kitex.Text("Pending Grants:")),
+							}, pendingNodes...)...,
+						)
+					}),
+
+					// System Warnings (e.g. Destructive)
+					kitex.If(len(req.SystemHints) > 0, func() kitex.Node {
+						var hintNodes []kitex.Node
+						for _, hint := range req.SystemHints {
+							hintNodes = append(hintNodes, components.Alert(components.AlertProps{
+								Severity: components.AlertWarning,
+								ShowIcon: true,
+								Style:    style.S(),
+							}, kitex.Text(hint)))
+						}
+						return kitex.Box(kitex.BoxProps{
+							Style: style.S().Display(style.DisplayFlex).FlexDirection(style.FlexColumn).Gap(1).MarginBottom(1),
+						},
+							hintNodes...,
+						)
+					}),
+
+					// Divider line
+					kitex.Box(kitex.BoxProps{
+						Style: style.S().BorderBottom(true, style.SingleBorder(), t.Color.Border.Primary).MarginVertical(1),
+					}),
+
+					// Scope Hybrid Selector OR Feedback Text Area
 					kitex.If(props.IsProvidingFeedback, func() kitex.Node {
 						textareaStyle := style.S().
 							Width(style.Percent(100)).
@@ -707,7 +1350,7 @@ var AuthorizationWidget = kitex.FC("AuthorizationWidget", func(props Authorizati
 						},
 							kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Secondary).Bold(true)}, kitex.Text("Reason for denial (optional):")),
 							kitex.TextArea(kitex.TextAreaProps{
-								Name:             "deny-feedback-textarea",
+								Name:             "deny-feedback-textarea-modal",
 								Value:            props.FeedbackText,
 								Placeholder:      "Type why you are denying this request...",
 								PlaceholderStyle: style.S().Foreground(t.Color.Text.Tertiary),
@@ -737,7 +1380,7 @@ var AuthorizationWidget = kitex.FC("AuthorizationWidget", func(props Authorizati
 										}
 										return
 									}
-									if ke.Code == key.KeyEnter && (ke.Mod&key.ModShift) == 0 {
+									if (ke.Code == key.KeyEnter || ke.Text == "\r" || ke.Text == "\n") && (ke.Mod&key.ModShift) == 0 {
 										e.PreventDefault()
 										e.StopPropagation()
 										if props.OnDenyWithFeedback != nil {
@@ -773,28 +1416,23 @@ var AuthorizationWidget = kitex.FC("AuthorizationWidget", func(props Authorizati
 						)
 					}),
 					kitex.If(!props.IsProvidingFeedback, func() kitex.Node {
-						return kitex.Fragment(
-							kitex.Box(kitex.BoxProps{Style: style.S().PaddingBottom(0).Foreground(t.Color.Text.Primary)}, kitex.Text("Grant permission...")),
-							AuthorizationHybridSelector(AuthorizationHybridSelectorProps{
-								Options:             currReqOptions,
-								DirectoryOptions:    currReqDirOptions,
-								FocusedItem:         props.FocusedItem,
-								SelectedScopeIndex:  props.SelectedScopeIndex,
-								SelectedOptionIndex: activeOptIdx,
-								SelectedDirIndex:    activeDirIdx,
-								IsActive:            props.IsActive,
-								AllowedScopes:       getAllowedScopes(props.Request, currentPage),
-								OnSelectVertical:    props.OnSelectVertical,
-								OnSelectScope:       props.OnSelectScope,
-								OnSelectOption:      props.OnSelectOption,
-								OnSelectDir:         props.OnSelectDir,
-							}),
-							buttonsRow,
-							hintNode,
-						)
+						return AuthorizationHybridSelector(AuthorizationHybridSelectorProps{
+							Options:             currReqOptions,
+							DirectoryOptions:    currReqDirOptions,
+							FocusedItem:         props.FocusedItem,
+							SelectedScopeIndex:  props.SelectedScopeIndex,
+							SelectedOptionIndex: props.SelectedOptionIndex,
+							SelectedDirIndex:    props.SelectedDirIndex,
+							IsActive:            true,
+							AllowedScopes:       getAllowedScopes(req, 0),
+							OnSelectVertical:    props.OnSelectVertical,
+							OnSelectScope:       props.OnSelectScope,
+							OnSelectOption:      props.OnSelectOption,
+							OnSelectDir:         props.OnSelectDir,
+						})
 					}),
-				)
-			}),
+				),
+			),
 		),
 	)
 })
@@ -803,6 +1441,15 @@ func renderHint(t *theme.Scheme, keys, action string) kitex.Node {
 	return kitex.Fragment(
 		kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Primary)}, kitex.Text(keys)),
 		kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Tertiary)}, kitex.Text(" "+action)),
+	)
+}
+
+func renderMetadataRow(t *theme.Scheme, label, val string) kitex.Node {
+	return kitex.Box(kitex.BoxProps{
+		Style: style.S().Display(style.DisplayFlex).FlexDirection(style.FlexRow).Gap(1),
+	},
+		kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Secondary).MinWidth(style.Cells(12))}, kitex.Text(label)),
+		kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Primary)}, kitex.Text(val)),
 	)
 }
 
@@ -831,406 +1478,6 @@ func formatTargetLabel(opt permissions.PermissionOption) string {
 	return opt.Target
 }
 
-type AuthorizationPreviewModalProps struct {
-	IsOpen              bool
-	PendingRequests     []permissions.AuthorizationRequest
-	CurrentPendingIndex int
-	CurrentPageIndex    int
-	FocusedItem         FocusItem
-	SelectedScopeIndex  int
-	SelectedOptions     map[string]int
-	SelectedDirs        map[string]int
-	IsSubmitting        bool
-	OnClose             func()
-	OnApprove           func()
-	OnDeny              func()
-	OnHardCancel        func()
-	OnSelectVertical    func(FocusItem)
-	OnSelectScope       func(int)
-	OnSelectOption      func(int)
-	OnSelectDir         func(int)
-	OnSetCurrentPage    func(int)
-	IsProvidingFeedback bool
-	FeedbackText        string
-	OnFeedbackChange    func(string)
-	OnDenyWithFeedback  func(string)
-	OnCancelFeedback    func()
-	OnStartFeedback     func()
-}
-
-var AuthorizationPreviewModal = kitex.FCC("AuthorizationPreviewModal", func(props AuthorizationPreviewModalProps) kitex.Node {
-	if !props.IsOpen || len(props.PendingRequests) == 0 || props.CurrentPendingIndex >= len(props.PendingRequests) {
-		return nil
-	}
-
-	t := theme.UseTheme()
-	localInputRef := kitex.CreateRef[dom.Element]()
-	kitex.UseEffect(func() {
-		if props.IsProvidingFeedback {
-			kitex.PostMacro(func() {
-				if localInputRef.Current != nil {
-					if doc := localInputRef.Current.OwnerDocument(); doc != nil {
-						doc.Focus(localInputRef.Current)
-					}
-				}
-			})
-		}
-	}, []any{props.IsProvidingFeedback})
-
-	textRef := kitex.UseRef("")
-	textRef.Current = props.FeedbackText
-
-	req := props.PendingRequests[props.CurrentPendingIndex]
-
-	leftNode := PreviewPanel(PreviewPanelProps{
-		Preview: req.Preview,
-		Payload: req.Payload,
-		Border:  false,
-	})
-
-	// Unified details and selector for the active page
-	totalPages := len(req.GrantRequests)
-	if totalPages == 0 {
-		totalPages = 1
-	}
-	currentPage := props.CurrentPageIndex
-	if currentPage >= totalPages {
-		currentPage = 0
-	}
-
-	var currReq *permissions.PermissionGrantRequest
-	var currReqOptions []permissions.PermissionOption
-	var currReqDirOptions []permissions.PermissionOption
-	if len(req.GrantRequests) > 0 {
-		currReq = &req.GrantRequests[currentPage]
-		currReqOptions = currReq.Options
-		currReqDirOptions = currReq.DirectoryOptions
-	}
-
-	var activeOptIdx int
-	var activeDirIdx int
-	if currReq != nil {
-		activeOptIdx = props.SelectedOptions[currReq.ID]
-		activeDirIdx = props.SelectedDirs[currReq.ID]
-	}
-
-	enterLabel := "Allow"
-	if currentPage == totalPages-1 {
-		enterLabel = "Allow All"
-	}
-
-	return components.Modal(components.ModalProps{
-		IsOpen:     props.IsOpen,
-		Title:      kitex.Text("Authorization Preview"),
-		OnClose:    props.OnClose,
-		Attributes: map[string]string{"data-context": "modal:auth"},
-		Footer: kitex.Box(kitex.BoxProps{
-			Style: style.S().
-				Display(style.DisplayFlex).
-				FlexDirection(style.FlexRow).
-				JustifyContent(style.JustifyBetween).
-				AlignItems(style.AlignCenter).
-				Width(style.Percent(100)).
-				Height(style.Percent(100)),
-		},
-			// Action Buttons
-			kitex.Box(kitex.BoxProps{
-				Style: style.S().Display(style.DisplayFlex).FlexDirection(style.FlexRow).Gap(1),
-			},
-				components.Button(components.ButtonProps{
-					Variant:   components.ButtonText,
-					Color:     components.ButtonSuccess,
-					StartIcon: icon.Check,
-					OnClick:   props.OnApprove,
-				}, kitex.Text(fmt.Sprintf("%s (Enter)", enterLabel))),
-				components.Button(components.ButtonProps{
-					Variant:   components.ButtonText,
-					Color:     components.ButtonError,
-					StartIcon: icon.Error,
-					OnClick:   props.OnDeny,
-				}, kitex.Text("Deny (d)")),
-				components.Button(components.ButtonProps{
-					Variant:   components.ButtonText,
-					Color:     components.ButtonError,
-					StartIcon: icon.Pencil,
-					OnClick:   props.OnStartFeedback,
-				}, kitex.Text("Deny with Feedback (D)")),
-				components.Button(components.ButtonProps{
-					Variant:   components.ButtonText,
-					Color:     components.ButtonError,
-					StartIcon: icon.Exit,
-					OnClick:   props.OnHardCancel,
-				}, kitex.Text("Hard Cancel (x)")),
-				kitex.If(currentPage > 0, func() kitex.Node {
-					return components.Button(components.ButtonProps{
-						Variant: components.ButtonText,
-						Color:   components.ButtonPrimary,
-						OnClick: func() {
-							props.OnSetCurrentPage(currentPage - 1)
-						},
-					}, kitex.Text("Prev (b)"))
-				}),
-			),
-
-			// Hint Bar
-			kitex.Box(kitex.BoxProps{
-				Style: style.S().Foreground(t.Color.Text.Secondary),
-			},
-				renderHint(t, "j/k", "navigate"),
-				kitex.Text(" · "),
-				renderHint(t, "h/l", "select"),
-				kitex.Text(" · "),
-				renderHint(t, "d", "deny"),
-				kitex.Text(" · "),
-				renderHint(t, "D", "deny with feedback"),
-				kitex.Text(" · "),
-				renderHint(t, "x", "hard cancel"),
-				kitex.Text(" · "),
-				renderHint(t, "Esc", "close"),
-			),
-		),
-	},
-		kitex.Box(kitex.BoxProps{
-			Style: style.S().
-				Display(style.DisplayFlex).
-				FlexDirection(style.FlexRow).
-				Width(style.Percent(100)).
-				Height(style.Percent(100)).
-				Gap(2),
-		},
-			// Left Panel: Code/Diff Preview (no borders)
-			kitex.Box(kitex.BoxProps{
-				Style: style.S().
-					Flex(2, 2, style.Cells(0)).
-					MinWidth(style.Cells(0)).
-					Height(style.Percent(100)).
-					Display(style.DisplayFlex).
-					FlexDirection(style.FlexColumn).
-					Padding(1).
-					Overflow(style.OverflowAuto),
-			},
-				kitex.Box(kitex.BoxProps{
-					Style: style.S().Bold(true).PaddingBottom(1).Foreground(t.Color.Text.Primary),
-				}, kitex.Text("Resource Preview:")),
-				leftNode,
-			),
-			// Right Panel: Details & Hybrid Selector (no borders)
-			kitex.Box(kitex.BoxProps{
-				Style: style.S().
-					Flex(1, 1, style.Cells(0)).
-					MinWidth(style.Cells(0)).
-					Height(style.Percent(100)).
-					Display(style.DisplayFlex).
-					FlexDirection(style.FlexColumn).
-					Background(t.Color.Surface.BaseFocus).
-					Padding(1).
-					Gap(1).
-					Overflow(style.OverflowAuto),
-			},
-				// Step Tracker Header
-				kitex.Box(kitex.BoxProps{
-					Style: style.S().Bold(true).PaddingBottom(1).Foreground(t.Color.Surface.Info),
-				}, kitex.Text(fmt.Sprintf("Authorization Details [Step %d of %d]", currentPage+1, totalPages))),
-
-				// Tool Details
-				kitex.Box(kitex.BoxProps{
-					Style: style.S().Display(style.DisplayFlex).FlexDirection(style.FlexRow).Gap(1),
-				},
-					kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Secondary).MinWidth(style.Cells(9))}, kitex.Text("Tool:")),
-					kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Magenta).Bold(true)}, kitex.Text(req.ToolName)),
-				),
-
-				// Action Details
-				kitex.If(currReq != nil, func() kitex.Node {
-					return kitex.Box(kitex.BoxProps{
-						Style: style.S().Display(style.DisplayFlex).FlexDirection(style.FlexRow).Gap(1).PaddingBottom(1),
-					},
-						kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Secondary).MinWidth(style.Cells(9))}, kitex.Text("Action:")),
-						kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Purple).Bold(true)}, kitex.Text(currReq.Description)),
-					)
-				}),
-
-				// Pending Grants list for page > 0
-				kitex.If(currentPage > 0 && len(req.GrantRequests) > 0, func() kitex.Node {
-					var pendingNodes []kitex.Node
-					scopeNames := getScopeNames(req, currentPage)
-					scopeName := "Once"
-					if props.SelectedScopeIndex >= 0 && props.SelectedScopeIndex < len(scopeNames) {
-						scopeName = scopeNames[props.SelectedScopeIndex]
-					}
-
-					for p := 0; p < currentPage; p++ {
-						gr := req.GrantRequests[p]
-						optIdx := props.SelectedOptions[gr.ID]
-						if optIdx < 0 || optIdx >= len(gr.Options) {
-							optIdx = 0
-						}
-						target := "*"
-						if len(gr.Options) > 0 {
-							target = gr.Options[optIdx].Target
-						}
-
-						dirIdx := props.SelectedDirs[gr.ID]
-						if dirIdx < 0 || dirIdx >= len(gr.DirectoryOptions) {
-							dirIdx = 0
-						}
-						dirTarget := "*"
-						if len(gr.DirectoryOptions) > 0 {
-							dirTarget = gr.DirectoryOptions[dirIdx].Target
-						}
-
-						summary := fmt.Sprintf("+ %s · %s", scopeName, target)
-						if dirTarget != "" && dirTarget != "*" {
-							summary += fmt.Sprintf(" (in %s)", dirTarget)
-						}
-
-						pendingNodes = append(pendingNodes, kitex.Span(kitex.SpanProps{
-							Style: style.S().Foreground(t.Color.Surface.Success),
-						}, kitex.Text(summary)))
-					}
-
-					return kitex.Box(kitex.BoxProps{
-						Style: style.S().
-							Display(style.DisplayFlex).
-							FlexDirection(style.FlexColumn).
-							Gap(0).
-							MarginBottom(1).
-							Padding(0, 1).
-							Border(true, style.SingleBorder(), t.Color.Border.Primary),
-					},
-						append([]kitex.Node{
-							kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Secondary).Bold(true)}, kitex.Text("Pending Grants:")),
-						}, pendingNodes...)...,
-					)
-				}),
-
-				// System Warnings (e.g. Destructive)
-				kitex.If(len(req.SystemHints) > 0, func() kitex.Node {
-					var hintNodes []kitex.Node
-					for _, hint := range req.SystemHints {
-						hintNodes = append(hintNodes, components.Alert(components.AlertProps{
-							Severity: components.AlertWarning,
-							ShowIcon: true,
-							Style:    style.S(),
-						}, kitex.Text(hint)))
-					}
-					return kitex.Box(kitex.BoxProps{
-						Style: style.S().Display(style.DisplayFlex).FlexDirection(style.FlexColumn).Gap(1).MarginBottom(1),
-					},
-						hintNodes...,
-					)
-				}),
-
-				// Divider line
-				kitex.Box(kitex.BoxProps{
-					Style: style.S().BorderBottom(true, style.SingleBorder(), t.Color.Border.Primary).MarginVertical(1),
-				}),
-
-				// Scope Hybrid Selector OR Feedback Text Area
-				kitex.If(props.IsProvidingFeedback, func() kitex.Node {
-					textareaStyle := style.S().
-						Width(style.Percent(100)).
-						Height(style.Cells(4)).
-						Background(color.Transparent).
-						Foreground(t.Color.Text.Primary).
-						Border(true, style.SingleBorder(), t.Color.Border.Primary).
-						Padding(0, 1)
-
-					return kitex.Box(kitex.BoxProps{
-						Style: style.S().
-							Display(style.DisplayFlex).
-							FlexDirection(style.FlexColumn).
-							Gap(1).
-							MarginTop(1),
-					},
-						kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Secondary).Bold(true)}, kitex.Text("Reason for denial (optional):")),
-						kitex.TextArea(kitex.TextAreaProps{
-							Name:             "deny-feedback-textarea-modal",
-							Value:            props.FeedbackText,
-							Placeholder:      "Type why you are denying this request...",
-							PlaceholderStyle: style.S().Foreground(t.Color.Text.Tertiary),
-							Style:            textareaStyle,
-							Ref:              localInputRef,
-							OnChange: func(e event.Event) {
-								val := ""
-								if ie, ok := e.(*event.ChangeEvent); ok {
-									val = ie.Value
-								} else if ie, ok := e.(*event.InputEvent); ok {
-									val = ie.Value
-								}
-								if props.OnFeedbackChange != nil {
-									props.OnFeedbackChange(val)
-								}
-							},
-							OnKeyDown: func(e event.Event) {
-								ke, ok := e.(*event.KeyEvent)
-								if !ok {
-									return
-								}
-								if ke.Code == key.KeyEscape {
-									e.PreventDefault()
-									e.StopPropagation()
-									if props.OnCancelFeedback != nil {
-										props.OnCancelFeedback()
-									}
-									return
-								}
-								if ke.Code == key.KeyEnter && (ke.Mod&key.ModShift) == 0 {
-									e.PreventDefault()
-									e.StopPropagation()
-									if props.OnDenyWithFeedback != nil {
-										props.OnDenyWithFeedback(textRef.Current)
-									}
-									return
-								}
-							},
-						}),
-						kitex.Box(kitex.BoxProps{
-							Style: style.S().Display(style.DisplayFlex).FlexDirection(style.FlexRow).Gap(1).MarginTop(1),
-						},
-							components.Button(components.ButtonProps{
-								Variant:   components.ButtonText,
-								Color:     components.ButtonError,
-								StartIcon: icon.Error,
-								OnClick: func() {
-									if props.OnDenyWithFeedback != nil {
-										props.OnDenyWithFeedback(textRef.Current)
-									}
-								},
-							}, kitex.Text("Submit Denial (Enter)")),
-							components.Button(components.ButtonProps{
-								Variant: components.ButtonText,
-								Color:   components.ButtonPrimary,
-								OnClick: func() {
-									if props.OnCancelFeedback != nil {
-										props.OnCancelFeedback()
-									}
-								},
-							}, kitex.Text("Cancel (Esc)")),
-						),
-					)
-				}),
-				kitex.If(!props.IsProvidingFeedback, func() kitex.Node {
-					return AuthorizationHybridSelector(AuthorizationHybridSelectorProps{
-						Options:             currReqOptions,
-						DirectoryOptions:    currReqDirOptions,
-						FocusedItem:         props.FocusedItem,
-						SelectedScopeIndex:  props.SelectedScopeIndex,
-						SelectedOptionIndex: activeOptIdx,
-						SelectedDirIndex:    activeDirIdx,
-						IsActive:            true,
-						AllowedScopes:       getAllowedScopes(req, currentPage),
-						OnSelectVertical:    props.OnSelectVertical,
-						OnSelectScope:       props.OnSelectScope,
-						OnSelectOption:      props.OnSelectOption,
-						OnSelectDir:         props.OnSelectDir,
-					})
-				}),
-			),
-		),
-	)
-})
-
 func getAllowedScopes(req permissions.AuthorizationRequest, page int) []permissions.PermissionScope {
 	if page > 0 && len(req.GrantRequests) >= page {
 		return req.GrantRequests[page-1].AllowedScopes
@@ -1246,20 +1493,57 @@ func getAllowedScopes(req permissions.AuthorizationRequest, page int) []permissi
 	}
 }
 
-func getScopeNames(req permissions.AuthorizationRequest, page int) []string {
+func getVisibleItems(scopeIdx int, req permissions.AuthorizationRequest, page int) []FocusItem {
+	var items []FocusItem
 	allowed := getAllowedScopes(req, page)
-	names := make([]string, len(allowed))
-	for idx, s := range allowed {
-		switch s {
+
+	for _, scope := range allowed {
+		switch scope {
 		case permissions.ScopeOnce:
-			names[idx] = "Once"
+			items = append(items, FocusItemOnce)
 		case permissions.ScopeSession:
-			names[idx] = "Session"
+			if len(req.GrantRequests) > page && len(req.GrantRequests[page].Options) > 0 {
+				items = append(items, FocusItemSessionCmd)
+			} else {
+				items = append(items, FocusItemSession)
+			}
 		case permissions.ScopeWorkspace:
-			names[idx] = "Workspace"
+			if len(req.GrantRequests) > page && len(req.GrantRequests[page].Options) > 0 {
+				items = append(items, FocusItemWorkspaceCmd)
+			} else {
+				items = append(items, FocusItemWorkspace)
+			}
 		case permissions.ScopeGlobal:
-			names[idx] = "Global"
+			if len(req.GrantRequests) > page && len(req.GrantRequests[page].Options) > 0 {
+				items = append(items, FocusItemGlobalCmd)
+			} else {
+				items = append(items, FocusItemGlobal)
+			}
 		}
 	}
-	return names
+
+	if len(req.GrantRequests) > page {
+		gr := req.GrantRequests[page]
+		onceIdx := -1
+		for idx, scope := range allowed {
+			if scope == permissions.ScopeOnce {
+				onceIdx = idx
+				break
+			}
+		}
+		if scopeIdx != onceIdx && len(gr.DirectoryOptions) > 0 {
+			items = append(items, FocusItemDirectory)
+		}
+	}
+	return items
+}
+
+func getScopeIndex(req permissions.AuthorizationRequest, page int, scope permissions.PermissionScope) int {
+	allowed := getAllowedScopes(req, page)
+	for idx, s := range allowed {
+		if s == scope {
+			return idx
+		}
+	}
+	return -1
 }
