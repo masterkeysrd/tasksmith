@@ -1876,19 +1876,6 @@ func renderQueuedMessages(t *theme.Scheme, queuedMessages message.MessageList) k
 	return kitex.Box(kitex.BoxProps{Style: containerStyle}, children...)
 }
 
-func getTargetOptionForHorizontal(options []permissions.PermissionOption, hIdx int) permissions.PermissionOption {
-	if len(options) == 0 {
-		return permissions.PermissionOption{}
-	}
-	if hIdx < 0 {
-		hIdx = 0
-	}
-	if hIdx >= len(options) {
-		hIdx = len(options) - 1
-	}
-	return options[hIdx]
-}
-
 func getScopeIndex(req permissions.AuthorizationRequest, page int, scope permissions.PermissionScope) int {
 	allowed := getAllowedScopes(req, page)
 	for idx, s := range allowed {

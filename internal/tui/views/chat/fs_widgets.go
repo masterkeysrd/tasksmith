@@ -16,8 +16,6 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/tui/theme"
 )
 
-const lsPreviewLines = 10
-
 // RemoveToolWidget renders the result of a remove tool call inline.
 var RemoveToolWidget = kitex.FC("RemoveToolWidget", func(props ToolExecutionProps) kitex.Node {
 	t := theme.UseTheme()
