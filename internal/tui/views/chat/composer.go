@@ -1,7 +1,6 @@
 package chat
 
 import (
-	"fmt"
 	"image/color"
 	"strings"
 
@@ -32,18 +31,6 @@ type ComposerProps struct {
 var Composer = kitex.FC("Composer", func(props ComposerProps) kitex.Node {
 	isFocused, setIsFocused := kitex.UseState(false)
 	t := theme.UseTheme()
-
-	initialValue, setInitialValue := kitex.UseState(props.Value)
-	resetCounter, setResetCounter := kitex.UseState(0)
-	lastTypedRef := kitex.UseRef(props.Value)
-
-	kitex.UseEffect(func() {
-		if props.Value != lastTypedRef.Current {
-			setInitialValue(props.Value)
-			lastTypedRef.Current = props.Value
-			setResetCounter(resetCounter() + 1)
-		}
-	}, []any{props.Value})
 
 	if t == nil {
 		return kitex.Box(kitex.BoxProps{}, kitex.Text("No Theme"))
@@ -89,14 +76,13 @@ var Composer = kitex.FC("Composer", func(props ComposerProps) kitex.Node {
 	textareaDisabled := props.Disabled || !props.IsInsert
 
 	textareaProps := kitex.TextAreaProps{
-		Key:              fmt.Sprintf("ta-%d", resetCounter()),
-		Name:             "composer-textarea",
-		Value:            initialValue(),
-		Placeholder:      "Message TaskSmith...",
-		PlaceholderStyle: ps,
-		Disabled:         textareaDisabled,
-		Style:            textareaStyle,
-		Ref:              props.Ref,
+		Name:              "composer-textarea",
+		Value:             props.Value,
+		Placeholder:       "Message TaskSmith...",
+		PlaceholderStyle:  ps,
+		Disabled:          textareaDisabled,
+		Style:             textareaStyle,
+		Ref:               props.Ref,
 		OnChange: func(e event.Event) {
 			val := ""
 			if ie, ok := e.(*event.ChangeEvent); ok {
@@ -104,7 +90,6 @@ var Composer = kitex.FC("Composer", func(props ComposerProps) kitex.Node {
 			} else if ie, ok := e.(*event.InputEvent); ok {
 				val = ie.Value
 			}
-			lastTypedRef.Current = val
 			if props.OnChange != nil {
 				props.OnChange(val)
 			}
