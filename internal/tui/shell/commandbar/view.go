@@ -14,7 +14,9 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/tui/command"
 	"github.com/masterkeysrd/tasksmith/internal/tui/components"
 	"github.com/masterkeysrd/tasksmith/internal/tui/mode"
+	"github.com/masterkeysrd/tasksmith/internal/tui/plugin/autocomplete"
 	"github.com/masterkeysrd/tasksmith/internal/tui/theme"
+	"github.com/masterkeysrd/tasksmith/internal/tui/widgets"
 )
 
 // Props defines properties for the CommandBar component.
@@ -28,6 +30,16 @@ var View = kitex.FC("CommandBar", func(props Props) kitex.Node {
 	value, setValue := kitex.UseState("")
 	commandError, setCommandError := kitex.UseState("")
 	inputRef := kitex.UseRef[dom.Element](nil)
+
+	// Initialize autocomplete controller once for commands
+	acController := kitex.UseMemo(func() any {
+		return autocomplete.New(autocomplete.Config{
+			Triggers: map[string][]string{"": {"command"}},
+			Prefixes: map[string]string{},
+		})
+	}, []any{}).(*autocomplete.Controller)
+
+	_ = acController.Use()
 
 	isOpen := m == mode.Command
 
@@ -49,6 +61,8 @@ var View = kitex.FC("CommandBar", func(props Props) kitex.Node {
 					}
 				})
 			}
+		} else {
+			acController.SetIsOpen(false)
 		}
 	}, []any{isOpen})
 
@@ -92,7 +106,32 @@ var View = kitex.FC("CommandBar", func(props Props) kitex.Node {
 		}
 	}
 
+	var cursorOffset int
+	if inputRef.Current != nil {
+		if sr, ok := inputRef.Current.(interface{ SelectionRange() (int, int) }); ok {
+			start, _ := sr.SelectionRange()
+			cursorOffset = start
+		} else {
+			cursorOffset = len(val)
+		}
+	} else {
+		cursorOffset = len(val)
+	}
+
 	return kitex.Box(boxProps,
+		// Autocomplete Dropdown List as Overlay
+		widgets.AutocompleteOverlay(widgets.AutocompleteOverlayProps{
+			Anchor:     inputRef.Current,
+			Controller: acController,
+			Value:      val,
+		}, widgets.AutocompleteMenu(widgets.AutocompleteMenuProps{
+			Controller: acController,
+			OnSelect: func(item autocomplete.Item) {
+				newText, _ := acController.ApplySelection(val, cursorOffset, item)
+				setValue(newText)
+				acController.SetIsOpen(false)
+			},
+		})),
 		// Bar Content
 		kitex.Box(kitex.BoxProps{Style: barStyle},
 			kitex.IfElse(isOpen,
@@ -128,6 +167,18 @@ var View = kitex.FC("CommandBar", func(props Props) kitex.Node {
 								Foreground(colorTextDimmed),
 							OnChange: func(v string) {
 								setValue(v)
+								var cursorOffset int
+								if inputRef.Current != nil {
+									if sr, ok := inputRef.Current.(interface{ SelectionRange() (int, int) }); ok {
+										start, _ := sr.SelectionRange()
+										cursorOffset = start
+									} else {
+										cursorOffset = len(v)
+									}
+								} else {
+									cursorOffset = len(v)
+								}
+								acController.HandleOnChange(v, cursorOffset)
 							},
 							OnBlur: func() {
 								if isOpen {
@@ -143,6 +194,22 @@ var View = kitex.FC("CommandBar", func(props Props) kitex.Node {
 							OnKeyDown: func(e event.Event) {
 								ke, ok := e.(*event.KeyEvent)
 								if !ok {
+									return
+								}
+
+								// Show autocomplete dropdown on Ctrl+Space
+								if (ke.Code == key.KeySpace || ke.Text == " ") && (ke.Mod&key.ModCtrl) != 0 {
+									e.PreventDefault()
+									e.StopPropagation()
+									acController.HandleOnChange(val, cursorOffset)
+									acController.SetIsOpen(true)
+									return
+								}
+
+								// Intercept autocomplete controls
+								if acController.HandleOnKeyDown(ke, val, setValue) {
+									e.PreventDefault()
+									e.StopPropagation()
 									return
 								}
 

@@ -22,6 +22,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/metrics"
 	"github.com/masterkeysrd/tasksmith/internal/session"
 	"github.com/masterkeysrd/tasksmith/internal/tui"
+	"github.com/masterkeysrd/tasksmith/internal/tui/plugin/autocomplete"
 	"github.com/masterkeysrd/tasksmith/internal/workspace"
 )
 
@@ -135,6 +136,25 @@ func (app *Application) Run(ctx context.Context) error {
 	app.AddCloser("workspaceTracker", func(ctx context.Context) error {
 		return wsTracker.Stop()
 	})
+
+	// Setup autocomplete plugin with the file source querying the workspace tracker
+	acPlugin := autocomplete.NewPlugin(autocomplete.Deps{
+		Sources: []autocomplete.Source{
+			autocomplete.NewFileSource(func(query string) []autocomplete.FileSearchResult {
+				results := wsTracker.Search(query)
+				var searchResults []autocomplete.FileSearchResult
+				for _, r := range results {
+					searchResults = append(searchResults, autocomplete.FileSearchResult{
+						Path:  r.Path,
+						IsDir: r.IsDir,
+					})
+				}
+				return searchResults
+			}),
+			autocomplete.NewCommandSource(),
+		},
+	})
+	autocomplete.SetPlugin(acPlugin)
 
 	app.api = api.NewService(app.ws, sessionMgr, metricsStore, app.lspManager, wsTracker)
 

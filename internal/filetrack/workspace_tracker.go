@@ -7,12 +7,14 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/fsnotify/fsnotify"
 	corefs "github.com/masterkeysrd/tasksmith/internal/core/fs"
+	"github.com/masterkeysrd/tasksmith/internal/core/fuzzy"
 )
 
 type workspaceTracker struct {
@@ -22,6 +24,7 @@ type workspaceTracker struct {
 
 	mu          sync.RWMutex
 	files       map[string]bool            // Set of relative paths (using forward slashes) of all files in workspace
+	dirs        map[string]bool            // Set of relative paths (using forward slashes) of all directories in workspace
 	interests   map[string]map[string]bool // file -> set of sessionIDs
 	subs        map[string]chan FileEvent  // sessionID -> event channel
 	activeFiles []string                   // MRU active files list
@@ -38,6 +41,7 @@ func NewWorkspaceTracker(workspaceDir string) WorkspaceTracker {
 		workspaceDir: workspaceDir,
 		ignorer:      ign,
 		files:        make(map[string]bool),
+		dirs:         make(map[string]bool),
 		interests:    make(map[string]map[string]bool),
 		subs:         make(map[string]chan FileEvent),
 		activeSet:    make(map[string]bool),
@@ -84,6 +88,11 @@ func (w *workspaceTracker) scanAndWatch(root string) error {
 		if info.IsDir() {
 			if err := w.watcher.Add(path); err != nil {
 				return fmt.Errorf("failed to watch directory %s: %w", path, err)
+			}
+			rel, err := filepath.Rel(w.workspaceDir, path)
+			if err == nil && rel != "." && rel != "" {
+				relNorm := filepath.ToSlash(rel)
+				w.dirs[relNorm] = true
 			}
 		} else {
 			rel, err := filepath.Rel(w.workspaceDir, path)
@@ -154,9 +163,15 @@ func (w *workspaceTracker) handleFsEvent(event fsnotify.Event) {
 		if errStat == nil {
 			if isDir {
 				_ = w.scanAndWatch(event.Name)
+				w.dirs[rel] = true
 				return
 			} else {
 				w.files[rel] = true
+				// Ensure parent directory is also recorded
+				parent := filepath.Dir(rel)
+				if parent != "." && parent != "/" && parent != "" {
+					w.dirs[parent] = true
+				}
 				kind = Created
 				hash = w.computeHashLocked(event.Name)
 			}
@@ -176,7 +191,22 @@ func (w *workspaceTracker) handleFsEvent(event fsnotify.Event) {
 
 	// Handle Remove (Delete) or Rename
 	if event.Has(fsnotify.Remove) || event.Has(fsnotify.Rename) {
-		delete(w.files, rel)
+		if w.dirs[rel] {
+			delete(w.dirs, rel)
+			prefix := rel + "/"
+			for f := range w.files {
+				if strings.HasPrefix(f, prefix) {
+					delete(w.files, f)
+				}
+			}
+			for d := range w.dirs {
+				if strings.HasPrefix(d, prefix) {
+					delete(w.dirs, d)
+				}
+			}
+		} else {
+			delete(w.files, rel)
+		}
 		_ = w.watcher.Remove(event.Name)
 		kind = Deleted
 		hash = "deleted"
@@ -328,35 +358,77 @@ func (w *workspaceTracker) ActiveFiles() []string {
 	return out
 }
 
-func (w *workspaceTracker) Search(query string) []string {
+func (w *workspaceTracker) Search(query string) []SearchResult {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
 
-	query = strings.ToLower(query)
-	var activeMatches []string
-	var otherMatches []string
+	if query == "" {
+		// Return all active, inactive files, and directories in priority order
+		var results []SearchResult
+		for _, p := range w.activeFiles {
+			results = append(results, SearchResult{Path: p, IsDir: false})
+		}
+		for path := range w.files {
+			if !w.activeSet[path] {
+				results = append(results, SearchResult{Path: path, IsDir: false})
+			}
+		}
+		for path := range w.dirs {
+			results = append(results, SearchResult{Path: path, IsDir: true})
+		}
+		return results
+	}
 
+	type scoredResult struct {
+		res   SearchResult
+		score int
+	}
+	var matches []scoredResult
+
+	// Match files using fuzzy subsequence matcher
 	for path := range w.files {
-		if query == "" || strings.Contains(strings.ToLower(path), query) {
+		if matched, score := fuzzy.Match(path, query); matched {
+			// Boost open files
 			if w.activeSet[path] {
-				activeMatches = append(activeMatches, path)
-			} else {
-				otherMatches = append(otherMatches, path)
+				score += 50
 			}
+			matches = append(matches, scoredResult{
+				res:   SearchResult{Path: path, IsDir: false},
+				score: score,
+			})
 		}
 	}
 
-	var orderedActive []string
-	for _, p := range w.activeFiles {
-		for _, am := range activeMatches {
-			if am == p {
-				orderedActive = append(orderedActive, p)
-				break
-			}
+	// Match directories (with a trailing slash appended during matching)
+	for path := range w.dirs {
+		dirPath := path
+		if !strings.HasSuffix(dirPath, "/") {
+			dirPath += "/"
+		}
+		if matched, score := fuzzy.Match(dirPath, query); matched {
+			matches = append(matches, scoredResult{
+				res:   SearchResult{Path: path, IsDir: true},
+				score: score - 5, // Slightly penalize directories vs direct files
+			})
 		}
 	}
 
-	return append(orderedActive, otherMatches...)
+	// Sort matches by score descending
+	sort.Slice(matches, func(i, j int) bool {
+		return matches[i].score > matches[j].score
+	})
+
+	results := make([]SearchResult, 0, len(matches))
+	for _, m := range matches {
+		results = append(results, m.res)
+	}
+	return results
+}
+
+func (w *workspaceTracker) IsDir(path string) bool {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	return w.dirs[path]
 }
 
 func (w *workspaceTracker) Stop() error {

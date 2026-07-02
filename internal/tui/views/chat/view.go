@@ -98,8 +98,8 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 	// Mode handling & Focus management
 	m := mode.Use()
 	isInsert := m == mode.Insert
-	inputRef := kitex.CreateRef[dom.Element]()
-	outerRef := kitex.CreateRef[dom.Element]()
+	inputRef := kitex.UseRef[dom.Element](nil)
+	outerRef := kitex.UseRef[dom.Element](nil)
 
 	showFullOutputModal, setShowFullOutputModal := kitex.UseState(false)
 	fullOutputTitle, setFullOutputTitle := kitex.UseState("")
@@ -111,7 +111,7 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 
 	localEditingMessages, setLocalEditingMessages := kitex.UseState([]message.Message(nil))
 	optimisticMessages, setOptimisticMessages := kitex.UseState([]message.Message(nil))
-	scrollAnchorRef := kitex.CreateRef[dom.Element]()
+	scrollAnchorRef := kitex.UseRef[dom.Element](nil)
 
 	handleRemoveQueuedMessage := func(messageID string) {
 		promise.New(func(ctx context.Context) (bool, error) {

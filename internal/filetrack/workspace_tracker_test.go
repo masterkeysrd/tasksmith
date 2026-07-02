@@ -47,30 +47,51 @@ func TestWorkspaceTracker(t *testing.T) {
 
 	// 1. Check initial scan results (Search)
 	results := wt.Search("")
-	if len(results) != 3 {
-		t.Errorf("expected 3 files, got %d: %v", len(results), results)
+	if len(results) != 4 {
+		t.Errorf("expected 4 items (3 files, 1 dir), got %d: %v", len(results), results)
+	}
+
+	// Verify SearchResult fields
+	var foundSubdir bool
+	for _, r := range results {
+		if r.Path == "subdir" {
+			foundSubdir = true
+			if !r.IsDir {
+				t.Errorf("expected subdir to be flagged as a directory")
+			}
+		}
+	}
+	if !foundSubdir {
+		t.Errorf("subdir not found in search results")
 	}
 
 	// Verify we can find specific files
 	matches := wt.Search("file_a")
-	if len(matches) != 1 || matches[0] != "file_a.txt" {
-		t.Errorf("expected to find file_a.txt, got %v", matches)
+	if len(matches) != 1 || matches[0].Path != "file_a.txt" || matches[0].IsDir {
+		t.Errorf("expected to find file_a.txt as a file, got %v", matches)
 	}
 
 	matchesSub := wt.Search("subdir/")
-	if len(matchesSub) != 1 || matchesSub[0] != "subdir/file_c.txt" {
+	var foundFileC bool
+	for _, m := range matchesSub {
+		if m.Path == "subdir/file_c.txt" && !m.IsDir {
+			foundFileC = true
+			break
+		}
+	}
+	if !foundFileC {
 		t.Errorf("expected to find subdir/file_c.txt, got %v", matchesSub)
 	}
 
 	// 2. Test MRU ranking (NotifyTouch)
 	wt.NotifyTouch("file_b.txt", false)
-	
+
 	searchResults := wt.Search("file_")
 	if len(searchResults) < 2 {
 		t.Fatalf("expected at least 2 search results, got %v", searchResults)
 	}
-	if searchResults[0] != "file_b.txt" {
-		t.Errorf("expected file_b.txt (MRU) to be first, got %s in %v", searchResults[0], searchResults)
+	if searchResults[0].Path != "file_b.txt" {
+		t.Errorf("expected file_b.txt (MRU) to be first, got %s in %v", searchResults[0].Path, searchResults)
 	}
 
 	// 3. Test Subscription and Interest Registration

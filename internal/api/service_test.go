@@ -101,7 +101,7 @@ func TestService(t *testing.T) {
 		},
 	}
 
-	svc := NewService(mockWS, nil, nil, nil)
+	svc := NewService(mockWS, nil, nil, nil, nil)
 	ctx := context.Background()
 
 	t.Run("ListProjects", func(t *testing.T) {
@@ -218,7 +218,7 @@ func TestService(t *testing.T) {
 		xdg.ClearCache()
 
 		mgr := lsp.NewManager()
-		svcWithLsp := NewService(mockWS, nil, nil, mgr)
+		svcWithLsp := NewService(mockWS, nil, nil, mgr, nil)
 
 		// Add dummy file change to trigger suggestion for "go"
 		absGo, _ := filepath.Abs("main.go")
@@ -325,7 +325,7 @@ func TestRevertFileAPI(t *testing.T) {
 		Workspace: ws,
 	})
 
-	svc := NewService(wsMock, manager, nil, nil)
+	svc := NewService(wsMock, manager, nil, nil, nil)
 	ctx := context.Background()
 
 	sess, err := manager.CreateSession(ctx, "Test Session")

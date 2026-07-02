@@ -12,7 +12,9 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/tui/components"
 	"github.com/masterkeysrd/tasksmith/internal/tui/components/icon"
 	"github.com/masterkeysrd/tasksmith/internal/tui/mode"
+	"github.com/masterkeysrd/tasksmith/internal/tui/plugin/autocomplete"
 	"github.com/masterkeysrd/tasksmith/internal/tui/theme"
+	"github.com/masterkeysrd/tasksmith/internal/tui/widgets"
 )
 
 // ComposerProps defines the properties for the Composer component.
@@ -30,7 +32,26 @@ type ComposerProps struct {
 // matching the design mockup in mockup.tsx.
 var Composer = kitex.FC("Composer", func(props ComposerProps) kitex.Node {
 	isFocused, setIsFocused := kitex.UseState(false)
+	wrapperRef := kitex.UseRef[dom.Element](nil)
 	t := theme.UseTheme()
+
+	// 1. Instantiate the Autocomplete Controller once using UseMemo
+	acController := kitex.UseMemo(func() *autocomplete.Controller {
+		return autocomplete.New(autocomplete.Config{
+			Triggers: map[string][]string{
+				"@": {"file", "lsp", "skill"},
+				"/": {"command"},
+			},
+			Prefixes: map[string]string{
+				"@file:":  "file",
+				"@sym:":   "lsp",
+				"@skill:": "skill",
+			},
+		})
+	}, nil)
+
+	// Call Use() to bind the component's render cycle reactively to state changes
+	_ = acController.Use()
 
 	if t == nil {
 		return kitex.Box(kitex.BoxProps{}, kitex.Text("No Theme"))
@@ -93,17 +114,37 @@ var Composer = kitex.FC("Composer", func(props ComposerProps) kitex.Node {
 			if props.OnChange != nil {
 				props.OnChange(val)
 			}
+			var cursorOffset int
+			if props.Ref != nil && props.Ref.Current != nil {
+				if sr, ok := props.Ref.Current.(interface{ SelectionRange() (int, int) }); ok {
+					start, _ := sr.SelectionRange()
+					cursorOffset = start
+				} else {
+					cursorOffset = len(val)
+				}
+			} else {
+				cursorOffset = len(val)
+			}
+			acController.HandleOnChange(val, cursorOffset)
 		},
 		OnFocus: func(e event.Event) {
 			setIsFocused(true)
 		},
 		OnBlur: func(e event.Event) {
 			setIsFocused(false)
+			acController.SetIsOpen(false)
 			mode.Set(mode.Normal)
 		},
 		OnKeyDown: func(e event.Event) {
 			ke, ok := e.(*event.KeyEvent)
 			if !ok {
+				return
+			}
+
+			// Intercept autocomplete keyboard controls (Enter/Tab/Escape/Arrows)
+			if acController.HandleOnKeyDown(ke, props.Value, props.OnChange) {
+				e.PreventDefault()
+				e.StopPropagation()
 				return
 			}
 
@@ -154,21 +195,65 @@ var Composer = kitex.FC("Composer", func(props ComposerProps) kitex.Node {
 			Foreground(blueColor)
 	}
 
-	wrapperProps := kitex.BoxProps{Style: wrapperStyle}
+	var cursorOffset int
+	if props.Ref != nil && props.Ref.Current != nil {
+		if sr, ok := props.Ref.Current.(interface{ SelectionRange() (int, int) }); ok {
+			start, _ := sr.SelectionRange()
+			cursorOffset = start
+		} else {
+			cursorOffset = len(props.Value)
+		}
+	} else {
+		cursorOffset = len(props.Value)
+	}
+
+	wrapperProps := kitex.BoxProps{
+		Key:   "composer-input-container",
+		Style: wrapperStyle,
+		Ref:   wrapperRef,
+	}
 	if !props.Disabled && !props.IsInsert {
 		wrapperProps.OnClick = func(e event.Event) {
 			mode.Set(mode.Insert)
 		}
 	}
 
-	return kitex.Box(wrapperProps,
-		kitex.TextArea(textareaProps),
-		components.Button(components.ButtonProps{
-			Variant:    components.ButtonText,
-			Disabled:   isSendDisabled,
-			OnClick:    props.OnSubmit,
-			Style:      btnStyle,
-			HoverStyle: btnHoverStyle,
-		}, icon.MoveUp),
+	outerStyle := style.S().
+		Display(style.DisplayFlex).
+		FlexDirection(style.FlexColumn).
+		Width(style.Percent(100))
+
+	anchorEl := wrapperRef.Current
+	if anchorEl == nil {
+		anchorEl = props.Ref.Current
+	}
+
+	return kitex.Box(kitex.BoxProps{Style: outerStyle},
+		widgets.AutocompleteOverlay(widgets.AutocompleteOverlayProps{
+			Anchor:      anchorEl,
+			InputAnchor: props.Ref.Current,
+			Controller:  acController,
+			Value:       props.Value,
+		}, widgets.AutocompleteMenu(widgets.AutocompleteMenuProps{
+			Controller: acController,
+			OnSelect: func(item autocomplete.Item) {
+				newText, _ := acController.ApplySelection(props.Value, cursorOffset, item)
+				if props.OnChange != nil {
+					props.OnChange(newText)
+				}
+				acController.SetIsOpen(false)
+			},
+		})),
+		// Input bordered text box and submit button
+		kitex.Box(wrapperProps,
+			kitex.TextArea(textareaProps),
+			components.Button(components.ButtonProps{
+				Variant:    components.ButtonText,
+				Disabled:   isSendDisabled,
+				OnClick:    props.OnSubmit,
+				Style:      btnStyle,
+				HoverStyle: btnHoverStyle,
+			}, icon.MoveUp),
+		),
 	)
 })

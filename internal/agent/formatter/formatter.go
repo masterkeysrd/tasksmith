@@ -6,8 +6,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/masterkeysrd/lspx"
 	"github.com/masterkeysrd/loom/message"
+	"github.com/masterkeysrd/lspx"
 	"github.com/masterkeysrd/tasksmith/internal/agent/resolver"
 	"github.com/masterkeysrd/tasksmith/internal/core/lsp"
 )

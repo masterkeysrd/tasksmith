@@ -1,12 +1,18 @@
 package widgets
 
 import (
-	"fmt"
+	"context"
 	"image/color"
+	"time"
 
+	"github.com/masterkeysrd/kite/cursor"
+	"github.com/masterkeysrd/kite/dom"
 	"github.com/masterkeysrd/kite/event"
 	"github.com/masterkeysrd/kite/extras/kitex"
+	"github.com/masterkeysrd/kite/geom"
+	"github.com/masterkeysrd/kite/promise"
 	"github.com/masterkeysrd/kite/style"
+	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	"github.com/masterkeysrd/tasksmith/internal/tui/components/icon"
 	"github.com/masterkeysrd/tasksmith/internal/tui/plugin/autocomplete"
 	"github.com/masterkeysrd/tasksmith/internal/tui/theme"
@@ -14,12 +20,11 @@ import (
 
 // AutocompleteMenuProps defines properties for the AutocompleteMenu widget.
 type AutocompleteMenuProps struct {
-	Items         []autocomplete.Item
-	SelectedIndex int
-	OnSelect      func(autocomplete.Item)
-	Style         style.Style
-	HideIcons     bool
-	HideBadges    bool
+	Controller *autocomplete.Controller
+	OnSelect   func(autocomplete.Item)
+	Style      style.Style
+	HideIcons  bool
+	HideBadges bool
 }
 
 var (
@@ -36,7 +41,9 @@ var (
 	menuListStyle = style.S().
 			ListStyleType(style.ListStyleNone).
 			Padding(0).
-			Margin(0)
+			Margin(0).
+			MaxHeight(style.Cells(8)).
+			OverflowY(style.OverflowAuto)
 
 	menuRowStyle = style.S().
 			Display(style.DisplayFlex).
@@ -68,6 +75,59 @@ var (
 
 // AutocompleteMenu renders the floating dropdown list of completion suggestions in a tabular format.
 var AutocompleteMenu = kitex.FC("AutocompleteMenu", func(props AutocompleteMenuProps) kitex.Node {
+	acState := props.Controller.Use()
+
+	// Fetch query results reactively when query or open status changes with a 100ms debounce
+	kitex.UseEffectCleanup(func() func() {
+		if !acState.IsOpen {
+			props.Controller.SetItems(nil)
+			return nil
+		}
+
+		// Strip trigger characters and namespace prefixes before querying the provider
+		var strippedQuery string
+		var sources []string
+		var matched bool
+		strippedQuery, sources, matched = props.Controller.Parse(acState.Query)
+		if !matched {
+			sources = nil
+		}
+
+		// Setup a 100ms debounce timer to prevent query spamming
+		debounceDuration := 100 * time.Millisecond
+		ctx, cancel := context.WithCancel(context.Background())
+
+		timer := time.AfterFunc(debounceDuration, func() {
+			promise.New(func(ctx context.Context) (*[]autocomplete.Item, error) {
+				p := autocomplete.GetPlugin()
+				if p == nil {
+					return nil, nil
+				}
+				items, err := p.Query(ctx, autocomplete.QueryReq{Query: strippedQuery, Sources: sources})
+				if err != nil {
+					return nil, err
+				}
+				return &items, nil
+			}).Then(func(items *[]autocomplete.Item) {
+				// Only update the state if the context has not been cancelled/superseded
+				if ctx.Err() == nil && items != nil {
+					props.Controller.SetItems(*items)
+				}
+			}, func(err error) {
+				// Ignore query errors
+			})
+		})
+
+		return func() {
+			timer.Stop()
+			cancel()
+		}
+	}, []any{acState.Query, acState.IsOpen})
+
+	if !acState.IsOpen || len(acState.FilteredItems) == 0 {
+		return nil
+	}
+
 	t := theme.UseTheme()
 
 	var bg, borderColor, textCol, titleCol, detailCol color.Color
@@ -107,15 +167,15 @@ var AutocompleteMenu = kitex.FC("AutocompleteMenu", func(props AutocompleteMenuP
 		kitex.Box(kitex.BoxProps{
 			Style: menuTitleStyle.Foreground(titleCol),
 		}, kitex.Text("Autocomplete")),
-		kitex.IfElse(len(props.Items) == 0,
+		kitex.IfElse(len(acState.FilteredItems) == 0,
 			kitex.Box(kitex.BoxProps{
 				Style: style.S().Foreground(detailCol).Padding(0, 1),
 			}, kitex.Text("No matches")),
 			kitex.UL(kitex.ULProps{
 				Style: menuListStyle,
 			},
-				kitex.Map(props.Items, func(item autocomplete.Item, idx int) kitex.Node {
-					isSelected := idx == props.SelectedIndex
+				kitex.Map(acState.FilteredItems, func(item autocomplete.Item, idx int) kitex.Node {
+					isSelected := idx == acState.SelectedIndex
 
 					rowStyle := menuRowStyle
 					var currentLabelCol, currentDetailCol color.Color
@@ -181,7 +241,7 @@ var AutocompleteMenu = kitex.FC("AutocompleteMenu", func(props AutocompleteMenuP
 					}, kitex.Text(item.Sublabel))
 
 					return kitex.LI(kitex.LIProps{
-						Key:   fmt.Sprintf("item-%s-%d", item.ID, idx),
+						Key:   "item-" + item.ID,
 						Style: rowStyle,
 						OnClick: func(e event.Event) {
 							if props.OnSelect != nil {
@@ -206,4 +266,143 @@ var AutocompleteMenu = kitex.FC("AutocompleteMenu", func(props AutocompleteMenuP
 			),
 		),
 	)
+})
+
+type AutocompleteOverlayProps struct {
+	Anchor      dom.Element
+	InputAnchor dom.Element
+	Controller  *autocomplete.Controller
+	Value       string
+	Children    []kitex.Node
+}
+
+// AutocompleteOverlay renders a Box that registers itself as a document overlay on mount,
+// bypassing the static positioning logic of kitex.Overlay and positioning itself relative to the anchor.
+var AutocompleteOverlay = kitex.FCC("AutocompleteOverlay", func(props AutocompleteOverlayProps) kitex.Node {
+	elRef := kitex.UseRef[dom.Node](nil)
+	docFunc := kitex.UseDocument()
+	doc := docFunc()
+
+	acState := props.Controller.Use()
+
+	kitex.UseEffectCleanup(func() func() {
+		node := elRef.Current
+		log.Info("AutocompleteOverlay UseEffectCleanup: evaluate", log.Bool("isOpen", acState.IsOpen), log.Bool("hasNode", node != nil))
+		if node != nil && doc != nil && acState.IsOpen {
+			elVal := node.(dom.Element)
+			log.Info("AutocompleteOverlay ShowOverlay: register overlay")
+			doc.ShowOverlay(elVal, 999)
+			return func() {
+				log.Info("AutocompleteOverlay ShowOverlay cleanup: HideOverlay")
+				doc.HideOverlay(elVal)
+			}
+		}
+		return nil
+	}, []any{elRef.Current, acState.IsOpen})
+
+	// Restore focus to input anchor when autocomplete closes
+	kitex.UseEffect(func() {
+		log.Info("AutocompleteOverlay Focus UseEffect: check", log.Bool("isOpen", acState.IsOpen))
+		if !acState.IsOpen {
+			inputAnchor := props.InputAnchor
+			if inputAnchor == nil {
+				inputAnchor = props.Anchor
+			}
+			if inputAnchor != nil && doc != nil {
+				log.Info("AutocompleteOverlay Focus UseEffect: calling Focus")
+				doc.Focus(inputAnchor)
+			}
+		}
+	}, []any{acState.IsOpen})
+
+	var marginLeft int
+	var marginTop int
+	display := style.DisplayFlex
+
+	if !acState.IsOpen {
+		display = style.DisplayNone
+	} else if props.Anchor != nil {
+		if rect, ok := props.Anchor.GetBoundingClientRect(); ok {
+			inputAnchor := props.InputAnchor
+			if inputAnchor == nil {
+				inputAnchor = props.Anchor
+			}
+
+			var cursorX int
+			var cursorY int
+			if cs, ok := inputAnchor.(interface{ CursorState() cursor.State }); ok {
+				cursorState := cs.CursorState()
+				cursorX = cursorState.X
+				cursorY = cursorState.Y
+			}
+
+			var inputRect geom.Rect
+			if ir, ok := inputAnchor.GetBoundingClientRect(); ok {
+				inputRect = ir
+			} else {
+				inputRect = rect
+			}
+
+			var docWidth int
+			var docHeight int
+			if doc != nil {
+				if view := doc.DefaultView(); view != nil {
+					sz := view.ViewportSize()
+					docWidth = sz.Width
+					docHeight = sz.Height
+				}
+			}
+
+			menuWidth := 58
+
+			// Dynamic Height Calculation (includes border + title box + list items):
+			numItems := len(acState.FilteredItems)
+			if numItems > 8 {
+				numItems = 8
+			}
+			menuHeight := numItems + 4
+
+			// Get the cursor offset from inputAnchor
+			var cursorOffset int
+			if sr, ok := inputAnchor.(interface{ SelectionRange() (int, int) }); ok {
+				start, _ := sr.SelectionRange()
+				cursorOffset = start
+			} else {
+				cursorOffset = len(props.Value)
+			}
+
+			startIdx := autocomplete.FindTriggerStart(props.Value, cursorOffset)
+			marginLeft = inputRect.Origin.X + cursorX - (cursorOffset - startIdx)
+
+			// Horizontal boundary flipping/clamping
+			if docWidth > 0 && marginLeft+menuWidth > docWidth {
+				marginLeft = docWidth - menuWidth - 1
+			}
+			if marginLeft < 0 {
+				marginLeft = 0
+			}
+
+			// Vertical placement: default below the cursor line (+1)
+			cursorLineY := inputRect.Origin.Y + cursorY
+			marginTop = cursorLineY + 1
+			if docHeight > 0 && marginTop+menuHeight > docHeight {
+				// Flip: place completely above the cursor line
+				marginTop = cursorLineY - menuHeight
+			}
+			if marginTop < 0 {
+				marginTop = 0
+			}
+		}
+	}
+
+	return kitex.Box(kitex.BoxProps{
+		Ref: elRef,
+		Style: style.S().
+			Display(display).
+			MarginLeft(marginLeft).
+			MarginTop(marginTop).
+			Width(style.Cells(58)).
+			FlexDirection(style.FlexColumn).
+			Background(color.Transparent),
+	}, props.Children...)
 })

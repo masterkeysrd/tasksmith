@@ -49,9 +49,14 @@ type JournalEntry struct {
 type FileEvent struct {
 	Path      string     `json:"path"` // workspace-relative
 	Kind      ChangeKind `json:"kind"`
-	Hash      string     `json:"hash"` // SHA-256 hash computed once by the notifier
+	Hash      string     `json:"hash"`             // SHA-256 hash computed once by the notifier
 	Source    string     `json:"source,omitempty"` // ID of the session that wrote it, or empty/"watcher"
 	Timestamp time.Time  `json:"timestamp"`
+}
+
+type SearchResult struct {
+	Path  string
+	IsDir bool
 }
 
 // WorkspaceTracker monitors the workspace filesystem, caches filenames, and acts as a pub/sub broker.
@@ -62,7 +67,7 @@ type WorkspaceTracker interface {
 	Stop() error
 
 	// Autocomplete & Search lookup from the filename cache
-	Search(query string) []string
+	Search(query string) []SearchResult
 
 	// Pub/Sub subscription for file changes
 	SubscribeSession(sessionID string) (<-chan FileEvent, func())

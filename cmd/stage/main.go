@@ -5,15 +5,15 @@ import (
 	"image/color"
 	"log/slog"
 	"os"
-	"strconv"
+	"strings"
 	"time"
 
 	"github.com/masterkeysrd/kite/dom"
 	"github.com/masterkeysrd/kite/event"
-	"github.com/masterkeysrd/kite/geom"
 	"github.com/masterkeysrd/kite/extras/kitex"
 	"github.com/masterkeysrd/kite/extras/stage"
-	"github.com/masterkeysrd/kite/key"
+	"github.com/masterkeysrd/kite/extras/wind"
+	"github.com/masterkeysrd/kite/geom"
 	kitelog "github.com/masterkeysrd/kite/log"
 	"github.com/masterkeysrd/kite/style"
 	"github.com/masterkeysrd/loom/message"
@@ -36,6 +36,9 @@ func main() {
 
 	stg := stage.New()
 
+	// Initialize the wind client once for the stage playground to prevent cache resetting on re-renders
+	stageWindClient := wind.NewClient()
+
 	// Register global controls (toolbar items)
 	stg.GlobalSelect("Theme", []string{"tokyo-night", "solarized", "github-dark"}, "tokyo-night")
 
@@ -44,7 +47,9 @@ func main() {
 		themeName := c.GlobalString("Theme", "tokyo-night")
 		_ = theme.Set(themeName)
 
-		return theme.Provider(theme.Props{}, n)
+		return wind.Provider(wind.ProviderProps{Client: stageWindClient},
+			theme.Provider(theme.Props{}, n),
+		)
 	})
 
 	// 2. Register Component scenes
@@ -193,9 +198,46 @@ func main() {
 				value, setValue := kitex.UseState("")
 				cursorPos, setCursorPos := kitex.UseState(0)
 
-				// Instantiate autocomplete controller with dummy suggestions
-				dummyProvider := autocomplete.NewDummyProvider()
-				ctrl := autocomplete.NewController(dummyProvider)
+				// Initialize mock autocomplete plugin once for the demo
+				kitex.UseMemo(func() any {
+					mockPlugin := autocomplete.NewPlugin(autocomplete.Deps{
+						Sources: []autocomplete.Source{
+							autocomplete.NewFileSource(func(query string) []autocomplete.FileSearchResult {
+								files := []autocomplete.FileSearchResult{
+									{Path: "cmd/tasksmith/main.go", IsDir: false},
+									{Path: "internal/tui/app.go", IsDir: false},
+									{Path: "internal/tui/widgets/autocomplete_menu.go", IsDir: false},
+									{Path: "internal/filetrack", IsDir: true},
+								}
+								var matches []autocomplete.FileSearchResult
+								for _, f := range files {
+									if query == "" || strings.Contains(strings.ToLower(f.Path), strings.ToLower(query)) {
+										matches = append(matches, f)
+									}
+								}
+								return matches
+							}),
+						},
+					})
+					autocomplete.SetPlugin(mockPlugin)
+					return nil
+				}, nil)
+
+				// Instantiate autocomplete controller once
+				ctrl := kitex.UseMemo(func() *autocomplete.Controller {
+					return autocomplete.New(autocomplete.Config{
+						Triggers: map[string][]string{
+							"@": {"file", "lsp", "skill"},
+							"/": {"command"},
+						},
+						Prefixes: map[string]string{
+							"@file:":  "file",
+							"@sym:":   "lsp",
+							"@skill:": "skill",
+						},
+					})
+				}, nil)
+				state := ctrl.Use()
 
 				applySuggestion := func(item autocomplete.Item) {
 					newText, newCursor := ctrl.ApplySelection(value(), cursorPos(), item)
@@ -213,16 +255,15 @@ func main() {
 				}
 
 				menu := kitex.Empty()
-				if ctrl.GetIsOpen() && inputRef.Current != nil {
+				if state.IsOpen && inputRef.Current != nil {
 					menu = kitex.Overlay(kitex.OverlayProps{
 						Anchor:    inputRef.Current,
 						Placement: geom.PlacementBottom,
 						Flip:      true,
 						ZIndex:    100,
 					}, widgets.AutocompleteMenu(widgets.AutocompleteMenuProps{
-						Items:         ctrl.GetFiltered(),
-						SelectedIndex: ctrl.GetSelectedIndex(),
-						OnSelect:      applySuggestion,
+						Controller: ctrl,
+						OnSelect:   applySuggestion,
 					}))
 				}
 
@@ -240,14 +281,32 @@ func main() {
 						Style: style.S().Width(style.Cells(60)).Display(style.DisplayFlex).FlexDirection(style.FlexColumn).Gap(1),
 					},
 						kitex.Text("Autocomplete Playground (Type @ or / to activate)"),
-						components.Input(components.InputProps{
+						kitex.Input(kitex.InputProps{
 							Ref:         inputRef,
 							Value:       value(),
 							Placeholder: "Type: @file, @sym, @skill, or /cmd...",
-							Variant:     components.InputOutline,
-							Style:       style.S().Width(style.Percent(100)),
-							OnChange: func(val string) {
-								setValue(val)
+							Style: style.S().
+								Width(style.Percent(100)).
+								Background(color.RGBA{R: 20, G: 24, B: 34, A: 255}).
+								Foreground(color.RGBA{R: 235, G: 238, B: 255, A: 255}).
+								Border(style.SingleBorder().Color(color.RGBA{R: 88, G: 104, B: 150, A: 255})).
+								Padding(0, 1),
+							OnChange: func(e event.Event) {
+								if ie, ok := e.(*event.InputEvent); ok {
+									setValue(ie.Value)
+									var cursorOffset int
+									if inputRef.Current != nil {
+										if sr, ok := inputRef.Current.(interface{ SelectionRange() (int, int) }); ok {
+											start, _ := sr.SelectionRange()
+											cursorOffset = start
+										} else {
+											cursorOffset = len(ie.Value)
+										}
+									} else {
+										cursorOffset = len(ie.Value)
+									}
+									ctrl.HandleOnChange(ie.Value, cursorOffset)
+								}
 							},
 							OnKeyDown: func(e event.Event) {
 								ke, ok := e.(*event.KeyEvent)
@@ -255,46 +314,12 @@ func main() {
 									return
 								}
 
-								// Intercept autocomplete controls if open
-								if ctrl.InterceptKey(ke) {
+								// Intercept autocomplete keyboard controls
+								if ctrl.HandleOnKeyDown(ke, value(), setValue) {
 									e.PreventDefault()
 									e.StopPropagation()
 									return
 								}
-
-								// Apply suggestion on Enter
-								if ctrl.GetIsOpen() && ke.Code == key.KeyEnter {
-									items := ctrl.GetFiltered()
-									if len(items) > 0 {
-										applySuggestion(items[ctrl.GetSelectedIndex()])
-									}
-									e.PreventDefault()
-									e.StopPropagation()
-									return
-								}
-
-								// Capture selection offset and check trigger on next tick
-								kitex.PostMacro(func() {
-									if inputRef.Current != nil {
-										offset := 0
-										if sel, ok := inputRef.Current.Attribute("selectionStart"); ok {
-											if val, err := strconv.Atoi(sel); err == nil {
-												offset = val
-											}
-										} else {
-											offset = len(value())
-										}
-										setCursorPos(offset)
-
-										// Check trigger boundaries
-										if word, triggerMatched := ctrl.CheckTrigger(value(), offset); triggerMatched {
-											ctrl.SetQuery(word)
-											ctrl.SetIsOpen(true)
-										} else {
-											ctrl.SetIsOpen(false)
-										}
-									}
-								})
 							},
 						}),
 						menu,

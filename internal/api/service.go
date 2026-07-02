@@ -20,6 +20,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/agent/tools"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	"github.com/masterkeysrd/tasksmith/internal/core/lsp"
+	"github.com/masterkeysrd/tasksmith/internal/filetrack"
 	"github.com/masterkeysrd/tasksmith/internal/mcp"
 	"github.com/masterkeysrd/tasksmith/internal/metrics"
 	"github.com/masterkeysrd/tasksmith/internal/session"
@@ -46,15 +47,23 @@ type Service struct {
 	sm           *session.Manager
 	metricsStore *metrics.Store
 	lspManager   *lsp.Manager
+	fileTracker  filetrack.WorkspaceTracker
 }
 
 // NewService creates a new API service.
-func NewService(ws Workspace, sm *session.Manager, metricsStore *metrics.Store, lspManager *lsp.Manager) *Service {
+func NewService(
+	ws Workspace,
+	sm *session.Manager,
+	metricsStore *metrics.Store,
+	lspManager *lsp.Manager,
+	fileTracker filetrack.WorkspaceTracker,
+) *Service {
 	return &Service{
 		ws:           ws,
 		sm:           sm,
 		metricsStore: metricsStore,
 		lspManager:   lspManager,
+		fileTracker:  fileTracker,
 	}
 }
 

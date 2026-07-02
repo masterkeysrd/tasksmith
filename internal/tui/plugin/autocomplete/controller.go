@@ -7,6 +7,7 @@ import (
 	"github.com/masterkeysrd/kite/event"
 	"github.com/masterkeysrd/kite/extras/kites"
 	"github.com/masterkeysrd/kite/key"
+	"github.com/masterkeysrd/tasksmith/internal/core/log"
 )
 
 // State represents the reactive data of an autocomplete session.
@@ -78,9 +79,7 @@ func (c *Controller) SetItems(items []Item) {
 		} else {
 			s.FilteredItems = items
 		}
-		if s.SelectedIndex >= len(s.FilteredItems) {
-			s.SelectedIndex = 0
-		}
+		s.SelectedIndex = 0
 		return s
 	})
 }
@@ -166,7 +165,7 @@ func (c *Controller) InterceptKey(ke *event.KeyEvent) bool {
 	if len(items) == 0 {
 		if ke.Code == key.KeyEscape {
 			c.SetIsOpen(false)
-			return true
+			return false
 		}
 		return false
 	}
@@ -206,4 +205,68 @@ func FindTriggerStart(text string, cursorOffset int) int {
 		}
 	}
 	return 0
+}
+
+// HandleOnChange updates the query and open status based on text and cursor position.
+func (c *Controller) HandleOnChange(val string, cursorOffset int) {
+	triggerWord, matched := c.CheckTrigger(val, cursorOffset)
+	if matched {
+		c.SetQuery(triggerWord)
+		state := c.store.Get()
+
+		// Check if we matched a non-empty trigger
+		hasNonEmptyTrigger := false
+		start := FindTriggerStart(val, cursorOffset)
+		if start != -1 {
+			word := val[start:cursorOffset]
+			for trig := range c.triggers {
+				if trig != "" && strings.HasPrefix(word, trig) {
+					hasNonEmptyTrigger = true
+					break
+				}
+			}
+		}
+
+		if hasNonEmptyTrigger || state.IsOpen {
+			c.SetIsOpen(true)
+		} else {
+			c.SetIsOpen(false)
+		}
+	} else {
+		c.SetIsOpen(false)
+	}
+}
+
+// HandleOnKeyDown intercepts keys (arrows/Esc/Tab/Enter) if autocomplete is open.
+// It returns true if the event was handled and default action should be prevented.
+func (c *Controller) HandleOnKeyDown(ke *event.KeyEvent, currentValue string, onChange func(string)) bool {
+	state := c.store.Get()
+	log.Info("HandleOnKeyDown called", log.Bool("isOpen", state.IsOpen), log.Int("code", int(ke.Code)))
+	if !state.IsOpen {
+		return false
+	}
+
+	// Intercept Enter/Tab to select
+	if ke.Code == key.KeyEnter || ke.Text == "\r" || ke.Text == "\n" || ke.Code == key.KeyTab {
+		items := state.FilteredItems
+		idx := state.SelectedIndex
+		log.Info("HandleOnKeyDown: Enter/Tab pressed", log.Int("itemsCount", len(items)), log.Int("selectedIndex", idx))
+		if len(items) > 0 && idx >= 0 && idx < len(items) {
+			selectedItem := items[idx]
+			newText, _ := c.ApplySelection(currentValue, len(currentValue), selectedItem)
+			log.Info("HandleOnKeyDown: applying selection", log.String("selected", selectedItem.Label))
+			if onChange != nil {
+				onChange(newText)
+			}
+			c.SetIsOpen(false)
+			return true
+		} else {
+			log.Info("HandleOnKeyDown: no items to select, closing")
+			c.SetIsOpen(false)
+			return false
+		}
+	}
+
+	// Intercept navigation
+	return c.InterceptKey(ke)
 }
