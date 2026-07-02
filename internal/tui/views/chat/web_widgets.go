@@ -110,11 +110,11 @@ var WebSearchToolWidget = kitex.FC("WebSearchToolWidget", func(props ToolExecuti
 				)
 			} else {
 				var sb strings.Builder
-				sb.WriteString(fmt.Sprintf("## Search Results for %q\n\n", query))
+				fmt.Fprintf(&sb, "## Search Results for %q\n\n", query)
 				for i, res := range results {
-					sb.WriteString(fmt.Sprintf("### %d. %s\n", i+1, res.Title))
-					sb.WriteString(fmt.Sprintf("*URL: [%s](%s)*\n\n", res.Url, res.Url))
-					sb.WriteString(fmt.Sprintf("> %s\n\n", res.Snippet))
+					fmt.Fprintf(&sb, "### %d. %s\n", i+1, res.Title)
+					fmt.Fprintf(&sb, "*URL: [%s](%s)*\n\n", res.Url, res.Url)
+					fmt.Fprintf(&sb, "> %s\n\n", res.Snippet)
 				}
 				props.OnViewPreview(
 					fmt.Sprintf("Web Search Results for %q", query),
@@ -157,7 +157,7 @@ var WebFetchToolWidget = kitex.FC("WebFetchToolWidget", func(props ToolExecution
 	var mimeType string
 	var isBinary bool
 	var title string
-	var displayTarget string = url
+	var displayTarget = url
 
 	if tm != nil {
 		vOut, ok := parseWebFetchStructuredOutput(tm.StructuredContent)
@@ -389,22 +389,22 @@ var DownloadToolWidget = kitex.FC("DownloadToolWidget", func(props ToolExecution
 				)
 			} else {
 				var sb strings.Builder
-				sb.WriteString(fmt.Sprintf("## Download Details for %s\n\n", filepath.Base(urlVal)))
-				sb.WriteString(fmt.Sprintf("- **URL**: %s\n", urlVal))
-				sb.WriteString(fmt.Sprintf("- **Destination**: %s\n", finalDest))
+				fmt.Fprintf(&sb, "## Download Details for %s\n\n", filepath.Base(urlVal))
+				fmt.Fprintf(&sb, "- **URL**: %s\n", urlVal)
+				fmt.Fprintf(&sb, "- **Destination**: %s\n", finalDest)
 				if bgTaskStr != "" {
-					sb.WriteString(fmt.Sprintf("- **Background Task ID**: %s\n", bgTaskStr))
+					fmt.Fprintf(&sb, "- **Background Task ID**: %s\n", bgTaskStr)
 				}
 				if sizeStr != "" && bgTaskStr == "" {
-					sb.WriteString(fmt.Sprintf("- **Size**: %s\n", sizeStr))
+					fmt.Fprintf(&sb, "- **Size**: %s\n", sizeStr)
 				}
 				statusStr := "Failed"
 				if successVal {
 					statusStr = "Success"
 				}
-				sb.WriteString(fmt.Sprintf("- **Status**: %s\n", statusStr))
+				fmt.Fprintf(&sb, "- **Status**: %s\n", statusStr)
 				if detailsMsg != "" {
-					sb.WriteString(fmt.Sprintf("- **Message**: %s\n", detailsMsg))
+					fmt.Fprintf(&sb, "- **Message**: %s\n", detailsMsg)
 				}
 				props.OnViewPreview(
 					fmt.Sprintf("Downloaded %s", filepath.Base(urlVal)),

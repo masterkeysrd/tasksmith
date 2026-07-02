@@ -292,7 +292,7 @@ func renderLsPreview(t *theme.Scheme, payload map[string]any, previewData previe
 			Owner:       entry.Owner,
 			Group:       entry.Group,
 			Modified:    entry.Modified,
-		}, lsPrev.Detailed, 0))
+		}, lsPrev.Detailed))
 	}
 	if lsPrev.Detailed {
 		return kitex.Table(kitex.TableProps{Style: style.S().MinWidth(style.Percent(0))},

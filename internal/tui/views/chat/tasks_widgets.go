@@ -101,15 +101,24 @@ var TasksToolWidget = kitex.FC("TasksToolWidget", func(props ToolExecutionProps)
 	tc := props.ToolCall
 	tm := props.ToolMessage
 
+	isAutoApproved := false
+	if tm != nil && tm.GetMetadata() != nil {
+		if val, ok := tm.GetMetadata()["auto_approved"].(bool); ok && val {
+			isAutoApproved = true
+		} else if val, ok := tm.GetMetadata()["auto_approved"].(string); ok && val == "true" {
+			isAutoApproved = true
+		}
+	}
+
 	action := ""
-	targetTaskId := ""
+	targetTaskID := ""
 	inputVal := ""
 	if tc != nil && len(tc.Args) > 0 {
 		if actVal, ok := tc.Args["action"]; ok {
 			action, _ = actVal.(string)
 		}
 		if tidVal, ok := tc.Args["taskId"]; ok {
-			targetTaskId, _ = tidVal.(string)
+			targetTaskID, _ = tidVal.(string)
 		}
 		if inputValVal, ok := tc.Args["input"]; ok {
 			inputVal, _ = inputValVal.(string)
@@ -212,21 +221,34 @@ var TasksToolWidget = kitex.FC("TasksToolWidget", func(props ToolExecutionProps)
 					iconNode,
 					kitex.Span(kitex.SpanProps{Style: style.S().Bold(true)}, kitex.Text(" "+statusLabel)),
 				),
-				kitex.If(isFinished && action != "kill", func() kitex.Node {
-					var label string
-					if isOpen() {
-						label = "▲ COLLAPSE"
-					} else {
-						label = "▼ EXPAND"
-					}
-					var textCol color.Color
-					if t != nil {
-						textCol = t.Color.Text.Secondary
-					}
-					return kitex.Span(kitex.SpanProps{
-						Style: style.S().Foreground(textCol),
-					}, kitex.Text(label))
-				}),
+				kitex.Box(kitex.BoxProps{
+					Style: style.S().
+						Display(style.DisplayFlex).
+						FlexDirection(style.FlexRow).
+						AlignItems(style.AlignCenter).
+						Gap(2),
+				},
+					kitex.If(isAutoApproved, func() kitex.Node {
+						return kitex.Span(kitex.SpanProps{
+							Style: style.S().Foreground(t.Color.Text.Magenta).Bold(true),
+						}, kitex.Text("[󰚩 Auto-Approved]"))
+					}),
+					kitex.If(isFinished && action != "kill", func() kitex.Node {
+						var label string
+						if isOpen() {
+							label = "▲ COLLAPSE"
+						} else {
+							label = "▼ EXPAND"
+						}
+						var textCol color.Color
+						if t != nil {
+							textCol = t.Color.Text.Secondary
+						}
+						return kitex.Span(kitex.SpanProps{
+							Style: style.S().Foreground(textCol),
+						}, kitex.Text(label))
+					}),
+				),
 			),
 			kitex.If(isOpen(), func() kitex.Node {
 				return kitex.Box(kitex.BoxProps{Style: bodyStyle},
@@ -277,13 +299,13 @@ var TasksToolWidget = kitex.FC("TasksToolWidget", func(props ToolExecutionProps)
 										startedTime = pt.Format("15:04:05")
 									}
 
-									shortId := task.TaskId
-									if len(shortId) > 12 {
-										shortId = shortId[:12] + "…"
+									shortID := task.TaskId
+									if len(shortID) > 12 {
+										shortID = shortID[:12] + "…"
 									}
 
 									taskRows = append(taskRows, kitex.TR(kitex.TRProps{},
-										kitex.TD(kitex.TDProps{Style: style.S().Foreground(t.Color.Text.Secondary).PaddingRight(1).Width(style.MaxContent)}, kitex.Text(shortId)),
+										kitex.TD(kitex.TDProps{Style: style.S().Foreground(t.Color.Text.Secondary).PaddingRight(1).Width(style.MaxContent)}, kitex.Text(shortID)),
 										kitex.TD(kitex.TDProps{Style: style.S().Foreground(statCol).PaddingRight(1).Width(style.MaxContent)}, kitex.Text(statText)),
 										kitex.TD(kitex.TDProps{Style: style.S().Foreground(t.Color.Text.Secondary).PaddingRight(1).Width(style.MaxContent)}, kitex.Text(startedTime)),
 										kitex.TD(kitex.TDProps{Style: style.S().Foreground(t.Color.Text.Primary).Width(style.Percent(100))}, kitex.Text(task.Name)),
@@ -412,7 +434,7 @@ var TasksToolWidget = kitex.FC("TasksToolWidget", func(props ToolExecutionProps)
 														modalLogText += "FULL STDERR:\n" + strings.ReplaceAll(out.StderrTail, "\t", "    ") + "\n"
 													}
 													props.OnViewPreview(
-														fmt.Sprintf("Task Logs: %s", targetTaskId),
+														fmt.Sprintf("Task Logs: %s", targetTaskID),
 														preview.DefaultTextPreview{Text: modalLogText},
 													)
 												}
