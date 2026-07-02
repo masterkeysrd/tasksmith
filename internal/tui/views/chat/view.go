@@ -695,9 +695,10 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 	composerContainerStyle := style.S().
 		PaddingHorizontal(1).
 		PaddingTop(0).
-		PaddingBottom(1).
+		PaddingBottom(0).
 		Display(style.DisplayFlex).
-		AlignItems(style.AlignCenter).
+		FlexDirection(style.FlexColumn).
+		AlignItems(style.AlignStretch).
 		Background(bgDark)
 
 	toolResponses := make(map[string]*message.Tool)
@@ -926,6 +927,34 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 					sendMessage(inputValue())
 				},
 			}),
+			func() kitex.Node {
+				var tipText string
+				if status == "running" {
+					tipText = "Press Ctrl+C to cancel execution"
+				} else if isInsert {
+					tipText = "Press <Enter> to send, <Esc> to exit"
+				} else {
+					tipText = "Press i to write, J/K to scroll, s to send queue"
+				}
+
+				var textStyle style.Style
+				if t != nil {
+					textStyle = style.S().Foreground(t.Color.Text.Tertiary)
+				}
+
+				return kitex.Box(kitex.BoxProps{
+					Style: style.S().
+						Display(style.DisplayFlex).
+						FlexDirection(style.FlexRow).
+						AlignItems(style.AlignCenter).
+						PaddingVertical(0).
+						PaddingHorizontal(1).
+						Height(style.Cells(1)).
+						Background(bgDark),
+				},
+					kitex.Span(kitex.SpanProps{Style: textStyle}, kitex.Text(tipText)),
+				)
+			}(),
 		),
 
 		// Resolution Dialog for Pending Authorizations

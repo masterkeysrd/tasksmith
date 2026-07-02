@@ -73,7 +73,7 @@ func init() {
 	keymap.Set([]mode.Mode{mode.Normal}, "h", command.ExecFunc("app:select-prev"), keymap.Context("chat"))
 	keymap.Set([]mode.Mode{mode.Normal}, "l", command.ExecFunc("app:select-next"), keymap.Context("chat"))
 	keymap.Set([]mode.Mode{mode.Normal}, "<Enter>", command.ExecFunc("app:accept"), keymap.Context("chat"))
-	keymap.Set([]mode.Mode{mode.Normal}, "x", command.ExecFunc("app:toggle-cancel"), keymap.Context("chat"))
+	keymap.Set([]mode.Mode{mode.Normal, mode.Insert}, "<C-c>", command.ExecFunc("app:toggle-cancel"), keymap.Context("chat"))
 
 	// --- View-Specific Key Mappings ---
 	keymap.Set([]mode.Mode{mode.Normal}, "d", command.ExecFunc("auth:deny"), keymap.Context("chat"))

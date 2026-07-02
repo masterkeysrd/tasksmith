@@ -752,7 +752,7 @@ var AuthorizationWidget = kitex.FC("AuthorizationWidget", func(props Authorizati
 						Color:     components.ButtonError,
 						StartIcon: icon.Exit,
 						OnClick:   func() { setShowCancelConfirmDialog(true) },
-					}, kitex.Text("Hard Cancel (x)")),
+					}, kitex.Text("Hard Cancel (Ctrl+C)")),
 				}
 
 				if req.Preview != nil {
@@ -1245,7 +1245,7 @@ var AuthorizationPreviewModal = kitex.FCC("AuthorizationPreviewModal", func(prop
 				kitex.Text(" · "),
 				renderHint(t, "D", "deny with feedback"),
 				kitex.Text(" · "),
-				renderHint(t, "x", "hard cancel"),
+				renderHint(t, "Ctrl+C", "hard cancel"),
 				kitex.Text(" · "),
 				renderHint(t, "Esc", "close"),
 			),
