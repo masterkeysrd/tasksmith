@@ -18,6 +18,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	"github.com/masterkeysrd/tasksmith/internal/core/lsp"
 	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
+	"github.com/masterkeysrd/tasksmith/internal/filetrack"
 	"github.com/masterkeysrd/tasksmith/internal/metrics"
 	"github.com/masterkeysrd/tasksmith/internal/session"
 	"github.com/masterkeysrd/tasksmith/internal/tui"
@@ -126,7 +127,16 @@ func (app *Application) Run(ctx context.Context) error {
 		}
 		return nil
 	})
-	app.api = api.NewService(app.ws, sessionMgr, metricsStore, app.lspManager)
+	// Initialize and start the global workspace tracker
+	wsTracker := filetrack.NewWorkspaceTracker(app.opts.CWD)
+	if err := wsTracker.Start(ctx); err != nil {
+		return fmt.Errorf("failed to start workspace tracker: %w", err)
+	}
+	app.AddCloser("workspaceTracker", func(ctx context.Context) error {
+		return wsTracker.Stop()
+	})
+
+	app.api = api.NewService(app.ws, sessionMgr, metricsStore, app.lspManager, wsTracker)
 
 	log.Info("Starting TaskSmith application",
 		log.String("cwd", app.opts.CWD),

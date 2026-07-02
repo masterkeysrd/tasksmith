@@ -1,79 +1,122 @@
 package autocomplete
 
 import (
-	"context"
+	"fmt"
 	"strings"
 
 	"github.com/masterkeysrd/kite/event"
-	"github.com/masterkeysrd/kite/extras/kitex"
+	"github.com/masterkeysrd/kite/extras/kites"
 	"github.com/masterkeysrd/kite/key"
 )
 
-// Controller manages the reactive state of an autocomplete session.
-type Controller struct {
-	GetQuery         func() string
-	SetQuery         func(string)
-	GetIsOpen        func() bool
-	SetIsOpen        func(bool)
-	GetSelectedIndex func() int
-	SetSelectedIndex func(int)
-	GetFiltered      func() []Item
-	SetFiltered      func([]Item)
-
-	Provider Provider
+// State represents the reactive data of an autocomplete session.
+type State struct {
+	Query         string
+	IsOpen        bool
+	SelectedIndex int
+	FilteredItems []Item
 }
 
-// NewController instantiates an Autocomplete state manager hook inside a Kitex functional component.
-func NewController(provider Provider) *Controller {
-	query, setQuery := kitex.UseState("")
-	isOpen, setIsOpen := kitex.UseState(false)
-	selectedIndex, setSelectedIndex := kitex.UseState(0)
-	filtered, setFiltered := kitex.UseState([]Item{})
+// Config defines the configurable trigger rules for the autocomplete controller.
+type Config struct {
+	Triggers map[string][]string // e.g. "@" -> ["file", "lsp", "skill"]
+	Prefixes map[string]string   // e.g. "@file:" -> "file"
+}
 
-	// Reactive effect: Filter items when the query string changes
-	kitex.UseEffect(func() {
-		q := query()
+// Controller is a pure, framework-agnostic autocomplete state machine.
+type Controller struct {
+	store    *kites.Store[State]
+	triggers map[string][]string
+	prefixes map[string]string
+}
 
-		// Strip trigger characters and namespace prefixes before querying the provider
-		strippedQuery := q
-		if strings.HasPrefix(q, "@file:") {
-			strippedQuery = strings.TrimPrefix(q, "@file:")
-		} else if strings.HasPrefix(q, "@sym:") {
-			strippedQuery = strings.TrimPrefix(q, "@sym:")
-		} else if strings.HasPrefix(q, "@skill:") {
-			strippedQuery = strings.TrimPrefix(q, "@skill:")
-		} else if strings.HasPrefix(q, "@") {
-			strippedQuery = strings.TrimPrefix(q, "@")
-		} else if strings.HasPrefix(q, "/") {
-			strippedQuery = strings.TrimPrefix(q, "/")
-		}
-
-		items, err := provider.Query(context.Background(), strippedQuery)
-		if err == nil {
-			setFiltered(items)
-		} else {
-			setFiltered([]Item{})
-		}
-
-		// Reset selection index to top on query change
-		setSelectedIndex(0)
-	}, []any{query()})
-
+// New instantiates a new Autocomplete controller.
+func New(cfg Config) *Controller {
 	return &Controller{
-		GetQuery:         query,
-		SetQuery:         setQuery,
-		GetIsOpen:        isOpen,
-		SetIsOpen:        setIsOpen,
-		GetSelectedIndex: selectedIndex,
-		SetSelectedIndex: setSelectedIndex,
-		GetFiltered:      filtered,
-		SetFiltered:      setFiltered,
-		Provider:         provider,
+		store: kites.Create(State{
+			FilteredItems: []Item{},
+		}),
+		triggers: cfg.Triggers,
+		prefixes: cfg.Prefixes,
 	}
 }
 
-// CheckTrigger scans the text cursor position for a valid autocomplete trigger.
-// Returns the active trigger word and true if matched.
+// Use registers the active functional component to re-render when the state changes.
+func (c *Controller) Use() State {
+	_ = kites.Use(c.store, func(s State) string {
+		// Re-render only when query, open status, selection index, or item count changes
+		return fmt.Sprintf("%s-%t-%d-%d", s.Query, s.IsOpen, s.SelectedIndex, len(s.FilteredItems))
+	})
+	return c.store.Get()
+}
+
+// SetQuery updates the search query.
+func (c *Controller) SetQuery(q string) {
+	c.store.Set(func(s State) State {
+		s.Query = q
+		s.SelectedIndex = 0
+		return s
+	})
+}
+
+// SetIsOpen toggles the dropdown visibility.
+func (c *Controller) SetIsOpen(open bool) {
+	c.store.Set(func(s State) State {
+		s.IsOpen = open
+		if !open {
+			s.FilteredItems = []Item{}
+		}
+		return s
+	})
+}
+
+// SetItems updates the active completions list.
+func (c *Controller) SetItems(items []Item) {
+	c.store.Set(func(s State) State {
+		if items == nil {
+			s.FilteredItems = []Item{}
+		} else {
+			s.FilteredItems = items
+		}
+		if s.SelectedIndex >= len(s.FilteredItems) {
+			s.SelectedIndex = 0
+		}
+		return s
+	})
+}
+
+// SetSelectedIndex updates the active selection row.
+func (c *Controller) SetSelectedIndex(idx int) {
+	c.store.Set(func(s State) State {
+		s.SelectedIndex = idx
+		return s
+	})
+}
+
+// Parse inspects the input query text to determine trigger match, prefix stripping, and target sources.
+func (c *Controller) Parse(q string) (strippedQuery string, sources []string, matched bool) {
+	if q == "" {
+		return "", nil, false
+	}
+
+	// 1. Check for complete, specific prefixes (e.g. "@file:main")
+	for pref, src := range c.prefixes {
+		if strings.HasPrefix(q, pref) {
+			return strings.TrimPrefix(q, pref), []string{src}, true
+		}
+	}
+
+	// 2. Check for general triggers (e.g. "@" or "/")
+	for trig, srcs := range c.triggers {
+		if strings.HasPrefix(q, trig) {
+			return strings.TrimPrefix(q, trig), srcs, true
+		}
+	}
+
+	return "", nil, false
+}
+
+// CheckTrigger scans the text cursor position for a valid trigger character.
 func (c *Controller) CheckTrigger(text string, cursorOffset int) (string, bool) {
 	if cursorOffset <= 0 || cursorOffset > len(text) {
 		return "", false
@@ -86,16 +129,17 @@ func (c *Controller) CheckTrigger(text string, cursorOffset int) (string, bool) 
 
 	word := text[start:cursorOffset]
 
-	// Trigger autocomplete on '@' (context reference) or '/' (slash command)
-	if len(word) > 0 && (strings.HasPrefix(word, "@") || strings.HasPrefix(word, "/")) {
-		return word, true
+	// Match trigger if it starts with any registered trigger trigger prefix
+	for trig := range c.triggers {
+		if strings.HasPrefix(word, trig) {
+			return word, true
+		}
 	}
 
 	return "", false
 }
 
 // ApplySelection splices the selected Item's value into the text, replacing the trigger query.
-// Returns the modified text string and the new cursor index offset.
 func (c *Controller) ApplySelection(text string, cursorOffset int, item Item) (string, int) {
 	start := FindTriggerStart(text, cursorOffset)
 	if start == -1 {
@@ -112,13 +156,13 @@ func (c *Controller) ApplySelection(text string, cursorOffset int, item Item) (s
 }
 
 // InterceptKey handles keyboard navigation (up/down/esc) when the dropdown menu is open.
-// Returns true if the key event was intercepted and processed.
 func (c *Controller) InterceptKey(ke *event.KeyEvent) bool {
-	if !c.GetIsOpen() {
+	state := c.store.Get()
+	if !state.IsOpen {
 		return false
 	}
 
-	items := c.GetFiltered()
+	items := state.FilteredItems
 	if len(items) == 0 {
 		if ke.Code == key.KeyEscape {
 			c.SetIsOpen(false)
@@ -127,7 +171,7 @@ func (c *Controller) InterceptKey(ke *event.KeyEvent) bool {
 		return false
 	}
 
-	idx := c.GetSelectedIndex()
+	idx := state.SelectedIndex
 
 	switch {
 	case ke.Code == key.KeyEscape:
