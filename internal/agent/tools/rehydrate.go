@@ -32,9 +32,18 @@ func ParseFileCacheMetadata(structured any) ([]FileCacheMetadata, bool) {
 	}
 
 	// Slow path: try unmarshalling JSON
-	data, err := json.Marshal(structured)
-	if err != nil {
-		return nil, false
+	var data []byte
+	switch v := structured.(type) {
+	case []byte:
+		data = v
+	case string:
+		data = []byte(v)
+	default:
+		var err error
+		data, err = json.Marshal(structured)
+		if err != nil {
+			return nil, false
+		}
 	}
 
 	// Try as a slice

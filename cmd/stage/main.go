@@ -2,20 +2,28 @@ package main
 
 import (
 	"fmt"
+	"image/color"
 	"log/slog"
 	"os"
+	"strconv"
 	"time"
 
+	"github.com/masterkeysrd/kite/dom"
+	"github.com/masterkeysrd/kite/event"
+	"github.com/masterkeysrd/kite/geom"
 	"github.com/masterkeysrd/kite/extras/kitex"
 	"github.com/masterkeysrd/kite/extras/stage"
+	"github.com/masterkeysrd/kite/key"
 	kitelog "github.com/masterkeysrd/kite/log"
 	"github.com/masterkeysrd/kite/style"
 	"github.com/masterkeysrd/loom/message"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	"github.com/masterkeysrd/tasksmith/internal/tui/components"
+	"github.com/masterkeysrd/tasksmith/internal/tui/plugin/autocomplete"
 	"github.com/masterkeysrd/tasksmith/internal/tui/theme"
 	"github.com/masterkeysrd/tasksmith/internal/tui/toast"
 	"github.com/masterkeysrd/tasksmith/internal/tui/views/chat"
+	"github.com/masterkeysrd/tasksmith/internal/tui/widgets"
 )
 
 func main() {
@@ -172,6 +180,130 @@ func main() {
 							c.Log("Input changed: " + val)
 						},
 					}),
+				)
+			},
+		},
+	})
+
+	stg.Register("Autocomplete", []stage.Scene{
+		{
+			Name: "Default",
+			Render: func(c *stage.Context) kitex.Node {
+				inputRef := kitex.UseRef[dom.Element](nil)
+				value, setValue := kitex.UseState("")
+				cursorPos, setCursorPos := kitex.UseState(0)
+
+				// Instantiate autocomplete controller with dummy suggestions
+				dummyProvider := autocomplete.NewDummyProvider()
+				ctrl := autocomplete.NewController(dummyProvider)
+
+				applySuggestion := func(item autocomplete.Item) {
+					newText, newCursor := ctrl.ApplySelection(value(), cursorPos(), item)
+					setValue(newText)
+					setCursorPos(newCursor)
+					ctrl.SetIsOpen(false)
+					c.Log("Applied autocomplete suggestion: " + item.Label)
+
+					// Return focus to text input
+					if inputRef.Current != nil {
+						if doc := inputRef.Current.OwnerDocument(); doc != nil {
+							doc.Focus(inputRef.Current)
+						}
+					}
+				}
+
+				menu := kitex.Empty()
+				if ctrl.GetIsOpen() && inputRef.Current != nil {
+					menu = kitex.Overlay(kitex.OverlayProps{
+						Anchor:    inputRef.Current,
+						Placement: geom.PlacementBottom,
+						Flip:      true,
+						ZIndex:    100,
+					}, widgets.AutocompleteMenu(widgets.AutocompleteMenuProps{
+						Items:         ctrl.GetFiltered(),
+						SelectedIndex: ctrl.GetSelectedIndex(),
+						OnSelect:      applySuggestion,
+					}))
+				}
+
+				return kitex.Box(kitex.BoxProps{
+					Style: style.S().
+						Padding(2).
+						Display(style.DisplayFlex).
+						FlexDirection(style.FlexColumn).
+						JustifyContent(style.JustifyCenter).
+						AlignItems(style.AlignCenter).
+						Width(style.Percent(100)).
+						Height(style.Percent(100)),
+				},
+					kitex.Box(kitex.BoxProps{
+						Style: style.S().Width(style.Cells(60)).Display(style.DisplayFlex).FlexDirection(style.FlexColumn).Gap(1),
+					},
+						kitex.Text("Autocomplete Playground (Type @ or / to activate)"),
+						components.Input(components.InputProps{
+							Ref:         inputRef,
+							Value:       value(),
+							Placeholder: "Type: @file, @sym, @skill, or /cmd...",
+							Variant:     components.InputOutline,
+							Style:       style.S().Width(style.Percent(100)),
+							OnChange: func(val string) {
+								setValue(val)
+							},
+							OnKeyDown: func(e event.Event) {
+								ke, ok := e.(*event.KeyEvent)
+								if !ok {
+									return
+								}
+
+								// Intercept autocomplete controls if open
+								if ctrl.InterceptKey(ke) {
+									e.PreventDefault()
+									e.StopPropagation()
+									return
+								}
+
+								// Apply suggestion on Enter
+								if ctrl.GetIsOpen() && ke.Code == key.KeyEnter {
+									items := ctrl.GetFiltered()
+									if len(items) > 0 {
+										applySuggestion(items[ctrl.GetSelectedIndex()])
+									}
+									e.PreventDefault()
+									e.StopPropagation()
+									return
+								}
+
+								// Capture selection offset and check trigger on next tick
+								kitex.PostMacro(func() {
+									if inputRef.Current != nil {
+										offset := 0
+										if sel, ok := inputRef.Current.Attribute("selectionStart"); ok {
+											if val, err := strconv.Atoi(sel); err == nil {
+												offset = val
+											}
+										} else {
+											offset = len(value())
+										}
+										setCursorPos(offset)
+
+										// Check trigger boundaries
+										if word, triggerMatched := ctrl.CheckTrigger(value(), offset); triggerMatched {
+											ctrl.SetQuery(word)
+											ctrl.SetIsOpen(true)
+										} else {
+											ctrl.SetIsOpen(false)
+										}
+									}
+								})
+							},
+						}),
+						menu,
+						kitex.Box(kitex.BoxProps{
+							Style: style.S().Foreground(color.RGBA{R: 120, G: 130, B: 150, A: 255}).MarginTop(1),
+						},
+							kitex.Text("Keys: Up/Down/Ctrl-N/Ctrl-P to navigate, Enter to select, Esc to close"),
+						),
+					),
 				)
 			},
 		},

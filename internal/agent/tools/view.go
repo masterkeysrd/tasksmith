@@ -1,20 +1,14 @@
 package tools
 
 import (
-	"bufio"
 	"context"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/masterkeysrd/loom/message"
-	"github.com/masterkeysrd/tasksmith/internal/core/fs"
-)
-
-const (
-	MaxTotalChars = 16000
-	MaxLineChars  = 500
+	"github.com/masterkeysrd/tasksmith/internal/agent/formatter"
+	"github.com/masterkeysrd/tasksmith/internal/agent/resolver"
 )
 
 func cleanPath(path string) string {
@@ -40,193 +34,46 @@ func cleanPath(path string) string {
 	return path
 }
 
-func normalizeSpacing(s string) string {
-	var sb strings.Builder
-	for _, r := range s {
-		if r == ' ' || r == '\u202f' || r == '\u00a0' || (r >= '\u2000' && r <= '\u200a') {
-			sb.WriteRune(' ')
-		} else {
-			sb.WriteRune(r)
-		}
-	}
-	return sb.String()
-}
-
-// View views the contents of a file.
+// View views the contents of a file by delegating to the resolver and formatter services.
 func (h *ToolHandlers) View(ctx context.Context, in ViewArgs) (ViewOutput, error) {
 	path := cleanPath(in.Path)
 
-	// If path doesn't exist, try to find a matching file in the same directory by normalizing spacing
-	if _, err := os.Stat(path); os.IsNotExist(err) {
-		dir := filepath.Dir(path)
-		base := filepath.Base(path)
-
-		normalizedBase := normalizeSpacing(base)
-		normalizedBaseLower := strings.ToLower(normalizedBase)
-
-		files, readErr := os.ReadDir(dir)
-		if readErr == nil {
-			var bestMatch string
-			for _, f := range files {
-				if !f.IsDir() {
-					normalizedName := normalizeSpacing(f.Name())
-					if normalizedName == normalizedBase {
-						bestMatch = filepath.Join(dir, f.Name())
-						break // Exact casing matches are preferred
-					}
-					if strings.ToLower(normalizedName) == normalizedBaseLower {
-						bestMatch = filepath.Join(dir, f.Name())
-					}
-				}
-			}
-			if bestMatch != "" {
-				path = bestMatch
-			}
+	// Format line bounds as a path hash anchor (e.g. #L10-L20) for the resolver
+	targetPath := path
+	if in.StartLine > 0 {
+		if in.EndLine > 0 {
+			targetPath = fmt.Sprintf("%s#L%d-L%d", targetPath, in.StartLine, in.EndLine)
+		} else {
+			targetPath = fmt.Sprintf("%s#L%d", targetPath, in.StartLine)
 		}
 	}
 
-	mimeType := fs.DetectMIMEType(path)
-	isBinary := fs.IsBinaryMIME(mimeType)
-	filename := filepath.Base(path)
-
-	var cachedPath string
-	if isBinary {
-		if h.Storage != nil {
-			file, err := os.Open(path)
-			if err != nil {
-				return ViewOutput{}, fmt.Errorf("failed to open binary file %s: %w", path, err)
-			}
-			defer file.Close()
-
-			toolCallID, _ := ctx.Value("tool_call_id").(string)
-			if toolCallID == "" {
-				toolCallID = "unknown"
-			}
-			storagePath := fmt.Sprintf("%s_%s", toolCallID, filename)
-
-			var errSave error
-			cachedPath, errSave = h.Storage.Save(ctx, storagePath, file)
-			if errSave != nil {
-				return ViewOutput{}, fmt.Errorf("failed to cache binary file: %w", errSave)
-			}
-		}
-
-		if h.FileTracker != nil {
-			baseDir := h.CWD
-			if baseDir == "" {
-				baseDir = "."
-			}
-			if baseDirAbs, errBase := filepath.Abs(baseDir); errBase == nil {
-				if absPath, errAbs := filepath.Abs(path); errAbs == nil {
-					if relPath, errRel := filepath.Rel(baseDirAbs, absPath); errRel == nil {
-						_ = h.FileTracker.RecordRead(ctx, "./"+filepath.ToSlash(relPath))
-					}
-				}
-			}
-		}
-
-		return ViewOutput{
-			Source:     path,
-			CachedPath: cachedPath,
-			MimeType:   mimeType,
-			IsBinary:   true,
-		}, nil
-	}
-
-	file, err := os.Open(path)
+	// 1. Resolve file via the core resolver
+	r := resolver.New(h.LspManager, h.CWD, h.FileTracker, h.Storage)
+	res, err := r.ResolveFile(ctx, targetPath)
 	if err != nil {
-		return ViewOutput{}, fmt.Errorf("failed to open file %s: %w", path, err)
-	}
-	defer file.Close()
-
-	if absPath, errAbs := filepath.Abs(path); errAbs == nil {
-		if h.LspManager != nil {
-			h.LspManager.NotifyFileOpened(ctx, absPath)
-		}
+		return ViewOutput{}, err
 	}
 
-	startLine := max(in.StartLine, 1)
-	endLine := in.EndLine
-
-	var lines []string
-	reader := bufio.NewReader(file)
-	currentLine := 0
-	totalChars := 0
-	truncated := false
-	lastAppendedLine := 0
-
-	for {
-		line, err := reader.ReadString('\n')
-		if len(line) > 0 {
-			currentLine++
-			if !truncated && currentLine >= startLine && (endLine == 0 || currentLine <= endLine) {
-				trimmedLine := strings.TrimSuffix(strings.TrimSuffix(line, "\n"), "\r")
-				charCount := len(trimmedLine)
-
-				var contentToAppend string
-				if charCount > MaxLineChars {
-					contentToAppend = trimmedLine[:MaxLineChars] + fmt.Sprintf(" ... [Line %d truncated: %d characters of minified/dense data]", currentLine, charCount)
-				} else {
-					contentToAppend = trimmedLine
-				}
-
-				formattedLine := fmt.Sprintf("%d | %s", currentLine, contentToAppend)
-
-				lineLength := len(formattedLine)
-				if len(lines) > 0 {
-					lineLength += 1 // for the "\n" separator
-				}
-
-				if totalChars+lineLength > MaxTotalChars {
-					truncated = true
-				} else {
-					lines = append(lines, formattedLine)
-					totalChars += lineLength
-					lastAppendedLine = currentLine
-				}
-			}
-		}
-		if err != nil {
-			break
-		}
+	fileRes, ok := res.(*resolver.ResolvedFile)
+	if !ok {
+		return ViewOutput{}, fmt.Errorf("failed to type assert ResolvedFile")
 	}
 
-	content := strings.Join(lines, "\n")
+	// 2. Formatter diagnostics list string
+	diagsStr := formatter.FormatDiagnostics(fileRes.Diagnostics)
 
-	var actualStartLine, actualEndLine int
-	if lastAppendedLine > 0 {
-		actualStartLine = startLine
-		actualEndLine = lastAppendedLine
-	}
-
-	var diagsStr string
-	if absPath, errAbs := filepath.Abs(path); errAbs == nil {
-		diagsStr = GetFileDiagnosticsString(ctx, h.LspManager, h.CWD, absPath)
-	}
-
-	if h.FileTracker != nil {
-		baseDir := h.CWD
-		if baseDir == "" {
-			baseDir = "."
-		}
-		if baseDirAbs, errBase := filepath.Abs(baseDir); errBase == nil {
-			if absPath, errAbs := filepath.Abs(path); errAbs == nil {
-				if relPath, errRel := filepath.Rel(baseDirAbs, absPath); errRel == nil {
-					_ = h.FileTracker.RecordRead(ctx, "./"+filepath.ToSlash(relPath))
-				}
-			}
-		}
-	}
-
+	// 3. Map resolver output back to the expected ViewOutput structure
 	return ViewOutput{
-		Content:     content,
-		StartLine:   actualStartLine,
-		EndLine:     actualEndLine,
-		TotalLines:  currentLine,
-		Source:      in.Path,
-		Truncated:   truncated,
-		MimeType:    mimeType,
-		IsBinary:    false,
+		Content:     formatter.FormatFileContent(fileRes.Content, fileRes.StartLine),
+		StartLine:   fileRes.StartLine,
+		EndLine:     fileRes.EndLine,
+		TotalLines:  fileRes.TotalLines,
+		Source:      fileRes.FilePath,
+		Truncated:   fileRes.Truncated,
+		MimeType:    fileRes.MimeType,
+		IsBinary:    fileRes.IsBinary,
+		CachedPath:  fileRes.CachedPath,
 		Diagnostics: diagsStr,
 	}, nil
 }
@@ -238,34 +85,21 @@ func (v ViewOutput) ToolContent() message.Content {
 			return message.Content{
 				&message.ImageBlock{
 					MIMEType: v.MimeType,
-					// Data is left as nil to prevent DB/checkpoint bloat.
-					// It will be dynamically populated (re-hydrated) when calling the LLM.
+					URL:      v.Source,
 				},
 			}
 		}
-
 		if v.MimeType == "application/pdf" {
 			return message.Content{
 				&message.DocumentBlock{
 					MIMEType: v.MimeType,
-					// Data is left as nil to prevent DB/checkpoint bloat.
-					// It will be dynamically populated (re-hydrated) when calling the LLM.
+					URL:      v.Source,
 				},
 			}
 		}
-
-		// Fallback for other documents or unsupported binaries
 		return message.Content{
 			&message.TextBlock{
 				Text: fmt.Sprintf("[Binary document: %s (%s)]", filepath.Base(v.Source), v.MimeType),
-			},
-		}
-	}
-
-	if v.TotalLines == 0 {
-		return message.Content{
-			&message.TextBlock{
-				Text: v.Content,
 			},
 		}
 	}
@@ -280,7 +114,7 @@ func (v ViewOutput) ToolContent() message.Content {
 	}
 
 	if v.Diagnostics != "" {
-		sb.WriteByte('\n')
+		sb.WriteString("\n\n")
 		sb.WriteString(v.Diagnostics)
 	}
 

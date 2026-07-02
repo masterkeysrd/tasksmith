@@ -12,6 +12,11 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/session/filetrack"
 )
 
+const (
+	MaxTotalChars = 16000
+	MaxLineChars  = 500
+)
+
 // Todo represents a single task in the agent's todo checklist.
 type Todo struct {
 	Description string `json:"description"`
