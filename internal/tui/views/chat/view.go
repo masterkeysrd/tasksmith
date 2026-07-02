@@ -786,7 +786,11 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 		),
 
 		// Message History Section
-		kitex.Box(kitex.BoxProps{Style: messagesContainerStyle, Ref: historyRef},
+		kitex.Box(kitex.BoxProps{
+			Style:      messagesContainerStyle,
+			Ref:        historyRef,
+			Attributes: map[string]string{"data-id": "history-scroller"},
+		},
 			kitex.Fragment(
 				renderBubbles(
 					messages,

@@ -319,6 +319,66 @@ var AuthorizationWidget = kitex.FC("AuthorizationWidget", func(props Authorizati
 	feedbackText, setFeedbackText := kitex.UseState("")
 	submitting, setSubmitting := kitex.UseState(false)
 
+	// Ref and Layout Effect to center the active widget vertically in the chat history container
+	elRef := kitex.CreateRef[dom.Element]()
+	kitex.UseLayoutEffect(func() {
+		if !props.IsActive {
+			return
+		}
+		node := elRef.Current
+		if node == nil {
+			return
+		}
+		doc := node.OwnerDocument()
+		if doc == nil {
+			return
+		}
+		view := doc.DefaultView()
+		if view == nil {
+			return
+		}
+
+		var scroller dom.Element
+		curr := node.Parent()
+		for curr != nil {
+			if e, ok := curr.(dom.Element); ok {
+				if val, okAttr := e.Attribute("data-id"); okAttr && val == "history-scroller" {
+					scroller = e
+					break
+				}
+			}
+			curr = curr.Parent()
+		}
+
+		if scroller != nil {
+			rectScroller, okScroller := view.GetBoundingClientRect(scroller)
+			rectWidget, okWidget := view.GetBoundingClientRect(node)
+
+			if okScroller && okWidget {
+				// Align the vertical centers of both the widget and the scroller
+				scrollerCenterY := rectScroller.Origin.Y + rectScroller.Size.Height/2
+				widgetCenterY := rectWidget.Origin.Y + rectWidget.Size.Height/2
+
+				diffY := widgetCenterY - scrollerCenterY
+
+				scrollX, scrollY := scroller.Scroll()
+				targetY := scrollY + diffY
+
+				_, maxScrollY := view.GetMaxScroll(scroller)
+				if targetY < 0 {
+					targetY = 0
+				}
+				if targetY > maxScrollY {
+					targetY = maxScrollY
+				}
+
+				if targetY != scrollY {
+					scroller.ScrollTo(scrollX, targetY)
+				}
+			}
+		}
+	}, []any{props.IsActive, focusedItem(), isProvidingFeedback()})
+
 	// Autofocus inline feedback textarea when opened
 	textareaRef := kitex.CreateRef[dom.Element]()
 	kitex.UseEffect(func() {
@@ -653,7 +713,7 @@ var AuthorizationWidget = kitex.FC("AuthorizationWidget", func(props Authorizati
 		currReqDirOptions = currReq.DirectoryOptions
 	}
 
-	return kitex.Box(kitex.BoxProps{Style: containerStyle},
+	return kitex.Box(kitex.BoxProps{Style: containerStyle, Ref: elRef},
 		kitex.Box(kitex.BoxProps{
 			Style: style.S().
 				Display(style.DisplayFlex).
