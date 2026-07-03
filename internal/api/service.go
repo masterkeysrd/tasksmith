@@ -97,6 +97,8 @@ func (s *Service) GetWorkspaceConfig(ctx context.Context, req GetWorkspaceConfig
 		DefaultProvider: cfg.DefaultProvider,
 		AuthorizedTools: cfg.AuthorizedTools,
 		IsConfigured:    cfg.IsConfigured,
+		IsTrusted:       cfg.IsTrusted,
+		HasManifest:     cfg.HasManifest,
 		CWD:             cfg.CWD,
 	}, nil
 }

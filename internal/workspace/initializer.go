@@ -23,6 +23,7 @@ type InitializationOptions struct {
 	DefaultModel     string
 	Theme            string
 	AuthorizedTools  map[string]bool
+	TrustOnly        bool // Skip file generation for local import/trust
 }
 
 // Initialize coordinates the setup process for a new workspace.
@@ -42,7 +43,7 @@ func (w *Workspace) Initialize(ctx context.Context, opts InitializationOptions) 
 		"initialized_at": time.Now().Format(time.RFC3339),
 		"workspace_path": w.cwd,
 	}
-	sentinelBytes, err := json.MarshalIndent(sentinelData, "", "  ")
+	sentinelBytes, err := json.MarshalIndent(sentinelData, "", "   ")
 	if err != nil {
 		return fmt.Errorf("failed to marshal sentinel data: %w", err)
 	}
@@ -63,7 +64,7 @@ func (w *Workspace) Initialize(ctx context.Context, opts InitializationOptions) 
 	cfgData := map[string]any{
 		"theme": opts.Theme,
 	}
-	cfgBytes, err := json.MarshalIndent(cfgData, "", "  ")
+	cfgBytes, err := json.MarshalIndent(cfgData, "", "   ")
 	if err != nil {
 		return fmt.Errorf("failed to marshal config data: %w", err)
 	}
@@ -71,6 +72,64 @@ func (w *Workspace) Initialize(ctx context.Context, opts InitializationOptions) 
 		return fmt.Errorf("failed to write theme config file: %w", err)
 	}
 
+	// 3. Handle Secrets (Always write .env to keep secrets local)
+	if opts.APIKey != "" {
+		envVarName := "API_KEY"
+		var baseProvider *warp.ModelProvider
+		for _, p := range w.ProvidersPresets() {
+			if p.Metadata.Name == opts.SelectedProvider {
+				baseProvider = p
+				break
+			}
+		}
+		if baseProvider != nil && baseProvider.Spec.Auth != nil {
+			if baseProvider.Spec.Auth.Env != "" {
+				envVarName = baseProvider.Spec.Auth.Env
+			}
+		}
+
+		envPath := filepath.Join(w.cwd, ".env")
+		envLine := fmt.Sprintf("%s=%s\n", envVarName, opts.APIKey)
+
+		// Append or write .env file
+		f, err := os.OpenFile(envPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
+		if err != nil {
+			return fmt.Errorf("failed to open .env file: %w", err)
+		}
+		if _, err := f.WriteString(envLine); err != nil {
+			f.Close()
+			return fmt.Errorf("failed to write to .env file: %w", err)
+		}
+		f.Close()
+
+		// Try to ensure .env is ignored in .gitignore
+		gitignorePath := filepath.Join(w.cwd, ".gitignore")
+		ignoreContent, err := os.ReadFile(gitignorePath)
+		hasEnv := false
+		if err == nil {
+			lines := strings.Split(string(ignoreContent), "\n")
+			for _, line := range lines {
+				if strings.TrimSpace(line) == ".env" {
+					hasEnv = true
+					break
+				}
+			}
+		}
+		if !hasEnv {
+			fGitignore, err := os.OpenFile(gitignorePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+			if err == nil {
+				_, _ = fGitignore.WriteString("\n# TaskSmith secrets\n.env\n")
+				fGitignore.Close()
+			}
+		}
+	}
+
+	// If the flow is TrustOnly, we are done! Exit without touching the repo files.
+	if opts.TrustOnly {
+		return nil
+	}
+
+	// 4. Create WORKSPACE.md (normal setup flow)
 	var allowedTools []string
 	for tool, allowed := range opts.AuthorizedTools {
 		if allowed {
@@ -88,7 +147,6 @@ func (w *Workspace) Initialize(ctx context.Context, opts InitializationOptions) 
 		}
 	}
 
-	// 3. Create WORKSPACE.md in the workspace root using warp formatting
 	wsDef := &warp.WorkspaceDef{
 		BaseResource: warp.BaseResource{
 			APIVersion: warp.APIVersion,
@@ -112,7 +170,7 @@ func (w *Workspace) Initialize(ctx context.Context, opts InitializationOptions) 
 		return fmt.Errorf("failed to write WORKSPACE.md: %w", err)
 	}
 
-	// 4. Create ./.agents/providers/<provider-name>.yaml in the workspace root
+	// 5. Create ./.agents/providers/<provider-name>.yaml in the workspace root
 	providersDir := filepath.Join(w.cwd, ".agents", "providers")
 	if err := os.MkdirAll(providersDir, 0755); err != nil {
 		return fmt.Errorf("failed to create providers directory: %w", err)
@@ -159,51 +217,6 @@ func (w *Workspace) Initialize(ctx context.Context, opts InitializationOptions) 
 	providerPath := filepath.Join(providersDir, opts.SelectedProvider+".yaml")
 	if err := os.WriteFile(providerPath, providerData, 0644); err != nil {
 		return fmt.Errorf("failed to write provider yaml: %w", err)
-	}
-
-	// 5. Secrets Management: write API Key to local .env if provided
-	if opts.APIKey != "" {
-		envVarName := "API_KEY"
-		if baseProvider != nil && baseProvider.Spec.Auth != nil {
-			if baseProvider.Spec.Auth.Env != "" {
-				envVarName = baseProvider.Spec.Auth.Env
-			}
-		}
-
-		envPath := filepath.Join(w.cwd, ".env")
-		envLine := fmt.Sprintf("%s=%s\n", envVarName, opts.APIKey)
-
-		// Append or write .env file
-		f, err := os.OpenFile(envPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
-		if err != nil {
-			return fmt.Errorf("failed to open .env file: %w", err)
-		}
-		if _, err := f.WriteString(envLine); err != nil {
-			f.Close()
-			return fmt.Errorf("failed to write to .env file: %w", err)
-		}
-		f.Close()
-
-		// Try to ensure .env is ignored in .gitignore
-		gitignorePath := filepath.Join(w.cwd, ".gitignore")
-		ignoreContent, err := os.ReadFile(gitignorePath)
-		hasEnv := false
-		if err == nil {
-			lines := strings.Split(string(ignoreContent), "\n")
-			for _, line := range lines {
-				if strings.TrimSpace(line) == ".env" {
-					hasEnv = true
-					break
-				}
-			}
-		}
-		if !hasEnv {
-			fGitignore, err := os.OpenFile(gitignorePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-			if err == nil {
-				_, _ = fGitignore.WriteString("\n# TaskSmith secrets\n.env\n")
-				fGitignore.Close()
-			}
-		}
 	}
 
 	return nil

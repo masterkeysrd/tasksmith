@@ -78,6 +78,7 @@ type ButtonProps struct {
 // It integrates with the theme system to react to theme changes.
 var Button = kitex.FCC("Button", func(props ButtonProps) kitex.Node {
 	isHovered, setIsHovered := kitex.UseState(false)
+	isFocused, setIsFocused := kitex.UseState(false)
 	t := theme.UseTheme()
 
 	if t == nil {
@@ -144,7 +145,7 @@ var Button = kitex.FCC("Button", func(props ButtonProps) kitex.Node {
 	var currentColor color.Color
 	if props.Disabled {
 		currentColor = disabled
-	} else if isHovered() {
+	} else if isHovered() || isFocused() {
 		currentColor = hover
 	} else if props.Active {
 		if focus != nil {
@@ -165,7 +166,7 @@ var Button = kitex.FCC("Button", func(props ButtonProps) kitex.Node {
 			bg = disabled
 			fg = t.Color.Text.Tertiary
 		} else if props.Color == ButtonBase {
-			if isHovered() {
+			if isHovered() || isFocused() {
 				bg = t.Color.Surface.InfoFocus
 				fg = t.Color.Surface.Primary
 			} else {
@@ -173,7 +174,7 @@ var Button = kitex.FCC("Button", func(props ButtonProps) kitex.Node {
 				fg = t.Color.Text.Secondary
 			}
 		} else {
-			if isHovered() {
+			if isHovered() || isFocused() {
 				if props.Color == ButtonInfo {
 					bg = t.Color.Surface.PrimaryPressed
 				} else {
@@ -201,7 +202,7 @@ var Button = kitex.FCC("Button", func(props ButtonProps) kitex.Node {
 		s = s.Border(style.SingleBorder().Color(currentColor)).Foreground(currentColor)
 	case ButtonText:
 		if props.Color == ButtonBase {
-			if isHovered() {
+			if isHovered() || isFocused() {
 				s = s.Foreground(t.Color.Text.Primary)
 			} else {
 				s = s.Foreground(t.Color.Text.Secondary)
@@ -215,7 +216,7 @@ var Button = kitex.FCC("Button", func(props ButtonProps) kitex.Node {
 
 	// Merge with explicit style overrides
 	s = s.Merge(props.Style)
-	if isHovered() {
+	if isHovered() || isFocused() {
 		s = s.Merge(props.HoverStyle)
 	}
 	if props.Active {
@@ -246,6 +247,12 @@ var Button = kitex.FCC("Button", func(props ButtonProps) kitex.Node {
 		},
 		OnMouseLeave: func(e event.Event) {
 			setIsHovered(false)
+		},
+		OnFocus: func(e event.Event) {
+			setIsFocused(true)
+		},
+		OnBlur: func(e event.Event) {
+			setIsFocused(false)
 		},
 	}, content...)
 })

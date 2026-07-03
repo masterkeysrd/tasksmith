@@ -196,6 +196,8 @@ type WorkspaceConfig struct {
 	DefaultProvider string
 	AuthorizedTools map[string]bool
 	IsConfigured    bool
+	IsTrusted       bool
+	HasManifest     bool
 	CWD             string
 }
 
@@ -203,35 +205,49 @@ func (w *Workspace) GetWorkspaceConfig(ctx context.Context) (WorkspaceConfig, er
 	if w.registry == nil {
 		return WorkspaceConfig{CWD: w.cwd}, nil
 	}
+
+	var hasManifest bool
+	var projectName string
+	var defaultProvider string
+	var authorizedTools map[string]bool
+
 	wsSpec := w.registry.WorkspaceSpec()
-	if wsSpec == nil || wsSpec.Def == nil || wsSpec.Synthetic {
-		return WorkspaceConfig{CWD: w.cwd}, nil
+	if wsSpec != nil && wsSpec.Def != nil && !wsSpec.Synthetic {
+		hasManifest = true
+		projectName = wsSpec.Def.Metadata.Name
+		defaultProvider = wsSpec.Def.Spec.DefaultProvider
+		if wsSpec.Def.Spec.Policies != nil && wsSpec.Def.Spec.Policies.Tools != nil {
+			authorizedTools = make(map[string]bool)
+			for _, tool := range wsSpec.Def.Spec.Policies.Tools.Include {
+				authorizedTools[tool] = true
+			}
+		}
 	}
 
-	var isConfigured bool
+	// Default project name to CWD folder base name if not defined
+	if projectName == "" {
+		projectName = filepath.Base(w.cwd)
+	}
+
+	// Always resolve local trust regardless of whether WORKSPACE.md is present
+	var isTrusted bool
 	wsDir, err := xdg.WorkspaceDir(w.cwd)
 	if err == nil {
 		sentinelPath := filepath.Join(wsDir, "setup.json")
 		if _, err := os.Stat(sentinelPath); err == nil {
-			isConfigured = true
+			isTrusted = true
 		}
 	}
 
-	cfg := WorkspaceConfig{
-		Name:            wsSpec.Def.Metadata.Name,
-		DefaultProvider: wsSpec.Def.Spec.DefaultProvider,
-		IsConfigured:    isConfigured,
+	return WorkspaceConfig{
+		Name:            projectName,
+		DefaultProvider: defaultProvider,
+		AuthorizedTools: authorizedTools,
+		IsConfigured:    isTrusted && hasManifest,
+		IsTrusted:       isTrusted,
+		HasManifest:     hasManifest,
 		CWD:             w.cwd,
-	}
-
-	if wsSpec.Def.Spec.Policies != nil && wsSpec.Def.Spec.Policies.Tools != nil {
-		cfg.AuthorizedTools = make(map[string]bool)
-		for _, tool := range wsSpec.Def.Spec.Policies.Tools.Include {
-			cfg.AuthorizedTools[tool] = true
-		}
-	}
-
-	return cfg, nil
+	}, nil
 }
 
 // ResolveAgent resolves an agent by ref within this workspace scope, applying

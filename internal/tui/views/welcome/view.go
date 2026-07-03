@@ -16,6 +16,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/tui/components/icon"
 	"github.com/masterkeysrd/tasksmith/internal/tui/queries"
 	"github.com/masterkeysrd/tasksmith/internal/tui/theme"
+	"github.com/masterkeysrd/tasksmith/internal/core/log"
 )
 
 // ViewProps defines the properties for the Welcome view.
@@ -252,14 +253,13 @@ var View = kitex.FC("WelcomeView", func(props ViewProps) kitex.Node {
 	}
 
 	// Dynamic text elements based on initialization state
-	isInitialized := false
+	isTrusted := false
+	hasManifest := false
+	projectName := "local-repo"
 	if !wsCfg.IsLoading && wsCfg.Data != nil {
-		isInitialized = wsCfg.Data.IsConfigured
-	}
-
-	initStatus := "initialized"
-	if !isInitialized {
-		initStatus = "unconfigured"
+		isTrusted = wsCfg.Data.IsTrusted
+		hasManifest = wsCfg.Data.HasManifest
+		projectName = wsCfg.Data.Name
 	}
 
 	// Prepare data lengths
@@ -267,17 +267,27 @@ var View = kitex.FC("WelcomeView", func(props ViewProps) kitex.Node {
 	if !projects.IsLoading && projects.Data != nil {
 		cnt := len(projects.Data.Projects)
 		projectCount = &cnt
+		log.Info("welcome view loaded projects", log.Int("count", cnt))
 	}
 
 	var agentCount *int
 	if !agents.IsLoading && agents.Data != nil {
 		cnt := len(agents.Data.Agents)
 		agentCount = &cnt
+		log.Info("welcome view loaded agents", log.Int("count", cnt))
+	}
+
+	if !providers.IsLoading && providers.Data != nil {
+		log.Info("welcome view loaded providers", log.Int("count", len(providers.Data.Providers)))
 	}
 
 	client := tuiapi.UseClient()
 	windClient := wind.UseClient()
 	sessions := queries.UseListSessions()
+
+	if !sessions.IsLoading && sessions.Data != nil {
+		log.Info("welcome view loaded sessions", log.Int("count", len(sessions.Data.Sessions)))
+	}
 
 	return components.Paper(components.PaperProps{
 		Color: components.PaperSurface,
@@ -298,18 +308,24 @@ var View = kitex.FC("WelcomeView", func(props ViewProps) kitex.Node {
 						Style: SubtitleStyle.Foreground(t.Color.Surface.Info),
 					}, kitex.Text("Your AI-powered task automation assistant")),
 					kitex.Box(kitex.BoxProps{Style: BadgesRowStyle},
-						kitex.Box(kitex.BoxProps{
-							Style: BadgeStyle.Foreground(t.Color.Surface.Info),
-						},
+						// Badge 1: Project Name
+						kitex.Box(kitex.BoxProps{Style: BadgeStyle.Foreground(t.Color.Surface.Info)},
 							icon.Folder,
-							kitex.Text("  tasksmith"),
+							kitex.Text("   "+projectName),
 						),
-						kitex.Box(kitex.BoxProps{
-							Style: BadgeStyle.Foreground(t.Color.Surface.Info),
-						},
-							kitex.If(isInitialized, func() kitex.Node { return icon.Checkmark }),
-							kitex.If(!isInitialized, func() kitex.Node { return icon.Alert }),
-							kitex.Text("  "+initStatus),
+						// Badge 2: Local Trust Status
+						kitex.Box(kitex.BoxProps{Style: BadgeStyle.Foreground(t.Color.Surface.Info)},
+							kitex.If(isTrusted, func() kitex.Node { return icon.Checkmark }),
+							kitex.If(!isTrusted, func() kitex.Node { return icon.Alert }),
+							kitex.If(isTrusted, func() kitex.Node { return kitex.Text("   trusted") }),
+							kitex.If(!isTrusted, func() kitex.Node { return kitex.Text("   untrusted") }),
+						),
+						// Badge 3: Workspace Manifest Status
+						kitex.Box(kitex.BoxProps{Style: BadgeStyle.Foreground(t.Color.Surface.Info)},
+							kitex.If(hasManifest, func() kitex.Node { return icon.Shield }),
+							kitex.If(!hasManifest, func() kitex.Node { return icon.Alert }),
+							kitex.If(hasManifest, func() kitex.Node { return kitex.Text("   workspace.md") }),
+							kitex.If(!hasManifest, func() kitex.Node { return kitex.Text("   no-workspace.md") }),
 						),
 					),
 				),
