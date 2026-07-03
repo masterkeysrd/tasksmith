@@ -445,7 +445,7 @@ func (h *ToolHandlers) Bash(ctx context.Context, in BashArgs) (tool.ToolStream, 
 					stderrSoFar := readAndTruncateBgLog(task.StderrPath)
 
 					var content message.Content
-					hintText := fmt.Sprintf("\nCommand is running in the background (Task ID: %s).\nTo manage or monitor this task, you must use the 'tasks' tool (e.g., action: 'status' or 'kill' with taskId: '%s').\n", task.ID, task.ID)
+					hintText := fmt.Sprintf("\n<background_task task_id=\"%s\" status=\"running\">\nYou do not need to poll this task's status. The system will automatically notify you when it finishes. You can continue with other work, or stop calling tools to wait.\n</background_task>\n", task.ID)
 					content = append(content, &message.TextBlock{Text: hintText})
 
 					// Yield background status chunk
@@ -475,8 +475,9 @@ func (o BashOutput) TextContent() string {
 
 	switch o.Status {
 	case "running":
-		fmt.Fprintf(&sb, "Command is running in the background (Task ID: %s).\n", o.TaskId)
-		fmt.Fprintf(&sb, "To manage or monitor this task, you must use the 'tasks' tool (e.g., action: 'status' or 'kill' with taskId: '%s').\n", o.TaskId)
+		fmt.Fprintf(&sb, "<background_task task_id=\"%s\" status=\"running\">\n", o.TaskId)
+		sb.WriteString("You do not need to poll this task's status. The system will automatically notify you when it finishes. You can continue with other work, or stop calling tools to wait.\n")
+		sb.WriteString("</background_task>\n")
 	case "completed":
 		fmt.Fprintf(&sb, "Command completed successfully (exit code %d).\n", o.ExitCode)
 	case "failed":

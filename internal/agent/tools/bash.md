@@ -54,7 +54,7 @@ Execute a bash command. If the command takes longer than `wait_ms`, it transitio
 
 <scheduling>
 - For long-running processes (dev servers, watchers, builds), set a low `wait_ms` (e.g. 1000–3000) to transition quickly.
-- Use the `tasks` tool to monitor (`status`), list (`list`), or terminate (`kill`) background tasks.
+- You will be automatically notified and woken up when background tasks finish. Use the `tasks` tool to send input, list running tasks, or manually terminate them. Do not poll or query status repeatedly to wait for completion.
 </scheduling>
 
 <cross_platform>

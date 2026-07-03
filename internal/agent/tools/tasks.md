@@ -88,13 +88,13 @@ Manage and monitor background tasks created by the `bash` tool.
 </actions>
 
 <when_to_use>
-- After launching a long-running command with `bash`, use `status` to check progress or wait for completion.
+- Use `status` to inspect intermediate logs or stdin of an actively running task, or check the final output of a completed/failed task.
 - Use `list` to get an overview of all running and finished tasks before starting new ones.
 - Use `kill` to stop a task that is stuck, no longer needed, or producing errors.
 </when_to_use>
 
 <guidelines>
-- Do not poll `status` in a tight loop; wait for output or a reasonable interval before checking again.
+- The system will automatically notify you and wake you up when a background task finishes. Do NOT poll or query `status` in a loop to wait for completion. Simply stop calling tools (or perform other work) and wait for the system notification.
 - A task with status `completed` and `exitCode` != 0 means it finished with an error — check `stderrTail` for details.
 - `taskId` is returned by `bash` when a command transitions to background; always save it if you need to track the task.
 </guidelines>
