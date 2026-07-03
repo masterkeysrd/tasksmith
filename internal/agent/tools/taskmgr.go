@@ -276,7 +276,7 @@ func (tm *TaskManager) KillTask(taskID string) error {
 	return nil
 }
 
-// ReadLog returns the tail of the log file for stdout or stderr.
+// ReadLog returns the tail of the log file for stdout or stderr, applying safety budgets.
 func (tm *TaskManager) ReadLog(taskID string, isStderr bool, limitLines int) (string, error) {
 	tm.mu.RLock()
 	t, ok := tm.tasks[taskID]
@@ -306,33 +306,107 @@ func (tm *TaskManager) ReadLog(taskID string, isStderr bool, limitLines int) (st
 		return "", nil
 	}
 
-	// Estimate how many bytes we need to read from the end.
-	// Average line length ~100-200 chars.
-	// We'll read (limitLines * bytesPerLineEstimate) bytes or the whole file, whichever is smaller.
-	readSize := int64(limitLines) * bytesPerLineEstimate
-	if readSize > info.Size() || readSize <= 0 {
-		readSize = info.Size()
+	const maxTotalChars = 16000
+
+	if limitLines <= 0 {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return "", err
+		}
+		return applyLogBudget(string(data), 0, maxTotalChars), nil
 	}
 
-	offset := info.Size() - readSize
-	_, err = file.Seek(offset, io.SeekStart)
-	if err != nil {
-		return "", err
+	const chunkSize = 4096
+	var contentBytes []byte
+	fileSize := info.Size()
+	offset := fileSize
+	newlinesFound := 0
+
+	for offset > 0 && newlinesFound <= limitLines {
+		currentReadSize := int64(chunkSize)
+		if offset < currentReadSize {
+			currentReadSize = offset
+		}
+		offset -= currentReadSize
+
+		_, err = file.Seek(offset, io.SeekStart)
+		if err != nil {
+			return "", err
+		}
+
+		buf := make([]byte, currentReadSize)
+		n, err := file.Read(buf)
+		if err != nil && err != io.EOF {
+			return "", err
+		}
+		buf = buf[:n]
+
+		// Count newlines in this chunk from right to left
+		for i := len(buf) - 1; i >= 0; i-- {
+			if buf[i] == '\n' {
+				newlinesFound++
+				if newlinesFound > limitLines {
+					// Found enough lines, trim start of buf to after this newline
+					buf = buf[i+1:]
+					break
+				}
+			}
+		}
+
+		contentBytes = append(buf, contentBytes...)
 	}
 
-	contentBytes := make([]byte, readSize)
-	n, err := file.Read(contentBytes)
-	if err != nil && err != io.EOF {
-		return "", err
-	}
-	content := string(contentBytes[:n])
+	content := string(contentBytes)
+	return applyLogBudget(content, limitLines, maxTotalChars), nil
+}
+
+// applyLogBudget trims the suffix newlines, cuts individual lines exceeding MaxLogLineChars,
+// and ensures the overall returned content stays under maxTotalChars by keeping newest lines first.
+func applyLogBudget(content string, limitLines int, maxTotalChars int) string {
+	content = strings.TrimSuffix(content, "\n")
+	content = strings.TrimSuffix(content, "\r")
 
 	lines := strings.Split(content, "\n")
 	if limitLines > 0 && len(lines) > limitLines {
 		lines = lines[len(lines)-limitLines:]
 	}
 
-	return strings.Join(lines, "\n"), nil
+	const maxLogLineChars = 500
+
+	var formattedLines []string
+	totalChars := 0
+	truncated := false
+
+	for i := len(lines) - 1; i >= 0; i-- {
+		line := lines[i]
+		charCount := len(line)
+
+		var formattedLine string
+		if charCount > maxLogLineChars {
+			formattedLine = line[:maxLogLineChars] + fmt.Sprintf(" ... [Line truncated: %d characters omitted]", charCount-maxLogLineChars)
+		} else {
+			formattedLine = line
+		}
+
+		lineLength := len(formattedLine)
+		if len(formattedLines) > 0 {
+			lineLength += 1 // account for "\n"
+		}
+
+		if totalChars+lineLength > maxTotalChars {
+			truncated = true
+			break
+		}
+
+		formattedLines = append([]string{formattedLine}, formattedLines...)
+		totalChars += lineLength
+	}
+
+	result := strings.Join(formattedLines, "\n")
+	if truncated {
+		result = "[... logs truncated due to size limits ...]\n" + result
+	}
+	return result
 }
 
 // WriteStdin writes the provided data to the task's standard input.
