@@ -26,7 +26,23 @@ type ComposerProps struct {
 	Ref       kitex.Ref[dom.Element]
 	OnChange  func(string)
 	OnKeyDown func(event.Event)
-	OnSubmit  func()
+	OnSubmit  func(text string, refs []resolver.Reference)
+}
+
+// resourceTypeFromKind maps an autocomplete Item.Kind to the corresponding
+// resolver.ResourceType. It provides a shared mapping between the autocomplete
+// system and the reference tracker.
+func resourceTypeFromKind(kind string) resolver.ResourceType {
+	switch kind {
+	case "file", "FILE":
+		return resolver.TypeFile
+	case "function", "struct", "method", "variable", "lsp", "LSP":
+		return resolver.TypeSymbol
+	case "skill", "SKILL":
+		return resolver.TypeSkill
+	default:
+		return resolver.TypeFile
+	}
 }
 
 // Composer is a multiline composer component styled like a terminal UI box,
@@ -35,6 +51,9 @@ var Composer = kitex.FC("Composer", func(props ComposerProps) kitex.Node {
 	isFocused, setIsFocused := kitex.UseState(false)
 	wrapperRef := kitex.UseRef[dom.Element](nil)
 	t := theme.UseTheme()
+
+	// Tracked references accumulated from autocomplete selections.
+	trackedRefs, setTrackedRefs := kitex.UseState([]resolver.Reference{})
 
 	// 1. Instantiate the Autocomplete Controller once using UseMemo
 	acController := kitex.UseMemo(func() *autocomplete.Controller {
@@ -111,6 +130,20 @@ var Composer = kitex.FC("Composer", func(props ComposerProps) kitex.Node {
 			if props.OnChange != nil {
 				props.OnChange(val)
 			}
+
+			// Prune broken references: remove tracked refs whose InsertText
+			// no longer appears in the updated text.
+			current := trackedRefs()
+			var surviving []resolver.Reference
+			for _, ref := range current {
+				if strings.Contains(val, ref.InsertText) {
+					surviving = append(surviving, ref)
+				}
+			}
+			if len(surviving) != len(current) {
+				setTrackedRefs(surviving)
+			}
+
 			var cursorOffset int
 			if props.Ref != nil && props.Ref.Current != nil {
 				if sr, ok := props.Ref.Current.(interface{ SelectionRange() (int, int) }); ok {
@@ -160,7 +193,7 @@ var Composer = kitex.FC("Composer", func(props ComposerProps) kitex.Node {
 				e.PreventDefault()
 				e.StopPropagation()
 				if props.OnSubmit != nil {
-					props.OnSubmit()
+					props.OnSubmit(props.Value, trackedRefs())
 				}
 				return
 			}
@@ -238,6 +271,22 @@ var Composer = kitex.FC("Composer", func(props ComposerProps) kitex.Node {
 				if props.OnChange != nil {
 					props.OnChange(newText)
 				}
+
+				// Dedup by full path: don't append if same file already tracked.
+				newRef := resolver.Reference{
+					Type:        resourceTypeFromKind(item.Kind),
+					Value:       item.ID,
+					InsertText:  item.InsertValue,
+					FromTracker: true,
+				}
+				current := trackedRefs()
+				for _, ref := range current {
+					if ref.Type == newRef.Type && ref.Value == newRef.Value {
+						return // already tracked
+					}
+				}
+				setTrackedRefs(append(current, newRef))
+
 				acController.SetIsOpen(false)
 			},
 		})),
@@ -245,9 +294,13 @@ var Composer = kitex.FC("Composer", func(props ComposerProps) kitex.Node {
 		kitex.Box(wrapperProps,
 			kitex.TextArea(textareaProps),
 			components.Button(components.ButtonProps{
-				Variant:    components.ButtonText,
-				Disabled:   isSendDisabled,
-				OnClick:    props.OnSubmit,
+				Variant:  components.ButtonText,
+				Disabled: isSendDisabled,
+				OnClick: func() {
+					if props.OnSubmit != nil {
+						props.OnSubmit(props.Value, trackedRefs())
+					}
+				},
 				Style:      btnStyle,
 				HoverStyle: btnHoverStyle,
 			}, icon.MoveUp),

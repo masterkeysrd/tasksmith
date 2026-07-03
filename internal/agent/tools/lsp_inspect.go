@@ -547,7 +547,7 @@ func (o LspInspectOutput) TextContent() string {
 		fmt.Fprintf(&sb, "%d total", r.ReferencesTotal)
 		sb.WriteString("):\n")
 		for _, ref := range r.References {
-			sb.WriteString("- `" + ref + "`\n")
+			fmt.Fprintf(&sb, "- `%s`\n", ref)
 		}
 		sb.WriteString("\n")
 	}
@@ -556,7 +556,7 @@ func (o LspInspectOutput) TextContent() string {
 		fmt.Fprintf(&sb, "%d total", r.ImplementationsTotal)
 		sb.WriteString("):\n")
 		for _, impl := range r.Implementations {
-			sb.WriteString("- `" + impl + "`\n")
+			fmt.Fprintf(&sb, "- `%s`\n", impl)
 		}
 		sb.WriteString("\n")
 	}

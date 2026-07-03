@@ -18,6 +18,7 @@ import (
 
 	"github.com/masterkeysrd/loom/message"
 	"github.com/masterkeysrd/tasksmith/internal/agent/permissions"
+	"github.com/masterkeysrd/tasksmith/internal/agent/resolver"
 	"github.com/masterkeysrd/tasksmith/internal/api"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	"github.com/masterkeysrd/tasksmith/internal/core/preview"
@@ -501,7 +502,7 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 		lastMaxScrollY.Current = maxScrollY
 	}, []any{messagesKey})
 
-	sendMessage := func(text string, force ...bool) {
+	sendMessage := func(text string, refs []resolver.Reference, force ...bool) {
 		if text == "" || submitting() {
 			return
 		}
@@ -614,7 +615,7 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 			windClient.InvalidateQueries(api.GetSessionStateRequest{SessionID: sessionID})
 			windClient.InvalidateQueries(api.GetFileChangesRequest{SessionID: sessionID})
 			if inputValue() != "" {
-				sendMessage(inputValue(), true)
+				sendMessage(inputValue(), nil, true)
 			}
 		}, func(err error) {
 			setShowResolutionDialog(false)
@@ -646,7 +647,7 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 			windClient.InvalidateQueries(api.GetSessionStateRequest{SessionID: sessionID})
 			windClient.InvalidateQueries(api.GetFileChangesRequest{SessionID: sessionID})
 			if inputValue() != "" {
-				sendMessage(inputValue(), true)
+				sendMessage(inputValue(), nil, true)
 			}
 		}, func(err error) {
 			setShowResolutionDialog(false)
@@ -928,8 +929,8 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 				OnChange: func(val string) {
 					setInputValue(val)
 				},
-				OnSubmit: func() {
-					sendMessage(inputValue())
+				OnSubmit: func(text string, trackedRefs []resolver.Reference) {
+					sendMessage(text, trackedRefs)
 				},
 			}),
 			func() kitex.Node {
