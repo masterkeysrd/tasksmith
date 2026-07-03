@@ -292,9 +292,11 @@ var AuthorizationHybridSelector = kitex.FC("AuthorizationHybridSelector", func(p
 })
 
 type AuthorizationWidgetProps struct {
-	Request   permissions.AuthorizationRequest
-	SessionID string
-	IsActive  bool
+	Request       permissions.AuthorizationRequest
+	SessionID     string
+	IsActive      bool
+	OnDecision    func(permissions.AuthorizationDecision)
+	LocalDecision *permissions.AuthorizationDecision
 }
 
 var AuthorizationWidget = kitex.FC("AuthorizationWidget", func(props AuthorizationWidgetProps) kitex.Node {
@@ -318,6 +320,9 @@ var AuthorizationWidget = kitex.FC("AuthorizationWidget", func(props Authorizati
 	isProvidingFeedback, setIsProvidingFeedback := kitex.UseState(false)
 	feedbackText, setFeedbackText := kitex.UseState("")
 	submitting, setSubmitting := kitex.UseState(false)
+
+	currentMode := mode.Use()
+	isVisuallyActive := props.IsActive && (currentMode == mode.Normal || isProvidingFeedback())
 
 	// Ref and Layout Effect to center the active widget vertically in the chat history container
 	elRef := kitex.CreateRef[dom.Element]()
@@ -395,11 +400,23 @@ var AuthorizationWidget = kitex.FC("AuthorizationWidget", func(props Authorizati
 
 	// Decision recorder & submitter
 	submitDecision := func(approved bool, scope permissions.PermissionScope, grantDecisions []permissions.GrantDecision, reason string) {
-		setSubmitting(true)
 		setIsProvidingFeedback(false)
 		IsFeedbackActive = false
 		setFeedbackText("")
 
+		if props.OnDecision != nil {
+			props.OnDecision(permissions.AuthorizationDecision{
+				ToolCallID:      req.ToolCallID,
+				Approved:        approved,
+				Scope:           scope,
+				GrantDecisions:  grantDecisions,
+				Reason:          reason,
+				CancelExecution: false,
+			})
+			return
+		}
+
+		setSubmitting(true)
 		promise.New(func(ctx context.Context) (bool, error) {
 			_, err := client.SubmitAuthorizationDecision(ctx, api.SubmitAuthorizationDecisionRequest{
 				SessionID: props.SessionID,
@@ -503,6 +520,7 @@ var AuthorizationWidget = kitex.FC("AuthorizationWidget", func(props Authorizati
 
 	// Bind handlers to the persistent static AuthCtrl if this widget is active
 	if props.IsActive {
+		AuthCtrl.ActiveToolCallID = req.ToolCallID
 		AuthCtrl.MoveDown = func() {
 			if isProvidingFeedback() || showCancelConfirmDialog() {
 				return
@@ -674,21 +692,24 @@ var AuthorizationWidget = kitex.FC("AuthorizationWidget", func(props Authorizati
 	kitex.UseEffectCleanup(func() func() {
 		return func() {
 			if props.IsActive {
-				AuthCtrl.MoveDown = nil
-				AuthCtrl.MoveUp = nil
-				AuthCtrl.SelectPrevOption = nil
-				AuthCtrl.SelectNextOption = nil
-				AuthCtrl.Approve = nil
-				AuthCtrl.Deny = nil
-				AuthCtrl.StartFeedback = nil
-				AuthCtrl.ToggleCancelDialog = nil
-				AuthCtrl.ShowPreview = nil
+				if AuthCtrl.ActiveToolCallID == req.ToolCallID {
+					AuthCtrl.ActiveToolCallID = ""
+					AuthCtrl.MoveDown = nil
+					AuthCtrl.MoveUp = nil
+					AuthCtrl.SelectPrevOption = nil
+					AuthCtrl.SelectNextOption = nil
+					AuthCtrl.Approve = nil
+					AuthCtrl.Deny = nil
+					AuthCtrl.StartFeedback = nil
+					AuthCtrl.ToggleCancelDialog = nil
+					AuthCtrl.ShowPreview = nil
+				}
 			}
 		}
 	}, []any{props.IsActive})
 
 	borderColor := t.Color.Border.Primary
-	if props.IsActive {
+	if isVisuallyActive {
 		borderColor = t.Color.Surface.Info
 	}
 
@@ -700,7 +721,7 @@ var AuthorizationWidget = kitex.FC("AuthorizationWidget", func(props Authorizati
 		Background(t.Color.Surface.BaseHover)
 
 	titleColor := t.Color.Text.Secondary
-	if props.IsActive {
+	if isVisuallyActive {
 		titleColor = color.Color(color.RGBA{R: 224, G: 153, B: 36, A: 255})
 	}
 
@@ -731,14 +752,27 @@ var AuthorizationWidget = kitex.FC("AuthorizationWidget", func(props Authorizati
 					kitex.Span(kitex.SpanProps{Style: style.S().Foreground(titleColor)}, icon.Alert),
 					kitex.Span(kitex.SpanProps{Style: style.S().Bold(true).Foreground(titleColor)}, kitex.Text("Authorization Required")),
 				),
-				kitex.Span(kitex.SpanProps{
-					Style: style.S().Foreground(t.Color.Surface.Info).Bold(props.IsActive),
-				}, kitex.Text(func() string {
-					if props.IsActive {
-						return "● ACTIVE"
+				func() kitex.Node {
+					if props.LocalDecision != nil {
+						statusText := "● APPROVED"
+						statusColor := t.Color.Surface.Success
+						if !props.LocalDecision.Approved {
+							statusText = "● DENIED"
+							statusColor = t.Color.Text.Error
+						}
+						return kitex.Span(kitex.SpanProps{
+							Style: style.S().Foreground(statusColor).Bold(true),
+						}, kitex.Text(statusText))
 					}
-					return "○ UNFOCUSED"
-				}())),
+					return kitex.Span(kitex.SpanProps{
+						Style: style.S().Foreground(t.Color.Surface.Info).Bold(isVisuallyActive),
+					}, kitex.Text(func() string {
+						if isVisuallyActive {
+							return "● ACTIVE"
+						}
+						return "○ UNFOCUSED"
+					}()))
+				}(),
 			),
 
 			// Identity details
@@ -782,7 +816,7 @@ var AuthorizationWidget = kitex.FC("AuthorizationWidget", func(props Authorizati
 			}),
 
 			// Interactive Selector Area (only if active)
-			kitex.If(props.IsActive, func() kitex.Node {
+			kitex.If(isVisuallyActive, func() kitex.Node {
 				enterLabel := "Allow"
 				buttons := []kitex.Node{
 					components.Button(components.ButtonProps{
@@ -916,7 +950,7 @@ var AuthorizationWidget = kitex.FC("AuthorizationWidget", func(props Authorizati
 								SelectedScopeIndex:  selectedScopeIndex(),
 								SelectedOptionIndex: selectedOptionIndex(),
 								SelectedDirIndex:    selectedDirIndex(),
-								IsActive:            true,
+								IsActive:            isVisuallyActive,
 								AllowedScopes:       getAllowedScopes(req, 0),
 								OnSelectVertical:    setFocusedItem,
 								OnSelectScope:       setSelectedScopeIndex,

@@ -96,6 +96,7 @@ var View = kitex.FC("SetupView", func(props ViewProps) kitex.Node {
 	configs, setConfigs := kitex.UseState(make(map[string]ProviderForm))
 	isExited, setIsExited := kitex.UseState(false)
 	isDeclined, setIsDeclined := kitex.UseState(false)
+	overrideTrustImport, setOverrideTrustImport := kitex.UseState(false)
 
 	_, quit := command.UseCommand("quit")
 
@@ -119,7 +120,18 @@ var View = kitex.FC("SetupView", func(props ViewProps) kitex.Node {
 	}
 
 	if isDeclined() {
-		return DeclinedView(func() { setIsDeclined(false) }, func() {})
+		return DeclinedView(func() { setIsDeclined(false) }, props.OnSkip)
+	}
+
+	if !overrideTrustImport() && !wsCfg.IsLoading && wsCfg.Data != nil && wsCfg.Data.HasManifest && !wsCfg.Data.IsTrusted {
+		return TrustImportView(TrustImportProps{
+			OnComplete: props.OnComplete,
+			OnWizard:   func() { setOverrideTrustImport(true) },
+			OnSkip:     props.OnSkip,
+			OnExit:     func() { setIsExited(true) },
+			OnDecline:  func() { setIsDeclined(true) },
+			Config:     wsCfg.Data,
+		})
 	}
 
 	return components.Paper(components.PaperProps{
@@ -199,11 +211,7 @@ var View = kitex.FC("SetupView", func(props ViewProps) kitex.Node {
 					setIsDeclined(true)
 				},
 				OnExit: func() {
-					if props.OnSkip != nil {
-						props.OnSkip()
-					} else {
-						setIsExited(true)
-					}
+					setIsExited(true)
 				},
 			}),
 		),
@@ -211,6 +219,18 @@ var View = kitex.FC("SetupView", func(props ViewProps) kitex.Node {
 })
 
 func ExitedView(onRelaunch func(), onExit func()) kitex.Node {
+	return ExitedScreen(ExitedScreenProps{
+		OnRelaunch: onRelaunch,
+		OnExit:     onExit,
+	})
+}
+
+type ExitedScreenProps struct {
+	OnRelaunch func()
+	OnExit     func()
+}
+
+var ExitedScreen = kitex.FC("ExitedScreen", func(props ExitedScreenProps) kitex.Node {
 	t := theme.UseTheme()
 	whiteColor := t.Color.Text.Primary
 	if c, ok := t.Palette["white"]; ok {
@@ -250,22 +270,34 @@ func ExitedView(onRelaunch func(), onExit func()) kitex.Node {
 						Variant:    components.ButtonText,
 						Style:      style.S().Foreground(t.Color.Surface.Primary).Bold(true),
 						HoverStyle: style.S().Foreground(t.Color.Surface.PrimaryHover),
-						OnClick:    onRelaunch,
+						OnClick:    props.OnRelaunch,
 					}, kitex.Text("[ RE-LAUNCH SYSTEM SETUP ]")),
 					components.Button(components.ButtonProps{
 						Key:        "exit_app",
 						Variant:    components.ButtonText,
 						Style:      style.S().Foreground(t.Color.Surface.Error).Bold(true),
 						HoverStyle: style.S().Foreground(t.Color.Surface.ErrorHover),
-						OnClick:    onExit,
+						OnClick:    props.OnExit,
 					}, kitex.Text("[ EXIT APPLICATION ]")),
 				),
 			),
 		),
 	)
-}
+})
 
 func DeclinedView(onReturn func(), onSkip func()) kitex.Node {
+	return DeclinedScreen(DeclinedScreenProps{
+		OnReturn: onReturn,
+		OnSkip:   onSkip,
+	})
+}
+
+type DeclinedScreenProps struct {
+	OnReturn func()
+	OnSkip   func()
+}
+
+var DeclinedScreen = kitex.FC("DeclinedScreen", func(props DeclinedScreenProps) kitex.Node {
 	t := theme.UseTheme()
 	muted := style.S().Foreground(t.Color.Text.Tertiary)
 	danger := style.S().Foreground(t.Color.Surface.Error)
@@ -300,27 +332,27 @@ func DeclinedView(onReturn func(), onSkip func()) kitex.Node {
 						Variant:    components.ButtonText,
 						Style:      style.S().Foreground(t.Color.Surface.Error).Bold(true),
 						HoverStyle: style.S().Foreground(t.Color.Surface.Tertiary),
-						OnClick:    onReturn,
+						OnClick:    props.OnReturn,
 					}, kitex.Text("[ < RETURN ]")),
 					components.Button(components.ButtonProps{
 						Key:        "skip_adhoc",
 						Variant:    components.ButtonText,
 						Style:      style.S().Foreground(t.Color.Text.Tertiary).Bold(true),
 						HoverStyle: style.S().Foreground(t.Color.Text.Secondary),
-						OnClick:    onSkip,
+						OnClick:    props.OnSkip,
 					}, kitex.Text("[ IGNORE & RUN AD-HOC ]")),
 				),
 			),
 		),
 	)
-}
+})
 
 type HeaderProps struct {
 	Step    int
 	OnClose func()
 }
 
-func Header(props HeaderProps) kitex.Node {
+var Header = kitex.FC("CardHeader", func(props HeaderProps) kitex.Node {
 	t := theme.UseTheme()
 
 	success := style.S().Foreground(t.Color.Surface.Success)
@@ -389,7 +421,7 @@ func Header(props HeaderProps) kitex.Node {
 			),
 		),
 	})
-}
+})
 
 type ContentProps struct {
 	Step                int
@@ -403,7 +435,7 @@ type ContentProps struct {
 	SetConfigs          func(map[string]ProviderForm)
 }
 
-func Content(props ContentProps) kitex.Node {
+var Content = kitex.FC("CardContent", func(props ContentProps) kitex.Node {
 	t := theme.UseTheme()
 	muted := style.S().Foreground(t.Color.Text.Tertiary)
 
@@ -476,7 +508,7 @@ func Content(props ContentProps) kitex.Node {
 			),
 		),
 	)
-}
+})
 
 type FooterProps struct {
 	Step      int
@@ -488,7 +520,7 @@ type FooterProps struct {
 	OnExit    func()
 }
 
-func Footer(props FooterProps) kitex.Node {
+var Footer = kitex.FC("CardActions", func(props FooterProps) kitex.Node {
 	t := theme.UseTheme()
 
 	return components.CardActions(components.CardActionsProps{
@@ -567,7 +599,7 @@ func Footer(props FooterProps) kitex.Node {
 			),
 		),
 	)
-}
+})
 
 type TabProps struct {
 	Step        int
@@ -575,7 +607,7 @@ type TabProps struct {
 	CurrentStep int
 }
 
-func Tab(props TabProps) kitex.Node {
+var Tab = kitex.FC("Tab", func(props TabProps) kitex.Node {
 	t := theme.UseTheme()
 
 	primary := style.S().Foreground(t.Color.Surface.Primary)
@@ -599,4 +631,4 @@ func Tab(props TabProps) kitex.Node {
 	},
 		kitex.Text(fmt.Sprintf("%s %s", status, props.Label)),
 	)
-}
+})

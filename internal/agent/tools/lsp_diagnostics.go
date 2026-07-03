@@ -353,7 +353,9 @@ func GetFileDiagnosticsString(ctx context.Context, lspManager *lsp.Manager, cwd 
 	}
 
 	var sb strings.Builder
-	sb.WriteString("LSP Diagnostics:\n")
+	sb.WriteString("<lsp-diagnostics>\n")
+	sb.WriteString("Please resolve if possible:\n")
+	sb.WriteString("<diagnostics>\n")
 
 	for _, d := range outputDiags {
 		severityStr := "UNKNOWN"
@@ -371,6 +373,7 @@ func GetFileDiagnosticsString(ctx context.Context, lspManager *lsp.Manager, cwd 
 	if totalCount > MaxLspFileDiagnosticsItems {
 		sb.WriteString(fmt.Sprintf("\n*(Plus %d more diagnostics omitted for brevity)*\n", totalCount-MaxLspFileDiagnosticsItems))
 	}
-
+	sb.WriteString("</diagnostics>\n")
+	sb.WriteString("</lsp-diagnostics>")
 	return sb.String()
 }

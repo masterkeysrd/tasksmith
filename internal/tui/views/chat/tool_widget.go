@@ -185,7 +185,7 @@ var ToolExecution = kitex.FC("ToolExecution", func(props ToolExecutionProps) kit
 		log.Info(fmt.Sprintf("[TUI] ToolExecution for %q: ToolMessage is nil", props.ToolCall.Name))
 	}
 
-	if isAutoApproved && props.ToolCall.Name != "bash" {
+	if isAutoApproved && props.ToolCall.Name != "bash" && props.ToolCall.Name != "tasks" && props.ToolCall.Name != "todos" {
 		return kitex.Box(kitex.BoxProps{
 			Style: style.S().
 				Display(style.DisplayFlex).

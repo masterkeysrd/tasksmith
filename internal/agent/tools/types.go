@@ -172,7 +172,7 @@ type AskQuestionOutput struct {
 //
 // <scheduling>
 // - For long-running processes (dev servers, watchers, builds), set a low `wait_ms` (e.g. 1000–3000) to transition quickly.
-// - Use the `tasks` tool to monitor (`status`), list (`list`), or terminate (`kill`) background tasks.
+// - You will be automatically notified and woken up when background tasks finish. Use the `tasks` tool to send input, list running tasks, or manually terminate them. Do not poll or query status repeatedly to wait for completion.
 // </scheduling>
 //
 // <cross_platform>
@@ -210,11 +210,12 @@ type BashOutput struct {
 
 // DownloadArgs defines the arguments for the "download" tool.
 //
-// Download a file from a URL to the local filesystem. If the download takes longer than `wait_ms`, it transitions to a background task and returns a `taskId` — use the `tasks` tool to monitor progress.
+// Download a file from a URL to the local filesystem. If the download takes longer than `wait_ms`, it transitions to a background task and returns a `taskId`.
 //
 // <guidelines>
 // - `destination` defaults to the filename extracted from the URL, saved in the workspace root.
 // - For large files, set a low `wait_ms` to transition to background quickly and avoid blocking.
+// - You will be automatically notified and woken up when the download task finishes. You can continue with other work, or stop calling tools to wait. Do not poll `tasks status` repeatedly.
 // - Check `size_bytes` in the result to confirm the full file was received.
 // </guidelines>
 type DownloadArgs struct {
@@ -248,6 +249,7 @@ type DownloadOutput struct {
 // - You MUST `view` the file first — unviewed or externally modified files will be rejected.
 // - The `target` must be copied character-for-character from the viewed file output — do not re-type or reformat it.
 // - Include enough surrounding context in `target` (3-5 lines) to ensure uniqueness — avoid single-line targets.
+// - Review and resolve any LSP warnings/hints returned under `<lsp-diagnostics>` if possible to ensure code quality.
 // - If changes are large enough to touch most of the file, prefer `write` for a clean full rewrite instead.
 // </guidelines>
 type EditArgs struct {
@@ -751,6 +753,7 @@ type McpReadResourcesOutput struct {
 // - Each `target` must be copied character-for-character from the viewed file output — do not re-type or reformat it.
 // - Edits are applied top-to-bottom — each `target` must match the file as it exists *after* prior edits. Avoid overlapping targets.
 // - Keep each `target` to the smallest unique block (3-20 lines) — never target an entire function.
+// - Review and resolve any LSP warnings/hints returned under `<lsp-diagnostics>` if possible to ensure code quality.
 // - If changes are large enough to touch most of the file, prefer `write` for a clean full rewrite instead.
 // </guidelines>
 type MultiEditArgs struct {
@@ -864,13 +867,13 @@ type ScheduleOutput struct {
 // </actions>
 //
 // <when_to_use>
-// - After launching a long-running command with `bash`, use `status` to check progress or wait for completion.
+// - Use `status` to inspect intermediate logs or stdin of an actively running task, or check the final output of a completed/failed task.
 // - Use `list` to get an overview of all running and finished tasks before starting new ones.
 // - Use `kill` to stop a task that is stuck, no longer needed, or producing errors.
 // </when_to_use>
 //
 // <guidelines>
-// - Do not poll `status` in a tight loop; wait for output or a reasonable interval before checking again.
+// - The system will automatically notify you and wake you up when a background task finishes. Do NOT poll or query `status` in a loop to wait for completion. Simply stop calling tools (or perform other work) and wait for the system notification.
 // - A task with status `completed` and `exitCode` != 0 means it finished with an error — check `stderrTail` for details.
 // - `taskId` is returned by `bash` when a command transitions to background; always save it if you need to track the task.
 // </guidelines>
@@ -1094,6 +1097,7 @@ type WebSearchOutputResultsItem struct {
 // <guidelines>
 // - You MUST `view` the file first when overwriting an existing one — externally modified files will be rejected.
 // - For partial changes to an existing file, prefer `edit` or `multi_edit` over a full rewrite.
+// - Review and resolve any LSP warnings/hints returned under `<lsp-diagnostics>` if possible to ensure code quality.
 // </guidelines>
 type WriteArgs struct {
 	// Content: Content to write.

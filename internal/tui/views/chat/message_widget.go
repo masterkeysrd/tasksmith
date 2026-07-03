@@ -1,14 +1,21 @@
 package chat
 
 import (
+	"context"
+	"fmt"
 	"strings"
 	"time"
 
 	"github.com/masterkeysrd/kite/extras/kitex"
+	"github.com/masterkeysrd/kite/extras/wind"
+	"github.com/masterkeysrd/kite/promise"
 	"github.com/masterkeysrd/kite/style"
 	"github.com/masterkeysrd/loom/message"
 	"github.com/masterkeysrd/tasksmith/internal/agent/permissions"
+	"github.com/masterkeysrd/tasksmith/internal/api"
+	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	"github.com/masterkeysrd/tasksmith/internal/core/preview"
+	tuiapi "github.com/masterkeysrd/tasksmith/internal/tui/api"
 	"github.com/masterkeysrd/tasksmith/internal/tui/components"
 )
 
@@ -30,6 +37,69 @@ var Message = kitex.FC("Message", func(props MessageProps) kitex.Node {
 	toolResponses := props.ToolResponses
 
 	if role == message.RoleAssistant {
+		client := tuiapi.UseClient()
+		windClient := wind.UseClient()
+
+		// Local state to accumulate decisions for pending authorizations
+		localDecisions, setLocalDecisions := kitex.UseState(make(map[string]permissions.AuthorizationDecision))
+
+		// Reset local decisions when pending authorizations list changes (e.g. from the backend)
+		// Or when the session changes.
+		kitex.UseEffect(func() {
+			setLocalDecisions(make(map[string]permissions.AuthorizationDecision))
+		}, []any{props.SessionID, len(props.PendingAuthorizations)})
+
+		// Helper to submit the batch of decisions
+		submitBatch := func(decisions []permissions.AuthorizationDecision) {
+			promise.New(func(ctx context.Context) (bool, error) {
+				_, err := client.SubmitAuthorizationDecision(ctx, api.SubmitAuthorizationDecisionRequest{
+					SessionID: props.SessionID,
+					Decisions: decisions,
+				})
+				return err == nil, err
+			}).Then(func(success bool) {
+				windClient.InvalidateQueries(api.GetSessionMessagesRequest{SessionID: props.SessionID})
+				windClient.InvalidateQueries(api.GetSessionStateRequest{SessionID: props.SessionID})
+				windClient.InvalidateQueries(api.GetFileChangesRequest{SessionID: props.SessionID})
+			}, func(err error) {
+				log.Error(fmt.Sprintf("Failed to submit batch authorization decisions: %v", err))
+			})
+		}
+
+		onDecision := func(dec permissions.AuthorizationDecision) {
+			current := localDecisions()
+			newDecisions := make(map[string]permissions.AuthorizationDecision)
+			for k, v := range current {
+				newDecisions[k] = v
+			}
+			newDecisions[dec.ToolCallID] = dec
+			setLocalDecisions(newDecisions)
+
+			// Check if all pending requests have been decided
+			allDecided := true
+			var decisionList []permissions.AuthorizationDecision
+			for _, req := range props.PendingAuthorizations {
+				if d, ok := newDecisions[req.ToolCallID]; ok {
+					decisionList = append(decisionList, d)
+				} else {
+					allDecided = false
+				}
+			}
+
+			if allDecided && len(props.PendingAuthorizations) > 0 {
+				submitBatch(decisionList)
+			}
+		}
+
+		// Determine the active undecided pending authorization (if any)
+		var activeToolCallID string
+		for _, req := range props.PendingAuthorizations {
+			if _, decided := localDecisions()[req.ToolCallID]; !decided {
+				activeToolCallID = req.ToolCallID
+				break
+			}
+		}
+
 		var children []kitex.Node
 		for _, block := range content {
 			var node kitex.Node
@@ -56,13 +126,19 @@ var Message = kitex.FC("Message", func(props MessageProps) kitex.Node {
 				}
 
 				if pendingReq != nil {
-					isActive := len(props.PendingAuthorizations) > 0 &&
-						pendingReq.ToolCallID == props.PendingAuthorizations[0].ToolCallID
+					var localDec *permissions.AuthorizationDecision
+					if dec, decided := localDecisions()[b.ID]; decided {
+						localDec = &dec
+					}
+
+					isActive := pendingReq.ToolCallID == activeToolCallID && localDec == nil
 
 					node = AuthorizationWidget(AuthorizationWidgetProps{
-						Request:   *pendingReq,
-						SessionID: props.SessionID,
-						IsActive:  isActive,
+						Request:       *pendingReq,
+						SessionID:     props.SessionID,
+						IsActive:      isActive,
+						OnDecision:    onDecision,
+						LocalDecision: localDec,
 					})
 				} else {
 					var toolMsg *message.Tool

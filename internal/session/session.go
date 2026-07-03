@@ -142,7 +142,25 @@ func NewManager(cfg ManagerConfig) *Manager {
 			return // Ignore mid-run details/ports updates and killed tasks in the chat history
 		}
 		statusStr := string(task.Status)
-		msgText := fmt.Sprintf("[System: Background task %s (\"%s\") completed with status %s (exit code %d).\nYou can inspect the command output/logs by calling the 'tasks' tool with action: 'status' and taskId: '%s'.]", taskID, task.Name, statusStr, task.ExitCode, taskID)
+
+		// Fetch standard output and standard error logs (last 100 lines) to show in context
+		stdoutTail, _ := m.taskMgr.ReadLog(taskID, false, 100)
+		stderrTail, _ := m.taskMgr.ReadLog(taskID, true, 100)
+
+		var outputParts []string
+		if stdoutTail != "" {
+			outputParts = append(outputParts, fmt.Sprintf("<stdout>\n%s\n</stdout>", stdoutTail))
+		}
+		if stderrTail != "" {
+			outputParts = append(outputParts, fmt.Sprintf("<stderr>\n%s\n</stderr>", stderrTail))
+		}
+
+		var outputSection string
+		if len(outputParts) > 0 {
+			outputSection = fmt.Sprintf("\n\n<output>\n%s\n</output>", strings.Join(outputParts, "\n"))
+		}
+
+		msgText := fmt.Sprintf("[System: Background task %s (\"%s\") completed with status %s (exit code %d).%s]", taskID, task.Name, statusStr, task.ExitCode, outputSection)
 		if task.Error != "" {
 			msgText += "\nError: " + task.Error
 		}

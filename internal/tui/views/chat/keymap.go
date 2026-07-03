@@ -22,6 +22,7 @@ var Controller = &ChatController{}
 
 // AuthController exposes authorization widget actions.
 type AuthController struct {
+	ActiveToolCallID   string
 	MoveDown           func()
 	MoveUp             func()
 	SelectPrevOption   func()

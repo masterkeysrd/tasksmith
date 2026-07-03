@@ -329,11 +329,11 @@ func TestTextContentProviders(t *testing.T) {
 		Stderr: "port check...",
 	}
 	tcRunning := boRunning.TextContent()
-	if !strings.Contains(tcRunning, "running in the background") {
-		t.Errorf("expected 'running in the background' in text content, got %q", tcRunning)
+	if !strings.Contains(tcRunning, "<background_task") {
+		t.Errorf("expected '<background_task' in text content, got %q", tcRunning)
 	}
-	if !strings.Contains(tcRunning, "must use the 'tasks' tool") {
-		t.Errorf("expected tasks tool instructions, got %q", tcRunning)
+	if !strings.Contains(tcRunning, "automatically notify you") {
+		t.Errorf("expected automatic notification instructions, got %q", tcRunning)
 	}
 	if !strings.Contains(tcRunning, "[stdout]\nserver starting...") {
 		t.Errorf("expected stdout in text content, got %q", tcRunning)

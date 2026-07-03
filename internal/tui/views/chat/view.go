@@ -673,6 +673,7 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 		Width(style.Percent(100)).
 		Height(style.Percent(100)).
 		Flex(1, 1, style.Cells(0)).
+		MinWidth(style.Percent(0)).
 		MinHeight(style.Cells(0)).
 		Display(style.DisplayFlex).
 		FlexDirection(style.FlexColumn)

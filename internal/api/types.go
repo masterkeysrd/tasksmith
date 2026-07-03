@@ -133,6 +133,7 @@ type InitializeWorkspaceRequest struct {
 	DefaultModel     string          `json:"default_model"`
 	Theme            string          `json:"theme"`
 	AuthorizedTools  map[string]bool `json:"authorized_tools"`
+	TrustOnly        bool            `json:"trust_only"` // Skip writing workspace.md/providers configs
 }
 
 type InitializeWorkspaceResponse struct {
@@ -147,6 +148,8 @@ type GetWorkspaceConfigResponse struct {
 	DefaultProvider string          `json:"default_provider"`
 	AuthorizedTools map[string]bool `json:"authorized_tools"`
 	IsConfigured    bool            `json:"is_configured"`
+	IsTrusted       bool            `json:"is_trusted"`
+	HasManifest     bool            `json:"has_manifest"`
 	CWD             string          `json:"cwd"`
 }
 

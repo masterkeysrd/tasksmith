@@ -20,6 +20,7 @@ import (
 	permissionsview "github.com/masterkeysrd/tasksmith/internal/tui/views/permissions"
 	"github.com/masterkeysrd/tasksmith/internal/tui/views/setup"
 	"github.com/masterkeysrd/tasksmith/internal/tui/views/welcome"
+	"github.com/masterkeysrd/tasksmith/internal/core/log"
 )
 
 // AppProps defines the top-level application properties.
@@ -61,9 +62,14 @@ var Router = kitex.SimpleFC("Router", func() kitex.Node {
 	wsCfg := queries.UseGetWorkspaceConfig()
 	providers := queries.UseListProviders()
 	activeView, setActiveView := kitex.UseState(string(viewLoading))
+	// initialRouteDone is a ref (not state) so updates don't cause re-renders.
+	// Once we route away from viewLoading for the first time, we never redo it.
+	initialRouteDone := kitex.UseRef(false)
 	activeSessionID := active.UseSessionID()
 	activeScreen := active.UseScreen()
 	windClient := wind.UseClient()
+
+	log.Info("Router render called", log.String("activeView", activeView()))
 
 	kitex.UseEffect(func() {
 		active.InvalidateSessionState = func(sessionID string) {
@@ -71,19 +77,21 @@ var Router = kitex.SimpleFC("Router", func() kitex.Node {
 		}
 	}, []any{windClient})
 
-	kitex.UseEffect(func() {
+	// Perform initial routing synchronously in the render body so there is no
+	// async scheduling window that could cause a stale activeView read.
+	// The initialRouteDone ref ensures this block only fires once.
+	if activeView() == string(viewLoading) && !initialRouteDone.Current {
 		if !wsCfg.IsLoading && !providers.IsLoading {
-			hasConfiguredProvider := providers.Data != nil && len(providers.Data.Providers) > 0
-			hasSelectedProvider := wsCfg.Data != nil && wsCfg.Data.DefaultProvider != ""
-			isConfigured := wsCfg.Data != nil && wsCfg.Data.IsConfigured
-
-			if isConfigured && hasSelectedProvider && hasConfiguredProvider {
+			initialRouteDone.Current = true
+			isTrusted := wsCfg.Data != nil && wsCfg.Data.IsTrusted
+			log.Info("Router initial load resolved", log.Bool("isTrusted", isTrusted))
+			if isTrusted {
 				setActiveView(string(viewWelcome))
 			} else {
 				setActiveView(string(viewSetup))
 			}
 		}
-	}, []any{wsCfg.IsLoading, providers.IsLoading, wsCfg.Data, providers.Data})
+	}
 
 	switch viewType(activeView()) {
 	case viewLoading:
@@ -121,7 +129,9 @@ var Router = kitex.SimpleFC("Router", func() kitex.Node {
 				windClient.InvalidateQueries(api.GetWorkspaceConfigRequest{})
 				setActiveView(string(viewMain))
 			},
-			OnSkip: func() { setActiveView(string(viewWelcome)) },
+			OnSkip: func() {
+				setActiveView(string(viewWelcome))
+			},
 		})
 
 	default: // viewMain — shell with active workspace view

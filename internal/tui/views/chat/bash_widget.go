@@ -5,7 +5,10 @@ import (
 	"image/color"
 	"strings"
 
+	"github.com/masterkeysrd/kite/dom"
+	"github.com/masterkeysrd/kite/event"
 	"github.com/masterkeysrd/kite/extras/kitex"
+	"github.com/masterkeysrd/kite/geom"
 	"github.com/masterkeysrd/kite/style"
 	"github.com/masterkeysrd/tasksmith/internal/core/preview"
 	"github.com/masterkeysrd/tasksmith/internal/tui/components"
@@ -17,6 +20,68 @@ import (
 var BashToolWidget = kitex.FC("BashToolWidget", func(props ToolExecutionProps) kitex.Node {
 	t := theme.UseTheme()
 	isOpen, setIsOpen := kitex.UseState(true)
+
+	docFunc := kitex.UseDocument()
+	doc := docFunc()
+
+	var initialSize geom.Size
+	if doc != nil {
+		if view := doc.DefaultView(); view != nil {
+			initialSize = view.ViewportSize()
+		}
+	}
+
+	size, setSize := kitex.UseState(initialSize)
+	elRef := kitex.UseRef[dom.Node](nil)
+	measuredWidth, setMeasuredWidth := kitex.UseState(0)
+
+	kitex.UseEffectCleanup(func() func() {
+		if doc == nil {
+			return nil
+		}
+
+		updateSize := func() {
+			if view := doc.DefaultView(); view != nil {
+				// 1. Update viewport size
+				currSize := view.ViewportSize()
+				if currSize != size() {
+					setSize(currSize)
+				}
+				// 2. Update widget layout width bounds
+				if elRef.Current != nil {
+					if rect, ok := view.GetBoundingClientRect(elRef.Current.(dom.Element)); ok {
+						if rect.Size.Width != measuredWidth() {
+							setMeasuredWidth(rect.Size.Width)
+						}
+					}
+				}
+			}
+		}
+
+		// Sync sizes after render/layout runs
+		updateSize()
+
+		sub := doc.AddEventListener(event.EventResize, func(ev event.Event) {
+			updateSize()
+		})
+
+		return func() {
+			sub.Cancel()
+		}
+	}, []any{doc, elRef.Current})
+
+	viewportWidth := size().Width
+	fallbackWrapWidth := getDynamicWrapWidth(viewportWidth)
+
+	var wrapWidth int
+	if measuredWidth() > 0 {
+		wrapWidth = measuredWidth() - 2
+		if wrapWidth < 20 {
+			wrapWidth = 20
+		}
+	} else {
+		wrapWidth = fallbackWrapWidth
+	}
 
 	tc := props.ToolCall
 	tm := props.ToolMessage
@@ -152,7 +217,7 @@ var BashToolWidget = kitex.FC("BashToolWidget", func(props ToolExecutionProps) k
 	}
 
 	return kitex.Fragment(
-		kitex.Box(kitex.BoxProps{Style: containerStyle},
+		kitex.Box(kitex.BoxProps{Ref: elRef, Style: containerStyle},
 			components.Button(components.ButtonProps{
 				Variant: components.ButtonText,
 				Color:   components.ButtonBase,
@@ -237,7 +302,8 @@ var BashToolWidget = kitex.FC("BashToolWidget", func(props ToolExecutionProps) k
 					}),
 					// Output (stdout/stderr) without outer header or borders
 					kitex.If(tm != nil, func() kitex.Node {
-						outText := getToolOutput(tm.Content)
+						originalOutText := getToolOutput(tm.Content)
+						outText := originalOutText
 						return kitex.Fragment(
 							kitex.If(strings.TrimSpace(outText) != "", func() kitex.Node {
 								lines := strings.Split(outText, "\n")
@@ -261,6 +327,7 @@ var BashToolWidget = kitex.FC("BashToolWidget", func(props ToolExecutionProps) k
 								outputContainerStyle := style.S().
 									Display(style.DisplayFlex).
 									FlexDirection(style.FlexColumn).
+									Flex(0, 1, style.Auto).
 									Width(style.Percent(100)).
 									MaxWidth(style.Percent(100)).
 									MinWidth(style.Percent(0)).
@@ -273,9 +340,12 @@ var BashToolWidget = kitex.FC("BashToolWidget", func(props ToolExecutionProps) k
 									elements = append(elements, kitex.Box(kitex.BoxProps{
 										Style: style.S().
 											Foreground(textCol).
-											Width(style.Percent(100)).
+											Width(style.Cells(wrapWidth)).
+											MaxWidth(style.Cells(wrapWidth)).
 											MinWidth(style.Percent(0)).
-											WhiteSpace(style.WhiteSpacePreWrap),
+											WhiteSpace(style.WhiteSpacePre).
+											ScrollbarX(true).
+											OverflowX(style.OverflowAuto),
 									}, kitex.Text(stdoutText)))
 								}
 
@@ -287,9 +357,12 @@ var BashToolWidget = kitex.FC("BashToolWidget", func(props ToolExecutionProps) k
 										elements = append(elements, kitex.Box(kitex.BoxProps{
 											Style: style.S().
 												Foreground(t.Color.Text.Error).
-												Width(style.Percent(100)).
+												Width(style.Cells(wrapWidth)).
+												MaxWidth(style.Cells(wrapWidth)).
 												MinWidth(style.Percent(0)).
-												WhiteSpace(style.WhiteSpacePreWrap).
+												WhiteSpace(style.WhiteSpacePre).
+												ScrollbarX(true).
+												OverflowX(style.OverflowAuto).
 												MarginTop(1),
 										}, kitex.Text("[stderr]\n"+stderrText)))
 									}
@@ -308,7 +381,7 @@ var BashToolWidget = kitex.FC("BashToolWidget", func(props ToolExecutionProps) k
 											if props.OnViewPreview != nil {
 												props.OnViewPreview(
 													"Command Output",
-													preview.DefaultTextPreview{Text: outText},
+													preview.DefaultTextPreview{Text: originalOutText},
 												)
 											}
 										},
@@ -325,6 +398,7 @@ var BashToolWidget = kitex.FC("BashToolWidget", func(props ToolExecutionProps) k
 										FlexDirection(style.FlexColumn).
 										Width(style.Percent(100)).
 										MaxWidth(style.Percent(100)).
+										MinWidth(style.Percent(0)).
 										Overflow(style.OverflowHidden),
 								},
 									kitex.Box(kitex.BoxProps{Style: outputContainerStyle}, elements...),
@@ -338,3 +412,72 @@ var BashToolWidget = kitex.FC("BashToolWidget", func(props ToolExecutionProps) k
 		),
 	)
 })
+
+func getDynamicWrapWidth(viewportWidth int) int {
+	if viewportWidth <= 0 {
+		return 80
+	}
+	// Conservative estimate: assume 34 cells are taken by the sidebar if open.
+	availableWidth := viewportWidth
+	if availableWidth > 34 {
+		availableWidth -= 34
+	}
+	// Apply bubble 90% MaxWidth constraint
+	bubbleWidth := int(float64(availableWidth) * 0.90)
+	// Subtract layout padding and margins (approx 6 cells)
+	wrapWidth := bubbleWidth - 6
+	if wrapWidth < 20 {
+		return 20 // Sane lower boundary
+	}
+	return wrapWidth
+}
+
+func wrapLongLines(text string, maxLen int) string {
+	text = strings.ReplaceAll(text, "\r", "")
+	lines := strings.Split(text, "\n")
+	var result []string
+
+	for _, line := range lines {
+		if len(line) <= maxLen {
+			result = append(result, line)
+			continue
+		}
+
+		// Wrap this line
+		var wrappedLine strings.Builder
+		runes := []rune(line)
+		start := 0
+		for start < len(runes) {
+			// If remaining part fits, write it and finish
+			if len(runes)-start <= maxLen {
+				wrappedLine.WriteString(string(runes[start:]))
+				break
+			}
+
+			// Search for the last space/tab within maxLen characters
+			spaceIdx := -1
+			for i := start + maxLen; i > start; i-- {
+				if runes[i] == ' ' || runes[i] == '\t' {
+					spaceIdx = i
+					break
+				}
+			}
+
+			if spaceIdx != -1 {
+				// Wrap at the space
+				wrappedLine.WriteString(string(runes[start:spaceIdx]))
+				wrappedLine.WriteRune('\n')
+				// Skip the space itself
+				start = spaceIdx + 1
+			} else {
+				// No space found (unbreakable word). Break at maxLen.
+				wrappedLine.WriteString(string(runes[start : start+maxLen]))
+				wrappedLine.WriteRune('\n')
+				start += maxLen
+			}
+		}
+		result = append(result, wrappedLine.String())
+	}
+
+	return strings.Join(result, "\n")
+}

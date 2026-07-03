@@ -440,7 +440,7 @@ var Picker = kitex.FC("Picker", func(props PickerProps) kitex.Node {
 						}
 					}
 				}
-			case ke.Text == "j" || ke.Code == key.KeyDown:
+			case ke.Text == "j" || ke.Code == key.KeyDown || keyStr == "<C-n>":
 				if total == 0 {
 					return
 				}
@@ -455,7 +455,7 @@ var Picker = kitex.FC("Picker", func(props PickerProps) kitex.Node {
 				} else if newIdx >= scrollOffset()+visibleCount {
 					setScrollOffset(newIdx - visibleCount + 1)
 				}
-			case ke.Text == "k" || ke.Code == key.KeyUp:
+			case ke.Text == "k" || ke.Code == key.KeyUp || keyStr == "<C-p>":
 				if total == 0 {
 					return
 				}
@@ -470,6 +470,60 @@ var Picker = kitex.FC("Picker", func(props PickerProps) kitex.Node {
 				} else if newIdx >= scrollOffset()+visibleCount {
 					setScrollOffset(newIdx - visibleCount + 1)
 				}
+			case keyStr == "<C-f>":
+				if total == 0 {
+					return
+				}
+				e.PreventDefault()
+				e.StopPropagation()
+
+				newScrollOffset := scrollOffset() + visibleCount
+				maxOffset := total - visibleCount
+				if maxOffset < 0 {
+					maxOffset = 0
+				}
+				if newScrollOffset > maxOffset {
+					newScrollOffset = maxOffset
+				}
+				setScrollOffset(newScrollOffset)
+
+				newIdx := idx + visibleCount
+				if newIdx >= total {
+					newIdx = total - 1
+				}
+				if newIdx < newScrollOffset {
+					newIdx = newScrollOffset
+				} else if newIdx >= newScrollOffset+visibleCount {
+					newIdx = newScrollOffset + visibleCount - 1
+				}
+
+				setSelectedIndex(newIdx)
+				selectedIndexRef.Current = newIdx
+			case keyStr == "<C-b>":
+				if total == 0 {
+					return
+				}
+				e.PreventDefault()
+				e.StopPropagation()
+
+				newScrollOffset := scrollOffset() - visibleCount
+				if newScrollOffset < 0 {
+					newScrollOffset = 0
+				}
+				setScrollOffset(newScrollOffset)
+
+				newIdx := idx - visibleCount
+				if newIdx < 0 {
+					newIdx = 0
+				}
+				if newIdx < newScrollOffset {
+					newIdx = newScrollOffset
+				} else if newIdx >= newScrollOffset+visibleCount {
+					newIdx = newScrollOffset + visibleCount - 1
+				}
+
+				setSelectedIndex(newIdx)
+				selectedIndexRef.Current = newIdx
 			}
 		})
 
@@ -715,7 +769,34 @@ var Picker = kitex.FC("Picker", func(props PickerProps) kitex.Node {
 					Background(t.Color.Surface.BaseFocus).
 					TextAlign(style.TextAlignCenter)}, kitex.Text("↓"),
 			),
+			kitex.Box(kitex.BoxProps{
+				Style: style.S().
+					Background(t.Color.Surface.BaseFocus).
+					TextAlign(style.TextAlignCenter)}, kitex.Text("Cp"),
+			),
+			kitex.Box(kitex.BoxProps{
+				Style: style.S().
+					Background(t.Color.Surface.BaseFocus).
+					TextAlign(style.TextAlignCenter)}, kitex.Text("Cn"),
+			),
 			kitex.Text("NAVIGATE"),
+		),
+		kitex.Box(kitex.BoxProps{
+			Style: style.S().
+				Display(style.DisplayFlex).
+				Gap(1),
+		},
+			kitex.Box(kitex.BoxProps{
+				Style: style.S().
+					Background(t.Color.Surface.BaseFocus).
+					TextAlign(style.TextAlignCenter)}, kitex.Text("Cf"),
+			),
+			kitex.Box(kitex.BoxProps{
+				Style: style.S().
+					Background(t.Color.Surface.BaseFocus).
+					TextAlign(style.TextAlignCenter)}, kitex.Text("Cb"),
+			),
+			kitex.Text("SCROLL"),
 		),
 		kitex.Box(kitex.BoxProps{
 			Style: style.S().

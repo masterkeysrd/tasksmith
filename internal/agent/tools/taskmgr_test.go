@@ -369,3 +369,50 @@ func TestTaskManager_KillTaskGroup(t *testing.T) {
 		exec.Command("kill", "-9", childPid).Run()
 	}
 }
+
+func TestTaskManager_ReadLog_Budgeting(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "taskmgr-readlog-budget-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	tm := NewTaskManager(tmpDir, nil)
+	taskID := "task_test_budget"
+
+	sessDir := filepath.Join(tmpDir, "sessions", "sess_test", "tasks")
+	if err := os.MkdirAll(sessDir, 0755); err != nil {
+		t.Fatalf("MkdirAll failed: %v", err)
+	}
+	stdoutPath := filepath.Join(sessDir, taskID+"_stdout.log")
+
+	longLine := strings.Repeat("A", 2897)
+	logContent := "short line 1\n" + longLine + "\nshort line 2\n"
+	if err := os.WriteFile(stdoutPath, []byte(logContent), 0644); err != nil {
+		t.Fatalf("WriteFile failed: %v", err)
+	}
+
+	tm.mu.Lock()
+	tm.tasks[taskID] = &Task{
+		ID:         taskID,
+		SessionID:  "sess_test",
+		StdoutPath: stdoutPath,
+		Status:     StatusCompleted,
+	}
+	tm.mu.Unlock()
+
+	got, err := tm.ReadLog(taskID, false, 2)
+	if err != nil {
+		t.Fatalf("ReadLog failed: %v", err)
+	}
+
+	if !strings.Contains(got, "[Line truncated: 2397 characters omitted]") {
+		t.Errorf("expected long line to be truncated, got: %s", got)
+	}
+	if !strings.Contains(got, "short line 2") {
+		t.Errorf("expected last line to be present, got: %s", got)
+	}
+	if strings.Contains(got, "short line 1") {
+		t.Errorf("expected first line to be excluded by limitLines, got: %s", got)
+	}
+}

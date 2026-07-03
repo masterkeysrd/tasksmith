@@ -349,7 +349,7 @@ func (h *ToolHandlers) Download(ctx context.Context, in DownloadArgs) (DownloadO
 		return DownloadOutput{
 			Success: true,
 			TaskId:  task.ID,
-			Message: fmt.Sprintf("Download is running in the background (Task ID: %s).", task.ID),
+			Message: fmt.Sprintf("<background_task task_id=\"%s\" status=\"running\">\nYou do not need to poll this task's status. The system will automatically notify you when it finishes. You can continue with other work, or stop calling tools to wait.\n</background_task>", task.ID),
 			Path:    finalPath,
 		}, nil
 	}

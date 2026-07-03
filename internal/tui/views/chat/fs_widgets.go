@@ -1335,7 +1335,7 @@ func parseRangeFromHeader(text string) (startLine, endLine int) {
 // lsEntryRow renders a single FileEntry as a table row (kitex.TR).
 // Each metadata field occupies its own TD so the table layout engine
 // distributes column widths automatically — no manual Sprintf padding needed.
-func lsEntryRow(t *theme.Scheme, fe tools.FileEntry, detailed bool, depth int) kitex.Node {
+func lsEntryRow(t *theme.Scheme, fe tools.FileEntry, detailed bool) kitex.Node {
 	var metaColor color.Color
 	var nameColor color.Color
 

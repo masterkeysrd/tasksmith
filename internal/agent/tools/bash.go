@@ -134,7 +134,7 @@ func readAndTruncateBgLog(logPath string) string {
 		if err != nil {
 			return ""
 		}
-		return string(data)
+		return applyLogBudget(string(data), 0, bgLogPreviewLimitBytes)
 	}
 
 	// Read last bgLogPreviewLimitBytes bytes
@@ -150,7 +150,7 @@ func readAndTruncateBgLog(logPath string) string {
 		return ""
 	}
 
-	return "[... truncated to protect context window. Use the 'tasks' tool with action 'status' to view more/latest logs ...]\n" + string(buf[:n])
+	return applyLogBudget(string(buf[:n]), 0, bgLogPreviewLimitBytes)
 }
 
 // saveAndTruncate checks the size of the log file at logPath. If it exceeds logSizeThresholdBytes,
@@ -171,7 +171,7 @@ func (h *ToolHandlers) saveAndTruncate(ctx context.Context, logPath string, suff
 		if err != nil {
 			return "", err
 		}
-		return string(data), nil
+		return applyLogBudget(string(data), 0, logPreviewLimitBytes), nil
 	}
 
 	// Exceeds threshold. Save full file to FileStorage
@@ -194,11 +194,13 @@ func (h *ToolHandlers) saveAndTruncate(ctx context.Context, logPath string, suff
 	// Read last preview limit characters from logPath
 	offset := fileInfo.Size() - logPreviewLimitBytes
 	_, _ = logFile.Seek(offset, io.SeekStart)
-	buf := new(strings.Builder)
-	buf.WriteString("[... truncated to protect context window. View the full file for complete logs ...]\n")
-	_, _ = io.Copy(buf, logFile)
+	buf := make([]byte, logPreviewLimitBytes)
+	n, err := logFile.Read(buf)
+	if err != nil && err != io.EOF {
+		return "", err
+	}
 
-	truncated := buf.String()
+	truncated := applyLogBudget(string(buf[:n]), 0, logPreviewLimitBytes)
 	note := fmt.Sprintf("\n\n[SYSTEM NOTE: The %s output was too long and was truncated. The complete output is saved at: %s. You can view the full file using 'view' or search it using 'grep'.]", suffix, savedPath)
 	return truncated + note, nil
 }
@@ -445,7 +447,7 @@ func (h *ToolHandlers) Bash(ctx context.Context, in BashArgs) (tool.ToolStream, 
 					stderrSoFar := readAndTruncateBgLog(task.StderrPath)
 
 					var content message.Content
-					hintText := fmt.Sprintf("\nCommand is running in the background (Task ID: %s).\nTo manage or monitor this task, you must use the 'tasks' tool (e.g., action: 'status' or 'kill' with taskId: '%s').\n", task.ID, task.ID)
+					hintText := fmt.Sprintf("\n<background_task task_id=\"%s\" status=\"running\">\nYou do not need to poll this task's status. The system will automatically notify you when it finishes. You can continue with other work, or stop calling tools to wait.\n</background_task>\n", task.ID)
 					content = append(content, &message.TextBlock{Text: hintText})
 
 					// Yield background status chunk
@@ -475,8 +477,9 @@ func (o BashOutput) TextContent() string {
 
 	switch o.Status {
 	case "running":
-		fmt.Fprintf(&sb, "Command is running in the background (Task ID: %s).\n", o.TaskId)
-		fmt.Fprintf(&sb, "To manage or monitor this task, you must use the 'tasks' tool (e.g., action: 'status' or 'kill' with taskId: '%s').\n", o.TaskId)
+		fmt.Fprintf(&sb, "<background_task task_id=\"%s\" status=\"running\">\n", o.TaskId)
+		sb.WriteString("You do not need to poll this task's status. The system will automatically notify you when it finishes. You can continue with other work, or stop calling tools to wait.\n")
+		sb.WriteString("</background_task>\n")
 	case "completed":
 		fmt.Fprintf(&sb, "Command completed successfully (exit code %d).\n", o.ExitCode)
 	case "failed":

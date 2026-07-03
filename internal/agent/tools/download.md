@@ -38,10 +38,11 @@ spec:
         type: string
         description: A human-readable description of the execution status.
 ---
-Download a file from a URL to the local filesystem. If the download takes longer than `wait_ms`, it transitions to a background task and returns a `taskId` — use the `tasks` tool to monitor progress.
+Download a file from a URL to the local filesystem. If the download takes longer than `wait_ms`, it transitions to a background task and returns a `taskId`.
 
 <guidelines>
 - `destination` defaults to the filename extracted from the URL, saved in the workspace root.
 - For large files, set a low `wait_ms` to transition to background quickly and avoid blocking.
+- You will be automatically notified and woken up when the download task finishes. You can continue with other work, or stop calling tools to wait. Do not poll `tasks status` repeatedly.
 - Check `size_bytes` in the result to confirm the full file was received.
 </guidelines>

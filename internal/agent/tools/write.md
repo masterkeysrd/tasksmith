@@ -42,5 +42,6 @@ Write content to a file, creating it if it does not exist or overwriting it enti
 <guidelines>
 - You MUST `view` the file first when overwriting an existing one — externally modified files will be rejected.
 - For partial changes to an existing file, prefer `edit` or `multi_edit` over a full rewrite.
+- Review and resolve any LSP warnings/hints returned under `<lsp-diagnostics>` if possible to ensure code quality.
 </guidelines>
 
