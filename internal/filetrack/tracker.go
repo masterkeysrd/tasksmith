@@ -55,8 +55,9 @@ type FileEvent struct {
 }
 
 type SearchResult struct {
-	Path  string
-	IsDir bool
+	Path      string
+	ShortPath string // Pre-computed shortest unique suffix for autocomplete
+	IsDir     bool
 }
 
 // WorkspaceTracker monitors the workspace filesystem, caches filenames, and acts as a pub/sub broker.

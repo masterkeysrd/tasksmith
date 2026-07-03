@@ -145,8 +145,9 @@ func (app *Application) Run(ctx context.Context) error {
 				var searchResults []autocomplete.FileSearchResult
 				for _, r := range results {
 					searchResults = append(searchResults, autocomplete.FileSearchResult{
-						Path:  r.Path,
-						IsDir: r.IsDir,
+						Path:      r.Path,
+						ShortPath: r.ShortPath,
+						IsDir:     r.IsDir,
 					})
 				}
 				return searchResults

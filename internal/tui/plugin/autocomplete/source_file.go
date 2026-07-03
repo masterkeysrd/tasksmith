@@ -7,8 +7,9 @@ import (
 
 // FileSearchResult represents a match found by a file search query.
 type FileSearchResult struct {
-	Path  string
-	IsDir bool
+	Path      string
+	ShortPath string // Pre-computed shortest unique suffix for autocomplete
+	IsDir     bool
 }
 
 // FileSource implements the Source interface for file completions.
@@ -36,11 +37,11 @@ func (s *FileSource) Query(ctx context.Context, query string) ([]Item, error) {
 	for _, r := range results {
 		badge := "FILE"
 		kind := "file"
-		insertVal := "@file:" + r.Path
+		insertVal := "@file:" + r.ShortPath
 		if r.IsDir {
 			badge = "DIR"
 			kind = "directory"
-			insertVal = "@file:" + r.Path + "/"
+			insertVal = "@file:" + r.ShortPath + "/"
 		}
 
 		items = append(items, Item{
