@@ -12,10 +12,12 @@ import (
 	"github.com/masterkeysrd/loom/graph"
 	"github.com/masterkeysrd/loom/llm"
 	"github.com/masterkeysrd/loom/message"
+	"github.com/masterkeysrd/tasksmith/internal/agent/formatter"
 	agentgraph "github.com/masterkeysrd/tasksmith/internal/agent/graph"
 	"github.com/masterkeysrd/tasksmith/internal/agent/model"
 	"github.com/masterkeysrd/tasksmith/internal/agent/permissions"
 	"github.com/masterkeysrd/tasksmith/internal/agent/prompt"
+	"github.com/masterkeysrd/tasksmith/internal/agent/resolver"
 	"github.com/masterkeysrd/tasksmith/internal/agent/tools"
 	coredb "github.com/masterkeysrd/tasksmith/internal/core/db"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
@@ -74,6 +76,7 @@ type ManagerConfig struct {
 	MetricsStore *metrics.Store
 	LspManager   *lsp.Manager
 	Context      context.Context
+	Resolver     *resolver.Resolver
 }
 
 // Manager coordinates session business logic and delegates persistence to the Store interface.
@@ -87,6 +90,7 @@ type Manager struct {
 	metricsStore   *metrics.Store
 	lspManager     *lsp.Manager
 	mcpManager     *mcp.Manager
+	resolver       *resolver.Resolver
 	wg             sync.WaitGroup
 	ctx            context.Context
 	cancel         context.CancelFunc
@@ -118,11 +122,16 @@ func NewManager(cfg ManagerConfig) *Manager {
 	}
 	mcpMgr := mcp.NewManager(mcps)
 
+	if cfg.Resolver == nil && cfg.Workspace != nil {
+		cfg.Resolver = resolver.New(cfg.LspManager, cfg.Workspace.CWD(), nil, nil)
+	}
+
 	m := &Manager{
 		store:          cfg.Store,
 		ws:             cfg.Workspace,
 		metricsStore:   cfg.MetricsStore,
 		lspManager:     cfg.LspManager,
+		resolver:       cfg.Resolver,
 		activeSessions: make(map[string]*ActiveSession),
 		mcpManager:     mcpMgr,
 	}
@@ -454,8 +463,27 @@ func (m *Manager) sendMessage(ctx context.Context, sessionID string, text string
 
 	m.tryRehydrateSession(ctx, sess)
 
+	// Phase 4: Two-phase resolution with dedup
+	var resources []resolver.ResolvedResource
+	if m.resolver != nil {
+		resources, _ = m.resolver.ResolveReferences(ctx, text, nil)
+	}
+
 	m.mu.Lock()
-	msg := message.NewUserText(text)
+
+	// Build message with attachments if resources were resolved
+	var msg message.Message
+	if len(resources) > 0 {
+		var blocks []message.Block
+		blocks = append(blocks, &message.TextBlock{Text: text})
+		for _, res := range resources {
+			blocks = append(blocks, formatter.FormatResource(res)...)
+		}
+		msg = message.NewUser(blocks...)
+	} else {
+		msg = message.NewUserText(text)
+	}
+
 	if len(meta) > 0 {
 		msg.SetMetadata(meta)
 	}

@@ -18,13 +18,14 @@ const (
 	MaxLineChars  = 500
 )
 
-// ResolveFile resolves a partial or relative filepath, reads its raw data safely within limits,
-// and returns a ResolvedFile type. Supports line range hashes (e.g., "view.go#L10-L20").
-func (r *Resolver) ResolveFile(ctx context.Context, inputPath string) (ResolvedResource, error) {
+// ResolvePath resolves a partial or relative filepath to an absolute filesystem path
+// without reading any content. It handles line range extraction, spacing normalization,
+// and fuzzy matching. This is the cheap first phase of two-phase resolution.
+func (r *Resolver) ResolvePath(ctx context.Context, inputPath string) (string, error) {
 	cleanedInput := strings.Trim(inputPath, "\"'` ")
 
 	// Extract optional line range anchors (e.g. #L10-L20)
-	targetPath, startLine, endLine := parseLineRange(cleanedInput)
+	targetPath, _, _ := parseLineRange(cleanedInput)
 
 	resolvedPath := targetPath
 	if !filepath.IsAbs(resolvedPath) {
@@ -56,7 +57,7 @@ func (r *Resolver) ResolveFile(ctx context.Context, inputPath string) (ResolvedR
 		if !found {
 			bestMatch, err := r.fuzzyFindFile(targetPath)
 			if err != nil || bestMatch == "" {
-				return nil, fmt.Errorf("file not found: %s (no such file or directory)", targetPath)
+				return "", fmt.Errorf("file not found: %s (no such file or directory)", targetPath)
 			}
 			resolvedPath = bestMatch
 		}
@@ -67,7 +68,12 @@ func (r *Resolver) ResolveFile(ctx context.Context, inputPath string) (ResolvedR
 		absPath = resolvedPath
 	}
 
-	// 2. MIME type check to detect binary vs text files
+	return absPath, nil
+}
+
+// loadResourceWithPath loads content and metadata for a known absolute path with
+// optional line range. This is the internal helper used by ResolveFile.
+func (r *Resolver) loadResourceWithPath(ctx context.Context, absPath string, startLine, endLine int) (ResolvedResource, error) {
 	mimeType := corefs.DetectMIMEType(absPath)
 	isBinary := corefs.IsBinaryMIME(mimeType)
 
@@ -79,6 +85,84 @@ func (r *Resolver) ResolveFile(ctx context.Context, inputPath string) (ResolvedR
 	if !isBinary {
 		var err error
 		content, totalLines, actualEndLine, truncated, err = r.readTextFile(absPath, startLine, endLine)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read file: %w", err)
+		}
+
+		if r.Lsp != nil {
+			r.Lsp.NotifyFileOpened(ctx, absPath)
+		}
+	} else if r.Storage != nil {
+		file, err := os.Open(absPath)
+		if err == nil {
+			defer file.Close()
+			filename := filepath.Base(absPath)
+
+			toolCallID, _ := ctx.Value("tool_call_id").(string)
+			var storagePath string
+			if toolCallID != "" {
+				storagePath = fmt.Sprintf("%s_%s", toolCallID, filename)
+			} else {
+				storagePath = fmt.Sprintf("attach_%s", filename)
+			}
+
+			if cached, errSave := r.Storage.Save(ctx, storagePath, file); errSave == nil {
+				cachedPath = cached
+			}
+		}
+	}
+
+	if r.FileTracker != nil {
+		if rel, err := filepath.Rel(r.Cwd, absPath); err == nil {
+			_ = r.FileTracker.RecordRead(ctx, "./"+filepath.ToSlash(rel))
+		}
+	}
+
+	var diags []lsp.Diagnostic
+	if r.Lsp != nil && !isBinary {
+		if client, err := r.Lsp.GetClient(ctx, r.Cwd); err == nil && client != nil {
+			if fileDiags, err := client.GetDiagnostics(ctx, absPath); err == nil {
+				diags = fileDiags
+			}
+		}
+	}
+
+	return &ResolvedFile{
+		FilePath:    absPath,
+		Content:     content,
+		StartLine:   startLine,
+		EndLine:     actualEndLine,
+		TotalLines:  totalLines,
+		Truncated:   truncated,
+		MimeType:    mimeType,
+		IsBinary:    isBinary,
+		CachedPath:  cachedPath,
+		Diagnostics: diags,
+	}, nil
+}
+
+// LoadResource loads content and metadata for a known, verified absolute path.
+// This is the expensive second phase of two-phase resolution. It reads file content,
+// retrieves LSP diagnostics, records the file read in the tracker, and handles
+// binary file caching.
+func (r *Resolver) LoadResource(ctx context.Context, absPath string) (ResolvedResource, error) {
+	// Verify file exists before attempting to read
+	if _, err := os.Stat(absPath); os.IsNotExist(err) {
+		return nil, fmt.Errorf("file not found: %s", absPath)
+	}
+
+	// MIME type check to detect binary vs text files
+	mimeType := corefs.DetectMIMEType(absPath)
+	isBinary := corefs.IsBinaryMIME(mimeType)
+
+	var content string
+	var totalLines, actualEndLine int
+	var truncated bool
+	var cachedPath string
+
+	if !isBinary {
+		var err error
+		content, totalLines, actualEndLine, truncated, err = r.readTextFile(absPath, 1, 0)
 		if err != nil {
 			return nil, fmt.Errorf("failed to read file: %w", err)
 		}
@@ -115,7 +199,7 @@ func (r *Resolver) ResolveFile(ctx context.Context, inputPath string) (ResolvedR
 		}
 	}
 
-	// 3. Retrieve raw LSP diagnostics (errors/warnings) for this file
+	// Retrieve raw LSP diagnostics (errors/warnings) for this file
 	var diags []lsp.Diagnostic
 	if r.Lsp != nil && !isBinary {
 		if client, err := r.Lsp.GetClient(ctx, r.Cwd); err == nil && client != nil {
@@ -128,7 +212,7 @@ func (r *Resolver) ResolveFile(ctx context.Context, inputPath string) (ResolvedR
 	return &ResolvedFile{
 		FilePath:    absPath,
 		Content:     content,
-		StartLine:   startLine,
+		StartLine:   1,
 		EndLine:     actualEndLine,
 		TotalLines:  totalLines,
 		Truncated:   truncated,
@@ -137,6 +221,95 @@ func (r *Resolver) ResolveFile(ctx context.Context, inputPath string) (ResolvedR
 		CachedPath:  cachedPath,
 		Diagnostics: diags,
 	}, nil
+}
+
+// ResolveReferences resolves a user message text by extracting references, resolving paths,
+// deduplicating, and loading content in a single pipeline. This is the primary entry point
+// for Phase 4 two-phase resolution.
+func (r *Resolver) ResolveReferences(ctx context.Context, text string, trackedRefs []Reference) ([]ResolvedResource, error) {
+	// 1. Extract manual references not already tracked
+	manualRefs := ExtractReferences(text, trackedRefs)
+
+	// 2. Resolve paths only for manual refs (cheap)
+	for i, ref := range manualRefs {
+		fullPath, err := r.ResolvePath(ctx, ref.Value)
+		if err != nil {
+			continue // skip unresolvable
+		}
+		manualRefs[i].Value = fullPath
+	}
+
+	// 3. Dedup ALL refs by (Type + full path) — BEFORE content loading
+	seen := make(map[string]bool)
+	var unique []Reference
+	for _, ref := range append(trackedRefs, manualRefs...) {
+		key := string(ref.Type) + ":" + ref.Value
+		if !seen[key] {
+			seen[key] = true
+			unique = append(unique, ref)
+		}
+	}
+
+	// 4. Load content ONLY for the unique set
+	var resources []ResolvedResource
+	for _, ref := range unique {
+		res, err := r.LoadResource(ctx, ref.Value)
+		if err != nil {
+			continue
+		}
+		resources = append(resources, res)
+	}
+
+	return resources, nil
+}
+
+// ResolveFile resolves a partial or relative filepath, reads its raw data safely within limits,
+// and returns a ResolvedFile type. Supports line range hashes (e.g., "view.go#L10-L20").
+//
+// Deprecated: Use ResolvePath followed by LoadResource for two-phase resolution with deduplication.
+func (r *Resolver) ResolveFile(ctx context.Context, inputPath string) (ResolvedResource, error) {
+	cleanedInput := strings.Trim(inputPath, "\"'` ")
+	targetPath, startLine, endLine := parseLineRange(cleanedInput)
+
+	resolvedPath := targetPath
+	if !filepath.IsAbs(resolvedPath) {
+		resolvedPath = filepath.Join(r.Cwd, resolvedPath)
+	}
+
+	if _, err := os.Stat(resolvedPath); os.IsNotExist(err) {
+		dir := filepath.Dir(resolvedPath)
+		base := filepath.Base(resolvedPath)
+		normalizedBaseLower := strings.ToLower(normalizeSpacing(base))
+
+		found := false
+		if files, readErr := os.ReadDir(dir); readErr == nil {
+			for _, f := range files {
+				if f.IsDir() {
+					continue
+				}
+				if strings.ToLower(normalizeSpacing(f.Name())) == normalizedBaseLower {
+					resolvedPath = filepath.Join(dir, f.Name())
+					found = true
+					break
+				}
+			}
+		}
+
+		if !found {
+			bestMatch, err := r.fuzzyFindFile(targetPath)
+			if err != nil || bestMatch == "" {
+				return nil, fmt.Errorf("file not found: %s (no such file or directory)", targetPath)
+			}
+			resolvedPath = bestMatch
+		}
+	}
+
+	absPath, err := filepath.Abs(resolvedPath)
+	if err != nil {
+		absPath = resolvedPath
+	}
+
+	return r.loadResourceWithPath(ctx, absPath, startLine, endLine)
 }
 
 // parseLineRange extracts line number bounds from a path string containing a "#L<start>-L<end>" anchor.
@@ -151,9 +324,9 @@ func parseLineRange(inputPath string) (cleanPath string, startLine, endLine int)
 
 	if strings.HasPrefix(hash, "L") {
 		hash = hash[1:]
-		if idx := strings.Index(hash, "-L"); idx != -1 {
-			startStr := hash[:idx]
-			endStr := hash[idx+2:]
+		if before, after, ok := strings.Cut(hash, "-L"); ok {
+			startStr := before
+			endStr := after
 			var s, e int
 			fmt.Sscanf(startStr, "%d", &s)
 			fmt.Sscanf(endStr, "%d", &e)
