@@ -72,5 +72,6 @@ Apply multiple, non-contiguous edits to a single file in a single turn.
 - Each `target` must be copied character-for-character from the viewed file output — do not re-type or reformat it.
 - Edits are applied top-to-bottom — each `target` must match the file as it exists *after* prior edits. Avoid overlapping targets.
 - Keep each `target` to the smallest unique block (3-20 lines) — never target an entire function.
+- Review and resolve any LSP warnings/hints returned under `<lsp-diagnostics>` if possible to ensure code quality.
 - If changes are large enough to touch most of the file, prefer `write` for a clean full rewrite instead.
 </guidelines>

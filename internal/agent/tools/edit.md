@@ -53,5 +53,6 @@ Edit a file by replacing a target block of text with a replacement.
 - You MUST `view` the file first — unviewed or externally modified files will be rejected.
 - The `target` must be copied character-for-character from the viewed file output — do not re-type or reformat it.
 - Include enough surrounding context in `target` (3-5 lines) to ensure uniqueness — avoid single-line targets.
+- Review and resolve any LSP warnings/hints returned under `<lsp-diagnostics>` if possible to ensure code quality.
 - If changes are large enough to touch most of the file, prefer `write` for a clean full rewrite instead.
 </guidelines>

@@ -249,6 +249,7 @@ type DownloadOutput struct {
 // - You MUST `view` the file first — unviewed or externally modified files will be rejected.
 // - The `target` must be copied character-for-character from the viewed file output — do not re-type or reformat it.
 // - Include enough surrounding context in `target` (3-5 lines) to ensure uniqueness — avoid single-line targets.
+// - Review and resolve any LSP warnings/hints returned under `<lsp-diagnostics>` if possible to ensure code quality.
 // - If changes are large enough to touch most of the file, prefer `write` for a clean full rewrite instead.
 // </guidelines>
 type EditArgs struct {
@@ -752,6 +753,7 @@ type McpReadResourcesOutput struct {
 // - Each `target` must be copied character-for-character from the viewed file output — do not re-type or reformat it.
 // - Edits are applied top-to-bottom — each `target` must match the file as it exists *after* prior edits. Avoid overlapping targets.
 // - Keep each `target` to the smallest unique block (3-20 lines) — never target an entire function.
+// - Review and resolve any LSP warnings/hints returned under `<lsp-diagnostics>` if possible to ensure code quality.
 // - If changes are large enough to touch most of the file, prefer `write` for a clean full rewrite instead.
 // </guidelines>
 type MultiEditArgs struct {
@@ -1095,6 +1097,7 @@ type WebSearchOutputResultsItem struct {
 // <guidelines>
 // - You MUST `view` the file first when overwriting an existing one — externally modified files will be rejected.
 // - For partial changes to an existing file, prefer `edit` or `multi_edit` over a full rewrite.
+// - Review and resolve any LSP warnings/hints returned under `<lsp-diagnostics>` if possible to ensure code quality.
 // </guidelines>
 type WriteArgs struct {
 	// Content: Content to write.
