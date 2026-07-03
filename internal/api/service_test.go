@@ -210,11 +210,8 @@ func TestService(t *testing.T) {
 	})
 
 	t.Run("ConfigureAndDismissLsp", func(t *testing.T) {
-		origXDG := os.Getenv("XDG_CONFIG_HOME")
 		tempConfigDir := t.TempDir()
-		os.Setenv("XDG_CONFIG_HOME", tempConfigDir)
-		defer os.Setenv("XDG_CONFIG_HOME", origXDG)
-
+		t.Setenv("XDG_CONFIG_HOME", tempConfigDir)
 		xdg.ClearCache()
 
 		mgr := lsp.NewManager()
@@ -295,9 +292,6 @@ func TestService(t *testing.T) {
 
 func TestRevertFileAPI(t *testing.T) {
 	tmpDir := t.TempDir()
-
-	t.Setenv("XDG_DATA_HOME", tmpDir)
-	t.Setenv("TASKSMITH_APPNAME", "tasksmith-test-api")
 
 	db, err := coredb.Open(tmpDir, "tasksmith.db")
 	if err != nil {

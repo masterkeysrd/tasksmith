@@ -8,8 +8,6 @@ import (
 
 func TestMigrate(t *testing.T) {
 	tmpDir := t.TempDir()
-	t.Setenv("XDG_DATA_HOME", tmpDir)
-	t.Setenv("TASKSMITH_APPNAME", "db-test")
 
 	conn, err := db.Open(tmpDir, "test.db")
 	if err != nil {

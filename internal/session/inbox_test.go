@@ -10,8 +10,6 @@ import (
 
 func TestSessionInboxPopAndPersist(t *testing.T) {
 	tmpCwd := t.TempDir()
-	t.Setenv("XDG_DATA_HOME", tmpCwd)
-	t.Setenv("TASKSMITH_APPNAME", "tasksmith-test-inbox-private")
 
 	db, err := coredb.Open(tmpCwd, "tasksmith.db")
 	if err != nil {

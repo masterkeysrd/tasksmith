@@ -3,6 +3,7 @@ package xdg
 import (
 	"os"
 	"path/filepath"
+	"testing"
 )
 
 // VarType represents the type of XDG directory.
@@ -116,4 +117,48 @@ func GetVar(varType VarType) string {
 // This is primarily used for testing purposes.
 func ClearCache() {
 	varCache = make(map[VarType]string)
+}
+
+// SetTestEnv configures the XDG environment variables to point to a temporary
+// directory and clears the path cache. This is used in testing to prevent
+// pollution of the real user configuration and data directories.
+func SetTestEnv(tmpDir string, appName string) {
+	os.Setenv("XDG_CONFIG_HOME", tmpDir)
+	os.Setenv("XDG_DATA_HOME", tmpDir)
+	os.Setenv("XDG_CACHE_HOME", tmpDir)
+	os.Setenv("TASKSMITH_APPNAME", appName)
+	ClearCache()
+}
+
+// RunWithTestEnv runs package tests within a redirected temporary XDG environment
+// to avoid polluting the user's local workspace.
+func RunWithTestEnv(m *testing.M, appName string) {
+	tmpDir, err := os.MkdirTemp("", appName+"-*")
+	if err != nil {
+		panic(err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	// Save original env vars
+	origXdgData := os.Getenv("XDG_DATA_HOME")
+	origXdgConfig := os.Getenv("XDG_CONFIG_HOME")
+	origXdgCache := os.Getenv("XDG_CACHE_HOME")
+	origAppName := os.Getenv("TASKSMITH_APPNAME")
+
+	// Set temporary ones
+	SetTestEnv(tmpDir, appName)
+
+	// Run tests
+	code := m.Run()
+
+	// Restore env vars
+	os.Setenv("XDG_DATA_HOME", origXdgData)
+	os.Setenv("XDG_CONFIG_HOME", origXdgConfig)
+	os.Setenv("XDG_CACHE_HOME", origXdgCache)
+	os.Setenv("TASKSMITH_APPNAME", origAppName)
+
+	// Clear cache again
+	ClearCache()
+
+	os.Exit(code)
 }

@@ -19,10 +19,6 @@ func TestSessionManager(t *testing.T) {
 	// Create a temporary directory to act as the test workspace
 	tmpCwd := t.TempDir()
 
-	// Redirect XDG directories during the test to avoid polluting the user's home directories
-	t.Setenv("XDG_DATA_HOME", tmpCwd)
-	t.Setenv("TASKSMITH_APPNAME", "tasksmith-test")
-
 	// 1. Open the DB connections using the core database package
 	db, err := coredb.Open(tmpCwd, "tasksmith.db")
 	if err != nil {
@@ -214,8 +210,6 @@ func TestSessionManager(t *testing.T) {
 
 func TestSessionBinaryRehydration(t *testing.T) {
 	tmpCwd := t.TempDir()
-	t.Setenv("XDG_DATA_HOME", tmpCwd)
-	t.Setenv("TASKSMITH_APPNAME", "tasksmith-test-binary")
 
 	db, err := coredb.Open(tmpCwd, "tasksmith.db")
 	if err != nil {
@@ -321,8 +315,6 @@ func TestSessionBinaryRehydration(t *testing.T) {
 
 func TestSessionInboxQueue(t *testing.T) {
 	tmpCwd := t.TempDir()
-	t.Setenv("XDG_DATA_HOME", tmpCwd)
-	t.Setenv("TASKSMITH_APPNAME", "tasksmith-test-inbox")
 
 	db, err := coredb.Open(tmpCwd, "tasksmith.db")
 	if err != nil {
@@ -383,8 +375,6 @@ func TestSessionInboxQueue(t *testing.T) {
 
 func TestSendSystemNotification(t *testing.T) {
 	tmpCwd := t.TempDir()
-	t.Setenv("XDG_DATA_HOME", tmpCwd)
-	t.Setenv("TASKSMITH_APPNAME", "tasksmith-test-notification")
 
 	db, err := coredb.Open(tmpCwd, "tasksmith.db")
 	if err != nil {
@@ -460,8 +450,6 @@ func TestSendSystemNotification(t *testing.T) {
 
 func TestSendMessageRejectionOnPendingAuth(t *testing.T) {
 	tmpCwd := t.TempDir()
-	t.Setenv("XDG_DATA_HOME", tmpCwd)
-	t.Setenv("TASKSMITH_APPNAME", "tasksmith-test-pending-auth")
 
 	db, err := coredb.Open(tmpCwd, "tasksmith.db")
 	if err != nil {
@@ -530,8 +518,6 @@ func TestSendMessageRejectionOnPendingAuth(t *testing.T) {
 
 func TestSubmitAuthorizationDecisionTransitionsStatus(t *testing.T) {
 	tmpCwd := t.TempDir()
-	t.Setenv("XDG_DATA_HOME", tmpCwd)
-	t.Setenv("TASKSMITH_APPNAME", "tasksmith-test-auth-transition")
 
 	db, err := coredb.Open(tmpCwd, "tasksmith.db")
 	if err != nil {
@@ -602,8 +588,6 @@ func TestSubmitAuthorizationDecisionTransitionsStatus(t *testing.T) {
 
 func TestSubmitDecisionInvalidState(t *testing.T) {
 	tmpCwd := t.TempDir()
-	t.Setenv("XDG_DATA_HOME", tmpCwd)
-	t.Setenv("TASKSMITH_APPNAME", "tasksmith-test-invalid-state")
 
 	db, err := coredb.Open(tmpCwd, "tasksmith.db")
 	if err != nil {
@@ -651,8 +635,6 @@ func TestSubmitDecisionInvalidState(t *testing.T) {
 
 func TestMessageQueueAfterDecisionSubmission(t *testing.T) {
 	tmpCwd := t.TempDir()
-	t.Setenv("XDG_DATA_HOME", tmpCwd)
-	t.Setenv("TASKSMITH_APPNAME", "tasksmith-test-queue-after-decision")
 
 	db, err := coredb.Open(tmpCwd, "tasksmith.db")
 	if err != nil {
@@ -725,8 +707,6 @@ func TestMessageQueueAfterDecisionSubmission(t *testing.T) {
 
 func TestActiveToolStreamInjection(t *testing.T) {
 	tmpCwd := t.TempDir()
-	t.Setenv("XDG_DATA_HOME", tmpCwd)
-	t.Setenv("TASKSMITH_APPNAME", "tasksmith-test-toolstream")
 
 	db, err := coredb.Open(tmpCwd, "tasksmith.db")
 	if err != nil {

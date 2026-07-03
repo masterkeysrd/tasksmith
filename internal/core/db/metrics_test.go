@@ -11,12 +11,6 @@ import (
 )
 
 func TestMetricsDB(t *testing.T) {
-	// Temporarily redirect XDG_DATA_HOME so we don't pollute the real DB
-	tempDir := t.TempDir()
-	os.Setenv("XDG_DATA_HOME", tempDir)
-	defer os.Unsetenv("XDG_DATA_HOME")
-	xdg.ClearCache() // Clear XDG cache so it picks up the temp dir
-
 	metricsDB, err := db.InitMetricsDB()
 	if err != nil {
 		t.Fatalf("failed to init metrics db: %v", err)
@@ -24,7 +18,11 @@ func TestMetricsDB(t *testing.T) {
 	defer metricsDB.Close()
 
 	// Verify the database file was created globally
-	dbPath := filepath.Join(tempDir, "tasksmith", "metrics.db")
+	dataDir, err := xdg.SubDataDir()
+	if err != nil {
+		t.Fatalf("failed to get data dir: %v", err)
+	}
+	dbPath := filepath.Join(dataDir, "metrics.db")
 	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
 		t.Fatalf("expected database file to be created at %s, but it was not found", dbPath)
 	}
