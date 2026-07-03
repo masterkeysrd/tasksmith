@@ -63,13 +63,18 @@ var CodeBlock = kitex.FC("CodeBlock", func(props CodeBlockProps) kitex.Node {
 	}
 	codeStyle := style.S().
 		Padding(padCode).
+		Width(style.Percent(100)).
+		MaxWidth(style.Percent(100)).
+		MinWidth(style.Percent(0)).
 		WhiteSpace(whiteSpace).
 		OverflowX(style.OverflowAuto)
 	if t != nil {
 		codeStyle = codeStyle.Foreground(t.Color.Text.Secondary)
 	}
 	if props.Wrap {
-		codeStyle = codeStyle.OverflowWrap(style.OverflowWrapBreakWord)
+		codeStyle = codeStyle.OverflowX(style.OverflowHidden).OverflowWrap(style.OverflowWrapBreakWord)
+	} else {
+		codeStyle = codeStyle.OverflowX(style.OverflowAuto)
 	}
 
 	wrapperStyle := style.S().
@@ -163,6 +168,9 @@ var CodeBlock = kitex.FC("CodeBlock", func(props CodeBlockProps) kitex.Node {
 		PaddingLeft(1).
 		PaddingRight(1).
 		Flex(1, 1, style.Cells(0)).
+		Width(style.Percent(100)).
+		MaxWidth(style.Percent(100)).
+		MinWidth(style.Percent(0)).
 		MinHeight(style.Cells(0)).
 		WhiteSpace(whiteSpace).
 		OverflowX(style.OverflowAuto)
@@ -170,7 +178,9 @@ var CodeBlock = kitex.FC("CodeBlock", func(props CodeBlockProps) kitex.Node {
 		codeBoxStyle = codeBoxStyle.Foreground(t.Color.Text.Secondary)
 	}
 	if props.Wrap {
-		codeBoxStyle = codeBoxStyle.OverflowWrap(style.OverflowWrapBreakWord)
+		codeBoxStyle = codeBoxStyle.OverflowX(style.OverflowHidden).OverflowWrap(style.OverflowWrapBreakWord)
+	} else {
+		codeBoxStyle = codeBoxStyle.OverflowX(style.OverflowAuto)
 	}
 
 	var gutterText string

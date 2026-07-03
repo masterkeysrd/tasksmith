@@ -458,6 +458,7 @@ var Bubble = kitex.FC("Bubble", func(props BubbleProps) kitex.Node {
 		Key: props.Key,
 		Style: style.S().
 			Width(style.Percent(100)).
+			MinWidth(style.Percent(0)).
 			Display(style.DisplayFlex).
 			FlexDirection(style.FlexColumn).
 			AlignItems(align),
@@ -471,6 +472,7 @@ var Bubble = kitex.FC("Bubble", func(props BubbleProps) kitex.Node {
 					Gap(1).
 					Width(style.Percent(100)).
 					MaxWidth(style.Percent(100)).
+					MinWidth(style.Percent(0)).
 					Overflow(style.OverflowHidden),
 			}, children...),
 		),
