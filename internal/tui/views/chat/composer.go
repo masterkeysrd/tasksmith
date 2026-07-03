@@ -9,6 +9,7 @@ import (
 	"github.com/masterkeysrd/kite/extras/kitex"
 	"github.com/masterkeysrd/kite/key"
 	"github.com/masterkeysrd/kite/style"
+	"github.com/masterkeysrd/tasksmith/internal/agent/resolver"
 	"github.com/masterkeysrd/tasksmith/internal/tui/components"
 	"github.com/masterkeysrd/tasksmith/internal/tui/components/icon"
 	"github.com/masterkeysrd/tasksmith/internal/tui/mode"
@@ -42,11 +43,7 @@ var Composer = kitex.FC("Composer", func(props ComposerProps) kitex.Node {
 				"@": {"file", "lsp", "skill"},
 				"/": {"command"},
 			},
-			Prefixes: map[string]string{
-				"@file:":  "file",
-				"@sym:":   "lsp",
-				"@skill:": "skill",
-			},
+			Prefixes: resolver.PrefixToSourceMap(),
 		})
 	}, nil)
 
