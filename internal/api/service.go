@@ -17,6 +17,7 @@ import (
 	"github.com/masterkeysrd/loom/tool"
 	"github.com/masterkeysrd/tasksmith/internal/agent/model"
 	"github.com/masterkeysrd/tasksmith/internal/agent/permissions"
+	"github.com/masterkeysrd/tasksmith/internal/agent/resolver"
 	"github.com/masterkeysrd/tasksmith/internal/agent/tools"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	"github.com/masterkeysrd/tasksmith/internal/core/lsp"
@@ -555,7 +556,11 @@ func (s *Service) SendMessage(ctx context.Context, req SendMessageRequest) (*Sen
 	if s.sm == nil {
 		return nil, fmt.Errorf("session manager not initialized")
 	}
-	if err := s.sm.SendMessage(ctx, req.SessionID, req.Text); err != nil {
+	refs := make([]resolver.Reference, len(req.References))
+	for i, r := range req.References {
+		refs[i] = r.FromPayload()
+	}
+	if err := s.sm.SendMessage(ctx, req.SessionID, req.Text, refs); err != nil {
 		return nil, err
 	}
 	return &SendMessageResponse{Success: true}, nil

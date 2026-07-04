@@ -360,8 +360,8 @@ func TestSessionInboxQueue(t *testing.T) {
 
 	// 2. Call SendMessage twice immediately
 	// The first call starts the run, and the second call will find it running and queue the message.
-	_ = manager.SendMessage(ctx, s.ID, "Initial message to start runner")
-	err = manager.SendMessage(ctx, s.ID, "Queued feedback message")
+	_ = manager.SendMessage(ctx, s.ID, "Initial message to start runner", nil)
+	err = manager.SendMessage(ctx, s.ID, "Queued feedback message", nil)
 	if err != nil {
 		t.Fatalf("failed to send queued feedback message: %v", err)
 	}
@@ -508,7 +508,7 @@ func TestSendMessageRejectionOnPendingAuth(t *testing.T) {
 	})
 
 	// Attempt to send a message — should be rejected
-	err = manager.SendMessage(ctx, s.ID, "Hello agent")
+	err = manager.SendMessage(ctx, s.ID, "Hello agent", nil)
 	if err == nil {
 		t.Fatal("expected error when sending message while pending auth, got nil")
 	}
@@ -705,7 +705,7 @@ func TestMessageQueueAfterDecisionSubmission(t *testing.T) {
 	}
 
 	// Now send a message — should be queued (since status is running)
-	err = manager.SendMessage(ctx, s.ID, "Queued message after decision")
+	err = manager.SendMessage(ctx, s.ID, "Queued message after decision", nil)
 	if err != nil {
 		t.Fatalf("failed to send queued message: %v", err)
 	}
@@ -766,7 +766,7 @@ func TestActiveToolStreamInjection(t *testing.T) {
 	}
 
 	// 2. Set active running session state with a tool stream chunk in memory
-	_ = manager.SendMessage(ctx, s.ID, "Wake up agent") // starts runner state
+	_ = manager.SendMessage(ctx, s.ID, "Wake up agent", nil) // starts runner state
 
 	// Inject stream content manually into the manager's active sessions map
 	manager.SetToolStreamDebug(s.ID, "call_abc", "Hello from streaming tool output!")

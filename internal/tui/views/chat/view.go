@@ -523,11 +523,18 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 		optMsg.SetID(optMsgID)
 		setOptimisticMessages(append(optimisticMessages(), optMsg))
 
-		// Trigger SendMessage on the backend asynchronously
 		promise.New(func(ctx context.Context) (bool, error) {
+			var payloadRefs []resolver.ReferencePayload
+			if len(refs) > 0 {
+				payloadRefs = make([]resolver.ReferencePayload, len(refs))
+				for i, r := range refs {
+					payloadRefs[i] = r.ToPayload()
+				}
+			}
 			_, err := client.SendMessage(ctx, api.SendMessageRequest{
-				SessionID: sessionID,
-				Text:      text,
+				SessionID:  sessionID,
+				Text:       text,
+				References: payloadRefs,
 			})
 			if err != nil {
 				return false, err

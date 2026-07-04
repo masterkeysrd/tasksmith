@@ -440,16 +440,16 @@ func (m *Manager) ListTasks(sessionID string) []*tools.Task {
 }
 
 // SendMessage appends the user message and initiates the background Loom agent execution.
-func (m *Manager) SendMessage(ctx context.Context, sessionID string, text string) error {
-	return m.sendMessage(ctx, sessionID, text, nil)
+func (m *Manager) SendMessage(ctx context.Context, sessionID string, text string, refs []resolver.Reference) error {
+	return m.sendMessage(ctx, sessionID, text, refs, nil)
 }
 
 // SendSystemNotification appends a system notification message with metadata and starts/queues execution.
 func (m *Manager) SendSystemNotification(ctx context.Context, sessionID string, text string, meta map[string]any) error {
-	return m.sendMessage(ctx, sessionID, text, meta)
+	return m.sendMessage(ctx, sessionID, text, nil, meta)
 }
 
-func (m *Manager) sendMessage(ctx context.Context, sessionID string, text string, meta map[string]any) error {
+func (m *Manager) sendMessage(ctx context.Context, sessionID string, text string, refs []resolver.Reference, meta map[string]any) error {
 	m.mu.Lock()
 	sess, exists := m.activeSessions[sessionID]
 	if !exists {
@@ -466,7 +466,7 @@ func (m *Manager) sendMessage(ctx context.Context, sessionID string, text string
 	// Phase 4: Two-phase resolution with dedup
 	var resources []resolver.ResolvedResource
 	if m.resolver != nil {
-		resources, _ = m.resolver.ResolveReferences(ctx, text, nil)
+		resources, _ = m.resolver.ResolveReferences(ctx, text, refs)
 	}
 
 	m.mu.Lock()
@@ -474,10 +474,11 @@ func (m *Manager) sendMessage(ctx context.Context, sessionID string, text string
 	// Build message with attachments if resources were resolved
 	var msg message.Message
 	if len(resources) > 0 {
+		attachmentsXML := formatter.FormatAttachmentsBlock(resources, m.resolver)
 		var blocks []message.Block
 		blocks = append(blocks, &message.TextBlock{Text: text})
-		for _, res := range resources {
-			blocks = append(blocks, formatter.FormatResource(res)...)
+		if attachmentsXML != "" {
+			blocks = append(blocks, &message.TextBlock{Text: attachmentsXML})
 		}
 		msg = message.NewUser(blocks...)
 	} else {

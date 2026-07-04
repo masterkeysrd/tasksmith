@@ -2,22 +2,30 @@ package components
 
 import (
 	"fmt"
+	"image/color"
 	"strings"
 
 	"github.com/masterkeysrd/kite/extras/kitex"
 	"github.com/masterkeysrd/kite/style"
+	"github.com/masterkeysrd/tasksmith/internal/tui/components/icon"
 	"github.com/masterkeysrd/tasksmith/internal/tui/theme"
 	"github.com/yuin/goldmark"
 	"github.com/yuin/goldmark/ast"
 	"github.com/yuin/goldmark/extension"
 	extast "github.com/yuin/goldmark/extension/ast"
+	"github.com/yuin/goldmark/parser"
 	"github.com/yuin/goldmark/text"
+	"github.com/yuin/goldmark/util"
 )
 
 // MarkdownProps defines properties for the Markdown rendering component.
 type MarkdownProps struct {
 	Source string
 	Style  style.Style
+	// OnAttachmentClick is called when a @file:, @sym:, or @skill: pill is clicked.
+	// Receives the ref type ("file", "sym", "skill") and the raw value from the token.
+	// If nil, pills are rendered as static badges.
+	OnAttachmentClick func(refType, rawValue string)
 }
 
 // Markdown renders markdown content into Kite UI nodes using goldmark.
@@ -31,7 +39,14 @@ var Markdown = kitex.FC("Markdown", func(props MarkdownProps) kitex.Node {
 		}
 
 		src := []byte(props.Source)
-		md := goldmark.New(goldmark.WithExtensions(extension.Table))
+		md := goldmark.New(
+			goldmark.WithExtensions(extension.Table),
+			goldmark.WithParserOptions(
+				parser.WithInlineParsers(
+					util.Prioritized(&attachmentRefParser{}, 999),
+				),
+			),
+		)
 		doc := md.Parser().Parse(text.NewReader(src))
 
 		// renderInline renders inline nodes (Text, Span) inside a block.
@@ -84,6 +99,9 @@ var Markdown = kitex.FC("Markdown", func(props MarkdownProps) kitex.Node {
 
 		renderInline = func(n ast.Node) kitex.Node {
 			switch node := n.(type) {
+			case *AttachmentRefNode:
+				return renderAttachmentRefPill(node, t, props.OnAttachmentClick)
+
 			case *ast.Text:
 				// Fallback: normally text is coalesced in renderInlineChildren.
 				val := string(node.Value(src))
@@ -331,6 +349,90 @@ var Markdown = kitex.FC("Markdown", func(props MarkdownProps) kitex.Node {
 
 	return node
 })
+
+// renderAttachmentRefPill renders an @file:, @sym:, or @skill: token as an
+// inline pill badge matching the style used in fs_widgets.go tool badges:
+// a BaseFocus background pill with the appropriate icon and label.
+// When onAttachmentClick is non-nil the pill is rendered as an interactive
+// Button; otherwise it is a static box.
+func renderAttachmentRefPill(node *AttachmentRefNode, t *theme.Scheme, onAttachmentClick func(refType, rawValue string)) kitex.Node {
+	var iconNode kitex.Node
+	var labelText string
+	var iconColor color.Color
+
+	if t != nil {
+		iconColor = t.Color.Text.Secondary
+	}
+
+	switch node.RefType {
+	case "file":
+		iconNode = icon.FileIcon(icon.FileIconProps{Path: node.Label})
+		labelText = node.Label
+	case "sym":
+		if node.SymKind != "" {
+			iconNode, iconColor = icon.LspKindIcon(node.SymKind, t)
+		} else {
+			iconNode, iconColor = icon.LspKindIcon("function", t)
+		}
+		labelText = node.Label
+	case "skill":
+		if t != nil {
+			iconColor = t.Color.Surface.Info
+		}
+		iconNode = kitex.Span(kitex.SpanProps{
+			Style: style.S().Foreground(iconColor),
+		}, icon.Plugin)
+		labelText = node.Label
+	}
+
+	_ = iconColor // used for icon coloring above
+
+	var bg color.Color
+	if t != nil {
+		bg = t.Color.Surface.BaseFocus
+	}
+
+	pillBoxStyle := style.S().
+		Display(style.DisplayFlex).
+		FlexDirection(style.FlexRow).
+		AlignItems(style.AlignCenter).
+		Background(bg).
+		PaddingHorizontal(1).
+		Gap(1)
+
+	labelNode := kitex.Span(kitex.SpanProps{
+		Style: style.S().
+			Bold(true).
+			Foreground(color.RGBA{255, 255, 255, 255}),
+	}, kitex.Text(labelText))
+
+	var contentNode kitex.Node
+	if onAttachmentClick != nil {
+		refType := node.RefType
+		rawValue := node.Label
+		if node.SymKind != "" {
+			rawValue = node.Label + ":" + node.SymKind
+		}
+		contentNode = Button(ButtonProps{
+			Variant: ButtonText,
+			Color:   ButtonBase,
+			Style:   pillBoxStyle,
+			OnClick: func() { onAttachmentClick(refType, rawValue) },
+		},
+			iconNode,
+			labelNode,
+		)
+	} else {
+		contentNode = kitex.Box(kitex.BoxProps{Style: pillBoxStyle},
+			iconNode,
+			labelNode,
+		)
+	}
+
+	return kitex.Span(kitex.SpanProps{
+		Style: style.S().Display(style.DisplayInlineBlock),
+	}, contentNode)
+}
 
 func renderList(
 	list *ast.List,

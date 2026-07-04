@@ -3,6 +3,7 @@ package chat
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -170,16 +171,86 @@ var Message = kitex.FC("Message", func(props MessageProps) kitex.Node {
 		}, children...)
 	}
 
-	// Combine all text blocks for other roles
-	var texts []string
+	// Parse attachments XML from any block containing it
+	var attachmentsXML string
 	for _, block := range content {
 		if tb, ok := block.(*message.TextBlock); ok {
-			cleaned := tryExtractTextFromJSON(tb.Text)
-			texts = append(texts, cleaned)
+			if strings.HasPrefix(tb.Text, "<attachments>") {
+				attachmentsXML = tb.Text
+				break
+			}
 		}
 	}
-	if len(texts) == 0 {
-		return nil
+
+	var attachmentsMap map[string]XMLFile
+	if attachmentsXML != "" {
+		if parsed := parseAttachmentsXML(attachmentsXML); parsed != nil {
+			attachmentsMap = make(map[string]XMLFile)
+			for _, f := range parsed.Files {
+				attachmentsMap[f.Path] = f
+				attachmentsMap[filepath.Base(f.Path)] = f
+			}
+		}
 	}
-	return components.Markdown(components.MarkdownProps{Source: strings.Join(texts, "\n")})
+
+	// Only render the first TextBlock for non-assistant roles (e.g. user).
+	// User messages are always structured as [userText, attachmentsXML?] by session.go —
+	// the attachments block is context for the model and should not be displayed in the chat.
+	for _, block := range content {
+		if tb, ok := block.(*message.TextBlock); ok {
+			// Skip the attachments XML block itself
+			if strings.HasPrefix(tb.Text, "<attachments>") {
+				continue
+			}
+			cleaned := tryExtractTextFromJSON(tb.Text)
+			if cleaned == "" {
+				return nil
+			}
+
+			var onAttachmentClick func(refType, rawValue string)
+			if props.OnViewPreview != nil && len(attachmentsMap) > 0 {
+				onAttachmentClick = func(refType, rawValue string) {
+					if refType == "file" {
+						f, found := attachmentsMap[rawValue]
+						if !found {
+							f, found = attachmentsMap[filepath.Base(rawValue)]
+						}
+						if found {
+							if f.Reason != "" {
+								var explanation string
+								if f.Mime != "" && f.Mime != "text/plain" {
+									explanation = fmt.Sprintf("Attachment is a binary file (%s).\nUse the view_file tool to inspect.", f.Mime)
+								} else {
+									explanation = fmt.Sprintf("Attachment is too large to preview inline (%d lines).\nUse the view_file tool to inspect.", f.Lines)
+								}
+								props.OnViewPreview(
+									fmt.Sprintf("Attachment: %s", filepath.Base(f.Path)),
+									preview.DefaultTextPreview{
+										Text: explanation,
+									},
+								)
+							} else {
+								props.OnViewPreview(
+									fmt.Sprintf("Viewing %s", filepath.Base(f.Path)),
+									preview.FileViewPreview{
+										Path:      f.Path,
+										Content:   stripLinePrefixes(f.Content),
+										IsBinary:  f.Mime != "" && f.Mime != "text/plain",
+										MimeType:  f.Mime,
+										StartLine: 1,
+									},
+								)
+							}
+						}
+					}
+				}
+			}
+
+			return components.Markdown(components.MarkdownProps{
+				Source:            cleaned,
+				OnAttachmentClick: onAttachmentClick,
+			})
+		}
+	}
+	return nil
 })

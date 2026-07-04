@@ -87,6 +87,7 @@ func TestFormatAttachmentsBlock(t *testing.T) {
 					FilePath:   "internal/gen/large.go",
 					Content:    strings.Repeat("line\n", 5000),
 					TotalLines: 8400,
+					Truncated:  true,
 				},
 			},
 			resolver: newResolver(false),
@@ -168,6 +169,7 @@ func TestFormatAttachmentsBlock(t *testing.T) {
 					FilePath:   "internal/gen/large.go",
 					Content:    strings.Repeat("x\n", 5000),
 					TotalLines: 8400,
+					Truncated:  true,
 				},
 				&resolver.ResolvedSymbol{
 					Name:      "Foo",

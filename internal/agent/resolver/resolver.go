@@ -94,6 +94,8 @@ func New(l *lsp.Manager, cwd string, ft filetrack.FileTracker, storage FileStora
 	}
 }
 
+// EmbedThreshold is the maximum character count for symbols and skills to be
+// embedded inline in the prompt. Files use the Truncated field instead.
 const EmbedThreshold = 4000 // characters (~1000 tokens)
 
 // ShouldEmbed determines whether the resource content is small enough to be
@@ -110,8 +112,11 @@ func (r *Resolver) ShouldEmbed(res ResolvedResource) bool {
 		if val.IsBinary {
 			return false
 		}
-		// Token efficiency: only embed small text files
-		return len(val.Content) > 0 && len(val.Content) <= EmbedThreshold
+		// Embed only when we have the complete file content. readTextFile sets
+		// Truncated=true when the file exceeded MaxTotalChars, meaning we only
+		// have a partial view — in that case, reference it so the agent knows
+		// to call view_file for the rest.
+		return len(val.Content) > 0 && !val.Truncated
 
 	case *ResolvedSymbol:
 		return len(val.Snippet) > 0 && len(val.Snippet) <= EmbedThreshold

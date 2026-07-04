@@ -79,3 +79,32 @@ func ExtractReferences(text string, tracked []Reference) []Reference {
 func isWhitespace(b byte) bool {
 	return b == ' ' || b == '\t' || b == '\n' || b == '\r'
 }
+
+// ReferencePayload is the JSON-serializable representation of a Reference
+// used for API communication between the TUI and the API service.
+type ReferencePayload struct {
+	Type        ResourceType `json:"type"`
+	Value       string       `json:"value"`
+	InsertText  string       `json:"insert_text"`
+	FromTracker bool         `json:"from_tracker"`
+}
+
+// ToPayload converts a Reference to its JSON-serializable payload form.
+func (r Reference) ToPayload() ReferencePayload {
+	return ReferencePayload{
+		Type:        r.Type,
+		Value:       r.Value,
+		InsertText:  r.InsertText,
+		FromTracker: r.FromTracker,
+	}
+}
+
+// FromPayload converts a JSON-serializable payload back to a Reference.
+func (p ReferencePayload) FromPayload() Reference {
+	return Reference{
+		Type:        p.Type,
+		Value:       p.Value,
+		InsertText:  p.InsertText,
+		FromTracker: p.FromTracker,
+	}
+}

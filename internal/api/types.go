@@ -5,6 +5,7 @@ import (
 
 	"github.com/masterkeysrd/tasksmith/internal/agent/model"
 	"github.com/masterkeysrd/tasksmith/internal/agent/permissions"
+	"github.com/masterkeysrd/tasksmith/internal/agent/resolver"
 	"github.com/masterkeysrd/tasksmith/internal/metrics"
 )
 
@@ -228,8 +229,9 @@ type ArchiveSessionResponse struct {
 }
 
 type SendMessageRequest struct {
-	SessionID string `json:"session_id"`
-	Text      string `json:"text"`
+	SessionID  string                      `json:"session_id"`
+	Text       string                      `json:"text"`
+	References []resolver.ReferencePayload `json:"references,omitempty"`
 }
 
 type SendMessageResponse struct {
