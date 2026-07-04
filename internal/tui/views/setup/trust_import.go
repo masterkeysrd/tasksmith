@@ -204,7 +204,6 @@ var TrustImportView = kitex.FC("TrustImportView", func(props TrustImportProps) k
 					},
 						kitex.Text("[!] SECURITY ALERT: Only trust workspaces you verify. AI agents will run local commands."),
 					),
-
 				),
 			),
 

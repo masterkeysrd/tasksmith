@@ -9,6 +9,7 @@ import (
 	"github.com/masterkeysrd/kite/promise"
 	"github.com/masterkeysrd/kite/style"
 	"github.com/masterkeysrd/tasksmith/internal/api"
+	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	"github.com/masterkeysrd/tasksmith/internal/tui/active"
 	tuiapi "github.com/masterkeysrd/tasksmith/internal/tui/api"
 	"github.com/masterkeysrd/tasksmith/internal/tui/command"
@@ -16,7 +17,6 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/tui/components/icon"
 	"github.com/masterkeysrd/tasksmith/internal/tui/queries"
 	"github.com/masterkeysrd/tasksmith/internal/tui/theme"
-	"github.com/masterkeysrd/tasksmith/internal/core/log"
 )
 
 // ViewProps defines the properties for the Welcome view.

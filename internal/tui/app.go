@@ -5,6 +5,7 @@ import (
 	"github.com/masterkeysrd/kite/extras/wind"
 	"github.com/masterkeysrd/kite/style"
 	"github.com/masterkeysrd/tasksmith/internal/api"
+	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	"github.com/masterkeysrd/tasksmith/internal/tui/active"
 	tuiapi "github.com/masterkeysrd/tasksmith/internal/tui/api"
 	"github.com/masterkeysrd/tasksmith/internal/tui/components"
@@ -20,7 +21,6 @@ import (
 	permissionsview "github.com/masterkeysrd/tasksmith/internal/tui/views/permissions"
 	"github.com/masterkeysrd/tasksmith/internal/tui/views/setup"
 	"github.com/masterkeysrd/tasksmith/internal/tui/views/welcome"
-	"github.com/masterkeysrd/tasksmith/internal/core/log"
 )
 
 // AppProps defines the top-level application properties.
