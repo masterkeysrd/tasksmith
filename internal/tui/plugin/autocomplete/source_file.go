@@ -35,11 +35,11 @@ func (s *FileSource) Query(ctx context.Context, query string) ([]Item, error) {
 	var items []Item
 
 	for _, r := range results {
-		badge := "FILE"
+		badge := "FILE "
 		kind := "file"
 		insertVal := "@file:" + r.ShortPath
 		if r.IsDir {
-			badge = "DIR"
+			badge = "DIR  "
 			kind = "directory"
 			insertVal = "@file:" + r.ShortPath + "/"
 		}

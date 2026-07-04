@@ -50,15 +50,23 @@ func (f *ResolvedFile) Path() string       { return f.FilePath }
 
 // ResolvedSymbol holds the raw structured data of a resolved LSP symbol.
 type ResolvedSymbol struct {
-	Name        string
-	Kind        string
-	Signature   string
-	Container   string
-	FilePath    string
-	StartLine   int
-	EndLine     int
-	Snippet     string
-	Diagnostics []lsp.Diagnostic
+	Name                 string
+	Kind                 string
+	Signature            string
+	TypeDefinedAt        string
+	Container            string
+	FilePath             string
+	StartLine            int
+	EndLine              int
+	Snippet              string
+	Diagnostics          []lsp.Diagnostic
+	Docs                 string
+	DocsTruncated        bool
+	References           []string
+	ReferencesTotal      int
+	Implementations      []string
+	ImplementationsTotal int
+	FullReportPath       string
 }
 
 func (s *ResolvedSymbol) Type() ResourceType { return TypeSymbol }
@@ -119,10 +127,10 @@ func (r *Resolver) ShouldEmbed(res ResolvedResource) bool {
 		return len(val.Content) > 0 && !val.Truncated
 
 	case *ResolvedSymbol:
-		return len(val.Snippet) > 0 && len(val.Snippet) <= EmbedThreshold
+		return len(val.Snippet) > 0
 
 	case *ResolvedSkill:
-		return len(val.Instructions) > 0 && len(val.Instructions) <= EmbedThreshold
+		return len(val.Instructions) > 0
 	}
 
 	return false

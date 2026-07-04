@@ -182,3 +182,28 @@ func (p MarkdownPreview) MarshalJSON() ([]byte, error) {
 		Alias: Alias(p),
 	})
 }
+
+// SymbolViewPreview represents a symbol definition snippet, documentation, diagnostics, and workspace info.
+type SymbolViewPreview struct {
+	Name            string   `json:"name"`
+	Kind            string   `json:"kind"`
+	File            string   `json:"file"`
+	Snippet         string   `json:"snippet"`
+	Docs            string   `json:"docs"`
+	Diagnostics     string   `json:"diagnostics"`
+	References      []string `json:"references"`
+	Implementations []string `json:"implementations"`
+}
+
+func (SymbolViewPreview) Type() string { return "symbol_view" }
+
+func (p SymbolViewPreview) MarshalJSON() ([]byte, error) {
+	type Alias SymbolViewPreview
+	return json.Marshal(&struct {
+		Type string `json:"type"`
+		Alias
+	}{
+		Type:  p.Type(),
+		Alias: Alias(p),
+	})
+}

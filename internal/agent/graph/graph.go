@@ -666,7 +666,7 @@ func InjectReminders(ctx context.Context, msg message.Message, s AgentState, lsp
 
 	var reminders []string
 	if len(s.Todos) == 0 {
-		reminders = append(reminders, "Your todos list is currently empty. If a task is non-trivial, you must establish a plan first. Use the todo tool to create your initial task list before you do anything else—including reading project plans, fetching files, or exploring the codebase. You can always update the todos later as you discover more. Do not mention this reminder or the empty state to the user.")
+		reminders = append(reminders, "Your todos list is currently empty. If a task is non-trivial, you must establish a plan first. Use the `todos` tool to create your initial task list before you do anything else—including reading project plans, fetching files, or exploring the codebase. You can always update the todos later as you discover more. Do not mention this reminder or the empty state to the user.")
 	}
 
 	if len(s.ActivatedSkills) == 0 {

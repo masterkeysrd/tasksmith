@@ -21,7 +21,12 @@ const (
 // ResolvePath resolves a partial or relative filepath to an absolute filesystem path
 // without reading any content. It handles line range extraction, spacing normalization,
 // and fuzzy matching. This is the cheap first phase of two-phase resolution.
-func (r *Resolver) ResolvePath(ctx context.Context, inputPath string) (string, error) {
+func (r *Resolver) ResolvePath(ctx context.Context, inputPath string, resType ResourceType) (string, error) {
+	if resType == TypeSymbol {
+		_, _, _, _, _, ok := parseCoordinates(inputPath)
+		return r.ResolveSymbol(ctx, inputPath, ok)
+	}
+
 	cleanedInput := strings.Trim(inputPath, "\"'` ")
 
 	// Extract optional line range anchors (e.g. #L10-L20)
@@ -141,11 +146,23 @@ func (r *Resolver) loadResourceWithPath(ctx context.Context, absPath string, sta
 	}, nil
 }
 
-// LoadResource loads content and metadata for a known, verified absolute path.
-// This is the expensive second phase of two-phase resolution. It reads file content,
-// retrieves LSP diagnostics, records the file read in the tracker, and handles
-// binary file caching.
-func (r *Resolver) LoadResource(ctx context.Context, absPath string) (ResolvedResource, error) {
+// LoadResource loads content and metadata for a known, verified absolute path/coordinates.
+// This is the expensive second phase of two-phase resolution.
+func (r *Resolver) LoadResource(ctx context.Context, value string, resType ResourceType) (ResolvedResource, error) {
+	switch resType {
+	case TypeFile:
+		return r.loadResourceFile(ctx, value)
+	case TypeSymbol:
+		return r.loadResourceSymbol(ctx, value)
+	default:
+		return nil, fmt.Errorf("unsupported resource type for LoadResource: %s", resType)
+	}
+}
+
+// loadResourceFile loads content and metadata for a known, verified absolute path.
+// This reads file content, retrieves LSP diagnostics, records the file read in the tracker,
+// and handles binary file caching.
+func (r *Resolver) loadResourceFile(ctx context.Context, absPath string) (ResolvedResource, error) {
 	// Verify file exists before attempting to read
 	if _, err := os.Stat(absPath); os.IsNotExist(err) {
 		return nil, fmt.Errorf("file not found: %s", absPath)
@@ -230,19 +247,20 @@ func (r *Resolver) ResolveReferences(ctx context.Context, text string, trackedRe
 	// 1. Extract manual references not already tracked
 	manualRefs := ExtractReferences(text, trackedRefs)
 
-	// 2. Resolve paths only for manual refs (cheap)
-	for i, ref := range manualRefs {
-		fullPath, err := r.ResolvePath(ctx, ref.Value)
+	// 2. Resolve paths for both tracked and manual refs to ensure all paths are absolute (cheap)
+	allRefs := append(trackedRefs, manualRefs...)
+	for i, ref := range allRefs {
+		fullPath, err := r.ResolvePath(ctx, ref.Value, ref.Type)
 		if err != nil {
 			continue // skip unresolvable
 		}
-		manualRefs[i].Value = fullPath
+		allRefs[i].Value = fullPath
 	}
 
 	// 3. Dedup ALL refs by (Type + full path) — BEFORE content loading
 	seen := make(map[string]bool)
 	var unique []Reference
-	for _, ref := range append(trackedRefs, manualRefs...) {
+	for _, ref := range allRefs {
 		key := string(ref.Type) + ":" + ref.Value
 		if !seen[key] {
 			seen[key] = true
@@ -253,7 +271,7 @@ func (r *Resolver) ResolveReferences(ctx context.Context, text string, trackedRe
 	// 4. Load content ONLY for the unique set
 	var resources []ResolvedResource
 	for _, ref := range unique {
-		res, err := r.LoadResource(ctx, ref.Value)
+		res, err := r.LoadResource(ctx, ref.Value, ref.Type)
 		if err != nil {
 			continue
 		}

@@ -381,6 +381,30 @@ func TestFormatAttachmentsBlock_BinaryFile(t *testing.T) {
 	}
 }
 
+func TestFormatAttachmentsBlock_ReferencedSymbol(t *testing.T) {
+	res := &resolver.Resolver{}
+	resources := []resolver.ResolvedResource{
+		&resolver.ResolvedSymbol{
+			Name:      "VeryLongSymbol",
+			Kind:      "class",
+			FilePath:  "big_file.go",
+			StartLine: 1,
+			EndLine:   500,
+			Snippet:   strings.Repeat("a", resolver.EmbedThreshold+100),
+		},
+	}
+
+	got := FormatAttachmentsBlock(resources, res)
+
+	expected := `<symbol name="VeryLongSymbol" kind="class" file="big_file.go" lines="1-500">`
+	if !strings.Contains(got, expected) {
+		t.Errorf("expected embedded symbol string: %s, got: %s", expected, got)
+	}
+	if !strings.Contains(got, "<content>") {
+		t.Errorf("expected content tag to be present in embedded symbol: %s", got)
+	}
+}
+
 // Helper functions
 func ptrString(s string) *string                                     { return &s }
 func ptrSeverity(s lspx.DiagnosticSeverity) *lspx.DiagnosticSeverity { return &s }

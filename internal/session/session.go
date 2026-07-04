@@ -478,7 +478,12 @@ func (m *Manager) sendMessage(ctx context.Context, sessionID string, text string
 		var blocks []message.Block
 		blocks = append(blocks, &message.TextBlock{Text: text})
 		if attachmentsXML != "" {
-			blocks = append(blocks, &message.TextBlock{Text: attachmentsXML})
+			blocks = append(blocks, &message.TextBlock{
+				Text: attachmentsXML,
+				Extras: map[string]any{
+					"is_attachments": true,
+				},
+			})
 		}
 		msg = message.NewUser(blocks...)
 	} else {

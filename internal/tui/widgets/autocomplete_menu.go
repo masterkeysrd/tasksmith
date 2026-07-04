@@ -2,7 +2,11 @@ package widgets
 
 import (
 	"context"
+	"fmt"
 	"image/color"
+	"path/filepath"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/masterkeysrd/kite/cursor"
@@ -31,8 +35,8 @@ var (
 	overlayCardBaseStyle = style.S().
 				Display(style.DisplayFlex).
 				FlexDirection(style.FlexColumn).
-				Width(style.Cells(58)). // Fixed width to keep overlay stable
-				Padding(0, 1)
+				Width(style.Cells(64)). // Increased from 58
+				Padding(0)              // Reduced from 0, 1
 
 	menuTitleStyle = style.S().
 			Bold(true).
@@ -55,13 +59,11 @@ var (
 
 	// Fixed-width column styles to achieve a clean tabular alignment
 	menuIconColStyle = style.S().
-				Width(style.Cells(2)).
-				MarginRight(1)
+				Width(style.Cells(2))
 
 	menuBadgeColStyle = style.S().
-				Width(style.Cells(8)).
-				Bold(true).
-				MarginRight(1)
+				Width(style.Cells(5)). // 5-char badges (CLASS, CONST, FIELD, etc.)
+				Bold(true)
 
 	menuLabelColStyle = style.S().
 				Width(style.Cells(22)).
@@ -71,6 +73,14 @@ var (
 	menuDetailColStyle = style.S().
 				Flex(1, 1, style.Cells(0)).
 				Overflow(style.OverflowHidden)
+
+	menuFooterStyle = style.S().
+			Display(style.DisplayFlex).
+			FlexDirection(style.FlexRow).
+			AlignItems(style.AlignCenter).
+			Padding(0, 1).
+			Height(style.Cells(1)).
+			Overflow(style.OverflowHidden)
 )
 
 // AutocompleteMenu renders the floating dropdown list of completion suggestions in a tabular format.
@@ -130,14 +140,13 @@ var AutocompleteMenu = kitex.FC("AutocompleteMenu", func(props AutocompleteMenuP
 
 	t := theme.UseTheme()
 
-	var bg, borderColor, textCol, titleCol, detailCol color.Color
+	var bg, borderColor, textCol, detailCol color.Color
 	var activeBg, activeFg, activeDetailCol color.Color
 
 	if t != nil {
 		bg = t.Color.Surface.BaseFocus
 		borderColor = t.Color.Border.Primary
 		textCol = t.Color.Text.Secondary
-		titleCol = t.Color.Text.Secondary
 		detailCol = t.Color.Text.Tertiary
 
 		// Use BaseHover for a subtle selection block to avoid washing out text
@@ -149,7 +158,6 @@ var AutocompleteMenu = kitex.FC("AutocompleteMenu", func(props AutocompleteMenuP
 		bg = color.RGBA{R: 24, G: 28, B: 38, A: 255}
 		borderColor = color.RGBA{R: 108, G: 124, B: 171, A: 255}
 		textCol = color.RGBA{R: 200, G: 210, B: 230, A: 255}
-		titleCol = color.RGBA{R: 176, G: 188, B: 220, A: 255}
 		detailCol = color.RGBA{R: 142, G: 151, B: 178, A: 255}
 		activeBg = color.RGBA{R: 63, G: 84, B: 145, A: 255}
 		activeFg = color.RGBA{R: 255, G: 255, B: 255, A: 255}
@@ -164,9 +172,6 @@ var AutocompleteMenu = kitex.FC("AutocompleteMenu", func(props AutocompleteMenuP
 	return kitex.Box(kitex.BoxProps{
 		Style: containerStyle,
 	},
-		kitex.Box(kitex.BoxProps{
-			Style: menuTitleStyle.Foreground(titleCol),
-		}, kitex.Text("Autocomplete")),
 		kitex.IfElse(len(acState.FilteredItems) == 0,
 			kitex.Box(kitex.BoxProps{
 				Style: style.S().Foreground(detailCol).Padding(0, 1),
@@ -202,7 +207,7 @@ var AutocompleteMenu = kitex.FC("AutocompleteMenu", func(props AutocompleteMenuP
 						}, kitex.IfElse(iNode != nil, iNode, kitex.Text(" ")))
 					}
 
-					// 2. Category Badge Column (Fixed Width: 8)
+					// 2. Category Badge Column (Fixed Width: 4)
 					var badgeNode kitex.Node
 					if !props.HideBadges {
 						var bText string
@@ -210,15 +215,13 @@ var AutocompleteMenu = kitex.FC("AutocompleteMenu", func(props AutocompleteMenuP
 						if item.Badge != "" {
 							bText = item.Badge
 							if t != nil {
-								switch item.Badge {
-								case "FILE":
+								switch bText {
+								case "FILE ", "DIR  ":
 									badgeCol = t.Color.Surface.Success
-								case "LSP":
-									badgeCol = t.Color.Surface.Info
-								case "CMD":
+								case "CMD  ":
 									badgeCol = t.Color.Surface.Tertiary
 								default:
-									badgeCol = t.Color.Surface.Secondary
+									badgeCol = t.Color.Surface.Info
 								}
 							} else {
 								badgeCol = color.RGBA{R: 123, G: 205, B: 165, A: 255}
@@ -265,6 +268,52 @@ var AutocompleteMenu = kitex.FC("AutocompleteMenu", func(props AutocompleteMenuP
 				}),
 			),
 		),
+		func() kitex.Node {
+			if acState.SelectedIndex >= 0 && acState.SelectedIndex < len(acState.FilteredItems) {
+				selectedItem := acState.FilteredItems[acState.SelectedIndex]
+				var footerText string
+				if strings.HasPrefix(selectedItem.Badge, "FILE") || strings.HasPrefix(selectedItem.Badge, "DIR") {
+					footerText = "Path: " + selectedItem.ID
+				} else if strings.HasPrefix(selectedItem.Badge, "CMD") {
+					footerText = "Cmd: " + selectedItem.Label
+				} else {
+					// Symbol coordinates
+					parts := strings.Split(selectedItem.ID, ":")
+					isLocal := len(parts) > 0 && !filepath.IsAbs(parts[0]) && !strings.HasPrefix(parts[0], "..")
+					if len(parts) >= 2 && isLocal {
+						lineNum := 1
+						if l, err := strconv.Atoi(parts[1]); err == nil {
+							lineNum = l + 1
+						}
+						var declName string
+						if len(parts) >= 5 {
+							declName = " (" + parts[4] + ")"
+						}
+						footerText = fmt.Sprintf("Decl: %s:%d%s", parts[0], lineNum, declName)
+					} else {
+						var declName string
+						if len(parts) >= 5 {
+							declName = parts[4]
+						} else {
+							declName = selectedItem.Label
+						}
+						footerText = "Decl: " + declName + " (external)"
+					}
+				}
+
+				var bgDarker color.Color
+				if t != nil {
+					bgDarker = t.Color.Surface.Base
+				} else {
+					bgDarker = color.RGBA{R: 16, G: 20, B: 28, A: 255}
+				}
+
+				return kitex.Box(kitex.BoxProps{
+					Style: menuFooterStyle.Background(bgDarker).Foreground(detailCol),
+				}, kitex.Text(footerText))
+			}
+			return nil
+		}(),
 	)
 })
 
@@ -353,14 +402,14 @@ var AutocompleteOverlay = kitex.FCC("AutocompleteOverlay", func(props Autocomple
 				}
 			}
 
-			menuWidth := 58
+			menuWidth := 64
 
-			// Dynamic Height Calculation (includes border + title box + list items):
+			// Dynamic Height Calculation (includes border + list items):
 			numItems := len(acState.FilteredItems)
 			if numItems > 8 {
 				numItems = 8
 			}
-			menuHeight := numItems + 4
+			menuHeight := numItems + 3
 
 			// Get the cursor offset from inputAnchor
 			var cursorOffset int
@@ -401,8 +450,89 @@ var AutocompleteOverlay = kitex.FCC("AutocompleteOverlay", func(props Autocomple
 			Display(display).
 			MarginLeft(marginLeft).
 			MarginTop(marginTop).
-			Width(style.Cells(58)).
+			Width(style.Cells(64)).
 			FlexDirection(style.FlexColumn).
 			Background(color.Transparent),
 	}, props.Children...)
 })
+
+func extractPackageFromPath(path string) string {
+	path = filepath.ToSlash(path)
+
+	// Go package mod cache
+	if idx := strings.Index(path, "go/pkg/mod/"); idx != -1 {
+		sub := path[idx+len("go/pkg/mod/"):]
+		if lastSlash := strings.LastIndex(sub, "/"); lastSlash != -1 {
+			sub = sub[:lastSlash]
+		}
+		if atIdx := strings.Index(sub, "@"); atIdx != -1 {
+			afterAt := sub[atIdx:]
+			if nextSlash := strings.Index(afterAt, "/"); nextSlash != -1 {
+				sub = sub[:atIdx] + afterAt[nextSlash:]
+			} else {
+				sub = sub[:atIdx]
+			}
+		}
+		return sub
+	}
+
+	// Go standard library
+	if idx := strings.LastIndex(path, "/src/"); idx != -1 {
+		sub := path[idx+len("/src/"):]
+		if lastSlash := strings.LastIndex(sub, "/"); lastSlash != -1 {
+			return sub[:lastSlash]
+		}
+		return sub
+	}
+
+	// Node/TypeScript node_modules
+	if idx := strings.Index(path, "node_modules/"); idx != -1 {
+		sub := path[idx+len("node_modules/"):]
+		if lastSlash := strings.LastIndex(sub, "/"); lastSlash != -1 {
+			sub = sub[:lastSlash]
+		}
+		if strings.HasPrefix(sub, "@") {
+			parts := strings.Split(sub, "/")
+			if len(parts) >= 2 {
+				return parts[0] + "/" + parts[1]
+			}
+		} else {
+			parts := strings.Split(sub, "/")
+			if len(parts) >= 1 {
+				return parts[0]
+			}
+		}
+		return sub
+	}
+
+	// Python site-packages & dist-packages
+	if idx := strings.Index(path, "site-packages/"); idx != -1 {
+		sub := path[idx+len("site-packages/"):]
+		if lastSlash := strings.LastIndex(sub, "/"); lastSlash != -1 {
+			sub = sub[:lastSlash]
+		}
+		parts := strings.Split(sub, "/")
+		if len(parts) >= 1 {
+			return parts[0]
+		}
+		return sub
+	}
+	if idx := strings.Index(path, "dist-packages/"); idx != -1 {
+		sub := path[idx+len("dist-packages/"):]
+		if lastSlash := strings.LastIndex(sub, "/"); lastSlash != -1 {
+			sub = sub[:lastSlash]
+		}
+		parts := strings.Split(sub, "/")
+		if len(parts) >= 1 {
+			return parts[0]
+		}
+		return sub
+	}
+
+	// Fallback to directory name
+	dir := filepath.Dir(path)
+	if dir == "." || dir == "/" {
+		return ""
+	}
+	return filepath.Base(dir)
+}

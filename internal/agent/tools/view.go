@@ -50,7 +50,11 @@ func (h *ToolHandlers) View(ctx context.Context, in ViewArgs) (ViewOutput, error
 
 	// 1. Resolve file via the core resolver
 	r := resolver.New(h.LspManager, h.CWD, h.FileTracker, h.Storage)
-	res, err := r.ResolveFile(ctx, targetPath)
+	absPath, err := r.ResolvePath(ctx, targetPath, resolver.TypeFile)
+	if err != nil {
+		return ViewOutput{}, err
+	}
+	res, err := r.LoadResource(ctx, absPath, resolver.TypeFile)
 	if err != nil {
 		return ViewOutput{}, err
 	}

@@ -39,7 +39,7 @@ func (s *CommandSource) Query(ctx context.Context, query string) ([]Item, error)
 					ID:          cmd,
 					Label:       cmd,
 					Sublabel:    "System Command",
-					Badge:       "CMD",
+					Badge:       "CMD  ",
 					Kind:        "command",
 					InsertValue: cmd,
 				},

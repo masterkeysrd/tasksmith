@@ -13,8 +13,10 @@ import (
 )
 
 type XMLAttachments struct {
-	XMLName xml.Name  `xml:"attachments"`
-	Files   []XMLFile `xml:"file"`
+	XMLName xml.Name    `xml:"attachments"`
+	Files   []XMLFile   `xml:"file"`
+	Symbols []XMLSymbol `xml:"symbol"`
+	Skills  []XMLSkill  `xml:"skill"`
 }
 
 type XMLFile struct {
@@ -25,9 +27,35 @@ type XMLFile struct {
 	Content string `xml:"content"`
 }
 
+type XMLSymbol struct {
+	Name            string   `xml:"name,attr"`
+	Kind            string   `xml:"kind,attr"`
+	File            string   `xml:"file,attr"`
+	Lines           string   `xml:"lines,attr"`
+	Content         string   `xml:"content"`
+	TypeDefinedAt   string   `xml:"type_defined_at"`
+	Docs            string   `xml:"docs"`
+	DocsTruncated   bool     `xml:"docs_truncated"`
+	FullReportPath  string   `xml:"full_report_path"`
+	References      []string `xml:"references>reference"`
+	Implementations []string `xml:"implementations>implementation"`
+	Diagnostics     string   `xml:"diagnostics"`
+}
+
+type XMLSkill struct {
+	Name    string `xml:"name,attr"`
+	Content string `xml:"content"`
+}
+
 func parseAttachmentsXML(xmlStr string) *XMLAttachments {
+	startIdx := strings.Index(xmlStr, "<attachments>")
+	if startIdx == -1 {
+		return nil
+	}
+	cleanXML := xmlStr[startIdx:]
+
 	var attachments XMLAttachments
-	err := xml.Unmarshal([]byte(xmlStr), &attachments)
+	err := xml.Unmarshal([]byte(cleanXML), &attachments)
 	if err != nil {
 		return nil
 	}

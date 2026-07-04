@@ -584,6 +584,8 @@ type LspInspectOutputResult struct {
 	Signature string `json:"signature,omitempty" jsonschema:"Code signature of the symbol."`
 	// TypeDefinedAt: File path and line where the symbol's underlying type is defined (if applicable).
 	TypeDefinedAt string `json:"type_defined_at,omitempty" jsonschema:"File path and line where the symbol's underlying type is defined (if applicable)."`
+	// Snippet: The code definition snippet.
+	Snippet string `json:"snippet,omitempty" jsonschema:"The code definition snippet."`
 }
 
 type LspInspectOutputSimilarSymbolsItem struct {

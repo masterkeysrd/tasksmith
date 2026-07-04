@@ -3,6 +3,7 @@ package chat
 import (
 	"context"
 	"fmt"
+	"maps"
 	"path/filepath"
 	"strings"
 	"time"
@@ -70,9 +71,7 @@ var Message = kitex.FC("Message", func(props MessageProps) kitex.Node {
 		onDecision := func(dec permissions.AuthorizationDecision) {
 			current := localDecisions()
 			newDecisions := make(map[string]permissions.AuthorizationDecision)
-			for k, v := range current {
-				newDecisions[k] = v
-			}
+			maps.Copy(newDecisions, current)
 			newDecisions[dec.ToolCallID] = dec
 			setLocalDecisions(newDecisions)
 
@@ -175,20 +174,33 @@ var Message = kitex.FC("Message", func(props MessageProps) kitex.Node {
 	var attachmentsXML string
 	for _, block := range content {
 		if tb, ok := block.(*message.TextBlock); ok {
-			if strings.HasPrefix(tb.Text, "<attachments>") {
+			if tb.Extras != nil && tb.Extras["is_attachments"] == true {
 				attachmentsXML = tb.Text
 				break
 			}
 		}
 	}
 
-	var attachmentsMap map[string]XMLFile
+	var filesMap map[string]XMLFile
+	var symbolsMap map[string]XMLSymbol
+	var skillsMap map[string]XMLSkill
 	if attachmentsXML != "" {
 		if parsed := parseAttachmentsXML(attachmentsXML); parsed != nil {
-			attachmentsMap = make(map[string]XMLFile)
+			filesMap = make(map[string]XMLFile)
 			for _, f := range parsed.Files {
-				attachmentsMap[f.Path] = f
-				attachmentsMap[filepath.Base(f.Path)] = f
+				filesMap[f.Path] = f
+				filesMap[filepath.Base(f.Path)] = f
+			}
+			symbolsMap = make(map[string]XMLSymbol)
+			for _, s := range parsed.Symbols {
+				symbolsMap[s.Name] = s
+				symbolsMap[fmt.Sprintf("@sym:%s:%s", s.Name, s.Kind)] = s
+				symbolsMap[s.Name+":"+s.Kind] = s
+			}
+			skillsMap = make(map[string]XMLSkill)
+			for _, sk := range parsed.Skills {
+				skillsMap[sk.Name] = sk
+				skillsMap["@skill:"+sk.Name] = sk
 			}
 		}
 	}
@@ -196,24 +208,35 @@ var Message = kitex.FC("Message", func(props MessageProps) kitex.Node {
 	// Only render the first TextBlock for non-assistant roles (e.g. user).
 	// User messages are always structured as [userText, attachmentsXML?] by session.go —
 	// the attachments block is context for the model and should not be displayed in the chat.
+	var nodes []kitex.Node
 	for _, block := range content {
 		if tb, ok := block.(*message.TextBlock); ok {
 			// Skip the attachments XML block itself
-			if strings.HasPrefix(tb.Text, "<attachments>") {
+			if tb.Extras != nil && tb.Extras["is_attachments"] == true {
 				continue
 			}
 			cleaned := tryExtractTextFromJSON(tb.Text)
 			if cleaned == "" {
-				return nil
+				continue
 			}
 
 			var onAttachmentClick func(refType, rawValue string)
-			if props.OnViewPreview != nil && len(attachmentsMap) > 0 {
+			if props.OnViewPreview != nil && (len(filesMap) > 0 || len(symbolsMap) > 0 || len(skillsMap) > 0) {
 				onAttachmentClick = func(refType, rawValue string) {
 					if refType == "file" {
-						f, found := attachmentsMap[rawValue]
+						f, found := filesMap[rawValue]
 						if !found {
-							f, found = attachmentsMap[filepath.Base(rawValue)]
+							f, found = filesMap[filepath.Base(rawValue)]
+						}
+						if !found {
+							// Try suffix-matching if rawValue is relative but keys are absolute
+							for k, file := range filesMap {
+								if strings.HasSuffix(filepath.ToSlash(k), filepath.ToSlash(rawValue)) {
+									f = file
+									found = true
+									break
+								}
+							}
 						}
 						if found {
 							if f.Reason != "" {
@@ -242,15 +265,73 @@ var Message = kitex.FC("Message", func(props MessageProps) kitex.Node {
 								)
 							}
 						}
+					} else if refType == "sym" {
+						s, found := symbolsMap[rawValue]
+						if !found {
+							// Split rawValue (e.g. "Message:Interface") into name and optional kind
+							parts := strings.SplitN(rawValue, ":", 2)
+							targetName := parts[0]
+							var targetKind string
+							if len(parts) > 1 {
+								targetKind = parts[1]
+							}
+
+							for _, sym := range symbolsMap {
+								nameMatches := sym.Name == targetName || strings.HasSuffix(sym.Name, "."+targetName)
+								kindMatches := targetKind == "" || strings.EqualFold(sym.Kind, targetKind)
+								if nameMatches && kindMatches {
+									s = sym
+									found = true
+									break
+								}
+							}
+						}
+						if found {
+							props.OnViewPreview(
+								fmt.Sprintf("Symbol: %s", s.Name),
+								preview.SymbolViewPreview{
+									Name:            s.Name,
+									Kind:            s.Kind,
+									File:            s.File,
+									Snippet:         s.Content,
+									Docs:            s.Docs,
+									Diagnostics:     s.Diagnostics,
+									References:      s.References,
+									Implementations: s.Implementations,
+								},
+							)
+						}
+					} else if refType == "skill" {
+						sk, found := skillsMap[rawValue]
+						if found {
+							props.OnViewPreview(
+								fmt.Sprintf("Skill: %s", sk.Name),
+								preview.DefaultTextPreview{
+									Text: sk.Content,
+								},
+							)
+						}
 					}
 				}
 			}
 
-			return components.Markdown(components.MarkdownProps{
+			nodes = append(nodes, components.Markdown(components.MarkdownProps{
 				Source:            cleaned,
 				OnAttachmentClick: onAttachmentClick,
-			})
+			}))
 		}
 	}
-	return nil
+
+	if len(nodes) == 0 {
+		return nil
+	}
+	if len(nodes) == 1 {
+		return nodes[0]
+	}
+	return kitex.Box(kitex.BoxProps{
+		Style: style.S().
+			Display(style.DisplayFlex).
+			FlexDirection(style.FlexColumn).
+			Gap(1),
+	}, nodes...)
 })

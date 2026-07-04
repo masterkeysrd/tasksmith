@@ -29,7 +29,7 @@ func TestResolvePath(t *testing.T) {
 	r := New(nil, tmpDir, nil, nil)
 
 	t.Run("resolve absolute path", func(t *testing.T) {
-		path, err := r.ResolvePath(context.Background(), testFilePath)
+		path, err := r.ResolvePath(context.Background(), testFilePath, TypeFile)
 		if err != nil {
 			t.Fatalf("ResolvePath failed: %v", err)
 		}
@@ -39,7 +39,7 @@ func TestResolvePath(t *testing.T) {
 	})
 
 	t.Run("resolve relative path", func(t *testing.T) {
-		path, err := r.ResolvePath(context.Background(), "internal/foo/bar.go")
+		path, err := r.ResolvePath(context.Background(), "internal/foo/bar.go", TypeFile)
 		if err != nil {
 			t.Fatalf("ResolvePath failed: %v", err)
 		}
@@ -50,7 +50,7 @@ func TestResolvePath(t *testing.T) {
 	})
 
 	t.Run("fuzzy find filename only", func(t *testing.T) {
-		path, err := r.ResolvePath(context.Background(), "bar.go")
+		path, err := r.ResolvePath(context.Background(), "bar.go", TypeFile)
 		if err != nil {
 			t.Fatalf("ResolvePath failed: %v", err)
 		}
@@ -60,7 +60,7 @@ func TestResolvePath(t *testing.T) {
 	})
 
 	t.Run("strip line range anchor", func(t *testing.T) {
-		path, err := r.ResolvePath(context.Background(), testFilePath+"#L3-L4")
+		path, err := r.ResolvePath(context.Background(), testFilePath+"#L3-L4", TypeFile)
 		if err != nil {
 			t.Fatalf("ResolvePath failed: %v", err)
 		}
@@ -70,7 +70,7 @@ func TestResolvePath(t *testing.T) {
 	})
 
 	t.Run("file not found", func(t *testing.T) {
-		_, err := r.ResolvePath(context.Background(), "nonexistent.go")
+		_, err := r.ResolvePath(context.Background(), "nonexistent.go", TypeFile)
 		if err == nil {
 			t.Error("expected error for nonexistent file, got nil")
 		}
@@ -98,7 +98,7 @@ func TestLoadResource(t *testing.T) {
 	r := New(nil, tmpDir, nil, nil)
 
 	t.Run("load absolute path", func(t *testing.T) {
-		res, err := r.LoadResource(context.Background(), testFilePath)
+		res, err := r.LoadResource(context.Background(), testFilePath, TypeFile)
 		if err != nil {
 			t.Fatalf("LoadResource failed: %v", err)
 		}
@@ -118,7 +118,7 @@ func TestLoadResource(t *testing.T) {
 	})
 
 	t.Run("load non-existent absolute path", func(t *testing.T) {
-		_, err := r.LoadResource(context.Background(), filepath.Join(tmpDir, "does_not_exist.go"))
+		_, err := r.LoadResource(context.Background(), filepath.Join(tmpDir, "does_not_exist.go"), TypeFile)
 		if err == nil {
 			t.Error("expected error for non-existent file, got nil")
 		}

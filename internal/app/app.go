@@ -137,7 +137,10 @@ func (app *Application) Run(ctx context.Context) error {
 		return wsTracker.Stop()
 	})
 
-	// Setup autocomplete plugin with the file source querying the workspace tracker
+	// Initialize the API service
+	app.api = api.NewService(app.ws, sessionMgr, metricsStore, app.lspManager, wsTracker)
+
+	// Setup autocomplete plugin with file, symbol, and command sources
 	acPlugin := autocomplete.NewPlugin(autocomplete.Deps{
 		Sources: []autocomplete.Source{
 			autocomplete.NewFileSource(func(query string) []autocomplete.FileSearchResult {
@@ -152,12 +155,34 @@ func (app *Application) Run(ctx context.Context) error {
 				}
 				return searchResults
 			}),
+			autocomplete.NewSymbolSource(func(query string) []autocomplete.SymbolSearchResult {
+				if query == "" {
+					query = "a" // Fallback to "a" for empty queries to show initial list
+				}
+				results, err := app.api.LspSymbols(context.Background(), api.LspSymbolsRequest{Query: query})
+				if err != nil {
+					return nil
+				}
+				var searchResults []autocomplete.SymbolSearchResult
+				for _, r := range results.Results {
+					searchResults = append(searchResults, autocomplete.SymbolSearchResult{
+						Name:          r.Name,
+						Kind:          r.Kind,
+						Path:          r.Path,
+						StartLine:     r.Line,
+						StartChar:     r.Char,
+						ContainerName: r.ContainerName,
+					})
+					if len(searchResults) >= 50 { // Limit to top 50 symbols for performance
+						break
+					}
+				}
+				return searchResults
+			}),
 			autocomplete.NewCommandSource(),
 		},
 	})
 	autocomplete.SetPlugin(acPlugin)
-
-	app.api = api.NewService(app.ws, sessionMgr, metricsStore, app.lspManager, wsTracker)
 
 	log.Info("Starting TaskSmith application",
 		log.String("cwd", app.opts.CWD),

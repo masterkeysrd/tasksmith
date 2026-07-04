@@ -33,12 +33,12 @@ type ComposerProps struct {
 // resolver.ResourceType. It provides a shared mapping between the autocomplete
 // system and the reference tracker.
 func resourceTypeFromKind(kind string) resolver.ResourceType {
-	switch kind {
-	case "file", "FILE":
+	switch strings.ToLower(kind) {
+	case "file", "directory":
 		return resolver.TypeFile
-	case "function", "struct", "method", "variable", "lsp", "LSP":
+	case "function", "struct", "method", "variable", "class", "interface", "constant", "field", "property", "enum", "module", "namespace", "package", "constructor", "lsp":
 		return resolver.TypeSymbol
-	case "skill", "SKILL":
+	case "skill":
 		return resolver.TypeSkill
 	default:
 		return resolver.TypeFile
@@ -59,7 +59,7 @@ var Composer = kitex.FC("Composer", func(props ComposerProps) kitex.Node {
 	acController := kitex.UseMemo(func() *autocomplete.Controller {
 		return autocomplete.New(autocomplete.Config{
 			Triggers: map[string][]string{
-				"@": {"file", "lsp", "skill"},
+				"@": {"file", "symbol", "skill"},
 				"/": {"command"},
 			},
 			Prefixes: resolver.PrefixToSourceMap(),

@@ -181,11 +181,45 @@ func FormatSymbol(s *resolver.ResolvedSymbol) []message.Block {
 	if s.Signature != "" {
 		fmt.Fprintf(&sb, "Signature: %s\n", s.Signature)
 	}
+	if s.TypeDefinedAt != "" {
+		fmt.Fprintf(&sb, "Type Defined at: %s\n", s.TypeDefinedAt)
+	}
 	if s.Container != "" {
 		fmt.Fprintf(&sb, "Defined in: %s\n", s.Container)
 	}
 	fmt.Fprintf(&sb, "Location: %s (lines %d-%d)\n\n", filepath.Base(s.FilePath), s.StartLine, s.EndLine)
 	sb.WriteString(s.Snippet)
+
+	if s.Docs != "" {
+		sb.WriteString("\n\n")
+		sb.WriteString(s.Docs)
+		if s.DocsTruncated {
+			sb.WriteString("\n\n[Truncated — full report available at: `")
+			sb.WriteString(s.FullReportPath)
+			sb.WriteString("`]")
+		}
+		sb.WriteString("\n\n")
+	}
+
+	if len(s.References) > 0 {
+		sb.WriteString("**References** (")
+		fmt.Fprintf(&sb, "%d total", s.ReferencesTotal)
+		sb.WriteString("):\n")
+		for _, ref := range s.References {
+			fmt.Fprintf(&sb, "- `%s`\n", ref)
+		}
+		sb.WriteString("\n")
+	}
+
+	if len(s.Implementations) > 0 {
+		sb.WriteString("**Implementations** (")
+		fmt.Fprintf(&sb, "%d total", s.ImplementationsTotal)
+		sb.WriteString("):\n")
+		for _, impl := range s.Implementations {
+			fmt.Fprintf(&sb, "- `%s`\n", impl)
+		}
+		sb.WriteString("\n")
+	}
 
 	if len(s.Diagnostics) > 0 {
 		diagsStr := FormatDiagnostics(s.Diagnostics)
@@ -218,6 +252,7 @@ func FormatAttachmentsBlock(resources []resolver.ResolvedResource, r *resolver.R
 	}
 
 	var sb strings.Builder
+	sb.WriteString("<system_reminder>These attachments were loaded by the user. Use them to complete the request.</system_reminder>\n")
 	sb.WriteString("<attachments>\n")
 
 	for _, res := range resources {
@@ -293,6 +328,38 @@ func formatEmbeddedSymbol(s *resolver.ResolvedSymbol) string {
 	sb.WriteString(escapeXML(s.Snippet))
 	sb.WriteString("\n</content>\n")
 
+	if s.TypeDefinedAt != "" {
+		sb.WriteString(fmt.Sprintf("<type_defined_at>%s</type_defined_at>\n", escapeXML(s.TypeDefinedAt)))
+	}
+
+	if s.Docs != "" {
+		sb.WriteString("<docs>\n")
+		sb.WriteString(escapeXML(s.Docs))
+		sb.WriteString("\n</docs>\n")
+		if s.DocsTruncated {
+			sb.WriteString(fmt.Sprintf("<docs_truncated>true</docs_truncated>\n"))
+			sb.WriteString(fmt.Sprintf("<full_report_path>%s</full_report_path>\n", escapeXML(s.FullReportPath)))
+		}
+	}
+
+	if len(s.References) > 0 {
+		sb.WriteString("<references>\n")
+		for _, ref := range s.References {
+			sb.WriteString(fmt.Sprintf("<reference>%s</reference>\n", escapeXML(ref)))
+		}
+		sb.WriteString("</references>\n")
+		sb.WriteString(fmt.Sprintf("<references_total>%d</references_total>\n", s.ReferencesTotal))
+	}
+
+	if len(s.Implementations) > 0 {
+		sb.WriteString("<implementations>\n")
+		for _, impl := range s.Implementations {
+			sb.WriteString(fmt.Sprintf("<implementation>%s</implementation>\n", escapeXML(impl)))
+		}
+		sb.WriteString("</implementations>\n")
+		sb.WriteString(fmt.Sprintf("<implementations_total>%d</implementations_total>\n", s.ImplementationsTotal))
+	}
+
 	if len(s.Diagnostics) > 0 {
 		sb.WriteString("<diagnostics>\n")
 		for _, d := range s.Diagnostics {
@@ -327,7 +394,7 @@ func formatEmbeddedSymbol(s *resolver.ResolvedSymbol) string {
 // formatEmbedded formats a ResolvedSkill with its instructions content.
 func formatEmbeddedSkill(sk *resolver.ResolvedSkill) string {
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("<skill name=\"%s\">\n", escapeXML(sk.Name)))
+	fmt.Fprintf(&sb, "<skill name=\"%s\">\n", escapeXML(sk.Name))
 	sb.WriteString("<content>\n")
 	sb.WriteString(escapeXML(sk.Instructions))
 	sb.WriteString("\n</content>\n")
@@ -340,8 +407,19 @@ func formatReferenced(res resolver.ResolvedResource) string {
 	switch val := res.(type) {
 	case *resolver.ResolvedFile:
 		return formatReferencedFile(val)
+	case *resolver.ResolvedSymbol:
+		return formatReferencedSymbol(val)
 	}
 	return ""
+}
+
+func formatReferencedSymbol(s *resolver.ResolvedSymbol) string {
+	reason := "too large to embed"
+	if len(s.Snippet) == 0 {
+		reason = "snippet empty or unavailable"
+	}
+	return fmt.Sprintf("<symbol name=\"%s\" kind=\"%s\" file=\"%s\" lines=\"%d-%d\" reason=\"%s\" />",
+		escapeXML(s.Name), escapeXML(s.Kind), escapeXML(filepath.Base(s.FilePath)), s.StartLine, s.EndLine, escapeXML(reason))
 }
 
 // formatReferencedFile formats a ResolvedFile as a self-closing tag with reason.
