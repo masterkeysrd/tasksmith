@@ -5,7 +5,9 @@ import (
 	"testing"
 
 	"github.com/masterkeysrd/loom/message"
+	"github.com/masterkeysrd/lspx"
 	"github.com/masterkeysrd/tasksmith/internal/agent/resolver"
+	"github.com/masterkeysrd/tasksmith/internal/core/lsp"
 )
 
 func TestFormatFile(t *testing.T) {
@@ -34,3 +36,349 @@ func TestFormatFile(t *testing.T) {
 		t.Errorf("expected numbered lines, got: %s", txtBlock.Text)
 	}
 }
+
+func TestFormatAttachmentsBlock(t *testing.T) {
+	// Helper to create a resolver with a custom ShouldEmbed override.
+	newResolver := func(embed bool) *resolver.Resolver {
+		return &resolver.Resolver{} // ShouldEmbed uses default thresholds
+	}
+
+	tests := []struct {
+		name         string
+		resources    []resolver.ResolvedResource
+		resolver     *resolver.Resolver
+		wantContains []string
+		wantMissing  []string
+	}{
+		{
+			name:         "empty resources returns empty string",
+			resources:    nil,
+			resolver:     newResolver(false),
+			wantContains: []string{},
+			wantMissing:  []string{},
+		},
+		{
+			name: "small file is embedded with content",
+			resources: []resolver.ResolvedResource{
+				&resolver.ResolvedFile{
+					FilePath:   "internal/app/app.go",
+					Content:    "package app\nfunc Main() {}",
+					TotalLines: 2,
+					StartLine:  1,
+				},
+			},
+			resolver: newResolver(false),
+			wantContains: []string{
+				"<attachments>",
+				"<file path=\"internal/app/app.go\" lines=\"2\">",
+				"<content>",
+				"1 | package app",
+				"2 | func Main() {}",
+				"</content>",
+				"</file>",
+				"</attachments>",
+			},
+			wantMissing: []string{"<diagnostics>", "reason="},
+		},
+		{
+			name: "large file is referenced with self-closing tag",
+			resources: []resolver.ResolvedResource{
+				&resolver.ResolvedFile{
+					FilePath:   "internal/gen/large.go",
+					Content:    strings.Repeat("line\n", 5000),
+					TotalLines: 8400,
+				},
+			},
+			resolver: newResolver(false),
+			wantContains: []string{
+				"<attachments>",
+				"<file path=\"internal/gen/large.go\" lines=\"8400\" reason=\"file too large, use view_file to read\" />",
+				"</attachments>",
+			},
+			wantMissing: []string{"<content>", "<diagnostics>"},
+		},
+		{
+			name: "binary file is referenced with mime type",
+			resources: []resolver.ResolvedResource{
+				&resolver.ResolvedFile{
+					FilePath: "assets/image.png",
+					IsBinary: true,
+					MimeType: "image/png",
+				},
+			},
+			resolver: newResolver(false),
+			wantContains: []string{
+				"<attachments>",
+				`<file path="assets/image.png" mime="image/png" reason="binary file, use view_file" />`,
+				"</attachments>",
+			},
+			wantMissing: []string{"<content>"},
+		},
+		{
+			name: "symbol with content",
+			resources: []resolver.ResolvedResource{
+				&resolver.ResolvedSymbol{
+					Name:      "NewResolver",
+					Kind:      "function",
+					FilePath:  "resolver.go",
+					StartLine: 88,
+					EndLine:   94,
+					Snippet:   "func NewResolver(l *lsp.Manager, cwd string) *Resolver {\n\treturn &Resolver{}\n}",
+				},
+			},
+			resolver: newResolver(false),
+			wantContains: []string{
+				"<attachments>",
+				`<symbol name="NewResolver" kind="function" file="resolver.go" lines="88-94">`,
+				"<content>",
+				"func NewResolver",
+				"</symbol>",
+				"</attachments>",
+			},
+			wantMissing: []string{"reason="},
+		},
+		{
+			name: "skill with content",
+			resources: []resolver.ResolvedResource{
+				&resolver.ResolvedSkill{
+					Name:         "agent-tooling",
+					Instructions: "## Agent Tooling Skill\n\nGuidelines for tools.",
+				},
+			},
+			resolver: newResolver(false),
+			wantContains: []string{
+				"<attachments>",
+				`<skill name="agent-tooling">`,
+				"<content>",
+				"Agent Tooling Skill",
+				"</skill>",
+				"</attachments>",
+			},
+			wantMissing: []string{"reason="},
+		},
+		{
+			name: "mixed resources",
+			resources: []resolver.ResolvedResource{
+				&resolver.ResolvedFile{
+					FilePath:   "internal/app/app.go",
+					Content:    "package app",
+					TotalLines: 1,
+				},
+				&resolver.ResolvedFile{
+					FilePath:   "internal/gen/large.go",
+					Content:    strings.Repeat("x\n", 5000),
+					TotalLines: 8400,
+				},
+				&resolver.ResolvedSymbol{
+					Name:      "Foo",
+					Kind:      "function",
+					FilePath:  "foo.go",
+					StartLine: 1,
+					EndLine:   5,
+					Snippet:   "func Foo() {}",
+				},
+			},
+			resolver: newResolver(false),
+			wantContains: []string{
+				"<attachments>",
+				`<file path="internal/app/app.go" lines="1">`,
+				`<file path="internal/gen/large.go" lines="8400" reason="file too large, use view_file to read" />`,
+				`<symbol name="Foo" kind="function" file="foo.go" lines="1-5">`,
+				"</attachments>",
+			},
+			wantMissing: []string{},
+		},
+		{
+			name: "file with diagnostics",
+			resources: []resolver.ResolvedResource{
+				&resolver.ResolvedFile{
+					FilePath:   "internal/app/app.go",
+					Content:    "package app",
+					TotalLines: 120,
+					Diagnostics: []lsp.Diagnostic{
+						{
+							Diagnostic: lspx.Diagnostic{
+								Message: lspx.DiagnosticMessage{String: ptrString("undefined variable 'ctx'")},
+								Range: lspx.Range{
+									Start: lspx.Position{Line: 41},
+								},
+								Severity: ptrSeverity(1),
+							},
+						},
+						{
+							Diagnostic: lspx.Diagnostic{
+								Message: lspx.DiagnosticMessage{String: ptrString("unused parameter 'opts'")},
+								Range: lspx.Range{
+									Start: lspx.Position{Line: 77},
+								},
+								Severity: ptrSeverity(2),
+							},
+						},
+					},
+				},
+			},
+			resolver: newResolver(false),
+			wantContains: []string{
+				"<diagnostics>",
+				`[error] line 42: undefined variable &apos;ctx&apos;`,
+				`[warning] line 78: unused parameter &apos;opts&apos;`,
+				"</diagnostics>",
+			},
+			wantMissing: []string{},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := FormatAttachmentsBlock(tt.resources, tt.resolver)
+
+			if tt.name == "empty resources returns empty string" {
+				if got != "" {
+					t.Errorf("FormatAttachmentsBlock() = %q, want empty string", got)
+				}
+				return
+			}
+
+			if got == "" {
+				t.Error("FormatAttachmentsBlock() returned empty string, expected content")
+				return
+			}
+
+			for _, want := range tt.wantContains {
+				if !strings.Contains(got, want) {
+					t.Errorf("FormatAttachmentsBlock() missing %q in:\n%s", want, got)
+				}
+			}
+
+			for _, missing := range tt.wantMissing {
+				if strings.Contains(got, missing) {
+					t.Errorf("FormatAttachmentsBlock() unexpectedly contains %q in:\n%s", missing, got)
+				}
+			}
+		})
+	}
+}
+
+func TestEscapeXML(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{"no special chars", "hello", "hello"},
+		{"ampersand", "a & b", "a &amp; b"},
+		{"less than", "a < b", "a &lt; b"},
+		{"greater than", "a > b", "a &gt; b"},
+		{"double quote", "a \"b\"", "a &quot;b&quot;"},
+		{"single quote", "a 'b'", "a &apos;b&apos;"},
+		{"all special chars", "<tag attr='val'>&text</tag>", "&lt;tag attr=&apos;val&apos;&gt;&amp;text&lt;/tag&gt;"},
+		{"empty string", "", ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := escapeXML(tt.input)
+			if got != tt.want {
+				t.Errorf("escapeXML(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestFormatAttachmentsBlock_SymbolWithDiagnostics(t *testing.T) {
+	res := &resolver.Resolver{}
+	resources := []resolver.ResolvedResource{
+		&resolver.ResolvedSymbol{
+			Name:      "NewResolver",
+			Kind:      "function",
+			FilePath:  "resolver.go",
+			StartLine: 88,
+			EndLine:   94,
+			Snippet:   "func NewResolver(l *lsp.Manager, cwd string) *Resolver {\n\treturn &Resolver{Lsp: l, Cwd: cwd}\n}",
+			Diagnostics: []lsp.Diagnostic{
+				{
+					Diagnostic: lspx.Diagnostic{
+						Message:  lspx.DiagnosticMessage{String: ptrString("parameter 'lsp' is unused")},
+						Range:    lspx.Range{Start: lspx.Position{Line: 89}},
+						Severity: ptrSeverity(2),
+					},
+				},
+			},
+		},
+	}
+
+	got := FormatAttachmentsBlock(resources, res)
+
+	if !strings.Contains(got, "<symbol name=\"NewResolver\" kind=\"function\" file=\"resolver.go\" lines=\"88-94\">") {
+		t.Errorf("missing symbol tag: %s", got)
+	}
+	if !strings.Contains(got, "<diagnostics>") {
+		t.Errorf("missing diagnostics tag: %s", got)
+	}
+	if !strings.Contains(got, "[warning] line 90: parameter &apos;lsp&apos; is unused") {
+		t.Errorf("missing diagnostic message: %s", got)
+	}
+	if !strings.Contains(got, "</symbol>") {
+		t.Errorf("missing closing symbol tag: %s", got)
+	}
+}
+
+func TestFormatAttachmentsBlock_Skill(t *testing.T) {
+	res := &resolver.Resolver{}
+	resources := []resolver.ResolvedResource{
+		&resolver.ResolvedSkill{
+			Name:         "golang",
+			Instructions: "# Go Skill\n\nUse camelCase for exported symbols.",
+		},
+	}
+
+	got := FormatAttachmentsBlock(resources, res)
+
+	if !strings.Contains(got, `<skill name="golang">`) {
+		t.Errorf("missing skill tag: %s", got)
+	}
+	if !strings.Contains(got, "<content>") {
+		t.Errorf("missing content tag: %s", got)
+	}
+	if !strings.Contains(got, "Use camelCase for exported symbols.") {
+		t.Errorf("missing instructions: %s", got)
+	}
+	if !strings.Contains(got, "</skill>") {
+		t.Errorf("missing closing skill tag: %s", got)
+	}
+}
+
+func TestFormatAttachmentsBlock_BinaryFile(t *testing.T) {
+	res := &resolver.Resolver{}
+	resources := []resolver.ResolvedResource{
+		&resolver.ResolvedFile{
+			FilePath: "assets/logo.png",
+			IsBinary: true,
+			MimeType: "image/png",
+		},
+		&resolver.ResolvedFile{
+			FilePath: "assets/data.bin",
+			IsBinary: true,
+			MimeType: "",
+		},
+	}
+
+	got := FormatAttachmentsBlock(resources, res)
+
+	if !strings.Contains(got, `path="assets/logo.png"`) {
+		t.Errorf("missing logo path: %s", got)
+	}
+	if !strings.Contains(got, `mime="image/png"`) {
+		t.Errorf("missing mime type: %s", got)
+	}
+	if !strings.Contains(got, `path="assets/data.bin"`) {
+		t.Errorf("missing data.bin path: %s", got)
+	}
+	if !strings.Contains(got, `mime="application/octet-stream"`) {
+		t.Errorf("missing default mime type: %s", got)
+	}
+}
+
+// Helper functions
+func ptrString(s string) *string                                     { return &s }
+func ptrSeverity(s lspx.DiagnosticSeverity) *lspx.DiagnosticSeverity { return &s }

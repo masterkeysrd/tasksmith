@@ -210,3 +210,158 @@ func FormatSkill(sk *resolver.ResolvedSkill) []message.Block {
 		},
 	}
 }
+
+// FormatAttachmentsBlock wraps all resolved resources into a single <attachments> XML block.
+func FormatAttachmentsBlock(resources []resolver.ResolvedResource, r *resolver.Resolver) string {
+	if len(resources) == 0 {
+		return ""
+	}
+
+	var sb strings.Builder
+	sb.WriteString("<attachments>\n")
+
+	for _, res := range resources {
+		if r.ShouldEmbed(res) {
+			sb.WriteString(formatEmbedded(res))
+		} else {
+			sb.WriteString(formatReferenced(res))
+		}
+	}
+
+	sb.WriteString("</attachments>")
+	return sb.String()
+}
+
+// formatEmbedded formats a resource that is small enough to be embedded in full.
+func formatEmbedded(res resolver.ResolvedResource) string {
+	switch val := res.(type) {
+	case *resolver.ResolvedFile:
+		return formatEmbeddedFile(val)
+	case *resolver.ResolvedSymbol:
+		return formatEmbeddedSymbol(val)
+	case *resolver.ResolvedSkill:
+		return formatEmbeddedSkill(val)
+	}
+	return ""
+}
+
+// formatEmbedded formats a ResolvedFile with content and optional diagnostics.
+func formatEmbeddedFile(f *resolver.ResolvedFile) string {
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("<file path=\"%s\" lines=\"%d\">\n", escapeXML(f.FilePath), f.TotalLines))
+	sb.WriteString("<content>\n")
+	sb.WriteString(FormatFileContent(f.Content, f.StartLine))
+	sb.WriteString("\n</content>\n")
+
+	if len(f.Diagnostics) > 0 {
+		sb.WriteString("<diagnostics>\n")
+		for _, d := range f.Diagnostics {
+			severity := "unknown"
+			if d.Severity != nil {
+				switch *d.Severity {
+				case 1:
+					severity = "error"
+				case 2:
+					severity = "warning"
+				case 3:
+					severity = "info"
+				case 4:
+					severity = "hint"
+				}
+			}
+			msg := ""
+			if d.Message.String != nil {
+				msg = *d.Message.String
+			} else if d.Message.MarkupContent != nil {
+				msg = d.Message.MarkupContent.Value
+			}
+			sb.WriteString(fmt.Sprintf("- [%s] line %d: %s\n", severity, d.Range.Start.Line+1, escapeXML(msg)))
+		}
+		sb.WriteString("</diagnostics>\n")
+	}
+
+	sb.WriteString("</file>")
+	return sb.String()
+}
+
+// formatEmbedded formats a ResolvedSymbol with content and optional diagnostics.
+func formatEmbeddedSymbol(s *resolver.ResolvedSymbol) string {
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("<symbol name=\"%s\" kind=\"%s\" file=\"%s\" lines=\"%d-%d\">\n",
+		escapeXML(s.Name), escapeXML(s.Kind), escapeXML(filepath.Base(s.FilePath)), s.StartLine, s.EndLine))
+	sb.WriteString("<content>\n")
+	sb.WriteString(escapeXML(s.Snippet))
+	sb.WriteString("\n</content>\n")
+
+	if len(s.Diagnostics) > 0 {
+		sb.WriteString("<diagnostics>\n")
+		for _, d := range s.Diagnostics {
+			severity := "unknown"
+			if d.Severity != nil {
+				switch *d.Severity {
+				case 1:
+					severity = "error"
+				case 2:
+					severity = "warning"
+				case 3:
+					severity = "info"
+				case 4:
+					severity = "hint"
+				}
+			}
+			msg := ""
+			if d.Message.String != nil {
+				msg = *d.Message.String
+			} else if d.Message.MarkupContent != nil {
+				msg = d.Message.MarkupContent.Value
+			}
+			sb.WriteString(fmt.Sprintf("- [%s] line %d: %s\n", severity, d.Range.Start.Line+1, escapeXML(msg)))
+		}
+		sb.WriteString("</diagnostics>\n")
+	}
+
+	sb.WriteString("</symbol>")
+	return sb.String()
+}
+
+// formatEmbedded formats a ResolvedSkill with its instructions content.
+func formatEmbeddedSkill(sk *resolver.ResolvedSkill) string {
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("<skill name=\"%s\">\n", escapeXML(sk.Name)))
+	sb.WriteString("<content>\n")
+	sb.WriteString(escapeXML(sk.Instructions))
+	sb.WriteString("\n</content>\n")
+	sb.WriteString("</skill>")
+	return sb.String()
+}
+
+// formatReferenced formats a resource that is too large or binary as a self-closing tag.
+func formatReferenced(res resolver.ResolvedResource) string {
+	switch val := res.(type) {
+	case *resolver.ResolvedFile:
+		return formatReferencedFile(val)
+	}
+	return ""
+}
+
+// formatReferencedFile formats a ResolvedFile as a self-closing tag with reason.
+func formatReferencedFile(f *resolver.ResolvedFile) string {
+	if f.IsBinary {
+		mime := f.MimeType
+		if mime == "" {
+			mime = "application/octet-stream"
+		}
+		return fmt.Sprintf("<file path=\"%s\" mime=\"%s\" reason=\"binary file, use view_file\" />", escapeXML(f.FilePath), escapeXML(mime))
+	}
+	return fmt.Sprintf("<file path=\"%s\" lines=\"%d\" reason=\"file too large, use view_file to read\" />", escapeXML(f.FilePath), f.TotalLines)
+}
+
+// escapeXML escapes special XML characters in the given string.
+func escapeXML(s string) string {
+	s = strings.ReplaceAll(s, "&", "&amp;")
+	s = strings.ReplaceAll(s, "<", "&lt;")
+	s = strings.ReplaceAll(s, ">", "&gt;")
+	s = strings.ReplaceAll(s, "\"", "&quot;")
+	s = strings.ReplaceAll(s, "'", "&apos;")
+	return s
+}
