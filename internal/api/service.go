@@ -162,6 +162,38 @@ func (s *Service) ListAgents(ctx context.Context, req ListAgentsRequest) (*ListA
 	return resp, nil
 }
 
+// ListSkills returns a list of skills the active agent has access to.
+func (s *Service) ListSkills(ctx context.Context, req ListSkillsRequest) (*ListSkillsResponse, error) {
+	agentName := "main"
+	if s.sm != nil && req.SessionID != "" {
+		if sd, err := s.sm.GetSession(ctx, req.SessionID); err == nil && sd != nil {
+			if sd.Settings.AgentName != "" {
+				agentName = sd.Settings.AgentName
+			}
+		}
+	}
+
+	var skills []SkillItem
+	if ws, ok := s.ws.(*workspace.Workspace); ok {
+		if resolvedAgent, err := ws.ResolveAgent(ctx, agentName); err == nil && resolvedAgent != nil {
+			for _, skill := range resolvedAgent.Skills {
+				skills = append(skills, SkillItem{
+					Name:        skill.Metadata.Name,
+					Description: skill.Metadata.Description,
+				})
+			}
+		}
+	}
+
+	sort.Slice(skills, func(i, j int) bool {
+		return skills[i].Name < skills[j].Name
+	})
+
+	return &ListSkillsResponse{
+		Skills: skills,
+	}, nil
+}
+
 // ListProviders returns a list of model providers in the workspace.
 func (s *Service) ListProviders(ctx context.Context, req ListProvidersRequest) (*ListProvidersResponse, error) {
 	providers := s.ws.Providers()

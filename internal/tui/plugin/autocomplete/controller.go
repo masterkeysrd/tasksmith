@@ -8,6 +8,7 @@ import (
 	"github.com/masterkeysrd/kite/extras/kites"
 	"github.com/masterkeysrd/kite/key"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
+	"github.com/masterkeysrd/tasksmith/internal/tui/keymap"
 )
 
 // State represents the reactive data of an autocomplete session.
@@ -171,20 +172,37 @@ func (c *Controller) InterceptKey(ke *event.KeyEvent) bool {
 	}
 
 	idx := state.SelectedIndex
+	keyStr := keymap.KeyToString(ke)
 
 	switch {
 	case ke.Code == key.KeyEscape:
 		c.SetIsOpen(false)
 		return true
 
-	case ke.Code == key.KeyDown || (ke.Text == "n" && (ke.Mod&key.ModCtrl) != 0):
+	case ke.Code == key.KeyDown || keyStr == "<C-n>" || (ke.Code == key.KeyTab && (ke.Mod&key.ModShift) == 0):
 		c.SetSelectedIndex((idx + 1) % len(items))
 		return true
 
-	case ke.Code == key.KeyUp || (ke.Text == "p" && (ke.Mod&key.ModCtrl) != 0):
+	case ke.Code == key.KeyUp || keyStr == "<C-p>" || (ke.Code == key.KeyTab && (ke.Mod&key.ModShift) != 0):
 		next := idx - 1
 		if next < 0 {
 			next = len(items) - 1
+		}
+		c.SetSelectedIndex(next)
+		return true
+
+	case keyStr == "<C-f>":
+		next := idx + 5
+		if next >= len(items) {
+			next = len(items) - 1
+		}
+		c.SetSelectedIndex(next)
+		return true
+
+	case keyStr == "<C-b>":
+		next := idx - 5
+		if next < 0 {
+			next = 0
 		}
 		c.SetSelectedIndex(next)
 		return true
@@ -246,11 +264,11 @@ func (c *Controller) HandleOnKeyDown(ke *event.KeyEvent, currentValue string, on
 		return false
 	}
 
-	// Intercept Enter/Tab to select
-	if ke.Code == key.KeyEnter || ke.Text == "\r" || ke.Text == "\n" || ke.Code == key.KeyTab {
+	// Intercept Enter to select
+	if ke.Code == key.KeyEnter || ke.Text == "\r" || ke.Text == "\n" {
 		items := state.FilteredItems
 		idx := state.SelectedIndex
-		log.Info("HandleOnKeyDown: Enter/Tab pressed", log.Int("itemsCount", len(items)), log.Int("selectedIndex", idx))
+		log.Info("HandleOnKeyDown: Enter pressed", log.Int("itemsCount", len(items)), log.Int("selectedIndex", idx))
 		if len(items) > 0 && idx >= 0 && idx < len(items) {
 			selectedItem := items[idx]
 			newText, _ := c.ApplySelection(currentValue, len(currentValue), selectedItem)

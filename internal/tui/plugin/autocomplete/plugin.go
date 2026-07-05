@@ -75,7 +75,7 @@ func (p *Plugin) Query(ctx context.Context, req QueryReq) ([]Item, error) {
 		// Query each matched source concurrently
 		src := targetSource
 		g.Go(func() error {
-			items, err := src.Query(ctx, req.Query)
+			items, err := src.Query(ctx, req)
 			if err != nil {
 				// We don't fail the whole operation if a single source fails
 				return nil
@@ -143,8 +143,10 @@ func scoreAutocompleteItem(item Item, query string) int {
 	}
 
 	// Source/Kind specific tuning:
-	// Prioritize files/folders slightly over deep external symbols unless exact matched
-	if item.Kind == "file" || item.Kind == "directory" {
+	// Prioritize skills above files/directories and deep external symbols
+	if item.Kind == "skill" {
+		score += 20
+	} else if item.Kind == "file" || item.Kind == "directory" {
 		score += 10
 	}
 

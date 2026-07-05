@@ -468,10 +468,21 @@ func (m *Manager) sendMessage(ctx context.Context, sessionID string, text string
 
 	m.tryRehydrateSession(ctx, sess)
 
+	agentName := "main"
+	if sessData, err := m.store.GetSession(ctx, sessionID); err == nil && sessData != nil {
+		var sessionSettings model.SessionSettings
+		if sessData.Settings != nil && *sessData.Settings != "" {
+			_ = json.Unmarshal([]byte(*sessData.Settings), &sessionSettings)
+		}
+		if sessionSettings.AgentName != "" {
+			agentName = sessionSettings.AgentName
+		}
+	}
+
 	// Phase 4: Two-phase resolution with dedup
 	var resources []resolver.ResolvedResource
 	if m.resolver != nil {
-		resources, _ = m.resolver.ResolveReferences(ctx, text, refs)
+		resources, _ = m.resolver.ResolveReferences(ctx, text, refs, agentName)
 	}
 
 	m.mu.Lock()

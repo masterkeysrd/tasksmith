@@ -35,8 +35,8 @@ func (s *SymbolSource) Name() string {
 }
 
 // Query performs an LSP symbol search using the provided query function and maps results to Items.
-func (s *SymbolSource) Query(ctx context.Context, query string) ([]Item, error) {
-	results := s.queryFn(query)
+func (s *SymbolSource) Query(ctx context.Context, req QueryReq) ([]Item, error) {
+	results := s.queryFn(req.Query)
 	var items []Item
 
 	for _, r := range results {

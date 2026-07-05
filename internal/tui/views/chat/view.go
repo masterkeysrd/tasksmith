@@ -929,10 +929,11 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 				}, children...)
 			}),
 			Composer(ComposerProps{
-				Value:    inputValue(),
-				Disabled: submitting(),
-				IsInsert: isInsert,
-				Ref:      inputRef,
+				Value:     inputValue(),
+				Disabled:  submitting(),
+				IsInsert:  isInsert,
+				Ref:       inputRef,
+				SessionID: sessionID,
 				OnChange: func(val string) {
 					setInputValue(val)
 				},

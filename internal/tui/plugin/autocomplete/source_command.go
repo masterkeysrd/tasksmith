@@ -22,7 +22,7 @@ func (s *CommandSource) Name() string {
 }
 
 // Query fuzzy matches the input query against registered command names.
-func (s *CommandSource) Query(ctx context.Context, query string) ([]Item, error) {
+func (s *CommandSource) Query(ctx context.Context, req QueryReq) ([]Item, error) {
 	cmds := command.List()
 
 	type scoredItem struct {
@@ -32,7 +32,7 @@ func (s *CommandSource) Query(ctx context.Context, query string) ([]Item, error)
 	var scored []scoredItem
 
 	for _, cmd := range cmds {
-		matched, score := fuzzy.Match(cmd, query)
+		matched, score := fuzzy.Match(cmd, req.Query)
 		if matched {
 			scored = append(scored, scoredItem{
 				item: Item{

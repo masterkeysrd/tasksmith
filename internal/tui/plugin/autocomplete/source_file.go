@@ -30,8 +30,8 @@ func (s *FileSource) Name() string {
 }
 
 // Query performs a file search using the provided query function and maps the results to Items.
-func (s *FileSource) Query(ctx context.Context, query string) ([]Item, error) {
-	results := s.queryFn(query)
+func (s *FileSource) Query(ctx context.Context, req QueryReq) ([]Item, error) {
+	results := s.queryFn(req.Query)
 	var items []Item
 
 	for _, r := range results {

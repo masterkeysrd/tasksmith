@@ -15,6 +15,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/app/flags"
 	coredb "github.com/masterkeysrd/tasksmith/internal/core/db"
 	"github.com/masterkeysrd/tasksmith/internal/core/fsutil"
+	"github.com/masterkeysrd/tasksmith/internal/core/fuzzy"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	"github.com/masterkeysrd/tasksmith/internal/core/lsp"
 	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
@@ -178,6 +179,27 @@ func (app *Application) Run(ctx context.Context) error {
 					}
 				}
 				return searchResults
+			}),
+			autocomplete.NewSkillSource(func(ctx context.Context, sessionID, query string) ([]autocomplete.SkillSearchResult, error) {
+				res, err := app.api.ListSkills(ctx, api.ListSkillsRequest{SessionID: sessionID})
+				if err != nil {
+					return nil, err
+				}
+				var searchResults []autocomplete.SkillSearchResult
+				for _, skill := range res.Skills {
+					if query == "" {
+						searchResults = append(searchResults, autocomplete.SkillSearchResult{
+							Name:        skill.Name,
+							Description: skill.Description,
+						})
+					} else if matched, _ := fuzzy.Match(skill.Name, query); matched {
+						searchResults = append(searchResults, autocomplete.SkillSearchResult{
+							Name:        skill.Name,
+							Description: skill.Description,
+						})
+					}
+				}
+				return searchResults, nil
 			}),
 			autocomplete.NewCommandSource(),
 		},

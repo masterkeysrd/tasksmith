@@ -34,6 +34,19 @@ type Agent struct {
 	Description string `json:"description"`
 }
 
+type ListSkillsRequest struct {
+	SessionID string `json:"session_id"`
+}
+
+type SkillItem struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+}
+
+type ListSkillsResponse struct {
+	Skills []SkillItem `json:"skills"`
+}
+
 type ListProvidersRequest struct {
 }
 

@@ -27,6 +27,7 @@ type ComposerProps struct {
 	OnChange  func(string)
 	OnKeyDown func(event.Event)
 	OnSubmit  func(text string, refs []resolver.Reference)
+	SessionID string
 }
 
 // resourceTypeFromKind maps an autocomplete Item.Kind to the corresponding
@@ -266,6 +267,7 @@ var Composer = kitex.FC("Composer", func(props ComposerProps) kitex.Node {
 			Value:       props.Value,
 		}, widgets.AutocompleteMenu(widgets.AutocompleteMenuProps{
 			Controller: acController,
+			SessionID:  props.SessionID,
 			OnSelect: func(item autocomplete.Item) {
 				newText, _ := acController.ApplySelection(props.Value, cursorOffset, item)
 				if props.OnChange != nil {
