@@ -123,7 +123,8 @@ func (r *Resolver) loadResourceWithPath(ctx context.Context, absPath string, sta
 	}
 
 	if r.FileTracker != nil {
-		if rel, err := filepath.Rel(r.Cwd, absPath); err == nil {
+		absCwd, _ := filepath.Abs(r.Cwd)
+		if rel, err := filepath.Rel(absCwd, absPath); err == nil {
 			_ = r.FileTracker.RecordRead(ctx, "./"+filepath.ToSlash(rel))
 		}
 	}
@@ -220,7 +221,8 @@ func (r *Resolver) loadResourceFile(ctx context.Context, value string) (Resolved
 
 	// Record file read in the file tracker (updates autocomplete and active files list)
 	if r.FileTracker != nil {
-		if rel, err := filepath.Rel(r.Cwd, absPath); err == nil {
+		absCwd, _ := filepath.Abs(r.Cwd)
+		if rel, err := filepath.Rel(absCwd, absPath); err == nil {
 			_ = r.FileTracker.RecordRead(ctx, "./"+filepath.ToSlash(rel))
 		}
 	}
