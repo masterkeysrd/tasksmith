@@ -29,6 +29,7 @@ type AutocompleteMenuProps struct {
 	Style      style.Style
 	HideIcons  bool
 	HideBadges bool
+	SessionID  string
 }
 
 var (
@@ -68,11 +69,13 @@ var (
 	menuLabelColStyle = style.S().
 				Width(style.Cells(22)).
 				Bold(true).
-				Overflow(style.OverflowHidden)
+				Overflow(style.OverflowHidden).
+				WhiteSpace(style.WhiteSpaceNoWrap)
 
 	menuDetailColStyle = style.S().
 				Flex(1, 1, style.Cells(0)).
-				Overflow(style.OverflowHidden)
+				Overflow(style.OverflowHidden).
+				WhiteSpace(style.WhiteSpaceNoWrap)
 
 	menuFooterStyle = style.S().
 			Display(style.DisplayFlex).
@@ -86,6 +89,28 @@ var (
 // AutocompleteMenu renders the floating dropdown list of completion suggestions in a tabular format.
 var AutocompleteMenu = kitex.FC("AutocompleteMenu", func(props AutocompleteMenuProps) kitex.Node {
 	acState := props.Controller.Use()
+	scrollOffset, setScrollOffset := kitex.UseState(0)
+	visibleCount := 8
+
+	// Reactive auto-scrolling to keep the selected suggestion in the viewport
+	kitex.UseEffect(func() {
+		idx := acState.SelectedIndex
+		items := acState.FilteredItems
+		total := len(items)
+		if total == 0 {
+			setScrollOffset(0)
+			return
+		}
+
+		currScroll := scrollOffset()
+		if idx < 0 {
+			setScrollOffset(0)
+		} else if idx < currScroll {
+			setScrollOffset(idx)
+		} else if idx >= currScroll+visibleCount {
+			setScrollOffset(idx - visibleCount + 1)
+		}
+	}, []any{acState.SelectedIndex, len(acState.FilteredItems)})
 
 	// Fetch query results reactively when query or open status changes with a 100ms debounce
 	kitex.UseEffectCleanup(func() func() {
@@ -113,7 +138,11 @@ var AutocompleteMenu = kitex.FC("AutocompleteMenu", func(props AutocompleteMenuP
 				if p == nil {
 					return nil, nil
 				}
-				items, err := p.Query(ctx, autocomplete.QueryReq{Query: strippedQuery, Sources: sources})
+				items, err := p.Query(ctx, autocomplete.QueryReq{
+					Query:     strippedQuery,
+					Sources:   sources,
+					SessionID: props.SessionID,
+				})
 				if err != nil {
 					return nil, err
 				}
@@ -179,93 +208,115 @@ var AutocompleteMenu = kitex.FC("AutocompleteMenu", func(props AutocompleteMenuP
 			kitex.UL(kitex.ULProps{
 				Style: menuListStyle,
 			},
-				kitex.Map(acState.FilteredItems, func(item autocomplete.Item, idx int) kitex.Node {
-					isSelected := idx == acState.SelectedIndex
-
-					rowStyle := menuRowStyle
-					var currentLabelCol, currentDetailCol color.Color
-					if isSelected {
-						rowStyle = rowStyle.Background(activeBg).Foreground(activeFg)
-						currentLabelCol = activeFg
-						currentDetailCol = activeDetailCol
-					} else {
-						rowStyle = rowStyle.Foreground(textCol)
-						currentLabelCol = textCol
-						currentDetailCol = detailCol
+				func() kitex.Node {
+					items := acState.FilteredItems
+					if len(items) == 0 {
+						return nil
 					}
-
-					// 1. Kind Icon Column (Fixed Width: 2)
-					var iconNode kitex.Node
-					if !props.HideIcons && t != nil {
-						var iNode kitex.Node
-						if item.Kind != "" {
-							iNode, _ = icon.LspKindIcon(item.Kind, t)
-						}
-						// Always render the Box to align subsequent columns
-						iconNode = kitex.Box(kitex.BoxProps{
-							Style: menuIconColStyle,
-						}, kitex.IfElse(iNode != nil, iNode, kitex.Text(" ")))
+					start := scrollOffset()
+					if start < 0 {
+						start = 0
 					}
+					if start >= len(items) {
+						start = len(items) - 1
+					}
+					end := start + visibleCount
+					if end > len(items) {
+						end = len(items)
+					}
+					visibleItems := items[start:end]
 
-					// 2. Category Badge Column (Fixed Width: 4)
-					var badgeNode kitex.Node
-					if !props.HideBadges {
-						var bText string
-						var badgeCol color.Color
-						if item.Badge != "" {
-							bText = item.Badge
-							if t != nil {
-								switch bText {
-								case "FILE ", "DIR  ":
-									badgeCol = t.Color.Surface.Success
-								case "CMD  ":
-									badgeCol = t.Color.Surface.Tertiary
-								default:
-									badgeCol = t.Color.Surface.Info
-								}
+					return kitex.Fragment(
+						kitex.Map(visibleItems, func(item autocomplete.Item, localIdx int) kitex.Node {
+							globalIdx := start + localIdx
+							isSelected := globalIdx == acState.SelectedIndex
+
+							rowStyle := menuRowStyle
+							var currentLabelCol, currentDetailCol color.Color
+							if isSelected {
+								rowStyle = rowStyle.Background(activeBg).Foreground(activeFg)
+								currentLabelCol = activeFg
+								currentDetailCol = activeDetailCol
 							} else {
-								badgeCol = color.RGBA{R: 123, G: 205, B: 165, A: 255}
+								rowStyle = rowStyle.Foreground(textCol)
+								currentLabelCol = textCol
+								currentDetailCol = detailCol
 							}
-						}
-						// Always render the Box to align subsequent columns
-						badgeNode = kitex.Box(kitex.BoxProps{
-							Style: menuBadgeColStyle.Foreground(badgeCol),
-						}, kitex.Text(bText))
-					}
 
-					// 3. Name / Label Column (Fixed Width: 22)
-					labelNode := kitex.Box(kitex.BoxProps{
-						Style: menuLabelColStyle.Foreground(currentLabelCol),
-					}, kitex.Text(item.Label))
-
-					// 4. Sublabel / Detail Column (Flex: 1)
-					detailNode := kitex.Box(kitex.BoxProps{
-						Style: menuDetailColStyle.Foreground(currentDetailCol),
-					}, kitex.Text(item.Sublabel))
-
-					return kitex.LI(kitex.LIProps{
-						Key:   "item-" + item.ID,
-						Style: rowStyle,
-						OnClick: func(e event.Event) {
-							if props.OnSelect != nil {
-								props.OnSelect(item)
+							// 1. Kind Icon Column (Fixed Width: 2)
+							var iconNode kitex.Node
+							if !props.HideIcons && t != nil {
+								var iNode kitex.Node
+								if item.Kind != "" {
+									iNode, _ = icon.LspKindIcon(item.Kind, t)
+								}
+								// Always render the Box to align subsequent columns
+								iconNode = kitex.Box(kitex.BoxProps{
+									Style: menuIconColStyle,
+								}, kitex.IfElse(iNode != nil, iNode, kitex.Text(" ")))
 							}
-						},
-					},
-						// Icon
-						kitex.If(iconNode != nil, func() kitex.Node {
-							return iconNode
+
+							// 2. Category Badge Column (Fixed Width: 4)
+							var badgeNode kitex.Node
+							if !props.HideBadges {
+								var bText string
+								var badgeCol color.Color
+								if item.Badge != "" {
+									bText = item.Badge
+									if t != nil {
+										switch bText {
+										case "FILE ", "DIR  ":
+											badgeCol = t.Color.Surface.Success
+										case "CMD  ":
+											badgeCol = t.Color.Surface.Tertiary
+										default:
+											badgeCol = t.Color.Surface.Info
+										}
+									} else {
+										badgeCol = color.RGBA{R: 123, G: 205, B: 165, A: 255}
+									}
+								}
+								// Always render the Box to align subsequent columns
+								badgeNode = kitex.Box(kitex.BoxProps{
+									Style: menuBadgeColStyle.Foreground(badgeCol),
+								}, kitex.Text(bText))
+							}
+
+							// 3. Name / Label Column (Fixed Width: 22)
+							labelNode := kitex.Box(kitex.BoxProps{
+								Style: menuLabelColStyle.Foreground(currentLabelCol),
+							}, kitex.Text(item.Label))
+
+							// 4. Sublabel / Detail Column (Flex: 1)
+							detailNode := kitex.Box(kitex.BoxProps{
+								Style: menuDetailColStyle.Foreground(currentDetailCol),
+							}, kitex.Text(item.Sublabel))
+
+							return kitex.LI(kitex.LIProps{
+								Key:   "item-" + item.ID,
+								Style: rowStyle,
+								OnClick: func(e event.Event) {
+									if props.OnSelect != nil {
+										props.OnSelect(item)
+									}
+								},
+							},
+								// Icon
+								kitex.If(iconNode != nil, func() kitex.Node {
+									return iconNode
+								}),
+								// Category Badge
+								kitex.If(badgeNode != nil, func() kitex.Node {
+									return badgeNode
+								}),
+								// Label (Symbol/Filename)
+								labelNode,
+								// Detail description or directory path
+								detailNode,
+							)
 						}),
-						// Category Badge
-						kitex.If(badgeNode != nil, func() kitex.Node {
-							return badgeNode
-						}),
-						// Label (Symbol/Filename)
-						labelNode,
-						// Detail description or directory path
-						detailNode,
 					)
-				}),
+				}(),
 			),
 		),
 		func() kitex.Node {
