@@ -582,10 +582,10 @@ type LspInspectOutputResult struct {
 	ReferencesTotal int `json:"references_total,omitempty" jsonschema:"Total number of references found."`
 	// Signature: Code signature of the symbol.
 	Signature string `json:"signature,omitempty" jsonschema:"Code signature of the symbol."`
+	// Snippet: The code definition snippet
+	Snippet string `json:"snippet,omitempty" jsonschema:"The code definition snippet"`
 	// TypeDefinedAt: File path and line where the symbol's underlying type is defined (if applicable).
 	TypeDefinedAt string `json:"type_defined_at,omitempty" jsonschema:"File path and line where the symbol's underlying type is defined (if applicable)."`
-	// Snippet: The code definition snippet.
-	Snippet string `json:"snippet,omitempty" jsonschema:"The code definition snippet."`
 }
 
 type LspInspectOutputSimilarSymbolsItem struct {

@@ -9,22 +9,9 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/masterkeysrd/warp"
 	"gopkg.in/yaml.v3"
 )
-
-type localTool struct {
-	APIVersion string `yaml:"apiVersion"`
-	Kind       string `yaml:"kind"`
-	Metadata   struct {
-		Name   string            `yaml:"name"`
-		Labels map[string]string `yaml:"labels"`
-	} `yaml:"metadata"`
-	Spec struct {
-		Description  string         `yaml:"description"`
-		InputSchema  map[string]any `yaml:"inputSchema"`
-		OutputSchema map[string]any `yaml:"outputSchema"`
-	} `yaml:"spec"`
-}
 
 type genConfig struct {
 	Tools map[string]struct {
@@ -79,24 +66,14 @@ func main() {
 			os.Exit(1)
 		}
 
-		// Split file content into YAML frontmatter and Markdown body
-		parts := strings.SplitN(string(data), "---", 3)
-		var yamlPart, markdownPart string
-		if len(parts) >= 3 {
-			yamlPart = parts[1]
-			markdownPart = strings.TrimSpace(parts[2])
-		} else {
-			// Skip files that do not contain valid frontmatter
-			continue
-		}
-
-		var tool localTool
-		if err := yaml.Unmarshal([]byte(yamlPart), &tool); err != nil {
-			fmt.Printf("Error parsing YAML front-matter in %s: %v\n", filename, err)
+		result, err := warp.Parse(path, string(data))
+		if err != nil {
+			fmt.Printf("Error parsing %s: %v\n", filename, err)
 			os.Exit(1)
 		}
 
-		if tool.Kind != "Tool" {
+		tool, ok := result.Resource.(*warp.Tool)
+		if !ok {
 			continue
 		}
 
@@ -122,10 +99,7 @@ func main() {
 			IsStreaming: isStreaming,
 		})
 
-		description := tool.Spec.Description
-		if markdownPart != "" {
-			description = markdownPart
-		}
+		description := tool.Spec.Instructions
 
 		// Generate Arguments Struct
 		structName := toCamelCase(tool.Metadata.Name) + "Args"
@@ -164,7 +138,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	fmt.Printf("Successfully generated types for %d tools in %s\n", len(toolFiles), outputPath)
+	fmt.Printf("Successfully generated types for %d tools in %s\n", len(toolsToGen), outputPath)
 
 	// Generate handlers.go
 	var hBuf bytes.Buffer
@@ -182,42 +156,42 @@ func main() {
 	hBuf.WriteString("\tif err != nil {\n")
 	hBuf.WriteString("\t\treturn nil, fmt.Errorf(\"failed to load tool resources: %w\", err)\n")
 	hBuf.WriteString("\t}\n\n")
-	hBuf.WriteString("\tresMap := make(map[string]*warp.Tool)\n")
+	hBuf.WriteString("\tnameMap := make(map[string]*warp.Tool)\n")
 	hBuf.WriteString("\tfor _, r := range resources {\n")
-	hBuf.WriteString("\t\tresMap[r.Metadata.Name] = r\n")
+	hBuf.WriteString("\t\tnameMap[r.Metadata.Name] = r\n")
 	hBuf.WriteString("\t}\n\n")
 	hBuf.WriteString("\tvar list []*tool.Tool\n")
 
 	for _, tInfo := range toolsToGen {
 		name := tInfo.Name
 		camelName := toCamelCase(name)
-		hBuf.WriteString(fmt.Sprintf("\tif res, ok := resMap[%q]; ok {\n", name))
-		hBuf.WriteString(fmt.Sprintf("\t\tvar opts []tool.Option\n"))
-		hBuf.WriteString(fmt.Sprintf("\t\tif res.Spec.Annotations != nil {\n"))
-		hBuf.WriteString(fmt.Sprintf("\t\t\topts = append(opts, tool.WithAnnotation(tool.Annotation{\n"))
-		hBuf.WriteString(fmt.Sprintf("\t\t\t\tIsOpenWorld:  res.Spec.Annotations.IsOpenWorld,\n"))
-		hBuf.WriteString(fmt.Sprintf("\t\t\t\tIsDangerous:  res.Spec.Annotations.IsDangerous,\n"))
-		hBuf.WriteString(fmt.Sprintf("\t\t\t\tIsReadOnly:   res.Spec.Annotations.IsReadOnly,\n"))
-		hBuf.WriteString(fmt.Sprintf("\t\t\t\tIsIdempotent: res.Spec.Annotations.IsIdempotent,\n"))
-		hBuf.WriteString(fmt.Sprintf("\t\t\t\tUserHint:     res.Spec.Annotations.UserHint,\n"))
-		hBuf.WriteString(fmt.Sprintf("\t\t\t}))\n"))
-		hBuf.WriteString(fmt.Sprintf("\t\t}\n"))
+		fmt.Fprintf(&hBuf, "\tif res, ok := nameMap[%q]; ok {\n", name)
+		hBuf.WriteString("\t\tvar opts []tool.Option\n")
+		hBuf.WriteString("\t\tif res.Spec.Annotations != nil {\n")
+		hBuf.WriteString("\t\t\topts = append(opts, tool.WithAnnotation(tool.Annotation{\n")
+		hBuf.WriteString("\t\t\t\tIsOpenWorld:  res.Spec.Annotations.IsOpenWorld,\n")
+		hBuf.WriteString("\t\t\t\tIsDangerous:  res.Spec.Annotations.IsDangerous,\n")
+		hBuf.WriteString("\t\t\t\tIsReadOnly:   res.Spec.Annotations.IsReadOnly,\n")
+		hBuf.WriteString("\t\t\t\tIsIdempotent: res.Spec.Annotations.IsIdempotent,\n")
+		hBuf.WriteString("\t\t\t\tUserHint:     res.Spec.Annotations.UserHint,\n")
+		hBuf.WriteString("\t\t\t}))\n")
+		hBuf.WriteString("\t\t}\n")
 		if tInfo.IsStreaming {
-			hBuf.WriteString(fmt.Sprintf("\t\tt, err := tool.NewStreaming(\n"))
+			hBuf.WriteString("\t\tt, err := tool.NewStreaming(\n")
 		} else {
-			hBuf.WriteString(fmt.Sprintf("\t\tt, err := tool.New(\n"))
+			hBuf.WriteString("\t\tt, err := tool.New(\n")
 		}
-		hBuf.WriteString(fmt.Sprintf("\t\t\t%q,\n", name))
-		hBuf.WriteString(fmt.Sprintf("\t\t\tres.Metadata.DisplayName,\n"))
-		hBuf.WriteString(fmt.Sprintf("\t\t\tres.Spec.Instructions,\n"))
-		hBuf.WriteString(fmt.Sprintf("\t\t\thandlers.%s,\n", camelName))
-		hBuf.WriteString(fmt.Sprintf("\t\t\topts...,\n"))
-		hBuf.WriteString(fmt.Sprintf("\t\t)\n"))
-		hBuf.WriteString(fmt.Sprintf("\t\tif err != nil {\n"))
-		hBuf.WriteString(fmt.Sprintf("\t\t\treturn nil, fmt.Errorf(\"failed to create tool %s: %%w\", err)\n", name))
-		hBuf.WriteString(fmt.Sprintf("\t\t}\n"))
-		hBuf.WriteString(fmt.Sprintf("\t\tlist = append(list, t)\n"))
-		hBuf.WriteString(fmt.Sprintf("\t}\n\n"))
+		fmt.Fprintf(&hBuf, "\t\t\t%q,\n", name)
+		hBuf.WriteString("\t\t\tres.Metadata.DisplayName,\n")
+		hBuf.WriteString("\t\t\tres.Spec.Instructions,\n")
+		fmt.Fprintf(&hBuf, "\t\t\thandlers.%s,\n", camelName)
+		hBuf.WriteString("\t\t\topts...,\n")
+		hBuf.WriteString("\t\t)\n")
+		hBuf.WriteString("\t\tif err != nil {\n")
+		fmt.Fprintf(&hBuf, "\t\t\treturn nil, fmt.Errorf(\"failed to create tool %s: %%w\", err)\n", name)
+		hBuf.WriteString("\t\t}\n")
+		hBuf.WriteString("\t\tlist = append(list, t)\n")
+		hBuf.WriteString("\t}\n\n")
 	}
 
 	hBuf.WriteString("\treturn list, nil\n")
@@ -287,12 +261,11 @@ func resolveType(parentName, propName string, propVal map[string]any, queue *[]s
 
 func writeStruct(buf *bytes.Buffer, name string, schema map[string]any, doc string, queue *[]structJob) {
 	if doc != "" {
-		lines := strings.Split(doc, "\n")
-		for _, line := range lines {
-			buf.WriteString(fmt.Sprintf("// %s\n", line))
+		for line := range strings.SplitSeq(doc, "\n") {
+			fmt.Fprintf(buf, "// %s\n", line)
 		}
 	}
-	buf.WriteString(fmt.Sprintf("type %s struct {\n", name))
+	fmt.Fprintf(buf, "type %s struct {\n", name)
 
 	props, ok := schema["properties"].(map[string]any)
 	if !ok {
@@ -335,10 +308,10 @@ func writeStruct(buf *bytes.Buffer, name string, schema map[string]any, doc stri
 		}
 
 		if desc != "" {
-			buf.WriteString(fmt.Sprintf("\t// %s: %s\n", fieldName, desc))
-			buf.WriteString(fmt.Sprintf("\t%s %s `json:\"%s\" jsonschema:\"%s\"`\n", fieldName, goType, jsonTag, strings.ReplaceAll(desc, "\"", "\\\"")))
+			fmt.Fprintf(buf, "\t// %s: %s\n", fieldName, desc)
+			fmt.Fprintf(buf, "\t%s %s `json:\"%s\" jsonschema:\"%s\"`\n", fieldName, goType, jsonTag, strings.ReplaceAll(desc, "\"", "\\\""))
 		} else {
-			buf.WriteString(fmt.Sprintf("\t%s %s `json:\"%s\"`\n", fieldName, goType, jsonTag))
+			fmt.Fprintf(buf, "\t%s %s `json:\"%s\"`\n", fieldName, goType, jsonTag)
 		}
 	}
 

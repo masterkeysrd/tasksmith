@@ -16,13 +16,13 @@ func LoomTools(handlers *ToolHandlers) ([]*tool.Tool, error) {
 		return nil, fmt.Errorf("failed to load tool resources: %w", err)
 	}
 
-	resMap := make(map[string]*warp.Tool)
+	nameMap := make(map[string]*warp.Tool)
 	for _, r := range resources {
-		resMap[r.Metadata.Name] = r
+		nameMap[r.Metadata.Name] = r
 	}
 
 	var list []*tool.Tool
-	if res, ok := resMap["activate_skill"]; ok {
+	if res, ok := nameMap["activate_skill"]; ok {
 		var opts []tool.Option
 		if res.Spec.Annotations != nil {
 			opts = append(opts, tool.WithAnnotation(tool.Annotation{
@@ -46,7 +46,7 @@ func LoomTools(handlers *ToolHandlers) ([]*tool.Tool, error) {
 		list = append(list, t)
 	}
 
-	if res, ok := resMap["agent_define"]; ok {
+	if res, ok := nameMap["agent_define"]; ok {
 		var opts []tool.Option
 		if res.Spec.Annotations != nil {
 			opts = append(opts, tool.WithAnnotation(tool.Annotation{
@@ -70,7 +70,7 @@ func LoomTools(handlers *ToolHandlers) ([]*tool.Tool, error) {
 		list = append(list, t)
 	}
 
-	if res, ok := resMap["agent_invoke"]; ok {
+	if res, ok := nameMap["agent_invoke"]; ok {
 		var opts []tool.Option
 		if res.Spec.Annotations != nil {
 			opts = append(opts, tool.WithAnnotation(tool.Annotation{
@@ -94,7 +94,7 @@ func LoomTools(handlers *ToolHandlers) ([]*tool.Tool, error) {
 		list = append(list, t)
 	}
 
-	if res, ok := resMap["agent_manage"]; ok {
+	if res, ok := nameMap["agent_manage"]; ok {
 		var opts []tool.Option
 		if res.Spec.Annotations != nil {
 			opts = append(opts, tool.WithAnnotation(tool.Annotation{
@@ -118,7 +118,7 @@ func LoomTools(handlers *ToolHandlers) ([]*tool.Tool, error) {
 		list = append(list, t)
 	}
 
-	if res, ok := resMap["agent_send_message"]; ok {
+	if res, ok := nameMap["agent_send_message"]; ok {
 		var opts []tool.Option
 		if res.Spec.Annotations != nil {
 			opts = append(opts, tool.WithAnnotation(tool.Annotation{
@@ -142,7 +142,7 @@ func LoomTools(handlers *ToolHandlers) ([]*tool.Tool, error) {
 		list = append(list, t)
 	}
 
-	if res, ok := resMap["ask_question"]; ok {
+	if res, ok := nameMap["ask_question"]; ok {
 		var opts []tool.Option
 		if res.Spec.Annotations != nil {
 			opts = append(opts, tool.WithAnnotation(tool.Annotation{
@@ -166,7 +166,7 @@ func LoomTools(handlers *ToolHandlers) ([]*tool.Tool, error) {
 		list = append(list, t)
 	}
 
-	if res, ok := resMap["bash"]; ok {
+	if res, ok := nameMap["bash"]; ok {
 		var opts []tool.Option
 		if res.Spec.Annotations != nil {
 			opts = append(opts, tool.WithAnnotation(tool.Annotation{
@@ -190,7 +190,7 @@ func LoomTools(handlers *ToolHandlers) ([]*tool.Tool, error) {
 		list = append(list, t)
 	}
 
-	if res, ok := resMap["download"]; ok {
+	if res, ok := nameMap["download"]; ok {
 		var opts []tool.Option
 		if res.Spec.Annotations != nil {
 			opts = append(opts, tool.WithAnnotation(tool.Annotation{
@@ -214,7 +214,7 @@ func LoomTools(handlers *ToolHandlers) ([]*tool.Tool, error) {
 		list = append(list, t)
 	}
 
-	if res, ok := resMap["edit"]; ok {
+	if res, ok := nameMap["edit"]; ok {
 		var opts []tool.Option
 		if res.Spec.Annotations != nil {
 			opts = append(opts, tool.WithAnnotation(tool.Annotation{
@@ -238,7 +238,7 @@ func LoomTools(handlers *ToolHandlers) ([]*tool.Tool, error) {
 		list = append(list, t)
 	}
 
-	if res, ok := resMap["fetch"]; ok {
+	if res, ok := nameMap["fetch"]; ok {
 		var opts []tool.Option
 		if res.Spec.Annotations != nil {
 			opts = append(opts, tool.WithAnnotation(tool.Annotation{
@@ -262,7 +262,7 @@ func LoomTools(handlers *ToolHandlers) ([]*tool.Tool, error) {
 		list = append(list, t)
 	}
 
-	if res, ok := resMap["glob"]; ok {
+	if res, ok := nameMap["glob"]; ok {
 		var opts []tool.Option
 		if res.Spec.Annotations != nil {
 			opts = append(opts, tool.WithAnnotation(tool.Annotation{
@@ -286,7 +286,7 @@ func LoomTools(handlers *ToolHandlers) ([]*tool.Tool, error) {
 		list = append(list, t)
 	}
 
-	if res, ok := resMap["grep"]; ok {
+	if res, ok := nameMap["grep"]; ok {
 		var opts []tool.Option
 		if res.Spec.Annotations != nil {
 			opts = append(opts, tool.WithAnnotation(tool.Annotation{
@@ -310,7 +310,7 @@ func LoomTools(handlers *ToolHandlers) ([]*tool.Tool, error) {
 		list = append(list, t)
 	}
 
-	if res, ok := resMap["ls"]; ok {
+	if res, ok := nameMap["ls"]; ok {
 		var opts []tool.Option
 		if res.Spec.Annotations != nil {
 			opts = append(opts, tool.WithAnnotation(tool.Annotation{
@@ -334,7 +334,7 @@ func LoomTools(handlers *ToolHandlers) ([]*tool.Tool, error) {
 		list = append(list, t)
 	}
 
-	if res, ok := resMap["lsp_diagnostics"]; ok {
+	if res, ok := nameMap["lsp_diagnostics"]; ok {
 		var opts []tool.Option
 		if res.Spec.Annotations != nil {
 			opts = append(opts, tool.WithAnnotation(tool.Annotation{
@@ -358,7 +358,7 @@ func LoomTools(handlers *ToolHandlers) ([]*tool.Tool, error) {
 		list = append(list, t)
 	}
 
-	if res, ok := resMap["lsp_inspect"]; ok {
+	if res, ok := nameMap["lsp_inspect"]; ok {
 		var opts []tool.Option
 		if res.Spec.Annotations != nil {
 			opts = append(opts, tool.WithAnnotation(tool.Annotation{
@@ -382,7 +382,7 @@ func LoomTools(handlers *ToolHandlers) ([]*tool.Tool, error) {
 		list = append(list, t)
 	}
 
-	if res, ok := resMap["lsp_restart"]; ok {
+	if res, ok := nameMap["lsp_restart"]; ok {
 		var opts []tool.Option
 		if res.Spec.Annotations != nil {
 			opts = append(opts, tool.WithAnnotation(tool.Annotation{
@@ -406,7 +406,7 @@ func LoomTools(handlers *ToolHandlers) ([]*tool.Tool, error) {
 		list = append(list, t)
 	}
 
-	if res, ok := resMap["lsp_symbols"]; ok {
+	if res, ok := nameMap["lsp_symbols"]; ok {
 		var opts []tool.Option
 		if res.Spec.Annotations != nil {
 			opts = append(opts, tool.WithAnnotation(tool.Annotation{
@@ -430,7 +430,7 @@ func LoomTools(handlers *ToolHandlers) ([]*tool.Tool, error) {
 		list = append(list, t)
 	}
 
-	if res, ok := resMap["mcp_list_resources"]; ok {
+	if res, ok := nameMap["mcp_list_resources"]; ok {
 		var opts []tool.Option
 		if res.Spec.Annotations != nil {
 			opts = append(opts, tool.WithAnnotation(tool.Annotation{
@@ -454,7 +454,7 @@ func LoomTools(handlers *ToolHandlers) ([]*tool.Tool, error) {
 		list = append(list, t)
 	}
 
-	if res, ok := resMap["mcp_read_resources"]; ok {
+	if res, ok := nameMap["mcp_read_resources"]; ok {
 		var opts []tool.Option
 		if res.Spec.Annotations != nil {
 			opts = append(opts, tool.WithAnnotation(tool.Annotation{
@@ -478,7 +478,7 @@ func LoomTools(handlers *ToolHandlers) ([]*tool.Tool, error) {
 		list = append(list, t)
 	}
 
-	if res, ok := resMap["multi_edit"]; ok {
+	if res, ok := nameMap["multi_edit"]; ok {
 		var opts []tool.Option
 		if res.Spec.Annotations != nil {
 			opts = append(opts, tool.WithAnnotation(tool.Annotation{
@@ -502,7 +502,7 @@ func LoomTools(handlers *ToolHandlers) ([]*tool.Tool, error) {
 		list = append(list, t)
 	}
 
-	if res, ok := resMap["remove"]; ok {
+	if res, ok := nameMap["remove"]; ok {
 		var opts []tool.Option
 		if res.Spec.Annotations != nil {
 			opts = append(opts, tool.WithAnnotation(tool.Annotation{
@@ -526,7 +526,7 @@ func LoomTools(handlers *ToolHandlers) ([]*tool.Tool, error) {
 		list = append(list, t)
 	}
 
-	if res, ok := resMap["schedule"]; ok {
+	if res, ok := nameMap["schedule"]; ok {
 		var opts []tool.Option
 		if res.Spec.Annotations != nil {
 			opts = append(opts, tool.WithAnnotation(tool.Annotation{
@@ -550,7 +550,7 @@ func LoomTools(handlers *ToolHandlers) ([]*tool.Tool, error) {
 		list = append(list, t)
 	}
 
-	if res, ok := resMap["tasks"]; ok {
+	if res, ok := nameMap["tasks"]; ok {
 		var opts []tool.Option
 		if res.Spec.Annotations != nil {
 			opts = append(opts, tool.WithAnnotation(tool.Annotation{
@@ -574,7 +574,7 @@ func LoomTools(handlers *ToolHandlers) ([]*tool.Tool, error) {
 		list = append(list, t)
 	}
 
-	if res, ok := resMap["todos"]; ok {
+	if res, ok := nameMap["todos"]; ok {
 		var opts []tool.Option
 		if res.Spec.Annotations != nil {
 			opts = append(opts, tool.WithAnnotation(tool.Annotation{
@@ -598,7 +598,7 @@ func LoomTools(handlers *ToolHandlers) ([]*tool.Tool, error) {
 		list = append(list, t)
 	}
 
-	if res, ok := resMap["view"]; ok {
+	if res, ok := nameMap["view"]; ok {
 		var opts []tool.Option
 		if res.Spec.Annotations != nil {
 			opts = append(opts, tool.WithAnnotation(tool.Annotation{
@@ -622,7 +622,7 @@ func LoomTools(handlers *ToolHandlers) ([]*tool.Tool, error) {
 		list = append(list, t)
 	}
 
-	if res, ok := resMap["web_fetch"]; ok {
+	if res, ok := nameMap["web_fetch"]; ok {
 		var opts []tool.Option
 		if res.Spec.Annotations != nil {
 			opts = append(opts, tool.WithAnnotation(tool.Annotation{
@@ -646,7 +646,7 @@ func LoomTools(handlers *ToolHandlers) ([]*tool.Tool, error) {
 		list = append(list, t)
 	}
 
-	if res, ok := resMap["web_search"]; ok {
+	if res, ok := nameMap["web_search"]; ok {
 		var opts []tool.Option
 		if res.Spec.Annotations != nil {
 			opts = append(opts, tool.WithAnnotation(tool.Annotation{
@@ -670,7 +670,7 @@ func LoomTools(handlers *ToolHandlers) ([]*tool.Tool, error) {
 		list = append(list, t)
 	}
 
-	if res, ok := resMap["write"]; ok {
+	if res, ok := nameMap["write"]; ok {
 		var opts []tool.Option
 		if res.Spec.Annotations != nil {
 			opts = append(opts, tool.WithAnnotation(tool.Annotation{

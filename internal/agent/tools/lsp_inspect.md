@@ -43,6 +43,9 @@ spec:
           docs_truncated:
             type: boolean
             description: True if the documentation was truncated for the inline response.
+          snippet:
+            type: string
+            description: The code definition snippet
           references:
             type: array
             items:
