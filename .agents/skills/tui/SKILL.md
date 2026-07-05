@@ -5,8 +5,8 @@ metadata:
   name: tui
   description: "Terminal User Interface (TUI) development guidelines, conventions, and best practices for building and maintaining the TaskSmith kite-based TUI components, views, and interactive elements."
 spec:
-  useWhen: "building or editing TUI components, designing layouts and styling, managing reactive state in the UI, handling user input and keybindings, registering TUI commands, or working with themes and dynamic colors"
-  keywords: [tui, kite, components, styling, keybindings, theme]
+  useWhen: "modifying code under internal/tui/, building Terminal User Interfaces, designing kite or kitex component layouts, mapping keyboard events and keybindings, or configuring reactive UI state"
+  keywords: [tui, kite, kitex, layout, keybindings, widgets, styling]
 ---
 # TUI Development Skill
 

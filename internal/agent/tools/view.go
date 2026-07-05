@@ -49,8 +49,27 @@ func (h *ToolHandlers) View(ctx context.Context, in ViewArgs) (ViewOutput, error
 	}
 
 	// 1. Resolve file via the core resolver
-	r := resolver.New(h.LspManager, h.CWD, h.FileTracker, h.Storage)
-	res, err := r.ResolveFile(ctx, targetPath)
+	r := resolver.New(resolver.Config{
+		Lsp:         h.LspManager,
+		Cwd:         h.CWD,
+		FileTracker: h.FileTracker,
+		Storage:     h.Storage,
+	})
+	absPath, err := r.ResolvePath(ctx, targetPath, resolver.TypeFile, "")
+	if err != nil {
+		return ViewOutput{}, err
+	}
+
+	// Format line bounds as a path hash anchor (e.g. #L10-L20) for LoadResource
+	if in.StartLine > 0 {
+		if in.EndLine > 0 {
+			absPath = fmt.Sprintf("%s#L%d-L%d", absPath, in.StartLine, in.EndLine)
+		} else {
+			absPath = fmt.Sprintf("%s#L%d", absPath, in.StartLine)
+		}
+	}
+
+	res, err := r.LoadResource(ctx, absPath, resolver.TypeFile, "")
 	if err != nil {
 		return ViewOutput{}, err
 	}

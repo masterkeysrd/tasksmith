@@ -28,6 +28,10 @@ func (m *mockClient) ListAgents(ctx context.Context, req api.ListAgentsRequest) 
 	return &api.ListAgentsResponse{}, nil
 }
 
+func (m *mockClient) ListSkills(ctx context.Context, req api.ListSkillsRequest) (*api.ListSkillsResponse, error) {
+	return &api.ListSkillsResponse{}, nil
+}
+
 func (m *mockClient) ListProviders(ctx context.Context, req api.ListProvidersRequest) (*api.ListProvidersResponse, error) {
 	return &api.ListProvidersResponse{}, nil
 }
@@ -188,9 +192,10 @@ func TestChatView(t *testing.T) {
 
 	t.Run("RenderComposer", func(t *testing.T) {
 		node := render(Composer(ComposerProps{
-			Value:    "hello",
-			Disabled: false,
-			IsInsert: true,
+			Value:     "hello",
+			Disabled:  false,
+			IsInsert:  true,
+			SessionID: "test-session-id",
 		}))
 		if node == nil {
 			t.Fatal("Composer returned nil node")

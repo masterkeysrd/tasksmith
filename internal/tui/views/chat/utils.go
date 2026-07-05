@@ -2,6 +2,7 @@ package chat
 
 import (
 	"encoding/json"
+	"encoding/xml"
 	"os/exec"
 	"runtime"
 	"strings"
@@ -10,6 +11,56 @@ import (
 	"github.com/masterkeysrd/loom/message"
 	"github.com/masterkeysrd/tasksmith/internal/agent/tools"
 )
+
+type XMLAttachments struct {
+	XMLName xml.Name    `xml:"attachments"`
+	Files   []XMLFile   `xml:"file"`
+	Symbols []XMLSymbol `xml:"symbol"`
+	Skills  []XMLSkill  `xml:"skill"`
+}
+
+type XMLFile struct {
+	Path    string `xml:"path,attr"`
+	Lines   int    `xml:"lines,attr"`
+	Mime    string `xml:"mime,attr"`
+	Reason  string `xml:"reason,attr"`
+	Content string `xml:"content"`
+}
+
+type XMLSymbol struct {
+	Name            string   `xml:"name,attr"`
+	Kind            string   `xml:"kind,attr"`
+	File            string   `xml:"file,attr"`
+	Lines           string   `xml:"lines,attr"`
+	Content         string   `xml:"content"`
+	TypeDefinedAt   string   `xml:"type_defined_at"`
+	Docs            string   `xml:"docs"`
+	DocsTruncated   bool     `xml:"docs_truncated"`
+	FullReportPath  string   `xml:"full_report_path"`
+	References      []string `xml:"references>reference"`
+	Implementations []string `xml:"implementations>implementation"`
+	Diagnostics     string   `xml:"diagnostics"`
+}
+
+type XMLSkill struct {
+	Name    string `xml:"name,attr"`
+	Content string `xml:"content"`
+}
+
+func parseAttachmentsXML(xmlStr string) *XMLAttachments {
+	startIdx := strings.Index(xmlStr, "<attachments>")
+	if startIdx == -1 {
+		return nil
+	}
+	cleanXML := xmlStr[startIdx:]
+
+	var attachments XMLAttachments
+	err := xml.Unmarshal([]byte(cleanXML), &attachments)
+	if err != nil {
+		return nil
+	}
+	return &attachments
+}
 
 // parseLsOutput extracts FileEntry values and metadata from a tool's StructuredContent.
 // It handles both same-process typed values and JSON-deserialized map[string]any forms.

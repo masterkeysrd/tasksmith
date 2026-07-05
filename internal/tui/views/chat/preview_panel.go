@@ -31,6 +31,7 @@ var PreviewRegistry = map[string]ToolPreviewRenderer{
 	"lsp_inspect":     renderLspInspectPreview,
 	"file_view":       renderFileViewPreview,
 	"markdown":        renderMarkdownPreview,
+	"symbol_view":     renderSymbolViewPreview,
 }
 
 // PreviewPanelProps defines properties for the generic PreviewPanel component.
@@ -77,6 +78,9 @@ var PreviewPanel = kitex.FCC("PreviewPanel", func(props PreviewPanelProps) kitex
 			previewType = val.Type()
 			previewData = *val
 		case *preview.MarkdownPreview:
+			previewType = val.Type()
+			previewData = *val
+		case *preview.SymbolViewPreview:
 			previewType = val.Type()
 			previewData = *val
 		default:
@@ -216,6 +220,40 @@ func reconstructPreviewFromMap(previewType string, m map[string]any) preview.Too
 	case "markdown":
 		md, _ := m["markdown"].(string)
 		return preview.MarkdownPreview{Markdown: md}
+	case "symbol_view":
+		name, _ := m["name"].(string)
+		kind, _ := m["kind"].(string)
+		file, _ := m["file"].(string)
+		snippet, _ := m["snippet"].(string)
+		docs, _ := m["docs"].(string)
+		diags, _ := m["diagnostics"].(string)
+
+		var refs []string
+		if rVal, ok := m["references"].([]any); ok {
+			for _, r := range rVal {
+				if s, ok := r.(string); ok {
+					refs = append(refs, s)
+				}
+			}
+		}
+		var impls []string
+		if iVal, ok := m["implementations"].([]any); ok {
+			for _, i := range iVal {
+				if s, ok := i.(string); ok {
+					impls = append(impls, s)
+				}
+			}
+		}
+		return preview.SymbolViewPreview{
+			Name:            name,
+			Kind:            kind,
+			File:            file,
+			Snippet:         snippet,
+			Docs:            docs,
+			Diagnostics:     diags,
+			References:      refs,
+			Implementations: impls,
+		}
 	default:
 		return nil
 	}
@@ -629,4 +667,55 @@ func renderMarkdownPreview(t *theme.Scheme, payload map[string]any, previewData 
 	return components.Markdown(components.MarkdownProps{
 		Source: mdPrev.Markdown,
 	})
+}
+
+func renderSymbolViewPreview(t *theme.Scheme, payload map[string]any, previewData preview.ToolPreview) kitex.Node {
+	symPrev, ok := previewData.(preview.SymbolViewPreview)
+	if !ok {
+		return renderDefaultPreview(t, payload, previewData)
+	}
+
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "## %s (%s)\n\n", symPrev.Name, symPrev.Kind)
+	fmt.Fprintf(&sb, "**Declared at:** `%s`\n\n", symPrev.File)
+
+	if symPrev.Snippet != "" {
+		sb.WriteString("**Definition:**\n```go\n")
+		sb.WriteString(symPrev.Snippet)
+		sb.WriteString("\n```\n\n")
+	}
+
+	if symPrev.Docs != "" {
+		sb.WriteString(symPrev.Docs)
+		sb.WriteString("\n\n")
+	}
+
+	if len(symPrev.References) > 0 {
+		fmt.Fprintf(&sb, "**References** (%d total):\n", len(symPrev.References))
+		for _, ref := range symPrev.References {
+			fmt.Fprintf(&sb, "- `%s`\n", ref)
+		}
+		sb.WriteString("\n")
+	}
+
+	if len(symPrev.Implementations) > 0 {
+		fmt.Fprintf(&sb, "**Implementations** (%d total):\n", len(symPrev.Implementations))
+		for _, impl := range symPrev.Implementations {
+			fmt.Fprintf(&sb, "- `%s`\n", impl)
+		}
+		sb.WriteString("\n")
+	}
+
+	return kitex.Box(kitex.BoxProps{
+		Style: style.S().
+			Display(style.DisplayFlex).
+			FlexDirection(style.FlexColumn).
+			Padding(1).
+			Width(style.Percent(100)).
+			MinWidth(style.Percent(0)),
+	},
+		components.Markdown(components.MarkdownProps{
+			Source: sb.String(),
+		}),
+	)
 }

@@ -89,10 +89,10 @@ func TestViewHandler(t *testing.T) {
 		}
 	})
 
-	t.Run("vertical truncation budget of 16000 chars", func(t *testing.T) {
+	t.Run("vertical truncation budget of 32000 chars", func(t *testing.T) {
 		filePath := filepath.Join(tmpDir, "large.txt")
 		var sb strings.Builder
-		for i := 1; i <= 1000; i++ {
+		for i := 1; i <= 2000; i++ {
 			fmt.Fprintf(&sb, "Line %d: %s\n", i, strings.Repeat("x", 20))
 		}
 		if err := os.WriteFile(filePath, []byte(sb.String()), 0644); err != nil {
@@ -133,8 +133,8 @@ func TestViewHandler(t *testing.T) {
 			t.Errorf("expected note to match suffix, got %q", parts[1])
 		}
 
-		if out.TotalLines != 1000 {
-			t.Errorf("expected TotalLines to be 1000, got %d", out.TotalLines)
+		if out.TotalLines != 2000 {
+			t.Errorf("expected TotalLines to be 2000, got %d", out.TotalLines)
 		}
 	})
 

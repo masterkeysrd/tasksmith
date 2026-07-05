@@ -5,8 +5,8 @@ metadata:
     name: conventional-commits
     description: "Conventional Commits specification, commit message formatting rules, and best practices for structured version control history."
 spec:
-    useWhen: "writing or reviewing commit messages, deciding on commit types (feature, fix, refactor, chore, etc.), formatting subject and body lines, marking breaking changes, or determining version bumps from commit history"
-    keywords: [git, commits, conventional-commits, versioning]
+    useWhen: "writing or reviewing git commit messages, deciding on commit types (feat, fix, refactor, chore, etc.), formatting subject and body lines, marking breaking changes, or determining version bumps from commit history"
+    keywords: [git, commit, conventional, history, versioning, semver]
 ---
 
 # Conventional Commits Skill

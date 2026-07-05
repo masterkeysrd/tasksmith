@@ -217,6 +217,20 @@ func main() {
 								}
 								return matches
 							}),
+							autocomplete.NewSymbolSource(func(query string) []autocomplete.SymbolSearchResult {
+								syms := []autocomplete.SymbolSearchResult{
+									{Name: "Main", Kind: "function", Path: "cmd/tasksmith/main.go", StartLine: 10, StartChar: 5, ContainerName: "package main"},
+									{Name: "AutocompleteMenu", Kind: "variable", Path: "internal/tui/widgets/autocomplete_menu.go", StartLine: 77, StartChar: 4, ContainerName: "package widgets"},
+									{Name: "Parse", Kind: "method", Path: "internal/tui/plugin/autocomplete/controller.go", StartLine: 96, StartChar: 21, ContainerName: "Controller"},
+								}
+								var matches []autocomplete.SymbolSearchResult
+								for _, s := range syms {
+									if query == "" || strings.Contains(strings.ToLower(s.Name), strings.ToLower(query)) {
+										matches = append(matches, s)
+									}
+								}
+								return matches
+							}),
 						},
 					})
 					autocomplete.SetPlugin(mockPlugin)
@@ -227,12 +241,12 @@ func main() {
 				ctrl := kitex.UseMemo(func() *autocomplete.Controller {
 					return autocomplete.New(autocomplete.Config{
 						Triggers: map[string][]string{
-							"@": {"file", "lsp", "skill"},
+							"@": {"file", "symbol", "skill"},
 							"/": {"command"},
 						},
 						Prefixes: map[string]string{
 							"@file:":  "file",
-							"@sym:":   "lsp",
+							"@sym:":   "symbol",
 							"@skill:": "skill",
 						},
 					})

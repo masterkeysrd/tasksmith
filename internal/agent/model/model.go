@@ -310,6 +310,24 @@ func New(ctx context.Context, cfg Config) (*llm.Model, error) {
 		}
 	}
 
+	// 4. Set ContextWindow from Warp specs
+	var contextWindow int
+	if cfg.ModelProvider != nil {
+		for _, m := range cfg.ModelProvider.Spec.Models {
+			if m.ID == cfg.ModelName {
+				contextWindow = m.Limits.Context
+				break
+			}
+		}
+	}
+
+	if contextWindow > 0 {
+		if modelConfig == nil {
+			modelConfig = &llm.ModelConfig{}
+		}
+		modelConfig.ContextWindow = contextWindow
+	}
+
 	if cfg.Agent != nil && cfg.Agent.Agent != nil && cfg.Agent.Agent.Spec.Temperature > 0 {
 		tempVal := float32(cfg.Agent.Agent.Spec.Temperature)
 		if modelConfig == nil {

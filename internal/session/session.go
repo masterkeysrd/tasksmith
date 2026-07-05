@@ -8,14 +8,18 @@ import (
 	"sync"
 	"time"
 
+	"path/filepath"
+
 	"github.com/google/uuid"
 	"github.com/masterkeysrd/loom/graph"
 	"github.com/masterkeysrd/loom/llm"
 	"github.com/masterkeysrd/loom/message"
+	"github.com/masterkeysrd/tasksmith/internal/agent/formatter"
 	agentgraph "github.com/masterkeysrd/tasksmith/internal/agent/graph"
 	"github.com/masterkeysrd/tasksmith/internal/agent/model"
 	"github.com/masterkeysrd/tasksmith/internal/agent/permissions"
 	"github.com/masterkeysrd/tasksmith/internal/agent/prompt"
+	"github.com/masterkeysrd/tasksmith/internal/agent/resolver"
 	"github.com/masterkeysrd/tasksmith/internal/agent/tools"
 	coredb "github.com/masterkeysrd/tasksmith/internal/core/db"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
@@ -26,7 +30,6 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/session/filetrack"
 	"github.com/masterkeysrd/tasksmith/internal/workspace"
 	"github.com/masterkeysrd/warp"
-	"path/filepath"
 )
 
 // SessionStatus represents the runtime execution status of a session thread.
@@ -74,6 +77,7 @@ type ManagerConfig struct {
 	MetricsStore *metrics.Store
 	LspManager   *lsp.Manager
 	Context      context.Context
+	Resolver     *resolver.Resolver
 }
 
 // Manager coordinates session business logic and delegates persistence to the Store interface.
@@ -87,6 +91,7 @@ type Manager struct {
 	metricsStore   *metrics.Store
 	lspManager     *lsp.Manager
 	mcpManager     *mcp.Manager
+	resolver       *resolver.Resolver
 	wg             sync.WaitGroup
 	ctx            context.Context
 	cancel         context.CancelFunc
@@ -118,11 +123,20 @@ func NewManager(cfg ManagerConfig) *Manager {
 	}
 	mcpMgr := mcp.NewManager(mcps)
 
+	if cfg.Resolver == nil && cfg.Workspace != nil {
+		cfg.Resolver = resolver.New(resolver.Config{
+			Lsp:       cfg.LspManager,
+			Cwd:       cfg.Workspace.CWD(),
+			Workspace: cfg.Workspace,
+		})
+	}
+
 	m := &Manager{
 		store:          cfg.Store,
 		ws:             cfg.Workspace,
 		metricsStore:   cfg.MetricsStore,
 		lspManager:     cfg.LspManager,
+		resolver:       cfg.Resolver,
 		activeSessions: make(map[string]*ActiveSession),
 		mcpManager:     mcpMgr,
 	}
@@ -431,16 +445,16 @@ func (m *Manager) ListTasks(sessionID string) []*tools.Task {
 }
 
 // SendMessage appends the user message and initiates the background Loom agent execution.
-func (m *Manager) SendMessage(ctx context.Context, sessionID string, text string) error {
-	return m.sendMessage(ctx, sessionID, text, nil)
+func (m *Manager) SendMessage(ctx context.Context, sessionID string, text string, refs []resolver.Reference) error {
+	return m.sendMessage(ctx, sessionID, text, refs, nil)
 }
 
 // SendSystemNotification appends a system notification message with metadata and starts/queues execution.
 func (m *Manager) SendSystemNotification(ctx context.Context, sessionID string, text string, meta map[string]any) error {
-	return m.sendMessage(ctx, sessionID, text, meta)
+	return m.sendMessage(ctx, sessionID, text, nil, meta)
 }
 
-func (m *Manager) sendMessage(ctx context.Context, sessionID string, text string, meta map[string]any) error {
+func (m *Manager) sendMessage(ctx context.Context, sessionID string, text string, refs []resolver.Reference, meta map[string]any) error {
 	m.mu.Lock()
 	sess, exists := m.activeSessions[sessionID]
 	if !exists {
@@ -454,8 +468,44 @@ func (m *Manager) sendMessage(ctx context.Context, sessionID string, text string
 
 	m.tryRehydrateSession(ctx, sess)
 
+	agentName := "main"
+	if sessData, err := m.store.GetSession(ctx, sessionID); err == nil && sessData != nil {
+		var sessionSettings model.SessionSettings
+		if sessData.Settings != nil && *sessData.Settings != "" {
+			_ = json.Unmarshal([]byte(*sessData.Settings), &sessionSettings)
+		}
+		if sessionSettings.AgentName != "" {
+			agentName = sessionSettings.AgentName
+		}
+	}
+
+	// Phase 4: Two-phase resolution with dedup
+	var resources []resolver.ResolvedResource
+	if m.resolver != nil {
+		resources, _ = m.resolver.ResolveReferences(ctx, text, refs, agentName)
+	}
+
 	m.mu.Lock()
-	msg := message.NewUserText(text)
+
+	// Build message with attachments if resources were resolved
+	var msg message.Message
+	if len(resources) > 0 {
+		attachmentsXML := formatter.FormatAttachmentsBlock(resources, m.resolver)
+		var blocks []message.Block
+		blocks = append(blocks, &message.TextBlock{Text: text})
+		if attachmentsXML != "" {
+			blocks = append(blocks, &message.TextBlock{
+				Text: attachmentsXML,
+				Extras: map[string]any{
+					"is_attachments": true,
+				},
+			})
+		}
+		msg = message.NewUser(blocks...)
+	} else {
+		msg = message.NewUserText(text)
+	}
+
 	if len(meta) > 0 {
 		msg.SetMetadata(meta)
 	}
@@ -580,11 +630,9 @@ func (m *Manager) SubmitAuthorizationDecision(ctx context.Context, sessionID str
 	})
 
 	// Start running Loom agent workflow asynchronously in background
-	m.wg.Add(1)
-	go func() {
-		defer m.wg.Done()
+	m.wg.Go(func() {
 		m.runAgentLoop(runCtx, sessionID, sess, inputCmd, cancel)
-	}()
+	})
 
 	return nil
 }
@@ -710,10 +758,6 @@ func (m *Manager) runAgentLoop(runCtx context.Context, sessionID string, sess *A
 		}
 	}
 
-	// Instantiate Model
-	if modelName == "" {
-		modelName = "qwen3.6:35b-a3b-coding-nvfp4" // default fallback
-	}
 	if _, found := provider.GetProfile(modelName); !found {
 		// If the model name is prefixed (e.g. "genai/gemini-3-flash-preview"), try stripping the prefix.
 		cleanedName := modelName
@@ -722,8 +766,8 @@ func (m *Manager) runAgentLoop(runCtx context.Context, sessionID string, sess *A
 		}
 		// If the model has a tag (e.g. "qwen3.6:35b-a3b-coding-nvfp4"), try matching by base name.
 		baseName := cleanedName
-		if idx := strings.Index(cleanedName, ":"); idx != -1 {
-			baseName = cleanedName[:idx]
+		if before, _, ok := strings.Cut(cleanedName, ":"); ok {
+			baseName = before
 		}
 
 		if _, foundCleaned := provider.GetProfile(cleanedName); foundCleaned {

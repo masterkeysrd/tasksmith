@@ -11,8 +11,8 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/jmoiron/sqlx v1.4.0
 	github.com/lrstanley/go-nf v0.0.0-20260418212552-215ab243b591
-	github.com/masterkeysrd/kite v0.0.2
-	github.com/masterkeysrd/loom v0.0.3-0.20260630045231-7614987158fe
+	github.com/masterkeysrd/kite v0.0.3-0.20260702190253-ff2200885138
+	github.com/masterkeysrd/loom v0.0.3-0.20260705022420-14d867a3d5e1
 	github.com/masterkeysrd/lspx v0.0.0-20260611065943-6cf2ef01a123
 	github.com/masterkeysrd/warp v0.0.3-0.20260630051154-d85a5bb1d863
 	github.com/modelcontextprotocol/go-sdk v1.6.1
@@ -70,7 +70,7 @@ require (
 	github.com/jbenet/go-context v0.0.0-20150711004518-d14ea06fba99 // indirect
 	github.com/kevinburke/ssh_config v1.6.0 // indirect
 	github.com/klauspost/compress v1.18.6 // indirect
-	github.com/klauspost/cpuid/v2 v2.3.0 // indirect
+	github.com/klauspost/cpuid/v2 v2.4.0 // indirect
 	github.com/lucasb-eyer/go-colorful v1.4.0 // indirect
 	github.com/mailru/easyjson v0.9.2 // indirect
 	github.com/mattn/go-isatty v0.0.22 // indirect

@@ -29,6 +29,7 @@ type workspaceTracker struct {
 	subs        map[string]chan FileEvent  // sessionID -> event channel
 	activeFiles []string                   // MRU active files list
 	activeSet   map[string]bool            // Set of active files for fast lookup
+	shortPaths  map[string]string          // full path -> shortest unique suffix
 
 	done chan struct{}
 	wg   sync.WaitGroup
@@ -45,6 +46,7 @@ func NewWorkspaceTracker(workspaceDir string) WorkspaceTracker {
 		interests:    make(map[string]map[string]bool),
 		subs:         make(map[string]chan FileEvent),
 		activeSet:    make(map[string]bool),
+		shortPaths:   make(map[string]string),
 		done:         make(chan struct{}),
 	}
 }
@@ -72,7 +74,7 @@ func (w *workspaceTracker) Start(ctx context.Context) error {
 }
 
 func (w *workspaceTracker) scanAndWatch(root string) error {
-	return filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
@@ -103,6 +105,30 @@ func (w *workspaceTracker) scanAndWatch(root string) error {
 		}
 		return nil
 	})
+	if err != nil {
+		return err
+	}
+	// After initial scan, compute short paths for all files
+	w.recomputeShortPathsLocked()
+	return nil
+}
+
+// recomputeShortPathsLocked recomputes the shortest unique suffix for every
+// file in the index. Must be called while w.mu is held.
+func (w *workspaceTracker) recomputeShortPathsLocked() {
+	// Collect all file paths into a slice
+	var allFiles []string
+	for path := range w.files {
+		allFiles = append(allFiles, path)
+	}
+
+	// Clear existing short paths
+	w.shortPaths = make(map[string]string)
+
+	// Compute shortest unique suffix for each file
+	for _, path := range allFiles {
+		w.shortPaths[path] = ShortestUniqueSuffix(path, allFiles)
+	}
 }
 
 func (w *workspaceTracker) watchLoop() {
@@ -174,6 +200,8 @@ func (w *workspaceTracker) handleFsEvent(event fsnotify.Event) {
 				}
 				kind = Created
 				hash = w.computeHashLocked(event.Name)
+				// Recompute short paths since a new file was added
+				w.recomputeShortPathsLocked()
 			}
 		}
 	}
@@ -210,6 +238,8 @@ func (w *workspaceTracker) handleFsEvent(event fsnotify.Event) {
 		_ = w.watcher.Remove(event.Name)
 		kind = Deleted
 		hash = "deleted"
+		// Recompute short paths since files were removed/renamed
+		w.recomputeShortPathsLocked()
 	}
 
 	if kind != "" {
@@ -366,11 +396,11 @@ func (w *workspaceTracker) Search(query string) []SearchResult {
 		// Return all active, inactive files, and directories in priority order
 		var results []SearchResult
 		for _, p := range w.activeFiles {
-			results = append(results, SearchResult{Path: p, IsDir: false})
+			results = append(results, SearchResult{Path: p, ShortPath: w.shortPaths[p], IsDir: false})
 		}
 		for path := range w.files {
 			if !w.activeSet[path] {
-				results = append(results, SearchResult{Path: path, IsDir: false})
+				results = append(results, SearchResult{Path: path, ShortPath: w.shortPaths[path], IsDir: false})
 			}
 		}
 		for path := range w.dirs {
@@ -393,7 +423,7 @@ func (w *workspaceTracker) Search(query string) []SearchResult {
 				score += 50
 			}
 			matches = append(matches, scoredResult{
-				res:   SearchResult{Path: path, IsDir: false},
+				res:   SearchResult{Path: path, ShortPath: w.shortPaths[path], IsDir: false},
 				score: score,
 			})
 		}
@@ -429,6 +459,44 @@ func (w *workspaceTracker) IsDir(path string) bool {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
 	return w.dirs[path]
+}
+
+// ShortestUniqueSuffix computes the minimum path suffix that uniquely
+// identifies a file within the index. It starts with the basename and
+// progressively adds parent directories until the suffix is unique
+// among all provided paths.
+func ShortestUniqueSuffix(fullPath string, allPaths []string) string {
+	basename := filepath.Base(fullPath)
+	dir := filepath.Dir(fullPath)
+
+	// Check if basename alone is unique
+	basenameCount := 0
+	for _, p := range allPaths {
+		if filepath.Base(p) == basename {
+			basenameCount++
+		}
+	}
+	if basenameCount == 1 {
+		return basename
+	}
+
+	// Build suffix by walking up from the file's directory
+	parts := strings.Split(dir, "/")
+	for i := len(parts) - 1; i >= 0; i-- {
+		suffix := strings.Join(parts[i:], "/") + "/" + basename
+		matchCount := 0
+		for _, p := range allPaths {
+			if p == suffix || strings.HasSuffix(p, "/"+suffix) {
+				matchCount++
+			}
+		}
+		if matchCount == 1 {
+			return suffix
+		}
+	}
+
+	// Fallback: return the full path
+	return fullPath
 }
 
 func (w *workspaceTracker) Stop() error {

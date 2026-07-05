@@ -32,6 +32,8 @@ type AuthController struct {
 	StartFeedback      func()
 	ToggleCancelDialog func()
 	ShowPreview        func()
+	ScrollDown         func()
+	ScrollUp           func()
 }
 
 // AuthCtrl is the pre-allocated, static AuthController instance for the inline widget.
@@ -188,4 +190,29 @@ func init() {
 		}
 		return nil
 	}, command.Context("modal:auth"))
+
+	command.Register("app:scroll-down", func(ctx command.CommandContext) error {
+		if ModalAuthCtrl.ScrollDown != nil {
+			ModalAuthCtrl.ScrollDown()
+		}
+		return nil
+	}, command.Context("modal:auth"))
+	command.Register("app:scroll-up", func(ctx command.CommandContext) error {
+		if ModalAuthCtrl.ScrollUp != nil {
+			ModalAuthCtrl.ScrollUp()
+		}
+		return nil
+	}, command.Context("modal:auth"))
+
+	// --- Modal Auth Key Mappings ---
+	keymap.Set([]mode.Mode{mode.Normal}, "j", command.ExecFunc("app:move-down"), keymap.Context("modal:auth"))
+	keymap.Set([]mode.Mode{mode.Normal}, "k", command.ExecFunc("app:move-up"), keymap.Context("modal:auth"))
+	keymap.Set([]mode.Mode{mode.Normal}, "h", command.ExecFunc("app:select-prev"), keymap.Context("modal:auth"))
+	keymap.Set([]mode.Mode{mode.Normal}, "l", command.ExecFunc("app:select-next"), keymap.Context("modal:auth"))
+	keymap.Set([]mode.Mode{mode.Normal}, "<Enter>", command.ExecFunc("app:accept"), keymap.Context("modal:auth"))
+	keymap.Set([]mode.Mode{mode.Normal, mode.Insert}, "<C-c>", command.ExecFunc("app:toggle-cancel"), keymap.Context("modal:auth"))
+	keymap.Set([]mode.Mode{mode.Normal}, "d", command.ExecFunc("auth:deny"), keymap.Context("modal:auth"))
+	keymap.Set([]mode.Mode{mode.Normal}, "D", command.ExecFunc("auth:start-feedback"), keymap.Context("modal:auth"))
+	keymap.Set([]mode.Mode{mode.Normal}, "J", command.ExecFunc("app:scroll-down"), keymap.Context("modal:auth"))
+	keymap.Set([]mode.Mode{mode.Normal}, "K", command.ExecFunc("app:scroll-up"), keymap.Context("modal:auth"))
 }

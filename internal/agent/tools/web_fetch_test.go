@@ -225,7 +225,7 @@ func TestWebFetchBinary(t *testing.T) {
 
 func TestWebFetchTruncation(t *testing.T) {
 	mux := http.NewServeMux()
-	largeText := strings.Repeat("A", 17000)
+	largeText := strings.Repeat("A", MaxTotalChars+1000)
 	mux.HandleFunc("/large.txt", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain")
 		_, _ = w.Write([]byte(largeText))

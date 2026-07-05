@@ -17,6 +17,7 @@ import (
 	"github.com/masterkeysrd/loom/tool"
 	"github.com/masterkeysrd/tasksmith/internal/agent/model"
 	"github.com/masterkeysrd/tasksmith/internal/agent/permissions"
+	"github.com/masterkeysrd/tasksmith/internal/agent/resolver"
 	"github.com/masterkeysrd/tasksmith/internal/agent/tools"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	"github.com/masterkeysrd/tasksmith/internal/core/lsp"
@@ -161,6 +162,38 @@ func (s *Service) ListAgents(ctx context.Context, req ListAgentsRequest) (*ListA
 	})
 
 	return resp, nil
+}
+
+// ListSkills returns a list of skills the active agent has access to.
+func (s *Service) ListSkills(ctx context.Context, req ListSkillsRequest) (*ListSkillsResponse, error) {
+	agentName := "main"
+	if s.sm != nil && req.SessionID != "" {
+		if sd, err := s.sm.GetSession(ctx, req.SessionID); err == nil && sd != nil {
+			if sd.Settings.AgentName != "" {
+				agentName = sd.Settings.AgentName
+			}
+		}
+	}
+
+	var skills []SkillItem
+	if ws, ok := s.ws.(*workspace.Workspace); ok {
+		if resolvedAgent, err := ws.ResolveAgent(ctx, agentName); err == nil && resolvedAgent != nil {
+			for _, skill := range resolvedAgent.Skills {
+				skills = append(skills, SkillItem{
+					Name:        skill.Metadata.Name,
+					Description: skill.Metadata.Description,
+				})
+			}
+		}
+	}
+
+	sort.Slice(skills, func(i, j int) bool {
+		return skills[i].Name < skills[j].Name
+	})
+
+	return &ListSkillsResponse{
+		Skills: skills,
+	}, nil
 }
 
 // ListProviders returns a list of model providers in the workspace.
@@ -557,7 +590,11 @@ func (s *Service) SendMessage(ctx context.Context, req SendMessageRequest) (*Sen
 	if s.sm == nil {
 		return nil, fmt.Errorf("session manager not initialized")
 	}
-	if err := s.sm.SendMessage(ctx, req.SessionID, req.Text); err != nil {
+	refs := make([]resolver.Reference, len(req.References))
+	for i, r := range req.References {
+		refs[i] = r.FromPayload()
+	}
+	if err := s.sm.SendMessage(ctx, req.SessionID, req.Text, refs); err != nil {
 		return nil, err
 	}
 	return &SendMessageResponse{Success: true}, nil

@@ -18,6 +18,7 @@ import (
 
 	"github.com/masterkeysrd/loom/message"
 	"github.com/masterkeysrd/tasksmith/internal/agent/permissions"
+	"github.com/masterkeysrd/tasksmith/internal/agent/resolver"
 	"github.com/masterkeysrd/tasksmith/internal/api"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	"github.com/masterkeysrd/tasksmith/internal/core/preview"
@@ -501,7 +502,7 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 		lastMaxScrollY.Current = maxScrollY
 	}, []any{messagesKey})
 
-	sendMessage := func(text string, force ...bool) {
+	sendMessage := func(text string, refs []resolver.Reference, force ...bool) {
 		if text == "" || submitting() {
 			return
 		}
@@ -522,11 +523,18 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 		optMsg.SetID(optMsgID)
 		setOptimisticMessages(append(optimisticMessages(), optMsg))
 
-		// Trigger SendMessage on the backend asynchronously
 		promise.New(func(ctx context.Context) (bool, error) {
+			var payloadRefs []resolver.ReferencePayload
+			if len(refs) > 0 {
+				payloadRefs = make([]resolver.ReferencePayload, len(refs))
+				for i, r := range refs {
+					payloadRefs[i] = r.ToPayload()
+				}
+			}
 			_, err := client.SendMessage(ctx, api.SendMessageRequest{
-				SessionID: sessionID,
-				Text:      text,
+				SessionID:  sessionID,
+				Text:       text,
+				References: payloadRefs,
 			})
 			if err != nil {
 				return false, err
@@ -614,7 +622,7 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 			windClient.InvalidateQueries(api.GetSessionStateRequest{SessionID: sessionID})
 			windClient.InvalidateQueries(api.GetFileChangesRequest{SessionID: sessionID})
 			if inputValue() != "" {
-				sendMessage(inputValue(), true)
+				sendMessage(inputValue(), nil, true)
 			}
 		}, func(err error) {
 			setShowResolutionDialog(false)
@@ -646,7 +654,7 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 			windClient.InvalidateQueries(api.GetSessionStateRequest{SessionID: sessionID})
 			windClient.InvalidateQueries(api.GetFileChangesRequest{SessionID: sessionID})
 			if inputValue() != "" {
-				sendMessage(inputValue(), true)
+				sendMessage(inputValue(), nil, true)
 			}
 		}, func(err error) {
 			setShowResolutionDialog(false)
@@ -921,15 +929,16 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 				}, children...)
 			}),
 			Composer(ComposerProps{
-				Value:    inputValue(),
-				Disabled: submitting(),
-				IsInsert: isInsert,
-				Ref:      inputRef,
+				Value:     inputValue(),
+				Disabled:  submitting(),
+				IsInsert:  isInsert,
+				Ref:       inputRef,
+				SessionID: sessionID,
 				OnChange: func(val string) {
 					setInputValue(val)
 				},
-				OnSubmit: func() {
-					sendMessage(inputValue())
+				OnSubmit: func(text string, trackedRefs []resolver.Reference) {
+					sendMessage(text, trackedRefs)
 				},
 			}),
 			func() kitex.Node {

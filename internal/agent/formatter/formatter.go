@@ -181,11 +181,45 @@ func FormatSymbol(s *resolver.ResolvedSymbol) []message.Block {
 	if s.Signature != "" {
 		fmt.Fprintf(&sb, "Signature: %s\n", s.Signature)
 	}
+	if s.TypeDefinedAt != "" {
+		fmt.Fprintf(&sb, "Type Defined at: %s\n", s.TypeDefinedAt)
+	}
 	if s.Container != "" {
 		fmt.Fprintf(&sb, "Defined in: %s\n", s.Container)
 	}
 	fmt.Fprintf(&sb, "Location: %s (lines %d-%d)\n\n", filepath.Base(s.FilePath), s.StartLine, s.EndLine)
 	sb.WriteString(s.Snippet)
+
+	if s.Docs != "" {
+		sb.WriteString("\n\n")
+		sb.WriteString(s.Docs)
+		if s.DocsTruncated {
+			sb.WriteString("\n\n[Truncated — full report available at: `")
+			sb.WriteString(s.FullReportPath)
+			sb.WriteString("`]")
+		}
+		sb.WriteString("\n\n")
+	}
+
+	if len(s.References) > 0 {
+		sb.WriteString("**References** (")
+		fmt.Fprintf(&sb, "%d total", s.ReferencesTotal)
+		sb.WriteString("):\n")
+		for _, ref := range s.References {
+			fmt.Fprintf(&sb, "- `%s`\n", ref)
+		}
+		sb.WriteString("\n")
+	}
+
+	if len(s.Implementations) > 0 {
+		sb.WriteString("**Implementations** (")
+		fmt.Fprintf(&sb, "%d total", s.ImplementationsTotal)
+		sb.WriteString("):\n")
+		for _, impl := range s.Implementations {
+			fmt.Fprintf(&sb, "- `%s`\n", impl)
+		}
+		sb.WriteString("\n")
+	}
 
 	if len(s.Diagnostics) > 0 {
 		diagsStr := FormatDiagnostics(s.Diagnostics)
@@ -209,4 +243,216 @@ func FormatSkill(sk *resolver.ResolvedSkill) []message.Block {
 			Text: fmt.Sprintf("# Skill: %s\n\n%s", sk.Name, sk.Instructions),
 		},
 	}
+}
+
+// FormatAttachmentsBlock wraps all resolved resources into a single <attachments> XML block.
+func FormatAttachmentsBlock(resources []resolver.ResolvedResource, r *resolver.Resolver) string {
+	if len(resources) == 0 {
+		return ""
+	}
+
+	hasSkill := false
+	for _, res := range resources {
+		if _, ok := res.(*resolver.ResolvedSkill); ok {
+			hasSkill = true
+			break
+		}
+	}
+
+	reminder := "These attachments were loaded by the user. Use them to complete the request."
+	if hasSkill {
+		reminder += " Consider the attached skills as already active/activated; you do not need to call activate_skill for them."
+	}
+
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "<system_reminder>%s</system_reminder>\n", reminder)
+	sb.WriteString("<attachments>\n")
+
+	for _, res := range resources {
+		if r.ShouldEmbed(res) {
+			sb.WriteString(formatEmbedded(res))
+		} else {
+			sb.WriteString(formatReferenced(res))
+		}
+	}
+
+	sb.WriteString("</attachments>")
+	return sb.String()
+}
+
+// formatEmbedded formats a resource that is small enough to be embedded in full.
+func formatEmbedded(res resolver.ResolvedResource) string {
+	switch val := res.(type) {
+	case *resolver.ResolvedFile:
+		return formatEmbeddedFile(val)
+	case *resolver.ResolvedSymbol:
+		return formatEmbeddedSymbol(val)
+	case *resolver.ResolvedSkill:
+		return formatEmbeddedSkill(val)
+	}
+	return ""
+}
+
+// formatEmbedded formats a ResolvedFile with content and optional diagnostics.
+func formatEmbeddedFile(f *resolver.ResolvedFile) string {
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "<file path=\"%s\" lines=\"%d\">\n", escapeXML(f.FilePath), f.TotalLines)
+	sb.WriteString("<content>\n")
+	sb.WriteString(FormatFileContent(f.Content, f.StartLine))
+	sb.WriteString("\n</content>\n")
+
+	if len(f.Diagnostics) > 0 {
+		sb.WriteString("<diagnostics>\n")
+		for _, d := range f.Diagnostics {
+			severity := "unknown"
+			if d.Severity != nil {
+				switch *d.Severity {
+				case lspx.DiagnosticSeverityError:
+					severity = "error"
+				case lspx.DiagnosticSeverityWarning:
+					severity = "warning"
+				case lspx.DiagnosticSeverityInformation:
+					severity = "info"
+				case lspx.DiagnosticSeverityHint:
+					severity = "hint"
+				}
+			}
+			msg := ""
+			if d.Message.String != nil {
+				msg = *d.Message.String
+			} else if d.Message.MarkupContent != nil {
+				msg = d.Message.MarkupContent.Value
+			}
+			fmt.Fprintf(&sb, "- [%s] line %d: %s\n", severity, d.Range.Start.Line+1, escapeXML(msg))
+		}
+		sb.WriteString("</diagnostics>\n")
+	}
+
+	sb.WriteString("</file>")
+	return sb.String()
+}
+
+// formatEmbedded formats a ResolvedSymbol with content and optional diagnostics.
+func formatEmbeddedSymbol(s *resolver.ResolvedSymbol) string {
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "<symbol name=\"%s\" kind=\"%s\" file=\"%s\" lines=\"%d-%d\">\n",
+		escapeXML(s.Name), escapeXML(s.Kind), escapeXML(filepath.Base(s.FilePath)), s.StartLine, s.EndLine)
+	sb.WriteString("<content>\n")
+	sb.WriteString(escapeXML(s.Snippet))
+	sb.WriteString("\n</content>\n")
+
+	if s.TypeDefinedAt != "" {
+		fmt.Fprintf(&sb, "<type_defined_at>%s</type_defined_at>\n", escapeXML(s.TypeDefinedAt))
+	}
+
+	if s.Docs != "" {
+		sb.WriteString("<docs>\n")
+		sb.WriteString(escapeXML(s.Docs))
+		sb.WriteString("\n</docs>\n")
+		if s.DocsTruncated {
+			fmt.Fprintf(&sb, "<docs_truncated>true</docs_truncated>\n")
+			fmt.Fprintf(&sb, "<full_report_path>%s</full_report_path>\n", escapeXML(s.FullReportPath))
+		}
+	}
+
+	if len(s.References) > 0 {
+		sb.WriteString("<references>\n")
+		for _, ref := range s.References {
+			fmt.Fprintf(&sb, "<reference>%s</reference>\n", escapeXML(ref))
+		}
+		sb.WriteString("</references>\n")
+		fmt.Fprintf(&sb, "<references_total>%d</references_total>\n", s.ReferencesTotal)
+	}
+
+	if len(s.Implementations) > 0 {
+		sb.WriteString("<implementations>\n")
+		for _, impl := range s.Implementations {
+			fmt.Fprintf(&sb, "<implementation>%s</implementation>\n", escapeXML(impl))
+		}
+		sb.WriteString("</implementations>\n")
+		fmt.Fprintf(&sb, "<implementations_total>%d</implementations_total>\n", s.ImplementationsTotal)
+	}
+
+	if len(s.Diagnostics) > 0 {
+		sb.WriteString("<diagnostics>\n")
+		for _, d := range s.Diagnostics {
+			severity := "unknown"
+			if d.Severity != nil {
+				switch *d.Severity {
+				case 1:
+					severity = "error"
+				case 2:
+					severity = "warning"
+				case 3:
+					severity = "info"
+				case 4:
+					severity = "hint"
+				}
+			}
+			msg := ""
+			if d.Message.String != nil {
+				msg = *d.Message.String
+			} else if d.Message.MarkupContent != nil {
+				msg = d.Message.MarkupContent.Value
+			}
+			fmt.Fprintf(&sb, "- [%s] line %d: %s\n", severity, d.Range.Start.Line+1, escapeXML(msg))
+		}
+		sb.WriteString("</diagnostics>\n")
+	}
+
+	sb.WriteString("</symbol>")
+	return sb.String()
+}
+
+// formatEmbedded formats a ResolvedSkill with its instructions content.
+func formatEmbeddedSkill(sk *resolver.ResolvedSkill) string {
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "<skill name=\"%s\">\n", escapeXML(sk.Name))
+	sb.WriteString("<content>\n")
+	sb.WriteString(escapeXML(sk.Instructions))
+	sb.WriteString("\n</content>\n")
+	sb.WriteString("</skill>")
+	return sb.String()
+}
+
+// formatReferenced formats a resource that is too large or binary as a self-closing tag.
+func formatReferenced(res resolver.ResolvedResource) string {
+	switch val := res.(type) {
+	case *resolver.ResolvedFile:
+		return formatReferencedFile(val)
+	case *resolver.ResolvedSymbol:
+		return formatReferencedSymbol(val)
+	}
+	return ""
+}
+
+func formatReferencedSymbol(s *resolver.ResolvedSymbol) string {
+	reason := "too large to embed"
+	if len(s.Snippet) == 0 {
+		reason = "snippet empty or unavailable"
+	}
+	return fmt.Sprintf("<symbol name=\"%s\" kind=\"%s\" file=\"%s\" lines=\"%d-%d\" reason=\"%s\" />",
+		escapeXML(s.Name), escapeXML(s.Kind), escapeXML(filepath.Base(s.FilePath)), s.StartLine, s.EndLine, escapeXML(reason))
+}
+
+// formatReferencedFile formats a ResolvedFile as a self-closing tag with reason.
+func formatReferencedFile(f *resolver.ResolvedFile) string {
+	if f.IsBinary {
+		mime := f.MimeType
+		if mime == "" {
+			mime = "application/octet-stream"
+		}
+		return fmt.Sprintf("<file path=\"%s\" mime=\"%s\" reason=\"binary file, use view_file\" />", escapeXML(f.FilePath), escapeXML(mime))
+	}
+	return fmt.Sprintf("<file path=\"%s\" lines=\"%d\" reason=\"file too large, use view_file to read\" />", escapeXML(f.FilePath), f.TotalLines)
+}
+
+// escapeXML escapes special XML characters in the given string.
+func escapeXML(s string) string {
+	s = strings.ReplaceAll(s, "&", "&amp;")
+	s = strings.ReplaceAll(s, "<", "&lt;")
+	s = strings.ReplaceAll(s, ">", "&gt;")
+	s = strings.ReplaceAll(s, "\"", "&quot;")
+	s = strings.ReplaceAll(s, "'", "&apos;")
+	return s
 }

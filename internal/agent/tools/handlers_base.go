@@ -1,11 +1,11 @@
 package tools
 
 import (
-	"context"
 	"path/filepath"
 	"strings"
 
 	"github.com/masterkeysrd/tasksmith/internal/agent/permissions"
+	"github.com/masterkeysrd/tasksmith/internal/agent/resolver"
 	"github.com/masterkeysrd/tasksmith/internal/core/lsp"
 	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
 	"github.com/masterkeysrd/tasksmith/internal/mcp"
@@ -13,7 +13,7 @@ import (
 )
 
 const (
-	MaxTotalChars = 16000
+	MaxTotalChars = 32000
 	MaxLineChars  = 500
 )
 
@@ -24,18 +24,14 @@ type Todo struct {
 	ActiveText  string `json:"active_text,omitempty"`
 }
 
-// SkillResolver defines the interface to find and render skill instructions.
-type SkillResolver interface {
-	ResolveSkill(ctx context.Context, name string) (instructions string, path string, err error)
-}
-
 // ToolHandlers consolidates all session dependencies and implements the handler methods.
 type ToolHandlers struct {
 	Storage           FileStorage
 	CWD               string
 	TaskManager       *TaskManager
 	SessionID         string
-	SkillResolver     SkillResolver
+	Resolver          *resolver.Resolver
+	AgentName         string
 	PermissionManager permissions.PermissionManager
 	LspManager        *lsp.Manager
 	FileTracker       filetrack.FileTracker
@@ -57,9 +53,15 @@ func (h *ToolHandlers) WithTaskManager(taskMgr *TaskManager, sessionID string) *
 	return h
 }
 
-// WithSkillResolver configures the SkillResolver on ToolHandlers.
-func (h *ToolHandlers) WithSkillResolver(resolver SkillResolver) *ToolHandlers {
-	h.SkillResolver = resolver
+// WithResolver configures the Resolver on ToolHandlers.
+func (h *ToolHandlers) WithResolver(r *resolver.Resolver) *ToolHandlers {
+	h.Resolver = r
+	return h
+}
+
+// WithAgentName configures the AgentName on ToolHandlers.
+func (h *ToolHandlers) WithAgentName(agentName string) *ToolHandlers {
+	h.AgentName = agentName
 	return h
 }
 

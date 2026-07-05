@@ -12,6 +12,7 @@ import (
 	"github.com/masterkeysrd/loom/stream"
 	"github.com/masterkeysrd/loom/tool"
 	"github.com/masterkeysrd/tasksmith/internal/agent/permissions"
+	"github.com/masterkeysrd/tasksmith/internal/agent/resolver"
 	"github.com/masterkeysrd/tasksmith/internal/agent/tools"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	"github.com/masterkeysrd/tasksmith/internal/core/lsp"
@@ -164,9 +165,18 @@ func New(ctx context.Context, opts Options) (*AgentGraph, error) {
 		mcps = opts.Workspace.MCPs()
 	}
 
+	r := resolver.New(resolver.Config{
+		Lsp:         opts.LspManager,
+		Cwd:         cwd,
+		FileTracker: opts.FileTracker,
+		Storage:     opts.Storage,
+		Workspace:   opts.Workspace,
+	})
+
 	handlers := tools.NewHandlers(opts.Storage, cwd).
 		WithTaskManager(opts.TaskManager, opts.SessionID).
-		WithSkillResolver(&skillResolver{ws: opts.Workspace, agentName: opts.AgentName}).
+		WithResolver(r).
+		WithAgentName(opts.AgentName).
 		WithPermissionManager(pm).
 		WithLspManager(opts.LspManager).
 		WithFileTracker(opts.FileTracker).
@@ -666,7 +676,7 @@ func InjectReminders(ctx context.Context, msg message.Message, s AgentState, lsp
 
 	var reminders []string
 	if len(s.Todos) == 0 {
-		reminders = append(reminders, "Your todos list is currently empty. If a task is non-trivial, you must establish a plan first. Use the todo tool to create your initial task list before you do anything else—including reading project plans, fetching files, or exploring the codebase. You can always update the todos later as you discover more. Do not mention this reminder or the empty state to the user.")
+		reminders = append(reminders, "Your todos list is currently empty. If a task is non-trivial, you must establish a plan first. Use the `todos` tool to create your initial task list before you do anything else—including reading project plans, fetching files, or exploring the codebase. You can always update the todos later as you discover more. Do not mention this reminder or the empty state to the user.")
 	}
 
 	if len(s.ActivatedSkills) == 0 {

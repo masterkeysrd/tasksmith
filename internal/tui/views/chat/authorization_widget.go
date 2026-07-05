@@ -1057,6 +1057,7 @@ var AuthorizationPreviewModal = kitex.FCC("AuthorizationPreviewModal", func(prop
 
 	t := theme.UseTheme()
 	localInputRef := kitex.CreateRef[dom.Element]()
+	previewRef := kitex.CreateRef[dom.Element]()
 	kitex.UseEffect(func() {
 		if props.IsProvidingFeedback {
 			kitex.PostMacro(func() {
@@ -1266,6 +1267,43 @@ var AuthorizationPreviewModal = kitex.FCC("AuthorizationPreviewModal", func(prop
 			}
 		}
 
+		ModalAuthCtrl.ScrollDown = func() {
+			if previewRef.Current != nil {
+				el := previewRef.Current
+				doc := el.OwnerDocument()
+				if doc == nil {
+					return
+				}
+				view := doc.DefaultView()
+				if view == nil {
+					return
+				}
+				_, maxScrollY := view.GetMaxScroll(el)
+				x, y := el.Scroll()
+				if y > maxScrollY {
+					y = maxScrollY
+				}
+				targetY := min(y+3, maxScrollY)
+				el.ScrollTo(x, targetY)
+			}
+		}
+
+		ModalAuthCtrl.ScrollUp = func() {
+			if previewRef.Current != nil {
+				el := previewRef.Current
+				doc := el.OwnerDocument()
+				if doc == nil {
+					return
+				}
+				view := doc.DefaultView()
+				if view == nil {
+					return
+				}
+				x, y := el.Scroll()
+				targetY := max(y-3, 0)
+				el.ScrollTo(x, targetY)
+			}
+		}
 	}
 
 	kitex.UseEffectCleanup(func() func() {
@@ -1279,6 +1317,8 @@ var AuthorizationPreviewModal = kitex.FCC("AuthorizationPreviewModal", func(prop
 				ModalAuthCtrl.Deny = nil
 				ModalAuthCtrl.StartFeedback = nil
 				ModalAuthCtrl.ToggleCancelDialog = nil
+				ModalAuthCtrl.ScrollDown = nil
+				ModalAuthCtrl.ScrollUp = nil
 			}
 		}
 	}, []any{props.IsOpen})
@@ -1355,10 +1395,12 @@ var AuthorizationPreviewModal = kitex.FCC("AuthorizationPreviewModal", func(prop
 		},
 			// Left Preview Panel
 			kitex.Box(kitex.BoxProps{
+				Ref: previewRef,
 				Style: style.S().
 					Flex(7, 7, style.Cells(0)).
 					MinHeight(style.Cells(0)).
 					Height(style.Percent(100)).
+					OverflowY(style.OverflowAuto).
 					BorderRight(true, style.SingleBorder(), t.Color.Border.Primary).
 					PaddingRight(2),
 			},

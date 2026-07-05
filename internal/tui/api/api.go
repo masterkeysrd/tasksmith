@@ -16,6 +16,7 @@ import (
 type Client interface {
 	ListProjects(ctx context.Context, req api.ListProjectsRequest) (*api.ListProjectsResponse, error)
 	ListAgents(ctx context.Context, req api.ListAgentsRequest) (*api.ListAgentsResponse, error)
+	ListSkills(ctx context.Context, req api.ListSkillsRequest) (*api.ListSkillsResponse, error)
 	ListProviders(ctx context.Context, req api.ListProvidersRequest) (*api.ListProvidersResponse, error)
 	ListProvidersPresets(ctx context.Context, req api.ListProvidersPresetsRequest) (*api.ListProvidersPresetsResponse, error)
 	ListToolsPresets(ctx context.Context, req api.ListToolsPresetsRequest) (*api.ListToolsPresetsResponse, error)
@@ -105,6 +106,12 @@ func (w *toastClient) ListProjects(ctx context.Context, req api.ListProjectsRequ
 func (w *toastClient) ListAgents(ctx context.Context, req api.ListAgentsRequest) (*api.ListAgentsResponse, error) {
 	res, err := w.delegate.ListAgents(ctx, req)
 	toastError("Failed to List Agents", err)
+	return res, err
+}
+
+func (w *toastClient) ListSkills(ctx context.Context, req api.ListSkillsRequest) (*api.ListSkillsResponse, error) {
+	res, err := w.delegate.ListSkills(ctx, req)
+	toastError("Failed to List Skills", err)
 	return res, err
 }
 

@@ -7,11 +7,28 @@ import (
 
 	"github.com/masterkeysrd/tasksmith/internal/core/lsp"
 	"github.com/masterkeysrd/tasksmith/internal/session/filetrack"
+	"github.com/masterkeysrd/warp"
 )
 
 // FileStorage defines the interface required by the resolver to save binary snapshots.
 type FileStorage interface {
 	Save(ctx context.Context, name string, r io.Reader) (string, error)
+}
+
+// Workspace defines the workspace interface required by the resolver to resolve
+// agents and list resources for skill and context resolution.
+type Workspace interface {
+	ResolveAgent(ctx context.Context, ref string) (*warp.ResolvedAgent, error)
+	Resources() []warp.Resource
+}
+
+// Config holds the dependencies and configuration for the Resolver.
+type Config struct {
+	Lsp         *lsp.Manager
+	Cwd         string
+	FileTracker filetrack.FileTracker
+	Storage     FileStorage
+	Workspace   Workspace
 }
 
 // ResourceType defines the category of the resolved context reference.
@@ -50,15 +67,23 @@ func (f *ResolvedFile) Path() string       { return f.FilePath }
 
 // ResolvedSymbol holds the raw structured data of a resolved LSP symbol.
 type ResolvedSymbol struct {
-	Name        string
-	Kind        string
-	Signature   string
-	Container   string
-	FilePath    string
-	StartLine   int
-	EndLine     int
-	Snippet     string
-	Diagnostics []lsp.Diagnostic
+	Name                 string
+	Kind                 string
+	Signature            string
+	TypeDefinedAt        string
+	Container            string
+	FilePath             string
+	StartLine            int
+	EndLine              int
+	Snippet              string
+	Diagnostics          []lsp.Diagnostic
+	Docs                 string
+	DocsTruncated        bool
+	References           []string
+	ReferencesTotal      int
+	Implementations      []string
+	ImplementationsTotal int
+	FullReportPath       string
 }
 
 func (s *ResolvedSymbol) Type() ResourceType { return TypeSymbol }
@@ -82,18 +107,22 @@ type Resolver struct {
 	Cwd         string
 	FileTracker filetrack.FileTracker
 	Storage     FileStorage
+	Workspace   Workspace
 }
 
-// New creates a new Resolver instance with required dependencies.
-func New(l *lsp.Manager, cwd string, ft filetrack.FileTracker, storage FileStorage) *Resolver {
+// New creates a new Resolver instance with the provided configuration.
+func New(cfg Config) *Resolver {
 	return &Resolver{
-		Lsp:         l,
-		Cwd:         cwd,
-		FileTracker: ft,
-		Storage:     storage,
+		Lsp:         cfg.Lsp,
+		Cwd:         cfg.Cwd,
+		FileTracker: cfg.FileTracker,
+		Storage:     cfg.Storage,
+		Workspace:   cfg.Workspace,
 	}
 }
 
+// EmbedThreshold is the maximum character count for symbols and skills to be
+// embedded inline in the prompt. Files use the Truncated field instead.
 const EmbedThreshold = 4000 // characters (~1000 tokens)
 
 // ShouldEmbed determines whether the resource content is small enough to be
@@ -110,14 +139,17 @@ func (r *Resolver) ShouldEmbed(res ResolvedResource) bool {
 		if val.IsBinary {
 			return false
 		}
-		// Token efficiency: only embed small text files
-		return len(val.Content) > 0 && len(val.Content) <= EmbedThreshold
+		// Embed only when we have the complete file content. readTextFile sets
+		// Truncated=true when the file exceeded MaxTotalChars, meaning we only
+		// have a partial view — in that case, reference it so the agent knows
+		// to call view_file for the rest.
+		return len(val.Content) > 0 && !val.Truncated
 
 	case *ResolvedSymbol:
-		return len(val.Snippet) > 0 && len(val.Snippet) <= EmbedThreshold
+		return len(val.Snippet) > 0
 
 	case *ResolvedSkill:
-		return len(val.Instructions) > 0 && len(val.Instructions) <= EmbedThreshold
+		return len(val.Instructions) > 0
 	}
 
 	return false

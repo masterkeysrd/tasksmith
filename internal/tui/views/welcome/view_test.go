@@ -32,6 +32,10 @@ func (m *mockClient) ListAgents(ctx context.Context, req api.ListAgentsRequest) 
 	}, nil
 }
 
+func (m *mockClient) ListSkills(ctx context.Context, req api.ListSkillsRequest) (*api.ListSkillsResponse, error) {
+	return &api.ListSkillsResponse{}, nil
+}
+
 func (m *mockClient) ListProviders(ctx context.Context, req api.ListProvidersRequest) (*api.ListProvidersResponse, error) {
 	return &api.ListProvidersResponse{
 		Providers: []api.Provider{
