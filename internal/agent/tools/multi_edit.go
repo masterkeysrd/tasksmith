@@ -126,8 +126,7 @@ func (h *ToolHandlers) MultiEdit(ctx context.Context, in MultiEditArgs) (MultiEd
 
 		diffStr = diff.FormatUnified(relSlash, relSlash, originalContent, contentNorm)
 
-		diffLines := strings.Split(diffStr, "\n")
-		for _, l := range diffLines {
+		for l := range strings.SplitSeq(diffStr, "\n") {
 			if strings.HasPrefix(l, "--- ") || strings.HasPrefix(l, "+++ ") {
 				continue
 			}

@@ -605,9 +605,10 @@ func (cd *bashChangeDetector) DetectChanges() []filetrack.Change {
 					}
 					if !found {
 						kind := filetrack.Modified
-						if post == "A" || post == "?? project" {
+						switch post {
+						case "A", "?? project":
 							kind = filetrack.Created
-						} else if post == "D" {
+						case "D":
 							kind = filetrack.Deleted
 						}
 						changes = append(changes, filetrack.Change{Path: "./" + rel, Kind: kind})

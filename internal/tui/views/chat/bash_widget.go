@@ -76,9 +76,7 @@ var BashToolWidget = kitex.FC("BashToolWidget", func(props ToolExecutionProps) k
 	var wrapWidth int
 	if measuredWidth() > 0 {
 		wrapWidth = measuredWidth() - 2
-		if wrapWidth < 20 {
-			wrapWidth = 20
-		}
+		wrapWidth = max(wrapWidth, 20)
 	} else {
 		wrapWidth = fallbackWrapWidth
 	}
@@ -430,54 +428,4 @@ func getDynamicWrapWidth(viewportWidth int) int {
 		return 20 // Sane lower boundary
 	}
 	return wrapWidth
-}
-
-func wrapLongLines(text string, maxLen int) string {
-	text = strings.ReplaceAll(text, "\r", "")
-	lines := strings.Split(text, "\n")
-	var result []string
-
-	for _, line := range lines {
-		if len(line) <= maxLen {
-			result = append(result, line)
-			continue
-		}
-
-		// Wrap this line
-		var wrappedLine strings.Builder
-		runes := []rune(line)
-		start := 0
-		for start < len(runes) {
-			// If remaining part fits, write it and finish
-			if len(runes)-start <= maxLen {
-				wrappedLine.WriteString(string(runes[start:]))
-				break
-			}
-
-			// Search for the last space/tab within maxLen characters
-			spaceIdx := -1
-			for i := start + maxLen; i > start; i-- {
-				if runes[i] == ' ' || runes[i] == '\t' {
-					spaceIdx = i
-					break
-				}
-			}
-
-			if spaceIdx != -1 {
-				// Wrap at the space
-				wrappedLine.WriteString(string(runes[start:spaceIdx]))
-				wrappedLine.WriteRune('\n')
-				// Skip the space itself
-				start = spaceIdx + 1
-			} else {
-				// No space found (unbreakable word). Break at maxLen.
-				wrappedLine.WriteString(string(runes[start : start+maxLen]))
-				wrappedLine.WriteRune('\n')
-				start += maxLen
-			}
-		}
-		result = append(result, wrappedLine.String())
-	}
-
-	return strings.Join(result, "\n")
 }

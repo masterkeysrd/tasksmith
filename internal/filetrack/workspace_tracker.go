@@ -268,7 +268,7 @@ func (w *workspaceTracker) computeHashLocked(path string) string {
 	return fmt.Sprintf("%x", h.Sum(nil))
 }
 
-func (w *workspaceTracker) publishLocked(ctx context.Context, event FileEvent) {
+func (w *workspaceTracker) publishLocked(_ context.Context, event FileEvent) {
 	// Send to regular sessions matching registered interests
 	sessionIDs := w.interests[event.Path]
 	for sessionID := range sessionIDs {

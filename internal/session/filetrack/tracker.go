@@ -289,9 +289,10 @@ func (t *tracker) Summary(ctx context.Context) ([]FileSummary, error) {
 
 			edits := diff.MyersDiff(baselineLines, currentLines)
 			for _, e := range edits {
-				if e.Op == diff.OpInsert {
+				switch e.Op {
+				case diff.OpInsert:
 					additions++
-				} else if e.Op == diff.OpDelete {
+				case diff.OpDelete:
 					deletions++
 				}
 			}

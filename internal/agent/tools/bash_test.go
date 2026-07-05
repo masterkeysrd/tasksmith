@@ -77,9 +77,10 @@ func TestRecordBashChanges_BinaryMetadataOnly(t *testing.T) {
 	var txtChange, pngChange *filetrack.Change
 	for i := range ft.recorded {
 		c := &ft.recorded[i]
-		if c.Path == "./test.txt" {
+		switch c.Path {
+		case "./test.txt":
 			txtChange = c
-		} else if c.Path == "./test.png" {
+		case "./test.png":
 			pngChange = c
 		}
 	}

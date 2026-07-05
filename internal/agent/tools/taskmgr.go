@@ -39,7 +39,6 @@ const (
 
 	statusPollInterval   = 10 * time.Millisecond
 	portPollInterval     = 2 * time.Second
-	bytesPerLineEstimate = 256
 	defaultExitCodeError = 1
 	exitCodeSuccess      = 0
 )
@@ -323,10 +322,7 @@ func (tm *TaskManager) ReadLog(taskID string, isStderr bool, limitLines int) (st
 	newlinesFound := 0
 
 	for offset > 0 && newlinesFound <= limitLines {
-		currentReadSize := int64(chunkSize)
-		if offset < currentReadSize {
-			currentReadSize = offset
-		}
+		currentReadSize := min(offset, chunkSize)
 		offset -= currentReadSize
 
 		_, err = file.Seek(offset, io.SeekStart)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"strings"
 	"sync"
 	"time"
@@ -575,11 +576,9 @@ func (m *Manager) sendMessage(ctx context.Context, sessionID string, text string
 	})
 
 	// 2. Start running Loom agent workflow asynchronously in background
-	m.wg.Add(1)
-	go func() {
-		defer m.wg.Done()
+	m.wg.Go(func() {
 		m.runAgentLoop(runCtx, sessionID, sess, inputCmd, cancel)
-	}()
+	})
 
 	return nil
 }
@@ -1168,10 +1167,8 @@ func (m *Manager) GetMessages(ctx context.Context, sessionID string) (message.Me
 		streamThinking = sess.CurrentStreamThinking
 		status = sess.Status
 		if len(sess.CurrentToolStreams) > 0 {
-			toolStreams = make(map[string]string)
-			for k, v := range sess.CurrentToolStreams {
-				toolStreams[k] = v
-			}
+			toolStreams = make(map[string]string, len(sess.CurrentToolStreams))
+			maps.Copy(toolStreams, sess.CurrentToolStreams)
 		}
 	}
 	m.mu.RUnlock()
@@ -1390,11 +1387,9 @@ func (m *Manager) SendQueued(ctx context.Context, sessionID string) error {
 		return state
 	})
 
-	m.wg.Add(1)
-	go func() {
-		defer m.wg.Done()
+	m.wg.Go(func() {
 		m.runAgentLoop(runCtx, sessionID, sess, inputCmd, cancel)
-	}()
+	})
 
 	return nil
 }
@@ -1549,7 +1544,7 @@ func (m *Manager) handleLLMChunk(sess *ActiveSession, ev graph.StreamEvent) {
 	m.notifySubscribers(sess.ID)
 }
 
-func (m *Manager) countToolTokens(ctx context.Context, sessionID string, agentName string) int {
+func (m *Manager) countToolTokens(ctx context.Context, _ string, _ string) int {
 	var allowedTools map[string]bool
 	if m.ws != nil {
 		cfg, err := m.ws.GetWorkspaceConfig(ctx)
@@ -1716,7 +1711,7 @@ func (m *Manager) handleToolChunk(sess *ActiveSession, ev graph.StreamEvent) {
 	}
 }
 
-func (m *Manager) handleToolMessage(ctx context.Context, sessionID string, sess *ActiveSession, ev graph.StreamEvent, agentName string) error {
+func (m *Manager) handleToolMessage(_ context.Context, sessionID string, sess *ActiveSession, ev graph.StreamEvent, agentName string) error {
 	toolMsg, ok := ev.Data.(message.Message)
 	if !ok {
 		return nil

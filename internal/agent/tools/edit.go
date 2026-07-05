@@ -113,8 +113,7 @@ func (h *ToolHandlers) Edit(ctx context.Context, in EditArgs) (EditOutput, error
 
 	// Compute additions and deletions
 	var additions, deletions int
-	diffLines := strings.Split(diffStr, "\n")
-	for _, l := range diffLines {
+	for l := range strings.SplitSeq(diffStr, "\n") {
 		if strings.HasPrefix(l, "--- ") || strings.HasPrefix(l, "+++ ") {
 			continue
 		}
