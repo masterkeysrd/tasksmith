@@ -5,8 +5,8 @@ metadata:
     name: agent-tooling
     description: "The exact process and scaffolding required to create a new builtin AI agent tool for TaskSmith."
 spec:
-    useWhen: "defining a new agent tool, writing tool manifests or parameter schemas, implementing tool execution handlers, handling tool permissions or user approval flows, managing tool output formatting or caching, or regenerating tool registration code"
-    keywords: [tools, agent-tools, tasksmith, codegen]
+    useWhen: "defining a new agent tool under internal/agent/tools/, writing tool manifests (.md files) or Go parameter schemas, implementing tool execution handlers, handling tool permissions, or regenerating tool registration code"
+    keywords: [tools, agent-tools, tasksmith, codegen, parameter-schema, tools-permissions]
 ---
 
 # Creating Agent Tools

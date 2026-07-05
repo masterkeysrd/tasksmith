@@ -5,8 +5,8 @@ metadata:
     name: loom
     description: "Instructions and architectural patterns for building LangGraph-style AI agent workflows using the Loom framework."
 spec:
-    useWhen: "designing agent workflows or state machines, implementing graph nodes and routing logic, managing agent conversation memory, configuring LLM streaming or persistence, integrating external tools or MCP servers, or setting up human-in-the-loop checkpoints"
-    keywords: [loom, workflows, langgraph, state-machines, agent-graph]
+    useWhen: "editing agent state machines or graph routers in internal/agent/graph/, modifying graph nodes using the loom library, or configuring LLM conversation memory persistence"
+    keywords: [loom, graph, workflows, memory, routing, state-machine]
 ---
 
 # Loom Agent Workflows
