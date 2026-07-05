@@ -39,7 +39,7 @@ func TestFormatFile(t *testing.T) {
 
 func TestFormatAttachmentsBlock(t *testing.T) {
 	// Helper to create a resolver with a custom ShouldEmbed override.
-	newResolver := func(embed bool) *resolver.Resolver {
+	newResolver := func(_ bool) *resolver.Resolver {
 		return &resolver.Resolver{} // ShouldEmbed uses default thresholds
 	}
 
@@ -200,20 +200,20 @@ func TestFormatAttachmentsBlock(t *testing.T) {
 					Diagnostics: []lsp.Diagnostic{
 						{
 							Diagnostic: lspx.Diagnostic{
-								Message: lspx.DiagnosticMessage{String: ptrString("undefined variable 'ctx'")},
+								Message: lspx.DiagnosticMessage{String: new("undefined variable 'ctx'")},
 								Range: lspx.Range{
 									Start: lspx.Position{Line: 41},
 								},
-								Severity: ptrSeverity(1),
+								Severity: new(lspx.DiagnosticSeverityError),
 							},
 						},
 						{
 							Diagnostic: lspx.Diagnostic{
-								Message: lspx.DiagnosticMessage{String: ptrString("unused parameter 'opts'")},
+								Message: lspx.DiagnosticMessage{String: new("unused parameter 'opts'")},
 								Range: lspx.Range{
 									Start: lspx.Position{Line: 77},
 								},
-								Severity: ptrSeverity(2),
+								Severity: new(lspx.DiagnosticSeverityWarning),
 							},
 						},
 					},
@@ -300,9 +300,9 @@ func TestFormatAttachmentsBlock_SymbolWithDiagnostics(t *testing.T) {
 			Diagnostics: []lsp.Diagnostic{
 				{
 					Diagnostic: lspx.Diagnostic{
-						Message:  lspx.DiagnosticMessage{String: ptrString("parameter 'lsp' is unused")},
+						Message:  lspx.DiagnosticMessage{String: new("parameter 'lsp' is unused")},
 						Range:    lspx.Range{Start: lspx.Position{Line: 89}},
-						Severity: ptrSeverity(2),
+						Severity: new(lspx.DiagnosticSeverityWarning),
 					},
 				},
 			},
@@ -404,7 +404,3 @@ func TestFormatAttachmentsBlock_ReferencedSymbol(t *testing.T) {
 		t.Errorf("expected content tag to be present in embedded symbol: %s", got)
 	}
 }
-
-// Helper functions
-func ptrString(s string) *string                                     { return &s }
-func ptrSeverity(s lspx.DiagnosticSeverity) *lspx.DiagnosticSeverity { return &s }

@@ -2,10 +2,13 @@ package resolver
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/masterkeysrd/warp"
 )
 
 func TestResolvePath(t *testing.T) {
@@ -29,7 +32,7 @@ func TestResolvePath(t *testing.T) {
 	r := New(Config{Cwd: tmpDir})
 
 	t.Run("resolve absolute path", func(t *testing.T) {
-		path, err := r.ResolvePath(context.Background(), testFilePath, TypeFile)
+		path, err := r.ResolvePath(context.Background(), testFilePath, TypeFile, "")
 		if err != nil {
 			t.Fatalf("ResolvePath failed: %v", err)
 		}
@@ -39,7 +42,7 @@ func TestResolvePath(t *testing.T) {
 	})
 
 	t.Run("resolve relative path", func(t *testing.T) {
-		path, err := r.ResolvePath(context.Background(), "internal/foo/bar.go", TypeFile)
+		path, err := r.ResolvePath(context.Background(), "internal/foo/bar.go", TypeFile, "")
 		if err != nil {
 			t.Fatalf("ResolvePath failed: %v", err)
 		}
@@ -50,7 +53,7 @@ func TestResolvePath(t *testing.T) {
 	})
 
 	t.Run("fuzzy find filename only", func(t *testing.T) {
-		path, err := r.ResolvePath(context.Background(), "bar.go", TypeFile)
+		path, err := r.ResolvePath(context.Background(), "bar.go", TypeFile, "")
 		if err != nil {
 			t.Fatalf("ResolvePath failed: %v", err)
 		}
@@ -60,7 +63,7 @@ func TestResolvePath(t *testing.T) {
 	})
 
 	t.Run("strip line range anchor", func(t *testing.T) {
-		path, err := r.ResolvePath(context.Background(), testFilePath+"#L3-L4", TypeFile)
+		path, err := r.ResolvePath(context.Background(), testFilePath+"#L3-L4", TypeFile, "")
 		if err != nil {
 			t.Fatalf("ResolvePath failed: %v", err)
 		}
@@ -70,7 +73,7 @@ func TestResolvePath(t *testing.T) {
 	})
 
 	t.Run("file not found", func(t *testing.T) {
-		_, err := r.ResolvePath(context.Background(), "nonexistent.go", TypeFile)
+		_, err := r.ResolvePath(context.Background(), "nonexistent.go", TypeFile, "")
 		if err == nil {
 			t.Error("expected error for nonexistent file, got nil")
 		}
@@ -98,7 +101,7 @@ func TestLoadResource(t *testing.T) {
 	r := New(Config{Cwd: tmpDir})
 
 	t.Run("load absolute path", func(t *testing.T) {
-		res, err := r.LoadResource(context.Background(), testFilePath, TypeFile)
+		res, err := r.LoadResource(context.Background(), testFilePath, TypeFile, "")
 		if err != nil {
 			t.Fatalf("LoadResource failed: %v", err)
 		}
@@ -118,7 +121,7 @@ func TestLoadResource(t *testing.T) {
 	})
 
 	t.Run("load non-existent absolute path", func(t *testing.T) {
-		_, err := r.LoadResource(context.Background(), filepath.Join(tmpDir, "does_not_exist.go"), TypeFile)
+		_, err := r.LoadResource(context.Background(), filepath.Join(tmpDir, "does_not_exist.go"), TypeFile, "")
 		if err == nil {
 			t.Error("expected error for non-existent file, got nil")
 		}
@@ -232,7 +235,7 @@ func TestResolveReferences(t *testing.T) {
 
 	t.Run("extract and resolve manual reference", func(t *testing.T) {
 		text := "Check @file:bar.go"
-		resources, err := r.ResolveReferences(context.Background(), text, nil)
+		resources, err := r.ResolveReferences(context.Background(), text, nil, "")
 		if err != nil {
 			t.Fatalf("ResolveReferences failed: %v", err)
 		}
@@ -250,7 +253,7 @@ func TestResolveReferences(t *testing.T) {
 
 	t.Run("dedup same file referenced twice", func(t *testing.T) {
 		text := "Check @file:bar.go and also @file:bar.go"
-		resources, err := r.ResolveReferences(context.Background(), text, nil)
+		resources, err := r.ResolveReferences(context.Background(), text, nil, "")
 		if err != nil {
 			t.Fatalf("ResolveReferences failed: %v", err)
 		}
@@ -270,7 +273,7 @@ func TestResolveReferences(t *testing.T) {
 		}
 
 		text := "Check @file:bar.go and @file:baz.go"
-		resources, err := r.ResolveReferences(context.Background(), text, nil)
+		resources, err := r.ResolveReferences(context.Background(), text, nil, "")
 		if err != nil {
 			t.Fatalf("ResolveReferences failed: %v", err)
 		}
@@ -281,7 +284,7 @@ func TestResolveReferences(t *testing.T) {
 
 	t.Run("skip unresolvable reference", func(t *testing.T) {
 		text := "Check @file:nonexistent.go"
-		resources, err := r.ResolveReferences(context.Background(), text, nil)
+		resources, err := r.ResolveReferences(context.Background(), text, nil, "")
 		if err != nil {
 			t.Fatalf("ResolveReferences failed: %v", err)
 		}
@@ -295,7 +298,7 @@ func TestResolveReferences(t *testing.T) {
 			{Type: TypeFile, Value: testFilePath, InsertText: "@file:bar.go", FromTracker: true},
 		}
 		text := "Also check @file:bar.go"
-		resources, err := r.ResolveReferences(context.Background(), text, trackedRefs)
+		resources, err := r.ResolveReferences(context.Background(), text, trackedRefs, "")
 		if err != nil {
 			t.Fatalf("ResolveReferences failed: %v", err)
 		}
@@ -306,7 +309,7 @@ func TestResolveReferences(t *testing.T) {
 
 	t.Run("different line ranges for same file", func(t *testing.T) {
 		text := "Check lines 3-4 @file:bar.go#L3-L4 and lines 1-2 @file:bar.go#L1-L2"
-		resources, err := r.ResolveReferences(context.Background(), text, nil)
+		resources, err := r.ResolveReferences(context.Background(), text, nil, "")
 		if err != nil {
 			t.Fatalf("ResolveReferences failed: %v", err)
 		}
@@ -335,7 +338,7 @@ func TestResolveReferences(t *testing.T) {
 
 	t.Run("whole file suppresses ranges", func(t *testing.T) {
 		text := "Check all @file:bar.go and also slice @file:bar.go#L3-L4"
-		resources, err := r.ResolveReferences(context.Background(), text, nil)
+		resources, err := r.ResolveReferences(context.Background(), text, nil, "")
 		if err != nil {
 			t.Fatalf("ResolveReferences failed: %v", err)
 		}
@@ -349,6 +352,111 @@ func TestResolveReferences(t *testing.T) {
 		}
 		if res.StartLine != 1 || res.EndLine != 5 { // 5 is actualEndLine for whole file bar.go
 			t.Errorf("expected whole file range, got L%d-L%d", res.StartLine, res.EndLine)
+		}
+	})
+}
+
+type mockWorkspace struct {
+	agents    map[string]*warp.ResolvedAgent
+	resources []warp.Resource
+}
+
+func (m *mockWorkspace) ResolveAgent(ctx context.Context, ref string) (*warp.ResolvedAgent, error) {
+	if a, ok := m.agents[ref]; ok {
+		return a, nil
+	}
+	return nil, fmt.Errorf("agent not found")
+}
+
+func (m *mockWorkspace) Resources() []warp.Resource {
+	return m.resources
+}
+
+func TestResolveSkill(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "tasksmith-resolver-skill-test-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	// Create a mock skill directory and SKILL.md file
+	skillDir := filepath.Join(tmpDir, "skills", "test-skill")
+	if err := os.MkdirAll(skillDir, 0755); err != nil {
+		t.Fatalf("failed to create skill dir: %v", err)
+	}
+	skillPath := filepath.Join(skillDir, "SKILL.md")
+	diskInstructions := "Instructions from disk"
+	if err := os.WriteFile(skillPath, []byte(diskInstructions), 0644); err != nil {
+		t.Fatalf("failed to write skill file: %v", err)
+	}
+
+	wsInstructions := "Instructions from workspace"
+	skillObj := &warp.Skill{}
+	skillObj.Directory = skillDir
+	skillObj.Metadata.Name = "test-skill"
+	skillObj.Spec.Instructions = wsInstructions
+
+	wsAgent := &warp.ResolvedAgent{
+		Skills: []warp.Skill{*skillObj},
+	}
+
+	mockWS := &mockWorkspace{
+		agents: map[string]*warp.ResolvedAgent{
+			"test-agent": wsAgent,
+		},
+		resources: []warp.Resource{skillObj},
+	}
+
+	t.Run("resolve from workspace agent", func(t *testing.T) {
+		r := New(Config{
+			Cwd:       tmpDir,
+			Workspace: mockWS,
+		})
+
+		path, err := r.ResolvePath(context.Background(), "test-skill", TypeSkill, "test-agent")
+		if err != nil {
+			t.Fatalf("ResolvePath failed: %v", err)
+		}
+
+		res, err := r.LoadResource(context.Background(), path, TypeSkill, "test-agent")
+		if err != nil {
+			t.Fatalf("LoadResource failed: %v", err)
+		}
+
+		skillRes, ok := res.(*ResolvedSkill)
+		if !ok {
+			t.Fatalf("expected *ResolvedSkill, got %T", res)
+		}
+
+		if skillRes.Instructions != wsInstructions {
+			t.Errorf("expected instructions %q, got %q", wsInstructions, skillRes.Instructions)
+		}
+
+		if skillRes.Name != "test-skill" {
+			t.Errorf("expected name %q, got %q", "test-skill", skillRes.Name)
+		}
+	})
+
+	t.Run("returns error when workspace is nil", func(t *testing.T) {
+		r := New(Config{
+			Cwd: tmpDir,
+		})
+
+		_, err := r.loadResourceSkill(context.Background(), skillDir, "test-agent")
+		if err == nil {
+			t.Error("expected error when workspace is nil, got nil")
+		}
+	})
+
+	t.Run("returns error when skill is not assigned to agent", func(t *testing.T) {
+		r := New(Config{
+			Cwd:       tmpDir,
+			Workspace: mockWS,
+		})
+
+		_, err := r.loadResourceSkill(context.Background(), "/some/other/path", "test-agent")
+		if err == nil {
+			t.Error("expected error when skill is not assigned to agent, got nil")
 		}
 	})
 }

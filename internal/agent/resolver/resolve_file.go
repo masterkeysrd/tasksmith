@@ -11,6 +11,7 @@ import (
 
 	corefs "github.com/masterkeysrd/tasksmith/internal/core/fs"
 	"github.com/masterkeysrd/tasksmith/internal/core/lsp"
+	"github.com/masterkeysrd/warp"
 )
 
 const (
@@ -21,10 +22,14 @@ const (
 // ResolvePath resolves a partial or relative filepath to an absolute filesystem path
 // without reading any content. It handles line range extraction, spacing normalization,
 // and fuzzy matching. This is the cheap first phase of two-phase resolution.
-func (r *Resolver) ResolvePath(ctx context.Context, inputPath string, resType ResourceType) (string, error) {
+func (r *Resolver) ResolvePath(ctx context.Context, inputPath string, resType ResourceType, agentName string) (string, error) {
 	if resType == TypeSymbol {
 		_, _, _, _, _, ok := parseCoordinates(inputPath)
 		return r.ResolveSymbol(ctx, inputPath, ok)
+	}
+
+	if resType == TypeSkill {
+		return r.resolveSkillPath(ctx, inputPath, agentName)
 	}
 
 	cleanedInput := strings.Trim(inputPath, "\"'` ")
@@ -148,12 +153,14 @@ func (r *Resolver) loadResourceWithPath(ctx context.Context, absPath string, sta
 
 // LoadResource loads content and metadata for a known, verified absolute path/coordinates.
 // This is the expensive second phase of two-phase resolution.
-func (r *Resolver) LoadResource(ctx context.Context, value string, resType ResourceType) (ResolvedResource, error) {
+func (r *Resolver) LoadResource(ctx context.Context, value string, resType ResourceType, agentName string) (ResolvedResource, error) {
 	switch resType {
 	case TypeFile:
 		return r.loadResourceFile(ctx, value)
 	case TypeSymbol:
 		return r.loadResourceSymbol(ctx, value)
+	case TypeSkill:
+		return r.loadResourceSkill(ctx, value, agentName)
 	default:
 		return nil, fmt.Errorf("unsupported resource type for LoadResource: %s", resType)
 	}
@@ -245,7 +252,7 @@ func (r *Resolver) loadResourceFile(ctx context.Context, value string) (Resolved
 // ResolveReferences resolves a user message text by extracting references, resolving paths,
 // deduplicating, and loading content in a single pipeline. This is the primary entry point
 // for Phase 4 two-phase resolution.
-func (r *Resolver) ResolveReferences(ctx context.Context, text string, trackedRefs []Reference) ([]ResolvedResource, error) {
+func (r *Resolver) ResolveReferences(ctx context.Context, text string, trackedRefs []Reference, agentName string) ([]ResolvedResource, error) {
 	// 1. Extract manual references not already tracked
 	manualRefs := ExtractReferences(text, trackedRefs)
 
@@ -263,7 +270,7 @@ func (r *Resolver) ResolveReferences(ctx context.Context, text string, trackedRe
 			}
 		}
 
-		fullPath, err := r.ResolvePath(ctx, allRefs[i].Value, allRefs[i].Type)
+		fullPath, err := r.ResolvePath(ctx, allRefs[i].Value, allRefs[i].Type, agentName)
 		if err != nil {
 			continue // skip unresolvable
 		}
@@ -283,7 +290,7 @@ func (r *Resolver) ResolveReferences(ctx context.Context, text string, trackedRe
 	seen := make(map[string]bool)
 	var unique []Reference
 	for _, ref := range allRefs {
-		if ref.Type == TypeFile && wholeFiles[ref.Value] && !(ref.StartLine == 1 && ref.EndLine == 0) {
+		if ref.Type == TypeFile && wholeFiles[ref.Value] && (ref.StartLine != 1 || ref.EndLine != 0) {
 			continue
 		}
 
@@ -294,7 +301,7 @@ func (r *Resolver) ResolveReferences(ctx context.Context, text string, trackedRe
 		}
 	}
 
-	// 4. Load content ONLY for the unique set
+	// Load content ONLY for the unique set
 	var resources []ResolvedResource
 	for _, ref := range unique {
 		val := ref.Value
@@ -305,7 +312,7 @@ func (r *Resolver) ResolveReferences(ctx context.Context, text string, trackedRe
 				val = fmt.Sprintf("%s#L%d", val, ref.StartLine)
 			}
 		}
-		res, err := r.LoadResource(ctx, val, ref.Type)
+		res, err := r.LoadResource(ctx, val, ref.Type, agentName)
 		if err != nil {
 			continue
 		}
@@ -442,6 +449,44 @@ func (r *Resolver) readTextFile(path string, startLine, endLine int) (content st
 	}
 
 	return strings.Join(lines, "\n"), currentLine, lastLineRead, truncated, nil
+}
+
+// findAgentSkill looks up a skill in the agent's assigned skills list.
+func (r *Resolver) findAgentSkill(ctx context.Context, skillName string, agentName string) (*warp.Skill, *warp.ResolvedAgent, error) {
+	if r.Workspace == nil {
+		return nil, nil, fmt.Errorf("workspace not available")
+	}
+	if agentName == "" {
+		return nil, nil, fmt.Errorf("agent name required")
+	}
+
+	resolvedAgent, err := r.Workspace.ResolveAgent(ctx, agentName)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	for _, skill := range resolvedAgent.Skills {
+		if skill.Metadata.Name == skillName ||
+			filepath.Base(skill.Directory) == skillName ||
+			strings.TrimSuffix(skill.Metadata.Name, filepath.Ext(skill.Metadata.Name)) == skillName {
+			return &skill, resolvedAgent, nil
+		}
+	}
+	return nil, nil, fmt.Errorf("skill %q not found for agent %q", skillName, agentName)
+}
+
+// resolveSkillPath resolves a skill name to its absolute file path using the workspace agent resolver.
+// It searches the active agent's skills list by name, basename, or name without extension.
+func (r *Resolver) resolveSkillPath(ctx context.Context, skillName string, agentName string) (string, error) {
+	skill, _, err := r.findAgentSkill(ctx, skillName, agentName)
+	if err != nil {
+		return "", err
+	}
+	path := skill.Directory
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(r.Cwd, path)
+	}
+	return filepath.Clean(path), nil
 }
 
 // fuzzyFindFile recursively walks the workspace root to match a partial path or filename,

@@ -3,30 +3,48 @@ package tools
 import (
 	"context"
 	"fmt"
+
+	"github.com/masterkeysrd/tasksmith/internal/agent/resolver"
 )
 
 // ActivateSkill activates a specialized skill to load its domain-specific instructions.
 func (h *ToolHandlers) ActivateSkill(ctx context.Context, in ActivateSkillArgs) (ActivateSkillOutput, error) {
-	if h.SkillResolver == nil {
+	if h.Resolver == nil {
 		return ActivateSkillOutput{
 			Success: false,
-			Message: "Skill resolver is not configured in this session.",
+			Message: "Resolver is not configured in this session.",
 		}, nil
 	}
 
-	instructions, path, err := h.SkillResolver.ResolveSkill(ctx, in.Skill)
+	path, err := h.Resolver.ResolvePath(ctx, in.Skill, resolver.TypeSkill, h.AgentName)
 	if err != nil {
 		return ActivateSkillOutput{
 			Success: false,
-			Message: fmt.Sprintf("Failed to resolve skill: %v", err),
+			Message: fmt.Sprintf("Failed to resolve skill path: %v", err),
+		}, nil
+	}
+
+	res, err := h.Resolver.LoadResource(ctx, path, resolver.TypeSkill, h.AgentName)
+	if err != nil {
+		return ActivateSkillOutput{
+			Success: false,
+			Message: fmt.Sprintf("Failed to load skill: %v", err),
+		}, nil
+	}
+
+	skillRes, ok := res.(*resolver.ResolvedSkill)
+	if !ok {
+		return ActivateSkillOutput{
+			Success: false,
+			Message: "Resolved resource is not a skill.",
 		}, nil
 	}
 
 	return ActivateSkillOutput{
 		Success:      true,
-		Instructions: instructions,
-		Path:         path,
-		Message:      fmt.Sprintf("Successfully activated skill %q from path: %s", in.Skill, path),
+		Instructions: skillRes.Instructions,
+		Path:         skillRes.SkillPath,
+		Message:      fmt.Sprintf("Successfully activated skill %q from path: %s", in.Skill, skillRes.SkillPath),
 	}, nil
 }
 

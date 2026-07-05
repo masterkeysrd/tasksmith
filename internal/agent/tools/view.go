@@ -55,7 +55,7 @@ func (h *ToolHandlers) View(ctx context.Context, in ViewArgs) (ViewOutput, error
 		FileTracker: h.FileTracker,
 		Storage:     h.Storage,
 	})
-	absPath, err := r.ResolvePath(ctx, targetPath, resolver.TypeFile)
+	absPath, err := r.ResolvePath(ctx, targetPath, resolver.TypeFile, "")
 	if err != nil {
 		return ViewOutput{}, err
 	}
@@ -69,7 +69,7 @@ func (h *ToolHandlers) View(ctx context.Context, in ViewArgs) (ViewOutput, error
 		}
 	}
 
-	res, err := r.LoadResource(ctx, absPath, resolver.TypeFile)
+	res, err := r.LoadResource(ctx, absPath, resolver.TypeFile, "")
 	if err != nil {
 		return ViewOutput{}, err
 	}

@@ -104,24 +104,10 @@ type ReferencePayload struct {
 
 // ToPayload converts a Reference to its JSON-serializable payload form.
 func (r Reference) ToPayload() ReferencePayload {
-	return ReferencePayload{
-		Type:        r.Type,
-		Value:       r.Value,
-		StartLine:   r.StartLine,
-		EndLine:     r.EndLine,
-		InsertText:  r.InsertText,
-		FromTracker: r.FromTracker,
-	}
+	return ReferencePayload(r)
 }
 
 // FromPayload converts a JSON-serializable payload back to a Reference.
 func (p ReferencePayload) FromPayload() Reference {
-	return Reference{
-		Type:        p.Type,
-		Value:       p.Value,
-		StartLine:   p.StartLine,
-		EndLine:     p.EndLine,
-		InsertText:  p.InsertText,
-		FromTracker: p.FromTracker,
-	}
+	return Reference(p)
 }

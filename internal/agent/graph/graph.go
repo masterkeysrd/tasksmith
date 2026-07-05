@@ -12,6 +12,7 @@ import (
 	"github.com/masterkeysrd/loom/stream"
 	"github.com/masterkeysrd/loom/tool"
 	"github.com/masterkeysrd/tasksmith/internal/agent/permissions"
+	"github.com/masterkeysrd/tasksmith/internal/agent/resolver"
 	"github.com/masterkeysrd/tasksmith/internal/agent/tools"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	"github.com/masterkeysrd/tasksmith/internal/core/lsp"
@@ -164,9 +165,18 @@ func New(ctx context.Context, opts Options) (*AgentGraph, error) {
 		mcps = opts.Workspace.MCPs()
 	}
 
+	r := resolver.New(resolver.Config{
+		Lsp:         opts.LspManager,
+		Cwd:         cwd,
+		FileTracker: opts.FileTracker,
+		Storage:     opts.Storage,
+		Workspace:   opts.Workspace,
+	})
+
 	handlers := tools.NewHandlers(opts.Storage, cwd).
 		WithTaskManager(opts.TaskManager, opts.SessionID).
-		WithSkillResolver(&skillResolver{ws: opts.Workspace, agentName: opts.AgentName}).
+		WithResolver(r).
+		WithAgentName(opts.AgentName).
 		WithPermissionManager(pm).
 		WithLspManager(opts.LspManager).
 		WithFileTracker(opts.FileTracker).

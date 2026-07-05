@@ -251,8 +251,21 @@ func FormatAttachmentsBlock(resources []resolver.ResolvedResource, r *resolver.R
 		return ""
 	}
 
+	hasSkill := false
+	for _, res := range resources {
+		if _, ok := res.(*resolver.ResolvedSkill); ok {
+			hasSkill = true
+			break
+		}
+	}
+
+	reminder := "These attachments were loaded by the user. Use them to complete the request."
+	if hasSkill {
+		reminder += " Consider the attached skills as already active/activated; you do not need to call activate_skill for them."
+	}
+
 	var sb strings.Builder
-	sb.WriteString("<system_reminder>These attachments were loaded by the user. Use them to complete the request.</system_reminder>\n")
+	fmt.Fprintf(&sb, "<system_reminder>%s</system_reminder>\n", reminder)
 	sb.WriteString("<attachments>\n")
 
 	for _, res := range resources {
@@ -283,7 +296,7 @@ func formatEmbedded(res resolver.ResolvedResource) string {
 // formatEmbedded formats a ResolvedFile with content and optional diagnostics.
 func formatEmbeddedFile(f *resolver.ResolvedFile) string {
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("<file path=\"%s\" lines=\"%d\">\n", escapeXML(f.FilePath), f.TotalLines))
+	fmt.Fprintf(&sb, "<file path=\"%s\" lines=\"%d\">\n", escapeXML(f.FilePath), f.TotalLines)
 	sb.WriteString("<content>\n")
 	sb.WriteString(FormatFileContent(f.Content, f.StartLine))
 	sb.WriteString("\n</content>\n")
@@ -294,13 +307,13 @@ func formatEmbeddedFile(f *resolver.ResolvedFile) string {
 			severity := "unknown"
 			if d.Severity != nil {
 				switch *d.Severity {
-				case 1:
+				case lspx.DiagnosticSeverityError:
 					severity = "error"
-				case 2:
+				case lspx.DiagnosticSeverityWarning:
 					severity = "warning"
-				case 3:
+				case lspx.DiagnosticSeverityInformation:
 					severity = "info"
-				case 4:
+				case lspx.DiagnosticSeverityHint:
 					severity = "hint"
 				}
 			}
@@ -310,7 +323,7 @@ func formatEmbeddedFile(f *resolver.ResolvedFile) string {
 			} else if d.Message.MarkupContent != nil {
 				msg = d.Message.MarkupContent.Value
 			}
-			sb.WriteString(fmt.Sprintf("- [%s] line %d: %s\n", severity, d.Range.Start.Line+1, escapeXML(msg)))
+			fmt.Fprintf(&sb, "- [%s] line %d: %s\n", severity, d.Range.Start.Line+1, escapeXML(msg))
 		}
 		sb.WriteString("</diagnostics>\n")
 	}
@@ -322,14 +335,14 @@ func formatEmbeddedFile(f *resolver.ResolvedFile) string {
 // formatEmbedded formats a ResolvedSymbol with content and optional diagnostics.
 func formatEmbeddedSymbol(s *resolver.ResolvedSymbol) string {
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("<symbol name=\"%s\" kind=\"%s\" file=\"%s\" lines=\"%d-%d\">\n",
-		escapeXML(s.Name), escapeXML(s.Kind), escapeXML(filepath.Base(s.FilePath)), s.StartLine, s.EndLine))
+	fmt.Fprintf(&sb, "<symbol name=\"%s\" kind=\"%s\" file=\"%s\" lines=\"%d-%d\">\n",
+		escapeXML(s.Name), escapeXML(s.Kind), escapeXML(filepath.Base(s.FilePath)), s.StartLine, s.EndLine)
 	sb.WriteString("<content>\n")
 	sb.WriteString(escapeXML(s.Snippet))
 	sb.WriteString("\n</content>\n")
 
 	if s.TypeDefinedAt != "" {
-		sb.WriteString(fmt.Sprintf("<type_defined_at>%s</type_defined_at>\n", escapeXML(s.TypeDefinedAt)))
+		fmt.Fprintf(&sb, "<type_defined_at>%s</type_defined_at>\n", escapeXML(s.TypeDefinedAt))
 	}
 
 	if s.Docs != "" {
@@ -337,27 +350,27 @@ func formatEmbeddedSymbol(s *resolver.ResolvedSymbol) string {
 		sb.WriteString(escapeXML(s.Docs))
 		sb.WriteString("\n</docs>\n")
 		if s.DocsTruncated {
-			sb.WriteString(fmt.Sprintf("<docs_truncated>true</docs_truncated>\n"))
-			sb.WriteString(fmt.Sprintf("<full_report_path>%s</full_report_path>\n", escapeXML(s.FullReportPath)))
+			fmt.Fprintf(&sb, "<docs_truncated>true</docs_truncated>\n")
+			fmt.Fprintf(&sb, "<full_report_path>%s</full_report_path>\n", escapeXML(s.FullReportPath))
 		}
 	}
 
 	if len(s.References) > 0 {
 		sb.WriteString("<references>\n")
 		for _, ref := range s.References {
-			sb.WriteString(fmt.Sprintf("<reference>%s</reference>\n", escapeXML(ref)))
+			fmt.Fprintf(&sb, "<reference>%s</reference>\n", escapeXML(ref))
 		}
 		sb.WriteString("</references>\n")
-		sb.WriteString(fmt.Sprintf("<references_total>%d</references_total>\n", s.ReferencesTotal))
+		fmt.Fprintf(&sb, "<references_total>%d</references_total>\n", s.ReferencesTotal)
 	}
 
 	if len(s.Implementations) > 0 {
 		sb.WriteString("<implementations>\n")
 		for _, impl := range s.Implementations {
-			sb.WriteString(fmt.Sprintf("<implementation>%s</implementation>\n", escapeXML(impl)))
+			fmt.Fprintf(&sb, "<implementation>%s</implementation>\n", escapeXML(impl))
 		}
 		sb.WriteString("</implementations>\n")
-		sb.WriteString(fmt.Sprintf("<implementations_total>%d</implementations_total>\n", s.ImplementationsTotal))
+		fmt.Fprintf(&sb, "<implementations_total>%d</implementations_total>\n", s.ImplementationsTotal)
 	}
 
 	if len(s.Diagnostics) > 0 {
@@ -382,7 +395,7 @@ func formatEmbeddedSymbol(s *resolver.ResolvedSymbol) string {
 			} else if d.Message.MarkupContent != nil {
 				msg = d.Message.MarkupContent.Value
 			}
-			sb.WriteString(fmt.Sprintf("- [%s] line %d: %s\n", severity, d.Range.Start.Line+1, escapeXML(msg)))
+			fmt.Fprintf(&sb, "- [%s] line %d: %s\n", severity, d.Range.Start.Line+1, escapeXML(msg))
 		}
 		sb.WriteString("</diagnostics>\n")
 	}

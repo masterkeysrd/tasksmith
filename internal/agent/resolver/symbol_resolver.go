@@ -25,12 +25,6 @@ const (
 	MaxSimilarSymbols = 20
 )
 
-// symbolCoordinates encodes the full symbol location into a string for autocomplete ID.
-// Format: path:line:char:kind:name (e.g., "internal/app/app.go:42:5:function:Main")
-func symbolCoordinates(path string, line, character int, kind uint32, name string) string {
-	return fmt.Sprintf("%s:%d:%d:%s:%s", path, line, character, SymbolKindToString(kind), name)
-}
-
 // parseCoordinates extracts symbol coordinates from an autocomplete ID string.
 // Returns path, line, character, kind string, name, and whether parsing succeeded.
 func parseCoordinates(id string) (path string, line int, character int, kind string, name string, ok bool) {
@@ -162,8 +156,8 @@ func (r *Resolver) ResolveSymbol(ctx context.Context, query string, fromTracker 
 			uriLower := strings.ToLower(uri)
 			pkgLower := strings.ToLower(packagePart)
 			pathOnly := uriLower
-			if idx := strings.Index(uriLower, "://"); idx != -1 {
-				pathOnly = uriLower[idx+3:]
+			if _, after, ok := strings.Cut(uriLower, "://"); ok {
+				pathOnly = after
 			}
 			segments := strings.Split(pathOnly, "/")
 			var matchedPkg bool
@@ -385,166 +379,6 @@ func (r *Resolver) loadResourceSymbol(ctx context.Context, coords string) (Resol
 }
 
 // loadSymbolContent loads the definition snippet and diagnostics for a symbol.
-func (r *Resolver) loadSymbolContent(ctx context.Context, client *lsp.Client, sym lspx.WorkspaceSymbol) (*ResolvedSymbol, error) {
-	var docURI string
-	var rangeVal lspx.Range
-
-	if sym.Location.Location != nil {
-		docURI = sym.Location.Location.URI
-		rangeVal = sym.Location.Location.Range
-	} else if sym.Location.LocationUriOnly != nil {
-		docURI = sym.Location.LocationUriOnly.URI
-	} else {
-		return nil, fmt.Errorf("no location found for symbol %s", sym.Name)
-	}
-
-	filePath := uriToPath(docURI)
-	if _, err := os.Stat(filePath); err != nil {
-		return nil, fmt.Errorf("symbol file not found: %s", filePath)
-	}
-
-	relPath, err := filepath.Rel(r.Cwd, filePath)
-	if err != nil {
-		relPath = filePath
-	}
-
-	// Build position for LSP hover call
-	pos := lspx.Position{
-		Line:      rangeVal.Start.Line,
-		Character: rangeVal.Start.Character,
-	}
-	textDoc := lspx.TextDocumentIdentifier{URI: docURI}
-
-	// Gather hover documentation
-	var docs string
-	hover, err := client.RawClient().Hover(ctx, &lspx.HoverParams{
-		TextDocument: textDoc,
-		Position:     pos,
-	})
-	if err == nil && hover != nil {
-		docs = extractHoverContent(hover)
-	}
-
-	// Gather references
-	var references []string
-	refParams := lspx.ReferenceParams{
-		TextDocument: textDoc,
-		Position:     pos,
-		Context:      lspx.ReferenceContext{IncludeDeclaration: true},
-	}
-	locations, err := client.RawClient().References(ctx, &refParams)
-	if err == nil {
-		for _, loc := range locations {
-			lpath := uriToPath(loc.URI)
-			rel, relErr := filepath.Rel(r.Cwd, lpath)
-			if relErr != nil {
-				rel = lpath
-			}
-			references = append(references, fmt.Sprintf("%s:%d:%d", rel, loc.Range.Start.Line+1, loc.Range.Start.Character+1))
-		}
-		sortStrings(references)
-	}
-
-	// Gather implementations
-	var implementations []string
-	implParams := lspx.ImplementationParams{
-		TextDocument: textDoc,
-		Position:     pos,
-	}
-	implResult, err := client.RawClient().Implementation(ctx, &implParams)
-	if err == nil && implResult != nil {
-		implementations = extractLocationsFromResult(implResult, r.Cwd)
-		sortStrings(implementations)
-	}
-
-	// Gather type definition
-	var typeDefinedAt string
-	typeDefParams := lspx.TypeDefinitionParams{
-		TextDocument: textDoc,
-		Position:     pos,
-	}
-	typeDefResult, err := client.RawClient().TypeDefinition(ctx, &typeDefParams)
-	if err == nil && typeDefResult != nil {
-		locs := extractLocationsFromResult(typeDefResult, r.Cwd)
-		if len(locs) > 0 {
-			typeDefinedAt = locs[0]
-		}
-	}
-
-	// Extract signature from hover docs
-	signature := sym.Name
-	if docs != "" {
-		signature = extractSignature(docs)
-	}
-
-	// Read the definition snippet from file
-	snippet, startLine, endLine, err := r.readSymbolSnippet(filePath, int(rangeVal.Start.Line), int(rangeVal.End.Line))
-	if err != nil {
-		snippet = fmt.Sprintf("// Error reading symbol: %v", err)
-	}
-
-	// Get diagnostics for this symbol's line range
-	var diags []lsp.Diagnostic
-	if client != nil {
-		if fileDiags, err := client.GetDiagnostics(ctx, filePath); err == nil {
-			diags = filterDiagnosticsInRange(fileDiags, int(rangeVal.Start.Line), int(rangeVal.End.Line))
-		}
-	}
-
-	kindStr := SymbolKindToString(uint32(sym.Kind))
-
-	// Counter phase: check if full report is needed
-	docsLen := len(docs)
-	refsCount := len(references)
-	implsCount := len(implementations)
-	needFullReport := docsLen > MaxDocsChars || refsCount > MaxRefsPerTool || implsCount > MaxImplsPerTool
-
-	// Report phase: save full report to storage if needed
-	var fullReportPath string
-	if needFullReport {
-		toolCallID, _ := ctx.Value("tool_call_id").(string)
-		if toolCallID == "" {
-			toolCallID = "unknown"
-		}
-		reportFilename := fmt.Sprintf("lsp_inspect_%s_%s.md", toolCallID, sanitizeFilename(sym.Name))
-		if r.Storage != nil {
-			storagePath := filepath.Join("lsp_inspect", reportFilename)
-			fullReport := buildFullReport(sym.Name, kindStr, relPath, typeDefinedAt, signature, docs, references, implementations)
-			cachedPath, errSave := r.Storage.Save(ctx, storagePath, strings.NewReader(fullReport))
-			if errSave == nil && cachedPath != "" {
-				fullReportPath = cachedPath
-			}
-		}
-	}
-
-	// Inline phase: build compact output with budget limits
-	inline := buildInlineOutput(docs, references, implementations)
-
-	return &ResolvedSymbol{
-		Name:          sym.Name,
-		Kind:          kindStr,
-		Signature:     signature,
-		TypeDefinedAt: typeDefinedAt,
-		Container: func() string {
-			if sym.ContainerName != nil {
-				return *sym.ContainerName
-			}
-			return ""
-		}(),
-		FilePath:             filePath,
-		StartLine:            startLine,
-		EndLine:              endLine,
-		Snippet:              snippet,
-		Diagnostics:          diags,
-		Docs:                 inline.docs,
-		DocsTruncated:        inline.docsTruncated,
-		References:           inline.references,
-		ReferencesTotal:      refsCount,
-		Implementations:      inline.implementations,
-		ImplementationsTotal: implsCount,
-		FullReportPath:       fullReportPath,
-	}, nil
-}
 
 // readSymbolSnippet reads a window of lines around the symbol definition.
 // Reads 5 lines before and 20 lines after the symbol's range.
@@ -556,10 +390,7 @@ func (r *Resolver) readSymbolSnippet(filePath string, startLine, endLine int) (s
 	defer file.Close()
 
 	// Calculate window bounds
-	windowStart := startLine - 5
-	if windowStart < 1 {
-		windowStart = 1
-	}
+	windowStart := max(startLine-5, 1)
 	windowEnd := endLine + 20
 
 	var lines []string

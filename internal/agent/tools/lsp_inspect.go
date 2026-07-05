@@ -39,7 +39,7 @@ func (h *ToolHandlers) LspInspect(ctx context.Context, in LspInspectArgs) (LspIn
 		FileTracker: h.FileTracker,
 		Storage:     h.Storage,
 	})
-	coords, err := r.ResolvePath(ctx, in.Query, resolver.TypeSymbol)
+	coords, err := r.ResolvePath(ctx, in.Query, resolver.TypeSymbol, "")
 	if err != nil {
 		if strings.Contains(err.Error(), "no symbols found") {
 			return LspInspectOutput{TotalMatches: 0}, nil
@@ -47,7 +47,7 @@ func (h *ToolHandlers) LspInspect(ctx context.Context, in LspInspectArgs) (LspIn
 		return LspInspectOutput{}, err
 	}
 
-	res, err := r.LoadResource(ctx, coords, resolver.TypeSymbol)
+	res, err := r.LoadResource(ctx, coords, resolver.TypeSymbol, "")
 	if err != nil {
 		return LspInspectOutput{}, err
 	}
