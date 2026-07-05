@@ -34,6 +34,8 @@ func IsPrefix(text string) bool {
 type Reference struct {
 	Type        ResourceType // e.g. TypeFile, TypeSymbol, TypeSkill
 	Value       string       // full path/name (e.g. "internal/app/app.go")
+	StartLine   int          // 1-indexed start line (optional, defaults to 1 for TypeFile)
+	EndLine     int          // 1-indexed end line (optional, defaults to 0 for TypeFile)
 	InsertText  string       // token as it appears in text (e.g. "@file:app.go")
 	FromTracker bool         // true = autocomplete, false = manual parse
 }
@@ -63,9 +65,18 @@ func ExtractReferences(text string, tracked []Reference) []Reference {
 			value := text[start+len(prefix) : end]
 
 			if !trackedSet[token] && value != "" {
+				var cleanVal string
+				var startLine, endLine int
+				if resType == TypeFile {
+					cleanVal, startLine, endLine = parseLineRange(value)
+				} else {
+					cleanVal = value
+				}
 				refs = append(refs, Reference{
 					Type:        resType,
-					Value:       value,
+					Value:       cleanVal,
+					StartLine:   startLine,
+					EndLine:     endLine,
 					InsertText:  token,
 					FromTracker: false,
 				})
@@ -85,6 +96,8 @@ func isWhitespace(b byte) bool {
 type ReferencePayload struct {
 	Type        ResourceType `json:"type"`
 	Value       string       `json:"value"`
+	StartLine   int          `json:"start_line,omitempty"`
+	EndLine     int          `json:"end_line,omitempty"`
 	InsertText  string       `json:"insert_text"`
 	FromTracker bool         `json:"from_tracker"`
 }
@@ -94,6 +107,8 @@ func (r Reference) ToPayload() ReferencePayload {
 	return ReferencePayload{
 		Type:        r.Type,
 		Value:       r.Value,
+		StartLine:   r.StartLine,
+		EndLine:     r.EndLine,
 		InsertText:  r.InsertText,
 		FromTracker: r.FromTracker,
 	}
@@ -104,6 +119,8 @@ func (p ReferencePayload) FromPayload() Reference {
 	return Reference{
 		Type:        p.Type,
 		Value:       p.Value,
+		StartLine:   p.StartLine,
+		EndLine:     p.EndLine,
 		InsertText:  p.InsertText,
 		FromTracker: p.FromTracker,
 	}

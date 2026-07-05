@@ -303,4 +303,52 @@ func TestResolveReferences(t *testing.T) {
 			t.Errorf("expected 1 resource (deduplicated), got %d", len(resources))
 		}
 	})
+
+	t.Run("different line ranges for same file", func(t *testing.T) {
+		text := "Check lines 3-4 @file:bar.go#L3-L4 and lines 1-2 @file:bar.go#L1-L2"
+		resources, err := r.ResolveReferences(context.Background(), text, nil)
+		if err != nil {
+			t.Fatalf("ResolveReferences failed: %v", err)
+		}
+		if len(resources) != 2 {
+			t.Errorf("expected 2 distinct resources for different ranges, got %d", len(resources))
+		}
+
+		// Verify first resource (sorted by insert text "@file:bar.go#L3-L4")
+		res0, ok0 := resources[0].(*ResolvedFile)
+		if !ok0 {
+			t.Fatalf("expected resource to be *ResolvedFile")
+		}
+		if res0.StartLine != 3 || res0.EndLine != 4 {
+			t.Errorf("expected range L3-L4, got L%d-L%d", res0.StartLine, res0.EndLine)
+		}
+
+		// Verify second resource ("@file:bar.go#L1-L2")
+		res1, ok1 := resources[1].(*ResolvedFile)
+		if !ok1 {
+			t.Fatalf("expected resource to be *ResolvedFile")
+		}
+		if res1.StartLine != 1 || res1.EndLine != 2 {
+			t.Errorf("expected range L1-L2, got L%d-L%d", res1.StartLine, res1.EndLine)
+		}
+	})
+
+	t.Run("whole file suppresses ranges", func(t *testing.T) {
+		text := "Check all @file:bar.go and also slice @file:bar.go#L3-L4"
+		resources, err := r.ResolveReferences(context.Background(), text, nil)
+		if err != nil {
+			t.Fatalf("ResolveReferences failed: %v", err)
+		}
+		// The range reference L3-L4 should be optimized out because the whole file is also referenced.
+		if len(resources) != 1 {
+			t.Errorf("expected 1 resource (whole file suppresses range), got %d", len(resources))
+		}
+		res, ok := resources[0].(*ResolvedFile)
+		if !ok {
+			t.Fatalf("expected resource to be *ResolvedFile")
+		}
+		if res.StartLine != 1 || res.EndLine != 5 { // 5 is actualEndLine for whole file bar.go
+			t.Errorf("expected whole file range, got L%d-L%d", res.StartLine, res.EndLine)
+		}
+	})
 }

@@ -306,7 +306,7 @@ func (tm *TaskManager) ReadLog(taskID string, isStderr bool, limitLines int) (st
 		return "", nil
 	}
 
-	const maxTotalChars = 16000
+	const maxTotalChars = 32000
 
 	if limitLines <= 0 {
 		data, err := os.ReadFile(path)

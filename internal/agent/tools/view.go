@@ -59,6 +59,16 @@ func (h *ToolHandlers) View(ctx context.Context, in ViewArgs) (ViewOutput, error
 	if err != nil {
 		return ViewOutput{}, err
 	}
+
+	// Format line bounds as a path hash anchor (e.g. #L10-L20) for LoadResource
+	if in.StartLine > 0 {
+		if in.EndLine > 0 {
+			absPath = fmt.Sprintf("%s#L%d-L%d", absPath, in.StartLine, in.EndLine)
+		} else {
+			absPath = fmt.Sprintf("%s#L%d", absPath, in.StartLine)
+		}
+	}
+
 	res, err := r.LoadResource(ctx, absPath, resolver.TypeFile)
 	if err != nil {
 		return ViewOutput{}, err

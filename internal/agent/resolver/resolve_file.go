@@ -14,7 +14,7 @@ import (
 )
 
 const (
-	MaxTotalChars = 16000
+	MaxTotalChars = 32000
 	MaxLineChars  = 500
 )
 
@@ -162,7 +162,9 @@ func (r *Resolver) LoadResource(ctx context.Context, value string, resType Resou
 // loadResourceFile loads content and metadata for a known, verified absolute path.
 // This reads file content, retrieves LSP diagnostics, records the file read in the tracker,
 // and handles binary file caching.
-func (r *Resolver) loadResourceFile(ctx context.Context, absPath string) (ResolvedResource, error) {
+func (r *Resolver) loadResourceFile(ctx context.Context, value string) (ResolvedResource, error) {
+	absPath, startLine, endLine := parseLineRange(value)
+
 	// Verify file exists before attempting to read
 	if _, err := os.Stat(absPath); os.IsNotExist(err) {
 		return nil, fmt.Errorf("file not found: %s", absPath)
@@ -179,7 +181,7 @@ func (r *Resolver) loadResourceFile(ctx context.Context, absPath string) (Resolv
 
 	if !isBinary {
 		var err error
-		content, totalLines, actualEndLine, truncated, err = r.readTextFile(absPath, 1, 0)
+		content, totalLines, actualEndLine, truncated, err = r.readTextFile(absPath, startLine, endLine)
 		if err != nil {
 			return nil, fmt.Errorf("failed to read file: %w", err)
 		}
@@ -229,7 +231,7 @@ func (r *Resolver) loadResourceFile(ctx context.Context, absPath string) (Resolv
 	return &ResolvedFile{
 		FilePath:    absPath,
 		Content:     content,
-		StartLine:   1,
+		StartLine:   startLine,
 		EndLine:     actualEndLine,
 		TotalLines:  totalLines,
 		Truncated:   truncated,
@@ -249,19 +251,43 @@ func (r *Resolver) ResolveReferences(ctx context.Context, text string, trackedRe
 
 	// 2. Resolve paths for both tracked and manual refs to ensure all paths are absolute (cheap)
 	allRefs := append(trackedRefs, manualRefs...)
-	for i, ref := range allRefs {
-		fullPath, err := r.ResolvePath(ctx, ref.Value, ref.Type)
+	for i := range allRefs {
+		if allRefs[i].Type == TypeFile {
+			cleanVal, start, end := parseLineRange(allRefs[i].Value)
+			allRefs[i].Value = cleanVal
+			if allRefs[i].StartLine == 0 {
+				allRefs[i].StartLine = start
+			}
+			if allRefs[i].EndLine == 0 {
+				allRefs[i].EndLine = end
+			}
+		}
+
+		fullPath, err := r.ResolvePath(ctx, allRefs[i].Value, allRefs[i].Type)
 		if err != nil {
 			continue // skip unresolvable
 		}
 		allRefs[i].Value = fullPath
 	}
 
-	// 3. Dedup ALL refs by (Type + full path) — BEFORE content loading
+	// Track which files are loaded as a whole file to optimize token usage
+	wholeFiles := make(map[string]bool)
+	for _, ref := range allRefs {
+		if ref.Type == TypeFile && ref.StartLine == 1 && ref.EndLine == 0 {
+			wholeFiles[ref.Value] = true
+		}
+	}
+
+	// 3. Dedup ALL refs by Type + path + line range — BEFORE content loading,
+	// applying token optimization to drop specific ranges if the whole file is loaded.
 	seen := make(map[string]bool)
 	var unique []Reference
 	for _, ref := range allRefs {
-		key := string(ref.Type) + ":" + ref.Value
+		if ref.Type == TypeFile && wholeFiles[ref.Value] && !(ref.StartLine == 1 && ref.EndLine == 0) {
+			continue
+		}
+
+		key := fmt.Sprintf("%s:%s:%d:%d", ref.Type, ref.Value, ref.StartLine, ref.EndLine)
 		if !seen[key] {
 			seen[key] = true
 			unique = append(unique, ref)
@@ -271,7 +297,15 @@ func (r *Resolver) ResolveReferences(ctx context.Context, text string, trackedRe
 	// 4. Load content ONLY for the unique set
 	var resources []ResolvedResource
 	for _, ref := range unique {
-		res, err := r.LoadResource(ctx, ref.Value, ref.Type)
+		val := ref.Value
+		if ref.Type == TypeFile {
+			if ref.EndLine > 0 {
+				val = fmt.Sprintf("%s#L%d-L%d", val, ref.StartLine, ref.EndLine)
+			} else {
+				val = fmt.Sprintf("%s#L%d", val, ref.StartLine)
+			}
+		}
+		res, err := r.LoadResource(ctx, val, ref.Type)
 		if err != nil {
 			continue
 		}

@@ -17,7 +17,7 @@ func TestExtractReferences(t *testing.T) {
 			text:    "Refactor @file:internal/app/app.go please",
 			tracked: nil,
 			wantRefs: []Reference{
-				{Type: TypeFile, Value: "internal/app/app.go", InsertText: "@file:internal/app/app.go", FromTracker: false},
+				{Type: TypeFile, Value: "internal/app/app.go", StartLine: 1, EndLine: 0, InsertText: "@file:internal/app/app.go", FromTracker: false},
 			},
 		},
 		{
@@ -25,7 +25,7 @@ func TestExtractReferences(t *testing.T) {
 			text:    "Check @sym:Resolver.ResolveFile signature",
 			tracked: nil,
 			wantRefs: []Reference{
-				{Type: TypeSymbol, Value: "Resolver.ResolveFile", InsertText: "@sym:Resolver.ResolveFile", FromTracker: false},
+				{Type: TypeSymbol, Value: "Resolver.ResolveFile", StartLine: 0, EndLine: 0, InsertText: "@sym:Resolver.ResolveFile", FromTracker: false},
 			},
 		},
 		{
@@ -33,7 +33,7 @@ func TestExtractReferences(t *testing.T) {
 			text:    "Use @skill:golang conventions here",
 			tracked: nil,
 			wantRefs: []Reference{
-				{Type: TypeSkill, Value: "golang", InsertText: "@skill:golang", FromTracker: false},
+				{Type: TypeSkill, Value: "golang", StartLine: 0, EndLine: 0, InsertText: "@skill:golang", FromTracker: false},
 			},
 		},
 		{
@@ -41,8 +41,8 @@ func TestExtractReferences(t *testing.T) {
 			text:    "Refactor @file:internal/app/app.go and @sym:NewResolver",
 			tracked: nil,
 			wantRefs: []Reference{
-				{Type: TypeFile, Value: "internal/app/app.go", InsertText: "@file:internal/app/app.go", FromTracker: false},
-				{Type: TypeSymbol, Value: "NewResolver", InsertText: "@sym:NewResolver", FromTracker: false},
+				{Type: TypeFile, Value: "internal/app/app.go", StartLine: 1, EndLine: 0, InsertText: "@file:internal/app/app.go", FromTracker: false},
+				{Type: TypeSymbol, Value: "NewResolver", StartLine: 0, EndLine: 0, InsertText: "@sym:NewResolver", FromTracker: false},
 			},
 		},
 		{
@@ -50,9 +50,9 @@ func TestExtractReferences(t *testing.T) {
 			text:    "Check @file:main.go @sym:Main and @skill:go",
 			tracked: nil,
 			wantRefs: []Reference{
-				{Type: TypeFile, Value: "main.go", InsertText: "@file:main.go", FromTracker: false},
-				{Type: TypeSymbol, Value: "Main", InsertText: "@sym:Main", FromTracker: false},
-				{Type: TypeSkill, Value: "go", InsertText: "@skill:go", FromTracker: false},
+				{Type: TypeFile, Value: "main.go", StartLine: 1, EndLine: 0, InsertText: "@file:main.go", FromTracker: false},
+				{Type: TypeSymbol, Value: "Main", StartLine: 0, EndLine: 0, InsertText: "@sym:Main", FromTracker: false},
+				{Type: TypeSkill, Value: "go", StartLine: 0, EndLine: 0, InsertText: "@skill:go", FromTracker: false},
 			},
 		},
 		{
@@ -71,7 +71,7 @@ func TestExtractReferences(t *testing.T) {
 			name: "skip already tracked references",
 			text: "Refactor @file:internal/app/app.go",
 			tracked: []Reference{
-				{Type: TypeFile, Value: "internal/app/app.go", InsertText: "@file:internal/app/app.go", FromTracker: true},
+				{Type: TypeFile, Value: "internal/app/app.go", StartLine: 1, EndLine: 0, InsertText: "@file:internal/app/app.go", FromTracker: true},
 			},
 			wantRefs: nil,
 		},
@@ -79,10 +79,10 @@ func TestExtractReferences(t *testing.T) {
 			name: "extract new refs not in tracked set",
 			text: "Check @file:internal/app/app.go and @file:internal/agent/agent.go",
 			tracked: []Reference{
-				{Type: TypeFile, Value: "internal/app/app.go", InsertText: "@file:internal/app/app.go", FromTracker: true},
+				{Type: TypeFile, Value: "internal/app/app.go", StartLine: 1, EndLine: 0, InsertText: "@file:internal/app/app.go", FromTracker: true},
 			},
 			wantRefs: []Reference{
-				{Type: TypeFile, Value: "internal/agent/agent.go", InsertText: "@file:internal/agent/agent.go", FromTracker: false},
+				{Type: TypeFile, Value: "internal/agent/agent.go", StartLine: 1, EndLine: 0, InsertText: "@file:internal/agent/agent.go", FromTracker: false},
 			},
 		},
 		{
@@ -90,7 +90,7 @@ func TestExtractReferences(t *testing.T) {
 			text:    "Check @file: and @file:valid.go",
 			tracked: nil,
 			wantRefs: []Reference{
-				{Type: TypeFile, Value: "valid.go", InsertText: "@file:valid.go", FromTracker: false},
+				{Type: TypeFile, Value: "valid.go", StartLine: 1, EndLine: 0, InsertText: "@file:valid.go", FromTracker: false},
 			},
 		},
 		{
@@ -98,7 +98,7 @@ func TestExtractReferences(t *testing.T) {
 			text:    "do something @file:main.go",
 			tracked: nil,
 			wantRefs: []Reference{
-				{Type: TypeFile, Value: "main.go", InsertText: "@file:main.go", FromTracker: false},
+				{Type: TypeFile, Value: "main.go", StartLine: 1, EndLine: 0, InsertText: "@file:main.go", FromTracker: false},
 			},
 		},
 		{
@@ -106,7 +106,7 @@ func TestExtractReferences(t *testing.T) {
 			text:    "@file:main.go refactor this",
 			tracked: nil,
 			wantRefs: []Reference{
-				{Type: TypeFile, Value: "main.go", InsertText: "@file:main.go", FromTracker: false},
+				{Type: TypeFile, Value: "main.go", StartLine: 1, EndLine: 0, InsertText: "@file:main.go", FromTracker: false},
 			},
 		},
 		{
@@ -114,8 +114,8 @@ func TestExtractReferences(t *testing.T) {
 			text:    "Compare @file:a.go with @file:b.go",
 			tracked: nil,
 			wantRefs: []Reference{
-				{Type: TypeFile, Value: "a.go", InsertText: "@file:a.go", FromTracker: false},
-				{Type: TypeFile, Value: "b.go", InsertText: "@file:b.go", FromTracker: false},
+				{Type: TypeFile, Value: "a.go", StartLine: 1, EndLine: 0, InsertText: "@file:a.go", FromTracker: false},
+				{Type: TypeFile, Value: "b.go", StartLine: 1, EndLine: 0, InsertText: "@file:b.go", FromTracker: false},
 			},
 		},
 		{
@@ -123,7 +123,15 @@ func TestExtractReferences(t *testing.T) {
 			text:    "Open @file:internal/agent/resolver/reference_test.go",
 			tracked: nil,
 			wantRefs: []Reference{
-				{Type: TypeFile, Value: "internal/agent/resolver/reference_test.go", InsertText: "@file:internal/agent/resolver/reference_test.go", FromTracker: false},
+				{Type: TypeFile, Value: "internal/agent/resolver/reference_test.go", StartLine: 1, EndLine: 0, InsertText: "@file:internal/agent/resolver/reference_test.go", FromTracker: false},
+			},
+		},
+		{
+			name:    "reference with line range anchor",
+			text:    "Look at @file:main.go#L10-L20 please",
+			tracked: nil,
+			wantRefs: []Reference{
+				{Type: TypeFile, Value: "main.go", StartLine: 10, EndLine: 20, InsertText: "@file:main.go#L10-L20", FromTracker: false},
 			},
 		},
 	}

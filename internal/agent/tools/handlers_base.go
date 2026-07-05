@@ -13,7 +13,7 @@ import (
 )
 
 const (
-	MaxTotalChars = 16000
+	MaxTotalChars = 32000
 	MaxLineChars  = 500
 )
 
