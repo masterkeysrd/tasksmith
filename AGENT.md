@@ -63,9 +63,13 @@ TaskSmith is a Go-based autonomous agent orchestrator and TUI application. This 
 6. **Error Handling**: Use structured error wrapping with `%w`.
 7. **Global State**: Use the `kite` library for global, thread-safe state management outside the VDOM.
 8. **Tool Specs**: Builtin agent tools are defined as markdown files in `internal/agent/tools/`. The front-matter defines the schemas (`parameters` and `outputSchema`), while the description must be in the markdown body. Run `go run ./tools/warp-gen` to update `types.go` after changes.
-9. **No Reflection**: Avoid using `reflect` to handle `warp` spec objects. Bind directly to the structs defined by the local `warp` library.
+9. **No Reflection**: Avoid using `reflect` to handle `warp` spec objects. Bind directly to the structs defined by the `warp` library.
 10. **File Tracking & Reverting**: All filesystem modifications (`write`, `edit`, `multi_edit`, `remove`) must be recorded using the session-scoped `FileTracker.Record()`. Reverting a file must use a three-way merge via `FileTracker.RevertToBaseline()` to preserve non-conflicting manual user modifications, only blocking (returning `"conflict"`) on overlapping line-level changes.
 11. **Knowledge Validation**: To prevent blind or stale edits/deletions, the agent tools (`edit`, `multi_edit`, `remove`, and `write` on existing files) must check `FileTracker.IsKnown()` to ensure the file has not been modified externally since it was last viewed or written. The `view` tool must call `FileTracker.RecordRead()` to register the file's current hash in the session resources.
+
+## Investigation
+
+- **Go Documentation**: Use `go doc` instead of jumping to read whole package code.
 
 ## 🖥 TUI Development
 
@@ -94,7 +98,7 @@ TaskSmith is a Go-based autonomous agent orchestrator and TUI application. This 
 - **Dependencies**:
       - `github.com/masterkeysrd/warp`: Workspace and resource management.
       - `github.com/masterkeysrd/kite`: TUI framework and reactive hooks.
-      - `github.com/masterkeysrd/loom`: Local library (replace directive).
+      - `github.com/masterkeysrd/loom`: AI Agentic Orchestration Workflow Package
       - `github.com/go-git/go-git/v5`: Git operations.
       - `github.com/jmoiron/sqlx`: Database access.
       - `modernc.org/sqlite`: SQLite database.

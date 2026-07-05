@@ -12,9 +12,13 @@ spec:
 
 This skill outlines coding guidelines, conventions, testing standards, and architectural patterns to keep the Go codebase clean, maintainable, and decoupled.
 
-## 1. Naming Conventions & Code Style
+## 1. Code Style, Performance, & Utility Best Practices
 - **Names:** Use `CamelCase` for Go symbols (structs, interfaces, methods, functions, variables). Capitalize the first letter for exported symbols, and keep it lowercase for package-private symbols.
 - **Acronyms:** Keep acronyms in consistent casing (e.g. `JSON`, `API`, `UUID`, `SQL`, `DB` rather than `Json`, `Api`, `Uuid`, `Sql`, `Db`).
+- **String Building:** Avoid using `sb.WriteString(fmt.Sprintf(...))` or `sb.Write([]byte(fmt.Sprintf(...)))` as it causes unnecessary heap allocations. Use `fmt.Fprintf(&sb, ...)` to format and write to the builder in a single pass.
+- **Index-Only Loops:** When looping through arrays, slices, or maps and only the index is needed, prefer `for i := range items` instead of `for i := 0; i < len(items); i++`.
+- **Built-in Utilities:** Use Go's built-in `min` and `max` functions (introduced in Go 1.21) for comparisons instead of writing custom helper functions.
+- **Documentation Lookup:** Prefer running `go doc <package> [symbol]` to retrieve package/symbol information and specifications quickly.
 - **Formatting:** Always ensure Go source code is formatted using standard `go fmt` rules before compiling or testing.
 
 ## 2. Interface Design & Circular Import Avoidance
