@@ -32,7 +32,9 @@ func TestParseCoordinates(t *testing.T) {
 
 func TestResolveSymbolAutocomplete(t *testing.T) {
 	tmpDir := "/Users/masterkeysrd/Projects/tasksmith"
-	r := New(nil, tmpDir, nil, nil)
+	r := New(Config{
+		Cwd: tmpDir,
+	})
 
 	t.Run("resolve autocomplete ref to absolute coordinates", func(t *testing.T) {
 		coord := "internal/app/app.go:42:5:function:Main"

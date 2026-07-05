@@ -8,6 +8,8 @@ import (
 	"sync"
 	"time"
 
+	"path/filepath"
+
 	"github.com/google/uuid"
 	"github.com/masterkeysrd/loom/graph"
 	"github.com/masterkeysrd/loom/llm"
@@ -28,7 +30,6 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/session/filetrack"
 	"github.com/masterkeysrd/tasksmith/internal/workspace"
 	"github.com/masterkeysrd/warp"
-	"path/filepath"
 )
 
 // SessionStatus represents the runtime execution status of a session thread.
@@ -123,7 +124,11 @@ func NewManager(cfg ManagerConfig) *Manager {
 	mcpMgr := mcp.NewManager(mcps)
 
 	if cfg.Resolver == nil && cfg.Workspace != nil {
-		cfg.Resolver = resolver.New(cfg.LspManager, cfg.Workspace.CWD(), nil, nil)
+		cfg.Resolver = resolver.New(resolver.Config{
+			Lsp:       cfg.LspManager,
+			Cwd:       cfg.Workspace.CWD(),
+			Workspace: cfg.Workspace,
+		})
 	}
 
 	m := &Manager{
@@ -614,11 +619,9 @@ func (m *Manager) SubmitAuthorizationDecision(ctx context.Context, sessionID str
 	})
 
 	// Start running Loom agent workflow asynchronously in background
-	m.wg.Add(1)
-	go func() {
-		defer m.wg.Done()
+	m.wg.Go(func() {
 		m.runAgentLoop(runCtx, sessionID, sess, inputCmd, cancel)
-	}()
+	})
 
 	return nil
 }
@@ -744,10 +747,6 @@ func (m *Manager) runAgentLoop(runCtx context.Context, sessionID string, sess *A
 		}
 	}
 
-	// Instantiate Model
-	if modelName == "" {
-		modelName = "qwen3.6:35b-a3b-coding-nvfp4" // default fallback
-	}
 	if _, found := provider.GetProfile(modelName); !found {
 		// If the model name is prefixed (e.g. "genai/gemini-3-flash-preview"), try stripping the prefix.
 		cleanedName := modelName
@@ -756,8 +755,8 @@ func (m *Manager) runAgentLoop(runCtx context.Context, sessionID string, sess *A
 		}
 		// If the model has a tag (e.g. "qwen3.6:35b-a3b-coding-nvfp4"), try matching by base name.
 		baseName := cleanedName
-		if idx := strings.Index(cleanedName, ":"); idx != -1 {
-			baseName = cleanedName[:idx]
+		if before, _, ok := strings.Cut(cleanedName, ":"); ok {
+			baseName = before
 		}
 
 		if _, foundCleaned := provider.GetProfile(cleanedName); foundCleaned {

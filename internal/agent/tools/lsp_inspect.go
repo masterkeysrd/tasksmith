@@ -33,7 +33,12 @@ func (h *ToolHandlers) LspInspect(ctx context.Context, in LspInspectArgs) (LspIn
 	}
 
 	// Call resolver's ResolveSymbol (via ResolvePath)
-	r := resolver.New(h.LspManager, h.CWD, h.FileTracker, h.Storage)
+	r := resolver.New(resolver.Config{
+		Lsp:         h.LspManager,
+		Cwd:         h.CWD,
+		FileTracker: h.FileTracker,
+		Storage:     h.Storage,
+	})
 	coords, err := r.ResolvePath(ctx, in.Query, resolver.TypeSymbol)
 	if err != nil {
 		if strings.Contains(err.Error(), "no symbols found") {

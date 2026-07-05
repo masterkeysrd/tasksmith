@@ -26,7 +26,7 @@ func TestResolvePath(t *testing.T) {
 		t.Fatalf("failed to write test file: %v", err)
 	}
 
-	r := New(nil, tmpDir, nil, nil)
+	r := New(Config{Cwd: tmpDir})
 
 	t.Run("resolve absolute path", func(t *testing.T) {
 		path, err := r.ResolvePath(context.Background(), testFilePath, TypeFile)
@@ -95,7 +95,7 @@ func TestLoadResource(t *testing.T) {
 		t.Fatalf("failed to write test file: %v", err)
 	}
 
-	r := New(nil, tmpDir, nil, nil)
+	r := New(Config{Cwd: tmpDir})
 
 	t.Run("load absolute path", func(t *testing.T) {
 		res, err := r.LoadResource(context.Background(), testFilePath, TypeFile)
@@ -143,7 +143,7 @@ func TestResolveFile(t *testing.T) {
 		t.Fatalf("failed to write test file: %v", err)
 	}
 
-	r := New(nil, tmpDir, nil, nil)
+	r := New(Config{Cwd: tmpDir})
 
 	t.Run("resolve absolute path", func(t *testing.T) {
 		res, err := r.ResolveFile(context.Background(), testFilePath)
@@ -228,7 +228,7 @@ func TestResolveReferences(t *testing.T) {
 		t.Fatalf("failed to write test file: %v", err)
 	}
 
-	r := New(nil, tmpDir, nil, nil)
+	r := New(Config{Cwd: tmpDir})
 
 	t.Run("extract and resolve manual reference", func(t *testing.T) {
 		text := "Check @file:bar.go"

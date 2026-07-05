@@ -7,11 +7,28 @@ import (
 
 	"github.com/masterkeysrd/tasksmith/internal/core/lsp"
 	"github.com/masterkeysrd/tasksmith/internal/session/filetrack"
+	"github.com/masterkeysrd/warp"
 )
 
 // FileStorage defines the interface required by the resolver to save binary snapshots.
 type FileStorage interface {
 	Save(ctx context.Context, name string, r io.Reader) (string, error)
+}
+
+// Workspace defines the workspace interface required by the resolver to resolve
+// agents and list resources for skill and context resolution.
+type Workspace interface {
+	ResolveAgent(ctx context.Context, ref string) (*warp.ResolvedAgent, error)
+	Resources() []warp.Resource
+}
+
+// Config holds the dependencies and configuration for the Resolver.
+type Config struct {
+	Lsp         *lsp.Manager
+	Cwd         string
+	FileTracker filetrack.FileTracker
+	Storage     FileStorage
+	Workspace   Workspace
 }
 
 // ResourceType defines the category of the resolved context reference.
@@ -90,15 +107,17 @@ type Resolver struct {
 	Cwd         string
 	FileTracker filetrack.FileTracker
 	Storage     FileStorage
+	Workspace   Workspace
 }
 
-// New creates a new Resolver instance with required dependencies.
-func New(l *lsp.Manager, cwd string, ft filetrack.FileTracker, storage FileStorage) *Resolver {
+// New creates a new Resolver instance with the provided configuration.
+func New(cfg Config) *Resolver {
 	return &Resolver{
-		Lsp:         l,
-		Cwd:         cwd,
-		FileTracker: ft,
-		Storage:     storage,
+		Lsp:         cfg.Lsp,
+		Cwd:         cfg.Cwd,
+		FileTracker: cfg.FileTracker,
+		Storage:     cfg.Storage,
+		Workspace:   cfg.Workspace,
 	}
 }
 
