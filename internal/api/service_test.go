@@ -23,6 +23,7 @@ type mockWorkspace struct {
 	toolsPresets     []*warp.Tool
 	mcps             []*warp.MCP
 	cwd              string
+	initOpts         workspace.InitializationOptions
 }
 
 func (m *mockWorkspace) Projects() []*warp.Project {
@@ -50,6 +51,7 @@ func (m *mockWorkspace) MCPs() []*warp.MCP {
 }
 
 func (m *mockWorkspace) Initialize(ctx context.Context, opts workspace.InitializationOptions) error {
+	m.initOpts = opts
 	return nil
 }
 
@@ -103,6 +105,27 @@ func TestService(t *testing.T) {
 
 	svc := NewService(mockWS, nil, nil, nil, nil)
 	ctx := context.Background()
+
+	t.Run("InitializeWorkspace", func(t *testing.T) {
+		req := InitializeWorkspaceRequest{
+			ProjectName:      "test-p",
+			SelectedProvider: "openai",
+			TrustOnly:        true,
+		}
+		_, err := svc.InitializeWorkspace(ctx, req)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if mockWS.initOpts.ProjectName != "test-p" {
+			t.Errorf("expected ProjectName 'test-p', got %s", mockWS.initOpts.ProjectName)
+		}
+		if mockWS.initOpts.SelectedProvider != "openai" {
+			t.Errorf("expected SelectedProvider 'openai', got %s", mockWS.initOpts.SelectedProvider)
+		}
+		if !mockWS.initOpts.TrustOnly {
+			t.Error("expected TrustOnly to be true")
+		}
+	})
 
 	t.Run("ListProjects", func(t *testing.T) {
 		resp, err := svc.ListProjects(ctx, ListProjectsRequest{})

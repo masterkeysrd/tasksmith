@@ -127,7 +127,10 @@ var Router = kitex.SimpleFC("Router", func() kitex.Node {
 		return setup.View(setup.ViewProps{
 			OnComplete: func() {
 				windClient.InvalidateQueries(api.GetWorkspaceConfigRequest{})
-				setActiveView(string(viewMain))
+				windClient.InvalidateQueries(api.ListProjectsRequest{})
+				windClient.InvalidateQueries(api.ListAgentsRequest{})
+				windClient.InvalidateQueries(api.ListProvidersRequest{})
+				setActiveView(string(viewWelcome))
 			},
 			OnSkip: func() {
 				setActiveView(string(viewWelcome))

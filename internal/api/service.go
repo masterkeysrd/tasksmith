@@ -114,6 +114,7 @@ func (s *Service) InitializeWorkspace(ctx context.Context, req InitializeWorkspa
 		DefaultModel:     req.DefaultModel,
 		Theme:            req.Theme,
 		AuthorizedTools:  req.AuthorizedTools,
+		TrustOnly:        req.TrustOnly,
 	}
 	if err := s.ws.Initialize(ctx, opts); err != nil {
 		return nil, err
