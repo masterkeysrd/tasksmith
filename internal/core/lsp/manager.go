@@ -203,7 +203,7 @@ func (m *Manager) NotifyFileChanged(ctx context.Context, path string, content st
 	}
 	absPath = filepath.Clean(absPath)
 
-	langID := getLanguageID(absPath)
+	langID := GetLanguageID(absPath)
 	if langID == "" {
 		return
 	}
@@ -275,7 +275,7 @@ func (m *Manager) NotifyFileOpened(ctx context.Context, path string) {
 	}
 	absPath = filepath.Clean(absPath)
 
-	langID := getLanguageID(absPath)
+	langID := GetLanguageID(absPath)
 	if langID == "" {
 		return
 	}

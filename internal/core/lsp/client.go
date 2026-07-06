@@ -104,8 +104,8 @@ func uriToPath(uri string) string {
 	return uri
 }
 
-// getLanguageID maps file extensions to LSP LanguageIDs.
-func getLanguageID(path string) string {
+// GetLanguageID maps file extensions to LSP LanguageIDs.
+func GetLanguageID(path string) string {
 	ext := strings.ToLower(filepath.Ext(path))
 	switch ext {
 	case ".go":
@@ -127,6 +127,9 @@ func getLanguageID(path string) string {
 	case ".cpp", ".hpp", ".cc", ".cxx":
 		return "cpp"
 	default:
+		if len(ext) > 1 {
+			return ext[1:]
+		}
 		return ""
 	}
 }
@@ -225,7 +228,7 @@ func (c *Client) EnsureOpened(ctx context.Context, path string) error {
 		return fmt.Errorf("failed to read file: %w", err)
 	}
 
-	langID := getLanguageID(path)
+	langID := GetLanguageID(path)
 	if langID == "" {
 		return fmt.Errorf("unsupported file type: %s", path)
 	}

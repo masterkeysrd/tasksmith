@@ -14,6 +14,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/api"
 	"github.com/masterkeysrd/tasksmith/internal/app/flags"
 	coredb "github.com/masterkeysrd/tasksmith/internal/core/db"
+	corefs "github.com/masterkeysrd/tasksmith/internal/core/fs"
 	"github.com/masterkeysrd/tasksmith/internal/core/fsutil"
 	"github.com/masterkeysrd/tasksmith/internal/core/fuzzy"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
@@ -137,6 +138,36 @@ func (app *Application) Run(ctx context.Context) error {
 	app.AddCloser("workspaceTracker", func(ctx context.Context) error {
 		return wsTracker.Stop()
 	})
+
+	// Subscribe to file changes and feed them to the LSP manager
+	ch, unsubscribe := wsTracker.SubscribeSession("wildcard:lsp")
+	app.AddCloser("lspWorkspaceSubscription", func(ctx context.Context) error {
+		unsubscribe()
+		return nil
+	})
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case event, ok := <-ch:
+				if !ok {
+					return
+				}
+				if event.Kind == filetrack.Created || event.Kind == filetrack.Modified {
+					absPath := filepath.Join(app.opts.CWD, event.Path)
+					if !corefs.IsBinaryMIME(corefs.DetectMIMEType(absPath)) {
+						if lsp.GetLanguageID(absPath) != "" {
+							content, err := os.ReadFile(absPath)
+							if err == nil {
+								app.lspManager.NotifyFileChanged(context.Background(), absPath, string(content))
+							}
+						}
+					}
+				}
+			}
+		}
+	}()
 
 	// Initialize the API service
 	app.api = api.NewService(app.ws, sessionMgr, metricsStore, app.lspManager, wsTracker)
