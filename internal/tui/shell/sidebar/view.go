@@ -79,6 +79,8 @@ var View = kitex.FC("ShellSidebar", func(props Props) kitex.Node {
 			data.ActiveSessionStatus = sessionState.Data.Status
 		}
 		data.Todos = sessionState.Data.Todos
+		data.IsGenerating = sessionState.Data.IsGenerating
+		data.RunningMetrics = sessionState.Data.RunningMetrics
 	}
 	if fileChanges.Data != nil {
 		data.ChangedFiles = fileChanges.Data.Changes

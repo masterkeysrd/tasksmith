@@ -588,6 +588,7 @@ var View = kitex.FCC("StatusLine", func(props Props) kitex.Node {
 	sessionsQuery := queries.UseListSessions()
 	providersQuery := queries.UseListProviders()
 	sessionID := active.UseSessionID()
+	sessionStateQuery := queries.UseGetSessionState(sessionID)
 
 	windClient := wind.UseClient()
 	kitex.UseInterval(func() {
@@ -628,6 +629,11 @@ var View = kitex.FCC("StatusLine", func(props Props) kitex.Node {
 				break
 			}
 		}
+	}
+
+	// Prefer running (streaming) metrics when the session is actively generating.
+	if sessionStateQuery.Data != nil && sessionStateQuery.Data.IsGenerating && sessionStateQuery.Data.RunningMetrics != nil {
+		metrics = sessionStateQuery.Data.RunningMetrics
 	}
 
 	// Resolve human-friendly provider and model labels

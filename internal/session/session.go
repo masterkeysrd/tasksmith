@@ -459,6 +459,17 @@ func (m *Manager) GetSessionState(ctx context.Context, sessionID string) (Sessio
 	return sess.Status, sess.Error, isGenerating, sess.PendingAuthorizations, elapsed
 }
 
+// GetRunningMetrics returns the current streaming token metrics for an active session, if any.
+func (m *Manager) GetRunningMetrics(sessionID string) *message.TokenMetrics {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	sess, ok := m.activeSessions[sessionID]
+	if !ok {
+		return nil
+	}
+	return sess.CurrentStreamMetrics
+}
+
 // ListTasks retrieves all tasks for a session from the task manager.
 func (m *Manager) ListTasks(sessionID string) []*tools.Task {
 	if m.taskMgr == nil {

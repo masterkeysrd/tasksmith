@@ -832,7 +832,7 @@ func (s *Service) GetSessionState(ctx context.Context, req GetSessionStateReques
 		mode = permissions.ModeDefault
 	}
 
-	return &GetSessionStateResponse{
+	resp := &GetSessionStateResponse{
 		Status:                string(status),
 		Error:                 errStr,
 		IsGenerating:          isGen,
@@ -843,7 +843,21 @@ func (s *Service) GetSessionState(ctx context.Context, req GetSessionStateReques
 		PendingLspSuggestions: apiSuggestions,
 		PendingMcpRequests:    apiMcpRequests,
 		PermissionMode:        mode,
-	}, nil
+	}
+
+	// Populate running metrics from the active session's streaming metrics.
+	if resp.IsGenerating {
+		if streamMetrics := s.sm.GetRunningMetrics(req.SessionID); streamMetrics != nil {
+			resp.RunningMetrics = &SessionMetrics{
+				PromptTokens:     streamMetrics.Tokens.Input,
+				CompletionTokens: streamMetrics.Tokens.Output,
+				TotalTokens:      streamMetrics.TotalTokens,
+				EstimatedCostUSD: streamMetrics.TotalCost.AsUSD(),
+			}
+		}
+	}
+
+	return resp, nil
 }
 
 // ResolveMcpRequest resolves a pending MCP authorization or elicitation request.

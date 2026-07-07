@@ -29,6 +29,11 @@ func metricsPanel(data Data) kitex.Node {
 		}
 	}
 
+	// Prefer running (streaming) metrics when the session is actively generating.
+	if data.IsGenerating && data.RunningMetrics != nil {
+		metrics = data.RunningMetrics
+	}
+
 	tokensUsed := 0
 	tokenLimit := 131072 // Default fallback
 	outputLimit := 4096  // Default fallback

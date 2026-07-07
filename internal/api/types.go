@@ -294,6 +294,7 @@ type GetSessionStateResponse struct {
 	PendingLspSuggestions []LspSuggestion                    `json:"pending_lsp_suggestions,omitempty"`
 	PendingMcpRequests    []PendingMcpRequest                `json:"pending_mcp_requests,omitempty"`
 	PermissionMode        permissions.PermissionMode         `json:"permission_mode,omitempty"`
+	RunningMetrics        *SessionMetrics                    `json:"running_metrics,omitempty"`
 }
 
 type SetPermissionModeRequest struct {

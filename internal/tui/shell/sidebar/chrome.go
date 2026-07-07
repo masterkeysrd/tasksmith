@@ -179,7 +179,10 @@ func sidebarFooter(data Data) kitex.Node {
 					}
 				}
 			}
-			if activeSession.LastTurnMetrics != nil {
+			// Prefer running (streaming) metrics when the session is actively generating.
+			if data.IsGenerating && data.RunningMetrics != nil {
+				tokensUsed = data.RunningMetrics.TotalTokens
+			} else if activeSession.LastTurnMetrics != nil {
 				tokensUsed = activeSession.LastTurnMetrics.TotalTokens
 			}
 		}
