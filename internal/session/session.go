@@ -515,8 +515,24 @@ func (m *Manager) sendMessage(ctx context.Context, sessionID string, text string
 
 	// Phase 4: Two-phase resolution with dedup
 	var resources []resolver.ResolvedResource
+	var res *resolver.Resolver
 	if m.resolver != nil {
-		resources, _ = m.resolver.ResolveReferences(ctx, text, refs, agentName)
+		var tracker filetrack.FileTracker
+		if t, err := m.FileTracker(sessionID); err == nil {
+			tracker = t
+		}
+		var storage resolver.FileStorage
+		if m.ws != nil {
+			storage = NewLocalFileStorage(m.ws.CWD(), sessionID)
+		}
+		res = resolver.New(resolver.Config{
+			Lsp:         m.lspManager,
+			Cwd:         m.ws.CWD(),
+			FileTracker: tracker,
+			Storage:     storage,
+			Workspace:   m.ws,
+		})
+		resources, _ = res.ResolveReferences(ctx, text, refs, agentName)
 	}
 
 	m.mu.Lock()
@@ -524,7 +540,7 @@ func (m *Manager) sendMessage(ctx context.Context, sessionID string, text string
 	// Build message with attachments if resources were resolved
 	var msg message.Message
 	if len(resources) > 0 {
-		attachmentsXML := formatter.FormatAttachmentsBlock(resources, m.resolver)
+		attachmentsXML := formatter.FormatAttachmentsBlock(resources, res)
 		var blocks []message.Block
 		blocks = append(blocks, &message.TextBlock{Text: text})
 		if attachmentsXML != "" {

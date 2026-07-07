@@ -3,16 +3,20 @@ package session_test
 import (
 	"bytes"
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/masterkeysrd/loom/message"
 	"github.com/masterkeysrd/tasksmith/internal/agent/model"
 	"github.com/masterkeysrd/tasksmith/internal/agent/permissions"
+	"github.com/masterkeysrd/tasksmith/internal/agent/resolver"
 	"github.com/masterkeysrd/tasksmith/internal/agent/tools"
 	coredb "github.com/masterkeysrd/tasksmith/internal/core/db"
 	"github.com/masterkeysrd/tasksmith/internal/core/preview"
 	"github.com/masterkeysrd/tasksmith/internal/session"
+	"github.com/masterkeysrd/tasksmith/internal/workspace"
 )
 
 func TestSessionManager(t *testing.T) {
@@ -778,5 +782,87 @@ func TestActiveToolStreamInjection(t *testing.T) {
 
 	if !foundTool {
 		t.Errorf("expected temporary running tool message to be injected in message list")
+	}
+}
+
+func TestSendMessageFileTracking(t *testing.T) {
+	tmpCwd := t.TempDir()
+
+	// 1. Open the DB connections using the core database package
+	db, err := coredb.Open(tmpCwd, "tasksmith.db")
+	if err != nil {
+		t.Fatalf("failed to open database: %v", err)
+	}
+	defer db.Close()
+
+	checkpointsDb, err := coredb.Open(tmpCwd, "checkpoints.db")
+	if err != nil {
+		t.Fatalf("failed to open checkpoints database: %v", err)
+	}
+	defer checkpointsDb.Close()
+
+	// 2. Initialize SQLite Store
+	store, err := session.NewSQLiteStore(db, checkpointsDb)
+	if err != nil {
+		t.Fatalf("failed to initialize sqlite store: %v", err)
+	}
+
+	// 3. Create a workspace
+	ws := workspace.New(tmpCwd)
+
+	// 4. Initialize Manager with the workspace
+	manager := session.NewManager(session.ManagerConfig{
+		Store:     store,
+		Workspace: ws,
+	})
+
+	ctx := context.Background()
+
+	// 5. Create session
+	s, err := manager.CreateSession(ctx, "test-file-tracking-session")
+	if err != nil {
+		t.Fatalf("failed to create session: %v", err)
+	}
+
+	// 6. Write a mock file to the workspace
+	filePath := filepath.Join(tmpCwd, "test_file.txt")
+	testContent := "hello world from tasksmith file attachment testing"
+	if err := os.WriteFile(filePath, []byte(testContent), 0644); err != nil {
+		t.Fatalf("failed to write test file: %v", err)
+	}
+
+	// 7. Get FileTracker for the session
+	tracker, err := manager.FileTracker(s.ID)
+	if err != nil {
+		t.Fatalf("failed to get session file tracker: %v", err)
+	}
+
+	// Verify initially the file is NOT known to the tracker
+	known, err := tracker.IsKnown(ctx, "test_file.txt")
+	if err != nil {
+		t.Fatalf("IsKnown failed: %v", err)
+	}
+	if known {
+		t.Error("expected file to be unknown initially")
+	}
+
+	// 8. Send a message that attaches this file
+	err = manager.SendMessage(ctx, s.ID, "Please check the attached file.", []resolver.Reference{
+		{
+			Type:  resolver.TypeFile,
+			Value: "test_file.txt",
+		},
+	})
+	if err != nil {
+		t.Fatalf("failed to send message with attachment: %v", err)
+	}
+
+	// 9. Now, verify the file IS known to the tracker
+	known, err = tracker.IsKnown(ctx, "test_file.txt")
+	if err != nil {
+		t.Fatalf("IsKnown failed after attach: %v", err)
+	}
+	if !known {
+		t.Error("expected file to be known to the tracker after being attached to user message")
 	}
 }
