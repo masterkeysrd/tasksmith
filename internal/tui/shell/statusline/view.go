@@ -607,6 +607,7 @@ var View = kitex.FCC("StatusLine", func(props Props) kitex.Node {
 	lineStyle := style.S().
 		Width(style.Percent(100)).
 		MinHeight(style.Cells(1)).
+		Overflow(style.OverflowHidden).
 		Display(style.DisplayFlex).
 		FlexDirection(style.FlexRow).
 		AlignItems(style.AlignCenter).
@@ -697,7 +698,7 @@ var View = kitex.FCC("StatusLine", func(props Props) kitex.Node {
 		var rightContainer kitex.Node
 		if len(rightNodes) > 0 {
 			rightContainer = kitex.Box(kitex.BoxProps{
-				Style: style.S().Display(style.DisplayFlex).FlexDirection(style.FlexRow).AlignItems(style.AlignCenter).Gap(1),
+				Style: style.S().Display(style.DisplayFlex).FlexDirection(style.FlexRow).AlignItems(style.AlignCenter).Gap(0),
 			}, rightNodes...)
 		}
 		children = append(children, rightContainer)

@@ -34,23 +34,25 @@ var View = kitex.FC("TitleBar", func(props Props) kitex.Node {
 	// ── Styles ────────────────────────────────────────────────────────────
 	barStyle := style.S().
 		Width(style.Percent(100)).
-		Height(style.Cells(1)).
+		Height(style.Cells(2)).
 		Display(style.DisplayFlex).
 		AlignItems(style.AlignCenter).
 		JustifyContent(style.JustifyBetween).
 		Background(t.Color.Surface.BaseHover).
 		Foreground(t.Color.Text.Tertiary).
+		Overflow(style.OverflowHidden).
+		PaddingVertical(0).
 		PaddingHorizontal(2)
 
 	leftStyle := style.S().
 		Display(style.DisplayFlex).
 		AlignItems(style.AlignCenter).
-		Gap(4)
+		Gap(2)
 
 	rightStyle := style.S().
 		Display(style.DisplayFlex).
 		AlignItems(style.AlignCenter).
-		Gap(3)
+		Gap(2)
 
 	brandStyle := style.S().
 		Display(style.DisplayFlex).
