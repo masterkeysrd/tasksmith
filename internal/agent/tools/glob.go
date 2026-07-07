@@ -17,8 +17,24 @@ const (
 	MaxGlobMatches = 200
 )
 
+// Validate compiles the glob pattern to verify it is correct.
+func (in GlobArgs) Validate() error {
+	pattern := strings.TrimPrefix(in.Pattern, "./")
+	if !strings.Contains(pattern, "/") {
+		pattern = "**/" + pattern
+	}
+	_, err := corefs.Compile(pattern)
+	if err != nil {
+		return fmt.Errorf("invalid pattern %q: %w", in.Pattern, err)
+	}
+	return nil
+}
+
 // Glob finds files matching a glob pattern using gitignore and predefined ignore rules.
 func (h *ToolHandlers) Glob(ctx context.Context, in GlobArgs) (GlobOutput, error) {
+	if err := in.Validate(); err != nil {
+		return GlobOutput{}, err
+	}
 	baseDir := h.CWD
 	if baseDir == "" {
 		baseDir = "."

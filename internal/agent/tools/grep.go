@@ -19,9 +19,27 @@ const (
 	MaxGrepMatches = 1000
 )
 
+// Validate compiles the regex pattern and include pattern to verify they are correct.
+func (in GrepArgs) Validate() error {
+	if !in.Literal {
+		if _, err := regexp.Compile(in.Pattern); err != nil {
+			return fmt.Errorf("invalid regex pattern: %w", err)
+		}
+	}
+	if in.Include != "" {
+		if _, err := corefs.Compile(in.Include); err != nil {
+			return fmt.Errorf("invalid include pattern: %w", err)
+		}
+	}
+	return nil
+}
+
 // Grep searches for a regex pattern in files using ripgrep if available, falling back
 // to a recursive directory scanner that respects ignore rules.
 func (h *ToolHandlers) Grep(ctx context.Context, in GrepArgs) (GrepOutput, error) {
+	if err := in.Validate(); err != nil {
+		return GrepOutput{}, err
+	}
 	baseDir := h.CWD
 	if baseDir == "" {
 		baseDir = "."

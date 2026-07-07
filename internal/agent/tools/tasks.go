@@ -14,8 +14,39 @@ const (
 	defaultLogLimitLines      = 100
 )
 
+// Validate checks the TasksArgs based on the action specified.
+func (in TasksArgs) Validate() error {
+	switch in.Action {
+	case "list":
+		return nil
+	case "send_input":
+		if in.TaskId == "" {
+			return fmt.Errorf("taskId is required for send_input action")
+		}
+		if in.Input == "" {
+			return fmt.Errorf("input is required for send_input action")
+		}
+		return nil
+	case "status":
+		if in.TaskId == "" {
+			return fmt.Errorf("taskId is required for status action")
+		}
+		return nil
+	case "kill":
+		if in.TaskId == "" {
+			return fmt.Errorf("taskId is required for kill action")
+		}
+		return nil
+	default:
+		return fmt.Errorf("unsupported action %q: must be one of list, send_input, status, kill", in.Action)
+	}
+}
+
 // Tasks manages background tasks (listing, checking status/logs, terminating).
 func (h *ToolHandlers) Tasks(ctx context.Context, in TasksArgs) (TasksOutput, error) {
+	if err := in.Validate(); err != nil {
+		return TasksOutput{}, err
+	}
 	if h.TaskManager == nil {
 		return TasksOutput{Message: "Task manager is not configured."}, nil
 	}

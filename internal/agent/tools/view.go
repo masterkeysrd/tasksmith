@@ -34,8 +34,25 @@ func cleanPath(path string) string {
 	return path
 }
 
+// Validate checks that the start and end line ranges are mathematically correct.
+func (in ViewArgs) Validate() error {
+	if in.StartLine < 0 {
+		return fmt.Errorf("start_line must be greater than or equal to 0")
+	}
+	if in.EndLine < 0 {
+		return fmt.Errorf("end_line must be greater than or equal to 0")
+	}
+	if in.EndLine > 0 && in.StartLine > in.EndLine {
+		return fmt.Errorf("start_line (%d) cannot be greater than end_line (%d)", in.StartLine, in.EndLine)
+	}
+	return nil
+}
+
 // View views the contents of a file by delegating to the resolver and formatter services.
 func (h *ToolHandlers) View(ctx context.Context, in ViewArgs) (ViewOutput, error) {
+	if err := in.Validate(); err != nil {
+		return ViewOutput{}, err
+	}
 	path := cleanPath(in.Path)
 
 	// Format line bounds as a path hash anchor (e.g. #L10-L20) for the resolver

@@ -3,6 +3,7 @@ package graph_test
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 
@@ -264,7 +265,14 @@ func TestAgentGraph_PermissionsInterception(t *testing.T) {
 						&message.ToolCall{
 							ID:   "call_todos_123",
 							Name: "todos",
-							Args: map[string]any{"action": "list"},
+							Args: map[string]any{
+								"todos": []any{
+									map[string]any{
+										"description": "test task",
+										"status":      "pending",
+									},
+								},
+							},
 						},
 					},
 				}, nil
@@ -385,7 +393,14 @@ func TestAgentGraph_PermissionsInterceptionDenyWithFeedback(t *testing.T) {
 						&message.ToolCall{
 							ID:   "call_todos_456",
 							Name: "todos",
-							Args: map[string]any{"action": "list"},
+							Args: map[string]any{
+								"todos": []any{
+									map[string]any{
+										"description": "test task",
+										"status":      "pending",
+									},
+								},
+							},
 						},
 					},
 				}, nil
@@ -483,5 +498,90 @@ func TestAgentGraph_PermissionsInterceptionDenyWithFeedback(t *testing.T) {
 	denyReason, ok := meta["deny_reason"].(string)
 	if !ok || denyReason != "unsafe execution directory" {
 		t.Errorf("expected metadata deny_reason 'unsafe execution directory', got %v", meta["deny_reason"])
+	}
+}
+
+func TestAgentGraph_InvalidArgumentsValidation(t *testing.T) {
+	// Register a dummy handler for the "todos" tool
+	dh := &dummyToolHandler{
+		evalRes: permissions.EvaluationResult{
+			State: permissions.StateRequiresAuth,
+			Hints: []string{"Todos requires authorization"},
+		},
+	}
+	permissions.RegisterHandler("todos", dh)
+
+	// Mock LLM model returning an invalid tool call (missing required 'todos' field)
+	mockModel := &mockLLMModel{
+		invokeFn: func(ctx context.Context, messages []message.Message) (*message.Assistant, error) {
+			return &message.Assistant{
+				Content: message.Content{
+					&message.ToolCall{
+						ID:   "call_todos_invalid",
+						Name: "todos",
+						Args: map[string]any{"invalid_field": 123},
+					},
+				},
+			}, nil
+		},
+	}
+
+	pm := &mockPermissionManager{mode: permissions.ModeDefault}
+	ag, err := agentgraph.New(context.Background(), agentgraph.Options{
+		Model:             mockModel,
+		PermissionManager: pm,
+	})
+	if err != nil {
+		t.Fatalf("failed to construct agent graph: %v", err)
+	}
+	cp := newMockCheckpointer()
+	g, err := ag.Build(cp)
+	if err != nil {
+		t.Fatalf("failed to build graph: %v", err)
+	}
+
+	initialState := agentgraph.AgentState{
+		Messages: message.MessageList{
+			message.NewUserText("List todos"),
+		},
+	}
+
+	initCmd := graph.Update[agentgraph.AgentState](func(s agentgraph.AgentState) agentgraph.AgentState {
+		return initialState
+	})
+
+	// Run graph - should not halt/intercept because validation fails before permission check.
+	// It should instead complete and append a validation error message.
+	snapshot, err := g.Execute(context.Background(), initCmd, nil)
+	if err != nil {
+		t.Fatalf("graph execution failed: %v", err)
+	}
+
+	if !snapshot.IsDone() {
+		t.Error("expected execution to be completed (no halt for validation error), but it halted")
+	}
+
+	if len(snapshot.State.PendingAuthorizations) > 0 {
+		t.Errorf("expected 0 pending authorizations, got %d", len(snapshot.State.PendingAuthorizations))
+	}
+
+	var toolMsg *message.Tool
+	for _, msg := range snapshot.State.Messages {
+		if tm, ok := msg.(*message.Tool); ok && tm.ToolCallID == "call_todos_invalid" {
+			toolMsg = tm
+			break
+		}
+	}
+
+	if toolMsg == nil {
+		t.Fatal("expected tool message result for call_todos_invalid in final messages list")
+	}
+
+	if !toolMsg.IsError {
+		t.Error("expected invalid arguments tool message to have IsError = true")
+	}
+
+	if !strings.Contains(toolMsg.GetContent().Text(), "invalid arguments for tool") {
+		t.Errorf("expected validation error text, got %q", toolMsg.GetContent().Text())
 	}
 }

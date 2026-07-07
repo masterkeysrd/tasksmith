@@ -426,6 +426,17 @@ func (a *AgentGraph) executeTools(ctx context.Context, s AgentState) (graph.Comm
 			continue
 		}
 
+		if err := targetTool.Validate(args); err != nil {
+			toolMsg := &message.Tool{
+				ToolCallID: tc.ID,
+				Name:       tc.Name,
+				IsError:    true,
+				Content:    message.Content{&message.TextBlock{Text: fmt.Sprintf("invalid arguments for tool %q: %v", tc.Name, err)}},
+			}
+			toolResults = append(toolResults, toolMsg)
+			continue
+		}
+
 		userHint := targetTool.Annotation.UserHint
 		if d, ok := args["description"].(string); ok && d != "" {
 			userHint = d

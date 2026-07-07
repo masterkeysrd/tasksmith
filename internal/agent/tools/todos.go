@@ -6,15 +6,23 @@ import (
 	"strings"
 )
 
-// Todos handles validation and updates of the authoritative task list.
-func (h *ToolHandlers) Todos(ctx context.Context, in TodosArgs) (TodosOutput, error) {
+// Validate checks the task list for correct formatting and status values.
+func (in TodosArgs) Validate() error {
 	for i, t := range in.Todos {
 		if t.Description == "" {
-			return TodosOutput{}, fmt.Errorf("todos: task at index %d has empty description", i)
+			return fmt.Errorf("todos: task at index %d has empty description", i)
 		}
 		if t.Status != "pending" && t.Status != "in_progress" && t.Status != "completed" {
-			return TodosOutput{}, fmt.Errorf("todos: task at index %d has invalid status %q: must be one of pending, in_progress, completed", i, t.Status)
+			return fmt.Errorf("todos: task at index %d has invalid status %q: must be one of pending, in_progress, completed", i, t.Status)
 		}
+	}
+	return nil
+}
+
+// Todos handles validation and updates of the authoritative task list.
+func (h *ToolHandlers) Todos(ctx context.Context, in TodosArgs) (TodosOutput, error) {
+	if err := in.Validate(); err != nil {
+		return TodosOutput{}, err
 	}
 
 	var outputTodos []TodosOutputTodosItem
