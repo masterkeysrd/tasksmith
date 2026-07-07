@@ -331,3 +331,21 @@ func TestSmartReplace_BoundaryProjectionUnrelatedDeletion(t *testing.T) {
 		t.Fatalf("expected 0 matches due to similarity check, but got %d (output: %q)", count, out)
 	}
 }
+
+func TestSmartReplace_InnerWhitespaceAlignment(t *testing.T) {
+	content := "var border = Border{\n\tTop:      \"==\",\n\tBottom:   \"==\",\n}"
+	target := "var border = Border{\n\tTop:        \"==\",\n\tBottom:  \"==\",\n}"
+	repl := "var border = Border{\n\tTop:      \"--\",\n\tBottom:   \"--\",\n}"
+
+	out, count, err := SmartReplace(content, target, repl, false)
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("expected 1 match, got %d", count)
+	}
+	expected := "var border = Border{\n\tTop:      \"--\",\n\tBottom:   \"--\",\n}"
+	if out != expected {
+		t.Errorf("got\n%q\nwant\n%q", out, expected)
+	}
+}

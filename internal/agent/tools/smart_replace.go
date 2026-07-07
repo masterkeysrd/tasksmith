@@ -75,7 +75,7 @@ func SmartReplace(content, target, replacement string, replaceAll bool) (string,
 	for i := 0; i <= len(contentLines)-len(targetLines); {
 		match := true
 		for j := 0; j < len(targetLines); j++ {
-			if strings.TrimSpace(contentLines[i+j]) != strings.TrimSpace(targetLines[j]) {
+			if collapseWhitespace(contentLines[i+j]) != collapseWhitespace(targetLines[j]) {
 				match = false
 				break
 			}
@@ -132,11 +132,11 @@ func SmartReplace(content, target, replacement string, replaceAll bool) (string,
 	// We want to compare against trimmed lines to ignore indentation drift
 	trimmedContentLines := make([]string, len(contentLines))
 	for i, l := range contentLines {
-		trimmedContentLines[i] = strings.TrimSpace(l)
+		trimmedContentLines[i] = collapseWhitespace(l)
 	}
 	trimmedTargetLines := make([]string, len(targetLines))
 	for i, l := range targetLines {
-		trimmedTargetLines[i] = strings.TrimSpace(l)
+		trimmedTargetLines[i] = collapseWhitespace(l)
 	}
 
 	targetLineIndex := make(map[string]int)
@@ -338,6 +338,23 @@ func SmartReplace(content, target, replacement string, replaceAll bool) (string,
 	}
 
 	return content, 0, nil // 0 matches found in all stages
+}
+
+func collapseWhitespace(s string) string {
+	var sb strings.Builder
+	inWhitespace := false
+	for _, r := range s {
+		if r == ' ' || r == '\t' || r == '\r' || r == '\n' {
+			if !inWhitespace {
+				sb.WriteRune(' ')
+				inWhitespace = true
+			}
+		} else {
+			sb.WriteRune(r)
+			inWhitespace = false
+		}
+	}
+	return strings.TrimSpace(sb.String())
 }
 
 func getIndentation(line string) string {
