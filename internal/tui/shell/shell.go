@@ -3,6 +3,7 @@ package shell
 import (
 	"github.com/masterkeysrd/kite/extras/kitex"
 	"github.com/masterkeysrd/kite/style"
+	"github.com/masterkeysrd/tasksmith/internal/tui/active"
 	"github.com/masterkeysrd/tasksmith/internal/tui/queries"
 	"github.com/masterkeysrd/tasksmith/internal/tui/shell/commandbar"
 	"github.com/masterkeysrd/tasksmith/internal/tui/shell/sidebar"
@@ -42,7 +43,7 @@ var (
 // future sidebar, status bar) around the active workspace view.
 var View = kitex.FCC("Shell", func(props Props) kitex.Node {
 	wsCfg := queries.UseGetWorkspaceConfig()
-	isSidebarOpen, setIsSidebarOpen := kitex.UseState(true)
+	isSidebarOpen := active.UseSidebarOpen()
 
 	workspaceName := ""
 	if wsCfg.Data != nil {
@@ -52,11 +53,11 @@ var View = kitex.FCC("Shell", func(props Props) kitex.Node {
 	return kitex.Box(kitex.BoxProps{Style: shellStyle},
 		titlebar.View(titlebar.Props{
 			WorkspaceName:   workspaceName,
-			IsSidebarOpen:   isSidebarOpen(),
-			OnToggleSidebar: func() { setIsSidebarOpen(!isSidebarOpen()) },
+			IsSidebarOpen:   isSidebarOpen,
+			OnToggleSidebar: func() { active.SetSidebarOpen(!active.GetSidebarOpen()) },
 		}),
 		kitex.Box(kitex.BoxProps{Style: contentStyle},
-			kitex.If(isSidebarOpen(), func() kitex.Node {
+			kitex.If(isSidebarOpen, func() kitex.Node {
 				return sidebar.View(sidebar.Props{})
 			}),
 			kitex.Box(kitex.BoxProps{Style: mainPaneStyle}, props.Children...),

@@ -6,15 +6,17 @@ import (
 )
 
 type state struct {
-	sessionID string
-	screen    string // "chat" or "analytics"
-	modal     string // active modal overlay identifier, "" if none
+	sessionID     string
+	screen        string // "chat" or "analytics"
+	modal         string // active modal overlay identifier, "" if none
+	isSidebarOpen bool
 }
 
 var store = kites.Create(state{
-	sessionID: "",
-	screen:    "chat",
-	modal:     "",
+	sessionID:     "",
+	screen:        "chat",
+	modal:         "",
+	isSidebarOpen: true,
 })
 
 // SetSessionID updates the active session ID and switches the screen back to chat, closing any modal.
@@ -77,6 +79,26 @@ func GetModal() string {
 func UseModal() string {
 	return kites.Use(store, func(s state) string {
 		return s.modal
+	})
+}
+
+// GetSidebarOpen returns whether the sidebar is open.
+func GetSidebarOpen() bool {
+	return store.Get().isSidebarOpen
+}
+
+// SetSidebarOpen updates whether the sidebar is open.
+func SetSidebarOpen(open bool) {
+	store.Set(func(s state) state {
+		s.isSidebarOpen = open
+		return s
+	})
+}
+
+// UseSidebarOpen returns whether the sidebar is open reactively.
+func UseSidebarOpen() bool {
+	return kites.Use(store, func(s state) bool {
+		return s.isSidebarOpen
 	})
 }
 

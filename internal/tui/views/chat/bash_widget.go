@@ -5,12 +5,12 @@ import (
 	"image/color"
 	"strings"
 
-	"github.com/masterkeysrd/kite/dom"
 	"github.com/masterkeysrd/kite/event"
 	"github.com/masterkeysrd/kite/extras/kitex"
 	"github.com/masterkeysrd/kite/geom"
 	"github.com/masterkeysrd/kite/style"
 	"github.com/masterkeysrd/tasksmith/internal/core/preview"
+	"github.com/masterkeysrd/tasksmith/internal/tui/active"
 	"github.com/masterkeysrd/tasksmith/internal/tui/components"
 	"github.com/masterkeysrd/tasksmith/internal/tui/components/icon"
 	"github.com/masterkeysrd/tasksmith/internal/tui/theme"
@@ -32,8 +32,6 @@ var BashToolWidget = kitex.FC("BashToolWidget", func(props ToolExecutionProps) k
 	}
 
 	size, setSize := kitex.UseState(initialSize)
-	elRef := kitex.UseRef[dom.Node](nil)
-	measuredWidth, setMeasuredWidth := kitex.UseState(0)
 
 	kitex.UseEffectCleanup(func() func() {
 		if doc == nil {
@@ -42,23 +40,13 @@ var BashToolWidget = kitex.FC("BashToolWidget", func(props ToolExecutionProps) k
 
 		updateSize := func() {
 			if view := doc.DefaultView(); view != nil {
-				// 1. Update viewport size
 				currSize := view.ViewportSize()
 				if currSize != size() {
 					setSize(currSize)
 				}
-				// 2. Update widget layout width bounds
-				if elRef.Current != nil {
-					if rect, ok := view.GetBoundingClientRect(elRef.Current.(dom.Element)); ok {
-						if rect.Size.Width != measuredWidth() {
-							setMeasuredWidth(rect.Size.Width)
-						}
-					}
-				}
 			}
 		}
 
-		// Sync sizes after render/layout runs
 		updateSize()
 
 		sub := doc.AddEventListener(event.EventResize, func(ev event.Event) {
@@ -68,18 +56,11 @@ var BashToolWidget = kitex.FC("BashToolWidget", func(props ToolExecutionProps) k
 		return func() {
 			sub.Cancel()
 		}
-	}, []any{doc, elRef.Current})
+	}, []any{doc})
 
+	isSidebarOpen := active.UseSidebarOpen()
 	viewportWidth := size().Width
-	fallbackWrapWidth := getDynamicWrapWidth(viewportWidth)
-
-	var wrapWidth int
-	if measuredWidth() > 0 {
-		wrapWidth = measuredWidth() - 2
-		wrapWidth = max(wrapWidth, 20)
-	} else {
-		wrapWidth = fallbackWrapWidth
-	}
+	wrapWidth := getDynamicWrapWidth(viewportWidth, isSidebarOpen)
 
 	tc := props.ToolCall
 	tm := props.ToolMessage
@@ -215,7 +196,7 @@ var BashToolWidget = kitex.FC("BashToolWidget", func(props ToolExecutionProps) k
 	}
 
 	return kitex.Fragment(
-		kitex.Box(kitex.BoxProps{Ref: elRef, Style: containerStyle},
+		kitex.Box(kitex.BoxProps{Style: containerStyle},
 			components.Button(components.ButtonProps{
 				Variant: components.ButtonText,
 				Color:   components.ButtonBase,
@@ -307,16 +288,14 @@ var BashToolWidget = kitex.FC("BashToolWidget", func(props ToolExecutionProps) k
 								lines := strings.Split(outText, "\n")
 								isTruncated := len(lines) > 10
 
-								var inlineText string
 								if isTruncated {
-									inlineText = strings.Join(lines[len(lines)-10:], "\n")
-								} else {
-									inlineText = outText
+									// Show first 10 lines
+									outText = strings.Join(lines[:10], "\n")
 								}
 
-								parts := strings.Split(inlineText, "[stderr]\n")
-								var elements []kitex.Node
+								parts := strings.SplitN(outText, "[stderr]", 2)
 
+								var elements []kitex.Node
 								var textCol color.Color
 								if t != nil {
 									textCol = t.Color.Text.Primary
@@ -411,13 +390,12 @@ var BashToolWidget = kitex.FC("BashToolWidget", func(props ToolExecutionProps) k
 	)
 })
 
-func getDynamicWrapWidth(viewportWidth int) int {
+func getDynamicWrapWidth(viewportWidth int, isSidebarOpen bool) int {
 	if viewportWidth <= 0 {
 		return 80
 	}
-	// Conservative estimate: assume 34 cells are taken by the sidebar if open.
 	availableWidth := viewportWidth
-	if availableWidth > 34 {
+	if isSidebarOpen && availableWidth > 34 {
 		availableWidth -= 34
 	}
 	// Apply bubble 90% MaxWidth constraint
