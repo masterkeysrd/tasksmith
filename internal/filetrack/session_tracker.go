@@ -32,31 +32,53 @@ type tracker struct {
 	touched       map[string]bool
 	mu            sync.Mutex
 	globalTracker WorkspaceTracker
+
+	expectedWrite map[string]string // path -> hash
+	unsubChan     func()
 }
 
 // NewTracker creates a new session-scoped FileTracker instance.
 func NewTracker(store *resource.Store, sessionID, changesDir, workspaceDir string, globalTracker WorkspaceTracker) FileTracker {
-	return &tracker{
+	t := &tracker{
 		store:         store,
 		sessionID:     sessionID,
 		changesDir:    changesDir,
 		workspaceDir:  workspaceDir,
 		touched:       make(map[string]bool),
 		globalTracker: globalTracker,
+		expectedWrite: make(map[string]string),
 	}
+
+	if globalTracker != nil {
+		globalTracker.RegisterSessionTracker(sessionID, t)
+		ch, unsub := globalTracker.SubscribeSession(sessionID)
+		t.unsubChan = unsub
+		go t.watchFsChanges(ch)
+	}
+
+	return t
+}
+
+func normalizePath(path string) string {
+	path = filepath.ToSlash(filepath.Clean(path))
+	path = strings.TrimPrefix(path, "./")
+	return path
 }
 
 func (t *tracker) journalPath(relPath string) string {
+	relPath = normalizePath(relPath)
 	h := sha256.Sum256([]byte(relPath))
 	return filepath.Join(t.changesDir, fmt.Sprintf("%x.jsonl", h[:8]))
 }
 
 func (t *tracker) lastPath(relPath string) string {
+	relPath = normalizePath(relPath)
 	h := sha256.Sum256([]byte(relPath))
 	return filepath.Join(t.changesDir, fmt.Sprintf("%x.last", h[:8]))
 }
 
 func (t *tracker) Record(ctx context.Context, change Change, diff string, oldContent string) error {
+	change.Path = normalizePath(change.Path)
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
@@ -273,6 +295,7 @@ func (t *tracker) Summary(ctx context.Context) ([]FileSummary, error) {
 }
 
 func (t *tracker) ReadJournal(ctx context.Context, path string) ([]JournalEntry, error) {
+	path = normalizePath(path)
 	journalPath := t.journalPath(path)
 	file, err := os.Open(journalPath)
 	if err != nil {
@@ -392,6 +415,7 @@ func (t *tracker) checkConflictLocked(ctx context.Context, path string) (bool, e
 }
 
 func (t *tracker) RevertToBaseline(ctx context.Context, path string, force bool) error {
+	path = normalizePath(path)
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
@@ -528,12 +552,14 @@ func (t *tracker) RevertToBaseline(ctx context.Context, path string, force bool)
 }
 
 func (t *tracker) CheckConflict(ctx context.Context, path string) (bool, error) {
+	path = normalizePath(path)
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return t.checkConflictLocked(ctx, path)
 }
 
 func (t *tracker) RecordRead(ctx context.Context, path string) error {
+	path = normalizePath(path)
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
@@ -570,6 +596,7 @@ func (t *tracker) RecordRead(ctx context.Context, path string) error {
 }
 
 func (t *tracker) IsKnown(ctx context.Context, path string) (bool, error) {
+	path = normalizePath(path)
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
@@ -613,4 +640,203 @@ func (t *tracker) IsKnown(ctx context.Context, path string) (bool, error) {
 
 	currentHash := fmt.Sprintf("%x", sha256.Sum256(data))
 	return currentHash == lastHash, nil
+}
+
+func (t *tracker) ExpectWrite(path string, hash string) {
+	path = normalizePath(path)
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.expectedWrite[path] = hash
+}
+
+func (t *tracker) Close() error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.globalTracker != nil {
+		t.globalTracker.UnregisterSessionTracker(t.sessionID)
+	}
+	if t.unsubChan != nil {
+		t.unsubChan()
+		t.unsubChan = nil
+	}
+	return nil
+}
+
+func (t *tracker) watchFsChanges(ch <-chan FileEvent) {
+	for event := range ch {
+		if event.Source != "watcher" {
+			continue
+		}
+		event.Path = normalizePath(event.Path)
+
+		if event.Kind == Deleted {
+			// Wait 200ms to let any atomic safe-write rename loops finish
+			time.Sleep(200 * time.Millisecond)
+			absPath := filepath.Join(t.workspaceDir, event.Path)
+			if _, err := os.Stat(absPath); err == nil {
+				continue
+			}
+		}
+
+		ctx := context.Background()
+
+		t.mu.Lock()
+		expectedHash := t.expectedWrite[event.Path]
+		t.mu.Unlock()
+
+		hashes, err := t.store.QueryByKey(ctx, t.sessionID, "file_hash", event.Path)
+		var lastHash string
+		if err == nil && len(hashes) > 0 {
+			var lastRes *resource.Resource
+			for _, r := range hashes {
+				if lastRes == nil || r.CreatedAt.After(lastRes.CreatedAt) {
+					rCopy := r
+					lastRes = &rCopy
+				}
+			}
+			if lastRes != nil {
+				lastHash = lastRes.Data
+			}
+		}
+
+		if (expectedHash != "" && event.Hash == expectedHash) || (lastHash != "" && event.Hash == lastHash) {
+			t.mu.Lock()
+			if expectedHash != "" && event.Hash == expectedHash {
+				delete(t.expectedWrite, event.Path)
+			}
+			t.mu.Unlock()
+			continue
+		}
+
+		_ = t.recordExternalChange(ctx, event)
+	}
+}
+
+func (t *tracker) recordExternalChange(ctx context.Context, event FileEvent) error {
+	event.Path = normalizePath(event.Path)
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	if err := os.MkdirAll(t.changesDir, 0755); err != nil {
+		return err
+	}
+
+	journalPath := t.journalPath(event.Path)
+	lastPath := t.lastPath(event.Path)
+	absPath := filepath.Join(t.workspaceDir, event.Path)
+
+	now := time.Now().UTC()
+
+	touched := t.touched[event.Path]
+	if !touched {
+		if info, err := os.Stat(journalPath); err == nil && info.Size() > 0 {
+			touched = true
+			t.touched[event.Path] = true
+		}
+	}
+
+	isBinary := false
+	if event.Kind != Deleted {
+		mimeType := fs.DetectMIMEType(absPath)
+		isBinary = fs.IsBinaryMIME(mimeType)
+	}
+
+	var oldContent string
+	if !isBinary {
+		if oldBytes, err := os.ReadFile(lastPath); err == nil {
+			oldContent = string(oldBytes)
+		}
+	}
+
+	var newContent string
+	if event.Kind != Deleted {
+		if newBytes, err := os.ReadFile(absPath); err == nil {
+			newContent = string(newBytes)
+		}
+	}
+
+	f, err := os.OpenFile(journalPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	if !touched {
+		baselineContent := ""
+		if !isBinary {
+			baselineContent = oldContent
+		}
+		baselineEntry := JournalEntry{
+			Timestamp: now,
+			Kind:      "baseline",
+			Content:   baselineContent,
+			IsBinary:  isBinary,
+		}
+		baselineBytes, _ := json.Marshal(baselineEntry)
+		_, _ = f.Write(append(baselineBytes, '\n'))
+		t.touched[event.Path] = true
+	}
+
+	var additions, deletions int
+	var diffStr string
+	if !isBinary && event.Kind != Deleted {
+		diffStr = diff.FormatUnified(event.Path, event.Path, oldContent, newContent)
+		for l := range strings.SplitSeq(diffStr, "\n") {
+			if strings.HasPrefix(l, "--- ") || strings.HasPrefix(l, "+++ ") {
+				continue
+			}
+			if strings.HasPrefix(l, "+") {
+				additions++
+			} else if strings.HasPrefix(l, "-") {
+				deletions++
+			}
+		}
+	}
+
+	toolName := "external"
+
+	changeEntry := JournalEntry{
+		Timestamp: now,
+		ToolName:  toolName,
+		Kind:      event.Kind,
+		Additions: additions,
+		Deletions: deletions,
+		Diff:      diffStr,
+	}
+	changeBytes, _ := json.Marshal(changeEntry)
+	_, _ = f.Write(append(changeBytes, '\n'))
+
+	rd := resourceData{
+		ToolName:   toolName,
+		ChangeKind: event.Kind,
+		Additions:  additions,
+		Deletions:  deletions,
+	}
+	rdBytes, _ := json.Marshal(rd)
+	res := resource.Resource{
+		SessionID: t.sessionID,
+		Kind:      "file_change",
+		Key:       event.Path,
+		Data:      string(rdBytes),
+		CreatedAt: now,
+	}
+	_, _ = t.store.Insert(ctx, res)
+
+	if event.Kind == Deleted {
+		_ = os.Remove(lastPath)
+	} else if !isBinary {
+		_ = os.WriteFile(lastPath, []byte(newContent), 0644)
+	}
+
+	_ = t.store.DeleteByKey(ctx, t.sessionID, "file_hash", event.Path)
+	resHash := resource.Resource{
+		SessionID: t.sessionID,
+		Kind:      "file_hash",
+		Key:       event.Path,
+		Data:      event.Hash,
+		CreatedAt: now,
+	}
+	_, _ = t.store.Insert(ctx, resHash)
+
+	return nil
 }

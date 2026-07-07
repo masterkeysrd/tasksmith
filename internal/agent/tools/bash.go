@@ -18,7 +18,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/core/process"
 	"github.com/masterkeysrd/tasksmith/internal/core/shellguard"
 	"github.com/masterkeysrd/tasksmith/internal/core/vcs"
-	"github.com/masterkeysrd/tasksmith/internal/session/filetrack"
+	"github.com/masterkeysrd/tasksmith/internal/filetrack"
 )
 
 // BashRunner implements TaskRunner for OS shell commands.

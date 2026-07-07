@@ -2,12 +2,14 @@ package tools
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 
-	"github.com/masterkeysrd/tasksmith/internal/session/filetrack"
+	"github.com/masterkeysrd/tasksmith/internal/core/diff"
+	"github.com/masterkeysrd/tasksmith/internal/filetrack"
 )
 
 // Write writes content to a file. It creates any parent directories if they
@@ -80,6 +82,10 @@ func (h *ToolHandlers) Write(ctx context.Context, in WriteArgs) (WriteOutput, er
 
 	// Write file content
 	contentBytes := []byte(in.Content)
+	if h.FileTracker != nil {
+		hashVal := fmt.Sprintf("%x", sha256.Sum256(contentBytes))
+		h.FileTracker.ExpectWrite(relSlash, hashVal)
+	}
 	if err := os.WriteFile(writeAbs, contentBytes, 0644); err != nil {
 		return WriteOutput{
 			Path:    path,
@@ -99,11 +105,23 @@ func (h *ToolHandlers) Write(ctx context.Context, in WriteArgs) (WriteOutput, er
 			kind = filetrack.Modified
 		}
 		var additions, deletions int
-		if in.Content != "" {
-			additions = strings.Count(in.Content, "\n") + 1
-		}
-		if existedBefore && oldContent != "" {
-			deletions = strings.Count(oldContent, "\n") + 1
+		var diffStr string
+		if existedBefore {
+			diffStr = diff.FormatUnified(relSlash, relSlash, oldContent, in.Content)
+			for _, l := range strings.Split(diffStr, "\n") {
+				if strings.HasPrefix(l, "--- ") || strings.HasPrefix(l, "+++ ") {
+					continue
+				}
+				if strings.HasPrefix(l, "+") {
+					additions++
+				} else if strings.HasPrefix(l, "-") {
+					deletions++
+				}
+			}
+		} else {
+			if in.Content != "" {
+				additions = strings.Count(in.Content, "\n") + 1
+			}
 		}
 
 		_ = h.FileTracker.Record(ctx, filetrack.Change{
@@ -112,7 +130,7 @@ func (h *ToolHandlers) Write(ctx context.Context, in WriteArgs) (WriteOutput, er
 			Kind:      kind,
 			Additions: additions,
 			Deletions: deletions,
-		}, "", oldContent)
+		}, diffStr, oldContent)
 	}
 
 	return WriteOutput{

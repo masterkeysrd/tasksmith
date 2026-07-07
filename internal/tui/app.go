@@ -75,6 +75,9 @@ var Router = kitex.SimpleFC("Router", func() kitex.Node {
 		active.InvalidateSessionState = func(sessionID string) {
 			windClient.InvalidateQueries(api.GetSessionStateRequest{SessionID: sessionID})
 		}
+		active.InvalidateFileChanges = func(sessionID string) {
+			windClient.InvalidateQueries(api.GetFileChangesRequest{SessionID: sessionID})
+		}
 	}, []any{windClient})
 
 	// Perform initial routing synchronously in the render body so there is no

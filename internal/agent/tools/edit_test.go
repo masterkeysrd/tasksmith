@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/masterkeysrd/tasksmith/internal/session/filetrack"
+	"github.com/masterkeysrd/tasksmith/internal/filetrack"
 )
 
 func TestEditBasic(t *testing.T) {
@@ -151,6 +151,9 @@ func (m *mockFileTracker) RecordRead(ctx context.Context, path string) error {
 	m.knownMap[path] = true
 	return nil
 }
+
+func (m *mockFileTracker) ExpectWrite(path string, hash string) {}
+func (m *mockFileTracker) Close() error                         { return nil }
 
 func TestEditKnownValidation(t *testing.T) {
 	dir := t.TempDir()

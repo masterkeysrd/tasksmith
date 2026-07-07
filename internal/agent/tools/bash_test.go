@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"github.com/masterkeysrd/loom/message"
-	"github.com/masterkeysrd/tasksmith/internal/session/filetrack"
+	"github.com/masterkeysrd/tasksmith/internal/filetrack"
 )
 
 type mockBashFileTracker struct {
@@ -22,6 +22,9 @@ func (m *mockBashFileTracker) Record(ctx context.Context, change filetrack.Chang
 func (m *mockBashFileTracker) RevertToBaseline(ctx context.Context, path string, force bool) error {
 	return nil
 }
+
+func (m *mockBashFileTracker) ExpectWrite(path string, hash string) {}
+func (m *mockBashFileTracker) Close() error                         { return nil }
 
 func (m *mockBashFileTracker) CheckConflict(ctx context.Context, path string) (bool, error) {
 	return false, nil

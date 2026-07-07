@@ -82,3 +82,6 @@ func UseModal() string {
 
 // InvalidateSessionState is a callback registered by the App to invalidate session state queries.
 var InvalidateSessionState func(sessionID string)
+
+// InvalidateFileChanges is a callback registered by the App to invalidate file changes queries.
+var InvalidateFileChanges func(sessionID string)

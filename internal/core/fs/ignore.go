@@ -82,6 +82,21 @@ func (ig *ignorer) ShouldIgnore(name, fullPath string, isDir bool) bool {
 		return true
 	}
 
+	// Ignore common editor backup, swap, and temporary files
+	if strings.HasSuffix(name, "~") || strings.HasPrefix(name, ".#") || strings.HasSuffix(name, ".tmp") {
+		return true
+	}
+	if strings.HasPrefix(name, ".") && (strings.HasSuffix(name, ".swp") || strings.HasSuffix(name, ".swo") || strings.HasSuffix(name, ".swx") || strings.HasSuffix(name, ".swpx")) {
+		return true
+	}
+
+	// Ignore TaskSmith's own sessions and changes directories
+	for _, p := range strings.Split(filepath.ToSlash(fullPath), "/") {
+		if p == "sessions" || p == "changes" {
+			return true
+		}
+	}
+
 	if ig.ignoreAll {
 		return true
 	}

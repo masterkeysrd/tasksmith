@@ -8,8 +8,8 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/agent/resolver"
 	"github.com/masterkeysrd/tasksmith/internal/core/lsp"
 	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
+	"github.com/masterkeysrd/tasksmith/internal/filetrack"
 	"github.com/masterkeysrd/tasksmith/internal/mcp"
-	"github.com/masterkeysrd/tasksmith/internal/session/filetrack"
 )
 
 const (

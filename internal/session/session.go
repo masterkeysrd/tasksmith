@@ -26,9 +26,9 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	"github.com/masterkeysrd/tasksmith/internal/core/lsp"
 	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
+	"github.com/masterkeysrd/tasksmith/internal/filetrack"
 	"github.com/masterkeysrd/tasksmith/internal/mcp"
 	"github.com/masterkeysrd/tasksmith/internal/metrics"
-	"github.com/masterkeysrd/tasksmith/internal/session/filetrack"
 	"github.com/masterkeysrd/tasksmith/internal/workspace"
 	"github.com/masterkeysrd/warp"
 )
@@ -73,12 +73,13 @@ type ActiveSession struct {
 
 // ManagerConfig defines configuration parameters and dependencies for Manager.
 type ManagerConfig struct {
-	Store        Store
-	Workspace    *workspace.Workspace
-	MetricsStore *metrics.Store
-	LspManager   *lsp.Manager
-	Context      context.Context
-	Resolver     *resolver.Resolver
+	Store         Store
+	Workspace     *workspace.Workspace
+	MetricsStore  *metrics.Store
+	LspManager    *lsp.Manager
+	Context       context.Context
+	Resolver      *resolver.Resolver
+	GlobalTracker filetrack.WorkspaceTracker
 }
 
 // Manager coordinates session business logic and delegates persistence to the Store interface.
@@ -93,6 +94,9 @@ type Manager struct {
 	lspManager     *lsp.Manager
 	mcpManager     *mcp.Manager
 	resolver       *resolver.Resolver
+	globalTracker  filetrack.WorkspaceTracker
+	trackersMu     sync.RWMutex
+	trackers       map[string]filetrack.FileTracker
 	wg             sync.WaitGroup
 	ctx            context.Context
 	cancel         context.CancelFunc
@@ -100,6 +104,13 @@ type Manager struct {
 
 // FileTracker returns a session-scoped FileTracker instance.
 func (m *Manager) FileTracker(sessionID string) (filetrack.FileTracker, error) {
+	m.trackersMu.Lock()
+	defer m.trackersMu.Unlock()
+
+	if t, ok := m.trackers[sessionID]; ok {
+		return t, nil
+	}
+
 	if m.ws == nil {
 		return nil, fmt.Errorf("workspace not initialized")
 	}
@@ -108,7 +119,9 @@ func (m *Manager) FileTracker(sessionID string) (filetrack.FileTracker, error) {
 		return nil, err
 	}
 	changesDir := filepath.Join(wsDir, "sessions", sessionID, "changes")
-	return filetrack.NewTracker(m.store.ResourceStore(), sessionID, changesDir, m.ws.CWD()), nil
+	t := filetrack.NewTracker(m.store.ResourceStore(), sessionID, changesDir, m.ws.CWD(), m.globalTracker)
+	m.trackers[sessionID] = t
+	return t, nil
 }
 
 // McpManager returns the session-scoped MCP manager.
@@ -140,6 +153,8 @@ func NewManager(cfg ManagerConfig) *Manager {
 		resolver:       cfg.Resolver,
 		activeSessions: make(map[string]*ActiveSession),
 		mcpManager:     mcpMgr,
+		globalTracker:  cfg.GlobalTracker,
+		trackers:       make(map[string]filetrack.FileTracker),
 	}
 	if cfg.Context != nil {
 		m.ctx, m.cancel = context.WithCancel(cfg.Context)
@@ -338,6 +353,13 @@ func (m *Manager) DeleteSession(ctx context.Context, id string) error {
 		delete(m.activeSessions, id)
 	}
 	m.mu.Unlock()
+
+	m.trackersMu.Lock()
+	if t, ok := m.trackers[id]; ok {
+		_ = t.Close()
+		delete(m.trackers, id)
+	}
+	m.trackersMu.Unlock()
 
 	return m.store.DeleteSession(ctx, id)
 }
@@ -1801,6 +1823,13 @@ func (m *Manager) Close() error {
 		}
 	}
 	m.mu.Unlock()
+
+	m.trackersMu.Lock()
+	for _, t := range m.trackers {
+		_ = t.Close()
+	}
+	m.trackers = make(map[string]filetrack.FileTracker)
+	m.trackersMu.Unlock()
 
 	m.wg.Wait()
 	return nil

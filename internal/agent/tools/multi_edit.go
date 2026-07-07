@@ -2,13 +2,14 @@ package tools
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/masterkeysrd/tasksmith/internal/core/diff"
-	"github.com/masterkeysrd/tasksmith/internal/session/filetrack"
+	"github.com/masterkeysrd/tasksmith/internal/filetrack"
 )
 
 // MultiEdit applies multiple edits to a file, allowing partial success.
@@ -112,6 +113,10 @@ func (h *ToolHandlers) MultiEdit(ctx context.Context, in MultiEditArgs) (MultiEd
 
 	if modified {
 		// Write the partially or fully modified content back
+		if h.FileTracker != nil {
+			hashVal := fmt.Sprintf("%x", sha256.Sum256([]byte(contentNorm)))
+			h.FileTracker.ExpectWrite(relSlash, hashVal)
+		}
 		if err := os.WriteFile(editAbs, []byte(contentNorm), 0644); err != nil {
 			return MultiEditOutput{
 				Path:    relSlash,

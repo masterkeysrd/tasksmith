@@ -78,10 +78,12 @@ type WorkspaceTracker interface {
 	RegisterInterest(sessionID, path string)
 	UnregisterInterest(sessionID, path string)
 
-	// Activity Notifications (called by session trackers or editor actions)
 	NotifyTouch(path string, isWrite bool)
 	// MRU list of active files
 	ActiveFiles() []string
+
+	RegisterSessionTracker(sessionID string, tracker FileTracker)
+	UnregisterSessionTracker(sessionID string)
 }
 
 // FileTracker records and queries file changes within a session.
@@ -93,6 +95,8 @@ type FileTracker interface {
 	CheckConflict(ctx context.Context, path string) (bool, error)
 	RecordRead(ctx context.Context, path string) error
 	IsKnown(ctx context.Context, path string) (bool, error)
+	ExpectWrite(path string, hash string)
+	Close() error
 }
 
 // splitLines splits a string into lines, normalizing line endings and removing trailing empty lines.

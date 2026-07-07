@@ -141,12 +141,14 @@ func TestWorkspaceTracker(t *testing.T) {
 		t.Fatalf("failed to write file D: %v", err)
 	}
 
-	// Session-1 has no interest in file_d.txt, so it should NOT receive an event
+	// Session-1 should receive the event under the new broadcast model
 	select {
 	case ev := <-ch:
-		t.Errorf("session-1 received unexpected event for file_d.txt: %v", ev)
-	case <-time.After(200 * time.Millisecond):
-		// Expected: no event received
+		if ev.Path != "file_d.txt" {
+			t.Errorf("expected session-1 event path to be 'file_d.txt', got %q", ev.Path)
+		}
+	case <-time.After(1 * time.Second):
+		t.Error("timed out waiting for session-1 creation event")
 	}
 
 	// Wildcard subscription should receive the event!

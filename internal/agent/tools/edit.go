@@ -2,13 +2,14 @@ package tools
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/masterkeysrd/tasksmith/internal/core/diff"
-	"github.com/masterkeysrd/tasksmith/internal/session/filetrack"
+	"github.com/masterkeysrd/tasksmith/internal/filetrack"
 )
 
 // Edit edits a file by replacing a target block of text with a replacement block.
@@ -94,6 +95,10 @@ func (h *ToolHandlers) Edit(ctx context.Context, in EditArgs) (EditOutput, error
 	}
 
 	// Write new content back
+	if h.FileTracker != nil {
+		hashVal := fmt.Sprintf("%x", sha256.Sum256([]byte(newContent)))
+		h.FileTracker.ExpectWrite(relSlash, hashVal)
+	}
 	if err := os.WriteFile(editAbs, []byte(newContent), 0644); err != nil {
 		return EditOutput{
 			Path:    path,

@@ -24,6 +24,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/metrics"
 	"github.com/masterkeysrd/tasksmith/internal/session"
 	"github.com/masterkeysrd/tasksmith/internal/tui"
+	"github.com/masterkeysrd/tasksmith/internal/tui/active"
 	"github.com/masterkeysrd/tasksmith/internal/tui/plugin/autocomplete"
 	"github.com/masterkeysrd/tasksmith/internal/workspace"
 )
@@ -115,21 +116,6 @@ func (app *Application) Run(ctx context.Context) error {
 		return fmt.Errorf("failed to load workspace: %w", err)
 	}
 
-	metricsStore := metrics.NewStore(metricsDB)
-	sessionMgr := session.NewManager(session.ManagerConfig{
-		Store:        store,
-		Workspace:    app.ws,
-		MetricsStore: metricsStore,
-		LspManager:   app.lspManager,
-		Context:      ctx,
-	})
-	app.AddCloser("sessionMgr & mcpManager", func(ctx context.Context) error {
-		_ = sessionMgr.Close()
-		if sessionMgr.McpManager() != nil {
-			return sessionMgr.McpManager().Close()
-		}
-		return nil
-	})
 	// Initialize and start the global workspace tracker
 	wsTracker := filetrack.NewWorkspaceTracker(app.opts.CWD)
 	if err := wsTracker.Start(ctx); err != nil {
@@ -137,6 +123,23 @@ func (app *Application) Run(ctx context.Context) error {
 	}
 	app.AddCloser("workspaceTracker", func(ctx context.Context) error {
 		return wsTracker.Stop()
+	})
+
+	metricsStore := metrics.NewStore(metricsDB)
+	sessionMgr := session.NewManager(session.ManagerConfig{
+		Store:         store,
+		Workspace:     app.ws,
+		MetricsStore:  metricsStore,
+		LspManager:    app.lspManager,
+		Context:       ctx,
+		GlobalTracker: wsTracker,
+	})
+	app.AddCloser("sessionMgr & mcpManager", func(ctx context.Context) error {
+		_ = sessionMgr.Close()
+		if sessionMgr.McpManager() != nil {
+			return sessionMgr.McpManager().Close()
+		}
+		return nil
 	})
 
 	// Subscribe to file changes and feed them to the LSP manager
@@ -154,13 +157,21 @@ func (app *Application) Run(ctx context.Context) error {
 				if !ok {
 					return
 				}
-				if event.Kind == filetrack.Created || event.Kind == filetrack.Modified {
-					absPath := filepath.Join(app.opts.CWD, event.Path)
-					if !corefs.IsBinaryMIME(corefs.DetectMIMEType(absPath)) {
-						if lsp.GetLanguageID(absPath) != "" {
-							content, err := os.ReadFile(absPath)
-							if err == nil {
-								app.lspManager.NotifyFileChanged(context.Background(), absPath, string(content))
+				if event.Kind == filetrack.Created || event.Kind == filetrack.Modified || event.Kind == filetrack.Deleted {
+					if event.Source == "watcher" {
+						activeSessionID := active.GetSessionID()
+						if activeSessionID != "" && active.InvalidateFileChanges != nil {
+							active.InvalidateFileChanges(activeSessionID)
+						}
+					}
+					if event.Kind != filetrack.Deleted {
+						absPath := filepath.Join(app.opts.CWD, event.Path)
+						if !corefs.IsBinaryMIME(corefs.DetectMIMEType(absPath)) {
+							if lsp.GetLanguageID(absPath) != "" {
+								content, err := os.ReadFile(absPath)
+								if err == nil {
+									app.lspManager.NotifyFileChanged(context.Background(), absPath, string(content))
+								}
 							}
 						}
 					}

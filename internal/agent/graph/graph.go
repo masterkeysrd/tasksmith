@@ -16,8 +16,8 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/agent/tools"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	"github.com/masterkeysrd/tasksmith/internal/core/lsp"
+	"github.com/masterkeysrd/tasksmith/internal/filetrack"
 	"github.com/masterkeysrd/tasksmith/internal/mcp"
-	"github.com/masterkeysrd/tasksmith/internal/session/filetrack"
 	"github.com/masterkeysrd/tasksmith/internal/workspace"
 	"github.com/masterkeysrd/warp"
 )
@@ -104,6 +104,7 @@ type AgentGraph struct {
 	cwd               string
 	lspManager        *lsp.Manager
 	storage           tools.FileStorage
+	fileTracker       filetrack.FileTracker
 }
 
 // Options defines the configurations and dependencies to initialize the AgentGraph.
@@ -208,6 +209,7 @@ func New(ctx context.Context, opts Options) (*AgentGraph, error) {
 		cwd:               cwd,
 		lspManager:        opts.LspManager,
 		storage:           opts.Storage,
+		fileTracker:       opts.FileTracker,
 	}, nil
 }
 

@@ -8,7 +8,7 @@ import (
 	"strings"
 
 	"github.com/masterkeysrd/tasksmith/internal/core/fs"
-	"github.com/masterkeysrd/tasksmith/internal/session/filetrack"
+	"github.com/masterkeysrd/tasksmith/internal/filetrack"
 )
 
 // Remove removes a file or directory.
@@ -100,6 +100,9 @@ func (h *ToolHandlers) Remove(ctx context.Context, in RemoveArgs) (RemoveOutput,
 	}
 
 	// Remove file or directory recursively
+	if h.FileTracker != nil {
+		h.FileTracker.ExpectWrite(relSlash, "deleted")
+	}
 	if err := os.RemoveAll(removeAbs); err != nil {
 		return RemoveOutput{
 			Path:    path,

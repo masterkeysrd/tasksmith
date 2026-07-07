@@ -31,6 +31,10 @@ type workspaceTracker struct {
 	activeSet   map[string]bool            // Set of active files for fast lookup
 	shortPaths  map[string]string          // full path -> shortest unique suffix
 
+	agentHashes     map[string]string      // path -> expected agent write hash
+	watcherHashes   map[string]string      // path -> hash seen by watcher on disk
+	sessionTrackers map[string]FileTracker // sessionID -> FileTracker
+
 	done chan struct{}
 	wg   sync.WaitGroup
 }
@@ -39,15 +43,18 @@ type workspaceTracker struct {
 func NewWorkspaceTracker(workspaceDir string) WorkspaceTracker {
 	ign, _ := corefs.NewIgnorer(workspaceDir)
 	return &workspaceTracker{
-		workspaceDir: workspaceDir,
-		ignorer:      ign,
-		files:        make(map[string]bool),
-		dirs:         make(map[string]bool),
-		interests:    make(map[string]map[string]bool),
-		subs:         make(map[string]chan FileEvent),
-		activeSet:    make(map[string]bool),
-		shortPaths:   make(map[string]string),
-		done:         make(chan struct{}),
+		workspaceDir:    workspaceDir,
+		ignorer:         ign,
+		files:           make(map[string]bool),
+		dirs:            make(map[string]bool),
+		interests:       make(map[string]map[string]bool),
+		subs:            make(map[string]chan FileEvent),
+		activeSet:       make(map[string]bool),
+		shortPaths:      make(map[string]string),
+		agentHashes:     make(map[string]string),
+		watcherHashes:   make(map[string]string),
+		sessionTrackers: make(map[string]FileTracker),
+		done:            make(chan struct{}),
 	}
 }
 
@@ -211,9 +218,7 @@ func (w *workspaceTracker) handleFsEvent(event fsnotify.Event) {
 		if errStat == nil && !isDir {
 			w.files[rel] = true
 			kind = Modified
-			if len(w.interests[rel]) > 0 {
-				hash = w.computeHashLocked(event.Name)
-			}
+			hash = w.computeHashLocked(event.Name)
 		}
 	}
 
@@ -243,14 +248,30 @@ func (w *workspaceTracker) handleFsEvent(event fsnotify.Event) {
 	}
 
 	if kind != "" {
-		eventPayload := FileEvent{
-			Path:      rel,
-			Kind:      kind,
-			Hash:      hash,
-			Source:    "watcher",
-			Timestamp: time.Now().UTC(),
+		if hash == "" && !isDir && (kind == Created || kind == Modified) {
+			hash = w.computeHashLocked(event.Name)
 		}
-		w.publishLocked(context.Background(), eventPayload)
+
+		isAgentWrite := false
+		if !isDir {
+			if w.agentHashes[rel] == hash {
+				isAgentWrite = true
+				delete(w.agentHashes, rel)
+			} else {
+				w.watcherHashes[rel] = hash
+			}
+		}
+
+		if !isAgentWrite {
+			eventPayload := FileEvent{
+				Path:      rel,
+				Kind:      kind,
+				Hash:      hash,
+				Source:    "watcher",
+				Timestamp: time.Now().UTC(),
+			}
+			w.publishLocked(context.Background(), eventPayload)
+		}
 	}
 }
 
@@ -269,24 +290,10 @@ func (w *workspaceTracker) computeHashLocked(path string) string {
 }
 
 func (w *workspaceTracker) publishLocked(_ context.Context, event FileEvent) {
-	// Send to regular sessions matching registered interests
-	sessionIDs := w.interests[event.Path]
-	for sessionID := range sessionIDs {
-		if ch, ok := w.subs[sessionID]; ok {
-			select {
-			case ch <- event:
-			default:
-			}
-		}
-	}
-
-	// Send to wildcard subscribers (e.g. "wildcard:autocomplete")
-	for id, ch := range w.subs {
-		if strings.HasPrefix(id, "wildcard:") {
-			select {
-			case ch <- event:
-			default:
-			}
+	for _, ch := range w.subs {
+		select {
+		case ch <- event:
+		default:
 		}
 	}
 }
@@ -328,31 +335,34 @@ func (w *workspaceTracker) SubscribeSession(sessionID string) (<-chan FileEvent,
 func (w *workspaceTracker) Publish(ctx context.Context, event FileEvent) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+
+	if event.Source != "watcher" && event.Source != "" {
+		if w.watcherHashes[event.Path] == event.Hash {
+			delete(w.watcherHashes, event.Path)
+		} else {
+			w.agentHashes[event.Path] = event.Hash
+		}
+	}
+
 	w.publishLocked(ctx, event)
 }
 
-func (w *workspaceTracker) RegisterInterest(sessionID, path string) {
+func (w *workspaceTracker) RegisterSessionTracker(sessionID string, tracker FileTracker) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	w.sessionTrackers[sessionID] = tracker
+}
 
-	path = filepath.ToSlash(path)
-	if w.interests[path] == nil {
-		w.interests[path] = make(map[string]bool)
-	}
-	w.interests[path][sessionID] = true
+func (w *workspaceTracker) UnregisterSessionTracker(sessionID string) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	delete(w.sessionTrackers, sessionID)
+}
+
+func (w *workspaceTracker) RegisterInterest(sessionID, path string) {
 }
 
 func (w *workspaceTracker) UnregisterInterest(sessionID, path string) {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-
-	path = filepath.ToSlash(path)
-	if sessions := w.interests[path]; sessions != nil {
-		delete(sessions, sessionID)
-		if len(sessions) == 0 {
-			delete(w.interests, path)
-		}
-	}
 }
 
 func (w *workspaceTracker) NotifyTouch(path string, isWrite bool) {
