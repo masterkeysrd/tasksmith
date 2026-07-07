@@ -298,7 +298,7 @@ func formatEmbeddedFile(f *resolver.ResolvedFile) string {
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "<file path=\"%s\" lines=\"%d\">\n", escapeXML(f.FilePath), f.TotalLines)
 	sb.WriteString("<content>\n")
-	sb.WriteString(FormatFileContent(f.Content, f.StartLine))
+	sb.WriteString(escapeXML(FormatFileContent(f.Content, f.StartLine)))
 	sb.WriteString("\n</content>\n")
 
 	if len(f.Diagnostics) > 0 {
