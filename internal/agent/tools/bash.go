@@ -13,12 +13,8 @@ import (
 
 	"github.com/masterkeysrd/loom/message"
 	"github.com/masterkeysrd/loom/tool"
-	"github.com/masterkeysrd/tasksmith/internal/core/fs"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	"github.com/masterkeysrd/tasksmith/internal/core/process"
-	"github.com/masterkeysrd/tasksmith/internal/core/shellguard"
-	"github.com/masterkeysrd/tasksmith/internal/core/vcs"
-	"github.com/masterkeysrd/tasksmith/internal/filetrack"
 )
 
 // BashRunner implements TaskRunner for OS shell commands.
@@ -210,23 +206,8 @@ func (h *ToolHandlers) Bash(ctx context.Context, in BashArgs) (tool.ToolStream, 
 	toolCallID, _ := ctx.Value("tool_call_id").(string)
 
 	return func(yield func(message.ToolChunk, error) bool) {
-		ops, err := shellguard.Analyze(in.Command, h.CWD)
-		isSafeToBypassTracker := err == nil
-		if err == nil {
-			for _, op := range ops {
-				if op.Action != shellguard.ActionRead || op.Safety != shellguard.SafetySafe {
-					isSafeToBypassTracker = false
-					break
-				}
-			}
-		}
-
 		// If task manager is nil, fallback to synchronous one-shot combined execution
 		if h.TaskManager == nil {
-			var detector *bashChangeDetector
-			if !isSafeToBypassTracker {
-				detector = newChangeDetector(h.CWD)
-			}
 			cmd := exec.CommandContext(ctx, "bash", "-c", in.Command)
 			cmd.Dir = h.CWD
 			process.Prepare(cmd)
@@ -242,10 +223,6 @@ func (h *ToolHandlers) Bash(ctx context.Context, in BashArgs) (tool.ToolStream, 
 				exitCode = 1
 				status = "failed"
 				stderrMsg = err.Error()
-			}
-			if err == nil && !isSafeToBypassTracker && detector != nil {
-				cdChanges := detector.DetectChanges()
-				recordBashChanges(ctx, h.FileTracker, h.CWD, cdChanges)
 			}
 			outObj := BashOutput{
 				ExitCode: exitCode,
@@ -285,10 +262,6 @@ func (h *ToolHandlers) Bash(ctx context.Context, in BashArgs) (tool.ToolStream, 
 			waitMs = defaultBashWaitMs
 		}
 
-		var detector *bashChangeDetector
-		if !isSafeToBypassTracker {
-			detector = newChangeDetector(h.CWD)
-		}
 		task, err := h.TaskManager.Submit(ctx, SubmitOptions{
 			SessionID:  h.SessionID,
 			TaskType:   "bash",
@@ -420,11 +393,6 @@ func (h *ToolHandlers) Bash(ctx context.Context, in BashArgs) (tool.ToolStream, 
 						stderrFinal = fmt.Sprintf("Failed to read stderr log: %v", err)
 					}
 
-					if !isSafeToBypassTracker && detector != nil {
-						cdChanges := detector.DetectChanges()
-						recordBashChanges(ctx, h.FileTracker, h.CWD, cdChanges)
-					}
-
 					// Yield final aggregated structured content chunk
 					outObj := BashOutput{
 						ExitCode: task.ExitCode,
@@ -503,158 +471,4 @@ func (o BashOutput) TextContent() string {
 	}
 
 	return sb.String()
-}
-
-type bashChangeDetector struct {
-	cwd       string
-	isGit     bool
-	ignorer   fs.Ignorer
-	preStatus map[string]string
-	preMtimes map[string]time.Time
-}
-
-func newChangeDetector(cwd string) *bashChangeDetector {
-	ign, _ := fs.NewIgnorer(cwd)
-	cd := &bashChangeDetector{
-		cwd:       cwd,
-		ignorer:   ign,
-		preMtimes: make(map[string]time.Time),
-	}
-	if vcs.IsGitAvailable() && vcs.IsRepo(cwd) {
-		cd.isGit = true
-		status, err := vcs.GetStatus(cwd)
-		if err == nil {
-			cd.preStatus = parseGitStatusLines(status)
-		}
-	}
-	cd.scanMtimes()
-	return cd
-}
-
-func (cd *bashChangeDetector) scanMtimes() {
-	_ = filepath.Walk(cd.cwd, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return nil
-		}
-		rel, err := filepath.Rel(cd.cwd, path)
-		if err != nil {
-			return nil
-		}
-		if cd.ignorer.ShouldIgnore(filepath.Base(path), path, info.IsDir()) {
-			if info.IsDir() {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		cd.preMtimes[rel] = info.ModTime()
-		return nil
-	})
-}
-
-func (cd *bashChangeDetector) DetectChanges() []filetrack.Change {
-	var changes []filetrack.Change
-	currentMtimes := make(map[string]time.Time)
-	_ = filepath.Walk(cd.cwd, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return nil
-		}
-		rel, err := filepath.Rel(cd.cwd, path)
-		if err != nil {
-			return nil
-		}
-		if cd.ignorer.ShouldIgnore(filepath.Base(path), path, info.IsDir()) {
-			if info.IsDir() {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		currentMtimes[rel] = info.ModTime()
-		return nil
-	})
-
-	for rel, mtime := range currentMtimes {
-		preMtime, ok := cd.preMtimes[rel]
-		if !ok {
-			changes = append(changes, filetrack.Change{Path: "./" + rel, Kind: filetrack.Created})
-		} else if mtime.After(preMtime) {
-			changes = append(changes, filetrack.Change{Path: "./" + rel, Kind: filetrack.Modified})
-		}
-	}
-	for rel := range cd.preMtimes {
-		if _, ok := currentMtimes[rel]; !ok {
-			changes = append(changes, filetrack.Change{Path: "./" + rel, Kind: filetrack.Deleted})
-		}
-	}
-
-	if cd.isGit {
-		status, err := vcs.GetStatus(cd.cwd)
-		if err == nil {
-			postStatus := parseGitStatusLines(status)
-			for rel, post := range postStatus {
-				pre, ok := cd.preStatus[rel]
-				if !ok || pre != post {
-					found := false
-					for i, c := range changes {
-						if c.Path == "./"+rel {
-							found = true
-							if c.Kind == filetrack.Modified && (post == "D" || post == "DR") {
-								changes[i].Kind = filetrack.Deleted
-							}
-							break
-						}
-					}
-					if !found {
-						kind := filetrack.Modified
-						switch post {
-						case "A", "?? project":
-							kind = filetrack.Created
-						case "D":
-							kind = filetrack.Deleted
-						}
-						changes = append(changes, filetrack.Change{Path: "./" + rel, Kind: kind})
-					}
-				}
-			}
-		}
-	}
-
-	return changes
-}
-
-func parseGitStatusLines(status string) map[string]string {
-	res := make(map[string]string)
-	lines := strings.Split(status, "\n")
-	for _, l := range lines {
-		if len(l) < 4 {
-			continue
-		}
-		state := strings.TrimSpace(l[:2])
-		file := strings.TrimSpace(l[3:])
-		res[file] = state
-	}
-	return res
-}
-
-func recordBashChanges(ctx context.Context, ft filetrack.FileTracker, cwd string, changes []filetrack.Change) {
-	if ft == nil {
-		return
-	}
-	for _, c := range changes {
-		absPath := filepath.Join(cwd, c.Path)
-		mimeType := fs.DetectMIMEType(absPath)
-		if fs.IsBinaryMIME(mimeType) {
-			_ = ft.Record(ctx, c, "", "")
-			continue
-		}
-
-		if c.Kind == filetrack.Created || c.Kind == filetrack.Modified {
-			content, err := os.ReadFile(absPath)
-			if err == nil {
-				c.Additions = strings.Count(string(content), "\n") + 1
-				_ = ft.Record(ctx, c, "", string(content))
-			}
-		} else {
-			_ = ft.Record(ctx, c, "", "")
-		}
-	}
 }
