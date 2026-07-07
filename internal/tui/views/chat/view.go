@@ -500,7 +500,7 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 		}
 
 		lastMaxScrollY.Current = maxScrollY
-	}, []any{messagesKey})
+	}, nil)
 
 	sendMessage := func(text string, refs []resolver.Reference, force ...bool) {
 		if text == "" || submitting() {
