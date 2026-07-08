@@ -371,15 +371,19 @@ var GenericPreviewModal = kitex.FCC("GenericPreviewModal", func(props GenericPre
 		return nil
 	}
 
+	previewNode := kitex.UseMemo(func() kitex.Node {
+		return PreviewPanel(PreviewPanelProps{
+			Preview: props.Preview,
+			Border:  false,
+		})
+	}, []any{props.Preview})
+
 	return components.Modal(components.ModalProps{
 		IsOpen:  props.IsOpen,
 		Title:   kitex.Text(props.Title),
 		OnClose: props.OnClose,
 	},
-		PreviewPanel(PreviewPanelProps{
-			Preview: props.Preview,
-			Border:  false,
-		}),
+		previewNode,
 	)
 })
 

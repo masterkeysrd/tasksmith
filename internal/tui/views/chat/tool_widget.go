@@ -23,6 +23,7 @@ type ToolExecutionProps struct {
 	ToolMessage      *message.Tool
 	OnViewFullOutput func(title, cachedPath string)
 	OnViewPreview    func(title string, p preview.ToolPreview)
+	OnViewSubagent   func(title, subagentTaskID string)
 }
 
 func toolPulse() kitex.Node {
@@ -156,6 +157,8 @@ var ToolExecution = kitex.FC("ToolExecution", func(props ToolExecutionProps) kit
 			node = ActivateSkillToolWidget(props)
 		case "todos":
 			node = TodosToolWidget(props)
+		case "invoke_agent":
+			node = AgentToolWidget(props)
 		default:
 			node = GenericToolWidget(props)
 		}

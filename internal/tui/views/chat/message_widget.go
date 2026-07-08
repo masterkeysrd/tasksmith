@@ -31,6 +31,7 @@ type MessageProps struct {
 	SessionID             string
 	OnViewFullOutput      func(title, cachedPath string)
 	OnViewPreview         func(title string, p preview.ToolPreview)
+	OnViewSubagent        func(title, subagentTaskID string)
 }
 
 var Message = kitex.FC("Message", func(props MessageProps) kitex.Node {
@@ -150,6 +151,7 @@ var Message = kitex.FC("Message", func(props MessageProps) kitex.Node {
 						ToolMessage:      toolMsg,
 						OnViewFullOutput: props.OnViewFullOutput,
 						OnViewPreview:    props.OnViewPreview,
+						OnViewSubagent:   props.OnViewSubagent,
 					})
 				}
 			}

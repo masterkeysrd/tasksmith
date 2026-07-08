@@ -104,6 +104,7 @@ func (h *ToolHandlers) InvokeAgent(ctx context.Context, in InvokeAgentArgs) (too
 					}
 
 					outObj := InvokeAgentOutput{
+						TaskId: task.ID,
 						Status: string(status),
 						Output: finalOutput,
 						Error:  errStr,

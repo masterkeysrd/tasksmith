@@ -125,10 +125,17 @@ var PendingAuthorizationsWidget = kitex.FC("PendingAuthorizationsWidget", func(p
 // ViewProps defines the properties for the Chat view.
 type ViewProps struct {
 	SessionID string
+	ReadOnly  bool
 }
 
 // View is the main Chat view component.
-var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
+var View func(props ViewProps) kitex.Node
+
+func init() {
+	View = kitex.FC("ChatView", renderChatView)
+}
+
+func renderChatView(props ViewProps) kitex.Node {
 	t := theme.UseTheme()
 	client := tuiapi.UseClient()
 	windClient := wind.UseClient()
@@ -192,7 +199,6 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 	isInsert := m == mode.Insert
 	inputRef := kitex.UseRef[dom.Element](nil)
 	outerRef := kitex.UseRef[dom.Element](nil)
-
 	showFullOutputModal, setShowFullOutputModal := kitex.UseState(false)
 	fullOutputTitle, setFullOutputTitle := kitex.UseState("")
 	fullOutputContent, setFullOutputContent := kitex.UseState("")
@@ -200,6 +206,10 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 	showResultPreview, setShowResultPreview := kitex.UseState(false)
 	resultPreviewTitle, setResultPreviewTitle := kitex.UseState("")
 	resultPreview, setResultPreview := kitex.UseState[preview.ToolPreview](nil)
+
+	showSubagentModal, setShowSubagentModal := kitex.UseState(false)
+	subagentSessionID, setSubagentSessionID := kitex.UseState("")
+	subagentTitle, setSubagentTitle := kitex.UseState("")
 
 	localEditingMessages, setLocalEditingMessages := kitex.UseState([]message.Message(nil))
 	optimisticMessages, setOptimisticMessages := kitex.UseState([]message.Message(nil))
@@ -329,6 +339,12 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 		setShowResultPreview(true)
 	}
 
+	onViewSubagent := func(title, subagentTaskID string) {
+		setSubagentSessionID(subagentTaskID)
+		setSubagentTitle(title)
+		setShowSubagentModal(true)
+	}
+
 	openFullOutputModal := func(title, cachedPath string) {
 		go func() {
 			resp, err := client.GetCachedFile(context.Background(), api.GetCachedFileRequest{
@@ -416,15 +432,20 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 	isFirstRenderOfSession := kitex.UseRef(true)
 
 	// Bind handlers to the persistent static controller
-	Controller.SendQueued = func() {
-		if len(queuedMessages) > 0 && status == "idle" {
-			handleSendQueued()
+	if !props.ReadOnly {
+		Controller.SendQueued = func() {
+			if len(queuedMessages) > 0 && status == "idle" {
+				handleSendQueued()
+			}
 		}
-	}
-	Controller.ClearQueue = func() {
-		if len(queuedMessages) > 0 && status == "idle" {
-			handleClearQueue()
+		Controller.ClearQueue = func() {
+			if len(queuedMessages) > 0 && status == "idle" {
+				handleClearQueue()
+			}
 		}
+	} else {
+		Controller.SendQueued = nil
+		Controller.ClearQueue = nil
 	}
 	Controller.ScrollDown = func() {
 		log.Info("ScrollDown invoked", log.Bool("historyRef_nil", historyRef.Current == nil))
@@ -891,6 +912,64 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 		}
 	}
 
+	// Memoize the history scroller content to optimize typing performance
+	historyContent := kitex.UseMemo(func() kitex.Node {
+		return kitex.Fragment(
+			renderBubbles(
+				messages,
+				toolResponses,
+				mainAgentName,
+				isGenerating,
+				thinkingTime(),
+				pendingAuthorizations,
+				sessionID,
+				openFullOutputModal,
+				onViewPreview,
+				onViewSubagent,
+			)...,
+		)
+	}, []any{
+		messages,
+		toolResponses,
+		isGenerating,
+		thinkingTime(),
+		pendingAuthorizations,
+	})
+
+	// Memoize the subagent view to avoid re-rendering the entire nested chat view
+	// unless the active subagent session ID changes.
+	subagentView := kitex.UseMemo(func() kitex.Node {
+		if subagentSessionID() == "" {
+			return nil
+		}
+		return View(ViewProps{
+			SessionID: subagentSessionID(),
+			ReadOnly:  true,
+		})
+	}, []any{subagentSessionID()})
+
+	// Memoize the full output content box
+	fullOutputContentNode := kitex.UseMemo(func() kitex.Node {
+		if !showFullOutputModal() {
+			return nil
+		}
+		var textCol color.Color
+		if t != nil {
+			textCol = t.Color.Text.Secondary
+		}
+		outputStyle := style.S().
+			Width(style.Percent(100)).
+			Height(style.Percent(100)).
+			Foreground(textCol).
+			WhiteSpace(style.WhiteSpacePreWrap).
+			OverflowWrap(style.OverflowWrapBreakWord).
+			OverflowY(style.OverflowAuto)
+
+		return kitex.Box(kitex.BoxProps{Style: outputStyle},
+			kitex.Text(fullOutputContent()),
+		)
+	}, []any{showFullOutputModal(), fullOutputContent()})
+
 	outerProps := kitex.BoxProps{
 		Style:      outerStyle,
 		Ref:        outerRef,
@@ -904,9 +983,11 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 
 	return kitex.Box(outerProps,
 		// Session Title Bar
-		kitex.Box(kitex.BoxProps{Style: sessionTitleBarStyle},
-			kitex.Text(title),
-		),
+		kitex.If(!props.ReadOnly, func() kitex.Node {
+			return kitex.Box(kitex.BoxProps{Style: sessionTitleBarStyle},
+				kitex.Text(title),
+			)
+		}),
 
 		// Message History Section
 		kitex.Box(kitex.BoxProps{
@@ -914,19 +995,7 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 			Ref:        historyRef,
 			Attributes: map[string]string{"data-id": "history-scroller"},
 		},
-			kitex.Fragment(
-				renderBubbles(
-					messages,
-					toolResponses,
-					mainAgentName,
-					isGenerating,
-					thinkingTime(),
-					pendingAuthorizations,
-					sessionID,
-					openFullOutputModal,
-					onViewPreview,
-				)...,
-			),
+			historyContent,
 
 			// Standalone Pending Authorizations Widget for subagents
 			kitex.If(len(unrenderedAuths) > 0, func() kitex.Node {
@@ -1006,92 +1075,94 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 		),
 
 		// Composer Section
-		kitex.Box(kitex.BoxProps{
-			Style:      composerContainerStyle,
-			Attributes: map[string]string{"data-context": "composer"},
-		},
-			// Queue actions row (above Composer)
-			kitex.If((len(queuedMessages) > 0 || len(localEditingMessages()) > 0) && status == "idle", func() kitex.Node {
-				isEditing := len(localEditingMessages()) > 0
-				children := []kitex.Node{
-					kitex.Text("Queue Actions:"),
-				}
-				if !isEditing {
-					children = append(children,
-						kitex.Span(kitex.SpanProps{
-							Style: style.S().Foreground(t.Color.Surface.Success).Bold(true).Underline(true),
-							OnClick: func(e event.Event) {
-								handleSendQueued()
-							},
-						}, kitex.Text("s: Send Queued")),
-						kitex.Span(kitex.SpanProps{
-							Style: style.S().Foreground(t.Color.Text.Secondary).Underline(true),
-							OnClick: func(e event.Event) {
-								handleClearQueue()
-							},
-						}, kitex.Text("c: Clear Queue")),
-					)
-				} else {
-					children = append(children,
-						kitex.Span(kitex.SpanProps{
-							Style: style.S().Foreground(t.Color.Text.Secondary).Underline(true),
-							OnClick: func(e event.Event) {
-								handleCancelQueuedEdit()
-							},
-						}, kitex.Text("x: Cancel Edit")),
-					)
-				}
-				return kitex.Box(kitex.BoxProps{
-					Style: style.S().
-						Display(style.DisplayFlex).
-						FlexDirection(style.FlexRow).
-						Gap(2).
-						PaddingHorizontal(1).
-						MarginBottom(1),
-				}, children...)
-			}),
-			Composer(ComposerProps{
-				Value:     inputValue(),
-				Disabled:  submitting(),
-				IsInsert:  isInsert,
-				Ref:       inputRef,
-				SessionID: sessionID,
-				OnChange: func(val string) {
-					setInputValue(val)
-				},
-				OnSubmit: func(text string, trackedRefs []resolver.Reference) {
-					sendMessage(text, trackedRefs)
-				},
-			}),
-			func() kitex.Node {
-				var tipText string
-				if status == "running" {
-					tipText = "Press Ctrl+C to cancel execution"
-				} else if isInsert {
-					tipText = "Press <Enter> to send, <Esc> to exit"
-				} else {
-					tipText = "Press i to write, J/K to scroll, s to send queue"
-				}
+		kitex.If(!props.ReadOnly, func() kitex.Node {
+			return kitex.Box(kitex.BoxProps{
+				Style:      composerContainerStyle,
+				Attributes: map[string]string{"data-context": "composer"},
+			},
+				// Queue actions row (above Composer)
+				kitex.If((len(queuedMessages) > 0 || len(localEditingMessages()) > 0) && status == "idle", func() kitex.Node {
+					isEditing := len(localEditingMessages()) > 0
+					children := []kitex.Node{
+						kitex.Text("Queue Actions:"),
+					}
+					if !isEditing {
+						children = append(children,
+							kitex.Span(kitex.SpanProps{
+								Style: style.S().Foreground(t.Color.Surface.Success).Bold(true).Underline(true),
+								OnClick: func(e event.Event) {
+									handleSendQueued()
+								},
+							}, kitex.Text("s: Send Queued")),
+							kitex.Span(kitex.SpanProps{
+								Style: style.S().Foreground(t.Color.Text.Secondary).Underline(true),
+								OnClick: func(e event.Event) {
+									handleClearQueue()
+								},
+							}, kitex.Text("c: Clear Queue")),
+						)
+					} else {
+						children = append(children,
+							kitex.Span(kitex.SpanProps{
+								Style: style.S().Foreground(t.Color.Text.Secondary).Underline(true),
+								OnClick: func(e event.Event) {
+									handleCancelQueuedEdit()
+								},
+							}, kitex.Text("x: Cancel Edit")),
+						)
+					}
+					return kitex.Box(kitex.BoxProps{
+						Style: style.S().
+							Display(style.DisplayFlex).
+							FlexDirection(style.FlexRow).
+							Gap(2).
+							PaddingHorizontal(1).
+							MarginBottom(1),
+					}, children...)
+				}),
+				Composer(ComposerProps{
+					Value:     inputValue(),
+					Disabled:  submitting(),
+					IsInsert:  isInsert,
+					Ref:       inputRef,
+					SessionID: sessionID,
+					OnChange: func(val string) {
+						setInputValue(val)
+					},
+					OnSubmit: func(text string, trackedRefs []resolver.Reference) {
+						sendMessage(text, trackedRefs)
+					},
+				}),
+				func() kitex.Node {
+					var tipText string
+					if status == "running" {
+						tipText = "Press Ctrl+C to cancel execution"
+					} else if isInsert {
+						tipText = "Press <Enter> to send, <Esc> to exit"
+					} else {
+						tipText = "Press i to write, J/K to scroll, s to send queue"
+					}
 
-				var textStyle style.Style
-				if t != nil {
-					textStyle = style.S().Foreground(t.Color.Text.Tertiary)
-				}
+					var textStyle style.Style
+					if t != nil {
+						textStyle = style.S().Foreground(t.Color.Text.Tertiary)
+					}
 
-				return kitex.Box(kitex.BoxProps{
-					Style: style.S().
-						Display(style.DisplayFlex).
-						FlexDirection(style.FlexRow).
-						AlignItems(style.AlignCenter).
-						PaddingVertical(0).
-						PaddingHorizontal(1).
-						Height(style.Cells(1)).
-						Background(bgDark),
-				},
-					kitex.Span(kitex.SpanProps{Style: textStyle}, kitex.Text(tipText)),
-				)
-			}(),
-		),
+					return kitex.Box(kitex.BoxProps{
+						Style: style.S().
+							Display(style.DisplayFlex).
+							FlexDirection(style.FlexRow).
+							AlignItems(style.AlignCenter).
+							PaddingVertical(0).
+							PaddingHorizontal(1).
+							Height(style.Cells(1)).
+							Background(bgDark),
+					},
+						kitex.Span(kitex.SpanProps{Style: textStyle}, kitex.Text(tipText)),
+					)
+				}(),
+			)
+		}),
 
 		// Resolution Dialog for Pending Authorizations
 		kitex.If(showResolutionDialog(), func() kitex.Node {
@@ -1109,41 +1180,70 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 		}),
 
 		// Modal Section for Full Output View
-		components.Modal(components.ModalProps{
-			IsOpen:  showFullOutputModal(),
-			Title:   kitex.Text(fullOutputTitle()),
-			OnClose: func() { setShowFullOutputModal(false) },
-		},
-			kitex.If(showFullOutputModal(), func() kitex.Node {
-				var textCol color.Color
-				if t != nil {
-					textCol = t.Color.Text.Secondary
-				}
-				outputStyle := style.S().
-					Width(style.Percent(100)).
-					Height(style.Percent(100)).
-					Foreground(textCol).
-					WhiteSpace(style.WhiteSpacePreWrap).
-					OverflowWrap(style.OverflowWrapBreakWord).
-					OverflowY(style.OverflowAuto)
-
-				return kitex.Box(kitex.BoxProps{Style: outputStyle},
-					kitex.Text(fullOutputContent()),
-				)
-			}),
-		),
+		kitex.If(!props.ReadOnly, func() kitex.Node {
+			return components.Modal(components.ModalProps{
+				IsOpen: showFullOutputModal(),
+				Title:  kitex.Text(fullOutputTitle()),
+				OnClose: func() {
+					setShowFullOutputModal(false)
+					setFullOutputContent("")
+					setFullOutputTitle("")
+				},
+			},
+				fullOutputContentNode,
+			)
+		}),
 
 		// Modal Section for Generic Result Preview
-		GenericPreviewModal(GenericPreviewModalProps{
-			IsOpen:  showResultPreview(),
-			Title:   resultPreviewTitle(),
-			Preview: resultPreview(),
-			OnClose: func() { setShowResultPreview(false) },
+		kitex.If(!props.ReadOnly, func() kitex.Node {
+			return GenericPreviewModal(GenericPreviewModalProps{
+				IsOpen:  showResultPreview(),
+				Title:   resultPreviewTitle(),
+				Preview: resultPreview(),
+				OnClose: func() {
+					setShowResultPreview(false)
+					setResultPreview(nil)
+					setResultPreviewTitle("")
+				},
+			})
+		}),
+
+		// Modal Section for Subagent Peek View
+		kitex.If(!props.ReadOnly, func() kitex.Node {
+			return components.Modal(components.ModalProps{
+				IsOpen: showSubagentModal(),
+				Title:  kitex.Text(subagentTitle()),
+				OnClose: func() {
+					setShowSubagentModal(false)
+					setSubagentSessionID("")
+					setSubagentTitle("")
+				},
+			},
+				kitex.If(showSubagentModal(), func() kitex.Node {
+					modalContentStyle := style.S().
+						Width(style.Percent(100)).
+						Height(style.Percent(100)).
+						Overflow(style.OverflowHidden)
+
+					return kitex.Box(kitex.BoxProps{Style: modalContentStyle},
+						subagentView,
+					)
+				}),
+			)
 		}),
 	)
-})
+}
 
-func getBubbleRole(role message.Role) message.Role {
+func getBubbleRole(role message.Role, msg message.Message) message.Role {
+	if msg != nil {
+		meta := msg.GetMetadata()
+		if meta != nil {
+			if name, ok := meta["agent_name"].(string); ok && name != "" {
+				return message.RoleAssistant
+			}
+		}
+	}
+
 	switch role {
 	case message.RoleUser:
 		return message.RoleUser
@@ -1165,6 +1265,7 @@ func renderBubbles(
 	sessionID string,
 	onViewFullOutput func(title, cachedPath string),
 	onViewPreview func(title string, p preview.ToolPreview),
+	onViewSubagent func(title, subagentTaskID string),
 ) []kitex.Node {
 	if len(messages) == 0 {
 		return nil
@@ -1196,6 +1297,7 @@ func renderBubbles(
 				SessionID:             sessionID,
 				OnViewFullOutput:      onViewFullOutput,
 				OnViewPreview:         onViewPreview,
+				OnViewSubagent:        onViewSubagent,
 			}))
 		}
 	}
@@ -1203,7 +1305,7 @@ func renderBubbles(
 	for _, msg := range messages {
 		isSys := isSystemNotification(msg)
 		role := msg.Role()
-		groupRole := getBubbleRole(role)
+		groupRole := getBubbleRole(role, msg)
 
 		if isSys {
 			flush()

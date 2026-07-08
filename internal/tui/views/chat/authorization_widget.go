@@ -1075,11 +1075,13 @@ var AuthorizationPreviewModal = kitex.FCC("AuthorizationPreviewModal", func(prop
 
 	req := props.Request
 
-	leftNode := PreviewPanel(PreviewPanelProps{
-		Preview: req.Preview,
-		Payload: req.Payload,
-		Border:  false,
-	})
+	leftNode := kitex.UseMemo(func() kitex.Node {
+		return PreviewPanel(PreviewPanelProps{
+			Preview: req.Preview,
+			Payload: req.Payload,
+			Border:  false,
+		})
+	}, []any{req.Preview, req.Payload})
 
 	var currReq *permissions.PermissionGrantRequest
 	var currReqOptions []permissions.PermissionOption

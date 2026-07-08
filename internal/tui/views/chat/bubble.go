@@ -29,6 +29,7 @@ type BubbleGroupProps struct {
 	SessionID             string
 	OnViewFullOutput      func(title, cachedPath string)
 	OnViewPreview         func(title string, p preview.ToolPreview)
+	OnViewSubagent        func(title, subagentTaskID string)
 }
 
 var BubbleGroup = kitex.FC("BubbleGroup", func(props BubbleGroupProps) kitex.Node {
@@ -130,8 +131,16 @@ var BubbleGroup = kitex.FC("BubbleGroup", func(props BubbleGroupProps) kitex.Nod
 				msgPendingAuths = props.PendingAuthorizations
 			}
 
+			effectiveRole := msg.Role()
+			meta := msg.GetMetadata()
+			if meta != nil {
+				if name, ok := meta["agent_name"].(string); ok && name != "" {
+					effectiveRole = message.RoleAssistant
+				}
+			}
+
 			node := Message(MessageProps{
-				Role:                  msg.Role(),
+				Role:                  effectiveRole,
 				Content:               msg.GetContent(),
 				ToolResponses:         props.ToolResponses,
 				ReasoningTokens:       reasoningTokens,
@@ -140,6 +149,7 @@ var BubbleGroup = kitex.FC("BubbleGroup", func(props BubbleGroupProps) kitex.Nod
 				SessionID:             props.SessionID,
 				OnViewFullOutput:      props.OnViewFullOutput,
 				OnViewPreview:         props.OnViewPreview,
+				OnViewSubagent:        props.OnViewSubagent,
 			})
 			if node != nil {
 				children = append(children, node)
@@ -519,6 +529,10 @@ func isSystemNotification(msg message.Message) bool {
 	if meta == nil {
 		return false
 	}
-	_, hasType := meta["type"]
-	return hasType
+	if val, ok := meta["is_system_notification"]; ok {
+		if b, ok := val.(bool); ok {
+			return b
+		}
+	}
+	return false
 }

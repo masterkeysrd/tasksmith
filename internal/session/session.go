@@ -1270,6 +1270,35 @@ func (m *Manager) notifySubscribers(sessionID string) {
 
 // GetMessages retrieves all Loom messages for a session.
 func (m *Manager) GetMessages(ctx context.Context, sessionID string) (message.MessageList, error) {
+	if strings.HasPrefix(sessionID, "task_") {
+		cp, err := m.store.NewCheckpointer()
+		if err != nil {
+			return nil, err
+		}
+		storage := NewLocalFileStorage(m.ws.CWD(), sessionID)
+		ag, err := agentgraph.New(ctx, agentgraph.Options{
+			Workspace:   m.ws,
+			Storage:     storage,
+			TaskManager: m.taskMgr,
+			SessionID:   sessionID,
+			LspManager:  m.lspManager,
+			McpManager:  m.mcpManager,
+		})
+		if err != nil {
+			return nil, err
+		}
+		g, err := ag.Build(cp)
+		if err != nil {
+			return nil, err
+		}
+		loc := &graph.Location{ThreadID: sessionID}
+		snap, err := g.Load(ctx, *loc)
+		if err != nil {
+			return nil, nil // Return empty if not found
+		}
+		return snap.State.Messages, nil
+	}
+
 	mds, err := m.store.GetMessages(ctx, sessionID)
 	if err != nil {
 		return nil, err
