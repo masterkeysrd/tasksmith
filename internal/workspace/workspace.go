@@ -288,15 +288,14 @@ func (w *Workspace) Project() *warp.Project {
 }
 
 func (w *Workspace) ResolveDefaults(ctx context.Context) (agentName, providerName, modelName string, err error) {
-	// Default values in case nothing is configured
+	if w.registry == nil {
+		_ = w.Load(ctx)
+	}
+
 	agentName = "main"
 	providerName = "ollama"
 	modelName = "qwen3.6:35b-a3b-coding-nvfp4"
-
-	cfg, err := w.GetWorkspaceConfig(ctx)
-	if err != nil {
-		return agentName, providerName, modelName, err
-	}
+	cfg, _ := w.GetWorkspaceConfig(ctx)
 
 	// 1. Find the "main" agent (or first agent if main doesn't exist)
 	var mainAgent *warp.Agent
@@ -329,8 +328,8 @@ func (w *Workspace) ResolveDefaults(ctx context.Context) (agentName, providerNam
 	}
 
 	// 2. Fallback to default provider in workspace config
+	providers := w.Providers()
 	if cfg.DefaultProvider != "" {
-		providers := w.Providers()
 		for _, p := range providers {
 			if p.GetName() == cfg.DefaultProvider {
 				pName := p.GetName()
@@ -345,5 +344,28 @@ func (w *Workspace) ResolveDefaults(ctx context.Context) (agentName, providerNam
 		}
 	}
 
-	return agentName, providerName, modelName, nil
+	// 3. Fallback to ollama provider preset or first available provider
+	var fallbackP *warp.ModelProvider
+	for _, p := range providers {
+		if p.GetName() == "ollama" {
+			fallbackP = p
+			break
+		}
+	}
+	if fallbackP == nil && len(providers) > 0 {
+		fallbackP = providers[0]
+	}
+
+	if fallbackP != nil {
+		pName := fallbackP.GetName()
+		mName := fallbackP.Spec.DefaultModel
+		if mName == "" && len(fallbackP.Spec.Models) > 0 {
+			mName = fallbackP.Spec.Models[0].ID
+		}
+		if mName != "" {
+			return agentName, pName, mName, nil
+		}
+	}
+
+	return agentName, "ollama", "qwen3.6:35b-a3b-coding-nvfp4", nil
 }

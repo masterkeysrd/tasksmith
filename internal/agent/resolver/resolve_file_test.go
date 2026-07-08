@@ -372,6 +372,34 @@ func (m *mockWorkspace) Resources() []warp.Resource {
 	return m.resources
 }
 
+func (m *mockWorkspace) CWD() string {
+	return ""
+}
+
+func (m *mockWorkspace) Providers() []*warp.ModelProvider {
+	return nil
+}
+
+func (m *mockWorkspace) ResolveDefaults(ctx context.Context) (agentName, providerName, modelName string, err error) {
+	return "", "", "", nil
+}
+
+func (m *mockWorkspace) Contexts() []*warp.Context {
+	return nil
+}
+
+func (m *mockWorkspace) WorkspaceSpec() *warp.Workspace {
+	return nil
+}
+
+func (m *mockWorkspace) Project() *warp.Project {
+	return nil
+}
+
+func (m *mockWorkspace) Agents() []*warp.Agent {
+	return nil
+}
+
 func TestResolveSkill(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "tasksmith-resolver-skill-test-*")
 	if err != nil {

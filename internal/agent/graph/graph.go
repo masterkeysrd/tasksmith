@@ -88,9 +88,7 @@ func NewLoomModel(m *llm.Model) LLMModel {
 }
 
 // InboxProvider defines the interface to retrieve pending user messages.
-type InboxProvider interface {
-	PopMessages() []message.Message
-}
+type InboxProvider = tools.InboxProvider
 
 // AgentGraph orchestrates the flow of model invocation.
 type AgentGraph struct {
@@ -133,6 +131,20 @@ func New(ctx context.Context, opts Options) (*AgentGraph, error) {
 			return nil, fmt.Errorf("failed to get workspace config: %w", err)
 		}
 		allowedTools = cfg.AuthorizedTools
+	}
+
+	if opts.Workspace != nil && opts.AgentName != "" {
+		if agent, err := opts.Workspace.ResolveAgent(ctx, opts.AgentName); err == nil && agent != nil && agent.Agent != nil {
+			if agent.Agent.Spec.Policies != nil && agent.Agent.Spec.Policies.Tools != nil {
+				agentAllowed := make(map[string]bool)
+				for _, tName := range agent.Agent.Spec.Policies.Tools.Include {
+					if allowedTools == nil || tools.IsToolAllowed(tName, allowedTools) {
+						agentAllowed[tName] = true
+					}
+				}
+				allowedTools = agentAllowed
+			}
+		}
 	}
 
 	var cwd string

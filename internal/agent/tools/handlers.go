@@ -46,102 +46,6 @@ func LoomTools(handlers *ToolHandlers) ([]*tool.Tool, error) {
 		list = append(list, t)
 	}
 
-	if res, ok := nameMap["agent_define"]; ok {
-		var opts []tool.Option
-		if res.Spec.Annotations != nil {
-			opts = append(opts, tool.WithAnnotation(tool.Annotation{
-				IsOpenWorld:  res.Spec.Annotations.IsOpenWorld,
-				IsDangerous:  res.Spec.Annotations.IsDangerous,
-				IsReadOnly:   res.Spec.Annotations.IsReadOnly,
-				IsIdempotent: res.Spec.Annotations.IsIdempotent,
-				UserHint:     res.Spec.Annotations.UserHint,
-			}))
-		}
-		t, err := tool.New(
-			"agent_define",
-			res.Metadata.DisplayName,
-			res.Spec.Instructions,
-			handlers.AgentDefine,
-			opts...,
-		)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create tool agent_define: %w", err)
-		}
-		list = append(list, t)
-	}
-
-	if res, ok := nameMap["agent_invoke"]; ok {
-		var opts []tool.Option
-		if res.Spec.Annotations != nil {
-			opts = append(opts, tool.WithAnnotation(tool.Annotation{
-				IsOpenWorld:  res.Spec.Annotations.IsOpenWorld,
-				IsDangerous:  res.Spec.Annotations.IsDangerous,
-				IsReadOnly:   res.Spec.Annotations.IsReadOnly,
-				IsIdempotent: res.Spec.Annotations.IsIdempotent,
-				UserHint:     res.Spec.Annotations.UserHint,
-			}))
-		}
-		t, err := tool.New(
-			"agent_invoke",
-			res.Metadata.DisplayName,
-			res.Spec.Instructions,
-			handlers.AgentInvoke,
-			opts...,
-		)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create tool agent_invoke: %w", err)
-		}
-		list = append(list, t)
-	}
-
-	if res, ok := nameMap["agent_manage"]; ok {
-		var opts []tool.Option
-		if res.Spec.Annotations != nil {
-			opts = append(opts, tool.WithAnnotation(tool.Annotation{
-				IsOpenWorld:  res.Spec.Annotations.IsOpenWorld,
-				IsDangerous:  res.Spec.Annotations.IsDangerous,
-				IsReadOnly:   res.Spec.Annotations.IsReadOnly,
-				IsIdempotent: res.Spec.Annotations.IsIdempotent,
-				UserHint:     res.Spec.Annotations.UserHint,
-			}))
-		}
-		t, err := tool.New(
-			"agent_manage",
-			res.Metadata.DisplayName,
-			res.Spec.Instructions,
-			handlers.AgentManage,
-			opts...,
-		)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create tool agent_manage: %w", err)
-		}
-		list = append(list, t)
-	}
-
-	if res, ok := nameMap["agent_send_message"]; ok {
-		var opts []tool.Option
-		if res.Spec.Annotations != nil {
-			opts = append(opts, tool.WithAnnotation(tool.Annotation{
-				IsOpenWorld:  res.Spec.Annotations.IsOpenWorld,
-				IsDangerous:  res.Spec.Annotations.IsDangerous,
-				IsReadOnly:   res.Spec.Annotations.IsReadOnly,
-				IsIdempotent: res.Spec.Annotations.IsIdempotent,
-				UserHint:     res.Spec.Annotations.UserHint,
-			}))
-		}
-		t, err := tool.New(
-			"agent_send_message",
-			res.Metadata.DisplayName,
-			res.Spec.Instructions,
-			handlers.AgentSendMessage,
-			opts...,
-		)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create tool agent_send_message: %w", err)
-		}
-		list = append(list, t)
-	}
-
 	if res, ok := nameMap["ask_question"]; ok {
 		var opts []tool.Option
 		if res.Spec.Annotations != nil {
@@ -306,6 +210,30 @@ func LoomTools(handlers *ToolHandlers) ([]*tool.Tool, error) {
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create tool grep: %w", err)
+		}
+		list = append(list, t)
+	}
+
+	if res, ok := nameMap["invoke_agent"]; ok {
+		var opts []tool.Option
+		if res.Spec.Annotations != nil {
+			opts = append(opts, tool.WithAnnotation(tool.Annotation{
+				IsOpenWorld:  res.Spec.Annotations.IsOpenWorld,
+				IsDangerous:  res.Spec.Annotations.IsDangerous,
+				IsReadOnly:   res.Spec.Annotations.IsReadOnly,
+				IsIdempotent: res.Spec.Annotations.IsIdempotent,
+				UserHint:     res.Spec.Annotations.UserHint,
+			}))
+		}
+		t, err := tool.NewStreaming(
+			"invoke_agent",
+			res.Metadata.DisplayName,
+			res.Spec.Instructions,
+			handlers.InvokeAgent,
+			opts...,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create tool invoke_agent: %w", err)
 		}
 		list = append(list, t)
 	}

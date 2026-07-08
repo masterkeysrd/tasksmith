@@ -33,112 +33,6 @@ type ActivateSkillOutput struct {
 	Success bool `json:"success,omitempty" jsonschema:"Whether the skill was successfully activated."`
 }
 
-// AgentDefineArgs defines the arguments for the "agent_define" tool.
-//
-// Define a new type of specialized subagent that can be spawned via agent_invoke.
-type AgentDefineArgs struct {
-	// Description: Description of the subagent's role.
-	Description string `json:"description" jsonschema:"Description of the subagent's role."`
-	// EnableMcpTools: Allow the subagent to interact with Model Context Protocol (MCP) servers.
-	EnableMcpTools bool `json:"enable_mcp_tools,omitempty" jsonschema:"Allow the subagent to interact with Model Context Protocol (MCP) servers."`
-	// EnableSubagentTools: Allow the subagent to define and spawn its own subagents.
-	EnableSubagentTools bool `json:"enable_subagent_tools,omitempty" jsonschema:"Allow the subagent to define and spawn its own subagents."`
-	// EnableWriteTools: Equip the subagent with tools to write/edit files and run terminal commands.
-	EnableWriteTools bool `json:"enable_write_tools,omitempty" jsonschema:"Equip the subagent with tools to write/edit files and run terminal commands."`
-	// Name: Unique name identifier for the new subagent type.
-	Name string `json:"name" jsonschema:"Unique name identifier for the new subagent type."`
-	// SystemPrompt: The detailed instructions/prompt for the subagent.
-	SystemPrompt string `json:"system_prompt" jsonschema:"The detailed instructions/prompt for the subagent."`
-}
-
-// AgentDefineOutput defines the output returned by the "agent_define" tool.
-type AgentDefineOutput struct {
-	// Error: Error message if the operation failed.
-	Error string `json:"error,omitempty" jsonschema:"Error message if the operation failed."`
-	// Success: Whether defining the subagent succeeded.
-	Success bool `json:"success,omitempty" jsonschema:"Whether defining the subagent succeeded."`
-}
-
-// AgentInvokeArgs defines the arguments for the "agent_invoke" tool.
-//
-// Invoke one or more subagents concurrently to perform background tasks.
-type AgentInvokeArgs struct {
-	Subagents []AgentInvokeArgsSubagentsItem `json:"subagents"`
-}
-
-type AgentInvokeArgsSubagentsItem struct {
-	// Prompt: The specific instruction task description for the subagent to start.
-	Prompt string `json:"prompt" jsonschema:"The specific instruction task description for the subagent to start."`
-	// Role: A brief role/job title for this invocation (e.g. Code Researcher).
-	Role string `json:"role" jsonschema:"A brief role/job title for this invocation (e.g. Code Researcher)."`
-	// TypeName: The defined type name of the subagent to invoke.
-	TypeName string `json:"type_name" jsonschema:"The defined type name of the subagent to invoke."`
-	// Workspace: Workspace isolation mode. Defaults to inherit.
-	Workspace string `json:"workspace,omitempty" jsonschema:"Workspace isolation mode. Defaults to inherit."`
-}
-
-// AgentInvokeOutput defines the output returned by the "agent_invoke" tool.
-type AgentInvokeOutput struct {
-	// Error: Error message if the invocation failed.
-	Error     string                           `json:"error,omitempty" jsonschema:"Error message if the invocation failed."`
-	Subagents []AgentInvokeOutputSubagentsItem `json:"subagents,omitempty"`
-	// Success: Whether invoking the subagents succeeded.
-	Success bool `json:"success,omitempty" jsonschema:"Whether invoking the subagents succeeded."`
-}
-
-type AgentInvokeOutputSubagentsItem struct {
-	// ConversationId: The unique ID assigned to this subagent conversation thread.
-	ConversationId string `json:"conversation_id,omitempty" jsonschema:"The unique ID assigned to this subagent conversation thread."`
-	// Role: Role description.
-	Role string `json:"role,omitempty" jsonschema:"Role description."`
-	// TypeName: Subagent type.
-	TypeName string `json:"type_name,omitempty" jsonschema:"Subagent type."`
-}
-
-// AgentManageArgs defines the arguments for the "agent_manage" tool.
-//
-// Manage active subagent threads (list, kill, or kill all).
-type AgentManageArgs struct {
-	// Action: The management action to perform.
-	Action string `json:"action" jsonschema:"The management action to perform."`
-	// ConversationIds: Conversation IDs of subagents to terminate (required for 'kill').
-	ConversationIds []string `json:"conversation_ids,omitempty" jsonschema:"Conversation IDs of subagents to terminate (required for 'kill')."`
-}
-
-// AgentManageOutput defines the output returned by the "agent_manage" tool.
-type AgentManageOutput struct {
-	// Error: Error message if the action failed.
-	Error     string                           `json:"error,omitempty" jsonschema:"Error message if the action failed."`
-	Subagents []AgentManageOutputSubagentsItem `json:"subagents,omitempty"`
-	// Success: Whether the management action succeeded.
-	Success bool `json:"success,omitempty" jsonschema:"Whether the management action succeeded."`
-}
-
-type AgentManageOutputSubagentsItem struct {
-	ConversationId string `json:"conversation_id,omitempty"`
-	Role           string `json:"role,omitempty"`
-	Status         string `json:"status,omitempty"`
-	TypeName       string `json:"type_name,omitempty"`
-}
-
-// AgentSendMessageArgs defines the arguments for the "agent_send_message" tool.
-//
-// Send an instruction or status query message to an active subagent.
-type AgentSendMessageArgs struct {
-	// Message: The content/instruction message to send.
-	Message string `json:"message" jsonschema:"The content/instruction message to send."`
-	// RecipientId: The conversation ID of the target subagent.
-	RecipientId string `json:"recipient_id" jsonschema:"The conversation ID of the target subagent."`
-}
-
-// AgentSendMessageOutput defines the output returned by the "agent_send_message" tool.
-type AgentSendMessageOutput struct {
-	// Error: Error message if sending failed.
-	Error string `json:"error,omitempty" jsonschema:"Error message if sending failed."`
-	// Success: Whether sending the message succeeded.
-	Success bool `json:"success,omitempty" jsonschema:"Whether sending the message succeeded."`
-}
-
 // AskQuestionArgs defines the arguments for the "ask_question" tool.
 //
 // Ask the user one or more multiple-choice questions for clarification or design decisions.
@@ -389,6 +283,32 @@ type GrepOutputMatchesItem struct {
 	Line int `json:"line,omitempty" jsonschema:"1-indexed line number of the match."`
 	// Path: File path containing the match.
 	Path string `json:"path,omitempty" jsonschema:"File path containing the match."`
+}
+
+// InvokeAgentArgs defines the arguments for the "invoke_agent" tool.
+//
+// Invoke a defined subagent to run a task.
+type InvokeAgentArgs struct {
+	// AgentRef: The defined type name of the subagent to invoke (e.g. researcher).
+	AgentRef string `json:"agent_ref" jsonschema:"The defined type name of the subagent to invoke (e.g. researcher)."`
+	// Mode: The lifecycle mode of the subagent. 'transient' (default) runs the task to completion and exits. 'interactive' suspends execution upon completion of the task, allowing future instructions.
+	Mode string `json:"mode,omitempty" jsonschema:"The lifecycle mode of the subagent. 'transient' (default) runs the task to completion and exits. 'interactive' suspends execution upon completion of the task, allowing future instructions."`
+	// Task: The specific instruction or prompt for the subagent to start execution with.
+	Task string `json:"task" jsonschema:"The specific instruction or prompt for the subagent to start execution with."`
+	// WaitMs: How long (in milliseconds) to block and wait for the agent to finish before returning a background task reference.
+	WaitMs int `json:"wait_ms,omitempty" jsonschema:"How long (in milliseconds) to block and wait for the agent to finish before returning a background task reference."`
+}
+
+// InvokeAgentOutput defines the output returned by the "invoke_agent" tool.
+type InvokeAgentOutput struct {
+	// Error: Error message if the subagent execution failed.
+	Error string `json:"error,omitempty" jsonschema:"Error message if the subagent execution failed."`
+	// Output: The final plain text message response produced by the subagent if completed synchronously.
+	Output string `json:"output,omitempty" jsonschema:"The final plain text message response produced by the subagent if completed synchronously."`
+	// Status: The execution status of the subagent (e.g. completed, failed, running).
+	Status string `json:"status,omitempty" jsonschema:"The execution status of the subagent (e.g. completed, failed, running)."`
+	// TaskId: The background task ID if the subagent execution runs in the background.
+	TaskId string `json:"task_id,omitempty" jsonschema:"The background task ID if the subagent execution runs in the background."`
 }
 
 // LsArgs defines the arguments for the "ls" tool.

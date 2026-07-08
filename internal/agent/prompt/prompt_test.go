@@ -87,6 +87,39 @@ func TestRenderAgent(t *testing.T) {
 	}
 }
 
+func TestRenderAgent_HasTool(t *testing.T) {
+	agent := &warp.Agent{
+		Spec: warp.AgentSpec{
+			Instructions: "{{if call .HasTool \"invoke_agent\"}}HAS_IT{{else}}NOPE{{end}}",
+		},
+	}
+
+	resolvedNoTool := &warp.ResolvedAgent{
+		Agent: agent,
+	}
+	res, err := RenderAgent(resolvedNoTool, nil, nil, nil)
+	if err != nil {
+		t.Fatalf("unexpected error rendering: %v", err)
+	}
+	if res != "NOPE" {
+		t.Errorf("expected NOPE, got %q", res)
+	}
+
+	toolObj := &warp.Tool{}
+	toolObj.Metadata.Name = "invoke_agent"
+	resolvedWithTool := &warp.ResolvedAgent{
+		Agent: agent,
+		Tools: []*warp.Tool{toolObj},
+	}
+	res2, err := RenderAgent(resolvedWithTool, nil, nil, nil)
+	if err != nil {
+		t.Fatalf("unexpected error rendering: %v", err)
+	}
+	if res2 != "HAS_IT" {
+		t.Errorf("expected HAS_IT, got %q", res2)
+	}
+}
+
 func TestRenderSkill(t *testing.T) {
 	skill := &warp.Skill{
 		Spec: warp.SkillSpec{

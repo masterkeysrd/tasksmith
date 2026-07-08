@@ -20,6 +20,13 @@ type FileStorage interface {
 type Workspace interface {
 	ResolveAgent(ctx context.Context, ref string) (*warp.ResolvedAgent, error)
 	Resources() []warp.Resource
+	Providers() []*warp.ModelProvider
+	CWD() string
+	ResolveDefaults(ctx context.Context) (agentName, providerName, modelName string, err error)
+	Contexts() []*warp.Context
+	WorkspaceSpec() *warp.Workspace
+	Project() *warp.Project
+	Agents() []*warp.Agent
 }
 
 // Config holds the dependencies and configuration for the Resolver.
