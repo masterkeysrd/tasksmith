@@ -209,6 +209,11 @@ func NewManager(cfg ManagerConfig) *Manager {
 		_ = m.SendSystemNotification(ctx, sessionID, msgText, meta)
 	})
 
+	m.taskMgr.OnPendingAuthorization = func(parentSessionID string, taskID string, reqs []permissions.AuthorizationRequest) {
+		log.Info(fmt.Sprintf("[Session] OnPendingAuthorization callback triggered: parentSessionID=%s taskID=%s reqsCount=%d", parentSessionID, taskID, len(reqs)))
+		m.syncSessionAuthStatus(parentSessionID)
+	}
+
 	return m
 }
 
@@ -470,6 +475,11 @@ func (m *Manager) GetRunningMetrics(sessionID string) *message.TokenMetrics {
 	return sess.CurrentStreamMetrics
 }
 
+// TaskManager returns the TaskManager instance associated with this session manager.
+func (m *Manager) TaskManager() *tools.TaskManager {
+	return m.taskMgr
+}
+
 // ListTasks retrieves all tasks for a session from the task manager.
 func (m *Manager) ListTasks(sessionID string) []*tools.Task {
 	if m.taskMgr == nil {
@@ -646,6 +656,45 @@ func (m *Manager) SubmitAuthorizationDecision(ctx context.Context, sessionID str
 	m.mu.Unlock()
 
 	m.tryRehydrateSession(ctx, sess)
+
+	// Route decisions to subagents if applicable
+	subagentRouted := false
+	for _, d := range decisions {
+		for _, t := range m.taskMgr.ListTasks(sessionID) {
+			if t.Type == "agent" && t.Status == tools.StatusRunning {
+				if runner, ok := t.Runner().(*tools.AgentRunner); ok {
+					runner.SubmitAuthorizationDecision(d)
+					subagentRouted = true
+				}
+			}
+		}
+	}
+
+	if subagentRouted {
+		m.mu.Lock()
+		var remaining []permissions.AuthorizationRequest
+		for _, req := range sess.PendingAuthorizations {
+			keep := true
+			for _, d := range decisions {
+				if req.ToolCallID == d.ToolCallID {
+					keep = false
+					break
+				}
+			}
+			if keep {
+				remaining = append(remaining, req)
+			}
+		}
+		sess.PendingAuthorizations = remaining
+		if len(remaining) > 0 {
+			sess.Status = StatusPendingAuth
+		} else {
+			sess.Status = StatusRunning
+		}
+		m.mu.Unlock()
+		m.notifySubscribers(sessionID)
+		return nil
+	}
 
 	m.mu.Lock()
 	if sess.Status != StatusPendingAuth && sess.Status != StatusIdle {
@@ -996,6 +1045,8 @@ func (m *Manager) runAgentLoop(runCtx context.Context, sessionID string, sess *A
 	}
 	m.mu.Unlock()
 
+	m.syncSessionAuthStatus(sessionID)
+
 	if _, err := m.AppendMessage(context.Background(), sessionID, asstMsg); err != nil {
 		m.setSessionError(sessionID, fmt.Errorf("failed to save final assistant message: %w", err))
 		return
@@ -1142,6 +1193,59 @@ func (m *Manager) SubscribeMessages(sessionID string) (<-chan struct{}, func()) 
 	}
 
 	return ch, cleanup
+}
+
+func (m *Manager) syncSessionAuthStatus(sessionID string) {
+	m.mu.Lock()
+	sess, exists := m.activeSessions[sessionID]
+	if !exists {
+		sess = &ActiveSession{
+			ID:     sessionID,
+			Status: StatusIdle,
+		}
+		m.activeSessions[sessionID] = sess
+	}
+
+	var parentAuths []permissions.AuthorizationRequest
+	subagentIDs := make(map[string]bool)
+	var subagentAuths []permissions.AuthorizationRequest
+	for _, t := range m.taskMgr.ListTasks(sessionID) {
+		log.Info(fmt.Sprintf("[Session] syncSessionAuthStatus task check: id=%s type=%s status=%s runnerType=%T", t.ID, t.Type, t.Status, t.Runner()))
+		if t.Type == "agent" && t.Status == tools.StatusRunning {
+			if runner, ok := t.Runner().(*tools.AgentRunner); ok {
+				auths := runner.PendingAuthorizations()
+				log.Info(fmt.Sprintf("[Session] syncSessionAuthStatus runner found: id=%s authsCount=%d", t.ID, len(auths)))
+				for _, req := range auths {
+					subagentAuths = append(subagentAuths, req)
+					subagentIDs[req.ToolCallID] = true
+				}
+			} else {
+				log.Info(fmt.Sprintf("[Session] syncSessionAuthStatus runner type mismatch: expected *tools.AgentRunner, got %T", t.Runner()))
+			}
+		}
+	}
+
+	for _, req := range sess.PendingAuthorizations {
+		if !subagentIDs[req.ToolCallID] {
+			parentAuths = append(parentAuths, req)
+		}
+	}
+
+	totalAuths := append(parentAuths, subagentAuths...)
+
+	if len(totalAuths) > 0 {
+		sess.Status = StatusPendingAuth
+		sess.PendingAuthorizations = totalAuths
+		log.Info(fmt.Sprintf("[Session] syncSessionAuthStatus: sessionID=%s set status=pending_auth count=%d (parent=%d subagent=%d)", sessionID, len(totalAuths), len(parentAuths), len(subagentAuths)))
+	} else {
+		if sess.Status == StatusPendingAuth {
+			sess.Status = StatusIdle
+			sess.PendingAuthorizations = nil
+			log.Info(fmt.Sprintf("[Session] syncSessionAuthStatus: sessionID=%s cleared pending_auth (transitioned to idle)", sessionID))
+		}
+	}
+	m.mu.Unlock()
+	m.notifySubscribers(sessionID)
 }
 
 func (m *Manager) notifySubscribers(sessionID string) {

@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/masterkeysrd/loom/message"
+	"github.com/masterkeysrd/tasksmith/internal/agent/permissions"
 )
 
 // InboxProvider defines the interface to retrieve pending user messages.
@@ -44,10 +45,48 @@ type AgentRunner struct {
 	TaskID   string
 	Handlers *ToolHandlers
 
-	Inbox   []message.Message
-	InboxMu sync.Mutex
-	cancel  context.CancelFunc
-	result  string
+	Inbox            []message.Message
+	InboxMu          sync.Mutex
+	authDecisionChan chan permissions.AuthorizationDecision
+	pendingAuths     []permissions.AuthorizationRequest
+	cancel           context.CancelFunc
+	result           string
+}
+
+// PendingAuthorizations returns the subagent's active pending authorizations.
+func (ar *AgentRunner) PendingAuthorizations() []permissions.AuthorizationRequest {
+	ar.InboxMu.Lock()
+	defer ar.InboxMu.Unlock()
+	return ar.pendingAuths
+}
+
+// SetPendingAuthorizations sets the subagent's active pending authorizations.
+func (ar *AgentRunner) SetPendingAuthorizations(reqs []permissions.AuthorizationRequest) {
+	ar.InboxMu.Lock()
+	defer ar.InboxMu.Unlock()
+	ar.pendingAuths = reqs
+}
+
+// WaitForAuthDecision blocks until a permission decision is received or context is canceled.
+func (ar *AgentRunner) WaitForAuthDecision(ctx context.Context) (permissions.AuthorizationDecision, error) {
+	select {
+	case <-ctx.Done():
+		return permissions.AuthorizationDecision{}, ctx.Err()
+	case d := <-ar.authDecisionChan:
+		return d, nil
+	}
+}
+
+// SubmitAuthorizationDecision submits a user permission decision to the subagent.
+func (ar *AgentRunner) SubmitAuthorizationDecision(decision permissions.AuthorizationDecision) {
+	ar.InboxMu.Lock()
+	defer ar.InboxMu.Unlock()
+	if ar.authDecisionChan != nil {
+		select {
+		case ar.authDecisionChan <- decision:
+		default:
+		}
+	}
 }
 
 // Result returns the subagent's execution result.
@@ -81,6 +120,7 @@ func (ar *AgentRunner) Start(ctx context.Context, stdout io.Writer, stderr io.Wr
 
 	// Initialize the inbox with the starting task prompt if empty.
 	ar.InboxMu.Lock()
+	ar.authDecisionChan = make(chan permissions.AuthorizationDecision, 1)
 	if len(ar.Inbox) == 0 {
 		msg := message.NewUserText(ar.Task)
 		u, err := uuid.NewV7()

@@ -3,10 +3,12 @@ package session_test
 import (
 	"bytes"
 	"context"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/masterkeysrd/loom/message"
 	"github.com/masterkeysrd/tasksmith/internal/agent/model"
@@ -864,5 +866,146 @@ func TestSendMessageFileTracking(t *testing.T) {
 	}
 	if !known {
 		t.Error("expected file to be known to the tracker after being attached to user message")
+	}
+}
+
+type mockSubagentGraphRunner struct {
+	runFunc func(ctx context.Context, opts tools.SubagentOptions) (string, error)
+}
+
+func (m *mockSubagentGraphRunner) Run(ctx context.Context, opts tools.SubagentOptions) (string, error) {
+	if m.runFunc != nil {
+		return m.runFunc(ctx, opts)
+	}
+	return "mock output", nil
+}
+
+func TestSubmitAuthorizationDecision_SubagentRouting(t *testing.T) {
+	tmpCwd := t.TempDir()
+
+	db, err := coredb.Open(tmpCwd, "tasksmith.db")
+	if err != nil {
+		t.Fatalf("failed to open database: %v", err)
+	}
+	defer db.Close()
+
+	checkpointsDb, err := coredb.Open(tmpCwd, "checkpoints.db")
+	if err != nil {
+		t.Fatalf("failed to open checkpoints database: %v", err)
+	}
+	defer checkpointsDb.Close()
+
+	store, err := session.NewSQLiteStore(db, checkpointsDb)
+	if err != nil {
+		t.Fatalf("failed to initialize sqlite store: %v", err)
+	}
+
+	ws := workspace.New(tmpCwd)
+	manager := session.NewManager(session.ManagerConfig{
+		Store:     store,
+		Workspace: ws,
+	})
+	ctx := context.Background()
+
+	s, err := manager.CreateSession(ctx, "subagent-auth-routing-test")
+	if err != nil {
+		t.Fatalf("failed to create session: %v", err)
+	}
+
+	// Register a mock subagent runner
+	oldSubagentRunner := tools.SubagentRunner
+	tools.SubagentRunner = &mockSubagentGraphRunner{
+		runFunc: func(ctx context.Context, opts tools.SubagentOptions) (string, error) {
+			<-ctx.Done()
+			return "mock output", nil
+		},
+	}
+	defer func() { tools.SubagentRunner = oldSubagentRunner }()
+
+	resolverObj := resolver.New(resolver.Config{
+		Cwd:       tmpCwd,
+		Workspace: ws,
+	})
+	handlers := &tools.ToolHandlers{
+		CWD:         tmpCwd,
+		SessionID:   s.ID,
+		TaskManager: manager.TaskManager(),
+		Resolver:    resolverObj,
+	}
+
+	runner := &tools.AgentRunner{
+		AgentRef: "researcher",
+		Task:     "find documents",
+		Mode:     "transient",
+		TaskID:   "task-subagent-123",
+		Handlers: handlers,
+	}
+
+	task, err := manager.TaskManager().Submit(ctx, tools.SubmitOptions{
+		SessionID: s.ID,
+		TaskType:  "agent",
+		Name:      "subagent_task",
+		Runner:    runner,
+		WaitMs:    0, // Run in background immediately
+	})
+	if err != nil {
+		t.Fatalf("failed to submit subagent task: %v", err)
+	}
+
+	// Simulate starting the runner which sets up authDecisionChan
+	go func() {
+		_ = runner.Start(ctx, io.Discard, io.Discard)
+	}()
+
+	// Wait briefly for Start to run and initialize authDecisionChan
+	time.Sleep(50 * time.Millisecond)
+
+	reqs := []permissions.AuthorizationRequest{
+		{
+			ToolCallID:  "call_subagent_tool",
+			ToolName:    "write_file",
+			Description: "Write test contents",
+		},
+	}
+
+	// 1. Simulate the subagent bubbling up auth requests
+	runner.SetPendingAuthorizations(reqs)
+	manager.TaskManager().BubbleUpAuthRequest(task.ID, reqs)
+
+	// 2. Verify parent session state is now pending_auth
+	status, _, _, pendingAuths, _ := manager.GetSessionState(ctx, s.ID)
+	if status != session.StatusPendingAuth {
+		t.Errorf("expected parent status pending_auth, got %s", status)
+	}
+	if len(pendingAuths) != 1 || pendingAuths[0].ToolCallID != "call_subagent_tool" {
+		t.Errorf("expected 1 pending auth for subagent, got %v", pendingAuths)
+	}
+
+	// 3. Submit decision to parent session manager
+	decision := permissions.AuthorizationDecision{
+		ToolCallID: "call_subagent_tool",
+		Approved:   true,
+	}
+	err = manager.SubmitAuthorizationDecision(ctx, s.ID, decision)
+	if err != nil {
+		t.Fatalf("failed to submit authorization decision: %v", err)
+	}
+
+	// 4. Verify that the subagent runner received the decision on its channel
+	d, err := runner.WaitForAuthDecision(ctx)
+	if err != nil {
+		t.Fatalf("WaitForAuthDecision failed: %v", err)
+	}
+	if d.ToolCallID != "call_subagent_tool" || !d.Approved {
+		t.Errorf("expected approved decision for call_subagent_tool, got %v", d)
+	}
+
+	// 5. Verify parent session cleared its pending authorizations
+	status2, _, _, pendingAuths2, _ := manager.GetSessionState(ctx, s.ID)
+	if status2 != session.StatusRunning {
+		t.Errorf("expected parent status running, got %s", status2)
+	}
+	if len(pendingAuths2) != 0 {
+		t.Errorf("expected parent pending auths to be cleared, got %v", pendingAuths2)
 	}
 }

@@ -18,6 +18,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/agent/tools"
 	coredb "github.com/masterkeysrd/tasksmith/internal/core/db"
 	"github.com/masterkeysrd/tasksmith/internal/core/fsutil"
+	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
 	"github.com/masterkeysrd/tasksmith/internal/workspace"
 	"github.com/masterkeysrd/warp"
@@ -296,26 +297,55 @@ func (r *subagentRunnerImpl) Run(ctx context.Context, opts tools.SubagentOptions
 			}
 		}
 
-		if snap, err := g.Load(ctx, *loc); err == nil && len(snap.State.Messages) > 0 {
-			lastMsg := snap.State.Messages[len(snap.State.Messages)-1]
-			if lastMsg.Role() == message.RoleAssistant {
-				hasToolCalls := false
-				for _, block := range lastMsg.GetContent() {
-					if _, ok := block.(*message.ToolCall); ok {
-						hasToolCalls = true
-						break
-					}
+		if snap, err := g.Load(ctx, *loc); err == nil {
+			log.Info(fmt.Sprintf("[Subagent] Loaded snapshot: PendingAuthsCount=%d MessagesCount=%d", len(snap.State.PendingAuthorizations), len(snap.State.Messages)))
+			if len(snap.State.PendingAuthorizations) > 0 {
+				log.Info(fmt.Sprintf("[Subagent] Pending authorizations found: %v", snap.State.PendingAuthorizations))
+				if runner, ok := opts.Inbox.(*tools.AgentRunner); ok {
+					runner.SetPendingAuthorizations(snap.State.PendingAuthorizations)
 				}
-				if !hasToolCalls {
-					var textParts []string
+
+				if opts.ParentHandlers != nil && opts.ParentHandlers.TaskManager != nil {
+					opts.ParentHandlers.TaskManager.BubbleUpAuthRequest(opts.SessionID, snap.State.PendingAuthorizations)
+				}
+
+				if runner, ok := opts.Inbox.(*tools.AgentRunner); ok {
+					decision, err := runner.WaitForAuthDecision(ctx)
+					runner.SetPendingAuthorizations(nil)
+					if err != nil {
+						return "", err
+					}
+
+					inputCmd = graph.Update[AgentState](func(state AgentState) AgentState {
+						state.Decisions = append(state.Decisions, decision)
+						state.PendingAuthorizations = nil
+						return state
+					})
+					continue
+				}
+			}
+
+			if len(snap.State.Messages) > 0 {
+				lastMsg := snap.State.Messages[len(snap.State.Messages)-1]
+				if lastMsg.Role() == message.RoleAssistant {
+					hasToolCalls := false
 					for _, block := range lastMsg.GetContent() {
-						if tb, ok := block.(*message.TextBlock); ok {
-							textParts = append(textParts, tb.Text)
+						if _, ok := block.(*message.ToolCall); ok {
+							hasToolCalls = true
+							break
 						}
 					}
-					finalOutput = strings.Join(textParts, "")
-					if runner, ok := opts.Inbox.(*tools.AgentRunner); ok {
-						runner.SetResult(finalOutput)
+					if !hasToolCalls {
+						var textParts []string
+						for _, block := range lastMsg.GetContent() {
+							if tb, ok := block.(*message.TextBlock); ok {
+								textParts = append(textParts, tb.Text)
+							}
+						}
+						finalOutput = strings.Join(textParts, "")
+						if runner, ok := opts.Inbox.(*tools.AgentRunner); ok {
+							runner.SetResult(finalOutput)
+						}
 					}
 				}
 			}

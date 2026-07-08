@@ -157,6 +157,7 @@ var Message = kitex.FC("Message", func(props MessageProps) kitex.Node {
 				children = append(children, node)
 			}
 		}
+
 		if len(children) == 0 {
 			return nil
 		}

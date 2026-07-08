@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"image/color"
+	"maps"
 	"strings"
 	"time"
 
@@ -30,6 +31,96 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/tui/theme"
 	"github.com/masterkeysrd/tasksmith/internal/tui/toast"
 )
+
+type PendingAuthorizationsWidgetProps struct {
+	SessionID             string
+	PendingAuthorizations []permissions.AuthorizationRequest
+}
+
+var PendingAuthorizationsWidget = kitex.FC("PendingAuthorizationsWidget", func(props PendingAuthorizationsWidgetProps) kitex.Node {
+	client := tuiapi.UseClient()
+	windClient := wind.UseClient()
+
+	localDecisions, setLocalDecisions := kitex.UseState(make(map[string]permissions.AuthorizationDecision))
+
+	kitex.UseEffect(func() {
+		setLocalDecisions(make(map[string]permissions.AuthorizationDecision))
+	}, []any{props.SessionID, len(props.PendingAuthorizations)})
+
+	submitBatch := func(decisions []permissions.AuthorizationDecision) {
+		promise.New(func(ctx context.Context) (bool, error) {
+			_, err := client.SubmitAuthorizationDecision(ctx, api.SubmitAuthorizationDecisionRequest{
+				SessionID: props.SessionID,
+				Decisions: decisions,
+			})
+			return err == nil, err
+		}).Then(func(success bool) {
+			windClient.InvalidateQueries(api.GetSessionMessagesRequest{SessionID: props.SessionID})
+			windClient.InvalidateQueries(api.GetSessionStateRequest{SessionID: props.SessionID})
+			windClient.InvalidateQueries(api.GetFileChangesRequest{SessionID: props.SessionID})
+		}, func(err error) {
+			log.Error(fmt.Sprintf("Failed to submit batch authorization decisions: %v", err))
+		})
+	}
+
+	onDecision := func(dec permissions.AuthorizationDecision) {
+		current := localDecisions()
+		newDecisions := make(map[string]permissions.AuthorizationDecision)
+		maps.Copy(newDecisions, current)
+		newDecisions[dec.ToolCallID] = dec
+		setLocalDecisions(newDecisions)
+
+		allDecided := true
+		var decisionList []permissions.AuthorizationDecision
+		for _, req := range props.PendingAuthorizations {
+			if d, ok := newDecisions[req.ToolCallID]; ok {
+				decisionList = append(decisionList, d)
+			} else {
+				allDecided = false
+			}
+		}
+
+		if allDecided && len(props.PendingAuthorizations) > 0 {
+			submitBatch(decisionList)
+		}
+	}
+
+	var activeToolCallID string
+	for _, req := range props.PendingAuthorizations {
+		if _, decided := localDecisions()[req.ToolCallID]; !decided {
+			activeToolCallID = req.ToolCallID
+			break
+		}
+	}
+
+	var children []kitex.Node
+	for _, req := range props.PendingAuthorizations {
+		var localDec *permissions.AuthorizationDecision
+		if dec, decided := localDecisions()[req.ToolCallID]; decided {
+			localDec = &dec
+		}
+		isActive := req.ToolCallID == activeToolCallID && localDec == nil
+		node := AuthorizationWidget(AuthorizationWidgetProps{
+			Request:       req,
+			SessionID:     props.SessionID,
+			IsActive:      isActive,
+			OnDecision:    onDecision,
+			LocalDecision: localDec,
+		})
+		children = append(children, node)
+	}
+
+	return kitex.Box(kitex.BoxProps{
+		Style: style.S().
+			Display(style.DisplayFlex).
+			FlexDirection(style.FlexColumn).
+			Width(style.Percent(100)).
+			MinWidth(style.Percent(0)).
+			Gap(1).
+			PaddingTop(1).
+			PaddingBottom(1),
+	}, children...)
+})
 
 // ViewProps defines the properties for the Chat view.
 type ViewProps struct {
@@ -460,6 +551,11 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 		}
 	}
 
+	// Refetch session state query when messages receive updates (e.g. subagent bubbles up prompts)
+	kitex.UseEffect(func() {
+		stateQuery.Refetch()
+	}, []any{messagesKey})
+
 	kitex.UseLayoutEffect(func() {
 		if historyRef.Current == nil {
 			return
@@ -777,6 +873,24 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 		}
 	}
 
+	// Filter out pending authorizations that are already present/rendered inline in the message blocks
+	var unrenderedAuths []permissions.AuthorizationRequest
+	renderedIDs := make(map[string]bool)
+	for _, msg := range messages {
+		if asst, ok := msg.(*message.Assistant); ok {
+			for _, block := range asst.Content {
+				if tc, ok := block.(*message.ToolCall); ok {
+					renderedIDs[tc.ID] = true
+				}
+			}
+		}
+	}
+	for _, req := range pendingAuthorizations {
+		if !renderedIDs[req.ToolCallID] {
+			unrenderedAuths = append(unrenderedAuths, req)
+		}
+	}
+
 	outerProps := kitex.BoxProps{
 		Style:      outerStyle,
 		Ref:        outerRef,
@@ -813,6 +927,14 @@ var View = kitex.FC("ChatView", func(props ViewProps) kitex.Node {
 					onViewPreview,
 				)...,
 			),
+
+			// Standalone Pending Authorizations Widget for subagents
+			kitex.If(len(unrenderedAuths) > 0, func() kitex.Node {
+				return PendingAuthorizationsWidget(PendingAuthorizationsWidgetProps{
+					SessionID:             sessionID,
+					PendingAuthorizations: unrenderedAuths,
+				})
+			}),
 
 			// Agent Status Widget
 			kitex.If(sending || lastFinishedTime() >= 0, func() kitex.Node {
@@ -1058,6 +1180,10 @@ func renderBubbles(
 			if isGenerating && len(messages) > 0 && currentGroup[len(currentGroup)-1] == messages[len(messages)-1] {
 				groupIsGenerating = true
 			}
+			groupPendingAuths := []permissions.AuthorizationRequest{}
+			if len(messages) > 0 && currentGroup[len(currentGroup)-1] == messages[len(messages)-1] {
+				groupPendingAuths = pendingAuthorizations
+			}
 			nodes = append(nodes, BubbleGroup(BubbleGroupProps{
 				Key:                   fmt.Sprintf("group-%s-%s", currentGroupRole, currentGroup[0].GetID()),
 				Role:                  currentGroupRole,
@@ -1066,7 +1192,7 @@ func renderBubbles(
 				MainAgentName:         mainAgentName,
 				IsGenerating:          groupIsGenerating,
 				LiveThinkingTime:      liveThinkingTime,
-				PendingAuthorizations: pendingAuthorizations,
+				PendingAuthorizations: groupPendingAuths,
 				SessionID:             sessionID,
 				OnViewFullOutput:      onViewFullOutput,
 				OnViewPreview:         onViewPreview,

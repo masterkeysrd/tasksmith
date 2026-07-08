@@ -11,7 +11,9 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/masterkeysrd/tasksmith/internal/agent/permissions"
 	"github.com/masterkeysrd/tasksmith/internal/core/fsutil"
+	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
 )
 
@@ -63,6 +65,11 @@ type Task struct {
 	cancel context.CancelFunc
 }
 
+// Runner returns the TaskRunner instance associated with this task.
+func (t *Task) Runner() TaskRunner {
+	return t.runner
+}
+
 // SubmitOptions defines the arguments for submitting a task to the TaskManager.
 type SubmitOptions struct {
 	SessionID  string
@@ -75,10 +82,11 @@ type SubmitOptions struct {
 
 // TaskManager orchestrates thread-safe creation, execution, and termination of background processes.
 type TaskManager struct {
-	mu             sync.RWMutex
-	tasks          map[string]*Task
-	workspacePath  string
-	notifyCallback func(sessionID string, taskID string, task *Task)
+	mu                     sync.RWMutex
+	tasks                  map[string]*Task
+	workspacePath          string
+	notifyCallback         func(sessionID string, taskID string, task *Task)
+	OnPendingAuthorization func(parentSessionID string, taskID string, reqs []permissions.AuthorizationRequest)
 }
 
 // NewTaskManager creates a new centralized TaskManager for the workspace.
@@ -149,6 +157,10 @@ func (tm *TaskManager) Submit(ctx context.Context, opts SubmitOptions) (*Task, e
 	tm.mu.Lock()
 	tm.tasks[taskID] = task
 	tm.mu.Unlock()
+
+	if ar, ok := opts.Runner.(*AgentRunner); ok {
+		ar.TaskID = taskID
+	}
 
 	doneChan := make(chan error, 1)
 
@@ -496,5 +508,22 @@ func (tm *TaskManager) pollState() {
 				tm.notifyCallback(t.SessionID, t.ID, t)
 			}
 		}
+	}
+}
+
+// BubbleUpAuthRequest notifies the manager that a task requires permission authorizations.
+func (tm *TaskManager) BubbleUpAuthRequest(taskID string, reqs []permissions.AuthorizationRequest) {
+	tm.mu.RLock()
+	task, exists := tm.tasks[taskID]
+	tm.mu.RUnlock()
+
+	log.Info(fmt.Sprintf("[TaskManager] BubbleUpAuthRequest called: taskID=%s reqsCount=%d exists=%t callbackIsNil=%t", taskID, len(reqs), exists, tm.OnPendingAuthorization == nil))
+
+	if !exists {
+		return
+	}
+
+	if tm.OnPendingAuthorization != nil {
+		tm.OnPendingAuthorization(task.SessionID, task.ID, reqs)
 	}
 }

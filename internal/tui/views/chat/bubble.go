@@ -88,6 +88,14 @@ var BubbleGroup = kitex.FC("BubbleGroup", func(props BubbleGroupProps) kitex.Nod
 			}
 		}
 
+		lastNonToolIndex := -1
+		for idx := len(props.Msgs) - 1; idx >= 0; idx-- {
+			if props.Msgs[idx].Role() != message.RoleTool {
+				lastNonToolIndex = idx
+				break
+			}
+		}
+
 		var children []kitex.Node
 		for i, msg := range props.Msgs {
 			if msg.Role() == message.RoleTool {
@@ -117,13 +125,18 @@ var BubbleGroup = kitex.FC("BubbleGroup", func(props BubbleGroupProps) kitex.Nod
 				}
 			}
 
+			var msgPendingAuths []permissions.AuthorizationRequest
+			if i == lastNonToolIndex {
+				msgPendingAuths = props.PendingAuthorizations
+			}
+
 			node := Message(MessageProps{
 				Role:                  msg.Role(),
 				Content:               msg.GetContent(),
 				ToolResponses:         props.ToolResponses,
 				ReasoningTokens:       reasoningTokens,
 				ThinkingDuration:      thinkingDuration,
-				PendingAuthorizations: props.PendingAuthorizations,
+				PendingAuthorizations: msgPendingAuths,
 				SessionID:             props.SessionID,
 				OnViewFullOutput:      props.OnViewFullOutput,
 				OnViewPreview:         props.OnViewPreview,
