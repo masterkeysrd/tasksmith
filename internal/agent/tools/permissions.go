@@ -454,16 +454,22 @@ func (h *FileSearchPermissionHandler) GetPermissionGroup() string {
 func (h *FileSearchPermissionHandler) Evaluate(ctx context.Context, req permissions.ToolCallRequest, mode permissions.PermissionMode, grants []permissions.Permission) permissions.EvaluationResult {
 	args := req.Args
 	var targetVal string
+	var pathVal string
 	if req.ToolName == "glob" {
 		targetVal, _ = args["pattern"].(string)
+		pathVal, _ = args["path"].(string)
+		if pathVal == "" {
+			pathVal = "."
+		}
 	} else {
 		targetVal, _ = args["path"].(string)
 		if targetVal == "" {
 			targetVal = "."
 		}
+		pathVal = targetVal
 	}
 
-	if state, found := evaluateFileGrants(grants, targetVal); found {
+	if state, found := evaluateFileGrants(grants, pathVal); found {
 		return permissions.EvaluationResult{State: state}
 	}
 
@@ -471,6 +477,13 @@ func (h *FileSearchPermissionHandler) Evaluate(ctx context.Context, req permissi
 	isSafe := true
 	if req.ToolName == "glob" {
 		isSafe = !strings.Contains(targetVal, "../")
+		if isSafe {
+			absPath, err := resolveAbsPath(ctx, pathVal)
+			if err != nil {
+				return permissions.EvaluationResult{State: permissions.StateRequiresAuth, Hints: []string{"Failed to resolve directory path"}}
+			}
+			isSafe = isSafeWorkspacePath(ctx, absPath)
+		}
 	} else {
 		absPath, err := resolveAbsPath(ctx, targetVal)
 		if err != nil {
