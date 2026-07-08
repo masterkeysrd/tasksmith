@@ -292,11 +292,13 @@ var AuthorizationHybridSelector = kitex.FC("AuthorizationHybridSelector", func(p
 })
 
 type AuthorizationWidgetProps struct {
-	Request       permissions.AuthorizationRequest
-	SessionID     string
-	IsActive      bool
-	OnDecision    func(permissions.AuthorizationDecision)
-	LocalDecision *permissions.AuthorizationDecision
+	Request             permissions.AuthorizationRequest
+	SessionID           string
+	IsActive            bool
+	OnDecision          func(permissions.AuthorizationDecision)
+	LocalDecision       *permissions.AuthorizationDecision
+	ShowPreviewModal    bool
+	SetShowPreviewModal func(bool)
 }
 
 var AuthorizationWidget = kitex.FC("AuthorizationWidget", func(props AuthorizationWidgetProps) kitex.Node {
@@ -315,7 +317,16 @@ var AuthorizationWidget = kitex.FC("AuthorizationWidget", func(props Authorizati
 	focusedItem, setFocusedItem := kitex.UseState(FocusItemOnce)
 	selectedOptionIndex, setSelectedOptionIndex := kitex.UseState(0)
 	selectedDirIndex, setSelectedDirIndex := kitex.UseState(0)
-	showPreviewModal, setShowPreviewModal := kitex.UseState(false)
+	var showPreviewModal func() bool
+	var setShowPreviewModal func(bool)
+	if props.SetShowPreviewModal != nil {
+		showPreviewModal = func() bool { return props.ShowPreviewModal }
+		setShowPreviewModal = props.SetShowPreviewModal
+	} else {
+		localShow, localSet := kitex.UseState(false)
+		showPreviewModal = localShow
+		setShowPreviewModal = localSet
+	}
 	showCancelConfirmDialog, setShowCancelConfirmDialog := kitex.UseState(false)
 	isProvidingFeedback, setIsProvidingFeedback := kitex.UseState(false)
 	feedbackText, setFeedbackText := kitex.UseState("")
@@ -975,40 +986,42 @@ var AuthorizationWidget = kitex.FC("AuthorizationWidget", func(props Authorizati
 			}),
 
 			// Overlay Modal
-			AuthorizationPreviewModal(AuthorizationPreviewModalProps{
-				IsOpen:              showPreviewModal(),
-				Request:             req,
-				FocusedItem:         focusedItem(),
-				SelectedScopeIndex:  selectedScopeIndex(),
-				SelectedOptionIndex: selectedOptionIndex(),
-				SelectedDirIndex:    selectedDirIndex(),
-				IsSubmitting:        submitting(),
-				OnClose: func() {
-					setShowPreviewModal(false)
-					setIsProvidingFeedback(false)
-					IsFeedbackActive = false
-				},
-				OnApprove:           handleApprove,
-				OnDeny:              handleDeny,
-				OnHardCancel:        handleHardCancel,
-				OnSelectVertical:    setFocusedItem,
-				OnSelectScope:       setSelectedScopeIndex,
-				OnSelectOption:      setSelectedOptionIndex,
-				OnSelectDir:         setSelectedDirIndex,
-				IsProvidingFeedback: isProvidingFeedback(),
-				FeedbackText:        feedbackText(),
-				OnFeedbackChange:    setFeedbackText,
-				OnDenyWithFeedback:  handleDenyWithFeedback,
-				OnCancelFeedback: func() {
-					setIsProvidingFeedback(false)
-					IsFeedbackActive = false
-					setFeedbackText("")
-				},
-				OnStartFeedback: func() {
-					setIsProvidingFeedback(true)
-					IsFeedbackActive = true
-					setFeedbackText("")
-				},
+			kitex.If(showPreviewModal(), func() kitex.Node {
+				return AuthorizationPreviewModal(AuthorizationPreviewModalProps{
+					IsOpen:              true,
+					Request:             req,
+					FocusedItem:         focusedItem(),
+					SelectedScopeIndex:  selectedScopeIndex(),
+					SelectedOptionIndex: selectedOptionIndex(),
+					SelectedDirIndex:    selectedDirIndex(),
+					IsSubmitting:        submitting(),
+					OnClose: func() {
+						setShowPreviewModal(false)
+						setIsProvidingFeedback(false)
+						IsFeedbackActive = false
+					},
+					OnApprove:           handleApprove,
+					OnDeny:              handleDeny,
+					OnHardCancel:        handleHardCancel,
+					OnSelectVertical:    setFocusedItem,
+					OnSelectScope:       setSelectedScopeIndex,
+					OnSelectOption:      setSelectedOptionIndex,
+					OnSelectDir:         setSelectedDirIndex,
+					IsProvidingFeedback: isProvidingFeedback(),
+					FeedbackText:        feedbackText(),
+					OnFeedbackChange:    setFeedbackText,
+					OnDenyWithFeedback:  handleDenyWithFeedback,
+					OnCancelFeedback: func() {
+						setIsProvidingFeedback(false)
+						IsFeedbackActive = false
+						setFeedbackText("")
+					},
+					OnStartFeedback: func() {
+						setIsProvidingFeedback(true)
+						IsFeedbackActive = true
+						setFeedbackText("")
+					},
+				})
 			}),
 
 			// Inline Hard Cancel Dialog
@@ -1070,6 +1083,18 @@ var AuthorizationPreviewModal = kitex.FCC("AuthorizationPreviewModal", func(prop
 		}
 	}, []any{props.IsProvidingFeedback})
 
+	kitex.UseEffect(func() {
+		if !props.IsProvidingFeedback {
+			kitex.PostMacro(func() {
+				if previewRef.Current != nil {
+					if doc := previewRef.Current.OwnerDocument(); doc != nil {
+						doc.Focus(previewRef.Current)
+					}
+				}
+			})
+		}
+	}, []any{props.IsProvidingFeedback})
+
 	textRef := kitex.UseRef("")
 	textRef.Current = props.FeedbackText
 
@@ -1110,6 +1135,7 @@ var AuthorizationPreviewModal = kitex.FCC("AuthorizationPreviewModal", func(prop
 
 	// Bind handlers to the persistent static ModalAuthCtrl if this modal is open
 	if props.IsOpen {
+		ModalAuthCtrl.ActiveToolCallID = req.ToolCallID
 		ModalAuthCtrl.MoveDown = func() {
 			if props.IsProvidingFeedback {
 				return
@@ -1311,16 +1337,19 @@ var AuthorizationPreviewModal = kitex.FCC("AuthorizationPreviewModal", func(prop
 	kitex.UseEffectCleanup(func() func() {
 		return func() {
 			if props.IsOpen {
-				ModalAuthCtrl.MoveDown = nil
-				ModalAuthCtrl.MoveUp = nil
-				ModalAuthCtrl.SelectPrevOption = nil
-				ModalAuthCtrl.SelectNextOption = nil
-				ModalAuthCtrl.Approve = nil
-				ModalAuthCtrl.Deny = nil
-				ModalAuthCtrl.StartFeedback = nil
-				ModalAuthCtrl.ToggleCancelDialog = nil
-				ModalAuthCtrl.ScrollDown = nil
-				ModalAuthCtrl.ScrollUp = nil
+				if ModalAuthCtrl.ActiveToolCallID == req.ToolCallID {
+					ModalAuthCtrl.ActiveToolCallID = ""
+					ModalAuthCtrl.MoveDown = nil
+					ModalAuthCtrl.MoveUp = nil
+					ModalAuthCtrl.SelectPrevOption = nil
+					ModalAuthCtrl.SelectNextOption = nil
+					ModalAuthCtrl.Approve = nil
+					ModalAuthCtrl.Deny = nil
+					ModalAuthCtrl.StartFeedback = nil
+					ModalAuthCtrl.ToggleCancelDialog = nil
+					ModalAuthCtrl.ScrollDown = nil
+					ModalAuthCtrl.ScrollUp = nil
+				}
 			}
 		}
 	}, []any{props.IsOpen})

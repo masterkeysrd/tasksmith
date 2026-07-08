@@ -45,6 +45,7 @@ var Message = kitex.FC("Message", func(props MessageProps) kitex.Node {
 
 		// Local state to accumulate decisions for pending authorizations
 		localDecisions, setLocalDecisions := kitex.UseState(make(map[string]permissions.AuthorizationDecision))
+		previewOpen, setPreviewOpen := kitex.UseState(false)
 
 		// Reset local decisions when pending authorizations list changes (e.g. from the backend)
 		// Or when the session changes.
@@ -88,6 +89,7 @@ var Message = kitex.FC("Message", func(props MessageProps) kitex.Node {
 			}
 
 			if allDecided && len(props.PendingAuthorizations) > 0 {
+				setPreviewOpen(false)
 				submitBatch(decisionList)
 			}
 		}
@@ -135,11 +137,13 @@ var Message = kitex.FC("Message", func(props MessageProps) kitex.Node {
 					isActive := pendingReq.ToolCallID == activeToolCallID && localDec == nil
 
 					node = AuthorizationWidget(AuthorizationWidgetProps{
-						Request:       *pendingReq,
-						SessionID:     props.SessionID,
-						IsActive:      isActive,
-						OnDecision:    onDecision,
-						LocalDecision: localDec,
+						Request:             *pendingReq,
+						SessionID:           props.SessionID,
+						IsActive:            isActive,
+						OnDecision:          onDecision,
+						LocalDecision:       localDec,
+						ShowPreviewModal:    isActive && previewOpen(),
+						SetShowPreviewModal: setPreviewOpen,
 					})
 				} else {
 					var toolMsg *message.Tool

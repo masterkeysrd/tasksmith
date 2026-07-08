@@ -42,6 +42,7 @@ var PendingAuthorizationsWidget = kitex.FC("PendingAuthorizationsWidget", func(p
 	windClient := wind.UseClient()
 
 	localDecisions, setLocalDecisions := kitex.UseState(make(map[string]permissions.AuthorizationDecision))
+	previewOpen, setPreviewOpen := kitex.UseState(false)
 
 	kitex.UseEffect(func() {
 		setLocalDecisions(make(map[string]permissions.AuthorizationDecision))
@@ -81,6 +82,7 @@ var PendingAuthorizationsWidget = kitex.FC("PendingAuthorizationsWidget", func(p
 		}
 
 		if allDecided && len(props.PendingAuthorizations) > 0 {
+			setPreviewOpen(false)
 			submitBatch(decisionList)
 		}
 	}
@@ -101,11 +103,13 @@ var PendingAuthorizationsWidget = kitex.FC("PendingAuthorizationsWidget", func(p
 		}
 		isActive := req.ToolCallID == activeToolCallID && localDec == nil
 		node := AuthorizationWidget(AuthorizationWidgetProps{
-			Request:       req,
-			SessionID:     props.SessionID,
-			IsActive:      isActive,
-			OnDecision:    onDecision,
-			LocalDecision: localDec,
+			Request:             req,
+			SessionID:           props.SessionID,
+			IsActive:            isActive,
+			OnDecision:          onDecision,
+			LocalDecision:       localDec,
+			ShowPreviewModal:    isActive && previewOpen(),
+			SetShowPreviewModal: setPreviewOpen,
 		})
 		children = append(children, node)
 	}
