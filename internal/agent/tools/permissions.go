@@ -878,20 +878,76 @@ func (h *BashPermissionHandler) GetOptions(req permissions.ToolCallRequest) []pe
 func (h *BashPermissionHandler) GetOptionsForCommand(cmd, exec string) []permissions.PermissionOption {
 	var options []permissions.PermissionOption
 
-	options = append(options, permissions.PermissionOption{
-		Label:       fmt.Sprintf("Allow exact command: %q", cmd),
-		Target:      cmd,
-		MatchMethod: "exact",
-		Action:      permissions.ActionAllow,
-	})
+	seen := make(map[string]bool)
+	var targets []string
+
+	exact := strings.TrimSpace(cmd)
+	if exact != "" {
+		targets = append(targets, exact)
+		seen[exact] = true
+	}
+
+	words := strings.Fields(exact)
+	if len(words) > 1 {
+		var currentPrefix strings.Builder
+		currentPrefix.WriteString(words[0])
+
+		for i := 1; i < len(words); i++ {
+			word := words[i]
+			if strings.HasPrefix(word, "-") {
+				break
+			}
+			currentPrefix.WriteString(" " + word)
+			prefixStr := currentPrefix.String()
+			targets = append(targets, prefixStr)
+		}
+	}
 
 	if exec != "" {
-		options = append(options, permissions.PermissionOption{
-			Label:       fmt.Sprintf("Allow all commands starting with %q", exec),
-			Target:      exec,
-			MatchMethod: "prefix",
-			Action:      permissions.ActionAllow,
-		})
+		exec = strings.TrimSpace(exec)
+		if !seen[exec] {
+			targets = append(targets, exec)
+			seen[exec] = true
+		}
+	}
+
+	deduped := []string{exact}
+	seen[exact] = true
+
+	var intermediatePrefixes []string
+	for _, t := range targets[1:] {
+		if t != exec && !seen[t] {
+			intermediatePrefixes = append(intermediatePrefixes, t)
+			seen[t] = true
+		}
+	}
+	for i := len(intermediatePrefixes) - 1; i >= 0; i-- {
+		deduped = append(deduped, intermediatePrefixes[i])
+	}
+
+	if exec != "" && exec != exact && !seen[exec] {
+		deduped = append(deduped, exec)
+		seen[exec] = true
+	} else if exec != "" && !seen[exec] {
+		deduped = append(deduped, exec)
+	}
+
+	for _, target := range deduped {
+		if target == exact {
+			options = append(options, permissions.PermissionOption{
+				Label:       fmt.Sprintf("Allow exact command: %q", target),
+				Target:      target,
+				MatchMethod: "exact",
+				Action:      permissions.ActionAllow,
+			})
+		} else {
+			options = append(options, permissions.PermissionOption{
+				Label:       fmt.Sprintf("Allow all commands starting with %q", target),
+				Target:      target,
+				MatchMethod: "prefix",
+				Action:      permissions.ActionAllow,
+			})
+		}
 	}
 
 	options = append(options, permissions.PermissionOption{
@@ -1042,7 +1098,7 @@ func (h *BashPermissionHandler) GetGrantRequests(
 
 				reqs = append(reqs, permissions.PermissionGrantRequest{
 					ID:               fmt.Sprintf("cmd_%d", cmdCount),
-					Description:      fmt.Sprintf("Permission required for: %s", effectiveCmdStr),
+					Description:      effectiveCmdStr,
 					Options:          h.GetOptionsForCommand(effectiveCmdStr, curr.Executable),
 					DirectoryOptions: dirOpts,
 				})

@@ -218,7 +218,7 @@ func TestBashPermissionHandler(t *testing.T) {
 	if len(reqsChain) != 1 {
 		t.Fatalf("expected 1 request for chained command, got %d", len(reqsChain))
 	}
-	if reqsChain[0].Description != "Permission required for: rm -rf /" {
+	if reqsChain[0].Description != "rm -rf /" {
 		t.Errorf("expected request description for rm -rf /, got %q", reqsChain[0].Description)
 	}
 
