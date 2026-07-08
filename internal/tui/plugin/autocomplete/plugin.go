@@ -143,11 +143,11 @@ func scoreAutocompleteItem(item Item, query string) int {
 	}
 
 	// Source/Kind specific tuning:
-	// Prioritize skills above files/directories and deep external symbols
+	// Prioritize skills, files, and directories above deep external symbols to ensure stable ranking
 	if item.Kind == "skill" {
-		score += 20
+		score += 150
 	} else if item.Kind == "file" || item.Kind == "directory" {
-		score += 10
+		score += 120
 	}
 
 	return score

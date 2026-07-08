@@ -37,11 +37,17 @@ func (s *FileSource) Query(ctx context.Context, req QueryReq) ([]Item, error) {
 	for _, r := range results {
 		badge := "FILE "
 		kind := "file"
-		insertVal := "@file:" + r.ShortPath
+
+		pathVal := r.ShortPath
+		if pathVal == "" {
+			pathVal = r.Path
+		}
+
+		insertVal := "@file:" + pathVal
 		if r.IsDir {
 			badge = "DIR  "
 			kind = "directory"
-			insertVal = "@file:" + r.ShortPath + "/"
+			insertVal = "@file:" + pathVal + "/"
 		}
 
 		items = append(items, Item{
