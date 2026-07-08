@@ -308,7 +308,7 @@ func EvaluateToolCall(
 
 func getFallbackActionDescription(req ToolCallRequest) string {
 	switch req.ToolName {
-	case "edit_file", "write_to_file":
+	case "edit_file", "write_to_file", "edit", "multi_edit":
 		if path, ok := req.Args["path"].(string); ok {
 			return fmt.Sprintf("Modify file: %s", path)
 		}
@@ -326,16 +326,27 @@ func getFallbackActionDescription(req ToolCallRequest) string {
 			return fmt.Sprintf("Read file: %s", path)
 		}
 		return "Read file"
-	case "grep_search":
+	case "grep_search", "grep":
 		if path, ok := req.Args["SearchPath"].(string); ok {
 			return fmt.Sprintf("Search path: %s", path)
 		}
+		if path, ok := req.Args["path"].(string); ok {
+			return fmt.Sprintf("Search path: %s", path)
+		}
 		return "Search files"
-	case "list_dir":
+	case "list_dir", "ls":
 		if path, ok := req.Args["DirectoryPath"].(string); ok {
 			return fmt.Sprintf("List directory: %s", path)
 		}
+		if path, ok := req.Args["path"].(string); ok {
+			return fmt.Sprintf("List directory: %s", path)
+		}
 		return "List directory"
+	case "glob":
+		if pattern, ok := req.Args["pattern"].(string); ok {
+			return fmt.Sprintf("Glob pattern: %s", pattern)
+		}
+		return "Glob files"
 	default:
 		return fmt.Sprintf("Call tool: %s", req.ToolName)
 	}

@@ -156,3 +156,53 @@ func (h *mockMultiGrantHandler) GetGrantRequests(ctx context.Context, req ToolCa
 		},
 	}
 }
+
+func TestGetFallbackActionDescription(t *testing.T) {
+	tests := []struct {
+		toolName string
+		args     map[string]any
+		expected string
+	}{
+		{
+			toolName: "ls",
+			args:     map[string]any{"path": "/some/dir"},
+			expected: "List directory: /some/dir",
+		},
+		{
+			toolName: "list_dir",
+			args:     map[string]any{"DirectoryPath": "/some/dir"},
+			expected: "List directory: /some/dir",
+		},
+		{
+			toolName: "grep",
+			args:     map[string]any{"path": "/some/dir"},
+			expected: "Search path: /some/dir",
+		},
+		{
+			toolName: "grep_search",
+			args:     map[string]any{"SearchPath": "/some/dir"},
+			expected: "Search path: /some/dir",
+		},
+		{
+			toolName: "glob",
+			args:     map[string]any{"pattern": "*.go"},
+			expected: "Glob pattern: *.go",
+		},
+		{
+			toolName: "edit",
+			args:     map[string]any{"path": "/some/file"},
+			expected: "Modify file: /some/file",
+		},
+	}
+
+	for _, tc := range tests {
+		req := ToolCallRequest{
+			ToolName: tc.toolName,
+			Args:     tc.args,
+		}
+		got := getFallbackActionDescription(req)
+		if got != tc.expected {
+			t.Errorf("getFallbackActionDescription(%s, %v) = %q; expected %q", tc.toolName, tc.args, got, tc.expected)
+		}
+	}
+}
