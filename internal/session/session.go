@@ -882,7 +882,7 @@ func (m *Manager) runAgentLoop(runCtx context.Context, sessionID string, sess *A
 		}
 	}
 
-	model, err := model.New(runCtx, model.Config{
+	llmModel, err := model.New(runCtx, model.Config{
 		Provider:      provider,
 		ModelName:     modelName,
 		ModelProvider: matchingProvider,
@@ -894,6 +894,45 @@ func (m *Manager) runAgentLoop(runCtx context.Context, sessionID string, sess *A
 		return
 	}
 
+	// Generate title if session has default/empty title
+	if sessData != nil {
+		lowerTitle := strings.ToLower(strings.TrimSpace(sessData.Title))
+		if lowerTitle == "new chat" || lowerTitle == "new-chat" || lowerTitle == "" {
+			if msgs, err := m.GetMessages(runCtx, sessionID); err == nil && len(msgs) > 0 {
+				var firstUserMsg string
+				for _, msg := range msgs {
+					if msg.Role() == message.RoleUser {
+						firstUserMsg = msg.GetContent().Text()
+						break
+					}
+				}
+				if firstUserMsg != "" && m.ws != nil {
+					if titleAgent, err := m.ws.ResolveAgent(runCtx, "title-generator"); err == nil && titleAgent != nil {
+						params := model.TitleParams{
+							FirstUserMsg:  firstUserMsg,
+							Provider:      provider,
+							ModelName:     modelName,
+							ModelProvider: matchingProvider,
+							TitleAgent:    titleAgent,
+						}
+						if newTitle, err := model.GenerateTitle(runCtx, params); err == nil && newTitle != "" {
+							if err := m.RenameSession(runCtx, sessionID, newTitle); err == nil {
+								log.Info(fmt.Sprintf("[Session] Automatically generated title: %q for session: %s", newTitle, sessionID))
+								m.notifySubscribers(sessionID)
+							} else {
+								log.Error(fmt.Sprintf("[Session] Failed to save generated title: %v", err))
+							}
+						} else {
+							log.Error(fmt.Sprintf("[Session] Title generation failed: %v", err))
+						}
+					} else {
+						log.Error(fmt.Sprintf("[Session] Failed to resolve title-generator agent: %v", err))
+					}
+				}
+			}
+		}
+	}
+
 	// Compile graph
 	storage := NewLocalFileStorage(m.ws.CWD(), sessionID)
 	ft, err := m.FileTracker(sessionID)
@@ -902,7 +941,7 @@ func (m *Manager) runAgentLoop(runCtx context.Context, sessionID string, sess *A
 		return
 	}
 	ag, err := agentgraph.New(runCtx, agentgraph.Options{
-		Model:        agentgraph.NewLoomModel(model),
+		Model:        agentgraph.NewLoomModel(llmModel),
 		Workspace:    m.ws,
 		Storage:      storage,
 		Inbox:        &sessionInbox{sess: sess, m: m},

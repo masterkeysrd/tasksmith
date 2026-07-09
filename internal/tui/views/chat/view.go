@@ -185,6 +185,13 @@ func renderChatView(props ViewProps) kitex.Node {
 	}
 	sending := status == "running"
 
+	// Invalidate session list to capture title changes reactively when messages change
+	kitex.UseEffect(func() {
+		if title == "New Chat" || title == "" {
+			windClient.InvalidateQueries(api.ListSessionsRequest{})
+		}
+	}, []any{msgsQuery.Data, title})
+
 	// Trigger a toast notification if the background agent execution fails
 	kitex.UseEffect(func() {
 		if stateQuery.Data != nil && stateQuery.Data.Error != "" {
