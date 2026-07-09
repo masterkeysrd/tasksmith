@@ -403,3 +403,8 @@ func (s *Store) LogLLMCall(event coredb.MetricsEvent, payload coredb.LLMCallPayl
 func (s *Store) LogToolCall(event coredb.MetricsEvent, payload coredb.ToolCallPayload) error {
 	return coredb.LogToolCall(s.db, event, payload)
 }
+
+// LogCompaction logs a compaction event to the metrics database.
+func (s *Store) LogCompaction(event coredb.MetricsEvent, payload coredb.CompactionPayload) error {
+	return coredb.LogCompaction(s.db, event, payload)
+}

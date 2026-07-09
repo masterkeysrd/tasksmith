@@ -77,6 +77,9 @@ var Router = kitex.SimpleFC("Router", func() kitex.Node {
 			windClient.InvalidateQueries(api.GetSessionStateRequest{SessionID: sessionID})
 			windClient.InvalidateQueries(api.ListSessionsRequest{})
 		}
+		active.InvalidateSessionMessages = func(sessionID string) {
+			windClient.InvalidateQueries(api.GetSessionMessagesRequest{SessionID: sessionID})
+		}
 		active.InvalidateFileChanges = func(sessionID string) {
 			windClient.InvalidateQueries(api.GetFileChangesRequest{SessionID: sessionID})
 		}

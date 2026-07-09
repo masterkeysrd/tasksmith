@@ -23,6 +23,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/api"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	"github.com/masterkeysrd/tasksmith/internal/core/preview"
+	"github.com/masterkeysrd/tasksmith/internal/tui/active"
 	tuiapi "github.com/masterkeysrd/tasksmith/internal/tui/api"
 	"github.com/masterkeysrd/tasksmith/internal/tui/components"
 	"github.com/masterkeysrd/tasksmith/internal/tui/mode"
@@ -184,6 +185,13 @@ func renderChatView(props ViewProps) kitex.Node {
 		status = stateQuery.Data.Status
 	}
 	sending := status == "running"
+
+	// Invalidate session list to capture title changes reactively when messages change
+	kitex.UseEffect(func() {
+		if title == "New Chat" || title == "" {
+			windClient.InvalidateQueries(api.ListSessionsRequest{})
+		}
+	}, []any{msgsQuery.Data, title})
 
 	// Trigger a toast notification if the background agent execution fails
 	kitex.UseEffect(func() {
@@ -625,6 +633,33 @@ func renderChatView(props ViewProps) kitex.Node {
 
 	sendMessage := func(text string, refs []resolver.Reference, force ...bool) {
 		if text == "" || submitting() {
+			return
+		}
+
+		if text == "/compact" {
+			setInputValue("")
+			setSubmitting(true)
+			promise.New(func(ctx context.Context) (bool, error) {
+				_, err := client.ForceCompaction(ctx, api.ForceCompactionRequest{
+					SessionID: sessionID,
+				})
+				if err != nil {
+					return false, err
+				}
+				return true, nil
+			}).Then(func(success bool) {
+				setSubmitting(false)
+				active.SetStatusMessage("Compaction triggered successfully.")
+				if active.InvalidateSessionMessages != nil {
+					active.InvalidateSessionMessages(sessionID)
+				}
+			}, func(err error) {
+				setSubmitting(false)
+				active.SetStatusMessage("Compaction failed: " + err.Error())
+				if active.InvalidateSessionMessages != nil {
+					active.InvalidateSessionMessages(sessionID)
+				}
+			})
 			return
 		}
 

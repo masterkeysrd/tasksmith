@@ -197,6 +197,16 @@ func (r *subagentRunnerImpl) Run(ctx context.Context, opts tools.SubagentOptions
 		sessionID:     opts.SessionID,
 	}
 
+	var contextWindow int
+	if matchingProvider != nil {
+		for _, m := range matchingProvider.Spec.Models {
+			if m.ID == modelName {
+				contextWindow = m.Limits.Context
+				break
+			}
+		}
+	}
+
 	graphOpts := Options{
 		Model:             NewLoomModel(loomModelObj),
 		Workspace:         wsConcrete,
@@ -211,6 +221,7 @@ func (r *subagentRunnerImpl) Run(ctx context.Context, opts tools.SubagentOptions
 		LspManager:        opts.ParentHandlers.LspManager,
 		FileTracker:       opts.ParentHandlers.FileTracker,
 		McpManager:        opts.ParentHandlers.McpManager,
+		ContextWindow:     contextWindow,
 	}
 
 	ag, err := New(ctx, graphOpts)

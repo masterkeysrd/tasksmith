@@ -61,7 +61,8 @@ func TestBashExecution(t *testing.T) {
 
 	ctx := context.Background()
 	in := BashArgs{
-		Command: "echo hello",
+		Command:     "echo hello",
+		Description: "echo string",
 	}
 
 	stream, err := h.Bash(ctx, in)
@@ -76,7 +77,8 @@ func TestBashExecution(t *testing.T) {
 
 	// Run a command that writes inside the workspace: touch test.txt.
 	inWrite := BashArgs{
-		Command: "touch test.txt",
+		Command:     "touch test.txt",
+		Description: "touch file",
 	}
 	streamWrite, err := h.Bash(ctx, inWrite)
 	if err != nil {
@@ -85,4 +87,36 @@ func TestBashExecution(t *testing.T) {
 	streamWrite(func(chunk message.ToolChunk, err error) bool {
 		return true
 	})
+}
+
+func TestBashValidation(t *testing.T) {
+	h := &ToolHandlers{
+		CWD:         ".",
+		FileTracker: &mockBashFileTracker{},
+		TaskManager: nil,
+	}
+
+	ctx := context.Background()
+
+	// Empty command should fail validation
+	inEmptyCmd := BashArgs{
+		Command:     "",
+		Description: "test validation",
+	}
+
+	_, err := h.Bash(ctx, inEmptyCmd)
+	if err == nil {
+		t.Error("expected error for empty command validation, got nil")
+	}
+
+	// Empty description should fail validation
+	inEmptyDesc := BashArgs{
+		Command:     "echo hello",
+		Description: "",
+	}
+
+	_, err = h.Bash(ctx, inEmptyDesc)
+	if err == nil {
+		t.Error("expected error for empty description validation, got nil")
+	}
 }

@@ -30,6 +30,7 @@ type Client interface {
 	ArchiveSession(ctx context.Context, req api.ArchiveSessionRequest) (*api.ArchiveSessionResponse, error)
 	DeleteSession(ctx context.Context, req api.DeleteSessionRequest) (*api.DeleteSessionResponse, error)
 	SendMessage(ctx context.Context, req api.SendMessageRequest) (*api.SendMessageResponse, error)
+	ForceCompaction(ctx context.Context, req api.ForceCompactionRequest) (*api.ForceCompactionResponse, error)
 	GetSessionMessages(ctx context.Context, req api.GetSessionMessagesRequest) (*api.GetSessionMessagesResponse, error)
 	WatchSessionMessages(ctx context.Context, req api.GetSessionMessagesRequest) iter.Seq2[*api.GetSessionMessagesResponse, error]
 	GetSessionState(ctx context.Context, req api.GetSessionStateRequest) (*api.GetSessionStateResponse, error)
@@ -60,12 +61,15 @@ type Client interface {
 
 var clientCtx = kitex.CreateContext[Client](nil)
 
+var GlobalClient Client
+
 type Props struct {
 	Client Client
 }
 
 func Provider(props Props, children ...kitex.Node) kitex.Node {
 	wrappedClient := &toastClient{delegate: props.Client}
+	GlobalClient = wrappedClient
 	return clientCtx.Provider(wrappedClient, children...)
 }
 
@@ -184,6 +188,12 @@ func (w *toastClient) DeleteSession(ctx context.Context, req api.DeleteSessionRe
 func (w *toastClient) SendMessage(ctx context.Context, req api.SendMessageRequest) (*api.SendMessageResponse, error) {
 	res, err := w.delegate.SendMessage(ctx, req)
 	toastError("Failed to Send Message", err)
+	return res, err
+}
+
+func (w *toastClient) ForceCompaction(ctx context.Context, req api.ForceCompactionRequest) (*api.ForceCompactionResponse, error) {
+	res, err := w.delegate.ForceCompaction(ctx, req)
+	toastError("Failed to Force Compaction", err)
 	return res, err
 }
 

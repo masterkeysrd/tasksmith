@@ -109,6 +109,9 @@ func UseSidebarOpen() bool {
 // InvalidateSessionState is a callback registered by the App to invalidate session state queries.
 var InvalidateSessionState func(sessionID string)
 
+// InvalidateSessionMessages is a callback registered by the App to invalidate session messages queries.
+var InvalidateSessionMessages func(sessionID string)
+
 // InvalidateFileChanges is a callback registered by the App to invalidate file changes queries.
 var InvalidateFileChanges func(sessionID string)
 

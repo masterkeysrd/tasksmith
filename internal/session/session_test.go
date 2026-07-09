@@ -1009,3 +1009,53 @@ func TestSubmitAuthorizationDecision_SubagentRouting(t *testing.T) {
 		t.Errorf("expected parent pending auths to be cleared, got %v", pendingAuths2)
 	}
 }
+
+func TestForceCompaction(t *testing.T) {
+	tmpCwd := t.TempDir()
+
+	db, err := coredb.Open(tmpCwd, "tasksmith.db")
+	if err != nil {
+		t.Fatalf("failed to open database: %v", err)
+	}
+	defer db.Close()
+
+	checkpointsDb, err := coredb.Open(tmpCwd, "checkpoints.db")
+	if err != nil {
+		t.Fatalf("failed to open checkpoints database: %v", err)
+	}
+	defer checkpointsDb.Close()
+
+	store, err := session.NewSQLiteStore(db, checkpointsDb)
+	if err != nil {
+		t.Fatalf("failed to initialize sqlite store: %v", err)
+	}
+
+	manager := session.NewManager(session.ManagerConfig{Store: store})
+	ctx := context.Background()
+
+	s, err := manager.CreateSession(ctx, "force-compaction-test")
+	if err != nil {
+		t.Fatalf("failed to create session: %v", err)
+	}
+
+	// 1. Calling ForceCompaction on StatusIdle should transition status to StatusRunning.
+	err = manager.ForceCompaction(ctx, s.ID)
+	if err != nil {
+		t.Fatalf("failed to force compaction: %v", err)
+	}
+
+	status, _, _, _, _ := manager.GetSessionState(ctx, s.ID)
+	if status == session.StatusRunning {
+		err = manager.ForceCompaction(ctx, s.ID)
+		if err == nil {
+			t.Error("expected error when calling ForceCompaction on a running session, got nil")
+		}
+	}
+
+	// 2. Set to pending auth and assert error
+	manager.SetStatusDebug(s.ID, session.StatusPendingAuth)
+	err = manager.ForceCompaction(ctx, s.ID)
+	if err == nil {
+		t.Error("expected error when calling ForceCompaction on a pending_auth session, got nil")
+	}
+}

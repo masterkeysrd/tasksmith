@@ -84,6 +84,10 @@ func (m *mockClient) SendMessage(ctx context.Context, req api.SendMessageRequest
 	return &api.SendMessageResponse{Success: true}, nil
 }
 
+func (m *mockClient) ForceCompaction(ctx context.Context, req api.ForceCompactionRequest) (*api.ForceCompactionResponse, error) {
+	return &api.ForceCompactionResponse{Success: true}, nil
+}
+
 func (m *mockClient) GetSessionMessages(ctx context.Context, req api.GetSessionMessagesRequest) (*api.GetSessionMessagesResponse, error) {
 	return &api.GetSessionMessagesResponse{
 		Messages: []string{
