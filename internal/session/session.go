@@ -993,6 +993,16 @@ func (m *Manager) runAgentLoop(runCtx context.Context, sessionID string, sess *A
 		m.setSessionError(sessionID, fmt.Errorf("failed to initialize file tracker: %w", err))
 		return
 	}
+	var contextWindow int
+	if matchingProvider != nil {
+		for _, m := range matchingProvider.Spec.Models {
+			if m.ID == modelName {
+				contextWindow = m.Limits.Context
+				break
+			}
+		}
+	}
+
 	ag, err := agentgraph.New(runCtx, agentgraph.Options{
 		Model:        agentgraph.NewLoomModel(llmModel),
 		Workspace:    m.ws,
@@ -1005,10 +1015,11 @@ func (m *Manager) runAgentLoop(runCtx context.Context, sessionID string, sess *A
 		OnTodosUpdated: func(ctx context.Context, todos []tools.Todo) error {
 			return m.UpdateTodos(ctx, sessionID, todos)
 		},
-		LspManager:   m.lspManager,
-		FileTracker:  ft,
-		McpManager:   m.mcpManager,
-		MetricsStore: m.metricsStore,
+		LspManager:    m.lspManager,
+		FileTracker:   ft,
+		McpManager:    m.mcpManager,
+		MetricsStore:  m.metricsStore,
+		ContextWindow: contextWindow,
 	})
 	if err != nil {
 		m.setSessionError(sessionID, fmt.Errorf("failed to construct agent graph: %w", err))

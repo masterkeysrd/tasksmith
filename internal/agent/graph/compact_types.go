@@ -26,3 +26,7 @@ type TimelineData struct {
 type TimelineContentProvider interface {
 	TimelineContent(args map[string]any) TimelineData
 }
+
+// Global registries mapping tool names to their compaction content providers.
+var CompactProviders = make(map[string]CompactContentProvider)
+var TimelineProviders = make(map[string]TimelineContentProvider)

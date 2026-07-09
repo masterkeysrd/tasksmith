@@ -106,6 +106,11 @@ type AgentGraph struct {
 	lspManager        *lsp.Manager
 	storage           tools.FileStorage
 	fileTracker       filetrack.FileTracker
+	sessionID         string
+	wsPath            string
+	projectName       string
+	metricsStore      *metrics.Store
+	compaction        CompactionConfig
 }
 
 // Options defines the configurations and dependencies to initialize the AgentGraph.
@@ -124,6 +129,7 @@ type Options struct {
 	FileTracker       filetrack.FileTracker
 	McpManager        *mcp.Manager
 	MetricsStore      *metrics.Store
+	ContextWindow     int
 }
 
 // New creates a new AgentGraph orchestrator by loading/binding tools outside of the execution nodes.
@@ -215,6 +221,19 @@ func New(ctx context.Context, opts Options) (*AgentGraph, error) {
 		container = tool.NewContainer(activeTools...)
 	}
 
+	var wsPath, projectName string
+	if opts.Workspace != nil {
+		wsPath = opts.Workspace.CWD()
+		if p := opts.Workspace.Project(); p != nil {
+			projectName = p.Name
+		}
+	}
+
+	compaction := DefaultCompactionConfig()
+	if opts.ContextWindow > 0 {
+		compaction.ContextWindow = opts.ContextWindow
+	}
+
 	return &AgentGraph{
 		model:             boundModel,
 		container:         container,
@@ -227,6 +246,11 @@ func New(ctx context.Context, opts Options) (*AgentGraph, error) {
 		lspManager:        opts.LspManager,
 		storage:           opts.Storage,
 		fileTracker:       opts.FileTracker,
+		sessionID:         opts.SessionID,
+		wsPath:            wsPath,
+		projectName:       projectName,
+		metricsStore:      opts.MetricsStore,
+		compaction:        compaction,
 	}, nil
 }
 
@@ -235,6 +259,7 @@ func (a *AgentGraph) Build(cp graph.Checkpointer) (*graph.Graph[AgentState], err
 	builder := graph.New[AgentState]().
 		WithName("agent_loop").
 		AddNode("check_inbox", graph.NodeFunc(a.checkInbox)).
+		AddNode("compact", graph.NodeFunc(a.compact)).
 		AddNode("think", graph.NodeFunc(a.think)).
 		AddNode("execute_tools", graph.NodeFunc(a.executeTools)).
 		AddEdge(graph.START, "check_inbox")
@@ -254,12 +279,14 @@ func (a *AgentGraph) Build(cp graph.Checkpointer) (*graph.Graph[AgentState], err
 			log.Info("[AgentGraph] check_inbox router: returning graph.END because lastMsg is Assistant")
 			return graph.END, nil
 		}
-		log.Info("[AgentGraph] check_inbox router: returning think")
-		return "think", nil
+		log.Info("[AgentGraph] check_inbox router: returning compact")
+		return "compact", nil
 	}, map[string]string{
-		"think":   "think",
+		"compact": "compact",
 		graph.END: graph.END,
 	})
+
+	builder.AddEdge("compact", "think")
 
 	builder.AddRouteEdge("think", func(s AgentState) (string, error) {
 		if len(s.Messages) == 0 {

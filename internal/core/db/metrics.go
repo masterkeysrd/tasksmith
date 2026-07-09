@@ -127,6 +127,33 @@ func LogToolCall(db *sqlx.DB, event MetricsEvent, payload ToolCallPayload) error
 	return insertEvent(db, event)
 }
 
+// CompactionPayload represents the specific JSON metrics for a compaction event.
+type CompactionPayload struct {
+	Phase           int    `json:"phase"`
+	Strategy        string `json:"strategy,omitempty"` // "timeline" or "llm_summary"
+	TokensReclaimed int    `json:"tokens_reclaimed"`
+	ToolsMasked     int    `json:"tools_masked,omitempty"`
+}
+
+// LogCompaction logs a compaction event to the metrics database.
+func LogCompaction(db *sqlx.DB, event MetricsEvent, payload CompactionPayload) error {
+	payloadBytes, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("failed to marshal compaction payload: %w", err)
+	}
+
+	id, err := uuid.NewV7()
+	if err != nil {
+		return fmt.Errorf("failed to generate uuid v7: %w", err)
+	}
+
+	event.ID = id.String()
+	event.EventType = "compaction"
+	event.Payload = string(payloadBytes)
+
+	return insertEvent(db, event)
+}
+
 func insertEvent(db *sqlx.DB, event MetricsEvent) error {
 	query := `INSERT INTO metrics_events (
 		id, session_id, workspace_path, project_name, agent_name, app_version, node_name, event_type, payload
