@@ -201,8 +201,22 @@ func (h *ToolHandlers) saveAndTruncate(ctx context.Context, logPath string, suff
 	return truncated + note, nil
 }
 
+// Validate checks that the command and description are not empty.
+func (in BashArgs) Validate() error {
+	if strings.TrimSpace(in.Command) == "" {
+		return fmt.Errorf("command is required")
+	}
+	if strings.TrimSpace(in.Description) == "" {
+		return fmt.Errorf("description is required")
+	}
+	return nil
+}
+
 // Bash executes a bash command and returns a ToolStream.
 func (h *ToolHandlers) Bash(ctx context.Context, in BashArgs) (tool.ToolStream, error) {
+	if err := in.Validate(); err != nil {
+		return nil, err
+	}
 	toolCallID, _ := ctx.Value("tool_call_id").(string)
 
 	return func(yield func(message.ToolChunk, error) bool) {

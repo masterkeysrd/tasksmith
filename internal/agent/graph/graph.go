@@ -438,6 +438,12 @@ func (a *AgentGraph) executeTools(ctx context.Context, s AgentState) (graph.Comm
 				Content:    message.Content{&message.TextBlock{Text: fmt.Sprintf("tool %q not found in container", tc.Name)}},
 			}
 			toolResults = append(toolResults, toolMsg)
+			if hasWriter {
+				_ = sw.Write(ctx, stream.Event{
+					Name: "tool_message",
+					Data: toolMsg,
+				})
+			}
 			continue
 		}
 
@@ -449,6 +455,12 @@ func (a *AgentGraph) executeTools(ctx context.Context, s AgentState) (graph.Comm
 				Content:    message.Content{&message.TextBlock{Text: fmt.Sprintf("invalid arguments for tool %q: %v", tc.Name, err)}},
 			}
 			toolResults = append(toolResults, toolMsg)
+			if hasWriter {
+				_ = sw.Write(ctx, stream.Event{
+					Name: "tool_message",
+					Data: toolMsg,
+				})
+			}
 			continue
 		}
 
