@@ -734,6 +734,59 @@ func (m *Manager) SubmitAuthorizationDecision(ctx context.Context, sessionID str
 	return nil
 }
 
+// ForceCompaction triggers a compaction sweep on the session messages.
+func (m *Manager) ForceCompaction(ctx context.Context, sessionID string) error {
+	m.mu.Lock()
+	sess, exists := m.activeSessions[sessionID]
+	if !exists {
+		sess = &ActiveSession{
+			ID:     sessionID,
+			Status: StatusIdle,
+		}
+		m.activeSessions[sessionID] = sess
+	}
+	m.mu.Unlock()
+
+	m.tryRehydrateSession(ctx, sess)
+
+	m.mu.Lock()
+	if sess.Status == StatusRunning {
+		m.mu.Unlock()
+		return fmt.Errorf("cannot force compaction while session is running")
+	}
+	if sess.Status == StatusPendingAuth {
+		m.mu.Unlock()
+		return fmt.Errorf("cannot force compaction while tool authorization is pending")
+	}
+
+	sess.Status = StatusRunning
+	sess.Error = ""
+	sess.CurrentStreamText = ""
+	sess.CurrentStreamThinking = ""
+	sess.CurrentToolStreams = make(map[string]string)
+	sess.ThinkingStart = time.Now()
+	sess.ThinkingDuration = 0
+	sess.CurrentStreamMetrics = nil
+	sess.PendingAuthorizations = nil
+
+	runCtx, cancel := context.WithCancel(context.Background())
+	sess.Cancel = cancel
+	m.mu.Unlock()
+
+	// Setup input command to set ForceCompaction flag to true
+	inputCmd := graph.Update[agentgraph.AgentState](func(state agentgraph.AgentState) agentgraph.AgentState {
+		state.ForceCompaction = true
+		return state
+	})
+
+	// Start running Loom agent workflow asynchronously in background
+	m.wg.Go(func() {
+		m.runAgentLoop(runCtx, sessionID, sess, inputCmd, cancel)
+	})
+
+	return nil
+}
+
 func (m *Manager) runAgentLoop(runCtx context.Context, sessionID string, sess *ActiveSession, inputCmd graph.Command[agentgraph.AgentState], cancel context.CancelFunc) {
 	defer func() {
 		m.mu.Lock()

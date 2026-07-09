@@ -31,6 +31,7 @@ type AgentState struct {
 	PendingAuthorizations []permissions.AuthorizationRequest  `json:"pending_authorizations,omitempty"`
 	Decisions             []permissions.AuthorizationDecision `json:"decisions,omitempty"`
 	ExecutionCancelled    bool                                `json:"execution_cancelled,omitempty"`
+	ForceCompaction       bool                                `json:"force_compaction,omitempty"`
 }
 
 // Copy performs a deep copy of AgentState to satisfy the loom graph.State interface.
@@ -57,6 +58,7 @@ func (s AgentState) Copy() AgentState {
 		copy(copied.Decisions, s.Decisions)
 	}
 	copied.ExecutionCancelled = s.ExecutionCancelled
+	copied.ForceCompaction = s.ForceCompaction
 	return copied
 }
 
