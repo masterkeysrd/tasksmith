@@ -1,6 +1,11 @@
 package chat
 
 import (
+	"fmt"
+
+	"github.com/masterkeysrd/tasksmith/internal/api"
+	"github.com/masterkeysrd/tasksmith/internal/tui/active"
+	tuiapi "github.com/masterkeysrd/tasksmith/internal/tui/api"
 	"github.com/masterkeysrd/tasksmith/internal/tui/command"
 	"github.com/masterkeysrd/tasksmith/internal/tui/keymap"
 	"github.com/masterkeysrd/tasksmith/internal/tui/mode"
@@ -215,4 +220,30 @@ func init() {
 	keymap.Set([]mode.Mode{mode.Normal}, "D", command.ExecFunc("auth:start-feedback"), keymap.Context("modal:auth"))
 	keymap.Set([]mode.Mode{mode.Normal}, "J", command.ExecFunc("app:scroll-down"), keymap.Context("modal:auth"))
 	keymap.Set([]mode.Mode{mode.Normal}, "K", command.ExecFunc("app:scroll-up"), keymap.Context("modal:auth"))
+
+	// --- Compaction TUI Slash Command ---
+	command.Register("compact", func(ctx command.CommandContext) error {
+		sessionID := active.GetSessionID()
+		if sessionID == "" {
+			return fmt.Errorf("no active session to compact")
+		}
+		if tuiapi.GlobalClient == nil {
+			return fmt.Errorf("API client not available")
+		}
+		active.SetStatusMessage("Triggering compaction...")
+		go func() {
+			_, err := tuiapi.GlobalClient.ForceCompaction(ctx.Ctx, api.ForceCompactionRequest{
+				SessionID: sessionID,
+			})
+			if err != nil {
+				active.SetStatusMessage("Compaction failed: " + err.Error())
+			} else {
+				active.SetStatusMessage("Compaction triggered successfully.")
+				if active.InvalidateSessionMessages != nil {
+					active.InvalidateSessionMessages(sessionID)
+				}
+			}
+		}()
+		return nil
+	})
 }

@@ -695,6 +695,17 @@ func (s *Service) SendMessage(ctx context.Context, req SendMessageRequest) (*Sen
 	return &SendMessageResponse{Success: true}, nil
 }
 
+// ForceCompaction triggers a forced compaction run for the session.
+func (s *Service) ForceCompaction(ctx context.Context, req ForceCompactionRequest) (*ForceCompactionResponse, error) {
+	if s.sm == nil {
+		return nil, fmt.Errorf("session manager not initialized")
+	}
+	if err := s.sm.ForceCompaction(ctx, req.SessionID); err != nil {
+		return nil, err
+	}
+	return &ForceCompactionResponse{Success: true}, nil
+}
+
 // GetSessionMessages returns the message log of a session.
 func (s *Service) GetSessionMessages(ctx context.Context, req GetSessionMessagesRequest) (*GetSessionMessagesResponse, error) {
 	if s.sm == nil {

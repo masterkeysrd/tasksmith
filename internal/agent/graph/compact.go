@@ -3,17 +3,21 @@ package graph
 import (
 	"context"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/masterkeysrd/loom/llm"
 	"github.com/masterkeysrd/loom/message"
+	"github.com/masterkeysrd/loom/stream"
+	"github.com/masterkeysrd/tasksmith/internal/agent/prompt"
+	"github.com/masterkeysrd/tasksmith/internal/agent/tools"
 	coredb "github.com/masterkeysrd/tasksmith/internal/core/db"
 	"github.com/masterkeysrd/tasksmith/internal/metrics"
 	"github.com/masterkeysrd/tasksmith/internal/workspace"
+	"github.com/masterkeysrd/warp"
 )
+
+const maskedPlaceholderTokenOverhead = 20
 
 // CompactionConfig controls the message compaction pipeline.
 type CompactionConfig struct {
@@ -59,7 +63,7 @@ func DefaultCompactionConfig() CompactionConfig {
 
 // ExtractTokensFromLastResponse extracts exact token counts from the last Assistant message metrics.
 // If metrics are missing or incomplete, it falls back to a full token count estimate of messages.
-func ExtractTokensFromLastResponse(messages []message.Message) int {
+func ExtractTokensFromLastResponse(ctx context.Context, messages []message.Message) int {
 	var lastAsst *message.Assistant
 	var lastAsstIdx = -1
 	for i := len(messages) - 1; i >= 0; i-- {
@@ -76,216 +80,68 @@ func ExtractTokensFromLastResponse(messages []message.Message) int {
 	tokens := lastAsst.Metrics.TotalTokens
 	// Add subsequent messages (such as tool responses or user messages) since that assistant turn
 	for i := lastAsstIdx + 1; i < len(messages); i++ {
-		t, _ := llm.ApproximateTokenCounter{}.CountTokens(context.TODO(), []message.Message{messages[i]})
+		t, _ := llm.ApproximateTokenCounter{}.CountTokens(ctx, []message.Message{messages[i]})
 		tokens += t
 	}
 	return tokens
 }
 
-// GetTextFromContent extracts raw text from the content blocks.
-func GetTextFromContent(content message.Content) string {
-	var sb strings.Builder
-	for _, b := range content {
-		if tb, ok := b.(*message.TextBlock); ok {
-			sb.WriteString(tb.Text)
-		}
-	}
-	return sb.String()
+// Compactor coordinates the hybrid message compaction pipeline.
+type Compactor struct {
+	Config        CompactionConfig
+	Storage       tools.FileStorage
+	Model         LLM
+	MetricsStore  *metrics.Store
+	SessionID     string
+	WorkspacePath string
+	ProjectName   string
+	AgentName     string
+	ProviderName  string
+	ModelName     string
+	Workspace     *workspace.Workspace
 }
 
-// CloneMessage performs a deep copy of a message.
-func CloneMessage(msg message.Message) message.Message {
-	if msg == nil {
-		return nil
-	}
-	switch m := msg.(type) {
-	case *message.Assistant:
-		clonedContent := make(message.Content, len(m.Content))
-		for i, b := range m.Content {
-			switch block := b.(type) {
-			case *message.ToolCall:
-				tcCloned := &message.ToolCall{
-					ID:   block.ID,
-					Name: block.Name,
-					Args: make(map[string]any),
-				}
-				for k, v := range block.Args {
-					tcCloned.Args[k] = v
-				}
-				clonedContent[i] = tcCloned
-			default:
-				clonedContent[i] = b
-			}
-		}
-		asst := &message.Assistant{
-			Base:    m.Base,
-			Content: clonedContent,
-			Metrics: m.Metrics,
-		}
-		if m.GetMetadata() != nil {
-			meta := make(map[string]any)
-			for k, v := range m.GetMetadata() {
-				meta[k] = v
-			}
-			asst.SetMetadata(meta)
-		}
-		return asst
-	case *message.Tool:
-		clonedContent := make(message.Content, len(m.Content))
-		copy(clonedContent, m.Content)
-		tMsg := &message.Tool{
-			Base:              m.Base,
-			ToolCallID:        m.ToolCallID,
-			Name:              m.Name,
-			Content:           clonedContent,
-			IsError:           m.IsError,
-			StructuredContent: m.StructuredContent,
-		}
-		if m.GetMetadata() != nil {
-			meta := make(map[string]any)
-			for k, v := range m.GetMetadata() {
-				meta[k] = v
-			}
-			tMsg.SetMetadata(meta)
-		}
-		return tMsg
-	case *message.User:
-		clonedContent := make(message.Content, len(m.Content))
-		copy(clonedContent, m.Content)
-		user := &message.User{
-			Base:    m.Base,
-			Content: clonedContent,
-		}
-		if m.GetMetadata() != nil {
-			meta := make(map[string]any)
-			for k, v := range m.GetMetadata() {
-				meta[k] = v
-			}
-			user.SetMetadata(meta)
-		}
-		return user
-	case *message.System:
-		clonedContent := make(message.Content, len(m.Content))
-		copy(clonedContent, m.Content)
-		sys := &message.System{
-			Base:    m.Base,
-			Content: clonedContent,
-		}
-		if m.GetMetadata() != nil {
-			meta := make(map[string]any)
-			for k, v := range m.GetMetadata() {
-				meta[k] = v
-			}
-			sys.SetMetadata(meta)
-		}
-		return sys
-	default:
-		return msg
-	}
-}
-
-// resolveModelProviderNames looks up model settings from the workspace.
-func resolveModelProviderNames(ctx context.Context, ws *workspace.Workspace, agentName string) (string, string) {
-	if ws == nil {
-		return "unknown", "unknown"
-	}
-	var providerName, modelName string
-	providers := ws.Providers()
-	if agentName != "" {
-		if agent, err := ws.ResolveAgent(ctx, agentName); err == nil && agent != nil && agent.Agent != nil && len(agent.Agent.Spec.Models) > 0 {
-			for _, modelID := range agent.Agent.Spec.Models {
-				for _, p := range providers {
-					for _, mInfo := range p.Spec.Models {
-						if mInfo.ID == modelID {
-							providerName = p.GetName()
-							modelName = modelID
-							break
-						}
-					}
-					if modelName != "" {
-						break
-					}
-				}
-				if modelName != "" {
-					break
-				}
-			}
-		}
-	}
-	if providerName == "" || modelName == "" {
-		if len(providers) > 0 {
-			providerName = providers[0].GetName()
-			if len(providers[0].Spec.Models) > 0 {
-				modelName = providers[0].Spec.Models[0].ID
-			}
-		}
-	}
-	if providerName == "" {
-		providerName = "unknown"
-	}
-	if modelName == "" {
-		modelName = "unknown"
-	}
-	return providerName, modelName
-}
-
-// CompactMessages applies the full compaction pipeline to a message list.
-func CompactMessages(
+// Compact applies the full compaction pipeline to a message list.
+func (c *Compactor) Compact(
 	ctx context.Context,
 	messages []message.Message,
 	currentTokens int,
-	config CompactionConfig,
 	forceCompaction bool,
-	cwd string,
-	model LLM,
-	metricsStore *metrics.Store,
-	sessionID string,
-	wsPath string,
-	projectName string,
-	agentName string,
-	ws *workspace.Workspace,
 ) ([]message.Message, error) {
-	if config.ContextWindow <= 0 {
+	if c.Config.ContextWindow <= 0 {
 		return messages, nil
 	}
 
-	if forceCompaction || currentTokens > int(float64(config.ContextWindow)*config.Phase2Watermark) {
+	if forceCompaction || currentTokens > int(float64(c.Config.ContextWindow)*c.Config.Phase2Watermark) {
 		// Run Phase 2 (Smart Compression)
-		compactedMsgs, err := RunPhase2(ctx, messages, currentTokens, config, forceCompaction, model, metricsStore, sessionID, wsPath, projectName, agentName, ws)
+		compactedMsgs, err := c.SummarizeHistory(ctx, messages, currentTokens, forceCompaction)
 		if err != nil {
 			return nil, err
 		}
 		// Run Phase 2.5 (Context-Aware State Bridge)
-		compactedMsgs = RunPhase2_5(ctx, messages, compactedMsgs)
+		compactedMsgs = c.InjectStateBridge(ctx, messages, compactedMsgs)
 		// Run Phase 3 (Failsafe Token Budget Trimming)
-		return RunPhase3(ctx, compactedMsgs, config)
-	} else if currentTokens > int(float64(config.ContextWindow)*config.Phase1Watermark) {
+		return c.TrimToBudget(ctx, compactedMsgs)
+	} else if currentTokens > int(float64(c.Config.ContextWindow)*c.Config.Phase1Watermark) {
 		// Run Phase 1 (Observation Masking)
-		compactedMsgs, err := RunPhase1(ctx, messages, currentTokens, config, cwd, metricsStore, sessionID, wsPath, projectName, agentName)
+		compactedMsgs, err := c.MaskObservations(ctx, messages, currentTokens)
 		if err != nil {
 			return nil, err
 		}
 		// Run Phase 2.5 (Context-Aware State Bridge)
-		return RunPhase2_5(ctx, messages, compactedMsgs), nil
+		return c.InjectStateBridge(ctx, messages, compactedMsgs), nil
 	}
 
 	return messages, nil
 }
 
-// RunPhase1 executes targeted observation masking on old heavy tool results.
-func RunPhase1(
+// MaskObservations executes targeted observation masking on old heavy tool results.
+func (c *Compactor) MaskObservations(
 	ctx context.Context,
 	messages []message.Message,
 	currentTokens int,
-	config CompactionConfig,
-	cwd string,
-	metricsStore *metrics.Store,
-	sessionID string,
-	wsPath string,
-	projectName string,
-	agentName string,
 ) ([]message.Message, error) {
-	target := int(float64(config.ContextWindow) * config.Phase1Target)
+	target := int(float64(c.Config.ContextWindow) * c.Config.Phase1Target)
 	tokensToReclaim := currentTokens - target
 	if tokensToReclaim <= 0 {
 		return messages, nil
@@ -297,7 +153,7 @@ func RunPhase1(
 	for i := len(messages) - 1; i >= 0; i-- {
 		if _, ok := messages[i].(*message.Assistant); ok {
 			asstCount++
-			if asstCount == config.ProtectedTurns {
+			if asstCount == c.Config.ProtectedTurns {
 				eligibleBoundary = i
 				break
 			}
@@ -325,13 +181,11 @@ func RunPhase1(
 			continue
 		}
 		tCount, _ := llm.ApproximateTokenCounter{}.CountTokens(ctx, []message.Message{tMsg})
-		if tCount < config.ToolTruncateThreshold {
+		if tCount < c.Config.ToolTruncateThreshold {
 			continue
 		}
-		savings := tCount - 20
-		if savings < 0 {
-			savings = 0
-		}
+		// Net savings is the original token count minus this overhead.
+		savings := max(tCount-maskedPlaceholderTokenOverhead, 0)
 		candidates = append(candidates, candidate{
 			index:  i,
 			tokens: tCount,
@@ -346,7 +200,7 @@ func RunPhase1(
 
 	cloned := make([]message.Message, len(messages))
 	for i, m := range messages {
-		cloned[i] = CloneMessage(m)
+		cloned[i] = message.CloneMessage(m)
 	}
 
 	reclaimed := 0
@@ -357,7 +211,7 @@ func RunPhase1(
 		}
 
 		tMsg := cloned[cand.index].(*message.Tool)
-		originalText := GetTextFromContent(tMsg.Content)
+		originalText := tMsg.Content.Text()
 
 		var targetAsst *message.Assistant
 		var targetToolCall *message.ToolCall
@@ -403,16 +257,15 @@ func RunPhase1(
 		}
 
 		offloadedPath := ""
-		if pathVal, ok := meta["OffloadedPath"].(string); ok && pathVal != "" {
+		if pathVal, ok := meta["compacted_path"].(string); ok && pathVal != "" {
 			offloadedPath = pathVal
-		} else if originalText != "" && cwd != "" {
-			dirPath := filepath.Join(cwd, ".tasksmith", "compacted")
-			_ = os.MkdirAll(dirPath, 0755)
-			fileName := fmt.Sprintf("turn_%s.txt", tMsg.ToolCallID)
-			filePath := filepath.Join(dirPath, fileName)
-			_ = os.WriteFile(filePath, []byte(originalText), 0644)
-			offloadedPath = filepath.Join(".tasksmith", "compacted", fileName)
-			meta["CompactedPath"] = offloadedPath
+		} else if originalText != "" && c.Storage != nil {
+			fileName := fmt.Sprintf("compacted/turn_%s.txt", tMsg.ToolCallID)
+			destPath, err := c.Storage.Save(ctx, fileName, strings.NewReader(originalText))
+			if err == nil {
+				offloadedPath = destPath
+				meta["compacted_path"] = offloadedPath
+			}
 		}
 
 		summary := compactedData.Summary
@@ -429,20 +282,17 @@ func RunPhase1(
 		meta["compacted"] = true
 		tMsg.SetMetadata(meta)
 
-		savings := cand.tokens - 20
-		if savings < 0 {
-			savings = 0
-		}
+		savings := max(cand.tokens-20, 0)
 		reclaimed += savings
 		maskedCount++
 	}
 
-	if metricsStore != nil && maskedCount > 0 {
+	if c.MetricsStore != nil && maskedCount > 0 {
 		event := coredb.MetricsEvent{
-			SessionID:     sessionID,
-			WorkspacePath: wsPath,
-			ProjectName:   projectName,
-			AgentName:     agentName,
+			SessionID:     c.SessionID,
+			WorkspacePath: c.WorkspacePath,
+			ProjectName:   c.ProjectName,
+			AgentName:     c.AgentName,
 			CreatedAt:     time.Now(),
 		}
 		payload := coredb.CompactionPayload{
@@ -450,7 +300,23 @@ func RunPhase1(
 			TokensReclaimed: reclaimed,
 			ToolsMasked:     maskedCount,
 		}
-		_ = metricsStore.LogCompaction(event, payload)
+		_ = c.MetricsStore.LogCompaction(event, payload)
+	}
+
+	if reclaimed > 0 {
+		sw, hasWriter := stream.WriterFromContext(ctx)
+		if hasWriter {
+			msgText := fmt.Sprintf("Compaction completed. Reclaimed %d tokens using observation_masking strategy.", reclaimed)
+			msg := message.NewUserText(msgText)
+			msg.SetMetadata(map[string]any{
+				"type":                   "system_notification",
+				"is_system_notification": true,
+			})
+			_ = sw.Write(ctx, stream.Event{
+				Name: "agent_message",
+				Data: msg,
+			})
+		}
 	}
 
 	return cloned, nil
@@ -464,25 +330,14 @@ type TurnBlock struct {
 	userMessageCount int
 }
 
-// RunPhase2 compresses a block of history using either Deterministic Timeline or LLM Summarization.
-func RunPhase2(
+// SummarizeHistory compresses a block of history using either Deterministic Timeline or LLM Summarization.
+func (c *Compactor) SummarizeHistory(
 	ctx context.Context,
 	messages []message.Message,
 	currentTokens int,
-	config CompactionConfig,
 	forceCompaction bool,
-	model LLM,
-	metricsStore *metrics.Store,
-	sessionID string,
-	wsPath string,
-	projectName string,
-	agentName string,
-	ws *workspace.Workspace,
 ) ([]message.Message, error) {
-	target := int(float64(config.ContextWindow) * config.Phase2Target)
-	if target < config.MinProtectedTokens {
-		target = config.MinProtectedTokens
-	}
+	target := max(int(float64(c.Config.ContextWindow)*c.Config.Phase2Target), c.Config.MinProtectedTokens)
 	tokensToReclaim := currentTokens - target
 	if tokensToReclaim <= 0 && !forceCompaction {
 		return messages, nil
@@ -493,7 +348,7 @@ func RunPhase2(
 	userCount := 0
 	isAnchor := false
 
-	for i := 0; i < len(messages); i++ {
+	for i := range messages {
 		msg := messages[i]
 		meta := msg.GetMetadata()
 		anchor := meta != nil && meta["compaction_anchor"] == true
@@ -523,7 +378,7 @@ func RunPhase2(
 		})
 	}
 
-	maxCompressibleBlocks := len(blocks) - config.ProtectedTurns
+	maxCompressibleBlocks := len(blocks) - c.Config.ProtectedTurns
 	if maxCompressibleBlocks <= 0 {
 		return messages, nil
 	}
@@ -531,7 +386,7 @@ func RunPhase2(
 	var selectedBlocks []TurnBlock
 	selectedTokens := 0
 
-	for i := 0; i < maxCompressibleBlocks; i++ {
+	for i := range maxCompressibleBlocks {
 		blockMsgs := messages[blocks[i].startIndex : blocks[i].endIndex+1]
 		tCount, _ := llm.ApproximateTokenCounter{}.CountTokens(ctx, blockMsgs)
 		selectedBlocks = append(selectedBlocks, blocks[i])
@@ -563,10 +418,10 @@ func RunPhase2(
 		strategy = "llm_summary"
 		existingSummary := ""
 		if firstBlock.isAnchor {
-			existingSummary = GetTextFromContent(messages[firstBlock.startIndex].GetContent())
+			existingSummary = messages[firstBlock.startIndex].GetContent().Text()
 		}
 		var err error
-		compactedText, err = LLMSummarize(ctx, model, messagesToCondense, existingSummary, metricsStore, sessionID, wsPath, projectName, agentName, ws)
+		compactedText, err = c.LLMSummarize(ctx, messagesToCondense, existingSummary)
 		if err != nil {
 			// Fallback to timeline
 			compactedText = GenerateTimeline(ctx, messages, selectedBlocks)
@@ -582,18 +437,32 @@ func RunPhase2(
 	meta["compaction_anchor"] = true
 	anchorMsg.SetMetadata(meta)
 
+	sw, hasWriter := stream.WriterFromContext(ctx)
+	if hasWriter && selectedTokens > 0 {
+		msgText := fmt.Sprintf("Compaction completed. Reclaimed %d tokens using %s strategy.", selectedTokens, strategy)
+		msg := message.NewUserText(msgText)
+		msg.SetMetadata(map[string]any{
+			"type":                   "system_notification",
+			"is_system_notification": true,
+		})
+		_ = sw.Write(ctx, stream.Event{
+			Name: "agent_message",
+			Data: msg,
+		})
+	}
+
 	var newMessages []message.Message
 	newMessages = append(newMessages, anchorMsg)
 	for i := lastBlock.endIndex + 1; i < len(messages); i++ {
-		newMessages = append(newMessages, CloneMessage(messages[i]))
+		newMessages = append(newMessages, message.CloneMessage(messages[i]))
 	}
 
-	if metricsStore != nil {
+	if c.MetricsStore != nil {
 		event := coredb.MetricsEvent{
-			SessionID:     sessionID,
-			WorkspacePath: wsPath,
-			ProjectName:   projectName,
-			AgentName:     agentName,
+			SessionID:     c.SessionID,
+			WorkspacePath: c.WorkspacePath,
+			ProjectName:   c.ProjectName,
+			AgentName:     c.AgentName,
 			CreatedAt:     time.Now(),
 		}
 		payload := coredb.CompactionPayload{
@@ -601,7 +470,7 @@ func RunPhase2(
 			Strategy:        strategy,
 			TokensReclaimed: selectedTokens,
 		}
-		_ = metricsStore.LogCompaction(event, payload)
+		_ = c.MetricsStore.LogCompaction(event, payload)
 	}
 
 	return newMessages, nil
@@ -614,7 +483,7 @@ func GenerateTimeline(ctx context.Context, messages []message.Message, selectedB
 
 	if len(selectedBlocks) > 0 && selectedBlocks[0].isAnchor {
 		anchorMsg := messages[selectedBlocks[0].startIndex]
-		existingText := GetTextFromContent(anchorMsg.GetContent())
+		existingText := anchorMsg.GetContent().Text()
 		timelineParts = append(timelineParts, existingText)
 		startIndex = 1
 	} else {
@@ -639,7 +508,7 @@ func GenerateTimeline(ctx context.Context, messages []message.Message, selectedB
 			continue
 		}
 
-		thought := GetTextFromContent(asstMsg.Content)
+		thought := asstMsg.Content.Text()
 		thought = strings.TrimSpace(strings.ReplaceAll(thought, "\n", " "))
 		if len(thought) > 150 {
 			thought = thought[:147] + "..."
@@ -672,13 +541,13 @@ func GenerateTimeline(ctx context.Context, messages []message.Message, selectedB
 			resultStr := "Success."
 			if matchedResult != nil {
 				if matchedResult.IsError {
-					resultStr = fmt.Sprintf("Failed: %s", GetTextFromContent(matchedResult.Content))
+					resultStr = fmt.Sprintf("Failed: %s", matchedResult.Content.Text())
 				} else {
 					if provider, exists := TimelineProviders[tc.Name]; exists {
 						timelineData := provider.TimelineContent(tc.Args)
 						resultStr = timelineData.Summary
 					} else {
-						previewText := GetTextFromContent(matchedResult.Content)
+						previewText := matchedResult.Content.Text()
 						if len(previewText) > 200 {
 							previewText = previewText[:197] + "..."
 						}
@@ -694,62 +563,70 @@ func GenerateTimeline(ctx context.Context, messages []message.Message, selectedB
 }
 
 // LLMSummarize invokes the model to condense history into a narrative summary.
-func LLMSummarize(
+func (c *Compactor) LLMSummarize(
 	ctx context.Context,
-	model LLM,
 	messagesToCondense []message.Message,
 	existingSummary string,
-	metricsStore *metrics.Store,
-	sessionID string,
-	wsPath string,
-	projectName string,
-	agentName string,
-	ws *workspace.Workspace,
 ) (string, error) {
+	var compactorAgent *warp.ResolvedAgent
+	if c.Workspace != nil {
+		compactorAgent, _ = c.Workspace.ResolveAgent(ctx, "compaction-summarizer")
+	}
+
+	var systemPrompt string
+	if compactorAgent != nil && c.Workspace != nil {
+		rendered, err := prompt.RenderAgent(
+			compactorAgent,
+			c.Workspace.WorkspaceSpec(),
+			c.Workspace.Project(),
+			nil,
+		)
+		if err == nil {
+			systemPrompt = rendered
+		}
+	}
+
 	var sb strings.Builder
-	sb.WriteString("You are the compaction_summarizer sub-agent. Your task is to summarize the following conversation history.\n")
 	if existingSummary != "" {
-		sb.WriteString("Here is the existing summary of the previous part of the conversation. You must merge the new history into this existing summary:\n")
+		sb.WriteString("Existing Summary:\n")
 		sb.WriteString("<existing_summary>\n")
 		sb.WriteString(existingSummary)
 		sb.WriteString("\n</existing_summary>\n\n")
 	}
-	sb.WriteString("Here is the history to summarize:\n")
+	sb.WriteString("History to summarize:\n")
 	sb.WriteString("<history>\n")
 	for _, msg := range messagesToCondense {
 		role := string(msg.Role())
-		text := GetTextFromContent(msg.GetContent())
-		sb.WriteString(fmt.Sprintf("[%s]: %s\n", role, text))
+		text := msg.GetContent().Text()
+		fmt.Fprintf(&sb, "[%s]: %s\n", role, text)
 	}
-	sb.WriteString("</history>\n\n")
-	sb.WriteString("Write a cohesive, dense, token-efficient summary. Avoid placeholders.")
+	sb.WriteString("</history>")
 
 	summarizerPrompt := sb.String()
 
-	sysMsg := message.NewSystemText("You are a helpful assistant specialized in conversation summarization.")
+	sysMsg := message.NewSystemText(systemPrompt)
 	userMsg := message.NewUserText(summarizerPrompt)
 
-	resp, err := model.Invoke(ctx, []message.Message{sysMsg, userMsg})
+	resp, err := c.Model.Invoke(ctx, []message.Message{sysMsg, userMsg})
 	if err != nil {
 		return "", err
 	}
 
-	summary := GetTextFromContent(resp.Content)
+	summary := resp.Content.Text()
 
-	if metricsStore != nil && resp.Metrics != nil {
-		providerName, modelName := resolveModelProviderNames(ctx, ws, agentName)
+	if c.MetricsStore != nil && resp.Metrics != nil {
 		sysTokens, _ := llm.ApproximateTokenCounter{}.CountTokens(ctx, []message.Message{sysMsg})
 		event := coredb.MetricsEvent{
-			SessionID:     sessionID,
-			WorkspacePath: wsPath,
-			ProjectName:   projectName,
+			SessionID:     c.SessionID,
+			WorkspacePath: c.WorkspacePath,
+			ProjectName:   c.ProjectName,
 			AgentName:     "compaction_summarizer",
-			NodeName:      func(s string) *string { return &s }("think"),
+			NodeName:      func(s string) *string { return &s }("compact"),
 			CreatedAt:     time.Now(),
 		}
 		payload := coredb.LLMCallPayload{
-			Provider:            providerName,
-			Model:               modelName,
+			Provider:            c.ProviderName,
+			Model:               c.ModelName,
 			SystemTokens:        sysTokens,
 			PromptTokens:        resp.Metrics.Tokens.Input,
 			CompletionTokens:    resp.Metrics.Tokens.Output,
@@ -758,14 +635,14 @@ func LLMSummarize(
 			CacheReadTokens:     resp.Metrics.Tokens.CacheRead,
 			EstimatedCostUSD:    resp.Metrics.TotalCost.AsUSD(),
 		}
-		_ = metricsStore.LogLLMCall(event, payload)
+		_ = c.MetricsStore.LogLLMCall(event, payload)
 	}
 
 	return summary, nil
 }
 
-// RunPhase2_5 inserts a synthetic state recovery message at the boundary.
-func RunPhase2_5(ctx context.Context, originalMessages []message.Message, compactedMsgs []message.Message) []message.Message {
+// InjectStateBridge inserts a synthetic state recovery message at the boundary.
+func (c *Compactor) InjectStateBridge(ctx context.Context, originalMessages []message.Message, compactedMsgs []message.Message) []message.Message {
 	if len(compactedMsgs) <= 1 {
 		return compactedMsgs
 	}
@@ -773,7 +650,7 @@ func RunPhase2_5(ctx context.Context, originalMessages []message.Message, compac
 	// Check if the uncompacted zone contains recent todos
 	hasRecentTodos := false
 	for _, msg := range compactedMsgs[1:] {
-		if tMsg, ok := msg.(*message.Tool); ok && (tMsg.Name == "todos" || tMsg.Name == "update_todos" || tMsg.Name == "get_todos") {
+		if tMsg, ok := msg.(*message.Tool); ok && tMsg.Name == "todos" {
 			hasRecentTodos = true
 			break
 		}
@@ -783,8 +660,8 @@ func RunPhase2_5(ctx context.Context, originalMessages []message.Message, compac
 	if !hasRecentTodos {
 		// Reverse-scan original messages for the latest non-error todos payload
 		for i := len(originalMessages) - 1; i >= 0; i-- {
-			if tMsg, ok := originalMessages[i].(*message.Tool); ok && (tMsg.Name == "todos" || tMsg.Name == "update_todos" || tMsg.Name == "get_todos") && !tMsg.IsError {
-				lastTodoPayload = GetTextFromContent(tMsg.Content)
+			if tMsg, ok := originalMessages[i].(*message.Tool); ok && tMsg.Name == "todos" && !tMsg.IsError {
+				lastTodoPayload = tMsg.Content.Text()
 				break
 			}
 		}
@@ -794,7 +671,7 @@ func RunPhase2_5(ctx context.Context, originalMessages []message.Message, compac
 	compactedLen := len(originalMessages) - len(compactedMsgs) + 1
 	skillSet := make(map[string]bool)
 	if compactedLen > 0 && compactedLen <= len(originalMessages) {
-		for i := 0; i < compactedLen; i++ {
+		for i := range compactedLen {
 			if asstMsg, ok := originalMessages[i].(*message.Assistant); ok {
 				for _, b := range asstMsg.GetContent() {
 					if tc, ok := b.(*message.ToolCall); ok && tc.Name == "activate_skill" {
@@ -833,16 +710,13 @@ func RunPhase2_5(ctx context.Context, originalMessages []message.Message, compac
 	return compactedMsgs
 }
 
-// RunPhase3 enforces the hard context budget via loom's TrimMessages.
-func RunPhase3(ctx context.Context, messages []message.Message, config CompactionConfig) ([]message.Message, error) {
-	outputReserve := config.OutputReserve
+// TrimToBudget enforces the hard context budget via loom's TrimMessages.
+func (c *Compactor) TrimToBudget(ctx context.Context, messages []message.Message) ([]message.Message, error) {
+	outputReserve := c.Config.OutputReserve
 	if outputReserve <= 0 {
-		outputReserve = int(float64(config.ContextWindow) * 0.20)
-		if outputReserve < 4096 {
-			outputReserve = 4096
-		}
+		outputReserve = max(int(float64(c.Config.ContextWindow)*0.20), 4096)
 	}
-	maxTokens := config.ContextWindow - outputReserve
+	maxTokens := c.Config.ContextWindow - outputReserve
 	if maxTokens <= 0 {
 		return messages, nil
 	}

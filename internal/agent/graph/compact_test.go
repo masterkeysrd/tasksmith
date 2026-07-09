@@ -2,21 +2,52 @@ package graph_test
 
 import (
 	"context"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/masterkeysrd/loom/message"
+	"github.com/masterkeysrd/loom/stream"
 	agentgraph "github.com/masterkeysrd/tasksmith/internal/agent/graph"
 )
+
+type mockStreamWriter struct {
+	events []stream.Event
+}
+
+func (m *mockStreamWriter) Write(ctx context.Context, ev any) error {
+	if event, ok := ev.(stream.Event); ok {
+		m.events = append(m.events, event)
+	}
+	return nil
+}
+
+type mockFileStorage struct {
+	saved map[string]string
+	tmp   string
+}
+
+func (m *mockFileStorage) Save(ctx context.Context, relativePath string, r io.Reader) (string, error) {
+	data, _ := io.ReadAll(r)
+	path := filepath.Join(m.tmp, relativePath)
+	_ = os.MkdirAll(filepath.Dir(path), 0755)
+	_ = os.WriteFile(path, data, 0644)
+	m.saved[relativePath] = string(data)
+	return path, nil
+}
+
+func (m *mockFileStorage) Get(ctx context.Context, relativePath string) (io.ReadCloser, error) {
+	return os.Open(filepath.Join(m.tmp, relativePath))
+}
 
 func TestExtractTokensFromLastResponse(t *testing.T) {
 	// Case 1: No Assistant message
 	msgs := []message.Message{
 		message.NewUserText("Hello"),
 	}
-	if tokens := agentgraph.ExtractTokensFromLastResponse(msgs); tokens != 0 {
+	if tokens := agentgraph.ExtractTokensFromLastResponse(context.Background(), msgs); tokens != 0 {
 		t.Errorf("expected 0 tokens, got %d", tokens)
 	}
 
@@ -30,7 +61,7 @@ func TestExtractTokensFromLastResponse(t *testing.T) {
 		message.NewUserText("Hello"),
 		asst,
 	}
-	if tokens := agentgraph.ExtractTokensFromLastResponse(msgs); tokens != 100 {
+	if tokens := agentgraph.ExtractTokensFromLastResponse(context.Background(), msgs); tokens != 100 {
 		t.Errorf("expected 100 tokens, got %d", tokens)
 	}
 
@@ -43,13 +74,13 @@ func TestExtractTokensFromLastResponse(t *testing.T) {
 			Content: message.Content{&message.TextBlock{Text: "output"}},
 		},
 	}
-	tokens := agentgraph.ExtractTokensFromLastResponse(msgs)
+	tokens := agentgraph.ExtractTokensFromLastResponse(context.Background(), msgs)
 	if tokens <= 100 {
 		t.Errorf("expected >100 tokens due to tool response, got %d", tokens)
 	}
 }
 
-func TestRunPhase1_Masking(t *testing.T) {
+func TestMaskObservations(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	// Register a compact content provider
@@ -96,9 +127,24 @@ func TestRunPhase1_Masking(t *testing.T) {
 		},
 	}
 
-	compacted, err := agentgraph.RunPhase1(context.Background(), msgs, 900, config, tmpDir, nil, "session_123", tmpDir, "project_abc", "main")
+	mockStorage := &mockFileStorage{saved: make(map[string]string), tmp: tmpDir}
+	compactor := &agentgraph.Compactor{
+		Config:        config,
+		Storage:       mockStorage,
+		SessionID:     "session_123",
+		WorkspacePath: tmpDir,
+		ProjectName:   "project_abc",
+		AgentName:     "main",
+		ProviderName:  "openai",
+		ModelName:     "gpt-4",
+	}
+
+	sw := &mockStreamWriter{}
+	ctx := stream.WithWriter(context.Background(), sw)
+
+	compacted, err := compactor.MaskObservations(ctx, msgs, 900)
 	if err != nil {
-		t.Fatalf("RunPhase1 failed: %v", err)
+		t.Fatalf("MaskObservations failed: %v", err)
 	}
 
 	// Verify masking results
@@ -114,8 +160,8 @@ func TestRunPhase1_Masking(t *testing.T) {
 
 	// Verify Turn 1 tool result masked
 	tr1 := compacted[1].(*message.Tool)
-	if !strings.Contains(agentgraph.GetTextFromContent(tr1.Content), "[Compacted: mock_tool -> success. Original output was") {
-		t.Errorf("expected tool 1 compacted output, got %q", agentgraph.GetTextFromContent(tr1.Content))
+	if !strings.Contains(tr1.Content.Text(), "[Compacted: mock_tool -> success. Original output was") {
+		t.Errorf("expected tool 1 compacted output, got %q", tr1.Content.Text())
 	}
 
 	// Verify Turn 2 fallback masking (heavy arg replaced by [Truncated])
@@ -125,22 +171,36 @@ func TestRunPhase1_Masking(t *testing.T) {
 	}
 
 	// Verify Turn 3 protected assistant turn untouched
-	if !strings.Contains(agentgraph.GetTextFromContent(compacted[4].GetContent()), "recent thought") {
+	if !strings.Contains(compacted[4].GetContent().Text(), "recent thought") {
 		t.Errorf("expected turn 3 untouched, got %v", compacted[4])
 	}
 
-	// Verify Universal File Offload saved output to .tasksmith/compacted/
-	offloadFile := filepath.Join(tmpDir, ".tasksmith", "compacted", "turn_call_2.txt")
-	data, err := os.ReadFile(offloadFile)
-	if err != nil {
-		t.Fatalf("expected offloaded file, got error: %v", err)
+	// Verify Universal File Offload saved output via FileStorage
+	offloadedContent, exists := mockStorage.saved["compacted/turn_call_2.txt"]
+	if !exists {
+		t.Fatalf("expected offloaded file in storage compacted/turn_call_2.txt")
 	}
-	if !strings.Contains(string(data), "some heavy results here") {
-		t.Errorf("unexpected offloaded content: %q", string(data))
+	if !strings.Contains(offloadedContent, "some heavy results here") {
+		t.Errorf("unexpected offloaded content: %q", offloadedContent)
+	}
+
+	// Verify compaction notification written to stream writer
+	if len(sw.events) != 1 {
+		t.Fatalf("expected 1 stream event, got %d", len(sw.events))
+	}
+	if sw.events[0].Name != "agent_message" {
+		t.Errorf("expected agent_message event, got %s", sw.events[0].Name)
+	}
+	msg, ok := sw.events[0].Data.(message.Message)
+	if !ok {
+		t.Fatalf("expected message.Message event data")
+	}
+	if !strings.Contains(msg.GetContent().Text(), "Compaction completed. Reclaimed") {
+		t.Errorf("unexpected notification text: %q", msg.GetContent().Text())
 	}
 }
 
-func TestRunPhase2_Timeline(t *testing.T) {
+func TestSummarizeHistory_Timeline(t *testing.T) {
 	// Register timeline provider
 	agentgraph.TimelineProviders["mock_tool"] = mockTimelineProvider{}
 
@@ -171,11 +231,34 @@ func TestRunPhase2_Timeline(t *testing.T) {
 		},
 	}
 
-	compacted, err := agentgraph.RunPhase2(
-		context.Background(), msgs, 900, config, true, nil, nil, "sess_1", "path", "proj", "main", nil,
-	)
+	compactor := &agentgraph.Compactor{
+		Config:       config,
+		SessionID:    "sess_1",
+		ProviderName: "openai",
+		ModelName:    "gpt-4",
+	}
+
+	sw := &mockStreamWriter{}
+	ctx := stream.WithWriter(context.Background(), sw)
+
+	compacted, err := compactor.SummarizeHistory(ctx, msgs, 900, true)
 	if err != nil {
-		t.Fatalf("RunPhase2 failed: %v", err)
+		t.Fatalf("SummarizeHistory failed: %v", err)
+	}
+
+	// Verify compaction notification written to stream writer
+	if len(sw.events) != 1 {
+		t.Fatalf("expected 1 stream event, got %d", len(sw.events))
+	}
+	if sw.events[0].Name != "agent_message" {
+		t.Errorf("expected agent_message event, got %s", sw.events[0].Name)
+	}
+	msg, ok := sw.events[0].Data.(message.Message)
+	if !ok {
+		t.Fatalf("expected message.Message event data")
+	}
+	if !strings.Contains(msg.GetContent().Text(), "Compaction completed. Reclaimed") || !strings.Contains(msg.GetContent().Text(), "timeline") {
+		t.Errorf("unexpected notification text: %q", msg.GetContent().Text())
 	}
 
 	// Compacted output should have 2 messages: 1 Anchor + 1 Protected Turn
@@ -188,7 +271,7 @@ func TestRunPhase2_Timeline(t *testing.T) {
 		t.Errorf("expected compaction anchor metadata, got %v", meta)
 	}
 
-	timelineText := agentgraph.GetTextFromContent(anchorMsg.GetContent())
+	timelineText := anchorMsg.GetContent().Text()
 	if !strings.Contains(timelineText, "### Summary of Autonomous Execution") {
 		t.Errorf("expected timeline header, got %q", timelineText)
 	}
@@ -200,7 +283,7 @@ func TestRunPhase2_Timeline(t *testing.T) {
 	}
 }
 
-func TestRunPhase2_LLMSummary(t *testing.T) {
+func TestSummarizeHistory_LLMSummary(t *testing.T) {
 	config := agentgraph.DefaultCompactionConfig()
 	config.ContextWindow = 1000
 	config.Phase2Watermark = 0.80
@@ -231,21 +314,49 @@ func TestRunPhase2_LLMSummary(t *testing.T) {
 		},
 	}
 
-	compacted, err := agentgraph.RunPhase2(
-		context.Background(), msgs, 900, config, true, mockModel, nil, "sess_1", "path", "proj", "main", nil,
-	)
+	compactor := &agentgraph.Compactor{
+		Config:       config,
+		Model:        mockModel,
+		SessionID:    "sess_1",
+		ProviderName: "openai",
+		ModelName:    "gpt-4",
+	}
+
+	sw := &mockStreamWriter{}
+	ctx := stream.WithWriter(context.Background(), sw)
+
+	compacted, err := compactor.SummarizeHistory(ctx, msgs, 900, true)
 	if err != nil {
-		t.Fatalf("RunPhase2 failed: %v", err)
+		t.Fatalf("SummarizeHistory failed: %v", err)
+	}
+
+	// Verify compaction notification written to stream writer
+	if len(sw.events) != 1 {
+		t.Fatalf("expected 1 stream event, got %d", len(sw.events))
+	}
+	if sw.events[0].Name != "agent_message" {
+		t.Errorf("expected agent_message event, got %s", sw.events[0].Name)
+	}
+	msg, ok := sw.events[0].Data.(message.Message)
+	if !ok {
+		t.Fatalf("expected message.Message event data")
+	}
+	if !strings.Contains(msg.GetContent().Text(), "Compaction completed. Reclaimed") || !strings.Contains(msg.GetContent().Text(), "llm_summary") {
+		t.Errorf("unexpected notification text: %q", msg.GetContent().Text())
+	}
+
+	if len(compacted) != 2 {
+		t.Fatalf("expected 2 messages post phase 2, got %d", len(compacted))
 	}
 
 	anchorMsg := compacted[0]
-	summaryText := agentgraph.GetTextFromContent(anchorMsg.GetContent())
+	summaryText := anchorMsg.GetContent().Text()
 	if summaryText != "This is the generated conversation summary." {
 		t.Errorf("expected generated summary, got %q", summaryText)
 	}
 }
 
-func TestRunPhase2_5_StateBridge(t *testing.T) {
+func TestInjectStateBridge(t *testing.T) {
 	// Original messages contain a todos call and an activate_skill call
 	original := []message.Message{
 		&message.Assistant{
@@ -277,14 +388,15 @@ func TestRunPhase2_5_StateBridge(t *testing.T) {
 		original[3],
 	}
 
-	bridged := agentgraph.RunPhase2_5(context.Background(), original, compacted)
+	compactor := &agentgraph.Compactor{}
+	bridged := compactor.InjectStateBridge(context.Background(), original, compacted)
 
 	// Bridged should now contain 3 messages: Anchor, State Bridge, Uncompacted Assistant
 	if len(bridged) != 3 {
 		t.Fatalf("expected 3 messages after state bridge, got %d", len(bridged))
 	}
 
-	bridgeMsgText := agentgraph.GetTextFromContent(bridged[1].GetContent())
+	bridgeMsgText := bridged[1].GetContent().Text()
 	if !strings.Contains(bridgeMsgText, "Active Todos:\n- [ ] Finish feature A") {
 		t.Errorf("expected todos in state bridge, got %q", bridgeMsgText)
 	}
@@ -293,7 +405,7 @@ func TestRunPhase2_5_StateBridge(t *testing.T) {
 	}
 }
 
-func TestRunPhase3_Trim(t *testing.T) {
+func TestTrimToBudget(t *testing.T) {
 	config := agentgraph.DefaultCompactionConfig()
 	config.ContextWindow = 200
 	config.OutputReserve = 50
@@ -306,9 +418,10 @@ func TestRunPhase3_Trim(t *testing.T) {
 		message.NewUserText(strings.Repeat("D", 200)),
 	}
 
-	trimmed, err := agentgraph.RunPhase3(context.Background(), msgs, config)
+	compactor := &agentgraph.Compactor{Config: config}
+	trimmed, err := compactor.TrimToBudget(context.Background(), msgs)
 	if err != nil {
-		t.Fatalf("RunPhase3 failed: %v", err)
+		t.Fatalf("TrimToBudget failed: %v", err)
 	}
 
 	// Should trim messages from the front while preserving system prompt

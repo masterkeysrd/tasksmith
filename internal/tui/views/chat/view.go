@@ -23,6 +23,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/api"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	"github.com/masterkeysrd/tasksmith/internal/core/preview"
+	"github.com/masterkeysrd/tasksmith/internal/tui/active"
 	tuiapi "github.com/masterkeysrd/tasksmith/internal/tui/api"
 	"github.com/masterkeysrd/tasksmith/internal/tui/components"
 	"github.com/masterkeysrd/tasksmith/internal/tui/mode"
@@ -632,6 +633,33 @@ func renderChatView(props ViewProps) kitex.Node {
 
 	sendMessage := func(text string, refs []resolver.Reference, force ...bool) {
 		if text == "" || submitting() {
+			return
+		}
+
+		if text == "/compact" {
+			setInputValue("")
+			setSubmitting(true)
+			promise.New(func(ctx context.Context) (bool, error) {
+				_, err := client.ForceCompaction(ctx, api.ForceCompactionRequest{
+					SessionID: sessionID,
+				})
+				if err != nil {
+					return false, err
+				}
+				return true, nil
+			}).Then(func(success bool) {
+				setSubmitting(false)
+				active.SetStatusMessage("Compaction triggered successfully.")
+				if active.InvalidateSessionMessages != nil {
+					active.InvalidateSessionMessages(sessionID)
+				}
+			}, func(err error) {
+				setSubmitting(false)
+				active.SetStatusMessage("Compaction failed: " + err.Error())
+				if active.InvalidateSessionMessages != nil {
+					active.InvalidateSessionMessages(sessionID)
+				}
+			})
 			return
 		}
 

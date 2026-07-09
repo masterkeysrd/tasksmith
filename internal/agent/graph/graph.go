@@ -111,6 +111,9 @@ type AgentGraph struct {
 	projectName       string
 	metricsStore      *metrics.Store
 	compaction        CompactionConfig
+	providerName      string
+	modelName         string
+	workspace         *workspace.Workspace
 }
 
 // Options defines the configurations and dependencies to initialize the AgentGraph.
@@ -123,6 +126,8 @@ type Options struct {
 	SessionID         string
 	SystemPrompt      string
 	AgentName         string
+	ProviderName      string
+	ModelName         string
 	OnTodosUpdated    func(ctx context.Context, todos []tools.Todo) error
 	PermissionManager permissions.PermissionManager
 	LspManager        *lsp.Manager
@@ -251,6 +256,9 @@ func New(ctx context.Context, opts Options) (*AgentGraph, error) {
 		projectName:       projectName,
 		metricsStore:      opts.MetricsStore,
 		compaction:        compaction,
+		providerName:      opts.ProviderName,
+		modelName:         opts.ModelName,
+		workspace:         opts.Workspace,
 	}, nil
 }
 

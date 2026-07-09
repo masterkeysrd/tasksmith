@@ -1012,6 +1012,8 @@ func (m *Manager) runAgentLoop(runCtx context.Context, sessionID string, sess *A
 		SessionID:    sessionID,
 		SystemPrompt: systemPrompt,
 		AgentName:    agentName,
+		ProviderName: providerName,
+		ModelName:    modelName,
 		OnTodosUpdated: func(ctx context.Context, todos []tools.Todo) error {
 			return m.UpdateTodos(ctx, sessionID, todos)
 		},

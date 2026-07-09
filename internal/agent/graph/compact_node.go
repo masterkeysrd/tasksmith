@@ -17,7 +17,7 @@ func (a *AgentGraph) compact(ctx context.Context, s AgentState) (graph.Command[A
 	}
 
 	// Fast path: Extract exact token count from the last LLM response usage metrics
-	currentTokens := ExtractTokensFromLastResponse(s.Messages)
+	currentTokens := ExtractTokensFromLastResponse(ctx, s.Messages)
 	if currentTokens == 0 {
 		// Fallback: Manually recount if metrics are missing
 		sysTokens, _ := llm.ApproximateTokenCounter{}.CountTokens(
@@ -27,21 +27,24 @@ func (a *AgentGraph) compact(ctx context.Context, s AgentState) (graph.Command[A
 		currentTokens = sysTokens + msgTokens
 	}
 
-	// CompactMessages applies Phase 1, 2, and 3 logic based on currentTokens
-	compactedMessages, err := CompactMessages(
+	compactor := &Compactor{
+		Config:        a.compaction,
+		Storage:       a.storage,
+		Model:         a.model,
+		MetricsStore:  a.metricsStore,
+		SessionID:     a.sessionID,
+		WorkspacePath: a.wsPath,
+		ProjectName:   a.projectName,
+		AgentName:     a.agentName,
+		ProviderName:  a.providerName,
+		ModelName:     a.modelName,
+		Workspace:     a.workspace,
+	}
+	compactedMessages, err := compactor.Compact(
 		ctx,
 		s.Messages,
 		currentTokens,
-		a.compaction,
 		s.ForceCompaction,
-		a.cwd,
-		a.model,
-		a.metricsStore,
-		a.sessionID,
-		a.wsPath,
-		a.projectName,
-		a.agentName,
-		nil,
 	)
 	if err != nil {
 		log.Warn(fmt.Sprintf("[AgentGraph] compaction failed: %v", err))
