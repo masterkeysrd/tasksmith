@@ -18,6 +18,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/tui/components/icon"
 	"github.com/masterkeysrd/tasksmith/internal/tui/queries"
 	"github.com/masterkeysrd/tasksmith/internal/tui/theme"
+	"github.com/masterkeysrd/tasksmith/internal/tui/toast"
 )
 
 type ViewProps struct{}
@@ -443,7 +444,7 @@ var View = kitex.FC("ModelPickerView", func(props ViewProps) kitex.Node {
 			windClient.InvalidateQueries(api.GetSessionStateRequest{SessionID: activeSessionID})
 			active.SetModal("")
 		}, func(err error) {
-			// Handle error silently or log in debug mode
+			toast.AddErrorMessage("Model Switch Failed", err.Error())
 		})
 	}
 

@@ -541,6 +541,100 @@ func (s *Service) ConfigureSession(ctx context.Context, req ConfigureSessionRequ
 		newSettings.ModelName = req.ModelName
 	}
 
+	// Validate or adapt thinking settings based on model capabilities resolved from dynamic providers list
+	if newSettings.Thinking != nil {
+		var activeModel *Model
+		providersResp, err := s.ListProviders(ctx, ListProvidersRequest{})
+		if err == nil && providersResp != nil {
+			for _, p := range providersResp.Providers {
+				if p.Name == newSettings.ProviderName {
+					for _, m := range p.Models {
+						if m.ID == newSettings.ModelName {
+							activeModel = &m
+							break
+						}
+					}
+					break
+				}
+			}
+		}
+
+		if activeModel != nil {
+			supportsOption := func(optType string) bool {
+				if !activeModel.Capabilities.Reasoning {
+					return false
+				}
+				if optType == "toggle" || optType == "enabled" {
+					if len(activeModel.Capabilities.ReasoningOptions) == 0 {
+						return true
+					}
+					for _, opt := range activeModel.Capabilities.ReasoningOptions {
+						if opt.Type == "toggle" || opt.Type == "enabled" {
+							return true
+						}
+					}
+					return false
+				}
+				for _, opt := range activeModel.Capabilities.ReasoningOptions {
+					if opt.Type == optType {
+						return true
+					}
+					if optType == "budget" && (opt.Type == "budget_tokens" || opt.Type == "budget") {
+						return true
+					}
+				}
+				return false
+			}
+
+			if req.ModelName != "" {
+				// We are switching models. Clean/adapt existing settings to the new model's capabilities.
+				if !activeModel.Capabilities.Reasoning {
+					newSettings.Thinking = nil
+				} else {
+					if newSettings.Thinking.Enabled != nil && *newSettings.Thinking.Enabled && !supportsOption("toggle") {
+						enabledVal := true
+						newSettings.Thinking.Enabled = &enabledVal
+					}
+					if newSettings.Thinking.Adaptive != nil && *newSettings.Thinking.Adaptive && !supportsOption("adaptive") {
+						newSettings.Thinking.Adaptive = nil
+					}
+					if newSettings.Thinking.Effort != nil && !supportsOption("effort") {
+						newSettings.Thinking.Effort = nil
+					}
+					if newSettings.Thinking.Budget != nil && !supportsOption("budget") {
+						newSettings.Thinking.Budget = nil
+					}
+				}
+			} else {
+				// Strict validation when explicitly modifying thinking settings for the current model
+				tcfg := newSettings.Thinking
+				if !activeModel.Capabilities.Reasoning {
+					if (tcfg.Enabled != nil && *tcfg.Enabled) || tcfg.Effort != nil || tcfg.Budget != nil || (tcfg.Adaptive != nil && *tcfg.Adaptive) {
+						return nil, fmt.Errorf("active model %q does not support reasoning/thinking", newSettings.ModelName)
+					}
+				} else {
+					if tcfg.Enabled != nil && !supportsOption("toggle") {
+						return nil, fmt.Errorf("active model %q does not support toggling reasoning on/off", newSettings.ModelName)
+					}
+					if tcfg.Adaptive != nil && *tcfg.Adaptive && !supportsOption("adaptive") {
+						return nil, fmt.Errorf("active model %q does not support adaptive reasoning", newSettings.ModelName)
+					}
+					if tcfg.Effort != nil && !supportsOption("effort") {
+						return nil, fmt.Errorf("active model %q does not support reasoning effort configuration", newSettings.ModelName)
+					}
+					if tcfg.Budget != nil && !supportsOption("budget") {
+						return nil, fmt.Errorf("active model %q does not support token budget configuration", newSettings.ModelName)
+					}
+				}
+			}
+		} else {
+			// If we switched to an unknown model (e.g. not in providers list), clear thinking settings to be safe
+			if req.ModelName != "" {
+				newSettings.Thinking = nil
+			}
+		}
+	}
+
 	cfg := session.SessionConfig{
 		Settings: newSettings,
 	}

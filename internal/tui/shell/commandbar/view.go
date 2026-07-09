@@ -11,6 +11,7 @@ import (
 	"github.com/masterkeysrd/kite/key"
 	"github.com/masterkeysrd/kite/style"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
+	"github.com/masterkeysrd/tasksmith/internal/tui/active"
 	"github.com/masterkeysrd/tasksmith/internal/tui/command"
 	"github.com/masterkeysrd/tasksmith/internal/tui/components"
 	"github.com/masterkeysrd/tasksmith/internal/tui/mode"
@@ -29,6 +30,7 @@ var View = kitex.FC("CommandBar", func(props Props) kitex.Node {
 
 	value, setValue := kitex.UseState("")
 	commandError, setCommandError := kitex.UseState("")
+	statusMessage := active.UseStatusMessage()
 	inputRef := kitex.UseRef[dom.Element](nil)
 
 	// Initialize autocomplete controller once for commands
@@ -281,16 +283,30 @@ var View = kitex.FC("CommandBar", func(props Props) kitex.Node {
 									Bold(true),
 							}, kitex.Text("ERROR: "+commandError())),
 						),
-						kitex.Fragment(
-							kitex.Box(kitex.BoxProps{
-								Style: style.S().
-									Foreground(colorTextDimmed).
-									MarginRight(1),
-							}, kitex.Text("●")),
-							kitex.Box(kitex.BoxProps{
-								Style: style.S().
-									Foreground(colorTextDimmed),
-							}, kitex.Text("READY_FOR_DIRECTIVE")),
+						kitex.IfElse(statusMessage != "",
+							kitex.Fragment(
+								kitex.Box(kitex.BoxProps{
+									Style: style.S().
+										Foreground(t.Color.Surface.Success).
+										MarginRight(1),
+								}, kitex.Text("✔")),
+								kitex.Box(kitex.BoxProps{
+									Style: style.S().
+										Foreground(t.Color.Surface.Success).
+										Bold(true),
+								}, kitex.Text(statusMessage)),
+							),
+							kitex.Fragment(
+								kitex.Box(kitex.BoxProps{
+									Style: style.S().
+										Foreground(colorTextDimmed).
+										MarginRight(1),
+								}, kitex.Text("●")),
+								kitex.Box(kitex.BoxProps{
+									Style: style.S().
+										Foreground(colorTextDimmed),
+								}, kitex.Text("READY_FOR_DIRECTIVE")),
+							),
 						),
 					),
 

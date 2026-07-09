@@ -212,11 +212,11 @@ var Provider = kitex.FC("Provider", func(props ProviderProps) kitex.Node {
 // ModelProps defines properties for the Model component.
 type ModelProps struct {
 	Model          string
-	ThinkingEffort string
+	ThinkingStatus string
 	Style          style.Style
 }
 
-// Model renders the active language model name and thinking effort.
+// Model renders the active language model name and thinking status.
 var Model = kitex.FC("Model", func(props ModelProps) kitex.Node {
 	t := theme.UseTheme()
 
@@ -234,7 +234,7 @@ var Model = kitex.FC("Model", func(props ModelProps) kitex.Node {
 	}
 
 	var modelDisplayColor color.Color
-	if strings.ToLower(props.ThinkingEffort) == "off" {
+	if strings.ToLower(props.ThinkingStatus) == "off" {
 		modelDisplayColor = colorInsert
 	} else {
 		modelDisplayColor = modelColor
@@ -246,7 +246,7 @@ var Model = kitex.FC("Model", func(props ModelProps) kitex.Node {
 		AlignItems(style.AlignCenter).
 		Gap(1).
 		Foreground(modelDisplayColor).
-		Bold(strings.ToLower(props.ThinkingEffort) != "off").
+		Bold(strings.ToLower(props.ThinkingStatus) != "off").
 		PaddingHorizontal(1).
 		Merge(props.Style)
 
@@ -257,7 +257,7 @@ var Model = kitex.FC("Model", func(props ModelProps) kitex.Node {
 		},
 	},
 		icon.CPU,
-		kitex.Text(fmt.Sprintf(" %s [%s]", props.Model, strings.ToUpper(props.ThinkingEffort))),
+		kitex.Text(fmt.Sprintf(" %s [%s]", props.Model, strings.ToUpper(props.ThinkingStatus))),
 	)
 })
 
@@ -517,11 +517,10 @@ type Props struct {
 	Children []kitex.Node
 }
 
-func renderFragment(f plugin.Fragment, state plugin.State, sessionID string, activeAgent, activeProvider, activeModel string, metrics *api.SessionMetrics) kitex.Node {
+func renderFragment(f plugin.Fragment, state plugin.State, sessionID string, activeAgent, activeProvider, activeModel string, thinkingStatus string, metrics *api.SessionMetrics) kitex.Node {
 	inputTokens := 0
 	outputTokens := 0
 	costValue := 0.0
-	thinkingEffort := "off"
 
 	if metrics != nil {
 		inputTokens = metrics.CumulativePromptTokens
@@ -557,7 +556,7 @@ func renderFragment(f plugin.Fragment, state plugin.State, sessionID string, act
 		case "provider":
 			return Provider(ProviderProps{Provider: activeProvider})
 		case "model":
-			return Model(ModelProps{Model: activeModel, ThinkingEffort: thinkingEffort})
+			return Model(ModelProps{Model: activeModel, ThinkingStatus: thinkingStatus})
 		case "agent":
 			return Agent(AgentProps{Agent: activeAgent})
 		case "stats":
@@ -619,6 +618,7 @@ var View = kitex.FCC("StatusLine", func(props Props) kitex.Node {
 	providerName := ""
 	modelName := ""
 	var metrics *api.SessionMetrics
+	thinkingStatus := "OFF"
 
 	if sessionsQuery.Data != nil && sessionID != "" {
 		for _, s := range sessionsQuery.Data.Sessions {
@@ -627,6 +627,21 @@ var View = kitex.FCC("StatusLine", func(props Props) kitex.Node {
 				providerName = s.Settings.ProviderName
 				modelName = s.Settings.ModelName
 				metrics = s.LastTurnMetrics
+
+				tcfg := s.Settings.Thinking
+				if tcfg != nil && tcfg.Enabled != nil && *tcfg.Enabled {
+					if tcfg.Adaptive != nil && *tcfg.Adaptive {
+						thinkingStatus = "ADAPTATIVE"
+					} else if tcfg.Effort != nil && *tcfg.Effort != "" {
+						thinkingStatus = strings.ToUpper(*tcfg.Effort)
+					} else if tcfg.Budget != nil && *tcfg.Budget > 0 {
+						thinkingStatus = "BUDGET"
+					} else {
+						thinkingStatus = "ON"
+					}
+				} else {
+					thinkingStatus = "OFF"
+				}
 				break
 			}
 		}
@@ -679,14 +694,14 @@ var View = kitex.FCC("StatusLine", func(props Props) kitex.Node {
 	} else {
 		var leftNodes []kitex.Node
 		for _, f := range state.Config.Left {
-			if node := renderFragment(f, state, sessionID, agentName, providerLabel, modelLabel, metrics); node != nil {
+			if node := renderFragment(f, state, sessionID, agentName, providerLabel, modelLabel, thinkingStatus, metrics); node != nil {
 				leftNodes = append(leftNodes, node)
 			}
 		}
 
 		var rightNodes []kitex.Node
 		for _, f := range state.Config.Right {
-			if node := renderFragment(f, state, sessionID, agentName, providerLabel, modelLabel, metrics); node != nil {
+			if node := renderFragment(f, state, sessionID, agentName, providerLabel, modelLabel, thinkingStatus, metrics); node != nil {
 				rightNodes = append(rightNodes, node)
 			}
 		}

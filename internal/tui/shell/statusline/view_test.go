@@ -59,7 +59,7 @@ func TestStatusLine(t *testing.T) {
 			Project(ProjectProps{ProjectName: "test-project"}),
 			Spacer(),
 			Provider(ProviderProps{Provider: "Loom_Engine"}),
-			Model(ModelProps{Model: "Gemini 3.1 Pro", ThinkingEffort: "medium"}),
+			Model(ModelProps{Model: "Gemini 3.1 Pro", ThinkingStatus: "medium"}),
 			Agent(AgentProps{Agent: "Loom_Primary"}),
 			Stats(StatsProps{
 				InputTokens:  25100,

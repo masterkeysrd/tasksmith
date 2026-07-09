@@ -2,6 +2,8 @@
 package active
 
 import (
+	"time"
+
 	"github.com/masterkeysrd/kite/extras/kites"
 )
 
@@ -10,6 +12,7 @@ type state struct {
 	screen        string // "chat" or "analytics"
 	modal         string // active modal overlay identifier, "" if none
 	isSidebarOpen bool
+	statusMessage string
 }
 
 var store = kites.Create(state{
@@ -17,6 +20,7 @@ var store = kites.Create(state{
 	screen:        "chat",
 	modal:         "",
 	isSidebarOpen: true,
+	statusMessage: "",
 })
 
 // SetSessionID updates the active session ID and switches the screen back to chat, closing any modal.
@@ -107,3 +111,28 @@ var InvalidateSessionState func(sessionID string)
 
 // InvalidateFileChanges is a callback registered by the App to invalidate file changes queries.
 var InvalidateFileChanges func(sessionID string)
+
+// SetStatusMessage sets a transient feedback message in the status bar/command bar.
+func SetStatusMessage(msg string) {
+	store.Set(func(s state) state {
+		s.statusMessage = msg
+		return s
+	})
+	// Auto-clear after 4 seconds
+	go func() {
+		time.Sleep(4 * time.Second)
+		store.Set(func(s state) state {
+			if s.statusMessage == msg {
+				s.statusMessage = ""
+			}
+			return s
+		})
+	}()
+}
+
+// UseStatusMessage returns the active transient status message reactively.
+func UseStatusMessage() string {
+	return kites.Use(store, func(s state) string {
+		return s.statusMessage
+	})
+}

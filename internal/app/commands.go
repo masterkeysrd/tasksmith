@@ -2,7 +2,10 @@ package app
 
 import (
 	"fmt"
+	"strconv"
+	"strings"
 
+	"github.com/masterkeysrd/tasksmith/internal/agent/model"
 	"github.com/masterkeysrd/tasksmith/internal/agent/permissions"
 	"github.com/masterkeysrd/tasksmith/internal/api"
 	"github.com/masterkeysrd/tasksmith/internal/tui/active"
@@ -53,6 +56,205 @@ func (app *Application) InitializeCommands() {
 	command.Register("model", func(ctx command.CommandContext) error {
 		active.SetModal("modelpicker")
 		return nil
+	})
+
+	command.Register("thinking", func(ctx command.CommandContext) error {
+		sessionID := active.GetSessionID()
+		if sessionID == "" {
+			return fmt.Errorf("thinking: no active session")
+		}
+
+		if len(ctx.Args) == 0 {
+			return fmt.Errorf("thinking: missing subcommand/argument (try 'toggle', 'effort', 'budget', or 'adaptive')")
+		}
+
+		// Fetch the session configuration from backend
+		sessionsResp, err := app.api.ListSessions(ctx.Ctx, api.ListSessionsRequest{})
+		if err != nil {
+			return fmt.Errorf("thinking: failed to list sessions: %w", err)
+		}
+		var currentSession api.Session
+		found := false
+		for _, s := range sessionsResp.Sessions {
+			if s.ID == sessionID {
+				currentSession = s
+				found = true
+				break
+			}
+		}
+		if !found {
+			return fmt.Errorf("thinking: session %q not found", sessionID)
+		}
+
+		newSettings := currentSession.Settings
+		if newSettings.Thinking == nil {
+			newSettings.Thinking = &model.SessionThinkingSetting{}
+		}
+
+		subcommand := strings.ToLower(ctx.Args[0])
+		switch subcommand {
+		case "toggle":
+			var nextEnabled bool
+			if newSettings.Thinking.Enabled == nil {
+				nextEnabled = true
+			} else {
+				nextEnabled = !*newSettings.Thinking.Enabled
+			}
+			newSettings.Thinking.Enabled = &nextEnabled
+
+			_, err = app.api.ConfigureSession(ctx.Ctx, api.ConfigureSessionRequest{
+				SessionID:    sessionID,
+				ProviderName: currentSession.Settings.ProviderName,
+				ModelName:    currentSession.Settings.ModelName,
+				AgentName:    currentSession.Settings.AgentName,
+				Settings:     &newSettings,
+			})
+			if err != nil {
+				return err
+			}
+
+			if active.InvalidateSessionState != nil {
+				active.InvalidateSessionState(sessionID)
+			}
+
+			if nextEnabled {
+				active.SetStatusMessage("Thinking: ENABLED")
+			} else {
+				active.SetStatusMessage("Thinking: DISABLED")
+			}
+			return nil
+
+		case "effort":
+			var activeModel api.Model
+			foundModel := false
+			providersResp, err := app.api.ListProviders(ctx.Ctx, api.ListProvidersRequest{})
+			if err == nil && providersResp != nil {
+				for _, p := range providersResp.Providers {
+					if p.Name == currentSession.Settings.ProviderName {
+						for _, m := range p.Models {
+							if m.ID == currentSession.Settings.ModelName {
+								activeModel = m
+								foundModel = true
+								break
+							}
+						}
+						break
+					}
+				}
+			}
+
+			hasEffort := false
+			if foundModel && activeModel.Capabilities.Reasoning {
+				for _, opt := range activeModel.Capabilities.ReasoningOptions {
+					if opt.Type == "effort" {
+						hasEffort = true
+						break
+					}
+				}
+			}
+			if !hasEffort {
+				modelID := "active model"
+				if foundModel {
+					modelID = activeModel.ID
+				}
+				return fmt.Errorf("thinking effort: active model %q does not support reasoning effort configuration", modelID)
+			}
+
+			// Open the effort picker modal
+			active.SetModal("effortpicker")
+			return nil
+
+		case "budget":
+			if len(ctx.Args) < 2 {
+				return fmt.Errorf("thinking budget: missing token budget value (try ':thinking budget 16000' or ':thinking budget off')")
+			}
+			valStr := strings.ToLower(ctx.Args[1])
+			if valStr == "off" || valStr == "none" || valStr == "0" {
+				newSettings.Thinking.Budget = nil
+			} else {
+				budgetVal, err := strconv.Atoi(valStr)
+				if err != nil {
+					return fmt.Errorf("thinking budget: invalid budget value %q (must be an integer or 'off')", ctx.Args[1])
+				}
+				newSettings.Thinking.Budget = &budgetVal
+				// Make sure thinking is enabled
+				enabledVal := true
+				newSettings.Thinking.Enabled = &enabledVal
+			}
+
+			_, err = app.api.ConfigureSession(ctx.Ctx, api.ConfigureSessionRequest{
+				SessionID:    sessionID,
+				ProviderName: currentSession.Settings.ProviderName,
+				ModelName:    currentSession.Settings.ModelName,
+				AgentName:    currentSession.Settings.AgentName,
+				Settings:     &newSettings,
+			})
+			if err != nil {
+				return err
+			}
+
+			if active.InvalidateSessionState != nil {
+				active.InvalidateSessionState(sessionID)
+			}
+
+			if newSettings.Thinking.Budget == nil {
+				active.SetStatusMessage("Thinking budget: OFF")
+			} else {
+				active.SetStatusMessage(fmt.Sprintf("Thinking budget set to: %d tokens", *newSettings.Thinking.Budget))
+			}
+			return nil
+
+		case "adaptive":
+			var nextAdaptive bool
+			if len(ctx.Args) >= 2 {
+				valStr := strings.ToLower(ctx.Args[1])
+				switch valStr {
+				case "on", "true", "yes":
+					nextAdaptive = true
+				case "off", "false", "no":
+					nextAdaptive = false
+				default:
+					return fmt.Errorf("thinking adaptive: invalid argument %q (try 'on' or 'off')", ctx.Args[1])
+				}
+			} else {
+				// Toggle
+				if newSettings.Thinking.Adaptive == nil {
+					nextAdaptive = true
+				} else {
+					nextAdaptive = !*newSettings.Thinking.Adaptive
+				}
+			}
+
+			newSettings.Thinking.Adaptive = &nextAdaptive
+			// Make sure thinking is enabled
+			enabledVal := true
+			newSettings.Thinking.Enabled = &enabledVal
+
+			_, err = app.api.ConfigureSession(ctx.Ctx, api.ConfigureSessionRequest{
+				SessionID:    sessionID,
+				ProviderName: currentSession.Settings.ProviderName,
+				ModelName:    currentSession.Settings.ModelName,
+				AgentName:    currentSession.Settings.AgentName,
+				Settings:     &newSettings,
+			})
+			if err != nil {
+				return err
+			}
+
+			if active.InvalidateSessionState != nil {
+				active.InvalidateSessionState(sessionID)
+			}
+
+			if nextAdaptive {
+				active.SetStatusMessage("Adaptive thinking: ENABLED")
+			} else {
+				active.SetStatusMessage("Adaptive thinking: DISABLED")
+			}
+			return nil
+
+		default:
+			return fmt.Errorf("thinking: unknown subcommand %q (try 'toggle', 'effort', 'budget', or 'adaptive')", ctx.Args[0])
+		}
 	})
 
 	command.Register("lsp", func(ctx command.CommandContext) error {

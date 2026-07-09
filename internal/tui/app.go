@@ -15,6 +15,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/tui/toast"
 	"github.com/masterkeysrd/tasksmith/internal/tui/views/analytics"
 	"github.com/masterkeysrd/tasksmith/internal/tui/views/chat"
+	"github.com/masterkeysrd/tasksmith/internal/tui/views/effortpicker"
 	"github.com/masterkeysrd/tasksmith/internal/tui/views/lspinfo"
 	"github.com/masterkeysrd/tasksmith/internal/tui/views/mcpinfo"
 	"github.com/masterkeysrd/tasksmith/internal/tui/views/modelpicker"
@@ -74,6 +75,7 @@ var Router = kitex.SimpleFC("Router", func() kitex.Node {
 	kitex.UseEffect(func() {
 		active.InvalidateSessionState = func(sessionID string) {
 			windClient.InvalidateQueries(api.GetSessionStateRequest{SessionID: sessionID})
+			windClient.InvalidateQueries(api.ListSessionsRequest{})
 		}
 		active.InvalidateFileChanges = func(sessionID string) {
 			windClient.InvalidateQueries(api.GetFileChangesRequest{SessionID: sessionID})
@@ -154,6 +156,7 @@ var Router = kitex.SimpleFC("Router", func() kitex.Node {
 				lspinfo.View(lspinfo.ViewProps{}),
 				mcpinfo.View(mcpinfo.ViewProps{}),
 				modelpicker.View(modelpicker.ViewProps{}),
+				effortpicker.View(effortpicker.ViewProps{}),
 				permissionsview.View(permissionsview.ViewProps{}),
 			),
 		)
