@@ -601,7 +601,7 @@ func renderChatView(props ViewProps) kitex.Node {
 
 		if isFirstRenderOfSession.Current {
 			isFirstRenderOfSession.Current = false
-			el.ScrollTo(0, maxScrollY)
+			el.ScrollBy(0, 9999)
 		} else if currentY >= lastMaxScrollY.Current-2 {
 			rectParent, okParent := view.GetBoundingClientRect(el)
 			var rectAnchor geom.Rect
@@ -616,7 +616,7 @@ func renderChatView(props ViewProps) kitex.Node {
 					el.ScrollTo(0, targetY)
 				}
 			} else {
-				el.ScrollTo(0, maxScrollY)
+				el.ScrollBy(0, 9999)
 			}
 		}
 
@@ -1024,12 +1024,6 @@ func renderChatView(props ViewProps) kitex.Node {
 				})
 			}),
 
-			// Scroll Anchor Box — keeps auto-scroll focused on the stream, above queued messages
-			kitex.Box(kitex.BoxProps{
-				Ref:   scrollAnchorRef,
-				Style: style.S().Height(style.Cells(0)),
-			}),
-
 			// Running Tasks Widget
 			kitex.If(stateQuery.Data != nil && len(stateQuery.Data.RunningTasks) > 0, func() kitex.Node {
 				return RunningTasksWidget(RunningTasksWidgetProps{
@@ -1076,6 +1070,12 @@ func renderChatView(props ViewProps) kitex.Node {
 					handleRemoveQueuedMessage,
 				)...,
 			),
+
+			// Scroll Anchor Box — keeps auto-scroll focused on the stream
+			kitex.Box(kitex.BoxProps{
+				Ref:   scrollAnchorRef,
+				Style: style.S().Height(style.Cells(0)),
+			}),
 		),
 
 		// Composer Section
