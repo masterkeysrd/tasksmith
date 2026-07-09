@@ -10,6 +10,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
 	"github.com/masterkeysrd/tasksmith/internal/filetrack"
 	"github.com/masterkeysrd/tasksmith/internal/mcp"
+	"github.com/masterkeysrd/tasksmith/internal/metrics"
 )
 
 const (
@@ -36,6 +37,7 @@ type ToolHandlers struct {
 	LspManager        *lsp.Manager
 	FileTracker       filetrack.FileTracker
 	McpManager        *mcp.Manager
+	MetricsStore      *metrics.Store
 }
 
 // NewHandlers creates a new ToolHandlers instance with the given dependencies.
@@ -86,6 +88,12 @@ func (h *ToolHandlers) WithFileTracker(ft filetrack.FileTracker) *ToolHandlers {
 // WithMcpManager configures the McpManager on ToolHandlers.
 func (h *ToolHandlers) WithMcpManager(mgr *mcp.Manager) *ToolHandlers {
 	h.McpManager = mgr
+	return h
+}
+
+// WithMetricsStore configures the MetricsStore on ToolHandlers.
+func (h *ToolHandlers) WithMetricsStore(store *metrics.Store) *ToolHandlers {
+	h.MetricsStore = store
 	return h
 }
 

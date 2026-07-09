@@ -20,6 +20,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/core/fsutil"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
+	"github.com/masterkeysrd/tasksmith/internal/metrics"
 	"github.com/masterkeysrd/tasksmith/internal/workspace"
 	"github.com/masterkeysrd/warp"
 )
@@ -231,6 +232,21 @@ func (r *subagentRunnerImpl) Run(ctx context.Context, opts tools.SubagentOptions
 		return state
 	})
 
+	var metricsStore *metrics.Store
+	if opts.ParentHandlers != nil {
+		metricsStore = opts.ParentHandlers.MetricsStore
+	}
+
+	var wsPath, projName string
+	if wsConcrete != nil {
+		wsPath = wsConcrete.CWD()
+		if p := wsConcrete.Project(); p != nil {
+			projName = p.Name
+		}
+	} else if opts.ParentHandlers != nil {
+		wsPath = opts.ParentHandlers.CWD
+	}
+
 	var finalOutput string
 	for {
 		seq, err := g.Stream(ctx, inputCmd, loc)
@@ -277,6 +293,29 @@ func (r *subagentRunnerImpl) Run(ctx context.Context, opts tools.SubagentOptions
 							fmt.Fprintf(opts.Stdout, "\n[Tool Call: %s(%v)]\n", tc.Name, tc.Args)
 						}
 					}
+					if asstMsg, ok := msg.(*message.Assistant); ok && asstMsg.Metrics != nil && metricsStore != nil {
+						sysTokens, _ := llm.ApproximateTokenCounter{}.CountTokens(ctx, message.MessageList{message.NewSystemText(systemPrompt)})
+						event := coredb.MetricsEvent{
+							SessionID:     opts.SessionID,
+							WorkspacePath: wsPath,
+							ProjectName:   projName,
+							AgentName:     opts.AgentRef,
+							NodeName:      func(s string) *string { return &s }("think"),
+							CreatedAt:     time.Now(),
+						}
+						payload := coredb.LLMCallPayload{
+							Provider:            providerName,
+							Model:               modelName,
+							SystemTokens:        sysTokens,
+							PromptTokens:        asstMsg.Metrics.Tokens.Input,
+							CompletionTokens:    asstMsg.Metrics.Tokens.Output,
+							TotalTokens:         asstMsg.Metrics.TotalTokens,
+							CacheCreationTokens: asstMsg.Metrics.Tokens.CacheWrite,
+							CacheReadTokens:     asstMsg.Metrics.Tokens.CacheRead,
+							EstimatedCostUSD:    asstMsg.Metrics.TotalCost.AsUSD(),
+						}
+						_ = metricsStore.LogLLMCall(event, payload)
+					}
 				}
 			case "tool_message":
 				if msg, ok := ev.Data.(message.Message); ok {
@@ -291,6 +330,51 @@ func (r *subagentRunnerImpl) Run(ctx context.Context, opts tools.SubagentOptions
 							fmt.Fprintf(opts.Stderr, "\n[Tool Error: %s -> %s]\n", tMsg.Name, text)
 						} else {
 							fmt.Fprintf(opts.Stdout, "\n[Tool Response: %s -> %s]\n", tMsg.Name, text)
+						}
+
+						if metricsStore != nil {
+							outputTokens := 0
+							for _, b := range tMsg.Content {
+								if txt, ok := b.(*message.TextBlock); ok {
+									outputTokens += len(txt.Text) / 4
+								}
+							}
+
+							status := "success"
+							var errMsg *string
+							if tMsg.IsError {
+								status = "error"
+								if len(tMsg.Content) > 0 {
+									if txt, ok := tMsg.Content[0].(*message.TextBlock); ok {
+										e := txt.Text
+										errMsg = &e
+									}
+								}
+							}
+
+							var execTime int64
+							if meta := tMsg.GetMetadata(); meta != nil {
+								if t, ok := meta["execution_time_ms"].(int64); ok {
+									execTime = t
+								}
+							}
+
+							event := coredb.MetricsEvent{
+								SessionID:     opts.SessionID,
+								WorkspacePath: wsPath,
+								ProjectName:   projName,
+								AgentName:     opts.AgentRef,
+								NodeName:      func(s string) *string { return &s }("execute_tools"),
+								CreatedAt:     time.Now(),
+							}
+							payload := coredb.ToolCallPayload{
+								ToolName:        tMsg.Name,
+								ExecutionTimeMs: execTime,
+								Status:          status,
+								ErrorMessage:    errMsg,
+								OutputTokens:    outputTokens,
+							}
+							_ = metricsStore.LogToolCall(event, payload)
 						}
 					}
 				}

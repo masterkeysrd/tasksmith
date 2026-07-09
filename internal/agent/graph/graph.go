@@ -18,6 +18,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/core/lsp"
 	"github.com/masterkeysrd/tasksmith/internal/filetrack"
 	"github.com/masterkeysrd/tasksmith/internal/mcp"
+	"github.com/masterkeysrd/tasksmith/internal/metrics"
 	"github.com/masterkeysrd/tasksmith/internal/workspace"
 	"github.com/masterkeysrd/warp"
 )
@@ -120,6 +121,7 @@ type Options struct {
 	LspManager        *lsp.Manager
 	FileTracker       filetrack.FileTracker
 	McpManager        *mcp.Manager
+	MetricsStore      *metrics.Store
 }
 
 // New creates a new AgentGraph orchestrator by loading/binding tools outside of the execution nodes.
@@ -193,7 +195,8 @@ func New(ctx context.Context, opts Options) (*AgentGraph, error) {
 		WithPermissionManager(pm).
 		WithLspManager(opts.LspManager).
 		WithFileTracker(opts.FileTracker).
-		WithMcpManager(opts.McpManager)
+		WithMcpManager(opts.McpManager).
+		WithMetricsStore(opts.MetricsStore)
 
 	activeTools, err := tools.LoadActiveTools(ctx, handlers, allowedTools, mcps)
 	if err != nil {

@@ -913,9 +913,10 @@ func (m *Manager) runAgentLoop(runCtx context.Context, sessionID string, sess *A
 		OnTodosUpdated: func(ctx context.Context, todos []tools.Todo) error {
 			return m.UpdateTodos(ctx, sessionID, todos)
 		},
-		LspManager:  m.lspManager,
-		FileTracker: ft,
-		McpManager:  m.mcpManager,
+		LspManager:   m.lspManager,
+		FileTracker:  ft,
+		McpManager:   m.mcpManager,
+		MetricsStore: m.metricsStore,
 	})
 	if err != nil {
 		m.setSessionError(sessionID, fmt.Errorf("failed to construct agent graph: %w", err))
