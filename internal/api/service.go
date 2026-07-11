@@ -115,6 +115,10 @@ func (s *Service) InitializeWorkspace(ctx context.Context, req InitializeWorkspa
 		Theme:            req.Theme,
 		AuthorizedTools:  req.AuthorizedTools,
 		TrustOnly:        req.TrustOnly,
+		AuthType:         req.AuthType,
+		AuthEnv:          req.AuthEnv,
+		AuthFile:         req.AuthFile,
+		AuthHeader:       req.AuthHeader,
 	}
 	if err := s.ws.Initialize(ctx, opts); err != nil {
 		return nil, err
@@ -330,14 +334,22 @@ func (s *Service) ListProviders(ctx context.Context, req ListProvidersRequest) (
 			})
 		}
 
+		var authEnv string
+		var apiKey string
+		if p.Spec.Auth != nil && p.Spec.Auth.Env != "" {
+			authEnv = p.Spec.Auth.Env
+			apiKey = os.Getenv(authEnv)
+		}
+
 		resp.Providers = append(resp.Providers, Provider{
 			Name:         p.Metadata.Name,
 			DisplayName:  displayName,
 			Description:  p.Spec.Type,
 			DefaultModel: p.Spec.DefaultModel,
 			Endpoint:     p.Spec.Endpoint,
-			// AuthEnv:      p.Spec.Auth.Env,
-			Models: models,
+			AuthEnv:      authEnv,
+			APIKey:       apiKey,
+			Models:       models,
 		})
 	}
 

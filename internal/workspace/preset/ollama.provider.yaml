@@ -6,9 +6,6 @@ spec:
   type: ollama
   endpoint: http://localhost:11434
   defaultModel: llama3.3
-  auth:
-    type: env
-    env: OLLAMA_HOST
   models:
     - id: qwen3.6
       name: qwen3.6

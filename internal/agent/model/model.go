@@ -3,7 +3,10 @@ package model
 import (
 	"context"
 	"fmt"
+	"net/http"
+	"net/url"
 	"os"
+	"strings"
 
 	"github.com/masterkeysrd/loom/llm"
 	"github.com/masterkeysrd/loom/llm/anthropic"
@@ -11,6 +14,13 @@ import (
 	"github.com/masterkeysrd/loom/llm/ollama"
 	"github.com/masterkeysrd/loom/llm/openai"
 	"github.com/masterkeysrd/warp"
+
+	anthropicclient "github.com/anthropics/anthropic-sdk-go"
+	anthropicoption "github.com/anthropics/anthropic-sdk-go/option"
+	ollamaapi "github.com/ollama/ollama/api"
+	openaiclient "github.com/openai/openai-go/v3"
+	openaioption "github.com/openai/openai-go/v3/option"
+	googlegenai "google.golang.org/genai"
 )
 
 // SessionSettings represents the structured configuration overrides for a session.
@@ -32,53 +42,74 @@ type SessionThinkingSetting struct {
 
 // CreateProvider instantiates a Loom llm.Provider based on the Warp model provider configuration.
 func CreateProvider(ctx context.Context, p *warp.ModelProvider) (llm.Provider, error) {
-	// Set endpoints dynamically
-	if p.Spec.Endpoint != "" {
-		switch p.Spec.Type {
-		case "ollama":
-			os.Setenv("OLLAMA_HOST", p.Spec.Endpoint)
-		case "openai":
-			os.Setenv("OPENAI_BASE_URL", p.Spec.Endpoint)
-		case "anthropic":
-			os.Setenv("ANTHROPIC_BASE_URL", p.Spec.Endpoint)
-		}
+	token, err := resolveAuthToken(p)
+	if err != nil {
+		return nil, err
 	}
 
-	// Inject credentials from environment variable configured in Warp
-	if p.Spec.Auth != nil && p.Spec.Auth.Env != "" {
-		val := os.Getenv(p.Spec.Auth.Env)
-		if val != "" {
-			switch p.Spec.Type {
-			case "openai":
-				os.Setenv("OPENAI_API_KEY", val)
-			case "anthropic":
-				os.Setenv("ANTHROPIC_API_KEY", val)
-			case "google-genai":
-				os.Setenv("GEMINI_API_KEY", val)
-			}
-		}
-	}
-
-	// Fallback for Google GenAI when GEMINI_API_KEY is not set but GOOGLE_API_KEY is
-	if p.Spec.Type == "google-genai" && os.Getenv("GEMINI_API_KEY") == "" {
-		if val := os.Getenv("GOOGLE_API_KEY"); val != "" {
-			os.Setenv("GEMINI_API_KEY", val)
-		}
-	}
-
-	// Instantiate the actual Loom provider backend
 	var loomProvider llm.Provider
-	var err error
 
 	switch p.Spec.Type {
 	case "ollama":
-		loomProvider, err = loomollama.NewDefaultProvider()
+		var u *url.URL
+		if p.Spec.Endpoint != "" {
+			u, err = url.Parse(p.Spec.Endpoint)
+			if err != nil {
+				return nil, fmt.Errorf("invalid ollama endpoint: %w", err)
+			}
+		} else {
+			u, _ = url.Parse("http://localhost:11434")
+		}
+
+		httpClient := newHTTPClient(p.Spec.Headers)
+		client := ollamaapi.NewClient(u, httpClient)
+		loomProvider = (&loomollama.Provider{}).NewProvider(client, u)
+
 	case "openai":
-		loomProvider, err = loomopenai.NewDefaultProvider()
+		var opts []openaioption.RequestOption
+		if token != "" {
+			opts = append(opts, openaioption.WithAPIKey(token))
+		}
+		if p.Spec.Endpoint != "" {
+			opts = append(opts, openaioption.WithBaseURL(p.Spec.Endpoint))
+		}
+		if len(p.Spec.Headers) > 0 {
+			opts = append(opts, openaioption.WithHTTPClient(newHTTPClient(p.Spec.Headers)))
+		}
+		client := openaiclient.NewClient(opts...)
+		loomProvider = loomopenai.NewProvider(&client)
+
 	case "anthropic":
-		loomProvider, err = loomanthropic.NewDefaultProvider()
+		var opts []anthropicoption.RequestOption
+		if token != "" {
+			opts = append(opts, anthropicoption.WithAPIKey(token))
+		}
+		if p.Spec.Endpoint != "" {
+			opts = append(opts, anthropicoption.WithBaseURL(p.Spec.Endpoint))
+		}
+		if len(p.Spec.Headers) > 0 {
+			opts = append(opts, anthropicoption.WithHTTPClient(newHTTPClient(p.Spec.Headers)))
+		}
+		client := anthropicclient.NewClient(opts...)
+		loomProvider = loomanthropic.NewProvider(&client)
+
 	case "google-genai":
-		loomProvider, err = loomgenai.NewDefaultProvider(ctx)
+		config := &googlegenai.ClientConfig{
+			APIKey:     token,
+			HTTPClient: newHTTPClient(p.Spec.Headers),
+		}
+		if p.Spec.Endpoint != "" {
+			config.HTTPOptions.BaseURL = p.Spec.Endpoint
+		}
+		if config.APIKey == "" {
+			if key := os.Getenv("GEMINI_API_KEY"); key != "" {
+				config.APIKey = key
+			} else if key := os.Getenv("GOOGLE_API_KEY"); key != "" {
+				config.APIKey = key
+			}
+		}
+		loomProvider, err = loomgenai.NewProvider(ctx, config)
+
 	default:
 		return nil, fmt.Errorf("unknown provider type: %s", p.Spec.Type)
 	}
@@ -310,13 +341,26 @@ func New(ctx context.Context, cfg Config) (*llm.Model, error) {
 		}
 	}
 
-	// 4. Set ContextWindow from Warp specs
-	var contextWindow int
+	// 4. Set ContextWindow and MaxTokens from Warp specs
+	var contextWindow, maxTokens int
 	if cfg.ModelProvider != nil {
 		for _, m := range cfg.ModelProvider.Spec.Models {
 			if m.ID == cfg.ModelName {
 				contextWindow = m.Limits.Context
+				maxTokens = m.Limits.Output
 				break
+			}
+		}
+	}
+
+	// Fallback to Loom's profile catalog values if 0
+	if cfg.Provider != nil && (contextWindow == 0 || maxTokens == 0) {
+		if prof, found := cfg.Provider.GetProfile(cfg.ModelName); found {
+			if contextWindow == 0 {
+				contextWindow = prof.Limits.Context
+			}
+			if maxTokens == 0 {
+				maxTokens = prof.Limits.Output
 			}
 		}
 	}
@@ -326,6 +370,13 @@ func New(ctx context.Context, cfg Config) (*llm.Model, error) {
 			modelConfig = &llm.ModelConfig{}
 		}
 		modelConfig.ContextWindow = contextWindow
+	}
+
+	if maxTokens > 0 {
+		if modelConfig == nil {
+			modelConfig = &llm.ModelConfig{}
+		}
+		modelConfig.MaxTokens = maxTokens
 	}
 
 	if cfg.Agent != nil && cfg.Agent.Agent != nil && cfg.Agent.Agent.Spec.Temperature > 0 {
@@ -346,4 +397,62 @@ func New(ctx context.Context, cfg Config) (*llm.Model, error) {
 	}
 
 	return llm.NewModel(cfg.Provider, cfg.ModelName, modelConfig)
+}
+
+type headerTransport struct {
+	underlying http.RoundTripper
+	headers    map[string]string
+}
+
+func (t *headerTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	cloned := req.Clone(req.Context())
+	for k, v := range t.headers {
+		cloned.Header.Set(k, v)
+	}
+	transport := t.underlying
+	if transport == nil {
+		transport = http.DefaultTransport
+	}
+	return transport.RoundTrip(cloned)
+}
+
+func newHTTPClient(headers map[string]string) *http.Client {
+	if len(headers) == 0 {
+		return http.DefaultClient
+	}
+	expandedHeaders := make(map[string]string, len(headers))
+	for k, v := range headers {
+		expandedHeaders[k] = os.ExpandEnv(v)
+	}
+	return &http.Client{
+		Transport: &headerTransport{
+			underlying: http.DefaultTransport,
+			headers:    expandedHeaders,
+		},
+	}
+}
+
+func resolveAuthToken(p *warp.ModelProvider) (string, error) {
+	if p.Spec.Auth == nil {
+		return "", nil
+	}
+
+	// 1. Resolve from Environment Variable
+	if p.Spec.Auth.Env != "" {
+		if val := os.Getenv(p.Spec.Auth.Env); val != "" {
+			return val, nil
+		}
+	}
+
+	// 2. Resolve from File Path
+	if p.Spec.Auth.File != "" {
+		filePath := p.Spec.Auth.File
+		data, err := os.ReadFile(filePath)
+		if err != nil {
+			return "", fmt.Errorf("failed to read auth file %q: %w", filePath, err)
+		}
+		return strings.TrimSpace(string(data)), nil
+	}
+
+	return "", nil
 }

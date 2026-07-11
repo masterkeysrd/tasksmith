@@ -174,14 +174,34 @@ var View = kitex.FC("SetupView", func(props ViewProps) kitex.Node {
 				},
 				OnConfirm: func() {
 					conf := configs()[selectedProvider()]
+					apiKey := conf.APIKey
+					authEnv := conf.AuthEnv
+					authFile := conf.AuthFile
+					authHeader := conf.AuthHeader
+					authType := conf.AuthType
+
+					if conf.AuthMethod == "file" {
+						apiKey = ""
+						authEnv = ""
+					} else if conf.AuthMethod == "env" {
+						apiKey = ""
+						authFile = ""
+					} else {
+						authFile = ""
+					}
+
 					req := api.InitializeWorkspaceRequest{
 						ProjectName:      projectName(),
 						SelectedProvider: selectedProvider(),
-						APIKey:           conf.APIKey,
+						APIKey:           apiKey,
 						Endpoint:         conf.Endpoint,
 						DefaultModel:     conf.DefaultModel,
 						Theme:            theme.GetName(),
 						AuthorizedTools:  authorizedTools(),
+						AuthType:         authType,
+						AuthEnv:          authEnv,
+						AuthFile:         authFile,
+						AuthHeader:       authHeader,
 					}
 					promise.New(func(ctx context.Context) (any, error) {
 						return client.InitializeWorkspace(ctx, req)

@@ -24,6 +24,10 @@ type InitializationOptions struct {
 	Theme            string
 	AuthorizedTools  map[string]bool
 	TrustOnly        bool // Skip file generation for local import/trust
+	AuthType         string
+	AuthEnv          string
+	AuthFile         string
+	AuthHeader       string
 }
 
 // Initialize coordinates the setup process for a new workspace.
@@ -82,7 +86,9 @@ func (w *Workspace) Initialize(ctx context.Context, opts InitializationOptions) 
 				break
 			}
 		}
-		if baseProvider != nil && baseProvider.Spec.Auth != nil {
+		if opts.AuthEnv != "" {
+			envVarName = opts.AuthEnv
+		} else if baseProvider != nil && baseProvider.Spec.Auth != nil {
 			if baseProvider.Spec.Auth.Env != "" {
 				envVarName = baseProvider.Spec.Auth.Env
 			}
@@ -199,6 +205,33 @@ func (w *Workspace) Initialize(ctx context.Context, opts InitializationOptions) 
 		providerSpec.DefaultModel = opts.DefaultModel
 	}
 
+	// Override auth configuration
+	if opts.AuthType != "" {
+		authConf := &warp.ProviderAuth{
+			Type: opts.AuthType,
+		}
+		if opts.AuthType == "api-key" && opts.AuthHeader != "" {
+			authConf.Header = opts.AuthHeader
+		}
+
+		if opts.AuthFile != "" {
+			authConf.File = opts.AuthFile
+		} else if opts.AuthEnv != "" {
+			authConf.Env = opts.AuthEnv
+		} else if baseProvider != nil && baseProvider.Spec.Auth != nil && baseProvider.Spec.Auth.Env != "" {
+			authConf.Env = baseProvider.Spec.Auth.Env
+		} else {
+			authConf.Env = "API_KEY"
+		}
+		providerSpec.Auth = authConf
+	} else if baseProvider != nil && baseProvider.Spec.Auth != nil {
+		authConf := baseProvider.Spec.Auth.DeepCopy()
+		if opts.APIKey != "" && authConf.Env == "" {
+			authConf.Env = "API_KEY"
+		}
+		providerSpec.Auth = authConf
+	}
+
 	providerRes := &warp.ModelProvider{
 		BaseResource: warp.BaseResource{
 			APIVersion: warp.APIVersion,
@@ -217,6 +250,10 @@ func (w *Workspace) Initialize(ctx context.Context, opts InitializationOptions) 
 	providerPath := filepath.Join(providersDir, opts.SelectedProvider+".yaml")
 	if err := os.WriteFile(providerPath, providerData, 0644); err != nil {
 		return fmt.Errorf("failed to write provider yaml: %w", err)
+	}
+
+	if err := w.Load(ctx); err != nil {
+		return fmt.Errorf("failed to reload workspace after initialization: %w", err)
 	}
 
 	return nil

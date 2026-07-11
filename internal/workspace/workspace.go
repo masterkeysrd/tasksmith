@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/masterkeysrd/tasksmith/internal/agent/tools"
+	"github.com/masterkeysrd/tasksmith/internal/core/env"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
 	"github.com/masterkeysrd/warp"
@@ -41,6 +42,13 @@ func (w *Workspace) CWD() string {
 
 func (w *Workspace) Load(ctx context.Context) error {
 	w.logger.Info("Loading workspace", log.String("cwd", w.cwd))
+
+	// Load local environment secrets
+	envPath := filepath.Join(w.cwd, ".env")
+	if err := env.Load(envPath); err != nil {
+		w.logger.Warn("Failed to load local .env file", log.Err(err))
+	}
+
 	provider := &systemProvider{}
 	reg, err := warp.Load(w.cwd, provider)
 	if err != nil {

@@ -17,12 +17,12 @@ var (
 	FormContainerStyle = style.S().
 				Display(style.DisplayFlex).
 				FlexDirection(style.FlexColumn).
-				Gap(2)
+				Gap(1)
 
 	InputGroupStyle = style.S().
 			Display(style.DisplayFlex).
 			FlexDirection(style.FlexRow).
-			Gap(2)
+			Gap(1)
 
 	InputContainerStyle = style.S().
 				Display(style.DisplayFlex).
@@ -77,6 +77,7 @@ var ToolCategoryOrders = []string{
 	"system",
 	"lsp",
 	"mcp",
+	"workflow",
 }
 
 var ToolCategoryLabels = map[string]string{
@@ -85,6 +86,7 @@ var ToolCategoryLabels = map[string]string{
 	"system":     "SYSTEM",
 	"lsp":        "LANGUAGE SERVER PROTOCOL (LSP)",
 	"mcp":        "MODEL CONTEXT PROTOCOLS (MCP)",
+	"workflow":   "WORKFLOW & AGENTS",
 }
 
 var WelcomeStep = kitex.SimpleFC("WelcomeStep", func() kitex.Node {
@@ -128,6 +130,11 @@ type ProviderForm struct {
 	APIKey       string
 	Endpoint     string
 	DefaultModel string
+	AuthMethod   string // "direct", "env", "file"
+	AuthType     string // "bearer", "api-key", "basic"
+	AuthHeader   string // custom header name if "api-key"
+	AuthEnv      string // custom environment variable name
+	AuthFile     string // custom file path
 }
 
 type ProviderStepProps struct {
@@ -154,10 +161,31 @@ var ProviderStep = kitex.FC("ProviderStep", func(props ProviderStepProps) kitex.
 		if !resp.IsLoading && len(resp.Data.Providers) > 0 {
 			newConfigs := make(map[string]ProviderForm)
 			for _, p := range resp.Data.Providers {
+				authMethod := "direct"
+				authType := "bearer"
+				if p.Description == "google" {
+					authType = "api-key"
+				}
+				authEnv := p.AuthEnv
+				if authEnv == "" {
+					if p.Description == "openai" {
+						authEnv = "OPENAI_API_KEY"
+					} else if p.Description == "anthropic" {
+						authEnv = "ANTHROPIC_API_KEY"
+					} else if p.Description == "google" {
+						authEnv = "GOOGLE_API_KEY"
+					}
+				}
+
 				newConfigs[p.Name] = ProviderForm{
 					Endpoint:     p.Endpoint,
 					DefaultModel: p.DefaultModel,
 					APIKey:       p.APIKey,
+					AuthMethod:   authMethod,
+					AuthType:     authType,
+					AuthEnv:      authEnv,
+					AuthFile:     "",
+					AuthHeader:   "",
 				}
 			}
 			setConfigs(newConfigs)
@@ -240,68 +268,155 @@ var ProviderStep = kitex.FC("ProviderStep", func(props ProviderStepProps) kitex.
 				Color: components.PaperContentAlt,
 				Style: FormContainerStyle.PaddingVertical(1).PaddingHorizontal(2),
 			},
-				// API Key and Endpoint Row
+				// Endpoint Row
 				kitex.Box(kitex.BoxProps{
-					Style: InputGroupStyle,
+					Style: style.S().Display(style.DisplayFlex).FlexDirection(style.FlexRow).AlignItems(style.AlignCenter).Gap(1),
 				},
-					// API Key
 					kitex.Box(kitex.BoxProps{
-						Style: InputContainerStyle,
-					},
-						kitex.Box(kitex.BoxProps{
-							Style: InputLabelStyle,
+						Style: style.S().Width(style.Cells(13)).Bold(true).Foreground(t.Color.Text.Secondary),
+					}, kitex.Text("ENDPOINT:")),
+					components.Input(components.InputProps{
+						Name:        "endpoint_" + selected,
+						Value:       conf.Endpoint,
+						Placeholder: "Base URL...",
+						Variant:     components.InputSolid,
+						Style:       InputStyle.Flex(1, 1, style.Cells(0)),
+						OnChange: func(val string) {
+							curr := configs()
+							next := make(map[string]ProviderForm)
+							maps.Copy(next, curr)
+							c := next[selected]
+							c.Endpoint = val
+							next[selected] = c
+							setConfigs(next)
 						},
-							kitex.Box(kitex.BoxProps{
-								Style: muted.Bold(true),
-							}, kitex.Text("API KEY (AUTH SECRET)")),
-						),
-						components.Input(components.InputProps{
-							Name:        "api_key_" + selected,
-							Value:       conf.APIKey,
-							Placeholder: "e.g. sk-proj-... or AIzaSy...",
-							Variant:     components.InputSolid,
-							Color:       components.InputSuccess,
-							Style:       InputStyle,
-							OnChange: func(val string) {
-								curr := configs()
-								next := make(map[string]ProviderForm)
-								maps.Copy(next, curr)
-								c := next[selected]
-								c.APIKey = val
-								next[selected] = c
-								setConfigs(next)
-							},
-						}),
-					),
-					// Endpoint
-					kitex.Box(kitex.BoxProps{
-						Style: InputContainerStyle,
-					},
-						kitex.Box(kitex.BoxProps{
-							Style: InputLabelStyle,
-						},
-							kitex.Box(kitex.BoxProps{
-								Style: muted.Bold(true),
-							}, kitex.Text("BASE ENDPOINT URL:")),
-						),
-						components.Input(components.InputProps{
-							Name:        "endpoint_" + selected,
-							Value:       conf.Endpoint,
-							Placeholder: "Base URL...",
-							Variant:     components.InputSolid,
-							Style:       InputStyle,
-							OnChange: func(val string) {
-								curr := configs()
-								next := make(map[string]ProviderForm)
-								maps.Copy(next, curr)
-								c := next[selected]
-								c.Endpoint = val
-								next[selected] = c
-								setConfigs(next)
-							},
-						}),
-					),
+					}),
 				),
+
+				// Auth Secret Row
+				kitex.If(currProvider.AuthEnv != "", func() kitex.Node {
+					return kitex.Box(kitex.BoxProps{
+						Style: style.S().Display(style.DisplayFlex).FlexDirection(style.FlexRow).AlignItems(style.AlignCenter).Gap(1),
+					},
+						kitex.Box(kitex.BoxProps{
+							Style: style.S().Width(style.Cells(13)).Bold(true).Foreground(t.Color.Text.Secondary),
+						}, kitex.Text("AUTH SECRET:")),
+						components.Select(components.SelectProps{
+							Value: func() string {
+								if conf.AuthMethod == "" {
+									return "direct"
+								}
+								return conf.AuthMethod
+							}(),
+							OnValueChange: func(val string) {
+								curr := configs()
+								next := make(map[string]ProviderForm)
+								maps.Copy(next, curr)
+								c := next[selected]
+								c.AuthMethod = val
+								next[selected] = c
+								setConfigs(next)
+							},
+						},
+							components.Option(components.OptionProps{Text: "Value", Value: "direct"}),
+							components.Option(components.OptionProps{Text: "Env", Value: "env"}),
+							components.Option(components.OptionProps{Text: "File", Value: "file"}),
+						),
+						components.Input(components.InputProps{
+							Name: "auth_val_" + selected,
+							Value: func() string {
+								if conf.AuthMethod == "file" {
+									return conf.AuthFile
+								}
+								if conf.AuthMethod == "env" {
+									return conf.AuthEnv
+								}
+								return conf.APIKey
+							}(),
+							Placeholder: func() string {
+								if conf.AuthMethod == "file" {
+									return "e.g. /path/to/key"
+								}
+								if conf.AuthMethod == "env" {
+									return "e.g. OPENAI_API_KEY"
+								}
+								return "e.g. sk-proj-..."
+							}(),
+							Variant: components.InputSolid,
+							Style:   InputStyle.Flex(1, 1, style.Cells(0)),
+							OnChange: func(val string) {
+								curr := configs()
+								next := make(map[string]ProviderForm)
+								maps.Copy(next, curr)
+								c := next[selected]
+								if conf.AuthMethod == "file" {
+									c.AuthFile = val
+								} else if conf.AuthMethod == "env" {
+									c.AuthEnv = val
+								} else {
+									c.APIKey = val
+								}
+								next[selected] = c
+								setConfigs(next)
+							},
+						}),
+					)
+				}),
+
+				// Auth Scheme Row
+				kitex.If(currProvider.AuthEnv != "", func() kitex.Node {
+					return kitex.Box(kitex.BoxProps{
+						Style: style.S().Display(style.DisplayFlex).FlexDirection(style.FlexRow).AlignItems(style.AlignCenter).Gap(1),
+					},
+						kitex.Box(kitex.BoxProps{
+							Style: style.S().Width(style.Cells(13)).Bold(true).Foreground(t.Color.Text.Secondary),
+						}, kitex.Text("AUTH SCHEME:")),
+						components.Select(components.SelectProps{
+							Value: func() string {
+								if conf.AuthType == "" {
+									return "bearer"
+								}
+								return conf.AuthType
+							}(),
+							OnValueChange: func(val string) {
+								curr := configs()
+								next := make(map[string]ProviderForm)
+								maps.Copy(next, curr)
+								c := next[selected]
+								c.AuthType = val
+								next[selected] = c
+								setConfigs(next)
+							},
+						},
+							components.Option(components.OptionProps{Text: "Bearer", Value: "bearer"}),
+							components.Option(components.OptionProps{Text: "API Key", Value: "api-key"}),
+							components.Option(components.OptionProps{Text: "Basic", Value: "basic"}),
+						),
+						kitex.If(conf.AuthType == "api-key", func() kitex.Node {
+							return kitex.Fragment(
+								kitex.Box(kitex.BoxProps{
+									Style: style.S().Width(style.Cells(13)).Bold(true).Foreground(t.Color.Text.Secondary).MarginLeft(1),
+								}, kitex.Text("HTTP HEADER:")),
+								components.Input(components.InputProps{
+									Name:        "auth_header_" + selected,
+									Value:       conf.AuthHeader,
+									Placeholder: "e.g. x-api-key",
+									Variant:     components.InputSolid,
+									Style:       InputStyle.Flex(1, 1, style.Cells(0)),
+									OnChange: func(val string) {
+										curr := configs()
+										next := make(map[string]ProviderForm)
+										maps.Copy(next, curr)
+										c := next[selected]
+										c.AuthHeader = val
+										next[selected] = c
+										setConfigs(next)
+									},
+								}),
+							)
+						}),
+					)
+				}),
 				// Default Model Identifier Row
 				kitex.Box(kitex.BoxProps{
 					Style: InputContainerStyle,
@@ -560,6 +675,9 @@ var ToolsStep = kitex.FC("ToolsStep", func(props ToolsStepProps) kitex.Node {
 		},
 			kitex.Map(ToolCategoryOrders, func(cat string, _ int) kitex.Node {
 				tools := categories[cat]
+				if len(tools) == 0 {
+					return kitex.Empty()
+				}
 				return ToolCategoryAccordion(ToolCategoryAccordionProps{
 					Cat:                    cat,
 					Tools:                  tools,

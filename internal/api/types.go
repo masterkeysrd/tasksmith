@@ -148,6 +148,10 @@ type InitializeWorkspaceRequest struct {
 	Theme            string          `json:"theme"`
 	AuthorizedTools  map[string]bool `json:"authorized_tools"`
 	TrustOnly        bool            `json:"trust_only"` // Skip writing workspace.md/providers configs
+	AuthType         string          `json:"auth_type"`
+	AuthEnv          string          `json:"auth_env"`
+	AuthFile         string          `json:"auth_file"`
+	AuthHeader       string          `json:"auth_header"`
 }
 
 type InitializeWorkspaceResponse struct {
