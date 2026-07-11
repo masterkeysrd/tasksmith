@@ -61,6 +61,10 @@ func (m *mockWorkspace) GetWorkspaceConfig(ctx context.Context) (workspace.Works
 	}, nil
 }
 
+func (m *mockWorkspace) ResolveDefaults(ctx context.Context) (agentName, providerName, modelName string, err error) {
+	return "main", "", "", nil
+}
+
 func TestService(t *testing.T) {
 	mockWS := &mockWorkspace{
 		cwd: t.TempDir(),

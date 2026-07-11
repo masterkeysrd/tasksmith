@@ -40,6 +40,7 @@ type Workspace interface {
 	MCPs() []*warp.MCP
 	Initialize(ctx context.Context, opts workspace.InitializationOptions) error
 	GetWorkspaceConfig(ctx context.Context) (workspace.WorkspaceConfig, error)
+	ResolveDefaults(ctx context.Context) (agentName, providerName, modelName string, err error)
 }
 
 // Service provides methods to interact with the workspace through API types.
@@ -155,7 +156,13 @@ func (s *Service) ListAgents(ctx context.Context, req ListAgentsRequest) (*ListA
 		Agents: make([]Agent, 0, len(agents)),
 	}
 
+	defaultAgent, _, _, _ := s.ws.ResolveDefaults(ctx)
+
 	for _, a := range agents {
+		// Filter out system-provided internal agents unless explicitly requested, but keep the resolved default agent
+		if !req.IncludeSystem && a.GetNamespace() == "system" && a.Metadata.Name != defaultAgent {
+			continue
+		}
 		resp.Agents = append(resp.Agents, Agent{
 			Name:        a.Metadata.Name,
 			Description: a.Metadata.Description,
@@ -163,6 +170,13 @@ func (s *Service) ListAgents(ctx context.Context, req ListAgentsRequest) (*ListA
 	}
 
 	sort.Slice(resp.Agents, func(i, j int) bool {
+		// Keep the resolved default agent as the first agent
+		if resp.Agents[i].Name == defaultAgent {
+			return true
+		}
+		if resp.Agents[j].Name == defaultAgent {
+			return false
+		}
 		return resp.Agents[i].Name < resp.Agents[j].Name
 	})
 

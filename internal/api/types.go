@@ -23,6 +23,7 @@ type Project struct {
 }
 
 type ListAgentsRequest struct {
+	IncludeSystem bool `json:"include_system"`
 }
 
 type ListAgentsResponse struct {

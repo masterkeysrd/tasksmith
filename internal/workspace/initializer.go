@@ -113,8 +113,8 @@ func (w *Workspace) Initialize(ctx context.Context, opts InitializationOptions) 
 		ignoreContent, err := os.ReadFile(gitignorePath)
 		hasEnv := false
 		if err == nil {
-			lines := strings.Split(string(ignoreContent), "\n")
-			for _, line := range lines {
+			lines := strings.SplitSeq(string(ignoreContent), "\n")
+			for line := range lines {
 				if strings.TrimSpace(line) == ".env" {
 					hasEnv = true
 					break
@@ -167,6 +167,7 @@ func (w *Workspace) Initialize(ctx context.Context, opts InitializationOptions) 
 			Policies:        policies,
 		},
 	}
+
 	wsData, err := warp.Format(wsDef)
 	if err != nil {
 		return fmt.Errorf("failed to format workspace definition: %w", err)
