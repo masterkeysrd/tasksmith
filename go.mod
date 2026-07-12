@@ -14,7 +14,7 @@ require (
 	github.com/masterkeysrd/kite v0.0.4-0.20260711035535-53e809cf57af
 	github.com/masterkeysrd/loom v0.0.4-0.20260711030105-60d4b1b463e3
 	github.com/masterkeysrd/lspx v0.0.0-20260611065943-6cf2ef01a123
-	github.com/masterkeysrd/warp v0.0.3-0.20260711024506-19b6cc76e3d3
+	github.com/masterkeysrd/warp v0.0.3-0.20260712054341-01be5a9aebda
 	github.com/modelcontextprotocol/go-sdk v1.6.1
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2
 	github.com/refraction-networking/utls v1.8.2

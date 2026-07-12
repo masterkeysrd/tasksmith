@@ -191,6 +191,15 @@ func TestWorkspace_ResolveDefaults(t *testing.T) {
 	if agent != "main" || provider != "ollama" || model != "qwen3.6:35b-a3b-coding-nvfp4" {
 		t.Errorf("expected defaults, got %s, %s, %s", agent, provider, model)
 	}
+
+	w.SetAgentOverride("custom-agent")
+	agent, _, _, err = w.ResolveDefaults(context.Background())
+	if err != nil {
+		t.Fatalf("expected no error resolving defaults with override, got %v", err)
+	}
+	if agent != "custom-agent" {
+		t.Errorf("expected agent override to be custom-agent, got %s", agent)
+	}
 }
 
 func TestWorkspace_Contexts(t *testing.T) {

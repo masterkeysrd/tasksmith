@@ -311,4 +311,56 @@ func (app *Application) InitializeCommands() {
 		}
 		return nil
 	})
+
+	command.Register("agent", func(ctx command.CommandContext) error {
+		if len(ctx.Args) == 0 {
+			active.SetModal("agentpicker")
+			return nil
+		}
+
+		agentName := ctx.Args[0]
+		sessionID := active.GetSessionID()
+		if sessionID == "" {
+			return fmt.Errorf("agent: no active session")
+		}
+
+		// Fetch the session configuration from backend
+		sessionsResp, err := app.api.ListSessions(ctx.Ctx, api.ListSessionsRequest{})
+		if err != nil {
+			return fmt.Errorf("agent: failed to list sessions: %w", err)
+		}
+		var currentSession api.Session
+		found := false
+		for _, s := range sessionsResp.Sessions {
+			if s.ID == sessionID {
+				currentSession = s
+				found = true
+				break
+			}
+		}
+		if !found {
+			return fmt.Errorf("agent: session %q not found", sessionID)
+		}
+
+		_, err = app.api.ConfigureSession(ctx.Ctx, api.ConfigureSessionRequest{
+			SessionID:    sessionID,
+			ProviderName: currentSession.Settings.ProviderName,
+			ModelName:    currentSession.Settings.ModelName,
+			AgentName:    agentName,
+		})
+		if err != nil {
+			return fmt.Errorf("agent: failed to configure session: %w", err)
+		}
+
+		if active.InvalidateSessionState != nil {
+			active.InvalidateSessionState(sessionID)
+		}
+		active.SetStatusMessage(fmt.Sprintf("Agent set to: %s", agentName))
+		return nil
+	})
+
+	command.Register("agentpicker", func(ctx command.CommandContext) error {
+		active.SetModal("agentpicker")
+		return nil
+	})
 }

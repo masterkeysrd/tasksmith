@@ -16,6 +16,7 @@ type Flags struct {
 	LogLevel     log.Level
 	DevToolsAddr string
 	Debug        bool
+	Agent        string
 }
 
 // Load parses command-line flags and returns the application options.
@@ -37,6 +38,7 @@ func Load() (*Flags, error) {
 		flag.StringVar(&logLevelStr, "log-level", "info", "Log level (debug, info, warn, error)")
 		flag.StringVar(&opts.DevToolsAddr, "devtools", "", "DevTools server address (e.g., :8080)")
 		flag.BoolVar(&debugFlag, "debug", false, "Expose pprof and enable debug features")
+		flag.StringVar(&opts.Agent, "agent", "", "Default agent name to start the session with")
 	} else {
 		if f := flag.Lookup("cwd"); f != nil {
 			opts.CWD = f.Value.String()
@@ -51,6 +53,9 @@ func Load() (*Flags, error) {
 			if b, ok := f.Value.(flag.Getter).Get().(bool); ok {
 				debugFlag = b
 			}
+		}
+		if f := flag.Lookup("agent"); f != nil {
+			opts.Agent = f.Value.String()
 		}
 	}
 

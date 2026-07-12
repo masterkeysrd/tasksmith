@@ -31,8 +31,15 @@ type ListAgentsResponse struct {
 }
 
 type Agent struct {
-	Name        string `json:"name"`
-	Description string `json:"description"`
+	Name         string   `json:"name"`
+	Description  string   `json:"description"`
+	Instructions string   `json:"instructions,omitempty"`
+	Models       []string `json:"models,omitempty"`
+	Temperature  float64  `json:"temperature,omitempty"`
+	Tools        []string `json:"tools,omitempty"`
+	Skills       []string `json:"skills,omitempty"`
+	Subagents    []string `json:"subagents,omitempty"`
+	Triggers     []string `json:"triggers,omitempty"`
 }
 
 type ListSkillsRequest struct {

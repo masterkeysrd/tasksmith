@@ -13,6 +13,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/tui/shell"
 	"github.com/masterkeysrd/tasksmith/internal/tui/theme"
 	"github.com/masterkeysrd/tasksmith/internal/tui/toast"
+	"github.com/masterkeysrd/tasksmith/internal/tui/views/agentpicker"
 	"github.com/masterkeysrd/tasksmith/internal/tui/views/analytics"
 	"github.com/masterkeysrd/tasksmith/internal/tui/views/chat"
 	"github.com/masterkeysrd/tasksmith/internal/tui/views/effortpicker"
@@ -161,6 +162,7 @@ var Router = kitex.SimpleFC("Router", func() kitex.Node {
 				modelpicker.View(modelpicker.ViewProps{}),
 				effortpicker.View(effortpicker.ViewProps{}),
 				permissionsview.View(permissionsview.ViewProps{}),
+				agentpicker.View(agentpicker.ViewProps{}),
 			),
 		)
 	}

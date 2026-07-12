@@ -829,9 +829,12 @@ var Picker = kitex.FC("Picker", func(props PickerProps) kitex.Node {
 		item := flatVisible[selectedIndex()]
 		previewNode = kitex.Box(kitex.BoxProps{
 			Style: style.S().
+				Display(style.DisplayFlex).
+				FlexDirection(style.FlexColumn).
 				Flex(6, 6, style.Cells(0)).
 				MinWidth(style.Cells(props.PreviewWidth)).
-				// BorderLeft(true, style.SingleBorder().Color(t.Color.Border.Primary)).
+				Height(style.Percent(100)).
+				OverflowY(style.OverflowAuto).
 				Background(t.Color.Surface.BaseFocus),
 		},
 			props.RenderPreview(item),

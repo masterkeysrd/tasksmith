@@ -65,6 +65,37 @@ func (m *mockWorkspace) ResolveDefaults(ctx context.Context) (agentName, provide
 	return "main", "", "", nil
 }
 
+func (m *mockWorkspace) ResolveAgent(ctx context.Context, ref string) (*warp.ResolvedAgent, error) {
+	return nil, nil
+}
+
+func (m *mockWorkspace) ListResources(opts warp.QueryOptions) []warp.Resource {
+	var results []warp.Resource
+	for _, k := range opts.Kinds {
+		switch k {
+		case warp.KindAgent:
+			for _, a := range m.agents {
+				if opts.Filter == nil || opts.Filter(a) {
+					results = append(results, a)
+				}
+			}
+		case warp.KindModelProvider:
+			for _, p := range m.providers {
+				if opts.Filter == nil || opts.Filter(p) {
+					results = append(results, p)
+				}
+			}
+		case warp.KindMCP:
+			for _, mc := range m.mcps {
+				if opts.Filter == nil || opts.Filter(mc) {
+					results = append(results, mc)
+				}
+			}
+		}
+	}
+	return results
+}
+
 func TestService(t *testing.T) {
 	mockWS := &mockWorkspace{
 		cwd: t.TempDir(),

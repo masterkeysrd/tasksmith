@@ -20,9 +20,10 @@ import (
 var presetFS embed.FS
 
 type Workspace struct {
-	cwd      string
-	logger   log.Interface
-	registry *warp.Registry
+	cwd           string
+	logger        log.Interface
+	registry      *warp.Registry
+	agentOverride string
 }
 
 func New(cwd string) *Workspace {
@@ -66,6 +67,14 @@ func (w *Workspace) Resources() []warp.Resource {
 
 	resources := resolver.ListResources(warp.QueryOptions{})
 	return resources
+}
+
+func (w *Workspace) ListResources(opts warp.QueryOptions) []warp.Resource {
+	resolver := w.resolver()
+	if resolver == nil {
+		return nil
+	}
+	return resolver.ListResources(opts)
 }
 
 func (w *Workspace) Projects() []*warp.Project {
@@ -202,6 +211,7 @@ func (w *Workspace) resolver() warp.Resolver {
 type WorkspaceConfig struct {
 	Name            string
 	DefaultProvider string
+	DefaultAgent    string
 	AuthorizedTools map[string]bool
 	IsConfigured    bool
 	IsTrusted       bool
@@ -217,6 +227,7 @@ func (w *Workspace) GetWorkspaceConfig(ctx context.Context) (WorkspaceConfig, er
 	var hasManifest bool
 	var projectName string
 	var defaultProvider string
+	var defaultAgent string
 	var authorizedTools map[string]bool
 
 	wsSpec := w.registry.WorkspaceSpec()
@@ -224,6 +235,7 @@ func (w *Workspace) GetWorkspaceConfig(ctx context.Context) (WorkspaceConfig, er
 		hasManifest = true
 		projectName = wsSpec.Def.Metadata.Name
 		defaultProvider = wsSpec.Def.Spec.DefaultProvider
+		defaultAgent = wsSpec.Def.Spec.DefaultAgent
 		if wsSpec.Def.Spec.Policies != nil && wsSpec.Def.Spec.Policies.Tools != nil {
 			authorizedTools = make(map[string]bool)
 			for _, tool := range wsSpec.Def.Spec.Policies.Tools.Include {
@@ -250,12 +262,17 @@ func (w *Workspace) GetWorkspaceConfig(ctx context.Context) (WorkspaceConfig, er
 	return WorkspaceConfig{
 		Name:            projectName,
 		DefaultProvider: defaultProvider,
+		DefaultAgent:    defaultAgent,
 		AuthorizedTools: authorizedTools,
 		IsConfigured:    isTrusted && hasManifest,
 		IsTrusted:       isTrusted,
 		HasManifest:     hasManifest,
 		CWD:             w.cwd,
 	}, nil
+}
+
+func (w *Workspace) SetAgentOverride(agentName string) {
+	w.agentOverride = agentName
 }
 
 // ResolveAgent resolves an agent by ref within this workspace scope, applying
@@ -301,21 +318,38 @@ func (w *Workspace) ResolveDefaults(ctx context.Context) (agentName, providerNam
 	}
 
 	agentName = "main"
+	if w.agentOverride != "" {
+		agentName = w.agentOverride
+	} else {
+		cfg, _ := w.GetWorkspaceConfig(ctx)
+		if cfg.DefaultAgent != "" {
+			agentName = cfg.DefaultAgent
+		}
+	}
 	providerName = "ollama"
 	modelName = "qwen3.6:35b-a3b-coding-nvfp4"
-	cfg, _ := w.GetWorkspaceConfig(ctx)
 
-	// 1. Find the "main" agent (or first agent if main doesn't exist)
+	// 1. Find the target default agent
 	var mainAgent *warp.Agent
 	agents := w.Agents()
 	for _, a := range agents {
-		if a.GetName() == "main" {
+		if a.GetName() == agentName {
 			mainAgent = a
 			break
 		}
 	}
-	if mainAgent == nil && len(agents) > 0 {
-		mainAgent = agents[0]
+
+	if mainAgent == nil && w.agentOverride == "" {
+		// Only fallback if no override was explicitly specified
+		for _, a := range agents {
+			if a.GetName() == "main" {
+				mainAgent = a
+				break
+			}
+		}
+		if mainAgent == nil && len(agents) > 0 {
+			mainAgent = agents[0]
+		}
 	}
 
 	if mainAgent != nil {
@@ -336,6 +370,7 @@ func (w *Workspace) ResolveDefaults(ctx context.Context) (agentName, providerNam
 	}
 
 	// 2. Fallback to default provider in workspace config
+	cfg, _ := w.GetWorkspaceConfig(ctx)
 	providers := w.Providers()
 	if cfg.DefaultProvider != "" {
 		for _, p := range providers {

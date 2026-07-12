@@ -112,6 +112,9 @@ func (app *Application) Run(ctx context.Context) error {
 	})
 
 	app.ws = workspace.New(app.opts.CWD)
+	if app.opts.Agent != "" {
+		app.ws.SetAgentOverride(app.opts.Agent)
+	}
 	if err := app.ws.Load(ctx); err != nil {
 		return fmt.Errorf("failed to load workspace: %w", err)
 	}

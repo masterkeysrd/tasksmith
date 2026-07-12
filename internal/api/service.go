@@ -41,6 +41,8 @@ type Workspace interface {
 	Initialize(ctx context.Context, opts workspace.InitializationOptions) error
 	GetWorkspaceConfig(ctx context.Context) (workspace.WorkspaceConfig, error)
 	ResolveDefaults(ctx context.Context) (agentName, providerName, modelName string, err error)
+	ResolveAgent(ctx context.Context, ref string) (*warp.ResolvedAgent, error)
+	ListResources(opts warp.QueryOptions) []warp.Resource
 }
 
 // Service provides methods to interact with the workspace through API types.
@@ -151,21 +153,97 @@ func (s *Service) ListProjects(ctx context.Context, req ListProjectsRequest) (*L
 
 // ListAgents returns a list of agents in the workspace.
 func (s *Service) ListAgents(ctx context.Context, req ListAgentsRequest) (*ListAgentsResponse, error) {
-	agents := s.ws.Agents()
-	resp := &ListAgentsResponse{
-		Agents: make([]Agent, 0, len(agents)),
-	}
-
 	defaultAgent, _, _, _ := s.ws.ResolveDefaults(ctx)
 
-	for _, a := range agents {
-		// Filter out system-provided internal agents unless explicitly requested, but keep the resolved default agent
-		if !req.IncludeSystem && a.GetNamespace() == "system" && a.Metadata.Name != defaultAgent {
-			continue
+	resources := s.ws.ListResources(warp.QueryOptions{
+		Kinds: []warp.Kind{warp.KindAgent},
+		Filter: func(r warp.Resource) bool {
+			a, ok := r.(*warp.Agent)
+			if !ok {
+				return false
+			}
+			// Filter out system-provided internal agents unless explicitly requested, but keep the resolved default agent
+			if !req.IncludeSystem && a.GetNamespace() == "system" && a.Metadata.Name != defaultAgent {
+				return false
+			}
+
+			// Filter agents by trigger: if triggers list is defined, it must contain "human"
+			if len(a.Spec.Triggers) > 0 {
+				hasHuman := false
+				for _, t := range a.Spec.Triggers {
+					if t == "human" {
+						hasHuman = true
+						break
+					}
+				}
+				if !hasHuman && a.Metadata.Name != defaultAgent {
+					return false
+				}
+			}
+			return true
+		},
+	})
+
+	resp := &ListAgentsResponse{
+		Agents: make([]Agent, 0, len(resources)),
+	}
+
+	for _, r := range resources {
+		a := r.(*warp.Agent)
+
+		var tools []string
+		var skills []string
+		var subagents []string
+		var models []string
+		temperature := a.Spec.Temperature
+
+		resolved, err := s.ws.ResolveAgent(ctx, a.Metadata.Name)
+		if err == nil && resolved != nil {
+			if len(resolved.Tools) > 0 {
+				tools = make([]string, len(resolved.Tools))
+				for idx, t := range resolved.Tools {
+					tools[idx] = t.GetName()
+				}
+			}
+			if len(resolved.Skills) > 0 {
+				skills = make([]string, len(resolved.Skills))
+				for idx, sk := range resolved.Skills {
+					skills[idx] = sk.GetName()
+				}
+			}
+			if len(resolved.Subagents) > 0 {
+				subagents = make([]string, len(resolved.Subagents))
+				for idx, sub := range resolved.Subagents {
+					subagents[idx] = sub.GetName()
+				}
+			}
+			if resolved.Agent != nil {
+				models = resolved.Agent.Spec.Models
+				temperature = resolved.Agent.Spec.Temperature
+			}
+		} else {
+			if a.Spec.Policies != nil && a.Spec.Policies.Tools != nil {
+				tools = a.Spec.Policies.Tools.Include
+			}
+			models = a.Spec.Models
+			skills = a.Spec.Skills
+			subagents = a.Spec.Subagents
 		}
+
+		sort.Strings(tools)
+		sort.Strings(skills)
+		sort.Strings(subagents)
+
 		resp.Agents = append(resp.Agents, Agent{
-			Name:        a.Metadata.Name,
-			Description: a.Metadata.Description,
+			Name:         a.Metadata.Name,
+			Description:  a.Metadata.Description,
+			Instructions: a.Spec.Instructions,
+			Models:       models,
+			Temperature:  temperature,
+			Tools:        tools,
+			Skills:       skills,
+			Subagents:    subagents,
+			Triggers:     a.Spec.Triggers,
 		})
 	}
 
