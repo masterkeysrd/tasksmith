@@ -20,6 +20,8 @@ type ModalProps struct {
 	OnClose func()
 	// Style extends the base modal container paper card style.
 	Style style.Style
+	// BodyStyle extends or overrides the base modal body style.
+	BodyStyle style.Style
 	// HeaderActions contains custom elements injected next to the close button.
 	HeaderActions kitex.Node
 	// Footer contains custom elements to display in the modal footer statusrail.
@@ -80,10 +82,13 @@ var Modal = kitex.FCC("Modal", func(props ModalProps) kitex.Node {
 		PaddingHorizontal(1)
 
 	bodyStyle := style.S().
+		Display(style.DisplayFlex).
+		FlexDirection(style.FlexColumn).
 		Flex(1, 1, style.Cells(0)).
 		MinHeight(style.Cells(0)).
 		OverflowY(style.OverflowAuto).
-		Padding(1)
+		Padding(1).
+		Merge(props.BodyStyle)
 
 	statusStyle := style.S().
 		Display(style.DisplayFlex).
@@ -110,6 +115,12 @@ var Modal = kitex.FCC("Modal", func(props ModalProps) kitex.Node {
 					props.OnClose()
 				}
 			}
+		},
+		OnWheel: func(e event.Event) {
+			e.StopPropagation()
+		},
+		OnScroll: func(e event.Event) {
+			e.StopPropagation()
 		},
 	},
 		Paper(PaperProps{

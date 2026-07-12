@@ -336,7 +336,7 @@ var AuthorizationWidget = kitex.FC("AuthorizationWidget", func(props Authorizati
 	isVisuallyActive := props.IsActive && (currentMode == mode.Normal || isProvidingFeedback())
 
 	// Ref and Layout Effect to center the active widget vertically in the chat history container
-	elRef := kitex.CreateRef[dom.Element]()
+	elRef := kitex.UseRef[dom.Element](nil)
 	kitex.UseLayoutEffect(func() {
 		if !props.IsActive {
 			return
@@ -1064,13 +1064,9 @@ type AuthorizationPreviewModalProps struct {
 }
 
 var AuthorizationPreviewModal = kitex.FCC("AuthorizationPreviewModal", func(props AuthorizationPreviewModalProps) kitex.Node {
-	if !props.IsOpen {
-		return nil
-	}
-
 	t := theme.UseTheme()
-	localInputRef := kitex.CreateRef[dom.Element]()
-	previewRef := kitex.CreateRef[dom.Element]()
+	localInputRef := kitex.UseRef[dom.Element](nil)
+	previewRef := kitex.UseRef[dom.Element](nil)
 	kitex.UseEffect(func() {
 		if props.IsProvidingFeedback {
 			kitex.PostMacro(func() {
@@ -1087,6 +1083,7 @@ var AuthorizationPreviewModal = kitex.FCC("AuthorizationPreviewModal", func(prop
 		if !props.IsProvidingFeedback {
 			kitex.PostMacro(func() {
 				if previewRef.Current != nil {
+					previewRef.Current.SetTabIndex(0)
 					if doc := previewRef.Current.OwnerDocument(); doc != nil {
 						doc.Focus(previewRef.Current)
 					}
@@ -1297,39 +1294,13 @@ var AuthorizationPreviewModal = kitex.FCC("AuthorizationPreviewModal", func(prop
 
 		ModalAuthCtrl.ScrollDown = func() {
 			if previewRef.Current != nil {
-				el := previewRef.Current
-				doc := el.OwnerDocument()
-				if doc == nil {
-					return
-				}
-				view := doc.DefaultView()
-				if view == nil {
-					return
-				}
-				_, maxScrollY := view.GetMaxScroll(el)
-				x, y := el.Scroll()
-				if y > maxScrollY {
-					y = maxScrollY
-				}
-				targetY := min(y+3, maxScrollY)
-				el.ScrollTo(x, targetY)
+				previewRef.Current.ScrollBy(0, 3)
 			}
 		}
 
 		ModalAuthCtrl.ScrollUp = func() {
 			if previewRef.Current != nil {
-				el := previewRef.Current
-				doc := el.OwnerDocument()
-				if doc == nil {
-					return
-				}
-				view := doc.DefaultView()
-				if view == nil {
-					return
-				}
-				x, y := el.Scroll()
-				targetY := max(y-3, 0)
-				el.ScrollTo(x, targetY)
+				previewRef.Current.ScrollBy(0, -3)
 			}
 		}
 	}
@@ -1354,11 +1325,16 @@ var AuthorizationPreviewModal = kitex.FCC("AuthorizationPreviewModal", func(prop
 		}
 	}, []any{props.IsOpen})
 
+	if !props.IsOpen {
+		return nil
+	}
+
 	return components.Modal(components.ModalProps{
 		IsOpen:     props.IsOpen,
 		Title:      kitex.Text("Authorization Preview"),
 		OnClose:    props.OnClose,
 		Attributes: map[string]string{"data-context": "modal:auth"},
+		BodyStyle:  style.S().OverflowY(style.OverflowHidden),
 		Footer: kitex.Box(kitex.BoxProps{
 			Style: style.S().
 				Display(style.DisplayFlex).
@@ -1421,16 +1397,20 @@ var AuthorizationPreviewModal = kitex.FCC("AuthorizationPreviewModal", func(prop
 				Display(style.DisplayFlex).
 				FlexDirection(style.FlexRow).
 				Width(style.Percent(100)).
-				Height(style.Percent(100)).
+				Flex(1, 1, style.Cells(0)).
+				MinHeight(style.Cells(0)).
 				Gap(2),
 		},
 			// Left Preview Panel
 			kitex.Box(kitex.BoxProps{
 				Ref: previewRef,
+				Attributes: map[string]string{
+					"tabindex": "0",
+				},
 				Style: style.S().
 					Flex(7, 7, style.Cells(0)).
 					MinHeight(style.Cells(0)).
-					Height(style.Percent(100)).
+					MinWidth(style.Cells(0)).
 					OverflowY(style.OverflowAuto).
 					BorderRight(true, style.SingleBorder(), t.Color.Border.Primary).
 					PaddingRight(2),
@@ -1445,7 +1425,7 @@ var AuthorizationPreviewModal = kitex.FCC("AuthorizationPreviewModal", func(prop
 					Display(style.DisplayFlex).
 					FlexDirection(style.FlexColumn).
 					MinHeight(style.Cells(0)).
-					Height(style.Percent(100)),
+					MinWidth(style.Cells(0)),
 			},
 				// Details Body Scroller
 				kitex.Box(kitex.BoxProps{

@@ -112,10 +112,15 @@ var PreviewPanel = kitex.FCC("PreviewPanel", func(props PreviewPanelProps) kitex
 		Display(style.DisplayFlex).
 		FlexDirection(style.FlexColumn).
 		Width(style.Percent(100)).
-		Overflow(style.OverflowAuto)
+		OverflowX(style.OverflowAuto)
 
 	if props.MaxHeight > 0 {
-		containerStyle = containerStyle.MaxHeight(style.Cells(props.MaxHeight))
+		containerStyle = containerStyle.
+			MaxHeight(style.Cells(props.MaxHeight)).
+			OverflowY(style.OverflowAuto)
+	} else {
+		containerStyle = containerStyle.
+			OverflowY(style.OverflowVisible)
 	}
 	if props.Border {
 		containerStyle = containerStyle.
