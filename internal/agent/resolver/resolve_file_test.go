@@ -211,6 +211,29 @@ func TestResolveFile(t *testing.T) {
 			t.Error("expected error for nonexistent file, got nil")
 		}
 	})
+
+	t.Run("resolve directory", func(t *testing.T) {
+		res, err := r.ResolveFile(context.Background(), srcDir)
+		if err != nil {
+			t.Fatalf("ResolveFile on directory failed: %v", err)
+		}
+		if res.Type() != TypeFile {
+			t.Errorf("expected TypeFile, got %v", res.Type())
+		}
+		if res.Handle() != "foo" {
+			t.Errorf("expected Handle 'foo', got %v", res.Handle())
+		}
+		fileRes, ok := res.(*ResolvedFile)
+		if !ok {
+			t.Fatalf("expected resolved resource to be *ResolvedFile")
+		}
+		if !fileRes.IsDir {
+			t.Error("expected IsDir to be true")
+		}
+		if fileRes.Content != "" {
+			t.Errorf("expected empty content for directory, got: %q", fileRes.Content)
+		}
+	})
 }
 
 func TestResolveReferences(t *testing.T) {

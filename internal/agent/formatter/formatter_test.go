@@ -404,3 +404,40 @@ func TestFormatAttachmentsBlock_ReferencedSymbol(t *testing.T) {
 		t.Errorf("expected content tag to be present in embedded symbol: %s", got)
 	}
 }
+
+func TestFormatFile_Directory(t *testing.T) {
+	f := &resolver.ResolvedFile{
+		FilePath: "/workspace/some_dir",
+		IsDir:    true,
+	}
+
+	blocks := FormatFile(f)
+	if len(blocks) != 1 {
+		t.Fatalf("expected 1 block, got %d", len(blocks))
+	}
+
+	txtBlock, ok := blocks[0].(*message.TextBlock)
+	if !ok {
+		t.Fatalf("expected TextBlock")
+	}
+
+	if !strings.Contains(txtBlock.Text, "[Directory: some_dir]") {
+		t.Errorf("expected directory description, got: %q", txtBlock.Text)
+	}
+}
+
+func TestFormatAttachmentsBlock_Directory(t *testing.T) {
+	res := &resolver.Resolver{}
+	resources := []resolver.ResolvedResource{
+		&resolver.ResolvedFile{
+			FilePath: "/workspace/some_dir",
+			IsDir:    true,
+		},
+	}
+
+	got := FormatAttachmentsBlock(resources, res)
+	expected := `<file path="/workspace/some_dir" is_dir="true" reason="directory, use ls to list contents" />`
+	if !strings.Contains(got, expected) {
+		t.Errorf("expected directory attachment tag: %s, got: %s", expected, got)
+	}
+}

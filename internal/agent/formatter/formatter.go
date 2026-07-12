@@ -32,6 +32,13 @@ func FormatResource(res resolver.ResolvedResource) []message.Block {
 
 // FormatFile formats a ResolvedFile structure into text blocks, image blocks, or document blocks.
 func FormatFile(f *resolver.ResolvedFile) []message.Block {
+	if f.IsDir {
+		return []message.Block{
+			&message.TextBlock{
+				Text: fmt.Sprintf("[Directory: %s]", filepath.Base(f.FilePath)),
+			},
+		}
+	}
 	diagsStr := FormatDiagnostics(f.Diagnostics)
 	return FormatFileBlocks(f.FilePath, f.Content, f.StartLine, f.EndLine, f.TotalLines, f.Truncated, f.MimeType, f.IsBinary, f.CachedPath, diagsStr)
 }
@@ -437,14 +444,17 @@ func formatReferencedSymbol(s *resolver.ResolvedSymbol) string {
 
 // formatReferencedFile formats a ResolvedFile as a self-closing tag with reason.
 func formatReferencedFile(f *resolver.ResolvedFile) string {
+	if f.IsDir {
+		return fmt.Sprintf("<file path=\"%s\" is_dir=\"true\" reason=\"directory, use ls to list contents\" />\n", escapeXML(f.FilePath))
+	}
 	if f.IsBinary {
 		mime := f.MimeType
 		if mime == "" {
 			mime = "application/octet-stream"
 		}
-		return fmt.Sprintf("<file path=\"%s\" mime=\"%s\" reason=\"binary file, use view_file\" />", escapeXML(f.FilePath), escapeXML(mime))
+		return fmt.Sprintf("<file path=\"%s\" mime=\"%s\" reason=\"binary file, use view_file\" />\n", escapeXML(f.FilePath), escapeXML(mime))
 	}
-	return fmt.Sprintf("<file path=\"%s\" lines=\"%d\" reason=\"file too large, use view_file to read\" />", escapeXML(f.FilePath), f.TotalLines)
+	return fmt.Sprintf("<file path=\"%s\" lines=\"%d\" reason=\"file too large, use view_file to read\" />\n", escapeXML(f.FilePath), f.TotalLines)
 }
 
 // escapeXML escapes special XML characters in the given string.

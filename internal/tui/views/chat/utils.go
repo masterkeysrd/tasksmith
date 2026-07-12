@@ -23,6 +23,7 @@ type XMLFile struct {
 	Path    string `xml:"path,attr"`
 	Lines   int    `xml:"lines,attr"`
 	Mime    string `xml:"mime,attr"`
+	IsDir   bool   `xml:"is_dir,attr"`
 	Reason  string `xml:"reason,attr"`
 	Content string `xml:"content"`
 }

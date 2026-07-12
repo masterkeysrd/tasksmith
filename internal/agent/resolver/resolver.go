@@ -64,6 +64,7 @@ type ResolvedFile struct {
 	Truncated   bool
 	MimeType    string
 	IsBinary    bool
+	IsDir       bool
 	CachedPath  string
 	Diagnostics []lsp.Diagnostic
 }
@@ -142,8 +143,8 @@ func (r *Resolver) ShouldEmbed(res ResolvedResource) bool {
 
 	switch val := res.(type) {
 	case *ResolvedFile:
-		// Do not embed binary files (e.g. images/PDFs are resolved via message attachments, not prompt text)
-		if val.IsBinary {
+		// Do not embed binary files or directories
+		if val.IsBinary || val.IsDir {
 			return false
 		}
 		// Embed only when we have the complete file content. readTextFile sets

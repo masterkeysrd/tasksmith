@@ -26,6 +26,7 @@ type MarkdownProps struct {
 	// Receives the ref type ("file", "sym", "skill") and the raw value from the token.
 	// If nil, pills are rendered as static badges.
 	OnAttachmentClick func(refType, rawValue string)
+	IsDirectory       func(path string) bool
 }
 
 // Markdown renders markdown content into Kite UI nodes using goldmark.
@@ -100,7 +101,7 @@ var Markdown = kitex.FC("Markdown", func(props MarkdownProps) kitex.Node {
 		renderInline = func(n ast.Node) kitex.Node {
 			switch node := n.(type) {
 			case *AttachmentRefNode:
-				return renderAttachmentRefPill(node, t, props.OnAttachmentClick)
+				return renderAttachmentRefPill(node, t, props.OnAttachmentClick, props.IsDirectory)
 
 			case *ast.Text:
 				// Fallback: normally text is coalesced in renderInlineChildren.
@@ -355,7 +356,7 @@ var Markdown = kitex.FC("Markdown", func(props MarkdownProps) kitex.Node {
 // a BaseFocus background pill with the appropriate icon and label.
 // When onAttachmentClick is non-nil the pill is rendered as an interactive
 // Button; otherwise it is a static box.
-func renderAttachmentRefPill(node *AttachmentRefNode, t *theme.Scheme, onAttachmentClick func(refType, rawValue string)) kitex.Node {
+func renderAttachmentRefPill(node *AttachmentRefNode, t *theme.Scheme, onAttachmentClick func(refType, rawValue string), isDirectory func(path string) bool) kitex.Node {
 	var iconNode kitex.Node
 	var labelText string
 	var iconColor color.Color
@@ -366,7 +367,17 @@ func renderAttachmentRefPill(node *AttachmentRefNode, t *theme.Scheme, onAttachm
 
 	switch node.RefType {
 	case "file":
-		iconNode = icon.FileIcon(icon.FileIconProps{Path: node.Label})
+		isDir := node.IsDir
+		if !isDir && isDirectory != nil {
+			isDir = isDirectory(node.Label)
+		}
+		if isDir {
+			iconNode = kitex.Span(kitex.SpanProps{
+				Style: style.S().Foreground(iconColor),
+			}, icon.Directory)
+		} else {
+			iconNode = icon.FileIcon(icon.FileIconProps{Path: node.Label})
+		}
 		labelText = node.Label
 	case "sym":
 		if node.SymKind != "" {

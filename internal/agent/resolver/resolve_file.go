@@ -84,15 +84,25 @@ func (r *Resolver) ResolvePath(ctx context.Context, inputPath string, resType Re
 // loadResourceWithPath loads content and metadata for a known absolute path with
 // optional line range. This is the internal helper used by ResolveFile.
 func (r *Resolver) loadResourceWithPath(ctx context.Context, absPath string, startLine, endLine int) (ResolvedResource, error) {
-	mimeType := corefs.DetectMIMEType(absPath)
-	isBinary := corefs.IsBinaryMIME(mimeType)
+	fi, err := os.Stat(absPath)
+	if err != nil {
+		return nil, err
+	}
+	isDir := fi.IsDir()
+
+	var mimeType string
+	var isBinary bool
+	if !isDir {
+		mimeType = corefs.DetectMIMEType(absPath)
+		isBinary = corefs.IsBinaryMIME(mimeType)
+	}
 
 	var content string
 	var totalLines, actualEndLine int
 	var truncated bool
 	var cachedPath string
 
-	if !isBinary {
+	if !isDir && !isBinary {
 		var err error
 		content, totalLines, actualEndLine, truncated, err = r.readTextFile(absPath, startLine, endLine)
 		if err != nil {
@@ -102,7 +112,7 @@ func (r *Resolver) loadResourceWithPath(ctx context.Context, absPath string, sta
 		if r.Lsp != nil {
 			r.Lsp.NotifyFileOpened(ctx, absPath)
 		}
-	} else if r.Storage != nil {
+	} else if !isDir && isBinary && r.Storage != nil {
 		file, err := os.Open(absPath)
 		if err == nil {
 			defer file.Close()
@@ -130,7 +140,7 @@ func (r *Resolver) loadResourceWithPath(ctx context.Context, absPath string, sta
 	}
 
 	var diags []lsp.Diagnostic
-	if r.Lsp != nil && !isBinary {
+	if r.Lsp != nil && !isDir && !isBinary {
 		if client, err := r.Lsp.GetClient(ctx, r.Cwd); err == nil && client != nil {
 			if fileDiags, err := client.GetDiagnostics(ctx, absPath); err == nil {
 				diags = fileDiags
@@ -147,6 +157,7 @@ func (r *Resolver) loadResourceWithPath(ctx context.Context, absPath string, sta
 		Truncated:   truncated,
 		MimeType:    mimeType,
 		IsBinary:    isBinary,
+		IsDir:       isDir,
 		CachedPath:  cachedPath,
 		Diagnostics: diags,
 	}, nil
@@ -174,20 +185,28 @@ func (r *Resolver) loadResourceFile(ctx context.Context, value string) (Resolved
 	absPath, startLine, endLine := parseLineRange(value)
 
 	// Verify file exists before attempting to read
-	if _, err := os.Stat(absPath); os.IsNotExist(err) {
+	fi, err := os.Stat(absPath)
+	if os.IsNotExist(err) {
 		return nil, fmt.Errorf("file not found: %s", absPath)
+	} else if err != nil {
+		return nil, err
 	}
 
-	// MIME type check to detect binary vs text files
-	mimeType := corefs.DetectMIMEType(absPath)
-	isBinary := corefs.IsBinaryMIME(mimeType)
+	isDir := fi.IsDir()
+
+	var mimeType string
+	var isBinary bool
+	if !isDir {
+		mimeType = corefs.DetectMIMEType(absPath)
+		isBinary = corefs.IsBinaryMIME(mimeType)
+	}
 
 	var content string
 	var totalLines, actualEndLine int
 	var truncated bool
 	var cachedPath string
 
-	if !isBinary {
+	if !isDir && !isBinary {
 		var err error
 		content, totalLines, actualEndLine, truncated, err = r.readTextFile(absPath, startLine, endLine)
 		if err != nil {
@@ -198,7 +217,7 @@ func (r *Resolver) loadResourceFile(ctx context.Context, value string) (Resolved
 		if r.Lsp != nil {
 			r.Lsp.NotifyFileOpened(ctx, absPath)
 		}
-	} else if r.Storage != nil {
+	} else if !isDir && isBinary && r.Storage != nil {
 		file, err := os.Open(absPath)
 		if err == nil {
 			defer file.Close()
@@ -229,7 +248,7 @@ func (r *Resolver) loadResourceFile(ctx context.Context, value string) (Resolved
 
 	// Retrieve raw LSP diagnostics (errors/warnings) for this file
 	var diags []lsp.Diagnostic
-	if r.Lsp != nil && !isBinary {
+	if r.Lsp != nil && !isDir && !isBinary {
 		if client, err := r.Lsp.GetClient(ctx, r.Cwd); err == nil && client != nil {
 			if fileDiags, err := client.GetDiagnostics(ctx, absPath); err == nil {
 				diags = fileDiags
@@ -246,6 +265,7 @@ func (r *Resolver) loadResourceFile(ctx context.Context, value string) (Resolved
 		Truncated:   truncated,
 		MimeType:    mimeType,
 		IsBinary:    isBinary,
+		IsDir:       isDir,
 		CachedPath:  cachedPath,
 		Diagnostics: diags,
 	}, nil

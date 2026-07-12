@@ -25,6 +25,8 @@ type AttachmentRefNode struct {
 	// Kind is the LSP symbol kind, populated only for @sym: references.
 	// Extracted from the value when the format is "name:kind" (e.g. "MyFunc:function").
 	SymKind string
+	// IsDir indicates whether the reference is a directory.
+	IsDir bool
 }
 
 func (n *AttachmentRefNode) Kind() ast.NodeKind { return attachmentRefKind }
@@ -75,6 +77,7 @@ func (p *attachmentRefParser) Parse(_ ast.Node, block text.Reader, _ parser.Cont
 			RefType: refType,
 			Label:   label,
 			SymKind: symKind,
+			IsDir:   refType == "file" && strings.HasSuffix(value, "/"),
 		}
 		block.Advance(end)
 		return node

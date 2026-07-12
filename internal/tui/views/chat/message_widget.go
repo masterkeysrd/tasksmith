@@ -231,14 +231,15 @@ var Message = kitex.FC("Message", func(props MessageProps) kitex.Node {
 			if props.OnViewPreview != nil && (len(filesMap) > 0 || len(symbolsMap) > 0 || len(skillsMap) > 0) {
 				onAttachmentClick = func(refType, rawValue string) {
 					if refType == "file" {
-						f, found := filesMap[rawValue]
+						cleanVal := strings.TrimSuffix(rawValue, "/")
+						f, found := filesMap[cleanVal]
 						if !found {
-							f, found = filesMap[filepath.Base(rawValue)]
+							f, found = filesMap[filepath.Base(cleanVal)]
 						}
 						if !found {
-							// Try suffix-matching if rawValue is relative but keys are absolute
+							// Try suffix-matching if cleanVal is relative but keys are absolute
 							for k, file := range filesMap {
-								if strings.HasSuffix(filepath.ToSlash(k), filepath.ToSlash(rawValue)) {
+								if strings.HasSuffix(filepath.ToSlash(k), filepath.ToSlash(cleanVal)) {
 									f = file
 									found = true
 									break
@@ -246,7 +247,15 @@ var Message = kitex.FC("Message", func(props MessageProps) kitex.Node {
 							}
 						}
 						if found {
-							if f.Reason != "" {
+							if f.IsDir {
+								explanation := "Attachment is a directory.\nUse the ls tool to inspect."
+								props.OnViewPreview(
+									fmt.Sprintf("Attachment: %s", filepath.Base(f.Path)),
+									preview.DefaultTextPreview{
+										Text: explanation,
+									},
+								)
+							} else if f.Reason != "" {
 								var explanation string
 								if f.Mime != "" && f.Mime != "text/plain" {
 									explanation = fmt.Sprintf("Attachment is a binary file (%s).\nUse the view_file tool to inspect.", f.Mime)
@@ -325,6 +334,23 @@ var Message = kitex.FC("Message", func(props MessageProps) kitex.Node {
 			nodes = append(nodes, components.Markdown(components.MarkdownProps{
 				Source:            cleaned,
 				OnAttachmentClick: onAttachmentClick,
+				IsDirectory: func(path string) bool {
+					cleanVal := strings.TrimSuffix(path, "/")
+					f, found := filesMap[cleanVal]
+					if !found {
+						f, found = filesMap[filepath.Base(cleanVal)]
+					}
+					if !found {
+						for k, file := range filesMap {
+							if strings.HasSuffix(filepath.ToSlash(k), filepath.ToSlash(cleanVal)) {
+								f = file
+								found = true
+								break
+							}
+						}
+					}
+					return found && f.IsDir
+				},
 			}))
 		}
 	}
