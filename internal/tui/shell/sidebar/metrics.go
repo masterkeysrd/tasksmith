@@ -29,8 +29,8 @@ func metricsPanel(data Data) kitex.Node {
 		}
 	}
 
-	// Prefer running (streaming) metrics when the session is actively generating.
-	if data.IsGenerating && data.RunningMetrics != nil {
+	// Prefer running (streaming) metrics when the session is actively generating and they are populated.
+	if data.IsGenerating && data.RunningMetrics != nil && (data.RunningMetrics.TotalTokens > 0 || data.RunningMetrics.PromptTokens > 0) {
 		metrics = data.RunningMetrics
 	}
 

@@ -1052,11 +1052,28 @@ func (s *Service) GetSessionState(ctx context.Context, req GetSessionStateReques
 	// Populate running metrics from the active session's streaming metrics.
 	if resp.IsGenerating {
 		if streamMetrics := s.sm.GetRunningMetrics(req.SessionID); streamMetrics != nil {
+			var cumPrompt, cumCompletion, cumTotal int
+			var cumCost float64
+			if sess, err := s.sm.GetSession(ctx, req.SessionID); err == nil && sess != nil && sess.LastTurnMetrics != nil {
+				cumPrompt = sess.LastTurnMetrics.CumulativePromptTokens + streamMetrics.Tokens.Input
+				cumCompletion = sess.LastTurnMetrics.CumulativeCompletionTokens + streamMetrics.Tokens.Output
+				cumTotal = sess.LastTurnMetrics.CumulativeTotalTokens + streamMetrics.TotalTokens
+				cumCost = sess.LastTurnMetrics.CumulativeCostUSD + streamMetrics.TotalCost.AsUSD()
+			} else {
+				cumPrompt = streamMetrics.Tokens.Input
+				cumCompletion = streamMetrics.Tokens.Output
+				cumTotal = streamMetrics.TotalTokens
+				cumCost = streamMetrics.TotalCost.AsUSD()
+			}
 			resp.RunningMetrics = &SessionMetrics{
-				PromptTokens:     streamMetrics.Tokens.Input,
-				CompletionTokens: streamMetrics.Tokens.Output,
-				TotalTokens:      streamMetrics.TotalTokens,
-				EstimatedCostUSD: streamMetrics.TotalCost.AsUSD(),
+				PromptTokens:               streamMetrics.Tokens.Input,
+				CompletionTokens:           streamMetrics.Tokens.Output,
+				TotalTokens:                streamMetrics.TotalTokens,
+				EstimatedCostUSD:           streamMetrics.TotalCost.AsUSD(),
+				CumulativePromptTokens:     cumPrompt,
+				CumulativeCompletionTokens: cumCompletion,
+				CumulativeTotalTokens:      cumTotal,
+				CumulativeCostUSD:          cumCost,
 			}
 		}
 	}

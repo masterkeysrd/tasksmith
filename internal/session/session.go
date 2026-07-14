@@ -1815,7 +1815,7 @@ func (m *Manager) handleLLMChunk(sess *ActiveSession, ev graph.StreamEvent) {
 	}
 
 	m.mu.Lock()
-	if chunkMetrics != nil {
+	if chunkMetrics != nil && (chunkMetrics.TotalTokens > 0 || chunkMetrics.Tokens.Input > 0 || chunkMetrics.Tokens.Output > 0) {
 		sess.CurrentStreamMetrics = chunkMetrics
 	}
 	if textChunk != "" || thinkingChunk != "" {

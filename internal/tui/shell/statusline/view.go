@@ -647,8 +647,9 @@ var View = kitex.FCC("StatusLine", func(props Props) kitex.Node {
 		}
 	}
 
-	// Prefer running (streaming) metrics when the session is actively generating.
-	if sessionStateQuery.Data != nil && sessionStateQuery.Data.IsGenerating && sessionStateQuery.Data.RunningMetrics != nil {
+	// Prefer running (streaming) metrics when the session is actively generating and they are populated.
+	if sessionStateQuery.Data != nil && sessionStateQuery.Data.IsGenerating && sessionStateQuery.Data.RunningMetrics != nil &&
+		(sessionStateQuery.Data.RunningMetrics.TotalTokens > 0 || sessionStateQuery.Data.RunningMetrics.PromptTokens > 0) {
 		metrics = sessionStateQuery.Data.RunningMetrics
 	}
 
