@@ -357,13 +357,13 @@ func TestRevertFileAPI(t *testing.T) {
 	}
 	defer db.Close()
 
-	checkpointsDb, err := coredb.Open(tmpDir, "checkpoints.db")
+	checkpointsDB, err := coredb.Open(tmpDir, "checkpoints.db")
 	if err != nil {
 		t.Fatalf("failed to open checkpoints database: %v", err)
 	}
-	defer checkpointsDb.Close()
+	defer checkpointsDB.Close()
 
-	store, err := session.NewSQLiteStore(db, checkpointsDb)
+	store, err := session.NewSQLiteStore(db, checkpointsDB)
 	if err != nil {
 		t.Fatalf("failed to initialize sqlite store: %v", err)
 	}

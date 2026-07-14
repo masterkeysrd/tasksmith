@@ -2,6 +2,9 @@ package autocomplete
 
 import (
 	"testing"
+
+	"github.com/masterkeysrd/kite/event"
+	"github.com/masterkeysrd/kite/key"
 )
 
 func TestControllerParse(t *testing.T) {
@@ -56,5 +59,89 @@ func TestControllerParse(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestControllerCycleInline(t *testing.T) {
+	c := New(Config{
+		Triggers: map[string][]string{
+			"": {"command"},
+		},
+		CycleInline: true,
+	})
+
+	var updatedValue string
+	onChange := func(v string) {
+		updatedValue = v
+	}
+
+	eventDown := &event.KeyEvent{}
+	eventDown.Code = key.KeyDown
+
+	// If menu is closed, pressing Down Arrow should not be handled
+	if handled := c.HandleOnKeyDown(eventDown, "th", onChange); handled {
+		t.Fatalf("Expected event to not be handled when menu is closed")
+	}
+
+	// Pressing Tab when closed should open the menu
+	eventTab := &event.KeyEvent{}
+	eventTab.Code = key.KeyTab
+	if handled := c.HandleOnKeyDown(eventTab, "th", onChange); !handled {
+		t.Fatalf("Expected Tab to be handled and open the menu when closed")
+	}
+
+	state := c.store.Get()
+	if !state.IsOpen {
+		t.Fatalf("Expected menu to be open after Tab on closed menu")
+	}
+
+	c.SetItems([]Item{
+		{Label: "theme", InsertValue: "theme"},
+		{Label: "thinking", InsertValue: "thinking"},
+	})
+
+	handled := c.HandleOnKeyDown(eventDown, "th", onChange)
+	if !handled {
+		t.Fatalf("Expected event to be handled")
+	}
+
+	state = c.store.Get()
+	if state.SelectedIndex != 1 {
+		t.Errorf("Expected SelectedIndex to be 1, got %d", state.SelectedIndex)
+	}
+	if updatedValue != "thinking" {
+		t.Errorf("Expected updated value to be 'thinking', got %q", updatedValue)
+	}
+
+	handled = c.HandleOnKeyDown(eventDown, "thinking", onChange)
+	if !handled {
+		t.Fatalf("Expected event to be handled")
+	}
+
+	state = c.store.Get()
+	if state.SelectedIndex != 0 {
+		t.Errorf("Expected SelectedIndex to be 0, got %d", state.SelectedIndex)
+	}
+	if updatedValue != "theme" {
+		t.Errorf("Expected updated value to be 'theme', got %q", updatedValue)
+	}
+}
+
+func TestControllerParseEmptyTrigger(t *testing.T) {
+	c := New(Config{
+		Triggers: map[string][]string{
+			"": {"command"},
+		},
+	})
+
+	stripped, sources, matched := c.Parse("")
+	if !matched {
+		t.Fatalf("Expected empty query to match when empty trigger is registered")
+	}
+	if len(sources) != 1 || sources[0] != "command" {
+		t.Errorf("Expected sources to be ['command'], got %v", sources)
+	}
+	if stripped != "" {
+		t.Errorf("Expected stripped query to be empty, got %q", stripped)
 	}
 }

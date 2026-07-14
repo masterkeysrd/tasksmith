@@ -8,6 +8,7 @@ import (
 	"iter"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -169,13 +170,7 @@ func (s *Service) ListAgents(ctx context.Context, req ListAgentsRequest) (*ListA
 
 			// Filter agents by trigger: if triggers list is defined, it must contain "human"
 			if len(a.Spec.Triggers) > 0 {
-				hasHuman := false
-				for _, t := range a.Spec.Triggers {
-					if t == "human" {
-						hasHuman = true
-						break
-					}
-				}
+				hasHuman := slices.Contains(a.Spec.Triggers, "human")
 				if !hasHuman && a.Metadata.Name != defaultAgent {
 					return false
 				}
@@ -1076,7 +1071,8 @@ func (s *Service) ResolveMcpRequest(ctx context.Context, req ResolveMcpRequest) 
 		return nil, fmt.Errorf("pending MCP request %q not found", req.RequestID)
 	}
 
-	if pr.Type == "oauth" {
+	switch pr.Type {
+	case "oauth":
 		if req.Action == "cancel" {
 			pr.ResponseChan <- fmt.Errorf("oauth flow cancelled by user")
 			return &ResolveMcpResponse{Success: true}, nil
@@ -1091,7 +1087,7 @@ func (s *Service) ResolveMcpRequest(ctx context.Context, req ResolveMcpRequest) 
 		}
 		pr.ResponseChan <- fmt.Errorf("oauth flow cancelled by user")
 		return &ResolveMcpResponse{Success: true}, nil
-	} else if pr.Type == "elicitation" {
+	case "elicitation":
 		if req.Action == "reject" || req.Action == "cancel" {
 			pr.ResponseChan <- fmt.Errorf("elicitation cancelled by user")
 			return &ResolveMcpResponse{Success: true}, nil

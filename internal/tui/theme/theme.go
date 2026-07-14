@@ -516,3 +516,41 @@ func Provider(props Props, children ...kitex.Node) kitex.Node {
 func UseTheme() *Scheme {
 	return kitex.UseContext(themeCtx)
 }
+
+// List returns a slice of all available theme names (built-in and custom).
+func List() []string {
+	var themes []string
+
+	// Read built-ins
+	if entries, err := builtinFS.ReadDir("builtin"); err == nil {
+		for _, entry := range entries {
+			if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".json") {
+				themes = append(themes, strings.TrimSuffix(entry.Name(), ".json"))
+			}
+		}
+	}
+
+	// Read user dir
+	if dir, err := xdg.SubConfigDir("themes"); err == nil {
+		if entries, err := os.ReadDir(dir); err == nil {
+			for _, entry := range entries {
+				if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".json") {
+					name := strings.TrimSuffix(entry.Name(), ".json")
+					// Avoid duplicates
+					exists := false
+					for _, t := range themes {
+						if t == name {
+							exists = true
+							break
+						}
+					}
+					if !exists {
+						themes = append(themes, name)
+					}
+				}
+			}
+		}
+	}
+
+	return themes
+}

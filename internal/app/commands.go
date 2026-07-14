@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"fmt"
 	"strconv"
 	"strings"
@@ -41,7 +42,21 @@ func (app *Application) InitializeCommands() {
 			return fmt.Errorf("theme: %w", err)
 		}
 		return nil
-	})
+	}, command.Complete(func(ctx context.Context, args []string) []command.CompletionItem {
+		if len(args) > 1 {
+			return nil
+		}
+		names := theme.List()
+		var items []command.CompletionItem
+		for _, name := range names {
+			items = append(items, command.CompletionItem{
+				Label:    name,
+				Sublabel: "Theme Preset",
+				Badge:    "THEME",
+			})
+		}
+		return items
+	}))
 
 	command.Register("lspinfo", func(ctx command.CommandContext) error {
 		active.SetModal("lspinfo")
@@ -255,7 +270,37 @@ func (app *Application) InitializeCommands() {
 		default:
 			return fmt.Errorf("thinking: unknown subcommand %q (try 'toggle', 'effort', 'budget', or 'adaptive')", ctx.Args[0])
 		}
-	})
+	}, command.Complete(func(ctx context.Context, args []string) []command.CompletionItem {
+		if len(args) == 0 {
+			return nil
+		}
+		if len(args) == 1 {
+			return []command.CompletionItem{
+				{Label: "toggle", Sublabel: "Toggle model reasoning/thinking on/off"},
+				{Label: "effort", Sublabel: "Open picker to select reasoning effort"},
+				{Label: "budget", Sublabel: "Configure token budget (e.g. 16000 or off)"},
+				{Label: "adaptive", Sublabel: "Configure adaptive thinking (on/off)"},
+			}
+		}
+		subcmd := strings.ToLower(args[0])
+		switch subcmd {
+		case "adaptive":
+			if len(args) == 2 {
+				return []command.CompletionItem{
+					{Label: "on", Sublabel: "Enable adaptive thinking"},
+					{Label: "off", Sublabel: "Disable adaptive thinking"},
+				}
+			}
+		case "budget":
+			if len(args) == 2 {
+				return []command.CompletionItem{
+					{Label: "off", Sublabel: "Disable token budget"},
+					{Label: "16000", Sublabel: "Default reasoning token budget"},
+				}
+			}
+		}
+		return nil
+	}))
 
 	command.Register("lsp", func(ctx command.CommandContext) error {
 		if len(ctx.Args) == 0 {
@@ -275,7 +320,15 @@ func (app *Application) InitializeCommands() {
 		default:
 			return fmt.Errorf("lsp: unknown subcommand %q", ctx.Args[0])
 		}
-	})
+	}, command.Complete(func(ctx context.Context, args []string) []command.CompletionItem {
+		if len(args) > 1 {
+			return nil
+		}
+		return []command.CompletionItem{
+			{Label: "info", Sublabel: "Show active LSP language client info"},
+			{Label: "restart", Sublabel: "Restart LSP language client"},
+		}
+	}))
 
 	command.Register("perm", func(ctx command.CommandContext) error {
 		if len(ctx.Args) == 0 {
@@ -310,7 +363,16 @@ func (app *Application) InitializeCommands() {
 			active.InvalidateSessionState(sessionID)
 		}
 		return nil
-	})
+	}, command.Complete(func(ctx context.Context, args []string) []command.CompletionItem {
+		if len(args) > 1 {
+			return nil
+		}
+		return []command.CompletionItem{
+			{Label: "auto", Sublabel: "Automatically approve all file/command permissions"},
+			{Label: "default", Sublabel: "Approve basic commands, prompt for sensitive actions"},
+			{Label: "strict", Sublabel: "Always prompt for approval"},
+		}
+	}))
 
 	command.Register("agent", func(ctx command.CommandContext) error {
 		if len(ctx.Args) == 0 {
@@ -357,7 +419,24 @@ func (app *Application) InitializeCommands() {
 		}
 		active.SetStatusMessage(fmt.Sprintf("Agent set to: %s", agentName))
 		return nil
-	})
+	}, command.Complete(func(ctx context.Context, args []string) []command.CompletionItem {
+		if len(args) > 1 {
+			return nil
+		}
+		res, err := app.api.ListAgents(ctx, api.ListAgentsRequest{})
+		if err != nil {
+			return nil
+		}
+		var items []command.CompletionItem
+		for _, a := range res.Agents {
+			items = append(items, command.CompletionItem{
+				Label:    a.Name,
+				Sublabel: a.Description,
+				Badge:    "AGENT",
+			})
+		}
+		return items
+	}))
 
 	command.Register("agentpicker", func(ctx command.CommandContext) error {
 		active.SetModal("agentpicker")

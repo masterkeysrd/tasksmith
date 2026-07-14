@@ -16,4 +16,5 @@ type QueryReq struct {
 	Query     string
 	Sources   []string
 	SessionID string // Needed for session-scoped skill queries
+	FullText  string // The full command line text before completion was triggered
 }

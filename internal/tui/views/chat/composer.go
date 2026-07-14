@@ -268,6 +268,7 @@ var Composer = kitex.FC("Composer", func(props ComposerProps) kitex.Node {
 		}, widgets.AutocompleteMenu(widgets.AutocompleteMenuProps{
 			Controller: acController,
 			SessionID:  props.SessionID,
+			Value:      props.Value,
 			OnSelect: func(item autocomplete.Item) {
 				newText, _ := acController.ApplySelection(props.Value, cursorOffset, item)
 				if props.OnChange != nil {

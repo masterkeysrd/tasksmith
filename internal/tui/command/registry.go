@@ -25,9 +25,20 @@ type CommandContext struct {
 // CommandFn is the signature for executable commands.
 type CommandFn func(ctx CommandContext) error
 
+// CompletionItem represents a suggestion for command arguments/subcommands.
+type CompletionItem struct {
+	Label    string
+	Sublabel string
+	Badge    string
+}
+
+// CompleteFn is the signature for command autocomplete functions.
+type CompleteFn func(ctx context.Context, args []string) []CompletionItem
+
 // Options holds metadata for a registered command.
 type Options struct {
-	Context string
+	Context   string
+	Completer CompleteFn
 }
 
 // Option is a functional option for configuring a command.
@@ -40,10 +51,18 @@ func Context(ctx string) Option {
 	}
 }
 
+// Complete returns an Option that registers a completion function for the command.
+func Complete(fn CompleteFn) Option {
+	return func(o *Options) {
+		o.Completer = fn
+	}
+}
+
 // registry holds the command maps, protected by a RWMutex.
 type registry struct {
 	mu              sync.RWMutex
 	commands        map[string]CommandFn
+	completers      map[string]CompleteFn
 	contextCommands map[string]map[string]CommandFn
 }
 
@@ -51,6 +70,7 @@ type registry struct {
 func newRegistry() *registry {
 	return &registry{
 		commands:        make(map[string]CommandFn),
+		completers:      make(map[string]CompleteFn),
 		contextCommands: make(map[string]map[string]CommandFn),
 	}
 }
@@ -69,28 +89,43 @@ func Register(id string, fn CommandFn, opts ...Option) {
 	for _, opt := range opts {
 		opt(&o)
 	}
-	globalRegistry.register(id, fn, o.Context)
+	globalRegistry.register(id, fn, o)
 }
 
 // register is the internal method on registry that adds a command.
-func (r *registry) register(id string, fn CommandFn, ctxName string) {
+func (r *registry) register(id string, fn CommandFn, o Options) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	if ctxName != "" {
-		if r.contextCommands[ctxName] == nil {
-			r.contextCommands[ctxName] = make(map[string]CommandFn)
+	if o.Context != "" {
+		if r.contextCommands[o.Context] == nil {
+			r.contextCommands[o.Context] = make(map[string]CommandFn)
 		}
-		if _, exists := r.contextCommands[ctxName][id]; exists {
-			panic(fmt.Sprintf("commands: register duplicate context command %q in context %q", id, ctxName))
+		if _, exists := r.contextCommands[o.Context][id]; exists {
+			panic(fmt.Sprintf("commands: register duplicate context command %q in context %q", id, o.Context))
 		}
-		r.contextCommands[ctxName][id] = fn
+		r.contextCommands[o.Context][id] = fn
 	} else {
 		if _, exists := r.commands[id]; exists {
 			panic(fmt.Sprintf("commands: register duplicate command %q", id))
 		}
 		r.commands[id] = fn
 	}
+
+	if o.Completer != nil {
+		r.completers[id] = o.Completer
+	}
+}
+
+// GetCompleter returns the registered completion function for a command, or nil if none exists.
+func GetCompleter(id string) CompleteFn {
+	return globalRegistry.getCompleter(id)
+}
+
+func (r *registry) getCompleter(id string) CompleteFn {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.completers[id]
 }
 
 // ExecFunc returns a keymap-ready callback that runs the specified command.

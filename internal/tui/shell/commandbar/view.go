@@ -36,8 +36,9 @@ var View = kitex.FC("CommandBar", func(props Props) kitex.Node {
 	// Initialize autocomplete controller once for commands
 	acController := kitex.UseMemo(func() any {
 		return autocomplete.New(autocomplete.Config{
-			Triggers: map[string][]string{"": {"command"}},
-			Prefixes: map[string]string{},
+			Triggers:    map[string][]string{"": {"command"}},
+			Prefixes:    map[string]string{},
+			CycleInline: true,
 		})
 	}, []any{}).(*autocomplete.Controller)
 
@@ -128,6 +129,7 @@ var View = kitex.FC("CommandBar", func(props Props) kitex.Node {
 			Value:      val,
 		}, widgets.AutocompleteMenu(widgets.AutocompleteMenuProps{
 			Controller: acController,
+			Value:      val,
 			OnSelect: func(item autocomplete.Item) {
 				newText, _ := acController.ApplySelection(val, cursorOffset, item)
 				setValue(newText)

@@ -30,6 +30,7 @@ type AutocompleteMenuProps struct {
 	HideIcons  bool
 	HideBadges bool
 	SessionID  string
+	Value      string // The full current input value
 }
 
 var (
@@ -142,6 +143,7 @@ var AutocompleteMenu = kitex.FC("AutocompleteMenu", func(props AutocompleteMenuP
 					Query:     strippedQuery,
 					Sources:   sources,
 					SessionID: props.SessionID,
+					FullText:  props.Value,
 				})
 				if err != nil {
 					return nil, err
@@ -150,7 +152,17 @@ var AutocompleteMenu = kitex.FC("AutocompleteMenu", func(props AutocompleteMenuP
 			}).Then(func(items *[]autocomplete.Item) {
 				// Only update the state if the context has not been cancelled/superseded
 				if ctx.Err() == nil && items != nil {
-					props.Controller.SetItems(*items)
+					if props.Controller.CycleInline() && len(*items) == 1 && props.Controller.IsOpen() {
+						selectedItem := (*items)[0]
+						if props.OnSelect != nil {
+							props.OnSelect(selectedItem)
+						} else {
+							props.Controller.SetItems(nil)
+							props.Controller.SetIsOpen(false)
+						}
+					} else {
+						props.Controller.SetItems(*items)
+					}
 				}
 			}, func(err error) {
 				// Ignore query errors

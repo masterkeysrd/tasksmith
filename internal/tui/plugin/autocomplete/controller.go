@@ -21,15 +21,17 @@ type State struct {
 
 // Config defines the configurable trigger rules for the autocomplete controller.
 type Config struct {
-	Triggers map[string][]string // e.g. "@" -> ["file", "lsp", "skill"]
-	Prefixes map[string]string   // e.g. "@file:" -> "file"
+	Triggers    map[string][]string // e.g. "@" -> ["file", "lsp", "skill"]
+	Prefixes    map[string]string   // e.g. "@file:" -> "file"
+	CycleInline bool                // If true, cycling updates the input field inline immediately
 }
 
 // Controller is a pure, framework-agnostic autocomplete state machine.
 type Controller struct {
-	store    *kites.Store[State]
-	triggers map[string][]string
-	prefixes map[string]string
+	store       *kites.Store[State]
+	triggers    map[string][]string
+	prefixes    map[string]string
+	cycleInline bool
 }
 
 // New instantiates a new Autocomplete controller.
@@ -38,8 +40,9 @@ func New(cfg Config) *Controller {
 		store: kites.Create(State{
 			FilteredItems: []Item{},
 		}),
-		triggers: cfg.Triggers,
-		prefixes: cfg.Prefixes,
+		triggers:    cfg.Triggers,
+		prefixes:    cfg.Prefixes,
+		cycleInline: cfg.CycleInline,
 	}
 }
 
@@ -96,6 +99,9 @@ func (c *Controller) SetSelectedIndex(idx int) {
 // Parse inspects the input query text to determine trigger match, prefix stripping, and target sources.
 func (c *Controller) Parse(q string) (strippedQuery string, sources []string, matched bool) {
 	if q == "" {
+		if srcs, exists := c.triggers[""]; exists {
+			return "", srcs, true
+		}
 		return "", nil, false
 	}
 
@@ -108,9 +114,14 @@ func (c *Controller) Parse(q string) (strippedQuery string, sources []string, ma
 
 	// 2. Check for general triggers (e.g. "@" or "/")
 	for trig, srcs := range c.triggers {
-		if strings.HasPrefix(q, trig) {
+		if trig != "" && strings.HasPrefix(q, trig) {
 			return strings.TrimPrefix(q, trig), srcs, true
 		}
+	}
+
+	// If no other trigger matched, check for the empty trigger
+	if srcs, exists := c.triggers[""]; exists {
+		return q, srcs, true
 	}
 
 	return "", nil, false
@@ -261,12 +272,30 @@ func (c *Controller) HandleOnKeyDown(ke *event.KeyEvent, currentValue string, on
 	state := c.store.Get()
 	log.Info("HandleOnKeyDown called", log.Bool("isOpen", state.IsOpen), log.Int("code", int(ke.Code)))
 	if !state.IsOpen {
+		if c.cycleInline && ke.Code == key.KeyTab && (ke.Mod&key.ModShift) == 0 {
+			c.HandleOnChange(currentValue, len(currentValue))
+			c.SetIsOpen(true)
+			return true
+		}
 		return false
+	}
+
+	items := state.FilteredItems
+	if len(items) == 0 {
+		if ke.Code == key.KeyEscape {
+			c.SetIsOpen(false)
+			return false
+		}
+		return false
+	}
+
+	if ke.Code == key.KeyEscape {
+		c.SetIsOpen(false)
+		return true
 	}
 
 	// Intercept Enter to select
 	if ke.Code == key.KeyEnter || ke.Text == "\r" || ke.Text == "\n" {
-		items := state.FilteredItems
 		idx := state.SelectedIndex
 		log.Info("HandleOnKeyDown: Enter pressed", log.Int("itemsCount", len(items)), log.Int("selectedIndex", idx))
 		if len(items) > 0 && idx >= 0 && idx < len(items) {
@@ -285,6 +314,54 @@ func (c *Controller) HandleOnKeyDown(ke *event.KeyEvent, currentValue string, on
 		}
 	}
 
-	// Intercept navigation
-	return c.InterceptKey(ke)
+	keyStr := keymap.KeyToString(ke)
+
+	isForward := ke.Code == key.KeyDown || keyStr == "<C-n>" || (ke.Code == key.KeyTab && (ke.Mod&key.ModShift) == 0)
+	isBackward := ke.Code == key.KeyUp || keyStr == "<C-p>" || (ke.Code == key.KeyTab && (ke.Mod&key.ModShift) != 0)
+	isPageDown := keyStr == "<C-f>"
+	isPageUp := keyStr == "<C-b>"
+
+	if (isForward || isBackward || isPageDown || isPageUp) && len(items) > 0 {
+		var nextIdx int
+		idx := state.SelectedIndex
+		if isForward {
+			nextIdx = (idx + 1) % len(items)
+		} else if isBackward {
+			nextIdx = idx - 1
+			if nextIdx < 0 {
+				nextIdx = len(items) - 1
+			}
+		} else if isPageDown {
+			nextIdx = idx + 5
+			if nextIdx >= len(items) {
+				nextIdx = len(items) - 1
+			}
+		} else if isPageUp {
+			nextIdx = idx - 5
+			if nextIdx < 0 {
+				nextIdx = 0
+			}
+		}
+
+		c.SetSelectedIndex(nextIdx)
+
+		if c.cycleInline && onChange != nil {
+			selectedItem := items[nextIdx]
+			newText, _ := c.ApplySelection(currentValue, len(currentValue), selectedItem)
+			onChange(newText)
+		}
+		return true
+	}
+
+	return false
+}
+
+// CycleInline returns whether inline cycling is enabled.
+func (c *Controller) CycleInline() bool {
+	return c.cycleInline
+}
+
+// IsOpen returns whether the autocomplete menu is open.
+func (c *Controller) IsOpen() bool {
+	return c.store.Get().IsOpen
 }
