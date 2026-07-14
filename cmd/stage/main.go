@@ -466,7 +466,7 @@ func main() {
 		},
 	})
 
-	stg.Register("QueuedBubble", []stage.Scene{
+	stg.Register("Chat/Widgets/QueuedBubble", []stage.Scene{
 		{
 			Name: "Default",
 			Render: func(c *stage.Context) kitex.Node {
@@ -529,7 +529,7 @@ func main() {
 		},
 	})
 
-	stg.Register("DeniedToolWidget", []stage.Scene{
+	stg.Register("Chat/Widgets/DeniedToolWidget", []stage.Scene{
 		{
 			Name: "Default",
 			Render: func(c *stage.Context) kitex.Node {
@@ -568,7 +568,7 @@ func main() {
 		},
 	})
 
-	stg.Register("GenericToolWidget", []stage.Scene{
+	stg.Register("Chat/Widgets/GenericToolWidget", []stage.Scene{
 		{
 			Name: "Running",
 			Render: func(c *stage.Context) kitex.Node {
@@ -634,7 +634,7 @@ func main() {
 		},
 	})
 
-	stg.Register("AgentStatus", []stage.Scene{
+	stg.Register("Chat/Widgets/AgentStatus", []stage.Scene{
 		{
 			Name: "Processing",
 			Render: func(c *stage.Context) kitex.Node {
@@ -675,7 +675,7 @@ func main() {
 		},
 	})
 
-	stg.Register("Bubble", []stage.Scene{
+	stg.Register("Chat/Widgets/Bubble", []stage.Scene{
 		{
 			Name: "User",
 			Render: func(c *stage.Context) kitex.Node {
@@ -727,7 +727,7 @@ func main() {
 		},
 	})
 
-	stg.Register("BubbleGroup", []stage.Scene{
+	stg.Register("Chat/Widgets/BubbleGroup", []stage.Scene{
 		{
 			Name: "User",
 			Render: func(c *stage.Context) kitex.Node {
@@ -814,98 +814,138 @@ func main() {
 		}
 	}
 
-	stg.Register("BashToolWidget", toolScenes(
-		"bash",
-		map[string]any{"command": "go test ./...", "description": "Run all tests"},
-		"ok\n--- PASS: TestFoo (0.01s)\nPASS",
-		"--- FAIL: TestBar (0.03s)\n    expected 1, got 2\nFAIL",
-	))
+	stg.Register("Chat/Widgets/BashToolWidget", []stage.Scene{
+		{
+			Name: "Interactive Test",
+			Render: func(c *stage.Context) kitex.Node {
+				cmdText := c.Text("Command", "go test ./...")
+				descText := c.Text("Description", "Run all tests")
+				outText := c.Text("Output", "ok\n--- PASS: TestFoo (0.01s)\nPASS")
+				isErr := c.Bool("Is Error", false)
+				exitCode := c.Int("Exit Code", 0)
+				isAutoApproved := c.Bool("Auto Approved", false)
+				isRunning := c.Bool("Is Running", false)
 
-	stg.Register("ViewToolWidget", toolScenes(
+				tc := &message.ToolCall{
+					Name: "bash",
+					Args: map[string]any{
+						"command":     cmdText,
+						"description": descText,
+					},
+				}
+
+				var tm *message.Tool
+				if !isRunning {
+					meta := make(map[string]any)
+					if isAutoApproved {
+						meta["auto_approved"] = true
+					}
+					sc := map[string]any{
+						"exitCode": exitCode,
+					}
+					tm = &message.Tool{
+						IsError:           isErr,
+						Content:           message.Content{&message.TextBlock{Text: outText}},
+						StructuredContent: sc,
+					}
+					tm.SetMetadata(meta)
+				}
+
+				return kitex.Box(kitex.BoxProps{
+					Style: style.S().Padding(2).Width(style.Percent(100)).Height(style.Percent(100)),
+				}, chat.ToolExecution(chat.ToolExecutionProps{
+					ToolCall:    tc,
+					ToolMessage: tm,
+				}))
+			},
+		},
+	})
+
+	stg.Register("Chat/Widgets/ViewToolWidget", toolScenes(
 		"view",
 		map[string]any{"path": "internal/tui/views/chat/view.go"},
 		"1. package chat\n2. \n3. import (\n4. \t\"context\"\n...",
 		"open internal/tui/views/chat/view.go: no such file or directory",
 	))
 
-	stg.Register("LsToolWidget", toolScenes(
+	stg.Register("Chat/Widgets/LsToolWidget", toolScenes(
 		"ls",
 		map[string]any{"path": "internal/tui/views/chat"},
 		"agent_status.go\nbubble.go\ncomposer.go\nview.go",
 		"open internal/tui/views/chat: no such file or directory",
 	))
 
-	stg.Register("GlobToolWidget", toolScenes(
+	stg.Register("Chat/Widgets/GlobToolWidget", toolScenes(
 		"glob",
 		map[string]any{"pattern": "**/*.go", "path": "internal/tui"},
 		"internal/tui/views/chat/view.go\ninternal/tui/views/chat/bubble.go\ninternal/tui/main.go",
 		"no matches found for pattern **/*.go",
 	))
 
-	stg.Register("GrepToolWidget", toolScenes(
+	stg.Register("Chat/Widgets/GrepToolWidget", toolScenes(
 		"grep",
 		map[string]any{"pattern": "kitex.FC", "path": "internal/tui"},
 		"internal/tui/views/chat/bubble.go:58:var BubbleGroup = kitex.FC(\"BubbleGroup\",...\ninternal/tui/views/chat/view.go:42:var View = kitex.FC(\"ChatView\",...",
 		"error reading directory: permission denied",
 	))
 
-	stg.Register("WriteToolWidget", toolScenes(
+	stg.Register("Chat/Widgets/WriteToolWidget", toolScenes(
 		"write",
 		map[string]any{"path": "internal/tui/views/chat/new_file.go", "content": "package chat\n"},
 		"File written successfully.",
 		"open internal/tui/views/chat/new_file.go: permission denied",
 	))
 
-	stg.Register("EditToolWidget", toolScenes(
+	stg.Register("Chat/Widgets/EditToolWidget", toolScenes(
 		"edit",
 		map[string]any{"path": "internal/tui/views/chat/view.go"},
 		"Edit applied successfully.",
 		"edit failed: old_str not found in file",
 	))
 
-	stg.Register("MultiEditToolWidget", toolScenes(
+	stg.Register("Chat/Widgets/MultiEditToolWidget", toolScenes(
 		"multi_edit",
 		map[string]any{"path": "internal/tui/views/chat/view.go"},
 		"3 edits applied successfully.",
 		"multi_edit failed: conflict on edit 2",
 	))
 
-	stg.Register("RemoveToolWidget", toolScenes(
+	stg.Register("Chat/Widgets/RemoveToolWidget", toolScenes(
 		"remove",
 		map[string]any{"path": "internal/tui/views/chat/old_file.go"},
 		"File removed successfully.",
 		"remove internal/tui/views/chat/old_file.go: no such file or directory",
 	))
 
-	stg.Register("WebSearchToolWidget", toolScenes(
+	stg.Register("Chat/Widgets/WebSearchToolWidget", toolScenes(
 		"web_search",
 		map[string]any{"query": "golang context cancellation best practices"},
 		"1. Effective Go - Context\n2. Go Blog: Context and Cancellation\n3. pkg.go.dev/context",
 		"search failed: rate limit exceeded",
 	))
 
-	stg.Register("WebFetchToolWidget", toolScenes(
+	stg.Register("Chat/Widgets/WebFetchToolWidget", toolScenes(
 		"web_fetch",
 		map[string]any{"url": "https://pkg.go.dev/context"},
 		"# context\nPackage context defines the Context type...",
 		"fetch https://pkg.go.dev/context: connection refused",
 	))
 
-	stg.Register("LspSymbolsToolWidget", toolScenes(
+	stg.Register("Chat/Widgets/LspSymbolsToolWidget", toolScenes(
 		"lsp_symbols",
 		map[string]any{"query": "BubbleGroup"},
 		"BubbleGroup - internal/tui/views/chat/bubble.go:58\nBubbleGroupProps - internal/tui/views/chat/bubble.go:20",
 		"LSP server not running",
 	))
 
-	stg.Register("LspDiagnosticsToolWidget", toolScenes(
+	stg.Register("Chat/Widgets/LspDiagnosticsToolWidget", toolScenes(
 		"lsp_diagnostics",
 		map[string]any{"path": "internal/tui/views/chat/view.go"},
 		"No diagnostics found.",
 		"LSP server not running for this file",
 	))
 
-	stg.Register("ActivateSkillToolWidget", toolScenes(
+	stg.Register("Chat/Widgets/ActivateSkillToolWidget", toolScenes(
 		"activate_skill",
 		map[string]any{"skill": "golang"},
 		"Skill 'golang' activated successfully.",

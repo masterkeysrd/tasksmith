@@ -29,213 +29,249 @@ type CodeBlockProps struct {
 // using the active TUI theme.
 var CodeBlock = kitex.FC("CodeBlock", func(props CodeBlockProps) kitex.Node {
 	t := theme.UseTheme()
-	codeStr := strings.ReplaceAll(props.Code, "\t", "    ")
-	lang := props.Lang
 
-	if strings.TrimSpace(codeStr) == "" {
-		return nil
-	}
-	if lang == "" {
-		lang = "code"
-	}
+	return kitex.UseMemo(func() kitex.Node {
+		codeStr := strings.ReplaceAll(props.Code, "\t", "    ")
+		lang := props.Lang
 
-	titleStyle := style.S().
-		Display(style.DisplayFlex).
-		FlexDirection(style.FlexRow).
-		JustifyContent(style.JustifyBetween).
-		PaddingHorizontal(1).
-		BorderBottom(true, style.SingleBorder()).
-		Bold(true)
-	if t != nil {
-		titleStyle = titleStyle.
-			Background(t.Color.Surface.BaseHover).
-			Foreground(t.Color.Text.Primary).
-			BorderBottom(true, style.SingleBorder(), t.Color.Border.Primary)
-	}
+		if strings.TrimSpace(codeStr) == "" {
+			return nil
+		}
+		if lang == "" {
+			lang = "code"
+		}
 
-	padCode := 1
-	if props.Compact {
-		padCode = 0
-	}
-	whiteSpace := style.WhiteSpacePre
-	if props.Wrap {
-		whiteSpace = style.WhiteSpacePreWrap
-	}
-	codeStyle := style.S().
-		Padding(padCode).
-		Width(style.Percent(100)).
-		MaxWidth(style.Percent(100)).
-		MinWidth(style.Percent(0)).
-		WhiteSpace(whiteSpace).
-		OverflowX(style.OverflowAuto)
-	if t != nil {
-		codeStyle = codeStyle.Foreground(t.Color.Text.Secondary)
-	}
-	if props.Wrap {
-		codeStyle = codeStyle.OverflowX(style.OverflowHidden).OverflowWrap(style.OverflowWrapBreakWord)
-	} else {
-		codeStyle = codeStyle.OverflowX(style.OverflowAuto)
-	}
-
-	wrapperStyle := style.S().
-		Display(style.DisplayFlex).
-		FlexDirection(style.FlexColumn).
-		Width(style.Percent(100)).
-		MinWidth(style.Percent(0)).
-		WhiteSpace(whiteSpace)
-	if props.Wrap {
-		wrapperStyle = wrapperStyle.OverflowWrap(style.OverflowWrapBreakWord)
-	}
-
-	if !props.HideHeader {
-		wrapperStyle = wrapperStyle.
-			MarginBottom(1).
-			Border(style.SingleBorder())
+		titleStyle := style.S().
+			Display(style.DisplayFlex).
+			FlexDirection(style.FlexRow).
+			JustifyContent(style.JustifyBetween).
+			PaddingHorizontal(1).
+			BorderBottom(true, style.SingleBorder()).
+			Bold(true)
 		if t != nil {
-			wrapperStyle = wrapperStyle.
+			titleStyle = titleStyle.
 				Background(t.Color.Surface.BaseHover).
-				Border(true, style.SingleBorder(), t.Color.Border.Primary)
+				Foreground(t.Color.Text.Primary).
+				BorderBottom(true, style.SingleBorder(), t.Color.Border.Primary)
 		}
-	} else if t != nil && !props.Compact {
-		wrapperStyle = wrapperStyle.Background(t.Color.Surface.BaseHover)
-	}
 
-	wrapperStyle = wrapperStyle.Merge(props.Style)
-
-	// Fetch and coalesce lexer
-	lexer := lexers.Get(lang)
-	if lexer == nil {
-		lexer = lexers.Fallback
-	}
-	lexer = chroma.Coalesce(lexer)
-
-	// Tokenize code string
-	iterator, err := lexer.Tokenise(nil, codeStr)
-	var contentNodes []kitex.Node
-	if err != nil {
-		contentNodes = []kitex.Node{
-			kitex.Span(
-				kitex.SpanProps{Style: style.S().WhiteSpace(whiteSpace)},
-				kitex.Text(codeStr),
-			),
+		padCode := 1
+		if props.Compact {
+			padCode = 0
 		}
-	} else {
-		for tok := iterator(); tok != chroma.EOF; tok = iterator() {
-			tokenStyle := ResolveTokenStyle(t, tok.Type)
+		whiteSpace := style.WhiteSpacePre
+		if props.Wrap {
+			whiteSpace = style.WhiteSpacePreWrap
+		}
+
+		codeStyle := style.S().
+			Padding(padCode).
+			Width(style.Percent(100)).
+			MaxWidth(style.Percent(100)).
+			MinWidth(style.Percent(0)).
+			WhiteSpace(whiteSpace)
+		if t != nil {
+			codeStyle = codeStyle.Foreground(t.Color.Text.Secondary)
+		}
+		if props.Wrap {
+			codeStyle = codeStyle.
+				OverflowX(style.OverflowHidden).
+				OverflowWrap(style.OverflowWrapBreakWord)
+		} else {
+			codeStyle = codeStyle.
+				OverflowX(style.OverflowAuto)
+		}
+
+		wrapperStyle := style.S().
+			Display(style.DisplayFlex).
+			FlexDirection(style.FlexColumn).
+			Width(style.Percent(100)).
+			MaxWidth(style.Percent(100)).
+			MinWidth(style.Percent(0)).
+			WhiteSpace(whiteSpace)
+		if props.Wrap {
+			wrapperStyle = wrapperStyle.
+				Overflow(style.OverflowHidden).
+				OverflowWrap(style.OverflowWrapBreakWord)
+		}
+
+		if !props.HideHeader {
+			wrapperStyle = wrapperStyle.
+				MarginBottom(1).
+				Border(style.SingleBorder())
+			if t != nil {
+				wrapperStyle = wrapperStyle.
+					Background(t.Color.Surface.BaseHover).
+					Border(true, style.SingleBorder(), t.Color.Border.Primary)
+			}
+		} else if t != nil && !props.Compact {
+			wrapperStyle = wrapperStyle.Background(t.Color.Surface.BaseHover)
+		}
+
+		wrapperStyle = wrapperStyle.Merge(props.Style)
+
+		// Fetch and coalesce lexer
+		lexer := lexers.Get(lang)
+		if lexer == nil {
+			lexer = lexers.Fallback
+		}
+		lexer = chroma.Coalesce(lexer)
+
+		// Tokenize code string
+		iterator, err := lexer.Tokenise(nil, codeStr)
+
+		var contentNodes []kitex.Node
+
+		if err != nil {
+			fallbackStyle := style.S().WhiteSpace(whiteSpace)
 			if props.Wrap {
-				tokenStyle = tokenStyle.WhiteSpace(style.WhiteSpacePreWrap).
-					OverflowWrap(style.OverflowWrapBreakWord)
+				fallbackStyle = fallbackStyle.
+					OverflowWrap(style.OverflowWrapBreakWord).
+					MaxWidth(style.Percent(100)).
+					MinWidth(style.Percent(0))
 			}
-			contentNodes = append(contentNodes, kitex.Span(
-				kitex.SpanProps{Style: tokenStyle},
-				kitex.Text(tok.Value),
-			))
-		}
-	}
-
-	// Line numbers rendering styles
-	rowStyle := style.S().
-		Display(style.DisplayFlex).
-		FlexDirection(style.FlexRow).
-		Width(style.Percent(100))
-
-	padY := 1
-	if props.Compact {
-		padY = 0
-	}
-
-	gutterStyle := style.S().
-		PaddingVertical(padY).
-		PaddingLeft(1).
-		PaddingRight(1).
-		TextAlign(style.TextAlignRight).
-		WhiteSpace(style.WhiteSpacePre)
-	if props.GutterMinWidth > 0 {
-		gutterStyle = gutterStyle.MinWidth(style.Cells(props.GutterMinWidth))
-	}
-	if t != nil {
-		gutterStyle = gutterStyle.Foreground(t.Color.Text.Tertiary)
-	}
-
-	separatorStyle := style.S().
-		PaddingVertical(padY)
-	if t != nil {
-		separatorStyle = separatorStyle.Foreground(t.Color.Border.Primary)
-	}
-
-	codeBoxStyle := style.S().
-		PaddingVertical(padY).
-		PaddingLeft(1).
-		PaddingRight(1).
-		Flex(1, 1, style.Cells(0)).
-		Width(style.Percent(100)).
-		MaxWidth(style.Percent(100)).
-		MinWidth(style.Percent(0)).
-		MinHeight(style.Cells(0)).
-		WhiteSpace(whiteSpace).
-		OverflowX(style.OverflowAuto)
-	if t != nil {
-		codeBoxStyle = codeBoxStyle.Foreground(t.Color.Text.Secondary)
-	}
-	if props.Wrap {
-		codeBoxStyle = codeBoxStyle.OverflowX(style.OverflowHidden).OverflowWrap(style.OverflowWrapBreakWord)
-	} else {
-		codeBoxStyle = codeBoxStyle.OverflowX(style.OverflowAuto)
-	}
-
-	var gutterText string
-	var separatorText string
-	if props.ShowLineNumbers {
-		start := props.StartLine
-		if start <= 0 {
-			start = 1
-		}
-		lineCount := 0
-		if codeStr != "" {
-			lineCount = strings.Count(codeStr, "\n") + 1
-		}
-		var gutterBuilder strings.Builder
-		var sepBuilder strings.Builder
-		for i := 0; i < lineCount; i++ {
-			if i > 0 {
-				gutterBuilder.WriteByte('\n')
-				sepBuilder.WriteByte('\n')
+			contentNodes = []kitex.Node{
+				kitex.Span(
+					kitex.SpanProps{Style: fallbackStyle},
+					kitex.Text(codeStr),
+				),
 			}
-			fmt.Fprintf(&gutterBuilder, "%d", start+i)
-			sepBuilder.WriteString("│")
+		} else {
+			for tok := iterator(); tok != chroma.EOF; tok = iterator() {
+				tokenStyle := ResolveTokenStyle(t, tok.Type)
+				if props.Wrap {
+					tokenStyle = tokenStyle.
+						WhiteSpace(style.WhiteSpacePreWrap).
+						OverflowWrap(style.OverflowWrapBreakWord).
+						MaxWidth(style.Percent(100)).
+						MinWidth(style.Percent(0))
+				}
+				contentNodes = append(contentNodes, kitex.Span(
+					kitex.SpanProps{Style: tokenStyle},
+					kitex.Text(tok.Value),
+				))
+			}
 		}
-		gutterText = gutterBuilder.String()
-		separatorText = sepBuilder.String()
-	}
 
-	var codeContainer kitex.Node
-	if props.ShowLineNumbers {
-		codeContainer = kitex.Box(kitex.BoxProps{Style: rowStyle},
-			kitex.Box(kitex.BoxProps{Style: gutterStyle},
-				kitex.Text(gutterText),
-			),
-			kitex.Box(kitex.BoxProps{Style: separatorStyle},
-				kitex.Text(separatorText),
-			),
-			kitex.Box(kitex.BoxProps{Style: codeBoxStyle},
-				contentNodes...,
-			),
-		)
-	} else {
-		codeContainer = kitex.Box(kitex.BoxProps{Style: codeStyle},
-			contentNodes...,
-		)
-	}
+		// Line numbers rendering styles
+		rowStyle := style.S().
+			Display(style.DisplayFlex).
+			FlexDirection(style.FlexRow).
+			Width(style.Percent(100)).
+			MaxWidth(style.Percent(100)).
+			MinWidth(style.Percent(0))
 
-	return kitex.Box(kitex.BoxProps{Style: wrapperStyle},
-		kitex.If(!props.HideHeader, func() kitex.Node {
-			return kitex.Box(kitex.BoxProps{Style: titleStyle},
-				kitex.Span(kitex.SpanProps{}, kitex.Text(strings.ToUpper(lang))),
-				kitex.Span(kitex.SpanProps{}, kitex.Text("READONLY")),
+		padY := 1
+		if props.Compact {
+			padY = 0
+		}
+
+		gutterStyle := style.S().
+			PaddingVertical(padY).
+			PaddingLeft(1).
+			PaddingRight(1).
+			TextAlign(style.TextAlignRight).
+			WhiteSpace(style.WhiteSpacePre)
+		if props.GutterMinWidth > 0 {
+			gutterStyle = gutterStyle.MinWidth(style.Cells(props.GutterMinWidth))
+		}
+		if t != nil {
+			gutterStyle = gutterStyle.Foreground(t.Color.Text.Tertiary)
+		}
+
+		separatorStyle := style.S().
+			PaddingVertical(padY)
+		if t != nil {
+			separatorStyle = separatorStyle.Foreground(t.Color.Border.Primary)
+		}
+
+		codeBoxStyle := style.S().
+			PaddingVertical(padY).
+			PaddingLeft(1).
+			PaddingRight(1).
+			Flex(1, 1, style.Cells(0)).
+			Width(style.Percent(100)).
+			MaxWidth(style.Percent(100)).
+			MinWidth(style.Percent(0)).
+			MinHeight(style.Cells(0)).
+			WhiteSpace(whiteSpace)
+		if t != nil {
+			codeBoxStyle = codeBoxStyle.Foreground(t.Color.Text.Secondary)
+		}
+		if props.Wrap {
+			codeBoxStyle = codeBoxStyle.
+				OverflowX(style.OverflowHidden).
+				OverflowWrap(style.OverflowWrapBreakWord)
+		} else {
+			codeBoxStyle = codeBoxStyle.
+				OverflowX(style.OverflowAuto)
+		}
+
+		var gutterText string
+		var separatorText string
+		if props.ShowLineNumbers {
+			start := props.StartLine
+			if start <= 0 {
+				start = 1
+			}
+			lineCount := 0
+			if codeStr != "" {
+				lineCount = strings.Count(codeStr, "\n") + 1
+			}
+			var gutterBuilder strings.Builder
+			var sepBuilder strings.Builder
+			for i := 0; i < lineCount; i++ {
+				if i > 0 {
+					gutterBuilder.WriteByte('\n')
+					sepBuilder.WriteByte('\n')
+				}
+				fmt.Fprintf(&gutterBuilder, "%d", start+i)
+				sepBuilder.WriteString("│")
+			}
+			gutterText = gutterBuilder.String()
+			separatorText = sepBuilder.String()
+		}
+
+		var codeContainer kitex.Node
+		if props.ShowLineNumbers {
+			codeContainer = kitex.Box(kitex.BoxProps{Style: rowStyle},
+				kitex.Box(kitex.BoxProps{Style: gutterStyle},
+					kitex.Text(gutterText),
+				),
+				kitex.Box(kitex.BoxProps{Style: separatorStyle},
+					kitex.Text(separatorText),
+				),
+				kitex.Box(kitex.BoxProps{Style: codeBoxStyle},
+					contentNodes...,
+				),
 			)
-		}),
-		codeContainer,
-	)
+		} else {
+			codeContainer = kitex.Box(kitex.BoxProps{Style: codeStyle},
+				contentNodes...,
+			)
+		}
+
+		return kitex.Box(kitex.BoxProps{Style: wrapperStyle},
+			kitex.If(!props.HideHeader, func() kitex.Node {
+				return kitex.Box(kitex.BoxProps{Style: titleStyle},
+					kitex.Span(kitex.SpanProps{}, kitex.Text(strings.ToUpper(lang))),
+					kitex.Span(kitex.SpanProps{}, kitex.Text("READONLY")),
+				)
+			}),
+			codeContainer,
+		)
+	}, []any{
+		t,
+		props.Code,
+		props.Lang,
+		props.HideHeader,
+		props.ShowLineNumbers,
+		props.StartLine,
+		props.Compact,
+		props.Wrap,
+		props.GutterMinWidth,
+		props.Style,
+	})
 })
 
 func getThemeColor(t *theme.Scheme, key string, fallback color.Color) color.Color {

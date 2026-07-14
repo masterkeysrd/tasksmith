@@ -180,6 +180,8 @@ github.com/masterkeysrd/kite v0.0.3 h1:rYQXfZaLpj0vgHz9EnhrNin1N4py/Rv9oNuWIcEjC
 github.com/masterkeysrd/kite v0.0.3/go.mod h1:qZ99zwRPtPPVF4CIZJX2DroO0eesJt3dip1Q+RIFWS0=
 github.com/masterkeysrd/kite v0.0.4-0.20260711035535-53e809cf57af h1:tUT68KMFYSLKembfWiJGMNQKUoqAy3DeN3zXff7xjmE=
 github.com/masterkeysrd/kite v0.0.4-0.20260711035535-53e809cf57af/go.mod h1:qZ99zwRPtPPVF4CIZJX2DroO0eesJt3dip1Q+RIFWS0=
+github.com/masterkeysrd/kite v0.0.4-0.20260714050143-e82e251c1355 h1:FwmLeWKx8q3fRoxv6vZIqGH5T5Mj4zRqAoykXo4GS14=
+github.com/masterkeysrd/kite v0.0.4-0.20260714050143-e82e251c1355/go.mod h1:qZ99zwRPtPPVF4CIZJX2DroO0eesJt3dip1Q+RIFWS0=
 github.com/masterkeysrd/loom v0.0.3-0.20260705022420-14d867a3d5e1 h1:9Xwcfy0npuWesCg+ETvm1VwzW41omCJRmB2RPgqQSlw=
 github.com/masterkeysrd/loom v0.0.3-0.20260705022420-14d867a3d5e1/go.mod h1:3sm1pl5ulIDzqRmNkDVT9YaGwz3ZXTcLEu3fza4RXl0=
 github.com/masterkeysrd/loom v0.0.3 h1:O/eLp+4b38qTNWnOrhDRblwbSMcq6EusLZXnSsZ3KRg=

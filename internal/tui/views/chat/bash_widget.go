@@ -255,7 +255,12 @@ var BashToolWidget = kitex.FC("BashToolWidget", func(props ToolExecutionProps) k
 						return kitex.Box(kitex.BoxProps{
 							Style: style.S().
 								Foreground(textCol).
-								Italic(true),
+								Italic(true).
+								Width(style.Cells(wrapWidth)).
+								MaxWidth(style.Cells(wrapWidth)).
+								MinWidth(style.Percent(0)).
+								WhiteSpace(style.WhiteSpacePreWrap).
+								OverflowWrap(style.OverflowWrapBreakWord),
 						}, kitex.Text(description))
 					}),
 					// Input: codeblock without header or borders
@@ -266,8 +271,10 @@ var BashToolWidget = kitex.FC("BashToolWidget", func(props ToolExecutionProps) k
 						}
 						return kitex.Box(kitex.BoxProps{
 							Style: style.S().
-								Width(style.Percent(100)).
-								MinWidth(style.Percent(0)),
+								Width(style.Cells(wrapWidth)).
+								MaxWidth(style.Cells(wrapWidth)).
+								MinWidth(style.Percent(0)).
+								Overflow(style.OverflowHidden),
 						},
 							components.CodeBlock(components.CodeBlockProps{
 								Code:       "$ " + command,
