@@ -177,6 +177,22 @@ var Message = kitex.FC("Message", func(props MessageProps) kitex.Node {
 		}, children...)
 	}
 
+	// Only render the first TextBlock for non-assistant roles (e.g. user).
+	// User messages are always structured as [userText, attachmentsXML?] by session.go —
+	// the attachments block is context for the model and should not be displayed in the chat.
+	return UserMessageContent(UserMessageContentProps{
+		Content:       content,
+		OnViewPreview: props.OnViewPreview,
+	})
+})
+
+type UserMessageContentProps struct {
+	Content       message.Content
+	OnViewPreview func(title string, p preview.ToolPreview)
+}
+
+var UserMessageContent = kitex.FC("UserMessageContent", func(props UserMessageContentProps) kitex.Node {
+	content := props.Content
 	// Parse attachments XML from any block containing it
 	var attachmentsXML string
 	for _, block := range content {

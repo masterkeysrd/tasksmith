@@ -485,8 +485,8 @@ func main() {
 						Height(style.Percent(100)),
 				},
 					chat.QueuedBubble(chat.QueuedBubbleProps{
-						ID:   id,
-						Text: text,
+						ID:      id,
+						Content: message.Content{&message.TextBlock{Text: text}},
 						OnEdit: func(msgID string) {
 							c.Log("Edit clicked: " + msgID)
 						},
@@ -510,19 +510,19 @@ func main() {
 				},
 					chat.QueuedBubble(chat.QueuedBubbleProps{
 						ID:       "msg-001",
-						Text:     "Can you add dark mode support to the settings panel?",
+						Content:  message.Content{&message.TextBlock{Text: "Can you add dark mode support to the settings panel?"}},
 						OnEdit:   func(id string) { c.Log("Edit: " + id) },
 						OnRemove: func(id string) { c.Log("Remove: " + id) },
 					}),
 					chat.QueuedBubble(chat.QueuedBubbleProps{
 						ID:       "msg-002",
-						Text:     "Also update the README with the new instructions.",
+						Content:  message.Content{&message.TextBlock{Text: "Also update the README with the new instructions."}},
 						OnEdit:   func(id string) { c.Log("Edit: " + id) },
 						OnRemove: func(id string) { c.Log("Remove: " + id) },
 					}),
 					chat.QueuedBubble(chat.QueuedBubbleProps{
-						ID:   "opt_msg-003",
-						Text: "This one is optimistic — no Edit/Remove actions.",
+						ID:      "opt_msg-003",
+						Content: message.Content{&message.TextBlock{Text: "This one is optimistic — no Edit/Remove actions."}},
 					}),
 				)
 			},

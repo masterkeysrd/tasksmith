@@ -1103,6 +1103,7 @@ func renderChatView(props ViewProps) kitex.Node {
 					append(queuedMessages, optimisticMessages()...),
 					handleEditQueuedMessage,
 					handleRemoveQueuedMessage,
+					onViewPreview,
 				)...,
 			),
 
@@ -1378,6 +1379,7 @@ func renderQueuedBubbles(
 	queuedMessages message.MessageList,
 	onEdit func(string),
 	onRemove func(string),
+	onViewPreview func(title string, p preview.ToolPreview),
 ) []kitex.Node {
 	if len(queuedMessages) == 0 {
 		return nil
@@ -1396,23 +1398,13 @@ func renderQueuedBubbles(
 
 		msgID := msg.GetID()
 
-		var texts []string
-		for _, block := range msg.GetContent() {
-			if tb, ok := block.(*message.TextBlock); ok {
-				cleaned := tryExtractTextFromJSON(tb.Text)
-				texts = append(texts, cleaned)
-			}
-		}
-		if len(texts) == 0 {
-			continue
-		}
-
 		nodes = append(nodes, QueuedBubble(QueuedBubbleProps{
-			Key:      "queued-" + msgID,
-			ID:       msgID,
-			Text:     strings.Join(texts, "\n"),
-			OnEdit:   onEdit,
-			OnRemove: onRemove,
+			Key:           "queued-" + msgID,
+			ID:            msgID,
+			Content:       msg.GetContent(),
+			OnEdit:        onEdit,
+			OnRemove:      onRemove,
+			OnViewPreview: onViewPreview,
 		}))
 	}
 

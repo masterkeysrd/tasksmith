@@ -6,7 +6,8 @@ import (
 	"github.com/masterkeysrd/kite/event"
 	"github.com/masterkeysrd/kite/extras/kitex"
 	"github.com/masterkeysrd/kite/style"
-	"github.com/masterkeysrd/tasksmith/internal/tui/components"
+	"github.com/masterkeysrd/loom/message"
+	"github.com/masterkeysrd/tasksmith/internal/core/preview"
 	"github.com/masterkeysrd/tasksmith/internal/tui/components/icon"
 	"github.com/masterkeysrd/tasksmith/internal/tui/theme"
 )
@@ -17,12 +18,14 @@ type QueuedBubbleProps struct {
 	// ID is the message ID. If it starts with "opt_" the bubble is treated as
 	// optimistic (no Edit/Remove actions shown).
 	ID string
-	// Text is the message content to display.
-	Text string
+	// Content is the message content blocks.
+	Content message.Content
 	// OnEdit is called when the user clicks [Edit].
 	OnEdit func(id string)
 	// OnRemove is called when the user clicks [Remove].
 	OnRemove func(id string)
+	// OnViewPreview is called when clicking an attachment pill.
+	OnViewPreview func(title string, p preview.ToolPreview)
 }
 
 // QueuedBubble renders a single queued user message bubble with optional
@@ -95,6 +98,15 @@ var QueuedBubble = kitex.FC("QueuedBubble", func(props QueuedBubbleProps) kitex.
 		Overflow(style.OverflowHidden).
 		Foreground(t.Color.Text.Tertiary)
 
+	body := UserMessageContent(UserMessageContentProps{
+		Content:       props.Content,
+		OnViewPreview: props.OnViewPreview,
+	})
+
+	if body == nil {
+		return nil
+	}
+
 	return kitex.Box(kitex.BoxProps{
 		Style: style.S().
 			Width(style.Percent(100)).
@@ -113,11 +125,7 @@ var QueuedBubble = kitex.FC("QueuedBubble", func(props QueuedBubbleProps) kitex.
 					Width(style.Percent(100)).
 					MaxWidth(style.Percent(100)).
 					Overflow(style.OverflowHidden),
-			},
-				components.Markdown(components.MarkdownProps{
-					Source: props.Text,
-				}),
-			),
+			}, body),
 		),
 	)
 })
