@@ -152,7 +152,12 @@ var AuthorizationHybridSelector = kitex.FC("AuthorizationHybridSelector", func(p
 				isHSelected := props.SelectedOptionIndex == pillIdx
 				label := formatTargetLabel(opt)
 
-				pillStyle := style.S().MarginRight(2)
+				pillStyle := style.S().
+					MarginRight(2).
+					MaxWidth(style.Percent(100)).
+					MinWidth(style.Percent(0)).
+					WhiteSpace(style.WhiteSpacePreWrap).
+					OverflowWrap(style.OverflowWrapBreakWord)
 				if isCmdFocused && isHSelected {
 					pillStyle = pillStyle.Background(color.RGBA{R: 0, G: 255, B: 0, A: 20}).Padding(0, 1)
 				}
@@ -182,8 +187,12 @@ var AuthorizationHybridSelector = kitex.FC("AuthorizationHybridSelector", func(p
 				Style: style.S().
 					Display(style.DisplayFlex).
 					FlexDirection(style.FlexRow).
+					FlexWrap(style.FlexWrapOn).
 					AlignItems(style.AlignCenter).
-					PaddingLeft(4),
+					PaddingLeft(4).
+					Width(style.Percent(100)).
+					MaxWidth(style.Percent(100)).
+					MinWidth(style.Percent(0)),
 				OnClick: func(e event.Event) {
 					if props.OnSelectVertical != nil {
 						props.OnSelectVertical(s.CmdFocus)
@@ -230,7 +239,12 @@ var AuthorizationHybridSelector = kitex.FC("AuthorizationHybridSelector", func(p
 				label = opt.Target
 			}
 
-			pillStyle := style.S().MarginRight(2)
+			pillStyle := style.S().
+				MarginRight(2).
+				MaxWidth(style.Percent(100)).
+				MinWidth(style.Percent(0)).
+				WhiteSpace(style.WhiteSpacePreWrap).
+				OverflowWrap(style.OverflowWrapBreakWord)
 			if isDirFocused && isHSelected {
 				pillStyle = pillStyle.Background(color.RGBA{R: 255, G: 255, B: 0, A: 20}).Padding(0, 1)
 			}
@@ -261,7 +275,10 @@ var AuthorizationHybridSelector = kitex.FC("AuthorizationHybridSelector", func(p
 				Display(style.DisplayFlex).
 				FlexDirection(style.FlexColumn).
 				MarginTop(1).
-				PaddingLeft(1),
+				PaddingLeft(1).
+				Width(style.Percent(100)).
+				MaxWidth(style.Percent(100)).
+				MinWidth(style.Percent(0)),
 			OnClick: func(e event.Event) {
 				if props.OnSelectVertical != nil {
 					props.OnSelectVertical(FocusItemDirectory)
@@ -275,8 +292,12 @@ var AuthorizationHybridSelector = kitex.FC("AuthorizationHybridSelector", func(p
 				Style: style.S().
 					Display(style.DisplayFlex).
 					FlexDirection(style.FlexRow).
+					FlexWrap(style.FlexWrapOn).
 					AlignItems(style.AlignCenter).
-					PaddingLeft(2),
+					PaddingLeft(2).
+					Width(style.Percent(100)).
+					MaxWidth(style.Percent(100)).
+					MinWidth(style.Percent(0)),
 			}, dirPills...),
 		)
 	}
@@ -285,7 +306,11 @@ var AuthorizationHybridSelector = kitex.FC("AuthorizationHybridSelector", func(p
 		Style: style.S().
 			Display(style.DisplayFlex).
 			FlexDirection(style.FlexColumn).
-			Gap(0),
+			Gap(0).
+			Width(style.Percent(100)).
+			MaxWidth(style.Percent(100)).
+			MinWidth(style.Percent(0)).
+			Overflow(style.OverflowHidden),
 	},
 		append(rows, kitex.If(dirSection != nil, func() kitex.Node { return dirSection }))...,
 	)
@@ -753,7 +778,10 @@ var AuthorizationWidget = kitex.FC("AuthorizationWidget", func(props Authorizati
 				PaddingTop(0).
 				PaddingHorizontal(1).
 				PaddingBottom(1).
-				Width(style.Percent(100)),
+				Width(style.Percent(100)).
+				MaxWidth(style.Percent(100)).
+				MinWidth(style.Percent(0)).
+				Overflow(style.OverflowHidden),
 		},
 			// Header
 			kitex.Box(kitex.BoxProps{
@@ -792,20 +820,54 @@ var AuthorizationWidget = kitex.FC("AuthorizationWidget", func(props Authorizati
 			// Context details
 			kitex.If(req.Description != "", func() kitex.Node {
 				return kitex.Box(kitex.BoxProps{
-					Style: style.S().Display(style.DisplayFlex).FlexDirection(style.FlexRow).Gap(1).MarginBottom(1),
+					Style: style.S().
+						Display(style.DisplayFlex).
+						FlexDirection(style.FlexRow).
+						Gap(1).
+						MarginBottom(1).
+						Width(style.Percent(100)).
+						MaxWidth(style.Percent(100)).
+						MinWidth(style.Percent(0)),
 				},
 					kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Secondary).MinWidth(style.Cells(9))}, kitex.Text("Context")),
-					kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Tertiary).Italic(true)}, kitex.Text(req.Description)),
+					kitex.Box(kitex.BoxProps{
+						Style: style.S().
+							Foreground(t.Color.Text.Tertiary).
+							Italic(true).
+							Flex(1, 1, style.Cells(0)).
+							Width(style.Percent(100)).
+							MaxWidth(style.Percent(100)).
+							MinWidth(style.Percent(0)).
+							WhiteSpace(style.WhiteSpacePreWrap).
+							OverflowWrap(style.OverflowWrapBreakWord),
+					}, kitex.Text(req.Description)),
 				)
 			}),
 
 			// Action details
 			kitex.If(currReq != nil, func() kitex.Node {
 				return kitex.Box(kitex.BoxProps{
-					Style: style.S().Display(style.DisplayFlex).FlexDirection(style.FlexRow).Gap(1).MarginBottom(1),
+					Style: style.S().
+						Display(style.DisplayFlex).
+						FlexDirection(style.FlexRow).
+						Gap(1).
+						MarginBottom(1).
+						Width(style.Percent(100)).
+						MaxWidth(style.Percent(100)).
+						MinWidth(style.Percent(0)),
 				},
 					kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Secondary).MinWidth(style.Cells(9))}, kitex.Text("Action")),
-					kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Purple).Bold(true)}, kitex.Text(currReq.Description)),
+					kitex.Box(kitex.BoxProps{
+						Style: style.S().
+							Foreground(t.Color.Text.Purple).
+							Bold(true).
+							Flex(1, 1, style.Cells(0)).
+							Width(style.Percent(100)).
+							MaxWidth(style.Percent(100)).
+							MinWidth(style.Percent(0)).
+							WhiteSpace(style.WhiteSpacePreWrap).
+							OverflowWrap(style.OverflowWrapBreakWord),
+					}, kitex.Text(currReq.Description)),
 				)
 			}),
 
@@ -1067,6 +1129,7 @@ var AuthorizationPreviewModal = kitex.FCC("AuthorizationPreviewModal", func(prop
 	t := theme.UseTheme()
 	localInputRef := kitex.UseRef[dom.Element](nil)
 	previewRef := kitex.UseRef[dom.Element](nil)
+
 	kitex.UseEffect(func() {
 		if props.IsProvidingFeedback {
 			kitex.PostMacro(func() {
@@ -1409,8 +1472,11 @@ var AuthorizationPreviewModal = kitex.FCC("AuthorizationPreviewModal", func(prop
 				},
 				Style: style.S().
 					Flex(7, 7, style.Cells(0)).
+					Width(style.Percent(100)).
+					MaxWidth(style.Percent(100)).
+					MinWidth(style.Percent(0)).
 					MinHeight(style.Cells(0)).
-					MinWidth(style.Cells(0)).
+					OverflowX(style.OverflowAuto).
 					OverflowY(style.OverflowAuto).
 					BorderRight(true, style.SingleBorder(), t.Color.Border.Primary).
 					PaddingRight(2),
@@ -1422,14 +1488,23 @@ var AuthorizationPreviewModal = kitex.FCC("AuthorizationPreviewModal", func(prop
 			kitex.Box(kitex.BoxProps{
 				Style: style.S().
 					Flex(5, 5, style.Cells(0)).
+					Width(style.Percent(100)).
+					MaxWidth(style.Percent(100)).
+					MinWidth(style.Percent(0)).
 					Display(style.DisplayFlex).
 					FlexDirection(style.FlexColumn).
 					MinHeight(style.Cells(0)).
-					MinWidth(style.Cells(0)),
+					OverflowX(style.OverflowAuto),
 			},
 				// Details Body Scroller
 				kitex.Box(kitex.BoxProps{
-					Style: style.S().Flex(1, 1, style.Cells(0)).MinHeight(style.Cells(0)).OverflowY(style.OverflowAuto),
+					Style: style.S().
+						Flex(1, 1, style.Cells(0)).
+						MinHeight(style.Cells(0)).
+						Width(style.Percent(100)).
+						MaxWidth(style.Percent(100)).
+						MinWidth(style.Percent(0)).
+						OverflowY(style.OverflowAuto),
 				},
 					kitex.If(currReq != nil, func() kitex.Node {
 						var pendingNodes []kitex.Node
@@ -1593,10 +1668,25 @@ func renderHint(t *theme.Scheme, keys, action string) kitex.Node {
 
 func renderMetadataRow(t *theme.Scheme, label, val string) kitex.Node {
 	return kitex.Box(kitex.BoxProps{
-		Style: style.S().Display(style.DisplayFlex).FlexDirection(style.FlexRow).Gap(1),
+		Style: style.S().
+			Display(style.DisplayFlex).
+			FlexDirection(style.FlexRow).
+			Gap(1).
+			Width(style.Percent(100)).
+			MaxWidth(style.Percent(100)).
+			MinWidth(style.Percent(0)),
 	},
 		kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Secondary).MinWidth(style.Cells(12))}, kitex.Text(label)),
-		kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Primary)}, kitex.Text(val)),
+		kitex.Box(kitex.BoxProps{
+			Style: style.S().
+				Foreground(t.Color.Text.Primary).
+				Flex(1, 1, style.Cells(0)).
+				Width(style.Percent(100)).
+				MaxWidth(style.Percent(100)).
+				MinWidth(style.Percent(0)).
+				WhiteSpace(style.WhiteSpacePreWrap).
+				OverflowWrap(style.OverflowWrapBreakWord),
+		}, kitex.Text(val)),
 	)
 }
 

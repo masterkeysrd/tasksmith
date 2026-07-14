@@ -17,6 +17,7 @@ import (
 	kitelog "github.com/masterkeysrd/kite/log"
 	"github.com/masterkeysrd/kite/style"
 	"github.com/masterkeysrd/loom/message"
+	"github.com/masterkeysrd/tasksmith/internal/agent/permissions"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	"github.com/masterkeysrd/tasksmith/internal/tui/components"
 	"github.com/masterkeysrd/tasksmith/internal/tui/plugin/autocomplete"
@@ -813,6 +814,156 @@ func main() {
 			},
 		}
 	}
+
+	stg.Register("Chat/Widgets/AuthorizationWidget", []stage.Scene{
+		{
+			Name: "Interactive Demo",
+			Render: func(c *stage.Context) kitex.Node {
+				toolName := c.Text("Tool Name", "bash")
+				desc := c.Text("Description", "Run command: git commit")
+				actionText := c.Text("Action", "Allow command")
+				target := c.Text("Target", "git commit -m \"feat: add auth widget\"")
+				isActive := c.Bool("Is Active", true)
+				showPreview := c.Bool("Show Preview", false)
+				decided := c.Select("Decision", []string{"none", "approved", "denied"}, "none")
+
+				var localDec *permissions.AuthorizationDecision
+				if decided == "approved" {
+					localDec = &permissions.AuthorizationDecision{
+						ToolCallID: "tc-001",
+						Approved:   true,
+						Scope:      permissions.ScopeOnce,
+					}
+				} else if decided == "denied" {
+					localDec = &permissions.AuthorizationDecision{
+						ToolCallID: "tc-001",
+						Approved:   false,
+						Scope:      permissions.ScopeOnce,
+					}
+				}
+
+				req := permissions.AuthorizationRequest{
+					ToolCallID:  "tc-001",
+					ToolName:    toolName,
+					Description: desc,
+					Payload:     map[string]any{"command": target},
+					GrantRequests: []permissions.PermissionGrantRequest{
+						{
+							ID:          "grant-001",
+							Description: actionText,
+							Options: []permissions.PermissionOption{
+								{
+									Label:       "Allow exact command",
+									Target:      target,
+									MatchMethod: "exact",
+									Action:      permissions.ActionAllow,
+								},
+								{
+									Label:       "Allow any git command",
+									Target:      "git",
+									MatchMethod: "prefix",
+									Action:      permissions.ActionAllow,
+								},
+							},
+							AllowedScopes: []permissions.PermissionScope{
+								permissions.ScopeOnce,
+								permissions.ScopeSession,
+								permissions.ScopeWorkspace,
+								permissions.ScopeGlobal,
+							},
+						},
+					},
+				}
+
+				previewOpen, setPreviewOpen := kitex.UseState(showPreview)
+				kitex.UseEffect(func() {
+					if previewOpen() != showPreview {
+						setPreviewOpen(showPreview)
+					}
+				}, []any{showPreview})
+
+				return kitex.Box(kitex.BoxProps{
+					Style: style.S().Padding(2).Width(style.Percent(100)).Height(style.Percent(100)),
+				},
+					chat.AuthorizationWidget(chat.AuthorizationWidgetProps{
+						Request:   req,
+						SessionID: "session-123",
+						IsActive:  isActive,
+						OnDecision: func(dec permissions.AuthorizationDecision) {
+							c.Log(fmt.Sprintf("Decision: approved=%v, scope=%s", dec.Approved, dec.Scope))
+						},
+						LocalDecision:       localDec,
+						ShowPreviewModal:    previewOpen(),
+						SetShowPreviewModal: setPreviewOpen,
+					}),
+				)
+			},
+		},
+		{
+			Name: "File Read Request",
+			Render: func(c *stage.Context) kitex.Node {
+				path := c.Text("Path", "/Users/davidmorales/Projects/tasksmith/internal/tui/views/chat/view.go")
+				isActive := c.Bool("Is Active", true)
+
+				req := permissions.AuthorizationRequest{
+					ToolCallID:  "tc-002",
+					ToolName:    "read_file",
+					Description: "Read file: " + path,
+					Payload:     map[string]any{"path": path},
+					GrantRequests: []permissions.PermissionGrantRequest{
+						{
+							ID:          "grant-002",
+							Description: "File Read access",
+							Options: []permissions.PermissionOption{
+								{
+									Label:       "Read file specifically",
+									Target:      path,
+									MatchMethod: "exact",
+									Action:      permissions.ActionAllow,
+								},
+							},
+							DirectoryOptions: []permissions.PermissionOption{
+								{
+									Label:       "Restrict to subdirectory 'views/chat'",
+									Target:      "/Users/davidmorales/Projects/tasksmith/internal/tui/views/chat",
+									MatchMethod: "path",
+									Action:      permissions.ActionAllow,
+								},
+								{
+									Label:       "Restrict to workspace 'tasksmith'",
+									Target:      "/Users/davidmorales/Projects/tasksmith",
+									MatchMethod: "path",
+									Action:      permissions.ActionAllow,
+								},
+							},
+							AllowedScopes: []permissions.PermissionScope{
+								permissions.ScopeOnce,
+								permissions.ScopeSession,
+								permissions.ScopeWorkspace,
+							},
+						},
+					},
+				}
+
+				previewOpen, setPreviewOpen := kitex.UseState(false)
+
+				return kitex.Box(kitex.BoxProps{
+					Style: style.S().Padding(2).Width(style.Percent(100)).Height(style.Percent(100)),
+				},
+					chat.AuthorizationWidget(chat.AuthorizationWidgetProps{
+						Request:   req,
+						SessionID: "session-123",
+						IsActive:  isActive,
+						OnDecision: func(dec permissions.AuthorizationDecision) {
+							c.Log(fmt.Sprintf("Decision: approved=%v, scope=%s", dec.Approved, dec.Scope))
+						},
+						ShowPreviewModal:    previewOpen(),
+						SetShowPreviewModal: setPreviewOpen,
+					}),
+				)
+			},
+		},
+	})
 
 	stg.Register("Chat/Widgets/BashToolWidget", []stage.Scene{
 		{
