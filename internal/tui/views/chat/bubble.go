@@ -3,7 +3,9 @@ package chat
 import (
 	"encoding/json"
 	"fmt"
+	"hash/fnv"
 	"image/color"
+	"io"
 	"strings"
 	"time"
 
@@ -33,7 +35,7 @@ type BubbleGroupProps struct {
 }
 
 var BubbleGroup = kitex.FC("BubbleGroup", func(props BubbleGroupProps) kitex.Node {
-	msgKey := computeMsgsKey(props.Msgs)
+	msgHash := computeMsgsHash(props.Msgs)
 	var authKey string
 	if len(props.PendingAuthorizations) > 0 {
 		var sb strings.Builder
@@ -208,7 +210,7 @@ var BubbleGroup = kitex.FC("BubbleGroup", func(props BubbleGroupProps) kitex.Nod
 	}, []any{
 		props.Key,
 		props.Role,
-		msgKey,
+		msgHash,
 		props.IsGenerating,
 		props.LiveThinkingTime,
 		authKey,
@@ -502,26 +504,27 @@ var Bubble = kitex.FC("Bubble", func(props BubbleProps) kitex.Node {
 	)
 })
 
-func computeMsgsKey(msgs []message.Message) string {
-	var sb strings.Builder
+func computeMsgsHash(msgs []message.Message) uint64 {
+	h := fnv.New64a()
 	for _, msg := range msgs {
-		sb.WriteString(string(msg.Role()))
+		io.WriteString(h, msg.GetID())
+		io.WriteString(h, string(msg.Role()))
 		for _, b := range msg.GetContent() {
 			switch block := b.(type) {
 			case *message.TextBlock:
-				sb.WriteString(block.Text)
+				io.WriteString(h, block.Text)
 			case *message.ThinkingBlock:
-				sb.WriteString(block.Thinking)
+				io.WriteString(h, block.Thinking)
 			case *message.ToolCall:
-				sb.WriteString(block.ID)
-				sb.WriteString(block.Name)
+				io.WriteString(h, block.ID)
+				io.WriteString(h, block.Name)
 				if data, err := json.Marshal(block.Args); err == nil {
-					sb.Write(data)
+					h.Write(data)
 				}
 			}
 		}
 	}
-	return sb.String()
+	return h.Sum64()
 }
 
 func isSystemNotification(msg message.Message) bool {

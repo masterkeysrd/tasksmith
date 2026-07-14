@@ -21,23 +21,20 @@ type CollapsibleThinkingProps struct {
 var CollapsibleThinking = kitex.FC("CollapsibleThinking", func(props CollapsibleThinkingProps) kitex.Node {
 	t := theme.UseTheme()
 
-	lines := strings.Split(strings.TrimSpace(props.Content), "\n")
+	expanded, setExpanded := kitex.UseState(false)
+
 	const previewLines = 10
-	hasMore := len(lines) > previewLines
+	var previewText string
+	var detailsText string
+	var hasMore bool
+
+	if strings.TrimSpace(props.Content) != "" {
+		previewText, detailsText, hasMore = getPreviewAndDetails(props.Content, previewLines, expanded())
+	}
 
 	var fg color.Color
 	if t != nil {
 		fg = t.Color.Text.Tertiary
-	}
-
-	previewText := ""
-	detailsText := ""
-
-	if hasMore {
-		previewText = strings.Join(lines[:previewLines], "\n")
-		detailsText = strings.Join(lines[previewLines:], "\n")
-	} else {
-		previewText = strings.TrimSpace(props.Content)
 	}
 
 	bodyStyle := style.S().
@@ -45,9 +42,14 @@ var CollapsibleThinking = kitex.FC("CollapsibleThinking", func(props Collapsible
 		Display(style.DisplayFlex).
 		FlexDirection(style.FlexColumn)
 
+	isExp := expanded()
 	return components.Accordion(components.AccordionProps{
-		Color:   components.PaperHover,
-		Variant: components.PaperOutlined,
+		Color:    components.PaperHover,
+		Variant:  components.PaperOutlined,
+		Expanded: &isExp,
+		OnChange: func(val bool) {
+			setExpanded(val)
+		},
 	},
 		components.AccordionSummary(components.AccordionSummaryProps{
 			HideExpandIcon: !hasMore,
@@ -56,7 +58,8 @@ var CollapsibleThinking = kitex.FC("CollapsibleThinking", func(props Collapsible
 				if t != nil {
 					fg = t.Color.Text.Secondary
 				}
-				label := fmt.Sprintf("%d more lines", len(lines)-previewLines)
+				moreLinesCount := countRemainingLines(props.Content, previewLines)
+				label := fmt.Sprintf("%d more lines", moreLinesCount)
 				return kitex.Span(kitex.SpanProps{Style: style.S().Foreground(fg)}, kitex.Text(label))
 			}),
 		},
@@ -95,7 +98,7 @@ var CollapsibleThinking = kitex.FC("CollapsibleThinking", func(props Collapsible
 			}, kitex.Text(previewText)),
 		),
 		// Details: overflow lines, only visible when expanded.
-		kitex.If(hasMore, func() kitex.Node {
+		kitex.If(hasMore && expanded(), func() kitex.Node {
 			return components.AccordionDetails(components.AccordionDetailsProps{Style: bodyStyle},
 				kitex.Box(kitex.BoxProps{
 					Style: style.S().Foreground(fg).WhiteSpace(style.WhiteSpacePreWrap),
@@ -104,6 +107,63 @@ var CollapsibleThinking = kitex.FC("CollapsibleThinking", func(props Collapsible
 		}),
 	)
 })
+
+func getPreviewAndDetails(s string, maxLines int, needDetails bool) (preview string, details string, hasMore bool) {
+	pos := 0
+	count := 0
+	for count < maxLines {
+		idx := strings.IndexByte(s[pos:], '\n')
+		if idx == -1 {
+			return strings.TrimSpace(s), "", false
+		}
+		pos += idx + 1
+		count++
+	}
+
+	// Check if there is actual content after the maxLines-th newline
+	if strings.TrimSpace(s[pos:]) == "" {
+		return strings.TrimSpace(s), "", false
+	}
+
+	preview = strings.TrimSuffix(s[:pos], "\n")
+	hasMore = true
+	if needDetails {
+		details = strings.TrimSpace(s[pos:])
+	}
+	return preview, details, hasMore
+}
+
+func countRemainingLines(s string, maxLines int) int {
+	pos := 0
+	count := 0
+	for count < maxLines {
+		idx := strings.IndexByte(s[pos:], '\n')
+		if idx == -1 {
+			return 0
+		}
+		pos += idx + 1
+		count++
+	}
+
+	if strings.TrimSpace(s[pos:]) == "" {
+		return 0
+	}
+
+	remaining := 0
+	sub := s[pos:]
+	for {
+		idx := strings.IndexByte(sub, '\n')
+		if idx == -1 {
+			if strings.TrimSpace(sub) != "" {
+				remaining++
+			}
+			break
+		}
+		remaining++
+		sub = sub[idx+1:]
+	}
+	return remaining
+}
 
 func formatThinkingDuration(d time.Duration) string {
 	if d <= 0 {
