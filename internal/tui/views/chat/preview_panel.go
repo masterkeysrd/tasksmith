@@ -285,6 +285,7 @@ func renderBashPreview(t *theme.Scheme, payload map[string]any, previewData prev
 		Lang:            "bash",
 		HideHeader:      true,
 		ShowLineNumbers: false,
+		Wrap:            true,
 	})
 }
 

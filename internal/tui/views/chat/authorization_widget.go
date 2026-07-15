@@ -1584,27 +1584,121 @@ var AuthorizationPreviewModal = kitex.FCC("AuthorizationPreviewModal", func(prop
 						OverflowY(style.OverflowAuto),
 				},
 					kitex.If(currReq != nil, func() kitex.Node {
-						var pendingNodes []kitex.Node
-						pendingNodes = append(pendingNodes, renderMetadataRow(t, "Request ID", currReq.ID))
-						pendingNodes = append(pendingNodes, renderMetadataRow(t, "Description", currReq.Description))
+						var detailNodes []kitex.Node
 
-						if len(currReq.Options) > 0 {
-							opt := currReq.Options[props.SelectedOptionIndex]
-							pendingNodes = append(pendingNodes, renderMetadataRow(t, "Action", string(opt.Action)))
-							pendingNodes = append(pendingNodes, renderMetadataRow(t, "Target", opt.Target))
+						// 1. Context (Description)
+						if req.Description != "" {
+							detailNodes = append(detailNodes, kitex.Box(kitex.BoxProps{
+								Style: style.S().
+									Display(style.DisplayFlex).
+									FlexDirection(style.FlexRow).
+									Gap(1).
+									MarginBottom(1).
+									Width(style.Percent(100)).
+									MaxWidth(style.Percent(100)).
+									MinWidth(style.Percent(0)),
+							},
+								kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Secondary).MinWidth(style.Cells(12))}, kitex.Text("Context")),
+								kitex.Box(kitex.BoxProps{
+									Style: style.S().
+										Foreground(t.Color.Text.Tertiary).
+										Italic(true).
+										Flex(1, 1, style.Cells(0)).
+										Width(style.Percent(100)).
+										MaxWidth(style.Percent(100)).
+										MinWidth(style.Percent(0)).
+										WhiteSpace(style.WhiteSpacePreWrap).
+										OverflowWrap(style.OverflowWrapBreakWord),
+								}, kitex.Text(req.Description)),
+							))
 						}
 
+						// 3. Action/Target details
+						if len(currReq.Options) > 0 {
+							opt := currReq.Options[props.SelectedOptionIndex]
+
+							detailNodes = append(detailNodes, kitex.Box(kitex.BoxProps{
+								Style: style.S().
+									Display(style.DisplayFlex).
+									FlexDirection(style.FlexRow).
+									Gap(1).
+									MarginBottom(1).
+									Width(style.Percent(100)).
+									MaxWidth(style.Percent(100)).
+									MinWidth(style.Percent(0)),
+							},
+								kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Secondary).MinWidth(style.Cells(12))}, kitex.Text("Action")),
+								kitex.Box(kitex.BoxProps{
+									Style: style.S().
+										Foreground(t.Color.Surface.Primary).
+										Bold(true).
+										Flex(1, 1, style.Cells(0)).
+										Width(style.Percent(100)).
+										MaxWidth(style.Percent(100)).
+										MinWidth(style.Percent(0)),
+								}, kitex.Text(string(opt.Action))),
+							))
+
+							detailNodes = append(detailNodes, kitex.Box(kitex.BoxProps{
+								Style: style.S().
+									Display(style.DisplayFlex).
+									FlexDirection(style.FlexRow).
+									Gap(1).
+									MarginBottom(1).
+									Width(style.Percent(100)).
+									MaxWidth(style.Percent(100)).
+									MinWidth(style.Percent(0)),
+							},
+								kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Secondary).MinWidth(style.Cells(12))}, kitex.Text("Target")),
+								kitex.Box(kitex.BoxProps{
+									Style: style.S().
+										Foreground(t.Color.Text.Purple).
+										Bold(true).
+										Flex(1, 1, style.Cells(0)).
+										Width(style.Percent(100)).
+										MaxWidth(style.Percent(100)).
+										MinWidth(style.Percent(0)).
+										WhiteSpace(style.WhiteSpacePreWrap).
+										OverflowWrap(style.OverflowWrapBreakWord),
+								}, kitex.Text(opt.Target)),
+							))
+						}
+
+						// 4. Scope Directory
 						if len(currReq.DirectoryOptions) > 0 {
 							dirOpt := currReq.DirectoryOptions[props.SelectedDirIndex]
-							pendingNodes = append(pendingNodes, renderMetadataRow(t, "Scope Dir", dirOpt.Target))
+							detailNodes = append(detailNodes, kitex.Box(kitex.BoxProps{
+								Style: style.S().
+									Display(style.DisplayFlex).
+									FlexDirection(style.FlexRow).
+									Gap(1).
+									MarginBottom(1).
+									Width(style.Percent(100)).
+									MaxWidth(style.Percent(100)).
+									MinWidth(style.Percent(0)),
+							},
+								kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Secondary).MinWidth(style.Cells(12))}, kitex.Text("Scope Dir")),
+								kitex.Box(kitex.BoxProps{
+									Style: style.S().
+										Foreground(t.Color.Text.Primary).
+										Flex(1, 1, style.Cells(0)).
+										Width(style.Percent(100)).
+										MaxWidth(style.Percent(100)).
+										MinWidth(style.Percent(0)).
+										WhiteSpace(style.WhiteSpacePreWrap).
+										OverflowWrap(style.OverflowWrapBreakWord),
+								}, kitex.Text(dirOpt.Target)),
+							))
 						}
 
 						return kitex.Box(kitex.BoxProps{
 							Style: style.S().Display(style.DisplayFlex).FlexDirection(style.FlexColumn).Gap(0),
 						},
 							append([]kitex.Node{
-								kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Secondary).Bold(true)}, kitex.Text("Pending Grants:")),
-							}, pendingNodes...)...,
+								kitex.Box(kitex.BoxProps{
+									Style: style.S().MarginBottom(1),
+								}, kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Secondary).Bold(true)}, kitex.Text("Pending Grants:"))),
+							}, detailNodes...)...,
 						)
 					}),
 
