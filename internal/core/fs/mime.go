@@ -8,10 +8,25 @@ import (
 	"strings"
 )
 
+var customExtensionMimes = map[string]string{
+	".sql": "text/x-sql",
+}
+
+var nonBinaryMimes = map[string]struct{}{
+	"application/json": {},
+	"application/yaml": {},
+	"application/x-sh": {},
+	"application/sql":  {},
+}
+
 // DetectMIMEType detects the MIME type of a file based on its extension or content.
 func DetectMIMEType(path string) string {
 	ext := filepath.Ext(path)
 	if ext != "" {
+		extLower := strings.ToLower(ext)
+		if customMime, ok := customExtensionMimes[extLower]; ok {
+			return customMime
+		}
 		mimeType := mime.TypeByExtension(ext)
 		if mimeType != "" {
 			if parts := strings.Split(mimeType, ";"); len(parts) > 0 {
@@ -43,7 +58,7 @@ func IsBinaryMIME(mimeStr string) bool {
 	if strings.HasPrefix(mimeStr, "text/") {
 		return false
 	}
-	if mimeStr == "application/json" || mimeStr == "application/yaml" || mimeStr == "application/x-sh" {
+	if _, ok := nonBinaryMimes[mimeStr]; ok {
 		return false
 	}
 	return true

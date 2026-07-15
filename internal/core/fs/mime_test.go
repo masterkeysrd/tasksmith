@@ -34,4 +34,21 @@ func TestMimeDetection(t *testing.T) {
 	if !IsBinaryMIME(mimeType) {
 		t.Error("expected image/png to be binary")
 	}
+
+	sqlPath := filepath.Join(dir, "test.sql")
+	if err := os.WriteFile(sqlPath, []byte("SELECT 1;"), 0644); err != nil {
+		t.Fatalf("failed to write test.sql: %v", err)
+	}
+	mimeType = DetectMIMEType(sqlPath)
+	if mimeType != "text/x-sql" {
+		t.Errorf("expected text/x-sql, got %s", mimeType)
+	}
+	if IsBinaryMIME(mimeType) {
+		t.Error("expected SQL mime type to not be binary")
+	}
+
+	// Verify application/sql is also considered non-binary
+	if IsBinaryMIME("application/sql") {
+		t.Error("expected application/sql to not be binary")
+	}
 }

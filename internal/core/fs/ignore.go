@@ -87,7 +87,7 @@ func (ig *ignorer) ShouldIgnore(name, fullPath string, isDir bool) bool {
 	}
 
 	// Ignore TaskSmith's own sessions and changes directories
-	for _, p := range strings.Split(filepath.ToSlash(fullPath), "/") {
+	for p := range strings.SplitSeq(filepath.ToSlash(fullPath), "/") {
 		if p == "sessions" || p == "changes" {
 			return true
 		}
@@ -105,8 +105,8 @@ func (ig *ignorer) ShouldIgnore(name, fullPath string, isDir bool) bool {
 	if ig.repoRoot != "" {
 		rel, err := filepath.Rel(ig.repoRoot, absPath)
 		if err == nil && !strings.HasPrefix(rel, "..") {
-			parts := strings.Split(filepath.ToSlash(rel), "/")
-			for _, part := range parts {
+			parts := strings.SplitSeq(filepath.ToSlash(rel), "/")
+			for part := range parts {
 				if _, ok := defaultIgnoreNames[part]; ok {
 					return true
 				}
@@ -115,8 +115,8 @@ func (ig *ignorer) ShouldIgnore(name, fullPath string, isDir bool) bool {
 	} else if ig.scanDir != "" {
 		rel, err := filepath.Rel(ig.scanDir, absPath)
 		if err == nil && !strings.HasPrefix(rel, "..") {
-			parts := strings.Split(filepath.ToSlash(rel), "/")
-			for _, part := range parts {
+			parts := strings.SplitSeq(filepath.ToSlash(rel), "/")
+			for part := range parts {
 				if _, ok := defaultIgnoreNames[part]; ok {
 					return true
 				}
@@ -149,8 +149,8 @@ func isDirIgnored(dir, repoRoot string) bool {
 	if repoRoot != "" {
 		rel, err := filepath.Rel(repoRoot, dir)
 		if err == nil && !strings.HasPrefix(rel, "..") {
-			parts := strings.Split(filepath.ToSlash(rel), "/")
-			for _, part := range parts {
+			parts := strings.SplitSeq(filepath.ToSlash(rel), "/")
+			for part := range parts {
 				if _, ok := defaultIgnoreNames[part]; ok {
 					return true
 				}
@@ -168,10 +168,7 @@ func isDirIgnored(dir, repoRoot string) bool {
 	}
 
 	current := dir
-	for {
-		if current == "" || current == "." || current == string(filepath.Separator) {
-			break
-		}
+	for current != "" && current != "." && current != string(filepath.Separator) {
 		if boundary != "" && (current == boundary || isDescendant(boundary, current)) {
 			break
 		}
