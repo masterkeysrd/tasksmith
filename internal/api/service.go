@@ -1153,6 +1153,42 @@ func (s *Service) SetPermissionMode(ctx context.Context, req SetPermissionModeRe
 	return &SetPermissionModeResponse{Success: true}, nil
 }
 
+// GetPermissions retrieves all stored permissions across all active scopes.
+func (s *Service) GetPermissions(ctx context.Context, req GetPermissionsRequest) (*GetPermissionsResponse, error) {
+	pm, err := s.newPermissionManager(ctx, req.SessionID)
+	if err != nil {
+		return nil, err
+	}
+
+	all, err := pm.GetAllPermissions(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	permsMap := make(map[string][]permissions.Permission)
+	for scope, list := range all {
+		permsMap[string(scope)] = list
+	}
+
+	return &GetPermissionsResponse{
+		Permissions: permsMap,
+	}, nil
+}
+
+// DeletePermission removes a stored permission from the given scope.
+func (s *Service) DeletePermission(ctx context.Context, req DeletePermissionRequest) (*DeletePermissionResponse, error) {
+	pm, err := s.newPermissionManager(ctx, req.SessionID)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := pm.DeletePermission(ctx, req.Scope, req.Permission); err != nil {
+		return nil, err
+	}
+
+	return &DeletePermissionResponse{Success: true}, nil
+}
+
 // GetTokenAnalytics aggregates token usage statistics.
 func (s *Service) GetTokenAnalytics(ctx context.Context, req GetTokenAnalyticsRequest) (*GetTokenAnalyticsResponse, error) {
 	resp := &GetTokenAnalyticsResponse{

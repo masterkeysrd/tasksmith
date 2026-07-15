@@ -180,3 +180,51 @@ func TestFSManager_NewFSManagerPaths(t *testing.T) {
 		t.Error("sessionPath should not be empty")
 	}
 }
+
+func TestFSManager_GetAllAndDelete(t *testing.T) {
+	tmpDir := t.TempDir()
+	globalPath := filepath.Join(tmpDir, "global_perms.json")
+	workspacePath := filepath.Join(tmpDir, "ws_perms.json")
+	sessionPath := filepath.Join(tmpDir, "sess_perms.json")
+
+	mgr := NewFSManagerWithPaths(globalPath, workspacePath, sessionPath)
+	ctx := context.Background()
+
+	p1 := Permission{Group: "bash", Target: "npm *", MatchMethod: "wildcard", Action: ActionAllow}
+	p2 := Permission{Group: "write_file", Target: "internal/**", MatchMethod: "path", Action: ActionAllow}
+
+	if err := mgr.SavePermission(ctx, ScopeGlobal, p1); err != nil {
+		t.Fatalf("failed to save p1: %v", err)
+	}
+	if err := mgr.SavePermission(ctx, ScopeSession, p2); err != nil {
+		t.Fatalf("failed to save p2: %v", err)
+	}
+
+	all, err := mgr.GetAllPermissions(ctx)
+	if err != nil {
+		t.Fatalf("GetAllPermissions failed: %v", err)
+	}
+
+	if len(all[ScopeGlobal]) != 1 {
+		t.Errorf("expected 1 global permission, got %d", len(all[ScopeGlobal]))
+	}
+	if len(all[ScopeSession]) != 1 {
+		t.Errorf("expected 1 session permission, got %d", len(all[ScopeSession]))
+	}
+
+	// Now delete global permission
+	if err := mgr.DeletePermission(ctx, ScopeGlobal, p1); err != nil {
+		t.Fatalf("DeletePermission failed: %v", err)
+	}
+
+	all2, err := mgr.GetAllPermissions(ctx)
+	if err != nil {
+		t.Fatalf("GetAllPermissions 2 failed: %v", err)
+	}
+	if len(all2[ScopeGlobal]) != 0 {
+		t.Errorf("expected 0 global permissions after deletion, got %d", len(all2[ScopeGlobal]))
+	}
+	if len(all2[ScopeSession]) != 1 {
+		t.Errorf("expected 1 session permission to remain, got %d", len(all2[ScopeSession]))
+	}
+}

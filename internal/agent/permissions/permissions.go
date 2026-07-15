@@ -187,6 +187,12 @@ type PermissionManager interface {
 
 	// SavePermission persists a new grant/deny to the specified scope.
 	SavePermission(ctx context.Context, scope PermissionScope, perm Permission) error
+
+	// GetAllPermissions retrieves all stored permissions across all active scopes.
+	GetAllPermissions(ctx context.Context) (map[PermissionScope][]Permission, error)
+
+	// DeletePermission removes the specified permission from the given scope.
+	DeletePermission(ctx context.Context, scope PermissionScope, perm Permission) error
 }
 
 // ToolCallRequest represents a request to evaluate permissions for a tool call.

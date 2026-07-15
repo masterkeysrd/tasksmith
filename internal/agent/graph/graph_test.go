@@ -170,6 +170,24 @@ func (m *mockPermissionManager) SavePermission(ctx context.Context, scope permis
 	return nil
 }
 
+func (m *mockPermissionManager) GetAllPermissions(ctx context.Context) (map[permissions.PermissionScope][]permissions.Permission, error) {
+	res := make(map[permissions.PermissionScope][]permissions.Permission)
+	res[permissions.ScopeSession] = m.grants
+	return res, nil
+}
+
+func (m *mockPermissionManager) DeletePermission(ctx context.Context, scope permissions.PermissionScope, perm permissions.Permission) error {
+	var remaining []permissions.Permission
+	for _, p := range m.grants {
+		if p.Group == perm.Group && p.Target == perm.Target && p.MatchMethod == perm.MatchMethod && p.Action == perm.Action && p.AllowedDirectory == perm.AllowedDirectory {
+			continue
+		}
+		remaining = append(remaining, p)
+	}
+	m.grants = remaining
+	return nil
+}
+
 type dummyToolHandler struct {
 	evalRes permissions.EvaluationResult
 }

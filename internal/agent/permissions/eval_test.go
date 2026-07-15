@@ -80,6 +80,24 @@ func (m *mockPermissionManager) SavePermission(ctx context.Context, scope Permis
 	return nil
 }
 
+func (m *mockPermissionManager) GetAllPermissions(ctx context.Context) (map[PermissionScope][]Permission, error) {
+	res := make(map[PermissionScope][]Permission)
+	res[ScopeSession] = m.grants
+	return res, nil
+}
+
+func (m *mockPermissionManager) DeletePermission(ctx context.Context, scope PermissionScope, perm Permission) error {
+	var remaining []Permission
+	for _, p := range m.saved {
+		if p.Group == perm.Group && p.Target == perm.Target && p.MatchMethod == perm.MatchMethod && p.Action == perm.Action && p.AllowedDirectory == perm.AllowedDirectory {
+			continue
+		}
+		remaining = append(remaining, p)
+	}
+	m.saved = remaining
+	return nil
+}
+
 func TestEvaluateToolCallMultiGrant(t *testing.T) {
 	mockHandler := &mockMultiGrantHandler{}
 	RegisterHandler("multi_mock", mockHandler)

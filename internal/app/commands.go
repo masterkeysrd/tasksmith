@@ -330,13 +330,22 @@ func (app *Application) InitializeCommands() {
 		}
 	}))
 
-	command.Register("perm", func(ctx command.CommandContext) error {
+	command.Register("permissions", func(ctx command.CommandContext) error {
 		if len(ctx.Args) == 0 {
-			active.SetModal("permissionpicker")
+			active.SetModal("permissionsmanager")
 			return nil
 		}
 
-		modeStr := ctx.Args[0]
+		arg := ctx.Args[0]
+		modeStr := arg
+		if arg == "mode" {
+			if len(ctx.Args) == 1 {
+				active.SetModal("permissionpicker")
+				return nil
+			}
+			modeStr = ctx.Args[1]
+		}
+
 		var mode permissions.PermissionMode
 		switch modeStr {
 		case "auto":
@@ -346,7 +355,7 @@ func (app *Application) InitializeCommands() {
 		case "strict":
 			mode = permissions.ModeStrict
 		default:
-			return fmt.Errorf("perm: unknown mode %q (try 'auto', 'default', or 'strict')", modeStr)
+			return fmt.Errorf("permissions: unknown subcommand/mode %q (try 'mode', 'auto', 'default', or 'strict')", modeStr)
 		}
 
 		sessionID := active.GetSessionID()
@@ -356,7 +365,7 @@ func (app *Application) InitializeCommands() {
 			Scope:     permissions.ScopeSession,
 		})
 		if err != nil {
-			return fmt.Errorf("perm: failed to set mode: %w", err)
+			return fmt.Errorf("permissions: failed to set mode: %w", err)
 		}
 
 		if active.InvalidateSessionState != nil {
@@ -364,14 +373,22 @@ func (app *Application) InitializeCommands() {
 		}
 		return nil
 	}, command.Complete(func(ctx context.Context, args []string) []command.CompletionItem {
-		if len(args) > 1 {
-			return nil
+		if len(args) == 1 {
+			return []command.CompletionItem{
+				{Label: "mode", Sublabel: "Open interactive permission mode switcher modal"},
+				{Label: "auto", Sublabel: "Automatically approve all file/command permissions"},
+				{Label: "default", Sublabel: "Approve basic commands, prompt for sensitive actions"},
+				{Label: "strict", Sublabel: "Always prompt for approval"},
+			}
 		}
-		return []command.CompletionItem{
-			{Label: "auto", Sublabel: "Automatically approve all file/command permissions"},
-			{Label: "default", Sublabel: "Approve basic commands, prompt for sensitive actions"},
-			{Label: "strict", Sublabel: "Always prompt for approval"},
+		if len(args) == 2 && args[0] == "mode" {
+			return []command.CompletionItem{
+				{Label: "auto", Sublabel: "Set mode to Auto"},
+				{Label: "default", Sublabel: "Set mode to Default"},
+				{Label: "strict", Sublabel: "Set mode to Strict"},
+			}
 		}
+		return nil
 	}))
 
 	command.Register("agent", func(ctx command.CommandContext) error {

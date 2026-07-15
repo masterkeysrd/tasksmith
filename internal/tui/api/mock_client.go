@@ -32,6 +32,8 @@ type MockClient struct {
 	SubmitAuthorizationDecisionFunc func(ctx context.Context, req api.SubmitAuthorizationDecisionRequest) (*api.SubmitAuthorizationDecisionResponse, error)
 	ResolveMcpRequestFunc           func(ctx context.Context, req api.ResolveMcpRequest) (*api.ResolveMcpResponse, error)
 	SetPermissionModeFunc           func(ctx context.Context, req api.SetPermissionModeRequest) (*api.SetPermissionModeResponse, error)
+	GetPermissionsFunc              func(ctx context.Context, req api.GetPermissionsRequest) (*api.GetPermissionsResponse, error)
+	DeletePermissionFunc            func(ctx context.Context, req api.DeletePermissionRequest) (*api.DeletePermissionResponse, error)
 	GetTokenAnalyticsFunc           func(ctx context.Context, req api.GetTokenAnalyticsRequest) (*api.GetTokenAnalyticsResponse, error)
 	ConfigureLspFunc                func(ctx context.Context, req api.ConfigureLspRequest) (*api.ConfigureLspResponse, error)
 	DismissLspSuggestionFunc        func(ctx context.Context, req api.DismissLspSuggestionRequest) (*api.DismissLspSuggestionResponse, error)
@@ -208,6 +210,20 @@ func (m *MockClient) SetPermissionMode(ctx context.Context, req api.SetPermissio
 		return m.SetPermissionModeFunc(ctx, req)
 	}
 	return &api.SetPermissionModeResponse{}, nil
+}
+
+func (m *MockClient) GetPermissions(ctx context.Context, req api.GetPermissionsRequest) (*api.GetPermissionsResponse, error) {
+	if m.GetPermissionsFunc != nil {
+		return m.GetPermissionsFunc(ctx, req)
+	}
+	return &api.GetPermissionsResponse{}, nil
+}
+
+func (m *MockClient) DeletePermission(ctx context.Context, req api.DeletePermissionRequest) (*api.DeletePermissionResponse, error) {
+	if m.DeletePermissionFunc != nil {
+		return m.DeletePermissionFunc(ctx, req)
+	}
+	return &api.DeletePermissionResponse{}, nil
 }
 
 func (m *MockClient) GetTokenAnalytics(ctx context.Context, req api.GetTokenAnalyticsRequest) (*api.GetTokenAnalyticsResponse, error) {

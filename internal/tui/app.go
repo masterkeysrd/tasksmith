@@ -162,6 +162,7 @@ var Router = kitex.SimpleFC("Router", func() kitex.Node {
 				modelpicker.View(modelpicker.ViewProps{}),
 				effortpicker.View(effortpicker.ViewProps{}),
 				permissionsview.View(permissionsview.ViewProps{}),
+				permissionsview.ManagerView(permissionsview.ManagerViewProps{}),
 				agentpicker.View(agentpicker.ViewProps{}),
 			),
 		)

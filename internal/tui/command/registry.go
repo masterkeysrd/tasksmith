@@ -122,7 +122,17 @@ func GetCompleter(id string) CompleteFn {
 	return globalRegistry.getCompleter(id)
 }
 
+func resolveAlias(id string) string {
+	switch id {
+	case "perm", "perms":
+		return "permissions"
+	default:
+		return id
+	}
+}
+
 func (r *registry) getCompleter(id string) CompleteFn {
+	id = resolveAlias(id)
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return r.completers[id]
@@ -149,6 +159,7 @@ func ExecuteWithPayload(ctx context.Context, id string, payload any, args ...str
 
 // execute is the internal method on registry that looks up and runs a command.
 func (r *registry) execute(ctx context.Context, id string, payload any, args []string) error {
+	id = resolveAlias(id)
 	var activeContext string
 	r.mu.RLock()
 	var fn CommandFn

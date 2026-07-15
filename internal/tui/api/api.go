@@ -37,6 +37,8 @@ type Client interface {
 	SubmitAuthorizationDecision(ctx context.Context, req api.SubmitAuthorizationDecisionRequest) (*api.SubmitAuthorizationDecisionResponse, error)
 	ResolveMcpRequest(ctx context.Context, req api.ResolveMcpRequest) (*api.ResolveMcpResponse, error)
 	SetPermissionMode(ctx context.Context, req api.SetPermissionModeRequest) (*api.SetPermissionModeResponse, error)
+	GetPermissions(ctx context.Context, req api.GetPermissionsRequest) (*api.GetPermissionsResponse, error)
+	DeletePermission(ctx context.Context, req api.DeletePermissionRequest) (*api.DeletePermissionResponse, error)
 	GetTokenAnalytics(ctx context.Context, req api.GetTokenAnalyticsRequest) (*api.GetTokenAnalyticsResponse, error)
 	ConfigureLsp(ctx context.Context, req api.ConfigureLspRequest) (*api.ConfigureLspResponse, error)
 	DismissLspSuggestion(ctx context.Context, req api.DismissLspSuggestionRequest) (*api.DismissLspSuggestionResponse, error)
@@ -265,6 +267,18 @@ func (w *toastClient) GetMcpStatus(ctx context.Context, req api.GetMcpStatusRequ
 func (w *toastClient) SetPermissionMode(ctx context.Context, req api.SetPermissionModeRequest) (*api.SetPermissionModeResponse, error) {
 	res, err := w.delegate.SetPermissionMode(ctx, req)
 	toastError("Failed to Set Permission Mode", err)
+	return res, err
+}
+
+func (w *toastClient) GetPermissions(ctx context.Context, req api.GetPermissionsRequest) (*api.GetPermissionsResponse, error) {
+	res, err := w.delegate.GetPermissions(ctx, req)
+	toastError("Failed to Get Permissions", err)
+	return res, err
+}
+
+func (w *toastClient) DeletePermission(ctx context.Context, req api.DeletePermissionRequest) (*api.DeletePermissionResponse, error) {
+	res, err := w.delegate.DeletePermission(ctx, req)
+	toastError("Failed to Delete Permission", err)
 	return res, err
 }
 

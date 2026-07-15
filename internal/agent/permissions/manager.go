@@ -269,3 +269,93 @@ func (m *FSManager) writeFile(path string, content permissionFileContent) error 
 
 	return os.WriteFile(path, data, 0644)
 }
+
+// GetAllPermissions retrieves all stored permissions across all active scopes.
+func (m *FSManager) GetAllPermissions(ctx context.Context) (map[PermissionScope][]Permission, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	res := make(map[PermissionScope][]Permission)
+
+	scopes := []struct {
+		scope PermissionScope
+		path  string
+	}{
+		{ScopeSession, m.sessionPath},
+		{ScopeWorkspace, m.workspacePath},
+		{ScopeGlobal, m.globalPath},
+	}
+
+	for _, sc := range scopes {
+		if sc.path == "" {
+			continue
+		}
+		content, err := m.readFile(sc.path)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return nil, fmt.Errorf("failed to read %s permissions: %w", sc.scope, err)
+		}
+		if len(content.Permissions) > 0 {
+			res[sc.scope] = content.Permissions
+		} else {
+			res[sc.scope] = []Permission{}
+		}
+	}
+
+	return res, nil
+}
+
+// DeletePermission removes the specified permission from the given scope.
+func (m *FSManager) DeletePermission(ctx context.Context, scope PermissionScope, perm Permission) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	var path string
+	switch scope {
+	case ScopeSession:
+		path = m.sessionPath
+	case ScopeWorkspace:
+		path = m.workspacePath
+	case ScopeGlobal:
+		path = m.globalPath
+	default:
+		return fmt.Errorf("invalid permission scope for deletion: %q", scope)
+	}
+
+	if path == "" {
+		return fmt.Errorf("path for scope %q is not configured", scope)
+	}
+
+	content, err := m.readFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil // Nothing to delete
+		}
+		return fmt.Errorf("failed to read permissions file %q: %w", path, err)
+	}
+
+	newPerms := make([]Permission, 0, len(content.Permissions))
+	deleted := false
+	for _, p := range content.Permissions {
+		if p.Group == perm.Group &&
+			p.Target == perm.Target &&
+			p.MatchMethod == perm.MatchMethod &&
+			p.Action == perm.Action &&
+			p.AllowedDirectory == perm.AllowedDirectory {
+			deleted = true
+			continue
+		}
+		newPerms = append(newPerms, p)
+	}
+
+	if deleted {
+		content.Permissions = newPerms
+		if err := m.writeFile(path, content); err != nil {
+			return fmt.Errorf("failed to write permissions file after deletion: %w", err)
+		}
+	}
+
+	return nil
+}

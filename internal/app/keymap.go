@@ -144,4 +144,11 @@ func (app *Application) InitializeKeymap() {
 	keymap.Set([]mode.Mode{mode.Normal}, "\\pm", cyclePermissionMode, keymap.Description("Cycle Permission Mode"))
 	keymap.Set([]mode.Mode{mode.Normal}, " pm", cyclePermissionMode, keymap.Description("Cycle Permission Mode"))
 	keymap.Set([]mode.Mode{mode.Normal}, "<Space>pm", cyclePermissionMode, keymap.Description("Cycle Permission Mode"))
+
+	openPermissionsManager := func(ctx context.Context) {
+		active.SetModal("permissionsmanager")
+	}
+	keymap.Set([]mode.Mode{mode.Normal}, "\\p", openPermissionsManager, keymap.Description("Open Permissions Manager"))
+	keymap.Set([]mode.Mode{mode.Normal}, " p", openPermissionsManager, keymap.Description("Open Permissions Manager"))
+	keymap.Set([]mode.Mode{mode.Normal}, "<Space>p", openPermissionsManager, keymap.Description("Open Permissions Manager"))
 }

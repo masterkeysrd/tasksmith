@@ -330,6 +330,26 @@ type SetPermissionModeResponse struct {
 	Error   string `json:"error,omitempty"`
 }
 
+type GetPermissionsRequest struct {
+	SessionID string `json:"session_id"`
+}
+
+type GetPermissionsResponse struct {
+	Permissions map[string][]permissions.Permission `json:"permissions"`
+	Error       string                              `json:"error,omitempty"`
+}
+
+type DeletePermissionRequest struct {
+	SessionID  string                      `json:"session_id"`
+	Scope      permissions.PermissionScope `json:"scope"`
+	Permission permissions.Permission      `json:"permission"`
+}
+
+type DeletePermissionResponse struct {
+	Success bool   `json:"success"`
+	Error   string `json:"error,omitempty"`
+}
+
 type ResolveMcpRequest struct {
 	RequestID string                 `json:"request_id"`
 	Action    string                 `json:"action"`            // "accept", "reject" (for elicitation) or "cancel"
