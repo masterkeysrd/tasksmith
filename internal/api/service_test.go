@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/masterkeysrd/tasksmith/internal/agent/model"
 	coredb "github.com/masterkeysrd/tasksmith/internal/core/db"
 	"github.com/masterkeysrd/tasksmith/internal/core/lsp"
 	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
@@ -450,5 +451,112 @@ func TestRevertFileAPI(t *testing.T) {
 	}
 	if string(data) != "original content" {
 		t.Errorf("expected 'original content', got %q", string(data))
+	}
+}
+
+func TestConfigureSession(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	db, err := coredb.Open(tmpDir, "tasksmith.db")
+	if err != nil {
+		t.Fatalf("failed to open database: %v", err)
+	}
+	defer db.Close()
+
+	checkpointsDB, err := coredb.Open(tmpDir, "checkpoints.db")
+	if err != nil {
+		t.Fatalf("failed to open checkpoints database: %v", err)
+	}
+	defer checkpointsDB.Close()
+
+	store, err := session.NewSQLiteStore(db, checkpointsDB)
+	if err != nil {
+		t.Fatalf("failed to initialize sqlite store: %v", err)
+	}
+
+	tempFalse := false
+	tempTrue := true
+	wsMock := &mockWorkspace{
+		cwd: tmpDir,
+		providers: []*warp.ModelProvider{
+			{
+				BaseResource: warp.BaseResource{
+					Metadata: warp.Metadata{Name: "openai", DisplayName: "OpenAI"},
+				},
+				Spec: warp.ModelProviderSpec{
+					Type: "openai",
+					Models: []warp.ProviderModel{
+						{
+							ID:    "gpt-4o",
+							Name:  "gpt-4o",
+							Label: "GPT-4o",
+							Capabilities: &warp.ProviderModelCapabilities{
+								Temperature: &tempTrue,
+							},
+						},
+						{
+							ID:    "o1-mini",
+							Name:  "o1-mini",
+							Label: "o1-mini",
+							Capabilities: &warp.ProviderModelCapabilities{
+								Temperature: &tempFalse,
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	ws := workspace.New(tmpDir)
+	wsMock.cwd = ws.CWD()
+
+	manager := session.NewManager(session.ManagerConfig{
+		Store:     store,
+		Workspace: ws,
+	})
+
+	svc := NewService(wsMock, manager, nil, nil, nil)
+	ctx := context.Background()
+
+	sess, err := manager.CreateSession(ctx, "Test Session")
+	if err != nil {
+		t.Fatalf("failed to create session: %v", err)
+	}
+
+	tempVal := 0.7
+	_, err = svc.ConfigureSession(ctx, ConfigureSessionRequest{
+		SessionID: sess.ID,
+		Settings: &model.SessionSettings{
+			ProviderName: "openai",
+			ModelName:    "gpt-4o",
+			Temperature:  &tempVal,
+		},
+	})
+	if err != nil {
+		t.Fatalf("expected success configuring temperature on gpt-4o, got: %v", err)
+	}
+
+	_, err = svc.ConfigureSession(ctx, ConfigureSessionRequest{
+		SessionID: sess.ID,
+		Settings: &model.SessionSettings{
+			ProviderName: "openai",
+			ModelName:    "o1-mini",
+			Temperature:  &tempVal,
+		},
+	})
+	if err == nil {
+		t.Fatal("expected error when setting temperature on o1-mini, got nil")
+	}
+
+	_, err = svc.ConfigureSession(ctx, ConfigureSessionRequest{
+		SessionID: sess.ID,
+		Settings: &model.SessionSettings{
+			ProviderName: "openai",
+			ModelName:    "o1-mini",
+		},
+	})
+	if err != nil {
+		t.Fatalf("expected success switching model without setting temperature, got: %v", err)
 	}
 }

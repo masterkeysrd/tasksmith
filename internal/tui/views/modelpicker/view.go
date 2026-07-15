@@ -158,6 +158,11 @@ var View = kitex.FC("ModelPickerView", func(props ViewProps) kitex.Node {
 				Style: tagStyle,
 			}, kitex.Text("REASONING")))
 		}
+		if targetModel.Capabilities.Temperature {
+			badgeNodes = append(badgeNodes, kitex.Box(kitex.BoxProps{
+				Style: tagStyle,
+			}, kitex.Text("TEMPERATURE")))
+		}
 
 		if targetModel.OpenWeights {
 			badgeNodes = append(badgeNodes, kitex.Box(kitex.BoxProps{

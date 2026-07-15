@@ -127,6 +127,12 @@ func CreateProvider(ctx context.Context, p *warp.ModelProvider) (llm.Provider, e
 				ID:   m.ID,
 				Name: m.Name,
 			}
+			prof.Capabilities.Temperature = true // Default custom/dynamic models to support temperature
+		}
+
+		// Ollama provider models always support temperature by default
+		if p.Spec.Type == "ollama" {
+			prof.Capabilities.Temperature = true
 		}
 
 		// Apply Warp overrides
@@ -379,21 +385,31 @@ func New(ctx context.Context, cfg Config) (*llm.Model, error) {
 		modelConfig.MaxTokens = maxTokens
 	}
 
-	if cfg.Agent != nil && cfg.Agent.Agent != nil && cfg.Agent.Agent.Spec.Temperature > 0 {
-		tempVal := float32(cfg.Agent.Agent.Spec.Temperature)
-		if modelConfig == nil {
-			modelConfig = &llm.ModelConfig{}
+	// Check if temperature is supported by the resolved model profile
+	tempSupported := true
+	if cfg.Provider != nil {
+		if prof, found := cfg.Provider.GetProfile(cfg.ModelName); found {
+			tempSupported = prof.Capabilities.Temperature
 		}
-		modelConfig.Temperature = &tempVal
 	}
 
-	// Overlay temperature from session settings if present
-	if cfg.Settings.Temperature != nil {
-		tVal := float32(*cfg.Settings.Temperature)
-		if modelConfig == nil {
-			modelConfig = &llm.ModelConfig{}
+	if tempSupported {
+		if cfg.Agent != nil && cfg.Agent.Agent != nil && cfg.Agent.Agent.Spec.Temperature > 0 {
+			tempVal := float32(cfg.Agent.Agent.Spec.Temperature)
+			if modelConfig == nil {
+				modelConfig = &llm.ModelConfig{}
+			}
+			modelConfig.Temperature = &tempVal
 		}
-		modelConfig.Temperature = &tVal
+
+		// Overlay temperature from session settings if present
+		if cfg.Settings.Temperature != nil {
+			tVal := float32(*cfg.Settings.Temperature)
+			if modelConfig == nil {
+				modelConfig = &llm.ModelConfig{}
+			}
+			modelConfig.Temperature = &tVal
+		}
 	}
 
 	return llm.NewModel(cfg.Provider, cfg.ModelName, modelConfig)

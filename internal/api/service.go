@@ -737,6 +737,30 @@ func (s *Service) ConfigureSession(ctx context.Context, req ConfigureSessionRequ
 		}
 	}
 
+	// Validate temperature settings based on model capabilities
+	if req.Settings != nil && req.Settings.Temperature != nil {
+		var activeModel *Model
+		providersResp, err := s.ListProviders(ctx, ListProvidersRequest{})
+		if err == nil && providersResp != nil {
+			for _, p := range providersResp.Providers {
+				if p.Name == newSettings.ProviderName {
+					for _, m := range p.Models {
+						if m.ID == newSettings.ModelName {
+							activeModel = &m
+							break
+						}
+					}
+					break
+				}
+			}
+		}
+
+		if activeModel != nil && !activeModel.Capabilities.Temperature {
+			// Explicitly reject setting a temperature when the active model does not support it
+			return nil, fmt.Errorf("active model %q does not support temperature configuration", newSettings.ModelName)
+		}
+	}
+
 	cfg := session.SessionConfig{
 		Settings: newSettings,
 	}
