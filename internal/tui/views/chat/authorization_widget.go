@@ -342,6 +342,17 @@ var AuthorizationWidget = kitex.FC("AuthorizationWidget", func(props Authorizati
 	focusedItem, setFocusedItem := kitex.UseState(FocusItemOnce)
 	selectedOptionIndex, setSelectedOptionIndex := kitex.UseState(0)
 	selectedDirIndex, setSelectedDirIndex := kitex.UseState(0)
+	currentPage, setCurrentPage := kitex.UseState(0)
+	grantDecisionsState, setGrantDecisionsState := kitex.UseState([]permissions.GrantDecision(nil))
+
+	kitex.UseEffect(func() {
+		setCurrentPage(0)
+		setGrantDecisionsState(nil)
+		setSelectedOptionIndex(0)
+		setSelectedDirIndex(0)
+		setSelectedScopeIndex(0)
+		setFocusedItem(FocusItemOnce)
+	}, []any{req.ToolCallID})
 	var showPreviewModal func() bool
 	var setShowPreviewModal func(bool)
 	if props.SetShowPreviewModal != nil {
@@ -482,41 +493,85 @@ var AuthorizationWidget = kitex.FC("AuthorizationWidget", func(props Authorizati
 
 	handleApprove := func() {
 		scope := permissions.ScopeOnce
-		allowed := getAllowedScopes(req, 0)
+		allowed := getAllowedScopes(req, currentPage())
 		idx := selectedScopeIndex()
 		if idx >= 0 && idx < len(allowed) {
 			scope = allowed[idx]
 		}
 
-		var decisions []permissions.GrantDecision
-		for _, gr := range req.GrantRequests {
-			optIdx := selectedOptionIndex()
-			if optIdx < 0 || optIdx >= len(gr.Options) {
-				optIdx = 0
-			}
-			target := "*"
-			if len(gr.Options) > 0 {
-				target = gr.Options[optIdx].Target
-			}
+		gr := req.GrantRequests[currentPage()]
 
-			dirIdx := selectedDirIndex()
-			if dirIdx < 0 || dirIdx >= len(gr.DirectoryOptions) {
-				dirIdx = 0
-			}
-			allowedDir := "*"
-			if len(gr.DirectoryOptions) > 0 {
-				allowedDir = gr.DirectoryOptions[dirIdx].Target
-			}
-
-			decisions = append(decisions, permissions.GrantDecision{
-				RequestID:        gr.ID,
-				SelectedTarget:   target,
-				AllowedDirectory: allowedDir,
-				Scope:            scope,
-			})
+		optIdx := selectedOptionIndex()
+		if optIdx < 0 || optIdx >= len(gr.Options) {
+			optIdx = 0
+		}
+		target := "*"
+		if len(gr.Options) > 0 {
+			target = gr.Options[optIdx].Target
 		}
 
-		submitDecision(true, scope, decisions, "")
+		dirIdx := selectedDirIndex()
+		if dirIdx < 0 || dirIdx >= len(gr.DirectoryOptions) {
+			dirIdx = 0
+		}
+		allowedDir := "*"
+		if len(gr.DirectoryOptions) > 0 {
+			allowedDir = gr.DirectoryOptions[dirIdx].Target
+		}
+
+		newDecision := permissions.GrantDecision{
+			RequestID:        gr.ID,
+			SelectedTarget:   target,
+			AllowedDirectory: allowedDir,
+			Scope:            scope,
+		}
+
+		accumulated := append(grantDecisionsState(), newDecision)
+		setGrantDecisionsState(accumulated)
+
+		if currentPage() < len(req.GrantRequests)-1 {
+			nextPage := currentPage() + 1
+			setCurrentPage(nextPage)
+			setSelectedOptionIndex(0)
+			setSelectedDirIndex(0)
+			setSelectedScopeIndex(0)
+
+			// Determine default focused item based on the next page's first allowed scope
+			nextAllowed := getAllowedScopes(req, nextPage)
+			if len(nextAllowed) > 0 {
+				switch nextAllowed[0] {
+				case permissions.ScopeOnce:
+					setFocusedItem(FocusItemOnce)
+				case permissions.ScopeSession:
+					nextGr := req.GrantRequests[nextPage]
+					if len(nextGr.Options) > 0 {
+						setFocusedItem(FocusItemSessionCmd)
+					} else {
+						setFocusedItem(FocusItemSession)
+					}
+				case permissions.ScopeWorkspace:
+					nextGr := req.GrantRequests[nextPage]
+					if len(nextGr.Options) > 0 {
+						setFocusedItem(FocusItemWorkspaceCmd)
+					} else {
+						setFocusedItem(FocusItemWorkspace)
+					}
+				case permissions.ScopeGlobal:
+					nextGr := req.GrantRequests[nextPage]
+					if len(nextGr.Options) > 0 {
+						setFocusedItem(FocusItemGlobalCmd)
+					} else {
+						setFocusedItem(FocusItemGlobal)
+					}
+				default:
+					setFocusedItem(FocusItemOnce)
+				}
+			} else {
+				setFocusedItem(FocusItemOnce)
+			}
+		} else {
+			submitDecision(true, scope, accumulated, "")
+		}
 	}
 
 	handleDeny := func() {
@@ -561,7 +616,7 @@ var AuthorizationWidget = kitex.FC("AuthorizationWidget", func(props Authorizati
 			if isProvidingFeedback() || showCancelConfirmDialog() {
 				return
 			}
-			items := getVisibleItems(selectedScopeIndex(), req, 0)
+			items := getVisibleItems(selectedScopeIndex(), req, currentPage())
 			currItem := focusedItem()
 			currIdx := 0
 			for idx, it := range items {
@@ -586,7 +641,7 @@ var AuthorizationWidget = kitex.FC("AuthorizationWidget", func(props Authorizati
 				targetScope = permissions.ScopeGlobal
 			}
 			if targetScope != "" {
-				targetScopeIdx := getScopeIndex(req, 0, targetScope)
+				targetScopeIdx := getScopeIndex(req, currentPage(), targetScope)
 				if targetScopeIdx != -1 {
 					setSelectedScopeIndex(targetScopeIdx)
 				}
@@ -597,7 +652,7 @@ var AuthorizationWidget = kitex.FC("AuthorizationWidget", func(props Authorizati
 			if isProvidingFeedback() || showCancelConfirmDialog() {
 				return
 			}
-			items := getVisibleItems(selectedScopeIndex(), req, 0)
+			items := getVisibleItems(selectedScopeIndex(), req, currentPage())
 			currItem := focusedItem()
 			currIdx := 0
 			for idx, it := range items {
@@ -622,7 +677,7 @@ var AuthorizationWidget = kitex.FC("AuthorizationWidget", func(props Authorizati
 				targetScope = permissions.ScopeGlobal
 			}
 			if targetScope != "" {
-				targetScopeIdx := getScopeIndex(req, 0, targetScope)
+				targetScopeIdx := getScopeIndex(req, currentPage(), targetScope)
 				if targetScopeIdx != -1 {
 					setSelectedScopeIndex(targetScopeIdx)
 				}
@@ -634,7 +689,7 @@ var AuthorizationWidget = kitex.FC("AuthorizationWidget", func(props Authorizati
 				return
 			}
 			if len(req.GrantRequests) > 0 {
-				currReq := req.GrantRequests[0]
+				currReq := req.GrantRequests[currentPage()]
 				currItem := focusedItem()
 
 				switch currItem {
@@ -657,7 +712,7 @@ var AuthorizationWidget = kitex.FC("AuthorizationWidget", func(props Authorizati
 				return
 			}
 			if len(req.GrantRequests) > 0 {
-				currReq := req.GrantRequests[0]
+				currReq := req.GrantRequests[currentPage()]
 				currItem := focusedItem()
 
 				switch currItem {
@@ -765,7 +820,7 @@ var AuthorizationWidget = kitex.FC("AuthorizationWidget", func(props Authorizati
 	var currReqOptions []permissions.PermissionOption
 	var currReqDirOptions []permissions.PermissionOption
 	if len(req.GrantRequests) > 0 {
-		currReq = &req.GrantRequests[0]
+		currReq = &req.GrantRequests[currentPage()]
 		currReqOptions = currReq.Options
 		currReqDirOptions = currReq.DirectoryOptions
 	}
@@ -789,7 +844,14 @@ var AuthorizationWidget = kitex.FC("AuthorizationWidget", func(props Authorizati
 			},
 				kitex.Box(kitex.BoxProps{Style: style.S().Display(style.DisplayFlex).FlexDirection(style.FlexRow).Gap(1)},
 					kitex.Span(kitex.SpanProps{Style: style.S().Foreground(titleColor)}, icon.Alert),
-					kitex.Span(kitex.SpanProps{Style: style.S().Bold(true).Foreground(titleColor)}, kitex.Text("Authorization Required")),
+					kitex.Span(kitex.SpanProps{Style: style.S().Bold(true).Foreground(titleColor)}, kitex.Text(
+						func() string {
+							if len(req.GrantRequests) > 1 {
+								return fmt.Sprintf("Authorization Required (%d of %d)", currentPage()+1, len(req.GrantRequests))
+							}
+							return "Authorization Required"
+						}(),
+					)),
 				),
 				func() kitex.Node {
 					if props.LocalDecision != nil {
@@ -891,6 +953,9 @@ var AuthorizationWidget = kitex.FC("AuthorizationWidget", func(props Authorizati
 			// Interactive Selector Area (only if active)
 			kitex.If(isVisuallyActive, func() kitex.Node {
 				enterLabel := "Allow"
+				if currentPage() < len(req.GrantRequests)-1 {
+					enterLabel = "Next"
+				}
 				buttons := []kitex.Node{
 					components.Button(components.ButtonProps{
 						Variant:   components.ButtonText,
@@ -1024,7 +1089,7 @@ var AuthorizationWidget = kitex.FC("AuthorizationWidget", func(props Authorizati
 								SelectedOptionIndex: selectedOptionIndex(),
 								SelectedDirIndex:    selectedDirIndex(),
 								IsActive:            isVisuallyActive,
-								AllowedScopes:       getAllowedScopes(req, 0),
+								AllowedScopes:       getAllowedScopes(req, currentPage()),
 								OnSelectVertical:    setFocusedItem,
 								OnSelectScope:       setSelectedScopeIndex,
 								OnSelectOption:      setSelectedOptionIndex,
@@ -1052,6 +1117,7 @@ var AuthorizationWidget = kitex.FC("AuthorizationWidget", func(props Authorizati
 				return AuthorizationPreviewModal(AuthorizationPreviewModalProps{
 					IsOpen:              true,
 					Request:             req,
+					CurrentPage:         currentPage(),
 					FocusedItem:         focusedItem(),
 					SelectedScopeIndex:  selectedScopeIndex(),
 					SelectedOptionIndex: selectedOptionIndex(),
@@ -1104,6 +1170,7 @@ var AuthorizationWidget = kitex.FC("AuthorizationWidget", func(props Authorizati
 type AuthorizationPreviewModalProps struct {
 	IsOpen              bool
 	Request             permissions.AuthorizationRequest
+	CurrentPage         int
 	FocusedItem         FocusItem
 	SelectedScopeIndex  int
 	SelectedOptionIndex int
@@ -1172,7 +1239,7 @@ var AuthorizationPreviewModal = kitex.FCC("AuthorizationPreviewModal", func(prop
 	var currReqOptions []permissions.PermissionOption
 	var currReqDirOptions []permissions.PermissionOption
 	if len(req.GrantRequests) > 0 {
-		currReq = &req.GrantRequests[0]
+		currReq = &req.GrantRequests[props.CurrentPage]
 		currReqOptions = currReq.Options
 		currReqDirOptions = currReq.DirectoryOptions
 	}
@@ -1200,7 +1267,7 @@ var AuthorizationPreviewModal = kitex.FCC("AuthorizationPreviewModal", func(prop
 			if props.IsProvidingFeedback {
 				return
 			}
-			items := getVisibleItems(props.SelectedScopeIndex, req, 0)
+			items := getVisibleItems(props.SelectedScopeIndex, req, props.CurrentPage)
 			currItem := props.FocusedItem
 			currIdxItem := 0
 			for idx, it := range items {
@@ -1227,7 +1294,7 @@ var AuthorizationPreviewModal = kitex.FCC("AuthorizationPreviewModal", func(prop
 				targetScope = permissions.ScopeGlobal
 			}
 			if targetScope != "" {
-				targetScopeIdx := getScopeIndex(req, 0, targetScope)
+				targetScopeIdx := getScopeIndex(req, props.CurrentPage, targetScope)
 				if targetScopeIdx != -1 && props.OnSelectScope != nil {
 					props.OnSelectScope(targetScopeIdx)
 				}
@@ -1238,7 +1305,7 @@ var AuthorizationPreviewModal = kitex.FCC("AuthorizationPreviewModal", func(prop
 			if props.IsProvidingFeedback {
 				return
 			}
-			items := getVisibleItems(props.SelectedScopeIndex, req, 0)
+			items := getVisibleItems(props.SelectedScopeIndex, req, props.CurrentPage)
 			currItem := props.FocusedItem
 			currIdxItem := 0
 			for idx, it := range items {
@@ -1265,7 +1332,7 @@ var AuthorizationPreviewModal = kitex.FCC("AuthorizationPreviewModal", func(prop
 				targetScope = permissions.ScopeGlobal
 			}
 			if targetScope != "" {
-				targetScopeIdx := getScopeIndex(req, 0, targetScope)
+				targetScopeIdx := getScopeIndex(req, props.CurrentPage, targetScope)
 				if targetScopeIdx != -1 && props.OnSelectScope != nil {
 					props.OnSelectScope(targetScopeIdx)
 				}
@@ -1277,7 +1344,7 @@ var AuthorizationPreviewModal = kitex.FCC("AuthorizationPreviewModal", func(prop
 				return
 			}
 			if len(req.GrantRequests) > 0 {
-				currReq := req.GrantRequests[0]
+				currReq := req.GrantRequests[props.CurrentPage]
 				currItem := props.FocusedItem
 
 				switch currItem {
@@ -1300,7 +1367,7 @@ var AuthorizationPreviewModal = kitex.FCC("AuthorizationPreviewModal", func(prop
 				return
 			}
 			if len(req.GrantRequests) > 0 {
-				currReq := req.GrantRequests[0]
+				currReq := req.GrantRequests[props.CurrentPage]
 				currItem := props.FocusedItem
 
 				switch currItem {
@@ -1393,8 +1460,13 @@ var AuthorizationPreviewModal = kitex.FCC("AuthorizationPreviewModal", func(prop
 	}
 
 	return components.Modal(components.ModalProps{
-		IsOpen:     props.IsOpen,
-		Title:      kitex.Text("Authorization Preview"),
+		IsOpen: props.IsOpen,
+		Title: kitex.Text(func() string {
+			if len(req.GrantRequests) > 1 {
+				return fmt.Sprintf("Authorization Preview (%d of %d)", props.CurrentPage+1, len(req.GrantRequests))
+			}
+			return "Authorization Preview"
+		}()),
 		OnClose:    props.OnClose,
 		Attributes: map[string]string{"data-context": "modal:auth"},
 		BodyStyle:  style.S().OverflowY(style.OverflowHidden),
@@ -1416,7 +1488,12 @@ var AuthorizationPreviewModal = kitex.FCC("AuthorizationPreviewModal", func(prop
 					Color:     components.ButtonSuccess,
 					StartIcon: icon.Check,
 					OnClick:   props.OnApprove,
-				}, kitex.Text("Allow (Enter)")),
+				}, kitex.Text(func() string {
+					if props.CurrentPage < len(req.GrantRequests)-1 {
+						return "Next (Enter)"
+					}
+					return "Allow (Enter)"
+				}())),
 				components.Button(components.ButtonProps{
 					Variant:   components.ButtonText,
 					Color:     components.ButtonError,
@@ -1646,7 +1723,7 @@ var AuthorizationPreviewModal = kitex.FCC("AuthorizationPreviewModal", func(prop
 							SelectedOptionIndex: props.SelectedOptionIndex,
 							SelectedDirIndex:    props.SelectedDirIndex,
 							IsActive:            true,
-							AllowedScopes:       getAllowedScopes(req, 0),
+							AllowedScopes:       getAllowedScopes(req, props.CurrentPage),
 							OnSelectVertical:    props.OnSelectVertical,
 							OnSelectScope:       props.OnSelectScope,
 							OnSelectOption:      props.OnSelectOption,
@@ -1716,11 +1793,8 @@ func formatTargetLabel(opt permissions.PermissionOption) string {
 }
 
 func getAllowedScopes(req permissions.AuthorizationRequest, page int) []permissions.PermissionScope {
-	if page > 0 && len(req.GrantRequests) >= page {
-		return req.GrantRequests[page-1].AllowedScopes
-	}
-	if len(req.GrantRequests) > 0 {
-		return req.GrantRequests[0].AllowedScopes
+	if page >= 0 && len(req.GrantRequests) > page {
+		return req.GrantRequests[page].AllowedScopes
 	}
 	return []permissions.PermissionScope{
 		permissions.ScopeOnce,

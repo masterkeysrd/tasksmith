@@ -1030,7 +1030,22 @@ func (h *BashPermissionHandler) GetGrantRequests(
 			var op *shellguard.Operation
 			for i := range ops {
 				if ops[i].Command != nil {
-					if ops[i].Command == &parsedCmd || (ops[i].Command.Executable == parsedCmd.Executable && len(ops[i].Command.Args) == len(parsedCmd.Args)) {
+					match := false
+					if ops[i].Command == &parsedCmd {
+						match = true
+					} else if ops[i].Command.Executable == parsedCmd.Executable && len(ops[i].Command.Args) == len(parsedCmd.Args) {
+						argsMatch := true
+						for idx := range parsedCmd.Args {
+							if ops[i].Command.Args[idx] != parsedCmd.Args[idx] {
+								argsMatch = false
+								break
+							}
+						}
+						if argsMatch {
+							match = true
+						}
+					}
+					if match {
 						op = &ops[i]
 						break
 					}

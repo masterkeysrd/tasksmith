@@ -260,4 +260,33 @@ func TestBashPermissionHandler(t *testing.T) {
 	if reqsCdParent[0].Options[0].Target != "cd .." {
 		t.Errorf("expected target 'cd ..', got %q", reqsCdParent[0].Options[0].Target)
 	}
+
+	// 8. Pipeline test with same executables and arg count but different arguments (e.g. ollama ps && ollama ls)
+	// Both should generate individual requests, and if one has a grant, only the other is requested.
+	reqPipeline := permissions.ToolCallRequest{
+		ToolName: "bash",
+		Args:     map[string]any{"command": "cd /test/workspace && ollama ps && ollama ls"},
+	}
+	reqsPipeline := h.GetGrantRequests(ctx, reqPipeline, permissions.ModeDefault, nil)
+	if len(reqsPipeline) != 2 {
+		t.Fatalf("expected 2 requests for pipeline, got %d", len(reqsPipeline))
+	}
+	if reqsPipeline[0].Options[0].Target != "ollama ps" {
+		t.Errorf("expected first target 'ollama ps', got %q", reqsPipeline[0].Options[0].Target)
+	}
+	if reqsPipeline[1].Options[0].Target != "ollama ls" {
+		t.Errorf("expected second target 'ollama ls', got %q", reqsPipeline[1].Options[0].Target)
+	}
+
+	// Chained with one already granted
+	grantsPipeline := []permissions.Permission{
+		{Group: "command", Target: "ollama ps", MatchMethod: "exact", Action: permissions.ActionAllow},
+	}
+	reqsPipelineWithGrant := h.GetGrantRequests(ctx, reqPipeline, permissions.ModeDefault, grantsPipeline)
+	if len(reqsPipelineWithGrant) != 1 {
+		t.Fatalf("expected 1 request when one command is granted, got %d", len(reqsPipelineWithGrant))
+	}
+	if reqsPipelineWithGrant[0].Options[0].Target != "ollama ls" {
+		t.Errorf("expected remaining request target 'ollama ls', got %q", reqsPipelineWithGrant[0].Options[0].Target)
+	}
 }
