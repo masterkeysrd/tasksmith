@@ -1059,6 +1059,17 @@ func renderChatView(props ViewProps) kitex.Node {
 				})
 			}),
 
+			// Queued messages
+			kitex.Fragment(
+				renderQueuedBubbles(
+					t,
+					append(queuedMessages, optimisticMessages()...),
+					handleEditQueuedMessage,
+					handleRemoveQueuedMessage,
+					onViewPreview,
+				)...,
+			),
+
 			// Running Tasks Widget
 			kitex.If(stateQuery.Data != nil && len(stateQuery.Data.RunningTasks) > 0, func() kitex.Node {
 				return RunningTasksWidget(RunningTasksWidgetProps{
@@ -1095,17 +1106,6 @@ func renderChatView(props ViewProps) kitex.Node {
 					},
 				})
 			}),
-
-			// Queued messages
-			kitex.Fragment(
-				renderQueuedBubbles(
-					t,
-					append(queuedMessages, optimisticMessages()...),
-					handleEditQueuedMessage,
-					handleRemoveQueuedMessage,
-					onViewPreview,
-				)...,
-			),
 
 			// Scroll Anchor Box — keeps auto-scroll focused on the stream
 			kitex.Box(kitex.BoxProps{
