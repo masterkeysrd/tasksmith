@@ -175,7 +175,7 @@ func TestSessionManager(t *testing.T) {
 	}
 
 	// 8. List sessions
-	sessions, err := manager.ListSessions(ctx)
+	sessions, err := manager.ListSessions(ctx, session.ListSessionsQuery{})
 	if err != nil {
 		t.Fatalf("failed to list sessions: %v", err)
 	}

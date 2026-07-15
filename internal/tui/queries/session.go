@@ -10,10 +10,14 @@ import (
 	tuiapi "github.com/masterkeysrd/tasksmith/internal/tui/api"
 )
 
-// UseListSessions retrieves a reactive list of all user sessions.
-func UseListSessions() wind.Result[*api.ListSessionsResponse] {
+// UseListSessions retrieves a reactive list of user sessions.
+func UseListSessions(req ...api.ListSessionsRequest) wind.Result[*api.ListSessionsResponse] {
 	client := tuiapi.UseClient()
-	return wind.Use(api.ListSessionsRequest{}, promise.WrapWithProps(client.ListSessions))
+	r := api.ListSessionsRequest{}
+	if len(req) > 0 {
+		r = req[0]
+	}
+	return wind.Use(r, promise.WrapWithProps(client.ListSessions))
 }
 
 // UseGetSessionMessages retrieves a reactive message log for the given session.

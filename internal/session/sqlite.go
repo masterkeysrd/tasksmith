@@ -65,10 +65,16 @@ func (s *sqliteStore) CreateSession(ctx context.Context, sd SessionData) error {
 	return err
 }
 
-func (s *sqliteStore) ListSessions(ctx context.Context) ([]SessionData, error) {
+func (s *sqliteStore) ListSessions(ctx context.Context, query ListSessionsQuery) ([]SessionData, error) {
 	var sessions []SessionData
-	query := `SELECT id, title, todos, last_turn_metrics, settings, created_at, updated_at FROM sessions WHERE archived_at IS NULL ORDER BY updated_at DESC`
-	err := s.db.SelectContext(ctx, &sessions, query)
+	sqlStr := `SELECT id, title, todos, last_turn_metrics, settings, created_at, updated_at FROM sessions WHERE archived_at IS NULL ORDER BY updated_at DESC`
+	var err error
+	if query.Limit > 0 {
+		sqlStr += " LIMIT ? OFFSET ?"
+		err = s.db.SelectContext(ctx, &sessions, sqlStr, query.Limit, query.Offset)
+	} else {
+		err = s.db.SelectContext(ctx, &sessions, sqlStr)
+	}
 	return sessions, err
 }
 

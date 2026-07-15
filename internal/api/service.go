@@ -552,7 +552,10 @@ func (s *Service) ListSessions(ctx context.Context, req ListSessionsRequest) (*L
 	if s.sm == nil {
 		return &ListSessionsResponse{}, nil
 	}
-	sessions, err := s.sm.ListSessions(ctx)
+	sessions, err := s.sm.ListSessions(ctx, session.ListSessionsQuery{
+		Limit:  req.Limit,
+		Offset: req.Offset,
+	})
 	if err != nil {
 		return nil, err
 	}

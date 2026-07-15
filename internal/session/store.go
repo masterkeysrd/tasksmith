@@ -51,12 +51,18 @@ type SessionConfig struct {
 	Settings model.SessionSettings `db:"settings"`
 }
 
+// ListSessionsQuery contains query parameters for listing sessions.
+type ListSessionsQuery struct {
+	Limit  int
+	Offset int
+}
+
 // Store defines the storage repository contract.
 // It remains completely decoupled from Loom-specific logic, UUID formatting, and validation.
 type Store interface {
 	CreateSession(ctx context.Context, s SessionData) error
 	GetSession(ctx context.Context, id string) (*SessionData, error)
-	ListSessions(ctx context.Context) ([]SessionData, error)
+	ListSessions(ctx context.Context, query ListSessionsQuery) ([]SessionData, error)
 	RenameSession(ctx context.Context, id, title string) error
 	UpdateSessionConfig(ctx context.Context, id string, cfg SessionConfig) error
 	UpdateSessionTodos(ctx context.Context, id string, todosJSON string) error

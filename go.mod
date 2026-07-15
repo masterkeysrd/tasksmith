@@ -6,21 +6,25 @@ require (
 	github.com/JohannesKaufmann/html-to-markdown v1.6.0
 	github.com/PuerkitoBio/goquery v1.12.0
 	github.com/alecthomas/chroma/v2 v2.27.0
+	github.com/anthropics/anthropic-sdk-go v1.56.0
 	github.com/fsnotify/fsnotify v1.10.1
 	github.com/go-git/go-git/v5 v5.19.1
 	github.com/google/uuid v1.6.0
 	github.com/jmoiron/sqlx v1.4.0
 	github.com/lrstanley/go-nf v0.0.0-20260418212552-215ab243b591
-	github.com/masterkeysrd/kite v0.0.4-0.20260714050143-e82e251c1355
+	github.com/masterkeysrd/kite v0.0.4-0.20260715041832-3224546b4bec
 	github.com/masterkeysrd/loom v0.0.4-0.20260711030105-60d4b1b463e3
 	github.com/masterkeysrd/lspx v0.0.0-20260611065943-6cf2ef01a123
 	github.com/masterkeysrd/warp v0.0.3-0.20260712054341-01be5a9aebda
 	github.com/modelcontextprotocol/go-sdk v1.6.1
+	github.com/ollama/ollama v0.31.2
+	github.com/openai/openai-go/v3 v3.41.1
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2
 	github.com/refraction-networking/utls v1.8.2
 	github.com/yuin/goldmark v1.8.2
 	golang.org/x/net v0.57.0
 	golang.org/x/sync v0.22.0
+	google.golang.org/genai v1.63.0
 	gopkg.in/yaml.v3 v3.0.1
 	modernc.org/sqlite v1.53.0
 	mvdan.cc/sh/v3 v3.13.1
@@ -35,7 +39,6 @@ require (
 	github.com/ProtonMail/go-crypto v1.4.1 // indirect
 	github.com/andybalholm/brotli v1.2.2 // indirect
 	github.com/andybalholm/cascadia v1.3.4 // indirect
-	github.com/anthropics/anthropic-sdk-go v1.56.0 // indirect
 	github.com/bahlo/generic-list-go v0.2.0 // indirect
 	github.com/buger/jsonparser v1.2.0 // indirect
 	github.com/cenkalti/backoff/v5 v5.0.3 // indirect
@@ -77,8 +80,6 @@ require (
 	github.com/mattn/go-runewidth v0.0.24 // indirect
 	github.com/muesli/cancelreader v0.2.2 // indirect
 	github.com/ncruces/go-strftime v1.0.0 // indirect
-	github.com/ollama/ollama v0.31.2 // indirect
-	github.com/openai/openai-go/v3 v3.41.1 // indirect
 	github.com/pb33f/ordered-map/v2 v2.3.1 // indirect
 	github.com/pjbgf/sha1cd v0.6.0 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
@@ -113,7 +114,6 @@ require (
 	golang.org/x/sys v0.47.0 // indirect
 	golang.org/x/text v0.40.0 // indirect
 	google.golang.org/api v0.288.0 // indirect
-	google.golang.org/genai v1.63.0 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20260706201446-f0a921348800 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260706201446-f0a921348800 // indirect
 	google.golang.org/grpc v1.82.0 // indirect

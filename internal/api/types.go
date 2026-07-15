@@ -180,6 +180,8 @@ type GetWorkspaceConfigResponse struct {
 }
 
 type ListSessionsRequest struct {
+	Limit  int `json:"limit,omitempty"`
+	Offset int `json:"offset,omitempty"`
 }
 
 type ListSessionsResponse struct {

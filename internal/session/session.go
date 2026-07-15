@@ -264,8 +264,8 @@ func (m *Manager) CreateSession(ctx context.Context, title string) (*Session, er
 }
 
 // ListSessions lists all sessions.
-func (m *Manager) ListSessions(ctx context.Context) ([]Session, error) {
-	sds, err := m.store.ListSessions(ctx)
+func (m *Manager) ListSessions(ctx context.Context, query ListSessionsQuery) ([]Session, error) {
+	sds, err := m.store.ListSessions(ctx, query)
 	if err != nil {
 		return nil, err
 	}

@@ -1,7 +1,6 @@
 package sidebar
 
 import (
-	"fmt"
 	"time"
 
 	"github.com/masterkeysrd/kite/dom"
@@ -12,39 +11,8 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/api"
 	"github.com/masterkeysrd/tasksmith/internal/tui/components"
 	"github.com/masterkeysrd/tasksmith/internal/tui/components/icon"
+	"github.com/masterkeysrd/tasksmith/internal/tui/format"
 )
-
-func relativeTime(ts string) string {
-	t, err := time.Parse(time.RFC3339, ts)
-	if err != nil {
-		return ts
-	}
-	d := time.Since(t)
-	switch {
-	case d < time.Minute:
-		return "just now"
-	case d < time.Hour:
-		m := int(d.Minutes())
-		if m == 1 {
-			return "1 min ago"
-		}
-		return fmt.Sprintf("%d mins ago", m)
-	case d < 24*time.Hour:
-		h := int(d.Hours())
-		if h == 1 {
-			return "1 hour ago"
-		}
-		return fmt.Sprintf("%d hours ago", h)
-	case d < 7*24*time.Hour:
-		days := int(d.Hours() / 24)
-		if days == 1 {
-			return "1 day ago"
-		}
-		return fmt.Sprintf("%d days ago", days)
-	default:
-		return t.Format("Jan 2")
-	}
-}
 
 var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 
@@ -194,7 +162,7 @@ var sessionRow = kitex.FC("SessionRow", func(props sessionRowProps) kitex.Node {
 			if props.IsLoading {
 				return kitex.Text(spinnerFrames[spinnerFrame()] + " switching…")
 			}
-			return kitex.Text(relativeTime(props.Session.UpdatedAt))
+			return kitex.Text(format.RelativeTime(props.Session.UpdatedAt))
 		}()),
 
 		// Archive confirmation overlay

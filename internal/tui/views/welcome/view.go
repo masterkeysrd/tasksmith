@@ -15,6 +15,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/tui/command"
 	"github.com/masterkeysrd/tasksmith/internal/tui/components"
 	"github.com/masterkeysrd/tasksmith/internal/tui/components/icon"
+	"github.com/masterkeysrd/tasksmith/internal/tui/format"
 	"github.com/masterkeysrd/tasksmith/internal/tui/queries"
 	"github.com/masterkeysrd/tasksmith/internal/tui/theme"
 )
@@ -46,9 +47,8 @@ var (
 			Display(style.DisplayFlex).
 			FlexDirection(style.FlexColumn).
 			Width(style.Percent(100)).
-			MaxWidth(style.Cells(110)).
-			Height(style.Percent(100)).
-			MaxHeight(style.Cells(38))
+			MaxWidth(style.Cells(125)).
+			MaxHeight(style.Percent(100))
 
 	HeaderSectionStyle = style.S().
 				Display(style.DisplayFlex).
@@ -96,6 +96,10 @@ var (
 
 	ActionBoxTitleStyle = style.S().
 				Bold(true).
+				Display(style.DisplayFlex).
+				FlexDirection(style.FlexRow).
+				AlignItems(style.AlignCenter).
+				Gap(2).
 				MarginBottom(0)
 
 	ActionBoxContentStyle = style.S().
@@ -168,6 +172,7 @@ var ActionItem = kitex.FC("ActionItem", func(props ActionItemProps) kitex.Node {
 // ActionBox groups related ActionItems.
 type ActionBoxProps struct {
 	Title    string
+	Icon     kitex.Node
 	Children []kitex.Node
 }
 
@@ -177,7 +182,10 @@ var ActionBox = kitex.FCC("ActionBox", func(props ActionBoxProps) kitex.Node {
 	headerStyle := ActionBoxTitleStyle.Foreground(t.Color.Text.Tertiary)
 
 	return kitex.Box(kitex.BoxProps{Style: ActionBoxContainerStyle},
-		kitex.Box(kitex.BoxProps{Style: headerStyle}, kitex.Text(props.Title)),
+		kitex.Box(kitex.BoxProps{Style: headerStyle},
+			props.Icon,
+			kitex.Text("  "+props.Title),
+		),
 		kitex.Box(kitex.BoxProps{Style: ActionBoxContentStyle}, props.Children...),
 	)
 })
@@ -209,7 +217,6 @@ var InfoSection = kitex.FCC("InfoSection", func(props InfoSectionProps) kitex.No
 	)
 })
 
-// SessionItem represents a clickable row in the recent sessions info block.
 type SessionItemProps struct {
 	Name    string
 	Hours   string
@@ -222,10 +229,17 @@ var SessionItem = kitex.FC("SessionItem", func(props SessionItemProps) kitex.Nod
 	return components.Button(components.ButtonProps{
 		Variant: components.ButtonText,
 		Color:   components.ButtonBase,
-		Style:   InfoRowStyle.Width(style.Percent(100)),
+		Style:   InfoRowStyle.Width(style.Percent(100)).JustifyContent(style.JustifyBetween),
 		OnClick: props.OnClick,
 	},
-		kitex.Text(props.Name),
+		kitex.Box(kitex.BoxProps{
+			Style: style.S().
+				Flex(1, 1, style.Cells(0)).
+				MinWidth(style.Percent(0)).
+				WhiteSpace(style.WhiteSpaceNoWrap).
+				Overflow(style.OverflowHidden).
+				TextOverflow(style.TextOverflowEllipsis),
+		}, kitex.Text(props.Name)),
 		kitex.Box(kitex.BoxProps{
 			Style: style.S().Foreground(t.Color.Text.Tertiary),
 		}, kitex.Text(props.Hours)),
@@ -283,7 +297,7 @@ var View = kitex.FC("WelcomeView", func(props ViewProps) kitex.Node {
 
 	client := tuiapi.UseClient()
 	windClient := wind.UseClient()
-	sessions := queries.UseListSessions()
+	sessions := queries.UseListSessions(api.ListSessionsRequest{Limit: 10})
 
 	if !sessions.IsLoading && sessions.Data != nil {
 		log.Info("welcome view loaded sessions", log.Int("count", len(sessions.Data.Sessions)))
@@ -297,7 +311,7 @@ var View = kitex.FC("WelcomeView", func(props ViewProps) kitex.Node {
 			Style: ContainerStyle,
 		},
 			kitex.Box(kitex.BoxProps{
-				Style: style.S().Flex(1).PaddingVertical(2).Overflow(style.OverflowAuto),
+				Style: style.S().Flex(1).PaddingVertical(1).Overflow(style.OverflowAuto),
 			},
 				// Header Section
 				kitex.Box(kitex.BoxProps{Style: HeaderSectionStyle},
@@ -347,7 +361,7 @@ var View = kitex.FC("WelcomeView", func(props ViewProps) kitex.Node {
 				kitex.Box(kitex.BoxProps{Style: GridContainerStyle},
 					// Left Column: Actions
 					kitex.Box(kitex.BoxProps{Style: LeftColumnStyle},
-						ActionBox(ActionBoxProps{Title: "Sessions"},
+						ActionBox(ActionBoxProps{Title: "Sessions", Icon: icon.Calendar},
 							ActionItem(ActionItemProps{
 								Icon:  icon.Calendar,
 								Label: "New Session",
@@ -369,16 +383,16 @@ var View = kitex.FC("WelcomeView", func(props ViewProps) kitex.Node {
 								},
 							}),
 						),
-						ActionBox(ActionBoxProps{Title: "Agents & Skills"},
+						ActionBox(ActionBoxProps{Title: "Agents & Skills", Icon: icon.Robot},
 							ActionItem(ActionItemProps{Icon: icon.Robot, Label: "New Agent", OnClick: func() { triggerAction("New Agent") }}),
 							ActionItem(ActionItemProps{Icon: icon.Pencil, Label: "New Skill", OnClick: func() { triggerAction("New Skill") }}),
 						),
-						ActionBox(ActionBoxProps{Title: "Tools & MCPs"},
+						ActionBox(ActionBoxProps{Title: "Tools & MCPs", Icon: icon.Wrench},
 							ActionItem(ActionItemProps{Icon: icon.Wrench, Label: "New Tool", OnClick: func() { triggerAction("New Tool") }}),
 							ActionItem(ActionItemProps{Icon: icon.Package, Label: "New Toolkit", OnClick: func() { triggerAction("New Toolkit") }}),
 							ActionItem(ActionItemProps{Icon: icon.Network, Label: "Register MCP", OnClick: func() { triggerAction("Register MCP") }}),
 						),
-						ActionBox(ActionBoxProps{Title: "Workspace"},
+						ActionBox(ActionBoxProps{Title: "Workspace", Icon: icon.Folder},
 							ActionItem(ActionItemProps{Icon: icon.Folder, Label: "New Project", OnClick: func() { triggerAction("New Project") }}),
 							ActionItem(ActionItemProps{Icon: icon.AppleKeyboardCommand, Label: "New Command", OnClick: func() { triggerAction("New Command") }}),
 							ActionItem(ActionItemProps{Icon: icon.Plugin, Label: "Install Plugin", OnClick: func() { triggerAction("Install Plugin") }}),
@@ -390,10 +404,10 @@ var View = kitex.FC("WelcomeView", func(props ViewProps) kitex.Node {
 								})
 							}),
 						),
-						ActionBox(ActionBoxProps{Title: "Telemetry & Performance"},
+						ActionBox(ActionBoxProps{Title: "Telemetry & Performance", Icon: icon.Fire},
 							ActionItem(ActionItemProps{Icon: icon.Fire, Label: "CodeBurn Analytics", OnClick: func() { active.SetScreen("analytics") }}),
 						),
-						ActionBox(ActionBoxProps{Title: "App"},
+						ActionBox(ActionBoxProps{Title: "App", Icon: icon.Exit},
 							ActionItem(ActionItemProps{Icon: icon.Exit, Label: "Quit", OnClick: func() { quit() }}),
 						),
 					),
@@ -411,14 +425,19 @@ var View = kitex.FC("WelcomeView", func(props ViewProps) kitex.Node {
 											name = p.Name
 										}
 										return kitex.Box(kitex.BoxProps{
-											Style: style.S().Foreground(t.Color.Text.Secondary).PaddingLeft(1),
+											Style: InfoRowStyle.Foreground(t.Color.Text.Secondary).
+												Width(style.Percent(100)).
+												MinWidth(style.Percent(0)).
+												WhiteSpace(style.WhiteSpaceNoWrap).
+												Overflow(style.OverflowHidden).
+												TextOverflow(style.TextOverflowEllipsis),
 										}, kitex.Text(name))
 									}),
 								)
 							}),
 							kitex.If(projects.IsLoading || projects.Data == nil || len(projects.Data.Projects) == 0, func() kitex.Node {
 								return kitex.Box(kitex.BoxProps{
-									Style: style.S().Foreground(t.Color.Text.Secondary).PaddingLeft(1),
+									Style: InfoRowStyle.Foreground(t.Color.Text.Secondary),
 								}, kitex.Text("kite"))
 							}),
 						),
@@ -484,12 +503,18 @@ var View = kitex.FC("WelcomeView", func(props ViewProps) kitex.Node {
 								if len(sList) == 0 {
 									return kitex.Box(kitex.BoxProps{Style: InfoRowStyle.Foreground(t.Color.Text.Secondary)}, kitex.Text("No recent sessions"))
 								}
-								return kitex.Fragment(
+								return kitex.Box(kitex.BoxProps{
+									Style: style.S().
+										Display(style.DisplayFlex).
+										FlexDirection(style.FlexColumn).
+										MaxHeight(style.Cells(12)).
+										Overflow(style.OverflowAuto),
+								},
 									kitex.Map(sList, func(s api.Session, idx int) kitex.Node {
 										sessionID := s.ID
 										return SessionItem(SessionItemProps{
 											Name:  s.Title,
-											Hours: "",
+											Hours: format.CompactRelativeTime(s.UpdatedAt),
 											OnClick: func() {
 												if props.OnOpenSession != nil {
 													props.OnOpenSession(sessionID)
