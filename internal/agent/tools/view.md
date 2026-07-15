@@ -53,7 +53,7 @@ spec:
         type: string
         description: LSP diagnostics for this file.
 ---
-Read the contents of a file. Also registers the file as known in the session, which is required before using `edit`, `multi_edit`, or `write` on existing files. Renders images inline. For directories, use `ls` instead.
+Read the contents of a file. Prefer this over `bash cat`/`head`/`tail` — it returns structured output with line numbers, handles truncation, and renders images inline. For directories, use `ls` instead.
 
 <guidelines>
 - Use `start_line` and `end_line` to read a specific range; omit both to read from the beginning.

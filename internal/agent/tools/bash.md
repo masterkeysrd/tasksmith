@@ -47,6 +47,18 @@ spec:
 ---
 Execute a bash command. If the command takes longer than `wait_ms`, it transitions to a background task and returns a `taskId`.
 
+<when_not_to_use>
+- **Do not use bash for tasks that have dedicated tools.** Use these instead:
+  - `view` instead of `cat`, `head`, `tail`, or `less` for reading file contents.
+  - `ls` instead of `ls` or `find -maxdepth` for listing directory contents.
+  - `grep` instead of `grep` or `rg` for searching file contents.
+  - `glob` instead of `find` for discovering files by pattern.
+  - `edit` / `multi_edit` instead of `sed` or `awk` for modifying files.
+  - `write` instead of `echo >` or `tee` for creating files.
+  - `fetch` / `web_fetch` instead of `curl` or `wget` for HTTP requests.
+- Reserve bash for: building, testing, running scripts, git operations, and system commands with no dedicated tool.
+</when_not_to_use>
+
 <background_execution>
 - Never append `&` or background commands yourself — the TaskManager handles it automatically.
 - Self-backgrounded commands are immediately lost and cannot be managed or stopped.

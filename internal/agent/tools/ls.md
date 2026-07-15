@@ -83,7 +83,7 @@ spec:
         type: boolean
         description: True if the result contains detailed information.
 ---
-List the direct contents of a directory (optionally recursive up to depth 4). By default, it returns a simple tree-like list of names to save context space. Use the `detailed` flag when you need information such as permissions, sizes, and modification times. Use `view` for file contents and `glob`/`grep` for recursive or pattern-based searches across the workspace.
+List the direct contents of a directory (optionally recursive up to depth 4). Prefer this over `bash ls` or `bash find -maxdepth` — it respects `.gitignore`, filters noise directories, and returns structured output. Use the `detailed` flag when you need information such as permissions, sizes, and modification times. Use `view` for file contents and `glob`/`grep` for recursive or pattern-based searches across the workspace.
 
 <ignore_rules>
 Entries are filtered through two tiers automatically:

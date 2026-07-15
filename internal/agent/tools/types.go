@@ -59,6 +59,19 @@ type AskQuestionOutput struct {
 //
 // Execute a bash command. If the command takes longer than `wait_ms`, it transitions to a background task and returns a `taskId`.
 //
+// <when_not_to_use>
+// - **Do not use bash for tasks that have dedicated tools.** Use these instead:
+//   - `view` instead of `cat`, `head`, `tail`, or `less` for reading file contents.
+//   - `ls` instead of `ls` or `find -maxdepth` for listing directory contents.
+//   - `grep` instead of `grep` or `rg` for searching file contents.
+//   - `glob` instead of `find` for discovering files by pattern.
+//   - `edit` / `multi_edit` instead of `sed` or `awk` for modifying files.
+//   - `write` instead of `echo >` or `tee` for creating files.
+//   - `fetch` / `web_fetch` instead of `curl` or `wget` for HTTP requests.
+//
+// - Reserve bash for: building, testing, running scripts, git operations, and system commands with no dedicated tool.
+// </when_not_to_use>
+//
 // <background_execution>
 // - Never append `&` or background commands yourself — the TaskManager handles it automatically.
 // - Self-backgrounded commands are immediately lost and cannot be managed or stopped.
@@ -313,7 +326,7 @@ type InvokeAgentOutput struct {
 
 // LsArgs defines the arguments for the "ls" tool.
 //
-// List the direct contents of a directory (optionally recursive up to depth 4). By default, it returns a simple tree-like list of names to save context space. Use the `detailed` flag when you need information such as permissions, sizes, and modification times. Use `view` for file contents and `glob`/`grep` for recursive or pattern-based searches across the workspace.
+// List the direct contents of a directory (optionally recursive up to depth 4). Prefer this over `bash ls` or `bash find -maxdepth` — it respects `.gitignore`, filters noise directories, and returns structured output. Use the `detailed` flag when you need information such as permissions, sizes, and modification times. Use `view` for file contents and `glob`/`grep` for recursive or pattern-based searches across the workspace.
 //
 // <ignore_rules>
 // Entries are filtered through two tiers automatically:
@@ -898,7 +911,7 @@ type TodosOutputTodosItem struct {
 
 // ViewArgs defines the arguments for the "view" tool.
 //
-// Read the contents of a file. Also registers the file as known in the session, which is required before using `edit`, `multi_edit`, or `write` on existing files. Renders images inline. For directories, use `ls` instead.
+// Read the contents of a file. Prefer this over `bash cat`/`head`/`tail` — it returns structured output with line numbers, handles truncation, and renders images inline. For directories, use `ls` instead.
 //
 // <guidelines>
 // - Use `start_line` and `end_line` to read a specific range; omit both to read from the beginning.
