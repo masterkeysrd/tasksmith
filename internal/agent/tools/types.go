@@ -318,7 +318,7 @@ type InvokeAgentOutput struct {
 // <ignore_rules>
 // Entries are filtered through two tiers automatically:
 //
-// - **Predefined**: `.git`, `node_modules`, `vendor`, `dist`, `build`, `.next`, `.venv`, `__pycache__`, `.DS_Store`, and similar noise directories are always excluded.
+// - **Predefined**: `.git`, `node_modules`, `.next`, `.venv`, `__pycache__`, `.DS_Store`, and similar noise directories are always excluded.
 // - **Gitignore**: all `.gitignore` files from the repo root down to the target directory are applied (full git semantics).
 // </ignore_rules>
 //

@@ -120,7 +120,7 @@ func TestLsSymlink(t *testing.T) {
 func TestLsDefaultIgnores(t *testing.T) {
 	dir := t.TempDir()
 
-	for _, name := range []string{".git", "node_modules", "__pycache__", "vendor", "dist", "build", ".next", ".DS_Store", ".venv", "venv"} {
+	for _, name := range []string{".git", "node_modules", "__pycache__", ".next", ".DS_Store", ".venv", "venv"} {
 		if err := os.Mkdir(filepath.Join(dir, name), 0755); err != nil {
 			t.Fatalf("mkdir %s: %v", name, err)
 		}

@@ -15,8 +15,8 @@ func TestIgnorerPredefinedNames(t *testing.T) {
 	}
 
 	ignored := []string{
-		".git", "node_modules", "__pycache__", "vendor",
-		"dist", "build", "target", ".next", ".DS_Store", ".venv", "venv",
+		".git", "node_modules", "__pycache__",
+		".next", ".DS_Store", ".venv", "venv",
 	}
 	for _, name := range ignored {
 		if !ig.ShouldIgnore(name, filepath.Join(dir, name), true) {
@@ -24,7 +24,7 @@ func TestIgnorerPredefinedNames(t *testing.T) {
 		}
 	}
 
-	visible := []string{"main.go", "README.md", "src", ".gitignore"}
+	visible := []string{"main.go", "README.md", "src", ".gitignore", "vendor", "dist", "target"}
 	for _, name := range visible {
 		if ig.ShouldIgnore(name, filepath.Join(dir, name), false) {
 			t.Errorf("expected %q NOT to be ignored", name)
