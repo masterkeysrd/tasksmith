@@ -19,6 +19,14 @@ var (
 				FlexDirection(style.FlexColumn).
 				Gap(1)
 
+	FormRowStyle = style.S().
+			Display(style.DisplayFlex).
+			FlexDirection(style.FlexRow).
+			AlignItems(style.AlignCenter).
+			Gap(1).
+			Width(style.Percent(100)).
+			MinWidth(style.Cells(0))
+
 	InputGroupStyle = style.S().
 			Display(style.DisplayFlex).
 			FlexDirection(style.FlexRow).
@@ -27,7 +35,8 @@ var (
 	InputContainerStyle = style.S().
 				Display(style.DisplayFlex).
 				FlexDirection(style.FlexColumn).
-				Flex(1, 1, style.Cells(0))
+				Flex(1, 1, style.Cells(0)).
+				MinWidth(style.Cells(0))
 
 	InputLabelStyle = style.S().
 			Display(style.DisplayFlex).
@@ -220,7 +229,7 @@ var ProviderStep = kitex.FC("ProviderStep", func(props ProviderStepProps) kitex.
 			),
 		),
 		kitex.Box(kitex.BoxProps{
-			Style: style.S().Display(style.DisplayFlex).FlexDirection(style.FlexRow).Gap(1).AlignItems(style.AlignCenter),
+			Style: FormRowStyle,
 		},
 			kitex.Box(kitex.BoxProps{
 				Style: muted.Bold(true),
@@ -270,7 +279,7 @@ var ProviderStep = kitex.FC("ProviderStep", func(props ProviderStepProps) kitex.
 			},
 				// Endpoint Row
 				kitex.Box(kitex.BoxProps{
-					Style: style.S().Display(style.DisplayFlex).FlexDirection(style.FlexRow).AlignItems(style.AlignCenter).Gap(1),
+					Style: FormRowStyle,
 				},
 					kitex.Box(kitex.BoxProps{
 						Style: style.S().Width(style.Cells(13)).Bold(true).Foreground(t.Color.Text.Secondary),
@@ -296,7 +305,7 @@ var ProviderStep = kitex.FC("ProviderStep", func(props ProviderStepProps) kitex.
 				// Auth Secret Row
 				kitex.If(currProvider.AuthEnv != "", func() kitex.Node {
 					return kitex.Box(kitex.BoxProps{
-						Style: style.S().Display(style.DisplayFlex).FlexDirection(style.FlexRow).AlignItems(style.AlignCenter).Gap(1),
+						Style: FormRowStyle,
 					},
 						kitex.Box(kitex.BoxProps{
 							Style: style.S().Width(style.Cells(13)).Bold(true).Foreground(t.Color.Text.Secondary),
@@ -366,7 +375,7 @@ var ProviderStep = kitex.FC("ProviderStep", func(props ProviderStepProps) kitex.
 				// Auth Scheme Row
 				kitex.If(currProvider.AuthEnv != "", func() kitex.Node {
 					return kitex.Box(kitex.BoxProps{
-						Style: style.S().Display(style.DisplayFlex).FlexDirection(style.FlexRow).AlignItems(style.AlignCenter).Gap(1),
+						Style: FormRowStyle,
 					},
 						kitex.Box(kitex.BoxProps{
 							Style: style.S().Width(style.Cells(13)).Bold(true).Foreground(t.Color.Text.Secondary),

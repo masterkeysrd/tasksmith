@@ -30,11 +30,13 @@ var (
 			FlexDirection(style.FlexColumn).
 			Width(style.Percent(100)).
 			MaxWidth(style.Cells(120)).
+			MinWidth(style.Cells(0)).
 			Height(style.Percent(100)).
 			MaxHeight(style.Cells(32))
 
 	ContentStyle = style.S().
 			Flex(1, 1, style.Cells(0)).
+			MinWidth(style.Cells(0)).
 			MinHeight(style.Cells(0))
 
 	ActionsContainerStyle = style.S().
@@ -65,12 +67,14 @@ var (
 	StepContentStyle = style.S().
 				Display(style.DisplayFlex).
 				Flex(1).
+				MinWidth(style.Cells(0)).
 				FlexDirection(style.FlexColumn).
 				JustifyContent(style.JustifyBetween).
 				Gap(1)
 
 	TabPanelStyle = style.S().
 			Flex(1, 1, style.Cells(0)).
+			MinWidth(style.Cells(0)).
 			MinHeight(style.Cells(0)).
 			Padding(1).
 			Overflow(style.OverflowAuto)
