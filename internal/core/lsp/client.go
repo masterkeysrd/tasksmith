@@ -134,6 +134,36 @@ func GetLanguageID(path string) string {
 	}
 }
 
+// findRootByMarkers walks up the directory hierarchy starting from path
+// to locate a directory containing any of the specified marker files.
+func findRootByMarkers(path string, markers []string) string {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		abs = path
+	}
+	abs = filepath.Clean(abs)
+
+	if len(markers) == 0 {
+		return abs
+	}
+
+	current := abs
+	for {
+		for _, marker := range markers {
+			if _, err := os.Stat(filepath.Join(current, marker)); err == nil {
+				return current
+			}
+		}
+
+		parent := filepath.Dir(current)
+		if parent == current {
+			break
+		}
+		current = parent
+	}
+	return abs
+}
+
 // NewClient creates and initializes a multiplexed LSP client.
 func NewClient(ctx context.Context, rootPath string) (*Client, error) {
 	cfg, err := LoadConfig()
@@ -142,10 +172,12 @@ func NewClient(ctx context.Context, rootPath string) (*Client, error) {
 	}
 
 	var servers []lspx.ServerConfig
+	var activeConfigs []ServerConfig
 	for _, sc := range cfg.Servers {
 		if len(sc.Command) > 0 {
 			if _, err := exec.LookPath(sc.Command[0]); err == nil {
-				servers = append(servers, sc)
+				servers = append(servers, sc.ToLspx())
+				activeConfigs = append(activeConfigs, sc)
 			}
 		}
 	}
@@ -154,9 +186,23 @@ func NewClient(ctx context.Context, rootPath string) (*Client, error) {
 		return nil, fmt.Errorf("no running language servers found in PATH (ensure commands in lsp.config are installed)")
 	}
 
+	// Gather all root markers from active servers
+	var markers []string
+	seen := make(map[string]bool)
+	for _, ac := range activeConfigs {
+		for _, m := range ac.RootMarkers {
+			if !seen[m] {
+				seen[m] = true
+				markers = append(markers, m)
+			}
+		}
+	}
+
+	canonicalRoot := findRootByMarkers(rootPath, markers)
+
 	opts := lspx.ClientOptions{
 		Servers: servers,
-		RootURI: pathToURI(rootPath),
+		RootURI: pathToURI(canonicalRoot),
 		Aggregate: lspx.AggregateOptions{
 			Diagnostics: true,
 			Completions: true,
@@ -190,7 +236,7 @@ func NewClient(ctx context.Context, rootPath string) (*Client, error) {
 
 	c := &Client{
 		lspClient:     lspc,
-		rootPath:      rootPath,
+		rootPath:      canonicalRoot,
 		activeServers: servers,
 		diagnostics:   make(map[string][]lspx.Diagnostic),
 	}

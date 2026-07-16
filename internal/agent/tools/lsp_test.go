@@ -11,7 +11,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/masterkeysrd/lspx"
 	"github.com/masterkeysrd/tasksmith/internal/core/lsp"
 	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
 )
@@ -31,7 +30,7 @@ func TestLspTools(t *testing.T) {
 
 	// Write mock config containing only the "go" preset
 	cfg := &lsp.Config{
-		Servers: []lspx.ServerConfig{
+		Servers: []lsp.ServerConfig{
 			lsp.Presets["go"],
 		},
 	}

@@ -162,6 +162,8 @@ github.com/masterkeysrd/loom v0.0.4-0.20260711030105-60d4b1b463e3 h1:SiHVTNYkjNO
 github.com/masterkeysrd/loom v0.0.4-0.20260711030105-60d4b1b463e3/go.mod h1:5wcS9OmpTWDXdHp9ILC4HKq0gzxPsIfXEaA06XckNOc=
 github.com/masterkeysrd/lspx v0.0.0-20260611065943-6cf2ef01a123 h1:AXKvP/sFrGJAzKnsAzXQk4pFz9ZZNXE4GrioZEJsS+I=
 github.com/masterkeysrd/lspx v0.0.0-20260611065943-6cf2ef01a123/go.mod h1:HfqQ9/wu18wUdLaGYRuzWqEKUW+VBOp77seK1j94p/c=
+github.com/masterkeysrd/lspx v0.0.0-20260716060742-21d5e843d27c h1:xHLzin+Fy4Rc/t3giaP8LQehyobnmWuKRAjiNyiCHN0=
+github.com/masterkeysrd/lspx v0.0.0-20260716060742-21d5e843d27c/go.mod h1:HfqQ9/wu18wUdLaGYRuzWqEKUW+VBOp77seK1j94p/c=
 github.com/masterkeysrd/warp v0.0.3-0.20260712054341-01be5a9aebda h1:oUjJM54XZOI/JnaDcYSoTY36bQCSk/3XjS8h+n1RYVo=
 github.com/masterkeysrd/warp v0.0.3-0.20260712054341-01be5a9aebda/go.mod h1:udJ0QO13und9cuRA5robSmxz+MOM2uoIEctTs+cUUo4=
 github.com/mattn/go-isatty v0.0.22 h1:j8l17JJ9i6VGPUFUYoTUKPSgKe/83EYU2zBC7YNKMw4=

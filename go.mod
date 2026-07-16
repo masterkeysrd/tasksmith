@@ -14,7 +14,7 @@ require (
 	github.com/lrstanley/go-nf v0.0.0-20260418212552-215ab243b591
 	github.com/masterkeysrd/kite v0.0.4-0.20260715041832-3224546b4bec
 	github.com/masterkeysrd/loom v0.0.4-0.20260711030105-60d4b1b463e3
-	github.com/masterkeysrd/lspx v0.0.0-20260611065943-6cf2ef01a123
+	github.com/masterkeysrd/lspx v0.0.0-20260716060742-21d5e843d27c
 	github.com/masterkeysrd/warp v0.0.3-0.20260712054341-01be5a9aebda
 	github.com/modelcontextprotocol/go-sdk v1.6.1
 	github.com/ollama/ollama v0.31.2

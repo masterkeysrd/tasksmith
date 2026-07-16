@@ -9,8 +9,29 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
 )
 
+type ServerConfig struct {
+	Name                  string            `json:"name"`
+	Command               []string          `json:"command"`
+	FileTypes             []string          `json:"filetypes"`
+	Env                   map[string]string `json:"env,omitempty"`
+	ShareSessions         bool              `json:"share_sessions"`
+	RootMarkers           []string          `json:"root_markers,omitempty"`
+	InitializationOptions any               `json:"initialization_options,omitempty"`
+}
+
+func (s ServerConfig) ToLspx() lspx.ServerConfig {
+	return lspx.ServerConfig{
+		Name:                  s.Name,
+		Command:               s.Command,
+		FileTypes:             s.FileTypes,
+		Env:                   s.Env,
+		ShareSessions:         s.ShareSessions,
+		InitializationOptions: s.InitializationOptions,
+	}
+}
+
 type Config struct {
-	Servers []lspx.ServerConfig `json:"servers"`
+	Servers []ServerConfig `json:"servers"`
 }
 
 type LspSuggestion struct {
@@ -19,36 +40,70 @@ type LspSuggestion struct {
 	Command    []string `json:"command"`
 }
 
-var Presets = map[string]lspx.ServerConfig{
+var Presets = map[string]ServerConfig{
 	"go": {
 		Name:          "gopls",
 		Command:       []string{"gopls"},
 		FileTypes:     []string{"go"},
 		ShareSessions: true,
+		RootMarkers:   []string{"go.work", "go.mod", ".git"},
+		InitializationOptions: map[string]any{
+			"gopls": map[string]any{
+				"staticcheck": true,
+				"directoryFilters": []string{
+					"-.git",
+					"-.vscode",
+					"-.idea",
+					"-.vscode-test",
+					"-node_modules",
+				},
+				"analyses": map[string]any{
+					"nilness":      true,
+					"unusedparams": true,
+					"unusedwrite":  true,
+					"useany":       true,
+					"asign":        true,
+				},
+			},
+		},
 	},
 	"python": {
 		Name:          "pyright",
 		Command:       []string{"pyright-langserver", "--stdio"},
 		FileTypes:     []string{"python"},
 		ShareSessions: true,
+		RootMarkers:   []string{"pyproject.toml", "setup.py", "requirements.txt", ".git"},
 	},
 	"typescript": {
-		Name:          "typescript-language-server",
-		Command:       []string{"typescript-language-server", "--stdio"},
-		FileTypes:     []string{"javascript", "typescript", "javascriptreact", "typescriptreact"},
+		Name:    "typescript-language-server",
+		Command: []string{"typescript-language-server", "--stdio"},
+		FileTypes: []string{
+			"javascript",
+			"javascriptreact",
+			"javascript.jsx",
+			"typescript",
+			"typescriptreact",
+			"typescript.tsx",
+		},
 		ShareSessions: true,
+		RootMarkers:   []string{"tsconfig.json", "jsconfig.json", "package.json", ".git"},
+		InitializationOptions: map[string]any{
+			"hostInfo": "neovim",
+		},
 	},
 	"rust": {
 		Name:          "rust-analyzer",
 		Command:       []string{"rust-analyzer"},
 		FileTypes:     []string{"rust"},
 		ShareSessions: true,
+		RootMarkers:   []string{"Cargo.toml", ".git"},
 	},
 	"c": {
 		Name:          "clangd",
 		Command:       []string{"clangd"},
 		FileTypes:     []string{"c", "cpp", "objective-c", "objective-cpp"},
 		ShareSessions: true,
+		RootMarkers:   []string{"Makefile", "CMakeLists.txt", "compile_commands.json", ".git"},
 	},
 }
 
@@ -71,7 +126,7 @@ func LoadConfig() (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return &Config{Servers: []lspx.ServerConfig{}}, nil
+			return &Config{Servers: []ServerConfig{}}, nil
 		}
 		return nil, err
 	}
