@@ -38,6 +38,9 @@ func init() {
 
 	// Standalone Command execution
 	permissions.RegisterHandler("bash", &BashPermissionHandler{})
+
+	// Standalone Background Task management
+	permissions.RegisterHandler("tasks", &TasksPermissionHandler{})
 }
 
 func resolveAbsPath(ctx context.Context, rawPath string) (string, error) {
@@ -1140,4 +1143,120 @@ func (h *BashPermissionHandler) GetPreview(ctx context.Context, req permissions.
 	args := req.Args
 	cmd, _ := args["command"].(string)
 	return preview.BashPreview{Command: cmd}, nil
+}
+
+// --- Standalone: TasksPermissionHandler ---
+
+type TasksPermissionHandler struct{}
+
+func (h *TasksPermissionHandler) GetPermissionGroup() string {
+	return "tasks"
+}
+
+func (h *TasksPermissionHandler) Evaluate(ctx context.Context, req permissions.ToolCallRequest, mode permissions.PermissionMode, grants []permissions.Permission) permissions.EvaluationResult {
+	if mode == permissions.ModeStrict {
+		return permissions.EvaluationResult{
+			State: permissions.StateRequiresAuth,
+			Hints: nil,
+		}
+	}
+
+	args := req.Args
+	action, _ := args["action"].(string)
+	taskId, _ := args["taskId"].(string)
+
+	var targetVal string
+	if taskId != "" {
+		targetVal = fmt.Sprintf("%s:%s", action, taskId)
+	} else {
+		targetVal = action
+	}
+
+	if state, found := evaluateGenericGrants(grants, targetVal); found {
+		return permissions.EvaluationResult{State: state}
+	}
+	if action != "" {
+		if state, found := evaluateGenericGrants(grants, action); found {
+			return permissions.EvaluationResult{State: state}
+		}
+	}
+
+	if action == "list" || action == "status" {
+		if mode == permissions.ModeAuto {
+			return permissions.EvaluationResult{State: permissions.StateAuto}
+		}
+		if mode == permissions.ModeDefault {
+			return permissions.EvaluationResult{State: permissions.StateExplicitAllow}
+		}
+	}
+
+	if mode == permissions.ModeAuto {
+		return permissions.EvaluationResult{
+			State: permissions.StateRequiresAuth,
+			Hints: []string{fmt.Sprintf("Auto mode blocked: tasks action %q requires authorization", action)},
+		}
+	}
+
+	return permissions.EvaluationResult{
+		State: permissions.StateRequiresAuth,
+		Hints: nil,
+	}
+}
+
+func (h *TasksPermissionHandler) GetOptions(req permissions.ToolCallRequest) []permissions.PermissionOption {
+	args := req.Args
+	action, _ := args["action"].(string)
+	taskId, _ := args["taskId"].(string)
+
+	var options []permissions.PermissionOption
+
+	if action != "" {
+		if taskId != "" {
+			options = append(options, permissions.PermissionOption{
+				Label:       fmt.Sprintf("Allow action %q for task %s", action, taskId),
+				Target:      fmt.Sprintf("%s:%s", action, taskId),
+				MatchMethod: "exact",
+				Action:      permissions.ActionAllow,
+			})
+		}
+		options = append(options, permissions.PermissionOption{
+			Label:       fmt.Sprintf("Allow all tasks %q actions", action),
+			Target:      action,
+			MatchMethod: "exact",
+			Action:      permissions.ActionAllow,
+		})
+	}
+
+	options = append(options, permissions.PermissionOption{
+		Label:       "Allow all background task management",
+		Target:      "*",
+		MatchMethod: "wildcard",
+		Action:      permissions.ActionAllow,
+		IsDanger:    true,
+	})
+
+	return options
+}
+
+func (h *TasksPermissionHandler) GetPreview(ctx context.Context, req permissions.ToolCallRequest) (preview.ToolPreview, error) {
+	args := req.Args
+	action, _ := args["action"].(string)
+	taskId, _ := args["taskId"].(string)
+	input, _ := args["input"].(string)
+
+	var text string
+	switch action {
+	case "list":
+		text = "List background tasks"
+	case "status":
+		text = fmt.Sprintf("Retrieve status of task %s", taskId)
+	case "kill":
+		text = fmt.Sprintf("Terminate task %s", taskId)
+	case "send_input":
+		text = fmt.Sprintf("Send input %q to task %s", input, taskId)
+	default:
+		text = fmt.Sprintf("Task action %q", action)
+	}
+
+	return preview.DefaultTextPreview{Text: text}, nil
 }

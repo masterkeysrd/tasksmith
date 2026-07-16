@@ -290,3 +290,88 @@ func TestBashPermissionHandler(t *testing.T) {
 		t.Errorf("expected remaining request target 'ollama ls', got %q", reqsPipelineWithGrant[0].Options[0].Target)
 	}
 }
+
+func TestTasksPermissionHandler(t *testing.T) {
+	h := &TasksPermissionHandler{}
+	ctx := context.Background()
+
+	// 1. Evaluate list & status in ModeAuto -> StateAuto
+	resList := h.Evaluate(ctx, permissions.ToolCallRequest{ToolName: "tasks", Args: map[string]any{"action": "list"}}, permissions.ModeAuto, nil)
+	if resList.State != permissions.StateAuto {
+		t.Errorf("expected StateAuto for list in ModeAuto, got %v", resList.State)
+	}
+
+	resStatus := h.Evaluate(ctx, permissions.ToolCallRequest{ToolName: "tasks", Args: map[string]any{"action": "status", "taskId": "t-123"}}, permissions.ModeAuto, nil)
+	if resStatus.State != permissions.StateAuto {
+		t.Errorf("expected StateAuto for status in ModeAuto, got %v", resStatus.State)
+	}
+
+	// 2. Evaluate kill & send_input in ModeAuto -> StateRequiresAuth
+	resKill := h.Evaluate(ctx, permissions.ToolCallRequest{ToolName: "tasks", Args: map[string]any{"action": "kill", "taskId": "t-123"}}, permissions.ModeAuto, nil)
+	if resKill.State != permissions.StateRequiresAuth {
+		t.Errorf("expected StateRequiresAuth for kill in ModeAuto, got %v", resKill.State)
+	}
+
+	resSend := h.Evaluate(ctx, permissions.ToolCallRequest{ToolName: "tasks", Args: map[string]any{"action": "send_input", "taskId": "t-123", "input": "yes"}}, permissions.ModeAuto, nil)
+	if resSend.State != permissions.StateRequiresAuth {
+		t.Errorf("expected StateRequiresAuth for send_input in ModeAuto, got %v", resSend.State)
+	}
+
+	// 3. Evaluate in ModeDefault with no grants
+	resDefaultList := h.Evaluate(ctx, permissions.ToolCallRequest{ToolName: "tasks", Args: map[string]any{"action": "list"}}, permissions.ModeDefault, nil)
+	if resDefaultList.State != permissions.StateExplicitAllow {
+		t.Errorf("expected StateExplicitAllow for list in ModeDefault, got %v", resDefaultList.State)
+	}
+
+	resDefaultStatus := h.Evaluate(ctx, permissions.ToolCallRequest{ToolName: "tasks", Args: map[string]any{"action": "status", "taskId": "t-123"}}, permissions.ModeDefault, nil)
+	if resDefaultStatus.State != permissions.StateExplicitAllow {
+		t.Errorf("expected StateExplicitAllow for status in ModeDefault, got %v", resDefaultStatus.State)
+	}
+
+	resDefaultKill := h.Evaluate(ctx, permissions.ToolCallRequest{ToolName: "tasks", Args: map[string]any{"action": "kill", "taskId": "t-123"}}, permissions.ModeDefault, nil)
+	if resDefaultKill.State != permissions.StateRequiresAuth {
+		t.Errorf("expected StateRequiresAuth for kill in ModeDefault, got %v", resDefaultKill.State)
+	}
+
+	// 4. Evaluate with matching specific grant -> StateExplicitAllow
+	grants := []permissions.Permission{
+		{Group: "tasks", Target: "status:t-123", MatchMethod: "exact", Action: permissions.ActionAllow},
+	}
+	resGranted := h.Evaluate(ctx, permissions.ToolCallRequest{ToolName: "tasks", Args: map[string]any{"action": "status", "taskId": "t-123"}}, permissions.ModeDefault, grants)
+	if resGranted.State != permissions.StateExplicitAllow {
+		t.Errorf("expected StateExplicitAllow for specific grant, got %v", resGranted.State)
+	}
+
+	// 5. Evaluate with matching action-wide grant -> StateExplicitAllow
+	grantsAction := []permissions.Permission{
+		{Group: "tasks", Target: "kill", MatchMethod: "exact", Action: permissions.ActionAllow},
+	}
+	resGrantedAction := h.Evaluate(ctx, permissions.ToolCallRequest{ToolName: "tasks", Args: map[string]any{"action": "kill", "taskId": "t-123"}}, permissions.ModeDefault, grantsAction)
+	if resGrantedAction.State != permissions.StateExplicitAllow {
+		t.Errorf("expected StateExplicitAllow for action-wide grant, got %v", resGrantedAction.State)
+	}
+
+	// 6. Options check
+	opts := h.GetOptions(permissions.ToolCallRequest{ToolName: "tasks", Args: map[string]any{"action": "kill", "taskId": "t-123"}})
+	if len(opts) != 3 {
+		t.Errorf("expected exactly 3 options, got %d", len(opts))
+	}
+	if opts[0].Target != "kill:t-123" {
+		t.Errorf("expected specific target 'kill:t-123', got %q", opts[0].Target)
+	}
+	if opts[1].Target != "kill" {
+		t.Errorf("expected action target 'kill', got %q", opts[1].Target)
+	}
+	if opts[2].Target != "*" {
+		t.Errorf("expected wildcard target '*', got %q", opts[2].Target)
+	}
+
+	// 7. Preview check
+	prev, err := h.GetPreview(ctx, permissions.ToolCallRequest{ToolName: "tasks", Args: map[string]any{"action": "kill", "taskId": "t-123"}})
+	if err != nil {
+		t.Fatalf("unexpected GetPreview error: %v", err)
+	}
+	if prev == nil {
+		t.Fatal("expected non-nil preview")
+	}
+}

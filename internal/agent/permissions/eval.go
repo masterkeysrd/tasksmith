@@ -347,6 +347,36 @@ func getFallbackActionDescription(req ToolCallRequest) string {
 			return fmt.Sprintf("Glob pattern: %s", pattern)
 		}
 		return "Glob files"
+	case "tasks":
+		action, _ := req.Args["action"].(string)
+		taskId, _ := req.Args["taskId"].(string)
+		switch action {
+		case "list":
+			return "List background tasks"
+		case "status":
+			if taskId != "" {
+				return fmt.Sprintf("Retrieve status of task %s", taskId)
+			}
+			return "Retrieve task status"
+		case "kill":
+			if taskId != "" {
+				return fmt.Sprintf("Terminate task %s", taskId)
+			}
+			return "Terminate task"
+		case "send_input":
+			if taskId != "" {
+				return fmt.Sprintf("Send input to task %s", taskId)
+			}
+			return "Send input to task"
+		default:
+			if action != "" {
+				if taskId != "" {
+					return fmt.Sprintf("Perform task action %q on task %s", action, taskId)
+				}
+				return fmt.Sprintf("Perform task action %q", action)
+			}
+			return "Manage background tasks"
+		}
 	default:
 		return fmt.Sprintf("Call tool: %s", req.ToolName)
 	}

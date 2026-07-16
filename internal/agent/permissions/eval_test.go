@@ -211,6 +211,26 @@ func TestGetFallbackActionDescription(t *testing.T) {
 			args:     map[string]any{"path": "/some/file"},
 			expected: "Modify file: /some/file",
 		},
+		{
+			toolName: "tasks",
+			args:     map[string]any{"action": "list"},
+			expected: "List background tasks",
+		},
+		{
+			toolName: "tasks",
+			args:     map[string]any{"action": "status", "taskId": "t-123"},
+			expected: "Retrieve status of task t-123",
+		},
+		{
+			toolName: "tasks",
+			args:     map[string]any{"action": "kill", "taskId": "t-123"},
+			expected: "Terminate task t-123",
+		},
+		{
+			toolName: "tasks",
+			args:     map[string]any{"action": "send_input", "taskId": "t-123"},
+			expected: "Send input to task t-123",
+		},
 	}
 
 	for _, tc := range tests {
