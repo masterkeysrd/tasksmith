@@ -160,8 +160,6 @@ github.com/masterkeysrd/kite v0.0.4-0.20260715041832-3224546b4bec h1:fbltAUKzYxq
 github.com/masterkeysrd/kite v0.0.4-0.20260715041832-3224546b4bec/go.mod h1:qZ99zwRPtPPVF4CIZJX2DroO0eesJt3dip1Q+RIFWS0=
 github.com/masterkeysrd/loom v0.0.4-0.20260711030105-60d4b1b463e3 h1:SiHVTNYkjNORkRbJj/q68sUln0Vh32LEkDhsCboyt4g=
 github.com/masterkeysrd/loom v0.0.4-0.20260711030105-60d4b1b463e3/go.mod h1:5wcS9OmpTWDXdHp9ILC4HKq0gzxPsIfXEaA06XckNOc=
-github.com/masterkeysrd/lspx v0.0.0-20260611065943-6cf2ef01a123 h1:AXKvP/sFrGJAzKnsAzXQk4pFz9ZZNXE4GrioZEJsS+I=
-github.com/masterkeysrd/lspx v0.0.0-20260611065943-6cf2ef01a123/go.mod h1:HfqQ9/wu18wUdLaGYRuzWqEKUW+VBOp77seK1j94p/c=
 github.com/masterkeysrd/lspx v0.0.0-20260716060742-21d5e843d27c h1:xHLzin+Fy4Rc/t3giaP8LQehyobnmWuKRAjiNyiCHN0=
 github.com/masterkeysrd/lspx v0.0.0-20260716060742-21d5e843d27c/go.mod h1:HfqQ9/wu18wUdLaGYRuzWqEKUW+VBOp77seK1j94p/c=
 github.com/masterkeysrd/warp v0.0.3-0.20260712054341-01be5a9aebda h1:oUjJM54XZOI/JnaDcYSoTY36bQCSk/3XjS8h+n1RYVo=
@@ -247,8 +245,8 @@ github.com/yosida95/uritemplate/v3 v3.0.2 h1:Ed3Oyj9yrmi9087+NczuL5BwkIc4wvTb5zI
 github.com/yosida95/uritemplate/v3 v3.0.2/go.mod h1:ILOh0sOhIJR3+L/8afwt/kE++YT040gmv5BQTMR2HP4=
 github.com/yuin/goldmark v1.4.13/go.mod h1:6yULJ656Px+3vBD8DxQVa3kxgyrAnzto9xy5taEt/CY=
 github.com/yuin/goldmark v1.7.1/go.mod h1:uzxRWxtg69N339t3louHJ7+O03ezfj6PlliRlaOzY1E=
-github.com/yuin/goldmark v1.8.2 h1:kEGpgqJXdgbkhcOgBxkC0X0PmoPG1ZyoZ117rDVp4zE=
-github.com/yuin/goldmark v1.8.2/go.mod h1:ip/1k0VRfGynBgxOz0yCqHrbZXhcjxyuS66Brc7iBKg=
+github.com/yuin/goldmark v1.8.4 h1:oat/nd3U6NeQqFEL3xpEJq7d7c86NI+DbSNGAs4xnjA=
+github.com/yuin/goldmark v1.8.4/go.mod h1:ip/1k0VRfGynBgxOz0yCqHrbZXhcjxyuS66Brc7iBKg=
 go.opentelemetry.io/auto/sdk v1.2.1 h1:jXsnJ4Lmnqd11kwkBV2LgLoFMZKizbCi5fNZ/ipaZ64=
 go.opentelemetry.io/auto/sdk v1.2.1/go.mod h1:KRTj+aOaElaLi+wW1kO/DZRXwkF4C5xPbEe3ZiIhN7Y=
 go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.69.0 h1:8tvICD4vSTOOsNrsI4Ljf6C+6UKvpTEH5XY3JMoyPoo=
