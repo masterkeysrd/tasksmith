@@ -3,6 +3,7 @@ package components
 import (
 	"image/color"
 
+	"github.com/masterkeysrd/kite/dom"
 	"github.com/masterkeysrd/kite/event"
 	"github.com/masterkeysrd/kite/extras/kitex"
 	"github.com/masterkeysrd/kite/key"
@@ -28,8 +29,75 @@ type ModalProps struct {
 	Footer kitex.Node
 	// Attributes contains custom DOM attributes.
 	Attributes map[string]string
+	// Ref is the scrollable body wrapper element reference.
+	Ref kitex.Ref[dom.Element]
 	// Children is the list of child elements displayed in the body.
 	Children []kitex.Node
+}
+
+func GetScrollTarget(body dom.Element, doc dom.Document) dom.Element {
+	if body == nil {
+		return nil
+	}
+	target := body
+	if doc != nil {
+		if focused := doc.CurrentFocus(); focused != nil {
+			curr := focused
+			isDescendant := false
+			for curr != nil {
+				if curr == body {
+					isDescendant = true
+					break
+				}
+				curr = curr.ParentElement()
+			}
+			if isDescendant {
+				target = focused
+			}
+		}
+	}
+	return target
+}
+
+func ScrollElement(start dom.Element, boundary dom.Element, dx, dy int) bool {
+	curr := start
+	scrolled := false
+	for curr != nil {
+		xBefore, yBefore := curr.Scroll()
+		curr.ScrollBy(dx, dy)
+		xAfter, yAfter := curr.Scroll()
+
+		if xBefore != xAfter || yBefore != yAfter {
+			scrolled = true
+			break
+		}
+
+		if curr == boundary {
+			break
+		}
+		curr = curr.ParentElement()
+	}
+	return scrolled
+}
+
+func FindAndScrollHorizontally(node dom.Node, dx int) bool {
+	if node == nil {
+		return false
+	}
+	if el, ok := node.(dom.Element); ok {
+		xBefore, _ := el.Scroll()
+		el.ScrollBy(dx, 0)
+		xAfter, _ := el.Scroll()
+		if xBefore != xAfter {
+			return true
+		}
+	}
+	for child := range node.ChildNodes() {
+		if FindAndScrollHorizontally(child, dx) {
+			return true
+		}
+	}
+	return false
 }
 
 // Modal renders a standardized full-screen modal card overlay.
@@ -101,6 +169,13 @@ var Modal = kitex.FCC("Modal", func(props ModalProps) kitex.Node {
 		statusStyle = statusStyle.Background(statusBg)
 	}
 
+	bodyBoxProps := kitex.BoxProps{
+		Style: bodyStyle,
+	}
+	if props.Ref != nil {
+		bodyBoxProps.Ref = props.Ref
+	}
+
 	return kitex.Dialog(kitex.DialogProps{
 		ZIndex: 100,
 		OnKeyDown: func(e event.Event) {
@@ -114,6 +189,7 @@ var Modal = kitex.FCC("Modal", func(props ModalProps) kitex.Node {
 				if props.OnClose != nil {
 					props.OnClose()
 				}
+				return
 			}
 		},
 		OnWheel: func(e event.Event) {
@@ -124,10 +200,9 @@ var Modal = kitex.FCC("Modal", func(props ModalProps) kitex.Node {
 		},
 	},
 		Paper(PaperProps{
-			Color:      PaperHover,
-			Variant:    PaperOutlined,
-			Style:      baseStyle,
-			Attributes: props.Attributes,
+			Color:   PaperHover,
+			Variant: PaperOutlined,
+			Style:   baseStyle,
 		},
 			// Header Row
 			kitex.Box(kitex.BoxProps{
@@ -149,9 +224,7 @@ var Modal = kitex.FCC("Modal", func(props ModalProps) kitex.Node {
 				),
 			),
 			// Body Content
-			kitex.Box(kitex.BoxProps{
-				Style: bodyStyle,
-			},
+			kitex.Box(bodyBoxProps,
 				props.Children...,
 			),
 			// Statusrail Divider Row

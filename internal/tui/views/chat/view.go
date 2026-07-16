@@ -226,6 +226,7 @@ func renderChatView(props ViewProps) kitex.Node {
 	localEditingMessages, setLocalEditingMessages := kitex.UseState([]message.Message(nil))
 	optimisticMessages, setOptimisticMessages := kitex.UseState([]message.Message(nil))
 	scrollAnchorRef := kitex.UseRef[dom.Element](nil)
+	activeModalRef := kitex.UseRef[dom.Element](nil)
 
 	handleRemoveQueuedMessage := func(messageID string) {
 		promise.New(func(ctx context.Context) (bool, error) {
@@ -460,6 +461,14 @@ func renderChatView(props ViewProps) kitex.Node {
 		Controller.ClearQueue = nil
 	}
 	Controller.ScrollDown = func() {
+		if showFullOutputModal() || showResultPreview() || showSubagentModal() {
+			if activeModalRef.Current != nil {
+				doc := activeModalRef.Current.OwnerDocument()
+				target := components.GetScrollTarget(activeModalRef.Current, doc)
+				components.ScrollElement(target, activeModalRef.Current, 0, 3)
+			}
+			return
+		}
 		log.Info("ScrollDown invoked", log.Bool("historyRef_nil", historyRef.Current == nil))
 		if historyRef.Current != nil {
 			el := historyRef.Current
@@ -486,6 +495,14 @@ func renderChatView(props ViewProps) kitex.Node {
 		}
 	}
 	Controller.ScrollUp = func() {
+		if showFullOutputModal() || showResultPreview() || showSubagentModal() {
+			if activeModalRef.Current != nil {
+				doc := activeModalRef.Current.OwnerDocument()
+				target := components.GetScrollTarget(activeModalRef.Current, doc)
+				components.ScrollElement(target, activeModalRef.Current, 0, -3)
+			}
+			return
+		}
 		log.Info("ScrollUp invoked", log.Bool("historyRef_nil", historyRef.Current == nil))
 		if historyRef.Current != nil {
 			el := historyRef.Current
@@ -512,6 +529,16 @@ func renderChatView(props ViewProps) kitex.Node {
 		}
 	}
 	Controller.ScrollLeft = func() {
+		if showFullOutputModal() || showResultPreview() || showSubagentModal() {
+			if activeModalRef.Current != nil {
+				doc := activeModalRef.Current.OwnerDocument()
+				target := components.GetScrollTarget(activeModalRef.Current, doc)
+				if !components.ScrollElement(target, activeModalRef.Current, -3, 0) {
+					components.FindAndScrollHorizontally(activeModalRef.Current, -3)
+				}
+			}
+			return
+		}
 		log.Info("ScrollLeft invoked", log.Bool("historyRef_nil", historyRef.Current == nil))
 		if historyRef.Current != nil {
 			el := historyRef.Current
@@ -538,6 +565,16 @@ func renderChatView(props ViewProps) kitex.Node {
 		}
 	}
 	Controller.ScrollRight = func() {
+		if showFullOutputModal() || showResultPreview() || showSubagentModal() {
+			if activeModalRef.Current != nil {
+				doc := activeModalRef.Current.OwnerDocument()
+				target := components.GetScrollTarget(activeModalRef.Current, doc)
+				if !components.ScrollElement(target, activeModalRef.Current, 3, 0) {
+					components.FindAndScrollHorizontally(activeModalRef.Current, 3)
+				}
+			}
+			return
+		}
 		log.Info("ScrollRight invoked", log.Bool("historyRef_nil", historyRef.Current == nil))
 		if historyRef.Current != nil {
 			el := historyRef.Current
@@ -1276,6 +1313,7 @@ func renderChatView(props ViewProps) kitex.Node {
 			return components.Modal(components.ModalProps{
 				IsOpen: showFullOutputModal(),
 				Title:  kitex.Text(fullOutputTitle()),
+				Ref:    activeModalRef,
 				OnClose: func() {
 					setShowFullOutputModal(false)
 					setFullOutputContent("")
@@ -1292,6 +1330,7 @@ func renderChatView(props ViewProps) kitex.Node {
 				IsOpen:  showResultPreview(),
 				Title:   resultPreviewTitle(),
 				Preview: resultPreview(),
+				Ref:     activeModalRef,
 				OnClose: func() {
 					setShowResultPreview(false)
 					setResultPreview(nil)
@@ -1305,6 +1344,7 @@ func renderChatView(props ViewProps) kitex.Node {
 			return components.Modal(components.ModalProps{
 				IsOpen: showSubagentModal(),
 				Title:  kitex.Text(subagentTitle()),
+				Ref:    activeModalRef,
 				OnClose: func() {
 					setShowSubagentModal(false)
 					setSubagentSessionID("")

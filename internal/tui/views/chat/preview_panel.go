@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/masterkeysrd/kite/dom"
 	"github.com/masterkeysrd/kite/extras/kitex"
 	"github.com/masterkeysrd/kite/style"
 	"github.com/masterkeysrd/tasksmith/internal/agent/tools"
@@ -369,6 +370,7 @@ type GenericPreviewModalProps struct {
 	Title   string
 	Preview preview.ToolPreview
 	OnClose func()
+	Ref     kitex.Ref[dom.Element]
 }
 
 // GenericPreviewModal renders a generic full-screen overlay for viewing any ToolPreview.
@@ -388,6 +390,7 @@ var GenericPreviewModal = kitex.FCC("GenericPreviewModal", func(props GenericPre
 		IsOpen:  props.IsOpen,
 		Title:   kitex.Text(props.Title),
 		OnClose: props.OnClose,
+		Ref:     props.Ref,
 	},
 		previewNode,
 	)
