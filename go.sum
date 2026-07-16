@@ -31,8 +31,8 @@ github.com/andybalholm/cascadia v1.3.4 h1:vM2lgh0Vru9Vwyfm4cQqWP2HHMW0u0+2PAW7Q3
 github.com/andybalholm/cascadia v1.3.4/go.mod h1:BLRmbRjpEtNKieZOCCvYj4RqN+KRA41GBe/5O+G93kM=
 github.com/anmitsu/go-shlex v0.0.0-20200514113438-38f4b401e2be h1:9AeTilPcZAjCFIImctFaOjnTIavg87rW78vTPkQqLI8=
 github.com/anmitsu/go-shlex v0.0.0-20200514113438-38f4b401e2be/go.mod h1:ySMOLuWl6zY27l47sB3qLNK6tF2fkHG55UZxx8oIVo4=
-github.com/anthropics/anthropic-sdk-go v1.56.0 h1:idVU14wOZ06D0GBNEvuhn927xXmBVEquo0469iDwLsc=
-github.com/anthropics/anthropic-sdk-go v1.56.0/go.mod h1:3EfIfmFqxH6rbiLcIP4tPFyXL/IHakx2wDG4OU+TIEI=
+github.com/anthropics/anthropic-sdk-go v1.58.0 h1:WbvzpIbFpd/eR6H4KK84j7VLuRJnIfKKyAptR1C49EI=
+github.com/anthropics/anthropic-sdk-go v1.58.0/go.mod h1:3EfIfmFqxH6rbiLcIP4tPFyXL/IHakx2wDG4OU+TIEI=
 github.com/armon/go-socks5 v0.0.0-20160902184237-e75332964ef5 h1:0CwZNZbxp69SHPdPJAN/hZIm0C4OItdklCFmMRWYpio=
 github.com/armon/go-socks5 v0.0.0-20160902184237-e75332964ef5/go.mod h1:wHh0iHkYZB8zMSxRWpUBQtwG5a7fFgvEO+odwuTv2gs=
 github.com/bahlo/generic-list-go v0.2.0 h1:5sz/EEAK+ls5wF+NeqDpk5+iNdMDXrh3z3nPnH1Wvgk=
@@ -160,8 +160,6 @@ github.com/masterkeysrd/kite v0.0.4-0.20260715041832-3224546b4bec h1:fbltAUKzYxq
 github.com/masterkeysrd/kite v0.0.4-0.20260715041832-3224546b4bec/go.mod h1:qZ99zwRPtPPVF4CIZJX2DroO0eesJt3dip1Q+RIFWS0=
 github.com/masterkeysrd/loom v0.0.4-0.20260711030105-60d4b1b463e3 h1:SiHVTNYkjNORkRbJj/q68sUln0Vh32LEkDhsCboyt4g=
 github.com/masterkeysrd/loom v0.0.4-0.20260711030105-60d4b1b463e3/go.mod h1:5wcS9OmpTWDXdHp9ILC4HKq0gzxPsIfXEaA06XckNOc=
-github.com/masterkeysrd/lspx v0.0.0-20260611065943-6cf2ef01a123 h1:AXKvP/sFrGJAzKnsAzXQk4pFz9ZZNXE4GrioZEJsS+I=
-github.com/masterkeysrd/lspx v0.0.0-20260611065943-6cf2ef01a123/go.mod h1:HfqQ9/wu18wUdLaGYRuzWqEKUW+VBOp77seK1j94p/c=
 github.com/masterkeysrd/lspx v0.0.0-20260716060742-21d5e843d27c h1:xHLzin+Fy4Rc/t3giaP8LQehyobnmWuKRAjiNyiCHN0=
 github.com/masterkeysrd/lspx v0.0.0-20260716060742-21d5e843d27c/go.mod h1:HfqQ9/wu18wUdLaGYRuzWqEKUW+VBOp77seK1j94p/c=
 github.com/masterkeysrd/warp v0.0.3-0.20260712054341-01be5a9aebda h1:oUjJM54XZOI/JnaDcYSoTY36bQCSk/3XjS8h+n1RYVo=
