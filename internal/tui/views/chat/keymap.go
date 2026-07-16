@@ -16,10 +16,12 @@ var IsFeedbackActive bool
 
 // ChatController exposes views/chat actions.
 type ChatController struct {
-	SendQueued func()
-	ClearQueue func()
-	ScrollDown func()
-	ScrollUp   func()
+	SendQueued  func()
+	ClearQueue  func()
+	ScrollDown  func()
+	ScrollUp    func()
+	ScrollLeft  func()
+	ScrollRight func()
 }
 
 // Controller is the pre-allocated, static ChatController instance.
@@ -39,6 +41,8 @@ type AuthController struct {
 	ShowPreview        func()
 	ScrollDown         func()
 	ScrollUp           func()
+	ScrollLeft         func()
+	ScrollRight        func()
 }
 
 // AuthCtrl is the pre-allocated, static AuthController instance for the inline widget.
@@ -70,10 +74,26 @@ func init() {
 		return nil
 	})
 
+	command.Register("app:scroll-left", func(ctx command.CommandContext) error {
+		if Controller.ScrollLeft != nil {
+			Controller.ScrollLeft()
+		}
+		return nil
+	})
+
+	command.Register("app:scroll-right", func(ctx command.CommandContext) error {
+		if Controller.ScrollRight != nil {
+			Controller.ScrollRight()
+		}
+		return nil
+	})
+
 	keymap.Set([]mode.Mode{mode.Normal}, "s", command.ExecFunc("chat:send-queued"), keymap.Context("chat"))
 	keymap.Set([]mode.Mode{mode.Normal}, "c", command.ExecFunc("chat:clear-queue"), keymap.Context("chat"))
 	keymap.Set([]mode.Mode{mode.Normal}, "J", command.ExecFunc("app:scroll-down"), keymap.Context("chat"))
 	keymap.Set([]mode.Mode{mode.Normal}, "K", command.ExecFunc("app:scroll-up"), keymap.Context("chat"))
+	keymap.Set([]mode.Mode{mode.Normal}, "H", command.ExecFunc("app:scroll-left"), keymap.Context("chat"))
+	keymap.Set([]mode.Mode{mode.Normal}, "L", command.ExecFunc("app:scroll-right"), keymap.Context("chat"))
 
 	// --- Generic App Navigation Key Mappings ---
 	keymap.Set([]mode.Mode{mode.Normal}, "j", command.ExecFunc("app:move-down"), keymap.Context("chat"))
@@ -208,6 +228,18 @@ func init() {
 		}
 		return nil
 	}, command.Context("modal:auth"))
+	command.Register("app:scroll-left", func(ctx command.CommandContext) error {
+		if ModalAuthCtrl.ScrollLeft != nil {
+			ModalAuthCtrl.ScrollLeft()
+		}
+		return nil
+	}, command.Context("modal:auth"))
+	command.Register("app:scroll-right", func(ctx command.CommandContext) error {
+		if ModalAuthCtrl.ScrollRight != nil {
+			ModalAuthCtrl.ScrollRight()
+		}
+		return nil
+	}, command.Context("modal:auth"))
 
 	// --- Modal Auth Key Mappings ---
 	keymap.Set([]mode.Mode{mode.Normal}, "j", command.ExecFunc("app:move-down"), keymap.Context("modal:auth"))
@@ -220,6 +252,8 @@ func init() {
 	keymap.Set([]mode.Mode{mode.Normal}, "D", command.ExecFunc("auth:start-feedback"), keymap.Context("modal:auth"))
 	keymap.Set([]mode.Mode{mode.Normal}, "J", command.ExecFunc("app:scroll-down"), keymap.Context("modal:auth"))
 	keymap.Set([]mode.Mode{mode.Normal}, "K", command.ExecFunc("app:scroll-up"), keymap.Context("modal:auth"))
+	keymap.Set([]mode.Mode{mode.Normal}, "H", command.ExecFunc("app:scroll-left"), keymap.Context("modal:auth"))
+	keymap.Set([]mode.Mode{mode.Normal}, "L", command.ExecFunc("app:scroll-right"), keymap.Context("modal:auth"))
 
 	// --- Compaction TUI Slash Command ---
 	command.Register("compact", func(ctx command.CommandContext) error {

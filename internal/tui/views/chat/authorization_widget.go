@@ -1433,6 +1433,18 @@ var AuthorizationPreviewModal = kitex.FCC("AuthorizationPreviewModal", func(prop
 				previewRef.Current.ScrollBy(0, -3)
 			}
 		}
+
+		ModalAuthCtrl.ScrollLeft = func() {
+			if previewRef.Current != nil {
+				previewRef.Current.ScrollBy(-3, 0)
+			}
+		}
+
+		ModalAuthCtrl.ScrollRight = func() {
+			if previewRef.Current != nil {
+				previewRef.Current.ScrollBy(3, 0)
+			}
+		}
 	}
 
 	kitex.UseEffectCleanup(func() func() {
@@ -1450,6 +1462,8 @@ var AuthorizationPreviewModal = kitex.FCC("AuthorizationPreviewModal", func(prop
 					ModalAuthCtrl.ToggleCancelDialog = nil
 					ModalAuthCtrl.ScrollDown = nil
 					ModalAuthCtrl.ScrollUp = nil
+					ModalAuthCtrl.ScrollLeft = nil
+					ModalAuthCtrl.ScrollRight = nil
 				}
 			}
 		}

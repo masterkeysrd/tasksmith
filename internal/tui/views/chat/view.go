@@ -511,6 +511,58 @@ func renderChatView(props ViewProps) kitex.Node {
 			log.Info("ScrollUp new position", log.Int("x", newX), log.Int("y", newY))
 		}
 	}
+	Controller.ScrollLeft = func() {
+		log.Info("ScrollLeft invoked", log.Bool("historyRef_nil", historyRef.Current == nil))
+		if historyRef.Current != nil {
+			el := historyRef.Current
+			doc := el.OwnerDocument()
+			if doc == nil {
+				return
+			}
+			view := doc.DefaultView()
+			if view == nil {
+				return
+			}
+			maxScrollX, _ := view.GetMaxScroll(el)
+			x, y := el.Scroll()
+			log.Info("ScrollLeft current position", log.Int("x", x), log.Int("y", y), log.Int("maxScrollX", maxScrollX))
+
+			if x > maxScrollX {
+				x = maxScrollX
+			}
+
+			targetX := max(x-3, 0)
+			el.ScrollTo(targetX, y)
+			newX, newY := el.Scroll()
+			log.Info("ScrollLeft new position", log.Int("x", newX), log.Int("y", newY))
+		}
+	}
+	Controller.ScrollRight = func() {
+		log.Info("ScrollRight invoked", log.Bool("historyRef_nil", historyRef.Current == nil))
+		if historyRef.Current != nil {
+			el := historyRef.Current
+			doc := el.OwnerDocument()
+			if doc == nil {
+				return
+			}
+			view := doc.DefaultView()
+			if view == nil {
+				return
+			}
+			maxScrollX, _ := view.GetMaxScroll(el)
+			x, y := el.Scroll()
+			log.Info("ScrollRight current position", log.Int("x", x), log.Int("y", y), log.Int("maxScrollX", maxScrollX))
+
+			if x > maxScrollX {
+				x = maxScrollX
+			}
+
+			targetX := min(x+3, maxScrollX)
+			el.ScrollTo(targetX, y)
+			newX, newY := el.Scroll()
+			log.Info("ScrollRight new position", log.Int("x", newX), log.Int("y", newY))
+		}
+	}
 
 	hasRunningTasks := stateQuery.Data != nil && len(stateQuery.Data.RunningTasks) > 0
 	kitex.UseInterval(func() {
