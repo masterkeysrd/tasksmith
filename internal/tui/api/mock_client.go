@@ -28,6 +28,7 @@ type MockClient struct {
 	ForceCompactionFunc             func(ctx context.Context, req api.ForceCompactionRequest) (*api.ForceCompactionResponse, error)
 	GetSessionMessagesFunc          func(ctx context.Context, req api.GetSessionMessagesRequest) (*api.GetSessionMessagesResponse, error)
 	WatchSessionMessagesFunc        func(ctx context.Context, req api.GetSessionMessagesRequest) iter.Seq2[*api.GetSessionMessagesResponse, error]
+	GetInputHistoryFunc             func(ctx context.Context, req api.GetInputHistoryRequest) (*api.GetInputHistoryResponse, error)
 	GetSessionStateFunc             func(ctx context.Context, req api.GetSessionStateRequest) (*api.GetSessionStateResponse, error)
 	SubmitAuthorizationDecisionFunc func(ctx context.Context, req api.SubmitAuthorizationDecisionRequest) (*api.SubmitAuthorizationDecisionResponse, error)
 	ResolveMcpRequestFunc           func(ctx context.Context, req api.ResolveMcpRequest) (*api.ResolveMcpResponse, error)
@@ -175,6 +176,13 @@ func (m *MockClient) GetSessionMessages(ctx context.Context, req api.GetSessionM
 		return m.GetSessionMessagesFunc(ctx, req)
 	}
 	return &api.GetSessionMessagesResponse{}, nil
+}
+
+func (m *MockClient) GetInputHistory(ctx context.Context, req api.GetInputHistoryRequest) (*api.GetInputHistoryResponse, error) {
+	if m.GetInputHistoryFunc != nil {
+		return m.GetInputHistoryFunc(ctx, req)
+	}
+	return &api.GetInputHistoryResponse{}, nil
 }
 
 func (m *MockClient) WatchSessionMessages(ctx context.Context, req api.GetSessionMessagesRequest) iter.Seq2[*api.GetSessionMessagesResponse, error] {

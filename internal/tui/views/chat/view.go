@@ -206,6 +206,11 @@ func renderChatView(props ViewProps) kitex.Node {
 	inputValue, setInputValue := kitex.UseState("")
 	submitting, setSubmitting := kitex.UseState(false)
 
+	historyQuery := queries.UseGetInputHistory(api.GetInputHistoryRequest{Limit: 50})
+
+	historyIdx, setHistoryIdx := kitex.UseState(-1)
+	draftVal, setDraftVal := kitex.UseState("")
+
 	// Mode handling & Focus management
 	m := mode.Use()
 	isInsert := m == mode.Insert
@@ -456,9 +461,44 @@ func renderChatView(props ViewProps) kitex.Node {
 				handleClearQueue()
 			}
 		}
+		Controller.HistoryPrev = func() {
+			if historyQuery.Data == nil {
+				return
+			}
+			h := historyQuery.Data.Inputs
+			if len(h) > 0 {
+				newIdx := historyIdx() + 1
+				if newIdx < len(h) {
+					if historyIdx() == -1 {
+						setDraftVal(inputValue())
+					}
+					setHistoryIdx(newIdx)
+					setInputValue(h[newIdx])
+				}
+			}
+		}
+		Controller.HistoryNext = func() {
+			if historyQuery.Data == nil {
+				return
+			}
+			h := historyQuery.Data.Inputs
+			if len(h) > 0 {
+				newIdx := historyIdx() - 1
+				if newIdx >= -1 {
+					setHistoryIdx(newIdx)
+					if newIdx == -1 {
+						setInputValue(draftVal())
+					} else {
+						setInputValue(h[newIdx])
+					}
+				}
+			}
+		}
 	} else {
 		Controller.SendQueued = nil
 		Controller.ClearQueue = nil
+		Controller.HistoryPrev = nil
+		Controller.HistoryNext = nil
 	}
 	Controller.ScrollDown = func() {
 		if showFullOutputModal() || showResultPreview() || showSubagentModal() {
@@ -827,6 +867,7 @@ func renderChatView(props ViewProps) kitex.Node {
 			windClient.InvalidateQueries(api.GetSessionMessagesRequest{SessionID: sessionID})
 			windClient.InvalidateQueries(api.GetSessionStateRequest{SessionID: sessionID})
 			windClient.InvalidateQueries(api.GetFileChangesRequest{SessionID: sessionID})
+			windClient.InvalidateQueries(api.GetInputHistoryRequest{})
 		}, func(err error) {
 			filtered := make([]message.Message, 0)
 			for _, m := range optimisticMessages() {
@@ -1257,9 +1298,12 @@ func renderChatView(props ViewProps) kitex.Node {
 					SessionID: sessionID,
 					OnChange: func(val string) {
 						setInputValue(val)
+						setHistoryIdx(-1)
 					},
 					OnSubmit: func(text string, trackedRefs []resolver.Reference) {
 						sendMessage(text, trackedRefs)
+						setHistoryIdx(-1)
+						setDraftVal("")
 					},
 				}),
 				func() kitex.Node {
@@ -1362,6 +1406,13 @@ func renderChatView(props ViewProps) kitex.Node {
 					)
 				}),
 			)
+		}),
+
+		// Modal Section for History Picker View
+		kitex.If(!props.ReadOnly, func() kitex.Node {
+			return HistoryPicker(HistoryPickerProps{
+				SetInputValue: setInputValue,
+			})
 		}),
 	)
 }

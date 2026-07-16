@@ -34,6 +34,12 @@ func UseGetSessionState(sessionID string) wind.Result[*api.GetSessionStateRespon
 	return wind.Use(api.GetSessionStateRequest{SessionID: sessionID}, promise.WrapWithProps(client.GetSessionState))
 }
 
+// UseGetInputHistory retrieves the user prompt history.
+func UseGetInputHistory(req api.GetInputHistoryRequest) wind.Result[*api.GetInputHistoryResponse] {
+	client := tuiapi.UseClient()
+	return wind.Use(req, promise.WrapWithProps(client.GetInputHistory))
+}
+
 // UseGetFileChanges retrieves the list of file changes for the active session.
 func UseGetFileChanges(sessionID string) wind.Result[*api.GetFileChangesResponse] {
 	client := tuiapi.UseClient()

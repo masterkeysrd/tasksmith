@@ -42,22 +42,23 @@ type PickerAction struct {
 
 // PickerProps defines the properties for the Picker component.
 type PickerProps struct {
-	IsOpen        bool
-	OnClose       func()
-	OnSelect      func(PickerItem)
-	Title         string
-	Placeholder   string
-	Groups        []PickerGroup
-	Items         []PickerItem
-	Footer        string
-	FooterStyle   style.Style
-	RenderItem    func(PickerItem) kitex.Node
-	RenderPreview func(PickerItem) kitex.Node
-	PreviewWidth  int
-	Style         style.Style
-	DisableSearch bool
-	Actions       []PickerAction
-	Attributes    map[string]string
+	IsOpen         bool
+	OnClose        func()
+	OnSelect       func(PickerItem)
+	Title          string
+	Placeholder    string
+	Groups         []PickerGroup
+	Items          []PickerItem
+	Footer         string
+	FooterStyle    style.Style
+	RenderItem     func(PickerItem) kitex.Node
+	RenderPreview  func(PickerItem) kitex.Node
+	PreviewWidth   int
+	Style          style.Style
+	DisableSearch  bool
+	OnSearchChange func(string)
+	Actions        []PickerAction
+	Attributes     map[string]string
 }
 
 var (
@@ -593,6 +594,9 @@ var Picker = kitex.FC("Picker", func(props PickerProps) kitex.Node {
 				PlaceholderStyle: style.S().Foreground(textTertiary),
 				OnChange: func(v string) {
 					setQuery(v)
+					if props.OnSearchChange != nil {
+						props.OnSearchChange(v)
+					}
 				},
 			}),
 		)

@@ -162,6 +162,18 @@ func (s *sqliteStore) GetMessages(ctx context.Context, sessionID string) ([]Mess
 	return messages, err
 }
 
+func (s *sqliteStore) GetUserMessages(ctx context.Context, query string, limit int) ([]MessageData, error) {
+	var messages []MessageData
+	if query != "" {
+		sqlStr := `SELECT id, session_id, role, content, created_at FROM messages WHERE role = 'user' AND content LIKE ? ORDER BY created_at DESC LIMIT ?`
+		err := s.db.SelectContext(ctx, &messages, sqlStr, "%"+query+"%", limit)
+		return messages, err
+	}
+	sqlStr := `SELECT id, session_id, role, content, created_at FROM messages WHERE role = 'user' ORDER BY created_at DESC LIMIT ?`
+	err := s.db.SelectContext(ctx, &messages, sqlStr, limit)
+	return messages, err
+}
+
 func (s *sqliteStore) NewCheckpointer() (*loomsqlite.Checkpointer, error) {
 	return loomsqlite.NewCheckpointer(s.checkDB.DB)
 }

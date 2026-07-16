@@ -33,6 +33,7 @@ type Client interface {
 	ForceCompaction(ctx context.Context, req api.ForceCompactionRequest) (*api.ForceCompactionResponse, error)
 	GetSessionMessages(ctx context.Context, req api.GetSessionMessagesRequest) (*api.GetSessionMessagesResponse, error)
 	WatchSessionMessages(ctx context.Context, req api.GetSessionMessagesRequest) iter.Seq2[*api.GetSessionMessagesResponse, error]
+	GetInputHistory(ctx context.Context, req api.GetInputHistoryRequest) (*api.GetInputHistoryResponse, error)
 	GetSessionState(ctx context.Context, req api.GetSessionStateRequest) (*api.GetSessionStateResponse, error)
 	SubmitAuthorizationDecision(ctx context.Context, req api.SubmitAuthorizationDecisionRequest) (*api.SubmitAuthorizationDecisionResponse, error)
 	ResolveMcpRequest(ctx context.Context, req api.ResolveMcpRequest) (*api.ResolveMcpResponse, error)
@@ -202,6 +203,12 @@ func (w *toastClient) ForceCompaction(ctx context.Context, req api.ForceCompacti
 func (w *toastClient) GetSessionMessages(ctx context.Context, req api.GetSessionMessagesRequest) (*api.GetSessionMessagesResponse, error) {
 	res, err := w.delegate.GetSessionMessages(ctx, req)
 	toastError("Failed to Get Session Messages", err)
+	return res, err
+}
+
+func (w *toastClient) GetInputHistory(ctx context.Context, req api.GetInputHistoryRequest) (*api.GetInputHistoryResponse, error) {
+	res, err := w.delegate.GetInputHistory(ctx, req)
+	toastError("Failed to Get Input History", err)
 	return res, err
 }
 

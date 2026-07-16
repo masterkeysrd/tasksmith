@@ -285,6 +285,15 @@ type GetSessionMessagesResponse struct {
 	QueuedMessages []string `json:"queued_messages,omitempty"` // Serialized JSON queued messages
 }
 
+type GetInputHistoryRequest struct {
+	Query string `json:"query,omitempty"`
+	Limit int    `json:"limit,omitempty"`
+}
+
+type GetInputHistoryResponse struct {
+	Inputs []string `json:"inputs"`
+}
+
 type GetSessionStateRequest struct {
 	SessionID string `json:"session_id"`
 }

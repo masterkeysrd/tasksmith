@@ -22,6 +22,8 @@ type ChatController struct {
 	ScrollUp    func()
 	ScrollLeft  func()
 	ScrollRight func()
+	HistoryPrev func()
+	HistoryNext func()
 }
 
 // Controller is the pre-allocated, static ChatController instance.
@@ -60,6 +62,30 @@ func init() {
 		return nil
 	})
 
+	command.Register("chat:history-prev", func(ctx command.CommandContext) error {
+		if Controller.HistoryPrev != nil {
+			Controller.HistoryPrev()
+		}
+		return nil
+	})
+
+	command.Register("chat:history-next", func(ctx command.CommandContext) error {
+		if Controller.HistoryNext != nil {
+			Controller.HistoryNext()
+		}
+		return nil
+	})
+
+	command.Register("chat:open-history-picker", func(ctx command.CommandContext) error {
+		active.SetModal("historypicker")
+		return nil
+	})
+
+	command.Register("history", func(ctx command.CommandContext) error {
+		active.SetModal("historypicker")
+		return nil
+	})
+
 	command.Register("app:scroll-down", func(ctx command.CommandContext) error {
 		if Controller.ScrollDown != nil {
 			Controller.ScrollDown()
@@ -94,6 +120,9 @@ func init() {
 	keymap.Set([]mode.Mode{mode.Normal}, "K", command.ExecFunc("app:scroll-up"), keymap.Context("chat"))
 	keymap.Set([]mode.Mode{mode.Normal}, "H", command.ExecFunc("app:scroll-left"), keymap.Context("chat"))
 	keymap.Set([]mode.Mode{mode.Normal}, "L", command.ExecFunc("app:scroll-right"), keymap.Context("chat"))
+	keymap.Set([]mode.Mode{mode.Normal, mode.Insert}, "<C-r>", command.ExecFunc("chat:open-history-picker"), keymap.Context("chat"))
+	keymap.Set([]mode.Mode{mode.Insert}, "<C-p>", command.ExecFunc("chat:history-prev"), keymap.Context("chat"))
+	keymap.Set([]mode.Mode{mode.Insert}, "<C-n>", command.ExecFunc("chat:history-next"), keymap.Context("chat"))
 
 	// --- Generic App Navigation Key Mappings ---
 	keymap.Set([]mode.Mode{mode.Normal}, "j", command.ExecFunc("app:move-down"), keymap.Context("chat"))

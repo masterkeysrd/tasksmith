@@ -2071,6 +2071,54 @@ func (m *Manager) handleToolMessage(_ context.Context, sessionID string, sess *A
 	return nil
 }
 
+// GetUserMessageHistory returns a list of unique user prompts matching the search filter from SQLite.
+func (m *Manager) GetUserMessageHistory(ctx context.Context, search string, limit int) ([]string, error) {
+	// Query messages with role = 'user', fetch slightly more to allow for de-duplication
+	mds, err := m.store.GetUserMessages(ctx, search, limit*3)
+	if err != nil {
+		return nil, err
+	}
+
+	var uniqueInputs []string
+	seen := make(map[string]bool)
+
+	for _, md := range mds {
+		rawArray := "[" + md.Content + "]"
+		var messages message.MessageList
+		if err := json.Unmarshal([]byte(rawArray), &messages); err != nil {
+			continue
+		}
+		if len(messages) == 0 {
+			continue
+		}
+
+		var textParts []string
+		for _, b := range messages[0].GetContent() {
+			if tb, ok := b.(*message.TextBlock); ok {
+				if isAttach, ok := tb.Extras["is_attachments"].(bool); ok && isAttach {
+					continue
+				}
+				textParts = append(textParts, tb.Text)
+			}
+		}
+
+		promptText := strings.TrimSpace(strings.Join(textParts, "\n"))
+		if promptText == "" {
+			continue
+		}
+
+		if !seen[promptText] {
+			seen[promptText] = true
+			uniqueInputs = append(uniqueInputs, promptText)
+			if len(uniqueInputs) >= limit {
+				break
+			}
+		}
+	}
+
+	return uniqueInputs, nil
+}
+
 // Done returns a channel that is closed when the Manager is closed.
 func (m *Manager) Done() <-chan struct{} {
 	return m.ctx.Done()

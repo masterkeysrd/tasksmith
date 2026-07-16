@@ -72,6 +72,7 @@ type Store interface {
 
 	AppendMessage(ctx context.Context, msg MessageData, updatedAt time.Time) error
 	GetMessages(ctx context.Context, sessionID string) ([]MessageData, error)
+	GetUserMessages(ctx context.Context, query string, limit int) ([]MessageData, error)
 
 	NewCheckpointer() (*loomsqlite.Checkpointer, error)
 	ResourceStore() *resource.Store

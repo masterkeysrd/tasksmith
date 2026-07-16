@@ -885,6 +885,22 @@ func (s *Service) GetSessionMessages(ctx context.Context, req GetSessionMessages
 	return resp, nil
 }
 
+// GetInputHistory returns a list of unique user prompts submitted in the workspace.
+func (s *Service) GetInputHistory(ctx context.Context, req GetInputHistoryRequest) (*GetInputHistoryResponse, error) {
+	if s.sm == nil {
+		return nil, fmt.Errorf("session manager not initialized")
+	}
+	limit := req.Limit
+	if limit <= 0 {
+		limit = 50
+	}
+	inputs, err := s.sm.GetUserMessageHistory(ctx, req.Query, limit)
+	if err != nil {
+		return nil, err
+	}
+	return &GetInputHistoryResponse{Inputs: inputs}, nil
+}
+
 // WatchSessionMessages establishes a stream that yields updated message lists.
 func (s *Service) WatchSessionMessages(ctx context.Context, req GetSessionMessagesRequest) iter.Seq2[*GetSessionMessagesResponse, error] {
 	return func(yield func(*GetSessionMessagesResponse, error) bool) {
