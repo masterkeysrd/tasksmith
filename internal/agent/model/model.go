@@ -69,6 +69,8 @@ func CreateProvider(ctx context.Context, p *warp.ModelProvider) (llm.Provider, e
 		var opts []openaioption.RequestOption
 		if token != "" {
 			opts = append(opts, openaioption.WithAPIKey(token))
+		} else if p.Spec.Auth != nil && p.Spec.Auth.Env != "" {
+			return nil, fmt.Errorf("authentication environment variable %q is empty or not set", p.Spec.Auth.Env)
 		}
 		if p.Spec.Endpoint != "" {
 			opts = append(opts, openaioption.WithBaseURL(p.Spec.Endpoint))
@@ -83,6 +85,8 @@ func CreateProvider(ctx context.Context, p *warp.ModelProvider) (llm.Provider, e
 		var opts []anthropicoption.RequestOption
 		if token != "" {
 			opts = append(opts, anthropicoption.WithAPIKey(token))
+		} else if p.Spec.Auth != nil && p.Spec.Auth.Env != "" {
+			return nil, fmt.Errorf("authentication environment variable %q is empty or not set", p.Spec.Auth.Env)
 		}
 		if p.Spec.Endpoint != "" {
 			opts = append(opts, anthropicoption.WithBaseURL(p.Spec.Endpoint))
@@ -106,6 +110,8 @@ func CreateProvider(ctx context.Context, p *warp.ModelProvider) (llm.Provider, e
 				config.APIKey = key
 			} else if key := os.Getenv("GOOGLE_API_KEY"); key != "" {
 				config.APIKey = key
+			} else if p.Spec.Auth != nil && p.Spec.Auth.Env != "" {
+				return nil, fmt.Errorf("authentication environment variable %q is empty or not set", p.Spec.Auth.Env)
 			}
 		}
 		loomProvider, err = loomgenai.NewProvider(ctx, config)

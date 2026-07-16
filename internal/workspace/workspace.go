@@ -41,13 +41,44 @@ func (w *Workspace) CWD() string {
 	return w.cwd
 }
 
+func findEnvPath(startDir string) string {
+	dir, err := filepath.Abs(startDir)
+	if err != nil {
+		dir = startDir
+	}
+	for {
+		envPath := filepath.Join(dir, ".env")
+		if _, err := os.Stat(envPath); err == nil {
+			return envPath
+		}
+		// Stop climbing if we hit workspace sentinel files
+		if _, err := os.Stat(filepath.Join(dir, "WORKSPACE.md")); err == nil {
+			return envPath
+		}
+		if _, err := os.Stat(filepath.Join(dir, ".warp")); err == nil {
+			return envPath
+		}
+
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break
+		}
+		dir = parent
+	}
+	return ""
+}
+
 func (w *Workspace) Load(ctx context.Context) error {
 	w.logger.Info("Loading workspace", log.String("cwd", w.cwd))
 
-	// Load local environment secrets
-	envPath := filepath.Join(w.cwd, ".env")
-	if err := env.Load(envPath); err != nil {
-		w.logger.Warn("Failed to load local .env file", log.Err(err))
+	// Load local environment secrets by walking up to find .env or workspace root
+	envPath := findEnvPath(w.cwd)
+	if envPath != "" {
+		if err := env.Load(envPath); err != nil {
+			w.logger.Warn("Failed to load local .env file", log.String("path", envPath), log.Err(err))
+		} else {
+			w.logger.Info("Loaded environment secrets", log.String("path", envPath))
+		}
 	}
 
 	provider := &systemProvider{}
