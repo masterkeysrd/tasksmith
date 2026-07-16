@@ -64,8 +64,14 @@ var BubbleGroup = kitex.FC("BubbleGroup", func(props BubbleGroupProps) kitex.Nod
 			timestamp = time.Now().Format("15:04")
 		}
 
+		isInterrupted := false
 		var tokensInput, tokensOutput, tokensTotal int
 		for _, msg := range props.Msgs {
+			if meta := msg.GetMetadata(); meta != nil {
+				if interrupted, ok := meta["interrupted"].(bool); ok && interrupted {
+					isInterrupted = true
+				}
+			}
 			if asstMsg, ok := msg.(*message.Assistant); ok {
 				if asstMsg.Metrics != nil {
 					tokensInput += asstMsg.Metrics.Tokens.Input
@@ -196,6 +202,7 @@ var BubbleGroup = kitex.FC("BubbleGroup", func(props BubbleGroupProps) kitex.Nod
 			Timestamp:            timestamp,
 			Children:             children,
 			IsSystemNotification: isSys,
+			IsInterrupted:        isInterrupted,
 			TaskID:               taskID,
 			TaskName:             taskName,
 			TaskStatus:           taskStatus,
@@ -223,6 +230,7 @@ type BubbleProps struct {
 	Timestamp            string
 	Children             []kitex.Node
 	IsSystemNotification bool
+	IsInterrupted        bool
 	TaskID               string
 	TaskName             string
 	TaskStatus           string
@@ -241,6 +249,27 @@ var Bubble = kitex.FC("Bubble", func(props BubbleProps) kitex.Node {
 	timestamp := props.Timestamp
 	children := props.Children
 
+	if props.IsInterrupted && t != nil {
+		noticeStyle := style.S().
+			Display(style.DisplayFlex).
+			FlexDirection(style.FlexRow).
+			AlignItems(style.AlignCenter).
+			Gap(1).
+			Foreground(t.Color.Text.Error).
+			Italic(true).
+			Bold(true).
+			MarginTop(1).
+			PaddingLeft(2)
+
+		interruptedNotice := kitex.Box(kitex.BoxProps{Style: noticeStyle},
+			icon.Alert,
+			kitex.Text(" Stopped by user"),
+		)
+		extendedChildren := make([]kitex.Node, len(props.Children), len(props.Children)+1)
+		copy(extendedChildren, props.Children)
+		children = append(extendedChildren, interruptedNotice)
+	}
+
 	if props.IsSystemNotification && t != nil {
 		align := style.AlignStart
 		borderCol := t.Color.Surface.Tertiary
@@ -250,6 +279,8 @@ var Bubble = kitex.FC("Bubble", func(props BubbleProps) kitex.Node {
 			} else {
 				borderCol = t.Color.Surface.Error
 			}
+		} else if props.IsInterrupted {
+			borderCol = t.Color.Text.Error
 		}
 
 		cardStyle := style.S().
@@ -280,6 +311,8 @@ var Bubble = kitex.FC("Bubble", func(props BubbleProps) kitex.Node {
 			} else {
 				titleIcon = icon.Alert
 			}
+		} else if props.IsInterrupted {
+			titleIcon = icon.Alert
 		}
 
 		cardHeader := kitex.Box(kitex.BoxProps{Style: titleStyle},
@@ -454,6 +487,21 @@ var Bubble = kitex.FC("Bubble", func(props BubbleProps) kitex.Node {
 		),
 		kitex.Text("─ "),
 		kitex.Text(timestamp),
+		kitex.If(props.IsInterrupted, func() kitex.Node {
+			return kitex.Box(kitex.BoxProps{
+				Style: style.S().
+					Display(style.DisplayFlex).
+					FlexDirection(style.FlexRow).
+					AlignItems(style.AlignCenter).
+					Gap(1).
+					Foreground(t.Color.Text.Error).
+					Bold(true),
+			},
+				kitex.Text("  "),
+				icon.Alert,
+				kitex.Text(" STOPPED"),
+			)
+		}),
 	)
 
 	// Add right-aligned dimmed token metrics if present

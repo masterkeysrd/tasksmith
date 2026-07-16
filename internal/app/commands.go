@@ -32,6 +32,37 @@ func (app *Application) InitializeCommands() {
 		return nil
 	})
 
+	command.Register("cancel", func(ctx command.CommandContext) error {
+		sessionID := active.GetSessionID()
+		if sessionID == "" {
+			return fmt.Errorf("cancel: no active session")
+		}
+		if app.api == nil {
+			return fmt.Errorf("cancel: API service not available")
+		}
+
+		state, err := app.api.GetSessionState(ctx.Ctx, api.GetSessionStateRequest{SessionID: sessionID})
+		if err != nil {
+			return fmt.Errorf("cancel: failed to get session state: %w", err)
+		}
+
+		if state.Status != "running" {
+			return fmt.Errorf("cancel: agent is not running")
+		}
+
+		active.SetStatusMessage("Cancelling agent execution...")
+		_, err = app.api.CancelTurn(ctx.Ctx, api.CancelTurnRequest{SessionID: sessionID})
+		if err != nil {
+			return fmt.Errorf("cancel: failed to cancel agent execution: %w", err)
+		}
+
+		active.SetStatusMessage("Agent execution cancelled.")
+		if active.InvalidateSessionState != nil {
+			active.InvalidateSessionState(sessionID)
+		}
+		return nil
+	})
+
 	command.Register("theme", func(ctx command.CommandContext) error {
 		if len(ctx.Args) == 0 {
 			return fmt.Errorf("theme: missing theme name")

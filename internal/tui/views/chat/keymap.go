@@ -1,6 +1,7 @@
 package chat
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/masterkeysrd/tasksmith/internal/api"
@@ -171,6 +172,29 @@ func init() {
 	command.Register("app:toggle-cancel", func(ctx command.CommandContext) error {
 		if AuthCtrl.ToggleCancelDialog != nil {
 			AuthCtrl.ToggleCancelDialog()
+			return nil
+		}
+		// If authorization dialog is not active, check if the session is running and cancel the turn
+		sessionID := active.GetSessionID()
+		if sessionID != "" && tuiapi.GlobalClient != nil {
+			state, err := tuiapi.GlobalClient.GetSessionState(ctx.Ctx, api.GetSessionStateRequest{SessionID: sessionID})
+			if err == nil && state.Status == "running" {
+				active.SetStatusMessage("Cancelling agent execution...")
+				go func() {
+					bgCtx := context.Background()
+					_, err := tuiapi.GlobalClient.CancelTurn(bgCtx, api.CancelTurnRequest{
+						SessionID: sessionID,
+					})
+					if err != nil {
+						active.SetStatusMessage("Cancel failed: " + err.Error())
+					} else {
+						active.SetStatusMessage("Agent execution cancelled.")
+						if active.InvalidateSessionState != nil {
+							active.InvalidateSessionState(sessionID)
+						}
+					}
+				}()
+			}
 		}
 		return nil
 	}, command.Context("chat"))

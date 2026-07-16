@@ -692,12 +692,35 @@ func renderChatView(props ViewProps) kitex.Node {
 			if thinkingTime() > 0 {
 				setLastFinishedTime(thinkingTime())
 			}
-		} else if prevSending.Current && lastFinishedTime() == -1 {
-			// Completed immediately (0 seconds)
-			setLastFinishedTime(0)
+		} else if prevSending.Current {
+			// Transitioned from running to idle. Check if cancelled.
+			isInterruptedSession := false
+			if len(messages) > 0 {
+				lastMsg := messages[len(messages)-1]
+				if asst, ok := lastMsg.(*message.Assistant); ok {
+					if meta := asst.GetMetadata(); meta != nil {
+						if interrupted, ok := meta["interrupted"].(bool); ok && interrupted {
+							isInterruptedSession = true
+						}
+					}
+				} else if lastMsg.Role() == message.RoleSystem {
+					for _, block := range lastMsg.GetContent() {
+						if tb, ok := block.(*message.TextBlock); ok && tb.Text == "Agent execution cancelled." {
+							isInterruptedSession = true
+						}
+					}
+				}
+			}
+
+			if isInterruptedSession {
+				setLastFinishedTime(-1)
+			} else if lastFinishedTime() == -1 {
+				// Completed immediately (0 seconds)
+				setLastFinishedTime(0)
+			}
 		}
 		prevSending.Current = sending
-	}, []any{sending, thinkingTime()})
+	}, []any{sending, thinkingTime(), messages})
 
 	// Calculate a simple integer key of the messages state to trigger the effect reactively.
 	// Only calculate the length of the last message to avoid O(N) traversal of all message blocks on every render.

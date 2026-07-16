@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"maps"
 	"strings"
@@ -488,6 +489,23 @@ func (m *Manager) ListTasks(sessionID string) []*tools.Task {
 	return m.taskMgr.ListTasks(sessionID)
 }
 
+// CancelTurn cancels the current active agent run for the session, transitioning it back to idle.
+func (m *Manager) CancelTurn(ctx context.Context, sessionID string) error {
+	m.mu.Lock()
+	sess, ok := m.activeSessions[sessionID]
+	if !ok {
+		m.mu.Unlock()
+		return fmt.Errorf("session %s not found", sessionID)
+	}
+	cancel := sess.Cancel
+	m.mu.Unlock()
+
+	if cancel != nil {
+		cancel()
+	}
+	return nil
+}
+
 // SendMessage appends the user message and initiates the background Loom agent execution.
 func (m *Manager) SendMessage(ctx context.Context, sessionID string, text string, refs []resolver.Reference) error {
 	return m.sendMessage(ctx, sessionID, text, refs, nil)
@@ -796,6 +814,7 @@ func (m *Manager) runAgentLoop(runCtx context.Context, sessionID string, sess *A
 		if !sess.ThinkingStart.IsZero() {
 			sess.ThinkingDuration = time.Since(sess.ThinkingStart)
 		}
+		sess.Cancel = nil
 		m.mu.Unlock()
 		cancel()
 	}()
@@ -1033,56 +1052,70 @@ func (m *Manager) runAgentLoop(runCtx context.Context, sessionID string, sess *A
 		return
 	}
 
+	var isCancelled bool
+
 	// Run the graph streaming loop
 	loc := &graph.Location{ThreadID: sessionID}
 	seq, err := g.Stream(runCtx, inputCmd, loc)
 	if err != nil {
-		m.setSessionError(sessionID, fmt.Errorf("failed to start agent stream: %w", err))
-		return
+		if errors.Is(err, context.Canceled) {
+			log.Info(fmt.Sprintf("Session execution cancelled [%s]", sessionID))
+			isCancelled = true
+		} else {
+			m.setSessionError(sessionID, fmt.Errorf("failed to start agent stream: %w", err))
+			return
+		}
 	}
 
 	var asstMsg message.Message
 
-	// Consume the stream, appending text chunks dynamically in memory
-	for ev, err := range seq {
-		if err != nil {
-			m.setSessionError(sessionID, fmt.Errorf("stream execution error: %w", err))
-			return
-		}
-
-		if ev.Event == graph.EventLLMChunk {
-			m.handleLLMChunk(sess, ev)
-		} else if ev.Event == "agent_message" {
-			if err := m.handleAgentMessage(runCtx, sessionID, sess, ev, systemPrompt, agentName, providerName, modelName); err != nil {
-				m.setSessionError(sessionID, err)
-				return
-			}
-		} else if ev.Event == "user_message" {
-			m.mu.Lock()
-			sess.CurrentStreamText = ""
-			sess.CurrentStreamThinking = ""
-			m.mu.Unlock()
-			m.notifySubscribers(sessionID)
-		} else if ev.Event == "on_tool_chunk" {
-			m.handleToolChunk(sess, ev)
-		} else if ev.Event == "tool_message" {
-			if err := m.handleToolMessage(runCtx, sessionID, sess, ev, agentName); err != nil {
-				m.setSessionError(sessionID, err)
-				return
-			}
-		} else if ev.Event == graph.EventCompleted {
-			var finalState *agentgraph.AgentState
-			if snap, ok := ev.Data.(graph.Snapshot[agentgraph.AgentState]); ok {
-				finalState = &snap.State
-			} else if snapPtr, ok := ev.Data.(*graph.Snapshot[agentgraph.AgentState]); ok {
-				if snapPtr != nil {
-					finalState = &snapPtr.State
+	if !isCancelled {
+		// Consume the stream, appending text chunks dynamically in memory
+		for ev, err := range seq {
+			if err != nil {
+				if errors.Is(err, context.Canceled) {
+					log.Info(fmt.Sprintf("Session execution cancelled [%s]", sessionID))
+					isCancelled = true
+					break
 				}
+				m.setSessionError(sessionID, fmt.Errorf("stream execution error: %w", err))
+				return
 			}
-			if finalState != nil && len(finalState.Messages) > 0 {
-				lastMsg := finalState.Messages[len(finalState.Messages)-1]
-				if lastMsg.Role() == message.RoleAssistant {
-					asstMsg = lastMsg
+
+			if ev.Event == graph.EventLLMChunk {
+				m.handleLLMChunk(sess, ev)
+			} else if ev.Event == "agent_message" {
+				if err := m.handleAgentMessage(runCtx, sessionID, sess, ev, systemPrompt, agentName, providerName, modelName); err != nil {
+					m.setSessionError(sessionID, err)
+					return
+				}
+			} else if ev.Event == "user_message" {
+				m.mu.Lock()
+				sess.CurrentStreamText = ""
+				sess.CurrentStreamThinking = ""
+				m.mu.Unlock()
+				m.notifySubscribers(sessionID)
+			} else if ev.Event == "on_tool_chunk" {
+				m.handleToolChunk(sess, ev)
+			} else if ev.Event == "tool_message" {
+				if err := m.handleToolMessage(runCtx, sessionID, sess, ev, agentName); err != nil {
+					m.setSessionError(sessionID, err)
+					return
+				}
+			} else if ev.Event == graph.EventCompleted {
+				var finalState *agentgraph.AgentState
+				if snap, ok := ev.Data.(graph.Snapshot[agentgraph.AgentState]); ok {
+					finalState = &snap.State
+				} else if snapPtr, ok := ev.Data.(*graph.Snapshot[agentgraph.AgentState]); ok {
+					if snapPtr != nil {
+						finalState = &snapPtr.State
+					}
+				}
+				if finalState != nil && len(finalState.Messages) > 0 {
+					lastMsg := finalState.Messages[len(finalState.Messages)-1]
+					if lastMsg.Role() == message.RoleAssistant {
+						asstMsg = lastMsg
+					}
 				}
 			}
 		}
@@ -1115,6 +1148,45 @@ func (m *Manager) runAgentLoop(runCtx context.Context, sessionID string, sess *A
 		}
 	}
 
+	var hasContent bool
+	if asstMsg != nil {
+		for _, b := range asstMsg.GetContent() {
+			switch block := b.(type) {
+			case *message.TextBlock:
+				if block.Text != "" {
+					hasContent = true
+				}
+			case *message.ThinkingBlock:
+				if block.Thinking != "" {
+					hasContent = true
+				}
+			default:
+				hasContent = true
+			}
+		}
+	}
+
+	if isCancelled {
+		if hasContent {
+			meta := asstMsg.GetMetadata()
+			if meta == nil {
+				meta = make(map[string]any)
+			}
+			meta["interrupted"] = true
+			asstMsg.SetMetadata(meta)
+		} else {
+			asstMsg = nil
+			sysMsg := &message.System{
+				Content: message.Content{&message.TextBlock{Text: "Agent execution cancelled."}},
+			}
+			sysMeta := make(map[string]any)
+			sysMeta["is_system_notification"] = true
+			sysMeta["interrupted"] = true
+			sysMsg.SetMetadata(sysMeta)
+			_, _ = m.AppendMessage(context.Background(), sessionID, sysMsg)
+		}
+	}
+
 	if asstMsg != nil {
 		m.mu.Lock()
 		if !sess.ThinkingStart.IsZero() {
@@ -1129,8 +1201,8 @@ func (m *Manager) runAgentLoop(runCtx context.Context, sessionID string, sess *A
 		}
 		if _, exists := meta["thinking_duration"]; !exists && durationSecs > 0 {
 			meta["thinking_duration"] = durationSecs
-			asstMsg.SetMetadata(meta)
 		}
+		asstMsg.SetMetadata(meta)
 	}
 
 	var pendingAuths []permissions.AuthorizationRequest
@@ -1153,9 +1225,11 @@ func (m *Manager) runAgentLoop(runCtx context.Context, sessionID string, sess *A
 
 	m.syncSessionAuthStatus(sessionID)
 
-	if _, err := m.AppendMessage(context.Background(), sessionID, asstMsg); err != nil {
-		m.setSessionError(sessionID, fmt.Errorf("failed to save final assistant message: %w", err))
-		return
+	if asstMsg != nil {
+		if _, err := m.AppendMessage(context.Background(), sessionID, asstMsg); err != nil {
+			m.setSessionError(sessionID, fmt.Errorf("failed to save final assistant message: %w", err))
+			return
+		}
 	}
 }
 

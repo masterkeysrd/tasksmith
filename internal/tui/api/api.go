@@ -30,6 +30,7 @@ type Client interface {
 	ArchiveSession(ctx context.Context, req api.ArchiveSessionRequest) (*api.ArchiveSessionResponse, error)
 	DeleteSession(ctx context.Context, req api.DeleteSessionRequest) (*api.DeleteSessionResponse, error)
 	SendMessage(ctx context.Context, req api.SendMessageRequest) (*api.SendMessageResponse, error)
+	CancelTurn(ctx context.Context, req api.CancelTurnRequest) (*api.CancelTurnResponse, error)
 	ForceCompaction(ctx context.Context, req api.ForceCompactionRequest) (*api.ForceCompactionResponse, error)
 	GetSessionMessages(ctx context.Context, req api.GetSessionMessagesRequest) (*api.GetSessionMessagesResponse, error)
 	WatchSessionMessages(ctx context.Context, req api.GetSessionMessagesRequest) iter.Seq2[*api.GetSessionMessagesResponse, error]
@@ -191,6 +192,12 @@ func (w *toastClient) DeleteSession(ctx context.Context, req api.DeleteSessionRe
 func (w *toastClient) SendMessage(ctx context.Context, req api.SendMessageRequest) (*api.SendMessageResponse, error) {
 	res, err := w.delegate.SendMessage(ctx, req)
 	toastError("Failed to Send Message", err)
+	return res, err
+}
+
+func (w *toastClient) CancelTurn(ctx context.Context, req api.CancelTurnRequest) (*api.CancelTurnResponse, error) {
+	res, err := w.delegate.CancelTurn(ctx, req)
+	toastError("Failed to Cancel Agent Run", err)
 	return res, err
 }
 

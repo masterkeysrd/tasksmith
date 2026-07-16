@@ -25,6 +25,7 @@ type MockClient struct {
 	ArchiveSessionFunc              func(ctx context.Context, req api.ArchiveSessionRequest) (*api.ArchiveSessionResponse, error)
 	DeleteSessionFunc               func(ctx context.Context, req api.DeleteSessionRequest) (*api.DeleteSessionResponse, error)
 	SendMessageFunc                 func(ctx context.Context, req api.SendMessageRequest) (*api.SendMessageResponse, error)
+	CancelTurnFunc                  func(ctx context.Context, req api.CancelTurnRequest) (*api.CancelTurnResponse, error)
 	ForceCompactionFunc             func(ctx context.Context, req api.ForceCompactionRequest) (*api.ForceCompactionResponse, error)
 	GetSessionMessagesFunc          func(ctx context.Context, req api.GetSessionMessagesRequest) (*api.GetSessionMessagesResponse, error)
 	WatchSessionMessagesFunc        func(ctx context.Context, req api.GetSessionMessagesRequest) iter.Seq2[*api.GetSessionMessagesResponse, error]
@@ -162,6 +163,13 @@ func (m *MockClient) SendMessage(ctx context.Context, req api.SendMessageRequest
 		return m.SendMessageFunc(ctx, req)
 	}
 	return &api.SendMessageResponse{}, nil
+}
+
+func (m *MockClient) CancelTurn(ctx context.Context, req api.CancelTurnRequest) (*api.CancelTurnResponse, error) {
+	if m.CancelTurnFunc != nil {
+		return m.CancelTurnFunc(ctx, req)
+	}
+	return &api.CancelTurnResponse{}, nil
 }
 
 func (m *MockClient) ForceCompaction(ctx context.Context, req api.ForceCompactionRequest) (*api.ForceCompactionResponse, error) {

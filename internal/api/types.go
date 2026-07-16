@@ -268,6 +268,14 @@ type SendMessageResponse struct {
 	Success bool `json:"success"`
 }
 
+type CancelTurnRequest struct {
+	SessionID string `json:"session_id"`
+}
+
+type CancelTurnResponse struct {
+	Success bool `json:"success"`
+}
+
 type ForceCompactionRequest struct {
 	SessionID string `json:"session_id"`
 }
