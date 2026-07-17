@@ -520,4 +520,75 @@ func (app *Application) InitializeCommands() {
 		active.SetModal("agentpicker")
 		return nil
 	})
+
+	command.Register("sessionpicker", func(ctx command.CommandContext) error {
+		active.SetModal("sessionpicker")
+		return nil
+	})
+
+	command.Register("session", func(ctx command.CommandContext) error {
+		if len(ctx.Args) == 0 {
+			active.SetModal("sessionpicker")
+			return nil
+		}
+
+		target := strings.Join(ctx.Args, " ")
+		sessionsResp, err := app.api.ListSessions(ctx.Ctx, api.ListSessionsRequest{})
+		if err != nil {
+			return fmt.Errorf("session: failed to list sessions: %w", err)
+		}
+
+		var targetSession *api.Session
+		for _, s := range sessionsResp.Sessions {
+			if s.ID == target || strings.EqualFold(s.Title, target) {
+				targetSession = &s
+				break
+			}
+		}
+
+		// Try partial/fuzzy title match if exact match not found
+		if targetSession == nil {
+			for _, s := range sessionsResp.Sessions {
+				if strings.Contains(strings.ToLower(s.Title), strings.ToLower(target)) {
+					targetSession = &s
+					break
+				}
+			}
+		}
+
+		if targetSession == nil {
+			return fmt.Errorf("session %q not found", target)
+		}
+
+		active.SetSessionID(targetSession.ID)
+		if active.InvalidateSessionState != nil {
+			active.InvalidateSessionState(targetSession.ID)
+		}
+		if active.InvalidateSessionMessages != nil {
+			active.InvalidateSessionMessages(targetSession.ID)
+		}
+		active.SetStatusMessage(fmt.Sprintf("Switched to session: %s", targetSession.Title))
+		return nil
+	}, command.Complete(func(ctx context.Context, args []string) []command.CompletionItem {
+		res, err := app.api.ListSessions(ctx, api.ListSessionsRequest{})
+		if err != nil {
+			return nil
+		}
+		var items []command.CompletionItem
+		query := strings.Join(args, " ")
+		for _, s := range res.Sessions {
+			title := s.Title
+			if title == "" {
+				title = "Untitled Session"
+			}
+			if query == "" || strings.Contains(strings.ToLower(title), strings.ToLower(query)) || strings.Contains(strings.ToLower(s.ID), strings.ToLower(query)) {
+				items = append(items, command.CompletionItem{
+					Label:    title,
+					Sublabel: fmt.Sprintf("Agent: %s | Model: %s", s.Settings.AgentName, s.Settings.ModelName),
+					Badge:    "SESSION",
+				})
+			}
+		}
+		return items
+	}))
 }

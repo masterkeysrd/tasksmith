@@ -36,6 +36,10 @@ func (app *Application) InitializeKeymap() {
 		active.SetModal("modelpicker")
 	}, keymap.Description("Open Model Picker"))
 
+	keymap.Set([]mode.Mode{mode.Normal}, "<C-s>", func(ctx context.Context) {
+		active.SetModal("sessionpicker")
+	}, keymap.Description("Open Session Picker"))
+
 	// Normal Mode Keybindings
 	keymap.Set([]mode.Mode{mode.Normal}, "q", func(ctx context.Context) {
 		if active.GetScreen() == "analytics" {
@@ -151,4 +155,11 @@ func (app *Application) InitializeKeymap() {
 	keymap.Set([]mode.Mode{mode.Normal}, "\\p", openPermissionsManager, keymap.Description("Open Permissions Manager"))
 	keymap.Set([]mode.Mode{mode.Normal}, " p", openPermissionsManager, keymap.Description("Open Permissions Manager"))
 	keymap.Set([]mode.Mode{mode.Normal}, "<Space>p", openPermissionsManager, keymap.Description("Open Permissions Manager"))
+
+	openSessionPicker := func(ctx context.Context) {
+		active.SetModal("sessionpicker")
+	}
+	keymap.Set([]mode.Mode{mode.Normal}, "\\s", openSessionPicker, keymap.Description("Open Session Picker"))
+	keymap.Set([]mode.Mode{mode.Normal}, " s", openSessionPicker, keymap.Description("Open Session Picker"))
+	keymap.Set([]mode.Mode{mode.Normal}, "<Space>s", openSessionPicker, keymap.Description("Open Session Picker"))
 }

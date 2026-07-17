@@ -21,6 +21,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/tui/views/mcpinfo"
 	"github.com/masterkeysrd/tasksmith/internal/tui/views/modelpicker"
 	permissionsview "github.com/masterkeysrd/tasksmith/internal/tui/views/permissions"
+	"github.com/masterkeysrd/tasksmith/internal/tui/views/sessionpicker"
 	"github.com/masterkeysrd/tasksmith/internal/tui/views/setup"
 	"github.com/masterkeysrd/tasksmith/internal/tui/views/welcome"
 )
@@ -164,6 +165,7 @@ var Router = kitex.SimpleFC("Router", func() kitex.Node {
 				permissionsview.View(permissionsview.ViewProps{}),
 				permissionsview.ManagerView(permissionsview.ManagerViewProps{}),
 				agentpicker.View(agentpicker.ViewProps{}),
+				sessionpicker.View(sessionpicker.ViewProps{}),
 			),
 		)
 	}
