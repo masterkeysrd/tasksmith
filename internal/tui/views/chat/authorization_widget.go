@@ -1644,13 +1644,15 @@ var AuthorizationPreviewModal = kitex.FCC("AuthorizationPreviewModal", func(prop
 								kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Secondary).MinWidth(style.Cells(12))}, kitex.Text("Action")),
 								kitex.Box(kitex.BoxProps{
 									Style: style.S().
-										Foreground(t.Color.Surface.Primary).
+										Foreground(t.Color.Text.Purple).
 										Bold(true).
 										Flex(1, 1, style.Cells(0)).
 										Width(style.Percent(100)).
 										MaxWidth(style.Percent(100)).
-										MinWidth(style.Percent(0)),
-								}, kitex.Text(string(opt.Action))),
+										MinWidth(style.Percent(0)).
+										WhiteSpace(style.WhiteSpacePreWrap).
+										OverflowWrap(style.OverflowWrapBreakWord),
+								}, kitex.Text(currReq.Description)),
 							))
 
 							detailNodes = append(detailNodes, kitex.Box(kitex.BoxProps{
