@@ -378,7 +378,11 @@ func (c *Compactor) SummarizeHistory(
 		})
 	}
 
-	maxCompressibleBlocks := len(blocks) - c.Config.ProtectedTurns
+	protectedTurns := c.Config.ProtectedTurns
+	if forceCompaction {
+		protectedTurns = 1
+	}
+	maxCompressibleBlocks := len(blocks) - protectedTurns
 	if maxCompressibleBlocks <= 0 {
 		return messages, nil
 	}

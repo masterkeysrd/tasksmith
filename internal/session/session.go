@@ -70,6 +70,7 @@ type ActiveSession struct {
 	CurrentStreamMetrics  *message.TokenMetrics
 	PendingAuthorizations []permissions.AuthorizationRequest
 	MessageSubscribers    []chan struct{}
+	IsCompacting          bool
 }
 
 // ManagerConfig defines configuration parameters and dependencies for Manager.
@@ -440,7 +441,7 @@ func (m *Manager) tryRehydrateSession(ctx context.Context, sess *ActiveSession) 
 }
 
 // GetSessionState returns the in-memory runtime execution state of the specified session.
-func (m *Manager) GetSessionState(ctx context.Context, sessionID string) (SessionStatus, string, bool, []permissions.AuthorizationRequest, time.Duration) {
+func (m *Manager) GetSessionState(ctx context.Context, sessionID string) (SessionStatus, string, bool, bool, []permissions.AuthorizationRequest, time.Duration) {
 	m.mu.Lock()
 	sess, ok := m.activeSessions[sessionID]
 	if !ok {
@@ -462,7 +463,7 @@ func (m *Manager) GetSessionState(ctx context.Context, sessionID string) (Sessio
 	if !sess.ThinkingStart.IsZero() {
 		elapsed = time.Since(sess.ThinkingStart)
 	}
-	return sess.Status, sess.Error, isGenerating, sess.PendingAuthorizations, elapsed
+	return sess.Status, sess.Error, isGenerating, sess.IsCompacting, sess.PendingAuthorizations, elapsed
 }
 
 // GetRunningMetrics returns the current streaming token metrics for an active session, if any.
@@ -946,10 +947,14 @@ func (m *Manager) ForceCompaction(ctx context.Context, sessionID string) error {
 	sess.ThinkingDuration = 0
 	sess.CurrentStreamMetrics = nil
 	sess.PendingAuthorizations = nil
+	sess.IsCompacting = true
 
 	runCtx, cancel := context.WithCancel(context.Background())
 	sess.Cancel = cancel
 	m.mu.Unlock()
+
+	// Notify subscribers of the "running" status change
+	m.notifySubscribers(sessionID)
 
 	// Setup input command to set ForceCompaction flag to true
 	inputCmd := graph.Update[agentgraph.AgentState](func(state agentgraph.AgentState) agentgraph.AgentState {
@@ -971,12 +976,14 @@ func (m *Manager) runAgentLoop(runCtx context.Context, sessionID string, sess *A
 		if sess.Status == StatusRunning {
 			sess.Status = StatusIdle
 		}
+		sess.IsCompacting = false
 		if !sess.ThinkingStart.IsZero() {
 			sess.ThinkingDuration = time.Since(sess.ThinkingStart)
 		}
 		sess.Cancel = nil
 		m.mu.Unlock()
 		cancel()
+		m.notifySubscribers(sessionID)
 	}()
 
 	// Load checkpointer
@@ -1242,6 +1249,11 @@ func (m *Manager) runAgentLoop(runCtx context.Context, sessionID string, sess *A
 				return
 			}
 
+			// Skip streaming events generated during compaction
+			if ev.Node == "compact" {
+				continue
+			}
+
 			if ev.Event == graph.EventLLMChunk {
 				m.handleLLMChunk(sess, ev)
 			} else if ev.Event == "agent_message" {
@@ -1345,6 +1357,8 @@ func (m *Manager) runAgentLoop(runCtx context.Context, sessionID string, sess *A
 			sysMsg.SetMetadata(sysMeta)
 			_, _ = m.AppendMessage(context.Background(), sessionID, sysMsg)
 		}
+	} else if !hasContent {
+		asstMsg = nil
 	}
 
 	if asstMsg != nil {

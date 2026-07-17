@@ -32,6 +32,8 @@ type AgentState struct {
 	Decisions             []permissions.AuthorizationDecision `json:"decisions,omitempty"`
 	ExecutionCancelled    bool                                `json:"execution_cancelled,omitempty"`
 	ForceCompaction       bool                                `json:"force_compaction,omitempty"`
+	WasForceCompacted     bool                                `json:"was_force_compacted,omitempty"`
+	CompactionDone        bool                                `json:"compaction_done,omitempty"`
 }
 
 // Copy performs a deep copy of AgentState to satisfy the loom graph.State interface.
@@ -59,6 +61,8 @@ func (s AgentState) Copy() AgentState {
 	}
 	copied.ExecutionCancelled = s.ExecutionCancelled
 	copied.ForceCompaction = s.ForceCompaction
+	copied.WasForceCompacted = s.WasForceCompacted
+	copied.CompactionDone = s.CompactionDone
 	return copied
 }
 
@@ -273,10 +277,18 @@ func (a *AgentGraph) Build(cp graph.Checkpointer) (*graph.Graph[AgentState], err
 		AddEdge(graph.START, "check_inbox")
 
 	builder.AddRouteEdge("check_inbox", func(s AgentState) (string, error) {
-		log.Info(fmt.Sprintf("[AgentGraph] check_inbox router: s.ExecutionCancelled=%t s.Messages=%d", s.ExecutionCancelled, len(s.Messages)))
+		log.Info(fmt.Sprintf("[AgentGraph] check_inbox router: s.ExecutionCancelled=%t s.Messages=%d s.ForceCompaction=%t s.WasForceCompacted=%t", s.ExecutionCancelled, len(s.Messages), s.ForceCompaction, s.WasForceCompacted))
 		if s.ExecutionCancelled {
 			log.Info("[AgentGraph] check_inbox router: returning graph.END because s.ExecutionCancelled is true")
 			return graph.END, nil
+		}
+		if s.WasForceCompacted {
+			log.Info("[AgentGraph] check_inbox router: returning graph.END because s.WasForceCompacted is true")
+			return graph.END, nil
+		}
+		if s.ForceCompaction {
+			log.Info("[AgentGraph] check_inbox router: s.ForceCompaction is true, routing to compact")
+			return "compact", nil
 		}
 		if len(s.Messages) == 0 {
 			log.Info("[AgentGraph] check_inbox router: returning graph.END because s.Messages is empty")
@@ -294,7 +306,23 @@ func (a *AgentGraph) Build(cp graph.Checkpointer) (*graph.Graph[AgentState], err
 		graph.END: graph.END,
 	})
 
-	builder.AddEdge("compact", "think")
+	builder.AddRouteEdge("compact", func(s AgentState) (string, error) {
+		if s.ForceCompaction {
+			log.Info("[AgentGraph] compact router: s.ForceCompaction is true, routing to check_inbox to halt")
+			return "check_inbox", nil
+		}
+		if len(s.Messages) == 0 {
+			return "check_inbox", nil
+		}
+		lastMsg := s.Messages[len(s.Messages)-1]
+		if lastMsg.Role() == message.RoleAssistant {
+			return "check_inbox", nil
+		}
+		return "think", nil
+	}, map[string]string{
+		"think":       "think",
+		"check_inbox": "check_inbox",
+	})
 
 	builder.AddRouteEdge("think", func(s AgentState) (string, error) {
 		if len(s.Messages) == 0 {
@@ -698,7 +726,21 @@ func (a *AgentGraph) executeTools(ctx context.Context, s AgentState) (graph.Comm
 
 // checkInbox checks for new user messages in the inbox and appends them to the execution state.
 func (a *AgentGraph) checkInbox(ctx context.Context, s AgentState) (graph.Command[AgentState], error) {
-	log.Info(fmt.Sprintf("[AgentGraph] checkInbox node: s.ExecutionCancelled=%t s.Messages=%d", s.ExecutionCancelled, len(s.Messages)))
+	log.Info(fmt.Sprintf("[AgentGraph] checkInbox node: s.ExecutionCancelled=%t s.Messages=%d s.ForceCompaction=%t s.WasForceCompacted=%t s.CompactionDone=%t", s.ExecutionCancelled, len(s.Messages), s.ForceCompaction, s.WasForceCompacted, s.CompactionDone))
+	if s.CompactionDone && s.ForceCompaction {
+		return graph.Update[AgentState](func(state AgentState) AgentState {
+			state.ForceCompaction = false
+			state.WasForceCompacted = true
+			state.CompactionDone = false
+			return state
+		}), nil
+	}
+	if s.WasForceCompacted {
+		return graph.Update[AgentState](func(state AgentState) AgentState {
+			state.WasForceCompacted = false
+			return state
+		}), nil
+	}
 	if s.ExecutionCancelled {
 		log.Info("[AgentGraph] checkInbox node: returning immediately because s.ExecutionCancelled is true")
 		return graph.Update[AgentState](func(state AgentState) AgentState {

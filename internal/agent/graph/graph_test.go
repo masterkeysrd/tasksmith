@@ -603,3 +603,81 @@ func TestAgentGraph_InvalidArgumentsValidation(t *testing.T) {
 		t.Errorf("expected validation error text, got %q", toolMsg.GetContent().Text())
 	}
 }
+
+func TestAgentGraph_ForceCompaction(t *testing.T) {
+	mockModel := &mockLLMModel{
+		invokeFn: func(ctx context.Context, messages []message.Message) (*message.Assistant, error) {
+			return &message.Assistant{
+				Content: message.Content{&message.TextBlock{Text: "Compacted summary of previous messages"}},
+			}, nil
+		},
+	}
+
+	ag, err := agentgraph.New(context.Background(), agentgraph.Options{
+		Model:         mockModel,
+		ContextWindow: 8192,
+	})
+	if err != nil {
+		t.Fatalf("failed to construct agent graph: %v", err)
+	}
+	g, err := ag.Build(nil)
+	if err != nil {
+		t.Fatalf("failed to build graph: %v", err)
+	}
+
+	// Create initial state with 6 turns to ensure we have enough blocks for compaction (ProtectedTurns = 5)
+	initialState := agentgraph.AgentState{
+		ForceCompaction: true,
+		Messages: message.MessageList{
+			message.NewUserText("User message 1"),
+			&message.Assistant{Content: message.Content{&message.TextBlock{Text: "Assistant message 1"}}},
+			message.NewUserText("User message 2"),
+			&message.Assistant{Content: message.Content{&message.TextBlock{Text: "Assistant message 2"}}},
+			message.NewUserText("User message 3"),
+			&message.Assistant{Content: message.Content{&message.TextBlock{Text: "Assistant message 3"}}},
+			message.NewUserText("User message 4"),
+			&message.Assistant{Content: message.Content{&message.TextBlock{Text: "Assistant message 4"}}},
+			message.NewUserText("User message 5"),
+			&message.Assistant{Content: message.Content{&message.TextBlock{Text: "Assistant message 5"}}},
+			message.NewUserText("User message 6"),
+			&message.Assistant{Content: message.Content{&message.TextBlock{Text: "Assistant message 6"}}},
+		},
+	}
+
+	initCmd := graph.Update[agentgraph.AgentState](func(s agentgraph.AgentState) agentgraph.AgentState {
+		return initialState
+	})
+
+	// Execute graph
+	snapshot, err := g.Execute(context.Background(), initCmd, nil)
+	if err != nil {
+		t.Fatalf("graph execution failed: %v", err)
+	}
+
+	// Print message roles and contents for debugging
+	t.Logf("Number of messages: %d", len(snapshot.State.Messages))
+	for idx, msg := range snapshot.State.Messages {
+		t.Logf("  [%d] Role: %s, Content: %s, Meta: %v", idx, msg.Role(), msg.GetContent().Text(), msg.GetMetadata())
+	}
+
+	// Assertions
+	if !snapshot.IsDone() {
+		t.Error("expected snapshot to be done")
+	}
+
+	// Verify that ForceCompaction is reset to false
+	if snapshot.State.ForceCompaction {
+		t.Error("expected ForceCompaction to be reset to false")
+	}
+
+	// The first few messages should have been compacted into an anchor message
+	if len(snapshot.State.Messages) >= 12 {
+		t.Errorf("expected messages to be compacted, but got %d messages", len(snapshot.State.Messages))
+	}
+
+	firstMsg := snapshot.State.Messages[0]
+	meta := firstMsg.GetMetadata()
+	if meta == nil || meta["compaction_anchor"] != true {
+		t.Error("expected first message to be a compaction anchor")
+	}
+}

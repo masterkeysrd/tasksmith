@@ -351,8 +351,14 @@ func init() {
 			})
 			if err != nil {
 				active.SetStatusMessage("Compaction failed: " + err.Error())
+				if active.InvalidateSessionState != nil {
+					active.InvalidateSessionState(sessionID)
+				}
 			} else {
 				active.SetStatusMessage("Compaction triggered successfully.")
+				if active.InvalidateSessionState != nil {
+					active.InvalidateSessionState(sessionID)
+				}
 				if active.InvalidateSessionMessages != nil {
 					active.InvalidateSessionMessages(sessionID)
 				}

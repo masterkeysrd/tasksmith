@@ -48,14 +48,16 @@ func (a *AgentGraph) compact(ctx context.Context, s AgentState) (graph.Command[A
 	)
 	if err != nil {
 		log.Warn(fmt.Sprintf("[AgentGraph] compaction failed: %v", err))
-		return nil, nil
+		return graph.Update[AgentState](func(state AgentState) AgentState {
+			state.CompactionDone = true
+			return state
+		}), nil
 	}
 
-	// Mutate the actual AgentState so checkpoints are physically reduced in size,
-	// and reset the ForceCompaction flag to false.
+	// Mutate the actual AgentState so checkpoints are physically reduced in size.
 	return graph.Update[AgentState](func(state AgentState) AgentState {
 		state.Messages = compactedMessages
-		state.ForceCompaction = false
+		state.CompactionDone = true
 		return state
 	}), nil
 }

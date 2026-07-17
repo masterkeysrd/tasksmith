@@ -153,6 +153,10 @@ func renderChatView(props ViewProps) kitex.Node {
 	// 2. Fetch session execution status reactively
 	stateQuery := queries.UseGetSessionState(sessionID)
 
+	kitex.UseEffect(func() {
+		windClient.InvalidateQueries(api.GetSessionStateRequest{SessionID: sessionID})
+	}, []any{msgsQuery.Data, sessionID})
+
 	// 2b. Fetch sessions reactively to resolve session title
 	sessionsQuery := queries.UseListSessions()
 
@@ -185,6 +189,7 @@ func renderChatView(props ViewProps) kitex.Node {
 		status = stateQuery.Data.Status
 	}
 	sending := status == "running"
+	isCompacting := stateQuery.Data != nil && stateQuery.Data.IsCompacting
 
 	// Invalidate session list to capture title changes reactively when messages change
 	kitex.UseEffect(func() {
@@ -802,12 +807,18 @@ func renderChatView(props ViewProps) kitex.Node {
 			}).Then(func(success bool) {
 				setSubmitting(false)
 				active.SetStatusMessage("Compaction triggered successfully.")
+				if active.InvalidateSessionState != nil {
+					active.InvalidateSessionState(sessionID)
+				}
 				if active.InvalidateSessionMessages != nil {
 					active.InvalidateSessionMessages(sessionID)
 				}
 			}, func(err error) {
 				setSubmitting(false)
 				active.SetStatusMessage("Compaction failed: " + err.Error())
+				if active.InvalidateSessionState != nil {
+					active.InvalidateSessionState(sessionID)
+				}
 				if active.InvalidateSessionMessages != nil {
 					active.InvalidateSessionMessages(sessionID)
 				}
@@ -1201,6 +1212,7 @@ func renderChatView(props ViewProps) kitex.Node {
 			kitex.If(sending || lastFinishedTime() >= 0, func() kitex.Node {
 				return AgentStatus(AgentStatusProps{
 					Sending:             sending,
+					IsCompacting:        isCompacting,
 					ThinkingTime:        thinkingTime(),
 					LastFinishedTime:    lastFinishedTime(),
 					RunPromptTokens:     runPromptTokens,

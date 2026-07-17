@@ -16,6 +16,7 @@ import (
 // AgentStatusProps defines the properties for the AgentStatus widget.
 type AgentStatusProps struct {
 	Sending             bool
+	IsCompacting        bool
 	ThinkingTime        int
 	LastFinishedTime    int
 	RunPromptTokens     int
@@ -50,16 +51,21 @@ var AgentStatus = kitex.FC("AgentStatus", func(props AgentStatusProps) kitex.Nod
 	if props.Sending {
 		var statusText string
 		var statusColor color.Color
-		switch props.Phase {
-		case "thinking":
-			statusText = "Thinking"
+		if props.IsCompacting {
+			statusText = "Compacting"
 			statusColor = blueColor
-		case "answering":
-			statusText = "Answering"
-			statusColor = greenColor
-		default:
-			statusText = "Processing"
-			statusColor = t.Color.Text.Tertiary
+		} else {
+			switch props.Phase {
+			case "thinking":
+				statusText = "Thinking"
+				statusColor = blueColor
+			case "answering":
+				statusText = "Answering"
+				statusColor = greenColor
+			default:
+				statusText = "Processing"
+				statusColor = t.Color.Text.Tertiary
+			}
 		}
 
 		containerStyle := style.S().

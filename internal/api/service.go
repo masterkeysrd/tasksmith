@@ -1041,7 +1041,7 @@ func (s *Service) GetSessionState(ctx context.Context, req GetSessionStateReques
 			PermissionMode:        mode,
 		}, nil
 	}
-	status, errStr, isGen, pendingAuths, elapsed := s.sm.GetSessionState(ctx, req.SessionID)
+	status, errStr, isGen, isCompacting, pendingAuths, elapsed := s.sm.GetSessionState(ctx, req.SessionID)
 
 	var runningTasks []RunningTaskInfo
 	tasks := s.sm.ListTasks(req.SessionID)
@@ -1105,6 +1105,7 @@ func (s *Service) GetSessionState(ctx context.Context, req GetSessionStateReques
 		Status:                string(status),
 		Error:                 errStr,
 		IsGenerating:          isGen,
+		IsCompacting:          isCompacting,
 		ThinkingDuration:      elapsedSeconds,
 		RunningTasks:          runningTasks,
 		Todos:                 apiTodos,

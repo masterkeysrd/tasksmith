@@ -379,10 +379,12 @@ var Status = kitex.FC("Status", func(props StatusProps) kitex.Node {
 	t := theme.UseTheme()
 
 	status := props.Status
+	isCompacting := false
 	if status == "" && props.SessionID != "" {
 		stateQuery := queries.UseGetSessionState(props.SessionID)
 		if stateQuery.Data != nil {
 			status = stateQuery.Data.Status
+			isCompacting = stateQuery.Data.IsCompacting
 		}
 	}
 	if status == "" {
@@ -413,15 +415,21 @@ var Status = kitex.FC("Status", func(props StatusProps) kitex.Node {
 	}
 
 	var statusBg color.Color
-	switch strings.ToLower(status) {
-	case "running":
+	statusLabel := status
+	if isCompacting {
 		statusBg = colorInsert
-	case "waiting_approval", "waiting":
-		statusBg = colorWaiting
-	case "error", "failed":
-		statusBg = colorError
-	default:
-		statusBg = colorNormal
+		statusLabel = "compacting"
+	} else {
+		switch strings.ToLower(status) {
+		case "running":
+			statusBg = colorInsert
+		case "waiting_approval", "waiting":
+			statusBg = colorWaiting
+		case "error", "failed":
+			statusBg = colorError
+		default:
+			statusBg = colorNormal
+		}
 	}
 
 	statusStyle := style.S().
@@ -432,7 +440,7 @@ var Status = kitex.FC("Status", func(props StatusProps) kitex.Node {
 		Merge(props.Style)
 
 	return kitex.Box(kitex.BoxProps{Style: statusStyle},
-		kitex.Text(strings.ToUpper(strings.ReplaceAll(status, "_", " "))),
+		kitex.Text(strings.ToUpper(strings.ReplaceAll(statusLabel, "_", " "))),
 	)
 })
 
