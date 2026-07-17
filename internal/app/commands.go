@@ -63,6 +63,36 @@ func (app *Application) InitializeCommands() {
 		return nil
 	})
 
+	command.Register("retry", func(ctx command.CommandContext) error {
+		sessionID := active.GetSessionID()
+		if sessionID == "" {
+			return fmt.Errorf("retry: no active session")
+		}
+		if app.api == nil {
+			return fmt.Errorf("retry: API service not available")
+		}
+
+		state, err := app.api.GetSessionState(ctx.Ctx, api.GetSessionStateRequest{SessionID: sessionID})
+		if err != nil {
+			return fmt.Errorf("retry: failed to get session state: %w", err)
+		}
+
+		if state.Status == "running" {
+			return fmt.Errorf("retry: agent is already running")
+		}
+
+		active.SetStatusMessage("Retrying agent execution...")
+		_, err = app.api.RetryTurn(ctx.Ctx, api.RetryTurnRequest{SessionID: sessionID})
+		if err != nil {
+			return fmt.Errorf("retry: failed to retry agent execution: %w", err)
+		}
+
+		if active.InvalidateSessionState != nil {
+			active.InvalidateSessionState(sessionID)
+		}
+		return nil
+	})
+
 	command.Register("theme", func(ctx command.CommandContext) error {
 		if len(ctx.Args) == 0 {
 			return fmt.Errorf("theme: missing theme name")

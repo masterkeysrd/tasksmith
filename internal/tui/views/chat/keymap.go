@@ -199,6 +199,33 @@ func init() {
 		return nil
 	}, command.Context("chat"))
 
+	command.Register("chat:retry", func(ctx command.CommandContext) error {
+		sessionID := active.GetSessionID()
+		if sessionID != "" && tuiapi.GlobalClient != nil {
+			state, err := tuiapi.GlobalClient.GetSessionState(ctx.Ctx, api.GetSessionStateRequest{SessionID: sessionID})
+			if err == nil && state.Status != "running" {
+				active.SetStatusMessage("Retrying agent execution...")
+				go func() {
+					bgCtx := context.Background()
+					_, err := tuiapi.GlobalClient.RetryTurn(bgCtx, api.RetryTurnRequest{
+						SessionID: sessionID,
+					})
+					if err != nil {
+						active.SetStatusMessage("Retry failed: " + err.Error())
+					} else {
+						active.SetStatusMessage("Retrying agent execution...")
+						if active.InvalidateSessionState != nil {
+							active.InvalidateSessionState(sessionID)
+						}
+					}
+				}()
+			}
+		}
+		return nil
+	}, command.Context("chat"))
+
+	keymap.Set([]mode.Mode{mode.Normal}, "R", command.ExecFunc("chat:retry"), keymap.Context("chat"))
+
 	command.Register("auth:deny", func(ctx command.CommandContext) error {
 		if AuthCtrl.Deny != nil {
 			AuthCtrl.Deny()

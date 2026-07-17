@@ -74,6 +74,7 @@ type Store interface {
 	GetMessages(ctx context.Context, sessionID string) ([]MessageData, error)
 	GetUserMessages(ctx context.Context, query string, limit int) ([]MessageData, error)
 	DeleteLastMessage(ctx context.Context, sessionID string) error
+	DeleteMessages(ctx context.Context, sessionID string, messageIDs []string) error
 
 	NewCheckpointer() (*loomsqlite.Checkpointer, error)
 	ResourceStore() *resource.Store

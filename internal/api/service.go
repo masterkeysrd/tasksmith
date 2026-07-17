@@ -832,6 +832,17 @@ func (s *Service) CancelTurn(ctx context.Context, req CancelTurnRequest) (*Cance
 	return &CancelTurnResponse{Success: true}, nil
 }
 
+// RetryTurn retries execution of the last user turn.
+func (s *Service) RetryTurn(ctx context.Context, req RetryTurnRequest) (*RetryTurnResponse, error) {
+	if s.sm == nil {
+		return nil, fmt.Errorf("session manager not initialized")
+	}
+	if err := s.sm.RetryTurn(ctx, req.SessionID); err != nil {
+		return nil, err
+	}
+	return &RetryTurnResponse{Success: true}, nil
+}
+
 // ForceCompaction triggers a forced compaction run for the session.
 func (s *Service) ForceCompaction(ctx context.Context, req ForceCompactionRequest) (*ForceCompactionResponse, error) {
 	if s.sm == nil {

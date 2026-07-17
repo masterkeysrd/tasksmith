@@ -174,6 +174,27 @@ func (s *sqliteStore) GetUserMessages(ctx context.Context, query string, limit i
 	return messages, err
 }
 
+func (s *sqliteStore) DeleteLastMessage(ctx context.Context, sessionID string) error {
+	query := `DELETE FROM messages WHERE id = (
+		SELECT id FROM messages WHERE session_id = ? ORDER BY created_at DESC, id DESC LIMIT 1
+	)`
+	_, err := s.db.ExecContext(ctx, query, sessionID)
+	return err
+}
+
+func (s *sqliteStore) DeleteMessages(ctx context.Context, sessionID string, messageIDs []string) error {
+	if len(messageIDs) == 0 {
+		return nil
+	}
+	query, args, err := sqlx.In(`DELETE FROM messages WHERE session_id = ? AND id IN (?)`, sessionID, messageIDs)
+	if err != nil {
+		return err
+	}
+	query = s.db.Rebind(query)
+	_, err = s.db.ExecContext(ctx, query, args...)
+	return err
+}
+
 func (s *sqliteStore) NewCheckpointer() (*loomsqlite.Checkpointer, error) {
 	return loomsqlite.NewCheckpointer(s.checkDB.DB)
 }

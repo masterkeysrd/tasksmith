@@ -276,6 +276,14 @@ type CancelTurnResponse struct {
 	Success bool `json:"success"`
 }
 
+type RetryTurnRequest struct {
+	SessionID string `json:"session_id"`
+}
+
+type RetryTurnResponse struct {
+	Success bool `json:"success"`
+}
+
 type ForceCompactionRequest struct {
 	SessionID string `json:"session_id"`
 }

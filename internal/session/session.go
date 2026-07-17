@@ -506,6 +506,166 @@ func (m *Manager) CancelTurn(ctx context.Context, sessionID string) error {
 	return nil
 }
 
+// RetryTurn re-triggers agent execution for the last user prompt in the session.
+func (m *Manager) RetryTurn(ctx context.Context, sessionID string) error {
+	m.mu.Lock()
+	sess, ok := m.activeSessions[sessionID]
+	if !ok {
+		m.mu.Unlock()
+		return fmt.Errorf("session %s not found", sessionID)
+	}
+
+	if sess.Status == StatusRunning {
+		m.mu.Unlock()
+		return fmt.Errorf("session is already running")
+	}
+	m.mu.Unlock()
+
+	// 1. Fetch current messages
+	msgs, err := m.GetMessages(ctx, sessionID)
+	if err != nil {
+		return fmt.Errorf("failed to get messages for retry: %w", err)
+	}
+	if len(msgs) == 0 {
+		return fmt.Errorf("no messages to retry")
+	}
+
+	// 2. Identify the target user message
+	var userMsgIndex = -1
+	var lastMsgIndex = len(msgs) - 1
+
+	lastMsg := msgs[lastMsgIndex]
+	isInterrupted := false
+	if lastMsg.Role() == message.RoleAssistant {
+		if meta := lastMsg.GetMetadata(); meta != nil {
+			if interrupted, ok := meta["interrupted"].(bool); ok && interrupted {
+				isInterrupted = true
+			}
+		}
+	} else if lastMsg.Role() == message.RoleSystem {
+		for _, block := range lastMsg.GetContent() {
+			if tb, ok := block.(*message.TextBlock); ok && tb.Text == "Agent execution cancelled." {
+				isInterrupted = true
+			}
+		}
+	}
+
+	var messagesToDelete []string
+	if isInterrupted {
+		messagesToDelete = append(messagesToDelete, lastMsg.GetID())
+		lastMsgIndex--
+	}
+
+	// Find the last user message
+	for i := lastMsgIndex; i >= 0; i-- {
+		if msgs[i].Role() == message.RoleUser {
+			userMsgIndex = i
+			break
+		}
+	}
+
+	if userMsgIndex == -1 {
+		return fmt.Errorf("no user message found to retry")
+	}
+
+	userMsg := msgs[userMsgIndex]
+
+	// All messages after the userMsgIndex should be deleted to keep the history clean/linear
+	for i := userMsgIndex + 1; i < len(msgs); i++ {
+		messagesToDelete = append(messagesToDelete, msgs[i].GetID())
+	}
+
+	// Delete these messages from the store
+	if len(messagesToDelete) > 0 {
+		if err := m.store.DeleteMessages(ctx, sessionID, messagesToDelete); err != nil {
+			return fmt.Errorf("failed to delete messages for retry: %w", err)
+		}
+		m.notifySubscribers(sessionID)
+	}
+
+	// 3. Find the starting checkpoint ID from the message before userMsgIndex
+	targetCheckpointID := ""
+	if userMsgIndex > 0 {
+		prevMsg := msgs[userMsgIndex-1]
+		if meta := prevMsg.GetMetadata(); meta != nil {
+			if cpID, ok := meta["checkpoint_id"].(string); ok {
+				targetCheckpointID = cpID
+			}
+		}
+	}
+	if targetCheckpointID == "" {
+		targetCheckpointID = "none" // Sentinel to load no checkpoint and start from scratch
+	}
+
+	// 4. Set state to running
+	m.mu.Lock()
+	sess.Status = StatusRunning
+	sess.Error = ""
+	sess.CurrentStreamText = ""
+	sess.CurrentStreamThinking = ""
+	sess.CurrentToolStreams = make(map[string]string)
+	sess.ThinkingStart = time.Now()
+	sess.ThinkingDuration = 0
+	sess.CurrentStreamMetrics = nil
+	sess.PendingAuthorizations = nil
+
+	runCtx, cancel := context.WithCancel(context.Background())
+	sess.Cancel = cancel
+	m.mu.Unlock()
+
+	existingTodos, _ := m.ListTodos(runCtx, sessionID)
+	var cwd string
+	if m.ws != nil {
+		if cfg, err := m.ws.GetWorkspaceConfig(runCtx); err == nil {
+			cwd = cfg.CWD
+		}
+	}
+
+	// Build map of valid message IDs up to userMsgIndex
+	validMessageIDs := make(map[string]bool)
+	for i := 0; i <= userMsgIndex; i++ {
+		validMessageIDs[msgs[i].GetID()] = true
+	}
+
+	// Reconstruct the input command using the userMsg
+	inputCmd := graph.Update[agentgraph.AgentState](func(state agentgraph.AgentState) agentgraph.AgentState {
+		if len(state.Todos) == 0 && len(existingTodos) > 0 {
+			state.Todos = existingTodos
+		}
+
+		agentgraph.InjectReminders(runCtx, userMsg, state, m.lspManager, cwd)
+
+		// Filter the graph's history to match the database's valid messages
+		var filteredMessages []message.Message
+		for _, m := range state.Messages {
+			if validMessageIDs[m.GetID()] {
+				filteredMessages = append(filteredMessages, m)
+			}
+		}
+		state.Messages = filteredMessages
+
+		// Only append userMsg if it's not already at the end of state.Messages
+		alreadyAppended := false
+		if len(state.Messages) > 0 {
+			lastGraphMsg := state.Messages[len(state.Messages)-1]
+			if lastGraphMsg.GetID() == userMsg.GetID() {
+				alreadyAppended = true
+			}
+		}
+		if !alreadyAppended {
+			state.Messages = append(state.Messages, userMsg)
+		}
+		state.ExecutionCancelled = false
+		return state
+	})
+
+	m.wg.Go(func() {
+		m.runAgentLoop(runCtx, sessionID, sess, inputCmd, cancel, targetCheckpointID)
+	})
+
+	return nil
+}
+
 // SendMessage appends the user message and initiates the background Loom agent execution.
 func (m *Manager) SendMessage(ctx context.Context, sessionID string, text string, refs []resolver.Reference) error {
 	return m.sendMessage(ctx, sessionID, text, refs, nil)
@@ -654,7 +814,7 @@ func (m *Manager) sendMessage(ctx context.Context, sessionID string, text string
 
 	// 2. Start running Loom agent workflow asynchronously in background
 	m.wg.Go(func() {
-		m.runAgentLoop(runCtx, sessionID, sess, inputCmd, cancel)
+		m.runAgentLoop(runCtx, sessionID, sess, inputCmd, cancel, "")
 	})
 
 	return nil
@@ -746,7 +906,7 @@ func (m *Manager) SubmitAuthorizationDecision(ctx context.Context, sessionID str
 
 	// Start running Loom agent workflow asynchronously in background
 	m.wg.Go(func() {
-		m.runAgentLoop(runCtx, sessionID, sess, inputCmd, cancel)
+		m.runAgentLoop(runCtx, sessionID, sess, inputCmd, cancel, "")
 	})
 
 	return nil
@@ -799,13 +959,13 @@ func (m *Manager) ForceCompaction(ctx context.Context, sessionID string) error {
 
 	// Start running Loom agent workflow asynchronously in background
 	m.wg.Go(func() {
-		m.runAgentLoop(runCtx, sessionID, sess, inputCmd, cancel)
+		m.runAgentLoop(runCtx, sessionID, sess, inputCmd, cancel, "")
 	})
 
 	return nil
 }
 
-func (m *Manager) runAgentLoop(runCtx context.Context, sessionID string, sess *ActiveSession, inputCmd graph.Command[agentgraph.AgentState], cancel context.CancelFunc) {
+func (m *Manager) runAgentLoop(runCtx context.Context, sessionID string, sess *ActiveSession, inputCmd graph.Command[agentgraph.AgentState], cancel context.CancelFunc, startCheckpointID string) {
 	defer func() {
 		m.mu.Lock()
 		if sess.Status == StatusRunning {
@@ -1055,7 +1215,7 @@ func (m *Manager) runAgentLoop(runCtx context.Context, sessionID string, sess *A
 	var isCancelled bool
 
 	// Run the graph streaming loop
-	loc := &graph.Location{ThreadID: sessionID}
+	loc := &graph.Location{ThreadID: sessionID, CheckpointID: startCheckpointID}
 	seq, err := g.Stream(runCtx, inputCmd, loc)
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
@@ -1201,6 +1361,9 @@ func (m *Manager) runAgentLoop(runCtx context.Context, sessionID string, sess *A
 		}
 		if _, exists := meta["thinking_duration"]; !exists && durationSecs > 0 {
 			meta["thinking_duration"] = durationSecs
+		}
+		if loc.CheckpointID != "" {
+			meta["checkpoint_id"] = loc.CheckpointID
 		}
 		asstMsg.SetMetadata(meta)
 	}
@@ -1750,7 +1913,7 @@ func (m *Manager) SendQueued(ctx context.Context, sessionID string) error {
 	})
 
 	m.wg.Go(func() {
-		m.runAgentLoop(runCtx, sessionID, sess, inputCmd, cancel)
+		m.runAgentLoop(runCtx, sessionID, sess, inputCmd, cancel, "")
 	})
 
 	return nil
