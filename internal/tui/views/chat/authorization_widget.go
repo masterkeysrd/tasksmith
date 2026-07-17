@@ -609,10 +609,10 @@ var AuthorizationWidget = kitex.FC("AuthorizationWidget", func(props Authorizati
 		})
 	}
 
-	// Bind handlers to the persistent static AuthCtrl if this widget is active
+	// Bind handlers to the persistent static ActiveWidgetCtrl if this widget is active
 	if props.IsActive {
-		AuthCtrl.ActiveToolCallID = req.ToolCallID
-		AuthCtrl.MoveDown = func() {
+		ActiveWidgetCtrl.ActiveToolCallID = req.ToolCallID
+		ActiveWidgetCtrl.MoveDown = func() {
 			if isProvidingFeedback() || showCancelConfirmDialog() {
 				return
 			}
@@ -648,7 +648,7 @@ var AuthorizationWidget = kitex.FC("AuthorizationWidget", func(props Authorizati
 			}
 		}
 
-		AuthCtrl.MoveUp = func() {
+		ActiveWidgetCtrl.MoveUp = func() {
 			if isProvidingFeedback() || showCancelConfirmDialog() {
 				return
 			}
@@ -684,7 +684,7 @@ var AuthorizationWidget = kitex.FC("AuthorizationWidget", func(props Authorizati
 			}
 		}
 
-		AuthCtrl.SelectPrevOption = func() {
+		ActiveWidgetCtrl.SelectPrevOption = func() {
 			if isProvidingFeedback() || showCancelConfirmDialog() {
 				return
 			}
@@ -707,7 +707,7 @@ var AuthorizationWidget = kitex.FC("AuthorizationWidget", func(props Authorizati
 			}
 		}
 
-		AuthCtrl.SelectNextOption = func() {
+		ActiveWidgetCtrl.SelectNextOption = func() {
 			if isProvidingFeedback() || showCancelConfirmDialog() {
 				return
 			}
@@ -730,7 +730,7 @@ var AuthorizationWidget = kitex.FC("AuthorizationWidget", func(props Authorizati
 			}
 		}
 
-		AuthCtrl.Approve = func() {
+		ActiveWidgetCtrl.Approve = func() {
 			if isProvidingFeedback() {
 				return
 			}
@@ -741,14 +741,14 @@ var AuthorizationWidget = kitex.FC("AuthorizationWidget", func(props Authorizati
 			handleApprove()
 		}
 
-		AuthCtrl.Deny = func() {
+		ActiveWidgetCtrl.Deny = func() {
 			if isProvidingFeedback() || showCancelConfirmDialog() {
 				return
 			}
 			handleDeny()
 		}
 
-		AuthCtrl.StartFeedback = func() {
+		ActiveWidgetCtrl.StartFeedback = func() {
 			if isProvidingFeedback() || showCancelConfirmDialog() {
 				return
 			}
@@ -758,7 +758,7 @@ var AuthorizationWidget = kitex.FC("AuthorizationWidget", func(props Authorizati
 			mode.Set(mode.Insert)
 		}
 
-		AuthCtrl.ToggleCancelDialog = func() {
+		ActiveWidgetCtrl.ToggleCancelDialog = func() {
 			if isProvidingFeedback() {
 				return
 			}
@@ -769,7 +769,7 @@ var AuthorizationWidget = kitex.FC("AuthorizationWidget", func(props Authorizati
 			setShowCancelConfirmDialog(true)
 		}
 
-		AuthCtrl.ShowPreview = func() {
+		ActiveWidgetCtrl.ShowPreview = func() {
 			if isProvidingFeedback() || showCancelConfirmDialog() {
 				return
 			}
@@ -783,17 +783,17 @@ var AuthorizationWidget = kitex.FC("AuthorizationWidget", func(props Authorizati
 	kitex.UseEffectCleanup(func() func() {
 		return func() {
 			if props.IsActive {
-				if AuthCtrl.ActiveToolCallID == req.ToolCallID {
-					AuthCtrl.ActiveToolCallID = ""
-					AuthCtrl.MoveDown = nil
-					AuthCtrl.MoveUp = nil
-					AuthCtrl.SelectPrevOption = nil
-					AuthCtrl.SelectNextOption = nil
-					AuthCtrl.Approve = nil
-					AuthCtrl.Deny = nil
-					AuthCtrl.StartFeedback = nil
-					AuthCtrl.ToggleCancelDialog = nil
-					AuthCtrl.ShowPreview = nil
+				if ActiveWidgetCtrl.ActiveToolCallID == req.ToolCallID {
+					ActiveWidgetCtrl.ActiveToolCallID = ""
+					ActiveWidgetCtrl.MoveDown = nil
+					ActiveWidgetCtrl.MoveUp = nil
+					ActiveWidgetCtrl.SelectPrevOption = nil
+					ActiveWidgetCtrl.SelectNextOption = nil
+					ActiveWidgetCtrl.Approve = nil
+					ActiveWidgetCtrl.Deny = nil
+					ActiveWidgetCtrl.StartFeedback = nil
+					ActiveWidgetCtrl.ToggleCancelDialog = nil
+					ActiveWidgetCtrl.ShowPreview = nil
 				}
 			}
 		}

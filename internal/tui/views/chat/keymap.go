@@ -30,8 +30,8 @@ type ChatController struct {
 // Controller is the pre-allocated, static ChatController instance.
 var Controller = &ChatController{}
 
-// AuthController exposes authorization widget actions.
-type AuthController struct {
+// ActiveWidgetController exposes active widget actions.
+type ActiveWidgetController struct {
 	ActiveToolCallID   string
 	MoveDown           func()
 	MoveUp             func()
@@ -48,11 +48,11 @@ type AuthController struct {
 	ScrollRight        func()
 }
 
-// AuthCtrl is the pre-allocated, static AuthController instance for the inline widget.
-var AuthCtrl = &AuthController{}
+// ActiveWidgetCtrl is the pre-allocated, static ActiveWidgetController instance for the inline widget.
+var ActiveWidgetCtrl = &ActiveWidgetController{}
 
-// ModalAuthCtrl is the pre-allocated, static AuthController instance for the preview modal.
-var ModalAuthCtrl = &AuthController{}
+// ModalAuthCtrl is the pre-allocated, static ActiveWidgetController instance for the preview modal.
+var ModalAuthCtrl = &ActiveWidgetController{}
 
 func init() {
 	// --- Chat Page Commands & Keymaps ---
@@ -138,40 +138,40 @@ func init() {
 	keymap.Set([]mode.Mode{mode.Normal}, "D", command.ExecFunc("auth:start-feedback"), keymap.Context("chat"))
 	keymap.Set([]mode.Mode{mode.Normal}, "p", command.ExecFunc("auth:show-preview"), keymap.Context("chat"))
 
-	// --- Inline Auth Widget Command Implementations (Context "chat") ---
+	// --- Inline Active Widget Command Implementations (Context "chat") ---
 	command.Register("app:move-down", func(ctx command.CommandContext) error {
-		if AuthCtrl.MoveDown != nil {
-			AuthCtrl.MoveDown()
+		if ActiveWidgetCtrl.MoveDown != nil {
+			ActiveWidgetCtrl.MoveDown()
 		}
 		return nil
 	}, command.Context("chat"))
 	command.Register("app:move-up", func(ctx command.CommandContext) error {
-		if AuthCtrl.MoveUp != nil {
-			AuthCtrl.MoveUp()
+		if ActiveWidgetCtrl.MoveUp != nil {
+			ActiveWidgetCtrl.MoveUp()
 		}
 		return nil
 	}, command.Context("chat"))
 	command.Register("app:select-prev", func(ctx command.CommandContext) error {
-		if AuthCtrl.SelectPrevOption != nil {
-			AuthCtrl.SelectPrevOption()
+		if ActiveWidgetCtrl.SelectPrevOption != nil {
+			ActiveWidgetCtrl.SelectPrevOption()
 		}
 		return nil
 	}, command.Context("chat"))
 	command.Register("app:select-next", func(ctx command.CommandContext) error {
-		if AuthCtrl.SelectNextOption != nil {
-			AuthCtrl.SelectNextOption()
+		if ActiveWidgetCtrl.SelectNextOption != nil {
+			ActiveWidgetCtrl.SelectNextOption()
 		}
 		return nil
 	}, command.Context("chat"))
 	command.Register("app:accept", func(ctx command.CommandContext) error {
-		if AuthCtrl.Approve != nil {
-			AuthCtrl.Approve()
+		if ActiveWidgetCtrl.Approve != nil {
+			ActiveWidgetCtrl.Approve()
 		}
 		return nil
 	}, command.Context("chat"))
 	command.Register("app:toggle-cancel", func(ctx command.CommandContext) error {
-		if AuthCtrl.ToggleCancelDialog != nil {
-			AuthCtrl.ToggleCancelDialog()
+		if ActiveWidgetCtrl.ToggleCancelDialog != nil {
+			ActiveWidgetCtrl.ToggleCancelDialog()
 			return nil
 		}
 		// If authorization dialog is not active, check if the session is running and cancel the turn
@@ -227,20 +227,20 @@ func init() {
 	keymap.Set([]mode.Mode{mode.Normal}, "R", command.ExecFunc("chat:retry"), keymap.Context("chat"))
 
 	command.Register("auth:deny", func(ctx command.CommandContext) error {
-		if AuthCtrl.Deny != nil {
-			AuthCtrl.Deny()
+		if ActiveWidgetCtrl.Deny != nil {
+			ActiveWidgetCtrl.Deny()
 		}
 		return nil
 	}, command.Context("chat"))
 	command.Register("auth:start-feedback", func(ctx command.CommandContext) error {
-		if AuthCtrl.StartFeedback != nil {
-			AuthCtrl.StartFeedback()
+		if ActiveWidgetCtrl.StartFeedback != nil {
+			ActiveWidgetCtrl.StartFeedback()
 		}
 		return nil
 	}, command.Context("chat"))
 	command.Register("auth:show-preview", func(ctx command.CommandContext) error {
-		if AuthCtrl.ShowPreview != nil {
-			AuthCtrl.ShowPreview()
+		if ActiveWidgetCtrl.ShowPreview != nil {
+			ActiveWidgetCtrl.ShowPreview()
 		}
 		return nil
 	}, command.Context("chat"))

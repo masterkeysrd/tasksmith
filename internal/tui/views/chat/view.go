@@ -398,6 +398,11 @@ func renderChatView(props ViewProps) kitex.Node {
 		pendingAuthorizations = stateQuery.Data.PendingAuthorizations
 	}
 
+	var pendingQuestions []api.PendingQuestion
+	if stateQuery.Data != nil {
+		pendingQuestions = stateQuery.Data.PendingQuestions
+	}
+
 	var pendingLspSuggestions []api.LspSuggestion
 	if stateQuery.Data != nil {
 		pendingLspSuggestions = stateQuery.Data.PendingLspSuggestions
@@ -1205,6 +1210,14 @@ func renderChatView(props ViewProps) kitex.Node {
 				return PendingAuthorizationsWidget(PendingAuthorizationsWidgetProps{
 					SessionID:             sessionID,
 					PendingAuthorizations: unrenderedAuths,
+				})
+			}),
+
+			// Standalone Pending Questions Widget for user clarification
+			kitex.If(len(pendingQuestions) > 0, func() kitex.Node {
+				return PendingQuestionsWidget(PendingQuestionsWidgetProps{
+					SessionID:        sessionID,
+					PendingQuestions: pendingQuestions,
 				})
 			}),
 

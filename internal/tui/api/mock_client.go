@@ -33,6 +33,7 @@ type MockClient struct {
 	GetInputHistoryFunc             func(ctx context.Context, req api.GetInputHistoryRequest) (*api.GetInputHistoryResponse, error)
 	GetSessionStateFunc             func(ctx context.Context, req api.GetSessionStateRequest) (*api.GetSessionStateResponse, error)
 	SubmitAuthorizationDecisionFunc func(ctx context.Context, req api.SubmitAuthorizationDecisionRequest) (*api.SubmitAuthorizationDecisionResponse, error)
+	SubmitQuestionAnswersFunc       func(ctx context.Context, req api.SubmitQuestionAnswersRequest) (*api.SubmitQuestionAnswersResponse, error)
 	ResolveMcpRequestFunc           func(ctx context.Context, req api.ResolveMcpRequest) (*api.ResolveMcpResponse, error)
 	SetPermissionModeFunc           func(ctx context.Context, req api.SetPermissionModeRequest) (*api.SetPermissionModeResponse, error)
 	GetPermissionsFunc              func(ctx context.Context, req api.GetPermissionsRequest) (*api.GetPermissionsResponse, error)
@@ -220,6 +221,13 @@ func (m *MockClient) SubmitAuthorizationDecision(ctx context.Context, req api.Su
 		return m.SubmitAuthorizationDecisionFunc(ctx, req)
 	}
 	return &api.SubmitAuthorizationDecisionResponse{}, nil
+}
+
+func (m *MockClient) SubmitQuestionAnswers(ctx context.Context, req api.SubmitQuestionAnswersRequest) (*api.SubmitQuestionAnswersResponse, error) {
+	if m.SubmitQuestionAnswersFunc != nil {
+		return m.SubmitQuestionAnswersFunc(ctx, req)
+	}
+	return &api.SubmitQuestionAnswersResponse{Success: true}, nil
 }
 
 func (m *MockClient) ResolveMcpRequest(ctx context.Context, req api.ResolveMcpRequest) (*api.ResolveMcpResponse, error) {

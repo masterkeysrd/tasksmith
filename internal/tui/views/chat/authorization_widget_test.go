@@ -93,17 +93,17 @@ func TestAuthorizationWidgetMultiPage(t *testing.T) {
 	env.Flush()
 
 	// Initially, it should be active and display the first command
-	if AuthCtrl.ActiveToolCallID != "test-tool-call" {
-		t.Fatalf("expected active tool call ID %q, got %q", "test-tool-call", AuthCtrl.ActiveToolCallID)
+	if ActiveWidgetCtrl.ActiveToolCallID != "test-tool-call" {
+		t.Fatalf("expected active tool call ID %q, got %q", "test-tool-call", ActiveWidgetCtrl.ActiveToolCallID)
 	}
 
 	// Simulate pressing Approve (which calls handleApprove)
-	if AuthCtrl.Approve == nil {
+	if ActiveWidgetCtrl.Approve == nil {
 		t.Fatal("expected Approve handler to be registered")
 	}
 
 	// Let's click approve for page 1
-	AuthCtrl.Approve()
+	ActiveWidgetCtrl.Approve()
 	env.Flush()
 
 	// Since there is a second page, OnDecision should not have been called yet
@@ -112,7 +112,7 @@ func TestAuthorizationWidgetMultiPage(t *testing.T) {
 	}
 
 	// Now Approve is for page 2. Let's call it again
-	AuthCtrl.Approve()
+	ActiveWidgetCtrl.Approve()
 	env.Flush()
 
 	// Now OnDecision should have been called with both decisions!

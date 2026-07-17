@@ -104,20 +104,35 @@ var Message = kitex.FC("Message", func(props MessageProps) kitex.Node {
 		}
 
 		var children []kitex.Node
+		var pendingQuestions []ToolExecutionProps
+
+		flushQuestions := func() {
+			if len(pendingQuestions) > 0 {
+				node := ConsolidatedQuestionsWidget(ConsolidatedQuestionsProps{
+					Items: pendingQuestions,
+				})
+				if node != nil {
+					children = append(children, node)
+				}
+				pendingQuestions = nil
+			}
+		}
+
 		for _, block := range content {
-			var node kitex.Node
 			switch b := block.(type) {
 			case *message.TextBlock:
+				flushQuestions()
 				if strings.TrimSpace(b.Text) != "" {
-					node = components.Markdown(components.MarkdownProps{Source: b.Text})
+					children = append(children, components.Markdown(components.MarkdownProps{Source: b.Text}))
 				}
 			case *message.ThinkingBlock:
+				flushQuestions()
 				if strings.TrimSpace(b.Thinking) != "" {
-					node = CollapsibleThinking(CollapsibleThinkingProps{
+					children = append(children, CollapsibleThinking(CollapsibleThinkingProps{
 						Content:  b.Thinking,
 						Duration: props.ThinkingDuration,
 						Tokens:   props.ReasoningTokens,
-					})
+					}))
 				}
 			case *message.ToolCall:
 				var pendingReq *permissions.AuthorizationRequest
@@ -129,6 +144,7 @@ var Message = kitex.FC("Message", func(props MessageProps) kitex.Node {
 				}
 
 				if pendingReq != nil {
+					flushQuestions()
 					var localDec *permissions.AuthorizationDecision
 					if dec, decided := localDecisions()[b.ID]; decided {
 						localDec = &dec
@@ -136,7 +152,7 @@ var Message = kitex.FC("Message", func(props MessageProps) kitex.Node {
 
 					isActive := pendingReq.ToolCallID == activeToolCallID && localDec == nil
 
-					node = AuthorizationWidget(AuthorizationWidgetProps{
+					children = append(children, AuthorizationWidget(AuthorizationWidgetProps{
 						Request:             *pendingReq,
 						SessionID:           props.SessionID,
 						IsActive:            isActive,
@@ -144,25 +160,36 @@ var Message = kitex.FC("Message", func(props MessageProps) kitex.Node {
 						LocalDecision:       localDec,
 						ShowPreviewModal:    isActive && previewOpen(),
 						SetShowPreviewModal: setPreviewOpen,
-					})
+					}))
 				} else {
 					var toolMsg *message.Tool
 					if toolResponses != nil {
 						toolMsg = toolResponses[b.ID]
 					}
-					node = ToolExecution(ToolExecutionProps{
-						ToolCall:         b,
-						ToolMessage:      toolMsg,
-						OnViewFullOutput: props.OnViewFullOutput,
-						OnViewPreview:    props.OnViewPreview,
-						OnViewSubagent:   props.OnViewSubagent,
-					})
+					if b.Name == "ask_question" {
+						if toolMsg != nil {
+							pendingQuestions = append(pendingQuestions, ToolExecutionProps{
+								ToolCall:    b,
+								ToolMessage: toolMsg,
+							})
+						}
+					} else {
+						flushQuestions()
+						node := ToolExecution(ToolExecutionProps{
+							ToolCall:         b,
+							ToolMessage:      toolMsg,
+							OnViewFullOutput: props.OnViewFullOutput,
+							OnViewPreview:    props.OnViewPreview,
+							OnViewSubagent:   props.OnViewSubagent,
+						})
+						if node != nil {
+							children = append(children, node)
+						}
+					}
 				}
 			}
-			if node != nil {
-				children = append(children, node)
-			}
 		}
+		flushQuestions()
 
 		if len(children) == 0 {
 			return nil

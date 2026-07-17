@@ -513,7 +513,7 @@ func TestSendMessageRejectionOnPendingAuth(t *testing.T) {
 	}
 
 	// Verify the session status is still pending_auth
-	status, _, _, _, pendingAuths, _ := manager.GetSessionState(ctx, s.ID)
+	status, _, _, _, pendingAuths, _, _ := manager.GetSessionState(ctx, s.ID)
 	if status != session.StatusPendingAuth {
 		t.Errorf("expected session status %q, got %q", session.StatusPendingAuth, status)
 	}
@@ -561,7 +561,7 @@ func TestSubmitAuthorizationDecisionTransitionsStatus(t *testing.T) {
 	})
 
 	// Verify status is pending_auth
-	status, _, _, _, pendingAuths, _ := manager.GetSessionState(ctx, s.ID)
+	status, _, _, _, pendingAuths, _, _ := manager.GetSessionState(ctx, s.ID)
 	if status != session.StatusPendingAuth {
 		t.Fatalf("expected session status %q, got %q", session.StatusPendingAuth, status)
 	}
@@ -580,13 +580,13 @@ func TestSubmitAuthorizationDecisionTransitionsStatus(t *testing.T) {
 	}
 
 	// Verify the session status transitioned to running
-	status, _, _, _, _, _ = manager.GetSessionState(ctx, s.ID)
+	status, _, _, _, _, _, _ = manager.GetSessionState(ctx, s.ID)
 	if status != session.StatusRunning {
 		t.Errorf("expected session status %q after submitting decision, got %q", session.StatusRunning, status)
 	}
 
 	// Verify pending authorizations are cleared
-	_, _, _, _, pendingAuths, _ = manager.GetSessionState(ctx, s.ID)
+	_, _, _, _, pendingAuths, _, _ = manager.GetSessionState(ctx, s.ID)
 	if len(pendingAuths) != 0 {
 		t.Errorf("expected 0 pending authorizations after submitting decision, got %d", len(pendingAuths))
 	}
@@ -687,7 +687,7 @@ func TestMessageQueueAfterDecisionSubmission(t *testing.T) {
 	}
 
 	// Verify status is running
-	status, _, _, _, _, _ := manager.GetSessionState(ctx, s.ID)
+	status, _, _, _, _, _, _ := manager.GetSessionState(ctx, s.ID)
 	if status != session.StatusRunning {
 		t.Fatalf("expected session status %q after submitting decision, got %q", session.StatusRunning, status)
 	}
@@ -973,7 +973,7 @@ func TestSubmitAuthorizationDecision_SubagentRouting(t *testing.T) {
 	manager.TaskManager().BubbleUpAuthRequest(task.ID, reqs)
 
 	// 2. Verify parent session state is now pending_auth
-	status, _, _, _, pendingAuths, _ := manager.GetSessionState(ctx, s.ID)
+	status, _, _, _, pendingAuths, _, _ := manager.GetSessionState(ctx, s.ID)
 	if status != session.StatusPendingAuth {
 		t.Errorf("expected parent status pending_auth, got %s", status)
 	}
@@ -1001,7 +1001,7 @@ func TestSubmitAuthorizationDecision_SubagentRouting(t *testing.T) {
 	}
 
 	// 5. Verify parent session cleared its pending authorizations
-	status2, _, _, _, pendingAuths2, _ := manager.GetSessionState(ctx, s.ID)
+	status2, _, _, _, pendingAuths2, _, _ := manager.GetSessionState(ctx, s.ID)
 	if status2 != session.StatusRunning {
 		t.Errorf("expected parent status running, got %s", status2)
 	}
@@ -1044,7 +1044,7 @@ func TestForceCompaction(t *testing.T) {
 		t.Fatalf("failed to force compaction: %v", err)
 	}
 
-	status, _, _, _, _, _ := manager.GetSessionState(ctx, s.ID)
+	status, _, _, _, _, _, _ := manager.GetSessionState(ctx, s.ID)
 	if status == session.StatusRunning {
 		err = manager.ForceCompaction(ctx, s.ID)
 		if err == nil {

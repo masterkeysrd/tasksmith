@@ -38,10 +38,11 @@ import (
 type SessionStatus string
 
 const (
-	StatusIdle        SessionStatus = "idle"
-	StatusRunning     SessionStatus = "running"
-	StatusError       SessionStatus = "error"
-	StatusPendingAuth SessionStatus = "pending_auth"
+	StatusIdle         SessionStatus = "idle"
+	StatusRunning      SessionStatus = "running"
+	StatusError        SessionStatus = "error"
+	StatusPendingAuth  SessionStatus = "pending_auth"
+	StatusPendingInput SessionStatus = "pending_input"
 )
 
 // Session represents a domain session.
@@ -69,6 +70,7 @@ type ActiveSession struct {
 	ThinkingDuration      time.Duration
 	CurrentStreamMetrics  *message.TokenMetrics
 	PendingAuthorizations []permissions.AuthorizationRequest
+	PendingQuestions      []tools.PendingQuestion
 	MessageSubscribers    []chan struct{}
 	IsCompacting          bool
 }
@@ -432,16 +434,19 @@ func (m *Manager) tryRehydrateSession(ctx context.Context, sess *ActiveSession) 
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	// Double check under lock
-	if sess.Status == StatusIdle && sess.PendingAuthorizations == nil {
+	if sess.Status == StatusIdle && sess.PendingAuthorizations == nil && sess.PendingQuestions == nil {
 		sess.PendingAuthorizations = snap.State.PendingAuthorizations
+		sess.PendingQuestions = snap.State.PendingQuestions
 		if len(sess.PendingAuthorizations) > 0 {
 			sess.Status = StatusPendingAuth
+		} else if len(sess.PendingQuestions) > 0 {
+			sess.Status = StatusPendingInput
 		}
 	}
 }
 
 // GetSessionState returns the in-memory runtime execution state of the specified session.
-func (m *Manager) GetSessionState(ctx context.Context, sessionID string) (SessionStatus, string, bool, bool, []permissions.AuthorizationRequest, time.Duration) {
+func (m *Manager) GetSessionState(ctx context.Context, sessionID string) (SessionStatus, string, bool, bool, []permissions.AuthorizationRequest, []tools.PendingQuestion, time.Duration) {
 	m.mu.Lock()
 	sess, ok := m.activeSessions[sessionID]
 	if !ok {
@@ -463,7 +468,7 @@ func (m *Manager) GetSessionState(ctx context.Context, sessionID string) (Sessio
 	if !sess.ThinkingStart.IsZero() {
 		elapsed = time.Since(sess.ThinkingStart)
 	}
-	return sess.Status, sess.Error, isGenerating, sess.IsCompacting, sess.PendingAuthorizations, elapsed
+	return sess.Status, sess.Error, isGenerating, sess.IsCompacting, sess.PendingAuthorizations, sess.PendingQuestions, elapsed
 }
 
 // GetRunningMetrics returns the current streaming token metrics for an active session, if any.
@@ -754,6 +759,11 @@ func (m *Manager) sendMessage(ctx context.Context, sessionID string, text string
 		return fmt.Errorf("cannot send message while tool authorization is pending")
 	}
 
+	if sess.Status == StatusPendingInput {
+		m.mu.Unlock()
+		return fmt.Errorf("cannot send message while user input is pending")
+	}
+
 	if sess.Status == StatusRunning {
 		u, err := uuid.NewV7()
 		if err != nil {
@@ -906,6 +916,54 @@ func (m *Manager) SubmitAuthorizationDecision(ctx context.Context, sessionID str
 	})
 
 	// Start running Loom agent workflow asynchronously in background
+	m.wg.Go(func() {
+		m.runAgentLoop(runCtx, sessionID, sess, inputCmd, cancel, "")
+	})
+
+	return nil
+}
+
+// SubmitQuestionAnswers submits user question answers and resumes the agent.
+func (m *Manager) SubmitQuestionAnswers(ctx context.Context, sessionID string, answers []tools.QuestionAnswer) error {
+	m.mu.Lock()
+	sess, exists := m.activeSessions[sessionID]
+	if !exists {
+		sess = &ActiveSession{
+			ID:     sessionID,
+			Status: StatusIdle,
+		}
+		m.activeSessions[sessionID] = sess
+	}
+	m.mu.Unlock()
+
+	m.tryRehydrateSession(ctx, sess)
+
+	m.mu.Lock()
+	if sess.Status != StatusPendingInput && sess.Status != StatusIdle {
+		m.mu.Unlock()
+		return fmt.Errorf("session is in an invalid state for submitting answers: %s", sess.Status)
+	}
+
+	sess.Status = StatusRunning
+	sess.Error = ""
+	sess.CurrentStreamText = ""
+	sess.CurrentStreamThinking = ""
+	sess.CurrentToolStreams = make(map[string]string)
+	sess.ThinkingStart = time.Now()
+	sess.ThinkingDuration = 0
+	sess.CurrentStreamMetrics = nil
+	sess.PendingQuestions = nil
+
+	runCtx, cancel := context.WithCancel(context.Background())
+	sess.Cancel = cancel
+	m.mu.Unlock()
+
+	log.Info(fmt.Sprintf("[Session] SubmitQuestionAnswers: sessionID=%s answersCount=%d", sessionID, len(answers)))
+	inputCmd := graph.Update[agentgraph.AgentState](func(state agentgraph.AgentState) agentgraph.AgentState {
+		state.QuestionAnswers = append(state.QuestionAnswers, answers...)
+		return state
+	})
+
 	m.wg.Go(func() {
 		m.runAgentLoop(runCtx, sessionID, sess, inputCmd, cancel, "")
 	})
@@ -1383,8 +1441,10 @@ func (m *Manager) runAgentLoop(runCtx context.Context, sessionID string, sess *A
 	}
 
 	var pendingAuths []permissions.AuthorizationRequest
+	var pendingQuestions []tools.PendingQuestion
 	if snap, err := g.Load(context.Background(), *loc); err == nil {
 		pendingAuths = snap.State.PendingAuthorizations
+		pendingQuestions = snap.State.PendingQuestions
 	}
 
 	// Clear the active stream state before persisting to database, so there is no duplication window
@@ -1393,8 +1453,11 @@ func (m *Manager) runAgentLoop(runCtx context.Context, sessionID string, sess *A
 	sess.CurrentStreamThinking = ""
 	sess.CurrentToolStreams = nil
 	sess.PendingAuthorizations = pendingAuths
+	sess.PendingQuestions = pendingQuestions
 	if len(pendingAuths) > 0 {
 		sess.Status = StatusPendingAuth
+	} else if len(pendingQuestions) > 0 {
+		sess.Status = StatusPendingInput
 	} else {
 		sess.Status = StatusIdle
 	}

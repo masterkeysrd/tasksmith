@@ -10,6 +10,7 @@ import (
 	"github.com/masterkeysrd/kite/extras/kitex"
 	"github.com/masterkeysrd/kite/style"
 	"github.com/masterkeysrd/loom/message"
+	"github.com/masterkeysrd/tasksmith/internal/agent/tools"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	"github.com/masterkeysrd/tasksmith/internal/core/preview"
 	"github.com/masterkeysrd/tasksmith/internal/tui/components"
@@ -159,6 +160,8 @@ var ToolExecution = kitex.FC("ToolExecution", func(props ToolExecutionProps) kit
 			node = TodosToolWidget(props)
 		case "invoke_agent":
 			node = AgentToolWidget(props)
+		case "ask_question":
+			node = AskQuestionToolWidget(props)
 		default:
 			node = GenericToolWidget(props)
 		}
@@ -496,5 +499,183 @@ var GenericToolWidget = kitex.FC("genericToolWidget", func(props ToolExecutionPr
 				)
 			}),
 		),
+	)
+})
+
+// AskQuestionToolWidget renders the completed question and user choices.
+var AskQuestionToolWidget = kitex.FC("AskQuestionToolWidget", func(props ToolExecutionProps) kitex.Node {
+	t := theme.UseTheme()
+	if t == nil {
+		return nil
+	}
+
+	tc := props.ToolCall
+	tm := props.ToolMessage
+
+	if tm == nil {
+		return nil
+	}
+
+	if tm.IsError {
+		return DeniedToolWidget(props)
+	}
+
+	// Completed state: render read-only card
+	var question string
+	var selected []string
+	var writeIn string
+
+	if tc != nil && tc.Args != nil {
+		if data, err := json.Marshal(tc.Args); err == nil {
+			var args tools.AskQuestionArgs
+			if err := json.Unmarshal(data, &args); err == nil {
+				question = args.Question
+			}
+		}
+	}
+
+	if tm.StructuredContent != nil {
+		out, ok := parseStructuredOutput[tools.AskQuestionOutput](tm.StructuredContent)
+		if ok {
+			selected = out.Selected
+			writeIn = out.WriteIn
+		}
+	}
+
+	var answerParts []string
+	if len(selected) > 0 {
+		answerParts = append(answerParts, strings.Join(selected, ", "))
+	}
+	if writeIn != "" {
+		answerParts = append(answerParts, fmt.Sprintf("Write-in: %q", writeIn))
+	}
+	answerText := strings.Join(answerParts, " | ")
+	if answerText == "" {
+		answerText = "(No answer)"
+	}
+
+	return kitex.Box(kitex.BoxProps{
+		Style: style.S().
+			Display(style.DisplayFlex).
+			FlexDirection(style.FlexColumn).
+			PaddingHorizontal(1).
+			PaddingVertical(0).
+			Border(true, style.SingleBorder(), t.Color.Text.Tertiary).
+			Background(t.Color.Surface.BaseHover).
+			Width(style.Percent(100)).
+			MarginVertical(0),
+	},
+		kitex.Box(kitex.BoxProps{
+			Style: style.S().Display(style.DisplayFlex).FlexDirection(style.FlexRow).MarginBottom(1),
+		},
+			kitex.Span(kitex.SpanProps{Style: style.S().Bold(true).Foreground(t.Color.Surface.Success)}, kitex.Text("Clarification")),
+		),
+		kitex.Span(kitex.SpanProps{Style: style.S().Bold(true).Foreground(t.Color.Text.Secondary)}, kitex.Text(question)),
+		kitex.Span(kitex.SpanProps{Style: style.S().Italic(true).Foreground(t.Color.Text.Primary).PaddingLeft(3).MarginTop(0)}, kitex.Text(answerText)),
+	)
+})
+
+type ConsolidatedQuestionsProps struct {
+	Items []ToolExecutionProps
+}
+
+// ConsolidatedQuestionsWidget renders multiple completed questions and user choices in a single card.
+var ConsolidatedQuestionsWidget = kitex.FC("ConsolidatedQuestionsWidget", func(props ConsolidatedQuestionsProps) kitex.Node {
+	t := theme.UseTheme()
+	if t == nil {
+		return nil
+	}
+
+	var summaryNodes []kitex.Node
+	for idx, item := range props.Items {
+		tc := item.ToolCall
+		tm := item.ToolMessage
+		if tm == nil {
+			continue
+		}
+
+		if tm.IsError {
+			// If any item is an error, render it using DeniedToolWidget or inline label
+			summaryNodes = append(summaryNodes, kitex.Box(kitex.BoxProps{
+				Style: style.S().Display(style.DisplayFlex).FlexDirection(style.FlexColumn).MarginBottom(1),
+			},
+				kitex.Span(kitex.SpanProps{Style: style.S().Bold(true).Foreground(t.Color.Text.Error)}, kitex.Text(fmt.Sprintf("%d. DENIED", idx+1))),
+			))
+			continue
+		}
+
+		var question string
+		if tc != nil && tc.Args != nil {
+			if data, err := json.Marshal(tc.Args); err == nil {
+				var args tools.AskQuestionArgs
+				if err := json.Unmarshal(data, &args); err == nil {
+					question = args.Question
+				}
+			}
+		}
+
+		var selected []string
+		var writeIn string
+		if tm.StructuredContent != nil {
+			out, ok := parseStructuredOutput[tools.AskQuestionOutput](tm.StructuredContent)
+			if ok {
+				selected = out.Selected
+				writeIn = out.WriteIn
+			}
+		}
+
+		var answerParts []string
+		if len(selected) > 0 {
+			answerParts = append(answerParts, strings.Join(selected, ", "))
+		}
+		if writeIn != "" {
+			answerParts = append(answerParts, fmt.Sprintf("Write-in: %q", writeIn))
+		}
+		answerText := strings.Join(answerParts, " | ")
+		if answerText == "" {
+			answerText = "(No answer)"
+		}
+
+		var itemStyle style.Style
+		if idx < len(props.Items)-1 {
+			itemStyle = style.S().Display(style.DisplayFlex).FlexDirection(style.FlexColumn).MarginBottom(1)
+		} else {
+			itemStyle = style.S().Display(style.DisplayFlex).FlexDirection(style.FlexColumn).MarginBottom(0)
+		}
+
+		summaryNodes = append(summaryNodes, kitex.Box(kitex.BoxProps{
+			Style: itemStyle,
+		},
+			kitex.Span(kitex.SpanProps{Style: style.S().Bold(true).Foreground(t.Color.Text.Secondary)}, kitex.Text(fmt.Sprintf("%d. %s", idx+1, question))),
+			kitex.Span(kitex.SpanProps{Style: style.S().Italic(true).Foreground(t.Color.Text.Primary).PaddingLeft(3).MarginTop(0)}, kitex.Text(answerText)),
+		))
+	}
+
+	if len(summaryNodes) == 0 {
+		return nil
+	}
+
+	titleText := "Clarifications"
+	if len(summaryNodes) == 1 {
+		titleText = "Clarification"
+	}
+
+	return kitex.Box(kitex.BoxProps{
+		Style: style.S().
+			Display(style.DisplayFlex).
+			FlexDirection(style.FlexColumn).
+			PaddingHorizontal(1).
+			PaddingVertical(0).
+			Border(true, style.SingleBorder(), t.Color.Text.Tertiary).
+			Background(t.Color.Surface.BaseHover).
+			Width(style.Percent(100)).
+			MarginVertical(0),
+	},
+		kitex.Box(kitex.BoxProps{
+			Style: style.S().Display(style.DisplayFlex).FlexDirection(style.FlexRow).MarginBottom(1),
+		},
+			kitex.Span(kitex.SpanProps{Style: style.S().Bold(true).Foreground(t.Color.Surface.Success)}, kitex.Text(titleText)),
+		),
+		kitex.Box(kitex.BoxProps{Style: style.S().Display(style.DisplayFlex).FlexDirection(style.FlexColumn)}, summaryNodes...),
 	)
 })

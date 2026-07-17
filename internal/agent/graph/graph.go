@@ -2,6 +2,7 @@ package graph
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -30,6 +31,8 @@ type AgentState struct {
 	ActivatedSkills       []string                            `json:"activated_skills"`
 	PendingAuthorizations []permissions.AuthorizationRequest  `json:"pending_authorizations,omitempty"`
 	Decisions             []permissions.AuthorizationDecision `json:"decisions,omitempty"`
+	PendingQuestions      []tools.PendingQuestion             `json:"pending_questions,omitempty"`
+	QuestionAnswers       []tools.QuestionAnswer              `json:"question_answers,omitempty"`
 	ExecutionCancelled    bool                                `json:"execution_cancelled,omitempty"`
 	ForceCompaction       bool                                `json:"force_compaction,omitempty"`
 	WasForceCompacted     bool                                `json:"was_force_compacted,omitempty"`
@@ -58,6 +61,14 @@ func (s AgentState) Copy() AgentState {
 	if s.Decisions != nil {
 		copied.Decisions = make([]permissions.AuthorizationDecision, len(s.Decisions))
 		copy(copied.Decisions, s.Decisions)
+	}
+	if s.PendingQuestions != nil {
+		copied.PendingQuestions = make([]tools.PendingQuestion, len(s.PendingQuestions))
+		copy(copied.PendingQuestions, s.PendingQuestions)
+	}
+	if s.QuestionAnswers != nil {
+		copied.QuestionAnswers = make([]tools.QuestionAnswer, len(s.QuestionAnswers))
+		copy(copied.QuestionAnswers, s.QuestionAnswers)
 	}
 	copied.ExecutionCancelled = s.ExecutionCancelled
 	copied.ForceCompaction = s.ForceCompaction
@@ -415,6 +426,7 @@ func (a *AgentGraph) executeTools(ctx context.Context, s AgentState) (graph.Comm
 	sw, hasWriter := stream.WriterFromContext(ctx)
 
 	var pendingRequests []permissions.AuthorizationRequest
+	var pendingQuestions []tools.PendingQuestion
 	interruptRequired := false
 
 	decisionMap := make(map[string]permissions.AuthorizationDecision)
@@ -480,6 +492,55 @@ func (a *AgentGraph) executeTools(ctx context.Context, s AgentState) (graph.Comm
 		if existingResult, ok := completedResults[tc.ID]; ok {
 			toolResults = append(toolResults, existingResult)
 			continue
+		}
+
+		if tc.Name == "ask_question" {
+			var answer *tools.QuestionAnswer
+			for _, ans := range s.QuestionAnswers {
+				if ans.ToolCallID == tc.ID {
+					answer = &ans
+					break
+				}
+			}
+
+			if answer != nil {
+				outData, _ := json.Marshal(tools.AskQuestionOutput{
+					Selected: answer.Selected,
+					WriteIn:  answer.WriteIn,
+					Success:  true,
+				})
+				toolMsg := &message.Tool{
+					ToolCallID: tc.ID,
+					Name:       tc.Name,
+					Content:    message.Content{&message.TextBlock{Text: string(outData)}},
+					StructuredContent: tools.AskQuestionOutput{
+						Selected: answer.Selected,
+						WriteIn:  answer.WriteIn,
+						Success:  true,
+					},
+				}
+				toolResults = append(toolResults, toolMsg)
+				if hasWriter {
+					_ = sw.Write(ctx, stream.Event{
+						Name: "tool_message",
+						Data: toolMsg,
+					})
+				}
+				continue
+			} else {
+				var qArgs tools.AskQuestionArgs
+				if data, err := json.Marshal(tc.Args); err == nil {
+					_ = json.Unmarshal(data, &qArgs)
+				}
+				pendingQuestions = append(pendingQuestions, tools.PendingQuestion{
+					ToolCallID:    tc.ID,
+					Question:      qArgs.Question,
+					Options:       qArgs.Options,
+					IsMultiSelect: qArgs.IsMultiSelect,
+				})
+				interruptRequired = true
+				continue
+			}
 		}
 
 		args := tc.Args
@@ -658,6 +719,7 @@ func (a *AgentGraph) executeTools(ctx context.Context, s AgentState) (graph.Comm
 				}
 
 				state.PendingAuthorizations = pendingRequests
+				state.PendingQuestions = pendingQuestions
 
 				// Filter out decisions that were handled
 				var remainingDecisions []permissions.AuthorizationDecision
@@ -681,6 +743,28 @@ func (a *AgentGraph) executeTools(ctx context.Context, s AgentState) (graph.Comm
 				}
 				state.Decisions = remainingDecisions
 
+				// Filter out question answers that were handled
+				var remainingAnswers []tools.QuestionAnswer
+				for _, ans := range state.QuestionAnswers {
+					resolved := false
+					for _, req := range pendingQuestions {
+						if req.ToolCallID == ans.ToolCallID {
+							resolved = true
+							break
+						}
+					}
+					for _, res := range toolResults {
+						if res.(*message.Tool).ToolCallID == ans.ToolCallID {
+							resolved = true
+							break
+						}
+					}
+					if !resolved {
+						remainingAnswers = append(remainingAnswers, ans)
+					}
+				}
+				state.QuestionAnswers = remainingAnswers
+
 				return state
 			},
 		}, nil
@@ -702,6 +786,8 @@ func (a *AgentGraph) executeTools(ctx context.Context, s AgentState) (graph.Comm
 
 		state.PendingAuthorizations = nil
 		state.Decisions = nil
+		state.PendingQuestions = nil
+		state.QuestionAnswers = nil
 
 		for _, res := range toolResults {
 			if tMsg, ok := res.(*message.Tool); ok {

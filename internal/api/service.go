@@ -1041,7 +1041,7 @@ func (s *Service) GetSessionState(ctx context.Context, req GetSessionStateReques
 			PermissionMode:        mode,
 		}, nil
 	}
-	status, errStr, isGen, isCompacting, pendingAuths, elapsed := s.sm.GetSessionState(ctx, req.SessionID)
+	status, errStr, isGen, isCompacting, pendingAuths, pendingQuestions, elapsed := s.sm.GetSessionState(ctx, req.SessionID)
 
 	var runningTasks []RunningTaskInfo
 	tasks := s.sm.ListTasks(req.SessionID)
@@ -1101,6 +1101,16 @@ func (s *Service) GetSessionState(ctx context.Context, req GetSessionStateReques
 		mode = permissions.ModeDefault
 	}
 
+	var apiQuestions []PendingQuestion
+	for _, pq := range pendingQuestions {
+		apiQuestions = append(apiQuestions, PendingQuestion{
+			ToolCallID:    pq.ToolCallID,
+			Question:      pq.Question,
+			Options:       pq.Options,
+			IsMultiSelect: pq.IsMultiSelect,
+		})
+	}
+
 	resp := &GetSessionStateResponse{
 		Status:                string(status),
 		Error:                 errStr,
@@ -1110,6 +1120,7 @@ func (s *Service) GetSessionState(ctx context.Context, req GetSessionStateReques
 		RunningTasks:          runningTasks,
 		Todos:                 apiTodos,
 		PendingAuthorizations: pendingAuths,
+		PendingQuestions:      apiQuestions,
 		PendingLspSuggestions: apiSuggestions,
 		PendingMcpRequests:    apiMcpRequests,
 		PermissionMode:        mode,
@@ -1200,6 +1211,25 @@ func (s *Service) SubmitAuthorizationDecision(ctx context.Context, req SubmitAut
 		return nil, err
 	}
 	return &SubmitAuthorizationDecisionResponse{Success: true}, nil
+}
+
+// SubmitQuestionAnswers submits user question answers and resumes the agent.
+func (s *Service) SubmitQuestionAnswers(ctx context.Context, req SubmitQuestionAnswersRequest) (*SubmitQuestionAnswersResponse, error) {
+	if s.sm == nil {
+		return nil, fmt.Errorf("session manager not initialized")
+	}
+	var sessionAnswers []tools.QuestionAnswer
+	for _, ans := range req.Answers {
+		sessionAnswers = append(sessionAnswers, tools.QuestionAnswer{
+			ToolCallID: ans.ToolCallID,
+			Selected:   ans.Selected,
+			WriteIn:    ans.WriteIn,
+		})
+	}
+	if err := s.sm.SubmitQuestionAnswers(ctx, req.SessionID, sessionAnswers); err != nil {
+		return nil, err
+	}
+	return &SubmitQuestionAnswersResponse{Success: true}, nil
 }
 
 // SetPermissionMode updates the active permission mode for a session or workspace/global.

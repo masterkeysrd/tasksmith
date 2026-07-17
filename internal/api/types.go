@@ -339,6 +339,7 @@ type GetSessionStateResponse struct {
 	RunningTasks          []RunningTaskInfo                  `json:"running_tasks,omitempty"`
 	Todos                 []Todo                             `json:"todos,omitempty"`
 	PendingAuthorizations []permissions.AuthorizationRequest `json:"pending_authorizations,omitempty"`
+	PendingQuestions      []PendingQuestion                  `json:"pending_questions,omitempty"`
 	PendingLspSuggestions []LspSuggestion                    `json:"pending_lsp_suggestions,omitempty"`
 	PendingMcpRequests    []PendingMcpRequest                `json:"pending_mcp_requests,omitempty"`
 	PermissionMode        permissions.PermissionMode         `json:"permission_mode,omitempty"`
@@ -527,6 +528,29 @@ type SubmitAuthorizationDecisionRequest struct {
 
 type SubmitAuthorizationDecisionResponse struct {
 	Success bool `json:"success"`
+}
+
+type PendingQuestion struct {
+	ToolCallID    string   `json:"tool_call_id"`
+	Question      string   `json:"question"`
+	Options       []string `json:"options"`
+	IsMultiSelect bool     `json:"is_multi_select"`
+}
+
+type QuestionAnswer struct {
+	ToolCallID string   `json:"tool_call_id"`
+	Selected   []string `json:"selected,omitempty"`
+	WriteIn    string   `json:"write_in,omitempty"`
+}
+
+type SubmitQuestionAnswersRequest struct {
+	SessionID string           `json:"session_id"`
+	Answers   []QuestionAnswer `json:"answers"`
+}
+
+type SubmitQuestionAnswersResponse struct {
+	Success bool   `json:"success"`
+	Error   string `json:"error,omitempty"`
 }
 
 type Todo struct {

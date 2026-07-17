@@ -38,6 +38,7 @@ type Client interface {
 	GetInputHistory(ctx context.Context, req api.GetInputHistoryRequest) (*api.GetInputHistoryResponse, error)
 	GetSessionState(ctx context.Context, req api.GetSessionStateRequest) (*api.GetSessionStateResponse, error)
 	SubmitAuthorizationDecision(ctx context.Context, req api.SubmitAuthorizationDecisionRequest) (*api.SubmitAuthorizationDecisionResponse, error)
+	SubmitQuestionAnswers(ctx context.Context, req api.SubmitQuestionAnswersRequest) (*api.SubmitQuestionAnswersResponse, error)
 	ResolveMcpRequest(ctx context.Context, req api.ResolveMcpRequest) (*api.ResolveMcpResponse, error)
 	SetPermissionMode(ctx context.Context, req api.SetPermissionModeRequest) (*api.SetPermissionModeResponse, error)
 	GetPermissions(ctx context.Context, req api.GetPermissionsRequest) (*api.GetPermissionsResponse, error)
@@ -246,6 +247,12 @@ func (w *toastClient) GetSessionState(ctx context.Context, req api.GetSessionSta
 func (w *toastClient) SubmitAuthorizationDecision(ctx context.Context, req api.SubmitAuthorizationDecisionRequest) (*api.SubmitAuthorizationDecisionResponse, error) {
 	res, err := w.delegate.SubmitAuthorizationDecision(ctx, req)
 	toastError("Authorization Submission Failed", err)
+	return res, err
+}
+
+func (w *toastClient) SubmitQuestionAnswers(ctx context.Context, req api.SubmitQuestionAnswersRequest) (*api.SubmitQuestionAnswersResponse, error) {
+	res, err := w.delegate.SubmitQuestionAnswers(ctx, req)
+	toastError("Question Submission Failed", err)
 	return res, err
 }
 
