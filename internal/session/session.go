@@ -57,22 +57,24 @@ type Session struct {
 
 // ActiveSession holds the in-memory execution status of a running Loom agent.
 type ActiveSession struct {
-	ID                    string
-	Status                SessionStatus
-	Error                 string
-	CurrentStreamText     string
-	CurrentStreamThinking string
-	CurrentToolStreams    map[string]string // toolCallID -> accumulated stream text
-	Cancel                context.CancelFunc
-	Inbox                 []message.Message
-	InboxMu               sync.Mutex
-	ThinkingStart         time.Time
-	ThinkingDuration      time.Duration
-	CurrentStreamMetrics  *message.TokenMetrics
-	PendingAuthorizations []permissions.AuthorizationRequest
-	PendingQuestions      []tools.PendingQuestion
-	MessageSubscribers    []chan struct{}
-	IsCompacting          bool
+	ID                        string
+	Status                    SessionStatus
+	Error                     string
+	CurrentStreamText         string
+	CurrentStreamThinking     string
+	CurrentToolStreams        map[string]string // toolCallID -> accumulated stream text
+	Cancel                    context.CancelFunc
+	Inbox                     []message.Message
+	InboxMu                   sync.Mutex
+	ThinkingStart             time.Time
+	ThinkingDuration          time.Duration
+	CurrentStreamMetrics      *message.TokenMetrics
+	AccumulatedMetrics        message.TokenMetrics
+	StartingCumulativeMetrics SessionMetrics
+	PendingAuthorizations     []permissions.AuthorizationRequest
+	PendingQuestions          []tools.PendingQuestion
+	MessageSubscribers        []chan struct{}
+	IsCompacting              bool
 }
 
 // ManagerConfig defines configuration parameters and dependencies for Manager.
@@ -343,12 +345,21 @@ func (m *Manager) GetSession(ctx context.Context, id string) (*Session, error) {
 		}
 	}
 
+	var metrics *SessionMetrics
+	if sd.LastTurnMetrics != nil {
+		var m SessionMetrics
+		if err := json.Unmarshal([]byte(*sd.LastTurnMetrics), &m); err == nil {
+			metrics = &m
+		}
+	}
+
 	return &Session{
-		ID:        sd.ID,
-		Title:     sd.Title,
-		Settings:  settings,
-		CreatedAt: sd.CreatedAt,
-		UpdatedAt: sd.UpdatedAt,
+		ID:              sd.ID,
+		Title:           sd.Title,
+		Settings:        settings,
+		LastTurnMetrics: metrics,
+		CreatedAt:       sd.CreatedAt,
+		UpdatedAt:       sd.UpdatedAt,
 	}, nil
 }
 
@@ -479,7 +490,46 @@ func (m *Manager) GetRunningMetrics(sessionID string) *message.TokenMetrics {
 	if !ok {
 		return nil
 	}
-	return sess.CurrentStreamMetrics
+	if sess.CurrentStreamMetrics == nil {
+		if sess.AccumulatedMetrics.TotalTokens > 0 || sess.AccumulatedMetrics.Tokens.Input > 0 {
+			copyMetrics := sess.AccumulatedMetrics
+			return &copyMetrics
+		}
+		return nil
+	}
+	combined := sess.AccumulatedMetrics.Add(*sess.CurrentStreamMetrics)
+	return &combined
+}
+
+func (m *Manager) persistTurnMetrics(ctx context.Context, sessionID string, sess *ActiveSession, includeActiveCall bool) {
+	m.mu.Lock()
+	turnMetrics := sess.AccumulatedMetrics
+	if includeActiveCall && sess.CurrentStreamMetrics != nil {
+		turnMetrics = sess.AccumulatedMetrics.Add(*sess.CurrentStreamMetrics)
+	}
+	startMetrics := sess.StartingCumulativeMetrics
+	m.mu.Unlock()
+
+	cumPrompt := startMetrics.CumulativePromptTokens + turnMetrics.Tokens.Input
+	cumCompletion := startMetrics.CumulativeCompletionTokens + turnMetrics.Tokens.Output
+	cumTotal := startMetrics.CumulativeTotalTokens + turnMetrics.TotalTokens
+	cumCost := startMetrics.CumulativeCostUSD + turnMetrics.TotalCost.AsUSD()
+
+	_ = m.store.UpdateSessionMetrics(ctx, sessionID, SessionMetrics{
+		SystemTokens:               startMetrics.SystemTokens,
+		ToolsTokens:                startMetrics.ToolsTokens,
+		ToolResultTokens:           startMetrics.ToolResultTokens,
+		WorkspaceFileTokens:        startMetrics.WorkspaceFileTokens,
+		ChatTokens:                 startMetrics.ChatTokens,
+		PromptTokens:               turnMetrics.Tokens.Input,
+		CompletionTokens:           turnMetrics.Tokens.Output,
+		TotalTokens:                turnMetrics.TotalTokens,
+		EstimatedCostUSD:           turnMetrics.TotalCost.AsUSD(),
+		CumulativePromptTokens:     cumPrompt,
+		CumulativeCompletionTokens: cumCompletion,
+		CumulativeTotalTokens:      cumTotal,
+		CumulativeCostUSD:          cumCost,
+	})
 }
 
 // TaskManager returns the TaskManager instance associated with this session manager.
@@ -1059,9 +1109,18 @@ func (m *Manager) runAgentLoop(runCtx context.Context, sessionID string, sess *A
 	}
 
 	var sessionSettings model.SessionSettings
-	if sessData.Settings != nil && *sessData.Settings != "" {
-		_ = json.Unmarshal([]byte(*sessData.Settings), &sessionSettings)
+	var startMetrics SessionMetrics
+	if sessData != nil {
+		if sessData.Settings != nil && *sessData.Settings != "" {
+			_ = json.Unmarshal([]byte(*sessData.Settings), &sessionSettings)
+		}
+		if sessData.LastTurnMetrics != nil {
+			_ = json.Unmarshal([]byte(*sessData.LastTurnMetrics), &startMetrics)
+		}
 	}
+	m.mu.Lock()
+	sess.StartingCumulativeMetrics = startMetrics
+	m.mu.Unlock()
 
 	agentName := sessionSettings.AgentName
 	providerName := sessionSettings.ProviderName
@@ -1281,6 +1340,23 @@ func (m *Manager) runAgentLoop(runCtx context.Context, sessionID string, sess *A
 
 	// Run the graph streaming loop
 	loc := &graph.Location{ThreadID: sessionID, CheckpointID: startCheckpointID}
+
+	// Start a background ticker to flush metrics to the database every 1 second
+	ticker := time.NewTicker(1 * time.Second)
+	tickerCtx, tickerCancel := context.WithCancel(runCtx)
+	m.wg.Go(func() {
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				m.persistTurnMetrics(context.Background(), sessionID, sess, true)
+			case <-tickerCtx.Done():
+				return
+			}
+		}
+	})
+	defer tickerCancel()
+
 	seq, err := g.Stream(runCtx, inputCmd, loc)
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
@@ -1294,8 +1370,11 @@ func (m *Manager) runAgentLoop(runCtx context.Context, sessionID string, sess *A
 
 	var asstMsg message.Message
 
+	var loopErr error
+
 	if !isCancelled {
 		// Consume the stream, appending text chunks dynamically in memory
+	stream:
 		for ev, err := range seq {
 			if err != nil {
 				if errors.Is(err, context.Canceled) {
@@ -1303,8 +1382,8 @@ func (m *Manager) runAgentLoop(runCtx context.Context, sessionID string, sess *A
 					isCancelled = true
 					break
 				}
-				m.setSessionError(sessionID, fmt.Errorf("stream execution error: %w", err))
-				return
+				loopErr = fmt.Errorf("stream execution error: %w", err)
+				break
 			}
 
 			// Skip streaming events generated during compaction
@@ -1312,27 +1391,28 @@ func (m *Manager) runAgentLoop(runCtx context.Context, sessionID string, sess *A
 				continue
 			}
 
-			if ev.Event == graph.EventLLMChunk {
+			switch ev.Event {
+			case graph.EventLLMChunk:
 				m.handleLLMChunk(sess, ev)
-			} else if ev.Event == "agent_message" {
+			case "agent_message":
 				if err := m.handleAgentMessage(runCtx, sessionID, sess, ev, systemPrompt, agentName, providerName, modelName); err != nil {
-					m.setSessionError(sessionID, err)
-					return
+					loopErr = err
+					break stream
 				}
-			} else if ev.Event == "user_message" {
+			case "user_message":
 				m.mu.Lock()
 				sess.CurrentStreamText = ""
 				sess.CurrentStreamThinking = ""
 				m.mu.Unlock()
 				m.notifySubscribers(sessionID)
-			} else if ev.Event == "on_tool_chunk" {
+			case "on_tool_chunk":
 				m.handleToolChunk(sess, ev)
-			} else if ev.Event == "tool_message" {
+			case "tool_message":
 				if err := m.handleToolMessage(runCtx, sessionID, sess, ev, agentName); err != nil {
-					m.setSessionError(sessionID, err)
-					return
+					loopErr = err
+					break stream
 				}
-			} else if ev.Event == graph.EventCompleted {
+			case graph.EventCompleted:
 				var finalState *agentgraph.AgentState
 				if snap, ok := ev.Data.(graph.Snapshot[agentgraph.AgentState]); ok {
 					finalState = &snap.State
@@ -1349,6 +1429,11 @@ func (m *Manager) runAgentLoop(runCtx context.Context, sessionID string, sess *A
 				}
 			}
 		}
+	}
+
+	if loopErr != nil {
+		m.setSessionError(sessionID, loopErr)
+		return
 	}
 
 	// Persist the finalized assistant message to the database
@@ -1464,6 +1549,10 @@ func (m *Manager) runAgentLoop(runCtx context.Context, sessionID string, sess *A
 	m.mu.Unlock()
 
 	m.syncSessionAuthStatus(sessionID)
+
+	if isCancelled {
+		m.persistTurnMetrics(context.Background(), sessionID, sess, true)
+	}
 
 	if asstMsg != nil {
 		if _, err := m.AppendMessage(context.Background(), sessionID, asstMsg); err != nil {
@@ -1980,6 +2069,7 @@ func (m *Manager) SendQueued(ctx context.Context, sessionID string) error {
 	sess.ThinkingStart = time.Now()
 	sess.ThinkingDuration = 0
 	sess.CurrentStreamMetrics = nil
+	sess.AccumulatedMetrics = message.TokenMetrics{}
 
 	runCtx, cancel := context.WithCancel(context.Background())
 	sess.Cancel = cancel
@@ -2130,6 +2220,13 @@ func (m *Manager) handleLLMChunk(sess *ActiveSession, ev graph.StreamEvent) {
 
 	m.mu.Lock()
 	if chunkMetrics != nil && (chunkMetrics.TotalTokens > 0 || chunkMetrics.Tokens.Input > 0 || chunkMetrics.Tokens.Output > 0) {
+		if sess.CurrentStreamMetrics != nil &&
+			(chunkMetrics.Tokens.Input != sess.CurrentStreamMetrics.Tokens.Input ||
+				chunkMetrics.Tokens.Output < sess.CurrentStreamMetrics.Tokens.Output) {
+			// A new LLM call started, accumulate the final metrics of the previous LLM call
+			sess.AccumulatedMetrics = sess.AccumulatedMetrics.Add(*sess.CurrentStreamMetrics)
+			go m.persistTurnMetrics(context.Background(), sess.ID, sess, false)
+		}
 		sess.CurrentStreamMetrics = chunkMetrics
 	}
 	if textChunk != "" || thinkingChunk != "" {

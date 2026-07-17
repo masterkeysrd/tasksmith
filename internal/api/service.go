@@ -1126,32 +1126,22 @@ func (s *Service) GetSessionState(ctx context.Context, req GetSessionStateReques
 		PermissionMode:        mode,
 	}
 
-	// Populate running metrics from the active session's streaming metrics.
-	if resp.IsGenerating {
-		if streamMetrics := s.sm.GetRunningMetrics(req.SessionID); streamMetrics != nil {
-			var cumPrompt, cumCompletion, cumTotal int
-			var cumCost float64
-			if sess, err := s.sm.GetSession(ctx, req.SessionID); err == nil && sess != nil && sess.LastTurnMetrics != nil {
-				cumPrompt = sess.LastTurnMetrics.CumulativePromptTokens + streamMetrics.Tokens.Input
-				cumCompletion = sess.LastTurnMetrics.CumulativeCompletionTokens + streamMetrics.Tokens.Output
-				cumTotal = sess.LastTurnMetrics.CumulativeTotalTokens + streamMetrics.TotalTokens
-				cumCost = sess.LastTurnMetrics.CumulativeCostUSD + streamMetrics.TotalCost.AsUSD()
-			} else {
-				cumPrompt = streamMetrics.Tokens.Input
-				cumCompletion = streamMetrics.Tokens.Output
-				cumTotal = streamMetrics.TotalTokens
-				cumCost = streamMetrics.TotalCost.AsUSD()
-			}
-			resp.RunningMetrics = &SessionMetrics{
-				PromptTokens:               streamMetrics.Tokens.Input,
-				CompletionTokens:           streamMetrics.Tokens.Output,
-				TotalTokens:                streamMetrics.TotalTokens,
-				EstimatedCostUSD:           streamMetrics.TotalCost.AsUSD(),
-				CumulativePromptTokens:     cumPrompt,
-				CumulativeCompletionTokens: cumCompletion,
-				CumulativeTotalTokens:      cumTotal,
-				CumulativeCostUSD:          cumCost,
-			}
+	// Populate last turn metrics from active session.
+	if sess, err := s.sm.GetSession(ctx, req.SessionID); err == nil && sess != nil && sess.LastTurnMetrics != nil {
+		resp.LastTurnMetrics = &SessionMetrics{
+			SystemTokens:               sess.LastTurnMetrics.SystemTokens,
+			ToolsTokens:                sess.LastTurnMetrics.ToolsTokens,
+			ToolResultTokens:           sess.LastTurnMetrics.ToolResultTokens,
+			WorkspaceFileTokens:        sess.LastTurnMetrics.WorkspaceFileTokens,
+			ChatTokens:                 sess.LastTurnMetrics.ChatTokens,
+			PromptTokens:               sess.LastTurnMetrics.PromptTokens,
+			CompletionTokens:           sess.LastTurnMetrics.CompletionTokens,
+			TotalTokens:                sess.LastTurnMetrics.TotalTokens,
+			EstimatedCostUSD:           sess.LastTurnMetrics.EstimatedCostUSD,
+			CumulativePromptTokens:     sess.LastTurnMetrics.CumulativePromptTokens,
+			CumulativeCompletionTokens: sess.LastTurnMetrics.CumulativeCompletionTokens,
+			CumulativeTotalTokens:      sess.LastTurnMetrics.CumulativeTotalTokens,
+			CumulativeCostUSD:          sess.LastTurnMetrics.CumulativeCostUSD,
 		}
 	}
 

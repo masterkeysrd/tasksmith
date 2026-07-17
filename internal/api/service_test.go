@@ -559,4 +559,39 @@ func TestConfigureSession(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected success switching model without setting temperature, got: %v", err)
 	}
+
+	t.Run("GetSessionStateLastTurnMetrics", func(t *testing.T) {
+		sess2, err := manager.CreateSession(ctx, "Test Session For Metrics")
+		if err != nil {
+			t.Fatalf("failed to create session: %v", err)
+		}
+
+		metrics := session.SessionMetrics{
+			PromptTokens:               100,
+			CompletionTokens:           50,
+			TotalTokens:                150,
+			EstimatedCostUSD:           0.005,
+			CumulativePromptTokens:     1000,
+			CumulativeCompletionTokens: 500,
+			CumulativeTotalTokens:      1500,
+			CumulativeCostUSD:          0.05,
+		}
+		err = store.UpdateSessionMetrics(ctx, sess2.ID, metrics)
+		if err != nil {
+			t.Fatalf("failed to update session metrics: %v", err)
+		}
+
+		resp, err := svc.GetSessionState(ctx, GetSessionStateRequest{SessionID: sess2.ID})
+		if err != nil {
+			t.Fatalf("failed to get session state: %v", err)
+		}
+
+		if resp.LastTurnMetrics == nil {
+			t.Fatal("expected LastTurnMetrics to be populated, got nil")
+		}
+
+		if resp.LastTurnMetrics.CumulativeTotalTokens != 1500 {
+			t.Errorf("expected CumulativeTotalTokens 1500, got %d", resp.LastTurnMetrics.CumulativeTotalTokens)
+		}
+	})
 }

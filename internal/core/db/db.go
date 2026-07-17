@@ -27,6 +27,7 @@ func Open(workspacePath, filename string) (*sqlx.DB, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to database: %w", err)
 	}
+	db.SetMaxOpenConns(1)
 
 	// Apply tuning pragmas for SQLite (WAL, busy timeout, and Foreign Keys)
 	pragmas := []string{
@@ -60,6 +61,7 @@ func OpenGlobal(filename string) (*sqlx.DB, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to global database: %w", err)
 	}
+	db.SetMaxOpenConns(1)
 
 	// Apply tuning pragmas
 	pragmas := []string{

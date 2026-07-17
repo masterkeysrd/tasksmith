@@ -74,14 +74,27 @@ var View = kitex.FC("ShellSidebar", func(props Props) kitex.Node {
 		data.IsConfigured = wsCfg.Data.IsConfigured
 	}
 
+	if sessions.Data != nil {
+		data.Sessions = sessions.Data.Sessions
+		for _, s := range sessions.Data.Sessions {
+			if s.ID == activeSessionID {
+				data.LastTurnMetrics = s.LastTurnMetrics
+				break
+			}
+		}
+	}
+
 	if sessionState.Data != nil {
 		if sessionState.Data.Status != "" {
 			data.ActiveSessionStatus = sessionState.Data.Status
 		}
 		data.Todos = sessionState.Data.Todos
 		data.IsGenerating = sessionState.Data.IsGenerating
-		data.RunningMetrics = sessionState.Data.RunningMetrics
+		if sessionState.Data.LastTurnMetrics != nil {
+			data.LastTurnMetrics = sessionState.Data.LastTurnMetrics
+		}
 	}
+
 	if fileChanges.Data != nil {
 		data.ChangedFiles = fileChanges.Data.Changes
 	}
@@ -93,9 +106,6 @@ var View = kitex.FC("ShellSidebar", func(props Props) kitex.Node {
 	}
 	if providers.Data != nil {
 		data.Providers = providers.Data.Providers
-	}
-	if sessions.Data != nil {
-		data.Sessions = sessions.Data.Sessions
 	}
 
 	if data.WorkspacePath == "" && len(data.Projects) > 0 {

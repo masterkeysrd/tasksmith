@@ -29,7 +29,7 @@ type Data struct {
 	Todos               []api.Todo
 	ChangedFiles        []api.FileChangeSummary
 	IsGenerating        bool
-	RunningMetrics      *api.SessionMetrics
+	LastTurnMetrics     *api.SessionMetrics
 }
 
 // ContentProps configures the presentational sidebar content.

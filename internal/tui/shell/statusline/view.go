@@ -597,10 +597,20 @@ var View = kitex.FCC("StatusLine", func(props Props) kitex.Node {
 	sessionID := active.UseSessionID()
 	sessionStateQuery := queries.UseGetSessionState(sessionID)
 
+	isGeneratingRef := kitex.UseRef(false)
+	if sessionStateQuery.Data != nil {
+		isGeneratingRef.Current = sessionStateQuery.Data.IsGenerating
+	} else {
+		isGeneratingRef.Current = false
+	}
+
 	windClient := wind.UseClient()
 	kitex.UseInterval(func() {
 		windClient.InvalidateQueries(api.GetLspDiagnosticCountsRequest{})
-	}, 2*time.Second, []any{windClient})
+		if sessionID != "" && isGeneratingRef.Current {
+			windClient.InvalidateQueries(api.GetSessionStateRequest{SessionID: sessionID})
+		}
+	}, 1*time.Second, []any{windClient, sessionID})
 
 	if wsCfg.Data != nil && wsCfg.Data.CWD != "" {
 		plugin.SetCWD(wsCfg.Data.CWD)
@@ -635,6 +645,9 @@ var View = kitex.FCC("StatusLine", func(props Props) kitex.Node {
 				providerName = s.Settings.ProviderName
 				modelName = s.Settings.ModelName
 				metrics = s.LastTurnMetrics
+				if sessionStateQuery.Data != nil && sessionStateQuery.Data.LastTurnMetrics != nil {
+					metrics = sessionStateQuery.Data.LastTurnMetrics
+				}
 
 				tcfg := s.Settings.Thinking
 				if tcfg != nil && tcfg.Enabled != nil && *tcfg.Enabled {
@@ -653,12 +666,6 @@ var View = kitex.FCC("StatusLine", func(props Props) kitex.Node {
 				break
 			}
 		}
-	}
-
-	// Prefer running (streaming) metrics when the session is actively generating and they are populated.
-	if sessionStateQuery.Data != nil && sessionStateQuery.Data.IsGenerating && sessionStateQuery.Data.RunningMetrics != nil &&
-		(sessionStateQuery.Data.RunningMetrics.TotalTokens > 0 || sessionStateQuery.Data.RunningMetrics.PromptTokens > 0) {
-		metrics = sessionStateQuery.Data.RunningMetrics
 	}
 
 	// Resolve human-friendly provider and model labels

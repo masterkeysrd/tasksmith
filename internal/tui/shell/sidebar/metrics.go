@@ -18,21 +18,15 @@ func metricsPanel(data Data) kitex.Node {
 	c := useColors()
 
 	var activeSession *api.Session
-	var metrics *api.SessionMetrics
 	for _, s := range data.Sessions {
 		if s.ID == data.ActiveSessionID {
-			// We only want a pointer or value. data.Sessions returns copies, so we copy it
 			sess := s
 			activeSession = &sess
-			metrics = s.LastTurnMetrics
 			break
 		}
 	}
 
-	// Prefer running (streaming) metrics when the session is actively generating and they are populated.
-	if data.IsGenerating && data.RunningMetrics != nil && (data.RunningMetrics.TotalTokens > 0 || data.RunningMetrics.PromptTokens > 0) {
-		metrics = data.RunningMetrics
-	}
+	metrics := data.LastTurnMetrics
 
 	tokensUsed := 0
 	tokenLimit := 131072 // Default fallback
