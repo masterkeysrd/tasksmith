@@ -64,10 +64,10 @@ var View = kitex.FC("TitleBar", func(props Props) kitex.Node {
 		AlignItems(style.AlignCenter).
 		Gap(2)
 
-	// Explorer button changes color when sidebar is open.
-	explorerFg := t.Color.Text.Tertiary
+	// Sidebar button changes color when sidebar is open.
+	sidebarFg := t.Color.Text.Tertiary
 	if props.IsSidebarOpen {
-		explorerFg = t.Color.Surface.Primary
+		sidebarFg = t.Color.Surface.Primary
 	}
 
 	wsName := props.WorkspaceName
@@ -100,17 +100,17 @@ var View = kitex.FC("TitleBar", func(props Props) kitex.Node {
 
 		// Right: buttons + indicators
 		kitex.Box(kitex.BoxProps{Style: rightStyle},
-			// Explorer toggle
+			// Sidebar toggle
 			components.Button(components.ButtonProps{
 				Variant: components.ButtonText,
 				Style: style.S().
-					Foreground(explorerFg).
+					Foreground(sidebarFg).
 					PaddingHorizontal(0),
 				HoverStyle: style.S().Foreground(t.Color.Text.Secondary),
 				StartIcon:  icon.Folder,
 				OnClick:    props.OnToggleSidebar,
 			},
-				kitex.Text("EXPLORER"),
+				kitex.Text("SIDEBAR"),
 				kitex.Box(kitex.BoxProps{
 					Style: style.S().Foreground(t.Color.Text.Tertiary),
 				}, kitex.Text("[CTRL-B]")),

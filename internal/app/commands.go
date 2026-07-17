@@ -591,4 +591,9 @@ func (app *Application) InitializeCommands() {
 		}
 		return items
 	}))
+
+	command.Register("sidebar", func(ctx command.CommandContext) error {
+		active.SetSidebarOpen(!active.GetSidebarOpen())
+		return nil
+	})
 }

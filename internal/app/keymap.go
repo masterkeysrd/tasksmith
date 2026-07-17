@@ -40,6 +40,10 @@ func (app *Application) InitializeKeymap() {
 		active.SetModal("sessionpicker")
 	}, keymap.Description("Open Session Picker"))
 
+	keymap.Set([]mode.Mode{mode.Normal}, "<C-b>", func(ctx context.Context) {
+		active.SetSidebarOpen(!active.GetSidebarOpen())
+	}, keymap.Description("Toggle Sidebar"))
+
 	// Normal Mode Keybindings
 	keymap.Set([]mode.Mode{mode.Normal}, "q", func(ctx context.Context) {
 		if active.GetScreen() == "analytics" {
