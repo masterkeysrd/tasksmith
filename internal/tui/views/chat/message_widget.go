@@ -408,6 +408,9 @@ var UserMessageContent = kitex.FC("UserMessageContent", func(props UserMessageCo
 		Style: style.S().
 			Display(style.DisplayFlex).
 			FlexDirection(style.FlexColumn).
+			Width(style.Percent(100)).
+			MaxWidth(style.Percent(100)).
+			MinWidth(style.Percent(0)).
 			Gap(1),
 	}, nodes...)
 })

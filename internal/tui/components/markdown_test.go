@@ -141,6 +141,18 @@ func TestMarkdownRender_ListCodeSpanKeepsInlineStyling(t *testing.T) {
 	}
 }
 
+func TestMarkdownRender_LongUnbreakableWordWraps(t *testing.T) {
+	longWord := "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+	env := renderMarkdownEnv(t, 20, 8, longWord)
+	defer env.Close()
+
+	text := env.DumpText()
+	lines := nonEmptyLines(text)
+	if len(lines) < 2 {
+		t.Fatalf("expected long word to wrap into multiple lines, but got %d lines: %q", len(lines), text)
+	}
+}
+
 func renderMarkdownEnv(t *testing.T, width, height int, source string) *testenv.Environment {
 	t.Helper()
 

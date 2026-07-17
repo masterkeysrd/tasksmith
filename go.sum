@@ -158,6 +158,8 @@ github.com/mailru/easyjson v0.9.2 h1:dX8U45hQsZpxd80nLvDGihsQ/OxlvTkVUXH2r/8cb2M
 github.com/mailru/easyjson v0.9.2/go.mod h1:1+xMtQp2MRNVL/V1bOzuP3aP8VNwRW55fQUto+XFtTU=
 github.com/masterkeysrd/kite v0.0.4-0.20260715041832-3224546b4bec h1:fbltAUKzYxq65JtpGwkORLz2DlNhUytPNvSlzY9fL1k=
 github.com/masterkeysrd/kite v0.0.4-0.20260715041832-3224546b4bec/go.mod h1:qZ99zwRPtPPVF4CIZJX2DroO0eesJt3dip1Q+RIFWS0=
+github.com/masterkeysrd/kite v0.0.4-0.20260717191519-2a5d389401ed h1:8A1HOap1fJysxlYVR8CQErNFxWEDrP03rshi3LsqV1c=
+github.com/masterkeysrd/kite v0.0.4-0.20260717191519-2a5d389401ed/go.mod h1:qZ99zwRPtPPVF4CIZJX2DroO0eesJt3dip1Q+RIFWS0=
 github.com/masterkeysrd/loom v0.0.4-0.20260711030105-60d4b1b463e3 h1:SiHVTNYkjNORkRbJj/q68sUln0Vh32LEkDhsCboyt4g=
 github.com/masterkeysrd/loom v0.0.4-0.20260711030105-60d4b1b463e3/go.mod h1:5wcS9OmpTWDXdHp9ILC4HKq0gzxPsIfXEaA06XckNOc=
 github.com/masterkeysrd/lspx v0.0.0-20260716060742-21d5e843d27c h1:xHLzin+Fy4Rc/t3giaP8LQehyobnmWuKRAjiNyiCHN0=

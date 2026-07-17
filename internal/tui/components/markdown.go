@@ -127,7 +127,8 @@ var Markdown = kitex.FC("Markdown", func(props MarkdownProps) kitex.Node {
 				}
 				spanStyle := style.S().
 					Display(style.DisplayInlineBlock).
-					WhiteSpace(style.WhiteSpaceNoWrap)
+					WhiteSpace(style.WhiteSpacePreWrap).
+					OverflowWrap(style.OverflowWrapAnywhere)
 				if t != nil {
 					spanStyle = spanStyle.
 						Background(t.Color.Surface.BaseFocus).
@@ -179,11 +180,10 @@ var Markdown = kitex.FC("Markdown", func(props MarkdownProps) kitex.Node {
 			case *ast.Document:
 				docStyle := style.S().
 					Width(style.Percent(100)).
+					MaxWidth(style.Percent(100)).
 					MinWidth(style.Percent(0)).
-					Display(style.DisplayFlex).
-					FlexDirection(style.FlexColumn).
 					WhiteSpace(style.WhiteSpacePreWrap).
-					OverflowWrap(style.OverflowWrapBreakWord).
+					OverflowWrap(style.OverflowWrapAnywhere).
 					Merge(props.Style)
 				if t != nil {
 					docStyle = docStyle.Foreground(t.Color.Text.Secondary)
@@ -196,7 +196,10 @@ var Markdown = kitex.FC("Markdown", func(props MarkdownProps) kitex.Node {
 				if len(children) == 0 {
 					return nil
 				}
-				pStyle := style.S()
+				pStyle := style.S().
+					Width(style.Percent(100)).
+					MaxWidth(style.Percent(100)).
+					MinWidth(style.Percent(0))
 				// Paragraphs inside a ListItem have no extra margin — the
 				// list's own spacing is sufficient.
 				_, inListItem := node.Parent().(*ast.ListItem)
@@ -218,7 +221,12 @@ var Markdown = kitex.FC("Markdown", func(props MarkdownProps) kitex.Node {
 						pStyle = pStyle.MarginBottom(1)
 					}
 				}
-				return kitex.Box(kitex.BoxProps{Style: pStyle.MinWidth(style.Percent(0))}, children...)
+				spanStyle := style.S().
+					WhiteSpace(style.WhiteSpacePreWrap).
+					OverflowWrap(style.OverflowWrapAnywhere)
+				return kitex.Box(kitex.BoxProps{Style: pStyle},
+					kitex.Span(kitex.SpanProps{Style: spanStyle}, children...),
+				)
 
 			case *ast.TextBlock:
 				children := renderInlineChildren(node)
@@ -231,7 +239,16 @@ var Markdown = kitex.FC("Markdown", func(props MarkdownProps) kitex.Node {
 						return kitex.Fragment(children...)
 					}
 				}
-				return kitex.Box(kitex.BoxProps{Style: style.S().MinWidth(style.Percent(0))}, children...)
+				spanStyle := style.S().
+					WhiteSpace(style.WhiteSpacePreWrap).
+					OverflowWrap(style.OverflowWrapAnywhere)
+				return kitex.Box(kitex.BoxProps{
+					Style: style.S().
+						Width(style.Percent(100)).
+						MaxWidth(style.Percent(100)).
+						MinWidth(style.Percent(0)),
+				}, kitex.Span(kitex.SpanProps{Style: spanStyle}, children...),
+				)
 
 			case *ast.Heading:
 				children := renderInlineChildren(node)
@@ -248,11 +265,18 @@ var Markdown = kitex.FC("Markdown", func(props MarkdownProps) kitex.Node {
 				} else {
 					hStyle = style.S()
 				}
-				spanStyle := style.S().Bold(true)
+				hStyle = hStyle.
+					Width(style.Percent(100)).
+					MaxWidth(style.Percent(100)).
+					MinWidth(style.Percent(0))
+				spanStyle := style.S().
+					Bold(true).
+					WhiteSpace(style.WhiteSpacePreWrap).
+					OverflowWrap(style.OverflowWrapAnywhere)
 				if t != nil {
 					spanStyle = spanStyle.Foreground(t.Color.Text.Primary)
 				}
-				return kitex.Box(kitex.BoxProps{Style: hStyle.MinWidth(style.Percent(0))},
+				return kitex.Box(kitex.BoxProps{Style: hStyle},
 					kitex.Span(kitex.SpanProps{Style: spanStyle}, children...),
 				)
 

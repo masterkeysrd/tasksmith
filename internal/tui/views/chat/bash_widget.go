@@ -5,12 +5,9 @@ import (
 	"image/color"
 	"strings"
 
-	"github.com/masterkeysrd/kite/event"
 	"github.com/masterkeysrd/kite/extras/kitex"
-	"github.com/masterkeysrd/kite/geom"
 	"github.com/masterkeysrd/kite/style"
 	"github.com/masterkeysrd/tasksmith/internal/core/preview"
-	"github.com/masterkeysrd/tasksmith/internal/tui/active"
 	"github.com/masterkeysrd/tasksmith/internal/tui/components"
 	"github.com/masterkeysrd/tasksmith/internal/tui/components/icon"
 	"github.com/masterkeysrd/tasksmith/internal/tui/theme"
@@ -20,47 +17,6 @@ import (
 var BashToolWidget = kitex.FC("BashToolWidget", func(props ToolExecutionProps) kitex.Node {
 	t := theme.UseTheme()
 	isOpen, setIsOpen := kitex.UseState(true)
-
-	docFunc := kitex.UseDocument()
-	doc := docFunc()
-
-	var initialSize geom.Size
-	if doc != nil {
-		if view := doc.DefaultView(); view != nil {
-			initialSize = view.ViewportSize()
-		}
-	}
-
-	size, setSize := kitex.UseState(initialSize)
-
-	kitex.UseEffectCleanup(func() func() {
-		if doc == nil {
-			return nil
-		}
-
-		updateSize := func() {
-			if view := doc.DefaultView(); view != nil {
-				currSize := view.ViewportSize()
-				if currSize != size() {
-					setSize(currSize)
-				}
-			}
-		}
-
-		updateSize()
-
-		sub := doc.AddEventListener(event.EventResize, func(ev event.Event) {
-			updateSize()
-		})
-
-		return func() {
-			sub.Cancel()
-		}
-	}, []any{doc})
-
-	isSidebarOpen := active.UseSidebarOpen()
-	viewportWidth := size().Width
-	wrapWidth := getDynamicWrapWidth(viewportWidth, isSidebarOpen)
 
 	tc := props.ToolCall
 	tm := props.ToolMessage
@@ -256,11 +212,11 @@ var BashToolWidget = kitex.FC("BashToolWidget", func(props ToolExecutionProps) k
 							Style: style.S().
 								Foreground(textCol).
 								Italic(true).
-								Width(style.Cells(wrapWidth)).
-								MaxWidth(style.Cells(wrapWidth)).
+								Width(style.Percent(100)).
+								MaxWidth(style.Percent(100)).
 								MinWidth(style.Percent(0)).
 								WhiteSpace(style.WhiteSpacePreWrap).
-								OverflowWrap(style.OverflowWrapBreakWord),
+								OverflowWrap(style.OverflowWrapAnywhere),
 						}, kitex.Text(description))
 					}),
 					// Input: codeblock without header or borders
@@ -271,8 +227,8 @@ var BashToolWidget = kitex.FC("BashToolWidget", func(props ToolExecutionProps) k
 						}
 						return kitex.Box(kitex.BoxProps{
 							Style: style.S().
-								Width(style.Cells(wrapWidth)).
-								MaxWidth(style.Cells(wrapWidth)).
+								Width(style.Percent(100)).
+								MaxWidth(style.Percent(100)).
 								MinWidth(style.Percent(0)).
 								Overflow(style.OverflowHidden),
 						},
@@ -303,10 +259,6 @@ var BashToolWidget = kitex.FC("BashToolWidget", func(props ToolExecutionProps) k
 								parts := strings.SplitN(outText, "[stderr]", 2)
 
 								var elements []kitex.Node
-								var textCol color.Color
-								if t != nil {
-									textCol = t.Color.Text.Primary
-								}
 
 								outputContainerStyle := style.S().
 									Display(style.DisplayFlex).
@@ -320,35 +272,31 @@ var BashToolWidget = kitex.FC("BashToolWidget", func(props ToolExecutionProps) k
 								// First part is stdout
 								stdoutText := strings.TrimSpace(parts[0])
 								if stdoutText != "" {
-									stdoutText = strings.ReplaceAll(stdoutText, "\t", "    ")
-									elements = append(elements, kitex.Box(kitex.BoxProps{
-										Style: style.S().
-											Foreground(textCol).
-											Width(style.Cells(wrapWidth)).
-											MaxWidth(style.Cells(wrapWidth)).
-											MinWidth(style.Percent(0)).
-											WhiteSpace(style.WhiteSpacePre).
-											ScrollbarX(true).
-											OverflowX(style.OverflowAuto),
-									}, kitex.Text(stdoutText)))
+									elements = append(elements, components.CodeBlock(components.CodeBlockProps{
+										Code:       stdoutText,
+										Lang:       "text",
+										HideHeader: true,
+										Wrap:       true,
+										Compact:    true,
+									}))
 								}
 
 								// Subsequent parts are stderr
 								if len(parts) > 1 {
 									stderrText := strings.TrimSpace(strings.Join(parts[1:], ""))
 									if stderrText != "" {
-										stderrText = strings.ReplaceAll(stderrText, "\t", "    ")
-										elements = append(elements, kitex.Box(kitex.BoxProps{
-											Style: style.S().
-												Foreground(t.Color.Text.Error).
-												Width(style.Cells(wrapWidth)).
-												MaxWidth(style.Cells(wrapWidth)).
-												MinWidth(style.Percent(0)).
-												WhiteSpace(style.WhiteSpacePre).
-												ScrollbarX(true).
-												OverflowX(style.OverflowAuto).
-												MarginTop(1),
-										}, kitex.Text("[stderr]\n"+stderrText)))
+										var stderrStyle style.Style
+										if t != nil {
+											stderrStyle = style.S().Foreground(t.Color.Text.Error)
+										}
+										elements = append(elements, components.CodeBlock(components.CodeBlockProps{
+											Code:       "[stderr]\n" + stderrText,
+											Lang:       "text",
+											HideHeader: true,
+											Wrap:       true,
+											Compact:    true,
+											Style:      stderrStyle,
+										}))
 									}
 								}
 
@@ -396,21 +344,3 @@ var BashToolWidget = kitex.FC("BashToolWidget", func(props ToolExecutionProps) k
 		),
 	)
 })
-
-func getDynamicWrapWidth(viewportWidth int, isSidebarOpen bool) int {
-	if viewportWidth <= 0 {
-		return 80
-	}
-	availableWidth := viewportWidth
-	if isSidebarOpen && availableWidth > 34 {
-		availableWidth -= 34
-	}
-	// Apply bubble 90% MaxWidth constraint
-	bubbleWidth := int(float64(availableWidth) * 0.90)
-	// Subtract layout padding and margins (approx 6 cells)
-	wrapWidth := bubbleWidth - 6
-	if wrapWidth < 20 {
-		return 20 // Sane lower boundary
-	}
-	return wrapWidth
-}

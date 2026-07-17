@@ -1041,12 +1041,16 @@ func renderChatView(props ViewProps) kitex.Node {
 
 	messagesContainerStyle := style.S().
 		Flex(1, 1, style.Cells(0)).
+		Width(style.Percent(100)).
+		MaxWidth(style.Percent(100)).
+		MinWidth(style.Percent(0)).
 		MinHeight(style.Cells(0)).
 		Display(style.DisplayFlex).
 		FlexDirection(style.FlexColumn).
 		Gap(1).
 		Padding(1).
-		Overflow(style.OverflowAuto).
+		OverflowX(style.OverflowHidden).
+		OverflowY(style.OverflowAuto).
 		Background(bgDark)
 
 	composerContainerStyle := style.S().

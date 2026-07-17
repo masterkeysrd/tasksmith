@@ -422,8 +422,11 @@ var Bubble = kitex.FC("Bubble", func(props BubbleProps) kitex.Node {
 	if t != nil {
 		bubbleStyle = style.S().
 			Padding(1).
+			Width(style.Percent(100)).
 			MaxWidth(style.Percent(90)).
 			MinWidth(style.Percent(0)).
+			WhiteSpace(style.WhiteSpacePreWrap).
+			OverflowWrap(style.OverflowWrapAnywhere).
 			Overflow(style.OverflowHidden)
 
 		switch role {
@@ -439,7 +442,6 @@ var Bubble = kitex.FC("Bubble", func(props BubbleProps) kitex.Node {
 		default:
 			align = style.AlignStart
 			bubbleStyle = bubbleStyle.
-				Width(style.Percent(100)).
 				Foreground(t.Color.Text.Primary)
 		}
 	}
@@ -531,6 +533,7 @@ var Bubble = kitex.FC("Bubble", func(props BubbleProps) kitex.Node {
 		Key: props.Key,
 		Style: style.S().
 			Width(style.Percent(100)).
+			MaxWidth(style.Percent(100)).
 			MinWidth(style.Percent(0)).
 			Display(style.DisplayFlex).
 			FlexDirection(style.FlexColumn).
