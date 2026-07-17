@@ -3,6 +3,7 @@ package chat
 import (
 	"fmt"
 	"image/color"
+	"unicode"
 
 	"github.com/masterkeysrd/kite/extras/kitex"
 	"github.com/masterkeysrd/kite/style"
@@ -11,6 +12,20 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/tui/components/icon"
 	"github.com/masterkeysrd/tasksmith/internal/tui/theme"
 )
+
+func capitalizeFirstWord(s string) string {
+	if s == "" {
+		return ""
+	}
+	runes := []rune(s)
+	for i, r := range runes {
+		if !unicode.IsSpace(r) {
+			runes[i] = unicode.ToUpper(r)
+			break
+		}
+	}
+	return string(runes)
+}
 
 // TodosToolWidget renders the list of subtasks as a compact, interactive accordion.
 var TodosToolWidget = kitex.FC("TodosToolWidget", func(props ToolExecutionProps) kitex.Node {
@@ -49,13 +64,26 @@ var TodosToolWidget = kitex.FC("TodosToolWidget", func(props ToolExecutionProps)
 	total := len(todos)
 	completed := 0
 	var activeTaskDesc string
+	var activeTaskActiveText string
 
 	for _, item := range todos {
 		if item.Status == "completed" {
 			completed++
 		} else if item.Status == "in_progress" && activeTaskDesc == "" {
 			activeTaskDesc = item.Description
+			activeTaskActiveText = item.ActiveText
 		}
+	}
+
+	var progressText string
+	if activeTaskActiveText != "" {
+		progressText = activeTaskActiveText
+	} else if activeTaskDesc != "" {
+		progressText = activeTaskDesc
+	}
+
+	if progressText != "" {
+		progressText = capitalizeFirstWord(progressText)
 	}
 
 	var statusLabel string
@@ -75,6 +103,15 @@ var TodosToolWidget = kitex.FC("TodosToolWidget", func(props ToolExecutionProps)
 			statusLabel = "Checklist"
 			iconNode = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Surface.Info)}, icon.Calendar)
 			borderCol = t.Color.Text.Tertiary
+		}
+	}
+
+	headerText := statusLabel
+	if total > 0 {
+		if progressText != "" {
+			headerText = fmt.Sprintf("%s: %s (%d/%d)", statusLabel, progressText, completed, total)
+		} else {
+			headerText = fmt.Sprintf("%s (%d/%d)", statusLabel, completed, total)
 		}
 	}
 
@@ -99,34 +136,7 @@ var TodosToolWidget = kitex.FC("TodosToolWidget", func(props ToolExecutionProps)
 					Gap(1),
 			},
 				iconNode,
-				kitex.Span(kitex.SpanProps{Style: style.S().Bold(true)}, kitex.Text(statusLabel)),
-				kitex.If(total > 0, func() kitex.Node {
-					return kitex.Box(kitex.BoxProps{
-						Style: style.S().
-							Display(style.DisplayFlex).
-							FlexDirection(style.FlexRow).
-							AlignItems(style.AlignCenter).
-							Gap(1),
-					},
-						kitex.Span(kitex.SpanProps{
-							Style: style.S().Foreground(t.Color.Text.Tertiary).Bold(true),
-						}, kitex.Text(fmt.Sprintf("[%d/%d]", completed, total))),
-						kitex.If(activeTaskDesc != "", func() kitex.Node {
-							return kitex.Box(kitex.BoxProps{
-								Style: style.S().
-									Display(style.DisplayFlex).
-									FlexDirection(style.FlexRow).
-									AlignItems(style.AlignCenter).
-									Gap(1),
-							},
-								kitex.Span(kitex.SpanProps{Style: style.S().Foreground(t.Color.Text.Tertiary)}, kitex.Text("|")),
-								kitex.Span(kitex.SpanProps{
-									Style: style.S().Foreground(t.Color.Text.Secondary).Italic(true),
-								}, kitex.Text(activeTaskDesc)),
-							)
-						}),
-					)
-				}),
+				kitex.Span(kitex.SpanProps{Style: style.S().Bold(true)}, kitex.Text(headerText)),
 			),
 		),
 		components.AccordionDetails(components.AccordionDetailsProps{
@@ -164,7 +174,11 @@ func todoRow(t *theme.Scheme, description string, status string, activeText stri
 	checkIcon := "󰄱"
 	var iconColor color.Color
 	var textColor color.Color
-	var activeTextNode kitex.Node
+
+	displayDescription := description
+	if status == "in_progress" && activeText != "" {
+		displayDescription = capitalizeFirstWord(activeText)
+	}
 
 	if t != nil {
 		iconColor = t.Color.Text.Tertiary
@@ -179,14 +193,6 @@ func todoRow(t *theme.Scheme, description string, status string, activeText stri
 			checkIcon = "󰄰"
 			iconColor = t.Color.Surface.Info
 			textColor = t.Color.Text.Primary
-			if activeText != "" {
-				activeTextNode = kitex.Box(kitex.BoxProps{
-					Style: style.S().
-						Foreground(t.Color.Surface.Info).
-						PaddingLeft(3).
-						Italic(true),
-				}, kitex.Text(activeText))
-			}
 		}
 	}
 
@@ -204,9 +210,9 @@ func todoRow(t *theme.Scheme, description string, status string, activeText stri
 
 	var textSpan kitex.Node
 	if t != nil {
-		textSpan = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(textColor)}, kitex.Text(description))
+		textSpan = kitex.Span(kitex.SpanProps{Style: style.S().Foreground(textColor)}, kitex.Text(displayDescription))
 	} else {
-		textSpan = kitex.Text(description)
+		textSpan = kitex.Text(displayDescription)
 	}
 
 	return kitex.Box(kitex.BoxProps{
@@ -218,8 +224,5 @@ func todoRow(t *theme.Scheme, description string, status string, activeText stri
 			iconSpan,
 			textSpan,
 		),
-		kitex.If(activeTextNode != nil, func() kitex.Node {
-			return activeTextNode
-		}),
 	)
 }

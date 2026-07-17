@@ -172,6 +172,29 @@ func renderChatView(props ViewProps) kitex.Node {
 		}
 	}
 
+	var progressText string
+	if stateQuery.Data != nil {
+		for _, todo := range stateQuery.Data.Todos {
+			if todo.Status == "in_progress" {
+				if todo.ActiveText != "" {
+					progressText = todo.ActiveText
+				} else if todo.Description != "" {
+					progressText = todo.Description
+				}
+				break
+			}
+		}
+	}
+
+	if progressText != "" {
+		progressText = capitalizeFirstWord(progressText)
+	}
+
+	displayTitle := title
+	if progressText != "" {
+		displayTitle = fmt.Sprintf("%s (%s)", title, progressText)
+	}
+
 	var messages message.MessageList
 	if msgsQuery.Data != nil && len(msgsQuery.Data.Messages) > 0 {
 		rawArray := "[" + strings.Join(msgsQuery.Data.Messages, ",") + "]"
@@ -1193,7 +1216,7 @@ func renderChatView(props ViewProps) kitex.Node {
 		// Session Title Bar
 		kitex.If(!props.ReadOnly, func() kitex.Node {
 			return kitex.Box(kitex.BoxProps{Style: sessionTitleBarStyle},
-				kitex.Text(title),
+				kitex.Text(displayTitle),
 			)
 		}),
 
