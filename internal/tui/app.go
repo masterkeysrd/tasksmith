@@ -1,9 +1,12 @@
 package tui
 
 import (
+	"time"
+
 	"github.com/masterkeysrd/kite/extras/kitex"
 	"github.com/masterkeysrd/kite/extras/wind"
 	"github.com/masterkeysrd/kite/style"
+	"github.com/masterkeysrd/kite/terminal"
 	"github.com/masterkeysrd/tasksmith/internal/api"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	"github.com/masterkeysrd/tasksmith/internal/tui/active"
@@ -71,6 +74,46 @@ var Router = kitex.SimpleFC("Router", func() kitex.Node {
 	activeSessionID := active.UseSessionID()
 	activeScreen := active.UseScreen()
 	windClient := wind.UseClient()
+
+	sessionStateQuery := queries.UseGetSessionState(activeSessionID)
+
+	isGenerating := false
+	hasPendingAuth := false
+	if sessionStateQuery.Data != nil {
+		isGenerating = sessionStateQuery.Data.IsGenerating
+		hasPendingAuth = len(sessionStateQuery.Data.PendingAuthorizations) > 0
+	}
+
+	_, setTitle := kitex.UseTitle("Tasksmith")
+	setProgressBar := kitex.UseProgressBar()
+	bell := kitex.UseBell()
+	focused := kitex.UseWindowFocus()
+	prevIsGenerating := kitex.UseRef(false)
+
+	kitex.UseEffect(func() {
+		if isGenerating {
+			setTitle("Tasksmith (running)")
+			setProgressBar(terminal.ProgressBarIndeterminate, 0)
+		} else if hasPendingAuth {
+			setTitle("Tasksmith (auth)")
+			setProgressBar(terminal.ProgressBarHide, 0)
+		} else {
+			setTitle("Tasksmith")
+			setProgressBar(terminal.ProgressBarHide, 0)
+		}
+
+		// Ring bell 3 times if we just finished generating and window is unfocused
+		if prevIsGenerating.Current && !isGenerating && !focused {
+			bell()
+			time.AfterFunc(150*time.Millisecond, func() {
+				kitex.PostMacro(bell)
+			})
+			time.AfterFunc(300*time.Millisecond, func() {
+				kitex.PostMacro(bell)
+			})
+		}
+		prevIsGenerating.Current = isGenerating
+	}, []any{isGenerating, hasPendingAuth, focused})
 
 	log.Info("Router render called", log.String("activeView", activeView()))
 
