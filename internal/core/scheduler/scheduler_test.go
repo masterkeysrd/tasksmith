@@ -161,3 +161,43 @@ func TestScheduler(t *testing.T) {
 		}
 	})
 }
+
+func TestSchedulerStartLoop(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	s := New(ctx)
+
+	var runCount int
+	var mu sync.Mutex
+	runner := func(ctx context.Context) error {
+		mu.Lock()
+		runCount++
+		mu.Unlock()
+		return nil
+	}
+
+	// Start the scheduler loop in the background
+	go s.Start(ctx)
+
+	// Register a task to run in 50ms
+	err := s.Register("task-fast", "Fast Task", "50ms", false, runner)
+	if err != nil {
+		t.Fatalf("failed to register task: %v", err)
+	}
+
+	// Wait for the task to be run by the scheduler loop
+	deadline := time.Now().Add(1 * time.Second)
+	for {
+		mu.Lock()
+		count := runCount
+		mu.Unlock()
+		if count > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("timed out waiting for task to execute in Start loop")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}

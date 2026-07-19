@@ -42,6 +42,7 @@ type Scheduler struct {
 	ctx      context.Context
 	cancel   context.CancelFunc
 	onChange func()
+	wakeup   chan struct{}
 
 	nowFunc func() time.Time
 }
@@ -54,6 +55,7 @@ func New(ctx context.Context) *Scheduler {
 		runners: make(map[string]Runner),
 		ctx:     subCtx,
 		cancel:  cancel,
+		wakeup:  make(chan struct{}, 1),
 		nowFunc: time.Now,
 	}
 }
@@ -180,19 +182,73 @@ func (s *Scheduler) Tasks() []Task {
 
 // Start runs the periodic check ticker loop to execute tasks when they become due.
 func (s *Scheduler) Start(ctx context.Context) {
-	ticker := time.NewTicker(100 * time.Millisecond)
-	defer ticker.Stop()
+	var timer *time.Timer
+	var timerChan <-chan time.Time
+
+	defer func() {
+		if timer != nil {
+			timer.Stop()
+		}
+	}()
 
 	for {
+		// Calculate the next wakeup time
+		dur, ok := s.nextWakeup()
+		if ok {
+			if timer != nil {
+				timer.Stop()
+			}
+			timer = time.NewTimer(dur)
+			timerChan = timer.C
+		} else {
+			if timer != nil {
+				timer.Stop()
+				timer = nil
+			}
+			timerChan = nil
+		}
+
 		select {
 		case <-s.ctx.Done():
 			return
 		case <-ctx.Done():
 			return
-		case <-ticker.C:
+		case <-s.wakeup:
+			s.Tick()
+		case <-timerChan:
 			s.Tick()
 		}
 	}
+}
+
+// nextWakeup returns the duration until the earliest task needs to run.
+// It returns a boolean indicating if there is any task scheduled.
+func (s *Scheduler) nextWakeup() (time.Duration, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	var earliest time.Time
+	hasAny := false
+	now := s.now()
+
+	for _, task := range s.tasks {
+		if task.Status != StatusRunning && !task.NextRun.IsZero() {
+			if !hasAny || task.NextRun.Before(earliest) {
+				earliest = task.NextRun
+				hasAny = true
+			}
+		}
+	}
+
+	if !hasAny {
+		return 0, false
+	}
+
+	dur := earliest.Sub(now)
+	if dur < 0 {
+		return 0, true
+	}
+	return dur, true
 }
 
 // Tick evaluates all tasks and fires any that are due.
@@ -269,5 +325,9 @@ func (s *Scheduler) now() time.Time {
 func (s *Scheduler) notify() {
 	if s.onChange != nil {
 		s.onChange()
+	}
+	select {
+	case s.wakeup <- struct{}{}:
+	default:
 	}
 }

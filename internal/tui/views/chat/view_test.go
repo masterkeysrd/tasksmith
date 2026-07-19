@@ -2,12 +2,15 @@ package chat
 
 import (
 	"context"
+	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/masterkeysrd/kite/element"
 	"github.com/masterkeysrd/kite/extras/kitex"
 	"github.com/masterkeysrd/kite/extras/wind"
 	"github.com/masterkeysrd/kite/testenv"
+	"github.com/masterkeysrd/loom/message"
 	"github.com/masterkeysrd/tasksmith/internal/agent/tools"
 	"github.com/masterkeysrd/tasksmith/internal/api"
 	"github.com/masterkeysrd/tasksmith/internal/tui/active"
@@ -29,8 +32,8 @@ func (m *mockClient) ListSessions(ctx context.Context, req api.ListSessionsReque
 
 func (m *mockClient) GetSessionMessages(ctx context.Context, req api.GetSessionMessagesRequest) (*api.GetSessionMessagesResponse, error) {
 	return &api.GetSessionMessagesResponse{
-		Messages: []string{
-			`{"role":"user","content":[{"type":"text","text":"hello"}]}`,
+		Messages: message.MessageList{
+			message.NewUserText("hello"),
 		},
 	}, nil
 }
@@ -112,19 +115,28 @@ func TestChatView(t *testing.T) {
 	})
 }
 
+func parseJSONMessages(strs []string) message.MessageList {
+	var list message.MessageList
+	if len(strs) > 0 {
+		rawArray := "[" + strings.Join(strs, ",") + "]"
+		_ = json.Unmarshal([]byte(rawArray), &list)
+	}
+	return list
+}
+
 type mockClientWithTools struct {
 	mockClient
 }
 
 func (m *mockClientWithTools) GetSessionMessages(ctx context.Context, req api.GetSessionMessagesRequest) (*api.GetSessionMessagesResponse, error) {
 	return &api.GetSessionMessagesResponse{
-		Messages: []string{
+		Messages: parseJSONMessages([]string{
 			`{"role":"user","content":[{"type":"text","text":"Run tool"}]}`,
 			`{"role":"assistant","content":[{"type":"text","text":"Thinking..."},{"type":"tool_call","id":"call-1","name":"bash","args":{"CommandLine":"echo hello"}},{"type":"tool_call","id":"call-2","name":"view_file","args":{"AbsolutePath":"/path/to/file.go"}}]}`,
 			`{"role":"tool","tool_call_id":"call-1","name":"bash","content":[{"type":"text","text":"hello\n"}]}`,
 			`{"role":"tool","tool_call_id":"call-2","name":"view_file","content":[{"type":"text","text":"package main"}]}`,
 			`{"role":"user","content":[{"type":"text","text":"Wake up"}],"metadata":{"is_system_notification":true,"task_id":"task-123","task_name":"run tests","task_status":"completed","exit_code":0}}`,
-		},
+		}),
 	}, nil
 }
 
@@ -134,11 +146,11 @@ type mockClientWithDeniedTool struct {
 
 func (m *mockClientWithDeniedTool) GetSessionMessages(ctx context.Context, req api.GetSessionMessagesRequest) (*api.GetSessionMessagesResponse, error) {
 	return &api.GetSessionMessagesResponse{
-		Messages: []string{
+		Messages: parseJSONMessages([]string{
 			`{"role":"user","content":[{"type":"text","text":"Run tool"}]}`,
 			`{"role":"assistant","content":[{"type":"tool_call","id":"call-denied","name":"write","args":{"path":"test.txt"}}]}`,
 			`{"role":"tool","tool_call_id":"call-denied","name":"write","is_error":true,"content":[{"type":"text","text":"Authorization denied by user for tool \"write\": security policy"}],"metadata":{"deny_reason":"security policy"}}`,
-		},
+		}),
 	}, nil
 }
 

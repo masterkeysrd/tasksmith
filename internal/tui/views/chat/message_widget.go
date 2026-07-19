@@ -32,6 +32,7 @@ type MessageProps struct {
 	OnViewFullOutput      func(title, cachedPath string)
 	OnViewPreview         func(title string, p preview.ToolPreview)
 	OnViewSubagent        func(title, subagentTaskID string)
+	IsGenerating          bool
 }
 
 var Message = kitex.FC("Message", func(props MessageProps) kitex.Node {
@@ -39,19 +40,21 @@ var Message = kitex.FC("Message", func(props MessageProps) kitex.Node {
 	content := props.Content
 	toolResponses := props.ToolResponses
 
+	// Hooks must be called unconditionally at the top of the component
+	client := tuiapi.UseClient()
+	windClient := wind.UseClient()
+
+	// Local state to accumulate decisions for pending authorizations
+	localDecisions, setLocalDecisions := kitex.UseState(make(map[string]permissions.AuthorizationDecision))
+	previewOpen, setPreviewOpen := kitex.UseState(false)
+
+	// Reset local decisions when pending authorizations list changes (e.g. from the backend)
+	// Or when the session changes.
+	kitex.UseEffect(func() {
+		setLocalDecisions(make(map[string]permissions.AuthorizationDecision))
+	}, []any{props.SessionID, len(props.PendingAuthorizations)})
+
 	if role == message.RoleAssistant {
-		client := tuiapi.UseClient()
-		windClient := wind.UseClient()
-
-		// Local state to accumulate decisions for pending authorizations
-		localDecisions, setLocalDecisions := kitex.UseState(make(map[string]permissions.AuthorizationDecision))
-		previewOpen, setPreviewOpen := kitex.UseState(false)
-
-		// Reset local decisions when pending authorizations list changes (e.g. from the backend)
-		// Or when the session changes.
-		kitex.UseEffect(func() {
-			setLocalDecisions(make(map[string]permissions.AuthorizationDecision))
-		}, []any{props.SessionID, len(props.PendingAuthorizations)})
 
 		// Helper to submit the batch of decisions
 		submitBatch := func(decisions []permissions.AuthorizationDecision) {
@@ -123,7 +126,9 @@ var Message = kitex.FC("Message", func(props MessageProps) kitex.Node {
 			case *message.TextBlock:
 				flushQuestions()
 				if strings.TrimSpace(b.Text) != "" {
-					children = append(children, components.Markdown(components.MarkdownProps{Source: b.Text}))
+					children = append(children, components.Markdown(components.MarkdownProps{
+						Source: b.Text,
+					}))
 				}
 			case *message.ThinkingBlock:
 				flushQuestions()
@@ -181,6 +186,7 @@ var Message = kitex.FC("Message", func(props MessageProps) kitex.Node {
 							OnViewFullOutput: props.OnViewFullOutput,
 							OnViewPreview:    props.OnViewPreview,
 							OnViewSubagent:   props.OnViewSubagent,
+							IsGenerating:     props.IsGenerating,
 						})
 						if node != nil {
 							children = append(children, node)

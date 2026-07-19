@@ -100,7 +100,7 @@ var AgentStatus = kitex.FC("AgentStatus", func(props AgentStatusProps) kitex.Nod
 				Stages:    []string{"○", "⊙", "◎", "◉", "●"},
 				Count:     3,
 				LoopStyle: components.LoopBreathe,
-				Interval:  120 * time.Millisecond,
+				Interval:  300 * time.Millisecond,
 			})),
 			kitex.Box(kitex.BoxProps{Style: labelStyle}, kitex.Text(statusText)),
 			kitex.Box(kitex.BoxProps{Style: timeStyle}, kitex.Text(timeStr)),

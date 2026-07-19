@@ -153,24 +153,22 @@ func renderChatView(props ViewProps) kitex.Node {
 	// 2. Fetch session execution status reactively
 	stateQuery := queries.UseGetSessionState(sessionID)
 
-	kitex.UseEffect(func() {
-		windClient.InvalidateQueries(api.GetSessionStateRequest{SessionID: sessionID})
-	}, []any{msgsQuery.Data, sessionID})
-
 	// 2b. Fetch sessions reactively to resolve session title
 	sessionsQuery := queries.UseListSessions()
 
-	title := sessionID
-	mainAgentName := "main"
+	lastTitleRef := kitex.UseRef(sessionID)
+	lastAgentNameRef := kitex.UseRef("main")
 	if sessionsQuery.Data != nil {
 		for _, s := range sessionsQuery.Data.Sessions {
 			if s.ID == sessionID {
-				title = s.Title
-				mainAgentName = s.Settings.AgentName
+				lastTitleRef.Current = s.Title
+				lastAgentNameRef.Current = s.Settings.AgentName
 				break
 			}
 		}
 	}
+	title := lastTitleRef.Current
+	mainAgentName := lastAgentNameRef.Current
 
 	var progressText string
 	if stateQuery.Data != nil {
@@ -196,16 +194,18 @@ func renderChatView(props ViewProps) kitex.Node {
 	}
 
 	var messages message.MessageList
-	if msgsQuery.Data != nil && len(msgsQuery.Data.Messages) > 0 {
-		rawArray := "[" + strings.Join(msgsQuery.Data.Messages, ",") + "]"
-		_ = json.Unmarshal([]byte(rawArray), &messages)
+	if msgsQuery.Data != nil {
+		messages = msgsQuery.Data.Messages
 	}
 
 	var queuedMessages message.MessageList
-	if msgsQuery.Data != nil && len(msgsQuery.Data.QueuedMessages) > 0 {
-		rawArray := "[" + strings.Join(msgsQuery.Data.QueuedMessages, ",") + "]"
-		_ = json.Unmarshal([]byte(rawArray), &queuedMessages)
+	if msgsQuery.Data != nil {
+		queuedMessages = msgsQuery.Data.QueuedMessages
 	}
+
+	kitex.UseEffect(func() {
+		windClient.InvalidateQueries(api.GetSessionStateRequest{SessionID: sessionID})
+	}, []any{len(messages), sessionID})
 
 	status := "idle"
 	if stateQuery.Data != nil {
@@ -219,7 +219,7 @@ func renderChatView(props ViewProps) kitex.Node {
 		if title == "New Chat" || title == "" {
 			windClient.InvalidateQueries(api.ListSessionsRequest{})
 		}
-	}, []any{msgsQuery.Data, title})
+	}, []any{len(messages)})
 
 	// Trigger a toast notification if the background agent execution fails
 	kitex.UseEffect(func() {
@@ -719,14 +719,10 @@ func renderChatView(props ViewProps) kitex.Node {
 		}
 	}, 1000*time.Millisecond, []any{sending})
 
-	// Save the most recent non-zero thinkingTime while the agent is running
+	// Save the final thinkingTime when the agent transitions from running to idle
 	prevSending := kitex.UseRef(false)
 	kitex.UseEffect(func() {
-		if sending {
-			if thinkingTime() > 0 {
-				setLastFinishedTime(thinkingTime())
-			}
-		} else if prevSending.Current {
+		if !sending && prevSending.Current {
 			// Transitioned from running to idle. Check if cancelled.
 			isInterruptedSession := false
 			if len(messages) > 0 {
@@ -748,32 +744,17 @@ func renderChatView(props ViewProps) kitex.Node {
 
 			if isInterruptedSession {
 				setLastFinishedTime(-1)
-			} else if lastFinishedTime() == -1 {
-				// Completed immediately (0 seconds)
-				setLastFinishedTime(0)
+			} else {
+				setLastFinishedTime(thinkingTime())
 			}
 		}
 		prevSending.Current = sending
-	}, []any{sending, thinkingTime(), messages})
-
-	// Calculate a simple integer key of the messages state to trigger the effect reactively.
-	// Only calculate the length of the last message to avoid O(N) traversal of all message blocks on every render.
-	messagesKey := len(messages)
-	if len(messages) > 0 {
-		lastMsg := messages[len(messages)-1]
-		for _, block := range lastMsg.GetContent() {
-			if tb, ok := block.(*message.TextBlock); ok {
-				messagesKey += len(tb.Text)
-			} else if tb, ok := block.(*message.ThinkingBlock); ok {
-				messagesKey += len(tb.Thinking)
-			}
-		}
-	}
+	}, []any{sending, len(messages)})
 
 	// Refetch session state query when messages receive updates (e.g. subagent bubbles up prompts)
 	kitex.UseEffect(func() {
 		stateQuery.Refetch()
-	}, []any{messagesKey})
+	}, []any{len(messages)})
 
 	kitex.UseLayoutEffect(func() {
 		if activeModal != "" || showFullOutputModal() || showResultPreview() || showSubagentModal() || showResolutionDialog() {
@@ -1082,14 +1063,31 @@ func renderChatView(props ViewProps) kitex.Node {
 		AlignItems(style.AlignStretch).
 		Background(bgDark)
 
-	toolResponses := make(map[string]*message.Tool)
-	for _, m := range messages {
-		if m.Role() == message.RoleTool {
-			if tMsg, ok := m.(*message.Tool); ok {
-				toolResponses[tMsg.ToolCallID] = tMsg
+	// Calculate a simple integer key of the messages state to trigger updates reactively.
+	messagesKey := len(messages)
+	if len(messages) > 0 {
+		lastMsg := messages[len(messages)-1]
+		for _, block := range lastMsg.GetContent() {
+			if tb, ok := block.(*message.TextBlock); ok {
+				messagesKey += len(tb.Text)
+			} else if tb, ok := block.(*message.ThinkingBlock); ok {
+				messagesKey += len(tb.Thinking)
 			}
 		}
 	}
+
+	// Memoize toolResponses map to avoid creating a new reference on every render
+	toolResponses := kitex.UseMemo(func() map[string]*message.Tool {
+		responses := make(map[string]*message.Tool)
+		for _, m := range messages {
+			if m.Role() == message.RoleTool {
+				if tMsg, ok := m.(*message.Tool); ok {
+					responses[tMsg.ToolCallID] = tMsg
+				}
+			}
+		}
+		return responses
+	}, []any{messagesKey})
 	var isGenerating bool
 	if stateQuery.Data != nil {
 		isGenerating = stateQuery.Data.IsGenerating
@@ -1167,15 +1165,66 @@ func renderChatView(props ViewProps) kitex.Node {
 		}
 	}
 
-	// Memoize the history scroller content to optimize typing performance
-	historyContent := kitex.UseMemo(func() kitex.Node {
+	// Find the start index of the last bubble group to split history rendering
+	lastGroupStartIndex := 0
+	if len(messages) > 0 {
+		var currentGroupRole message.Role
+		for i, msg := range messages {
+			isSys := isSystemNotification(msg)
+			role := msg.Role()
+			groupRole := getBubbleRole(role, msg)
+
+			if i == 0 {
+				currentGroupRole = groupRole
+				if isSys {
+					currentGroupRole = "system_notification"
+				}
+			} else {
+				if isSys || currentGroupRole == "system_notification" || groupRole != currentGroupRole {
+					lastGroupStartIndex = i
+					currentGroupRole = groupRole
+					if isSys {
+						currentGroupRole = "system_notification"
+					}
+				}
+			}
+		}
+	}
+
+	stableMessages := messages[:lastGroupStartIndex]
+	activeMessages := messages[lastGroupStartIndex:]
+
+	// Stable history is memoized based only on its length. It is NEVER re-evaluated during streaming/generation.
+	stableHistoryContent := kitex.UseMemo(func() kitex.Node {
+		if len(stableMessages) == 0 {
+			return nil
+		}
 		return kitex.Fragment(
 			renderBubbles(
-				messages,
+				stableMessages,
+				toolResponses,
+				mainAgentName,
+				false,
+				nil,
+				sessionID,
+				openFullOutputModal,
+				onViewPreview,
+				onViewSubagent,
+			)...,
+		)
+	}, []any{len(stableMessages)})
+
+	// Active history content renders only the active bubble group which changes during streaming.
+	activeHistoryContent := kitex.UseMemo(func() kitex.Node {
+		if len(activeMessages) == 0 {
+			return nil
+		}
+		return kitex.Fragment(
+			renderBubbles(
+				activeMessages,
 				toolResponses,
 				mainAgentName,
 				isGenerating,
-				thinkingTime(),
 				pendingAuthorizations,
 				sessionID,
 				openFullOutputModal,
@@ -1184,12 +1233,15 @@ func renderChatView(props ViewProps) kitex.Node {
 			)...,
 		)
 	}, []any{
-		messages,
-		toolResponses,
+		messagesKey,
 		isGenerating,
-		thinkingTime(),
-		pendingAuthorizations,
+		len(pendingAuthorizations),
 	})
+
+	historyContent := kitex.Fragment(
+		stableHistoryContent,
+		activeHistoryContent,
+	)
 
 	// Memoize the subagent view to avoid re-rendering the entire nested chat view
 	// unless the active subagent session ID changes.
@@ -1538,7 +1590,6 @@ func renderBubbles(
 	toolResponses map[string]*message.Tool,
 	mainAgentName string,
 	isGenerating bool,
-	liveThinkingTime int,
 	pendingAuthorizations []permissions.AuthorizationRequest,
 	sessionID string,
 	onViewFullOutput func(title, cachedPath string),
@@ -1570,7 +1621,6 @@ func renderBubbles(
 				ToolResponses:         toolResponses,
 				MainAgentName:         mainAgentName,
 				IsGenerating:          groupIsGenerating,
-				LiveThinkingTime:      liveThinkingTime,
 				PendingAuthorizations: groupPendingAuths,
 				SessionID:             sessionID,
 				OnViewFullOutput:      onViewFullOutput,

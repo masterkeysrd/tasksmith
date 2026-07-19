@@ -353,13 +353,14 @@ var AuthorizationWidget = kitex.FC("AuthorizationWidget", func(props Authorizati
 		setSelectedScopeIndex(0)
 		setFocusedItem(FocusItemOnce)
 	}, []any{req.ToolCallID})
+	localShow, localSet := kitex.UseState(false)
+
 	var showPreviewModal func() bool
 	var setShowPreviewModal func(bool)
 	if props.SetShowPreviewModal != nil {
 		showPreviewModal = func() bool { return props.ShowPreviewModal }
 		setShowPreviewModal = props.SetShowPreviewModal
 	} else {
-		localShow, localSet := kitex.UseState(false)
 		showPreviewModal = localShow
 		setShowPreviewModal = localSet
 	}

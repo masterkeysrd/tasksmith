@@ -25,6 +25,7 @@ type ToolExecutionProps struct {
 	OnViewFullOutput func(title, cachedPath string)
 	OnViewPreview    func(title string, p preview.ToolPreview)
 	OnViewSubagent   func(title, subagentTaskID string)
+	IsGenerating     bool
 }
 
 func toolPulse() kitex.Node {
@@ -32,7 +33,7 @@ func toolPulse() kitex.Node {
 		Stages:    []string{"○", "⊙", "◎", "◉", "●"},
 		Count:     1,
 		LoopStyle: components.LoopBreathe,
-		Interval:  120 * time.Millisecond,
+		Interval:  300 * time.Millisecond,
 	})
 }
 

@@ -26,7 +26,6 @@ type BubbleGroupProps struct {
 	ToolResponses         map[string]*message.Tool
 	MainAgentName         string
 	IsGenerating          bool
-	LiveThinkingTime      int
 	PendingAuthorizations []permissions.AuthorizationRequest
 	SessionID             string
 	OnViewFullOutput      func(title, cachedPath string)
@@ -130,7 +129,7 @@ var BubbleGroup = kitex.FC("BubbleGroup", func(props BubbleGroupProps) kitex.Nod
 					}
 				}
 				if props.IsGenerating && i == len(props.Msgs)-1 {
-					thinkingDuration = time.Duration(props.LiveThinkingTime) * time.Second
+					thinkingDuration = 0
 				}
 			}
 
@@ -147,6 +146,11 @@ var BubbleGroup = kitex.FC("BubbleGroup", func(props BubbleGroupProps) kitex.Nod
 				}
 			}
 
+			isMsgGenerating := false
+			if props.IsGenerating && i == len(props.Msgs)-1 {
+				isMsgGenerating = true
+			}
+
 			node := Message(MessageProps{
 				Role:                  effectiveRole,
 				Content:               msg.GetContent(),
@@ -158,6 +162,7 @@ var BubbleGroup = kitex.FC("BubbleGroup", func(props BubbleGroupProps) kitex.Nod
 				OnViewFullOutput:      props.OnViewFullOutput,
 				OnViewPreview:         props.OnViewPreview,
 				OnViewSubagent:        props.OnViewSubagent,
+				IsGenerating:          isMsgGenerating,
 			})
 			if node != nil {
 				children = append(children, node)
@@ -219,7 +224,6 @@ var BubbleGroup = kitex.FC("BubbleGroup", func(props BubbleGroupProps) kitex.Nod
 		props.Role,
 		msgHash,
 		props.IsGenerating,
-		props.LiveThinkingTime,
 		authKey,
 	})
 })

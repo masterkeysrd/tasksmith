@@ -20,7 +20,6 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/agent/permissions"
 	"github.com/masterkeysrd/tasksmith/internal/agent/resolver"
 	"github.com/masterkeysrd/tasksmith/internal/agent/tools"
-	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	"github.com/masterkeysrd/tasksmith/internal/core/lsp"
 	"github.com/masterkeysrd/tasksmith/internal/filetrack"
 	"github.com/masterkeysrd/tasksmith/internal/mcp"
@@ -873,47 +872,15 @@ func (s *Service) GetSessionMessages(ctx context.Context, req GetSessionMessages
 		return nil, err
 	}
 
-	resp := &GetSessionMessagesResponse{
-		Messages: make([]string, len(msgs)),
-	}
-	for i, msg := range msgs {
-		list := message.MessageList{msg}
-		data, err := json.Marshal(list)
-		if err != nil {
-			return nil, err
-		}
-		if len(data) >= 2 && data[0] == '[' && data[len(data)-1] == ']' {
-			data = data[1 : len(data)-1]
-		}
-		resp.Messages[i] = string(data)
-	}
-
-	// Fetch in-memory queued messages
 	queuedMsgs, err := s.sm.GetQueuedMessages(req.SessionID)
 	if err != nil {
 		return nil, err
 	}
-	if len(queuedMsgs) > 0 {
-		resp.QueuedMessages = make([]string, len(queuedMsgs))
-		for i, msg := range queuedMsgs {
-			list := message.MessageList{msg}
-			data, err := json.Marshal(list)
-			if err != nil {
-				return nil, err
-			}
-			if len(data) >= 2 && data[0] == '[' && data[len(data)-1] == ']' {
-				data = data[1 : len(data)-1]
-			}
-			resp.QueuedMessages[i] = string(data)
-		}
-	}
 
-	log.Info("GetSessionMessages debug",
-		log.String("session", req.SessionID),
-		log.Int("history", len(resp.Messages)),
-		log.Int("queued", len(resp.QueuedMessages)))
-
-	return resp, nil
+	return &GetSessionMessagesResponse{
+		Messages:       msgs,
+		QueuedMessages: queuedMsgs,
+	}, nil
 }
 
 // GetInputHistory returns a list of unique user prompts submitted in the workspace.

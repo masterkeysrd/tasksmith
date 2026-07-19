@@ -3,6 +3,7 @@ package api
 import (
 	"time"
 
+	"github.com/masterkeysrd/loom/message"
 	"github.com/masterkeysrd/tasksmith/internal/agent/model"
 	"github.com/masterkeysrd/tasksmith/internal/agent/permissions"
 	"github.com/masterkeysrd/tasksmith/internal/agent/resolver"
@@ -305,8 +306,8 @@ type GetSessionMessagesRequest struct {
 }
 
 type GetSessionMessagesResponse struct {
-	Messages       []string `json:"messages"`                  // Serialized JSON messages
-	QueuedMessages []string `json:"queued_messages,omitempty"` // Serialized JSON queued messages
+	Messages       message.MessageList `json:"messages"`
+	QueuedMessages message.MessageList `json:"queued_messages,omitempty"`
 }
 
 type GetInputHistoryRequest struct {

@@ -12,7 +12,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/jmoiron/sqlx v1.4.0
 	github.com/lrstanley/go-nf v0.0.0-20260418212552-215ab243b591
-	github.com/masterkeysrd/kite v0.0.4-0.20260717191519-2a5d389401ed
+	github.com/masterkeysrd/kite v0.0.4-0.20260719185231-a64f739f4358
 	github.com/masterkeysrd/loom v0.0.4-0.20260711030105-60d4b1b463e3
 	github.com/masterkeysrd/lspx v0.0.0-20260716060742-21d5e843d27c
 	github.com/masterkeysrd/warp v0.0.3-0.20260712054341-01be5a9aebda
@@ -44,7 +44,7 @@ require (
 	github.com/cenkalti/backoff/v5 v5.0.3 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/charmbracelet/colorprofile v0.4.3 // indirect
-	github.com/charmbracelet/ultraviolet v0.0.0-20260703014108-f5a850f9c2b7 // indirect
+	github.com/charmbracelet/ultraviolet v0.0.0-20260713092251-4bee1914c0cf // indirect
 	github.com/charmbracelet/x/ansi v0.11.7 // indirect
 	github.com/charmbracelet/x/term v0.2.2 // indirect
 	github.com/charmbracelet/x/termios v0.1.1 // indirect

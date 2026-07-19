@@ -110,6 +110,8 @@ var CodeBlock = kitex.FC("CodeBlock", func(props CodeBlockProps) kitex.Node {
 
 		wrapperStyle = wrapperStyle.Merge(props.Style)
 
+		var contentNodes []kitex.Node
+
 		// Fetch and coalesce lexer
 		lexer := lexers.Get(lang)
 		if lexer == nil {
@@ -119,8 +121,6 @@ var CodeBlock = kitex.FC("CodeBlock", func(props CodeBlockProps) kitex.Node {
 
 		// Tokenize code string
 		iterator, err := lexer.Tokenise(nil, codeStr)
-
-		var contentNodes []kitex.Node
 
 		if err != nil {
 			fallbackStyle := style.S().WhiteSpace(whiteSpace)
@@ -137,20 +137,44 @@ var CodeBlock = kitex.FC("CodeBlock", func(props CodeBlockProps) kitex.Node {
 				),
 			}
 		} else {
-			for tok := iterator(); tok != chroma.EOF; tok = iterator() {
-				tokenStyle := ResolveTokenStyle(t, tok.Type)
-				if props.Wrap {
-					tokenStyle = tokenStyle.
-						WhiteSpace(style.WhiteSpacePreWrap).
-						OverflowWrap(style.OverflowWrapBreakWord).
-						MaxWidth(style.Percent(100)).
-						MinWidth(style.Percent(0))
+			var currentType chroma.TokenType
+			var currentText strings.Builder
+			var hasPending bool
+
+			flushCurrent := func() {
+				if hasPending {
+					tokenStyle := ResolveTokenStyle(t, currentType)
+					if props.Wrap {
+						tokenStyle = tokenStyle.
+							WhiteSpace(style.WhiteSpacePreWrap).
+							OverflowWrap(style.OverflowWrapBreakWord).
+							MaxWidth(style.Percent(100)).
+							MinWidth(style.Percent(0))
+					}
+					contentNodes = append(contentNodes, kitex.Span(
+						kitex.SpanProps{Style: tokenStyle},
+						kitex.Text(currentText.String()),
+					))
+					currentText.Reset()
+					hasPending = false
 				}
-				contentNodes = append(contentNodes, kitex.Span(
-					kitex.SpanProps{Style: tokenStyle},
-					kitex.Text(tok.Value),
-				))
 			}
+
+			for tok := iterator(); tok != chroma.EOF; tok = iterator() {
+				if !hasPending {
+					currentType = tok.Type
+					currentText.WriteString(tok.Value)
+					hasPending = true
+				} else if tok.Type == currentType {
+					currentText.WriteString(tok.Value)
+				} else {
+					flushCurrent()
+					currentType = tok.Type
+					currentText.WriteString(tok.Value)
+					hasPending = true
+				}
+			}
+			flushCurrent()
 		}
 
 		// Line numbers rendering styles
