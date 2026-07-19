@@ -229,6 +229,7 @@ func renderChatView(props ViewProps) kitex.Node {
 	}, []any{stateQuery.Data != nil, stateQuery.Data != nil && stateQuery.Data.Error != ""})
 
 	activeTip := tips.Use(sending)
+	activeModal := active.UseModal()
 
 	// 3. Reactive state for input composer and submitting state
 	inputValue, setInputValue := kitex.UseState("")
@@ -775,6 +776,10 @@ func renderChatView(props ViewProps) kitex.Node {
 	}, []any{messagesKey})
 
 	kitex.UseLayoutEffect(func() {
+		if activeModal != "" || showFullOutputModal() || showResultPreview() || showSubagentModal() || showResolutionDialog() {
+			return
+		}
+
 		if historyRef.Current == nil {
 			return
 		}
