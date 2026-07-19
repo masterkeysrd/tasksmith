@@ -189,13 +189,18 @@ var Composer = kitex.FC("Composer", func(props ComposerProps) kitex.Node {
 				return
 			}
 
-			// Enter without modifiers submits
-			if (ke.Code == key.KeyEnter || ke.Text == "\r" || ke.Text == "\n") && (ke.Mod&key.ModShift) == 0 {
+			// Ctrl+Enter, Alt+Enter, or Ctrl+S submits
+			if ke.MatchString("ctrl+enter") || ke.MatchString("alt+enter") || ke.MatchString("ctrl+s") {
 				e.PreventDefault()
 				e.StopPropagation()
 				if props.OnSubmit != nil {
 					props.OnSubmit(props.Value, trackedRefs())
 				}
+				return
+			}
+
+			// Plain Enter falls through to allow default text area behavior (inserting a newline)
+			if ke.Code == key.KeyEnter || ke.Text == "\r" || ke.Text == "\n" {
 				return
 			}
 

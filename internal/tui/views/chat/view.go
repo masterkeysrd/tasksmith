@@ -1406,7 +1406,7 @@ func renderChatView(props ViewProps) kitex.Node {
 					if status == "running" {
 						tipText = "Press Ctrl+C to cancel execution"
 					} else if isInsert {
-						tipText = "Press <Enter> to send, <Esc> to exit"
+						tipText = "Press <Ctrl+Enter>/<Alt+Enter>/<Ctrl+S> to send, <Enter> for newline, <Esc> to exit"
 					} else {
 						tipText = "Press i to write, J/K to scroll, s to send queue"
 					}
