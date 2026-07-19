@@ -1059,3 +1059,111 @@ func TestForceCompaction(t *testing.T) {
 		t.Error("expected error when calling ForceCompaction on a pending_auth session, got nil")
 	}
 }
+
+func TestSetActiveAgentAndSlashCommands(t *testing.T) {
+	tmpCwd := t.TempDir()
+
+	db, err := coredb.Open(tmpCwd, "tasksmith.db")
+	if err != nil {
+		t.Fatalf("failed to open database: %v", err)
+	}
+	defer db.Close()
+
+	checkpointsDb, err := coredb.Open(tmpCwd, "checkpoints.db")
+	if err != nil {
+		t.Fatalf("failed to open checkpoints database: %v", err)
+	}
+	defer checkpointsDb.Close()
+
+	store, err := session.NewSQLiteStore(db, checkpointsDb)
+	if err != nil {
+		t.Fatalf("failed to initialize sqlite store: %v", err)
+	}
+
+	ws := workspace.New(tmpCwd)
+	manager := session.NewManager(session.ManagerConfig{
+		Store:     store,
+		Workspace: ws,
+	})
+	ctx := context.Background()
+
+	s, err := manager.CreateSession(ctx, "agent-test")
+	if err != nil {
+		t.Fatalf("failed to create session: %v", err)
+	}
+
+	// 1. Initially default agent is "main"
+	sess, err := manager.GetSession(ctx, s.ID)
+	if err != nil {
+		t.Fatalf("failed to get session: %v", err)
+	}
+	if sess.Settings.AgentName != "main" {
+		t.Errorf("expected default agent 'main', got %q", sess.Settings.AgentName)
+	}
+
+	// 2. Set active agent to "custom-agent"
+	err = manager.SetActiveAgent(ctx, s.ID, "custom-agent")
+	if err != nil {
+		t.Fatalf("failed to set active agent: %v", err)
+	}
+
+	sess, err = manager.GetSession(ctx, s.ID)
+	if err != nil {
+		t.Fatalf("failed to get session: %v", err)
+	}
+	if sess.Settings.AgentName != "custom-agent" {
+		t.Errorf("expected agent 'custom-agent', got %q", sess.Settings.AgentName)
+	}
+
+	// 3. Send "/create-skill" — should intercept and switch to "skill-creator"
+	// Without a workspace manifest, all tools are allowed by default.
+	err = manager.SendMessage(ctx, s.ID, "/create-skill", nil)
+	if err != nil {
+		t.Fatalf("SendMessage failed: %v", err)
+	}
+
+	sess, err = manager.GetSession(ctx, s.ID)
+	if err != nil {
+		t.Fatalf("failed to get session: %v", err)
+	}
+	if sess.Settings.AgentName != "skill-creator" {
+		t.Errorf("expected agent 'skill-creator' after /create-skill command, got %q", sess.Settings.AgentName)
+	}
+
+	// 4. Restore the agent using SetActiveAgent("")
+	err = manager.SetActiveAgent(ctx, s.ID, "")
+	if err != nil {
+		t.Fatalf("failed to restore active agent: %v", err)
+	}
+
+	// 5. Create a workspace manifest that does NOT authorize set_active_agent
+	wsPath := filepath.Join(tmpCwd, "WORKSPACE.md")
+	manifestContent := `---
+apiVersion: warp/v1alpha1
+kind: Workspace
+metadata:
+  name: test-ws
+spec:
+  projects: ["."]
+  policies:
+    tools:
+      include: ["ls", "view"]
+---`
+	if err := os.WriteFile(wsPath, []byte(manifestContent), 0644); err != nil {
+		t.Fatalf("failed to write WORKSPACE.md: %v", err)
+	}
+
+	err = ws.Load(ctx)
+	if err != nil {
+		t.Fatalf("failed to load workspace: %v", err)
+	}
+
+	// Sending "/create-skill" now should be rejected due to missing tool authorizations
+	err = manager.SendMessage(ctx, s.ID, "/create-skill", nil)
+	if err == nil {
+		t.Fatal("expected SendMessage to fail due to blocked tool policy, got nil")
+	}
+	if !strings.Contains(err.Error(), "requires set_active_agent") {
+		t.Errorf("expected error to mention 'set_active_agent', got: %v", err)
+	}
+}

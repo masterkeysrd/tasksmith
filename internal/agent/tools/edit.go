@@ -94,6 +94,18 @@ func (h *ToolHandlers) Edit(ctx context.Context, in EditArgs) (EditOutput, error
 		}, nil
 	}
 
+	if h.PreWriteHook != nil {
+		enriched, err := h.PreWriteHook(editAbs, newContent)
+		if err != nil {
+			return EditOutput{
+				Path:    path,
+				Success: false,
+				Message: fmt.Sprintf("pre-write hook failed: %v", err),
+			}, fmt.Errorf("pre-write hook failed: %w", err)
+		}
+		newContent = enriched
+	}
+
 	// Write new content back
 	if h.FileTracker != nil {
 		hashVal := fmt.Sprintf("%x", sha256.Sum256([]byte(newContent)))

@@ -61,7 +61,7 @@ var Composer = kitex.FC("Composer", func(props ComposerProps) kitex.Node {
 		return autocomplete.New(autocomplete.Config{
 			Triggers: map[string][]string{
 				"@": {"file", "symbol", "skill"},
-				"/": {"command"},
+				"/": {"workflow"},
 			},
 			Prefixes: resolver.PrefixToSourceMap(),
 		})

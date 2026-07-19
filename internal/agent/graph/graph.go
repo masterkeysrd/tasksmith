@@ -150,6 +150,7 @@ type Options struct {
 	McpManager        *mcp.Manager
 	MetricsStore      *metrics.Store
 	ContextWindow     int
+	OnSetActiveAgent  func(ctx context.Context, agentName string) error
 }
 
 // New creates a new AgentGraph orchestrator by loading/binding tools outside of the execution nodes.
@@ -224,7 +225,12 @@ func New(ctx context.Context, opts Options) (*AgentGraph, error) {
 		WithLspManager(opts.LspManager).
 		WithFileTracker(opts.FileTracker).
 		WithMcpManager(opts.McpManager).
-		WithMetricsStore(opts.MetricsStore)
+		WithMetricsStore(opts.MetricsStore).
+		WithSetActiveAgent(opts.OnSetActiveAgent)
+
+	if opts.AgentName == workspace.AgentNameAgentCreator {
+		handlers.WithPreWriteHook(AgentManifestPreWriteHook)
+	}
 
 	activeTools, err := tools.LoadActiveTools(ctx, handlers, allowedTools, mcps)
 	if err != nil {

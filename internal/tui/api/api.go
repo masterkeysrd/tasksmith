@@ -6,6 +6,7 @@ import (
 	"context"
 	stdErrs "errors"
 	"iter"
+	"strings"
 
 	"github.com/masterkeysrd/kite/extras/kitex"
 	"github.com/masterkeysrd/tasksmith/internal/api"
@@ -22,6 +23,7 @@ type Client interface {
 	ListToolsPresets(ctx context.Context, req api.ListToolsPresetsRequest) (*api.ListToolsPresetsResponse, error)
 	InitializeWorkspace(ctx context.Context, req api.InitializeWorkspaceRequest) (*api.InitializeWorkspaceResponse, error)
 	GetWorkspaceConfig(ctx context.Context, req api.GetWorkspaceConfigRequest) (*api.GetWorkspaceConfigResponse, error)
+	AuthorizeWorkspaceTools(ctx context.Context, req api.AuthorizeWorkspaceToolsRequest) (*api.AuthorizeWorkspaceToolsResponse, error)
 
 	ListSessions(ctx context.Context, req api.ListSessionsRequest) (*api.ListSessionsResponse, error)
 	CreateSession(ctx context.Context, req api.CreateSessionRequest) (*api.CreateSessionResponse, error)
@@ -90,8 +92,11 @@ func toastError(defaultTitle string, err error) {
 	if err == nil {
 		return
 	}
-	title := defaultTitle
 	msg := err.Error()
+	if strings.Contains(msg, "requires 'set_active_agent'") || strings.Contains(msg, "requires 'ask_question'") || strings.Contains(msg, "requires set_active_agent") || strings.Contains(msg, "requires ask_question") {
+		return
+	}
+	title := defaultTitle
 
 	var appErr *tserrors.Error
 	if stdErrs.As(err, &appErr) {
@@ -152,6 +157,12 @@ func (w *toastClient) InitializeWorkspace(ctx context.Context, req api.Initializ
 func (w *toastClient) GetWorkspaceConfig(ctx context.Context, req api.GetWorkspaceConfigRequest) (*api.GetWorkspaceConfigResponse, error) {
 	res, err := w.delegate.GetWorkspaceConfig(ctx, req)
 	toastError("Failed to Get Workspace Config", err)
+	return res, err
+}
+
+func (w *toastClient) AuthorizeWorkspaceTools(ctx context.Context, req api.AuthorizeWorkspaceToolsRequest) (*api.AuthorizeWorkspaceToolsResponse, error) {
+	res, err := w.delegate.AuthorizeWorkspaceTools(ctx, req)
+	toastError("Failed to Authorize Workspace Tools", err)
 	return res, err
 }
 

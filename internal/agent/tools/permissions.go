@@ -41,6 +41,9 @@ func init() {
 
 	// Standalone Background Task management
 	permissions.RegisterHandler("tasks", &TasksPermissionHandler{})
+
+	// Safe Internal coordination tools
+	permissions.RegisterHandler("set_active_agent", &SetActiveAgentPermissionHandler{})
 }
 
 func resolveAbsPath(ctx context.Context, rawPath string) (string, error) {
@@ -1259,4 +1262,30 @@ func (h *TasksPermissionHandler) GetPreview(ctx context.Context, req permissions
 	}
 
 	return preview.DefaultTextPreview{Text: text}, nil
+}
+
+// SetActiveAgentPermissionHandler evaluates permissions for the set_active_agent tool.
+type SetActiveAgentPermissionHandler struct{}
+
+func (h *SetActiveAgentPermissionHandler) GetPermissionGroup() string {
+	return "set_active_agent"
+}
+
+func (h *SetActiveAgentPermissionHandler) Evaluate(ctx context.Context, req permissions.ToolCallRequest, mode permissions.PermissionMode, grants []permissions.Permission) permissions.EvaluationResult {
+	// Always allow, regardless of the permission mode!
+	return permissions.EvaluationResult{State: permissions.StateExplicitAllow}
+}
+
+func (h *SetActiveAgentPermissionHandler) GetOptions(req permissions.ToolCallRequest) []permissions.PermissionOption {
+	return []permissions.PermissionOption{
+		{Target: "*", Label: "Allow Always"},
+	}
+}
+
+func (h *SetActiveAgentPermissionHandler) GetPreview(ctx context.Context, req permissions.ToolCallRequest) (preview.ToolPreview, error) {
+	agentName, _ := req.Args["agent_name"].(string)
+	if agentName == "" {
+		return preview.DefaultTextPreview{Text: "Restore default agent"}, nil
+	}
+	return preview.DefaultTextPreview{Text: fmt.Sprintf("Switch active agent to %q", agentName)}, nil
 }

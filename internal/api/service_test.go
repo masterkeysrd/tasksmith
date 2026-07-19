@@ -70,6 +70,10 @@ func (m *mockWorkspace) ResolveAgent(ctx context.Context, ref string) (*warp.Res
 	return nil, nil
 }
 
+func (m *mockWorkspace) AuthorizeTools(ctx context.Context, tools []string) error {
+	return nil
+}
+
 func (m *mockWorkspace) ListResources(opts warp.QueryOptions) []warp.Resource {
 	var results []warp.Resource
 	for _, k := range opts.Kinds {

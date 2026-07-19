@@ -19,6 +19,15 @@ import (
 //go:embed all:preset/*.yaml
 var presetFS embed.FS
 
+const (
+	AgentNameMain               = "main"
+	AgentNameAgentCreator       = "agent-creator"
+	AgentNameSkillCreator       = "skill-creator"
+	AgentNameToolCreator        = "tool-creator"
+	AgentNameProjectInitializer = "project-initializer"
+	AgentNameProviderManager    = "provider-manager"
+)
+
 type Workspace struct {
 	cwd           string
 	logger        log.Interface
@@ -442,4 +451,72 @@ func (w *Workspace) ResolveDefaults(ctx context.Context) (agentName, providerNam
 	}
 
 	return agentName, "ollama", "qwen3.6:35b-a3b-coding-nvfp4", nil
+}
+
+// AuthorizeTools updates WORKSPACE.md to include the specified tools in the authorized list, then reloads the workspace.
+func (w *Workspace) AuthorizeTools(ctx context.Context, toolsToAuthorize []string) error {
+	wsSpec := w.WorkspaceSpec()
+	var wsDef *warp.WorkspaceDef
+
+	if wsSpec == nil || wsSpec.Def == nil || wsSpec.Synthetic {
+		// Initialize a new WorkspaceDef
+		projectName := filepath.Base(w.cwd)
+		var allowedTools []string
+		for _, tool := range toolsToAuthorize {
+			allowedTools = append(allowedTools, tool)
+		}
+		wsDef = &warp.WorkspaceDef{
+			BaseResource: warp.BaseResource{
+				APIVersion: warp.APIVersion,
+				Kind:       warp.KindWorkspace,
+				Metadata: warp.Metadata{
+					Name: projectName,
+				},
+			},
+			Spec: warp.WorkspaceDefSpec{
+				Projects:        []string{"."},
+				DefaultProvider: "ollama",
+				DefaultAgent:    "",
+				Plugins:         []warp.WorkspacePlugin{},
+				Policies: &warp.Policies{
+					Tools: &warp.ToolPolicies{
+						Include: allowedTools,
+					},
+				},
+			},
+		}
+	} else {
+		wsDef = wsSpec.Def
+		if wsDef.Spec.Policies == nil {
+			wsDef.Spec.Policies = &warp.Policies{}
+		}
+		if wsDef.Spec.Policies.Tools == nil {
+			wsDef.Spec.Policies.Tools = &warp.ToolPolicies{}
+		}
+
+		for _, tool := range toolsToAuthorize {
+			found := false
+			for _, existing := range wsDef.Spec.Policies.Tools.Include {
+				if existing == tool {
+					found = true
+					break
+				}
+			}
+			if !found {
+				wsDef.Spec.Policies.Tools.Include = append(wsDef.Spec.Policies.Tools.Include, tool)
+			}
+		}
+	}
+
+	data, err := warp.Format(wsDef)
+	if err != nil {
+		return fmt.Errorf("format workspace definition: %w", err)
+	}
+
+	wsPath := filepath.Join(w.cwd, "WORKSPACE.md")
+	if err := os.WriteFile(wsPath, data, 0644); err != nil {
+		return fmt.Errorf("write WORKSPACE.md: %w", err)
+	}
+
+	return w.Load(ctx)
 }

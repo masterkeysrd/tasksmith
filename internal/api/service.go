@@ -43,6 +43,7 @@ type Workspace interface {
 	GetWorkspaceConfig(ctx context.Context) (workspace.WorkspaceConfig, error)
 	ResolveDefaults(ctx context.Context) (agentName, providerName, modelName string, err error)
 	ResolveAgent(ctx context.Context, ref string) (*warp.ResolvedAgent, error)
+	AuthorizeTools(ctx context.Context, tools []string) error
 	ListResources(opts warp.QueryOptions) []warp.Resource
 }
 
@@ -128,6 +129,14 @@ func (s *Service) InitializeWorkspace(ctx context.Context, req InitializeWorkspa
 		return nil, err
 	}
 	return &InitializeWorkspaceResponse{Success: true}, nil
+}
+
+// AuthorizeWorkspaceTools adds tools to the workspace allowed tools configuration.
+func (s *Service) AuthorizeWorkspaceTools(ctx context.Context, req AuthorizeWorkspaceToolsRequest) (*AuthorizeWorkspaceToolsResponse, error) {
+	if err := s.ws.AuthorizeTools(ctx, req.Tools); err != nil {
+		return nil, err
+	}
+	return &AuthorizeWorkspaceToolsResponse{Success: true}, nil
 }
 
 // ListProjects returns a list of projects in the workspace.

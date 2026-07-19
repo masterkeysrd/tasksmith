@@ -806,6 +806,25 @@ type ScheduleOutput struct {
 	TaskId string `json:"task_id,omitempty" jsonschema:"The scheduled task ID."`
 }
 
+// SetActiveAgentArgs defines the arguments for the "set_active_agent" tool.
+//
+// Switch the session's active agent to a different agent, or restore the session's default agent when a transient workflow completes.
+//
+// <when-to-use>
+// - Call this tool at the end of a specialized workflow (e.g. `/init`, `/create-skill`) to switch the session back to the default developer agent.
+// </when-to-use>
+//
+// <guidelines>
+// - Omit `agent_name` or set to `""` to restore the user's default active agent.
+// </guidelines>
+type SetActiveAgentArgs struct {
+	// AgentName: The name of the agent to switch the session to. Omit or set to empty string to restore the session's default agent.
+	AgentName string `json:"agent_name,omitempty" jsonschema:"The name of the agent to switch the session to. Omit or set to empty string to restore the session's default agent."`
+}
+
+// SetActiveAgentOutput defines the output returned by the "set_active_agent" tool.
+type SetActiveAgentOutput struct{}
+
 // TasksArgs defines the arguments for the "tasks" tool.
 //
 // Manage and monitor background tasks created by the `bash` tool.

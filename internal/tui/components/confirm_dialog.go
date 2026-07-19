@@ -1,14 +1,20 @@
 package components
 
 import (
+	"github.com/masterkeysrd/kite/event"
 	"github.com/masterkeysrd/kite/extras/kitex"
+	"github.com/masterkeysrd/kite/key"
 	"github.com/masterkeysrd/kite/style"
 )
 
 // ConfirmDialogProps defines the properties for the ConfirmDialog component.
 type ConfirmDialogProps struct {
+	// Title is an optional header text for the dialog.
+	Title string
 	// Message is the confirmation question displayed to the user.
 	Message string
+	// Content allows passing a rich custom kitex.Node instead of a simple Message string.
+	Content kitex.Node
 	// ConfirmLabel is the label for the confirm button (default: "Confirm").
 	ConfirmLabel string
 	// CancelLabel is the label for the cancel button (default: "Cancel").
@@ -25,9 +31,11 @@ type ConfirmDialogProps struct {
 	OnCancel func()
 	// OnSecondary is called when the user triggers the secondary action.
 	OnSecondary func()
+	// OnKeyDown allows custom key interceptors to override default keys.
+	OnKeyDown func(event.Event)
 }
 
-// ConfirmDialog renders a centered full-screen dialog asking the user to confirm or cancel an action.
+// ConfirmDialog renders a centered dialog asking the user to confirm or cancel an action.
 var ConfirmDialog = kitex.FC("ConfirmDialog", func(props ConfirmDialogProps) kitex.Node {
 	confirmLabel := props.ConfirmLabel
 	if confirmLabel == "" {
@@ -46,7 +54,34 @@ var ConfirmDialog = kitex.FC("ConfirmDialog", func(props ConfirmDialogProps) kit
 		secondaryColor = ButtonBase
 	}
 
-	return kitex.Dialog(kitex.DialogProps{ZIndex: 100},
+	return kitex.Dialog(kitex.DialogProps{
+		ZIndex: 100,
+		OnKeyDown: func(e event.Event) {
+			if props.OnKeyDown != nil {
+				props.OnKeyDown(e)
+				if e.DefaultPrevented() {
+					return
+				}
+			}
+			ke, ok := e.(*event.KeyEvent)
+			if !ok {
+				return
+			}
+			if ke.Code == key.KeyEnter || ke.Text == "\r" || ke.Text == "\n" {
+				e.PreventDefault()
+				e.StopPropagation()
+				if props.OnConfirm != nil {
+					props.OnConfirm()
+				}
+			} else if ke.Code == key.KeyEscape {
+				e.PreventDefault()
+				e.StopPropagation()
+				if props.OnCancel != nil {
+					props.OnCancel()
+				}
+			}
+		},
+	},
 		Paper(PaperProps{
 			Color:   PaperBase,
 			Variant: PaperOutlined,
@@ -55,9 +90,21 @@ var ConfirmDialog = kitex.FC("ConfirmDialog", func(props ConfirmDialogProps) kit
 				FlexDirection(style.FlexColumn).
 				Gap(1).
 				Padding(1).
-				MinWidth(style.Cells(40)),
+				MinWidth(style.Cells(50)).
+				MaxWidth(style.Cells(75)),
 		},
-			kitex.If(props.Message != "", func() kitex.Node {
+			kitex.If(props.Title != "", func() kitex.Node {
+				return kitex.Box(kitex.BoxProps{
+					Style: style.S().
+						Bold(true).
+						PaddingHorizontal(1).
+						PaddingVertical(0),
+				}, kitex.Text(props.Title))
+			}),
+			kitex.If(props.Content != nil, func() kitex.Node {
+				return props.Content
+			}),
+			kitex.If(props.Content == nil && props.Message != "", func() kitex.Node {
 				return kitex.Box(kitex.BoxProps{
 					Style: style.S().
 						PaddingVertical(1).

@@ -80,6 +80,14 @@ func (h *ToolHandlers) Write(ctx context.Context, in WriteArgs) (WriteOutput, er
 		return WriteOutput{}, fmt.Errorf("failed to create directories for %q: %w", path, err)
 	}
 
+	if h.PreWriteHook != nil {
+		enriched, err := h.PreWriteHook(writeAbs, in.Content)
+		if err != nil {
+			return WriteOutput{}, fmt.Errorf("pre-write hook failed: %w", err)
+		}
+		in.Content = enriched
+	}
+
 	// Write file content
 	contentBytes := []byte(in.Content)
 	if h.FileTracker != nil {

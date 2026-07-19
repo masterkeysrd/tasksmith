@@ -596,4 +596,94 @@ func (app *Application) InitializeCommands() {
 		active.SetSidebarOpen(!active.GetSidebarOpen())
 		return nil
 	})
+
+	command.Register("init", func(ctx command.CommandContext) error {
+		sessionID := active.GetSessionID()
+		if sessionID == "" {
+			return fmt.Errorf("init: no active session")
+		}
+		_, err := app.api.SendMessage(ctx.Ctx, api.SendMessageRequest{
+			SessionID: sessionID,
+			Text:      "/init",
+		})
+		if err != nil {
+			return fmt.Errorf("init: %w", err)
+		}
+		if active.InvalidateSessionMessages != nil {
+			active.InvalidateSessionMessages(sessionID)
+		}
+		return nil
+	})
+
+	command.Register("create-skill", func(ctx command.CommandContext) error {
+		sessionID := active.GetSessionID()
+		if sessionID == "" {
+			return fmt.Errorf("create-skill: no active session")
+		}
+		_, err := app.api.SendMessage(ctx.Ctx, api.SendMessageRequest{
+			SessionID: sessionID,
+			Text:      "/create-skill",
+		})
+		if err != nil {
+			return fmt.Errorf("create-skill: %w", err)
+		}
+		if active.InvalidateSessionMessages != nil {
+			active.InvalidateSessionMessages(sessionID)
+		}
+		return nil
+	})
+
+	command.Register("create-tool", func(ctx command.CommandContext) error {
+		sessionID := active.GetSessionID()
+		if sessionID == "" {
+			return fmt.Errorf("create-tool: no active session")
+		}
+		_, err := app.api.SendMessage(ctx.Ctx, api.SendMessageRequest{
+			SessionID: sessionID,
+			Text:      "/create-tool",
+		})
+		if err != nil {
+			return fmt.Errorf("create-tool: %w", err)
+		}
+		if active.InvalidateSessionMessages != nil {
+			active.InvalidateSessionMessages(sessionID)
+		}
+		return nil
+	})
+
+	command.Register("create-agent", func(ctx command.CommandContext) error {
+		sessionID := active.GetSessionID()
+		if sessionID == "" {
+			return fmt.Errorf("create-agent: no active session")
+		}
+		_, err := app.api.SendMessage(ctx.Ctx, api.SendMessageRequest{
+			SessionID: sessionID,
+			Text:      "/create-agent",
+		})
+		if err != nil {
+			return fmt.Errorf("create-agent: %w", err)
+		}
+		if active.InvalidateSessionMessages != nil {
+			active.InvalidateSessionMessages(sessionID)
+		}
+		return nil
+	})
+
+	command.Register("manage-providers", func(ctx command.CommandContext) error {
+		sessionID := active.GetSessionID()
+		if sessionID == "" {
+			return fmt.Errorf("manage-providers: no active session")
+		}
+		_, err := app.api.SendMessage(ctx.Ctx, api.SendMessageRequest{
+			SessionID: sessionID,
+			Text:      "/manage-providers",
+		})
+		if err != nil {
+			return fmt.Errorf("manage-providers: %w", err)
+		}
+		if active.InvalidateSessionMessages != nil {
+			active.InvalidateSessionMessages(sessionID)
+		}
+		return nil
+	})
 }

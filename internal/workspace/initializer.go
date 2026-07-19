@@ -164,6 +164,8 @@ func (w *Workspace) Initialize(ctx context.Context, opts InitializationOptions) 
 		Spec: warp.WorkspaceDefSpec{
 			Projects:        []string{"."},
 			DefaultProvider: opts.SelectedProvider,
+			DefaultAgent:    "",
+			Plugins:         []warp.WorkspacePlugin{},
 			Policies:        policies,
 		},
 	}

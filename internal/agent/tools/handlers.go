@@ -478,6 +478,30 @@ func LoomTools(handlers *ToolHandlers) ([]*tool.Tool, error) {
 		list = append(list, t)
 	}
 
+	if res, ok := nameMap["set_active_agent"]; ok {
+		var opts []tool.Option
+		if res.Spec.Annotations != nil {
+			opts = append(opts, tool.WithAnnotation(tool.Annotation{
+				IsOpenWorld:  res.Spec.Annotations.IsOpenWorld,
+				IsDangerous:  res.Spec.Annotations.IsDangerous,
+				IsReadOnly:   res.Spec.Annotations.IsReadOnly,
+				IsIdempotent: res.Spec.Annotations.IsIdempotent,
+				UserHint:     res.Spec.Annotations.UserHint,
+			}))
+		}
+		t, err := tool.New(
+			"set_active_agent",
+			res.Metadata.DisplayName,
+			res.Spec.Instructions,
+			handlers.SetActiveAgent,
+			opts...,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create tool set_active_agent: %w", err)
+		}
+		list = append(list, t)
+	}
+
 	if res, ok := nameMap["tasks"]; ok {
 		var opts []tool.Option
 		if res.Spec.Annotations != nil {

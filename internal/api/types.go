@@ -166,6 +166,14 @@ type InitializeWorkspaceResponse struct {
 	Success bool `json:"success"`
 }
 
+type AuthorizeWorkspaceToolsRequest struct {
+	Tools []string `json:"tools"`
+}
+
+type AuthorizeWorkspaceToolsResponse struct {
+	Success bool `json:"success"`
+}
+
 type GetWorkspaceConfigRequest struct {
 }
 

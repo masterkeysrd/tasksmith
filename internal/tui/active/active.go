@@ -8,19 +8,23 @@ import (
 )
 
 type state struct {
-	sessionID     string
-	screen        string // "chat" or "analytics"
-	modal         string // active modal overlay identifier, "" if none
-	isSidebarOpen bool
-	statusMessage string
+	sessionID              string
+	screen                 string // "chat" or "analytics"
+	modal                  string // active modal overlay identifier, "" if none
+	isSidebarOpen          bool
+	statusMessage          string
+	pendingWorkflowTools   []string
+	pendingWorkflowCommand string
 }
 
 var store = kites.Create(state{
-	sessionID:     "",
-	screen:        "chat",
-	modal:         "",
-	isSidebarOpen: true,
-	statusMessage: "",
+	sessionID:              "",
+	screen:                 "chat",
+	modal:                  "",
+	isSidebarOpen:          true,
+	statusMessage:          "",
+	pendingWorkflowTools:   nil,
+	pendingWorkflowCommand: "",
 })
 
 // SetSessionID updates the active session ID and switches the screen back to chat, closing any modal.
@@ -138,4 +142,19 @@ func UseStatusMessage() string {
 	return kites.Use(store, func(s state) string {
 		return s.statusMessage
 	})
+}
+
+// SetPendingWorkflow updates the pending workflow command and tools.
+func SetPendingWorkflow(command string, tools []string) {
+	store.Set(func(s state) state {
+		s.pendingWorkflowCommand = command
+		s.pendingWorkflowTools = tools
+		return s
+	})
+}
+
+// GetPendingWorkflow returns the currently pending workflow command and tools.
+func GetPendingWorkflow() (string, []string) {
+	st := store.Get()
+	return st.pendingWorkflowCommand, st.pendingWorkflowTools
 }

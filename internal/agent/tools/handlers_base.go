@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"context"
 	"path/filepath"
 	"strings"
 
@@ -38,6 +39,8 @@ type ToolHandlers struct {
 	FileTracker       filetrack.FileTracker
 	McpManager        *mcp.Manager
 	MetricsStore      *metrics.Store
+	OnSetActiveAgent  func(ctx context.Context, agentName string) error
+	PreWriteHook      func(filePath string, content string) (string, error)
 }
 
 // NewHandlers creates a new ToolHandlers instance with the given dependencies.
@@ -64,6 +67,18 @@ func (h *ToolHandlers) WithResolver(r *resolver.Resolver) *ToolHandlers {
 // WithAgentName configures the AgentName on ToolHandlers.
 func (h *ToolHandlers) WithAgentName(agentName string) *ToolHandlers {
 	h.AgentName = agentName
+	return h
+}
+
+// WithSetActiveAgent configures the OnSetActiveAgent callback on ToolHandlers.
+func (h *ToolHandlers) WithSetActiveAgent(fn func(ctx context.Context, agentName string) error) *ToolHandlers {
+	h.OnSetActiveAgent = fn
+	return h
+}
+
+// WithPreWriteHook configures the PreWriteHook callback on ToolHandlers.
+func (h *ToolHandlers) WithPreWriteHook(fn func(filePath string, content string) (string, error)) *ToolHandlers {
+	h.PreWriteHook = fn
 	return h
 }
 

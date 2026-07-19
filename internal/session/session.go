@@ -75,6 +75,7 @@ type ActiveSession struct {
 	PendingQuestions          []tools.PendingQuestion
 	MessageSubscribers        []chan struct{}
 	IsCompacting              bool
+	PreviousAgent             string
 }
 
 // ManagerConfig defines configuration parameters and dependencies for Manager.
@@ -757,6 +758,54 @@ func (m *Manager) sendMessage(ctx context.Context, sessionID string, text string
 		}
 	}
 
+	// Intercept slash command workflows
+	var flowAgent string
+	if strings.HasPrefix(text, "/init") {
+		flowAgent = workspace.AgentNameProjectInitializer
+	} else if strings.HasPrefix(text, "/create-skill") {
+		flowAgent = workspace.AgentNameSkillCreator
+	} else if strings.HasPrefix(text, "/create-tool") {
+		flowAgent = workspace.AgentNameToolCreator
+	} else if strings.HasPrefix(text, "/create-agent") {
+		flowAgent = workspace.AgentNameAgentCreator
+	} else if strings.HasPrefix(text, "/manage-providers") {
+		flowAgent = workspace.AgentNameProviderManager
+	}
+
+	if flowAgent != "" {
+		if m.ws != nil {
+			if cfg, err := m.ws.GetWorkspaceConfig(ctx); err == nil && cfg.HasManifest {
+				var missing []string
+				if !tools.IsToolAllowed("set_active_agent", cfg.AuthorizedTools) {
+					missing = append(missing, "set_active_agent")
+				}
+				if !tools.IsToolAllowed("ask_question", cfg.AuthorizedTools) {
+					missing = append(missing, "ask_question")
+				}
+				if len(missing) > 0 {
+					return fmt.Errorf("this workflow requires %s to be authorized in WORKSPACE.md", strings.Join(missing, ", "))
+				}
+			}
+		}
+
+		m.mu.Lock()
+		if sess.PreviousAgent == "" {
+			sess.PreviousAgent = agentName
+		}
+		m.mu.Unlock()
+
+		// Update database session config
+		if sessData, err := m.store.GetSession(ctx, sessionID); err == nil && sessData != nil {
+			var settings model.SessionSettings
+			if sessData.Settings != nil && *sessData.Settings != "" {
+				_ = json.Unmarshal([]byte(*sessData.Settings), &settings)
+			}
+			settings.AgentName = flowAgent
+			_ = m.UpdateSessionConfig(ctx, sessionID, SessionConfig{Settings: settings})
+		}
+		agentName = flowAgent
+	}
+
 	// Phase 4: Two-phase resolution with dedup
 	var resources []resolver.ResolvedResource
 	var res *resolver.Resolver
@@ -1325,6 +1374,9 @@ func (m *Manager) runAgentLoop(runCtx context.Context, sessionID string, sess *A
 		McpManager:    m.mcpManager,
 		MetricsStore:  m.metricsStore,
 		ContextWindow: contextWindow,
+		OnSetActiveAgent: func(ctx context.Context, targetAgent string) error {
+			return m.SetActiveAgent(ctx, sessionID, targetAgent)
+		},
 	})
 	if err != nil {
 		m.setSessionError(sessionID, fmt.Errorf("failed to construct agent graph: %w", err))
@@ -2169,6 +2221,57 @@ func (m *Manager) resolveDefaults(ctx context.Context) (agentName, providerName,
 		return "main", "ollama", "qwen3.6:35b-a3b-coding-nvfp4", nil
 	}
 	return m.ws.ResolveDefaults(ctx)
+}
+
+// SetActiveAgent updates the session settings to switch the active agent.
+// If targetAgent is empty or "default", it restores the previous agent name or the session default.
+func (m *Manager) SetActiveAgent(ctx context.Context, sessionID string, targetAgent string) error {
+	m.mu.Lock()
+	sess, exists := m.activeSessions[sessionID]
+	var prevAgent string
+	if exists {
+		prevAgent = sess.PreviousAgent
+	}
+	m.mu.Unlock()
+
+	if targetAgent == "" || targetAgent == "default" {
+		if prevAgent != "" {
+			targetAgent = prevAgent
+		} else {
+			// Fallback to workspace/defaults
+			defAgent, _, _, err := m.resolveDefaults(ctx)
+			if err != nil {
+				targetAgent = "main"
+			} else {
+				targetAgent = defAgent
+			}
+		}
+	}
+
+	// Update session configuration in database
+	sessData, err := m.store.GetSession(ctx, sessionID)
+	if err != nil {
+		return err
+	}
+
+	var settings model.SessionSettings
+	if sessData != nil && sessData.Settings != nil && *sessData.Settings != "" {
+		_ = json.Unmarshal([]byte(*sessData.Settings), &settings)
+	}
+
+	settings.AgentName = targetAgent
+	if err := m.UpdateSessionConfig(ctx, sessionID, SessionConfig{Settings: settings}); err != nil {
+		return err
+	}
+
+	m.mu.Lock()
+	if exists {
+		sess.PreviousAgent = ""
+	}
+	m.mu.Unlock()
+
+	m.notifySubscribers(sessionID)
+	return nil
 }
 
 // ListTodos retrieves the todos for a session from the SQLite store.

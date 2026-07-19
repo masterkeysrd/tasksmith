@@ -941,6 +941,21 @@ func renderChatView(props ViewProps) kitex.Node {
 
 			setSubmitting(false)
 			log.Error(fmt.Sprintf("Failed to send message to backend: %v", err))
+
+			errMsg := err.Error()
+			if strings.Contains(errMsg, "requires") && (strings.Contains(errMsg, "set_active_agent") || strings.Contains(errMsg, "ask_question")) {
+				var missingTools []string
+				if strings.Contains(errMsg, "set_active_agent") {
+					missingTools = append(missingTools, "set_active_agent")
+				}
+				if strings.Contains(errMsg, "ask_question") {
+					missingTools = append(missingTools, "ask_question")
+				}
+				active.SetPendingWorkflow(text, missingTools)
+				active.SetModal("policywarning")
+			} else {
+				active.SetStatusMessage("Error: " + errMsg)
+			}
 		})
 	}
 

@@ -18,6 +18,7 @@ type MockClient struct {
 	ListToolsPresetsFunc            func(ctx context.Context, req api.ListToolsPresetsRequest) (*api.ListToolsPresetsResponse, error)
 	InitializeWorkspaceFunc         func(ctx context.Context, req api.InitializeWorkspaceRequest) (*api.InitializeWorkspaceResponse, error)
 	GetWorkspaceConfigFunc          func(ctx context.Context, req api.GetWorkspaceConfigRequest) (*api.GetWorkspaceConfigResponse, error)
+	AuthorizeWorkspaceToolsFunc     func(ctx context.Context, req api.AuthorizeWorkspaceToolsRequest) (*api.AuthorizeWorkspaceToolsResponse, error)
 	ListSessionsFunc                func(ctx context.Context, req api.ListSessionsRequest) (*api.ListSessionsResponse, error)
 	CreateSessionFunc               func(ctx context.Context, req api.CreateSessionRequest) (*api.CreateSessionResponse, error)
 	ConfigureSessionFunc            func(ctx context.Context, req api.ConfigureSessionRequest) (*api.ConfigureSessionResponse, error)
@@ -116,6 +117,13 @@ func (m *MockClient) GetWorkspaceConfig(ctx context.Context, req api.GetWorkspac
 		return m.GetWorkspaceConfigFunc(ctx, req)
 	}
 	return &api.GetWorkspaceConfigResponse{}, nil
+}
+
+func (m *MockClient) AuthorizeWorkspaceTools(ctx context.Context, req api.AuthorizeWorkspaceToolsRequest) (*api.AuthorizeWorkspaceToolsResponse, error) {
+	if m.AuthorizeWorkspaceToolsFunc != nil {
+		return m.AuthorizeWorkspaceToolsFunc(ctx, req)
+	}
+	return &api.AuthorizeWorkspaceToolsResponse{}, nil
 }
 
 func (m *MockClient) ListSessions(ctx context.Context, req api.ListSessionsRequest) (*api.ListSessionsResponse, error) {

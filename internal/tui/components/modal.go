@@ -31,6 +31,8 @@ type ModalProps struct {
 	Attributes map[string]string
 	// Ref is the scrollable body wrapper element reference.
 	Ref kitex.Ref[dom.Element]
+	// OnKeyDown is triggered when a key is pressed.
+	OnKeyDown func(event.Event)
 	// Children is the list of child elements displayed in the body.
 	Children []kitex.Node
 }
@@ -179,6 +181,12 @@ var Modal = kitex.FCC("Modal", func(props ModalProps) kitex.Node {
 	return kitex.Dialog(kitex.DialogProps{
 		ZIndex: 100,
 		OnKeyDown: func(e event.Event) {
+			if props.OnKeyDown != nil {
+				props.OnKeyDown(e)
+				if e.DefaultPrevented() {
+					return
+				}
+			}
 			ke, ok := e.(*event.KeyEvent)
 			if !ok {
 				return

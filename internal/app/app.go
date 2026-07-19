@@ -247,6 +247,7 @@ func (app *Application) Run(ctx context.Context) error {
 				return searchResults, nil
 			}),
 			autocomplete.NewCommandSource(),
+			autocomplete.NewWorkflowSource(),
 		},
 	})
 	autocomplete.SetPlugin(acPlugin)
