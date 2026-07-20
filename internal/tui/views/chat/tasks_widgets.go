@@ -67,7 +67,7 @@ var RunningTasksWidget = kitex.FC("RunningTasksWidget", func(props RunningTasksW
 	return kitex.Box(kitex.BoxProps{
 		Style: style.S().
 			MarginTop(1).
-			MarginBottom(1).
+			MarginBottom(0).
 			Width(style.Percent(100)).
 			MaxWidth(style.Percent(90)).
 			AlignSelf(style.AlignStart),
