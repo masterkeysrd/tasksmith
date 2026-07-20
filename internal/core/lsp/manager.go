@@ -2,7 +2,9 @@ package lsp
 
 import (
 	"context"
+	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 
 	"github.com/masterkeysrd/lspx"
@@ -11,6 +13,8 @@ import (
 type Manager struct {
 	mu                   sync.Mutex
 	client               *Client
+	rootPath             string
+	activeLangs          map[string]bool
 	pendingSuggestions   map[string]LspSuggestion
 	dismissedSuggestions map[string]bool
 }
@@ -18,51 +22,128 @@ type Manager struct {
 // NewManager creates a new LSP manager instance.
 func NewManager() *Manager {
 	return &Manager{
+		activeLangs:          make(map[string]bool),
 		pendingSuggestions:   make(map[string]LspSuggestion),
 		dismissedSuggestions: make(map[string]bool),
 	}
 }
 
+func detectWorkspaceLangs(rootPath string) []string {
+	var langs []string
+	seen := make(map[string]bool)
+
+	// Scan the workspace directory (non-recursively, skipping heavy folders)
+	_ = filepath.WalkDir(rootPath, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if d.IsDir() {
+			name := d.Name()
+			if strings.HasPrefix(name, ".") || name == "node_modules" || name == "vendor" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if lang := GetLanguageID(path); lang != "" {
+			if !seen[lang] {
+				seen[lang] = true
+				langs = append(langs, lang)
+			}
+		}
+		return nil
+	})
+	return langs
+}
+
+func (m *Manager) ensureClientForLangsLocked(ctx context.Context, langs []string) error {
+	needsRestart := false
+	if m.client == nil {
+		needsRestart = true
+	} else if m.client.lspClient != nil {
+		// Check if any desired language is missing from the active servers
+		for _, lang := range langs {
+			found := false
+			for _, srv := range m.client.activeServers {
+				for _, ft := range srv.FileTypes {
+					if ft == lang {
+						found = true
+						break
+					}
+				}
+				if found {
+					break
+				}
+			}
+			if !found {
+				needsRestart = true
+				break
+			}
+		}
+	} else if len(langs) > 0 {
+		// client was created as dummy/empty but now we have languages
+		needsRestart = true
+	}
+
+	if !needsRestart {
+		return nil
+	}
+
+	if m.client != nil {
+		_ = m.client.Close()
+		m.client = nil
+	}
+
+	client, err := NewClientWithLangs(ctx, m.rootPath, langs)
+	if err != nil {
+		return err
+	}
+	m.client = client
+	return nil
+}
+
 func (m *Manager) GetClient(ctx context.Context, rootPath string) (*Client, error) {
 	m.mu.Lock()
+	m.rootPath = rootPath
+
+	if len(m.activeLangs) == 0 {
+		for _, lang := range detectWorkspaceLangs(rootPath) {
+			m.activeLangs[lang] = true
+		}
+	}
+
+	var langs []string
+	for l := range m.activeLangs {
+		langs = append(langs, l)
+	}
+
+	err := m.ensureClientForLangsLocked(ctx, langs)
 	client := m.client
 	m.mu.Unlock()
 
-	if client != nil {
-		return client, nil
-	}
-
-	newClient, err := NewClient(ctx, rootPath)
 	if err != nil {
 		return nil, err
 	}
-
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.client == nil {
-		m.client = newClient
-	} else {
-		// Another goroutine initialized it while we were creating one
-		_ = newClient.Close()
-	}
-	return m.client, nil
+	return client, nil
 }
 
 // RestartClient shuts down and recreates the client for the specified workspace path.
 func (m *Manager) RestartClient(ctx context.Context, rootPath string) error {
-	client, err := NewClient(ctx, rootPath)
-	if err != nil {
-		return err
-	}
-
 	m.mu.Lock()
-	defer m.mu.Unlock()
+	m.rootPath = rootPath
 
-	if m.client != nil {
-		_ = m.client.Close()
+	m.activeLangs = make(map[string]bool)
+	for _, lang := range detectWorkspaceLangs(rootPath) {
+		m.activeLangs[lang] = true
 	}
-	m.client = client
-	return nil
+
+	var langs []string
+	for l := range m.activeLangs {
+		langs = append(langs, l)
+	}
+
+	err := m.ensureClientForLangsLocked(ctx, langs)
+	m.mu.Unlock()
+	return err
 }
 
 // ServerStatus describes the state of a configured language server.
@@ -154,6 +235,17 @@ func (m *Manager) GetSuggestions() []LspSuggestion {
 	return result
 }
 
+// ActivateLanguage marks a language as active so its server is started.
+func (m *Manager) ActivateLanguage(lang string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if m.activeLangs == nil {
+		m.activeLangs = make(map[string]bool)
+	}
+	m.activeLangs[lang] = true
+}
+
 // DismissSuggestion removes a language suggestion and prevents it from showing again.
 func (m *Manager) DismissSuggestion(lang string) {
 	m.mu.Lock()
@@ -208,11 +300,8 @@ func (m *Manager) NotifyFileChanged(ctx context.Context, path string, content st
 		return
 	}
 
-	if m.client == nil {
-		if _, ok := Presets[langID]; ok {
-			m.addSuggestionLocked(langID)
-		}
-		return
+	if m.rootPath == "" {
+		m.rootPath = filepath.Dir(absPath)
 	}
 
 	// Verify if configured
@@ -220,20 +309,30 @@ func (m *Manager) NotifyFileChanged(ctx context.Context, path string, content st
 	if err != nil {
 		return
 	}
-	hasLang := false
+	isConfigured := false
 	for _, sc := range cfg.Servers {
 		for _, ft := range sc.FileTypes {
 			if ft == langID {
-				hasLang = true
+				isConfigured = true
 				break
 			}
 		}
 	}
 
-	if !hasLang {
+	if !isConfigured {
 		if _, ok := Presets[langID]; ok {
 			m.addSuggestionLocked(langID)
 		}
+		return
+	}
+
+	// Ensure LSP is started for this language
+	m.activeLangs[langID] = true
+	var langs []string
+	for l := range m.activeLangs {
+		langs = append(langs, l)
+	}
+	if err := m.ensureClientForLangsLocked(ctx, langs); err != nil || m.client == nil || m.client.lspClient == nil {
 		return
 	}
 
@@ -280,11 +379,8 @@ func (m *Manager) NotifyFileOpened(ctx context.Context, path string) {
 		return
 	}
 
-	if m.client == nil {
-		if _, ok := Presets[langID]; ok {
-			m.addSuggestionLocked(langID)
-		}
-		return
+	if m.rootPath == "" {
+		m.rootPath = filepath.Dir(absPath)
 	}
 
 	// Verify if configured
@@ -292,20 +388,30 @@ func (m *Manager) NotifyFileOpened(ctx context.Context, path string) {
 	if err != nil {
 		return
 	}
-	hasLang := false
+	isConfigured := false
 	for _, sc := range cfg.Servers {
 		for _, ft := range sc.FileTypes {
 			if ft == langID {
-				hasLang = true
+				isConfigured = true
 				break
 			}
 		}
 	}
 
-	if !hasLang {
+	if !isConfigured {
 		if _, ok := Presets[langID]; ok {
 			m.addSuggestionLocked(langID)
 		}
+		return
+	}
+
+	// Ensure LSP is started for this language
+	m.activeLangs[langID] = true
+	var langs []string
+	for l := range m.activeLangs {
+		langs = append(langs, l)
+	}
+	if err := m.ensureClientForLangsLocked(ctx, langs); err != nil || m.client == nil {
 		return
 	}
 

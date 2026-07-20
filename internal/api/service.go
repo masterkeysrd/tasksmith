@@ -1319,6 +1319,9 @@ func (s *Service) ConfigureLsp(ctx context.Context, req ConfigureLspRequest) (*C
 	// Dismiss the suggestion since it's now configured
 	s.lspManager.DismissSuggestion(req.Language)
 
+	// Activate the newly configured language
+	s.lspManager.ActivateLanguage(req.Language)
+
 	// Restart client
 	wsCfg, err := s.ws.GetWorkspaceConfig(ctx)
 	if err != nil {

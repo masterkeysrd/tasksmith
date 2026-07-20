@@ -164,16 +164,45 @@ func findRootByMarkers(path string, markers []string) string {
 	return abs
 }
 
-// NewClient creates and initializes a multiplexed LSP client.
+// NewClient creates and initializes a multiplexed LSP client with all configured servers.
 func NewClient(ctx context.Context, rootPath string) (*Client, error) {
 	cfg, err := LoadConfig()
 	if err != nil {
 		return nil, fmt.Errorf("failed to load LSP config: %w", err)
 	}
+	var langs []string
+	for _, sc := range cfg.Servers {
+		langs = append(langs, sc.FileTypes...)
+	}
+	return NewClientWithLangs(ctx, rootPath, langs)
+}
+
+// NewClientWithLangs creates and initializes a multiplexed LSP client with only the specified languages.
+func NewClientWithLangs(ctx context.Context, rootPath string, langs []string) (*Client, error) {
+	cfg, err := LoadConfig()
+	if err != nil {
+		return nil, fmt.Errorf("failed to load LSP config: %w", err)
+	}
+
+	needed := make(map[string]bool)
+	for _, l := range langs {
+		needed[l] = true
+	}
 
 	var servers []lspx.ServerConfig
 	var activeConfigs []ServerConfig
 	for _, sc := range cfg.Servers {
+		hasNeededLang := false
+		for _, ft := range sc.FileTypes {
+			if needed[ft] {
+				hasNeededLang = true
+				break
+			}
+		}
+		if !hasNeededLang {
+			continue
+		}
+
 		if len(sc.Command) > 0 {
 			if _, err := exec.LookPath(sc.Command[0]); err == nil {
 				servers = append(servers, sc.ToLspx())
@@ -183,7 +212,7 @@ func NewClient(ctx context.Context, rootPath string) (*Client, error) {
 	}
 
 	if len(servers) == 0 {
-		return nil, fmt.Errorf("no running language servers found in PATH (ensure commands in lsp.config are installed)")
+		return &Client{rootPath: rootPath}, nil
 	}
 
 	// Gather all root markers from active servers
@@ -254,6 +283,9 @@ func NewClient(ctx context.Context, rootPath string) (*Client, error) {
 
 // Close shuts down the client.
 func (c *Client) Close() error {
+	if c.lspClient == nil {
+		return nil
+	}
 	return c.lspClient.Close()
 }
 
@@ -264,6 +296,9 @@ func (c *Client) RawClient() *lspx.Client {
 
 // EnsureOpened makes sure a file is registered with the LSP server.
 func (c *Client) EnsureOpened(ctx context.Context, path string) error {
+	if c.lspClient == nil {
+		return nil
+	}
 	uri := pathToURI(path)
 	if c.lspClient.IsOpened(uri) {
 		return nil
@@ -301,6 +336,10 @@ type Diagnostic struct {
 
 // GetDiagnostics retrieves diagnostics for a file or directory.
 func (c *Client) GetDiagnostics(ctx context.Context, path string) ([]Diagnostic, error) {
+	if c.lspClient == nil {
+		return nil, nil
+	}
+
 	absPath, err := filepath.Abs(path)
 	if err != nil {
 		absPath = path
@@ -356,6 +395,10 @@ func (c *Client) GetDiagnostics(ctx context.Context, path string) ([]Diagnostic,
 
 // Search performs workspace-wide symbol searches using WorkspaceSymbol.
 func (c *Client) Search(ctx context.Context, query string) ([]lspx.WorkspaceSymbol, error) {
+	if c.lspClient == nil {
+		return nil, nil
+	}
+
 	params := &lspx.WorkspaceSymbolParams{
 		Query: query,
 	}
