@@ -51,4 +51,28 @@ func TestMimeDetection(t *testing.T) {
 	if IsBinaryMIME("application/sql") {
 		t.Error("expected application/sql to not be binary")
 	}
+
+	tsPath := filepath.Join(dir, "test.ts")
+	if err := os.WriteFile(tsPath, []byte("const x: number = 1;"), 0644); err != nil {
+		t.Fatalf("failed to write test.ts: %v", err)
+	}
+	mimeType = DetectMIMEType(tsPath)
+	if mimeType != "text/typescript" {
+		t.Errorf("expected text/typescript, got %s", mimeType)
+	}
+	if IsBinaryMIME(mimeType) {
+		t.Error("expected typescript mime type to not be binary")
+	}
+
+	tsxPath := filepath.Join(dir, "test.tsx")
+	if err := os.WriteFile(tsxPath, []byte("const component = () => <div />;"), 0644); err != nil {
+		t.Fatalf("failed to write test.tsx: %v", err)
+	}
+	mimeType = DetectMIMEType(tsxPath)
+	if mimeType != "text/typescript-jsx" {
+		t.Errorf("expected text/typescript-jsx, got %s", mimeType)
+	}
+	if IsBinaryMIME(mimeType) {
+		t.Error("expected typescript-jsx mime type to not be binary")
+	}
 }

@@ -10,6 +10,8 @@ import (
 
 var customExtensionMimes = map[string]string{
 	".sql": "text/x-sql",
+	".ts":  "text/typescript",
+	".tsx": "text/typescript-jsx",
 }
 
 var nonBinaryMimes = map[string]struct{}{
