@@ -28,6 +28,10 @@ When running non-trivial bash commands (especially those that modify the system)
 - Simple read-only commands does not require a detailed description.
 - Avoid interactive commmands - use non-interactive flags (e.g., "-y" for npm init) to prevent blocking.
 </tools_usage>
+{{else}}
+<tools_usage>
+NONE. You have absolutely no external tools, system access, or file-writing capabilities. You must interact with the user purely via text. Do not attempt to generate XML tool tags, JSON tool calls, or invoke commands.
+</tools_usage>
 {{end}}`
 
 const skillsTemplateBlock = `{{if .Agent.Skills}}
@@ -54,10 +58,13 @@ You have access to specialized knowledge modules called "Skills". Each skill pro
 - **Subagent Delegation**: If delegating a task to a subagent, instruct the subagent to activate the relevant skill itself rather than trying to summarize the skill for them.
 </skill_usage_rules>
 </skills_and_specialized_knowledge>
+{{else}}
+<skills_and_specialized_knowledge>
+NONE. You do not have access to specialized skills. Do not attempt to activate skills.
+</skills_and_specialized_knowledge>
 {{end}}`
 
-const subagentsTemplateBlock = `{{if call .HasTool "invoke_agent"}}
-{{if .Agent.Subagents}}
+const subagentsTemplateBlock = `{{if and (call .HasTool "invoke_agent") .Agent.Subagents}}
 <subagents_and_delegation>
 You have access to specialized subagents in your roster. You can delegate tasks to them using the "invoke_agent" tool.
 
@@ -76,6 +83,31 @@ You have access to specialized subagents in your roster. You can delegate tasks 
 - **Asynchronous Work**: If a subagent execution takes longer than "wait_ms", it will run in the background. The system will notify you with the final response once it finishes.
 </delegation_rules>
 </subagents_and_delegation>
+{{else}}
+<subagents_and_delegation>
+NONE. You cannot delegate tasks or invoke other agents. Do not attempt to use the invoke_agent tool or call subagents.
+</subagents_and_delegation>
+{{end}}`
+
+const environmentTemplateBlock = `<execution_environment>
+You are operating under the following environment:
+- Current Date: {{.Date}}
+- Operating System: {{.OS}}
+- Architecture: {{.Arch}}
+- User: {{.User}}
+- Host: {{.Host}}
+- Shell: {{.Shell}}
+- Home Directory: {{.Home}}
+- Workspace Directory: {{.CWD}}
+- Terminal: {{.Terminal}}
+{{if .GitBranch}}- Git Branch: {{.GitBranch}}{{end}}
+</execution_environment>`
+
+const contextTemplateBlock = `{{if .Context}}
+{{if .Context.Instructions}}
+<project_context path="{{.Context.Path}}">
+{{.Context.Instructions}}
+</project_context>
 {{end}}
 {{end}}`
 
@@ -97,36 +129,37 @@ func AgentManifestPreWriteHook(filePath string, content string) (string, error) 
 	modified := false
 	inst := agent.Spec.Instructions
 
-	// 3. Determine if tools are enabled (active unless explicitly restricted to empty list)
-	toolsEnabled := true
-	if agent.Spec.Policies != nil && agent.Spec.Policies.Tools != nil && agent.Spec.Policies.Tools.Include != nil {
-		if len(agent.Spec.Policies.Tools.Include) == 0 {
-			toolsEnabled = false
-		}
+	// Append/Prepend blocks unconditionally if missing. The runtime templates will dynamically
+	// evaluate and render the usage blocks (if enabled) or the negation blocks (if disabled).
+
+	// 3. Prepend environment template block if missing
+	if !strings.Contains(inst, "<execution_environment>") && !strings.Contains(inst, "{{.OS}}") {
+		inst = environmentTemplateBlock + "\n\n" + strings.TrimSpace(inst)
+		modified = true
 	}
 
-	// 4. Append tools template block if enabled and missing
-	if toolsEnabled {
-		if !strings.Contains(inst, "<tools_usage>") && !strings.Contains(inst, "{{if .Agent.Tools}}") {
-			inst = strings.TrimSpace(inst) + "\n\n" + toolsTemplateBlock + "\n"
-			modified = true
-		}
+	// 4. Append tools template block if missing
+	if !strings.Contains(inst, "<tools_usage>") && !strings.Contains(inst, "{{if .Agent.Tools}}") {
+		inst = strings.TrimSpace(inst) + "\n\n" + toolsTemplateBlock + "\n"
+		modified = true
 	}
 
-	// 5. Append skills template block if skills are specified and missing
-	if len(agent.Spec.Skills) > 0 {
-		if !strings.Contains(inst, "<skills_and_specialized_knowledge>") && !strings.Contains(inst, "{{if .Agent.Skills}}") {
-			inst = strings.TrimSpace(inst) + "\n\n" + skillsTemplateBlock + "\n"
-			modified = true
-		}
+	// 5. Append skills template block if missing
+	if !strings.Contains(inst, "<skills_and_specialized_knowledge>") && !strings.Contains(inst, "{{if .Agent.Skills}}") {
+		inst = strings.TrimSpace(inst) + "\n\n" + skillsTemplateBlock + "\n"
+		modified = true
 	}
 
-	// 6. Append subagents template block if subagents are specified and missing
-	if len(agent.Spec.Subagents) > 0 {
-		if !strings.Contains(inst, "<subagents_and_delegation>") && !strings.Contains(inst, "{{if .Agent.Subagents}}") && !strings.Contains(inst, "invoke_agent") {
-			inst = strings.TrimSpace(inst) + "\n\n" + subagentsTemplateBlock + "\n"
-			modified = true
-		}
+	// 6. Append subagents template block if missing
+	if !strings.Contains(inst, "<subagents_and_delegation>") && !strings.Contains(inst, "{{if .Agent.Subagents}}") && !strings.Contains(inst, "invoke_agent") {
+		inst = strings.TrimSpace(inst) + "\n\n" + subagentsTemplateBlock + "\n"
+		modified = true
+	}
+
+	// 7. Append project context template block if missing
+	if !strings.Contains(inst, "<project_context>") && !strings.Contains(inst, "{{.Context}}") {
+		inst = strings.TrimSpace(inst) + "\n\n" + contextTemplateBlock + "\n"
+		modified = true
 	}
 
 	// 7. If modified, format the resource back to standard WARP representation

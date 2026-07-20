@@ -271,6 +271,10 @@ When running non-trivial bash commands (especially those that modify the system)
 - Simple read-only commands does not require a detailed description.
 - Avoid interactive commmands - use non-interactive flags (e.g., `-y` for npm init) to prevent blocking.
 </tools_usage>
+{{else}}
+<tools_usage>
+NONE. You have absolutely no external tools, system access, or file-writing capabilities. You must interact with the user purely via text. Do not attempt to generate XML tool tags, JSON tool calls, or invoke commands.
+</tools_usage>
 {{end}}
 
 {{if .Agent.Skills}}
@@ -297,10 +301,13 @@ You have access to specialized knowledge modules called "Skills". Each skill pro
 - **Subagent Delegation**: If delegating a task to a subagent, instruct the subagent to activate the relevant skill itself rather than trying to summarize the skill for them.
 </skill_usage_rules>
 </skills_and_specialized_knowledge>
+{{else}}
+<skills_and_specialized_knowledge>
+NONE. You do not have access to specialized skills. Do not attempt to activate skills.
+</skills_and_specialized_knowledge>
 {{end}}
 
-{{if call .HasTool "invoke_agent"}}
-{{if .Agent.Subagents}}
+{{if and (call .HasTool "invoke_agent") .Agent.Subagents}}
 <subagents_and_delegation>
 You have access to specialized subagents in your roster. You can delegate tasks to them using the `invoke_agent` tool.
 
@@ -319,7 +326,10 @@ You have access to specialized subagents in your roster. You can delegate tasks 
 - **Asynchronous Work**: If a subagent execution takes longer than `wait_ms`, it will run in the background. The system will notify you with the final response once it finishes.
 </delegation_rules>
 </subagents_and_delegation>
-{{end}}
+{{else}}
+<subagents_and_delegation>
+NONE. You cannot delegate tasks or invoke other agents. Do not attempt to use the invoke_agent tool or call subagents.
+</subagents_and_delegation>
 {{end}}
 
 # System reminders

@@ -166,6 +166,8 @@ github.com/masterkeysrd/lspx v0.0.0-20260716060742-21d5e843d27c h1:xHLzin+Fy4Rc/
 github.com/masterkeysrd/lspx v0.0.0-20260716060742-21d5e843d27c/go.mod h1:HfqQ9/wu18wUdLaGYRuzWqEKUW+VBOp77seK1j94p/c=
 github.com/masterkeysrd/warp v0.0.3-0.20260712054341-01be5a9aebda h1:oUjJM54XZOI/JnaDcYSoTY36bQCSk/3XjS8h+n1RYVo=
 github.com/masterkeysrd/warp v0.0.3-0.20260712054341-01be5a9aebda/go.mod h1:udJ0QO13und9cuRA5robSmxz+MOM2uoIEctTs+cUUo4=
+github.com/masterkeysrd/warp v0.0.3-0.20260720015035-44410dbbc84b h1:KrPWRjzMjE56wGU0G9Gq8XC3816AOpfJ4DKL4vAbxYc=
+github.com/masterkeysrd/warp v0.0.3-0.20260720015035-44410dbbc84b/go.mod h1:udJ0QO13und9cuRA5robSmxz+MOM2uoIEctTs+cUUo4=
 github.com/mattn/go-isatty v0.0.22 h1:j8l17JJ9i6VGPUFUYoTUKPSgKe/83EYU2zBC7YNKMw4=
 github.com/mattn/go-isatty v0.0.22/go.mod h1:ZXfXG4SQHsB/w3ZeOYbR0PrPwLy+n6xiMrJlRFqopa4=
 github.com/mattn/go-runewidth v0.0.24 h1:cpokDiIn0MGnhdHwuWnJBITySJ20QyNGnY2kR/ay2DU=

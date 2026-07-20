@@ -229,8 +229,12 @@ func (s *Service) ListAgents(ctx context.Context, req ListAgentsRequest) (*ListA
 				tools = a.Spec.Policies.Tools.Include
 			}
 			models = a.Spec.Models
-			skills = a.Spec.Skills
-			subagents = a.Spec.Subagents
+			if a.Spec.Skills != nil {
+				skills = *a.Spec.Skills
+			}
+			if a.Spec.Subagents != nil {
+				subagents = *a.Spec.Subagents
+			}
 		}
 
 		sort.Strings(tools)

@@ -15,7 +15,7 @@ require (
 	github.com/masterkeysrd/kite v0.0.4-0.20260719185231-a64f739f4358
 	github.com/masterkeysrd/loom v0.0.4-0.20260711030105-60d4b1b463e3
 	github.com/masterkeysrd/lspx v0.0.0-20260716060742-21d5e843d27c
-	github.com/masterkeysrd/warp v0.0.3-0.20260712054341-01be5a9aebda
+	github.com/masterkeysrd/warp v0.0.3-0.20260720015035-44410dbbc84b
 	github.com/modelcontextprotocol/go-sdk v1.6.1
 	github.com/ollama/ollama v0.32.1
 	github.com/openai/openai-go/v3 v3.43.0

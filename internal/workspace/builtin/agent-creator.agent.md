@@ -39,7 +39,7 @@ metadata:
   labels:
     category: agent
 spec:
-  extends: <parent-agent-to-inherit-from> # optional (e.g. main)
+  extends: <parent-agent-to-inherit-from> # optional (Note: Omit/leave blank for specialized agents to prevent prompt pollution/hallucinations from 'main')
   triggers: [<trigger1>, ...] # system, human, agent
   models:
     - <model-id>
@@ -69,7 +69,7 @@ spec:
    - Scan `.agents/providers/` to see available model providers and models.
 2. **Collect Requirements**: Ask the user (via `ask_question` or text chat):
    - **Identity**: Agent name, display name, and description.
-   - **Extends**: Do they want the agent to inherit from/extend an existing agent (e.g. `main`)?
+   - **Extends**: Do they want the agent to inherit from/extend an existing agent? (Advise the user to leave this blank/omit for specialized agents, as extending 'main' will inject developer-specific instructions and cause tool hallucinations).
    - **Model & Temp**: Default model and temperature.
    - **Triggers**: What entities can trigger this agent (`human`, `system`, `agent`)? Use `["*"]` or omit to allow all.
    - **Tools Selector**:
