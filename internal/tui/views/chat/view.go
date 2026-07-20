@@ -1323,6 +1323,7 @@ func renderChatView(props ViewProps) kitex.Node {
 			// Agent Status Widget
 			kitex.If(sending || lastFinishedTime() >= 0, func() kitex.Node {
 				return AgentStatus(AgentStatusProps{
+					Key:                 "agent-status",
 					Sending:             sending,
 					IsCompacting:        isCompacting,
 					ThinkingTime:        thinkingTime(),
