@@ -79,9 +79,11 @@ var Router = kitex.SimpleFC("Router", func() kitex.Node {
 	sessionStateQuery := queries.UseGetSessionState(activeSessionID)
 
 	isGenerating := false
+	isRunning := false
 	hasPendingAuth := false
 	if sessionStateQuery.Data != nil {
 		isGenerating = sessionStateQuery.Data.IsGenerating
+		isRunning = sessionStateQuery.Data.Status == "running"
 		hasPendingAuth = len(sessionStateQuery.Data.PendingAuthorizations) > 0
 	}
 
@@ -89,7 +91,11 @@ var Router = kitex.SimpleFC("Router", func() kitex.Node {
 	setProgressBar := kitex.UseProgressBar()
 	bell := kitex.UseBell()
 	focused := kitex.UseWindowFocus()
-	prevIsGenerating := kitex.UseRef(false)
+
+	lastSessionID := kitex.UseRef(activeSessionID)
+	prevIsNil := kitex.UseRef(true)
+	prevIsRunning := kitex.UseRef(false)
+	prevHasPendingAuth := kitex.UseRef(false)
 
 	kitex.UseEffect(func() {
 		if isGenerating {
@@ -103,8 +109,25 @@ var Router = kitex.SimpleFC("Router", func() kitex.Node {
 			setProgressBar(terminal.ProgressBarHide, 0)
 		}
 
-		// Ring bell 3 times if we just finished generating and window is unfocused
-		if prevIsGenerating.Current && !isGenerating && !focused {
+		if sessionStateQuery.Data == nil {
+			return
+		}
+
+		sessionChanged := lastSessionID.Current != activeSessionID
+		lastSessionID.Current = activeSessionID
+
+		if sessionChanged || prevIsNil.Current {
+			prevIsNil.Current = false
+			prevIsRunning.Current = isRunning
+			prevHasPendingAuth.Current = hasPendingAuth
+			return
+		}
+
+		// Ring bell 3 times if we just finished running or just entered pending auth, and window is unfocused
+		justFinishedRunning := prevIsRunning.Current && !isRunning
+		justEnteredPendingAuth := !prevHasPendingAuth.Current && hasPendingAuth
+
+		if (justFinishedRunning || justEnteredPendingAuth) && !focused {
 			bell()
 			time.AfterFunc(150*time.Millisecond, func() {
 				kitex.PostMacro(bell)
@@ -113,8 +136,10 @@ var Router = kitex.SimpleFC("Router", func() kitex.Node {
 				kitex.PostMacro(bell)
 			})
 		}
-		prevIsGenerating.Current = isGenerating
-	}, []any{isGenerating, hasPendingAuth, focused})
+
+		prevIsRunning.Current = isRunning
+		prevHasPendingAuth.Current = hasPendingAuth
+	}, []any{isRunning, isGenerating, hasPendingAuth, focused, activeSessionID})
 
 	log.Info("Router render called", log.String("activeView", activeView()))
 
