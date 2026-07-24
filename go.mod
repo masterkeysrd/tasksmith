@@ -24,7 +24,7 @@ require (
 	github.com/yuin/goldmark v1.8.4
 	golang.org/x/net v0.57.0
 	golang.org/x/sync v0.22.0
-	google.golang.org/genai v1.64.0
+	google.golang.org/genai v1.65.0
 	gopkg.in/yaml.v3 v3.0.1
 	modernc.org/sqlite v1.54.0
 	mvdan.cc/sh/v3 v3.13.1
