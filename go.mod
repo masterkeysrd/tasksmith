@@ -18,7 +18,7 @@ require (
 	github.com/masterkeysrd/warp v0.0.3
 	github.com/modelcontextprotocol/go-sdk v1.6.1
 	github.com/ollama/ollama v0.32.1
-	github.com/openai/openai-go/v3 v3.44.0
+	github.com/openai/openai-go/v3 v3.46.0
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2
 	github.com/refraction-networking/utls v1.8.2
 	github.com/yuin/goldmark v1.8.4
