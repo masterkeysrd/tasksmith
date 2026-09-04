@@ -7,12 +7,12 @@ spec:
   endpoint: http://localhost:11434
   defaultModel: llama3.3
   models:
-    - id: qwen3.6
-      name: qwen3.6
-      label: Qwen 3.6
+    - id: qwen3.8
+      name: qwen3.8
+      label: Qwen 3.8
       limits:
-        context: 32768
-        output: 4096
+        context: 262144
+        output: 32768
     - id: gemma4
       name: gemma4
       label: Gemma 4

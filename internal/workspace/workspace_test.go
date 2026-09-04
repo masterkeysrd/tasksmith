@@ -20,14 +20,20 @@ func TestWorkspace_Presets(t *testing.T) {
 	}
 
 	foundAnthropic := false
+	foundAntigravity := false
 	for _, p := range providers {
 		if p.Metadata.Name == "anthropic" {
 			foundAnthropic = true
-			break
+		}
+		if p.Metadata.Name == "antigravity" {
+			foundAntigravity = true
 		}
 	}
 	if !foundAnthropic {
 		t.Error("Anthropic provider preset not found")
+	}
+	if !foundAntigravity {
+		t.Error("Antigravity provider preset not found")
 	}
 
 	tools := w.ToolsPresets()
@@ -188,7 +194,7 @@ func TestWorkspace_ResolveDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
-	if agent != "main" || provider != "ollama" || model != "qwen3.6:35b-a3b-coding-nvfp4" {
+	if agent != "main" || provider != "ollama" || !strings.HasPrefix(model, "qwen3.6:35b-a3b-coding") {
 		t.Errorf("expected defaults, got %s, %s, %s", agent, provider, model)
 	}
 

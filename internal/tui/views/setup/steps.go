@@ -172,7 +172,7 @@ var ProviderStep = kitex.FC("ProviderStep", func(props ProviderStepProps) kitex.
 			for _, p := range resp.Data.Providers {
 				authMethod := "direct"
 				authType := "bearer"
-				if p.Description == "google" {
+				if p.Description == "google" || p.Description == "google-genai" {
 					authType = "api-key"
 				}
 				authEnv := p.AuthEnv
@@ -181,8 +181,10 @@ var ProviderStep = kitex.FC("ProviderStep", func(props ProviderStepProps) kitex.
 						authEnv = "OPENAI_API_KEY"
 					} else if p.Description == "anthropic" {
 						authEnv = "ANTHROPIC_API_KEY"
-					} else if p.Description == "google" {
+					} else if p.Description == "google" || p.Description == "google-genai" {
 						authEnv = "GOOGLE_API_KEY"
+					} else if p.Description == "antigravity" {
+						authEnv = "ANTIGRAVITY_TOKEN"
 					}
 				}
 

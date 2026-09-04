@@ -6,13 +6,16 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/masterkeysrd/loom/llm"
+	loomantigravity "github.com/masterkeysrd/loom/llm/antigravity"
 	"github.com/masterkeysrd/loom/llm/anthropic"
 	"github.com/masterkeysrd/loom/llm/genai"
 	"github.com/masterkeysrd/loom/llm/ollama"
 	"github.com/masterkeysrd/loom/llm/openai"
+	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
 	"github.com/masterkeysrd/warp"
 
 	anthropicclient "github.com/anthropics/anthropic-sdk-go"
@@ -116,6 +119,49 @@ func CreateProvider(ctx context.Context, p *warp.ModelProvider) (llm.Provider, e
 		}
 		loomProvider, err = loomgenai.NewProvider(ctx, config)
 
+	case "antigravity":
+		var tp loomantigravity.TokenProvider
+
+		if token != "" {
+			tp = loomantigravity.StaticToken(token)
+		} else if (p.Spec.Auth == nil || p.Spec.Auth.File == "") && os.Getenv("ANTIGRAVITY_TOKEN") != "" {
+			tp = loomantigravity.StaticToken(os.Getenv("ANTIGRAVITY_TOKEN"))
+		} else if (p.Spec.Auth == nil || p.Spec.Auth.File == "") && os.Getenv("GOOGLE_ACCESS_TOKEN") != "" {
+			tp = loomantigravity.StaticToken(os.Getenv("GOOGLE_ACCESS_TOKEN"))
+		} else {
+			var tokenFile string
+			if p.Spec.Auth != nil && p.Spec.Auth.File != "" && p.Spec.Auth.Type != "bearer" {
+				tokenFile = p.Spec.Auth.File
+			} else {
+				var pathErr error
+				tokenFile, pathErr = AntigravityTokenPath()
+				if pathErr != nil {
+					return nil, fmt.Errorf("antigravity: resolve token path: %w", pathErr)
+				}
+			}
+
+			oauthTP, oauthErr := loomantigravity.NewOAuth2TokenProvider(loomantigravity.OAuth2Config{
+				TokenFile: tokenFile,
+			})
+			if oauthErr != nil {
+				return nil, fmt.Errorf("antigravity: failed to initialize oauth2 provider: %w", oauthErr)
+			}
+			tp = oauthTP
+		}
+
+		cfg := &loomantigravity.Config{
+			TokenProvider: tp,
+		}
+		if p.Spec.Endpoint != "" {
+			cfg.BaseURL = p.Spec.Endpoint
+		} else {
+			cfg.BaseURL = loomantigravity.DailyBaseURL
+		}
+		if len(p.Spec.Headers) > 0 {
+			cfg.HTTPClient = newHTTPClient(p.Spec.Headers)
+		}
+		loomProvider, err = loomantigravity.NewProvider(cfg)
+
 	default:
 		return nil, fmt.Errorf("unknown provider type: %s", p.Spec.Type)
 	}
@@ -129,6 +175,12 @@ func CreateProvider(ctx context.Context, p *warp.ModelProvider) (llm.Provider, e
 		// Get existing profile or initialize a new one if not found in catalog
 		prof, found := loomProvider.GetProfile(m.ID)
 		if !found {
+			// For dynamic providers (like antigravity), do not register an unpopulated fallback profile.
+			// Doing so stores into p.overrides and permanently shadows upstream dynamic model discovery.
+			if p.Spec.Type == "antigravity" && m.Capabilities == nil {
+				continue
+			}
+
 			prof = llm.ModelProfile{
 				ID:   m.ID,
 				Name: m.Name,
@@ -219,6 +271,12 @@ func CreateProvider(ctx context.Context, p *warp.ModelProvider) (llm.Provider, e
 			} else {
 				prof.Pricing.TieredLimits = nil
 			}
+		}
+
+		// For dynamic providers (like antigravity), do not override if the profile was not found
+		// and no explicit capabilities were provided, avoiding shadowing dynamic discovery.
+		if !found && p.Spec.Type == "antigravity" && m.Capabilities == nil {
+			continue
 		}
 
 		// Register the enriched profile into Loom's catalog
@@ -467,7 +525,15 @@ func resolveAuthToken(p *warp.ModelProvider) (string, error) {
 	}
 
 	// 2. Resolve from File Path
-	if p.Spec.Auth.File != "" {
+	// For OAuth-based authentication (such as Antigravity OAuth2 token files),
+	// Auth.File specifies the OAuth token state cache file rather than a static token string.
+	// We only read Auth.File as a static token when not using OAuth.
+	isOAuthFile := p.Spec.Type == "antigravity" && p.Spec.Auth.Type != "bearer"
+	if p.Spec.Auth.Type == "oauth" || p.Spec.Auth.Type == "oauth2" {
+		isOAuthFile = true
+	}
+
+	if p.Spec.Auth.File != "" && !isOAuthFile {
 		filePath := p.Spec.Auth.File
 		data, err := os.ReadFile(filePath)
 		if err != nil {
@@ -477,4 +543,13 @@ func resolveAuthToken(p *warp.ModelProvider) (string, error) {
 	}
 
 	return "", nil
+}
+
+// AntigravityTokenPath returns the path to TaskSmith's cached Antigravity OAuth token file.
+func AntigravityTokenPath() (string, error) {
+	cfgDir, err := xdg.SubConfigDir()
+	if err != nil {
+		return "", fmt.Errorf("failed to get config dir for antigravity token: %w", err)
+	}
+	return filepath.Join(cfgDir, "antigravity_token.json"), nil
 }

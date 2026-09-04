@@ -1,0 +1,64 @@
+apiVersion: warp/v1alpha1
+kind: ModelProvider
+metadata:
+  name: antigravity
+  description: Google Antigravity provider configuration for TaskSmith.
+spec:
+  type: antigravity
+  endpoint: https://daily-cloudcode-pa.googleapis.com
+  defaultModel: gemini-3.8-flash
+  auth:
+    type: env
+    env: ANTIGRAVITY_TOKEN
+  models:
+    - id: gemini-3.8-flash
+      name: gemini-3.8-flash
+      label: Gemini 3.8 Flash
+      limits:
+        context: 1048576
+        output: 65536
+      capabilities:
+        tools: true
+        temperature: true
+        thinking:
+          - type: effort
+            default: high
+            isDefault: true
+            allowedEfforts:
+              - low
+              - medium
+              - high
+    - id: gemini-3.7-flash
+      name: gemini-3.7-flash
+      label: Gemini 3.7 Flash
+      limits:
+        context: 1048576
+        output: 65536
+      capabilities:
+        tools: true
+        temperature: true
+        thinking:
+          - type: effort
+            default: high
+            isDefault: true
+            allowedEfforts:
+              - low
+              - medium
+              - high
+    - id: gemini-2.5-pro
+      name: gemini-2.5-pro
+      label: Gemini 2.5 Pro
+      limits:
+        context: 1048576
+        output: 65536
+      capabilities:
+        tools: true
+        temperature: true
+        thinking:
+          - type: effort
+            default: high
+            isDefault: true
+            allowedEfforts:
+              - low
+              - medium
+              - high

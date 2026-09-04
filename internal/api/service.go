@@ -389,6 +389,32 @@ func (s *Service) ListProviders(ctx context.Context, req ListProvidersRequest) (
 				}
 			}
 
+			// Fallback to Warp manifest capabilities if not resolved from Loom profile
+			if (!caps.ToolCall && !caps.Reasoning) && m.Capabilities != nil {
+				if m.Capabilities.Attachment != nil {
+					caps.Attachment = *m.Capabilities.Attachment
+				}
+				if m.Capabilities.Tools != nil {
+					caps.ToolCall = *m.Capabilities.Tools
+				}
+				if m.Capabilities.Temperature != nil {
+					caps.Temperature = *m.Capabilities.Temperature
+				}
+				if len(m.Capabilities.Thinking) > 0 {
+					caps.Reasoning = true
+					for _, t := range m.Capabilities.Thinking {
+						var values []string
+						if t.Type == "effort" {
+							values = t.AllowedEfforts
+						}
+						caps.ReasoningOptions = append(caps.ReasoningOptions, ModelReasoningOption{
+							Type:   t.Type,
+							Values: values,
+						})
+					}
+				}
+			}
+
 			contextWindow := m.Limits.Context
 			maxOutputTokens := m.Limits.Output
 			// Fallback to Loom profile limits if not configured in Warp

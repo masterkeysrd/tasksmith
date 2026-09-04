@@ -6,8 +6,11 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"os/signal"
 	"runtime/debug"
+	"syscall"
 
+	"github.com/masterkeysrd/tasksmith/internal/agent/model"
 	"github.com/masterkeysrd/tasksmith/internal/app"
 	"github.com/masterkeysrd/tasksmith/internal/app/flags"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
@@ -36,6 +39,25 @@ func main() {
 	opts, err := flags.Load()
 	if err != nil {
 		panic(err)
+	}
+
+	if len(opts.Args) > 0 && opts.Args[0] == "login" {
+		provider := "antigravity"
+		if len(opts.Args) >= 2 {
+			provider = opts.Args[1]
+		}
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer stop()
+
+		if err := model.Login(ctx, provider); err != nil {
+			if errors.Is(err, context.Canceled) {
+				fmt.Fprintln(os.Stderr, "\nLogin cancelled.")
+				os.Exit(130)
+			}
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+		return
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())

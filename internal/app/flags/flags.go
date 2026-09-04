@@ -4,6 +4,7 @@ package flags
 
 import (
 	"flag"
+	"fmt"
 	"os"
 	"strings"
 
@@ -17,6 +18,7 @@ type Flags struct {
 	DevToolsAddr string
 	Debug        bool
 	Agent        string
+	Args         []string
 }
 
 // Load parses command-line flags and returns the application options.
@@ -59,10 +61,20 @@ func Load() (*Flags, error) {
 		}
 	}
 
+	flag.Usage = func() {
+		fmt.Fprintf(os.Stderr, "Usage: %s [flags]\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "       %s login [provider]\n\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "Commands:\n")
+		fmt.Fprintf(os.Stderr, "  login [provider]  Authenticate with an LLM provider (default: antigravity)\n\n")
+		fmt.Fprintf(os.Stderr, "Flags:\n")
+		flag.PrintDefaults()
+	}
+
 	if !flag.Parsed() {
 		flag.Parse()
 	}
 
+	opts.Args = flag.Args()
 	opts.Debug = debugFlag || os.Getenv("TASKSMITH_DEBUG") != ""
 
 	switch strings.ToLower(logLevelStr) {

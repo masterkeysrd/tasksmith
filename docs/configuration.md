@@ -70,9 +70,9 @@ spec:
 
 ### Provider Specifications
 
-- **`spec.type`**: Reasoning engine type (e.g. `openai`, `anthropic`, `google-genai`, `ollama`).
-- **`spec.endpoint`**: Base URL of the API.
-- **`spec.auth.env`**: Name of the environment variable containing the secret API key.
+- **`spec.type`**: Reasoning engine type (e.g. `openai`, `anthropic`, `google-genai`, `ollama`, `antigravity`).
+- **`spec.endpoint`**: Base URL of the API (defaults to `https://daily-cloudcode-pa.googleapis.com` for `antigravity`).
+- **`spec.auth.env`**: Name of the environment variable containing the secret API key (e.g. `ANTIGRAVITY_TOKEN`).
 - **`spec.models`**: Array of available model profiles with their token and context limits.
 
 ---
@@ -135,4 +135,12 @@ Defines the layout of the status line at the bottom of the shell. It supports bu
 * **`type: "command"`**: Runs custom script commands on a background interval timer.
   * `exec`: Shell command to run (spawned under `/bin/sh -c`).
   * `interval`: Go duration string specifying how often the command executes (e.g. `10s`, `1m`, `5m`).
+
+### Antigravity OAuth Token (`antigravity_token.json`)
+Stores Google OAuth 2.0 PKCE credentials obtained via:
+```bash
+tasksmith login antigravity
+```
+When present, TaskSmith automatically handles token refresh in the background without needing manual `ANTIGRAVITY_TOKEN` environment variables.
+
 
