@@ -27,7 +27,7 @@ require (
 	google.golang.org/genai v1.71.0
 	gopkg.in/yaml.v3 v3.0.1
 	modernc.org/sqlite v1.58.0
-	mvdan.cc/sh/v3 v3.14.0
+	mvdan.cc/sh/v3 v3.14.1
 )
 
 require (
