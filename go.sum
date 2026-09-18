@@ -175,8 +175,8 @@ github.com/muesli/cancelreader v0.2.2 h1:3I4Kt4BQjOR54NavqnDogx/MIoWBFa0StPA8ELU
 github.com/muesli/cancelreader v0.2.2/go.mod h1:3XuTXfFS2VjM+HTLZY9Ak0l6eUKfijIfMUZ4EgX0QYo=
 github.com/ncruces/go-strftime v1.0.0 h1:HMFp8mLCTPp341M/ZnA4qaf7ZlsbTc+miZjCLOFAw7w=
 github.com/ncruces/go-strftime v1.0.0/go.mod h1:Fwc5htZGVVkseilnfgOVb9mKy6w1naJmn9CehxcKcls=
-github.com/ollama/ollama v0.33.3 h1:MRbU7xvqbOYFHptzm45Cs/H7KG/woZ1KLIfGup8gf3A=
-github.com/ollama/ollama v0.33.3/go.mod h1:D2fxVZuCQ7KQqszQMNx+k21Ig8hQEAWOwDIPFgwB8C8=
+github.com/ollama/ollama v0.34.0 h1:6BrPUjSiGVuYz+Um6YawOrZanVXeurjjfX2rRVpRR3E=
+github.com/ollama/ollama v0.34.0/go.mod h1:D2fxVZuCQ7KQqszQMNx+k21Ig8hQEAWOwDIPFgwB8C8=
 github.com/onsi/gomega v1.34.1 h1:EUMJIKUjM8sKjYbtxQI9A4z2o+rruxnzNvpknOXie6k=
 github.com/onsi/gomega v1.34.1/go.mod h1:kU1QgUvBDLXBJq618Xvm2LUX6rSAfRaFRTcdOeDLwwY=
 github.com/openai/openai-go/v3 v3.56.0 h1:Xb+gsS7Gsb5dx+Uat9BHTWhifAOvQjU+pQNWT/HXeWQ=
