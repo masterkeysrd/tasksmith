@@ -17,7 +17,7 @@ require (
 	github.com/masterkeysrd/lspx v0.0.0-20260716060742-21d5e843d27c
 	github.com/masterkeysrd/warp v0.0.4
 	github.com/modelcontextprotocol/go-sdk v1.7.0
-	github.com/ollama/ollama v0.33.3
+	github.com/ollama/ollama v0.34.0
 	github.com/openai/openai-go/v3 v3.56.0
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2
 	github.com/refraction-networking/utls v1.8.2
