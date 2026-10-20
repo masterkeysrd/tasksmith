@@ -1,151 +1,72 @@
-# Provider Gateway Architecture & Specification
+# Gateway Architecture
 
-## 1. Executive Summary
-
-The **Provider Gateway** (`internal/gateway`) is the centralized subsystem in the TaskSmith v2 Brain daemon responsible for managing, authenticating, and instantiating artificial intelligence models across multiple upstream backends.
-
-Under **Option 1 (Workspace Boundary Pattern)**, the Gateway is **completely decoupled from Warp manifests**. It operates strictly on strongly-typed domain configuration structures (`gateway.Config`), while `internal/workspace` acts as the translation layer converting Warp manifests and workspace settings into `gateway.Config`.
-
-Gateways are pooled across the daemon using **content-addressable configuration hashing (`Config.Fingerprint()`)**, ensuring automatic connection reuse across worktrees and workspaces with identical configurations.
+The **Provider Gateway** is the subsystem in the TaskSmith daemon that manages connections, authentication, and model routing between workspaces and upstream AI providers.
 
 ---
 
-## 2. Architectural Principles & Invariants
-
-### A. Total Manifest Decoupling (Anti-Corruption Layer)
-- `internal/gateway` **does not import `github.com/masterkeysrd/warp`**.
-- All manifest parsing, inheritance, YAML serialization, and directory watching are quarantined within `internal/workspace`.
-- The Gateway accepts pure Go structs (`gateway.Config`) and instantiates concrete execution runtimes from **[Loom](https://github.com/masterkeysrd/loom)** (`llm.Model`, `decision.Model`, `embedding.Model`).
-
-### B. Content-Addressable Pooling (`Config.Fingerprint`)
-- Rather than keying gateways by mutable strings like `workspace_id`, the Gateway Pool keys instances by the canonical SHA-256 fingerprint of their effective configuration (providers, endpoints, credentials, and default models).
-- **Worktree Efficiency**: Multiple `git worktree` instances sharing the same repository configuration automatically share the same Gateway and HTTP connection pools.
-- **Zero Cache Invalidation Races**: Modifying a provider config produces a new hash, spawning a new Gateway entry while allowing existing in-flight turns on the prior gateway to drain cleanly.
-
-### C. Zero Magic Fallbacks for Authentication
-- **No Global Environment Probing**: The Gateway **never** reads `os.Getenv` or inspects process-level environment variables.
-- **No Unmanaged File Traversal**: The Gateway does not search the filesystem for unreferenced `.env` files.
-- **Explicit Injected Credentials**: Credentials are read strictly from an explicit in-memory map (`Config.Env map[string]string`). If a provider specifies `Auth.Env: "ANTHROPIC_API_KEY"` and the key is missing or blank in `Config.Env`, initialization immediately returns a descriptive error.
-
-### D. Triple-System Workload Architecture
-AI workloads in TaskSmith v2 are divided into three distinct operational domains:
-
-1. **System One (Decisions)**: Fast, calibrated probabilistic evaluation models implemented via `loom/decision.Model`. Used for classification, routing, and dynamic flow branching.
-2. **System Two (Completions & Reasoning)**: Multi-turn, tool-calling conversational and reasoning agents implemented via `loom/llm.Model`.
-3. **System Three (Embeddings)**: High-throughput dense vector embeddings implemented via `loom/embedding.Model`. Used for semantic indexing, memory, and RAG.
-
----
-
-## 3. Subsystem Architecture
+## 1. Architectural Overview
 
 ```mermaid
 flowchart TD
-    subgraph WorkspaceLayer ["internal/workspace"]
-        WarpLoader["Warp Loader\n(.agents/providers/*.yaml)"]
-        EnvLoader["Workspace Secrets\n(in-memory map[string]string)"]
-        Converter["Warp -> gateway.Config Converter"]
-        WarpLoader --> Converter
-        EnvLoader --> Converter
+    subgraph Workspaces ["Active Workspaces & Worktrees"]
+        WS1["Workspace A (Primary)"]
+        WS2["Workspace A (Worktree)"]
+        WS3["Workspace B"]
     end
 
-    subgraph GatewaySubsystem ["internal/gateway"]
-        Pool["gateway.Pool\n(Content-Addressable by Fingerprint)"]
-        GW["gateway.Gateway"]
-        AuthResolver["Strict Auth Validator\n(matches Config.Env)"]
-        AdaptEngine["Decision Adapter Engine\n(decision.NewFromLLM)"]
+    subgraph GatewaySubsystem ["Provider Gateway Subsystem"]
+        Pool["Content-Addressable Gateway Pool\n(Keyed by Config Fingerprint)"]
         
-        Pool -->|Acquire(cfg)| GW
-        GW --> AuthResolver
+        subgraph GatewayInstance ["Gateway Instance"]
+            Auth["Strict Credential Resolver\n(In-Memory Env Map / File)"]
+            Router["Role-Based Model Router\n(Completion / Decision / Embedding)"]
+            Adapter["Decision Fallback Adapter\n(Structured LLM Wrapper)"]
+        end
+
+        Pool --> GatewayInstance
+        Router --> Adapter
     end
 
-    subgraph UpstreamProviders ["Loom Providers (github.com/masterkeysrd/loom)"]
-        Anthropic["anthropic (Claude 3.7)"]
-        OpenAI["openai (GPT / o-series)"]
-        Ollama["ollama (nimble-v3 / llama3)"]
-        TypeSafe["typesafe (jev-latest)"]
-        GenAI["genai (Gemini 2.5)"]
-        Antigravity["antigravity (Enterprise)"]
+    subgraph Providers ["Upstream Provider Clients"]
+        Anthropic["Anthropic"]
+        OpenAI["OpenAI"]
+        Ollama["Ollama"]
+        TypeSafe["TypeSafe"]
+        GenAI["Google GenAI"]
+        Antigravity["Antigravity"]
     end
 
-    Converter -->|gateway.Config| Pool
-    GW -->|Native Decision / LLM / Embedding| UpstreamProviders
-    GW -->|Fallback Adapter| AdaptEngine
-    AdaptEngine --> UpstreamProviders
+    WS1 & WS2 -->|Same Config Hash| Pool
+    WS3 -->|Different Config Hash| Pool
+    GatewayInstance --> Providers
 ```
 
 ---
 
-## 4. Supported Providers & Capabilities
+## 2. Core Architectural Components
 
-| Provider Type | Loom Package | Native Capabilities | Notes |
-| :--- | :--- | :--- | :--- |
-| `anthropic` | `providers/anthropic` | Completion, Tools, Reasoning | Primary System Two reasoning model |
-| `openai` | `providers/openai` | Completion, Decision, Embedding, Tools | System One, Two, and Three |
-| `ollama` | `providers/ollama` | Completion, Decision (`nimble-v3`), Embedding | Local offline inference |
-| `typesafe` | `providers/typesafe` | Decision (`jev-latest`) | High-speed deterministic decision backend |
-| `genai` | `providers/genai` | Completion, Embedding, Tools | Multimodal & large context processing |
-| `antigravity`| `providers/antigravity`| Completion, Tools | Internal enterprise gateway |
+### 1. Decoupled Configuration Boundary
+The gateway is completely decoupled from on-disk manifest formats. The workspace layer parses declarative configuration files and translates them into a normalized gateway configuration containing:
+- Registered providers (endpoints, headers, model catalogs, and capability flags).
+- Role-based default model mappings.
+- An isolated, in-memory environment map containing workspace secrets.
 
----
+### 2. Content-Addressable Gateway Pool
+Rather than creating a gateway per session or keying gateways by a mutable workspace ID, the daemon maintains a **Content-Addressable Pool** keyed by a deterministic SHA-256 fingerprint of the effective configuration:
+- **Automatic De-duplication**: Multiple git worktrees of the same repository—or separate workspaces sharing the same global provider setup—produce the exact same configuration fingerprint and automatically share a single Gateway instance and its underlying HTTP connection pools.
+- **Zero-Race Hot Reloading**: When a user edits a provider configuration or rotates an API key, the configuration fingerprint changes automatically. New turns acquire a freshly initialized gateway for the new hash without disrupting in-flight turns on the previous instance.
+- **Scoped Hash Inputs**: Only environment variables explicitly referenced by a provider's authentication config are included in the fingerprint; unrelated environment variables never cause cache misses.
 
-## 5. Workload Roles & Model Resolution
+### 3. Strict Credential Resolver
+To guarantee deterministic behavior and prevent secret leakage, the gateway enforces strict authentication rules:
+- **No Global Environment Probing**: The gateway never reads the daemon process's global environment or searches the filesystem for undeclared `.env` files.
+- **Explicit Resolution**: Each provider declares whether its credential comes from a named key in the injected environment map or an explicit credential file path, and how it is attached (`Bearer`, `API-Key`, or `Basic` auth headers). If a required credential is missing, gateway initialization fails immediately.
 
-Model resolution uses role-based precedence:
+### 4. Triple-Role Model Router & Decision Adapter
+The gateway routes requests across three cognitive roles following a strict fallback chain (**Explicit Override $\to$ Workspace Role Default $\to$ Provider Role Default $\to$ Catalog Capability Match**):
 
-```text
-Explicit Override  ──>  Role Default (Config.DefaultModels)  ──>  Provider Default
-```
-
-### System One: Decision Resolution (`RoleDecision`)
-1. Checks if the requested (or defaulted) model is provided by a backend supporting native decision evaluation (`Capabilities.Decision`).
-2. If native: instantiates `*decision.Model` via `decision.NewModel`.
-3. If the backend only supports completion: instantiates the underlying `*llm.Model` and adapts it via `decision.NewFromLLM(llmModel, cfg)`.
-
-### System Two: Completion Resolution (`RoleCompletion`)
-1. Resolves candidate model matching `RoleCompletion`.
-2. Confirms model supports text/chat completions (`Capabilities.SupportsCompletion()`).
-3. Instantiates `*llm.Model` with telemetry middleware.
-
-### System Three: Embedding Resolution (`RoleEmbedding`)
-1. Resolves candidate model matching `RoleEmbedding`.
-2. Confirms model supports vector embeddings (`Capabilities.SupportsEmbedding()`).
-3. Instantiates `*embedding.Model`.
-
----
-
-## 6. Public Go API (`internal/gateway`)
-
-### Core Types & Configuration
-```go
-type ModelRole string
-
-const (
-    RoleCompletion ModelRole = "completion"
-    RoleDecision   ModelRole = "decision"
-    RoleEmbedding  ModelRole = "embedding"
-)
-
-type Config struct {
-    Providers     []ProviderConfig           `json:"providers"`
-    DefaultModels map[ModelRole]string       `json:"default_models,omitempty"`
-    Env           map[string]string          `json:"env,omitempty"`
-}
-
-func (c Config) Fingerprint() string
-```
-
-### Gateway & Pool Interfaces
-```go
-type Gateway interface {
-    ResolveLLM(ctx context.Context, explicit string, opts ...Option) (*llm.Model, error)
-    ResolveDecision(ctx context.Context, explicit string, opts ...Option) (*decision.Model, error)
-    ResolveEmbedding(ctx context.Context, explicit string, opts ...Option) (*embedding.Model, error)
-    ListProviders() []ProviderInfo
-    Close() error
-}
-
-type Pool interface {
-    Acquire(cfg Config) (Gateway, error)
-    Close() error
-}
-```
+- **System 1 — Decision (`decision`)**: Evaluates calibrated probabilistic questions (classification, routing, confidence checks).
+  - *Native Path*: If the target provider and model support native decision evaluation (e.g., Ollama `nimble-v3`, TypeSafe `jev-latest`, OpenAI decision models), the gateway routes directly to the provider's native decision API.
+  - *Adapted Path*: If the target model only supports text completion, the gateway's **Decision Adapter** transparently wraps the completion model using structured outputs so any LLM can act as a System 1 decision engine.
+- **System 2 — Completion (`completion`)**: Routes multi-turn reasoning, coding, and tool-calling workloads to chat completion providers.
+- **System 3 — Embedding (`embedding`)**: Routes vector generation workloads for semantic search and memory indexing to embedding-capable models.
