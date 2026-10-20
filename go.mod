@@ -9,6 +9,7 @@ require (
 	github.com/ollama/ollama v0.40.6
 	github.com/openai/openai-go/v3 v3.79.0
 	google.golang.org/genai v1.75.0
+	mvdan.cc/sh/v3 v3.14.0
 )
 
 require (
