@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
 	"strings"
@@ -68,12 +69,10 @@ func LoadFile(path string) (map[string]string, error) {
 
 // Merge combines the provided environment maps in order and returns a new
 // isolated map. Keys in later maps override keys in earlier maps.
-func Merge(maps ...map[string]string) map[string]string {
+func Merge(envs ...map[string]string) map[string]string {
 	merged := make(map[string]string)
-	for _, m := range maps {
-		for k, v := range m {
-			merged[k] = v
-		}
+	for _, m := range envs {
+		maps.Copy(merged, m)
 	}
 	return merged
 }

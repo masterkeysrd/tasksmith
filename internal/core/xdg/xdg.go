@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -89,12 +90,9 @@ func isValidAppName(name string) bool {
 	if cleaned == "." || cleaned == ".." || strings.HasPrefix(cleaned, ".."+string(filepath.Separator)) {
 		return false
 	}
-	for _, part := range strings.FieldsFunc(name, func(r rune) bool { return r == '/' || r == '\\' }) {
-		if part == ".." {
-			return false
-		}
-	}
-	return true
+	return !slices.Contains(strings.FieldsFunc(name, func(r rune) bool {
+		return r == '/' || r == '\\'
+	}), "..")
 }
 
 func loadAppNameLocked() {
