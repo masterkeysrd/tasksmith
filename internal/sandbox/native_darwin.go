@@ -21,7 +21,7 @@ func checkNativeAvailable() error {
 
 // wrapNativeCommand wraps a resolved command invocation in macOS Seatbelt (sandbox-exec).
 func wrapNativeCommand(s *session, _ string, resolvedBin string, args []string) (string, []string, error) {
-	profile := buildSeatbeltProfile(s.workDir, s.realWorkDir, s.cfg.ReadOnly, s.cfg.Network.Disabled)
+	profile := buildSeatbeltProfile(s.workDir, s.realWorkDir, s.tempDir, s.realTempDir, s.cfg.ReadOnly, s.cfg.Network.Disabled)
 	wrappedArgs := make([]string, 0, 4+len(args))
 	wrappedArgs = append(wrappedArgs, "-p", profile, "--", resolvedBin)
 	wrappedArgs = append(wrappedArgs, args...)
@@ -32,10 +32,10 @@ func wrapNativeCommand(s *session, _ string, resolvedBin string, args []string) 
 //
 // The policy allows reading system files and executing child processes, while
 // restricting file writes exclusively to WorkDir (and its symlink-resolved path,
-// such as /private/var/folders/... on macOS) when ReadOnly is false, or denying
-// writes to WorkDir when ReadOnly is true. Outbound/inbound network access is
-// omitted when networkDisabled is true.
-func buildSeatbeltProfile(workDir, realWorkDir string, readOnly, networkDisabled bool) string {
+// such as /private/var/folders/... on macOS) and the dedicated temp directory
+// when ReadOnly is false, or denying writes to WorkDir when ReadOnly is true.
+// Outbound/inbound network access is omitted when networkDisabled is true.
+func buildSeatbeltProfile(workDir, realWorkDir, tempDir, realTempDir string, readOnly, networkDisabled bool) string {
 	var b strings.Builder
 	b.WriteString("(version 1)\n")
 	b.WriteString("(deny default)\n")
@@ -61,6 +61,16 @@ func buildSeatbeltProfile(workDir, realWorkDir string, readOnly, networkDisabled
 			fmt.Fprintf(&b, "(deny file-write* (subpath \"%s\") (subpath \"%s\"))\n", escapedWork, escapedReal)
 		} else {
 			fmt.Fprintf(&b, "(deny file-write* (subpath \"%s\"))\n", escapedWork)
+		}
+	}
+
+	if tempDir != "" {
+		escapedTemp := escapeSeatbeltString(tempDir)
+		escapedRealTemp := escapeSeatbeltString(realTempDir)
+		if realTempDir != "" && realTempDir != tempDir {
+			fmt.Fprintf(&b, "(allow file-write* (subpath \"%s\") (subpath \"%s\"))\n", escapedTemp, escapedRealTemp)
+		} else {
+			fmt.Fprintf(&b, "(allow file-write* (subpath \"%s\"))\n", escapedTemp)
 		}
 	}
 

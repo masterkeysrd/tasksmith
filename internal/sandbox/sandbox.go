@@ -20,6 +20,8 @@ type session struct {
 	mode        Mode
 	workDir     string
 	realWorkDir string
+	tempDir     string
+	realTempDir string
 	cfg         Config
 	root        *os.Root
 	fsCap       *sandboxFS
@@ -45,24 +47,6 @@ func New(cfg Config) (Sandbox, error) {
 		realWorkDir = filepath.Clean(resolved)
 	}
 
-	if mode == ModeNative {
-		if err := checkNativeAvailable(); err != nil {
-			return nil, err
-		}
-	}
-
-	root, err := os.OpenRoot(cleanWorkDir)
-	if err != nil {
-		return nil, fmt.Errorf("%w: failed to open root %q: %v", ErrInvalidConfig, cleanWorkDir, err)
-	}
-
-	// Clone environment map defensively so external mutations do not affect the sandbox.
-	envCopy := make(map[string]string, len(cfg.Env))
-	maps.Copy(envCopy, cfg.Env)
-	cfg.Env = envCopy
-	cfg.Mode = mode
-	cfg.WorkDir = cleanWorkDir
-
 	id := strings.TrimSpace(cfg.ID)
 	if id == "" {
 		fp := cfg.Fingerprint()
@@ -73,11 +57,48 @@ func New(cfg Config) (Sandbox, error) {
 		}
 	}
 
+	var tempDir, realTempDir string
+	if mode == ModeNative {
+		if err := checkNativeAvailable(); err != nil {
+			return nil, err
+		}
+		td, err := os.MkdirTemp("", "tasksmith-sbx-"+id+"-")
+		if err != nil {
+			return nil, fmt.Errorf("sandbox: failed to create temp dir: %w", err)
+		}
+		tempDir = filepath.Clean(td)
+		realTempDir = tempDir
+		if resolved, err := filepath.EvalSymlinks(tempDir); err == nil {
+			realTempDir = filepath.Clean(resolved)
+		}
+		_ = os.MkdirAll(filepath.Join(tempDir, "tmp"), 0o755)
+		_ = os.MkdirAll(filepath.Join(tempDir, "cache"), 0o755)
+		_ = os.MkdirAll(filepath.Join(tempDir, "gocache"), 0o755)
+		_ = os.MkdirAll(filepath.Join(tempDir, "home"), 0o755)
+	}
+
+	root, err := os.OpenRoot(cleanWorkDir)
+	if err != nil {
+		if tempDir != "" {
+			_ = os.RemoveAll(tempDir)
+		}
+		return nil, fmt.Errorf("%w: failed to open root %q: %v", ErrInvalidConfig, cleanWorkDir, err)
+	}
+
+	// Clone environment map defensively so external mutations do not affect the sandbox.
+	envCopy := make(map[string]string, len(cfg.Env))
+	maps.Copy(envCopy, cfg.Env)
+	cfg.Env = envCopy
+	cfg.Mode = mode
+	cfg.WorkDir = cleanWorkDir
+
 	s := &session{
 		id:          id,
 		mode:        mode,
 		workDir:     cleanWorkDir,
 		realWorkDir: realWorkDir,
+		tempDir:     tempDir,
+		realTempDir: realTempDir,
 		cfg:         cfg,
 		root:        root,
 	}
@@ -349,5 +370,15 @@ func (s *session) Close() error {
 	s.netCap.closeIdleConnections()
 	procErr := s.procCap.closeAll()
 	rootErr := s.root.Close()
-	return errors.Join(procErr, rootErr)
+	var tempErr error
+	if s.tempDir != "" {
+		_ = filepath.Walk(s.tempDir, func(path string, info os.FileInfo, err error) error {
+			if err == nil && info.IsDir() {
+				_ = os.Chmod(path, 0o777)
+			}
+			return nil
+		})
+		tempErr = os.RemoveAll(s.tempDir)
+	}
+	return errors.Join(procErr, rootErr, tempErr)
 }

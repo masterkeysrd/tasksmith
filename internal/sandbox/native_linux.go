@@ -34,12 +34,12 @@ func wrapNativeCommand(s *session, targetDir, resolvedBin string, args []string)
 	if err != nil {
 		return "", nil, err
 	}
-	wrappedArgs := buildBwrapArgs(s.workDir, s.realWorkDir, targetDir, s.cfg.ReadOnly, s.cfg.Network.Disabled, resolvedBin, args)
+	wrappedArgs := buildBwrapArgs(s.workDir, s.realWorkDir, s.tempDir, s.realTempDir, targetDir, s.cfg.ReadOnly, s.cfg.Network.Disabled, resolvedBin, args)
 	return bwrapBin, wrappedArgs, nil
 }
 
 // buildBwrapArgs constructs arguments for Linux Bubblewrap (bwrap).
-func buildBwrapArgs(workDir, realWorkDir, targetDir string, readOnly, networkDisabled bool, resolvedBin string, args []string) []string {
+func buildBwrapArgs(workDir, realWorkDir, tempDir, realTempDir, targetDir string, readOnly, networkDisabled bool, resolvedBin string, args []string) []string {
 	out := []string{
 		"--ro-bind", "/", "/",
 	}
@@ -47,6 +47,12 @@ func buildBwrapArgs(workDir, realWorkDir, targetDir string, readOnly, networkDis
 		out = append(out, "--bind", workDir, workDir)
 		if realWorkDir != "" && realWorkDir != workDir {
 			out = append(out, "--bind", realWorkDir, realWorkDir)
+		}
+	}
+	if tempDir != "" {
+		out = append(out, "--bind", tempDir, tempDir)
+		if realTempDir != "" && realTempDir != tempDir {
+			out = append(out, "--bind", realTempDir, realTempDir)
 		}
 	}
 	out = append(out,

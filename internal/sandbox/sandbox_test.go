@@ -397,7 +397,7 @@ func TestProcExecEnvIsolationAndConfinement(t *testing.T) {
 
 	res, err := sbx.Proc().Exec(ctx, Command{
 		Name: "sh",
-		Args: []string{"-c", `printf "HOST=%s|BASE=%s|OVER=%s" "$TASKSMITH_HOST_SECRET_KEY" "$SANDBOX_BASE_VAR" "$OVERRIDE_ME"`},
+		Args: []string{"-c", `printf "HOST=%s|BASE=%s|OVER=%s|HOME=%s" "$TASKSMITH_HOST_SECRET_KEY" "$SANDBOX_BASE_VAR" "$OVERRIDE_ME" "$HOME"`},
 		Env: map[string]string{
 			"OVERRIDE_ME": "from_cmd",
 		},
@@ -408,9 +408,13 @@ func TestProcExecEnvIsolationAndConfinement(t *testing.T) {
 	if res.ExitCode != 0 {
 		t.Fatalf("expected exit code 0, got %d (stderr: %s)", res.ExitCode, string(res.Stderr))
 	}
-	expected := "HOST=|BASE=from_config|OVER=from_cmd"
-	if string(res.Stdout) != expected {
-		t.Fatalf("env isolation mismatch: expected %q, got %q", expected, string(res.Stdout))
+	expectedPrefix := "HOST=|BASE=from_config|OVER=from_cmd|HOME="
+	if !strings.HasPrefix(string(res.Stdout), expectedPrefix) {
+		t.Fatalf("env isolation mismatch: expected prefix %q, got %q", expectedPrefix, string(res.Stdout))
+	}
+	procHome := strings.TrimPrefix(string(res.Stdout), expectedPrefix)
+	if procHome == workDir || procHome == "" {
+		t.Fatalf("expected HOME to not be workDir (%q), got %q", workDir, procHome)
 	}
 
 	// Verify non-zero exit code is captured cleanly without returning a Go error
@@ -531,6 +535,24 @@ func TestModeNativeExecution(t *testing.T) {
 	})
 	if err != nil || resInside.ExitCode != 0 {
 		t.Fatalf("ModeNative write inside WorkDir failed: err=%v exit=%d stderr=%s", err, resInside.ExitCode, string(resInside.Stderr))
+	}
+
+	// Verify child process can write to $HOME, which resolves inside tempDir (not workDir or host HOME)
+	resHome, err := sbxRW.Proc().Exec(ctx, Command{
+		Name: "sh",
+		Args: []string{"-c", `echo "$HOME" > home_path.txt && echo "home-ok" > "$HOME/test_home.txt"`},
+	})
+	if err != nil || resHome.ExitCode != 0 {
+		t.Fatalf("ModeNative write inside $HOME failed: err=%v exit=%d stderr=%s", err, resHome.ExitCode, string(resHome.Stderr))
+	}
+	homePathBytes, err := sbxRW.FS().ReadFile(ctx, "home_path.txt")
+	if err != nil {
+		t.Fatalf("ReadFile home_path.txt: %v", err)
+	}
+	sbxHome := strings.TrimSpace(string(homePathBytes))
+	hostHome, _ := os.UserHomeDir()
+	if sbxHome == "" || sbxHome == workDir || (hostHome != "" && sbxHome == hostHome) {
+		t.Fatalf("expected ModeNative $HOME to be isolated in tempDir, got %q (workDir=%q, hostHome=%q)", sbxHome, workDir, hostHome)
 	}
 
 	// Writing outside WorkDir must be blocked by the kernel sandbox

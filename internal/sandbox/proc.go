@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -51,21 +52,41 @@ func (p *sandboxProc) resolveWorkDir(dir string) (string, error) {
 // buildEnv constructs a deterministic environment slice strictly from
 // Config.Env and Command.Env without ever inspecting os.Environ() or os.Getenv().
 func (p *sandboxProc) buildEnv(cmdEnv map[string]string, workDir string) ([]string, string) {
-	merged := make(map[string]string, len(p.s.cfg.Env)+len(cmdEnv)+3)
-	for k, v := range p.s.cfg.Env {
-		merged[k] = v
-	}
-	for k, v := range cmdEnv {
-		merged[k] = v
-	}
+	merged := make(map[string]string, len(p.s.cfg.Env)+len(cmdEnv)+8)
+	maps.Copy(merged, p.s.cfg.Env)
+	maps.Copy(merged, cmdEnv)
 	if _, ok := merged["PATH"]; !ok {
 		merged["PATH"] = defaultSafePath
 	}
 	if _, ok := merged["HOME"]; !ok {
-		merged["HOME"] = workDir
+		if p.s.mode == ModeNative && p.s.tempDir != "" {
+			merged["HOME"] = filepath.Join(p.s.tempDir, "home")
+		} else {
+			home, err := os.UserHomeDir()
+			if err != nil || strings.TrimSpace(home) == "" {
+				home = os.TempDir()
+			}
+			merged["HOME"] = home
+		}
 	}
 	if _, ok := merged["PWD"]; !ok {
 		merged["PWD"] = workDir
+	}
+
+	if p.s.mode == ModeNative && p.s.tempDir != "" {
+		if _, ok := merged["TMPDIR"]; !ok {
+			merged["TMPDIR"] = filepath.Join(p.s.tempDir, "tmp")
+		}
+		if _, ok := merged["XDG_CACHE_HOME"]; !ok {
+			merged["XDG_CACHE_HOME"] = filepath.Join(p.s.tempDir, "cache")
+		}
+		if _, ok := merged["GOCACHE"]; !ok {
+			merged["GOCACHE"] = filepath.Join(p.s.tempDir, "gocache")
+		}
+	} else {
+		if _, ok := merged["TMPDIR"]; !ok {
+			merged["TMPDIR"] = os.TempDir()
+		}
 	}
 
 	keys := make([]string, 0, len(merged))
@@ -225,8 +246,7 @@ func (p *sandboxProc) Exec(ctx context.Context, cmd Command) (*ExecResult, error
 
 	exitCode := 0
 	if waitErr != nil {
-		var exitErr *exec.ExitError
-		if errors.As(waitErr, &exitErr) {
+		if exitErr, ok := errors.AsType[*exec.ExitError](waitErr); ok {
 			exitCode = exitErr.ExitCode()
 		} else {
 			return nil, waitErr
@@ -376,8 +396,7 @@ func (sp *sandboxProcess) Wait() (*ExecResult, error) {
 		duration := time.Since(sp.start)
 		exitCode := 0
 		if waitErr != nil {
-			var exitErr *exec.ExitError
-			if errors.As(waitErr, &exitErr) {
+			if exitErr, ok := errors.AsType[*exec.ExitError](waitErr); ok {
 				exitCode = exitErr.ExitCode()
 			} else {
 				sp.waitErr = waitErr
@@ -416,8 +435,7 @@ func exitCodeFromError(err error) int {
 	if err == nil {
 		return 0
 	}
-	var exitErr *exec.ExitError
-	if errors.As(err, &exitErr) {
+	if exitErr, ok := errors.AsType[*exec.ExitError](err); ok {
 		return exitErr.ExitCode()
 	}
 	return -1
