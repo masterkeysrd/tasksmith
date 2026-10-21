@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -23,6 +24,8 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
 	"github.com/masterkeysrd/tasksmith/internal/gateway"
 	"github.com/masterkeysrd/tasksmith/internal/harness"
+	"github.com/masterkeysrd/tasksmith/internal/sandbox"
+	"github.com/masterkeysrd/tasksmith/internal/std"
 	"github.com/masterkeysrd/tasksmith/internal/workspace"
 )
 
@@ -801,5 +804,469 @@ func TestAppendMessageIsolationFromHarnessCheckpoints(t *testing.T) {
 		if m.Role() == message.RoleSystem || strings.Contains(msgText(m), "Notice from system") {
 			t.Errorf("harness checkpoint state.Messages[%d] was polluted with chat-only system message: %+v", i, m)
 		}
+	}
+}
+
+func TestFileTrackerCompactJournalAndBlobs(t *testing.T) {
+	ctx := context.Background()
+	_, ws, _, _, mgr := setupTestEnv(t, nil)
+
+	sess, err := mgr.Create(ctx, CreateParams{Title: "File Tracker Session"})
+	if err != nil {
+		t.Fatalf("Create error: %v", err)
+	}
+
+	if _, err := mgr.Tracker(ctx, "non-existent"); !errors.Is(err, ErrSessionNotFound) {
+		t.Errorf("Tracker non-existent session error = %v, want %v", err, ErrSessionNotFound)
+	}
+
+	tr, err := mgr.Tracker(ctx, sess.ID)
+	if err != nil {
+		t.Fatalf("Tracker error: %v", err)
+	}
+
+	sb, err := sandbox.New(sandbox.Config{
+		WorkDir: ws.RootDir(),
+		Mode:    sandbox.ModeLocal,
+	})
+	if err != nil {
+		t.Fatalf("sandbox.New: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = sb.Close()
+	})
+
+	stdTools, err := std.New(std.Config{
+		Sandbox: sb,
+		Tracker: tr,
+		Logger:  log.Default(),
+	})
+	if err != nil {
+		t.Fatalf("std.New: %v", err)
+	}
+
+	// Create initial baseline file on disk
+	initialContent := "line1\nline2\nline3\n"
+	if err := sb.FS().MkdirAll(ctx, "pkg", 0o755); err != nil {
+		t.Fatalf("MkdirAll pkg: %v", err)
+	}
+	if err := sb.FS().WriteFile(ctx, "pkg/app.go", []byte(initialContent), 0o644); err != nil {
+		t.Fatalf("WriteFile initial: %v", err)
+	}
+
+	// 1. View file -> calls RecordRead in memory ONLY (must NOT create .jsonl or blobs on disk)
+	viewRes, err := stdTools.View(ctx, std.ViewRequest{Path: "pkg/app.go"})
+	if err != nil {
+		t.Fatalf("stdTools.View: %v", err)
+	}
+
+	jPath := tr.journalPath("pkg/app.go")
+	if _, err := os.Stat(jPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expected View (RecordRead) NOT to create journal %q on disk, stat err = %v", jPath, err)
+	}
+	if _, err := os.Stat(tr.blobsDir); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expected View (RecordRead) NOT to create blobs dir %q on disk, stat err = %v", tr.blobsDir, err)
+	}
+
+	// Verify CAS conflict detection when file is modified externally after View
+	if err := sb.FS().WriteFile(ctx, "pkg/app.go", []byte("external_tamper\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile external tamper: %v", err)
+	}
+	if _, err := stdTools.Edit(ctx, std.EditRequest{
+		Path:    "pkg/app.go",
+		OldText: "line2",
+		NewText: "line2_agent_edit",
+	}); !errors.Is(err, std.ErrFileModified) {
+		t.Fatalf("expected std.ErrFileModified after external tamper, got %v", err)
+	}
+
+	// Restore initial content and re-read via View
+	if err := sb.FS().WriteFile(ctx, "pkg/app.go", []byte(initialContent), 0o644); err != nil {
+		t.Fatalf("WriteFile restore initial: %v", err)
+	}
+	if _, err := stdTools.View(ctx, std.ViewRequest{Path: "pkg/app.go"}); err != nil {
+		t.Fatalf("stdTools.View restore: %v", err)
+	}
+
+	// 2. Edit file -> calls RecordChange (writes Line 1 JournalHeader + Line 2 JournalEntry + blobs)
+	editRes, err := stdTools.Edit(ctx, std.EditRequest{
+		Path:    "pkg/app.go",
+		OldText: "line2",
+		NewText: "line2_agent_edit",
+	})
+	if err != nil {
+		t.Fatalf("stdTools.Edit: %v", err)
+	}
+
+	// 3. Inspect raw <path_hash>.jsonl on disk
+	rawBytes, err := os.ReadFile(jPath)
+	if err != nil {
+		t.Fatalf("ReadFile journal %q: %v", jPath, err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(rawBytes)), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("expected 2 lines in journal (1 header + 1 entry), got %d:\n%s", len(lines), string(rawBytes))
+	}
+
+	// Verify Line 1 has "path" and "baseline"
+	var line1Map map[string]any
+	if err := json.Unmarshal([]byte(lines[0]), &line1Map); err != nil {
+		t.Fatalf("unmarshal line 1: %v", err)
+	}
+	if line1Map["path"] != "pkg/app.go" {
+		t.Errorf("line 1 path = %v, want \"pkg/app.go\"", line1Map["path"])
+	}
+	if line1Map["baseline"] != viewRes.Hash {
+		t.Errorf("line 1 baseline = %v, want %q", line1Map["baseline"], viewRes.Hash)
+	}
+
+	// Verify Line 2 does NOT contain "path" or "diff"
+	var line2Map map[string]any
+	if err := json.Unmarshal([]byte(lines[1]), &line2Map); err != nil {
+		t.Fatalf("unmarshal line 2: %v", err)
+	}
+	if _, hasPath := line2Map["path"]; hasPath {
+		t.Errorf("line 2 unexpectedly contains redundant \"path\" field: %s", lines[1])
+	}
+	if _, hasDiff := line2Map["diff"]; hasDiff {
+		t.Errorf("line 2 unexpectedly contains inline \"diff\" field: %s", lines[1])
+	}
+
+	// 4. Verify blobs exist and deduplicate identical content
+	beforeBlob, err := tr.ReadBlob(viewRes.Hash)
+	if err != nil {
+		t.Fatalf("ReadBlob baseline: %v", err)
+	}
+	if string(beforeBlob) != initialContent {
+		t.Errorf("beforeBlob = %q, want %q", string(beforeBlob), initialContent)
+	}
+
+	afterBlob, err := tr.ReadBlob(editRes.AfterHash)
+	if err != nil {
+		t.Fatalf("ReadBlob after: %v", err)
+	}
+	if string(afterBlob) != "line1\nline2_agent_edit\nline3\n" {
+		t.Errorf("afterBlob = %q", string(afterBlob))
+	}
+
+	// RecordChange again with identical after content and verify only 2 blobs exist in blobs/
+	dupChange := &std.FileChange{
+		Path:         "pkg/app.go",
+		Source:       std.SourceAgent,
+		Tool:         "write",
+		Kind:         std.KindModified,
+		BeforeHash:   editRes.AfterHash,
+		AfterHash:    editRes.AfterHash,
+		AfterContent: afterBlob,
+	}
+	if err := tr.RecordChange(ctx, dupChange); err != nil {
+		t.Fatalf("RecordChange duplicate: %v", err)
+	}
+	if dupChange.ID == "" {
+		t.Errorf("expected RecordChange to populate dupChange.ID")
+	}
+	blobEntries, err := os.ReadDir(tr.blobsDir)
+	if err != nil {
+		t.Fatalf("ReadDir blobs: %v", err)
+	}
+	if len(blobEntries) != 2 {
+		t.Errorf("expected exactly 2 deduplicated blobs, got %d", len(blobEntries))
+	}
+}
+
+func TestFileTrackerDiffAndRecoverAt(t *testing.T) {
+	ctx := context.Background()
+	_, ws, _, _, mgr := setupTestEnv(t, nil)
+
+	sess, err := mgr.Create(ctx, CreateParams{Title: "Recovery Session"})
+	if err != nil {
+		t.Fatalf("Create error: %v", err)
+	}
+	tr, err := mgr.Tracker(ctx, sess.ID)
+	if err != nil {
+		t.Fatalf("Tracker error: %v", err)
+	}
+
+	sb, err := sandbox.New(sandbox.Config{
+		WorkDir: ws.RootDir(),
+		Mode:    sandbox.ModeLocal,
+	})
+	if err != nil {
+		t.Fatalf("sandbox.New: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = sb.Close()
+	})
+
+	stdTools, err := std.New(std.Config{
+		Sandbox: sb,
+		Tracker: tr,
+		Logger:  log.Default(),
+	})
+	if err != nil {
+		t.Fatalf("std.New: %v", err)
+	}
+
+	// Step 1: Agent creates file via Write ("v1\n")
+	if _, err := stdTools.Write(ctx, std.WriteRequest{
+		Path:    "notes.txt",
+		Content: "v1\n",
+	}); err != nil {
+		t.Fatalf("Write v1: %v", err)
+	}
+
+	// Step 2: Agent edits file to "v2\n"
+	if _, err := stdTools.Edit(ctx, std.EditRequest{
+		Path:    "notes.txt",
+		OldText: "v1",
+		NewText: "v2",
+	}); err != nil {
+		t.Fatalf("Edit v2: %v", err)
+	}
+
+	// Step 3: External bash command modifies file to "v3_external\n"
+	if _, err := stdTools.Bash(ctx, std.BashRequest{
+		Command: "printf 'v3_external\\n' > notes.txt",
+	}); err != nil {
+		t.Fatalf("Bash v3_external: %v", err)
+	}
+
+	header, entries, err := tr.ReadJournal("notes.txt")
+	if err != nil {
+		t.Fatalf("ReadJournal: %v", err)
+	}
+	if header.Baseline != "" {
+		t.Errorf("expected empty baseline for newly created file, got %q", header.Baseline)
+	}
+	if len(entries) != 3 {
+		t.Fatalf("expected 3 journal entries, got %d", len(entries))
+	}
+	if entries[0].Source != std.SourceAgent || entries[0].Kind != std.KindCreated {
+		t.Errorf("entries[0] = %+v", entries[0])
+	}
+	if entries[1].Source != std.SourceAgent || entries[1].Kind != std.KindModified {
+		t.Errorf("entries[1] = %+v", entries[1])
+	}
+	if entries[2].Source != std.SourceExternal || entries[2].Kind != std.KindModified {
+		t.Errorf("entries[2] = %+v", entries[2])
+	}
+
+	// On-demand DiffEntry for entries[1] ("v1\n" -> "v2\n")
+	diffText, err := tr.DiffEntry("notes.txt", entries[1].ID)
+	if err != nil {
+		t.Fatalf("DiffEntry: %v", err)
+	}
+	if !strings.Contains(diffText, "-v1") || !strings.Contains(diffText, "+v2") {
+		t.Errorf("unexpected DiffEntry output:\n%s", diffText)
+	}
+
+	// RecoverAt entries[2] with before=true (state right before external bash edit -> "v2\n")
+	if err := tr.RecoverAt(ctx, sb.FS(), "notes.txt", entries[2].ID, true); err != nil {
+		t.Fatalf("RecoverAt before entries[2]: %v", err)
+	}
+	diskBytes, err := sb.FS().ReadFile(ctx, "notes.txt")
+	if err != nil {
+		t.Fatalf("ReadFile after RecoverAt: %v", err)
+	}
+	if string(diskBytes) != "v2\n" {
+		t.Errorf("disk content after RecoverAt(entries[2], before=true) = %q, want \"v2\\n\"", string(diskBytes))
+	}
+
+	// RecoverAt entries[0] with before=false (state right after creation -> "v1\n")
+	if err := tr.RecoverAt(ctx, sb.FS(), "notes.txt", entries[0].ID, false); err != nil {
+		t.Fatalf("RecoverAt after entries[0]: %v", err)
+	}
+	diskBytes, err = sb.FS().ReadFile(ctx, "notes.txt")
+	if err != nil {
+		t.Fatalf("ReadFile after RecoverAt: %v", err)
+	}
+	if string(diskBytes) != "v1\n" {
+		t.Errorf("disk content after RecoverAt(entries[0], before=false) = %q, want \"v1\\n\"", string(diskBytes))
+	}
+
+	// RecoverAt entries[0] with before=true (state before creation -> file removed)
+	if err := tr.RecoverAt(ctx, sb.FS(), "notes.txt", entries[0].ID, true); err != nil {
+		t.Fatalf("RecoverAt before entries[0]: %v", err)
+	}
+	if _, err := sb.FS().Stat(ctx, "notes.txt"); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("expected notes.txt to be removed after recovering before creation, err = %v", err)
+	}
+}
+
+func TestFileTrackerRevertToBaselineThreeWayMerge(t *testing.T) {
+	ctx := context.Background()
+	_, ws, _, _, mgr := setupTestEnv(t, nil)
+
+	sess, err := mgr.Create(ctx, CreateParams{Title: "Merge3 Revert Session"})
+	if err != nil {
+		t.Fatalf("Create error: %v", err)
+	}
+	tr, err := mgr.Tracker(ctx, sess.ID)
+	if err != nil {
+		t.Fatalf("Tracker error: %v", err)
+	}
+
+	sb, err := sandbox.New(sandbox.Config{
+		WorkDir: ws.RootDir(),
+		Mode:    sandbox.ModeLocal,
+	})
+	if err != nil {
+		t.Fatalf("sandbox.New: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = sb.Close()
+	})
+
+	stdTools, err := std.New(std.Config{
+		Sandbox: sb,
+		Tracker: tr,
+		Logger:  log.Default(),
+	})
+	if err != nil {
+		t.Fatalf("std.New: %v", err)
+	}
+
+	// Initial baseline on disk: 5 lines
+	baseline := "line1\nline2\nline3\nline4\nline5\n"
+	if err := sb.FS().WriteFile(ctx, "service.go", []byte(baseline), 0o644); err != nil {
+		t.Fatalf("WriteFile baseline: %v", err)
+	}
+
+	// Agent reads and edits line1 -> line1_agent
+	if _, err := stdTools.View(ctx, std.ViewRequest{Path: "service.go"}); err != nil {
+		t.Fatalf("View: %v", err)
+	}
+	if _, err := stdTools.Edit(ctx, std.EditRequest{
+		Path:    "service.go",
+		OldText: "line1",
+		NewText: "line1_agent",
+	}); err != nil {
+		t.Fatalf("Edit line1: %v", err)
+	}
+
+	// User externally edits line5 -> line5_user (non-overlapping with line1)
+	externalNonOverlapping := "line1_agent\nline2\nline3\nline4\nline5_user\n"
+	if err := sb.FS().WriteFile(ctx, "service.go", []byte(externalNonOverlapping), 0o644); err != nil {
+		t.Fatalf("WriteFile external non-overlapping: %v", err)
+	}
+
+	// RevertToBaseline with force=false should revert line1_agent -> line1 while preserving line5_user!
+	if err := tr.RevertToBaseline(ctx, sb.FS(), "service.go", false); err != nil {
+		t.Fatalf("RevertToBaseline (non-overlapping) error: %v", err)
+	}
+	mergedDisk, err := sb.FS().ReadFile(ctx, "service.go")
+	if err != nil {
+		t.Fatalf("ReadFile after RevertToBaseline: %v", err)
+	}
+	wantMerged := "line1\nline2\nline3\nline4\nline5_user\n"
+	if string(mergedDisk) != wantMerged {
+		t.Errorf("merged file =\n%s\nwant:\n%s", string(mergedDisk), wantMerged)
+	}
+
+	// Now test overlapping conflict: Agent edits line2 -> line2_agent, then user externally edits line2_agent -> line2_user_conflict
+	if _, err := stdTools.View(ctx, std.ViewRequest{Path: "service.go"}); err != nil {
+		t.Fatalf("View 2: %v", err)
+	}
+	if _, err := stdTools.Edit(ctx, std.EditRequest{
+		Path:    "service.go",
+		OldText: "line2",
+		NewText: "line2_agent",
+	}); err != nil {
+		t.Fatalf("Edit line2: %v", err)
+	}
+
+	overlappingExternal := "line1\nline2_user_conflict\nline3\nline4\nline5_user\n"
+	if err := sb.FS().WriteFile(ctx, "service.go", []byte(overlappingExternal), 0o644); err != nil {
+		t.Fatalf("WriteFile overlapping external: %v", err)
+	}
+
+	if err := tr.RevertToBaseline(ctx, sb.FS(), "service.go", false); !errors.Is(err, ErrRevertConflict) {
+		t.Errorf("RevertToBaseline overlapping error = %v, want %v", err, ErrRevertConflict)
+	}
+
+	// With force=true, RevertToBaseline restores exact original baseline
+	if err := tr.RevertToBaseline(ctx, sb.FS(), "service.go", true); err != nil {
+		t.Fatalf("RevertToBaseline(force=true) error: %v", err)
+	}
+	forcedDisk, err := sb.FS().ReadFile(ctx, "service.go")
+	if err != nil {
+		t.Fatalf("ReadFile after forced revert: %v", err)
+	}
+	if string(forcedDisk) != baseline {
+		t.Errorf("forced revert content = %q, want %q", string(forcedDisk), baseline)
+	}
+}
+
+func TestFileTrackerReloadAndDeleteSessionCleanup(t *testing.T) {
+	ctx := context.Background()
+	db, ws, gw, pub, mgr := setupTestEnv(t, nil)
+
+	sess, err := mgr.Create(ctx, CreateParams{Title: "Persistent Tracker"})
+	if err != nil {
+		t.Fatalf("Create error: %v", err)
+	}
+
+	tr1, err := mgr.Tracker(ctx, sess.ID)
+	if err != nil {
+		t.Fatalf("Tracker 1 error: %v", err)
+	}
+
+	content := []byte("package main\n")
+	hash := sha256Hex(content)
+	if err := tr1.RecordChange(ctx, &std.FileChange{
+		Path:         "main.go",
+		Source:       std.SourceAgent,
+		Tool:         "write",
+		Kind:         std.KindCreated,
+		AfterHash:    hash,
+		AfterContent: content,
+		Additions:    1,
+	}); err != nil {
+		t.Fatalf("RecordChange: %v", err)
+	}
+
+	// Construct a second Manager over the same DB and Workspace (simulating process restart)
+	mgr2, err := New(Config{
+		DB:        db,
+		Workspace: ws,
+		Gateway:   gw,
+		Publisher: pub,
+		Logger:    log.Default(),
+	})
+	if err != nil {
+		t.Fatalf("New mgr2 error: %v", err)
+	}
+
+	tr2, err := mgr2.Tracker(ctx, sess.ID)
+	if err != nil {
+		t.Fatalf("Tracker 2 error: %v", err)
+	}
+
+	gotHash, ok := tr2.LastHash("main.go")
+	if !ok || gotHash != hash {
+		t.Errorf("reloaded LastHash = (%q, %v), want (%q, true)", gotHash, ok, hash)
+	}
+	gotContent, ok := tr2.LastContent("main.go")
+	if !ok || string(gotContent) != string(content) {
+		t.Errorf("reloaded LastContent = (%q, %v), want (%q, true)", string(gotContent), ok, string(content))
+	}
+	if paths := tr2.TrackedPaths(); !reflect.DeepEqual(paths, []string{"main.go"}) {
+		t.Errorf("reloaded TrackedPaths = %v, want [\"main.go\"]", paths)
+	}
+
+	// Delete session and verify <WorkspaceDir>/sessions/<sess.ID> is removed from disk
+	sessDir, err := mgr2.sessionDir(sess.ID)
+	if err != nil {
+		t.Fatalf("sessionDir: %v", err)
+	}
+	if _, err := os.Stat(sessDir); err != nil {
+		t.Fatalf("expected sessionDir %q to exist before Delete: %v", sessDir, err)
+	}
+
+	if err := mgr2.Delete(ctx, sess.ID); err != nil {
+		t.Fatalf("Delete error: %v", err)
+	}
+	if _, err := os.Stat(sessDir); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("expected sessionDir %q to be removed on Delete, stat err = %v", sessDir, err)
 	}
 }

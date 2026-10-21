@@ -1,7 +1,7 @@
-// Package session manages user-facing chat threads, session metadata, and the
-// permanent UI message history stored in SQLite, resolving workspace agents,
-// system prompts, and language models per session and executing conversational
-// turns through [github.com/masterkeysrd/tasksmith/internal/harness.Harness].
+// Package session manages user-facing chat threads, session metadata, persistent
+// per-session file change journals, and the permanent UI message history stored
+// in SQLite, resolving workspace agents, system prompts, and language models per
+// session and executing conversational turns through [github.com/masterkeysrd/tasksmith/internal/harness.Harness].
 //
 // # Strict Dependency Injection
 //
@@ -33,4 +33,16 @@
 // notice) records the message in `messages` and publishes an [EventMessageAdded]
 // event without mutating or polluting the underlying harness graph checkpoint
 // for that session.
+//
+// # Persistent Per-Session File Tracker
+//
+// [Manager.Tracker] returns a persistent [*FileTracker] implementing
+// [github.com/masterkeysrd/tasksmith/internal/std.FileTracker] rooted at
+// `<xdg.WorkspaceDir>/sessions/<session_id>/changes/`. Each tracked file is
+// stored in a compact `<path_hash>.jsonl` file (Line 1: [JournalHeader],
+// Lines 2..N: [JournalEntry] without redundant `path` or inline `diff` fields)
+// paired with deduplicated content-addressable snapshots in `changes/blobs/<sha256>`.
+// This layout enables on-demand unified diff generation ([FileTracker.DiffEntry]),
+// point-in-time recovery ([FileTracker.RecoverAt]), and conflict-aware 3-way
+// baseline reversion ([FileTracker.RevertToBaseline]).
 package session

@@ -4,12 +4,16 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/masterkeysrd/loom/message"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
+	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
 	"github.com/masterkeysrd/tasksmith/internal/gateway"
 	"github.com/masterkeysrd/tasksmith/internal/harness"
 	"github.com/masterkeysrd/tasksmith/internal/workspace"
@@ -55,6 +59,9 @@ type Manager struct {
 	gateway   gateway.Gateway
 	publisher Publisher
 	logger    log.Interface
+
+	mu       sync.Mutex
+	trackers map[string]*FileTracker
 }
 
 // New constructs a new [Manager] and automatically runs SQLite schema migrations
@@ -76,6 +83,7 @@ func New(cfg Config) (*Manager, error) {
 		gateway:   cfg.Gateway,
 		publisher: cfg.Publisher,
 		logger:    cfg.Logger.ForComponent("session"),
+		trackers:  make(map[string]*FileTracker),
 	}, nil
 }
 
@@ -153,7 +161,8 @@ func (m *Manager) List(ctx context.Context) ([]Session, error) {
 	return m.store.listSessions(ctx)
 }
 
-// Delete removes the specified session and all of its persisted UI messages.
+// Delete removes the specified session, all of its persisted UI messages, and
+// its on-disk `<WorkspaceDir>/sessions/<id>` directory (including `changes/`).
 // It returns [ErrEmptySessionID] if id is blank and [ErrSessionNotFound] if the
 // session did not exist.
 func (m *Manager) Delete(ctx context.Context, id string) error {
@@ -164,7 +173,56 @@ func (m *Manager) Delete(ctx context.Context, id string) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	return m.store.deleteSession(ctx, id)
+	if err := m.store.deleteSession(ctx, id); err != nil {
+		return err
+	}
+
+	m.mu.Lock()
+	delete(m.trackers, id)
+	m.mu.Unlock()
+
+	if sessionDir, err := m.sessionDir(id); err == nil {
+		_ = os.RemoveAll(sessionDir)
+	}
+	return nil
+}
+
+// Tracker returns the persistent per-session [*FileTracker] rooted at
+// `<WorkspaceDir>/sessions/<sessionID>/changes`, replaying any existing
+// `changes/*.jsonl` journals from disk.
+func (m *Manager) Tracker(ctx context.Context, sessionID string) (*FileTracker, error) {
+	sess, err := m.Get(ctx, sessionID)
+	if err != nil {
+		return nil, err
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if tr, ok := m.trackers[sess.ID]; ok {
+		return tr, nil
+	}
+
+	sessionDir, err := m.sessionDir(sess.ID)
+	if err != nil {
+		return nil, err
+	}
+	changesDir := filepath.Join(sessionDir, "changes")
+
+	tr, err := newFileTracker(changesDir)
+	if err != nil {
+		return nil, err
+	}
+	m.trackers[sess.ID] = tr
+	return tr, nil
+}
+
+func (m *Manager) sessionDir(sessionID string) (string, error) {
+	wsDir, err := xdg.WorkspaceDir(m.workspace.RootDir())
+	if err != nil {
+		return "", fmt.Errorf("session: resolve workspace data dir: %w", err)
+	}
+	return filepath.Join(wsDir, "sessions", filepath.Base(sessionID)), nil
 }
 
 // History returns the ordered UI message history (`id ASC`) for sessionID from

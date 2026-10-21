@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/masterkeysrd/loom/message"
+	"github.com/masterkeysrd/tasksmith/internal/std"
 )
 
 // Sentinel errors returned by the session package.
@@ -14,6 +15,10 @@ var (
 	ErrSessionNotFound = errors.New("session: session not found")
 	ErrEmptySessionID  = errors.New("session: session ID must not be empty")
 	ErrNilMessage      = errors.New("session: message must not be nil")
+	ErrJournalNotFound = errors.New("session: file change journal not found")
+	ErrEntryNotFound   = errors.New("session: journal entry not found")
+	ErrBlobNotFound    = errors.New("session: file snapshot blob not found")
+	ErrRevertConflict  = errors.New("session: revert conflict with external changes")
 )
 
 // Session represents a persistent user-facing chat thread.
@@ -61,4 +66,27 @@ type Event struct {
 // Publisher broadcasts real-time session events to downstream subscribers or UI layers.
 type Publisher interface {
 	Publish(ctx context.Context, event Event)
+}
+
+// JournalHeader is stored as Line 1 of each `<path_hash>.jsonl` file inside a
+// session's `changes/` directory, recording the canonical workspace-relative path
+// and its initial baseline blob hash.
+type JournalHeader struct {
+	Path     string `json:"path"`
+	Baseline string `json:"baseline,omitempty"`
+	Binary   bool   `json:"binary,omitempty"`
+}
+
+// JournalEntry is stored on Lines 2..N of `<path_hash>.jsonl`, recording a compact
+// mutation event without repeating the file path or storing inline diffs.
+type JournalEntry struct {
+	ID        string           `json:"id"`
+	Timestamp time.Time        `json:"ts"`
+	Source    std.ChangeSource `json:"source"`
+	Tool      string           `json:"tool,omitempty"`
+	Kind      std.ChangeKind   `json:"kind"`
+	Before    string           `json:"before,omitempty"`
+	After     string           `json:"after,omitempty"`
+	Additions int              `json:"add,omitempty"`
+	Deletions int              `json:"del,omitempty"`
 }
