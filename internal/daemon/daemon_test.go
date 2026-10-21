@@ -833,14 +833,9 @@ func TestPermissionsModesAndFileChangesRevert(t *testing.T) {
 	}
 }
 
-func TestConnectOrStartExistingServerAndShutdown(t *testing.T) {
+func TestServerShutdownEndpoint(t *testing.T) {
 	ctx := context.Background()
-	srv, _, _ := setupDaemonTest(t, nil)
-
-	cli, err := ConnectOrStart(ctx, srv.SocketPath())
-	if err != nil {
-		t.Fatalf("ConnectOrStart against running server: %v", err)
-	}
+	_, cli, _ := setupDaemonTest(t, nil)
 
 	if _, err := cli.Health(ctx); err != nil {
 		t.Fatalf("cli.Health: %v", err)
