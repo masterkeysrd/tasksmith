@@ -112,7 +112,7 @@ func run() error {
 	}
 
 	fmt.Printf("TaskSmith REPL (session=%s agent=%s model=%s)\n", activeSession.ID, activeSession.Agent, activeSession.Model)
-	fmt.Println("Commands: /new, /sessions, /history, /system <text>, /exit, /quit")
+	fmt.Println("Commands: /new [model], /sessions, /history, /system <text>, /exit, /quit")
 
 	scanner := bufio.NewScanner(os.Stdin)
 	for {
@@ -131,9 +131,11 @@ func run() error {
 		case line == "/exit" || line == "/quit":
 			return nil
 
-		case line == "/new":
+		case line == "/new" || strings.HasPrefix(line, "/new "):
+			modelOverride := strings.TrimSpace(strings.TrimPrefix(line, "/new"))
 			s, err := mgr.Create(ctx, session.CreateParams{
 				Title: "Terminal Session",
+				Model: modelOverride,
 			})
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "error creating session: %v\n", err)

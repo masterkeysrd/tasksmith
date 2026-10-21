@@ -5,11 +5,17 @@ metadata:
 spec:
   type: ollama
   endpoint: http://localhost:11434
-  defaultModel: llama3.3
+  defaultModel: qwen3.8
   models:
     - id: qwen3.8
       name: qwen3.8
       label: Qwen 3.8
+      limits:
+        context: 262144
+        output: 32768
+    - id: nemotron-3.5-lightning
+      name: nemotron-3.5-lightning
+      label: Nemotron 3.5 Lightning
       limits:
         context: 262144
         output: 32768

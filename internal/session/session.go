@@ -93,7 +93,11 @@ func (m *Manager) Create(ctx context.Context, params CreateParams) (*Session, er
 	}
 
 	model := strings.TrimSpace(params.Model)
-	if model == "" {
+	if model != "" && !strings.Contains(model, "/") {
+		if models := m.workspace.ResolveModels(workspace.RoleCompletion, model); len(models) > 0 {
+			model = models[0]
+		}
+	} else if model == "" {
 		var explicit []string
 		if ag, ok := m.workspace.GetAgent(agent); ok && len(ag.Models) > 0 {
 			explicit = ag.Models
