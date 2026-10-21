@@ -135,6 +135,44 @@ func DefaultPolicy() Policy {
 		}
 	}
 
+	// Network / HTTP / remote commands.
+	p.Rules["curl"] = CommandRule{
+		DefaultCategory: ActionNet,
+		TargetMode:      TargetsNone,
+		PathFlags: []string{
+			"-o", "--output", "-K", "--config", "-T", "--upload-file",
+			"-D", "--dump-header", "-c", "--cookie-jar",
+		},
+	}
+
+	p.Rules["wget"] = CommandRule{
+		DefaultCategory: ActionNet,
+		TargetMode:      TargetsNone,
+		PathFlags: []string{
+			"-O", "--output-document", "-P", "--directory-prefix",
+			"-i", "--input-file", "-o", "--output-file",
+		},
+	}
+
+	for _, exec := range []string{"http", "https", "xh"} {
+		p.Rules[exec] = CommandRule{
+			DefaultCategory: ActionNet,
+			TargetMode:      TargetsNone,
+			PathFlags:       []string{"-o", "--output"},
+		}
+	}
+
+	for _, exec := range []string{
+		"ssh", "scp", "sftp", "rsync", "ftp", "telnet",
+		"nc", "netcat", "ncat", "socat",
+		"ping", "dig", "nslookup", "host", "traceroute", "whois",
+	} {
+		p.Rules[exec] = CommandRule{
+			DefaultCategory: ActionNet,
+			TargetMode:      TargetsNone,
+		}
+	}
+
 	// Git: declarative subcommand target modes, path flags (-C), value flags (-m, etc.), and action rules.
 	p.Rules["git"] = CommandRule{
 		DefaultCategory: ActionWrite,
@@ -148,6 +186,7 @@ func DefaultPolicy() Policy {
 			"-b", "-B", "--orphan",
 		},
 		SubcommandModes: map[string]TargetMode{
+			"clone":       TargetsSkipFirst,
 			"branch":      TargetsAfterDashDash,
 			"tag":         TargetsAfterDashDash,
 			"switch":      TargetsAfterDashDash,
@@ -195,6 +234,10 @@ func DefaultPolicy() Policy {
 				Category:    ActionDelete,
 				Subcommands: []string{"push"},
 				ContainsAny: []string{"--force", "-f", "--force-with-lease"},
+			},
+			{
+				Category:    ActionNet,
+				Subcommands: []string{"clone", "fetch", "pull", "push"},
 			},
 			{
 				Category:    ActionRead,
@@ -434,7 +477,7 @@ func (g *Guard) determineOperation(cmd ParsedCommand, state *trackerState) Opera
 		currRedir = currRedir.SubCommand
 	}
 
-	if len(writeRedirs) > 0 && action != ActionDelete {
+	if len(writeRedirs) > 0 && action != ActionDelete && action != ActionNet {
 		action = ActionWrite
 	}
 
@@ -480,6 +523,13 @@ func (g *Guard) determineOperation(cmd ParsedCommand, state *trackerState) Opera
 		safety := SafetySafe
 		if action == ActionDelete {
 			safety = SafetyUnsafe
+		} else if action == ActionNet {
+			safety = SafetyUnknown
+			if !state.isCWDUnknown {
+				if s := g.evaluatePath(state.virtualCWD, action); s.Severity() > safety.Severity() {
+					safety = s
+				}
+			}
 		} else if action == ActionExec && (hasEval || hasSubst) {
 			safety = SafetyUnknown
 		} else if state.isCWDUnknown {
@@ -506,7 +556,7 @@ func (g *Guard) determineOperation(cmd ParsedCommand, state *trackerState) Opera
 		}
 	} else {
 		worstSafety := SafetySafe
-		if action == ActionExec && (hasEval || hasSubst) {
+		if (action == ActionExec && (hasEval || hasSubst)) || action == ActionNet {
 			worstSafety = SafetyUnknown
 		}
 
@@ -776,9 +826,15 @@ func (g *Guard) IsProtectedPath(targetPath string) bool {
 	return guard.IsProtectedPath(targetPath, g.workspaceDir, g.protectedDirs...)
 }
 
-// evaluatePath classifies resolvedPath using guard.EvaluatePath.
+// EvaluatePath resolves targetPath against the Guard's workspaceDir (and expands ~
+// with homeDir) and classifies its SafetyLevel for the given ActionType.
+func (g *Guard) EvaluatePath(targetPath string, action ActionType) (string, SafetyLevel) {
+	return guard.EvaluatePath(targetPath, g.workspaceDir, g.homeDir, action, g.protectedDirs...)
+}
+
+// evaluatePath classifies resolvedPath using g.EvaluatePath.
 func (g *Guard) evaluatePath(resolvedPath string, action ActionType) SafetyLevel {
-	_, safety := guard.EvaluatePath(resolvedPath, g.workspaceDir, g.homeDir, action, g.protectedDirs...)
+	_, safety := g.EvaluatePath(resolvedPath, action)
 	return safety
 }
 

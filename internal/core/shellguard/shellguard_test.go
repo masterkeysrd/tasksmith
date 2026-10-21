@@ -300,13 +300,15 @@ func TestGitConditionals(t *testing.T) {
 		{"git remote -v", ActionRead, SafetySafe},
 		{"git tag", ActionRead, SafetySafe},
 		{"git commit -m 'hello'", ActionWrite, SafetySafe},
-		{"git push origin main", ActionWrite, SafetySafe},
+		{"git push origin main", ActionNet, SafetyUnknown},
 		{"git add .", ActionWrite, SafetySafe},
 		{"git checkout main", ActionWrite, SafetySafe},
 		{"git switch main", ActionWrite, SafetySafe},
 		{"git merge feature", ActionWrite, SafetySafe},
 		{"git rebase main", ActionWrite, SafetySafe},
-		{"git pull", ActionWrite, SafetySafe},
+		{"git pull", ActionNet, SafetyUnknown},
+		{"git fetch origin", ActionNet, SafetyUnknown},
+		{"git clone https://github.com/org/repo", ActionNet, SafetyUnknown},
 		{"git stash", ActionWrite, SafetySafe},
 		{"git rm file.txt", ActionDelete, SafetyUnsafe},
 		{"git reset --hard HEAD", ActionDelete, SafetyUnsafe},
@@ -1281,5 +1283,53 @@ func TestIsProtectedPath(t *testing.T) {
 	}
 	if customGuard.IsProtectedPath(".git/config") {
 		t.Error("expected .git/config not to be protected when overridden by custom ProtectedDirs")
+	}
+}
+
+func TestNetworkCommands(t *testing.T) {
+	guard := New(Config{WorkspaceDir: "/tmp/workspace"})
+
+	tests := []struct {
+		command        string
+		expectedAction ActionType
+		expectedSafety SafetyLevel
+	}{
+		{"curl https://example.com", ActionNet, SafetyUnknown},
+		{"wget https://example.com/file.tar.gz", ActionNet, SafetyUnknown},
+		{"http GET https://example.com", ActionNet, SafetyUnknown},
+		{"ssh user@example.com", ActionNet, SafetyUnknown},
+		{"scp file.txt user@example.com:/tmp", ActionNet, SafetyUnknown},
+		{"nc localhost 8080", ActionNet, SafetyUnknown},
+		{"dig example.com", ActionNet, SafetyUnknown},
+		{"ping -c 1 8.8.8.8", ActionNet, SafetyUnknown},
+		{"git fetch", ActionNet, SafetyUnknown},
+		{"git pull", ActionNet, SafetyUnknown},
+		{"git push", ActionNet, SafetyUnknown},
+		{"git clone https://github.com/org/repo", ActionNet, SafetyUnknown},
+		{"git clone https://github.com/org/repo subrepo", ActionNet, SafetyUnknown},
+		{"curl -o out.txt https://example.com", ActionNet, SafetyUnknown},
+		{"curl -o ../outside.txt https://example.com", ActionNet, SafetyUnsafe},
+		{"wget -O /etc/passwd https://example.com", ActionNet, SafetyUnsafe},
+		{"curl https://example.com > ../outside.txt", ActionNet, SafetyUnsafe},
+		{"git clone https://github.com/org/repo ../outside", ActionNet, SafetyUnsafe},
+		{"git push --force origin main", ActionDelete, SafetyUnsafe},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.command, func(t *testing.T) {
+			ops, err := guard.Analyze(tt.command)
+			if err != nil {
+				t.Fatalf("Analyze(%q) failed: %v", tt.command, err)
+			}
+			if len(ops) != 1 {
+				t.Fatalf("Analyze(%q) expected 1 operation, got %d", tt.command, len(ops))
+			}
+			if ops[0].Action != tt.expectedAction {
+				t.Errorf("Analyze(%q) action = %q, want %q", tt.command, ops[0].Action, tt.expectedAction)
+			}
+			if ops[0].Safety != tt.expectedSafety {
+				t.Errorf("Analyze(%q) safety = %q, want %q", tt.command, ops[0].Safety, tt.expectedSafety)
+			}
+		})
 	}
 }
