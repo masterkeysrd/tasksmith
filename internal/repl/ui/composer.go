@@ -73,6 +73,11 @@ func (c Composer) Update(msg tea.Msg) (Composer, tea.Cmd) {
 	return c, cmd
 }
 
+// InHistory reports whether the composer is currently navigating previous history items.
+func (c Composer) InHistory() bool {
+	return c.historyIdx < len(c.history)
+}
+
 // NavigateHistory steps backward (delta < 0) or forward (delta > 0) through command history.
 func (c Composer) NavigateHistory(delta int) Composer {
 	if len(c.history) == 0 {

@@ -8,6 +8,7 @@ import (
 
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/client"
+	"github.com/masterkeysrd/tasksmith/internal/repl/ui"
 )
 
 // Env provides the active REPL session context to a [Handler].
@@ -30,6 +31,7 @@ type Result struct {
 	ModeChange    api.PermissionMode
 	Clear         bool
 	Quit          bool
+	Picker        *ui.Picker
 }
 
 // Handler executes a slash command against the active [Env].
@@ -42,6 +44,7 @@ type Command struct {
 	Usage       string
 	Description string
 	Handler     Handler
+	Options     func(ctx context.Context, env *Env) []ui.Option
 }
 
 // Registry maintains the ordered collection of REPL slash commands and aliases.
@@ -125,6 +128,41 @@ func (r *Registry) Suggest(prefix string) []Command {
 		}
 	}
 	return matches
+}
+
+// SuggestArgs returns argument completion options for a partially typed slash command line.
+// It returns true only if line begins with "/" and contains a space after the command identifier.
+func (r *Registry) SuggestArgs(ctx context.Context, env *Env, rawLine string) (Command, []ui.Option, bool) {
+	trimmedLeft := strings.TrimLeft(rawLine, " \t")
+	if !strings.HasPrefix(trimmedLeft, "/") {
+		return Command{}, nil, false
+	}
+
+	cmdPart, argPart, hasSpace := strings.Cut(trimmedLeft, " ")
+	if !hasSpace {
+		return Command{}, nil, false
+	}
+
+	cmd, ok := r.Lookup(cmdPart)
+	if !ok || cmd.Options == nil {
+		return Command{}, nil, false
+	}
+
+	allOpts := cmd.Options(ctx, env)
+	query := strings.ToLower(strings.TrimSpace(argPart))
+	if query == "" {
+		return cmd, allOpts, true
+	}
+
+	var filtered []ui.Option
+	for _, opt := range allOpts {
+		val := strings.ToLower(opt.Value)
+		lbl := strings.ToLower(opt.Label)
+		if strings.HasPrefix(val, query) || strings.HasPrefix(lbl, query) || strings.Contains(val, query) {
+			filtered = append(filtered, opt)
+		}
+	}
+	return cmd, filtered, true
 }
 
 func matchesCommandPrefix(cmd Command, prefix string) bool {

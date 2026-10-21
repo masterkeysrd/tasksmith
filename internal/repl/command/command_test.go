@@ -243,6 +243,9 @@ func TestBuiltinCommandsExecution(t *testing.T) {
 	if err != nil || !strings.Contains(resModeRead.Output, "default") {
 		t.Errorf("/mode read failed: res=%+v, err=%v", resModeRead, err)
 	}
+	if resModeRead.Picker == nil || len(resModeRead.Picker.Options) != 5 {
+		t.Errorf("/mode read expected Picker with 5 options, got %+v", resModeRead.Picker)
+	}
 	resModeSet, err := reg.Execute(ctx, env, "/mode accept_edits")
 	if err != nil || resModeSet.ModeChange != api.ModeAcceptEdits {
 		t.Errorf("/mode set failed: res=%+v, err=%v", resModeSet, err)
@@ -276,5 +279,44 @@ func TestBuiltinCommandsExecution(t *testing.T) {
 	resExit, err := reg.Execute(ctx, env, "/exit")
 	if err != nil || !resExit.Quit {
 		t.Errorf("/exit failed: res=%+v, err=%v", resExit, err)
+	}
+}
+
+func TestSuggestArgs(t *testing.T) {
+	reg := NewRegistry()
+	ctx := context.Background()
+	env := &Env{
+		Mode: api.ModeDefault,
+	}
+
+	// 1. Without space -> false
+	if _, _, ok := reg.SuggestArgs(ctx, env, "/mode"); ok {
+		t.Errorf("SuggestArgs without space should return false")
+	}
+
+	// 2. Trailing space -> all 5 options
+	cmd, opts, ok := reg.SuggestArgs(ctx, env, "/mode ")
+	if !ok || cmd.Name != "mode" || len(opts) != 5 {
+		t.Fatalf("SuggestArgs('/mode ') = (%+v, len=%d, ok=%v)", cmd, len(opts), ok)
+	}
+	if !opts[0].Current {
+		t.Errorf("expected opts[0] (default) to be Current")
+	}
+
+	// 3. Filter by prefix
+	_, filteredAS, ok := reg.SuggestArgs(ctx, env, "/mode as")
+	if !ok || len(filteredAS) != 1 || filteredAS[0].Value != "ask" {
+		t.Errorf("SuggestArgs('/mode as') expected 'ask', got %+v", filteredAS)
+	}
+
+	// 4. Filter exact match
+	_, filteredPlan, ok := reg.SuggestArgs(ctx, env, "/mode plan")
+	if !ok || len(filteredPlan) != 1 || filteredPlan[0].Value != "plan" {
+		t.Errorf("SuggestArgs('/mode plan') expected 'plan', got %+v", filteredPlan)
+	}
+
+	// 5. Command without options -> false
+	if _, _, ok := reg.SuggestArgs(ctx, env, "/help "); ok {
+		t.Errorf("SuggestArgs('/help ') should return false")
 	}
 }

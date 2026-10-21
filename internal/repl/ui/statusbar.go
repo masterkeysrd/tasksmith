@@ -18,6 +18,8 @@ const (
 	StateStreaming
 	// StateApproval indicates the REPL is paused awaiting user resolution of a tool permission request.
 	StateApproval
+	// StatePicker indicates an interactive command picker modal is active.
+	StatePicker
 )
 
 // String returns the human-readable name of the [State].
@@ -29,6 +31,8 @@ func (s State) String() string {
 		return "streaming"
 	case StateApproval:
 		return "approval"
+	case StatePicker:
+		return "picker"
 	default:
 		return "unknown"
 	}
@@ -79,8 +83,6 @@ func stateHint(state State) string {
 	switch state {
 	case StateStreaming:
 		return "streaming • esc to cancel"
-	case StateApproval:
-		return "permission required • ↑/↓ select • enter confirm • r feedback"
 	default:
 		return "shift+tab cycle mode • /help commands"
 	}

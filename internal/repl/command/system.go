@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/masterkeysrd/tasksmith/api"
+	"github.com/masterkeysrd/tasksmith/internal/repl/ui"
 )
 
 func (r *Registry) registerSystemCommands() {
@@ -21,6 +22,7 @@ func (r *Registry) registerSystemCommands() {
 		Usage:       "/mode [default|accept_edits|plan|ask|auto]",
 		Description: "Read or update the session permission mode",
 		Handler:     HandleMode,
+		Options:     modeOptions,
 	})
 	r.Register(Command{
 		Name:        "clear",
@@ -63,23 +65,21 @@ func HandleMode(ctx context.Context, env *Env, args []string) (Result, error) {
 
 	hasSession := env.Session != nil && strings.TrimSpace(env.Session.ID) != ""
 	if len(args) == 0 || strings.TrimSpace(args[0]) == "" {
-		if !hasSession {
-			mode := env.Mode
-			if mode == "" {
-				mode = api.ModeDefault
+		mode := env.Mode
+		if hasSession {
+			if m, err := env.Client.PermissionMode(ctx, env.Session.ID); err == nil && m != "" {
+				mode = m
 			}
-			return Result{
-				Output:     fmt.Sprintf("Permission mode: %s", mode),
-				ModeChange: mode,
-			}, nil
 		}
-		mode, err := env.Client.PermissionMode(ctx, env.Session.ID)
-		if err != nil {
-			return Result{}, fmt.Errorf("error reading permission mode: %w", err)
+		if mode == "" {
+			mode = api.ModeDefault
 		}
+
+		picker := ui.NewPicker("Select permission mode:", "/mode", modeOptionsWithActive(mode))
 		return Result{
 			Output:     fmt.Sprintf("Permission mode: %s", mode),
 			ModeChange: mode,
+			Picker:     &picker,
 		}, nil
 	}
 
@@ -101,6 +101,52 @@ func HandleMode(ctx context.Context, env *Env, args []string) (Result, error) {
 		Output:     fmt.Sprintf("Permission mode set to: %s", nextMode),
 		ModeChange: nextMode,
 	}, nil
+}
+
+func modeOptionsWithActive(activeMode api.PermissionMode) []ui.Option {
+	if activeMode == "" {
+		activeMode = api.ModeDefault
+	}
+	return []ui.Option{
+		{
+			Value:       string(api.ModeDefault),
+			Label:       string(api.ModeDefault),
+			Description: "Allow safe reads; ask for writes, commands, and network",
+			Current:     activeMode == api.ModeDefault,
+		},
+		{
+			Value:       string(api.ModeAcceptEdits),
+			Label:       string(api.ModeAcceptEdits),
+			Description: "Allow safe reads and workspace file edits",
+			Current:     activeMode == api.ModeAcceptEdits,
+		},
+		{
+			Value:       string(api.ModePlan),
+			Label:       string(api.ModePlan),
+			Description: "Read-only mode; block writes, edits, and shell commands",
+			Current:     activeMode == api.ModePlan,
+		},
+		{
+			Value:       string(api.ModeAsk),
+			Label:       string(api.ModeAsk),
+			Description: "Ask for confirmation before every tool call",
+			Current:     activeMode == api.ModeAsk,
+		},
+		{
+			Value:       string(api.ModeAuto),
+			Label:       string(api.ModeAuto),
+			Description: "Allow all workspace actions except unsafe operations",
+			Current:     activeMode == api.ModeAuto,
+		},
+	}
+}
+
+func modeOptions(_ context.Context, env *Env) []ui.Option {
+	var active api.PermissionMode
+	if env != nil {
+		active = env.Mode
+	}
+	return modeOptionsWithActive(active)
 }
 
 func isValidPermissionMode(mode api.PermissionMode) bool {

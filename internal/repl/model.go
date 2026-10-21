@@ -35,10 +35,12 @@ type Model struct {
 	defaultTitle string
 	registry     *command.Registry
 
-	state    ui.State
-	composer ui.Composer
-	approval ui.Approval
-	spinner  spinner.Model
+	state     ui.State
+	composer  ui.Composer
+	approval  ui.Approval
+	picker    ui.Picker
+	argCursor int
+	spinner   spinner.Model
 
 	streamText      string
 	streamReasoning string
@@ -131,6 +133,16 @@ func (m Model) FeedbackMode() bool {
 	return m.approval.FeedbackMode()
 }
 
+// PickerCursor returns the currently highlighted option index in [ui.StatePicker].
+func (m Model) PickerCursor() int {
+	return m.picker.Cursor()
+}
+
+// ArgCursor returns the currently highlighted index in inline argument suggestions.
+func (m Model) ArgCursor() int {
+	return m.argCursor
+}
+
 // InputValue returns the current text in the prompt input field.
 func (m Model) InputValue() string {
 	return m.composer.Value()
@@ -139,6 +151,18 @@ func (m Model) InputValue() string {
 // SetInputValue sets the prompt input field value and moves the cursor to the end.
 func (m *Model) SetInputValue(val string) {
 	m.composer.SetValue(val)
+}
+
+func (m Model) commandEnv() *command.Env {
+	return &command.Env{
+		Client:       m.client,
+		Workspace:    m.workspace,
+		Session:      m.session,
+		Mode:         m.mode,
+		DefaultAgent: m.defaultAgent,
+		DefaultModel: m.defaultModel,
+		DefaultTitle: m.defaultTitle,
+	}
 }
 
 // Init implements [tea.Model].
@@ -193,6 +217,8 @@ func (m Model) View() tea.View {
 		return tea.NewView(m.renderStreamingView())
 	case ui.StateApproval:
 		return tea.NewView(m.renderApprovalView())
+	case ui.StatePicker:
+		return tea.NewView(m.renderPickerView())
 	default:
 		return tea.NewView(m.renderIdleView())
 	}
@@ -202,20 +228,38 @@ func (m Model) renderIdleView() string {
 	var sections []string
 	sections = append(sections, m.composer.View())
 
-	raw := strings.TrimSpace(m.composer.Value())
-	if strings.HasPrefix(raw, "/") && !strings.Contains(raw, " ") {
-		suggestions := m.registry.Suggest(raw)
-		suggs := make([]ui.Suggestion, len(suggestions))
-		for i, s := range suggestions {
-			suggs[i] = ui.Suggestion{Usage: s.Usage, Description: s.Description}
+	raw := m.composer.Value()
+	if _, argOpts, ok := m.registry.SuggestArgs(m.ctx, m.commandEnv(), raw); ok && len(argOpts) > 0 {
+		cursor := m.argCursor
+		if cursor < 0 {
+			cursor = 0
 		}
-		if hint := ui.FormatSuggestions(suggs); hint != "" {
-			sections = append(sections, hint)
+		if cursor >= len(argOpts) {
+			cursor = len(argOpts) - 1
+		}
+		if optsBlock := ui.FormatOptions(argOpts, cursor); optsBlock != "" {
+			sections = append(sections, optsBlock)
+		}
+	} else {
+		trimmed := strings.TrimSpace(raw)
+		if strings.HasPrefix(trimmed, "/") && !strings.Contains(trimmed, " ") {
+			suggestions := m.registry.Suggest(trimmed)
+			suggs := make([]ui.Suggestion, len(suggestions))
+			for i, s := range suggestions {
+				suggs[i] = ui.Suggestion{Usage: s.Usage, Description: s.Description}
+			}
+			if hint := ui.FormatSuggestions(suggs); hint != "" {
+				sections = append(sections, hint)
+			}
 		}
 	}
 
 	sections = append(sections, ui.FormatStatusBar(m.state, m.session, m.mode))
 	return strings.Join(sections, "\n")
+}
+
+func (m Model) renderPickerView() string {
+	return m.picker.Render()
 }
 
 func (m Model) renderStreamingView() string {
@@ -234,12 +278,7 @@ func (m Model) renderStreamingView() string {
 }
 
 func (m Model) renderApprovalView() string {
-	var sections []string
-	if card := m.approval.Render(); card != "" {
-		sections = append(sections, card)
-	}
-	sections = append(sections, ui.FormatStatusBar(m.state, m.session, m.mode))
-	return strings.Join(sections, "\n")
+	return m.approval.Render()
 }
 
 func (m Model) handleKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
@@ -248,9 +287,39 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m.handleStreamingKey(msg)
 	case ui.StateApproval:
 		return m.handleApprovalKey(msg)
+	case ui.StatePicker:
+		return m.handlePickerKey(msg)
 	default:
 		return m.handleIdleKey(msg)
 	}
+}
+
+func (m Model) handlePickerKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	keyStr := msg.String()
+	switch {
+	case keyStr == "ctrl+c" || keyStr == "esc" || msg.Code == tea.KeyEscape:
+		m.state = ui.StateIdle
+		return m, nil
+
+	case keyStr == "up" || keyStr == "k" || msg.Code == tea.KeyUp:
+		m.picker.CursorUp()
+		return m, nil
+
+	case keyStr == "down" || keyStr == "j" || msg.Code == tea.KeyDown:
+		m.picker.CursorDown()
+		return m, nil
+
+	case keyStr == "enter" || msg.Code == tea.KeyEnter:
+		opt, ok := m.picker.Selected()
+		if !ok {
+			m.state = ui.StateIdle
+			return m, nil
+		}
+		m.state = ui.StateIdle
+		cmdLine := m.picker.CommandPrefix + " " + opt.Value
+		return m.executeSlashCommand(cmdLine)
+	}
+	return m, nil
 }
 
 func (m Model) handleIdleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
@@ -263,6 +332,35 @@ func (m Model) handleIdleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 	if keyStr == "shift+tab" || (msg.Code == tea.KeyTab && msg.Mod&tea.ModShift != 0) {
 		return m.cycleMode()
+	}
+
+	inHist := m.composer.InHistory()
+	argCmd, argOpts, hasArgSuggs := m.registry.SuggestArgs(m.ctx, m.commandEnv(), m.composer.Value())
+	if !inHist && hasArgSuggs && len(argOpts) > 0 {
+		if keyStr == "up" || msg.Code == tea.KeyUp {
+			if m.argCursor > 0 {
+				m.argCursor--
+			}
+			return m, nil
+		}
+		if keyStr == "down" || msg.Code == tea.KeyDown {
+			if m.argCursor < len(argOpts)-1 {
+				m.argCursor++
+			}
+			return m, nil
+		}
+		if keyStr == "enter" || msg.Code == tea.KeyEnter {
+			idx := m.argCursor
+			if idx < 0 {
+				idx = 0
+			}
+			if idx >= len(argOpts) {
+				idx = len(argOpts) - 1
+			}
+			m.composer.SetValue("/" + argCmd.Name + " " + argOpts[idx].Value)
+			m.argCursor = 0
+			return m.submitIdleInput()
+		}
 	}
 
 	if keyStr == "up" || msg.Code == tea.KeyUp {
@@ -279,8 +377,12 @@ func (m Model) handleIdleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m.submitIdleInput()
 	}
 
+	oldVal := m.composer.Value()
 	var cmd tea.Cmd
 	m.composer, cmd = m.composer.Update(msg)
+	if m.composer.Value() != oldVal {
+		m.argCursor = 0
+	}
 	return m, cmd
 }
 
@@ -313,6 +415,7 @@ func nextPermissionMode(curr api.PermissionMode) api.PermissionMode {
 }
 
 func (m Model) submitIdleInput() (tea.Model, tea.Cmd) {
+	m.argCursor = 0
 	text := m.composer.Submit()
 	if text == "" {
 		return m, nil
@@ -342,19 +445,17 @@ func (m Model) submitIdleInput() (tea.Model, tea.Cmd) {
 }
 
 func (m Model) executeSlashCommand(line string) (tea.Model, tea.Cmd) {
-	env := &command.Env{
-		Client:       m.client,
-		Workspace:    m.workspace,
-		Session:      m.session,
-		Mode:         m.mode,
-		DefaultAgent: m.defaultAgent,
-		DefaultModel: m.defaultModel,
-		DefaultTitle: m.defaultTitle,
-	}
+	env := m.commandEnv()
 
 	res, err := m.registry.Execute(m.ctx, env, line)
 	if err != nil {
 		return m, tea.Println(ui.FormatError(err.Error()))
+	}
+
+	if res.Picker != nil {
+		m.picker = *res.Picker
+		m.state = ui.StatePicker
+		return m, nil
 	}
 
 	if res.ResetSession {

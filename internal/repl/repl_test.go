@@ -1317,3 +1317,120 @@ func TestRunResumeSessionWithMutation(t *testing.T) {
 		t.Errorf("session Model = %q, want 'claude-opus-4-6'", s1.Model)
 	}
 }
+
+func TestInteractiveModePickerAndFilterFlows(t *testing.T) {
+	c, _ := startTestUnixDaemon(t)
+	ctx := context.Background()
+
+	cfg := Config{
+		Client:    c,
+		Workspace: "/workspace/project",
+		SessionID: "s1",
+		In:        strings.NewReader(""),
+		Out:       &bytes.Buffer{},
+		ErrOut:    &bytes.Buffer{},
+	}
+	sess := &api.Session{ID: "s1", Agent: "build", Model: "claude-sonnet-4-6"}
+	m := NewModel(ctx, cfg, NewRegistry(), sess, api.ModeDefault)
+	_ = m.Init()
+
+	// --- Flow 1: Typing "/mode" and Enter opens StatePicker ---
+	m.SetInputValue("/mode")
+	updated, _ := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = updated.(Model)
+	if m.State() != StatePicker {
+		t.Fatalf("State after '/mode' Enter = %v, want StatePicker", m.State())
+	}
+	pickerView := m.View()
+	if !strings.Contains(pickerView.Content, "Select permission mode:") ||
+		!strings.Contains(pickerView.Content, "default") ||
+		!strings.Contains(pickerView.Content, "esc to cancel") {
+		t.Fatalf("picker view mismatch:\n%s", pickerView.Content)
+	}
+	if strings.Contains(pickerView.Content, "mode: default │") || strings.Contains(pickerView.Content, "shift+tab cycle mode") {
+		t.Errorf("picker view should own its status bar and not render global status bar:\n%s", pickerView.Content)
+	}
+	// Initial cursor is at 0 (ModeDefault)
+	if m.PickerCursor() != 0 {
+		t.Errorf("initial picker cursor = %d, want 0", m.PickerCursor())
+	}
+	// Navigate down to 1 (accept_edits)
+	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	m = updated.(Model)
+	if m.PickerCursor() != 1 {
+		t.Errorf("picker cursor after down = %d, want 1", m.PickerCursor())
+	}
+	// Cancel picker with Esc -> returns to StateIdle with mode unchanged
+	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	m = updated.(Model)
+	if m.State() != StateIdle {
+		t.Fatalf("State after Esc = %v, want StateIdle", m.State())
+	}
+	if m.Mode() != api.ModeDefault {
+		t.Errorf("Mode after canceled picker = %v, want ModeDefault", m.Mode())
+	}
+
+	// Open picker again, navigate down to 2 (plan), confirm with Enter
+	m.SetInputValue("/mode")
+	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = updated.(Model)
+	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown}) // to 1 (accept_edits)
+	m = updated.(Model)
+	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown}) // to 2 (plan)
+	m = updated.(Model)
+	if m.PickerCursor() != 2 {
+		t.Fatalf("picker cursor = %d, want 2", m.PickerCursor())
+	}
+	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = updated.(Model)
+	if m.State() != StateIdle {
+		t.Fatalf("State after picker Enter = %v, want StateIdle", m.State())
+	}
+	if m.Mode() != api.ModePlan {
+		t.Errorf("Mode after picker select = %v, want ModePlan", m.Mode())
+	}
+
+	// --- Flow 2: Typing "/mode " with trailing space (live inline argument filter) ---
+	m.SetInputValue("/mode ")
+	idleView := m.View()
+	// All 5 options should be visible in inline suggestion block
+	if !strings.Contains(idleView.Content, "accept_edits") ||
+		!strings.Contains(idleView.Content, "plan") ||
+		!strings.Contains(idleView.Content, "ask") ||
+		!strings.Contains(idleView.Content, "auto") {
+		t.Fatalf("idle view with '/mode ' missing options:\n%s", idleView.Content)
+	}
+	if m.ArgCursor() != 0 {
+		t.Errorf("initial argCursor = %d, want 0", m.ArgCursor())
+	}
+
+	// Navigate down in suggestions
+	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	m = updated.(Model)
+	if m.ArgCursor() != 1 {
+		t.Errorf("argCursor after Down = %d, want 1", m.ArgCursor())
+	}
+	// Navigate up
+	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyUp})
+	m = updated.(Model)
+	if m.ArgCursor() != 0 {
+		t.Errorf("argCursor after Up = %d, want 0", m.ArgCursor())
+	}
+
+	// Filter with query: "/mode as" (matches "ask")
+	m.SetInputValue("/mode as")
+	// Down and Enter to select "ask"
+	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = updated.(Model)
+	if m.Mode() != api.ModeAsk {
+		t.Errorf("Mode after filtered select = %v, want ModeAsk", m.Mode())
+	}
+
+	// --- Flow 3: Typing "/mode plan" directly and pressing Enter ---
+	m.SetInputValue("/mode plan")
+	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = updated.(Model)
+	if m.Mode() != api.ModePlan {
+		t.Errorf("Mode after direct '/mode plan' = %v, want ModePlan", m.Mode())
+	}
+}

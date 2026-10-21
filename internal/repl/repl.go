@@ -20,6 +20,8 @@ import (
 type (
 	Header         = ui.Header
 	State          = ui.State
+	Option         = ui.Option
+	Picker         = ui.Picker
 	Registry       = command.Registry
 	Command        = command.Command
 	CommandEnv     = command.Env
@@ -31,6 +33,7 @@ const (
 	StateIdle      = ui.StateIdle
 	StateStreaming = ui.StateStreaming
 	StateApproval  = ui.StateApproval
+	StatePicker    = ui.StatePicker
 )
 
 // ErrInvalidConfig is returned when required [Config] fields are missing.

@@ -320,3 +320,69 @@ func TestMessageAndDiffFormatting(t *testing.T) {
 		t.Errorf("FormatError = %q", errFormatted)
 	}
 }
+
+func TestPickerComponent(t *testing.T) {
+	opts := []Option{
+		{Value: "default", Label: "Default", Description: "Safe reads"},
+		{Value: "accept_edits", Label: "Accept Edits", Description: "Auto edits", Current: true},
+		{Value: "plan", Label: "Plan", Description: "Read-only"},
+	}
+
+	p := NewPicker("Choose Mode:", "/mode", opts)
+	if p.Cursor() != 1 {
+		t.Fatalf("expected cursor at 1 (Current option), got %d", p.Cursor())
+	}
+
+	sel, ok := p.Selected()
+	if !ok || sel.Value != "accept_edits" {
+		t.Errorf("Selected = %+v, ok=%v", sel, ok)
+	}
+
+	p.CursorDown()
+	if p.Cursor() != 2 {
+		t.Errorf("CursorDown = %d, want 2", p.Cursor())
+	}
+	p.CursorDown() // clamped
+	if p.Cursor() != 2 {
+		t.Errorf("CursorDown clamped = %d, want 2", p.Cursor())
+	}
+
+	p.CursorUp()
+	if p.Cursor() != 1 {
+		t.Errorf("CursorUp = %d, want 1", p.Cursor())
+	}
+
+	p.SetCursor(0)
+	if p.Cursor() != 0 {
+		t.Errorf("SetCursor(0) = %d, want 0", p.Cursor())
+	}
+
+	rendered := p.Render()
+	if !strings.Contains(rendered, "Choose Mode:") ||
+		!strings.Contains(rendered, "Accept Edits") ||
+		!strings.Contains(rendered, "current") ||
+		!strings.Contains(rendered, "esc to cancel") {
+		t.Errorf("rendered picker mismatch:\n%s", rendered)
+	}
+
+	// Empty picker
+	emptyP := NewPicker("", "", nil)
+	if _, ok := emptyP.Selected(); ok {
+		t.Errorf("empty picker Selected should be false")
+	}
+	if emptyP.Render() == "" {
+		t.Errorf("empty picker Render should still render footer")
+	}
+
+	// Custom status bar
+	customP := NewPicker("Custom", "/cmd", opts)
+	customP.StatusBar = "custom navigation hints"
+	if !strings.Contains(customP.Render(), "custom navigation hints") {
+		t.Errorf("custom status bar missing in render")
+	}
+	// Fallback to DefaultPickerStatusBar when cleared
+	customP.StatusBar = ""
+	if !strings.Contains(customP.Render(), DefaultPickerStatusBar) {
+		t.Errorf("default status bar missing when StatusBar cleared")
+	}
+}
