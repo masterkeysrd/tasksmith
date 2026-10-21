@@ -7,7 +7,9 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/masterkeysrd/tasksmith/api"
+	"github.com/masterkeysrd/tasksmith/internal/repl/theme"
 )
 
 func TestHeaderRenderingAndNormalization(t *testing.T) {
@@ -53,33 +55,81 @@ func TestHeaderRenderingAndNormalization(t *testing.T) {
 }
 
 func TestStatusBarRenderingAndStates(t *testing.T) {
-	sess := &api.Session{
-		ID:    "s123",
-		Agent: "coder",
-		Model: "gpt-5",
+	// 1. Default mode: shows "<Model> · <Thinking>" without "default · "
+	sbDefault := StatusBar{
+		State:    StateIdle,
+		Mode:     api.ModeDefault,
+		Model:    "Claude 3.7 Sonnet",
+		Thinking: "high",
+		Width:    100,
+	}
+	outDefault := sbDefault.Render()
+	if !strings.Contains(outDefault, "Claude 3.7 Sonnet · high") {
+		t.Errorf("expected model · thinking on right, got: %s", outDefault)
+	}
+	if strings.Contains(outDefault, "default · ") {
+		t.Errorf("default mode should not prefix with 'default · ': %s", outDefault)
+	}
+	if !strings.Contains(outDefault, "shift+tab cycle mode") {
+		t.Errorf("idle state hint missing on left: %s", outDefault)
 	}
 
-	for _, state := range []State{StateIdle, StateStreaming, StateApproval} {
-		for _, mode := range []api.PermissionMode{api.ModeDefault, api.ModeAcceptEdits, api.ModePlan, api.ModeAsk, api.ModeAuto} {
-			sb := StatusBar{
-				State:   state,
-				Session: sess,
-				Mode:    mode,
-			}
-			out := sb.Render()
-			if !strings.Contains(out, string(mode)) {
-				t.Errorf("status bar missing mode %q: %s", mode, out)
-			}
-			if !strings.Contains(out, "s123") || !strings.Contains(out, "coder") || !strings.Contains(out, "gpt-5") {
-				t.Errorf("status bar missing session info: %s", out)
-			}
+	// 2. Non-default modes: shows "<mode> · <Model> · <Thinking>"
+	for _, mode := range []api.PermissionMode{api.ModeAcceptEdits, api.ModePlan, api.ModeAsk, api.ModeAuto} {
+		sb := StatusBar{
+			State:    StateIdle,
+			Mode:     mode,
+			Model:    "Gemini 2.5 Flash",
+			Thinking: "auto",
+			Width:    120,
 		}
+		out := sb.Render()
+		wantRight := theme.ModeBadgeStyle(mode).Render(string(mode)) + theme.StatusBarStyle.Render(" · ") + theme.StatusBarStyle.Render("Gemini 2.5 Flash · auto")
+		if !strings.Contains(out, wantRight) {
+			t.Errorf("mode %s right part mismatch, want %q in %q", mode, wantRight, out)
+		}
+	}
+
+	// 3. Streaming state hint on left
+	sbStreaming := StatusBar{
+		State:    StateStreaming,
+		Mode:     api.ModeDefault,
+		Model:    "Claude 3.7 Sonnet",
+		Thinking: "auto",
+		Width:    80,
+	}
+	outStreaming := sbStreaming.Render()
+	if !strings.Contains(outStreaming, "streaming • esc to cancel") {
+		t.Errorf("streaming hint missing on left: %s", outStreaming)
+	}
+
+	// 4. Width gap separation
+	sbWide := StatusBar{
+		State:    StateIdle,
+		Mode:     api.ModeDefault,
+		Model:    "M",
+		Thinking: "T",
+		Width:    100,
+	}
+	outWide := sbWide.Render()
+	left := theme.StatusBarStyle.Render("shift+tab cycle mode • /help commands")
+	right := theme.StatusBarStyle.Render("M · T")
+	expectedSpaces := 100 - lipgloss.Width(left) - lipgloss.Width(right)
+	if !strings.Contains(outWide, strings.Repeat(" ", expectedSpaces)) {
+		t.Errorf("status bar width gap mismatch: %q", outWide)
+	}
+
+	// 5. Fallback defaults when fields are empty
+	sbEmpty := StatusBar{}
+	outEmpty := sbEmpty.Render()
+	if !strings.Contains(outEmpty, "default · auto") {
+		t.Errorf("empty status bar missing fallback 'default · auto': %s", outEmpty)
 	}
 
 	if (State(99)).String() != "unknown" {
 		t.Errorf("unknown state string = %q", (State(99)).String())
 	}
-	if FormatStatusBar(StateIdle, nil, api.ModeDefault) == "" {
+	if FormatStatusBar(sbDefault) == "" {
 		t.Errorf("FormatStatusBar returned empty")
 	}
 }

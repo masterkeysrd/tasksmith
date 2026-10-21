@@ -19,6 +19,7 @@ import (
 // Forwarded types and constants from subpackages for caller ergonomics.
 type (
 	Header            = ui.Header
+	StatusBar         = ui.StatusBar
 	State             = ui.State
 	Option            = ui.Option
 	Picker            = ui.Picker
@@ -120,9 +121,9 @@ func Run(ctx context.Context, cfg Config) error {
 	return runTUI(ctx, cfg, sess, mode)
 }
 
-func buildHeader(ctx context.Context, cfg Config, sess *api.Session) Header {
-	agentName := strings.TrimSpace(cfg.Agent)
-	modelID := strings.TrimSpace(cfg.Model)
+func resolveModelAndThinking(ctx context.Context, c *client.Client, cfgAgent, cfgModel string, sess *api.Session) (modelLabel, thinking string) {
+	agentName := strings.TrimSpace(cfgAgent)
+	modelID := strings.TrimSpace(cfgModel)
 
 	if sess != nil {
 		agentName = strings.TrimSpace(sess.Agent)
@@ -130,16 +131,16 @@ func buildHeader(ctx context.Context, cfg Config, sess *api.Session) Header {
 	}
 
 	var ws *api.Workspace
-	if agentName == "" || modelID == "" {
-		ws, _ = cfg.Client.GetWorkspace(ctx)
+	if c != nil && (agentName == "" || modelID == "") {
+		ws, _ = c.GetWorkspace(ctx)
 		if ws != nil && agentName == "" {
 			agentName = strings.TrimSpace(ws.DefaultAgent)
 		}
 	}
 
 	var ag *api.Agent
-	if agentName != "" {
-		ag, _ = cfg.Client.GetAgent(ctx, agentName)
+	if c != nil && agentName != "" {
+		ag, _ = c.GetAgent(ctx, agentName)
 	}
 
 	if modelID == "" {
@@ -152,8 +153,8 @@ func buildHeader(ctx context.Context, cfg Config, sess *api.Session) Header {
 	}
 
 	var mdl *api.Model
-	if modelID != "" {
-		mdl, _ = cfg.Client.GetModel(ctx, modelID)
+	if c != nil && modelID != "" {
+		mdl, _ = c.GetModel(ctx, modelID)
 	}
 
 	var agEffort, mdlLabel, mdlEffort string
@@ -165,10 +166,15 @@ func buildHeader(ctx context.Context, cfg Config, sess *api.Session) Header {
 		mdlEffort = strings.TrimSpace(mdl.DefaultEffort)
 	}
 
+	return cmp.Or(mdlLabel, modelID), cmp.Or(agEffort, mdlEffort, "auto")
+}
+
+func buildHeader(ctx context.Context, cfg Config, sess *api.Session) Header {
+	mdl, thinking := resolveModelAndThinking(ctx, cfg.Client, cfg.Agent, cfg.Model, sess)
 	return Header{
 		Version:  cfg.Version,
-		Model:    cmp.Or(mdlLabel, modelID),
-		Thinking: cmp.Or(agEffort, mdlEffort, "auto"),
+		Model:    mdl,
+		Thinking: thinking,
 		Path:     cfg.Workspace,
 	}
 }
@@ -276,9 +282,9 @@ func FormatBanner(h Header) string {
 	return ui.FormatHeader(h)
 }
 
-// FormatStatusBar renders the contextual status footer for the active REPL state.
-func FormatStatusBar(state State, sess *api.Session, mode api.PermissionMode) string {
-	return ui.FormatStatusBar(state, sess, mode)
+// FormatStatusBar renders the contextual status footer for the given [StatusBar].
+func FormatStatusBar(s StatusBar) string {
+	return ui.FormatStatusBar(s)
 }
 
 // FormatUserPrompt formats a submitted user prompt line for scrollback output.

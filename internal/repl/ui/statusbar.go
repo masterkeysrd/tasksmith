@@ -1,9 +1,11 @@
 package ui
 
 import (
+	"cmp"
 	"fmt"
 	"strings"
 
+	"charm.land/lipgloss/v2"
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/repl/theme"
 )
@@ -40,43 +42,35 @@ func (s State) String() string {
 
 // StatusBar holds contextual data rendered in the REPL status footer.
 type StatusBar struct {
-	State   State
-	Session *api.Session
-	Mode    api.PermissionMode
+	State    State
+	Mode     api.PermissionMode
+	Model    string
+	Thinking string
+	Width    int
 }
 
-// Render formats the status bar footer string.
+// Render formats the status bar footer string using a split layout.
 func (s StatusBar) Render() string {
-	mode := s.Mode
-	if mode == "" {
-		mode = api.ModeDefault
+	left := theme.StatusBarStyle.Render(stateHint(s.State))
+
+	model := cmp.Or(strings.TrimSpace(s.Model), "default")
+	thinking := cmp.Or(strings.TrimSpace(s.Thinking), "auto")
+	modelPart := theme.StatusBarStyle.Render(fmt.Sprintf("%s · %s", model, thinking))
+	mode := cmp.Or(s.Mode, api.ModeDefault)
+
+	var right string
+	if mode == api.ModeDefault {
+		right = modelPart
+	} else {
+		right = theme.ModeBadgeStyle(mode).Render(string(mode)) + theme.StatusBarStyle.Render(" · ") + modelPart
 	}
 
-	modeBadge := theme.ModeBadgeStyle(mode).Render(fmt.Sprintf("mode: %s", mode))
+	width := cmp.Or(s.Width, 80)
+	leftWidth := lipgloss.Width(left)
+	rightWidth := lipgloss.Width(right)
+	gap := max(width-leftWidth-rightWidth, 2)
 
-	var sessionInfo string
-	if s.Session != nil {
-		parts := make([]string, 0, 3)
-		if s.Session.ID != "" {
-			parts = append(parts, fmt.Sprintf("session: %s", s.Session.ID))
-		}
-		if s.Session.Agent != "" {
-			parts = append(parts, fmt.Sprintf("agent: %s", s.Session.Agent))
-		}
-		if s.Session.Model != "" {
-			parts = append(parts, fmt.Sprintf("model: %s", s.Session.Model))
-		}
-		sessionInfo = strings.Join(parts, " • ")
-	}
-
-	hint := stateHint(s.State)
-	segments := []string{modeBadge}
-	if sessionInfo != "" {
-		segments = append(segments, theme.StatusBarStyle.Render(sessionInfo))
-	}
-	segments = append(segments, theme.StatusBarStyle.Render(hint))
-
-	return strings.Join(segments, theme.StatusBarStyle.Render(" │ "))
+	return left + strings.Repeat(" ", gap) + right
 }
 
 func stateHint(state State) string {
@@ -88,7 +82,7 @@ func stateHint(state State) string {
 	}
 }
 
-// FormatStatusBar renders the contextual status footer for the active REPL state.
-func FormatStatusBar(state State, sess *api.Session, mode api.PermissionMode) string {
-	return StatusBar{State: state, Session: sess, Mode: mode}.Render()
+// FormatStatusBar renders the contextual status footer for the given [StatusBar].
+func FormatStatusBar(s StatusBar) string {
+	return s.Render()
 }

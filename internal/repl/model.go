@@ -46,6 +46,9 @@ type Model struct {
 	streamText      string
 	streamReasoning string
 
+	modelLabel string
+	thinking   string
+
 	eventCh  <-chan api.Event
 	quitting bool
 }
@@ -72,6 +75,8 @@ func NewModel(ctx context.Context, cfg Config, reg *command.Registry, sess *api.
 		c = c.WithCWD(cfg.Workspace)
 	}
 
+	modelLabel, thinking := resolveModelAndThinking(ctx, c, cfg.Agent, cfg.Model, sess)
+
 	return Model{
 		ctx:          ctx,
 		client:       c,
@@ -81,6 +86,8 @@ func NewModel(ctx context.Context, cfg Config, reg *command.Registry, sess *api.
 		defaultAgent: cfg.Agent,
 		defaultModel: cfg.Model,
 		defaultTitle: cfg.Title,
+		modelLabel:   modelLabel,
+		thinking:     thinking,
 		registry:     reg,
 		state:        ui.StateIdle,
 		composer:     ui.NewComposer(),
@@ -97,6 +104,16 @@ func (m Model) State() ui.State {
 // Mode returns the active [api.PermissionMode] tracked by the model.
 func (m Model) Mode() api.PermissionMode {
 	return m.mode
+}
+
+// ModelLabel returns the resolved model display name for the status bar.
+func (m Model) ModelLabel() string {
+	return m.modelLabel
+}
+
+// Thinking returns the resolved thinking/reasoning effort level for the status bar.
+func (m Model) Thinking() string {
+	return m.thinking
 }
 
 // Session returns the active [api.Session] tracked by the model.
@@ -275,6 +292,7 @@ func (m Model) handleNewSession(msg command.NewSessionMsg) (tea.Model, tea.Cmd) 
 	if msg.Model != "" {
 		m.defaultModel = msg.Model
 	}
+	m.modelLabel, m.thinking = resolveModelAndThinking(m.ctx, m.client, m.defaultAgent, m.defaultModel, nil)
 	return m, tea.Println(fmt.Sprintf("Switched to new session (agent=%s model=%s)", m.defaultAgent, m.defaultModel))
 }
 
@@ -287,6 +305,7 @@ func (m Model) handleSwitchSession(msg command.SwitchSessionMsg) (tea.Model, tea
 		return m, tea.Println(ui.FormatError(fmt.Sprintf("error switching session: %v", err)))
 	}
 	m.session = s
+	m.modelLabel, m.thinking = resolveModelAndThinking(m.ctx, m.client, m.defaultAgent, m.defaultModel, s)
 	return m, tea.Println(fmt.Sprintf("Switched to session %s (agent=%s model=%s)", s.ID, s.Agent, s.Model))
 }
 
@@ -417,7 +436,13 @@ func (m Model) renderIdleView() string {
 		}
 	}
 
-	sections = append(sections, ui.FormatStatusBar(m.state, m.session, m.mode))
+	sections = append(sections, ui.StatusBar{
+		State:    m.state,
+		Mode:     m.mode,
+		Model:    m.modelLabel,
+		Thinking: m.thinking,
+		Width:    m.composer.Width(),
+	}.Render())
 	return strings.Join(sections, "\n")
 }
 
@@ -437,7 +462,13 @@ func (m Model) renderStreamingView() string {
 	}
 	sections = append(sections, streamLine)
 	sections = append(sections, m.composer.View())
-	sections = append(sections, ui.FormatStatusBar(m.state, m.session, m.mode))
+	sections = append(sections, ui.StatusBar{
+		State:    m.state,
+		Mode:     m.mode,
+		Model:    m.modelLabel,
+		Thinking: m.thinking,
+		Width:    m.composer.Width(),
+	}.Render())
 	return strings.Join(sections, "\n")
 }
 
@@ -573,6 +604,7 @@ func (m Model) submitIdleInput() (tea.Model, tea.Cmd) {
 			return m, tea.Println(ui.FormatError(err.Error()))
 		}
 		m.session = sess
+		m.modelLabel, m.thinking = resolveModelAndThinking(m.ctx, m.client, m.defaultAgent, m.defaultModel, sess)
 	}
 
 	m.state = ui.StateStreaming

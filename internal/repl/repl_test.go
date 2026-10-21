@@ -657,12 +657,6 @@ func TestRegistryLookupSuggestListAndCommands(t *testing.T) {
 }
 
 func TestStylesAndFormatters(t *testing.T) {
-	sess := &api.Session{
-		ID:    "sess-42",
-		Agent: "build",
-		Model: "claude-sonnet-4-6",
-	}
-
 	for _, mode := range []api.PermissionMode{
 		api.ModeDefault,
 		api.ModeAcceptEdits,
@@ -691,9 +685,24 @@ func TestStylesAndFormatters(t *testing.T) {
 		}
 
 		for _, state := range []State{StateIdle, StateStreaming, StateApproval} {
-			bar := FormatStatusBar(state, sess, mode)
-			if !strings.Contains(bar, string(mode)) {
-				t.Errorf("FormatStatusBar(%s, %s) missing mode: %q", state, mode, bar)
+			bar := FormatStatusBar(StatusBar{
+				State:    state,
+				Mode:     mode,
+				Model:    "claude-sonnet-4-6",
+				Thinking: "auto",
+				Width:    80,
+			})
+			if mode != api.ModeDefault {
+				if !strings.Contains(bar, string(mode)) {
+					t.Errorf("FormatStatusBar(%s, %s) missing mode: %q", state, mode, bar)
+				}
+			} else {
+				if strings.Contains(bar, "default · ") {
+					t.Errorf("default mode should not prefix with 'default · ': %s", bar)
+				}
+			}
+			if !strings.Contains(bar, "claude-sonnet-4-6 · auto") {
+				t.Errorf("missing model · thinking in status bar: %s", bar)
 			}
 		}
 	}
