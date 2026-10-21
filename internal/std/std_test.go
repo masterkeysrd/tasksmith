@@ -705,6 +705,31 @@ func TestFetchAndDownload(t *testing.T) {
 		t.Fatalf("expected truncated 5-byte response, got %+v", truncRes)
 	}
 
+	// Fetch DryRun
+	dryFetch, err := s.Fetch(ctx, FetchRequest{
+		URL:    srv.URL + "/json",
+		DryRun: true,
+	})
+	if err != nil {
+		t.Fatalf("Fetch DryRun failed: %v", err)
+	}
+	if !dryFetch.DryRun || dryFetch.StatusCode != 0 {
+		t.Fatalf("unexpected dryFetch: %+v", dryFetch)
+	}
+
+	// Download DryRun
+	dryDl, err := s.Download(ctx, DownloadRequest{
+		URL:    srv.URL + "/artifact.txt",
+		Path:   "downloads/dry_artifact.txt",
+		DryRun: true,
+	})
+	if err != nil {
+		t.Fatalf("Download DryRun failed: %v", err)
+	}
+	if !dryDl.DryRun || !dryDl.Created {
+		t.Fatalf("unexpected dryDl: %+v", dryDl)
+	}
+
 	// Download new file
 	dlRes, err := s.Download(ctx, DownloadRequest{
 		URL:  srv.URL + "/artifact.txt",
@@ -962,5 +987,3 @@ func TestExpectedHashCASAndUUIDv7(t *testing.T) {
 		}
 	}
 }
-
-

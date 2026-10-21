@@ -16,7 +16,10 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/core/sqlite"
 	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
 	"github.com/masterkeysrd/tasksmith/internal/gateway"
+	"github.com/masterkeysrd/tasksmith/internal/sandbox"
 	"github.com/masterkeysrd/tasksmith/internal/session"
+	"github.com/masterkeysrd/tasksmith/internal/tools"
+	"github.com/masterkeysrd/tasksmith/internal/tools/builtin"
 	"github.com/masterkeysrd/tasksmith/internal/workspace"
 )
 
@@ -64,10 +67,24 @@ func run() error {
 		return fmt.Errorf("resolve working directory: %w", err)
 	}
 
-	ws, err := workspace.Open(ctx, cwd)
+	ws, err := workspace.Open(ctx, cwd, workspace.WithBuiltinFS(builtin.FS()))
 	if err != nil {
 		return fmt.Errorf("open workspace: %w", err)
 	}
+
+	sb, err := sandbox.New(sandbox.Config{
+		Mode:    sandbox.ModeLocal,
+		WorkDir: cwd,
+		Network: sandbox.NetworkPolicy{
+			AllowLoopback: true,
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("initialize sandbox: %w", err)
+	}
+	defer func() {
+		_ = sb.Close()
+	}()
 
 	gwCfg := buildGatewayConfig(ws)
 	gw, err := gateway.New(ctx, gwCfg)
@@ -97,6 +114,7 @@ func run() error {
 		DB:        db,
 		Workspace: ws,
 		Gateway:   gw,
+		Sandbox:   sb,
 		Publisher: pub,
 		Logger:    logger,
 	})
@@ -112,7 +130,7 @@ func run() error {
 	}
 
 	fmt.Printf("TaskSmith REPL (session=%s agent=%s model=%s)\n", activeSession.ID, activeSession.Agent, activeSession.Model)
-	fmt.Println("Commands: /new [model], /sessions, /history, /system <text>, /exit, /quit")
+	fmt.Println("Commands: /new [model], /sessions, /history, /mode [default|accept_edits|plan|ask|auto], /system <text>, /exit, /quit")
 
 	scanner := bufio.NewScanner(os.Stdin)
 	for {
@@ -169,6 +187,24 @@ func run() error {
 				fmt.Printf("[%s] %s\n", msg.Role(), extractMessageText(msg))
 			}
 
+		case line == "/mode" || strings.HasPrefix(line, "/mode "):
+			arg := strings.TrimSpace(strings.TrimPrefix(line, "/mode"))
+			if arg == "" {
+				mode, err := mgr.PermissionMode(ctx, activeSession.ID)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "error reading permission mode: %v\n", err)
+					continue
+				}
+				fmt.Printf("Permission mode: %s\n", mode)
+				continue
+			}
+			nextMode := tools.PermissionMode(arg)
+			if err := mgr.SetPermissionMode(ctx, activeSession.ID, nextMode); err != nil {
+				fmt.Fprintf(os.Stderr, "error setting permission mode: %v (valid: default, accept_edits, plan, ask, auto)\n", err)
+				continue
+			}
+			fmt.Printf("Permission mode set to: %s\n", nextMode)
+
 		case line == "/system" || strings.HasPrefix(line, "/system "):
 			text := strings.TrimSpace(strings.TrimPrefix(line, "/system"))
 			if text == "" {
@@ -186,11 +222,68 @@ func run() error {
 			fmt.Println()
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "error: %v\n", err)
+				continue
+			}
+			if err := promptPendingPermissions(ctx, scanner, mgr, activeSession.ID); err != nil {
+				fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			}
 		}
 	}
 
 	return scanner.Err()
+}
+
+func promptPendingPermissions(ctx context.Context, scanner *bufio.Scanner, mgr *session.Manager, sessionID string) error {
+	for {
+		perms, err := mgr.PendingPermissions(ctx, sessionID)
+		if err != nil {
+			return err
+		}
+		if len(perms) == 0 {
+			return nil
+		}
+
+		perm := perms[0]
+		fmt.Printf("\n[Permission Required] %s\n", perm.Summary)
+		if perm.Diff != "" {
+			fmt.Println(perm.Diff)
+		}
+		fmt.Print("Allow? [y]es once / [a]llow session / [n]o (reject): ")
+		if !scanner.Scan() {
+			fmt.Println()
+			return scanner.Err()
+		}
+
+		raw := strings.TrimSpace(scanner.Text())
+		lower := strings.ToLower(raw)
+
+		decision := tools.PermissionDecision{
+			RequestID:  perm.ID,
+			ToolCallID: perm.ToolCallID,
+		}
+
+		switch {
+		case lower == "y" || lower == "yes":
+			decision.Kind = tools.DecisionAllowOnce
+		case lower == "a" || lower == "allow" || lower == "always":
+			decision.Kind = tools.DecisionAllowSession
+			if len(perm.GrantPatterns) > 0 {
+				decision.GrantPattern = perm.GrantPatterns[0]
+			}
+		default:
+			decision.Kind = tools.DecisionReject
+			if strings.HasPrefix(lower, "n ") {
+				decision.Feedback = strings.TrimSpace(raw[2:])
+			} else if strings.HasPrefix(lower, "no ") {
+				decision.Feedback = strings.TrimSpace(raw[3:])
+			}
+		}
+
+		if _, err := mgr.RespondPermission(ctx, sessionID, decision); err != nil {
+			return err
+		}
+		fmt.Println()
+	}
 }
 
 func buildGatewayConfig(ws *workspace.Workspace) gateway.Config {

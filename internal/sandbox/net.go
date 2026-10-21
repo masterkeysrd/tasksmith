@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -39,6 +40,82 @@ func newSandboxNet(s *session) *sandboxNet {
 	return n
 }
 
+// checkHostPolicy enforces Disabled, BlockedHosts, AllowedHosts, and literal IP
+// or localhost loopback restrictions for a normalized hostname.
+func checkHostPolicy(policy NetworkPolicy, rawHost, normalizedHost string) error {
+	if policy.Disabled {
+		return ErrNetworkDisabled
+	}
+
+	// 1. Check BlockedHosts first (denylist takes precedence).
+	for _, pattern := range policy.BlockedHosts {
+		if matchHostPattern(normalizedHost, pattern) {
+			return fmt.Errorf("%w: %q matches blocked pattern %q", ErrHostBlocked, rawHost, pattern)
+		}
+	}
+
+	// 2. Check AllowedHosts if non-empty.
+	if len(policy.AllowedHosts) > 0 {
+		allowed := false
+		for _, pattern := range policy.AllowedHosts {
+			if matchHostPattern(normalizedHost, pattern) {
+				allowed = true
+				break
+			}
+		}
+		if !allowed {
+			return fmt.Errorf("%w: %q is not in allowed_hosts", ErrHostBlocked, rawHost)
+		}
+	}
+
+	// 3. Check literal IP or localhost loopback rules.
+	if ip := net.ParseIP(normalizedHost); ip != nil {
+		if !policy.AllowLoopback && (ip.IsLoopback() || ip.IsUnspecified()) {
+			return fmt.Errorf("%w: %s", ErrLoopbackBlocked, ip.String())
+		}
+		return nil
+	}
+
+	if !policy.AllowLoopback && (normalizedHost == "localhost" || strings.HasSuffix(normalizedHost, ".localhost")) {
+		return fmt.Errorf("%w: %s", ErrLoopbackBlocked, rawHost)
+	}
+
+	return nil
+}
+
+func (n *sandboxNet) ValidateURL(rawURL string) (*url.URL, error) {
+	if n.s.isClosed() {
+		return nil, ErrSandboxClosed
+	}
+
+	trimmed := strings.TrimSpace(rawURL)
+	if trimmed == "" {
+		return nil, fmt.Errorf("%w: url is required", ErrInvalidURL)
+	}
+
+	u, err := url.Parse(trimmed)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrInvalidURL, err)
+	}
+
+	scheme := strings.ToLower(u.Scheme)
+	if scheme != "http" && scheme != "https" {
+		return nil, fmt.Errorf("%w: unsupported scheme %q (must be http or https)", ErrInvalidURL, u.Scheme)
+	}
+
+	rawHost := u.Hostname()
+	normalizedHost := strings.ToLower(strings.TrimSuffix(strings.TrimSpace(rawHost), "."))
+	if normalizedHost == "" {
+		return nil, fmt.Errorf("%w: missing host", ErrInvalidURL)
+	}
+
+	if err := checkHostPolicy(n.s.cfg.Network, rawHost, normalizedHost); err != nil {
+		return nil, err
+	}
+
+	return u, nil
+}
+
 func (n *sandboxNet) DialContext(ctx context.Context, network, addr string) (net.Conn, error) {
 	if n.s.isClosed() {
 		return nil, ErrSandboxClosed
@@ -62,37 +139,12 @@ func (n *sandboxNet) DialContext(ctx context.Context, network, addr string) (net
 		return nil, fmt.Errorf("sandbox: empty host in address %q", addr)
 	}
 
-	// 1. Check BlockedHosts first (denylist takes precedence).
-	for _, pattern := range policy.BlockedHosts {
-		if matchHostPattern(normalizedHost, pattern) {
-			return nil, fmt.Errorf("%w: %q matches blocked pattern %q", ErrHostBlocked, host, pattern)
-		}
+	if err := checkHostPolicy(policy, host, normalizedHost); err != nil {
+		return nil, err
 	}
 
-	// 2. Check AllowedHosts if non-empty.
-	if len(policy.AllowedHosts) > 0 {
-		allowed := false
-		for _, pattern := range policy.AllowedHosts {
-			if matchHostPattern(normalizedHost, pattern) {
-				allowed = true
-				break
-			}
-		}
-		if !allowed {
-			return nil, fmt.Errorf("%w: %q is not in allowed_hosts", ErrHostBlocked, host)
-		}
-	}
-
-	// 3. Check literal IP or resolve hostname to enforce AllowLoopback and prevent DNS rebinding.
 	if ip := net.ParseIP(normalizedHost); ip != nil {
-		if !policy.AllowLoopback && (ip.IsLoopback() || ip.IsUnspecified()) {
-			return nil, fmt.Errorf("%w: %s", ErrLoopbackBlocked, ip.String())
-		}
 		return n.dialer.DialContext(ctx, network, net.JoinHostPort(ip.String(), port))
-	}
-
-	if !policy.AllowLoopback && (normalizedHost == "localhost" || strings.HasSuffix(normalizedHost, ".localhost")) {
-		return nil, fmt.Errorf("%w: %s", ErrLoopbackBlocked, host)
 	}
 
 	ipAddrs, err := net.DefaultResolver.LookupIPAddr(ctx, normalizedHost)

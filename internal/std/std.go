@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	"path/filepath"
 	"strings"
 
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
@@ -82,48 +81,15 @@ func (s *Std) Tracker() FileTracker {
 	return s.tracker
 }
 
-// normalizePath normalizes a caller-supplied path into a clean, slash-separated
-// path relative to the sandbox's WorkDir when the path lies inside the sandbox.
+// normalizePath delegates path normalization to s.sandbox.FS().ResolvePath.
 // If the path attempts to escape the sandbox root, it is returned unstripped so
-// that the underlying sandbox.FS capability rejects it with sandbox.ErrPathEscape.
+// that the subsequent sandbox.FS operation rejects it with sandbox.ErrPathEscape.
 func (s *Std) normalizePath(rawPath string) string {
-	trimmed := strings.TrimSpace(rawPath)
-	if trimmed == "" || trimmed == "." {
-		return "."
-	}
-
-	if filepath.IsAbs(trimmed) {
-		clean := filepath.Clean(trimmed)
-		workDir := filepath.Clean(s.sandbox.Platform().WorkDir)
-		if workDir != "" {
-			if rel, ok := relWithinRoot(workDir, clean); ok {
-				return filepath.ToSlash(rel)
-			}
-			if realWorkDir, err := filepath.EvalSymlinks(workDir); err == nil && realWorkDir != workDir {
-				if rel, ok := relWithinRoot(realWorkDir, clean); ok {
-					return filepath.ToSlash(rel)
-				}
-			}
-		}
-		return trimmed
-	}
-
-	clean := filepath.Clean(trimmed)
-	if clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
-		return trimmed
-	}
-	return filepath.ToSlash(clean)
-}
-
-func relWithinRoot(base, target string) (string, bool) {
-	rel, err := filepath.Rel(base, target)
+	rel, err := s.sandbox.FS().ResolvePath(rawPath)
 	if err != nil {
-		return "", false
+		return strings.TrimSpace(rawPath)
 	}
-	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return "", false
-	}
-	return rel, true
+	return rel
 }
 
 func sha256Hex(data []byte) string {

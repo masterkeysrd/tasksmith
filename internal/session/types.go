@@ -7,18 +7,22 @@ import (
 
 	"github.com/masterkeysrd/loom/message"
 	"github.com/masterkeysrd/tasksmith/internal/std"
+	"github.com/masterkeysrd/tasksmith/internal/tools"
 )
 
 // Sentinel errors returned by the session package.
 var (
-	ErrInvalidConfig   = errors.New("session: invalid configuration")
-	ErrSessionNotFound = errors.New("session: session not found")
-	ErrEmptySessionID  = errors.New("session: session ID must not be empty")
-	ErrNilMessage      = errors.New("session: message must not be nil")
-	ErrJournalNotFound = errors.New("session: file change journal not found")
-	ErrEntryNotFound   = errors.New("session: journal entry not found")
-	ErrBlobNotFound    = errors.New("session: file snapshot blob not found")
-	ErrRevertConflict  = errors.New("session: revert conflict with external changes")
+	ErrInvalidConfig        = errors.New("session: invalid configuration")
+	ErrSessionNotFound      = errors.New("session: session not found")
+	ErrEmptySessionID       = errors.New("session: session ID must not be empty")
+	ErrNilMessage           = errors.New("session: message must not be nil")
+	ErrJournalNotFound      = errors.New("session: file change journal not found")
+	ErrEntryNotFound        = errors.New("session: journal entry not found")
+	ErrBlobNotFound         = errors.New("session: file snapshot blob not found")
+	ErrRevertConflict       = errors.New("session: revert conflict with external changes")
+	ErrNoPendingPermissions = errors.New("session: no pending permissions")
+	ErrPermissionNotFound   = errors.New("session: permission request not found")
+	ErrInvalidDecision      = errors.New("session: invalid permission decision")
 )
 
 // Session represents a persistent user-facing chat thread.
@@ -53,14 +57,19 @@ const (
 	// EventCompleted is published once the conversational turn completes and the
 	// final assistant reply has been persisted.
 	EventCompleted EventType = "completed"
+
+	// EventPermissionRequested is published when the harness pauses execution to
+	// request user approval for one or more pending tool executions.
+	EventPermissionRequested EventType = "permission_requested"
 )
 
 // Event represents a real-time session notification delivered via [Publisher].
 type Event struct {
-	Type      EventType               `json:"type"`
-	SessionID string                  `json:"session_id"`
-	Message   message.Message         `json:"message,omitempty"`
-	Chunk     *message.AssistantChunk `json:"chunk,omitempty"`
+	Type        EventType                 `json:"type"`
+	SessionID   string                    `json:"session_id"`
+	Message     message.Message           `json:"message,omitempty"`
+	Chunk       *message.AssistantChunk   `json:"chunk,omitempty"`
+	Permissions []tools.PermissionRequest `json:"permissions,omitempty"`
 }
 
 // Publisher broadcasts real-time session events to downstream subscribers or UI layers.

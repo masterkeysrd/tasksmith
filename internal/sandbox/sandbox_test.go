@@ -655,4 +655,60 @@ func TestNetPolicyEnforcement(t *testing.T) {
 	if err != nil || string(body) != "sandbox-net-ok" {
 		t.Fatalf("unexpected response body %q (err=%v)", string(body), err)
 	}
+
+	// 4. ValidateURL checks
+	if _, err := sbxDisabled.Net().ValidateURL("https://example.com/path"); !errors.Is(err, ErrNetworkDisabled) {
+		t.Fatalf("expected ErrNetworkDisabled from ValidateURL, got %v", err)
+	}
+
+	invalidURLs := []string{
+		"",
+		"   ",
+		"://bad-url",
+		"ftp://example.com/file",
+		"file:///etc/passwd",
+		"http:///no-host",
+	}
+	for _, raw := range invalidURLs {
+		if _, err := sbxNoLoop.Net().ValidateURL(raw); !errors.Is(err, ErrInvalidURL) {
+			t.Fatalf("ValidateURL(%q): expected ErrInvalidURL, got %v", raw, err)
+		}
+	}
+
+	for _, loopURL := range []string{
+		"http://127.0.0.1:8080/test",
+		"http://[::1]:8080/test",
+		"https://localhost/api",
+		"https://sub.localhost/api",
+		"http://0.0.0.0:8080/",
+	} {
+		if _, err := sbxNoLoop.Net().ValidateURL(loopURL); !errors.Is(err, ErrLoopbackBlocked) {
+			t.Fatalf("ValidateURL(%q): expected ErrLoopbackBlocked, got %v", loopURL, err)
+		}
+	}
+
+	if _, err := sbxPolicy.Net().ValidateURL("https://blocked.trusted.example.com/v1"); !errors.Is(err, ErrHostBlocked) {
+		t.Fatalf("expected ErrHostBlocked for blocked subdomain URL, got %v", err)
+	}
+	if _, err := sbxPolicy.Net().ValidateURL("https://sub.evil.org/v1"); !errors.Is(err, ErrHostBlocked) {
+		t.Fatalf("expected ErrHostBlocked for blocked wildcard URL, got %v", err)
+	}
+	if _, err := sbxPolicy.Net().ValidateURL("https://unlisted.example.org/v1"); !errors.Is(err, ErrHostBlocked) {
+		t.Fatalf("expected ErrHostBlocked for unlisted host URL, got %v", err)
+	}
+
+	u, err := sbxPolicy.Net().ValidateURL("https://api.trusted.example.com/v1/chat?x=1")
+	if err != nil || u.Hostname() != "api.trusted.example.com" {
+		t.Fatalf("expected valid URL for allowed wildcard host, got u=%v err=%v", u, err)
+	}
+
+	if _, err := sbxPolicy.Net().ValidateURL(srv.URL + "/health"); err != nil {
+		t.Fatalf("expected valid URL for loopback server when AllowLoopback=true, got %v", err)
+	}
+
+	// Closed sandbox returns ErrSandboxClosed on ValidateURL
+	_ = sbxPolicy.Close()
+	if _, err := sbxPolicy.Net().ValidateURL("https://api.trusted.example.com"); !errors.Is(err, ErrSandboxClosed) {
+		t.Fatalf("expected ErrSandboxClosed on closed sandbox ValidateURL, got %v", err)
+	}
 }

@@ -358,6 +358,9 @@ type FetchRequest struct {
 	// MaxBytes caps the maximum number of response body bytes read.
 	// Defaults to DefaultMaxFetchBytes (10 MiB).
 	MaxBytes int64 `json:"max_bytes,omitempty"`
+
+	// DryRun validates URL and network policy without executing the HTTP request.
+	DryRun bool `json:"dry_run,omitempty"`
 }
 
 // FetchResult contains the HTTP response status, headers, and body from [Std.Fetch].
@@ -371,6 +374,7 @@ type FetchResult struct {
 	Text        string            `json:"text,omitempty"`
 	Truncated   bool              `json:"truncated,omitempty"`
 	Duration    time.Duration     `json:"duration"`
+	DryRun      bool              `json:"dry_run,omitempty"`
 }
 
 // DownloadRequest configures an HTTP file download into the sandbox via [Std.Download].
@@ -401,6 +405,11 @@ type DownloadRequest struct {
 	// MaxBytes caps the maximum allowed download size in bytes.
 	// Defaults to DefaultMaxDownloadBytes (100 MiB).
 	MaxBytes int64 `json:"max_bytes,omitempty"`
+
+	// DryRun validates URL and destination path and enforces Read-Before-Overwrite
+	// and Compare-And-Swap checks without performing the network request or
+	// writing to disk.
+	DryRun bool `json:"dry_run,omitempty"`
 }
 
 // DownloadResult contains metadata for a completed [Std.Download] operation.
@@ -415,4 +424,5 @@ type DownloadResult struct {
 	AfterHash    string        `json:"after_hash"`
 	IsBinary     bool          `json:"is_binary,omitempty"`
 	Duration     time.Duration `json:"duration"`
+	DryRun       bool          `json:"dry_run,omitempty"`
 }

@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"time"
 )
@@ -20,6 +21,7 @@ var (
 	ErrNetworkDisabled   = errors.New("sandbox: network access is disabled")
 	ErrHostBlocked       = errors.New("sandbox: target host is blocked by policy")
 	ErrLoopbackBlocked   = errors.New("sandbox: loopback address access is blocked by policy")
+	ErrInvalidURL        = errors.New("sandbox: invalid http/https url")
 	ErrNativeUnavailable = errors.New("sandbox: native OS sandbox backend is unavailable")
 )
 
@@ -224,4 +226,9 @@ type Net interface {
 	// HTTPClient returns a new *http.Client whose transport is wired to use
 	// the sandbox's policy-enforced DialContext.
 	HTTPClient() *http.Client
+
+	// ValidateURL parses and validates an outbound HTTP or HTTPS URL and
+	// checks its hostname against the sandbox's NetworkPolicy (Disabled,
+	// BlockedHosts, AllowedHosts, and literal/localhost loopback rules).
+	ValidateURL(rawURL string) (*url.URL, error)
 }

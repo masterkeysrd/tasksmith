@@ -4,8 +4,11 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"iter"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -13,9 +16,14 @@ import (
 	"github.com/google/uuid"
 	"github.com/masterkeysrd/loom/message"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
+	"github.com/masterkeysrd/tasksmith/internal/core/shellguard"
 	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
 	"github.com/masterkeysrd/tasksmith/internal/gateway"
 	"github.com/masterkeysrd/tasksmith/internal/harness"
+	"github.com/masterkeysrd/tasksmith/internal/sandbox"
+	"github.com/masterkeysrd/tasksmith/internal/std"
+	"github.com/masterkeysrd/tasksmith/internal/tools"
+	"github.com/masterkeysrd/tasksmith/internal/tools/builtin"
 	"github.com/masterkeysrd/tasksmith/internal/workspace"
 )
 
@@ -24,6 +32,7 @@ type Config struct {
 	DB        *sql.DB
 	Workspace *workspace.Workspace
 	Gateway   gateway.Gateway
+	Sandbox   sandbox.Sandbox
 	Publisher Publisher
 	Logger    log.Interface
 }
@@ -39,6 +48,9 @@ func (c Config) Validate() error {
 	if c.Gateway == nil {
 		return fmt.Errorf("%w: gateway is required", ErrInvalidConfig)
 	}
+	if c.Sandbox == nil {
+		return fmt.Errorf("%w: sandbox is required", ErrInvalidConfig)
+	}
 	if c.Publisher == nil {
 		return fmt.Errorf("%w: publisher is required", ErrInvalidConfig)
 	}
@@ -49,19 +61,23 @@ func (c Config) Validate() error {
 }
 
 // Manager coordinates session lifecycle, UI message history persistence,
-// agent/model/prompt resolution via [workspace.Workspace] and [gateway.Gateway],
-// event publishing via [Publisher], and multi-turn conversational execution
-// through [harness.Harness].
+// per-session tool containers and permission gates, agent/model/prompt
+// resolution via [workspace.Workspace] and [gateway.Gateway], event publishing
+// via [Publisher], and multi-turn conversational execution through
+// [harness.Harness].
 type Manager struct {
 	db        *sql.DB
 	store     *store
 	workspace *workspace.Workspace
 	gateway   gateway.Gateway
+	sandbox   sandbox.Sandbox
 	publisher Publisher
 	logger    log.Interface
 
-	mu       sync.Mutex
-	trackers map[string]*FileTracker
+	mu         sync.Mutex
+	trackers   map[string]*FileTracker
+	containers map[string]*tools.Container
+	decisions  map[string]map[string]tools.PermissionDecision
 }
 
 // New constructs a new [Manager] and automatically runs SQLite schema migrations
@@ -77,13 +93,16 @@ func New(cfg Config) (*Manager, error) {
 	}
 
 	return &Manager{
-		db:        cfg.DB,
-		store:     st,
-		workspace: cfg.Workspace,
-		gateway:   cfg.Gateway,
-		publisher: cfg.Publisher,
-		logger:    cfg.Logger.ForComponent("session"),
-		trackers:  make(map[string]*FileTracker),
+		db:         cfg.DB,
+		store:      st,
+		workspace:  cfg.Workspace,
+		gateway:    cfg.Gateway,
+		sandbox:    cfg.Sandbox,
+		publisher:  cfg.Publisher,
+		logger:     cfg.Logger.ForComponent("session"),
+		trackers:   make(map[string]*FileTracker),
+		containers: make(map[string]*tools.Container),
+		decisions:  make(map[string]map[string]tools.PermissionDecision),
 	}, nil
 }
 
@@ -179,6 +198,8 @@ func (m *Manager) Delete(ctx context.Context, id string) error {
 
 	m.mu.Lock()
 	delete(m.trackers, id)
+	delete(m.containers, id)
+	delete(m.decisions, id)
 	m.mu.Unlock()
 
 	if sessionDir, err := m.sessionDir(id); err == nil {
@@ -215,6 +236,90 @@ func (m *Manager) Tracker(ctx context.Context, sessionID string) (*FileTracker, 
 	}
 	m.trackers[sess.ID] = tr
 	return tr, nil
+}
+
+// Tools returns the cached per-session [*tools.Container], constructing it on
+// first access with the session's [*FileTracker], sandbox, workspace, and
+// shellguard.
+func (m *Manager) Tools(ctx context.Context, sessionID string) (*tools.Container, error) {
+	sess, err := m.Get(ctx, sessionID)
+	if err != nil {
+		return nil, err
+	}
+
+	tr, err := m.Tracker(ctx, sess.ID)
+	if err != nil {
+		return nil, err
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if c, ok := m.containers[sess.ID]; ok {
+		return c, nil
+	}
+
+	stdInst, err := std.New(std.Config{
+		Sandbox: m.sandbox,
+		Tracker: tr,
+		Logger:  m.logger,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("session: initialize std tools: %w", err)
+	}
+
+	guardInst := shellguard.New(shellguard.Config{
+		WorkspaceDir: m.sandbox.Platform().WorkDir,
+	})
+
+	builtinTools, err := builtin.New(builtin.Config{
+		Std:     stdInst,
+		Sandbox: m.sandbox,
+		Guard:   guardInst,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("session: initialize builtin tools: %w", err)
+	}
+
+	container, err := tools.NewContainer(tools.Config{
+		Tools:     builtinTools,
+		Sandbox:   m.sandbox,
+		Workspace: m.workspace,
+		Logger:    m.logger,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("session: initialize tools container: %w", err)
+	}
+
+	m.containers[sess.ID] = container
+	return container, nil
+}
+
+// PermissionMode returns the active [tools.PermissionMode] configured on the
+// session's tool gate.
+func (m *Manager) PermissionMode(ctx context.Context, sessionID string) (tools.PermissionMode, error) {
+	c, err := m.Tools(ctx, sessionID)
+	if err != nil {
+		return "", err
+	}
+	return c.Gate().Mode(), nil
+}
+
+// SetPermissionMode updates the active [tools.PermissionMode] configured on the
+// session's tool gate.
+func (m *Manager) SetPermissionMode(ctx context.Context, sessionID string, mode tools.PermissionMode) error {
+	switch mode {
+	case tools.ModeDefault, tools.ModeAcceptEdits, tools.ModePlan, tools.ModeAsk, tools.ModeAuto:
+	default:
+		return fmt.Errorf("%w: unsupported permission mode %q", ErrInvalidConfig, mode)
+	}
+
+	c, err := m.Tools(ctx, sessionID)
+	if err != nil {
+		return err
+	}
+	c.Gate().SetMode(mode)
+	return nil
 }
 
 func (m *Manager) sessionDir(sessionID string) (string, error) {
@@ -268,11 +373,126 @@ func (m *Manager) AppendMessage(ctx context.Context, sessionID string, msg messa
 	return nil
 }
 
-// Send records the user input message in the session's UI history, renders the
-// session's system prompt and resolves its LLM via the gateway, executes a
-// conversational turn via [harness.Harness.Stream], publishes real-time [Event]
-// notifications via [Publisher], persists the completed assistant reply, and
-// returns it.
+// PendingPermissions returns all unresolved [tools.PermissionRequest] items from
+// the session's checkpointed harness state that do not yet have a buffered
+// decision in the session manager.
+func (m *Manager) PendingPermissions(ctx context.Context, sessionID string) ([]tools.PermissionRequest, error) {
+	sess, err := m.Get(ctx, sessionID)
+	if err != nil {
+		return nil, err
+	}
+
+	h, err := m.buildHarness(ctx, sess)
+	if err != nil {
+		return nil, err
+	}
+
+	state, err := h.LoadState(ctx, sess.ID)
+	if err != nil {
+		return nil, err
+	}
+	if len(state.PendingPermissions) == 0 {
+		return nil, nil
+	}
+
+	m.mu.Lock()
+	decMap := m.decisions[sess.ID]
+	var out []tools.PermissionRequest
+	for _, req := range state.PendingPermissions {
+		if _, resolved := decMap[req.ID]; !resolved {
+			req.GrantPatterns = slices.Clone(req.GrantPatterns)
+			out = append(out, req)
+		}
+	}
+	m.mu.Unlock()
+
+	return out, nil
+}
+
+// RespondPermission records a user's [tools.PermissionDecision] for a pending
+// permission request. If additional permission requests remain unresolved for
+// the session, RespondPermission buffers the decision and returns `(nil, nil)`
+// without invoking the workflow graph. Once all pending permission requests for
+// the session have been resolved, RespondPermission resumes the harness graph
+// with the complete decision set and streams the remaining turn.
+func (m *Manager) RespondPermission(ctx context.Context, sessionID string, decision tools.PermissionDecision) (*message.Assistant, error) {
+	sess, err := m.Get(ctx, sessionID)
+	if err != nil {
+		return nil, err
+	}
+
+	switch decision.Kind {
+	case tools.DecisionAllowOnce, tools.DecisionAllowSession, tools.DecisionReject:
+	default:
+		return nil, fmt.Errorf("%w: unsupported decision kind %q", ErrInvalidDecision, decision.Kind)
+	}
+
+	h, err := m.buildHarness(ctx, sess)
+	if err != nil {
+		return nil, err
+	}
+
+	state, err := h.LoadState(ctx, sess.ID)
+	if err != nil {
+		return nil, err
+	}
+	if len(state.PendingPermissions) == 0 {
+		return nil, ErrNoPendingPermissions
+	}
+
+	var matched *tools.PermissionRequest
+	for i := range state.PendingPermissions {
+		req := &state.PendingPermissions[i]
+		if (decision.RequestID != "" && req.ID == decision.RequestID) ||
+			(decision.ToolCallID != "" && req.ToolCallID == decision.ToolCallID) {
+			matched = req
+			break
+		}
+	}
+	if matched == nil {
+		return nil, ErrPermissionNotFound
+	}
+
+	decision.RequestID = matched.ID
+	decision.ToolCallID = matched.ToolCallID
+
+	m.mu.Lock()
+	decMap := m.decisions[sess.ID]
+	if decMap == nil {
+		decMap = make(map[string]tools.PermissionDecision, len(state.PendingPermissions))
+		m.decisions[sess.ID] = decMap
+	}
+	decMap[matched.ID] = decision
+
+	allResolved := true
+	for _, req := range state.PendingPermissions {
+		if _, ok := decMap[req.ID]; !ok {
+			allResolved = false
+			break
+		}
+	}
+
+	var fullDecisions map[string]tools.PermissionDecision
+	if allResolved {
+		fullDecisions = maps.Clone(decMap)
+		delete(m.decisions, sess.ID)
+	}
+	m.mu.Unlock()
+
+	if !allResolved {
+		return nil, nil
+	}
+
+	return m.consumeHarnessStream(ctx, sess.ID, h.Resume(ctx, sess.ID, fullDecisions))
+}
+
+// Send executes a conversational turn via [harness.Harness.Stream], persisting
+// all emitted messages (including any canceled tool calls, the incoming user
+// message, intermediate tool-calling assistant turns, tool execution results,
+// and the final assistant reply) in the session's UI history and publishing
+// real-time [Event] notifications via [Publisher]. If execution pauses awaiting
+// tool permissions, Send publishes [EventPermissionRequested] and returns
+// `(nil, nil)`.
 func (m *Manager) Send(ctx context.Context, sessionID string, input message.Message) (*message.Assistant, error) {
 	sess, err := m.Get(ctx, sessionID)
 	if err != nil {
@@ -280,6 +500,91 @@ func (m *Manager) Send(ctx context.Context, sessionID string, input message.Mess
 	}
 	if input == nil {
 		return nil, ErrNilMessage
+	}
+
+	h, err := m.buildHarness(ctx, sess)
+	if err != nil {
+		return nil, err
+	}
+
+	m.mu.Lock()
+	delete(m.decisions, sess.ID)
+	m.mu.Unlock()
+
+	return m.consumeHarnessStream(ctx, sess.ID, h.Stream(ctx, sess.ID, input))
+}
+
+func (m *Manager) consumeHarnessStream(ctx context.Context, sessID string, stream iter.Seq2[harness.Event, error]) (*message.Assistant, error) {
+	var reply *message.Assistant
+	var interrupted bool
+
+	for hev, err := range stream {
+		if err != nil {
+			return nil, err
+		}
+		switch hev.Type {
+		case harness.EventChunk:
+			if hev.Chunk != nil {
+				chunkCopy := message.CloneAssistantChunk(*hev.Chunk)
+				m.publisher.Publish(ctx, Event{
+					Type:      EventChunk,
+					SessionID: sessID,
+					Chunk:     &chunkCopy,
+				})
+			}
+
+		case harness.EventMessage:
+			if hev.Message != nil {
+				if err := m.store.insertMessage(ctx, sessID, hev.Message, time.Now().UTC()); err != nil {
+					return nil, err
+				}
+				m.publisher.Publish(ctx, Event{
+					Type:      EventMessageAdded,
+					SessionID: sessID,
+					Message:   message.CloneMessage(hev.Message),
+				})
+			}
+
+		case harness.EventInterrupted:
+			interrupted = true
+			perms := make([]tools.PermissionRequest, len(hev.Permissions))
+			for i, p := range hev.Permissions {
+				p.GrantPatterns = slices.Clone(p.GrantPatterns)
+				perms[i] = p
+			}
+			m.publisher.Publish(ctx, Event{
+				Type:        EventPermissionRequested,
+				SessionID:   sessID,
+				Permissions: perms,
+			})
+
+		case harness.EventCompleted:
+			if hev.Message != nil {
+				if asst, ok := message.CloneMessage(hev.Message).(*message.Assistant); ok {
+					reply = asst
+				}
+				m.publisher.Publish(ctx, Event{
+					Type:      EventCompleted,
+					SessionID: sessID,
+					Message:   message.CloneMessage(hev.Message),
+				})
+			}
+		}
+	}
+
+	if interrupted {
+		return nil, nil
+	}
+	if reply == nil {
+		return nil, fmt.Errorf("session: harness returned nil assistant reply for session %q", sessID)
+	}
+	return reply, nil
+}
+
+func (m *Manager) buildHarness(ctx context.Context, sess *Session) (*harness.Harness, error) {
+	reg, err := m.Tools(ctx, sess.ID)
+	if err != nil {
+		return nil, err
 	}
 
 	systemPrompt := m.renderSystemPrompt(sess.Agent)
@@ -292,72 +597,14 @@ func (m *Manager) Send(ctx context.Context, sessionID string, input message.Mess
 	h, err := harness.New(harness.Config{
 		DB:           m.db,
 		Model:        llmModel,
+		Tools:        reg,
 		SystemPrompt: systemPrompt,
 		Logger:       m.logger,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("session: initialize harness: %w", err)
 	}
-
-	msgID, err := uuid.NewV7()
-	if err != nil {
-		return nil, fmt.Errorf("session: generate message id: %w", err)
-	}
-	in := message.CloneMessage(input)
-	in.SetID(msgID.String())
-
-	if err := m.store.insertMessage(ctx, sess.ID, in, time.Now().UTC()); err != nil {
-		return nil, err
-	}
-
-	m.publisher.Publish(ctx, Event{
-		Type:      EventMessageAdded,
-		SessionID: sess.ID,
-		Message:   message.CloneMessage(in),
-	})
-
-	var reply *message.Assistant
-	for hev, err := range h.Stream(ctx, sess.ID, in) {
-		if err != nil {
-			return nil, err
-		}
-		switch hev.Type {
-		case harness.EventChunk:
-			if hev.Chunk != nil {
-				chunkCopy := message.CloneAssistantChunk(*hev.Chunk)
-				m.publisher.Publish(ctx, Event{
-					Type:      EventChunk,
-					SessionID: sess.ID,
-					Chunk:     &chunkCopy,
-				})
-			}
-		case harness.EventCompleted:
-			if hev.Message != nil {
-				reply = hev.Message
-			}
-		}
-	}
-	if reply == nil {
-		return nil, fmt.Errorf("session: harness returned nil assistant reply for session %q", sess.ID)
-	}
-
-	if err := m.store.insertMessage(ctx, sess.ID, reply, time.Now().UTC()); err != nil {
-		return nil, err
-	}
-
-	m.publisher.Publish(ctx, Event{
-		Type:      EventMessageAdded,
-		SessionID: sess.ID,
-		Message:   message.CloneMessage(reply),
-	})
-	m.publisher.Publish(ctx, Event{
-		Type:      EventCompleted,
-		SessionID: sess.ID,
-		Message:   message.CloneMessage(reply),
-	})
-
-	out, _ := message.CloneMessage(reply).(*message.Assistant)
-	return out, nil
+	return h, nil
 }
 
 func (m *Manager) renderSystemPrompt(agentName string) string {

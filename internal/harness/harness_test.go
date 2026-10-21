@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -15,7 +16,14 @@ import (
 	"github.com/masterkeysrd/loom/message"
 	"github.com/masterkeysrd/loom/profile"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
-	"github.com/masterkeysrd/tasksmith/internal/core/sqlite"
+	"github.com/masterkeysrd/tasksmith/internal/core/shellguard"
+	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
+	"github.com/masterkeysrd/tasksmith/internal/sandbox"
+	"github.com/masterkeysrd/tasksmith/internal/std"
+	"github.com/masterkeysrd/tasksmith/internal/tools"
+	"github.com/masterkeysrd/tasksmith/internal/tools/builtin"
+	"github.com/masterkeysrd/tasksmith/internal/workspace"
+	_ "modernc.org/sqlite"
 )
 
 type capturedTurn struct {
@@ -24,9 +32,10 @@ type capturedTurn struct {
 }
 
 type fakeProvider struct {
-	mu      sync.Mutex
-	turns   []capturedTurn
-	handler func(ctx context.Context, req *llm.Request) ([]string, string, error)
+	mu          sync.Mutex
+	turns       []capturedTurn
+	handler     func(ctx context.Context, req *llm.Request) ([]string, string, error)
+	stepHandler func(ctx context.Context, req *llm.Request, turn int) ([]message.AssistantChunk, error)
 }
 
 func (p *fakeProvider) Name() string {
@@ -61,8 +70,28 @@ func (p *fakeProvider) Stream(ctx context.Context, req *llm.Request) (llm.Stream
 		model:    req.Model,
 		messages: clonedMsgs,
 	})
+	turnIdx := len(p.turns)
+	stepHandler := p.stepHandler
 	handler := p.handler
 	p.mu.Unlock()
+
+	if stepHandler != nil {
+		rawChunks, err := stepHandler(ctx, req, turnIdx)
+		if err != nil {
+			return nil, err
+		}
+		return func(yield func(message.AssistantChunk, error) bool) {
+			for _, ch := range rawChunks {
+				if err := ctx.Err(); err != nil {
+					yield(message.AssistantChunk{}, err)
+					return
+				}
+				if !yield(ch, nil) {
+					return
+				}
+			}
+		}, nil
+	}
 
 	var chunks []string
 	var respID string
@@ -121,14 +150,78 @@ func newTestModel(t *testing.T, p *fakeProvider) *llm.Model {
 func openTestSQLite(t *testing.T) *sql.DB {
 	t.Helper()
 	dbPath := filepath.Join(t.TempDir(), "test.db")
-	db, err := sqlite.Open(context.Background(), dbPath)
+	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
-		t.Fatalf("sqlite.Open: %v", err)
+		t.Fatalf("sql.Open sqlite: %v", err)
 	}
 	t.Cleanup(func() {
 		_ = db.Close()
 	})
 	return db
+}
+
+func newTestToolsRegistry(t *testing.T) (string, *tools.Container) {
+	t.Helper()
+	xdgRoot := t.TempDir()
+	xdg.SetTestEnv(xdgRoot, "tasksmith-harness-test")
+	t.Cleanup(func() {
+		xdg.ClearCache()
+	})
+
+	dir := t.TempDir()
+	if realDir, err := filepath.EvalSymlinks(dir); err == nil {
+		dir = realDir
+	}
+
+	ws, err := workspace.Open(context.Background(), dir, workspace.WithBuiltinFS(builtin.FS()))
+	if err != nil {
+		t.Fatalf("workspace.Open: %v", err)
+	}
+
+	sb, err := sandbox.New(sandbox.Config{
+		Mode:    sandbox.ModeLocal,
+		WorkDir: dir,
+	})
+	if err != nil {
+		t.Fatalf("sandbox.New: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = sb.Close()
+	})
+
+	stdLib, err := std.New(std.Config{
+		Sandbox: sb,
+		Tracker: std.NewMemoryTracker(),
+		Logger:  log.Default(),
+	})
+	if err != nil {
+		t.Fatalf("std.New: %v", err)
+	}
+
+	guard := shellguard.New(shellguard.Config{
+		WorkspaceDir: dir,
+	})
+
+	builtinTools, err := builtin.New(builtin.Config{
+		Std:     stdLib,
+		Sandbox: sb,
+		Guard:   guard,
+	})
+	if err != nil {
+		t.Fatalf("builtin.New: %v", err)
+	}
+
+	container, err := tools.NewContainer(tools.Config{
+		Tools:     builtinTools,
+		Sandbox:   sb,
+		Workspace: ws,
+		Logger:    log.Default(),
+	})
+	if err != nil {
+		t.Fatalf("tools.NewContainer: %v", err)
+	}
+
+	return dir, container
 }
 
 func extractBlocksText(blocks []message.Block) string {
@@ -158,10 +251,14 @@ func drainStream(ctx context.Context, h *Harness, threadID string, input message
 		switch ev.Type {
 		case EventChunk:
 			if ev.Chunk != nil {
-				deltas = append(deltas, extractBlocksText(ev.Chunk.Content))
+				if text := extractBlocksText(ev.Chunk.Content); text != "" {
+					deltas = append(deltas, text)
+				}
 			}
 		case EventCompleted:
-			completed = ev.Message
+			if asst, ok := ev.Message.(*message.Assistant); ok {
+				completed = asst
+			}
 		}
 	}
 	return deltas, completed, nil
@@ -170,6 +267,7 @@ func drainStream(ctx context.Context, h *Harness, threadID string, input message
 func TestSingleTurnStreaming(t *testing.T) {
 	ctx := context.Background()
 	db := openTestSQLite(t)
+	_, reg := newTestToolsRegistry(t)
 	prov := &fakeProvider{
 		handler: func(_ context.Context, _ *llm.Request) ([]string, string, error) {
 			return []string{"Task", "Smith", " v2", " ready."}, "msg-assistant-1", nil
@@ -179,6 +277,7 @@ func TestSingleTurnStreaming(t *testing.T) {
 	h, err := New(Config{
 		DB:     db,
 		Model:  newTestModel(t, prov),
+		Tools:  reg,
 		Logger: log.Default(),
 	})
 	if err != nil {
@@ -215,6 +314,7 @@ func TestSingleTurnStreaming(t *testing.T) {
 func TestMultiTurnSQLitePersistence(t *testing.T) {
 	ctx := context.Background()
 	db := openTestSQLite(t)
+	_, reg := newTestToolsRegistry(t)
 
 	turnCount := 0
 	prov := &fakeProvider{
@@ -231,6 +331,7 @@ func TestMultiTurnSQLitePersistence(t *testing.T) {
 	h, err := New(Config{
 		DB:     db,
 		Model:  model,
+		Tools:  reg,
 		Logger: log.Default(),
 	})
 	if err != nil {
@@ -259,6 +360,7 @@ func TestMultiTurnSQLitePersistence(t *testing.T) {
 	h2, err := New(Config{
 		DB:     db,
 		Model:  model,
+		Tools:  reg,
 		Logger: log.Default(),
 	})
 	if err != nil {
@@ -314,9 +416,6 @@ func TestMultiTurnSQLitePersistence(t *testing.T) {
 		t.Errorf("state.Messages[3] = (%s, %q)", state.Messages[3].Role(), msgText(state.Messages[3]))
 	}
 	for i, m := range state.Messages {
-		if m.Role() != message.RoleAssistant {
-			continue
-		}
 		u, err := uuid.Parse(m.GetID())
 		if err != nil || u.Version() != 7 {
 			t.Errorf("state.Messages[%d].GetID() = %q, want valid UUIDv7 (err=%v)", i, m.GetID(), err)
@@ -327,6 +426,7 @@ func TestMultiTurnSQLitePersistence(t *testing.T) {
 func TestSystemPromptIsolation(t *testing.T) {
 	ctx := context.Background()
 	db := openTestSQLite(t)
+	_, reg := newTestToolsRegistry(t)
 
 	prov := &fakeProvider{
 		handler: func(_ context.Context, _ *llm.Request) ([]string, string, error) {
@@ -338,6 +438,7 @@ func TestSystemPromptIsolation(t *testing.T) {
 	h, err := New(Config{
 		DB:           db,
 		Model:        newTestModel(t, prov),
+		Tools:        reg,
 		SystemPrompt: sysPrompt,
 		Logger:       log.Default(),
 	})
@@ -391,6 +492,7 @@ func TestSystemPromptIsolation(t *testing.T) {
 func TestThreadIsolation(t *testing.T) {
 	ctx := context.Background()
 	db := openTestSQLite(t)
+	_, reg := newTestToolsRegistry(t)
 
 	prov := &fakeProvider{
 		handler: func(_ context.Context, req *llm.Request) ([]string, string, error) {
@@ -402,6 +504,7 @@ func TestThreadIsolation(t *testing.T) {
 	h, err := New(Config{
 		DB:     db,
 		Model:  newTestModel(t, prov),
+		Tools:  reg,
 		Logger: log.Default(),
 	})
 	if err != nil {
@@ -441,33 +544,535 @@ func TestThreadIsolation(t *testing.T) {
 	}
 }
 
+func TestMultiStepToolExecution(t *testing.T) {
+	ctx := context.Background()
+	db := openTestSQLite(t)
+	workDir, reg := newTestToolsRegistry(t)
+
+	targetFile := filepath.Join(workDir, "hello.txt")
+	if err := os.WriteFile(targetFile, []byte("secret-file-contents\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	prov := &fakeProvider{
+		stepHandler: func(_ context.Context, _ *llm.Request, turn int) ([]message.AssistantChunk, error) {
+			if turn == 1 {
+				return []message.AssistantChunk{
+					{
+						BaseChunk: message.BaseChunk{ID: "asst-tool-call"},
+						Content: []message.Block{
+							&message.TextBlock{Text: "Let me read hello.txt."},
+							&message.ToolCall{
+								ID:   "call-view-1",
+								Name: "view",
+								Args: map[string]any{"path": "hello.txt"},
+							},
+						},
+						Done: true,
+					},
+				}, nil
+			}
+			return []message.AssistantChunk{
+				{
+					BaseChunk: message.BaseChunk{ID: "asst-final"},
+					Content: []message.Block{
+						&message.TextBlock{Text: "The file contains secret-file-contents."},
+					},
+					Done: true,
+				},
+			}, nil
+		},
+	}
+
+	h, err := New(Config{
+		DB:     db,
+		Model:  newTestModel(t, prov),
+		Tools:  reg,
+		Logger: log.Default(),
+	})
+	if err != nil {
+		t.Fatalf("New error: %v", err)
+	}
+
+	var emittedMessages []message.Message
+	var completedMsg message.Message
+
+	for ev, err := range h.Stream(ctx, "thread-tools", message.NewUserText("Read hello.txt")) {
+		if err != nil {
+			t.Fatalf("Stream error: %v", err)
+		}
+		switch ev.Type {
+		case EventMessage:
+			emittedMessages = append(emittedMessages, ev.Message)
+		case EventCompleted:
+			completedMsg = ev.Message
+		case EventInterrupted:
+			t.Fatalf("unexpected EventInterrupted for read-only view tool: %+v", ev.Permissions)
+		}
+	}
+
+	// Expect 4 EventMessage notifications: User, Assistant(ToolCall), Tool(Result), Assistant(Final)
+	if len(emittedMessages) != 4 {
+		t.Fatalf("expected 4 EventMessage events, got %d", len(emittedMessages))
+	}
+	if emittedMessages[0].Role() != message.RoleUser {
+		t.Errorf("emittedMessages[0].Role() = %q, want user", emittedMessages[0].Role())
+	}
+	if emittedMessages[1].Role() != message.RoleAssistant {
+		t.Errorf("emittedMessages[1].Role() = %q, want assistant", emittedMessages[1].Role())
+	}
+	toolMsg, ok := emittedMessages[2].(*message.Tool)
+	if !ok {
+		t.Fatalf("emittedMessages[2] is %T, want *message.Tool", emittedMessages[2])
+	}
+	if toolMsg.IsError || !strings.Contains(msgText(toolMsg), "secret-file-contents") {
+		t.Errorf("unexpected tool output: isError=%v, text=%q", toolMsg.IsError, msgText(toolMsg))
+	}
+	if emittedMessages[3].Role() != message.RoleAssistant || msgText(emittedMessages[3]) != "The file contains secret-file-contents." {
+		t.Errorf("unexpected final assistant message: %q", msgText(emittedMessages[3]))
+	}
+	if completedMsg == nil || msgText(completedMsg) != "The file contains secret-file-contents." {
+		t.Errorf("unexpected EventCompleted message: %v", completedMsg)
+	}
+
+	// Verify all 4 messages are persisted in checkpoint state
+	state, err := h.LoadState(ctx, "thread-tools")
+	if err != nil {
+		t.Fatalf("LoadState error: %v", err)
+	}
+	if len(state.Messages) != 4 {
+		t.Fatalf("expected 4 messages in checkpoint state, got %d", len(state.Messages))
+	}
+}
+
+func TestPermissionInterruptAndResume(t *testing.T) {
+	ctx := context.Background()
+	db := openTestSQLite(t)
+	workDir, reg := newTestToolsRegistry(t)
+
+	prov := &fakeProvider{
+		stepHandler: func(_ context.Context, _ *llm.Request, turn int) ([]message.AssistantChunk, error) {
+			if turn == 1 {
+				return []message.AssistantChunk{
+					{
+						BaseChunk: message.BaseChunk{ID: "asst-write"},
+						Content: []message.Block{
+							&message.ToolCall{
+								ID:   "call-ls-readonly",
+								Name: "ls",
+								Args: map[string]any{},
+							},
+							&message.ToolCall{
+								ID:   "call-write-allow",
+								Name: "write",
+								Args: map[string]any{
+									"path":    "allowed.txt",
+									"content": "approved content",
+								},
+							},
+							&message.ToolCall{
+								ID:   "call-write-reject",
+								Name: "write",
+								Args: map[string]any{
+									"path":    "rejected.txt",
+									"content": "rejected content",
+								},
+							},
+						},
+						Done: true,
+					},
+				}, nil
+			}
+			return []message.AssistantChunk{
+				{
+					BaseChunk: message.BaseChunk{ID: "asst-after-resume"},
+					Content: []message.Block{
+						&message.TextBlock{Text: "Processed permission decisions."},
+					},
+					Done: true,
+				},
+			}, nil
+		},
+	}
+
+	h, err := New(Config{
+		DB:     db,
+		Model:  newTestModel(t, prov),
+		Tools:  reg,
+		Logger: log.Default(),
+	})
+	if err != nil {
+		t.Fatalf("New error: %v", err)
+	}
+
+	// 1. Calling Resume on a thread with no pending permissions -> ErrNoPendingPermissions
+	for _, err := range h.Resume(ctx, "thread-perm", nil) {
+		if !errors.Is(err, ErrNoPendingPermissions) {
+			t.Fatalf("Resume without pending permissions error = %v, want %v", err, ErrNoPendingPermissions)
+		}
+	}
+
+	// 2. Run Stream -> ls executes immediately, while the 2 write calls pause at ToolsNode with EventInterrupted
+	var streamToolMsgs []*message.Tool
+	var interruptedPerms []tools.PermissionRequest
+	for ev, err := range h.Stream(ctx, "thread-perm", message.NewUserText("Write two files")) {
+		if err != nil {
+			t.Fatalf("Stream error: %v", err)
+		}
+		if ev.Type == EventMessage {
+			if tm, ok := ev.Message.(*message.Tool); ok {
+				streamToolMsgs = append(streamToolMsgs, tm)
+			}
+		}
+		if ev.Type == EventInterrupted {
+			interruptedPerms = ev.Permissions
+		}
+		if ev.Type == EventCompleted {
+			t.Fatalf("expected stream to interrupt for write permissions, but got EventCompleted")
+		}
+	}
+
+	if len(streamToolMsgs) != 1 || streamToolMsgs[0].IsError {
+		t.Fatalf("expected ls read-only tool to execute before interrupt, got %+v", streamToolMsgs)
+	}
+	if len(interruptedPerms) != 2 {
+		t.Fatalf("expected 2 pending permission requests, got %d", len(interruptedPerms))
+	}
+
+	statePaused, err := h.LoadState(ctx, "thread-perm")
+	if err != nil {
+		t.Fatalf("LoadState paused error: %v", err)
+	}
+	if len(statePaused.PendingPermissions) != 2 {
+		t.Fatalf("expected 2 PendingPermissions in checkpoint, got %d", len(statePaused.PendingPermissions))
+	}
+
+	// 3. Calling Resume with partial/missing decisions MUST fail with ErrPendingPermissionsUnresolved without calling the graph
+	turnsBeforePartial := len(prov.recordedTurns())
+	partialDecisions := map[string]tools.PermissionDecision{
+		interruptedPerms[0].ID: {
+			Kind: tools.DecisionAllowOnce,
+		},
+	}
+	var partialErr error
+	for _, err := range h.Resume(ctx, "thread-perm", partialDecisions) {
+		if err != nil {
+			partialErr = err
+		}
+	}
+	if !errors.Is(partialErr, ErrPendingPermissionsUnresolved) {
+		t.Fatalf("Resume with partial decisions error = %v, want %v", partialErr, ErrPendingPermissionsUnresolved)
+	}
+	if gotTurns := len(prov.recordedTurns()); gotTurns != turnsBeforePartial {
+		t.Fatalf("expected 0 graph/LLM invocations on unresolved permissions, got %d -> %d", turnsBeforePartial, gotTurns)
+	}
+
+	// 4. Calling Resume with all decisions resolved (1 allow_once, 1 reject with feedback)
+	fullDecisions := map[string]tools.PermissionDecision{
+		interruptedPerms[0].ID: {
+			Kind: tools.DecisionAllowOnce,
+		},
+		interruptedPerms[1].ToolCallID: {
+			Kind:     tools.DecisionReject,
+			Feedback: "do not touch rejected.txt",
+		},
+	}
+
+	var resumeToolMsgs []*message.Tool
+	var resumeCompleted message.Message
+	for ev, err := range h.Resume(ctx, "thread-perm", fullDecisions) {
+		if err != nil {
+			t.Fatalf("Resume error: %v", err)
+		}
+		switch ev.Type {
+		case EventMessage:
+			if tm, ok := ev.Message.(*message.Tool); ok {
+				resumeToolMsgs = append(resumeToolMsgs, tm)
+			}
+		case EventCompleted:
+			resumeCompleted = ev.Message
+		}
+	}
+
+	if len(resumeToolMsgs) != 2 {
+		t.Fatalf("expected 2 Tool messages during Resume (2 writes), got %d", len(resumeToolMsgs))
+	}
+	if resumeToolMsgs[0].IsError {
+		t.Errorf("expected allowed.txt write to succeed, got error: %s", msgText(resumeToolMsgs[0]))
+	}
+	if !resumeToolMsgs[1].IsError || !strings.Contains(msgText(resumeToolMsgs[1]), "do not touch rejected.txt") {
+		t.Errorf("expected rejected.txt write to fail with user feedback, got: %s", msgText(resumeToolMsgs[1]))
+	}
+	if resumeCompleted == nil || msgText(resumeCompleted) != "Processed permission decisions." {
+		t.Errorf("unexpected completed message after Resume: %v", resumeCompleted)
+	}
+
+	// Verify allowed.txt was written on disk and rejected.txt was not
+	if data, err := os.ReadFile(filepath.Join(workDir, "allowed.txt")); err != nil || string(data) != "approved content" {
+		t.Errorf("allowed.txt content = %q, err = %v", string(data), err)
+	}
+	if _, err := os.Stat(filepath.Join(workDir, "rejected.txt")); !os.IsNotExist(err) {
+		t.Errorf("expected rejected.txt not to exist, got err=%v", err)
+	}
+
+	// Verify PendingPermissions is cleared in final checkpoint state
+	finalState, err := h.LoadState(ctx, "thread-perm")
+	if err != nil {
+		t.Fatalf("LoadState final error: %v", err)
+	}
+	if len(finalState.PendingPermissions) != 0 {
+		t.Errorf("expected 0 PendingPermissions after Resume, got %d", len(finalState.PendingPermissions))
+	}
+}
+
+func TestCancelPendingPermissionsOnNewUserMessage(t *testing.T) {
+	ctx := context.Background()
+	db := openTestSQLite(t)
+	workDir, reg := newTestToolsRegistry(t)
+
+	prov := &fakeProvider{
+		stepHandler: func(_ context.Context, _ *llm.Request, turn int) ([]message.AssistantChunk, error) {
+			if turn == 1 {
+				return []message.AssistantChunk{
+					{
+						BaseChunk: message.BaseChunk{ID: "asst-write-pending"},
+						Content: []message.Block{
+							&message.ToolCall{
+								ID:   "call-write-cancel",
+								Name: "write",
+								Args: map[string]any{
+									"path":    "never-written.txt",
+									"content": "should be canceled",
+								},
+							},
+						},
+						Done: true,
+					},
+				}, nil
+			}
+			return []message.AssistantChunk{
+				{
+					BaseChunk: message.BaseChunk{ID: "asst-new-turn"},
+					Content: []message.Block{
+						&message.TextBlock{Text: "Switched to your new request."},
+					},
+					Done: true,
+				},
+			}, nil
+		},
+	}
+
+	h, err := New(Config{
+		DB:     db,
+		Model:  newTestModel(t, prov),
+		Tools:  reg,
+		Logger: log.Default(),
+	})
+	if err != nil {
+		t.Fatalf("New error: %v", err)
+	}
+
+	// Turn 1: Trigger permission interrupt
+	var interrupted bool
+	for ev, err := range h.Stream(ctx, "thread-cancel-perm", message.NewUserText("Write never-written.txt")) {
+		if err != nil {
+			t.Fatalf("Turn 1 Stream error: %v", err)
+		}
+		if ev.Type == EventInterrupted {
+			interrupted = true
+		}
+	}
+	if !interrupted {
+		t.Fatalf("expected Turn 1 to interrupt for permission")
+	}
+
+	// Turn 2: Send a brand new user message via Stream without resolving permissions
+	var turn2Events []message.Message
+	var canceledToolMsg *message.Tool
+	var finalMsg message.Message
+	for ev, err := range h.Stream(ctx, "thread-cancel-perm", message.NewUserText("Actually, cancel that and do something else")) {
+		if err != nil {
+			t.Fatalf("Turn 2 Stream error: %v", err)
+		}
+		switch ev.Type {
+		case EventMessage:
+			turn2Events = append(turn2Events, ev.Message)
+			if tm, ok := ev.Message.(*message.Tool); ok {
+				canceledToolMsg = tm
+			}
+		case EventCompleted:
+			finalMsg = ev.Message
+		}
+	}
+
+	if len(turn2Events) != 3 || turn2Events[0].Role() != message.RoleTool ||
+		turn2Events[1].Role() != message.RoleUser || turn2Events[2].Role() != message.RoleAssistant {
+		t.Fatalf("expected Turn 2 EventMessage order [Tool(Canceled), User, Assistant], got %d events", len(turn2Events))
+	}
+
+	if canceledToolMsg == nil || !canceledToolMsg.IsError || !strings.Contains(msgText(canceledToolMsg), "canceled") {
+		t.Fatalf("expected canceled *message.Tool event, got %+v", canceledToolMsg)
+	}
+	if finalMsg == nil || msgText(finalMsg) != "Switched to your new request." {
+		t.Fatalf("unexpected final message: %v", finalMsg)
+	}
+	if _, err := os.Stat(filepath.Join(workDir, "never-written.txt")); !os.IsNotExist(err) {
+		t.Errorf("expected never-written.txt not to be created, got err=%v", err)
+	}
+
+	// Verify LLM on Turn 2 received messages in strict order:
+	// [User1, Assistant1(ToolCall), Tool(Canceled), User2]
+	turns := prov.recordedTurns()
+	if len(turns) != 2 {
+		t.Fatalf("expected 2 LLM turns, got %d", len(turns))
+	}
+	turn2Msgs := turns[1].messages
+	if len(turn2Msgs) != 4 {
+		t.Fatalf("expected 4 messages in Turn 2 LLM request, got %d", len(turn2Msgs))
+	}
+	if turn2Msgs[0].Role() != message.RoleUser || turn2Msgs[1].Role() != message.RoleAssistant ||
+		turn2Msgs[2].Role() != message.RoleTool || turn2Msgs[3].Role() != message.RoleUser {
+		t.Errorf("unexpected Turn 2 message role sequence: [%s, %s, %s, %s]",
+			turn2Msgs[0].Role(), turn2Msgs[1].Role(), turn2Msgs[2].Role(), turn2Msgs[3].Role())
+	}
+
+	state, err := h.LoadState(ctx, "thread-cancel-perm")
+	if err != nil {
+		t.Fatalf("LoadState error: %v", err)
+	}
+	if len(state.PendingPermissions) != 0 {
+		t.Errorf("expected PendingPermissions to be cleared, got %d", len(state.PendingPermissions))
+	}
+	if len(state.Messages) != 5 {
+		t.Fatalf("expected 5 persisted messages in state, got %d", len(state.Messages))
+	}
+	for i := 1; i < len(state.Messages); i++ {
+		if !(state.Messages[i-1].GetID() < state.Messages[i].GetID()) {
+			t.Errorf("expected strictly increasing UUIDv7 IDs: state.Messages[%d].ID (%s) >= state.Messages[%d].ID (%s)",
+				i-1, state.Messages[i-1].GetID(), i, state.Messages[i].GetID())
+		}
+	}
+}
+
+func TestMixedToolCallsAndPlanModeDeny(t *testing.T) {
+	ctx := context.Background()
+	db := openTestSQLite(t)
+	workDir, reg := newTestToolsRegistry(t)
+
+	if err := os.WriteFile(filepath.Join(workDir, "readme.txt"), []byte("hello plan\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	// Put registry in ModePlan: view is allowed, write is denied (AccessDeny without interrupt) and unknown tool fails Prepare
+	reg.SetMode(tools.ModePlan)
+
+	prov := &fakeProvider{
+		stepHandler: func(_ context.Context, _ *llm.Request, turn int) ([]message.AssistantChunk, error) {
+			if turn == 1 {
+				return []message.AssistantChunk{
+					{
+						BaseChunk: message.BaseChunk{ID: "asst-plan-calls"},
+						Content: []message.Block{
+							&message.ToolCall{
+								ID:   "call-view",
+								Name: "view",
+								Args: map[string]any{"path": "readme.txt"},
+							},
+							&message.ToolCall{
+								ID:   "call-write-denied",
+								Name: "write",
+								Args: map[string]any{"path": "denied.txt", "content": "nope"},
+							},
+							&message.ToolCall{
+								ID:   "call-nonexistent",
+								Name: "nonexistent_tool",
+								Args: map[string]any{},
+							},
+						},
+						Done: true,
+					},
+				}, nil
+			}
+			return []message.AssistantChunk{
+				{
+					BaseChunk: message.BaseChunk{ID: "asst-plan-done"},
+					Content: []message.Block{
+						&message.TextBlock{Text: "Plan mode evaluated."},
+					},
+					Done: true,
+				},
+			}, nil
+		},
+	}
+
+	h, err := New(Config{
+		DB:     db,
+		Model:  newTestModel(t, prov),
+		Tools:  reg,
+		Logger: log.Default(),
+	})
+	if err != nil {
+		t.Fatalf("New error: %v", err)
+	}
+
+	var toolMsgs []*message.Tool
+	for ev, err := range h.Stream(ctx, "thread-plan", message.NewUserText("Try view, write, and unknown")) {
+		if err != nil {
+			t.Fatalf("Stream error: %v", err)
+		}
+		if ev.Type == EventMessage {
+			if tm, ok := ev.Message.(*message.Tool); ok {
+				toolMsgs = append(toolMsgs, tm)
+			}
+		}
+	}
+
+	if len(toolMsgs) != 3 {
+		t.Fatalf("expected 3 tool messages, got %d", len(toolMsgs))
+	}
+	if toolMsgs[0].IsError || !strings.Contains(msgText(toolMsgs[0]), "hello plan") {
+		t.Errorf("expected view to succeed in ModePlan, got: %s", msgText(toolMsgs[0]))
+	}
+	if !toolMsgs[1].IsError || !strings.Contains(msgText(toolMsgs[1]), tools.ErrPermissionDenied.Error()) {
+		t.Errorf("expected write to be denied in ModePlan, got: %s", msgText(toolMsgs[1]))
+	}
+	if !toolMsgs[2].IsError || !strings.Contains(msgText(toolMsgs[2]), tools.ErrToolNotFound.Error()) {
+		t.Errorf("expected nonexistent_tool to fail Prepare, got: %s", msgText(toolMsgs[2]))
+	}
+}
+
 func TestValidationAndContextCancellation(t *testing.T) {
 	ctx := context.Background()
 	db := openTestSQLite(t)
+	_, reg := newTestToolsRegistry(t)
 	model := newTestModel(t, nil)
 	logger := log.Default()
 
-	// 1. Validate all 3 required Config fields
-	if _, err := New(Config{Model: model, Logger: logger}); !errors.Is(err, ErrInvalidConfig) {
+	// 1. Validate all 4 required Config fields
+	if _, err := New(Config{Model: model, Tools: reg, Logger: logger}); !errors.Is(err, ErrInvalidConfig) {
 		t.Errorf("missing DB error = %v, want %v", err, ErrInvalidConfig)
 	}
-	if _, err := New(Config{DB: db, Logger: logger}); !errors.Is(err, ErrInvalidConfig) {
+	if _, err := New(Config{DB: db, Tools: reg, Logger: logger}); !errors.Is(err, ErrInvalidConfig) {
 		t.Errorf("missing Model error = %v, want %v", err, ErrInvalidConfig)
 	}
-	if _, err := New(Config{DB: db, Model: model}); !errors.Is(err, ErrInvalidConfig) {
+	if _, err := New(Config{DB: db, Model: model, Logger: logger}); !errors.Is(err, ErrInvalidConfig) {
+		t.Errorf("missing Tools error = %v, want %v", err, ErrInvalidConfig)
+	}
+	if _, err := New(Config{DB: db, Model: model, Tools: reg}); !errors.Is(err, ErrInvalidConfig) {
 		t.Errorf("missing Logger error = %v, want %v", err, ErrInvalidConfig)
 	}
 
 	h, err := New(Config{
 		DB:     db,
 		Model:  model,
+		Tools:  reg,
 		Logger: logger,
 	})
 	if err != nil {
 		t.Fatalf("New error: %v", err)
 	}
 
-	// 2. Empty threadID -> ErrEmptyThreadID on Stream and LoadState; nil input -> ErrNilMessage
+	// 2. Empty threadID -> ErrEmptyThreadID on Stream, Resume, and LoadState; nil input -> ErrNilMessage
 	if _, _, err := drainStream(ctx, h, "", message.NewUserText("hi")); !errors.Is(err, ErrEmptyThreadID) {
 		t.Errorf("Stream empty threadID error = %v, want %v", err, ErrEmptyThreadID)
 	}
@@ -477,15 +1082,25 @@ func TestValidationAndContextCancellation(t *testing.T) {
 	if _, _, err := drainStream(ctx, h, "thread-valid", nil); !errors.Is(err, ErrNilMessage) {
 		t.Errorf("Stream nil message error = %v, want %v", err, ErrNilMessage)
 	}
+	for _, err := range h.Resume(ctx, "", nil) {
+		if !errors.Is(err, ErrEmptyThreadID) {
+			t.Errorf("Resume empty threadID error = %v, want %v", err, ErrEmptyThreadID)
+		}
+	}
 	if _, err := h.LoadState(ctx, ""); !errors.Is(err, ErrEmptyThreadID) {
 		t.Errorf("LoadState empty threadID error = %v, want %v", err, ErrEmptyThreadID)
 	}
 
-	// 3. Context cancellation before Stream
+	// 3. Context cancellation before Stream / Resume / LoadState
 	cancelCtx, cancel := context.WithCancel(ctx)
 	cancel()
 	if _, _, err := drainStream(cancelCtx, h, "thread-cancel", message.NewUserText("hi")); !errors.Is(err, context.Canceled) {
 		t.Errorf("Stream with canceled ctx error = %v, want %v", err, context.Canceled)
+	}
+	for _, err := range h.Resume(cancelCtx, "thread-cancel", nil) {
+		if !errors.Is(err, context.Canceled) {
+			t.Errorf("Resume with canceled ctx error = %v, want %v", err, context.Canceled)
+		}
 	}
 	if _, err := h.LoadState(cancelCtx, "thread-cancel"); !errors.Is(err, context.Canceled) {
 		t.Errorf("LoadState with canceled ctx error = %v, want %v", err, context.Canceled)
@@ -502,6 +1117,7 @@ func TestValidationAndContextCancellation(t *testing.T) {
 	hCancel, err := New(Config{
 		DB:     db,
 		Model:  newTestModel(t, cancelProv),
+		Tools:  reg,
 		Logger: logger,
 	})
 	if err != nil {

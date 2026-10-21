@@ -8,7 +8,6 @@ import (
 	"io"
 	"io/fs"
 	"net/http"
-	"net/url"
 	"os"
 	"path"
 	"strings"
@@ -16,6 +15,7 @@ import (
 
 	"github.com/masterkeysrd/tasksmith/internal/core/diff"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
+	"github.com/masterkeysrd/tasksmith/internal/sandbox"
 )
 
 // Fetch executes an outbound HTTP request through the sandbox's policy-enforced
@@ -25,14 +25,24 @@ func (s *Std) Fetch(ctx context.Context, req FetchRequest) (*FetchResult, error)
 	if rawURL == "" {
 		return nil, fmt.Errorf("%w: url is required", ErrInvalidArgument)
 	}
-	parsedURL, err := validateHTTPURL(rawURL)
+	parsedURL, err := s.sandbox.Net().ValidateURL(rawURL)
 	if err != nil {
+		if errors.Is(err, sandbox.ErrInvalidURL) {
+			return nil, fmt.Errorf("%w: %w", ErrInvalidArgument, err)
+		}
 		return nil, err
 	}
 
 	method := strings.ToUpper(strings.TrimSpace(req.Method))
 	if method == "" {
 		method = http.MethodGet
+	}
+
+	if req.DryRun {
+		return &FetchResult{
+			URL:    parsedURL.String(),
+			DryRun: true,
+		}, nil
 	}
 
 	reqCtx := ctx
@@ -113,8 +123,11 @@ func (s *Std) Download(ctx context.Context, req DownloadRequest) (*DownloadResul
 	if rawURL == "" {
 		return nil, fmt.Errorf("%w: url is required", ErrInvalidArgument)
 	}
-	parsedURL, err := validateHTTPURL(rawURL)
+	parsedURL, err := s.sandbox.Net().ValidateURL(rawURL)
 	if err != nil {
+		if errors.Is(err, sandbox.ErrInvalidURL) {
+			return nil, fmt.Errorf("%w: %w", ErrInvalidArgument, err)
+		}
 		return nil, err
 	}
 	if strings.TrimSpace(req.Path) == "" {
@@ -163,6 +176,16 @@ func (s *Std) Download(ctx context.Context, req DownloadRequest) (*DownloadResul
 
 	if req.Mode != 0 {
 		fileMode = req.Mode
+	}
+
+	if req.DryRun {
+		return &DownloadResult{
+			URL:        parsedURL.String(),
+			Path:       normPath,
+			Created:    !exists,
+			BeforeHash: diskHash,
+			DryRun:     true,
+		}, nil
 	}
 
 	reqCtx := ctx
@@ -265,19 +288,4 @@ func (s *Std) Download(ctx context.Context, req DownloadRequest) (*DownloadResul
 		IsBinary:     isBin,
 		Duration:     duration,
 	}, nil
-}
-
-func validateHTTPURL(raw string) (*url.URL, error) {
-	u, err := url.Parse(raw)
-	if err != nil {
-		return nil, fmt.Errorf("%w: invalid url %q: %v", ErrInvalidArgument, raw, err)
-	}
-	scheme := strings.ToLower(u.Scheme)
-	if scheme != "http" && scheme != "https" {
-		return nil, fmt.Errorf("%w: unsupported url scheme %q (must be http or https)", ErrInvalidArgument, u.Scheme)
-	}
-	if u.Host == "" {
-		return nil, fmt.Errorf("%w: url %q is missing host", ErrInvalidArgument, raw)
-	}
-	return u, nil
 }

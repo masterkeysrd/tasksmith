@@ -26,6 +26,8 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/harness"
 	"github.com/masterkeysrd/tasksmith/internal/sandbox"
 	"github.com/masterkeysrd/tasksmith/internal/std"
+	"github.com/masterkeysrd/tasksmith/internal/tools"
+	"github.com/masterkeysrd/tasksmith/internal/tools/builtin"
 	"github.com/masterkeysrd/tasksmith/internal/workspace"
 )
 
@@ -35,9 +37,10 @@ type capturedTurn struct {
 }
 
 type fakeProvider struct {
-	mu      sync.Mutex
-	turns   []capturedTurn
-	handler func(ctx context.Context, req *llm.Request) ([]string, string, error)
+	mu           sync.Mutex
+	turns        []capturedTurn
+	handler      func(ctx context.Context, req *llm.Request) ([]string, string, error)
+	chunkHandler func(ctx context.Context, req *llm.Request) ([]message.AssistantChunk, error)
 }
 
 func (p *fakeProvider) Name() string {
@@ -73,7 +76,26 @@ func (p *fakeProvider) Stream(ctx context.Context, req *llm.Request) (llm.Stream
 		messages: clonedMsgs,
 	})
 	handler := p.handler
+	chunkHandler := p.chunkHandler
 	p.mu.Unlock()
+
+	if chunkHandler != nil {
+		customChunks, err := chunkHandler(ctx, req)
+		if err != nil {
+			return nil, err
+		}
+		return func(yield func(message.AssistantChunk, error) bool) {
+			for _, ch := range customChunks {
+				if err := ctx.Err(); err != nil {
+					yield(message.AssistantChunk{}, err)
+					return
+				}
+				if !yield(ch, nil) {
+					return
+				}
+			}
+		}, nil
+	}
 
 	var chunks []string
 	var respID string
@@ -198,10 +220,21 @@ func setupTestEnv(t *testing.T, prov *fakeProvider) (*sql.DB, *workspace.Workspa
 		_ = db.Close()
 	})
 
-	ws, err := workspace.Open(context.Background(), t.TempDir())
+	ws, err := workspace.Open(context.Background(), t.TempDir(), workspace.WithBuiltinFS(builtin.FS()))
 	if err != nil {
 		t.Fatalf("workspace.Open: %v", err)
 	}
+
+	sb, err := sandbox.New(sandbox.Config{
+		WorkDir: ws.RootDir(),
+		Mode:    sandbox.ModeLocal,
+	})
+	if err != nil {
+		t.Fatalf("sandbox.New: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = sb.Close()
+	})
 
 	logger := log.Default()
 	gw := newFakeGateway(prov)
@@ -211,6 +244,7 @@ func setupTestEnv(t *testing.T, prov *fakeProvider) (*sql.DB, *workspace.Workspa
 		DB:        db,
 		Workspace: ws,
 		Gateway:   gw,
+		Sandbox:   sb,
 		Publisher: pub,
 		Logger:    logger,
 	})
@@ -221,15 +255,20 @@ func setupTestEnv(t *testing.T, prov *fakeProvider) (*sql.DB, *workspace.Workspa
 	return db, ws, gw, pub, mgr
 }
 
-func loadHarnessState(t *testing.T, db *sql.DB, gw *fakeGateway, sessionID string) harness.State {
+func loadHarnessState(t *testing.T, mgr *Manager, db *sql.DB, gw *fakeGateway, sessionID string) harness.State {
 	t.Helper()
 	llmModel, err := gw.ResolveLLM(context.Background(), "fake-default-model")
 	if err != nil {
 		t.Fatalf("ResolveLLM: %v", err)
 	}
+	reg, err := mgr.Tools(context.Background(), sessionID)
+	if err != nil {
+		t.Fatalf("mgr.Tools: %v", err)
+	}
 	h, err := harness.New(harness.Config{
 		DB:     db,
 		Model:  llmModel,
+		Tools:  reg,
 		Logger: log.Default(),
 	})
 	if err != nil {
@@ -260,7 +299,8 @@ func msgText(m message.Message) string {
 }
 
 func TestConfigValidate(t *testing.T) {
-	db, ws, gw, pub, _ := setupTestEnv(t, nil)
+	db, ws, gw, pub, mgr := setupTestEnv(t, nil)
+	sb := mgr.sandbox
 	logger := log.Default()
 
 	tests := []struct {
@@ -272,6 +312,7 @@ func TestConfigValidate(t *testing.T) {
 			cfg: Config{
 				Workspace: ws,
 				Gateway:   gw,
+				Sandbox:   sb,
 				Publisher: pub,
 				Logger:    logger,
 			},
@@ -281,6 +322,7 @@ func TestConfigValidate(t *testing.T) {
 			cfg: Config{
 				DB:        db,
 				Gateway:   gw,
+				Sandbox:   sb,
 				Publisher: pub,
 				Logger:    logger,
 			},
@@ -290,6 +332,17 @@ func TestConfigValidate(t *testing.T) {
 			cfg: Config{
 				DB:        db,
 				Workspace: ws,
+				Sandbox:   sb,
+				Publisher: pub,
+				Logger:    logger,
+			},
+		},
+		{
+			name: "missing Sandbox",
+			cfg: Config{
+				DB:        db,
+				Workspace: ws,
+				Gateway:   gw,
 				Publisher: pub,
 				Logger:    logger,
 			},
@@ -300,6 +353,7 @@ func TestConfigValidate(t *testing.T) {
 				DB:        db,
 				Workspace: ws,
 				Gateway:   gw,
+				Sandbox:   sb,
 				Logger:    logger,
 			},
 		},
@@ -309,6 +363,7 @@ func TestConfigValidate(t *testing.T) {
 				DB:        db,
 				Workspace: ws,
 				Gateway:   gw,
+				Sandbox:   sb,
 				Publisher: pub,
 			},
 		},
@@ -524,10 +579,21 @@ OVERRIDE_AGENT_PROMPT_MARKER {{ if call .HasTool "shell" }}HAS_SHELL_TOOL{{ end 
 		t.Fatal(err)
 	}
 
-	ws, err := workspace.Open(ctx, wsDir)
+	ws, err := workspace.Open(ctx, wsDir, workspace.WithBuiltinFS(builtin.FS()))
 	if err != nil {
 		t.Fatalf("workspace.Open: %v", err)
 	}
+
+	sb, err := sandbox.New(sandbox.Config{
+		WorkDir: ws.RootDir(),
+		Mode:    sandbox.ModeLocal,
+	})
+	if err != nil {
+		t.Fatalf("sandbox.New: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = sb.Close()
+	})
 
 	prov := &fakeProvider{
 		handler: func(_ context.Context, _ *llm.Request) ([]string, string, error) {
@@ -541,6 +607,7 @@ OVERRIDE_AGENT_PROMPT_MARKER {{ if call .HasTool "shell" }}HAS_SHELL_TOOL{{ end 
 		DB:        db,
 		Workspace: ws,
 		Gateway:   gw,
+		Sandbox:   sb,
 		Publisher: pub,
 		Logger:    log.Default(),
 	})
@@ -719,7 +786,7 @@ func TestSendAndHistory(t *testing.T) {
 	}
 
 	// Verify harness.LoadState returns [User, Assistant] from the checkpoints table
-	state := loadHarnessState(t, db, gw, sess.ID)
+	state := loadHarnessState(t, mgr, db, gw, sess.ID)
 	if len(state.Messages) != 2 {
 		t.Fatalf("expected 2 messages in harness checkpoint state, got %d", len(state.Messages))
 	}
@@ -796,7 +863,7 @@ func TestAppendMessageIsolationFromHarnessCheckpoints(t *testing.T) {
 	}
 
 	// 4. Verify harness.LoadState (checkpoints table) is NOT polluted with the chat-only system message
-	state := loadHarnessState(t, db, gw, sess.ID)
+	state := loadHarnessState(t, mgr, db, gw, sess.ID)
 	if len(state.Messages) != 2 {
 		t.Fatalf("expected 2 messages in harness checkpoint state, got %d: %+v", len(state.Messages), state.Messages)
 	}
@@ -1230,6 +1297,7 @@ func TestFileTrackerReloadAndDeleteSessionCleanup(t *testing.T) {
 		DB:        db,
 		Workspace: ws,
 		Gateway:   gw,
+		Sandbox:   mgr.sandbox,
 		Publisher: pub,
 		Logger:    log.Default(),
 	})
@@ -1268,5 +1336,524 @@ func TestFileTrackerReloadAndDeleteSessionCleanup(t *testing.T) {
 	}
 	if _, err := os.Stat(sessDir); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("expected sessionDir %q to be removed on Delete, stat err = %v", sessDir, err)
+	}
+}
+
+func TestMultiStepToolExecutionAndFileTracker(t *testing.T) {
+	ctx := context.Background()
+
+	var step int
+	prov := &fakeProvider{
+		chunkHandler: func(_ context.Context, req *llm.Request) ([]message.AssistantChunk, error) {
+			step++
+			if step == 1 {
+				return []message.AssistantChunk{
+					{
+						BaseChunk: message.BaseChunk{ID: uuid.NewString()},
+						Model:     req.Model,
+						Content: []message.Block{
+							&message.TextBlock{Text: "Let me view that file."},
+							&message.ToolCall{
+								ID:   "tc-view-1",
+								Name: "view",
+								Args: map[string]any{
+									"path": "hello.txt",
+								},
+							},
+						},
+						Done: true,
+					},
+				}, nil
+			}
+			// Step 2: verify the tool result message is present in req.Messages
+			var foundToolOutput bool
+			for _, m := range req.Messages {
+				if m.Role() == message.RoleTool && strings.Contains(msgText(m), "Hello from disk!") {
+					foundToolOutput = true
+				}
+			}
+			if !foundToolOutput {
+				return nil, errors.New("expected tool output containing 'Hello from disk!' in second LLM turn")
+			}
+			return []message.AssistantChunk{
+				{
+					BaseChunk: message.BaseChunk{ID: uuid.NewString()},
+					Model:     req.Model,
+					Content: []message.Block{
+						&message.TextBlock{Text: "The file says: Hello from disk!"},
+					},
+					Done: true,
+				},
+			}, nil
+		},
+	}
+
+	_, ws, _, pub, mgr := setupTestEnv(t, prov)
+
+	fileBytes := []byte("Hello from disk!\n")
+	if err := os.WriteFile(filepath.Join(ws.RootDir(), "hello.txt"), fileBytes, 0o644); err != nil {
+		t.Fatalf("WriteFile hello.txt: %v", err)
+	}
+
+	sess, err := mgr.Create(ctx, CreateParams{Title: "Multi-step Tool Session"})
+	if err != nil {
+		t.Fatalf("Create error: %v", err)
+	}
+
+	pub.reset()
+
+	reply, err := mgr.Send(ctx, sess.ID, message.NewUserText("Read hello.txt please"))
+	if err != nil {
+		t.Fatalf("Send error: %v", err)
+	}
+	if reply == nil {
+		t.Fatal("expected non-nil final assistant reply")
+	}
+	if got := msgText(reply); got != "The file says: Hello from disk!" {
+		t.Errorf("reply text = %q, want %q", got, "The file says: Hello from disk!")
+	}
+
+	// Verify History in SQLite messages table contains:
+	// [User, Assistant(ToolCall), Tool(Result), Assistant(Final)] in exact id ASC order!
+	history, err := mgr.History(ctx, sess.ID)
+	if err != nil {
+		t.Fatalf("History error: %v", err)
+	}
+	if len(history) != 4 {
+		t.Fatalf("expected 4 messages in History, got %d: %+v", len(history), history)
+	}
+
+	wantRoles := []message.Role{
+		message.RoleUser,
+		message.RoleAssistant,
+		message.RoleTool,
+		message.RoleAssistant,
+	}
+	for i, wantRole := range wantRoles {
+		if history[i].Role() != wantRole {
+			t.Errorf("history[%d].Role() = %q, want %q", i, history[i].Role(), wantRole)
+		}
+		if i > 0 && !(history[i-1].GetID() < history[i].GetID()) {
+			t.Errorf("expected chronological UUIDv7 ordering history[%d].ID (%q) < history[%d].ID (%q)",
+				i-1, history[i-1].GetID(), i, history[i].GetID())
+		}
+	}
+
+	asstToolMsg, ok := history[1].(*message.Assistant)
+	if !ok || len(asstToolMsg.ToolCalls()) != 1 || asstToolMsg.ToolCalls()[0].Name != "view" {
+		t.Errorf("history[1] = %+v, want Assistant with 'view' tool call", history[1])
+	}
+	if !strings.Contains(msgText(history[2]), "Hello from disk!") {
+		t.Errorf("history[2] tool result = %q, want to contain 'Hello from disk!'", msgText(history[2]))
+	}
+	if msgText(history[3]) != "The file says: Hello from disk!" {
+		t.Errorf("history[3] final text = %q, want 'The file says: Hello from disk!'", msgText(history[3]))
+	}
+
+	// Verify Tracker(ctx, sess.ID) recorded the file read!
+	tr, err := mgr.Tracker(ctx, sess.ID)
+	if err != nil {
+		t.Fatalf("Tracker error: %v", err)
+	}
+	gotHash, ok := tr.LastHash("hello.txt")
+	if !ok || gotHash != sha256Hex(fileBytes) {
+		t.Errorf("Tracker.LastHash(\"hello.txt\") = (%q, %v), want (%q, true)", gotHash, ok, sha256Hex(fileBytes))
+	}
+}
+
+func TestMultiPermissionInterruptAndAllOrNothingRespondPermission(t *testing.T) {
+	ctx := context.Background()
+
+	var step int
+	prov := &fakeProvider{
+		chunkHandler: func(_ context.Context, req *llm.Request) ([]message.AssistantChunk, error) {
+			step++
+			if step == 1 {
+				return []message.AssistantChunk{
+					{
+						BaseChunk: message.BaseChunk{ID: uuid.NewString()},
+						Model:     req.Model,
+						Content: []message.Block{
+							&message.TextBlock{Text: "I will write both files."},
+							&message.ToolCall{
+								ID:   "tc-write-1",
+								Name: "write",
+								Args: map[string]any{
+									"path":    "file1.txt",
+									"content": "content one\n",
+								},
+							},
+							&message.ToolCall{
+								ID:   "tc-write-2",
+								Name: "write",
+								Args: map[string]any{
+									"path":    "file2.txt",
+									"content": "content two\n",
+								},
+							},
+						},
+						Done: true,
+					},
+				}, nil
+			}
+			return []message.AssistantChunk{
+				{
+					BaseChunk: message.BaseChunk{ID: uuid.NewString()},
+					Model:     req.Model,
+					Content: []message.Block{
+						&message.TextBlock{Text: "Wrote file1.txt and skipped file2.txt as requested."},
+					},
+					Done: true,
+				},
+			}, nil
+		},
+	}
+
+	_, ws, _, pub, mgr := setupTestEnv(t, prov)
+
+	sess, err := mgr.Create(ctx, CreateParams{Title: "All-Or-Nothing Permissions"})
+	if err != nil {
+		t.Fatalf("Create error: %v", err)
+	}
+
+	pub.reset()
+
+	// 1. Send triggers 2 write tool calls -> interrupts with 2 permissions and returns (nil, nil)
+	reply, err := mgr.Send(ctx, sess.ID, message.NewUserText("Write file1.txt and file2.txt"))
+	if err != nil {
+		t.Fatalf("Send error: %v", err)
+	}
+	if reply != nil {
+		t.Fatalf("expected nil reply while paused on permissions, got %+v", reply)
+	}
+
+	// Verify EventPermissionRequested was published with 2 permissions
+	events := pub.recorded()
+	var permEvent *Event
+	for i := range events {
+		if events[i].Type == EventPermissionRequested {
+			permEvent = &events[i]
+		}
+	}
+	if permEvent == nil || len(permEvent.Permissions) != 2 {
+		t.Fatalf("expected EventPermissionRequested with 2 permissions, got %+v", permEvent)
+	}
+
+	// Verify PendingPermissions returns 2 items
+	pending, err := mgr.PendingPermissions(ctx, sess.ID)
+	if err != nil {
+		t.Fatalf("PendingPermissions error: %v", err)
+	}
+	if len(pending) != 2 {
+		t.Fatalf("expected 2 pending permissions, got %d", len(pending))
+	}
+
+	// Validation error checks on RespondPermission
+	if _, err := mgr.RespondPermission(ctx, sess.ID, tools.PermissionDecision{
+		RequestID: pending[0].ID,
+		Kind:      "invalid_kind",
+	}); !errors.Is(err, ErrInvalidDecision) {
+		t.Errorf("RespondPermission invalid kind error = %v, want %v", err, ErrInvalidDecision)
+	}
+	if _, err := mgr.RespondPermission(ctx, sess.ID, tools.PermissionDecision{
+		RequestID: "non-existent-req-id",
+		Kind:      tools.DecisionAllowOnce,
+	}); !errors.Is(err, ErrPermissionNotFound) {
+		t.Errorf("RespondPermission unknown request ID error = %v, want %v", err, ErrPermissionNotFound)
+	}
+
+	pub.reset()
+
+	// 2. Respond to permission #1 ONLY -> must buffer decision and return (nil, nil) WITHOUT calling the graph!
+	reply1, err := mgr.RespondPermission(ctx, sess.ID, tools.PermissionDecision{
+		RequestID: pending[0].ID,
+		Kind:      tools.DecisionAllowOnce,
+	})
+	if err != nil {
+		t.Fatalf("RespondPermission #1 error: %v", err)
+	}
+	if reply1 != nil {
+		t.Fatalf("expected nil reply after resolving only 1 of 2 permissions, got %+v", reply1)
+	}
+	if len(prov.recordedTurns()) != 1 {
+		t.Fatalf("expected graph NOT to be called until all permissions resolved, got %d LLM turns", len(prov.recordedTurns()))
+	}
+	if len(pub.recorded()) != 0 {
+		t.Fatalf("expected 0 events published when buffering partial decision, got %+v", pub.recorded())
+	}
+	if _, err := os.Stat(filepath.Join(ws.RootDir(), "file1.txt")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expected file1.txt NOT to be written before all permissions are resolved, stat err = %v", err)
+	}
+
+	// Verify PendingPermissions now returns ONLY permission #2!
+	remaining, err := mgr.PendingPermissions(ctx, sess.ID)
+	if err != nil {
+		t.Fatalf("PendingPermissions after #1 error: %v", err)
+	}
+	if len(remaining) != 1 || remaining[0].ID != pending[1].ID {
+		t.Fatalf("PendingPermissions after #1 = %+v, want only [%s]", remaining, pending[1].ID)
+	}
+
+	// 3. Respond to permission #2 (rejecting it with feedback) -> triggers h.Resume!
+	finalReply, err := mgr.RespondPermission(ctx, sess.ID, tools.PermissionDecision{
+		RequestID: pending[1].ID,
+		Kind:      tools.DecisionReject,
+		Feedback:  "Do not create file2.txt",
+	})
+	if err != nil {
+		t.Fatalf("RespondPermission #2 error: %v", err)
+	}
+	if finalReply == nil {
+		t.Fatal("expected non-nil final assistant reply after resolving all permissions")
+	}
+	if got := msgText(finalReply); got != "Wrote file1.txt and skipped file2.txt as requested." {
+		t.Errorf("finalReply = %q, want %q", got, "Wrote file1.txt and skipped file2.txt as requested.")
+	}
+
+	// Verify file1.txt was written and tracked in session's FileTracker journal!
+	disk1, err := os.ReadFile(filepath.Join(ws.RootDir(), "file1.txt"))
+	if err != nil {
+		t.Fatalf("ReadFile file1.txt: %v", err)
+	}
+	if string(disk1) != "content one\n" {
+		t.Errorf("file1.txt content = %q, want \"content one\\n\"", string(disk1))
+	}
+	if _, err := os.Stat(filepath.Join(ws.RootDir(), "file2.txt")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("expected rejected file2.txt not to exist on disk, stat err = %v", err)
+	}
+
+	tr, err := mgr.Tracker(ctx, sess.ID)
+	if err != nil {
+		t.Fatalf("Tracker error: %v", err)
+	}
+	_, entries, err := tr.ReadJournal("file1.txt")
+	if err != nil {
+		t.Fatalf("ReadJournal(\"file1.txt\") error: %v", err)
+	}
+	if len(entries) != 1 || entries[0].Kind != std.KindCreated || entries[0].Tool != "write" {
+		t.Errorf("unexpected journal entries for file1.txt: %+v", entries)
+	}
+
+	// Verify PendingPermissions is now empty and RespondPermission returns ErrNoPendingPermissions
+	afterPerms, err := mgr.PendingPermissions(ctx, sess.ID)
+	if err != nil {
+		t.Fatalf("PendingPermissions after completion error: %v", err)
+	}
+	if len(afterPerms) != 0 {
+		t.Errorf("expected 0 pending permissions after completion, got %d", len(afterPerms))
+	}
+	if _, err := mgr.RespondPermission(ctx, sess.ID, tools.PermissionDecision{
+		RequestID: pending[0].ID,
+		Kind:      tools.DecisionAllowOnce,
+	}); !errors.Is(err, ErrNoPendingPermissions) {
+		t.Errorf("RespondPermission with no pending permissions error = %v, want %v", err, ErrNoPendingPermissions)
+	}
+
+	// Verify History contains [User, Assistant(ToolCalls), Tool1, Tool2, Assistant(Final)] in exact id ASC order
+	history, err := mgr.History(ctx, sess.ID)
+	if err != nil {
+		t.Fatalf("History error: %v", err)
+	}
+	if len(history) != 5 {
+		t.Fatalf("expected 5 messages in History, got %d: %+v", len(history), history)
+	}
+	wantRoles := []message.Role{
+		message.RoleUser,
+		message.RoleAssistant,
+		message.RoleTool,
+		message.RoleTool,
+		message.RoleAssistant,
+	}
+	for i, wantRole := range wantRoles {
+		if history[i].Role() != wantRole {
+			t.Errorf("history[%d].Role() = %q, want %q", i, history[i].Role(), wantRole)
+		}
+		if i > 0 && !(history[i-1].GetID() < history[i].GetID()) {
+			t.Errorf("expected chronological UUIDv7 ordering history[%d].ID (%q) < history[%d].ID (%q)",
+				i-1, history[i-1].GetID(), i, history[i].GetID())
+		}
+	}
+	if !strings.Contains(msgText(history[3]), "Do not create file2.txt") {
+		t.Errorf("history[3] rejected tool message = %q, want to contain rejection feedback", msgText(history[3]))
+	}
+}
+
+func TestCancelPendingPermissionsOnNewUserSend(t *testing.T) {
+	ctx := context.Background()
+
+	var step int
+	prov := &fakeProvider{
+		chunkHandler: func(_ context.Context, req *llm.Request) ([]message.AssistantChunk, error) {
+			step++
+			if step == 1 {
+				return []message.AssistantChunk{
+					{
+						BaseChunk: message.BaseChunk{ID: uuid.NewString()},
+						Model:     req.Model,
+						Content: []message.Block{
+							&message.TextBlock{Text: "Preparing writes."},
+							&message.ToolCall{
+								ID:   "tc-cancel-1",
+								Name: "write",
+								Args: map[string]any{
+									"path":    "cancel1.txt",
+									"content": "nope 1\n",
+								},
+							},
+							&message.ToolCall{
+								ID:   "tc-cancel-2",
+								Name: "write",
+								Args: map[string]any{
+									"path":    "cancel2.txt",
+									"content": "nope 2\n",
+								},
+							},
+						},
+						Done: true,
+					},
+				}, nil
+			}
+			return []message.AssistantChunk{
+				{
+					BaseChunk: message.BaseChunk{ID: uuid.NewString()},
+					Model:     req.Model,
+					Content: []message.Block{
+						&message.TextBlock{Text: "Understood, canceled those writes and moving on."},
+					},
+					Done: true,
+				},
+			}, nil
+		},
+	}
+
+	_, ws, _, _, mgr := setupTestEnv(t, prov)
+
+	sess, err := mgr.Create(ctx, CreateParams{Title: "Cancel Pending Permissions"})
+	if err != nil {
+		t.Fatalf("Create error: %v", err)
+	}
+
+	// 1. First Send pauses awaiting 2 permissions
+	reply1, err := mgr.Send(ctx, sess.ID, message.NewUserText("Write cancel1.txt and cancel2.txt"))
+	if err != nil {
+		t.Fatalf("Send 1 error: %v", err)
+	}
+	if reply1 != nil {
+		t.Fatalf("expected nil reply while paused, got %+v", reply1)
+	}
+
+	pending, err := mgr.PendingPermissions(ctx, sess.ID)
+	if err != nil || len(pending) != 2 {
+		t.Fatalf("expected 2 pending permissions, got (%d, %v)", len(pending), err)
+	}
+
+	// Buffer a partial decision for permission #1
+	if _, err := mgr.RespondPermission(ctx, sess.ID, tools.PermissionDecision{
+		RequestID: pending[0].ID,
+		Kind:      tools.DecisionAllowOnce,
+	}); err != nil {
+		t.Fatalf("RespondPermission partial error: %v", err)
+	}
+
+	// 2. Call Send with a new user message while permissions are pending!
+	reply2, err := mgr.Send(ctx, sess.ID, message.NewUserText("Actually, cancel that and do something else"))
+	if err != nil {
+		t.Fatalf("Send 2 error: %v", err)
+	}
+	if reply2 == nil || msgText(reply2) != "Understood, canceled those writes and moving on." {
+		t.Fatalf("unexpected reply2: %+v", reply2)
+	}
+
+	// Verify neither file was written
+	for _, name := range []string{"cancel1.txt", "cancel2.txt"} {
+		if _, err := os.Stat(filepath.Join(ws.RootDir(), name)); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("expected %s not to be written after cancellation, stat err = %v", name, err)
+		}
+	}
+
+	// Verify History (ORDER BY id ASC) returns:
+	// [User1, Assistant1(ToolCalls), Tool1(Canceled), Tool2(Canceled), User2, Assistant2]
+	// in exact chronological order!
+	history, err := mgr.History(ctx, sess.ID)
+	if err != nil {
+		t.Fatalf("History error: %v", err)
+	}
+	if len(history) != 6 {
+		t.Fatalf("expected 6 messages in History, got %d: %+v", len(history), history)
+	}
+
+	wantRoles := []message.Role{
+		message.RoleUser,
+		message.RoleAssistant,
+		message.RoleTool,
+		message.RoleTool,
+		message.RoleUser,
+		message.RoleAssistant,
+	}
+	for i, wantRole := range wantRoles {
+		if history[i].Role() != wantRole {
+			t.Errorf("history[%d].Role() = %q, want %q", i, history[i].Role(), wantRole)
+		}
+		if i > 0 && !(history[i-1].GetID() < history[i].GetID()) {
+			t.Errorf("expected chronological UUIDv7 ordering history[%d].ID (%q) < history[%d].ID (%q)",
+				i-1, history[i-1].GetID(), i, history[i].GetID())
+		}
+	}
+
+	if msgText(history[0]) != "Write cancel1.txt and cancel2.txt" {
+		t.Errorf("history[0] = %q", msgText(history[0]))
+	}
+	if !strings.Contains(strings.ToLower(msgText(history[2])), "cancel") {
+		t.Errorf("history[2] = %q, want canceled tool result", msgText(history[2]))
+	}
+	if !strings.Contains(strings.ToLower(msgText(history[3])), "cancel") {
+		t.Errorf("history[3] = %q, want canceled tool result", msgText(history[3]))
+	}
+	if msgText(history[4]) != "Actually, cancel that and do something else" {
+		t.Errorf("history[4] = %q", msgText(history[4]))
+	}
+	if msgText(history[5]) != "Understood, canceled those writes and moving on." {
+		t.Errorf("history[5] = %q", msgText(history[5]))
+	}
+}
+
+func TestPermissionModeGetAndSet(t *testing.T) {
+	ctx := context.Background()
+	_, _, _, _, mgr := setupTestEnv(t, nil)
+
+	sess, err := mgr.Create(ctx, CreateParams{Title: "Permission Modes"})
+	if err != nil {
+		t.Fatalf("Create error: %v", err)
+	}
+
+	mode, err := mgr.PermissionMode(ctx, sess.ID)
+	if err != nil {
+		t.Fatalf("PermissionMode error: %v", err)
+	}
+	if mode != tools.ModeDefault {
+		t.Errorf("initial PermissionMode = %q, want %q", mode, tools.ModeDefault)
+	}
+
+	for _, nextMode := range []tools.PermissionMode{
+		tools.ModeAcceptEdits,
+		tools.ModePlan,
+		tools.ModeAsk,
+		tools.ModeAuto,
+		tools.ModeDefault,
+	} {
+		if err := mgr.SetPermissionMode(ctx, sess.ID, nextMode); err != nil {
+			t.Fatalf("SetPermissionMode(%q) error: %v", nextMode, err)
+		}
+		got, err := mgr.PermissionMode(ctx, sess.ID)
+		if err != nil {
+			t.Fatalf("PermissionMode after SetPermissionMode(%q) error: %v", nextMode, err)
+		}
+		if got != nextMode {
+			t.Errorf("PermissionMode = %q, want %q", got, nextMode)
+		}
+	}
+
+	if err := mgr.SetPermissionMode(ctx, sess.ID, "invalid_mode"); !errors.Is(err, ErrInvalidConfig) {
+		t.Errorf("SetPermissionMode invalid mode error = %v, want %v", err, ErrInvalidConfig)
 	}
 }
