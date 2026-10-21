@@ -139,6 +139,10 @@ type FS interface {
 	RemoveAll(ctx context.Context, path string) error
 	Rename(ctx context.Context, oldpath, newpath string) error
 	Chmod(ctx context.Context, path string, perm fs.FileMode) error
+
+	// ResolvePath validates path and returns a clean, slash-separated path
+	// relative to the sandbox root, or ErrPathEscape if path escapes WorkDir.
+	ResolvePath(path string) (string, error)
 }
 
 // Command specifies the parameters for executing a child process inside the sandbox.

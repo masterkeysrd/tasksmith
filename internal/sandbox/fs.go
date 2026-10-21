@@ -19,6 +19,17 @@ func newSandboxFS(s *session) *sandboxFS {
 	return &sandboxFS{s: s}
 }
 
+// ResolvePath validates a caller-supplied path (relative or absolute within
+// WorkDir) and returns a clean, slash-separated path relative to the sandbox
+// root, or ErrPathEscape if the path escapes WorkDir.
+func (f *sandboxFS) ResolvePath(path string) (string, error) {
+	rel, err := f.resolvePath(path)
+	if err != nil {
+		return "", err
+	}
+	return filepath.ToSlash(rel), nil
+}
+
 // resolvePath validates and converts a caller-supplied path (relative or
 // absolute within WorkDir) into a clean path relative to WorkDir suitable for
 // os.Root methods. Any traversal outside WorkDir returns ErrPathEscape.

@@ -194,6 +194,35 @@ func TestFSCapabilityAndConfinement(t *testing.T) {
 	if _, err := fsys.ReadFile(ctx, "evil_link"); !errors.Is(err, ErrPathEscape) {
 		t.Fatalf("expected ErrPathEscape on symlink escape, got %v", err)
 	}
+
+	// ResolvePath tests: relative, empty/dot, absolute inside WorkDir & realWorkDir, and escaping paths
+	for _, rootIn := range []string{"", "."} {
+		got, err := fsys.ResolvePath(rootIn)
+		if err != nil || got != "." {
+			t.Fatalf("ResolvePath(%q): expected \".\", got %q (err=%v)", rootIn, got, err)
+		}
+	}
+
+	relInputs := []string{
+		"./pkg/a.go",
+		"pkg/sub/../a.go",
+		filepath.Join(workDir, "pkg", "a.go"),
+	}
+	if realWorkDir, err := filepath.EvalSymlinks(workDir); err == nil && realWorkDir != workDir {
+		relInputs = append(relInputs, filepath.Join(realWorkDir, "pkg", "a.go"))
+	}
+	for _, in := range relInputs {
+		got, err := fsys.ResolvePath(in)
+		if err != nil || got != "pkg/a.go" {
+			t.Fatalf("ResolvePath(%q): expected \"pkg/a.go\", got %q (err=%v)", in, got, err)
+		}
+	}
+
+	for _, esc := range []string{"../outside", "pkg/../../outside", "/etc/passwd", outsideFile} {
+		if _, err := fsys.ResolvePath(esc); !errors.Is(err, ErrPathEscape) {
+			t.Fatalf("ResolvePath(%q): expected ErrPathEscape, got %v", esc, err)
+		}
+	}
 }
 
 func TestFSReadOnlyEnforcement(t *testing.T) {
