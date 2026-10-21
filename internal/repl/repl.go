@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"sync"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/masterkeysrd/tasksmith/api"
@@ -18,15 +19,16 @@ import (
 
 // Forwarded types and constants from subpackages for caller ergonomics.
 type (
-	Header         = ui.Header
-	State          = ui.State
-	Option         = ui.Option
-	Picker         = ui.Picker
-	Registry       = command.Registry
-	Command        = command.Command
-	CommandEnv     = command.Env
-	CommandResult  = command.Result
-	CommandHandler = command.Handler
+	Header            = ui.Header
+	State             = ui.State
+	Option            = ui.Option
+	Picker            = ui.Picker
+	PickerCanceledMsg = ui.PickerCanceledMsg
+	Registry          = command.Registry
+	Command           = command.Command
+	CommandEnv        = command.Env
+	CommandResult     = tea.Msg
+	CommandHandler    = command.Handler
 )
 
 const (
@@ -74,8 +76,7 @@ func (c Config) Validate() error {
 	return nil
 }
 
-// Run starts the REPL using the inline Bubble Tea v2 TUI when cfg.In is a
-// terminal TTY, or the deterministic line-driven loop when cfg.In is not a TTY.
+// Run starts the REPL using the inline Bubble Tea v2 TUI.
 func Run(ctx context.Context, cfg Config) error {
 	if err := cfg.Validate(); err != nil {
 		return err
@@ -117,10 +118,7 @@ func Run(ctx context.Context, cfg Config) error {
 		}
 	}
 
-	if isTTY(cfg.In) {
-		return runTUI(ctx, cfg, sess, mode)
-	}
-	return runLineLoop(ctx, cfg, sess, mode)
+	return runTUI(ctx, cfg, sess, mode)
 }
 
 func buildHeader(ctx context.Context, cfg Config, sess *api.Session) Header {
@@ -199,8 +197,8 @@ func ensureSession(ctx context.Context, c *client.Client, title, agent, model st
 	return sess, nil
 }
 
-func isTTY(r io.Reader) bool {
-	f, ok := r.(*os.File)
+func isTTY(v any) bool {
+	f, ok := v.(*os.File)
 	if !ok || f == nil {
 		return false
 	}
@@ -214,9 +212,32 @@ func isTTY(r io.Reader) bool {
 	return info.Mode()&os.ModeCharDevice != 0
 }
 
+type syncWriter struct {
+	mu sync.Mutex
+	w  io.Writer
+}
+
+func (s *syncWriter) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.w.Write(p)
+}
+
+func (s *syncWriter) Fd() uintptr {
+	if f, ok := s.w.(interface{ Fd() uintptr }); ok {
+		return f.Fd()
+	}
+	return 0
+}
+
 func runTUI(ctx context.Context, cfg Config, sess *api.Session, mode api.PermissionMode) error {
+	out := cfg.Out
+	if !isTTY(out) {
+		out = &syncWriter{w: out}
+	}
+
 	hdr := buildHeader(ctx, cfg, sess)
-	_, _ = fmt.Fprintln(cfg.Out, ui.FormatHeader(hdr))
+	_, _ = fmt.Fprintln(out, ui.FormatHeader(hdr))
 
 	subCtx, cancelSub := context.WithCancel(ctx)
 	eventCh := make(chan api.Event, 64)
@@ -245,12 +266,16 @@ func runTUI(ctx context.Context, cfg Config, sess *api.Session, mode api.Permiss
 	model := NewModel(ctx, cfg, command.NewRegistry(), sess, mode)
 	model.eventCh = eventCh
 
-	p := tea.NewProgram(
-		model,
+	opts := []tea.ProgramOption{
 		tea.WithInput(cfg.In),
-		tea.WithOutput(cfg.Out),
+		tea.WithOutput(out),
 		tea.WithContext(ctx),
-	)
+	}
+	if !isTTY(cfg.In) {
+		opts = append(opts, tea.WithoutSignals())
+	}
+
+	p := tea.NewProgram(model, opts...)
 	_, err := p.Run()
 	if errors.Is(err, tea.ErrInterrupted) || errors.Is(err, context.Canceled) {
 		return nil
@@ -317,9 +342,4 @@ func FormatCommandSuggestions(cmds []Command) string {
 		suggestions[i] = ui.Suggestion{Usage: c.Usage, Description: c.Description}
 	}
 	return ui.FormatSuggestions(suggestions)
-}
-
-// ParsePermissionInput parses a line-mode permission response into an api.PermissionDecision.
-func ParsePermissionInput(perm api.PermissionRequest, raw string) api.PermissionDecision {
-	return ui.ParsePermissionInput(perm, raw)
 }

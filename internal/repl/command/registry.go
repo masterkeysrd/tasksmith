@@ -1,41 +1,77 @@
 package command
 
 import (
-	"context"
-	"errors"
 	"fmt"
 	"strings"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/masterkeysrd/tasksmith/api"
-	"github.com/masterkeysrd/tasksmith/client"
 	"github.com/masterkeysrd/tasksmith/internal/repl/ui"
 )
 
-// Env provides the active REPL session context to a [Handler].
+// Env provides a lightweight read-only snapshot of REPL state to commands.
 type Env struct {
-	Client       *client.Client
-	Workspace    string
-	Session      *api.Session
 	Mode         api.PermissionMode
+	Session      *api.Session
 	DefaultAgent string
 	DefaultModel string
-	DefaultTitle string
 }
 
-// Result describes the output and state transitions produced by a slash command.
-type Result struct {
-	Output        string
-	SwitchTo      *api.Session
-	ResetSession  bool
-	ModelOverride string
-	ModeChange    api.PermissionMode
-	Clear         bool
-	Quit          bool
-	Picker        *ui.Picker
+// OutputMsg indicates plain text output from a slash command.
+type OutputMsg struct {
+	Text string
 }
 
-// Handler executes a slash command against the active [Env].
-type Handler func(ctx context.Context, env *Env, args []string) (Result, error)
+// OpenPickerMsg directs the UI to display an interactive command picker.
+type OpenPickerMsg struct {
+	Picker ui.Picker
+}
+
+// ChangeModeMsg requests changing the session permission mode.
+type ChangeModeMsg struct {
+	Mode   api.PermissionMode
+	Silent bool
+}
+
+// NewSessionMsg requests creating a new session.
+type NewSessionMsg struct {
+	Model string
+}
+
+// SwitchSessionMsg requests switching to an existing session.
+type SwitchSessionMsg struct {
+	SessionID string
+}
+
+// ListSessionsMsg requests listing available sessions.
+type ListSessionsMsg struct{}
+
+// ShowHistoryMsg requests displaying session message history.
+type ShowHistoryMsg struct{}
+
+// ListChangesMsg requests listing tracked file changes.
+type ListChangesMsg struct{}
+
+// ShowDiffMsg requests displaying a unified diff for a tracked file change.
+type ShowDiffMsg struct {
+	Path    string
+	EntryID string
+}
+
+// RevertMsg requests reverting file changes.
+type RevertMsg struct {
+	Path    string
+	EntryID string
+}
+
+// ClearScreenMsg requests clearing the terminal screen.
+type ClearScreenMsg struct{}
+
+// QuitMsg requests terminating the REPL.
+type QuitMsg struct{}
+
+// Handler executes a slash command against the active [Env], emitting an intent event.
+type Handler func(env Env, args []string) (tea.Msg, error)
 
 // Command defines a declarative REPL slash command and its metadata.
 type Command struct {
@@ -44,7 +80,8 @@ type Command struct {
 	Usage       string
 	Description string
 	Handler     Handler
-	Options     func(ctx context.Context, env *Env) []ui.Option
+	Options     func(env Env) []ui.Option
+	OnSelect    func(opt ui.Option) tea.Msg
 }
 
 // Registry maintains the ordered collection of REPL slash commands and aliases.
@@ -132,7 +169,7 @@ func (r *Registry) Suggest(prefix string) []Command {
 
 // SuggestArgs returns argument completion options for a partially typed slash command line.
 // It returns true only if line begins with "/" and contains a space after the command identifier.
-func (r *Registry) SuggestArgs(ctx context.Context, env *Env, rawLine string) (Command, []ui.Option, bool) {
+func (r *Registry) SuggestArgs(env Env, rawLine string) (Command, []ui.Option, bool) {
 	trimmedLeft := strings.TrimLeft(rawLine, " \t")
 	if !strings.HasPrefix(trimmedLeft, "/") {
 		return Command{}, nil, false
@@ -148,7 +185,7 @@ func (r *Registry) SuggestArgs(ctx context.Context, env *Env, rawLine string) (C
 		return Command{}, nil, false
 	}
 
-	allOpts := cmd.Options(ctx, env)
+	allOpts := cmd.Options(env)
 	query := strings.ToLower(strings.TrimSpace(argPart))
 	if query == "" {
 		return cmd, allOpts, true
@@ -178,38 +215,25 @@ func matchesCommandPrefix(cmd Command, prefix string) bool {
 }
 
 // Execute parses a raw slash command line and invokes the matching [Handler].
-func (r *Registry) Execute(ctx context.Context, env *Env, line string) (Result, error) {
+func (r *Registry) Execute(env Env, line string) (tea.Msg, error) {
 	trimmed := strings.TrimSpace(line)
 	if trimmed == "" {
-		return Result{}, nil
+		return nil, nil
 	}
 
 	fields := strings.Fields(trimmed)
 	cmd, ok := r.Lookup(fields[0])
 	if !ok {
-		return Result{}, fmt.Errorf("unknown command: %s", trimmed)
+		return nil, fmt.Errorf("unknown command: %s", trimmed)
 	}
 	if cmd.Handler == nil {
-		return Result{}, fmt.Errorf("command /%s has no handler", cmd.Name)
+		return nil, fmt.Errorf("command /%s has no handler", cmd.Name)
 	}
-	return cmd.Handler(ctx, env, fields[1:])
+	return cmd.Handler(env, fields[1:])
 }
 
 func normalizeCommandKey(raw string) string {
 	return strings.ToLower(strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(raw), "/")))
-}
-
-func requireEnvSession(env *Env, needSession bool) error {
-	if env == nil || env.Client == nil {
-		return errors.New("repl: client is required")
-	}
-	if strings.TrimSpace(env.Workspace) == "" {
-		return errors.New("repl: workspace is required")
-	}
-	if needSession && (env.Session == nil || strings.TrimSpace(env.Session.ID) == "") {
-		return errors.New("repl: active session is required")
-	}
-	return nil
 }
 
 func (r *Registry) registerBuiltins() {

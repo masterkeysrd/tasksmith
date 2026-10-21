@@ -233,38 +233,3 @@ func FormatDecisionSummary(perm api.PermissionRequest, decision api.PermissionDe
 		return theme.RejectDecisionStyle.Render(fmt.Sprintf("✗ Rejected: %s", target))
 	}
 }
-
-// ParsePermissionInput parses a line-mode permission response ("y", "a", "n [feedback]")
-// into a structured [api.PermissionDecision].
-func ParsePermissionInput(perm api.PermissionRequest, raw string) api.PermissionDecision {
-	lower := strings.ToLower(strings.TrimSpace(raw))
-	decision := api.PermissionDecision{
-		RequestID:  perm.ID,
-		ToolCallID: perm.ToolCallID,
-		Wait:       true,
-	}
-
-	if lower == "y" || lower == "yes" {
-		decision.Kind = api.DecisionAllowOnce
-		return decision
-	}
-
-	if lower == "a" || lower == "allow" || lower == "always" {
-		decision.Kind = api.DecisionAllowSession
-		if len(perm.GrantPatterns) > 0 {
-			decision.GrantPattern = perm.GrantPatterns[0]
-		}
-		return decision
-	}
-
-	decision.Kind = api.DecisionReject
-	trimmed := strings.TrimSpace(raw)
-	if len(trimmed) > 2 && strings.HasPrefix(lower, "n ") {
-		decision.Feedback = strings.TrimSpace(trimmed[2:])
-		return decision
-	}
-	if len(trimmed) > 3 && strings.HasPrefix(lower, "no ") {
-		decision.Feedback = strings.TrimSpace(trimmed[3:])
-	}
-	return decision
-}

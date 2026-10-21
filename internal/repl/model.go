@@ -2,6 +2,7 @@ package repl
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"charm.land/bubbles/v2/spinner"
@@ -153,15 +154,12 @@ func (m *Model) SetInputValue(val string) {
 	m.composer.SetValue(val)
 }
 
-func (m Model) commandEnv() *command.Env {
-	return &command.Env{
-		Client:       m.client,
-		Workspace:    m.workspace,
-		Session:      m.session,
+func (m Model) commandEnv() command.Env {
+	return command.Env{
 		Mode:         m.mode,
+		Session:      m.session,
 		DefaultAgent: m.defaultAgent,
 		DefaultModel: m.defaultModel,
-		DefaultTitle: m.defaultTitle,
 	}
 }
 
@@ -196,6 +194,52 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case sseClosedMsg:
 		return m, nil
+
+	case command.OutputMsg:
+		if typed.Text != "" {
+			return m, tea.Println(typed.Text)
+		}
+		return m, nil
+
+	case command.OpenPickerMsg:
+		m.picker = typed.Picker
+		m.state = ui.StatePicker
+		return m, nil
+
+	case ui.PickerCanceledMsg:
+		m.state = ui.StateIdle
+		return m, nil
+
+	case command.ChangeModeMsg:
+		return m.handleChangeMode(typed)
+
+	case command.NewSessionMsg:
+		return m.handleNewSession(typed)
+
+	case command.SwitchSessionMsg:
+		return m.handleSwitchSession(typed)
+
+	case command.ListSessionsMsg:
+		return m.handleListSessions()
+
+	case command.ShowHistoryMsg:
+		return m.handleShowHistory()
+
+	case command.ListChangesMsg:
+		return m.handleListChanges()
+
+	case command.ShowDiffMsg:
+		return m.handleShowDiff(typed)
+
+	case command.RevertMsg:
+		return m.handleRevert(typed)
+
+	case command.ClearScreenMsg:
+		return m, tea.ClearScreen
+
+	case command.QuitMsg:
+		m.quitting = true
+		return m, tea.Quit
 	}
 
 	if m.state == ui.StateIdle {
@@ -204,6 +248,119 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	}
 	return m, nil
+}
+
+func (m Model) handleChangeMode(msg command.ChangeModeMsg) (tea.Model, tea.Cmd) {
+	m.state = ui.StateIdle
+	if m.client != nil && m.session != nil && strings.TrimSpace(m.session.ID) != "" {
+		if err := m.client.SetPermissionMode(m.ctx, m.session.ID, msg.Mode); err != nil {
+			return m, tea.Println(ui.FormatError(err.Error()))
+		}
+	}
+	m.mode = msg.Mode
+	if !msg.Silent {
+		return m, tea.Println(fmt.Sprintf("Permission mode set to: %s", msg.Mode))
+	}
+	return m, nil
+}
+
+func (m Model) handleNewSession(msg command.NewSessionMsg) (tea.Model, tea.Cmd) {
+	m.session = nil
+	if msg.Model != "" {
+		m.defaultModel = msg.Model
+	}
+	return m, tea.Println(fmt.Sprintf("Switched to new session (agent=%s model=%s)", m.defaultAgent, m.defaultModel))
+}
+
+func (m Model) handleSwitchSession(msg command.SwitchSessionMsg) (tea.Model, tea.Cmd) {
+	if m.client == nil {
+		return m, tea.Println(ui.FormatError("repl: client is required"))
+	}
+	s, err := m.client.GetSession(m.ctx, msg.SessionID)
+	if err != nil {
+		return m, tea.Println(ui.FormatError(fmt.Sprintf("error switching session: %v", err)))
+	}
+	m.session = s
+	return m, tea.Println(fmt.Sprintf("Switched to session %s (agent=%s model=%s)", s.ID, s.Agent, s.Model))
+}
+
+func (m Model) handleListSessions() (tea.Model, tea.Cmd) {
+	if m.client == nil {
+		return m, tea.Println(ui.FormatError("repl: client is required"))
+	}
+	sessions, err := m.client.ListSessions(m.ctx)
+	if err != nil {
+		return m, tea.Println(ui.FormatError(fmt.Sprintf("error listing sessions: %v", err)))
+	}
+	var activeID string
+	if m.session != nil {
+		activeID = m.session.ID
+	}
+	return m, tea.Println(formatSessionList(sessions, activeID))
+}
+
+func (m Model) handleShowHistory() (tea.Model, tea.Cmd) {
+	if m.session == nil || strings.TrimSpace(m.session.ID) == "" {
+		return m, tea.Println("No messages in session history.")
+	}
+	if m.client == nil {
+		return m, tea.Println(ui.FormatError("repl: client is required"))
+	}
+	history, err := m.client.History(m.ctx, m.session.ID)
+	if err != nil {
+		return m, tea.Println(ui.FormatError(fmt.Sprintf("error loading history: %v", err)))
+	}
+	return m, tea.Println(formatHistory(history))
+}
+
+func (m Model) handleListChanges() (tea.Model, tea.Cmd) {
+	if m.session == nil || strings.TrimSpace(m.session.ID) == "" {
+		return m, tea.Println("No tracked file changes.")
+	}
+	if m.client == nil {
+		return m, tea.Println(ui.FormatError("repl: client is required"))
+	}
+	changes, err := m.client.Changes(m.ctx, m.session.ID)
+	if err != nil {
+		return m, tea.Println(ui.FormatError(fmt.Sprintf("error listing file changes: %v", err)))
+	}
+	return m, tea.Println(formatChanges(changes))
+}
+
+func (m Model) handleShowDiff(msg command.ShowDiffMsg) (tea.Model, tea.Cmd) {
+	if m.session == nil || strings.TrimSpace(m.session.ID) == "" {
+		return m, tea.Println(ui.FormatError("repl: active session is required"))
+	}
+	if m.client == nil {
+		return m, tea.Println(ui.FormatError("repl: client is required"))
+	}
+	diffText, err := m.client.DiffChange(m.ctx, m.session.ID, msg.Path, msg.EntryID)
+	if err != nil {
+		return m, tea.Println(ui.FormatError(fmt.Sprintf("error fetching diff: %v", err)))
+	}
+	if strings.TrimSpace(diffText) == "" {
+		return m, tea.Println("No diff changes.")
+	}
+	return m, tea.Println(ui.FormatDiff(strings.TrimRight(diffText, "\n")))
+}
+
+func (m Model) handleRevert(msg command.RevertMsg) (tea.Model, tea.Cmd) {
+	if m.session == nil || strings.TrimSpace(m.session.ID) == "" {
+		return m, tea.Println(ui.FormatError("repl: active session is required"))
+	}
+	if m.client == nil {
+		return m, tea.Println(ui.FormatError("repl: client is required"))
+	}
+	if err := m.client.Revert(m.ctx, m.session.ID, api.RevertRequest{
+		Path:  msg.Path,
+		Force: true,
+	}); err != nil {
+		return m, tea.Println(ui.FormatError(fmt.Sprintf("error reverting changes: %v", err)))
+	}
+	if msg.Path == "" {
+		return m, tea.Println("Reverted all session file changes.")
+	}
+	return m, tea.Println(fmt.Sprintf("Reverted %s.", msg.Path))
 }
 
 // View implements [tea.Model] in inline mode (AltScreen is never enabled).
@@ -229,7 +386,7 @@ func (m Model) renderIdleView() string {
 	sections = append(sections, m.composer.View())
 
 	raw := m.composer.Value()
-	if _, argOpts, ok := m.registry.SuggestArgs(m.ctx, m.commandEnv(), raw); ok && len(argOpts) > 0 {
+	if _, argOpts, ok := m.registry.SuggestArgs(m.commandEnv(), raw); ok && len(argOpts) > 0 {
 		cursor := m.argCursor
 		if cursor < 0 {
 			cursor = 0
@@ -281,6 +438,11 @@ func (m Model) renderApprovalView() string {
 	return m.approval.Render()
 }
 
+func isEnterKey(msg tea.KeyPressMsg) bool {
+	keyStr := msg.String()
+	return keyStr == "enter" || msg.Code == tea.KeyEnter || keyStr == "ctrl+j" || msg.Code == '\n' || msg.Code == 10 || msg.Code == 13
+}
+
 func (m Model) handleKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch m.state {
 	case ui.StateStreaming:
@@ -288,38 +450,18 @@ func (m Model) handleKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case ui.StateApproval:
 		return m.handleApprovalKey(msg)
 	case ui.StatePicker:
-		return m.handlePickerKey(msg)
+		var cmd tea.Cmd
+		m.picker, cmd = m.picker.Update(msg)
+		if cmd != nil {
+			ev := cmd()
+			if ev != nil {
+				return m.Update(ev)
+			}
+		}
+		return m, nil
 	default:
 		return m.handleIdleKey(msg)
 	}
-}
-
-func (m Model) handlePickerKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	keyStr := msg.String()
-	switch {
-	case keyStr == "ctrl+c" || keyStr == "esc" || msg.Code == tea.KeyEscape:
-		m.state = ui.StateIdle
-		return m, nil
-
-	case keyStr == "up" || keyStr == "k" || msg.Code == tea.KeyUp:
-		m.picker.CursorUp()
-		return m, nil
-
-	case keyStr == "down" || keyStr == "j" || msg.Code == tea.KeyDown:
-		m.picker.CursorDown()
-		return m, nil
-
-	case keyStr == "enter" || msg.Code == tea.KeyEnter:
-		opt, ok := m.picker.Selected()
-		if !ok {
-			m.state = ui.StateIdle
-			return m, nil
-		}
-		m.state = ui.StateIdle
-		cmdLine := m.picker.CommandPrefix + " " + opt.Value
-		return m.executeSlashCommand(cmdLine)
-	}
-	return m, nil
 }
 
 func (m Model) handleIdleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
@@ -331,11 +473,14 @@ func (m Model) handleIdleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 
 	if keyStr == "shift+tab" || (msg.Code == tea.KeyTab && msg.Mod&tea.ModShift != 0) {
-		return m.cycleMode()
+		return m.Update(command.ChangeModeMsg{
+			Mode:   nextPermissionMode(m.mode),
+			Silent: true,
+		})
 	}
 
 	inHist := m.composer.InHistory()
-	argCmd, argOpts, hasArgSuggs := m.registry.SuggestArgs(m.ctx, m.commandEnv(), m.composer.Value())
+	argCmd, argOpts, hasArgSuggs := m.registry.SuggestArgs(m.commandEnv(), m.composer.Value())
 	if !inHist && hasArgSuggs && len(argOpts) > 0 {
 		if keyStr == "up" || msg.Code == tea.KeyUp {
 			if m.argCursor > 0 {
@@ -349,17 +494,18 @@ func (m Model) handleIdleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
-		if keyStr == "enter" || msg.Code == tea.KeyEnter {
-			idx := m.argCursor
-			if idx < 0 {
-				idx = 0
-			}
+		if isEnterKey(msg) {
+			idx := max(m.argCursor, 0)
 			if idx >= len(argOpts) {
 				idx = len(argOpts) - 1
 			}
-			m.composer.SetValue("/" + argCmd.Name + " " + argOpts[idx].Value)
+			opt := argOpts[idx]
+			_ = m.composer.Submit()
 			m.argCursor = 0
-			return m.submitIdleInput()
+			if argCmd.OnSelect != nil {
+				return m.Update(argCmd.OnSelect(opt))
+			}
+			return m.executeSlashCommand("/" + argCmd.Name + " " + opt.Value)
 		}
 	}
 
@@ -373,7 +519,7 @@ func (m Model) handleIdleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	if keyStr == "enter" || msg.Code == tea.KeyEnter {
+	if isEnterKey(msg) {
 		return m.submitIdleInput()
 	}
 
@@ -384,17 +530,6 @@ func (m Model) handleIdleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.argCursor = 0
 	}
 	return m, cmd
-}
-
-func (m Model) cycleMode() (tea.Model, tea.Cmd) {
-	next := nextPermissionMode(m.mode)
-	if m.client != nil && m.session != nil && strings.TrimSpace(m.session.ID) != "" {
-		if err := m.client.SetPermissionMode(m.ctx, m.session.ID, next); err != nil {
-			return m, tea.Println(ui.FormatError(err.Error()))
-		}
-	}
-	m.mode = next
-	return m, nil
 }
 
 func nextPermissionMode(curr api.PermissionMode) api.PermissionMode {
@@ -445,42 +580,14 @@ func (m Model) submitIdleInput() (tea.Model, tea.Cmd) {
 }
 
 func (m Model) executeSlashCommand(line string) (tea.Model, tea.Cmd) {
-	env := m.commandEnv()
-
-	res, err := m.registry.Execute(m.ctx, env, line)
+	ev, err := m.registry.Execute(m.commandEnv(), line)
 	if err != nil {
 		return m, tea.Println(ui.FormatError(err.Error()))
 	}
-
-	if res.Picker != nil {
-		m.picker = *res.Picker
-		m.state = ui.StatePicker
+	if ev == nil {
 		return m, nil
 	}
-
-	if res.ResetSession {
-		m.session = nil
-		m.defaultModel = res.ModelOverride
-	}
-	if res.SwitchTo != nil {
-		m.session = res.SwitchTo
-	}
-	if res.ModeChange != "" {
-		m.mode = res.ModeChange
-	}
-
-	var cmds []tea.Cmd
-	if res.Clear {
-		cmds = append(cmds, tea.ClearScreen)
-	}
-	if res.Output != "" {
-		cmds = append(cmds, tea.Println(res.Output))
-	}
-	if res.Quit {
-		m.quitting = true
-		cmds = append(cmds, tea.Quit)
-	}
-	return m, tea.Batch(cmds...)
+	return m.Update(ev)
 }
 
 func (m Model) handleStreamingKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
@@ -538,7 +645,7 @@ func (m Model) handleApprovalKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.approval.EnterFeedback()
 		return m, nil
 
-	case keyStr == "enter" || msg.Code == tea.KeyEnter:
+	case isEnterKey(msg):
 		return m.submitSelectedPermission()
 	}
 
@@ -551,7 +658,7 @@ func (m Model) handleApprovalFeedbackKey(msg tea.KeyPressMsg) (tea.Model, tea.Cm
 		m.approval.ExitFeedback()
 		return m, nil
 	}
-	if keyStr == "enter" || msg.Code == tea.KeyEnter {
+	if isEnterKey(msg) {
 		feedback := strings.TrimSpace(m.approval.FeedbackValue())
 		m.approval.ExitFeedback()
 		return m.submitPermissionDecision(api.DecisionReject, feedback)

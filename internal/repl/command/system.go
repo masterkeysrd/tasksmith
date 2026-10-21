@@ -1,10 +1,11 @@
 package command
 
 import (
-	"context"
+	"cmp"
 	"fmt"
 	"strings"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/repl/ui"
 )
@@ -23,6 +24,9 @@ func (r *Registry) registerSystemCommands() {
 		Description: "Read or update the session permission mode",
 		Handler:     HandleMode,
 		Options:     modeOptions,
+		OnSelect: func(opt ui.Option) tea.Msg {
+			return ChangeModeMsg{Mode: api.PermissionMode(opt.Value)}
+		},
 	})
 	r.Register(Command{
 		Name:        "clear",
@@ -39,7 +43,7 @@ func (r *Registry) registerSystemCommands() {
 	})
 }
 
-func (r *Registry) handleHelp(_ context.Context, _ *Env, _ []string) (Result, error) {
+func (r *Registry) handleHelp(_ Env, _ []string) (tea.Msg, error) {
 	cmds := r.List()
 	var rows []string
 	rows = append(rows, "Available commands:")
@@ -54,53 +58,26 @@ func (r *Registry) handleHelp(_ context.Context, _ *Env, _ []string) (Result, er
 		}
 		rows = append(rows, fmt.Sprintf("  %-44s %s", usage, cmd.Description))
 	}
-	return Result{Output: strings.Join(rows, "\n")}, nil
+	return OutputMsg{Text: strings.Join(rows, "\n")}, nil
 }
 
 // HandleMode displays or alters the active permission mode.
-func HandleMode(ctx context.Context, env *Env, args []string) (Result, error) {
-	if err := requireEnvSession(env, false); err != nil {
-		return Result{}, err
-	}
-
-	hasSession := env.Session != nil && strings.TrimSpace(env.Session.ID) != ""
+func HandleMode(env Env, args []string) (tea.Msg, error) {
 	if len(args) == 0 || strings.TrimSpace(args[0]) == "" {
-		mode := env.Mode
-		if hasSession {
-			if m, err := env.Client.PermissionMode(ctx, env.Session.ID); err == nil && m != "" {
-				mode = m
-			}
-		}
-		if mode == "" {
-			mode = api.ModeDefault
-		}
-
-		picker := ui.NewPicker("Select permission mode:", "/mode", modeOptionsWithActive(mode))
-		return Result{
-			Output:     fmt.Sprintf("Permission mode: %s", mode),
-			ModeChange: mode,
-			Picker:     &picker,
+		mode := cmp.Or(env.Mode, api.ModeDefault)
+		picker := ui.NewPicker("Select permission mode:", modeOptionsWithActive(mode), func(opt ui.Option) tea.Msg {
+			return ChangeModeMsg{Mode: api.PermissionMode(opt.Value)}
+		})
+		return OpenPickerMsg{
+			Picker: picker,
 		}, nil
 	}
 
 	nextMode := api.PermissionMode(strings.TrimSpace(args[0]))
-	if !hasSession {
-		if !isValidPermissionMode(nextMode) {
-			return Result{}, fmt.Errorf("error setting permission mode: invalid permission mode %q (valid: default, accept_edits, plan, ask, auto)", nextMode)
-		}
-		return Result{
-			Output:     fmt.Sprintf("Permission mode set to: %s", nextMode),
-			ModeChange: nextMode,
-		}, nil
+	if !isValidPermissionMode(nextMode) {
+		return nil, fmt.Errorf("error setting permission mode: invalid permission mode %q (valid: default, accept_edits, plan, ask, auto)", nextMode)
 	}
-
-	if err := env.Client.SetPermissionMode(ctx, env.Session.ID, nextMode); err != nil {
-		return Result{}, fmt.Errorf("error setting permission mode: %w (valid: default, accept_edits, plan, ask, auto)", err)
-	}
-	return Result{
-		Output:     fmt.Sprintf("Permission mode set to: %s", nextMode),
-		ModeChange: nextMode,
-	}, nil
+	return ChangeModeMsg{Mode: nextMode}, nil
 }
 
 func modeOptionsWithActive(activeMode api.PermissionMode) []ui.Option {
@@ -141,12 +118,9 @@ func modeOptionsWithActive(activeMode api.PermissionMode) []ui.Option {
 	}
 }
 
-func modeOptions(_ context.Context, env *Env) []ui.Option {
-	var active api.PermissionMode
-	if env != nil {
-		active = env.Mode
-	}
-	return modeOptionsWithActive(active)
+func modeOptions(env Env) []ui.Option {
+	mode := cmp.Or(env.Mode, api.ModeDefault)
+	return modeOptionsWithActive(mode)
 }
 
 func isValidPermissionMode(mode api.PermissionMode) bool {
@@ -159,11 +133,11 @@ func isValidPermissionMode(mode api.PermissionMode) bool {
 }
 
 // HandleClear signals that the terminal screen should be cleared.
-func HandleClear(_ context.Context, _ *Env, _ []string) (Result, error) {
-	return Result{Clear: true}, nil
+func HandleClear(_ Env, _ []string) (tea.Msg, error) {
+	return ClearScreenMsg{}, nil
 }
 
 // HandleExit signals that the REPL session should terminate.
-func HandleExit(_ context.Context, _ *Env, _ []string) (Result, error) {
-	return Result{Quit: true}, nil
+func HandleExit(_ Env, _ []string) (tea.Msg, error) {
+	return QuitMsg{}, nil
 }

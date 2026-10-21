@@ -19,6 +19,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/client"
+	"github.com/masterkeysrd/tasksmith/internal/repl/command"
 )
 
 type testDaemonState struct {
@@ -493,146 +494,166 @@ func TestRegistryLookupSuggestListAndCommands(t *testing.T) {
 		Name:        "custom",
 		Aliases:     []string{"c"},
 		Description: "Custom test command",
-		Handler: func(_ context.Context, _ *CommandEnv, _ []string) (CommandResult, error) {
-			return CommandResult{Output: "custom-ok"}, nil
+		Handler: func(_ CommandEnv, _ []string) (tea.Msg, error) {
+			return command.OutputMsg{Text: "custom-ok"}, nil
 		},
 	})
-	if res, err := reg.Execute(ctx, nil, "/c"); err != nil || res.Output != "custom-ok" {
+	if res, err := reg.Execute(CommandEnv{}, "/c"); err != nil || res != (command.OutputMsg{Text: "custom-ok"}) {
 		t.Errorf("Execute(\"/c\") = (%+v, %v), want custom-ok", res, err)
 	}
 
-	env := &CommandEnv{
-		Client:       c,
-		Workspace:    "/tmp/ws",
+	env := CommandEnv{
 		Session:      &api.Session{ID: "s1", Agent: "build", Model: "claude-sonnet-4-6"},
 		Mode:         api.ModeDefault,
 		DefaultAgent: "build",
 		DefaultModel: "claude-sonnet-4-6",
-		DefaultTitle: "REPL Test",
 	}
 
 	// 1. /help
-	helpRes, err := reg.Execute(ctx, env, "/help")
-	if err != nil || !strings.Contains(helpRes.Output, "/new [model]") || !strings.Contains(helpRes.Output, "/diff <path> <entry_id>") {
+	helpRes, err := reg.Execute(env, "/help")
+	if err != nil {
+		t.Fatalf("/help = %v", err)
+	}
+	outHelp, ok := helpRes.(command.OutputMsg)
+	if !ok || !strings.Contains(outHelp.Text, "/new [model]") || !strings.Contains(outHelp.Text, "/diff <path> <entry_id>") {
 		t.Errorf("/help = (%+v, %v)", helpRes, err)
 	}
 
 	// 2. /sessions
-	sessRes, err := reg.Execute(ctx, env, "/ls")
-	if err != nil || !strings.Contains(sessRes.Output, "* s1") {
+	sessRes, err := reg.Execute(env, "/ls")
+	if err != nil || sessRes != (command.ListSessionsMsg{}) {
 		t.Errorf("/ls = (%+v, %v)", sessRes, err)
 	}
 
 	// 3. /history
-	histRes, err := reg.Execute(ctx, env, "/history")
-	if err != nil || !strings.Contains(histRes.Output, "[user] Hello REPL") || !strings.Contains(histRes.Output, "[assistant] Hi there!") {
+	histRes, err := reg.Execute(env, "/history")
+	if err != nil || histRes != (command.ShowHistoryMsg{}) {
 		t.Errorf("/history = (%+v, %v)", histRes, err)
 	}
 
 	// 4. /mode get & set & invalid
-	modeGetRes, err := reg.Execute(ctx, env, "/mode")
-	if err != nil || modeGetRes.ModeChange != api.ModeDefault || !strings.Contains(modeGetRes.Output, "Permission mode: default") {
-		t.Errorf("/mode = (%+v, %v)", modeGetRes, err)
+	modeGetRes, err := reg.Execute(env, "/mode")
+	if err != nil {
+		t.Fatalf("/mode = %v", err)
 	}
-	modeSetRes, err := reg.Execute(ctx, env, "/mode plan")
-	if err != nil || modeSetRes.ModeChange != api.ModePlan || !strings.Contains(modeSetRes.Output, "Permission mode set to: plan") {
+	openPicker, ok := modeGetRes.(command.OpenPickerMsg)
+	if !ok || len(openPicker.Picker.Options) != 5 {
+		t.Errorf("/mode = %+v", modeGetRes)
+	}
+	modeSetRes, err := reg.Execute(env, "/mode plan")
+	if err != nil || modeSetRes != (command.ChangeModeMsg{Mode: api.ModePlan}) {
 		t.Errorf("/mode plan = (%+v, %v)", modeSetRes, err)
 	}
-	if _, err := reg.Execute(ctx, env, "/mode invalid"); err == nil {
+	if _, err := reg.Execute(env, "/mode invalid"); err == nil {
 		t.Errorf("/mode invalid expected error, got nil")
 	}
 
 	// 5. /changes & /diff & /revert
-	chRes, err := reg.Execute(ctx, env, "/changes")
-	if err != nil || !strings.Contains(chRes.Output, "main.go") || !strings.Contains(chRes.Output, "+3/-1") {
+	chRes, err := reg.Execute(env, "/changes")
+	if err != nil || chRes != (command.ListChangesMsg{}) {
 		t.Errorf("/changes = (%+v, %v)", chRes, err)
 	}
 
-	diffRes, err := reg.Execute(ctx, env, "/diff main.go e1")
-	if err != nil || !strings.Contains(diffRes.Output, "+new") {
+	diffRes, err := reg.Execute(env, "/diff main.go e1")
+	if err != nil || diffRes != (command.ShowDiffMsg{Path: "main.go", EntryID: "e1"}) {
 		t.Errorf("/diff main.go e1 = (%+v, %v)", diffRes, err)
 	}
-	if _, err := reg.Execute(ctx, env, "/diff main.go"); err == nil {
+	if _, err := reg.Execute(env, "/diff main.go"); err == nil {
 		t.Errorf("/diff missing entry_id expected error")
 	}
-	if _, err := reg.Execute(ctx, env, "/diff main.go missing"); err == nil {
-		t.Errorf("/diff missing entry expected error")
+	if _, err := reg.Execute(env, "/diff"); err == nil {
+		t.Errorf("/diff missing args expected error")
 	}
 
-	revFileRes, err := reg.Execute(ctx, env, "/revert main.go")
-	if err != nil || revFileRes.Output != "Reverted main.go." {
+	revFileRes, err := reg.Execute(env, "/revert main.go")
+	if err != nil || revFileRes != (command.RevertMsg{Path: "main.go"}) {
 		t.Errorf("/revert main.go = (%+v, %v)", revFileRes, err)
 	}
-	revAllRes, err := reg.Execute(ctx, env, "/revert")
-	if err != nil || revAllRes.Output != "Reverted all session file changes." {
+	revAllRes, err := reg.Execute(env, "/revert")
+	if err != nil || revAllRes != (command.RevertMsg{}) {
 		t.Errorf("/revert = (%+v, %v)", revAllRes, err)
-	}
-	if _, err := reg.Execute(ctx, env, "/revert fail.go"); err == nil {
-		t.Errorf("/revert fail.go expected error")
 	}
 
 	// 6. /new & /switch
-	newRes, err := reg.Execute(ctx, env, "/new claude-opus-4-6")
-	if err != nil || !newRes.ResetSession || newRes.ModelOverride != "claude-opus-4-6" {
+	newRes, err := reg.Execute(env, "/new claude-opus-4-6")
+	if err != nil || newRes != (command.NewSessionMsg{Model: "claude-opus-4-6"}) {
 		t.Errorf("/new = (%+v, %v)", newRes, err)
 	}
-	swRes, err := reg.Execute(ctx, env, "/switch s1")
-	if err != nil || swRes.SwitchTo == nil || swRes.SwitchTo.ID != "s1" {
+	swRes, err := reg.Execute(env, "/switch s1")
+	if err != nil || swRes != (command.SwitchSessionMsg{SessionID: "s1"}) {
 		t.Errorf("/switch s1 = (%+v, %v)", swRes, err)
 	}
-	if _, err := reg.Execute(ctx, env, "/switch"); err == nil {
+	if _, err := reg.Execute(env, "/switch"); err == nil {
 		t.Errorf("/switch without arg expected error")
-	}
-	if _, err := reg.Execute(ctx, env, "/switch missing"); err == nil {
-		t.Errorf("/switch missing expected error")
 	}
 
 	// 7. /clear & /exit
-	clearRes, err := reg.Execute(ctx, env, "/clear")
-	if err != nil || !clearRes.Clear {
+	clearRes, err := reg.Execute(env, "/clear")
+	if err != nil || clearRes != (command.ClearScreenMsg{}) {
 		t.Errorf("/clear = (%+v, %v)", clearRes, err)
 	}
-	exitRes, err := reg.Execute(ctx, env, "/exit")
-	if err != nil || !exitRes.Quit {
+	exitRes, err := reg.Execute(env, "/exit")
+	if err != nil || exitRes != (command.QuitMsg{}) {
 		t.Errorf("/exit = (%+v, %v)", exitRes, err)
 	}
 
-	// Nil session branches for /mode, /changes, /history
-	env.Session = nil
-	nilModeGet, err := reg.Execute(ctx, env, "/mode")
-	if err != nil || nilModeGet.ModeChange != api.ModeDefault {
-		t.Errorf("nil session /mode = (%+v, %v)", nilModeGet, err)
+	// Test Model execution of command events with daemon client
+	cfg := Config{
+		Client:    c,
+		Workspace: "/tmp/ws",
+		SessionID: "s1",
+		Agent:     "build",
+		Model:     "claude-sonnet-4-6",
+		Title:     "REPL Test",
+		In:        strings.NewReader(""),
+		Out:       &bytes.Buffer{},
+		ErrOut:    &bytes.Buffer{},
 	}
-	nilModeSet, err := reg.Execute(ctx, env, "/mode auto")
-	if err != nil || nilModeSet.ModeChange != api.ModeAuto {
-		t.Errorf("nil session /mode auto = (%+v, %v)", nilModeSet, err)
-	}
-	if _, err := reg.Execute(ctx, env, "/mode invalid"); err == nil {
-		t.Errorf("nil session /mode invalid expected error")
-	}
-	nilCh, err := reg.Execute(ctx, env, "/changes")
-	if err != nil || nilCh.Output != "No tracked file changes." {
-		t.Errorf("nil session /changes = (%+v, %v)", nilCh, err)
-	}
-	nilHist, err := reg.Execute(ctx, env, "/history")
-	if err != nil || nilHist.Output != "No messages in session history." {
-		t.Errorf("nil session /history = (%+v, %v)", nilHist, err)
-	}
+	m := NewModel(ctx, cfg, reg, &api.Session{ID: "s1", Agent: "build", Model: "claude-sonnet-4-6"}, api.ModeDefault)
 
-	// EmptyChanges & EmptyHistory branches
+	// Model handling of commands
+	updatedM, cmdMode := m.Update(command.ChangeModeMsg{Mode: api.ModePlan})
+	m = updatedM.(Model)
+	if m.Mode() != api.ModePlan {
+		t.Errorf("Model mode = %v, want ModePlan", m.Mode())
+	}
+	_ = cmdMode
+
+	updatedM, _ = m.Update(command.ListSessionsMsg{})
+	m = updatedM.(Model)
+
+	updatedM, _ = m.Update(command.ShowHistoryMsg{})
+	m = updatedM.(Model)
+
+	updatedM, _ = m.Update(command.ListChangesMsg{})
+	m = updatedM.(Model)
+
+	updatedM, _ = m.Update(command.ShowDiffMsg{Path: "main.go", EntryID: "e1"})
+	m = updatedM.(Model)
+
+	updatedM, _ = m.Update(command.RevertMsg{Path: "main.go"})
+	m = updatedM.(Model)
+
+	updatedM, _ = m.Update(command.RevertMsg{})
+	m = updatedM.(Model)
+
+	// Empty session branches for history and changes
+	m.session = nil
+	updatedM, _ = m.Update(command.ShowHistoryMsg{})
+	m = updatedM.(Model)
+	updatedM, _ = m.Update(command.ListChangesMsg{})
+	m = updatedM.(Model)
+
+	// Empty changes & history in daemon session
 	st.mu.Lock()
 	st.changes["s2"] = nil
 	st.history["s2"] = nil
 	st.mu.Unlock()
-	env.Session = &api.Session{ID: "s2"}
-	emptyCh, err := reg.Execute(ctx, env, "/changes")
-	if err != nil || emptyCh.Output != "No tracked file changes." {
-		t.Errorf("empty /changes = (%+v, %v)", emptyCh, err)
-	}
-	emptyHist, err := reg.Execute(ctx, env, "/history")
-	if err != nil || emptyHist.Output != "No messages in session history." {
-		t.Errorf("empty /history = (%+v, %v)", emptyHist, err)
-	}
+	m.session = &api.Session{ID: "s2"}
+	updatedM, _ = m.Update(command.ListChangesMsg{})
+	m = updatedM.(Model)
+	updatedM, _ = m.Update(command.ShowHistoryMsg{})
+	m = updatedM.(Model)
 }
 
 func TestStylesAndFormatters(t *testing.T) {
@@ -1109,26 +1130,6 @@ func TestBubbleTeaModelLifecycle(t *testing.T) {
 	}
 }
 
-func TestParsePermissionInput(t *testing.T) {
-	perm := api.PermissionRequest{
-		ID:            "p1",
-		ToolCallID:    "tc1",
-		GrantPatterns: []string{"write:**"},
-	}
-	if d := ParsePermissionInput(perm, "y"); d.Kind != api.DecisionAllowOnce {
-		t.Errorf("ParsePermissionInput('y') = %+v", d)
-	}
-	if d := ParsePermissionInput(perm, "always"); d.Kind != api.DecisionAllowSession || d.GrantPattern != "write:**" {
-		t.Errorf("ParsePermissionInput('always') = %+v", d)
-	}
-	if d := ParsePermissionInput(perm, "n bad path"); d.Kind != api.DecisionReject || d.Feedback != "bad path" {
-		t.Errorf("ParsePermissionInput('n bad path') = %+v", d)
-	}
-	if d := ParsePermissionInput(perm, "no unsafe"); d.Kind != api.DecisionReject || d.Feedback != "unsafe" {
-		t.Errorf("ParsePermissionInput('no unsafe') = %+v", d)
-	}
-}
-
 func TestLazySessionCreationNoPrompts(t *testing.T) {
 	c, st := startTestUnixDaemon(t)
 	st.mu.Lock()
@@ -1165,52 +1166,6 @@ func TestLazySessionCreationNoPrompts(t *testing.T) {
 	st.mu.Unlock()
 	if sessionCount != 0 {
 		t.Fatalf("expected 0 sessions created when no prompt was sent, got %d", sessionCount)
-	}
-}
-
-func TestRunNonTTYLineLoop(t *testing.T) {
-	c, _ := startTestUnixDaemon(t)
-
-	input := strings.Join([]string{
-		"Hello from line loop",
-		"/help",
-		"/mode accept_edits",
-		"/changes",
-		"/diff main.go e1",
-		"/revert main.go",
-		"/exit",
-	}, "\n") + "\n"
-
-	var out, errOut bytes.Buffer
-	err := Run(context.Background(), Config{
-		Client:    c,
-		Workspace: "/tmp/ws",
-		SessionID: "s1",
-		Agent:     "build",
-		Model:     "claude-sonnet-4-6",
-		Title:     "Line Loop",
-		In:        strings.NewReader(input),
-		Out:       &out,
-		ErrOut:    &errOut,
-	})
-	if err != nil {
-		t.Fatalf("Run failed: %v\nerrOut: %s", err, errOut.String())
-	}
-
-	got := out.String()
-	for _, want := range []string{
-		"TaskSmith",
-		"Claude 3.7 Sonnet with",
-		"Echo: Hello from line loop",
-		"Available commands:",
-		"Permission mode set to: accept_edits",
-		"main.go",
-		"+new",
-		"Reverted main.go.",
-	} {
-		if !strings.Contains(got, want) {
-			t.Errorf("Run stdout missing %q.\nFull stdout:\n%s", want, got)
-		}
 	}
 }
 

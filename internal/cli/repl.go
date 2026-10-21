@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/repl"
 	"github.com/spf13/cobra"
 )
@@ -66,8 +65,4 @@ func runREPL(cmd *cobra.Command, rootOpts *rootOptions, opts *replOptions) error
 		Out:       cmd.OutOrStdout(),
 		ErrOut:    cmd.ErrOrStderr(),
 	})
-}
-
-func parsePermissionInput(perm api.PermissionRequest, raw string) api.PermissionDecision {
-	return repl.ParsePermissionInput(perm, raw)
 }

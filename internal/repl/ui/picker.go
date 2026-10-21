@@ -5,11 +5,15 @@ import (
 	"fmt"
 	"strings"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/masterkeysrd/tasksmith/internal/repl/theme"
 )
 
 // DefaultPickerStatusBar is the default navigation hint displayed at the bottom of a picker.
 const DefaultPickerStatusBar = "↑/↓ or j/k to select • enter to confirm • esc to cancel"
+
+// PickerCanceledMsg indicates that a picker interaction was dismissed without making a selection.
+type PickerCanceledMsg struct{}
 
 // Option represents a selectable item in an interactive command picker or inline argument filter.
 type Option struct {
@@ -21,16 +25,17 @@ type Option struct {
 
 // Picker manages interactive selection for a slash command.
 type Picker struct {
-	Title         string
-	CommandPrefix string
-	Options       []Option
-	StatusBar     string
-	cursor        int
+	Title     string
+	Options   []Option
+	StatusBar string
+	OnSelect  func(opt Option) tea.Msg
+	Keys      map[string]func(opt Option) tea.Msg
+	cursor    int
 }
 
 // NewPicker constructs an initialized [Picker] with the cursor positioned at the
 // currently active option, or 0 if none is marked current.
-func NewPicker(title, commandPrefix string, opts []Option) Picker {
+func NewPicker(title string, opts []Option, onSelect func(opt Option) tea.Msg) Picker {
 	cursor := 0
 	for i, opt := range opts {
 		if opt.Current {
@@ -40,11 +45,11 @@ func NewPicker(title, commandPrefix string, opts []Option) Picker {
 	}
 
 	return Picker{
-		Title:         title,
-		CommandPrefix: commandPrefix,
-		Options:       opts,
-		StatusBar:     DefaultPickerStatusBar,
-		cursor:        cursor,
+		Title:     title,
+		Options:   opts,
+		StatusBar: DefaultPickerStatusBar,
+		OnSelect:  onSelect,
+		cursor:    cursor,
 	}
 }
 
@@ -88,6 +93,59 @@ func (p Picker) Selected() (Option, bool) {
 		return Option{}, false
 	}
 	return p.Options[p.cursor], true
+}
+
+// Select invokes OnSelect for the currently highlighted option, or returns nil.
+func (p Picker) Select() tea.Msg {
+	if p.OnSelect == nil {
+		return nil
+	}
+	opt, ok := p.Selected()
+	if !ok {
+		return nil
+	}
+	return p.OnSelect(opt)
+}
+
+// Update processes navigation and selection key events for the picker.
+func (p Picker) Update(msg tea.Msg) (Picker, tea.Cmd) {
+	keyMsg, ok := msg.(tea.KeyPressMsg)
+	if !ok {
+		return p, nil
+	}
+
+	keyStr := keyMsg.String()
+	switch {
+	case keyStr == "ctrl+c" || keyStr == "esc" || keyMsg.Code == tea.KeyEscape:
+		return p, func() tea.Msg { return PickerCanceledMsg{} }
+
+	case keyStr == "up" || keyStr == "k" || keyMsg.Code == tea.KeyUp:
+		p.CursorUp()
+		return p, nil
+
+	case keyStr == "down" || keyStr == "j" || keyMsg.Code == tea.KeyDown:
+		p.CursorDown()
+		return p, nil
+
+	case keyStr == "enter" || keyMsg.Code == tea.KeyEnter || keyStr == "ctrl+j" || keyMsg.Code == '\n' || keyMsg.Code == 10 || keyMsg.Code == 13:
+		if ev := p.Select(); ev != nil {
+			return p, func() tea.Msg { return ev }
+		}
+		return p, func() tea.Msg { return PickerCanceledMsg{} }
+
+	default:
+		if p.Keys != nil {
+			if handler, found := p.Keys[keyStr]; found {
+				if opt, ok := p.Selected(); ok {
+					ev := handler(opt)
+					if ev != nil {
+						return p, func() tea.Msg { return ev }
+					}
+				}
+			}
+		}
+	}
+	return p, nil
 }
 
 // Render formats the picker title, option list, and navigation footer.

@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/masterkeysrd/tasksmith/api"
 )
 
@@ -246,20 +247,6 @@ func TestApprovalComponentAndDecisions(t *testing.T) {
 	if !strings.Contains(sumReject, "Rejected") || !strings.Contains(sumReject, "no shell commands") {
 		t.Errorf("summary reject mismatch: %s", sumReject)
 	}
-
-	// ParsePermissionInput variants
-	d1 := ParsePermissionInput(req1, "y")
-	if d1.Kind != api.DecisionAllowOnce {
-		t.Errorf("parse 'y' = %v", d1.Kind)
-	}
-	d2 := ParsePermissionInput(req1, "allow")
-	if d2.Kind != api.DecisionAllowSession {
-		t.Errorf("parse 'allow' = %v", d2.Kind)
-	}
-	d3 := ParsePermissionInput(req1, "n not allowed")
-	if d3.Kind != api.DecisionReject || d3.Feedback != "not allowed" {
-		t.Errorf("parse 'n not allowed' = %+v", d3)
-	}
 }
 
 func TestMessageAndDiffFormatting(t *testing.T) {
@@ -328,7 +315,10 @@ func TestPickerComponent(t *testing.T) {
 		{Value: "plan", Label: "Plan", Description: "Read-only"},
 	}
 
-	p := NewPicker("Choose Mode:", "/mode", opts)
+	type dummyMsg struct{ val string }
+	p := NewPicker("Choose Mode:", opts, func(opt Option) tea.Msg {
+		return dummyMsg{val: opt.Value}
+	})
 	if p.Cursor() != 1 {
 		t.Fatalf("expected cursor at 1 (Current option), got %d", p.Cursor())
 	}
@@ -336,6 +326,11 @@ func TestPickerComponent(t *testing.T) {
 	sel, ok := p.Selected()
 	if !ok || sel.Value != "accept_edits" {
 		t.Errorf("Selected = %+v, ok=%v", sel, ok)
+	}
+
+	selectedMsg := p.Select()
+	if dm, ok := selectedMsg.(dummyMsg); !ok || dm.val != "accept_edits" {
+		t.Errorf("Select() = %+v, want dummyMsg 'accept_edits'", selectedMsg)
 	}
 
 	p.CursorDown()
@@ -366,16 +361,19 @@ func TestPickerComponent(t *testing.T) {
 	}
 
 	// Empty picker
-	emptyP := NewPicker("", "", nil)
+	emptyP := NewPicker("", nil, nil)
 	if _, ok := emptyP.Selected(); ok {
 		t.Errorf("empty picker Selected should be false")
+	}
+	if emptyP.Select() != nil {
+		t.Errorf("empty picker Select should be nil")
 	}
 	if emptyP.Render() == "" {
 		t.Errorf("empty picker Render should still render footer")
 	}
 
 	// Custom status bar
-	customP := NewPicker("Custom", "/cmd", opts)
+	customP := NewPicker("Custom", opts, nil)
 	customP.StatusBar = "custom navigation hints"
 	if !strings.Contains(customP.Render(), "custom navigation hints") {
 		t.Errorf("custom status bar missing in render")

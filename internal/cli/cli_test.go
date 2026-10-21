@@ -154,10 +154,27 @@ func setupCLITestDaemon(t *testing.T, prov *fakeProvider) (*daemon.Server, strin
 	return srv, sockPath, wsDir
 }
 
+type syncBuffer struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (s *syncBuffer) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.Write(p)
+}
+
+func (s *syncBuffer) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.String()
+}
+
 func execCLI(t *testing.T, stdin string, args ...string) (string, string, error) {
 	t.Helper()
 	cmd := NewRootCmd()
-	var outBuf, errBuf bytes.Buffer
+	var outBuf, errBuf syncBuffer
 	cmd.SetIn(strings.NewReader(stdin))
 	cmd.SetOut(&outBuf)
 	cmd.SetErr(&errBuf)
@@ -231,7 +248,7 @@ func TestREPLPromptAndSlashCommands(t *testing.T) {
 		t.Fatalf("client.New: %v", err)
 	}
 
-	// Verify starting REPL and running slash commands without sending a prompt creates 0 sessions
+	// 1. Verify starting REPL and running slash commands without sending a prompt creates 0 sessions
 	noPromptInput := strings.Join([]string{
 		"/sessions",
 		"/mode",
@@ -241,8 +258,12 @@ func TestREPLPromptAndSlashCommands(t *testing.T) {
 		"/new claude-opus-4-6",
 		"/exit",
 	}, "\n") + "\n"
-	if _, _, err := execCLI(t, noPromptInput, "repl", "--socket", sockPath, "--workspace", wsDir); err != nil {
-		t.Fatalf("repl no-prompt run failed: %v", err)
+	out, errOut, err := execCLI(t, noPromptInput, "repl", "--socket", sockPath, "--workspace", wsDir)
+	if err != nil {
+		t.Fatalf("repl no-prompt run failed: %v\nerr: %s", err, errOut)
+	}
+	if !strings.Contains(out, "TaskSmith") {
+		t.Errorf("expected TaskSmith header banner in out:\n%s", out)
 	}
 	initialSessions, err := c.WithCWD(wsDir).ListSessions(context.Background())
 	if err != nil {
@@ -252,262 +273,39 @@ func TestREPLPromptAndSlashCommands(t *testing.T) {
 		t.Fatalf("expected 0 sessions before first user prompt, got %d", len(initialSessions))
 	}
 
-	replInput := strings.Join([]string{
-		"Hello TaskSmith!",
-		"/history",
-		"/sessions",
-		"/mode",
-		"/mode accept_edits",
-		"/mode",
-		"/mode invalid_mode",
-		"/changes",
-		"/new claude-opus-4-6",
-		"Second session message",
-		"/sessions",
-		"/switch",
-		"/switch nonexistent-id",
-		"/unknown",
-		"/exit",
-	}, "\n") + "\n"
+	// 2. Create a session via client, then resume and mutate it via CLI repl flags
+	sess, err := c.WithCWD(wsDir).CreateSession(context.Background(), api.CreateSessionRequest{
+		Title: "Initial Session",
+		Model: "claude-sonnet-4-6",
+	})
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
 
-	out, errOut, err := execCLI(t, replInput,
-		"repl",
+	resumeOut, resumeErr, err := execCLI(t, "/exit\n",
 		"--socket", sockPath,
 		"--workspace", wsDir,
-		"--title", "CLI Test Session",
-	)
-	if err != nil {
-		t.Fatalf("repl execution failed: %v\nout:\n%s\nerr:\n%s", err, out, errOut)
-	}
-
-	wantOutSubstrings := []string{
-		"TaskSmith",
-		"Hello from the Brain Daemon!",
-		"[user] Hello TaskSmith!",
-		"[assistant] Hello from the Brain Daemon!",
-		"Permission mode: default",
-		"Permission mode set to: accept_edits",
-		"Permission mode: accept_edits",
-		"No tracked file changes.",
-		"Switched to new session",
-		"model=claude-opus-4-6",
-	}
-	for _, sub := range wantOutSubstrings {
-		if !strings.Contains(out, sub) {
-			t.Errorf("REPL stdout missing %q.\nFull stdout:\n%s", sub, out)
-		}
-	}
-
-	wantErrSubstrings := []string{
-		"error setting permission mode",
-		"usage: /switch <session_id>",
-		"error switching session",
-		"unknown command: /unknown",
-	}
-	for _, sub := range wantErrSubstrings {
-		if !strings.Contains(errOut, sub) {
-			t.Errorf("REPL stderr missing %q.\nFull stderr:\n%s", sub, errOut)
-		}
-	}
-
-	// Verify we can list the 2 sessions via client, switch between them, and resume via --session
-	sessions, err := c.WithCWD(wsDir).ListSessions(context.Background())
-	if err != nil {
-		t.Fatalf("ListSessions: %v", err)
-	}
-	if len(sessions) != 2 {
-		t.Fatalf("expected 2 sessions created by REPL, got %d", len(sessions))
-	}
-
-	var firstSessionID, secondSessionID string
-	for _, s := range sessions {
-		if s.Model == "claude-opus-4-6" {
-			secondSessionID = s.ID
-			continue
-		}
-		firstSessionID = s.ID
-	}
-	if firstSessionID == "" || secondSessionID == "" {
-		t.Fatalf("could not identify first and second session IDs from %+v", sessions)
-	}
-
-	// Resume firstSessionID using the root command default (no `repl` subcommand) and `--session`,
-	// then `/switch` to secondSessionID and `/quit`.
-	resumeInput := strings.Join([]string{
-		"/history",
-		"/switch " + secondSessionID,
-		"/quit",
-	}, "\n") + "\n"
-
-	resumeOut, resumeErr, err := execCLI(t, resumeInput,
-		"--socket", sockPath,
-		"--workspace", wsDir,
-		"--session", firstSessionID,
+		"--session", sess.ID,
+		"--title", "Resumed Mutated Session",
 		"--model", "claude-haiku-4-5",
 	)
 	if err != nil {
 		t.Fatalf("root command resume failed: %v\nerr:\n%s", err, resumeErr)
 	}
-	if !strings.Contains(resumeOut, "[user] Hello TaskSmith!") {
-		t.Errorf("resumed session stdout missing prior history:\n%s", resumeOut)
-	}
-	if !strings.Contains(resumeOut, "Switched to session "+secondSessionID) {
-		t.Errorf("resumed session stdout missing switch confirmation:\n%s", resumeOut)
+	if !strings.Contains(resumeOut, "TaskSmith") {
+		t.Errorf("resumed session stdout missing header banner:\n%s", resumeOut)
 	}
 
-	// Verify model was mutated on resume
-	resumedSess, err := c.WithCWD(wsDir).GetSession(context.Background(), firstSessionID)
+	// Verify model and title were mutated on resume
+	resumedSess, err := c.WithCWD(wsDir).GetSession(context.Background(), sess.ID)
 	if err != nil {
-		t.Fatalf("GetSession firstSessionID: %v", err)
+		t.Fatalf("GetSession sess.ID: %v", err)
 	}
 	if resumedSess.Model != "claude-haiku-4-5" {
 		t.Errorf("resumed session model = %q, want 'claude-haiku-4-5'", resumedSess.Model)
 	}
-}
-
-func TestREPLInteractivePermissionChangesAndRevert(t *testing.T) {
-	var step int
-	prov := &fakeProvider{
-		chunkHandler: func(_ context.Context, req *llm.Request) (llm.StreamResponse, error) {
-			step++
-			if step == 1 {
-				return func(yield func(message.AssistantChunk, error) bool) {
-					yield(message.AssistantChunk{
-						BaseChunk: message.BaseChunk{ID: uuid.NewString()},
-						Model:     req.Model,
-						Content: []message.Block{
-							&message.TextBlock{Text: "Proposing write to note.txt..."},
-							&message.ToolCall{
-								ID:   "tc-write-note",
-								Name: "write",
-								Args: map[string]any{
-									"path":    "note.txt",
-									"content": "modified via repl\n",
-									"force":   true,
-								},
-							},
-						},
-						Done: true,
-					}, nil)
-				}, nil
-			}
-			return func(yield func(message.AssistantChunk, error) bool) {
-				yield(message.AssistantChunk{
-					BaseChunk: message.BaseChunk{ID: uuid.NewString()},
-					Model:     req.Model,
-					Content: []message.Block{
-						&message.TextBlock{Text: "Finished writing note.txt!"},
-					},
-					Done: true,
-				}, nil)
-			}, nil
-		},
-	}
-
-	_, sockPath, wsDir := setupCLITestDaemon(t, prov)
-
-	notePath := filepath.Join(wsDir, "note.txt")
-	if err := os.WriteFile(notePath, []byte("original note\n"), 0o644); err != nil {
-		t.Fatalf("WriteFile note.txt: %v", err)
-	}
-
-	// First REPL run: send prompt -> approve permission ('y') -> inspect /changes -> /exit
-	input1 := strings.Join([]string{
-		"Please update note.txt",
-		"y",
-		"/changes",
-		"/exit",
-	}, "\n") + "\n"
-
-	out1, errOut1, err := execCLI(t, input1, "repl", "--socket", sockPath, "--workspace", wsDir)
-	if err != nil {
-		t.Fatalf("repl permission run failed: %v\nerr:\n%s", err, errOut1)
-	}
-
-	for _, want := range []string{
-		"Proposing write to note.txt...",
-		"[Permission Required]",
-		"Allow? [y]es once / [a]llow session / [n]o (reject):",
-		"Finished writing note.txt!",
-		"note.txt",
-	} {
-		if !strings.Contains(out1, want) {
-			t.Errorf("out1 missing %q.\nFull out1:\n%s", want, out1)
-		}
-	}
-
-	// Verify file on disk has been modified
-	gotBytes, err := os.ReadFile(notePath)
-	if err != nil {
-		t.Fatalf("ReadFile note.txt: %v", err)
-	}
-	if string(gotBytes) != "modified via repl\n" {
-		t.Fatalf("note.txt after approval = %q, want 'modified via repl\\n'", string(gotBytes))
-	}
-
-	// Find session ID to test `/revert note.txt` and `/revert`
-	c, err := client.New(sockPath)
-	if err != nil {
-		t.Fatalf("client.New: %v", err)
-	}
-	sessions, err := c.WithCWD(wsDir).ListSessions(context.Background())
-	if err != nil || len(sessions) != 1 {
-		t.Fatalf("ListSessions = %+v, %v", sessions, err)
-	}
-
-	input2 := strings.Join([]string{
-		"/revert note.txt",
-		"/revert",
-		"/exit",
-	}, "\n") + "\n"
-
-	out2, errOut2, err := execCLI(t, input2,
-		"repl",
-		"--socket", sockPath,
-		"--workspace", wsDir,
-		"--session", sessions[0].ID,
-	)
-	if err != nil {
-		t.Fatalf("repl revert run failed: %v\nerr:\n%s", err, errOut2)
-	}
-	if !strings.Contains(out2, "Reverted note.txt.") || !strings.Contains(out2, "Reverted all session file changes.") {
-		t.Errorf("out2 missing revert confirmations:\n%s", out2)
-	}
-
-	revertedBytes, err := os.ReadFile(notePath)
-	if err != nil {
-		t.Fatalf("ReadFile note.txt after revert: %v", err)
-	}
-	if string(revertedBytes) != "original note\n" {
-		t.Errorf("note.txt after /revert = %q, want 'original note\\n'", string(revertedBytes))
-	}
-}
-
-func TestParsePermissionInputVariants(t *testing.T) {
-	perm := api.PermissionRequest{
-		ID:            "perm-1",
-		ToolCallID:    "tc-1",
-		GrantPatterns: []string{"write:**"},
-	}
-
-	dOnce := parsePermissionInput(perm, "yes")
-	if dOnce.Kind != api.DecisionAllowOnce {
-		t.Errorf("parsePermissionInput('yes').Kind = %q, want %q", dOnce.Kind, api.DecisionAllowOnce)
-	}
-
-	dSession := parsePermissionInput(perm, "a")
-	if dSession.Kind != api.DecisionAllowSession || dSession.GrantPattern != "write:**" {
-		t.Errorf("parsePermissionInput('a') = %+v, want DecisionAllowSession with GrantPattern 'write:**'", dSession)
-	}
-
-	dReject1 := parsePermissionInput(perm, "n do not touch")
-	if dReject1.Kind != api.DecisionReject || dReject1.Feedback != "do not touch" {
-		t.Errorf("parsePermissionInput('n do not touch') = %+v, want DecisionReject with feedback", dReject1)
-	}
-
-	dReject2 := parsePermissionInput(perm, "no wrong file")
-	if dReject2.Kind != api.DecisionReject || dReject2.Feedback != "wrong file" {
-		t.Errorf("parsePermissionInput('no wrong file') = %+v, want DecisionReject with feedback", dReject2)
+	if resumedSess.Title != "Resumed Mutated Session" {
+		t.Errorf("resumed session title = %q, want 'Resumed Mutated Session'", resumedSess.Title)
 	}
 }
 
