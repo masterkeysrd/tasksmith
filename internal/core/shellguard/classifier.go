@@ -4,6 +4,8 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+
+	"github.com/masterkeysrd/tasksmith/internal/core/guard"
 )
 
 var defaultPolicy = DefaultPolicy()
@@ -345,14 +347,16 @@ func collapseOperations(ops []Operation, commandStr string) Operation {
 	bestAction := ops[0].Action
 
 	for _, op := range ops[1:] {
-		if op.Action > worstAction {
+		if op.Action.Severity() > worstAction.Severity() {
 			worstAction = op.Action
 		}
-		if op.Safety > worstSafety {
+		if op.Safety.Severity() > worstSafety.Severity() {
 			worstSafety = op.Safety
 		}
 
-		if op.Safety > bestSafety || (op.Safety == bestSafety && op.Action > bestAction) || (criticalPath == "" && op.Path != "") {
+		if op.Safety.Severity() > bestSafety.Severity() ||
+			(op.Safety.Severity() == bestSafety.Severity() && op.Action.Severity() > bestAction.Severity()) ||
+			(criticalPath == "" && op.Path != "") {
 			bestSafety = op.Safety
 			bestAction = op.Action
 			if op.Path != "" {
@@ -483,16 +487,14 @@ func (g *Guard) determineOperation(cmd ParsedCommand, state *trackerState) Opera
 		} else {
 			pathToCheck := state.virtualCWD
 			if action == ActionExec && strings.Contains(effectiveExec, "/") {
-				pathToCheck = resolvePath(effectiveExec, state.virtualCWD)
+				pathToCheck = g.resolveTarget(effectiveExec, state.virtualCWD)
 			}
-			if !g.isPathSafeForAction(pathToCheck, action) {
-				safety = SafetyUnsafe
-			}
+			safety = g.evaluatePath(pathToCheck, action)
 		}
 
 		pathToReport := state.virtualCWD
 		if action == ActionExec && strings.Contains(effectiveExec, "/") {
-			pathToReport = resolvePath(effectiveExec, state.virtualCWD)
+			pathToReport = g.resolveTarget(effectiveExec, state.virtualCWD)
 		}
 
 		op = Operation{
@@ -515,20 +517,16 @@ func (g *Guard) determineOperation(cmd ParsedCommand, state *trackerState) Opera
 			if action == ActionDelete {
 				safety = SafetyUnsafe
 				if !state.isCWDUnknown && !check.isDynamic && check.path != "" {
-					resolved = resolvePath(check.path, state.virtualCWD)
+					resolved = g.resolveTarget(check.path, state.virtualCWD)
 				}
 			} else if state.isCWDUnknown || check.isDynamic || check.path == "" {
 				safety = SafetyUnknown
 			} else {
-				resolved = resolvePath(check.path, state.virtualCWD)
-				if !g.isPathSafeForAction(resolved, check.forAction) {
-					safety = SafetyUnsafe
-				} else {
-					safety = SafetySafe
-				}
+				resolved = g.resolveTarget(check.path, state.virtualCWD)
+				safety = g.evaluatePath(resolved, check.forAction)
 			}
 
-			if safety > worstSafety {
+			if safety.Severity() > worstSafety.Severity() {
 				worstSafety = safety
 				if resolved != "" {
 					chosenPath = resolved
@@ -567,15 +565,15 @@ func (g *Guard) determineOperation(cmd ParsedCommand, state *trackerState) Opera
 		var substOps []Operation
 		g.analyzePipelines([]Pipeline{{Commands: substCmds}}, &subState, &substOps)
 		for _, subOp := range substOps {
-			if subOp.Action > op.Action {
+			if subOp.Action.Severity() > op.Action.Severity() {
 				op.Action = subOp.Action
 			}
-			if subOp.Safety > op.Safety {
+			if subOp.Safety.Severity() > op.Safety.Severity() {
 				op.Safety = subOp.Safety
 				if subOp.Path != "" {
 					op.Path = subOp.Path
 				}
-			} else if subOp.Safety == op.Safety && subOp.Action > action && subOp.Path != "" {
+			} else if subOp.Safety == op.Safety && subOp.Action.Severity() > action.Severity() && subOp.Path != "" {
 				op.Path = subOp.Path
 			}
 		}
@@ -754,54 +752,34 @@ func isPatternOrScriptFlag(arg string) bool {
 		strings.HasPrefix(arg, "--file=") || strings.HasPrefix(arg, "--from-file=")
 }
 
-// resolvePath resolves a target to an absolute path.
-func resolvePath(target string, baseDir string) string {
-	if strings.HasPrefix(target, "/") {
-		return filepath.Clean(target)
-	}
-	return filepath.Clean(filepath.Join(baseDir, target))
-}
-
-// isInsideWorkspace checks if a resolved path is inside the workspace directory.
-func isInsideWorkspace(resolved string, workspaceDir string) bool {
-	workspaceDir = filepath.Clean(workspaceDir)
-	resolved = filepath.Clean(resolved)
-	return strings.HasPrefix(resolved, workspaceDir+string(filepath.Separator)) ||
-		resolved == workspaceDir
-}
-
-// isInsideProtectedDirectory checks if a resolved path targets one of the Guard's
-// configured protected directories (e.g. .git, .bare, .agents) inside the workspace.
-func (g *Guard) isInsideProtectedDirectory(resolved string) bool {
-	resolved = filepath.Clean(resolved)
-	checkPath := resolved
-	if g.workspaceDir != "" {
-		if rel, err := filepath.Rel(g.workspaceDir, resolved); err == nil && !strings.HasPrefix(rel, "..") {
-			checkPath = rel
+// resolveTarget resolves a target against baseDir, expanding ~ with the Guard's homeDir.
+func (g *Guard) resolveTarget(target string, baseDir string) string {
+	t := strings.TrimSpace(target)
+	if g.homeDir != "" {
+		if t == "~" {
+			return g.homeDir
+		}
+		if strings.HasPrefix(t, "~/") {
+			return filepath.Clean(g.homeDir + t[1:])
 		}
 	}
-	for part := range strings.SplitSeq(filepath.ToSlash(checkPath), "/") {
-		if slices.Contains(g.protectedDirs, part) {
-			return true
-		}
+	if strings.HasPrefix(t, "/") {
+		return filepath.Clean(t)
 	}
-	return false
+	return filepath.Clean(filepath.Join(baseDir, t))
 }
 
-// isPathSafeForAction checks whether resolvedPath is within the Guard's workspaceDir
-// and respects protected directory restrictions. Read-only operations inside
-// protected workspace directories remain SafetySafe, while write/delete/exec/unknown
-// operations targeting them are SafetyUnsafe.
-func (g *Guard) isPathSafeForAction(resolvedPath string, action ActionType) bool {
-	if !isInsideWorkspace(resolvedPath, g.workspaceDir) {
-		return false
-	}
-	if g.isInsideProtectedDirectory(resolvedPath) {
-		if action != ActionRead {
-			return false
-		}
-	}
-	return true
+// IsProtectedPath reports whether targetPath (either workspace-relative or
+// absolute within the workspace) resides inside one of the Guard's configured
+// protected directories (such as .git, .bare, or .agents).
+func (g *Guard) IsProtectedPath(targetPath string) bool {
+	return guard.IsProtectedPath(targetPath, g.workspaceDir, g.protectedDirs...)
+}
+
+// evaluatePath classifies resolvedPath using guard.EvaluatePath.
+func (g *Guard) evaluatePath(resolvedPath string, action ActionType) SafetyLevel {
+	_, safety := guard.EvaluatePath(resolvedPath, g.workspaceDir, g.homeDir, action, g.protectedDirs...)
+	return safety
 }
 
 // matchRule evaluates a CommandRule against the given arguments.

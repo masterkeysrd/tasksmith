@@ -634,6 +634,30 @@ func TestCommandAwareArgumentTargetExtraction(t *testing.T) {
 			expectedAction: ActionWrite,
 			expectedSafety: SafetyUnsafe,
 		},
+		{
+			name:           "cat outside workspace non-sensitive file is SafetyOutside",
+			command:        `cat ../somefile.txt`,
+			expectedAction: ActionRead,
+			expectedSafety: SafetyOutside,
+		},
+		{
+			name:           "cat sensitive /etc/hosts is SafetyUnsafe",
+			command:        `cat /etc/hosts`,
+			expectedAction: ActionRead,
+			expectedSafety: SafetyUnsafe,
+		},
+		{
+			name:           "cat sensitive ~/.ssh/id_rsa is SafetyUnsafe",
+			command:        `cat ~/.ssh/id_rsa`,
+			expectedAction: ActionRead,
+			expectedSafety: SafetyUnsafe,
+		},
+		{
+			name:           "touch outside workspace non-sensitive file is SafetyUnsafe",
+			command:        `touch ../somefile.txt`,
+			expectedAction: ActionWrite,
+			expectedSafety: SafetyUnsafe,
+		},
 	}
 
 	for _, tt := range tests {
@@ -733,12 +757,12 @@ func TestSubshellCWDIsolation(t *testing.T) {
 		t.Fatalf("expected 2 operations, got %d", len(ops))
 	}
 
-	// First operation: pwd inside subshell after cd /tmp
+	// First operation: pwd inside subshell after cd /tmp (read-only outside workspace -> SafetyOutside)
 	if ops[0].CWD != "/tmp" {
 		t.Errorf("expected first op CWD '/tmp', got %q", ops[0].CWD)
 	}
-	if ops[0].Safety != SafetyUnsafe {
-		t.Errorf("expected first op SafetyUnsafe (in /tmp), got %q", ops[0].Safety)
+	if ops[0].Safety != SafetyOutside {
+		t.Errorf("expected first op SafetyOutside (in /tmp), got %q", ops[0].Safety)
 	}
 
 	// Second operation: ls outside subshell should still resolve in workspaceDir
@@ -1006,11 +1030,11 @@ func TestStringMethods(t *testing.T) {
 		{ActionWrite, "write"},
 		{ActionExec, "exec"},
 		{ActionDelete, "delete"},
-		{ActionType(99), "unknown"},
+		{ActionType("invalid"), "unknown"},
 	}
 	for _, tc := range actionCases {
 		if got := tc.action.String(); got != tc.want {
-			t.Errorf("ActionType(%d).String() = %q, want %q", tc.action, got, tc.want)
+			t.Errorf("ActionType(%q).String() = %q, want %q", tc.action, got, tc.want)
 		}
 	}
 
@@ -1021,11 +1045,11 @@ func TestStringMethods(t *testing.T) {
 		{SafetySafe, "safe"},
 		{SafetyUnknown, "unknown"},
 		{SafetyUnsafe, "unsafe"},
-		{SafetyLevel(99), "unknown"},
+		{SafetyLevel("invalid"), "unknown"},
 	}
 	for _, tc := range safetyCases {
 		if got := tc.safety.String(); got != tc.want {
-			t.Errorf("SafetyLevel(%d).String() = %q, want %q", tc.safety, got, tc.want)
+			t.Errorf("SafetyLevel(%q).String() = %q, want %q", tc.safety, got, tc.want)
 		}
 	}
 }
@@ -1214,4 +1238,48 @@ func TestCompoundASTConstructsAndEdgeCases(t *testing.T) {
 			t.Error("expected 'git commit' grant to match 'git -C subpkg commit'")
 		}
 	})
+}
+
+func TestIsProtectedPath(t *testing.T) {
+	guard := New(Config{WorkspaceDir: "/tmp/workspace"})
+
+	tests := []struct {
+		path string
+		want bool
+	}{
+		{".git", true},
+		{".git/config", true},
+		{"sub/.git/HEAD", true},
+		{".bare", true},
+		{".bare/refs/heads/main", true},
+		{".agents", true},
+		{".agents/skills/test/SKILL.md", true},
+		{"/tmp/workspace/.git/config", true},
+		{"/tmp/workspace/.agents/rules.md", true},
+		{"/tmp/workspace/.bare/HEAD", true},
+		{".github/workflows/ci.yml", false},
+		{".gitignore", false},
+		{"src/main.go", false},
+		{"/tmp/workspace/src/main.go", false},
+	}
+
+	for _, tt := range tests {
+		if got := guard.IsProtectedPath(tt.path); got != tt.want {
+			t.Errorf("guard.IsProtectedPath(%q) = %v, want %v", tt.path, got, tt.want)
+		}
+	}
+
+	customGuard := New(Config{
+		WorkspaceDir:  "/tmp/workspace",
+		ProtectedDirs: []string{".secrets", ".private"},
+	})
+	if !customGuard.IsProtectedPath(".secrets/api.key") {
+		t.Error("expected .secrets/api.key to be protected with custom ProtectedDirs")
+	}
+	if !customGuard.IsProtectedPath("/tmp/workspace/.private/cert.pem") {
+		t.Error("expected /tmp/workspace/.private/cert.pem to be protected with custom ProtectedDirs")
+	}
+	if customGuard.IsProtectedPath(".git/config") {
+		t.Error("expected .git/config not to be protected when overridden by custom ProtectedDirs")
+	}
 }

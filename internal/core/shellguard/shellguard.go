@@ -3,6 +3,8 @@ package shellguard
 import (
 	"os"
 	"path/filepath"
+
+	"github.com/masterkeysrd/tasksmith/internal/core/guard"
 )
 
 // DefaultMaxOperations is the default maximum number of individual operations
@@ -10,63 +12,34 @@ import (
 // Operation to prevent approval prompt bloat.
 const DefaultMaxOperations = 3
 
-// DefaultProtectedDirs returns the default list of protected workspace directories
+// MaxGranularOperations is an alias for DefaultMaxOperations.
+const MaxGranularOperations = DefaultMaxOperations
+
+// DefaultProtectedDirs is the default list of protected workspace directories
 // where write, delete, or exec operations are marked SafetyUnsafe.
-var DefaultProtectedDirs = []string{".git", ".bare", ".agents"}
+var DefaultProtectedDirs = guard.DefaultProtectedDirs
 
-// ActionType represents the fundamental action of a command, ordered from
-// lowest to highest severity.
-type ActionType uint8
-
-const (
-	ActionRead    ActionType = iota // Known read-only (cat, ls, git status)
-	ActionUnknown                   // Command not found in classifier rules (e.g., custom binaries)
-	ActionWrite                     // Known write (touch, git commit) or explicit shell redirect (>)
-	ActionExec                      // Known arbitrary execution (e.g., explicitly calling ./run.sh)
-	ActionDelete                    // Known destructive (rm, git rm)
-)
-
-// String returns the canonical lowercase name of the action type.
-func (a ActionType) String() string {
-	switch a {
-	case ActionRead:
-		return "read"
-	case ActionUnknown:
-		return "unknown"
-	case ActionWrite:
-		return "write"
-	case ActionExec:
-		return "exec"
-	case ActionDelete:
-		return "delete"
-	default:
-		return "unknown"
-	}
-}
-
-// SafetyLevel represents the safety category of an operation, ordered from
-// safest to most unsafe.
-type SafetyLevel uint8
+// ActionType classifies the fundamental category of a command operation.
+type ActionType = guard.ActionType
 
 const (
-	SafetySafe    SafetyLevel = iota // Inside workspace boundary
-	SafetyUnknown                    // Unresolvable dynamic path
-	SafetyUnsafe                     // Outside boundary or explicitly destructive
+	ActionRead    = guard.ActionRead    // Known read-only (cat, ls, git status)
+	ActionUnknown = guard.ActionUnknown // Command not found in classifier rules (e.g., custom binaries)
+	ActionNet     = guard.ActionNet     // Network access operation
+	ActionWrite   = guard.ActionWrite   // Known write (touch, git commit) or explicit shell redirect (>)
+	ActionExec    = guard.ActionExec    // Known arbitrary execution (e.g., explicitly calling ./run.sh)
+	ActionDelete  = guard.ActionDelete  // Known destructive (rm, git rm)
 )
 
-// String returns the canonical lowercase name of the safety level.
-func (s SafetyLevel) String() string {
-	switch s {
-	case SafetySafe:
-		return "safe"
-	case SafetyUnknown:
-		return "unknown"
-	case SafetyUnsafe:
-		return "unsafe"
-	default:
-		return "unknown"
-	}
-}
+// SafetyLevel classifies the risk profile of an operation.
+type SafetyLevel = guard.SafetyLevel
+
+const (
+	SafetySafe    = guard.SafetySafe    // Inside workspace boundary
+	SafetyOutside = guard.SafetyOutside // Read-only access outside workspace (non-sensitive path)
+	SafetyUnknown = guard.SafetyUnknown // Unresolvable dynamic path
+	SafetyUnsafe  = guard.SafetyUnsafe  // Sensitive path, outside write/exec, or explicitly destructive
+)
 
 // Operation represents an evaluation of a command target.
 type Operation struct {
