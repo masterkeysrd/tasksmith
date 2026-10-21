@@ -130,7 +130,7 @@ func run() error {
 	}
 
 	fmt.Printf("TaskSmith REPL (session=%s agent=%s model=%s)\n", activeSession.ID, activeSession.Agent, activeSession.Model)
-	fmt.Println("Commands: /new [model], /sessions, /history, /mode [default|accept_edits|plan|ask|auto], /system <text>, /exit, /quit")
+	fmt.Println("Commands: /new [model], /sessions, /history, /mode [default|accept_edits|plan|ask|auto], /exit, /quit")
 
 	scanner := bufio.NewScanner(os.Stdin)
 	for {
@@ -204,18 +204,6 @@ func run() error {
 				continue
 			}
 			fmt.Printf("Permission mode set to: %s\n", nextMode)
-
-		case line == "/system" || strings.HasPrefix(line, "/system "):
-			text := strings.TrimSpace(strings.TrimPrefix(line, "/system"))
-			if text == "" {
-				fmt.Fprintln(os.Stderr, "usage: /system <text>")
-				continue
-			}
-			if err := mgr.AppendMessage(ctx, activeSession.ID, message.NewSystemText(text)); err != nil {
-				fmt.Fprintf(os.Stderr, "error appending system message: %v\n", err)
-				continue
-			}
-			fmt.Printf("[system] %s\n", text)
 
 		default:
 			_, err := mgr.Send(ctx, activeSession.ID, message.NewUserText(line))

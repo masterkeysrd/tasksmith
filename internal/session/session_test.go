@@ -455,8 +455,8 @@ func TestSessionCRUD(t *testing.T) {
 
 	// Append a message to s1 so its updated_at becomes newer than s2
 	time.Sleep(2 * time.Millisecond)
-	if err := mgr.AppendMessage(ctx, s1.ID, message.NewUserText("Hello on s1")); err != nil {
-		t.Fatalf("AppendMessage s1 error: %v", err)
+	if err := mgr.appendMessage(ctx, s1.ID, message.NewUserText("Hello on s1")); err != nil {
+		t.Fatalf("appendMessage s1 error: %v", err)
 	}
 
 	listAfterUpdate, err := mgr.List(ctx)
@@ -812,15 +812,15 @@ func TestAppendMessageIsolationFromHarnessCheckpoints(t *testing.T) {
 		t.Fatalf("Create error: %v", err)
 	}
 
-	// Validation checks on AppendMessage
-	if err := mgr.AppendMessage(ctx, "", message.NewSystemText("notice")); !errors.Is(err, ErrEmptySessionID) {
-		t.Errorf("AppendMessage empty sessionID error = %v, want %v", err, ErrEmptySessionID)
+	// Validation checks on appendMessage
+	if err := mgr.appendMessage(ctx, "", message.NewSystemText("notice")); !errors.Is(err, ErrEmptySessionID) {
+		t.Errorf("appendMessage empty sessionID error = %v, want %v", err, ErrEmptySessionID)
 	}
-	if err := mgr.AppendMessage(ctx, "does-not-exist", message.NewSystemText("notice")); !errors.Is(err, ErrSessionNotFound) {
-		t.Errorf("AppendMessage unknown sessionID error = %v, want %v", err, ErrSessionNotFound)
+	if err := mgr.appendMessage(ctx, "does-not-exist", message.NewSystemText("notice")); !errors.Is(err, ErrSessionNotFound) {
+		t.Errorf("appendMessage unknown sessionID error = %v, want %v", err, ErrSessionNotFound)
 	}
-	if err := mgr.AppendMessage(ctx, sess.ID, nil); !errors.Is(err, ErrNilMessage) {
-		t.Errorf("AppendMessage nil message error = %v, want %v", err, ErrNilMessage)
+	if err := mgr.appendMessage(ctx, sess.ID, nil); !errors.Is(err, ErrNilMessage) {
+		t.Errorf("appendMessage nil message error = %v, want %v", err, ErrNilMessage)
 	}
 
 	// 1. Run a conversational turn via Send
@@ -830,9 +830,9 @@ func TestAppendMessageIsolationFromHarnessCheckpoints(t *testing.T) {
 
 	pub.reset()
 
-	// 2. Append a chat-only system message via AppendMessage
-	if err := mgr.AppendMessage(ctx, sess.ID, message.NewSystemText("Notice from system")); err != nil {
-		t.Fatalf("AppendMessage error: %v", err)
+	// 2. Append a chat-only system message via appendMessage
+	if err := mgr.appendMessage(ctx, sess.ID, message.NewSystemText("Notice from system")); err != nil {
+		t.Fatalf("appendMessage error: %v", err)
 	}
 
 	// Verify Publisher received EventMessageAdded for the appended system message

@@ -340,11 +340,12 @@ func (m *Manager) History(ctx context.Context, sessionID string) (message.Messag
 	return m.store.listMessages(ctx, sess.ID)
 }
 
-// AppendMessage appends a message directly to the session's UI thread (`messages`
-// table), updates the session's `updated_at` timestamp, and publishes an
-// [EventMessageAdded] notification without modifying the underlying
-// [harness.Harness] graph checkpoint.
-func (m *Manager) AppendMessage(ctx context.Context, sessionID string, msg message.Message) error {
+// appendMessage is an internal helper that appends a message directly to the
+// session's UI thread (`messages` table), updates the session's `updated_at`
+// timestamp, and publishes an [EventMessageAdded] notification without
+// modifying the underlying [harness.Harness] graph checkpoint. It is used for
+// system-emitted UI history messages.
+func (m *Manager) appendMessage(ctx context.Context, sessionID string, msg message.Message) error {
 	sess, err := m.Get(ctx, sessionID)
 	if err != nil {
 		return err

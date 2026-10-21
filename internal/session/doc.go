@@ -31,14 +31,13 @@
 //     UI thread transcript (sorted chronologically by UUIDv7 `id ASC` via
 //     [Manager.History]), including user turns, intermediate tool-calling
 //     assistant messages, tool execution results, final assistant replies, and
-//     chat-only notifications appended via [Manager.AppendMessage].
+//     chat-only notifications appended internally.
 //  2. The `checkpoints` table managed by [github.com/masterkeysrd/tasksmith/internal/harness.Harness]
 //     stores the Loom workflow graph execution state sent to the LLM.
 //
-// Appending a message via [Manager.AppendMessage] (for example, a UI-only system
-// notice) records the message in `messages` and publishes an [EventMessageAdded]
-// event without mutating or polluting the underlying harness graph checkpoint
-// for that session.
+// Appending a message internally (for example, a UI-only system notice) records
+// the message in `messages` and publishes an [EventMessageAdded] event without
+// mutating or polluting the underlying harness graph checkpoint for that session.
 //
 // # All-or-Nothing Permission Resolution
 //
