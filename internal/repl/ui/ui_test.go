@@ -139,6 +139,23 @@ func TestComposerLifecycleAndHistory(t *testing.T) {
 		t.Errorf("View() returned empty")
 	}
 
+	// Width, WindowSizeMsg, and top/bottom horizontal border rendering
+	if c.Width() != 80 {
+		t.Errorf("default width = %d, want 80", c.Width())
+	}
+	c.SetWidth(100)
+	if c.Width() != 100 {
+		t.Errorf("width after SetWidth = %d, want 100", c.Width())
+	}
+	c, _ = c.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	if c.Width() != 120 {
+		t.Errorf("width after WindowSizeMsg = %d, want 120", c.Width())
+	}
+	view := c.View()
+	if !strings.Contains(view, "─") {
+		t.Errorf("View() missing horizontal border lines:\n%s", view)
+	}
+
 	suggestions := []Suggestion{
 		{Usage: "/help", Description: "Show help"},
 		{Usage: "/exit", Description: "Exit REPL"},

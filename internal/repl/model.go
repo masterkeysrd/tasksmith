@@ -174,6 +174,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyPressMsg:
 		return m.handleKeyPress(typed)
 
+	case tea.WindowSizeMsg:
+		m.composer, _ = m.composer.Update(typed)
+		return m, nil
+
 	case api.Event:
 		model, cmd := m.handleSSEEvent(typed)
 		return model, tea.Batch(cmd, m.waitForSSECmd())
@@ -430,6 +434,7 @@ func (m Model) renderStreamingView() string {
 		streamLine = m.spinner.View() + " " + m.streamText
 	}
 	sections = append(sections, streamLine)
+	sections = append(sections, m.composer.View())
 	sections = append(sections, ui.FormatStatusBar(m.state, m.session, m.mode))
 	return strings.Join(sections, "\n")
 }
@@ -601,7 +606,12 @@ func (m Model) handleStreamingKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.streamReasoning = ""
 		return m, nil
 	}
-	return m, nil
+	if isEnterKey(msg) {
+		return m, nil
+	}
+	var cmd tea.Cmd
+	m.composer, cmd = m.composer.Update(msg)
+	return m, cmd
 }
 
 func (m Model) handleApprovalKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {

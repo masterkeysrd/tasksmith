@@ -21,6 +21,7 @@ type Composer struct {
 	history      []string
 	historyIdx   int
 	historyDraft string
+	width        int
 }
 
 // NewComposer constructs an initialized [Composer] ready for user input.
@@ -29,9 +30,24 @@ func NewComposer() Composer {
 	ti.Prompt = "❯ "
 	ti.Placeholder = "Ask TaskSmith or type /help..."
 	ti.Focus()
+	ti.SetWidth(max(80-4, 20))
 
 	return Composer{
 		input: ti,
+		width: 80,
+	}
+}
+
+// Width returns the configured layout width for the composer.
+func (c Composer) Width() int {
+	return c.width
+}
+
+// SetWidth sets the composer layout width and updates the internal text input width.
+func (c *Composer) SetWidth(w int) {
+	if w > 0 {
+		c.width = w
+		c.input.SetWidth(max(w-4, 20))
 	}
 }
 
@@ -61,13 +77,17 @@ func (c *Composer) Blur() {
 	c.input.Blur()
 }
 
-// View renders the prompt input field.
+// View renders the prompt input field with top and bottom horizontal border lines.
 func (c Composer) View() string {
-	return c.input.View()
+	return theme.ComposerBorderStyle.Width(c.width).Render(c.input.View())
 }
 
 // Update forwards Bubble Tea messages to the internal [textinput.Model].
 func (c Composer) Update(msg tea.Msg) (Composer, tea.Cmd) {
+	if ws, ok := msg.(tea.WindowSizeMsg); ok {
+		c.SetWidth(ws.Width)
+		return c, nil
+	}
 	var cmd tea.Cmd
 	c.input, cmd = c.input.Update(msg)
 	return c, cmd

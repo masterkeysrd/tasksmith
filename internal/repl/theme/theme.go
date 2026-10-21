@@ -114,6 +114,10 @@ var (
 	RejectDecisionStyle = lipgloss.NewStyle().
 				Bold(true).
 				Foreground(lipgloss.Color("#F87171"))
+
+	ComposerBorderStyle = lipgloss.NewStyle().
+				Border(lipgloss.NormalBorder(), true, false, true, false).
+				BorderForeground(lipgloss.Color("#4B5563"))
 )
 
 // ModeBadgeStyle returns the badge style corresponding to a permission mode.

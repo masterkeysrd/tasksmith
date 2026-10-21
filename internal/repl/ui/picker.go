@@ -162,7 +162,7 @@ func (p Picker) Render() string {
 	hint := cmp.Or(p.StatusBar, DefaultPickerStatusBar)
 	rows = append(rows, theme.StatusBarStyle.Render(hint))
 
-	return strings.Join(rows, "\n")
+	return strings.Join(rows, "\n") + "\n"
 }
 
 // FormatOptions renders a list of [Option] rows with a highlighted cursor indicator.

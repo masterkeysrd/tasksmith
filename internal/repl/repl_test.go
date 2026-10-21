@@ -889,6 +889,31 @@ func TestBubbleTeaModelLifecycle(t *testing.T) {
 	if !strings.Contains(streamView.Content, "I will update main.go now.") || !strings.Contains(streamView.Content, "esc to cancel") {
 		t.Errorf("streaming view missing content:\n%s", streamView.Content)
 	}
+	if !strings.Contains(streamView.Content, "─") || !strings.Contains(streamView.Content, "❯ ") {
+		t.Errorf("streaming view missing anchored composer:\n%s", streamView.Content)
+	}
+
+	// Typing while streaming updates draft in composer; Enter is ignored
+	updated, _ = m.Update(tea.KeyPressMsg{Code: 'n', Text: "n"})
+	m = updated.(Model)
+	updated, _ = m.Update(tea.KeyPressMsg{Code: 'e', Text: "e"})
+	m = updated.(Model)
+	updated, _ = m.Update(tea.KeyPressMsg{Code: 'x', Text: "x"})
+	m = updated.(Model)
+	updated, _ = m.Update(tea.KeyPressMsg{Code: 't', Text: "t"})
+	m = updated.(Model)
+	if m.InputValue() != "next" {
+		t.Errorf("InputValue while streaming = %q, want 'next'", m.InputValue())
+	}
+	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	m = updated.(Model)
+	if m.State() != StateStreaming {
+		t.Errorf("Enter while streaming should be ignored, got state = %v", m.State())
+	}
+	// WindowSizeMsg updates composer width
+	updated, _ = m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	m = updated.(Model)
+	m.SetInputValue("") // clear draft for subsequent steps
 
 	// Intermediate tool call and tool result via EventMessageAdded
 	updated, _ = m.Update(api.Event{

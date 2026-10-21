@@ -8,7 +8,6 @@ import (
 	"io"
 	"os"
 	"strings"
-	"sync"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/masterkeysrd/tasksmith/api"
@@ -212,32 +211,9 @@ func isTTY(v any) bool {
 	return info.Mode()&os.ModeCharDevice != 0
 }
 
-type syncWriter struct {
-	mu sync.Mutex
-	w  io.Writer
-}
-
-func (s *syncWriter) Write(p []byte) (int, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.w.Write(p)
-}
-
-func (s *syncWriter) Fd() uintptr {
-	if f, ok := s.w.(interface{ Fd() uintptr }); ok {
-		return f.Fd()
-	}
-	return 0
-}
-
 func runTUI(ctx context.Context, cfg Config, sess *api.Session, mode api.PermissionMode) error {
-	out := cfg.Out
-	if !isTTY(out) {
-		out = &syncWriter{w: out}
-	}
-
 	hdr := buildHeader(ctx, cfg, sess)
-	_, _ = fmt.Fprintln(out, ui.FormatHeader(hdr))
+	_, _ = fmt.Fprintln(cfg.Out, ui.FormatHeader(hdr))
 
 	subCtx, cancelSub := context.WithCancel(ctx)
 	eventCh := make(chan api.Event, 64)
@@ -268,7 +244,7 @@ func runTUI(ctx context.Context, cfg Config, sess *api.Session, mode api.Permiss
 
 	opts := []tea.ProgramOption{
 		tea.WithInput(cfg.In),
-		tea.WithOutput(out),
+		tea.WithOutput(cfg.Out),
 		tea.WithContext(ctx),
 	}
 	if !isTTY(cfg.In) {
