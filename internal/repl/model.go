@@ -176,6 +176,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.WindowSizeMsg:
 		m.composer, _ = m.composer.Update(typed)
+		m.picker.SetWidth(m.composer.Width())
 		return m, nil
 
 	case api.Event:
@@ -207,6 +208,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case command.OpenPickerMsg:
 		m.picker = typed.Picker
+		m.picker.SetWidth(m.composer.Width())
 		m.state = ui.StatePicker
 		return m, nil
 

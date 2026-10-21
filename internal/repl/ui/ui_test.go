@@ -376,6 +376,27 @@ func TestPickerComponent(t *testing.T) {
 		!strings.Contains(rendered, "esc to cancel") {
 		t.Errorf("rendered picker mismatch:\n%s", rendered)
 	}
+	if !strings.Contains(rendered, "─") {
+		t.Errorf("rendered picker missing top border separator line:\n%s", rendered)
+	}
+	// Verify blank line before status bar
+	lines := strings.Split(strings.TrimRight(rendered, "\n"), "\n")
+	if len(lines) < 3 || strings.TrimSpace(lines[len(lines)-2]) != "" {
+		t.Errorf("rendered picker missing blank line before status bar:\n%s", rendered)
+	}
+
+	// Width and WindowSizeMsg handling
+	if p.Width() != 80 {
+		t.Errorf("p.Width() default = %d, want 80", p.Width())
+	}
+	p.SetWidth(100)
+	if p.Width() != 100 {
+		t.Errorf("p.Width() after SetWidth = %d, want 100", p.Width())
+	}
+	p, _ = p.Update(tea.WindowSizeMsg{Width: 110, Height: 35})
+	if p.Width() != 110 {
+		t.Errorf("p.Width() after WindowSizeMsg = %d, want 110", p.Width())
+	}
 
 	// Empty picker
 	emptyP := NewPicker("", nil, nil)

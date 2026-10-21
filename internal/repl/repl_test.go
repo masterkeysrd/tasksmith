@@ -1327,6 +1327,13 @@ func TestInteractiveModePickerAndFilterFlows(t *testing.T) {
 		!strings.Contains(pickerView.Content, "esc to cancel") {
 		t.Fatalf("picker view mismatch:\n%s", pickerView.Content)
 	}
+	if !strings.Contains(pickerView.Content, "─") {
+		t.Errorf("picker view missing top horizontal separator line:\n%s", pickerView.Content)
+	}
+	pickerLines := strings.Split(strings.TrimRight(pickerView.Content, "\n"), "\n")
+	if len(pickerLines) < 3 || strings.TrimSpace(pickerLines[len(pickerLines)-2]) != "" {
+		t.Errorf("picker view missing blank line before status bar:\n%s", pickerView.Content)
+	}
 	if strings.Contains(pickerView.Content, "mode: default │") || strings.Contains(pickerView.Content, "shift+tab cycle mode") {
 		t.Errorf("picker view should own its status bar and not render global status bar:\n%s", pickerView.Content)
 	}

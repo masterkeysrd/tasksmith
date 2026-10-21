@@ -31,6 +31,7 @@ type Picker struct {
 	OnSelect  func(opt Option) tea.Msg
 	Keys      map[string]func(opt Option) tea.Msg
 	cursor    int
+	width     int
 }
 
 // NewPicker constructs an initialized [Picker] with the cursor positioned at the
@@ -50,6 +51,19 @@ func NewPicker(title string, opts []Option, onSelect func(opt Option) tea.Msg) P
 		StatusBar: DefaultPickerStatusBar,
 		OnSelect:  onSelect,
 		cursor:    cursor,
+		width:     80,
+	}
+}
+
+// Width returns the configured layout width for the picker.
+func (p Picker) Width() int {
+	return cmp.Or(p.width, 80)
+}
+
+// SetWidth sets the picker layout width.
+func (p *Picker) SetWidth(w int) {
+	if w > 0 {
+		p.width = w
 	}
 }
 
@@ -109,6 +123,11 @@ func (p Picker) Select() tea.Msg {
 
 // Update processes navigation and selection key events for the picker.
 func (p Picker) Update(msg tea.Msg) (Picker, tea.Cmd) {
+	if ws, ok := msg.(tea.WindowSizeMsg); ok {
+		p.SetWidth(ws.Width)
+		return p, nil
+	}
+
 	keyMsg, ok := msg.(tea.KeyPressMsg)
 	if !ok {
 		return p, nil
@@ -160,9 +179,13 @@ func (p Picker) Render() string {
 	}
 
 	hint := cmp.Or(p.StatusBar, DefaultPickerStatusBar)
+	if p.Title != "" || len(p.Options) > 0 {
+		rows = append(rows, "")
+	}
 	rows = append(rows, theme.StatusBarStyle.Render(hint))
 
-	return strings.Join(rows, "\n") + "\n"
+	width := cmp.Or(p.width, 80)
+	return theme.PickerTopBorderStyle.Width(width).Render(strings.Join(rows, "\n"))
 }
 
 // FormatOptions renders a list of [Option] rows with a highlighted cursor indicator.

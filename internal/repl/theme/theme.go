@@ -118,6 +118,10 @@ var (
 	ComposerBorderStyle = lipgloss.NewStyle().
 				Border(lipgloss.NormalBorder(), true, false, true, false).
 				BorderForeground(lipgloss.Color("#4B5563"))
+
+	PickerTopBorderStyle = lipgloss.NewStyle().
+				Border(lipgloss.NormalBorder(), true, false, false, false).
+				BorderForeground(lipgloss.Color("#4B5563"))
 )
 
 // ModeBadgeStyle returns the badge style corresponding to a permission mode.
