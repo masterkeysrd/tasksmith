@@ -44,6 +44,29 @@ func (s *store) insertSession(ctx context.Context, sess *Session) error {
 	return nil
 }
 
+func (s *store) updateSession(ctx context.Context, sess *Session) error {
+	res, err := s.db.ExecContext(
+		ctx,
+		`UPDATE sessions SET title = ?, agent = ?, model = ?, updated_at = ? WHERE id = ?`,
+		sess.Title,
+		sess.Agent,
+		sess.Model,
+		formatTime(sess.UpdatedAt),
+		sess.ID,
+	)
+	if err != nil {
+		return fmt.Errorf("session: update session %q: %w", sess.ID, err)
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("session: check rows affected for session %q: %w", sess.ID, err)
+	}
+	if affected == 0 {
+		return ErrSessionNotFound
+	}
+	return nil
+}
+
 func (s *store) getSession(ctx context.Context, id string) (*Session, error) {
 	row := s.db.QueryRowContext(
 		ctx,

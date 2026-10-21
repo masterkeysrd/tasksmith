@@ -75,9 +75,14 @@ func NewModel(ctx context.Context, cfg Config, reg *Registry, sess *api.Session,
 		spinner.WithStyle(lipgloss.NewStyle().Foreground(lipgloss.Color("#7C3AED"))),
 	)
 
+	c := cfg.Client
+	if c != nil && c.CWD() == "" && cfg.Workspace != "" {
+		c = c.WithCWD(cfg.Workspace)
+	}
+
 	return Model{
 		ctx:           ctx,
-		client:        cfg.Client,
+		client:        c,
 		workspace:     cfg.Workspace,
 		session:       sess,
 		mode:          mode,
@@ -284,7 +289,7 @@ func (m Model) handleIdleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 func (m Model) cycleMode() (tea.Model, tea.Cmd) {
 	next := nextPermissionMode(m.mode)
 	if m.client != nil && m.session != nil && strings.TrimSpace(m.session.ID) != "" {
-		if err := m.client.SetPermissionMode(m.ctx, m.workspace, m.session.ID, next); err != nil {
+		if err := m.client.SetPermissionMode(m.ctx, m.session.ID, next); err != nil {
 			return m, tea.Println(FormatError(err.Error()))
 		}
 	}
@@ -357,7 +362,7 @@ func (m Model) submitIdleInput() (tea.Model, tea.Cmd) {
 	}
 
 	if (m.session == nil || strings.TrimSpace(m.session.ID) == "") && m.client != nil {
-		sess, err := ensureSession(m.ctx, m.client, m.workspace, m.defaultTitle, m.defaultAgent, m.defaultModel, m.mode)
+		sess, err := ensureSession(m.ctx, m.client, m.defaultTitle, m.defaultAgent, m.defaultModel, m.mode)
 		if err != nil {
 			return m, tea.Println(FormatError(err.Error()))
 		}
@@ -420,7 +425,7 @@ func (m Model) handleStreamingKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	keyStr := msg.String()
 	if keyStr == "esc" || keyStr == "ctrl+c" || msg.Code == tea.KeyEscape {
 		if m.client != nil && m.session != nil && strings.TrimSpace(m.session.ID) != "" {
-			_ = m.client.Cancel(m.ctx, m.workspace, m.session.ID)
+			_ = m.client.Cancel(m.ctx, m.session.ID)
 		}
 		m.state = StateIdle
 		m.streamText = ""
@@ -444,7 +449,7 @@ func (m Model) handleApprovalKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch {
 	case keyStr == "ctrl+c" || keyStr == "esc" || msg.Code == tea.KeyEscape:
 		if m.client != nil && m.session != nil && strings.TrimSpace(m.session.ID) != "" {
-			_ = m.client.Cancel(m.ctx, m.workspace, m.session.ID)
+			_ = m.client.Cancel(m.ctx, m.session.ID)
 		}
 		m.pendingPerms = nil
 		m.state = StateIdle
@@ -533,7 +538,7 @@ func (m Model) submitPermissionDecision(kind api.DecisionKind, feedback string) 
 	}
 
 	if m.client != nil && m.session != nil && strings.TrimSpace(m.session.ID) != "" {
-		if err := m.client.RespondPermission(m.ctx, m.workspace, m.session.ID, decision); err != nil {
+		if err := m.client.RespondPermission(m.ctx, m.session.ID, decision); err != nil {
 			m.state = StateIdle
 			return m, tea.Println(FormatError(err.Error()))
 		}
@@ -631,7 +636,7 @@ func (m Model) handlePermissionRequestedEvent(ev api.Event) (Model, tea.Cmd) {
 		m.pendingPerms = append(m.pendingPerms, ev.Permissions...)
 	}
 	if len(m.pendingPerms) == 0 && m.client != nil && m.session != nil && strings.TrimSpace(m.session.ID) != "" {
-		if perms, err := m.client.PendingPermissions(m.ctx, m.workspace, m.session.ID); err == nil {
+		if perms, err := m.client.PendingPermissions(m.ctx, m.session.ID); err == nil {
 			m.pendingPerms = append(m.pendingPerms, perms...)
 		}
 	}
@@ -684,7 +689,6 @@ func (m *Model) flushStreamBuffer() string {
 func (m Model) sendPromptCmd(text string) tea.Cmd {
 	c := m.client
 	ctx := m.ctx
-	ws := m.workspace
 	var sid string
 	if m.session != nil {
 		sid = m.session.ID
@@ -693,7 +697,7 @@ func (m Model) sendPromptCmd(text string) tea.Cmd {
 		if c == nil || sid == "" {
 			return nil
 		}
-		if err := c.Send(ctx, ws, sid, api.SendRequest{Content: text, Wait: false}); err != nil {
+		if err := c.Send(ctx, sid, api.SendRequest{Content: text, Wait: false}); err != nil {
 			return sendErrorMsg{err: err}
 		}
 		return nil

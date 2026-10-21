@@ -23,6 +23,7 @@ const baseURL = "http://unix"
 var (
 	ErrInvalidSocketPath = errors.New("client: socket path must not be empty")
 	ErrEmptyWorkspace    = errors.New("client: workspace path must not be empty")
+	ErrEmptyCWD          = ErrEmptyWorkspace
 	ErrEmptySessionID    = errors.New("client: session ID must not be empty")
 )
 
@@ -38,9 +39,17 @@ func WithHTTPClient(hc *http.Client) Option {
 	}
 }
 
+// WithCWD configures the default client working directory sent via [api.HeaderCWD].
+func WithCWD(cwd string) Option {
+	return func(c *Client) {
+		c.cwd = strings.TrimSpace(cwd)
+	}
+}
+
 // Client communicates with the TaskSmith Brain Daemon over a Unix domain socket.
 type Client struct {
 	socketPath string
+	cwd        string
 	httpClient *http.Client
 }
 
@@ -77,6 +86,25 @@ func (c *Client) SocketPath() string {
 	return c.socketPath
 }
 
+// CWD returns the configured client working directory.
+func (c *Client) CWD() string {
+	return c.cwd
+}
+
+// WithCWD returns a shallow copy of [Client] with its working directory set to cwd.
+func (c *Client) WithCWD(cwd string) *Client {
+	cp := *c
+	cp.cwd = strings.TrimSpace(cwd)
+	return &cp
+}
+
+func (c *Client) requireCWD() error {
+	if strings.TrimSpace(c.cwd) == "" {
+		return ErrEmptyWorkspace
+	}
+	return nil
+}
+
 // Health queries the daemon's `/v1/health` endpoint.
 func (c *Client) Health(ctx context.Context) (*api.HealthResponse, error) {
 	var out api.HealthResponse
@@ -91,62 +119,147 @@ func (c *Client) Shutdown(ctx context.Context) error {
 	return c.doJSON(ctx, http.MethodPost, "/v1/shutdown", nil, nil, nil)
 }
 
+// GetWorkspace retrieves the resolved configuration metadata for the workspace.
+func (c *Client) GetWorkspace(ctx context.Context) (*api.Workspace, error) {
+	if err := c.requireCWD(); err != nil {
+		return nil, err
+	}
+	var out api.Workspace
+	if err := c.doJSON(ctx, http.MethodGet, "/v1/workspace", nil, nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// ListAgents returns all effective agents in the workspace scope.
+func (c *Client) ListAgents(ctx context.Context) ([]api.Agent, error) {
+	if err := c.requireCWD(); err != nil {
+		return nil, err
+	}
+	var out []api.Agent
+	if err := c.doJSON(ctx, http.MethodGet, "/v1/agents", nil, nil, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// GetAgent retrieves an effective agent configuration by name.
+func (c *Client) GetAgent(ctx context.Context, name string) (*api.Agent, error) {
+	if err := c.requireCWD(); err != nil {
+		return nil, err
+	}
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return nil, errors.New("client: agent name must not be empty")
+	}
+	path := "/v1/agents/" + url.PathEscape(name)
+	var out api.Agent
+	if err := c.doJSON(ctx, http.MethodGet, path, nil, nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// ListModels returns all resolved models across providers in the workspace.
+func (c *Client) ListModels(ctx context.Context) ([]api.Model, error) {
+	if err := c.requireCWD(); err != nil {
+		return nil, err
+	}
+	var out []api.Model
+	if err := c.doJSON(ctx, http.MethodGet, "/v1/models", nil, nil, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// GetModel retrieves a model by ID or qualified identifier (e.g. "ollama/qwen3.8").
+func (c *Client) GetModel(ctx context.Context, id string) (*api.Model, error) {
+	if err := c.requireCWD(); err != nil {
+		return nil, err
+	}
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return nil, errors.New("client: model ID must not be empty")
+	}
+	parts := strings.Split(id, "/")
+	for i, p := range parts {
+		parts[i] = url.PathEscape(p)
+	}
+	path := "/v1/models/" + strings.Join(parts, "/")
+	var out api.Model
+	if err := c.doJSON(ctx, http.MethodGet, path, nil, nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 // CreateSession creates a new session in workspace.
-func (c *Client) CreateSession(ctx context.Context, workspace string, req api.CreateSessionRequest) (*api.Session, error) {
-	q, err := workspaceQuery(workspace)
-	if err != nil {
+func (c *Client) CreateSession(ctx context.Context, req api.CreateSessionRequest) (*api.Session, error) {
+	if err := c.requireCWD(); err != nil {
 		return nil, err
 	}
 	var out api.Session
-	if err := c.doJSON(ctx, http.MethodPost, "/v1/sessions", q, req, &out); err != nil {
+	if err := c.doJSON(ctx, http.MethodPost, "/v1/sessions", nil, req, &out); err != nil {
 		return nil, err
 	}
 	return &out, nil
 }
 
 // ListSessions lists all sessions in workspace ordered by most recently updated.
-func (c *Client) ListSessions(ctx context.Context, workspace string) ([]api.Session, error) {
-	q, err := workspaceQuery(workspace)
-	if err != nil {
+func (c *Client) ListSessions(ctx context.Context) ([]api.Session, error) {
+	if err := c.requireCWD(); err != nil {
 		return nil, err
 	}
 	var out []api.Session
-	if err := c.doJSON(ctx, http.MethodGet, "/v1/sessions", q, nil, &out); err != nil {
+	if err := c.doJSON(ctx, http.MethodGet, "/v1/sessions", nil, nil, &out); err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
 // GetSession retrieves session metadata and live status by ID.
-func (c *Client) GetSession(ctx context.Context, workspace, sessionID string) (*api.Session, error) {
-	path, q, err := sessionEndpoint(workspace, sessionID, "")
+func (c *Client) GetSession(ctx context.Context, sessionID string) (*api.Session, error) {
+	path, err := c.sessionEndpoint(sessionID, "")
 	if err != nil {
 		return nil, err
 	}
 	var out api.Session
-	if err := c.doJSON(ctx, http.MethodGet, path, q, nil, &out); err != nil {
+	if err := c.doJSON(ctx, http.MethodGet, path, nil, nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// UpdateSession modifies session metadata (title, agent, model) on an existing session.
+func (c *Client) UpdateSession(ctx context.Context, sessionID string, req api.UpdateSessionRequest) (*api.Session, error) {
+	path, err := c.sessionEndpoint(sessionID, "")
+	if err != nil {
+		return nil, err
+	}
+	var out api.Session
+	if err := c.doJSON(ctx, http.MethodPatch, path, nil, req, &out); err != nil {
 		return nil, err
 	}
 	return &out, nil
 }
 
 // DeleteSession deletes a session and its associated history and change journals.
-func (c *Client) DeleteSession(ctx context.Context, workspace, sessionID string) error {
-	path, q, err := sessionEndpoint(workspace, sessionID, "")
+func (c *Client) DeleteSession(ctx context.Context, sessionID string) error {
+	path, err := c.sessionEndpoint(sessionID, "")
 	if err != nil {
 		return err
 	}
-	return c.doJSON(ctx, http.MethodDelete, path, q, nil, nil)
+	return c.doJSON(ctx, http.MethodDelete, path, nil, nil, nil)
 }
 
 // History returns the chronological UI message history for a session.
-func (c *Client) History(ctx context.Context, workspace, sessionID string) ([]api.Message, error) {
-	path, q, err := sessionEndpoint(workspace, sessionID, "/messages")
+func (c *Client) History(ctx context.Context, sessionID string) ([]api.Message, error) {
+	path, err := c.sessionEndpoint(sessionID, "/messages")
 	if err != nil {
 		return nil, err
 	}
 	var out []api.Message
-	if err := c.doJSON(ctx, http.MethodGet, path, q, nil, &out); err != nil {
+	if err := c.doJSON(ctx, http.MethodGet, path, nil, nil, &out); err != nil {
 		return nil, err
 	}
 	return out, nil
@@ -154,86 +267,87 @@ func (c *Client) History(ctx context.Context, workspace, sessionID string) ([]ap
 
 // Send submits a user message to a session and triggers a conversational turn
 // in the daemon's background runtime.
-func (c *Client) Send(ctx context.Context, workspace, sessionID string, req api.SendRequest) error {
-	path, q, err := sessionEndpoint(workspace, sessionID, "/messages")
+func (c *Client) Send(ctx context.Context, sessionID string, req api.SendRequest) error {
+	path, err := c.sessionEndpoint(sessionID, "/messages")
 	if err != nil {
 		return err
 	}
-	return c.doJSON(ctx, http.MethodPost, path, q, req, nil)
+	return c.doJSON(ctx, http.MethodPost, path, nil, req, nil)
 }
 
 // Cancel aborts an in-progress conversational turn on a session.
-func (c *Client) Cancel(ctx context.Context, workspace, sessionID string) error {
-	path, q, err := sessionEndpoint(workspace, sessionID, "/cancel")
+func (c *Client) Cancel(ctx context.Context, sessionID string) error {
+	path, err := c.sessionEndpoint(sessionID, "/cancel")
 	if err != nil {
 		return err
 	}
-	return c.doJSON(ctx, http.MethodPost, path, q, nil, nil)
+	return c.doJSON(ctx, http.MethodPost, path, nil, nil, nil)
 }
 
 // PendingPermissions returns all unresolved permission requests for a session.
-func (c *Client) PendingPermissions(ctx context.Context, workspace, sessionID string) ([]api.PermissionRequest, error) {
-	path, q, err := sessionEndpoint(workspace, sessionID, "/permissions")
+func (c *Client) PendingPermissions(ctx context.Context, sessionID string) ([]api.PermissionRequest, error) {
+	path, err := c.sessionEndpoint(sessionID, "/permissions")
 	if err != nil {
 		return nil, err
 	}
 	var out []api.PermissionRequest
-	if err := c.doJSON(ctx, http.MethodGet, path, q, nil, &out); err != nil {
+	if err := c.doJSON(ctx, http.MethodGet, path, nil, nil, &out); err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
 // RespondPermission submits a user decision for a pending permission request.
-func (c *Client) RespondPermission(ctx context.Context, workspace, sessionID string, decision api.PermissionDecision) error {
-	path, q, err := sessionEndpoint(workspace, sessionID, "/permissions")
+func (c *Client) RespondPermission(ctx context.Context, sessionID string, decision api.PermissionDecision) error {
+	path, err := c.sessionEndpoint(sessionID, "/permissions")
 	if err != nil {
 		return err
 	}
-	return c.doJSON(ctx, http.MethodPost, path, q, decision, nil)
+	return c.doJSON(ctx, http.MethodPost, path, nil, decision, nil)
 }
 
 // PermissionMode returns the active [api.PermissionMode] for a session.
-func (c *Client) PermissionMode(ctx context.Context, workspace, sessionID string) (api.PermissionMode, error) {
-	path, q, err := sessionEndpoint(workspace, sessionID, "/mode")
+func (c *Client) PermissionMode(ctx context.Context, sessionID string) (api.PermissionMode, error) {
+	path, err := c.sessionEndpoint(sessionID, "/mode")
 	if err != nil {
 		return "", err
 	}
 	var out api.ModeResponse
-	if err := c.doJSON(ctx, http.MethodGet, path, q, nil, &out); err != nil {
+	if err := c.doJSON(ctx, http.MethodGet, path, nil, nil, &out); err != nil {
 		return "", err
 	}
 	return out.Mode, nil
 }
 
 // SetPermissionMode updates the active [api.PermissionMode] for a session.
-func (c *Client) SetPermissionMode(ctx context.Context, workspace, sessionID string, mode api.PermissionMode) error {
-	path, q, err := sessionEndpoint(workspace, sessionID, "/mode")
+func (c *Client) SetPermissionMode(ctx context.Context, sessionID string, mode api.PermissionMode) error {
+	path, err := c.sessionEndpoint(sessionID, "/mode")
 	if err != nil {
 		return err
 	}
-	return c.doJSON(ctx, http.MethodPut, path, q, api.SetModeRequest{Mode: mode}, nil)
+	return c.doJSON(ctx, http.MethodPut, path, nil, api.SetModeRequest{Mode: mode}, nil)
 }
 
 // Changes returns all recorded file mutation entries for a session.
-func (c *Client) Changes(ctx context.Context, workspace, sessionID string) ([]api.FileChange, error) {
-	path, q, err := sessionEndpoint(workspace, sessionID, "/changes")
+func (c *Client) Changes(ctx context.Context, sessionID string) ([]api.FileChange, error) {
+	path, err := c.sessionEndpoint(sessionID, "/changes")
 	if err != nil {
 		return nil, err
 	}
 	var out []api.FileChange
-	if err := c.doJSON(ctx, http.MethodGet, path, q, nil, &out); err != nil {
+	if err := c.doJSON(ctx, http.MethodGet, path, nil, nil, &out); err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
 // DiffChange computes the unified diff for a specific journal entry on a path.
-func (c *Client) DiffChange(ctx context.Context, workspace, sessionID, filePath, entryID string) (string, error) {
-	path, q, err := sessionEndpoint(workspace, sessionID, "/diff")
+func (c *Client) DiffChange(ctx context.Context, sessionID, filePath, entryID string) (string, error) {
+	path, err := c.sessionEndpoint(sessionID, "/diff")
 	if err != nil {
 		return "", err
 	}
+	q := url.Values{}
 	q.Set("path", filePath)
 	q.Set("entry_id", entryID)
 	var out api.DiffResponse
@@ -245,22 +359,23 @@ func (c *Client) DiffChange(ctx context.Context, workspace, sessionID, filePath,
 
 // Revert reverts a single journal entry, a single file to baseline, or all
 // tracked files in the session.
-func (c *Client) Revert(ctx context.Context, workspace, sessionID string, req api.RevertRequest) error {
-	path, q, err := sessionEndpoint(workspace, sessionID, "/revert")
+func (c *Client) Revert(ctx context.Context, sessionID string, req api.RevertRequest) error {
+	path, err := c.sessionEndpoint(sessionID, "/revert")
 	if err != nil {
 		return err
 	}
-	return c.doJSON(ctx, http.MethodPost, path, q, req, nil)
+	return c.doJSON(ctx, http.MethodPost, path, nil, req, nil)
 }
 
-// Subscribe opens a real-time Server-Sent Events (SSE) stream for workspace and
-// optional sessionID, yielding [api.Event] items as they arrive.
-func (c *Client) Subscribe(ctx context.Context, workspace, sessionID string) iter.Seq2[api.Event, error] {
+// Subscribe opens a real-time Server-Sent Events (SSE) stream for optional sessionID,
+// yielding [api.Event] items as they arrive.
+func (c *Client) Subscribe(ctx context.Context, sessionID string) iter.Seq2[api.Event, error] {
 	return func(yield func(api.Event, error) bool) {
-		q := url.Values{}
-		if ws := strings.TrimSpace(workspace); ws != "" {
-			q.Set("workspace", ws)
+		if err := c.requireCWD(); err != nil {
+			yield(api.Event{}, err)
+			return
 		}
+		q := url.Values{}
 		if sid := strings.TrimSpace(sessionID); sid != "" {
 			q.Set("session_id", sid)
 		}
@@ -277,6 +392,7 @@ func (c *Client) Subscribe(ctx context.Context, workspace, sessionID string) ite
 		}
 		req.Header.Set("Accept", "text/event-stream")
 		req.Header.Set("Cache-Control", "no-cache")
+		req.Header.Set(api.HeaderCWD, c.cwd)
 
 		resp, err := c.httpClient.Do(req)
 		if err != nil {
@@ -352,27 +468,16 @@ func streamSSE(ctx context.Context, body io.Reader, yield func(api.Event, error)
 	}
 }
 
-func workspaceQuery(workspace string) (url.Values, error) {
-	ws := strings.TrimSpace(workspace)
-	if ws == "" {
-		return nil, ErrEmptyWorkspace
-	}
-	q := url.Values{}
-	q.Set("workspace", ws)
-	return q, nil
-}
-
-func sessionEndpoint(workspace, sessionID, suffix string) (string, url.Values, error) {
-	q, err := workspaceQuery(workspace)
-	if err != nil {
-		return "", nil, err
+func (c *Client) sessionEndpoint(sessionID, suffix string) (string, error) {
+	if err := c.requireCWD(); err != nil {
+		return "", err
 	}
 	sid := strings.TrimSpace(sessionID)
 	if sid == "" {
-		return "", nil, ErrEmptySessionID
+		return "", ErrEmptySessionID
 	}
 	path := "/v1/sessions/" + url.PathEscape(sid) + suffix
-	return path, q, nil
+	return path, nil
 }
 
 func (c *Client) doJSON(ctx context.Context, method, path string, query url.Values, reqBody any, respBody any) error {
@@ -395,6 +500,9 @@ func (c *Client) doJSON(ctx context.Context, method, path string, query url.Valu
 		return fmt.Errorf("client: build request %s %s: %w", method, path, err)
 	}
 	req.Header.Set("Accept", "application/json")
+	if c.cwd != "" {
+		req.Header.Set(api.HeaderCWD, c.cwd)
+	}
 	if reqBody != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}

@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"cmp"
 	"maps"
 	"slices"
 	"strings"
@@ -12,6 +13,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/session"
 	"github.com/masterkeysrd/tasksmith/internal/std"
 	"github.com/masterkeysrd/tasksmith/internal/tools"
+	"github.com/masterkeysrd/tasksmith/internal/workspace"
 )
 
 func toAPISession(sess *session.Session, status api.SessionStatus) api.Session {
@@ -250,5 +252,112 @@ func toAPIFileChange(fc std.FileChange) api.FileChange {
 		Additions:  fc.Additions,
 		Deletions:  fc.Deletions,
 		Timestamp:  fc.Timestamp,
+	}
+}
+
+func extractAgentEffort(thinking map[string]any) string {
+	if thinking == nil {
+		return ""
+	}
+	if v, ok := thinking["effort"].(string); ok && strings.TrimSpace(v) != "" {
+		return strings.TrimSpace(v)
+	}
+	if t, ok := thinking["type"].(string); ok && strings.EqualFold(t, "effort") {
+		if v, ok := thinking["default"].(string); ok && strings.TrimSpace(v) != "" {
+			return strings.TrimSpace(v)
+		}
+	}
+	return ""
+}
+
+func toAPIAgent(ag workspace.Agent) api.Agent {
+	return api.Agent{
+		Name:        ag.Name,
+		DisplayName: ag.DisplayName,
+		Description: ag.Description,
+		Models:      slices.Clone(ag.Models),
+		Effort:      extractAgentEffort(ag.Thinking),
+	}
+}
+
+func extractModelEffort(caps *workspace.ModelCapabilities) (defaultEffort string, allowedEfforts []string) {
+	if caps == nil || len(caps.Thinking) == 0 {
+		return "", nil
+	}
+	for _, tc := range caps.Thinking {
+		if strings.EqualFold(tc.Type, "effort") {
+			if len(tc.AllowedEfforts) > 0 {
+				allowedEfforts = slices.Clone(tc.AllowedEfforts)
+			}
+			if s, ok := tc.Default.(string); ok && strings.TrimSpace(s) != "" {
+				defaultEffort = strings.TrimSpace(s)
+			}
+			break
+		}
+	}
+	return defaultEffort, allowedEfforts
+}
+
+func toAPIModel(providerName string, pm workspace.ProviderModel) api.Model {
+	id := pm.ID
+	if !strings.Contains(id, "/") && providerName != "" {
+		id = providerName + "/" + id
+	}
+	name := cmp.Or(pm.Name, pm.ID)
+	label := cmp.Or(pm.Label, pm.Name, pm.ID)
+	defEffort, allowedEfforts := extractModelEffort(pm.Capabilities)
+
+	return api.Model{
+		ID:             id,
+		Provider:       providerName,
+		Name:           name,
+		Label:          label,
+		DefaultEffort:  defEffort,
+		AllowedEfforts: allowedEfforts,
+	}
+}
+
+// resolveAPIModel resolves a model identifier against the workspace catalog and defaults,
+// returning an api.Model with populated metadata.
+func resolveAPIModel(ws *workspace.Workspace, rawID string) api.Model {
+	rawID = strings.TrimSpace(rawID)
+	targetID := rawID
+	if ws != nil {
+		if resolved := ws.ResolveModels(workspace.RoleCompletion, rawID); len(resolved) > 0 && resolved[0] != "" {
+			targetID = resolved[0]
+		}
+	}
+
+	providerName, modelName, hasSlash := strings.Cut(targetID, "/")
+	if !hasSlash {
+		modelName = targetID
+		providerName = ""
+	}
+
+	if ws != nil {
+		if providerName != "" {
+			if p, ok := ws.GetProvider(providerName); ok {
+				for _, m := range p.Models {
+					if m.ID == modelName || m.Name == modelName || p.Name+"/"+m.ID == targetID {
+						return toAPIModel(p.Name, m)
+					}
+				}
+			}
+		} else {
+			for _, p := range ws.Providers() {
+				for _, m := range p.Models {
+					if m.ID == modelName || m.Name == modelName {
+						return toAPIModel(p.Name, m)
+					}
+				}
+			}
+		}
+	}
+
+	return api.Model{
+		ID:       targetID,
+		Provider: providerName,
+		Name:     modelName,
+		Label:    cmp.Or(modelName, targetID),
 	}
 }

@@ -21,58 +21,99 @@ func TestNewAndValidation(t *testing.T) {
 	}
 
 	customHC := &http.Client{}
-	c, err := New("/tmp/brain.sock", WithHTTPClient(customHC))
+	c, err := New("/tmp/brain.sock", WithHTTPClient(customHC), WithCWD("/tmp/init-ws"))
 	if err != nil {
 		t.Fatalf("New error: %v", err)
 	}
 	if c.SocketPath() != "/tmp/brain.sock" {
 		t.Errorf("SocketPath() = %q, want \"/tmp/brain.sock\"", c.SocketPath())
 	}
+	if c.CWD() != "/tmp/init-ws" {
+		t.Errorf("CWD() = %q, want \"/tmp/init-ws\"", c.CWD())
+	}
 	if c.httpClient != customHC {
 		t.Errorf("expected custom HTTP client to be set")
 	}
 
+	switched := c.WithCWD("/tmp/switched-ws")
+	if switched.CWD() != "/tmp/switched-ws" {
+		t.Errorf("switched.CWD() = %q, want \"/tmp/switched-ws\"", switched.CWD())
+	}
+	if c.CWD() != "/tmp/init-ws" {
+		t.Errorf("c.CWD() should remain \"/tmp/init-ws\", got %q", c.CWD())
+	}
+
+	// Empty CWD client validation
+	emptyCWDClient, err := New("/tmp/brain.sock")
+	if err != nil {
+		t.Fatalf("New emptyCWDClient error: %v", err)
+	}
 	ctx := context.Background()
-	if _, err := c.CreateSession(ctx, "", api.CreateSessionRequest{}); !errors.Is(err, ErrEmptyWorkspace) {
-		t.Errorf("CreateSession empty workspace error = %v, want %v", err, ErrEmptyWorkspace)
+
+	if _, err := emptyCWDClient.GetWorkspace(ctx); !errors.Is(err, ErrEmptyWorkspace) {
+		t.Errorf("GetWorkspace empty CWD error = %v, want %v", err, ErrEmptyWorkspace)
 	}
-	if _, err := c.ListSessions(ctx, ""); !errors.Is(err, ErrEmptyWorkspace) {
-		t.Errorf("ListSessions empty workspace error = %v, want %v", err, ErrEmptyWorkspace)
+	if _, err := emptyCWDClient.ListAgents(ctx); !errors.Is(err, ErrEmptyWorkspace) {
+		t.Errorf("ListAgents empty CWD error = %v, want %v", err, ErrEmptyWorkspace)
 	}
-	if _, err := c.GetSession(ctx, "/tmp/ws", ""); !errors.Is(err, ErrEmptySessionID) {
+	if _, err := emptyCWDClient.GetAgent(ctx, "dev"); !errors.Is(err, ErrEmptyWorkspace) {
+		t.Errorf("GetAgent empty CWD error = %v, want %v", err, ErrEmptyWorkspace)
+	}
+	if _, err := emptyCWDClient.ListModels(ctx); !errors.Is(err, ErrEmptyWorkspace) {
+		t.Errorf("ListModels empty CWD error = %v, want %v", err, ErrEmptyWorkspace)
+	}
+	if _, err := emptyCWDClient.GetModel(ctx, "m1"); !errors.Is(err, ErrEmptyWorkspace) {
+		t.Errorf("GetModel empty CWD error = %v, want %v", err, ErrEmptyWorkspace)
+	}
+	if _, err := emptyCWDClient.CreateSession(ctx, api.CreateSessionRequest{}); !errors.Is(err, ErrEmptyWorkspace) {
+		t.Errorf("CreateSession empty CWD error = %v, want %v", err, ErrEmptyWorkspace)
+	}
+	if _, err := emptyCWDClient.ListSessions(ctx); !errors.Is(err, ErrEmptyWorkspace) {
+		t.Errorf("ListSessions empty CWD error = %v, want %v", err, ErrEmptyWorkspace)
+	}
+
+	// With CWD configured, test empty parameter checks
+	withCWD := emptyCWDClient.WithCWD("/tmp/ws")
+	if _, err := withCWD.GetAgent(ctx, ""); err == nil {
+		t.Errorf("GetAgent empty name expected error, got nil")
+	}
+	if _, err := withCWD.GetModel(ctx, ""); err == nil {
+		t.Errorf("GetModel empty ID expected error, got nil")
+	}
+	if _, err := withCWD.GetSession(ctx, ""); !errors.Is(err, ErrEmptySessionID) {
 		t.Errorf("GetSession empty sessionID error = %v, want %v", err, ErrEmptySessionID)
 	}
-	if err := c.DeleteSession(ctx, "/tmp/ws", ""); !errors.Is(err, ErrEmptySessionID) {
+	if err := withCWD.DeleteSession(ctx, ""); !errors.Is(err, ErrEmptySessionID) {
 		t.Errorf("DeleteSession empty sessionID error = %v, want %v", err, ErrEmptySessionID)
 	}
-	if _, err := c.History(ctx, "/tmp/ws", ""); !errors.Is(err, ErrEmptySessionID) {
+	if _, err := withCWD.History(ctx, ""); !errors.Is(err, ErrEmptySessionID) {
 		t.Errorf("History empty sessionID error = %v, want %v", err, ErrEmptySessionID)
 	}
-	if err := c.Send(ctx, "/tmp/ws", "", api.SendRequest{}); !errors.Is(err, ErrEmptySessionID) {
+	if err := withCWD.Send(ctx, "", api.SendRequest{}); !errors.Is(err, ErrEmptySessionID) {
 		t.Errorf("Send empty sessionID error = %v, want %v", err, ErrEmptySessionID)
 	}
-	if err := c.Cancel(ctx, "/tmp/ws", ""); !errors.Is(err, ErrEmptySessionID) {
+	if err := withCWD.Cancel(ctx, ""); !errors.Is(err, ErrEmptySessionID) {
 		t.Errorf("Cancel empty sessionID error = %v, want %v", err, ErrEmptySessionID)
 	}
-	if _, err := c.PendingPermissions(ctx, "/tmp/ws", ""); !errors.Is(err, ErrEmptySessionID) {
+	if _, err := withCWD.PendingPermissions(ctx, ""); !errors.Is(err, ErrEmptySessionID) {
 		t.Errorf("PendingPermissions empty sessionID error = %v, want %v", err, ErrEmptySessionID)
 	}
-	if err := c.RespondPermission(ctx, "/tmp/ws", "", api.PermissionDecision{}); !errors.Is(err, ErrEmptySessionID) {
+	if err := withCWD.RespondPermission(ctx, "", api.PermissionDecision{}); !errors.Is(err, ErrEmptySessionID) {
 		t.Errorf("RespondPermission empty sessionID error = %v, want %v", err, ErrEmptySessionID)
 	}
-	if _, err := c.PermissionMode(ctx, "/tmp/ws", ""); !errors.Is(err, ErrEmptySessionID) {
+	if _, err := withCWD.PermissionMode(ctx, ""); !errors.Is(err, ErrEmptySessionID) {
 		t.Errorf("PermissionMode empty sessionID error = %v, want %v", err, ErrEmptySessionID)
 	}
-	if err := c.SetPermissionMode(ctx, "/tmp/ws", "", api.ModeAuto); !errors.Is(err, ErrEmptySessionID) {
+	if err := withCWD.SetPermissionMode(ctx, "", api.ModeAuto); !errors.Is(err, ErrEmptySessionID) {
 		t.Errorf("SetPermissionMode empty sessionID error = %v, want %v", err, ErrEmptySessionID)
 	}
-	if _, err := c.Changes(ctx, "/tmp/ws", ""); !errors.Is(err, ErrEmptySessionID) {
+	if _, err := withCWD.Changes(ctx, ""); !errors.Is(err, ErrEmptySessionID) {
 		t.Errorf("Changes empty sessionID error = %v, want %v", err, ErrEmptySessionID)
 	}
-	if _, err := c.DiffChange(ctx, "/tmp/ws", "", "a.go", "e1"); !errors.Is(err, ErrEmptySessionID) {
+	if _, err := withCWD.DiffChange(ctx, "", "a.go", "e1"); !errors.Is(err, ErrEmptySessionID) {
 		t.Errorf("DiffChange empty sessionID error = %v, want %v", err, ErrEmptySessionID)
 	}
-	if err := c.Revert(ctx, "/tmp/ws", "", api.RevertRequest{}); !errors.Is(err, ErrEmptySessionID) {
+	if err := withCWD.Revert(ctx, "", api.RevertRequest{}); !errors.Is(err, ErrEmptySessionID) {
 		t.Errorf("Revert empty sessionID error = %v, want %v", err, ErrEmptySessionID)
 	}
 }
@@ -102,14 +143,81 @@ func TestClientAllMethodsOverUnixSocket(t *testing.T) {
 	mux.HandleFunc("POST /v1/shutdown", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	})
-	mux.HandleFunc("POST /v1/sessions", func(w http.ResponseWriter, _ *http.Request) {
+
+	mux.HandleFunc("GET /v1/workspace", func(w http.ResponseWriter, r *http.Request) {
+		cwd := r.Header.Get(api.HeaderCWD)
+		if cwd != "/ws" {
+			http.Error(w, "missing or bad HeaderCWD", http.StatusBadRequest)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(api.Workspace{
+			Name:         "test-ws",
+			RootDir:      "/ws",
+			CWD:          cwd,
+			DefaultAgent: "developer",
+			DefaultModel: "ollama/qwen3.8",
+		})
+	})
+	mux.HandleFunc("GET /v1/agents", func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get(api.HeaderCWD) != "/ws" {
+			http.Error(w, "bad header", http.StatusBadRequest)
+			return
+		}
+		_ = json.NewEncoder(w).Encode([]api.Agent{{Name: "developer", Effort: "high"}})
+	})
+	mux.HandleFunc("GET /v1/agents/{name}", func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get(api.HeaderCWD) != "/ws" {
+			http.Error(w, "bad header", http.StatusBadRequest)
+			return
+		}
+		if r.PathValue("name") == "missing" {
+			w.WriteHeader(http.StatusNotFound)
+			_ = json.NewEncoder(w).Encode(api.ErrorResponse{Code: "not_found", Message: "agent not found"})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(api.Agent{Name: r.PathValue("name"), Effort: "high"})
+	})
+	mux.HandleFunc("GET /v1/models", func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get(api.HeaderCWD) != "/ws" {
+			http.Error(w, "bad header", http.StatusBadRequest)
+			return
+		}
+		_ = json.NewEncoder(w).Encode([]api.Model{{ID: "ollama/qwen3.8", Name: "qwen3.8"}})
+	})
+	mux.HandleFunc("GET /v1/models/{id...}", func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get(api.HeaderCWD) != "/ws" {
+			http.Error(w, "bad header", http.StatusBadRequest)
+			return
+		}
+		id := r.PathValue("id")
+		if id == "missing" {
+			w.WriteHeader(http.StatusNotFound)
+			_ = json.NewEncoder(w).Encode(api.ErrorResponse{Code: "not_found", Message: "model not found"})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(api.Model{ID: id, Name: id, Label: "Test Model"})
+	})
+
+	mux.HandleFunc("POST /v1/sessions", func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get(api.HeaderCWD) != "/ws" {
+			http.Error(w, "bad header", http.StatusBadRequest)
+			return
+		}
 		w.WriteHeader(http.StatusCreated)
 		_ = json.NewEncoder(w).Encode(api.Session{ID: "s1", Title: "Test", Status: api.StatusIdle})
 	})
-	mux.HandleFunc("GET /v1/sessions", func(w http.ResponseWriter, _ *http.Request) {
+	mux.HandleFunc("GET /v1/sessions", func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get(api.HeaderCWD) != "/ws" {
+			http.Error(w, "bad header", http.StatusBadRequest)
+			return
+		}
 		_ = json.NewEncoder(w).Encode([]api.Session{{ID: "s1", Title: "Test", Status: api.StatusIdle}})
 	})
 	mux.HandleFunc("GET /v1/sessions/{id}", func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get(api.HeaderCWD) != "/ws" {
+			http.Error(w, "bad header", http.StatusBadRequest)
+			return
+		}
 		if r.PathValue("id") == "missing" {
 			w.WriteHeader(http.StatusNotFound)
 			_ = json.NewEncoder(w).Encode(api.ErrorResponse{Code: "not_found", Message: "missing session"})
@@ -120,6 +228,21 @@ func TestClientAllMethodsOverUnixSocket(t *testing.T) {
 			return
 		}
 		_ = json.NewEncoder(w).Encode(api.Session{ID: r.PathValue("id"), Status: api.StatusIdle})
+	})
+	mux.HandleFunc("PATCH /v1/sessions/{id}", func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get(api.HeaderCWD) != "/ws" {
+			http.Error(w, "bad header", http.StatusBadRequest)
+			return
+		}
+		var req api.UpdateSessionRequest
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		_ = json.NewEncoder(w).Encode(api.Session{
+			ID:     r.PathValue("id"),
+			Title:  req.Title,
+			Agent:  req.Agent,
+			Model:  req.Model,
+			Status: api.StatusIdle,
+		})
 	})
 	mux.HandleFunc("DELETE /v1/sessions/{id}", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
@@ -155,7 +278,7 @@ func TestClientAllMethodsOverUnixSocket(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	})
 	mux.HandleFunc("GET /v1/events", func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Query().Get("workspace") == "bad" {
+		if r.Header.Get(api.HeaderCWD) == "bad" {
 			w.WriteHeader(http.StatusBadRequest)
 			_ = json.NewEncoder(w).Encode(api.ErrorResponse{Code: "bad_request", Message: "bad workspace"})
 			return
@@ -172,7 +295,7 @@ func TestClientAllMethodsOverUnixSocket(t *testing.T) {
 		_ = srv.Close()
 	})
 
-	c, err := New(sockPath)
+	c, err := New(sockPath, WithCWD("/ws"))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -184,60 +307,97 @@ func TestClientAllMethodsOverUnixSocket(t *testing.T) {
 	if err := c.Shutdown(ctx); err != nil {
 		t.Errorf("Shutdown: %v", err)
 	}
-	if s, err := c.CreateSession(ctx, "/ws", api.CreateSessionRequest{Title: "Test"}); err != nil || s.ID != "s1" {
+
+	ws, err := c.GetWorkspace(ctx)
+	if err != nil || ws.Name != "test-ws" || ws.CWD != "/ws" {
+		t.Errorf("GetWorkspace = (%+v, %v)", ws, err)
+	}
+
+	agents, err := c.ListAgents(ctx)
+	if err != nil || len(agents) != 1 || agents[0].Name != "developer" {
+		t.Errorf("ListAgents = (%+v, %v)", agents, err)
+	}
+
+	ag, err := c.GetAgent(ctx, "developer")
+	if err != nil || ag.Name != "developer" {
+		t.Errorf("GetAgent = (%+v, %v)", ag, err)
+	}
+
+	models, err := c.ListModels(ctx)
+	if err != nil || len(models) != 1 || models[0].ID != "ollama/qwen3.8" {
+		t.Errorf("ListModels = (%+v, %v)", models, err)
+	}
+
+	// Test GetModel with slash ID
+	mdl, err := c.GetModel(ctx, "ollama/qwen3.8")
+	if err != nil || mdl.ID != "ollama/qwen3.8" {
+		t.Errorf("GetModel qualified = (%+v, %v)", mdl, err)
+	}
+
+	// Test GetModel with bare ID
+	mdlBare, err := c.GetModel(ctx, "qwen3.8")
+	if err != nil || mdlBare.ID != "qwen3.8" {
+		t.Errorf("GetModel bare = (%+v, %v)", mdlBare, err)
+	}
+
+	if s, err := c.CreateSession(ctx, api.CreateSessionRequest{Title: "Test"}); err != nil || s.ID != "s1" {
 		t.Errorf("CreateSession = (%+v, %v)", s, err)
 	}
-	if list, err := c.ListSessions(ctx, "/ws"); err != nil || len(list) != 1 {
+	if list, err := c.ListSessions(ctx); err != nil || len(list) != 1 {
 		t.Errorf("ListSessions = (%+v, %v)", list, err)
 	}
-	if s, err := c.GetSession(ctx, "/ws", "s1"); err != nil || s.ID != "s1" {
+	if s, err := c.GetSession(ctx, "s1"); err != nil || s.ID != "s1" {
 		t.Errorf("GetSession = (%+v, %v)", s, err)
 	}
 
+	if up, err := c.UpdateSession(ctx, "s1", api.UpdateSessionRequest{Title: "Updated", Model: "gpt-5"}); err != nil || up.Title != "Updated" || up.Model != "gpt-5" {
+		t.Errorf("UpdateSession = (%+v, %v)", up, err)
+	}
+
 	var apiErr *api.APIError
-	if _, err := c.GetSession(ctx, "/ws", "missing"); !errors.As(err, &apiErr) || apiErr.StatusCode != 404 || apiErr.Code != "not_found" {
+	if _, err := c.GetSession(ctx, "missing"); !errors.As(err, &apiErr) || apiErr.StatusCode != 404 || apiErr.Code != "not_found" {
 		t.Errorf("GetSession missing error = %v", err)
 	}
-	if _, err := c.GetSession(ctx, "/ws", "plain-err"); !errors.As(err, &apiErr) || apiErr.StatusCode != 502 || apiErr.Message != "raw error text" {
+	if _, err := c.GetSession(ctx, "plain-err"); !errors.As(err, &apiErr) || apiErr.StatusCode != 502 || apiErr.Message != "raw error text" {
 		t.Errorf("GetSession plain-err error = %v", err)
 	}
 
-	if err := c.DeleteSession(ctx, "/ws", "s1"); err != nil {
+	if err := c.DeleteSession(ctx, "s1"); err != nil {
 		t.Errorf("DeleteSession: %v", err)
 	}
-	if msgs, err := c.History(ctx, "/ws", "s1"); err != nil || len(msgs) != 1 {
+	if msgs, err := c.History(ctx, "s1"); err != nil || len(msgs) != 1 {
 		t.Errorf("History = (%+v, %v)", msgs, err)
 	}
-	if err := c.Send(ctx, "/ws", "s1", api.SendRequest{Content: "hi"}); err != nil {
+	if err := c.Send(ctx, "s1", api.SendRequest{Content: "hi"}); err != nil {
 		t.Errorf("Send: %v", err)
 	}
-	if err := c.Cancel(ctx, "/ws", "s1"); err != nil {
+	if err := c.Cancel(ctx, "s1"); err != nil {
 		t.Errorf("Cancel: %v", err)
 	}
-	if perms, err := c.PendingPermissions(ctx, "/ws", "s1"); err != nil || len(perms) != 1 {
+	if perms, err := c.PendingPermissions(ctx, "s1"); err != nil || len(perms) != 1 {
 		t.Errorf("PendingPermissions = (%+v, %v)", perms, err)
 	}
-	if err := c.RespondPermission(ctx, "/ws", "s1", api.PermissionDecision{RequestID: "p1", Kind: api.DecisionAllowOnce}); err != nil {
+	if err := c.RespondPermission(ctx, "s1", api.PermissionDecision{RequestID: "p1", Kind: api.DecisionAllowOnce}); err != nil {
 		t.Errorf("RespondPermission: %v", err)
 	}
-	if mode, err := c.PermissionMode(ctx, "/ws", "s1"); err != nil || mode != api.ModeAcceptEdits {
+	if mode, err := c.PermissionMode(ctx, "s1"); err != nil || mode != api.ModeAcceptEdits {
 		t.Errorf("PermissionMode = (%q, %v)", mode, err)
 	}
-	if err := c.SetPermissionMode(ctx, "/ws", "s1", api.ModePlan); err != nil {
+	if err := c.SetPermissionMode(ctx, "s1", api.ModePlan); err != nil {
 		t.Errorf("SetPermissionMode: %v", err)
 	}
-	if ch, err := c.Changes(ctx, "/ws", "s1"); err != nil || len(ch) != 1 {
+	if ch, err := c.Changes(ctx, "s1"); err != nil || len(ch) != 1 {
 		t.Errorf("Changes = (%+v, %v)", ch, err)
 	}
-	if diff, err := c.DiffChange(ctx, "/ws", "s1", "a.go", "c1"); err != nil || !strings.Contains(diff, "+++ b/a.go") {
+	if diff, err := c.DiffChange(ctx, "s1", "a.go", "c1"); err != nil || !strings.Contains(diff, "+++ b/a.go") {
 		t.Errorf("DiffChange = (%q, %v)", diff, err)
 	}
-	if err := c.Revert(ctx, "/ws", "s1", api.RevertRequest{Path: "a.go"}); err != nil {
+	if err := c.Revert(ctx, "s1", api.RevertRequest{Path: "a.go"}); err != nil {
 		t.Errorf("Revert: %v", err)
 	}
 
 	var count int
-	for ev, err := range c.Subscribe(ctx, "/ws", "s1") {
+	for ev, err := range c.Subscribe(ctx, "s1") {
 		if err != nil {
 			t.Fatalf("Subscribe error: %v", err)
 		}
@@ -249,8 +409,9 @@ func TestClientAllMethodsOverUnixSocket(t *testing.T) {
 		t.Errorf("Subscribe received %d events, want 1", count)
 	}
 
+	badC := c.WithCWD("bad")
 	var subErr error
-	for _, err := range c.Subscribe(ctx, "bad", "s1") {
+	for _, err := range badC.Subscribe(ctx, "s1") {
 		subErr = err
 	}
 	if !errors.As(subErr, &apiErr) || apiErr.StatusCode != 400 {

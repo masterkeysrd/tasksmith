@@ -20,7 +20,7 @@ func bindREPLFlags(cmd *cobra.Command, opts *replOptions) {
 	cmd.Flags().StringVar(&opts.sessionID, "session", "", "Existing session ID to resume")
 	cmd.Flags().StringVar(&opts.agent, "agent", "", "Agent name when creating a new session")
 	cmd.Flags().StringVar(&opts.model, "model", "", "Model identifier when creating a new session")
-	cmd.Flags().StringVar(&opts.title, "title", "Terminal Session", "Session title when creating a new session")
+	cmd.Flags().StringVar(&opts.title, "title", "", "Session title when creating a new session")
 }
 
 func newREPLCmd(rootOpts *rootOptions) *cobra.Command {

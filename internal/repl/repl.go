@@ -2,6 +2,7 @@ package repl
 
 import (
 	"bufio"
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -25,6 +26,7 @@ var ErrInvalidConfig = errors.New("repl: invalid configuration")
 type Config struct {
 	Client    *client.Client
 	Workspace string
+	Version   string
 	SessionID string
 	Agent     string
 	Model     string
@@ -61,16 +63,43 @@ func Run(ctx context.Context, cfg Config) error {
 		return err
 	}
 
+	cfg.Version = strings.TrimSpace(cfg.Version)
+	if cfg.Version == "" {
+		cfg.Version = "v0.1.0"
+	} else if !strings.HasPrefix(cfg.Version, "v") {
+		cfg.Version = "v" + cfg.Version
+	}
+
+	if cfg.Client.CWD() == "" && cfg.Workspace != "" {
+		cfg.Client = cfg.Client.WithCWD(cfg.Workspace)
+	}
+
 	var sess *api.Session
 	mode := api.ModeDefault
 
 	if sid := strings.TrimSpace(cfg.SessionID); sid != "" {
-		loaded, err := cfg.Client.GetSession(ctx, cfg.Workspace, sid)
+		loaded, err := cfg.Client.GetSession(ctx, sid)
 		if err != nil {
 			return fmt.Errorf("get session %q: %w", sid, err)
 		}
 		sess = loaded
-		if m, mErr := cfg.Client.PermissionMode(ctx, cfg.Workspace, sess.ID); mErr == nil && m != "" {
+
+		title := strings.TrimSpace(cfg.Title)
+		agent := strings.TrimSpace(cfg.Agent)
+		model := strings.TrimSpace(cfg.Model)
+		if title != "" || agent != "" || model != "" {
+			updated, err := cfg.Client.UpdateSession(ctx, sid, api.UpdateSessionRequest{
+				Title: title,
+				Agent: agent,
+				Model: model,
+			})
+			if err != nil {
+				return fmt.Errorf("update session %q: %w", sid, err)
+			}
+			sess = updated
+		}
+
+		if m, mErr := cfg.Client.PermissionMode(ctx, sess.ID); mErr == nil && m != "" {
 			mode = m
 		}
 	}
@@ -81,13 +110,66 @@ func Run(ctx context.Context, cfg Config) error {
 	return runLineLoop(ctx, cfg, sess, mode)
 }
 
-func ensureSession(ctx context.Context, c *client.Client, workspace, title, agent, model string, mode api.PermissionMode) (*api.Session, error) {
+func buildHeader(ctx context.Context, cfg Config, sess *api.Session) Header {
+	agentName := strings.TrimSpace(cfg.Agent)
+	modelID := strings.TrimSpace(cfg.Model)
+
+	if sess != nil {
+		agentName = strings.TrimSpace(sess.Agent)
+		modelID = strings.TrimSpace(sess.Model)
+	}
+
+	var ws *api.Workspace
+	if agentName == "" || modelID == "" {
+		ws, _ = cfg.Client.GetWorkspace(ctx)
+		if ws != nil && agentName == "" {
+			agentName = strings.TrimSpace(ws.DefaultAgent)
+		}
+	}
+
+	var ag *api.Agent
+	if agentName != "" {
+		ag, _ = cfg.Client.GetAgent(ctx, agentName)
+	}
+
+	if modelID == "" {
+		if ag != nil && len(ag.Models) > 0 {
+			modelID = strings.TrimSpace(ag.Models[0])
+		}
+		if modelID == "" && ws != nil {
+			modelID = strings.TrimSpace(ws.DefaultModel)
+		}
+	}
+
+	var mdl *api.Model
+	if modelID != "" {
+		mdl, _ = cfg.Client.GetModel(ctx, modelID)
+	}
+
+	var agEffort, mdlLabel, mdlEffort string
+	if ag != nil {
+		agEffort = strings.TrimSpace(ag.Effort)
+	}
+	if mdl != nil {
+		mdlLabel = cmp.Or(strings.TrimSpace(mdl.Label), strings.TrimSpace(mdl.Name), strings.TrimSpace(mdl.ID))
+		mdlEffort = strings.TrimSpace(mdl.DefaultEffort)
+	}
+
+	return Header{
+		Version:  cfg.Version,
+		Model:    cmp.Or(mdlLabel, modelID),
+		Thinking: cmp.Or(agEffort, mdlEffort, "auto"),
+		Path:     cfg.Workspace,
+	}
+}
+
+func ensureSession(ctx context.Context, c *client.Client, title, agent, model string, mode api.PermissionMode) (*api.Session, error) {
 	resolvedTitle := strings.TrimSpace(title)
 	if resolvedTitle == "" {
 		resolvedTitle = "Terminal Session"
 	}
 
-	sess, err := c.CreateSession(ctx, workspace, api.CreateSessionRequest{
+	sess, err := c.CreateSession(ctx, api.CreateSessionRequest{
 		Title: resolvedTitle,
 		Agent: strings.TrimSpace(agent),
 		Model: strings.TrimSpace(model),
@@ -97,7 +179,7 @@ func ensureSession(ctx context.Context, c *client.Client, workspace, title, agen
 	}
 
 	if mode != "" && mode != api.ModeDefault {
-		if err := c.SetPermissionMode(ctx, workspace, sess.ID, mode); err != nil {
+		if err := c.SetPermissionMode(ctx, sess.ID, mode); err != nil {
 			return nil, fmt.Errorf("set permission mode: %w", err)
 		}
 	}
@@ -120,7 +202,8 @@ func isTTY(r io.Reader) bool {
 }
 
 func runTUI(ctx context.Context, cfg Config, sess *api.Session, mode api.PermissionMode) error {
-	_, _ = fmt.Fprintln(cfg.Out, FormatBanner(sess, cfg.Workspace, mode))
+	hdr := buildHeader(ctx, cfg, sess)
+	_, _ = fmt.Fprintln(cfg.Out, FormatHeader(hdr))
 
 	subCtx, cancelSub := context.WithCancel(ctx)
 	eventCh := make(chan api.Event, 64)
@@ -129,7 +212,7 @@ func runTUI(ctx context.Context, cfg Config, sess *api.Session, mode api.Permiss
 	go func() {
 		defer close(subDone)
 		defer close(eventCh)
-		for ev, err := range cfg.Client.Subscribe(subCtx, cfg.Workspace, "") {
+		for ev, err := range cfg.Client.Subscribe(subCtx, "") {
 			if err != nil {
 				return
 			}
@@ -211,7 +294,8 @@ func runLineLoop(ctx context.Context, cfg Config, sess *api.Session, mode api.Pe
 		<-subDone
 	}()
 
-	_, _ = fmt.Fprintln(r.out, FormatBanner(r.activeSession, cfg.Workspace, mode))
+	hdr := buildHeader(ctx, cfg, sess)
+	_, _ = fmt.Fprintln(r.out, FormatHeader(hdr))
 
 	return r.loop()
 }
@@ -220,7 +304,7 @@ func (r *lineRunner) startEventSubscription(subCtx context.Context) <-chan struc
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		for ev, err := range r.cfg.Client.Subscribe(subCtx, r.cfg.Workspace, "") {
+		for ev, err := range r.cfg.Client.Subscribe(subCtx, "") {
 			if err != nil {
 				return
 			}
@@ -324,7 +408,7 @@ func (r *lineRunner) handleSlashCommand(line string) bool {
 
 func (r *lineRunner) handlePrompt(line string) {
 	if r.activeSession == nil || strings.TrimSpace(r.activeSession.ID) == "" {
-		sess, err := ensureSession(r.ctx, r.cfg.Client, r.cfg.Workspace, r.cfg.Title, r.cfg.Agent, r.cfg.Model, r.mode)
+		sess, err := ensureSession(r.ctx, r.cfg.Client, r.cfg.Title, r.cfg.Agent, r.cfg.Model, r.mode)
 		if err != nil {
 			_, _ = fmt.Fprintf(r.errOut, "error: %v\n", err)
 			return
@@ -334,7 +418,7 @@ func (r *lineRunner) handlePrompt(line string) {
 	}
 
 	r.drainTurnSettled()
-	err := r.cfg.Client.Send(r.ctx, r.cfg.Workspace, r.activeSession.ID, api.SendRequest{
+	err := r.cfg.Client.Send(r.ctx, r.activeSession.ID, api.SendRequest{
 		Content: line,
 		Wait:    true,
 	})
@@ -353,7 +437,7 @@ func (r *lineRunner) handlePrompt(line string) {
 
 func (r *lineRunner) promptPendingPermissions() error {
 	for {
-		perms, err := r.cfg.Client.PendingPermissions(r.ctx, r.cfg.Workspace, r.activeSession.ID)
+		perms, err := r.cfg.Client.PendingPermissions(r.ctx, r.activeSession.ID)
 		if err != nil {
 			return err
 		}
@@ -373,7 +457,7 @@ func (r *lineRunner) promptPendingPermissions() error {
 		decision := ParsePermissionInput(perm, strings.TrimSpace(r.in.Text()))
 
 		r.drainTurnSettled()
-		if err := r.cfg.Client.RespondPermission(r.ctx, r.cfg.Workspace, r.activeSession.ID, decision); err != nil {
+		if err := r.cfg.Client.RespondPermission(r.ctx, r.activeSession.ID, decision); err != nil {
 			return err
 		}
 		if len(perms) == 1 {

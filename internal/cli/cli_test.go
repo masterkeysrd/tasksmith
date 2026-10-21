@@ -244,7 +244,7 @@ func TestREPLPromptAndSlashCommands(t *testing.T) {
 	if _, _, err := execCLI(t, noPromptInput, "repl", "--socket", sockPath, "--workspace", wsDir); err != nil {
 		t.Fatalf("repl no-prompt run failed: %v", err)
 	}
-	initialSessions, err := c.ListSessions(context.Background(), wsDir)
+	initialSessions, err := c.WithCWD(wsDir).ListSessions(context.Background())
 	if err != nil {
 		t.Fatalf("ListSessions: %v", err)
 	}
@@ -281,7 +281,7 @@ func TestREPLPromptAndSlashCommands(t *testing.T) {
 	}
 
 	wantOutSubstrings := []string{
-		"TaskSmith REPL",
+		"TaskSmith",
 		"Hello from the Brain Daemon!",
 		"[user] Hello TaskSmith!",
 		"[assistant] Hello from the Brain Daemon!",
@@ -311,7 +311,7 @@ func TestREPLPromptAndSlashCommands(t *testing.T) {
 	}
 
 	// Verify we can list the 2 sessions via client, switch between them, and resume via --session
-	sessions, err := c.ListSessions(context.Background(), wsDir)
+	sessions, err := c.WithCWD(wsDir).ListSessions(context.Background())
 	if err != nil {
 		t.Fatalf("ListSessions: %v", err)
 	}
@@ -343,6 +343,7 @@ func TestREPLPromptAndSlashCommands(t *testing.T) {
 		"--socket", sockPath,
 		"--workspace", wsDir,
 		"--session", firstSessionID,
+		"--model", "claude-haiku-4-5",
 	)
 	if err != nil {
 		t.Fatalf("root command resume failed: %v\nerr:\n%s", err, resumeErr)
@@ -352,6 +353,15 @@ func TestREPLPromptAndSlashCommands(t *testing.T) {
 	}
 	if !strings.Contains(resumeOut, "Switched to session "+secondSessionID) {
 		t.Errorf("resumed session stdout missing switch confirmation:\n%s", resumeOut)
+	}
+
+	// Verify model was mutated on resume
+	resumedSess, err := c.WithCWD(wsDir).GetSession(context.Background(), firstSessionID)
+	if err != nil {
+		t.Fatalf("GetSession firstSessionID: %v", err)
+	}
+	if resumedSess.Model != "claude-haiku-4-5" {
+		t.Errorf("resumed session model = %q, want 'claude-haiku-4-5'", resumedSess.Model)
 	}
 }
 
@@ -440,7 +450,7 @@ func TestREPLInteractivePermissionChangesAndRevert(t *testing.T) {
 	if err != nil {
 		t.Fatalf("client.New: %v", err)
 	}
-	sessions, err := c.ListSessions(context.Background(), wsDir)
+	sessions, err := c.WithCWD(wsDir).ListSessions(context.Background())
 	if err != nil || len(sessions) != 1 {
 		t.Fatalf("ListSessions = %+v, %v", sessions, err)
 	}

@@ -124,7 +124,7 @@ func startTestUnixDaemon(t *testing.T) (*client.Client, *testDaemonState) {
 		_ = srv.Close()
 	})
 
-	c, err := client.New(sockPath)
+	c, err := client.New(sockPath, client.WithCWD("/workspace/project"))
 	if err != nil {
 		t.Fatalf("client.New: %v", err)
 	}
@@ -132,6 +132,42 @@ func startTestUnixDaemon(t *testing.T) (*client.Client, *testDaemonState) {
 }
 
 func registerTestDaemonRoutes(mux *http.ServeMux, st *testDaemonState) {
+	mux.HandleFunc("GET /v1/workspace", func(w http.ResponseWriter, r *http.Request) {
+		cwd := r.Header.Get(api.HeaderCWD)
+		if cwd == "" {
+			cwd = "/workspace/project"
+		}
+		_ = json.NewEncoder(w).Encode(api.Workspace{
+			Name:         "test-workspace",
+			RootDir:      "/workspace/project",
+			CWD:          cwd,
+			DefaultAgent: "build",
+			DefaultModel: "claude-sonnet-4-6",
+		})
+	})
+	mux.HandleFunc("GET /v1/agents", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode([]api.Agent{{Name: "build", Models: []string{"claude-sonnet-4-6"}, Effort: "high"}})
+	})
+	mux.HandleFunc("GET /v1/agents/{name}", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(api.Agent{
+			Name:   r.PathValue("name"),
+			Models: []string{"claude-sonnet-4-6"},
+			Effort: "high",
+		})
+	})
+	mux.HandleFunc("GET /v1/models", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode([]api.Model{{ID: "claude-sonnet-4-6", Name: "claude-sonnet-4-6", Label: "Claude 3.7 Sonnet", DefaultEffort: "medium"}})
+	})
+	mux.HandleFunc("GET /v1/models/{id...}", func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+		_ = json.NewEncoder(w).Encode(api.Model{
+			ID:            id,
+			Name:          id,
+			Label:         "Claude 3.7 Sonnet",
+			DefaultEffort: "medium",
+		})
+	})
+
 	mux.HandleFunc("POST /v1/sessions", func(w http.ResponseWriter, r *http.Request) {
 		var req api.CreateSessionRequest
 		_ = json.NewDecoder(r.Body).Decode(&req)
@@ -183,6 +219,35 @@ func registerTestDaemonRoutes(mux *http.ServeMux, st *testDaemonState) {
 			_ = json.NewEncoder(w).Encode(api.ErrorResponse{Code: "not_found", Message: "session not found"})
 			return
 		}
+		_ = json.NewEncoder(w).Encode(sess)
+	})
+
+	mux.HandleFunc("PATCH /v1/sessions/{id}", func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+		var req api.UpdateSessionRequest
+		_ = json.NewDecoder(r.Body).Decode(&req)
+
+		st.mu.Lock()
+		sess, ok := st.sessions[id]
+		if !ok {
+			st.mu.Unlock()
+			w.WriteHeader(http.StatusNotFound)
+			_ = json.NewEncoder(w).Encode(api.ErrorResponse{Code: "not_found", Message: "session not found"})
+			return
+		}
+		if req.Title != "" {
+			sess.Title = req.Title
+		}
+		if req.Agent != "" {
+			sess.Agent = req.Agent
+		}
+		if req.Model != "" {
+			sess.Model = req.Model
+		}
+		sess.UpdatedAt = time.Now().UTC()
+		st.sessions[id] = sess
+		st.mu.Unlock()
+
 		_ = json.NewEncoder(w).Encode(sess)
 	})
 
@@ -584,10 +649,26 @@ func TestStylesAndFormatters(t *testing.T) {
 		api.ModeAsk,
 		api.ModeAuto,
 	} {
-		banner := FormatBanner(sess, "/workspace/project", mode)
-		if !strings.Contains(banner, "TaskSmith REPL") || !strings.Contains(banner, "sess-42") {
-			t.Errorf("FormatBanner(%s) = %q", mode, banner)
+		banner := FormatHeader(Header{
+			Version:  "v0.1.0",
+			Model:    "Claude 3.7 Sonnet",
+			Thinking: "high",
+			Path:     "/workspace/project",
+		})
+		lines := strings.Split(banner, "\n")
+		if len(lines) != 3 {
+			t.Fatalf("FormatBanner expected 3 lines, got %d: %q", len(lines), banner)
 		}
+		if !strings.Contains(lines[0], "TaskSmith") || !strings.Contains(lines[0], "v0.1.0") {
+			t.Errorf("FormatBanner line 1 = %q, want TaskSmith and v0.1.0", lines[0])
+		}
+		if !strings.Contains(lines[1], "Claude 3.7 Sonnet with high effort") {
+			t.Errorf("FormatBanner line 2 = %q, want 'Claude 3.7 Sonnet with high effort'", lines[1])
+		}
+		if !strings.Contains(lines[2], "/workspace/project") {
+			t.Errorf("FormatBanner line 3 = %q, want '/workspace/project'", lines[2])
+		}
+
 		for _, state := range []State{StateIdle, StateStreaming, StateApproval} {
 			bar := FormatStatusBar(state, sess, mode)
 			if !strings.Contains(bar, string(mode)) {
@@ -1118,7 +1199,8 @@ func TestRunNonTTYLineLoop(t *testing.T) {
 
 	got := out.String()
 	for _, want := range []string{
-		"TaskSmith REPL",
+		"TaskSmith",
+		"Claude 3.7 Sonnet with",
 		"Echo: Hello from line loop",
 		"Available commands:",
 		"Permission mode set to: accept_edits",
@@ -1129,5 +1211,109 @@ func TestRunNonTTYLineLoop(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Errorf("Run stdout missing %q.\nFull stdout:\n%s", want, got)
 		}
+	}
+}
+
+func TestBuildHeaderAndFormatHeader(t *testing.T) {
+	c, _ := startTestUnixDaemon(t)
+	ctx := context.Background()
+
+	// 1. Without session, empty agent and model -> fallbacks to workspace default
+	cfg1 := Config{
+		Client:    c,
+		Workspace: "/workspace/project",
+	}
+	h1 := buildHeader(ctx, cfg1, nil)
+	if h1.Model != "Claude 3.7 Sonnet" {
+		t.Errorf("h1.Model = %q, want 'Claude 3.7 Sonnet'", h1.Model)
+	}
+	if h1.Thinking != "high" { // ag.Effort = "high" from "build"
+		t.Errorf("h1.Thinking = %q, want 'high'", h1.Thinking)
+	}
+
+	// 2. Explicit agent and model overrides
+	cfg2 := Config{
+		Client:    c,
+		Workspace: "/workspace/project",
+		Agent:     "build",
+		Model:     "claude-sonnet-4-6",
+	}
+	h2 := buildHeader(ctx, cfg2, nil)
+	if h2.Model != "Claude 3.7 Sonnet" {
+		t.Errorf("h2.Model = %q, want 'Claude 3.7 Sonnet'", h2.Model)
+	}
+	if h2.Thinking != "high" {
+		t.Errorf("h2.Thinking = %q, want 'high'", h2.Thinking)
+	}
+
+	// 3. With existing session
+	sess := &api.Session{
+		ID:    "s1",
+		Agent: "build",
+		Model: "claude-sonnet-4-6",
+	}
+	h3 := buildHeader(ctx, cfg1, sess)
+	if h3.Model != "Claude 3.7 Sonnet" {
+		t.Errorf("h3.Model = %q, want 'Claude 3.7 Sonnet'", h3.Model)
+	}
+	if h3.Thinking != "high" {
+		t.Errorf("h3.Thinking = %q, want 'high'", h3.Thinking)
+	}
+
+	// 4. Header format rendering
+	b1 := FormatHeader(Header{
+		Version:  "0.1.0",
+		Model:    "Claude 3.7 Sonnet",
+		Thinking: "high",
+		Path:     "/workspace/project",
+	})
+	if !strings.Contains(b1, "TaskSmith") || !strings.Contains(b1, "v0.1.0") {
+		t.Errorf("expected leading 'v' to be prepended, got:\n%s", b1)
+	}
+	if !strings.Contains(b1, "Claude 3.7 Sonnet with high effort") {
+		t.Errorf("expected line 2 model and effort, got:\n%s", b1)
+	}
+
+	// 5. Default version when empty
+	b2 := FormatHeader(Header{Path: "/workspace/project"})
+	if !strings.Contains(b2, "TaskSmith") || !strings.Contains(b2, "v0.1.0") {
+		t.Errorf("expected default v0.1.0, got:\n%s", b2)
+	}
+	if !strings.Contains(b2, "default with auto effort") {
+		t.Errorf("expected 'default with auto effort', got:\n%s", b2)
+	}
+}
+
+func TestRunResumeSessionWithMutation(t *testing.T) {
+	c, st := startTestUnixDaemon(t)
+	ctx := context.Background()
+
+	// Initial session in daemon is s1 (Title: "Initial", Agent: "build", Model: "claude-sonnet-4-6")
+	var out, errOut bytes.Buffer
+	cfg := Config{
+		Client:    c,
+		Workspace: "/workspace/project",
+		SessionID: "s1",
+		Title:     "Updated Resumed Title",
+		Model:     "claude-opus-4-6",
+		In:        strings.NewReader("/exit\n"),
+		Out:       &out,
+		ErrOut:    &errOut,
+	}
+
+	if err := Run(ctx, cfg); err != nil {
+		t.Fatalf("Run failed: %v", err)
+	}
+
+	// Verify session in daemon was mutated
+	st.mu.Lock()
+	s1 := st.sessions["s1"]
+	st.mu.Unlock()
+
+	if s1.Title != "Updated Resumed Title" {
+		t.Errorf("session Title = %q, want 'Updated Resumed Title'", s1.Title)
+	}
+	if s1.Model != "claude-opus-4-6" {
+		t.Errorf("session Model = %q, want 'claude-opus-4-6'", s1.Model)
 	}
 }

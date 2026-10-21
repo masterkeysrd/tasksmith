@@ -1,8 +1,11 @@
 package repl
 
 import (
+	"cmp"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"charm.land/lipgloss/v2"
@@ -145,22 +148,53 @@ var (
 				Foreground(lipgloss.Color("#F87171"))
 )
 
-// FormatBanner renders the startup header banner for a REPL session.
-func FormatBanner(sess *api.Session, workspace string, mode api.PermissionMode) string {
-	var sid, agent, model string
-	if sess != nil {
-		sid = sess.ID
-		agent = sess.Agent
-		model = sess.Model
+func shortenHomePath(path string) string {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return path
 	}
-	if mode == "" {
-		mode = api.ModeDefault
+	home = filepath.Clean(home)
+	cleaned := filepath.Clean(path)
+	if cleaned == home {
+		return "~"
 	}
+	if strings.HasPrefix(cleaned, home+string(filepath.Separator)) {
+		return "~" + cleaned[len(home):]
+	}
+	return path
+}
 
-	header := fmt.Sprintf("TaskSmith REPL (session=%s agent=%s model=%s)", sid, agent, model)
-	meta := fmt.Sprintf("workspace=%s mode=%s • /help for commands • shift+tab to cycle mode", workspace, mode)
+// Header holds the view-model fields for the 3-line REPL startup header.
+type Header struct {
+	Version  string
+	Model    string
+	Thinking string
+	Path     string
+}
 
-	return bannerTitleStyle.Render(header) + "\n" + bannerMetaStyle.Render(meta)
+func normalizeVersion(version string) string {
+	version = strings.TrimSpace(version)
+	if version == "" {
+		return "v0.1.0"
+	}
+	if !strings.HasPrefix(version, "v") {
+		return "v" + version
+	}
+	return version
+}
+
+// FormatHeader renders the 3-line startup header banner for a REPL session.
+func FormatHeader(h Header) string {
+	version := normalizeVersion(h.Version)
+	model := cmp.Or(strings.TrimSpace(h.Model), "default")
+	thinking := cmp.Or(strings.TrimSpace(h.Thinking), "auto")
+	path := shortenHomePath(h.Path)
+
+	line1 := bannerTitleStyle.Render("TaskSmith") + " " + bannerMetaStyle.Render(version)
+	line2 := bannerMetaStyle.Render(fmt.Sprintf("%s with %s effort", model, thinking))
+	line3 := statusBarStyle.Render(path)
+
+	return line1 + "\n" + line2 + "\n" + line3
 }
 
 // FormatStatusBar renders the contextual status footer for the active REPL state.

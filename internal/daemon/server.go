@@ -302,6 +302,13 @@ func cleanWorkspacePath(dir string) (string, error) {
 	return filepath.Clean(absDir), nil
 }
 
+func requestWorkspace(r *http.Request) string {
+	if cwd := strings.TrimSpace(r.Header.Get(api.HeaderCWD)); cwd != "" {
+		return cwd
+	}
+	return strings.TrimSpace(r.URL.Query().Get("workspace"))
+}
+
 func (s *Server) resolveWorkspaceRoot(ctx context.Context, rawWorkspace string) (string, error) {
 	cleanDir, err := cleanWorkspacePath(rawWorkspace)
 	if err != nil {
@@ -324,7 +331,6 @@ func (s *Server) resolveWorkspaceRoot(ctx context.Context, rawWorkspace string) 
 	s.mu.Lock()
 	if !s.closed {
 		s.dirToRoot[cleanDir] = rootDir
-		s.dirToRoot[rootDir] = rootDir
 	}
 	s.mu.Unlock()
 
@@ -341,12 +347,6 @@ func (s *Server) getRuntime(ctx context.Context, rawWorkspace string) (*workspac
 	if s.closed {
 		s.mu.Unlock()
 		return nil, errors.New("daemon: server is closed")
-	}
-	if rootDir, ok := s.dirToRoot[cleanDir]; ok {
-		if rt, exists := s.runtimes[rootDir]; exists {
-			s.mu.Unlock()
-			return rt, nil
-		}
 	}
 	if rt, exists := s.runtimes[cleanDir]; exists {
 		s.mu.Unlock()
@@ -366,8 +366,7 @@ func (s *Server) getRuntime(ctx context.Context, rawWorkspace string) (*workspac
 		return nil, errors.New("daemon: server is closed")
 	}
 	s.dirToRoot[cleanDir] = rootDir
-	s.dirToRoot[rootDir] = rootDir
-	if existing, ok := s.runtimes[rootDir]; ok {
+	if existing, ok := s.runtimes[cleanDir]; ok {
 		s.mu.Unlock()
 		return existing, nil
 	}
@@ -384,12 +383,12 @@ func (s *Server) getRuntime(ctx context.Context, rawWorkspace string) (*workspac
 		_ = rt.close()
 		return nil, errors.New("daemon: server is closed")
 	}
-	if existing, ok := s.runtimes[rootDir]; ok {
+	if existing, ok := s.runtimes[cleanDir]; ok {
 		s.mu.Unlock()
 		_ = rt.close()
 		return existing, nil
 	}
-	s.runtimes[rootDir] = rt
+	s.runtimes[cleanDir] = rt
 	s.mu.Unlock()
 
 	return rt, nil
@@ -397,9 +396,14 @@ func (s *Server) getRuntime(ctx context.Context, rawWorkspace string) (*workspac
 
 func (s *Server) openWorkspaces() []string {
 	s.mu.Lock()
+	seen := make(map[string]struct{})
 	dirs := make([]string, 0, len(s.runtimes))
-	for dir := range s.runtimes {
-		dirs = append(dirs, dir)
+	for _, rt := range s.runtimes {
+		root := rt.workspace.RootDir()
+		if _, ok := seen[root]; !ok {
+			seen[root] = struct{}{}
+			dirs = append(dirs, root)
+		}
 	}
 	s.mu.Unlock()
 	sort.Strings(dirs)
@@ -412,9 +416,16 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("POST /v1/shutdown", s.handleShutdown)
 	mux.HandleFunc("GET /v1/events", s.handleEvents)
 
+	mux.HandleFunc("GET /v1/workspace", s.handleGetWorkspace)
+	mux.HandleFunc("GET /v1/agents", s.handleListAgents)
+	mux.HandleFunc("GET /v1/agents/{name}", s.handleGetAgent)
+	mux.HandleFunc("GET /v1/models", s.handleListModels)
+	mux.HandleFunc("GET /v1/models/{id...}", s.handleGetModel)
+
 	mux.HandleFunc("POST /v1/sessions", s.handleCreateSession)
 	mux.HandleFunc("GET /v1/sessions", s.handleListSessions)
 	mux.HandleFunc("GET /v1/sessions/{id}", s.handleGetSession)
+	mux.HandleFunc("PATCH /v1/sessions/{id}", s.handleUpdateSession)
 	mux.HandleFunc("DELETE /v1/sessions/{id}", s.handleDeleteSession)
 
 	mux.HandleFunc("GET /v1/sessions/{id}/messages", s.handleHistory)
@@ -456,7 +467,7 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var wsFilter string
-	if rawWS := strings.TrimSpace(r.URL.Query().Get("workspace")); rawWS != "" {
+	if rawWS := requestWorkspace(r); rawWS != "" {
 		rootDir, err := s.resolveWorkspaceRoot(r.Context(), rawWS)
 		if err != nil {
 			writeError(w, err)
@@ -503,8 +514,102 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (s *Server) handleGetWorkspace(w http.ResponseWriter, r *http.Request) {
+	wsPath := requestWorkspace(r)
+	rt, err := s.getRuntime(r.Context(), wsPath)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+
+	var defModel string
+	if models := rt.workspace.ResolveModels(workspace.RoleCompletion); len(models) > 0 {
+		defModel = models[0]
+	}
+
+	cleanDir, _ := cleanWorkspacePath(wsPath)
+
+	out := api.Workspace{
+		Name:         rt.workspace.Name(),
+		RootDir:      rt.workspace.RootDir(),
+		CWD:          cleanDir,
+		DefaultAgent: rt.workspace.DefaultAgentName(),
+		DefaultModel: defModel,
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *Server) handleListAgents(w http.ResponseWriter, r *http.Request) {
+	rt, err := s.getRuntime(r.Context(), requestWorkspace(r))
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+
+	agents := rt.workspace.Agents()
+	out := make([]api.Agent, len(agents))
+	for i, ag := range agents {
+		out[i] = toAPIAgent(ag)
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *Server) handleGetAgent(w http.ResponseWriter, r *http.Request) {
+	rt, err := s.getRuntime(r.Context(), requestWorkspace(r))
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+
+	name := strings.TrimSpace(r.PathValue("name"))
+	ag, ok := rt.workspace.GetAgent(name)
+	if !ok {
+		writeError(w, &api.APIError{
+			StatusCode: http.StatusNotFound,
+			Code:       "not_found",
+			Message:    fmt.Sprintf("agent %q not found", name),
+		})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, toAPIAgent(*ag))
+}
+
+func (s *Server) handleListModels(w http.ResponseWriter, r *http.Request) {
+	rt, err := s.getRuntime(r.Context(), requestWorkspace(r))
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+
+	providers := rt.workspace.Providers()
+	var out []api.Model
+	for _, p := range providers {
+		for _, m := range p.Models {
+			out = append(out, toAPIModel(p.Name, m))
+		}
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *Server) handleGetModel(w http.ResponseWriter, r *http.Request) {
+	rt, err := s.getRuntime(r.Context(), requestWorkspace(r))
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+
+	rawID := strings.TrimSpace(r.PathValue("id"))
+	if rawID == "" {
+		writeBadRequest(w, errors.New("model ID must not be empty"))
+		return
+	}
+
+	writeJSON(w, http.StatusOK, resolveAPIModel(rt.workspace, rawID))
+}
+
 func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
-	rt, err := s.getRuntime(r.Context(), r.URL.Query().Get("workspace"))
+	rt, err := s.getRuntime(r.Context(), requestWorkspace(r))
 	if err != nil {
 		writeError(w, err)
 		return
@@ -530,7 +635,7 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleListSessions(w http.ResponseWriter, r *http.Request) {
-	rt, err := s.getRuntime(r.Context(), r.URL.Query().Get("workspace"))
+	rt, err := s.getRuntime(r.Context(), requestWorkspace(r))
 	if err != nil {
 		writeError(w, err)
 		return
@@ -550,7 +655,7 @@ func (s *Server) handleListSessions(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleGetSession(w http.ResponseWriter, r *http.Request) {
-	rt, err := s.getRuntime(r.Context(), r.URL.Query().Get("workspace"))
+	rt, err := s.getRuntime(r.Context(), requestWorkspace(r))
 	if err != nil {
 		writeError(w, err)
 		return
@@ -566,8 +671,35 @@ func (s *Server) handleGetSession(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, toAPISession(sess, rt.sessionStatus(r.Context(), sess.ID)))
 }
 
+func (s *Server) handleUpdateSession(w http.ResponseWriter, r *http.Request) {
+	rt, err := s.getRuntime(r.Context(), requestWorkspace(r))
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+
+	id := r.PathValue("id")
+	var req api.UpdateSessionRequest
+	if err := decodeOptionalJSON(r.Body, &req); err != nil {
+		writeBadRequest(w, err)
+		return
+	}
+
+	sess, err := rt.manager.Update(r.Context(), id, session.UpdateParams{
+		Title: req.Title,
+		Agent: req.Agent,
+		Model: req.Model,
+	})
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, toAPISession(sess, rt.sessionStatus(r.Context(), sess.ID)))
+}
+
 func (s *Server) handleDeleteSession(w http.ResponseWriter, r *http.Request) {
-	rt, err := s.getRuntime(r.Context(), r.URL.Query().Get("workspace"))
+	rt, err := s.getRuntime(r.Context(), requestWorkspace(r))
 	if err != nil {
 		writeError(w, err)
 		return
@@ -584,7 +716,7 @@ func (s *Server) handleDeleteSession(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
-	rt, err := s.getRuntime(r.Context(), r.URL.Query().Get("workspace"))
+	rt, err := s.getRuntime(r.Context(), requestWorkspace(r))
 	if err != nil {
 		writeError(w, err)
 		return
@@ -607,7 +739,7 @@ func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
-	rt, err := s.getRuntime(r.Context(), r.URL.Query().Get("workspace"))
+	rt, err := s.getRuntime(r.Context(), requestWorkspace(r))
 	if err != nil {
 		writeError(w, err)
 		return
@@ -639,7 +771,7 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleCancel(w http.ResponseWriter, r *http.Request) {
-	rt, err := s.getRuntime(r.Context(), r.URL.Query().Get("workspace"))
+	rt, err := s.getRuntime(r.Context(), requestWorkspace(r))
 	if err != nil {
 		writeError(w, err)
 		return
@@ -655,7 +787,7 @@ func (s *Server) handleCancel(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handlePendingPermissions(w http.ResponseWriter, r *http.Request) {
-	rt, err := s.getRuntime(r.Context(), r.URL.Query().Get("workspace"))
+	rt, err := s.getRuntime(r.Context(), requestWorkspace(r))
 	if err != nil {
 		writeError(w, err)
 		return
@@ -676,7 +808,7 @@ func (s *Server) handlePendingPermissions(w http.ResponseWriter, r *http.Request
 }
 
 func (s *Server) handleRespondPermission(w http.ResponseWriter, r *http.Request) {
-	rt, err := s.getRuntime(r.Context(), r.URL.Query().Get("workspace"))
+	rt, err := s.getRuntime(r.Context(), requestWorkspace(r))
 	if err != nil {
 		writeError(w, err)
 		return
@@ -698,7 +830,7 @@ func (s *Server) handleRespondPermission(w http.ResponseWriter, r *http.Request)
 }
 
 func (s *Server) handleGetMode(w http.ResponseWriter, r *http.Request) {
-	rt, err := s.getRuntime(r.Context(), r.URL.Query().Get("workspace"))
+	rt, err := s.getRuntime(r.Context(), requestWorkspace(r))
 	if err != nil {
 		writeError(w, err)
 		return
@@ -715,7 +847,7 @@ func (s *Server) handleGetMode(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleSetMode(w http.ResponseWriter, r *http.Request) {
-	rt, err := s.getRuntime(r.Context(), r.URL.Query().Get("workspace"))
+	rt, err := s.getRuntime(r.Context(), requestWorkspace(r))
 	if err != nil {
 		writeError(w, err)
 		return
@@ -737,7 +869,7 @@ func (s *Server) handleSetMode(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleChanges(w http.ResponseWriter, r *http.Request) {
-	rt, err := s.getRuntime(r.Context(), r.URL.Query().Get("workspace"))
+	rt, err := s.getRuntime(r.Context(), requestWorkspace(r))
 	if err != nil {
 		writeError(w, err)
 		return
@@ -764,7 +896,7 @@ func (s *Server) handleChanges(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleDiff(w http.ResponseWriter, r *http.Request) {
-	rt, err := s.getRuntime(r.Context(), r.URL.Query().Get("workspace"))
+	rt, err := s.getRuntime(r.Context(), requestWorkspace(r))
 	if err != nil {
 		writeError(w, err)
 		return
@@ -798,7 +930,7 @@ func (s *Server) handleDiff(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleRevert(w http.ResponseWriter, r *http.Request) {
-	rt, err := s.getRuntime(r.Context(), r.URL.Query().Get("workspace"))
+	rt, err := s.getRuntime(r.Context(), requestWorkspace(r))
 	if err != nil {
 		writeError(w, err)
 		return
@@ -875,6 +1007,18 @@ func writeBadRequest(w http.ResponseWriter, err error) {
 }
 
 func writeError(w http.ResponseWriter, err error) {
+	var apiErr *api.APIError
+	if errors.As(err, &apiErr) {
+		code := apiErr.Code
+		if code == "" {
+			code = "error"
+		}
+		writeJSON(w, apiErr.StatusCode, api.ErrorResponse{
+			Code:    code,
+			Message: apiErr.Message,
+		})
+		return
+	}
 	status, code := classifyError(err)
 	writeJSON(w, status, api.ErrorResponse{
 		Code:    code,

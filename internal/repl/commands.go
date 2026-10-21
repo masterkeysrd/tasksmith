@@ -274,7 +274,7 @@ func handleSessions(ctx context.Context, env *CommandEnv, _ []string) (CommandRe
 		return CommandResult{}, err
 	}
 
-	sessions, err := env.Client.ListSessions(ctx, env.Workspace)
+	sessions, err := env.Client.ListSessions(ctx)
 	if err != nil {
 		return CommandResult{}, fmt.Errorf("error listing sessions: %w", err)
 	}
@@ -303,7 +303,7 @@ func handleSwitch(ctx context.Context, env *CommandEnv, args []string) (CommandR
 	}
 
 	targetID := strings.TrimSpace(args[0])
-	s, err := env.Client.GetSession(ctx, env.Workspace, targetID)
+	s, err := env.Client.GetSession(ctx, targetID)
 	if err != nil {
 		return CommandResult{}, fmt.Errorf("error switching session: %w", err)
 	}
@@ -322,7 +322,7 @@ func handleHistory(ctx context.Context, env *CommandEnv, _ []string) (CommandRes
 		return CommandResult{}, err
 	}
 
-	history, err := env.Client.History(ctx, env.Workspace, env.Session.ID)
+	history, err := env.Client.History(ctx, env.Session.ID)
 	if err != nil {
 		return CommandResult{}, fmt.Errorf("error loading history: %w", err)
 	}
@@ -354,7 +354,7 @@ func handleMode(ctx context.Context, env *CommandEnv, args []string) (CommandRes
 				ModeChange: mode,
 			}, nil
 		}
-		mode, err := env.Client.PermissionMode(ctx, env.Workspace, env.Session.ID)
+		mode, err := env.Client.PermissionMode(ctx, env.Session.ID)
 		if err != nil {
 			return CommandResult{}, fmt.Errorf("error reading permission mode: %w", err)
 		}
@@ -375,7 +375,7 @@ func handleMode(ctx context.Context, env *CommandEnv, args []string) (CommandRes
 		}, nil
 	}
 
-	if err := env.Client.SetPermissionMode(ctx, env.Workspace, env.Session.ID, nextMode); err != nil {
+	if err := env.Client.SetPermissionMode(ctx, env.Session.ID, nextMode); err != nil {
 		return CommandResult{}, fmt.Errorf("error setting permission mode: %w (valid: default, accept_edits, plan, ask, auto)", err)
 	}
 	return CommandResult{
@@ -401,7 +401,7 @@ func handleChanges(ctx context.Context, env *CommandEnv, _ []string) (CommandRes
 		return CommandResult{}, err
 	}
 
-	changes, err := env.Client.Changes(ctx, env.Workspace, env.Session.ID)
+	changes, err := env.Client.Changes(ctx, env.Session.ID)
 	if err != nil {
 		return CommandResult{}, fmt.Errorf("error listing file changes: %w", err)
 	}
@@ -424,7 +424,7 @@ func handleDiff(ctx context.Context, env *CommandEnv, args []string) (CommandRes
 		return CommandResult{}, errors.New("usage: /diff <path> <entry_id>")
 	}
 
-	diffText, err := env.Client.DiffChange(ctx, env.Workspace, env.Session.ID, strings.TrimSpace(args[0]), strings.TrimSpace(args[1]))
+	diffText, err := env.Client.DiffChange(ctx, env.Session.ID, strings.TrimSpace(args[0]), strings.TrimSpace(args[1]))
 	if err != nil {
 		return CommandResult{}, fmt.Errorf("error fetching diff: %w", err)
 	}
@@ -443,7 +443,7 @@ func handleRevert(ctx context.Context, env *CommandEnv, args []string) (CommandR
 	if len(args) > 0 {
 		path = strings.TrimSpace(args[0])
 	}
-	if err := env.Client.Revert(ctx, env.Workspace, env.Session.ID, api.RevertRequest{
+	if err := env.Client.Revert(ctx, env.Session.ID, api.RevertRequest{
 		Path:  path,
 		Force: true,
 	}); err != nil {

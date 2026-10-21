@@ -31,6 +31,68 @@ func TestAPIErrorFormatting(t *testing.T) {
 }
 
 func TestWireTypesJSONRoundTrip(t *testing.T) {
+	if HeaderCWD != "X-TaskSmith-CWD" {
+		t.Fatalf("HeaderCWD = %q, want %q", HeaderCWD, "X-TaskSmith-CWD")
+	}
+
+	ws := Workspace{
+		Name:         "my-ws",
+		RootDir:      "/path/to/root",
+		CWD:          "/path/to/root/pkg",
+		DefaultAgent: "developer",
+		DefaultModel: "ollama/qwen3.8",
+	}
+	wsRaw, err := json.Marshal(ws)
+	if err != nil {
+		t.Fatalf("Marshal Workspace: %v", err)
+	}
+	var wsDecoded Workspace
+	if err := json.Unmarshal(wsRaw, &wsDecoded); err != nil {
+		t.Fatalf("Unmarshal Workspace: %v", err)
+	}
+	if wsDecoded != ws {
+		t.Fatalf("Workspace roundtrip mismatch: got %+v, want %+v", wsDecoded, ws)
+	}
+
+	ag := Agent{
+		Name:        "developer",
+		DisplayName: "Dev Agent",
+		Description: "General coding agent",
+		Models:      []string{"ollama/qwen3.8"},
+		Effort:      "high",
+	}
+	agRaw, err := json.Marshal(ag)
+	if err != nil {
+		t.Fatalf("Marshal Agent: %v", err)
+	}
+	var agDecoded Agent
+	if err := json.Unmarshal(agRaw, &agDecoded); err != nil {
+		t.Fatalf("Unmarshal Agent: %v", err)
+	}
+	if agDecoded.Name != ag.Name || agDecoded.Effort != "high" || len(agDecoded.Models) != 1 {
+		t.Fatalf("Agent roundtrip mismatch: got %+v, want %+v", agDecoded, ag)
+	}
+
+	mdl := Model{
+		ID:             "ollama/qwen3.8",
+		Provider:       "ollama",
+		Name:           "qwen3.8",
+		Label:          "Qwen 3.8",
+		DefaultEffort:  "medium",
+		AllowedEfforts: []string{"low", "medium", "high"},
+	}
+	mdlRaw, err := json.Marshal(mdl)
+	if err != nil {
+		t.Fatalf("Marshal Model: %v", err)
+	}
+	var mdlDecoded Model
+	if err := json.Unmarshal(mdlRaw, &mdlDecoded); err != nil {
+		t.Fatalf("Unmarshal Model: %v", err)
+	}
+	if mdlDecoded.ID != mdl.ID || mdlDecoded.Label != "Qwen 3.8" || len(mdlDecoded.AllowedEfforts) != 3 {
+		t.Fatalf("Model roundtrip mismatch: got %+v, want %+v", mdlDecoded, mdl)
+	}
+
 	now := time.Now().UTC().Truncate(time.Millisecond)
 	ev := Event{
 		Type:      EventMessageAdded,
@@ -59,5 +121,22 @@ func TestWireTypesJSONRoundTrip(t *testing.T) {
 	}
 	if decoded.Type != EventMessageAdded || decoded.Message == nil || len(decoded.Message.Content) != 3 {
 		t.Fatalf("unexpected decoded Event: %+v", decoded)
+	}
+
+	upReq := UpdateSessionRequest{
+		Title: "New Title",
+		Agent: "coder",
+		Model: "claude-sonnet-4-6",
+	}
+	upRaw, err := json.Marshal(upReq)
+	if err != nil {
+		t.Fatalf("Marshal UpdateSessionRequest: %v", err)
+	}
+	var upDecoded UpdateSessionRequest
+	if err := json.Unmarshal(upRaw, &upDecoded); err != nil {
+		t.Fatalf("Unmarshal UpdateSessionRequest: %v", err)
+	}
+	if upDecoded != upReq {
+		t.Fatalf("UpdateSessionRequest mismatch: got %+v, want %+v", upDecoded, upReq)
 	}
 }

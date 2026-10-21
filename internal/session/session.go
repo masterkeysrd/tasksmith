@@ -106,25 +106,28 @@ func New(cfg Config) (*Manager, error) {
 	}, nil
 }
 
-// Create creates and persists a new [Session] with a fresh UUIDv7 identifier,
-// resolving default `Agent` and `Model` values from the workspace when not
-// explicitly provided in params.
-func (m *Manager) Create(ctx context.Context, params CreateParams) (*Session, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
+// resolveModelName resolves a bare model name (e.g. "sonnet") against the workspace providers.
+func (m *Manager) resolveModelName(model string) string {
+	model = strings.TrimSpace(model)
+	if model != "" && !strings.Contains(model, "/") {
+		if models := m.workspace.ResolveModels(workspace.RoleCompletion, model); len(models) > 0 {
+			return models[0]
+		}
 	}
+	return model
+}
 
-	agent := strings.TrimSpace(params.Agent)
+// resolveAgentAndModel determines effective agent and model names using workspace defaults.
+func (m *Manager) resolveAgentAndModel(agent, model string) (string, string) {
+	agent = strings.TrimSpace(agent)
 	if agent == "" {
 		agent = m.workspace.DefaultAgentName()
 	}
 
-	model := strings.TrimSpace(params.Model)
-	if model != "" && !strings.Contains(model, "/") {
-		if models := m.workspace.ResolveModels(workspace.RoleCompletion, model); len(models) > 0 {
-			model = models[0]
-		}
-	} else if model == "" {
+	model = strings.TrimSpace(model)
+	if model != "" {
+		model = m.resolveModelName(model)
+	} else {
 		var explicit []string
 		if ag, ok := m.workspace.GetAgent(agent); ok && len(ag.Models) > 0 {
 			explicit = ag.Models
@@ -135,6 +138,18 @@ func (m *Manager) Create(ctx context.Context, params CreateParams) (*Session, er
 			model = explicit[0]
 		}
 	}
+	return agent, model
+}
+
+// Create creates and persists a new [Session] with a fresh UUIDv7 identifier,
+// resolving default `Agent` and `Model` values from the workspace when not
+// explicitly provided in params.
+func (m *Manager) Create(ctx context.Context, params CreateParams) (*Session, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	agent, model := m.resolveAgentAndModel(params.Agent, params.Model)
 
 	now := time.Now().UTC()
 	id, err := uuid.NewV7()
@@ -151,6 +166,44 @@ func (m *Manager) Create(ctx context.Context, params CreateParams) (*Session, er
 	}
 
 	if err := m.store.insertSession(ctx, sess); err != nil {
+		return nil, err
+	}
+
+	cp := *sess
+	return &cp, nil
+}
+
+// Update modifies fields on an existing [Session], resolving the model against the
+// workspace when updated. It returns [ErrEmptySessionID] if id is blank and
+// [ErrSessionNotFound] if no matching session exists.
+func (m *Manager) Update(ctx context.Context, id string, params UpdateParams) (*Session, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return nil, ErrEmptySessionID
+	}
+
+	sess, err := m.store.getSession(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+
+	if title := strings.TrimSpace(params.Title); title != "" {
+		sess.Title = title
+	}
+	if agent := strings.TrimSpace(params.Agent); agent != "" {
+		sess.Agent = agent
+	}
+	if model := strings.TrimSpace(params.Model); model != "" {
+		sess.Model = m.resolveModelName(model)
+	} else if strings.TrimSpace(params.Agent) != "" && sess.Model == "" {
+		_, sess.Model = m.resolveAgentAndModel(sess.Agent, "")
+	}
+
+	sess.UpdatedAt = time.Now().UTC()
+	if err := m.store.updateSession(ctx, sess); err != nil {
 		return nil, err
 	}
 

@@ -5,6 +5,37 @@ import (
 	"time"
 )
 
+// HeaderCWD is the HTTP request header carrying the client's working directory.
+const HeaderCWD = "X-TaskSmith-CWD"
+
+// Workspace describes the resolved configuration metadata for a workspace directory.
+type Workspace struct {
+	Name         string `json:"name"`
+	RootDir      string `json:"root_dir"`
+	CWD          string `json:"cwd,omitempty"`
+	DefaultAgent string `json:"default_agent"`
+	DefaultModel string `json:"default_model,omitempty"`
+}
+
+// Agent describes an effective agent configuration in a workspace.
+type Agent struct {
+	Name        string   `json:"name"`
+	DisplayName string   `json:"display_name,omitempty"`
+	Description string   `json:"description,omitempty"`
+	Models      []string `json:"models,omitempty"`
+	Effort      string   `json:"effort,omitempty"`
+}
+
+// Model describes a resolved model and its capabilities from a workspace provider.
+type Model struct {
+	ID             string   `json:"id"`
+	Provider       string   `json:"provider,omitempty"`
+	Name           string   `json:"name"`
+	Label          string   `json:"label,omitempty"`
+	DefaultEffort  string   `json:"default_effort,omitempty"`
+	AllowedEfforts []string `json:"allowed_efforts,omitempty"`
+}
+
 // HealthResponse reports the daemon's process identity, startup timestamp,
 // and currently initialized workspace directories.
 type HealthResponse struct {
@@ -59,6 +90,13 @@ type Session struct {
 
 // CreateSessionRequest holds optional parameters for creating a new session.
 type CreateSessionRequest struct {
+	Title string `json:"title,omitempty"`
+	Agent string `json:"agent,omitempty"`
+	Model string `json:"model,omitempty"`
+}
+
+// UpdateSessionRequest holds optional fields to update on an existing session.
+type UpdateSessionRequest struct {
 	Title string `json:"title,omitempty"`
 	Agent string `json:"agent,omitempty"`
 	Model string `json:"model,omitempty"`

@@ -42,6 +42,13 @@ type CreateParams struct {
 	Model string `json:"model,omitempty"`
 }
 
+// UpdateParams holds optional parameters for updating an existing [Session].
+type UpdateParams struct {
+	Title string `json:"title,omitempty"`
+	Agent string `json:"agent,omitempty"`
+	Model string `json:"model,omitempty"`
+}
+
 // EventType identifies the kind of real-time notification published by [Manager].
 type EventType string
 

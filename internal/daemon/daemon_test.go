@@ -3,6 +3,8 @@ package daemon
 import (
 	"context"
 	"errors"
+	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -132,6 +134,10 @@ func shortTempDir(t *testing.T) string {
 	if err != nil {
 		t.Fatalf("MkdirTemp: %v", err)
 	}
+	if eval, err := filepath.EvalSymlinks(dir); err == nil {
+		dir = eval
+	}
+	dir = filepath.Clean(dir)
 	t.Cleanup(func() {
 		_ = os.RemoveAll(dir)
 	})
@@ -168,12 +174,12 @@ func setupDaemonTest(t *testing.T, prov *fakeProvider) (*Server, *client.Client,
 		_ = srv.Close()
 	})
 
-	cli, err := client.New(sockPath)
+	wsDir := shortTempDir(t)
+	cli, err := client.New(sockPath, client.WithCWD(wsDir))
 	if err != nil {
 		t.Fatalf("client.New: %v", err)
 	}
 
-	wsDir := shortTempDir(t)
 	return srv, cli, wsDir
 }
 
@@ -319,7 +325,7 @@ func TestHealthAndSessionCRUD(t *testing.T) {
 	}
 
 	// 2. CreateSession
-	s1, err := cli.CreateSession(ctx, wsDir, api.CreateSessionRequest{
+	s1, err := cli.CreateSession(ctx, api.CreateSessionRequest{
 		Title: "Session One",
 	})
 	if err != nil {
@@ -334,13 +340,13 @@ func TestHealthAndSessionCRUD(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Health 2: %v", err)
 	}
-	if len(health2.Workspaces) != 1 {
-		t.Fatalf("expected 1 open workspace, got %v", health2.Workspaces)
+	if len(health2.Workspaces) != 1 || health2.Workspaces[0] != wsDir {
+		t.Fatalf("expected 1 open workspace (%s), got %v", wsDir, health2.Workspaces)
 	}
 
 	time.Sleep(2 * time.Millisecond)
 
-	s2, err := cli.CreateSession(ctx, wsDir, api.CreateSessionRequest{
+	s2, err := cli.CreateSession(ctx, api.CreateSessionRequest{
 		Title: "Session Two",
 		Model: "anthropic/claude-4-sonnet",
 	})
@@ -349,7 +355,7 @@ func TestHealthAndSessionCRUD(t *testing.T) {
 	}
 
 	// 3. GetSession
-	got1, err := cli.GetSession(ctx, wsDir, s1.ID)
+	got1, err := cli.GetSession(ctx, s1.ID)
 	if err != nil {
 		t.Fatalf("GetSession s1: %v", err)
 	}
@@ -357,22 +363,34 @@ func TestHealthAndSessionCRUD(t *testing.T) {
 		t.Errorf("GetSession s1 = %+v", got1)
 	}
 
-	// 4. ListSessions (ordered by updated_at DESC -> [s2, s1])
-	list, err := cli.ListSessions(ctx, wsDir)
+	// 3b. UpdateSession
+	up1, err := cli.UpdateSession(ctx, s1.ID, api.UpdateSessionRequest{
+		Title: "Session One Renamed",
+		Model: "anthropic/claude-4-sonnet",
+	})
+	if err != nil {
+		t.Fatalf("UpdateSession s1: %v", err)
+	}
+	if up1.Title != "Session One Renamed" || up1.Model != "anthropic/claude-4-sonnet" {
+		t.Errorf("UpdateSession s1 = %+v", up1)
+	}
+
+	// 4. ListSessions (ordered by updated_at DESC -> s1 updated after s2)
+	list, err := cli.ListSessions(ctx)
 	if err != nil {
 		t.Fatalf("ListSessions: %v", err)
 	}
-	if len(list) != 2 || list[0].ID != s2.ID || list[1].ID != s1.ID {
-		t.Fatalf("ListSessions = %+v, want [%s, %s]", list, s2.ID, s1.ID)
+	if len(list) != 2 || list[0].ID != s1.ID || list[1].ID != s2.ID {
+		t.Fatalf("ListSessions = %+v, want [%s, %s]", list, s1.ID, s2.ID)
 	}
 
 	// 5. DeleteSession
-	if err := cli.DeleteSession(ctx, wsDir, s1.ID); err != nil {
+	if err := cli.DeleteSession(ctx, s1.ID); err != nil {
 		t.Fatalf("DeleteSession s1: %v", err)
 	}
 
 	var apiErr *api.APIError
-	if _, err := cli.GetSession(ctx, wsDir, s1.ID); !errors.As(err, &apiErr) || apiErr.StatusCode != 404 {
+	if _, err := cli.GetSession(ctx, s1.ID); !errors.As(err, &apiErr) || apiErr.StatusCode != 404 {
 		t.Errorf("GetSession deleted s1 error = %v, want 404 APIError", err)
 	}
 }
@@ -398,9 +416,9 @@ func TestSSESubscribeAndStreamingTurn(t *testing.T) {
 		},
 	}
 
-	_, cli, wsDir := setupDaemonTest(t, prov)
+	_, cli, _ := setupDaemonTest(t, prov)
 
-	sess, err := cli.CreateSession(ctx, wsDir, api.CreateSessionRequest{Title: "SSE Session"})
+	sess, err := cli.CreateSession(ctx, api.CreateSessionRequest{Title: "SSE Session"})
 	if err != nil {
 		t.Fatalf("CreateSession: %v", err)
 	}
@@ -412,7 +430,7 @@ func TestSSESubscribeAndStreamingTurn(t *testing.T) {
 	subReady := make(chan struct{})
 	go func() {
 		first := true
-		for ev, err := range cli.Subscribe(subCtx, wsDir, sess.ID) {
+		for ev, err := range cli.Subscribe(subCtx, sess.ID) {
 			if err != nil {
 				return
 			}
@@ -430,7 +448,7 @@ func TestSSESubscribeAndStreamingTurn(t *testing.T) {
 	<-subReady
 	time.Sleep(30 * time.Millisecond)
 
-	if err := cli.Send(ctx, wsDir, sess.ID, api.SendRequest{
+	if err := cli.Send(ctx, sess.ID, api.SendRequest{
 		Content: "Stream me",
 		Wait:    true,
 	}); err != nil {
@@ -509,9 +527,9 @@ func TestBackgroundTurnSurvivesClientDisconnect(t *testing.T) {
 		},
 	}
 
-	_, cli, wsDir := setupDaemonTest(t, prov)
+	_, cli, _ := setupDaemonTest(t, prov)
 
-	sess, err := cli.CreateSession(ctx, wsDir, api.CreateSessionRequest{Title: "Background Turn"})
+	sess, err := cli.CreateSession(ctx, api.CreateSessionRequest{Title: "Background Turn"})
 	if err != nil {
 		t.Fatalf("CreateSession: %v", err)
 	}
@@ -520,7 +538,7 @@ func TestBackgroundTurnSurvivesClientDisconnect(t *testing.T) {
 	shortCtx, cancelShort := context.WithCancel(ctx)
 	sendDone := make(chan error, 1)
 	go func() {
-		sendDone <- cli.Send(shortCtx, wsDir, sess.ID, api.SendRequest{
+		sendDone <- cli.Send(shortCtx, sess.ID, api.SendRequest{
 			Content: "Run in background",
 			Wait:    true,
 		})
@@ -533,7 +551,7 @@ func TestBackgroundTurnSurvivesClientDisconnect(t *testing.T) {
 	}
 
 	// Verify GetSession reports StatusRunning while turn is active
-	runningSess, err := cli.GetSession(ctx, wsDir, sess.ID)
+	runningSess, err := cli.GetSession(ctx, sess.ID)
 	if err != nil {
 		t.Fatalf("GetSession while running: %v", err)
 	}
@@ -543,7 +561,7 @@ func TestBackgroundTurnSurvivesClientDisconnect(t *testing.T) {
 
 	// Concurrent Send while running must return 409 Conflict
 	var apiErr *api.APIError
-	if err := cli.Send(ctx, wsDir, sess.ID, api.SendRequest{Content: "concurrent"}); !errors.As(err, &apiErr) || apiErr.StatusCode != 409 {
+	if err := cli.Send(ctx, sess.ID, api.SendRequest{Content: "concurrent"}); !errors.As(err, &apiErr) || apiErr.StatusCode != 409 {
 		t.Errorf("concurrent Send error = %v, want 409 Conflict", err)
 	}
 
@@ -556,14 +574,14 @@ func TestBackgroundTurnSurvivesClientDisconnect(t *testing.T) {
 
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
-		st, err := cli.GetSession(ctx, wsDir, sess.ID)
+		st, err := cli.GetSession(ctx, sess.ID)
 		if err == nil && st.Status == api.StatusIdle {
 			break
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
 
-	afterSess, err := cli.GetSession(ctx, wsDir, sess.ID)
+	afterSess, err := cli.GetSession(ctx, sess.ID)
 	if err != nil {
 		t.Fatalf("GetSession after completion: %v", err)
 	}
@@ -571,7 +589,7 @@ func TestBackgroundTurnSurvivesClientDisconnect(t *testing.T) {
 		t.Fatalf("afterSess.Status = %q, want %q", afterSess.Status, api.StatusIdle)
 	}
 
-	history, err := cli.History(ctx, wsDir, sess.ID)
+	history, err := cli.History(ctx, sess.ID)
 	if err != nil {
 		t.Fatalf("History: %v", err)
 	}
@@ -595,14 +613,14 @@ func TestCancelRunningTurn(t *testing.T) {
 		},
 	}
 
-	_, cli, wsDir := setupDaemonTest(t, prov)
+	_, cli, _ := setupDaemonTest(t, prov)
 
-	sess, err := cli.CreateSession(ctx, wsDir, api.CreateSessionRequest{Title: "Cancelable Turn"})
+	sess, err := cli.CreateSession(ctx, api.CreateSessionRequest{Title: "Cancelable Turn"})
 	if err != nil {
 		t.Fatalf("CreateSession: %v", err)
 	}
 
-	if err := cli.Send(ctx, wsDir, sess.ID, api.SendRequest{
+	if err := cli.Send(ctx, sess.ID, api.SendRequest{
 		Content: "Hang forever",
 		Wait:    false,
 	}); err != nil {
@@ -615,11 +633,11 @@ func TestCancelRunningTurn(t *testing.T) {
 		t.Fatal("timed out waiting for turn to start")
 	}
 
-	if err := cli.Cancel(ctx, wsDir, sess.ID); err != nil {
+	if err := cli.Cancel(ctx, sess.ID); err != nil {
 		t.Fatalf("Cancel: %v", err)
 	}
 
-	afterSess, err := cli.GetSession(ctx, wsDir, sess.ID)
+	afterSess, err := cli.GetSession(ctx, sess.ID)
 	if err != nil {
 		t.Fatalf("GetSession after Cancel: %v", err)
 	}
@@ -677,13 +695,13 @@ func TestPermissionsModesAndFileChangesRevert(t *testing.T) {
 		t.Fatalf("WriteFile baseline: %v", err)
 	}
 
-	sess, err := cli.CreateSession(ctx, wsDir, api.CreateSessionRequest{Title: "Permissions & Revert"})
+	sess, err := cli.CreateSession(ctx, api.CreateSessionRequest{Title: "Permissions & Revert"})
 	if err != nil {
 		t.Fatalf("CreateSession: %v", err)
 	}
 
 	// 1. Test PermissionMode get and set
-	mode, err := cli.PermissionMode(ctx, wsDir, sess.ID)
+	mode, err := cli.PermissionMode(ctx, sess.ID)
 	if err != nil {
 		t.Fatalf("PermissionMode: %v", err)
 	}
@@ -691,13 +709,13 @@ func TestPermissionsModesAndFileChangesRevert(t *testing.T) {
 		t.Errorf("initial mode = %q, want %q", mode, api.ModeDefault)
 	}
 
-	if err := cli.SetPermissionMode(ctx, wsDir, sess.ID, api.ModeAsk); err != nil {
+	if err := cli.SetPermissionMode(ctx, sess.ID, api.ModeAsk); err != nil {
 		t.Fatalf("SetPermissionMode(ModeAsk): %v", err)
 	}
-	if got, err := cli.PermissionMode(ctx, wsDir, sess.ID); err != nil || got != api.ModeAsk {
+	if got, err := cli.PermissionMode(ctx, sess.ID); err != nil || got != api.ModeAsk {
 		t.Errorf("PermissionMode after Set = (%q, %v), want %q", got, err, api.ModeAsk)
 	}
-	if err := cli.SetPermissionMode(ctx, wsDir, sess.ID, api.ModeDefault); err != nil {
+	if err := cli.SetPermissionMode(ctx, sess.ID, api.ModeDefault); err != nil {
 		t.Fatalf("SetPermissionMode(ModeDefault): %v", err)
 	}
 
@@ -706,7 +724,7 @@ func TestPermissionsModesAndFileChangesRevert(t *testing.T) {
 	defer cancelSub()
 	permEvents := make(chan api.Event, 16)
 	go func() {
-		for ev, err := range cli.Subscribe(subCtx, wsDir, sess.ID) {
+		for ev, err := range cli.Subscribe(subCtx, sess.ID) {
 			if err != nil {
 				return
 			}
@@ -718,7 +736,7 @@ func TestPermissionsModesAndFileChangesRevert(t *testing.T) {
 	time.Sleep(30 * time.Millisecond)
 
 	// 2. Send triggers write tool call -> pauses on permission gate
-	if err := cli.Send(ctx, wsDir, sess.ID, api.SendRequest{
+	if err := cli.Send(ctx, sess.ID, api.SendRequest{
 		Content: "Please update hello.txt",
 		Wait:    true,
 	}); err != nil {
@@ -735,7 +753,7 @@ func TestPermissionsModesAndFileChangesRevert(t *testing.T) {
 	}
 
 	// Session status must be StatusWaitingPermission
-	waitingSess, err := cli.GetSession(ctx, wsDir, sess.ID)
+	waitingSess, err := cli.GetSession(ctx, sess.ID)
 	if err != nil {
 		t.Fatalf("GetSession waiting: %v", err)
 	}
@@ -743,7 +761,7 @@ func TestPermissionsModesAndFileChangesRevert(t *testing.T) {
 		t.Errorf("waitingSess.Status = %q, want %q", waitingSess.Status, api.StatusWaitingPermission)
 	}
 
-	perms, err := cli.PendingPermissions(ctx, wsDir, sess.ID)
+	perms, err := cli.PendingPermissions(ctx, sess.ID)
 	if err != nil {
 		t.Fatalf("PendingPermissions: %v", err)
 	}
@@ -752,7 +770,7 @@ func TestPermissionsModesAndFileChangesRevert(t *testing.T) {
 	}
 
 	// 3. Approve permission via RespondPermission
-	if err := cli.RespondPermission(ctx, wsDir, sess.ID, api.PermissionDecision{
+	if err := cli.RespondPermission(ctx, sess.ID, api.PermissionDecision{
 		RequestID: perms[0].ID,
 		Kind:      api.DecisionAllowOnce,
 		Wait:      true,
@@ -770,7 +788,7 @@ func TestPermissionsModesAndFileChangesRevert(t *testing.T) {
 	}
 
 	// 4. Inspect Changes and DiffChange
-	changes, err := cli.Changes(ctx, wsDir, sess.ID)
+	changes, err := cli.Changes(ctx, sess.ID)
 	if err != nil {
 		t.Fatalf("Changes: %v", err)
 	}
@@ -778,7 +796,7 @@ func TestPermissionsModesAndFileChangesRevert(t *testing.T) {
 		t.Fatalf("Changes = %+v, want 1 write change on hello.txt", changes)
 	}
 
-	diffText, err := cli.DiffChange(ctx, wsDir, sess.ID, "hello.txt", changes[0].ID)
+	diffText, err := cli.DiffChange(ctx, sess.ID, "hello.txt", changes[0].ID)
 	if err != nil {
 		t.Fatalf("DiffChange: %v", err)
 	}
@@ -787,7 +805,7 @@ func TestPermissionsModesAndFileChangesRevert(t *testing.T) {
 	}
 
 	// 5. Revert session back to baseline via client.Revert
-	if err := cli.Revert(ctx, wsDir, sess.ID, api.RevertRequest{
+	if err := cli.Revert(ctx, sess.ID, api.RevertRequest{
 		Force: true,
 	}); err != nil {
 		t.Fatalf("Revert session: %v", err)
@@ -802,7 +820,7 @@ func TestPermissionsModesAndFileChangesRevert(t *testing.T) {
 	}
 
 	// 6. RecoverAt the first change entry (before=false -> "updated content\n")
-	if err := cli.Revert(ctx, wsDir, sess.ID, api.RevertRequest{
+	if err := cli.Revert(ctx, sess.ID, api.RevertRequest{
 		Path:    "hello.txt",
 		EntryID: changes[0].ID,
 		Before:  false,
@@ -818,7 +836,7 @@ func TestPermissionsModesAndFileChangesRevert(t *testing.T) {
 	}
 
 	// 7. Revert single file to baseline (Path="hello.txt", EntryID="")
-	if err := cli.Revert(ctx, wsDir, sess.ID, api.RevertRequest{
+	if err := cli.Revert(ctx, sess.ID, api.RevertRequest{
 		Path:  "hello.txt",
 		Force: true,
 	}); err != nil {
@@ -875,9 +893,9 @@ func TestConversionsAndErrorPublishing(t *testing.T) {
 			return nil, errors.New("upstream llm failure")
 		},
 	}
-	_, cli, wsDir := setupDaemonTest(t, prov)
+	_, cli, _ := setupDaemonTest(t, prov)
 
-	sess, err := cli.CreateSession(ctx, wsDir, api.CreateSessionRequest{Title: "Error Session"})
+	sess, err := cli.CreateSession(ctx, api.CreateSessionRequest{Title: "Error Session"})
 	if err != nil {
 		t.Fatalf("CreateSession: %v", err)
 	}
@@ -887,7 +905,7 @@ func TestConversionsAndErrorPublishing(t *testing.T) {
 
 	errEvents := make(chan api.Event, 4)
 	go func() {
-		for ev, sErr := range cli.Subscribe(subCtx, wsDir, sess.ID) {
+		for ev, sErr := range cli.Subscribe(subCtx, sess.ID) {
 			if sErr != nil {
 				return
 			}
@@ -899,7 +917,7 @@ func TestConversionsAndErrorPublishing(t *testing.T) {
 	}()
 	time.Sleep(30 * time.Millisecond)
 
-	if err := cli.Send(ctx, wsDir, sess.ID, api.SendRequest{Content: "trigger error", Wait: false}); err != nil {
+	if err := cli.Send(ctx, sess.ID, api.SendRequest{Content: "trigger error", Wait: false}); err != nil {
 		t.Fatalf("Send(Wait: false): %v", err)
 	}
 
@@ -928,13 +946,14 @@ func TestSubdirectorySharesCanonicalWorkspaceRuntime(t *testing.T) {
 	}
 
 	// Create session using wsDir
-	sess, err := cli.CreateSession(ctx, wsDir, api.CreateSessionRequest{Title: "Root Session"})
+	sess, err := cli.CreateSession(ctx, api.CreateSessionRequest{Title: "Root Session"})
 	if err != nil {
 		t.Fatalf("CreateSession at root: %v", err)
 	}
 
 	// Query ListSessions and GetSession using subDir -> must resolve to the same workspace runtime!
-	list, err := cli.ListSessions(ctx, subDir)
+	subCLI := cli.WithCWD(subDir)
+	list, err := subCLI.ListSessions(ctx)
 	if err != nil {
 		t.Fatalf("ListSessions from subDir: %v", err)
 	}
@@ -942,7 +961,7 @@ func TestSubdirectorySharesCanonicalWorkspaceRuntime(t *testing.T) {
 		t.Fatalf("ListSessions from subDir = %+v, want [%s]", list, sess.ID)
 	}
 
-	got, err := cli.GetSession(ctx, subDir, sess.ID)
+	got, err := subCLI.GetSession(ctx, sess.ID)
 	if err != nil || got.ID != sess.ID {
 		t.Fatalf("GetSession from subDir = (%+v, %v)", got, err)
 	}
@@ -962,7 +981,7 @@ func TestSubdirectorySharesCanonicalWorkspaceRuntime(t *testing.T) {
 
 	doneCh := make(chan struct{}, 1)
 	go func() {
-		for ev, sErr := range cli.Subscribe(subCtx, subDir, sess.ID) {
+		for ev, sErr := range subCLI.Subscribe(subCtx, sess.ID) {
 			if sErr != nil {
 				return
 			}
@@ -974,7 +993,7 @@ func TestSubdirectorySharesCanonicalWorkspaceRuntime(t *testing.T) {
 	}()
 	time.Sleep(30 * time.Millisecond)
 
-	if err := cli.Send(ctx, wsDir, sess.ID, api.SendRequest{Content: "hello from root", Wait: true}); err != nil {
+	if err := cli.Send(ctx, sess.ID, api.SendRequest{Content: "hello from root", Wait: true}); err != nil {
 		t.Fatalf("Send: %v", err)
 	}
 
@@ -982,5 +1001,368 @@ func TestSubdirectorySharesCanonicalWorkspaceRuntime(t *testing.T) {
 	case <-doneCh:
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for completed SSE event when subscribed via subDir")
+	}
+}
+
+func TestWorkspaceAgentsModelsEndpoints(t *testing.T) {
+	ctx := context.Background()
+	_, cli, wsDir := setupDaemonTest(t, nil)
+
+	// 1. GetWorkspace
+	ws, err := cli.GetWorkspace(ctx)
+	if err != nil {
+		t.Fatalf("GetWorkspace: %v", err)
+	}
+	if ws.RootDir != wsDir {
+		t.Errorf("ws.RootDir = %q, want %q", ws.RootDir, wsDir)
+	}
+	if ws.CWD != wsDir {
+		t.Errorf("ws.CWD = %q, want %q", ws.CWD, wsDir)
+	}
+	if ws.DefaultAgent == "" {
+		t.Errorf("ws.DefaultAgent should not be empty")
+	}
+
+	// 2. ListAgents
+	agents, err := cli.ListAgents(ctx)
+	if err != nil {
+		t.Fatalf("ListAgents: %v", err)
+	}
+	if len(agents) == 0 {
+		t.Fatalf("expected at least 1 agent, got 0")
+	}
+	var foundMain bool
+	for _, ag := range agents {
+		if ag.Name == "main" {
+			foundMain = true
+			break
+		}
+	}
+	if !foundMain {
+		t.Errorf("expected 'main' agent in ListAgents: %+v", agents)
+	}
+
+	// 3. GetAgent (found & 404)
+	ag, err := cli.GetAgent(ctx, "main")
+	if err != nil {
+		t.Fatalf("GetAgent('main'): %v", err)
+	}
+	if ag.Name != "main" {
+		t.Errorf("ag.Name = %q, want 'main'", ag.Name)
+	}
+
+	var apiErr *api.APIError
+	if _, err := cli.GetAgent(ctx, "nonexistent-agent"); !errors.As(err, &apiErr) || apiErr.StatusCode != 404 {
+		t.Errorf("GetAgent non-existent = %v, want 404 APIError", err)
+	}
+
+	// 4. ListModels
+	models, err := cli.ListModels(ctx)
+	if err != nil {
+		t.Fatalf("ListModels: %v", err)
+	}
+	_ = models
+
+	// 5. GetModel with bare name and qualified name (fallback / custom unlisted resolution)
+	m1, err := cli.GetModel(ctx, "custom-model")
+	if err != nil {
+		t.Fatalf("GetModel('custom-model'): %v", err)
+	}
+	if m1.ID != "custom-model" || m1.Name != "custom-model" || m1.Label != "custom-model" {
+		t.Errorf("m1 = %+v, want fallback custom-model", m1)
+	}
+
+	m2, err := cli.GetModel(ctx, "ollama/qwen3.8")
+	if err != nil {
+		t.Fatalf("GetModel('ollama/qwen3.8'): %v", err)
+	}
+	if m2.ID != "ollama/qwen3.8" || m2.Provider != "ollama" || m2.Name != "qwen3.8" {
+		t.Errorf("m2 = %+v, want qualified model", m2)
+	}
+}
+
+func TestCustomWorkspaceProvidersAndEffort(t *testing.T) {
+	ctx := context.Background()
+	_, cli, wsDir := setupDaemonTest(t, nil)
+
+	// Create workspace manifest declaring custom default agent
+	wsManifest := `---
+apiVersion: warp/v1alpha1
+kind: Workspace
+metadata:
+  name: configured-ws
+spec:
+  defaultAgent: custom-agent
+---
+Workspace instructions.
+`
+	if err := os.WriteFile(filepath.Join(wsDir, "WORKSPACE.md"), []byte(wsManifest), 0o644); err != nil {
+		t.Fatalf("WriteFile WORKSPACE.md: %v", err)
+	}
+
+	agentsDir := filepath.Join(wsDir, ".agents")
+	provDir := filepath.Join(agentsDir, "providers")
+	if err := os.MkdirAll(provDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll provDir: %v", err)
+	}
+
+	// Provider with model thinking capability (effort)
+	provYAML := `apiVersion: warp/v1alpha1
+kind: ModelProvider
+metadata:
+  name: my-ollama
+spec:
+  type: ollama
+  defaultModel: qwen3.8
+  models:
+    - id: qwen3.8
+      name: qwen3.8
+      label: "Qwen 3.8"
+      capabilities:
+        completion: true
+        thinking:
+          - type: effort
+            default: high
+            allowedEfforts: ["low", "medium", "high"]
+`
+	if err := os.WriteFile(filepath.Join(provDir, "ollama.yaml"), []byte(provYAML), 0o644); err != nil {
+		t.Fatalf("WriteFile ollama.yaml: %v", err)
+	}
+
+	// Agent with thinking effort
+	agentMD := `---
+apiVersion: warp/v1alpha1
+kind: Agent
+metadata:
+  name: custom-agent
+  displayName: "Custom Agent"
+  description: "Specialized helper"
+spec:
+  models:
+    - my-ollama/qwen3.8
+  thinking:
+    type: effort
+    default: medium
+---
+Custom agent instructions.
+`
+	if err := os.WriteFile(filepath.Join(agentsDir, "custom-agent.agent.md"), []byte(agentMD), 0o644); err != nil {
+		t.Fatalf("WriteFile custom-agent.agent.md: %v", err)
+	}
+
+	// Query endpoints with a fresh client pointed to wsDir
+	wsCLI := cli.WithCWD(wsDir)
+
+	ws, err := wsCLI.GetWorkspace(ctx)
+	if err != nil {
+		t.Fatalf("GetWorkspace: %v", err)
+	}
+	if ws.Name != "configured-ws" {
+		t.Errorf("ws.Name = %q, want 'configured-ws'", ws.Name)
+	}
+	if ws.DefaultAgent != "custom-agent" {
+		t.Errorf("ws.DefaultAgent = %q, want 'custom-agent'", ws.DefaultAgent)
+	}
+
+	ag, err := wsCLI.GetAgent(ctx, "custom-agent")
+	if err != nil {
+		t.Fatalf("GetAgent('custom-agent'): %v", err)
+	}
+	if ag.Name != "custom-agent" || ag.DisplayName != "Custom Agent" || ag.Effort != "medium" {
+		t.Errorf("ag = %+v, want Effort='medium'", ag)
+	}
+
+	mdl, err := wsCLI.GetModel(ctx, "my-ollama/qwen3.8")
+	if err != nil {
+		t.Fatalf("GetModel('my-ollama/qwen3.8'): %v", err)
+	}
+	if mdl.ID != "my-ollama/qwen3.8" || mdl.Provider != "my-ollama" || mdl.Name != "qwen3.8" || mdl.Label != "Qwen 3.8" {
+		t.Errorf("mdl = %+v, want Qwen 3.8", mdl)
+	}
+	if mdl.DefaultEffort != "high" || len(mdl.AllowedEfforts) != 3 {
+		t.Errorf("mdl effort = %q, allowed=%v, want 'high' and [low, medium, high]", mdl.DefaultEffort, mdl.AllowedEfforts)
+	}
+
+	models, err := wsCLI.ListModels(ctx)
+	if err != nil {
+		t.Fatalf("ListModels: %v", err)
+	}
+	var foundOllama bool
+	for _, m := range models {
+		if m.ID == "my-ollama/qwen3.8" {
+			foundOllama = true
+			if m.DefaultEffort != "high" || m.Label != "Qwen 3.8" {
+				t.Errorf("listed model mismatch: %+v", m)
+			}
+			break
+		}
+	}
+	if !foundOllama {
+		t.Errorf("expected 'my-ollama/qwen3.8' in ListModels: %+v", models)
+	}
+}
+
+func TestHeaderCWDFallbackToQueryParam(t *testing.T) {
+	ctx := context.Background()
+	_, cli, wsDir := setupDaemonTest(t, nil)
+
+	unixClient := &http.Client{
+		Transport: &http.Transport{
+			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+				var d net.Dialer
+				return d.DialContext(ctx, "unix", cli.SocketPath())
+			},
+		},
+	}
+
+	// Make raw request using X-TaskSmith-CWD
+	rawReq, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://unix/v1/workspace", nil)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	rawReq.Header.Set("Accept", "application/json")
+	rawReq.Header.Set(api.HeaderCWD, wsDir)
+
+	resp, err := unixClient.Do(rawReq)
+	if err != nil {
+		t.Fatalf("httpClient.Do with header: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("response status with header = %d, want 200", resp.StatusCode)
+	}
+
+	// Make raw request using query param fallback ?workspace=...
+	queryReq, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://unix/v1/workspace?workspace="+wsDir, nil)
+	if err != nil {
+		t.Fatalf("NewRequest query: %v", err)
+	}
+	queryReq.Header.Set("Accept", "application/json")
+
+	qResp, err := unixClient.Do(queryReq)
+	if err != nil {
+		t.Fatalf("httpClient.Do with query: %v", err)
+	}
+	defer qResp.Body.Close()
+	if qResp.StatusCode != http.StatusOK {
+		t.Fatalf("response status with query = %d, want 200", qResp.StatusCode)
+	}
+
+	// Make raw request with no header and no query param -> 400 Bad Request
+	emptyReq, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://unix/v1/workspace", nil)
+	if err != nil {
+		t.Fatalf("NewRequest empty: %v", err)
+	}
+	emptyReq.Header.Set("Accept", "application/json")
+
+	eResp, err := unixClient.Do(emptyReq)
+	if err != nil {
+		t.Fatalf("httpClient.Do empty: %v", err)
+	}
+	defer eResp.Body.Close()
+	if eResp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("response status with empty workspace = %d, want 400", eResp.StatusCode)
+	}
+}
+
+func TestSubprojectPreservesCWDAndLocalConfigs(t *testing.T) {
+	ctx := context.Background()
+	_, cli, wsDir := setupDaemonTest(t, nil)
+
+	// Workspace root configuration
+	wsManifest := `---
+apiVersion: warp/v1alpha1
+kind: Workspace
+metadata:
+  name: mono-repo
+spec:
+  projects: [".", "packages/sub"]
+---
+Root workspace.
+`
+	if err := os.WriteFile(filepath.Join(wsDir, "WORKSPACE.md"), []byte(wsManifest), 0o644); err != nil {
+		t.Fatalf("WriteFile WORKSPACE.md: %v", err)
+	}
+
+	rootAgentsDir := filepath.Join(wsDir, ".agents")
+	if err := os.MkdirAll(rootAgentsDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll rootAgentsDir: %v", err)
+	}
+	rootAgentMD := `---
+apiVersion: warp/v1alpha1
+kind: Agent
+metadata:
+  name: main
+  description: "Root agent"
+spec:
+  thinking:
+    type: effort
+    default: high
+---
+Root agent instructions.
+`
+	if err := os.WriteFile(filepath.Join(rootAgentsDir, "main.agent.md"), []byte(rootAgentMD), 0o644); err != nil {
+		t.Fatalf("WriteFile root main.agent.md: %v", err)
+	}
+
+	// Subproject configuration
+	subDir := filepath.Join(wsDir, "packages", "sub")
+	subAgentsDir := filepath.Join(subDir, ".agents")
+	if err := os.MkdirAll(subAgentsDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll subAgentsDir: %v", err)
+	}
+	subAgentMD := `---
+apiVersion: warp/v1alpha1
+kind: Agent
+metadata:
+  name: main
+  description: "Subproject agent"
+spec:
+  thinking:
+    type: effort
+    default: low
+---
+Subproject agent instructions.
+`
+	if err := os.WriteFile(filepath.Join(subAgentsDir, "main.agent.md"), []byte(subAgentMD), 0o644); err != nil {
+		t.Fatalf("WriteFile sub main.agent.md: %v", err)
+	}
+
+	rootCLI := cli.WithCWD(wsDir)
+	subCLI := cli.WithCWD(subDir)
+
+	// Verify Root workspace
+	rootWS, err := rootCLI.GetWorkspace(ctx)
+	if err != nil {
+		t.Fatalf("rootCLI.GetWorkspace: %v", err)
+	}
+	if rootWS.CWD != wsDir {
+		t.Errorf("rootWS.CWD = %q, want %q", rootWS.CWD, wsDir)
+	}
+	rootAgent, err := rootCLI.GetAgent(ctx, "main")
+	if err != nil {
+		t.Fatalf("rootCLI.GetAgent('main'): %v", err)
+	}
+	if rootAgent.Effort != "high" || rootAgent.Description != "Root agent" {
+		t.Errorf("rootAgent = %+v, want Effort='high' and Description='Root agent'", rootAgent)
+	}
+
+	// Verify Subproject preserves subDir CWD and shadows local agent config
+	subWS, err := subCLI.GetWorkspace(ctx)
+	if err != nil {
+		t.Fatalf("subCLI.GetWorkspace: %v", err)
+	}
+	if subWS.CWD != subDir {
+		t.Errorf("subWS.CWD = %q, want %q", subWS.CWD, subDir)
+	}
+	if subWS.RootDir != wsDir {
+		t.Errorf("subWS.RootDir = %q, want %q", subWS.RootDir, wsDir)
+	}
+	subAgent, err := subCLI.GetAgent(ctx, "main")
+	if err != nil {
+		t.Fatalf("subCLI.GetAgent('main'): %v", err)
+	}
+	if subAgent.Effort != "low" || subAgent.Description != "Subproject agent" {
+		t.Errorf("subAgent = %+v, want Effort='low' and Description='Subproject agent'", subAgent)
 	}
 }

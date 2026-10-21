@@ -675,6 +675,53 @@ OVERRIDE_AGENT_PROMPT_MARKER {{ if call .HasTool "shell" }}HAS_SHELL_TOOL{{ end 
 		!strings.Contains(sys1, "HAS_SHELL_TOOL") {
 		t.Errorf("turns[1] system prompt = %q, missing expected override markers", sys1)
 	}
+
+	// Update Session A: update title, agent, and bare model (resolving with defaultProvider openai)
+	updatedA, err := mgr.Update(ctx, sessDefault.ID, UpdateParams{
+		Title: "Renamed Default Session",
+		Agent: "override-agent",
+		Model: "gpt-5.5-default",
+	})
+	if err != nil {
+		t.Fatalf("Update session error: %v", err)
+	}
+	if updatedA.Title != "Renamed Default Session" {
+		t.Errorf("updatedA.Title = %q, want %q", updatedA.Title, "Renamed Default Session")
+	}
+	if updatedA.Agent != "override-agent" {
+		t.Errorf("updatedA.Agent = %q, want %q", updatedA.Agent, "override-agent")
+	}
+	if updatedA.Model != "openai/gpt-5.5-default" {
+		t.Errorf("updatedA.Model = %q, want %q", updatedA.Model, "openai/gpt-5.5-default")
+	}
+
+	// Update Session A again with fully qualified model
+	updatedA2, err := mgr.Update(ctx, sessDefault.ID, UpdateParams{
+		Model: "anthropic/claude-4-sonnet",
+	})
+	if err != nil {
+		t.Fatalf("Update session model: %v", err)
+	}
+	if updatedA2.Model != "anthropic/claude-4-sonnet" {
+		t.Errorf("updatedA2.Model = %q, want %q", updatedA2.Model, "anthropic/claude-4-sonnet")
+	}
+
+	// Verify persistence via Get
+	fetchedA, err := mgr.Get(ctx, sessDefault.ID)
+	if err != nil {
+		t.Fatalf("Get updated session: %v", err)
+	}
+	if fetchedA.Title != updatedA2.Title || fetchedA.Agent != updatedA2.Agent || fetchedA.Model != updatedA2.Model {
+		t.Errorf("Get mismatch after update: got %+v, want %+v", fetchedA, updatedA2)
+	}
+
+	// Error cases
+	if _, err := mgr.Update(ctx, "", UpdateParams{Title: "X"}); !errors.Is(err, ErrEmptySessionID) {
+		t.Errorf("Update empty ID: got %v, want ErrEmptySessionID", err)
+	}
+	if _, err := mgr.Update(ctx, "non-existent-id", UpdateParams{Title: "X"}); !errors.Is(err, ErrSessionNotFound) {
+		t.Errorf("Update nonexistent ID: got %v, want ErrSessionNotFound", err)
+	}
 }
 
 func TestSendAndHistory(t *testing.T) {
