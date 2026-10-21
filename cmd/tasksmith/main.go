@@ -6,53 +6,65 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
-	"github.com/masterkeysrd/loom/message"
+	"github.com/masterkeysrd/tasksmith/api"
+	"github.com/masterkeysrd/tasksmith/client"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
-	"github.com/masterkeysrd/tasksmith/internal/core/sqlite"
 	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
+	"github.com/masterkeysrd/tasksmith/internal/daemon"
 	"github.com/masterkeysrd/tasksmith/internal/gateway"
-	"github.com/masterkeysrd/tasksmith/internal/sandbox"
-	"github.com/masterkeysrd/tasksmith/internal/session"
-	"github.com/masterkeysrd/tasksmith/internal/tools"
-	"github.com/masterkeysrd/tasksmith/internal/tools/builtin"
-	"github.com/masterkeysrd/tasksmith/internal/workspace"
 )
 
-type terminalPublisher struct{}
-
-func (p *terminalPublisher) Publish(_ context.Context, ev session.Event) {
-	if ev.Type == session.EventChunk && ev.Chunk != nil {
-		for _, block := range ev.Chunk.Content {
-			if tb, ok := block.(*message.TextBlock); ok && tb != nil {
-				fmt.Print(tb.Text)
-			}
-		}
-	}
-}
-
 func main() {
-	if err := run(); err != nil {
+	if err := run(os.Args[1:]); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
 }
 
-func run() error {
+func run(args []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	if len(args) > 0 && args[0] == "daemon" {
+		return runDaemonCmd(ctx, args[1:])
+	}
+
+	return runREPL(ctx)
+}
+
+func runDaemonCmd(ctx context.Context, args []string) error {
+	sub := "serve"
+	if len(args) > 0 {
+		sub = args[0]
+	}
+
+	switch sub {
+	case "serve":
+		return runDaemonServe(ctx)
+	case "start":
+		return runDaemonStart(ctx)
+	case "stop":
+		return runDaemonStop(ctx)
+	case "status":
+		return runDaemonStatus(ctx)
+	default:
+		return fmt.Errorf("unknown daemon subcommand %q (expected serve, start, stop, or status)", sub)
+	}
+}
+
+func runDaemonServe(ctx context.Context) error {
 	logsDir, err := xdg.LogsDir()
 	if err != nil {
 		return fmt.Errorf("resolve logs directory: %w", err)
 	}
 	logger, rw, err := log.NewRotating(log.RotatingWriterConfig{
 		Dir:    logsDir,
-		Stream: "cli",
+		Stream: "daemon",
 	}, log.LevelInfo)
 	if err != nil {
 		return fmt.Errorf("initialize rotating logger: %w", err)
@@ -62,72 +74,121 @@ func run() error {
 	}()
 	log.SetDefault(logger)
 
+	sockPath, err := daemon.DefaultSocketPath()
+	if err != nil {
+		return fmt.Errorf("resolve socket path: %w", err)
+	}
+	lockPath, err := daemon.DefaultLockPath()
+	if err != nil {
+		return fmt.Errorf("resolve lock path: %w", err)
+	}
+
+	srv, err := daemon.New(daemon.Config{
+		SocketPath:  sockPath,
+		LockPath:    lockPath,
+		GatewayPool: gateway.NewPool(),
+		Logger:      logger,
+	})
+	if err != nil {
+		return fmt.Errorf("initialize daemon server: %w", err)
+	}
+
+	return srv.Serve(ctx)
+}
+
+func runDaemonStart(ctx context.Context) error {
+	c, err := daemon.ConnectOrStart(ctx, "")
+	if err != nil {
+		return err
+	}
+	h, err := c.Health(ctx)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("Daemon running (pid=%d socket=%s)\n", h.PID, c.SocketPath())
+	return nil
+}
+
+func runDaemonStop(ctx context.Context) error {
+	sockPath, err := daemon.DefaultSocketPath()
+	if err != nil {
+		return err
+	}
+	c, err := client.New(sockPath)
+	if err != nil {
+		return err
+	}
+	if err := c.Shutdown(ctx); err != nil {
+		return fmt.Errorf("stop daemon: %w", err)
+	}
+	fmt.Println("Daemon stopped.")
+	return nil
+}
+
+func runDaemonStatus(ctx context.Context) error {
+	sockPath, err := daemon.DefaultSocketPath()
+	if err != nil {
+		return err
+	}
+	c, err := client.New(sockPath)
+	if err != nil {
+		return err
+	}
+	h, err := c.Health(ctx)
+	if err != nil {
+		fmt.Printf("Daemon is not running (socket=%s)\n", sockPath)
+		return nil
+	}
+	fmt.Printf("Daemon running (pid=%d started_at=%s socket=%s workspaces=%d)\n",
+		h.PID, h.StartedAt.Format(time.RFC3339), sockPath, len(h.Workspaces))
+	for _, ws := range h.Workspaces {
+		fmt.Printf("  - %s\n", ws)
+	}
+	return nil
+}
+
+func runREPL(ctx context.Context) error {
 	cwd, err := os.Getwd()
 	if err != nil {
 		return fmt.Errorf("resolve working directory: %w", err)
 	}
 
-	ws, err := workspace.Open(ctx, cwd, workspace.WithBuiltinFS(builtin.FS()))
+	c, err := daemon.ConnectOrStart(ctx, "")
 	if err != nil {
-		return fmt.Errorf("open workspace: %w", err)
+		return fmt.Errorf("connect to daemon: %w", err)
 	}
 
-	sb, err := sandbox.New(sandbox.Config{
-		Mode:    sandbox.ModeLocal,
-		WorkDir: cwd,
-		Network: sandbox.NetworkPolicy{
-			AllowLoopback: true,
-		},
-	})
-	if err != nil {
-		return fmt.Errorf("initialize sandbox: %w", err)
-	}
-	defer func() {
-		_ = sb.Close()
-	}()
-
-	gwCfg := buildGatewayConfig(ws)
-	gw, err := gateway.New(ctx, gwCfg)
-	if err != nil {
-		return fmt.Errorf("initialize gateway: %w", err)
-	}
-	defer func() {
-		_ = gw.Close()
-	}()
-
-	wsDataDir, err := xdg.WorkspaceDir(ws.RootDir())
-	if err != nil {
-		return fmt.Errorf("resolve workspace data directory: %w", err)
-	}
-
-	dbPath := filepath.Join(wsDataDir, "tasksmith.db")
-	db, err := sqlite.Open(ctx, dbPath)
-	if err != nil {
-		return fmt.Errorf("open sqlite database %q: %w", dbPath, err)
-	}
-	defer func() {
-		_ = db.Close()
-	}()
-
-	pub := &terminalPublisher{}
-	mgr, err := session.New(session.Config{
-		DB:        db,
-		Workspace: ws,
-		Gateway:   gw,
-		Sandbox:   sb,
-		Publisher: pub,
-		Logger:    logger,
-	})
-	if err != nil {
-		return fmt.Errorf("initialize session manager: %w", err)
-	}
-
-	activeSession, err := mgr.Create(ctx, session.CreateParams{
+	activeSession, err := c.CreateSession(ctx, cwd, api.CreateSessionRequest{
 		Title: "Terminal Session",
 	})
 	if err != nil {
 		return fmt.Errorf("create initial session: %w", err)
 	}
+
+	var activeSessionID atomic.Value
+	activeSessionID.Store(activeSession.ID)
+
+	subCtx, cancelSub := context.WithCancel(ctx)
+	defer cancelSub()
+
+	go func() {
+		for ev, err := range c.Subscribe(subCtx, cwd, "") {
+			if err != nil {
+				return
+			}
+			currID, _ := activeSessionID.Load().(string)
+			if ev.SessionID != currID {
+				continue
+			}
+			if ev.Type == api.EventChunk && ev.Chunk != nil {
+				for _, b := range ev.Chunk.Content {
+					if b.Type == api.BlockText && b.Text != "" {
+						fmt.Print(b.Text)
+					}
+				}
+			}
+		}
+	}()
 
 	fmt.Printf("TaskSmith REPL (session=%s agent=%s model=%s)\n", activeSession.ID, activeSession.Agent, activeSession.Model)
 	fmt.Println("Commands: /new [model], /sessions, /history, /mode [default|accept_edits|plan|ask|auto], /exit, /quit")
@@ -151,7 +212,7 @@ func run() error {
 
 		case line == "/new" || strings.HasPrefix(line, "/new "):
 			modelOverride := strings.TrimSpace(strings.TrimPrefix(line, "/new"))
-			s, err := mgr.Create(ctx, session.CreateParams{
+			s, err := c.CreateSession(ctx, cwd, api.CreateSessionRequest{
 				Title: "Terminal Session",
 				Model: modelOverride,
 			})
@@ -160,10 +221,11 @@ func run() error {
 				continue
 			}
 			activeSession = s
+			activeSessionID.Store(activeSession.ID)
 			fmt.Printf("Switched to new session %s (agent=%s model=%s)\n", activeSession.ID, activeSession.Agent, activeSession.Model)
 
 		case line == "/sessions":
-			sessions, err := mgr.List(ctx)
+			sessions, err := c.ListSessions(ctx, cwd)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "error listing sessions: %v\n", err)
 				continue
@@ -173,24 +235,24 @@ func run() error {
 				if s.ID == activeSession.ID {
 					marker = "*"
 				}
-				fmt.Printf("%s %s\tagent=%s\tmodel=%s\tupdated_at=%s\n",
-					marker, s.ID, s.Agent, s.Model, s.UpdatedAt.Format(time.RFC3339))
+				fmt.Printf("%s %s\tstatus=%s\tagent=%s\tmodel=%s\tupdated_at=%s\n",
+					marker, s.ID, s.Status, s.Agent, s.Model, s.UpdatedAt.Format(time.RFC3339))
 			}
 
 		case line == "/history":
-			history, err := mgr.History(ctx, activeSession.ID)
+			history, err := c.History(ctx, cwd, activeSession.ID)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "error loading history: %v\n", err)
 				continue
 			}
 			for _, msg := range history {
-				fmt.Printf("[%s] %s\n", msg.Role(), extractMessageText(msg))
+				fmt.Printf("[%s] %s\n", msg.Role, extractMessageText(msg))
 			}
 
 		case line == "/mode" || strings.HasPrefix(line, "/mode "):
 			arg := strings.TrimSpace(strings.TrimPrefix(line, "/mode"))
 			if arg == "" {
-				mode, err := mgr.PermissionMode(ctx, activeSession.ID)
+				mode, err := c.PermissionMode(ctx, cwd, activeSession.ID)
 				if err != nil {
 					fmt.Fprintf(os.Stderr, "error reading permission mode: %v\n", err)
 					continue
@@ -198,21 +260,24 @@ func run() error {
 				fmt.Printf("Permission mode: %s\n", mode)
 				continue
 			}
-			nextMode := tools.PermissionMode(arg)
-			if err := mgr.SetPermissionMode(ctx, activeSession.ID, nextMode); err != nil {
+			nextMode := api.PermissionMode(arg)
+			if err := c.SetPermissionMode(ctx, cwd, activeSession.ID, nextMode); err != nil {
 				fmt.Fprintf(os.Stderr, "error setting permission mode: %v (valid: default, accept_edits, plan, ask, auto)\n", err)
 				continue
 			}
 			fmt.Printf("Permission mode set to: %s\n", nextMode)
 
 		default:
-			_, err := mgr.Send(ctx, activeSession.ID, message.NewUserText(line))
+			err := c.Send(ctx, cwd, activeSession.ID, api.SendRequest{
+				Content: line,
+				Wait:    true,
+			})
 			fmt.Println()
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "error: %v\n", err)
 				continue
 			}
-			if err := promptPendingPermissions(ctx, scanner, mgr, activeSession.ID); err != nil {
+			if err := promptPendingPermissions(ctx, scanner, c, cwd, activeSession.ID); err != nil {
 				fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			}
 		}
@@ -221,9 +286,9 @@ func run() error {
 	return scanner.Err()
 }
 
-func promptPendingPermissions(ctx context.Context, scanner *bufio.Scanner, mgr *session.Manager, sessionID string) error {
+func promptPendingPermissions(ctx context.Context, scanner *bufio.Scanner, c *client.Client, workspace, sessionID string) error {
 	for {
-		perms, err := mgr.PendingPermissions(ctx, sessionID)
+		perms, err := c.PendingPermissions(ctx, workspace, sessionID)
 		if err != nil {
 			return err
 		}
@@ -245,124 +310,41 @@ func promptPendingPermissions(ctx context.Context, scanner *bufio.Scanner, mgr *
 		raw := strings.TrimSpace(scanner.Text())
 		lower := strings.ToLower(raw)
 
-		decision := tools.PermissionDecision{
+		decision := api.PermissionDecision{
 			RequestID:  perm.ID,
 			ToolCallID: perm.ToolCallID,
+			Wait:       true,
 		}
 
 		switch {
 		case lower == "y" || lower == "yes":
-			decision.Kind = tools.DecisionAllowOnce
+			decision.Kind = api.DecisionAllowOnce
 		case lower == "a" || lower == "allow" || lower == "always":
-			decision.Kind = tools.DecisionAllowSession
+			decision.Kind = api.DecisionAllowSession
 			if len(perm.GrantPatterns) > 0 {
 				decision.GrantPattern = perm.GrantPatterns[0]
 			}
 		default:
-			decision.Kind = tools.DecisionReject
-			if strings.HasPrefix(lower, "n ") {
-				decision.Feedback = strings.TrimSpace(raw[2:])
-			} else if strings.HasPrefix(lower, "no ") {
-				decision.Feedback = strings.TrimSpace(raw[3:])
+			decision.Kind = api.DecisionReject
+			if after, ok := strings.CutPrefix(raw, "n "); ok && strings.HasPrefix(lower, "n ") {
+				decision.Feedback = strings.TrimSpace(after)
+			} else if after, ok := strings.CutPrefix(raw, "no "); ok && strings.HasPrefix(lower, "no ") {
+				decision.Feedback = strings.TrimSpace(after)
 			}
 		}
 
-		if _, err := mgr.RespondPermission(ctx, sessionID, decision); err != nil {
+		if err := c.RespondPermission(ctx, workspace, sessionID, decision); err != nil {
 			return err
 		}
 		fmt.Println()
 	}
 }
 
-func buildGatewayConfig(ws *workspace.Workspace) gateway.Config {
-	wsEnv := ws.Env()
-	wsProviders := ws.Providers()
-	providers := make([]gateway.ProviderConfig, 0, len(wsProviders))
-	for _, p := range wsProviders {
-		providers = append(providers, toGatewayProvider(p))
-	}
-
-	defaultModels := make(map[gateway.ModelRole]string)
-	if models := ws.ResolveModels(workspace.RoleCompletion); len(models) > 0 {
-		defaultModels[gateway.RoleCompletion] = models[0]
-	}
-
-	return gateway.Config{
-		Providers:     providers,
-		DefaultModels: defaultModels,
-		Env:           wsEnv,
-	}
-}
-
-func toGatewayProvider(p workspace.Provider) gateway.ProviderConfig {
-	var auth *gateway.AuthConfig
-	if p.Auth != nil {
-		auth = &gateway.AuthConfig{
-			Type:   gateway.AuthType(p.Auth.Type),
-			Header: p.Auth.Header,
-			Env:    p.Auth.Env,
-			File:   p.Auth.File,
-		}
-	}
-
-	var defaultModels map[gateway.ModelRole]string
-	if len(p.DefaultModels) > 0 {
-		defaultModels = make(map[gateway.ModelRole]string, len(p.DefaultModels))
-		for r, m := range p.DefaultModels {
-			defaultModels[gateway.ModelRole(r)] = m
-		}
-	}
-
-	var models []gateway.ModelSpec
-	if len(p.Models) > 0 {
-		models = make([]gateway.ModelSpec, len(p.Models))
-		for i, m := range p.Models {
-			var caps *gateway.ModelCapabilities
-			if m.Capabilities != nil {
-				caps = &gateway.ModelCapabilities{
-					Completion: m.Capabilities.Completion,
-					Decision:   m.Capabilities.Decision,
-					Embedding:  m.Capabilities.Embedding,
-					Attachment: m.Capabilities.Attachment,
-					Tools:      m.Capabilities.Tools,
-					Dimensions: m.Capabilities.Dimensions,
-				}
-			}
-			models[i] = gateway.ModelSpec{
-				ID:    m.ID,
-				Name:  m.Name,
-				Label: m.Label,
-				Limits: gateway.ModelLimits{
-					Context:    m.Limits.Context,
-					Output:     m.Limits.Output,
-					Dimensions: m.Limits.Dimensions,
-				},
-				Capabilities: caps,
-			}
-		}
-	}
-
-	return gateway.ProviderConfig{
-		Name:          p.Name,
-		Type:          p.Type,
-		Endpoint:      p.Endpoint,
-		DefaultModel:  p.DefaultModel,
-		DefaultModels: defaultModels,
-		Auth:          auth,
-		Headers:       p.Headers,
-		Config:        p.Config,
-		Models:        models,
-	}
-}
-
-func extractMessageText(msg message.Message) string {
-	if msg == nil {
-		return ""
-	}
+func extractMessageText(msg api.Message) string {
 	var sb strings.Builder
-	for _, b := range msg.GetContent() {
-		if tb, ok := b.(*message.TextBlock); ok && tb != nil {
-			sb.WriteString(tb.Text)
+	for _, b := range msg.Content {
+		if b.Type == api.BlockText {
+			sb.WriteString(b.Text)
 		}
 	}
 	return sb.String()

@@ -410,35 +410,33 @@ func (m *Manager) PendingPermissions(ctx context.Context, sessionID string) ([]t
 	return out, nil
 }
 
-// RespondPermission records a user's [tools.PermissionDecision] for a pending
-// permission request. If additional permission requests remain unresolved for
-// the session, RespondPermission buffers the decision and returns `(nil, nil)`
-// without invoking the workflow graph. Once all pending permission requests for
-// the session have been resolved, RespondPermission resumes the harness graph
-// with the complete decision set and streams the remaining turn.
-func (m *Manager) RespondPermission(ctx context.Context, sessionID string, decision tools.PermissionDecision) (*message.Assistant, error) {
+// RecordDecision validates and buffers a user's [tools.PermissionDecision] for
+// a pending permission request without invoking the workflow graph. It returns
+// true once all pending permission requests for the session have been resolved
+// and the session is ready for [Manager.Resume].
+func (m *Manager) RecordDecision(ctx context.Context, sessionID string, decision tools.PermissionDecision) (bool, error) {
 	sess, err := m.Get(ctx, sessionID)
 	if err != nil {
-		return nil, err
+		return false, err
 	}
 
 	switch decision.Kind {
 	case tools.DecisionAllowOnce, tools.DecisionAllowSession, tools.DecisionReject:
 	default:
-		return nil, fmt.Errorf("%w: unsupported decision kind %q", ErrInvalidDecision, decision.Kind)
+		return false, fmt.Errorf("%w: unsupported decision kind %q", ErrInvalidDecision, decision.Kind)
 	}
 
 	h, err := m.buildHarness(ctx, sess)
 	if err != nil {
-		return nil, err
+		return false, err
 	}
 
 	state, err := h.LoadState(ctx, sess.ID)
 	if err != nil {
-		return nil, err
+		return false, err
 	}
 	if len(state.PendingPermissions) == 0 {
-		return nil, ErrNoPendingPermissions
+		return false, ErrNoPendingPermissions
 	}
 
 	var matched *tools.PermissionRequest
@@ -451,7 +449,7 @@ func (m *Manager) RespondPermission(ctx context.Context, sessionID string, decis
 		}
 	}
 	if matched == nil {
-		return nil, ErrPermissionNotFound
+		return false, ErrPermissionNotFound
 	}
 
 	decision.RequestID = matched.ID
@@ -472,19 +470,49 @@ func (m *Manager) RespondPermission(ctx context.Context, sessionID string, decis
 			break
 		}
 	}
-
-	var fullDecisions map[string]tools.PermissionDecision
-	if allResolved {
-		fullDecisions = maps.Clone(decMap)
-		delete(m.decisions, sess.ID)
-	}
 	m.mu.Unlock()
 
-	if !allResolved {
-		return nil, nil
+	return allResolved, nil
+}
+
+// Resume consumes the buffered permission decisions for sessionID and resumes
+// the interrupted harness workflow graph.
+func (m *Manager) Resume(ctx context.Context, sessionID string) (*message.Assistant, error) {
+	sess, err := m.Get(ctx, sessionID)
+	if err != nil {
+		return nil, err
+	}
+
+	m.mu.Lock()
+	decMap := m.decisions[sess.ID]
+	if len(decMap) == 0 {
+		m.mu.Unlock()
+		return nil, ErrNoPendingPermissions
+	}
+	fullDecisions := maps.Clone(decMap)
+	delete(m.decisions, sess.ID)
+	m.mu.Unlock()
+
+	h, err := m.buildHarness(ctx, sess)
+	if err != nil {
+		return nil, err
 	}
 
 	return m.consumeHarnessStream(ctx, sess.ID, h.Resume(ctx, sess.ID, fullDecisions))
+}
+
+// RespondPermission records a user's [tools.PermissionDecision] for a pending
+// permission request. If additional permission requests remain unresolved for
+// the session, RespondPermission buffers the decision and returns `(nil, nil)`
+// without invoking the workflow graph. Once all pending permission requests for
+// the session have been resolved, RespondPermission resumes the harness graph
+// with the complete decision set and streams the remaining turn.
+func (m *Manager) RespondPermission(ctx context.Context, sessionID string, decision tools.PermissionDecision) (*message.Assistant, error) {
+	ready, err := m.RecordDecision(ctx, sessionID, decision)
+	if err != nil || !ready {
+		return nil, err
+	}
+	return m.Resume(ctx, sessionID)
 }
 
 // Send executes a conversational turn via [harness.Harness.Stream], persisting

@@ -251,6 +251,40 @@ func (t *FileTracker) ReadJournal(path string) (*JournalHeader, []JournalEntry, 
 	return readJournalFile(t.journalPath(normPath))
 }
 
+// Changes reads all recorded journal entries across all tracked paths in this
+// session and returns them as a chronologically ordered slice of [std.FileChange]
+// (sorted by UUIDv7 `ID` ascending).
+func (t *FileTracker) Changes() ([]std.FileChange, error) {
+	paths := t.TrackedPaths()
+	out := make([]std.FileChange, 0)
+	for _, p := range paths {
+		header, entries, err := t.ReadJournal(p)
+		if err != nil {
+			return nil, err
+		}
+		for _, e := range entries {
+			out = append(out, std.FileChange{
+				ID:         e.ID,
+				Path:       header.Path,
+				Source:     e.Source,
+				Tool:       e.Tool,
+				Kind:       e.Kind,
+				BeforeHash: e.Before,
+				AfterHash:  e.After,
+				Additions:  e.Additions,
+				Deletions:  e.Deletions,
+				IsBinary:   header.Binary,
+				Timestamp:  e.Timestamp,
+			})
+		}
+	}
+
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].ID < out[j].ID
+	})
+	return out, nil
+}
+
 // ReadBlob reads the raw snapshot bytes for the given SHA-256 hex digest from
 // `changes/blobs/<hash>`. If hash is empty, it returns (nil, nil).
 func (t *FileTracker) ReadBlob(hash string) ([]byte, error) {
@@ -432,6 +466,20 @@ func (t *FileTracker) RevertToBaseline(ctx context.Context, fsys sandbox.FS, pat
 		Deletions:     del,
 		IsBinary:      header.Binary,
 	})
+}
+
+// RevertSession reverts all tracked files in the session back to their initial
+// session baselines via [FileTracker.RevertToBaseline].
+func (t *FileTracker) RevertSession(ctx context.Context, fsys sandbox.FS, force bool) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	for _, p := range t.TrackedPaths() {
+		if err := t.RevertToBaseline(ctx, fsys, p, force); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (t *FileTracker) applyTargetHash(ctx context.Context, fsys sandbox.FS, header *JournalHeader, targetHash string) error {
