@@ -1,0 +1,322 @@
+package ui
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/masterkeysrd/tasksmith/api"
+)
+
+func TestHeaderRenderingAndNormalization(t *testing.T) {
+	h := Header{
+		Version:  "0.1.0",
+		Model:    "Claude 3.7 Sonnet",
+		Thinking: "high",
+		Path:     "/workspace/project",
+	}
+	rendered := h.Render()
+	lines := strings.Split(rendered, "\n")
+	if len(lines) != 3 {
+		t.Fatalf("expected 3 lines, got %d:\n%s", len(lines), rendered)
+	}
+	if !strings.Contains(lines[0], "TaskSmith") || !strings.Contains(lines[0], "v0.1.0") {
+		t.Errorf("line 1 mismatch: %q", lines[0])
+	}
+	if !strings.Contains(lines[1], "Claude 3.7 Sonnet with high effort") {
+		t.Errorf("line 2 mismatch: %q", lines[1])
+	}
+	if !strings.Contains(lines[2], "/workspace/project") {
+		t.Errorf("line 3 mismatch: %q", lines[2])
+	}
+
+	// Home path shortening
+	home, err := os.UserHomeDir()
+	if err == nil && home != "" {
+		shortened := ShortenHomePath(filepath.Join(home, "src", "tasksmith"))
+		if !strings.HasPrefix(shortened, "~") {
+			t.Errorf("expected ~ prefix for home path, got %q", shortened)
+		}
+		if ShortenHomePath(home) != "~" {
+			t.Errorf("expected ~ for exact home, got %q", ShortenHomePath(home))
+		}
+	}
+
+	// Empty defaults
+	emptyH := Header{}
+	emptyRendered := FormatHeader(emptyH)
+	if !strings.Contains(emptyRendered, "v0.1.0") || !strings.Contains(emptyRendered, "default with auto effort") {
+		t.Errorf("empty defaults mismatch:\n%s", emptyRendered)
+	}
+}
+
+func TestStatusBarRenderingAndStates(t *testing.T) {
+	sess := &api.Session{
+		ID:    "s123",
+		Agent: "coder",
+		Model: "gpt-5",
+	}
+
+	for _, state := range []State{StateIdle, StateStreaming, StateApproval} {
+		for _, mode := range []api.PermissionMode{api.ModeDefault, api.ModeAcceptEdits, api.ModePlan, api.ModeAsk, api.ModeAuto} {
+			sb := StatusBar{
+				State:   state,
+				Session: sess,
+				Mode:    mode,
+			}
+			out := sb.Render()
+			if !strings.Contains(out, string(mode)) {
+				t.Errorf("status bar missing mode %q: %s", mode, out)
+			}
+			if !strings.Contains(out, "s123") || !strings.Contains(out, "coder") || !strings.Contains(out, "gpt-5") {
+				t.Errorf("status bar missing session info: %s", out)
+			}
+		}
+	}
+
+	if (State(99)).String() != "unknown" {
+		t.Errorf("unknown state string = %q", (State(99)).String())
+	}
+	if FormatStatusBar(StateIdle, nil, api.ModeDefault) == "" {
+		t.Errorf("FormatStatusBar returned empty")
+	}
+}
+
+func TestComposerLifecycleAndHistory(t *testing.T) {
+	c := NewComposer()
+	if c.Value() != "" {
+		t.Errorf("initial value = %q, want empty", c.Value())
+	}
+
+	c.SetValue("hello")
+	if c.Value() != "hello" {
+		t.Errorf("SetValue failed, got %q", c.Value())
+	}
+	c.Reset()
+	if c.Value() != "" {
+		t.Errorf("Reset failed, got %q", c.Value())
+	}
+
+	// Submit history
+	c.SetValue("cmd 1")
+	if submitted := c.Submit(); submitted != "cmd 1" {
+		t.Errorf("Submit = %q, want 'cmd 1'", submitted)
+	}
+	c.SetValue("cmd 2")
+	_ = c.Submit()
+
+	// History navigation
+	c.SetValue("draft")
+	c = c.NavigateHistory(-1)
+	if c.Value() != "cmd 2" {
+		t.Errorf("NavigateHistory(-1) = %q, want 'cmd 2'", c.Value())
+	}
+	c = c.NavigateHistory(-1)
+	if c.Value() != "cmd 1" {
+		t.Errorf("NavigateHistory(-1) = %q, want 'cmd 1'", c.Value())
+	}
+	// At top of history
+	c = c.NavigateHistory(-1)
+	if c.Value() != "cmd 1" {
+		t.Errorf("NavigateHistory(-1) at top = %q, want 'cmd 1'", c.Value())
+	}
+
+	// Navigate down
+	c = c.NavigateHistory(1)
+	if c.Value() != "cmd 2" {
+		t.Errorf("NavigateHistory(1) = %q, want 'cmd 2'", c.Value())
+	}
+	c = c.NavigateHistory(1)
+	if c.Value() != "draft" {
+		t.Errorf("NavigateHistory(1) restored draft = %q, want 'draft'", c.Value())
+	}
+
+	_ = c.Focus()
+	c.Blur()
+	if c.View() == "" {
+		t.Errorf("View() returned empty")
+	}
+
+	suggestions := []Suggestion{
+		{Usage: "/help", Description: "Show help"},
+		{Usage: "/exit", Description: "Exit REPL"},
+	}
+	formatted := FormatSuggestions(suggestions)
+	if !strings.Contains(formatted, "/help") || !strings.Contains(formatted, "Show help") {
+		t.Errorf("FormatSuggestions = %q", formatted)
+	}
+	if FormatSuggestions(nil) != "" {
+		t.Errorf("FormatSuggestions(nil) should be empty")
+	}
+}
+
+func TestApprovalComponentAndDecisions(t *testing.T) {
+	app := NewApproval()
+	if app.HasPending() {
+		t.Fatalf("expected no pending on new approval")
+	}
+
+	req1 := api.PermissionRequest{
+		ID:            "p1",
+		ToolName:      "write_file",
+		Action:        api.ActionWrite,
+		Safety:        api.SafetyUnsafe,
+		Summary:       "Write foo.go",
+		Target:        "/tmp/foo.go",
+		Diff:          "+added line\n-removed line\n",
+		GrantPatterns: []string{"write_file:*"},
+	}
+	req2 := api.PermissionRequest{
+		ID:       "p2",
+		ToolName: "shell",
+		Action:   api.ActionExec,
+		Safety:   api.SafetyUnsafe,
+		Summary:  "Execute ls",
+	}
+
+	app.SetPending([]api.PermissionRequest{req1})
+	app.Append(req2)
+	if len(app.Pending()) != 2 {
+		t.Fatalf("expected 2 pending, got %d", len(app.Pending()))
+	}
+
+	// Cursor navigation
+	if app.Cursor() != 0 {
+		t.Errorf("initial cursor = %d, want 0", app.Cursor())
+	}
+	app.CursorDown()
+	if app.Cursor() != 1 {
+		t.Errorf("cursor after down = %d, want 1", app.Cursor())
+	}
+	app.CursorDown()
+	if app.Cursor() != 2 {
+		t.Errorf("cursor after down = %d, want 2", app.Cursor())
+	}
+	app.CursorDown() // capped at 2
+	if app.Cursor() != 2 {
+		t.Errorf("cursor after capped down = %d, want 2", app.Cursor())
+	}
+	app.CursorUp()
+	if app.Cursor() != 1 {
+		t.Errorf("cursor after up = %d, want 1", app.Cursor())
+	}
+
+	// Render card
+	card := app.Render()
+	if !strings.Contains(card, "write_file") || !strings.Contains(card, "Write foo.go") {
+		t.Errorf("rendered card missing details:\n%s", card)
+	}
+
+	// Feedback mode
+	app.EnterFeedback()
+	if !app.FeedbackMode() {
+		t.Errorf("expected FeedbackMode true")
+	}
+	app.ExitFeedback()
+	if app.FeedbackMode() {
+		t.Errorf("expected FeedbackMode false after ExitFeedback")
+	}
+	app.CursorUp() // cursor goes from 2 back to 1 (AllowSession)
+
+	// Pop selected (cursor at 1 -> AllowSession)
+	poppedReq, decision, ok := app.PopSelected()
+	if !ok || poppedReq.ID != "p1" {
+		t.Fatalf("PopSelected failed: ok=%v, req=%+v", ok, poppedReq)
+	}
+	if decision.Kind != api.DecisionAllowSession || decision.GrantPattern != "write_file:*" {
+		t.Errorf("decision = %+v, want AllowSession with pattern", decision)
+	}
+
+	// Format decision summary
+	sumAllow := FormatDecisionSummary(poppedReq, decision)
+	if !strings.Contains(sumAllow, "Allowed for session") {
+		t.Errorf("summary mismatch: %s", sumAllow)
+	}
+
+	// Pop second as Reject with feedback
+	popped2, dec2, ok2 := app.PopDecision(api.DecisionReject, "no shell commands")
+	if !ok2 || popped2.ID != "p2" {
+		t.Fatalf("PopDecision p2 failed: %v", popped2)
+	}
+	if dec2.Kind != api.DecisionReject || dec2.Feedback != "no shell commands" {
+		t.Errorf("dec2 mismatch: %+v", dec2)
+	}
+	sumReject := FormatDecisionSummary(popped2, dec2)
+	if !strings.Contains(sumReject, "Rejected") || !strings.Contains(sumReject, "no shell commands") {
+		t.Errorf("summary reject mismatch: %s", sumReject)
+	}
+
+	// ParsePermissionInput variants
+	d1 := ParsePermissionInput(req1, "y")
+	if d1.Kind != api.DecisionAllowOnce {
+		t.Errorf("parse 'y' = %v", d1.Kind)
+	}
+	d2 := ParsePermissionInput(req1, "allow")
+	if d2.Kind != api.DecisionAllowSession {
+		t.Errorf("parse 'allow' = %v", d2.Kind)
+	}
+	d3 := ParsePermissionInput(req1, "n not allowed")
+	if d3.Kind != api.DecisionReject || d3.Feedback != "not allowed" {
+		t.Errorf("parse 'n not allowed' = %+v", d3)
+	}
+}
+
+func TestMessageAndDiffFormatting(t *testing.T) {
+	// User prompt
+	prompt := FormatUserPrompt("hello world")
+	if !strings.Contains(prompt, "hello world") {
+		t.Errorf("FormatUserPrompt missing text: %s", prompt)
+	}
+
+	// User message
+	userMsg := FormatMessage(api.Message{
+		Role:    api.RoleUser,
+		Content: []api.Block{{Type: api.BlockText, Text: "howdy"}},
+	})
+	if !strings.Contains(userMsg, "[user] howdy") {
+		t.Errorf("userMsg = %q", userMsg)
+	}
+
+	// Assistant message with reasoning and tool call
+	asstMsg := FormatMessage(api.Message{
+		Role: api.RoleAssistant,
+		Content: []api.Block{
+			{Type: api.BlockReasoning, Text: "deep thought"},
+			{Type: api.BlockText, Text: "greetings"},
+			{Type: api.BlockToolCall, ToolCall: &api.ToolCall{ID: "t1", Name: "read_file", Args: map[string]any{"path": "x"}}},
+		},
+	})
+	if !strings.Contains(asstMsg, "[reasoning] deep thought") ||
+		!strings.Contains(asstMsg, "[assistant] greetings") ||
+		!strings.Contains(asstMsg, "read_file") {
+		t.Errorf("asstMsg = %q", asstMsg)
+	}
+
+	// Tool message
+	toolMsg := FormatMessage(api.Message{
+		Role:       api.RoleTool,
+		ToolCallID: "t1",
+		Name:       "read_file",
+		Content:    []api.Block{{Type: api.BlockText, Text: "file content"}},
+	})
+	if !strings.Contains(toolMsg, "[tool] read_file: file content") {
+		t.Errorf("toolMsg = %q", toolMsg)
+	}
+
+	// Diff format
+	rawDiff := "--- a/file.go\n+++ b/file.go\n@@ -1,1 +1,2 @@\n-old\n+new\n"
+	diffOut := FormatDiff(rawDiff)
+	if !strings.Contains(diffOut, "--- a/file.go") || !strings.Contains(diffOut, "+new") {
+		t.Errorf("FormatDiff output missing details:\n%s", diffOut)
+	}
+	if FormatDiff("") != "" {
+		t.Errorf("FormatDiff empty should return empty")
+	}
+
+	// Error formatting
+	errFormatted := FormatError("fatal failure")
+	if !strings.Contains(errFormatted, "error: fatal failure") {
+		t.Errorf("FormatError = %q", errFormatted)
+	}
+}

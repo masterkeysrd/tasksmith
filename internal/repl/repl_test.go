@@ -1064,7 +1064,7 @@ func TestBubbleTeaModelLifecycle(t *testing.T) {
 		t.Errorf("expected FeedbackMode() == false after Esc")
 	}
 	// Press Enter on cursor 0 (Allow once) for p4
-	m.permCursor = 0
+	m.SetPermCursor(0)
 	updated, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m = updated.(Model)
 	// Press 'n' (Reject) for p5

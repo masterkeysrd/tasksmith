@@ -10,6 +10,9 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/client"
+	"github.com/masterkeysrd/tasksmith/internal/repl/command"
+	"github.com/masterkeysrd/tasksmith/internal/repl/theme"
+	"github.com/masterkeysrd/tasksmith/internal/repl/ui"
 )
 
 type sendErrorMsg struct {
@@ -18,7 +21,9 @@ type sendErrorMsg struct {
 
 type sseClosedMsg struct{}
 
-// Model implements the inline Bubble Tea v2 [tea.Model] for the TaskSmith REPL.
+// Model implements the inline Bubble Tea v2 [tea.Model] for the TaskSmith REPL,
+// delegating UI rendering and component state to [ui.Composer], [ui.Approval],
+// and [command.Registry].
 type Model struct {
 	ctx          context.Context
 	client       *client.Client
@@ -28,47 +33,31 @@ type Model struct {
 	defaultAgent string
 	defaultModel string
 	defaultTitle string
-	registry     *Registry
+	registry     *command.Registry
 
-	state        State
-	input        textinput.Model
-	spinner      spinner.Model
-	history      []string
-	historyIdx   int
-	historyDraft string
+	state    ui.State
+	composer ui.Composer
+	approval ui.Approval
+	spinner  spinner.Model
 
 	streamText      string
 	streamReasoning string
-
-	pendingPerms  []api.PermissionRequest
-	permCursor    int
-	feedbackMode  bool
-	feedbackInput textinput.Model
 
 	eventCh  <-chan api.Event
 	quitting bool
 }
 
-// NewModel constructs an initialized [Model] in [StateIdle].
-func NewModel(ctx context.Context, cfg Config, reg *Registry, sess *api.Session, mode api.PermissionMode) Model {
+// NewModel constructs an initialized [Model] in [ui.StateIdle].
+func NewModel(ctx context.Context, cfg Config, reg *command.Registry, sess *api.Session, mode api.PermissionMode) Model {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	if reg == nil {
-		reg = NewRegistry()
+		reg = command.NewRegistry()
 	}
 	if mode == "" {
 		mode = api.ModeDefault
 	}
-
-	ti := textinput.New()
-	ti.Prompt = "❯ "
-	ti.Placeholder = "Ask TaskSmith or type /help..."
-	ti.Focus()
-
-	fi := textinput.New()
-	fi.Prompt = ""
-	fi.Placeholder = "Reason for rejection..."
 
 	sp := spinner.New(
 		spinner.WithSpinner(spinner.Dot),
@@ -81,24 +70,24 @@ func NewModel(ctx context.Context, cfg Config, reg *Registry, sess *api.Session,
 	}
 
 	return Model{
-		ctx:           ctx,
-		client:        c,
-		workspace:     cfg.Workspace,
-		session:       sess,
-		mode:          mode,
-		defaultAgent:  cfg.Agent,
-		defaultModel:  cfg.Model,
-		defaultTitle:  cfg.Title,
-		registry:      reg,
-		state:         StateIdle,
-		input:         ti,
-		spinner:       sp,
-		feedbackInput: fi,
+		ctx:          ctx,
+		client:       c,
+		workspace:    cfg.Workspace,
+		session:      sess,
+		mode:         mode,
+		defaultAgent: cfg.Agent,
+		defaultModel: cfg.Model,
+		defaultTitle: cfg.Title,
+		registry:     reg,
+		state:        ui.StateIdle,
+		composer:     ui.NewComposer(),
+		approval:     ui.NewApproval(),
+		spinner:      sp,
 	}
 }
 
-// State returns the current lifecycle [State] of the model.
-func (m Model) State() State {
+// State returns the current lifecycle [ui.State] of the model.
+func (m Model) State() ui.State {
 	return m.state
 }
 
@@ -124,28 +113,32 @@ func (m Model) StreamReasoning() string {
 
 // PendingPermissions returns the queue of unresolved [api.PermissionRequest] items.
 func (m Model) PendingPermissions() []api.PermissionRequest {
-	return m.pendingPerms
+	return m.approval.Pending()
 }
 
-// PermCursor returns the currently highlighted option index in [StateApproval].
+// PermCursor returns the currently highlighted option index in [ui.StateApproval].
 func (m Model) PermCursor() int {
-	return m.permCursor
+	return m.approval.Cursor()
 }
 
-// FeedbackMode reports whether inline rejection feedback input is active in [StateApproval].
+// SetPermCursor overrides the selection cursor index for testing.
+func (m *Model) SetPermCursor(c int) {
+	m.approval.SetCursor(c)
+}
+
+// FeedbackMode reports whether inline rejection feedback input is active in [ui.StateApproval].
 func (m Model) FeedbackMode() bool {
-	return m.feedbackMode
+	return m.approval.FeedbackMode()
 }
 
 // InputValue returns the current text in the prompt input field.
 func (m Model) InputValue() string {
-	return m.input.Value()
+	return m.composer.Value()
 }
 
 // SetInputValue sets the prompt input field value and moves the cursor to the end.
 func (m *Model) SetInputValue(val string) {
-	m.input.SetValue(val)
-	m.input.CursorEnd()
+	m.composer.SetValue(val)
 }
 
 // Init implements [tea.Model].
@@ -164,13 +157,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return model, tea.Batch(cmd, m.waitForSSECmd())
 
 	case sendErrorMsg:
-		m.state = StateIdle
+		m.state = ui.StateIdle
 		m.streamText = ""
 		m.streamReasoning = ""
-		return m, tea.Println(FormatError(typed.err.Error()))
+		return m, tea.Println(ui.FormatError(typed.err.Error()))
 
 	case spinner.TickMsg:
-		if m.state != StateStreaming {
+		if m.state != ui.StateStreaming {
 			return m, nil
 		}
 		var cmd tea.Cmd
@@ -181,9 +174,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	if m.state == StateIdle {
+	if m.state == ui.StateIdle {
 		var cmd tea.Cmd
-		m.input, cmd = m.input.Update(msg)
+		m.composer, cmd = m.composer.Update(msg)
 		return m, cmd
 	}
 	return m, nil
@@ -196,9 +189,9 @@ func (m Model) View() tea.View {
 	}
 
 	switch m.state {
-	case StateStreaming:
+	case ui.StateStreaming:
 		return tea.NewView(m.renderStreamingView())
-	case StateApproval:
+	case ui.StateApproval:
 		return tea.NewView(m.renderApprovalView())
 	default:
 		return tea.NewView(m.renderIdleView())
@@ -207,24 +200,28 @@ func (m Model) View() tea.View {
 
 func (m Model) renderIdleView() string {
 	var sections []string
-	sections = append(sections, m.input.View())
+	sections = append(sections, m.composer.View())
 
-	raw := strings.TrimSpace(m.input.Value())
+	raw := strings.TrimSpace(m.composer.Value())
 	if strings.HasPrefix(raw, "/") && !strings.Contains(raw, " ") {
 		suggestions := m.registry.Suggest(raw)
-		if hint := FormatCommandSuggestions(suggestions); hint != "" {
+		suggs := make([]ui.Suggestion, len(suggestions))
+		for i, s := range suggestions {
+			suggs[i] = ui.Suggestion{Usage: s.Usage, Description: s.Description}
+		}
+		if hint := ui.FormatSuggestions(suggs); hint != "" {
 			sections = append(sections, hint)
 		}
 	}
 
-	sections = append(sections, FormatStatusBar(m.state, m.session, m.mode))
+	sections = append(sections, ui.FormatStatusBar(m.state, m.session, m.mode))
 	return strings.Join(sections, "\n")
 }
 
 func (m Model) renderStreamingView() string {
 	var sections []string
 	if r := strings.TrimSpace(m.streamReasoning); r != "" {
-		sections = append(sections, reasoningStyle.Render(r))
+		sections = append(sections, theme.ReasoningStyle.Render(r))
 	}
 
 	streamLine := m.spinner.View() + " Thinking..."
@@ -232,25 +229,24 @@ func (m Model) renderStreamingView() string {
 		streamLine = m.spinner.View() + " " + m.streamText
 	}
 	sections = append(sections, streamLine)
-	sections = append(sections, FormatStatusBar(m.state, m.session, m.mode))
+	sections = append(sections, ui.FormatStatusBar(m.state, m.session, m.mode))
 	return strings.Join(sections, "\n")
 }
 
 func (m Model) renderApprovalView() string {
 	var sections []string
-	if len(m.pendingPerms) > 0 {
-		card := FormatPermissionCard(m.pendingPerms[0], m.permCursor, m.feedbackMode, m.feedbackInput.Value())
+	if card := m.approval.Render(); card != "" {
 		sections = append(sections, card)
 	}
-	sections = append(sections, FormatStatusBar(m.state, m.session, m.mode))
+	sections = append(sections, ui.FormatStatusBar(m.state, m.session, m.mode))
 	return strings.Join(sections, "\n")
 }
 
 func (m Model) handleKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch m.state {
-	case StateStreaming:
+	case ui.StateStreaming:
 		return m.handleStreamingKey(msg)
-	case StateApproval:
+	case ui.StateApproval:
 		return m.handleApprovalKey(msg)
 	default:
 		return m.handleIdleKey(msg)
@@ -270,11 +266,13 @@ func (m Model) handleIdleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 
 	if keyStr == "up" || msg.Code == tea.KeyUp {
-		return m.navigateHistory(-1), nil
+		m.composer = m.composer.NavigateHistory(-1)
+		return m, nil
 	}
 
 	if keyStr == "down" || msg.Code == tea.KeyDown {
-		return m.navigateHistory(1), nil
+		m.composer = m.composer.NavigateHistory(1)
+		return m, nil
 	}
 
 	if keyStr == "enter" || msg.Code == tea.KeyEnter {
@@ -282,7 +280,7 @@ func (m Model) handleIdleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 
 	var cmd tea.Cmd
-	m.input, cmd = m.input.Update(msg)
+	m.composer, cmd = m.composer.Update(msg)
 	return m, cmd
 }
 
@@ -290,7 +288,7 @@ func (m Model) cycleMode() (tea.Model, tea.Cmd) {
 	next := nextPermissionMode(m.mode)
 	if m.client != nil && m.session != nil && strings.TrimSpace(m.session.ID) != "" {
 		if err := m.client.SetPermissionMode(m.ctx, m.session.ID, next); err != nil {
-			return m, tea.Println(FormatError(err.Error()))
+			return m, tea.Println(ui.FormatError(err.Error()))
 		}
 	}
 	m.mode = next
@@ -314,48 +312,11 @@ func nextPermissionMode(curr api.PermissionMode) api.PermissionMode {
 	}
 }
 
-func (m Model) navigateHistory(delta int) Model {
-	if len(m.history) == 0 {
-		return m
-	}
-
-	if delta < 0 {
-		if m.historyIdx == len(m.history) {
-			m.historyDraft = m.input.Value()
-		}
-		if m.historyIdx > 0 {
-			m.historyIdx--
-			m.input.SetValue(m.history[m.historyIdx])
-			m.input.CursorEnd()
-		}
-		return m
-	}
-
-	if m.historyIdx < len(m.history)-1 {
-		m.historyIdx++
-		m.input.SetValue(m.history[m.historyIdx])
-		m.input.CursorEnd()
-		return m
-	}
-
-	if m.historyIdx == len(m.history)-1 {
-		m.historyIdx = len(m.history)
-		m.input.SetValue(m.historyDraft)
-		m.input.CursorEnd()
-	}
-	return m
-}
-
 func (m Model) submitIdleInput() (tea.Model, tea.Cmd) {
-	text := strings.TrimSpace(m.input.Value())
+	text := m.composer.Submit()
 	if text == "" {
 		return m, nil
 	}
-
-	m.history = append(m.history, text)
-	m.historyIdx = len(m.history)
-	m.historyDraft = ""
-	m.input.Reset()
 
 	if strings.HasPrefix(text, "/") {
 		return m.executeSlashCommand(text)
@@ -364,24 +325,24 @@ func (m Model) submitIdleInput() (tea.Model, tea.Cmd) {
 	if (m.session == nil || strings.TrimSpace(m.session.ID) == "") && m.client != nil {
 		sess, err := ensureSession(m.ctx, m.client, m.defaultTitle, m.defaultAgent, m.defaultModel, m.mode)
 		if err != nil {
-			return m, tea.Println(FormatError(err.Error()))
+			return m, tea.Println(ui.FormatError(err.Error()))
 		}
 		m.session = sess
 	}
 
-	m.state = StateStreaming
+	m.state = ui.StateStreaming
 	m.streamText = ""
 	m.streamReasoning = ""
 
 	return m, tea.Batch(
-		tea.Println(FormatUserPrompt(text)),
+		tea.Println(ui.FormatUserPrompt(text)),
 		m.spinner.Tick,
 		m.sendPromptCmd(text),
 	)
 }
 
 func (m Model) executeSlashCommand(line string) (tea.Model, tea.Cmd) {
-	env := &CommandEnv{
+	env := &command.Env{
 		Client:       m.client,
 		Workspace:    m.workspace,
 		Session:      m.session,
@@ -393,7 +354,7 @@ func (m Model) executeSlashCommand(line string) (tea.Model, tea.Cmd) {
 
 	res, err := m.registry.Execute(m.ctx, env, line)
 	if err != nil {
-		return m, tea.Println(FormatError(err.Error()))
+		return m, tea.Println(ui.FormatError(err.Error()))
 	}
 
 	if res.ResetSession {
@@ -427,7 +388,7 @@ func (m Model) handleStreamingKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if m.client != nil && m.session != nil && strings.TrimSpace(m.session.ID) != "" {
 			_ = m.client.Cancel(m.ctx, m.session.ID)
 		}
-		m.state = StateIdle
+		m.state = ui.StateIdle
 		m.streamText = ""
 		m.streamReasoning = ""
 		return m, nil
@@ -436,12 +397,12 @@ func (m Model) handleStreamingKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) handleApprovalKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	if len(m.pendingPerms) == 0 {
-		m.state = StateIdle
+	if !m.approval.HasPending() {
+		m.state = ui.StateIdle
 		return m, nil
 	}
 
-	if m.feedbackMode {
+	if m.approval.FeedbackMode() {
 		return m.handleApprovalFeedbackKey(msg)
 	}
 
@@ -451,20 +412,16 @@ func (m Model) handleApprovalKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if m.client != nil && m.session != nil && strings.TrimSpace(m.session.ID) != "" {
 			_ = m.client.Cancel(m.ctx, m.session.ID)
 		}
-		m.pendingPerms = nil
-		m.state = StateIdle
+		m.approval.Clear()
+		m.state = ui.StateIdle
 		return m, nil
 
 	case keyStr == "up" || keyStr == "k" || msg.Code == tea.KeyUp:
-		if m.permCursor > 0 {
-			m.permCursor--
-		}
+		m.approval.CursorUp()
 		return m, nil
 
 	case keyStr == "down" || keyStr == "j" || msg.Code == tea.KeyDown:
-		if m.permCursor < 2 {
-			m.permCursor++
-		}
+		m.approval.CursorDown()
 		return m, nil
 
 	case keyStr == "y":
@@ -477,10 +434,7 @@ func (m Model) handleApprovalKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m.submitPermissionDecision(api.DecisionReject, "")
 
 	case keyStr == "r":
-		m.feedbackMode = true
-		m.permCursor = 2
-		m.feedbackInput.Reset()
-		m.feedbackInput.Focus()
+		m.approval.EnterFeedback()
 		return m, nil
 
 	case keyStr == "enter" || msg.Code == tea.KeyEnter:
@@ -493,64 +447,53 @@ func (m Model) handleApprovalKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 func (m Model) handleApprovalFeedbackKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	keyStr := msg.String()
 	if keyStr == "esc" || msg.Code == tea.KeyEscape {
-		m.feedbackMode = false
-		m.feedbackInput.Reset()
+		m.approval.ExitFeedback()
 		return m, nil
 	}
 	if keyStr == "enter" || msg.Code == tea.KeyEnter {
-		feedback := strings.TrimSpace(m.feedbackInput.Value())
-		m.feedbackMode = false
-		m.feedbackInput.Reset()
+		feedback := strings.TrimSpace(m.approval.FeedbackValue())
+		m.approval.ExitFeedback()
 		return m.submitPermissionDecision(api.DecisionReject, feedback)
 	}
 
 	var cmd tea.Cmd
-	m.feedbackInput, cmd = m.feedbackInput.Update(msg)
+	m.approval, cmd = m.approval.UpdateFeedback(msg)
 	return m, cmd
 }
 
 func (m Model) submitSelectedPermission() (tea.Model, tea.Cmd) {
-	switch m.permCursor {
-	case 0:
-		return m.submitPermissionDecision(api.DecisionAllowOnce, "")
-	case 1:
-		return m.submitPermissionDecision(api.DecisionAllowSession, "")
-	default:
-		return m.submitPermissionDecision(api.DecisionReject, "")
+	perm, decision, ok := m.approval.PopSelected()
+	if !ok {
+		m.state = ui.StateIdle
+		return m, nil
 	}
+	return m.applyDecision(perm, decision)
 }
 
 func (m Model) submitPermissionDecision(kind api.DecisionKind, feedback string) (tea.Model, tea.Cmd) {
-	perm := m.pendingPerms[0]
-	m.pendingPerms = m.pendingPerms[1:]
-	m.permCursor = 0
-	m.feedbackMode = false
-
-	decision := api.PermissionDecision{
-		RequestID:  perm.ID,
-		ToolCallID: perm.ToolCallID,
-		Kind:       kind,
-		Feedback:   feedback,
-		Wait:       false,
+	perm, decision, ok := m.approval.PopDecision(kind, feedback)
+	if !ok {
+		m.state = ui.StateIdle
+		return m, nil
 	}
-	if kind == api.DecisionAllowSession && len(perm.GrantPatterns) > 0 {
-		decision.GrantPattern = perm.GrantPatterns[0]
-	}
+	return m.applyDecision(perm, decision)
+}
 
+func (m Model) applyDecision(perm api.PermissionRequest, decision api.PermissionDecision) (tea.Model, tea.Cmd) {
 	if m.client != nil && m.session != nil && strings.TrimSpace(m.session.ID) != "" {
 		if err := m.client.RespondPermission(m.ctx, m.session.ID, decision); err != nil {
-			m.state = StateIdle
-			return m, tea.Println(FormatError(err.Error()))
+			m.state = ui.StateIdle
+			return m, tea.Println(ui.FormatError(err.Error()))
 		}
 	}
 
-	summary := FormatDecisionSummary(perm, decision)
-	if len(m.pendingPerms) > 0 {
-		m.state = StateApproval
+	summary := ui.FormatDecisionSummary(perm, decision)
+	if m.approval.HasPending() {
+		m.state = ui.StateApproval
 		return m, tea.Println(summary)
 	}
 
-	m.state = StateStreaming
+	m.state = ui.StateStreaming
 	return m, tea.Batch(tea.Println(summary), m.spinner.Tick)
 }
 
@@ -602,16 +545,16 @@ func (m Model) handleMessageAddedEvent(ev api.Event) (Model, tea.Cmd) {
 		return m, nil
 	}
 	if ev.Message.Role == api.RoleTool {
-		return m, tea.Println(FormatMessage(*ev.Message))
+		return m, tea.Println(ui.FormatMessage(*ev.Message))
 	}
 	if ev.Message.Role == api.RoleAssistant {
 		if hasToolCalls(ev.Message.Content) {
 			m.streamText = ""
 			m.streamReasoning = ""
-			return m, tea.Println(FormatMessage(*ev.Message))
+			return m, tea.Println(ui.FormatMessage(*ev.Message))
 		}
 		if m.streamText == "" {
-			m.streamText = extractTextBlocks(ev.Message.Content)
+			m.streamText = ui.ExtractTextBlocks(ev.Message.Content)
 		}
 	}
 	return m, nil
@@ -633,25 +576,22 @@ func (m Model) handlePermissionRequestedEvent(ev api.Event) (Model, tea.Cmd) {
 	}
 
 	if len(ev.Permissions) > 0 {
-		m.pendingPerms = append(m.pendingPerms, ev.Permissions...)
+		m.approval.Append(ev.Permissions...)
 	}
-	if len(m.pendingPerms) == 0 && m.client != nil && m.session != nil && strings.TrimSpace(m.session.ID) != "" {
+	if !m.approval.HasPending() && m.client != nil && m.session != nil && strings.TrimSpace(m.session.ID) != "" {
 		if perms, err := m.client.PendingPermissions(m.ctx, m.session.ID); err == nil {
-			m.pendingPerms = append(m.pendingPerms, perms...)
+			m.approval.Append(perms...)
 		}
 	}
 
-	m.state = StateApproval
-	m.permCursor = 0
-	m.feedbackMode = false
-	m.feedbackInput.Reset()
+	m.state = ui.StateApproval
 	return m, tea.Batch(cmds...)
 }
 
 func (m Model) handleCompletedEvent() (Model, tea.Cmd) {
 	flushed := m.flushStreamBuffer()
-	m.state = StateIdle
-	m.pendingPerms = nil
+	m.state = ui.StateIdle
+	m.approval.Clear()
 	if flushed != "" {
 		return m, tea.Println(flushed)
 	}
@@ -661,13 +601,13 @@ func (m Model) handleCompletedEvent() (Model, tea.Cmd) {
 func (m Model) handleErrorEvent(ev api.Event) (Model, tea.Cmd) {
 	m.streamText = ""
 	m.streamReasoning = ""
-	m.pendingPerms = nil
-	m.state = StateIdle
+	m.approval.Clear()
+	m.state = ui.StateIdle
 	errText := ev.Error
 	if errText == "" {
 		errText = "turn failed"
 	}
-	return m, tea.Println(FormatError(errText))
+	return m, tea.Println(ui.FormatError(errText))
 }
 
 func (m *Model) flushStreamBuffer() string {
@@ -683,7 +623,7 @@ func (m *Model) flushStreamBuffer() string {
 	if len(blocks) == 0 {
 		return ""
 	}
-	return formatAssistantMessage(blocks)
+	return ui.FormatAssistantMessage(blocks)
 }
 
 func (m Model) sendPromptCmd(text string) tea.Cmd {
