@@ -984,5 +984,3 @@ func TestSubdirectorySharesCanonicalWorkspaceRuntime(t *testing.T) {
 		t.Fatal("timed out waiting for completed SSE event when subscribed via subDir")
 	}
 }
-
-

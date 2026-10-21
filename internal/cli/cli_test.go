@@ -200,9 +200,9 @@ func TestDaemonStatusStartAndStopCommands(t *testing.T) {
 		t.Errorf("daemon start output = %q, want 'Daemon running'", startOut)
 	}
 
-	// Open a workspace by running a quick REPL /exit so status lists 1 open workspace
-	if _, _, err := execCLI(t, "/exit\n", "repl", "--socket", sockPath, "--workspace", wsDir); err != nil {
-		t.Fatalf("repl /exit error: %v", err)
+	// Open a workspace by running a quick REPL /sessions + /exit so status lists 1 open workspace (with 0 sessions created)
+	if _, _, err := execCLI(t, "/sessions\n/exit\n", "repl", "--socket", sockPath, "--workspace", wsDir); err != nil {
+		t.Fatalf("repl /sessions /exit error: %v", err)
 	}
 
 	statusOut, _, err := execCLI(t, "", "daemon", "status", "--socket", sockPath)
@@ -226,6 +226,32 @@ func TestDaemonStatusStartAndStopCommands(t *testing.T) {
 func TestREPLPromptAndSlashCommands(t *testing.T) {
 	_, sockPath, wsDir := setupCLITestDaemon(t, nil)
 
+	c, err := client.New(sockPath)
+	if err != nil {
+		t.Fatalf("client.New: %v", err)
+	}
+
+	// Verify starting REPL and running slash commands without sending a prompt creates 0 sessions
+	noPromptInput := strings.Join([]string{
+		"/sessions",
+		"/mode",
+		"/mode plan",
+		"/history",
+		"/changes",
+		"/new claude-opus-4-6",
+		"/exit",
+	}, "\n") + "\n"
+	if _, _, err := execCLI(t, noPromptInput, "repl", "--socket", sockPath, "--workspace", wsDir); err != nil {
+		t.Fatalf("repl no-prompt run failed: %v", err)
+	}
+	initialSessions, err := c.ListSessions(context.Background(), wsDir)
+	if err != nil {
+		t.Fatalf("ListSessions: %v", err)
+	}
+	if len(initialSessions) != 0 {
+		t.Fatalf("expected 0 sessions before first user prompt, got %d", len(initialSessions))
+	}
+
 	replInput := strings.Join([]string{
 		"Hello TaskSmith!",
 		"/history",
@@ -236,6 +262,7 @@ func TestREPLPromptAndSlashCommands(t *testing.T) {
 		"/mode invalid_mode",
 		"/changes",
 		"/new claude-opus-4-6",
+		"Second session message",
 		"/sessions",
 		"/switch",
 		"/switch nonexistent-id",
@@ -284,10 +311,6 @@ func TestREPLPromptAndSlashCommands(t *testing.T) {
 	}
 
 	// Verify we can list the 2 sessions via client, switch between them, and resume via --session
-	c, err := client.New(sockPath)
-	if err != nil {
-		t.Fatalf("client.New: %v", err)
-	}
 	sessions, err := c.ListSessions(context.Background(), wsDir)
 	if err != nil {
 		t.Fatalf("ListSessions: %v", err)
@@ -296,15 +319,13 @@ func TestREPLPromptAndSlashCommands(t *testing.T) {
 		t.Fatalf("expected 2 sessions created by REPL, got %d", len(sessions))
 	}
 
-	// Find the session that has history ("Hello TaskSmith!")
 	var firstSessionID, secondSessionID string
 	for _, s := range sessions {
-		h, hErr := c.History(context.Background(), wsDir, s.ID)
-		if hErr == nil && len(h) > 0 {
-			firstSessionID = s.ID
-		} else {
+		if s.Model == "claude-opus-4-6" {
 			secondSessionID = s.ID
+			continue
 		}
+		firstSessionID = s.ID
 	}
 	if firstSessionID == "" || secondSessionID == "" {
 		t.Fatalf("could not identify first and second session IDs from %+v", sessions)
@@ -533,4 +554,3 @@ func TestDaemonServeCommandLifecycle(t *testing.T) {
 		t.Fatal("timed out waiting for daemon serve to exit")
 	}
 }
-
