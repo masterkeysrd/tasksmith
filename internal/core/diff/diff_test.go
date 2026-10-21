@@ -250,3 +250,45 @@ func TestStats(t *testing.T) {
 		}
 	})
 }
+
+func TestMerge3(t *testing.T) {
+	t.Run("Non-overlapping changes merge cleanly", func(t *testing.T) {
+		ancestor := []string{"1", "2", "3", "4", "5"}
+		left := []string{"1-left", "2", "3", "4", "5"}
+		right := []string{"1", "2", "3", "4", "5-right"}
+
+		merged, conflict := Merge3(ancestor, left, right)
+		if conflict {
+			t.Fatalf("expected no conflict, got conflict=true")
+		}
+		want := []string{"1-left", "2", "3", "4", "5-right"}
+		if !reflect.DeepEqual(merged, want) {
+			t.Errorf("merged = %v, want %v", merged, want)
+		}
+	})
+
+	t.Run("Overlapping divergent changes report conflict", func(t *testing.T) {
+		ancestor := []string{"1", "2", "3"}
+		left := []string{"1", "2-left", "3"}
+		right := []string{"1", "2-right", "3"}
+
+		_, conflict := Merge3(ancestor, left, right)
+		if !conflict {
+			t.Fatalf("expected conflict=true for overlapping divergent edits")
+		}
+	})
+
+	t.Run("Identical overlapping changes do not conflict", func(t *testing.T) {
+		ancestor := []string{"1", "2", "3"}
+		left := []string{"1", "2-same", "3"}
+		right := []string{"1", "2-same", "3"}
+
+		merged, conflict := Merge3(ancestor, left, right)
+		if conflict {
+			t.Fatalf("expected conflict=false for identical edits")
+		}
+		if !reflect.DeepEqual(merged, left) {
+			t.Errorf("merged = %v, want %v", merged, left)
+		}
+	})
+}

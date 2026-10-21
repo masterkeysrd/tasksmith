@@ -349,3 +349,139 @@ func splitLines(s string) []string {
 	}
 	return lines
 }
+
+// Merge3 performs a line-based three-way merge using ancestor as the common base
+// between left and right. It returns the merged lines and a boolean reporting
+// whether an overlapping conflict was detected.
+func Merge3(ancestor, left, right []string) ([]string, bool) {
+	matchA := buildMatches(ancestor, left)
+	matchC := buildMatches(ancestor, right)
+
+	var result []string
+	hasConflict := false
+
+	prevA := -1
+	prevC := -1
+
+	i := 0
+	n := len(ancestor)
+
+	for i < n {
+		if matchA[i] != -1 && matchC[i] != -1 {
+			currA := matchA[i]
+			currC := matchC[i]
+
+			insA := left[prevA+1 : currA]
+			insC := right[prevC+1 : currC]
+
+			if len(insA) > 0 && len(insC) > 0 {
+				if equalSlices(insA, insC) {
+					result = append(result, insA...)
+				} else {
+					hasConflict = true
+				}
+			} else if len(insA) > 0 {
+				result = append(result, insA...)
+			} else if len(insC) > 0 {
+				result = append(result, insC...)
+			}
+
+			result = append(result, ancestor[i])
+
+			prevA = currA
+			prevC = currC
+			i++
+		} else {
+			start := i
+			for i < n && (matchA[i] == -1 || matchC[i] == -1) {
+				i++
+			}
+			end := i
+
+			nextA := len(left)
+			if end < n && matchA[end] != -1 {
+				nextA = matchA[end]
+			}
+			nextC := len(right)
+			if end < n && matchC[end] != -1 {
+				nextC = matchC[end]
+			}
+
+			hunkAncestor := ancestor[start:end]
+			hunkLeft := left[prevA+1 : nextA]
+			hunkRight := right[prevC+1 : nextC]
+
+			leftChanged := !equalSlices(hunkAncestor, hunkLeft)
+			rightChanged := !equalSlices(hunkAncestor, hunkRight)
+
+			if leftChanged && rightChanged {
+				if equalSlices(hunkLeft, hunkRight) {
+					result = append(result, hunkLeft...)
+				} else {
+					hasConflict = true
+				}
+			} else if leftChanged {
+				result = append(result, hunkLeft...)
+			} else if rightChanged {
+				result = append(result, hunkRight...)
+			} else {
+				result = append(result, hunkAncestor...)
+			}
+
+			prevA = nextA - 1
+			prevC = nextC - 1
+		}
+	}
+
+	insA := left[prevA+1:]
+	insC := right[prevC+1:]
+	if len(insA) > 0 && len(insC) > 0 {
+		if equalSlices(insA, insC) {
+			result = append(result, insA...)
+		} else {
+			hasConflict = true
+		}
+	} else if len(insA) > 0 {
+		result = append(result, insA...)
+	} else if len(insC) > 0 {
+		result = append(result, insC...)
+	}
+
+	return result, hasConflict
+}
+
+func buildMatches(src, dst []string) []int {
+	edits := MyersDiff(src, dst)
+	matches := make([]int, len(src))
+	for i := range matches {
+		matches[i] = -1
+	}
+
+	srcIdx := 0
+	dstIdx := 0
+	for _, e := range edits {
+		switch e.Op {
+		case OpEqual:
+			matches[srcIdx] = dstIdx
+			srcIdx++
+			dstIdx++
+		case OpDelete:
+			srcIdx++
+		case OpInsert:
+			dstIdx++
+		}
+	}
+	return matches
+}
+
+func equalSlices(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
