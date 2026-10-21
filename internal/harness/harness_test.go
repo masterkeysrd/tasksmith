@@ -10,11 +10,12 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/masterkeysrd/loom/llm"
 	"github.com/masterkeysrd/loom/message"
 	"github.com/masterkeysrd/loom/profile"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
-	_ "modernc.org/sqlite"
+	"github.com/masterkeysrd/tasksmith/internal/core/sqlite"
 )
 
 type capturedTurn struct {
@@ -120,9 +121,9 @@ func newTestModel(t *testing.T, p *fakeProvider) *llm.Model {
 func openTestSQLite(t *testing.T) *sql.DB {
 	t.Helper()
 	dbPath := filepath.Join(t.TempDir(), "test.db")
-	db, err := sql.Open("sqlite", dbPath)
+	db, err := sqlite.Open(context.Background(), dbPath)
 	if err != nil {
-		t.Fatalf("sql.Open sqlite: %v", err)
+		t.Fatalf("sqlite.Open: %v", err)
 	}
 	t.Cleanup(func() {
 		_ = db.Close()
@@ -205,8 +206,9 @@ func TestSingleTurnStreaming(t *testing.T) {
 	if reply.Role() != message.RoleAssistant {
 		t.Errorf("reply.Role() = %q, want %q", reply.Role(), message.RoleAssistant)
 	}
-	if reply.GetID() != "msg-assistant-1" {
-		t.Errorf("reply.GetID() = %q, want %q", reply.GetID(), "msg-assistant-1")
+	parsedID, err := uuid.Parse(reply.GetID())
+	if err != nil || parsedID.Version() != 7 {
+		t.Errorf("reply.GetID() = %q, want valid UUIDv7 (err=%v)", reply.GetID(), err)
 	}
 }
 
@@ -310,6 +312,15 @@ func TestMultiTurnSQLitePersistence(t *testing.T) {
 	}
 	if state.Messages[3].Role() != message.RoleAssistant || msgText(state.Messages[3]) != "Your name is Alice." {
 		t.Errorf("state.Messages[3] = (%s, %q)", state.Messages[3].Role(), msgText(state.Messages[3]))
+	}
+	for i, m := range state.Messages {
+		if m.Role() != message.RoleAssistant {
+			continue
+		}
+		u, err := uuid.Parse(m.GetID())
+		if err != nil || u.Version() != 7 {
+			t.Errorf("state.Messages[%d].GetID() = %q, want valid UUIDv7 (err=%v)", i, m.GetID(), err)
+		}
 	}
 }
 

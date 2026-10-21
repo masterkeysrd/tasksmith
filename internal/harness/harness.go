@@ -8,7 +8,6 @@ import (
 	"iter"
 	"strings"
 
-	"github.com/google/uuid"
 	"github.com/masterkeysrd/loom/checkpoint/sqlite"
 	"github.com/masterkeysrd/loom/graph"
 	"github.com/masterkeysrd/loom/llm"
@@ -89,9 +88,6 @@ func (h *Harness) Stream(ctx context.Context, threadID string, input message.Mes
 		}
 
 		in := message.CloneMessage(input)
-		if in.GetID() == "" {
-			in.SetID(uuid.NewString())
-		}
 
 		update := graph.Update[State](func(s State) State {
 			s.Messages = append(s.Messages, in)

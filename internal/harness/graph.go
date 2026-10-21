@@ -61,9 +61,11 @@ func (n *AgentNode) Execute(ctx context.Context, state State) (graph.Command[Sta
 		return nil, fmt.Errorf("harness: invoke llm: %w", err)
 	}
 
-	if resp.ID == "" {
-		resp.ID = uuid.NewString()
+	id, err := uuid.NewV7()
+	if err != nil {
+		return nil, fmt.Errorf("harness: generate message id: %w", err)
 	}
+	resp.ID = id.String()
 
 	return graph.Update[State](func(s State) State {
 		s.Messages = append(s.Messages, resp)
