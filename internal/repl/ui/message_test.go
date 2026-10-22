@@ -12,10 +12,14 @@ import (
 )
 
 func renderNodeToText(node trail.Node) string {
+	return renderNodeToTextWithWidth(node, 120)
+}
+
+func renderNodeToTextWithWidth(node trail.Node, width int) string {
 	if node == nil {
 		return ""
 	}
-	b := mock.New(120, 24)
+	b := mock.New(width, 24)
 	app := trail.SimpleFC("TestApp", func() kitex.Node {
 		return trail.Box(trail.BoxProps{}, node)
 	})
@@ -333,3 +337,91 @@ func TestRoleToolMessageBehavior(t *testing.T) {
 		}
 	})
 }
+
+func TestReasoningNarrowViewportKeepsClosingParenthesis(t *testing.T) {
+	out := renderNodeToTextWithWidth(Reasoning(ReasoningProps{
+		Text:    "this is a very long reasoning string that will definitely exceed thirty columns in total length",
+		Running: true,
+	}), 35)
+
+	firstLine := strings.Split(strings.TrimSpace(out), "\n")[0]
+	if !strings.HasSuffix(firstLine, ")") {
+		t.Errorf("expected narrow reasoning line to end with ')', got: %q", firstLine)
+	}
+	if !strings.HasPrefix(firstLine, "○ Thinking (") {
+		t.Errorf("expected narrow reasoning line to start with '○ Thinking (', got: %q", firstLine)
+	}
+}
+
+func TestToolGroupNarrowViewportKeepsClosingParenthesis(t *testing.T) {
+	out := renderNodeToTextWithWidth(ToolCall(ToolCallProps{
+		ToolCall: api.ToolCall{Name: "bash", Args: map[string]any{"command": "very long command with lots of arguments that overflows"}},
+		Running:  false,
+	}), 35)
+
+	firstLine := strings.Split(strings.TrimSpace(out), "\n")[0]
+	if !strings.HasSuffix(firstLine, ")") {
+		t.Errorf("expected narrow tool group line to end with ')', got: %q", firstLine)
+	}
+	if !strings.HasPrefix(firstLine, "● Ran (") {
+		t.Errorf("expected narrow tool group line to start with '● Ran (', got: %q", firstLine)
+	}
+}
+
+func TestRenderHistoryMessagesCoalescing(t *testing.T) {
+	hist := []api.Message{
+		{
+			Role: api.RoleUser,
+			Content: []api.Block{
+				{Type: api.BlockText, Text: "Check status"},
+			},
+		},
+		{
+			Role: api.RoleAssistant,
+			Content: []api.Block{
+				{Type: api.BlockToolCall, ToolCall: &api.ToolCall{ID: "tc1", Name: "bash", Args: map[string]any{"command": "git status"}}},
+			},
+		},
+		{
+			Role:       api.RoleTool,
+			ToolCallID: "tc1",
+			Content:    []api.Block{{Type: api.BlockText, Text: "On branch main"}},
+		},
+		{
+			Role: api.RoleAssistant,
+			Content: []api.Block{
+				{Type: api.BlockToolCall, ToolCall: &api.ToolCall{ID: "tc2", Name: "bash", Args: map[string]any{"command": "git diff"}}},
+			},
+		},
+		{
+			Role:       api.RoleTool,
+			ToolCallID: "tc2",
+			Content:    []api.Block{{Type: api.BlockText, Text: ""}},
+		},
+		{
+			Role: api.RoleAssistant,
+			Content: []api.Block{
+				{Type: api.BlockText, Text: "Workspace is clean."},
+			},
+		},
+	}
+
+	nodes := RenderHistoryMessages(hist)
+	var sb strings.Builder
+	for _, n := range nodes {
+		sb.WriteString(renderNodeToText(n))
+		sb.WriteString("\n")
+	}
+	out := sb.String()
+
+	if !strings.Contains(out, "● Ran 2 commands (+1 · git diff)") {
+		t.Errorf("expected coalesced tool calls in history output, got:\n%s", out)
+	}
+	if !strings.Contains(out, "Workspace is clean.") {
+		t.Errorf("expected assistant text in history output, got:\n%s", out)
+	}
+	if strings.Contains(out, "On branch main") {
+		t.Errorf("expected raw tool output to be suppressed in history, got:\n%s", out)
+	}
+}
+

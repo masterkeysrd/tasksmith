@@ -54,13 +54,16 @@ func useLifecycleContext() context.Context {
 
 // StreamState encapsulates in-flight assistant streaming text, reasoning, progress, and pending tools.
 type StreamState struct {
-	IsStreaming     bool
-	StreamText      string
-	StreamReasoning string
-	PendingTools    []api.ToolCall
-	SpinnerText     string
-	Start           func(spinnerText string)
-	Reset           func()
+	IsStreaming             bool
+	StreamText              string
+	StreamReasoning         string
+	StreamReasoningDone     bool
+	StreamReasoningDuration time.Duration
+	PendingTools            []api.ToolCall
+	CompletedTools          []api.ToolCall
+	SpinnerText             string
+	Start                   func(spinnerText string)
+	Reset                   func()
 }
 
 // useSSEStream subscribes to the daemon's real-time SSE stream and manages live text chunk state.
@@ -76,9 +79,28 @@ func useSSEStream(
 	isStreaming, setIsStreaming := kitex.UseState(false)
 	streamText, setStreamText := kitex.UseState("")
 	streamReasoning, setStreamReasoning := kitex.UseState("")
+	streamReasoningDone, setStreamReasoningDone := kitex.UseState(false)
+	streamReasoningDuration, setStreamReasoningDuration := kitex.UseState(time.Duration(0))
 	pendingTools, setPendingTools := kitex.UseState([]api.ToolCall(nil))
+	completedTools, setCompletedTools := kitex.UseState([]api.ToolCall(nil))
 	spinnerText, setSpinnerText := kitex.UseState("Thinking...")
 	reasoningStartRef := kitex.UseRef(time.Time{})
+
+	flushCompletedTools := func() {
+		curr := completedTools()
+		if len(curr) > 0 {
+			groups := ui.GroupToolCalls(curr)
+			for _, grp := range groups {
+				if onItem != nil {
+					onItem(ui.ToolGroup(ui.ToolGroupProps{
+						Calls:   grp,
+						Running: false,
+					}))
+				}
+			}
+			setCompletedTools(nil)
+		}
+	}
 
 	kitex.UseEffectCleanup(func() func() {
 		if c == nil {
@@ -109,7 +131,11 @@ func useSSEStream(
 							case api.RoleAssistant:
 								var reasoningDuration time.Duration
 								if !reasoningStartRef.Current.IsZero() {
-									reasoningDuration = time.Since(reasoningStartRef.Current)
+									if streamReasoningDone() && streamReasoningDuration() > 0 {
+										reasoningDuration = streamReasoningDuration()
+									} else {
+										reasoningDuration = time.Since(reasoningStartRef.Current)
+									}
 									reasoningStartRef.Current = time.Time{}
 								}
 
@@ -123,21 +149,27 @@ func useSSEStream(
 									}
 								}
 
-								if len(nonToolBlocks) > 0 && onItem != nil {
-									msg := *curEv.Message
-									msg.Content = nonToolBlocks
-									onItem(ui.Message(ui.MessageProps{
-										Message:           msg,
-										ReasoningDuration: reasoningDuration,
-									}))
+								if len(nonToolBlocks) > 0 {
+									flushCompletedTools()
+									if onItem != nil {
+										msg := *curEv.Message
+										msg.Content = nonToolBlocks
+										onItem(ui.Message(ui.MessageProps{
+											Message:           msg,
+											ReasoningDuration: reasoningDuration,
+										}))
+									}
 								}
 
 								if len(toolCalls) > 0 {
 									setPendingTools(append(pendingTools(), toolCalls...))
+									setSpinnerText(fmt.Sprintf("Running %s...", toolCalls[len(toolCalls)-1].Name))
 								}
 
 								setStreamText("")
 								setStreamReasoning("")
+								setStreamReasoningDone(false)
+								setStreamReasoningDuration(0)
 
 							case api.RoleTool:
 								toolCallID := curEv.Message.ToolCallID
@@ -165,15 +197,24 @@ func useSSEStream(
 									newPending = append(newPending, curPending[:matchedIdx]...)
 									newPending = append(newPending, curPending[matchedIdx+1:]...)
 									setPendingTools(newPending)
+									if len(newPending) == 0 {
+										setSpinnerText("Thinking...")
+									}
 
-									if onItem != nil {
-										onItem(ui.ToolCall(ui.ToolCallProps{
-											ToolCall:  matchedCall,
-											Running:   false,
-											ErrorText: errText,
-										}))
+									if curEv.Message.IsError {
+										flushCompletedTools()
+										if onItem != nil {
+											onItem(ui.ToolCall(ui.ToolCallProps{
+												ToolCall:  matchedCall,
+												Running:   false,
+												ErrorText: errText,
+											}))
+										}
+									} else {
+										setCompletedTools(append(completedTools(), matchedCall))
 									}
 								} else if curEv.Message.IsError {
+									flushCompletedTools()
 									if onItem != nil {
 										onItem(ui.ToolError(ui.ToolErrorProps{
 											ErrorText: errText,
@@ -183,6 +224,7 @@ func useSSEStream(
 								// If not in pending and not an error, do NOT dump raw tool output
 
 							default:
+								flushCompletedTools()
 								if onItem != nil {
 									onItem(ui.Message(ui.MessageProps{Message: *curEv.Message}))
 								}
@@ -195,19 +237,34 @@ func useSSEStream(
 								switch b.Type {
 								case api.BlockReasoning:
 									if b.Text != "" {
+										if len(completedTools()) > 0 && len(pendingTools()) == 0 {
+											flushCompletedTools()
+										}
 										if reasoningStartRef.Current.IsZero() {
 											reasoningStartRef.Current = time.Now()
+											setStreamReasoningDone(false)
+											setStreamReasoningDuration(0)
 										}
 										setStreamReasoning(streamReasoning() + b.Text)
+										setSpinnerText("Thinking...")
 									}
 								case api.BlockText:
 									if b.Text != "" {
+										if len(completedTools()) > 0 && len(pendingTools()) == 0 {
+											flushCompletedTools()
+										}
+										if !reasoningStartRef.Current.IsZero() && !streamReasoningDone() {
+											setStreamReasoningDuration(time.Since(reasoningStartRef.Current))
+											setStreamReasoningDone(true)
+										}
 										setStreamText(streamText() + b.Text)
 									}
 								case api.BlockToolCall:
-									if b.ToolCall != nil {
-										setSpinnerText(fmt.Sprintf("Running %s...", b.ToolCall.Name))
+									if !reasoningStartRef.Current.IsZero() && !streamReasoningDone() {
+										setStreamReasoningDuration(time.Since(reasoningStartRef.Current))
+										setStreamReasoningDone(true)
 									}
+									// Do not set SpinnerText here to "Running <tool>..."!
 								}
 							}
 						}
@@ -218,10 +275,14 @@ func useSSEStream(
 						}
 
 					case api.EventCompleted:
+						flushCompletedTools()
 						setIsStreaming(false)
 						setStreamText("")
 						setStreamReasoning("")
+						setStreamReasoningDone(false)
+						setStreamReasoningDuration(0)
 						setPendingTools(nil)
+						setCompletedTools(nil)
 						reasoningStartRef.Current = time.Time{}
 						setSpinnerText("Thinking...")
 						if onCompleted != nil {
@@ -229,8 +290,12 @@ func useSSEStream(
 						}
 
 					case api.EventError:
+						flushCompletedTools()
 						setIsStreaming(false)
 						setPendingTools(nil)
+						setCompletedTools(nil)
+						setStreamReasoningDone(false)
+						setStreamReasoningDuration(0)
 						reasoningStartRef.Current = time.Time{}
 						if curEv.Error != "" && onError != nil {
 							onError(curEv.Error)
@@ -248,7 +313,10 @@ func useSSEStream(
 		setIsStreaming(true)
 		setStreamText("")
 		setStreamReasoning("")
+		setStreamReasoningDone(false)
+		setStreamReasoningDuration(0)
 		setPendingTools(nil)
+		setCompletedTools(nil)
 		reasoningStartRef.Current = time.Time{}
 		if spinnerTextVal != "" {
 			setSpinnerText(spinnerTextVal)
@@ -258,22 +326,29 @@ func useSSEStream(
 	}
 
 	reset := func() {
+		flushCompletedTools()
 		setIsStreaming(false)
 		setStreamText("")
 		setStreamReasoning("")
+		setStreamReasoningDone(false)
+		setStreamReasoningDuration(0)
 		setPendingTools(nil)
+		setCompletedTools(nil)
 		reasoningStartRef.Current = time.Time{}
 		setSpinnerText("Thinking...")
 	}
 
 	return StreamState{
-		IsStreaming:     isStreaming(),
-		StreamText:      streamText(),
-		StreamReasoning: streamReasoning(),
-		PendingTools:    pendingTools(),
-		SpinnerText:     spinnerText(),
-		Start:           start,
-		Reset:           reset,
+		IsStreaming:             isStreaming(),
+		StreamText:              streamText(),
+		StreamReasoning:         streamReasoning(),
+		StreamReasoningDone:     streamReasoningDone(),
+		StreamReasoningDuration: streamReasoningDuration(),
+		PendingTools:            pendingTools(),
+		CompletedTools:          completedTools(),
+		SpinnerText:             spinnerText(),
+		Start:                   start,
+		Reset:                   reset,
 	}
 }
 
@@ -421,9 +496,7 @@ func useREPLController(props AppProps, app trail.AppHandle) REPLController {
 			if sess != nil && props.Client != nil {
 				hist, err := props.Client.History(ctx, sess.ID)
 				if err == nil {
-					for _, msg := range hist {
-						initialItems = append(initialItems, ui.Message(ui.MessageProps{Message: msg}))
-					}
+					initialItems = append(initialItems, ui.RenderHistoryMessages(hist)...)
 				}
 				permsList, pErr := props.Client.PendingPermissions(ctx, sess.ID)
 				if pErr == nil && len(permsList) > 0 {
@@ -540,8 +613,8 @@ func useREPLController(props AppProps, app trail.AppHandle) REPLController {
 								Thinking: think,
 								Path:     props.Workspace,
 							}))
-							for _, msg := range hist {
-								newItems = append(newItems, ui.Message(ui.MessageProps{Message: msg}))
+							for _, node := range ui.RenderHistoryMessages(hist) {
+								newItems = append(newItems, node)
 							}
 							setItems(newItems)
 						})

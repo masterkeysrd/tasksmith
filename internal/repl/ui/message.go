@@ -113,23 +113,24 @@ var Reasoning = trail.FC("Reasoning", func(props ReasoningProps) trail.Node {
 	}
 	return trail.Box(trail.BoxProps{
 		Style: style.S().
+			Display(style.DisplayFlex).
 			FlexDirection(style.FlexRow).
 			Width(style.Percent(100)).
 			MaxWidth(style.Percent(100)),
 	},
 		trail.Span(trail.SpanProps{
-			Style: theme.ReasoningStyle.WhiteSpace(style.WhiteSpaceNoWrap).FlexShrink(0),
+			Style: theme.ReasoningStyle.WhiteSpace(style.WhiteSpaceNoWrap).Flex(0, 0),
 		}, trail.Text(prefix)),
 		trail.Span(trail.SpanProps{
 			Style: theme.ReasoningStyle.
 				WhiteSpace(style.WhiteSpaceNoWrap).
-				FlexShrink(1).
+				Flex(0, 1).
 				MinWidth(style.Cells(0)).
 				Overflow(style.OverflowHidden).
 				TextOverflow(style.TextOverflowEllipsis),
 		}, trail.Text(line)),
 		trail.Span(trail.SpanProps{
-			Style: theme.ReasoningStyle.WhiteSpace(style.WhiteSpaceNoWrap).FlexShrink(0),
+			Style: theme.ReasoningStyle.WhiteSpace(style.WhiteSpaceNoWrap).Flex(0, 0),
 		}, trail.Text(")")),
 	)
 })
@@ -458,7 +459,7 @@ var ToolGroup = trail.FC("ToolGroup", func(props ToolGroupProps) trail.Node {
 
 	var spans []trail.Node
 	spans = append(spans, trail.Span(trail.SpanProps{
-		Style: bulletStyle.WhiteSpace(style.WhiteSpaceNoWrap).FlexShrink(0),
+		Style: bulletStyle.WhiteSpace(style.WhiteSpaceNoWrap).Flex(0, 0),
 	}, trail.Text(bullet)))
 
 	if idx := strings.Index(summary, " ("); idx != -1 && strings.HasSuffix(summary, ")") {
@@ -468,25 +469,25 @@ var ToolGroup = trail.FC("ToolGroup", func(props ToolGroupProps) trail.Node {
 
 		spans = append(spans,
 			trail.Span(trail.SpanProps{
-				Style: theme.ToolCallStyle.WhiteSpace(style.WhiteSpaceNoWrap).FlexShrink(0),
+				Style: theme.ToolCallStyle.WhiteSpace(style.WhiteSpaceNoWrap).Flex(0, 0),
 			}, trail.Text(prefix)),
 			trail.Span(trail.SpanProps{
 				Style: theme.ToolCallStyle.
 					WhiteSpace(style.WhiteSpaceNoWrap).
-					FlexShrink(1).
+					Flex(0, 1).
 					MinWidth(style.Cells(0)).
 					Overflow(style.OverflowHidden).
 					TextOverflow(style.TextOverflowEllipsis),
 			}, trail.Text(inner)),
 			trail.Span(trail.SpanProps{
-				Style: theme.ToolCallStyle.WhiteSpace(style.WhiteSpaceNoWrap).FlexShrink(0),
+				Style: theme.ToolCallStyle.WhiteSpace(style.WhiteSpaceNoWrap).Flex(0, 0),
 			}, trail.Text(suffix)),
 		)
 	} else {
 		spans = append(spans, trail.Span(trail.SpanProps{
 			Style: theme.ToolCallStyle.
 				WhiteSpace(style.WhiteSpaceNoWrap).
-				FlexShrink(1).
+				Flex(0, 1).
 				MinWidth(style.Cells(0)).
 				Overflow(style.OverflowHidden).
 				TextOverflow(style.TextOverflowEllipsis),
@@ -496,6 +497,7 @@ var ToolGroup = trail.FC("ToolGroup", func(props ToolGroupProps) trail.Node {
 	nodes := []trail.Node{
 		trail.Box(trail.BoxProps{
 			Style: style.S().
+				Display(style.DisplayFlex).
 				FlexDirection(style.FlexRow).
 				Width(style.Percent(100)).
 				MaxWidth(style.Percent(100)),

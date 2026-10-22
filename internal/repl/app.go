@@ -42,16 +42,36 @@ var App = trail.FC("App", func(props AppProps) trail.Node {
 	if state == ui.StateStreaming || ctrl.Stream.IsStreaming {
 		if r := strings.TrimSpace(ctrl.Stream.StreamReasoning); r != "" {
 			activeNodes = append(activeNodes, ui.Reasoning(ui.ReasoningProps{
-				Text:    r,
-				Running: true,
+				Text:     r,
+				Duration: ctrl.Stream.StreamReasoningDuration,
+				Running:  !ctrl.Stream.StreamReasoningDone,
 			}))
 		}
+		var allActiveTools []api.ToolCall
+		if len(ctrl.Stream.CompletedTools) > 0 {
+			allActiveTools = append(allActiveTools, ctrl.Stream.CompletedTools...)
+		}
 		if len(ctrl.Stream.PendingTools) > 0 {
-			groups := ui.GroupToolCalls(ctrl.Stream.PendingTools)
+			allActiveTools = append(allActiveTools, ctrl.Stream.PendingTools...)
+		}
+		if len(allActiveTools) > 0 {
+			groups := ui.GroupToolCalls(allActiveTools)
 			for _, grp := range groups {
+				grpRunning := false
+				for _, c := range grp {
+					for _, pt := range ctrl.Stream.PendingTools {
+						if pt.ID == c.ID {
+							grpRunning = true
+							break
+						}
+					}
+					if grpRunning {
+						break
+					}
+				}
 				activeNodes = append(activeNodes, ui.ToolGroup(ui.ToolGroupProps{
 					Calls:   grp,
-					Running: true,
+					Running: grpRunning,
 				}))
 			}
 		}

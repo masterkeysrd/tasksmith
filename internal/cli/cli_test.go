@@ -250,18 +250,18 @@ func TestDaemonStatusStartAndStopCommands(t *testing.T) {
 
 func feedMockREPLInput(b *mock.Backend, lines ...string) {
 	go func() {
-		time.Sleep(20 * time.Millisecond)
+		time.Sleep(100 * time.Millisecond)
 		for _, line := range lines {
 			for _, r := range line {
 				b.PostEvent(&backend.RawKeyEvent{
 					Key: key.Key{Code: r, Text: string(r)},
 				})
-				time.Sleep(1 * time.Millisecond)
+				time.Sleep(2 * time.Millisecond)
 			}
 			b.PostEvent(&backend.RawKeyEvent{
 				Key: key.Key{Code: key.KeyEnter},
 			})
-			time.Sleep(10 * time.Millisecond)
+			time.Sleep(50 * time.Millisecond)
 		}
 	}()
 }
