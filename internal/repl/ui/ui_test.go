@@ -256,7 +256,7 @@ func TestMessageAndTranscriptComponents(t *testing.T) {
 	if !strings.Contains(out, "✓ Allowed once: Run ls") {
 		t.Errorf("decision item missing from static transcript:\n%s", out)
 	}
-	if !strings.Contains(out, "▸ Analyzing problem") || !strings.Contains(out, "I can help with that") {
+	if !strings.Contains(out, "○ Thought (Analyzing problem)") || !strings.Contains(out, "I can help with that") {
 		t.Errorf("assistant message missing from static transcript:\n%s", out)
 	}
 	if strings.Contains(out, "[assistant]") {
@@ -340,8 +340,8 @@ func TestReasoningSingleLineTruncation(t *testing.T) {
 	inst.Frame()
 
 	out := surfaceText(b)
-	if !strings.Contains(out, "▸ First line of thought...") {
-		t.Errorf("expected '▸ First line of thought...', got:\n%s", out)
+	if !strings.Contains(out, "○ Thought (First line of thought...)") {
+		t.Errorf("expected '○ Thought (First line of thought...)', got:\n%s", out)
 	}
 	if strings.Contains(out, "Second line") || strings.Contains(out, "Third line") {
 		t.Errorf("multi-line details should not appear in collapsed reasoning output:\n%s", out)

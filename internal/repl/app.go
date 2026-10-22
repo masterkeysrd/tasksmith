@@ -40,24 +40,28 @@ var App = trail.FC("App", func(props AppProps) trail.Node {
 
 	// Streaming display
 	if state == ui.StateStreaming || ctrl.Stream.IsStreaming {
-		var content []api.Block
 		if r := strings.TrimSpace(ctrl.Stream.StreamReasoning); r != "" {
-			content = append(content, api.Block{
-				Type: api.BlockReasoning,
-				Text: r,
-			})
+			activeNodes = append(activeNodes, ui.Reasoning(ui.ReasoningProps{
+				Text:    r,
+				Running: true,
+			}))
 		}
-		if t := ctrl.Stream.StreamText; t != "" {
-			content = append(content, api.Block{
-				Type: api.BlockText,
-				Text: t,
-			})
+		if len(ctrl.Stream.PendingTools) > 0 {
+			groups := ui.GroupToolCalls(ctrl.Stream.PendingTools)
+			for _, grp := range groups {
+				activeNodes = append(activeNodes, ui.ToolGroup(ui.ToolGroupProps{
+					Calls:   grp,
+					Running: true,
+				}))
+			}
 		}
-		if len(content) > 0 {
+		if t := strings.TrimSpace(ctrl.Stream.StreamText); t != "" {
 			activeNodes = append(activeNodes, ui.Message(ui.MessageProps{
 				Message: api.Message{
-					Role:    api.RoleAssistant,
-					Content: content,
+					Role: api.RoleAssistant,
+					Content: []api.Block{
+						{Type: api.BlockText, Text: t},
+					},
 				},
 			}))
 		}

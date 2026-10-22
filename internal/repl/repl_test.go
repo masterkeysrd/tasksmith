@@ -432,6 +432,31 @@ func insertedAboveText(b *mock.Backend) string {
 	return sb.String()
 }
 
+func surfaceText(b *mock.Backend) string {
+	frame := b.LastFrame().Surface
+	if frame == nil {
+		return ""
+	}
+	var sb strings.Builder
+	for y := 0; y < frame.Height; y++ {
+		var line strings.Builder
+		for x := 0; x < frame.Width; x++ {
+			c := frame.CellAt(x, y)
+			if c.Content != "" {
+				line.WriteString(c.Content)
+			} else {
+				line.WriteByte(' ')
+			}
+		}
+		trimmed := strings.TrimRight(line.String(), " ")
+		if trimmed != "" {
+			sb.WriteString(trimmed)
+			sb.WriteString("\n")
+		}
+	}
+	return sb.String()
+}
+
 func TestConfigValidate(t *testing.T) {
 	c, _ := startTestUnixDaemon(t)
 
@@ -467,18 +492,18 @@ func TestConfigValidate(t *testing.T) {
 
 func feedMockCommands(b *mock.Backend, lines ...string) {
 	go func() {
-		time.Sleep(20 * time.Millisecond)
+		time.Sleep(100 * time.Millisecond)
 		for _, line := range lines {
 			for _, r := range line {
 				b.PostEvent(&backend.RawKeyEvent{
 					Key: key.Key{Code: r, Text: string(r)},
 				})
-				time.Sleep(1 * time.Millisecond)
+				time.Sleep(2 * time.Millisecond)
 			}
 			b.PostEvent(&backend.RawKeyEvent{
 				Key: key.Key{Code: key.KeyEnter},
 			})
-			time.Sleep(10 * time.Millisecond)
+			time.Sleep(50 * time.Millisecond)
 		}
 	}()
 }
@@ -681,3 +706,144 @@ func TestAppFunctionalComponentLifecycle(t *testing.T) {
 		t.Errorf("expected decision in scrollback, got:\n%s", above)
 	}
 }
+
+func TestLiveToolCallStreamingAndReasoningDuration(t *testing.T) {
+	c, st := startTestUnixDaemon(t)
+	ctx := t.Context()
+
+	sess, err := c.GetSession(ctx, "s1")
+	if err != nil {
+		t.Fatalf("GetSession: %v", err)
+	}
+
+	b := mock.New(100, 30)
+	props := AppProps{
+		Client:            c,
+		Workspace:         "/workspace/project",
+		Version:           "v0.1.0",
+		SessionID:         "s1",
+		InitialSess:       sess,
+		InitialMode:       api.ModeDefault,
+		InitialModelLabel: "Claude 3.7 Sonnet",
+		InitialThinking:   "high",
+		Registry:          command.NewRegistry(),
+	}
+
+	inst, err := trail.New(App(props), trail.WithBackend(b))
+	if err != nil {
+		t.Fatalf("trail.New: %v", err)
+	}
+
+	runDone := make(chan error, 1)
+	go func() {
+		runDone <- inst.Run(ctx)
+	}()
+
+	time.Sleep(50 * time.Millisecond)
+
+	// 1. Stream reasoning chunk
+	st.sseCh <- api.Event{
+		Type:      api.EventChunk,
+		SessionID: "s1",
+		Chunk: &api.Chunk{
+			ID: "c1",
+			Content: []api.Block{
+				{Type: api.BlockReasoning, Text: "planning commands to execute"},
+			},
+		},
+	}
+	time.Sleep(30 * time.Millisecond)
+
+	// 2. Assistant message with reasoning + tool call arrives
+	st.sseCh <- api.Event{
+		Type:      api.EventMessageAdded,
+		SessionID: "s1",
+		Message: &api.Message{
+			Role: api.RoleAssistant,
+			Content: []api.Block{
+				{Type: api.BlockReasoning, Text: "planning commands to execute"},
+				{Type: api.BlockToolCall, ToolCall: &api.ToolCall{
+					ID:   "tc1",
+					Name: "bash",
+					Args: map[string]any{"command": "echo running-cmd"},
+				}},
+			},
+		},
+	}
+	time.Sleep(30 * time.Millisecond)
+
+	// 3. Tool completion arrives (success)
+	st.sseCh <- api.Event{
+		Type:      api.EventMessageAdded,
+		SessionID: "s1",
+		Message: &api.Message{
+			Role:       api.RoleTool,
+			ToolCallID: "tc1",
+			IsError:    false,
+			Content: []api.Block{
+				{Type: api.BlockText, Text: "running-cmd output\nmore output"},
+			},
+		},
+	}
+	time.Sleep(30 * time.Millisecond)
+
+	// 4. Now send another assistant message with a failing tool call
+	st.sseCh <- api.Event{
+		Type:      api.EventMessageAdded,
+		SessionID: "s1",
+		Message: &api.Message{
+			Role: api.RoleAssistant,
+			Content: []api.Block{
+				{Type: api.BlockToolCall, ToolCall: &api.ToolCall{
+					ID:   "tc2",
+					Name: "view",
+					Args: map[string]any{"path": "/pkg/missing.go"},
+				}},
+			},
+		},
+	}
+	time.Sleep(30 * time.Millisecond)
+
+	// 5. Tool completion arrives (error)
+	st.sseCh <- api.Event{
+		Type:      api.EventMessageAdded,
+		SessionID: "s1",
+		Message: &api.Message{
+			Role:       api.RoleTool,
+			ToolCallID: "tc2",
+			IsError:    true,
+			Content: []api.Block{
+				{Type: api.BlockText, Text: "file not found: missing.go\ndetails here"},
+			},
+		},
+	}
+	time.Sleep(30 * time.Millisecond)
+
+	// 6. Complete
+	st.sseCh <- api.Event{
+		Type:      api.EventCompleted,
+		SessionID: "s1",
+	}
+	time.Sleep(30 * time.Millisecond)
+
+	inst.Exit(nil)
+	<-runDone
+
+	above := insertedAboveText(b)
+	if !strings.Contains(above, "○ Thought") {
+		t.Errorf("expected thought in transcript, got:\n%s", above)
+	}
+	if !strings.Contains(above, "● Ran (echo running-cmd)") {
+		t.Errorf("expected finished bash tool call in transcript, got:\n%s", above)
+	}
+	if strings.Contains(above, "more output") {
+		t.Errorf("expected raw tool output to be suppressed, got:\n%s", above)
+	}
+	if !strings.Contains(above, "● Explored 1 file (missing.go)") {
+		t.Errorf("expected finished view tool call in transcript, got:\n%s", above)
+	}
+	if !strings.Contains(above, "⎿  ✗ file not found: missing.go") {
+		t.Errorf("expected indented error indicator in transcript, got:\n%s", above)
+	}
+}
+

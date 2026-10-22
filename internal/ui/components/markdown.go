@@ -20,8 +20,9 @@ import (
 
 // MarkdownProps defines properties for the Markdown rendering component.
 type MarkdownProps struct {
-	Source string
-	Style  style.Style
+	Source          string
+	Style           style.Style
+	PlainCodeBlocks bool
 	// OnAttachmentClick is called when a @file:, @sym:, or @skill: pill is clicked.
 	// Receives the ref type ("file", "sym", "skill") and the raw value from the token.
 	// If nil, pills are rendered as static badges.
@@ -290,10 +291,17 @@ var Markdown = kitex.FC("Markdown", func(props MarkdownProps) kitex.Node {
 				if node.NextSibling() == nil {
 					marginBottom = 0
 				}
+				plain := props.PlainCodeBlocks || (t != nil && t.Transparent)
+				cbStyle := style.S().MarginBottom(marginBottom)
+				if plain {
+					cbStyle = cbStyle.PaddingLeft(2)
+				}
 				return CodeBlock(CodeBlockProps{
-					Code:  strings.TrimRight(b.String(), "\n"),
-					Lang:  "code",
-					Style: style.S().MarginBottom(marginBottom),
+					Code:       strings.TrimRight(b.String(), "\n"),
+					Lang:       "code",
+					HideHeader: plain,
+					Compact:    plain,
+					Style:      cbStyle,
 				})
 
 			case *ast.FencedCodeBlock:
@@ -312,10 +320,17 @@ var Markdown = kitex.FC("Markdown", func(props MarkdownProps) kitex.Node {
 				if node.NextSibling() == nil {
 					marginBottom = 0
 				}
+				plain := props.PlainCodeBlocks || (t != nil && t.Transparent)
+				cbStyle := style.S().MarginBottom(marginBottom)
+				if plain {
+					cbStyle = cbStyle.PaddingLeft(2)
+				}
 				return CodeBlock(CodeBlockProps{
-					Code:  strings.TrimRight(b.String(), "\n"),
-					Lang:  lang,
-					Style: style.S().MarginBottom(marginBottom),
+					Code:       strings.TrimRight(b.String(), "\n"),
+					Lang:       lang,
+					HideHeader: plain,
+					Compact:    plain,
+					Style:      cbStyle,
 				})
 
 			case *ast.List:
@@ -370,7 +385,7 @@ var Markdown = kitex.FC("Markdown", func(props MarkdownProps) kitex.Node {
 		}
 
 		return renderBlock(doc)
-	}, []any{t, props.Source, props.Style})
+	}, []any{t, props.Source, props.Style, props.PlainCodeBlocks})
 
 	return node
 })

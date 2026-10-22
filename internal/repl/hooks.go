@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/masterkeysrd/kite/extras/kitex"
 	"github.com/masterkeysrd/kite/extras/trail"
@@ -51,11 +52,12 @@ func useLifecycleContext() context.Context {
 	return ctxRef.Current
 }
 
-// StreamState encapsulates in-flight assistant streaming text, reasoning, and progress.
+// StreamState encapsulates in-flight assistant streaming text, reasoning, progress, and pending tools.
 type StreamState struct {
 	IsStreaming     bool
 	StreamText      string
 	StreamReasoning string
+	PendingTools    []api.ToolCall
 	SpinnerText     string
 	Start           func(spinnerText string)
 	Reset           func()
@@ -66,7 +68,7 @@ func useSSEStream(
 	ctx context.Context,
 	c *client.Client,
 	getSession func() *api.Session,
-	onMessage func(api.Message),
+	onItem func(trail.Node),
 	onPermission func([]api.PermissionRequest),
 	onError func(string),
 	onCompleted func(),
@@ -74,7 +76,9 @@ func useSSEStream(
 	isStreaming, setIsStreaming := kitex.UseState(false)
 	streamText, setStreamText := kitex.UseState("")
 	streamReasoning, setStreamReasoning := kitex.UseState("")
+	pendingTools, setPendingTools := kitex.UseState([]api.ToolCall(nil))
 	spinnerText, setSpinnerText := kitex.UseState("Thinking...")
+	reasoningStartRef := kitex.UseRef(time.Time{})
 
 	kitex.UseEffectCleanup(func() func() {
 		if c == nil {
@@ -100,11 +104,89 @@ func useSSEStream(
 								// User prompt was already appended optimistically in submit
 								return
 							}
-							if onMessage != nil {
-								onMessage(*curEv.Message)
+
+							switch curEv.Message.Role {
+							case api.RoleAssistant:
+								var reasoningDuration time.Duration
+								if !reasoningStartRef.Current.IsZero() {
+									reasoningDuration = time.Since(reasoningStartRef.Current)
+									reasoningStartRef.Current = time.Time{}
+								}
+
+								var toolCalls []api.ToolCall
+								var nonToolBlocks []api.Block
+								for _, b := range curEv.Message.Content {
+									if b.Type == api.BlockToolCall && b.ToolCall != nil {
+										toolCalls = append(toolCalls, *b.ToolCall)
+									} else {
+										nonToolBlocks = append(nonToolBlocks, b)
+									}
+								}
+
+								if len(nonToolBlocks) > 0 && onItem != nil {
+									msg := *curEv.Message
+									msg.Content = nonToolBlocks
+									onItem(ui.Message(ui.MessageProps{
+										Message:           msg,
+										ReasoningDuration: reasoningDuration,
+									}))
+								}
+
+								if len(toolCalls) > 0 {
+									setPendingTools(append(pendingTools(), toolCalls...))
+								}
+
+								setStreamText("")
+								setStreamReasoning("")
+
+							case api.RoleTool:
+								toolCallID := curEv.Message.ToolCallID
+								curPending := pendingTools()
+								matchedIdx := -1
+								var matchedCall api.ToolCall
+								for i, pt := range curPending {
+									if pt.ID == toolCallID {
+										matchedIdx = i
+										matchedCall = pt
+										break
+									}
+								}
+
+								errText := ""
+								if curEv.Message.IsError {
+									errText = ui.ExtractTextBlocks(curEv.Message.Content)
+									if errText == "" {
+										errText = "tool execution failed"
+									}
+								}
+
+								if matchedIdx >= 0 {
+									newPending := make([]api.ToolCall, 0, len(curPending)-1)
+									newPending = append(newPending, curPending[:matchedIdx]...)
+									newPending = append(newPending, curPending[matchedIdx+1:]...)
+									setPendingTools(newPending)
+
+									if onItem != nil {
+										onItem(ui.ToolCall(ui.ToolCallProps{
+											ToolCall:  matchedCall,
+											Running:   false,
+											ErrorText: errText,
+										}))
+									}
+								} else if curEv.Message.IsError {
+									if onItem != nil {
+										onItem(ui.ToolError(ui.ToolErrorProps{
+											ErrorText: errText,
+										}))
+									}
+								}
+								// If not in pending and not an error, do NOT dump raw tool output
+
+							default:
+								if onItem != nil {
+									onItem(ui.Message(ui.MessageProps{Message: *curEv.Message}))
+								}
 							}
-							setStreamText("")
-							setStreamReasoning("")
 						}
 
 					case api.EventChunk:
@@ -113,6 +195,9 @@ func useSSEStream(
 								switch b.Type {
 								case api.BlockReasoning:
 									if b.Text != "" {
+										if reasoningStartRef.Current.IsZero() {
+											reasoningStartRef.Current = time.Now()
+										}
 										setStreamReasoning(streamReasoning() + b.Text)
 									}
 								case api.BlockText:
@@ -136,6 +221,8 @@ func useSSEStream(
 						setIsStreaming(false)
 						setStreamText("")
 						setStreamReasoning("")
+						setPendingTools(nil)
+						reasoningStartRef.Current = time.Time{}
 						setSpinnerText("Thinking...")
 						if onCompleted != nil {
 							onCompleted()
@@ -143,6 +230,8 @@ func useSSEStream(
 
 					case api.EventError:
 						setIsStreaming(false)
+						setPendingTools(nil)
+						reasoningStartRef.Current = time.Time{}
 						if curEv.Error != "" && onError != nil {
 							onError(curEv.Error)
 						}
@@ -159,6 +248,8 @@ func useSSEStream(
 		setIsStreaming(true)
 		setStreamText("")
 		setStreamReasoning("")
+		setPendingTools(nil)
+		reasoningStartRef.Current = time.Time{}
 		if spinnerTextVal != "" {
 			setSpinnerText(spinnerTextVal)
 		} else {
@@ -170,6 +261,8 @@ func useSSEStream(
 		setIsStreaming(false)
 		setStreamText("")
 		setStreamReasoning("")
+		setPendingTools(nil)
+		reasoningStartRef.Current = time.Time{}
 		setSpinnerText("Thinking...")
 	}
 
@@ -177,6 +270,7 @@ func useSSEStream(
 		IsStreaming:     isStreaming(),
 		StreamText:      streamText(),
 		StreamReasoning: streamReasoning(),
+		PendingTools:    pendingTools(),
 		SpinnerText:     spinnerText(),
 		Start:           start,
 		Reset:           reset,
@@ -288,9 +382,7 @@ func useREPLController(props AppProps, app trail.AppHandle) REPLController {
 		ctx,
 		props.Client,
 		session,
-		func(msg api.Message) {
-			appendItem(ui.Message(ui.MessageProps{Message: msg}))
-		},
+		appendItem,
 		func(newPerms []api.PermissionRequest) {
 			perms.Queue(newPerms)
 		},
