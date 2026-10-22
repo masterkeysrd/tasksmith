@@ -96,6 +96,10 @@ func useSSEStream(
 					switch curEv.Type {
 					case api.EventMessageAdded:
 						if curEv.Message != nil {
+							if curEv.Message.Role == api.RoleUser {
+								// User prompt was already appended optimistically in submit
+								return
+							}
 							if onMessage != nil {
 								onMessage(*curEv.Message)
 							}
@@ -342,6 +346,13 @@ func useREPLController(props AppProps, app trail.AppHandle) REPLController {
 		p.OnOpen = func() {
 			setStatusHint("")
 		}
+		origSelect := p.OnSelect
+		p.OnSelect = func(opt ui.Option) {
+			setIsPickerOpen(false)
+			if origSelect != nil {
+				origSelect(opt)
+			}
+		}
 		origCancel := p.OnCancel
 		p.OnCancel = func() {
 			setIsPickerOpen(false)
@@ -396,7 +407,6 @@ func useREPLController(props AppProps, app trail.AppHandle) REPLController {
 				if sess != nil && props.Client != nil {
 					go props.Client.SetPermissionMode(ctx, sess.ID, m)
 				}
-				appendItem(ui.Notice(ui.NoticeProps{Text: fmt.Sprintf("Switched to %s mode.", m)}))
 			},
 			NewSession: func(model string) {
 				targetModel := cmp.Or(strings.TrimSpace(model), props.Model)
@@ -540,7 +550,10 @@ func useREPLController(props AppProps, app trail.AppHandle) REPLController {
 			RevertChanges: func(path, entryID string) {
 				sess := session()
 				if sess == nil {
-					appendItem(ui.Notice(ui.NoticeProps{Text: "No active session."}))
+					appendItem(ui.CommandOutput(ui.CommandOutputProps{
+						Command: "/revert",
+						Output:  "No active session.",
+					}))
 					return
 				}
 				if props.Client != nil {
@@ -554,7 +567,17 @@ func useREPLController(props AppProps, app trail.AppHandle) REPLController {
 								appendItem(ui.ErrorMessage(ui.ErrorMessageProps{Text: err.Error()}))
 								return
 							}
-							appendItem(ui.Notice(ui.NoticeProps{Text: "Reverted changes."}))
+							cmdStr := "/revert"
+							if path != "" {
+								cmdStr += " " + path
+								if entryID != "" {
+									cmdStr += " " + entryID
+								}
+							}
+							appendItem(ui.CommandOutput(ui.CommandOutputProps{
+								Command: cmdStr,
+								Output:  "Reverted changes.",
+							}))
 						})
 					}()
 				}

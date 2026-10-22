@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,6 +12,7 @@ import (
 	"github.com/masterkeysrd/kite/extras/kitex"
 	"github.com/masterkeysrd/kite/extras/trail"
 	"github.com/masterkeysrd/kite/key"
+	"github.com/masterkeysrd/kite/style"
 	"github.com/masterkeysrd/tasksmith/api"
 )
 
@@ -242,7 +244,7 @@ func TestMessageAndTranscriptComponents(t *testing.T) {
 	inst.Frame()
 
 	out := insertedAboveText(b)
-	if !strings.Contains(out, "❯ Hello world") {
+	if !strings.Contains(out, "> Hello world") {
 		t.Errorf("user prompt missing from static transcript:\n%s", out)
 	}
 	if !strings.Contains(out, "Switched session") {
@@ -254,21 +256,18 @@ func TestMessageAndTranscriptComponents(t *testing.T) {
 	if !strings.Contains(out, "✓ Allowed once: Run ls") {
 		t.Errorf("decision item missing from static transcript:\n%s", out)
 	}
-	if !strings.Contains(out, "[reasoning] Analyzing problem") || !strings.Contains(out, "I can help with that") {
+	if !strings.Contains(out, "▸ Analyzing problem") || !strings.Contains(out, "I can help with that") {
 		t.Errorf("assistant message missing from static transcript:\n%s", out)
+	}
+	if strings.Contains(out, "[assistant]") {
+		t.Errorf("expected no [assistant] badge in output:\n%s", out)
 	}
 }
 
-func TestHelpAndChangesListComponents(t *testing.T) {
+func TestChangesListComponent(t *testing.T) {
 	b := mock.New(80, 24)
 	app := trail.SimpleFC("TestApp", func() kitex.Node {
 		return trail.Box(trail.BoxProps{},
-			Help(HelpProps{
-				Entries: []HelpEntry{
-					{Usage: "/help", Aliases: []string{"h"}, Description: "Show available slash commands"},
-					{Usage: "/exit", Description: "Exit REPL"},
-				},
-			}),
 			ChangesList(ChangesListProps{
 				Changes: []api.FileChange{
 					{ID: "c1", Kind: "modify", Path: "main.go", Additions: 10, Deletions: 2},
@@ -280,11 +279,72 @@ func TestHelpAndChangesListComponents(t *testing.T) {
 	inst.Frame()
 
 	out := surfaceText(b)
-	if !strings.Contains(out, "Available commands:") || !strings.Contains(out, "/help (/h)") {
-		t.Errorf("Help component missing from output:\n%s", out)
-	}
 	if !strings.Contains(out, "Tracked file changes:") || !strings.Contains(out, "main.go") || !strings.Contains(out, "+10/-2") {
 		t.Errorf("ChangesList component missing from output:\n%s", out)
+	}
+}
+
+func TestCommandOutputComponent(t *testing.T) {
+	b := mock.New(80, 24)
+	app := trail.SimpleFC("TestApp", func() kitex.Node {
+		return trail.Box(trail.BoxProps{
+			Style: style.S().FlexDirection(style.FlexColumn),
+		},
+			CommandOutput(CommandOutputProps{
+				Command: "/mode plan",
+				Output:  "Switched to plan mode.",
+			}),
+			CommandOutput(CommandOutputProps{
+				Command: "/sessions",
+				Output:  "Exited /sessions command",
+			}),
+		)
+	})
+	inst, _ := trail.New(app(), trail.WithBackend(b))
+	inst.Frame()
+
+	out := surfaceText(b)
+	if !strings.Contains(out, "> /mode plan") || !strings.Contains(out, "⎿  Switched to plan mode.") {
+		t.Errorf("CommandOutput mode output missing:\n%s", out)
+	}
+	if !strings.Contains(out, "> /sessions") || !strings.Contains(out, "⎿  Exited /sessions command") {
+		t.Errorf("CommandOutput sessions output missing:\n%s", out)
+	}
+}
+
+func TestReasoningSingleLineTruncation(t *testing.T) {
+	// 1. Helper function checks
+	if res := FormatSingleLineReasoning(""); res != "" {
+		t.Errorf("expected empty for empty input, got %q", res)
+	}
+	if res := FormatSingleLineReasoning("Single line thought"); res != "Single line thought" {
+		t.Errorf("expected single line thought, got %q", res)
+	}
+	multi := "First line of thought\nSecond line details\nThird line conclusion"
+	if res := FormatSingleLineReasoning(multi); res != "First line of thought..." {
+		t.Errorf("expected 'First line of thought...', got %q", res)
+	}
+	dots := "Already dotted...\nNext line"
+	if res := FormatSingleLineReasoning(dots); res != "Already dotted..." {
+		t.Errorf("expected 'Already dotted...', got %q", res)
+	}
+
+	// 2. Component render check
+	b := mock.New(80, 24)
+	app := trail.SimpleFC("TestApp", func() kitex.Node {
+		return trail.Box(trail.BoxProps{},
+			Reasoning(ReasoningProps{Text: multi}),
+		)
+	})
+	inst, _ := trail.New(app(), trail.WithBackend(b))
+	inst.Frame()
+
+	out := surfaceText(b)
+	if !strings.Contains(out, "▸ First line of thought...") {
+		t.Errorf("expected '▸ First line of thought...', got:\n%s", out)
+	}
+	if strings.Contains(out, "Second line") || strings.Contains(out, "Third line") {
+		t.Errorf("multi-line details should not appear in collapsed reasoning output:\n%s", out)
 	}
 }
 
@@ -577,5 +637,204 @@ func TestComposerSuggestArgsAndSelection(t *testing.T) {
 	inst.Frame()
 	if submittedText != "/mode accept_edits" {
 		t.Errorf("submittedText = %q, want '/mode accept_edits'", submittedText)
+	}
+}
+
+func TestComposerSlashCommandNavigationAndSelection(t *testing.T) {
+	suggestions := []Suggestion{
+		{Usage: "/help", Description: "Show commands"},
+		{Usage: "/mode [name]", Description: "Change mode"},
+		{Usage: "/sessions", Description: "List sessions"},
+	}
+
+	var submittedText string
+	b := mock.New(80, 24)
+	app := trail.SimpleFC("TestApp", func() kitex.Node {
+		return Composer(ComposerProps{
+			Suggest: func(prefix string) []Suggestion {
+				if prefix == "/" {
+					return suggestions
+				}
+				return nil
+			},
+			OnSubmit: func(text string) {
+				submittedText = text
+			},
+		})
+	})
+
+	inst, err := trail.New(app(), trail.WithBackend(b))
+	if err != nil {
+		t.Fatalf("trail.New: %v", err)
+	}
+	inst.Frame()
+
+	// 1. Type "/"
+	inst.Engine().ProcessRawEvent(&backend.RawKeyEvent{
+		Key: key.Key{Code: '/', Text: "/"},
+	})
+	inst.Frame()
+
+	out := surfaceText(b)
+	if !strings.Contains(out, "❯ /help") {
+		t.Fatalf("expected row 0 highlighted with '❯ /help', got:\n%s", out)
+	}
+	if !strings.Contains(out, "  /mode [name]") {
+		t.Errorf("expected row 1 unselected '  /mode', got:\n%s", out)
+	}
+
+	// 2. Press Down -> moves selection to row 1 (/mode)
+	inst.Engine().ProcessRawEvent(&backend.RawKeyEvent{
+		Key: key.Key{Code: key.KeyDown},
+	})
+	inst.Frame()
+
+	outDown := surfaceText(b)
+	if !strings.Contains(outDown, "  /help") || !strings.Contains(outDown, "❯ /mode [name]") {
+		t.Fatalf("expected row 1 highlighted with '❯ /mode [name]', got:\n%s", outDown)
+	}
+
+	// 3. Press Enter -> executes the highlighted command ("/mode") directly
+	inst.Engine().ProcessRawEvent(&backend.RawKeyEvent{
+		Key: key.Key{Code: key.KeyEnter},
+	})
+	inst.Frame()
+
+	if submittedText != "/mode" {
+		t.Errorf("submittedText = %q, want '/mode'", submittedText)
+	}
+}
+
+func TestComposerSlashCommandTabCompletion(t *testing.T) {
+	suggestions := []Suggestion{
+		{Usage: "/help", Description: "Show commands"},
+		{Usage: "/mode [name]", Description: "Change mode"},
+	}
+
+	b := mock.New(80, 24)
+	app := trail.SimpleFC("TestApp", func() kitex.Node {
+		return Composer(ComposerProps{
+			Suggest: func(prefix string) []Suggestion {
+				if strings.HasPrefix(prefix, "/") {
+					return suggestions
+				}
+				return nil
+			},
+		})
+	})
+
+	inst, err := trail.New(app(), trail.WithBackend(b))
+	if err != nil {
+		t.Fatalf("trail.New: %v", err)
+	}
+	inst.Frame()
+
+	// 1. Type "/"
+	inst.Engine().ProcessRawEvent(&backend.RawKeyEvent{
+		Key: key.Key{Code: '/', Text: "/"},
+	})
+	inst.Frame()
+
+	// 2. Press Down -> selects /mode
+	inst.Engine().ProcessRawEvent(&backend.RawKeyEvent{
+		Key: key.Key{Code: key.KeyDown},
+	})
+	inst.Frame()
+
+	// 3. Press Tab -> completes "/mode "
+	inst.Engine().ProcessRawEvent(&backend.RawKeyEvent{
+		Key: key.Key{Code: key.KeyTab},
+	})
+	inst.Frame()
+
+	// 4. Type 'x' to verify the trailing space after tab completion
+	inst.Engine().ProcessRawEvent(&backend.RawKeyEvent{
+		Key: key.Key{Code: 'x', Text: "x"},
+	})
+	inst.Frame()
+
+	outTab := surfaceText(b)
+	if !strings.Contains(outTab, "> /mode x") {
+		t.Errorf("expected input to contain '> /mode x' after Tab and typing 'x', got:\n%s", outTab)
+	}
+}
+
+func TestOptionListPagination(t *testing.T) {
+	opts := make([]Option, 8)
+	for i := 0; i < 8; i++ {
+		opts[i] = Option{
+			Value:       fmt.Sprintf("cmd%d", i),
+			Label:       fmt.Sprintf("/cmd%d", i),
+			Description: fmt.Sprintf("Command %d", i),
+		}
+	}
+
+	// 1. Initially at Selected: 0 -> shows "  ↓ 3 more" at bottom and NO "↑ ... more" at top
+	b1 := mock.New(80, 24)
+	app1 := trail.SimpleFC("App1", func() kitex.Node {
+		return OptionList(OptionListProps{
+			Options:    opts,
+			Selected:   0,
+			MaxVisible: 5,
+		})
+	})
+	inst1, _ := trail.New(app1(), trail.WithBackend(b1))
+	inst1.Frame()
+	out1 := surfaceText(b1)
+	if !strings.Contains(out1, "↓ 3 more") {
+		t.Errorf("expected '↓ 3 more' at bottom, got:\n%s", out1)
+	}
+	if strings.Contains(out1, "↑") {
+		t.Errorf("expected no top overflow at selected 0, got:\n%s", out1)
+	}
+	if !strings.Contains(out1, "❯ /cmd0") || !strings.Contains(out1, "  /cmd4") {
+		t.Errorf("expected visible range [0:5], got:\n%s", out1)
+	}
+	if strings.Contains(out1, "/cmd5") {
+		t.Errorf("expected /cmd5 to be hidden, got:\n%s", out1)
+	}
+
+	// 2. Selected: 5 -> shows "  ↑ 1 more" at top AND "  ↓ 2 more" at bottom
+	b2 := mock.New(80, 24)
+	app2 := trail.SimpleFC("App2", func() kitex.Node {
+		return OptionList(OptionListProps{
+			Options:    opts,
+			Selected:   5,
+			MaxVisible: 5,
+		})
+	})
+	inst2, _ := trail.New(app2(), trail.WithBackend(b2))
+	inst2.Frame()
+	out2 := surfaceText(b2)
+	if !strings.Contains(out2, "↑ 1 more") {
+		t.Errorf("expected '↑ 1 more' at top, got:\n%s", out2)
+	}
+	if !strings.Contains(out2, "↓ 2 more") {
+		t.Errorf("expected '↓ 2 more' at bottom, got:\n%s", out2)
+	}
+	if !strings.Contains(out2, "❯ /cmd5") {
+		t.Errorf("expected /cmd5 to be selected, got:\n%s", out2)
+	}
+
+	// 3. Selected: 7 (last item) -> shows "  ↑ 3 more" at top, and NO "↓ ... more" at bottom
+	b3 := mock.New(80, 24)
+	app3 := trail.SimpleFC("App3", func() kitex.Node {
+		return OptionList(OptionListProps{
+			Options:    opts,
+			Selected:   7,
+			MaxVisible: 5,
+		})
+	})
+	inst3, _ := trail.New(app3(), trail.WithBackend(b3))
+	inst3.Frame()
+	out3 := surfaceText(b3)
+	if !strings.Contains(out3, "↑ 3 more") {
+		t.Errorf("expected '↑ 3 more' at top, got:\n%s", out3)
+	}
+	if strings.Contains(out3, "↓") {
+		t.Errorf("expected no bottom overflow at selected 7, got:\n%s", out3)
+	}
+	if !strings.Contains(out3, "❯ /cmd7") {
+		t.Errorf("expected /cmd7 to be selected, got:\n%s", out3)
 	}
 }

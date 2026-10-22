@@ -49,7 +49,9 @@ type pickerModalState struct {
 type PickerProps struct {
 	Title          string
 	Options        []Option
-	Footer         string // Optional navigation hint displayed in the picker footer
+	MaxVisible     int      // Max visible options before scrolling (defaults to DefaultPickerMaxVisible)
+	Columns        []Column // Column specifications forwarded to OptionList
+	Footer         string   // Optional navigation hint displayed in the picker footer
 	Filterable     bool
 	OnOpen         func()
 	OnSelect       func(opt Option)
@@ -94,8 +96,8 @@ func filterOptions(opts []Option, query string) []Option {
 			continue
 		}
 		match := false
-		for _, col := range opt.Columns {
-			if strings.Contains(strings.ToLower(col), q) {
+		for _, cell := range opt.Cells {
+			if strings.Contains(strings.ToLower(cell), q) {
 				match = true
 				break
 			}
@@ -177,9 +179,6 @@ var Picker = trail.FC("Picker", func(props PickerProps) trail.Node {
 		case ke.MatchString("enter"):
 			if len(filtered) > 0 && props.OnSelect != nil {
 				props.OnSelect(filtered[cur])
-			}
-			if props.OnCancel != nil {
-				props.OnCancel()
 			}
 			return true
 
@@ -300,11 +299,18 @@ var Picker = trail.FC("Picker", func(props PickerProps) trail.Node {
 		))
 	}
 
+	maxVis := props.MaxVisible
+	if maxVis <= 0 {
+		maxVis = DefaultPickerMaxVisible
+	}
+
 	// Options rendering
 	rows = append(rows, OptionList(OptionListProps{
-		Options:   filtered,
-		Selected:  cur,
-		EmptyText: "  No matching options.",
+		Options:    filtered,
+		Selected:   cur,
+		EmptyText:  "  No matching options.",
+		MaxVisible: maxVis,
+		Columns:    props.Columns,
 	}))
 
 	// Inline prompt mode (confirm or input)

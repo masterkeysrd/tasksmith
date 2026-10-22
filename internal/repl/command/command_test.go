@@ -161,8 +161,16 @@ func TestBuiltinCommandsExecution(t *testing.T) {
 
 	// 1. /help
 	reset()
-	if err := reg.Execute(env, "/help"); err != nil || len(appendedNodes) != 1 {
-		t.Fatalf("/help failed: appended=%d, err=%v", len(appendedNodes), err)
+	if err := reg.Execute(env, "/help"); err != nil || openedPicker == nil {
+		t.Fatalf("/help failed: opened=%v, err=%v", openedPicker != nil, err)
+	}
+	if len(openedPicker.Options) != len(reg.List()) {
+		t.Errorf("expected %d help options, got %d", len(reg.List()), len(openedPicker.Options))
+	}
+	// Verify canceling /help emits Exited /help command
+	openedPicker.OnCancel()
+	if len(appendedNodes) != 1 {
+		t.Fatalf("expected 1 appended node after cancel, got %d", len(appendedNodes))
 	}
 
 	// 2. /new
@@ -222,6 +230,30 @@ func TestBuiltinCommandsExecution(t *testing.T) {
 	if openedPicker.Options[0].Value != "s1" || !openedPicker.Options[0].Current {
 		t.Errorf("expected option 0 to be current s1, got %+v", openedPicker.Options[0])
 	}
+	// Verify session id is not present in Cells (only title, model, relTime)
+	cells := openedPicker.Options[0].Cells
+	if len(cells) != 3 {
+		t.Fatalf("expected 3 cells (title, model, relTime), got %d: %v", len(cells), cells)
+	}
+	if cells[0] != "Session One" || cells[1] != "claude-sonnet-4-6" {
+		t.Errorf("unexpected cells: %v", cells)
+	}
+	for _, cell := range cells {
+		if cell == "s1" {
+			t.Errorf("session ID 's1' should not be present in cells: %v", cells)
+		}
+	}
+	// Verify Columns configured on picker
+	if len(openedPicker.Columns) != 3 || openedPicker.Columns[0].Width != 0 || openedPicker.Columns[1].Width != 24 || openedPicker.Columns[2].Width != 26 {
+		t.Errorf("unexpected Columns: %+v", openedPicker.Columns)
+	}
+	// Verify canceling /sessions emits Exited /sessions command
+	openedPicker.OnCancel()
+	if len(appendedNodes) != 1 {
+		t.Fatalf("expected 1 appended node after sessions cancel, got %d", len(appendedNodes))
+	}
+	reset()
+	_ = reg.Execute(envWithSessions, "/sessions")
 	openedPicker.OnSelect(openedPicker.Options[0])
 	if switchSessionID != "s1" {
 		t.Errorf("picker OnSelect() = %q, want 's1'", switchSessionID)
@@ -269,6 +301,13 @@ func TestBuiltinCommandsExecution(t *testing.T) {
 	if err := reg.Execute(env, "/mode"); err != nil || openedPicker == nil || len(openedPicker.Options) != 5 {
 		t.Fatalf("/mode read failed: opened=%v, err=%v", openedPicker != nil, err)
 	}
+	// Verify canceling /mode emits Exited /mode command
+	openedPicker.OnCancel()
+	if len(appendedNodes) != 1 {
+		t.Fatalf("expected 1 appended node after mode cancel, got %d", len(appendedNodes))
+	}
+	reset()
+	_ = reg.Execute(env, "/mode")
 	openedPicker.OnSelect(openedPicker.Options[0])
 	if setModeVal != api.ModeDefault {
 		t.Errorf("picker OnSelect() = %q, want %q", setModeVal, api.ModeDefault)

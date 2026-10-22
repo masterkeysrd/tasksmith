@@ -10,13 +10,14 @@ import (
 	"github.com/masterkeysrd/kite/extras/kitex"
 	"github.com/masterkeysrd/kite/extras/trail"
 	"github.com/masterkeysrd/kite/key"
+	"github.com/masterkeysrd/kite/style"
 )
 
 func TestFilterOptions(t *testing.T) {
 	opts := []Option{
-		{Value: "v1", Label: "Alpha", Description: "First Greek letter", Columns: []string{"A", "alpha"}},
-		{Value: "v2", Label: "Beta", Description: "Second Greek letter", Columns: []string{"B", "beta"}},
-		{Value: "v3", Label: "Gamma", Description: "Third Greek letter", Columns: []string{"G", "gamma"}},
+		{Value: "v1", Label: "Alpha", Description: "First Greek letter", Cells: []string{"A", "alpha"}},
+		{Value: "v2", Label: "Beta", Description: "Second Greek letter", Cells: []string{"B", "beta"}},
+		{Value: "v3", Label: "Gamma", Description: "Third Greek letter", Cells: []string{"G", "gamma"}},
 	}
 
 	// 1. Empty query returns all opts
@@ -293,12 +294,12 @@ func TestPickerColumnsMultiColumn(t *testing.T) {
 	opts := []Option{
 		{
 			Value:   "s1",
-			Columns: []string{"sess-001", "main-workspace", "2m ago"},
+			Cells:   []string{"sess-001", "main-workspace", "2m ago"},
 			Current: true,
 		},
 		{
-			Value:   "s2",
-			Columns: []string{"sess-002", "branch-workspace", "1h ago"},
+			Value: "s2",
+			Cells: []string{"sess-002", "branch-workspace", "1h ago"},
 		},
 	}
 
@@ -327,6 +328,116 @@ func TestPickerColumnsMultiColumn(t *testing.T) {
 	// Row 1 does not have Current: true
 	if strings.Contains(out, "1h ago • current") {
 		t.Errorf("row 1 should not have '• current':\n%s", out)
+	}
+}
+
+func TestPickerFixedColumnWidths(t *testing.T) {
+	opts := []Option{
+		{
+			Value:   "s1",
+			Cells:   []string{"Short", "gpt-4", "1m ago"},
+			Current: true,
+		},
+		{
+			Value:   "s2",
+			Cells:   []string{"Much Longer Session Title Here", "claude-sonnet-4-6", "3h ago"},
+		},
+	}
+
+	b := mock.New(100, 24)
+	app := trail.SimpleFC("TestApp", func() kitex.Node {
+		return Picker(PickerProps{
+			Title:   "Sessions",
+			Options: opts,
+			Columns: []Column{
+				{Width: 0},
+				{Width: 24, Align: style.TextAlignLeft},
+				{Width: 26, Align: style.TextAlignRight},
+			},
+		})
+	})
+
+	inst, err := trail.New(app(), trail.WithBackend(b))
+	if err != nil {
+		t.Fatalf("trail.New: %v", err)
+	}
+	inst.Frame()
+
+	frame := b.LastFrame().Surface
+	if frame == nil {
+		t.Fatalf("nil surface frame")
+	}
+
+	// Locate row Y coordinates for "Short" and "Much Longer"
+	var row0Y, row1Y int
+	for y := 0; y < frame.Height; y++ {
+		var line strings.Builder
+		for x := 0; x < frame.Width; x++ {
+			c := frame.CellAt(x, y)
+			if c.Content != "" {
+				line.WriteString(c.Content)
+			} else {
+				line.WriteByte(' ')
+			}
+		}
+		rowStr := line.String()
+		if strings.Contains(rowStr, "Short") {
+			row0Y = y
+		}
+		if strings.Contains(rowStr, "Much Longer") {
+			row1Y = y
+		}
+	}
+	if row0Y == 0 || row1Y == 0 {
+		t.Fatalf("failed to locate session rows: row0Y=%d, row1Y=%d", row0Y, row1Y)
+	}
+
+	// Find X coordinate of model column ("gpt-4" on row 0, "claude-sonnet-4-6" on row 1)
+	findSubstrX := func(y int, substr string) int {
+		runes := []rune(substr)
+		for x := 0; x <= frame.Width-len(runes); x++ {
+			matched := true
+			for i, r := range runes {
+				if frame.CellAt(x+i, y).Content != string(r) {
+					matched = false
+					break
+				}
+			}
+			if matched {
+				return x
+			}
+		}
+		return -1
+	}
+
+	model0X := findSubstrX(row0Y, "gpt-4")
+	model1X := findSubstrX(row1Y, "claude-sonnet-4-6")
+	if model0X == -1 || model1X == -1 {
+		t.Fatalf("could not find model column on rows: model0X=%d, model1X=%d", model0X, model1X)
+	}
+	if model0X != model1X {
+		t.Errorf("model column X mismatch across rows: row0=%d, row1=%d", model0X, model1X)
+	}
+	if model0X != 50 {
+		t.Errorf("expected model column at X=50, got %d", model0X)
+	}
+
+	// For right-aligned time column, verify the text ends at the right edge (X=99)
+	time0Str := "1m ago • current"
+	time1Str := "3h ago"
+	time0X := findSubstrX(row0Y, time0Str)
+	time1X := findSubstrX(row1Y, time1Str)
+	if time0X == -1 || time1X == -1 {
+		t.Fatalf("could not find time column on rows: time0X=%d, time1X=%d", time0X, time1X)
+	}
+
+	time0EndX := time0X + len([]rune(time0Str)) - 1
+	time1EndX := time1X + len([]rune(time1Str)) - 1
+	if time0EndX != 99 {
+		t.Errorf("expected row 0 time text to end at X=99 (right-aligned), got endX=%d (startX=%d)", time0EndX, time0X)
+	}
+	if time1EndX != 99 {
+		t.Errorf("expected row 1 time text to end at X=99 (right-aligned), got endX=%d (startX=%d)", time1EndX, time1X)
 	}
 }
 

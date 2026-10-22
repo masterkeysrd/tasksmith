@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/dustin/go-humanize"
+	"github.com/masterkeysrd/kite/style"
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/repl/ui"
 )
@@ -48,7 +49,10 @@ func HandleSessions(env Env, args []string) error {
 
 	if env.ListSessions == nil {
 		if env.AppendNode != nil {
-			env.AppendNode(ui.Notice(ui.NoticeProps{Text: "No sessions found."}))
+			env.AppendNode(ui.CommandOutput(ui.CommandOutputProps{
+				Command: "/sessions",
+				Output:  "No sessions found.",
+			}))
 		}
 		return nil
 	}
@@ -58,7 +62,10 @@ func HandleSessions(env Env, args []string) error {
 	}
 	if len(sessions) == 0 {
 		if env.AppendNode != nil {
-			env.AppendNode(ui.Notice(ui.NoticeProps{Text: "No sessions found."}))
+			env.AppendNode(ui.CommandOutput(ui.CommandOutputProps{
+				Command: "/sessions",
+				Output:  "No sessions found.",
+			}))
 		}
 		return nil
 	}
@@ -89,7 +96,7 @@ func NewSessionPicker(env Env, sessions []api.Session, activeID string) ui.Picke
 		opts[i] = ui.Option{
 			Value:   s.ID,
 			Label:   title,
-			Columns: []string{title, s.ID, model, relTime},
+			Cells:   []string{title, model, relTime},
 			Current: activeID != "" && s.ID == activeID,
 		}
 	}
@@ -99,7 +106,20 @@ func NewSessionPicker(env Env, sessions []api.Session, activeID string) ui.Picke
 			env.SwitchSession(opt.Value)
 		}
 	})
+	picker.Columns = []ui.Column{
+		{Width: 0},
+		{Width: 24, Align: style.TextAlignLeft},
+		{Width: 26, Align: style.TextAlignRight},
+	}
 	picker.Filterable = true
+	picker.OnCancel = func() {
+		if env.AppendNode != nil {
+			env.AppendNode(ui.CommandOutput(ui.CommandOutputProps{
+				Command: "/sessions",
+				Output:  "Exited /sessions command",
+			}))
+		}
+	}
 	picker.Footer = "↑/↓ to select • enter to switch • f2 to rename • f4 to delete • esc to cancel"
 
 	picker.InputActions = map[string]ui.InputAction{

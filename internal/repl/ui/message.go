@@ -13,20 +13,102 @@ import (
 
 // UserPromptProps defines the properties for a user prompt scrollback item.
 type UserPromptProps struct {
-	Text string
+	Text     string
+	NoMargin bool
 }
 
 // UserPrompt is a trail functional component rendering a user input prompt line.
 var UserPrompt = trail.FC("UserPrompt", func(props UserPromptProps) trail.Node {
+	s := style.S().FlexDirection(style.FlexRow)
+	if !props.NoMargin {
+		s = s.Margin(0, 0, 1, 0)
+	}
 	return trail.Box(trail.BoxProps{
-		Style: style.S().FlexDirection(style.FlexRow),
+		Style: s,
 	},
 		trail.Span(trail.SpanProps{
 			Style: theme.UserPromptStyle,
-		}, trail.Text("❯ ")),
+		}, trail.Text("> ")),
 		trail.Span(trail.SpanProps{
 			Style: theme.UserMsgStyle,
 		}, trail.Text(props.Text)),
+	)
+})
+
+// CommandOutputProps defines the properties for a command execution result.
+type CommandOutputProps struct {
+	Command  string       // e.g. "/mode" or "/mode plan"
+	Output   string       // e.g. "Switched to plan mode." or "Exited /mode command"
+	Children []trail.Node // Optional children (injected by trail.FCC)
+}
+
+// CommandOutput is a trail functional component rendering a command prompt line and its indented result indicator.
+var CommandOutput = trail.FCC("CommandOutput", func(props CommandOutputProps) trail.Node {
+	rows := []trail.Node{
+		UserPrompt(UserPromptProps{Text: props.Command, NoMargin: true}),
+		trail.Box(trail.BoxProps{
+			Style: style.S().FlexDirection(style.FlexRow),
+		},
+			trail.Span(trail.SpanProps{
+				Style: theme.StatusBarStyle.WhiteSpace(style.WhiteSpacePre),
+			}, trail.Text("  ⎿  ")),
+			trail.Span(trail.SpanProps{
+				Style: theme.StatusBarStyle,
+			}, trail.Text(props.Output)),
+		),
+	}
+	if len(props.Children) > 0 {
+		rows = append(rows, trail.Box(trail.BoxProps{
+			Style: style.S().Margin(0, 0, 0, 5).FlexDirection(style.FlexColumn),
+		}, props.Children...))
+	}
+	return trail.Box(trail.BoxProps{
+		Style: style.S().FlexDirection(style.FlexColumn),
+	}, rows...)
+})
+
+// ReasoningProps defines the properties for rendering a reasoning block.
+type ReasoningProps struct {
+	Text string
+}
+
+// FormatSingleLineReasoning collapses multi-line reasoning into a single line with an ellipsis.
+func FormatSingleLineReasoning(r string) string {
+	r = strings.TrimSpace(r)
+	if r == "" {
+		return ""
+	}
+	lines := strings.Split(r, "\n")
+	firstLine := ""
+	for _, l := range lines {
+		trimmed := strings.TrimSpace(l)
+		if trimmed != "" {
+			firstLine = trimmed
+			break
+		}
+	}
+	if len(lines) > 1 {
+		firstLine = strings.TrimRight(firstLine, ". ") + "..."
+	}
+	return firstLine
+}
+
+// Reasoning is a trail functional component rendering a single-line reasoning block with ellipsis.
+var Reasoning = trail.FC("Reasoning", func(props ReasoningProps) trail.Node {
+	line := FormatSingleLineReasoning(props.Text)
+	if line == "" {
+		return nil
+	}
+	return trail.Box(trail.BoxProps{
+		Style: style.S().
+			FlexDirection(style.FlexRow).
+			WhiteSpace(style.WhiteSpaceNoWrap).
+			Overflow(style.OverflowHidden).
+			TextOverflow(style.TextOverflowEllipsis),
+	},
+		trail.Span(trail.SpanProps{
+			Style: theme.ReasoningStyle.WhiteSpace(style.WhiteSpaceNoWrap),
+		}, trail.Text("▸ "+line)),
 	)
 })
 
@@ -79,16 +161,7 @@ var Message = trail.FC("Message", func(props MessageProps) trail.Node {
 	switch msg.Role {
 	case api.RoleUser:
 		text := ExtractTextBlocks(msg.Content)
-		return trail.Box(trail.BoxProps{
-			Style: style.S().FlexDirection(style.FlexRow),
-		},
-			trail.Span(trail.SpanProps{
-				Style: theme.UserBadgeStyle,
-			}, trail.Text("[user] ")),
-			trail.Span(trail.SpanProps{
-				Style: theme.UserMsgStyle,
-			}, trail.Text(text)),
-		)
+		return UserPrompt(UserPromptProps{Text: text})
 
 	case api.RoleAssistant:
 		var rows []trail.Node
@@ -109,13 +182,7 @@ var Message = trail.FC("Message", func(props MessageProps) trail.Node {
 
 		if r := strings.TrimSpace(reasoning.String()); r != "" {
 			rows = append([]trail.Node{
-				trail.Box(trail.BoxProps{
-					Style: style.S().FlexDirection(style.FlexRow),
-				},
-					trail.Span(trail.SpanProps{
-						Style: theme.ReasoningStyle,
-					}, trail.Text(fmt.Sprintf("[reasoning] %s", r))),
-				),
+				Reasoning(ReasoningProps{Text: r}),
 			}, rows...)
 		}
 
@@ -124,26 +191,17 @@ var Message = trail.FC("Message", func(props MessageProps) trail.Node {
 				Style: style.S().FlexDirection(style.FlexRow),
 			},
 				trail.Span(trail.SpanProps{
-					Style: theme.AgentBadgeStyle,
-				}, trail.Text("[assistant] ")),
-				trail.Span(trail.SpanProps{
 					Style: theme.AssistantMsgStyle,
 				}, trail.Text(t)),
 			))
 		}
 
 		if len(rows) == 0 {
-			return trail.Box(trail.BoxProps{
-				Style: style.S().FlexDirection(style.FlexRow),
-			},
-				trail.Span(trail.SpanProps{
-					Style: theme.AgentBadgeStyle,
-				}, trail.Text("[assistant] ")),
-			)
+			return nil
 		}
 
 		return trail.Box(trail.BoxProps{
-			Style: style.S().FlexDirection(style.FlexColumn),
+			Style: style.S().FlexDirection(style.FlexColumn).Margin(0, 0, 1, 0),
 		}, rows...)
 
 	case api.RoleTool:

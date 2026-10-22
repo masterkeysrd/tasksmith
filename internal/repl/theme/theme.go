@@ -59,7 +59,7 @@ var (
 	ModeBadgeAutoStyle        = style.S().Bold(true).Foreground(ColorRed)
 
 	UserPromptStyle   = style.S().Bold(true).Foreground(ColorCyan)
-	UserMsgStyle      = style.S().Bold(true).Foreground(ColorTextUser)
+	UserMsgStyle      = style.S().Bold(true).Foreground(ColorCyan)
 	AssistantMsgStyle = style.S().Foreground(ColorTextAsst)
 	ReasoningStyle    = style.S().Italic(true).Foreground(ColorMuted)
 	ToolCallStyle     = style.S().Foreground(ColorToolCall)

@@ -41,17 +41,36 @@ func (r *Registry) registerSystemCommands() {
 
 func (r *Registry) handleHelp(env Env, _ []string) error {
 	cmds := r.List()
-	entries := make([]ui.HelpEntry, len(cmds))
+	opts := make([]ui.Option, len(cmds))
 	for i, cmd := range cmds {
-		entries[i] = ui.HelpEntry{
-			Name:        cmd.Name,
-			Aliases:     cmd.Aliases,
-			Usage:       cmd.Usage,
+		usage := cmd.Usage
+		if len(cmd.Aliases) > 0 {
+			aliases := make([]string, len(cmd.Aliases))
+			for j, a := range cmd.Aliases {
+				aliases[j] = "/" + a
+			}
+			usage = fmt.Sprintf("%s (%s)", usage, strings.Join(aliases, ", "))
+		}
+		opts[i] = ui.Option{
+			Value:       "/" + cmd.Name,
+			Label:       usage,
 			Description: cmd.Description,
 		}
 	}
-	if env.AppendNode != nil {
-		env.AppendNode(ui.Help(ui.HelpProps{Entries: entries}))
+	picker := ui.NewPicker("Available commands:", opts, func(opt ui.Option) {
+		_ = r.Execute(env, opt.Value)
+	})
+	picker.Filterable = true
+	picker.OnCancel = func() {
+		if env.AppendNode != nil {
+			env.AppendNode(ui.CommandOutput(ui.CommandOutputProps{
+				Command: "/help",
+				Output:  "Exited /help command",
+			}))
+		}
+	}
+	if env.OpenPicker != nil {
+		env.OpenPicker(picker)
 	}
 	return nil
 }
@@ -64,7 +83,21 @@ func HandleMode(env Env, args []string) error {
 			if env.SetMode != nil {
 				env.SetMode(api.PermissionMode(opt.Value))
 			}
+			if env.AppendNode != nil {
+				env.AppendNode(ui.CommandOutput(ui.CommandOutputProps{
+					Command: "/mode",
+					Output:  fmt.Sprintf("Switched to %s mode.", opt.Value),
+				}))
+			}
 		})
+		picker.OnCancel = func() {
+			if env.AppendNode != nil {
+				env.AppendNode(ui.CommandOutput(ui.CommandOutputProps{
+					Command: "/mode",
+					Output:  "Exited /mode command",
+				}))
+			}
+		}
 		if env.OpenPicker != nil {
 			env.OpenPicker(picker)
 		}
@@ -77,6 +110,12 @@ func HandleMode(env Env, args []string) error {
 	}
 	if env.SetMode != nil {
 		env.SetMode(nextMode)
+	}
+	if env.AppendNode != nil {
+		env.AppendNode(ui.CommandOutput(ui.CommandOutputProps{
+			Command: "/mode " + string(nextMode),
+			Output:  fmt.Sprintf("Switched to %s mode.", nextMode),
+		}))
 	}
 	return nil
 }

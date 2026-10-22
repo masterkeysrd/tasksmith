@@ -57,7 +57,10 @@ type ChangesListProps struct {
 // ChangesList is a trail functional component rendering a table of tracked file changes.
 var ChangesList = trail.FC("ChangesList", func(props ChangesListProps) trail.Node {
 	if len(props.Changes) == 0 {
-		return Notice(NoticeProps{Text: "No tracked file changes."})
+		return CommandOutput(CommandOutputProps{
+			Command: "/changes",
+			Output:  "No tracked file changes.",
+		})
 	}
 
 	var rows []trail.Node
@@ -86,14 +89,12 @@ var ChangesList = trail.FC("ChangesList", func(props ChangesListProps) trail.Nod
 		))
 	}
 
-	return trail.Box(trail.BoxProps{
-		Style: style.S().FlexDirection(style.FlexColumn),
-	},
-		trail.Span(trail.SpanProps{
-			Style: theme.ApprovalTitleStyle,
-		}, trail.Text("Tracked file changes:")),
-		kitex.Table(kitex.TableProps{
-			Style: style.S().Margin(0, 0, 0, 2),
-		}, kitex.TBody(kitex.TBodyProps{}, rows...)),
-	)
+	table := kitex.Table(kitex.TableProps{
+		Style: style.S().Margin(0, 0, 0, 2),
+	}, kitex.TBody(kitex.TBodyProps{}, rows...))
+
+	return CommandOutput(CommandOutputProps{
+		Command: "/changes",
+		Output:  "Tracked file changes:",
+	}, table)
 })

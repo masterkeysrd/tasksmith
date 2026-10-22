@@ -72,6 +72,11 @@ func useAutocomplete(val string, suggest func(string) []Suggestion, suggestArgs 
 		return MatchAutocomplete(val, suggest, suggestArgs)
 	}, []any{val})
 
+	count := len(match.ArgOptions)
+	if !match.IsArgs {
+		count = len(match.Suggestions)
+	}
+
 	// Clamping & default selection on options change
 	kitex.UseEffect(func() {
 		if match.IsArgs && len(match.ArgOptions) > 0 {
@@ -90,13 +95,17 @@ func useAutocomplete(val string, suggest func(string) []Suggestion, suggestArgs 
 					setCursor(max(0, len(match.ArgOptions)-1))
 				}
 			}
+		} else if !match.IsArgs && len(match.Suggestions) > 0 {
+			if cur := cursor(); cur >= len(match.Suggestions) {
+				setCursor(max(0, len(match.Suggestions)-1))
+			}
 		}
-	}, []any{val, len(match.ArgOptions)})
+	}, []any{val, count})
 
 	cur := cursor()
-	if len(match.ArgOptions) > 0 {
-		if cur >= len(match.ArgOptions) {
-			cur = len(match.ArgOptions) - 1
+	if count > 0 {
+		if cur >= count {
+			cur = count - 1
 		}
 		if cur < 0 {
 			cur = 0
@@ -106,7 +115,7 @@ func useAutocomplete(val string, suggest func(string) []Suggestion, suggestArgs 
 	}
 
 	up := func() bool {
-		if match.IsArgs && len(match.ArgOptions) > 0 {
+		if count > 0 {
 			if cur > 0 {
 				setCursor(cur - 1)
 			}
@@ -116,8 +125,8 @@ func useAutocomplete(val string, suggest func(string) []Suggestion, suggestArgs 
 	}
 
 	down := func() bool {
-		if match.IsArgs && len(match.ArgOptions) > 0 {
-			if cur < len(match.ArgOptions)-1 {
+		if count > 0 {
+			if cur < count-1 {
 				setCursor(cur + 1)
 			}
 			return true
@@ -131,7 +140,7 @@ func useAutocomplete(val string, suggest func(string) []Suggestion, suggestArgs 
 			return match.CmdName + " " + selectedOpt.Value + " ", true
 		}
 		if len(match.Suggestions) > 0 {
-			parts := strings.Fields(match.Suggestions[0].Usage)
+			parts := strings.Fields(match.Suggestions[cur].Usage)
 			if len(parts) > 0 {
 				return parts[0] + " ", true
 			}
@@ -143,6 +152,12 @@ func useAutocomplete(val string, suggest func(string) []Suggestion, suggestArgs 
 		if match.IsArgs && len(match.ArgOptions) > 0 {
 			selectedOpt := match.ArgOptions[cur]
 			return match.CmdName + " " + selectedOpt.Value, true
+		}
+		if len(match.Suggestions) > 0 {
+			parts := strings.Fields(match.Suggestions[cur].Usage)
+			if len(parts) > 0 {
+				return parts[0], true
+			}
 		}
 		return "", false
 	}
@@ -162,8 +177,9 @@ var Autocomplete = trail.FC("Autocomplete", func(props AutocompleteProps) trail.
 	match := MatchAutocomplete(props.Value, props.Suggest, props.SuggestArgs)
 	if match.IsArgs && len(match.ArgOptions) > 0 {
 		return OptionList(OptionListProps{
-			Options:  match.ArgOptions,
-			Selected: props.Selected,
+			Options:    match.ArgOptions,
+			Selected:   props.Selected,
+			MaxVisible: DefaultAutocompleteMaxVisible,
 		})
 	}
 	if len(match.Suggestions) > 0 {
@@ -175,8 +191,9 @@ var Autocomplete = trail.FC("Autocomplete", func(props AutocompleteProps) trail.
 			}
 		}
 		return OptionList(OptionListProps{
-			Options:  opts,
-			Selected: -1,
+			Options:    opts,
+			Selected:   props.Selected,
+			MaxVisible: DefaultAutocompleteMaxVisible,
 		})
 	}
 	return nil
