@@ -5,7 +5,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/masterkeysrd/kite/extras/trail"
 	"github.com/masterkeysrd/tasksmith/api"
+	"github.com/masterkeysrd/tasksmith/internal/repl/ui"
 )
 
 func TestRegistryLookupSuggestAndExecute(t *testing.T) {
@@ -43,26 +45,28 @@ func TestRegistryLookupSuggestAndExecute(t *testing.T) {
 	}
 
 	// Custom registration override
+	var customCalled bool
 	reg.Register(Command{
 		Name:        "custom",
 		Description: "A custom test command",
-		Handler: func(_ Env, _ []string) (Event, error) {
-			return OutputMsg{Text: "custom ok"}, nil
+		Handler: func(_ Env, _ []string) error {
+			customCalled = true
+			return nil
 		},
 	})
-	res, err := reg.Execute(Env{}, "/custom")
-	if err != nil || res != (OutputMsg{Text: "custom ok"}) {
-		t.Errorf("Execute custom failed: res=%+v, err=%v", res, err)
+	err := reg.Execute(Env{}, "/custom")
+	if err != nil || !customCalled {
+		t.Errorf("Execute custom failed: called=%v, err=%v", customCalled, err)
 	}
 
 	// Empty line execution
-	resEmpty, errEmpty := reg.Execute(Env{}, "   ")
-	if errEmpty != nil || resEmpty != nil {
-		t.Errorf("Execute empty line error: res=%+v, err=%v", resEmpty, errEmpty)
+	errEmpty := reg.Execute(Env{}, "   ")
+	if errEmpty != nil {
+		t.Errorf("Execute empty line error: err=%v", errEmpty)
 	}
 
 	// Unknown command error
-	_, errUnknown := reg.Execute(Env{}, "/unknown_cmd")
+	errUnknown := reg.Execute(Env{}, "/unknown_cmd")
 	if errUnknown == nil || !strings.Contains(errUnknown.Error(), "unknown command") {
 		t.Errorf("expected unknown command error, got %v", errUnknown)
 	}
@@ -78,38 +82,104 @@ func TestBuiltinCommandsExecution(t *testing.T) {
 		Model: "gpt-5",
 	}
 
+	var appendedNodes []trail.Node
+	var openedPicker *ui.PickerProps
+	var setModeVal api.PermissionMode
+	var newSessionModel string
+	var switchSessionID string
+	var renameSessionID, renameSessionTitle string
+	var deleteSessionID string
+	var listChangesCalled bool
+	var diffPath, diffEntryID string
+	var revertPath, revertEntryID string
+	var clearScreenCalled bool
+	var exitCalled bool
+
+	reset := func() {
+		appendedNodes = nil
+		openedPicker = nil
+		setModeVal = ""
+		newSessionModel = ""
+		switchSessionID = ""
+		renameSessionID = ""
+		renameSessionTitle = ""
+		deleteSessionID = ""
+		listChangesCalled = false
+		diffPath = ""
+		diffEntryID = ""
+		revertPath = ""
+		revertEntryID = ""
+		clearScreenCalled = false
+		exitCalled = false
+	}
+
 	env := Env{
 		Session:      sess,
 		Mode:         api.ModeDefault,
 		DefaultAgent: "developer",
 		DefaultModel: "claude-sonnet-4-6",
+		AppendNode: func(n trail.Node) {
+			appendedNodes = append(appendedNodes, n)
+		},
+		OpenPicker: func(p ui.PickerProps) {
+			openedPicker = &p
+		},
+		SetMode: func(m api.PermissionMode) {
+			setModeVal = m
+		},
+		NewSession: func(m string) {
+			newSessionModel = m
+		},
+		SwitchSession: func(id string) {
+			switchSessionID = id
+		},
+		RenameSession: func(id, title string) {
+			renameSessionID = id
+			renameSessionTitle = title
+		},
+		DeleteSession: func(id string) {
+			deleteSessionID = id
+		},
+		ListChanges: func() {
+			listChangesCalled = true
+		},
+		DiffChange: func(path, entryID string) {
+			diffPath = path
+			diffEntryID = entryID
+		},
+		RevertChanges: func(path, entryID string) {
+			revertPath = path
+			revertEntryID = entryID
+		},
+		ClearScreen: func() {
+			clearScreenCalled = true
+		},
+		Exit: func() {
+			exitCalled = true
+		},
 	}
 
 	// 1. /help
-	resHelp, err := reg.Execute(env, "/help")
-	if err != nil {
-		t.Fatalf("/help failed: %v", err)
-	}
-	outHelp, ok := resHelp.(OutputMsg)
-	if !ok || !strings.Contains(outHelp.Text, "Available commands:") {
-		t.Errorf("/help returned invalid message: %+v", resHelp)
+	reset()
+	if err := reg.Execute(env, "/help"); err != nil || len(appendedNodes) != 1 {
+		t.Fatalf("/help failed: appended=%d, err=%v", len(appendedNodes), err)
 	}
 
 	// 2. /new
-	resNew, err := reg.Execute(env, "/new my-model")
-	if err != nil || resNew != (NewSessionMsg{Model: "my-model"}) {
-		t.Errorf("/new failed: res=%+v, err=%v", resNew, err)
+	reset()
+	if err := reg.Execute(env, "/new my-model"); err != nil || newSessionModel != "my-model" {
+		t.Errorf("/new failed: model=%q, err=%v", newSessionModel, err)
 	}
-	resNewDefault, err := reg.Execute(env, "/new")
-	if err != nil || resNewDefault != (NewSessionMsg{Model: "claude-sonnet-4-6"}) {
-		t.Errorf("/new default failed: res=%+v, err=%v", resNewDefault, err)
+	reset()
+	if err := reg.Execute(env, "/new"); err != nil || newSessionModel != "claude-sonnet-4-6" {
+		t.Errorf("/new default failed: model=%q, err=%v", newSessionModel, err)
 	}
 
 	// 3. /sessions
 	// 3a. /sessions when ListSessions is nil
-	resSessionsNil, err := reg.Execute(env, "/sessions")
-	if err != nil || resSessionsNil != (OutputMsg{Text: "No sessions found."}) {
-		t.Errorf("/sessions (nil ListSessions) failed: res=%+v, err=%v", resSessionsNil, err)
+	reset()
+	if err := reg.Execute(env, "/sessions"); err != nil || len(appendedNodes) != 1 {
+		t.Errorf("/sessions (nil ListSessions) failed: appended=%d, err=%v", len(appendedNodes), err)
 	}
 
 	// 3b. /sessions when ListSessions returns empty
@@ -117,12 +187,12 @@ func TestBuiltinCommandsExecution(t *testing.T) {
 	envEmpty.ListSessions = func() ([]api.Session, error) {
 		return nil, nil
 	}
-	resSessionsEmpty, err := reg.Execute(envEmpty, "/sessions")
-	if err != nil || resSessionsEmpty != (OutputMsg{Text: "No sessions found."}) {
-		t.Errorf("/sessions (empty) failed: res=%+v, err=%v", resSessionsEmpty, err)
+	reset()
+	if err := reg.Execute(envEmpty, "/sessions"); err != nil || len(appendedNodes) != 1 {
+		t.Errorf("/sessions (empty) failed: appended=%d, err=%v", len(appendedNodes), err)
 	}
 
-	// 3c. /sessions when ListSessions returns sessions -> OpenPickerMsg
+	// 3c. /sessions when ListSessions returns sessions -> OpenPicker
 	now := time.Now().UTC()
 	envWithSessions := env
 	envWithSessions.Session = &api.Session{ID: "s1"}
@@ -142,57 +212,50 @@ func TestBuiltinCommandsExecution(t *testing.T) {
 			},
 		}, nil
 	}
-	resSessions, err := reg.Execute(envWithSessions, "/sessions")
-	if err != nil {
-		t.Fatalf("/sessions failed: %v", err)
+	reset()
+	if err := reg.Execute(envWithSessions, "/sessions"); err != nil || openedPicker == nil {
+		t.Fatalf("/sessions failed: opened=%v, err=%v", openedPicker != nil, err)
 	}
-	openPicker, ok := resSessions.(OpenPickerMsg)
-	if !ok {
-		t.Fatalf("/sessions expected OpenPickerMsg, got %+v", resSessions)
+	if len(openedPicker.Options) != 2 {
+		t.Fatalf("expected 2 picker options, got %d", len(openedPicker.Options))
 	}
-	if len(openPicker.Picker.Options) != 2 {
-		t.Fatalf("expected 2 picker options, got %d", len(openPicker.Picker.Options))
+	if openedPicker.Options[0].Value != "s1" || !openedPicker.Options[0].Current {
+		t.Errorf("expected option 0 to be current s1, got %+v", openedPicker.Options[0])
 	}
-	if openPicker.Picker.Options[0].Value != "s1" || !openPicker.Picker.Options[0].Current {
-		t.Errorf("expected option 0 to be current s1, got %+v", openPicker.Picker.Options[0])
+	openedPicker.OnSelect(openedPicker.Options[0])
+	if switchSessionID != "s1" {
+		t.Errorf("picker OnSelect() = %q, want 's1'", switchSessionID)
 	}
-	selMsg := openPicker.Picker.OnSelect(openPicker.Picker.Options[0])
-	if selMsg != (SwitchSessionMsg{SessionID: "s1"}) {
-		t.Errorf("picker OnSelect() = %+v, want SwitchSessionMsg(s1)", selMsg)
-	}
-	f4Action, ok := openPicker.Picker.ConfirmActions["f4"]
+	f4Action, ok := openedPicker.ConfirmActions["f4"]
 	if !ok {
 		t.Fatalf("expected 'f4' confirm action in picker")
 	}
-	delMsg := f4Action.OnConfirm(openPicker.Picker.Options[1])
-	if delMsg != (DeleteSessionMsg{SessionID: "s2"}) {
-		t.Errorf("f4Action.OnConfirm(s2) = %+v, want DeleteSessionMsg(s2)", delMsg)
+	f4Action.OnConfirm(openedPicker.Options[1])
+	if deleteSessionID != "s2" {
+		t.Errorf("f4Action.OnConfirm(s2) = %q, want 's2'", deleteSessionID)
 	}
 
-	f2Action, ok := openPicker.Picker.InputActions["f2"]
+	f2Action, ok := openedPicker.InputActions["f2"]
 	if !ok {
 		t.Fatalf("expected 'f2' input action in picker")
 	}
-	renMsg := f2Action.OnSubmit(openPicker.Picker.Options[1], "New Title")
-	if renMsg != (RenameSessionMsg{SessionID: "s2", Title: "New Title"}) {
-		t.Errorf("f2Action.OnSubmit(s2) = %+v, want RenameSessionMsg(s2)", renMsg)
+	f2Action.OnSubmit(openedPicker.Options[1], "New Title")
+	if renameSessionID != "s2" || renameSessionTitle != "New Title" {
+		t.Errorf("f2Action.OnSubmit(s2) = (%q, %q), want ('s2', 'New Title')", renameSessionID, renameSessionTitle)
 	}
 
 	// 3d. /sessions <id> direct switch
-	resSessionsArg, err := reg.Execute(env, "/sessions s1")
-	if err != nil || resSessionsArg != (SwitchSessionMsg{SessionID: "s1"}) {
-		t.Errorf("/sessions s1 failed: res=%+v, err=%v", resSessionsArg, err)
+	reset()
+	if err := reg.Execute(env, "/sessions s1"); err != nil || switchSessionID != "s1" {
+		t.Errorf("/sessions s1 failed: switchID=%q, err=%v", switchSessionID, err)
 	}
-	resSessionAlias, err := reg.Execute(env, "/session s1")
-	if err != nil || resSessionAlias != (SwitchSessionMsg{SessionID: "s1"}) {
-		t.Errorf("/session s1 failed: res=%+v, err=%v", resSessionAlias, err)
+	reset()
+	if err := reg.Execute(env, "/session s1"); err != nil || switchSessionID != "s1" {
+		t.Errorf("/session s1 failed: switchID=%q, err=%v", switchSessionID, err)
 	}
-	resLsAlias, err := reg.Execute(envWithSessions, "/ls")
-	if err != nil {
-		t.Errorf("/ls failed: %v", err)
-	}
-	if _, ok := resLsAlias.(OpenPickerMsg); !ok {
-		t.Errorf("/ls expected OpenPickerMsg, got %+v", resLsAlias)
+	reset()
+	if err := reg.Execute(envWithSessions, "/ls"); err != nil || openedPicker == nil {
+		t.Errorf("/ls failed: opened=%v, err=%v", openedPicker != nil, err)
 	}
 	if _, ok := reg.Lookup("switch"); ok {
 		t.Errorf("/switch should not exist in registry")
@@ -201,63 +264,63 @@ func TestBuiltinCommandsExecution(t *testing.T) {
 		t.Errorf("/history should not exist in registry")
 	}
 
-	// 6. /mode read & set
-	resModeRead, err := reg.Execute(env, "/mode")
-	if err != nil {
-		t.Fatalf("/mode read failed: %v", err)
+	// 4. /mode read & set
+	reset()
+	if err := reg.Execute(env, "/mode"); err != nil || openedPicker == nil || len(openedPicker.Options) != 5 {
+		t.Fatalf("/mode read failed: opened=%v, err=%v", openedPicker != nil, err)
 	}
-	modePicker, ok := resModeRead.(OpenPickerMsg)
-	if !ok || len(modePicker.Picker.Options) != 5 {
-		t.Errorf("/mode read expected OpenPickerMsg with 5 options, got %+v", resModeRead)
-	}
-	modeSelMsg := modePicker.Picker.OnSelect(modePicker.Picker.Options[0])
-	if modeSelMsg != (ChangeModeMsg{Mode: api.ModeDefault}) {
-		t.Errorf("picker OnSelect() = %+v, want ChangeModeMsg(default)", modeSelMsg)
+	openedPicker.OnSelect(openedPicker.Options[0])
+	if setModeVal != api.ModeDefault {
+		t.Errorf("picker OnSelect() = %q, want %q", setModeVal, api.ModeDefault)
 	}
 
-	resModeSet, err := reg.Execute(env, "/mode accept_edits")
-	if err != nil || resModeSet != (ChangeModeMsg{Mode: api.ModeAcceptEdits}) {
-		t.Errorf("/mode set failed: res=%+v, err=%v", resModeSet, err)
+	reset()
+	if err := reg.Execute(env, "/mode accept_edits"); err != nil || setModeVal != api.ModeAcceptEdits {
+		t.Errorf("/mode set failed: mode=%q, err=%v", setModeVal, err)
 	}
-	if _, err := reg.Execute(env, "/mode invalid"); err == nil {
+	if err := reg.Execute(env, "/mode invalid"); err == nil {
 		t.Errorf("/mode invalid expected error")
 	}
 
-	// 7. /changes
-	resChanges, err := reg.Execute(env, "/changes")
-	if err != nil || resChanges != (ListChangesMsg{}) {
-		t.Errorf("/changes failed: res=%+v, err=%v", resChanges, err)
+	// 5. /changes
+	reset()
+	if err := reg.Execute(env, "/changes"); err != nil || !listChangesCalled {
+		t.Errorf("/changes failed: called=%v, err=%v", listChangesCalled, err)
 	}
 
-	// 8. /diff
-	resDiff, err := reg.Execute(env, "/diff main.go c1")
-	if err != nil || resDiff != (ShowDiffMsg{Path: "main.go", EntryID: "c1"}) {
-		t.Errorf("/diff failed: res=%+v, err=%v", resDiff, err)
+	// 6. /diff
+	reset()
+	if err := reg.Execute(env, "/diff main.go c1"); err != nil || diffPath != "main.go" || diffEntryID != "c1" {
+		t.Errorf("/diff failed: path=%q, entryID=%q, err=%v", diffPath, diffEntryID, err)
 	}
-	if _, err := reg.Execute(env, "/diff main.go"); err == nil {
+	if err := reg.Execute(env, "/diff main.go"); err == nil {
 		t.Errorf("/diff missing entry_id expected error")
 	}
 
-	// 9. /revert
-	resRevert, err := reg.Execute(env, "/revert main.go")
-	if err != nil || resRevert != (RevertMsg{Path: "main.go"}) {
-		t.Errorf("/revert failed: res=%+v, err=%v", resRevert, err)
+	// 7. /revert
+	reset()
+	if err := reg.Execute(env, "/revert main.go c1"); err != nil || revertPath != "main.go" || revertEntryID != "c1" {
+		t.Errorf("/revert failed: path=%q, entryID=%q, err=%v", revertPath, revertEntryID, err)
 	}
-	resRevertAll, err := reg.Execute(env, "/revert")
-	if err != nil || resRevertAll != (RevertMsg{}) {
-		t.Errorf("/revert all failed: res=%+v, err=%v", resRevertAll, err)
+	reset()
+	if err := reg.Execute(env, "/revert main.go"); err != nil || revertPath != "main.go" || revertEntryID != "" {
+		t.Errorf("/revert file failed: path=%q, err=%v", revertPath, err)
 	}
-
-	// 10. /clear
-	resClear, err := reg.Execute(env, "/clear")
-	if err != nil || resClear != (ClearScreenMsg{}) {
-		t.Errorf("/clear failed: res=%+v, err=%v", resClear, err)
+	reset()
+	if err := reg.Execute(env, "/revert"); err != nil || revertPath != "" || revertEntryID != "" {
+		t.Errorf("/revert all failed: path=%q, err=%v", revertPath, err)
 	}
 
-	// 11. /exit
-	resExit, err := reg.Execute(env, "/exit")
-	if err != nil || resExit != (QuitMsg{}) {
-		t.Errorf("/exit failed: res=%+v, err=%v", resExit, err)
+	// 8. /clear
+	reset()
+	if err := reg.Execute(env, "/clear"); err != nil || !clearScreenCalled {
+		t.Errorf("/clear failed: called=%v, err=%v", clearScreenCalled, err)
+	}
+
+	// 9. /exit
+	reset()
+	if err := reg.Execute(env, "/exit"); err != nil || !exitCalled {
+		t.Errorf("/exit failed: called=%v, err=%v", exitCalled, err)
 	}
 }
 
@@ -279,12 +342,6 @@ func TestSuggestArgs(t *testing.T) {
 	}
 	if !opts[0].Current {
 		t.Errorf("expected opts[0] (default) to be Current")
-	}
-	if cmd.OnSelect != nil {
-		msg := cmd.OnSelect(opts[1])
-		if msg != (ChangeModeMsg{Mode: api.ModeAcceptEdits}) {
-			t.Errorf("OnSelect returned %+v", msg)
-		}
 	}
 
 	// 3. Filter by prefix

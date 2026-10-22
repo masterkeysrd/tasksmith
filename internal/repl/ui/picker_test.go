@@ -76,14 +76,8 @@ func TestPickerFunctionalComponent(t *testing.T) {
 			OnOpen: func() {
 				opened = true
 			},
-			OnSelect: func(opt Option) any {
+			OnSelect: func(opt Option) {
 				selectedValue = opt.Value
-				return opt.Value
-			},
-			OnAction: func(action any, closePicker bool) {
-				if s, ok := action.(string); ok {
-					selectedValue = s
-				}
 			},
 			OnCancel: func() {
 				canceled = true
@@ -226,9 +220,8 @@ func TestPickerFilterable(t *testing.T) {
 			Title:      "Select fruit:",
 			Options:    opts,
 			Filterable: true,
-			OnSelect: func(opt Option) any {
+			OnSelect: func(opt Option) {
 				selected = opt.Value
-				return opt.Value
 			},
 		})
 	})
@@ -344,7 +337,6 @@ func TestPickerConfirmActions(t *testing.T) {
 	}
 
 	var confirmedValue string
-	var actionResult any
 	b := mock.New(80, 24)
 	app := trail.SimpleFC("TestApp", func() kitex.Node {
 		return Picker(PickerProps{
@@ -355,14 +347,10 @@ func TestPickerConfirmActions(t *testing.T) {
 					Prompt: func(opt Option) string {
 						return fmt.Sprintf("Delete %q?", opt.Label)
 					},
-					OnConfirm: func(opt Option) any {
+					OnConfirm: func(opt Option) {
 						confirmedValue = opt.Value
-						return "deleted-" + opt.Value
 					},
 				},
-			},
-			OnAction: func(action any, closePicker bool) {
-				actionResult = action
 			},
 		})
 	})
@@ -412,9 +400,6 @@ func TestPickerConfirmActions(t *testing.T) {
 	if confirmedValue != "s1" {
 		t.Errorf("confirmedValue = %q, want 's1'", confirmedValue)
 	}
-	if actionResult != "deleted-s1" {
-		t.Errorf("actionResult = %v, want 'deleted-s1'", actionResult)
-	}
 }
 
 func TestPickerInputActions(t *testing.T) {
@@ -423,7 +408,6 @@ func TestPickerInputActions(t *testing.T) {
 	}
 
 	var submittedValue string
-	var actionResult any
 	b := mock.New(80, 24)
 	app := trail.SimpleFC("TestApp", func() kitex.Node {
 		return Picker(PickerProps{
@@ -435,14 +419,10 @@ func TestPickerInputActions(t *testing.T) {
 					InitialValue: func(opt Option) string {
 						return opt.Label
 					},
-					OnSubmit: func(opt Option, val string) any {
+					OnSubmit: func(opt Option, val string) {
 						submittedValue = val
-						return "renamed-" + val
 					},
 				},
-			},
-			OnAction: func(action any, closePicker bool) {
-				actionResult = action
 			},
 		})
 	})
@@ -489,9 +469,6 @@ func TestPickerInputActions(t *testing.T) {
 	if submittedValue != "Initial Session Name" {
 		t.Errorf("submittedValue = %q, want 'Initial Session Name'", submittedValue)
 	}
-	if actionResult != "renamed-Initial Session Name" {
-		t.Errorf("actionResult = %v, want 'renamed-Initial Session Name'", actionResult)
-	}
 }
 
 func TestPickerCustomKeys(t *testing.T) {
@@ -506,10 +483,9 @@ func TestPickerCustomKeys(t *testing.T) {
 		return Picker(PickerProps{
 			Title:   "Select:",
 			Options: opts,
-			Keys: map[string]func(opt Option) any{
-				"d": func(opt Option) any {
+			Keys: map[string]func(opt Option){
+				"d": func(opt Option) {
 					customInvoked = opt.Value
-					return opt.Value
 				},
 			},
 		})

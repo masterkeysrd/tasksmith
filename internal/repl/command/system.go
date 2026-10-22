@@ -23,9 +23,6 @@ func (r *Registry) registerSystemCommands() {
 		Description: "Read or update the session permission mode",
 		Handler:     HandleMode,
 		Options:     modeOptions,
-		OnSelect: func(opt ui.Option) Event {
-			return ChangeModeMsg{Mode: api.PermissionMode(opt.Value)}
-		},
 	})
 	r.Register(Command{
 		Name:        "clear",
@@ -42,41 +39,62 @@ func (r *Registry) registerSystemCommands() {
 	})
 }
 
-func (r *Registry) handleHelp(_ Env, _ []string) (Event, error) {
+func (r *Registry) handleHelp(env Env, _ []string) error {
 	cmds := r.List()
-	var rows []string
-	rows = append(rows, "Available commands:")
-	for _, cmd := range cmds {
-		usage := cmd.Usage
-		if len(cmd.Aliases) > 0 {
-			aliases := make([]string, len(cmd.Aliases))
-			for i, a := range cmd.Aliases {
-				aliases[i] = "/" + a
-			}
-			usage = fmt.Sprintf("%s (%s)", usage, strings.Join(aliases, ", "))
+	entries := make([]ui.HelpEntry, len(cmds))
+	for i, cmd := range cmds {
+		entries[i] = ui.HelpEntry{
+			Name:        cmd.Name,
+			Aliases:     cmd.Aliases,
+			Usage:       cmd.Usage,
+			Description: cmd.Description,
 		}
-		rows = append(rows, fmt.Sprintf("  %-44s %s", usage, cmd.Description))
 	}
-	return PrintMsg{Text: strings.Join(rows, "\n")}, nil
+	if env.AppendNode != nil {
+		env.AppendNode(ui.Help(ui.HelpProps{Entries: entries}))
+	}
+	return nil
 }
 
 // HandleMode displays or alters the active permission mode.
-func HandleMode(env Env, args []string) (Event, error) {
+func HandleMode(env Env, args []string) error {
 	if len(args) == 0 || strings.TrimSpace(args[0]) == "" {
 		mode := cmp.Or(env.Mode, api.ModeDefault)
-		picker := ui.NewPicker("Select permission mode:", modeOptionsWithActive(mode), func(opt ui.Option) any {
-			return ChangeModeMsg{Mode: api.PermissionMode(opt.Value)}
+		picker := ui.NewPicker("Select permission mode:", modeOptionsWithActive(mode), func(opt ui.Option) {
+			if env.SetMode != nil {
+				env.SetMode(api.PermissionMode(opt.Value))
+			}
 		})
-		return OpenPickerMsg{
-			Picker: picker,
-		}, nil
+		if env.OpenPicker != nil {
+			env.OpenPicker(picker)
+		}
+		return nil
 	}
 
 	nextMode := api.PermissionMode(strings.TrimSpace(args[0]))
 	if !isValidPermissionMode(nextMode) {
-		return nil, fmt.Errorf("error setting permission mode: invalid permission mode %q (valid: default, accept_edits, plan, ask, auto)", nextMode)
+		return fmt.Errorf("error setting permission mode: invalid permission mode %q (valid: default, accept_edits, plan, ask, auto)", nextMode)
 	}
-	return ChangeModeMsg{Mode: nextMode}, nil
+	if env.SetMode != nil {
+		env.SetMode(nextMode)
+	}
+	return nil
+}
+
+// HandleClear clears the terminal screen.
+func HandleClear(env Env, _ []string) error {
+	if env.ClearScreen != nil {
+		env.ClearScreen()
+	}
+	return nil
+}
+
+// HandleExit terminates the REPL.
+func HandleExit(env Env, _ []string) error {
+	if env.Exit != nil {
+		env.Exit()
+	}
+	return nil
 }
 
 func modeOptionsWithActive(activeMode api.PermissionMode) []ui.Option {
@@ -99,44 +117,33 @@ func modeOptionsWithActive(activeMode api.PermissionMode) []ui.Option {
 		{
 			Value:       string(api.ModePlan),
 			Label:       string(api.ModePlan),
-			Description: "Read-only mode; block writes, edits, and shell commands",
+			Description: "Allow safe reads; disallow all writes, commands, and network",
 			Current:     activeMode == api.ModePlan,
 		},
 		{
 			Value:       string(api.ModeAsk),
 			Label:       string(api.ModeAsk),
-			Description: "Ask for confirmation before every tool call",
+			Description: "Ask confirmation for all tool actions",
 			Current:     activeMode == api.ModeAsk,
 		},
 		{
 			Value:       string(api.ModeAuto),
 			Label:       string(api.ModeAuto),
-			Description: "Allow all workspace actions except unsafe operations",
+			Description: "Automatically allow all tool actions without prompting",
 			Current:     activeMode == api.ModeAuto,
 		},
 	}
 }
 
 func modeOptions(env Env) []ui.Option {
-	mode := cmp.Or(env.Mode, api.ModeDefault)
-	return modeOptionsWithActive(mode)
+	return modeOptionsWithActive(env.Mode)
 }
 
-func isValidPermissionMode(mode api.PermissionMode) bool {
-	switch mode {
+func isValidPermissionMode(m api.PermissionMode) bool {
+	switch m {
 	case api.ModeDefault, api.ModeAcceptEdits, api.ModePlan, api.ModeAsk, api.ModeAuto:
 		return true
 	default:
 		return false
 	}
-}
-
-// HandleClear signals that the terminal screen should be cleared.
-func HandleClear(_ Env, _ []string) (Event, error) {
-	return ClearScreenMsg{}, nil
-}
-
-// HandleExit signals that the REPL session should terminate.
-func HandleExit(_ Env, _ []string) (Event, error) {
-	return ExitMsg{}, nil
 }

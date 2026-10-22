@@ -4,94 +4,35 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/masterkeysrd/kite/extras/trail"
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/repl/ui"
 )
 
-// Event represents an emitted action or directive from a slash command.
-type Event any
-
-// Env provides a lightweight read-only snapshot of REPL state to commands.
+// Env provides a lightweight snapshot of REPL state and callback actions to commands.
 type Env struct {
 	Mode         api.PermissionMode
 	Session      *api.Session
 	DefaultAgent string
 	DefaultModel string
-	ListSessions func() ([]api.Session, error)
+
+	AppendNode    func(node trail.Node)
+	OpenPicker    func(picker ui.PickerProps)
+	SetMode       func(mode api.PermissionMode)
+	NewSession    func(model string)
+	SwitchSession func(sessionID string)
+	RenameSession func(sessionID, title string)
+	DeleteSession func(sessionID string)
+	ListSessions  func() ([]api.Session, error)
+	ListChanges   func()
+	DiffChange    func(path, entryID string)
+	RevertChanges func(path, entryID string)
+	ClearScreen   func()
+	Exit          func()
 }
 
-// PrintMsg indicates plain text output from a slash command.
-type PrintMsg struct {
-	Text string
-}
-
-// OutputMsg is an alias to PrintMsg for backwards compatibility.
-type OutputMsg = PrintMsg
-
-// OpenPickerMsg directs the UI to display an interactive command picker.
-type OpenPickerMsg struct {
-	Picker ui.PickerProps
-}
-
-// ChangeModeMsg requests changing the session permission mode.
-type ChangeModeMsg struct {
-	Mode   api.PermissionMode
-	Silent bool
-}
-
-// NewSessionMsg requests creating a new session.
-type NewSessionMsg struct {
-	Model string
-}
-
-// SwitchSessionMsg requests switching to an existing session.
-type SwitchSessionMsg struct {
-	SessionID string
-}
-
-// RenameSessionMsg requests renaming an existing session.
-type RenameSessionMsg struct {
-	SessionID string
-	Title     string
-}
-
-// DeleteSessionMsg requests deleting an existing session.
-type DeleteSessionMsg struct {
-	SessionID string
-}
-
-// ListChangesMsg requests listing tracked file changes.
-type ListChangesMsg struct{}
-
-// DiffChangeMsg requests displaying a unified diff for a tracked file change.
-type DiffChangeMsg struct {
-	Path    string
-	EntryID string
-}
-
-// ShowDiffMsg is an alias to DiffChangeMsg for backwards compatibility.
-type ShowDiffMsg = DiffChangeMsg
-
-// RevertChangesMsg requests reverting file changes.
-type RevertChangesMsg struct {
-	Path    string
-	EntryID string
-}
-
-// RevertMsg is an alias to RevertChangesMsg for backwards compatibility.
-type RevertMsg = RevertChangesMsg
-
-// ClearScreenMsg requests clearing the terminal screen.
-type ClearScreenMsg struct{}
-
-// ExitMsg requests terminating the REPL.
-type ExitMsg struct{}
-
-// QuitMsg is an alias to ExitMsg for backwards compatibility.
-type QuitMsg = ExitMsg
-
-// Handler executes a slash command against the active [Env], emitting an intent event.
-type Handler func(env Env, args []string) (Event, error)
+// Handler executes a slash command against the active [Env].
+type Handler func(env Env, args []string) error
 
 // Command defines a declarative REPL slash command and its metadata.
 type Command struct {
@@ -101,7 +42,6 @@ type Command struct {
 	Description string
 	Handler     Handler
 	Options     func(env Env) []ui.Option
-	OnSelect    func(opt ui.Option) Event
 }
 
 // Registry maintains the ordered collection of REPL slash commands and aliases.
@@ -234,19 +174,19 @@ func matchesCommandPrefix(cmd Command, prefix string) bool {
 }
 
 // Execute parses a raw slash command line and invokes the matching [Handler].
-func (r *Registry) Execute(env Env, line string) (Event, error) {
+func (r *Registry) Execute(env Env, line string) error {
 	trimmed := strings.TrimSpace(line)
 	if trimmed == "" {
-		return nil, nil
+		return nil
 	}
 
 	fields := strings.Fields(trimmed)
 	cmd, ok := r.Lookup(fields[0])
 	if !ok {
-		return nil, fmt.Errorf("unknown command: %s", trimmed)
+		return fmt.Errorf("unknown command: %s", trimmed)
 	}
 	if cmd.Handler == nil {
-		return nil, fmt.Errorf("command /%s has no handler", cmd.Name)
+		return fmt.Errorf("command /%s has no handler", cmd.Name)
 	}
 	return cmd.Handler(env, fields[1:])
 }

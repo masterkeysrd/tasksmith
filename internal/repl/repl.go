@@ -15,26 +15,6 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/repl/ui"
 )
 
-// Forwarded types and constants from subpackages for caller ergonomics.
-type (
-	HeaderProps    = ui.HeaderProps
-	StatusBarProps = ui.StatusBarProps
-	State          = ui.State
-	Option         = ui.Option
-	PickerProps    = ui.PickerProps
-	Registry       = command.Registry
-	Command           = command.Command
-	CommandEnv        = command.Env
-	CommandResult     = command.Event
-	CommandHandler    = command.Handler
-)
-
-const (
-	StateIdle      = ui.StateIdle
-	StateStreaming = ui.StateStreaming
-	StateApproval  = ui.StateApproval
-	StatePicker    = ui.StatePicker
-)
 
 // ErrInvalidConfig is returned when required [Config] fields are missing.
 var ErrInvalidConfig = errors.New("repl: invalid configuration")

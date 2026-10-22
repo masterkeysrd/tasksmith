@@ -18,7 +18,7 @@ type Suggestion struct {
 	Description string
 }
 
-// ComposerProps defines the properties for the input composer component.
+// ComposerProps defines the properties for the Composer functional component.
 type ComposerProps struct {
 	Disabled    bool
 	Suggest     func(prefix string) []Suggestion
@@ -28,96 +28,87 @@ type ComposerProps struct {
 	OnCancel    func()
 }
 
-type argResult struct {
-	cmdName string
-	opts    []Option
-	ok      bool
+// PromptHistory holds state and operations for traversing input prompt history.
+type PromptHistory struct {
+	History    []string
+	HistoryIdx int
+	Draft      string
+	Up         func(currentValue string) (string, bool)
+	Down       func() (string, bool)
+	Add        func(text string)
 }
 
-// Composer is a trail functional component managing user prompt input, history navigation,
-// slash command autocomplete suggestions, inline argument options, and key shortcuts.
-var Composer = trail.FC("Composer", func(props ComposerProps) trail.Node {
-	value, setValue := kitex.UseState("")
+// usePromptHistory manages input prompt history navigation and draft preservation.
+func usePromptHistory() PromptHistory {
 	history, setHistory := kitex.UseState([]string(nil))
 	historyIdx, setHistoryIdx := kitex.UseState(0)
 	draft, setDraft := kitex.UseState("")
-	argCursor, setArgCursor := kitex.UseState(0)
+
+	up := func(currentValue string) (string, bool) {
+		hist := history()
+		if len(hist) == 0 {
+			return "", false
+		}
+		hIdx := historyIdx()
+		if hIdx >= len(hist) {
+			setDraft(currentValue)
+			newIdx := len(hist) - 1
+			setHistoryIdx(newIdx)
+			return hist[newIdx], true
+		} else if hIdx > 0 {
+			newIdx := hIdx - 1
+			setHistoryIdx(newIdx)
+			return hist[newIdx], true
+		}
+		return "", false
+	}
+
+	down := func() (string, bool) {
+		hist := history()
+		if len(hist) == 0 {
+			return "", false
+		}
+		hIdx := historyIdx()
+		if hIdx < len(hist)-1 {
+			newIdx := hIdx + 1
+			setHistoryIdx(newIdx)
+			return hist[newIdx], true
+		} else if hIdx == len(hist)-1 {
+			setHistoryIdx(len(hist))
+			return draft(), true
+		}
+		return "", false
+	}
+
+	add := func(text string) {
+		hist := append(history(), text)
+		setHistory(hist)
+		setHistoryIdx(len(hist))
+		setDraft("")
+	}
+
+	return PromptHistory{
+		History:    history(),
+		HistoryIdx: historyIdx(),
+		Draft:      draft(),
+		Up:         up,
+		Down:       down,
+		Add:        add,
+	}
+}
+
+// Composer is a trail functional component managing multi-line user prompt drafting,
+// command autocomplete, prompt history navigation, and mode cycling.
+var Composer = trail.FC("Composer", func(props ComposerProps) trail.Node {
+	value, setValue := kitex.UseState("")
+	history := usePromptHistory()
+	auto := useAutocomplete(value(), props.Suggest, props.SuggestArgs)
 
 	inputRef := kitex.UseRef[dom.Element](nil)
-
-	kitex.UseLayoutEffect(func() {
-		if !props.Disabled && inputRef.Current != nil {
-			if doc := inputRef.Current.OwnerDocument(); doc != nil {
-				doc.Focus(inputRef.Current)
-			}
-		}
-	}, []any{props.Disabled})
-
-	val := value()
-	trimmedLeft := strings.TrimLeft(val, " \t")
-
-	argRes := kitex.UseMemo(func() argResult {
-		if strings.HasPrefix(trimmedLeft, "/") && strings.Contains(trimmedLeft, " ") && props.SuggestArgs != nil {
-			cmdPart, _, _ := strings.Cut(trimmedLeft, " ")
-			opts, ok := props.SuggestArgs(val)
-			if ok {
-				return argResult{
-					cmdName: cmdPart,
-					opts:    opts,
-					ok:      true,
-				}
-			}
-		}
-		return argResult{}
-	}, []any{val})
-
-	suggestions := kitex.UseMemo(func() []Suggestion {
-		if strings.HasPrefix(trimmedLeft, "/") && !strings.Contains(trimmedLeft, " ") && props.Suggest != nil {
-			return props.Suggest(trimmedLeft)
-		}
-		return nil
-	}, []any{val})
-
-	kitex.UseEffect(func() {
-		if argRes.ok && len(argRes.opts) > 0 {
-			_, argPart, _ := strings.Cut(trimmedLeft, " ")
-			if strings.TrimSpace(argPart) == "" {
-				for i, opt := range argRes.opts {
-					if opt.Current {
-						setArgCursor(i)
-						return
-					}
-				}
-				setArgCursor(0)
-			} else {
-				if cur := argCursor(); cur >= len(argRes.opts) {
-					setArgCursor(max(0, len(argRes.opts)-1))
-				}
-			}
-		}
-	}, []any{val, len(argRes.opts)})
-
-	curArg := argCursor()
-	if len(argRes.opts) > 0 {
-		if curArg >= len(argRes.opts) {
-			curArg = len(argRes.opts) - 1
-		}
-		if curArg < 0 {
-			curArg = 0
-		}
-	} else {
-		curArg = 0
-	}
-
-	setNativeValue := func(next string) {
-		if inputRef.Current != nil {
-			if txa, ok := inputRef.Current.(*element.TextAreaElement); ok {
-				txa.SetValue(next)
-			} else if inp, ok := inputRef.Current.(*element.InputElement); ok {
-				inp.SetValue(next)
-			}
-		}
-	}
+	trail.UseFocus(inputRef, trail.FocusOptions{
+		AutoFocus: true,
+		IsActive:  !props.Disabled,
+	})
 
 	handleKeyDown := func(e event.Event) {
 		ke, ok := e.(*event.KeyEvent)
@@ -141,33 +132,16 @@ var Composer = trail.FC("Composer", func(props ComposerProps) trail.Node {
 			}
 
 		case ke.MatchString("tab"):
-			if argRes.ok && len(argRes.opts) > 0 {
+			if nextVal, ok := auto.Tab(); ok {
 				e.PreventDefault()
 				e.StopPropagation()
-				selectedOpt := argRes.opts[curArg]
-				nextVal := argRes.cmdName + " " + selectedOpt.Value + " "
-				setNativeValue(nextVal)
 				setValue(nextVal)
-				return
-			}
-			if len(suggestions) > 0 {
-				e.PreventDefault()
-				e.StopPropagation()
-				parts := strings.Fields(suggestions[0].Usage)
-				if len(parts) > 0 {
-					nextVal := parts[0] + " "
-					setNativeValue(nextVal)
-					setValue(nextVal)
-				}
 			}
 
 		case ke.MatchString("up"):
-			if argRes.ok && len(argRes.opts) > 0 {
+			if auto.Up() {
 				e.PreventDefault()
 				e.StopPropagation()
-				if curArg > 0 {
-					setArgCursor(curArg - 1)
-				}
 				return
 			}
 			if txa, ok := inputRef.Current.(*element.TextAreaElement); ok {
@@ -177,30 +151,14 @@ var Composer = trail.FC("Composer", func(props ComposerProps) trail.Node {
 			}
 			e.PreventDefault()
 			e.StopPropagation()
-			hist := history()
-			if len(hist) > 0 {
-				hIdx := historyIdx()
-				if hIdx >= len(hist) {
-					setDraft(value())
-					newIdx := len(hist) - 1
-					setHistoryIdx(newIdx)
-					setNativeValue(hist[newIdx])
-					setValue(hist[newIdx])
-				} else if hIdx > 0 {
-					newIdx := hIdx - 1
-					setHistoryIdx(newIdx)
-					setNativeValue(hist[newIdx])
-					setValue(hist[newIdx])
-				}
+			if prevVal, ok := history.Up(value()); ok {
+				setValue(prevVal)
 			}
 
 		case ke.MatchString("down"):
-			if argRes.ok && len(argRes.opts) > 0 {
+			if auto.Down() {
 				e.PreventDefault()
 				e.StopPropagation()
-				if curArg < len(argRes.opts)-1 {
-					setArgCursor(curArg + 1)
-				}
 				return
 			}
 			if txa, ok := inputRef.Current.(*element.TextAreaElement); ok {
@@ -211,20 +169,8 @@ var Composer = trail.FC("Composer", func(props ComposerProps) trail.Node {
 			}
 			e.PreventDefault()
 			e.StopPropagation()
-			hist := history()
-			if len(hist) > 0 {
-				hIdx := historyIdx()
-				if hIdx < len(hist)-1 {
-					newIdx := hIdx + 1
-					setHistoryIdx(newIdx)
-					setNativeValue(hist[newIdx])
-					setValue(hist[newIdx])
-				} else if hIdx == len(hist)-1 {
-					setHistoryIdx(len(hist))
-					d := draft()
-					setNativeValue(d)
-					setValue(d)
-				}
+			if nextVal, ok := history.Down(); ok {
+				setValue(nextVal)
 			}
 
 		case ke.MatchString("shift+enter", "alt+enter"):
@@ -237,15 +183,9 @@ var Composer = trail.FC("Composer", func(props ComposerProps) trail.Node {
 		case ke.MatchString("enter"):
 			e.PreventDefault()
 			e.StopPropagation()
-			if argRes.ok && len(argRes.opts) > 0 {
-				selectedOpt := argRes.opts[curArg]
-				subText := argRes.cmdName + " " + selectedOpt.Value
-				setNativeValue("")
+			if subText, ok := auto.Enter(); ok {
 				setValue("")
-				hist := append(history(), subText)
-				setHistory(hist)
-				setHistoryIdx(len(hist))
-				setDraft("")
+				history.Add(subText)
 				if props.OnSubmit != nil {
 					props.OnSubmit(subText)
 				}
@@ -253,13 +193,9 @@ var Composer = trail.FC("Composer", func(props ComposerProps) trail.Node {
 			}
 
 			text := strings.TrimSpace(value())
-			setNativeValue("")
 			setValue("")
 			if text != "" {
-				hist := append(history(), text)
-				setHistory(hist)
-				setHistoryIdx(len(hist))
-				setDraft("")
+				history.Add(text)
 				if props.OnSubmit != nil {
 					props.OnSubmit(text)
 				}
@@ -303,64 +239,11 @@ var Composer = trail.FC("Composer", func(props ComposerProps) trail.Node {
 			Width(style.Percent(100)),
 	},
 		composerBox,
-		kitex.If(argRes.ok && len(argRes.opts) > 0, func() trail.Node {
-			var trs []trail.Node
-			for i, opt := range argRes.opts {
-				rowStyle := theme.PickerOptionStyle
-				prefix := "  "
-				if i == curArg {
-					rowStyle = theme.PickerSelectedStyle
-					prefix = "❯ "
-				}
-				desc := opt.Description
-				if opt.Current {
-					if desc != "" {
-						desc += " • current"
-					} else {
-						desc = "current"
-					}
-				}
-
-				td1 := kitex.TD(kitex.TDProps{
-					Style: style.S().Padding(0, 2, 0, 0).WhiteSpace(style.WhiteSpacePre),
-				}, trail.Span(trail.SpanProps{
-					Style: rowStyle.WhiteSpace(style.WhiteSpacePre),
-				}, trail.Text(prefix+opt.Label)))
-
-				td2 := kitex.TD(kitex.TDProps{
-					Style: style.S(),
-				}, trail.Span(trail.SpanProps{
-					Style: theme.StatusBarStyle,
-				}, trail.Text(desc)))
-
-				trs = append(trs, kitex.TR(kitex.TRProps{}, td1, td2))
-			}
-
-			return kitex.Table(kitex.TableProps{
-				Style: style.S().Width(style.Percent(100)),
-			}, kitex.TBody(kitex.TBodyProps{}, trs...))
-		}),
-		kitex.If(!argRes.ok && len(suggestions) > 0, func() trail.Node {
-			var trs []trail.Node
-			for _, s := range suggestions {
-				td1 := kitex.TD(kitex.TDProps{
-					Style: style.S().Padding(0, 2, 0, 0).WhiteSpace(style.WhiteSpacePre),
-				}, trail.Span(trail.SpanProps{
-					Style: theme.StatusBarStyle.WhiteSpace(style.WhiteSpacePre),
-				}, trail.Text("  "+s.Usage)))
-
-				td2 := kitex.TD(kitex.TDProps{
-					Style: style.S(),
-				}, trail.Span(trail.SpanProps{
-					Style: theme.StatusBarStyle,
-				}, trail.Text(s.Description)))
-
-				trs = append(trs, kitex.TR(kitex.TRProps{}, td1, td2))
-			}
-
-			return kitex.Table(kitex.TableProps{
-				Style: style.S().Width(style.Percent(100)),
-			}, kitex.TBody(kitex.TBodyProps{}, trs...))
+		Autocomplete(AutocompleteProps{
+			Value:       value(),
+			Suggest:     props.Suggest,
+			SuggestArgs: props.SuggestArgs,
+			Selected:    auto.Cursor,
 		}),
 	)
 })

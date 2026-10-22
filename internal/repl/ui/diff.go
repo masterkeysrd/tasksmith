@@ -1,10 +1,13 @@
 package ui
 
 import (
+	"fmt"
 	"strings"
 
+	"github.com/masterkeysrd/kite/extras/kitex"
 	"github.com/masterkeysrd/kite/extras/trail"
 	"github.com/masterkeysrd/kite/style"
+	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/repl/theme"
 )
 
@@ -44,4 +47,53 @@ var Diff = trail.FC("Diff", func(props DiffProps) trail.Node {
 	return trail.Box(trail.BoxProps{
 		Style: style.S().FlexDirection(style.FlexColumn),
 	}, nodes...)
+})
+
+// ChangesListProps defines the properties for rendering tracked file changes.
+type ChangesListProps struct {
+	Changes []api.FileChange
+}
+
+// ChangesList is a trail functional component rendering a table of tracked file changes.
+var ChangesList = trail.FC("ChangesList", func(props ChangesListProps) trail.Node {
+	if len(props.Changes) == 0 {
+		return Notice(NoticeProps{Text: "No tracked file changes."})
+	}
+
+	var rows []trail.Node
+	for _, c := range props.Changes {
+		diffStats := fmt.Sprintf("+%d/-%d", c.Additions, c.Deletions)
+		rows = append(rows, kitex.TR(kitex.TRProps{},
+			kitex.TD(kitex.TDProps{
+				Style: style.S().Padding(0, 2, 0, 0),
+			}, trail.Span(trail.SpanProps{
+				Style: theme.ToolCallStyle,
+			}, trail.Text(c.ID))),
+			kitex.TD(kitex.TDProps{
+				Style: style.S().Padding(0, 2, 0, 0),
+			}, trail.Span(trail.SpanProps{
+				Style: theme.ActionBadgeStyle,
+			}, trail.Text(c.Kind))),
+			kitex.TD(kitex.TDProps{
+				Style: style.S().Padding(0, 2, 0, 0),
+			}, trail.Span(trail.SpanProps{
+				Style: theme.AssistantMsgStyle,
+			}, trail.Text(c.Path))),
+			kitex.TD(kitex.TDProps{},
+				trail.Span(trail.SpanProps{
+					Style: theme.DiffAddStyle,
+				}, trail.Text(diffStats))),
+		))
+	}
+
+	return trail.Box(trail.BoxProps{
+		Style: style.S().FlexDirection(style.FlexColumn),
+	},
+		trail.Span(trail.SpanProps{
+			Style: theme.ApprovalTitleStyle,
+		}, trail.Text("Tracked file changes:")),
+		kitex.Table(kitex.TableProps{
+			Style: style.S().Margin(0, 0, 0, 2),
+		}, kitex.TBody(kitex.TBodyProps{}, rows...)),
+	)
 })

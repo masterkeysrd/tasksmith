@@ -26,24 +26,27 @@ func (r *Registry) registerChangesCommands() {
 	})
 }
 
-// HandleChanges emits a directive to list tracked file changes in the session.
-func HandleChanges(_ Env, _ []string) (Event, error) {
-	return ListChangesMsg{}, nil
-}
-
-// HandleDiff parses diff arguments and emits a DiffChangeMsg.
-func HandleDiff(_ Env, args []string) (Event, error) {
-	if len(args) < 2 || strings.TrimSpace(args[0]) == "" || strings.TrimSpace(args[1]) == "" {
-		return nil, errors.New("usage: /diff <path> <entry_id>")
+// HandleChanges triggers listing tracked file changes in the session.
+func HandleChanges(env Env, _ []string) error {
+	if env.ListChanges != nil {
+		env.ListChanges()
 	}
-	return DiffChangeMsg{
-		Path:    strings.TrimSpace(args[0]),
-		EntryID: strings.TrimSpace(args[1]),
-	}, nil
+	return nil
 }
 
-// HandleRevert parses revert arguments and emits a RevertChangesMsg.
-func HandleRevert(_ Env, args []string) (Event, error) {
+// HandleDiff parses diff arguments and triggers showing a diff.
+func HandleDiff(env Env, args []string) error {
+	if len(args) < 2 || strings.TrimSpace(args[0]) == "" || strings.TrimSpace(args[1]) == "" {
+		return errors.New("usage: /diff <path> <entry_id>")
+	}
+	if env.DiffChange != nil {
+		env.DiffChange(strings.TrimSpace(args[0]), strings.TrimSpace(args[1]))
+	}
+	return nil
+}
+
+// HandleRevert parses revert arguments and triggers reverting tracked file changes.
+func HandleRevert(env Env, args []string) error {
 	var path, entryID string
 	if len(args) > 0 {
 		path = strings.TrimSpace(args[0])
@@ -51,8 +54,8 @@ func HandleRevert(_ Env, args []string) (Event, error) {
 	if len(args) > 1 {
 		entryID = strings.TrimSpace(args[1])
 	}
-	return RevertChangesMsg{
-		Path:    path,
-		EntryID: entryID,
-	}, nil
+	if env.RevertChanges != nil {
+		env.RevertChanges(path, entryID)
+	}
+	return nil
 }

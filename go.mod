@@ -7,7 +7,7 @@ require (
 	github.com/dustin/go-humanize v1.1.0
 	github.com/google/jsonschema-go v0.4.3
 	github.com/google/uuid v1.6.0
-	github.com/masterkeysrd/kite v0.0.6-0.20261022021255-2e3e060d9355
+	github.com/masterkeysrd/kite v0.0.6-0.20261022040605-8ea3da87d4da
 	github.com/masterkeysrd/loom v0.0.8
 	github.com/masterkeysrd/warp v0.0.6
 	github.com/ollama/ollama v0.40.6

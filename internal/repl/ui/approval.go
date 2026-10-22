@@ -26,14 +26,10 @@ var Approval = trail.FC("Approval", func(props ApprovalProps) trail.Node {
 	feedbackText, setFeedbackText := kitex.UseState("")
 
 	feedbackInputRef := kitex.UseRef[dom.Element](nil)
-
-	kitex.UseLayoutEffect(func() {
-		if feedbackMode() && feedbackInputRef.Current != nil {
-			if doc := feedbackInputRef.Current.OwnerDocument(); doc != nil {
-				doc.Focus(feedbackInputRef.Current)
-			}
-		}
-	}, []any{feedbackMode()})
+	trail.UseFocus(feedbackInputRef, trail.FocusOptions{
+		AutoFocus: true,
+		IsActive:  feedbackMode(),
+	})
 
 	trail.UseInput(func(input string, k event.KeyEvent) {
 		if feedbackMode() {
@@ -159,7 +155,7 @@ var Approval = trail.FC("Approval", func(props ApprovalProps) trail.Node {
 		lines = append(lines, trail.Box(trail.BoxProps{
 			Style: style.S().FlexDirection(style.FlexRow),
 		}, trail.Span(trail.SpanProps{
-			Style: optStyle,
+			Style: optStyle.WhiteSpace(style.WhiteSpacePre),
 		}, trail.Text(prefix+opt))))
 	}
 

@@ -26,40 +26,55 @@ func (r *Registry) registerSessionCommands() {
 }
 
 // HandleNew switches the REPL to a fresh session, optionally with a model override.
-func HandleNew(env Env, args []string) (Event, error) {
+func HandleNew(env Env, args []string) error {
 	modelOverride := strings.TrimSpace(strings.Join(args, " "))
 	if modelOverride == "" {
 		modelOverride = strings.TrimSpace(env.DefaultModel)
 	}
-	return NewSessionMsg{Model: modelOverride}, nil
+	if env.NewSession != nil {
+		env.NewSession(modelOverride)
+	}
+	return nil
 }
 
 // HandleSessions browses or switches sessions in the active workspace.
-func HandleSessions(env Env, args []string) (Event, error) {
+func HandleSessions(env Env, args []string) error {
 	if len(args) > 0 && strings.TrimSpace(args[0]) != "" {
-		return SwitchSessionMsg{SessionID: strings.TrimSpace(args[0])}, nil
+		if env.SwitchSession != nil {
+			env.SwitchSession(strings.TrimSpace(args[0]))
+		}
+		return nil
 	}
 
 	if env.ListSessions == nil {
-		return PrintMsg{Text: "No sessions found."}, nil
+		if env.AppendNode != nil {
+			env.AppendNode(ui.Notice(ui.NoticeProps{Text: "No sessions found."}))
+		}
+		return nil
 	}
 	sessions, err := env.ListSessions()
 	if err != nil {
-		return nil, fmt.Errorf("error listing sessions: %w", err)
+		return fmt.Errorf("error listing sessions: %w", err)
 	}
 	if len(sessions) == 0 {
-		return PrintMsg{Text: "No sessions found."}, nil
+		if env.AppendNode != nil {
+			env.AppendNode(ui.Notice(ui.NoticeProps{Text: "No sessions found."}))
+		}
+		return nil
 	}
 
 	var activeID string
 	if env.Session != nil {
 		activeID = env.Session.ID
 	}
-	return OpenPickerMsg{Picker: NewSessionPicker(sessions, activeID)}, nil
+	if env.OpenPicker != nil {
+		env.OpenPicker(NewSessionPicker(env, sessions, activeID))
+	}
+	return nil
 }
 
 // NewSessionPicker constructs an interactive picker for selecting or deleting sessions.
-func NewSessionPicker(sessions []api.Session, activeID string) ui.PickerProps {
+func NewSessionPicker(env Env, sessions []api.Session, activeID string) ui.PickerProps {
 	opts := make([]ui.Option, len(sessions))
 	for i, s := range sessions {
 		title := strings.TrimSpace(s.Title)
@@ -79,8 +94,10 @@ func NewSessionPicker(sessions []api.Session, activeID string) ui.PickerProps {
 		}
 	}
 
-	picker := ui.NewPicker("Sessions", opts, func(opt ui.Option) any {
-		return SwitchSessionMsg{SessionID: opt.Value}
+	picker := ui.NewPicker("Sessions", opts, func(opt ui.Option) {
+		if env.SwitchSession != nil {
+			env.SwitchSession(opt.Value)
+		}
 	})
 	picker.Filterable = true
 	picker.Footer = "↑/↓ to select • enter to switch • f2 to rename • f4 to delete • esc to cancel"
@@ -91,8 +108,10 @@ func NewSessionPicker(sessions []api.Session, activeID string) ui.PickerProps {
 			InitialValue: func(opt ui.Option) string {
 				return opt.Label
 			},
-			OnSubmit: func(opt ui.Option, val string) any {
-				return RenameSessionMsg{SessionID: opt.Value, Title: val}
+			OnSubmit: func(opt ui.Option, val string) {
+				if env.RenameSession != nil {
+					env.RenameSession(opt.Value, val)
+				}
 			},
 		},
 	}
@@ -101,8 +120,10 @@ func NewSessionPicker(sessions []api.Session, activeID string) ui.PickerProps {
 			Prompt: func(opt ui.Option) string {
 				return fmt.Sprintf("Delete session %q?", opt.Label)
 			},
-			OnConfirm: func(opt ui.Option) any {
-				return DeleteSessionMsg{SessionID: opt.Value}
+			OnConfirm: func(opt ui.Option) {
+				if env.DeleteSession != nil {
+					env.DeleteSession(opt.Value)
+				}
 			},
 		},
 	}

@@ -216,25 +216,27 @@ func TestSpinnerAndDiffComponents(t *testing.T) {
 
 func TestMessageAndTranscriptComponents(t *testing.T) {
 	b := mock.New(80, 24)
-	items := []TranscriptItem{
-		PromptItem("Hello world"),
-		NoticeItem("Switched session"),
-		ErrorItem("Something failed"),
-		DecisionItem(
-			api.PermissionRequest{ToolName: "bash", Summary: "Run ls"},
-			api.PermissionDecision{Kind: api.DecisionAllowOnce},
-		),
-		MessageItem(api.Message{
-			Role: api.RoleAssistant,
-			Content: []api.Block{
-				{Type: api.BlockReasoning, Text: "Analyzing problem"},
-				{Type: api.BlockText, Text: "I can help with that"},
+	items := []trail.Node{
+		UserPrompt(UserPromptProps{Text: "Hello world"}),
+		Notice(NoticeProps{Text: "Switched session"}),
+		ErrorMessage(ErrorMessageProps{Text: "Something failed"}),
+		DecisionSummary(DecisionSummaryProps{
+			Request:  api.PermissionRequest{ToolName: "bash", Summary: "Run ls"},
+			Decision: api.PermissionDecision{Kind: api.DecisionAllowOnce},
+		}),
+		Message(MessageProps{
+			Message: api.Message{
+				Role: api.RoleAssistant,
+				Content: []api.Block{
+					{Type: api.BlockReasoning, Text: "Analyzing problem"},
+					{Type: api.BlockText, Text: "I can help with that"},
+				},
 			},
 		}),
 	}
 
 	app := trail.SimpleFC("TestApp", func() kitex.Node {
-		return Transcript(items)
+		return Transcript(TranscriptProps{Items: items})
 	})
 	inst, _ := trail.New(app(), trail.WithBackend(b))
 	inst.Frame()
@@ -254,6 +256,112 @@ func TestMessageAndTranscriptComponents(t *testing.T) {
 	}
 	if !strings.Contains(out, "[reasoning] Analyzing problem") || !strings.Contains(out, "I can help with that") {
 		t.Errorf("assistant message missing from static transcript:\n%s", out)
+	}
+}
+
+func TestHelpAndChangesListComponents(t *testing.T) {
+	b := mock.New(80, 24)
+	app := trail.SimpleFC("TestApp", func() kitex.Node {
+		return trail.Box(trail.BoxProps{},
+			Help(HelpProps{
+				Entries: []HelpEntry{
+					{Usage: "/help", Aliases: []string{"h"}, Description: "Show available slash commands"},
+					{Usage: "/exit", Description: "Exit REPL"},
+				},
+			}),
+			ChangesList(ChangesListProps{
+				Changes: []api.FileChange{
+					{ID: "c1", Kind: "modify", Path: "main.go", Additions: 10, Deletions: 2},
+				},
+			}),
+		)
+	})
+	inst, _ := trail.New(app(), trail.WithBackend(b))
+	inst.Frame()
+
+	out := surfaceText(b)
+	if !strings.Contains(out, "Available commands:") || !strings.Contains(out, "/help (/h)") {
+		t.Errorf("Help component missing from output:\n%s", out)
+	}
+	if !strings.Contains(out, "Tracked file changes:") || !strings.Contains(out, "main.go") || !strings.Contains(out, "+10/-2") {
+		t.Errorf("ChangesList component missing from output:\n%s", out)
+	}
+}
+
+func TestOptionListComponent(t *testing.T) {
+	b := mock.New(80, 24)
+
+	// 1. Empty with EmptyText
+	appEmpty := trail.SimpleFC("AppEmpty", func() kitex.Node {
+		return OptionList(OptionListProps{
+			Options:   nil,
+			Selected:  -1,
+			EmptyText: "  No matching options.",
+		})
+	})
+	inst1, _ := trail.New(appEmpty(), trail.WithBackend(b))
+	inst1.Frame()
+	out1 := surfaceText(b)
+	if !strings.Contains(out1, "No matching options.") {
+		t.Errorf("expected empty text, got:\n%s", out1)
+	}
+
+	// 2. Render options with selection and current badge
+	b2 := mock.New(80, 24)
+	appOpts := trail.SimpleFC("AppOpts", func() kitex.Node {
+		return OptionList(OptionListProps{
+			Options: []Option{
+				{Value: "opt1", Label: "First", Description: "First desc", Current: true},
+				{Value: "opt2", Label: "Second", Description: "Second desc"},
+			},
+			Selected: 0,
+		})
+	})
+	inst2, _ := trail.New(appOpts(), trail.WithBackend(b2))
+	inst2.Frame()
+	out2 := surfaceText(b2)
+	if !strings.Contains(out2, "❯ First") || !strings.Contains(out2, "First desc • current") {
+		t.Errorf("expected selected row and current badge, got:\n%s", out2)
+	}
+	if !strings.Contains(out2, "  Second") {
+		t.Errorf("expected second row, got:\n%s", out2)
+	}
+}
+
+func TestAutocompleteComponent(t *testing.T) {
+	b := mock.New(80, 24)
+
+	app := trail.SimpleFC("AppAuto", func() kitex.Node {
+		return trail.Box(trail.BoxProps{},
+			Autocomplete(AutocompleteProps{
+				Value: "/m",
+				Suggest: func(prefix string) []Suggestion {
+					if prefix == "/m" {
+						return []Suggestion{{Usage: "/mode [name]", Description: "Change mode"}}
+					}
+					return nil
+				},
+			}),
+			Autocomplete(AutocompleteProps{
+				Value: "/mode ",
+				SuggestArgs: func(rawLine string) ([]Option, bool) {
+					return []Option{
+						{Value: "plan", Label: "plan", Description: "Plan mode", Current: true},
+					}, true
+				},
+				Selected: 0,
+			}),
+		)
+	})
+	inst, _ := trail.New(app(), trail.WithBackend(b))
+	inst.Frame()
+
+	out := surfaceText(b)
+	if !strings.Contains(out, "/mode [name]") || !strings.Contains(out, "Change mode") {
+		t.Errorf("expected command autocomplete hint in output:\n%s", out)
+	}
+	if !strings.Contains(out, "❯ plan") || !strings.Contains(out, "Plan mode • current") {
+		t.Errorf("expected argument autocomplete options in output:\n%s", out)
 	}
 }
 
