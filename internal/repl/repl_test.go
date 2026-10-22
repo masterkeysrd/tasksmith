@@ -20,6 +20,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/client"
 	"github.com/masterkeysrd/tasksmith/internal/repl/command"
+	"github.com/masterkeysrd/tasksmith/internal/repl/ui"
 )
 
 type testDaemonState struct {
@@ -252,6 +253,16 @@ func registerTestDaemonRoutes(mux *http.ServeMux, st *testDaemonState) {
 		_ = json.NewEncoder(w).Encode(sess)
 	})
 
+	mux.HandleFunc("DELETE /v1/sessions/{id}", func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+		st.mu.Lock()
+		delete(st.sessions, id)
+		delete(st.modes, id)
+		delete(st.history, id)
+		st.mu.Unlock()
+		w.WriteHeader(http.StatusNoContent)
+	})
+
 	mux.HandleFunc("GET /v1/sessions/{id}/messages", func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
 		st.mu.Lock()
@@ -461,8 +472,8 @@ func TestRegistryLookupSuggestListAndCommands(t *testing.T) {
 
 	reg := NewRegistry()
 	list := reg.List()
-	if len(list) < 11 {
-		t.Fatalf("expected at least 11 built-in commands, got %d", len(list))
+	if len(list) < 9 {
+		t.Fatalf("expected at least 9 built-in commands, got %d", len(list))
 	}
 
 	// Lookup by primary name and aliases (with and without leading '/')
@@ -470,6 +481,12 @@ func TestRegistryLookupSuggestListAndCommands(t *testing.T) {
 		if _, ok := reg.Lookup(query); !ok {
 			t.Errorf("Lookup(%q) = false, want true", query)
 		}
+	}
+	if _, ok := reg.Lookup("switch"); ok {
+		t.Errorf("Lookup(\"switch\") = true, want false (/switch was deleted)")
+	}
+	if _, ok := reg.Lookup("history"); ok {
+		t.Errorf("Lookup(\"history\") = true, want false (/history was deleted)")
 	}
 	if _, ok := reg.Lookup(""); ok {
 		t.Errorf("Lookup(\"\") = true, want false")
@@ -480,8 +497,8 @@ func TestRegistryLookupSuggestListAndCommands(t *testing.T) {
 
 	// Suggest
 	suggestions := reg.Suggest("/s")
-	if len(suggestions) != 2 || suggestions[0].Name != "sessions" || suggestions[1].Name != "switch" {
-		t.Errorf("Suggest(\"/s\") = %+v, want [sessions, switch]", suggestions)
+	if len(suggestions) != 1 || suggestions[0].Name != "sessions" {
+		t.Errorf("Suggest(\"/s\") = %+v, want [sessions]", suggestions)
 	}
 	aliasSuggestions := reg.Suggest("/ls")
 	if len(aliasSuggestions) != 1 || aliasSuggestions[0].Name != "sessions" {
@@ -507,6 +524,9 @@ func TestRegistryLookupSuggestListAndCommands(t *testing.T) {
 		Mode:         api.ModeDefault,
 		DefaultAgent: "build",
 		DefaultModel: "claude-sonnet-4-6",
+		ListSessions: func() ([]api.Session, error) {
+			return c.ListSessions(ctx)
+		},
 	}
 
 	// 1. /help
@@ -521,14 +541,11 @@ func TestRegistryLookupSuggestListAndCommands(t *testing.T) {
 
 	// 2. /sessions
 	sessRes, err := reg.Execute(env, "/ls")
-	if err != nil || sessRes != (command.ListSessionsMsg{}) {
-		t.Errorf("/ls = (%+v, %v)", sessRes, err)
+	if err != nil {
+		t.Fatalf("/ls = %v", err)
 	}
-
-	// 3. /history
-	histRes, err := reg.Execute(env, "/history")
-	if err != nil || histRes != (command.ShowHistoryMsg{}) {
-		t.Errorf("/history = (%+v, %v)", histRes, err)
+	if _, ok := sessRes.(command.OpenPickerMsg); !ok {
+		t.Errorf("/ls = (%+v, %v), want OpenPickerMsg", sessRes, err)
 	}
 
 	// 4. /mode get & set & invalid
@@ -574,17 +591,21 @@ func TestRegistryLookupSuggestListAndCommands(t *testing.T) {
 		t.Errorf("/revert = (%+v, %v)", revAllRes, err)
 	}
 
-	// 6. /new & /switch
+	// 6. /new & /sessions
 	newRes, err := reg.Execute(env, "/new claude-opus-4-6")
 	if err != nil || newRes != (command.NewSessionMsg{Model: "claude-opus-4-6"}) {
 		t.Errorf("/new = (%+v, %v)", newRes, err)
 	}
-	swRes, err := reg.Execute(env, "/switch s1")
+	swRes, err := reg.Execute(env, "/sessions s1")
 	if err != nil || swRes != (command.SwitchSessionMsg{SessionID: "s1"}) {
-		t.Errorf("/switch s1 = (%+v, %v)", swRes, err)
+		t.Errorf("/sessions s1 = (%+v, %v)", swRes, err)
 	}
-	if _, err := reg.Execute(env, "/switch"); err == nil {
-		t.Errorf("/switch without arg expected error")
+	lsRes, err := reg.Execute(env, "/sessions")
+	if err != nil {
+		t.Fatalf("/sessions = %v", err)
+	}
+	if _, ok := lsRes.(command.OpenPickerMsg); !ok {
+		t.Errorf("/sessions = (%+v, %v), want OpenPickerMsg", lsRes, err)
 	}
 
 	// 7. /clear & /exit
@@ -619,11 +640,162 @@ func TestRegistryLookupSuggestListAndCommands(t *testing.T) {
 	}
 	_ = cmdMode
 
-	updatedM, _ = m.Update(command.ListSessionsMsg{})
+	updatedM, _ = m.executeSlashCommand("/sessions")
 	m = updatedM.(Model)
+	if m.state != ui.StatePicker {
+		t.Fatalf("expected state ui.StatePicker after /sessions, got %v", m.state)
+	}
+	if len(m.picker.Options) != 1 {
+		t.Fatalf("expected 1 session option in picker, got %d", len(m.picker.Options))
+	}
+	if len(m.picker.Options[0].Columns) != 4 {
+		t.Fatalf("expected 4 columns in session option, got %d", len(m.picker.Options[0].Columns))
+	}
+	if m.picker.Options[0].Columns[0] != "Initial" || m.picker.Options[0].Columns[1] != "s1" {
+		t.Fatalf("unexpected columns in session option: %+v", m.picker.Options[0].Columns)
+	}
 
-	updatedM, _ = m.Update(command.ShowHistoryMsg{})
+	// Switch session via picker selection
+	swMsg := m.picker.Select()
+	if swMsg != (command.SwitchSessionMsg{SessionID: "s1"}) {
+		t.Fatalf("picker.Select() = %+v, want SwitchSessionMsg s1", swMsg)
+	}
+	updatedM, _ = m.Update(swMsg)
 	m = updatedM.(Model)
+	if m.state != ui.StateIdle {
+		t.Fatalf("expected state ui.StateIdle after SwitchSessionMsg, got %v", m.state)
+	}
+
+	// Test deleting session via 'd' key in picker
+	now := time.Now().UTC()
+	st.mu.Lock()
+	st.sessions["s2"] = api.Session{
+		ID:        "s2",
+		Title:     "Session To Delete",
+		Agent:     "build",
+		Model:     "claude-sonnet-4-6",
+		Status:    api.StatusIdle,
+		UpdatedAt: now,
+	}
+	st.mu.Unlock()
+
+	updatedM, _ = m.executeSlashCommand("/sessions")
+	m = updatedM.(Model)
+	if m.state != ui.StatePicker {
+		t.Fatalf("expected state ui.StatePicker after /sessions, got %v", m.state)
+	}
+
+	var s2Opt ui.Option
+	for _, opt := range m.picker.Options {
+		if opt.Value == "s2" {
+			s2Opt = opt
+			break
+		}
+	}
+
+	// Test renaming session via 'f2' input action
+	f2Act, ok := m.picker.InputActions["f2"]
+	if !ok {
+		t.Fatalf("expected 'f2' input action in session picker")
+	}
+	renMsg := f2Act.OnSubmit(s2Opt, "Renamed Session Two")
+	if renMsg != (command.RenameSessionMsg{SessionID: "s2", Title: "Renamed Session Two"}) {
+		t.Fatalf("f2Act = %+v, want RenameSessionMsg s2", renMsg)
+	}
+	updatedM, _ = m.Update(renMsg)
+	m = updatedM.(Model)
+	if m.state != ui.StatePicker {
+		t.Fatalf("expected state ui.StatePicker to stay open after rename, got %v", m.state)
+	}
+	st.mu.Lock()
+	s2Renamed := st.sessions["s2"]
+	st.mu.Unlock()
+	if s2Renamed.Title != "Renamed Session Two" {
+		t.Errorf("expected daemon session s2 title = 'Renamed Session Two', got %q", s2Renamed.Title)
+	}
+
+	// Test deleting session via 'f4' confirm action
+	f4Act, ok := m.picker.ConfirmActions["f4"]
+	if !ok {
+		t.Fatalf("expected 'f4' confirm action in session picker")
+	}
+	delMsg := f4Act.OnConfirm(s2Opt)
+	if delMsg != (command.DeleteSessionMsg{SessionID: "s2"}) {
+		t.Fatalf("f4Act = %+v, want DeleteSessionMsg s2", delMsg)
+	}
+	updatedM, _ = m.Update(delMsg)
+	m = updatedM.(Model)
+	if m.state != ui.StatePicker {
+		t.Fatalf("expected state ui.StatePicker after DeleteSessionMsg with remaining sessions, got %v", m.state)
+	}
+	if len(m.picker.Options) != 1 || m.picker.Options[0].Value != "s1" {
+		t.Fatalf("expected 1 remaining session (s1), got %+v", m.picker.Options)
+	}
+	st.mu.Lock()
+	_, s2Exists := st.sessions["s2"]
+	st.mu.Unlock()
+	if s2Exists {
+		t.Fatalf("expected s2 to be deleted from daemon")
+	}
+
+	// Test deleting the active session (s1), which is also the last remaining session.
+	// The picker must stay open in ui.StatePicker (until esc).
+	updatedM, _ = m.Update(command.DeleteSessionMsg{SessionID: "s1"})
+	m = updatedM.(Model)
+	if m.session != nil {
+		t.Fatalf("expected m.session to be nil after deleting active session, got %+v", m.session)
+	}
+	if m.state != ui.StatePicker {
+		t.Fatalf("expected state ui.StatePicker to remain open even with 0 sessions remaining, got %v", m.state)
+	}
+	if len(m.picker.Options) != 0 {
+		t.Fatalf("expected 0 options remaining in picker, got %d", len(m.picker.Options))
+	}
+
+	// Dismiss empty picker with Esc
+	updatedM, _ = m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	m = updatedM.(Model)
+	if m.state != ui.StateIdle {
+		t.Fatalf("expected state ui.StateIdle after Esc on picker, got %v", m.state)
+	}
+
+	// Restore s1 with ModePlan in daemon to test mode sync and header re-rendering on switch
+	st.mu.Lock()
+	st.sessions["s1"] = api.Session{
+		ID:        "s1",
+		Title:     "Initial",
+		Agent:     "build",
+		Model:     "claude-sonnet-4-6",
+		Status:    api.StatusIdle,
+		UpdatedAt: now,
+	}
+	st.modes["s1"] = api.ModePlan
+	st.mu.Unlock()
+
+	updatedM, swCmd := m.Update(command.SwitchSessionMsg{SessionID: "s1"})
+	m = updatedM.(Model)
+	if m.Mode() != api.ModePlan {
+		t.Errorf("Model mode after switch = %v, want ModePlan", m.Mode())
+	}
+	if swCmd == nil {
+		t.Fatalf("expected tea.Cmd sequence from switch session")
+	}
+
+	// Test /new clearing session, resetting mode to Default, and re-rendering header
+	updatedM, newCmd := m.Update(command.NewSessionMsg{Model: "claude-haiku-4-5"})
+	m = updatedM.(Model)
+	if m.session != nil {
+		t.Fatalf("expected nil session after /new")
+	}
+	if m.Mode() != api.ModeDefault {
+		t.Fatalf("expected ModeDefault after /new, got %v", m.Mode())
+	}
+	if newCmd == nil {
+		t.Fatalf("expected tea.Cmd sequence from /new")
+	}
+
+	// Restore session for remaining tests
+	m.session = &api.Session{ID: "s1", Agent: "build", Model: "claude-sonnet-4-6"}
 
 	updatedM, _ = m.Update(command.ListChangesMsg{})
 	m = updatedM.(Model)
@@ -637,22 +809,18 @@ func TestRegistryLookupSuggestListAndCommands(t *testing.T) {
 	updatedM, _ = m.Update(command.RevertMsg{})
 	m = updatedM.(Model)
 
-	// Empty session branches for history and changes
+	// Empty session branches for changes
 	m.session = nil
-	updatedM, _ = m.Update(command.ShowHistoryMsg{})
-	m = updatedM.(Model)
 	updatedM, _ = m.Update(command.ListChangesMsg{})
 	m = updatedM.(Model)
 
-	// Empty changes & history in daemon session
+	// Empty changes in daemon session
 	st.mu.Lock()
 	st.changes["s2"] = nil
 	st.history["s2"] = nil
 	st.mu.Unlock()
 	m.session = &api.Session{ID: "s2"}
 	updatedM, _ = m.Update(command.ListChangesMsg{})
-	m = updatedM.(Model)
-	updatedM, _ = m.Update(command.ShowHistoryMsg{})
 	m = updatedM.(Model)
 }
 
@@ -1174,7 +1342,6 @@ func TestLazySessionCreationNoPrompts(t *testing.T) {
 		"/sessions",
 		"/mode",
 		"/mode plan",
-		"/history",
 		"/changes",
 		"/new claude-opus-4-6",
 		"/exit",
@@ -1304,6 +1471,11 @@ func TestRunResumeSessionWithMutation(t *testing.T) {
 	}
 	if s1.Model != "claude-opus-4-6" {
 		t.Errorf("session Model = %q, want 'claude-opus-4-6'", s1.Model)
+	}
+
+	// Verify session history was printed on resume
+	if !strings.Contains(out.String(), "Hello REPL") || !strings.Contains(out.String(), "Hi there!") {
+		t.Errorf("resumed session stdout expected history messages, got:\n%s", out.String())
 	}
 }
 

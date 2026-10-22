@@ -7,6 +7,7 @@ require (
 	charm.land/bubbletea/v2 v2.1.0
 	charm.land/lipgloss/v2 v2.0.6
 	github.com/anthropics/anthropic-sdk-go v1.82.0
+	github.com/dustin/go-humanize v1.1.0
 	github.com/google/jsonschema-go v0.4.3
 	github.com/google/uuid v1.6.0
 	github.com/masterkeysrd/loom v0.0.8
@@ -42,7 +43,6 @@ require (
 	github.com/cloudflare/circl v1.6.5 // indirect
 	github.com/coder/websocket v1.8.15 // indirect
 	github.com/cyphar/filepath-securejoin v0.7.0 // indirect
-	github.com/dustin/go-humanize v1.1.0 // indirect
 	github.com/emirpasic/gods v1.18.1 // indirect
 	github.com/felixge/httpsnoop v1.1.0 // indirect
 	github.com/go-git/gcfg v1.5.1-0.20230307220236-3a3c6141e376 // indirect

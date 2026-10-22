@@ -3,35 +3,18 @@ package repl
 import (
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/repl/ui"
 )
 
-func formatSessionList(sessions []api.Session, activeID string) string {
-	if len(sessions) == 0 {
-		return "No sessions found."
-	}
-	var rows []string
-	for _, s := range sessions {
-		marker := " "
-		if activeID != "" && s.ID == activeID {
-			marker = "*"
-		}
-		rows = append(rows, fmt.Sprintf("%s %s\tstatus=%s\tagent=%s\tmodel=%s\tupdated_at=%s",
-			marker, s.ID, s.Status, s.Agent, s.Model, s.UpdatedAt.Format(time.RFC3339)))
-	}
-	return strings.Join(rows, "\n")
-}
-
 func formatHistory(history []api.Message) string {
-	if len(history) == 0 {
-		return "No messages in session history."
-	}
-	rows := make([]string, len(history))
-	for i, msg := range history {
-		rows[i] = ui.FormatMessage(msg)
+	var rows []string
+	for _, msg := range history {
+		formatted := ui.FormatMessage(msg)
+		if strings.TrimSpace(formatted) != "" {
+			rows = append(rows, formatted)
+		}
 	}
 	return strings.Join(rows, "\n")
 }

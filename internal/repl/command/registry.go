@@ -15,6 +15,7 @@ type Env struct {
 	Session      *api.Session
 	DefaultAgent string
 	DefaultModel string
+	ListSessions func() ([]api.Session, error)
 }
 
 // OutputMsg indicates plain text output from a slash command.
@@ -43,11 +44,16 @@ type SwitchSessionMsg struct {
 	SessionID string
 }
 
-// ListSessionsMsg requests listing available sessions.
-type ListSessionsMsg struct{}
+// RenameSessionMsg requests renaming an existing session.
+type RenameSessionMsg struct {
+	SessionID string
+	Title     string
+}
 
-// ShowHistoryMsg requests displaying session message history.
-type ShowHistoryMsg struct{}
+// DeleteSessionMsg requests deleting an existing session.
+type DeleteSessionMsg struct {
+	SessionID string
+}
 
 // ListChangesMsg requests listing tracked file changes.
 type ListChangesMsg struct{}

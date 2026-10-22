@@ -220,6 +220,13 @@ func isTTY(v any) bool {
 func runTUI(ctx context.Context, cfg Config, sess *api.Session, mode api.PermissionMode) error {
 	hdr := buildHeader(ctx, cfg, sess)
 	_, _ = fmt.Fprintln(cfg.Out, ui.FormatHeader(hdr))
+	if sess != nil && strings.TrimSpace(sess.ID) != "" && cfg.Client != nil {
+		if history, err := cfg.Client.History(ctx, sess.ID); err == nil && len(history) > 0 {
+			if h := formatHistory(history); h != "" {
+				_, _ = fmt.Fprintln(cfg.Out, "\n"+h)
+			}
+		}
+	}
 
 	subCtx, cancelSub := context.WithCancel(ctx)
 	eventCh := make(chan api.Event, 64)

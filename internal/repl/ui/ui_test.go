@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -470,5 +471,211 @@ func TestPickerComponent(t *testing.T) {
 	customP.StatusBar = ""
 	if !strings.Contains(customP.Render(), DefaultPickerStatusBar) {
 		t.Errorf("default status bar missing when StatusBar cleared")
+	}
+}
+
+func TestPickerColumnsAndCustomKeys(t *testing.T) {
+	opts := []Option{
+		{
+			Value:   "s1",
+			Columns: []string{"My Session", "s1", "claude-sonnet-4-6", "2 minutes ago"},
+			Current: true,
+		},
+		{
+			Value:   "s2",
+			Columns: []string{"Another Session", "s2", "claude-opus-4-6", "1 hour ago"},
+		},
+	}
+
+	type deleteMsg struct{ id string }
+	p := NewPicker("Select session:", opts, func(opt Option) tea.Msg {
+		return opt.Value
+	})
+	p.Keys = map[string]func(opt Option) tea.Msg{
+		"d": func(opt Option) tea.Msg {
+			return deleteMsg{id: opt.Value}
+		},
+	}
+
+	rendered := p.Render()
+	if !strings.Contains(rendered, "My Session") ||
+		!strings.Contains(rendered, "claude-sonnet-4-6") ||
+		!strings.Contains(rendered, "2 minutes ago") ||
+		!strings.Contains(rendered, "current") {
+		t.Errorf("rendered multi-column picker missing expected strings:\n%s", rendered)
+	}
+
+	// Test key press 'd' triggering custom key handler
+	updatedP, cmd := p.Update(tea.KeyPressMsg{Code: 'd', Text: "d"})
+	if cmd == nil {
+		t.Fatalf("expected command from 'd' keypress")
+	}
+	msg := cmd()
+	if dm, ok := msg.(deleteMsg); !ok || dm.id != "s1" {
+		t.Errorf("expected deleteMsg for 's1', got %+v", msg)
+	}
+
+	// Move cursor down to s2 and test 'd'
+	updatedP.CursorDown()
+	_, cmd2 := updatedP.Update(tea.KeyPressMsg{Code: 'd', Text: "d"})
+	if cmd2 == nil {
+		t.Fatalf("expected command from 'd' keypress on second item")
+	}
+	msg2 := cmd2()
+	if dm, ok := msg2.(deleteMsg); !ok || dm.id != "s2" {
+		t.Errorf("expected deleteMsg for 's2', got %+v", msg2)
+	}
+}
+
+func TestPickerFilteringConfirmAndInputActions(t *testing.T) {
+	opts := []Option{
+		{
+			Value:       "s1",
+			Label:       "Alpha Session",
+			Description: "The first session",
+			Columns:     []string{"Alpha Session", "s1", "claude-sonnet-4-6", "10m ago"},
+			Current:     true,
+		},
+		{
+			Value:       "s2",
+			Label:       "Beta Session",
+			Description: "Second session",
+			Columns:     []string{"Beta Session", "s2", "claude-opus-4-6", "1h ago"},
+		},
+		{
+			Value:       "s3",
+			Label:       "Gamma Session",
+			Description: "Third session",
+			Columns:     []string{"Gamma Session", "s3", "gpt-5.4", "2d ago"},
+		},
+	}
+
+	type deleteMsg struct{ id string }
+	type renameMsg struct {
+		id    string
+		title string
+	}
+
+	p := NewPicker("Select session:", opts, func(opt Option) tea.Msg {
+		return opt.Value
+	})
+	p.Filterable = true
+	p.ConfirmActions = map[string]ConfirmAction{
+		"f4": {
+			Prompt: func(opt Option) string {
+				return fmt.Sprintf("Delete %q?", opt.Label)
+			},
+			OnConfirm: func(opt Option) tea.Msg {
+				return deleteMsg{id: opt.Value}
+			},
+		},
+	}
+	p.InputActions = map[string]InputAction{
+		"f2": {
+			Prompt: "Rename: ",
+			InitialValue: func(opt Option) string {
+				return opt.Label
+			},
+			OnSubmit: func(opt Option, val string) tea.Msg {
+				return renameMsg{id: opt.Value, title: val}
+			},
+		},
+	}
+
+	// 1. Initial render includes filter input view
+	rendered := p.Render()
+	if !strings.Contains(rendered, "ype to filter") {
+		t.Errorf("expected filter placeholder in rendered output:\n%s", rendered)
+	}
+
+	// 2. Live filtering: type "beta"
+	p.SetFilterValue("beta")
+	if p.FilterValue() != "beta" {
+		t.Errorf("FilterValue() = %q, want 'beta'", p.FilterValue())
+	}
+	filtered := p.FilteredOptions()
+	if len(filtered) != 1 || filtered[0].Value != "s2" {
+		t.Fatalf("expected 1 filtered option (s2), got %+v", filtered)
+	}
+	if sel, ok := p.Selected(); !ok || sel.Value != "s2" {
+		t.Errorf("Selected() = %+v, want s2", sel)
+	}
+
+	// 3. Filter with no matches
+	p.SetFilterValue("nonexistent")
+	if len(p.FilteredOptions()) != 0 {
+		t.Errorf("expected 0 matches for 'nonexistent'")
+	}
+	noMatchRender := p.Render()
+	if !strings.Contains(noMatchRender, "No matching options.") {
+		t.Errorf("expected 'No matching options.' in rendered output:\n%s", noMatchRender)
+	}
+
+	// 4. Clear filter
+	p.SetFilterValue("")
+	if len(p.FilteredOptions()) != 3 {
+		t.Errorf("expected 3 options after clearing filter")
+	}
+
+	// 5. Test F4 ConfirmAction: trigger, cancel with 'n'
+	p.SetCursor(0) // Alpha Session
+	p, _ = p.Update(tea.KeyPressMsg{Code: tea.KeyF4})
+	if !p.InConfirmMode() {
+		t.Fatalf("expected InConfirmMode() == true after F4")
+	}
+	confirmRender := p.Render()
+	if !strings.Contains(confirmRender, `Delete "Alpha Session"?`) || !strings.Contains(confirmRender, "y to confirm") {
+		t.Errorf("unexpected confirm render:\n%s", confirmRender)
+	}
+	// Press 'n' to cancel
+	p, _ = p.Update(tea.KeyPressMsg{Code: 'n', Text: "n"})
+	if p.InConfirmMode() {
+		t.Fatalf("expected InConfirmMode() == false after pressing 'n'")
+	}
+
+	// Test F4 ConfirmAction: trigger, confirm with 'y'
+	p, _ = p.Update(tea.KeyPressMsg{Code: tea.KeyF4})
+	p, delCmd := p.Update(tea.KeyPressMsg{Code: 'y', Text: "y"})
+	if delCmd == nil {
+		t.Fatalf("expected command on confirming F4 with 'y'")
+	}
+	ev := delCmd()
+	if dm, ok := ev.(deleteMsg); !ok || dm.id != "s1" {
+		t.Errorf("expected deleteMsg for s1, got %+v", ev)
+	}
+	if p.InConfirmMode() {
+		t.Fatalf("expected InConfirmMode() == false after confirmation")
+	}
+
+	// 6. Test F2 InputAction: trigger, cancel with Esc
+	p.SetCursor(1) // Beta Session
+	p, _ = p.Update(tea.KeyPressMsg{Code: tea.KeyF2})
+	if !p.InInputMode() {
+		t.Fatalf("expected InInputMode() == true after F2")
+	}
+	inputRender := p.Render()
+	if !strings.Contains(inputRender, "Rename: ") || !strings.Contains(inputRender, "Beta Session") {
+		t.Errorf("unexpected input mode render:\n%s", inputRender)
+	}
+	// Cancel with Esc
+	p, _ = p.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
+	if p.InInputMode() {
+		t.Fatalf("expected InInputMode() == false after Esc")
+	}
+
+	// Test F2 InputAction: trigger, edit, submit with Enter
+	p, _ = p.Update(tea.KeyPressMsg{Code: tea.KeyF2})
+	// Type " Renamed"
+	p, _ = p.Update(tea.KeyPressMsg{Code: '!', Text: "!"})
+	p, saveCmd := p.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if saveCmd == nil {
+		t.Fatalf("expected command on saving F2 input with Enter")
+	}
+	saveEv := saveCmd()
+	if rm, ok := saveEv.(renameMsg); !ok || rm.id != "s2" || rm.title != "Beta Session!" {
+		t.Errorf("expected renameMsg for s2 with 'Beta Session!', got %+v", saveEv)
+	}
+	if p.InInputMode() {
+		t.Fatalf("expected InInputMode() == false after saving input")
 	}
 }

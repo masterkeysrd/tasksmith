@@ -253,7 +253,6 @@ func TestREPLPromptAndSlashCommands(t *testing.T) {
 		"/sessions",
 		"/mode",
 		"/mode plan",
-		"/history",
 		"/changes",
 		"/new claude-opus-4-6",
 		"/exit",

@@ -29,6 +29,7 @@ type Model struct {
 	ctx          context.Context
 	client       *client.Client
 	workspace    string
+	version      string
 	session      *api.Session
 	mode         api.PermissionMode
 	defaultAgent string
@@ -81,6 +82,7 @@ func NewModel(ctx context.Context, cfg Config, reg *command.Registry, sess *api.
 		ctx:          ctx,
 		client:       c,
 		workspace:    cfg.Workspace,
+		version:      ui.NormalizeVersion(cfg.Version),
 		session:      sess,
 		mode:         mode,
 		defaultAgent: cfg.Agent,
@@ -94,6 +96,15 @@ func NewModel(ctx context.Context, cfg Config, reg *command.Registry, sess *api.
 		approval:     ui.NewApproval(),
 		spinner:      sp,
 	}
+}
+
+func (m Model) renderHeader() string {
+	return ui.Header{
+		Version:  m.version,
+		Model:    m.modelLabel,
+		Thinking: m.thinking,
+		Path:     m.workspace,
+	}.Render()
 }
 
 // State returns the current lifecycle [ui.State] of the model.
@@ -172,12 +183,18 @@ func (m *Model) SetInputValue(val string) {
 }
 
 func (m Model) commandEnv() command.Env {
-	return command.Env{
+	env := command.Env{
 		Mode:         m.mode,
 		Session:      m.session,
 		DefaultAgent: m.defaultAgent,
 		DefaultModel: m.defaultModel,
 	}
+	if m.client != nil {
+		env.ListSessions = func() ([]api.Session, error) {
+			return m.client.ListSessions(m.ctx)
+		}
+	}
+	return env
 }
 
 // Init implements [tea.Model].
@@ -242,11 +259,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case command.SwitchSessionMsg:
 		return m.handleSwitchSession(typed)
 
-	case command.ListSessionsMsg:
-		return m.handleListSessions()
+	case command.RenameSessionMsg:
+		return m.handleRenameSession(typed)
 
-	case command.ShowHistoryMsg:
-		return m.handleShowHistory()
+	case command.DeleteSessionMsg:
+		return m.handleDeleteSession(typed)
 
 	case command.ListChangesMsg:
 		return m.handleListChanges()
@@ -289,14 +306,16 @@ func (m Model) handleChangeMode(msg command.ChangeModeMsg) (tea.Model, tea.Cmd) 
 
 func (m Model) handleNewSession(msg command.NewSessionMsg) (tea.Model, tea.Cmd) {
 	m.session = nil
+	m.mode = api.ModeDefault
 	if msg.Model != "" {
 		m.defaultModel = msg.Model
 	}
 	m.modelLabel, m.thinking = resolveModelAndThinking(m.ctx, m.client, m.defaultAgent, m.defaultModel, nil)
-	return m, tea.Println(fmt.Sprintf("Switched to new session (agent=%s model=%s)", m.defaultAgent, m.defaultModel))
+	return m, tea.Sequence(tea.ClearScreen, tea.Println(m.renderHeader()))
 }
 
 func (m Model) handleSwitchSession(msg command.SwitchSessionMsg) (tea.Model, tea.Cmd) {
+	m.state = ui.StateIdle
 	if m.client == nil {
 		return m, tea.Println(ui.FormatError("repl: client is required"))
 	}
@@ -305,37 +324,72 @@ func (m Model) handleSwitchSession(msg command.SwitchSessionMsg) (tea.Model, tea
 		return m, tea.Println(ui.FormatError(fmt.Sprintf("error switching session: %v", err)))
 	}
 	m.session = s
+	if mode, err := m.client.PermissionMode(m.ctx, s.ID); err == nil && mode != "" {
+		m.mode = mode
+	} else {
+		m.mode = api.ModeDefault
+	}
 	m.modelLabel, m.thinking = resolveModelAndThinking(m.ctx, m.client, m.defaultAgent, m.defaultModel, s)
-	return m, tea.Println(fmt.Sprintf("Switched to session %s (agent=%s model=%s)", s.ID, s.Agent, s.Model))
+
+	history, _ := m.client.History(m.ctx, s.ID)
+	out := m.renderHeader()
+	if len(history) > 0 {
+		if h := formatHistory(history); h != "" {
+			out += "\n\n" + h
+		}
+	}
+	return m, tea.Sequence(tea.ClearScreen, tea.Println(out))
 }
 
-func (m Model) handleListSessions() (tea.Model, tea.Cmd) {
+func (m *Model) refreshSessionPicker() {
 	if m.client == nil {
-		return m, tea.Println(ui.FormatError("repl: client is required"))
+		return
 	}
-	sessions, err := m.client.ListSessions(m.ctx)
-	if err != nil {
-		return m, tea.Println(ui.FormatError(fmt.Sprintf("error listing sessions: %v", err)))
-	}
+	sessions, _ := m.client.ListSessions(m.ctx)
 	var activeID string
 	if m.session != nil {
 		activeID = m.session.ID
 	}
-	return m, tea.Println(formatSessionList(sessions, activeID))
+	prevCursor := m.picker.Cursor()
+	prevFilter := m.picker.FilterValue()
+	width := m.composer.Width()
+
+	m.picker = command.NewSessionPicker(sessions, activeID)
+	m.picker.SetFilterValue(prevFilter)
+	m.picker.SetCursor(prevCursor)
+	m.picker.SetWidth(width)
+	m.state = ui.StatePicker
 }
 
-func (m Model) handleShowHistory() (tea.Model, tea.Cmd) {
-	if m.session == nil || strings.TrimSpace(m.session.ID) == "" {
-		return m, tea.Println("No messages in session history.")
-	}
+func (m Model) handleRenameSession(msg command.RenameSessionMsg) (tea.Model, tea.Cmd) {
 	if m.client == nil {
 		return m, tea.Println(ui.FormatError("repl: client is required"))
 	}
-	history, err := m.client.History(m.ctx, m.session.ID)
+	updated, err := m.client.UpdateSession(m.ctx, msg.SessionID, api.UpdateSessionRequest{Title: msg.Title})
 	if err != nil {
-		return m, tea.Println(ui.FormatError(fmt.Sprintf("error loading history: %v", err)))
+		return m, tea.Println(ui.FormatError(fmt.Sprintf("error renaming session: %v", err)))
 	}
-	return m, tea.Println(formatHistory(history))
+	if m.session != nil && m.session.ID == msg.SessionID && updated != nil {
+		m.session = updated
+	}
+	m.refreshSessionPicker()
+	return m, nil
+}
+
+func (m Model) handleDeleteSession(msg command.DeleteSessionMsg) (tea.Model, tea.Cmd) {
+	if m.client == nil {
+		return m, tea.Println(ui.FormatError("repl: client is required"))
+	}
+	if err := m.client.DeleteSession(m.ctx, msg.SessionID); err != nil {
+		return m, tea.Println(ui.FormatError(fmt.Sprintf("error deleting session: %v", err)))
+	}
+	if m.session != nil && m.session.ID == msg.SessionID {
+		m.session = nil
+		m.modelLabel, m.thinking = resolveModelAndThinking(m.ctx, m.client, m.defaultAgent, m.defaultModel, nil)
+	}
+
+	m.refreshSessionPicker()
+	return m, nil
 }
 
 func (m Model) handleListChanges() (tea.Model, tea.Cmd) {
