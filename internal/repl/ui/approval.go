@@ -1,235 +1,227 @@
 package ui
 
 import (
-	"fmt"
 	"strings"
 
-	"charm.land/bubbles/v2/textinput"
-	tea "charm.land/bubbletea/v2"
+	"github.com/masterkeysrd/kite/dom"
+	"github.com/masterkeysrd/kite/event"
+	"github.com/masterkeysrd/kite/extras/kitex"
+	"github.com/masterkeysrd/kite/extras/trail"
+	"github.com/masterkeysrd/kite/style"
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/repl/theme"
 )
 
-// Approval manages pending tool permission requests, navigation cursor, and feedback input.
-type Approval struct {
-	pending       []api.PermissionRequest
-	cursor        int
-	feedbackMode  bool
-	feedbackInput textinput.Model
+// ApprovalProps defines the properties for the permission approval component.
+type ApprovalProps struct {
+	Request    api.PermissionRequest
+	OnDecision func(req api.PermissionRequest, dec api.PermissionDecision)
 }
 
-// NewApproval constructs an initialized [Approval] component.
-func NewApproval() Approval {
-	fi := textinput.New()
-	fi.Prompt = ""
-	fi.Placeholder = "Reason for rejection..."
+// Approval is a trail functional component managing tool permission authorization decisions,
+// inline rejection feedback input, and key shortcuts.
+var Approval = trail.FC("Approval", func(props ApprovalProps) trail.Node {
+	cursor, setCursor := kitex.UseState(0)
+	feedbackMode, setFeedbackMode := kitex.UseState(false)
+	feedbackText, setFeedbackText := kitex.UseState("")
 
-	return Approval{
-		feedbackInput: fi,
-	}
-}
+	feedbackInputRef := kitex.UseRef[dom.Element](nil)
 
-// Pending returns the current list of pending permission requests.
-func (a Approval) Pending() []api.PermissionRequest {
-	return a.pending
-}
+	kitex.UseLayoutEffect(func() {
+		if feedbackMode() && feedbackInputRef.Current != nil {
+			if doc := feedbackInputRef.Current.OwnerDocument(); doc != nil {
+				doc.Focus(feedbackInputRef.Current)
+			}
+		}
+	}, []any{feedbackMode()})
 
-// HasPending reports whether any permission requests are waiting for decision.
-func (a Approval) HasPending() bool {
-	return len(a.pending) > 0
-}
+	trail.UseInput(func(input string, k event.KeyEvent) {
+		if feedbackMode() {
+			return
+		}
 
-// SetPending replaces the queue of pending permission requests.
-func (a *Approval) SetPending(perms []api.PermissionRequest) {
-	a.pending = perms
-	a.cursor = 0
-	a.feedbackMode = false
-	a.feedbackInput.Reset()
-}
+		cur := cursor()
+		switch {
+		case input == "y" || input == "Y" || k.MatchString("y"):
+			if props.OnDecision != nil {
+				props.OnDecision(props.Request, api.PermissionDecision{Kind: api.DecisionAllowOnce})
+			}
 
-// Append adds permission requests to the end of the queue.
-func (a *Approval) Append(perms ...api.PermissionRequest) {
-	a.pending = append(a.pending, perms...)
-}
+		case input == "a" || input == "A" || k.MatchString("a"):
+			if props.OnDecision != nil {
+				props.OnDecision(props.Request, api.PermissionDecision{Kind: api.DecisionAllowSession})
+			}
 
-// Clear clears all pending permission requests and resets state.
-func (a *Approval) Clear() {
-	a.pending = nil
-	a.cursor = 0
-	a.feedbackMode = false
-	a.feedbackInput.Reset()
-}
+		case input == "n" || input == "N" || k.MatchString("n"):
+			if props.OnDecision != nil {
+				props.OnDecision(props.Request, api.PermissionDecision{Kind: api.DecisionReject})
+			}
 
-// Cursor returns the currently highlighted decision option index (0..2).
-func (a Approval) Cursor() int {
-	return a.cursor
-}
+		case input == "r" || input == "R" || k.MatchString("r"):
+			setFeedbackMode(true)
+			setFeedbackText("")
+			setCursor(2)
 
-// SetCursor explicitly sets the cursor index, clamping it to 0..2.
-func (a *Approval) SetCursor(c int) {
-	if c < 0 {
-		c = 0
-	}
-	if c > 2 {
-		c = 2
-	}
-	a.cursor = c
-}
+		case k.MatchString("up", "k"):
+			if cur > 0 {
+				setCursor(cur - 1)
+			}
 
-// CursorUp moves the selection cursor up.
-func (a *Approval) CursorUp() {
-	if a.cursor > 0 {
-		a.cursor--
-	}
-}
+		case k.MatchString("down", "j"):
+			if cur < 2 {
+				setCursor(cur + 1)
+			}
 
-// CursorDown moves the selection cursor down.
-func (a *Approval) CursorDown() {
-	if a.cursor < 2 {
-		a.cursor++
-	}
-}
+		case k.MatchString("enter"):
+			if props.OnDecision != nil {
+				var kind api.DecisionKind
+				switch cur {
+				case 0:
+					kind = api.DecisionAllowOnce
+				case 1:
+					kind = api.DecisionAllowSession
+				default:
+					kind = api.DecisionReject
+				}
+				props.OnDecision(props.Request, api.PermissionDecision{Kind: kind})
+			}
+		}
+	})
 
-// FeedbackMode reports whether rejection feedback text input is active.
-func (a Approval) FeedbackMode() bool {
-	return a.feedbackMode
-}
+	perm := props.Request
+	var lines []trail.Node
 
-// FeedbackValue returns the current text in the feedback input field.
-func (a Approval) FeedbackValue() string {
-	return a.feedbackInput.Value()
-}
-
-// EnterFeedback switches the component into rejection feedback input mode.
-func (a *Approval) EnterFeedback() {
-	a.feedbackMode = true
-	a.cursor = 2
-	a.feedbackInput.Reset()
-	a.feedbackInput.Focus()
-}
-
-// ExitFeedback cancels rejection feedback input mode.
-func (a *Approval) ExitFeedback() {
-	a.feedbackMode = false
-	a.feedbackInput.Reset()
-}
-
-// UpdateFeedback forwards Bubble Tea messages to the rejection feedback input field.
-func (a Approval) UpdateFeedback(msg tea.Msg) (Approval, tea.Cmd) {
-	var cmd tea.Cmd
-	a.feedbackInput, cmd = a.feedbackInput.Update(msg)
-	return a, cmd
-}
-
-// PopDecision creates a [api.PermissionDecision] for the head request, removes it from the queue,
-// and returns the resolved request and decision.
-func (a *Approval) PopDecision(kind api.DecisionKind, feedback string) (api.PermissionRequest, api.PermissionDecision, bool) {
-	if len(a.pending) == 0 {
-		return api.PermissionRequest{}, api.PermissionDecision{}, false
-	}
-
-	perm := a.pending[0]
-	a.pending = a.pending[1:]
-	a.cursor = 0
-	a.feedbackMode = false
-	a.feedbackInput.Reset()
-
-	decision := api.PermissionDecision{
-		RequestID:  perm.ID,
-		ToolCallID: perm.ToolCallID,
-		Kind:       kind,
-		Feedback:   feedback,
-		Wait:       false,
-	}
-	if kind == api.DecisionAllowSession && len(perm.GrantPatterns) > 0 {
-		decision.GrantPattern = perm.GrantPatterns[0]
-	}
-
-	return perm, decision, true
-}
-
-// PopSelected creates a decision based on the currently selected cursor option.
-func (a *Approval) PopSelected() (api.PermissionRequest, api.PermissionDecision, bool) {
-	switch a.cursor {
-	case 0:
-		return a.PopDecision(api.DecisionAllowOnce, "")
-	case 1:
-		return a.PopDecision(api.DecisionAllowSession, "")
-	default:
-		return a.PopDecision(api.DecisionReject, "")
-	}
-}
-
-// Render formats the active permission request card as a styled terminal view.
-func (a Approval) Render() string {
-	if len(a.pending) == 0 {
-		return ""
-	}
-	return FormatPermissionCard(a.pending[0], a.cursor, a.feedbackMode, a.feedbackInput.Value())
-}
-
-// FormatPermissionCard renders a bordered approval card for a pending [api.PermissionRequest].
-func FormatPermissionCard(perm api.PermissionRequest, cursor int, feedbackMode bool, feedbackText string) string {
-	var rows []string
-
-	actionBadge := theme.ActionBadgeStyle.Render(strings.ToUpper(string(perm.Action)))
-	safetyBadge := theme.SafetyBadgeStyle(perm.Safety).Render(strings.ToUpper(string(perm.Safety)))
-	header := theme.PermHeaderStyle.Render("[Permission Required]") + " " + actionBadge + " • " + safetyBadge
+	// Header line
+	var headerSpans []trail.Node
+	headerSpans = append(headerSpans,
+		trail.Span(trail.SpanProps{
+			Style: theme.ApprovalTitleStyle,
+		}, trail.Text("[Permission Required] ")),
+		trail.Span(trail.SpanProps{
+			Style: theme.ActionBadgeStyle,
+		}, trail.Text(strings.ToUpper(string(perm.Action)))),
+		trail.Span(trail.SpanProps{
+			Style: theme.StatusBarStyle,
+		}, trail.Text(" • ")),
+		trail.Span(trail.SpanProps{
+			Style: theme.SafetyBadgeStyle(perm.Safety),
+		}, trail.Text(strings.ToUpper(string(perm.Safety)))),
+	)
 	if perm.ToolName != "" {
-		header += " • " + theme.ToolCallStyle.Render(perm.ToolName)
+		headerSpans = append(headerSpans,
+			trail.Span(trail.SpanProps{
+				Style: theme.StatusBarStyle,
+			}, trail.Text(" • ")),
+			trail.Span(trail.SpanProps{
+				Style: theme.ToolCallStyle,
+			}, trail.Text(perm.ToolName)),
+		)
 	}
-	rows = append(rows, header)
+	lines = append(lines, trail.Box(trail.BoxProps{
+		Style: style.S().FlexDirection(style.FlexRow),
+	}, headerSpans...))
 
+	// Summary & Target
 	if perm.Summary != "" {
-		rows = append(rows, fmt.Sprintf("Summary: %s", perm.Summary))
+		lines = append(lines, trail.Box(trail.BoxProps{
+			Style: style.S().FlexDirection(style.FlexRow),
+		}, trail.Span(trail.SpanProps{
+			Style: theme.UserMsgStyle,
+		}, trail.Text("Summary: "+perm.Summary))))
 	}
 	if perm.Target != "" {
-		rows = append(rows, fmt.Sprintf("Target:  %s", perm.Target))
-	}
-	if perm.Diff != "" {
-		rows = append(rows, FormatDiff(strings.TrimRight(perm.Diff, "\n")))
+		lines = append(lines, trail.Box(trail.BoxProps{
+			Style: style.S().FlexDirection(style.FlexRow),
+		}, trail.Span(trail.SpanProps{
+			Style: theme.StatusBarStyle,
+		}, trail.Text("Target:  "+perm.Target))))
 	}
 
+	// Diff (if any)
+	if perm.Diff != "" {
+		lines = append(lines, Diff(DiffProps{Text: strings.TrimRight(perm.Diff, "\n")}))
+	}
+
+	// Decision option list
 	options := []string{
 		"[y] Allow once",
-		"[a] Allow for session",
-		"[n] Reject",
+		"[a] Always allow",
+		"[n] Deny",
 	}
+	cur := cursor()
 	for i, opt := range options {
-		if i == cursor {
-			rows = append(rows, theme.OptionSelectedStyle.Render("❯ "+opt))
-			continue
+		optStyle := theme.OptionNormalStyle
+		prefix := "  "
+		if i == cur {
+			optStyle = theme.OptionSelectedStyle
+			prefix = "❯ "
 		}
-		rows = append(rows, theme.OptionNormalStyle.Render("  "+opt))
+		lines = append(lines, trail.Box(trail.BoxProps{
+			Style: style.S().FlexDirection(style.FlexRow),
+		}, trail.Span(trail.SpanProps{
+			Style: optStyle,
+		}, trail.Text(prefix+opt))))
 	}
 
-	rows = append(rows, formatPermissionFooter(feedbackMode, feedbackText))
+	// Bottom action/feedback row
+	if feedbackMode() {
+		lines = append(lines, trail.Box(trail.BoxProps{
+			Style: style.S().
+				Display(style.DisplayFlex).
+				FlexDirection(style.FlexRow).
+				AlignItems(style.AlignCenter).
+				Width(style.Percent(100)),
+		},
+			trail.Span(trail.SpanProps{
+				Style: theme.ApprovalTitleStyle.Margin(0, 1, 0, 0),
+			}, trail.Text("Feedback:")),
+			kitex.Input(kitex.InputProps{
+				Ref:   feedbackInputRef,
+				Value: feedbackText(),
+				Style: style.S().Flex(1).Width(style.Percent(100)),
+				OnChange: func(e event.Event) {
+					if ie, ok := e.(*event.InputEvent); ok {
+						setFeedbackText(ie.Value)
+					}
+				},
+				OnKeyDown: func(e event.Event) {
+					if ke, ok := e.(*event.KeyEvent); ok {
+						switch {
+						case ke.MatchString("enter"):
+							e.PreventDefault()
+							e.StopPropagation()
+							fb := feedbackText()
+							setFeedbackMode(false)
+							setFeedbackText("")
+							if props.OnDecision != nil {
+								props.OnDecision(props.Request, api.PermissionDecision{
+									Kind:     api.DecisionReject,
+									Feedback: fb,
+								})
+							}
 
-	return theme.PermCardBorderStyle.Render(strings.Join(rows, "\n"))
-}
+						case ke.MatchString("esc", "escape"):
+							e.PreventDefault()
+							e.StopPropagation()
+							setFeedbackMode(false)
+							setFeedbackText("")
+						}
+					}
+				},
+			}),
+			trail.Span(trail.SpanProps{
+				Style: theme.StatusBarStyle,
+			}, trail.Text(" (enter to submit, esc to cancel)")),
+		))
+	} else {
+		lines = append(lines, trail.Box(trail.BoxProps{
+			Style: style.S().FlexDirection(style.FlexRow),
+		}, trail.Span(trail.SpanProps{
+			Style: theme.StatusBarStyle,
+		}, trail.Text("↑/↓ or j/k to select • enter to confirm • r to reject with feedback"))))
+	}
 
-func formatPermissionFooter(feedbackMode bool, feedbackText string) string {
-	if feedbackMode {
-		return theme.PermHeaderStyle.Render("Feedback: ") + feedbackText + "█ " + theme.StatusBarStyle.Render("(enter to submit, esc to cancel)")
-	}
-	return theme.StatusBarStyle.Render("↑/↓ or j/k to select • enter to confirm • r to reject with feedback")
-}
-
-// FormatDecisionSummary renders a 1-line summary of a resolved permission request.
-func FormatDecisionSummary(perm api.PermissionRequest, decision api.PermissionDecision) string {
-	target := perm.Summary
-	if target == "" {
-		target = perm.ToolName
-	}
-	switch decision.Kind {
-	case api.DecisionAllowOnce:
-		return theme.AllowDecisionStyle.Render(fmt.Sprintf("✓ Allowed once: %s", target))
-	case api.DecisionAllowSession:
-		return theme.AllowDecisionStyle.Render(fmt.Sprintf("✓ Allowed for session: %s", target))
-	default:
-		if decision.Feedback != "" {
-			return theme.RejectDecisionStyle.Render(fmt.Sprintf("✗ Rejected: %s (%s)", target, decision.Feedback))
-		}
-		return theme.RejectDecisionStyle.Render(fmt.Sprintf("✗ Rejected: %s", target))
-	}
-}
+	return trail.Box(trail.BoxProps{
+		Style: theme.ApprovalBoxStyle,
+	}, lines...)
+})

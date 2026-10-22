@@ -5,7 +5,6 @@ import (
 	"testing"
 	"time"
 
-	tea "charm.land/bubbletea/v2"
 	"github.com/masterkeysrd/tasksmith/api"
 )
 
@@ -47,7 +46,7 @@ func TestRegistryLookupSuggestAndExecute(t *testing.T) {
 	reg.Register(Command{
 		Name:        "custom",
 		Description: "A custom test command",
-		Handler: func(_ Env, _ []string) (tea.Msg, error) {
+		Handler: func(_ Env, _ []string) (Event, error) {
 			return OutputMsg{Text: "custom ok"}, nil
 		},
 	})

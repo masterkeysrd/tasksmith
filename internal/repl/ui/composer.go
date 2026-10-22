@@ -4,8 +4,12 @@ import (
 	"fmt"
 	"strings"
 
-	"charm.land/bubbles/v2/textinput"
-	tea "charm.land/bubbletea/v2"
+	"github.com/masterkeysrd/kite/dom"
+	"github.com/masterkeysrd/kite/element"
+	"github.com/masterkeysrd/kite/event"
+	"github.com/masterkeysrd/kite/extras/kitex"
+	"github.com/masterkeysrd/kite/extras/trail"
+	"github.com/masterkeysrd/kite/style"
 	"github.com/masterkeysrd/tasksmith/internal/repl/theme"
 )
 
@@ -15,145 +19,217 @@ type Suggestion struct {
 	Description string
 }
 
-// Composer handles user prompt input and history navigation in the REPL.
-type Composer struct {
-	input        textinput.Model
-	history      []string
-	historyIdx   int
-	historyDraft string
-	width        int
+// ComposerProps defines the properties for the input composer component.
+type ComposerProps struct {
+	Disabled    bool
+	Suggest     func(prefix string) []Suggestion
+	OnSubmit    func(text string)
+	OnCycleMode func()
+	OnCancel    func()
 }
 
-// NewComposer constructs an initialized [Composer] ready for user input.
-func NewComposer() Composer {
-	ti := textinput.New()
-	ti.Prompt = "❯ "
-	ti.Placeholder = "Ask TaskSmith or type /help..."
-	ti.Focus()
-	ti.SetWidth(max(80-4, 20))
+// Composer is a trail functional component managing user prompt input, history navigation,
+// slash command autocomplete suggestions, and key shortcuts.
+var Composer = trail.FC("Composer", func(props ComposerProps) trail.Node {
+	value, setValue := kitex.UseState("")
+	history, setHistory := kitex.UseState([]string(nil))
+	historyIdx, setHistoryIdx := kitex.UseState(0)
+	draft, setDraft := kitex.UseState("")
 
-	return Composer{
-		input: ti,
-		width: 80,
-	}
-}
+	inputRef := kitex.UseRef[dom.Element](nil)
 
-// Width returns the configured layout width for the composer.
-func (c Composer) Width() int {
-	return c.width
-}
-
-// SetWidth sets the composer layout width and updates the internal text input width.
-func (c *Composer) SetWidth(w int) {
-	if w > 0 {
-		c.width = w
-		c.input.SetWidth(max(w-4, 20))
-	}
-}
-
-// Value returns the current text in the composer input field.
-func (c Composer) Value() string {
-	return c.input.Value()
-}
-
-// SetValue sets the composer text and moves the cursor to the end.
-func (c *Composer) SetValue(val string) {
-	c.input.SetValue(val)
-	c.input.CursorEnd()
-}
-
-// Reset clears the input text field.
-func (c *Composer) Reset() {
-	c.input.Reset()
-}
-
-// Focus focuses the text input.
-func (c *Composer) Focus() tea.Cmd {
-	return c.input.Focus()
-}
-
-// Blur blurs the text input.
-func (c *Composer) Blur() {
-	c.input.Blur()
-}
-
-// View renders the prompt input field with top and bottom horizontal border lines.
-func (c Composer) View() string {
-	return theme.ComposerBorderStyle.Width(c.width).Render(c.input.View())
-}
-
-// Update forwards Bubble Tea messages to the internal [textinput.Model].
-func (c Composer) Update(msg tea.Msg) (Composer, tea.Cmd) {
-	if ws, ok := msg.(tea.WindowSizeMsg); ok {
-		c.SetWidth(ws.Width)
-		return c, nil
-	}
-	var cmd tea.Cmd
-	c.input, cmd = c.input.Update(msg)
-	return c, cmd
-}
-
-// InHistory reports whether the composer is currently navigating previous history items.
-func (c Composer) InHistory() bool {
-	return c.historyIdx < len(c.history)
-}
-
-// NavigateHistory steps backward (delta < 0) or forward (delta > 0) through command history.
-func (c Composer) NavigateHistory(delta int) Composer {
-	if len(c.history) == 0 {
-		return c
-	}
-
-	if delta < 0 {
-		if c.historyIdx == len(c.history) {
-			c.historyDraft = c.input.Value()
+	kitex.UseLayoutEffect(func() {
+		if !props.Disabled && inputRef.Current != nil {
+			if doc := inputRef.Current.OwnerDocument(); doc != nil {
+				doc.Focus(inputRef.Current)
+			}
 		}
-		if c.historyIdx > 0 {
-			c.historyIdx--
-			c.input.SetValue(c.history[c.historyIdx])
-			c.input.CursorEnd()
+	}, []any{props.Disabled})
+
+	val := value()
+	suggestions := kitex.UseMemo(func() []Suggestion {
+		trimmed := strings.TrimSpace(val)
+		if strings.HasPrefix(trimmed, "/") && props.Suggest != nil {
+			return props.Suggest(trimmed)
 		}
-		return c
+		return nil
+	}, []any{val})
+
+	handleKeyDown := func(e event.Event) {
+		ke, ok := e.(*event.KeyEvent)
+		if !ok {
+			return
+		}
+
+		switch {
+		case ke.MatchString("shift+tab"):
+			e.PreventDefault()
+			e.StopPropagation()
+			if props.OnCycleMode != nil {
+				props.OnCycleMode()
+			}
+
+		case ke.MatchString("esc", "escape"):
+			e.PreventDefault()
+			e.StopPropagation()
+			if props.OnCancel != nil {
+				props.OnCancel()
+			}
+
+		case ke.MatchString("tab"):
+			if len(suggestions) > 0 {
+				e.PreventDefault()
+				e.StopPropagation()
+				parts := strings.Fields(suggestions[0].Usage)
+				if len(parts) > 0 {
+					nextVal := parts[0] + " "
+					if txa, ok := inputRef.Current.(*element.TextAreaElement); ok {
+						txa.SetValue(nextVal)
+					}
+					setValue(nextVal)
+				}
+			}
+
+		case ke.MatchString("up"):
+			if txa, ok := inputRef.Current.(*element.TextAreaElement); ok {
+				if txa.CursorState().Y > 0 {
+					return
+				}
+			}
+			e.PreventDefault()
+			e.StopPropagation()
+			hist := history()
+			if len(hist) > 0 {
+				hIdx := historyIdx()
+				if hIdx >= len(hist) {
+					setDraft(value())
+					newIdx := len(hist) - 1
+					setHistoryIdx(newIdx)
+					if txa, ok := inputRef.Current.(*element.TextAreaElement); ok {
+						txa.SetValue(hist[newIdx])
+					}
+					setValue(hist[newIdx])
+				} else if hIdx > 0 {
+					newIdx := hIdx - 1
+					setHistoryIdx(newIdx)
+					if txa, ok := inputRef.Current.(*element.TextAreaElement); ok {
+						txa.SetValue(hist[newIdx])
+					}
+					setValue(hist[newIdx])
+				}
+			}
+
+		case ke.MatchString("down"):
+			if txa, ok := inputRef.Current.(*element.TextAreaElement); ok {
+				lineCount := strings.Count(txa.TextContent(), "\n") + 1
+				if txa.CursorState().Y < lineCount-1 {
+					return
+				}
+			}
+			e.PreventDefault()
+			e.StopPropagation()
+			hist := history()
+			if len(hist) > 0 {
+				hIdx := historyIdx()
+				if hIdx < len(hist)-1 {
+					newIdx := hIdx + 1
+					setHistoryIdx(newIdx)
+					if txa, ok := inputRef.Current.(*element.TextAreaElement); ok {
+						txa.SetValue(hist[newIdx])
+					}
+					setValue(hist[newIdx])
+				} else if hIdx == len(hist)-1 {
+					setHistoryIdx(len(hist))
+					d := draft()
+					if txa, ok := inputRef.Current.(*element.TextAreaElement); ok {
+						txa.SetValue(d)
+					}
+					setValue(d)
+				}
+			}
+
+		case ke.MatchString("shift+enter", "alt+enter"):
+			e.PreventDefault()
+			e.StopPropagation()
+			if inputRef.Current != nil {
+				setValue(inputRef.Current.TextContent())
+			}
+
+		case ke.MatchString("enter"):
+			e.PreventDefault()
+			e.StopPropagation()
+			text := strings.TrimSpace(value())
+			if txa, ok := inputRef.Current.(*element.TextAreaElement); ok {
+				txa.SetValue("")
+			}
+			setValue("")
+			if text != "" {
+				hist := append(history(), text)
+				setHistory(hist)
+				setHistoryIdx(len(hist))
+				setDraft("")
+				if props.OnSubmit != nil {
+					props.OnSubmit(text)
+				}
+			}
+		}
 	}
 
-	if c.historyIdx < len(c.history)-1 {
-		c.historyIdx++
-		c.input.SetValue(c.history[c.historyIdx])
-		c.input.CursorEnd()
-		return c
-	}
+	composerBox := trail.Box(trail.BoxProps{
+		Style: theme.ComposerBorderStyle.
+			Display(style.DisplayFlex).
+			FlexDirection(style.FlexRow).
+			AlignItems(style.AlignStart).
+			Width(style.Percent(100)),
+	},
+		trail.Span(trail.SpanProps{
+			Style: theme.UserPromptStyle.Margin(0, 1, 0, 0),
+		}, trail.Text(">")),
+		kitex.TextArea(kitex.TextAreaProps{
+			Ref:      inputRef,
+			Value:    value(),
+			Disabled: props.Disabled,
+			Style: style.S().
+				Flex(1).
+				Width(style.Percent(100)).
+				Height(style.Content).
+				MinHeight(style.Cells(1)).
+				Scrollbar(style.Scrollbar{Y: style.Some(false)}),
+			OnChange: func(e event.Event) {
+				if ie, ok := e.(*event.InputEvent); ok {
+					setValue(ie.Value)
+				}
+			},
+			OnKeyDown: handleKeyDown,
+		}),
+	)
 
-	if c.historyIdx == len(c.history)-1 {
-		c.historyIdx = len(c.history)
-		c.input.SetValue(c.historyDraft)
-		c.input.CursorEnd()
-	}
-	return c
-}
-
-// Submit records the current prompt in history if non-empty, clears the input, and returns the text.
-func (c *Composer) Submit() string {
-	text := strings.TrimSpace(c.input.Value())
-	if text == "" {
-		return ""
-	}
-
-	c.history = append(c.history, text)
-	c.historyIdx = len(c.history)
-	c.historyDraft = ""
-	c.input.Reset()
-
-	return text
-}
-
-// FormatSuggestions renders inline slash-command autocomplete hints.
-func FormatSuggestions(suggestions []Suggestion) string {
-	if len(suggestions) == 0 {
-		return ""
-	}
-	var lines []string
-	for _, s := range suggestions {
-		lines = append(lines, theme.StatusBarStyle.Render(fmt.Sprintf("  %-38s %s", s.Usage, s.Description)))
-	}
-	return strings.Join(lines, "\n")
-}
+	return trail.Box(trail.BoxProps{
+		Style: style.S().
+			Display(style.DisplayFlex).
+			FlexDirection(style.FlexColumn).
+			Width(style.Percent(100)),
+	},
+		composerBox,
+		kitex.If(len(suggestions) > 0, func() trail.Node {
+			return trail.Box(trail.BoxProps{
+				Style: style.S().
+					Display(style.DisplayFlex).
+					FlexDirection(style.FlexColumn).
+					Width(style.Percent(100)),
+			},
+				kitex.Map(suggestions, func(s Suggestion, _ int) trail.Node {
+					return trail.Box(trail.BoxProps{
+						Style: style.S().
+							Display(style.DisplayFlex).
+							FlexDirection(style.FlexRow),
+					},
+						trail.Span(trail.SpanProps{
+							Style: theme.StatusBarStyle,
+						}, trail.Text(fmt.Sprintf("  %-38s %s", s.Usage, s.Description))),
+					)
+				}),
+			)
+		}),
+	)
+})

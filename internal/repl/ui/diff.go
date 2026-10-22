@@ -3,35 +3,45 @@ package ui
 import (
 	"strings"
 
+	"github.com/masterkeysrd/kite/extras/trail"
+	"github.com/masterkeysrd/kite/style"
 	"github.com/masterkeysrd/tasksmith/internal/repl/theme"
 )
 
-// FormatDiff styles a unified diff string with green additions, red deletions,
-// and cyan hunk headers.
-func FormatDiff(diffText string) string {
-	if diffText == "" {
-		return ""
-	}
-	lines := strings.Split(diffText, "\n")
-	styled := make([]string, len(lines))
-	for i, line := range lines {
-		styled[i] = styleDiffLine(line)
-	}
-	return strings.Join(styled, "\n")
+// DiffProps defines the properties for rendering a unified diff.
+type DiffProps struct {
+	Text string
 }
 
-func styleDiffLine(line string) string {
-	if strings.HasPrefix(line, "+++") || strings.HasPrefix(line, "---") {
-		return theme.DiffHeaderStyle.Render(line)
+// Diff is a trail functional component rendering unified diff lines styled with
+// theme.DiffHeaderStyle, theme.DiffHunkStyle, theme.DiffAddStyle, and theme.DiffDelStyle.
+var Diff = trail.FC("Diff", func(props DiffProps) trail.Node {
+	if props.Text == "" {
+		return nil
 	}
-	if strings.HasPrefix(line, "@@") {
-		return theme.DiffHunkStyle.Render(line)
+
+	lines := strings.Split(props.Text, "\n")
+	var nodes []trail.Node
+	for _, line := range lines {
+		s := style.S()
+		if strings.HasPrefix(line, "+++") || strings.HasPrefix(line, "---") {
+			s = theme.DiffHeaderStyle
+		} else if strings.HasPrefix(line, "@@") {
+			s = theme.DiffHunkStyle
+		} else if strings.HasPrefix(line, "+") {
+			s = theme.DiffAddStyle
+		} else if strings.HasPrefix(line, "-") {
+			s = theme.DiffDelStyle
+		}
+
+		nodes = append(nodes, trail.Box(trail.BoxProps{
+			Style: style.S().FlexDirection(style.FlexRow),
+		}, trail.Span(trail.SpanProps{
+			Style: s,
+		}, trail.Text(line))))
 	}
-	if strings.HasPrefix(line, "+") {
-		return theme.DiffAddStyle.Render(line)
-	}
-	if strings.HasPrefix(line, "-") {
-		return theme.DiffDelStyle.Render(line)
-	}
-	return line
-}
+
+	return trail.Box(trail.BoxProps{
+		Style: style.S().FlexDirection(style.FlexColumn),
+	}, nodes...)
+})

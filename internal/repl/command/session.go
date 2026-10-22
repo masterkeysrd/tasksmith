@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"strings"
 
-	tea "charm.land/bubbletea/v2"
 	"github.com/dustin/go-humanize"
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/repl/ui"
@@ -27,7 +26,7 @@ func (r *Registry) registerSessionCommands() {
 }
 
 // HandleNew switches the REPL to a fresh session, optionally with a model override.
-func HandleNew(env Env, args []string) (tea.Msg, error) {
+func HandleNew(env Env, args []string) (Event, error) {
 	modelOverride := strings.TrimSpace(strings.Join(args, " "))
 	if modelOverride == "" {
 		modelOverride = strings.TrimSpace(env.DefaultModel)
@@ -36,20 +35,20 @@ func HandleNew(env Env, args []string) (tea.Msg, error) {
 }
 
 // HandleSessions browses or switches sessions in the active workspace.
-func HandleSessions(env Env, args []string) (tea.Msg, error) {
+func HandleSessions(env Env, args []string) (Event, error) {
 	if len(args) > 0 && strings.TrimSpace(args[0]) != "" {
 		return SwitchSessionMsg{SessionID: strings.TrimSpace(args[0])}, nil
 	}
 
 	if env.ListSessions == nil {
-		return OutputMsg{Text: "No sessions found."}, nil
+		return PrintMsg{Text: "No sessions found."}, nil
 	}
 	sessions, err := env.ListSessions()
 	if err != nil {
 		return nil, fmt.Errorf("error listing sessions: %w", err)
 	}
 	if len(sessions) == 0 {
-		return OutputMsg{Text: "No sessions found."}, nil
+		return PrintMsg{Text: "No sessions found."}, nil
 	}
 
 	var activeID string
@@ -60,7 +59,7 @@ func HandleSessions(env Env, args []string) (tea.Msg, error) {
 }
 
 // NewSessionPicker constructs an interactive picker for selecting or deleting sessions.
-func NewSessionPicker(sessions []api.Session, activeID string) ui.Picker {
+func NewSessionPicker(sessions []api.Session, activeID string) ui.PickerProps {
 	opts := make([]ui.Option, len(sessions))
 	for i, s := range sessions {
 		title := strings.TrimSpace(s.Title)
@@ -80,7 +79,7 @@ func NewSessionPicker(sessions []api.Session, activeID string) ui.Picker {
 		}
 	}
 
-	picker := ui.NewPicker("Select session:", opts, func(opt ui.Option) tea.Msg {
+	picker := ui.NewPicker("Select session:", opts, func(opt ui.Option) any {
 		return SwitchSessionMsg{SessionID: opt.Value}
 	})
 	picker.Filterable = true
@@ -92,18 +91,17 @@ func NewSessionPicker(sessions []api.Session, activeID string) ui.Picker {
 			InitialValue: func(opt ui.Option) string {
 				return opt.Label
 			},
-			OnSubmit: func(opt ui.Option, val string) tea.Msg {
+			OnSubmit: func(opt ui.Option, val string) any {
 				return RenameSessionMsg{SessionID: opt.Value, Title: val}
 			},
 		},
 	}
-
 	picker.ConfirmActions = map[string]ui.ConfirmAction{
 		"f4": {
 			Prompt: func(opt ui.Option) string {
 				return fmt.Sprintf("Delete session %q?", opt.Label)
 			},
-			OnConfirm: func(opt ui.Option) tea.Msg {
+			OnConfirm: func(opt ui.Option) any {
 				return DeleteSessionMsg{SessionID: opt.Value}
 			},
 		},

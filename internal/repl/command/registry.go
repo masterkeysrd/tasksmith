@@ -4,10 +4,12 @@ import (
 	"fmt"
 	"strings"
 
-	tea "charm.land/bubbletea/v2"
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/repl/ui"
 )
+
+// Event represents an emitted action or directive from a slash command.
+type Event any
 
 // Env provides a lightweight read-only snapshot of REPL state to commands.
 type Env struct {
@@ -18,14 +20,17 @@ type Env struct {
 	ListSessions func() ([]api.Session, error)
 }
 
-// OutputMsg indicates plain text output from a slash command.
-type OutputMsg struct {
+// PrintMsg indicates plain text output from a slash command.
+type PrintMsg struct {
 	Text string
 }
 
+// OutputMsg is an alias to PrintMsg for backwards compatibility.
+type OutputMsg = PrintMsg
+
 // OpenPickerMsg directs the UI to display an interactive command picker.
 type OpenPickerMsg struct {
-	Picker ui.Picker
+	Picker ui.PickerProps
 }
 
 // ChangeModeMsg requests changing the session permission mode.
@@ -58,26 +63,35 @@ type DeleteSessionMsg struct {
 // ListChangesMsg requests listing tracked file changes.
 type ListChangesMsg struct{}
 
-// ShowDiffMsg requests displaying a unified diff for a tracked file change.
-type ShowDiffMsg struct {
+// DiffChangeMsg requests displaying a unified diff for a tracked file change.
+type DiffChangeMsg struct {
 	Path    string
 	EntryID string
 }
 
-// RevertMsg requests reverting file changes.
-type RevertMsg struct {
+// ShowDiffMsg is an alias to DiffChangeMsg for backwards compatibility.
+type ShowDiffMsg = DiffChangeMsg
+
+// RevertChangesMsg requests reverting file changes.
+type RevertChangesMsg struct {
 	Path    string
 	EntryID string
 }
+
+// RevertMsg is an alias to RevertChangesMsg for backwards compatibility.
+type RevertMsg = RevertChangesMsg
 
 // ClearScreenMsg requests clearing the terminal screen.
 type ClearScreenMsg struct{}
 
-// QuitMsg requests terminating the REPL.
-type QuitMsg struct{}
+// ExitMsg requests terminating the REPL.
+type ExitMsg struct{}
+
+// QuitMsg is an alias to ExitMsg for backwards compatibility.
+type QuitMsg = ExitMsg
 
 // Handler executes a slash command against the active [Env], emitting an intent event.
-type Handler func(env Env, args []string) (tea.Msg, error)
+type Handler func(env Env, args []string) (Event, error)
 
 // Command defines a declarative REPL slash command and its metadata.
 type Command struct {
@@ -87,7 +101,7 @@ type Command struct {
 	Description string
 	Handler     Handler
 	Options     func(env Env) []ui.Option
-	OnSelect    func(opt ui.Option) tea.Msg
+	OnSelect    func(opt ui.Option) Event
 }
 
 // Registry maintains the ordered collection of REPL slash commands and aliases.
@@ -174,7 +188,6 @@ func (r *Registry) Suggest(prefix string) []Command {
 }
 
 // SuggestArgs returns argument completion options for a partially typed slash command line.
-// It returns true only if line begins with "/" and contains a space after the command identifier.
 func (r *Registry) SuggestArgs(env Env, rawLine string) (Command, []ui.Option, bool) {
 	trimmedLeft := strings.TrimLeft(rawLine, " \t")
 	if !strings.HasPrefix(trimmedLeft, "/") {
@@ -221,7 +234,7 @@ func matchesCommandPrefix(cmd Command, prefix string) bool {
 }
 
 // Execute parses a raw slash command line and invokes the matching [Handler].
-func (r *Registry) Execute(env Env, line string) (tea.Msg, error) {
+func (r *Registry) Execute(env Env, line string) (Event, error) {
 	trimmed := strings.TrimSpace(line)
 	if trimmed == "" {
 		return nil, nil

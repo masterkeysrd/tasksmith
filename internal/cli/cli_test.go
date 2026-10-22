@@ -11,6 +11,9 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/masterkeysrd/kite/backend"
+	"github.com/masterkeysrd/kite/backend/mock"
+	"github.com/masterkeysrd/kite/key"
 	"github.com/masterkeysrd/loom/decision"
 	"github.com/masterkeysrd/loom/embedding"
 	"github.com/masterkeysrd/loom/llm"
@@ -22,6 +25,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
 	"github.com/masterkeysrd/tasksmith/internal/daemon"
 	"github.com/masterkeysrd/tasksmith/internal/gateway"
+	"github.com/masterkeysrd/tasksmith/internal/repl"
 )
 
 type fakeProvider struct {
@@ -217,9 +221,13 @@ func TestDaemonStatusStartAndStopCommands(t *testing.T) {
 		t.Errorf("daemon start output = %q, want 'Daemon running'", startOut)
 	}
 
-	// Open a workspace by running a quick REPL /sessions + /exit so status lists 1 open workspace (with 0 sessions created)
-	if _, _, err := execCLI(t, "/sessions\n/exit\n", "repl", "--socket", sockPath, "--workspace", wsDir); err != nil {
-		t.Fatalf("repl /sessions /exit error: %v", err)
+	// Open a workspace so status lists 1 open workspace (with 0 sessions created)
+	c, err := client.New(sockPath, client.WithCWD(wsDir))
+	if err != nil {
+		t.Fatalf("client.New: %v", err)
+	}
+	if _, err := c.GetWorkspace(context.Background()); err != nil {
+		t.Fatalf("GetWorkspace: %v", err)
 	}
 
 	statusOut, _, err := execCLI(t, "", "daemon", "status", "--socket", sockPath)
@@ -240,31 +248,53 @@ func TestDaemonStatusStartAndStopCommands(t *testing.T) {
 	}
 }
 
+func feedMockREPLInput(b *mock.Backend, lines ...string) {
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		for _, line := range lines {
+			for _, r := range line {
+				b.PostEvent(&backend.RawKeyEvent{
+					Key: key.Key{Code: r, Text: string(r)},
+				})
+				time.Sleep(1 * time.Millisecond)
+			}
+			b.PostEvent(&backend.RawKeyEvent{
+				Key: key.Key{Code: key.KeyEnter},
+			})
+			time.Sleep(10 * time.Millisecond)
+		}
+	}()
+}
+
 func TestREPLPromptAndSlashCommands(t *testing.T) {
 	_, sockPath, wsDir := setupCLITestDaemon(t, nil)
 
-	c, err := client.New(sockPath)
+	c, err := client.New(sockPath, client.WithCWD(wsDir))
 	if err != nil {
 		t.Fatalf("client.New: %v", err)
 	}
 
 	// 1. Verify starting REPL and running slash commands without sending a prompt creates 0 sessions
-	noPromptInput := strings.Join([]string{
+	b1 := mock.New(80, 24)
+	feedMockREPLInput(b1,
 		"/sessions",
 		"/mode",
 		"/mode plan",
 		"/changes",
 		"/new claude-opus-4-6",
 		"/exit",
-	}, "\n") + "\n"
-	out, errOut, err := execCLI(t, noPromptInput, "repl", "--socket", sockPath, "--workspace", wsDir)
-	if err != nil {
-		t.Fatalf("repl no-prompt run failed: %v\nerr: %s", err, errOut)
+	)
+	if err := repl.Run(context.Background(), repl.Config{
+		Client:    c,
+		Workspace: wsDir,
+		Backend:   b1,
+	}); err != nil {
+		t.Fatalf("repl no-prompt run failed: %v", err)
 	}
-	if !strings.Contains(out, "TaskSmith") {
-		t.Errorf("expected TaskSmith header banner in out:\n%s", out)
+	if len(b1.InsertedAbove) == 0 {
+		t.Errorf("expected header banner flushed to InsertedAbove")
 	}
-	initialSessions, err := c.WithCWD(wsDir).ListSessions(context.Background())
+	initialSessions, err := c.ListSessions(context.Background())
 	if err != nil {
 		t.Fatalf("ListSessions: %v", err)
 	}
@@ -272,8 +302,8 @@ func TestREPLPromptAndSlashCommands(t *testing.T) {
 		t.Fatalf("expected 0 sessions before first user prompt, got %d", len(initialSessions))
 	}
 
-	// 2. Create a session via client, then resume and mutate it via CLI repl flags
-	sess, err := c.WithCWD(wsDir).CreateSession(context.Background(), api.CreateSessionRequest{
+	// 2. Create a session via client, then resume and mutate it via repl.Config
+	sess, err := c.CreateSession(context.Background(), api.CreateSessionRequest{
 		Title: "Initial Session",
 		Model: "claude-sonnet-4-6",
 	})
@@ -281,22 +311,24 @@ func TestREPLPromptAndSlashCommands(t *testing.T) {
 		t.Fatalf("CreateSession: %v", err)
 	}
 
-	resumeOut, resumeErr, err := execCLI(t, "/exit\n",
-		"--socket", sockPath,
-		"--workspace", wsDir,
-		"--session", sess.ID,
-		"--title", "Resumed Mutated Session",
-		"--model", "claude-haiku-4-5",
-	)
-	if err != nil {
-		t.Fatalf("root command resume failed: %v\nerr:\n%s", err, resumeErr)
+	b2 := mock.New(80, 24)
+	feedMockREPLInput(b2, "/exit")
+	if err := repl.Run(context.Background(), repl.Config{
+		Client:    c,
+		Workspace: wsDir,
+		SessionID: sess.ID,
+		Title:     "Resumed Mutated Session",
+		Model:     "claude-haiku-4-5",
+		Backend:   b2,
+	}); err != nil {
+		t.Fatalf("repl resume failed: %v", err)
 	}
-	if !strings.Contains(resumeOut, "TaskSmith") {
-		t.Errorf("resumed session stdout missing header banner:\n%s", resumeOut)
+	if len(b2.InsertedAbove) == 0 {
+		t.Errorf("resumed session missing header banner in InsertedAbove")
 	}
 
 	// Verify model and title were mutated on resume
-	resumedSess, err := c.WithCWD(wsDir).GetSession(context.Background(), sess.ID)
+	resumedSess, err := c.GetSession(context.Background(), sess.ID)
 	if err != nil {
 		t.Fatalf("GetSession sess.ID: %v", err)
 	}

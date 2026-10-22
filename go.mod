@@ -3,13 +3,11 @@ module github.com/masterkeysrd/tasksmith
 go 1.26.4
 
 require (
-	charm.land/bubbles/v2 v2.2.1
-	charm.land/bubbletea/v2 v2.1.0
-	charm.land/lipgloss/v2 v2.0.6
 	github.com/anthropics/anthropic-sdk-go v1.82.0
 	github.com/dustin/go-humanize v1.1.0
 	github.com/google/jsonschema-go v0.4.3
 	github.com/google/uuid v1.6.0
+	github.com/masterkeysrd/kite v0.0.6-0.20261022021255-2e3e060d9355
 	github.com/masterkeysrd/loom v0.0.8
 	github.com/masterkeysrd/warp v0.0.6
 	github.com/ollama/ollama v0.40.6
@@ -27,7 +25,6 @@ require (
 	dario.cat/mergo v1.0.2 // indirect
 	github.com/Microsoft/go-winio v0.6.4 // indirect
 	github.com/ProtonMail/go-crypto v1.5.2 // indirect
-	github.com/atotto/clipboard v0.1.4 // indirect
 	github.com/bahlo/generic-list-go v0.2.0 // indirect
 	github.com/buger/jsonparser v1.6.1 // indirect
 	github.com/cenkalti/backoff/v5 v5.0.3 // indirect

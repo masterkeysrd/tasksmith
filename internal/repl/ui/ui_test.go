@@ -1,41 +1,103 @@
 package ui
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
-	tea "charm.land/bubbletea/v2"
-	"charm.land/lipgloss/v2"
+	"github.com/masterkeysrd/kite/backend"
+	"github.com/masterkeysrd/kite/backend/mock"
+	"github.com/masterkeysrd/kite/extras/kitex"
+	"github.com/masterkeysrd/kite/extras/trail"
+	"github.com/masterkeysrd/kite/key"
 	"github.com/masterkeysrd/tasksmith/api"
-	"github.com/masterkeysrd/tasksmith/internal/repl/theme"
 )
 
-func TestHeaderRenderingAndNormalization(t *testing.T) {
-	h := Header{
-		Version:  "0.1.0",
-		Model:    "Claude 3.7 Sonnet",
-		Thinking: "high",
-		Path:     "/workspace/project",
+func surfaceText(b *mock.Backend) string {
+	frame := b.LastFrame().Surface
+	if frame == nil {
+		return ""
 	}
-	rendered := h.Render()
-	lines := strings.Split(rendered, "\n")
-	if len(lines) != 3 {
-		t.Fatalf("expected 3 lines, got %d:\n%s", len(lines), rendered)
+	var sb strings.Builder
+	for y := 0; y < frame.Height; y++ {
+		var line strings.Builder
+		for x := 0; x < frame.Width; x++ {
+			c := frame.CellAt(x, y)
+			if c.Content != "" {
+				line.WriteString(c.Content)
+			} else {
+				line.WriteByte(' ')
+			}
+		}
+		trimmed := strings.TrimRight(line.String(), " ")
+		if trimmed != "" {
+			sb.WriteString(trimmed)
+			sb.WriteString("\n")
+		}
 	}
-	if !strings.Contains(lines[0], "TaskSmith") || !strings.Contains(lines[0], "v0.1.0") {
-		t.Errorf("line 1 mismatch: %q", lines[0])
+	return sb.String()
+}
+
+func insertedAboveText(b *mock.Backend) string {
+	var sb strings.Builder
+	for _, buf := range b.InsertedAbove {
+		for y := 0; y < buf.Height; y++ {
+			var line strings.Builder
+			for x := 0; x < buf.Width; x++ {
+				c := buf.CellAt(x, y)
+				if c.Content != "" {
+					line.WriteString(c.Content)
+				} else {
+					line.WriteByte(' ')
+				}
+			}
+			trimmed := strings.TrimRight(line.String(), " ")
+			if trimmed != "" {
+				sb.WriteString(trimmed)
+				sb.WriteString("\n")
+			}
+		}
 	}
-	if !strings.Contains(lines[1], "Claude 3.7 Sonnet with high effort") {
-		t.Errorf("line 2 mismatch: %q", lines[1])
+	return sb.String()
+}
+
+func TestHeaderComponent(t *testing.T) {
+	b := mock.New(80, 24)
+	app := trail.SimpleFC("TestApp", func() kitex.Node {
+		return Header(HeaderProps{
+			Version:  "0.1.0",
+			Model:    "Claude 3.7 Sonnet",
+			Thinking: "high",
+			Path:     "/workspace/project",
+		})
+	})
+
+	inst, err := trail.New(app(), trail.WithBackend(b))
+	if err != nil {
+		t.Fatalf("trail.New: %v", err)
 	}
-	if !strings.Contains(lines[2], "/workspace/project") {
-		t.Errorf("line 3 mismatch: %q", lines[2])
+	inst.Frame()
+
+	out := surfaceText(b)
+	if !strings.Contains(out, "TaskSmith v0.1.0") {
+		t.Errorf("line 1 missing 'TaskSmith v0.1.0':\n%s", out)
+	}
+	if !strings.Contains(out, "Claude 3.7 Sonnet with high effort") {
+		t.Errorf("line 2 missing model/thinking:\n%s", out)
+	}
+	if !strings.Contains(out, "/workspace/project") {
+		t.Errorf("line 3 missing path:\n%s", out)
 	}
 
-	// Home path shortening
+	// Helpers
+	if got := NormalizeVersion("0.1.0"); got != "v0.1.0" {
+		t.Errorf("NormalizeVersion('0.1.0') = %q, want 'v0.1.0'", got)
+	}
+	if got := NormalizeVersion(""); got != "v0.1.0" {
+		t.Errorf("NormalizeVersion('') = %q, want 'v0.1.0'", got)
+	}
+
 	home, err := os.UserHomeDir()
 	if err == nil && home != "" {
 		shortened := ShortenHomePath(filepath.Join(home, "src", "tasksmith"))
@@ -46,636 +108,297 @@ func TestHeaderRenderingAndNormalization(t *testing.T) {
 			t.Errorf("expected ~ for exact home, got %q", ShortenHomePath(home))
 		}
 	}
-
-	// Empty defaults
-	emptyH := Header{}
-	emptyRendered := FormatHeader(emptyH)
-	if !strings.Contains(emptyRendered, "v0.1.0") || !strings.Contains(emptyRendered, "default with auto effort") {
-		t.Errorf("empty defaults mismatch:\n%s", emptyRendered)
-	}
 }
 
-func TestStatusBarRenderingAndStates(t *testing.T) {
+func TestStatusBarComponent(t *testing.T) {
 	// 1. Default mode: shows "<Model> · <Thinking>" without "default · "
-	sbDefault := StatusBar{
-		State:    StateIdle,
-		Mode:     api.ModeDefault,
-		Model:    "Claude 3.7 Sonnet",
-		Thinking: "high",
-		Width:    100,
-	}
-	outDefault := sbDefault.Render()
-	if !strings.Contains(outDefault, "Claude 3.7 Sonnet · high") {
-		t.Errorf("expected model · thinking on right, got: %s", outDefault)
-	}
-	if strings.Contains(outDefault, "default · ") {
-		t.Errorf("default mode should not prefix with 'default · ': %s", outDefault)
-	}
-	if !strings.Contains(outDefault, "shift+tab cycle mode") {
-		t.Errorf("idle state hint missing on left: %s", outDefault)
-	}
-
-	// 2. Non-default modes: shows "<mode> · <Model> · <Thinking>"
-	for _, mode := range []api.PermissionMode{api.ModeAcceptEdits, api.ModePlan, api.ModeAsk, api.ModeAuto} {
-		sb := StatusBar{
+	b1 := mock.New(80, 24)
+	app1 := trail.SimpleFC("TestApp", func() kitex.Node {
+		return StatusBar(StatusBarProps{
 			State:    StateIdle,
-			Mode:     mode,
-			Model:    "Gemini 2.5 Flash",
-			Thinking: "auto",
-			Width:    120,
-		}
-		out := sb.Render()
-		wantRight := theme.ModeBadgeStyle(mode).Render(string(mode)) + theme.StatusBarStyle.Render(" · ") + theme.StatusBarStyle.Render("Gemini 2.5 Flash · auto")
-		if !strings.Contains(out, wantRight) {
-			t.Errorf("mode %s right part mismatch, want %q in %q", mode, wantRight, out)
-		}
-	}
-
-	// 3. Streaming state hint on left
-	sbStreaming := StatusBar{
-		State:    StateStreaming,
-		Mode:     api.ModeDefault,
-		Model:    "Claude 3.7 Sonnet",
-		Thinking: "auto",
-		Width:    80,
-	}
-	outStreaming := sbStreaming.Render()
-	if !strings.Contains(outStreaming, "streaming • esc to cancel") {
-		t.Errorf("streaming hint missing on left: %s", outStreaming)
-	}
-
-	// 4. Width gap separation
-	sbWide := StatusBar{
-		State:    StateIdle,
-		Mode:     api.ModeDefault,
-		Model:    "M",
-		Thinking: "T",
-		Width:    100,
-	}
-	outWide := sbWide.Render()
-	left := theme.StatusBarStyle.Render("shift+tab cycle mode • /help commands")
-	right := theme.StatusBarStyle.Render("M · T")
-	expectedSpaces := 100 - lipgloss.Width(left) - lipgloss.Width(right)
-	if !strings.Contains(outWide, strings.Repeat(" ", expectedSpaces)) {
-		t.Errorf("status bar width gap mismatch: %q", outWide)
-	}
-
-	// 5. Fallback defaults when fields are empty
-	sbEmpty := StatusBar{}
-	outEmpty := sbEmpty.Render()
-	if !strings.Contains(outEmpty, "default · auto") {
-		t.Errorf("empty status bar missing fallback 'default · auto': %s", outEmpty)
-	}
-
-	if (State(99)).String() != "unknown" {
-		t.Errorf("unknown state string = %q", (State(99)).String())
-	}
-	if FormatStatusBar(sbDefault) == "" {
-		t.Errorf("FormatStatusBar returned empty")
-	}
-}
-
-func TestComposerLifecycleAndHistory(t *testing.T) {
-	c := NewComposer()
-	if c.Value() != "" {
-		t.Errorf("initial value = %q, want empty", c.Value())
-	}
-
-	c.SetValue("hello")
-	if c.Value() != "hello" {
-		t.Errorf("SetValue failed, got %q", c.Value())
-	}
-	c.Reset()
-	if c.Value() != "" {
-		t.Errorf("Reset failed, got %q", c.Value())
-	}
-
-	// Submit history
-	c.SetValue("cmd 1")
-	if submitted := c.Submit(); submitted != "cmd 1" {
-		t.Errorf("Submit = %q, want 'cmd 1'", submitted)
-	}
-	c.SetValue("cmd 2")
-	_ = c.Submit()
-
-	// History navigation
-	c.SetValue("draft")
-	c = c.NavigateHistory(-1)
-	if c.Value() != "cmd 2" {
-		t.Errorf("NavigateHistory(-1) = %q, want 'cmd 2'", c.Value())
-	}
-	c = c.NavigateHistory(-1)
-	if c.Value() != "cmd 1" {
-		t.Errorf("NavigateHistory(-1) = %q, want 'cmd 1'", c.Value())
-	}
-	// At top of history
-	c = c.NavigateHistory(-1)
-	if c.Value() != "cmd 1" {
-		t.Errorf("NavigateHistory(-1) at top = %q, want 'cmd 1'", c.Value())
-	}
-
-	// Navigate down
-	c = c.NavigateHistory(1)
-	if c.Value() != "cmd 2" {
-		t.Errorf("NavigateHistory(1) = %q, want 'cmd 2'", c.Value())
-	}
-	c = c.NavigateHistory(1)
-	if c.Value() != "draft" {
-		t.Errorf("NavigateHistory(1) restored draft = %q, want 'draft'", c.Value())
-	}
-
-	_ = c.Focus()
-	c.Blur()
-	if c.View() == "" {
-		t.Errorf("View() returned empty")
-	}
-
-	// Width, WindowSizeMsg, and top/bottom horizontal border rendering
-	if c.Width() != 80 {
-		t.Errorf("default width = %d, want 80", c.Width())
-	}
-	c.SetWidth(100)
-	if c.Width() != 100 {
-		t.Errorf("width after SetWidth = %d, want 100", c.Width())
-	}
-	c, _ = c.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
-	if c.Width() != 120 {
-		t.Errorf("width after WindowSizeMsg = %d, want 120", c.Width())
-	}
-	view := c.View()
-	if !strings.Contains(view, "─") {
-		t.Errorf("View() missing horizontal border lines:\n%s", view)
-	}
-
-	suggestions := []Suggestion{
-		{Usage: "/help", Description: "Show help"},
-		{Usage: "/exit", Description: "Exit REPL"},
-	}
-	formatted := FormatSuggestions(suggestions)
-	if !strings.Contains(formatted, "/help") || !strings.Contains(formatted, "Show help") {
-		t.Errorf("FormatSuggestions = %q", formatted)
-	}
-	if FormatSuggestions(nil) != "" {
-		t.Errorf("FormatSuggestions(nil) should be empty")
-	}
-}
-
-func TestApprovalComponentAndDecisions(t *testing.T) {
-	app := NewApproval()
-	if app.HasPending() {
-		t.Fatalf("expected no pending on new approval")
-	}
-
-	req1 := api.PermissionRequest{
-		ID:            "p1",
-		ToolName:      "write_file",
-		Action:        api.ActionWrite,
-		Safety:        api.SafetyUnsafe,
-		Summary:       "Write foo.go",
-		Target:        "/tmp/foo.go",
-		Diff:          "+added line\n-removed line\n",
-		GrantPatterns: []string{"write_file:*"},
-	}
-	req2 := api.PermissionRequest{
-		ID:       "p2",
-		ToolName: "shell",
-		Action:   api.ActionExec,
-		Safety:   api.SafetyUnsafe,
-		Summary:  "Execute ls",
-	}
-
-	app.SetPending([]api.PermissionRequest{req1})
-	app.Append(req2)
-	if len(app.Pending()) != 2 {
-		t.Fatalf("expected 2 pending, got %d", len(app.Pending()))
-	}
-
-	// Cursor navigation
-	if app.Cursor() != 0 {
-		t.Errorf("initial cursor = %d, want 0", app.Cursor())
-	}
-	app.CursorDown()
-	if app.Cursor() != 1 {
-		t.Errorf("cursor after down = %d, want 1", app.Cursor())
-	}
-	app.CursorDown()
-	if app.Cursor() != 2 {
-		t.Errorf("cursor after down = %d, want 2", app.Cursor())
-	}
-	app.CursorDown() // capped at 2
-	if app.Cursor() != 2 {
-		t.Errorf("cursor after capped down = %d, want 2", app.Cursor())
-	}
-	app.CursorUp()
-	if app.Cursor() != 1 {
-		t.Errorf("cursor after up = %d, want 1", app.Cursor())
-	}
-
-	// Render card
-	card := app.Render()
-	if !strings.Contains(card, "write_file") || !strings.Contains(card, "Write foo.go") {
-		t.Errorf("rendered card missing details:\n%s", card)
-	}
-
-	// Feedback mode
-	app.EnterFeedback()
-	if !app.FeedbackMode() {
-		t.Errorf("expected FeedbackMode true")
-	}
-	app.ExitFeedback()
-	if app.FeedbackMode() {
-		t.Errorf("expected FeedbackMode false after ExitFeedback")
-	}
-	app.CursorUp() // cursor goes from 2 back to 1 (AllowSession)
-
-	// Pop selected (cursor at 1 -> AllowSession)
-	poppedReq, decision, ok := app.PopSelected()
-	if !ok || poppedReq.ID != "p1" {
-		t.Fatalf("PopSelected failed: ok=%v, req=%+v", ok, poppedReq)
-	}
-	if decision.Kind != api.DecisionAllowSession || decision.GrantPattern != "write_file:*" {
-		t.Errorf("decision = %+v, want AllowSession with pattern", decision)
-	}
-
-	// Format decision summary
-	sumAllow := FormatDecisionSummary(poppedReq, decision)
-	if !strings.Contains(sumAllow, "Allowed for session") {
-		t.Errorf("summary mismatch: %s", sumAllow)
-	}
-
-	// Pop second as Reject with feedback
-	popped2, dec2, ok2 := app.PopDecision(api.DecisionReject, "no shell commands")
-	if !ok2 || popped2.ID != "p2" {
-		t.Fatalf("PopDecision p2 failed: %v", popped2)
-	}
-	if dec2.Kind != api.DecisionReject || dec2.Feedback != "no shell commands" {
-		t.Errorf("dec2 mismatch: %+v", dec2)
-	}
-	sumReject := FormatDecisionSummary(popped2, dec2)
-	if !strings.Contains(sumReject, "Rejected") || !strings.Contains(sumReject, "no shell commands") {
-		t.Errorf("summary reject mismatch: %s", sumReject)
-	}
-}
-
-func TestMessageAndDiffFormatting(t *testing.T) {
-	// User prompt
-	prompt := FormatUserPrompt("hello world")
-	if !strings.Contains(prompt, "hello world") {
-		t.Errorf("FormatUserPrompt missing text: %s", prompt)
-	}
-
-	// User message
-	userMsg := FormatMessage(api.Message{
-		Role:    api.RoleUser,
-		Content: []api.Block{{Type: api.BlockText, Text: "howdy"}},
+			Mode:     api.ModeDefault,
+			Model:    "Claude 3.7 Sonnet",
+			Thinking: "high",
+		})
 	})
-	if !strings.Contains(userMsg, "[user] howdy") {
-		t.Errorf("userMsg = %q", userMsg)
+	inst1, _ := trail.New(app1(), trail.WithBackend(b1))
+	inst1.Frame()
+	if h := b1.LastFrame().Surface.Height; h != 1 {
+		t.Errorf("expected StatusBar height 1, got %d:\n%s", h, surfaceText(b1))
+	}
+	out1 := surfaceText(b1)
+	if !strings.Contains(out1, "Claude 3.7 Sonnet · high") {
+		t.Errorf("expected model · thinking in status bar:\n%s", out1)
+	}
+	if strings.Contains(out1, "default · ") {
+		t.Errorf("default mode should not be prefixed with 'default · ':\n%s", out1)
+	}
+	if !strings.Contains(out1, "shift+tab cycle mode") {
+		t.Errorf("idle state hint missing on left:\n%s", out1)
 	}
 
-	// Assistant message with reasoning and tool call
-	asstMsg := FormatMessage(api.Message{
-		Role: api.RoleAssistant,
-		Content: []api.Block{
-			{Type: api.BlockReasoning, Text: "deep thought"},
-			{Type: api.BlockText, Text: "greetings"},
-			{Type: api.BlockToolCall, ToolCall: &api.ToolCall{ID: "t1", Name: "read_file", Args: map[string]any{"path": "x"}}},
-		},
+	// 2. Non-default mode: shows "<mode> · <Model> · <Thinking>"
+	b2 := mock.New(80, 24)
+	app2 := trail.SimpleFC("TestApp", func() kitex.Node {
+		return StatusBar(StatusBarProps{
+			State:    StateStreaming,
+			Mode:     api.ModeAcceptEdits,
+			Model:    "Claude 3.7 Sonnet",
+			Thinking: "high",
+		})
 	})
-	if !strings.Contains(asstMsg, "[reasoning] deep thought") ||
-		!strings.Contains(asstMsg, "[assistant] greetings") ||
-		!strings.Contains(asstMsg, "read_file") {
-		t.Errorf("asstMsg = %q", asstMsg)
+	inst2, _ := trail.New(app2(), trail.WithBackend(b2))
+	inst2.Frame()
+	if h := b2.LastFrame().Surface.Height; h != 1 {
+		t.Errorf("expected StatusBar height 1 in non-default mode, got %d:\n%s", h, surfaceText(b2))
+	}
+	out2 := surfaceText(b2)
+	if !strings.Contains(out2, "accept_edits · Claude 3.7 Sonnet · high") {
+		t.Errorf("expected mode · model · thinking:\n%s", out2)
+	}
+	if !strings.Contains(out2, "streaming • esc to cancel") {
+		t.Errorf("streaming hint missing:\n%s", out2)
 	}
 
-	// Tool message
-	toolMsg := FormatMessage(api.Message{
-		Role:       api.RoleTool,
-		ToolCallID: "t1",
-		Name:       "read_file",
-		Content:    []api.Block{{Type: api.BlockText, Text: "file content"}},
+	// 3. Custom hint override
+	b3 := mock.New(80, 24)
+	app3 := trail.SimpleFC("TestApp", func() kitex.Node {
+		return StatusBar(StatusBarProps{
+			State: StatePicker,
+			Hint:  "custom hint override",
+		})
 	})
-	if !strings.Contains(toolMsg, "[tool] read_file: file content") {
-		t.Errorf("toolMsg = %q", toolMsg)
-	}
-
-	// Diff format
-	rawDiff := "--- a/file.go\n+++ b/file.go\n@@ -1,1 +1,2 @@\n-old\n+new\n"
-	diffOut := FormatDiff(rawDiff)
-	if !strings.Contains(diffOut, "--- a/file.go") || !strings.Contains(diffOut, "+new") {
-		t.Errorf("FormatDiff output missing details:\n%s", diffOut)
-	}
-	if FormatDiff("") != "" {
-		t.Errorf("FormatDiff empty should return empty")
-	}
-
-	// Error formatting
-	errFormatted := FormatError("fatal failure")
-	if !strings.Contains(errFormatted, "error: fatal failure") {
-		t.Errorf("FormatError = %q", errFormatted)
+	inst3, _ := trail.New(app3(), trail.WithBackend(b3))
+	inst3.Frame()
+	out3 := surfaceText(b3)
+	if !strings.Contains(out3, "custom hint override") {
+		t.Errorf("expected custom hint:\n%s", out3)
 	}
 }
 
-func TestPickerComponent(t *testing.T) {
+func TestSpinnerAndDiffComponents(t *testing.T) {
+	b := mock.New(80, 24)
+	app := trail.SimpleFC("TestApp", func() kitex.Node {
+		return trail.Fragment(
+			Spinner(SpinnerProps{Text: "Resolving packages..."}),
+			Diff(DiffProps{Text: "--- a/f\n+++ b/f\n@@ -1 +1 @@\n-old\n+new"}),
+		)
+	})
+	inst, _ := trail.New(app(), trail.WithBackend(b))
+	inst.Frame()
+	out := surfaceText(b)
+	if !strings.Contains(out, "Resolving packages...") {
+		t.Errorf("spinner text missing:\n%s", out)
+	}
+	if !strings.Contains(out, "--- a/f") || !strings.Contains(out, "+new") {
+		t.Errorf("diff lines missing:\n%s", out)
+	}
+}
+
+func TestMessageAndTranscriptComponents(t *testing.T) {
+	b := mock.New(80, 24)
+	items := []TranscriptItem{
+		PromptItem("Hello world"),
+		NoticeItem("Switched session"),
+		ErrorItem("Something failed"),
+		DecisionItem(
+			api.PermissionRequest{ToolName: "bash", Summary: "Run ls"},
+			api.PermissionDecision{Kind: api.DecisionAllowOnce},
+		),
+		MessageItem(api.Message{
+			Role: api.RoleAssistant,
+			Content: []api.Block{
+				{Type: api.BlockReasoning, Text: "Analyzing problem"},
+				{Type: api.BlockText, Text: "I can help with that"},
+			},
+		}),
+	}
+
+	app := trail.SimpleFC("TestApp", func() kitex.Node {
+		return Transcript(items)
+	})
+	inst, _ := trail.New(app(), trail.WithBackend(b))
+	inst.Frame()
+
+	out := insertedAboveText(b)
+	if !strings.Contains(out, "❯ Hello world") {
+		t.Errorf("user prompt missing from static transcript:\n%s", out)
+	}
+	if !strings.Contains(out, "Switched session") {
+		t.Errorf("notice item missing from static transcript:\n%s", out)
+	}
+	if !strings.Contains(out, "error: Something failed") {
+		t.Errorf("error item missing from static transcript:\n%s", out)
+	}
+	if !strings.Contains(out, "✓ Allowed once: Run ls") {
+		t.Errorf("decision item missing from static transcript:\n%s", out)
+	}
+	if !strings.Contains(out, "[reasoning] Analyzing problem") || !strings.Contains(out, "I can help with that") {
+		t.Errorf("assistant message missing from static transcript:\n%s", out)
+	}
+}
+
+func TestComposerFunctionalComponent(t *testing.T) {
+	cycleCalled := false
+	cancelCalled := false
+
+	b := mock.New(80, 24)
+	app := trail.SimpleFC("TestApp", func() kitex.Node {
+		return Composer(ComposerProps{
+			Suggest: func(prefix string) []Suggestion {
+				if prefix == "/h" {
+					return []Suggestion{{Usage: "/help", Description: "Show commands"}}
+				}
+				return nil
+			},
+			OnCycleMode: func() {
+				cycleCalled = true
+			},
+			OnCancel: func() {
+				cancelCalled = true
+			},
+		})
+	})
+
+	inst, err := trail.New(app(), trail.WithBackend(b))
+	if err != nil {
+		t.Fatalf("trail.New: %v", err)
+	}
+	inst.Frame()
+
+	// Initial render contains prompt symbol and has height 3 (top border + 1 row + bottom border)
+	out := surfaceText(b)
+	if !strings.Contains(out, ">") {
+		t.Errorf("composer missing '>':\n%s", out)
+	}
+	if h := b.LastFrame().Surface.Height; h != 3 {
+		t.Errorf("expected initial composer height 3, got %d:\n%s", h, out)
+	}
+
+	// Space and Shift+A must NOT trigger OnCycleMode
+	inst.Engine().ProcessRawEvent(&backend.RawKeyEvent{
+		Key: key.Key{Code: ' ', Text: " "},
+	})
+	inst.Engine().ProcessRawEvent(&backend.RawKeyEvent{
+		Key: key.Key{Code: 'a', Text: "A", Mod: key.ModShift},
+	})
+	if cycleCalled {
+		t.Errorf("OnCycleMode should not be called on space or Shift+A")
+	}
+
+	// Shift+Enter inserts a newline and grows the composer height to 4
+	inst.Engine().ProcessRawEvent(&backend.RawKeyEvent{
+		Key: key.Key{Code: key.KeyEnter, Mod: key.ModShift},
+	})
+	inst.Frame()
+	if h := b.LastFrame().Surface.Height; h != 4 {
+		t.Errorf("expected composer height 4 after Shift+Enter newline, got %d:\n%s", h, surfaceText(b))
+	}
+
+	// Send Shift+Tab key event
+	inst.Engine().ProcessRawEvent(&backend.RawKeyEvent{
+		Key: key.Key{Code: key.KeyTab, Mod: key.ModShift},
+	})
+	if !cycleCalled {
+		t.Errorf("expected OnCycleMode to be called on Shift+Tab")
+	}
+
+	// Send Escape key event
+	inst.Engine().ProcessRawEvent(&backend.RawKeyEvent{
+		Key: key.Key{Code: key.KeyEscape},
+	})
+	if !cancelCalled {
+		t.Errorf("expected OnCancel to be called on Escape")
+	}
+}
+
+func TestPickerFunctionalComponent(t *testing.T) {
 	opts := []Option{
-		{Value: "default", Label: "Default", Description: "Safe reads"},
-		{Value: "accept_edits", Label: "Accept Edits", Description: "Auto edits", Current: true},
-		{Value: "plan", Label: "Plan", Description: "Read-only"},
+		{Value: "opt1", Label: "Option One", Description: "First option", Current: true},
+		{Value: "opt2", Label: "Option Two", Description: "Second option"},
 	}
 
-	type dummyMsg struct{ val string }
-	p := NewPicker("Choose Mode:", opts, func(opt Option) tea.Msg {
-		return dummyMsg{val: opt.Value}
+	var selectedValue string
+	canceled := false
+
+	b := mock.New(80, 24)
+	app := trail.SimpleFC("TestApp", func() kitex.Node {
+		return Picker(PickerProps{
+			Title:   "Select an option:",
+			Options: opts,
+			OnSelect: func(opt Option) any {
+				selectedValue = opt.Value
+				return opt.Value
+			},
+			OnAction: func(action any, closePicker bool) {
+				if s, ok := action.(string); ok {
+					selectedValue = s
+				}
+			},
+			OnCancel: func() {
+				canceled = true
+			},
+		})
 	})
-	if p.Cursor() != 1 {
-		t.Fatalf("expected cursor at 1 (Current option), got %d", p.Cursor())
+
+	inst, _ := trail.New(app(), trail.WithBackend(b))
+	inst.Frame()
+
+	out := surfaceText(b)
+	if !strings.Contains(out, "Select an option:") || !strings.Contains(out, "Option One") {
+		t.Errorf("picker output missing title or options:\n%s", out)
 	}
 
-	sel, ok := p.Selected()
-	if !ok || sel.Value != "accept_edits" {
-		t.Errorf("Selected = %+v, ok=%v", sel, ok)
+	// Press Enter -> selects Option One (opt1)
+	inst.Engine().ProcessRawEvent(&backend.RawKeyEvent{
+		Key: key.Key{Code: key.KeyEnter},
+	})
+	if selectedValue != "opt1" {
+		t.Errorf("selected value = %q, want 'opt1'", selectedValue)
 	}
 
-	selectedMsg := p.Select()
-	if dm, ok := selectedMsg.(dummyMsg); !ok || dm.val != "accept_edits" {
-		t.Errorf("Select() = %+v, want dummyMsg 'accept_edits'", selectedMsg)
-	}
-
-	p.CursorDown()
-	if p.Cursor() != 2 {
-		t.Errorf("CursorDown = %d, want 2", p.Cursor())
-	}
-	p.CursorDown() // clamped
-	if p.Cursor() != 2 {
-		t.Errorf("CursorDown clamped = %d, want 2", p.Cursor())
-	}
-
-	p.CursorUp()
-	if p.Cursor() != 1 {
-		t.Errorf("CursorUp = %d, want 1", p.Cursor())
-	}
-
-	p.SetCursor(0)
-	if p.Cursor() != 0 {
-		t.Errorf("SetCursor(0) = %d, want 0", p.Cursor())
-	}
-
-	rendered := p.Render()
-	if !strings.Contains(rendered, "Choose Mode:") ||
-		!strings.Contains(rendered, "Accept Edits") ||
-		!strings.Contains(rendered, "current") ||
-		!strings.Contains(rendered, "esc to cancel") {
-		t.Errorf("rendered picker mismatch:\n%s", rendered)
-	}
-	if !strings.Contains(rendered, "─") {
-		t.Errorf("rendered picker missing top border separator line:\n%s", rendered)
-	}
-	// Verify blank line before status bar
-	lines := strings.Split(strings.TrimRight(rendered, "\n"), "\n")
-	if len(lines) < 3 || strings.TrimSpace(lines[len(lines)-2]) != "" {
-		t.Errorf("rendered picker missing blank line before status bar:\n%s", rendered)
-	}
-
-	// Width and WindowSizeMsg handling
-	if p.Width() != 80 {
-		t.Errorf("p.Width() default = %d, want 80", p.Width())
-	}
-	p.SetWidth(100)
-	if p.Width() != 100 {
-		t.Errorf("p.Width() after SetWidth = %d, want 100", p.Width())
-	}
-	p, _ = p.Update(tea.WindowSizeMsg{Width: 110, Height: 35})
-	if p.Width() != 110 {
-		t.Errorf("p.Width() after WindowSizeMsg = %d, want 110", p.Width())
-	}
-
-	// Empty picker
-	emptyP := NewPicker("", nil, nil)
-	if _, ok := emptyP.Selected(); ok {
-		t.Errorf("empty picker Selected should be false")
-	}
-	if emptyP.Select() != nil {
-		t.Errorf("empty picker Select should be nil")
-	}
-	if emptyP.Render() == "" {
-		t.Errorf("empty picker Render should still render footer")
-	}
-
-	// Custom status bar
-	customP := NewPicker("Custom", opts, nil)
-	customP.StatusBar = "custom navigation hints"
-	if !strings.Contains(customP.Render(), "custom navigation hints") {
-		t.Errorf("custom status bar missing in render")
-	}
-	// Fallback to DefaultPickerStatusBar when cleared
-	customP.StatusBar = ""
-	if !strings.Contains(customP.Render(), DefaultPickerStatusBar) {
-		t.Errorf("default status bar missing when StatusBar cleared")
+	// Press Escape -> cancel called
+	inst.Engine().ProcessRawEvent(&backend.RawKeyEvent{
+		Key: key.Key{Code: key.KeyEscape},
+	})
+	if !canceled {
+		t.Errorf("expected OnCancel to be called on Escape")
 	}
 }
 
-func TestPickerColumnsAndCustomKeys(t *testing.T) {
-	opts := []Option{
-		{
-			Value:   "s1",
-			Columns: []string{"My Session", "s1", "claude-sonnet-4-6", "2 minutes ago"},
-			Current: true,
-		},
-		{
-			Value:   "s2",
-			Columns: []string{"Another Session", "s2", "claude-opus-4-6", "1 hour ago"},
-		},
+func TestApprovalFunctionalComponent(t *testing.T) {
+	req := api.PermissionRequest{
+		Action:   api.ActionWrite,
+		Safety:   api.SafetySafe,
+		ToolName: "write_file",
+		Summary:  "Write main.go",
+		Target:   "main.go",
 	}
 
-	type deleteMsg struct{ id string }
-	p := NewPicker("Select session:", opts, func(opt Option) tea.Msg {
-		return opt.Value
+	var decided api.PermissionDecision
+	b := mock.New(80, 24)
+	app := trail.SimpleFC("TestApp", func() kitex.Node {
+		return Approval(ApprovalProps{
+			Request: req,
+			OnDecision: func(_ api.PermissionRequest, dec api.PermissionDecision) {
+				decided = dec
+			},
+		})
 	})
-	p.Keys = map[string]func(opt Option) tea.Msg{
-		"d": func(opt Option) tea.Msg {
-			return deleteMsg{id: opt.Value}
-		},
+
+	inst, _ := trail.New(app(), trail.WithBackend(b))
+	inst.Frame()
+
+	out := surfaceText(b)
+	if !strings.Contains(out, "[Permission Required]") || !strings.Contains(out, "Write main.go") {
+		t.Errorf("approval card output missing header or summary:\n%s", out)
 	}
 
-	rendered := p.Render()
-	if !strings.Contains(rendered, "My Session") ||
-		!strings.Contains(rendered, "claude-sonnet-4-6") ||
-		!strings.Contains(rendered, "2 minutes ago") ||
-		!strings.Contains(rendered, "current") {
-		t.Errorf("rendered multi-column picker missing expected strings:\n%s", rendered)
-	}
-
-	// Test key press 'd' triggering custom key handler
-	updatedP, cmd := p.Update(tea.KeyPressMsg{Code: 'd', Text: "d"})
-	if cmd == nil {
-		t.Fatalf("expected command from 'd' keypress")
-	}
-	msg := cmd()
-	if dm, ok := msg.(deleteMsg); !ok || dm.id != "s1" {
-		t.Errorf("expected deleteMsg for 's1', got %+v", msg)
-	}
-
-	// Move cursor down to s2 and test 'd'
-	updatedP.CursorDown()
-	_, cmd2 := updatedP.Update(tea.KeyPressMsg{Code: 'd', Text: "d"})
-	if cmd2 == nil {
-		t.Fatalf("expected command from 'd' keypress on second item")
-	}
-	msg2 := cmd2()
-	if dm, ok := msg2.(deleteMsg); !ok || dm.id != "s2" {
-		t.Errorf("expected deleteMsg for 's2', got %+v", msg2)
-	}
-}
-
-func TestPickerFilteringConfirmAndInputActions(t *testing.T) {
-	opts := []Option{
-		{
-			Value:       "s1",
-			Label:       "Alpha Session",
-			Description: "The first session",
-			Columns:     []string{"Alpha Session", "s1", "claude-sonnet-4-6", "10m ago"},
-			Current:     true,
-		},
-		{
-			Value:       "s2",
-			Label:       "Beta Session",
-			Description: "Second session",
-			Columns:     []string{"Beta Session", "s2", "claude-opus-4-6", "1h ago"},
-		},
-		{
-			Value:       "s3",
-			Label:       "Gamma Session",
-			Description: "Third session",
-			Columns:     []string{"Gamma Session", "s3", "gpt-5.4", "2d ago"},
-		},
-	}
-
-	type deleteMsg struct{ id string }
-	type renameMsg struct {
-		id    string
-		title string
-	}
-
-	p := NewPicker("Select session:", opts, func(opt Option) tea.Msg {
-		return opt.Value
+	// Press 'y' -> Allow once
+	inst.Engine().ProcessRawEvent(&backend.RawKeyEvent{
+		Key: key.Key{Code: 'y', Text: "y"},
 	})
-	p.Filterable = true
-	p.ConfirmActions = map[string]ConfirmAction{
-		"f4": {
-			Prompt: func(opt Option) string {
-				return fmt.Sprintf("Delete %q?", opt.Label)
-			},
-			OnConfirm: func(opt Option) tea.Msg {
-				return deleteMsg{id: opt.Value}
-			},
-		},
-	}
-	p.InputActions = map[string]InputAction{
-		"f2": {
-			Prompt: "Rename: ",
-			InitialValue: func(opt Option) string {
-				return opt.Label
-			},
-			OnSubmit: func(opt Option, val string) tea.Msg {
-				return renameMsg{id: opt.Value, title: val}
-			},
-		},
-	}
-
-	// 1. Initial render includes filter input view
-	rendered := p.Render()
-	if !strings.Contains(rendered, "ype to filter") {
-		t.Errorf("expected filter placeholder in rendered output:\n%s", rendered)
-	}
-
-	// 2. Live filtering: type "beta"
-	p.SetFilterValue("beta")
-	if p.FilterValue() != "beta" {
-		t.Errorf("FilterValue() = %q, want 'beta'", p.FilterValue())
-	}
-	filtered := p.FilteredOptions()
-	if len(filtered) != 1 || filtered[0].Value != "s2" {
-		t.Fatalf("expected 1 filtered option (s2), got %+v", filtered)
-	}
-	if sel, ok := p.Selected(); !ok || sel.Value != "s2" {
-		t.Errorf("Selected() = %+v, want s2", sel)
-	}
-
-	// 3. Filter with no matches
-	p.SetFilterValue("nonexistent")
-	if len(p.FilteredOptions()) != 0 {
-		t.Errorf("expected 0 matches for 'nonexistent'")
-	}
-	noMatchRender := p.Render()
-	if !strings.Contains(noMatchRender, "No matching options.") {
-		t.Errorf("expected 'No matching options.' in rendered output:\n%s", noMatchRender)
-	}
-
-	// 4. Clear filter
-	p.SetFilterValue("")
-	if len(p.FilteredOptions()) != 3 {
-		t.Errorf("expected 3 options after clearing filter")
-	}
-
-	// 5. Test F4 ConfirmAction: trigger, cancel with 'n'
-	p.SetCursor(0) // Alpha Session
-	p, _ = p.Update(tea.KeyPressMsg{Code: tea.KeyF4})
-	if !p.InConfirmMode() {
-		t.Fatalf("expected InConfirmMode() == true after F4")
-	}
-	confirmRender := p.Render()
-	if !strings.Contains(confirmRender, `Delete "Alpha Session"?`) || !strings.Contains(confirmRender, "y to confirm") {
-		t.Errorf("unexpected confirm render:\n%s", confirmRender)
-	}
-	// Press 'n' to cancel
-	p, _ = p.Update(tea.KeyPressMsg{Code: 'n', Text: "n"})
-	if p.InConfirmMode() {
-		t.Fatalf("expected InConfirmMode() == false after pressing 'n'")
-	}
-
-	// Test F4 ConfirmAction: trigger, confirm with 'y'
-	p, _ = p.Update(tea.KeyPressMsg{Code: tea.KeyF4})
-	p, delCmd := p.Update(tea.KeyPressMsg{Code: 'y', Text: "y"})
-	if delCmd == nil {
-		t.Fatalf("expected command on confirming F4 with 'y'")
-	}
-	ev := delCmd()
-	if dm, ok := ev.(deleteMsg); !ok || dm.id != "s1" {
-		t.Errorf("expected deleteMsg for s1, got %+v", ev)
-	}
-	if p.InConfirmMode() {
-		t.Fatalf("expected InConfirmMode() == false after confirmation")
-	}
-
-	// 6. Test F2 InputAction: trigger, cancel with Esc
-	p.SetCursor(1) // Beta Session
-	p, _ = p.Update(tea.KeyPressMsg{Code: tea.KeyF2})
-	if !p.InInputMode() {
-		t.Fatalf("expected InInputMode() == true after F2")
-	}
-	inputRender := p.Render()
-	if !strings.Contains(inputRender, "Rename: ") || !strings.Contains(inputRender, "Beta Session") {
-		t.Errorf("unexpected input mode render:\n%s", inputRender)
-	}
-	// Cancel with Esc
-	p, _ = p.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
-	if p.InInputMode() {
-		t.Fatalf("expected InInputMode() == false after Esc")
-	}
-
-	// Test F2 InputAction: trigger, edit, submit with Enter
-	p, _ = p.Update(tea.KeyPressMsg{Code: tea.KeyF2})
-	// Type " Renamed"
-	p, _ = p.Update(tea.KeyPressMsg{Code: '!', Text: "!"})
-	p, saveCmd := p.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	if saveCmd == nil {
-		t.Fatalf("expected command on saving F2 input with Enter")
-	}
-	saveEv := saveCmd()
-	if rm, ok := saveEv.(renameMsg); !ok || rm.id != "s2" || rm.title != "Beta Session!" {
-		t.Errorf("expected renameMsg for s2 with 'Beta Session!', got %+v", saveEv)
-	}
-	if p.InInputMode() {
-		t.Fatalf("expected InInputMode() == false after saving input")
+	if decided.Kind != api.DecisionAllowOnce {
+		t.Errorf("decision kind = %v, want DecisionAllowOnce", decided.Kind)
 	}
 }

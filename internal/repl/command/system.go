@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"strings"
 
-	tea "charm.land/bubbletea/v2"
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/repl/ui"
 )
@@ -24,7 +23,7 @@ func (r *Registry) registerSystemCommands() {
 		Description: "Read or update the session permission mode",
 		Handler:     HandleMode,
 		Options:     modeOptions,
-		OnSelect: func(opt ui.Option) tea.Msg {
+		OnSelect: func(opt ui.Option) Event {
 			return ChangeModeMsg{Mode: api.PermissionMode(opt.Value)}
 		},
 	})
@@ -43,7 +42,7 @@ func (r *Registry) registerSystemCommands() {
 	})
 }
 
-func (r *Registry) handleHelp(_ Env, _ []string) (tea.Msg, error) {
+func (r *Registry) handleHelp(_ Env, _ []string) (Event, error) {
 	cmds := r.List()
 	var rows []string
 	rows = append(rows, "Available commands:")
@@ -58,14 +57,14 @@ func (r *Registry) handleHelp(_ Env, _ []string) (tea.Msg, error) {
 		}
 		rows = append(rows, fmt.Sprintf("  %-44s %s", usage, cmd.Description))
 	}
-	return OutputMsg{Text: strings.Join(rows, "\n")}, nil
+	return PrintMsg{Text: strings.Join(rows, "\n")}, nil
 }
 
 // HandleMode displays or alters the active permission mode.
-func HandleMode(env Env, args []string) (tea.Msg, error) {
+func HandleMode(env Env, args []string) (Event, error) {
 	if len(args) == 0 || strings.TrimSpace(args[0]) == "" {
 		mode := cmp.Or(env.Mode, api.ModeDefault)
-		picker := ui.NewPicker("Select permission mode:", modeOptionsWithActive(mode), func(opt ui.Option) tea.Msg {
+		picker := ui.NewPicker("Select permission mode:", modeOptionsWithActive(mode), func(opt ui.Option) any {
 			return ChangeModeMsg{Mode: api.PermissionMode(opt.Value)}
 		})
 		return OpenPickerMsg{
@@ -133,11 +132,11 @@ func isValidPermissionMode(mode api.PermissionMode) bool {
 }
 
 // HandleClear signals that the terminal screen should be cleared.
-func HandleClear(_ Env, _ []string) (tea.Msg, error) {
+func HandleClear(_ Env, _ []string) (Event, error) {
 	return ClearScreenMsg{}, nil
 }
 
 // HandleExit signals that the REPL session should terminate.
-func HandleExit(_ Env, _ []string) (tea.Msg, error) {
-	return QuitMsg{}, nil
+func HandleExit(_ Env, _ []string) (Event, error) {
+	return ExitMsg{}, nil
 }

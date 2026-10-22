@@ -61,8 +61,5 @@ func runREPL(cmd *cobra.Command, rootOpts *rootOptions, opts *replOptions) error
 		Agent:     strings.TrimSpace(opts.agent),
 		Model:     strings.TrimSpace(opts.model),
 		Title:     strings.TrimSpace(opts.title),
-		In:        cmd.InOrStdin(),
-		Out:       cmd.OutOrStdout(),
-		ErrOut:    cmd.ErrOrStderr(),
 	})
 }

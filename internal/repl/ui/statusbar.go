@@ -5,12 +5,13 @@ import (
 	"fmt"
 	"strings"
 
-	"charm.land/lipgloss/v2"
+	"github.com/masterkeysrd/kite/extras/trail"
+	"github.com/masterkeysrd/kite/style"
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/repl/theme"
 )
 
-// State represents the interactive lifecycle phase of the REPL model.
+// State represents the interactive lifecycle phase of the REPL.
 type State int
 
 const (
@@ -40,49 +41,71 @@ func (s State) String() string {
 	}
 }
 
-// StatusBar holds contextual data rendered in the REPL status footer.
-type StatusBar struct {
+// StatusBarProps defines the properties for the REPL status footer.
+type StatusBarProps struct {
 	State    State
 	Mode     api.PermissionMode
 	Model    string
 	Thinking string
-	Width    int
-}
-
-// Render formats the status bar footer string using a split layout.
-func (s StatusBar) Render() string {
-	left := theme.StatusBarStyle.Render(stateHint(s.State))
-
-	model := cmp.Or(strings.TrimSpace(s.Model), "default")
-	thinking := cmp.Or(strings.TrimSpace(s.Thinking), "auto")
-	modelPart := theme.StatusBarStyle.Render(fmt.Sprintf("%s · %s", model, thinking))
-	mode := cmp.Or(s.Mode, api.ModeDefault)
-
-	var right string
-	if mode == api.ModeDefault {
-		right = modelPart
-	} else {
-		right = theme.ModeBadgeStyle(mode).Render(string(mode)) + theme.StatusBarStyle.Render(" · ") + modelPart
-	}
-
-	width := cmp.Or(s.Width, 80)
-	leftWidth := lipgloss.Width(left)
-	rightWidth := lipgloss.Width(right)
-	gap := max(width-leftWidth-rightWidth, 2)
-
-	return left + strings.Repeat(" ", gap) + right
+	Hint     string // Custom hint override, e.g. from active picker
 }
 
 func stateHint(state State) string {
 	switch state {
 	case StateStreaming:
 		return "streaming • esc to cancel"
+	case StatePicker:
+		return "↑/↓ navigate · enter select · esc cancel"
+	case StateApproval:
+		return "y allow once · a allow session · n deny · r reject with feedback"
 	default:
 		return "shift+tab cycle mode • /help commands"
 	}
 }
 
-// FormatStatusBar renders the contextual status footer for the given [StatusBar].
-func FormatStatusBar(s StatusBar) string {
-	return s.Render()
-}
+// StatusBar is a trail functional component rendering the two-column REPL status bar:
+// left: shortcut hint
+// right: <mode> · <Model> · <Thinking> (or <Model> · <Thinking> when mode is default or empty)
+var StatusBar = trail.FC("StatusBar", func(props StatusBarProps) trail.Node {
+	leftText := props.Hint
+	if leftText == "" {
+		leftText = stateHint(props.State)
+	}
+
+	model := cmp.Or(strings.TrimSpace(props.Model), "default")
+	thinking := cmp.Or(strings.TrimSpace(props.Thinking), "auto")
+	mode := cmp.Or(props.Mode, api.ModeDefault)
+
+	var rightChildren []trail.Node
+	if mode != api.ModeDefault && mode != "" {
+		rightChildren = append(rightChildren,
+			trail.Span(trail.SpanProps{
+				Style: theme.ModeBadgeStyle(mode),
+			}, trail.Text(string(mode))),
+			trail.Span(trail.SpanProps{
+				Style: theme.StatusBarStyle,
+			}, trail.Text(" · ")),
+		)
+	}
+	rightChildren = append(rightChildren,
+		trail.Span(trail.SpanProps{
+			Style: theme.StatusBarStyle,
+		}, trail.Text(fmt.Sprintf("%s · %s", model, thinking))),
+	)
+
+	return trail.Box(trail.BoxProps{
+		Style: style.S().
+			Display(style.DisplayFlex).
+			FlexDirection(style.FlexRow).
+			AlignItems(style.AlignCenter).
+			Width(style.Percent(100)),
+	},
+		// Left shortcut hint
+		trail.Span(trail.SpanProps{
+			Style: theme.StatusBarStyle,
+		}, trail.Text(leftText)),
+		trail.Spacer(),
+		// Right mode · model · thinking indicator (inline spans inside a single box)
+		trail.Box(trail.BoxProps{}, rightChildren...),
+	)
+})

@@ -5,107 +5,64 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/masterkeysrd/kite/extras/trail"
+	"github.com/masterkeysrd/kite/style"
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/repl/theme"
 )
 
-// FormatUserPrompt formats a submitted user prompt line for scrollback output.
-func FormatUserPrompt(text string) string {
-	return theme.UserPromptStyle.Render("❯ " + text)
+// UserPromptProps defines the properties for a user prompt scrollback item.
+type UserPromptProps struct {
+	Text string
 }
 
-// FormatMessage renders a persisted or streamed [api.Message] including user text,
-// assistant reasoning/text, tool calls, and tool results.
-func FormatMessage(msg api.Message) string {
-	switch msg.Role {
-	case api.RoleUser:
-		text := ExtractTextBlocks(msg.Content)
-		return theme.UserMsgStyle.Render(fmt.Sprintf("[user] %s", text))
+// UserPrompt is a trail functional component rendering a user input prompt line.
+var UserPrompt = trail.FC("UserPrompt", func(props UserPromptProps) trail.Node {
+	return trail.Box(trail.BoxProps{
+		Style: style.S().FlexDirection(style.FlexRow),
+	},
+		trail.Span(trail.SpanProps{
+			Style: theme.UserPromptStyle,
+		}, trail.Text("❯ ")),
+		trail.Span(trail.SpanProps{
+			Style: theme.UserMsgStyle,
+		}, trail.Text(props.Text)),
+	)
+})
 
-	case api.RoleAssistant:
-		return FormatAssistantMessage(msg.Content)
-
-	case api.RoleTool:
-		return FormatToolMessage(msg)
-
-	default:
-		text := ExtractTextBlocks(msg.Content)
-		return theme.StatusBarStyle.Render(fmt.Sprintf("[%s] %s", msg.Role, text))
-	}
+// ToolCallProps defines the properties for a tool call indicator.
+type ToolCallProps struct {
+	ToolCall api.ToolCall
 }
 
-// FormatAssistantMessage formats the reasoning, text, and tool calls of an assistant message.
-func FormatAssistantMessage(blocks []api.Block) string {
-	var parts []string
-	var reasoning strings.Builder
-	var text strings.Builder
-
-	for _, b := range blocks {
-		switch b.Type {
-		case api.BlockReasoning:
-			reasoning.WriteString(b.Text)
-		case api.BlockText:
-			text.WriteString(b.Text)
-		case api.BlockToolCall:
-			if b.ToolCall != nil {
-				parts = append(parts, FormatToolCall(*b.ToolCall))
-			}
+// ToolCall is a trail functional component rendering a tool invocation block.
+var ToolCall = trail.FC("ToolCall", func(props ToolCallProps) trail.Node {
+	tc := props.ToolCall
+	argsStr := ""
+	if len(tc.Args) > 0 {
+		if raw, err := json.Marshal(tc.Args); err == nil {
+			argsStr = " " + string(raw)
 		}
 	}
 
-	var out []string
-	if r := strings.TrimSpace(reasoning.String()); r != "" {
-		out = append(out, theme.ReasoningStyle.Render(fmt.Sprintf("[reasoning] %s", r)))
-	}
-	if t := text.String(); t != "" {
-		out = append(out, theme.AssistantMsgStyle.Render(fmt.Sprintf("[assistant] %s", t)))
-	}
-	out = append(out, parts...)
+	return trail.Box(trail.BoxProps{
+		Style: style.S().FlexDirection(style.FlexRow),
+	},
+		trail.Span(trail.SpanProps{
+			Style: theme.ToolBadgeStyle,
+		}, trail.Text("[tool_call] ")),
+		trail.Span(trail.SpanProps{
+			Style: theme.ToolCallStyle,
+		}, trail.Text(fmt.Sprintf("%s (%s)%s", tc.Name, tc.ID, argsStr))),
+	)
+})
 
-	if len(out) == 0 {
-		return theme.AssistantMsgStyle.Render("[assistant] ")
-	}
-	return strings.Join(out, "\n")
+// MessageProps defines the properties for an api.Message item.
+type MessageProps struct {
+	Message api.Message
 }
 
-// FormatToolCall renders a formatted tool call indicator.
-func FormatToolCall(tc api.ToolCall) string {
-	if len(tc.Args) == 0 {
-		return theme.ToolCallStyle.Render(fmt.Sprintf("[tool_call] %s (%s)", tc.Name, tc.ID))
-	}
-	raw, err := json.Marshal(tc.Args)
-	if err != nil {
-		return theme.ToolCallStyle.Render(fmt.Sprintf("[tool_call] %s (%s)", tc.Name, tc.ID))
-	}
-	return theme.ToolCallStyle.Render(fmt.Sprintf("[tool_call] %s (%s) %s", tc.Name, tc.ID, string(raw)))
-}
-
-// FormatToolMessage renders a formatted tool result block.
-func FormatToolMessage(msg api.Message) string {
-	text := ExtractTextBlocks(msg.Content)
-	name := msg.Name
-	if name == "" {
-		name = msg.ToolCallID
-	}
-	prefix := "[tool]"
-	if msg.IsError {
-		prefix = "[tool:error]"
-	}
-	if name != "" {
-		line := fmt.Sprintf("%s %s: %s", prefix, name, text)
-		if msg.IsError {
-			return theme.ErrorStyle.Render(line)
-		}
-		return theme.ToolResultStyle.Render(line)
-	}
-	line := fmt.Sprintf("%s %s", prefix, text)
-	if msg.IsError {
-		return theme.ErrorStyle.Render(line)
-	}
-	return theme.ToolResultStyle.Render(line)
-}
-
-// ExtractTextBlocks concatenates all text blocks in a message.
+// ExtractTextBlocks aggregates text from text-type content blocks.
 func ExtractTextBlocks(blocks []api.Block) string {
 	var sb strings.Builder
 	for _, b := range blocks {
@@ -116,7 +73,199 @@ func ExtractTextBlocks(blocks []api.Block) string {
 	return sb.String()
 }
 
-// FormatError styles an error message for scrollback display.
-func FormatError(msg string) string {
-	return theme.ErrorStyle.Render("error: " + msg)
+// Message is a trail functional component rendering a user, assistant, or tool message.
+var Message = trail.FC("Message", func(props MessageProps) trail.Node {
+	msg := props.Message
+	switch msg.Role {
+	case api.RoleUser:
+		text := ExtractTextBlocks(msg.Content)
+		return trail.Box(trail.BoxProps{
+			Style: style.S().FlexDirection(style.FlexRow),
+		},
+			trail.Span(trail.SpanProps{
+				Style: theme.UserBadgeStyle,
+			}, trail.Text("[user] ")),
+			trail.Span(trail.SpanProps{
+				Style: theme.UserMsgStyle,
+			}, trail.Text(text)),
+		)
+
+	case api.RoleAssistant:
+		var rows []trail.Node
+		var reasoning strings.Builder
+		var text strings.Builder
+		for _, b := range msg.Content {
+			switch b.Type {
+			case api.BlockReasoning:
+				reasoning.WriteString(b.Text)
+			case api.BlockText:
+				text.WriteString(b.Text)
+			case api.BlockToolCall:
+				if b.ToolCall != nil {
+					rows = append(rows, ToolCall(ToolCallProps{ToolCall: *b.ToolCall}))
+				}
+			}
+		}
+
+		if r := strings.TrimSpace(reasoning.String()); r != "" {
+			rows = append([]trail.Node{
+				trail.Box(trail.BoxProps{
+					Style: style.S().FlexDirection(style.FlexRow),
+				},
+					trail.Span(trail.SpanProps{
+						Style: theme.ReasoningStyle,
+					}, trail.Text(fmt.Sprintf("[reasoning] %s", r))),
+				),
+			}, rows...)
+		}
+
+		if t := text.String(); t != "" {
+			rows = append(rows, trail.Box(trail.BoxProps{
+				Style: style.S().FlexDirection(style.FlexRow),
+			},
+				trail.Span(trail.SpanProps{
+					Style: theme.AgentBadgeStyle,
+				}, trail.Text("[assistant] ")),
+				trail.Span(trail.SpanProps{
+					Style: theme.AssistantMsgStyle,
+				}, trail.Text(t)),
+			))
+		}
+
+		if len(rows) == 0 {
+			return trail.Box(trail.BoxProps{
+				Style: style.S().FlexDirection(style.FlexRow),
+			},
+				trail.Span(trail.SpanProps{
+					Style: theme.AgentBadgeStyle,
+				}, trail.Text("[assistant] ")),
+			)
+		}
+
+		return trail.Box(trail.BoxProps{
+			Style: style.S().FlexDirection(style.FlexColumn),
+		}, rows...)
+
+	case api.RoleTool:
+		text := ExtractTextBlocks(msg.Content)
+		name := msg.Name
+		if name == "" {
+			name = msg.ToolCallID
+		}
+		prefix := "[tool] "
+		badgeStyle := theme.ToolSuccessStyle
+		textStyle := theme.ToolResultStyle
+		if msg.IsError {
+			prefix = "[tool:error] "
+			badgeStyle = theme.ToolErrorStyle
+			textStyle = theme.ErrorStyle
+		}
+
+		var spans []trail.Node
+		spans = append(spans, trail.Span(trail.SpanProps{
+			Style: badgeStyle,
+		}, trail.Text(prefix)))
+
+		if name != "" {
+			spans = append(spans,
+				trail.Span(trail.SpanProps{
+					Style: theme.ToolCallStyle,
+				}, trail.Text(name+": ")),
+			)
+		}
+
+		spans = append(spans, trail.Span(trail.SpanProps{
+			Style: textStyle,
+		}, trail.Text(text)))
+
+		return trail.Box(trail.BoxProps{
+			Style: style.S().FlexDirection(style.FlexRow),
+		}, spans...)
+
+	default:
+		text := ExtractTextBlocks(msg.Content)
+		return trail.Box(trail.BoxProps{
+			Style: style.S().FlexDirection(style.FlexRow),
+		},
+			trail.Span(trail.SpanProps{
+				Style: theme.StatusBarStyle,
+			}, trail.Text(fmt.Sprintf("[%s] %s", msg.Role, text))),
+		)
+	}
+})
+
+// DecisionSummaryProps defines the properties for a permission decision summary item.
+type DecisionSummaryProps struct {
+	Request  api.PermissionRequest
+	Decision api.PermissionDecision
 }
+
+// DecisionSummary is a trail functional component rendering a 1-line resolution indicator.
+var DecisionSummary = trail.FC("DecisionSummary", func(props DecisionSummaryProps) trail.Node {
+	perm := props.Request
+	decision := props.Decision
+
+	target := perm.Summary
+	if target == "" {
+		target = perm.ToolName
+	}
+
+	var summary string
+	s := theme.AllowDecisionStyle
+	switch decision.Kind {
+	case api.DecisionAllowOnce:
+		summary = fmt.Sprintf("✓ Allowed once: %s", target)
+	case api.DecisionAllowSession:
+		summary = fmt.Sprintf("✓ Allowed for session: %s", target)
+	default:
+		s = theme.RejectDecisionStyle
+		if decision.Feedback != "" {
+			summary = fmt.Sprintf("✗ Rejected: %s (%s)", target, decision.Feedback)
+		} else {
+			summary = fmt.Sprintf("✗ Rejected: %s", target)
+		}
+	}
+
+	return trail.Box(trail.BoxProps{
+		Style: style.S().FlexDirection(style.FlexRow),
+	},
+		trail.Span(trail.SpanProps{
+			Style: s,
+		}, trail.Text(summary)),
+	)
+})
+
+// ErrorMessageProps defines the properties for an error notification item.
+type ErrorMessageProps struct {
+	Text string
+}
+
+// ErrorMessage is a trail functional component rendering a styled error line.
+var ErrorMessage = trail.FC("ErrorMessage", func(props ErrorMessageProps) trail.Node {
+	return trail.Box(trail.BoxProps{
+		Style: style.S().FlexDirection(style.FlexRow),
+	},
+		trail.Span(trail.SpanProps{
+			Style: theme.ErrorBadgeStyle,
+		}, trail.Text("error: ")),
+		trail.Span(trail.SpanProps{
+			Style: theme.ErrorStyle,
+		}, trail.Text(props.Text)),
+	)
+})
+
+// NoticeProps defines the properties for an informational notice item.
+type NoticeProps struct {
+	Text string
+}
+
+// Notice is a trail functional component rendering a dim status notice line.
+var Notice = trail.FC("Notice", func(props NoticeProps) trail.Node {
+	return trail.Box(trail.BoxProps{
+		Style: style.S().FlexDirection(style.FlexRow),
+	},
+		trail.Span(trail.SpanProps{
+			Style: theme.StatusBarStyle,
+		}, trail.Text(props.Text)),
+	)
+})

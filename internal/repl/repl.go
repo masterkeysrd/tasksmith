@@ -5,11 +5,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
-	"os"
 	"strings"
 
-	tea "charm.land/bubbletea/v2"
+	"github.com/masterkeysrd/kite/backend"
+	"github.com/masterkeysrd/kite/extras/trail"
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/client"
 	"github.com/masterkeysrd/tasksmith/internal/repl/command"
@@ -18,16 +17,16 @@ import (
 
 // Forwarded types and constants from subpackages for caller ergonomics.
 type (
-	Header            = ui.Header
-	StatusBar         = ui.StatusBar
+	HeaderProps       = ui.HeaderProps
+	StatusBarProps    = ui.StatusBarProps
 	State             = ui.State
 	Option            = ui.Option
-	Picker            = ui.Picker
+	PickerProps       = ui.PickerProps
 	PickerCanceledMsg = ui.PickerCanceledMsg
 	Registry          = command.Registry
 	Command           = command.Command
 	CommandEnv        = command.Env
-	CommandResult     = tea.Msg
+	CommandResult     = command.Event
 	CommandHandler    = command.Handler
 )
 
@@ -42,7 +41,6 @@ const (
 var ErrInvalidConfig = errors.New("repl: invalid configuration")
 
 // Config holds the parameters for starting a REPL session.
-// SessionID is optional; when empty, a session is created lazily on the first user prompt.
 type Config struct {
 	Client    *client.Client
 	Workspace string
@@ -51,9 +49,7 @@ type Config struct {
 	Agent     string
 	Model     string
 	Title     string
-	In        io.Reader
-	Out       io.Writer
-	ErrOut    io.Writer
+	Backend   backend.Backend
 }
 
 // Validate checks that all required fields in [Config] are provided.
@@ -64,19 +60,10 @@ func (c Config) Validate() error {
 	if strings.TrimSpace(c.Workspace) == "" {
 		return fmt.Errorf("%w: workspace is required", ErrInvalidConfig)
 	}
-	if c.In == nil {
-		return fmt.Errorf("%w: input reader is required", ErrInvalidConfig)
-	}
-	if c.Out == nil {
-		return fmt.Errorf("%w: output writer is required", ErrInvalidConfig)
-	}
-	if c.ErrOut == nil {
-		return fmt.Errorf("%w: error output writer is required", ErrInvalidConfig)
-	}
 	return nil
 }
 
-// Run starts the REPL using the inline Bubble Tea v2 TUI.
+// Run starts the REPL using the Kite trail inline application engine.
 func Run(ctx context.Context, cfg Config) error {
 	if err := cfg.Validate(); err != nil {
 		return err
@@ -166,169 +153,37 @@ func resolveModelAndThinking(ctx context.Context, c *client.Client, cfgAgent, cf
 		mdlEffort = strings.TrimSpace(mdl.DefaultEffort)
 	}
 
-	return cmp.Or(mdlLabel, modelID), cmp.Or(agEffort, mdlEffort, "auto")
-}
-
-func buildHeader(ctx context.Context, cfg Config, sess *api.Session) Header {
-	mdl, thinking := resolveModelAndThinking(ctx, cfg.Client, cfg.Agent, cfg.Model, sess)
-	return Header{
-		Version:  cfg.Version,
-		Model:    mdl,
-		Thinking: thinking,
-		Path:     cfg.Workspace,
-	}
-}
-
-func ensureSession(ctx context.Context, c *client.Client, title, agent, model string, mode api.PermissionMode) (*api.Session, error) {
-	resolvedTitle := strings.TrimSpace(title)
-	if resolvedTitle == "" {
-		resolvedTitle = "Terminal Session"
-	}
-
-	sess, err := c.CreateSession(ctx, api.CreateSessionRequest{
-		Title: resolvedTitle,
-		Agent: strings.TrimSpace(agent),
-		Model: strings.TrimSpace(model),
-	})
-	if err != nil {
-		return nil, fmt.Errorf("create session: %w", err)
-	}
-
-	if mode != "" && mode != api.ModeDefault {
-		if err := c.SetPermissionMode(ctx, sess.ID, mode); err != nil {
-			return nil, fmt.Errorf("set permission mode: %w", err)
-		}
-	}
-	return sess, nil
-}
-
-func isTTY(v any) bool {
-	f, ok := v.(*os.File)
-	if !ok || f == nil {
-		return false
-	}
-	if f.Name() == os.DevNull {
-		return false
-	}
-	info, err := f.Stat()
-	if err != nil {
-		return false
-	}
-	return info.Mode()&os.ModeCharDevice != 0
+	modelLabel = cmp.Or(mdlLabel, modelID, "default")
+	thinking = cmp.Or(agEffort, mdlEffort, "auto")
+	return modelLabel, thinking
 }
 
 func runTUI(ctx context.Context, cfg Config, sess *api.Session, mode api.PermissionMode) error {
-	hdr := buildHeader(ctx, cfg, sess)
-	_, _ = fmt.Fprintln(cfg.Out, ui.FormatHeader(hdr))
-	if sess != nil && strings.TrimSpace(sess.ID) != "" && cfg.Client != nil {
-		if history, err := cfg.Client.History(ctx, sess.ID); err == nil && len(history) > 0 {
-			if h := formatHistory(history); h != "" {
-				_, _ = fmt.Fprintln(cfg.Out, "\n"+h)
-			}
-		}
+	modelLabel, thinking := resolveModelAndThinking(ctx, cfg.Client, cfg.Agent, cfg.Model, sess)
+
+	props := AppProps{
+		Client:            cfg.Client,
+		Workspace:         cfg.Workspace,
+		Version:           cfg.Version,
+		SessionID:         cfg.SessionID,
+		Agent:             cfg.Agent,
+		Model:             cfg.Model,
+		Title:             cfg.Title,
+		InitialSess:       sess,
+		InitialMode:       mode,
+		InitialModelLabel: modelLabel,
+		InitialThinking:   thinking,
+		Registry:          command.NewRegistry(),
 	}
 
-	subCtx, cancelSub := context.WithCancel(ctx)
-	eventCh := make(chan api.Event, 64)
-	subDone := make(chan struct{})
-
-	go func() {
-		defer close(subDone)
-		defer close(eventCh)
-		for ev, err := range cfg.Client.Subscribe(subCtx, "") {
-			if err != nil {
-				return
-			}
-			select {
-			case eventCh <- ev:
-			case <-subCtx.Done():
-				return
-			}
-		}
-	}()
-
-	defer func() {
-		cancelSub()
-		<-subDone
-	}()
-
-	model := NewModel(ctx, cfg, command.NewRegistry(), sess, mode)
-	model.eventCh = eventCh
-
-	opts := []tea.ProgramOption{
-		tea.WithInput(cfg.In),
-		tea.WithOutput(cfg.Out),
-		tea.WithContext(ctx),
-	}
-	if !isTTY(cfg.In) {
-		opts = append(opts, tea.WithoutSignals())
+	opts := []trail.Option{trail.WithCtrlCExit(true)}
+	if cfg.Backend != nil {
+		opts = append(opts, trail.WithBackend(cfg.Backend))
 	}
 
-	p := tea.NewProgram(model, opts...)
-	_, err := p.Run()
-	if errors.Is(err, tea.ErrInterrupted) || errors.Is(err, context.Canceled) {
+	runErr := trail.Run(ctx, App(props), opts...)
+	if errors.Is(runErr, context.Canceled) {
 		return nil
 	}
-	return err
-}
-
-// Forwarding helper functions delegating to ui or command subpackages.
-
-// NewRegistry constructs a [command.Registry] populated with built-in commands.
-func NewRegistry() *Registry {
-	return command.NewRegistry()
-}
-
-// FormatHeader renders the 3-line startup header banner.
-func FormatHeader(h Header) string {
-	return ui.FormatHeader(h)
-}
-
-// FormatBanner renders the 3-line startup header banner.
-func FormatBanner(h Header) string {
-	return ui.FormatHeader(h)
-}
-
-// FormatStatusBar renders the contextual status footer for the given [StatusBar].
-func FormatStatusBar(s StatusBar) string {
-	return ui.FormatStatusBar(s)
-}
-
-// FormatUserPrompt formats a submitted user prompt line for scrollback output.
-func FormatUserPrompt(text string) string {
-	return ui.FormatUserPrompt(text)
-}
-
-// FormatMessage renders a persisted or streamed message for terminal display.
-func FormatMessage(msg api.Message) string {
-	return ui.FormatMessage(msg)
-}
-
-// FormatError styles an error message for scrollback display.
-func FormatError(msg string) string {
-	return ui.FormatError(msg)
-}
-
-// FormatDiff styles a unified diff string.
-func FormatDiff(diffText string) string {
-	return ui.FormatDiff(diffText)
-}
-
-// FormatPermissionCard renders a bordered approval card for a pending permission request.
-func FormatPermissionCard(perm api.PermissionRequest, cursor int, feedbackMode bool, feedbackText string) string {
-	return ui.FormatPermissionCard(perm, cursor, feedbackMode, feedbackText)
-}
-
-// FormatDecisionSummary renders a 1-line summary of a resolved permission request.
-func FormatDecisionSummary(perm api.PermissionRequest, decision api.PermissionDecision) string {
-	return ui.FormatDecisionSummary(perm, decision)
-}
-
-// FormatCommandSuggestions renders inline slash-command autocomplete hints.
-func FormatCommandSuggestions(cmds []Command) string {
-	suggestions := make([]ui.Suggestion, len(cmds))
-	for i, c := range cmds {
-		suggestions[i] = ui.Suggestion{Usage: c.Usage, Description: c.Description}
-	}
-	return ui.FormatSuggestions(suggestions)
+	return runErr
 }

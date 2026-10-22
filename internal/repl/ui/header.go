@@ -7,11 +7,13 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/masterkeysrd/kite/extras/trail"
+	"github.com/masterkeysrd/kite/style"
 	"github.com/masterkeysrd/tasksmith/internal/repl/theme"
 )
 
-// Header holds the view-model fields for the 3-line REPL startup header.
-type Header struct {
+// HeaderProps defines the properties for the 3-line REPL startup header.
+type HeaderProps struct {
 	Version  string
 	Model    string
 	Thinking string
@@ -47,21 +49,47 @@ func ShortenHomePath(path string) string {
 	return path
 }
 
-// Render formats the 3-line startup header using the REPL theme styles.
-func (h Header) Render() string {
-	version := NormalizeVersion(h.Version)
-	model := cmp.Or(strings.TrimSpace(h.Model), "default")
-	thinking := cmp.Or(strings.TrimSpace(h.Thinking), "auto")
-	path := ShortenHomePath(h.Path)
+// Header is a trail functional component rendering the 3-line startup banner:
+// 1. TaskSmith <version>
+// 2. <Model> with <Thinking> effort
+// 3. <ShortenHomePath(Path)>
+var Header = trail.FC("Header", func(props HeaderProps) trail.Node {
+	version := NormalizeVersion(props.Version)
+	model := cmp.Or(strings.TrimSpace(props.Model), "default")
+	thinking := cmp.Or(strings.TrimSpace(props.Thinking), "auto")
+	path := ShortenHomePath(props.Path)
 
-	line1 := theme.BannerTitleStyle.Render("TaskSmith") + " " + theme.BannerMetaStyle.Render(version)
-	line2 := theme.BannerMetaStyle.Render(fmt.Sprintf("%s with %s effort", model, thinking))
-	line3 := theme.StatusBarStyle.Render(path)
-
-	return line1 + "\n" + line2 + "\n" + line3
-}
-
-// FormatHeader renders the 3-line startup header banner for a REPL session.
-func FormatHeader(h Header) string {
-	return h.Render()
-}
+	return trail.Box(trail.BoxProps{
+		Style: style.S().
+			FlexDirection(style.FlexColumn).
+			MarginBottom(1),
+	},
+		// Line 1: TaskSmith (bold primary) + <version> (muted)
+		trail.Box(trail.BoxProps{
+			Style: style.S().FlexDirection(style.FlexRow),
+		},
+			trail.Span(trail.SpanProps{
+				Style: theme.BannerTitleStyle,
+			}, trail.Text("TaskSmith")),
+			trail.Span(trail.SpanProps{
+				Style: theme.BannerMetaStyle,
+			}, trail.Text(" "+version)),
+		),
+		// Line 2: <Model> with <Thinking> effort (muted)
+		trail.Box(trail.BoxProps{
+			Style: style.S().FlexDirection(style.FlexRow),
+		},
+			trail.Span(trail.SpanProps{
+				Style: theme.BannerMetaStyle,
+			}, trail.Text(fmt.Sprintf("%s with %s effort", model, thinking))),
+		),
+		// Line 3: <shortened workspace path with ~> (dim)
+		trail.Box(trail.BoxProps{
+			Style: style.S().FlexDirection(style.FlexRow),
+		},
+			trail.Span(trail.SpanProps{
+				Style: theme.DimmedStyle,
+			}, trail.Text(path)),
+		),
+	)
+})

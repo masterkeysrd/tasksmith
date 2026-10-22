@@ -3,8 +3,6 @@ package command
 import (
 	"errors"
 	"strings"
-
-	tea "charm.land/bubbletea/v2"
 )
 
 func (r *Registry) registerChangesCommands() {
@@ -29,23 +27,23 @@ func (r *Registry) registerChangesCommands() {
 }
 
 // HandleChanges emits a directive to list tracked file changes in the session.
-func HandleChanges(_ Env, _ []string) (tea.Msg, error) {
+func HandleChanges(_ Env, _ []string) (Event, error) {
 	return ListChangesMsg{}, nil
 }
 
-// HandleDiff parses diff arguments and emits a ShowDiffMsg.
-func HandleDiff(_ Env, args []string) (tea.Msg, error) {
+// HandleDiff parses diff arguments and emits a DiffChangeMsg.
+func HandleDiff(_ Env, args []string) (Event, error) {
 	if len(args) < 2 || strings.TrimSpace(args[0]) == "" || strings.TrimSpace(args[1]) == "" {
 		return nil, errors.New("usage: /diff <path> <entry_id>")
 	}
-	return ShowDiffMsg{
+	return DiffChangeMsg{
 		Path:    strings.TrimSpace(args[0]),
 		EntryID: strings.TrimSpace(args[1]),
 	}, nil
 }
 
-// HandleRevert parses revert arguments and emits a RevertMsg.
-func HandleRevert(_ Env, args []string) (tea.Msg, error) {
+// HandleRevert parses revert arguments and emits a RevertChangesMsg.
+func HandleRevert(_ Env, args []string) (Event, error) {
 	var path, entryID string
 	if len(args) > 0 {
 		path = strings.TrimSpace(args[0])
@@ -53,7 +51,7 @@ func HandleRevert(_ Env, args []string) (tea.Msg, error) {
 	if len(args) > 1 {
 		entryID = strings.TrimSpace(args[1])
 	}
-	return RevertMsg{
+	return RevertChangesMsg{
 		Path:    path,
 		EntryID: entryID,
 	}, nil

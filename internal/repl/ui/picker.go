@@ -1,14 +1,13 @@
 package ui
 
 import (
-	"cmp"
-	"fmt"
 	"strings"
 
-	"charm.land/bubbles/v2/textinput"
-	tea "charm.land/bubbletea/v2"
-	"charm.land/lipgloss/v2"
-	"charm.land/lipgloss/v2/table"
+	"github.com/masterkeysrd/kite/dom"
+	"github.com/masterkeysrd/kite/event"
+	"github.com/masterkeysrd/kite/extras/kitex"
+	"github.com/masterkeysrd/kite/extras/trail"
+	"github.com/masterkeysrd/kite/style"
 	"github.com/masterkeysrd/tasksmith/internal/repl/theme"
 )
 
@@ -18,7 +17,7 @@ const DefaultPickerStatusBar = "↑/↓ or j/k to select • enter to confirm �
 // PickerCanceledMsg indicates that a picker interaction was dismissed without making a selection.
 type PickerCanceledMsg struct{}
 
-// Option represents a selectable item in an interactive command picker or inline argument filter.
+// Option represents a selectable item in an interactive command picker.
 type Option struct {
 	Value       string
 	Label       string
@@ -30,472 +29,440 @@ type Option struct {
 // ConfirmAction defines an inline confirmation prompt triggered by a custom key.
 type ConfirmAction struct {
 	Prompt    func(opt Option) string
-	OnConfirm func(opt Option) tea.Msg
+	OnConfirm func(opt Option) any
 }
 
 // InputAction defines an inline text input prompt triggered by a custom key.
 type InputAction struct {
 	Prompt       string
 	InitialValue func(opt Option) string
-	OnSubmit     func(opt Option, value string) tea.Msg
+	OnSubmit     func(opt Option, value string) any
 }
 
 type pickerMode int
 
 const (
-	pickerModeNormal pickerMode = iota
+	pickerModeBrowse pickerMode = iota
 	pickerModeConfirm
 	pickerModeInput
 )
 
-// Picker manages interactive selection for a slash command.
-type Picker struct {
+// PickerProps defines the properties for the interactive Picker component.
+type PickerProps struct {
 	Title          string
 	Options        []Option
 	StatusBar      string
-	OnSelect       func(opt Option) tea.Msg
-	Keys           map[string]func(opt Option) tea.Msg
+	Filterable     bool
+	OnSelect       func(opt Option) any
+	Keys           map[string]func(opt Option) any
 	ConfirmActions map[string]ConfirmAction
 	InputActions   map[string]InputAction
-	Filterable     bool
-
-	filterInput textinput.Model
-	cursor      int
-	width       int
-
-	mode          pickerMode
-	confirmPrompt string
-	confirmAction ConfirmAction
-	targetOpt     Option
-	inputPrompt   string
-	inputAction   InputAction
-	actionInput   textinput.Model
+	OnAction       func(action any, closePicker bool)
+	OnCancel       func()
 }
 
-// NewPicker constructs an initialized [Picker] with the cursor positioned at the
-// currently active option, or 0 if none is marked current.
-func NewPicker(title string, opts []Option, onSelect func(opt Option) tea.Msg) Picker {
-	cursor := 0
-	for i, opt := range opts {
-		if opt.Current {
-			cursor = i
-			break
-		}
-	}
-
-	ti := textinput.New()
-	ti.Prompt = "❯ "
-	ti.Placeholder = "Type to filter..."
-	ti.Focus()
-	ti.SetWidth(max(80-4, 20))
-
-	return Picker{
-		Title:       title,
-		Options:     opts,
-		StatusBar:   DefaultPickerStatusBar,
-		OnSelect:    onSelect,
-		filterInput: ti,
-		cursor:      cursor,
-		width:       80,
+// NewPicker constructs an initialized PickerProps with default status bar and cursor at current.
+func NewPicker(title string, opts []Option, onSelect func(opt Option) any) PickerProps {
+	return PickerProps{
+		Title:     title,
+		Options:   opts,
+		StatusBar: DefaultPickerStatusBar,
+		OnSelect:  onSelect,
 	}
 }
 
-// FilterValue returns the current filter query string.
-func (p Picker) FilterValue() string {
-	return p.filterInput.Value()
-}
-
-// SetFilterValue sets the filter query string.
-func (p *Picker) SetFilterValue(val string) {
-	p.filterInput.SetValue(val)
-}
-
-// FilteredOptions returns the list of options matching the active filter query, or all options if none.
-func (p Picker) FilteredOptions() []Option {
-	query := strings.ToLower(strings.TrimSpace(p.filterInput.Value()))
-	if !p.Filterable || query == "" {
-		return p.Options
-	}
-
-	var matches []Option
-	for _, opt := range p.Options {
-		if strings.Contains(strings.ToLower(opt.Label), query) ||
-			strings.Contains(strings.ToLower(opt.Value), query) ||
-			strings.Contains(strings.ToLower(opt.Description), query) {
-			matches = append(matches, opt)
-			continue
-		}
-		matchedCol := false
-		for _, col := range opt.Columns {
-			if strings.Contains(strings.ToLower(col), query) {
-				matchedCol = true
-				break
-			}
-		}
-		if matchedCol {
-			matches = append(matches, opt)
-		}
-	}
-	return matches
-}
-
-// Width returns the configured layout width for the picker.
-func (p Picker) Width() int {
-	return cmp.Or(p.width, 80)
-}
-
-// SetWidth sets the picker layout width.
-func (p *Picker) SetWidth(w int) {
-	if w > 0 {
-		p.width = w
-		p.filterInput.SetWidth(max(w-4, 20))
-		p.actionInput.SetWidth(max(w-4, 20))
-	}
-}
-
-// Cursor returns the currently highlighted option index.
-func (p Picker) Cursor() int {
-	return p.cursor
-}
-
-// SetCursor explicitly sets the cursor position, clamped within bounds of FilteredOptions().
-func (p *Picker) SetCursor(c int) {
-	filtered := p.FilteredOptions()
-	if len(filtered) == 0 {
-		p.cursor = 0
-		return
-	}
-	if c < 0 {
-		c = 0
-	}
-	if c >= len(filtered) {
-		c = len(filtered) - 1
-	}
-	p.cursor = c
-}
-
-// CursorUp moves the picker cursor up by one item.
-func (p *Picker) CursorUp() {
-	if p.cursor > 0 {
-		p.cursor--
-	}
-}
-
-// CursorDown moves the picker cursor down by one item.
-func (p *Picker) CursorDown() {
-	filtered := p.FilteredOptions()
-	if p.cursor < len(filtered)-1 {
-		p.cursor++
-	}
-}
-
-// Selected returns the currently highlighted [Option] and true, or false if empty.
-func (p Picker) Selected() (Option, bool) {
-	filtered := p.FilteredOptions()
-	if len(filtered) == 0 || p.cursor < 0 || p.cursor >= len(filtered) {
-		return Option{}, false
-	}
-	return filtered[p.cursor], true
-}
-
-// Select invokes OnSelect for the currently highlighted option, or returns nil.
-func (p Picker) Select() tea.Msg {
+// Select invokes OnSelect on the currently selected or first option.
+func (p PickerProps) Select() any {
 	if p.OnSelect == nil {
 		return nil
 	}
-	opt, ok := p.Selected()
+	opt, ok := p.SelectedOption()
 	if !ok {
 		return nil
 	}
 	return p.OnSelect(opt)
 }
 
-// InConfirmMode reports whether the picker is displaying an inline action confirmation prompt.
-func (p Picker) InConfirmMode() bool {
-	return p.mode == pickerModeConfirm
-}
-
-// InInputMode reports whether the picker is displaying an inline action text input prompt.
-func (p Picker) InInputMode() bool {
-	return p.mode == pickerModeInput
-}
-
-func normalizePickerKey(msg tea.KeyPressMsg) string {
-	keyStr := strings.ToLower(msg.String())
-	if keyStr == "ctrl+j" || msg.Code == '\n' || msg.Code == 10 || msg.Code == 13 || msg.Code == tea.KeyEnter {
-		return "enter"
+// SelectedOption returns the currently active option, or the first option if none is marked Current.
+func (p PickerProps) SelectedOption() (Option, bool) {
+	if len(p.Options) == 0 {
+		return Option{}, false
 	}
-	if keyStr == "esc" || keyStr == "ctrl+c" || msg.Code == tea.KeyEscape {
-		return "esc"
-	}
-
-	switch msg.Code {
-	case tea.KeyF1:
-		return "f1"
-	case tea.KeyF2:
-		return "f2"
-	case tea.KeyF3:
-		return "f3"
-	case tea.KeyF4:
-		return "f4"
-	case tea.KeyF5:
-		return "f5"
-	case tea.KeyF6:
-		return "f6"
-	case tea.KeyF7:
-		return "f7"
-	case tea.KeyF8:
-		return "f8"
-	case tea.KeyF9:
-		return "f9"
-	case tea.KeyF10:
-		return "f10"
-	case tea.KeyF11:
-		return "f11"
-	case tea.KeyF12:
-		return "f12"
-	case tea.KeyUp:
-		return "up"
-	case tea.KeyDown:
-		return "down"
-	default:
-		return keyStr
-	}
-}
-
-// Update processes navigation and selection key events for the picker.
-func (p Picker) Update(msg tea.Msg) (Picker, tea.Cmd) {
-	if ws, ok := msg.(tea.WindowSizeMsg); ok {
-		p.SetWidth(ws.Width)
-		return p, nil
-	}
-
-	keyMsg, ok := msg.(tea.KeyPressMsg)
-	if !ok {
-		return p, nil
-	}
-
-	normKey := normalizePickerKey(keyMsg)
-	keyStr := keyMsg.String()
-
-	switch p.mode {
-	case pickerModeConfirm:
-		switch {
-		case normKey == "y" || normKey == "enter":
-			p.mode = pickerModeNormal
-			if p.confirmAction.OnConfirm != nil {
-				if ev := p.confirmAction.OnConfirm(p.targetOpt); ev != nil {
-					return p, func() tea.Msg { return ev }
-				}
-			}
-			return p, nil
-		case normKey == "n" || normKey == "esc" || keyStr == "ctrl+c":
-			p.mode = pickerModeNormal
-			return p, nil
-		default:
-			return p, nil
-		}
-
-	case pickerModeInput:
-		switch {
-		case normKey == "esc" || keyStr == "ctrl+c":
-			p.mode = pickerModeNormal
-			return p, nil
-		case normKey == "enter" || keyMsg.Code == '\n' || keyMsg.Code == 10 || keyMsg.Code == 13:
-			val := strings.TrimSpace(p.actionInput.Value())
-			p.mode = pickerModeNormal
-			if val != "" && p.inputAction.OnSubmit != nil {
-				if ev := p.inputAction.OnSubmit(p.targetOpt, val); ev != nil {
-					return p, func() tea.Msg { return ev }
-				}
-			}
-			return p, nil
-		default:
-			var cmd tea.Cmd
-			p.actionInput, cmd = p.actionInput.Update(keyMsg)
-			return p, cmd
-		}
-
-	default: // pickerModeNormal
-		switch {
-		case normKey == "esc" || keyStr == "ctrl+c":
-			return p, func() tea.Msg { return PickerCanceledMsg{} }
-
-		case normKey == "up" || (!p.Filterable && (keyStr == "k" || keyStr == "ctrl+p")):
-			p.CursorUp()
-			return p, nil
-
-		case normKey == "down" || (!p.Filterable && (keyStr == "j" || keyStr == "ctrl+n")):
-			p.CursorDown()
-			return p, nil
-
-		case normKey == "enter" || keyMsg.Code == '\n' || keyMsg.Code == 10 || keyMsg.Code == 13:
-			if ev := p.Select(); ev != nil {
-				return p, func() tea.Msg { return ev }
-			}
-			return p, func() tea.Msg { return PickerCanceledMsg{} }
-
-		default:
-			// 1. Check ConfirmActions
-			if act, found := p.ConfirmActions[normKey]; found {
-				if opt, ok := p.Selected(); ok {
-					p.mode = pickerModeConfirm
-					p.targetOpt = opt
-					p.confirmAction = act
-					if act.Prompt != nil {
-						p.confirmPrompt = act.Prompt(opt)
-					} else {
-						p.confirmPrompt = fmt.Sprintf("Confirm action on %q?", opt.Label)
-					}
-					return p, nil
-				}
-			}
-
-			// 2. Check InputActions
-			if act, found := p.InputActions[normKey]; found {
-				if opt, ok := p.Selected(); ok {
-					p.mode = pickerModeInput
-					p.targetOpt = opt
-					p.inputAction = act
-					p.inputPrompt = act.Prompt
-					initVal := ""
-					if act.InitialValue != nil {
-						initVal = act.InitialValue(opt)
-					}
-					ti := textinput.New()
-					ti.Prompt = ""
-					ti.SetValue(initVal)
-					ti.CursorEnd()
-					ti.Focus()
-					ti.SetWidth(max(p.Width()-len(p.inputPrompt)-10, 20))
-					p.actionInput = ti
-					return p, nil
-				}
-			}
-
-			// 3. Check Keys
-			if handler, found := p.Keys[normKey]; found {
-				if opt, ok := p.Selected(); ok {
-					ev := handler(opt)
-					if ev != nil {
-						return p, func() tea.Msg { return ev }
-					}
-				}
-				return p, nil
-			}
-			if handler, found := p.Keys[keyStr]; found {
-				if opt, ok := p.Selected(); ok {
-					ev := handler(opt)
-					if ev != nil {
-						return p, func() tea.Msg { return ev }
-					}
-				}
-				return p, nil
-			}
-
-			// 4. Live filtering
-			if p.Filterable {
-				oldVal := p.filterInput.Value()
-				var cmd tea.Cmd
-				p.filterInput, cmd = p.filterInput.Update(keyMsg)
-				if p.filterInput.Value() != oldVal {
-					p.cursor = 0
-				}
-				return p, cmd
-			}
-		}
-	}
-
-	return p, nil
-}
-
-// Render formats the picker title, filter input, option list, and navigation footer.
-func (p Picker) Render() string {
-	var rows []string
-	if p.Title != "" {
-		rows = append(rows, theme.PermHeaderStyle.Render(p.Title))
-	}
-
-	if p.Filterable {
-		rows = append(rows, p.filterInput.View())
-	}
-
-	filtered := p.FilteredOptions()
-	if len(filtered) == 0 {
-		rows = append(rows, theme.StatusBarStyle.Render("  No matching options."))
-	} else if optsBlock := FormatOptions(filtered, p.cursor); optsBlock != "" {
-		rows = append(rows, optsBlock)
-	}
-
-	rows = append(rows, "")
-
-	var statusBar string
-	switch p.mode {
-	case pickerModeConfirm:
-		statusBar = theme.PermHeaderStyle.Render(p.confirmPrompt) + " " + theme.StatusBarStyle.Render("(y to confirm • n/esc to cancel)")
-	case pickerModeInput:
-		statusBar = theme.PermHeaderStyle.Render(p.inputPrompt) + p.actionInput.View() + " " + theme.StatusBarStyle.Render("(enter to save • esc to cancel)")
-	default:
-		hint := cmp.Or(p.StatusBar, DefaultPickerStatusBar)
-		statusBar = theme.StatusBarStyle.Render(hint)
-	}
-	rows = append(rows, statusBar)
-
-	width := cmp.Or(p.width, 80)
-	return theme.PickerTopBorderStyle.Width(width).Render(strings.Join(rows, "\n"))
-}
-
-// FormatOptions renders a list of [Option] rows with a highlighted cursor indicator.
-func FormatOptions(opts []Option, cursor int) string {
-	if len(opts) == 0 {
-		return ""
-	}
-
-	tableRows := make([][]string, len(opts))
-	for i, opt := range opts {
-		var cols []string
-		if len(opt.Columns) > 0 {
-			cols = make([]string, len(opt.Columns))
-			copy(cols, opt.Columns)
-		} else {
-			cols = []string{cmp.Or(opt.Label, opt.Value), opt.Description}
-		}
-
-		if i == cursor {
-			cols[0] = "❯ " + cols[0]
-		} else {
-			cols[0] = "  " + cols[0]
-		}
-
+	for _, opt := range p.Options {
 		if opt.Current {
-			lastIdx := len(cols) - 1
-			if cols[lastIdx] != "" {
-				cols[lastIdx] += " • current"
-			} else {
-				cols[lastIdx] = "current"
+			return opt, true
+		}
+	}
+	return p.Options[0], true
+}
+
+func initialCursor(opts []Option) int {
+	for i, opt := range opts {
+		if opt.Current {
+			return i
+		}
+	}
+	return 0
+}
+
+// Picker is a trail functional component managing interactive item selection,
+// filtering, custom actions (e.g. rename, delete), and keyboard navigation.
+var Picker = trail.FC("Picker", func(props PickerProps) trail.Node {
+	cursor, setCursor := kitex.UseState(initialCursor(props.Options))
+	filter, setFilter := kitex.UseState("")
+	mode, setMode := kitex.UseState(pickerModeBrowse)
+	targetOpt, setTargetOpt := kitex.UseState(Option{})
+	activeConfirm, setActiveConfirm := kitex.UseState(ConfirmAction{})
+	activeInput, setActiveInput := kitex.UseState(InputAction{})
+	inputVal, setInputVal := kitex.UseState("")
+
+	filterInputRef := kitex.UseRef[dom.Element](nil)
+	actionInputRef := kitex.UseRef[dom.Element](nil)
+
+	kitex.UseLayoutEffect(func() {
+		if mode() == pickerModeBrowse && props.Filterable && filterInputRef.Current != nil {
+			if doc := filterInputRef.Current.OwnerDocument(); doc != nil {
+				doc.Focus(filterInputRef.Current)
+			}
+		} else if mode() == pickerModeInput && actionInputRef.Current != nil {
+			if doc := actionInputRef.Current.OwnerDocument(); doc != nil {
+				doc.Focus(actionInputRef.Current)
 			}
 		}
-		tableRows[i] = cols
+	}, []any{mode(), props.Filterable})
+
+	filtered := kitex.UseMemo(func() []Option {
+		q := strings.TrimSpace(strings.ToLower(filter()))
+		if q == "" {
+			return props.Options
+		}
+		var res []Option
+		for _, opt := range props.Options {
+			if strings.Contains(strings.ToLower(opt.Label), q) ||
+				strings.Contains(strings.ToLower(opt.Description), q) ||
+				strings.Contains(strings.ToLower(opt.Value), q) {
+				res = append(res, opt)
+				continue
+			}
+			match := false
+			for _, col := range opt.Columns {
+				if strings.Contains(strings.ToLower(col), q) {
+					match = true
+					break
+				}
+			}
+			if match {
+				res = append(res, opt)
+			}
+		}
+		return res
+	}, []any{props.Options, filter()})
+
+	cur := cursor()
+	if len(filtered) > 0 {
+		if cur >= len(filtered) {
+			cur = len(filtered) - 1
+		}
+		if cur < 0 {
+			cur = 0
+		}
+	} else {
+		cur = 0
 	}
 
-	t := table.New().
-		BorderTop(false).
-		BorderBottom(false).
-		BorderLeft(false).
-		BorderRight(false).
-		BorderColumn(false).
-		BorderRow(false).
-		BorderHeader(false).
-		Rows(tableRows...).
-		StyleFunc(func(row, col int) lipgloss.Style {
-			if col == 0 {
-				if row == cursor {
-					return theme.OptionSelectedStyle.PaddingRight(2)
-				}
-				return theme.OptionNormalStyle.PaddingRight(2)
+	handleBrowseKey := func(ke event.KeyEvent) bool {
+		switch {
+		case ke.MatchString("up", "k"):
+			if cur > 0 {
+				setCursor(cur - 1)
 			}
-			return theme.StatusBarStyle.PaddingRight(2)
-		})
+			return true
 
-	return strings.TrimRight(t.Render(), "\n")
-}
+		case ke.MatchString("down", "j"):
+			if cur < len(filtered)-1 {
+				setCursor(cur + 1)
+			}
+			return true
+
+		case ke.MatchString("enter"):
+			if len(filtered) > 0 && props.OnSelect != nil {
+				act := props.OnSelect(filtered[cur])
+				if props.OnAction != nil {
+					props.OnAction(act, true)
+				}
+			}
+			return true
+
+		case ke.MatchString("esc", "escape"):
+			if props.OnCancel != nil {
+				props.OnCancel()
+			}
+			return true
+		}
+
+		// Check confirm actions
+		for k, ca := range props.ConfirmActions {
+			if ke.MatchString(k) && len(filtered) > 0 {
+				setTargetOpt(filtered[cur])
+				setActiveConfirm(ca)
+				setMode(pickerModeConfirm)
+				return true
+			}
+		}
+
+		// Check input actions
+		for k, ia := range props.InputActions {
+			if ke.MatchString(k) && len(filtered) > 0 {
+				setTargetOpt(filtered[cur])
+				setActiveInput(ia)
+				initVal := ""
+				if ia.InitialValue != nil {
+					initVal = ia.InitialValue(filtered[cur])
+				}
+				setInputVal(initVal)
+				setMode(pickerModeInput)
+				return true
+			}
+		}
+
+		// Check custom keys
+		for k, fn := range props.Keys {
+			if ke.MatchString(k) && len(filtered) > 0 {
+				act := fn(filtered[cur])
+				if props.OnAction != nil {
+					props.OnAction(act, false)
+				}
+				return true
+			}
+		}
+
+		return false
+	}
+
+	// trail.UseInput for non-input navigation or confirm mode
+	trail.UseInput(func(input string, k event.KeyEvent) {
+		m := mode()
+		if m == pickerModeConfirm {
+			if input == "y" || input == "Y" || k.MatchString("y", "enter") {
+				ca := activeConfirm()
+				if ca.OnConfirm != nil {
+					act := ca.OnConfirm(targetOpt())
+					if props.OnAction != nil {
+						props.OnAction(act, false)
+					}
+				}
+				setMode(pickerModeBrowse)
+				return
+			}
+			if input == "n" || input == "N" || k.MatchString("n", "esc", "escape") {
+				setMode(pickerModeBrowse)
+				return
+			}
+			return
+		}
+
+		if m == pickerModeBrowse && !props.Filterable {
+			handleBrowseKey(k)
+		}
+	})
+
+	var rows []trail.Node
+
+	// Title
+	if props.Title != "" {
+		rows = append(rows, trail.Box(trail.BoxProps{
+			Style: style.S().FlexDirection(style.FlexRow),
+		}, trail.Span(trail.SpanProps{
+			Style: theme.PickerTitleStyle,
+		}, trail.Text(props.Title))))
+	}
+
+	// Live filter input row
+	if props.Filterable && mode() == pickerModeBrowse {
+		rows = append(rows, trail.Box(trail.BoxProps{
+			Style: style.S().
+				Display(style.DisplayFlex).
+				FlexDirection(style.FlexRow).
+				AlignItems(style.AlignCenter).
+				Width(style.Percent(100)),
+		},
+			trail.Span(trail.SpanProps{
+				Style: theme.PickerTitleStyle.Margin(0, 1, 0, 0),
+			}, trail.Text("Filter:")),
+			kitex.Input(kitex.InputProps{
+				Ref:   filterInputRef,
+				Value: filter(),
+				Style: style.S().Flex(1).Width(style.Percent(100)),
+				OnChange: func(e event.Event) {
+					if ie, ok := e.(*event.InputEvent); ok {
+						setFilter(ie.Value)
+						setCursor(0)
+					}
+				},
+				OnKeyDown: func(e event.Event) {
+					if ke, ok := e.(*event.KeyEvent); ok {
+						if handleBrowseKey(*ke) {
+							e.PreventDefault()
+							e.StopPropagation()
+						}
+					}
+				},
+			}),
+		))
+	}
+
+	// Options rendering
+	if len(filtered) == 0 {
+		rows = append(rows, trail.Box(trail.BoxProps{
+			Style: style.S().FlexDirection(style.FlexRow),
+		}, trail.Span(trail.SpanProps{
+			Style: theme.PickerOptionStyle,
+		}, trail.Text("  No matching options."))))
+	} else if len(filtered[0].Columns) > 0 {
+		var trs []trail.Node
+		for i, opt := range filtered {
+			rowStyle := theme.PickerOptionStyle
+			prefix := "  "
+			if i == cur {
+				rowStyle = theme.PickerSelectedStyle
+				prefix = "❯ "
+			}
+			cols := make([]string, len(opt.Columns))
+			copy(cols, opt.Columns)
+			if opt.Current && len(cols) > 0 {
+				last := len(cols) - 1
+				if cols[last] != "" {
+					cols[last] += " • current"
+				} else {
+					cols[last] = "current"
+				}
+			}
+
+			var tds []trail.Node
+			tds = append(tds, kitex.TD(kitex.TDProps{
+				Style: style.S().Padding(0, 1, 0, 0),
+			}, trail.Span(trail.SpanProps{Style: rowStyle}, trail.Text(prefix+cols[0]))))
+
+			for _, col := range cols[1:] {
+				tds = append(tds, kitex.TD(kitex.TDProps{
+					Style: style.S().Padding(0, 1, 0, 1),
+				}, trail.Span(trail.SpanProps{Style: rowStyle}, trail.Text(col))))
+			}
+
+			trs = append(trs, kitex.TR(kitex.TRProps{}, tds...))
+		}
+
+		rows = append(rows, kitex.Table(kitex.TableProps{
+			Style: style.S().Width(style.Percent(100)),
+		}, kitex.TBody(kitex.TBodyProps{}, trs...)))
+	} else {
+		rows = append(rows, trail.Box(trail.BoxProps{
+			Style: style.S().FlexDirection(style.FlexColumn).Width(style.Percent(100)),
+		},
+			kitex.Map(filtered, func(opt Option, i int) trail.Node {
+				labelStyle := theme.PickerOptionStyle
+				prefix := "  "
+				if i == cur {
+					labelStyle = theme.PickerSelectedStyle
+					prefix = "❯ "
+				}
+				desc := opt.Description
+				if opt.Current {
+					if desc != "" {
+						desc += " • current"
+					} else {
+						desc = "current"
+					}
+				}
+				var spans []trail.Node
+				spans = append(spans, trail.Span(trail.SpanProps{
+					Style: labelStyle,
+				}, trail.Text(prefix+opt.Label)))
+				if desc != "" {
+					spans = append(spans, trail.Span(trail.SpanProps{
+						Style: theme.StatusBarStyle,
+					}, trail.Text("  "+desc)))
+				}
+				return trail.Box(trail.BoxProps{
+					Style: style.S().FlexDirection(style.FlexRow),
+				}, spans...)
+			}),
+		))
+	}
+
+	// Inline prompt mode (confirm or input)
+	switch mode() {
+	case pickerModeConfirm:
+		promptText := ""
+		if activeConfirm().Prompt != nil {
+			promptText = activeConfirm().Prompt(targetOpt())
+		}
+		rows = append(rows, trail.Newline(1), trail.Box(trail.BoxProps{
+			Style: style.S().FlexDirection(style.FlexRow),
+		},
+			trail.Span(trail.SpanProps{
+				Style: style.S().Foreground(theme.ColorYellow).Bold(true),
+			}, trail.Text("? "+promptText+" ")),
+			trail.Span(trail.SpanProps{
+				Style: theme.StatusBarStyle,
+			}, trail.Text("(y/N)")),
+		))
+
+	case pickerModeInput:
+		rows = append(rows, trail.Newline(1), trail.Box(trail.BoxProps{
+			Style: style.S().
+				Display(style.DisplayFlex).
+				FlexDirection(style.FlexRow).
+				AlignItems(style.AlignCenter).
+				Width(style.Percent(100)),
+		},
+			trail.Span(trail.SpanProps{
+				Style: style.S().Foreground(theme.ColorCyan).Bold(true).Margin(0, 1, 0, 0),
+			}, trail.Text(strings.TrimRight(activeInput().Prompt, " "))),
+			kitex.Input(kitex.InputProps{
+				Ref:   actionInputRef,
+				Value: inputVal(),
+				Style: style.S().Flex(1).Width(style.Percent(100)),
+				OnChange: func(e event.Event) {
+					if ie, ok := e.(*event.InputEvent); ok {
+						setInputVal(ie.Value)
+					}
+				},
+				OnKeyDown: func(e event.Event) {
+					if ke, ok := e.(*event.KeyEvent); ok {
+						switch {
+						case ke.MatchString("enter"):
+							e.PreventDefault()
+							e.StopPropagation()
+							ia := activeInput()
+							if ia.OnSubmit != nil {
+								act := ia.OnSubmit(targetOpt(), inputVal())
+								if props.OnAction != nil {
+									props.OnAction(act, false)
+								}
+							}
+							setMode(pickerModeBrowse)
+
+						case ke.MatchString("esc", "escape"):
+							e.PreventDefault()
+							e.StopPropagation()
+							setMode(pickerModeBrowse)
+						}
+					}
+				},
+			}),
+			trail.Span(trail.SpanProps{
+				Style: theme.StatusBarStyle,
+			}, trail.Text(" (enter to submit, esc to cancel)")),
+		))
+	}
+
+	// Trailing blank line before global status bar
+	rows = append(rows, trail.Newline(1))
+
+	return trail.Box(trail.BoxProps{
+		Style: theme.PickerTopBorderStyle.
+			Width(style.Percent(100)).
+			FlexDirection(style.FlexColumn),
+	}, rows...)
+})
