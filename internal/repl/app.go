@@ -9,6 +9,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/client"
 	"github.com/masterkeysrd/tasksmith/internal/repl/command"
 	"github.com/masterkeysrd/tasksmith/internal/repl/ui"
+	uitheme "github.com/masterkeysrd/tasksmith/internal/ui/theme"
 )
 
 // AppProps configures the root REPL trail functional component.
@@ -97,13 +98,15 @@ var App = trail.FC("App", func(props AppProps) trail.Node {
 		Hint:     ctrl.StatusHint(),
 	}))
 
-	return trail.Fragment(
-		ui.Transcript(ui.TranscriptProps{Items: ctrl.Items()}),
-		trail.Box(trail.BoxProps{
-			Style: style.S().
-				Display(style.DisplayFlex).
-				FlexDirection(style.FlexColumn).
-				Width(style.Percent(100)),
-		}, activeNodes...),
+	return uitheme.Provider(uitheme.Props{Transparent: true},
+		trail.Fragment(
+			ui.Transcript(ui.TranscriptProps{Items: ctrl.Items()}),
+			trail.Box(trail.BoxProps{
+				Style: style.S().
+					Display(style.DisplayFlex).
+					FlexDirection(style.FlexColumn).
+					Width(style.Percent(100)),
+			}, activeNodes...),
+		),
 	)
 })

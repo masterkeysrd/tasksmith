@@ -3,16 +3,19 @@ module github.com/masterkeysrd/tasksmith
 go 1.26.4
 
 require (
+	github.com/alecthomas/chroma/v2 v2.27.0
 	github.com/anthropics/anthropic-sdk-go v1.82.0
 	github.com/dustin/go-humanize v1.1.0
 	github.com/google/jsonschema-go v0.4.3
 	github.com/google/uuid v1.6.0
-	github.com/masterkeysrd/kite v0.0.6-0.20261022040605-8ea3da87d4da
+	github.com/lrstanley/go-nf v0.0.0-20260418212552-215ab243b591
+	github.com/masterkeysrd/kite v0.0.6-0.20261022053628-4a0d9aff0b59
 	github.com/masterkeysrd/loom v0.0.8
 	github.com/masterkeysrd/warp v0.0.6
-	github.com/ollama/ollama v0.40.6
+	github.com/ollama/ollama v0.40.8
 	github.com/openai/openai-go/v3 v3.79.0
 	github.com/spf13/cobra v1.10.2
+	github.com/yuin/goldmark v1.8.6
 	google.golang.org/genai v1.75.0
 	modernc.org/sqlite v1.60.1
 	mvdan.cc/sh/v3 v3.14.0
@@ -40,6 +43,7 @@ require (
 	github.com/cloudflare/circl v1.6.5 // indirect
 	github.com/coder/websocket v1.8.15 // indirect
 	github.com/cyphar/filepath-securejoin v0.7.0 // indirect
+	github.com/dlclark/regexp2/v2 v2.2.1 // indirect
 	github.com/emirpasic/gods v1.18.1 // indirect
 	github.com/felixge/httpsnoop v1.1.0 // indirect
 	github.com/go-git/gcfg v1.5.1-0.20230307220236-3a3c6141e376 // indirect

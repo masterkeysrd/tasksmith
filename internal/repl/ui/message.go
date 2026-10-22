@@ -9,6 +9,7 @@ import (
 	"github.com/masterkeysrd/kite/style"
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/repl/theme"
+	"github.com/masterkeysrd/tasksmith/internal/ui/components"
 )
 
 // UserPromptProps defines the properties for a user prompt scrollback item.
@@ -187,13 +188,9 @@ var Message = trail.FC("Message", func(props MessageProps) trail.Node {
 		}
 
 		if t := text.String(); t != "" {
-			rows = append(rows, trail.Box(trail.BoxProps{
-				Style: style.S().FlexDirection(style.FlexRow),
-			},
-				trail.Span(trail.SpanProps{
-					Style: theme.AssistantMsgStyle,
-				}, trail.Text(t)),
-			))
+			rows = append(rows, components.Markdown(components.MarkdownProps{
+				Source: t,
+			}))
 		}
 
 		if len(rows) == 0 {
