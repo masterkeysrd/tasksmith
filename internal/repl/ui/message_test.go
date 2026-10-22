@@ -67,9 +67,9 @@ func TestReasoningStates(t *testing.T) {
 
 func TestToolCategoryAndArgExtraction(t *testing.T) {
 	tests := []struct {
-		call     api.ToolCall
-		wantCat  string
-		wantArg  string
+		call    api.ToolCall
+		wantCat string
+		wantArg string
 	}{
 		{
 			call:    api.ToolCall{Name: "bash", Args: map[string]any{"command": "git status"}},
@@ -424,4 +424,3 @@ func TestRenderHistoryMessagesCoalescing(t *testing.T) {
 		t.Errorf("expected raw tool output to be suppressed in history, got:\n%s", out)
 	}
 }
-

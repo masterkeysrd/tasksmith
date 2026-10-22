@@ -9,10 +9,14 @@ import (
 
 	"github.com/masterkeysrd/kite/extras/kitex"
 	"github.com/masterkeysrd/kite/extras/trail"
+	"github.com/masterkeysrd/kite/extras/wind"
+	"github.com/masterkeysrd/kite/promise"
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/client"
 	"github.com/masterkeysrd/tasksmith/internal/repl/command"
 	"github.com/masterkeysrd/tasksmith/internal/repl/ui"
+	"github.com/masterkeysrd/tasksmith/internal/ui/components"
+	uihooks "github.com/masterkeysrd/tasksmith/internal/ui/hooks"
 )
 
 func nextPermissionMode(current api.PermissionMode) api.PermissionMode {
@@ -416,21 +420,19 @@ func usePermissionQueue(
 
 // REPLController aggregates all REPL state, command execution, and session management.
 type REPLController struct {
-	Items           func() []trail.Node
-	Mode            func() api.PermissionMode
-	ModelLabel      func() string
-	Thinking        func() string
-	StatusHint      func() string
-	ActivePicker    func() ui.PickerProps
-	IsPickerOpen    func() bool
-	State           func() ui.State
-	Stream          StreamState
-	Perms           PermissionQueue
-	Submit          func(text string)
-	CycleMode       func()
-	Cancel          func()
-	SuggestCommands func(prefix string) []ui.Suggestion
-	SuggestArgs     func(rawLine string) ([]ui.Option, bool)
+	Items        func() []trail.Node
+	Mode         func() api.PermissionMode
+	ModelLabel   func() string
+	Thinking     func() string
+	StatusHint   func() string
+	ActivePicker func() ui.PickerProps
+	IsPickerOpen func() bool
+	State        func() ui.State
+	Stream       StreamState
+	Perms        PermissionQueue
+	Submit       func(text string)
+	CycleMode    func()
+	Cancel       func()
 }
 
 // useREPLController coordinates reactive hooks, slash command execution, and session switching.
@@ -439,16 +441,95 @@ func useREPLController(props AppProps, app trail.AppHandle) REPLController {
 
 	items, setItems := kitex.UseState([]trail.Node(nil))
 	session, setSession := kitex.UseState(props.InitialSess)
+	sessionVersion := kitex.UseRef(0)
+	selectSession := func(sess *api.Session) {
+		sessionVersion.Current++
+		setSession(sess)
+	}
 	mode, setMode := kitex.UseState(cmp.Or(props.InitialMode, api.ModeDefault))
 	modelLabel, setModelLabel := kitex.UseState(props.InitialModelLabel)
 	thinking, setThinking := kitex.UseState(props.InitialThinking)
 	statusHint, setStatusHint := kitex.UseState("")
 	pickerProps, setPickerProps := kitex.UseState(ui.PickerProps{})
 	isPickerOpen, setIsPickerOpen := kitex.UseState(false)
+	isSessionPickerOpen, setIsSessionPickerOpen := kitex.UseState(false)
+	sessionMutationPending := kitex.UseRef(false)
+
+	sessions := uihooks.UseSessions(wind.Options{Enabled: isSessionPickerOpen()})
 
 	appendItem := func(n trail.Node) {
 		setItems(append(items(), n))
 	}
+
+	renameSession := uihooks.UseRenameSession(wind.MutationOptions[uihooks.RenameSessionInput, *api.Session]{
+		OnSuccess: func(updated *api.Session, input uihooks.RenameSessionInput, _ wind.MutationContext) {
+			sessionMutationPending.Current = false
+			setStatusHint("")
+			if active := session(); active != nil && active.ID == input.SessionID {
+				selectSession(updated)
+			}
+		},
+		OnError: func(err error, _ uihooks.RenameSessionInput, _ wind.MutationContext) {
+			sessionMutationPending.Current = false
+			setStatusHint("")
+			appendItem(ui.ErrorMessage(ui.ErrorMessageProps{Text: err.Error()}))
+		},
+	})
+	type modelAndThinking struct {
+		model    string
+		thinking string
+	}
+	resolveDefaults := promise.Wrap(func(ctx context.Context) (modelAndThinking, error) {
+		model, thinking := resolveModelAndThinking(ctx, props.Client, props.Agent, props.Model, nil)
+		return modelAndThinking{model: model, thinking: thinking}, nil
+	})
+	deleteSession := uihooks.UseDeleteSession(wind.MutationOptions[string, struct{}]{
+		OnSuccess: func(_ struct{}, sessionID string, _ wind.MutationContext) {
+			sessionMutationPending.Current = false
+			setStatusHint("")
+			if active := session(); active == nil || active.ID != sessionID {
+				return
+			}
+			selectSession(nil)
+			version := sessionVersion.Current
+			resolveDefaults(ctx).Then(func(defaults modelAndThinking) {
+				if ctx.Err() != nil {
+					return
+				}
+				if sessionVersion.Current == version {
+					setModelLabel(defaults.model)
+					setThinking(defaults.thinking)
+				}
+			}, func(err error) {
+				if ctx.Err() == nil {
+					appendItem(ui.ErrorMessage(ui.ErrorMessageProps{Text: err.Error()}))
+				}
+			})
+		},
+		OnError: func(err error, _ string, _ wind.MutationContext) {
+			sessionMutationPending.Current = false
+			setStatusHint("")
+			appendItem(ui.ErrorMessage(ui.ErrorMessageProps{Text: err.Error()}))
+		},
+	})
+
+	kitex.UseEffect(func() {
+		if !isSessionPickerOpen() || sessions.IsLoading || sessions.IsFetching {
+			return
+		}
+		if sessions.IsError {
+			appendItem(ui.ErrorMessage(ui.ErrorMessageProps{Text: sessions.Error.Error()}))
+		} else if len(sessions.Data) == 0 {
+			appendItem(ui.CommandOutput(ui.CommandOutputProps{
+				Command: "/sessions",
+				Output:  "No sessions found.",
+			}))
+		} else {
+			return
+		}
+		setIsSessionPickerOpen(false)
+		setIsPickerOpen(false)
+	}, []any{isSessionPickerOpen(), sessions.IsLoading, sessions.IsFetching, sessions.IsError, sessions.Error, sessions.Data})
 
 	var stream StreamState
 	var perms PermissionQueue
@@ -512,8 +593,9 @@ func useREPLController(props AppProps, app trail.AppHandle) REPLController {
 			setStatusHint("")
 		}
 		origSelect := p.OnSelect
-		p.OnSelect = func(opt ui.Option) {
+		p.OnSelect = func(opt components.Option) {
 			setIsPickerOpen(false)
+			setIsSessionPickerOpen(false)
 			if origSelect != nil {
 				origSelect(opt)
 			}
@@ -521,6 +603,7 @@ func useREPLController(props AppProps, app trail.AppHandle) REPLController {
 		origCancel := p.OnCancel
 		p.OnCancel = func() {
 			setIsPickerOpen(false)
+			setIsSessionPickerOpen(false)
 			if origCancel != nil {
 				origCancel()
 			}
@@ -528,31 +611,16 @@ func useREPLController(props AppProps, app trail.AppHandle) REPLController {
 		return p
 	}
 
-	var refreshSessionPicker func(activeSess *api.Session)
 	var makeEnv func() command.Env
 
-	refreshSessionPicker = func(activeSess *api.Session) {
-		if props.Client == nil {
-			return
+	beginSessionMutation := func() bool {
+		if sessionMutationPending.Current {
+			setStatusHint("A session update is already in progress.")
+			return false
 		}
-		sessions, err := props.Client.ListSessions(ctx)
-		kitex.PostMacro(func() {
-			if err != nil {
-				appendItem(ui.ErrorMessage(ui.ErrorMessageProps{Text: err.Error()}))
-				return
-			}
-			if len(sessions) == 0 {
-				setIsPickerOpen(false)
-				return
-			}
-			var activeID string
-			if activeSess != nil {
-				activeID = activeSess.ID
-			}
-			p := bindPickerCallbacks(command.NewSessionPicker(makeEnv(), sessions, activeID))
-			setPickerProps(p)
-			setIsPickerOpen(true)
-		})
+		sessionMutationPending.Current = true
+		setStatusHint("")
+		return true
 	}
 
 	makeEnv = func() command.Env {
@@ -563,6 +631,7 @@ func useREPLController(props AppProps, app trail.AppHandle) REPLController {
 			DefaultModel: props.Model,
 			AppendNode:   appendItem,
 			OpenPicker: func(p ui.PickerProps) {
+				setIsSessionPickerOpen(false)
 				setPickerProps(bindPickerCallbacks(p))
 				setIsPickerOpen(true)
 			},
@@ -576,7 +645,7 @@ func useREPLController(props AppProps, app trail.AppHandle) REPLController {
 			NewSession: func(model string) {
 				targetModel := cmp.Or(strings.TrimSpace(model), props.Model)
 				mdlLabel, think := resolveModelAndThinking(ctx, props.Client, props.Agent, targetModel, nil)
-				setSession(nil)
+				selectSession(nil)
 				setModelLabel(mdlLabel)
 				setThinking(think)
 				setMode(api.ModeDefault)
@@ -601,7 +670,7 @@ func useREPLController(props AppProps, app trail.AppHandle) REPLController {
 						m, _ := props.Client.PermissionMode(ctx, switchedSess.ID)
 						mdlLabel, think := resolveModelAndThinking(ctx, props.Client, props.Agent, props.Model, switchedSess)
 						kitex.PostMacro(func() {
-							setSession(switchedSess)
+							selectSession(switchedSess)
 							setModelLabel(mdlLabel)
 							setThinking(think)
 							if m != "" {
@@ -613,66 +682,26 @@ func useREPLController(props AppProps, app trail.AppHandle) REPLController {
 								Thinking: think,
 								Path:     props.Workspace,
 							}))
-							for _, node := range ui.RenderHistoryMessages(hist) {
-								newItems = append(newItems, node)
-							}
+							newItems = append(newItems, ui.RenderHistoryMessages(hist)...)
 							setItems(newItems)
 						})
 					}()
 				}
 			},
 			RenameSession: func(sessionID, title string) {
-				if props.Client != nil {
-					go func() {
-						updated, err := props.Client.UpdateSession(ctx, sessionID, api.UpdateSessionRequest{
-							Title: title,
-						})
-						if err != nil {
-							kitex.PostMacro(func() {
-								appendItem(ui.ErrorMessage(ui.ErrorMessageProps{Text: err.Error()}))
-							})
-							return
-						}
-						activeSess := session()
-						if activeSess != nil && activeSess.ID == sessionID && updated != nil {
-							activeSess = updated
-							kitex.PostMacro(func() {
-								setSession(updated)
-							})
-						}
-						refreshSessionPicker(activeSess)
-					}()
+				if beginSessionMutation() {
+					renameSession.Mutate(uihooks.RenameSessionInput{SessionID: sessionID, Title: title})
 				}
 			},
 			DeleteSession: func(sessionID string) {
-				if props.Client != nil {
-					go func() {
-						err := props.Client.DeleteSession(ctx, sessionID)
-						if err != nil {
-							kitex.PostMacro(func() {
-								appendItem(ui.ErrorMessage(ui.ErrorMessageProps{Text: err.Error()}))
-							})
-							return
-						}
-						activeSess := session()
-						if activeSess != nil && activeSess.ID == sessionID {
-							activeSess = nil
-							mdlLabel, think := resolveModelAndThinking(ctx, props.Client, props.Agent, props.Model, nil)
-							kitex.PostMacro(func() {
-								setSession(nil)
-								setModelLabel(mdlLabel)
-								setThinking(think)
-							})
-						}
-						refreshSessionPicker(activeSess)
-					}()
+				if beginSessionMutation() {
+					deleteSession.Mutate(sessionID)
 				}
 			},
-			ListSessions: func() ([]api.Session, error) {
-				if props.Client == nil {
-					return nil, nil
-				}
-				return props.Client.ListSessions(ctx)
+			BrowseSessions: func() {
+				sessions.Refetch()
+				setIsSessionPickerOpen(true)
+				setIsPickerOpen(true)
 			},
 			ListChanges: func() {
 				sess := session()
@@ -763,6 +792,25 @@ func useREPLController(props AppProps, app trail.AppHandle) REPLController {
 		}
 	}
 
+	activePicker := func() ui.PickerProps {
+		if !isSessionPickerOpen() {
+			return pickerProps()
+		}
+		var activeID string
+		if active := session(); active != nil {
+			activeID = active.ID
+		}
+		p := bindPickerCallbacks(command.NewSessionPicker(makeEnv(), sessions.Data, activeID))
+		if sessions.IsLoading || sessions.IsFetching {
+			p.Footer = "Loading sessions..."
+		} else if renameSession.IsPending {
+			p.Footer = "Renaming session..."
+		} else if deleteSession.IsPending {
+			p.Footer = "Deleting session..."
+		}
+		return p
+	}
+
 	submit := func(text string) {
 		if strings.HasPrefix(text, "/") {
 			reg := props.Registry
@@ -800,7 +848,7 @@ func useREPLController(props AppProps, app trail.AppHandle) REPLController {
 					return
 				}
 				kitex.PostMacro(func() {
-					setSession(newSess)
+					selectSession(newSess)
 				})
 				sendErr := props.Client.Send(ctx, newSess.ID, api.SendRequest{Content: text})
 				if sendErr != nil {
@@ -842,31 +890,6 @@ func useREPLController(props AppProps, app trail.AppHandle) REPLController {
 		}
 	}
 
-	suggestCommands := func(prefix string) []ui.Suggestion {
-		reg := props.Registry
-		if reg == nil {
-			reg = command.NewRegistry()
-		}
-		cmds := reg.Suggest(prefix)
-		var res []ui.Suggestion
-		for _, c := range cmds {
-			res = append(res, ui.Suggestion{
-				Usage:       c.Usage,
-				Description: c.Description,
-			})
-		}
-		return res
-	}
-
-	suggestArgs := func(rawLine string) ([]ui.Option, bool) {
-		reg := props.Registry
-		if reg == nil {
-			reg = command.NewRegistry()
-		}
-		_, opts, ok := reg.SuggestArgs(makeEnv(), rawLine)
-		return opts, ok
-	}
-
 	computedState := func() ui.State {
 		if isPickerOpen() {
 			return ui.StatePicker
@@ -881,20 +904,18 @@ func useREPLController(props AppProps, app trail.AppHandle) REPLController {
 	}
 
 	return REPLController{
-		Items:           items,
-		Mode:            mode,
-		ModelLabel:      modelLabel,
-		Thinking:        thinking,
-		StatusHint:      statusHint,
-		ActivePicker:    pickerProps,
-		IsPickerOpen:    isPickerOpen,
-		State:           computedState,
-		Stream:          stream,
-		Perms:           perms,
-		Submit:          submit,
-		CycleMode:       cycleMode,
-		Cancel:          cancel,
-		SuggestCommands: suggestCommands,
-		SuggestArgs:     suggestArgs,
+		Items:        items,
+		Mode:         mode,
+		ModelLabel:   modelLabel,
+		Thinking:     thinking,
+		StatusHint:   statusHint,
+		ActivePicker: activePicker,
+		IsPickerOpen: isPickerOpen,
+		State:        computedState,
+		Stream:       stream,
+		Perms:        perms,
+		Submit:       submit,
+		CycleMode:    cycleMode,
+		Cancel:       cancel,
 	}
 }

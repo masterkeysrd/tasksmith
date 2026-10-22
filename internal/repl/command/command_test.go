@@ -184,46 +184,42 @@ func TestBuiltinCommandsExecution(t *testing.T) {
 	}
 
 	// 3. /sessions
-	// 3a. /sessions when ListSessions is nil
+	// 3a. /sessions when browsing is unavailable
 	reset()
 	if err := reg.Execute(env, "/sessions"); err != nil || len(appendedNodes) != 1 {
-		t.Errorf("/sessions (nil ListSessions) failed: appended=%d, err=%v", len(appendedNodes), err)
+		t.Errorf("/sessions (nil BrowseSessions) failed: appended=%d, err=%v", len(appendedNodes), err)
 	}
 
-	// 3b. /sessions when ListSessions returns empty
-	envEmpty := env
-	envEmpty.ListSessions = func() ([]api.Session, error) {
-		return nil, nil
-	}
-	reset()
-	if err := reg.Execute(envEmpty, "/sessions"); err != nil || len(appendedNodes) != 1 {
-		t.Errorf("/sessions (empty) failed: appended=%d, err=%v", len(appendedNodes), err)
-	}
-
-	// 3c. /sessions when ListSessions returns sessions -> OpenPicker
-	now := time.Now().UTC()
+	// 3b. /sessions delegates loading to the controller
+	browseCalls := 0
 	envWithSessions := env
-	envWithSessions.Session = &api.Session{ID: "s1"}
-	envWithSessions.ListSessions = func() ([]api.Session, error) {
-		return []api.Session{
-			{
-				ID:        "s1",
-				Title:     "Session One",
-				Model:     "claude-sonnet-4-6",
-				UpdatedAt: now,
-			},
-			{
-				ID:        "s2",
-				Title:     "Session Two",
-				Model:     "claude-opus-4-6",
-				UpdatedAt: now,
-			},
-		}, nil
+	envWithSessions.BrowseSessions = func() {
+		browseCalls++
 	}
 	reset()
-	if err := reg.Execute(envWithSessions, "/sessions"); err != nil || openedPicker == nil {
-		t.Fatalf("/sessions failed: opened=%v, err=%v", openedPicker != nil, err)
+	if err := reg.Execute(envWithSessions, "/sessions"); err != nil || browseCalls != 1 || openedPicker != nil || len(appendedNodes) != 0 {
+		t.Errorf("/sessions failed: browseCalls=%d, opened=%v, appended=%d, err=%v", browseCalls, openedPicker != nil, len(appendedNodes), err)
 	}
+
+	// 3c. The session picker consumes data supplied by the controller
+	now := time.Now().UTC()
+	sessions := []api.Session{
+		{
+			ID:        "s1",
+			Title:     "Session One",
+			Model:     "claude-sonnet-4-6",
+			UpdatedAt: now,
+		},
+		{
+			ID:        "s2",
+			Title:     "Session Two",
+			Model:     "claude-opus-4-6",
+			UpdatedAt: now,
+		},
+	}
+	reset()
+	picker := NewSessionPicker(envWithSessions, sessions, "s1")
+	openedPicker = &picker
 	if len(openedPicker.Options) != 2 {
 		t.Fatalf("expected 2 picker options, got %d", len(openedPicker.Options))
 	}
@@ -253,7 +249,8 @@ func TestBuiltinCommandsExecution(t *testing.T) {
 		t.Fatalf("expected 1 appended node after sessions cancel, got %d", len(appendedNodes))
 	}
 	reset()
-	_ = reg.Execute(envWithSessions, "/sessions")
+	picker = NewSessionPicker(envWithSessions, sessions, "s1")
+	openedPicker = &picker
 	openedPicker.OnSelect(openedPicker.Options[0])
 	if switchSessionID != "s1" {
 		t.Errorf("picker OnSelect() = %q, want 's1'", switchSessionID)
@@ -286,8 +283,8 @@ func TestBuiltinCommandsExecution(t *testing.T) {
 		t.Errorf("/session s1 failed: switchID=%q, err=%v", switchSessionID, err)
 	}
 	reset()
-	if err := reg.Execute(envWithSessions, "/ls"); err != nil || openedPicker == nil {
-		t.Errorf("/ls failed: opened=%v, err=%v", openedPicker != nil, err)
+	if err := reg.Execute(envWithSessions, "/ls"); err != nil || browseCalls != 2 {
+		t.Errorf("/ls failed: browseCalls=%d, err=%v", browseCalls, err)
 	}
 	if _, ok := reg.Lookup("switch"); ok {
 		t.Errorf("/switch should not exist in registry")

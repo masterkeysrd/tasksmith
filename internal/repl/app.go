@@ -3,12 +3,16 @@ package repl
 import (
 	"strings"
 
+	"github.com/masterkeysrd/kite/extras/kitex"
 	"github.com/masterkeysrd/kite/extras/trail"
+	"github.com/masterkeysrd/kite/extras/wind"
 	"github.com/masterkeysrd/kite/style"
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/client"
 	"github.com/masterkeysrd/tasksmith/internal/repl/command"
 	"github.com/masterkeysrd/tasksmith/internal/repl/ui"
+	"github.com/masterkeysrd/tasksmith/internal/ui/autocomplete"
+	uiclient "github.com/masterkeysrd/tasksmith/internal/ui/client"
 	uitheme "github.com/masterkeysrd/tasksmith/internal/ui/theme"
 )
 
@@ -30,6 +34,32 @@ type AppProps struct {
 
 // App is the root trail functional component for the TaskSmith REPL.
 var App = trail.FC("App", func(props AppProps) trail.Node {
+	queryClient := kitex.UseMemo(wind.NewClient, []any{})
+	return uiclient.Provider(uiclient.Props{Client: props.Client},
+		wind.Provider(wind.ProviderProps{Client: queryClient}, replView(props)),
+	)
+})
+
+var replView = trail.FC("REPL", func(props AppProps) trail.Node {
+	props.Registry = kitex.UseMemo(func() *command.Registry {
+		if props.Registry != nil {
+			return props.Registry
+		}
+		return command.NewRegistry()
+	}, []any{props.Registry})
+	type completionSetup struct {
+		engine *autocomplete.Engine
+		err    error
+	}
+	completions := kitex.UseMemo(func() completionSetup {
+		engine := autocomplete.New()
+		for _, source := range props.Registry.Sources() {
+			if err := engine.Register(source); err != nil {
+				return completionSetup{err: err}
+			}
+		}
+		return completionSetup{engine: engine}
+	}, []any{props.Registry})
 	app := trail.UseApp()
 	ctrl := useREPLController(props, app)
 
@@ -103,13 +133,13 @@ var App = trail.FC("App", func(props AppProps) trail.Node {
 
 	// Composer (visible in idle and streaming so user can draft next prompt)
 	if state != ui.StatePicker && state != ui.StateApproval {
+		if completions.err != nil {
+			activeNodes = append(activeNodes, ui.ErrorMessage(ui.ErrorMessageProps{Text: completions.err.Error()}))
+		}
 		activeNodes = append(activeNodes, ui.Composer(ui.ComposerProps{
-			Disabled:    false,
-			Suggest:     ctrl.SuggestCommands,
-			SuggestArgs: ctrl.SuggestArgs,
-			OnSubmit:    ctrl.Submit,
-			OnCycleMode: ctrl.CycleMode,
-			OnCancel:    ctrl.Cancel,
+			Autocomplete:    completions.engine,
+			CompletionViews: command.CompletionViews(ctrl.Mode()),
+			OnSubmit:        ctrl.Submit, OnCycleMode: ctrl.CycleMode, OnCancel: ctrl.Cancel,
 		}))
 	}
 

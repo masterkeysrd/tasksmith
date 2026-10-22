@@ -432,31 +432,6 @@ func insertedAboveText(b *mock.Backend) string {
 	return sb.String()
 }
 
-func surfaceText(b *mock.Backend) string {
-	frame := b.LastFrame().Surface
-	if frame == nil {
-		return ""
-	}
-	var sb strings.Builder
-	for y := 0; y < frame.Height; y++ {
-		var line strings.Builder
-		for x := 0; x < frame.Width; x++ {
-			c := frame.CellAt(x, y)
-			if c.Content != "" {
-				line.WriteString(c.Content)
-			} else {
-				line.WriteByte(' ')
-			}
-		}
-		trimmed := strings.TrimRight(line.String(), " ")
-		if trimmed != "" {
-			sb.WriteString(trimmed)
-			sb.WriteString("\n")
-		}
-	}
-	return sb.String()
-}
-
 func TestConfigValidate(t *testing.T) {
 	c, _ := startTestUnixDaemon(t)
 
@@ -500,9 +475,15 @@ func feedMockCommands(b *mock.Backend, lines ...string) {
 				})
 				time.Sleep(2 * time.Millisecond)
 			}
+			// These tests submit complete commands rather than accepting suggestions.
+			time.Sleep(25 * time.Millisecond)
+			b.PostEvent(&backend.RawKeyEvent{Key: key.Key{Code: key.KeyEscape}})
+			time.Sleep(25 * time.Millisecond)
 			b.PostEvent(&backend.RawKeyEvent{
 				Key: key.Key{Code: key.KeyEnter},
 			})
+			time.Sleep(50 * time.Millisecond)
+			b.PostEvent(&backend.RawKeyEvent{Key: key.Key{Code: key.KeyEscape}})
 			time.Sleep(50 * time.Millisecond)
 		}
 	}()
@@ -524,7 +505,9 @@ func TestLazySessionCreationNoPrompts(t *testing.T) {
 		"/exit",
 	)
 
-	err := Run(context.Background(), Config{
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	err := Run(ctx, Config{
 		Client:    c,
 		Workspace: "/tmp/ws",
 		Agent:     "build",
@@ -546,7 +529,8 @@ func TestLazySessionCreationNoPrompts(t *testing.T) {
 
 func TestRunResumeSessionWithMutation(t *testing.T) {
 	c, st := startTestUnixDaemon(t)
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
 
 	b := mock.New(80, 24)
 	feedMockCommands(b, "/exit")
@@ -679,6 +663,9 @@ func TestAppFunctionalComponentLifecycle(t *testing.T) {
 		b.PostEvent(&backend.RawKeyEvent{Key: key.Key{Code: ch, Text: string(ch)}})
 		time.Sleep(2 * time.Millisecond)
 	}
+	time.Sleep(25 * time.Millisecond)
+	b.PostEvent(&backend.RawKeyEvent{Key: key.Key{Code: key.KeyEscape}})
+	time.Sleep(25 * time.Millisecond)
 	b.PostEvent(&backend.RawKeyEvent{Key: key.Key{Code: key.KeyEnter}})
 
 	select {
@@ -689,6 +676,7 @@ func TestAppFunctionalComponentLifecycle(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		inst.Exit(nil)
 		<-runDone
+		t.Error("timed out submitting /exit")
 	}
 
 	// Now that inst.Run has exited, safely verify output
@@ -846,4 +834,3 @@ func TestLiveToolCallStreamingAndReasoningDuration(t *testing.T) {
 		t.Errorf("expected indented error indicator in transcript, got:\n%s", above)
 	}
 }
-

@@ -11,6 +11,7 @@ import (
 	"github.com/masterkeysrd/kite/extras/trail"
 	"github.com/masterkeysrd/kite/style"
 	"github.com/masterkeysrd/tasksmith/internal/repl/theme"
+	"github.com/masterkeysrd/tasksmith/internal/ui/components"
 )
 
 // DefaultPickerFooter is the default navigation hint displayed at the bottom of a picker.
@@ -18,15 +19,15 @@ const DefaultPickerFooter = "↑/↓ or j/k to select • enter to confirm • e
 
 // ConfirmAction defines an inline confirmation prompt triggered by a custom key.
 type ConfirmAction struct {
-	Prompt    func(opt Option) string
-	OnConfirm func(opt Option)
+	Prompt    func(opt components.Option) string
+	OnConfirm func(opt components.Option)
 }
 
 // InputAction defines an inline text input prompt triggered by a custom key.
 type InputAction struct {
 	Prompt       string
-	InitialValue func(opt Option) string
-	OnSubmit     func(opt Option, value string)
+	InitialValue func(opt components.Option) string
+	OnSubmit     func(opt components.Option, value string)
 }
 
 type pickerMode int
@@ -39,7 +40,7 @@ const (
 
 type pickerModalState struct {
 	mode          pickerMode
-	targetOpt     Option
+	targetOpt     components.Option
 	activeConfirm ConfirmAction
 	activeInput   InputAction
 	inputVal      string
@@ -48,21 +49,21 @@ type pickerModalState struct {
 // PickerProps defines the properties for the interactive Picker component.
 type PickerProps struct {
 	Title          string
-	Options        []Option
-	MaxVisible     int      // Max visible options before scrolling (defaults to DefaultPickerMaxVisible)
-	Columns        []Column // Column specifications forwarded to OptionList
-	Footer         string   // Optional navigation hint displayed in the picker footer
+	Options        []components.Option
+	MaxVisible     int                 // Max visible options before scrolling (defaults to components.DefaultPickerMaxVisible)
+	Columns        []components.Column // Column specifications forwarded to components.OptionList
+	Footer         string              // Optional navigation hint displayed in the picker footer
 	Filterable     bool
 	OnOpen         func()
-	OnSelect       func(opt Option)
-	Keys           map[string]func(opt Option)
+	OnSelect       func(opt components.Option)
+	Keys           map[string]func(opt components.Option)
 	ConfirmActions map[string]ConfirmAction
 	InputActions   map[string]InputAction
 	OnCancel       func()
 }
 
 // NewPicker constructs an initialized PickerProps with default footer and cursor at current.
-func NewPicker(title string, opts []Option, onSelect func(opt Option)) PickerProps {
+func NewPicker(title string, opts []components.Option, onSelect func(opt components.Option)) PickerProps {
 	return PickerProps{
 		Title:    title,
 		Options:  opts,
@@ -71,7 +72,7 @@ func NewPicker(title string, opts []Option, onSelect func(opt Option)) PickerPro
 	}
 }
 
-func initialCursor(opts []Option) int {
+func initialCursor(opts []components.Option) int {
 	for i, opt := range opts {
 		if opt.Current {
 			return i
@@ -82,12 +83,12 @@ func initialCursor(opts []Option) int {
 
 // filterOptions filters opts against query by checking Label, Description, Value,
 // and Columns case-insensitively. It returns opts directly if query is empty.
-func filterOptions(opts []Option, query string) []Option {
+func filterOptions(opts []components.Option, query string) []components.Option {
 	q := strings.TrimSpace(strings.ToLower(query))
 	if q == "" {
 		return opts
 	}
-	var res []Option
+	var res []components.Option
 	for _, opt := range opts {
 		if strings.Contains(strings.ToLower(opt.Label), q) ||
 			strings.Contains(strings.ToLower(opt.Description), q) ||
@@ -134,7 +135,7 @@ var Picker = trail.FC("Picker", func(props PickerProps) trail.Node {
 		IsActive:  modal().mode == pickerModeInput,
 	})
 
-	filtered := kitex.UseMemo(func() []Option {
+	filtered := kitex.UseMemo(func() []components.Option {
 		return filterOptions(props.Options, filter())
 	}, []any{props.Options, filter()})
 
@@ -301,16 +302,21 @@ var Picker = trail.FC("Picker", func(props PickerProps) trail.Node {
 
 	maxVis := props.MaxVisible
 	if maxVis <= 0 {
-		maxVis = DefaultPickerMaxVisible
+		maxVis = components.DefaultPickerMaxVisible
 	}
 
 	// Options rendering
-	rows = append(rows, OptionList(OptionListProps{
+	rows = append(rows, components.OptionList(components.OptionListProps{
 		Options:    filtered,
 		Selected:   cur,
 		EmptyText:  "  No matching options.",
 		MaxVisible: maxVis,
 		Columns:    props.Columns,
+		Styles: &components.OptionListStyles{
+			Option:      theme.PickerOptionStyle,
+			Selected:    theme.PickerSelectedStyle,
+			Description: theme.StatusBarStyle,
+		},
 	}))
 
 	// Inline prompt mode (confirm or input)

@@ -255,5 +255,3 @@ func TestProviderTransparent(t *testing.T) {
 		t.Errorf("expected BaseFocus %v, got %v", focusColor, captured.Color.Surface.BaseFocus)
 	}
 }
-
-

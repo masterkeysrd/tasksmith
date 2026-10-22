@@ -15,7 +15,6 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/repl/ui"
 )
 
-
 // ErrInvalidConfig is returned when required [Config] fields are missing.
 var ErrInvalidConfig = errors.New("repl: invalid configuration")
 

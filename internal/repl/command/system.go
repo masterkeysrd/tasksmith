@@ -7,6 +7,7 @@ import (
 
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/repl/ui"
+	"github.com/masterkeysrd/tasksmith/internal/ui/components"
 )
 
 func (r *Registry) registerSystemCommands() {
@@ -23,6 +24,7 @@ func (r *Registry) registerSystemCommands() {
 		Description: "Read or update the session permission mode",
 		Handler:     HandleMode,
 		Options:     modeOptions,
+		Complete:    completeModes,
 	})
 	r.Register(Command{
 		Name:        "clear",
@@ -41,7 +43,7 @@ func (r *Registry) registerSystemCommands() {
 
 func (r *Registry) handleHelp(env Env, _ []string) error {
 	cmds := r.List()
-	opts := make([]ui.Option, len(cmds))
+	opts := make([]components.Option, len(cmds))
 	for i, cmd := range cmds {
 		usage := cmd.Usage
 		if len(cmd.Aliases) > 0 {
@@ -51,13 +53,13 @@ func (r *Registry) handleHelp(env Env, _ []string) error {
 			}
 			usage = fmt.Sprintf("%s (%s)", usage, strings.Join(aliases, ", "))
 		}
-		opts[i] = ui.Option{
+		opts[i] = components.Option{
 			Value:       "/" + cmd.Name,
 			Label:       usage,
 			Description: cmd.Description,
 		}
 	}
-	picker := ui.NewPicker("Available commands:", opts, func(opt ui.Option) {
+	picker := ui.NewPicker("Available commands:", opts, func(opt components.Option) {
 		_ = r.Execute(env, opt.Value)
 	})
 	picker.Filterable = true
@@ -79,7 +81,7 @@ func (r *Registry) handleHelp(env Env, _ []string) error {
 func HandleMode(env Env, args []string) error {
 	if len(args) == 0 || strings.TrimSpace(args[0]) == "" {
 		mode := cmp.Or(env.Mode, api.ModeDefault)
-		picker := ui.NewPicker("Select permission mode:", modeOptionsWithActive(mode), func(opt ui.Option) {
+		picker := ui.NewPicker("Select permission mode:", modeOptionsWithActive(mode), func(opt components.Option) {
 			if env.SetMode != nil {
 				env.SetMode(api.PermissionMode(opt.Value))
 			}
@@ -136,11 +138,11 @@ func HandleExit(env Env, _ []string) error {
 	return nil
 }
 
-func modeOptionsWithActive(activeMode api.PermissionMode) []ui.Option {
+func modeOptionsWithActive(activeMode api.PermissionMode) []components.Option {
 	if activeMode == "" {
 		activeMode = api.ModeDefault
 	}
-	return []ui.Option{
+	return []components.Option{
 		{
 			Value:       string(api.ModeDefault),
 			Label:       string(api.ModeDefault),
@@ -174,7 +176,7 @@ func modeOptionsWithActive(activeMode api.PermissionMode) []ui.Option {
 	}
 }
 
-func modeOptions(env Env) []ui.Option {
+func modeOptions(env Env) []components.Option {
 	return modeOptionsWithActive(env.Mode)
 }
 

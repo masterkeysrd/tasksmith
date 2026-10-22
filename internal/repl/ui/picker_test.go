@@ -11,10 +11,11 @@ import (
 	"github.com/masterkeysrd/kite/extras/trail"
 	"github.com/masterkeysrd/kite/key"
 	"github.com/masterkeysrd/kite/style"
+	"github.com/masterkeysrd/tasksmith/internal/ui/components"
 )
 
 func TestFilterOptions(t *testing.T) {
-	opts := []Option{
+	opts := []components.Option{
 		{Value: "v1", Label: "Alpha", Description: "First Greek letter", Cells: []string{"A", "alpha"}},
 		{Value: "v2", Label: "Beta", Description: "Second Greek letter", Cells: []string{"B", "beta"}},
 		{Value: "v3", Label: "Gamma", Description: "Third Greek letter", Cells: []string{"G", "gamma"}},
@@ -60,7 +61,7 @@ func TestFilterOptions(t *testing.T) {
 }
 
 func TestPickerFunctionalComponent(t *testing.T) {
-	opts := []Option{
+	opts := []components.Option{
 		{Value: "opt1", Label: "Option One", Description: "First option", Current: true},
 		{Value: "opt2", Label: "Option Two", Description: "Second option"},
 	}
@@ -77,7 +78,7 @@ func TestPickerFunctionalComponent(t *testing.T) {
 			OnOpen: func() {
 				opened = true
 			},
-			OnSelect: func(opt Option) {
+			OnSelect: func(opt components.Option) {
 				selectedValue = opt.Value
 			},
 			OnCancel: func() {
@@ -124,7 +125,7 @@ func TestPickerFunctionalComponent(t *testing.T) {
 }
 
 func TestPickerAlignmentAndNoLayoutShift(t *testing.T) {
-	opts := []Option{
+	opts := []components.Option{
 		{Value: "default", Label: "default", Description: "Allow safe reads", Current: true},
 		{Value: "accept_edits", Label: "accept_edits", Description: "Allow workspace edits"},
 	}
@@ -208,7 +209,7 @@ func TestPickerAlignmentAndNoLayoutShift(t *testing.T) {
 }
 
 func TestPickerFilterable(t *testing.T) {
-	opts := []Option{
+	opts := []components.Option{
 		{Value: "apple", Label: "Apple", Description: "Red fruit"},
 		{Value: "banana", Label: "Banana", Description: "Yellow fruit"},
 		{Value: "cherry", Label: "Cherry", Description: "Dark red fruit"},
@@ -221,7 +222,7 @@ func TestPickerFilterable(t *testing.T) {
 			Title:      "Select fruit:",
 			Options:    opts,
 			Filterable: true,
-			OnSelect: func(opt Option) {
+			OnSelect: func(opt components.Option) {
 				selected = opt.Value
 			},
 		})
@@ -291,7 +292,7 @@ func TestPickerFilterable(t *testing.T) {
 }
 
 func TestPickerColumnsMultiColumn(t *testing.T) {
-	opts := []Option{
+	opts := []components.Option{
 		{
 			Value:   "s1",
 			Cells:   []string{"sess-001", "main-workspace", "2m ago"},
@@ -332,15 +333,15 @@ func TestPickerColumnsMultiColumn(t *testing.T) {
 }
 
 func TestPickerFixedColumnWidths(t *testing.T) {
-	opts := []Option{
+	opts := []components.Option{
 		{
 			Value:   "s1",
 			Cells:   []string{"Short", "gpt-4", "1m ago"},
 			Current: true,
 		},
 		{
-			Value:   "s2",
-			Cells:   []string{"Much Longer Session Title Here", "claude-sonnet-4-6", "3h ago"},
+			Value: "s2",
+			Cells: []string{"Much Longer Session Title Here", "claude-sonnet-4-6", "3h ago"},
 		},
 	}
 
@@ -349,7 +350,7 @@ func TestPickerFixedColumnWidths(t *testing.T) {
 		return Picker(PickerProps{
 			Title:   "Sessions",
 			Options: opts,
-			Columns: []Column{
+			Columns: []components.Column{
 				{Width: 0},
 				{Width: 24, Align: style.TextAlignLeft},
 				{Width: 26, Align: style.TextAlignRight},
@@ -442,7 +443,7 @@ func TestPickerFixedColumnWidths(t *testing.T) {
 }
 
 func TestPickerConfirmActions(t *testing.T) {
-	opts := []Option{
+	opts := []components.Option{
 		{Value: "s1", Label: "Session One"},
 		{Value: "s2", Label: "Session Two"},
 	}
@@ -455,10 +456,10 @@ func TestPickerConfirmActions(t *testing.T) {
 			Options: opts,
 			ConfirmActions: map[string]ConfirmAction{
 				"f4": {
-					Prompt: func(opt Option) string {
+					Prompt: func(opt components.Option) string {
 						return fmt.Sprintf("Delete %q?", opt.Label)
 					},
-					OnConfirm: func(opt Option) {
+					OnConfirm: func(opt components.Option) {
 						confirmedValue = opt.Value
 					},
 				},
@@ -514,7 +515,7 @@ func TestPickerConfirmActions(t *testing.T) {
 }
 
 func TestPickerInputActions(t *testing.T) {
-	opts := []Option{
+	opts := []components.Option{
 		{Value: "s1", Label: "Initial Session Name"},
 	}
 
@@ -527,10 +528,10 @@ func TestPickerInputActions(t *testing.T) {
 			InputActions: map[string]InputAction{
 				"f2": {
 					Prompt: "Rename session:",
-					InitialValue: func(opt Option) string {
+					InitialValue: func(opt components.Option) string {
 						return opt.Label
 					},
-					OnSubmit: func(opt Option, val string) {
+					OnSubmit: func(opt components.Option, val string) {
 						submittedValue = val
 					},
 				},
@@ -583,7 +584,7 @@ func TestPickerInputActions(t *testing.T) {
 }
 
 func TestPickerCustomKeys(t *testing.T) {
-	opts := []Option{
+	opts := []components.Option{
 		{Value: "opt1", Label: "Option One"},
 		{Value: "opt2", Label: "Option Two"},
 	}
@@ -594,8 +595,8 @@ func TestPickerCustomKeys(t *testing.T) {
 		return Picker(PickerProps{
 			Title:   "Select:",
 			Options: opts,
-			Keys: map[string]func(opt Option){
-				"d": func(opt Option) {
+			Keys: map[string]func(opt components.Option){
+				"d": func(opt components.Option) {
 					customInvoked = opt.Value
 				},
 			},
@@ -619,18 +620,18 @@ func TestPickerCustomKeys(t *testing.T) {
 }
 
 func TestPickerCursorReconciliation(t *testing.T) {
-	var currentOpts = []Option{
+	var currentOpts = []components.Option{
 		{Value: "o1", Label: "Option 1"},
 		{Value: "o2", Label: "Option 2"},
 		{Value: "o3", Label: "Option 3"},
 	}
 
 	b := mock.New(80, 24)
-	var rerender func(opts []Option)
+	var rerender func(opts []components.Option)
 
 	parent := trail.SimpleFC("ParentApp", func() kitex.Node {
 		optsState, setOpts := kitex.UseState(currentOpts)
-		rerender = func(next []Option) {
+		rerender = func(next []components.Option) {
 			setOpts(next)
 		}
 		return Picker(PickerProps{
@@ -657,7 +658,7 @@ func TestPickerCursorReconciliation(t *testing.T) {
 	}
 
 	// Shrink options list to 1 option
-	rerender([]Option{{Value: "o1", Label: "Option 1"}})
+	rerender([]components.Option{{Value: "o1", Label: "Option 1"}})
 	inst.Frame()
 
 	outShrunk := surfaceText(b)

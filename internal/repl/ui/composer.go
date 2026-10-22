@@ -10,22 +10,18 @@ import (
 	"github.com/masterkeysrd/kite/extras/trail"
 	"github.com/masterkeysrd/kite/style"
 	"github.com/masterkeysrd/tasksmith/internal/repl/theme"
+	"github.com/masterkeysrd/tasksmith/internal/ui/autocomplete"
+	"github.com/masterkeysrd/tasksmith/internal/ui/components"
 )
-
-// Suggestion describes an autocomplete hint for a slash command.
-type Suggestion struct {
-	Usage       string
-	Description string
-}
 
 // ComposerProps defines the properties for the Composer functional component.
 type ComposerProps struct {
-	Disabled    bool
-	Suggest     func(prefix string) []Suggestion
-	SuggestArgs func(rawLine string) ([]Option, bool)
-	OnSubmit    func(text string)
-	OnCycleMode func()
-	OnCancel    func()
+	Disabled        bool
+	Autocomplete    *autocomplete.Engine
+	CompletionViews map[string]components.AutocompleteView
+	OnSubmit        func(text string)
+	OnCycleMode     func()
+	OnCancel        func()
 }
 
 // PromptHistory holds state and operations for traversing input prompt history.
@@ -98,11 +94,14 @@ func usePromptHistory() PromptHistory {
 }
 
 // Composer is a trail functional component managing multi-line user prompt drafting,
-// command autocomplete, prompt history navigation, and mode cycling.
+// autocomplete, prompt history navigation, and mode cycling. It requires an
+// enclosing wind.Provider.
 var Composer = trail.FC("Composer", func(props ComposerProps) trail.Node {
-	value, setValue := kitex.UseState("")
+	draft, setDraft := kitex.UseState(components.AutocompleteEdit{})
 	history := usePromptHistory()
-	auto := useAutocomplete(value(), props.Suggest, props.SuggestArgs)
+	auto := components.UseAutocomplete(components.AutocompleteOptions{
+		Engine: props.Autocomplete, Value: draft().Value, Cursor: draft().Cursor, Disabled: props.Disabled,
+	})
 
 	inputRef := kitex.UseRef[dom.Element](nil)
 	trail.UseFocus(inputRef, trail.FocusOptions{
@@ -110,11 +109,32 @@ var Composer = trail.FC("Composer", func(props ComposerProps) trail.Node {
 		IsActive:  !props.Disabled,
 	})
 
+	readDraft := func() components.AutocompleteEdit {
+		if input, ok := inputRef.Current.(*element.TextAreaElement); ok {
+			return components.AutocompleteEdit{Value: input.TextContent(), Cursor: input.Buffer().ByteOffset()}
+		}
+		return draft()
+	}
+	syncDraft := func() {
+		if next := readDraft(); next != draft() {
+			setDraft(next)
+		}
+	}
+	replaceDraft := func(next components.AutocompleteEdit) {
+		if input, ok := inputRef.Current.(*element.TextAreaElement); ok {
+			input.SetValue(next.Value)
+			input.SetSelectionRange(next.Cursor, next.Cursor)
+		}
+		setDraft(next)
+	}
 	handleKeyDown := func(e event.Event) {
 		ke, ok := e.(*event.KeyEvent)
-		if !ok {
+		if !ok || props.Disabled {
 			return
 		}
+		kitex.PostMacro(syncDraft)
+		current := readDraft()
+		isCurrent := current.Value == auto.Result.Input && current.Cursor == auto.Result.Cursor
 
 		switch {
 		case ke.MatchString("shift+tab"):
@@ -127,19 +147,26 @@ var Composer = trail.FC("Composer", func(props ComposerProps) trail.Node {
 		case ke.MatchString("esc", "escape"):
 			e.PreventDefault()
 			e.StopPropagation()
+			if auto.Dismiss() {
+				return
+			}
 			if props.OnCancel != nil {
 				props.OnCancel()
 			}
 
 		case ke.MatchString("tab"):
-			if nextVal, ok := auto.Tab(); ok {
+			if isCurrent && auto.IsOpen {
 				e.PreventDefault()
 				e.StopPropagation()
-				setValue(nextVal)
+				if !auto.IsLoading && auto.Error == nil && len(auto.Result.Candidates) > 0 {
+					if edit, err := auto.Accept(); err == nil {
+						replaceDraft(edit)
+					}
+				}
 			}
 
 		case ke.MatchString("up"):
-			if auto.Up() {
+			if isCurrent && auto.Up() {
 				e.PreventDefault()
 				e.StopPropagation()
 				return
@@ -151,12 +178,12 @@ var Composer = trail.FC("Composer", func(props ComposerProps) trail.Node {
 			}
 			e.PreventDefault()
 			e.StopPropagation()
-			if prevVal, ok := history.Up(value()); ok {
-				setValue(prevVal)
+			if prevVal, ok := history.Up(current.Value); ok {
+				replaceDraft(components.AutocompleteEdit{Value: prevVal, Cursor: len(prevVal)})
 			}
 
 		case ke.MatchString("down"):
-			if auto.Down() {
+			if isCurrent && auto.Down() {
 				e.PreventDefault()
 				e.StopPropagation()
 				return
@@ -170,30 +197,34 @@ var Composer = trail.FC("Composer", func(props ComposerProps) trail.Node {
 			e.PreventDefault()
 			e.StopPropagation()
 			if nextVal, ok := history.Down(); ok {
-				setValue(nextVal)
+				replaceDraft(components.AutocompleteEdit{Value: nextVal, Cursor: len(nextVal)})
 			}
 
 		case ke.MatchString("shift+enter", "alt+enter"):
 			e.PreventDefault()
 			e.StopPropagation()
-			if inputRef.Current != nil {
-				setValue(inputRef.Current.TextContent())
+			start, end := current.Cursor, current.Cursor
+			if input, ok := inputRef.Current.(*element.TextAreaElement); ok && input.SelectedText() != "" {
+				start, end = input.SelectionRange()
 			}
+			replaceDraft(components.AutocompleteEdit{
+				Value: current.Value[:start] + "\n" + current.Value[end:], Cursor: start + 1,
+			})
 
 		case ke.MatchString("enter"):
 			e.PreventDefault()
 			e.StopPropagation()
-			if subText, ok := auto.Enter(); ok {
-				setValue("")
-				history.Add(subText)
-				if props.OnSubmit != nil {
-					props.OnSubmit(subText)
+			if isCurrent && auto.IsOpen {
+				if !auto.IsLoading && auto.Error == nil && len(auto.Result.Candidates) > 0 {
+					if edit, err := auto.Accept(); err == nil {
+						replaceDraft(edit)
+					}
 				}
 				return
 			}
 
-			text := strings.TrimSpace(value())
-			setValue("")
+			text := strings.TrimSpace(current.Value)
+			replaceDraft(components.AutocompleteEdit{})
 			if text != "" {
 				history.Add(text)
 				if props.OnSubmit != nil {
@@ -202,6 +233,24 @@ var Composer = trail.FC("Composer", func(props ComposerProps) trail.Node {
 			}
 		}
 	}
+
+	keyHandler := kitex.UseRef[event.Listener](nil)
+	keyHandler.Current = handleKeyDown
+	kitex.UseEffectCleanup(func() func() {
+		if input := inputRef.Current; input != nil {
+			selection := input.AddEventListener(event.EventSelectionChange, func(event.Event) { syncDraft() })
+			keys := input.AddEventListener(event.EventKeyDown, func(e event.Event) { keyHandler.Current(e) }, event.Capture())
+			mouse := input.AddEventListener(event.EventMouseDown, func(event.Event) { kitex.PostMacro(syncDraft) })
+			drag := input.AddEventListener(event.EventDrag, func(event.Event) { kitex.PostMacro(syncDraft) })
+			return func() {
+				selection.Cancel()
+				keys.Cancel()
+				mouse.Cancel()
+				drag.Cancel()
+			}
+		}
+		return nil
+	}, []any{})
 
 	composerBox := trail.Box(trail.BoxProps{
 		Style: theme.ComposerBorderStyle.
@@ -215,7 +264,7 @@ var Composer = trail.FC("Composer", func(props ComposerProps) trail.Node {
 		}, trail.Text(">")),
 		kitex.TextArea(kitex.TextAreaProps{
 			Ref:      inputRef,
-			Value:    value(),
+			Value:    draft().Value,
 			Disabled: props.Disabled,
 			Style: style.S().
 				Flex(1).
@@ -223,12 +272,7 @@ var Composer = trail.FC("Composer", func(props ComposerProps) trail.Node {
 				Height(style.Content).
 				MinHeight(style.Cells(1)).
 				Scrollbar(style.Scrollbar{Y: style.Some(false)}),
-			OnChange: func(e event.Event) {
-				if ie, ok := e.(*event.InputEvent); ok {
-					setValue(ie.Value)
-				}
-			},
-			OnKeyDown: handleKeyDown,
+			OnChange: func(event.Event) { syncDraft() },
 		}),
 	)
 
@@ -239,11 +283,9 @@ var Composer = trail.FC("Composer", func(props ComposerProps) trail.Node {
 			Width(style.Percent(100)),
 	},
 		composerBox,
-		Autocomplete(AutocompleteProps{
-			Value:       value(),
-			Suggest:     props.Suggest,
-			SuggestArgs: props.SuggestArgs,
-			Selected:    auto.Cursor,
+		components.Autocomplete(components.AutocompleteProps{
+			State: auto,
+			Views: props.CompletionViews,
 		}),
 	)
 })

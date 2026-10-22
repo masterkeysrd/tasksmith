@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -14,6 +15,8 @@ import (
 	"github.com/masterkeysrd/kite/key"
 	"github.com/masterkeysrd/kite/style"
 	"github.com/masterkeysrd/tasksmith/api"
+	"github.com/masterkeysrd/tasksmith/internal/ui/autocomplete"
+	"github.com/masterkeysrd/tasksmith/internal/ui/components"
 )
 
 func surfaceText(b *mock.Backend) string {
@@ -353,7 +356,7 @@ func TestOptionListComponent(t *testing.T) {
 
 	// 1. Empty with EmptyText
 	appEmpty := trail.SimpleFC("AppEmpty", func() kitex.Node {
-		return OptionList(OptionListProps{
+		return components.OptionList(components.OptionListProps{
 			Options:   nil,
 			Selected:  -1,
 			EmptyText: "  No matching options.",
@@ -369,8 +372,8 @@ func TestOptionListComponent(t *testing.T) {
 	// 2. Render options with selection and current badge
 	b2 := mock.New(80, 24)
 	appOpts := trail.SimpleFC("AppOpts", func() kitex.Node {
-		return OptionList(OptionListProps{
-			Options: []Option{
+		return components.OptionList(components.OptionListProps{
+			Options: []components.Option{
 				{Value: "opt1", Label: "First", Description: "First desc", Current: true},
 				{Value: "opt2", Label: "Second", Description: "Second desc"},
 			},
@@ -393,23 +396,26 @@ func TestAutocompleteComponent(t *testing.T) {
 
 	app := trail.SimpleFC("AppAuto", func() kitex.Node {
 		return trail.Box(trail.BoxProps{},
-			Autocomplete(AutocompleteProps{
-				Value: "/m",
-				Suggest: func(prefix string) []Suggestion {
-					if prefix == "/m" {
-						return []Suggestion{{Usage: "/mode [name]", Description: "Change mode"}}
-					}
-					return nil
+			components.Autocomplete(components.AutocompleteProps{
+				State: components.AutocompleteState{
+					IsOpen: true,
+					Result: autocomplete.Result{Candidates: []autocomplete.Candidate{
+						{Value: "mode", Label: "/mode [name]", Description: "Change mode"},
+					}},
 				},
 			}),
-			Autocomplete(AutocompleteProps{
-				Value: "/mode ",
-				SuggestArgs: func(rawLine string) ([]Option, bool) {
-					return []Option{
-						{Value: "plan", Label: "plan", Description: "Plan mode", Current: true},
-					}, true
+			components.Autocomplete(components.AutocompleteProps{
+				State: components.AutocompleteState{
+					IsOpen: true,
+					Result: autocomplete.Result{Request: autocomplete.Request{Source: "modes"}},
 				},
-				Selected: 0,
+				Views: map[string]components.AutocompleteView{
+					"modes": func(autocomplete.Result, int) trail.Node {
+						return components.OptionList(components.OptionListProps{
+							Options: []components.Option{{Value: "plan", Label: "plan", Description: "Plan mode", Current: true}},
+						})
+					},
+				},
 			}),
 		)
 	})
@@ -431,13 +437,7 @@ func TestComposerFunctionalComponent(t *testing.T) {
 
 	b := mock.New(80, 24)
 	app := trail.SimpleFC("TestApp", func() kitex.Node {
-		return Composer(ComposerProps{
-			Suggest: func(prefix string) []Suggestion {
-				if prefix == "/h" {
-					return []Suggestion{{Usage: "/help", Description: "Show commands"}}
-				}
-				return nil
-			},
+		return composerForTest(ComposerProps{
 			OnCycleMode: func() {
 				cycleCalled = true
 			},
@@ -537,7 +537,7 @@ func TestApprovalFunctionalComponent(t *testing.T) {
 }
 
 func TestComposerSuggestArgsAndSelection(t *testing.T) {
-	opts := []Option{
+	opts := []components.Option{
 		{Value: "default", Label: "default", Description: "Allow safe reads", Current: true},
 		{Value: "accept_edits", Label: "accept_edits", Description: "Allow safe reads and workspace file edits"},
 		{Value: "plan", Label: "plan", Description: "Read-only mode"},
@@ -546,15 +546,22 @@ func TestComposerSuggestArgsAndSelection(t *testing.T) {
 	}
 
 	var submittedText string
+	engine := composerCompletionEngine(t, autocomplete.Source{
+		Name: "modes", Trigger: "/mode ", StartOnly: true,
+		Complete: func(context.Context, autocomplete.Request) ([]autocomplete.Candidate, error) {
+			candidates := make([]autocomplete.Candidate, len(opts))
+			for i, opt := range opts {
+				candidates[i] = autocomplete.Candidate{
+					Value: opt.Value, Label: opt.Label, Description: opt.Description,
+				}
+			}
+			return candidates, nil
+		},
+	})
 	b := mock.New(80, 24)
 	app := trail.SimpleFC("TestApp", func() kitex.Node {
-		return Composer(ComposerProps{
-			SuggestArgs: func(rawLine string) ([]Option, bool) {
-				if strings.HasPrefix(rawLine, "/mode ") {
-					return opts, true
-				}
-				return nil, false
-			},
+		return composerForTest(ComposerProps{
+			Autocomplete: engine,
 			OnSubmit: func(text string) {
 				submittedText = text
 			},
@@ -573,7 +580,7 @@ func TestComposerSuggestArgsAndSelection(t *testing.T) {
 			Key: key.Key{Code: ch, Text: string(ch)},
 		})
 	}
-	inst.Frame()
+	awaitComposer(t, inst, func() bool { return strings.Contains(surfaceText(b), "accept_edits") })
 
 	out := surfaceText(b)
 	if !strings.Contains(out, "default") || !strings.Contains(out, "accept_edits") || !strings.Contains(out, "plan") {
@@ -630,10 +637,15 @@ func TestComposerSuggestArgsAndSelection(t *testing.T) {
 			frameDown.CellAt(0, row1Y).Content, frameDown.CellAt(1, row1Y).Content, frameDown.CellAt(2, row1Y).Content)
 	}
 
-	// 3. Press Enter -> submits "/mode accept_edits"
+	// Accepting a suggestion updates the draft without submitting it.
 	inst.Engine().ProcessRawEvent(&backend.RawKeyEvent{
 		Key: key.Key{Code: key.KeyEnter},
 	})
+	inst.Frame()
+	if submittedText != "" || !strings.Contains(surfaceText(b), "> /mode accept_edits") {
+		t.Fatalf("accepting a suggestion submitted %q or lost the draft:\n%s", submittedText, surfaceText(b))
+	}
+	inst.Engine().ProcessRawEvent(&backend.RawKeyEvent{Key: key.Key{Code: key.KeyEnter}})
 	inst.Frame()
 	if submittedText != "/mode accept_edits" {
 		t.Errorf("submittedText = %q, want '/mode accept_edits'", submittedText)
@@ -641,22 +653,13 @@ func TestComposerSuggestArgsAndSelection(t *testing.T) {
 }
 
 func TestComposerSlashCommandNavigationAndSelection(t *testing.T) {
-	suggestions := []Suggestion{
-		{Usage: "/help", Description: "Show commands"},
-		{Usage: "/mode [name]", Description: "Change mode"},
-		{Usage: "/sessions", Description: "List sessions"},
-	}
+	engine := composerCompletionEngine(t, composerCommandSource())
 
 	var submittedText string
 	b := mock.New(80, 24)
 	app := trail.SimpleFC("TestApp", func() kitex.Node {
-		return Composer(ComposerProps{
-			Suggest: func(prefix string) []Suggestion {
-				if prefix == "/" {
-					return suggestions
-				}
-				return nil
-			},
+		return composerForTest(ComposerProps{
+			Autocomplete: engine,
 			OnSubmit: func(text string) {
 				submittedText = text
 			},
@@ -673,7 +676,7 @@ func TestComposerSlashCommandNavigationAndSelection(t *testing.T) {
 	inst.Engine().ProcessRawEvent(&backend.RawKeyEvent{
 		Key: key.Key{Code: '/', Text: "/"},
 	})
-	inst.Frame()
+	awaitComposer(t, inst, func() bool { return strings.Contains(surfaceText(b), "❯ /help") })
 
 	out := surfaceText(b)
 	if !strings.Contains(out, "❯ /help") {
@@ -694,32 +697,29 @@ func TestComposerSlashCommandNavigationAndSelection(t *testing.T) {
 		t.Fatalf("expected row 1 highlighted with '❯ /mode [name]', got:\n%s", outDown)
 	}
 
-	// 3. Press Enter -> executes the highlighted command ("/mode") directly
+	// Enter accepts the highlighted command; a second Enter submits it.
 	inst.Engine().ProcessRawEvent(&backend.RawKeyEvent{
 		Key: key.Key{Code: key.KeyEnter},
 	})
 	inst.Frame()
 
+	if submittedText != "" {
+		t.Fatalf("accepting a command submitted %q", submittedText)
+	}
+	inst.Engine().ProcessRawEvent(&backend.RawKeyEvent{Key: key.Key{Code: key.KeyEnter}})
+	inst.Frame()
 	if submittedText != "/mode" {
 		t.Errorf("submittedText = %q, want '/mode'", submittedText)
 	}
 }
 
 func TestComposerSlashCommandTabCompletion(t *testing.T) {
-	suggestions := []Suggestion{
-		{Usage: "/help", Description: "Show commands"},
-		{Usage: "/mode [name]", Description: "Change mode"},
-	}
+	engine := composerCompletionEngine(t, composerCommandSource())
 
 	b := mock.New(80, 24)
 	app := trail.SimpleFC("TestApp", func() kitex.Node {
-		return Composer(ComposerProps{
-			Suggest: func(prefix string) []Suggestion {
-				if strings.HasPrefix(prefix, "/") {
-					return suggestions
-				}
-				return nil
-			},
+		return composerForTest(ComposerProps{
+			Autocomplete: engine,
 		})
 	})
 
@@ -733,7 +733,7 @@ func TestComposerSlashCommandTabCompletion(t *testing.T) {
 	inst.Engine().ProcessRawEvent(&backend.RawKeyEvent{
 		Key: key.Key{Code: '/', Text: "/"},
 	})
-	inst.Frame()
+	awaitComposer(t, inst, func() bool { return strings.Contains(surfaceText(b), "❯ /help") })
 
 	// 2. Press Down -> selects /mode
 	inst.Engine().ProcessRawEvent(&backend.RawKeyEvent{
@@ -760,9 +760,9 @@ func TestComposerSlashCommandTabCompletion(t *testing.T) {
 }
 
 func TestOptionListPagination(t *testing.T) {
-	opts := make([]Option, 8)
-	for i := 0; i < 8; i++ {
-		opts[i] = Option{
+	opts := make([]components.Option, 8)
+	for i := range 8 {
+		opts[i] = components.Option{
 			Value:       fmt.Sprintf("cmd%d", i),
 			Label:       fmt.Sprintf("/cmd%d", i),
 			Description: fmt.Sprintf("Command %d", i),
@@ -772,7 +772,7 @@ func TestOptionListPagination(t *testing.T) {
 	// 1. Initially at Selected: 0 -> shows "  ↓ 3 more" at bottom and NO "↑ ... more" at top
 	b1 := mock.New(80, 24)
 	app1 := trail.SimpleFC("App1", func() kitex.Node {
-		return OptionList(OptionListProps{
+		return components.OptionList(components.OptionListProps{
 			Options:    opts,
 			Selected:   0,
 			MaxVisible: 5,
@@ -797,7 +797,7 @@ func TestOptionListPagination(t *testing.T) {
 	// 2. Selected: 5 -> shows "  ↑ 1 more" at top AND "  ↓ 2 more" at bottom
 	b2 := mock.New(80, 24)
 	app2 := trail.SimpleFC("App2", func() kitex.Node {
-		return OptionList(OptionListProps{
+		return components.OptionList(components.OptionListProps{
 			Options:    opts,
 			Selected:   5,
 			MaxVisible: 5,
@@ -819,7 +819,7 @@ func TestOptionListPagination(t *testing.T) {
 	// 3. Selected: 7 (last item) -> shows "  ↑ 3 more" at top, and NO "↓ ... more" at bottom
 	b3 := mock.New(80, 24)
 	app3 := trail.SimpleFC("App3", func() kitex.Node {
-		return OptionList(OptionListProps{
+		return components.OptionList(components.OptionListProps{
 			Options:    opts,
 			Selected:   7,
 			MaxVisible: 5,

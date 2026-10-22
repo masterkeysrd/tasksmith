@@ -1,4 +1,4 @@
-package ui
+package components
 
 import (
 	"fmt"
@@ -7,7 +7,7 @@ import (
 	"github.com/masterkeysrd/kite/extras/kitex"
 	"github.com/masterkeysrd/kite/extras/trail"
 	"github.com/masterkeysrd/kite/style"
-	"github.com/masterkeysrd/tasksmith/internal/repl/theme"
+	"github.com/masterkeysrd/tasksmith/internal/ui/theme"
 )
 
 // DefaultPickerMaxVisible is the default number of visible options in a picker before scrolling.
@@ -39,6 +39,14 @@ type OptionListProps struct {
 	EmptyText  string   // optional message when len(Options) == 0 (e.g. "  No matching options.")
 	MaxVisible int      // max number of rows visible simultaneously before sliding-window pagination
 	Columns    []Column // column specifications (width, alignment, style override)
+	Styles     *OptionListStyles
+}
+
+// OptionListStyles optionally overrides the theme's list styles.
+type OptionListStyles struct {
+	Option      style.Style
+	Selected    style.Style
+	Description style.Style
 }
 
 // withCurrentSuffix appends " • current" (or returns "current" if text is empty) when current is true.
@@ -55,6 +63,15 @@ func withCurrentSuffix(text string, current bool) string {
 // OptionList is a trail functional component rendering a selectable or informational list of options as a table.
 var OptionList = trail.FC("OptionList", func(props OptionListProps) trail.Node {
 	offset, setOffset := kitex.UseState(0)
+	scheme := theme.UseTheme()
+	styles := OptionListStyles{
+		Option:      style.S().Foreground(scheme.Color.Text.Secondary),
+		Selected:    style.S().Bold(true).Foreground(scheme.Color.Icon.Primary),
+		Description: style.S().Foreground(scheme.Color.Text.Tertiary),
+	}
+	if props.Styles != nil {
+		styles = *props.Styles
+	}
 
 	start := 0
 	end := len(props.Options)
@@ -94,7 +111,7 @@ var OptionList = trail.FC("OptionList", func(props OptionListProps) trail.Node {
 		return trail.Box(trail.BoxProps{
 			Style: style.S().FlexDirection(style.FlexRow),
 		}, trail.Span(trail.SpanProps{
-			Style: theme.PickerOptionStyle.WhiteSpace(style.WhiteSpacePre),
+			Style: styles.Option.WhiteSpace(style.WhiteSpacePre),
 		}, trail.Text(props.EmptyText)))
 	}
 
@@ -107,12 +124,12 @@ var OptionList = trail.FC("OptionList", func(props OptionListProps) trail.Node {
 
 	for relIdx, opt := range visibleOpts {
 		origIdx := start + relIdx
-		rowStyle := theme.PickerOptionStyle
+		rowStyle := styles.Option
 		prefix := "  "
 		if props.Selected < 0 {
-			rowStyle = theme.StatusBarStyle
+			rowStyle = styles.Description
 		} else if origIdx == props.Selected {
-			rowStyle = theme.PickerSelectedStyle
+			rowStyle = styles.Selected
 			prefix = "❯ "
 		}
 
@@ -164,7 +181,7 @@ var OptionList = trail.FC("OptionList", func(props OptionListProps) trail.Node {
 				kitex.TD(kitex.TDProps{
 					Style: style.S(),
 				}, trail.Span(trail.SpanProps{
-					Style: theme.StatusBarStyle,
+					Style: styles.Description,
 				}, trail.Text(withCurrentSuffix(opt.Description, opt.Current)))),
 			}
 		}
@@ -189,7 +206,7 @@ var OptionList = trail.FC("OptionList", func(props OptionListProps) trail.Node {
 		nodes = append(nodes, trail.Box(trail.BoxProps{
 			Style: style.S().FlexDirection(style.FlexRow),
 		}, trail.Span(trail.SpanProps{
-			Style: theme.StatusBarStyle.WhiteSpace(style.WhiteSpacePre),
+			Style: styles.Description.WhiteSpace(style.WhiteSpacePre),
 		}, trail.Text(fmt.Sprintf("  ↑ %d more", above)))))
 	}
 
@@ -199,7 +216,7 @@ var OptionList = trail.FC("OptionList", func(props OptionListProps) trail.Node {
 		nodes = append(nodes, trail.Box(trail.BoxProps{
 			Style: style.S().FlexDirection(style.FlexRow),
 		}, trail.Span(trail.SpanProps{
-			Style: theme.StatusBarStyle.WhiteSpace(style.WhiteSpacePre),
+			Style: styles.Description.WhiteSpace(style.WhiteSpacePre),
 		}, trail.Text(fmt.Sprintf("  ↓ %d more", below)))))
 	}
 

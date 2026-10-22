@@ -8,6 +8,7 @@ import (
 	"github.com/masterkeysrd/kite/style"
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/repl/ui"
+	"github.com/masterkeysrd/tasksmith/internal/ui/components"
 )
 
 func (r *Registry) registerSessionCommands() {
@@ -47,7 +48,7 @@ func HandleSessions(env Env, args []string) error {
 		return nil
 	}
 
-	if env.ListSessions == nil {
+	if env.BrowseSessions == nil {
 		if env.AppendNode != nil {
 			env.AppendNode(ui.CommandOutput(ui.CommandOutputProps{
 				Command: "/sessions",
@@ -56,33 +57,13 @@ func HandleSessions(env Env, args []string) error {
 		}
 		return nil
 	}
-	sessions, err := env.ListSessions()
-	if err != nil {
-		return fmt.Errorf("error listing sessions: %w", err)
-	}
-	if len(sessions) == 0 {
-		if env.AppendNode != nil {
-			env.AppendNode(ui.CommandOutput(ui.CommandOutputProps{
-				Command: "/sessions",
-				Output:  "No sessions found.",
-			}))
-		}
-		return nil
-	}
-
-	var activeID string
-	if env.Session != nil {
-		activeID = env.Session.ID
-	}
-	if env.OpenPicker != nil {
-		env.OpenPicker(NewSessionPicker(env, sessions, activeID))
-	}
+	env.BrowseSessions()
 	return nil
 }
 
 // NewSessionPicker constructs an interactive picker for selecting or deleting sessions.
 func NewSessionPicker(env Env, sessions []api.Session, activeID string) ui.PickerProps {
-	opts := make([]ui.Option, len(sessions))
+	opts := make([]components.Option, len(sessions))
 	for i, s := range sessions {
 		title := strings.TrimSpace(s.Title)
 		if title == "" {
@@ -93,7 +74,7 @@ func NewSessionPicker(env Env, sessions []api.Session, activeID string) ui.Picke
 			model = "-"
 		}
 		relTime := humanize.Time(s.UpdatedAt)
-		opts[i] = ui.Option{
+		opts[i] = components.Option{
 			Value:   s.ID,
 			Label:   title,
 			Cells:   []string{title, model, relTime},
@@ -101,12 +82,12 @@ func NewSessionPicker(env Env, sessions []api.Session, activeID string) ui.Picke
 		}
 	}
 
-	picker := ui.NewPicker("Sessions", opts, func(opt ui.Option) {
+	picker := ui.NewPicker("Sessions", opts, func(opt components.Option) {
 		if env.SwitchSession != nil {
 			env.SwitchSession(opt.Value)
 		}
 	})
-	picker.Columns = []ui.Column{
+	picker.Columns = []components.Column{
 		{Width: 0},
 		{Width: 24, Align: style.TextAlignLeft},
 		{Width: 26, Align: style.TextAlignRight},
@@ -125,10 +106,10 @@ func NewSessionPicker(env Env, sessions []api.Session, activeID string) ui.Picke
 	picker.InputActions = map[string]ui.InputAction{
 		"f2": {
 			Prompt: "Rename session:",
-			InitialValue: func(opt ui.Option) string {
+			InitialValue: func(opt components.Option) string {
 				return opt.Label
 			},
-			OnSubmit: func(opt ui.Option, val string) {
+			OnSubmit: func(opt components.Option, val string) {
 				if env.RenameSession != nil {
 					env.RenameSession(opt.Value, val)
 				}
@@ -137,10 +118,10 @@ func NewSessionPicker(env Env, sessions []api.Session, activeID string) ui.Picke
 	}
 	picker.ConfirmActions = map[string]ui.ConfirmAction{
 		"f4": {
-			Prompt: func(opt ui.Option) string {
+			Prompt: func(opt components.Option) string {
 				return fmt.Sprintf("Delete session %q?", opt.Label)
 			},
-			OnConfirm: func(opt ui.Option) {
+			OnConfirm: func(opt components.Option) {
 				if env.DeleteSession != nil {
 					env.DeleteSession(opt.Value)
 				}

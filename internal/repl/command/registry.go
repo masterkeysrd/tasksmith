@@ -7,6 +7,8 @@ import (
 	"github.com/masterkeysrd/kite/extras/trail"
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/repl/ui"
+	"github.com/masterkeysrd/tasksmith/internal/ui/autocomplete"
+	"github.com/masterkeysrd/tasksmith/internal/ui/components"
 )
 
 // Env provides a lightweight snapshot of REPL state and callback actions to commands.
@@ -16,19 +18,19 @@ type Env struct {
 	DefaultAgent string
 	DefaultModel string
 
-	AppendNode    func(node trail.Node)
-	OpenPicker    func(picker ui.PickerProps)
-	SetMode       func(mode api.PermissionMode)
-	NewSession    func(model string)
-	SwitchSession func(sessionID string)
-	RenameSession func(sessionID, title string)
-	DeleteSession func(sessionID string)
-	ListSessions  func() ([]api.Session, error)
-	ListChanges   func()
-	DiffChange    func(path, entryID string)
-	RevertChanges func(path, entryID string)
-	ClearScreen   func()
-	Exit          func()
+	AppendNode     func(node trail.Node)
+	OpenPicker     func(picker ui.PickerProps)
+	SetMode        func(mode api.PermissionMode)
+	NewSession     func(model string)
+	SwitchSession  func(sessionID string)
+	RenameSession  func(sessionID, title string)
+	DeleteSession  func(sessionID string)
+	BrowseSessions func()
+	ListChanges    func()
+	DiffChange     func(path, entryID string)
+	RevertChanges  func(path, entryID string)
+	ClearScreen    func()
+	Exit           func()
 }
 
 // Handler executes a slash command against the active [Env].
@@ -41,7 +43,9 @@ type Command struct {
 	Usage       string
 	Description string
 	Handler     Handler
-	Options     func(env Env) []ui.Option
+	Options     func(env Env) []components.Option
+	// Complete supplies headless argument suggestions after the command name.
+	Complete autocomplete.Completer
 }
 
 // Registry maintains the ordered collection of REPL slash commands and aliases.
@@ -128,7 +132,7 @@ func (r *Registry) Suggest(prefix string) []Command {
 }
 
 // SuggestArgs returns argument completion options for a partially typed slash command line.
-func (r *Registry) SuggestArgs(env Env, rawLine string) (Command, []ui.Option, bool) {
+func (r *Registry) SuggestArgs(env Env, rawLine string) (Command, []components.Option, bool) {
 	trimmedLeft := strings.TrimLeft(rawLine, " \t")
 	if !strings.HasPrefix(trimmedLeft, "/") {
 		return Command{}, nil, false
@@ -150,7 +154,7 @@ func (r *Registry) SuggestArgs(env Env, rawLine string) (Command, []ui.Option, b
 		return cmd, allOpts, true
 	}
 
-	var filtered []ui.Option
+	var filtered []components.Option
 	for _, opt := range allOpts {
 		val := strings.ToLower(opt.Value)
 		lbl := strings.ToLower(opt.Label)
