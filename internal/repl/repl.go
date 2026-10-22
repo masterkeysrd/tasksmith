@@ -17,13 +17,12 @@ import (
 
 // Forwarded types and constants from subpackages for caller ergonomics.
 type (
-	HeaderProps       = ui.HeaderProps
-	StatusBarProps    = ui.StatusBarProps
-	State             = ui.State
-	Option            = ui.Option
-	PickerProps       = ui.PickerProps
-	PickerCanceledMsg = ui.PickerCanceledMsg
-	Registry          = command.Registry
+	HeaderProps    = ui.HeaderProps
+	StatusBarProps = ui.StatusBarProps
+	State          = ui.State
+	Option         = ui.Option
+	PickerProps    = ui.PickerProps
+	Registry       = command.Registry
 	Command           = command.Command
 	CommandEnv        = command.Env
 	CommandResult     = command.Event

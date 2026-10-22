@@ -60,6 +60,7 @@ var App = trail.FC("App", func(props AppProps) trail.Node {
 	streamText, setStreamText := kitex.UseState("")
 	streamReasoning, setStreamReasoning := kitex.UseState("")
 	spinnerText, setSpinnerText := kitex.UseState("Thinking...")
+	statusHint, setStatusHint := kitex.UseState("")
 	pickerProps, setPickerProps := kitex.UseState(ui.PickerProps{})
 	pendingPerms, setPendingPerms := kitex.UseState([]api.PermissionRequest(nil))
 
@@ -168,6 +169,9 @@ var App = trail.FC("App", func(props AppProps) trail.Node {
 	var handleCommandEvent func(evt command.Event)
 
 	bindPickerCallbacks := func(p ui.PickerProps) ui.PickerProps {
+		p.OnOpen = func() {
+			setStatusHint("")
+		}
 		p.OnAction = func(action any, closePicker bool) {
 			if closePicker {
 				setState(ui.StateIdle)
@@ -538,6 +542,27 @@ var App = trail.FC("App", func(props AppProps) trail.Node {
 		return res
 	}
 
+	suggestArgs := func(rawLine string) ([]ui.Option, bool) {
+		reg := props.Registry
+		if reg == nil {
+			reg = command.NewRegistry()
+		}
+		env := command.Env{
+			Mode:         mode(),
+			Session:      session(),
+			DefaultAgent: props.Agent,
+			DefaultModel: props.Model,
+			ListSessions: func() ([]api.Session, error) {
+				if props.Client == nil {
+					return nil, nil
+				}
+				return props.Client.ListSessions(context.Background())
+			},
+		}
+		_, opts, ok := reg.SuggestArgs(env, rawLine)
+		return opts, ok
+	}
+
 	var activeNodes []trail.Node
 
 	// Streaming display
@@ -584,6 +609,7 @@ var App = trail.FC("App", func(props AppProps) trail.Node {
 		activeNodes = append(activeNodes, ui.Composer(ui.ComposerProps{
 			Disabled:    false,
 			Suggest:     suggestCommands,
+			SuggestArgs: suggestArgs,
 			OnSubmit:    onSubmit,
 			OnCycleMode: onCycleMode,
 			OnCancel:    onCancel,
@@ -591,16 +617,12 @@ var App = trail.FC("App", func(props AppProps) trail.Node {
 	}
 
 	// Global status bar (always visible at the bottom)
-	var statusHint string
-	if state() == ui.StatePicker {
-		statusHint = pickerProps().StatusBar
-	}
 	activeNodes = append(activeNodes, ui.StatusBar(ui.StatusBarProps{
 		State:    state(),
 		Mode:     mode(),
 		Model:    modelLabel(),
 		Thinking: thinking(),
-		Hint:     statusHint,
+		Hint:     statusHint(),
 	}))
 
 	return trail.Fragment(

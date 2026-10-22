@@ -156,9 +156,9 @@ func TestBuiltinCommandsExecution(t *testing.T) {
 	if openPicker.Picker.Options[0].Value != "s1" || !openPicker.Picker.Options[0].Current {
 		t.Errorf("expected option 0 to be current s1, got %+v", openPicker.Picker.Options[0])
 	}
-	selMsg := openPicker.Picker.Select()
+	selMsg := openPicker.Picker.OnSelect(openPicker.Picker.Options[0])
 	if selMsg != (SwitchSessionMsg{SessionID: "s1"}) {
-		t.Errorf("picker Select() = %+v, want SwitchSessionMsg(s1)", selMsg)
+		t.Errorf("picker OnSelect() = %+v, want SwitchSessionMsg(s1)", selMsg)
 	}
 	f4Action, ok := openPicker.Picker.ConfirmActions["f4"]
 	if !ok {
@@ -210,9 +210,9 @@ func TestBuiltinCommandsExecution(t *testing.T) {
 	if !ok || len(modePicker.Picker.Options) != 5 {
 		t.Errorf("/mode read expected OpenPickerMsg with 5 options, got %+v", resModeRead)
 	}
-	modeSelMsg := modePicker.Picker.Select()
+	modeSelMsg := modePicker.Picker.OnSelect(modePicker.Picker.Options[0])
 	if modeSelMsg != (ChangeModeMsg{Mode: api.ModeDefault}) {
-		t.Errorf("picker Select() = %+v, want ChangeModeMsg(default)", modeSelMsg)
+		t.Errorf("picker OnSelect() = %+v, want ChangeModeMsg(default)", modeSelMsg)
 	}
 
 	resModeSet, err := reg.Execute(env, "/mode accept_edits")

@@ -1,6 +1,8 @@
 package ui
 
 import (
+	"maps"
+	"slices"
 	"strings"
 
 	"github.com/masterkeysrd/kite/dom"
@@ -11,11 +13,8 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/repl/theme"
 )
 
-// DefaultPickerStatusBar is the default navigation hint displayed at the bottom of a picker.
-const DefaultPickerStatusBar = "↑/↓ or j/k to select • enter to confirm • esc to cancel"
-
-// PickerCanceledMsg indicates that a picker interaction was dismissed without making a selection.
-type PickerCanceledMsg struct{}
+// DefaultPickerFooter is the default navigation hint displayed at the bottom of a picker.
+const DefaultPickerFooter = "↑/↓ or j/k to select • enter to confirm • esc to cancel"
 
 // Option represents a selectable item in an interactive command picker.
 type Option struct {
@@ -47,12 +46,21 @@ const (
 	pickerModeInput
 )
 
+type pickerModalState struct {
+	mode          pickerMode
+	targetOpt     Option
+	activeConfirm ConfirmAction
+	activeInput   InputAction
+	inputVal      string
+}
+
 // PickerProps defines the properties for the interactive Picker component.
 type PickerProps struct {
 	Title          string
 	Options        []Option
-	StatusBar      string
+	Footer         string // Optional navigation hint displayed in the picker footer
 	Filterable     bool
+	OnOpen         func()
 	OnSelect       func(opt Option) any
 	Keys           map[string]func(opt Option) any
 	ConfirmActions map[string]ConfirmAction
@@ -61,39 +69,14 @@ type PickerProps struct {
 	OnCancel       func()
 }
 
-// NewPicker constructs an initialized PickerProps with default status bar and cursor at current.
+// NewPicker constructs an initialized PickerProps with default footer and cursor at current.
 func NewPicker(title string, opts []Option, onSelect func(opt Option) any) PickerProps {
 	return PickerProps{
-		Title:     title,
-		Options:   opts,
-		StatusBar: DefaultPickerStatusBar,
-		OnSelect:  onSelect,
+		Title:    title,
+		Options:  opts,
+		Footer:   DefaultPickerFooter,
+		OnSelect: onSelect,
 	}
-}
-
-// Select invokes OnSelect on the currently selected or first option.
-func (p PickerProps) Select() any {
-	if p.OnSelect == nil {
-		return nil
-	}
-	opt, ok := p.SelectedOption()
-	if !ok {
-		return nil
-	}
-	return p.OnSelect(opt)
-}
-
-// SelectedOption returns the currently active option, or the first option if none is marked Current.
-func (p PickerProps) SelectedOption() (Option, bool) {
-	if len(p.Options) == 0 {
-		return Option{}, false
-	}
-	for _, opt := range p.Options {
-		if opt.Current {
-			return opt, true
-		}
-	}
-	return p.Options[0], true
 }
 
 func initialCursor(opts []Option) int {
@@ -105,58 +88,151 @@ func initialCursor(opts []Option) int {
 	return 0
 }
 
+// withCurrentSuffix appends " • current" (or returns "current" if text is empty) when current is true.
+func withCurrentSuffix(text string, current bool) string {
+	if !current {
+		return text
+	}
+	if text != "" {
+		return text + " • current"
+	}
+	return "current"
+}
+
+// filterOptions filters opts against query by checking Label, Description, Value,
+// and Columns case-insensitively. It returns opts directly if query is empty.
+func filterOptions(opts []Option, query string) []Option {
+	q := strings.TrimSpace(strings.ToLower(query))
+	if q == "" {
+		return opts
+	}
+	var res []Option
+	for _, opt := range opts {
+		if strings.Contains(strings.ToLower(opt.Label), q) ||
+			strings.Contains(strings.ToLower(opt.Description), q) ||
+			strings.Contains(strings.ToLower(opt.Value), q) {
+			res = append(res, opt)
+			continue
+		}
+		match := false
+		for _, col := range opt.Columns {
+			if strings.Contains(strings.ToLower(col), q) {
+				match = true
+				break
+			}
+		}
+		if match {
+			res = append(res, opt)
+		}
+	}
+	return res
+}
+
+// renderOptionsTable renders the option rows as a table or empty message.
+func renderOptionsTable(filtered []Option, cur int) trail.Node {
+	if len(filtered) == 0 {
+		return trail.Box(trail.BoxProps{
+			Style: style.S().FlexDirection(style.FlexRow),
+		}, trail.Span(trail.SpanProps{
+			Style: theme.PickerOptionStyle,
+		}, trail.Text("  No matching options.")))
+	}
+
+	hasColumns := len(filtered[0].Columns) > 0
+	trs := make([]trail.Node, 0, len(filtered))
+
+	for i, opt := range filtered {
+		rowStyle := theme.PickerOptionStyle
+		prefix := "  "
+		if i == cur {
+			rowStyle = theme.PickerSelectedStyle
+			prefix = "❯ "
+		}
+
+		var tds []trail.Node
+		if hasColumns && len(opt.Columns) > 0 {
+			cols := slices.Clone(opt.Columns)
+			last := len(cols) - 1
+			cols[last] = withCurrentSuffix(cols[last], opt.Current)
+
+			tds = append(tds, kitex.TD(kitex.TDProps{
+				Style: style.S().Padding(0, 2, 0, 0).WhiteSpace(style.WhiteSpacePre),
+			}, trail.Span(trail.SpanProps{
+				Style: rowStyle.WhiteSpace(style.WhiteSpacePre),
+			}, trail.Text(prefix+cols[0]))))
+
+			for _, col := range cols[1:] {
+				tds = append(tds, kitex.TD(kitex.TDProps{
+					Style: style.S().Padding(0, 1, 0, 1),
+				}, trail.Span(trail.SpanProps{Style: rowStyle}, trail.Text(col))))
+			}
+		} else {
+			tds = []trail.Node{
+				kitex.TD(kitex.TDProps{
+					Style: style.S().Padding(0, 2, 0, 0).WhiteSpace(style.WhiteSpacePre),
+				}, trail.Span(trail.SpanProps{
+					Style: rowStyle.WhiteSpace(style.WhiteSpacePre),
+				}, trail.Text(prefix+opt.Label))),
+				kitex.TD(kitex.TDProps{
+					Style: style.S(),
+				}, trail.Span(trail.SpanProps{
+					Style: theme.StatusBarStyle,
+				}, trail.Text(withCurrentSuffix(opt.Description, opt.Current)))),
+			}
+		}
+
+		trs = append(trs, kitex.TR(kitex.TRProps{}, tds...))
+	}
+
+	return kitex.Table(kitex.TableProps{
+		Style: style.S().Width(style.Percent(100)),
+	}, kitex.TBody(kitex.TBodyProps{}, trs...))
+}
+
 // Picker is a trail functional component managing interactive item selection,
 // filtering, custom actions (e.g. rename, delete), and keyboard navigation.
 var Picker = trail.FC("Picker", func(props PickerProps) trail.Node {
 	cursor, setCursor := kitex.UseState(initialCursor(props.Options))
 	filter, setFilter := kitex.UseState("")
-	mode, setMode := kitex.UseState(pickerModeBrowse)
-	targetOpt, setTargetOpt := kitex.UseState(Option{})
-	activeConfirm, setActiveConfirm := kitex.UseState(ConfirmAction{})
-	activeInput, setActiveInput := kitex.UseState(InputAction{})
-	inputVal, setInputVal := kitex.UseState("")
+	modal, setModal := kitex.UseState(pickerModalState{mode: pickerModeBrowse})
 
 	filterInputRef := kitex.UseRef[dom.Element](nil)
 	actionInputRef := kitex.UseRef[dom.Element](nil)
 
+	kitex.UseEffect(func() {
+		if props.OnOpen != nil {
+			props.OnOpen()
+		}
+	}, nil)
+
 	kitex.UseLayoutEffect(func() {
-		if mode() == pickerModeBrowse && props.Filterable && filterInputRef.Current != nil {
+		st := modal()
+		if st.mode == pickerModeBrowse && props.Filterable && filterInputRef.Current != nil {
 			if doc := filterInputRef.Current.OwnerDocument(); doc != nil {
 				doc.Focus(filterInputRef.Current)
 			}
-		} else if mode() == pickerModeInput && actionInputRef.Current != nil {
+		} else if st.mode == pickerModeInput && actionInputRef.Current != nil {
 			if doc := actionInputRef.Current.OwnerDocument(); doc != nil {
 				doc.Focus(actionInputRef.Current)
 			}
 		}
-	}, []any{mode(), props.Filterable})
+	}, []any{modal().mode, props.Filterable})
 
 	filtered := kitex.UseMemo(func() []Option {
-		q := strings.TrimSpace(strings.ToLower(filter()))
-		if q == "" {
-			return props.Options
-		}
-		var res []Option
-		for _, opt := range props.Options {
-			if strings.Contains(strings.ToLower(opt.Label), q) ||
-				strings.Contains(strings.ToLower(opt.Description), q) ||
-				strings.Contains(strings.ToLower(opt.Value), q) {
-				res = append(res, opt)
-				continue
-			}
-			match := false
-			for _, col := range opt.Columns {
-				if strings.Contains(strings.ToLower(col), q) {
-					match = true
-					break
-				}
-			}
-			if match {
-				res = append(res, opt)
-			}
-		}
-		return res
+		return filterOptions(props.Options, filter())
 	}, []any{props.Options, filter()})
+
+	// Cursor reconciliation when filtered list changes or shrinks
+	kitex.UseEffect(func() {
+		cur := cursor()
+		if len(filtered) == 0 {
+			if cur != 0 {
+				setCursor(0)
+			}
+		} else if cur >= len(filtered) {
+			setCursor(len(filtered) - 1)
+		}
+	}, []any{len(filtered)})
 
 	cur := cursor()
 	if len(filtered) > 0 {
@@ -200,35 +276,40 @@ var Picker = trail.FC("Picker", func(props PickerProps) trail.Node {
 			return true
 		}
 
-		// Check confirm actions
-		for k, ca := range props.ConfirmActions {
+		// Check confirm actions (sorted for deterministic evaluation)
+		for _, k := range slices.Sorted(maps.Keys(props.ConfirmActions)) {
 			if ke.MatchString(k) && len(filtered) > 0 {
-				setTargetOpt(filtered[cur])
-				setActiveConfirm(ca)
-				setMode(pickerModeConfirm)
+				setModal(pickerModalState{
+					mode:          pickerModeConfirm,
+					targetOpt:     filtered[cur],
+					activeConfirm: props.ConfirmActions[k],
+				})
 				return true
 			}
 		}
 
-		// Check input actions
-		for k, ia := range props.InputActions {
+		// Check input actions (sorted for deterministic evaluation)
+		for _, k := range slices.Sorted(maps.Keys(props.InputActions)) {
 			if ke.MatchString(k) && len(filtered) > 0 {
-				setTargetOpt(filtered[cur])
-				setActiveInput(ia)
+				ia := props.InputActions[k]
 				initVal := ""
 				if ia.InitialValue != nil {
 					initVal = ia.InitialValue(filtered[cur])
 				}
-				setInputVal(initVal)
-				setMode(pickerModeInput)
+				setModal(pickerModalState{
+					mode:        pickerModeInput,
+					targetOpt:   filtered[cur],
+					activeInput: ia,
+					inputVal:    initVal,
+				})
 				return true
 			}
 		}
 
-		// Check custom keys
-		for k, fn := range props.Keys {
+		// Check custom keys (sorted for deterministic evaluation)
+		for _, k := range slices.Sorted(maps.Keys(props.Keys)) {
 			if ke.MatchString(k) && len(filtered) > 0 {
-				act := fn(filtered[cur])
+				act := props.Keys[k](filtered[cur])
 				if props.OnAction != nil {
 					props.OnAction(act, false)
 				}
@@ -241,27 +322,26 @@ var Picker = trail.FC("Picker", func(props PickerProps) trail.Node {
 
 	// trail.UseInput for non-input navigation or confirm mode
 	trail.UseInput(func(input string, k event.KeyEvent) {
-		m := mode()
-		if m == pickerModeConfirm {
+		st := modal()
+		if st.mode == pickerModeConfirm {
 			if input == "y" || input == "Y" || k.MatchString("y", "enter") {
-				ca := activeConfirm()
-				if ca.OnConfirm != nil {
-					act := ca.OnConfirm(targetOpt())
+				if st.activeConfirm.OnConfirm != nil {
+					act := st.activeConfirm.OnConfirm(st.targetOpt)
 					if props.OnAction != nil {
 						props.OnAction(act, false)
 					}
 				}
-				setMode(pickerModeBrowse)
+				setModal(pickerModalState{mode: pickerModeBrowse})
 				return
 			}
 			if input == "n" || input == "N" || k.MatchString("n", "esc", "escape") {
-				setMode(pickerModeBrowse)
+				setModal(pickerModalState{mode: pickerModeBrowse})
 				return
 			}
 			return
 		}
 
-		if m == pickerModeBrowse && !props.Filterable {
+		if st.mode == pickerModeBrowse && !props.Filterable {
 			handleBrowseKey(k)
 		}
 	})
@@ -278,7 +358,8 @@ var Picker = trail.FC("Picker", func(props PickerProps) trail.Node {
 	}
 
 	// Live filter input row
-	if props.Filterable && mode() == pickerModeBrowse {
+	st := modal()
+	if props.Filterable && st.mode == pickerModeBrowse {
 		rows = append(rows, trail.Box(trail.BoxProps{
 			Style: style.S().
 				Display(style.DisplayFlex).
@@ -287,12 +368,12 @@ var Picker = trail.FC("Picker", func(props PickerProps) trail.Node {
 				Width(style.Percent(100)),
 		},
 			trail.Span(trail.SpanProps{
-				Style: theme.PickerTitleStyle.Margin(0, 1, 0, 0),
+				Style: theme.PickerTitleStyle.Margin(0, 1, 0, 0).Flex(0, 0).WhiteSpace(style.WhiteSpacePre),
 			}, trail.Text("Filter:")),
 			kitex.Input(kitex.InputProps{
 				Ref:   filterInputRef,
 				Value: filter(),
-				Style: style.S().Flex(1).Width(style.Percent(100)),
+				Style: style.S().Flex(1),
 				OnChange: func(e event.Event) {
 					if ie, ok := e.(*event.InputEvent); ok {
 						setFilter(ie.Value)
@@ -312,90 +393,14 @@ var Picker = trail.FC("Picker", func(props PickerProps) trail.Node {
 	}
 
 	// Options rendering
-	if len(filtered) == 0 {
-		rows = append(rows, trail.Box(trail.BoxProps{
-			Style: style.S().FlexDirection(style.FlexRow),
-		}, trail.Span(trail.SpanProps{
-			Style: theme.PickerOptionStyle,
-		}, trail.Text("  No matching options."))))
-	} else if len(filtered[0].Columns) > 0 {
-		var trs []trail.Node
-		for i, opt := range filtered {
-			rowStyle := theme.PickerOptionStyle
-			prefix := "  "
-			if i == cur {
-				rowStyle = theme.PickerSelectedStyle
-				prefix = "❯ "
-			}
-			cols := make([]string, len(opt.Columns))
-			copy(cols, opt.Columns)
-			if opt.Current && len(cols) > 0 {
-				last := len(cols) - 1
-				if cols[last] != "" {
-					cols[last] += " • current"
-				} else {
-					cols[last] = "current"
-				}
-			}
-
-			var tds []trail.Node
-			tds = append(tds, kitex.TD(kitex.TDProps{
-				Style: style.S().Padding(0, 1, 0, 0),
-			}, trail.Span(trail.SpanProps{Style: rowStyle}, trail.Text(prefix+cols[0]))))
-
-			for _, col := range cols[1:] {
-				tds = append(tds, kitex.TD(kitex.TDProps{
-					Style: style.S().Padding(0, 1, 0, 1),
-				}, trail.Span(trail.SpanProps{Style: rowStyle}, trail.Text(col))))
-			}
-
-			trs = append(trs, kitex.TR(kitex.TRProps{}, tds...))
-		}
-
-		rows = append(rows, kitex.Table(kitex.TableProps{
-			Style: style.S().Width(style.Percent(100)),
-		}, kitex.TBody(kitex.TBodyProps{}, trs...)))
-	} else {
-		rows = append(rows, trail.Box(trail.BoxProps{
-			Style: style.S().FlexDirection(style.FlexColumn).Width(style.Percent(100)),
-		},
-			kitex.Map(filtered, func(opt Option, i int) trail.Node {
-				labelStyle := theme.PickerOptionStyle
-				prefix := "  "
-				if i == cur {
-					labelStyle = theme.PickerSelectedStyle
-					prefix = "❯ "
-				}
-				desc := opt.Description
-				if opt.Current {
-					if desc != "" {
-						desc += " • current"
-					} else {
-						desc = "current"
-					}
-				}
-				var spans []trail.Node
-				spans = append(spans, trail.Span(trail.SpanProps{
-					Style: labelStyle,
-				}, trail.Text(prefix+opt.Label)))
-				if desc != "" {
-					spans = append(spans, trail.Span(trail.SpanProps{
-						Style: theme.StatusBarStyle,
-					}, trail.Text("  "+desc)))
-				}
-				return trail.Box(trail.BoxProps{
-					Style: style.S().FlexDirection(style.FlexRow),
-				}, spans...)
-			}),
-		))
-	}
+	rows = append(rows, renderOptionsTable(filtered, cur))
 
 	// Inline prompt mode (confirm or input)
-	switch mode() {
+	switch st.mode {
 	case pickerModeConfirm:
 		promptText := ""
-		if activeConfirm().Prompt != nil {
-			promptText = activeConfirm().Prompt(targetOpt())
+		if st.activeConfirm.Prompt != nil {
+			promptText = st.activeConfirm.Prompt(st.targetOpt)
 		}
 		rows = append(rows, trail.Newline(1), trail.Box(trail.BoxProps{
 			Style: style.S().FlexDirection(style.FlexRow),
@@ -417,15 +422,17 @@ var Picker = trail.FC("Picker", func(props PickerProps) trail.Node {
 				Width(style.Percent(100)),
 		},
 			trail.Span(trail.SpanProps{
-				Style: style.S().Foreground(theme.ColorCyan).Bold(true).Margin(0, 1, 0, 0),
-			}, trail.Text(strings.TrimRight(activeInput().Prompt, " "))),
+				Style: style.S().Foreground(theme.ColorCyan).Bold(true).Margin(0, 1, 0, 0).Flex(0, 0).WhiteSpace(style.WhiteSpacePre),
+			}, trail.Text(st.activeInput.Prompt)),
 			kitex.Input(kitex.InputProps{
 				Ref:   actionInputRef,
-				Value: inputVal(),
-				Style: style.S().Flex(1).Width(style.Percent(100)),
+				Value: st.inputVal,
+				Style: style.S().Flex(1),
 				OnChange: func(e event.Event) {
 					if ie, ok := e.(*event.InputEvent); ok {
-						setInputVal(ie.Value)
+						current := modal()
+						current.inputVal = ie.Value
+						setModal(current)
 					}
 				},
 				OnKeyDown: func(e event.Event) {
@@ -434,28 +441,43 @@ var Picker = trail.FC("Picker", func(props PickerProps) trail.Node {
 						case ke.MatchString("enter"):
 							e.PreventDefault()
 							e.StopPropagation()
-							ia := activeInput()
-							if ia.OnSubmit != nil {
-								act := ia.OnSubmit(targetOpt(), inputVal())
+							current := modal()
+							if current.activeInput.OnSubmit != nil {
+								act := current.activeInput.OnSubmit(current.targetOpt, current.inputVal)
 								if props.OnAction != nil {
 									props.OnAction(act, false)
 								}
 							}
-							setMode(pickerModeBrowse)
+							setModal(pickerModalState{mode: pickerModeBrowse})
 
 						case ke.MatchString("esc", "escape"):
 							e.PreventDefault()
 							e.StopPropagation()
-							setMode(pickerModeBrowse)
+							setModal(pickerModalState{mode: pickerModeBrowse})
 						}
 					}
 				},
 			}),
-			trail.Span(trail.SpanProps{
-				Style: theme.StatusBarStyle,
-			}, trail.Text(" (enter to submit, esc to cancel)")),
 		))
 	}
+
+	// Footer navigation hint
+	footerHint := props.Footer
+	if footerHint == "" {
+		footerHint = DefaultPickerFooter
+	}
+	switch st.mode {
+	case pickerModeConfirm:
+		footerHint = "y/enter to confirm • n/esc to cancel"
+	case pickerModeInput:
+		footerHint = "enter to submit • esc to cancel"
+	}
+
+	rows = append(rows, trail.Newline(1), trail.Box(trail.BoxProps{
+		Style: style.S().FlexDirection(style.FlexRow),
+	}, trail.Span(trail.SpanProps{
+		Style: theme.StatusBarStyle,
+	}, trail.Text(footerHint))))
 
 	// Trailing blank line before global status bar
 	rows = append(rows, trail.Newline(1))

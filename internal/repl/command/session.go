@@ -79,15 +79,15 @@ func NewSessionPicker(sessions []api.Session, activeID string) ui.PickerProps {
 		}
 	}
 
-	picker := ui.NewPicker("Select session:", opts, func(opt ui.Option) any {
+	picker := ui.NewPicker("Sessions", opts, func(opt ui.Option) any {
 		return SwitchSessionMsg{SessionID: opt.Value}
 	})
 	picker.Filterable = true
-	picker.StatusBar = "↑/↓ to select • enter to switch • f2 to rename • f4 to delete • esc to cancel"
+	picker.Footer = "↑/↓ to select • enter to switch • f2 to rename • f4 to delete • esc to cancel"
 
 	picker.InputActions = map[string]ui.InputAction{
 		"f2": {
-			Prompt: "Rename session: ",
+			Prompt: "Rename session:",
 			InitialValue: func(opt ui.Option) string {
 				return opt.Label
 			},

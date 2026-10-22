@@ -55,7 +55,7 @@ func stateHint(state State) string {
 	case StateStreaming:
 		return "streaming • esc to cancel"
 	case StatePicker:
-		return "↑/↓ navigate · enter select · esc cancel"
+		return ""
 	case StateApproval:
 		return "y allow once · a allow session · n deny · r reject with feedback"
 	default:
@@ -68,7 +68,7 @@ func stateHint(state State) string {
 // right: <mode> · <Model> · <Thinking> (or <Model> · <Thinking> when mode is default or empty)
 var StatusBar = trail.FC("StatusBar", func(props StatusBarProps) trail.Node {
 	leftText := props.Hint
-	if leftText == "" {
+	if leftText == "" && props.State != StatePicker {
 		leftText = stateHint(props.State)
 	}
 

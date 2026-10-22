@@ -409,30 +409,6 @@ func registerTestDaemonRoutes(mux *http.ServeMux, st *testDaemonState) {
 	})
 }
 
-func surfaceText(b *mock.Backend) string {
-	frame := b.LastFrame().Surface
-	if frame == nil {
-		return ""
-	}
-	var sb strings.Builder
-	for y := 0; y < frame.Height; y++ {
-		var line strings.Builder
-		for x := 0; x < frame.Width; x++ {
-			c := frame.CellAt(x, y)
-			if c.Content != "" {
-				line.WriteString(c.Content)
-			} else {
-				line.WriteByte(' ')
-			}
-		}
-		trimmed := strings.TrimRight(line.String(), " ")
-		if trimmed != "" {
-			sb.WriteString(trimmed + "\n")
-		}
-	}
-	return sb.String()
-}
-
 func insertedAboveText(b *mock.Backend) string {
 	var sb strings.Builder
 	for _, buf := range b.InsertedAbove {
@@ -448,7 +424,8 @@ func insertedAboveText(b *mock.Backend) string {
 			}
 			trimmed := strings.TrimRight(line.String(), " ")
 			if trimmed != "" {
-				sb.WriteString(trimmed + "\n")
+				sb.WriteString(trimmed)
+				sb.WriteString("\n")
 			}
 		}
 	}
@@ -577,8 +554,7 @@ func TestRunResumeSessionWithMutation(t *testing.T) {
 
 func TestAppFunctionalComponentLifecycle(t *testing.T) {
 	c, st := startTestUnixDaemon(t)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	sess, err := c.GetSession(ctx, "s1")
 	if err != nil {

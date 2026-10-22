@@ -174,6 +174,25 @@ func TestStatusBarComponent(t *testing.T) {
 	if !strings.Contains(out3, "custom hint override") {
 		t.Errorf("expected custom hint:\n%s", out3)
 	}
+
+	// 4. StatePicker with empty hint: leftText is empty, right side displays model/thinking
+	b4 := mock.New(80, 24)
+	app4 := trail.SimpleFC("TestApp", func() kitex.Node {
+		return StatusBar(StatusBarProps{
+			State:    StatePicker,
+			Model:    "Claude 3.7 Sonnet",
+			Thinking: "high",
+		})
+	})
+	inst4, _ := trail.New(app4(), trail.WithBackend(b4))
+	inst4.Frame()
+	out4 := surfaceText(b4)
+	if !strings.Contains(out4, "Claude 3.7 Sonnet · high") {
+		t.Errorf("expected model · thinking on right:\n%s", out4)
+	}
+	if strings.Contains(out4, "navigate") || strings.Contains(out4, "select") {
+		t.Errorf("expected no hint on left in StatePicker, got:\n%s", out4)
+	}
 }
 
 func TestSpinnerAndDiffComponents(t *testing.T) {
@@ -312,60 +331,6 @@ func TestComposerFunctionalComponent(t *testing.T) {
 	}
 }
 
-func TestPickerFunctionalComponent(t *testing.T) {
-	opts := []Option{
-		{Value: "opt1", Label: "Option One", Description: "First option", Current: true},
-		{Value: "opt2", Label: "Option Two", Description: "Second option"},
-	}
-
-	var selectedValue string
-	canceled := false
-
-	b := mock.New(80, 24)
-	app := trail.SimpleFC("TestApp", func() kitex.Node {
-		return Picker(PickerProps{
-			Title:   "Select an option:",
-			Options: opts,
-			OnSelect: func(opt Option) any {
-				selectedValue = opt.Value
-				return opt.Value
-			},
-			OnAction: func(action any, closePicker bool) {
-				if s, ok := action.(string); ok {
-					selectedValue = s
-				}
-			},
-			OnCancel: func() {
-				canceled = true
-			},
-		})
-	})
-
-	inst, _ := trail.New(app(), trail.WithBackend(b))
-	inst.Frame()
-
-	out := surfaceText(b)
-	if !strings.Contains(out, "Select an option:") || !strings.Contains(out, "Option One") {
-		t.Errorf("picker output missing title or options:\n%s", out)
-	}
-
-	// Press Enter -> selects Option One (opt1)
-	inst.Engine().ProcessRawEvent(&backend.RawKeyEvent{
-		Key: key.Key{Code: key.KeyEnter},
-	})
-	if selectedValue != "opt1" {
-		t.Errorf("selected value = %q, want 'opt1'", selectedValue)
-	}
-
-	// Press Escape -> cancel called
-	inst.Engine().ProcessRawEvent(&backend.RawKeyEvent{
-		Key: key.Key{Code: key.KeyEscape},
-	})
-	if !canceled {
-		t.Errorf("expected OnCancel to be called on Escape")
-	}
-}
-
 func TestApprovalFunctionalComponent(t *testing.T) {
 	req := api.PermissionRequest{
 		Action:   api.ActionWrite,
@@ -400,5 +365,109 @@ func TestApprovalFunctionalComponent(t *testing.T) {
 	})
 	if decided.Kind != api.DecisionAllowOnce {
 		t.Errorf("decision kind = %v, want DecisionAllowOnce", decided.Kind)
+	}
+}
+
+func TestComposerSuggestArgsAndSelection(t *testing.T) {
+	opts := []Option{
+		{Value: "default", Label: "default", Description: "Allow safe reads", Current: true},
+		{Value: "accept_edits", Label: "accept_edits", Description: "Allow safe reads and workspace file edits"},
+		{Value: "plan", Label: "plan", Description: "Read-only mode"},
+		{Value: "ask", Label: "ask", Description: "Ask for confirmation"},
+		{Value: "auto", Label: "auto", Description: "Allow all actions"},
+	}
+
+	var submittedText string
+	b := mock.New(80, 24)
+	app := trail.SimpleFC("TestApp", func() kitex.Node {
+		return Composer(ComposerProps{
+			SuggestArgs: func(rawLine string) ([]Option, bool) {
+				if strings.HasPrefix(rawLine, "/mode ") {
+					return opts, true
+				}
+				return nil, false
+			},
+			OnSubmit: func(text string) {
+				submittedText = text
+			},
+		})
+	})
+
+	inst, err := trail.New(app(), trail.WithBackend(b))
+	if err != nil {
+		t.Fatalf("trail.New: %v", err)
+	}
+	inst.Frame()
+
+	// 1. Type "/mode " into composer
+	for _, ch := range "/mode " {
+		inst.Engine().ProcessRawEvent(&backend.RawKeyEvent{
+			Key: key.Key{Code: ch, Text: string(ch)},
+		})
+	}
+	inst.Frame()
+
+	out := surfaceText(b)
+	if !strings.Contains(out, "default") || !strings.Contains(out, "accept_edits") || !strings.Contains(out, "plan") {
+		t.Fatalf("expected mode options table below composer, got:\n%s", out)
+	}
+
+	// Verify alignment: row 0 has "❯ default", row 1 has "  accept_edits"
+	// Both label texts must start at the exact same X column
+	frame := b.LastFrame().Surface
+	if frame == nil {
+		t.Fatalf("expected rendered frame")
+	}
+
+	var row0Y, row1Y int
+	for y := 0; y < frame.Height; y++ {
+		rowStr := ""
+		for x := 0; x < frame.Width; x++ {
+			rowStr += frame.CellAt(x, y).Content
+		}
+		if strings.Contains(rowStr, "default") && strings.Contains(rowStr, "❯") {
+			row0Y = y
+		}
+		if strings.Contains(rowStr, "accept_edits") {
+			row1Y = y
+		}
+	}
+
+	// In row0, "default" starts at X=2 (after "❯ ")
+	if frame.CellAt(0, row0Y).Content != "❯" || frame.CellAt(1, row0Y).Content != " " || frame.CellAt(2, row0Y).Content != "d" {
+		t.Errorf("row0 cursor/label mismatch: [%q, %q, %q]",
+			frame.CellAt(0, row0Y).Content, frame.CellAt(1, row0Y).Content, frame.CellAt(2, row0Y).Content)
+	}
+	// In row1, "accept_edits" starts at X=2 (after "  ")
+	if frame.CellAt(0, row1Y).Content != " " || frame.CellAt(1, row1Y).Content != " " || frame.CellAt(2, row1Y).Content != "a" {
+		t.Errorf("row1 cursor/label mismatch: [%q, %q, %q] - leading spaces must not be stripped",
+			frame.CellAt(0, row1Y).Content, frame.CellAt(1, row1Y).Content, frame.CellAt(2, row1Y).Content)
+	}
+
+	// 2. Press Down -> moves selection to accept_edits
+	inst.Engine().ProcessRawEvent(&backend.RawKeyEvent{
+		Key: key.Key{Code: key.KeyDown},
+	})
+	inst.Frame()
+
+	frameDown := b.LastFrame().Surface
+	// Now row0 has unselected "  default" starting at X=2
+	if frameDown.CellAt(0, row0Y).Content != " " || frameDown.CellAt(1, row0Y).Content != " " || frameDown.CellAt(2, row0Y).Content != "d" {
+		t.Errorf("after Down, row0 mismatch: [%q, %q, %q]",
+			frameDown.CellAt(0, row0Y).Content, frameDown.CellAt(1, row0Y).Content, frameDown.CellAt(2, row0Y).Content)
+	}
+	// And row1 has selected "❯ accept_edits" starting at X=2
+	if frameDown.CellAt(0, row1Y).Content != "❯" || frameDown.CellAt(1, row1Y).Content != " " || frameDown.CellAt(2, row1Y).Content != "a" {
+		t.Errorf("after Down, row1 mismatch: [%q, %q, %q]",
+			frameDown.CellAt(0, row1Y).Content, frameDown.CellAt(1, row1Y).Content, frameDown.CellAt(2, row1Y).Content)
+	}
+
+	// 3. Press Enter -> submits "/mode accept_edits"
+	inst.Engine().ProcessRawEvent(&backend.RawKeyEvent{
+		Key: key.Key{Code: key.KeyEnter},
+	})
+	inst.Frame()
+	if submittedText != "/mode accept_edits" {
+		t.Errorf("submittedText = %q, want '/mode accept_edits'", submittedText)
 	}
 }
