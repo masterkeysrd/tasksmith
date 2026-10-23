@@ -12,10 +12,10 @@ import (
 	"github.com/google/uuid"
 	"github.com/masterkeysrd/loom/message"
 	"github.com/masterkeysrd/tasksmith/api"
-	"github.com/masterkeysrd/tasksmith/internal/session"
-	"github.com/masterkeysrd/tasksmith/internal/std"
-	"github.com/masterkeysrd/tasksmith/internal/tools"
-	"github.com/masterkeysrd/tasksmith/internal/workspace"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/session"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/std"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/tools"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/workspace"
 )
 
 func toAPISession(sess *session.Session, status api.SessionStatus) api.Session {

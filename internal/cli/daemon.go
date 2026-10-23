@@ -14,7 +14,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
 	"github.com/masterkeysrd/tasksmith/internal/daemon"
-	"github.com/masterkeysrd/tasksmith/internal/gateway"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/gateway"
 	"github.com/spf13/cobra"
 )
 

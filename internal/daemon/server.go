@@ -19,11 +19,11 @@ import (
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
-	"github.com/masterkeysrd/tasksmith/internal/gateway"
-	"github.com/masterkeysrd/tasksmith/internal/session"
-	"github.com/masterkeysrd/tasksmith/internal/tools"
-	"github.com/masterkeysrd/tasksmith/internal/tools/builtin"
-	"github.com/masterkeysrd/tasksmith/internal/workspace"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/gateway"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/session"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/tools"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/tools/builtin"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/workspace"
 )
 
 // Sentinel errors returned by the daemon package.

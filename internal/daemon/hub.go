@@ -6,7 +6,7 @@ import (
 	"sync"
 
 	"github.com/masterkeysrd/tasksmith/api"
-	"github.com/masterkeysrd/tasksmith/internal/session"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/session"
 )
 
 type subscriber struct {

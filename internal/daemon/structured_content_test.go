@@ -14,7 +14,7 @@ import (
 	"github.com/masterkeysrd/loom/llm"
 	"github.com/masterkeysrd/loom/message"
 	"github.com/masterkeysrd/tasksmith/api"
-	"github.com/masterkeysrd/tasksmith/internal/session"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/session"
 )
 
 func TestStructuredContentConversionFailure(t *testing.T) {

@@ -22,7 +22,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/client"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
-	"github.com/masterkeysrd/tasksmith/internal/gateway"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/gateway"
 )
 
 type fakeProvider struct {

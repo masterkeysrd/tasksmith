@@ -13,11 +13,11 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	"github.com/masterkeysrd/tasksmith/internal/core/sqlite"
 	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
-	"github.com/masterkeysrd/tasksmith/internal/gateway"
-	"github.com/masterkeysrd/tasksmith/internal/sandbox"
-	"github.com/masterkeysrd/tasksmith/internal/session"
-	"github.com/masterkeysrd/tasksmith/internal/tools"
-	"github.com/masterkeysrd/tasksmith/internal/workspace"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/gateway"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/sandbox"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/session"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/tools"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/workspace"
 )
 
 type activeRun struct {
