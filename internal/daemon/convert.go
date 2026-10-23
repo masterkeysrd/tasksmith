@@ -2,6 +2,8 @@ package daemon
 
 import (
 	"cmp"
+	"encoding/json"
+	"fmt"
 	"maps"
 	"slices"
 	"strings"
@@ -31,9 +33,9 @@ func toAPISession(sess *session.Session, status api.SessionStatus) api.Session {
 	}
 }
 
-func toAPIMessage(msg message.Message) *api.Message {
+func toAPIMessage(msg message.Message) (*api.Message, error) {
 	if msg == nil {
-		return nil
+		return nil, nil
 	}
 
 	out := &api.Message{
@@ -47,9 +49,16 @@ func toAPIMessage(msg message.Message) *api.Message {
 		out.ToolCallID = tm.ToolCallID
 		out.Name = tm.Name
 		out.IsError = tm.IsError
+		if tm.StructuredContent != nil {
+			data, err := json.Marshal(tm.StructuredContent)
+			if err != nil {
+				return nil, fmt.Errorf("daemon: marshal structured content for message %q: %w", msg.GetID(), err)
+			}
+			out.StructuredContent = data
+		}
 	}
 
-	return out
+	return out, nil
 }
 
 func extractUUIDv7Time(id string) time.Time {
@@ -230,14 +239,19 @@ func fromAPIPermissionDecision(dec api.PermissionDecision) tools.PermissionDecis
 }
 
 func toAPIEvent(workspaceDir string, ev session.Event) api.Event {
-	return api.Event{
+	out := api.Event{
 		Type:        api.EventType(ev.Type),
 		Workspace:   workspaceDir,
 		SessionID:   ev.SessionID,
-		Message:     toAPIMessage(ev.Message),
 		Chunk:       toAPIChunk(ev.Chunk),
 		Permissions: toAPIPermissionRequests(ev.Permissions),
 	}
+	var err error
+	out.Message, err = toAPIMessage(ev.Message)
+	if err != nil {
+		out.Type, out.Error = api.EventError, err.Error()
+	}
+	return out
 }
 
 func toAPIFileChange(fc std.FileChange) api.FileChange {

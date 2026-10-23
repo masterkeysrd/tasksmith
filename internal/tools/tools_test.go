@@ -238,8 +238,11 @@ func TestSpecValidationAndDefaultPrepare(t *testing.T) {
 		Name: "net_only",
 		Args: map[string]any{"name": "host"},
 	})
-	if err != nil || !strings.Contains(netMsg.Content.Text(), `"ok":1`) {
-		t.Fatalf("expected JSON-marshaled output, got %q (err: %v)", netMsg.Content.Text(), err)
+	if err != nil || netMsg.Content.Text() != "" || netMsg.StructuredContent == nil {
+		t.Fatalf("expected empty Content and non-nil StructuredContent, got text %q, structured %+v (err: %v)", netMsg.Content.Text(), netMsg.StructuredContent, err)
+	}
+	if m, ok := netMsg.StructuredContent.(map[string]int); !ok || m["ok"] != 1 {
+		t.Fatalf("unexpected structured output: %+v", netMsg.StructuredContent)
 	}
 }
 

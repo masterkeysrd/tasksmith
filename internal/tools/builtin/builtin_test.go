@@ -251,8 +251,8 @@ func TestReadOnlyToolsPrepareEvaluateExecute(t *testing.T) {
 			if parseErr != nil || parsedID.Version() != 7 {
 				t.Fatalf("expected UUIDv7 on tool result message, got %q (err: %v)", res.ID, parseErr)
 			}
-			if res.Content.Text() == "" {
-				t.Fatalf("expected non-empty text content for %s", tc.Name)
+			if res.StructuredContent == nil {
+				t.Fatalf("expected non-nil structured content for %s", tc.Name)
 			}
 		})
 	}
@@ -410,8 +410,12 @@ func TestBashWebFetchDownloadRemoveAndEdgeCases(t *testing.T) {
 		Name: builtin.ToolBash,
 		Args: map[string]any{"command": "echo hello", "timeout_ms": 5000},
 	})
-	if err != nil || echoRes.IsError || !strings.Contains(echoRes.Content.Text(), "hello") {
-		t.Fatalf("Execute(echo hello) failed: err=%v, text=%s", err, echoRes.Content.Text())
+	if err != nil || echoRes.IsError {
+		t.Fatalf("Execute(echo hello) failed: err=%v, res=%+v", err, echoRes)
+	}
+	bashOut, ok := echoRes.StructuredContent.(builtin.BashOutput)
+	if !ok || !strings.Contains(bashOut.Stdout, "hello") {
+		t.Fatalf("unexpected bash output: %+v", echoRes.StructuredContent)
 	}
 
 	// 2. web_fetch + download + remove
@@ -436,8 +440,12 @@ func TestBashWebFetchDownloadRemoveAndEdgeCases(t *testing.T) {
 		t.Fatalf("unexpected web_fetch plan: %+v, err=%v", fetchPlan, err)
 	}
 	fetchRes, err := c.Execute(ctx, fetchCall)
-	if err != nil || fetchRes.IsError || !strings.Contains(fetchRes.Content.Text(), "remote payload") {
-		t.Fatalf("Execute(web_fetch) failed: err=%v, text=%s", err, fetchRes.Content.Text())
+	if err != nil || fetchRes.IsError {
+		t.Fatalf("Execute(web_fetch) failed: err=%v, res=%+v", err, fetchRes)
+	}
+	fetchOut, ok := fetchRes.StructuredContent.(builtin.WebFetchOutput)
+	if !ok || !strings.Contains(fetchOut.Text, "remote payload") {
+		t.Fatalf("unexpected web_fetch output: %+v", fetchRes.StructuredContent)
 	}
 
 	// Download to existing unread file fails in Prepare with std.ErrFileNotRead

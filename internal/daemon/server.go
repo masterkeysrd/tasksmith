@@ -731,7 +731,12 @@ func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
 
 	out := make([]api.Message, 0, len(history))
 	for _, msg := range history {
-		if converted := toAPIMessage(msg); converted != nil {
+		converted, err := toAPIMessage(msg)
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		if converted != nil {
 			out = append(out, *converted)
 		}
 	}

@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 )
@@ -27,6 +28,44 @@ func TestAPIErrorFormatting(t *testing.T) {
 	}
 	if got := withoutCode.Error(); got != "api: status 500: internal error" {
 		t.Errorf("withoutCode.Error() = %q", got)
+	}
+}
+
+func TestMessageStructuredContentJSONRoundTrip(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		raw  string
+	}{
+		{"absent", ""},
+		{"object", `{"path":"file.go","start_line":2,"end_line":3}`},
+		{"array", `["first",2]`},
+		{"string", `"tool output"`},
+		{"number", `9007199254740993`},
+		{"null", `null`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			event := Event{
+				Type: EventMessageAdded,
+				Message: &Message{
+					ID: "result", Role: RoleTool, ToolCallID: "call",
+					StructuredContent: json.RawMessage(test.raw),
+				},
+			}
+			data, err := json.Marshal(event)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var decoded Event
+			if err := json.Unmarshal(data, &decoded); err != nil {
+				t.Fatal(err)
+			}
+			if decoded.Message == nil || string(decoded.Message.StructuredContent) != test.raw {
+				t.Fatalf("structured content roundtrip = %+v, want %q", decoded.Message, test.raw)
+			}
+			if test.raw == "" && strings.Contains(string(data), "structured_content") {
+				t.Fatalf("absent structured content was not omitted: %s", data)
+			}
+		})
 	}
 }
 

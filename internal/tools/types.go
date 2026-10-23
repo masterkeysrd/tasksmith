@@ -365,8 +365,6 @@ func (t *typedTool[In, Out]) Execute(ctx context.Context, call *message.ToolCall
 		content = message.Content{&message.TextBlock{Text: tp.TextContent()}}
 	} else if s, ok := any(out).(string); ok {
 		content = message.Content{&message.TextBlock{Text: s}}
-	} else if data, mErr := json.Marshal(out); mErr == nil {
-		content = message.Content{&message.TextBlock{Text: string(data)}}
 	}
 
 	return &message.Tool{

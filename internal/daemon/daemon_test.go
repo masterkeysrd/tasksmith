@@ -878,7 +878,10 @@ func TestConversionsAndErrorPublishing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("fromSendRequest: %v", err)
 	}
-	apiMsg := toAPIMessage(reqMsg)
+	apiMsg, err := toAPIMessage(reqMsg)
+	if err != nil {
+		t.Fatalf("toAPIMessage: %v", err)
+	}
 	if apiMsg == nil || len(apiMsg.Content) != 3 {
 		t.Fatalf("toAPIMessage = %+v, want 3 blocks", apiMsg)
 	}

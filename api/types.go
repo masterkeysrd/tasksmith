@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/json"
 	"fmt"
 	"time"
 )
@@ -138,13 +139,14 @@ type Block struct {
 
 // Message represents a persisted turn in a session's UI conversation history.
 type Message struct {
-	ID         string    `json:"id"`
-	Role       Role      `json:"role"`
-	Content    []Block   `json:"content,omitempty"`
-	ToolCallID string    `json:"tool_call_id,omitempty"`
-	Name       string    `json:"name,omitempty"`
-	IsError    bool      `json:"is_error,omitempty"`
-	CreatedAt  time.Time `json:"created_at,omitempty"`
+	ID                string          `json:"id"`
+	Role              Role            `json:"role"`
+	Content           []Block         `json:"content,omitempty"`
+	StructuredContent json.RawMessage `json:"structured_content,omitempty"`
+	ToolCallID        string          `json:"tool_call_id,omitempty"`
+	Name              string          `json:"name,omitempty"`
+	IsError           bool            `json:"is_error,omitempty"`
+	CreatedAt         time.Time       `json:"created_at,omitzero"`
 }
 
 // Chunk represents an incremental streaming assistant delta.
