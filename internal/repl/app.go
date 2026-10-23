@@ -109,8 +109,8 @@ var replView = trail.FC("REPL", func(props AppProps) trail.Node {
 		}))
 	}
 
-	// Global status bar (always visible at the bottom)
-	activeNodes = append(activeNodes, ui.StatusBar(ui.StatusBarProps{
+	// Global status line (always visible at the bottom)
+	activeNodes = append(activeNodes, components.StatusLine(components.StatusLineProps{
 		State:    state,
 		Mode:     ctrl.Mode(),
 		Model:    ctrl.ModelLabel(),

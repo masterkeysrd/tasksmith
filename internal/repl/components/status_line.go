@@ -1,4 +1,4 @@
-package ui
+package components
 
 import (
 	"cmp"
@@ -9,66 +9,37 @@ import (
 	"github.com/masterkeysrd/kite/style"
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/repl/theme"
+	"github.com/masterkeysrd/tasksmith/internal/repl/ui"
 )
 
-// State represents the interactive lifecycle phase of the REPL.
-type State int
-
-const (
-	// StateIdle indicates the REPL is waiting for user prompt or slash command input.
-	StateIdle State = iota
-	// StateStreaming indicates the REPL is streaming an active assistant turn.
-	StateStreaming
-	// StateApproval indicates the REPL is paused awaiting user resolution of a tool permission request.
-	StateApproval
-	// StatePicker indicates an interactive command picker modal is active.
-	StatePicker
-)
-
-// String returns the human-readable name of the [State].
-func (s State) String() string {
-	switch s {
-	case StateIdle:
-		return "idle"
-	case StateStreaming:
-		return "streaming"
-	case StateApproval:
-		return "approval"
-	case StatePicker:
-		return "picker"
-	default:
-		return "unknown"
-	}
-}
-
-// StatusBarProps defines the properties for the REPL status footer.
-type StatusBarProps struct {
-	State    State
+// StatusLineProps defines the properties for the REPL status line.
+type StatusLineProps struct {
+	State    ui.State
 	Mode     api.PermissionMode
 	Model    string
 	Thinking string
 	Hint     string // Custom hint override, e.g. from active picker
 }
 
-func stateHint(state State) string {
+func stateHint(state ui.State) string {
 	switch state {
-	case StateStreaming:
+	case ui.StateStreaming:
 		return "streaming • esc to cancel"
-	case StatePicker:
+	case ui.StatePicker:
 		return ""
-	case StateApproval:
+	case ui.StateApproval:
 		return "y allow once · a allow session · n deny · r reject with feedback"
 	default:
 		return "shift+tab cycle mode • /help commands"
 	}
 }
 
-// StatusBar is a trail functional component rendering the two-column REPL status bar:
+// StatusLine is a trail functional component rendering the two-column REPL status bar:
 // left: shortcut hint
 // right: <mode> · <Model> · <Thinking> (or <Model> · <Thinking> when mode is default or empty)
-var StatusBar = trail.FC("StatusBar", func(props StatusBarProps) trail.Node {
+var StatusLine = trail.FC("StatusLine", func(props StatusLineProps) trail.Node {
 	leftText := props.Hint
-	if leftText == "" && props.State != StatePicker {
+	if leftText == "" && props.State != ui.StatePicker {
 		leftText = stateHint(props.State)
 	}
 
