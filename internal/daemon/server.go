@@ -876,7 +876,7 @@ func (s *Server) handleSetMode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, api.ModeResponse{Mode: req.Mode})
+	writeJSON(w, http.StatusOK, api.ModeResponse(req))
 }
 
 func (s *Server) handleChanges(w http.ResponseWriter, r *http.Request) {
@@ -1018,8 +1018,7 @@ func writeBadRequest(w http.ResponseWriter, err error) {
 }
 
 func writeError(w http.ResponseWriter, err error) {
-	var apiErr *api.APIError
-	if errors.As(err, &apiErr) {
+	if apiErr, ok := errors.AsType[*api.APIError](err); ok {
 		code := apiErr.Code
 		if code == "" {
 			code = "error"

@@ -36,12 +36,6 @@ func (p *fakeProvider) GetProfile(string) (profile.Profile, bool) { return profi
 func (p *fakeProvider) SearchProfiles(string) []profile.Profile   { return nil }
 func (p *fakeProvider) OverrideProfile(string, profile.Profile)   {}
 
-func (p *fakeProvider) setHandler(fn func(ctx context.Context, req *llm.Request) (llm.StreamResponse, error)) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	p.chunkHandler = fn
-}
-
 func (p *fakeProvider) Stream(ctx context.Context, req *llm.Request) (llm.StreamResponse, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
