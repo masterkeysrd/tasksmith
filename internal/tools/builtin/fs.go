@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/core/shellguard"
 	"github.com/masterkeysrd/tasksmith/internal/sandbox"
 	"github.com/masterkeysrd/tasksmith/internal/std"
@@ -37,7 +38,7 @@ type viewTool struct {
 	guard   *shellguard.Guard
 }
 
-func (t *viewTool) Prepare(_ context.Context, in ViewInput) (*tools.Plan, error) {
+func (t *viewTool) Prepare(_ context.Context, in api.ViewInput) (*tools.Plan, error) {
 	if strings.TrimSpace(in.Path) == "" {
 		return nil, fmt.Errorf("%w: path is required", std.ErrInvalidArgument)
 	}
@@ -55,16 +56,16 @@ func (t *viewTool) Prepare(_ context.Context, in ViewInput) (*tools.Plan, error)
 	}, nil
 }
 
-func (t *viewTool) Execute(ctx context.Context, in ViewInput) (ViewOutput, error) {
+func (t *viewTool) Execute(ctx context.Context, in api.ViewInput) (api.ViewOutput, error) {
 	res, err := t.std.View(ctx, std.ViewRequest{
 		Path:   in.Path,
 		Offset: in.Offset,
 		Limit:  in.Limit,
 	})
 	if err != nil {
-		return ViewOutput{}, err
+		return api.ViewOutput{}, err
 	}
-	return ViewOutput{
+	return api.ViewOutput{
 		Path:       res.Path,
 		Content:    res.Content,
 		Numbered:   res.Numbered,
@@ -82,7 +83,7 @@ type lsTool struct {
 	guard   *shellguard.Guard
 }
 
-func (t *lsTool) Prepare(_ context.Context, in LsInput) (*tools.Plan, error) {
+func (t *lsTool) Prepare(_ context.Context, in api.LsInput) (*tools.Plan, error) {
 	rawPath := in.Path
 	if strings.TrimSpace(rawPath) == "" {
 		rawPath = "."
@@ -101,7 +102,7 @@ func (t *lsTool) Prepare(_ context.Context, in LsInput) (*tools.Plan, error) {
 	}, nil
 }
 
-func (t *lsTool) Execute(ctx context.Context, in LsInput) (LsOutput, error) {
+func (t *lsTool) Execute(ctx context.Context, in api.LsInput) (api.LsOutput, error) {
 	res, err := t.std.List(ctx, std.ListRequest{
 		Path:          in.Path,
 		Recursive:     in.Recursive,
@@ -111,18 +112,18 @@ func (t *lsTool) Execute(ctx context.Context, in LsInput) (LsOutput, error) {
 		Limit:         in.Limit,
 	})
 	if err != nil {
-		return LsOutput{}, err
+		return api.LsOutput{}, err
 	}
-	entries := make([]LsEntry, 0, len(res.Entries))
+	entries := make([]api.LsEntry, 0, len(res.Entries))
 	for _, e := range res.Entries {
-		entries = append(entries, LsEntry{
+		entries = append(entries, api.LsEntry{
 			Path:  e.Path,
 			Name:  e.Name,
 			IsDir: e.IsDir,
 			Size:  e.Size,
 		})
 	}
-	return LsOutput{
+	return api.LsOutput{
 		Path:      res.Path,
 		Entries:   entries,
 		Truncated: res.Truncated,
@@ -135,7 +136,7 @@ type globTool struct {
 	guard   *shellguard.Guard
 }
 
-func (t *globTool) Prepare(_ context.Context, in GlobInput) (*tools.Plan, error) {
+func (t *globTool) Prepare(_ context.Context, in api.GlobInput) (*tools.Plan, error) {
 	if strings.TrimSpace(in.Pattern) == "" {
 		return nil, fmt.Errorf("%w: pattern is required", std.ErrInvalidArgument)
 	}
@@ -157,7 +158,7 @@ func (t *globTool) Prepare(_ context.Context, in GlobInput) (*tools.Plan, error)
 	}, nil
 }
 
-func (t *globTool) Execute(ctx context.Context, in GlobInput) (GlobOutput, error) {
+func (t *globTool) Execute(ctx context.Context, in api.GlobInput) (api.GlobOutput, error) {
 	res, err := t.std.Glob(ctx, std.GlobRequest{
 		Pattern:       in.Pattern,
 		Path:          in.Path,
@@ -166,9 +167,9 @@ func (t *globTool) Execute(ctx context.Context, in GlobInput) (GlobOutput, error
 		Limit:         in.Limit,
 	})
 	if err != nil {
-		return GlobOutput{}, err
+		return api.GlobOutput{}, err
 	}
-	return GlobOutput{
+	return api.GlobOutput{
 		Pattern:   res.Pattern,
 		Path:      res.Path,
 		Matches:   res.Matches,
@@ -182,7 +183,7 @@ type grepTool struct {
 	guard   *shellguard.Guard
 }
 
-func (t *grepTool) Prepare(_ context.Context, in GrepInput) (*tools.Plan, error) {
+func (t *grepTool) Prepare(_ context.Context, in api.GrepInput) (*tools.Plan, error) {
 	if strings.TrimSpace(in.Pattern) == "" {
 		return nil, fmt.Errorf("%w: pattern is required", std.ErrInvalidArgument)
 	}
@@ -204,7 +205,7 @@ func (t *grepTool) Prepare(_ context.Context, in GrepInput) (*tools.Plan, error)
 	}, nil
 }
 
-func (t *grepTool) Execute(ctx context.Context, in GrepInput) (GrepOutput, error) {
+func (t *grepTool) Execute(ctx context.Context, in api.GrepInput) (api.GrepOutput, error) {
 	res, err := t.std.Grep(ctx, std.GrepRequest{
 		Pattern:         in.Pattern,
 		Path:            in.Path,
@@ -215,11 +216,11 @@ func (t *grepTool) Execute(ctx context.Context, in GrepInput) (GrepOutput, error
 		Limit:           in.Limit,
 	})
 	if err != nil {
-		return GrepOutput{}, err
+		return api.GrepOutput{}, err
 	}
-	matches := make([]GrepMatch, 0, len(res.Matches))
+	matches := make([]api.GrepMatch, 0, len(res.Matches))
 	for _, m := range res.Matches {
-		matches = append(matches, GrepMatch{
+		matches = append(matches, api.GrepMatch{
 			Path:   m.Path,
 			Line:   m.Line,
 			Column: m.Column,
@@ -228,7 +229,7 @@ func (t *grepTool) Execute(ctx context.Context, in GrepInput) (GrepOutput, error
 			After:  m.After,
 		})
 	}
-	return GrepOutput{
+	return api.GrepOutput{
 		Pattern:   res.Pattern,
 		Matches:   matches,
 		Truncated: res.Truncated,
@@ -240,7 +241,7 @@ type writeTool struct {
 	guard *shellguard.Guard
 }
 
-func (t *writeTool) Prepare(ctx context.Context, in WriteInput) (*tools.Plan, error) {
+func (t *writeTool) Prepare(ctx context.Context, in api.WriteInput) (*tools.Plan, error) {
 	res, err := t.std.Write(ctx, std.WriteRequest{
 		Path:    in.Path,
 		Content: in.Content,
@@ -265,7 +266,7 @@ func (t *writeTool) Prepare(ctx context.Context, in WriteInput) (*tools.Plan, er
 	}, nil
 }
 
-func (t *writeTool) Execute(ctx context.Context, in WriteInput) (WriteOutput, error) {
+func (t *writeTool) Execute(ctx context.Context, in api.WriteInput) (api.WriteOutput, error) {
 	res, err := t.std.Write(ctx, std.WriteRequest{
 		Path:    in.Path,
 		Content: in.Content,
@@ -273,9 +274,9 @@ func (t *writeTool) Execute(ctx context.Context, in WriteInput) (WriteOutput, er
 		DryRun:  false,
 	})
 	if err != nil {
-		return WriteOutput{}, err
+		return api.WriteOutput{}, err
 	}
-	return WriteOutput{
+	return api.WriteOutput{
 		Path:         res.Path,
 		Created:      res.Created,
 		BytesWritten: res.BytesWritten,
@@ -292,7 +293,7 @@ type editTool struct {
 	guard *shellguard.Guard
 }
 
-func (t *editTool) Prepare(ctx context.Context, in EditInput) (*tools.Plan, error) {
+func (t *editTool) Prepare(ctx context.Context, in api.EditInput) (*tools.Plan, error) {
 	res, err := t.std.Edit(ctx, std.EditRequest{
 		Path:       in.Path,
 		OldText:    in.OldText,
@@ -319,7 +320,7 @@ func (t *editTool) Prepare(ctx context.Context, in EditInput) (*tools.Plan, erro
 	}, nil
 }
 
-func (t *editTool) Execute(ctx context.Context, in EditInput) (EditOutput, error) {
+func (t *editTool) Execute(ctx context.Context, in api.EditInput) (api.EditOutput, error) {
 	res, err := t.std.Edit(ctx, std.EditRequest{
 		Path:       in.Path,
 		OldText:    in.OldText,
@@ -329,9 +330,9 @@ func (t *editTool) Execute(ctx context.Context, in EditInput) (EditOutput, error
 		DryRun:     false,
 	})
 	if err != nil {
-		return EditOutput{}, err
+		return api.EditOutput{}, err
 	}
-	return EditOutput{
+	return api.EditOutput{
 		Path:         res.Path,
 		Replacements: res.Replacements,
 		Additions:    res.Additions,
@@ -347,7 +348,7 @@ type removeTool struct {
 	guard *shellguard.Guard
 }
 
-func (t *removeTool) Prepare(ctx context.Context, in RemoveInput) (*tools.Plan, error) {
+func (t *removeTool) Prepare(ctx context.Context, in api.RemoveInput) (*tools.Plan, error) {
 	res, err := t.std.Remove(ctx, std.RemoveRequest{
 		Path:   in.Path,
 		Force:  in.Force,
@@ -371,16 +372,16 @@ func (t *removeTool) Prepare(ctx context.Context, in RemoveInput) (*tools.Plan, 
 	}, nil
 }
 
-func (t *removeTool) Execute(ctx context.Context, in RemoveInput) (RemoveOutput, error) {
+func (t *removeTool) Execute(ctx context.Context, in api.RemoveInput) (api.RemoveOutput, error) {
 	res, err := t.std.Remove(ctx, std.RemoveRequest{
 		Path:   in.Path,
 		Force:  in.Force,
 		DryRun: false,
 	})
 	if err != nil {
-		return RemoveOutput{}, err
+		return api.RemoveOutput{}, err
 	}
-	return RemoveOutput{
+	return api.RemoveOutput{
 		Path:       res.Path,
 		Deletions:  res.Deletions,
 		Diff:       res.Diff,

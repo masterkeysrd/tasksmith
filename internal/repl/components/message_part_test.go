@@ -9,7 +9,6 @@ import (
 	"github.com/masterkeysrd/kite/extras/trail"
 	"github.com/masterkeysrd/kite/testenv"
 	"github.com/masterkeysrd/tasksmith/api"
-	"github.com/masterkeysrd/tasksmith/internal/tools/builtin"
 	"github.com/masterkeysrd/tasksmith/internal/ui/hooks"
 )
 
@@ -37,7 +36,7 @@ func TestMessageToolDispatchesViewRenderer(t *testing.T) {
 	if got := render(MessageTool(MessageToolProps{Tool: tool})); got != "○ Reading \ue627 file.go (lines 2-4)" {
 		t.Fatalf("running tool = %q", got)
 	}
-	tool.Response = viewResponse(t, builtin.ViewOutput{
+	tool.Response = viewResponse(t, api.ViewOutput{
 		Path: "file.go", StartLine: 2, EndLine: 3,
 	})
 	tool.Status = hooks.ToolSucceeded

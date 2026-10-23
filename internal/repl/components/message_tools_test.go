@@ -10,7 +10,6 @@ import (
 	"github.com/masterkeysrd/kite/extras/kitex"
 	"github.com/masterkeysrd/kite/testenv"
 	"github.com/masterkeysrd/tasksmith/api"
-	"github.com/masterkeysrd/tasksmith/internal/tools/builtin"
 	"github.com/masterkeysrd/tasksmith/internal/ui/hooks"
 )
 
@@ -27,7 +26,7 @@ func renderViewTool(t *testing.T, width int) func(hooks.ToolPart) string {
 	}
 }
 
-func viewResponse(t *testing.T, output builtin.ViewOutput) *api.Message {
+func viewResponse(t *testing.T, output api.ViewOutput) *api.Message {
 	t.Helper()
 	data, err := json.Marshal(output)
 	if err != nil {
@@ -54,7 +53,7 @@ func TestViewToolRendererRunningAndCompleted(t *testing.T) {
 	}
 	completed := running
 	completed.Status = hooks.ToolSucceeded
-	completed.Response = viewResponse(t, builtin.ViewOutput{
+	completed.Response = viewResponse(t, api.ViewOutput{
 		Path: "resolved/main.go", StartLine: 10, EndLine: 15, TotalLines: 15,
 		Content: "must not dump the file contents",
 	})
@@ -131,13 +130,13 @@ func TestViewToolRendererPartialPendingAndInterrupted(t *testing.T) {
 
 func TestViewToolRendererUnmatchedAndEmptyResults(t *testing.T) {
 	render := renderViewTool(t, 100)
-	got := render(hooks.ToolPart{Response: viewResponse(t, builtin.ViewOutput{
+	got := render(hooks.ToolPart{Response: viewResponse(t, api.ViewOutput{
 		Path: "unmatched.go", StartLine: 2, EndLine: 2, TotalLines: 2,
 	})})
 	if got != "● Read \ue627 unmatched.go (line 2)" {
 		t.Fatalf("unmatched result = %q", got)
 	}
-	got = render(hooks.ToolPart{Response: viewResponse(t, builtin.ViewOutput{
+	got = render(hooks.ToolPart{Response: viewResponse(t, api.ViewOutput{
 		Path: "empty.go",
 	})})
 	if got != "● Read \ue627 empty.go" {
@@ -145,7 +144,7 @@ func TestViewToolRendererUnmatchedAndEmptyResults(t *testing.T) {
 	}
 	got = render(hooks.ToolPart{
 		Call: &api.ToolCall{Args: map[string]any{"path": "file.go", "offset": 100}},
-		Response: viewResponse(t, builtin.ViewOutput{
+		Response: viewResponse(t, api.ViewOutput{
 			Path: "file.go", TotalLines: 10,
 		}),
 	})
@@ -154,7 +153,7 @@ func TestViewToolRendererUnmatchedAndEmptyResults(t *testing.T) {
 	}
 	got = render(hooks.ToolPart{
 		Status: hooks.ToolRunning,
-		Response: viewResponse(t, builtin.ViewOutput{
+		Response: viewResponse(t, api.ViewOutput{
 			Path: "finished.go", StartLine: 1, EndLine: 2, TotalLines: 2,
 		}),
 	})
@@ -192,7 +191,7 @@ func TestViewToolRendererErrors(t *testing.T) {
 
 func TestViewToolRendererUsesStructuredContent(t *testing.T) {
 	render := renderViewTool(t, 100)
-	response := viewResponse(t, builtin.ViewOutput{
+	response := viewResponse(t, api.ViewOutput{
 		Path: "structured.go", StartLine: 2, EndLine: 3,
 	})
 	response.Content = []api.Block{{Type: api.BlockText, Text: "not a structured tool result"}}

@@ -8,7 +8,6 @@ import (
 	"github.com/masterkeysrd/kite/extras/trail"
 	"github.com/masterkeysrd/kite/style"
 	"github.com/masterkeysrd/tasksmith/api"
-	"github.com/masterkeysrd/tasksmith/internal/tools/builtin"
 	"github.com/masterkeysrd/tasksmith/internal/ui/components/icon"
 	"github.com/masterkeysrd/tasksmith/internal/ui/hooks"
 	"github.com/masterkeysrd/tasksmith/internal/ui/theme"
@@ -22,7 +21,7 @@ func ViewToolRenderer(tool hooks.ToolPart) trail.Node {
 	}
 	if tool.Call != nil && tool.Call.Args != nil {
 		data, err := json.Marshal(tool.Call.Args)
-		var input builtin.ViewInput
+		var input api.ViewInput
 		if err == nil {
 			err = json.Unmarshal(data, &input)
 		}
@@ -63,7 +62,7 @@ func ViewToolRenderer(tool hooks.ToolPart) trail.Node {
 			Text: strings.TrimSpace("● Read failed "+viewToolDetails(props)) + "\n" + tool.Response.Content[0].Text, Error: true,
 		})
 	}
-	var output builtin.ViewOutput
+	var output api.ViewOutput
 	if err := json.Unmarshal(tool.Response.StructuredContent, &output); err != nil {
 		return viewToolNotice(viewToolNoticeProps{
 			Text: "Unable to render read result: " + err.Error(), Error: true,

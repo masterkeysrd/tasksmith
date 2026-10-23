@@ -11,7 +11,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/tools"
 )
 
-//go:generate toolgen -dir . -pkg builtin -out generated.go
+//go:generate toolgen -dir . -pkg builtin -out generated.go -types-pkg api -types-out ../../../api/tools.go
 
 //go:embed *.tool.md
 var builtinFS embed.FS

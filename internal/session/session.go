@@ -623,7 +623,7 @@ func (m *Manager) Resume(ctx context.Context, sessionID string) (*message.Assist
 		return nil, err
 	}
 
-	return m.consumeHarnessStream(ctx, sess.ID, h.Resume(ctx, sess.ID, fullDecisions))
+	return m.send(ctx, sess.ID, h.Resume(ctx, sess.ID, fullDecisions))
 }
 
 // RespondPermission records a user's [tools.PermissionDecision] for a pending
@@ -665,10 +665,10 @@ func (m *Manager) Send(ctx context.Context, sessionID string, input message.Mess
 	delete(m.decisions, sess.ID)
 	m.mu.Unlock()
 
-	return m.consumeHarnessStream(ctx, sess.ID, h.Stream(ctx, sess.ID, input))
+	return m.send(ctx, sess.ID, h.Stream(ctx, sess.ID, input))
 }
 
-func (m *Manager) consumeHarnessStream(ctx context.Context, sessID string, stream iter.Seq2[harness.Event, error]) (*message.Assistant, error) {
+func (m *Manager) send(ctx context.Context, sessID string, stream iter.Seq2[harness.Event, error]) (*message.Assistant, error) {
 	var reply *message.Assistant
 	var interrupted bool
 
@@ -771,10 +771,8 @@ func (m *Manager) renderSystemPrompt(agentName string) string {
 	globals := map[string]any{
 		"HasTool": func(toolName string) bool {
 			if ag, ok := m.workspace.GetAgent(agentName); ok {
-				for _, t := range ag.Tools {
-					if t == toolName {
-						return true
-					}
+				if slices.Contains(ag.Tools, toolName) {
+					return true
 				}
 			}
 			return false

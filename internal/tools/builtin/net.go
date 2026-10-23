@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/core/shellguard"
 	"github.com/masterkeysrd/tasksmith/internal/std"
 	"github.com/masterkeysrd/tasksmith/internal/tools"
@@ -14,7 +15,7 @@ type webFetchTool struct {
 	std *std.Std
 }
 
-func (t *webFetchTool) Prepare(ctx context.Context, in WebFetchInput) (*tools.Plan, error) {
+func (t *webFetchTool) Prepare(ctx context.Context, in api.WebFetchInput) (*tools.Plan, error) {
 	res, err := t.std.Fetch(ctx, std.FetchRequest{
 		URL:    in.URL,
 		Method: in.Method,
@@ -33,7 +34,7 @@ func (t *webFetchTool) Prepare(ctx context.Context, in WebFetchInput) (*tools.Pl
 	}, nil
 }
 
-func (t *webFetchTool) Execute(ctx context.Context, in WebFetchInput) (WebFetchOutput, error) {
+func (t *webFetchTool) Execute(ctx context.Context, in api.WebFetchInput) (api.WebFetchOutput, error) {
 	var timeout time.Duration
 	if in.TimeoutMs > 0 {
 		timeout = time.Duration(in.TimeoutMs) * time.Millisecond
@@ -51,9 +52,9 @@ func (t *webFetchTool) Execute(ctx context.Context, in WebFetchInput) (WebFetchO
 		MaxBytes: in.MaxBytes,
 	})
 	if err != nil {
-		return WebFetchOutput{}, err
+		return api.WebFetchOutput{}, err
 	}
-	return WebFetchOutput{
+	return api.WebFetchOutput{
 		URL:         res.URL,
 		StatusCode:  res.StatusCode,
 		Status:      res.Status,
@@ -69,7 +70,7 @@ type downloadTool struct {
 	guard *shellguard.Guard
 }
 
-func (t *downloadTool) Prepare(ctx context.Context, in DownloadInput) (*tools.Plan, error) {
+func (t *downloadTool) Prepare(ctx context.Context, in api.DownloadInput) (*tools.Plan, error) {
 	res, err := t.std.Download(ctx, std.DownloadRequest{
 		URL:      in.URL,
 		Path:     in.Path,
@@ -95,7 +96,7 @@ func (t *downloadTool) Prepare(ctx context.Context, in DownloadInput) (*tools.Pl
 	}, nil
 }
 
-func (t *downloadTool) Execute(ctx context.Context, in DownloadInput) (DownloadOutput, error) {
+func (t *downloadTool) Execute(ctx context.Context, in api.DownloadInput) (api.DownloadOutput, error) {
 	var timeout time.Duration
 	if in.TimeoutMs > 0 {
 		timeout = time.Duration(in.TimeoutMs) * time.Millisecond
@@ -110,9 +111,9 @@ func (t *downloadTool) Execute(ctx context.Context, in DownloadInput) (DownloadO
 		DryRun:   false,
 	})
 	if err != nil {
-		return DownloadOutput{}, err
+		return api.DownloadOutput{}, err
 	}
-	return DownloadOutput{
+	return api.DownloadOutput{
 		URL:          res.URL,
 		Path:         res.Path,
 		StatusCode:   res.StatusCode,

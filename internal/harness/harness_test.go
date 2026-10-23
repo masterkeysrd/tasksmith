@@ -15,6 +15,7 @@ import (
 	"github.com/masterkeysrd/loom/llm"
 	"github.com/masterkeysrd/loom/message"
 	"github.com/masterkeysrd/loom/profile"
+	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	"github.com/masterkeysrd/tasksmith/internal/core/shellguard"
 	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
@@ -625,8 +626,12 @@ func TestMultiStepToolExecution(t *testing.T) {
 	if !ok {
 		t.Fatalf("emittedMessages[2] is %T, want *message.Tool", emittedMessages[2])
 	}
-	if toolMsg.IsError || !strings.Contains(msgText(toolMsg), "secret-file-contents") {
-		t.Errorf("unexpected tool output: isError=%v, text=%q", toolMsg.IsError, msgText(toolMsg))
+	if toolMsg.IsError {
+		t.Errorf("unexpected tool error: %s", msgText(toolMsg))
+	}
+	viewOut, ok := toolMsg.StructuredContent.(api.ViewOutput)
+	if !ok || !strings.Contains(viewOut.Content, "secret-file-contents") {
+		t.Errorf("unexpected tool structured output: ok=%v, content=%+v", ok, toolMsg.StructuredContent)
 	}
 	if emittedMessages[3].Role() != message.RoleAssistant || msgText(emittedMessages[3]) != "The file contains secret-file-contents." {
 		t.Errorf("unexpected final assistant message: %q", msgText(emittedMessages[3]))
@@ -1030,8 +1035,12 @@ func TestMixedToolCallsAndPlanModeDeny(t *testing.T) {
 	if len(toolMsgs) != 3 {
 		t.Fatalf("expected 3 tool messages, got %d", len(toolMsgs))
 	}
-	if toolMsgs[0].IsError || !strings.Contains(msgText(toolMsgs[0]), "hello plan") {
-		t.Errorf("expected view to succeed in ModePlan, got: %s", msgText(toolMsgs[0]))
+	if toolMsgs[0].IsError {
+		t.Errorf("expected view to succeed in ModePlan, got error: %s", msgText(toolMsgs[0]))
+	}
+	viewOut, ok := toolMsgs[0].StructuredContent.(api.ViewOutput)
+	if !ok || !strings.Contains(viewOut.Content, "hello plan") {
+		t.Errorf("expected view to succeed in ModePlan with content 'hello plan': ok=%v, content=%+v", ok, toolMsgs[0].StructuredContent)
 	}
 	if !toolMsgs[1].IsError || !strings.Contains(msgText(toolMsgs[1]), tools.ErrPermissionDenied.Error()) {
 		t.Errorf("expected write to be denied in ModePlan, got: %s", msgText(toolMsgs[1]))

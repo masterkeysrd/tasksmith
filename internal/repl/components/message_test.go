@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"github.com/masterkeysrd/tasksmith/api"
-	"github.com/masterkeysrd/tasksmith/internal/tools/builtin"
 	"github.com/masterkeysrd/tasksmith/internal/ui/hooks"
 )
 
@@ -101,7 +100,7 @@ func TestMessageUpdatesStreamingParts(t *testing.T) {
 
 func TestMessageRendersUnmatchedToolResponse(t *testing.T) {
 	render := renderMessagePart(t, 100)
-	response := viewResponse(t, builtin.ViewOutput{Path: "orphan.go", StartLine: 1, EndLine: 2})
+	response := viewResponse(t, api.ViewOutput{Path: "orphan.go", StartLine: 1, EndLine: 2})
 	response.Name = "view"
 	message := hooks.Message{ID: "result", Role: api.RoleTool, Parts: []hooks.MessagePart{{
 		ID: "tool", Type: hooks.PartTool, Tool: &hooks.ToolPart{

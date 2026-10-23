@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -178,4 +179,218 @@ func TestWireTypesJSONRoundTrip(t *testing.T) {
 	if upDecoded != upReq {
 		t.Fatalf("UpdateSessionRequest mismatch: got %+v, want %+v", upDecoded, upReq)
 	}
+}
+
+func testJSONRoundTrip[T any](t *testing.T, original T) {
+	t.Helper()
+	data, err := json.Marshal(original)
+	if err != nil {
+		t.Fatalf("Marshal(%T): %v", original, err)
+	}
+	var decoded T
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("Unmarshal(%T): %v", original, err)
+	}
+	if !reflect.DeepEqual(decoded, original) {
+		t.Fatalf("%T roundtrip mismatch:\ngot:  %+v\nwant: %+v", original, decoded, original)
+	}
+}
+
+func TestGeneratedToolTypesJSONRoundTrip(t *testing.T) {
+	t.Run("Bash", func(t *testing.T) {
+		testJSONRoundTrip(t, BashInput{
+			Command:   "ls -la",
+			Dir:       "src",
+			Env:       map[string]string{"DEBUG": "1"},
+			Stdin:     "input line",
+			TimeoutMs: 5000,
+		})
+		testJSONRoundTrip(t, BashOutput{
+			Stdout:     "output",
+			Stderr:     "warning",
+			ExitCode:   0,
+			DurationMs: 123,
+		})
+	})
+
+	t.Run("Download", func(t *testing.T) {
+		testJSONRoundTrip(t, DownloadInput{
+			URL:       "https://example.com/archive.tar.gz",
+			Path:      "downloads/archive.tar.gz",
+			Force:     true,
+			Headers:   map[string]string{"Authorization": "Bearer token"},
+			MaxBytes:  1048576,
+			TimeoutMs: 10000,
+		})
+		testJSONRoundTrip(t, DownloadOutput{
+			URL:          "https://example.com/archive.tar.gz",
+			Path:         "downloads/archive.tar.gz",
+			StatusCode:   200,
+			BytesWritten: 1024,
+			Created:      true,
+			AfterHash:    "deadbeef",
+			BeforeHash:   "oldbeef",
+			ContentType:  "application/gzip",
+			IsBinary:     true,
+		})
+	})
+
+	t.Run("Edit", func(t *testing.T) {
+		testJSONRoundTrip(t, EditInput{
+			Path:       "file.go",
+			OldText:    "old",
+			NewText:    "new",
+			Force:      true,
+			ReplaceAll: true,
+		})
+		testJSONRoundTrip(t, EditOutput{
+			Path:         "file.go",
+			Replacements: 2,
+			Additions:    2,
+			Deletions:    2,
+			BeforeHash:   "hash1",
+			AfterHash:    "hash2",
+			Diff:         "--- file.go\n+++ file.go\n",
+		})
+	})
+
+	t.Run("Glob", func(t *testing.T) {
+		testJSONRoundTrip(t, GlobInput{
+			Pattern:       "**/*.go",
+			Ignore:        []string{"vendor/**"},
+			IncludeHidden: true,
+			Limit:         100,
+			Path:          ".",
+		})
+		testJSONRoundTrip(t, GlobOutput{
+			Pattern:   "**/*.go",
+			Path:      ".",
+			Matches:   []string{"main.go", "api/types.go"},
+			Truncated: false,
+		})
+	})
+
+	t.Run("Grep", func(t *testing.T) {
+		testJSONRoundTrip(t, GrepInput{
+			Pattern:         `func Test\w+`,
+			CaseInsensitive: true,
+			ContextLines:    2,
+			Include:         "*.go",
+			IncludeHidden:   false,
+			Limit:           50,
+			Path:            "api",
+		})
+		testJSONRoundTrip(t, GrepOutput{
+			Pattern: `func Test\w+`,
+			Matches: []GrepMatch{
+				{
+					Path:   "api/types_test.go",
+					Line:   42,
+					Column: 1,
+					Text:   "func TestMain(t *testing.T) {",
+					Before: []string{"// Comment line 1", "// Comment line 2"},
+					After:  []string{"\tt.Parallel()"},
+				},
+			},
+			Truncated: true,
+		})
+	})
+
+	t.Run("Ls", func(t *testing.T) {
+		testJSONRoundTrip(t, LsInput{
+			Ignore:        []string{"*.log"},
+			IncludeHidden: true,
+			Limit:         50,
+			MaxDepth:      2,
+			Path:          "internal",
+			Recursive:     true,
+		})
+		testJSONRoundTrip(t, LsOutput{
+			Path: "internal",
+			Entries: []LsEntry{
+				{
+					Path:  "internal/tools",
+					Name:  "tools",
+					IsDir: true,
+					Size:  0,
+				},
+				{
+					Path:  "internal/doc.go",
+					Name:  "doc.go",
+					IsDir: false,
+					Size:  128,
+				},
+			},
+			Truncated: false,
+		})
+	})
+
+	t.Run("Remove", func(t *testing.T) {
+		testJSONRoundTrip(t, RemoveInput{
+			Path:  "scratch.txt",
+			Force: true,
+		})
+		testJSONRoundTrip(t, RemoveOutput{
+			Path:       "scratch.txt",
+			Deletions:  5,
+			BeforeHash: "cafe1234",
+			Diff:       "deleted file mode 100644",
+		})
+	})
+
+	t.Run("View", func(t *testing.T) {
+		testJSONRoundTrip(t, ViewInput{
+			Path:   "README.md",
+			Limit:  20,
+			Offset: 1,
+		})
+		testJSONRoundTrip(t, ViewOutput{
+			Path:       "README.md",
+			Content:    "Hello world\nLine 2",
+			Numbered:   "1\tHello world\n2\tLine 2",
+			StartLine:  1,
+			EndLine:    2,
+			TotalLines: 2,
+			Hash:       "abcd5678",
+			Truncated:  false,
+		})
+	})
+
+	t.Run("WebFetch", func(t *testing.T) {
+		testJSONRoundTrip(t, WebFetchInput{
+			URL:       "https://example.com/api",
+			Body:      `{"key":"val"}`,
+			Headers:   map[string]string{"Content-Type": "application/json"},
+			MaxBytes:  4096,
+			Method:    "POST",
+			TimeoutMs: 5000,
+		})
+		testJSONRoundTrip(t, WebFetchOutput{
+			URL:         "https://example.com/api",
+			StatusCode:  200,
+			Status:      "200 OK",
+			ContentType: "application/json",
+			Headers:     map[string]string{"Content-Type": "application/json"},
+			Text:        `{"status":"ok"}`,
+			Truncated:   false,
+		})
+	})
+
+	t.Run("Write", func(t *testing.T) {
+		testJSONRoundTrip(t, WriteInput{
+			Path:    "output.txt",
+			Content: "generated content\n",
+			Force:   true,
+		})
+		testJSONRoundTrip(t, WriteOutput{
+			Path:         "output.txt",
+			Created:      true,
+			BytesWritten: 18,
+			Additions:    1,
+			Deletions:    0,
+			AfterHash:    "feed9999",
+			BeforeHash:   "beef8888",
+			Diff:         "+generated content\n",
+		})
+	})
 }

@@ -19,6 +19,7 @@ import (
 	"github.com/masterkeysrd/loom/llm"
 	"github.com/masterkeysrd/loom/message"
 	"github.com/masterkeysrd/loom/profile"
+	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	"github.com/masterkeysrd/tasksmith/internal/core/sqlite"
 	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
@@ -1415,8 +1416,15 @@ func TestMultiStepToolExecutionAndFileTracker(t *testing.T) {
 			// Step 2: verify the tool result message is present in req.Messages
 			var foundToolOutput bool
 			for _, m := range req.Messages {
-				if m.Role() == message.RoleTool && strings.Contains(msgText(m), "Hello from disk!") {
-					foundToolOutput = true
+				if tm, ok := m.(*message.Tool); ok {
+					if viewOut, ok := tm.StructuredContent.(api.ViewOutput); ok && strings.Contains(viewOut.Content, "Hello from disk!") {
+						foundToolOutput = true
+						break
+					}
+					if strings.Contains(msgText(m), "Hello from disk!") {
+						foundToolOutput = true
+						break
+					}
 				}
 			}
 			if !foundToolOutput {
@@ -1490,8 +1498,18 @@ func TestMultiStepToolExecutionAndFileTracker(t *testing.T) {
 	if !ok || len(asstToolMsg.ToolCalls()) != 1 || asstToolMsg.ToolCalls()[0].Name != "view" {
 		t.Errorf("history[1] = %+v, want Assistant with 'view' tool call", history[1])
 	}
-	if !strings.Contains(msgText(history[2]), "Hello from disk!") {
-		t.Errorf("history[2] tool result = %q, want to contain 'Hello from disk!'", msgText(history[2]))
+	toolHistMsg, ok := history[2].(*message.Tool)
+	if !ok {
+		t.Fatalf("history[2] is %T, want *message.Tool", history[2])
+	}
+	var viewOut api.ViewOutput
+	if vo, ok := toolHistMsg.StructuredContent.(api.ViewOutput); ok {
+		viewOut = vo
+	} else if raw, err := json.Marshal(toolHistMsg.StructuredContent); err == nil {
+		_ = json.Unmarshal(raw, &viewOut)
+	}
+	if !strings.Contains(viewOut.Content, "Hello from disk!") && !strings.Contains(msgText(history[2]), "Hello from disk!") {
+		t.Errorf("history[2] tool result = %q (structured: %+v), want to contain 'Hello from disk!'", msgText(history[2]), toolHistMsg.StructuredContent)
 	}
 	if msgText(history[3]) != "The file says: Hello from disk!" {
 		t.Errorf("history[3] final text = %q, want 'The file says: Hello from disk!'", msgText(history[3]))

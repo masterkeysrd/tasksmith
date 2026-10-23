@@ -15,7 +15,6 @@ import (
 	"github.com/masterkeysrd/loom/message"
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/session"
-	"github.com/masterkeysrd/tasksmith/internal/tools/builtin"
 )
 
 func TestStructuredContentConversionFailure(t *testing.T) {
@@ -109,7 +108,7 @@ func TestToolStructuredContentInEventsAndHistory(t *testing.T) {
 	if live.IsError {
 		t.Fatalf("view failed: %+v", live)
 	}
-	var liveOutput builtin.ViewOutput
+	var liveOutput api.ViewOutput
 	if err := json.Unmarshal(live.StructuredContent, &liveOutput); err != nil {
 		t.Fatalf("decode live structured content: %v", err)
 	}
@@ -127,7 +126,7 @@ func TestToolStructuredContentInEventsAndHistory(t *testing.T) {
 		if persisted.ID != live.ID {
 			continue
 		}
-		var output builtin.ViewOutput
+		var output api.ViewOutput
 		if err := json.Unmarshal(persisted.StructuredContent, &output); err != nil {
 			t.Fatalf("decode persisted structured content: %v", err)
 		}

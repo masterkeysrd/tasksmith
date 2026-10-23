@@ -14,6 +14,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/masterkeysrd/loom/message"
+	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	"github.com/masterkeysrd/tasksmith/internal/core/shellguard"
 	"github.com/masterkeysrd/tasksmith/internal/sandbox"
@@ -413,7 +414,7 @@ func TestBashWebFetchDownloadRemoveAndEdgeCases(t *testing.T) {
 	if err != nil || echoRes.IsError {
 		t.Fatalf("Execute(echo hello) failed: err=%v, res=%+v", err, echoRes)
 	}
-	bashOut, ok := echoRes.StructuredContent.(builtin.BashOutput)
+	bashOut, ok := echoRes.StructuredContent.(api.BashOutput)
 	if !ok || !strings.Contains(bashOut.Stdout, "hello") {
 		t.Fatalf("unexpected bash output: %+v", echoRes.StructuredContent)
 	}
@@ -443,7 +444,7 @@ func TestBashWebFetchDownloadRemoveAndEdgeCases(t *testing.T) {
 	if err != nil || fetchRes.IsError {
 		t.Fatalf("Execute(web_fetch) failed: err=%v, res=%+v", err, fetchRes)
 	}
-	fetchOut, ok := fetchRes.StructuredContent.(builtin.WebFetchOutput)
+	fetchOut, ok := fetchRes.StructuredContent.(api.WebFetchOutput)
 	if !ok || !strings.Contains(fetchOut.Text, "remote payload") {
 		t.Fatalf("unexpected web_fetch output: %+v", fetchRes.StructuredContent)
 	}

@@ -140,3 +140,37 @@ func TestStatusSegmentDefaults(t *testing.T) {
 		t.Errorf("blank thinking default missing: %q", out)
 	}
 }
+
+// A mode that is hidden at first and shown later must appear before the model,
+// not after it: kite inserts content of a component that rendered nothing at
+// the end of its parent unless the segment keeps an empty box in place.
+func TestStatusModeSegmentAppearsLateInItsPlace(t *testing.T) {
+	c, err := client.New(t.TempDir()+"/unused.sock", client.WithCWD("/work"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	session := &api.Session{ID: uuid.Must(uuid.NewV7()).String(), Agent: "build", Model: "m"}
+	var setMode func(api.PermissionMode)
+	capture := trail.SimpleFC("Capture", func() trail.Node {
+		setMode = uihooks.UsePermissionMode().Set
+		return nil
+	})
+
+	b := mock.New(80, 24)
+	inst, err := trail.New(uiclient.Provider(uiclient.Props{Client: c},
+		wind.Provider(wind.ProviderProps{Client: wind.NewClient()},
+			uihooks.SessionProvider(uihooks.SessionProviderProps{
+				Initial: session, InitialModel: "m", InitialThinking: "high",
+			}, StatusProvider(StatusContext{}, capture(), DefaultStatusLine())))),
+		trail.WithBackend(b))
+	if err != nil {
+		t.Fatal(err)
+	}
+	inst.Frame()
+	setMode(api.ModePlan)
+	inst.Frame()
+
+	if out := surfaceText(b); !strings.Contains(out, "plan · m · high") {
+		t.Errorf("late mode segment rendered out of place:\n%s", out)
+	}
+}

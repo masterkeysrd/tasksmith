@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/core/guard"
 	"github.com/masterkeysrd/tasksmith/internal/core/shellguard"
 	"github.com/masterkeysrd/tasksmith/internal/sandbox"
@@ -19,7 +20,7 @@ type bashTool struct {
 	guard   *shellguard.Guard
 }
 
-func (t *bashTool) Prepare(_ context.Context, in BashInput) (*tools.Plan, error) {
+func (t *bashTool) Prepare(_ context.Context, in api.BashInput) (*tools.Plan, error) {
 	cmdStr := strings.TrimSpace(in.Command)
 	if cmdStr == "" {
 		return nil, fmt.Errorf("%w: command is required", std.ErrInvalidArgument)
@@ -72,7 +73,7 @@ func (t *bashTool) Prepare(_ context.Context, in BashInput) (*tools.Plan, error)
 	}, nil
 }
 
-func (t *bashTool) Execute(ctx context.Context, in BashInput) (BashOutput, error) {
+func (t *bashTool) Execute(ctx context.Context, in api.BashInput) (api.BashOutput, error) {
 	var timeout time.Duration
 	if in.TimeoutMs > 0 {
 		timeout = time.Duration(in.TimeoutMs) * time.Millisecond
@@ -85,9 +86,9 @@ func (t *bashTool) Execute(ctx context.Context, in BashInput) (BashOutput, error
 		Timeout: timeout,
 	})
 	if err != nil {
-		return BashOutput{}, err
+		return api.BashOutput{}, err
 	}
-	return BashOutput{
+	return api.BashOutput{
 		Stdout:     res.Stdout,
 		Stderr:     res.Stderr,
 		ExitCode:   res.ExitCode,
