@@ -15,7 +15,7 @@ import (
 func TestTranscriptPrintsEntriesInOrder(t *testing.T) {
 	b := mock.New(80, 24)
 	entries := []TranscriptEntry{
-		HeaderEntry(ui.HeaderProps{Version: "v1", Model: "Test Model", Thinking: "high", Path: "/work"}),
+		HeaderEntry(HeaderProps{Version: "v1", Model: "Test Model", Thinking: "high", Path: "/work"}),
 		MessageEntry(hooks.Message{ID: "u", Role: api.RoleUser, Parts: []hooks.MessagePart{{
 			ID: "u:0", Type: hooks.PartText, Text: &hooks.TextPart{Text: "Hello world"},
 		}}}),

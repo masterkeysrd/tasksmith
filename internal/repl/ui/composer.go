@@ -215,12 +215,18 @@ var Composer = trail.FC("Composer", func(props ComposerProps) trail.Node {
 			e.PreventDefault()
 			e.StopPropagation()
 			if isCurrent && auto.IsOpen {
-				if !auto.IsLoading && auto.Error == nil && len(auto.Result.Candidates) > 0 {
+				if auto.IsLoading || auto.Error != nil || len(auto.Result.Candidates) == 0 {
+					return
+				}
+				if !selectionMatchesQuery(auto) {
 					if edit, err := auto.Accept(); err == nil {
 						replaceDraft(edit)
 					}
+					return
 				}
-				return
+				// The typed token already is the selected candidate (for example
+				// "/mode" or "/mode plan"), so accepting would change nothing:
+				// submit instead.
 			}
 
 			text := strings.TrimSpace(current.Value)
@@ -289,3 +295,23 @@ var Composer = trail.FC("Composer", func(props ComposerProps) trail.Node {
 		}),
 	)
 })
+
+// selectionMatchesQuery reports whether the token being completed already
+// equals the selected candidate's value or one of its aliases. An empty query
+// (for example right after "/mode ") never matches, so Enter keeps completing.
+func selectionMatchesQuery(auto components.AutocompleteState) bool {
+	candidates := auto.Result.Candidates
+	if auto.Selected < 0 || auto.Selected >= len(candidates) || auto.Result.Query == "" {
+		return false
+	}
+	candidate := candidates[auto.Selected]
+	if strings.EqualFold(auto.Result.Query, candidate.Value) {
+		return true
+	}
+	for _, alias := range candidate.Aliases {
+		if strings.EqualFold(auto.Result.Query, alias) {
+			return true
+		}
+	}
+	return false
+}

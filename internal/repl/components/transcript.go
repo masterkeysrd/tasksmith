@@ -9,7 +9,7 @@ import (
 // TranscriptEntry is one finalized item of the transcript. Exactly one field
 // is set; use the constructors below.
 type TranscriptEntry struct {
-	Header   *ui.HeaderProps
+	Header   *HeaderProps
 	Message  *hooks.Message
 	Notice   *ui.NoticeProps
 	Error    *ui.ErrorMessageProps
@@ -19,7 +19,7 @@ type TranscriptEntry struct {
 	Diff     *ui.DiffProps
 }
 
-func HeaderEntry(p ui.HeaderProps) TranscriptEntry {
+func HeaderEntry(p HeaderProps) TranscriptEntry {
 	return TranscriptEntry{Header: &p}
 }
 
@@ -66,7 +66,7 @@ var Transcript = trail.FC("Transcript", func(props TranscriptProps) trail.Node {
 	return trail.Static(props.Entries, func(e TranscriptEntry, _ int) trail.Node {
 		switch {
 		case e.Header != nil:
-			return ui.Header(*e.Header)
+			return Header(*e.Header)
 		case e.Message != nil:
 			return Message(MessageProps{Message: *e.Message})
 		case e.Notice != nil:

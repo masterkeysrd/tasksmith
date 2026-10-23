@@ -12,7 +12,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/client"
 	"github.com/masterkeysrd/tasksmith/internal/repl/command"
-	"github.com/masterkeysrd/tasksmith/internal/repl/ui"
+	"github.com/masterkeysrd/tasksmith/internal/repl/components"
 )
 
 // ErrInvalidConfig is returned when required [Config] fields are missing.
@@ -47,7 +47,7 @@ func Run(ctx context.Context, cfg Config) error {
 		return err
 	}
 
-	cfg.Version = ui.NormalizeVersion(cfg.Version)
+	cfg.Version = components.NormalizeVersion(cfg.Version)
 
 	if cfg.Client.CWD() == "" && cfg.Workspace != "" {
 		cfg.Client = cfg.Client.WithCWD(cfg.Workspace)

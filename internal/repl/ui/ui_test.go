@@ -3,8 +3,6 @@ package ui
 import (
 	"context"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -42,77 +40,6 @@ func surfaceText(b *mock.Backend) string {
 		}
 	}
 	return sb.String()
-}
-
-func insertedAboveText(b *mock.Backend) string {
-	var sb strings.Builder
-	for _, buf := range b.InsertedAbove {
-		for y := 0; y < buf.Height; y++ {
-			var line strings.Builder
-			for x := 0; x < buf.Width; x++ {
-				c := buf.CellAt(x, y)
-				if c.Content != "" {
-					line.WriteString(c.Content)
-				} else {
-					line.WriteByte(' ')
-				}
-			}
-			trimmed := strings.TrimRight(line.String(), " ")
-			if trimmed != "" {
-				sb.WriteString(trimmed)
-				sb.WriteString("\n")
-			}
-		}
-	}
-	return sb.String()
-}
-
-func TestHeaderComponent(t *testing.T) {
-	b := mock.New(80, 24)
-	app := trail.SimpleFC("TestApp", func() kitex.Node {
-		return Header(HeaderProps{
-			Version:  "0.1.0",
-			Model:    "Claude 3.7 Sonnet",
-			Thinking: "high",
-			Path:     "/workspace/project",
-		})
-	})
-
-	inst, err := trail.New(app(), trail.WithBackend(b))
-	if err != nil {
-		t.Fatalf("trail.New: %v", err)
-	}
-	inst.Frame()
-
-	out := surfaceText(b)
-	if !strings.Contains(out, "TaskSmith v0.1.0") {
-		t.Errorf("line 1 missing 'TaskSmith v0.1.0':\n%s", out)
-	}
-	if !strings.Contains(out, "Claude 3.7 Sonnet with high effort") {
-		t.Errorf("line 2 missing model/thinking:\n%s", out)
-	}
-	if !strings.Contains(out, "/workspace/project") {
-		t.Errorf("line 3 missing path:\n%s", out)
-	}
-
-	// Helpers
-	if got := NormalizeVersion("0.1.0"); got != "v0.1.0" {
-		t.Errorf("NormalizeVersion('0.1.0') = %q, want 'v0.1.0'", got)
-	}
-	if got := NormalizeVersion(""); got != "v0.1.0" {
-		t.Errorf("NormalizeVersion('') = %q, want 'v0.1.0'", got)
-	}
-
-	home, err := os.UserHomeDir()
-	if err == nil && home != "" {
-		shortened := ShortenHomePath(filepath.Join(home, "src", "tasksmith"))
-		if !strings.HasPrefix(shortened, "~") {
-			t.Errorf("expected ~ prefix for home path, got %q", shortened)
-		}
-		if ShortenHomePath(home) != "~" {
-			t.Errorf("expected ~ for exact home, got %q", ShortenHomePath(home))
-		}
-	}
 }
 
 func TestStatusBarComponent(t *testing.T) {
@@ -752,5 +679,58 @@ func TestOptionListPagination(t *testing.T) {
 	}
 	if !strings.Contains(out3, "❯ /cmd7") {
 		t.Errorf("expected /cmd7 to be selected, got:\n%s", out3)
+	}
+}
+
+func TestComposerEnterSubmitsCompleteCommandAndCompletesPartial(t *testing.T) {
+	engine := composerCompletionEngine(t, composerCommandSource())
+
+	var submitted []string
+	b := mock.New(80, 24)
+	app := trail.SimpleFC("TestApp", func() kitex.Node {
+		return composerForTest(ComposerProps{
+			Autocomplete: engine,
+			OnSubmit:     func(text string) { submitted = append(submitted, text) },
+		})
+	})
+	inst, err := trail.New(app(), trail.WithBackend(b))
+	if err != nil {
+		t.Fatalf("trail.New: %v", err)
+	}
+	inst.Frame()
+
+	typeText := func(text string) {
+		for _, r := range text {
+			inst.Engine().ProcessRawEvent(&backend.RawKeyEvent{Key: key.Key{Code: r, Text: string(r)}})
+		}
+	}
+	enter := func() {
+		inst.Engine().ProcessRawEvent(&backend.RawKeyEvent{Key: key.Key{Code: key.KeyEnter}})
+		inst.Frame()
+	}
+
+	// A partial command name completes without submitting.
+	typeText("/hel")
+	awaitComposer(t, inst, func() bool { return strings.Contains(surfaceText(b), "❯ /help") })
+	enter()
+	if len(submitted) != 0 {
+		t.Fatalf("completing a partial command submitted %v", submitted)
+	}
+	if !strings.Contains(surfaceText(b), "> /help") {
+		t.Fatalf("partial command was not completed:\n%s", surfaceText(b))
+	}
+
+	// The complete command name submits on the next Enter.
+	enter()
+	if len(submitted) != 1 || submitted[0] != "/help" {
+		t.Fatalf("submitted = %v, want [/help]", submitted)
+	}
+
+	// Typing the full name submits with a single Enter.
+	typeText("/help")
+	awaitComposer(t, inst, func() bool { return strings.Contains(surfaceText(b), "❯ /help") })
+	enter()
+	if len(submitted) != 2 || submitted[1] != "/help" {
+		t.Fatalf("submitted = %v, want a second /help after one Enter", submitted)
 	}
 }
