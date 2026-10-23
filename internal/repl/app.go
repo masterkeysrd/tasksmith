@@ -102,7 +102,7 @@ var replView = trail.FC("REPL", func(props AppProps) trail.Node {
 		if completions.err != nil {
 			activeNodes = append(activeNodes, ui.ErrorMessage(ui.ErrorMessageProps{Text: completions.err.Error()}))
 		}
-		activeNodes = append(activeNodes, ui.Composer(ui.ComposerProps{
+		activeNodes = append(activeNodes, components.Composer(components.ComposerProps{
 			Autocomplete:    completions.engine,
 			CompletionViews: command.CompletionViews(ctrl.Mode()),
 			OnSubmit:        ctrl.Submit, OnCycleMode: ctrl.CycleMode, OnCancel: ctrl.Cancel,

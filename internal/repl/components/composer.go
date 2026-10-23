@@ -1,4 +1,4 @@
-package ui
+package components
 
 import (
 	"strings"
@@ -11,14 +11,14 @@ import (
 	"github.com/masterkeysrd/kite/style"
 	"github.com/masterkeysrd/tasksmith/internal/repl/theme"
 	"github.com/masterkeysrd/tasksmith/internal/ui/autocomplete"
-	"github.com/masterkeysrd/tasksmith/internal/ui/components"
+	uicomponents "github.com/masterkeysrd/tasksmith/internal/ui/components"
 )
 
 // ComposerProps defines the properties for the Composer functional component.
 type ComposerProps struct {
 	Disabled        bool
 	Autocomplete    *autocomplete.Engine
-	CompletionViews map[string]components.AutocompleteView
+	CompletionViews map[string]uicomponents.AutocompleteView
 	OnSubmit        func(text string)
 	OnCycleMode     func()
 	OnCancel        func()
@@ -97,9 +97,9 @@ func usePromptHistory() PromptHistory {
 // autocomplete, prompt history navigation, and mode cycling. It requires an
 // enclosing wind.Provider.
 var Composer = trail.FC("Composer", func(props ComposerProps) trail.Node {
-	draft, setDraft := kitex.UseState(components.AutocompleteEdit{})
+	draft, setDraft := kitex.UseState(uicomponents.AutocompleteEdit{})
 	history := usePromptHistory()
-	auto := components.UseAutocomplete(components.AutocompleteOptions{
+	auto := uicomponents.UseAutocomplete(uicomponents.AutocompleteOptions{
 		Engine: props.Autocomplete, Value: draft().Value, Cursor: draft().Cursor, Disabled: props.Disabled,
 	})
 
@@ -109,9 +109,9 @@ var Composer = trail.FC("Composer", func(props ComposerProps) trail.Node {
 		IsActive:  !props.Disabled,
 	})
 
-	readDraft := func() components.AutocompleteEdit {
+	readDraft := func() uicomponents.AutocompleteEdit {
 		if input, ok := inputRef.Current.(*element.TextAreaElement); ok {
-			return components.AutocompleteEdit{Value: input.TextContent(), Cursor: input.Buffer().ByteOffset()}
+			return uicomponents.AutocompleteEdit{Value: input.TextContent(), Cursor: input.Buffer().ByteOffset()}
 		}
 		return draft()
 	}
@@ -120,7 +120,7 @@ var Composer = trail.FC("Composer", func(props ComposerProps) trail.Node {
 			setDraft(next)
 		}
 	}
-	replaceDraft := func(next components.AutocompleteEdit) {
+	replaceDraft := func(next uicomponents.AutocompleteEdit) {
 		if input, ok := inputRef.Current.(*element.TextAreaElement); ok {
 			input.SetValue(next.Value)
 			input.SetSelectionRange(next.Cursor, next.Cursor)
@@ -179,7 +179,7 @@ var Composer = trail.FC("Composer", func(props ComposerProps) trail.Node {
 			e.PreventDefault()
 			e.StopPropagation()
 			if prevVal, ok := history.Up(current.Value); ok {
-				replaceDraft(components.AutocompleteEdit{Value: prevVal, Cursor: len(prevVal)})
+				replaceDraft(uicomponents.AutocompleteEdit{Value: prevVal, Cursor: len(prevVal)})
 			}
 
 		case ke.MatchString("down"):
@@ -197,7 +197,7 @@ var Composer = trail.FC("Composer", func(props ComposerProps) trail.Node {
 			e.PreventDefault()
 			e.StopPropagation()
 			if nextVal, ok := history.Down(); ok {
-				replaceDraft(components.AutocompleteEdit{Value: nextVal, Cursor: len(nextVal)})
+				replaceDraft(uicomponents.AutocompleteEdit{Value: nextVal, Cursor: len(nextVal)})
 			}
 
 		case ke.MatchString("shift+enter", "alt+enter"):
@@ -207,7 +207,7 @@ var Composer = trail.FC("Composer", func(props ComposerProps) trail.Node {
 			if input, ok := inputRef.Current.(*element.TextAreaElement); ok && input.SelectedText() != "" {
 				start, end = input.SelectionRange()
 			}
-			replaceDraft(components.AutocompleteEdit{
+			replaceDraft(uicomponents.AutocompleteEdit{
 				Value: current.Value[:start] + "\n" + current.Value[end:], Cursor: start + 1,
 			})
 
@@ -230,7 +230,7 @@ var Composer = trail.FC("Composer", func(props ComposerProps) trail.Node {
 			}
 
 			text := strings.TrimSpace(current.Value)
-			replaceDraft(components.AutocompleteEdit{})
+			replaceDraft(uicomponents.AutocompleteEdit{})
 			if text != "" {
 				history.Add(text)
 				if props.OnSubmit != nil {
@@ -289,7 +289,7 @@ var Composer = trail.FC("Composer", func(props ComposerProps) trail.Node {
 			Width(style.Percent(100)),
 	},
 		composerBox,
-		components.Autocomplete(components.AutocompleteProps{
+		uicomponents.Autocomplete(uicomponents.AutocompleteProps{
 			State: auto,
 			Views: props.CompletionViews,
 		}),
@@ -299,7 +299,7 @@ var Composer = trail.FC("Composer", func(props ComposerProps) trail.Node {
 // selectionMatchesQuery reports whether the token being completed already
 // equals the selected candidate's value or one of its aliases. An empty query
 // (for example right after "/mode ") never matches, so Enter keeps completing.
-func selectionMatchesQuery(auto components.AutocompleteState) bool {
+func selectionMatchesQuery(auto uicomponents.AutocompleteState) bool {
 	candidates := auto.Result.Candidates
 	if auto.Selected < 0 || auto.Selected >= len(candidates) || auto.Result.Query == "" {
 		return false
