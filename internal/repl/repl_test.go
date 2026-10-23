@@ -610,6 +610,18 @@ func TestAppFunctionalComponentLifecycle(t *testing.T) {
 		t.Errorf("expected SendRequest to daemon, got 0")
 	}
 
+	// The daemon echoes the persisted user message over SSE.
+	st.sseCh <- api.Event{
+		Type:      api.EventMessageAdded,
+		SessionID: "s1",
+		Message: &api.Message{
+			ID:      "m-sent",
+			Role:    api.RoleUser,
+			Content: []api.Block{{Type: api.BlockText, Text: "Hello assistant"}},
+		},
+	}
+	time.Sleep(50 * time.Millisecond)
+
 	// 2. Stream chunk via SSE
 	st.sseCh <- api.Event{
 		Type:      api.EventChunk,
@@ -630,11 +642,12 @@ func TestAppFunctionalComponentLifecycle(t *testing.T) {
 		SessionID: "s1",
 		Permissions: []api.PermissionRequest{
 			{
-				ID:       "p1",
-				Action:   api.ActionWrite,
-				Safety:   api.SafetySafe,
-				ToolName: "write_file",
-				Summary:  "Write test.go",
+				ID:         "p1",
+				ToolCallID: "tc-write",
+				Action:     api.ActionWrite,
+				Safety:     api.SafetySafe,
+				ToolName:   "write_file",
+				Summary:    "Write test.go",
 			},
 		},
 	}
@@ -651,10 +664,18 @@ func TestAppFunctionalComponentLifecycle(t *testing.T) {
 		t.Errorf("expected DecisionAllowOnce sent to daemon, got %+v", st.decisions)
 	}
 
-	// 4. Complete turn
+	// 4. Complete turn with the persisted assistant message
 	st.sseCh <- api.Event{
 		Type:      api.EventCompleted,
 		SessionID: "s1",
+		Message: &api.Message{
+			ID:   "a-final",
+			Role: api.RoleAssistant,
+			Content: []api.Block{
+				{Type: api.BlockReasoning, Text: "Analyzing request"},
+				{Type: api.BlockText, Text: "Working on it"},
+			},
+		},
 	}
 	time.Sleep(50 * time.Millisecond)
 
@@ -747,6 +768,7 @@ func TestLiveToolCallStreamingAndReasoningDuration(t *testing.T) {
 		Type:      api.EventMessageAdded,
 		SessionID: "s1",
 		Message: &api.Message{
+			ID:   "a1",
 			Role: api.RoleAssistant,
 			Content: []api.Block{
 				{Type: api.BlockReasoning, Text: "planning commands to execute"},
@@ -765,6 +787,7 @@ func TestLiveToolCallStreamingAndReasoningDuration(t *testing.T) {
 		Type:      api.EventMessageAdded,
 		SessionID: "s1",
 		Message: &api.Message{
+			ID:         "t1",
 			Role:       api.RoleTool,
 			ToolCallID: "tc1",
 			IsError:    false,
@@ -780,6 +803,7 @@ func TestLiveToolCallStreamingAndReasoningDuration(t *testing.T) {
 		Type:      api.EventMessageAdded,
 		SessionID: "s1",
 		Message: &api.Message{
+			ID:   "a2",
 			Role: api.RoleAssistant,
 			Content: []api.Block{
 				{Type: api.BlockToolCall, ToolCall: &api.ToolCall{
@@ -797,6 +821,7 @@ func TestLiveToolCallStreamingAndReasoningDuration(t *testing.T) {
 		Type:      api.EventMessageAdded,
 		SessionID: "s1",
 		Message: &api.Message{
+			ID:         "t2",
 			Role:       api.RoleTool,
 			ToolCallID: "tc2",
 			IsError:    true,
@@ -818,7 +843,7 @@ func TestLiveToolCallStreamingAndReasoningDuration(t *testing.T) {
 	<-runDone
 
 	above := insertedAboveText(b)
-	if !strings.Contains(above, "○ Thought") {
+	if !strings.Contains(above, "● Thought (planning commands to execute)") {
 		t.Errorf("expected thought in transcript, got:\n%s", above)
 	}
 	if !strings.Contains(above, "● Ran (echo running-cmd)") {
@@ -827,10 +852,10 @@ func TestLiveToolCallStreamingAndReasoningDuration(t *testing.T) {
 	if strings.Contains(above, "more output") {
 		t.Errorf("expected raw tool output to be suppressed, got:\n%s", above)
 	}
-	if !strings.Contains(above, "● Explored 1 file (missing.go)") {
+	if !strings.Contains(above, "● Read failed /pkg/missing.go") {
 		t.Errorf("expected finished view tool call in transcript, got:\n%s", above)
 	}
-	if !strings.Contains(above, "⎿  ✗ file not found: missing.go") {
+	if !strings.Contains(above, "file not found: missing.go") {
 		t.Errorf("expected indented error indicator in transcript, got:\n%s", above)
 	}
 }

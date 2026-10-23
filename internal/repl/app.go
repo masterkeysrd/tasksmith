@@ -1,8 +1,6 @@
 package repl
 
 import (
-	"strings"
-
 	"github.com/masterkeysrd/kite/extras/kitex"
 	"github.com/masterkeysrd/kite/extras/trail"
 	"github.com/masterkeysrd/kite/extras/wind"
@@ -10,6 +8,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/client"
 	"github.com/masterkeysrd/tasksmith/internal/repl/command"
+	"github.com/masterkeysrd/tasksmith/internal/repl/components"
 	"github.com/masterkeysrd/tasksmith/internal/repl/ui"
 	"github.com/masterkeysrd/tasksmith/internal/ui/autocomplete"
 	uiclient "github.com/masterkeysrd/tasksmith/internal/ui/client"
@@ -68,54 +67,21 @@ var replView = trail.FC("REPL", func(props AppProps) trail.Node {
 
 	var activeNodes []trail.Node
 
-	// Streaming display
-	if state == ui.StateStreaming || ctrl.Stream.IsStreaming {
-		if r := strings.TrimSpace(ctrl.Stream.StreamReasoning); r != "" {
-			activeNodes = append(activeNodes, ui.Reasoning(ui.ReasoningProps{
-				Text:     r,
-				Duration: ctrl.Stream.StreamReasoningDuration,
-				Running:  !ctrl.Stream.StreamReasoningDone,
-			}))
-		}
-		var allActiveTools []api.ToolCall
-		if len(ctrl.Stream.CompletedTools) > 0 {
-			allActiveTools = append(allActiveTools, ctrl.Stream.CompletedTools...)
-		}
-		if len(ctrl.Stream.PendingTools) > 0 {
-			allActiveTools = append(allActiveTools, ctrl.Stream.PendingTools...)
-		}
-		if len(allActiveTools) > 0 {
-			groups := ui.GroupToolCalls(allActiveTools)
-			for _, grp := range groups {
-				grpRunning := false
-				for _, c := range grp {
-					for _, pt := range ctrl.Stream.PendingTools {
-						if pt.ID == c.ID {
-							grpRunning = true
-							break
-						}
-					}
-					if grpRunning {
-						break
-					}
-				}
-				activeNodes = append(activeNodes, ui.ToolGroup(ui.ToolGroupProps{
-					Calls:   grp,
-					Running: grpRunning,
-				}))
-			}
-		}
-		if t := strings.TrimSpace(ctrl.Stream.StreamText); t != "" {
-			activeNodes = append(activeNodes, ui.Message(ui.MessageProps{
-				Message: api.Message{
-					Role: api.RoleAssistant,
-					Content: []api.Block{
-						{Type: api.BlockText, Text: t},
-					},
-				},
-			}))
-		}
-		activeNodes = append(activeNodes, ui.Spinner(ui.SpinnerProps{Text: ctrl.Stream.SpinnerText}))
+	for _, message := range ctrl.Conversation.Stream.Messages {
+		activeNodes = append(activeNodes, trail.Box(trail.BoxProps{
+			Key: message.ID,
+			Style: style.S().
+				Display(style.DisplayFlex).
+				FlexDirection(style.FlexColumn).
+				Width(style.Percent(100)).
+				MinWidth(style.Cells(0)),
+		}, components.Message(components.MessageProps{Message: message})))
+	}
+	if ctrl.Conversation.Error != nil {
+		activeNodes = append(activeNodes, ui.ErrorMessage(ui.ErrorMessageProps{Text: ctrl.Conversation.Error.Error()}))
+	}
+	if ctrl.IsStreaming {
+		activeNodes = append(activeNodes, ui.Spinner(ui.SpinnerProps{Text: "Thinking..."}))
 	}
 
 	// Active modal overlays
@@ -154,7 +120,7 @@ var replView = trail.FC("REPL", func(props AppProps) trail.Node {
 
 	return uitheme.Provider(uitheme.Props{Transparent: true},
 		trail.Fragment(
-			ui.Transcript(ui.TranscriptProps{Items: ctrl.Items()}),
+			components.Transcript(components.TranscriptProps{Items: ctrl.Items()}),
 			trail.Box(trail.BoxProps{
 				Style: style.S().
 					Display(style.DisplayFlex).

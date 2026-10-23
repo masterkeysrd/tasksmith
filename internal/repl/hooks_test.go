@@ -17,6 +17,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/client"
 	"github.com/masterkeysrd/tasksmith/internal/repl/command"
+	replcomponents "github.com/masterkeysrd/tasksmith/internal/repl/components"
 	"github.com/masterkeysrd/tasksmith/internal/repl/ui"
 	uiclient "github.com/masterkeysrd/tasksmith/internal/ui/client"
 	"github.com/masterkeysrd/tasksmith/internal/ui/components"
@@ -46,7 +47,7 @@ func mountController(t *testing.T, props AppProps) (*mock.Backend, func(func(REP
 			model:      ctrl.ModelLabel(),
 			itemCount:  len(ctrl.Items()),
 		})
-		return ui.Transcript(ui.TranscriptProps{Items: ctrl.Items()})
+		return replcomponents.Transcript(replcomponents.TranscriptProps{Items: ctrl.Items()})
 	})
 	cache := wind.NewClient()
 	cache.GcTime = time.Millisecond

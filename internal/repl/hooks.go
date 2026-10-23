@@ -3,9 +3,8 @@ package repl
 import (
 	"cmp"
 	"context"
-	"fmt"
+	"maps"
 	"strings"
-	"time"
 
 	"github.com/masterkeysrd/kite/extras/kitex"
 	"github.com/masterkeysrd/kite/extras/trail"
@@ -14,6 +13,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/client"
 	"github.com/masterkeysrd/tasksmith/internal/repl/command"
+	replcomponents "github.com/masterkeysrd/tasksmith/internal/repl/components"
 	"github.com/masterkeysrd/tasksmith/internal/repl/ui"
 	"github.com/masterkeysrd/tasksmith/internal/ui/components"
 	uihooks "github.com/masterkeysrd/tasksmith/internal/ui/hooks"
@@ -56,364 +56,92 @@ func useLifecycleContext() context.Context {
 	return ctxRef.Current
 }
 
-// StreamState encapsulates in-flight assistant streaming text, reasoning, progress, and pending tools.
-type StreamState struct {
-	IsStreaming             bool
-	StreamText              string
-	StreamReasoning         string
-	StreamReasoningDone     bool
-	StreamReasoningDuration time.Duration
-	PendingTools            []api.ToolCall
-	CompletedTools          []api.ToolCall
-	SpinnerText             string
-	Start                   func(spinnerText string)
-	Reset                   func()
-}
-
-// useSSEStream subscribes to the daemon's real-time SSE stream and manages live text chunk state.
-func useSSEStream(
-	ctx context.Context,
-	c *client.Client,
-	getSession func() *api.Session,
-	onItem func(trail.Node),
-	onPermission func([]api.PermissionRequest),
-	onError func(string),
-	onCompleted func(),
-) StreamState {
-	isStreaming, setIsStreaming := kitex.UseState(false)
-	streamText, setStreamText := kitex.UseState("")
-	streamReasoning, setStreamReasoning := kitex.UseState("")
-	streamReasoningDone, setStreamReasoningDone := kitex.UseState(false)
-	streamReasoningDuration, setStreamReasoningDuration := kitex.UseState(time.Duration(0))
-	pendingTools, setPendingTools := kitex.UseState([]api.ToolCall(nil))
-	completedTools, setCompletedTools := kitex.UseState([]api.ToolCall(nil))
-	spinnerText, setSpinnerText := kitex.UseState("Thinking...")
-	reasoningStartRef := kitex.UseRef(time.Time{})
-
-	flushCompletedTools := func() {
-		curr := completedTools()
-		if len(curr) > 0 {
-			groups := ui.GroupToolCalls(curr)
-			for _, grp := range groups {
-				if onItem != nil {
-					onItem(ui.ToolGroup(ui.ToolGroupProps{
-						Calls:   grp,
-						Running: false,
-					}))
-				}
-			}
-			setCompletedTools(nil)
-		}
-	}
-
-	kitex.UseEffectCleanup(func() func() {
-		if c == nil {
-			return func() {}
-		}
-		subCtx, subCancel := context.WithCancel(ctx)
-		go func() {
-			for ev, err := range c.Subscribe(subCtx, "") {
-				if err != nil {
-					return
-				}
-				curEv := ev
-				kitex.PostMacro(func() {
-					sess := getSession()
-					if curEv.SessionID != "" && sess != nil && curEv.SessionID != sess.ID {
-						return
-					}
-
-					switch curEv.Type {
-					case api.EventMessageAdded:
-						if curEv.Message != nil {
-							if curEv.Message.Role == api.RoleUser {
-								// User prompt was already appended optimistically in submit
-								return
-							}
-
-							switch curEv.Message.Role {
-							case api.RoleAssistant:
-								var reasoningDuration time.Duration
-								if !reasoningStartRef.Current.IsZero() {
-									if streamReasoningDone() && streamReasoningDuration() > 0 {
-										reasoningDuration = streamReasoningDuration()
-									} else {
-										reasoningDuration = time.Since(reasoningStartRef.Current)
-									}
-									reasoningStartRef.Current = time.Time{}
-								}
-
-								var toolCalls []api.ToolCall
-								var nonToolBlocks []api.Block
-								for _, b := range curEv.Message.Content {
-									if b.Type == api.BlockToolCall && b.ToolCall != nil {
-										toolCalls = append(toolCalls, *b.ToolCall)
-									} else {
-										nonToolBlocks = append(nonToolBlocks, b)
-									}
-								}
-
-								if len(nonToolBlocks) > 0 {
-									flushCompletedTools()
-									if onItem != nil {
-										msg := *curEv.Message
-										msg.Content = nonToolBlocks
-										onItem(ui.Message(ui.MessageProps{
-											Message:           msg,
-											ReasoningDuration: reasoningDuration,
-										}))
-									}
-								}
-
-								if len(toolCalls) > 0 {
-									setPendingTools(append(pendingTools(), toolCalls...))
-									setSpinnerText(fmt.Sprintf("Running %s...", toolCalls[len(toolCalls)-1].Name))
-								}
-
-								setStreamText("")
-								setStreamReasoning("")
-								setStreamReasoningDone(false)
-								setStreamReasoningDuration(0)
-
-							case api.RoleTool:
-								toolCallID := curEv.Message.ToolCallID
-								curPending := pendingTools()
-								matchedIdx := -1
-								var matchedCall api.ToolCall
-								for i, pt := range curPending {
-									if pt.ID == toolCallID {
-										matchedIdx = i
-										matchedCall = pt
-										break
-									}
-								}
-
-								errText := ""
-								if curEv.Message.IsError {
-									errText = ui.ExtractTextBlocks(curEv.Message.Content)
-									if errText == "" {
-										errText = "tool execution failed"
-									}
-								}
-
-								if matchedIdx >= 0 {
-									newPending := make([]api.ToolCall, 0, len(curPending)-1)
-									newPending = append(newPending, curPending[:matchedIdx]...)
-									newPending = append(newPending, curPending[matchedIdx+1:]...)
-									setPendingTools(newPending)
-									if len(newPending) == 0 {
-										setSpinnerText("Thinking...")
-									}
-
-									if curEv.Message.IsError {
-										flushCompletedTools()
-										if onItem != nil {
-											onItem(ui.ToolCall(ui.ToolCallProps{
-												ToolCall:  matchedCall,
-												Running:   false,
-												ErrorText: errText,
-											}))
-										}
-									} else {
-										setCompletedTools(append(completedTools(), matchedCall))
-									}
-								} else if curEv.Message.IsError {
-									flushCompletedTools()
-									if onItem != nil {
-										onItem(ui.ToolError(ui.ToolErrorProps{
-											ErrorText: errText,
-										}))
-									}
-								}
-								// If not in pending and not an error, do NOT dump raw tool output
-
-							default:
-								flushCompletedTools()
-								if onItem != nil {
-									onItem(ui.Message(ui.MessageProps{Message: *curEv.Message}))
-								}
-							}
-						}
-
-					case api.EventChunk:
-						if curEv.Chunk != nil {
-							for _, b := range curEv.Chunk.Content {
-								switch b.Type {
-								case api.BlockReasoning:
-									if b.Text != "" {
-										if len(completedTools()) > 0 && len(pendingTools()) == 0 {
-											flushCompletedTools()
-										}
-										if reasoningStartRef.Current.IsZero() {
-											reasoningStartRef.Current = time.Now()
-											setStreamReasoningDone(false)
-											setStreamReasoningDuration(0)
-										}
-										setStreamReasoning(streamReasoning() + b.Text)
-										setSpinnerText("Thinking...")
-									}
-								case api.BlockText:
-									if b.Text != "" {
-										if len(completedTools()) > 0 && len(pendingTools()) == 0 {
-											flushCompletedTools()
-										}
-										if !reasoningStartRef.Current.IsZero() && !streamReasoningDone() {
-											setStreamReasoningDuration(time.Since(reasoningStartRef.Current))
-											setStreamReasoningDone(true)
-										}
-										setStreamText(streamText() + b.Text)
-									}
-								case api.BlockToolCall:
-									if !reasoningStartRef.Current.IsZero() && !streamReasoningDone() {
-										setStreamReasoningDuration(time.Since(reasoningStartRef.Current))
-										setStreamReasoningDone(true)
-									}
-									// Do not set SpinnerText here to "Running <tool>..."!
-								}
-							}
-						}
-
-					case api.EventPermissionRequested:
-						if len(curEv.Permissions) > 0 && onPermission != nil {
-							onPermission(curEv.Permissions)
-						}
-
-					case api.EventCompleted:
-						flushCompletedTools()
-						setIsStreaming(false)
-						setStreamText("")
-						setStreamReasoning("")
-						setStreamReasoningDone(false)
-						setStreamReasoningDuration(0)
-						setPendingTools(nil)
-						setCompletedTools(nil)
-						reasoningStartRef.Current = time.Time{}
-						setSpinnerText("Thinking...")
-						if onCompleted != nil {
-							onCompleted()
-						}
-
-					case api.EventError:
-						flushCompletedTools()
-						setIsStreaming(false)
-						setPendingTools(nil)
-						setCompletedTools(nil)
-						setStreamReasoningDone(false)
-						setStreamReasoningDuration(0)
-						reasoningStartRef.Current = time.Time{}
-						if curEv.Error != "" && onError != nil {
-							onError(curEv.Error)
-						}
-					}
-				})
-			}
-		}()
-		return func() {
-			subCancel()
-		}
-	}, []any{c})
-
-	start := func(spinnerTextVal string) {
-		setIsStreaming(true)
-		setStreamText("")
-		setStreamReasoning("")
-		setStreamReasoningDone(false)
-		setStreamReasoningDuration(0)
-		setPendingTools(nil)
-		setCompletedTools(nil)
-		reasoningStartRef.Current = time.Time{}
-		if spinnerTextVal != "" {
-			setSpinnerText(spinnerTextVal)
-		} else {
-			setSpinnerText("Thinking...")
-		}
-	}
-
-	reset := func() {
-		flushCompletedTools()
-		setIsStreaming(false)
-		setStreamText("")
-		setStreamReasoning("")
-		setStreamReasoningDone(false)
-		setStreamReasoningDuration(0)
-		setPendingTools(nil)
-		setCompletedTools(nil)
-		reasoningStartRef.Current = time.Time{}
-		setSpinnerText("Thinking...")
-	}
-
-	return StreamState{
-		IsStreaming:             isStreaming(),
-		StreamText:              streamText(),
-		StreamReasoning:         streamReasoning(),
-		StreamReasoningDone:     streamReasoningDone(),
-		StreamReasoningDuration: streamReasoningDuration(),
-		PendingTools:            pendingTools(),
-		CompletedTools:          completedTools(),
-		SpinnerText:             spinnerText(),
-		Start:                   start,
-		Reset:                   reset,
-	}
-}
-
 // PermissionQueue manages pending permission approval requests and decision dispatch.
 type PermissionQueue struct {
 	Count  func() int
 	Active func() (api.PermissionRequest, bool)
-	Queue  func(perms []api.PermissionRequest)
 	Decide func(req api.PermissionRequest, dec api.PermissionDecision)
 }
 
 // usePermissionQueue provides queueing and dispatch for interactive tool approvals.
 func usePermissionQueue(
-	ctx context.Context,
 	c *client.Client,
 	getSession func() *api.Session,
+	requests []api.PermissionRequest,
 	onDecisionLogged func(req api.PermissionRequest, dec api.PermissionDecision),
-	onQueueEmpty func(),
+	onError func(error),
 ) PermissionQueue {
-	pendingPerms, setPendingPerms := kitex.UseState([]api.PermissionRequest(nil))
-
-	queue := func(perms []api.PermissionRequest) {
-		setPendingPerms(append(pendingPerms(), perms...))
+	var sessionID string
+	if sess := getSession(); sess != nil {
+		sessionID = sess.ID
 	}
-
-	active := func() (api.PermissionRequest, bool) {
-		p := pendingPerms()
-		if len(p) == 0 {
-			return api.PermissionRequest{}, false
-		}
-		return p[0], true
+	type decisionKey struct {
+		SessionID string
+		RequestID string
 	}
-
-	count := func() int {
-		return len(pendingPerms())
+	type decisionInput struct {
+		Key      decisionKey
+		Request  api.PermissionRequest
+		Decision api.PermissionDecision
 	}
-
-	decide := func(req api.PermissionRequest, dec api.PermissionDecision) {
-		if onDecisionLogged != nil {
-			onDecisionLogged(req, dec)
-		}
-		sess := getSession()
-		if sess != nil && c != nil {
-			go c.RespondPermission(ctx, sess.ID, dec)
-		}
-		curPerms := pendingPerms()
-		if len(curPerms) > 0 {
-			rem := curPerms[1:]
-			setPendingPerms(rem)
-			if len(rem) == 0 && onQueueEmpty != nil {
-				onQueueEmpty()
+	decided, setDecided := kitex.UseState(map[decisionKey]bool(nil))
+	mutation := wind.UseMutation(promise.WrapWithProps(func(ctx context.Context, input decisionInput) (struct{}, error) {
+		return struct{}{}, c.RespondPermission(ctx, input.Key.SessionID, input.Decision)
+	}), wind.MutationOptions[decisionInput, struct{}]{
+		OnSuccess: func(_ struct{}, input decisionInput, _ wind.MutationContext) {
+			if sess := getSession(); sess != nil && sess.ID == input.Key.SessionID {
+				onDecisionLogged(input.Request, input.Decision)
 			}
-		} else if onQueueEmpty != nil {
-			onQueueEmpty()
+		},
+		OnError: func(err error, input decisionInput, _ wind.MutationContext) {
+			next := maps.Clone(decided())
+			delete(next, input.Key)
+			setDecided(next)
+			if sess := getSession(); sess != nil && sess.ID == input.Key.SessionID {
+				onError(err)
+			}
+		},
+	})
+	pending := func() []api.PermissionRequest {
+		sess := getSession()
+		if sess == nil || sess.ID != sessionID {
+			return nil
 		}
+		var pending []api.PermissionRequest
+		for _, request := range requests {
+			if !decided()[decisionKey{SessionID: sess.ID, RequestID: request.ID}] {
+				pending = append(pending, request)
+			}
+		}
+		return pending
 	}
-
+	decide := func(req api.PermissionRequest, dec api.PermissionDecision) {
+		sess := getSession()
+		if sess == nil || sess.ID != sessionID {
+			return
+		}
+		key := decisionKey{SessionID: sess.ID, RequestID: req.ID}
+		if decided()[key] {
+			return
+		}
+		next := maps.Clone(decided())
+		if next == nil {
+			next = make(map[decisionKey]bool)
+		}
+		next[key] = true
+		setDecided(next)
+		dec.RequestID, dec.ToolCallID = req.ID, req.ToolCallID
+		mutation.Mutate(decisionInput{Key: key, Request: req, Decision: dec})
+	}
 	return PermissionQueue{
-		Count:  count,
-		Active: active,
-		Queue:  queue,
+		Count: func() int { return len(pending()) },
+		Active: func() (api.PermissionRequest, bool) {
+			requests := pending()
+			if len(requests) == 0 {
+				return api.PermissionRequest{}, false
+			}
+			return requests[0], true
+		},
 		Decide: decide,
 	}
 }
@@ -428,7 +156,8 @@ type REPLController struct {
 	ActivePicker func() ui.PickerProps
 	IsPickerOpen func() bool
 	State        func() ui.State
-	Stream       StreamState
+	Conversation uihooks.Conversation
+	IsStreaming  bool
 	Perms        PermissionQueue
 	Submit       func(text string)
 	CycleMode    func()
@@ -442,6 +171,12 @@ func useREPLController(props AppProps, app trail.AppHandle) REPLController {
 	items, setItems := kitex.UseState([]trail.Node(nil))
 	session, setSession := kitex.UseState(props.InitialSess)
 	sessionVersion := kitex.UseRef(0)
+	type sendState struct {
+		Version int
+		Pending bool
+	}
+	sending, setSending := kitex.UseState(sendState{})
+	historyRevision, setHistoryRevision := kitex.UseState(0)
 	selectSession := func(sess *api.Session) {
 		sessionVersion.Current++
 		setSession(sess)
@@ -455,6 +190,19 @@ func useREPLController(props AppProps, app trail.AppHandle) REPLController {
 	isSessionPickerOpen, setIsSessionPickerOpen := kitex.UseState(false)
 	sessionMutationPending := kitex.UseRef(false)
 
+	var sessionID string
+	if sess := session(); sess != nil {
+		sessionID = sess.ID
+	}
+	conversation := uihooks.UseConversation(sessionID)
+	printed := kitex.UseMemo(func() map[string]bool {
+		return make(map[string]bool)
+	}, []any{sessionID, historyRevision()})
+	isStreaming := func() bool {
+		return (sending().Pending && sending().Version == sessionVersion.Current) ||
+			conversation.Stream.Status == uihooks.StreamRunning ||
+			conversation.Stream.Status == uihooks.StreamWaitingPermission
+	}
 	sessions := uihooks.UseSessions(wind.Options{Enabled: isSessionPickerOpen()})
 
 	appendItem := func(n trail.Node) {
@@ -466,7 +214,7 @@ func useREPLController(props AppProps, app trail.AppHandle) REPLController {
 			sessionMutationPending.Current = false
 			setStatusHint("")
 			if active := session(); active != nil && active.ID == input.SessionID {
-				selectSession(updated)
+				setSession(updated)
 			}
 		},
 		OnError: func(err error, _ uihooks.RenameSessionInput, _ wind.MutationContext) {
@@ -531,62 +279,40 @@ func useREPLController(props AppProps, app trail.AppHandle) REPLController {
 		setIsPickerOpen(false)
 	}, []any{isSessionPickerOpen(), sessions.IsLoading, sessions.IsFetching, sessions.IsError, sessions.Error, sessions.Data})
 
-	var stream StreamState
-	var perms PermissionQueue
-
-	stream = useSSEStream(
-		ctx,
+	perms := usePermissionQueue(
 		props.Client,
 		session,
-		appendItem,
-		func(newPerms []api.PermissionRequest) {
-			perms.Queue(newPerms)
-		},
-		func(errText string) {
-			appendItem(ui.ErrorMessage(ui.ErrorMessageProps{Text: errText}))
-		},
-		func() {},
-	)
-
-	perms = usePermissionQueue(
-		ctx,
-		props.Client,
-		session,
+		conversation.Permissions,
 		func(req api.PermissionRequest, dec api.PermissionDecision) {
 			appendItem(ui.DecisionSummary(ui.DecisionSummaryProps{
 				Request:  req,
 				Decision: dec,
 			}))
 		},
-		func() {},
+		func(err error) {
+			appendItem(ui.ErrorMessage(ui.ErrorMessageProps{Text: err.Error()}))
+		},
 	)
 
-	// Initial startup setup: render banner header, load history and pending permissions
 	kitex.UseLayoutEffect(func() {
-		curr := items()
-		if len(curr) == 0 {
-			var initialItems []trail.Node
-			initialItems = append(initialItems, ui.Header(ui.HeaderProps{
+		if len(items()) == 0 {
+			appendItem(ui.Header(ui.HeaderProps{
 				Version:  props.Version,
 				Model:    modelLabel(),
 				Thinking: thinking(),
 				Path:     props.Workspace,
 			}))
-
-			sess := session()
-			if sess != nil && props.Client != nil {
-				hist, err := props.Client.History(ctx, sess.ID)
-				if err == nil {
-					initialItems = append(initialItems, ui.RenderHistoryMessages(hist)...)
-				}
-				permsList, pErr := props.Client.PendingPermissions(ctx, sess.ID)
-				if pErr == nil && len(permsList) > 0 {
-					perms.Queue(permsList)
-				}
-			}
-			setItems(initialItems)
 		}
 	}, []any{})
+
+	kitex.UseLayoutEffect(func() {
+		for _, message := range conversation.History {
+			if !printed[message.ID] {
+				appendItem(replcomponents.Message(replcomponents.MessageProps{Message: message}))
+				printed[message.ID] = true
+			}
+		}
+	}, []any{sessionID, historyRevision(), len(conversation.History)})
 
 	bindPickerCallbacks := func(p ui.PickerProps) ui.PickerProps {
 		p.OnOpen = func() {
@@ -658,32 +384,37 @@ func useREPLController(props AppProps, app trail.AppHandle) REPLController {
 			},
 			SwitchSession: func(sessionID string) {
 				if props.Client != nil {
+					sessionVersion.Current++
+					version := sessionVersion.Current
 					go func() {
 						switchedSess, err := props.Client.GetSession(ctx, sessionID)
 						if err != nil {
 							kitex.PostMacro(func() {
-								appendItem(ui.ErrorMessage(ui.ErrorMessageProps{Text: err.Error()}))
+								if ctx.Err() == nil && sessionVersion.Current == version {
+									appendItem(ui.ErrorMessage(ui.ErrorMessageProps{Text: err.Error()}))
+								}
 							})
 							return
 						}
-						hist, _ := props.Client.History(ctx, switchedSess.ID)
 						m, _ := props.Client.PermissionMode(ctx, switchedSess.ID)
 						mdlLabel, think := resolveModelAndThinking(ctx, props.Client, props.Agent, props.Model, switchedSess)
 						kitex.PostMacro(func() {
+							if ctx.Err() != nil || sessionVersion.Current != version {
+								return
+							}
 							selectSession(switchedSess)
+							setHistoryRevision(historyRevision() + 1)
 							setModelLabel(mdlLabel)
 							setThinking(think)
 							if m != "" {
 								setMode(m)
 							}
-							newItems := append(items(), ui.Header(ui.HeaderProps{
+							appendItem(ui.Header(ui.HeaderProps{
 								Version:  props.Version,
 								Model:    mdlLabel,
 								Thinking: think,
 								Path:     props.Workspace,
 							}))
-							newItems = append(newItems, ui.RenderHistoryMessages(hist)...)
-							setItems(newItems)
 						})
 					}()
 				}
@@ -811,6 +542,21 @@ func useREPLController(props AppProps, app trail.AppHandle) REPLController {
 		return p
 	}
 
+	send := func(sessionID, text string, version int) {
+		go func() {
+			err := props.Client.Send(ctx, sessionID, api.SendRequest{Content: text})
+			kitex.PostMacro(func() {
+				if ctx.Err() != nil || sessionVersion.Current != version {
+					return
+				}
+				setSending(sendState{})
+				if err != nil {
+					appendItem(ui.ErrorMessage(ui.ErrorMessageProps{Text: err.Error()}))
+				}
+			})
+		}()
+	}
+
 	submit := func(text string) {
 		if strings.HasPrefix(text, "/") {
 			reg := props.Registry
@@ -824,13 +570,19 @@ func useREPLController(props AppProps, app trail.AppHandle) REPLController {
 			return
 		}
 
-		// User prompt
-		appendItem(ui.UserPrompt(ui.UserPromptProps{Text: text}))
-		stream.Start("Thinking...")
-
 		if props.Client == nil {
+			appendItem(ui.ErrorMessage(ui.ErrorMessageProps{Text: "Daemon client is unavailable."}))
 			return
 		}
+		if isStreaming() {
+			appendItem(ui.Notice(ui.NoticeProps{Text: "A response is already running."}))
+			return
+		}
+		if conversation.Error != nil {
+			conversation.Refetch()
+		}
+		version := sessionVersion.Current
+		setSending(sendState{Version: version, Pending: true})
 
 		sess := session()
 		if sess == nil {
@@ -842,32 +594,25 @@ func useREPLController(props AppProps, app trail.AppHandle) REPLController {
 				})
 				if err != nil {
 					kitex.PostMacro(func() {
+						if ctx.Err() != nil || sessionVersion.Current != version {
+							return
+						}
 						appendItem(ui.ErrorMessage(ui.ErrorMessageProps{Text: err.Error()}))
-						stream.Reset()
+						setSending(sendState{})
 					})
 					return
 				}
 				kitex.PostMacro(func() {
+					if ctx.Err() != nil || sessionVersion.Current != version {
+						return
+					}
 					selectSession(newSess)
+					setSending(sendState{Version: sessionVersion.Current, Pending: true})
+					send(newSess.ID, text, sessionVersion.Current)
 				})
-				sendErr := props.Client.Send(ctx, newSess.ID, api.SendRequest{Content: text})
-				if sendErr != nil {
-					kitex.PostMacro(func() {
-						appendItem(ui.ErrorMessage(ui.ErrorMessageProps{Text: sendErr.Error()}))
-						stream.Reset()
-					})
-				}
 			}()
 		} else {
-			go func() {
-				sendErr := props.Client.Send(ctx, sess.ID, api.SendRequest{Content: text})
-				if sendErr != nil {
-					kitex.PostMacro(func() {
-						appendItem(ui.ErrorMessage(ui.ErrorMessageProps{Text: sendErr.Error()}))
-						stream.Reset()
-					})
-				}
-			}()
+			send(sess.ID, text, version)
 		}
 	}
 
@@ -881,12 +626,22 @@ func useREPLController(props AppProps, app trail.AppHandle) REPLController {
 	}
 
 	cancel := func() {
-		if stream.IsStreaming {
+		if isStreaming() {
 			sess := session()
 			if sess != nil && props.Client != nil {
-				go props.Client.Cancel(ctx, sess.ID)
+				go func() {
+					if err := props.Client.Cancel(ctx, sess.ID); err != nil {
+						kitex.PostMacro(func() {
+							if active := session(); ctx.Err() == nil && active != nil && active.ID == sess.ID {
+								appendItem(ui.ErrorMessage(ui.ErrorMessageProps{Text: err.Error()}))
+							}
+						})
+					}
+				}()
+			} else {
+				sessionVersion.Current++
 			}
-			stream.Reset()
+			setSending(sendState{})
 		}
 	}
 
@@ -897,7 +652,7 @@ func useREPLController(props AppProps, app trail.AppHandle) REPLController {
 		if perms.Count() > 0 {
 			return ui.StateApproval
 		}
-		if stream.IsStreaming {
+		if isStreaming() {
 			return ui.StateStreaming
 		}
 		return ui.StateIdle
@@ -912,7 +667,8 @@ func useREPLController(props AppProps, app trail.AppHandle) REPLController {
 		ActivePicker: activePicker,
 		IsPickerOpen: isPickerOpen,
 		State:        computedState,
-		Stream:       stream,
+		Conversation: conversation,
+		IsStreaming:  isStreaming(),
 		Perms:        perms,
 		Submit:       submit,
 		CycleMode:    cycleMode,

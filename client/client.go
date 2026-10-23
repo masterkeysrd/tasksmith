@@ -370,6 +370,13 @@ func (c *Client) Revert(ctx context.Context, sessionID string, req api.RevertReq
 // Subscribe opens a real-time Server-Sent Events (SSE) stream for optional sessionID,
 // yielding [api.Event] items as they arrive.
 func (c *Client) Subscribe(ctx context.Context, sessionID string) iter.Seq2[api.Event, error] {
+	return c.SubscribeWithReady(ctx, sessionID, nil)
+}
+
+// SubscribeWithReady invokes ready once the server has registered the
+// subscription, before reading events. This allows consumers to load a snapshot
+// while subsequent events are buffered by the connection.
+func (c *Client) SubscribeWithReady(ctx context.Context, sessionID string, ready func()) iter.Seq2[api.Event, error] {
 	return func(yield func(api.Event, error) bool) {
 		if err := c.requireCWD(); err != nil {
 			yield(api.Event{}, err)
@@ -406,6 +413,9 @@ func (c *Client) Subscribe(ctx context.Context, sessionID string) iter.Seq2[api.
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 			yield(api.Event{}, decodeErrorResponse(resp))
 			return
+		}
+		if ready != nil {
+			ready()
 		}
 
 		streamSSE(ctx, resp.Body, yield)

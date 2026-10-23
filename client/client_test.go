@@ -409,9 +409,19 @@ func TestClientAllMethodsOverUnixSocket(t *testing.T) {
 		t.Errorf("Subscribe received %d events, want 1", count)
 	}
 
+	readyCalls := 0
+	for _, err := range c.SubscribeWithReady(ctx, "s1", func() { readyCalls++ }) {
+		if err != nil || readyCalls != 1 {
+			t.Fatalf("SubscribeWithReady: err=%v, ready calls=%d; want nil, 1", err, readyCalls)
+		}
+	}
+	if readyCalls != 1 {
+		t.Errorf("ready calls = %d, want 1", readyCalls)
+	}
+
 	badC := c.WithCWD("bad")
 	var subErr error
-	for _, err := range badC.Subscribe(ctx, "s1") {
+	for _, err := range badC.SubscribeWithReady(ctx, "s1", func() { t.Error("ready called for unsuccessful subscription") }) {
 		subErr = err
 	}
 	if !errors.As(subErr, &apiErr) || apiErr.StatusCode != 400 {

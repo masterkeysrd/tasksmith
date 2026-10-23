@@ -219,54 +219,6 @@ func TestSpinnerAndDiffComponents(t *testing.T) {
 	}
 }
 
-func TestMessageAndTranscriptComponents(t *testing.T) {
-	b := mock.New(80, 24)
-	items := []trail.Node{
-		UserPrompt(UserPromptProps{Text: "Hello world"}),
-		Notice(NoticeProps{Text: "Switched session"}),
-		ErrorMessage(ErrorMessageProps{Text: "Something failed"}),
-		DecisionSummary(DecisionSummaryProps{
-			Request:  api.PermissionRequest{ToolName: "bash", Summary: "Run ls"},
-			Decision: api.PermissionDecision{Kind: api.DecisionAllowOnce},
-		}),
-		Message(MessageProps{
-			Message: api.Message{
-				Role: api.RoleAssistant,
-				Content: []api.Block{
-					{Type: api.BlockReasoning, Text: "Analyzing problem"},
-					{Type: api.BlockText, Text: "I can help with that"},
-				},
-			},
-		}),
-	}
-
-	app := trail.SimpleFC("TestApp", func() kitex.Node {
-		return Transcript(TranscriptProps{Items: items})
-	})
-	inst, _ := trail.New(app(), trail.WithBackend(b))
-	inst.Frame()
-
-	out := insertedAboveText(b)
-	if !strings.Contains(out, "> Hello world") {
-		t.Errorf("user prompt missing from static transcript:\n%s", out)
-	}
-	if !strings.Contains(out, "Switched session") {
-		t.Errorf("notice item missing from static transcript:\n%s", out)
-	}
-	if !strings.Contains(out, "error: Something failed") {
-		t.Errorf("error item missing from static transcript:\n%s", out)
-	}
-	if !strings.Contains(out, "✓ Allowed once: Run ls") {
-		t.Errorf("decision item missing from static transcript:\n%s", out)
-	}
-	if !strings.Contains(out, "○ Thought (Analyzing problem)") || !strings.Contains(out, "I can help with that") {
-		t.Errorf("assistant message missing from static transcript:\n%s", out)
-	}
-	if strings.Contains(out, "[assistant]") {
-		t.Errorf("expected no [assistant] badge in output:\n%s", out)
-	}
-}
-
 func TestChangesListComponent(t *testing.T) {
 	b := mock.New(80, 24)
 	app := trail.SimpleFC("TestApp", func() kitex.Node {
@@ -312,42 +264,6 @@ func TestCommandOutputComponent(t *testing.T) {
 	}
 	if !strings.Contains(out, "> /sessions") || !strings.Contains(out, "⎿  Exited /sessions command") {
 		t.Errorf("CommandOutput sessions output missing:\n%s", out)
-	}
-}
-
-func TestReasoningSingleLineTruncation(t *testing.T) {
-	// 1. Helper function checks
-	if res := FormatSingleLineReasoning(""); res != "" {
-		t.Errorf("expected empty for empty input, got %q", res)
-	}
-	if res := FormatSingleLineReasoning("Single line thought"); res != "Single line thought" {
-		t.Errorf("expected single line thought, got %q", res)
-	}
-	multi := "First line of thought\nSecond line details\nThird line conclusion"
-	if res := FormatSingleLineReasoning(multi); res != "First line of thought..." {
-		t.Errorf("expected 'First line of thought...', got %q", res)
-	}
-	dots := "Already dotted...\nNext line"
-	if res := FormatSingleLineReasoning(dots); res != "Already dotted..." {
-		t.Errorf("expected 'Already dotted...', got %q", res)
-	}
-
-	// 2. Component render check
-	b := mock.New(80, 24)
-	app := trail.SimpleFC("TestApp", func() kitex.Node {
-		return trail.Box(trail.BoxProps{},
-			Reasoning(ReasoningProps{Text: multi}),
-		)
-	})
-	inst, _ := trail.New(app(), trail.WithBackend(b))
-	inst.Frame()
-
-	out := surfaceText(b)
-	if !strings.Contains(out, "○ Thought (First line of thought...)") {
-		t.Errorf("expected '○ Thought (First line of thought...)', got:\n%s", out)
-	}
-	if strings.Contains(out, "Second line") || strings.Contains(out, "Third line") {
-		t.Errorf("multi-line details should not appear in collapsed reasoning output:\n%s", out)
 	}
 }
 
