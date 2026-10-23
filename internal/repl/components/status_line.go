@@ -1,82 +1,90 @@
 package components
 
 import (
-	"cmp"
-	"fmt"
-	"strings"
+	"image/color"
 
 	"github.com/masterkeysrd/kite/extras/trail"
 	"github.com/masterkeysrd/kite/style"
-	"github.com/masterkeysrd/tasksmith/api"
-	"github.com/masterkeysrd/tasksmith/internal/repl/theme"
-	"github.com/masterkeysrd/tasksmith/internal/repl/ui"
+	"github.com/masterkeysrd/tasksmith/internal/ui/theme"
 )
 
-// StatusLineProps defines the properties for the REPL status line.
-type StatusLineProps struct {
-	State    ui.State
-	Mode     api.PermissionMode
-	Model    string
-	Thinking string
-	Hint     string // Custom hint override, e.g. from active picker
-}
+// Tone is a semantic color role. It is resolved against the active theme when
+// a status segment renders, so segments never reference concrete colors.
+type Tone int
 
-func stateHint(state ui.State) string {
-	switch state {
-	case ui.StateStreaming:
-		return "streaming • esc to cancel"
-	case ui.StatePicker:
-		return ""
-	case ui.StateApproval:
-		return "y allow once · a allow session · n deny · r reject with feedback"
+const (
+	// ToneMuted is the default, low-emphasis status text.
+	ToneMuted Tone = iota
+	ToneInfo
+	ToneSuccess
+	TonePurple
+	ToneMagenta
+	ToneError
+)
+
+func (t Tone) color(scheme *theme.Scheme) color.Color {
+	if scheme == nil {
+		return nil
+	}
+	switch t {
+	case ToneInfo:
+		return scheme.Color.Surface.Info
+	case ToneSuccess:
+		return scheme.Color.Surface.Success
+	case TonePurple:
+		return scheme.Color.Text.Purple
+	case ToneMagenta:
+		return scheme.Color.Text.Magenta
+	case ToneError:
+		return scheme.Color.Text.Error
 	default:
-		return "shift+tab cycle mode • /help commands"
+		return scheme.Color.Text.Tertiary
 	}
 }
 
-// StatusLine is a trail functional component rendering the two-column REPL status bar:
-// left: shortcut hint
-// right: <mode> · <Model> · <Thinking> (or <Model> · <Thinking> when mode is default or empty)
-var StatusLine = trail.FC("StatusLine", func(props StatusLineProps) trail.Node {
-	leftText := props.Hint
-	if leftText == "" && props.State != ui.StatePicker {
-		leftText = stateHint(props.State)
-	}
+// StatusLineProps defines the properties for the StatusLine layout.
+type StatusLineProps struct {
+	Children []trail.Node
+}
 
-	model := cmp.Or(strings.TrimSpace(props.Model), "default")
-	thinking := cmp.Or(strings.TrimSpace(props.Thinking), "auto")
-	mode := cmp.Or(props.Mode, api.ModeDefault)
-
-	var rightChildren []trail.Node
-	if mode != api.ModeDefault && mode != "" {
-		rightChildren = append(rightChildren,
-			trail.Span(trail.SpanProps{
-				Style: theme.ModeBadgeStyle(mode),
-			}, trail.Text(string(mode))),
-			trail.Span(trail.SpanProps{
-				Style: theme.StatusBarStyle,
-			}, trail.Text(" · ")),
-		)
-	}
-	rightChildren = append(rightChildren,
-		trail.Span(trail.SpanProps{
-			Style: theme.StatusBarStyle,
-		}, trail.Text(fmt.Sprintf("%s · %s", model, thinking))),
-	)
-
+// StatusLine lays its children out on one line. Compose it from self-sufficient
+// segments and a [trail.Spacer] to push the right-hand ones to the edge:
+//
+//	StatusLine(StatusLineProps{},
+//	    HintSegment(SegmentProps{}),
+//	    trail.Spacer(),
+//	    ModeSegment(SegmentProps{Separator: " · "}),
+//	    ModelSegment(SegmentProps{}),
+//	)
+var StatusLine = trail.FCC("StatusLine", func(props StatusLineProps) trail.Node {
 	return trail.Box(trail.BoxProps{
 		Style: style.S().
 			Display(style.DisplayFlex).
 			FlexDirection(style.FlexRow).
 			AlignItems(style.AlignCenter).
 			Width(style.Percent(100)),
-	},
-		// Left shortcut hint
-		trail.Span(trail.SpanProps{
-			Style: theme.StatusBarStyle,
-		}, trail.Text(leftText)),
+	}, props.Children...)
+})
+
+// DefaultStatusLine is the stock status line: the state hint on the left and
+// the permission mode and model on the right.
+var DefaultStatusLine = trail.FC("DefaultStatusLine", func(struct{}) trail.Node {
+	return StatusLine(StatusLineProps{},
+		HintSegment(SegmentProps{}),
 		trail.Spacer(),
-		// Right mode · model · thinking indicator (inline spans inside a single box)
-		trail.Box(trail.BoxProps{}, rightChildren...),
+		ModeSegment(SegmentProps{Separator: " · "}),
+		ModelSegment(SegmentProps{}),
 	)
 })
+
+// statusText renders text in the given tone.
+func statusText(text string, tone Tone, bold bool) trail.Node {
+	spanStyle := style.S().WhiteSpace(style.WhiteSpacePre)
+	if fg := tone.color(theme.UseTheme()); fg != nil {
+		spanStyle = spanStyle.Foreground(fg)
+	}
+	if bold {
+		spanStyle = spanStyle.Bold(true)
+	}
+	return trail.Span(trail.SpanProps{Style: spanStyle}, trail.Text(text))
+}

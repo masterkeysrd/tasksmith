@@ -109,17 +109,20 @@ var replView = trail.FC("REPL", func(props AppProps) trail.Node {
 		}))
 	}
 
-	// Global status line (always visible at the bottom)
-	activeNodes = append(activeNodes, components.StatusLine(components.StatusLineProps{
+	// Global status line (always visible at the bottom). Its segments read the
+	// status from the provider below.
+	activeNodes = append(activeNodes, components.DefaultStatusLine(struct{}{}))
+
+	status := components.StatusContext{
 		State:    state,
 		Mode:     ctrl.Mode(),
 		Model:    ctrl.ModelLabel(),
 		Thinking: ctrl.Thinking(),
 		Hint:     ctrl.StatusHint(),
-	}))
+	}
 
 	return uitheme.Provider(uitheme.Props{Transparent: true},
-		trail.Fragment(
+		components.StatusProvider(status, trail.Fragment(
 			trail.Box(trail.BoxProps{Key: ctrl.Transcript.Key},
 				components.Transcript(components.TranscriptProps{
 					Entries: ctrl.Transcript.Entries,
@@ -131,6 +134,6 @@ var replView = trail.FC("REPL", func(props AppProps) trail.Node {
 					FlexDirection(style.FlexColumn).
 					Width(style.Percent(100)),
 			}, activeNodes...),
-		),
+		)),
 	)
 })

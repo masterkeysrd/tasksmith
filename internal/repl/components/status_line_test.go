@@ -11,23 +11,33 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/repl/ui"
 )
 
+func renderStatus(t *testing.T, status StatusContext, node func() trail.Node) (string, int) {
+	t.Helper()
+	b := mock.New(80, 24)
+	app := trail.SimpleFC("TestApp", func() kitex.Node {
+		return StatusProvider(status, node())
+	})
+	inst, err := trail.New(app(), trail.WithBackend(b))
+	if err != nil {
+		t.Fatalf("trail.New: %v", err)
+	}
+	inst.Frame()
+	return surfaceText(b), b.LastFrame().Surface.Height
+}
+
+func renderDefaultStatusLine(t *testing.T, status StatusContext) (string, int) {
+	t.Helper()
+	return renderStatus(t, status, func() trail.Node { return DefaultStatusLine(struct{}{}) })
+}
+
 func TestStatusLine(t *testing.T) {
 	// 1. Default mode: shows "<Model> · <Thinking>" without "default · "
-	b1 := mock.New(80, 24)
-	app1 := trail.SimpleFC("TestApp", func() kitex.Node {
-		return StatusLine(StatusLineProps{
-			State:    ui.StateIdle,
-			Mode:     api.ModeDefault,
-			Model:    "Claude 3.7 Sonnet",
-			Thinking: "high",
-		})
+	out1, h := renderDefaultStatusLine(t, StatusContext{
+		State: ui.StateIdle, Mode: api.ModeDefault, Model: "Claude 3.7 Sonnet", Thinking: "high",
 	})
-	inst1, _ := trail.New(app1(), trail.WithBackend(b1))
-	inst1.Frame()
-	if h := b1.LastFrame().Surface.Height; h != 1 {
-		t.Errorf("expected StatusLine height 1, got %d:\n%s", h, surfaceText(b1))
+	if h != 1 {
+		t.Errorf("expected StatusLine height 1, got %d:\n%s", h, out1)
 	}
-	out1 := surfaceText(b1)
 	if !strings.Contains(out1, "Claude 3.7 Sonnet · high") {
 		t.Errorf("expected model · thinking in status line:\n%s", out1)
 	}
@@ -39,21 +49,12 @@ func TestStatusLine(t *testing.T) {
 	}
 
 	// 2. Non-default mode: shows "<mode> · <Model> · <Thinking>"
-	b2 := mock.New(80, 24)
-	app2 := trail.SimpleFC("TestApp", func() kitex.Node {
-		return StatusLine(StatusLineProps{
-			State:    ui.StateStreaming,
-			Mode:     api.ModeAcceptEdits,
-			Model:    "Claude 3.7 Sonnet",
-			Thinking: "high",
-		})
+	out2, h := renderDefaultStatusLine(t, StatusContext{
+		State: ui.StateStreaming, Mode: api.ModeAcceptEdits, Model: "Claude 3.7 Sonnet", Thinking: "high",
 	})
-	inst2, _ := trail.New(app2(), trail.WithBackend(b2))
-	inst2.Frame()
-	if h := b2.LastFrame().Surface.Height; h != 1 {
-		t.Errorf("expected StatusLine height 1 in non-default mode, got %d:\n%s", h, surfaceText(b2))
+	if h != 1 {
+		t.Errorf("expected StatusLine height 1 in non-default mode, got %d:\n%s", h, out2)
 	}
-	out2 := surfaceText(b2)
 	if !strings.Contains(out2, "accept_edits · Claude 3.7 Sonnet · high") {
 		t.Errorf("expected mode · model · thinking:\n%s", out2)
 	}
@@ -62,36 +63,50 @@ func TestStatusLine(t *testing.T) {
 	}
 
 	// 3. Custom hint override
-	b3 := mock.New(80, 24)
-	app3 := trail.SimpleFC("TestApp", func() kitex.Node {
-		return StatusLine(StatusLineProps{
-			State: ui.StatePicker,
-			Hint:  "custom hint override",
-		})
-	})
-	inst3, _ := trail.New(app3(), trail.WithBackend(b3))
-	inst3.Frame()
-	out3 := surfaceText(b3)
+	out3, _ := renderDefaultStatusLine(t, StatusContext{State: ui.StatePicker, Hint: "custom hint override"})
 	if !strings.Contains(out3, "custom hint override") {
 		t.Errorf("expected custom hint:\n%s", out3)
 	}
 
-	// 4. ui.StatePicker with empty hint: leftText is empty, right side displays model/thinking
-	b4 := mock.New(80, 24)
-	app4 := trail.SimpleFC("TestApp", func() kitex.Node {
-		return StatusLine(StatusLineProps{
-			State:    ui.StatePicker,
-			Model:    "Claude 3.7 Sonnet",
-			Thinking: "high",
-		})
-	})
-	inst4, _ := trail.New(app4(), trail.WithBackend(b4))
-	inst4.Frame()
-	out4 := surfaceText(b4)
+	// 4. Picker with an empty hint: nothing on the left, model/thinking on the right
+	out4, _ := renderDefaultStatusLine(t, StatusContext{State: ui.StatePicker, Model: "Claude 3.7 Sonnet", Thinking: "high"})
 	if !strings.Contains(out4, "Claude 3.7 Sonnet · high") {
 		t.Errorf("expected model · thinking on right:\n%s", out4)
 	}
 	if strings.Contains(out4, "navigate") || strings.Contains(out4, "select") {
-		t.Errorf("expected no hint on left in ui.StatePicker, got:\n%s", out4)
+		t.Errorf("expected no hint on left in StatePicker, got:\n%s", out4)
+	}
+}
+
+func TestStatusSegmentsReadFromProviderAndComposeFreely(t *testing.T) {
+	// Segments are self-sufficient: composing them in another order needs no props.
+	out, _ := renderStatus(t, StatusContext{Mode: api.ModePlan, Model: "m", Thinking: "high"}, func() trail.Node {
+		return StatusLine(StatusLineProps{},
+			ModelSegment(SegmentProps{Separator: " | "}),
+			ModeSegment(SegmentProps{}),
+		)
+	})
+	if !strings.Contains(out, "m · high | plan") {
+		t.Errorf("composed segments = %q", out)
+	}
+}
+
+func TestStatusSegmentHidesSeparatorWithItself(t *testing.T) {
+	// The mode segment is hidden in default mode, and so is its separator.
+	out, _ := renderDefaultStatusLine(t, StatusContext{Mode: api.ModeDefault, Model: "m", Thinking: "high"})
+	if strings.Contains(out, "·  m") || strings.Contains(out, " · m · high") {
+		t.Errorf("hidden mode segment left a separator: %q", out)
+	}
+	if !strings.Contains(out, "m · high") {
+		t.Errorf("model segment missing: %q", out)
+	}
+}
+
+func TestStatusSegmentDefaults(t *testing.T) {
+	out, _ := renderStatus(t, StatusContext{State: ui.StatePicker}, func() trail.Node {
+		return StatusLine(StatusLineProps{}, HintSegment(SegmentProps{}), ModelSegment(SegmentProps{}))
+	})
+	if !strings.Contains(out, "default · auto") {
+		t.Errorf("blank model/thinking defaults missing: %q", out)
 	}
 }
