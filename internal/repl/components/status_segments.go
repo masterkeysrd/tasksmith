@@ -8,26 +8,26 @@ import (
 	"github.com/masterkeysrd/kite/extras/trail"
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/repl/ui"
+	uihooks "github.com/masterkeysrd/tasksmith/internal/ui/hooks"
 )
 
-// StatusContext is the read-only REPL status shared with status segments.
+// StatusContext is the REPL view state shared with status segments. Anything
+// that belongs to the session, such as its mode or model, is read by the
+// segments themselves through the session hooks.
 type StatusContext struct {
-	State    ui.State
-	Mode     api.PermissionMode
-	Model    string
-	Thinking string
+	State ui.State
 	// Hint overrides the state hint, for example while a picker is open.
 	Hint string
 }
 
 var statusContext = kitex.CreateContext[StatusContext](StatusContext{})
 
-// StatusProvider supplies the REPL status to the segments below it.
+// StatusProvider supplies the REPL view state to the segments below it.
 func StatusProvider(status StatusContext, children ...trail.Node) trail.Node {
 	return statusContext.Provider(status, children...)
 }
 
-// UseStatus returns the status supplied by the nearest [StatusProvider].
+// UseStatus returns the state supplied by the nearest [StatusProvider].
 func UseStatus() StatusContext {
 	return kitex.UseContext(statusContext)
 }
@@ -51,22 +51,25 @@ var HintSegment = trail.FC("HintSegment", func(props SegmentProps) trail.Node {
 
 // ModeSegment shows a colored badge for a non-default permission mode.
 var ModeSegment = trail.FC("ModeSegment", func(props SegmentProps) trail.Node {
-	status := UseStatus()
-	if status.Mode == "" || status.Mode == api.ModeDefault {
+	mode := uihooks.UsePermissionMode().Mode
+	if mode == "" || mode == api.ModeDefault {
 		return nil
 	}
-	text := string(status.Mode)
-	return segment(props, statusText(text, modeTone(status.Mode), true), text)
+	text := string(mode)
+	return segment(props, statusText(text, modeTone(mode), true), text)
 })
 
-// ModelSegment shows "<model> · <thinking>", with defaults for blank values.
+// ModelSegment shows "<model> · <thinking>" once the model is known.
 var ModelSegment = trail.FC("ModelSegment", func(props SegmentProps) trail.Node {
-	status := UseStatus()
-	model := strings.TrimSpace(status.Model)
+	info := uihooks.UseModelInfo()
+	if !info.Ready {
+		return nil
+	}
+	model := strings.TrimSpace(info.Label)
 	if model == "" {
 		model = "default"
 	}
-	thinking := strings.TrimSpace(status.Thinking)
+	thinking := strings.TrimSpace(info.Thinking)
 	if thinking == "" {
 		thinking = "auto"
 	}

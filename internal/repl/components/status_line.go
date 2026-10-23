@@ -68,7 +68,7 @@ var StatusLine = trail.FCC("StatusLine", func(props StatusLineProps) trail.Node 
 
 // DefaultStatusLine is the stock status line: the state hint on the left and
 // the permission mode and model on the right.
-var DefaultStatusLine = trail.FC("DefaultStatusLine", func(struct{}) trail.Node {
+var DefaultStatusLine = trail.SimpleFC("DefaultStatusLine", func() trail.Node {
 	return StatusLine(StatusLineProps{},
 		HintSegment(SegmentProps{}),
 		trail.Spacer(),

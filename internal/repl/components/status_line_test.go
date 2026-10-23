@@ -4,18 +4,47 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/masterkeysrd/kite/backend/mock"
 	"github.com/masterkeysrd/kite/extras/kitex"
 	"github.com/masterkeysrd/kite/extras/trail"
+	"github.com/masterkeysrd/kite/extras/wind"
 	"github.com/masterkeysrd/tasksmith/api"
+	"github.com/masterkeysrd/tasksmith/client"
 	"github.com/masterkeysrd/tasksmith/internal/repl/ui"
+	uiclient "github.com/masterkeysrd/tasksmith/internal/ui/client"
+	uihooks "github.com/masterkeysrd/tasksmith/internal/ui/hooks"
 )
 
-func renderStatus(t *testing.T, status StatusContext, node func() trail.Node) (string, int) {
+// statusFixture is what the status line is rendered against. Segments read the
+// mode and model from the session providers, so the fixture mounts them. The
+// model is given up front, so nothing is requested from a daemon.
+type statusFixture struct {
+	State    ui.State
+	Hint     string
+	Mode     api.PermissionMode
+	Model    string
+	Thinking string
+}
+
+func renderStatus(t *testing.T, fixture statusFixture, node func() trail.Node) (string, int) {
 	t.Helper()
+	c, err := client.New(t.TempDir()+"/unused.sock", client.WithCWD("/work"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	session := &api.Session{ID: uuid.Must(uuid.NewV7()).String(), Agent: "build", Model: "m"}
+
 	b := mock.New(80, 24)
 	app := trail.SimpleFC("TestApp", func() kitex.Node {
-		return StatusProvider(status, node())
+		return uiclient.Provider(uiclient.Props{Client: c},
+			wind.Provider(wind.ProviderProps{Client: wind.NewClient()},
+				uihooks.SessionProvider(uihooks.SessionProviderProps{
+					Initial:         session,
+					Mode:            fixture.Mode,
+					InitialModel:    fixture.Model,
+					InitialThinking: fixture.Thinking,
+				}, StatusProvider(StatusContext{State: fixture.State, Hint: fixture.Hint}, node()))))
 	})
 	inst, err := trail.New(app(), trail.WithBackend(b))
 	if err != nil {
@@ -25,14 +54,14 @@ func renderStatus(t *testing.T, status StatusContext, node func() trail.Node) (s
 	return surfaceText(b), b.LastFrame().Surface.Height
 }
 
-func renderDefaultStatusLine(t *testing.T, status StatusContext) (string, int) {
+func renderDefaultStatusLine(t *testing.T, fixture statusFixture) (string, int) {
 	t.Helper()
-	return renderStatus(t, status, func() trail.Node { return DefaultStatusLine(struct{}{}) })
+	return renderStatus(t, fixture, func() trail.Node { return DefaultStatusLine() })
 }
 
 func TestStatusLine(t *testing.T) {
 	// 1. Default mode: shows "<Model> · <Thinking>" without "default · "
-	out1, h := renderDefaultStatusLine(t, StatusContext{
+	out1, h := renderDefaultStatusLine(t, statusFixture{
 		State: ui.StateIdle, Mode: api.ModeDefault, Model: "Claude 3.7 Sonnet", Thinking: "high",
 	})
 	if h != 1 {
@@ -49,7 +78,7 @@ func TestStatusLine(t *testing.T) {
 	}
 
 	// 2. Non-default mode: shows "<mode> · <Model> · <Thinking>"
-	out2, h := renderDefaultStatusLine(t, StatusContext{
+	out2, h := renderDefaultStatusLine(t, statusFixture{
 		State: ui.StateStreaming, Mode: api.ModeAcceptEdits, Model: "Claude 3.7 Sonnet", Thinking: "high",
 	})
 	if h != 1 {
@@ -63,13 +92,13 @@ func TestStatusLine(t *testing.T) {
 	}
 
 	// 3. Custom hint override
-	out3, _ := renderDefaultStatusLine(t, StatusContext{State: ui.StatePicker, Hint: "custom hint override"})
+	out3, _ := renderDefaultStatusLine(t, statusFixture{State: ui.StatePicker, Hint: "custom hint override", Model: "m"})
 	if !strings.Contains(out3, "custom hint override") {
 		t.Errorf("expected custom hint:\n%s", out3)
 	}
 
 	// 4. Picker with an empty hint: nothing on the left, model/thinking on the right
-	out4, _ := renderDefaultStatusLine(t, StatusContext{State: ui.StatePicker, Model: "Claude 3.7 Sonnet", Thinking: "high"})
+	out4, _ := renderDefaultStatusLine(t, statusFixture{State: ui.StatePicker, Model: "Claude 3.7 Sonnet", Thinking: "high"})
 	if !strings.Contains(out4, "Claude 3.7 Sonnet · high") {
 		t.Errorf("expected model · thinking on right:\n%s", out4)
 	}
@@ -78,9 +107,9 @@ func TestStatusLine(t *testing.T) {
 	}
 }
 
-func TestStatusSegmentsReadFromProviderAndComposeFreely(t *testing.T) {
+func TestStatusSegmentsReadTheSessionThemselvesAndComposeFreely(t *testing.T) {
 	// Segments are self-sufficient: composing them in another order needs no props.
-	out, _ := renderStatus(t, StatusContext{Mode: api.ModePlan, Model: "m", Thinking: "high"}, func() trail.Node {
+	out, _ := renderStatus(t, statusFixture{Mode: api.ModePlan, Model: "m", Thinking: "high"}, func() trail.Node {
 		return StatusLine(StatusLineProps{},
 			ModelSegment(SegmentProps{Separator: " | "}),
 			ModeSegment(SegmentProps{}),
@@ -93,7 +122,7 @@ func TestStatusSegmentsReadFromProviderAndComposeFreely(t *testing.T) {
 
 func TestStatusSegmentHidesSeparatorWithItself(t *testing.T) {
 	// The mode segment is hidden in default mode, and so is its separator.
-	out, _ := renderDefaultStatusLine(t, StatusContext{Mode: api.ModeDefault, Model: "m", Thinking: "high"})
+	out, _ := renderDefaultStatusLine(t, statusFixture{Mode: api.ModeDefault, Model: "m", Thinking: "high"})
 	if strings.Contains(out, "·  m") || strings.Contains(out, " · m · high") {
 		t.Errorf("hidden mode segment left a separator: %q", out)
 	}
@@ -103,10 +132,11 @@ func TestStatusSegmentHidesSeparatorWithItself(t *testing.T) {
 }
 
 func TestStatusSegmentDefaults(t *testing.T) {
-	out, _ := renderStatus(t, StatusContext{State: ui.StatePicker}, func() trail.Node {
+	// A model with no effort reported falls back to "auto".
+	out, _ := renderStatus(t, statusFixture{State: ui.StatePicker, Model: "m"}, func() trail.Node {
 		return StatusLine(StatusLineProps{}, HintSegment(SegmentProps{}), ModelSegment(SegmentProps{}))
 	})
-	if !strings.Contains(out, "default · auto") {
-		t.Errorf("blank model/thinking defaults missing: %q", out)
+	if !strings.Contains(out, "m · auto") {
+		t.Errorf("blank thinking default missing: %q", out)
 	}
 }

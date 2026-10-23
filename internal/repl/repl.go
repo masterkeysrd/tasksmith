@@ -1,7 +1,6 @@
 package repl
 
 import (
-	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -13,6 +12,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/client"
 	"github.com/masterkeysrd/tasksmith/internal/repl/command"
 	"github.com/masterkeysrd/tasksmith/internal/repl/components"
+	uihooks "github.com/masterkeysrd/tasksmith/internal/ui/hooks"
 )
 
 // ErrInvalidConfig is returned when required [Config] fields are missing.
@@ -86,58 +86,8 @@ func Run(ctx context.Context, cfg Config) error {
 	return runTUI(ctx, cfg, sess, mode)
 }
 
-func resolveModelAndThinking(ctx context.Context, c *client.Client, cfgAgent, cfgModel string, sess *api.Session) (modelLabel, thinking string) {
-	agentName := strings.TrimSpace(cfgAgent)
-	modelID := strings.TrimSpace(cfgModel)
-
-	if sess != nil {
-		agentName = strings.TrimSpace(sess.Agent)
-		modelID = strings.TrimSpace(sess.Model)
-	}
-
-	var ws *api.Workspace
-	if c != nil && (agentName == "" || modelID == "") {
-		ws, _ = c.GetWorkspace(ctx)
-		if ws != nil && agentName == "" {
-			agentName = strings.TrimSpace(ws.DefaultAgent)
-		}
-	}
-
-	var ag *api.Agent
-	if c != nil && agentName != "" {
-		ag, _ = c.GetAgent(ctx, agentName)
-	}
-
-	if modelID == "" {
-		if ag != nil && len(ag.Models) > 0 {
-			modelID = strings.TrimSpace(ag.Models[0])
-		}
-		if modelID == "" && ws != nil {
-			modelID = strings.TrimSpace(ws.DefaultModel)
-		}
-	}
-
-	var mdl *api.Model
-	if c != nil && modelID != "" {
-		mdl, _ = c.GetModel(ctx, modelID)
-	}
-
-	var agEffort, mdlLabel, mdlEffort string
-	if ag != nil {
-		agEffort = strings.TrimSpace(ag.Effort)
-	}
-	if mdl != nil {
-		mdlLabel = cmp.Or(strings.TrimSpace(mdl.Label), strings.TrimSpace(mdl.Name), strings.TrimSpace(mdl.ID))
-		mdlEffort = strings.TrimSpace(mdl.DefaultEffort)
-	}
-
-	modelLabel = cmp.Or(mdlLabel, modelID, "default")
-	thinking = cmp.Or(agEffort, mdlEffort, "auto")
-	return modelLabel, thinking
-}
-
 func runTUI(ctx context.Context, cfg Config, sess *api.Session, mode api.PermissionMode) error {
-	modelLabel, thinking := resolveModelAndThinking(ctx, cfg.Client, cfg.Agent, cfg.Model, sess)
+	modelLabel, thinking := uihooks.ResolveModelInfo(ctx, cfg.Client, cfg.Agent, cfg.Model, sess)
 
 	props := AppProps{
 		Client:            cfg.Client,
