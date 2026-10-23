@@ -64,11 +64,11 @@ func (r *Registry) handleHelp(env Env, _ []string) error {
 	})
 	picker.Filterable = true
 	picker.OnCancel = func() {
-		if env.AppendNode != nil {
-			env.AppendNode(ui.CommandOutput(ui.CommandOutputProps{
+		if env.AppendOutput != nil {
+			env.AppendOutput(ui.CommandOutputProps{
 				Command: "/help",
 				Output:  "Exited /help command",
-			}))
+			})
 		}
 	}
 	if env.OpenPicker != nil {
@@ -85,19 +85,19 @@ func HandleMode(env Env, args []string) error {
 			if env.SetMode != nil {
 				env.SetMode(api.PermissionMode(opt.Value))
 			}
-			if env.AppendNode != nil {
-				env.AppendNode(ui.CommandOutput(ui.CommandOutputProps{
+			if env.AppendOutput != nil {
+				env.AppendOutput(ui.CommandOutputProps{
 					Command: "/mode",
 					Output:  fmt.Sprintf("Switched to %s mode.", opt.Value),
-				}))
+				})
 			}
 		})
 		picker.OnCancel = func() {
-			if env.AppendNode != nil {
-				env.AppendNode(ui.CommandOutput(ui.CommandOutputProps{
+			if env.AppendOutput != nil {
+				env.AppendOutput(ui.CommandOutputProps{
 					Command: "/mode",
 					Output:  "Exited /mode command",
-				}))
+				})
 			}
 		}
 		if env.OpenPicker != nil {
@@ -113,11 +113,11 @@ func HandleMode(env Env, args []string) error {
 	if env.SetMode != nil {
 		env.SetMode(nextMode)
 	}
-	if env.AppendNode != nil {
-		env.AppendNode(ui.CommandOutput(ui.CommandOutputProps{
+	if env.AppendOutput != nil {
+		env.AppendOutput(ui.CommandOutputProps{
 			Command: "/mode " + string(nextMode),
 			Output:  fmt.Sprintf("Switched to %s mode.", nextMode),
-		}))
+		})
 	}
 	return nil
 }

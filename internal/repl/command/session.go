@@ -49,11 +49,11 @@ func HandleSessions(env Env, args []string) error {
 	}
 
 	if env.BrowseSessions == nil {
-		if env.AppendNode != nil {
-			env.AppendNode(ui.CommandOutput(ui.CommandOutputProps{
+		if env.AppendOutput != nil {
+			env.AppendOutput(ui.CommandOutputProps{
 				Command: "/sessions",
 				Output:  "No sessions found.",
-			}))
+			})
 		}
 		return nil
 	}
@@ -94,11 +94,11 @@ func NewSessionPicker(env Env, sessions []api.Session, activeID string) ui.Picke
 	}
 	picker.Filterable = true
 	picker.OnCancel = func() {
-		if env.AppendNode != nil {
-			env.AppendNode(ui.CommandOutput(ui.CommandOutputProps{
+		if env.AppendOutput != nil {
+			env.AppendOutput(ui.CommandOutputProps{
 				Command: "/sessions",
 				Output:  "Exited /sessions command",
-			}))
+			})
 		}
 	}
 	picker.Footer = "↑/↓ to select • enter to switch • f2 to rename • f4 to delete • esc to cancel"

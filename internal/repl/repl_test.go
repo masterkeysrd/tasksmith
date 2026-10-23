@@ -615,7 +615,7 @@ func TestAppFunctionalComponentLifecycle(t *testing.T) {
 		Type:      api.EventMessageAdded,
 		SessionID: "s1",
 		Message: &api.Message{
-			ID:      "m-sent",
+			ID:      "m3",
 			Role:    api.RoleUser,
 			Content: []api.Block{{Type: api.BlockText, Text: "Hello assistant"}},
 		},
@@ -669,7 +669,7 @@ func TestAppFunctionalComponentLifecycle(t *testing.T) {
 		Type:      api.EventCompleted,
 		SessionID: "s1",
 		Message: &api.Message{
-			ID:   "a-final",
+			ID:   "m4",
 			Role: api.RoleAssistant,
 			Content: []api.Block{
 				{Type: api.BlockReasoning, Text: "Analyzing request"},
@@ -768,7 +768,7 @@ func TestLiveToolCallStreamingAndReasoningDuration(t *testing.T) {
 		Type:      api.EventMessageAdded,
 		SessionID: "s1",
 		Message: &api.Message{
-			ID:   "a1",
+			ID:   "m3",
 			Role: api.RoleAssistant,
 			Content: []api.Block{
 				{Type: api.BlockReasoning, Text: "planning commands to execute"},
@@ -787,7 +787,7 @@ func TestLiveToolCallStreamingAndReasoningDuration(t *testing.T) {
 		Type:      api.EventMessageAdded,
 		SessionID: "s1",
 		Message: &api.Message{
-			ID:         "t1",
+			ID:         "m4",
 			Role:       api.RoleTool,
 			ToolCallID: "tc1",
 			IsError:    false,
@@ -803,7 +803,7 @@ func TestLiveToolCallStreamingAndReasoningDuration(t *testing.T) {
 		Type:      api.EventMessageAdded,
 		SessionID: "s1",
 		Message: &api.Message{
-			ID:   "a2",
+			ID:   "m5",
 			Role: api.RoleAssistant,
 			Content: []api.Block{
 				{Type: api.BlockToolCall, ToolCall: &api.ToolCall{
@@ -821,7 +821,7 @@ func TestLiveToolCallStreamingAndReasoningDuration(t *testing.T) {
 		Type:      api.EventMessageAdded,
 		SessionID: "s1",
 		Message: &api.Message{
-			ID:         "t2",
+			ID:         "m6",
 			Role:       api.RoleTool,
 			ToolCallID: "tc2",
 			IsError:    true,

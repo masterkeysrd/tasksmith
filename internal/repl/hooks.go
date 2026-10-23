@@ -4,6 +4,8 @@ import (
 	"cmp"
 	"context"
 	"maps"
+	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/masterkeysrd/kite/extras/kitex"
@@ -146,9 +148,16 @@ func usePermissionQueue(
 	}
 }
 
+// TranscriptView is the data rendered by the Transcript component. Key
+// changes whenever the transcript restarts.
+type TranscriptView struct {
+	Key     string
+	Entries []replcomponents.TranscriptEntry
+}
+
 // REPLController aggregates all REPL state, command execution, and session management.
 type REPLController struct {
-	Items        func() []trail.Node
+	Transcript   TranscriptView
 	Mode         func() api.PermissionMode
 	ModelLabel   func() string
 	Thinking     func() string
@@ -168,7 +177,21 @@ type REPLController struct {
 func useREPLController(props AppProps, app trail.AppHandle) REPLController {
 	ctx := useLifecycleContext()
 
-	items, setItems := kitex.UseState([]trail.Node(nil))
+	// entries is the append-only transcript. lastMessageID is the high-water
+	// mark of conversation messages already appended; message IDs are
+	// time-sortable (UUIDv7) and arrive in order, so anything not greater than
+	// it has been printed.
+	entries, setEntries := kitex.UseState([]replcomponents.TranscriptEntry{
+		replcomponents.HeaderEntry(ui.HeaderProps{
+			Version:  props.Version,
+			Model:    props.InitialModelLabel,
+			Thinking: props.InitialThinking,
+			Path:     props.Workspace,
+		}),
+	})
+	lastMessageID := kitex.UseRef("")
+	latestMessageID := kitex.UseRef("")
+	epoch, setEpoch := kitex.UseState(0)
 	session, setSession := kitex.UseState(props.InitialSess)
 	sessionVersion := kitex.UseRef(0)
 	type sendState struct {
@@ -176,7 +199,16 @@ func useREPLController(props AppProps, app trail.AppHandle) REPLController {
 		Pending bool
 	}
 	sending, setSending := kitex.UseState(sendState{})
-	historyRevision, setHistoryRevision := kitex.UseState(0)
+	// restartTranscript starts a new printed transcript with a fresh header.
+	// skipThrough is the last message ID that is already on screen (used by
+	// /clear); messages up to it are not printed again.
+	restartTranscript := func(skipThrough, model, thinking string) {
+		lastMessageID.Current = skipThrough
+		setEntries([]replcomponents.TranscriptEntry{replcomponents.HeaderEntry(ui.HeaderProps{
+			Version: props.Version, Model: model, Thinking: thinking, Path: props.Workspace,
+		})})
+		setEpoch(epoch() + 1)
+	}
 	selectSession := func(sess *api.Session) {
 		sessionVersion.Current++
 		setSession(sess)
@@ -195,9 +227,11 @@ func useREPLController(props AppProps, app trail.AppHandle) REPLController {
 		sessionID = sess.ID
 	}
 	conversation := uihooks.UseConversation(sessionID)
-	printed := kitex.UseMemo(func() map[string]bool {
-		return make(map[string]bool)
-	}, []any{sessionID, historyRevision()})
+	if n := len(conversation.History); n > 0 {
+		latestMessageID.Current = conversation.History[n-1].SourceID
+	} else {
+		latestMessageID.Current = ""
+	}
 	isStreaming := func() bool {
 		return (sending().Pending && sending().Version == sessionVersion.Current) ||
 			conversation.Stream.Status == uihooks.StreamRunning ||
@@ -205,9 +239,22 @@ func useREPLController(props AppProps, app trail.AppHandle) REPLController {
 	}
 	sessions := uihooks.UseSessions(wind.Options{Enabled: isSessionPickerOpen()})
 
-	appendItem := func(n trail.Node) {
-		setItems(append(items(), n))
+	appendItem := func(e replcomponents.TranscriptEntry) {
+		setEntries(append(slices.Clone(entries()), e))
 	}
+
+	kitex.UseLayoutEffect(func() {
+		var added []replcomponents.TranscriptEntry
+		for _, message := range conversation.History {
+			if message.SourceID > lastMessageID.Current {
+				added = append(added, replcomponents.MessageEntry(message))
+				lastMessageID.Current = message.SourceID
+			}
+		}
+		if len(added) > 0 {
+			setEntries(append(slices.Clone(entries()), added...))
+		}
+	}, []any{sessionID, epoch(), len(conversation.History)})
 
 	renameSession := uihooks.UseRenameSession(wind.MutationOptions[uihooks.RenameSessionInput, *api.Session]{
 		OnSuccess: func(updated *api.Session, input uihooks.RenameSessionInput, _ wind.MutationContext) {
@@ -220,7 +267,7 @@ func useREPLController(props AppProps, app trail.AppHandle) REPLController {
 		OnError: func(err error, _ uihooks.RenameSessionInput, _ wind.MutationContext) {
 			sessionMutationPending.Current = false
 			setStatusHint("")
-			appendItem(ui.ErrorMessage(ui.ErrorMessageProps{Text: err.Error()}))
+			appendItem(replcomponents.ErrorEntry(ui.ErrorMessageProps{Text: err.Error()}))
 		},
 	})
 	type modelAndThinking struct {
@@ -247,17 +294,18 @@ func useREPLController(props AppProps, app trail.AppHandle) REPLController {
 				if sessionVersion.Current == version {
 					setModelLabel(defaults.model)
 					setThinking(defaults.thinking)
+					restartTranscript("", defaults.model, defaults.thinking)
 				}
 			}, func(err error) {
 				if ctx.Err() == nil {
-					appendItem(ui.ErrorMessage(ui.ErrorMessageProps{Text: err.Error()}))
+					appendItem(replcomponents.ErrorEntry(ui.ErrorMessageProps{Text: err.Error()}))
 				}
 			})
 		},
 		OnError: func(err error, _ string, _ wind.MutationContext) {
 			sessionMutationPending.Current = false
 			setStatusHint("")
-			appendItem(ui.ErrorMessage(ui.ErrorMessageProps{Text: err.Error()}))
+			appendItem(replcomponents.ErrorEntry(ui.ErrorMessageProps{Text: err.Error()}))
 		},
 	})
 
@@ -266,9 +314,9 @@ func useREPLController(props AppProps, app trail.AppHandle) REPLController {
 			return
 		}
 		if sessions.IsError {
-			appendItem(ui.ErrorMessage(ui.ErrorMessageProps{Text: sessions.Error.Error()}))
+			appendItem(replcomponents.ErrorEntry(ui.ErrorMessageProps{Text: sessions.Error.Error()}))
 		} else if len(sessions.Data) == 0 {
-			appendItem(ui.CommandOutput(ui.CommandOutputProps{
+			appendItem(replcomponents.CommandEntry(ui.CommandOutputProps{
 				Command: "/sessions",
 				Output:  "No sessions found.",
 			}))
@@ -284,35 +332,15 @@ func useREPLController(props AppProps, app trail.AppHandle) REPLController {
 		session,
 		conversation.Permissions,
 		func(req api.PermissionRequest, dec api.PermissionDecision) {
-			appendItem(ui.DecisionSummary(ui.DecisionSummaryProps{
+			appendItem(replcomponents.DecisionEntry(ui.DecisionSummaryProps{
 				Request:  req,
 				Decision: dec,
 			}))
 		},
 		func(err error) {
-			appendItem(ui.ErrorMessage(ui.ErrorMessageProps{Text: err.Error()}))
+			appendItem(replcomponents.ErrorEntry(ui.ErrorMessageProps{Text: err.Error()}))
 		},
 	)
-
-	kitex.UseLayoutEffect(func() {
-		if len(items()) == 0 {
-			appendItem(ui.Header(ui.HeaderProps{
-				Version:  props.Version,
-				Model:    modelLabel(),
-				Thinking: thinking(),
-				Path:     props.Workspace,
-			}))
-		}
-	}, []any{})
-
-	kitex.UseLayoutEffect(func() {
-		for _, message := range conversation.History {
-			if !printed[message.ID] {
-				appendItem(replcomponents.Message(replcomponents.MessageProps{Message: message}))
-				printed[message.ID] = true
-			}
-		}
-	}, []any{sessionID, historyRevision(), len(conversation.History)})
 
 	bindPickerCallbacks := func(p ui.PickerProps) ui.PickerProps {
 		p.OnOpen = func() {
@@ -355,7 +383,9 @@ func useREPLController(props AppProps, app trail.AppHandle) REPLController {
 			Session:      session(),
 			DefaultAgent: props.Agent,
 			DefaultModel: props.Model,
-			AppendNode:   appendItem,
+			AppendOutput: func(output ui.CommandOutputProps) {
+				appendItem(replcomponents.CommandEntry(output))
+			},
 			OpenPicker: func(p ui.PickerProps) {
 				setIsSessionPickerOpen(false)
 				setPickerProps(bindPickerCallbacks(p))
@@ -375,12 +405,7 @@ func useREPLController(props AppProps, app trail.AppHandle) REPLController {
 				setModelLabel(mdlLabel)
 				setThinking(think)
 				setMode(api.ModeDefault)
-				appendItem(ui.Header(ui.HeaderProps{
-					Version:  props.Version,
-					Model:    mdlLabel,
-					Thinking: think,
-					Path:     props.Workspace,
-				}))
+				restartTranscript("", mdlLabel, think)
 			},
 			SwitchSession: func(sessionID string) {
 				if props.Client != nil {
@@ -391,7 +416,7 @@ func useREPLController(props AppProps, app trail.AppHandle) REPLController {
 						if err != nil {
 							kitex.PostMacro(func() {
 								if ctx.Err() == nil && sessionVersion.Current == version {
-									appendItem(ui.ErrorMessage(ui.ErrorMessageProps{Text: err.Error()}))
+									appendItem(replcomponents.ErrorEntry(ui.ErrorMessageProps{Text: err.Error()}))
 								}
 							})
 							return
@@ -403,18 +428,12 @@ func useREPLController(props AppProps, app trail.AppHandle) REPLController {
 								return
 							}
 							selectSession(switchedSess)
-							setHistoryRevision(historyRevision() + 1)
 							setModelLabel(mdlLabel)
 							setThinking(think)
 							if m != "" {
 								setMode(m)
 							}
-							appendItem(ui.Header(ui.HeaderProps{
-								Version:  props.Version,
-								Model:    mdlLabel,
-								Thinking: think,
-								Path:     props.Workspace,
-							}))
+							restartTranscript("", mdlLabel, think)
 						})
 					}()
 				}
@@ -437,7 +456,7 @@ func useREPLController(props AppProps, app trail.AppHandle) REPLController {
 			ListChanges: func() {
 				sess := session()
 				if sess == nil {
-					appendItem(ui.Notice(ui.NoticeProps{Text: "No active session."}))
+					appendItem(replcomponents.NoticeEntry(ui.NoticeProps{Text: "No active session."}))
 					return
 				}
 				if props.Client != nil {
@@ -445,10 +464,10 @@ func useREPLController(props AppProps, app trail.AppHandle) REPLController {
 						changes, err := props.Client.Changes(ctx, sess.ID)
 						kitex.PostMacro(func() {
 							if err != nil {
-								appendItem(ui.ErrorMessage(ui.ErrorMessageProps{Text: err.Error()}))
+								appendItem(replcomponents.ErrorEntry(ui.ErrorMessageProps{Text: err.Error()}))
 								return
 							}
-							appendItem(ui.ChangesList(ui.ChangesListProps{Changes: changes}))
+							appendItem(replcomponents.ChangesEntry(ui.ChangesListProps{Changes: changes}))
 						})
 					}()
 				}
@@ -456,7 +475,7 @@ func useREPLController(props AppProps, app trail.AppHandle) REPLController {
 			DiffChange: func(path, entryID string) {
 				sess := session()
 				if sess == nil {
-					appendItem(ui.Notice(ui.NoticeProps{Text: "No active session."}))
+					appendItem(replcomponents.NoticeEntry(ui.NoticeProps{Text: "No active session."}))
 					return
 				}
 				if props.Client != nil {
@@ -464,10 +483,10 @@ func useREPLController(props AppProps, app trail.AppHandle) REPLController {
 						diff, err := props.Client.DiffChange(ctx, sess.ID, path, entryID)
 						kitex.PostMacro(func() {
 							if err != nil {
-								appendItem(ui.ErrorMessage(ui.ErrorMessageProps{Text: err.Error()}))
+								appendItem(replcomponents.ErrorEntry(ui.ErrorMessageProps{Text: err.Error()}))
 								return
 							}
-							appendItem(ui.Diff(ui.DiffProps{Text: diff}))
+							appendItem(replcomponents.DiffEntry(ui.DiffProps{Text: diff}))
 						})
 					}()
 				}
@@ -475,7 +494,7 @@ func useREPLController(props AppProps, app trail.AppHandle) REPLController {
 			RevertChanges: func(path, entryID string) {
 				sess := session()
 				if sess == nil {
-					appendItem(ui.CommandOutput(ui.CommandOutputProps{
+					appendItem(replcomponents.CommandEntry(ui.CommandOutputProps{
 						Command: "/revert",
 						Output:  "No active session.",
 					}))
@@ -489,7 +508,7 @@ func useREPLController(props AppProps, app trail.AppHandle) REPLController {
 						})
 						kitex.PostMacro(func() {
 							if err != nil {
-								appendItem(ui.ErrorMessage(ui.ErrorMessageProps{Text: err.Error()}))
+								appendItem(replcomponents.ErrorEntry(ui.ErrorMessageProps{Text: err.Error()}))
 								return
 							}
 							cmdStr := "/revert"
@@ -499,7 +518,7 @@ func useREPLController(props AppProps, app trail.AppHandle) REPLController {
 									cmdStr += " " + entryID
 								}
 							}
-							appendItem(ui.CommandOutput(ui.CommandOutputProps{
+							appendItem(replcomponents.CommandEntry(ui.CommandOutputProps{
 								Command: cmdStr,
 								Output:  "Reverted changes.",
 							}))
@@ -508,12 +527,7 @@ func useREPLController(props AppProps, app trail.AppHandle) REPLController {
 				}
 			},
 			ClearScreen: func() {
-				appendItem(ui.Header(ui.HeaderProps{
-					Version:  props.Version,
-					Model:    modelLabel(),
-					Thinking: thinking(),
-					Path:     props.Workspace,
-				}))
+				restartTranscript(latestMessageID.Current, modelLabel(), thinking())
 			},
 			Exit: func() {
 				if app != nil {
@@ -551,7 +565,7 @@ func useREPLController(props AppProps, app trail.AppHandle) REPLController {
 				}
 				setSending(sendState{})
 				if err != nil {
-					appendItem(ui.ErrorMessage(ui.ErrorMessageProps{Text: err.Error()}))
+					appendItem(replcomponents.ErrorEntry(ui.ErrorMessageProps{Text: err.Error()}))
 				}
 			})
 		}()
@@ -565,17 +579,17 @@ func useREPLController(props AppProps, app trail.AppHandle) REPLController {
 			}
 			err := reg.Execute(makeEnv(), text)
 			if err != nil {
-				appendItem(ui.ErrorMessage(ui.ErrorMessageProps{Text: err.Error()}))
+				appendItem(replcomponents.ErrorEntry(ui.ErrorMessageProps{Text: err.Error()}))
 			}
 			return
 		}
 
 		if props.Client == nil {
-			appendItem(ui.ErrorMessage(ui.ErrorMessageProps{Text: "Daemon client is unavailable."}))
+			appendItem(replcomponents.ErrorEntry(ui.ErrorMessageProps{Text: "Daemon client is unavailable."}))
 			return
 		}
 		if isStreaming() {
-			appendItem(ui.Notice(ui.NoticeProps{Text: "A response is already running."}))
+			appendItem(replcomponents.NoticeEntry(ui.NoticeProps{Text: "A response is already running."}))
 			return
 		}
 		if conversation.Error != nil {
@@ -597,7 +611,7 @@ func useREPLController(props AppProps, app trail.AppHandle) REPLController {
 						if ctx.Err() != nil || sessionVersion.Current != version {
 							return
 						}
-						appendItem(ui.ErrorMessage(ui.ErrorMessageProps{Text: err.Error()}))
+						appendItem(replcomponents.ErrorEntry(ui.ErrorMessageProps{Text: err.Error()}))
 						setSending(sendState{})
 					})
 					return
@@ -633,7 +647,7 @@ func useREPLController(props AppProps, app trail.AppHandle) REPLController {
 					if err := props.Client.Cancel(ctx, sess.ID); err != nil {
 						kitex.PostMacro(func() {
 							if active := session(); ctx.Err() == nil && active != nil && active.ID == sess.ID {
-								appendItem(ui.ErrorMessage(ui.ErrorMessageProps{Text: err.Error()}))
+								appendItem(replcomponents.ErrorEntry(ui.ErrorMessageProps{Text: err.Error()}))
 							}
 						})
 					}
@@ -658,8 +672,10 @@ func useREPLController(props AppProps, app trail.AppHandle) REPLController {
 		return ui.StateIdle
 	}
 
+	transcript := TranscriptView{Key: strconv.Itoa(epoch()), Entries: entries()}
+
 	return REPLController{
-		Items:        items,
+		Transcript:   transcript,
 		Mode:         mode,
 		ModelLabel:   modelLabel,
 		Thinking:     thinking,

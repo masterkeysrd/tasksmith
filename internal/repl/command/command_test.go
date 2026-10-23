@@ -5,7 +5,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/masterkeysrd/kite/extras/trail"
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/repl/ui"
 )
@@ -82,7 +81,7 @@ func TestBuiltinCommandsExecution(t *testing.T) {
 		Model: "gpt-5",
 	}
 
-	var appendedNodes []trail.Node
+	var appendedNodes []ui.CommandOutputProps
 	var openedPicker *ui.PickerProps
 	var setModeVal api.PermissionMode
 	var newSessionModel string
@@ -118,7 +117,7 @@ func TestBuiltinCommandsExecution(t *testing.T) {
 		Mode:         api.ModeDefault,
 		DefaultAgent: "developer",
 		DefaultModel: "claude-sonnet-4-6",
-		AppendNode: func(n trail.Node) {
+		AppendOutput: func(n ui.CommandOutputProps) {
 			appendedNodes = append(appendedNodes, n)
 		},
 		OpenPicker: func(p ui.PickerProps) {

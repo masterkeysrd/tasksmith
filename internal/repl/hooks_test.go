@@ -45,9 +45,11 @@ func mountController(t *testing.T, props AppProps) (*mock.Backend, func(func(REP
 			picker:     ctrl.ActivePicker(),
 			sessions:   sessions,
 			model:      ctrl.ModelLabel(),
-			itemCount:  len(ctrl.Items()),
+			itemCount:  len(ctrl.Transcript.Entries),
 		})
-		return replcomponents.Transcript(replcomponents.TranscriptProps{Items: ctrl.Items()})
+		return trail.Box(trail.BoxProps{Key: ctrl.Transcript.Key},
+			replcomponents.Transcript(replcomponents.TranscriptProps{Entries: ctrl.Transcript.Entries}),
+		)
 	})
 	cache := wind.NewClient()
 	cache.GcTime = time.Millisecond

@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/masterkeysrd/kite/extras/trail"
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/repl/ui"
 	"github.com/masterkeysrd/tasksmith/internal/ui/autocomplete"
@@ -18,7 +17,7 @@ type Env struct {
 	DefaultAgent string
 	DefaultModel string
 
-	AppendNode     func(node trail.Node)
+	AppendOutput   func(output ui.CommandOutputProps)
 	OpenPicker     func(picker ui.PickerProps)
 	SetMode        func(mode api.PermissionMode)
 	NewSession     func(model string)

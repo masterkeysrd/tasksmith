@@ -120,7 +120,11 @@ var replView = trail.FC("REPL", func(props AppProps) trail.Node {
 
 	return uitheme.Provider(uitheme.Props{Transparent: true},
 		trail.Fragment(
-			components.Transcript(components.TranscriptProps{Items: ctrl.Items()}),
+			trail.Box(trail.BoxProps{Key: ctrl.Transcript.Key},
+				components.Transcript(components.TranscriptProps{
+					Entries: ctrl.Transcript.Entries,
+				}),
+			),
 			trail.Box(trail.BoxProps{
 				Style: style.S().
 					Display(style.DisplayFlex).
