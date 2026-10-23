@@ -23,6 +23,8 @@ var (
 	ErrNoPendingPermissions = errors.New("session: no pending permissions")
 	ErrPermissionNotFound   = errors.New("session: permission request not found")
 	ErrInvalidDecision      = errors.New("session: invalid permission decision")
+	ErrInvalidSessionID     = errors.New("session: session ID must be a canonical lowercase UUIDv7")
+	ErrSessionConflict      = errors.New("session: session already exists with different parameters")
 )
 
 // Session represents a persistent user-facing chat thread.
@@ -36,7 +38,11 @@ type Session struct {
 }
 
 // CreateParams holds optional parameters for creating a new [Session].
+//
+// A non-empty ID must be a canonical lowercase UUIDv7 and makes creation
+// idempotent; see [Manager.Ensure].
 type CreateParams struct {
+	ID    string `json:"id,omitempty"`
 	Title string `json:"title,omitempty"`
 	Agent string `json:"agent,omitempty"`
 	Model string `json:"model,omitempty"`

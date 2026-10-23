@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"iter"
 	"maps"
@@ -75,6 +76,7 @@ type Manager struct {
 	logger    log.Interface
 
 	mu         sync.Mutex
+	createMu   sync.Mutex
 	trackers   map[string]*FileTracker
 	containers map[string]*tools.Container
 	decisions  map[string]map[string]tools.PermissionDecision
@@ -141,23 +143,67 @@ func (m *Manager) resolveAgentAndModel(agent, model string) (string, string) {
 	return agent, model
 }
 
-// Create creates and persists a new [Session] with a fresh UUIDv7 identifier,
-// resolving default `Agent` and `Model` values from the workspace when not
-// explicitly provided in params.
+// Create creates and persists a new [Session], resolving default `Agent` and
+// `Model` values from the workspace when not explicitly provided in params. The
+// identifier is a fresh UUIDv7 unless params.ID is set, in which case Create
+// behaves like [Manager.Ensure] and discards whether the session was new.
 func (m *Manager) Create(ctx context.Context, params CreateParams) (*Session, error) {
+	sess, _, err := m.Ensure(ctx, params)
+	return sess, err
+}
+
+// Ensure creates the session described by params, or returns it when params.ID
+// names a session that already exists. created reports whether a new session
+// was persisted.
+//
+// A caller-supplied ID must be a canonical lowercase UUIDv7 ([ErrInvalidSessionID]
+// otherwise); this also keeps the on-disk session directory name safe. For an
+// existing ID, every non-empty param must match the stored session, otherwise
+// Ensure returns [ErrSessionConflict]. Empty params match anything, so a retry
+// that omits optional fields is still accepted.
+func (m *Manager) Ensure(ctx context.Context, params CreateParams) (sess *Session, created bool, err error) {
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return nil, false, err
+	}
+
+	id := strings.TrimSpace(params.ID)
+	if id != "" {
+		if err := validateSessionID(id); err != nil {
+			return nil, false, err
+		}
+	}
+
+	// Serialize creation by ID so two concurrent requests cannot both insert.
+	if id != "" {
+		m.createMu.Lock()
+		defer m.createMu.Unlock()
+
+		existing, err := m.store.getSession(ctx, id)
+		switch {
+		case err == nil:
+			if err := m.matchesParams(existing, params); err != nil {
+				return nil, false, err
+			}
+			cp := *existing
+			return &cp, false, nil
+		case !errors.Is(err, ErrSessionNotFound):
+			return nil, false, err
+		}
 	}
 
 	agent, model := m.resolveAgentAndModel(params.Agent, params.Model)
 
 	now := time.Now().UTC()
-	id, err := uuid.NewV7()
-	if err != nil {
-		return nil, fmt.Errorf("session: generate session id: %w", err)
+	if id == "" {
+		generated, err := uuid.NewV7()
+		if err != nil {
+			return nil, false, fmt.Errorf("session: generate session id: %w", err)
+		}
+		id = generated.String()
 	}
-	sess := &Session{
-		ID:        id.String(),
+	created = true
+	newSession := &Session{
+		ID:        id,
 		Title:     strings.TrimSpace(params.Title),
 		Agent:     agent,
 		Model:     model,
@@ -165,12 +211,38 @@ func (m *Manager) Create(ctx context.Context, params CreateParams) (*Session, er
 		UpdatedAt: now,
 	}
 
-	if err := m.store.insertSession(ctx, sess); err != nil {
-		return nil, err
+	if err := m.store.insertSession(ctx, newSession); err != nil {
+		return nil, false, err
 	}
 
-	cp := *sess
-	return &cp, nil
+	cp := *newSession
+	return &cp, created, nil
+}
+
+// validateSessionID requires a canonical lowercase UUIDv7.
+func validateSessionID(id string) error {
+	parsed, err := uuid.Parse(id)
+	if err != nil || parsed.Version() != 7 || parsed.String() != id {
+		return fmt.Errorf("%w: %q", ErrInvalidSessionID, id)
+	}
+	return nil
+}
+
+// matchesParams reports [ErrSessionConflict] when a non-empty param differs
+// from the stored session. Agent and model are compared after the same
+// resolution Create applies, so aliases match their resolved names.
+func (m *Manager) matchesParams(existing *Session, params CreateParams) error {
+	if title := strings.TrimSpace(params.Title); title != "" && title != existing.Title {
+		return fmt.Errorf("%w: title differs", ErrSessionConflict)
+	}
+	agent, model := m.resolveAgentAndModel(params.Agent, params.Model)
+	if strings.TrimSpace(params.Agent) != "" && agent != existing.Agent {
+		return fmt.Errorf("%w: agent differs", ErrSessionConflict)
+	}
+	if strings.TrimSpace(params.Model) != "" && model != existing.Model {
+		return fmt.Errorf("%w: model differs", ErrSessionConflict)
+	}
+	return nil
 }
 
 // Update modifies fields on an existing [Session], resolving the model against the

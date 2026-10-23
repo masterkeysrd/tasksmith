@@ -621,7 +621,8 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sess, err := rt.manager.Create(r.Context(), session.CreateParams{
+	sess, created, err := rt.manager.Ensure(r.Context(), session.CreateParams{
+		ID:    req.ID,
 		Title: req.Title,
 		Agent: req.Agent,
 		Model: req.Model,
@@ -631,7 +632,12 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusCreated, toAPISession(sess, api.StatusIdle))
+	// An idempotent create of an existing session returns it with 200.
+	status := http.StatusCreated
+	if !created {
+		status = http.StatusOK
+	}
+	writeJSON(w, status, toAPISession(sess, rt.sessionStatus(r.Context(), sess.ID)))
 }
 
 func (s *Server) handleListSessions(w http.ResponseWriter, r *http.Request) {
@@ -1038,6 +1044,7 @@ func classifyError(err error) (int, string) {
 		errors.Is(err, session.ErrEmptySessionID),
 		errors.Is(err, session.ErrInvalidDecision),
 		errors.Is(err, session.ErrInvalidConfig),
+		errors.Is(err, session.ErrInvalidSessionID),
 		errors.Is(err, session.ErrNoPendingPermissions):
 		return http.StatusBadRequest, "bad_request"
 
@@ -1049,6 +1056,7 @@ func classifyError(err error) (int, string) {
 		return http.StatusNotFound, "not_found"
 
 	case errors.Is(err, ErrSessionRunning),
+		errors.Is(err, session.ErrSessionConflict),
 		errors.Is(err, session.ErrRevertConflict):
 		return http.StatusConflict, "conflict"
 

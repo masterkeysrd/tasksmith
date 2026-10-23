@@ -90,7 +90,13 @@ type Session struct {
 }
 
 // CreateSessionRequest holds optional parameters for creating a new session.
+//
+// ID is optional. When set it must be a canonical lowercase UUIDv7 and makes
+// the request idempotent: creating an ID that already exists returns the
+// existing session when every supplied field matches, and fails with a
+// conflict otherwise.
 type CreateSessionRequest struct {
+	ID    string `json:"id,omitempty"`
 	Title string `json:"title,omitempty"`
 	Agent string `json:"agent,omitempty"`
 	Model string `json:"model,omitempty"`
