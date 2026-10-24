@@ -14,6 +14,7 @@ const (
 	TranscriptKindNotice   TranscriptKind = "notice"
 	TranscriptKindError    TranscriptKind = "error"
 	TranscriptKindCommand  TranscriptKind = "command"
+	TranscriptKindMessage  TranscriptKind = "message"
 )
 
 // HeaderData holds the data for the startup banner.
@@ -121,6 +122,15 @@ func AppendTimelineEntry(e api.TimelineEntry) {
 		ID:   e.ID,
 		Kind: TranscriptKindTimeline,
 		Data: e,
+	})
+}
+
+// AppendMessage appends a finalized message to the transcript scrollback.
+func AppendMessage(msg Message) {
+	AppendTranscript(TranscriptItem{
+		ID:   msg.ID,
+		Kind: TranscriptKindMessage,
+		Data: msg,
 	})
 }
 

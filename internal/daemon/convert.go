@@ -167,12 +167,19 @@ func toAPIChunk(ch *message.AssistantChunk) *api.Chunk {
 }
 
 func fromSendRequest(req api.SendRequest) (session.SendInput, error) {
-	if req.Decision != nil && (strings.TrimSpace(req.Content) != "" || len(req.Blocks) > 0) {
+	if req.Decision != nil && (strings.TrimSpace(req.Content) != "" || len(req.Blocks) > 0 || strings.TrimSpace(req.ID) != "") {
 		return session.SendInput{}, fmt.Errorf("%w: cannot specify both message and decision", session.ErrInvalidConfig)
 	}
 	if req.Decision != nil {
 		dec := fromAPIPermissionDecision(*req.Decision)
 		return session.SendInput{Decision: &dec}, nil
+	}
+	id := strings.TrimSpace(req.ID)
+	if id != "" {
+		parsed, err := uuid.Parse(id)
+		if err != nil || parsed.Version() != 7 || parsed.String() != id {
+			return session.SendInput{}, fmt.Errorf("%w: invalid message id %q", session.ErrInvalidConfig, id)
+		}
 	}
 	var blocks []message.Block
 	if strings.TrimSpace(req.Content) != "" {
@@ -186,7 +193,11 @@ func fromSendRequest(req api.SendRequest) (session.SendInput, error) {
 	if len(blocks) == 0 {
 		return session.SendInput{}, ErrEmptyMessage
 	}
-	return session.SendInput{Message: message.NewUser(blocks...)}, nil
+	msg := message.NewUser(blocks...)
+	if id != "" {
+		msg.SetID(id)
+	}
+	return session.SendInput{Message: msg}, nil
 }
 
 func fromAPIBlock(b api.Block) (message.Block, bool) {

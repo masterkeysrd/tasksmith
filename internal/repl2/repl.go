@@ -52,13 +52,20 @@ func Run(ctx context.Context, opts Options) error {
 	store.ClearSlot()
 	store.ResetSession()
 	store.ClearTranscript()
+	store.ResetStream()
 
-	modelLabel, thinking := store.ResolveModelInfo(ctx, opts.Client, opts.Agent, opts.Model, nil)
-	store.SetModelInfo(modelLabel, thinking)
+	store.InitSession(ctx, opts.Client, store.InitSessionOptions{
+		SessionID: opts.SessionID,
+		Agent:     opts.Agent,
+		Model:     opts.Model,
+		Title:     opts.Title,
+	})
+
+	sess := store.GetSession()
 	store.AppendHeader(store.HeaderData{
 		Version:   opts.Version,
-		Model:     modelLabel,
-		Thinking:  thinking,
+		Model:     sess.ModelLabel,
+		Thinking:  sess.Thinking,
 		Workspace: opts.Workspace,
 	})
 

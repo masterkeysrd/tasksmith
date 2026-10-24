@@ -140,12 +140,14 @@ func (h *harness) Stream(ctx context.Context, input Input) iter.Seq2[Event, erro
 			in := message.CloneMessage(input.Message)
 			_, _, unfulfilled, _ := state.ActiveToolCalls()
 			if len(unfulfilled) == 0 {
-				id, err := uuid.NewV7()
-				if err != nil {
-					yield(Event{}, fmt.Errorf("harness: generate user message id: %w", err))
-					return
+				if strings.TrimSpace(in.GetID()) == "" {
+					id, err := uuid.NewV7()
+					if err != nil {
+						yield(Event{}, fmt.Errorf("harness: generate user message id: %w", err))
+						return
+					}
+					in.SetID(id.String())
 				}
-				in.SetID(id.String())
 				if !yield(Event{
 					Type:    EventMessage,
 					Message: message.CloneMessage(in),
@@ -170,64 +172,74 @@ func (h *harness) Stream(ctx context.Context, input Input) iter.Seq2[Event, erro
 }
 
 func (h *harness) consumeGraphStream(stream iter.Seq2[graph.StreamEvent, error], yield func(Event, error) bool) {
-	for ev, err := range stream {
+	var stopped bool
+	stream(func(ev graph.StreamEvent, err error) bool {
+		if stopped {
+			return false
+		}
 		if err != nil {
+			stopped = true
 			yield(Event{}, err)
-			return
+			return false
 		}
 
 		switch ev.Event {
 		case graph.EventLLMChunk:
 			chunk, ok := ev.Data.(message.AssistantChunk)
 			if !ok {
-				continue
+				return true
 			}
 			chunkCopy := message.CloneAssistantChunk(chunk)
 			if !yield(Event{
 				Type:  EventChunk,
 				Chunk: &chunkCopy,
 			}, nil) {
-				return
+				stopped = true
+				return false
 			}
 
 		case eventNodeMessage:
 			msg, ok := ev.Data.(message.Message)
 			if !ok || msg == nil {
-				continue
+				return true
 			}
 			if !yield(Event{
 				Type:    EventMessage,
 				Message: message.CloneMessage(msg),
 			}, nil) {
-				return
+				stopped = true
+				return false
 			}
 
 		case graph.EventInterrupted:
 			snap, ok := ev.Data.(graph.Snapshot[State])
 			if !ok {
-				continue
+				return true
 			}
 			if !yield(Event{
 				Type:        EventInterrupted,
 				Permissions: clonePermissionRequests(snap.State.PendingPermissions),
 			}, nil) {
-				return
+				stopped = true
+				return false
 			}
 
 		case graph.EventCompleted:
 			snap, ok := ev.Data.(graph.Snapshot[State])
 			if !ok || len(snap.State.Messages) == 0 {
-				continue
+				return true
 			}
 			lastMsg := snap.State.Messages[len(snap.State.Messages)-1]
 			if !yield(Event{
 				Type:    EventCompleted,
 				Message: message.CloneMessage(lastMsg),
 			}, nil) {
-				return
+				stopped = true
+				return false
 			}
 		}
-	}
+		return true
+	})
 }
 
 // LoadState retrieves the latest checkpointed [State] for this session.

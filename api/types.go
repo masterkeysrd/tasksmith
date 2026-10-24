@@ -170,6 +170,7 @@ type Chunk struct {
 
 // SendRequest specifies the user message payload or permission decision to submit to the session.
 type SendRequest struct {
+	ID       string              `json:"id,omitempty"`
 	Content  string              `json:"content,omitempty"`
 	Blocks   []Block             `json:"blocks,omitempty"`
 	Decision *PermissionDecision `json:"decision,omitempty"`

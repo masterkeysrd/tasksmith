@@ -3,8 +3,12 @@ package store
 import (
 	"cmp"
 	"context"
+	"errors"
 	"strings"
+	"sync"
+	"time"
 
+	"github.com/google/uuid"
 	"github.com/masterkeysrd/kite/extras/kites"
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/client"
@@ -21,6 +25,267 @@ type SessionState struct {
 }
 
 var session = kites.Create(SessionState{Config: api.SessionConfig{Mode: api.ModeDefault}})
+
+var (
+	sessMu       sync.Mutex
+	activeClient *client.Client
+	activeOpts   InitSessionOptions
+	activeCtx    context.Context
+	activeCancel context.CancelFunc
+	streamCancel context.CancelFunc
+)
+
+// InitSessionOptions specifies options for initializing or connecting to a session.
+type InitSessionOptions struct {
+	SessionID string
+	Agent     string
+	Model     string
+	Title     string
+}
+
+// InitSession initializes or attaches to a session. It starts background watchers
+// for session metadata and stream events.
+func InitSession(ctx context.Context, c *client.Client, opts InitSessionOptions) {
+	sessMu.Lock()
+	if activeCancel != nil {
+		activeCancel()
+	}
+	if streamCancel != nil {
+		streamCancel()
+		streamCancel = nil
+	}
+	subCtx, cancel := context.WithCancel(ctx)
+	activeCtx = subCtx
+	activeCancel = cancel
+	activeClient = c
+	activeOpts = opts
+	sessMu.Unlock()
+
+	var sess *api.Session
+	sid := strings.TrimSpace(opts.SessionID)
+	if c != nil && sid != "" {
+		if loaded, err := c.GetSession(subCtx, sid); err == nil && loaded != nil {
+			sess = loaded
+			title := strings.TrimSpace(opts.Title)
+			agent := strings.TrimSpace(opts.Agent)
+			model := strings.TrimSpace(opts.Model)
+			if title != "" || agent != "" || model != "" {
+				if updated, err := c.UpdateSession(subCtx, sid, api.UpdateSessionRequest{
+					Title: title,
+					Config: api.SessionConfig{
+						Agent: agent,
+						Model: model,
+					},
+				}); err == nil && updated != nil {
+					sess = updated
+				}
+			}
+			SetSession(sess)
+			globalConversation.setSessionID(sid)
+			if tl, err := c.Timeline(subCtx, sid); err == nil {
+				globalConversation.loadTimeline(tl)
+			}
+			startSessionStreamWatcher(subCtx, sid)
+		}
+	}
+
+	modelLabel, thinking := ResolveModelInfo(subCtx, c, opts.Agent, opts.Model, sess)
+	SetModelInfo(modelLabel, thinking)
+
+	if c != nil {
+		startSessionsWatcher(subCtx)
+	}
+}
+
+func startSessionStreamWatcher(ctx context.Context, sessionID string) {
+	sessMu.Lock()
+	if streamCancel != nil {
+		streamCancel()
+	}
+	watchCtx, cancel := context.WithCancel(ctx)
+	streamCancel = cancel
+	c := activeClient
+	sessMu.Unlock()
+
+	if c == nil || sessionID == "" {
+		return
+	}
+
+	go func() {
+		var since string
+		for {
+			if watchCtx.Err() != nil {
+				return
+			}
+			for ev, err := range c.Watch(watchCtx, since, api.SessionStreamTopic(sessionID)) {
+				if err != nil {
+					if client.IsNeedSync(err) {
+						if tl, tlErr := c.Timeline(watchCtx, sessionID); tlErr == nil {
+							globalConversation.loadTimeline(tl)
+						}
+						since = ""
+					}
+					break
+				}
+				if ev.ID != "" {
+					since = ev.ID
+				}
+				globalConversation.applyEvent(ev)
+			}
+			select {
+			case <-watchCtx.Done():
+				return
+			case <-time.After(100 * time.Millisecond):
+			}
+		}
+	}()
+}
+
+func startSessionsWatcher(ctx context.Context) {
+	sessMu.Lock()
+	c := activeClient
+	sessMu.Unlock()
+
+	if c == nil {
+		return
+	}
+
+	go func() {
+		var since string
+		for {
+			if ctx.Err() != nil {
+				return
+			}
+			for ev, err := range c.Watch(ctx, since, api.TopicSessions) {
+				if err != nil {
+					break
+				}
+				if ev.ID != "" {
+					since = ev.ID
+				}
+				if p, ok := ev.Payload.(api.SessionUpdatedEvent); ok {
+					sessMu.Lock()
+					curr := GetSession().Session
+					sessMu.Unlock()
+					if curr != nil && curr.ID == p.Session.ID {
+						sess := p.Session
+						SetSession(&sess)
+					}
+				}
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(100 * time.Millisecond):
+			}
+		}
+	}()
+}
+
+func getOrCreateSession(ctx context.Context, initialTitle string) (*api.Session, error) {
+	sessMu.Lock()
+	sess := GetSession().Session
+	if sess != nil && sess.ID != "" {
+		sessMu.Unlock()
+		return sess, nil
+	}
+	if activeClient == nil {
+		sessMu.Unlock()
+		return nil, errors.New("repl2: no active client to create session")
+	}
+	title := strings.TrimSpace(activeOpts.Title)
+	if title == "" {
+		title = strings.TrimSpace(initialTitle)
+	}
+	if title == "" {
+		title = "New Session"
+	}
+	c := activeClient
+	agent := activeOpts.Agent
+	model := activeOpts.Model
+	mode := GetSession().Config.Mode
+	sessMu.Unlock()
+
+	created, err := c.CreateSession(ctx, api.CreateSessionRequest{
+		Title: title,
+		Config: api.SessionConfig{
+			Agent: agent,
+			Model: model,
+			Mode:  mode,
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+	SetSession(created)
+	globalConversation.setSessionID(created.ID)
+	startSessionStreamWatcher(ctx, created.ID)
+	return created, nil
+}
+
+// Send sends a user prompt message to the active session. If no session exists yet,
+// one is created lazily.
+func Send(text string) {
+	trimmed := strings.TrimSpace(text)
+	if trimmed == "" {
+		return
+	}
+	msgID := uuid.Must(uuid.NewV7()).String()
+	globalConversation.addPendingUser(msgID, text)
+
+	sessMu.Lock()
+	c := activeClient
+	ctx := activeCtx
+	sessMu.Unlock()
+
+	if c == nil {
+		globalConversation.cancelPendingUser(msgID, errors.New("repl2: no active client"))
+		return
+	}
+
+	go func() {
+		if ctx == nil || ctx.Err() != nil {
+			ctx = context.Background()
+		}
+
+		sess, err := getOrCreateSession(ctx, trimmed)
+		if err != nil {
+			globalConversation.cancelPendingUser(msgID, err)
+			return
+		}
+
+		err = c.Send(ctx, sess.ID, api.SendRequest{
+			ID:      msgID,
+			Content: text,
+		})
+		if err != nil {
+			globalConversation.cancelPendingUser(msgID, err)
+		}
+	}()
+}
+
+// Cancel aborts the active turn if streaming.
+func Cancel() {
+	if !GetStream().Streaming {
+		return
+	}
+	sessMu.Lock()
+	c := activeClient
+	ctx := activeCtx
+	sess := GetSession().Session
+	sessMu.Unlock()
+
+	if c == nil || sess == nil || sess.ID == "" {
+		return
+	}
+
+	go func() {
+		if ctx == nil || ctx.Err() != nil {
+			ctx = context.Background()
+		}
+		_ = c.Cancel(ctx, sess.ID)
+	}()
+}
 
 // UseSession subscribes a component to a comparable slice of SessionState.
 func UseSession[U comparable](selector func(SessionState) U) U {
@@ -76,21 +341,41 @@ func NextPermissionMode(current api.PermissionMode) api.PermissionMode {
 
 // CycleMode atomically advances to the next permission mode in sequence and returns the new mode.
 func CycleMode() api.PermissionMode {
-	var next api.PermissionMode
-	session.Set(func(s SessionState) SessionState {
-		next = NextPermissionMode(s.Config.Mode)
-		s.Config.Mode = next
-		return s
-	})
+	next := NextPermissionMode(GetSession().Config.Mode)
+	SetMode(next)
 	return next
 }
 
 // SetMode updates the active permission mode.
 func SetMode(mode api.PermissionMode) {
+	if mode == "" {
+		mode = api.ModeDefault
+	}
+	var sessID string
 	session.Set(func(s SessionState) SessionState {
 		s.Config.Mode = mode
+		if s.Session != nil {
+			s.Session.Config.Mode = mode
+			sessID = s.Session.ID
+		}
 		return s
 	})
+	if sessID != "" {
+		sessMu.Lock()
+		c := activeClient
+		ctx := activeCtx
+		sessMu.Unlock()
+		if c != nil {
+			go func() {
+				if ctx == nil || ctx.Err() != nil {
+					ctx = context.Background()
+				}
+				_, _ = c.UpdateSession(ctx, sessID, api.UpdateSessionRequest{
+					Config: api.SessionConfig{Mode: mode},
+				})
+			}()
+		}
+	}
 }
 
 // SetModelInfo sets the display model label and reasoning effort.
@@ -103,8 +388,22 @@ func SetModelInfo(label, thinking string) {
 	})
 }
 
-// ResetSession resets the session state to its initial default mode.
+// ResetSession resets the session state to its initial default mode and cancels any active watchers.
 func ResetSession() {
+	sessMu.Lock()
+	if activeCancel != nil {
+		activeCancel()
+		activeCancel = nil
+	}
+	if streamCancel != nil {
+		streamCancel()
+		streamCancel = nil
+	}
+	activeClient = nil
+	activeOpts = InitSessionOptions{}
+	activeCtx = nil
+	sessMu.Unlock()
+
 	session.Set(func(SessionState) SessionState {
 		return SessionState{Config: api.SessionConfig{Mode: api.ModeDefault}}
 	})

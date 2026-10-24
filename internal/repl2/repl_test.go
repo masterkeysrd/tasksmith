@@ -398,3 +398,82 @@ func TestRunShiftTabCyclesPermissionMode(t *testing.T) {
 			strings.Contains(surfaceText(b), "plan")
 	}, 2*time.Second, "status line to show plan mode")
 }
+
+func TestRunSubmitPromptAndActiveStream(t *testing.T) {
+	b := mock.New(80, 24)
+	c, st := startTestUnixDaemon(t)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	opts := Options{
+		Client:    c,
+		Workspace: "/workspace/project",
+		Version:   "0.1.0",
+		Model:     "claude-sonnet-4-6",
+		Backend:   b,
+	}
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- Run(ctx, opts)
+	}()
+
+	waitFor(t, func() bool {
+		return b.LastFrame().Surface != nil && strings.Contains(surfaceText(b), ">")
+	}, 2*time.Second, "initial composer render")
+
+	// Type "Hello Tasksmith" into Composer
+	for _, ch := range "Hello Tasksmith" {
+		b.PostEvent(&backend.RawKeyEvent{
+			Key: key.Key{Code: ch, Text: string(ch)},
+		})
+	}
+
+	waitFor(t, func() bool {
+		return strings.Contains(surfaceText(b), "Hello Tasksmith")
+	}, 2*time.Second, "typed text in composer")
+
+	// Press Enter
+	b.PostEvent(&backend.RawKeyEvent{
+		Key: key.Key{Code: key.KeyEnter},
+	})
+
+	// Composer should clear, pending user message should appear in ActiveStream,
+	// hint should become "streaming • esc to cancel", and message sent to daemon
+	waitFor(t, func() bool {
+		st.mu.Lock()
+		sentCount := len(st.sent)
+		st.mu.Unlock()
+		txt := surfaceText(b)
+		return sentCount > 0 &&
+			strings.Contains(txt, "Hello Tasksmith") &&
+			(strings.Contains(txt, "Thinking...") || strings.Contains(txt, "streaming • esc to cancel"))
+	}, 2*time.Second, "active stream prompt submission and hint")
+
+	// Verify client-supplied message ID was generated (UUIDv7)
+	st.mu.Lock()
+	if len(st.sent) == 0 {
+		st.mu.Unlock()
+		t.Fatal("expected message to be sent")
+	}
+	sentReq := st.sent[0]
+	st.mu.Unlock()
+	if sentReq.ID == "" {
+		t.Fatal("expected client-generated UUIDv7 ID on SendRequest, got empty")
+	}
+	if sentReq.Content != "Hello Tasksmith" {
+		t.Fatalf("expected SendRequest content 'Hello Tasksmith', got %q", sentReq.Content)
+	}
+
+	// Press Escape to cancel
+	b.PostEvent(&backend.RawKeyEvent{
+		Key: key.Key{Code: key.KeyEscape},
+	})
+
+	waitFor(t, func() bool {
+		st.mu.Lock()
+		defer st.mu.Unlock()
+		return len(st.cancels) > 0
+	}, 2*time.Second, "cancel request delivered to daemon")
+}

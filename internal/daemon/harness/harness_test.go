@@ -1150,3 +1150,43 @@ func TestValidationAndContextCancellation(t *testing.T) {
 		t.Errorf("expected error when context is canceled during streaming, got nil")
 	}
 }
+
+func TestCallerSuppliedUserMessageID(t *testing.T) {
+	ctx := context.Background()
+	db := openTestSQLite(t)
+	_, reg := newTestToolsRegistry(t)
+	prov := &fakeProvider{
+		handler: func(_ context.Context, _ *llm.Request) ([]string, string, error) {
+			return []string{"response"}, "msg-asst-1", nil
+		},
+	}
+
+	h, err := New(Config{
+		ID:     "thread-custom-id",
+		DB:     db,
+		Model:  newTestModel(t, prov),
+		Tools:  reg,
+		Logger: log.Default(),
+	})
+	if err != nil {
+		t.Fatalf("New error: %v", err)
+	}
+
+	customID := uuid.Must(uuid.NewV7()).String()
+	userMsg := message.NewUserText("Hello with custom id")
+	userMsg.SetID(customID)
+
+	var emittedUserMsgID string
+	for ev, err := range h.Stream(ctx, Input{Message: userMsg}) {
+		if err != nil {
+			t.Fatalf("Stream error: %v", err)
+		}
+		if ev.Type == EventMessage && ev.Message != nil && ev.Message.Role() == message.RoleUser {
+			emittedUserMsgID = ev.Message.GetID()
+		}
+	}
+
+	if emittedUserMsgID != customID {
+		t.Fatalf("emitted user message ID = %q, want exact %q", emittedUserMsgID, customID)
+	}
+}
