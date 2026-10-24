@@ -3,6 +3,7 @@ package gateway
 import (
 	"encoding/base64"
 	"fmt"
+	"maps"
 	"net/http"
 	"os"
 	"strings"
@@ -46,9 +47,7 @@ func buildHTTPTransport(base http.RoundTripper, auth *AuthConfig, token string, 
 	}
 
 	headers := make(map[string]string)
-	for k, v := range customHeaders {
-		headers[k] = v
-	}
+	maps.Copy(headers, customHeaders)
 
 	if token != "" && auth != nil {
 		switch auth.Type {

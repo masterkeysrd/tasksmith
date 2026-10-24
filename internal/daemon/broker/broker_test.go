@@ -256,9 +256,7 @@ func TestConcurrentPublishSubscribeAndClose(t *testing.T) {
 	stop := make(chan struct{})
 
 	for range 4 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			for n := 0; ; n++ {
 				select {
 				case <-stop:
@@ -267,12 +265,10 @@ func TestConcurrentPublishSubscribeAndClose(t *testing.T) {
 				}
 				b.Publish(fmt.Sprintf("topic.%d", n%3), testEvent{"x"})
 			}
-		}()
+		})
 	}
 	for i := range 20 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			sub := NewSubscriber(fmt.Sprintf("c%d", i))
 			if err := b.Add(sub); err != nil {
 				t.Errorf("Add: %v", err)
@@ -287,7 +283,7 @@ func TestConcurrentPublishSubscribeAndClose(t *testing.T) {
 				}
 			}
 			sub.Close()
-		}()
+		})
 	}
 	time.Sleep(50 * time.Millisecond)
 	close(stop)
@@ -426,8 +422,8 @@ func TestSubscribeSinceInvalidCursor(t *testing.T) {
 
 	for _, invalid := range []string{
 		"not-a-uuid",
-		"00000000-0000-4000-8000-000000000000", // v4
-		"0192e4c0-0000-7000-8000-00000000000G", // non-hex
+		"00000000-0000-4000-8000-000000000000",            // v4
+		"0192e4c0-0000-7000-8000-00000000000G",            // non-hex
 		strings.ToUpper(uuid.Must(uuid.NewV7()).String()), // uppercase
 	} {
 		_, err := sub.SubscribeSince(invalid, "test.invalid")

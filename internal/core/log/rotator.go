@@ -313,7 +313,7 @@ func (w *RotatingWriter) pruneLocked(now time.Time) {
 	})
 
 	excess := len(retained) - w.maxBackups
-	for i := 0; i < excess; i++ {
+	for i := range excess {
 		_ = os.Remove(retained[i].path)
 	}
 }

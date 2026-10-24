@@ -370,20 +370,14 @@ func (s *Std) Grep(ctx context.Context, req GrepRequest) (*GrepResult, error) {
 			}
 
 			if req.ContextLines > 0 {
-				startCtx := i - req.ContextLines
-				if startCtx < 0 {
-					startCtx = 0
-				}
+				startCtx := max(i-req.ContextLines, 0)
 				if startCtx < i {
 					before := make([]string, i-startCtx)
 					copy(before, lines[startCtx:i])
 					match.Before = before
 				}
 
-				endCtx := i + 1 + req.ContextLines
-				if endCtx > len(lines) {
-					endCtx = len(lines)
-				}
+				endCtx := min(i+1+req.ContextLines, len(lines))
 				if i+1 < endCtx {
 					after := make([]string, endCtx-(i+1))
 					copy(after, lines[i+1:endCtx])

@@ -79,10 +79,8 @@ func (g *Gate) SetMode(mode PermissionMode) {
 func (g *Gate) AddGrant(grant Grant) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	for _, existing := range g.grants {
-		if existing == grant {
-			return
-		}
+	if slices.Contains(g.grants, grant) {
+		return
 	}
 	g.grants = append(g.grants, grant)
 }
@@ -384,8 +382,8 @@ func matchGrant(gr Grant, plan *Plan) bool {
 	}
 
 	// Directory prefix / /** glob matching.
-	if strings.HasSuffix(pattern, "/**") {
-		prefix := strings.TrimSuffix(pattern, "/**")
+	if before, ok := strings.CutSuffix(pattern, "/**"); ok {
+		prefix := before
 		prefix = strings.TrimSuffix(prefix, "/")
 		if prefix == "" || prefix == "." {
 			return true

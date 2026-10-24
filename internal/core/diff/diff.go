@@ -272,10 +272,7 @@ func groupEdits(edits []Edit, context int) []hunk {
 		}
 
 		hunkStart := i
-		preContextStart := hunkStart - context
-		if preContextStart < 0 {
-			preContextStart = 0
-		}
+		preContextStart := max(hunkStart-context, 0)
 		hunkAStart := lineA - (hunkStart - preContextStart)
 		hunkBStart := lineB - (hunkStart - preContextStart)
 
@@ -290,10 +287,7 @@ func groupEdits(edits []Edit, context int) []hunk {
 			i++
 		}
 
-		hunkEnd := lastEditIdx + 1 + context
-		if hunkEnd > i {
-			hunkEnd = i
-		}
+		hunkEnd := min(lastEditIdx+1+context, i)
 		if hunkEnd > n {
 			hunkEnd = n
 		}

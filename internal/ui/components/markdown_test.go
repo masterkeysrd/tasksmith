@@ -133,7 +133,7 @@ func TestMarkdownRender_ListCodeSpanKeepsInlineStyling(t *testing.T) {
 		t.Fatal("expected a rendered framebuffer")
 	}
 
-	for offset := 0; offset < len(codeText); offset++ {
+	for offset := range len(codeText) {
 		cell := frame.Surface.CellAt(idx+offset, 0)
 		if cell.Bg == nil {
 			t.Fatalf("inline code cell %d missing background styling", offset)
@@ -185,7 +185,7 @@ func renderMarkdownEnv(t *testing.T, width, height int, source string) *testenv.
 
 func nonEmptyLines(text string) []string {
 	var lines []string
-	for _, line := range strings.Split(text, "\n") {
+	for line := range strings.SplitSeq(text, "\n") {
 		line = strings.TrimRight(line, " ")
 		if line != "" {
 			lines = append(lines, line)
@@ -195,9 +195,9 @@ func nonEmptyLines(text string) []string {
 }
 
 func firstCellIndex(line, needle string) int {
-	byteIdx := strings.Index(line, needle)
-	if byteIdx < 0 {
+	before, _, ok := strings.Cut(line, needle)
+	if !ok {
 		return -1
 	}
-	return utf8.RuneCountInString(line[:byteIdx])
+	return utf8.RuneCountInString(before)
 }

@@ -121,16 +121,14 @@ func TestEnsureConcurrentCreatesOneSession(t *testing.T) {
 	var wg sync.WaitGroup
 	results := make(chan bool, 8)
 	for range 8 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			_, created, err := mgr.Ensure(ctx, CreateParams{ID: id, Title: "Race"})
 			if err != nil {
 				t.Errorf("Ensure: %v", err)
 				return
 			}
 			results <- created
-		}()
+		})
 	}
 	wg.Wait()
 	close(results)

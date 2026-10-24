@@ -234,7 +234,7 @@ func TestRotatingWriterRotationAndMaxBackups(t *testing.T) {
 	}
 
 	// Write enough entries to trigger multiple rotations beyond MaxBackups (3).
-	for i := 0; i < 12; i++ {
+	for i := range 12 {
 		logger.Info("rotating log entry", Int("iteration", i), String("padding", "0123456789abcdef"))
 	}
 
@@ -347,11 +347,11 @@ func TestRotatingWriterConcurrentWrites(t *testing.T) {
 
 	var wg sync.WaitGroup
 	wg.Add(goroutines)
-	for g := 0; g < goroutines; g++ {
+	for g := range goroutines {
 		go func(id int) {
 			defer wg.Done()
 			compLogger := logger.ForComponent(fmt.Sprintf("worker-%d", id))
-			for i := 0; i < writesPerGoroutine; i++ {
+			for i := range writesPerGoroutine {
 				compLogger.Info("concurrent log message", Int("worker", id), Int("seq", i))
 			}
 		}(g)

@@ -251,11 +251,11 @@ func TestConcurrentAccess(t *testing.T) {
 	SetTestEnv(tmpDir, "tasksmith-race")
 
 	var wg sync.WaitGroup
-	for i := 0; i < 32; i++ {
+	for i := range 32 {
 		wg.Add(1)
 		go func(id int) {
 			defer wg.Done()
-			for j := 0; j < 50; j++ {
+			for j := range 50 {
 				if j%15 == 0 {
 					ClearCache()
 				}

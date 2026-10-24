@@ -453,7 +453,7 @@ func TestChronologicalUUIDv7Ordering(t *testing.T) {
 	sessionID := "session-ordering"
 
 	var appendedIDs []string
-	for i := 0; i < 8; i++ {
+	for i := range 8 {
 		time.Sleep(2 * time.Millisecond) // ensure distinct UUIDv7 timestamps
 		entry := NewMessageEntry(sessionID, message.NewUserText("msg"))
 		if err := store.Append(ctx, entry); err != nil {

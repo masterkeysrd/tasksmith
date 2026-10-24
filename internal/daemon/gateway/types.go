@@ -99,7 +99,7 @@ type ModelSpec struct {
 	ID           string             `json:"id"`
 	Name         string             `json:"name"`
 	Label        string             `json:"label,omitempty"`
-	Limits       ModelLimits        `json:"limits,omitempty"`
+	Limits       ModelLimits        `json:"limits"`
 	Capabilities *ModelCapabilities `json:"capabilities,omitempty"`
 }
 

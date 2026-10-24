@@ -6,10 +6,6 @@ import (
 	"testing"
 )
 
-func boolPtr(b bool) *bool {
-	return &b
-}
-
 func TestConfigFingerprint(t *testing.T) {
 	cfg1 := Config{
 		Providers: []ProviderConfig{
@@ -18,7 +14,7 @@ func TestConfigFingerprint(t *testing.T) {
 				Type: "ollama",
 				Models: []ModelSpec{
 					{ID: "llama3.2", Name: "Llama 3.2"},
-					{ID: "nimble-v3", Name: "Nimble Decision", Capabilities: &ModelCapabilities{Decision: boolPtr(true)}},
+					{ID: "nimble-v3", Name: "Nimble Decision", Capabilities: &ModelCapabilities{Decision: new(true)}},
 				},
 			},
 			{
@@ -55,7 +51,7 @@ func TestConfigFingerprint(t *testing.T) {
 				Name: "ollama",
 				Type: "ollama",
 				Models: []ModelSpec{
-					{ID: "nimble-v3", Name: "Nimble Decision", Capabilities: &ModelCapabilities{Decision: boolPtr(true)}},
+					{ID: "nimble-v3", Name: "Nimble Decision", Capabilities: &ModelCapabilities{Decision: new(true)}},
 					{ID: "llama3.2", Name: "Llama 3.2"},
 				},
 			},
@@ -191,27 +187,27 @@ func TestModelResolution(t *testing.T) {
 						ID:   "llama3.2",
 						Name: "Llama 3.2",
 						Capabilities: &ModelCapabilities{
-							Completion: boolPtr(true),
-							Decision:   boolPtr(false),
-							Embedding:  boolPtr(false),
+							Completion: new(true),
+							Decision:   new(false),
+							Embedding:  new(false),
 						},
 					},
 					{
 						ID:   "nimble-v3",
 						Name: "Nimble v3",
 						Capabilities: &ModelCapabilities{
-							Completion: boolPtr(false),
-							Decision:   boolPtr(true),
-							Embedding:  boolPtr(false),
+							Completion: new(false),
+							Decision:   new(true),
+							Embedding:  new(false),
 						},
 					},
 					{
 						ID:   "nomic-embed-text",
 						Name: "Nomic Embed",
 						Capabilities: &ModelCapabilities{
-							Completion: boolPtr(false),
-							Decision:   boolPtr(false),
-							Embedding:  boolPtr(true),
+							Completion: new(false),
+							Decision:   new(false),
+							Embedding:  new(true),
 						},
 					},
 				},

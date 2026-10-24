@@ -657,7 +657,7 @@ spec:
 
 	// Concurrent executions targeting the same normalized path must be serialized by Gate.lockPath!
 	var wg sync.WaitGroup
-	for i := 0; i < 6; i++ {
+	for i := range 6 {
 		wg.Add(1)
 		go func(idx int) {
 			defer wg.Done()

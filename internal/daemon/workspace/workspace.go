@@ -9,6 +9,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -351,10 +352,10 @@ func loadIsolatedEnv(cwd, rootDir string) (map[string]string, error) {
 	}
 
 	// Reverse climbPaths so outer ancestors are merged before inner directories
-	for i := len(climbPaths) - 1; i >= 0; i-- {
-		m, err := env.LoadFile(climbPaths[i])
+	for _, climbPath := range slices.Backward(climbPaths) {
+		m, err := env.LoadFile(climbPath)
 		if err != nil {
-			return nil, fmt.Errorf("workspace: load ancestor .env %q: %w", climbPaths[i], err)
+			return nil, fmt.Errorf("workspace: load ancestor .env %q: %w", climbPath, err)
 		}
 		layers = append(layers, m)
 	}
@@ -1118,9 +1119,7 @@ func (w *Workspace) RenderDecision(name string, inputs map[string]any, globals m
 
 	mergedGlobals := make(map[string]any)
 	maps.Copy(mergedGlobals, globals)
-	for k, v := range inputs {
-		mergedGlobals[k] = v
-	}
+	maps.Copy(mergedGlobals, inputs)
 	if _, hasInputs := mergedGlobals["Inputs"]; !hasInputs && inputs != nil {
 		mergedGlobals["Inputs"] = inputs
 	}

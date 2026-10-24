@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"sort"
@@ -108,9 +109,7 @@ func (c *Config) Fingerprint() string {
 	sort.Strings(blocked)
 
 	envCopy := make(map[string]string, len(c.Env))
-	for k, v := range c.Env {
-		envCopy[k] = v
-	}
+	maps.Copy(envCopy, c.Env)
 
 	canonical := struct {
 		Mode           Mode              `json:"mode"`
