@@ -660,12 +660,12 @@ func (d *Daemon) Changes(ctx context.Context, rawWS, id string) ([]api.FileChang
 		return nil, err
 	}
 
-	tr, err := rt.manager.Tracker(ctx, id)
+	jr, err := rt.manager.Journal(ctx, id)
 	if err != nil {
 		return nil, err
 	}
 
-	changes, err := tr.Changes()
+	changes, err := jr.Changes(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -693,12 +693,12 @@ func (d *Daemon) Diff(ctx context.Context, rawWS, id, path, entryID string) (*ap
 		}
 	}
 
-	tr, err := rt.manager.Tracker(ctx, id)
+	jr, err := rt.manager.Journal(ctx, id)
 	if err != nil {
 		return nil, err
 	}
 
-	diffText, err := tr.DiffEntry(path, entryID)
+	diffText, err := jr.DiffEntry(ctx, path, entryID)
 	if err != nil {
 		return nil, err
 	}
@@ -716,7 +716,7 @@ func (d *Daemon) Revert(ctx context.Context, rawWS, id string, req api.RevertReq
 		return err
 	}
 
-	tr, err := rt.manager.Tracker(ctx, id)
+	jr, err := rt.manager.Journal(ctx, id)
 	if err != nil {
 		return err
 	}
@@ -725,14 +725,14 @@ func (d *Daemon) Revert(ctx context.Context, rawWS, id string, req api.RevertReq
 	entryID := strings.TrimSpace(req.EntryID)
 
 	if path != "" && entryID != "" {
-		return tr.RecoverAt(ctx, rt.sandbox.FS(), path, entryID, req.Before)
+		return jr.RecoverAt(ctx, rt.sandbox.FS(), path, entryID, req.Before)
 	}
 
 	if path != "" {
-		return tr.RevertToBaseline(ctx, rt.sandbox.FS(), path, req.Force)
+		return jr.RevertToBaseline(ctx, rt.sandbox.FS(), path, req.Force)
 	}
 
-	return tr.RevertSession(ctx, rt.sandbox.FS(), req.Force)
+	return jr.RevertSession(ctx, rt.sandbox.FS(), req.Force)
 }
 
 func (d *Daemon) getRuntime(ctx context.Context, rawWorkspace string) (*workspaceRuntime, error) {

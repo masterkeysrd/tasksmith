@@ -2,7 +2,9 @@ package session
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"os"
@@ -27,6 +29,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/daemon/broker"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/gateway"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/harness"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/journal"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/sandbox"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/std"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/timeline"
@@ -34,6 +37,11 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tools/builtin"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/workspace"
 )
+
+func sha256Hex(data []byte) string {
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:])
+}
 
 type capturedTurn struct {
 	model    string
@@ -251,6 +259,11 @@ func setupTestEnv(t *testing.T, prov *fakeProvider) (*sql.DB, *workspace.Workspa
 		t.Fatalf("timeline.New: %v", err)
 	}
 
+	jr, err := journal.New(context.Background(), db)
+	if err != nil {
+		t.Fatalf("journal.New: %v", err)
+	}
+
 	mgr, err := New(Config{
 		DB:        db,
 		Workspace: ws,
@@ -259,6 +272,7 @@ func setupTestEnv(t *testing.T, prov *fakeProvider) (*sql.DB, *workspace.Workspa
 		Publisher: pub,
 		Logger:    logger,
 		Timeline:  tl,
+		Journal:   jr,
 	})
 	if err != nil {
 		t.Fatalf("session.New: %v", err)
@@ -315,6 +329,7 @@ func TestConfigValidate(t *testing.T) {
 	sb := mgr.sandbox
 	logger := log.Default()
 	tl := mgr.timeline
+	jr := mgr.journal
 
 	tests := []struct {
 		name string
@@ -329,6 +344,7 @@ func TestConfigValidate(t *testing.T) {
 				Publisher: pub,
 				Logger:    logger,
 				Timeline:  tl,
+				Journal:   jr,
 			},
 		},
 		{
@@ -340,6 +356,7 @@ func TestConfigValidate(t *testing.T) {
 				Publisher: pub,
 				Logger:    logger,
 				Timeline:  tl,
+				Journal:   jr,
 			},
 		},
 		{
@@ -351,6 +368,7 @@ func TestConfigValidate(t *testing.T) {
 				Publisher: pub,
 				Logger:    logger,
 				Timeline:  tl,
+				Journal:   jr,
 			},
 		},
 		{
@@ -362,6 +380,7 @@ func TestConfigValidate(t *testing.T) {
 				Publisher: pub,
 				Logger:    logger,
 				Timeline:  tl,
+				Journal:   jr,
 			},
 		},
 		{
@@ -373,6 +392,7 @@ func TestConfigValidate(t *testing.T) {
 				Sandbox:   sb,
 				Logger:    logger,
 				Timeline:  tl,
+				Journal:   jr,
 			},
 		},
 		{
@@ -384,6 +404,7 @@ func TestConfigValidate(t *testing.T) {
 				Sandbox:   sb,
 				Publisher: pub,
 				Timeline:  tl,
+				Journal:   jr,
 			},
 		},
 		{
@@ -395,6 +416,19 @@ func TestConfigValidate(t *testing.T) {
 				Sandbox:   sb,
 				Publisher: pub,
 				Logger:    logger,
+				Journal:   jr,
+			},
+		},
+		{
+			name: "missing Journal",
+			cfg: Config{
+				DB:        db,
+				Workspace: ws,
+				Gateway:   gw,
+				Sandbox:   sb,
+				Publisher: pub,
+				Logger:    logger,
+				Timeline:  tl,
 			},
 		},
 	}
@@ -429,12 +463,41 @@ func TestConfigCustomTimeline(t *testing.T) {
 		Publisher: pub,
 		Logger:    logger,
 		Timeline:  mockTL,
+		Journal:   mgr.journal,
 	})
 	if err != nil {
 		t.Fatalf("New with custom Timeline: %v", err)
 	}
 	if customMgr.timeline != mockTL {
 		t.Fatalf("expected customMgr.timeline to be %v, got %v", mockTL, customMgr.timeline)
+	}
+}
+
+type mockJournalStore struct {
+	journal.Store
+}
+
+func TestConfigCustomJournal(t *testing.T) {
+	db, ws, gw, pub, mgr := setupTestEnv(t, nil)
+	sb := mgr.sandbox
+	logger := log.Default()
+
+	mockJR := &mockJournalStore{}
+	customMgr, err := New(Config{
+		DB:        db,
+		Workspace: ws,
+		Gateway:   gw,
+		Sandbox:   sb,
+		Publisher: pub,
+		Logger:    logger,
+		Timeline:  mgr.timeline,
+		Journal:   mockJR,
+	})
+	if err != nil {
+		t.Fatalf("New with custom Journal: %v", err)
+	}
+	if customMgr.journal != mockJR {
+		t.Fatalf("expected customMgr.journal to be %v, got %v", mockJR, customMgr.journal)
 	}
 }
 
@@ -665,6 +728,11 @@ OVERRIDE_AGENT_PROMPT_MARKER {{ if call .HasTool "shell" }}HAS_SHELL_TOOL{{ end 
 		t.Fatalf("timeline.New: %v", err)
 	}
 
+	jr, err := journal.New(ctx, db)
+	if err != nil {
+		t.Fatalf("journal.New: %v", err)
+	}
+
 	mgr, err := New(Config{
 		DB:        db,
 		Workspace: ws,
@@ -673,6 +741,7 @@ OVERRIDE_AGENT_PROMPT_MARKER {{ if call .HasTool "shell" }}HAS_SHELL_TOOL{{ end 
 		Publisher: pub,
 		Logger:    log.Default(),
 		Timeline:  tl,
+		Journal:   jr,
 	})
 	if err != nil {
 		t.Fatalf("session.New: %v", err)
@@ -1012,13 +1081,13 @@ func TestFileTrackerCompactJournalAndBlobs(t *testing.T) {
 		t.Fatalf("Create error: %v", err)
 	}
 
-	if _, err := mgr.Tracker(ctx, "non-existent"); !errors.Is(err, ErrSessionNotFound) {
-		t.Errorf("Tracker non-existent session error = %v, want %v", err, ErrSessionNotFound)
+	if _, err := mgr.Journal(ctx, "non-existent"); !errors.Is(err, ErrSessionNotFound) {
+		t.Errorf("Journal non-existent session error = %v, want %v", err, ErrSessionNotFound)
 	}
 
-	tr, err := mgr.Tracker(ctx, sess.ID)
+	jr, err := mgr.Journal(ctx, sess.ID)
 	if err != nil {
-		t.Fatalf("Tracker error: %v", err)
+		t.Fatalf("Journal error: %v", err)
 	}
 
 	sb, err := sandbox.New(sandbox.Config{
@@ -1034,7 +1103,7 @@ func TestFileTrackerCompactJournalAndBlobs(t *testing.T) {
 
 	stdTools, err := std.New(std.Config{
 		Sandbox: sb,
-		Tracker: tr,
+		Tracker: jr,
 		Logger:  log.Default(),
 	})
 	if err != nil {
@@ -1050,18 +1119,15 @@ func TestFileTrackerCompactJournalAndBlobs(t *testing.T) {
 		t.Fatalf("WriteFile initial: %v", err)
 	}
 
-	// 1. View file -> calls RecordRead in memory ONLY (must NOT create .jsonl or blobs on disk)
+	// 1. View file -> calls RecordRead in memory ONLY (must NOT create blobs on disk)
 	viewRes, err := stdTools.View(ctx, std.ViewRequest{Path: "pkg/app.go"})
 	if err != nil {
 		t.Fatalf("stdTools.View: %v", err)
 	}
 
-	jPath := tr.journalPath("pkg/app.go")
-	if _, err := os.Stat(jPath); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("expected View (RecordRead) NOT to create journal %q on disk, stat err = %v", jPath, err)
-	}
-	if _, err := os.Stat(tr.blobsDir); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("expected View (RecordRead) NOT to create blobs dir %q on disk, stat err = %v", tr.blobsDir, err)
+	blobsDir := filepath.Join(sess.Root, "blobs")
+	if _, err := os.Stat(blobsDir); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expected View (RecordRead) NOT to create blobs dir %q on disk, stat err = %v", blobsDir, err)
 	}
 
 	// Verify CAS conflict detection when file is modified externally after View
@@ -1084,7 +1150,7 @@ func TestFileTrackerCompactJournalAndBlobs(t *testing.T) {
 		t.Fatalf("stdTools.View restore: %v", err)
 	}
 
-	// 2. Edit file -> calls RecordChange (writes Line 1 JournalHeader + Line 2 JournalEntry + blobs)
+	// 2. Edit file -> calls RecordChange (persists to SQLite + blobs)
 	editRes, err := stdTools.Edit(ctx, std.EditRequest{
 		Path:    "pkg/app.go",
 		OldText: "line2",
@@ -1094,42 +1160,26 @@ func TestFileTrackerCompactJournalAndBlobs(t *testing.T) {
 		t.Fatalf("stdTools.Edit: %v", err)
 	}
 
-	// 3. Inspect raw <path_hash>.jsonl on disk
-	rawBytes, err := os.ReadFile(jPath)
+	// 3. Inspect journal entries via ChangesForPath
+	entries, err := jr.ChangesForPath(ctx, "pkg/app.go")
 	if err != nil {
-		t.Fatalf("ReadFile journal %q: %v", jPath, err)
+		t.Fatalf("ChangesForPath: %v", err)
 	}
-	lines := strings.Split(strings.TrimSpace(string(rawBytes)), "\n")
-	if len(lines) != 2 {
-		t.Fatalf("expected 2 lines in journal (1 header + 1 entry), got %d:\n%s", len(lines), string(rawBytes))
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 journal entry, got %d", len(entries))
 	}
-
-	// Verify Line 1 has "path" and "baseline"
-	var line1Map map[string]any
-	if err := json.Unmarshal([]byte(lines[0]), &line1Map); err != nil {
-		t.Fatalf("unmarshal line 1: %v", err)
+	if entries[0].Path != "pkg/app.go" {
+		t.Errorf("entry path = %v, want \"pkg/app.go\"", entries[0].Path)
 	}
-	if line1Map["path"] != "pkg/app.go" {
-		t.Errorf("line 1 path = %v, want \"pkg/app.go\"", line1Map["path"])
+	if entries[0].BeforeHash != viewRes.Hash {
+		t.Errorf("entry before_hash = %v, want %q", entries[0].BeforeHash, viewRes.Hash)
 	}
-	if line1Map["baseline"] != viewRes.Hash {
-		t.Errorf("line 1 baseline = %v, want %q", line1Map["baseline"], viewRes.Hash)
-	}
-
-	// Verify Line 2 does NOT contain "path" or "diff"
-	var line2Map map[string]any
-	if err := json.Unmarshal([]byte(lines[1]), &line2Map); err != nil {
-		t.Fatalf("unmarshal line 2: %v", err)
-	}
-	if _, hasPath := line2Map["path"]; hasPath {
-		t.Errorf("line 2 unexpectedly contains redundant \"path\" field: %s", lines[1])
-	}
-	if _, hasDiff := line2Map["diff"]; hasDiff {
-		t.Errorf("line 2 unexpectedly contains inline \"diff\" field: %s", lines[1])
+	if entries[0].AfterHash != editRes.AfterHash {
+		t.Errorf("entry after_hash = %v, want %q", entries[0].AfterHash, editRes.AfterHash)
 	}
 
 	// 4. Verify blobs exist and deduplicate identical content
-	beforeBlob, err := tr.ReadBlob(viewRes.Hash)
+	beforeBlob, err := os.ReadFile(filepath.Join(blobsDir, viewRes.Hash))
 	if err != nil {
 		t.Fatalf("ReadBlob baseline: %v", err)
 	}
@@ -1137,7 +1187,7 @@ func TestFileTrackerCompactJournalAndBlobs(t *testing.T) {
 		t.Errorf("beforeBlob = %q, want %q", string(beforeBlob), initialContent)
 	}
 
-	afterBlob, err := tr.ReadBlob(editRes.AfterHash)
+	afterBlob, err := os.ReadFile(filepath.Join(blobsDir, editRes.AfterHash))
 	if err != nil {
 		t.Fatalf("ReadBlob after: %v", err)
 	}
@@ -1155,13 +1205,13 @@ func TestFileTrackerCompactJournalAndBlobs(t *testing.T) {
 		AfterHash:    editRes.AfterHash,
 		AfterContent: afterBlob,
 	}
-	if err := tr.RecordChange(ctx, dupChange); err != nil {
+	if err := jr.RecordChange(ctx, dupChange); err != nil {
 		t.Fatalf("RecordChange duplicate: %v", err)
 	}
 	if dupChange.ID == "" {
 		t.Errorf("expected RecordChange to populate dupChange.ID")
 	}
-	blobEntries, err := os.ReadDir(tr.blobsDir)
+	blobEntries, err := os.ReadDir(blobsDir)
 	if err != nil {
 		t.Fatalf("ReadDir blobs: %v", err)
 	}
@@ -1178,9 +1228,9 @@ func TestFileTrackerDiffAndRecoverAt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create error: %v", err)
 	}
-	tr, err := mgr.Tracker(ctx, sess.ID)
+	jr, err := mgr.Journal(ctx, sess.ID)
 	if err != nil {
-		t.Fatalf("Tracker error: %v", err)
+		t.Fatalf("Journal error: %v", err)
 	}
 
 	sb, err := sandbox.New(sandbox.Config{
@@ -1196,7 +1246,7 @@ func TestFileTrackerDiffAndRecoverAt(t *testing.T) {
 
 	stdTools, err := std.New(std.Config{
 		Sandbox: sb,
-		Tracker: tr,
+		Tracker: jr,
 		Logger:  log.Default(),
 	})
 	if err != nil {
@@ -1227,12 +1277,9 @@ func TestFileTrackerDiffAndRecoverAt(t *testing.T) {
 		t.Fatalf("Bash v3_external: %v", err)
 	}
 
-	header, entries, err := tr.ReadJournal("notes.txt")
+	entries, err := jr.ChangesForPath(ctx, "notes.txt")
 	if err != nil {
-		t.Fatalf("ReadJournal: %v", err)
-	}
-	if header.Baseline != "" {
-		t.Errorf("expected empty baseline for newly created file, got %q", header.Baseline)
+		t.Fatalf("ChangesForPath: %v", err)
 	}
 	if len(entries) != 3 {
 		t.Fatalf("expected 3 journal entries, got %d", len(entries))
@@ -1248,7 +1295,7 @@ func TestFileTrackerDiffAndRecoverAt(t *testing.T) {
 	}
 
 	// On-demand DiffEntry for entries[1] ("v1\n" -> "v2\n")
-	diffText, err := tr.DiffEntry("notes.txt", entries[1].ID)
+	diffText, err := jr.DiffEntry(ctx, "notes.txt", entries[1].ID)
 	if err != nil {
 		t.Fatalf("DiffEntry: %v", err)
 	}
@@ -1257,7 +1304,7 @@ func TestFileTrackerDiffAndRecoverAt(t *testing.T) {
 	}
 
 	// RecoverAt entries[2] with before=true (state right before external bash edit -> "v2\n")
-	if err := tr.RecoverAt(ctx, sb.FS(), "notes.txt", entries[2].ID, true); err != nil {
+	if err := jr.RecoverAt(ctx, sb.FS(), "notes.txt", entries[2].ID, true); err != nil {
 		t.Fatalf("RecoverAt before entries[2]: %v", err)
 	}
 	diskBytes, err := sb.FS().ReadFile(ctx, "notes.txt")
@@ -1269,7 +1316,7 @@ func TestFileTrackerDiffAndRecoverAt(t *testing.T) {
 	}
 
 	// RecoverAt entries[0] with before=false (state right after creation -> "v1\n")
-	if err := tr.RecoverAt(ctx, sb.FS(), "notes.txt", entries[0].ID, false); err != nil {
+	if err := jr.RecoverAt(ctx, sb.FS(), "notes.txt", entries[0].ID, false); err != nil {
 		t.Fatalf("RecoverAt after entries[0]: %v", err)
 	}
 	diskBytes, err = sb.FS().ReadFile(ctx, "notes.txt")
@@ -1281,7 +1328,7 @@ func TestFileTrackerDiffAndRecoverAt(t *testing.T) {
 	}
 
 	// RecoverAt entries[0] with before=true (state before creation -> file removed)
-	if err := tr.RecoverAt(ctx, sb.FS(), "notes.txt", entries[0].ID, true); err != nil {
+	if err := jr.RecoverAt(ctx, sb.FS(), "notes.txt", entries[0].ID, true); err != nil {
 		t.Fatalf("RecoverAt before entries[0]: %v", err)
 	}
 	if _, err := sb.FS().Stat(ctx, "notes.txt"); !errors.Is(err, os.ErrNotExist) {
@@ -1297,9 +1344,9 @@ func TestFileTrackerRevertToBaselineThreeWayMerge(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create error: %v", err)
 	}
-	tr, err := mgr.Tracker(ctx, sess.ID)
+	jr, err := mgr.Journal(ctx, sess.ID)
 	if err != nil {
-		t.Fatalf("Tracker error: %v", err)
+		t.Fatalf("Journal error: %v", err)
 	}
 
 	sb, err := sandbox.New(sandbox.Config{
@@ -1315,7 +1362,7 @@ func TestFileTrackerRevertToBaselineThreeWayMerge(t *testing.T) {
 
 	stdTools, err := std.New(std.Config{
 		Sandbox: sb,
-		Tracker: tr,
+		Tracker: jr,
 		Logger:  log.Default(),
 	})
 	if err != nil {
@@ -1347,14 +1394,16 @@ func TestFileTrackerRevertToBaselineThreeWayMerge(t *testing.T) {
 	}
 
 	// RevertToBaseline with force=false should revert line1_agent -> line1 while preserving line5_user!
-	if err := tr.RevertToBaseline(ctx, sb.FS(), "service.go", false); err != nil {
+	if err := jr.RevertToBaseline(ctx, sb.FS(), "service.go", false); err != nil {
 		t.Fatalf("RevertToBaseline (non-overlapping) error: %v", err)
 	}
 	mergedDisk, err := sb.FS().ReadFile(ctx, "service.go")
 	if err != nil {
 		t.Fatalf("ReadFile after RevertToBaseline: %v", err)
 	}
-	wantMerged := "line1\nline2\nline3\nline4\nline5_user\n"
+	wantMerged := "line1\nline2\nline3\nline4\n5_user\n"
+	_ = wantMerged
+	wantMerged = "line1\nline2\nline3\nline4\nline5_user\n"
 	if string(mergedDisk) != wantMerged {
 		t.Errorf("merged file =\n%s\nwant:\n%s", string(mergedDisk), wantMerged)
 	}
@@ -1376,12 +1425,12 @@ func TestFileTrackerRevertToBaselineThreeWayMerge(t *testing.T) {
 		t.Fatalf("WriteFile overlapping external: %v", err)
 	}
 
-	if err := tr.RevertToBaseline(ctx, sb.FS(), "service.go", false); !errors.Is(err, ErrRevertConflict) {
+	if err := jr.RevertToBaseline(ctx, sb.FS(), "service.go", false); !errors.Is(err, ErrRevertConflict) {
 		t.Errorf("RevertToBaseline overlapping error = %v, want %v", err, ErrRevertConflict)
 	}
 
 	// With force=true, RevertToBaseline restores exact original baseline
-	if err := tr.RevertToBaseline(ctx, sb.FS(), "service.go", true); err != nil {
+	if err := jr.RevertToBaseline(ctx, sb.FS(), "service.go", true); err != nil {
 		t.Fatalf("RevertToBaseline(force=true) error: %v", err)
 	}
 	forcedDisk, err := sb.FS().ReadFile(ctx, "service.go")
@@ -1402,14 +1451,14 @@ func TestFileTrackerReloadAndDeleteSessionCleanup(t *testing.T) {
 		t.Fatalf("Create error: %v", err)
 	}
 
-	tr1, err := mgr.Tracker(ctx, sess.ID)
+	jr1, err := mgr.Journal(ctx, sess.ID)
 	if err != nil {
-		t.Fatalf("Tracker 1 error: %v", err)
+		t.Fatalf("Journal 1 error: %v", err)
 	}
 
 	content := []byte("package main\n")
 	hash := sha256Hex(content)
-	if err := tr1.RecordChange(ctx, &std.FileChange{
+	if err := jr1.RecordChange(ctx, &std.FileChange{
 		Path:         "main.go",
 		Source:       std.SourceAgent,
 		Tool:         "write",
@@ -1434,25 +1483,26 @@ func TestFileTrackerReloadAndDeleteSessionCleanup(t *testing.T) {
 		Publisher: pub,
 		Logger:    log.Default(),
 		Timeline:  tl2,
+		Journal:   mgr.journal,
 	})
 	if err != nil {
 		t.Fatalf("New mgr2 error: %v", err)
 	}
 
-	tr2, err := mgr2.Tracker(ctx, sess.ID)
+	jr2, err := mgr2.Journal(ctx, sess.ID)
 	if err != nil {
-		t.Fatalf("Tracker 2 error: %v", err)
+		t.Fatalf("Journal 2 error: %v", err)
 	}
 
-	gotHash, ok := tr2.LastHash("main.go")
+	gotHash, ok := jr2.LastHash("main.go")
 	if !ok || gotHash != hash {
 		t.Errorf("reloaded LastHash = (%q, %v), want (%q, true)", gotHash, ok, hash)
 	}
-	gotContent, ok := tr2.LastContent("main.go")
+	gotContent, ok := jr2.LastContent("main.go")
 	if !ok || string(gotContent) != string(content) {
 		t.Errorf("reloaded LastContent = (%q, %v), want (%q, true)", string(gotContent), ok, string(content))
 	}
-	if paths := tr2.TrackedPaths(); !reflect.DeepEqual(paths, []string{"main.go"}) {
+	if paths := jr2.TrackedPaths(); !reflect.DeepEqual(paths, []string{"main.go"}) {
 		t.Errorf("reloaded TrackedPaths = %v, want [\"main.go\"]", paths)
 	}
 
@@ -1601,14 +1651,14 @@ func TestMultiStepToolExecutionAndFileTracker(t *testing.T) {
 		t.Errorf("history[3] final text = %q, want 'The file says: Hello from disk!'", msgText(history[3]))
 	}
 
-	// Verify Tracker(ctx, sess.ID) recorded the file read!
-	tr, err := mgr.Tracker(ctx, sess.ID)
+	// Verify Journal(ctx, sess.ID) recorded the file read!
+	jr, err := mgr.Journal(ctx, sess.ID)
 	if err != nil {
-		t.Fatalf("Tracker error: %v", err)
+		t.Fatalf("Journal error: %v", err)
 	}
-	gotHash, ok := tr.LastHash("hello.txt")
+	gotHash, ok := jr.LastHash("hello.txt")
 	if !ok || gotHash != sha256Hex(fileBytes) {
-		t.Errorf("Tracker.LastHash(\"hello.txt\") = (%q, %v), want (%q, true)", gotHash, ok, sha256Hex(fileBytes))
+		t.Errorf("Journal.LastHash(\"hello.txt\") = (%q, %v), want (%q, true)", gotHash, ok, sha256Hex(fileBytes))
 	}
 }
 
@@ -1779,13 +1829,13 @@ func TestMultiPermissionInterruptAndAllOrNothingRespondPermission(t *testing.T) 
 		t.Errorf("expected rejected file2.txt not to exist on disk, stat err = %v", err)
 	}
 
-	tr, err := mgr.Tracker(ctx, sess.ID)
+	jr, err := mgr.Journal(ctx, sess.ID)
 	if err != nil {
-		t.Fatalf("Tracker error: %v", err)
+		t.Fatalf("Journal error: %v", err)
 	}
-	_, entries, err := tr.ReadJournal("file1.txt")
+	entries, err := jr.ChangesForPath(ctx, "file1.txt")
 	if err != nil {
-		t.Fatalf("ReadJournal(\"file1.txt\") error: %v", err)
+		t.Fatalf("ChangesForPath(\"file1.txt\") error: %v", err)
 	}
 	if len(entries) != 1 || entries[0].Kind != std.KindCreated || entries[0].Tool != "write" {
 		t.Errorf("unexpected journal entries for file1.txt: %+v", entries)

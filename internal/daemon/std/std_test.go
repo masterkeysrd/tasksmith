@@ -15,6 +15,7 @@ import (
 
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/sandbox"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/scope"
 )
 
 func newTestStd(t *testing.T, allowLoopback bool) (*Std, *MemoryTracker, string) {
@@ -181,6 +182,53 @@ func TestMemoryTrackerConcurrencyAndCloning(t *testing.T) {
 	}
 	if err := tracker.RecordChange(ctx, nil); !errors.Is(err, ErrInvalidArgument) {
 		t.Fatalf("expected ErrInvalidArgument for nil change, got %v", err)
+	}
+}
+
+func TestMemoryTrackerScopePropagation(t *testing.T) {
+	tracker := NewMemoryTracker()
+	ctx := scope.With(context.Background(), scope.Scope{
+		TurnID:     "turn-01",
+		MessageID:  "msg-02",
+		ToolCallID: "tc-03",
+		ToolName:   "write",
+	})
+
+	// Agent change with empty scope fields should inherit from context
+	ch := FileChange{
+		Path:      "test.txt",
+		Source:    SourceAgent,
+		Kind:      KindCreated,
+		AfterHash: "hash-01",
+	}
+	if err := tracker.RecordChange(ctx, &ch); err != nil {
+		t.Fatalf("RecordChange: %v", err)
+	}
+	if ch.TurnID != "turn-01" {
+		t.Errorf("ch.TurnID = %q, want turn-01", ch.TurnID)
+	}
+	if ch.MessageID != "msg-02" {
+		t.Errorf("ch.MessageID = %q, want msg-02", ch.MessageID)
+	}
+	if ch.ToolCallID != "tc-03" {
+		t.Errorf("ch.ToolCallID = %q, want tc-03", ch.ToolCallID)
+	}
+	if ch.Tool != "write" {
+		t.Errorf("ch.Tool = %q, want write", ch.Tool)
+	}
+
+	// External change should NOT inherit from scope
+	extCh := FileChange{
+		Path:      "test.txt",
+		Source:    SourceExternal,
+		Kind:      KindModified,
+		AfterHash: "hash-02",
+	}
+	if err := tracker.RecordChange(ctx, &extCh); err != nil {
+		t.Fatalf("RecordChange ext: %v", err)
+	}
+	if extCh.TurnID != "" || extCh.MessageID != "" || extCh.ToolCallID != "" || extCh.Tool != "" {
+		t.Errorf("expected empty scope fields for SourceExternal, got %+v", extCh)
 	}
 }
 

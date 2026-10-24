@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/scope"
 )
 
 type trackedState struct {
@@ -124,6 +125,20 @@ func (t *MemoryTracker) RecordChange(ctx context.Context, change *FileChange) er
 
 	key := cleanTrackerPath(change.Path)
 	change.Path = key
+	if sc, ok := scope.From(ctx); ok && change.Source == SourceAgent {
+		if change.TurnID == "" {
+			change.TurnID = sc.TurnID
+		}
+		if change.MessageID == "" {
+			change.MessageID = sc.MessageID
+		}
+		if change.ToolCallID == "" {
+			change.ToolCallID = sc.ToolCallID
+		}
+		if change.Tool == "" {
+			change.Tool = sc.ToolName
+		}
+	}
 	if change.ID == "" {
 		id, err := uuid.NewV7()
 		if err != nil {

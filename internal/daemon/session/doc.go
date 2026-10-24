@@ -6,7 +6,7 @@
 //
 // # Strict Dependency Injection
 //
-// As an internal application subsystem, [New] requires all seven runtime
+// As an internal application subsystem, [New] requires all eight runtime
 // dependencies on [Config] to be explicitly provided with zero silent fallbacks:
 //   - [Config.DB]: Active SQLite connection used for storing the `sessions` table,
 //     `timeline` entries, and harness checkpoints.
@@ -25,6 +25,8 @@
 //     scoped to the "session" component.
 //   - [Config.Timeline]: Active [github.com/masterkeysrd/tasksmith/internal/daemon/timeline.Store]
 //     used for append-only chronological session event logging and queries.
+//   - [Config.Journal]: Active [github.com/masterkeysrd/tasksmith/internal/daemon/journal.Store]
+//     used for per-session file change tracking, diffing, and baseline reversion.
 //
 // # Separation of Session Timeline and Graph Checkpoints
 //
@@ -56,15 +58,12 @@
 // a new user message while permissions are pending discards any buffered partial
 // decisions and cancels the pending tool calls in chronological order.
 //
-// # Persistent Per-Session File Tracker
+// # Persistent Per-Session Journal
 //
-// [Manager.Tracker] returns a persistent [*FileTracker] implementing
-// [github.com/masterkeysrd/tasksmith/internal/daemon/std.FileTracker] rooted at
-// `<xdg.WorkspaceDir>/sessions/<session_id>/changes/`. Each tracked file is
-// stored in a compact `<path_hash>.jsonl` file (Line 1: [JournalHeader],
-// Lines 2..N: [JournalEntry] without redundant `path` or inline `diff` fields)
-// paired with deduplicated content-addressable snapshots in `changes/blobs/<sha256>`.
-// This layout enables on-demand unified diff generation ([FileTracker.DiffEntry]),
-// point-in-time recovery ([FileTracker.RecoverAt]), and conflict-aware 3-way
-// baseline reversion ([FileTracker.RevertToBaseline]).
+// [Manager.Journal] returns a persistent [github.com/masterkeysrd/tasksmith/internal/daemon/journal.Journal]
+// implementing [github.com/masterkeysrd/tasksmith/internal/daemon/std.FileTracker]
+// with SQLite metadata paired with content-addressable snapshots in `<sessionDir>/blobs/<sha256>`.
+// This enables on-demand unified diff generation ([github.com/masterkeysrd/tasksmith/internal/daemon/journal.Journal.DiffEntry]),
+// point-in-time recovery ([github.com/masterkeysrd/tasksmith/internal/daemon/journal.Journal.RecoverAt]), and conflict-aware 3-way
+// baseline reversion ([github.com/masterkeysrd/tasksmith/internal/daemon/journal.Journal.RevertToBaseline]).
 package session

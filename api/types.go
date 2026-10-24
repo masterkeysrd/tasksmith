@@ -254,6 +254,9 @@ type FileChange struct {
 	Kind       string    `json:"kind"`
 	BeforeHash string    `json:"before_hash,omitempty"`
 	AfterHash  string    `json:"after_hash,omitempty"`
+	TurnID     string    `json:"turn_id,omitempty"`
+	MessageID  string    `json:"message_id,omitempty"`
+	ToolCallID string    `json:"tool_call_id,omitempty"`
 	Additions  int       `json:"additions,omitempty"`
 	Deletions  int       `json:"deletions,omitempty"`
 	Timestamp  time.Time `json:"timestamp"`

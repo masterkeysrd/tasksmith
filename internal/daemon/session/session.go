@@ -22,7 +22,9 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/gateway"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/harness"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/journal"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/sandbox"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/scope"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/std"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/timeline"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tools"
@@ -39,6 +41,7 @@ type Config struct {
 	Publisher Publisher
 	Logger    log.Interface
 	Timeline  timeline.Store
+	Journal   journal.Store
 }
 
 // Validate checks that all required configuration dependencies are non-nil.
@@ -64,6 +67,9 @@ func (c Config) Validate() error {
 	if c.Timeline == nil {
 		return fmt.Errorf("%w: timeline is required", ErrInvalidConfig)
 	}
+	if c.Journal == nil {
+		return fmt.Errorf("%w: journal store is required", ErrInvalidConfig)
+	}
 	return nil
 }
 
@@ -76,6 +82,7 @@ type Manager struct {
 	db        *sql.DB
 	store     *store
 	timeline  timeline.Store
+	journal   journal.Store
 	workspace *workspace.Workspace
 	gateway   gateway.Gateway
 	sandbox   sandbox.Sandbox
@@ -109,6 +116,7 @@ func New(cfg Config) (*Manager, error) {
 		db:        cfg.DB,
 		store:     st,
 		timeline:  cfg.Timeline,
+		journal:   cfg.Journal,
 		workspace: cfg.Workspace,
 		gateway:   cfg.Gateway,
 		sandbox:   cfg.Sandbox,
@@ -499,6 +507,9 @@ func (m *Manager) Delete(ctx context.Context, id string) error {
 	if err := m.timeline.DeleteSession(ctx, id); err != nil {
 		return err
 	}
+	if err := m.journal.DeleteSession(ctx, id); err != nil {
+		return err
+	}
 
 	m.mu.Lock()
 	sess := m.sessions[id]
@@ -514,10 +525,9 @@ func (m *Manager) Delete(ctx context.Context, id string) error {
 	return nil
 }
 
-// Tracker returns the persistent per-session [*FileTracker] rooted at
-// `<WorkspaceDir>/sessions/<sessionID>/changes`, replaying any existing
-// `changes/*.jsonl` journals from disk.
-func (m *Manager) Tracker(ctx context.Context, sessionID string) (*FileTracker, error) {
+// Journal returns the persistent per-session [journal.Journal] backed by SQLite
+// and content-addressable snapshots under `<sessionDir>/blobs`.
+func (m *Manager) Journal(ctx context.Context, sessionID string) (journal.Journal, error) {
 	sess, err := m.getLiveSession(ctx, sessionID)
 	if err != nil {
 		return nil, err
@@ -526,8 +536,8 @@ func (m *Manager) Tracker(ctx context.Context, sessionID string) (*FileTracker, 
 	sess.Lock()
 	defer sess.Unlock()
 
-	if sess.Tracker != nil {
-		return sess.Tracker, nil
+	if sess.Journal != nil {
+		return sess.Journal, nil
 	}
 
 	if sess.Root == "" {
@@ -538,17 +548,17 @@ func (m *Manager) Tracker(ctx context.Context, sessionID string) (*FileTracker, 
 		sess.Root = dir
 	}
 
-	changesDir := filepath.Join(sess.Root, "changes")
-	tr, err := newFileTracker(changesDir)
+	blobsDir := filepath.Join(sess.Root, "blobs")
+	jr, err := m.journal.Open(ctx, sess.ID, blobsDir)
 	if err != nil {
 		return nil, err
 	}
-	sess.Tracker = tr
-	return tr, nil
+	sess.Journal = jr
+	return jr, nil
 }
 
 // Tools returns the cached per-session [*tools.Container], constructing it on
-// first access with the session's [*FileTracker], sandbox, workspace, and
+// first access with the session's [journal.Journal], sandbox, workspace, and
 // shellguard.
 func (m *Manager) Tools(ctx context.Context, sessionID string) (*tools.Container, error) {
 	sess, err := m.getLiveSession(ctx, sessionID)
@@ -556,7 +566,7 @@ func (m *Manager) Tools(ctx context.Context, sessionID string) (*tools.Container
 		return nil, err
 	}
 
-	tr, err := m.Tracker(ctx, sess.ID)
+	jr, err := m.Journal(ctx, sess.ID)
 	if err != nil {
 		return nil, err
 	}
@@ -570,7 +580,7 @@ func (m *Manager) Tools(ctx context.Context, sessionID string) (*tools.Container
 
 	stdInst, err := std.New(std.Config{
 		Sandbox: m.sandbox,
-		Tracker: tr,
+		Tracker: jr,
 		Logger:  m.logger,
 	})
 	if err != nil {
@@ -875,6 +885,7 @@ func (m *Manager) Resume(ctx context.Context, sessionID string) (*message.Assist
 		return nil, err
 	}
 
+	ctx = scope.With(ctx, scope.Scope{SessionID: sess.ID})
 	return m.send(ctx, sess, h.Resume(ctx, sess.ID, fullDecisions))
 }
 
@@ -917,6 +928,7 @@ func (m *Manager) Send(ctx context.Context, sessionID string, input message.Mess
 	clear(sess.decisions)
 	sess.Unlock()
 
+	ctx = scope.With(ctx, scope.Scope{SessionID: sess.ID})
 	return m.send(ctx, sess, h.Stream(ctx, sess.ID, input))
 }
 

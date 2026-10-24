@@ -12,6 +12,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/broker"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/gateway"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/journal"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/sandbox"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/session"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/timeline"
@@ -71,6 +72,13 @@ func newWorkspaceRuntime(ctx context.Context, ws *workspace.Workspace, pool gate
 		return nil, fmt.Errorf("daemon: initialize timeline for %q: %w", rootDir, err)
 	}
 
+	jr, err := journal.New(ctx, db)
+	if err != nil {
+		_ = db.Close()
+		_ = sb.Close()
+		return nil, fmt.Errorf("daemon: initialize journal for %q: %w", rootDir, err)
+	}
+
 	rt := &workspaceRuntime{
 		dir:       rootDir,
 		workspace: ws,
@@ -89,6 +97,7 @@ func newWorkspaceRuntime(ctx context.Context, ws *workspace.Workspace, pool gate
 		Publisher: b,
 		Logger:    logger,
 		Timeline:  tl,
+		Journal:   jr,
 	})
 	if err != nil {
 		_ = db.Close()

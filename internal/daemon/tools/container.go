@@ -10,6 +10,7 @@ import (
 	"github.com/masterkeysrd/loom/tool"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/sandbox"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/scope"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/workspace"
 )
 
@@ -219,6 +220,7 @@ func (c *Container) Execute(ctx context.Context, tc *message.ToolCall) (*message
 		}
 
 		var execErr error
+		ctx = scope.With(ctx, scope.Scope{ToolCallID: tc.ID, ToolName: tc.Name})
 		resp, execErr = t.Execute(ctx, tc)
 		if execErr != nil {
 			resp = &message.Tool{

@@ -54,6 +54,9 @@ type FileChange struct {
 	Kind          ChangeKind   `json:"kind"`
 	BeforeHash    string       `json:"before_hash,omitempty"`
 	AfterHash     string       `json:"after_hash,omitempty"`
+	TurnID        string       `json:"turn_id,omitempty"`
+	MessageID     string       `json:"message_id,omitempty"`
+	ToolCallID    string       `json:"tool_call_id,omitempty"`
 	BeforeContent []byte       `json:"-"`
 	AfterContent  []byte       `json:"-"`
 	Additions     int          `json:"additions,omitempty"`

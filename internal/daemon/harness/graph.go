@@ -3,6 +3,7 @@ package harness
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/google/uuid"
@@ -11,6 +12,7 @@ import (
 	"github.com/masterkeysrd/loom/message"
 	"github.com/masterkeysrd/loom/stream"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/scope"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tools"
 )
 
@@ -130,10 +132,24 @@ func (n *ToolsNode) Execute(ctx context.Context, state State) (graph.Command[Sta
 	if hasUserAfter {
 		return n.cancelCalls(ctx, asstIdx, unfulfilled, state.Messages)
 	}
+
+	asstMsgID := state.Messages[asstIdx].GetID()
+	turnID := lastUserMessageID(state.Messages)
+	ctx = scope.With(ctx, scope.Scope{TurnID: turnID, MessageID: asstMsgID})
+
 	if len(state.PendingPermissions) > 0 {
 		return n.resumeCalls(ctx, unfulfilled, state.PendingPermissions, state.PermissionDecisions)
 	}
 	return n.evaluateCalls(ctx, unfulfilled)
+}
+
+func lastUserMessageID(messages message.MessageList) string {
+	for _, message0 := range slices.Backward(messages) {
+		if u, ok := message0.(*message.User); ok && u != nil {
+			return u.GetID()
+		}
+	}
+	return ""
 }
 
 func (n *ToolsNode) cancelCalls(ctx context.Context, asstIdx int, unfulfilled []*message.ToolCall, messages message.MessageList) (graph.Command[State], error) {
