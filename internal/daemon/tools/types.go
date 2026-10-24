@@ -54,6 +54,19 @@ const (
 	ModeAuto        PermissionMode = "auto"
 )
 
+func (m PermissionMode) String() string {
+	return string(m)
+}
+
+func (m PermissionMode) IsValid() bool {
+	switch m {
+	case ModeDefault, ModeAcceptEdits, ModePlan, ModeAsk, ModeAuto:
+		return true
+	default:
+		return false
+	}
+}
+
 // AccessDecision represents the policy evaluation outcome returned by [Gate.Evaluate].
 type AccessDecision string
 

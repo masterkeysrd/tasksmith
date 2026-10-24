@@ -16,12 +16,6 @@ var (
 	ErrRevertConflict = errors.New("journal: revert conflict with external changes")
 )
 
-// Store manages persistent file change journals backed by SQLite metadata.
-type Store interface {
-	Open(ctx context.Context, sessionID, blobsDir string) (Journal, error)
-	DeleteSession(ctx context.Context, sessionID string) error
-}
-
 // Journal tracks per-session file reads (CAS) and persists file change metadata
 // in SQLite paired with content-addressable snapshots in the session's blobsDir.
 type Journal interface {
@@ -33,4 +27,5 @@ type Journal interface {
 	RecoverAt(ctx context.Context, fsys sandbox.FS, path, entryID string, before bool) error
 	RevertToBaseline(ctx context.Context, fsys sandbox.FS, path string, force bool) error
 	RevertSession(ctx context.Context, fsys sandbox.FS, force bool) error
+	Delete(ctx context.Context) error
 }

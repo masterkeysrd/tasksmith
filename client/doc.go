@@ -6,7 +6,7 @@
 // Sessions support conversation turns and timeline inspection:
 //   - [Client.Send]: submits user messages to `/v1/sessions/{id}/send`, triggering conversational turns in the background runtime.
 //   - [Client.Timeline]: retrieves chronological session timeline entries ([api.TimelineEntry]) via `GET /v1/sessions/{id}/timeline`.
-//   - [Client.Cancel], [Client.PendingPermissions], [Client.RespondPermission], [Client.PermissionMode],
+//   - [Client.Cancel],
 //     and file mutation journal methods ([Client.Changes], [Client.DiffChange], [Client.Revert]).
 //
 // # Real-Time Server-Sent Events (SSE)

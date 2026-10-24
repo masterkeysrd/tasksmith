@@ -6,8 +6,7 @@ var migrations = []string{
 CREATE TABLE IF NOT EXISTS sessions (
     id TEXT PRIMARY KEY,
     title TEXT NOT NULL DEFAULT '',
-    agent TEXT NOT NULL DEFAULT '',
-    model TEXT NOT NULL DEFAULT '',
+    config TEXT NOT NULL DEFAULT '{}',
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );

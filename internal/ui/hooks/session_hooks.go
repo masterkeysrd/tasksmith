@@ -46,8 +46,10 @@ func NextPermissionMode(current api.PermissionMode) api.PermissionMode {
 func UsePermissionMode() PermissionModeControl {
 	scope := useSessionScope()
 	c := uiclient.UseClient()
-	mutation := wind.UseMutation(promise.WrapWithProps(func(ctx context.Context, in permissionModeInput) (struct{}, error) {
-		return struct{}{}, c.SetPermissionMode(ctx, in.SessionID, in.Mode)
+	mutation := wind.UseMutation(promise.WrapWithProps(func(ctx context.Context, in permissionModeInput) (*api.Session, error) {
+		return c.UpdateSession(ctx, in.SessionID, api.UpdateSessionRequest{
+			Config: api.SessionConfig{Mode: in.Mode},
+		})
 	}))
 
 	set := func(mode api.PermissionMode) {

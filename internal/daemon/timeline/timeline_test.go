@@ -2,6 +2,7 @@ package timeline
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"path/filepath"
@@ -15,7 +16,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tools"
 )
 
-func openTestStore(t *testing.T) (Store, context.Context) {
+func openTestTimeline(t *testing.T, sessionID string) (Timeline, *sql.DB, context.Context) {
 	t.Helper()
 	ctx := context.Background()
 	dbPath := filepath.Join(t.TempDir(), "timeline_test.db")
@@ -25,23 +26,23 @@ func openTestStore(t *testing.T) (Store, context.Context) {
 	}
 	t.Cleanup(func() { _ = db.Close() })
 
-	store, err := New(ctx, db)
+	tl, err := New(ctx, db, sessionID)
 	if err != nil {
 		t.Fatalf("timeline.New: %v", err)
 	}
-	return store, ctx
+	return tl, db, ctx
 }
 
 func TestNew(t *testing.T) {
 	ctx := context.Background()
 
 	// 1. Missing DB
-	_, err := New(ctx, nil)
+	_, err := New(ctx, nil, "session-1")
 	if !errors.Is(err, ErrInvalidConfig) {
-		t.Fatalf("New(ctx, nil) error = %v, want %v", err, ErrInvalidConfig)
+		t.Fatalf("New(ctx, nil, s) error = %v, want %v", err, ErrInvalidConfig)
 	}
 
-	// 2. Valid DB
+	// 2. Empty session ID
 	dbPath := filepath.Join(t.TempDir(), "new_test.db")
 	db, err := sqlite.Open(ctx, dbPath)
 	if err != nil {
@@ -49,27 +50,35 @@ func TestNew(t *testing.T) {
 	}
 	defer db.Close()
 
-	store, err := New(ctx, db)
-	if err != nil {
-		t.Fatalf("New(ctx, db) unexpected error: %v", err)
-	}
-	if store == nil {
-		t.Fatal("New(ctx, db) returned nil store")
+	for _, emptyID := range []string{"", "   ", "\t\n"} {
+		_, err := New(ctx, db, emptyID)
+		if !errors.Is(err, ErrEmptySessionID) {
+			t.Fatalf("New(ctx, db, %q) error = %v, want %v", emptyID, err, ErrEmptySessionID)
+		}
 	}
 
-	// 3. Idempotent New
-	store2, err := New(ctx, db)
+	// 3. Valid DB and session ID
+	tl, err := New(ctx, db, "session-1")
 	if err != nil {
-		t.Fatalf("second New(ctx, db) error: %v", err)
+		t.Fatalf("New(ctx, db, s) unexpected error: %v", err)
 	}
-	if store2 == nil {
-		t.Fatal("second New(ctx, db) returned nil store")
+	if tl == nil {
+		t.Fatal("New(ctx, db, s) returned nil timeline")
+	}
+
+	// 4. Idempotent New
+	tl2, err := New(ctx, db, "session-1")
+	if err != nil {
+		t.Fatalf("second New(ctx, db, s) error: %v", err)
+	}
+	if tl2 == nil {
+		t.Fatal("second New(ctx, db, s) returned nil timeline")
 	}
 }
 
 func TestAppendAndGet_AllKinds(t *testing.T) {
-	store, ctx := openTestStore(t)
 	sessionID := "session-all-kinds"
+	tl, _, ctx := openTestTimeline(t, sessionID)
 
 	tests := []struct {
 		name      string
@@ -235,7 +244,7 @@ func TestAppendAndGet_AllKinds(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			entry := tt.makeEntry()
-			if err := store.Append(ctx, entry); err != nil {
+			if err := tl.Append(ctx, entry); err != nil {
 				t.Fatalf("Append failed: %v", err)
 			}
 			if entry.ID == "" {
@@ -245,7 +254,7 @@ func TestAppendAndGet_AllKinds(t *testing.T) {
 				t.Fatal("Append did not set CreatedAt")
 			}
 
-			loaded, err := store.Get(ctx, entry.ID)
+			loaded, err := tl.Get(ctx, entry.ID)
 			if err != nil {
 				t.Fatalf("Get(%q) failed: %v", entry.ID, err)
 			}
@@ -264,15 +273,15 @@ func TestAppendAndGet_AllKinds(t *testing.T) {
 	}
 }
 
-func TestAppendMessage_Convenience(t *testing.T) {
-	store, ctx := openTestStore(t)
+func TestAppend_MessageHandling(t *testing.T) {
 	sessionID := "session-append-msg"
+	tl, _, ctx := openTestTimeline(t, sessionID)
 
 	// 1. Message without an existing ID
 	userMsg := message.NewUserText("User question")
-	entry1, err := store.AppendMessage(ctx, sessionID, userMsg)
-	if err != nil {
-		t.Fatalf("AppendMessage failed: %v", err)
+	entry1 := NewMessageEntry(sessionID, userMsg)
+	if err := tl.Append(ctx, entry1); err != nil {
+		t.Fatalf("Append failed: %v", err)
 	}
 	if entry1.ID == "" {
 		t.Fatal("entry1.ID is empty")
@@ -286,16 +295,16 @@ func TestAppendMessage_Convenience(t *testing.T) {
 	asstMsg := message.NewAssistantText("Assistant answer")
 	asstMsg.SetID(existingID)
 
-	entry2, err := store.AppendMessage(ctx, sessionID, asstMsg)
-	if err != nil {
-		t.Fatalf("AppendMessage with existing ID failed: %v", err)
+	entry2 := NewMessageEntry(sessionID, asstMsg)
+	if err := tl.Append(ctx, entry2); err != nil {
+		t.Fatalf("Append with existing ID failed: %v", err)
 	}
 	if entry2.ID != existingID {
 		t.Fatalf("entry2.ID = %q, want %q", entry2.ID, existingID)
 	}
 
 	// 3. Messages retrieval
-	msgs, err := store.Messages(ctx, sessionID)
+	msgs, err := tl.Messages(ctx)
 	if err != nil {
 		t.Fatalf("Messages failed: %v", err)
 	}
@@ -449,14 +458,14 @@ func TestJSONRoundTrip_AllKinds(t *testing.T) {
 }
 
 func TestChronologicalUUIDv7Ordering(t *testing.T) {
-	store, ctx := openTestStore(t)
 	sessionID := "session-ordering"
+	tl, _, ctx := openTestTimeline(t, sessionID)
 
 	var appendedIDs []string
 	for i := range 8 {
 		time.Sleep(2 * time.Millisecond) // ensure distinct UUIDv7 timestamps
 		entry := NewMessageEntry(sessionID, message.NewUserText("msg"))
-		if err := store.Append(ctx, entry); err != nil {
+		if err := tl.Append(ctx, entry); err != nil {
 			t.Fatalf("Append %d failed: %v", i, err)
 		}
 		appendedIDs = append(appendedIDs, entry.ID)
@@ -479,7 +488,7 @@ func TestChronologicalUUIDv7Ordering(t *testing.T) {
 	}
 
 	// Verify List returns in strict id ASC order
-	list, err := store.List(ctx, sessionID)
+	list, err := tl.List(ctx)
 	if err != nil {
 		t.Fatalf("List failed: %v", err)
 	}
@@ -493,7 +502,7 @@ func TestChronologicalUUIDv7Ordering(t *testing.T) {
 	}
 
 	// Verify Messages returns in strict id ASC order
-	msgs, err := store.Messages(ctx, sessionID)
+	msgs, err := tl.Messages(ctx)
 	if err != nil {
 		t.Fatalf("Messages failed: %v", err)
 	}
@@ -508,9 +517,25 @@ func TestChronologicalUUIDv7Ordering(t *testing.T) {
 }
 
 func TestListAndListByKind(t *testing.T) {
-	store, ctx := openTestStore(t)
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "timeline_test.db")
+	db, err := sqlite.Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("sqlite.Open: %v", err)
+	}
+	defer db.Close()
+
 	sessA := "session-A"
 	sessB := "session-B"
+
+	tlA, err := New(ctx, db, sessA)
+	if err != nil {
+		t.Fatalf("New A: %v", err)
+	}
+	tlB, err := New(ctx, db, sessB)
+	if err != nil {
+		t.Fatalf("New B: %v", err)
+	}
 
 	// Session A entries: 2 messages, 1 model, 1 mode
 	eA1 := NewMessageEntry(sessA, message.NewUserText("A-1"))
@@ -519,7 +544,7 @@ func TestListAndListByKind(t *testing.T) {
 	eA4 := NewModeEntry(sessA, ModeChange{From: tools.ModeDefault, To: tools.ModeAsk})
 
 	for _, e := range []*Entry{eA1, eA2, eA3, eA4} {
-		if err := store.Append(ctx, e); err != nil {
+		if err := tlA.Append(ctx, e); err != nil {
 			t.Fatalf("Append to %s failed: %v", sessA, err)
 		}
 	}
@@ -529,13 +554,13 @@ func TestListAndListByKind(t *testing.T) {
 	eB2 := NewEffortEntry(sessB, EffortChange{From: "low", To: "high"})
 
 	for _, e := range []*Entry{eB1, eB2} {
-		if err := store.Append(ctx, e); err != nil {
+		if err := tlB.Append(ctx, e); err != nil {
 			t.Fatalf("Append to %s failed: %v", sessB, err)
 		}
 	}
 
 	// Verify List for SessA
-	listA, err := store.List(ctx, sessA)
+	listA, err := tlA.List(ctx)
 	if err != nil {
 		t.Fatalf("List(%q) failed: %v", sessA, err)
 	}
@@ -544,7 +569,7 @@ func TestListAndListByKind(t *testing.T) {
 	}
 
 	// Verify List for SessB
-	listB, err := store.List(ctx, sessB)
+	listB, err := tlB.List(ctx)
 	if err != nil {
 		t.Fatalf("List(%q) failed: %v", sessB, err)
 	}
@@ -553,7 +578,7 @@ func TestListAndListByKind(t *testing.T) {
 	}
 
 	// Verify ListByKind for SessA messages
-	msgsA, err := store.ListByKind(ctx, sessA, KindMessage)
+	msgsA, err := tlA.ListByKind(ctx, KindMessage)
 	if err != nil {
 		t.Fatalf("ListByKind(sessA, KindMessage) failed: %v", err)
 	}
@@ -565,7 +590,7 @@ func TestListAndListByKind(t *testing.T) {
 	}
 
 	// Verify ListByKind for SessA model
-	modelsA, err := store.ListByKind(ctx, sessA, KindModel)
+	modelsA, err := tlA.ListByKind(ctx, KindModel)
 	if err != nil {
 		t.Fatalf("ListByKind(sessA, KindModel) failed: %v", err)
 	}
@@ -574,7 +599,7 @@ func TestListAndListByKind(t *testing.T) {
 	}
 
 	// Verify ListByKind for nonexistent kind in SessA returns empty slice
-	effortsA, err := store.ListByKind(ctx, sessA, KindEffort)
+	effortsA, err := tlA.ListByKind(ctx, KindEffort)
 	if err != nil {
 		t.Fatalf("ListByKind(sessA, KindEffort) failed: %v", err)
 	}
@@ -584,26 +609,26 @@ func TestListAndListByKind(t *testing.T) {
 }
 
 func TestMessages(t *testing.T) {
-	store, ctx := openTestStore(t)
 	sessionID := "session-messages-test"
+	tl, _, ctx := openTestTimeline(t, sessionID)
 
 	// Append mix of message and non-message entries
-	if err := store.Append(ctx, NewModelEntry(sessionID, ModelChange{From: "m1", To: "m2"})); err != nil {
+	if err := tl.Append(ctx, NewModelEntry(sessionID, ModelChange{From: "m1", To: "m2"})); err != nil {
 		t.Fatalf("Append model: %v", err)
 	}
-	e1, err := store.AppendMessage(ctx, sessionID, message.NewUserText("Hello"))
-	if err != nil {
-		t.Fatalf("AppendMessage 1: %v", err)
+	e1 := NewMessageEntry(sessionID, message.NewUserText("Hello"))
+	if err := tl.Append(ctx, e1); err != nil {
+		t.Fatalf("Append message 1: %v", err)
 	}
-	if err := store.Append(ctx, NewEffortEntry(sessionID, EffortChange{From: "low", To: "high"})); err != nil {
+	if err := tl.Append(ctx, NewEffortEntry(sessionID, EffortChange{From: "low", To: "high"})); err != nil {
 		t.Fatalf("Append effort: %v", err)
 	}
-	e2, err := store.AppendMessage(ctx, sessionID, message.NewAssistantText("Hi"))
-	if err != nil {
-		t.Fatalf("AppendMessage 2: %v", err)
+	e2 := NewMessageEntry(sessionID, message.NewAssistantText("Hi"))
+	if err := tl.Append(ctx, e2); err != nil {
+		t.Fatalf("Append message 2: %v", err)
 	}
 
-	msgs, err := store.Messages(ctx, sessionID)
+	msgs, err := tl.Messages(ctx)
 	if err != nil {
 		t.Fatalf("Messages failed: %v", err)
 	}
@@ -613,38 +638,45 @@ func TestMessages(t *testing.T) {
 	if msgs[0].GetID() != e1.ID || msgs[1].GetID() != e2.ID {
 		t.Errorf("message IDs = [%q, %q], want [%q, %q]", msgs[0].GetID(), msgs[1].GetID(), e1.ID, e2.ID)
 	}
-
-	// Nonexistent session returns empty MessageList
-	emptyMsgs, err := store.Messages(ctx, "session-none")
-	if err != nil {
-		t.Fatalf("Messages empty session failed: %v", err)
-	}
-	if len(emptyMsgs) != 0 {
-		t.Errorf("len(emptyMsgs) = %d, want 0", len(emptyMsgs))
-	}
 }
 
-func TestDeleteSession(t *testing.T) {
-	store, ctx := openTestStore(t)
+func TestDelete(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "timeline_test.db")
+	db, err := sqlite.Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("sqlite.Open: %v", err)
+	}
+	defer db.Close()
+
 	sess1 := "session-del-1"
 	sess2 := "session-del-2"
 
-	e1, err := store.AppendMessage(ctx, sess1, message.NewUserText("msg1"))
+	tl1, err := New(ctx, db, sess1)
 	if err != nil {
-		t.Fatalf("AppendMessage sess1: %v", err)
+		t.Fatalf("New tl1: %v", err)
 	}
-	e2, err := store.AppendMessage(ctx, sess2, message.NewUserText("msg2"))
+	tl2, err := New(ctx, db, sess2)
 	if err != nil {
-		t.Fatalf("AppendMessage sess2: %v", err)
+		t.Fatalf("New tl2: %v", err)
+	}
+
+	e1 := NewMessageEntry(sess1, message.NewUserText("msg1"))
+	if err := tl1.Append(ctx, e1); err != nil {
+		t.Fatalf("Append sess1: %v", err)
+	}
+	e2 := NewMessageEntry(sess2, message.NewUserText("msg2"))
+	if err := tl2.Append(ctx, e2); err != nil {
+		t.Fatalf("Append sess2: %v", err)
 	}
 
 	// Delete sess1
-	if err := store.DeleteSession(ctx, sess1); err != nil {
-		t.Fatalf("DeleteSession(%q) failed: %v", sess1, err)
+	if err := tl1.Delete(ctx); err != nil {
+		t.Fatalf("Delete sess1 failed: %v", err)
 	}
 
 	// Verify sess1 is empty
-	list1, err := store.List(ctx, sess1)
+	list1, err := tl1.List(ctx)
 	if err != nil {
 		t.Fatalf("List(%q) failed: %v", sess1, err)
 	}
@@ -653,13 +685,13 @@ func TestDeleteSession(t *testing.T) {
 	}
 
 	// Verify Get for sess1 entry returns ErrEntryNotFound
-	_, err = store.Get(ctx, e1.ID)
+	_, err = tl1.Get(ctx, e1.ID)
 	if !errors.Is(err, ErrEntryNotFound) {
 		t.Errorf("Get(%q) error = %v, want %v", e1.ID, err, ErrEntryNotFound)
 	}
 
 	// Verify sess2 remains intact
-	list2, err := store.List(ctx, sess2)
+	list2, err := tl2.List(ctx)
 	if err != nil {
 		t.Fatalf("List(%q) failed: %v", sess2, err)
 	}
@@ -667,27 +699,25 @@ func TestDeleteSession(t *testing.T) {
 		t.Errorf("sess2 entries modified unexpectedly")
 	}
 
-	loaded2, err := store.Get(ctx, e2.ID)
+	loaded2, err := tl2.Get(ctx, e2.ID)
 	if err != nil || loaded2.ID != e2.ID {
 		t.Errorf("Get(%q) for sess2 failed: %v", e2.ID, err)
 	}
 }
 
 func TestErrorCases(t *testing.T) {
-	store, ctx := openTestStore(t)
 	validSession := "valid-session"
+	tl, _, ctx := openTestTimeline(t, validSession)
 
 	// 1. Append nil entry
-	if err := store.Append(ctx, nil); !errors.Is(err, ErrInvalidEntry) {
+	if err := tl.Append(ctx, nil); !errors.Is(err, ErrInvalidEntry) {
 		t.Errorf("Append(nil) error = %v, want %v", err, ErrInvalidEntry)
 	}
 
-	// 2. Append empty or whitespace session ID
-	for _, emptyID := range []string{"", "   ", "\t\n"} {
-		entry := NewMessageEntry(emptyID, message.NewUserText("hi"))
-		if err := store.Append(ctx, entry); !errors.Is(err, ErrEmptySessionID) {
-			t.Errorf("Append(sessionID=%q) error = %v, want %v", emptyID, err, ErrEmptySessionID)
-		}
+	// 2. Append mismatched session ID
+	mismatchedEntry := NewMessageEntry("other-session", message.NewUserText("hi"))
+	if err := tl.Append(ctx, mismatchedEntry); !errors.Is(err, ErrInvalidEntry) {
+		t.Errorf("Append(mismatched) error = %v, want %v", err, ErrInvalidEntry)
 	}
 
 	// 3. Invalid / missing payloads per Kind
@@ -747,60 +777,20 @@ func TestErrorCases(t *testing.T) {
 
 	for _, tc := range invalidCases {
 		t.Run(tc.name, func(t *testing.T) {
-			if err := store.Append(ctx, tc.entry); !errors.Is(err, ErrInvalidEntry) {
+			if err := tl.Append(ctx, tc.entry); !errors.Is(err, ErrInvalidEntry) {
 				t.Errorf("Append() error = %v, want %v", err, ErrInvalidEntry)
 			}
 		})
 	}
 
-	// 4. AppendMessage errors
-	if _, err := store.AppendMessage(ctx, "", message.NewUserText("hi")); !errors.Is(err, ErrEmptySessionID) {
-		t.Errorf("AppendMessage(empty) error = %v, want %v", err, ErrEmptySessionID)
-	}
-	if _, err := store.AppendMessage(ctx, validSession, nil); !errors.Is(err, ErrInvalidEntry) {
-		t.Errorf("AppendMessage(nil msg) error = %v, want %v", err, ErrInvalidEntry)
-	}
-
-	// 5. Get errors
-	if _, err := store.Get(ctx, ""); !errors.Is(err, ErrEntryNotFound) {
+	// 4. Get errors
+	if _, err := tl.Get(ctx, ""); !errors.Is(err, ErrEntryNotFound) {
 		t.Errorf("Get(\"\") error = %v, want %v", err, ErrEntryNotFound)
 	}
-	if _, err := store.Get(ctx, "   "); !errors.Is(err, ErrEntryNotFound) {
+	if _, err := tl.Get(ctx, "   "); !errors.Is(err, ErrEntryNotFound) {
 		t.Errorf("Get(\"   \") error = %v, want %v", err, ErrEntryNotFound)
 	}
-	if _, err := store.Get(ctx, "does-not-exist"); !errors.Is(err, ErrEntryNotFound) {
+	if _, err := tl.Get(ctx, "does-not-exist"); !errors.Is(err, ErrEntryNotFound) {
 		t.Errorf("Get(nonexistent) error = %v, want %v", err, ErrEntryNotFound)
-	}
-
-	// 6. List errors
-	if _, err := store.List(ctx, ""); !errors.Is(err, ErrEmptySessionID) {
-		t.Errorf("List(\"\") error = %v, want %v", err, ErrEmptySessionID)
-	}
-	if _, err := store.List(ctx, "   "); !errors.Is(err, ErrEmptySessionID) {
-		t.Errorf("List(\"   \") error = %v, want %v", err, ErrEmptySessionID)
-	}
-
-	// 7. ListByKind errors
-	if _, err := store.ListByKind(ctx, "", KindMessage); !errors.Is(err, ErrEmptySessionID) {
-		t.Errorf("ListByKind(\"\") error = %v, want %v", err, ErrEmptySessionID)
-	}
-	if _, err := store.ListByKind(ctx, "   ", KindMessage); !errors.Is(err, ErrEmptySessionID) {
-		t.Errorf("ListByKind(\"   \") error = %v, want %v", err, ErrEmptySessionID)
-	}
-
-	// 8. Messages errors
-	if _, err := store.Messages(ctx, ""); !errors.Is(err, ErrEmptySessionID) {
-		t.Errorf("Messages(\"\") error = %v, want %v", err, ErrEmptySessionID)
-	}
-	if _, err := store.Messages(ctx, "   "); !errors.Is(err, ErrEmptySessionID) {
-		t.Errorf("Messages(\"   \") error = %v, want %v", err, ErrEmptySessionID)
-	}
-
-	// 9. DeleteSession errors
-	if err := store.DeleteSession(ctx, ""); !errors.Is(err, ErrEmptySessionID) {
-		t.Errorf("DeleteSession(\"\") error = %v, want %v", err, ErrEmptySessionID)
-	}
-	if err := store.DeleteSession(ctx, "   "); !errors.Is(err, ErrEmptySessionID) {
-		t.Errorf("DeleteSession(\"   \") error = %v, want %v", err, ErrEmptySessionID)
 	}
 }

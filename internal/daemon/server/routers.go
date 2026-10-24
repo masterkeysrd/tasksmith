@@ -281,10 +281,6 @@ func (s *sessionRouter) initRoutes() {
 		GetRoute("/v1/sessions/{id}/timeline", s.getTimeline),
 		PostRoute("/v1/sessions/{id}/send", s.postSend),
 		PostRoute("/v1/sessions/{id}/cancel", s.postCancel),
-		GetRoute("/v1/sessions/{id}/permissions", s.getPendingPermissions),
-		PostRoute("/v1/sessions/{id}/permissions", s.postRespondPermission),
-		GetRoute("/v1/sessions/{id}/mode", s.getMode),
-		PutRoute("/v1/sessions/{id}/mode", s.putMode),
 		GetRoute("/v1/sessions/{id}/changes", s.getChanges),
 		GetRoute("/v1/sessions/{id}/diff", s.getDiff),
 		PostRoute("/v1/sessions/{id}/revert", s.postRevert),
@@ -373,11 +369,7 @@ func (s *sessionRouter) postSend(w http.ResponseWriter, r *http.Request) {
 		WriteError(w, err)
 		return
 	}
-	status := http.StatusAccepted
-	if req.Wait {
-		status = http.StatusOK
-	}
-	w.WriteHeader(status)
+	w.WriteHeader(http.StatusAccepted)
 }
 
 func (s *sessionRouter) postCancel(w http.ResponseWriter, r *http.Request) {
@@ -387,55 +379,6 @@ func (s *sessionRouter) postCancel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusOK)
-}
-
-func (s *sessionRouter) getPendingPermissions(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
-	perms, err := s.b.PendingPermissions(r.Context(), RequestWorkspace(r), id)
-	if err != nil {
-		WriteError(w, err)
-		return
-	}
-	WriteJSON(w, http.StatusOK, perms)
-}
-
-func (s *sessionRouter) postRespondPermission(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
-	dec, err := DecodeJSON[api.PermissionDecision](r)
-	if err != nil {
-		WriteBadRequest(w, err.Error())
-		return
-	}
-	if err := s.b.RespondPermission(r.Context(), RequestWorkspace(r), id, dec); err != nil {
-		WriteError(w, err)
-		return
-	}
-	w.WriteHeader(http.StatusOK)
-}
-
-func (s *sessionRouter) getMode(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
-	mode, err := s.b.GetMode(r.Context(), RequestWorkspace(r), id)
-	if err != nil {
-		WriteError(w, err)
-		return
-	}
-	WriteJSON(w, http.StatusOK, api.ModeResponse{Mode: mode})
-}
-
-func (s *sessionRouter) putMode(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
-	req, err := DecodeJSON[api.SetModeRequest](r)
-	if err != nil {
-		WriteBadRequest(w, err.Error())
-		return
-	}
-	mode, err := s.b.SetMode(r.Context(), RequestWorkspace(r), id, req.Mode)
-	if err != nil {
-		WriteError(w, err)
-		return
-	}
-	WriteJSON(w, http.StatusOK, api.ModeResponse{Mode: mode})
 }
 
 func (s *sessionRouter) getChanges(w http.ResponseWriter, r *http.Request) {

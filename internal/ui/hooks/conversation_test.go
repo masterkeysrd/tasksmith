@@ -517,7 +517,7 @@ func (s *conversationTestServer) roundTrip(r *http.Request) (*http.Response, err
 	case strings.HasSuffix(r.URL.Path, "/permissions"):
 		return response(r, http.StatusOK, s.permissions), nil
 	default:
-		return response(r, http.StatusOK, api.Session{ID: "s1", Status: s.status}), nil
+		return response(r, http.StatusOK, api.Session{ID: "s1", Status: s.status, PendingPermissions: s.permissions}), nil
 	}
 }
 
@@ -708,7 +708,7 @@ func TestUseConversationUnmountCancelsHydration(t *testing.T) {
 }
 
 func TestUseConversationFailuresAndRefetch(t *testing.T) {
-	for _, path := range []string{"/v1/events", "/v1/sessions/s1/timeline", "/v1/sessions/s1/permissions", "/v1/sessions/s1"} {
+	for _, path := range []string{"/v1/events", "/v1/sessions/s1/timeline", "/v1/sessions/s1"} {
 		t.Run(path, func(t *testing.T) {
 			server := newConversationTestServer()
 			server.failPath = path

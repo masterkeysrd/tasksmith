@@ -77,8 +77,10 @@ func TestBuiltinCommandsExecution(t *testing.T) {
 	sess := &api.Session{
 		ID:    "s1",
 		Title: "Session One",
-		Agent: "build",
-		Model: "gpt-5",
+		Config: api.SessionConfig{
+			Agent: "build",
+			Model: "gpt-5",
+		},
 	}
 
 	var appendedNodes []ui.CommandOutputProps
@@ -206,13 +208,13 @@ func TestBuiltinCommandsExecution(t *testing.T) {
 		{
 			ID:        "s1",
 			Title:     "Session One",
-			Model:     "claude-sonnet-4-6",
+			Config:    api.SessionConfig{Model: "claude-sonnet-4-6"},
 			UpdatedAt: now,
 		},
 		{
 			ID:        "s2",
 			Title:     "Session Two",
-			Model:     "claude-opus-4-6",
+			Config:    api.SessionConfig{Model: "claude-opus-4-6"},
 			UpdatedAt: now,
 		},
 	}

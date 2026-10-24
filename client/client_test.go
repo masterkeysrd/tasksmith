@@ -105,18 +105,6 @@ func TestNewAndValidation(t *testing.T) {
 	if err := withCWD.Cancel(ctx, ""); !errors.Is(err, ErrEmptySessionID) {
 		t.Errorf("Cancel empty sessionID error = %v, want %v", err, ErrEmptySessionID)
 	}
-	if _, err := withCWD.PendingPermissions(ctx, ""); !errors.Is(err, ErrEmptySessionID) {
-		t.Errorf("PendingPermissions empty sessionID error = %v, want %v", err, ErrEmptySessionID)
-	}
-	if err := withCWD.RespondPermission(ctx, "", api.PermissionDecision{}); !errors.Is(err, ErrEmptySessionID) {
-		t.Errorf("RespondPermission empty sessionID error = %v, want %v", err, ErrEmptySessionID)
-	}
-	if _, err := withCWD.PermissionMode(ctx, ""); !errors.Is(err, ErrEmptySessionID) {
-		t.Errorf("PermissionMode empty sessionID error = %v, want %v", err, ErrEmptySessionID)
-	}
-	if err := withCWD.SetPermissionMode(ctx, "", api.ModeAuto); !errors.Is(err, ErrEmptySessionID) {
-		t.Errorf("SetPermissionMode empty sessionID error = %v, want %v", err, ErrEmptySessionID)
-	}
 	if _, err := withCWD.Changes(ctx, ""); !errors.Is(err, ErrEmptySessionID) {
 		t.Errorf("Changes empty sessionID error = %v, want %v", err, ErrEmptySessionID)
 	}
@@ -249,8 +237,7 @@ func TestClientAllMethodsOverUnixSocket(t *testing.T) {
 		_ = json.NewEncoder(w).Encode(api.Session{
 			ID:     r.PathValue("id"),
 			Title:  req.Title,
-			Agent:  req.Agent,
-			Model:  req.Model,
+			Config: req.Config,
 			Status: api.StatusIdle,
 		})
 	})
@@ -265,18 +252,6 @@ func TestClientAllMethodsOverUnixSocket(t *testing.T) {
 	})
 	mux.HandleFunc("POST /v1/sessions/{id}/cancel", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
-	})
-	mux.HandleFunc("GET /v1/sessions/{id}/permissions", func(w http.ResponseWriter, _ *http.Request) {
-		_ = json.NewEncoder(w).Encode([]api.PermissionRequest{{ID: "p1", ToolName: "write"}})
-	})
-	mux.HandleFunc("POST /v1/sessions/{id}/permissions", func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	})
-	mux.HandleFunc("GET /v1/sessions/{id}/mode", func(w http.ResponseWriter, _ *http.Request) {
-		_ = json.NewEncoder(w).Encode(api.ModeResponse{Mode: api.ModeAcceptEdits})
-	})
-	mux.HandleFunc("PUT /v1/sessions/{id}/mode", func(w http.ResponseWriter, _ *http.Request) {
-		_ = json.NewEncoder(w).Encode(api.ModeResponse{Mode: api.ModePlan})
 	})
 	mux.HandleFunc("GET /v1/sessions/{id}/changes", func(w http.ResponseWriter, _ *http.Request) {
 		_ = json.NewEncoder(w).Encode([]api.FileChange{{ID: "c1", Path: "a.go"}})
@@ -379,7 +354,7 @@ func TestClientAllMethodsOverUnixSocket(t *testing.T) {
 		t.Errorf("GetSession = (%+v, %v)", s, err)
 	}
 
-	if up, err := c.UpdateSession(ctx, "s1", api.UpdateSessionRequest{Title: "Updated", Model: "gpt-5"}); err != nil || up.Title != "Updated" || up.Model != "gpt-5" {
+	if up, err := c.UpdateSession(ctx, "s1", api.UpdateSessionRequest{Title: "Updated", Config: api.SessionConfig{Model: "gpt-5"}}); err != nil || up.Title != "Updated" || up.Config.Model != "gpt-5" {
 		t.Errorf("UpdateSession = (%+v, %v)", up, err)
 	}
 
@@ -402,18 +377,6 @@ func TestClientAllMethodsOverUnixSocket(t *testing.T) {
 	}
 	if err := c.Cancel(ctx, "s1"); err != nil {
 		t.Errorf("Cancel: %v", err)
-	}
-	if perms, err := c.PendingPermissions(ctx, "s1"); err != nil || len(perms) != 1 {
-		t.Errorf("PendingPermissions = (%+v, %v)", perms, err)
-	}
-	if err := c.RespondPermission(ctx, "s1", api.PermissionDecision{RequestID: "p1", Kind: api.DecisionAllowOnce}); err != nil {
-		t.Errorf("RespondPermission: %v", err)
-	}
-	if mode, err := c.PermissionMode(ctx, "s1"); err != nil || mode != api.ModeAcceptEdits {
-		t.Errorf("PermissionMode = (%q, %v)", mode, err)
-	}
-	if err := c.SetPermissionMode(ctx, "s1", api.ModePlan); err != nil {
-		t.Errorf("SetPermissionMode: %v", err)
 	}
 	if ch, err := c.Changes(ctx, "s1"); err != nil || len(ch) != 1 {
 		t.Errorf("Changes = (%+v, %v)", ch, err)

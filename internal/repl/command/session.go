@@ -69,7 +69,7 @@ func NewSessionPicker(env Env, sessions []api.Session, activeID string) ui.Picke
 		if title == "" {
 			title = "Untitled"
 		}
-		model := strings.TrimSpace(s.Model)
+		model := strings.TrimSpace(s.Config.Model)
 		if model == "" {
 			model = "-"
 		}

@@ -1,0 +1,569 @@
+package session
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"slices"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/google/uuid"
+	"github.com/masterkeysrd/tasksmith/api"
+	"github.com/masterkeysrd/tasksmith/internal/core/log"
+	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/gateway"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/timeline"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/tools"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/workspace"
+)
+
+// Config holds runtime dependencies required to construct a [Manager].
+type Config struct {
+	DB        *sql.DB
+	Workspace workspace.Workspace
+	Gateway   gateway.Gateway
+	Publisher Publisher
+	Logger    log.Interface
+}
+
+// Validate checks that all required configuration dependencies are non-nil.
+func (c Config) Validate() error {
+	if c.DB == nil {
+		return fmt.Errorf("%w: database is required", ErrInvalidConfig)
+	}
+	if c.Workspace == nil {
+		return fmt.Errorf("%w: workspace is required", ErrInvalidConfig)
+	}
+	if c.Gateway == nil {
+		return fmt.Errorf("%w: gateway is required", ErrInvalidConfig)
+	}
+	if c.Publisher == nil {
+		return fmt.Errorf("%w: publisher is required", ErrInvalidConfig)
+	}
+	if c.Logger == nil {
+		return fmt.Errorf("%w: logger is required", ErrInvalidConfig)
+	}
+	return nil
+}
+
+// Manager coordinates session collection lifecycle.
+type Manager interface {
+	Create(ctx context.Context, params CreateParams) (sess *Session, created bool, err error)
+	Get(ctx context.Context, id string) (*Session, error)
+	List(ctx context.Context) ([]*Session, error)
+	Update(ctx context.Context, id string, params UpdateParams) (*Session, error)
+	Delete(ctx context.Context, id string) error
+	Close() error
+}
+
+type manager struct {
+	db        *sql.DB
+	store     *store
+	workspace workspace.Workspace
+	gateway   gateway.Gateway
+	publisher Publisher
+	logger    log.Interface
+
+	bgCtx    context.Context
+	bgCancel context.CancelFunc
+	wg       sync.WaitGroup
+
+	mu       sync.Mutex
+	createMu sync.Mutex
+	sessions map[string]*Session
+}
+
+var _ Manager = (*manager)(nil)
+
+// New constructs a new [Manager] and automatically runs SQLite schema migrations
+// for the sessions table.
+func New(cfg Config) (Manager, error) {
+	if err := cfg.Validate(); err != nil {
+		return nil, err
+	}
+
+	st, err := newStore(context.Background(), cfg.DB)
+	if err != nil {
+		return nil, err
+	}
+
+	bgCtx, bgCancel := context.WithCancel(context.Background())
+	return &manager{
+		db:        cfg.DB,
+		store:     st,
+		workspace: cfg.Workspace,
+		gateway:   cfg.Gateway,
+		publisher: cfg.Publisher,
+		logger:    cfg.Logger,
+		bgCtx:     bgCtx,
+		bgCancel:  bgCancel,
+		sessions:  make(map[string]*Session),
+	}, nil
+}
+
+// validateSessionID requires a canonical lowercase UUIDv7.
+func validateSessionID(id string) error {
+	parsed, err := uuid.Parse(id)
+	if err != nil || parsed.Version() != 7 || parsed.String() != id {
+		return fmt.Errorf("%w: %q", ErrInvalidSessionID, id)
+	}
+	return nil
+}
+
+func (m *manager) sessionDir(sessionID string) (string, error) {
+	wsDir, err := xdg.WorkspaceDir(m.workspace.RootDir())
+	if err != nil {
+		return "", fmt.Errorf("session: resolve workspace data dir: %w", err)
+	}
+	return filepath.Join(wsDir, "sessions", filepath.Base(sessionID)), nil
+}
+
+func (m *manager) resolveModelName(model string) string {
+	model = strings.TrimSpace(model)
+	if model != "" && !strings.Contains(model, "/") {
+		if models := m.workspace.ResolveModels(workspace.RoleCompletion, model); len(models) > 0 {
+			return models[0]
+		}
+	}
+	return model
+}
+
+func (m *manager) resolveAgentAndModel(agent, model string) (string, string) {
+	agent = strings.TrimSpace(agent)
+	if agent == "" {
+		agent = m.workspace.DefaultAgentName()
+	}
+
+	model = strings.TrimSpace(model)
+	if model != "" {
+		model = m.resolveModelName(model)
+	} else {
+		var explicit []string
+		if ag, ok := m.workspace.GetAgent(agent); ok && len(ag.Models) > 0 {
+			explicit = ag.Models
+		}
+		if models := m.workspace.ResolveModels(workspace.RoleCompletion, explicit...); len(models) > 0 {
+			model = models[0]
+		} else if len(explicit) > 0 {
+			model = explicit[0]
+		}
+	}
+
+	return agent, model
+}
+
+func (m *manager) matchesParams(s *Session, params CreateParams) error {
+	s.Lock()
+	defer s.Unlock()
+
+	wantTitle := strings.TrimSpace(params.Title)
+	if wantTitle != "" && s.Title != wantTitle {
+		return ErrSessionConflict
+	}
+	wantAgent, wantModel := m.resolveAgentAndModel(params.Config.Agent, params.Config.Model)
+	if wantAgent != "" && s.Config.Agent != wantAgent {
+		return ErrSessionConflict
+	}
+	if wantModel != "" && s.Config.Model != wantModel {
+		return ErrSessionConflict
+	}
+	wantEffort := strings.TrimSpace(params.Config.Effort)
+	if wantEffort != "" && s.Config.Effort != wantEffort {
+		return ErrSessionConflict
+	}
+	wantMode := params.Config.Mode
+	if wantMode != "" && s.Config.Mode != wantMode {
+		return ErrSessionConflict
+	}
+	return nil
+}
+
+func (m *manager) loadOrCacheSession(ctx context.Context, dbSess *Session) (*Session, error) {
+	m.mu.Lock()
+	if sess, ok := m.sessions[dbSess.ID]; ok {
+		m.mu.Unlock()
+		return sess, nil
+	}
+	m.mu.Unlock()
+
+	dir, err := m.sessionDir(dbSess.ID)
+	if err != nil {
+		return nil, err
+	}
+
+	sess := &Session{
+		State:     NewState(),
+		ID:        dbSess.ID,
+		Title:     dbSess.Title,
+		Config:    dbSess.Config,
+		CreatedAt: dbSess.CreatedAt,
+		UpdatedAt: dbSess.UpdatedAt,
+		Root:      dir,
+		db:        m.db,
+		store:     m.store,
+		workspace: m.workspace,
+		gateway:   m.gateway,
+		publisher: m.publisher,
+		logger:    m.logger,
+		bgCtx:     m.bgCtx,
+		wg:        &m.wg,
+	}
+
+	if err := sess.initResources(ctx); err != nil {
+		return nil, err
+	}
+
+	if h, err := sess.harness(ctx); err == nil {
+		if st, err := h.LoadState(ctx); err == nil && len(st.PendingPermissions) > 0 {
+			sess.Lock()
+			if sess.Status == StatusIdle {
+				sess.Status = StatusWaitingPermission
+				sess.WaitingPermission = true
+				perms := make([]tools.PermissionRequest, len(st.PendingPermissions))
+				for i, p := range st.PendingPermissions {
+					p.GrantPatterns = slices.Clone(p.GrantPatterns)
+					perms[i] = p
+				}
+				sess.PendingPermissions = perms
+			}
+			sess.Unlock()
+		}
+	}
+
+	m.mu.Lock()
+	if existing, ok := m.sessions[sess.ID]; ok {
+		m.mu.Unlock()
+		_ = sess.Close()
+		return existing, nil
+	}
+	m.sessions[sess.ID] = sess
+	m.mu.Unlock()
+
+	return sess, nil
+}
+
+func (m *manager) getLiveSession(ctx context.Context, id string) (*Session, error) {
+	m.mu.Lock()
+	sess, ok := m.sessions[id]
+	m.mu.Unlock()
+	if ok {
+		return sess, nil
+	}
+
+	dbSess, err := m.store.getSession(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	return m.loadOrCacheSession(ctx, dbSess)
+}
+
+func (m *manager) Create(ctx context.Context, params CreateParams) (sess *Session, created bool, err error) {
+	if err := ctx.Err(); err != nil {
+		return nil, false, err
+	}
+
+	id := strings.TrimSpace(params.ID)
+	if id != "" {
+		if err := validateSessionID(id); err != nil {
+			return nil, false, err
+		}
+	}
+
+	mode := params.Config.Mode
+	if mode == "" {
+		mode = tools.ModeDefault
+	}
+	if !mode.IsValid() {
+		return nil, false, fmt.Errorf("%w: unsupported permission mode %q", ErrInvalidConfig, params.Config.Mode)
+	}
+
+	if id != "" {
+		m.createMu.Lock()
+		defer m.createMu.Unlock()
+
+		existing, err := m.getLiveSession(ctx, id)
+		switch {
+		case err == nil:
+			if err := m.matchesParams(existing, params); err != nil {
+				return nil, false, err
+			}
+			return existing, false, nil
+		case !errors.Is(err, ErrSessionNotFound):
+			return nil, false, err
+		}
+	}
+
+	agent, model := m.resolveAgentAndModel(params.Config.Agent, params.Config.Model)
+	effort := strings.TrimSpace(params.Config.Effort)
+
+	now := time.Now().UTC()
+	if id == "" {
+		generated, err := uuid.NewV7()
+		if err != nil {
+			return nil, false, fmt.Errorf("session: generate session id: %w", err)
+		}
+		id = generated.String()
+	}
+
+	sessDir, err := m.sessionDir(id)
+	if err != nil {
+		return nil, false, err
+	}
+
+	newSession := &Session{
+		State: NewState(),
+		ID:    id,
+		Title: strings.TrimSpace(params.Title),
+		Config: SessionConfig{
+			Agent:  agent,
+			Model:  model,
+			Effort: effort,
+			Mode:   mode,
+		},
+		CreatedAt: now,
+		UpdatedAt: now,
+		Root:      sessDir,
+		db:        m.db,
+		store:     m.store,
+		workspace: m.workspace,
+		gateway:   m.gateway,
+		publisher: m.publisher,
+		logger:    m.logger,
+		bgCtx:     m.bgCtx,
+		wg:        &m.wg,
+	}
+
+	if err := newSession.initResources(ctx); err != nil {
+		return nil, false, err
+	}
+
+	if err := m.store.insertSession(ctx, newSession); err != nil {
+		_ = newSession.Close()
+		return nil, false, err
+	}
+
+	m.mu.Lock()
+	m.sessions[id] = newSession
+	m.mu.Unlock()
+
+	m.publisher.Publish(api.TopicSessions, CreatedEvent{
+		Workspace: m.workspace.RootDir(),
+		Session:   newSession.Clone(),
+	})
+
+	return newSession, true, nil
+}
+
+func (m *manager) Get(ctx context.Context, id string) (*Session, error) {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return nil, ErrEmptySessionID
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return m.getLiveSession(ctx, id)
+}
+
+func (m *manager) List(ctx context.Context) ([]*Session, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	list, err := m.store.listSessions(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*Session, len(list))
+	for i, dbSess := range list {
+		live, err := m.getLiveSession(ctx, dbSess.ID)
+		if err != nil {
+			return nil, err
+		}
+		out[i] = live
+	}
+	return out, nil
+}
+
+func (m *manager) Update(ctx context.Context, id string, params UpdateParams) (*Session, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return nil, ErrEmptySessionID
+	}
+
+	if params.Config.Mode != "" && !params.Config.Mode.IsValid() {
+		return nil, fmt.Errorf("%w: unsupported permission mode %q", ErrInvalidConfig, params.Config.Mode)
+	}
+
+	sess, err := m.getLiveSession(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+
+	sess.Lock()
+	oldConfig := sess.Config
+	newConfig := sess.Config
+	newTitle := sess.Title
+
+	if title := strings.TrimSpace(params.Title); title != "" {
+		newTitle = title
+	}
+	if agent := strings.TrimSpace(params.Config.Agent); agent != "" {
+		newConfig.Agent = agent
+	}
+	if model := strings.TrimSpace(params.Config.Model); model != "" {
+		newConfig.Model = m.resolveModelName(model)
+	} else if strings.TrimSpace(params.Config.Agent) != "" && sess.Config.Model == "" {
+		_, newConfig.Model = m.resolveAgentAndModel(newConfig.Agent, "")
+	}
+	if effort := strings.TrimSpace(params.Config.Effort); effort != "" {
+		newConfig.Effort = effort
+	}
+	if params.Config.Mode != "" {
+		newConfig.Mode = params.Config.Mode
+	}
+
+	updatedAt := time.Now().UTC()
+
+	dbSess := &Session{
+		ID:        sess.ID,
+		Title:     newTitle,
+		Config:    newConfig,
+		CreatedAt: sess.CreatedAt,
+		UpdatedAt: updatedAt,
+	}
+
+	if err := m.store.updateSession(ctx, dbSess); err != nil {
+		sess.Unlock()
+		return nil, err
+	}
+
+	sess.Title = newTitle
+	sess.Config = newConfig
+	sess.UpdatedAt = updatedAt
+	if oldConfig.Agent != newConfig.Agent || oldConfig.Model != newConfig.Model || oldConfig.Effort != newConfig.Effort {
+		sess.Harness = nil
+	}
+	if oldConfig.Mode != newConfig.Mode && sess.Tools != nil {
+		sess.Tools.SetMode(newConfig.Mode)
+	}
+	sess.Unlock()
+
+	if oldConfig.Agent != newConfig.Agent {
+		entry := timeline.NewAgentEntry(sess.ID, timeline.AgentChange{From: oldConfig.Agent, To: newConfig.Agent})
+		if err := sess.Timeline.Append(ctx, entry); err != nil {
+			return nil, err
+		}
+		m.publisher.Publish(api.SessionStreamTopic(sess.ID), EntryAddedEvent{
+			SessionID: sess.ID,
+			Entry:     entry.Clone(),
+		})
+	}
+	if oldConfig.Model != newConfig.Model {
+		entry := timeline.NewModelEntry(sess.ID, timeline.ModelChange{From: oldConfig.Model, To: newConfig.Model})
+		if err := sess.Timeline.Append(ctx, entry); err != nil {
+			return nil, err
+		}
+		m.publisher.Publish(api.SessionStreamTopic(sess.ID), EntryAddedEvent{
+			SessionID: sess.ID,
+			Entry:     entry.Clone(),
+		})
+	}
+	if oldConfig.Effort != newConfig.Effort {
+		entry := timeline.NewEffortEntry(sess.ID, timeline.EffortChange{From: oldConfig.Effort, To: newConfig.Effort})
+		if err := sess.Timeline.Append(ctx, entry); err != nil {
+			return nil, err
+		}
+		m.publisher.Publish(api.SessionStreamTopic(sess.ID), EntryAddedEvent{
+			SessionID: sess.ID,
+			Entry:     entry.Clone(),
+		})
+	}
+	if oldConfig.Mode != newConfig.Mode {
+		entry := timeline.NewModeEntry(sess.ID, timeline.ModeChange{From: oldConfig.Mode, To: newConfig.Mode})
+		if err := sess.Timeline.Append(ctx, entry); err != nil {
+			return nil, err
+		}
+		m.publisher.Publish(api.SessionStreamTopic(sess.ID), EntryAddedEvent{
+			SessionID: sess.ID,
+			Entry:     entry.Clone(),
+		})
+	}
+
+	m.publisher.Publish(api.TopicSessions, UpdatedEvent{
+		Workspace: m.workspace.RootDir(),
+		Session:   sess.Clone(),
+	})
+
+	return sess, nil
+}
+
+func (m *manager) Delete(ctx context.Context, id string) error {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return ErrEmptySessionID
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	m.mu.Lock()
+	sess := m.sessions[id]
+	delete(m.sessions, id)
+	m.mu.Unlock()
+
+	if sess == nil {
+		if live, err := m.getLiveSession(ctx, id); err == nil {
+			sess = live
+			m.mu.Lock()
+			delete(m.sessions, id)
+			m.mu.Unlock()
+		}
+	}
+
+	if sess != nil {
+		_ = sess.Cancel(ctx)
+		_ = sess.Close()
+		if sess.Timeline != nil {
+			_ = sess.Timeline.Delete(ctx)
+		}
+		if sess.Journal != nil {
+			_ = sess.Journal.Delete(ctx)
+		}
+	}
+
+	if err := m.store.deleteSession(ctx, id); err != nil {
+		return err
+	}
+
+	sessDir, err := m.sessionDir(id)
+	if err == nil {
+		_ = os.RemoveAll(sessDir)
+	}
+
+	m.publisher.Publish(api.TopicSessions, DeletedEvent{
+		Workspace: m.workspace.RootDir(),
+		SessionID: id,
+	})
+	m.publisher.DeleteTopic(api.SessionStreamTopic(id))
+
+	return nil
+}
+
+func (m *manager) Close() error {
+	m.bgCancel()
+	m.mu.Lock()
+	for _, sess := range m.sessions {
+		_ = sess.Close()
+	}
+	m.mu.Unlock()
+	m.wg.Wait()
+	return nil
+}

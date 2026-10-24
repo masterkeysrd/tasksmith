@@ -69,8 +69,10 @@ func Run(ctx context.Context, cfg Config) error {
 		if title != "" || agent != "" || model != "" {
 			updated, err := cfg.Client.UpdateSession(ctx, sid, api.UpdateSessionRequest{
 				Title: title,
-				Agent: agent,
-				Model: model,
+				Config: api.SessionConfig{
+					Agent: agent,
+					Model: model,
+				},
 			})
 			if err != nil {
 				return fmt.Errorf("update session %q: %w", sid, err)
@@ -78,8 +80,8 @@ func Run(ctx context.Context, cfg Config) error {
 			sess = updated
 		}
 
-		if m, mErr := cfg.Client.PermissionMode(ctx, sess.ID); mErr == nil && m != "" {
-			mode = m
+		if sess.Config.Mode != "" {
+			mode = sess.Config.Mode
 		}
 	}
 

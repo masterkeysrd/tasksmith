@@ -58,7 +58,8 @@ var PermissionsProvider = trail.FCC("PermissionsProvider", func(props Permission
 	decided, setDecided := kitex.UseState(map[decisionKey]bool(nil))
 
 	mutation := wind.UseMutation(promise.WrapWithProps(func(ctx context.Context, in permissionDecision) (struct{}, error) {
-		return struct{}{}, c.RespondPermission(ctx, in.SessionID, in.Decision)
+		dec := in.Decision
+		return struct{}{}, c.Send(ctx, in.SessionID, api.SendRequest{Decision: &dec})
 	}), wind.MutationOptions[permissionDecision, struct{}]{
 		OnSuccess: func(_ struct{}, in permissionDecision, _ wind.MutationContext) {
 			transcript.Append(components.DecisionEntry(ui.DecisionSummaryProps{

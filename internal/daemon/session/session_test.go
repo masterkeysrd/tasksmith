@@ -29,7 +29,6 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/daemon/broker"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/gateway"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/harness"
-	"github.com/masterkeysrd/tasksmith/internal/daemon/journal"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/sandbox"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/std"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/timeline"
@@ -202,6 +201,8 @@ func (p *testPublisher) Publish(_ string, ev broker.Event) {
 	}
 }
 
+func (p *testPublisher) DeleteTopic(_ string) {}
+
 func (p *testPublisher) recorded() []Event {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -216,7 +217,7 @@ func (p *testPublisher) reset() {
 	p.events = nil
 }
 
-func setupTestEnv(t *testing.T, prov *fakeProvider) (*sql.DB, workspace.Workspace, *fakeGateway, *testPublisher, *Manager) {
+func setupTestEnv(t *testing.T, prov *fakeProvider) (*sql.DB, workspace.Workspace, *fakeGateway, *testPublisher, Manager) {
 	t.Helper()
 
 	xdgRoot := t.TempDir()
@@ -239,40 +240,16 @@ func setupTestEnv(t *testing.T, prov *fakeProvider) (*sql.DB, workspace.Workspac
 		t.Fatalf("workspace.Open: %v", err)
 	}
 
-	sb, err := sandbox.New(sandbox.Config{
-		WorkDir: ws.RootDir(),
-		Mode:    sandbox.ModeLocal,
-	})
-	if err != nil {
-		t.Fatalf("sandbox.New: %v", err)
-	}
-	t.Cleanup(func() {
-		_ = sb.Close()
-	})
-
 	logger := log.Default()
 	gw := newFakeGateway(prov)
 	pub := &testPublisher{}
-
-	tl, err := timeline.New(context.Background(), db)
-	if err != nil {
-		t.Fatalf("timeline.New: %v", err)
-	}
-
-	jr, err := journal.New(context.Background(), db)
-	if err != nil {
-		t.Fatalf("journal.New: %v", err)
-	}
 
 	mgr, err := New(Config{
 		DB:        db,
 		Workspace: ws,
 		Gateway:   gw,
-		Sandbox:   sb,
 		Publisher: pub,
 		Logger:    logger,
-		Timeline:  tl,
-		Journal:   jr,
 	})
 	if err != nil {
 		t.Fatalf("session.New: %v", err)
@@ -281,26 +258,27 @@ func setupTestEnv(t *testing.T, prov *fakeProvider) (*sql.DB, workspace.Workspac
 	return db, ws, gw, pub, mgr
 }
 
-func loadHarnessState(t *testing.T, mgr *Manager, db *sql.DB, gw *fakeGateway, sessionID string) harness.State {
+func loadHarnessState(t *testing.T, mgr Manager, db *sql.DB, gw *fakeGateway, sessionID string) harness.State {
 	t.Helper()
 	llmModel, err := gw.ResolveLLM(context.Background(), "fake-default-model")
 	if err != nil {
 		t.Fatalf("ResolveLLM: %v", err)
 	}
-	reg, err := mgr.Tools(context.Background(), sessionID)
+	sess, err := mgr.Get(context.Background(), sessionID)
 	if err != nil {
-		t.Fatalf("mgr.Tools: %v", err)
+		t.Fatalf("mgr.Get: %v", err)
 	}
 	h, err := harness.New(harness.Config{
+		ID:     sessionID,
 		DB:     db,
 		Model:  llmModel,
-		Tools:  reg,
+		Tools:  sess.Tools,
 		Logger: log.Default(),
 	})
 	if err != nil {
 		t.Fatalf("harness.New: %v", err)
 	}
-	state, err := h.LoadState(context.Background(), sessionID)
+	state, err := h.LoadState(context.Background())
 	if err != nil {
 		t.Fatalf("h.LoadState: %v", err)
 	}
@@ -325,11 +303,8 @@ func msgText(m message.Message) string {
 }
 
 func TestConfigValidate(t *testing.T) {
-	db, ws, gw, pub, mgr := setupTestEnv(t, nil)
-	sb := mgr.sandbox
+	db, ws, gw, pub, _ := setupTestEnv(t, nil)
 	logger := log.Default()
-	tl := mgr.timeline
-	jr := mgr.journal
 
 	tests := []struct {
 		name string
@@ -340,11 +315,8 @@ func TestConfigValidate(t *testing.T) {
 			cfg: Config{
 				Workspace: ws,
 				Gateway:   gw,
-				Sandbox:   sb,
 				Publisher: pub,
 				Logger:    logger,
-				Timeline:  tl,
-				Journal:   jr,
 			},
 		},
 		{
@@ -352,11 +324,8 @@ func TestConfigValidate(t *testing.T) {
 			cfg: Config{
 				DB:        db,
 				Gateway:   gw,
-				Sandbox:   sb,
 				Publisher: pub,
 				Logger:    logger,
-				Timeline:  tl,
-				Journal:   jr,
 			},
 		},
 		{
@@ -364,23 +333,8 @@ func TestConfigValidate(t *testing.T) {
 			cfg: Config{
 				DB:        db,
 				Workspace: ws,
-				Sandbox:   sb,
 				Publisher: pub,
 				Logger:    logger,
-				Timeline:  tl,
-				Journal:   jr,
-			},
-		},
-		{
-			name: "missing Sandbox",
-			cfg: Config{
-				DB:        db,
-				Workspace: ws,
-				Gateway:   gw,
-				Publisher: pub,
-				Logger:    logger,
-				Timeline:  tl,
-				Journal:   jr,
 			},
 		},
 		{
@@ -389,10 +343,7 @@ func TestConfigValidate(t *testing.T) {
 				DB:        db,
 				Workspace: ws,
 				Gateway:   gw,
-				Sandbox:   sb,
 				Logger:    logger,
-				Timeline:  tl,
-				Journal:   jr,
 			},
 		},
 		{
@@ -401,34 +352,7 @@ func TestConfigValidate(t *testing.T) {
 				DB:        db,
 				Workspace: ws,
 				Gateway:   gw,
-				Sandbox:   sb,
 				Publisher: pub,
-				Timeline:  tl,
-				Journal:   jr,
-			},
-		},
-		{
-			name: "missing Timeline",
-			cfg: Config{
-				DB:        db,
-				Workspace: ws,
-				Gateway:   gw,
-				Sandbox:   sb,
-				Publisher: pub,
-				Logger:    logger,
-				Journal:   jr,
-			},
-		},
-		{
-			name: "missing Journal",
-			cfg: Config{
-				DB:        db,
-				Workspace: ws,
-				Gateway:   gw,
-				Sandbox:   sb,
-				Publisher: pub,
-				Logger:    logger,
-				Timeline:  tl,
 			},
 		},
 	}
@@ -442,62 +366,6 @@ func TestConfigValidate(t *testing.T) {
 				t.Errorf("New() error = %v, want %v", err, ErrInvalidConfig)
 			}
 		})
-	}
-}
-
-type mockTimelineStore struct {
-	timeline.Store
-}
-
-func TestConfigCustomTimeline(t *testing.T) {
-	db, ws, gw, pub, mgr := setupTestEnv(t, nil)
-	sb := mgr.sandbox
-	logger := log.Default()
-
-	mockTL := &mockTimelineStore{}
-	customMgr, err := New(Config{
-		DB:        db,
-		Workspace: ws,
-		Gateway:   gw,
-		Sandbox:   sb,
-		Publisher: pub,
-		Logger:    logger,
-		Timeline:  mockTL,
-		Journal:   mgr.journal,
-	})
-	if err != nil {
-		t.Fatalf("New with custom Timeline: %v", err)
-	}
-	if customMgr.timeline != mockTL {
-		t.Fatalf("expected customMgr.timeline to be %v, got %v", mockTL, customMgr.timeline)
-	}
-}
-
-type mockJournalStore struct {
-	journal.Store
-}
-
-func TestConfigCustomJournal(t *testing.T) {
-	db, ws, gw, pub, mgr := setupTestEnv(t, nil)
-	sb := mgr.sandbox
-	logger := log.Default()
-
-	mockJR := &mockJournalStore{}
-	customMgr, err := New(Config{
-		DB:        db,
-		Workspace: ws,
-		Gateway:   gw,
-		Sandbox:   sb,
-		Publisher: pub,
-		Logger:    logger,
-		Timeline:  mgr.timeline,
-		Journal:   mockJR,
-	})
-	if err != nil {
-		t.Fatalf("New with custom Journal: %v", err)
-	}
-	if customMgr.journal != mockJR {
-		t.Fatalf("expected customMgr.journal to be %v, got %v", mockJR, customMgr.journal)
 	}
 }
 
@@ -515,7 +383,7 @@ func TestSessionCRUD(t *testing.T) {
 	}
 
 	// Create session 1
-	s1, err := mgr.Create(ctx, CreateParams{Title: "First Session"})
+	s1, _, err := mgr.Create(ctx, CreateParams{Title: "First Session"})
 	if err != nil {
 		t.Fatalf("Create s1 error: %v", err)
 	}
@@ -525,7 +393,7 @@ func TestSessionCRUD(t *testing.T) {
 	if s1.Title != "First Session" {
 		t.Errorf("s1.Title = %q, want %q", s1.Title, "First Session")
 	}
-	if s1.Agent == "" {
+	if s1.Config.Agent == "" {
 		t.Errorf("expected default s1.Agent to be resolved from workspace, got empty")
 	}
 	if s1.CreatedAt.IsZero() || s1.UpdatedAt.IsZero() {
@@ -536,7 +404,7 @@ func TestSessionCRUD(t *testing.T) {
 	time.Sleep(2 * time.Millisecond)
 
 	// Create session 2
-	s2, err := mgr.Create(ctx, CreateParams{Title: "Second Session"})
+	s2, _, err := mgr.Create(ctx, CreateParams{Title: "Second Session"})
 	if err != nil {
 		t.Fatalf("Create s2 error: %v", err)
 	}
@@ -546,7 +414,7 @@ func TestSessionCRUD(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get s1 error: %v", err)
 	}
-	if got1.ID != s1.ID || got1.Title != s1.Title || got1.Agent != s1.Agent || got1.Model != s1.Model || !got1.CreatedAt.Equal(s1.CreatedAt) {
+	if got1.ID != s1.ID || got1.Title != s1.Title || got1.Config.Agent != s1.Config.Agent || got1.Config.Model != s1.Config.Model || !got1.CreatedAt.Equal(s1.CreatedAt) {
 		t.Errorf("Get(s1) = %+v, want %+v", got1, s1)
 	}
 
@@ -575,7 +443,7 @@ func TestSessionCRUD(t *testing.T) {
 
 	// Append a message to s1 so its updated_at becomes newer than s2
 	time.Sleep(2 * time.Millisecond)
-	if err := mgr.appendMessage(ctx, s1.ID, message.NewUserText("Hello on s1")); err != nil {
+	if err := s1.appendMessage(ctx, message.NewUserText("Hello on s1")); err != nil {
 		t.Fatalf("appendMessage s1 error: %v", err)
 	}
 
@@ -704,17 +572,6 @@ OVERRIDE_AGENT_PROMPT_MARKER {{ if call .HasTool "shell" }}HAS_SHELL_TOOL{{ end 
 		t.Fatalf("workspace.Open: %v", err)
 	}
 
-	sb, err := sandbox.New(sandbox.Config{
-		WorkDir: ws.RootDir(),
-		Mode:    sandbox.ModeLocal,
-	})
-	if err != nil {
-		t.Fatalf("sandbox.New: %v", err)
-	}
-	t.Cleanup(func() {
-		_ = sb.Close()
-	})
-
 	prov := &fakeProvider{
 		handler: func(_ context.Context, _ *llm.Request) ([]string, string, error) {
 			return []string{"OK"}, uuid.NewString(), nil
@@ -723,64 +580,59 @@ OVERRIDE_AGENT_PROMPT_MARKER {{ if call .HasTool "shell" }}HAS_SHELL_TOOL{{ end 
 	gw := newFakeGateway(prov)
 	pub := &testPublisher{}
 
-	tl, err := timeline.New(ctx, db)
-	if err != nil {
-		t.Fatalf("timeline.New: %v", err)
-	}
-
-	jr, err := journal.New(ctx, db)
-	if err != nil {
-		t.Fatalf("journal.New: %v", err)
-	}
-
 	mgr, err := New(Config{
 		DB:        db,
 		Workspace: ws,
 		Gateway:   gw,
-		Sandbox:   sb,
 		Publisher: pub,
 		Logger:    log.Default(),
-		Timeline:  tl,
-		Journal:   jr,
 	})
 	if err != nil {
 		t.Fatalf("session.New: %v", err)
 	}
 
 	// Session A: uses workspace defaults for Agent and Model
-	sessDefault, err := mgr.Create(ctx, CreateParams{Title: "Default Session"})
+	sessDefault, _, err := mgr.Create(ctx, CreateParams{Title: "Default Session"})
 	if err != nil {
 		t.Fatalf("Create default session error: %v", err)
 	}
-	if sessDefault.Agent != "custom-default-agent" {
-		t.Errorf("sessDefault.Agent = %q, want %q", sessDefault.Agent, "custom-default-agent")
+	if sessDefault.Config.Agent != "custom-default-agent" {
+		t.Errorf("sessDefault.Agent = %q, want %q", sessDefault.Config.Agent, "custom-default-agent")
 	}
-	if sessDefault.Model != "openai/gpt-5.5-default" {
-		t.Errorf("sessDefault.Model = %q, want %q", sessDefault.Model, "openai/gpt-5.5-default")
+	if sessDefault.Config.Model != "openai/gpt-5.5-default" {
+		t.Errorf("sessDefault.Model = %q, want %q", sessDefault.Config.Model, "openai/gpt-5.5-default")
 	}
 
 	// Session B: explicit Agent and Model overrides in the same workspace
-	sessOverride, err := mgr.Create(ctx, CreateParams{
+	sessOverride, _, err := mgr.Create(ctx, CreateParams{
 		Title: "Override Session",
-		Agent: "override-agent",
-		Model: "anthropic/claude-4-sonnet",
+		Config: SessionConfig{
+			Agent: "override-agent",
+			Model: "anthropic/claude-4-sonnet",
+		},
 	})
 	if err != nil {
 		t.Fatalf("Create override session error: %v", err)
 	}
-	if sessOverride.Agent != "override-agent" {
-		t.Errorf("sessOverride.Agent = %q, want %q", sessOverride.Agent, "override-agent")
+	if sessOverride.Config.Agent != "override-agent" {
+		t.Errorf("sessOverride.Agent = %q, want %q", sessOverride.Config.Agent, "override-agent")
 	}
-	if sessOverride.Model != "anthropic/claude-4-sonnet" {
-		t.Errorf("sessOverride.Model = %q, want %q", sessOverride.Model, "anthropic/claude-4-sonnet")
+	if sessOverride.Config.Model != "anthropic/claude-4-sonnet" {
+		t.Errorf("sessOverride.Model = %q, want %q", sessOverride.Config.Model, "anthropic/claude-4-sonnet")
 	}
 
 	// Send on both concurrent sessions and verify each uses its own Agent prompt and Model
-	if _, err := mgr.Send(ctx, sessDefault.ID, message.NewUserText("Hello default")); err != nil {
+	if err := sessDefault.Send(ctx, SendInput{Message: message.NewUserText("Hello default")}); err != nil {
 		t.Fatalf("Send sessDefault error: %v", err)
 	}
-	if _, err := mgr.Send(ctx, sessOverride.ID, message.NewUserText("Hello override")); err != nil {
+	if err := sessDefault.Wait(ctx); err != nil {
+		t.Fatalf("Wait sessDefault error: %v", err)
+	}
+	if err := sessOverride.Send(ctx, SendInput{Message: message.NewUserText("Hello override")}); err != nil {
 		t.Fatalf("Send sessOverride error: %v", err)
+	}
+	if err := sessOverride.Wait(ctx); err != nil {
+		t.Fatalf("Wait sessOverride error: %v", err)
 	}
 
 	turns := prov.recordedTurns()
@@ -811,8 +663,10 @@ OVERRIDE_AGENT_PROMPT_MARKER {{ if call .HasTool "shell" }}HAS_SHELL_TOOL{{ end 
 	// Update Session A: update title, agent, and bare model (resolving with defaultProvider openai)
 	updatedA, err := mgr.Update(ctx, sessDefault.ID, UpdateParams{
 		Title: "Renamed Default Session",
-		Agent: "override-agent",
-		Model: "gpt-5.5-default",
+		Config: SessionConfig{
+			Agent: "override-agent",
+			Model: "gpt-5.5-default",
+		},
 	})
 	if err != nil {
 		t.Fatalf("Update session error: %v", err)
@@ -820,22 +674,24 @@ OVERRIDE_AGENT_PROMPT_MARKER {{ if call .HasTool "shell" }}HAS_SHELL_TOOL{{ end 
 	if updatedA.Title != "Renamed Default Session" {
 		t.Errorf("updatedA.Title = %q, want %q", updatedA.Title, "Renamed Default Session")
 	}
-	if updatedA.Agent != "override-agent" {
-		t.Errorf("updatedA.Agent = %q, want %q", updatedA.Agent, "override-agent")
+	if updatedA.Config.Agent != "override-agent" {
+		t.Errorf("updatedA.Agent = %q, want %q", updatedA.Config.Agent, "override-agent")
 	}
-	if updatedA.Model != "openai/gpt-5.5-default" {
-		t.Errorf("updatedA.Model = %q, want %q", updatedA.Model, "openai/gpt-5.5-default")
+	if updatedA.Config.Model != "openai/gpt-5.5-default" {
+		t.Errorf("updatedA.Model = %q, want %q", updatedA.Config.Model, "openai/gpt-5.5-default")
 	}
 
 	// Update Session A again with fully qualified model
 	updatedA2, err := mgr.Update(ctx, sessDefault.ID, UpdateParams{
-		Model: "anthropic/claude-4-sonnet",
+		Config: SessionConfig{
+			Model: "anthropic/claude-4-sonnet",
+		},
 	})
 	if err != nil {
 		t.Fatalf("Update session model: %v", err)
 	}
-	if updatedA2.Model != "anthropic/claude-4-sonnet" {
-		t.Errorf("updatedA2.Model = %q, want %q", updatedA2.Model, "anthropic/claude-4-sonnet")
+	if updatedA2.Config.Model != "anthropic/claude-4-sonnet" {
+		t.Errorf("updatedA2.Model = %q, want %q", updatedA2.Config.Model, "anthropic/claude-4-sonnet")
 	}
 
 	// Verify persistence via Get
@@ -843,7 +699,7 @@ OVERRIDE_AGENT_PROMPT_MARKER {{ if call .HasTool "shell" }}HAS_SHELL_TOOL{{ end 
 	if err != nil {
 		t.Fatalf("Get updated session: %v", err)
 	}
-	if fetchedA.Title != updatedA2.Title || fetchedA.Agent != updatedA2.Agent || fetchedA.Model != updatedA2.Model {
+	if fetchedA.Title != updatedA2.Title || fetchedA.Config.Agent != updatedA2.Config.Agent || fetchedA.Config.Model != updatedA2.Config.Model {
 		t.Errorf("Get mismatch after update: got %+v, want %+v", fetchedA, updatedA2)
 	}
 
@@ -865,36 +721,39 @@ func TestSendAndHistory(t *testing.T) {
 	}
 	db, _, gw, pub, mgr := setupTestEnv(t, prov)
 
-	sess, err := mgr.Create(ctx, CreateParams{Title: "Chat Loop"})
+	sess, _, err := mgr.Create(ctx, CreateParams{Title: "Chat Loop"})
 	if err != nil {
 		t.Fatalf("Create error: %v", err)
 	}
 
 	// Validation checks on Send and History
-	if _, err := mgr.Send(ctx, "", message.NewUserText("hi")); !errors.Is(err, ErrEmptySessionID) {
-		t.Errorf("Send empty sessionID error = %v, want %v", err, ErrEmptySessionID)
-	}
-	if _, err := mgr.Send(ctx, "missing", message.NewUserText("hi")); !errors.Is(err, ErrSessionNotFound) {
-		t.Errorf("Send missing sessionID error = %v, want %v", err, ErrSessionNotFound)
-	}
-	if _, err := mgr.Send(ctx, sess.ID, nil); !errors.Is(err, ErrNilMessage) {
+	if err := sess.Send(ctx, SendInput{Message: nil}); !errors.Is(err, ErrNilMessage) {
 		t.Errorf("Send nil input error = %v, want %v", err, ErrNilMessage)
 	}
-	if _, err := mgr.History(ctx, "missing"); !errors.Is(err, ErrSessionNotFound) {
-		t.Errorf("History missing sessionID error = %v, want %v", err, ErrSessionNotFound)
+	var nilSess *Session
+	if _, err := nilSess.History(ctx); err == nil {
+		t.Errorf("History on nil session expected error")
 	}
 
 	pub.reset()
 
 	userIn := message.NewUserText("Greetings!")
-	reply, err := mgr.Send(ctx, sess.ID, userIn)
-	if err != nil {
+	if err := sess.Send(ctx, SendInput{Message: userIn}); err != nil {
 		t.Fatalf("Send error: %v", err)
 	}
+	if err := sess.Wait(ctx); err != nil {
+		t.Fatalf("Wait error: %v", err)
+	}
 
-	if reply == nil {
+	msgs, err := sess.History(ctx)
+	if err != nil || len(msgs) < 2 {
+		t.Fatalf("History error (%v) or too few messages (%d)", err, len(msgs))
+	}
+	reply, ok := msgs[1].(*message.Assistant)
+	if !ok || reply == nil {
 		t.Fatal("expected non-nil assistant reply")
 	}
+
 	if got := msgText(reply); got != "Hello, TaskSmith!" {
 		t.Errorf("reply text = %q, want %q", got, "Hello, TaskSmith!")
 	}
@@ -961,7 +820,7 @@ func TestSendAndHistory(t *testing.T) {
 	}
 
 	// Verify session.History returns [User, Assistant] from the messages table
-	history, err := mgr.History(ctx, sess.ID)
+	history, err := sess.History(ctx)
 	if err != nil {
 		t.Fatalf("History error: %v", err)
 	}
@@ -975,7 +834,7 @@ func TestSendAndHistory(t *testing.T) {
 		t.Errorf("history[1] = (%s, %q, %q), want (assistant, \"Hello, TaskSmith!\", %q)",
 			history[1].Role(), msgText(history[1]), history[1].GetID(), reply.GetID())
 	}
-	if !(history[0].GetID() < history[1].GetID()) {
+	if history[0].GetID() >= history[1].GetID() {
 		t.Errorf("expected UUIDv7 chronological order history[0].ID (%q) < history[1].ID (%q)", history[0].GetID(), history[1].GetID())
 	}
 
@@ -1001,31 +860,32 @@ func TestAppendMessageIsolationFromHarnessCheckpoints(t *testing.T) {
 	}
 	db, _, gw, pub, mgr := setupTestEnv(t, prov)
 
-	sess, err := mgr.Create(ctx, CreateParams{Title: "System Notice Thread"})
+	sess, _, err := mgr.Create(ctx, CreateParams{Title: "System Notice Thread"})
 	if err != nil {
 		t.Fatalf("Create error: %v", err)
 	}
 
 	// Validation checks on appendMessage
-	if err := mgr.appendMessage(ctx, "", message.NewSystemText("notice")); !errors.Is(err, ErrEmptySessionID) {
-		t.Errorf("appendMessage empty sessionID error = %v, want %v", err, ErrEmptySessionID)
+	var nilSess *Session
+	if err := nilSess.appendMessage(ctx, message.NewSystemText("notice")); err == nil {
+		t.Errorf("expected error appending message to nil session")
 	}
-	if err := mgr.appendMessage(ctx, "does-not-exist", message.NewSystemText("notice")); !errors.Is(err, ErrSessionNotFound) {
-		t.Errorf("appendMessage unknown sessionID error = %v, want %v", err, ErrSessionNotFound)
-	}
-	if err := mgr.appendMessage(ctx, sess.ID, nil); !errors.Is(err, ErrNilMessage) {
+	if err := sess.appendMessage(ctx, nil); !errors.Is(err, ErrNilMessage) {
 		t.Errorf("appendMessage nil message error = %v, want %v", err, ErrNilMessage)
 	}
 
 	// 1. Run a conversational turn via Send
-	if _, err := mgr.Send(ctx, sess.ID, message.NewUserText("Hello agent")); err != nil {
+	if err := sess.Send(ctx, SendInput{Message: message.NewUserText("Hello agent")}); err != nil {
 		t.Fatalf("Send error: %v", err)
+	}
+	if err := sess.Wait(ctx); err != nil {
+		t.Fatalf("Wait error: %v", err)
 	}
 
 	pub.reset()
 
 	// 2. Append a chat-only system message via appendMessage
-	if err := mgr.appendMessage(ctx, sess.ID, message.NewSystemText("Notice from system")); err != nil {
+	if err := sess.appendMessage(ctx, message.NewSystemText("Notice from system")); err != nil {
 		t.Fatalf("appendMessage error: %v", err)
 	}
 
@@ -1040,7 +900,7 @@ func TestAppendMessageIsolationFromHarnessCheckpoints(t *testing.T) {
 	}
 
 	// 3. Verify the RoleSystem message appears in session.History (messages table)
-	history, err := mgr.History(ctx, sess.ID)
+	history, err := sess.History(ctx)
 	if err != nil {
 		t.Fatalf("History error: %v", err)
 	}
@@ -1076,19 +936,12 @@ func TestFileTrackerCompactJournalAndBlobs(t *testing.T) {
 	ctx := context.Background()
 	_, ws, _, _, mgr := setupTestEnv(t, nil)
 
-	sess, err := mgr.Create(ctx, CreateParams{Title: "File Tracker Session"})
+	sess, _, err := mgr.Create(ctx, CreateParams{Title: "File Tracker Session"})
 	if err != nil {
 		t.Fatalf("Create error: %v", err)
 	}
 
-	if _, err := mgr.Journal(ctx, "non-existent"); !errors.Is(err, ErrSessionNotFound) {
-		t.Errorf("Journal non-existent session error = %v, want %v", err, ErrSessionNotFound)
-	}
-
-	jr, err := mgr.Journal(ctx, sess.ID)
-	if err != nil {
-		t.Fatalf("Journal error: %v", err)
-	}
+	jr := sess.Journal
 
 	sb, err := sandbox.New(sandbox.Config{
 		WorkDir: ws.RootDir(),
@@ -1224,14 +1077,11 @@ func TestFileTrackerDiffAndRecoverAt(t *testing.T) {
 	ctx := context.Background()
 	_, ws, _, _, mgr := setupTestEnv(t, nil)
 
-	sess, err := mgr.Create(ctx, CreateParams{Title: "Recovery Session"})
+	sess, _, err := mgr.Create(ctx, CreateParams{Title: "Recovery Session"})
 	if err != nil {
 		t.Fatalf("Create error: %v", err)
 	}
-	jr, err := mgr.Journal(ctx, sess.ID)
-	if err != nil {
-		t.Fatalf("Journal error: %v", err)
-	}
+	jr := sess.Journal
 
 	sb, err := sandbox.New(sandbox.Config{
 		WorkDir: ws.RootDir(),
@@ -1340,14 +1190,11 @@ func TestFileTrackerRevertToBaselineThreeWayMerge(t *testing.T) {
 	ctx := context.Background()
 	_, ws, _, _, mgr := setupTestEnv(t, nil)
 
-	sess, err := mgr.Create(ctx, CreateParams{Title: "Merge3 Revert Session"})
+	sess, _, err := mgr.Create(ctx, CreateParams{Title: "Merge3 Revert Session"})
 	if err != nil {
 		t.Fatalf("Create error: %v", err)
 	}
-	jr, err := mgr.Journal(ctx, sess.ID)
-	if err != nil {
-		t.Fatalf("Journal error: %v", err)
-	}
+	jr := sess.Journal
 
 	sb, err := sandbox.New(sandbox.Config{
 		WorkDir: ws.RootDir(),
@@ -1446,15 +1293,12 @@ func TestFileTrackerReloadAndDeleteSessionCleanup(t *testing.T) {
 	ctx := context.Background()
 	db, ws, gw, pub, mgr := setupTestEnv(t, nil)
 
-	sess, err := mgr.Create(ctx, CreateParams{Title: "Persistent Tracker"})
+	sess, _, err := mgr.Create(ctx, CreateParams{Title: "Persistent Tracker"})
 	if err != nil {
 		t.Fatalf("Create error: %v", err)
 	}
 
-	jr1, err := mgr.Journal(ctx, sess.ID)
-	if err != nil {
-		t.Fatalf("Journal 1 error: %v", err)
-	}
+	jr1 := sess.Journal
 
 	content := []byte("package main\n")
 	hash := sha256Hex(content)
@@ -1471,28 +1315,22 @@ func TestFileTrackerReloadAndDeleteSessionCleanup(t *testing.T) {
 	}
 
 	// Construct a second Manager over the same DB and Workspace (simulating process restart)
-	tl2, err := timeline.New(ctx, db)
-	if err != nil {
-		t.Fatalf("timeline.New tl2 error: %v", err)
-	}
 	mgr2, err := New(Config{
 		DB:        db,
 		Workspace: ws,
 		Gateway:   gw,
-		Sandbox:   mgr.sandbox,
 		Publisher: pub,
 		Logger:    log.Default(),
-		Timeline:  tl2,
-		Journal:   mgr.journal,
 	})
 	if err != nil {
 		t.Fatalf("New mgr2 error: %v", err)
 	}
 
-	jr2, err := mgr2.Journal(ctx, sess.ID)
+	sess2, err := mgr2.Get(ctx, sess.ID)
 	if err != nil {
-		t.Fatalf("Journal 2 error: %v", err)
+		t.Fatalf("Get 2 error: %v", err)
 	}
+	jr2 := sess2.Journal
 
 	gotHash, ok := jr2.LastHash("main.go")
 	if !ok || gotHash != hash {
@@ -1507,10 +1345,7 @@ func TestFileTrackerReloadAndDeleteSessionCleanup(t *testing.T) {
 	}
 
 	// Delete session and verify <WorkspaceDir>/sessions/<sess.ID> is removed from disk
-	sessDir, err := mgr2.sessionDir(sess.ID)
-	if err != nil {
-		t.Fatalf("sessionDir: %v", err)
-	}
+	sessDir := sess.Root
 	if _, err := os.Stat(sessDir); err != nil {
 		t.Fatalf("expected sessionDir %q to exist before Delete: %v", sessDir, err)
 	}
@@ -1586,29 +1421,36 @@ func TestMultiStepToolExecutionAndFileTracker(t *testing.T) {
 		t.Fatalf("WriteFile hello.txt: %v", err)
 	}
 
-	sess, err := mgr.Create(ctx, CreateParams{Title: "Multi-step Tool Session"})
+	sess, _, err := mgr.Create(ctx, CreateParams{Title: "Multi-step Tool Session"})
 	if err != nil {
 		t.Fatalf("Create error: %v", err)
 	}
 
 	pub.reset()
 
-	reply, err := mgr.Send(ctx, sess.ID, message.NewUserText("Read hello.txt please"))
-	if err != nil {
+	if err := sess.Send(ctx, SendInput{Message: message.NewUserText("Read hello.txt please")}); err != nil {
 		t.Fatalf("Send error: %v", err)
 	}
-	if reply == nil {
-		t.Fatal("expected non-nil final assistant reply")
-	}
-	if got := msgText(reply); got != "The file says: Hello from disk!" {
-		t.Errorf("reply text = %q, want %q", got, "The file says: Hello from disk!")
+	if err := sess.Wait(ctx); err != nil {
+		t.Fatalf("Wait error: %v", err)
 	}
 
 	// Verify History in SQLite messages table contains:
 	// [User, Assistant(ToolCall), Tool(Result), Assistant(Final)] in exact id ASC order!
-	history, err := mgr.History(ctx, sess.ID)
+	history, err := sess.History(ctx)
 	if err != nil {
 		t.Fatalf("History error: %v", err)
+	}
+	if len(history) != 4 {
+		t.Fatalf("expected 4 messages in History, got %d: %+v", len(history), history)
+	}
+
+	reply, ok := history[len(history)-1].(*message.Assistant)
+	if !ok || reply == nil {
+		t.Fatal("expected non-nil final assistant reply")
+	}
+	if got := msgText(reply); got != "The file says: Hello from disk!" {
+		t.Errorf("reply text = %q, want %q", got, "The file says: Hello from disk!")
 	}
 	if len(history) != 4 {
 		t.Fatalf("expected 4 messages in History, got %d: %+v", len(history), history)
@@ -1624,7 +1466,7 @@ func TestMultiStepToolExecutionAndFileTracker(t *testing.T) {
 		if history[i].Role() != wantRole {
 			t.Errorf("history[%d].Role() = %q, want %q", i, history[i].Role(), wantRole)
 		}
-		if i > 0 && !(history[i-1].GetID() < history[i].GetID()) {
+		if i > 0 && (history[i-1].GetID() >= history[i].GetID()) {
 			t.Errorf("expected chronological UUIDv7 ordering history[%d].ID (%q) < history[%d].ID (%q)",
 				i-1, history[i-1].GetID(), i, history[i].GetID())
 		}
@@ -1652,10 +1494,7 @@ func TestMultiStepToolExecutionAndFileTracker(t *testing.T) {
 	}
 
 	// Verify Journal(ctx, sess.ID) recorded the file read!
-	jr, err := mgr.Journal(ctx, sess.ID)
-	if err != nil {
-		t.Fatalf("Journal error: %v", err)
-	}
+	jr := sess.Journal
 	gotHash, ok := jr.LastHash("hello.txt")
 	if !ok || gotHash != sha256Hex(fileBytes) {
 		t.Errorf("Journal.LastHash(\"hello.txt\") = (%q, %v), want (%q, true)", gotHash, ok, sha256Hex(fileBytes))
@@ -1712,20 +1551,23 @@ func TestMultiPermissionInterruptAndAllOrNothingRespondPermission(t *testing.T) 
 
 	_, ws, _, pub, mgr := setupTestEnv(t, prov)
 
-	sess, err := mgr.Create(ctx, CreateParams{Title: "All-Or-Nothing Permissions"})
+	sess, _, err := mgr.Create(ctx, CreateParams{Title: "All-Or-Nothing Permissions"})
 	if err != nil {
 		t.Fatalf("Create error: %v", err)
 	}
 
 	pub.reset()
 
-	// 1. Send triggers 2 write tool calls -> interrupts with 2 permissions and returns (nil, nil)
-	reply, err := mgr.Send(ctx, sess.ID, message.NewUserText("Write file1.txt and file2.txt"))
+	// 1. Send triggers 2 write tool calls -> interrupts with 2 permissions
+	err = sess.Send(ctx, SendInput{Message: message.NewUserText("Write file1.txt and file2.txt")})
 	if err != nil {
 		t.Fatalf("Send error: %v", err)
 	}
-	if reply != nil {
-		t.Fatalf("expected nil reply while paused on permissions, got %+v", reply)
+	if err := sess.Wait(ctx); err != nil {
+		t.Fatalf("Wait error: %v", err)
+	}
+	if sess.Status != StatusWaitingPermission {
+		t.Fatalf("expected StatusWaitingPermission, got %v", sess.Status)
 	}
 
 	// Verify PermissionRequestedEvent was published with 2 permissions
@@ -1741,40 +1583,44 @@ func TestMultiPermissionInterruptAndAllOrNothingRespondPermission(t *testing.T) 
 	}
 
 	// Verify PendingPermissions returns 2 items
-	pending, err := mgr.PendingPermissions(ctx, sess.ID)
+	liveSess, err := mgr.Get(ctx, sess.ID)
 	if err != nil {
-		t.Fatalf("PendingPermissions error: %v", err)
+		t.Fatalf("Get error: %v", err)
 	}
+	pending := liveSess.PendingPermissions
 	if len(pending) != 2 {
 		t.Fatalf("expected 2 pending permissions, got %d", len(pending))
 	}
 
 	// Validation error checks on RespondPermission
-	if _, err := mgr.RespondPermission(ctx, sess.ID, tools.PermissionDecision{
-		RequestID: pending[0].ID,
-		Kind:      "invalid_kind",
+	if err := sess.Send(ctx, SendInput{
+		Decision: &tools.PermissionDecision{
+			RequestID: pending[0].ID,
+			Kind:      "invalid_kind",
+		},
 	}); !errors.Is(err, ErrInvalidDecision) {
 		t.Errorf("RespondPermission invalid kind error = %v, want %v", err, ErrInvalidDecision)
 	}
-	if _, err := mgr.RespondPermission(ctx, sess.ID, tools.PermissionDecision{
-		RequestID: "non-existent-req-id",
-		Kind:      tools.DecisionAllowOnce,
+	if err := sess.Send(ctx, SendInput{
+		Decision: &tools.PermissionDecision{
+			RequestID: "non-existent-req-id",
+			Kind:      tools.DecisionAllowOnce,
+		},
 	}); !errors.Is(err, ErrPermissionNotFound) {
 		t.Errorf("RespondPermission unknown request ID error = %v, want %v", err, ErrPermissionNotFound)
 	}
 
 	pub.reset()
 
-	// 2. Respond to permission #1 ONLY -> must buffer decision and return (nil, nil) WITHOUT calling the graph!
-	reply1, err := mgr.RespondPermission(ctx, sess.ID, tools.PermissionDecision{
-		RequestID: pending[0].ID,
-		Kind:      tools.DecisionAllowOnce,
+	// 2. Respond to permission #1 ONLY -> must buffer decision and return WITHOUT calling the graph!
+	err = sess.Send(ctx, SendInput{
+		Decision: &tools.PermissionDecision{
+			RequestID: pending[0].ID,
+			Kind:      tools.DecisionAllowOnce,
+		},
 	})
 	if err != nil {
 		t.Fatalf("RespondPermission #1 error: %v", err)
-	}
-	if reply1 != nil {
-		t.Fatalf("expected nil reply after resolving only 1 of 2 permissions, got %+v", reply1)
 	}
 	if len(prov.recordedTurns()) != 1 {
 		t.Fatalf("expected graph NOT to be called until all permissions resolved, got %d LLM turns", len(prov.recordedTurns()))
@@ -1793,24 +1639,36 @@ func TestMultiPermissionInterruptAndAllOrNothingRespondPermission(t *testing.T) 
 	}
 
 	// Verify PendingPermissions now returns ONLY permission #2!
-	remaining, err := mgr.PendingPermissions(ctx, sess.ID)
+	liveSess, err = mgr.Get(ctx, sess.ID)
 	if err != nil {
-		t.Fatalf("PendingPermissions after #1 error: %v", err)
+		t.Fatalf("Get error: %v", err)
 	}
+	remaining := liveSess.PendingPermissions
 	if len(remaining) != 1 || remaining[0].ID != pending[1].ID {
 		t.Fatalf("PendingPermissions after #1 = %+v, want only [%s]", remaining, pending[1].ID)
 	}
 
 	// 3. Respond to permission #2 (rejecting it with feedback) -> triggers h.Resume!
-	finalReply, err := mgr.RespondPermission(ctx, sess.ID, tools.PermissionDecision{
-		RequestID: pending[1].ID,
-		Kind:      tools.DecisionReject,
-		Feedback:  "Do not create file2.txt",
+	err = sess.Send(ctx, SendInput{
+		Decision: &tools.PermissionDecision{
+			RequestID: pending[1].ID,
+			Kind:      tools.DecisionReject,
+			Feedback:  "Do not create file2.txt",
+		},
 	})
 	if err != nil {
 		t.Fatalf("RespondPermission #2 error: %v", err)
 	}
-	if finalReply == nil {
+	if err := sess.Wait(ctx); err != nil {
+		t.Fatalf("Wait error: %v", err)
+	}
+
+	history, err := sess.History(ctx)
+	if err != nil {
+		t.Fatalf("History error: %v", err)
+	}
+	finalReply, ok := history[len(history)-1].(*message.Assistant)
+	if !ok || finalReply == nil {
 		t.Fatal("expected non-nil final assistant reply after resolving all permissions")
 	}
 	if got := msgText(finalReply); got != "Wrote file1.txt and skipped file2.txt as requested." {
@@ -1829,10 +1687,7 @@ func TestMultiPermissionInterruptAndAllOrNothingRespondPermission(t *testing.T) 
 		t.Errorf("expected rejected file2.txt not to exist on disk, stat err = %v", err)
 	}
 
-	jr, err := mgr.Journal(ctx, sess.ID)
-	if err != nil {
-		t.Fatalf("Journal error: %v", err)
-	}
+	jr := sess.Journal
 	entries, err := jr.ChangesForPath(ctx, "file1.txt")
 	if err != nil {
 		t.Fatalf("ChangesForPath(\"file1.txt\") error: %v", err)
@@ -1841,26 +1696,25 @@ func TestMultiPermissionInterruptAndAllOrNothingRespondPermission(t *testing.T) 
 		t.Errorf("unexpected journal entries for file1.txt: %+v", entries)
 	}
 
-	// Verify PendingPermissions is now empty and RespondPermission returns ErrNoPendingPermissions
-	afterPerms, err := mgr.PendingPermissions(ctx, sess.ID)
+	// Verify PendingPermissions is now empty and RespondPermission returns ErrPermissionNotFound
+	liveSess, err = mgr.Get(ctx, sess.ID)
 	if err != nil {
-		t.Fatalf("PendingPermissions after completion error: %v", err)
+		t.Fatalf("Get error: %v", err)
 	}
+	afterPerms := liveSess.PendingPermissions
 	if len(afterPerms) != 0 {
 		t.Errorf("expected 0 pending permissions after completion, got %d", len(afterPerms))
 	}
-	if _, err := mgr.RespondPermission(ctx, sess.ID, tools.PermissionDecision{
-		RequestID: pending[0].ID,
-		Kind:      tools.DecisionAllowOnce,
-	}); !errors.Is(err, ErrNoPendingPermissions) {
-		t.Errorf("RespondPermission with no pending permissions error = %v, want %v", err, ErrNoPendingPermissions)
+	if err := sess.Send(ctx, SendInput{
+		Decision: &tools.PermissionDecision{
+			RequestID: pending[0].ID,
+			Kind:      tools.DecisionAllowOnce,
+		},
+	}); !errors.Is(err, ErrPermissionNotFound) {
+		t.Errorf("RespondPermission with no pending permissions error = %v, want %v", err, ErrPermissionNotFound)
 	}
 
 	// Verify History contains [User, Assistant(ToolCalls), Tool1, Tool2, Assistant(Final)] in exact id ASC order
-	history, err := mgr.History(ctx, sess.ID)
-	if err != nil {
-		t.Fatalf("History error: %v", err)
-	}
 	if len(history) != 5 {
 		t.Fatalf("expected 5 messages in History, got %d: %+v", len(history), history)
 	}
@@ -1875,7 +1729,7 @@ func TestMultiPermissionInterruptAndAllOrNothingRespondPermission(t *testing.T) 
 		if history[i].Role() != wantRole {
 			t.Errorf("history[%d].Role() = %q, want %q", i, history[i].Role(), wantRole)
 		}
-		if i > 0 && !(history[i-1].GetID() < history[i].GetID()) {
+		if i > 0 && (history[i-1].GetID() >= history[i].GetID()) {
 			t.Errorf("expected chronological UUIDv7 ordering history[%d].ID (%q) < history[%d].ID (%q)",
 				i-1, history[i-1].GetID(), i, history[i].GetID())
 		}
@@ -1935,40 +1789,49 @@ func TestCancelPendingPermissionsOnNewUserSend(t *testing.T) {
 
 	_, ws, _, _, mgr := setupTestEnv(t, prov)
 
-	sess, err := mgr.Create(ctx, CreateParams{Title: "Cancel Pending Permissions"})
+	sess, _, err := mgr.Create(ctx, CreateParams{Title: "Cancel Pending Permissions"})
 	if err != nil {
 		t.Fatalf("Create error: %v", err)
 	}
 
 	// 1. First Send pauses awaiting 2 permissions
-	reply1, err := mgr.Send(ctx, sess.ID, message.NewUserText("Write cancel1.txt and cancel2.txt"))
+	err = sess.Send(ctx, SendInput{Message: message.NewUserText("Write cancel1.txt and cancel2.txt")})
 	if err != nil {
 		t.Fatalf("Send 1 error: %v", err)
 	}
-	if reply1 != nil {
-		t.Fatalf("expected nil reply while paused, got %+v", reply1)
+	if err := sess.Wait(ctx); err != nil {
+		t.Fatalf("Wait 1 error: %v", err)
+	}
+	if sess.Status != StatusWaitingPermission {
+		t.Fatalf("expected StatusWaitingPermission, got %v", sess.Status)
 	}
 
-	pending, err := mgr.PendingPermissions(ctx, sess.ID)
-	if err != nil || len(pending) != 2 {
-		t.Fatalf("expected 2 pending permissions, got (%d, %v)", len(pending), err)
+	liveSess, err := mgr.Get(ctx, sess.ID)
+	if err != nil {
+		t.Fatalf("Get error: %v", err)
+	}
+	pending := liveSess.PendingPermissions
+	if len(pending) != 2 {
+		t.Fatalf("expected 2 pending permissions, got %d", len(pending))
 	}
 
 	// Buffer a partial decision for permission #1
-	if _, err := mgr.RespondPermission(ctx, sess.ID, tools.PermissionDecision{
-		RequestID: pending[0].ID,
-		Kind:      tools.DecisionAllowOnce,
+	if err := sess.Send(ctx, SendInput{
+		Decision: &tools.PermissionDecision{
+			RequestID: pending[0].ID,
+			Kind:      tools.DecisionAllowOnce,
+		},
 	}); err != nil {
 		t.Fatalf("RespondPermission partial error: %v", err)
 	}
 
 	// 2. Call Send with a new user message while permissions are pending!
-	reply2, err := mgr.Send(ctx, sess.ID, message.NewUserText("Actually, cancel that and do something else"))
+	err = sess.Send(ctx, SendInput{Message: message.NewUserText("Actually, cancel that and do something else")})
 	if err != nil {
 		t.Fatalf("Send 2 error: %v", err)
 	}
-	if reply2 == nil || msgText(reply2) != "Understood, canceled those writes and moving on." {
-		t.Fatalf("unexpected reply2: %+v", reply2)
+	if err := sess.Wait(ctx); err != nil {
+		t.Fatalf("Wait 2 error: %v", err)
 	}
 
 	// Verify neither file was written
@@ -1981,12 +1844,16 @@ func TestCancelPendingPermissionsOnNewUserSend(t *testing.T) {
 	// Verify History (ORDER BY id ASC) returns:
 	// [User1, Assistant1(ToolCalls), Tool1(Canceled), Tool2(Canceled), User2, Assistant2]
 	// in exact chronological order!
-	history, err := mgr.History(ctx, sess.ID)
+	history, err := sess.History(ctx)
 	if err != nil {
 		t.Fatalf("History error: %v", err)
 	}
 	if len(history) != 6 {
 		t.Fatalf("expected 6 messages in History, got %d: %+v", len(history), history)
+	}
+	reply2, ok := history[len(history)-1].(*message.Assistant)
+	if !ok || reply2 == nil || msgText(reply2) != "Understood, canceled those writes and moving on." {
+		t.Fatalf("unexpected reply2: %+v", reply2)
 	}
 
 	wantRoles := []message.Role{
@@ -2001,7 +1868,7 @@ func TestCancelPendingPermissionsOnNewUserSend(t *testing.T) {
 		if history[i].Role() != wantRole {
 			t.Errorf("history[%d].Role() = %q, want %q", i, history[i].Role(), wantRole)
 		}
-		if i > 0 && !(history[i-1].GetID() < history[i].GetID()) {
+		if i > 0 && (history[i-1].GetID() >= history[i].GetID()) {
 			t.Errorf("expected chronological UUIDv7 ordering history[%d].ID (%q) < history[%d].ID (%q)",
 				i-1, history[i-1].GetID(), i, history[i].GetID())
 		}
@@ -2028,17 +1895,13 @@ func TestPermissionModeGetAndSet(t *testing.T) {
 	ctx := context.Background()
 	_, _, _, _, mgr := setupTestEnv(t, nil)
 
-	sess, err := mgr.Create(ctx, CreateParams{Title: "Permission Modes"})
+	sess, _, err := mgr.Create(ctx, CreateParams{Title: "Permission Modes"})
 	if err != nil {
 		t.Fatalf("Create error: %v", err)
 	}
 
-	mode, err := mgr.PermissionMode(ctx, sess.ID)
-	if err != nil {
-		t.Fatalf("PermissionMode error: %v", err)
-	}
-	if mode != tools.ModeDefault {
-		t.Errorf("initial PermissionMode = %q, want %q", mode, tools.ModeDefault)
+	if sess.Config.Mode != tools.ModeDefault {
+		t.Errorf("initial PermissionMode = %q, want %q", sess.Config.Mode, tools.ModeDefault)
 	}
 
 	for _, nextMode := range []tools.PermissionMode{
@@ -2048,20 +1911,24 @@ func TestPermissionModeGetAndSet(t *testing.T) {
 		tools.ModeAuto,
 		tools.ModeDefault,
 	} {
-		if err := mgr.SetPermissionMode(ctx, sess.ID, nextMode); err != nil {
-			t.Fatalf("SetPermissionMode(%q) error: %v", nextMode, err)
-		}
-		got, err := mgr.PermissionMode(ctx, sess.ID)
+		updated, err := mgr.Update(ctx, sess.ID, UpdateParams{Config: SessionConfig{Mode: nextMode}})
 		if err != nil {
-			t.Fatalf("PermissionMode after SetPermissionMode(%q) error: %v", nextMode, err)
+			t.Fatalf("Update(%q) error: %v", nextMode, err)
 		}
-		if got != nextMode {
-			t.Errorf("PermissionMode = %q, want %q", got, nextMode)
+		if updated.Config.Mode != nextMode {
+			t.Errorf("PermissionMode = %q, want %q", updated.Config.Mode, nextMode)
+		}
+		got, err := mgr.Get(ctx, sess.ID)
+		if err != nil {
+			t.Fatalf("Get after Update(%q) error: %v", nextMode, err)
+		}
+		if got.Config.Mode != nextMode {
+			t.Errorf("Get PermissionMode = %q, want %q", got.Config.Mode, nextMode)
 		}
 	}
 
-	if err := mgr.SetPermissionMode(ctx, sess.ID, "invalid_mode"); !errors.Is(err, ErrInvalidConfig) {
-		t.Errorf("SetPermissionMode invalid mode error = %v, want %v", err, ErrInvalidConfig)
+	if _, err := mgr.Update(ctx, sess.ID, UpdateParams{Config: SessionConfig{Mode: "invalid_mode"}}); !errors.Is(err, ErrInvalidConfig) {
+		t.Errorf("Update invalid mode error = %v, want %v", err, ErrInvalidConfig)
 	}
 }
 
@@ -2107,28 +1974,19 @@ func TestTimelineRecordEvents(t *testing.T) {
 
 	db, _, _, pub, mgr := setupTestEnv(t, prov)
 
-	// 1. Validation checks on Timeline
-	if _, err := mgr.Timeline(ctx, ""); !errors.Is(err, ErrEmptySessionID) {
-		t.Errorf("Timeline empty sessionID error = %v, want %v", err, ErrEmptySessionID)
-	}
-	if _, err := mgr.Timeline(ctx, "   "); !errors.Is(err, ErrEmptySessionID) {
-		t.Errorf("Timeline blank sessionID error = %v, want %v", err, ErrEmptySessionID)
-	}
-	if _, err := mgr.Timeline(ctx, "missing-session"); !errors.Is(err, ErrSessionNotFound) {
-		t.Errorf("Timeline missing session error = %v, want %v", err, ErrSessionNotFound)
-	}
-
-	// 2. Create session and verify empty initial timeline
-	sess, err := mgr.Create(ctx, CreateParams{
+	// 1. Create session and verify empty initial timeline
+	sess, _, err := mgr.Create(ctx, CreateParams{
 		Title: "Timeline Lifecycle",
-		Agent: "code-reviewer",
-		Model: "sonnet",
+		Config: SessionConfig{
+			Agent: "code-reviewer",
+			Model: "sonnet",
+		},
 	})
 	if err != nil {
 		t.Fatalf("Create session: %v", err)
 	}
 
-	initialTimeline, err := mgr.Timeline(ctx, sess.ID)
+	initialTimeline, err := sess.Timeline.List(ctx)
 	if err != nil {
 		t.Fatalf("Timeline initial: %v", err)
 	}
@@ -2136,13 +1994,13 @@ func TestTimelineRecordEvents(t *testing.T) {
 		t.Fatalf("expected empty initial timeline, got %d entries", len(initialTimeline))
 	}
 
-	// 3. Append a user message and verify KindMessage entry
+	// 2. Append a user message and verify KindMessage entry
 	userMsg := message.NewUserText("Please review this code")
-	if err := mgr.AppendMessage(ctx, sess.ID, userMsg); err != nil {
+	if err := sess.appendMessage(ctx, userMsg); err != nil {
 		t.Fatalf("AppendMessage error: %v", err)
 	}
 
-	tl1, err := mgr.Timeline(ctx, sess.ID)
+	tl1, err := sess.Timeline.List(ctx)
 	if err != nil {
 		t.Fatalf("Timeline after message: %v", err)
 	}
@@ -2156,18 +2014,18 @@ func TestTimelineRecordEvents(t *testing.T) {
 		t.Errorf("tl1[0].Message text = %v, want %q", tl1[0].Message, "Please review this code")
 	}
 
-	// 4. Update Model and verify KindModel entry
-	oldModel := sess.Model
+	// 3. Update Model and verify KindModel entry
+	oldModel := sess.Config.Model
 	newModelRaw := "claude-3-5-sonnet"
-	updatedSess, err := mgr.Update(ctx, sess.ID, UpdateParams{Model: newModelRaw})
+	updatedSess, err := mgr.Update(ctx, sess.ID, UpdateParams{Config: SessionConfig{Model: newModelRaw}})
 	if err != nil {
 		t.Fatalf("Update model error: %v", err)
 	}
-	if updatedSess.Model == oldModel {
+	if updatedSess.Config.Model == oldModel {
 		t.Fatalf("expected model to change from %q", oldModel)
 	}
 
-	tl2, err := mgr.Timeline(ctx, sess.ID)
+	tl2, err := sess.Timeline.List(ctx)
 	if err != nil {
 		t.Fatalf("Timeline after model update: %v", err)
 	}
@@ -2177,19 +2035,19 @@ func TestTimelineRecordEvents(t *testing.T) {
 	if tl2[1].Kind != timeline.KindModel {
 		t.Errorf("tl2[1].Kind = %q, want %q", tl2[1].Kind, timeline.KindModel)
 	}
-	if tl2[1].Model == nil || tl2[1].Model.From != oldModel || tl2[1].Model.To != updatedSess.Model {
-		t.Errorf("tl2[1].Model = %+v, want From=%q To=%q", tl2[1].Model, oldModel, updatedSess.Model)
+	if tl2[1].Model == nil || tl2[1].Model.From != oldModel || tl2[1].Model.To != updatedSess.Config.Model {
+		t.Errorf("tl2[1].Model = %+v, want From=%q To=%q", tl2[1].Model, oldModel, updatedSess.Config.Model)
 	}
 
-	// 5. Update Agent and verify KindAgent entry
-	oldAgent := updatedSess.Agent
+	// 4. Update Agent and verify KindAgent entry
+	oldAgent := updatedSess.Config.Agent
 	newAgent := "general-assistant"
-	updatedSess, err = mgr.Update(ctx, sess.ID, UpdateParams{Agent: newAgent})
+	_, err = mgr.Update(ctx, sess.ID, UpdateParams{Config: SessionConfig{Agent: newAgent}})
 	if err != nil {
 		t.Fatalf("Update agent error: %v", err)
 	}
 
-	tl3, err := mgr.Timeline(ctx, sess.ID)
+	tl3, err := sess.Timeline.List(ctx)
 	if err != nil {
 		t.Fatalf("Timeline after agent update: %v", err)
 	}
@@ -2203,12 +2061,12 @@ func TestTimelineRecordEvents(t *testing.T) {
 		t.Errorf("tl3[2].Agent = %+v, want From=%q To=%q", tl3[2].Agent, oldAgent, newAgent)
 	}
 
-	// 6. Change permission mode and verify KindMode entry
-	if err := mgr.SetPermissionMode(ctx, sess.ID, tools.ModePlan); err != nil {
-		t.Fatalf("SetPermissionMode(ModePlan) error: %v", err)
+	// 5. Change permission mode and verify KindMode entry
+	if _, err := mgr.Update(ctx, sess.ID, UpdateParams{Config: SessionConfig{Mode: tools.ModePlan}}); err != nil {
+		t.Fatalf("Update(ModePlan) error: %v", err)
 	}
 
-	tl4, err := mgr.Timeline(ctx, sess.ID)
+	tl4, err := sess.Timeline.List(ctx)
 	if err != nil {
 		t.Fatalf("Timeline after mode change: %v", err)
 	}
@@ -2223,10 +2081,10 @@ func TestTimelineRecordEvents(t *testing.T) {
 	}
 
 	// Setting the same mode again should NOT append an entry
-	if err := mgr.SetPermissionMode(ctx, sess.ID, tools.ModePlan); err != nil {
-		t.Fatalf("SetPermissionMode duplicate error: %v", err)
+	if _, err := mgr.Update(ctx, sess.ID, UpdateParams{Config: SessionConfig{Mode: tools.ModePlan}}); err != nil {
+		t.Fatalf("Update duplicate error: %v", err)
 	}
-	tl4Dup, err := mgr.Timeline(ctx, sess.ID)
+	tl4Dup, err := sess.Timeline.List(ctx)
 	if err != nil {
 		t.Fatalf("Timeline after duplicate mode: %v", err)
 	}
@@ -2235,10 +2093,10 @@ func TestTimelineRecordEvents(t *testing.T) {
 	}
 
 	// Reset mode to default so the tool call requires approval
-	if err := mgr.SetPermissionMode(ctx, sess.ID, tools.ModeDefault); err != nil {
-		t.Fatalf("SetPermissionMode(ModeDefault) error: %v", err)
+	if _, err := mgr.Update(ctx, sess.ID, UpdateParams{Config: SessionConfig{Mode: tools.ModeDefault}}); err != nil {
+		t.Fatalf("Update(ModeDefault) error: %v", err)
 	}
-	tl5, err := mgr.Timeline(ctx, sess.ID)
+	tl5, err := sess.Timeline.List(ctx)
 	if err != nil {
 		t.Fatalf("Timeline after mode reset: %v", err)
 	}
@@ -2249,19 +2107,22 @@ func TestTimelineRecordEvents(t *testing.T) {
 		t.Errorf("tl5[4].Mode = %+v, want From=%q To=%q", tl5[4].Mode, tools.ModePlan, tools.ModeDefault)
 	}
 
-	// 7. Send tool-calling turn to trigger permission interrupt
-	reply, err := mgr.Send(ctx, sess.ID, message.NewUserText("Write a file"))
-	if err != nil {
+	// 6. Send tool-calling turn to trigger permission interrupt
+	if err := sess.Send(ctx, SendInput{Message: message.NewUserText("Write a file")}); err != nil {
 		t.Fatalf("Send error: %v", err)
 	}
-	if reply != nil {
-		t.Fatalf("expected nil reply while paused on permissions, got %+v", reply)
+	if err := sess.Wait(ctx); err != nil {
+		t.Fatalf("Wait error: %v", err)
+	}
+	if sess.Status != StatusWaitingPermission {
+		t.Fatalf("expected StatusWaitingPermission, got %v", sess.Status)
 	}
 
-	pending, err := mgr.PendingPermissions(ctx, sess.ID)
+	liveSess, err := mgr.Get(ctx, sess.ID)
 	if err != nil {
-		t.Fatalf("PendingPermissions: %v", err)
+		t.Fatalf("Get: %v", err)
 	}
+	pending := liveSess.PendingPermissions
 	if len(pending) != 1 {
 		t.Fatalf("expected 1 pending permission, got %d", len(pending))
 	}
@@ -2271,7 +2132,7 @@ func TestTimelineRecordEvents(t *testing.T) {
 		RequestID: pending[0].ID,
 		Kind:      tools.DecisionAllowOnce,
 	}
-	ready, err := mgr.RecordDecision(ctx, sess.ID, dec)
+	ready, err := sess.recordDecision(ctx, dec)
 	if err != nil {
 		t.Fatalf("RecordDecision error: %v", err)
 	}
@@ -2279,7 +2140,7 @@ func TestTimelineRecordEvents(t *testing.T) {
 		t.Errorf("expected ready = true after resolving only pending permission")
 	}
 
-	tl6, err := mgr.Timeline(ctx, sess.ID)
+	tl6, err := sess.Timeline.List(ctx)
 	if err != nil {
 		t.Fatalf("Timeline after permission decision: %v", err)
 	}
@@ -2313,14 +2174,14 @@ func TestTimelineRecordEvents(t *testing.T) {
 
 	// 8. Verify strict UUIDv7 ascending chronological ordering
 	for i := 0; i < len(tl6)-1; i++ {
-		if !(tl6[i].ID < tl6[i+1].ID) {
+		if tl6[i].ID >= tl6[i+1].ID {
 			t.Errorf("expected strictly ascending entry IDs: tl6[%d].ID=%q >= tl6[%d].ID=%q",
 				i, tl6[i].ID, i+1, tl6[i+1].ID)
 		}
 	}
 
 	// 9. Verify History returns only KindMessage entries
-	history, err := mgr.History(ctx, sess.ID)
+	history, err := sess.History(ctx)
 	if err != nil {
 		t.Fatalf("History error: %v", err)
 	}
@@ -2351,5 +2212,149 @@ func TestTimelineRecordEvents(t *testing.T) {
 	}
 	if count != 0 {
 		t.Errorf("expected 0 timeline entries for deleted session, got %d", count)
+	}
+}
+
+func TestTargetedSessionFixes(t *testing.T) {
+	ctx := context.Background()
+
+	prov := &fakeProvider{
+		chunkHandler: func(_ context.Context, req *llm.Request) ([]message.AssistantChunk, error) {
+			return []message.AssistantChunk{
+				{
+					BaseChunk: message.BaseChunk{ID: uuid.NewString()},
+					Model:     req.Model,
+					Content: []message.Block{
+						&message.ToolCall{
+							ID:   "call-write-1",
+							Name: "write",
+							Args: map[string]any{
+								"path":    "demo.txt",
+								"content": "hello",
+							},
+						},
+					},
+					Done: true,
+				},
+			}, nil
+		},
+	}
+
+	db, ws, gw, pub, mgr := setupTestEnv(t, prov)
+
+	// 1. Verify sessionDir uses xdg.WorkspaceDir and does NOT create a sessions/ dir in ws.RootDir()
+	sess, _, err := mgr.Create(ctx, CreateParams{
+		Title: "Test Fixes",
+		Config: SessionConfig{
+			Effort: "low",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	wsDataDir, err := xdg.WorkspaceDir(ws.RootDir())
+	if err != nil {
+		t.Fatalf("xdg.WorkspaceDir: %v", err)
+	}
+	expectedRoot := filepath.Join(wsDataDir, "sessions", sess.ID)
+	if sess.Root != expectedRoot {
+		t.Errorf("sess.Root = %q, want %q", sess.Root, expectedRoot)
+	}
+	workspaceSessionsDir := filepath.Join(ws.RootDir(), "sessions")
+	if _, err := os.Stat(workspaceSessionsDir); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("expected no sessions/ dir in workspace root, got stat err: %v", err)
+	}
+
+	// 2. Verify Update Effort appends and publishes timeline.NewEffortEntry
+	pub.reset()
+	updated, err := mgr.Update(ctx, sess.ID, UpdateParams{
+		Config: SessionConfig{
+			Effort: "high",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Update effort: %v", err)
+	}
+	if updated.Config.Effort != "high" {
+		t.Errorf("updated.Config.Effort = %q, want 'high'", updated.Config.Effort)
+	}
+
+	tl, err := sess.Timeline.List(ctx)
+	if err != nil {
+		t.Fatalf("Timeline.List: %v", err)
+	}
+	var foundEffort bool
+	for _, entry := range tl {
+		if entry.Kind == timeline.KindEffort && entry.Effort != nil {
+			if entry.Effort.From == "low" && entry.Effort.To == "high" {
+				foundEffort = true
+				break
+			}
+		}
+	}
+	if !foundEffort {
+		t.Errorf("expected timeline EffortEntry with From='low' To='high'")
+	}
+
+	var foundEffortEvent bool
+	for _, ev := range pub.recorded() {
+		if ea, ok := ev.(EntryAddedEvent); ok && ea.Entry.Kind == timeline.KindEffort {
+			if ea.Entry.Effort != nil && ea.Entry.Effort.From == "low" && ea.Entry.Effort.To == "high" {
+				foundEffortEvent = true
+				break
+			}
+		}
+	}
+	if !foundEffortEvent {
+		t.Errorf("expected EntryAddedEvent with KindEffort published")
+	}
+
+	// 3. Trigger permission interrupt and verify loadOrCacheSession restores StatusWaitingPermission
+	if err := sess.Send(ctx, SendInput{Message: message.NewUserText("write demo.txt")}); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	if err := sess.Wait(ctx); err != nil {
+		t.Fatalf("Wait: %v", err)
+	}
+	if sess.Status != StatusWaitingPermission {
+		t.Fatalf("expected StatusWaitingPermission, got %v", sess.Status)
+	}
+
+	// Load session via a new manager (simulating fresh loadOrCacheSession)
+	mgr2, err := New(Config{
+		DB:        db,
+		Workspace: ws,
+		Gateway:   gw,
+		Publisher: pub,
+		Logger:    log.Default(),
+	})
+	if err != nil {
+		t.Fatalf("New mgr2: %v", err)
+	}
+
+	sess2, err := mgr2.Get(ctx, sess.ID)
+	if err != nil {
+		t.Fatalf("mgr2.Get: %v", err)
+	}
+	if sess2.Status != StatusWaitingPermission {
+		t.Errorf("sess2.Status = %v, want StatusWaitingPermission", sess2.Status)
+	}
+	if !sess2.WaitingPermission {
+		t.Errorf("sess2.WaitingPermission = false, want true")
+	}
+	if len(sess2.PendingPermissions) == 0 {
+		t.Errorf("sess2.PendingPermissions is empty, want > 0")
+	}
+
+	// 4. Verify Sandbox initialized with ID
+	if sess.Sandbox == nil {
+		t.Fatalf("sess.Sandbox is nil")
+	}
+	if sess.Sandbox.ID() != sess.ID {
+		t.Errorf("Sandbox.ID() = %q, want %q", sess.Sandbox.ID(), sess.ID)
+	}
+	if sess.Sandbox.Platform().WorkDir != ws.RootDir() {
+		t.Errorf("Sandbox.WorkDir = %q, want %q", sess.Sandbox.Platform().WorkDir, ws.RootDir())
 	}
 }

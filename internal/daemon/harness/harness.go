@@ -19,6 +19,7 @@ import (
 
 // Config holds the mandatory dependencies required to construct a [Harness].
 type Config struct {
+	ID           string
 	DB           *sql.DB
 	Model        *llm.Model
 	Tools        tools.Container
@@ -28,6 +29,9 @@ type Config struct {
 
 // Validate checks that all required configuration dependencies are present.
 func (c Config) Validate() error {
+	if strings.TrimSpace(c.ID) == "" {
+		return fmt.Errorf("%w: id is required", ErrInvalidConfig)
+	}
 	if c.DB == nil {
 		return fmt.Errorf("%w: database is required", ErrInvalidConfig)
 	}
@@ -46,12 +50,12 @@ func (c Config) Validate() error {
 // Harness orchestrates stateful, multi-turn agent conversations and tool
 // execution over a compiled Loom workflow graph.
 type Harness interface {
-	Stream(ctx context.Context, threadID string, input message.Message) iter.Seq2[Event, error]
-	Resume(ctx context.Context, threadID string, decisions map[string]tools.PermissionDecision) iter.Seq2[Event, error]
-	LoadState(ctx context.Context, threadID string) (State, error)
+	Stream(ctx context.Context, input Input) iter.Seq2[Event, error]
+	LoadState(ctx context.Context) (State, error)
 }
 
 type harness struct {
+	id     string
 	logger log.Interface
 	graph  *graph.Graph[State]
 }
@@ -77,119 +81,85 @@ func New(cfg Config) (Harness, error) {
 	}
 
 	return &harness{
+		id:     strings.TrimSpace(cfg.ID),
 		logger: logger,
 		graph:  g,
 	}, nil
 }
 
-// Stream executes a conversational turn on the specified threadID, returning an
+// Stream executes a conversational turn on the configured session ID, returning an
 // iterator that yields incremental [EventChunk], [EventMessage], [EventInterrupted],
 // and [EventCompleted] notifications.
 //
-// If the thread was previously paused at [ToolsNode] awaiting permission decisions,
-// calling Stream with a new user message automatically cancels all pending tool
-// calls on the thread before invoking [AgentNode] with the new message.
-func (h *harness) Stream(ctx context.Context, threadID string, input message.Message) iter.Seq2[Event, error] {
+// If input.Decisions is provided, it resumes an interrupted execution awaiting permission
+// decisions. If input.Message is provided, it streams a new user message.
+func (h *harness) Stream(ctx context.Context, input Input) iter.Seq2[Event, error] {
 	return func(yield func(Event, error) bool) {
-		if strings.TrimSpace(threadID) == "" {
-			yield(Event{}, ErrEmptyThreadID)
+		if err := ctx.Err(); err != nil {
+			yield(Event{}, err)
 			return
 		}
-		if input == nil {
+		if input.Decisions != nil && input.Message != nil {
+			yield(Event{}, fmt.Errorf("%w: cannot specify both message and decisions", ErrInvalidConfig))
+			return
+		}
+		if input.Decisions == nil && input.Message == nil {
 			yield(Event{}, ErrNilMessage)
 			return
 		}
-		if err := ctx.Err(); err != nil {
-			yield(Event{}, err)
-			return
-		}
 
-		state, err := h.LoadState(ctx, threadID)
+		state, err := h.LoadState(ctx)
 		if err != nil {
 			yield(Event{}, err)
 			return
 		}
 
-		in := message.CloneMessage(input)
-		_, _, unfulfilled, _ := state.ActiveToolCalls()
-		if len(unfulfilled) == 0 {
-			id, err := uuid.NewV7()
-			if err != nil {
-				yield(Event{}, fmt.Errorf("harness: generate user message id: %w", err))
+		var update graph.Update[State]
+		if input.Decisions != nil {
+			if len(state.PendingPermissions) == 0 {
+				yield(Event{}, ErrNoPendingPermissions)
 				return
 			}
-			in.SetID(id.String())
-			if !yield(Event{
-				Type:    EventMessage,
-				Message: message.CloneMessage(in),
-			}, nil) {
-				return
+			normalized := make(map[string]tools.PermissionDecision, len(state.PendingPermissions)*2)
+			for _, req := range state.PendingPermissions {
+				dec, ok := lookupDecision(input.Decisions, req)
+				if !ok {
+					yield(Event{}, ErrPendingPermissionsUnresolved)
+					return
+				}
+				dec.RequestID = req.ID
+				dec.ToolCallID = req.ToolCallID
+				normalized[req.ID] = dec
+				normalized[req.ToolCallID] = dec
 			}
-		}
-
-		update := graph.Update[State](func(s State) State {
-			s.Messages = append(s.Messages, in)
-			return s
-		})
-
-		stream, err := h.graph.Stream(ctx, update, &graph.Location{ThreadID: threadID})
-		if err != nil {
-			yield(Event{}, err)
-			return
-		}
-
-		h.consumeGraphStream(stream, yield)
-	}
-}
-
-// Resume continues an interrupted thread after the user has resolved all pending
-// permission requests.
-//
-// Resume validates that every request in [State.PendingPermissions] has a valid
-// decision in decisions (keyed by either Request.ID or Request.ToolCallID) before
-// invoking the workflow graph. If no permissions are pending, it yields
-// [ErrNoPendingPermissions]; if any pending permission is missing a decision, it
-// yields [ErrPendingPermissionsUnresolved] without calling the graph.
-func (h *harness) Resume(ctx context.Context, threadID string, decisions map[string]tools.PermissionDecision) iter.Seq2[Event, error] {
-	return func(yield func(Event, error) bool) {
-		if strings.TrimSpace(threadID) == "" {
-			yield(Event{}, ErrEmptyThreadID)
-			return
-		}
-		if err := ctx.Err(); err != nil {
-			yield(Event{}, err)
-			return
-		}
-
-		state, err := h.LoadState(ctx, threadID)
-		if err != nil {
-			yield(Event{}, err)
-			return
-		}
-		if len(state.PendingPermissions) == 0 {
-			yield(Event{}, ErrNoPendingPermissions)
-			return
-		}
-
-		normalized := make(map[string]tools.PermissionDecision, len(state.PendingPermissions)*2)
-		for _, req := range state.PendingPermissions {
-			dec, ok := lookupDecision(decisions, req)
-			if !ok {
-				yield(Event{}, ErrPendingPermissionsUnresolved)
-				return
+			update = graph.Update[State](func(s State) State {
+				s.PermissionDecisions = normalized
+				return s
+			})
+		} else {
+			in := message.CloneMessage(input.Message)
+			_, _, unfulfilled, _ := state.ActiveToolCalls()
+			if len(unfulfilled) == 0 {
+				id, err := uuid.NewV7()
+				if err != nil {
+					yield(Event{}, fmt.Errorf("harness: generate user message id: %w", err))
+					return
+				}
+				in.SetID(id.String())
+				if !yield(Event{
+					Type:    EventMessage,
+					Message: message.CloneMessage(in),
+				}, nil) {
+					return
+				}
 			}
-			dec.RequestID = req.ID
-			dec.ToolCallID = req.ToolCallID
-			normalized[req.ID] = dec
-			normalized[req.ToolCallID] = dec
+			update = graph.Update[State](func(s State) State {
+				s.Messages = append(s.Messages, in)
+				return s
+			})
 		}
 
-		update := graph.Update[State](func(s State) State {
-			s.PermissionDecisions = normalized
-			return s
-		})
-
-		stream, err := h.graph.Stream(ctx, update, &graph.Location{ThreadID: threadID})
+		stream, err := h.graph.Stream(ctx, update, &graph.Location{ThreadID: h.id})
 		if err != nil {
 			yield(Event{}, err)
 			return
@@ -260,17 +230,14 @@ func (h *harness) consumeGraphStream(stream iter.Seq2[graph.StreamEvent, error],
 	}
 }
 
-// LoadState retrieves the latest checkpointed [State] for threadID.
-// If no checkpoint exists for threadID, it returns an empty [State] and nil error.
-func (h *harness) LoadState(ctx context.Context, threadID string) (State, error) {
-	if strings.TrimSpace(threadID) == "" {
-		return State{}, ErrEmptyThreadID
-	}
+// LoadState retrieves the latest checkpointed [State] for this session.
+// If no checkpoint exists, it returns an empty [State] and nil error.
+func (h *harness) LoadState(ctx context.Context) (State, error) {
 	if err := ctx.Err(); err != nil {
 		return State{}, err
 	}
 
-	snap, err := h.graph.Load(ctx, graph.Location{ThreadID: threadID})
+	snap, err := h.graph.Load(ctx, graph.Location{ThreadID: h.id})
 	if err != nil {
 		if errors.Is(err, graph.ErrCheckpointNotFound) {
 			return State{}, nil

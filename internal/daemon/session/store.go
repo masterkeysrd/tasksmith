@@ -3,11 +3,13 @@ package session
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
 
 	"github.com/masterkeysrd/tasksmith/internal/core/sqlite"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/tools"
 )
 
 // timestampFormat is a fixed-width UTC RFC3339Nano layout so SQLite TEXT
@@ -26,13 +28,16 @@ func newStore(ctx context.Context, db *sql.DB) (*store, error) {
 }
 
 func (s *store) insertSession(ctx context.Context, sess *Session) error {
-	_, err := s.db.ExecContext(
+	configBytes, err := json.Marshal(sess.Config)
+	if err != nil {
+		return fmt.Errorf("session: marshal config: %w", err)
+	}
+	_, err = s.db.ExecContext(
 		ctx,
-		`INSERT INTO sessions (id, title, agent, model, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO sessions (id, title, config, created_at, updated_at) VALUES (?, ?, ?, ?, ?)`,
 		sess.ID,
 		sess.Title,
-		sess.Agent,
-		sess.Model,
+		string(configBytes),
 		formatTime(sess.CreatedAt),
 		formatTime(sess.UpdatedAt),
 	)
@@ -43,12 +48,15 @@ func (s *store) insertSession(ctx context.Context, sess *Session) error {
 }
 
 func (s *store) updateSession(ctx context.Context, sess *Session) error {
+	configBytes, err := json.Marshal(sess.Config)
+	if err != nil {
+		return fmt.Errorf("session: marshal config: %w", err)
+	}
 	res, err := s.db.ExecContext(
 		ctx,
-		`UPDATE sessions SET title = ?, agent = ?, model = ?, updated_at = ? WHERE id = ?`,
+		`UPDATE sessions SET title = ?, config = ?, updated_at = ? WHERE id = ?`,
 		sess.Title,
-		sess.Agent,
-		sess.Model,
+		string(configBytes),
 		formatTime(sess.UpdatedAt),
 		sess.ID,
 	)
@@ -88,7 +96,7 @@ func (s *store) touchSession(ctx context.Context, sessionID string, updatedAt ti
 func (s *store) getSession(ctx context.Context, id string) (*Session, error) {
 	row := s.db.QueryRowContext(
 		ctx,
-		`SELECT id, title, agent, model, created_at, updated_at FROM sessions WHERE id = ?`,
+		`SELECT id, title, config, created_at, updated_at FROM sessions WHERE id = ?`,
 		id,
 	)
 	sess, err := scanSession(row)
@@ -101,23 +109,23 @@ func (s *store) getSession(ctx context.Context, id string) (*Session, error) {
 	return sess, nil
 }
 
-func (s *store) listSessions(ctx context.Context) ([]Session, error) {
+func (s *store) listSessions(ctx context.Context) ([]*Session, error) {
 	rows, err := s.db.QueryContext(
 		ctx,
-		`SELECT id, title, agent, model, created_at, updated_at FROM sessions ORDER BY updated_at DESC, id DESC`,
+		`SELECT id, title, config, created_at, updated_at FROM sessions ORDER BY updated_at DESC, id DESC`,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("session: list sessions: %w", err)
 	}
 	defer rows.Close()
 
-	sessions := make([]Session, 0)
+	sessions := make([]*Session, 0)
 	for rows.Next() {
 		sess, err := scanSession(rows)
 		if err != nil {
 			return nil, fmt.Errorf("session: scan session row: %w", err)
 		}
-		sessions = append(sessions, *sess)
+		sessions = append(sessions, sess)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("session: iterate sessions: %w", err)
@@ -147,11 +155,21 @@ type rowScanner interface {
 func scanSession(r rowScanner) (*Session, error) {
 	var (
 		sess         Session
+		configRaw    string
 		createdAtRaw string
 		updatedAtRaw string
 	)
-	if err := r.Scan(&sess.ID, &sess.Title, &sess.Agent, &sess.Model, &createdAtRaw, &updatedAtRaw); err != nil {
+	if err := r.Scan(&sess.ID, &sess.Title, &configRaw, &createdAtRaw, &updatedAtRaw); err != nil {
 		return nil, err
+	}
+
+	if configRaw != "" {
+		if err := json.Unmarshal([]byte(configRaw), &sess.Config); err != nil {
+			return nil, fmt.Errorf("parse config: %w", err)
+		}
+	}
+	if sess.Config.Mode == "" {
+		sess.Config.Mode = tools.ModeDefault
 	}
 
 	createdAt, err := parseTime(createdAtRaw)

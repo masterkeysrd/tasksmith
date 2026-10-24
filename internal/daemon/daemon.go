@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -21,10 +20,10 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/broker"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/gateway"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/runtime"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/server"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/session"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tools"
-	"github.com/masterkeysrd/tasksmith/internal/daemon/tools/builtin"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/workspace"
 )
 
@@ -33,7 +32,7 @@ var (
 	ErrInvalidConfig  = errors.New("daemon: invalid configuration")
 	ErrAlreadyRunning = errors.New("daemon: server is already running")
 	ErrSessionRunning = session.ErrSessionRunning
-	ErrEmptyWorkspace = errors.New("daemon: workspace parameter is required")
+	ErrEmptyWorkspace = runtime.ErrEmptyWorkspace
 	ErrEmptyMessage   = errors.New("daemon: message content must not be empty")
 )
 
@@ -87,8 +86,7 @@ type Daemon struct {
 	listener     net.Listener
 	started      bool
 	closed       bool
-	runtimes     map[string]*workspaceRuntime
-	dirToRoot    map[string]string
+	runtimes     runtime.Manager
 	shutdownCh   chan struct{}
 	shutdownOnce sync.Once
 	closeOnce    sync.Once
@@ -111,22 +109,32 @@ func New(cfg Config) (*Daemon, error) {
 	daemonLogger := cfg.Logger.ForComponent("daemon")
 	serverLogger := cfg.Logger.ForComponent("server")
 
-	d := &Daemon{
-		cfg:       cfg,
-		logger:    daemonLogger,
-		startedAt: time.Now().UTC(),
-		broker: broker.New(broker.WithTopicBufferSize(func(topic string) int {
-			if topic == api.TopicSessions {
-				return 128
-			}
-			if strings.HasSuffix(topic, ".stream") {
-				return 1024
-			}
+	b := broker.New(broker.WithTopicBufferSize(func(topic string) int {
+		if topic == api.TopicSessions {
 			return 128
-		})),
+		}
+		if strings.HasSuffix(topic, ".stream") {
+			return 1024
+		}
+		return 128
+	}))
+
+	rtMgr, err := runtime.New(runtime.Config{
+		GatewayPool: cfg.GatewayPool,
+		Publisher:   b,
+		Logger:      daemonLogger,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	d := &Daemon{
+		cfg:        cfg,
+		logger:     daemonLogger,
+		startedAt:  time.Now().UTC(),
+		broker:     b,
 		srv:        server.NewServer(serverLogger),
-		runtimes:   make(map[string]*workspaceRuntime),
-		dirToRoot:  make(map[string]string),
+		runtimes:   rtMgr,
 		shutdownCh: make(chan struct{}),
 		serveErrCh: make(chan error, 1),
 	}
@@ -236,13 +244,6 @@ func (d *Daemon) Close(ctx context.Context) error {
 		lockFile := d.lockFile
 		d.listener = nil
 		d.lockFile = nil
-
-		runtimes := make([]*workspaceRuntime, 0, len(d.runtimes))
-		for k, rt := range d.runtimes {
-			runtimes = append(runtimes, rt)
-			delete(d.runtimes, k)
-		}
-		clear(d.dirToRoot)
 		d.mu.Unlock()
 
 		var errs []error
@@ -255,10 +256,8 @@ func (d *Daemon) Close(ctx context.Context) error {
 			_ = os.Remove(d.cfg.SocketPath)
 		}
 
-		for _, rt := range runtimes {
-			if err := rt.close(); err != nil {
-				errs = append(errs, err)
-			}
+		if err := d.runtimes.Close(); err != nil {
+			errs = append(errs, err)
 		}
 
 		if err := d.cfg.GatewayPool.Close(); err != nil {
@@ -282,7 +281,7 @@ func (d *Daemon) Health(_ context.Context) (*api.HealthResponse, error) {
 	return &api.HealthResponse{
 		PID:        os.Getpid(),
 		StartedAt:  d.startedAt,
-		Workspaces: d.openWorkspaces(),
+		Workspaces: d.runtimes.Workspaces(),
 	}, nil
 }
 
@@ -367,34 +366,34 @@ func (d *Daemon) Done() <-chan struct{} {
 // WorkspaceBackend implementation
 
 func (d *Daemon) GetWorkspace(ctx context.Context, rawWS string) (*api.Workspace, error) {
-	rt, err := d.getRuntime(ctx, rawWS)
+	rt, err := d.runtimes.Get(ctx, rawWS)
 	if err != nil {
 		return nil, err
 	}
 
 	var defModel string
-	if models := rt.workspace.ResolveModels(workspace.RoleCompletion); len(models) > 0 {
+	if models := rt.Workspace().ResolveModels(workspace.RoleCompletion); len(models) > 0 {
 		defModel = models[0]
 	}
 
 	cleanDir, _ := fsutils.CleanPath(rawWS)
 
 	return &api.Workspace{
-		Name:         rt.workspace.Name(),
-		RootDir:      rt.workspace.RootDir(),
+		Name:         rt.Workspace().Name(),
+		RootDir:      rt.Workspace().RootDir(),
 		CWD:          cleanDir,
-		DefaultAgent: rt.workspace.DefaultAgentName(),
+		DefaultAgent: rt.Workspace().DefaultAgentName(),
 		DefaultModel: defModel,
 	}, nil
 }
 
 func (d *Daemon) ListAgents(ctx context.Context, rawWS string) ([]api.Agent, error) {
-	rt, err := d.getRuntime(ctx, rawWS)
+	rt, err := d.runtimes.Get(ctx, rawWS)
 	if err != nil {
 		return nil, err
 	}
 
-	agents := rt.workspace.Agents()
+	agents := rt.Workspace().Agents()
 	out := make([]api.Agent, len(agents))
 	for i, ag := range agents {
 		out[i] = toAPIAgent(ag)
@@ -403,13 +402,13 @@ func (d *Daemon) ListAgents(ctx context.Context, rawWS string) ([]api.Agent, err
 }
 
 func (d *Daemon) GetAgent(ctx context.Context, rawWS, name string) (*api.Agent, error) {
-	rt, err := d.getRuntime(ctx, rawWS)
+	rt, err := d.runtimes.Get(ctx, rawWS)
 	if err != nil {
 		return nil, err
 	}
 
 	name = strings.TrimSpace(name)
-	ag, ok := rt.workspace.GetAgent(name)
+	ag, ok := rt.Workspace().GetAgent(name)
 	if !ok {
 		return nil, &api.APIError{
 			StatusCode: http.StatusNotFound,
@@ -423,12 +422,12 @@ func (d *Daemon) GetAgent(ctx context.Context, rawWS, name string) (*api.Agent, 
 }
 
 func (d *Daemon) ListModels(ctx context.Context, rawWS string) ([]api.Model, error) {
-	rt, err := d.getRuntime(ctx, rawWS)
+	rt, err := d.runtimes.Get(ctx, rawWS)
 	if err != nil {
 		return nil, err
 	}
 
-	providers := rt.workspace.Providers()
+	providers := rt.Workspace().Providers()
 	var out []api.Model
 	for _, p := range providers {
 		for _, m := range p.Models {
@@ -439,7 +438,7 @@ func (d *Daemon) ListModels(ctx context.Context, rawWS string) ([]api.Model, err
 }
 
 func (d *Daemon) GetModel(ctx context.Context, rawWS, id string) (*api.Model, error) {
-	rt, err := d.getRuntime(ctx, rawWS)
+	rt, err := d.runtimes.Get(ctx, rawWS)
 	if err != nil {
 		return nil, err
 	}
@@ -453,63 +452,61 @@ func (d *Daemon) GetModel(ctx context.Context, rawWS, id string) (*api.Model, er
 		}
 	}
 
-	m := resolveAPIModel(rt.workspace, rawID)
+	m := resolveAPIModel(rt.Workspace(), rawID)
 	return &m, nil
 }
 
 // SessionBackend implementation
 
 func (d *Daemon) CreateSession(ctx context.Context, rawWS string, req api.CreateSessionRequest) (*api.Session, bool, error) {
-	rt, err := d.getRuntime(ctx, rawWS)
+	rt, err := d.runtimes.Get(ctx, rawWS)
 	if err != nil {
 		return nil, false, err
 	}
 
-	sess, created, err := rt.manager.Ensure(ctx, session.CreateParams{
+	sess, created, err := rt.Sessions().Create(ctx, session.CreateParams{
 		ID:    req.ID,
 		Title: req.Title,
-		Agent: req.Agent,
-		Model: req.Model,
+		Config: session.SessionConfig{
+			Agent:  req.Config.Agent,
+			Model:  req.Config.Model,
+			Effort: req.Config.Effort,
+			Mode:   tools.PermissionMode(req.Config.Mode),
+		},
 	})
 	if err != nil {
 		return nil, false, err
 	}
 
 	out := toAPISession(sess)
-	if created {
-		d.broker.Publish(api.TopicSessions, api.SessionCreatedEvent{
-			Workspace: rt.dir,
-			Session:   out,
-		})
-	}
 	return &out, created, nil
 }
 
 func (d *Daemon) ListSessions(ctx context.Context, rawWS string) ([]api.Session, error) {
-	rt, err := d.getRuntime(ctx, rawWS)
+	rt, err := d.runtimes.Get(ctx, rawWS)
 	if err != nil {
 		return nil, err
 	}
 
-	list, err := rt.manager.List(ctx)
+	list, err := rt.Sessions().List(ctx)
 	if err != nil {
 		return nil, err
 	}
 
 	out := make([]api.Session, len(list))
-	for i := range list {
-		out[i] = toAPISession(&list[i])
+	for i, s := range list {
+		out[i] = toAPISession(s)
 	}
 	return out, nil
 }
 
 func (d *Daemon) GetSession(ctx context.Context, rawWS, id string) (*api.Session, error) {
-	rt, err := d.getRuntime(ctx, rawWS)
+	rt, err := d.runtimes.Get(ctx, rawWS)
 	if err != nil {
 		return nil, err
 	}
 
-	sess, err := rt.manager.Get(ctx, id)
+	sess, err := rt.Sessions().Get(ctx, id)
 	if err != nil {
 		return nil, err
 	}
@@ -519,53 +516,49 @@ func (d *Daemon) GetSession(ctx context.Context, rawWS, id string) (*api.Session
 }
 
 func (d *Daemon) UpdateSession(ctx context.Context, rawWS, id string, req api.UpdateSessionRequest) (*api.Session, error) {
-	rt, err := d.getRuntime(ctx, rawWS)
+	rt, err := d.runtimes.Get(ctx, rawWS)
 	if err != nil {
 		return nil, err
 	}
 
-	sess, err := rt.manager.Update(ctx, id, session.UpdateParams{
+	sess, err := rt.Sessions().Update(ctx, id, session.UpdateParams{
 		Title: req.Title,
-		Agent: req.Agent,
-		Model: req.Model,
+		Config: session.SessionConfig{
+			Agent:  req.Config.Agent,
+			Model:  req.Config.Model,
+			Effort: req.Config.Effort,
+			Mode:   tools.PermissionMode(req.Config.Mode),
+		},
 	})
 	if err != nil {
 		return nil, err
 	}
 
 	out := toAPISession(sess)
-	d.broker.Publish(api.TopicSessions, api.SessionUpdatedEvent{
-		Workspace: rt.dir,
-		Session:   out,
-	})
 	return &out, nil
 }
 
 func (d *Daemon) DeleteSession(ctx context.Context, rawWS, id string) error {
-	rt, err := d.getRuntime(ctx, rawWS)
+	rt, err := d.runtimes.Get(ctx, rawWS)
 	if err != nil {
 		return err
 	}
 
-	if err := rt.manager.Delete(ctx, id); err != nil {
-		return err
-	}
-	d.broker.DeleteTopic(api.SessionStreamTopic(id))
-
-	d.broker.Publish(api.TopicSessions, api.SessionDeletedEvent{
-		Workspace: rt.dir,
-		SessionID: id,
-	})
-	return nil
+	return rt.Sessions().Delete(ctx, id)
 }
 
 func (d *Daemon) Timeline(ctx context.Context, rawWS, id string) ([]api.TimelineEntry, error) {
-	rt, err := d.getRuntime(ctx, rawWS)
+	rt, err := d.runtimes.Get(ctx, rawWS)
 	if err != nil {
 		return nil, err
 	}
 
-	entries, err := rt.manager.Timeline(ctx, id)
+	sess, err := rt.Sessions().Get(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+
+	entries, err := sess.Timeline.List(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -582,90 +575,50 @@ func (d *Daemon) Timeline(ctx context.Context, rawWS, id string) ([]api.Timeline
 }
 
 func (d *Daemon) Send(ctx context.Context, rawWS, id string, req api.SendRequest) error {
-	rt, err := d.getRuntime(ctx, rawWS)
+	rt, err := d.runtimes.Get(ctx, rawWS)
 	if err != nil {
 		return err
 	}
 
-	userMsg, err := fromSendRequest(req)
+	sess, err := rt.Sessions().Get(ctx, id)
 	if err != nil {
 		return err
 	}
 
-	return rt.manager.StartTurn(ctx, id, userMsg, req.Wait)
+	in, err := fromSendRequest(req)
+	if err != nil {
+		return err
+	}
+
+	return sess.Send(ctx, in)
 }
 
 func (d *Daemon) Cancel(ctx context.Context, rawWS, id string) error {
-	rt, err := d.getRuntime(ctx, rawWS)
+	rt, err := d.runtimes.Get(ctx, rawWS)
 	if err != nil {
 		return err
 	}
 
-	return rt.manager.Cancel(ctx, id)
-}
-
-func (d *Daemon) PendingPermissions(ctx context.Context, rawWS, id string) ([]api.PermissionRequest, error) {
-	rt, err := d.getRuntime(ctx, rawWS)
-	if err != nil {
-		return nil, err
-	}
-
-	perms, err := rt.manager.PendingPermissions(ctx, id)
-	if err != nil {
-		return nil, err
-	}
-
-	return toAPIPermissionRequests(perms), nil
-}
-
-func (d *Daemon) RespondPermission(ctx context.Context, rawWS, id string, dec api.PermissionDecision) error {
-	rt, err := d.getRuntime(ctx, rawWS)
+	sess, err := rt.Sessions().Get(ctx, id)
 	if err != nil {
 		return err
 	}
 
-	return rt.manager.RespondPermissionAsync(ctx, id, fromAPIPermissionDecision(dec), dec.Wait)
-}
-
-func (d *Daemon) GetMode(ctx context.Context, rawWS, id string) (api.PermissionMode, error) {
-	rt, err := d.getRuntime(ctx, rawWS)
-	if err != nil {
-		return "", err
-	}
-
-	mode, err := rt.manager.PermissionMode(ctx, id)
-	if err != nil {
-		return "", err
-	}
-
-	return api.PermissionMode(mode), nil
-}
-
-func (d *Daemon) SetMode(ctx context.Context, rawWS, id string, mode api.PermissionMode) (api.PermissionMode, error) {
-	rt, err := d.getRuntime(ctx, rawWS)
-	if err != nil {
-		return "", err
-	}
-
-	if err := rt.manager.SetPermissionMode(ctx, id, tools.PermissionMode(mode)); err != nil {
-		return "", err
-	}
-
-	return mode, nil
+	return sess.Cancel(ctx)
 }
 
 func (d *Daemon) Changes(ctx context.Context, rawWS, id string) ([]api.FileChange, error) {
-	rt, err := d.getRuntime(ctx, rawWS)
+	rt, err := d.runtimes.Get(ctx, rawWS)
 	if err != nil {
 		return nil, err
 	}
 
-	jr, err := rt.manager.Journal(ctx, id)
+	sess, err := rt.Sessions().Get(ctx, id)
 	if err != nil {
 		return nil, err
 	}
 
-	changes, err := jr.Changes(ctx)
+	changes, err := sess.Journal.Changes(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -678,7 +631,7 @@ func (d *Daemon) Changes(ctx context.Context, rawWS, id string) ([]api.FileChang
 }
 
 func (d *Daemon) Diff(ctx context.Context, rawWS, id, path, entryID string) (*api.DiffResponse, error) {
-	rt, err := d.getRuntime(ctx, rawWS)
+	rt, err := d.runtimes.Get(ctx, rawWS)
 	if err != nil {
 		return nil, err
 	}
@@ -693,12 +646,12 @@ func (d *Daemon) Diff(ctx context.Context, rawWS, id, path, entryID string) (*ap
 		}
 	}
 
-	jr, err := rt.manager.Journal(ctx, id)
+	sess, err := rt.Sessions().Get(ctx, id)
 	if err != nil {
 		return nil, err
 	}
 
-	diffText, err := jr.DiffEntry(ctx, path, entryID)
+	diffText, err := sess.Journal.DiffEntry(ctx, path, entryID)
 	if err != nil {
 		return nil, err
 	}
@@ -711,12 +664,12 @@ func (d *Daemon) Diff(ctx context.Context, rawWS, id, path, entryID string) (*ap
 }
 
 func (d *Daemon) Revert(ctx context.Context, rawWS, id string, req api.RevertRequest) error {
-	rt, err := d.getRuntime(ctx, rawWS)
+	rt, err := d.runtimes.Get(ctx, rawWS)
 	if err != nil {
 		return err
 	}
 
-	jr, err := rt.manager.Journal(ctx, id)
+	sess, err := rt.Sessions().Get(ctx, id)
 	if err != nil {
 		return err
 	}
@@ -725,88 +678,12 @@ func (d *Daemon) Revert(ctx context.Context, rawWS, id string, req api.RevertReq
 	entryID := strings.TrimSpace(req.EntryID)
 
 	if path != "" && entryID != "" {
-		return jr.RecoverAt(ctx, rt.sandbox.FS(), path, entryID, req.Before)
+		return sess.Journal.RecoverAt(ctx, sess.Sandbox.FS(), path, entryID, req.Before)
 	}
 
 	if path != "" {
-		return jr.RevertToBaseline(ctx, rt.sandbox.FS(), path, req.Force)
+		return sess.Journal.RevertToBaseline(ctx, sess.Sandbox.FS(), path, req.Force)
 	}
 
-	return jr.RevertSession(ctx, rt.sandbox.FS(), req.Force)
-}
-
-func (d *Daemon) getRuntime(ctx context.Context, rawWorkspace string) (*workspaceRuntime, error) {
-	cleanDir, err := fsutils.CleanPath(rawWorkspace)
-	if err != nil {
-		if errors.Is(err, fsutils.ErrEmptyPath) {
-			return nil, ErrEmptyWorkspace
-		}
-		return nil, fmt.Errorf("daemon: resolve workspace path %q: %w", rawWorkspace, err)
-	}
-
-	d.mu.Lock()
-	if d.closed {
-		d.mu.Unlock()
-		return nil, errors.New("daemon: server is closed")
-	}
-	if rt, exists := d.runtimes[cleanDir]; exists {
-		d.mu.Unlock()
-		return rt, nil
-	}
-	d.mu.Unlock()
-
-	ws, err := workspace.Open(ctx, cleanDir, workspace.WithBuiltinFS(builtin.FS()))
-	if err != nil {
-		return nil, fmt.Errorf("daemon: open workspace %q: %w", cleanDir, err)
-	}
-	rootDir := ws.RootDir()
-
-	d.mu.Lock()
-	if d.closed {
-		d.mu.Unlock()
-		return nil, errors.New("daemon: server is closed")
-	}
-	d.dirToRoot[cleanDir] = rootDir
-	if existing, ok := d.runtimes[cleanDir]; ok {
-		d.mu.Unlock()
-		return existing, nil
-	}
-	d.mu.Unlock()
-
-	rt, err := newWorkspaceRuntime(ctx, ws, d.cfg.GatewayPool, d.broker, d.logger)
-	if err != nil {
-		return nil, err
-	}
-
-	d.mu.Lock()
-	if d.closed {
-		d.mu.Unlock()
-		_ = rt.close()
-		return nil, errors.New("daemon: server is closed")
-	}
-	if existing, ok := d.runtimes[cleanDir]; ok {
-		d.mu.Unlock()
-		_ = rt.close()
-		return existing, nil
-	}
-	d.runtimes[cleanDir] = rt
-	d.mu.Unlock()
-
-	return rt, nil
-}
-
-func (d *Daemon) openWorkspaces() []string {
-	d.mu.Lock()
-	seen := make(map[string]struct{})
-	dirs := make([]string, 0, len(d.runtimes))
-	for _, rt := range d.runtimes {
-		root := rt.workspace.RootDir()
-		if _, ok := seen[root]; !ok {
-			seen[root] = struct{}{}
-			dirs = append(dirs, root)
-		}
-	}
-	d.mu.Unlock()
-	sort.Strings(dirs)
-	return dirs
+	return sess.Journal.RevertSession(ctx, sess.Sandbox.FS(), req.Force)
 }

@@ -16,39 +16,47 @@ import (
 
 const timestampFormat = "2006-01-02T15:04:05.000000000Z"
 
-// Store provides append-only persistence and querying for session timelines.
-type Store interface {
+// Timeline provides append-only persistence and querying for a single session timeline.
+type Timeline interface {
 	Append(ctx context.Context, entry *Entry) error
-	AppendMessage(ctx context.Context, sessionID string, msg message.Message) (*Entry, error)
 	Get(ctx context.Context, id string) (*Entry, error)
-	List(ctx context.Context, sessionID string) ([]Entry, error)
-	ListByKind(ctx context.Context, sessionID string, kind Kind) ([]Entry, error)
-	Messages(ctx context.Context, sessionID string) (message.MessageList, error)
-	DeleteSession(ctx context.Context, sessionID string) error
+	List(ctx context.Context) ([]Entry, error)
+	ListByKind(ctx context.Context, kind Kind) ([]Entry, error)
+	Messages(ctx context.Context) (message.MessageList, error)
+	Delete(ctx context.Context) error
 }
 
-type sqliteStore struct {
-	db *sql.DB
+type sqliteTimeline struct {
+	db        *sql.DB
+	sessionID string
 }
 
-// New creates and initializes a timeline Store, running migrations on the provided db.
-func New(ctx context.Context, db *sql.DB) (Store, error) {
+var _ Timeline = (*sqliteTimeline)(nil)
+
+// New creates and initializes a session-scoped Timeline, running migrations on the provided db.
+func New(ctx context.Context, db *sql.DB, sessionID string) (Timeline, error) {
 	if db == nil {
 		return nil, ErrInvalidConfig
+	}
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return nil, ErrEmptySessionID
 	}
 	if err := sqlite.Migrate(ctx, db, "timeline", migrations); err != nil {
 		return nil, fmt.Errorf("timeline: migrate schema: %w", err)
 	}
-	return &sqliteStore{db: db}, nil
+	return &sqliteTimeline{db: db, sessionID: sessionID}, nil
 }
 
-// Append validates and records a new timeline entry.
-func (s *sqliteStore) Append(ctx context.Context, entry *Entry) error {
+// Append validates and records a new timeline entry for this session.
+func (s *sqliteTimeline) Append(ctx context.Context, entry *Entry) error {
 	if entry == nil {
 		return ErrInvalidEntry
 	}
 	if strings.TrimSpace(entry.SessionID) == "" {
-		return ErrEmptySessionID
+		entry.SessionID = s.sessionID
+	} else if entry.SessionID != s.sessionID {
+		return ErrInvalidEntry
 	}
 
 	switch entry.Kind {
@@ -151,30 +159,16 @@ func (s *sqliteStore) Append(ctx context.Context, entry *Entry) error {
 	return nil
 }
 
-// AppendMessage is a convenience helper for appending a message entry to the timeline.
-func (s *sqliteStore) AppendMessage(ctx context.Context, sessionID string, msg message.Message) (*Entry, error) {
-	if strings.TrimSpace(sessionID) == "" {
-		return nil, ErrEmptySessionID
-	}
-	if msg == nil {
-		return nil, ErrInvalidEntry
-	}
-	entry := NewMessageEntry(sessionID, msg)
-	if err := s.Append(ctx, entry); err != nil {
-		return nil, err
-	}
-	return entry, nil
-}
-
-// Get retrieves a single timeline entry by its UUIDv7 ID.
-func (s *sqliteStore) Get(ctx context.Context, id string) (*Entry, error) {
+// Get retrieves an entry by its ID within this session.
+func (s *sqliteTimeline) Get(ctx context.Context, id string) (*Entry, error) {
 	if strings.TrimSpace(id) == "" {
 		return nil, ErrEntryNotFound
 	}
 	row := s.db.QueryRowContext(
 		ctx,
-		`SELECT id, session_id, kind, payload, created_at FROM timeline WHERE id = ?`,
+		`SELECT id, session_id, kind, payload, created_at FROM timeline WHERE id = ? AND session_id = ?`,
 		id,
+		s.sessionID,
 	)
 	entry, err := scanEntry(row)
 	if err != nil {
@@ -186,18 +180,15 @@ func (s *sqliteStore) Get(ctx context.Context, id string) (*Entry, error) {
 	return entry, nil
 }
 
-// List returns all entries for the specified session ordered by id ASC.
-func (s *sqliteStore) List(ctx context.Context, sessionID string) ([]Entry, error) {
-	if strings.TrimSpace(sessionID) == "" {
-		return nil, ErrEmptySessionID
-	}
+// List returns all timeline entries for this session ordered by id ASC.
+func (s *sqliteTimeline) List(ctx context.Context) ([]Entry, error) {
 	rows, err := s.db.QueryContext(
 		ctx,
 		`SELECT id, session_id, kind, payload, created_at FROM timeline WHERE session_id = ? ORDER BY id ASC`,
-		sessionID,
+		s.sessionID,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("timeline: list entries for session %q: %w", sessionID, err)
+		return nil, fmt.Errorf("timeline: list entries for session %q: %w", s.sessionID, err)
 	}
 	defer rows.Close()
 
@@ -210,24 +201,21 @@ func (s *sqliteStore) List(ctx context.Context, sessionID string) ([]Entry, erro
 		entries = append(entries, *entry)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("timeline: iterate entries for session %q: %w", sessionID, err)
+		return nil, fmt.Errorf("timeline: iterate entries for session %q: %w", s.sessionID, err)
 	}
 	return entries, nil
 }
 
-// ListByKind returns entries for the specified session and kind ordered by id ASC.
-func (s *sqliteStore) ListByKind(ctx context.Context, sessionID string, kind Kind) ([]Entry, error) {
-	if strings.TrimSpace(sessionID) == "" {
-		return nil, ErrEmptySessionID
-	}
+// ListByKind returns entries for this session and kind ordered by id ASC.
+func (s *sqliteTimeline) ListByKind(ctx context.Context, kind Kind) ([]Entry, error) {
 	rows, err := s.db.QueryContext(
 		ctx,
 		`SELECT id, session_id, kind, payload, created_at FROM timeline WHERE session_id = ? AND kind = ? ORDER BY id ASC`,
-		sessionID,
+		s.sessionID,
 		string(kind),
 	)
 	if err != nil {
-		return nil, fmt.Errorf("timeline: list entries for session %q by kind %q: %w", sessionID, kind, err)
+		return nil, fmt.Errorf("timeline: list entries for session %q by kind %q: %w", s.sessionID, kind, err)
 	}
 	defer rows.Close()
 
@@ -240,24 +228,21 @@ func (s *sqliteStore) ListByKind(ctx context.Context, sessionID string, kind Kin
 		entries = append(entries, *entry)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("timeline: iterate entries for session %q by kind %q: %w", sessionID, kind, err)
+		return nil, fmt.Errorf("timeline: iterate entries for session %q by kind %q: %w", s.sessionID, kind, err)
 	}
 	return entries, nil
 }
 
-// Messages returns all KindMessage payloads for sessionID ordered by id ASC.
-func (s *sqliteStore) Messages(ctx context.Context, sessionID string) (message.MessageList, error) {
-	if strings.TrimSpace(sessionID) == "" {
-		return nil, ErrEmptySessionID
-	}
+// Messages returns all KindMessage payloads for this session ordered by id ASC.
+func (s *sqliteTimeline) Messages(ctx context.Context) (message.MessageList, error) {
 	rows, err := s.db.QueryContext(
 		ctx,
 		`SELECT id, payload FROM timeline WHERE session_id = ? AND kind = ? ORDER BY id ASC`,
-		sessionID,
+		s.sessionID,
 		string(KindMessage),
 	)
 	if err != nil {
-		return nil, fmt.Errorf("timeline: query messages for session %q: %w", sessionID, err)
+		return nil, fmt.Errorf("timeline: query messages for session %q: %w", s.sessionID, err)
 	}
 	defer rows.Close()
 
@@ -275,18 +260,15 @@ func (s *sqliteStore) Messages(ctx context.Context, sessionID string) (message.M
 		list = append(list, msg)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("timeline: iterate messages for session %q: %w", sessionID, err)
+		return nil, fmt.Errorf("timeline: iterate messages for session %q: %w", s.sessionID, err)
 	}
 	return list, nil
 }
 
-// DeleteSession removes all timeline entries associated with sessionID.
-func (s *sqliteStore) DeleteSession(ctx context.Context, sessionID string) error {
-	if strings.TrimSpace(sessionID) == "" {
-		return ErrEmptySessionID
-	}
-	if _, err := s.db.ExecContext(ctx, `DELETE FROM timeline WHERE session_id = ?`, sessionID); err != nil {
-		return fmt.Errorf("timeline: delete session %q: %w", sessionID, err)
+// Delete removes all timeline entries associated with this session.
+func (s *sqliteTimeline) Delete(ctx context.Context) error {
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM timeline WHERE session_id = ?`, s.sessionID); err != nil {
+		return fmt.Errorf("timeline: delete session %q: %w", s.sessionID, err)
 	}
 	return nil
 }

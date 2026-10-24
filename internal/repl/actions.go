@@ -48,6 +48,7 @@ type SendProviderProps struct {
 
 type createInput struct {
 	Session api.Session
+	Mode    api.PermissionMode
 	Text    string
 	Token   int64
 }
@@ -66,6 +67,7 @@ var SendProvider = trail.FCC("SendProvider", func(props SendProviderProps) trail
 	selection := uihooks.UseSessionSelection()
 	setSending := uihooks.UseSetSending()
 	streaming := uihooks.UseIsStreaming()
+	permMode := uihooks.UsePermissionMode()
 	transcript := UseTranscript()
 
 	// token identifies the latest send; results of older ones are ignored, so
@@ -92,8 +94,12 @@ var SendProvider = trail.FCC("SendProvider", func(props SendProviderProps) trail
 		return c.CreateSession(ctx, api.CreateSessionRequest{
 			ID:    in.Session.ID,
 			Title: in.Text,
-			Agent: in.Session.Agent,
-			Model: in.Session.Model,
+			Config: api.SessionConfig{
+				Agent:  in.Session.Config.Agent,
+				Model:  in.Session.Config.Model,
+				Effort: in.Session.Config.Effort,
+				Mode:   in.Mode,
+			},
 		})
 	}), wind.MutationOptions[createInput, *api.Session]{
 		OnSuccess: func(created *api.Session, in createInput, _ wind.MutationContext) {
@@ -125,7 +131,7 @@ var SendProvider = trail.FCC("SendProvider", func(props SendProviderProps) trail
 			id := token.Current
 			setSending(session.ID)
 			if session.Draft {
-				create.Mutate(createInput{Session: session.Session, Text: text, Token: id})
+				create.Mutate(createInput{Session: session.Session, Mode: permMode.Mode, Text: text, Token: id})
 				return
 			}
 			send.Mutate(sendInput{SessionID: session.ID, Text: text, Token: id})
@@ -217,7 +223,7 @@ var SessionActionsProvider = trail.FCC("SessionActionsProvider", func(props Sess
 		if err != nil {
 			return switchedSession{}, err
 		}
-		mode, _ := c.PermissionMode(ctx, target.ID)
+		mode := target.Config.Mode
 		return switchedSession{Session: *target, Mode: mode}, nil
 	}), wind.MutationOptions[string, switchedSession]{
 		OnSuccess: func(target switchedSession, _ string, _ wind.MutationContext) {

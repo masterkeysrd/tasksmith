@@ -242,10 +242,10 @@ func msgText(m message.Message) string {
 	return extractBlocksText(m.GetContent())
 }
 
-func drainStream(ctx context.Context, h Harness, threadID string, input message.Message) ([]string, *message.Assistant, error) {
+func drainStream(ctx context.Context, h Harness, input message.Message) ([]string, *message.Assistant, error) {
 	var deltas []string
 	var completed *message.Assistant
-	for ev, err := range h.Stream(ctx, threadID, input) {
+	for ev, err := range h.Stream(ctx, Input{Message: input}) {
 		if err != nil {
 			return deltas, completed, err
 		}
@@ -276,6 +276,7 @@ func TestSingleTurnStreaming(t *testing.T) {
 	}
 
 	h, err := New(Config{
+		ID:     "thread-1",
 		DB:     db,
 		Model:  newTestModel(t, prov),
 		Tools:  reg,
@@ -285,7 +286,7 @@ func TestSingleTurnStreaming(t *testing.T) {
 		t.Fatalf("New error: %v", err)
 	}
 
-	deltas, reply, err := drainStream(ctx, h, "thread-1", message.NewUserText("Hi there"))
+	deltas, reply, err := drainStream(ctx, h, message.NewUserText("Hi there"))
 	if err != nil {
 		t.Fatalf("Stream error: %v", err)
 	}
@@ -330,6 +331,7 @@ func TestMultiTurnSQLitePersistence(t *testing.T) {
 	model := newTestModel(t, prov)
 
 	h, err := New(Config{
+		ID:     "thread-alice",
 		DB:     db,
 		Model:  model,
 		Tools:  reg,
@@ -340,7 +342,7 @@ func TestMultiTurnSQLitePersistence(t *testing.T) {
 	}
 
 	// Verify empty state before any turn on thread
-	initialState, err := h.LoadState(ctx, "thread-alice")
+	initialState, err := h.LoadState(ctx)
 	if err != nil {
 		t.Fatalf("LoadState initial error: %v", err)
 	}
@@ -349,7 +351,7 @@ func TestMultiTurnSQLitePersistence(t *testing.T) {
 	}
 
 	// Turn 1
-	_, reply1, err := drainStream(ctx, h, "thread-alice", message.NewUserText("My name is Alice"))
+	_, reply1, err := drainStream(ctx, h, message.NewUserText("My name is Alice"))
 	if err != nil {
 		t.Fatalf("Turn 1 Stream error: %v", err)
 	}
@@ -359,6 +361,7 @@ func TestMultiTurnSQLitePersistence(t *testing.T) {
 
 	// Turn 2 on the same threadID across a freshly constructed Harness sharing the same SQLite DB
 	h2, err := New(Config{
+		ID:     "thread-alice",
 		DB:     db,
 		Model:  model,
 		Tools:  reg,
@@ -368,7 +371,7 @@ func TestMultiTurnSQLitePersistence(t *testing.T) {
 		t.Fatalf("New h2 error: %v", err)
 	}
 
-	_, reply2, err := drainStream(ctx, h2, "thread-alice", message.NewUserText("What is my name?"))
+	_, reply2, err := drainStream(ctx, h2, message.NewUserText("What is my name?"))
 	if err != nil {
 		t.Fatalf("Turn 2 Stream error: %v", err)
 	}
@@ -397,7 +400,7 @@ func TestMultiTurnSQLitePersistence(t *testing.T) {
 	}
 
 	// Verify persisted state has all 4 conversation messages
-	state, err := h2.LoadState(ctx, "thread-alice")
+	state, err := h2.LoadState(ctx)
 	if err != nil {
 		t.Fatalf("LoadState error: %v", err)
 	}
@@ -437,6 +440,7 @@ func TestSystemPromptIsolation(t *testing.T) {
 
 	sysPrompt := "You are TaskSmith v2.\n\nFollow strict Go conventions."
 	h, err := New(Config{
+		ID:           "thread-sys",
 		DB:           db,
 		Model:        newTestModel(t, prov),
 		Tools:        reg,
@@ -447,7 +451,7 @@ func TestSystemPromptIsolation(t *testing.T) {
 		t.Fatalf("New error: %v", err)
 	}
 
-	_, _, err = drainStream(ctx, h, "thread-sys", message.NewUserText("Ping"))
+	_, _, err = drainStream(ctx, h, message.NewUserText("Ping"))
 	if err != nil {
 		t.Fatalf("Stream error: %v", err)
 	}
@@ -473,7 +477,7 @@ func TestSystemPromptIsolation(t *testing.T) {
 	}
 
 	// 2. Verify LoadState NEVER contains the system prompt
-	state, err := h.LoadState(ctx, "thread-sys")
+	state, err := h.LoadState(ctx)
 	if err != nil {
 		t.Fatalf("LoadState error: %v", err)
 	}
@@ -502,28 +506,40 @@ func TestThreadIsolation(t *testing.T) {
 		},
 	}
 
-	h, err := New(Config{
+	hA, err := New(Config{
+		ID:     "thread-A",
 		DB:     db,
 		Model:  newTestModel(t, prov),
 		Tools:  reg,
 		Logger: log.Default(),
 	})
 	if err != nil {
-		t.Fatalf("New error: %v", err)
+		t.Fatalf("New hA error: %v", err)
 	}
 
-	if _, _, err := drainStream(ctx, h, "thread-A", message.NewUserText("Message for A")); err != nil {
+	hB, err := New(Config{
+		ID:     "thread-B",
+		DB:     db,
+		Model:  newTestModel(t, prov),
+		Tools:  reg,
+		Logger: log.Default(),
+	})
+	if err != nil {
+		t.Fatalf("New hB error: %v", err)
+	}
+
+	if _, _, err := drainStream(ctx, hA, message.NewUserText("Message for A")); err != nil {
 		t.Fatalf("Stream thread-A error: %v", err)
 	}
-	if _, _, err := drainStream(ctx, h, "thread-B", message.NewUserText("Message for B")); err != nil {
+	if _, _, err := drainStream(ctx, hB, message.NewUserText("Message for B")); err != nil {
 		t.Fatalf("Stream thread-B error: %v", err)
 	}
 
-	stateA, err := h.LoadState(ctx, "thread-A")
+	stateA, err := hA.LoadState(ctx)
 	if err != nil {
 		t.Fatalf("LoadState thread-A error: %v", err)
 	}
-	stateB, err := h.LoadState(ctx, "thread-B")
+	stateB, err := hB.LoadState(ctx)
 	if err != nil {
 		t.Fatalf("LoadState thread-B error: %v", err)
 	}
@@ -586,6 +602,7 @@ func TestMultiStepToolExecution(t *testing.T) {
 	}
 
 	h, err := New(Config{
+		ID:     "thread-tools",
 		DB:     db,
 		Model:  newTestModel(t, prov),
 		Tools:  reg,
@@ -598,7 +615,7 @@ func TestMultiStepToolExecution(t *testing.T) {
 	var emittedMessages []message.Message
 	var completedMsg message.Message
 
-	for ev, err := range h.Stream(ctx, "thread-tools", message.NewUserText("Read hello.txt")) {
+	for ev, err := range h.Stream(ctx, Input{Message: message.NewUserText("Read hello.txt")}) {
 		if err != nil {
 			t.Fatalf("Stream error: %v", err)
 		}
@@ -641,7 +658,7 @@ func TestMultiStepToolExecution(t *testing.T) {
 	}
 
 	// Verify all 4 messages are persisted in checkpoint state
-	state, err := h.LoadState(ctx, "thread-tools")
+	state, err := h.LoadState(ctx)
 	if err != nil {
 		t.Fatalf("LoadState error: %v", err)
 	}
@@ -701,6 +718,7 @@ func TestPermissionInterruptAndResume(t *testing.T) {
 	}
 
 	h, err := New(Config{
+		ID:     "thread-perm",
 		DB:     db,
 		Model:  newTestModel(t, prov),
 		Tools:  reg,
@@ -711,7 +729,7 @@ func TestPermissionInterruptAndResume(t *testing.T) {
 	}
 
 	// 1. Calling Resume on a thread with no pending permissions -> ErrNoPendingPermissions
-	for _, err := range h.Resume(ctx, "thread-perm", nil) {
+	for _, err := range h.Stream(ctx, Input{Decisions: map[string]tools.PermissionDecision{}}) {
 		if !errors.Is(err, ErrNoPendingPermissions) {
 			t.Fatalf("Resume without pending permissions error = %v, want %v", err, ErrNoPendingPermissions)
 		}
@@ -720,7 +738,7 @@ func TestPermissionInterruptAndResume(t *testing.T) {
 	// 2. Run Stream -> ls executes immediately, while the 2 write calls pause at ToolsNode with EventInterrupted
 	var streamToolMsgs []*message.Tool
 	var interruptedPerms []tools.PermissionRequest
-	for ev, err := range h.Stream(ctx, "thread-perm", message.NewUserText("Write two files")) {
+	for ev, err := range h.Stream(ctx, Input{Message: message.NewUserText("Write two files")}) {
 		if err != nil {
 			t.Fatalf("Stream error: %v", err)
 		}
@@ -744,7 +762,7 @@ func TestPermissionInterruptAndResume(t *testing.T) {
 		t.Fatalf("expected 2 pending permission requests, got %d", len(interruptedPerms))
 	}
 
-	statePaused, err := h.LoadState(ctx, "thread-perm")
+	statePaused, err := h.LoadState(ctx)
 	if err != nil {
 		t.Fatalf("LoadState paused error: %v", err)
 	}
@@ -760,7 +778,7 @@ func TestPermissionInterruptAndResume(t *testing.T) {
 		},
 	}
 	var partialErr error
-	for _, err := range h.Resume(ctx, "thread-perm", partialDecisions) {
+	for _, err := range h.Stream(ctx, Input{Decisions: partialDecisions}) {
 		if err != nil {
 			partialErr = err
 		}
@@ -785,7 +803,7 @@ func TestPermissionInterruptAndResume(t *testing.T) {
 
 	var resumeToolMsgs []*message.Tool
 	var resumeCompleted message.Message
-	for ev, err := range h.Resume(ctx, "thread-perm", fullDecisions) {
+	for ev, err := range h.Stream(ctx, Input{Decisions: fullDecisions}) {
 		if err != nil {
 			t.Fatalf("Resume error: %v", err)
 		}
@@ -821,7 +839,7 @@ func TestPermissionInterruptAndResume(t *testing.T) {
 	}
 
 	// Verify PendingPermissions is cleared in final checkpoint state
-	finalState, err := h.LoadState(ctx, "thread-perm")
+	finalState, err := h.LoadState(ctx)
 	if err != nil {
 		t.Fatalf("LoadState final error: %v", err)
 	}
@@ -868,6 +886,7 @@ func TestCancelPendingPermissionsOnNewUserMessage(t *testing.T) {
 	}
 
 	h, err := New(Config{
+		ID:     "thread-cancel-perm",
 		DB:     db,
 		Model:  newTestModel(t, prov),
 		Tools:  reg,
@@ -879,7 +898,7 @@ func TestCancelPendingPermissionsOnNewUserMessage(t *testing.T) {
 
 	// Turn 1: Trigger permission interrupt
 	var interrupted bool
-	for ev, err := range h.Stream(ctx, "thread-cancel-perm", message.NewUserText("Write never-written.txt")) {
+	for ev, err := range h.Stream(ctx, Input{Message: message.NewUserText("Write never-written.txt")}) {
 		if err != nil {
 			t.Fatalf("Turn 1 Stream error: %v", err)
 		}
@@ -895,7 +914,7 @@ func TestCancelPendingPermissionsOnNewUserMessage(t *testing.T) {
 	var turn2Events []message.Message
 	var canceledToolMsg *message.Tool
 	var finalMsg message.Message
-	for ev, err := range h.Stream(ctx, "thread-cancel-perm", message.NewUserText("Actually, cancel that and do something else")) {
+	for ev, err := range h.Stream(ctx, Input{Message: message.NewUserText("Actually, cancel that and do something else")}) {
 		if err != nil {
 			t.Fatalf("Turn 2 Stream error: %v", err)
 		}
@@ -941,7 +960,7 @@ func TestCancelPendingPermissionsOnNewUserMessage(t *testing.T) {
 			turn2Msgs[0].Role(), turn2Msgs[1].Role(), turn2Msgs[2].Role(), turn2Msgs[3].Role())
 	}
 
-	state, err := h.LoadState(ctx, "thread-cancel-perm")
+	state, err := h.LoadState(ctx)
 	if err != nil {
 		t.Fatalf("LoadState error: %v", err)
 	}
@@ -1011,6 +1030,7 @@ func TestMixedToolCallsAndPlanModeDeny(t *testing.T) {
 	}
 
 	h, err := New(Config{
+		ID:     "thread-plan",
 		DB:     db,
 		Model:  newTestModel(t, prov),
 		Tools:  reg,
@@ -1021,7 +1041,7 @@ func TestMixedToolCallsAndPlanModeDeny(t *testing.T) {
 	}
 
 	var toolMsgs []*message.Tool
-	for ev, err := range h.Stream(ctx, "thread-plan", message.NewUserText("Try view, write, and unknown")) {
+	for ev, err := range h.Stream(ctx, Input{Message: message.NewUserText("Try view, write, and unknown")}) {
 		if err != nil {
 			t.Fatalf("Stream error: %v", err)
 		}
@@ -1057,21 +1077,28 @@ func TestValidationAndContextCancellation(t *testing.T) {
 	model := newTestModel(t, nil)
 	logger := log.Default()
 
-	// 1. Validate all 4 required Config fields
-	if _, err := New(Config{Model: model, Tools: reg, Logger: logger}); !errors.Is(err, ErrInvalidConfig) {
+	// 1. Validate all required Config fields
+	if _, err := New(Config{DB: db, Model: model, Tools: reg, Logger: logger}); !errors.Is(err, ErrInvalidConfig) {
+		t.Errorf("missing ID error = %v, want %v", err, ErrInvalidConfig)
+	}
+	if _, err := New(Config{ID: "   ", DB: db, Model: model, Tools: reg, Logger: logger}); !errors.Is(err, ErrInvalidConfig) {
+		t.Errorf("whitespace ID error = %v, want %v", err, ErrInvalidConfig)
+	}
+	if _, err := New(Config{ID: "thread-valid", Model: model, Tools: reg, Logger: logger}); !errors.Is(err, ErrInvalidConfig) {
 		t.Errorf("missing DB error = %v, want %v", err, ErrInvalidConfig)
 	}
-	if _, err := New(Config{DB: db, Tools: reg, Logger: logger}); !errors.Is(err, ErrInvalidConfig) {
+	if _, err := New(Config{ID: "thread-valid", DB: db, Tools: reg, Logger: logger}); !errors.Is(err, ErrInvalidConfig) {
 		t.Errorf("missing Model error = %v, want %v", err, ErrInvalidConfig)
 	}
-	if _, err := New(Config{DB: db, Model: model, Logger: logger}); !errors.Is(err, ErrInvalidConfig) {
+	if _, err := New(Config{ID: "thread-valid", DB: db, Model: model, Logger: logger}); !errors.Is(err, ErrInvalidConfig) {
 		t.Errorf("missing Tools error = %v, want %v", err, ErrInvalidConfig)
 	}
-	if _, err := New(Config{DB: db, Model: model, Tools: reg}); !errors.Is(err, ErrInvalidConfig) {
+	if _, err := New(Config{ID: "thread-valid", DB: db, Model: model, Tools: reg}); !errors.Is(err, ErrInvalidConfig) {
 		t.Errorf("missing Logger error = %v, want %v", err, ErrInvalidConfig)
 	}
 
 	h, err := New(Config{
+		ID:     "thread-valid",
 		DB:     db,
 		Model:  model,
 		Tools:  reg,
@@ -1081,37 +1108,23 @@ func TestValidationAndContextCancellation(t *testing.T) {
 		t.Fatalf("New error: %v", err)
 	}
 
-	// 2. Empty threadID -> ErrEmptyThreadID on Stream, Resume, and LoadState; nil input -> ErrNilMessage
-	if _, _, err := drainStream(ctx, h, "", message.NewUserText("hi")); !errors.Is(err, ErrEmptyThreadID) {
-		t.Errorf("Stream empty threadID error = %v, want %v", err, ErrEmptyThreadID)
-	}
-	if _, _, err := drainStream(ctx, h, "   ", message.NewUserText("hi")); !errors.Is(err, ErrEmptyThreadID) {
-		t.Errorf("Stream whitespace threadID error = %v, want %v", err, ErrEmptyThreadID)
-	}
-	if _, _, err := drainStream(ctx, h, "thread-valid", nil); !errors.Is(err, ErrNilMessage) {
+	// 2. Nil message -> ErrNilMessage
+	if _, _, err := drainStream(ctx, h, nil); !errors.Is(err, ErrNilMessage) {
 		t.Errorf("Stream nil message error = %v, want %v", err, ErrNilMessage)
 	}
-	for _, err := range h.Resume(ctx, "", nil) {
-		if !errors.Is(err, ErrEmptyThreadID) {
-			t.Errorf("Resume empty threadID error = %v, want %v", err, ErrEmptyThreadID)
-		}
-	}
-	if _, err := h.LoadState(ctx, ""); !errors.Is(err, ErrEmptyThreadID) {
-		t.Errorf("LoadState empty threadID error = %v, want %v", err, ErrEmptyThreadID)
-	}
 
-	// 3. Context cancellation before Stream / Resume / LoadState
+	// 3. Context cancellation before Stream / LoadState
 	cancelCtx, cancel := context.WithCancel(ctx)
 	cancel()
-	if _, _, err := drainStream(cancelCtx, h, "thread-cancel", message.NewUserText("hi")); !errors.Is(err, context.Canceled) {
+	if _, _, err := drainStream(cancelCtx, h, message.NewUserText("hi")); !errors.Is(err, context.Canceled) {
 		t.Errorf("Stream with canceled ctx error = %v, want %v", err, context.Canceled)
 	}
-	for _, err := range h.Resume(cancelCtx, "thread-cancel", nil) {
+	for _, err := range h.Stream(cancelCtx, Input{Decisions: map[string]tools.PermissionDecision{}}) {
 		if !errors.Is(err, context.Canceled) {
 			t.Errorf("Resume with canceled ctx error = %v, want %v", err, context.Canceled)
 		}
 	}
-	if _, err := h.LoadState(cancelCtx, "thread-cancel"); !errors.Is(err, context.Canceled) {
+	if _, err := h.LoadState(cancelCtx); !errors.Is(err, context.Canceled) {
 		t.Errorf("LoadState with canceled ctx error = %v, want %v", err, context.Canceled)
 	}
 
@@ -1124,6 +1137,7 @@ func TestValidationAndContextCancellation(t *testing.T) {
 		},
 	}
 	hCancel, err := New(Config{
+		ID:     "thread-stream-cancel",
 		DB:     db,
 		Model:  newTestModel(t, cancelProv),
 		Tools:  reg,
@@ -1132,7 +1146,7 @@ func TestValidationAndContextCancellation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New hCancel error: %v", err)
 	}
-	if _, _, err := drainStream(streamCancelCtx, hCancel, "thread-stream-cancel", message.NewUserText("hi")); err == nil {
+	if _, _, err := drainStream(streamCancelCtx, hCancel, message.NewUserText("hi")); err == nil {
 		t.Errorf("expected error when context is canceled during streaming, got nil")
 	}
 }

@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"slices"
 	"sync"
 	"time"
 
@@ -13,12 +14,13 @@ import (
 type State struct {
 	sync.Mutex `json:"-"`
 
-	Status            Status    `json:"status"`
-	Running           bool      `json:"running"`
-	WaitingPermission bool      `json:"waiting_permission"`
-	Error             string    `json:"error,omitempty"`
-	StartedAt         time.Time `json:"started_at,omitzero"`
-	FinishedAt        time.Time `json:"finished_at,omitzero"`
+	Status             Status                    `json:"status"`
+	Running            bool                      `json:"running"`
+	WaitingPermission  bool                      `json:"waiting_permission"`
+	PendingPermissions []tools.PermissionRequest `json:"pending_permissions,omitempty"`
+	Error              string                    `json:"error,omitempty"`
+	StartedAt          time.Time                 `json:"started_at,omitzero"`
+	FinishedAt         time.Time                 `json:"finished_at,omitzero"`
 
 	cancel    context.CancelFunc                  `json:"-"`
 	done      chan struct{}                       `json:"-"`
@@ -44,13 +46,22 @@ func (s *State) Clone() *State {
 	if status == "" {
 		status = StatusIdle
 	}
+	var perms []tools.PermissionRequest
+	if len(s.PendingPermissions) > 0 {
+		perms = make([]tools.PermissionRequest, len(s.PendingPermissions))
+		for i, p := range s.PendingPermissions {
+			p.GrantPatterns = slices.Clone(p.GrantPatterns)
+			perms[i] = p
+		}
+	}
 	return &State{
-		Status:            status,
-		Running:           s.Running,
-		WaitingPermission: s.WaitingPermission,
-		Error:             s.Error,
-		StartedAt:         s.StartedAt,
-		FinishedAt:        s.FinishedAt,
-		decisions:         make(map[string]tools.PermissionDecision),
+		Status:             status,
+		Running:            s.Running,
+		WaitingPermission:  s.WaitingPermission,
+		PendingPermissions: perms,
+		Error:              s.Error,
+		StartedAt:          s.StartedAt,
+		FinishedAt:         s.FinishedAt,
+		decisions:          make(map[string]tools.PermissionDecision),
 	}
 }

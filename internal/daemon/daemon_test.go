@@ -344,7 +344,9 @@ func TestHealthAndSessionCRUD(t *testing.T) {
 
 	s2, err := cli.CreateSession(ctx, api.CreateSessionRequest{
 		Title: "Session Two",
-		Model: "anthropic/claude-4-sonnet",
+		Config: api.SessionConfig{
+			Model: "anthropic/claude-4-sonnet",
+		},
 	})
 	if err != nil {
 		t.Fatalf("CreateSession s2: %v", err)
@@ -362,12 +364,14 @@ func TestHealthAndSessionCRUD(t *testing.T) {
 	// 3b. UpdateSession
 	up1, err := cli.UpdateSession(ctx, s1.ID, api.UpdateSessionRequest{
 		Title: "Session One Renamed",
-		Model: "anthropic/claude-4-sonnet",
+		Config: api.SessionConfig{
+			Model: "anthropic/claude-4-sonnet",
+		},
 	})
 	if err != nil {
 		t.Fatalf("UpdateSession s1: %v", err)
 	}
-	if up1.Title != "Session One Renamed" || up1.Model != "anthropic/claude-4-sonnet" {
+	if up1.Title != "Session One Renamed" || up1.Config.Model != "anthropic/claude-4-sonnet" {
 		t.Errorf("UpdateSession s1 = %+v", up1)
 	}
 
@@ -443,7 +447,6 @@ func TestSSESubscribeAndStreamingTurn(t *testing.T) {
 
 	if err := cli.Send(ctx, sess.ID, api.SendRequest{
 		Content: "Stream me",
-		Wait:    true,
 	}); err != nil {
 		t.Fatalf("Send: %v", err)
 	}
@@ -539,7 +542,6 @@ func TestBackgroundTurnSurvivesClientDisconnect(t *testing.T) {
 	go func() {
 		sendDone <- cli.Send(shortCtx, sess.ID, api.SendRequest{
 			Content: "Run in background",
-			Wait:    true,
 		})
 	}()
 
@@ -627,9 +629,8 @@ func TestCancelRunningTurn(t *testing.T) {
 
 	if err := cli.Send(ctx, sess.ID, api.SendRequest{
 		Content: "Hang forever",
-		Wait:    false,
 	}); err != nil {
-		t.Fatalf("Send(Wait: false): %v", err)
+		t.Fatalf("Send: %v", err)
 	}
 
 	select {
@@ -705,23 +706,28 @@ func TestPermissionsModesAndFileChangesRevert(t *testing.T) {
 		t.Fatalf("CreateSession: %v", err)
 	}
 
-	// 1. Test PermissionMode get and set
-	mode, err := cli.PermissionMode(ctx, sess.ID)
+	// 1. Test PermissionMode get and set via GetSession and UpdateSession
+	sessInfo, err := cli.GetSession(ctx, sess.ID)
 	if err != nil {
-		t.Fatalf("PermissionMode: %v", err)
+		t.Fatalf("GetSession: %v", err)
 	}
-	if mode != api.ModeDefault {
-		t.Errorf("initial mode = %q, want %q", mode, api.ModeDefault)
+	if sessInfo.Config.Mode != api.ModeDefault {
+		t.Errorf("initial mode = %q, want %q", sessInfo.Config.Mode, api.ModeDefault)
 	}
 
-	if err := cli.SetPermissionMode(ctx, sess.ID, api.ModeAsk); err != nil {
-		t.Fatalf("SetPermissionMode(ModeAsk): %v", err)
+	updatedSess, err := cli.UpdateSession(ctx, sess.ID, api.UpdateSessionRequest{
+		Config: api.SessionConfig{Mode: api.ModeAsk},
+	})
+	if err != nil {
+		t.Fatalf("UpdateSession(ModeAsk): %v", err)
 	}
-	if got, err := cli.PermissionMode(ctx, sess.ID); err != nil || got != api.ModeAsk {
-		t.Errorf("PermissionMode after Set = (%q, %v), want %q", got, err, api.ModeAsk)
+	if updatedSess.Config.Mode != api.ModeAsk {
+		t.Errorf("Mode after Update = %q, want %q", updatedSess.Config.Mode, api.ModeAsk)
 	}
-	if err := cli.SetPermissionMode(ctx, sess.ID, api.ModeDefault); err != nil {
-		t.Fatalf("SetPermissionMode(ModeDefault): %v", err)
+	if _, err := cli.UpdateSession(ctx, sess.ID, api.UpdateSessionRequest{
+		Config: api.SessionConfig{Mode: api.ModeDefault},
+	}); err != nil {
+		t.Fatalf("UpdateSession(ModeDefault): %v", err)
 	}
 
 	// Subscribe to SSE to verify permission_requested event
@@ -748,7 +754,6 @@ func TestPermissionsModesAndFileChangesRevert(t *testing.T) {
 	// 2. Send triggers write tool call -> pauses on permission gate
 	if err := cli.Send(ctx, sess.ID, api.SendRequest{
 		Content: "Please update hello.txt",
-		Wait:    true,
 	}); err != nil {
 		t.Fatalf("Send: %v", err)
 	}
@@ -772,30 +777,34 @@ func TestPermissionsModesAndFileChangesRevert(t *testing.T) {
 		t.Errorf("waitingSess.Status = %q, want %q", waitingSess.Status, api.StatusWaitingPermission)
 	}
 
-	perms, err := cli.PendingPermissions(ctx, sess.ID)
-	if err != nil {
-		t.Fatalf("PendingPermissions: %v", err)
-	}
+	perms := waitingSess.PendingPermissions
 	if len(perms) != 1 || perms[0].ToolName != "write" {
 		t.Fatalf("PendingPermissions = %+v, want 1 write permission", perms)
 	}
 
-	// 3. Approve permission via RespondPermission
-	if err := cli.RespondPermission(ctx, sess.ID, api.PermissionDecision{
-		RequestID: perms[0].ID,
-		Kind:      api.DecisionAllowOnce,
-		Wait:      true,
+	// 3. Approve permission via Send decision
+	if err := cli.Send(ctx, sess.ID, api.SendRequest{
+		Decision: &api.PermissionDecision{
+			RequestID: perms[0].ID,
+			Kind:      api.DecisionAllowOnce,
+		},
 	}); err != nil {
-		t.Fatalf("RespondPermission: %v", err)
+		t.Fatalf("Send decision: %v", err)
 	}
 
 	// Verify file on disk was updated
-	diskBytes, err := os.ReadFile(targetFile)
-	if err != nil {
-		t.Fatalf("ReadFile targetFile: %v", err)
+	var diskBytes []byte
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		b, err := os.ReadFile(targetFile)
+		if err == nil && string(b) == "updated content\n" {
+			diskBytes = b
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 	if string(diskBytes) != "updated content\n" {
-		t.Errorf("disk content = %q, want \"updated content\\n\"", string(diskBytes))
+		t.Fatalf("disk content = %q, want \"updated content\\n\"", string(diskBytes))
 	}
 
 	// 4. Inspect Changes and DiffChange
@@ -889,7 +898,7 @@ func TestConversionsAndErrorPublishing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("fromSendRequest: %v", err)
 	}
-	apiMsg, err := toAPIMessage(reqMsg)
+	apiMsg, err := toAPIMessage(reqMsg.Message)
 	if err != nil {
 		t.Fatalf("toAPIMessage: %v", err)
 	}
@@ -936,8 +945,8 @@ func TestConversionsAndErrorPublishing(t *testing.T) {
 		t.Fatal("timed out waiting for error sub ready")
 	}
 
-	if err := cli.Send(ctx, sess.ID, api.SendRequest{Content: "trigger error", Wait: false}); err != nil {
-		t.Fatalf("Send(Wait: false): %v", err)
+	if err := cli.Send(ctx, sess.ID, api.SendRequest{Content: "trigger error"}); err != nil {
+		t.Fatalf("Send: %v", err)
 	}
 
 	select {
@@ -1018,7 +1027,7 @@ func TestSubdirectorySharesCanonicalWorkspaceRuntime(t *testing.T) {
 		t.Fatal("timed out waiting for subDir sub ready")
 	}
 
-	if err := cli.Send(ctx, sess.ID, api.SendRequest{Content: "hello from root", Wait: true}); err != nil {
+	if err := cli.Send(ctx, sess.ID, api.SendRequest{Content: "hello from root"}); err != nil {
 		t.Fatalf("Send: %v", err)
 	}
 
@@ -1473,7 +1482,7 @@ func TestToolStructuredContentInEventsAndHistory(t *testing.T) {
 	case <-ctx.Done():
 		t.Fatal(ctx.Err())
 	}
-	if err := cli.Send(ctx, sess.ID, api.SendRequest{Content: "Read source.go.", Wait: true}); err != nil {
+	if err := cli.Send(ctx, sess.ID, api.SendRequest{Content: "Read source.go."}); err != nil {
 		t.Fatal(err)
 	}
 	var live api.Message

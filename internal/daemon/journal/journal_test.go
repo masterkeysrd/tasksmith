@@ -2,6 +2,7 @@ package journal_test
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"os"
 	"path/filepath"
@@ -16,7 +17,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/daemon/std"
 )
 
-func setupTestJournal(t *testing.T) (journal.Store, string, sandbox.FS) {
+func setupTestJournal(t *testing.T) (*sql.DB, string, sandbox.FS) {
 	t.Helper()
 	ctx := context.Background()
 
@@ -28,11 +29,6 @@ func setupTestJournal(t *testing.T) (journal.Store, string, sandbox.FS) {
 	t.Cleanup(func() {
 		_ = db.Close()
 	})
-
-	store, err := journal.New(ctx, db)
-	if err != nil {
-		t.Fatalf("journal.New: %v", err)
-	}
 
 	workDir := t.TempDir()
 	sb, err := sandbox.New(sandbox.Config{
@@ -46,34 +42,30 @@ func setupTestJournal(t *testing.T) (journal.Store, string, sandbox.FS) {
 		_ = sb.Close()
 	})
 
-	return store, t.TempDir(), sb.FS()
+	return db, t.TempDir(), sb.FS()
 }
 
-func TestStoreValidation(t *testing.T) {
+func TestJournalValidation(t *testing.T) {
 	ctx := context.Background()
 
-	if _, err := journal.New(ctx, nil); !errors.Is(err, journal.ErrInvalidConfig) {
-		t.Errorf("journal.New(nil) = %v, want %v", err, journal.ErrInvalidConfig)
-	}
+	db, blobsDir, _ := setupTestJournal(t)
 
-	store, blobsDir, _ := setupTestJournal(t)
-
-	if _, err := store.Open(ctx, "", blobsDir); !errors.Is(err, journal.ErrInvalidConfig) {
-		t.Errorf("store.Open empty sessionID = %v, want %v", err, journal.ErrInvalidConfig)
+	if _, err := journal.New(ctx, nil, "sess", blobsDir); !errors.Is(err, journal.ErrInvalidConfig) {
+		t.Errorf("journal.New(nil db) = %v, want %v", err, journal.ErrInvalidConfig)
 	}
-	if _, err := store.Open(ctx, "sess-1", ""); !errors.Is(err, journal.ErrInvalidConfig) {
-		t.Errorf("store.Open empty blobsDir = %v, want %v", err, journal.ErrInvalidConfig)
+	if _, err := journal.New(ctx, db, "", blobsDir); !errors.Is(err, journal.ErrInvalidConfig) {
+		t.Errorf("journal.New empty sessionID = %v, want %v", err, journal.ErrInvalidConfig)
 	}
-	if err := store.DeleteSession(ctx, ""); !errors.Is(err, journal.ErrInvalidConfig) {
-		t.Errorf("store.DeleteSession empty sessionID = %v, want %v", err, journal.ErrInvalidConfig)
+	if _, err := journal.New(ctx, db, "sess-1", ""); !errors.Is(err, journal.ErrInvalidConfig) {
+		t.Errorf("journal.New empty blobsDir = %v, want %v", err, journal.ErrInvalidConfig)
 	}
 }
 
 func TestJournalRecordReadAndCAS(t *testing.T) {
 	ctx := context.Background()
-	store, blobsDir, _ := setupTestJournal(t)
+	db, blobsDir, _ := setupTestJournal(t)
 
-	j, err := store.Open(ctx, "session-cas", blobsDir)
+	j, err := journal.New(ctx, db, "session-cas", blobsDir)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -103,9 +95,9 @@ func TestJournalRecordReadAndCAS(t *testing.T) {
 
 func TestJournalRecordChangeAndScope(t *testing.T) {
 	ctx := context.Background()
-	store, blobsDir, _ := setupTestJournal(t)
+	db, blobsDir, _ := setupTestJournal(t)
 
-	j, err := store.Open(ctx, "session-scope", blobsDir)
+	j, err := journal.New(ctx, db, "session-scope", blobsDir)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -217,9 +209,9 @@ func TestJournalRecordChangeAndScope(t *testing.T) {
 
 func TestJournalRecoverAt(t *testing.T) {
 	ctx := context.Background()
-	store, blobsDir, fsys := setupTestJournal(t)
+	db, blobsDir, fsys := setupTestJournal(t)
 
-	j, err := store.Open(ctx, "session-recover", blobsDir)
+	j, err := journal.New(ctx, db, "session-recover", blobsDir)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -285,9 +277,9 @@ func TestJournalRecoverAt(t *testing.T) {
 
 func TestJournalRevertToBaselineThreeWayMerge(t *testing.T) {
 	ctx := context.Background()
-	store, blobsDir, fsys := setupTestJournal(t)
+	db, blobsDir, fsys := setupTestJournal(t)
 
-	j, err := store.Open(ctx, "session-revert", blobsDir)
+	j, err := journal.New(ctx, db, "session-revert", blobsDir)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -376,9 +368,9 @@ func TestJournalRevertToBaselineThreeWayMerge(t *testing.T) {
 
 func TestJournalReloadAndSessionDeletion(t *testing.T) {
 	ctx := context.Background()
-	store, blobsDir, fsys := setupTestJournal(t)
+	db, blobsDir, fsys := setupTestJournal(t)
 
-	j1, err := store.Open(ctx, "session-reload", blobsDir)
+	j1, err := journal.New(ctx, db, "session-reload", blobsDir)
 	if err != nil {
 		t.Fatalf("Open 1: %v", err)
 	}
@@ -395,7 +387,7 @@ func TestJournalReloadAndSessionDeletion(t *testing.T) {
 	}
 
 	// Open again (simulating process restart)
-	j2, err := store.Open(ctx, "session-reload", blobsDir)
+	j2, err := journal.New(ctx, db, "session-reload", blobsDir)
 	if err != nil {
 		t.Fatalf("Open 2: %v", err)
 	}
@@ -412,13 +404,13 @@ func TestJournalReloadAndSessionDeletion(t *testing.T) {
 		t.Errorf("reloaded TrackedPaths = %v, want [\"main.go\"]", paths)
 	}
 
-	// DeleteSession removes records from SQLite
-	if err := store.DeleteSession(ctx, "session-reload"); err != nil {
-		t.Fatalf("DeleteSession: %v", err)
+	// Delete removes records from SQLite
+	if err := j2.Delete(ctx); err != nil {
+		t.Fatalf("Delete: %v", err)
 	}
 
 	// Open after deletion has no tracked files
-	j3, err := store.Open(ctx, "session-reload", blobsDir)
+	j3, err := journal.New(ctx, db, "session-reload", blobsDir)
 	if err != nil {
 		t.Fatalf("Open 3: %v", err)
 	}

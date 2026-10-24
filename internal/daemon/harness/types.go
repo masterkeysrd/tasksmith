@@ -18,6 +18,13 @@ var (
 	ErrPendingPermissionsUnresolved = errors.New("harness: all pending permissions must be resolved before resuming")
 )
 
+// Input represents the conversational input to [Harness.Stream].
+// It can provide either a new user message or resolved permission decisions.
+type Input struct {
+	Message   message.Message
+	Decisions map[string]tools.PermissionDecision
+}
+
 // State holds the checkpointed conversation and permission state for a thread.
 // It implements [github.com/masterkeysrd/loom/graph.State].
 type State struct {

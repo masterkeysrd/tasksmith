@@ -309,50 +309,6 @@ func (c *Client) Cancel(ctx context.Context, sessionID string) error {
 	return c.doJSON(ctx, http.MethodPost, path, nil, nil, nil)
 }
 
-// PendingPermissions returns all unresolved permission requests for a session.
-func (c *Client) PendingPermissions(ctx context.Context, sessionID string) ([]api.PermissionRequest, error) {
-	path, err := c.sessionEndpoint(sessionID, "/permissions")
-	if err != nil {
-		return nil, err
-	}
-	var out []api.PermissionRequest
-	if err := c.doJSON(ctx, http.MethodGet, path, nil, nil, &out); err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-// RespondPermission submits a user decision for a pending permission request.
-func (c *Client) RespondPermission(ctx context.Context, sessionID string, decision api.PermissionDecision) error {
-	path, err := c.sessionEndpoint(sessionID, "/permissions")
-	if err != nil {
-		return err
-	}
-	return c.doJSON(ctx, http.MethodPost, path, nil, decision, nil)
-}
-
-// PermissionMode returns the active [api.PermissionMode] for a session.
-func (c *Client) PermissionMode(ctx context.Context, sessionID string) (api.PermissionMode, error) {
-	path, err := c.sessionEndpoint(sessionID, "/mode")
-	if err != nil {
-		return "", err
-	}
-	var out api.ModeResponse
-	if err := c.doJSON(ctx, http.MethodGet, path, nil, nil, &out); err != nil {
-		return "", err
-	}
-	return out.Mode, nil
-}
-
-// SetPermissionMode updates the active [api.PermissionMode] for a session.
-func (c *Client) SetPermissionMode(ctx context.Context, sessionID string, mode api.PermissionMode) error {
-	path, err := c.sessionEndpoint(sessionID, "/mode")
-	if err != nil {
-		return err
-	}
-	return c.doJSON(ctx, http.MethodPut, path, nil, api.SetModeRequest{Mode: mode}, nil)
-}
-
 // Changes returns all recorded file mutation entries for a session.
 func (c *Client) Changes(ctx context.Context, sessionID string) ([]api.FileChange, error) {
 	path, err := c.sessionEndpoint(sessionID, "/changes")

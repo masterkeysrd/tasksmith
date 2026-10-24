@@ -30,7 +30,7 @@ type modelInfoKey struct {
 }
 
 func newModelInfoKey(c *client.Client, s api.Session) modelInfoKey {
-	return modelInfoKey{Socket: c.SocketPath(), CWD: c.CWD(), ID: s.ID, Agent: s.Agent, Model: s.Model}
+	return modelInfoKey{Socket: c.SocketPath(), CWD: c.CWD(), ID: s.ID, Agent: s.Config.Agent, Model: s.Config.Model}
 }
 
 // UseModelInfo resolves the label and effort for the active session, asking
@@ -66,8 +66,8 @@ func ResolveModelInfo(ctx context.Context, c *client.Client, cfgAgent, cfgModel 
 	modelID := strings.TrimSpace(cfgModel)
 
 	if sess != nil {
-		agentName = strings.TrimSpace(sess.Agent)
-		modelID = strings.TrimSpace(sess.Model)
+		agentName = strings.TrimSpace(sess.Config.Agent)
+		modelID = strings.TrimSpace(sess.Config.Model)
 	}
 
 	var ws *api.Workspace

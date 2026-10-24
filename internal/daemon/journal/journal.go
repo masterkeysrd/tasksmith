@@ -27,36 +27,36 @@ type fileState struct {
 	changed bool
 }
 
-type sqliteStore struct {
-	db *sql.DB
+type sqliteJournal struct {
+	mu        sync.RWMutex
+	db        *sql.DB
+	sessionID string
+	blobsDir  string
+	files     map[string]fileState
 }
 
-var _ Store = (*sqliteStore)(nil)
+var _ Journal = (*sqliteJournal)(nil)
 
-// New creates and initializes a journal Store, running migrations on the provided db.
-func New(ctx context.Context, db *sql.DB) (Store, error) {
+// New loads or initializes the Journal for a session, running schema migrations
+// and restoring in-memory CAS tracked file state from SQLite metadata.
+func New(ctx context.Context, db *sql.DB, sessionID, blobsDir string) (Journal, error) {
 	if db == nil {
 		return nil, ErrInvalidConfig
 	}
-	if err := sqlite.Migrate(ctx, db, "journal", migrations); err != nil {
-		return nil, fmt.Errorf("journal: migrate schema: %w", err)
-	}
-	return &sqliteStore{db: db}, nil
-}
-
-// Open loads or initializes the Journal for a session, restoring in-memory CAS
-// tracked file state from SQLite metadata.
-func (s *sqliteStore) Open(ctx context.Context, sessionID, blobsDir string) (Journal, error) {
 	sessionID = strings.TrimSpace(sessionID)
 	blobsDir = strings.TrimSpace(blobsDir)
 	if sessionID == "" || blobsDir == "" {
 		return nil, fmt.Errorf("%w: session ID and blobs dir must not be empty", ErrInvalidConfig)
 	}
 
+	if err := sqlite.Migrate(ctx, db, "journal", migrations); err != nil {
+		return nil, fmt.Errorf("journal: migrate schema: %w", err)
+	}
+
 	files := make(map[string]fileState)
 
 	// Load files tracked in journal_files
-	fileRows, err := s.db.QueryContext(ctx, "SELECT path, baseline FROM journal_files WHERE session_id = ? ORDER BY path ASC", sessionID)
+	fileRows, err := db.QueryContext(ctx, "SELECT path, baseline FROM journal_files WHERE session_id = ? ORDER BY path ASC", sessionID)
 	if err != nil {
 		return nil, fmt.Errorf("journal: load files for session %q: %w", sessionID, err)
 	}
@@ -78,7 +78,7 @@ func (s *sqliteStore) Open(ctx context.Context, sessionID, blobsDir string) (Jou
 	}
 
 	// Replay journal_entries to determine latest CAS hash
-	entryRows, err := s.db.QueryContext(ctx, "SELECT path, kind, after_hash FROM journal_entries WHERE session_id = ? ORDER BY id ASC", sessionID)
+	entryRows, err := db.QueryContext(ctx, "SELECT path, kind, after_hash FROM journal_entries WHERE session_id = ? ORDER BY id ASC", sessionID)
 	if err != nil {
 		return nil, fmt.Errorf("journal: load entries for session %q: %w", sessionID, err)
 	}
@@ -104,21 +104,16 @@ func (s *sqliteStore) Open(ctx context.Context, sessionID, blobsDir string) (Jou
 	}
 
 	return &sqliteJournal{
-		db:        s.db,
+		db:        db,
 		sessionID: sessionID,
 		blobsDir:  blobsDir,
 		files:     files,
 	}, nil
 }
 
-// DeleteSession removes all journal entries and file tracking records for sessionID.
-func (s *sqliteStore) DeleteSession(ctx context.Context, sessionID string) error {
-	sessionID = strings.TrimSpace(sessionID)
-	if sessionID == "" {
-		return fmt.Errorf("%w: session ID must not be empty", ErrInvalidConfig)
-	}
-
-	tx, err := s.db.BeginTx(ctx, nil)
+// Delete removes all journal entries and file tracking records for this session.
+func (j *sqliteJournal) Delete(ctx context.Context) error {
+	tx, err := j.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("journal: begin tx: %w", err)
 	}
@@ -126,27 +121,20 @@ func (s *sqliteStore) DeleteSession(ctx context.Context, sessionID string) error
 		_ = tx.Rollback()
 	}()
 
-	if _, err := tx.ExecContext(ctx, "DELETE FROM journal_entries WHERE session_id = ?", sessionID); err != nil {
-		return fmt.Errorf("journal: delete entries for %q: %w", sessionID, err)
+	if _, err := tx.ExecContext(ctx, "DELETE FROM journal_entries WHERE session_id = ?", j.sessionID); err != nil {
+		return fmt.Errorf("journal: delete entries for %q: %w", j.sessionID, err)
 	}
-	if _, err := tx.ExecContext(ctx, "DELETE FROM journal_files WHERE session_id = ?", sessionID); err != nil {
-		return fmt.Errorf("journal: delete files for %q: %w", sessionID, err)
+	if _, err := tx.ExecContext(ctx, "DELETE FROM journal_files WHERE session_id = ?", j.sessionID); err != nil {
+		return fmt.Errorf("journal: delete files for %q: %w", j.sessionID, err)
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("journal: commit delete session: %w", err)
 	}
+	j.mu.Lock()
+	clear(j.files)
+	j.mu.Unlock()
 	return nil
 }
-
-type sqliteJournal struct {
-	mu        sync.RWMutex
-	db        *sql.DB
-	sessionID string
-	blobsDir  string
-	files     map[string]fileState
-}
-
-var _ Journal = (*sqliteJournal)(nil)
 
 // LastHash returns the most recently recorded SHA-256 content hash for path.
 func (j *sqliteJournal) LastHash(path string) (string, bool) {

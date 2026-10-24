@@ -195,8 +195,10 @@ func TestWireTypesJSONRoundTrip(t *testing.T) {
 
 	upReq := UpdateSessionRequest{
 		Title: "New Title",
-		Agent: "coder",
-		Model: "claude-sonnet-4-6",
+		Config: SessionConfig{
+			Agent: "coder",
+			Model: "claude-sonnet-4-6",
+		},
 	}
 	upRaw, err := json.Marshal(upReq)
 	if err != nil {
@@ -525,10 +527,12 @@ func TestEventPayloadsAndJSONRoundTrip(t *testing.T) {
 				Payload: SessionCreatedEvent{
 					Workspace: "/workspace",
 					Session: Session{
-						ID:        "s1",
-						Title:     "New Session",
-						Agent:     "developer",
-						Model:     "gpt-4o",
+						ID:    "s1",
+						Title: "New Session",
+						Config: SessionConfig{
+							Agent: "developer",
+							Model: "gpt-4o",
+						},
 						Status:    StatusIdle,
 						CreatedAt: now,
 						UpdatedAt: now,
@@ -545,10 +549,12 @@ func TestEventPayloadsAndJSONRoundTrip(t *testing.T) {
 				Payload: SessionUpdatedEvent{
 					Workspace: "/workspace",
 					Session: Session{
-						ID:        "s1",
-						Title:     "Renamed Session",
-						Agent:     "developer",
-						Model:     "gpt-4o",
+						ID:    "s1",
+						Title: "Renamed Session",
+						Config: SessionConfig{
+							Agent: "developer",
+							Model: "gpt-4o",
+						},
 						Status:    StatusRunning,
 						CreatedAt: now,
 						UpdatedAt: now,

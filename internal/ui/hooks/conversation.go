@@ -352,16 +352,12 @@ func (s *conversationState) load(ctx context.Context, c *client.Client) error {
 			}
 		}
 	}
-	permissions, err := c.PendingPermissions(ctx, s.sessionID)
-	if err != nil {
-		return fmt.Errorf("conversation: permissions: %w", err)
-	}
-	if err := s.addPermissions(permissions); err != nil {
-		return err
-	}
 	session, err := c.GetSession(ctx, s.sessionID)
 	if err != nil {
 		return fmt.Errorf("conversation: session: %w", err)
+	}
+	if err := s.addPermissions(session.PendingPermissions); err != nil {
+		return err
 	}
 	switch session.Status {
 	case api.StatusIdle:

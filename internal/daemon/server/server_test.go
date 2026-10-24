@@ -53,13 +53,6 @@ type mockBackend struct {
 	timelineErr       error
 	sendErr           error
 	cancelErr         error
-	permsResp         []api.PermissionRequest
-	permsErr          error
-	respPermErr       error
-	getModeResp       api.PermissionMode
-	getModeErr        error
-	setModeResp       api.PermissionMode
-	setModeErr        error
 	changesResp       []api.FileChange
 	changesErr        error
 	diffResp          *api.DiffResponse
@@ -159,22 +152,6 @@ func (m *mockBackend) Send(ctx context.Context, workspace, id string, req api.Se
 
 func (m *mockBackend) Cancel(ctx context.Context, workspace, id string) error {
 	return m.cancelErr
-}
-
-func (m *mockBackend) PendingPermissions(ctx context.Context, workspace, id string) ([]api.PermissionRequest, error) {
-	return m.permsResp, m.permsErr
-}
-
-func (m *mockBackend) RespondPermission(ctx context.Context, workspace, id string, dec api.PermissionDecision) error {
-	return m.respPermErr
-}
-
-func (m *mockBackend) GetMode(ctx context.Context, workspace, id string) (api.PermissionMode, error) {
-	return m.getModeResp, m.getModeErr
-}
-
-func (m *mockBackend) SetMode(ctx context.Context, workspace, id string, mode api.PermissionMode) (api.PermissionMode, error) {
-	return m.setModeResp, m.setModeErr
 }
 
 func (m *mockBackend) Changes(ctx context.Context, workspace, id string) ([]api.FileChange, error) {
@@ -319,8 +296,6 @@ func TestSessionRouterEndpoints(t *testing.T) {
 		timelineResp: []api.TimelineEntry{
 			{ID: "entry-1", SessionID: "sess-1", Kind: api.TimelineKindMessage},
 		},
-		getModeResp: api.ModeDefault,
-		setModeResp: api.ModePlan,
 	}
 	handler := setupTestServer(mock)
 
@@ -348,35 +323,12 @@ func TestSessionRouterEndpoints(t *testing.T) {
 		t.Fatalf("timeline status = %d", rec.Code)
 	}
 
-	// Send (non-blocking)
+	// Send
 	req = httptest.NewRequest(http.MethodPost, "/v1/sessions/sess-1/send", strings.NewReader(`{"content":"hello"}`))
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusAccepted {
-		t.Fatalf("send non-blocking status = %d, want 202", rec.Code)
-	}
-
-	// Send (blocking)
-	req = httptest.NewRequest(http.MethodPost, "/v1/sessions/sess-1/send", strings.NewReader(`{"content":"hello","wait":true}`))
-	rec = httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("send blocking status = %d, want 200", rec.Code)
-	}
-
-	// Mode GET & PUT
-	req = httptest.NewRequest(http.MethodGet, "/v1/sessions/sess-1/mode", nil)
-	rec = httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("get mode status = %d", rec.Code)
-	}
-
-	req = httptest.NewRequest(http.MethodPut, "/v1/sessions/sess-1/mode", strings.NewReader(`{"mode":"plan"}`))
-	rec = httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("set mode status = %d", rec.Code)
+		t.Fatalf("send status = %d, want 202", rec.Code)
 	}
 }
 

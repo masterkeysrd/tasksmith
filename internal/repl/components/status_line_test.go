@@ -33,7 +33,7 @@ func renderStatus(t *testing.T, fixture statusFixture, node func() trail.Node) (
 	if err != nil {
 		t.Fatal(err)
 	}
-	session := &api.Session{ID: uuid.Must(uuid.NewV7()).String(), Agent: "build", Model: "m"}
+	session := &api.Session{ID: uuid.Must(uuid.NewV7()).String(), Config: api.SessionConfig{Agent: "build", Model: "m"}}
 
 	b := mock.New(80, 24)
 	app := trail.SimpleFC("TestApp", func() kitex.Node {
@@ -149,7 +149,7 @@ func TestStatusModeSegmentAppearsLateInItsPlace(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	session := &api.Session{ID: uuid.Must(uuid.NewV7()).String(), Agent: "build", Model: "m"}
+	session := &api.Session{ID: uuid.Must(uuid.NewV7()).String(), Config: api.SessionConfig{Agent: "build", Model: "m"}}
 	var setMode func(api.PermissionMode)
 	capture := trail.SimpleFC("Capture", func() trail.Node {
 		setMode = uihooks.UsePermissionMode().Set

@@ -305,7 +305,9 @@ func TestREPLPromptAndSlashCommands(t *testing.T) {
 	// 2. Create a session via client, then resume and mutate it via repl.Config
 	sess, err := c.CreateSession(context.Background(), api.CreateSessionRequest{
 		Title: "Initial Session",
-		Model: "claude-sonnet-4-6",
+		Config: api.SessionConfig{
+			Model: "claude-sonnet-4-6",
+		},
 	})
 	if err != nil {
 		t.Fatalf("CreateSession: %v", err)
@@ -332,8 +334,8 @@ func TestREPLPromptAndSlashCommands(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetSession sess.ID: %v", err)
 	}
-	if resumedSess.Model != "claude-haiku-4-5" {
-		t.Errorf("resumed session model = %q, want 'claude-haiku-4-5'", resumedSess.Model)
+	if resumedSess.Config.Model != "claude-haiku-4-5" {
+		t.Errorf("resumed session model = %q, want 'claude-haiku-4-5'", resumedSess.Config.Model)
 	}
 	if resumedSess.Title != "Resumed Mutated Session" {
 		t.Errorf("resumed session title = %q, want 'Resumed Mutated Session'", resumedSess.Title)

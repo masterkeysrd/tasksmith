@@ -39,11 +39,13 @@ func TestStateAndSessionClone(t *testing.T) {
 
 	now := time.Now().UTC()
 	sess := &Session{
-		State:     st,
-		ID:        "01931f7a-8b83-7182-8924-a7192ba87123",
-		Title:     "Test Session",
-		Agent:     "test-agent",
-		Model:     "test-model",
+		State: st,
+		ID:    "01931f7a-8b83-7182-8924-a7192ba87123",
+		Title: "Test Session",
+		Config: SessionConfig{
+			Agent: "test-agent",
+			Model: "test-model",
+		},
 		CreatedAt: now,
 		UpdatedAt: now,
 		Root:      "/tmp/session-dir",
@@ -74,20 +76,25 @@ func TestManagerStartTurnAndCancel(t *testing.T) {
 	_, _, _, pub, mgr := setupTestEnv(t, prov)
 	defer mgr.Close()
 
-	sess, err := mgr.Create(ctx, CreateParams{Title: "Async Turn Test"})
+	sess, _, err := mgr.Create(ctx, CreateParams{Title: "Async Turn Test"})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 
-	// 1. StartTurn nil message returns ErrNilMessage
-	if err := mgr.StartTurn(ctx, sess.ID, nil, false); !errors.Is(err, ErrNilMessage) {
-		t.Errorf("StartTurn nil message err = %v, want %v", err, ErrNilMessage)
+	// 1. Send nil message returns ErrNilMessage
+	if err := sess.Send(ctx, SendInput{}); !errors.Is(err, ErrNilMessage) {
+		t.Errorf("Send nil message err = %v, want %v", err, ErrNilMessage)
 	}
 
-	// 2. StartTurn with wait=true executes turn to completion using default fakeProvider
-	err = mgr.StartTurn(ctx, sess.ID, message.NewUserText("Hi"), true)
+	// 2. Send executes turn in background using default fakeProvider
+	err = sess.Send(ctx, SendInput{Message: message.NewUserText("Hi")})
 	if err != nil {
-		t.Fatalf("StartTurn with wait=true error: %v", err)
+		t.Fatalf("Send error: %v", err)
+	}
+
+	// Wait for turn to complete
+	if err := sess.Wait(ctx); err != nil {
+		t.Fatalf("Wait error: %v", err)
 	}
 
 	// Verify session returned by Get is StatusIdle
@@ -128,15 +135,15 @@ func TestManagerConcurrentTurnRejection(t *testing.T) {
 	_, _, _, _, mgr := setupTestEnv(t, prov)
 	defer mgr.Close()
 
-	sess, err := mgr.Create(ctx, CreateParams{Title: "Concurrency Test"})
+	sess, _, err := mgr.Create(ctx, CreateParams{Title: "Concurrency Test"})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 
-	// Start asynchronous turn with wait=false
-	err = mgr.StartTurn(ctx, sess.ID, message.NewUserText("First"), false)
+	// Start asynchronous turn
+	err = sess.Send(ctx, SendInput{Message: message.NewUserText("First")})
 	if err != nil {
-		t.Fatalf("StartTurn error: %v", err)
+		t.Fatalf("Send error: %v", err)
 	}
 
 	// Verify session is now Running
@@ -149,25 +156,22 @@ func TestManagerConcurrentTurnRejection(t *testing.T) {
 		t.Errorf("got.Status = %q, Running = %v; want StatusRunning and Running=true", got.Status, got.Running)
 	}
 
-	// Second StartTurn should fail with ErrSessionRunning
-	err = mgr.StartTurn(ctx, sess.ID, message.NewUserText("Second"), false)
+	// Second Send should fail with ErrSessionRunning
+	err = sess.Send(ctx, SendInput{Message: message.NewUserText("Second")})
 	if !errors.Is(err, ErrSessionRunning) {
-		t.Errorf("concurrent StartTurn err = %v, want %v", err, ErrSessionRunning)
+		t.Errorf("concurrent Send err = %v, want %v", err, ErrSessionRunning)
 	}
 
 	// Unblock first turn
 	close(releaseTurn)
 
 	// Wait for turn to finish
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		got, err = mgr.Get(ctx, sess.ID)
-		if err == nil && got.Status == StatusIdle && !got.Running {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
+	if err := sess.Wait(ctx); err != nil {
+		t.Fatalf("sess.Wait error: %v", err)
 	}
-	if got.Status != StatusIdle || got.Running {
+
+	got, err = mgr.Get(ctx, sess.ID)
+	if err != nil || got.Status != StatusIdle || got.Running {
 		t.Fatalf("session failed to return to StatusIdle: %+v", got)
 	}
 }
@@ -182,15 +186,19 @@ func TestManagerTurnErrorPublishing(t *testing.T) {
 	_, _, _, pub, mgr := setupTestEnv(t, prov)
 	defer mgr.Close()
 
-	sess, err := mgr.Create(ctx, CreateParams{Title: "Error Turn Test"})
+	sess, _, err := mgr.Create(ctx, CreateParams{Title: "Error Turn Test"})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 
-	// StartTurn with wait=true should return the error
-	err = mgr.StartTurn(ctx, sess.ID, message.NewUserText("Fail please"), true)
+	// Send should launch turn and Wait should return the error
+	err = sess.Send(ctx, SendInput{Message: message.NewUserText("Fail please")})
+	if err != nil {
+		t.Fatalf("Send error: %v", err)
+	}
+	err = sess.Wait(ctx)
 	if err == nil {
-		t.Fatalf("expected error from StartTurn")
+		t.Fatalf("expected error from sess.Wait")
 	}
 
 	// Verify session has error recorded and is StatusIdle
@@ -234,14 +242,14 @@ func TestManagerCancelTurn(t *testing.T) {
 	_, _, _, _, mgr := setupTestEnv(t, prov)
 	defer mgr.Close()
 
-	sess, err := mgr.Create(ctx, CreateParams{Title: "Cancel Test"})
+	sess, _, err := mgr.Create(ctx, CreateParams{Title: "Cancel Test"})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 
-	err = mgr.StartTurn(ctx, sess.ID, message.NewUserText("Hang"), false)
+	err = sess.Send(ctx, SendInput{Message: message.NewUserText("Hang")})
 	if err != nil {
-		t.Fatalf("StartTurn: %v", err)
+		t.Fatalf("Send: %v", err)
 	}
 
 	time.Sleep(10 * time.Millisecond)
@@ -249,7 +257,7 @@ func TestManagerCancelTurn(t *testing.T) {
 	// Cancel the turn
 	cancelCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
-	if err := mgr.Cancel(cancelCtx, sess.ID); err != nil {
+	if err := sess.Cancel(cancelCtx); err != nil {
 		t.Fatalf("Cancel: %v", err)
 	}
 
@@ -270,23 +278,18 @@ func TestManagerUpdateInvalidatesHarness(t *testing.T) {
 	_, _, _, _, mgr := setupTestEnv(t, prov)
 	defer mgr.Close()
 
-	sess, err := mgr.Create(ctx, CreateParams{Title: "Harness Invalidation"})
+	sess, _, err := mgr.Create(ctx, CreateParams{Title: "Harness Invalidation"})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 
-	liveSess, err := mgr.getLiveSession(ctx, sess.ID)
-	if err != nil {
-		t.Fatalf("getLiveSession: %v", err)
-	}
-
 	// Ensure harness is created
-	h1, err := mgr.harness(ctx, liveSess)
+	h1, err := sess.harness(ctx)
 	if err != nil {
 		t.Fatalf("harness: %v", err)
 	}
-	if liveSess.Harness == nil || liveSess.Harness != h1 {
-		t.Fatalf("expected liveSess.Harness to be cached")
+	if sess.Harness == nil || sess.Harness != h1 {
+		t.Fatalf("expected sess.Harness to be cached")
 	}
 
 	// Update with same model/agent -> Harness remains cached
@@ -294,17 +297,17 @@ func TestManagerUpdateInvalidatesHarness(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Update title: %v", err)
 	}
-	if liveSess.Harness == nil {
-		t.Fatalf("expected liveSess.Harness to remain non-nil after title update")
+	if sess.Harness == nil {
+		t.Fatalf("expected sess.Harness to remain non-nil after title update")
 	}
 
 	// Update with new model -> Harness cleared
-	_, err = mgr.Update(ctx, sess.ID, UpdateParams{Model: "custom-model"})
+	_, err = mgr.Update(ctx, sess.ID, UpdateParams{Config: SessionConfig{Model: "custom-model"}})
 	if err != nil {
 		t.Fatalf("Update model: %v", err)
 	}
-	if liveSess.Harness != nil {
-		t.Errorf("expected liveSess.Harness to be nil after model change, got %v", liveSess.Harness)
+	if sess.Harness != nil {
+		t.Errorf("expected sess.Harness to be nil after model change, got %v", sess.Harness)
 	}
 }
 
@@ -345,16 +348,17 @@ func TestManagerRespondPermissionAsync(t *testing.T) {
 	_, _, _, pub, mgr := setupTestEnv(t, prov)
 	defer mgr.Close()
 
-	sess, err := mgr.Create(ctx, CreateParams{Title: "Async Perm Test"})
+	sess, _, err := mgr.Create(ctx, CreateParams{Title: "Async Perm Test"})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 
-	// StartTurn with wait=true stops when interrupted
-	err = mgr.StartTurn(ctx, sess.ID, message.NewUserText("Write foo.txt"), true)
+	// Send stops when interrupted
+	err = sess.Send(ctx, SendInput{Message: message.NewUserText("Write foo.txt")})
 	if err != nil {
-		t.Fatalf("StartTurn: %v", err)
+		t.Fatalf("Send: %v", err)
 	}
+	_ = sess.Wait(ctx)
 
 	// Check status is StatusWaitingPermission
 	got, err := mgr.Get(ctx, sess.ID)
@@ -366,22 +370,21 @@ func TestManagerRespondPermissionAsync(t *testing.T) {
 			got.Status, got.WaitingPermission, got.Running)
 	}
 
-	pending, err := mgr.PendingPermissions(ctx, sess.ID)
-	if err != nil {
-		t.Fatalf("PendingPermissions: %v", err)
-	}
-	if len(pending) != 1 {
-		t.Fatalf("expected 1 pending permission, got %d", len(pending))
+	if len(got.PendingPermissions) != 1 {
+		t.Fatalf("expected 1 pending permission, got %d", len(got.PendingPermissions))
 	}
 
-	// RespondPermissionAsync with wait=true
-	err = mgr.RespondPermissionAsync(ctx, sess.ID, tools.PermissionDecision{
-		RequestID: pending[0].ID,
-		Kind:      tools.DecisionAllowOnce,
-	}, true)
+	// Respond to permission via sess.Send with Decision
+	err = sess.Send(ctx, SendInput{
+		Decision: &tools.PermissionDecision{
+			RequestID: got.PendingPermissions[0].ID,
+			Kind:      tools.DecisionAllowOnce,
+		},
+	})
 	if err != nil {
-		t.Fatalf("RespondPermissionAsync error: %v", err)
+		t.Fatalf("Send decision error: %v", err)
 	}
+	_ = sess.Wait(ctx)
 
 	// Status should now be StatusIdle
 	gotAfter, err := mgr.Get(ctx, sess.ID)

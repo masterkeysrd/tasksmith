@@ -78,15 +78,23 @@ const (
 	StatusWaitingPermission SessionStatus = "waiting_permission"
 )
 
+// SessionConfig holds configurable runtime settings for a [Session].
+type SessionConfig struct {
+	Agent  string         `json:"agent,omitempty"`
+	Model  string         `json:"model,omitempty"`
+	Effort string         `json:"effort,omitempty"`
+	Mode   PermissionMode `json:"mode,omitempty"`
+}
+
 // Session represents a persistent conversational session managed by the daemon.
 type Session struct {
-	ID        string        `json:"id"`
-	Title     string        `json:"title"`
-	Agent     string        `json:"agent"`
-	Model     string        `json:"model"`
-	Status    SessionStatus `json:"status"`
-	CreatedAt time.Time     `json:"created_at"`
-	UpdatedAt time.Time     `json:"updated_at"`
+	ID                 string              `json:"id"`
+	Title              string              `json:"title"`
+	Config             SessionConfig       `json:"config"`
+	Status             SessionStatus       `json:"status"`
+	PendingPermissions []PermissionRequest `json:"pending_permissions,omitempty"`
+	CreatedAt          time.Time           `json:"created_at"`
+	UpdatedAt          time.Time           `json:"updated_at"`
 }
 
 // CreateSessionRequest holds optional parameters for creating a new session.
@@ -96,17 +104,15 @@ type Session struct {
 // existing session when every supplied field matches, and fails with a
 // conflict otherwise.
 type CreateSessionRequest struct {
-	ID    string `json:"id,omitempty"`
-	Title string `json:"title,omitempty"`
-	Agent string `json:"agent,omitempty"`
-	Model string `json:"model,omitempty"`
+	ID     string        `json:"id,omitempty"`
+	Title  string        `json:"title,omitempty"`
+	Config SessionConfig `json:"config"`
 }
 
 // UpdateSessionRequest holds optional fields to update on an existing session.
 type UpdateSessionRequest struct {
-	Title string `json:"title,omitempty"`
-	Agent string `json:"agent,omitempty"`
-	Model string `json:"model,omitempty"`
+	Title  string        `json:"title,omitempty"`
+	Config SessionConfig `json:"config"`
 }
 
 // Role identifies the author of a conversation message.
@@ -162,12 +168,11 @@ type Chunk struct {
 	Done    bool    `json:"done,omitempty"`
 }
 
-// SendRequest specifies the user message payload and whether the HTTP request
-// should block until the turn finishes or pauses for permissions.
+// SendRequest specifies the user message payload or permission decision to submit to the session.
 type SendRequest struct {
-	Content string  `json:"content,omitempty"`
-	Blocks  []Block `json:"blocks,omitempty"`
-	Wait    bool    `json:"wait,omitempty"`
+	Content  string              `json:"content,omitempty"`
+	Blocks   []Block             `json:"blocks,omitempty"`
+	Decision *PermissionDecision `json:"decision,omitempty"`
 }
 
 // PermissionMode controls the session-wide tool approval policy.
@@ -232,17 +237,6 @@ type PermissionDecision struct {
 	Kind         DecisionKind `json:"kind"`
 	GrantPattern string       `json:"grant_pattern,omitempty"`
 	Feedback     string       `json:"feedback,omitempty"`
-	Wait         bool         `json:"wait,omitempty"`
-}
-
-// ModeResponse reports the active [PermissionMode] of a session.
-type ModeResponse struct {
-	Mode PermissionMode `json:"mode"`
-}
-
-// SetModeRequest updates the active [PermissionMode] of a session.
-type SetModeRequest struct {
-	Mode PermissionMode `json:"mode"`
 }
 
 // FileChange represents a single recorded file mutation entry in a session's change journal.

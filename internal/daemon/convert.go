@@ -25,17 +25,26 @@ func toAPISession(sess *session.Session) api.Session {
 		return api.Session{}
 	}
 	status := api.StatusIdle
-	if sess.State != nil && sess.Status != "" {
-		status = api.SessionStatus(sess.Status)
+	var perms []api.PermissionRequest
+	if sess.State != nil {
+		if sess.Status != "" {
+			status = api.SessionStatus(sess.Status)
+		}
+		perms = toAPIPermissionRequests(sess.PendingPermissions)
 	}
 	return api.Session{
-		ID:        sess.ID,
-		Title:     sess.Title,
-		Agent:     sess.Agent,
-		Model:     sess.Model,
-		Status:    status,
-		CreatedAt: sess.CreatedAt,
-		UpdatedAt: sess.UpdatedAt,
+		ID:    sess.ID,
+		Title: sess.Title,
+		Config: api.SessionConfig{
+			Agent:  sess.Config.Agent,
+			Model:  sess.Config.Model,
+			Effort: sess.Config.Effort,
+			Mode:   api.PermissionMode(sess.Config.Mode),
+		},
+		Status:             status,
+		PendingPermissions: perms,
+		CreatedAt:          sess.CreatedAt,
+		UpdatedAt:          sess.UpdatedAt,
 	}
 }
 
@@ -157,7 +166,14 @@ func toAPIChunk(ch *message.AssistantChunk) *api.Chunk {
 	}
 }
 
-func fromSendRequest(req api.SendRequest) (message.Message, error) {
+func fromSendRequest(req api.SendRequest) (session.SendInput, error) {
+	if req.Decision != nil && (strings.TrimSpace(req.Content) != "" || len(req.Blocks) > 0) {
+		return session.SendInput{}, fmt.Errorf("%w: cannot specify both message and decision", session.ErrInvalidConfig)
+	}
+	if req.Decision != nil {
+		dec := fromAPIPermissionDecision(*req.Decision)
+		return session.SendInput{Decision: &dec}, nil
+	}
 	var blocks []message.Block
 	if strings.TrimSpace(req.Content) != "" {
 		blocks = append(blocks, &message.TextBlock{Text: req.Content})
@@ -168,9 +184,9 @@ func fromSendRequest(req api.SendRequest) (message.Message, error) {
 		}
 	}
 	if len(blocks) == 0 {
-		return nil, ErrEmptyMessage
+		return session.SendInput{}, ErrEmptyMessage
 	}
-	return message.NewUser(blocks...), nil
+	return session.SendInput{Message: message.NewUser(blocks...)}, nil
 }
 
 func fromAPIBlock(b api.Block) (message.Block, bool) {
@@ -499,6 +515,39 @@ func (d *Daemon) FormatEvent(msg broker.Message) (api.Event, error) {
 			Payload: api.ErrorEvent{
 				SessionID: ev.SessionID,
 				Error:     ev.Error,
+			},
+		}, nil
+
+	case session.CreatedEvent:
+		return api.Event{
+			ID:    msg.ID,
+			Type:  api.EventSessionCreated,
+			Topic: msg.Topic,
+			Payload: api.SessionCreatedEvent{
+				Workspace: ev.Workspace,
+				Session:   toAPISession(ev.Session),
+			},
+		}, nil
+
+	case session.UpdatedEvent:
+		return api.Event{
+			ID:    msg.ID,
+			Type:  api.EventSessionUpdated,
+			Topic: msg.Topic,
+			Payload: api.SessionUpdatedEvent{
+				Workspace: ev.Workspace,
+				Session:   toAPISession(ev.Session),
+			},
+		}, nil
+
+	case session.DeletedEvent:
+		return api.Event{
+			ID:    msg.ID,
+			Type:  api.EventSessionDeleted,
+			Topic: msg.Topic,
+			Payload: api.SessionDeletedEvent{
+				Workspace: ev.Workspace,
+				SessionID: ev.SessionID,
 			},
 		}, nil
 

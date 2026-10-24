@@ -39,11 +39,6 @@ type SessionBackend interface {
 	Send(ctx context.Context, workspace, id string, req api.SendRequest) error
 	Cancel(ctx context.Context, workspace, id string) error
 
-	PendingPermissions(ctx context.Context, workspace, id string) ([]api.PermissionRequest, error)
-	RespondPermission(ctx context.Context, workspace, id string, dec api.PermissionDecision) error
-	GetMode(ctx context.Context, workspace, id string) (api.PermissionMode, error)
-	SetMode(ctx context.Context, workspace, id string, mode api.PermissionMode) (api.PermissionMode, error)
-
 	Changes(ctx context.Context, workspace, id string) ([]api.FileChange, error)
 	Diff(ctx context.Context, workspace, id, path, entryID string) (*api.DiffResponse, error)
 	Revert(ctx context.Context, workspace, id string, req api.RevertRequest) error

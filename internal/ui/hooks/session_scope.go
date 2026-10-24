@@ -24,8 +24,11 @@ func (s Session) IsDraft() bool { return s.Draft }
 // NewDraft returns a draft session with a fresh UUIDv7 ID.
 func NewDraft(agent, model string) Session {
 	return Session{
-		Session: api.Session{ID: uuid.Must(uuid.NewV7()).String(), Agent: agent, Model: model},
-		Draft:   true,
+		Session: api.Session{
+			ID:     uuid.Must(uuid.NewV7()).String(),
+			Config: api.SessionConfig{Agent: agent, Model: model},
+		},
+		Draft: true,
 	}
 }
 
@@ -99,7 +102,7 @@ var SessionProvider = kitex.FCC("SessionProvider", func(props SessionProviderPro
 	scope := &sessionScope{
 		state:       state(),
 		mode:        mode(),
-		defaults:    api.Session{Agent: props.Agent, Model: props.Model},
+		defaults:    api.Session{Config: api.SessionConfig{Agent: props.Agent, Model: props.Model}},
 		initialKey:  initialKey,
 		initialInfo: ModelInfo{Label: props.InitialModel, Thinking: props.InitialThinking, Ready: props.InitialModel != ""},
 		selectFn: func(s api.Session, m api.PermissionMode) {
