@@ -84,9 +84,10 @@ func (e *eventRouter) getEvents(w http.ResponseWriter, r *http.Request) {
 	}
 
 	subID := strings.TrimSpace(r.Header.Get(api.HeaderSubscriberID))
+	since := strings.TrimSpace(r.URL.Query().Get("since"))
 	topics := r.URL.Query()["topic"]
 
-	sub, subscribedTopics, err := e.b.AddSubscriber(r.Context(), subID, topics...)
+	sub, subscribedTopics, err := e.b.AddSubscriber(r.Context(), subID, since, topics...)
 	if err != nil {
 		WriteError(w, err)
 		return
@@ -139,7 +140,11 @@ func (e *eventRouter) getEvents(w http.ResponseWriter, r *http.Request) {
 			if err != nil {
 				continue
 			}
-			fmt.Fprintf(w, "event: %s\ndata: %s\n\n", ev.Type, data)
+			if ev.ID != "" {
+				fmt.Fprintf(w, "id: %s\nevent: %s\ndata: %s\n\n", ev.ID, ev.Type, data)
+			} else {
+				fmt.Fprintf(w, "event: %s\ndata: %s\n\n", ev.Type, data)
+			}
 			flusher.Flush()
 		}
 	}
@@ -152,7 +157,7 @@ func (e *eventRouter) postSubscribe(w http.ResponseWriter, r *http.Request) {
 		WriteBadRequest(w, err.Error())
 		return
 	}
-	topics, err := e.b.Subscribe(r.Context(), subID, req.Topics...)
+	topics, err := e.b.Subscribe(r.Context(), subID, req.Since, req.Topics...)
 	if err != nil {
 		WriteError(w, err)
 		return

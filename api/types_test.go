@@ -177,6 +177,22 @@ func TestWireTypesJSONRoundTrip(t *testing.T) {
 	}
 	_ = now
 
+	subReq := SubscriptionRequest{
+		Topics: []string{"sessions", "sessions.s1.stream"},
+		Since:  "0192e4c0-0000-7000-8000-000000000001",
+	}
+	subRaw, err := json.Marshal(subReq)
+	if err != nil {
+		t.Fatalf("Marshal SubscriptionRequest: %v", err)
+	}
+	var subDecoded SubscriptionRequest
+	if err := json.Unmarshal(subRaw, &subDecoded); err != nil {
+		t.Fatalf("Unmarshal SubscriptionRequest: %v", err)
+	}
+	if !reflect.DeepEqual(subReq, subDecoded) {
+		t.Fatalf("SubscriptionRequest roundtrip mismatch: %+v vs %+v", subReq, subDecoded)
+	}
+
 	upReq := UpdateSessionRequest{
 		Title: "New Title",
 		Agent: "coder",
@@ -615,15 +631,11 @@ func TestEventPayloadsAndJSONRoundTrip(t *testing.T) {
 		{
 			name: "completed",
 			ev: Event{
+				ID:    "0192e4c0-0000-7000-8000-000000000001",
 				Type:  EventCompleted,
 				Topic: SessionStreamTopic("s1"),
 				Payload: CompletedEvent{
 					SessionID: "s1",
-					Message: &Message{
-						ID:      "msg-done",
-						Role:    RoleAssistant,
-						Content: []Block{{Type: BlockText, Text: "Done!"}},
-					},
 				},
 			},
 			wantTyp: EventCompleted,
@@ -659,6 +671,9 @@ func TestEventPayloadsAndJSONRoundTrip(t *testing.T) {
 			var decoded Event
 			if err := json.Unmarshal(data, &decoded); err != nil {
 				t.Fatalf("json.Unmarshal: %v", err)
+			}
+			if decoded.ID != tc.ev.ID {
+				t.Errorf("decoded.ID = %q, want %q", decoded.ID, tc.ev.ID)
 			}
 			if decoded.Type != tc.wantTyp {
 				t.Errorf("decoded.Type = %q, want %q", decoded.Type, tc.wantTyp)

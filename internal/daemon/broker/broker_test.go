@@ -4,9 +4,12 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 type testEvent struct{ name string }
@@ -300,5 +303,173 @@ func TestValidateTopic(t *testing.T) {
 		if err := ValidateTopic(topic); err != nil {
 			t.Errorf("ValidateTopic(%q) = %v", topic, err)
 		}
+	}
+}
+
+func TestMonotonicUUIDv7Publish(t *testing.T) {
+	b := New()
+	sub := registered(t, b, "c1")
+	if _, err := sub.Subscribe("test.mono"); err != nil {
+		t.Fatal(err)
+	}
+
+	const count = 500
+	for i := range count {
+		b.Publish("test.mono", testEvent{fmt.Sprintf("e-%d", i)})
+	}
+
+	var lastID string
+	for i := range count {
+		msg := receive(t, sub)
+		if msg.ID == "" {
+			t.Fatalf("msg[%d] has empty ID", i)
+		}
+		parsed, err := uuid.Parse(msg.ID)
+		if err != nil {
+			t.Fatalf("msg[%d] invalid UUID %q: %v", i, msg.ID, err)
+		}
+		if parsed.Version() != 7 {
+			t.Errorf("msg[%d] version = %d, want 7", i, parsed.Version())
+		}
+		if msg.ID != strings.ToLower(msg.ID) {
+			t.Errorf("msg[%d] not lowercase: %q", i, msg.ID)
+		}
+		if lastID != "" && msg.ID <= lastID {
+			t.Fatalf("msg[%d] ID %q not strictly greater than previous %q", i, msg.ID, lastID)
+		}
+		lastID = msg.ID
+	}
+}
+
+func TestSubscribeSinceReplay(t *testing.T) {
+	b := New()
+	sub1 := registered(t, b, "c1")
+	if _, err := sub1.Subscribe("test.replay"); err != nil {
+		t.Fatal(err)
+	}
+
+	const total = 5
+	var ids []string
+	for i := range total {
+		b.Publish("test.replay", testEvent{fmt.Sprintf("e-%d", i)})
+		msg := receive(t, sub1)
+		ids = append(ids, msg.ID)
+	}
+
+	// sub2 subscribes since ids[1] (message 1), expecting messages 2, 3, 4
+	sub2 := registered(t, b, "c2")
+	added, err := sub2.SubscribeSince(ids[1], "test.replay")
+	if err != nil {
+		t.Fatalf("SubscribeSince: %v", err)
+	}
+	if !slices.Equal(added, []string{"test.replay"}) {
+		t.Errorf("added = %v, want [test.replay]", added)
+	}
+
+	for i := 2; i < total; i++ {
+		msg := receive(t, sub2)
+		if msg.ID != ids[i] {
+			t.Errorf("expected msg.ID = %q, got %q", ids[i], msg.ID)
+		}
+		if msg.Event.EventType() != fmt.Sprintf("e-%d", i) {
+			t.Errorf("expected event e-%d, got %s", i, msg.Event.EventType())
+		}
+	}
+	assertNothing(t, sub2)
+}
+
+func TestSubscribeSinceNeedSync(t *testing.T) {
+	b := New(WithTopicBufferSize(func(topic string) int {
+		return 3
+	}))
+	sub1 := registered(t, b, "c1")
+	if _, err := sub1.Subscribe("test.needsync"); err != nil {
+		t.Fatal(err)
+	}
+
+	var ids []string
+	for i := range 5 {
+		b.Publish("test.needsync", testEvent{fmt.Sprintf("e-%d", i)})
+		msg := receive(t, sub1)
+		ids = append(ids, msg.ID)
+	}
+
+	// Ring buffer of size 3 now holds ids[2], ids[3], ids[4].
+	// ids[0] and ids[1] were evicted.
+	// Subscribing since ids[0] (which is < ids[2]) must fail with ErrNeedSync.
+	sub2 := registered(t, b, "c2")
+	_, err := sub2.SubscribeSince(ids[0], "test.needsync")
+	if !errors.Is(err, ErrNeedSync) {
+		t.Fatalf("SubscribeSince(ids[0]) err = %v, want ErrNeedSync", err)
+	}
+
+	// Subscribing since ids[2] (oldest retained) should succeed and replay ids[3] and ids[4].
+	sub3 := registered(t, b, "c3")
+	_, err = sub3.SubscribeSince(ids[2], "test.needsync")
+	if err != nil {
+		t.Fatalf("SubscribeSince(ids[2]) err = %v, want nil", err)
+	}
+	msg3 := receive(t, sub3)
+	if msg3.ID != ids[3] {
+		t.Errorf("got %q, want ids[3] (%q)", msg3.ID, ids[3])
+	}
+	msg4 := receive(t, sub3)
+	if msg4.ID != ids[4] {
+		t.Errorf("got %q, want ids[4] (%q)", msg4.ID, ids[4])
+	}
+	assertNothing(t, sub3)
+}
+
+func TestSubscribeSinceInvalidCursor(t *testing.T) {
+	b := New()
+	sub := registered(t, b, "c1")
+
+	for _, invalid := range []string{
+		"not-a-uuid",
+		"00000000-0000-4000-8000-000000000000", // v4
+		"0192e4c0-0000-7000-8000-00000000000G", // non-hex
+		strings.ToUpper(uuid.Must(uuid.NewV7()).String()), // uppercase
+	} {
+		_, err := sub.SubscribeSince(invalid, "test.invalid")
+		if !errors.Is(err, ErrInvalidCursor) {
+			t.Errorf("SubscribeSince(%q) err = %v, want ErrInvalidCursor", invalid, err)
+		}
+	}
+}
+
+func TestWithTopicBufferSizeAndDeleteTopic(t *testing.T) {
+	b := New(WithTopicBufferSize(func(topic string) int {
+		if topic == "special" {
+			return 2
+		}
+		return -1 // fallback to DefaultRingSize
+	}))
+
+	sub := registered(t, b, "c1")
+	if _, err := sub.Subscribe("special"); err != nil {
+		t.Fatal(err)
+	}
+
+	var ids []string
+	for i := range 3 {
+		b.Publish("special", testEvent{fmt.Sprintf("e-%d", i)})
+		msg := receive(t, sub)
+		ids = append(ids, msg.ID)
+	}
+
+	// ids[0] was evicted because cap=2
+	sub2 := registered(t, b, "c2")
+	_, err := sub2.SubscribeSince(ids[0], "special")
+	if !errors.Is(err, ErrNeedSync) {
+		t.Fatalf("expected ErrNeedSync for evicted cursor, got %v", err)
+	}
+
+	// DeleteTopic
+	b.DeleteTopic("special")
+
+	// After DeleteTopic, b.rings["special"] is gone, so SubscribeSince does not see evicted buffer
+	sub3 := registered(t, b, "c3")
+	if _, err := sub3.SubscribeSince(ids[0], "special"); err != nil {
+		t.Fatalf("SubscribeSince after DeleteTopic error: %v", err)
 	}
 }

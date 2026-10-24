@@ -112,10 +112,18 @@ func New(cfg Config) (*Daemon, error) {
 	serverLogger := cfg.Logger.ForComponent("server")
 
 	d := &Daemon{
-		cfg:        cfg,
-		logger:     daemonLogger,
-		startedAt:  time.Now().UTC(),
-		broker:     broker.New(),
+		cfg:       cfg,
+		logger:    daemonLogger,
+		startedAt: time.Now().UTC(),
+		broker: broker.New(broker.WithTopicBufferSize(func(topic string) int {
+			if topic == api.TopicSessions {
+				return 128
+			}
+			if strings.HasSuffix(topic, ".stream") {
+				return 1024
+			}
+			return 128
+		})),
 		srv:        server.NewServer(serverLogger),
 		runtimes:   make(map[string]*workspaceRuntime),
 		dirToRoot:  make(map[string]string),
@@ -285,7 +293,7 @@ func (d *Daemon) Shutdown(_ context.Context) error {
 
 // EventBackend implementation
 
-func (d *Daemon) AddSubscriber(_ context.Context, subscriberID string, topics ...string) (*broker.Subscriber, []string, error) {
+func (d *Daemon) AddSubscriber(_ context.Context, subscriberID, since string, topics ...string) (*broker.Subscriber, []string, error) {
 	subID := strings.TrimSpace(subscriberID)
 	if subID == "" {
 		u, err := uuid.NewV7()
@@ -309,7 +317,7 @@ func (d *Daemon) AddSubscriber(_ context.Context, subscriberID string, topics ..
 	}
 
 	if len(cleanTopics) > 0 {
-		if _, err := sub.Subscribe(cleanTopics...); err != nil {
+		if _, err := sub.SubscribeSince(since, cleanTopics...); err != nil {
 			d.broker.Remove(sub)
 			return nil, nil, err
 		}
@@ -324,7 +332,7 @@ func (d *Daemon) RemoveSubscriber(sub *broker.Subscriber) {
 	}
 }
 
-func (d *Daemon) Subscribe(_ context.Context, subscriberID string, topics ...string) ([]string, error) {
+func (d *Daemon) Subscribe(_ context.Context, subscriberID, since string, topics ...string) ([]string, error) {
 	subID := strings.TrimSpace(subscriberID)
 	if subID == "" {
 		return nil, &api.APIError{StatusCode: http.StatusBadRequest, Code: "bad_request", Message: "subscriber ID must not be empty"}
@@ -333,7 +341,7 @@ func (d *Daemon) Subscribe(_ context.Context, subscriberID string, topics ...str
 	if !ok {
 		return nil, &api.APIError{StatusCode: http.StatusNotFound, Code: "not_found", Message: "subscriber not found"}
 	}
-	if _, err := sub.Subscribe(topics...); err != nil {
+	if _, err := sub.SubscribeSince(since, topics...); err != nil {
 		return nil, err
 	}
 	return sub.Topics(), nil
@@ -543,6 +551,7 @@ func (d *Daemon) DeleteSession(ctx context.Context, rawWS, id string) error {
 	if err := rt.manager.Delete(ctx, id); err != nil {
 		return err
 	}
+	d.broker.DeleteTopic(api.SessionStreamTopic(id))
 
 	d.broker.Publish(api.TopicSessions, api.SessionDeletedEvent{
 		Workspace: rt.dir,
@@ -725,39 +734,6 @@ func (d *Daemon) Revert(ctx context.Context, rawWS, id string, req api.RevertReq
 	}
 
 	return tr.RevertSession(ctx, rt.sandbox.FS(), req.Force)
-}
-
-// Internal daemon helpers
-
-func (d *Daemon) resolveWorkspaceRoot(ctx context.Context, rawWorkspace string) (string, error) {
-	cleanDir, err := fsutils.CleanPath(rawWorkspace)
-	if err != nil {
-		if errors.Is(err, fsutils.ErrEmptyPath) {
-			return "", ErrEmptyWorkspace
-		}
-		return "", fmt.Errorf("daemon: resolve workspace path %q: %w", rawWorkspace, err)
-	}
-
-	d.mu.Lock()
-	if rootDir, ok := d.dirToRoot[cleanDir]; ok {
-		d.mu.Unlock()
-		return rootDir, nil
-	}
-	d.mu.Unlock()
-
-	ws, err := workspace.Open(ctx, cleanDir, workspace.WithBuiltinFS(builtin.FS()))
-	if err != nil {
-		return "", fmt.Errorf("daemon: open workspace %q: %w", cleanDir, err)
-	}
-	rootDir := ws.RootDir()
-
-	d.mu.Lock()
-	if !d.closed {
-		d.dirToRoot[cleanDir] = rootDir
-	}
-	d.mu.Unlock()
-
-	return rootDir, nil
 }
 
 func (d *Daemon) getRuntime(ctx context.Context, rawWorkspace string) (*workspaceRuntime, error) {

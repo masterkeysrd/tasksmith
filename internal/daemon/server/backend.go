@@ -13,9 +13,9 @@ type SystemBackend interface {
 }
 
 type EventBackend interface {
-	AddSubscriber(ctx context.Context, subscriberID string, topics ...string) (*broker.Subscriber, []string, error)
+	AddSubscriber(ctx context.Context, subscriberID, since string, topics ...string) (*broker.Subscriber, []string, error)
 	RemoveSubscriber(sub *broker.Subscriber)
-	Subscribe(ctx context.Context, subscriberID string, topics ...string) ([]string, error)
+	Subscribe(ctx context.Context, subscriberID, since string, topics ...string) ([]string, error)
 	Unsubscribe(ctx context.Context, subscriberID string, topics ...string) ([]string, error)
 	FormatEvent(msg broker.Message) (api.Event, error)
 	Done() <-chan struct{}

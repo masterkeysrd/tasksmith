@@ -46,6 +46,21 @@ type workspaceRuntime struct {
 	activeRuns map[string]*activeRun
 }
 
+type runtimePublisher struct {
+	rt *workspaceRuntime
+	b  *broker.Broker
+}
+
+func (p *runtimePublisher) Publish(topic string, ev broker.Event) {
+	switch e := ev.(type) {
+	case session.CompletedEvent:
+		p.rt.markRunCompleted(e.SessionID)
+	case session.PermissionRequestedEvent:
+		p.rt.markRunCompleted(e.SessionID)
+	}
+	p.b.Publish(topic, ev)
+}
+
 func newWorkspaceRuntime(ctx context.Context, ws *workspace.Workspace, pool gateway.Pool, b *broker.Broker, logger log.Interface) (*workspaceRuntime, error) {
 	rootDir := ws.RootDir()
 
@@ -88,12 +103,27 @@ func newWorkspaceRuntime(ctx context.Context, ws *workspace.Workspace, pool gate
 		return nil, fmt.Errorf("daemon: initialize timeline for %q: %w", rootDir, err)
 	}
 
+	bgCtx, bgCancel := context.WithCancel(context.Background())
+
+	rt := &workspaceRuntime{
+		dir:        rootDir,
+		workspace:  ws,
+		sandbox:    sb,
+		gateway:    gw,
+		db:         db,
+		broker:     b,
+		logger:     logger,
+		bgCtx:      bgCtx,
+		bgCancel:   bgCancel,
+		activeRuns: make(map[string]*activeRun),
+	}
+
 	mgr, err := session.New(session.Config{
 		DB:        db,
 		Workspace: ws,
 		Gateway:   gw,
 		Sandbox:   sb,
-		Publisher: b,
+		Publisher: &runtimePublisher{rt: rt, b: b},
 		Logger:    logger,
 		Timeline:  tl,
 	})
@@ -102,22 +132,9 @@ func newWorkspaceRuntime(ctx context.Context, ws *workspace.Workspace, pool gate
 		_ = sb.Close()
 		return nil, fmt.Errorf("daemon: initialize session manager for %q: %w", rootDir, err)
 	}
+	rt.manager = mgr
 
-	bgCtx, bgCancel := context.WithCancel(context.Background())
-
-	return &workspaceRuntime{
-		dir:        rootDir,
-		workspace:  ws,
-		sandbox:    sb,
-		gateway:    gw,
-		db:         db,
-		manager:    mgr,
-		broker:     b,
-		logger:     logger,
-		bgCtx:      bgCtx,
-		bgCancel:   bgCancel,
-		activeRuns: make(map[string]*activeRun),
-	}, nil
+	return rt, nil
 }
 
 func (rt *workspaceRuntime) sessionStatus(ctx context.Context, sessionID string) api.SessionStatus {
@@ -154,6 +171,7 @@ func (rt *workspaceRuntime) startTurn(ctx context.Context, sessionID string, inp
 		}()
 		if _, err := rt.manager.Send(runCtx, sess.ID, input); err != nil {
 			runErr = err
+			rt.clearRun(sess.ID, run)
 			rt.publishRunError(sess.ID, err)
 		}
 	}()
@@ -194,6 +212,7 @@ func (rt *workspaceRuntime) respondPermission(ctx context.Context, sessionID str
 		}()
 		if _, err := rt.manager.Resume(runCtx, sess.ID); err != nil {
 			runErr = err
+			rt.clearRun(sess.ID, run)
 			rt.publishRunError(sess.ID, err)
 		}
 	}()
@@ -243,14 +262,22 @@ func (rt *workspaceRuntime) registerRun(sessionID string) (*activeRun, context.C
 	return run, runCtx, nil
 }
 
-func (rt *workspaceRuntime) finishRun(sessionID string, run *activeRun, err error) {
-	run.err = err
-	run.cancel()
+func (rt *workspaceRuntime) clearRun(sessionID string, run *activeRun) {
 	rt.mu.Lock()
-	if rt.activeRuns[sessionID] == run {
+	if run == nil || rt.activeRuns[sessionID] == run {
 		delete(rt.activeRuns, sessionID)
 	}
 	rt.mu.Unlock()
+}
+
+func (rt *workspaceRuntime) markRunCompleted(sessionID string) {
+	rt.clearRun(sessionID, nil)
+}
+
+func (rt *workspaceRuntime) finishRun(sessionID string, run *activeRun, err error) {
+	run.err = err
+	run.cancel()
+	rt.clearRun(sessionID, run)
 	close(run.done)
 	rt.wg.Done()
 }

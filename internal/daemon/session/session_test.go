@@ -887,8 +887,8 @@ func TestSendAndHistory(t *testing.T) {
 		t.Errorf("events[4] = %+v, want assistant EntryAddedEvent", events[4])
 	}
 	ev5, ok := events[5].(CompletedEvent)
-	if !ok || ev5.Message == nil || ev5.Message.Role() != message.RoleAssistant || msgText(ev5.Message) != "Hello, TaskSmith!" {
-		t.Errorf("events[5] = %+v, want assistant CompletedEvent", events[5])
+	if !ok || ev5.SessionID != sess.ID {
+		t.Errorf("events[5] = %+v, want CompletedEvent for session %q", events[5], sess.ID)
 	}
 
 	// Verify session.History returns [User, Assistant] from the messages table

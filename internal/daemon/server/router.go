@@ -113,6 +113,9 @@ func WriteError(w http.ResponseWriter, err error) {
 
 func classifyError(err error) (int, string) {
 	switch {
+	case errors.Is(err, broker.ErrNeedSync):
+		return http.StatusConflict, api.ErrCodeNeedSync
+
 	case errors.Is(err, session.ErrEmptySessionID),
 		errors.Is(err, session.ErrInvalidDecision),
 		errors.Is(err, session.ErrInvalidConfig),
@@ -122,6 +125,7 @@ func classifyError(err error) (int, string) {
 		errors.Is(err, broker.ErrInvalidTopic),
 		errors.Is(err, broker.ErrTooManyTopics),
 		errors.Is(err, broker.ErrNotRegistered),
+		errors.Is(err, broker.ErrInvalidCursor),
 		strings.Contains(err.Error(), "workspace parameter is required"),
 		strings.Contains(err.Error(), "message content must not be empty"):
 		return http.StatusBadRequest, "bad_request"

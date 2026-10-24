@@ -810,14 +810,11 @@ func (m *Manager) send(ctx context.Context, sessID string, stream iter.Seq2[harn
 
 		case harness.EventCompleted:
 			if hev.Message != nil {
-				var asstMsg *message.Assistant
 				if asst, ok := message.CloneMessage(hev.Message).(*message.Assistant); ok {
 					reply = asst
-					asstMsg = asst
 				}
 				m.publisher.Publish(api.SessionStreamTopic(sessID), CompletedEvent{
 					SessionID: sessID,
-					Message:   asstMsg,
 				})
 			}
 		}

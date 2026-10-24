@@ -7,9 +7,9 @@
 // # Real-Time Server-Sent Events (SSE)
 //
 // The daemon publishes structured events over `/v1/events` encapsulated by [Event].
-// Each event carries a typed [EventType], an optional broker topic (see [TopicSessions]
-// and [SessionStreamTopic]), and a typed [EventPayload] conforming to the
-// daemon-wide event broker:
+// Each event carries an optional monotonic UUIDv7 ID, a typed [EventType], an optional
+// broker topic (see [TopicSessions] and [SessionStreamTopic]), and a typed [EventPayload]
+// conforming to the daemon-wide event broker:
 //   - [ConnectedEvent] ([EventConnected]): echoes initial subscription topics and client subscriber ID.
 //   - [SessionCreatedEvent] ([EventSessionCreated]): broadcast when a new session is created.
 //   - [SessionUpdatedEvent] ([EventSessionUpdated]): broadcast when session metadata (title, agent, model) changes.
@@ -17,11 +17,13 @@
 //   - [EntryAddedEvent] ([EventEntryAdded]): broadcast when a new [TimelineEntry] is recorded in a session.
 //   - [ChunkEvent] ([EventChunk]): streaming assistant token or delta blocks.
 //   - [PermissionRequestedEvent] ([EventPermissionRequested]): pending tool approvals.
-//   - [CompletedEvent] ([EventCompleted]): final assistant reply concluding a turn.
+//   - [CompletedEvent] ([EventCompleted]): signal concluding a turn.
 //   - [ErrorEvent] ([EventError]): terminal turn errors.
 //
-// Dynamic topic subscriptions are managed via [SubscriptionRequest] and [SubscriptionResponse]
-// addressing the daemon's internal event broker.
+// Dynamic topic subscriptions and cursor-based event replays are managed via [SubscriptionRequest]
+// (with optional Since cursor) and [SubscriptionResponse] addressing the daemon's internal event broker.
+// When a subscriber's cursor is older than the broker's retained ring buffer, the daemon responds
+// with [ErrCodeNeedSync] indicating that a full snapshot reload is required.
 //
 // # Chronological Session Timeline
 //

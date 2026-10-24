@@ -222,8 +222,12 @@ func conversationUpdates(ctx context.Context, c *client.Client, key conversation
 		parentCtx := ctx
 		ctx, cancel := context.WithCancel(ctx)
 		defer cancel()
-		state := conversationState{sessionID: key.Session, status: StreamIdle, draft: -1, identities: identities}
-		loaded := false
+
+		var (
+			state  conversationState
+			loaded bool
+		)
+
 		emit := func() bool {
 			return yield(conversationSnapshot{Key: key, Data: state.view(), Loaded: loaded}, nil)
 		}
@@ -236,34 +240,55 @@ func conversationUpdates(ctx context.Context, c *client.Client, key conversation
 				yield(conversationSnapshot{}, &conversationFailure{key: key, err: err})
 			}
 		}
-		var loadErr error
-		ready := func() {
-			loadErr = state.load(ctx, c)
-			loaded = loadErr == nil
-			if loadErr != nil || !emit() {
-				cancel()
-			}
-		}
-		for event, err := range c.Watch(ctx, ready, api.SessionStreamTopic(key.Session)) {
+
+		for {
 			if ctx.Err() != nil {
-				break
-			}
-			if err != nil {
-				fail(fmt.Errorf("conversation: subscribe: %w", err))
 				return
 			}
-			if err := state.apply(event); err != nil {
-				fail(err)
+			since := client.NewCursor()
+			state = conversationState{sessionID: key.Session, status: StreamIdle, draft: -1, identities: identities}
+			loaded = false
+
+			loadErr := state.load(ctx, c)
+			if loadErr != nil {
+				fail(loadErr)
 				return
 			}
+			loaded = true
 			if !emit() {
 				return
 			}
-		}
-		if loadErr != nil {
-			fail(loadErr)
-		} else if ctx.Err() == nil {
-			fail(fmt.Errorf("conversation: event stream closed: %w", io.EOF))
+
+			needSync := false
+			for event, err := range c.Watch(ctx, since, api.SessionStreamTopic(key.Session)) {
+				if ctx.Err() != nil {
+					return
+				}
+				if err != nil {
+					if client.IsNeedSync(err) {
+						needSync = true
+						break
+					}
+					fail(fmt.Errorf("conversation: subscribe: %w", err))
+					return
+				}
+				if err := state.apply(event); err != nil {
+					fail(err)
+					return
+				}
+				if !emit() {
+					return
+				}
+			}
+
+			if needSync {
+				continue
+			}
+
+			if ctx.Err() == nil {
+				fail(fmt.Errorf("conversation: event stream closed: %w", io.EOF))
+			}
+			return
 		}
 	}
 }
@@ -390,6 +415,11 @@ func (s *conversationState) apply(event api.Event) error {
 		if p.SessionID != s.sessionID {
 			return nil
 		}
+		if slices.ContainsFunc(s.messages, func(record conversationMessage) bool {
+			return !record.draft && record.message.ID == p.Chunk.ID
+		}) {
+			return nil
+		}
 		if err := s.addChunk(p.Chunk); err != nil {
 			return err
 		}
@@ -417,11 +447,6 @@ func (s *conversationState) apply(event api.Event) error {
 		}
 		if p.SessionID != s.sessionID {
 			return nil
-		}
-		if p.Message != nil {
-			if err := s.addMessage(*p.Message); err != nil {
-				return err
-			}
 		}
 		s.status, s.err = StreamCompleted, nil
 		if s.draft >= 0 {

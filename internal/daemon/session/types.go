@@ -105,7 +105,6 @@ func (PermissionRequestedEvent) EventType() string { return string(EventPermissi
 
 type CompletedEvent struct {
 	SessionID string
-	Message   *message.Assistant
 }
 
 func (CompletedEvent) EventType() string { return string(EventCompleted) }

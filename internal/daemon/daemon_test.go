@@ -425,7 +425,7 @@ func TestSSESubscribeAndStreamingTurn(t *testing.T) {
 	eventsCh := make(chan api.Event, 32)
 	subReady := make(chan struct{})
 	go func() {
-		for ev, err := range cli.EventsWithReady(subCtx, "", func(string) { close(subReady) }, api.SessionStreamTopic(sess.ID)) {
+		for ev, err := range cli.EventsWithReady(subCtx, "", "", func(string) { close(subReady) }, api.SessionStreamTopic(sess.ID)) {
 			if err != nil {
 				return
 			}
@@ -730,7 +730,7 @@ func TestPermissionsModesAndFileChangesRevert(t *testing.T) {
 	permEvents := make(chan api.Event, 16)
 	permReady := make(chan struct{})
 	go func() {
-		for ev, err := range cli.EventsWithReady(subCtx, "", func(string) { close(permReady) }, api.SessionStreamTopic(sess.ID)) {
+		for ev, err := range cli.EventsWithReady(subCtx, "", "", func(string) { close(permReady) }, api.SessionStreamTopic(sess.ID)) {
 			if err != nil {
 				return
 			}
@@ -920,7 +920,7 @@ func TestConversionsAndErrorPublishing(t *testing.T) {
 	errEvents := make(chan api.Event, 4)
 	errReady := make(chan struct{})
 	go func() {
-		for ev, sErr := range cli.EventsWithReady(subCtx, "", func(string) { close(errReady) }, api.SessionStreamTopic(sess.ID)) {
+		for ev, sErr := range cli.EventsWithReady(subCtx, "", "", func(string) { close(errReady) }, api.SessionStreamTopic(sess.ID)) {
 			if sErr != nil {
 				return
 			}
@@ -1002,7 +1002,7 @@ func TestSubdirectorySharesCanonicalWorkspaceRuntime(t *testing.T) {
 	doneCh := make(chan struct{}, 1)
 	subReady := make(chan struct{})
 	go func() {
-		for ev, sErr := range subCLI.EventsWithReady(subCtx, "", func(string) { close(subReady) }, api.SessionStreamTopic(sess.ID)) {
+		for ev, sErr := range subCLI.EventsWithReady(subCtx, "", "", func(string) { close(subReady) }, api.SessionStreamTopic(sess.ID)) {
 			if sErr != nil {
 				return
 			}
@@ -1445,7 +1445,7 @@ func TestToolStructuredContentInEventsAndHistory(t *testing.T) {
 	results := make(chan api.Message, 1)
 	subErrors := make(chan error, 1)
 	go func() {
-		for event, err := range cli.EventsWithReady(ctx, "", func(string) { close(ready) }, api.SessionStreamTopic(sess.ID)) {
+		for event, err := range cli.EventsWithReady(ctx, "", "", func(string) { close(ready) }, api.SessionStreamTopic(sess.ID)) {
 			if err != nil {
 				subErrors <- err
 				return

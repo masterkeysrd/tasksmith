@@ -74,7 +74,7 @@ func replPermissions(sessionID string, perms ...api.PermissionRequest) api.Event
 	}
 }
 
-func replCompleted(sessionID string, msg *api.Message) api.Event {
+func replCompleted(sessionID string, _ *api.Message) api.Event {
 	var topic string
 	if sessionID != "" {
 		topic = api.SessionStreamTopic(sessionID)
@@ -84,7 +84,6 @@ func replCompleted(sessionID string, msg *api.Message) api.Event {
 		Type:  api.EventCompleted,
 		Payload: api.CompletedEvent{
 			SessionID: sessionID,
-			Message:   msg,
 		},
 	}
 }

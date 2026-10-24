@@ -83,7 +83,7 @@ func testPermissions(sessionID string, perms ...api.PermissionRequest) api.Event
 	}
 }
 
-func testCompleted(sessionID string, msg *api.Message) api.Event {
+func testCompleted(sessionID string, _ *api.Message) api.Event {
 	var topic string
 	if sessionID != "" {
 		topic = api.SessionStreamTopic(sessionID)
@@ -93,7 +93,6 @@ func testCompleted(sessionID string, msg *api.Message) api.Event {
 		Type:  api.EventCompleted,
 		Payload: api.CompletedEvent{
 			SessionID: sessionID,
-			Message:   msg,
 		},
 	}
 }
@@ -525,12 +524,6 @@ func (s *conversationTestServer) roundTrip(r *http.Request) (*http.Response, err
 func TestUseConversationHydratesAfterConnectingAndFoldsEveryEvent(t *testing.T) {
 	server := newConversationTestServer()
 	server.history = []api.Message{conversationText("user", api.RoleUser, "hello")}
-	server.onHistory = func(_ *http.Request) error {
-		if len(server.connections) == 0 {
-			t.Error("history requested before subscription opened")
-		}
-		return nil
-	}
 	c := hookClient(t, "/daemon.sock", "/workspace", server.roundTrip)
 	inst, load, _ := mountHooks(t, c, func() Conversation { return UseConversation("s1") })
 	awaitHooks(t, load, func(c *Conversation) bool { return !c.IsLoading && len(c.History) == 1 })
@@ -588,7 +581,6 @@ func TestUseConversationReconcilesEventsBufferedDuringHydration(t *testing.T) {
 			}
 			c := hookClient(t, "/daemon.sock", "/workspace", server.roundTrip)
 			_, load, _ := mountHooks(t, c, func() Conversation { return UseConversation("s1") })
-			stream := awaitConversationConnection(t, server.connections)
 			select {
 			case <-started:
 			case <-time.After(3 * time.Second):
@@ -596,18 +588,19 @@ func TestUseConversationReconcilesEventsBufferedDuringHydration(t *testing.T) {
 			}
 			user := conversationText("new-user", api.RoleUser, "new")
 			reply := conversationText("new-assistant", api.RoleAssistant, "new response")
-			stream.send(t,
-				testEntryAdded("s1", user),
-				testChunk("s1", api.Chunk{ID: "provider", Content: reply.Content}),
-				testEntryAdded("s1", reply),
-				testCompleted("s1", &reply),
-			)
 			if included {
 				server.mu.Lock()
 				server.history = append(server.history, user, reply)
 				server.mu.Unlock()
 			}
 			close(release)
+			stream := awaitConversationConnection(t, server.connections)
+			stream.send(t,
+				testEntryAdded("s1", user),
+				testChunk("s1", api.Chunk{ID: "provider", Content: reply.Content}),
+				testEntryAdded("s1", reply),
+				testCompleted("s1", &reply),
+			)
 			result := awaitHooks(t, load, func(c *Conversation) bool { return c.Stream.Status == StreamCompleted })
 			if result.Error != nil || len(result.History) != 3 || len(result.Stream.Messages) != 0 ||
 				result.History[1].SourceID != user.ID || result.History[2].SourceID != reply.ID {
@@ -692,14 +685,15 @@ func TestUseConversationRefetchRetainsDataWhileLoadingAndOnFailure(t *testing.T)
 func TestUseConversationUnmountCancelsHydration(t *testing.T) {
 	server := newConversationTestServer()
 	started := make(chan struct{})
+	canceled := make(chan struct{})
 	server.onHistory = func(r *http.Request) error {
 		close(started)
 		<-r.Context().Done()
+		close(canceled)
 		return r.Context().Err()
 	}
 	c := hookClient(t, "/daemon.sock", "/workspace", server.roundTrip)
 	_, _, stop := mountHooks(t, c, func() Conversation { return UseConversation("s1") })
-	stream := awaitConversationConnection(t, server.connections)
 	select {
 	case <-started:
 	case <-time.After(3 * time.Second):
@@ -707,9 +701,9 @@ func TestUseConversationUnmountCancelsHydration(t *testing.T) {
 	}
 	stop()
 	select {
-	case <-stream.closed:
+	case <-canceled:
 	case <-time.After(3 * time.Second):
-		t.Fatal("hydration did not release its subscription")
+		t.Fatal("hydration was not canceled on unmount")
 	}
 }
 

@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/masterkeysrd/tasksmith/api"
 )
 
@@ -92,7 +93,7 @@ func TestNewAndValidation(t *testing.T) {
 	if _, err := withCWD.Timeline(ctx, ""); !errors.Is(err, ErrEmptySessionID) {
 		t.Errorf("Timeline empty sessionID error = %v, want %v", err, ErrEmptySessionID)
 	}
-	if _, err := withCWD.Subscribe(ctx, ""); !errors.Is(err, ErrEmptySubscriberID) {
+	if _, err := withCWD.Subscribe(ctx, "", ""); !errors.Is(err, ErrEmptySubscriberID) {
 		t.Errorf("Subscribe empty subscriberID error = %v, want %v", err, ErrEmptySubscriberID)
 	}
 	if _, err := withCWD.Unsubscribe(ctx, ""); !errors.Is(err, ErrEmptySubscriberID) {
@@ -424,7 +425,7 @@ func TestClientAllMethodsOverUnixSocket(t *testing.T) {
 		t.Errorf("Revert: %v", err)
 	}
 
-	if subResp, err := c.Subscribe(ctx, "sub-1", "topic1", "topic2"); err != nil || len(subResp.Topics) != 2 {
+	if subResp, err := c.Subscribe(ctx, "sub-1", "", "topic1", "topic2"); err != nil || len(subResp.Topics) != 2 {
 		t.Errorf("Subscribe = (%+v, %v)", subResp, err)
 	}
 	if unsubResp, err := c.Unsubscribe(ctx, "sub-1", "topic1"); err != nil || len(unsubResp.Topics) != 1 {
@@ -432,7 +433,7 @@ func TestClientAllMethodsOverUnixSocket(t *testing.T) {
 	}
 
 	var count int
-	for ev, err := range c.Events(ctx, "", "sessions.s1.stream") {
+	for ev, err := range c.Events(ctx, "", "", "sessions.s1.stream") {
 		if err != nil {
 			t.Fatalf("Events error: %v", err)
 		}
@@ -446,7 +447,7 @@ func TestClientAllMethodsOverUnixSocket(t *testing.T) {
 
 	readyCalls := 0
 	var receivedSubID string
-	for _, err := range c.EventsWithReady(ctx, "", func(subID string) {
+	for _, err := range c.EventsWithReady(ctx, "", "", func(subID string) {
 		readyCalls++
 		receivedSubID = subID
 	}, "sessions.s1.stream") {
@@ -460,7 +461,7 @@ func TestClientAllMethodsOverUnixSocket(t *testing.T) {
 
 	badC := c.WithCWD("bad")
 	var subErr error
-	for _, err := range badC.EventsWithReady(ctx, "", func(string) { t.Error("ready called for unsuccessful subscription") }, "sessions.s1.stream") {
+	for _, err := range badC.EventsWithReady(ctx, "", "", func(string) { t.Error("ready called for unsuccessful subscription") }, "sessions.s1.stream") {
 		subErr = err
 	}
 	if !errors.As(subErr, &apiErr) || apiErr.StatusCode != 400 {
@@ -595,13 +596,12 @@ func TestSharedSSEMultiplexer(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 
-	w1Ready := make(chan struct{})
 	w1Ctx, w1Cancel := context.WithCancel(ctx)
 	defer w1Cancel()
 
 	w1Events := make(chan api.Event, 10)
 	go func() {
-		for ev, err := range cli.Watch(w1Ctx, func() { close(w1Ready) }, "topic.one") {
+		for ev, err := range cli.Watch(w1Ctx, "", "topic.one") {
 			if err != nil {
 				return
 			}
@@ -609,10 +609,14 @@ func TestSharedSSEMultiplexer(t *testing.T) {
 		}
 	}()
 
-	select {
-	case <-w1Ready:
-	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for w1Ready")
+	for range 100 {
+		mu.Lock()
+		conns := eventsConns
+		mu.Unlock()
+		if conns == 1 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 
 	mu.Lock()
@@ -623,12 +627,11 @@ func TestSharedSSEMultiplexer(t *testing.T) {
 
 	// Now start watcher 2 on derived client (WithCWD) for topic.two
 	derivedCli := cli.WithCWD("/derived")
-	w2Ready := make(chan struct{})
 	w2Ctx, w2Cancel := context.WithCancel(ctx)
 
 	w2Events := make(chan api.Event, 10)
 	go func() {
-		for ev, err := range derivedCli.Watch(w2Ctx, func() { close(w2Ready) }, "topic.two") {
+		for ev, err := range derivedCli.Watch(w2Ctx, "", "topic.two") {
 			if err != nil {
 				return
 			}
@@ -636,10 +639,14 @@ func TestSharedSSEMultiplexer(t *testing.T) {
 		}
 	}()
 
-	select {
-	case <-w2Ready:
-	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for w2Ready")
+	for range 100 {
+		mu.Lock()
+		hasTopic2 := slices.Contains(subCalls, "topic.two")
+		mu.Unlock()
+		if hasTopic2 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 
 	// Should still be only 1 underlying connection!
@@ -694,5 +701,31 @@ func TestSharedSSEMultiplexer(t *testing.T) {
 	case <-streamClosed:
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for stream to close after all watchers exited")
+	}
+}
+
+func TestNeedSyncAndCursorHelpers(t *testing.T) {
+	cur := NewCursor()
+	if cur == "" {
+		t.Fatal("NewCursor returned empty")
+	}
+	parsed, err := uuid.Parse(cur)
+	if err != nil || parsed.Version() != 7 {
+		t.Fatalf("NewCursor invalid UUIDv7: %q, err=%v", cur, err)
+	}
+
+	if IsNeedSync(nil) {
+		t.Error("IsNeedSync(nil) = true, want false")
+	}
+	if !IsNeedSync(ErrNeedSync) {
+		t.Error("IsNeedSync(ErrNeedSync) = false, want true")
+	}
+	wrapped := fmt.Errorf("outer: %w", ErrNeedSync)
+	if !IsNeedSync(wrapped) {
+		t.Error("IsNeedSync(wrapped) = false, want true")
+	}
+	apiErr := &api.APIError{StatusCode: 409, Code: api.ErrCodeNeedSync}
+	if !IsNeedSync(apiErr) {
+		t.Error("IsNeedSync(apiErr) = false, want true")
 	}
 }

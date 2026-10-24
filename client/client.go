@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"strings"
 
+	"github.com/google/uuid"
 	"github.com/masterkeysrd/tasksmith/api"
 )
 
@@ -26,7 +27,28 @@ var (
 	ErrEmptyCWD          = ErrEmptyWorkspace
 	ErrEmptySessionID    = errors.New("client: session ID must not be empty")
 	ErrEmptySubscriberID = errors.New("client: subscriber ID must not be empty")
+	ErrNeedSync          = errors.New("client: stream out of sync")
 )
+
+// IsNeedSync reports whether err represents a stream cursor desync requiring a full snapshot reload.
+func IsNeedSync(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, ErrNeedSync) {
+		return true
+	}
+	var apiErr *api.APIError
+	if errors.As(err, &apiErr) && apiErr.Code == api.ErrCodeNeedSync {
+		return true
+	}
+	return false
+}
+
+// NewCursor returns a fresh canonical UUIDv7 string cursor for event streaming.
+func NewCursor() string {
+	return uuid.Must(uuid.NewV7()).String()
+}
 
 // Option configures a [Client].
 type Option func(*Client)
@@ -371,7 +393,7 @@ func (c *Client) Revert(ctx context.Context, sessionID string, req api.RevertReq
 }
 
 // Subscribe subscribes an active SSE stream (identified by subscriberID) to additional topics.
-func (c *Client) Subscribe(ctx context.Context, subscriberID string, topics ...string) (*api.SubscriptionResponse, error) {
+func (c *Client) Subscribe(ctx context.Context, subscriberID, since string, topics ...string) (*api.SubscriptionResponse, error) {
 	subID := strings.TrimSpace(subscriberID)
 	if subID == "" {
 		return nil, ErrEmptySubscriberID
@@ -380,7 +402,10 @@ func (c *Client) Subscribe(ctx context.Context, subscriberID string, topics ...s
 		api.HeaderSubscriberID: []string{subID},
 	}
 	var out api.SubscriptionResponse
-	if err := c.doJSONWithHeaders(ctx, http.MethodPost, "/v1/events/subscribe", nil, headers, api.SubscriptionRequest{Topics: topics}, &out); err != nil {
+	if err := c.doJSONWithHeaders(ctx, http.MethodPost, "/v1/events/subscribe", nil, headers, api.SubscriptionRequest{
+		Topics: topics,
+		Since:  strings.TrimSpace(since),
+	}, &out); err != nil {
 		return nil, err
 	}
 	return &out, nil
@@ -402,19 +427,22 @@ func (c *Client) Unsubscribe(ctx context.Context, subscriberID string, topics ..
 	return &out, nil
 }
 
-// Events opens a real-time Server-Sent Events (SSE) stream with optional subscriberID and initial topics.
-func (c *Client) Events(ctx context.Context, subscriberID string, topics ...string) iter.Seq2[api.Event, error] {
-	return c.EventsWithReady(ctx, subscriberID, nil, topics...)
+// Events opens a real-time Server-Sent Events (SSE) stream with optional subscriberID, since cursor, and initial topics.
+func (c *Client) Events(ctx context.Context, subscriberID, since string, topics ...string) iter.Seq2[api.Event, error] {
+	return c.EventsWithReady(ctx, subscriberID, since, nil, topics...)
 }
 
 // EventsWithReady opens an SSE stream and invokes ready with the server-assigned (or echoed) subscriber ID once connected.
-func (c *Client) EventsWithReady(ctx context.Context, subscriberID string, ready func(subscriberID string), topics ...string) iter.Seq2[api.Event, error] {
+func (c *Client) EventsWithReady(ctx context.Context, subscriberID, since string, ready func(subscriberID string), topics ...string) iter.Seq2[api.Event, error] {
 	return func(yield func(api.Event, error) bool) {
 		q := url.Values{}
 		for _, t := range topics {
 			if trimmed := strings.TrimSpace(t); trimmed != "" {
 				q.Add("topic", trimmed)
 			}
+		}
+		if trimmedSince := strings.TrimSpace(since); trimmedSince != "" {
+			q.Set("since", trimmedSince)
 		}
 
 		u := baseURL + "/v1/events"
@@ -446,7 +474,12 @@ func (c *Client) EventsWithReady(ctx context.Context, subscriberID string, ready
 		}()
 
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-			yield(api.Event{}, decodeErrorResponse(resp))
+			errResp := decodeErrorResponse(resp)
+			var apiErr *api.APIError
+			if errors.As(errResp, &apiErr) && apiErr.Code == api.ErrCodeNeedSync {
+				errResp = fmt.Errorf("%w: %w", ErrNeedSync, errResp)
+			}
+			yield(api.Event{}, errResp)
 			return
 		}
 

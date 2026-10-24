@@ -75,7 +75,7 @@ func (m *mockBackend) Shutdown(ctx context.Context) error {
 	return m.shutdownErr
 }
 
-func (m *mockBackend) AddSubscriber(ctx context.Context, subscriberID string, topics ...string) (*broker.Subscriber, []string, error) {
+func (m *mockBackend) AddSubscriber(ctx context.Context, subscriberID, since string, topics ...string) (*broker.Subscriber, []string, error) {
 	return m.connectSub, m.connectTopics, m.connectErr
 }
 
@@ -84,15 +84,16 @@ func (m *mockBackend) RemoveSubscriber(sub *broker.Subscriber) {}
 func (m *mockBackend) FormatEvent(msg broker.Message) (api.Event, error) {
 	if payload, ok := msg.Event.(api.EventPayload); ok {
 		return api.Event{
+			ID:      msg.ID,
 			Type:    api.EventType(payload.EventType()),
 			Topic:   msg.Topic,
 			Payload: payload,
 		}, nil
 	}
-	return api.Event{}, nil
+	return api.Event{ID: msg.ID}, nil
 }
 
-func (m *mockBackend) Subscribe(ctx context.Context, subscriberID string, topics ...string) ([]string, error) {
+func (m *mockBackend) Subscribe(ctx context.Context, subscriberID, since string, topics ...string) ([]string, error) {
 	return m.subTopics, m.subErr
 }
 

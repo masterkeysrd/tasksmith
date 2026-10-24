@@ -25,8 +25,12 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
+	"time"
+
+	"github.com/google/uuid"
 )
 
 // Event is something that happened. It carries no routing information: which
@@ -40,13 +44,17 @@ type Event interface {
 // Message is an [Event] addressed to a topic. It is what a [Subscriber]
 // receives.
 type Message struct {
+	ID    string
 	Topic string
 	Event Event
 }
 
 const (
 	// bufferSize is how many undelivered messages a subscriber may hold.
-	bufferSize = 256
+	bufferSize = 1024
+
+	// DefaultRingSize is the default topic ring buffer capacity.
+	DefaultRingSize = 128
 
 	// MaxTopics bounds the number of topics a single subscriber may hold.
 	MaxTopics = 256
@@ -74,7 +82,25 @@ var (
 	// ErrTooManyTopics is returned when a subscription would exceed
 	// [MaxTopics].
 	ErrTooManyTopics = errors.New("broker: too many topics")
+
+	// ErrInvalidCursor is returned when a non-empty since cursor is not a canonical UUIDv7.
+	ErrInvalidCursor = errors.New("broker: invalid cursor")
+
+	// ErrNeedSync is returned when a subscriber's since cursor is older than the
+	// oldest retained message in a topic's ring buffer.
+	ErrNeedSync = errors.New("broker: subscriber cursor is out of date")
 )
+
+// Option configures a [Broker].
+type Option func(*Broker)
+
+// WithTopicBufferSize configures a function that returns the ring buffer capacity
+// for a given topic. Values <= 0 fall back to DefaultRingSize.
+func WithTopicBufferSize(fn func(topic string) int) Option {
+	return func(b *Broker) {
+		b.ringSizeFn = fn
+	}
+}
 
 // ValidateTopic reports whether topic is a well-formed name: non-empty
 // dot-separated segments with no whitespace and no wildcard characters. Topics
@@ -94,23 +120,128 @@ func ValidateTopic(topic string) error {
 	return nil
 }
 
+type topicRing struct {
+	buf     []Message
+	cap     int
+	start   int
+	count   int
+	evicted bool
+}
+
+func newTopicRing(capacity int) *topicRing {
+	if capacity <= 0 {
+		capacity = DefaultRingSize
+	}
+	return &topicRing{
+		buf: make([]Message, capacity),
+		cap: capacity,
+	}
+}
+
+func (r *topicRing) push(msg Message) {
+	if r.count < r.cap {
+		idx := (r.start + r.count) % r.cap
+		r.buf[idx] = msg
+		r.count++
+	} else {
+		r.buf[r.start] = msg
+		r.start = (r.start + 1) % r.cap
+		r.evicted = true
+	}
+}
+
+func (r *topicRing) oldest() Message {
+	if r.count == 0 {
+		return Message{}
+	}
+	return r.buf[r.start]
+}
+
+func (r *topicRing) messagesSince(since string) []Message {
+	if r.count == 0 {
+		return nil
+	}
+	var res []Message
+	for i := 0; i < r.count; i++ {
+		idx := (r.start + i) % r.cap
+		msg := r.buf[idx]
+		if since == "" || msg.ID > since {
+			res = append(res, msg)
+		}
+	}
+	return res
+}
+
 // Broker delivers published events to the subscribers that subscribed to their
 // exact topic. It keeps an index from topic to subscribers, so publishing
 // touches only the subscribers that asked for it.
 //
 // Lock order is the broker's lock, then a subscriber's lock.
 type Broker struct {
-	mu          sync.RWMutex
+	mu          sync.Mutex
 	subscribers map[string]*Subscriber
 	topics      map[string]map[*Subscriber]struct{}
+	rings       map[string]*topicRing
+	ringSizeFn  func(topic string) int
+	lastID      string
 }
 
 // New returns a broker with no subscribers.
-func New() *Broker {
-	return &Broker{
+func New(opts ...Option) *Broker {
+	b := &Broker{
 		subscribers: make(map[string]*Subscriber),
 		topics:      make(map[string]map[*Subscriber]struct{}),
+		rings:       make(map[string]*topicRing),
 	}
+	for _, opt := range opts {
+		opt(b)
+	}
+	return b
+}
+
+func (b *Broker) ringSizeFor(topic string) int {
+	if b.ringSizeFn != nil {
+		if sz := b.ringSizeFn(topic); sz > 0 {
+			return sz
+		}
+	}
+	return DefaultRingSize
+}
+
+func (b *Broker) nextIDLocked() string {
+	u := uuid.Must(uuid.NewV7())
+	id := strings.ToLower(u.String())
+	if b.lastID == "" || id > b.lastID {
+		b.lastID = id
+		return id
+	}
+
+	// Increment trailing 12 hex digits (rand_b) of b.lastID.
+	lastTail := b.lastID[24:]
+	val, err := strconv.ParseUint(lastTail, 16, 64)
+	if err == nil && val < 0xffffffffffff {
+		val++
+		id = fmt.Sprintf("%s%012x", b.lastID[:24], val)
+		b.lastID = id
+		return id
+	}
+
+	for {
+		u = uuid.Must(uuid.NewV7())
+		id = strings.ToLower(u.String())
+		if id > b.lastID {
+			b.lastID = id
+			return id
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+// DeleteTopic deletes the ring buffer for topic so deleted sessions do not leak memory.
+func (b *Broker) DeleteTopic(topic string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	delete(b.rings, topic)
 }
 
 // Add registers a subscriber. It returns [ErrExists] if the ID is taken or the
@@ -146,7 +277,10 @@ func (b *Broker) Remove(sub *Subscriber) {
 func (b *Broker) remove(sub *Subscriber, reason error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	b.removeSubscriberLocked(sub, reason)
+}
 
+func (b *Broker) removeSubscriberLocked(sub *Subscriber, reason error) {
 	if b.subscribers[sub.id] == sub {
 		delete(b.subscribers, sub.id)
 	}
@@ -161,8 +295,8 @@ func (b *Broker) remove(sub *Subscriber, reason error) {
 
 // Get returns the registered subscriber with the given ID.
 func (b *Broker) Get(id string) (*Subscriber, bool) {
-	b.mu.RLock()
-	defer b.mu.RUnlock()
+	b.mu.Lock()
+	defer b.mu.Unlock()
 
 	sub, ok := b.subscribers[id]
 	return sub, ok
@@ -170,8 +304,8 @@ func (b *Broker) Get(id string) (*Subscriber, bool) {
 
 // Len returns the number of registered subscribers.
 func (b *Broker) Len() int {
-	b.mu.RLock()
-	defer b.mu.RUnlock()
+	b.mu.Lock()
+	defer b.mu.Unlock()
 
 	return len(b.subscribers)
 }
@@ -180,24 +314,29 @@ func (b *Broker) Len() int {
 // A subscriber whose buffer is full is closed with [ErrOverflow] and removed,
 // so a slow subscriber can never silently miss part of a stream.
 func (b *Broker) Publish(topic string, event Event) {
-	b.mu.RLock()
-	targets := make([]*Subscriber, 0, len(b.topics[topic]))
-	for sub := range b.topics[topic] {
-		targets = append(targets, sub)
-	}
-	b.mu.RUnlock()
+	b.mu.Lock()
+	defer b.mu.Unlock()
 
-	message := Message{Topic: topic, Event: event}
-	for _, sub := range targets {
+	id := b.nextIDLocked()
+	message := Message{ID: id, Topic: topic, Event: event}
+
+	ring := b.rings[topic]
+	if ring == nil {
+		ring = newTopicRing(b.ringSizeFor(topic))
+		b.rings[topic] = ring
+	}
+	ring.push(message)
+
+	for sub := range b.topics[topic] {
 		switch sub.deliver(message) {
 		case deliveredOK:
 		case deliveredOverflow:
-			b.remove(sub, ErrOverflow)
+			b.removeSubscriberLocked(sub, ErrOverflow)
 		}
 	}
 }
 
-func (b *Broker) subscribe(sub *Subscriber, topics []string) ([]string, error) {
+func (b *Broker) subscribe(sub *Subscriber, since string, topics []string) ([]string, error) {
 	for _, topic := range topics {
 		if err := ValidateTopic(topic); err != nil {
 			return nil, err
@@ -226,7 +365,32 @@ func (b *Broker) subscribe(sub *Subscriber, topics []string) ([]string, error) {
 	if len(sub.topics)+len(added) > MaxTopics {
 		return nil, fmt.Errorf("%w: limit is %d", ErrTooManyTopics, MaxTopics)
 	}
+
+	if since != "" {
+		for _, topic := range added {
+			ring := b.rings[topic]
+			if ring != nil && ring.evicted && ring.count > 0 && since < ring.oldest().ID {
+				return nil, fmt.Errorf("%w: topic %q", ErrNeedSync, topic)
+			}
+		}
+	}
+
 	for _, topic := range added {
+		if since != "" && b.rings[topic] != nil {
+			for _, msg := range b.rings[topic].messagesSince(since) {
+				select {
+				case sub.ch <- msg:
+				default:
+					for t := range sub.topics {
+						b.dropLocked(t, sub)
+					}
+					sub.topics = make(map[string]struct{})
+					delete(b.subscribers, sub.id)
+					sub.closeLocked(ErrOverflow)
+					return nil, ErrOverflow
+				}
+			}
+		}
 		sub.topics[topic] = struct{}{}
 		index := b.topics[topic]
 		if index == nil {
@@ -309,13 +473,25 @@ func (s *Subscriber) ID() string { return s.id }
 // subscriber must be registered with a broker. If any topic is invalid, or the
 // topic limit would be exceeded, none are added.
 func (s *Subscriber) Subscribe(topics ...string) ([]string, error) {
+	return s.SubscribeSince("", topics...)
+}
+
+// SubscribeSince adds topics and replays messages with ID > since. The
+// subscriber must be registered with a broker.
+func (s *Subscriber) SubscribeSince(since string, topics ...string) ([]string, error) {
+	if since != "" {
+		parsed, err := uuid.Parse(since)
+		if err != nil || parsed.Version() != 7 || parsed.String() != since {
+			return nil, fmt.Errorf("%w: %q", ErrInvalidCursor, since)
+		}
+	}
 	s.mu.Lock()
 	broker := s.broker
 	s.mu.Unlock()
 	if broker == nil {
 		return nil, ErrNotRegistered
 	}
-	return broker.subscribe(s, topics)
+	return broker.subscribe(s, since, topics)
 }
 
 // Unsubscribe removes topics and returns the ones that were held. Topics the

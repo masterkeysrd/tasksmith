@@ -2,6 +2,7 @@ package client
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"iter"
@@ -42,8 +43,8 @@ func newEventMux() *eventMux {
 }
 
 // Watch returns an iterator of events multiplexed over a shared SSE connection.
-// It subscribes to topics, waits for connection, and invokes ready when connected.
-func (c *Client) Watch(ctx context.Context, ready func(), topics ...string) iter.Seq2[api.Event, error] {
+// It subscribes to topics, replaying from since if non-empty, and yields events.
+func (c *Client) Watch(ctx context.Context, since string, topics ...string) iter.Seq2[api.Event, error] {
 	return func(yield func(api.Event, error) bool) {
 		var cleanTopics []string
 		for _, t := range topics {
@@ -62,7 +63,7 @@ func (c *Client) Watch(ctx context.Context, ready func(), topics ...string) iter
 			ctx:    ctx,
 		}
 
-		subID, err := c.mux.attach(ctx, c, watcher, cleanTopics, ready)
+		subID, err := c.mux.attach(ctx, c, watcher, since, cleanTopics)
 		if err != nil {
 			yield(api.Event{}, err)
 			return
@@ -90,7 +91,7 @@ func (c *Client) Watch(ctx context.Context, ready func(), topics ...string) iter
 	}
 }
 
-func (m *eventMux) attach(ctx context.Context, c *Client, watcher *eventWatcher, topics []string, ready func()) (string, error) {
+func (m *eventMux) attach(ctx context.Context, c *Client, watcher *eventWatcher, since string, topics []string) (string, error) {
 	m.mu.Lock()
 
 	for {
@@ -113,7 +114,7 @@ func (m *eventMux) attach(ctx context.Context, c *Client, watcher *eventWatcher,
 
 			m.mu.Unlock()
 
-			go m.runStream(streamCtx, c, gen, topics, connectWait)
+			go m.runStream(streamCtx, c, gen, since, topics, connectWait)
 
 			select {
 			case <-ctx.Done():
@@ -138,9 +139,6 @@ func (m *eventMux) attach(ctx context.Context, c *Client, watcher *eventWatcher,
 				subID := m.subID
 				m.mu.Unlock()
 
-				if ready != nil {
-					ready()
-				}
 				return subID, nil
 			}
 		}
@@ -174,7 +172,7 @@ func (m *eventMux) attach(ctx context.Context, c *Client, watcher *eventWatcher,
 		m.mu.Unlock()
 
 		if len(needed) > 0 {
-			if _, err := c.Subscribe(ctx, subID, needed...); err != nil {
+			if _, err := c.Subscribe(ctx, subID, since, needed...); err != nil {
 				m.mu.Lock()
 				m.removeWatcherLocked(watcher)
 				for _, t := range topics {
@@ -187,18 +185,19 @@ func (m *eventMux) attach(ctx context.Context, c *Client, watcher *eventWatcher,
 					m.closeStreamLocked()
 				}
 				m.mu.Unlock()
+				var apiErr *api.APIError
+				if errors.As(err, &apiErr) && apiErr.Code == api.ErrCodeNeedSync {
+					return "", fmt.Errorf("%w: %w", ErrNeedSync, err)
+				}
 				return "", fmt.Errorf("client: subscribe additional topics: %w", err)
 			}
 		}
 
-		if ready != nil {
-			ready()
-		}
 		return subID, nil
 	}
 }
 
-func (m *eventMux) runStream(ctx context.Context, c *Client, gen uint64, initialTopics []string, connectWait chan struct{}) {
+func (m *eventMux) runStream(ctx context.Context, c *Client, gen uint64, since string, initialTopics []string, connectWait chan struct{}) {
 	var notifiedConnect bool
 	notifyConnect := func(err error) {
 		m.mu.Lock()
@@ -223,7 +222,7 @@ func (m *eventMux) runStream(ctx context.Context, c *Client, gen uint64, initial
 		notifyConnect(nil)
 	}
 
-	stream := c.EventsWithReady(ctx, "", readyCb, initialTopics...)
+	stream := c.EventsWithReady(ctx, "", since, readyCb, initialTopics...)
 
 	var streamErr error
 	for ev, err := range stream {

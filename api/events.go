@@ -9,6 +9,9 @@ import (
 // HeaderSubscriberID is the HTTP header carrying the SSE subscriber ID.
 const HeaderSubscriberID = "X-TaskSmith-Subscriber-ID"
 
+// ErrCodeNeedSync is the API error code returned when a subscriber's cursor is out of date.
+const ErrCodeNeedSync = "need_sync"
+
 // TopicSessions is the broker topic for session lifecycle and metadata events.
 const TopicSessions = "sessions"
 
@@ -17,9 +20,11 @@ func SessionStreamTopic(sessionID string) string {
 	return "sessions." + sessionID + ".stream"
 }
 
-// SubscriptionRequest contains topics to subscribe to or unsubscribe from.
+// SubscriptionRequest contains topics to subscribe to or unsubscribe from,
+// and an optional cursor for replaying missed events.
 type SubscriptionRequest struct {
 	Topics []string `json:"topics"`
+	Since  string   `json:"since,omitempty"`
 }
 
 // SubscriptionResponse reports the active set of subscribed topics.
@@ -106,8 +111,7 @@ func (PermissionRequestedEvent) EventType() string { return string(EventPermissi
 
 // CompletedEvent represents the payload for an [EventCompleted] event.
 type CompletedEvent struct {
-	SessionID string   `json:"session_id"`
-	Message   *Message `json:"message,omitempty"`
+	SessionID string `json:"session_id"`
 }
 
 func (CompletedEvent) EventType() string { return string(EventCompleted) }
@@ -122,16 +126,18 @@ func (ErrorEvent) EventType() string { return string(EventError) }
 
 // Event is the real-time notification payload streamed over SSE.
 type Event struct {
+	ID      string       `json:"id,omitempty"`
 	Type    EventType    `json:"type"`
 	Topic   string       `json:"topic,omitempty"`
 	Payload EventPayload `json:"payload,omitempty"`
 }
 
 // UnmarshalJSON implements [json.Unmarshaler] for [*Event].
-// It decodes type, topic, and payload, unmarshaling payload into the concrete
+// It decodes id, type, topic, and payload, unmarshaling payload into the concrete
 // payload struct matching Type when non-empty and not "null".
 func (e *Event) UnmarshalJSON(data []byte) error {
 	type wire struct {
+		ID      string          `json:"id,omitempty"`
 		Type    EventType       `json:"type"`
 		Topic   string          `json:"topic,omitempty"`
 		Payload json.RawMessage `json:"payload,omitempty"`
@@ -140,6 +146,7 @@ func (e *Event) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(data, &w); err != nil {
 		return err
 	}
+	e.ID = w.ID
 	e.Type = w.Type
 	e.Topic = w.Topic
 	e.Payload = nil

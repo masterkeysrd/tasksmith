@@ -429,6 +429,7 @@ func (d *Daemon) FormatEvent(msg broker.Message) (api.Event, error) {
 		apiEntry, err := toAPITimelineEntry(ev.Entry)
 		if err != nil {
 			return api.Event{
+				ID:    msg.ID,
 				Type:  api.EventError,
 				Topic: msg.Topic,
 				Payload: api.ErrorEvent{
@@ -438,6 +439,7 @@ func (d *Daemon) FormatEvent(msg broker.Message) (api.Event, error) {
 			}, nil
 		}
 		return api.Event{
+			ID:    msg.ID,
 			Type:  api.EventEntryAdded,
 			Topic: msg.Topic,
 			Payload: api.EntryAddedEvent{
@@ -452,6 +454,7 @@ func (d *Daemon) FormatEvent(msg broker.Message) (api.Event, error) {
 			ch = *converted
 		}
 		return api.Event{
+			ID:    msg.ID,
 			Type:  api.EventChunk,
 			Topic: msg.Topic,
 			Payload: api.ChunkEvent{
@@ -462,6 +465,7 @@ func (d *Daemon) FormatEvent(msg broker.Message) (api.Event, error) {
 
 	case session.PermissionRequestedEvent:
 		return api.Event{
+			ID:    msg.ID,
 			Type:  api.EventPermissionRequested,
 			Topic: msg.Topic,
 			Payload: api.PermissionRequestedEvent{
@@ -471,38 +475,24 @@ func (d *Daemon) FormatEvent(msg broker.Message) (api.Event, error) {
 		}, nil
 
 	case session.CompletedEvent:
-		var msgObj *api.Message
-		if ev.Message != nil {
-			var err error
-			msgObj, err = toAPIMessage(ev.Message)
-			if err != nil {
-				return api.Event{
-					Type:  api.EventError,
-					Topic: msg.Topic,
-					Payload: api.ErrorEvent{
-						SessionID: ev.SessionID,
-						Error:     err.Error(),
-					},
-				}, nil
-			}
-		}
 		return api.Event{
+			ID:    msg.ID,
 			Type:  api.EventCompleted,
 			Topic: msg.Topic,
 			Payload: api.CompletedEvent{
 				SessionID: ev.SessionID,
-				Message:   msgObj,
 			},
 		}, nil
 
 	case api.EventPayload:
 		return api.Event{
+			ID:      msg.ID,
 			Type:    api.EventType(ev.EventType()),
 			Topic:   msg.Topic,
 			Payload: ev,
 		}, nil
 
 	default:
-		return api.Event{}, fmt.Errorf("daemon: unknown broker event type %T", msg.Event)
+		return api.Event{ID: msg.ID}, fmt.Errorf("daemon: unknown broker event type %T", msg.Event)
 	}
 }
