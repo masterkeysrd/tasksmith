@@ -129,15 +129,15 @@ var ModelSegment = trail.FC("ModelSegment", func(props SegmentProps) trail.Node 
 	ready := store.UseSession(func(s store.SessionState) bool {
 		return s.Ready
 	})
-	if !ready {
-		return nil
-	}
 	modelLabel := store.UseSession(func(s store.SessionState) string {
 		return s.ModelLabel
 	})
 	thinking := store.UseSession(func(s store.SessionState) string {
 		return s.Thinking
 	})
+	if !ready {
+		return nil
+	}
 
 	model := cmp.Or(strings.TrimSpace(modelLabel), "default")
 	effort := cmp.Or(strings.TrimSpace(thinking), "auto")

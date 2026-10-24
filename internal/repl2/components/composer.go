@@ -1,0 +1,286 @@
+package components
+
+import (
+	"strings"
+
+	"github.com/masterkeysrd/kite/dom"
+	"github.com/masterkeysrd/kite/element"
+	"github.com/masterkeysrd/kite/event"
+	"github.com/masterkeysrd/kite/extras/kitex"
+	"github.com/masterkeysrd/kite/extras/trail"
+	"github.com/masterkeysrd/kite/style"
+	"github.com/masterkeysrd/tasksmith/internal/repl2/store"
+	"github.com/masterkeysrd/tasksmith/internal/ui/theme"
+)
+
+// ComposerProps defines the properties for the Composer functional component.
+type ComposerProps struct {
+	Disabled    bool
+	OnSubmit    func(text string)
+	OnCycleMode func()
+	OnCancel    func()
+}
+
+// DraftEdit holds the current draft value and cursor offset.
+type DraftEdit struct {
+	Value  string
+	Cursor int
+}
+
+// PromptHistory holds state and operations for traversing input prompt history.
+type PromptHistory struct {
+	History    []string
+	HistoryIdx int
+	Draft      string
+	Up         func(currentValue string) (string, bool)
+	Down       func() (string, bool)
+	Add        func(text string)
+}
+
+// usePromptHistory manages input prompt history navigation and draft preservation.
+func usePromptHistory() PromptHistory {
+	history, setHistory := kitex.UseState([]string(nil))
+	historyIdx, setHistoryIdx := kitex.UseState(0)
+	draft, setDraft := kitex.UseState("")
+
+	up := func(currentValue string) (string, bool) {
+		hist := history()
+		if len(hist) == 0 {
+			return "", false
+		}
+		hIdx := historyIdx()
+		if hIdx >= len(hist) {
+			setDraft(currentValue)
+			newIdx := len(hist) - 1
+			setHistoryIdx(newIdx)
+			return hist[newIdx], true
+		} else if hIdx > 0 {
+			newIdx := hIdx - 1
+			setHistoryIdx(newIdx)
+			return hist[newIdx], true
+		}
+		return "", false
+	}
+
+	down := func() (string, bool) {
+		hist := history()
+		if len(hist) == 0 {
+			return "", false
+		}
+		hIdx := historyIdx()
+		if hIdx < len(hist)-1 {
+			newIdx := hIdx + 1
+			setHistoryIdx(newIdx)
+			return hist[newIdx], true
+		} else if hIdx == len(hist)-1 {
+			setHistoryIdx(len(hist))
+			return draft(), true
+		}
+		return "", false
+	}
+
+	add := func(text string) {
+		hist := append(history(), text)
+		setHistory(hist)
+		setHistoryIdx(len(hist))
+		setDraft("")
+	}
+
+	return PromptHistory{
+		History:    history(),
+		HistoryIdx: historyIdx(),
+		Draft:      draft(),
+		Up:         up,
+		Down:       down,
+		Add:        add,
+	}
+}
+
+// Composer is a trail functional component managing multi-line user prompt drafting,
+// prompt history navigation, and mode cycling.
+var Composer = trail.FC("Composer", func(props ComposerProps) trail.Node {
+	hide := store.UseHideComposer()
+	ctrlCPending := store.UseApp(func(s store.AppState) bool {
+		return s.CtrlCPending
+	})
+	scheme := theme.UseTheme()
+
+	draft, setDraft := kitex.UseState(DraftEdit{})
+	history := usePromptHistory()
+
+	disabled := props.Disabled || hide
+	inputRef := kitex.UseRef[dom.Element](nil)
+	trail.UseFocus(inputRef, trail.FocusOptions{
+		AutoFocus: true,
+		IsActive:  !disabled,
+	})
+
+	readDraft := func() DraftEdit {
+		if input, ok := inputRef.Current.(*element.TextAreaElement); ok {
+			return DraftEdit{Value: input.TextContent(), Cursor: input.Buffer().ByteOffset()}
+		}
+		return draft()
+	}
+	syncDraft := func() {
+		if next := readDraft(); next != draft() {
+			setDraft(next)
+		}
+	}
+	replaceDraft := func(next DraftEdit) {
+		if input, ok := inputRef.Current.(*element.TextAreaElement); ok {
+			input.SetValue(next.Value)
+			input.SetSelectionRange(next.Cursor, next.Cursor)
+		}
+		setDraft(next)
+	}
+
+	// First Ctrl+C clears the current input
+	kitex.UseLayoutEffect(func() {
+		if ctrlCPending {
+			replaceDraft(DraftEdit{})
+		}
+	}, []any{ctrlCPending})
+
+	handleKeyDown := func(e event.Event) {
+		ke, ok := e.(*event.KeyEvent)
+		if !ok || disabled {
+			return
+		}
+		kitex.PostMacro(syncDraft)
+		current := readDraft()
+
+		switch {
+		case ke.MatchString("shift+tab"):
+			e.PreventDefault()
+			e.StopPropagation()
+			if props.OnCycleMode != nil {
+				props.OnCycleMode()
+			} else {
+				store.CycleMode()
+			}
+
+		case ke.MatchString("esc", "escape"):
+			e.PreventDefault()
+			e.StopPropagation()
+			if props.OnCancel != nil {
+				props.OnCancel()
+			}
+
+		case ke.MatchString("up"):
+			if txa, ok := inputRef.Current.(*element.TextAreaElement); ok {
+				if txa.CursorState().Y > 0 {
+					return
+				}
+			}
+			e.PreventDefault()
+			e.StopPropagation()
+			if prevVal, ok := history.Up(current.Value); ok {
+				replaceDraft(DraftEdit{Value: prevVal, Cursor: len(prevVal)})
+			}
+
+		case ke.MatchString("down"):
+			if txa, ok := inputRef.Current.(*element.TextAreaElement); ok {
+				lineCount := strings.Count(txa.TextContent(), "\n") + 1
+				if txa.CursorState().Y < lineCount-1 {
+					return
+				}
+			}
+			e.PreventDefault()
+			e.StopPropagation()
+			if nextVal, ok := history.Down(); ok {
+				replaceDraft(DraftEdit{Value: nextVal, Cursor: len(nextVal)})
+			}
+
+		case ke.MatchString("shift+enter", "alt+enter"):
+			e.PreventDefault()
+			e.StopPropagation()
+			start, end := current.Cursor, current.Cursor
+			if input, ok := inputRef.Current.(*element.TextAreaElement); ok && input.SelectedText() != "" {
+				start, end = input.SelectionRange()
+			}
+			replaceDraft(DraftEdit{
+				Value:  current.Value[:start] + "\n" + current.Value[end:],
+				Cursor: start + 1,
+			})
+
+		case ke.MatchString("enter"):
+			e.PreventDefault()
+			e.StopPropagation()
+			text := strings.TrimSpace(current.Value)
+			replaceDraft(DraftEdit{})
+			if text != "" {
+				history.Add(text)
+				if props.OnSubmit != nil {
+					props.OnSubmit(text)
+				}
+			}
+		}
+	}
+
+	keyHandler := kitex.UseRef[event.Listener](nil)
+	keyHandler.Current = handleKeyDown
+	kitex.UseEffectCleanup(func() func() {
+		if input := inputRef.Current; input != nil {
+			selection := input.AddEventListener(event.EventSelectionChange, func(event.Event) { syncDraft() })
+			keys := input.AddEventListener(event.EventKeyDown, func(e event.Event) { keyHandler.Current(e) }, event.Capture())
+			mouse := input.AddEventListener(event.EventMouseDown, func(event.Event) { kitex.PostMacro(syncDraft) })
+			drag := input.AddEventListener(event.EventDrag, func(event.Event) { kitex.PostMacro(syncDraft) })
+			return func() {
+				selection.Cancel()
+				keys.Cancel()
+				mouse.Cancel()
+				drag.Cancel()
+			}
+		}
+		return nil
+	}, []any{})
+
+	border := style.SingleBorder().Top(true).Bottom(true).Left(false).Right(false)
+	if scheme != nil && scheme.Color.Border.Primary != nil {
+		border = border.Color(scheme.Color.Border.Primary)
+	}
+
+	composerStyle := style.S().
+		Border(border).
+		Display(style.DisplayFlex).
+		FlexDirection(style.FlexRow).
+		AlignItems(style.AlignStart).
+		Width(style.Percent(100))
+
+	promptStyle := style.S().Bold(true).Margin(0, 1, 0, 0)
+	if scheme != nil && scheme.Color.Icon.Primary != nil {
+		promptStyle = promptStyle.Foreground(scheme.Color.Icon.Primary)
+	}
+
+	outerStyle := style.S().
+		Display(style.DisplayFlex).
+		FlexDirection(style.FlexColumn).
+		Width(style.Percent(100))
+	if hide {
+		outerStyle = outerStyle.Display(style.DisplayNone)
+	}
+
+	return trail.Box(trail.BoxProps{
+		Style: outerStyle,
+	},
+		trail.Box(trail.BoxProps{
+			Style: composerStyle,
+		},
+			trail.Span(trail.SpanProps{
+				Style: promptStyle,
+			}, trail.Text(">")),
+			kitex.TextArea(kitex.TextAreaProps{
+				Ref:      inputRef,
+				Value:    draft().Value,
+				Disabled: disabled,
+				Style: style.S().
+					Flex(1).
+					Width(style.Percent(100)).
+					Height(style.Content).
+					MinHeight(style.Cells(1)).
+					Scrollbar(style.Scrollbar{Y: style.Some(false)}),
+				OnChange: func(event.Event) { syncDraft() },
+			}),
+		),
+	)
+})

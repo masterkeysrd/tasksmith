@@ -10,6 +10,7 @@ import (
 	"github.com/masterkeysrd/kite/backend"
 	"github.com/masterkeysrd/kite/backend/mock"
 	"github.com/masterkeysrd/kite/key"
+	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/client"
 	"github.com/masterkeysrd/tasksmith/internal/repl2/store"
 )
@@ -343,4 +344,57 @@ func TestRunStartupHeader(t *testing.T) {
 	waitFor(t, func() bool {
 		return strings.Contains(surfaceText(b), "shift+tab cycle mode")
 	}, 2*time.Second, "default hint on status line")
+}
+
+func TestRunShiftTabCyclesPermissionMode(t *testing.T) {
+	b := mock.New(80, 24)
+	c, err := client.New("/tmp/mock.sock")
+	if err != nil {
+		t.Fatalf("failed to create client: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	opts := Options{
+		Client:    c,
+		Workspace: "/tmp/ws",
+		Version:   "0.1.0",
+		Model:     "test-model",
+		Backend:   b,
+	}
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- Run(ctx, opts)
+	}()
+
+	// Wait for initial render where ModeDefault is hidden
+	waitFor(t, func() bool {
+		return b.LastFrame().Surface != nil && strings.Contains(surfaceText(b), ">")
+	}, 2*time.Second, "initial composer render")
+
+	if store.GetSession().Config.Mode != api.ModeDefault {
+		t.Fatalf("expected ModeDefault initially, got %q", store.GetSession().Config.Mode)
+	}
+
+	// Press Shift+Tab -> cycles to accept_edits
+	b.PostEvent(&backend.RawKeyEvent{
+		Key: key.Key{Code: key.KeyTab, Mod: key.ModShift},
+	})
+
+	waitFor(t, func() bool {
+		return store.GetSession().Config.Mode == api.ModeAcceptEdits &&
+			strings.Contains(surfaceText(b), "accept_edits")
+	}, 2*time.Second, "status line to show accept_edits mode")
+
+	// Press Shift+Tab again -> cycles to plan
+	b.PostEvent(&backend.RawKeyEvent{
+		Key: key.Key{Code: key.KeyTab, Mod: key.ModShift},
+	})
+
+	waitFor(t, func() bool {
+		return store.GetSession().Config.Mode == api.ModePlan &&
+			strings.Contains(surfaceText(b), "plan")
+	}, 2*time.Second, "status line to show plan mode")
 }

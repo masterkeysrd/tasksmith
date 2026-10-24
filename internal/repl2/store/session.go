@@ -57,6 +57,34 @@ func SetSession(sess *api.Session) {
 	})
 }
 
+// NextPermissionMode returns the next permission mode in the cycle sequence:
+// default -> accept_edits -> plan -> ask -> auto -> default.
+func NextPermissionMode(current api.PermissionMode) api.PermissionMode {
+	switch current {
+	case "", api.ModeDefault:
+		return api.ModeAcceptEdits
+	case api.ModeAcceptEdits:
+		return api.ModePlan
+	case api.ModePlan:
+		return api.ModeAsk
+	case api.ModeAsk:
+		return api.ModeAuto
+	default:
+		return api.ModeDefault
+	}
+}
+
+// CycleMode atomically advances to the next permission mode in sequence and returns the new mode.
+func CycleMode() api.PermissionMode {
+	var next api.PermissionMode
+	session.Set(func(s SessionState) SessionState {
+		next = NextPermissionMode(s.Config.Mode)
+		s.Config.Mode = next
+		return s
+	})
+	return next
+}
+
 // SetMode updates the active permission mode.
 func SetMode(mode api.PermissionMode) {
 	session.Set(func(s SessionState) SessionState {

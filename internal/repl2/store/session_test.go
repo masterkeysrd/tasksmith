@@ -85,3 +85,52 @@ func TestResolveModelInfoNilClient(t *testing.T) {
 		t.Fatalf("expected claude-3-7/auto from sess, got %q/%q", label, thinking)
 	}
 }
+
+func TestNextPermissionMode(t *testing.T) {
+	tests := []struct {
+		current api.PermissionMode
+		want    api.PermissionMode
+	}{
+		{"", api.ModeAcceptEdits},
+		{api.ModeDefault, api.ModeAcceptEdits},
+		{api.ModeAcceptEdits, api.ModePlan},
+		{api.ModePlan, api.ModeAsk},
+		{api.ModeAsk, api.ModeAuto},
+		{api.ModeAuto, api.ModeDefault},
+		{api.PermissionMode("other"), api.ModeDefault},
+	}
+
+	for _, tt := range tests {
+		if got := NextPermissionMode(tt.current); got != tt.want {
+			t.Errorf("NextPermissionMode(%q) = %q, want %q", tt.current, got, tt.want)
+		}
+	}
+}
+
+func TestCycleMode(t *testing.T) {
+	ResetSession()
+	defer ResetSession()
+
+	if GetSession().Config.Mode != api.ModeDefault {
+		t.Fatalf("expected initial ModeDefault, got %q", GetSession().Config.Mode)
+	}
+
+	expectedSequence := []api.PermissionMode{
+		api.ModeAcceptEdits,
+		api.ModePlan,
+		api.ModeAsk,
+		api.ModeAuto,
+		api.ModeDefault,
+	}
+
+	for _, want := range expectedSequence {
+		got := CycleMode()
+		if got != want {
+			t.Fatalf("CycleMode() = %q, want %q", got, want)
+		}
+		if GetSession().Config.Mode != want {
+			t.Fatalf("GetSession().Config.Mode = %q, want %q", GetSession().Config.Mode, want)
+		}
+	}
+}
+

@@ -47,6 +47,7 @@ var App = trail.SimpleFC("App", func() trail.Node {
 			Width(style.Percent(100)),
 	},
 		components.Transcript(),
+		components.Composer(components.ComposerProps{}),
 		components.Slot(),
 		components.DefaultStatusLine(),
 	)
