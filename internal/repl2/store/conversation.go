@@ -234,6 +234,22 @@ func (acc *conversationAccumulator) cancelPendingUser(id string, err error) {
 	AppendError("Error", err.Error())
 }
 
+func (acc *conversationAccumulator) cancelTurn() {
+	acc.mu.Lock()
+	defer acc.mu.Unlock()
+	acc.status = StreamIdle
+	acc.err = nil
+	acc.pendingUser = nil
+	acc.permissions = nil
+	acc.discardDraftLocked()
+	acc.publishLocked()
+}
+
+// CancelTurn resets the active turn stream state to idle and discards drafts.
+func CancelTurn() {
+	globalConversation.cancelTurn()
+}
+
 func (acc *conversationAccumulator) applyEvent(event api.Event) {
 	acc.mu.Lock()
 	defer acc.mu.Unlock()
@@ -252,6 +268,17 @@ func (acc *conversationAccumulator) applyEvent(event api.Event) {
 		}
 
 		if p.Entry.Kind != api.TimelineKindMessage {
+			if p.Entry.Kind == api.TimelineKindInterrupted {
+				acc.status = StreamIdle
+				acc.err = nil
+				acc.pendingUser = nil
+				acc.permissions = nil
+				acc.discardDraftLocked()
+				acc.publishLocked()
+				AppendTimelineEntry(p.Entry)
+				return
+			}
+
 			// Non-message timeline entry: flush to Transcript
 			AppendTimelineEntry(p.Entry)
 			switch p.Entry.Kind {
@@ -359,6 +386,17 @@ func (acc *conversationAccumulator) loadTimeline(entries []api.TimelineEntry) {
 
 	for _, entry := range entries {
 		if entry.Kind != api.TimelineKindMessage {
+			if entry.Kind == api.TimelineKindInterrupted {
+				acc.status = StreamIdle
+				acc.err = nil
+				acc.pendingUser = nil
+				acc.permissions = nil
+				acc.discardDraftLocked()
+				acc.publishLocked()
+				AppendTimelineEntry(entry)
+				continue
+			}
+
 			AppendTimelineEntry(entry)
 			switch entry.Kind {
 			case api.TimelineKindMode:
@@ -559,6 +597,7 @@ func (acc *conversationAccumulator) projectLocked() (history []Message, streamMs
 		}
 	}
 
+	isActive := acc.status == StreamRunning || acc.status == StreamWaitingPermission
 	mutableSuffix := false
 	for i, message := range messages {
 		if message.Role == api.RoleTool && len(message.Parts) == 0 {
@@ -580,6 +619,8 @@ func (acc *conversationAccumulator) projectLocked() (history []Message, streamMs
 				tool.Status = ToolFailed
 			case tool.Response != nil:
 				tool.Status = ToolSucceeded
+			case tool.Response == nil && !isActive:
+				tool.Status = ToolInterrupted
 			case acc.status == StreamFailed:
 				tool.Status = ToolInterrupted
 			case len(tool.Permissions) > 0:
@@ -591,7 +632,7 @@ func (acc *conversationAccumulator) projectLocked() (history []Message, streamMs
 			default:
 				tool.Status = ToolPending
 			}
-			mutable = mutable || tool.Call == nil || tool.Response == nil || len(tool.Permissions) > 0
+			mutable = mutable || (isActive && (tool.Call == nil || tool.Response == nil || len(tool.Permissions) > 0))
 		}
 		mutableSuffix = mutableSuffix || mutable
 		if mutableSuffix {

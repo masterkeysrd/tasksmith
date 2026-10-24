@@ -613,10 +613,21 @@ func TestCancelRunningTurn(t *testing.T) {
 
 	turnStarted := make(chan struct{})
 	prov := &fakeProvider{
-		chunkHandler: func(runCtx context.Context, _ *llm.Request) (llm.StreamResponse, error) {
-			close(turnStarted)
-			<-runCtx.Done()
-			return nil, runCtx.Err()
+		chunkHandler: func(runCtx context.Context, req *llm.Request) (llm.StreamResponse, error) {
+			return func(yield func(message.AssistantChunk, error) bool) {
+				yield(message.AssistantChunk{
+					BaseChunk: message.BaseChunk{ID: uuid.NewString()},
+					Model:     req.Model,
+					Content: message.Content{
+						&message.ThinkingBlock{Thinking: "Analyzing request..."},
+						&message.TextBlock{Text: "Partial response before cancel"},
+					},
+					Done: false,
+				}, nil)
+				close(turnStarted)
+				<-runCtx.Done()
+				yield(message.AssistantChunk{}, runCtx.Err())
+			}, nil
 		},
 	}
 
@@ -626,6 +637,20 @@ func TestCancelRunningTurn(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateSession: %v", err)
 	}
+
+	subCtx, cancelSub := context.WithCancel(ctx)
+	defer cancelSub()
+	ready := make(chan struct{})
+	eventsCh := make(chan api.Event, 32)
+	go func() {
+		for ev, err := range cli.EventsWithReady(subCtx, "", "", func(string) { close(ready) }, api.SessionStreamTopic(sess.ID)) {
+			if err != nil {
+				return
+			}
+			eventsCh <- ev
+		}
+	}()
+	<-ready
 
 	if err := cli.Send(ctx, sess.ID, api.SendRequest{
 		Content: "Hang forever",
@@ -649,6 +674,67 @@ func TestCancelRunningTurn(t *testing.T) {
 	}
 	if afterSess.Status != api.StatusIdle {
 		t.Errorf("Status after Cancel = %q, want %q", afterSess.Status, api.StatusIdle)
+	}
+
+	// Verify SSE events received for partial message and interrupted entry
+	var gotPartialMsg, gotInterruptedEvent bool
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) && (!gotPartialMsg || !gotInterruptedEvent) {
+		select {
+		case ev := <-eventsCh:
+			if ev.Type == api.EventEntryAdded {
+				if p, ok := ev.Payload.(api.EntryAddedEvent); ok {
+					if p.Entry.Kind == api.TimelineKindMessage && p.Entry.Message != nil && p.Entry.Message.Role == api.RoleAssistant {
+						gotPartialMsg = true
+					}
+					if p.Entry.Kind == api.TimelineKindInterrupted {
+						gotInterruptedEvent = true
+					}
+				}
+			}
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+
+	if !gotPartialMsg {
+		t.Error("expected EventEntryAdded for partial assistant message on SSE")
+	}
+	if !gotInterruptedEvent {
+		t.Error("expected EventEntryAdded for TimelineKindInterrupted on SSE")
+	}
+
+	// Verify timeline persistence
+	tl, err := cli.Timeline(ctx, sess.ID)
+	if err != nil {
+		t.Fatalf("Timeline: %v", err)
+	}
+
+	var foundAsstMessage bool
+	var foundInterrupted bool
+	for _, entry := range tl {
+		if entry.Kind == api.TimelineKindMessage && entry.Message != nil && entry.Message.Role == api.RoleAssistant {
+			foundAsstMessage = true
+			if len(entry.Message.Content) != 2 {
+				t.Errorf("expected 2 blocks in partial assistant message, got %d", len(entry.Message.Content))
+			} else {
+				if entry.Message.Content[0].Type != api.BlockReasoning || entry.Message.Content[0].Text != "Analyzing request..." {
+					t.Errorf("unexpected block 0: %+v", entry.Message.Content[0])
+				}
+				if entry.Message.Content[1].Type != api.BlockText || entry.Message.Content[1].Text != "Partial response before cancel" {
+					t.Errorf("unexpected block 1: %+v", entry.Message.Content[1])
+				}
+			}
+		}
+		if entry.Kind == api.TimelineKindInterrupted {
+			foundInterrupted = true
+		}
+	}
+
+	if !foundAsstMessage {
+		t.Error("expected partial assistant message entry in timeline")
+	}
+	if !foundInterrupted {
+		t.Error("expected TimelineKindInterrupted entry in timeline")
 	}
 }
 

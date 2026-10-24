@@ -192,3 +192,204 @@ func TestConversationCancelPendingUser(t *testing.T) {
 		t.Fatalf("expected TranscriptKindError, got %q", (*tr.Items)[0].Kind)
 	}
 }
+
+func TestConversationInterruptedTurnFlushesMessages(t *testing.T) {
+	ResetStream()
+	ClearTranscript()
+	defer ResetStream()
+	defer ClearTranscript()
+
+	acc := newConversationAccumulator()
+	acc.setSessionID("sess-1")
+
+	// 1. User message confirmed
+	acc.applyEvent(api.Event{
+		Type: api.EventEntryAdded,
+		Payload: api.EntryAddedEvent{
+			SessionID: "sess-1",
+			Entry: api.TimelineEntry{
+				ID:   "u1",
+				Kind: api.TimelineKindMessage,
+				Message: &api.Message{
+					ID:        "u1",
+					Role:      api.RoleUser,
+					CreatedAt: time.Now(),
+					Content: []api.Block{
+						{Type: api.BlockText, Text: "Run a task"},
+					},
+				},
+			},
+		},
+	})
+
+	// 2. Draft chunks accumulated for assistant
+	acc.applyEvent(api.Event{
+		Type: api.EventChunk,
+		Payload: api.ChunkEvent{
+			SessionID: "sess-1",
+			Chunk: api.Chunk{
+				ID: "a1",
+				Content: []api.Block{
+					{Type: api.BlockReasoning, Text: "Thinking partial..."},
+				},
+			},
+		},
+	})
+	if !GetStream().Streaming {
+		t.Fatal("expected Streaming true during draft")
+	}
+
+	// 3. Daemon cancels and emits persisted partial assistant message followed by interrupted entry
+	acc.applyEvent(api.Event{
+		Type: api.EventEntryAdded,
+		Payload: api.EntryAddedEvent{
+			SessionID: "sess-1",
+			Entry: api.TimelineEntry{
+				ID:   "a1",
+				Kind: api.TimelineKindMessage,
+				Message: &api.Message{
+					ID:        "a1",
+					Role:      api.RoleAssistant,
+					CreatedAt: time.Now(),
+					Content: []api.Block{
+						{Type: api.BlockReasoning, Text: "Thinking partial..."},
+					},
+				},
+			},
+		},
+	})
+
+	acc.applyEvent(api.Event{
+		Type: api.EventEntryAdded,
+		Payload: api.EntryAddedEvent{
+			SessionID: "sess-1",
+			Entry: api.TimelineEntry{
+				ID:   "int-1",
+				Kind: api.TimelineKindInterrupted,
+			},
+		},
+	})
+
+	// Streaming should be false
+	if GetStream().Streaming {
+		t.Fatal("expected Streaming false after TimelineKindInterrupted")
+	}
+	if GetStream().Messages != nil && len(*GetStream().Messages) > 0 {
+		t.Fatalf("expected 0 active stream messages, got %d", len(*GetStream().Messages))
+	}
+
+	// Transcript should have user msg, assistant partial msg, and interrupted notice
+	tr := GetTranscript()
+	if tr.Items == nil || len(*tr.Items) != 3 {
+		t.Fatalf("expected 3 transcript items (user, assistant, interrupted), got %d", len(*tr.Items))
+	}
+	if (*tr.Items)[0].Kind != TranscriptKindMessage {
+		t.Errorf("item 0 kind = %q, want message", (*tr.Items)[0].Kind)
+	}
+	if (*tr.Items)[1].Kind != TranscriptKindMessage {
+		t.Errorf("item 1 kind = %q, want message", (*tr.Items)[1].Kind)
+	}
+	if (*tr.Items)[2].Kind != TranscriptKindTimeline {
+		t.Errorf("item 2 kind = %q, want timeline", (*tr.Items)[2].Kind)
+	}
+}
+
+func TestConversationInterruptedToolCall(t *testing.T) {
+	ResetStream()
+	ClearTranscript()
+	defer ResetStream()
+	defer ClearTranscript()
+
+	acc := newConversationAccumulator()
+	acc.setSessionID("sess-1")
+
+	// User message initiates running turn
+	acc.applyEvent(api.Event{
+		Type: api.EventEntryAdded,
+		Payload: api.EntryAddedEvent{
+			SessionID: "sess-1",
+			Entry: api.TimelineEntry{
+				ID:   "u-1",
+				Kind: api.TimelineKindMessage,
+				Message: &api.Message{
+					ID:        "u-1",
+					Role:      api.RoleUser,
+					CreatedAt: time.Now(),
+					Content: []api.Block{
+						{Type: api.BlockText, Text: "run sleep"},
+					},
+				},
+			},
+		},
+	})
+
+	// Assistant message with a tool call
+	acc.applyEvent(api.Event{
+		Type: api.EventEntryAdded,
+		Payload: api.EntryAddedEvent{
+			SessionID: "sess-1",
+			Entry: api.TimelineEntry{
+				ID:   "a-tool",
+				Kind: api.TimelineKindMessage,
+				Message: &api.Message{
+					ID:        "a-tool",
+					Role:      api.RoleAssistant,
+					CreatedAt: time.Now(),
+					Content: []api.Block{
+						{
+							Type: api.BlockToolCall,
+							ToolCall: &api.ToolCall{
+								ID:   "call-1",
+								Name: "bash",
+								Args: map[string]any{"command": "sleep 10"},
+							},
+						},
+					},
+				},
+			},
+		},
+	})
+
+	// While running, tool is running and in stream messages
+	st := GetStream()
+	if st.Messages == nil || len(*st.Messages) != 1 {
+		t.Fatalf("expected 1 stream message while tool running, got %+v", st.Messages)
+	}
+	toolPart := (*st.Messages)[0].Parts[0].Tool
+	if toolPart == nil || toolPart.Status != ToolRunning {
+		t.Fatalf("expected ToolRunning status, got %+v", toolPart)
+	}
+
+	// Now interrupted timeline event arrives
+	acc.applyEvent(api.Event{
+		Type: api.EventEntryAdded,
+		Payload: api.EntryAddedEvent{
+			SessionID: "sess-1",
+			Entry: api.TimelineEntry{
+				ID:   "int-2",
+				Kind: api.TimelineKindInterrupted,
+			},
+		},
+	})
+
+	// Active stream should now be empty
+	if GetStream().Messages != nil && len(*GetStream().Messages) > 0 {
+		t.Fatalf("expected active stream to be empty, got %d", len(*GetStream().Messages))
+	}
+
+	// Tool message should be flushed to Transcript with ToolInterrupted status!
+	tr := GetTranscript()
+	if tr.Items == nil || len(*tr.Items) != 3 {
+		t.Fatalf("expected 3 transcript items (user + flushed tool message + interrupted), got %d", len(*tr.Items))
+	}
+	msgItem, ok := (*tr.Items)[1].Data.(Message)
+	if !ok || len(msgItem.Parts) != 1 || msgItem.Parts[0].Tool == nil {
+		t.Fatalf("unexpected transcript item 1: %+v", (*tr.Items)[1].Data)
+	}
+	if msgItem.Parts[0].Tool.Status != ToolInterrupted {
+		t.Fatalf("expected ToolInterrupted, got %q", msgItem.Parts[0].Tool.Status)
+	}
+	if (*tr.Items)[2].Kind != TranscriptKindTimeline {
+		t.Fatalf("expected TranscriptKindTimeline for item 2, got %q", (*tr.Items)[2].Kind)
+	}
+}

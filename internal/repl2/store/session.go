@@ -276,6 +276,7 @@ func Cancel() {
 	sessMu.Unlock()
 
 	if c == nil || sess == nil || sess.ID == "" {
+		globalConversation.cancelTurn()
 		return
 	}
 
@@ -284,6 +285,7 @@ func Cancel() {
 			ctx = context.Background()
 		}
 		_ = c.Cancel(ctx, sess.ID)
+		globalConversation.cancelTurn()
 	}()
 }
 

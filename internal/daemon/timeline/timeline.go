@@ -84,6 +84,8 @@ func (s *sqliteTimeline) Append(ctx context.Context, entry *Entry) error {
 		if entry.Permission == nil {
 			return ErrInvalidEntry
 		}
+	case KindInterrupted:
+		// no additional struct field validation needed
 	default:
 		return ErrInvalidEntry
 	}
@@ -142,6 +144,8 @@ func (s *sqliteTimeline) Append(ctx context.Context, entry *Entry) error {
 		if err != nil {
 			return fmt.Errorf("timeline: marshal permission %q: %w", entry.ID, err)
 		}
+	case KindInterrupted:
+		payload = []byte("{}")
 	}
 
 	_, err = s.db.ExecContext(
@@ -339,6 +343,8 @@ func scanEntry(r rowScanner) (*Entry, error) {
 			return nil, fmt.Errorf("timeline: unmarshal permission record for %q: %w", id, err)
 		}
 		entry.Permission = &p
+	case KindInterrupted:
+		// No extra payload unmarshaling needed
 	default:
 		return nil, fmt.Errorf("timeline: unknown entry kind %q for %q", kindRaw, id)
 	}

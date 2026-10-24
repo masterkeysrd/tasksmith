@@ -164,4 +164,19 @@ func TestNoticeAndErrorBannerAndCommandOutput(t *testing.T) {
 	if !strings.Contains(got, "Mode set to plan") {
 		t.Fatalf("unexpected timeline event output: %q", got)
 	}
+
+	got = render(TimelineEvent(api.TimelineEntry{
+		Kind:  api.TimelineKindAgent,
+		Agent: &api.AgentChange{To: "coder"},
+	}))
+	if !strings.Contains(got, "Agent set to coder") {
+		t.Fatalf("unexpected agent timeline event output: %q", got)
+	}
+
+	got = render(TimelineEvent(api.TimelineEntry{
+		Kind: api.TimelineKindInterrupted,
+	}))
+	if !strings.Contains(got, "Interrupted by user") {
+		t.Fatalf("unexpected interrupted timeline event output: %q", got)
+	}
 }

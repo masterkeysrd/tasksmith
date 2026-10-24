@@ -24,12 +24,13 @@ var (
 type Kind string
 
 const (
-	KindMessage    Kind = "message"
-	KindModel      Kind = "model"
-	KindEffort     Kind = "effort"
-	KindAgent      Kind = "agent"
-	KindMode       Kind = "mode"
-	KindPermission Kind = "permission"
+	KindMessage     Kind = "message"
+	KindModel       Kind = "model"
+	KindEffort      Kind = "effort"
+	KindAgent       Kind = "agent"
+	KindMode        Kind = "mode"
+	KindPermission  Kind = "permission"
+	KindInterrupted Kind = "interrupted"
 )
 
 // ModelChange captures a transition of the active LLM / model.
@@ -226,5 +227,13 @@ func NewPermissionEntry(sessionID string, record PermissionRecord) *Entry {
 		SessionID:  sessionID,
 		Kind:       KindPermission,
 		Permission: &r,
+	}
+}
+
+// NewInterruptedEntry creates an Entry recording that a turn was interrupted/canceled by the user.
+func NewInterruptedEntry(sessionID string) *Entry {
+	return &Entry{
+		SessionID: sessionID,
+		Kind:      KindInterrupted,
 	}
 }

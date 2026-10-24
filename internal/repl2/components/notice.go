@@ -80,6 +80,12 @@ var TimelineEvent = trail.FC("TimelineEvent", func(entry api.TimelineEntry) trai
 		if entry.Effort != nil {
 			text = "Thinking effort set to " + entry.Effort.To
 		}
+	case api.TimelineKindAgent:
+		if entry.Agent != nil {
+			text = "Agent set to " + entry.Agent.To
+		}
+	case api.TimelineKindInterrupted:
+		text = "Interrupted by user"
 	default:
 		text = "Timeline event: " + string(entry.Kind)
 	}

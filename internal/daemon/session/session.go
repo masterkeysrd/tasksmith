@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/masterkeysrd/loom/message"
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
@@ -517,7 +518,19 @@ func (s *Session) handleAsyncError(err error) {
 	}
 	s.Unlock()
 
-	if !errors.Is(err, context.Canceled) {
+	if errors.Is(err, context.Canceled) {
+		entry := timeline.NewInterruptedEntry(s.ID)
+		if appErr := s.Timeline.Append(s.bgCtx, entry); appErr == nil {
+			_ = s.store.touchSession(s.bgCtx, s.ID, entry.CreatedAt)
+			s.Lock()
+			s.UpdatedAt = entry.CreatedAt
+			s.Unlock()
+			s.publisher.Publish(api.SessionStreamTopic(s.ID), EntryAddedEvent{
+				SessionID: s.ID,
+				Entry:     entry.Clone(),
+			})
+		}
+	} else {
 		s.publisher.Publish(api.SessionStreamTopic(s.ID), ErrorEvent{
 			SessionID: s.ID,
 			Error:     err.Error(),
@@ -528,14 +541,37 @@ func (s *Session) handleAsyncError(err error) {
 func (s *Session) send(ctx context.Context, stream iter.Seq2[harness.Event, error]) (*message.Assistant, error) {
 	var reply *message.Assistant
 	var interrupted bool
+	agg := message.NewAssistantAggregator()
 
 	for hev, err := range stream {
 		if err != nil {
+			if errors.Is(err, context.Canceled) {
+				partialMsg, buildErr := agg.Build()
+				if buildErr == nil && partialMsg != nil && len(partialMsg.Content) > 0 {
+					if partialMsg.GetID() == "" || uuid.Validate(partialMsg.GetID()) != nil {
+						if u, uErr := uuid.NewV7(); uErr == nil {
+							partialMsg.SetID(u.String())
+						}
+					}
+					entry := timeline.NewMessageEntry(s.ID, partialMsg)
+					if appErr := s.Timeline.Append(s.bgCtx, entry); appErr == nil {
+						_ = s.store.touchSession(s.bgCtx, s.ID, entry.CreatedAt)
+						s.Lock()
+						s.UpdatedAt = entry.CreatedAt
+						s.Unlock()
+						s.publisher.Publish(api.SessionStreamTopic(s.ID), EntryAddedEvent{
+							SessionID: s.ID,
+							Entry:     entry.Clone(),
+						})
+					}
+				}
+			}
 			return nil, err
 		}
 		switch hev.Type {
 		case harness.EventChunk:
 			if hev.Chunk != nil {
+				agg.Add(hev.Chunk)
 				s.publisher.Publish(api.SessionStreamTopic(s.ID), ChunkEvent{
 					SessionID: s.ID,
 					Chunk:     message.CloneAssistantChunk(*hev.Chunk),
@@ -544,6 +580,7 @@ func (s *Session) send(ctx context.Context, stream iter.Seq2[harness.Event, erro
 
 		case harness.EventMessage:
 			if hev.Message != nil {
+				agg = message.NewAssistantAggregator()
 				entry := timeline.NewMessageEntry(s.ID, hev.Message)
 				if err := s.Timeline.Append(ctx, entry); err != nil {
 					return nil, err

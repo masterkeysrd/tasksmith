@@ -794,3 +794,47 @@ func TestErrorCases(t *testing.T) {
 		t.Errorf("Get(nonexistent) error = %v, want %v", err, ErrEntryNotFound)
 	}
 }
+
+func TestInterruptedEntry(t *testing.T) {
+	sessionID := "sess-interrupted"
+	tl, _, ctx := openTestTimeline(t, sessionID)
+
+	entry := NewInterruptedEntry(sessionID)
+	if entry.Kind != KindInterrupted {
+		t.Fatalf("expected KindInterrupted, got %q", entry.Kind)
+	}
+
+	if err := tl.Append(ctx, entry); err != nil {
+		t.Fatalf("Append(NewInterruptedEntry): %v", err)
+	}
+	if entry.ID == "" {
+		t.Fatal("expected non-empty generated ID")
+	}
+
+	got, err := tl.Get(ctx, entry.ID)
+	if err != nil {
+		t.Fatalf("Get(%q): %v", entry.ID, err)
+	}
+	if got.Kind != KindInterrupted {
+		t.Fatalf("got kind %q, want %q", got.Kind, KindInterrupted)
+	}
+	if got.SessionID != sessionID {
+		t.Fatalf("got sessionID %q, want %q", got.SessionID, sessionID)
+	}
+
+	list, err := tl.List(ctx)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(list) != 1 || list[0].Kind != KindInterrupted {
+		t.Fatalf("unexpected List result: %+v", list)
+	}
+
+	byKind, err := tl.ListByKind(ctx, KindInterrupted)
+	if err != nil {
+		t.Fatalf("ListByKind(KindInterrupted): %v", err)
+	}
+	if len(byKind) != 1 || byKind[0].ID != entry.ID {
+		t.Fatalf("unexpected ListByKind result: %+v", byKind)
+	}
+}

@@ -476,4 +476,12 @@ func TestRunSubmitPromptAndActiveStream(t *testing.T) {
 		defer st.mu.Unlock()
 		return len(st.cancels) > 0
 	}, 2*time.Second, "cancel request delivered to daemon")
+
+	waitFor(t, func() bool {
+		txt := surfaceText(b)
+		return !store.GetStream().Streaming &&
+			!strings.Contains(txt, "Thinking...") &&
+			!strings.Contains(txt, "streaming • esc to cancel") &&
+			strings.Contains(txt, "shift+tab cycle mode • /help commands")
+	}, 2*time.Second, "UI state reset on cancel")
 }

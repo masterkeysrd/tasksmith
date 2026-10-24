@@ -6,12 +6,13 @@ import "time"
 type TimelineKind string
 
 const (
-	TimelineKindMessage    TimelineKind = "message"
-	TimelineKindModel      TimelineKind = "model"
-	TimelineKindEffort     TimelineKind = "effort"
-	TimelineKindAgent      TimelineKind = "agent"
-	TimelineKindMode       TimelineKind = "mode"
-	TimelineKindPermission TimelineKind = "permission"
+	TimelineKindMessage     TimelineKind = "message"
+	TimelineKindModel       TimelineKind = "model"
+	TimelineKindEffort      TimelineKind = "effort"
+	TimelineKindAgent       TimelineKind = "agent"
+	TimelineKindMode        TimelineKind = "mode"
+	TimelineKindPermission  TimelineKind = "permission"
+	TimelineKindInterrupted TimelineKind = "interrupted"
 )
 
 // ModelChange captures a transition of the active LLM.
