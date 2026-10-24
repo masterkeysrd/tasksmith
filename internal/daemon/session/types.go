@@ -55,10 +55,10 @@ type Session struct {
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 
-	Root    string           `json:"-"` // Path to <WorkspaceDir>/sessions/<id>
-	Journal journal.Journal  `json:"-"`
-	Tools   *tools.Container `json:"-"`
-	Harness *harness.Harness `json:"-"`
+	Root    string          `json:"-"` // Path to <WorkspaceDir>/sessions/<id>
+	Journal journal.Journal `json:"-"`
+	Tools   tools.Container `json:"-"`
+	Harness harness.Harness `json:"-"`
 }
 
 // Clone returns a deep copy of the session and its exported execution state,

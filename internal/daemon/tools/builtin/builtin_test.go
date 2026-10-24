@@ -24,7 +24,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/daemon/workspace"
 )
 
-func setupBuiltinEnv(t *testing.T, allowLoopback bool) (string, *tools.Container, *std.Std, sandbox.Sandbox, *workspace.Workspace) {
+func setupBuiltinEnv(t *testing.T, allowLoopback bool) (string, tools.Container, *std.Std, sandbox.Sandbox, workspace.Workspace) {
 	t.Helper()
 	ctx := context.Background()
 	dir := t.TempDir()

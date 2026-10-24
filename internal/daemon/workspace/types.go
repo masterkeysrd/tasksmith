@@ -1,10 +1,53 @@
 package workspace
 
 import (
+	"context"
 	"maps"
 
 	"github.com/masterkeysrd/warp"
 )
+
+// Workspace represents an active TaskSmith workspace, encapsulating its 4-tier
+// resource registry and isolated environment variables.
+type Workspace interface {
+	Initialize(ctx context.Context, opts InitOptions) error
+	Reload(ctx context.Context) error
+	RootDir() string
+	CWD() string
+	Name() string
+	IsSynthetic() bool
+	Warnings() []string
+	Env() map[string]string
+	SetEnv(key, value string) error
+	DefaultAgentName() string
+	SetAgentOverride(name string)
+	Presets() []Provider
+	ProviderPresets() []Provider
+	Providers() []Provider
+	GetProvider(name string) (*Provider, bool)
+	Agents() []Agent
+	GetAgent(name string) (*Agent, bool)
+	Decisions() []Decision
+	GetDecision(name string) (*Decision, bool)
+	Skills() []Skill
+	GetSkill(name string) (*Skill, bool)
+	Commands() []Command
+	GetCommand(name string) (*Command, bool)
+	Tools() []Tool
+	GetTool(name string) (*Tool, bool)
+	Toolkits() []Toolkit
+	GetToolkit(name string) (*Toolkit, bool)
+	MCPs() []MCP
+	GetMCP(name string) (*MCP, bool)
+	Projects() []Project
+	Policies() *Policies
+	ResolveModels(role ModelRole, explicit ...string) []string
+	RenderAgent(name string, args map[string]string, globals map[string]any) (string, error)
+	RenderSkill(name string, args map[string]string, globals map[string]any) (string, error)
+	RenderCommand(name string, args map[string]string, globals map[string]any) (string, error)
+	RenderDecision(name string, inputs map[string]any, globals map[string]any) (string, error)
+	RenderWorkspace(globals map[string]any) (string, error)
+}
 
 // Namespace constants identifying the 4-tier resource resolution hierarchy.
 const (

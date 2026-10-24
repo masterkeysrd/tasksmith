@@ -348,8 +348,16 @@ func Initialize(ctx context.Context, dir string, opts InitOptions) error {
 	return nil
 }
 
+// Init initializes the workspace directory at dir according to opts and opens it.
+func Init(ctx context.Context, dir string, opts InitOptions, openOpts ...Option) (Workspace, error) {
+	if err := Initialize(ctx, dir, opts); err != nil {
+		return nil, err
+	}
+	return Open(ctx, dir, openOpts...)
+}
+
 // Initialize initializes the workspace's root directory and reloads its registry and environment.
-func (w *Workspace) Initialize(ctx context.Context, opts InitOptions) error {
+func (w *workspace) Initialize(ctx context.Context, opts InitOptions) error {
 	if err := Initialize(ctx, w.RootDir(), opts); err != nil {
 		return err
 	}

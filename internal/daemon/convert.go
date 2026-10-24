@@ -386,7 +386,7 @@ func toAPIModel(providerName string, pm workspace.ProviderModel) api.Model {
 
 // resolveAPIModel resolves a model identifier against the workspace catalog and defaults,
 // returning an api.Model with populated metadata.
-func resolveAPIModel(ws *workspace.Workspace, rawID string) api.Model {
+func resolveAPIModel(ws workspace.Workspace, rawID string) api.Model {
 	rawID = strings.TrimSpace(rawID)
 	targetID := rawID
 	if ws != nil {

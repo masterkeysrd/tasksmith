@@ -113,9 +113,9 @@ func findWarpPreset(name string) *warp.ModelProvider {
 	return nil
 }
 
-// Workspace manages an active TaskSmith workspace, encapsulating its 4-tier
+// workspace manages an active TaskSmith workspace, encapsulating its 4-tier
 // resource registry and isolated environment variables.
-type Workspace struct {
+type workspace struct {
 	mu            sync.RWMutex
 	cwd           string
 	rootDir       string
@@ -125,9 +125,11 @@ type Workspace struct {
 	agentOverride string
 }
 
+var _ Workspace = (*workspace)(nil)
+
 // Open discovers and loads the workspace for dir, applying the 4-tier resource
 // hierarchy (system < user < workspace < local) and isolated .env layering.
-func Open(ctx context.Context, dir string, opts ...Option) (*Workspace, error) {
+func Open(ctx context.Context, dir string, opts ...Option) (Workspace, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -146,7 +148,7 @@ func Open(ctx context.Context, dir string, opts ...Option) (*Workspace, error) {
 		}
 	}
 
-	w := &Workspace{
+	w := &workspace{
 		cwd:           absDir,
 		rootDir:       absDir,
 		opts:          o,
@@ -162,7 +164,7 @@ func Open(ctx context.Context, dir string, opts ...Option) (*Workspace, error) {
 }
 
 // Reload re-reads all 4 resource tiers and .env layers from disk into the Workspace.
-func (w *Workspace) Reload(ctx context.Context) error {
+func (w *workspace) Reload(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -386,14 +388,14 @@ func loadIsolatedEnv(cwd, rootDir string) (map[string]string, error) {
 }
 
 // RootDir returns the absolute path to the discovered workspace root directory.
-func (w *Workspace) RootDir() string {
+func (w *workspace) RootDir() string {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
 	return w.rootDir
 }
 
 // CWD returns the absolute working directory path this Workspace was opened with.
-func (w *Workspace) CWD() string {
+func (w *workspace) CWD() string {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
 	return w.cwd
@@ -401,7 +403,7 @@ func (w *Workspace) CWD() string {
 
 // Name returns the workspace name declared in WORKSPACE.md, or the base directory
 // name of RootDir when unconfigured/synthetic.
-func (w *Workspace) Name() string {
+func (w *workspace) Name() string {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
 	if w.registry != nil {
@@ -413,7 +415,7 @@ func (w *Workspace) Name() string {
 }
 
 // IsSynthetic reports whether the workspace was inferred without an on-disk WORKSPACE.md.
-func (w *Workspace) IsSynthetic() bool {
+func (w *workspace) IsSynthetic() bool {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
 	if w.registry == nil {
@@ -424,7 +426,7 @@ func (w *Workspace) IsSynthetic() bool {
 }
 
 // Warnings returns a copy of non-fatal warnings encountered during workspace loading.
-func (w *Workspace) Warnings() []string {
+func (w *workspace) Warnings() []string {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
 	if w.registry == nil {
@@ -434,7 +436,7 @@ func (w *Workspace) Warnings() []string {
 }
 
 // Env returns a defensive copy of the workspace's isolated environment variables.
-func (w *Workspace) Env() map[string]string {
+func (w *workspace) Env() map[string]string {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
 	if w.env == nil {
@@ -445,7 +447,7 @@ func (w *Workspace) Env() map[string]string {
 
 // SetEnv updates key=value in the workspace's in-memory environment map and
 // atomically persists the change to <RootDir>/.env.
-func (w *Workspace) SetEnv(key, value string) error {
+func (w *workspace) SetEnv(key, value string) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
@@ -462,7 +464,7 @@ func (w *Workspace) SetEnv(key, value string) error {
 
 // DefaultAgentName returns the active default agent name, honoring any runtime
 // override, then WORKSPACE.md's spec.defaultAgent, and finally falling back to "main".
-func (w *Workspace) DefaultAgentName() string {
+func (w *workspace) DefaultAgentName() string {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
 	if w.agentOverride != "" {
@@ -477,23 +479,23 @@ func (w *Workspace) DefaultAgentName() string {
 }
 
 // SetAgentOverride sets or clears the active default agent override.
-func (w *Workspace) SetAgentOverride(name string) {
+func (w *workspace) SetAgentOverride(name string) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.agentOverride = strings.TrimSpace(name)
 }
 
 // Presets returns all embedded model provider presets.
-func (w *Workspace) Presets() []Provider {
+func (w *workspace) Presets() []Provider {
 	return Presets()
 }
 
 // ProviderPresets returns all embedded model provider presets.
-func (w *Workspace) ProviderPresets() []Provider {
+func (w *workspace) ProviderPresets() []Provider {
 	return Presets()
 }
 
-func (w *Workspace) resolverLocked() warp.Resolver {
+func (w *workspace) resolverLocked() warp.Resolver {
 	if w.registry == nil {
 		return nil
 	}
@@ -503,7 +505,7 @@ func (w *Workspace) resolverLocked() warp.Resolver {
 	return w.registry
 }
 
-func (w *Workspace) currentWarpProjectLocked() *warp.Project {
+func (w *workspace) currentWarpProjectLocked() *warp.Project {
 	if w.registry == nil {
 		return nil
 	}
@@ -513,7 +515,7 @@ func (w *Workspace) currentWarpProjectLocked() *warp.Project {
 	return nil
 }
 
-func (w *Workspace) resolveByKindLocked(kind warp.Kind, name string) (warp.Resource, bool) {
+func (w *workspace) resolveByKindLocked(kind warp.Kind, name string) (warp.Resource, bool) {
 	resolver := w.resolverLocked()
 	if resolver == nil || strings.TrimSpace(name) == "" {
 		return nil, false
@@ -542,7 +544,7 @@ func (w *Workspace) resolveByKindLocked(kind warp.Kind, name string) (warp.Resou
 
 // Providers returns all effective model providers in the workspace scope,
 // sorted by name.
-func (w *Workspace) Providers() []Provider {
+func (w *workspace) Providers() []Provider {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
 	resolver := w.resolverLocked()
@@ -566,7 +568,7 @@ func (w *Workspace) Providers() []Provider {
 }
 
 // GetProvider resolves an effective model provider by name or type.
-func (w *Workspace) GetProvider(name string) (*Provider, bool) {
+func (w *workspace) GetProvider(name string) (*Provider, bool) {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
 	if res, ok := w.resolveByKindLocked(warp.KindModelProvider, name); ok {
@@ -591,7 +593,7 @@ func (w *Workspace) GetProvider(name string) (*Provider, bool) {
 	return nil, false
 }
 
-func (w *Workspace) resolveWarpAgentLocked(name string) (*warp.Agent, *warp.ResolvedAgent, bool) {
+func (w *workspace) resolveWarpAgentLocked(name string) (*warp.Agent, *warp.ResolvedAgent, bool) {
 	res, ok := w.resolveByKindLocked(warp.KindAgent, name)
 	if !ok {
 		return nil, nil, false
@@ -616,7 +618,7 @@ func (w *Workspace) resolveWarpAgentLocked(name string) (*warp.Agent, *warp.Reso
 }
 
 // Agents returns all effective agents in the workspace scope, sorted by name.
-func (w *Workspace) Agents() []Agent {
+func (w *workspace) Agents() []Agent {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
 	resolver := w.resolverLocked()
@@ -645,7 +647,7 @@ func (w *Workspace) Agents() []Agent {
 }
 
 // GetAgent resolves an effective agent by name, applying any inheritance chain.
-func (w *Workspace) GetAgent(name string) (*Agent, bool) {
+func (w *workspace) GetAgent(name string) (*Agent, bool) {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
 	ag, resolved, ok := w.resolveWarpAgentLocked(name)
@@ -658,7 +660,7 @@ func (w *Workspace) GetAgent(name string) (*Agent, bool) {
 
 // Decisions returns all effective decision resources in the workspace scope,
 // sorted by name.
-func (w *Workspace) Decisions() []Decision {
+func (w *workspace) Decisions() []Decision {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
 	resolver := w.resolverLocked()
@@ -682,7 +684,7 @@ func (w *Workspace) Decisions() []Decision {
 }
 
 // GetDecision resolves an effective decision resource by name.
-func (w *Workspace) GetDecision(name string) (*Decision, bool) {
+func (w *workspace) GetDecision(name string) (*Decision, bool) {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
 	res, ok := w.resolveByKindLocked(warp.KindDecision, name)
@@ -698,7 +700,7 @@ func (w *Workspace) GetDecision(name string) (*Decision, bool) {
 }
 
 // Skills returns all effective skill resources in the workspace scope, sorted by name.
-func (w *Workspace) Skills() []Skill {
+func (w *workspace) Skills() []Skill {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
 	resolver := w.resolverLocked()
@@ -722,7 +724,7 @@ func (w *Workspace) Skills() []Skill {
 }
 
 // GetSkill resolves an effective skill resource by name.
-func (w *Workspace) GetSkill(name string) (*Skill, bool) {
+func (w *workspace) GetSkill(name string) (*Skill, bool) {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
 	res, ok := w.resolveByKindLocked(warp.KindSkill, name)
@@ -738,7 +740,7 @@ func (w *Workspace) GetSkill(name string) (*Skill, bool) {
 }
 
 // Commands returns all effective command resources in the workspace scope, sorted by name.
-func (w *Workspace) Commands() []Command {
+func (w *workspace) Commands() []Command {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
 	resolver := w.resolverLocked()
@@ -762,7 +764,7 @@ func (w *Workspace) Commands() []Command {
 }
 
 // GetCommand resolves an effective command resource by name.
-func (w *Workspace) GetCommand(name string) (*Command, bool) {
+func (w *workspace) GetCommand(name string) (*Command, bool) {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
 	res, ok := w.resolveByKindLocked(warp.KindCommand, name)
@@ -778,7 +780,7 @@ func (w *Workspace) GetCommand(name string) (*Command, bool) {
 }
 
 // Tools returns all effective tool resources in the workspace scope, sorted by name.
-func (w *Workspace) Tools() []Tool {
+func (w *workspace) Tools() []Tool {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
 	resolver := w.resolverLocked()
@@ -825,7 +827,7 @@ func (w *Workspace) Tools() []Tool {
 }
 
 // GetTool resolves an effective tool resource by name.
-func (w *Workspace) GetTool(name string) (*Tool, bool) {
+func (w *workspace) GetTool(name string) (*Tool, bool) {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
 	if res, ok := w.resolveByKindLocked(warp.KindTool, name); ok {
@@ -859,7 +861,7 @@ func (w *Workspace) GetTool(name string) (*Tool, bool) {
 }
 
 // Toolkits returns all effective toolkit resources in the workspace scope, sorted by name.
-func (w *Workspace) Toolkits() []Toolkit {
+func (w *workspace) Toolkits() []Toolkit {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
 	resolver := w.resolverLocked()
@@ -883,7 +885,7 @@ func (w *Workspace) Toolkits() []Toolkit {
 }
 
 // GetToolkit resolves an effective toolkit resource by name.
-func (w *Workspace) GetToolkit(name string) (*Toolkit, bool) {
+func (w *workspace) GetToolkit(name string) (*Toolkit, bool) {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
 	res, ok := w.resolveByKindLocked(warp.KindToolkit, name)
@@ -900,7 +902,7 @@ func (w *Workspace) GetToolkit(name string) (*Toolkit, bool) {
 
 // MCPs returns all effective MCP server configurations in the workspace scope,
 // sorted by name.
-func (w *Workspace) MCPs() []MCP {
+func (w *workspace) MCPs() []MCP {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
 	resolver := w.resolverLocked()
@@ -924,7 +926,7 @@ func (w *Workspace) MCPs() []MCP {
 }
 
 // GetMCP resolves an effective MCP server configuration by name.
-func (w *Workspace) GetMCP(name string) (*MCP, bool) {
+func (w *workspace) GetMCP(name string) (*MCP, bool) {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
 	res, ok := w.resolveByKindLocked(warp.KindMCP, name)
@@ -940,7 +942,7 @@ func (w *Workspace) GetMCP(name string) (*MCP, bool) {
 }
 
 // Projects returns all projects registered in the workspace, sorted by name.
-func (w *Workspace) Projects() []Project {
+func (w *workspace) Projects() []Project {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
 	if w.registry == nil {
@@ -956,7 +958,7 @@ func (w *Workspace) Projects() []Project {
 
 // Policies returns the workspace-level security and tool policies declared in
 // WORKSPACE.md, or nil when none are configured.
-func (w *Workspace) Policies() *Policies {
+func (w *workspace) Policies() *Policies {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
 	if w.registry == nil {
@@ -975,7 +977,7 @@ func (w *Workspace) Policies() *Policies {
 //  2. Workspace role default (spec.defaultModels.<role> or spec.defaultModel for completion).
 //  3. Default Provider role default (spec.defaultModels.<role> or spec.defaultModel for completion).
 //  4. Capability match across registered providers.
-func (w *Workspace) ResolveModels(role ModelRole, explicit ...string) []string {
+func (w *workspace) ResolveModels(role ModelRole, explicit ...string) []string {
 	w.mu.RLock()
 	resolver := w.resolverLocked()
 	var resolved []string
@@ -1035,7 +1037,7 @@ func (w *Workspace) ResolveModels(role ModelRole, explicit ...string) []string {
 
 // RenderAgent renders the named agent's instructions template with workspace,
 // project, resolved agent metadata, args, and globals.
-func (w *Workspace) RenderAgent(name string, args map[string]string, globals map[string]any) (string, error) {
+func (w *workspace) RenderAgent(name string, args map[string]string, globals map[string]any) (string, error) {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
 
@@ -1055,7 +1057,7 @@ func (w *Workspace) RenderAgent(name string, args map[string]string, globals map
 
 // RenderSkill renders the named skill's instructions template with workspace,
 // project, args, and globals.
-func (w *Workspace) RenderSkill(name string, args map[string]string, globals map[string]any) (string, error) {
+func (w *workspace) RenderSkill(name string, args map[string]string, globals map[string]any) (string, error) {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
 
@@ -1078,7 +1080,7 @@ func (w *Workspace) RenderSkill(name string, args map[string]string, globals map
 
 // RenderCommand renders the named command's instructions template with workspace,
 // project, positional/hint arguments, and globals.
-func (w *Workspace) RenderCommand(name string, args map[string]string, globals map[string]any) (string, error) {
+func (w *workspace) RenderCommand(name string, args map[string]string, globals map[string]any) (string, error) {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
 
@@ -1104,7 +1106,7 @@ func (w *Workspace) RenderCommand(name string, args map[string]string, globals m
 
 // RenderDecision renders the named decision's instructions template with workspace,
 // project, inputs, and globals.
-func (w *Workspace) RenderDecision(name string, inputs map[string]any, globals map[string]any) (string, error) {
+func (w *workspace) RenderDecision(name string, inputs map[string]any, globals map[string]any) (string, error) {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
 
@@ -1135,7 +1137,7 @@ func (w *Workspace) RenderDecision(name string, inputs map[string]any, globals m
 }
 
 // RenderWorkspace renders the workspace-level instructions from WORKSPACE.md.
-func (w *Workspace) RenderWorkspace(globals map[string]any) (string, error) {
+func (w *workspace) RenderWorkspace(globals map[string]any) (string, error) {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
 	if w.registry == nil {

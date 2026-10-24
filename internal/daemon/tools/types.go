@@ -142,7 +142,7 @@ type Spec[In, Out any] struct {
 }
 
 type workspaceBinder interface {
-	bindWorkspace(ws *workspace.Workspace) error
+	bindWorkspace(ws workspace.Workspace) error
 }
 
 type typedTool[In, Out any] struct {
@@ -223,7 +223,7 @@ func (t *typedTool[In, Out]) Definition() tool.Definition {
 	return t.def
 }
 
-func (t *typedTool[In, Out]) bindWorkspace(ws *workspace.Workspace) error {
+func (t *typedTool[In, Out]) bindWorkspace(ws workspace.Workspace) error {
 	if ws == nil {
 		return nil
 	}

@@ -18,7 +18,7 @@ import (
 
 const eventNodeMessage = "on_node_message"
 
-func buildGraph(cp graph.Checkpointer, model *llm.Model, container *tools.Container, systemPrompt string, logger log.Interface) (*graph.Graph[State], error) {
+func buildGraph(cp graph.Checkpointer, model *llm.Model, container tools.Container, systemPrompt string, logger log.Interface) (*graph.Graph[State], error) {
 	agentNode := NewAgentNode(model, container, systemPrompt, logger)
 	toolsNode := NewToolsNode(container, logger)
 
@@ -57,14 +57,14 @@ func emitNodeMessage(ctx context.Context, msg message.Message) {
 // It implements [github.com/masterkeysrd/loom/graph.Node].
 type AgentNode struct {
 	model        *llm.Model
-	tools        *tools.Container
+	tools        tools.Container
 	systemPrompt string
 	logger       log.Interface
 }
 
 // NewAgentNode constructs a new [AgentNode] bound to the resolved LLM model,
 // tool container, system prompt, and structured logger.
-func NewAgentNode(model *llm.Model, container *tools.Container, systemPrompt string, logger log.Interface) *AgentNode {
+func NewAgentNode(model *llm.Model, container tools.Container, systemPrompt string, logger log.Interface) *AgentNode {
 	return &AgentNode{
 		model:        model,
 		tools:        container,
@@ -110,12 +110,12 @@ func (n *AgentNode) Execute(ctx context.Context, state State) (graph.Command[Sta
 // interrupt/resume lifecycles, and tool execution.
 // It implements [github.com/masterkeysrd/loom/graph.Node].
 type ToolsNode struct {
-	tools  *tools.Container
+	tools  tools.Container
 	logger log.Interface
 }
 
 // NewToolsNode constructs a new [ToolsNode] bound to the tool container and logger.
-func NewToolsNode(container *tools.Container, logger log.Interface) *ToolsNode {
+func NewToolsNode(container tools.Container, logger log.Interface) *ToolsNode {
 	return &ToolsNode{
 		tools:  container,
 		logger: logger.ForComponent("harness.tools"),
@@ -271,7 +271,7 @@ func (n *ToolsNode) resumeSingleCall(ctx context.Context, tc *message.ToolCall, 
 	if !ok {
 		return nil, ErrPendingPermissionsUnresolved
 	}
-	if err := n.tools.Gate().ApplyDecision(&req, dec); err != nil {
+	if err := n.tools.ApplyDecision(&req, dec); err != nil {
 		return newErrorToolMessage(tc, err.Error())
 	}
 	toolMsg, err := n.tools.Execute(ctx, tc)

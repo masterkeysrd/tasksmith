@@ -21,7 +21,7 @@ import (
 
 type workspaceRuntime struct {
 	dir       string
-	workspace *workspace.Workspace
+	workspace workspace.Workspace
 	sandbox   sandbox.Sandbox
 	gateway   gateway.Gateway
 	db        *sql.DB
@@ -30,7 +30,7 @@ type workspaceRuntime struct {
 	logger    log.Interface
 }
 
-func newWorkspaceRuntime(ctx context.Context, ws *workspace.Workspace, pool gateway.Pool, b *broker.Broker, logger log.Interface) (*workspaceRuntime, error) {
+func newWorkspaceRuntime(ctx context.Context, ws workspace.Workspace, pool gateway.Pool, b *broker.Broker, logger log.Interface) (*workspaceRuntime, error) {
 	rootDir := ws.RootDir()
 
 	sb, err := sandbox.New(sandbox.Config{
@@ -116,7 +116,7 @@ func (rt *workspaceRuntime) close() error {
 	return errors.Join(mgrErr, sbErr, dbErr)
 }
 
-func buildGatewayConfig(ws *workspace.Workspace) gateway.Config {
+func buildGatewayConfig(ws workspace.Workspace) gateway.Config {
 	wsEnv := ws.Env()
 	wsProviders := ws.Providers()
 	providers := make([]gateway.ProviderConfig, 0, len(wsProviders))

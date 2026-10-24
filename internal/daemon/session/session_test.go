@@ -216,7 +216,7 @@ func (p *testPublisher) reset() {
 	p.events = nil
 }
 
-func setupTestEnv(t *testing.T, prov *fakeProvider) (*sql.DB, *workspace.Workspace, *fakeGateway, *testPublisher, *Manager) {
+func setupTestEnv(t *testing.T, prov *fakeProvider) (*sql.DB, workspace.Workspace, *fakeGateway, *testPublisher, *Manager) {
 	t.Helper()
 
 	xdgRoot := t.TempDir()

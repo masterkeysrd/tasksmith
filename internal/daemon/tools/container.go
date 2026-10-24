@@ -18,7 +18,7 @@ import (
 type Config struct {
 	Tools     []Tool
 	Sandbox   sandbox.Sandbox
-	Workspace *workspace.Workspace
+	Workspace workspace.Workspace
 	Logger    log.Interface
 }
 
@@ -44,23 +44,41 @@ func (c Config) Validate() error {
 
 // Container manages registered [Tool] instances, custom workspace command
 // tools, two-phase Prepare/Execute orchestration, and the session permission [Gate].
-type Container struct {
+type Container interface {
+	Gate() *Gate
+	Definitions() []tool.Definition
+	List() []Tool
+	Get(name string) (Tool, bool)
+	Mode() PermissionMode
+	SetMode(mode PermissionMode)
+	AddGrant(grant Grant)
+	Grants() []Grant
+	ClearGrants()
+	ApplyDecision(req *PermissionRequest, dec PermissionDecision) error
+	Prepare(ctx context.Context, tc *message.ToolCall) (*Plan, error)
+	Evaluate(plan *Plan) (AccessDecision, *PermissionRequest, error)
+	Execute(ctx context.Context, tc *message.ToolCall) (*message.Tool, error)
+}
+
+type container struct {
 	sandbox   sandbox.Sandbox
-	workspace *workspace.Workspace
+	workspace workspace.Workspace
 	logger    log.Interface
 	gate      *Gate
 	order     []string
 	tools     map[string]Tool
 }
 
+var _ Container = (*container)(nil)
+
 // NewContainer validates cfg and constructs a [Container] from cfg.Tools plus
 // any custom command tools declared in cfg.Workspace.Tools().
-func NewContainer(cfg Config) (*Container, error) {
+func NewContainer(cfg Config) (Container, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
 
-	c := &Container{
+	c := &container{
 		sandbox:   cfg.Sandbox,
 		workspace: cfg.Workspace,
 		logger:    cfg.Logger.ForComponent("tools"),
@@ -84,7 +102,7 @@ func NewContainer(cfg Config) (*Container, error) {
 	return c, nil
 }
 
-func (c *Container) addTool(t Tool) {
+func (c *container) addTool(t Tool) {
 	name := t.Name()
 	if _, exists := c.tools[name]; !exists {
 		c.order = append(c.order, name)
@@ -94,13 +112,13 @@ func (c *Container) addTool(t Tool) {
 }
 
 // Gate returns the permission and policy [Gate] associated with c.
-func (c *Container) Gate() *Gate {
+func (c *container) Gate() *Gate {
 	return c.gate
 }
 
 // Definitions returns the LLM tool definitions for all registered tools in
 // registration order.
-func (c *Container) Definitions() []tool.Definition {
+func (c *container) Definitions() []tool.Definition {
 	defs := make([]tool.Definition, 0, len(c.order))
 	for _, name := range c.order {
 		if t, ok := c.tools[name]; ok {
@@ -111,7 +129,7 @@ func (c *Container) Definitions() []tool.Definition {
 }
 
 // List returns all registered [Tool] instances in registration order.
-func (c *Container) List() []Tool {
+func (c *container) List() []Tool {
 	list := make([]Tool, 0, len(c.order))
 	for _, name := range c.order {
 		if t, ok := c.tools[name]; ok {
@@ -122,39 +140,44 @@ func (c *Container) List() []Tool {
 }
 
 // Get retrieves a registered [Tool] by name.
-func (c *Container) Get(name string) (Tool, bool) {
+func (c *container) Get(name string) (Tool, bool) {
 	t, ok := c.tools[name]
 	return t, ok
 }
 
 // Mode returns the Gate's active [PermissionMode].
-func (c *Container) Mode() PermissionMode {
+func (c *container) Mode() PermissionMode {
 	return c.gate.Mode()
 }
 
 // SetMode sets the Gate's active [PermissionMode].
-func (c *Container) SetMode(mode PermissionMode) {
+func (c *container) SetMode(mode PermissionMode) {
 	c.gate.SetMode(mode)
 }
 
 // AddGrant adds a session-scoped [Grant] to the Gate.
-func (c *Container) AddGrant(grant Grant) {
+func (c *container) AddGrant(grant Grant) {
 	c.gate.AddGrant(grant)
 }
 
 // Grants returns a defensive copy of all active session grants in the Gate.
-func (c *Container) Grants() []Grant {
+func (c *container) Grants() []Grant {
 	return c.gate.Grants()
 }
 
 // ClearGrants clears all active session grants in the Gate.
-func (c *Container) ClearGrants() {
+func (c *container) ClearGrants() {
 	c.gate.ClearGrants()
+}
+
+// ApplyDecision delegates applying a permission decision to the Gate.
+func (c *container) ApplyDecision(req *PermissionRequest, dec PermissionDecision) error {
+	return c.gate.ApplyDecision(req, dec)
 }
 
 // Prepare validates the tool call and delegates pre-flight analysis to the
 // target [Tool.Prepare] implementation.
-func (c *Container) Prepare(ctx context.Context, tc *message.ToolCall) (*Plan, error) {
+func (c *container) Prepare(ctx context.Context, tc *message.ToolCall) (*Plan, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -181,7 +204,7 @@ func (c *Container) Prepare(ctx context.Context, tc *message.ToolCall) (*Plan, e
 }
 
 // Evaluate delegates plan evaluation to [Gate.Evaluate].
-func (c *Container) Evaluate(plan *Plan) (AccessDecision, *PermissionRequest, error) {
+func (c *container) Evaluate(plan *Plan) (AccessDecision, *PermissionRequest, error) {
 	return c.gate.Evaluate(plan)
 }
 
@@ -189,7 +212,7 @@ func (c *Container) Evaluate(plan *Plan) (AccessDecision, *PermissionRequest, er
 // to the same file path, wrapping any validation or execution error into a
 // non-fatal [*message.Tool] with IsError: true, and assigning a single UUIDv7
 // message ID.
-func (c *Container) Execute(ctx context.Context, tc *message.ToolCall) (*message.Tool, error) {
+func (c *container) Execute(ctx context.Context, tc *message.ToolCall) (*message.Tool, error) {
 	if tc == nil {
 		id, err := uuid.NewV7()
 		if err != nil {
@@ -246,7 +269,7 @@ func (c *Container) Execute(ctx context.Context, tc *message.ToolCall) (*message
 	return resp, nil
 }
 
-func (c *Container) mutatingPathForTool(t Tool, args map[string]any) (string, bool) {
+func (c *container) mutatingPathForTool(t Tool, args map[string]any) (string, bool) {
 	if t.Definition().Annotation.IsReadOnly || args == nil {
 		return "", false
 	}

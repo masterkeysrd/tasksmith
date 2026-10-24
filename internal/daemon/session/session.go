@@ -35,7 +35,7 @@ import (
 // Config holds runtime dependencies required to construct a [Manager].
 type Config struct {
 	DB        *sql.DB
-	Workspace *workspace.Workspace
+	Workspace workspace.Workspace
 	Gateway   gateway.Gateway
 	Sandbox   sandbox.Sandbox
 	Publisher Publisher
@@ -83,7 +83,7 @@ type Manager struct {
 	store     *store
 	timeline  timeline.Store
 	journal   journal.Store
-	workspace *workspace.Workspace
+	workspace workspace.Workspace
 	gateway   gateway.Gateway
 	sandbox   sandbox.Sandbox
 	publisher Publisher
@@ -557,10 +557,10 @@ func (m *Manager) Journal(ctx context.Context, sessionID string) (journal.Journa
 	return jr, nil
 }
 
-// Tools returns the cached per-session [*tools.Container], constructing it on
+// Tools returns the cached per-session [tools.Container], constructing it on
 // first access with the session's [journal.Journal], sandbox, workspace, and
 // shellguard.
-func (m *Manager) Tools(ctx context.Context, sessionID string) (*tools.Container, error) {
+func (m *Manager) Tools(ctx context.Context, sessionID string) (tools.Container, error) {
 	sess, err := m.getLiveSession(ctx, sessionID)
 	if err != nil {
 		return nil, err
@@ -1225,7 +1225,7 @@ func (m *Manager) Cancel(ctx context.Context, sessionID string) error {
 	return nil
 }
 
-func (m *Manager) harness(ctx context.Context, sess *Session) (*harness.Harness, error) {
+func (m *Manager) harness(ctx context.Context, sess *Session) (harness.Harness, error) {
 	reg, err := m.Tools(ctx, sess.ID)
 	if err != nil {
 		return nil, err

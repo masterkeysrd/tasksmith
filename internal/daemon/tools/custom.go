@@ -24,7 +24,7 @@ type customTool struct {
 	sandbox             sandbox.Sandbox
 }
 
-func (c *Container) registerCustomTools() error {
+func (c *container) registerCustomTools() error {
 	if c.workspace == nil {
 		return nil
 	}
@@ -47,7 +47,7 @@ func (c *Container) registerCustomTools() error {
 	return nil
 }
 
-func (c *Container) buildCustomTool(wsTool workspace.Tool) (Tool, error) {
+func (c *container) buildCustomTool(wsTool workspace.Tool) (Tool, error) {
 	title := wsTool.DisplayName
 	if title == "" {
 		title = wsTool.Name

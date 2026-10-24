@@ -22,7 +22,7 @@ type Gate struct {
 	mode        PermissionMode
 	grants      []Grant
 	policies    *workspace.Policies
-	workspace   *workspace.Workspace
+	workspace   workspace.Workspace
 	annotations map[string]tool.Annotation
 
 	locksMu   sync.Mutex
@@ -31,7 +31,7 @@ type Gate struct {
 
 // NewGate constructs a new [Gate] initialized in [ModeDefault] with policies
 // loaded from ws (when non-nil).
-func NewGate(ws *workspace.Workspace) *Gate {
+func NewGate(ws workspace.Workspace) *Gate {
 	var policies *workspace.Policies
 	if ws != nil {
 		policies = ws.Policies()
@@ -290,7 +290,7 @@ func (g *Gate) lockPath(targetPath string) func() {
 	return mu.Unlock
 }
 
-func (g *Gate) isAllowedByPolicy(plan *Plan, policies *workspace.Policies, ws *workspace.Workspace, regAnn tool.Annotation, hasRegAnn bool) bool {
+func (g *Gate) isAllowedByPolicy(plan *Plan, policies *workspace.Policies, ws workspace.Workspace, regAnn tool.Annotation, hasRegAnn bool) bool {
 	if policies == nil || policies.Tools == nil {
 		return true
 	}

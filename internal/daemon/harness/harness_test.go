@@ -161,7 +161,7 @@ func openTestSQLite(t *testing.T) *sql.DB {
 	return db
 }
 
-func newTestToolsRegistry(t *testing.T) (string, *tools.Container) {
+func newTestToolsRegistry(t *testing.T) (string, tools.Container) {
 	t.Helper()
 	xdgRoot := t.TempDir()
 	xdg.SetTestEnv(xdgRoot, "tasksmith-harness-test")
@@ -242,7 +242,7 @@ func msgText(m message.Message) string {
 	return extractBlocksText(m.GetContent())
 }
 
-func drainStream(ctx context.Context, h *Harness, threadID string, input message.Message) ([]string, *message.Assistant, error) {
+func drainStream(ctx context.Context, h Harness, threadID string, input message.Message) ([]string, *message.Assistant, error) {
 	var deltas []string
 	var completed *message.Assistant
 	for ev, err := range h.Stream(ctx, threadID, input) {
