@@ -165,6 +165,7 @@ func scanSession(r rowScanner) (*Session, error) {
 
 	sess.CreatedAt = createdAt
 	sess.UpdatedAt = updatedAt
+	sess.State = NewState()
 	return &sess, nil
 }
 

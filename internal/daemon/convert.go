@@ -20,9 +20,13 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/daemon/workspace"
 )
 
-func toAPISession(sess *session.Session, status api.SessionStatus) api.Session {
+func toAPISession(sess *session.Session) api.Session {
 	if sess == nil {
 		return api.Session{}
+	}
+	status := api.StatusIdle
+	if sess.State != nil && sess.Status != "" {
+		status = api.SessionStatus(sess.Status)
 	}
 	return api.Session{
 		ID:        sess.ID,
@@ -481,6 +485,17 @@ func (d *Daemon) FormatEvent(msg broker.Message) (api.Event, error) {
 			Topic: msg.Topic,
 			Payload: api.CompletedEvent{
 				SessionID: ev.SessionID,
+			},
+		}, nil
+
+	case session.ErrorEvent:
+		return api.Event{
+			ID:    msg.ID,
+			Type:  api.EventError,
+			Topic: msg.Topic,
+			Payload: api.ErrorEvent{
+				SessionID: ev.SessionID,
+				Error:     ev.Error,
 			},
 		}, nil
 

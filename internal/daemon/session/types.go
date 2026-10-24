@@ -6,6 +6,7 @@ import (
 
 	"github.com/masterkeysrd/loom/message"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/broker"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/harness"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/std"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/timeline"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tools"
@@ -26,16 +27,68 @@ var (
 	ErrInvalidDecision      = errors.New("session: invalid permission decision")
 	ErrInvalidSessionID     = errors.New("session: session ID must be a canonical lowercase UUIDv7")
 	ErrSessionConflict      = errors.New("session: session already exists with different parameters")
+	ErrSessionRunning       = errors.New("session: session already has an active turn")
 )
 
-// Session represents a persistent user-facing chat thread.
+// Status represents the operational execution state of a [Session].
+type Status string
+
+const (
+	StatusIdle              Status = "idle"
+	StatusRunning           Status = "running"
+	StatusWaitingPermission Status = "waiting_permission"
+)
+
+// Session represents a persistent user-facing chat thread and its runtime state.
 type Session struct {
+	// We embed [State] here so that Session supports state fields and locking
+	// directly, but marshal it as a struct in JSON.
+	//
+	// State also provides a [sync.Mutex] which is used as lock for both
+	// the Session and State.
+	*State `json:"state"`
+
 	ID        string    `json:"id"`
 	Title     string    `json:"title"`
 	Agent     string    `json:"agent"`
 	Model     string    `json:"model"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
+
+	Root    string           `json:"-"` // Path to <WorkspaceDir>/sessions/<id>
+	Tracker *FileTracker     `json:"-"`
+	Tools   *tools.Container `json:"-"`
+	Harness *harness.Harness `json:"-"`
+}
+
+// Clone returns a deep copy of the session and its exported execution state,
+// synchronizing on the session's embedded mutex.
+func (s *Session) Clone() *Session {
+	if s == nil {
+		return nil
+	}
+	if s.State != nil {
+		s.Lock()
+		defer s.Unlock()
+	}
+	cp := &Session{
+		ID:        s.ID,
+		Title:     s.Title,
+		Agent:     s.Agent,
+		Model:     s.Model,
+		CreatedAt: s.CreatedAt,
+		UpdatedAt: s.UpdatedAt,
+		Root:      s.Root,
+		Tracker:   s.Tracker,
+		Tools:     s.Tools,
+		Harness:   s.Harness,
+	}
+	if s.State != nil {
+		cp.State = s.State.Clone()
+	} else {
+		cp.State = NewState()
+	}
+	return cp
 }
 
 // CreateParams holds optional parameters for creating a new [Session].
@@ -75,6 +128,9 @@ const (
 	// EventPermissionRequested is published when the harness pauses execution to
 	// request user approval for one or more pending tool executions.
 	EventPermissionRequested EventType = "permission_requested"
+
+	// EventError is published when an asynchronous conversational turn fails with an error.
+	EventError EventType = "error"
 )
 
 // Event is implemented by all real-time session notifications published by [Manager].
@@ -108,6 +164,13 @@ type CompletedEvent struct {
 }
 
 func (CompletedEvent) EventType() string { return string(EventCompleted) }
+
+type ErrorEvent struct {
+	SessionID string
+	Error     string
+}
+
+func (ErrorEvent) EventType() string { return string(EventError) }
 
 // Publisher broadcasts real-time session events to a topic.
 type Publisher interface {

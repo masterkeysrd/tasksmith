@@ -6,10 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
-	"sync"
 
-	"github.com/masterkeysrd/loom/message"
-	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	"github.com/masterkeysrd/tasksmith/internal/core/sqlite"
 	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
@@ -18,15 +15,8 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/daemon/sandbox"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/session"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/timeline"
-	"github.com/masterkeysrd/tasksmith/internal/daemon/tools"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/workspace"
 )
-
-type activeRun struct {
-	cancel context.CancelFunc
-	done   chan struct{}
-	err    error
-}
 
 type workspaceRuntime struct {
 	dir       string
@@ -37,28 +27,6 @@ type workspaceRuntime struct {
 	manager   *session.Manager
 	broker    *broker.Broker
 	logger    log.Interface
-
-	bgCtx    context.Context
-	bgCancel context.CancelFunc
-	wg       sync.WaitGroup
-
-	mu         sync.Mutex
-	activeRuns map[string]*activeRun
-}
-
-type runtimePublisher struct {
-	rt *workspaceRuntime
-	b  *broker.Broker
-}
-
-func (p *runtimePublisher) Publish(topic string, ev broker.Event) {
-	switch e := ev.(type) {
-	case session.CompletedEvent:
-		p.rt.markRunCompleted(e.SessionID)
-	case session.PermissionRequestedEvent:
-		p.rt.markRunCompleted(e.SessionID)
-	}
-	p.b.Publish(topic, ev)
 }
 
 func newWorkspaceRuntime(ctx context.Context, ws *workspace.Workspace, pool gateway.Pool, b *broker.Broker, logger log.Interface) (*workspaceRuntime, error) {
@@ -103,19 +71,14 @@ func newWorkspaceRuntime(ctx context.Context, ws *workspace.Workspace, pool gate
 		return nil, fmt.Errorf("daemon: initialize timeline for %q: %w", rootDir, err)
 	}
 
-	bgCtx, bgCancel := context.WithCancel(context.Background())
-
 	rt := &workspaceRuntime{
-		dir:        rootDir,
-		workspace:  ws,
-		sandbox:    sb,
-		gateway:    gw,
-		db:         db,
-		broker:     b,
-		logger:     logger,
-		bgCtx:      bgCtx,
-		bgCancel:   bgCancel,
-		activeRuns: make(map[string]*activeRun),
+		dir:       rootDir,
+		workspace: ws,
+		sandbox:   sb,
+		gateway:   gw,
+		db:        db,
+		broker:    b,
+		logger:    logger,
 	}
 
 	mgr, err := session.New(session.Config{
@@ -123,7 +86,7 @@ func newWorkspaceRuntime(ctx context.Context, ws *workspace.Workspace, pool gate
 		Workspace: ws,
 		Gateway:   gw,
 		Sandbox:   sb,
-		Publisher: &runtimePublisher{rt: rt, b: b},
+		Publisher: b,
 		Logger:    logger,
 		Timeline:  tl,
 	})
@@ -137,179 +100,11 @@ func newWorkspaceRuntime(ctx context.Context, ws *workspace.Workspace, pool gate
 	return rt, nil
 }
 
-func (rt *workspaceRuntime) sessionStatus(ctx context.Context, sessionID string) api.SessionStatus {
-	rt.mu.Lock()
-	_, running := rt.activeRuns[sessionID]
-	rt.mu.Unlock()
-	if running {
-		return api.StatusRunning
-	}
-
-	perms, err := rt.manager.PendingPermissions(ctx, sessionID)
-	if err == nil && len(perms) > 0 {
-		return api.StatusWaitingPermission
-	}
-
-	return api.StatusIdle
-}
-
-func (rt *workspaceRuntime) startTurn(ctx context.Context, sessionID string, input message.Message, wait bool) error {
-	sess, err := rt.manager.Get(ctx, sessionID)
-	if err != nil {
-		return err
-	}
-
-	run, runCtx, err := rt.registerRun(sess.ID)
-	if err != nil {
-		return err
-	}
-
-	go func() {
-		var runErr error
-		defer func() {
-			rt.finishRun(sess.ID, run, runErr)
-		}()
-		if _, err := rt.manager.Send(runCtx, sess.ID, input); err != nil {
-			runErr = err
-			rt.clearRun(sess.ID, run)
-			rt.publishRunError(sess.ID, err)
-		}
-	}()
-
-	if !wait {
-		return nil
-	}
-	return waitForRun(ctx, run)
-}
-
-func (rt *workspaceRuntime) respondPermission(ctx context.Context, sessionID string, decision tools.PermissionDecision, wait bool) error {
-	sess, err := rt.manager.Get(ctx, sessionID)
-	if err != nil {
-		return err
-	}
-
-	rt.mu.Lock()
-	_, running := rt.activeRuns[sess.ID]
-	rt.mu.Unlock()
-	if running {
-		return ErrSessionRunning
-	}
-
-	ready, err := rt.manager.RecordDecision(ctx, sess.ID, decision)
-	if err != nil || !ready {
-		return err
-	}
-
-	run, runCtx, err := rt.registerRun(sess.ID)
-	if err != nil {
-		return err
-	}
-
-	go func() {
-		var runErr error
-		defer func() {
-			rt.finishRun(sess.ID, run, runErr)
-		}()
-		if _, err := rt.manager.Resume(runCtx, sess.ID); err != nil {
-			runErr = err
-			rt.clearRun(sess.ID, run)
-			rt.publishRunError(sess.ID, err)
-		}
-	}()
-
-	if !wait {
-		return nil
-	}
-	return waitForRun(ctx, run)
-}
-
-func (rt *workspaceRuntime) cancelTurn(ctx context.Context, sessionID string) error {
-	sess, err := rt.manager.Get(ctx, sessionID)
-	if err != nil {
-		return err
-	}
-
-	rt.mu.Lock()
-	run := rt.activeRuns[sess.ID]
-	rt.mu.Unlock()
-	if run == nil {
-		return nil
-	}
-
-	run.cancel()
-	select {
-	case <-run.done:
-	case <-ctx.Done():
-	}
-	return nil
-}
-
-func (rt *workspaceRuntime) registerRun(sessionID string) (*activeRun, context.Context, error) {
-	rt.mu.Lock()
-	defer rt.mu.Unlock()
-
-	if _, exists := rt.activeRuns[sessionID]; exists {
-		return nil, nil, ErrSessionRunning
-	}
-
-	runCtx, cancel := context.WithCancel(rt.bgCtx)
-	run := &activeRun{
-		cancel: cancel,
-		done:   make(chan struct{}),
-	}
-	rt.activeRuns[sessionID] = run
-	rt.wg.Add(1)
-	return run, runCtx, nil
-}
-
-func (rt *workspaceRuntime) clearRun(sessionID string, run *activeRun) {
-	rt.mu.Lock()
-	if run == nil || rt.activeRuns[sessionID] == run {
-		delete(rt.activeRuns, sessionID)
-	}
-	rt.mu.Unlock()
-}
-
-func (rt *workspaceRuntime) markRunCompleted(sessionID string) {
-	rt.clearRun(sessionID, nil)
-}
-
-func (rt *workspaceRuntime) finishRun(sessionID string, run *activeRun, err error) {
-	run.err = err
-	run.cancel()
-	rt.clearRun(sessionID, run)
-	close(run.done)
-	rt.wg.Done()
-}
-
-func (rt *workspaceRuntime) publishRunError(sessionID string, err error) {
-	if errors.Is(err, context.Canceled) {
-		return
-	}
-	rt.broker.Publish(api.SessionStreamTopic(sessionID), api.ErrorEvent{
-		SessionID: sessionID,
-		Error:     err.Error(),
-	})
-}
-
 func (rt *workspaceRuntime) close() error {
-	rt.bgCancel()
-	rt.wg.Wait()
+	mgrErr := rt.manager.Close()
 	sbErr := rt.sandbox.Close()
 	dbErr := rt.db.Close()
-	return errors.Join(sbErr, dbErr)
-}
-
-func waitForRun(ctx context.Context, run *activeRun) error {
-	select {
-	case <-run.done:
-		if run.err != nil && !errors.Is(run.err, context.Canceled) {
-			return run.err
-		}
-		return nil
-	case <-ctx.Done():
-		return nil
-	}
+	return errors.Join(mgrErr, sbErr, dbErr)
 }
 
 func buildGatewayConfig(ws *workspace.Workspace) gateway.Config {

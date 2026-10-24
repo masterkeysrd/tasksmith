@@ -82,11 +82,13 @@ type Manager struct {
 	publisher Publisher
 	logger    log.Interface
 
-	mu         sync.Mutex
-	createMu   sync.Mutex
-	trackers   map[string]*FileTracker
-	containers map[string]*tools.Container
-	decisions  map[string]map[string]tools.PermissionDecision
+	bgCtx    context.Context
+	bgCancel context.CancelFunc
+	wg       sync.WaitGroup
+
+	mu       sync.Mutex
+	createMu sync.Mutex
+	sessions map[string]*Session
 }
 
 // New constructs a new [Manager] and automatically runs SQLite schema migrations
@@ -101,19 +103,28 @@ func New(cfg Config) (*Manager, error) {
 		return nil, err
 	}
 
+	bgCtx, bgCancel := context.WithCancel(context.Background())
+
 	return &Manager{
-		db:         cfg.DB,
-		store:      st,
-		timeline:   cfg.Timeline,
-		workspace:  cfg.Workspace,
-		gateway:    cfg.Gateway,
-		sandbox:    cfg.Sandbox,
-		publisher:  cfg.Publisher,
-		logger:     cfg.Logger.ForComponent("session"),
-		trackers:   make(map[string]*FileTracker),
-		containers: make(map[string]*tools.Container),
-		decisions:  make(map[string]map[string]tools.PermissionDecision),
+		db:        cfg.DB,
+		store:     st,
+		timeline:  cfg.Timeline,
+		workspace: cfg.Workspace,
+		gateway:   cfg.Gateway,
+		sandbox:   cfg.Sandbox,
+		publisher: cfg.Publisher,
+		logger:    cfg.Logger.ForComponent("session"),
+		bgCtx:     bgCtx,
+		bgCancel:  bgCancel,
+		sessions:  make(map[string]*Session),
 	}, nil
+}
+
+// Close terminates in-flight background turns and waits for goroutines to exit.
+func (m *Manager) Close() error {
+	m.bgCancel()
+	m.wg.Wait()
+	return nil
 }
 
 // resolveModelName resolves a bare model name (e.g. "sonnet") against the workspace providers.
@@ -149,6 +160,84 @@ func (m *Manager) resolveAgentAndModel(agent, model string) (string, string) {
 		}
 	}
 	return agent, model
+}
+
+func (m *Manager) loadOrCacheSession(ctx context.Context, dbSess *Session) (*Session, error) {
+	if dbSess == nil {
+		return nil, ErrSessionNotFound
+	}
+
+	m.mu.Lock()
+	if existing, ok := m.sessions[dbSess.ID]; ok {
+		m.mu.Unlock()
+		existing.Lock()
+		existing.Title = dbSess.Title
+		existing.Agent = dbSess.Agent
+		existing.Model = dbSess.Model
+		existing.CreatedAt = dbSess.CreatedAt
+		existing.UpdatedAt = dbSess.UpdatedAt
+		existing.Unlock()
+		return existing.Clone(), nil
+	}
+
+	root, err := m.sessionDir(dbSess.ID)
+	if err != nil {
+		m.mu.Unlock()
+		return nil, err
+	}
+	if dbSess.State == nil {
+		dbSess.State = NewState()
+	}
+	dbSess.Root = root
+	m.sessions[dbSess.ID] = dbSess
+	m.mu.Unlock()
+
+	// Check if session has unresolved permissions in checkpoint state
+	if h, err := m.harness(ctx, dbSess); err == nil {
+		if st, err := h.LoadState(ctx, dbSess.ID); err == nil && len(st.PendingPermissions) > 0 {
+			dbSess.Lock()
+			if dbSess.Status == StatusIdle {
+				dbSess.Status = StatusWaitingPermission
+				dbSess.WaitingPermission = true
+			}
+			dbSess.Unlock()
+		}
+	}
+
+	return dbSess.Clone(), nil
+}
+
+func (m *Manager) getLiveSession(ctx context.Context, id string) (*Session, error) {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return nil, ErrEmptySessionID
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	m.mu.Lock()
+	if sess, ok := m.sessions[id]; ok {
+		m.mu.Unlock()
+		return sess, nil
+	}
+	m.mu.Unlock()
+
+	dbSess, err := m.store.getSession(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := m.loadOrCacheSession(ctx, dbSess); err != nil {
+		return nil, err
+	}
+
+	m.mu.Lock()
+	sess := m.sessions[id]
+	m.mu.Unlock()
+	if sess == nil {
+		return nil, ErrSessionNotFound
+	}
+	return sess, nil
 }
 
 // Create creates and persists a new [Session], resolving default `Agent` and
@@ -192,8 +281,11 @@ func (m *Manager) Ensure(ctx context.Context, params CreateParams) (sess *Sessio
 			if err := m.matchesParams(existing, params); err != nil {
 				return nil, false, err
 			}
-			cp := *existing
-			return &cp, false, nil
+			cloned, err := m.loadOrCacheSession(ctx, existing)
+			if err != nil {
+				return nil, false, err
+			}
+			return cloned, false, nil
 		case !errors.Is(err, ErrSessionNotFound):
 			return nil, false, err
 		}
@@ -210,21 +302,31 @@ func (m *Manager) Ensure(ctx context.Context, params CreateParams) (sess *Sessio
 		id = generated.String()
 	}
 	created = true
+	dir, err := m.sessionDir(id)
+	if err != nil {
+		return nil, false, err
+	}
+
 	newSession := &Session{
+		State:     NewState(),
 		ID:        id,
 		Title:     strings.TrimSpace(params.Title),
 		Agent:     agent,
 		Model:     model,
 		CreatedAt: now,
 		UpdatedAt: now,
+		Root:      dir,
 	}
 
 	if err := m.store.insertSession(ctx, newSession); err != nil {
 		return nil, false, err
 	}
 
-	cp := *newSession
-	return &cp, created, nil
+	m.mu.Lock()
+	m.sessions[id] = newSession
+	m.mu.Unlock()
+
+	return newSession.Clone(), created, nil
 }
 
 // validateSessionID requires a canonical lowercase UUIDv7.
@@ -265,33 +367,57 @@ func (m *Manager) Update(ctx context.Context, id string, params UpdateParams) (*
 		return nil, ErrEmptySessionID
 	}
 
-	sess, err := m.store.getSession(ctx, id)
+	sess, err := m.getLiveSession(ctx, id)
 	if err != nil {
 		return nil, err
 	}
 
+	sess.Lock()
 	oldAgent := sess.Agent
 	oldModel := sess.Model
 
+	newTitle := sess.Title
 	if title := strings.TrimSpace(params.Title); title != "" {
-		sess.Title = title
+		newTitle = title
 	}
+	newAgent := sess.Agent
 	if agent := strings.TrimSpace(params.Agent); agent != "" {
-		sess.Agent = agent
+		newAgent = agent
 	}
+	newModel := sess.Model
 	if model := strings.TrimSpace(params.Model); model != "" {
-		sess.Model = m.resolveModelName(model)
+		newModel = m.resolveModelName(model)
 	} else if strings.TrimSpace(params.Agent) != "" && sess.Model == "" {
-		_, sess.Model = m.resolveAgentAndModel(sess.Agent, "")
+		_, newModel = m.resolveAgentAndModel(newAgent, "")
 	}
 
-	sess.UpdatedAt = time.Now().UTC()
-	if err := m.store.updateSession(ctx, sess); err != nil {
+	updatedAt := time.Now().UTC()
+
+	dbSess := &Session{
+		ID:        sess.ID,
+		Title:     newTitle,
+		Agent:     newAgent,
+		Model:     newModel,
+		CreatedAt: sess.CreatedAt,
+		UpdatedAt: updatedAt,
+	}
+
+	if err := m.store.updateSession(ctx, dbSess); err != nil {
+		sess.Unlock()
 		return nil, err
 	}
 
-	if oldAgent != sess.Agent {
-		entry := timeline.NewAgentEntry(sess.ID, timeline.AgentChange{From: oldAgent, To: sess.Agent})
+	sess.Title = newTitle
+	sess.Agent = newAgent
+	sess.Model = newModel
+	sess.UpdatedAt = updatedAt
+	if oldAgent != sess.Agent || oldModel != sess.Model {
+		sess.Harness = nil
+	}
+	sess.Unlock()
+
+	if oldAgent != newAgent {
+		entry := timeline.NewAgentEntry(sess.ID, timeline.AgentChange{From: oldAgent, To: newAgent})
 		if err := m.timeline.Append(ctx, entry); err != nil {
 			return nil, err
 		}
@@ -300,8 +426,8 @@ func (m *Manager) Update(ctx context.Context, id string, params UpdateParams) (*
 			Entry:     entry.Clone(),
 		})
 	}
-	if oldModel != sess.Model {
-		entry := timeline.NewModelEntry(sess.ID, timeline.ModelChange{From: oldModel, To: sess.Model})
+	if oldModel != newModel {
+		entry := timeline.NewModelEntry(sess.ID, timeline.ModelChange{From: oldModel, To: newModel})
 		if err := m.timeline.Append(ctx, entry); err != nil {
 			return nil, err
 		}
@@ -311,8 +437,7 @@ func (m *Manager) Update(ctx context.Context, id string, params UpdateParams) (*
 		})
 	}
 
-	cp := *sess
-	return &cp, nil
+	return sess.Clone(), nil
 }
 
 // Get retrieves a [Session] by its identifier.
@@ -326,7 +451,11 @@ func (m *Manager) Get(ctx context.Context, id string) (*Session, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	return m.store.getSession(ctx, id)
+	dbSess, err := m.store.getSession(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	return m.loadOrCacheSession(ctx, dbSess)
 }
 
 // List returns all persisted sessions ordered by `updated_at DESC, id DESC`.
@@ -334,7 +463,19 @@ func (m *Manager) List(ctx context.Context) ([]Session, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	return m.store.listSessions(ctx)
+	list, err := m.store.listSessions(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Session, len(list))
+	for i := range list {
+		cloned, err := m.loadOrCacheSession(ctx, &list[i])
+		if err != nil {
+			return nil, err
+		}
+		out[i] = *cloned
+	}
+	return out, nil
 }
 
 // Delete removes the specified session, all of its persisted timeline entries, and
@@ -349,6 +490,9 @@ func (m *Manager) Delete(ctx context.Context, id string) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+
+	_ = m.Cancel(ctx, id)
+
 	if err := m.store.deleteSession(ctx, id); err != nil {
 		return err
 	}
@@ -357,13 +501,15 @@ func (m *Manager) Delete(ctx context.Context, id string) error {
 	}
 
 	m.mu.Lock()
-	delete(m.trackers, id)
-	delete(m.containers, id)
-	delete(m.decisions, id)
+	sess := m.sessions[id]
+	delete(m.sessions, id)
 	m.mu.Unlock()
 
-	if sessionDir, err := m.sessionDir(id); err == nil {
+	sessionDir, err := m.sessionDir(id)
+	if err == nil {
 		_ = os.RemoveAll(sessionDir)
+	} else if sess != nil && sess.Root != "" {
+		_ = os.RemoveAll(sess.Root)
 	}
 	return nil
 }
@@ -372,29 +518,32 @@ func (m *Manager) Delete(ctx context.Context, id string) error {
 // `<WorkspaceDir>/sessions/<sessionID>/changes`, replaying any existing
 // `changes/*.jsonl` journals from disk.
 func (m *Manager) Tracker(ctx context.Context, sessionID string) (*FileTracker, error) {
-	sess, err := m.Get(ctx, sessionID)
+	sess, err := m.getLiveSession(ctx, sessionID)
 	if err != nil {
 		return nil, err
 	}
 
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	sess.Lock()
+	defer sess.Unlock()
 
-	if tr, ok := m.trackers[sess.ID]; ok {
-		return tr, nil
+	if sess.Tracker != nil {
+		return sess.Tracker, nil
 	}
 
-	sessionDir, err := m.sessionDir(sess.ID)
-	if err != nil {
-		return nil, err
+	if sess.Root == "" {
+		dir, err := m.sessionDir(sess.ID)
+		if err != nil {
+			return nil, err
+		}
+		sess.Root = dir
 	}
-	changesDir := filepath.Join(sessionDir, "changes")
 
+	changesDir := filepath.Join(sess.Root, "changes")
 	tr, err := newFileTracker(changesDir)
 	if err != nil {
 		return nil, err
 	}
-	m.trackers[sess.ID] = tr
+	sess.Tracker = tr
 	return tr, nil
 }
 
@@ -402,7 +551,7 @@ func (m *Manager) Tracker(ctx context.Context, sessionID string) (*FileTracker, 
 // first access with the session's [*FileTracker], sandbox, workspace, and
 // shellguard.
 func (m *Manager) Tools(ctx context.Context, sessionID string) (*tools.Container, error) {
-	sess, err := m.Get(ctx, sessionID)
+	sess, err := m.getLiveSession(ctx, sessionID)
 	if err != nil {
 		return nil, err
 	}
@@ -412,11 +561,11 @@ func (m *Manager) Tools(ctx context.Context, sessionID string) (*tools.Container
 		return nil, err
 	}
 
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	sess.Lock()
+	defer sess.Unlock()
 
-	if c, ok := m.containers[sess.ID]; ok {
-		return c, nil
+	if sess.Tools != nil {
+		return sess.Tools, nil
 	}
 
 	stdInst, err := std.New(std.Config{
@@ -451,7 +600,7 @@ func (m *Manager) Tools(ctx context.Context, sessionID string) (*tools.Container
 		return nil, fmt.Errorf("session: initialize tools container: %w", err)
 	}
 
-	m.containers[sess.ID] = container
+	sess.Tools = container
 	return container, nil
 }
 
@@ -474,7 +623,7 @@ func (m *Manager) SetPermissionMode(ctx context.Context, sessionID string, mode 
 		return fmt.Errorf("%w: unsupported permission mode %q", ErrInvalidConfig, mode)
 	}
 
-	sess, err := m.Get(ctx, sessionID)
+	sess, err := m.getLiveSession(ctx, sessionID)
 	if err != nil {
 		return err
 	}
@@ -493,6 +642,9 @@ func (m *Manager) SetPermissionMode(ctx context.Context, sessionID string, mode 
 		if err := m.store.touchSession(ctx, sess.ID, entry.CreatedAt); err != nil {
 			return err
 		}
+		sess.Lock()
+		sess.UpdatedAt = entry.CreatedAt
+		sess.Unlock()
 		m.publisher.Publish(api.SessionStreamTopic(sess.ID), EntryAddedEvent{
 			SessionID: sess.ID,
 			Entry:     entry.Clone(),
@@ -542,7 +694,7 @@ func (m *Manager) History(ctx context.Context, sessionID string) (message.Messag
 // notification without modifying the underlying [harness.Harness] graph
 // checkpoint. It is used for system-emitted UI history messages.
 func (m *Manager) AppendMessage(ctx context.Context, sessionID string, msg message.Message) error {
-	sess, err := m.Get(ctx, sessionID)
+	sess, err := m.getLiveSession(ctx, sessionID)
 	if err != nil {
 		return err
 	}
@@ -558,6 +710,9 @@ func (m *Manager) AppendMessage(ctx context.Context, sessionID string, msg messa
 	if err := m.store.touchSession(ctx, sess.ID, entry.CreatedAt); err != nil {
 		return err
 	}
+	sess.Lock()
+	sess.UpdatedAt = entry.CreatedAt
+	sess.Unlock()
 
 	m.publisher.Publish(api.SessionStreamTopic(sess.ID), EntryAddedEvent{
 		SessionID: sess.ID,
@@ -575,12 +730,12 @@ func (m *Manager) appendMessage(ctx context.Context, sessionID string, msg messa
 // the session's checkpointed harness state that do not yet have a buffered
 // decision in the session manager.
 func (m *Manager) PendingPermissions(ctx context.Context, sessionID string) ([]tools.PermissionRequest, error) {
-	sess, err := m.Get(ctx, sessionID)
+	sess, err := m.getLiveSession(ctx, sessionID)
 	if err != nil {
 		return nil, err
 	}
 
-	h, err := m.buildHarness(ctx, sess)
+	h, err := m.harness(ctx, sess)
 	if err != nil {
 		return nil, err
 	}
@@ -593,8 +748,8 @@ func (m *Manager) PendingPermissions(ctx context.Context, sessionID string) ([]t
 		return nil, nil
 	}
 
-	m.mu.Lock()
-	decMap := m.decisions[sess.ID]
+	sess.Lock()
+	decMap := sess.decisions
 	var out []tools.PermissionRequest
 	for _, req := range state.PendingPermissions {
 		if _, resolved := decMap[req.ID]; !resolved {
@@ -602,7 +757,7 @@ func (m *Manager) PendingPermissions(ctx context.Context, sessionID string) ([]t
 			out = append(out, req)
 		}
 	}
-	m.mu.Unlock()
+	sess.Unlock()
 
 	return out, nil
 }
@@ -612,7 +767,7 @@ func (m *Manager) PendingPermissions(ctx context.Context, sessionID string) ([]t
 // true once all pending permission requests for the session have been resolved
 // and the session is ready for [Manager.Resume].
 func (m *Manager) RecordDecision(ctx context.Context, sessionID string, decision tools.PermissionDecision) (bool, error) {
-	sess, err := m.Get(ctx, sessionID)
+	sess, err := m.getLiveSession(ctx, sessionID)
 	if err != nil {
 		return false, err
 	}
@@ -623,7 +778,7 @@ func (m *Manager) RecordDecision(ctx context.Context, sessionID string, decision
 		return false, fmt.Errorf("%w: unsupported decision kind %q", ErrInvalidDecision, decision.Kind)
 	}
 
-	h, err := m.buildHarness(ctx, sess)
+	h, err := m.harness(ctx, sess)
 	if err != nil {
 		return false, err
 	}
@@ -652,22 +807,20 @@ func (m *Manager) RecordDecision(ctx context.Context, sessionID string, decision
 	decision.RequestID = matched.ID
 	decision.ToolCallID = matched.ToolCallID
 
-	m.mu.Lock()
-	decMap := m.decisions[sess.ID]
-	if decMap == nil {
-		decMap = make(map[string]tools.PermissionDecision, len(state.PendingPermissions))
-		m.decisions[sess.ID] = decMap
+	sess.Lock()
+	if sess.decisions == nil {
+		sess.decisions = make(map[string]tools.PermissionDecision, len(state.PendingPermissions))
 	}
-	decMap[matched.ID] = decision
+	sess.decisions[matched.ID] = decision
 
 	allResolved := true
 	for _, req := range state.PendingPermissions {
-		if _, ok := decMap[req.ID]; !ok {
+		if _, ok := sess.decisions[req.ID]; !ok {
 			allResolved = false
 			break
 		}
 	}
-	m.mu.Unlock()
+	sess.Unlock()
 
 	matchedReq := *matched
 	matchedReq.GrantPatterns = slices.Clone(matched.GrantPatterns)
@@ -677,17 +830,21 @@ func (m *Manager) RecordDecision(ctx context.Context, sessionID string, decision
 		Decision: fullDec,
 	})
 	if err := m.timeline.Append(ctx, entry); err != nil {
-		m.mu.Lock()
-		delete(decMap, matched.ID)
-		m.mu.Unlock()
+		sess.Lock()
+		delete(sess.decisions, matched.ID)
+		sess.Unlock()
 		return false, err
 	}
 	if err := m.store.touchSession(ctx, sess.ID, entry.CreatedAt); err != nil {
-		m.mu.Lock()
-		delete(decMap, matched.ID)
-		m.mu.Unlock()
+		sess.Lock()
+		delete(sess.decisions, matched.ID)
+		sess.Unlock()
 		return false, err
 	}
+	sess.Lock()
+	sess.UpdatedAt = entry.CreatedAt
+	sess.Unlock()
+
 	m.publisher.Publish(api.SessionStreamTopic(sess.ID), EntryAddedEvent{
 		SessionID: sess.ID,
 		Entry:     entry.Clone(),
@@ -699,27 +856,26 @@ func (m *Manager) RecordDecision(ctx context.Context, sessionID string, decision
 // Resume consumes the buffered permission decisions for sessionID and resumes
 // the interrupted harness workflow graph.
 func (m *Manager) Resume(ctx context.Context, sessionID string) (*message.Assistant, error) {
-	sess, err := m.Get(ctx, sessionID)
+	sess, err := m.getLiveSession(ctx, sessionID)
 	if err != nil {
 		return nil, err
 	}
 
-	m.mu.Lock()
-	decMap := m.decisions[sess.ID]
-	if len(decMap) == 0 {
-		m.mu.Unlock()
+	sess.Lock()
+	if len(sess.decisions) == 0 {
+		sess.Unlock()
 		return nil, ErrNoPendingPermissions
 	}
-	fullDecisions := maps.Clone(decMap)
-	delete(m.decisions, sess.ID)
-	m.mu.Unlock()
+	fullDecisions := maps.Clone(sess.decisions)
+	clear(sess.decisions)
+	sess.Unlock()
 
-	h, err := m.buildHarness(ctx, sess)
+	h, err := m.harness(ctx, sess)
 	if err != nil {
 		return nil, err
 	}
 
-	return m.send(ctx, sess.ID, h.Resume(ctx, sess.ID, fullDecisions))
+	return m.send(ctx, sess, h.Resume(ctx, sess.ID, fullDecisions))
 }
 
 // RespondPermission records a user's [tools.PermissionDecision] for a pending
@@ -744,7 +900,7 @@ func (m *Manager) RespondPermission(ctx context.Context, sessionID string, decis
 // tool permissions, Send publishes [EventPermissionRequested] and returns
 // `(nil, nil)`.
 func (m *Manager) Send(ctx context.Context, sessionID string, input message.Message) (*message.Assistant, error) {
-	sess, err := m.Get(ctx, sessionID)
+	sess, err := m.getLiveSession(ctx, sessionID)
 	if err != nil {
 		return nil, err
 	}
@@ -752,19 +908,19 @@ func (m *Manager) Send(ctx context.Context, sessionID string, input message.Mess
 		return nil, ErrNilMessage
 	}
 
-	h, err := m.buildHarness(ctx, sess)
+	h, err := m.harness(ctx, sess)
 	if err != nil {
 		return nil, err
 	}
 
-	m.mu.Lock()
-	delete(m.decisions, sess.ID)
-	m.mu.Unlock()
+	sess.Lock()
+	clear(sess.decisions)
+	sess.Unlock()
 
-	return m.send(ctx, sess.ID, h.Stream(ctx, sess.ID, input))
+	return m.send(ctx, sess, h.Stream(ctx, sess.ID, input))
 }
 
-func (m *Manager) send(ctx context.Context, sessID string, stream iter.Seq2[harness.Event, error]) (*message.Assistant, error) {
+func (m *Manager) send(ctx context.Context, sess *Session, stream iter.Seq2[harness.Event, error]) (*message.Assistant, error) {
 	var reply *message.Assistant
 	var interrupted bool
 
@@ -775,23 +931,27 @@ func (m *Manager) send(ctx context.Context, sessID string, stream iter.Seq2[harn
 		switch hev.Type {
 		case harness.EventChunk:
 			if hev.Chunk != nil {
-				m.publisher.Publish(api.SessionStreamTopic(sessID), ChunkEvent{
-					SessionID: sessID,
+				m.publisher.Publish(api.SessionStreamTopic(sess.ID), ChunkEvent{
+					SessionID: sess.ID,
 					Chunk:     message.CloneAssistantChunk(*hev.Chunk),
 				})
 			}
 
 		case harness.EventMessage:
 			if hev.Message != nil {
-				entry, err := m.timeline.AppendMessage(ctx, sessID, hev.Message)
+				entry, err := m.timeline.AppendMessage(ctx, sess.ID, hev.Message)
 				if err != nil {
 					return nil, err
 				}
-				if err := m.store.touchSession(ctx, sessID, entry.CreatedAt); err != nil {
+				if err := m.store.touchSession(ctx, sess.ID, entry.CreatedAt); err != nil {
 					return nil, err
 				}
-				m.publisher.Publish(api.SessionStreamTopic(sessID), EntryAddedEvent{
-					SessionID: sessID,
+				sess.Lock()
+				sess.UpdatedAt = entry.CreatedAt
+				sess.Unlock()
+
+				m.publisher.Publish(api.SessionStreamTopic(sess.ID), EntryAddedEvent{
+					SessionID: sess.ID,
 					Entry:     entry.Clone(),
 				})
 			}
@@ -803,8 +963,16 @@ func (m *Manager) send(ctx context.Context, sessID string, stream iter.Seq2[harn
 				p.GrantPatterns = slices.Clone(p.GrantPatterns)
 				perms[i] = p
 			}
-			m.publisher.Publish(api.SessionStreamTopic(sessID), PermissionRequestedEvent{
-				SessionID:   sessID,
+
+			sess.Lock()
+			sess.Status = StatusWaitingPermission
+			sess.Running = false
+			sess.WaitingPermission = true
+			sess.FinishedAt = time.Now().UTC()
+			sess.Unlock()
+
+			m.publisher.Publish(api.SessionStreamTopic(sess.ID), PermissionRequestedEvent{
+				SessionID:   sess.ID,
 				Permissions: perms,
 			})
 
@@ -813,10 +981,18 @@ func (m *Manager) send(ctx context.Context, sessID string, stream iter.Seq2[harn
 				if asst, ok := message.CloneMessage(hev.Message).(*message.Assistant); ok {
 					reply = asst
 				}
-				m.publisher.Publish(api.SessionStreamTopic(sessID), CompletedEvent{
-					SessionID: sessID,
-				})
 			}
+
+			sess.Lock()
+			sess.Status = StatusIdle
+			sess.Running = false
+			sess.WaitingPermission = false
+			sess.FinishedAt = time.Now().UTC()
+			sess.Unlock()
+
+			m.publisher.Publish(api.SessionStreamTopic(sess.ID), CompletedEvent{
+				SessionID: sess.ID,
+			})
 		}
 	}
 
@@ -824,15 +1000,230 @@ func (m *Manager) send(ctx context.Context, sessID string, stream iter.Seq2[harn
 		return nil, nil
 	}
 	if reply == nil {
-		return nil, fmt.Errorf("session: harness returned nil assistant reply for session %q", sessID)
+		return nil, fmt.Errorf("session: harness returned nil assistant reply for session %q", sess.ID)
 	}
 	return reply, nil
 }
 
-func (m *Manager) buildHarness(ctx context.Context, sess *Session) (*harness.Harness, error) {
+// StartTurn initiates an asynchronous conversational turn for sessionID on the
+// manager's background worker pool. If wait is true, StartTurn blocks until the
+// turn completes, pauses for permissions, or ctx is canceled.
+func (m *Manager) StartTurn(ctx context.Context, sessionID string, input message.Message, wait bool) error {
+	if input == nil {
+		return ErrNilMessage
+	}
+
+	sess, err := m.getLiveSession(ctx, sessionID)
+	if err != nil {
+		return err
+	}
+
+	sess.Lock()
+	if sess.Running {
+		sess.Unlock()
+		return ErrSessionRunning
+	}
+
+	runCtx, cancel := context.WithCancel(m.bgCtx)
+	done := make(chan struct{})
+
+	sess.Status = StatusRunning
+	sess.Running = true
+	sess.WaitingPermission = false
+	sess.Error = ""
+	sess.err = nil
+	sess.StartedAt = time.Now().UTC()
+	sess.cancel = cancel
+	sess.done = done
+	clear(sess.decisions)
+	sess.Unlock()
+
+	m.wg.Add(1)
+	go func() {
+		defer func() {
+			sess.Lock()
+			if sess.done == done {
+				sess.Running = false
+				if sess.Status == StatusRunning {
+					sess.Status = StatusIdle
+				}
+				sess.cancel = nil
+				sess.done = nil
+			}
+			sess.Unlock()
+			cancel()
+			close(done)
+			m.wg.Done()
+		}()
+
+		if _, err := m.Send(runCtx, sess.ID, input); err != nil {
+			sess.Lock()
+			sess.Running = false
+			sess.WaitingPermission = false
+			sess.Status = StatusIdle
+			sess.FinishedAt = time.Now().UTC()
+			sess.err = err
+			if !errors.Is(err, context.Canceled) {
+				sess.Error = err.Error()
+			}
+			sess.Unlock()
+
+			if !errors.Is(err, context.Canceled) {
+				m.publisher.Publish(api.SessionStreamTopic(sess.ID), ErrorEvent{
+					SessionID: sess.ID,
+					Error:     err.Error(),
+				})
+			}
+		}
+	}()
+
+	if !wait {
+		return nil
+	}
+	select {
+	case <-done:
+		sess.Lock()
+		turnErr := sess.err
+		sess.Unlock()
+		if turnErr != nil && !errors.Is(turnErr, context.Canceled) {
+			return turnErr
+		}
+		return nil
+	case <-ctx.Done():
+		return nil
+	}
+}
+
+// RespondPermissionAsync records a permission decision and resumes an interrupted
+// conversational turn in the background once all pending requests are resolved.
+func (m *Manager) RespondPermissionAsync(ctx context.Context, sessionID string, decision tools.PermissionDecision, wait bool) error {
+	sess, err := m.getLiveSession(ctx, sessionID)
+	if err != nil {
+		return err
+	}
+
+	sess.Lock()
+	if sess.Running {
+		sess.Unlock()
+		return ErrSessionRunning
+	}
+	sess.Unlock()
+
+	ready, err := m.RecordDecision(ctx, sess.ID, decision)
+	if err != nil || !ready {
+		return err
+	}
+
+	sess.Lock()
+	if sess.Running {
+		sess.Unlock()
+		return ErrSessionRunning
+	}
+
+	runCtx, cancel := context.WithCancel(m.bgCtx)
+	done := make(chan struct{})
+
+	sess.Status = StatusRunning
+	sess.Running = true
+	sess.WaitingPermission = false
+	sess.Error = ""
+	sess.err = nil
+	sess.StartedAt = time.Now().UTC()
+	sess.cancel = cancel
+	sess.done = done
+	sess.Unlock()
+
+	m.wg.Add(1)
+	go func() {
+		defer func() {
+			sess.Lock()
+			if sess.done == done {
+				sess.Running = false
+				if sess.Status == StatusRunning {
+					sess.Status = StatusIdle
+				}
+				sess.cancel = nil
+				sess.done = nil
+			}
+			sess.Unlock()
+			cancel()
+			close(done)
+			m.wg.Done()
+		}()
+
+		if _, err := m.Resume(runCtx, sess.ID); err != nil {
+			sess.Lock()
+			sess.Running = false
+			sess.WaitingPermission = false
+			sess.Status = StatusIdle
+			sess.FinishedAt = time.Now().UTC()
+			sess.err = err
+			if !errors.Is(err, context.Canceled) {
+				sess.Error = err.Error()
+			}
+			sess.Unlock()
+
+			if !errors.Is(err, context.Canceled) {
+				m.publisher.Publish(api.SessionStreamTopic(sess.ID), ErrorEvent{
+					SessionID: sess.ID,
+					Error:     err.Error(),
+				})
+			}
+		}
+	}()
+
+	if !wait {
+		return nil
+	}
+	select {
+	case <-done:
+		sess.Lock()
+		turnErr := sess.err
+		sess.Unlock()
+		if turnErr != nil && !errors.Is(turnErr, context.Canceled) {
+			return turnErr
+		}
+		return nil
+	case <-ctx.Done():
+		return nil
+	}
+}
+
+// Cancel interrupts any active conversational turn executing on sessionID.
+func (m *Manager) Cancel(ctx context.Context, sessionID string) error {
+	sess, err := m.getLiveSession(ctx, sessionID)
+	if err != nil {
+		return err
+	}
+
+	sess.Lock()
+	cancel := sess.cancel
+	done := sess.done
+	sess.Unlock()
+
+	if done == nil {
+		return nil
+	}
+
+	cancel()
+	select {
+	case <-done:
+	case <-ctx.Done():
+	}
+	return nil
+}
+
+func (m *Manager) harness(ctx context.Context, sess *Session) (*harness.Harness, error) {
 	reg, err := m.Tools(ctx, sess.ID)
 	if err != nil {
 		return nil, err
+	}
+
+	sess.Lock()
+	defer sess.Unlock()
+
+	if sess.Harness != nil {
+		return sess.Harness, nil
 	}
 
 	systemPrompt := m.renderSystemPrompt(sess.Agent)
@@ -852,6 +1243,8 @@ func (m *Manager) buildHarness(ctx context.Context, sess *Session) (*harness.Har
 	if err != nil {
 		return nil, fmt.Errorf("session: initialize harness: %w", err)
 	}
+
+	sess.Harness = h
 	return h, nil
 }
 

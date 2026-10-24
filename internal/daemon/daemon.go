@@ -32,7 +32,7 @@ import (
 var (
 	ErrInvalidConfig  = errors.New("daemon: invalid configuration")
 	ErrAlreadyRunning = errors.New("daemon: server is already running")
-	ErrSessionRunning = errors.New("daemon: session already has an active turn")
+	ErrSessionRunning = session.ErrSessionRunning
 	ErrEmptyWorkspace = errors.New("daemon: workspace parameter is required")
 	ErrEmptyMessage   = errors.New("daemon: message content must not be empty")
 )
@@ -475,7 +475,7 @@ func (d *Daemon) CreateSession(ctx context.Context, rawWS string, req api.Create
 		return nil, false, err
 	}
 
-	out := toAPISession(sess, rt.sessionStatus(ctx, sess.ID))
+	out := toAPISession(sess)
 	if created {
 		d.broker.Publish(api.TopicSessions, api.SessionCreatedEvent{
 			Workspace: rt.dir,
@@ -498,7 +498,7 @@ func (d *Daemon) ListSessions(ctx context.Context, rawWS string) ([]api.Session,
 
 	out := make([]api.Session, len(list))
 	for i := range list {
-		out[i] = toAPISession(&list[i], rt.sessionStatus(ctx, list[i].ID))
+		out[i] = toAPISession(&list[i])
 	}
 	return out, nil
 }
@@ -514,7 +514,7 @@ func (d *Daemon) GetSession(ctx context.Context, rawWS, id string) (*api.Session
 		return nil, err
 	}
 
-	out := toAPISession(sess, rt.sessionStatus(ctx, sess.ID))
+	out := toAPISession(sess)
 	return &out, nil
 }
 
@@ -533,7 +533,7 @@ func (d *Daemon) UpdateSession(ctx context.Context, rawWS, id string, req api.Up
 		return nil, err
 	}
 
-	out := toAPISession(sess, rt.sessionStatus(ctx, sess.ID))
+	out := toAPISession(sess)
 	d.broker.Publish(api.TopicSessions, api.SessionUpdatedEvent{
 		Workspace: rt.dir,
 		Session:   out,
@@ -547,7 +547,6 @@ func (d *Daemon) DeleteSession(ctx context.Context, rawWS, id string) error {
 		return err
 	}
 
-	_ = rt.cancelTurn(ctx, id)
 	if err := rt.manager.Delete(ctx, id); err != nil {
 		return err
 	}
@@ -593,7 +592,7 @@ func (d *Daemon) Send(ctx context.Context, rawWS, id string, req api.SendRequest
 		return err
 	}
 
-	return rt.startTurn(ctx, id, userMsg, req.Wait)
+	return rt.manager.StartTurn(ctx, id, userMsg, req.Wait)
 }
 
 func (d *Daemon) Cancel(ctx context.Context, rawWS, id string) error {
@@ -602,7 +601,7 @@ func (d *Daemon) Cancel(ctx context.Context, rawWS, id string) error {
 		return err
 	}
 
-	return rt.cancelTurn(ctx, id)
+	return rt.manager.Cancel(ctx, id)
 }
 
 func (d *Daemon) PendingPermissions(ctx context.Context, rawWS, id string) ([]api.PermissionRequest, error) {
@@ -625,7 +624,7 @@ func (d *Daemon) RespondPermission(ctx context.Context, rawWS, id string, dec ap
 		return err
 	}
 
-	return rt.respondPermission(ctx, id, fromAPIPermissionDecision(dec), dec.Wait)
+	return rt.manager.RespondPermissionAsync(ctx, id, fromAPIPermissionDecision(dec), dec.Wait)
 }
 
 func (d *Daemon) GetMode(ctx context.Context, rawWS, id string) (api.PermissionMode, error) {
