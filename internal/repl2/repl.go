@@ -49,6 +49,18 @@ func Run(ctx context.Context, opts Options) error {
 	}
 
 	store.ResetApp()
+	store.ClearSlot()
+	store.ResetSession()
+	store.ClearTranscript()
+
+	modelLabel, thinking := store.ResolveModelInfo(ctx, opts.Client, opts.Agent, opts.Model, nil)
+	store.SetModelInfo(modelLabel, thinking)
+	store.AppendHeader(store.HeaderData{
+		Version:   opts.Version,
+		Model:     modelLabel,
+		Thinking:  thinking,
+		Workspace: opts.Workspace,
+	})
 
 	trailOpts := []trail.Option{trail.WithCtrlCExit(false)}
 	if opts.Backend != nil {

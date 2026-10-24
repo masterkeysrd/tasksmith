@@ -298,3 +298,49 @@ func TestRunWithCWD(t *testing.T) {
 	cancel()
 	<-errCh
 }
+
+func TestRunStartupHeader(t *testing.T) {
+	b := mock.New(80, 24)
+	c, err := client.New("/tmp/mock.sock")
+	if err != nil {
+		t.Fatalf("failed to create client: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	opts := Options{
+		Client:    c,
+		Workspace: "/tmp/ws",
+		Version:   "0.2.0",
+		Model:     "test-model",
+		Backend:   b,
+	}
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- Run(ctx, opts)
+	}()
+
+	waitFor(t, func() bool {
+		for _, buf := range b.InsertedAbove {
+			for y := 0; y < buf.Height; y++ {
+				var line strings.Builder
+				for x := 0; x < buf.Width; x++ {
+					c := buf.CellAt(x, y)
+					if c.Content != "" {
+						line.WriteString(c.Content)
+					}
+				}
+				if strings.Contains(line.String(), "TaskSmith v0.2.0") {
+					return true
+				}
+			}
+		}
+		return false
+	}, 2*time.Second, "startup banner in inserted above scrollback")
+
+	waitFor(t, func() bool {
+		return strings.Contains(surfaceText(b), "shift+tab cycle mode")
+	}, 2*time.Second, "default hint on status line")
+}

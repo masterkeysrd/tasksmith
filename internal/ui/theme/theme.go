@@ -559,7 +559,9 @@ func UseTheme() (scheme *Scheme) {
 	}()
 	s := kitex.UseContext(themeCtx)
 	if s == nil {
-		return store.Get().scheme
+		return kites.Use(store, func(s state) *Scheme {
+			return s.scheme
+		})
 	}
 	return s
 }

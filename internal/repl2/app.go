@@ -7,6 +7,7 @@ import (
 	"github.com/masterkeysrd/kite/extras/trail"
 	"github.com/masterkeysrd/kite/key"
 	"github.com/masterkeysrd/kite/style"
+	"github.com/masterkeysrd/tasksmith/internal/repl2/components"
 	"github.com/masterkeysrd/tasksmith/internal/repl2/store"
 )
 
@@ -40,14 +41,13 @@ var App = trail.SimpleFC("App", func() trail.Node {
 		}
 	}, CtrlCTimeout, []any{ctrlCPending})
 
-	var children []trail.Node
-	if ctrlCPending {
-		children = append(children, trail.Text("Press Ctrl+C again to exit"))
-	}
-
 	return trail.Box(trail.BoxProps{
 		Style: style.S().
 			FlexDirection(style.FlexColumn).
 			Width(style.Percent(100)),
-	}, children...)
+	},
+		components.Transcript(),
+		components.Slot(),
+		components.DefaultStatusLine(),
+	)
 })
