@@ -25,6 +25,7 @@ var (
 	ErrEmptyWorkspace    = errors.New("client: workspace path must not be empty")
 	ErrEmptyCWD          = ErrEmptyWorkspace
 	ErrEmptySessionID    = errors.New("client: session ID must not be empty")
+	ErrEmptySubscriberID = errors.New("client: subscriber ID must not be empty")
 )
 
 // Option configures a [Client].
@@ -252,13 +253,13 @@ func (c *Client) DeleteSession(ctx context.Context, sessionID string) error {
 	return c.doJSON(ctx, http.MethodDelete, path, nil, nil, nil)
 }
 
-// History returns the chronological UI message history for a session.
-func (c *Client) History(ctx context.Context, sessionID string) ([]api.Message, error) {
-	path, err := c.sessionEndpoint(sessionID, "/messages")
+// Timeline returns the chronological session timeline for a session.
+func (c *Client) Timeline(ctx context.Context, sessionID string) ([]api.TimelineEntry, error) {
+	path, err := c.sessionEndpoint(sessionID, "/timeline")
 	if err != nil {
 		return nil, err
 	}
-	var out []api.Message
+	var out []api.TimelineEntry
 	if err := c.doJSON(ctx, http.MethodGet, path, nil, nil, &out); err != nil {
 		return nil, err
 	}
@@ -268,7 +269,7 @@ func (c *Client) History(ctx context.Context, sessionID string) ([]api.Message, 
 // Send submits a user message to a session and triggers a conversational turn
 // in the daemon's background runtime.
 func (c *Client) Send(ctx context.Context, sessionID string, req api.SendRequest) error {
-	path, err := c.sessionEndpoint(sessionID, "/messages")
+	path, err := c.sessionEndpoint(sessionID, "/send")
 	if err != nil {
 		return err
 	}
@@ -367,24 +368,51 @@ func (c *Client) Revert(ctx context.Context, sessionID string, req api.RevertReq
 	return c.doJSON(ctx, http.MethodPost, path, nil, req, nil)
 }
 
-// Subscribe opens a real-time Server-Sent Events (SSE) stream for optional sessionID,
-// yielding [api.Event] items as they arrive.
-func (c *Client) Subscribe(ctx context.Context, sessionID string) iter.Seq2[api.Event, error] {
-	return c.SubscribeWithReady(ctx, sessionID, nil)
+// Subscribe subscribes an active SSE stream (identified by subscriberID) to additional topics.
+func (c *Client) Subscribe(ctx context.Context, subscriberID string, topics ...string) (*api.SubscriptionResponse, error) {
+	subID := strings.TrimSpace(subscriberID)
+	if subID == "" {
+		return nil, ErrEmptySubscriberID
+	}
+	headers := http.Header{
+		api.HeaderSubscriberID: []string{subID},
+	}
+	var out api.SubscriptionResponse
+	if err := c.doJSONWithHeaders(ctx, http.MethodPost, "/v1/events/subscribe", nil, headers, api.SubscriptionRequest{Topics: topics}, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
-// SubscribeWithReady invokes ready once the server has registered the
-// subscription, before reading events. This allows consumers to load a snapshot
-// while subsequent events are buffered by the connection.
-func (c *Client) SubscribeWithReady(ctx context.Context, sessionID string, ready func()) iter.Seq2[api.Event, error] {
+// Unsubscribe unsubscribes an active SSE stream (identified by subscriberID) from topics.
+func (c *Client) Unsubscribe(ctx context.Context, subscriberID string, topics ...string) (*api.SubscriptionResponse, error) {
+	subID := strings.TrimSpace(subscriberID)
+	if subID == "" {
+		return nil, ErrEmptySubscriberID
+	}
+	headers := http.Header{
+		api.HeaderSubscriberID: []string{subID},
+	}
+	var out api.SubscriptionResponse
+	if err := c.doJSONWithHeaders(ctx, http.MethodPost, "/v1/events/unsubscribe", nil, headers, api.SubscriptionRequest{Topics: topics}, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// Events opens a real-time Server-Sent Events (SSE) stream with optional subscriberID and initial topics.
+func (c *Client) Events(ctx context.Context, subscriberID string, topics ...string) iter.Seq2[api.Event, error] {
+	return c.EventsWithReady(ctx, subscriberID, nil, topics...)
+}
+
+// EventsWithReady opens an SSE stream and invokes ready with the server-assigned (or echoed) subscriber ID once connected.
+func (c *Client) EventsWithReady(ctx context.Context, subscriberID string, ready func(subscriberID string), topics ...string) iter.Seq2[api.Event, error] {
 	return func(yield func(api.Event, error) bool) {
-		if err := c.requireCWD(); err != nil {
-			yield(api.Event{}, err)
-			return
-		}
 		q := url.Values{}
-		if sid := strings.TrimSpace(sessionID); sid != "" {
-			q.Set("session_id", sid)
+		for _, t := range topics {
+			if trimmed := strings.TrimSpace(t); trimmed != "" {
+				q.Add("topic", trimmed)
+			}
 		}
 
 		u := baseURL + "/v1/events"
@@ -399,7 +427,12 @@ func (c *Client) SubscribeWithReady(ctx context.Context, sessionID string, ready
 		}
 		req.Header.Set("Accept", "text/event-stream")
 		req.Header.Set("Cache-Control", "no-cache")
-		req.Header.Set(api.HeaderCWD, c.cwd)
+		if subID := strings.TrimSpace(subscriberID); subID != "" {
+			req.Header.Set(api.HeaderSubscriberID, subID)
+		}
+		if c.cwd != "" {
+			req.Header.Set(api.HeaderCWD, c.cwd)
+		}
 
 		resp, err := c.httpClient.Do(req)
 		if err != nil {
@@ -414,8 +447,9 @@ func (c *Client) SubscribeWithReady(ctx context.Context, sessionID string, ready
 			yield(api.Event{}, decodeErrorResponse(resp))
 			return
 		}
+
 		if ready != nil {
-			ready()
+			ready(strings.TrimSpace(resp.Header.Get(api.HeaderSubscriberID)))
 		}
 
 		streamSSE(ctx, resp.Body, yield)
@@ -426,10 +460,7 @@ func streamSSE(ctx context.Context, body io.Reader, yield func(api.Event, error)
 	scanner := bufio.NewScanner(body)
 	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
 
-	var (
-		eventType string
-		dataBuf   bytes.Buffer
-	)
+	var dataBuf bytes.Buffer
 
 	for scanner.Scan() {
 		line := strings.TrimSuffix(scanner.Text(), "\r")
@@ -438,30 +469,20 @@ func streamSSE(ctx context.Context, body io.Reader, yield func(api.Event, error)
 		}
 		if line == "" {
 			if dataBuf.Len() == 0 {
-				eventType = ""
 				continue
 			}
 			var ev api.Event
 			if err := json.Unmarshal(dataBuf.Bytes(), &ev); err != nil {
 				dataBuf.Reset()
-				eventType = ""
 				if !yield(api.Event{}, fmt.Errorf("client: decode sse event: %w", err)) {
 					return
 				}
 				continue
 			}
-			if ev.Type == "" && eventType != "" {
-				ev.Type = api.EventType(eventType)
-			}
 			dataBuf.Reset()
-			eventType = ""
 			if !yield(ev, nil) {
 				return
 			}
-			continue
-		}
-		if after, ok := strings.CutPrefix(line, "event:"); ok {
-			eventType = strings.TrimSpace(after)
 			continue
 		}
 		if after, ok := strings.CutPrefix(line, "data:"); ok {
@@ -491,6 +512,10 @@ func (c *Client) sessionEndpoint(sessionID, suffix string) (string, error) {
 }
 
 func (c *Client) doJSON(ctx context.Context, method, path string, query url.Values, reqBody any, respBody any) error {
+	return c.doJSONWithHeaders(ctx, method, path, query, nil, reqBody, respBody)
+}
+
+func (c *Client) doJSONWithHeaders(ctx context.Context, method, path string, query url.Values, headers http.Header, reqBody any, respBody any) error {
 	u := baseURL + path
 	if len(query) > 0 {
 		u += "?" + query.Encode()
@@ -512,6 +537,11 @@ func (c *Client) doJSON(ctx context.Context, method, path string, query url.Valu
 	req.Header.Set("Accept", "application/json")
 	if c.cwd != "" {
 		req.Header.Set(api.HeaderCWD, c.cwd)
+	}
+	for k, vs := range headers {
+		for _, v := range vs {
+			req.Header.Add(k, v)
+		}
 	}
 	if reqBody != nil {
 		req.Header.Set("Content-Type", "application/json")

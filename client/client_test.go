@@ -86,8 +86,14 @@ func TestNewAndValidation(t *testing.T) {
 	if err := withCWD.DeleteSession(ctx, ""); !errors.Is(err, ErrEmptySessionID) {
 		t.Errorf("DeleteSession empty sessionID error = %v, want %v", err, ErrEmptySessionID)
 	}
-	if _, err := withCWD.History(ctx, ""); !errors.Is(err, ErrEmptySessionID) {
-		t.Errorf("History empty sessionID error = %v, want %v", err, ErrEmptySessionID)
+	if _, err := withCWD.Timeline(ctx, ""); !errors.Is(err, ErrEmptySessionID) {
+		t.Errorf("Timeline empty sessionID error = %v, want %v", err, ErrEmptySessionID)
+	}
+	if _, err := withCWD.Subscribe(ctx, ""); !errors.Is(err, ErrEmptySubscriberID) {
+		t.Errorf("Subscribe empty subscriberID error = %v, want %v", err, ErrEmptySubscriberID)
+	}
+	if _, err := withCWD.Unsubscribe(ctx, ""); !errors.Is(err, ErrEmptySubscriberID) {
+		t.Errorf("Unsubscribe empty subscriberID error = %v, want %v", err, ErrEmptySubscriberID)
 	}
 	if err := withCWD.Send(ctx, "", api.SendRequest{}); !errors.Is(err, ErrEmptySessionID) {
 		t.Errorf("Send empty sessionID error = %v, want %v", err, ErrEmptySessionID)
@@ -247,10 +253,10 @@ func TestClientAllMethodsOverUnixSocket(t *testing.T) {
 	mux.HandleFunc("DELETE /v1/sessions/{id}", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	})
-	mux.HandleFunc("GET /v1/sessions/{id}/messages", func(w http.ResponseWriter, _ *http.Request) {
-		_ = json.NewEncoder(w).Encode([]api.Message{{ID: "m1", Role: api.RoleUser}})
+	mux.HandleFunc("GET /v1/sessions/{id}/timeline", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode([]api.TimelineEntry{{ID: "t1", Kind: api.TimelineKindMessage}})
 	})
-	mux.HandleFunc("POST /v1/sessions/{id}/messages", func(w http.ResponseWriter, _ *http.Request) {
+	mux.HandleFunc("POST /v1/sessions/{id}/send", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusAccepted)
 	})
 	mux.HandleFunc("POST /v1/sessions/{id}/cancel", func(w http.ResponseWriter, _ *http.Request) {
@@ -277,6 +283,24 @@ func TestClientAllMethodsOverUnixSocket(t *testing.T) {
 	mux.HandleFunc("POST /v1/sessions/{id}/revert", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
+	mux.HandleFunc("POST /v1/events/subscribe", func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get(api.HeaderSubscriberID) == "" {
+			http.Error(w, "missing subscriber", http.StatusBadRequest)
+			return
+		}
+		var req api.SubscriptionRequest
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		_ = json.NewEncoder(w).Encode(api.SubscriptionResponse{Topics: req.Topics})
+	})
+	mux.HandleFunc("POST /v1/events/unsubscribe", func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get(api.HeaderSubscriberID) == "" {
+			http.Error(w, "missing subscriber", http.StatusBadRequest)
+			return
+		}
+		var req api.SubscriptionRequest
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		_ = json.NewEncoder(w).Encode(api.SubscriptionResponse{Topics: req.Topics})
+	})
 	mux.HandleFunc("GET /v1/events", func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get(api.HeaderCWD) == "bad" {
 			w.WriteHeader(http.StatusBadRequest)
@@ -284,7 +308,8 @@ func TestClientAllMethodsOverUnixSocket(t *testing.T) {
 			return
 		}
 		w.Header().Set("Content-Type", "text/event-stream")
-		_, _ = fmt.Fprint(w, ": connected\n\nevent: completed\ndata: {\"session_id\":\"s1\"}\n\n")
+		w.Header().Set(api.HeaderSubscriberID, "sub-1")
+		_, _ = fmt.Fprint(w, ": connected\n\ndata: {\"type\":\"completed\",\"topic\":\"sessions.s1.stream\",\"payload\":{\"session_id\":\"s1\"}}\n\n")
 	})
 
 	srv := &http.Server{Handler: mux}
@@ -365,8 +390,8 @@ func TestClientAllMethodsOverUnixSocket(t *testing.T) {
 	if err := c.DeleteSession(ctx, "s1"); err != nil {
 		t.Errorf("DeleteSession: %v", err)
 	}
-	if msgs, err := c.History(ctx, "s1"); err != nil || len(msgs) != 1 {
-		t.Errorf("History = (%+v, %v)", msgs, err)
+	if entries, err := c.Timeline(ctx, "s1"); err != nil || len(entries) != 1 {
+		t.Errorf("Timeline = (%+v, %v)", entries, err)
 	}
 	if err := c.Send(ctx, "s1", api.SendRequest{Content: "hi"}); err != nil {
 		t.Errorf("Send: %v", err)
@@ -396,36 +421,47 @@ func TestClientAllMethodsOverUnixSocket(t *testing.T) {
 		t.Errorf("Revert: %v", err)
 	}
 
+	if subResp, err := c.Subscribe(ctx, "sub-1", "topic1", "topic2"); err != nil || len(subResp.Topics) != 2 {
+		t.Errorf("Subscribe = (%+v, %v)", subResp, err)
+	}
+	if unsubResp, err := c.Unsubscribe(ctx, "sub-1", "topic1"); err != nil || len(unsubResp.Topics) != 1 {
+		t.Errorf("Unsubscribe = (%+v, %v)", unsubResp, err)
+	}
+
 	var count int
-	for ev, err := range c.Subscribe(ctx, "s1") {
+	for ev, err := range c.Events(ctx, "", "sessions.s1.stream") {
 		if err != nil {
-			t.Fatalf("Subscribe error: %v", err)
+			t.Fatalf("Events error: %v", err)
 		}
 		if ev.Type == api.EventCompleted {
 			count++
 		}
 	}
 	if count != 1 {
-		t.Errorf("Subscribe received %d events, want 1", count)
+		t.Errorf("Events received %d events, want 1", count)
 	}
 
 	readyCalls := 0
-	for _, err := range c.SubscribeWithReady(ctx, "s1", func() { readyCalls++ }) {
+	var receivedSubID string
+	for _, err := range c.EventsWithReady(ctx, "", func(subID string) {
+		readyCalls++
+		receivedSubID = subID
+	}, "sessions.s1.stream") {
 		if err != nil || readyCalls != 1 {
-			t.Fatalf("SubscribeWithReady: err=%v, ready calls=%d; want nil, 1", err, readyCalls)
+			t.Fatalf("EventsWithReady: err=%v, ready calls=%d; want nil, 1", err, readyCalls)
 		}
 	}
-	if readyCalls != 1 {
-		t.Errorf("ready calls = %d, want 1", readyCalls)
+	if readyCalls != 1 || receivedSubID != "sub-1" {
+		t.Errorf("ready calls = %d, receivedSubID = %q, want 1, sub-1", readyCalls, receivedSubID)
 	}
 
 	badC := c.WithCWD("bad")
 	var subErr error
-	for _, err := range badC.SubscribeWithReady(ctx, "s1", func() { t.Error("ready called for unsuccessful subscription") }) {
+	for _, err := range badC.EventsWithReady(ctx, "", func(string) { t.Error("ready called for unsuccessful subscription") }, "sessions.s1.stream") {
 		subErr = err
 	}
 	if !errors.As(subErr, &apiErr) || apiErr.StatusCode != 400 {
-		t.Errorf("Subscribe bad workspace error = %v, want 400 APIError", subErr)
+		t.Errorf("Events bad workspace error = %v, want 400 APIError", subErr)
 	}
 }
 
@@ -434,11 +470,9 @@ func TestStreamSSEParsing(t *testing.T) {
 		": connected",
 		"",
 		": ping",
-		"event: chunk",
-		`data: {"workspace":"/tmp/ws","session_id":"s1","chunk":{"id":"c1","content":[{"type":"text","text":"hi"}]}}`,
+		`data: {"type":"chunk","topic":"sessions.s1.stream","payload":{"session_id":"s1","chunk":{"id":"c1","content":[{"type":"text","text":"hi"}]}}}`,
 		"",
-		"event: completed",
-		`data: {"type":"completed","workspace":"/tmp/ws","session_id":"s1"}`,
+		`data: {"type":"completed","topic":"sessions.s1.stream","payload":{"session_id":"s1"}}`,
 		"",
 		"",
 	}, "\n")
@@ -455,10 +489,12 @@ func TestStreamSSEParsing(t *testing.T) {
 	if len(events) != 2 {
 		t.Fatalf("expected 2 SSE events, got %d: %+v", len(events), events)
 	}
-	if events[0].Type != api.EventChunk || events[0].Chunk == nil || len(events[0].Chunk.Content) != 1 || events[0].Chunk.Content[0].Text != "hi" {
+	cp, ok := events[0].Payload.(api.ChunkPayload)
+	if !ok || events[0].Type != api.EventChunk || len(cp.Chunk.Content) != 1 || cp.Chunk.Content[0].Text != "hi" {
 		t.Errorf("unexpected events[0]: %+v", events[0])
 	}
-	if events[1].Type != api.EventCompleted || events[1].SessionID != "s1" {
+	comp, ok := events[1].Payload.(api.CompletedPayload)
+	if !ok || events[1].Type != api.EventCompleted || comp.SessionID != "s1" {
 		t.Errorf("unexpected events[1]: %+v", events[1])
 	}
 }

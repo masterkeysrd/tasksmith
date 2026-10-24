@@ -23,12 +23,13 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/daemon/harness"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/sandbox"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/std"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/timeline"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tools"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tools/builtin"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/workspace"
 )
 
-// Config holds the mandatory runtime dependencies required to construct a [Manager].
+// Config holds runtime dependencies required to construct a [Manager].
 type Config struct {
 	DB        *sql.DB
 	Workspace *workspace.Workspace
@@ -36,6 +37,7 @@ type Config struct {
 	Sandbox   sandbox.Sandbox
 	Publisher Publisher
 	Logger    log.Interface
+	Timeline  timeline.Store
 }
 
 // Validate checks that all required configuration dependencies are non-nil.
@@ -58,6 +60,9 @@ func (c Config) Validate() error {
 	if c.Logger == nil {
 		return fmt.Errorf("%w: logger is required", ErrInvalidConfig)
 	}
+	if c.Timeline == nil {
+		return fmt.Errorf("%w: timeline is required", ErrInvalidConfig)
+	}
 	return nil
 }
 
@@ -69,6 +74,7 @@ func (c Config) Validate() error {
 type Manager struct {
 	db        *sql.DB
 	store     *store
+	timeline  timeline.Store
 	workspace *workspace.Workspace
 	gateway   gateway.Gateway
 	sandbox   sandbox.Sandbox
@@ -83,7 +89,7 @@ type Manager struct {
 }
 
 // New constructs a new [Manager] and automatically runs SQLite schema migrations
-// for the `sessions` and `messages` tables.
+// for the sessions and timeline tables.
 func New(cfg Config) (*Manager, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
@@ -97,6 +103,7 @@ func New(cfg Config) (*Manager, error) {
 	return &Manager{
 		db:         cfg.DB,
 		store:      st,
+		timeline:   cfg.Timeline,
 		workspace:  cfg.Workspace,
 		gateway:    cfg.Gateway,
 		sandbox:    cfg.Sandbox,
@@ -262,6 +269,9 @@ func (m *Manager) Update(ctx context.Context, id string, params UpdateParams) (*
 		return nil, err
 	}
 
+	oldAgent := sess.Agent
+	oldModel := sess.Model
+
 	if title := strings.TrimSpace(params.Title); title != "" {
 		sess.Title = title
 	}
@@ -277,6 +287,19 @@ func (m *Manager) Update(ctx context.Context, id string, params UpdateParams) (*
 	sess.UpdatedAt = time.Now().UTC()
 	if err := m.store.updateSession(ctx, sess); err != nil {
 		return nil, err
+	}
+
+	if oldAgent != sess.Agent {
+		entry := timeline.NewAgentEntry(sess.ID, timeline.AgentChange{From: oldAgent, To: sess.Agent})
+		if err := m.timeline.Append(ctx, entry); err != nil {
+			return nil, err
+		}
+	}
+	if oldModel != sess.Model {
+		entry := timeline.NewModelEntry(sess.ID, timeline.ModelChange{From: oldModel, To: sess.Model})
+		if err := m.timeline.Append(ctx, entry); err != nil {
+			return nil, err
+		}
 	}
 
 	cp := *sess
@@ -305,7 +328,7 @@ func (m *Manager) List(ctx context.Context) ([]Session, error) {
 	return m.store.listSessions(ctx)
 }
 
-// Delete removes the specified session, all of its persisted UI messages, and
+// Delete removes the specified session, all of its persisted timeline entries, and
 // its on-disk `<WorkspaceDir>/sessions/<id>` directory (including `changes/`).
 // It returns [ErrEmptySessionID] if id is blank and [ErrSessionNotFound] if the
 // session did not exist.
@@ -318,6 +341,9 @@ func (m *Manager) Delete(ctx context.Context, id string) error {
 		return err
 	}
 	if err := m.store.deleteSession(ctx, id); err != nil {
+		return err
+	}
+	if err := m.timeline.DeleteSession(ctx, id); err != nil {
 		return err
 	}
 
@@ -439,11 +465,26 @@ func (m *Manager) SetPermissionMode(ctx context.Context, sessionID string, mode 
 		return fmt.Errorf("%w: unsupported permission mode %q", ErrInvalidConfig, mode)
 	}
 
-	c, err := m.Tools(ctx, sessionID)
+	sess, err := m.Get(ctx, sessionID)
 	if err != nil {
 		return err
 	}
-	c.Gate().SetMode(mode)
+
+	c, err := m.Tools(ctx, sess.ID)
+	if err != nil {
+		return err
+	}
+	prevMode := c.Mode()
+	c.SetMode(mode)
+	if prevMode != mode {
+		entry := timeline.NewModeEntry(sess.ID, timeline.ModeChange{From: prevMode, To: mode})
+		if err := m.timeline.Append(ctx, entry); err != nil {
+			return err
+		}
+		if err := m.store.touchSession(ctx, sess.ID, entry.CreatedAt); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -455,22 +496,39 @@ func (m *Manager) sessionDir(sessionID string) (string, error) {
 	return filepath.Join(wsDir, "sessions", filepath.Base(sessionID)), nil
 }
 
+// Timeline returns the ordered timeline entries for sessionID from the
+// session timeline. It returns [ErrEmptySessionID] if sessionID is blank and
+// [ErrSessionNotFound] if the session does not exist.
+func (m *Manager) Timeline(ctx context.Context, sessionID string) ([]timeline.Entry, error) {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return nil, ErrEmptySessionID
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	sess, err := m.store.getSession(ctx, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	return m.timeline.List(ctx, sess.ID)
+}
+
 // History returns the ordered UI message history (`id ASC`) for sessionID from
-// the `messages` table.
+// the session timeline.
 func (m *Manager) History(ctx context.Context, sessionID string) (message.MessageList, error) {
 	sess, err := m.Get(ctx, sessionID)
 	if err != nil {
 		return nil, err
 	}
-	return m.store.listMessages(ctx, sess.ID)
+	return m.timeline.Messages(ctx, sess.ID)
 }
 
-// appendMessage is an internal helper that appends a message directly to the
-// session's UI thread (`messages` table), updates the session's `updated_at`
-// timestamp, and publishes an [EventMessageAdded] notification without
-// modifying the underlying [harness.Harness] graph checkpoint. It is used for
-// system-emitted UI history messages.
-func (m *Manager) appendMessage(ctx context.Context, sessionID string, msg message.Message) error {
+// AppendMessage appends a message directly to the session's timeline, updates
+// the session's updated_at timestamp, and publishes an [EventMessageAdded]
+// notification without modifying the underlying [harness.Harness] graph
+// checkpoint. It is used for system-emitted UI history messages.
+func (m *Manager) AppendMessage(ctx context.Context, sessionID string, msg message.Message) error {
 	sess, err := m.Get(ctx, sessionID)
 	if err != nil {
 		return err
@@ -479,24 +537,26 @@ func (m *Manager) appendMessage(ctx context.Context, sessionID string, msg messa
 		return ErrNilMessage
 	}
 
-	id, err := uuid.NewV7()
+	entry, err := m.timeline.AppendMessage(ctx, sess.ID, msg)
 	if err != nil {
-		return fmt.Errorf("session: generate message id: %w", err)
+		return err
 	}
-	cloned := message.CloneMessage(msg)
-	cloned.SetID(id.String())
 
-	if err := m.store.insertMessage(ctx, sess.ID, cloned, time.Now().UTC()); err != nil {
+	if err := m.store.touchSession(ctx, sess.ID, entry.CreatedAt); err != nil {
 		return err
 	}
 
 	m.publisher.Publish(ctx, Event{
 		Type:      EventMessageAdded,
 		SessionID: sess.ID,
-		Message:   message.CloneMessage(cloned),
+		Message:   message.CloneMessage(entry.Message),
 	})
 
 	return nil
+}
+
+func (m *Manager) appendMessage(ctx context.Context, sessionID string, msg message.Message) error {
+	return m.AppendMessage(ctx, sessionID, msg)
 }
 
 // PendingPermissions returns all unresolved [tools.PermissionRequest] items from
@@ -597,6 +657,26 @@ func (m *Manager) RecordDecision(ctx context.Context, sessionID string, decision
 	}
 	m.mu.Unlock()
 
+	matchedReq := *matched
+	matchedReq.GrantPatterns = slices.Clone(matched.GrantPatterns)
+	fullDec := decision
+	entry := timeline.NewPermissionEntry(sess.ID, timeline.PermissionRecord{
+		Request:  matchedReq,
+		Decision: fullDec,
+	})
+	if err := m.timeline.Append(ctx, entry); err != nil {
+		m.mu.Lock()
+		delete(decMap, matched.ID)
+		m.mu.Unlock()
+		return false, err
+	}
+	if err := m.store.touchSession(ctx, sess.ID, entry.CreatedAt); err != nil {
+		m.mu.Lock()
+		delete(decMap, matched.ID)
+		m.mu.Unlock()
+		return false, err
+	}
+
 	return allResolved, nil
 }
 
@@ -689,13 +769,17 @@ func (m *Manager) send(ctx context.Context, sessID string, stream iter.Seq2[harn
 
 		case harness.EventMessage:
 			if hev.Message != nil {
-				if err := m.store.insertMessage(ctx, sessID, hev.Message, time.Now().UTC()); err != nil {
+				entry, err := m.timeline.AppendMessage(ctx, sessID, hev.Message)
+				if err != nil {
+					return nil, err
+				}
+				if err := m.store.touchSession(ctx, sessID, entry.CreatedAt); err != nil {
 					return nil, err
 				}
 				m.publisher.Publish(ctx, Event{
 					Type:      EventMessageAdded,
 					SessionID: sessID,
-					Message:   message.CloneMessage(hev.Message),
+					Message:   message.CloneMessage(entry.Message),
 				})
 			}
 

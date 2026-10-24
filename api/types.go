@@ -273,25 +273,3 @@ type RevertRequest struct {
 	Before  bool   `json:"before,omitempty"`
 	Force   bool   `json:"force,omitempty"`
 }
-
-// EventType identifies the kind of real-time Server-Sent Event emitted by the daemon.
-type EventType string
-
-const (
-	EventMessageAdded        EventType = "message_added"
-	EventChunk               EventType = "chunk"
-	EventPermissionRequested EventType = "permission_requested"
-	EventCompleted           EventType = "completed"
-	EventError               EventType = "error"
-)
-
-// Event is the real-time notification payload streamed over `/v1/events`.
-type Event struct {
-	Type        EventType           `json:"type"`
-	Workspace   string              `json:"workspace,omitempty"`
-	SessionID   string              `json:"session_id,omitempty"`
-	Message     *Message            `json:"message,omitempty"`
-	Chunk       *Chunk              `json:"chunk,omitempty"`
-	Permissions []PermissionRequest `json:"permissions,omitempty"`
-	Error       string              `json:"error,omitempty"`
-}

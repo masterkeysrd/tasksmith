@@ -17,23 +17,33 @@ import (
 const timestampFormat = "2006-01-02T15:04:05.000000000Z"
 
 // Store provides append-only persistence and querying for session timelines.
-type Store struct {
+type Store interface {
+	Append(ctx context.Context, entry *Entry) error
+	AppendMessage(ctx context.Context, sessionID string, msg message.Message) (*Entry, error)
+	Get(ctx context.Context, id string) (*Entry, error)
+	List(ctx context.Context, sessionID string) ([]Entry, error)
+	ListByKind(ctx context.Context, sessionID string, kind Kind) ([]Entry, error)
+	Messages(ctx context.Context, sessionID string) (message.MessageList, error)
+	DeleteSession(ctx context.Context, sessionID string) error
+}
+
+type sqliteStore struct {
 	db *sql.DB
 }
 
 // New creates and initializes a timeline Store, running migrations on the provided db.
-func New(ctx context.Context, db *sql.DB) (*Store, error) {
+func New(ctx context.Context, db *sql.DB) (Store, error) {
 	if db == nil {
 		return nil, ErrInvalidConfig
 	}
 	if err := sqlite.Migrate(ctx, db, "timeline", migrations); err != nil {
 		return nil, fmt.Errorf("timeline: migrate schema: %w", err)
 	}
-	return &Store{db: db}, nil
+	return &sqliteStore{db: db}, nil
 }
 
 // Append validates and records a new timeline entry.
-func (s *Store) Append(ctx context.Context, entry *Entry) error {
+func (s *sqliteStore) Append(ctx context.Context, entry *Entry) error {
 	if entry == nil {
 		return ErrInvalidEntry
 	}
@@ -142,7 +152,7 @@ func (s *Store) Append(ctx context.Context, entry *Entry) error {
 }
 
 // AppendMessage is a convenience helper for appending a message entry to the timeline.
-func (s *Store) AppendMessage(ctx context.Context, sessionID string, msg message.Message) (*Entry, error) {
+func (s *sqliteStore) AppendMessage(ctx context.Context, sessionID string, msg message.Message) (*Entry, error) {
 	if strings.TrimSpace(sessionID) == "" {
 		return nil, ErrEmptySessionID
 	}
@@ -157,7 +167,7 @@ func (s *Store) AppendMessage(ctx context.Context, sessionID string, msg message
 }
 
 // Get retrieves a single timeline entry by its UUIDv7 ID.
-func (s *Store) Get(ctx context.Context, id string) (*Entry, error) {
+func (s *sqliteStore) Get(ctx context.Context, id string) (*Entry, error) {
 	if strings.TrimSpace(id) == "" {
 		return nil, ErrEntryNotFound
 	}
@@ -177,7 +187,7 @@ func (s *Store) Get(ctx context.Context, id string) (*Entry, error) {
 }
 
 // List returns all entries for the specified session ordered by id ASC.
-func (s *Store) List(ctx context.Context, sessionID string) ([]Entry, error) {
+func (s *sqliteStore) List(ctx context.Context, sessionID string) ([]Entry, error) {
 	if strings.TrimSpace(sessionID) == "" {
 		return nil, ErrEmptySessionID
 	}
@@ -206,7 +216,7 @@ func (s *Store) List(ctx context.Context, sessionID string) ([]Entry, error) {
 }
 
 // ListByKind returns entries for the specified session and kind ordered by id ASC.
-func (s *Store) ListByKind(ctx context.Context, sessionID string, kind Kind) ([]Entry, error) {
+func (s *sqliteStore) ListByKind(ctx context.Context, sessionID string, kind Kind) ([]Entry, error) {
 	if strings.TrimSpace(sessionID) == "" {
 		return nil, ErrEmptySessionID
 	}
@@ -236,7 +246,7 @@ func (s *Store) ListByKind(ctx context.Context, sessionID string, kind Kind) ([]
 }
 
 // Messages returns all KindMessage payloads for sessionID ordered by id ASC.
-func (s *Store) Messages(ctx context.Context, sessionID string) (message.MessageList, error) {
+func (s *sqliteStore) Messages(ctx context.Context, sessionID string) (message.MessageList, error) {
 	if strings.TrimSpace(sessionID) == "" {
 		return nil, ErrEmptySessionID
 	}
@@ -271,7 +281,7 @@ func (s *Store) Messages(ctx context.Context, sessionID string) (message.Message
 }
 
 // DeleteSession removes all timeline entries associated with sessionID.
-func (s *Store) DeleteSession(ctx context.Context, sessionID string) error {
+func (s *sqliteStore) DeleteSession(ctx context.Context, sessionID string) error {
 	if strings.TrimSpace(sessionID) == "" {
 		return ErrEmptySessionID
 	}

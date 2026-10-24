@@ -46,10 +46,17 @@ func TestMessageStructuredContentJSONRoundTrip(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			event := Event{
-				Type: EventMessageAdded,
-				Message: &Message{
-					ID: "result", Role: RoleTool, ToolCallID: "call",
-					StructuredContent: json.RawMessage(test.raw),
+				Type: EventEntryAdded,
+				Payload: EntryAddedPayload{
+					SessionID: "s1",
+					Entry: TimelineEntry{
+						ID:   "result",
+						Kind: TimelineKindMessage,
+						Message: &Message{
+							ID: "result", Role: RoleTool, ToolCallID: "call",
+							StructuredContent: json.RawMessage(test.raw),
+						},
+					},
 				},
 			}
 			data, err := json.Marshal(event)
@@ -60,8 +67,9 @@ func TestMessageStructuredContentJSONRoundTrip(t *testing.T) {
 			if err := json.Unmarshal(data, &decoded); err != nil {
 				t.Fatal(err)
 			}
-			if decoded.Message == nil || string(decoded.Message.StructuredContent) != test.raw {
-				t.Fatalf("structured content roundtrip = %+v, want %q", decoded.Message, test.raw)
+			payload, ok := decoded.Payload.(EntryAddedPayload)
+			if !ok || payload.Entry.Message == nil || string(payload.Entry.Message.StructuredContent) != test.raw {
+				t.Fatalf("structured content roundtrip = %+v, want %q", decoded.Payload, test.raw)
 			}
 			if test.raw == "" && strings.Contains(string(data), "structured_content") {
 				t.Fatalf("absent structured content was not omitted: %s", data)
@@ -135,18 +143,19 @@ func TestWireTypesJSONRoundTrip(t *testing.T) {
 
 	now := time.Now().UTC().Truncate(time.Millisecond)
 	ev := Event{
-		Type:      EventMessageAdded,
-		Workspace: "/tmp/ws",
-		SessionID: "sess-1",
-		Message: &Message{
-			ID:   "msg-1",
-			Role: RoleAssistant,
-			Content: []Block{
-				{Type: BlockReasoning, Text: "thinking...", Signature: "sig-1"},
-				{Type: BlockText, Text: "hello"},
-				{Type: BlockToolCall, ToolCall: &ToolCall{ID: "tc-1", Name: "view", Args: map[string]any{"path": "a.go"}}},
+		Type:  EventChunk,
+		Topic: "sessions.sess-1.stream",
+		Payload: ChunkPayload{
+			SessionID: "sess-1",
+			Chunk: Chunk{
+				ID: "chk-1",
+				Content: []Block{
+					{Type: BlockReasoning, Text: "thinking...", Signature: "sig-1"},
+					{Type: BlockText, Text: "hello"},
+					{Type: BlockToolCall, ToolCall: &ToolCall{ID: "tc-1", Name: "view", Args: map[string]any{"path": "a.go"}}},
+				},
+				Done: false,
 			},
-			CreatedAt: now,
 		},
 	}
 
@@ -159,9 +168,14 @@ func TestWireTypesJSONRoundTrip(t *testing.T) {
 	if err := json.Unmarshal(raw, &decoded); err != nil {
 		t.Fatalf("Unmarshal Event: %v", err)
 	}
-	if decoded.Type != EventMessageAdded || decoded.Message == nil || len(decoded.Message.Content) != 3 {
+	if decoded.Type != EventChunk || decoded.Topic != "sessions.sess-1.stream" {
 		t.Fatalf("unexpected decoded Event: %+v", decoded)
 	}
+	chkPayload, ok := decoded.Payload.(ChunkPayload)
+	if !ok || len(chkPayload.Chunk.Content) != 3 {
+		t.Fatalf("unexpected chunk payload: %+v", decoded.Payload)
+	}
+	_ = now
 
 	upReq := UpdateSessionRequest{
 		Title: "New Title",
@@ -393,4 +407,289 @@ func TestGeneratedToolTypesJSONRoundTrip(t *testing.T) {
 			Diff:         "+generated content\n",
 		})
 	})
+}
+
+func TestHeaderAndTopicHelpers(t *testing.T) {
+	if HeaderSubscriberID != "X-TaskSmith-Subscriber-ID" {
+		t.Errorf("HeaderSubscriberID = %q, want X-TaskSmith-Subscriber-ID", HeaderSubscriberID)
+	}
+	if TopicSessions != "sessions" {
+		t.Errorf("TopicSessions = %q, want sessions", TopicSessions)
+	}
+	if got := SessionStreamTopic("abc-123"); got != "sessions.abc-123.stream" {
+		t.Errorf("SessionStreamTopic() = %q, want sessions.abc-123.stream", got)
+	}
+}
+
+func TestSubscriptionDTOsRoundTrip(t *testing.T) {
+	req := SubscriptionRequest{
+		Topics: []string{"sessions", "sessions.123.stream"},
+	}
+	testJSONRoundTrip(t, req)
+
+	resp := SubscriptionResponse{
+		Topics: []string{"sessions"},
+	}
+	testJSONRoundTrip(t, resp)
+}
+
+func TestTimelineWireDTOs(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+
+	entry := TimelineEntry{
+		ID:        "entry-1",
+		SessionID: "sess-1",
+		Kind:      TimelineKindMessage,
+		CreatedAt: now,
+		Message: &Message{
+			ID:      "m1",
+			Role:    RoleUser,
+			Content: []Block{{Type: BlockText, Text: "hi"}},
+		},
+		Model: &ModelChange{
+			From: "claude-3-5-sonnet",
+			To:   "claude-3-7-sonnet",
+		},
+		Effort: &EffortChange{
+			From: "low",
+			To:   "high",
+		},
+		Agent: &AgentChange{
+			From: "coder",
+			To:   "reviewer",
+		},
+		Mode: &ModeChange{
+			From: ModeDefault,
+			To:   ModePlan,
+		},
+		Permission: &PermissionRecord{
+			Request: PermissionRequest{
+				ID:         "p1",
+				ToolCallID: "tc1",
+				ToolName:   "write",
+				Action:     ActionWrite,
+				Safety:     SafetyUnsafe,
+				Summary:    "write to file",
+			},
+			Decision: PermissionDecision{
+				RequestID: "p1",
+				Kind:      DecisionAllowOnce,
+			},
+		},
+	}
+
+	testJSONRoundTrip(t, entry)
+}
+
+func TestEventPayloadsAndJSONRoundTrip(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+
+	tests := []struct {
+		name    string
+		ev      Event
+		wantTyp EventType
+	}{
+		{
+			name: "connected",
+			ev: Event{
+				Type:  EventConnected,
+				Topic: TopicSessions,
+				Payload: ConnectedPayload{
+					SubscriberID: "sub-123",
+					Topics:       []string{TopicSessions, "sessions.s1.stream"},
+				},
+			},
+			wantTyp: EventConnected,
+		},
+		{
+			name: "session_created",
+			ev: Event{
+				Type:  EventSessionCreated,
+				Topic: TopicSessions,
+				Payload: SessionCreatedPayload{
+					Workspace: "/workspace",
+					Session: Session{
+						ID:        "s1",
+						Title:     "New Session",
+						Agent:     "developer",
+						Model:     "gpt-4o",
+						Status:    StatusIdle,
+						CreatedAt: now,
+						UpdatedAt: now,
+					},
+				},
+			},
+			wantTyp: EventSessionCreated,
+		},
+		{
+			name: "session_updated",
+			ev: Event{
+				Type:  EventSessionUpdated,
+				Topic: TopicSessions,
+				Payload: SessionUpdatedPayload{
+					Workspace: "/workspace",
+					Session: Session{
+						ID:        "s1",
+						Title:     "Renamed Session",
+						Agent:     "developer",
+						Model:     "gpt-4o",
+						Status:    StatusRunning,
+						CreatedAt: now,
+						UpdatedAt: now,
+					},
+				},
+			},
+			wantTyp: EventSessionUpdated,
+		},
+		{
+			name: "session_deleted",
+			ev: Event{
+				Type:  EventSessionDeleted,
+				Topic: TopicSessions,
+				Payload: SessionDeletedPayload{
+					Workspace: "/workspace",
+					SessionID: "s1",
+				},
+			},
+			wantTyp: EventSessionDeleted,
+		},
+		{
+			name: "entry_added",
+			ev: Event{
+				Type:  EventEntryAdded,
+				Topic: SessionStreamTopic("s1"),
+				Payload: EntryAddedPayload{
+					SessionID: "s1",
+					Entry: TimelineEntry{
+						ID:        "te-1",
+						SessionID: "s1",
+						Kind:      TimelineKindMessage,
+						CreatedAt: now,
+						Message: &Message{
+							ID:      "msg-1",
+							Role:    RoleUser,
+							Content: []Block{{Type: BlockText, Text: "Hello"}},
+						},
+					},
+				},
+			},
+			wantTyp: EventEntryAdded,
+		},
+		{
+			name: "chunk",
+			ev: Event{
+				Type:  EventChunk,
+				Topic: SessionStreamTopic("s1"),
+				Payload: ChunkPayload{
+					SessionID: "s1",
+					Chunk: Chunk{
+						ID:      "chk-1",
+						Content: []Block{{Type: BlockText, Text: "part"}},
+						Done:    false,
+					},
+				},
+			},
+			wantTyp: EventChunk,
+		},
+		{
+			name: "permission_requested",
+			ev: Event{
+				Type:  EventPermissionRequested,
+				Topic: SessionStreamTopic("s1"),
+				Payload: PermissionRequestedPayload{
+					SessionID: "s1",
+					Permissions: []PermissionRequest{
+						{
+							ID:         "pr-1",
+							ToolCallID: "tc-1",
+							ToolName:   "write",
+							Action:     ActionWrite,
+							Safety:     SafetyUnsafe,
+							Summary:    "Write file",
+						},
+					},
+				},
+			},
+			wantTyp: EventPermissionRequested,
+		},
+		{
+			name: "completed",
+			ev: Event{
+				Type:  EventCompleted,
+				Topic: SessionStreamTopic("s1"),
+				Payload: CompletedPayload{
+					SessionID: "s1",
+					Message: &Message{
+						ID:      "msg-done",
+						Role:    RoleAssistant,
+						Content: []Block{{Type: BlockText, Text: "Done!"}},
+					},
+				},
+			},
+			wantTyp: EventCompleted,
+		},
+		{
+			name: "error",
+			ev: Event{
+				Type:  EventError,
+				Topic: SessionStreamTopic("s1"),
+				Payload: ErrorPayload{
+					SessionID: "s1",
+					Error:     "context cancelled",
+				},
+			},
+			wantTyp: EventError,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			// Verify EventType method on payload
+			if got := tc.ev.Payload.EventType(); got != string(tc.wantTyp) {
+				t.Errorf("Payload.EventType() = %q, want %q", got, tc.wantTyp)
+			}
+
+			// Marshal with explicit Type
+			data, err := json.Marshal(tc.ev)
+			if err != nil {
+				t.Fatalf("json.Marshal(ev): %v", err)
+			}
+
+			// Unmarshal and verify
+			var decoded Event
+			if err := json.Unmarshal(data, &decoded); err != nil {
+				t.Fatalf("json.Unmarshal: %v", err)
+			}
+			if decoded.Type != tc.wantTyp {
+				t.Errorf("decoded.Type = %q, want %q", decoded.Type, tc.wantTyp)
+			}
+			if decoded.Topic != tc.ev.Topic {
+				t.Errorf("decoded.Topic = %q, want %q", decoded.Topic, tc.ev.Topic)
+			}
+			if !reflect.DeepEqual(decoded.Payload, tc.ev.Payload) {
+				t.Errorf("payload mismatch:\ngot  %+v\nwant %+v", decoded.Payload, tc.ev.Payload)
+			}
+		})
+	}
+}
+
+func TestEventNullAndUnknownPayload(t *testing.T) {
+	// Null payload
+	rawNull := `{"type":"connected","topic":"sessions","payload":null}`
+	var evNull Event
+	if err := json.Unmarshal([]byte(rawNull), &evNull); err != nil {
+		t.Fatalf("Unmarshal null payload: %v", err)
+	}
+	if evNull.Type != EventConnected || evNull.Payload != nil {
+		t.Errorf("expected nil payload for null, got %+v", evNull)
+	}
+
+	// Unknown event type
+	rawUnknown := `{"type":"future_type","topic":"future","payload":{"foo":"bar"}}`
+	var evUnknown Event
+	if err := json.Unmarshal([]byte(rawUnknown), &evUnknown); err == nil {
+		t.Fatalf("expected error for unknown event type, got nil")
+	} else if !strings.Contains(err.Error(), `unknown event type "future_type"`) {
+		t.Fatalf("expected unknown event type error, got %v", err)
+	}
 }

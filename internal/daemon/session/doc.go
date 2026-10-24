@@ -1,15 +1,15 @@
 // Package session manages user-facing chat threads, session metadata, persistent
 // per-session file change journals, per-session tool containers and permission
-// gates, and the permanent UI message history stored in SQLite, resolving
+// gates, and the chronological session timeline stored in SQLite, resolving
 // workspace agents, system prompts, and language models per session and
 // executing conversational turns through [github.com/masterkeysrd/tasksmith/internal/daemon/harness.Harness].
 //
 // # Strict Dependency Injection
 //
-// As an internal application subsystem, [New] requires all six runtime
+// As an internal application subsystem, [New] requires all seven runtime
 // dependencies on [Config] to be explicitly provided with zero silent fallbacks:
-//   - [Config.DB]: Active SQLite connection used for storing the `sessions` and
-//     `messages` tables as well as harness checkpoints.
+//   - [Config.DB]: Active SQLite connection used for storing the `sessions` table,
+//     `timeline` entries, and harness checkpoints.
 //   - [Config.Workspace]: Active [github.com/masterkeysrd/tasksmith/internal/daemon/workspace.Workspace]
 //     used to resolve session agents, default completion models, tool policies,
 //     and dynamic system prompts.
@@ -23,20 +23,24 @@
 //     [EventCompleted] notifications.
 //   - [Config.Logger]: Structured [github.com/masterkeysrd/tasksmith/internal/core/log.Interface]
 //     scoped to the "session" component.
+//   - [Config.Timeline]: Active [github.com/masterkeysrd/tasksmith/internal/daemon/timeline.Store]
+//     used for append-only chronological session event logging and queries.
 //
-// # Separation of UI History and Graph Checkpoints
+// # Separation of Session Timeline and Graph Checkpoints
 //
 // TaskSmith maintains a strict separation between two persistence layers:
-//  1. The `messages` table managed by this package records the complete, ordered
-//     UI thread transcript (sorted chronologically by UUIDv7 `id ASC` via
-//     [Manager.History]), including user turns, intermediate tool-calling
-//     assistant messages, tool execution results, final assistant replies, and
-//     chat-only notifications appended internally.
+//  1. The `timeline` table managed by [github.com/masterkeysrd/tasksmith/internal/daemon/timeline.Store]
+//     records the complete, append-only chronological log of session events
+//     (sorted chronologically by UUIDv7 `id ASC` via [Manager.Timeline]), including
+//     user turns, intermediate tool-calling assistant messages, tool execution
+//     results, final assistant replies, model/agent transitions, permission mode
+//     updates, and permission decisions. [Manager.History] queries the message
+//     subset of the timeline for UI transcript callers.
 //  2. The `checkpoints` table managed by [github.com/masterkeysrd/tasksmith/internal/daemon/harness.Harness]
 //     stores the Loom workflow graph execution state sent to the LLM.
 //
 // Appending a message internally (for example, a UI-only system notice) records
-// the message in `messages` and publishes an [EventMessageAdded] event without
+// the message in the session timeline and publishes an [EventMessageAdded] event without
 // mutating or polluting the underlying harness graph checkpoint for that session.
 //
 // # All-or-Nothing Permission Resolution

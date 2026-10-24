@@ -16,6 +16,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/daemon/gateway"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/sandbox"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/session"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/timeline"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tools"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/workspace"
 )
@@ -84,6 +85,13 @@ func newWorkspaceRuntime(ctx context.Context, ws *workspace.Workspace, pool gate
 		hub:       h,
 	}
 
+	tl, err := timeline.New(ctx, db)
+	if err != nil {
+		_ = db.Close()
+		_ = sb.Close()
+		return nil, fmt.Errorf("daemon: initialize timeline for %q: %w", rootDir, err)
+	}
+
 	mgr, err := session.New(session.Config{
 		DB:        db,
 		Workspace: ws,
@@ -91,6 +99,7 @@ func newWorkspaceRuntime(ctx context.Context, ws *workspace.Workspace, pool gate
 		Sandbox:   sb,
 		Publisher: pub,
 		Logger:    logger,
+		Timeline:  tl,
 	})
 	if err != nil {
 		_ = db.Close()

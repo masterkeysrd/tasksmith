@@ -27,6 +27,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/daemon/harness"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/sandbox"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/std"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/timeline"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tools"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tools/builtin"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/workspace"
@@ -241,6 +242,11 @@ func setupTestEnv(t *testing.T, prov *fakeProvider) (*sql.DB, *workspace.Workspa
 	gw := newFakeGateway(prov)
 	pub := &testPublisher{}
 
+	tl, err := timeline.New(context.Background(), db)
+	if err != nil {
+		t.Fatalf("timeline.New: %v", err)
+	}
+
 	mgr, err := New(Config{
 		DB:        db,
 		Workspace: ws,
@@ -248,6 +254,7 @@ func setupTestEnv(t *testing.T, prov *fakeProvider) (*sql.DB, *workspace.Workspa
 		Sandbox:   sb,
 		Publisher: pub,
 		Logger:    logger,
+		Timeline:  tl,
 	})
 	if err != nil {
 		t.Fatalf("session.New: %v", err)
@@ -303,6 +310,7 @@ func TestConfigValidate(t *testing.T) {
 	db, ws, gw, pub, mgr := setupTestEnv(t, nil)
 	sb := mgr.sandbox
 	logger := log.Default()
+	tl := mgr.timeline
 
 	tests := []struct {
 		name string
@@ -316,6 +324,7 @@ func TestConfigValidate(t *testing.T) {
 				Sandbox:   sb,
 				Publisher: pub,
 				Logger:    logger,
+				Timeline:  tl,
 			},
 		},
 		{
@@ -326,6 +335,7 @@ func TestConfigValidate(t *testing.T) {
 				Sandbox:   sb,
 				Publisher: pub,
 				Logger:    logger,
+				Timeline:  tl,
 			},
 		},
 		{
@@ -336,6 +346,7 @@ func TestConfigValidate(t *testing.T) {
 				Sandbox:   sb,
 				Publisher: pub,
 				Logger:    logger,
+				Timeline:  tl,
 			},
 		},
 		{
@@ -346,6 +357,7 @@ func TestConfigValidate(t *testing.T) {
 				Gateway:   gw,
 				Publisher: pub,
 				Logger:    logger,
+				Timeline:  tl,
 			},
 		},
 		{
@@ -356,6 +368,7 @@ func TestConfigValidate(t *testing.T) {
 				Gateway:   gw,
 				Sandbox:   sb,
 				Logger:    logger,
+				Timeline:  tl,
 			},
 		},
 		{
@@ -366,6 +379,18 @@ func TestConfigValidate(t *testing.T) {
 				Gateway:   gw,
 				Sandbox:   sb,
 				Publisher: pub,
+				Timeline:  tl,
+			},
+		},
+		{
+			name: "missing Timeline",
+			cfg: Config{
+				DB:        db,
+				Workspace: ws,
+				Gateway:   gw,
+				Sandbox:   sb,
+				Publisher: pub,
+				Logger:    logger,
 			},
 		},
 	}
@@ -379,6 +404,33 @@ func TestConfigValidate(t *testing.T) {
 				t.Errorf("New() error = %v, want %v", err, ErrInvalidConfig)
 			}
 		})
+	}
+}
+
+type mockTimelineStore struct {
+	timeline.Store
+}
+
+func TestConfigCustomTimeline(t *testing.T) {
+	db, ws, gw, pub, mgr := setupTestEnv(t, nil)
+	sb := mgr.sandbox
+	logger := log.Default()
+
+	mockTL := &mockTimelineStore{}
+	customMgr, err := New(Config{
+		DB:        db,
+		Workspace: ws,
+		Gateway:   gw,
+		Sandbox:   sb,
+		Publisher: pub,
+		Logger:    logger,
+		Timeline:  mockTL,
+	})
+	if err != nil {
+		t.Fatalf("New with custom Timeline: %v", err)
+	}
+	if customMgr.timeline != mockTL {
+		t.Fatalf("expected customMgr.timeline to be %v, got %v", mockTL, customMgr.timeline)
 	}
 }
 
@@ -477,7 +529,7 @@ func TestSessionCRUD(t *testing.T) {
 		t.Errorf("Delete unknown ID error = %v, want %v", err, ErrSessionNotFound)
 	}
 
-	// Delete s1 and verify both session and its messages are gone
+	// Delete s1 and verify both session and its timeline entries are gone
 	if err := mgr.Delete(ctx, s1.ID); err != nil {
 		t.Fatalf("Delete s1 error: %v", err)
 	}
@@ -486,11 +538,11 @@ func TestSessionCRUD(t *testing.T) {
 	}
 
 	var msgCount int
-	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM messages WHERE session_id = ?`, s1.ID).Scan(&msgCount); err != nil {
-		t.Fatalf("count messages for deleted s1: %v", err)
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM timeline WHERE session_id = ?`, s1.ID).Scan(&msgCount); err != nil {
+		t.Fatalf("count timeline entries for deleted s1: %v", err)
 	}
 	if msgCount != 0 {
-		t.Errorf("expected 0 messages for deleted session s1, got %d", msgCount)
+		t.Errorf("expected 0 timeline entries for deleted session s1, got %d", msgCount)
 	}
 }
 
@@ -604,6 +656,11 @@ OVERRIDE_AGENT_PROMPT_MARKER {{ if call .HasTool "shell" }}HAS_SHELL_TOOL{{ end 
 	gw := newFakeGateway(prov)
 	pub := &testPublisher{}
 
+	tl, err := timeline.New(ctx, db)
+	if err != nil {
+		t.Fatalf("timeline.New: %v", err)
+	}
+
 	mgr, err := New(Config{
 		DB:        db,
 		Workspace: ws,
@@ -611,6 +668,7 @@ OVERRIDE_AGENT_PROMPT_MARKER {{ if call .HasTool "shell" }}HAS_SHELL_TOOL{{ end 
 		Sandbox:   sb,
 		Publisher: pub,
 		Logger:    log.Default(),
+		Timeline:  tl,
 	})
 	if err != nil {
 		t.Fatalf("session.New: %v", err)
@@ -1341,6 +1399,10 @@ func TestFileTrackerReloadAndDeleteSessionCleanup(t *testing.T) {
 	}
 
 	// Construct a second Manager over the same DB and Workspace (simulating process restart)
+	tl2, err := timeline.New(ctx, db)
+	if err != nil {
+		t.Fatalf("timeline.New tl2 error: %v", err)
+	}
 	mgr2, err := New(Config{
 		DB:        db,
 		Workspace: ws,
@@ -1348,6 +1410,7 @@ func TestFileTrackerReloadAndDeleteSessionCleanup(t *testing.T) {
 		Sandbox:   mgr.sandbox,
 		Publisher: pub,
 		Logger:    log.Default(),
+		Timeline:  tl2,
 	})
 	if err != nil {
 		t.Fatalf("New mgr2 error: %v", err)
@@ -1920,5 +1983,281 @@ func TestPermissionModeGetAndSet(t *testing.T) {
 
 	if err := mgr.SetPermissionMode(ctx, sess.ID, "invalid_mode"); !errors.Is(err, ErrInvalidConfig) {
 		t.Errorf("SetPermissionMode invalid mode error = %v, want %v", err, ErrInvalidConfig)
+	}
+}
+
+func TestTimelineRecordEvents(t *testing.T) {
+	ctx := context.Background()
+
+	var turnCount int
+	prov := &fakeProvider{
+		chunkHandler: func(_ context.Context, req *llm.Request) ([]message.AssistantChunk, error) {
+			turnCount++
+			if turnCount == 1 {
+				return []message.AssistantChunk{
+					{
+						BaseChunk: message.BaseChunk{ID: uuid.NewString()},
+						Model:     req.Model,
+						Content: []message.Block{
+							&message.TextBlock{Text: "I will write the test file."},
+							&message.ToolCall{
+								ID:   "tc-timeline-write",
+								Name: "write",
+								Args: map[string]any{
+									"path":    "timeline_test.txt",
+									"content": "sample content\n",
+								},
+							},
+						},
+						Done: true,
+					},
+				}, nil
+			}
+			return []message.AssistantChunk{
+				{
+					BaseChunk: message.BaseChunk{ID: uuid.NewString()},
+					Model:     req.Model,
+					Content: []message.Block{
+						&message.TextBlock{Text: "Write completed."},
+					},
+					Done: true,
+				},
+			}, nil
+		},
+	}
+
+	db, _, _, _, mgr := setupTestEnv(t, prov)
+
+	// 1. Validation checks on Timeline
+	if _, err := mgr.Timeline(ctx, ""); !errors.Is(err, ErrEmptySessionID) {
+		t.Errorf("Timeline empty sessionID error = %v, want %v", err, ErrEmptySessionID)
+	}
+	if _, err := mgr.Timeline(ctx, "   "); !errors.Is(err, ErrEmptySessionID) {
+		t.Errorf("Timeline blank sessionID error = %v, want %v", err, ErrEmptySessionID)
+	}
+	if _, err := mgr.Timeline(ctx, "missing-session"); !errors.Is(err, ErrSessionNotFound) {
+		t.Errorf("Timeline missing session error = %v, want %v", err, ErrSessionNotFound)
+	}
+
+	// 2. Create session and verify empty initial timeline
+	sess, err := mgr.Create(ctx, CreateParams{
+		Title: "Timeline Lifecycle",
+		Agent: "code-reviewer",
+		Model: "sonnet",
+	})
+	if err != nil {
+		t.Fatalf("Create session: %v", err)
+	}
+
+	initialTimeline, err := mgr.Timeline(ctx, sess.ID)
+	if err != nil {
+		t.Fatalf("Timeline initial: %v", err)
+	}
+	if len(initialTimeline) != 0 {
+		t.Fatalf("expected empty initial timeline, got %d entries", len(initialTimeline))
+	}
+
+	// 3. Append a user message and verify KindMessage entry
+	userMsg := message.NewUserText("Please review this code")
+	if err := mgr.AppendMessage(ctx, sess.ID, userMsg); err != nil {
+		t.Fatalf("AppendMessage error: %v", err)
+	}
+
+	tl1, err := mgr.Timeline(ctx, sess.ID)
+	if err != nil {
+		t.Fatalf("Timeline after message: %v", err)
+	}
+	if len(tl1) != 1 {
+		t.Fatalf("expected 1 timeline entry, got %d", len(tl1))
+	}
+	if tl1[0].Kind != timeline.KindMessage {
+		t.Errorf("tl1[0].Kind = %q, want %q", tl1[0].Kind, timeline.KindMessage)
+	}
+	if tl1[0].Message == nil || msgText(tl1[0].Message) != "Please review this code" {
+		t.Errorf("tl1[0].Message text = %v, want %q", tl1[0].Message, "Please review this code")
+	}
+
+	// 4. Update Model and verify KindModel entry
+	oldModel := sess.Model
+	newModelRaw := "claude-3-5-sonnet"
+	updatedSess, err := mgr.Update(ctx, sess.ID, UpdateParams{Model: newModelRaw})
+	if err != nil {
+		t.Fatalf("Update model error: %v", err)
+	}
+	if updatedSess.Model == oldModel {
+		t.Fatalf("expected model to change from %q", oldModel)
+	}
+
+	tl2, err := mgr.Timeline(ctx, sess.ID)
+	if err != nil {
+		t.Fatalf("Timeline after model update: %v", err)
+	}
+	if len(tl2) != 2 {
+		t.Fatalf("expected 2 timeline entries, got %d", len(tl2))
+	}
+	if tl2[1].Kind != timeline.KindModel {
+		t.Errorf("tl2[1].Kind = %q, want %q", tl2[1].Kind, timeline.KindModel)
+	}
+	if tl2[1].Model == nil || tl2[1].Model.From != oldModel || tl2[1].Model.To != updatedSess.Model {
+		t.Errorf("tl2[1].Model = %+v, want From=%q To=%q", tl2[1].Model, oldModel, updatedSess.Model)
+	}
+
+	// 5. Update Agent and verify KindAgent entry
+	oldAgent := updatedSess.Agent
+	newAgent := "general-assistant"
+	updatedSess, err = mgr.Update(ctx, sess.ID, UpdateParams{Agent: newAgent})
+	if err != nil {
+		t.Fatalf("Update agent error: %v", err)
+	}
+
+	tl3, err := mgr.Timeline(ctx, sess.ID)
+	if err != nil {
+		t.Fatalf("Timeline after agent update: %v", err)
+	}
+	if len(tl3) != 3 {
+		t.Fatalf("expected 3 timeline entries, got %d", len(tl3))
+	}
+	if tl3[2].Kind != timeline.KindAgent {
+		t.Errorf("tl3[2].Kind = %q, want %q", tl3[2].Kind, timeline.KindAgent)
+	}
+	if tl3[2].Agent == nil || tl3[2].Agent.From != oldAgent || tl3[2].Agent.To != newAgent {
+		t.Errorf("tl3[2].Agent = %+v, want From=%q To=%q", tl3[2].Agent, oldAgent, newAgent)
+	}
+
+	// 6. Change permission mode and verify KindMode entry
+	if err := mgr.SetPermissionMode(ctx, sess.ID, tools.ModePlan); err != nil {
+		t.Fatalf("SetPermissionMode(ModePlan) error: %v", err)
+	}
+
+	tl4, err := mgr.Timeline(ctx, sess.ID)
+	if err != nil {
+		t.Fatalf("Timeline after mode change: %v", err)
+	}
+	if len(tl4) != 4 {
+		t.Fatalf("expected 4 timeline entries, got %d", len(tl4))
+	}
+	if tl4[3].Kind != timeline.KindMode {
+		t.Errorf("tl4[3].Kind = %q, want %q", tl4[3].Kind, timeline.KindMode)
+	}
+	if tl4[3].Mode == nil || tl4[3].Mode.From != tools.ModeDefault || tl4[3].Mode.To != tools.ModePlan {
+		t.Errorf("tl4[3].Mode = %+v, want From=%q To=%q", tl4[3].Mode, tools.ModeDefault, tools.ModePlan)
+	}
+
+	// Setting the same mode again should NOT append an entry
+	if err := mgr.SetPermissionMode(ctx, sess.ID, tools.ModePlan); err != nil {
+		t.Fatalf("SetPermissionMode duplicate error: %v", err)
+	}
+	tl4Dup, err := mgr.Timeline(ctx, sess.ID)
+	if err != nil {
+		t.Fatalf("Timeline after duplicate mode: %v", err)
+	}
+	if len(tl4Dup) != 4 {
+		t.Fatalf("expected no new entry for duplicate mode, got %d", len(tl4Dup))
+	}
+
+	// Reset mode to default so the tool call requires approval
+	if err := mgr.SetPermissionMode(ctx, sess.ID, tools.ModeDefault); err != nil {
+		t.Fatalf("SetPermissionMode(ModeDefault) error: %v", err)
+	}
+	tl5, err := mgr.Timeline(ctx, sess.ID)
+	if err != nil {
+		t.Fatalf("Timeline after mode reset: %v", err)
+	}
+	if len(tl5) != 5 {
+		t.Fatalf("expected 5 timeline entries, got %d", len(tl5))
+	}
+	if tl5[4].Kind != timeline.KindMode || tl5[4].Mode.From != tools.ModePlan || tl5[4].Mode.To != tools.ModeDefault {
+		t.Errorf("tl5[4].Mode = %+v, want From=%q To=%q", tl5[4].Mode, tools.ModePlan, tools.ModeDefault)
+	}
+
+	// 7. Send tool-calling turn to trigger permission interrupt
+	reply, err := mgr.Send(ctx, sess.ID, message.NewUserText("Write a file"))
+	if err != nil {
+		t.Fatalf("Send error: %v", err)
+	}
+	if reply != nil {
+		t.Fatalf("expected nil reply while paused on permissions, got %+v", reply)
+	}
+
+	pending, err := mgr.PendingPermissions(ctx, sess.ID)
+	if err != nil {
+		t.Fatalf("PendingPermissions: %v", err)
+	}
+	if len(pending) != 1 {
+		t.Fatalf("expected 1 pending permission, got %d", len(pending))
+	}
+
+	// Record decision and verify KindPermission entry
+	dec := tools.PermissionDecision{
+		RequestID: pending[0].ID,
+		Kind:      tools.DecisionAllowOnce,
+	}
+	ready, err := mgr.RecordDecision(ctx, sess.ID, dec)
+	if err != nil {
+		t.Fatalf("RecordDecision error: %v", err)
+	}
+	if !ready {
+		t.Errorf("expected ready = true after resolving only pending permission")
+	}
+
+	tl6, err := mgr.Timeline(ctx, sess.ID)
+	if err != nil {
+		t.Fatalf("Timeline after permission decision: %v", err)
+	}
+
+	// Entries in tl6 should be:
+	// [0] KindMessage (user append)
+	// [1] KindModel
+	// [2] KindAgent
+	// [3] KindMode (default -> plan)
+	// [4] KindMode (plan -> default)
+	// [5] KindMessage (Send user message)
+	// [6] KindMessage (assistant tool-call turn)
+	// [7] KindPermission (recorded decision)
+	if len(tl6) != 8 {
+		t.Fatalf("expected 8 timeline entries, got %d: %+v", len(tl6), tl6)
+	}
+
+	permEntry := tl6[7]
+	if permEntry.Kind != timeline.KindPermission {
+		t.Fatalf("tl6[7].Kind = %q, want %q", permEntry.Kind, timeline.KindPermission)
+	}
+	if permEntry.Permission == nil {
+		t.Fatalf("expected non-nil Permission payload in entry")
+	}
+	if permEntry.Permission.Request.ID != pending[0].ID {
+		t.Errorf("Permission.Request.ID = %q, want %q", permEntry.Permission.Request.ID, pending[0].ID)
+	}
+	if permEntry.Permission.Decision.Kind != tools.DecisionAllowOnce {
+		t.Errorf("Permission.Decision.Kind = %q, want %q", permEntry.Permission.Decision.Kind, tools.DecisionAllowOnce)
+	}
+
+	// 8. Verify strict UUIDv7 ascending chronological ordering
+	for i := 0; i < len(tl6)-1; i++ {
+		if !(tl6[i].ID < tl6[i+1].ID) {
+			t.Errorf("expected strictly ascending entry IDs: tl6[%d].ID=%q >= tl6[%d].ID=%q",
+				i, tl6[i].ID, i+1, tl6[i+1].ID)
+		}
+	}
+
+	// 9. Verify History returns only KindMessage entries
+	history, err := mgr.History(ctx, sess.ID)
+	if err != nil {
+		t.Fatalf("History error: %v", err)
+	}
+	if len(history) != 3 {
+		t.Fatalf("expected 3 messages in History (user append, send user, send assistant), got %d: %+v", len(history), history)
+	}
+
+	// 10. Delete session and verify timeline entries are removed
+	if err := mgr.Delete(ctx, sess.ID); err != nil {
+		t.Fatalf("Delete session: %v", err)
+	}
+	var count int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM timeline WHERE session_id = ?`, sess.ID).Scan(&count); err != nil {
+		t.Fatalf("count timeline entries after delete: %v", err)
+	}
+	if count != 0 {
+		t.Errorf("expected 0 timeline entries for deleted session, got %d", count)
 	}
 }

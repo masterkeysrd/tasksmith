@@ -3,12 +3,10 @@ package session
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
 
-	"github.com/masterkeysrd/loom/message"
 	"github.com/masterkeysrd/tasksmith/internal/core/sqlite"
 )
 
@@ -60,6 +58,26 @@ func (s *store) updateSession(ctx context.Context, sess *Session) error {
 	affected, err := res.RowsAffected()
 	if err != nil {
 		return fmt.Errorf("session: check rows affected for session %q: %w", sess.ID, err)
+	}
+	if affected == 0 {
+		return ErrSessionNotFound
+	}
+	return nil
+}
+
+func (s *store) touchSession(ctx context.Context, sessionID string, updatedAt time.Time) error {
+	res, err := s.db.ExecContext(
+		ctx,
+		`UPDATE sessions SET updated_at = ? WHERE id = ?`,
+		formatTime(updatedAt),
+		sessionID,
+	)
+	if err != nil {
+		return fmt.Errorf("session: touch session %q: %w", sessionID, err)
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("session: check rows affected for session %q: %w", sessionID, err)
 	}
 	if affected == 0 {
 		return ErrSessionNotFound
@@ -122,88 +140,6 @@ func (s *store) deleteSession(ctx context.Context, id string) error {
 	return nil
 }
 
-func (s *store) insertMessage(ctx context.Context, sessionID string, msg message.Message, now time.Time) error {
-	payload, err := marshalMessage(msg)
-	if err != nil {
-		return err
-	}
-
-	ts := formatTime(now)
-
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("session: begin insert message transaction: %w", err)
-	}
-	defer func() {
-		_ = tx.Rollback()
-	}()
-
-	_, err = tx.ExecContext(
-		ctx,
-		`INSERT INTO messages (id, session_id, role, payload, created_at) VALUES (?, ?, ?, ?, ?)`,
-		msg.GetID(),
-		sessionID,
-		string(msg.Role()),
-		payload,
-		ts,
-	)
-	if err != nil {
-		return fmt.Errorf("session: insert message %q for session %q: %w", msg.GetID(), sessionID, err)
-	}
-
-	res, err := tx.ExecContext(
-		ctx,
-		`UPDATE sessions SET updated_at = ? WHERE id = ?`,
-		ts,
-		sessionID,
-	)
-	if err != nil {
-		return fmt.Errorf("session: update session %q timestamp: %w", sessionID, err)
-	}
-	affected, err := res.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("session: check updated rows for session %q: %w", sessionID, err)
-	}
-	if affected == 0 {
-		return ErrSessionNotFound
-	}
-
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("session: commit insert message %q: %w", msg.GetID(), err)
-	}
-	return nil
-}
-
-func (s *store) listMessages(ctx context.Context, sessionID string) (message.MessageList, error) {
-	rows, err := s.db.QueryContext(
-		ctx,
-		`SELECT id, payload FROM messages WHERE session_id = ? ORDER BY id ASC`,
-		sessionID,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("session: query messages for session %q: %w", sessionID, err)
-	}
-	defer rows.Close()
-
-	list := make(message.MessageList, 0)
-	for rows.Next() {
-		var id string
-		var payload []byte
-		if err := rows.Scan(&id, &payload); err != nil {
-			return nil, fmt.Errorf("session: scan message row: %w", err)
-		}
-		msg, err := unmarshalMessage(id, payload)
-		if err != nil {
-			return nil, err
-		}
-		list = append(list, msg)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("session: iterate messages for session %q: %w", sessionID, err)
-	}
-	return list, nil
-}
-
 type rowScanner interface {
 	Scan(dest ...any) error
 }
@@ -242,23 +178,4 @@ func parseTime(raw string) (time.Time, error) {
 		return time.Time{}, err
 	}
 	return t.UTC(), nil
-}
-
-func marshalMessage(msg message.Message) ([]byte, error) {
-	data, err := json.Marshal(message.MessageList{msg})
-	if err != nil {
-		return nil, fmt.Errorf("session: marshal message %q: %w", msg.GetID(), err)
-	}
-	return data, nil
-}
-
-func unmarshalMessage(id string, payload []byte) (message.Message, error) {
-	var list message.MessageList
-	if err := json.Unmarshal(payload, &list); err != nil {
-		return nil, fmt.Errorf("session: unmarshal message %q: %w", id, err)
-	}
-	if len(list) != 1 || list[0] == nil {
-		return nil, fmt.Errorf("session: invalid message payload for %q (decoded %d messages)", id, len(list))
-	}
-	return list[0], nil
 }

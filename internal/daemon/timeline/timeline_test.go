@@ -15,7 +15,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tools"
 )
 
-func openTestStore(t *testing.T) (*Store, context.Context) {
+func openTestStore(t *testing.T) (Store, context.Context) {
 	t.Helper()
 	ctx := context.Background()
 	dbPath := filepath.Join(t.TempDir(), "timeline_test.db")
