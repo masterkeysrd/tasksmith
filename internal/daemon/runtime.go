@@ -13,6 +13,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	"github.com/masterkeysrd/tasksmith/internal/core/sqlite"
 	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/broker"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/gateway"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/sandbox"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/session"
@@ -34,7 +35,7 @@ type workspaceRuntime struct {
 	gateway   gateway.Gateway
 	db        *sql.DB
 	manager   *session.Manager
-	hub       *hub
+	broker    *broker.Broker
 	logger    log.Interface
 
 	bgCtx    context.Context
@@ -45,7 +46,7 @@ type workspaceRuntime struct {
 	activeRuns map[string]*activeRun
 }
 
-func newWorkspaceRuntime(ctx context.Context, ws *workspace.Workspace, pool gateway.Pool, h *hub, logger log.Interface) (*workspaceRuntime, error) {
+func newWorkspaceRuntime(ctx context.Context, ws *workspace.Workspace, pool gateway.Pool, b *broker.Broker, logger log.Interface) (*workspaceRuntime, error) {
 	rootDir := ws.RootDir()
 
 	sb, err := sandbox.New(sandbox.Config{
@@ -80,11 +81,6 @@ func newWorkspaceRuntime(ctx context.Context, ws *workspace.Workspace, pool gate
 		return nil, fmt.Errorf("daemon: open sqlite db %q: %w", dbPath, err)
 	}
 
-	pub := &workspacePublisher{
-		workspace: rootDir,
-		hub:       h,
-	}
-
 	tl, err := timeline.New(ctx, db)
 	if err != nil {
 		_ = db.Close()
@@ -97,7 +93,7 @@ func newWorkspaceRuntime(ctx context.Context, ws *workspace.Workspace, pool gate
 		Workspace: ws,
 		Gateway:   gw,
 		Sandbox:   sb,
-		Publisher: pub,
+		Publisher: b,
 		Logger:    logger,
 		Timeline:  tl,
 	})
@@ -116,7 +112,7 @@ func newWorkspaceRuntime(ctx context.Context, ws *workspace.Workspace, pool gate
 		gateway:    gw,
 		db:         db,
 		manager:    mgr,
-		hub:        h,
+		broker:     b,
 		logger:     logger,
 		bgCtx:      bgCtx,
 		bgCancel:   bgCancel,
@@ -263,9 +259,7 @@ func (rt *workspaceRuntime) publishRunError(sessionID string, err error) {
 	if errors.Is(err, context.Canceled) {
 		return
 	}
-	rt.hub.publish(api.Event{
-		Type:      api.EventError,
-		Workspace: rt.dir,
+	rt.broker.Publish(api.SessionStreamTopic(sessionID), api.ErrorEvent{
 		SessionID: sessionID,
 		Error:     err.Error(),
 	})

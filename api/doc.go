@@ -10,15 +10,15 @@
 // Each event carries a typed [EventType], an optional broker topic (see [TopicSessions]
 // and [SessionStreamTopic]), and a typed [EventPayload] conforming to the
 // daemon-wide event broker:
-//   - [ConnectedPayload] ([EventConnected]): echoes initial subscription topics and client subscriber ID.
-//   - [SessionCreatedPayload] ([EventSessionCreated]): broadcast when a new session is created.
-//   - [SessionUpdatedPayload] ([EventSessionUpdated]): broadcast when session metadata (title, agent, model) changes.
-//   - [SessionDeletedPayload] ([EventSessionDeleted]): broadcast when a session is removed.
-//   - [EntryAddedPayload] ([EventEntryAdded]): broadcast when a new [TimelineEntry] is recorded in a session.
-//   - [ChunkPayload] ([EventChunk]): streaming assistant token or delta blocks.
-//   - [PermissionRequestedPayload] ([EventPermissionRequested]): pending tool approvals.
-//   - [CompletedPayload] ([EventCompleted]): final assistant reply concluding a turn.
-//   - [ErrorPayload] ([EventError]): terminal turn errors.
+//   - [ConnectedEvent] ([EventConnected]): echoes initial subscription topics and client subscriber ID.
+//   - [SessionCreatedEvent] ([EventSessionCreated]): broadcast when a new session is created.
+//   - [SessionUpdatedEvent] ([EventSessionUpdated]): broadcast when session metadata (title, agent, model) changes.
+//   - [SessionDeletedEvent] ([EventSessionDeleted]): broadcast when a session is removed.
+//   - [EntryAddedEvent] ([EventEntryAdded]): broadcast when a new [TimelineEntry] is recorded in a session.
+//   - [ChunkEvent] ([EventChunk]): streaming assistant token or delta blocks.
+//   - [PermissionRequestedEvent] ([EventPermissionRequested]): pending tool approvals.
+//   - [CompletedEvent] ([EventCompleted]): final assistant reply concluding a turn.
+//   - [ErrorEvent] ([EventError]): terminal turn errors.
 //
 // Dynamic topic subscriptions are managed via [SubscriptionRequest] and [SubscriptionResponse]
 // addressing the daemon's internal event broker.

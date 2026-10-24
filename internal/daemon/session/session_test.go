@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -23,6 +24,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	"github.com/masterkeysrd/tasksmith/internal/core/sqlite"
 	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/broker"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/gateway"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/harness"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/sandbox"
@@ -184,10 +186,12 @@ type testPublisher struct {
 	events []Event
 }
 
-func (p *testPublisher) Publish(_ context.Context, ev Event) {
+func (p *testPublisher) Publish(_ string, ev broker.Event) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.events = append(p.events, ev)
+	if sev, ok := ev.(Event); ok {
+		p.events = append(p.events, sev)
+	}
 }
 
 func (p *testPublisher) recorded() []Event {
@@ -831,45 +835,60 @@ func TestSendAndHistory(t *testing.T) {
 	}
 
 	// Verify published event sequence via Publisher:
-	// 1. EventMessageAdded (user)
+	// 1. EventEntryAdded (user message)
 	// 2..4. EventChunk ("Hello", ", ", "TaskSmith!")
-	// 5. EventMessageAdded (assistant)
-	// 6. EventCompleted (assistant)
+	// 5. EventEntryAdded (assistant message)
+	// 6. EventCompleted (assistant reply)
 	events := pub.recorded()
 	if len(events) != 6 {
 		t.Fatalf("expected 6 published events, got %d: %+v", len(events), events)
 	}
 	for i, ev := range events {
-		if ev.SessionID != sess.ID {
-			t.Errorf("events[%d].SessionID = %q, want %q", i, ev.SessionID, sess.ID)
+		var sessionID string
+		switch e := ev.(type) {
+		case EntryAddedEvent:
+			sessionID = e.SessionID
+		case ChunkEvent:
+			sessionID = e.SessionID
+		case PermissionRequestedEvent:
+			sessionID = e.SessionID
+		case CompletedEvent:
+			sessionID = e.SessionID
+		}
+		if sessionID != sess.ID {
+			t.Errorf("events[%d].SessionID = %q, want %q", i, sessionID, sess.ID)
 		}
 	}
 
-	if events[0].Type != EventMessageAdded || events[0].Message == nil || events[0].Message.Role() != message.RoleUser || msgText(events[0].Message) != "Greetings!" {
-		t.Errorf("events[0] = %+v, want user EventMessageAdded", events[0])
+	ev0, ok := events[0].(EntryAddedEvent)
+	if !ok || ev0.Entry.Kind != timeline.KindMessage || ev0.Entry.Message == nil || ev0.Entry.Message.Role() != message.RoleUser || msgText(ev0.Entry.Message) != "Greetings!" {
+		t.Errorf("events[0] = %+v, want user EntryAddedEvent", events[0])
 	}
-	if events[0].Message.GetID() == "" {
+	if ev0.Entry.ID == "" || ev0.Entry.Message.GetID() == "" {
 		t.Errorf("expected generated UUID on user message in events[0]")
 	}
 
 	var chunkTexts []string
 	for i := 1; i <= 3; i++ {
-		if events[i].Type != EventChunk || events[i].Chunk == nil {
-			t.Errorf("events[%d] = %+v, want EventChunk", i, events[i])
+		chkEv, ok := events[i].(ChunkEvent)
+		if !ok {
+			t.Errorf("events[%d] = %+v, want ChunkEvent", i, events[i])
 			continue
 		}
-		chunkTexts = append(chunkTexts, extractBlocksText(events[i].Chunk.Content))
+		chunkTexts = append(chunkTexts, extractBlocksText(chkEv.Chunk.Content))
 	}
 	wantChunks := []string{"Hello", ", ", "TaskSmith!"}
 	if !reflect.DeepEqual(chunkTexts, wantChunks) {
 		t.Errorf("chunkTexts = %v, want %v", chunkTexts, wantChunks)
 	}
 
-	if events[4].Type != EventMessageAdded || events[4].Message == nil || events[4].Message.Role() != message.RoleAssistant || msgText(events[4].Message) != "Hello, TaskSmith!" {
-		t.Errorf("events[4] = %+v, want assistant EventMessageAdded", events[4])
+	ev4, ok := events[4].(EntryAddedEvent)
+	if !ok || ev4.Entry.Kind != timeline.KindMessage || ev4.Entry.Message == nil || ev4.Entry.Message.Role() != message.RoleAssistant || msgText(ev4.Entry.Message) != "Hello, TaskSmith!" {
+		t.Errorf("events[4] = %+v, want assistant EntryAddedEvent", events[4])
 	}
-	if events[5].Type != EventCompleted || events[5].Message == nil || events[5].Message.Role() != message.RoleAssistant || msgText(events[5].Message) != "Hello, TaskSmith!" {
-		t.Errorf("events[5] = %+v, want assistant EventCompleted", events[5])
+	ev5, ok := events[5].(CompletedEvent)
+	if !ok || ev5.Message == nil || ev5.Message.Role() != message.RoleAssistant || msgText(ev5.Message) != "Hello, TaskSmith!" {
+		t.Errorf("events[5] = %+v, want assistant CompletedEvent", events[5])
 	}
 
 	// Verify session.History returns [User, Assistant] from the messages table
@@ -941,10 +960,14 @@ func TestAppendMessageIsolationFromHarnessCheckpoints(t *testing.T) {
 		t.Fatalf("appendMessage error: %v", err)
 	}
 
-	// Verify Publisher received EventMessageAdded for the appended system message
+	// Verify Publisher received EventEntryAdded for the appended system message
 	appendedEvents := pub.recorded()
-	if len(appendedEvents) != 1 || appendedEvents[0].Type != EventMessageAdded || appendedEvents[0].Message == nil || appendedEvents[0].Message.Role() != message.RoleSystem {
-		t.Fatalf("expected 1 EventMessageAdded for system message, got %+v", appendedEvents)
+	if len(appendedEvents) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(appendedEvents))
+	}
+	appEv, ok := appendedEvents[0].(EntryAddedEvent)
+	if !ok || appEv.Entry.Kind != timeline.KindMessage || appEv.Entry.Message == nil || appEv.Entry.Message.Role() != message.RoleSystem {
+		t.Fatalf("expected 1 EntryAddedEvent for system message, got %+v", appendedEvents)
 	}
 
 	// 3. Verify the RoleSystem message appears in session.History (messages table)
@@ -1655,16 +1678,16 @@ func TestMultiPermissionInterruptAndAllOrNothingRespondPermission(t *testing.T) 
 		t.Fatalf("expected nil reply while paused on permissions, got %+v", reply)
 	}
 
-	// Verify EventPermissionRequested was published with 2 permissions
+	// Verify PermissionRequestedEvent was published with 2 permissions
 	events := pub.recorded()
-	var permEvent *Event
+	var permEvent *PermissionRequestedEvent
 	for i := range events {
-		if events[i].Type == EventPermissionRequested {
-			permEvent = &events[i]
+		if pe, ok := events[i].(PermissionRequestedEvent); ok {
+			permEvent = &pe
 		}
 	}
 	if permEvent == nil || len(permEvent.Permissions) != 2 {
-		t.Fatalf("expected EventPermissionRequested with 2 permissions, got %+v", permEvent)
+		t.Fatalf("expected PermissionRequestedEvent with 2 permissions, got %+v", permEvent)
 	}
 
 	// Verify PendingPermissions returns 2 items
@@ -1706,9 +1729,15 @@ func TestMultiPermissionInterruptAndAllOrNothingRespondPermission(t *testing.T) 
 	if len(prov.recordedTurns()) != 1 {
 		t.Fatalf("expected graph NOT to be called until all permissions resolved, got %d LLM turns", len(prov.recordedTurns()))
 	}
-	if len(pub.recorded()) != 0 {
-		t.Fatalf("expected 0 events published when buffering partial decision, got %+v", pub.recorded())
+	recs := pub.recorded()
+	if len(recs) != 1 {
+		t.Fatalf("expected 1 event, got %+v", recs)
 	}
+	decEv, ok := recs[0].(EntryAddedEvent)
+	if !ok || decEv.Entry.Kind != timeline.KindPermission {
+		t.Fatalf("expected 1 EntryAddedEvent (permission) published when recording decision, got %+v", recs)
+	}
+	pub.reset()
 	if _, err := os.Stat(filepath.Join(ws.RootDir(), "file1.txt")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("expected file1.txt NOT to be written before all permissions are resolved, stat err = %v", err)
 	}
@@ -2026,7 +2055,7 @@ func TestTimelineRecordEvents(t *testing.T) {
 		},
 	}
 
-	db, _, _, _, mgr := setupTestEnv(t, prov)
+	db, _, _, pub, mgr := setupTestEnv(t, prov)
 
 	// 1. Validation checks on Timeline
 	if _, err := mgr.Timeline(ctx, ""); !errors.Is(err, ErrEmptySessionID) {
@@ -2247,6 +2276,19 @@ func TestTimelineRecordEvents(t *testing.T) {
 	}
 	if len(history) != 3 {
 		t.Fatalf("expected 3 messages in History (user append, send user, send assistant), got %d: %+v", len(history), history)
+	}
+
+	// Verify EntryAddedEvent published events for all appended entries
+	var publishedKinds []timeline.Kind
+	for _, ev := range pub.recorded() {
+		if eae, ok := ev.(EntryAddedEvent); ok {
+			publishedKinds = append(publishedKinds, eae.Entry.Kind)
+		}
+	}
+	for _, expectedKind := range []timeline.Kind{timeline.KindMessage, timeline.KindModel, timeline.KindAgent, timeline.KindMode, timeline.KindPermission} {
+		if !slices.Contains(publishedKinds, expectedKind) {
+			t.Errorf("expected EventEntryAdded with kind %q in published events: %v", expectedKind, publishedKinds)
+		}
 	}
 
 	// 10. Delete session and verify timeline entries are removed

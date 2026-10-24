@@ -244,16 +244,13 @@ func conversationUpdates(ctx context.Context, c *client.Client, key conversation
 				cancel()
 			}
 		}
-		for event, err := range c.SubscribeWithReady(ctx, key.Session, ready) {
+		for event, err := range c.Watch(ctx, ready, api.SessionStreamTopic(key.Session)) {
 			if ctx.Err() != nil {
 				break
 			}
 			if err != nil {
 				fail(fmt.Errorf("conversation: subscribe: %w", err))
 				return
-			}
-			if event.SessionID != key.Session {
-				continue
 			}
 			if err := state.apply(event); err != nil {
 				fail(err)
@@ -319,13 +316,15 @@ func (s *conversationState) messageID(sourceID, draftID string) string {
 }
 
 func (s *conversationState) load(ctx context.Context, c *client.Client) error {
-	history, err := c.History(ctx, s.sessionID)
+	entries, err := c.Timeline(ctx, s.sessionID)
 	if err != nil {
-		return fmt.Errorf("conversation: history: %w", err)
+		return fmt.Errorf("conversation: timeline: %w", err)
 	}
-	for _, message := range history {
-		if err := s.addMessage(message); err != nil {
-			return err
+	for _, entry := range entries {
+		if entry.Kind == api.TimelineKindMessage && entry.Message != nil {
+			if err := s.addMessage(*entry.Message); err != nil {
+				return err
+			}
 		}
 	}
 	permissions, err := c.PendingPermissions(ctx, s.sessionID)
@@ -354,39 +353,73 @@ func (s *conversationState) load(ctx context.Context, c *client.Client) error {
 
 func (s *conversationState) apply(event api.Event) error {
 	switch event.Type {
-	case api.EventMessageAdded:
-		if event.Message == nil {
+	case api.EventConnected:
+		return nil
+
+	case api.EventEntryAdded:
+		p, ok := event.Payload.(api.EntryAddedEvent)
+		if !ok {
+			return errors.New("conversation: entry_added event has invalid payload")
+		}
+		if p.SessionID != s.sessionID {
+			return nil
+		}
+		if p.Entry.Kind != api.TimelineKindMessage {
+			return nil
+		}
+		if p.Entry.Message == nil {
 			return errors.New("conversation: message event has no message")
 		}
 		known := slices.ContainsFunc(s.messages, func(record conversationMessage) bool {
-			return record.message.ID == event.Message.ID
+			return record.message.ID == p.Entry.Message.ID
 		})
-		if err := s.addMessage(*event.Message); err != nil {
+		if err := s.addMessage(*p.Entry.Message); err != nil {
 			return err
 		}
-		if event.Message.Role == api.RoleUser && !known {
+		if p.Entry.Message.Role == api.RoleUser && !known {
 			s.status, s.err = StreamRunning, nil
-		} else if event.Message.Role == api.RoleTool && s.status == StreamWaitingPermission && len(s.permissions) == 0 {
+		} else if p.Entry.Message.Role == api.RoleTool && s.status == StreamWaitingPermission && len(s.permissions) == 0 {
 			s.status = StreamRunning
 		}
+
 	case api.EventChunk:
-		if event.Chunk == nil {
-			return errors.New("conversation: chunk event has no chunk")
+		p, ok := event.Payload.(api.ChunkEvent)
+		if !ok {
+			return errors.New("conversation: chunk event has invalid payload")
 		}
-		if err := s.addChunk(*event.Chunk); err != nil {
+		if p.SessionID != s.sessionID {
+			return nil
+		}
+		if err := s.addChunk(p.Chunk); err != nil {
 			return err
 		}
 		s.status, s.err = StreamRunning, nil
+
 	case api.EventPermissionRequested:
-		if err := s.addPermissions(event.Permissions); err != nil {
+		p, ok := event.Payload.(api.PermissionRequestedEvent)
+		if !ok {
+			return errors.New("conversation: permission_requested event has invalid payload")
+		}
+		if p.SessionID != s.sessionID {
+			return nil
+		}
+		if err := s.addPermissions(p.Permissions); err != nil {
 			return err
 		}
 		if len(s.permissions) > 0 {
 			s.status, s.err = StreamWaitingPermission, nil
 		}
+
 	case api.EventCompleted:
-		if event.Message != nil {
-			if err := s.addMessage(*event.Message); err != nil {
+		p, ok := event.Payload.(api.CompletedEvent)
+		if !ok {
+			return errors.New("conversation: completed event has invalid payload")
+		}
+		if p.SessionID != s.sessionID {
+			return nil
+		}
+		if p.Message != nil {
+			if err := s.addMessage(*p.Message); err != nil {
 				return err
 			}
 		}
@@ -402,13 +435,22 @@ func (s *conversationState) apply(event api.Event) error {
 			}
 		}
 		s.permissions = nil
+
 	case api.EventError:
+		p, ok := event.Payload.(api.ErrorEvent)
+		if !ok {
+			return errors.New("conversation: error event has invalid payload")
+		}
+		if p.SessionID != s.sessionID {
+			return nil
+		}
 		s.status = StreamFailed
-		if event.Error == "" {
+		if p.Error == "" {
 			s.err = errors.New("conversation: server reported a failure without details")
 		} else {
-			s.err = fmt.Errorf("conversation: %s", event.Error)
+			s.err = fmt.Errorf("conversation: %s", p.Error)
 		}
+
 	default:
 		return fmt.Errorf("conversation: unsupported event %q", event.Type)
 	}

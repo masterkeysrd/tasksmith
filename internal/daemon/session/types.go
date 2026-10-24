@@ -1,12 +1,13 @@
 package session
 
 import (
-	"context"
 	"errors"
 	"time"
 
 	"github.com/masterkeysrd/loom/message"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/broker"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/std"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/timeline"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tools"
 )
 
@@ -59,9 +60,9 @@ type UpdateParams struct {
 type EventType string
 
 const (
-	// EventMessageAdded is published whenever a message is persisted to the
-	// session's UI message history.
-	EventMessageAdded EventType = "message_added"
+	// EventEntryAdded is published whenever an entry is persisted to the
+	// session timeline (e.g. messages, model/agent transitions, permission changes).
+	EventEntryAdded EventType = "entry_added"
 
 	// EventChunk is published for each incremental streaming chunk produced by
 	// the assistant during a conversational turn.
@@ -76,18 +77,42 @@ const (
 	EventPermissionRequested EventType = "permission_requested"
 )
 
-// Event represents a real-time session notification delivered via [Publisher].
-type Event struct {
-	Type        EventType                 `json:"type"`
-	SessionID   string                    `json:"session_id"`
-	Message     message.Message           `json:"message,omitempty"`
-	Chunk       *message.AssistantChunk   `json:"chunk,omitempty"`
-	Permissions []tools.PermissionRequest `json:"permissions,omitempty"`
+// Event is implemented by all real-time session notifications published by [Manager].
+type Event interface {
+	EventType() string
 }
 
-// Publisher broadcasts real-time session events to downstream subscribers or UI layers.
+type EntryAddedEvent struct {
+	SessionID string
+	Entry     timeline.Entry
+}
+
+func (EntryAddedEvent) EventType() string { return string(EventEntryAdded) }
+
+type ChunkEvent struct {
+	SessionID string
+	Chunk     message.AssistantChunk
+}
+
+func (ChunkEvent) EventType() string { return string(EventChunk) }
+
+type PermissionRequestedEvent struct {
+	SessionID   string
+	Permissions []tools.PermissionRequest
+}
+
+func (PermissionRequestedEvent) EventType() string { return string(EventPermissionRequested) }
+
+type CompletedEvent struct {
+	SessionID string
+	Message   *message.Assistant
+}
+
+func (CompletedEvent) EventType() string { return string(EventCompleted) }
+
+// Publisher broadcasts real-time session events to a topic.
 type Publisher interface {
-	Publish(ctx context.Context, event Event)
+	Publish(topic string, event broker.Event)
 }
 
 // JournalHeader is stored as Line 1 of each `<path_hash>.jsonl` file inside a

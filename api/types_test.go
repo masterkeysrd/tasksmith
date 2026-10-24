@@ -47,7 +47,7 @@ func TestMessageStructuredContentJSONRoundTrip(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			event := Event{
 				Type: EventEntryAdded,
-				Payload: EntryAddedPayload{
+				Payload: EntryAddedEvent{
 					SessionID: "s1",
 					Entry: TimelineEntry{
 						ID:   "result",
@@ -67,7 +67,7 @@ func TestMessageStructuredContentJSONRoundTrip(t *testing.T) {
 			if err := json.Unmarshal(data, &decoded); err != nil {
 				t.Fatal(err)
 			}
-			payload, ok := decoded.Payload.(EntryAddedPayload)
+			payload, ok := decoded.Payload.(EntryAddedEvent)
 			if !ok || payload.Entry.Message == nil || string(payload.Entry.Message.StructuredContent) != test.raw {
 				t.Fatalf("structured content roundtrip = %+v, want %q", decoded.Payload, test.raw)
 			}
@@ -145,7 +145,7 @@ func TestWireTypesJSONRoundTrip(t *testing.T) {
 	ev := Event{
 		Type:  EventChunk,
 		Topic: "sessions.sess-1.stream",
-		Payload: ChunkPayload{
+		Payload: ChunkEvent{
 			SessionID: "sess-1",
 			Chunk: Chunk{
 				ID: "chk-1",
@@ -171,7 +171,7 @@ func TestWireTypesJSONRoundTrip(t *testing.T) {
 	if decoded.Type != EventChunk || decoded.Topic != "sessions.sess-1.stream" {
 		t.Fatalf("unexpected decoded Event: %+v", decoded)
 	}
-	chkPayload, ok := decoded.Payload.(ChunkPayload)
+	chkPayload, ok := decoded.Payload.(ChunkEvent)
 	if !ok || len(chkPayload.Chunk.Content) != 3 {
 		t.Fatalf("unexpected chunk payload: %+v", decoded.Payload)
 	}
@@ -494,7 +494,7 @@ func TestEventPayloadsAndJSONRoundTrip(t *testing.T) {
 			ev: Event{
 				Type:  EventConnected,
 				Topic: TopicSessions,
-				Payload: ConnectedPayload{
+				Payload: ConnectedEvent{
 					SubscriberID: "sub-123",
 					Topics:       []string{TopicSessions, "sessions.s1.stream"},
 				},
@@ -506,7 +506,7 @@ func TestEventPayloadsAndJSONRoundTrip(t *testing.T) {
 			ev: Event{
 				Type:  EventSessionCreated,
 				Topic: TopicSessions,
-				Payload: SessionCreatedPayload{
+				Payload: SessionCreatedEvent{
 					Workspace: "/workspace",
 					Session: Session{
 						ID:        "s1",
@@ -526,7 +526,7 @@ func TestEventPayloadsAndJSONRoundTrip(t *testing.T) {
 			ev: Event{
 				Type:  EventSessionUpdated,
 				Topic: TopicSessions,
-				Payload: SessionUpdatedPayload{
+				Payload: SessionUpdatedEvent{
 					Workspace: "/workspace",
 					Session: Session{
 						ID:        "s1",
@@ -546,7 +546,7 @@ func TestEventPayloadsAndJSONRoundTrip(t *testing.T) {
 			ev: Event{
 				Type:  EventSessionDeleted,
 				Topic: TopicSessions,
-				Payload: SessionDeletedPayload{
+				Payload: SessionDeletedEvent{
 					Workspace: "/workspace",
 					SessionID: "s1",
 				},
@@ -558,7 +558,7 @@ func TestEventPayloadsAndJSONRoundTrip(t *testing.T) {
 			ev: Event{
 				Type:  EventEntryAdded,
 				Topic: SessionStreamTopic("s1"),
-				Payload: EntryAddedPayload{
+				Payload: EntryAddedEvent{
 					SessionID: "s1",
 					Entry: TimelineEntry{
 						ID:        "te-1",
@@ -580,7 +580,7 @@ func TestEventPayloadsAndJSONRoundTrip(t *testing.T) {
 			ev: Event{
 				Type:  EventChunk,
 				Topic: SessionStreamTopic("s1"),
-				Payload: ChunkPayload{
+				Payload: ChunkEvent{
 					SessionID: "s1",
 					Chunk: Chunk{
 						ID:      "chk-1",
@@ -596,7 +596,7 @@ func TestEventPayloadsAndJSONRoundTrip(t *testing.T) {
 			ev: Event{
 				Type:  EventPermissionRequested,
 				Topic: SessionStreamTopic("s1"),
-				Payload: PermissionRequestedPayload{
+				Payload: PermissionRequestedEvent{
 					SessionID: "s1",
 					Permissions: []PermissionRequest{
 						{
@@ -617,7 +617,7 @@ func TestEventPayloadsAndJSONRoundTrip(t *testing.T) {
 			ev: Event{
 				Type:  EventCompleted,
 				Topic: SessionStreamTopic("s1"),
-				Payload: CompletedPayload{
+				Payload: CompletedEvent{
 					SessionID: "s1",
 					Message: &Message{
 						ID:      "msg-done",
@@ -633,7 +633,7 @@ func TestEventPayloadsAndJSONRoundTrip(t *testing.T) {
 			ev: Event{
 				Type:  EventError,
 				Topic: SessionStreamTopic("s1"),
-				Payload: ErrorPayload{
+				Payload: ErrorEvent{
 					SessionID: "s1",
 					Error:     "context cancelled",
 				},

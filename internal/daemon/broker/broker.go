@@ -176,11 +176,10 @@ func (b *Broker) Len() int {
 	return len(b.subscribers)
 }
 
-// Publish delivers event to every subscriber subscribed to exactly topic and
-// returns how many accepted it. A subscriber whose buffer is full is closed
-// with [ErrOverflow] and removed, so a slow subscriber can never silently miss
-// part of a stream.
-func (b *Broker) Publish(topic string, event Event) int {
+// Publish delivers event to every subscriber subscribed to topic.
+// A subscriber whose buffer is full is closed with [ErrOverflow] and removed,
+// so a slow subscriber can never silently miss part of a stream.
+func (b *Broker) Publish(topic string, event Event) {
 	b.mu.RLock()
 	targets := make([]*Subscriber, 0, len(b.topics[topic]))
 	for sub := range b.topics[topic] {
@@ -189,16 +188,13 @@ func (b *Broker) Publish(topic string, event Event) int {
 	b.mu.RUnlock()
 
 	message := Message{Topic: topic, Event: event}
-	delivered := 0
 	for _, sub := range targets {
 		switch sub.deliver(message) {
 		case deliveredOK:
-			delivered++
 		case deliveredOverflow:
 			b.remove(sub, ErrOverflow)
 		}
 	}
-	return delivered
 }
 
 func (b *Broker) subscribe(sub *Subscriber, topics []string) ([]string, error) {

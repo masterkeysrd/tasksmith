@@ -19,7 +19,7 @@
 //     used for isolated filesystem, command, and network execution across the
 //     session's standard and custom tools.
 //   - [Config.Publisher]: Active [Publisher] used to broadcast real-time
-//     [EventMessageAdded], [EventChunk], [EventPermissionRequested], and
+//     [EventEntryAdded], [EventChunk], [EventPermissionRequested], and
 //     [EventCompleted] notifications.
 //   - [Config.Logger]: Structured [github.com/masterkeysrd/tasksmith/internal/core/log.Interface]
 //     scoped to the "session" component.
@@ -39,8 +39,8 @@
 //  2. The `checkpoints` table managed by [github.com/masterkeysrd/tasksmith/internal/daemon/harness.Harness]
 //     stores the Loom workflow graph execution state sent to the LLM.
 //
-// Appending a message internally (for example, a UI-only system notice) records
-// the message in the session timeline and publishes an [EventMessageAdded] event without
+// Appending an entry internally (for example, a UI-only system notice or mode change) records
+// the entry in the session timeline and publishes an [EventEntryAdded] event without
 // mutating or polluting the underlying harness graph checkpoint for that session.
 //
 // # All-or-Nothing Permission Resolution

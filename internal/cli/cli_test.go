@@ -114,7 +114,7 @@ func (p *fakeGatewayPool) Close() error {
 	return nil
 }
 
-func setupCLITestDaemon(t *testing.T, prov *fakeProvider) (*daemon.Server, string, string) {
+func setupCLITestDaemon(t *testing.T, prov *fakeProvider) (*daemon.Daemon, string, string) {
 	t.Helper()
 
 	xdgRoot := t.TempDir()
@@ -147,7 +147,7 @@ func setupCLITestDaemon(t *testing.T, prov *fakeProvider) (*daemon.Server, strin
 		t.Fatalf("srv.Start: %v", err)
 	}
 	t.Cleanup(func() {
-		_ = srv.Close()
+		_ = srv.Close(context.Background())
 	})
 
 	wsDir := filepath.Join(shortTmp, "ws")

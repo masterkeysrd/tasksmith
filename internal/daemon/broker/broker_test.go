@@ -49,9 +49,7 @@ func TestPublishDeliversOnlyToExactTopic(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if n := b.Publish("sessions.updates", testEvent{"created"}); n != 1 {
-		t.Fatalf("Publish delivered to %d subscribers, want 1", n)
-	}
+	b.Publish("sessions.updates", testEvent{"created"})
 	got := receive(t, sub)
 	if got.Topic != "sessions.updates" || got.Event.EventType() != "created" {
 		t.Errorf("message = %+v", got)
@@ -59,9 +57,7 @@ func TestPublishDeliversOnlyToExactTopic(t *testing.T) {
 
 	// Neither a longer, a shorter nor a different topic matches.
 	for _, topic := range []string{"sessions.updates.extra", "sessions", "sessions.other", "session.updates"} {
-		if n := b.Publish(topic, testEvent{"x"}); n != 0 {
-			t.Errorf("Publish(%q) delivered to %d subscribers, want 0", topic, n)
-		}
+		b.Publish(topic, testEvent{"x"})
 	}
 	assertNothing(t, sub)
 }
@@ -197,10 +193,7 @@ func TestSlowSubscriberIsClosedNotSilentlyDropped(t *testing.T) {
 		t.Fatalf("the subscriber closed with a full buffer but no overflow: %v", slow.Err())
 	}
 
-	delivered := b.Publish("stream", testEvent{"one too many"})
-	if delivered != 1 {
-		t.Errorf("delivered to %d subscribers, want only the healthy one", delivered)
-	}
+	b.Publish("stream", testEvent{"one too many"})
 	select {
 	case <-slow.Done():
 	default:
@@ -219,8 +212,9 @@ func TestSlowSubscriberIsClosedNotSilentlyDropped(t *testing.T) {
 		t.Errorf("Len = %d, want 1", b.Len())
 	}
 	// Later publishes no longer reach it.
-	if n := b.Publish("stream", testEvent{"after"}); n != 1 {
-		t.Errorf("delivered to %d subscribers after the overflow, want 1", n)
+	b.Publish("stream", testEvent{"after"})
+	if receive(t, healthy).Event.EventType() != "after" {
+		t.Error("healthy subscriber missed message after slow subscriber overflowed")
 	}
 }
 
@@ -243,9 +237,8 @@ func TestCloseReleasesSubscriptionsAndIsIdempotent(t *testing.T) {
 	if !errors.Is(sub.Err(), ErrClosed) {
 		t.Errorf("Err = %v, want ErrClosed", sub.Err())
 	}
-	if n := b.Publish("a.b", testEvent{"x"}); n != 0 {
-		t.Errorf("a closed subscriber still received %d messages", n)
-	}
+	b.Publish("a.b", testEvent{"x"})
+	assertNothing(t, sub)
 	if _, err := sub.Subscribe("c.d"); !errors.Is(err, ErrClosed) {
 		t.Errorf("Subscribe after Close = %v, want ErrClosed", err)
 	}

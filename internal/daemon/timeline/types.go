@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/masterkeysrd/loom/message"
@@ -75,6 +76,36 @@ type Entry struct {
 	Agent      *AgentChange      `json:"agent,omitempty"`
 	Mode       *ModeChange       `json:"mode,omitempty"`
 	Permission *PermissionRecord `json:"permission,omitempty"`
+}
+
+// Clone returns a deep copy of the timeline entry.
+func (e Entry) Clone() Entry {
+	cp := e
+	if e.Message != nil {
+		cp.Message = message.CloneMessage(e.Message)
+	}
+	if e.Model != nil {
+		m := *e.Model
+		cp.Model = &m
+	}
+	if e.Effort != nil {
+		eff := *e.Effort
+		cp.Effort = &eff
+	}
+	if e.Agent != nil {
+		ag := *e.Agent
+		cp.Agent = &ag
+	}
+	if e.Mode != nil {
+		md := *e.Mode
+		cp.Mode = &md
+	}
+	if e.Permission != nil {
+		perm := *e.Permission
+		perm.Request.GrantPatterns = slices.Clone(e.Permission.Request.GrantPatterns)
+		cp.Permission = &perm
+	}
+	return cp
 }
 
 // MarshalJSON implements json.Marshaler for Entry to ensure polymorphic Message payloads

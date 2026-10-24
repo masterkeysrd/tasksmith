@@ -1,80 +1,76 @@
 // Package server implements the HTTP server layer for the TaskSmith Brain
-// Daemon, providing a pluggable router, Server-Sent Events (SSE) streaming
-// endpoint, and REST routes that serve the daemon to its clients.
+// Daemon, providing pluggable modular routers, Server-Sent Events (SSE) streaming,
+// and REST routes that serve the daemon to its clients.
 //
 // # Architecture
 //
 // The server package is the network-facing boundary of the daemon. It decouples
 // HTTP transport and routing from the daemon's internal runtime (workspace
-// management, session lifecycle, and gateway orchestration) via the [Backend]
-// interface:
+// management, session lifecycle, and gateway orchestration) via composed
+// backend interfaces:
 //
-//   - Backend Abstraction: All business-logic access goes through the
-//     [Backend] interface (currently exposing [Backend.ListSessions]),
-//     allowing the server to be tested with fakes and evolved independently of
-//     the daemon internals.
+//   - Backend Abstraction: Business logic access is factored into four cohesive
+//     interfaces ([SystemBackend], [EventBackend], [WorkspaceBackend], and
+//     [SessionBackend]), composed into [Backend]. This allows routers to be
+//     tested independently with mock implementations.
 //
-//   - Router and Route Registration: [Router] is a minimal path-and-method
-//     mux built on [http.ServeMux]. Routes are declared with helpers
-//     ([NewRoute], [GetRoute], [PostRoute]) and registered via
-//     [Router.buildRoutes]; the resulting [http.Handler] is produced by
-//     [Router.handler], which enforces HTTP method matching and delegates to
-//     the registered [HandlerFunc].
+//   - Modular Routers: Route declarations are grouped logically into four router
+//     constructors ([NewSystemRouter], [NewEventRouter], [NewWorkspaceRouter],
+//     and [NewSessionRouter]). Each produces a [Router] containing declared
+//     [Route] definitions.
 //
-//   - SSE Event Stream: The `GET /v1/events` endpoint (registered as a route
-//     in the daemon's `routes()` builder) maintains a long-lived
-//     `text/event-stream` connection. Subscribers filter by workspace and
-//     optional session ID; server-sent events carry
-//     [github.com/masterkeysrd/tasksmith/api.Event] payloads
-//     ([api.EventMessageAdded], [api.EventChunk],
-//     [api.EventPermissionRequested], [api.EventCompleted],
-//     [api.EventError]). Periodic pings keep intermediaries from stalling the
-//     stream.
+//   - Go 1.22+ Multiplexing: [Server.CreateMux] combines routers onto an
+//     [http.ServeMux] using Go 1.22+ method-and-path patterns (e.g.
+//     `"GET /v1/sessions/{id}"`, `"GET /v1/models/{id...}"`), supporting multiple
+//     HTTP methods on shared path patterns natively, and attaching a fallback
+//     handler returning [api.ErrorResponse] with code `"route_not_found"` and
+//     HTTP 404 StatusNotFound.
 //
-//   - Server Lifecycle: [Server] wraps a [Router] and owns its [http.Server].
-//     [NewServer] constructs a server bound to a [Backend]; [Server.Start]
-//     launches the HTTP listener. Graceful shutdown is coordinated by the
-//     parent daemon via its `Close` path.
+//   - SSE Event Stream: The `GET /v1/events` endpoint connects subscribers to
+//     the daemon's topic-based broker. Connections emit an initial `connected`
+//     frame carrying the subscriber ID and subscribed topics, stream JSON events
+//     ([api.EventEntryAdded], [api.EventChunk], [api.EventPermissionRequested],
+//     [api.EventCompleted], [api.EventError]), and emit periodic `: ping\n\n`
+//     keep-alives.
 //
 // # REST Routes
 //
-// The daemon's full route table (defined in the parent package) includes:
+// The daemon route table includes:
 //
-//   - `GET  /v1/health`                  – Liveness and open-workspace summary.
-//   - `POST /v1/shutdown`                – Graceful shutdown trigger.
-//   - `GET  /v1/events`                  – SSE stream of session events.
-//   - `GET  /v1/workspace`               – Workspace metadata.
-//   - `GET  /v1/agents`                  – List configured agents.
-//   - `GET  /v1/agents/{name}`           – Fetch a single agent.
-//   - `GET  /v1/models`                  – List available models.
-//   - `GET  /v1/models/{id}`             – Fetch a single model.
-//   - `POST /v1/sessions`                – Create or retrieve a session.
-//   - `GET  /v1/sessions`                – List sessions.
-//   - `GET  /v1/sessions/{id}`           – Fetch a session.
-//   - `PATCH /v1/sessions/{id}`          – Update a session.
-//   - `DELETE /v1/sessions/{id}`         – Delete a session.
-//   - `GET  /v1/sessions/{id}/messages`  – Message history.
-//   - `POST /v1/sessions/{id}/messages`  – Send a user message / start turn.
-//   - `POST /v1/sessions/{id}/cancel`    – Cancel an active turn.
-//   - `GET  /v1/sessions/{id}/permissions`     – Pending permission requests.
-//   - `POST /v1/sessions/{id}/permissions`     – Respond to a permission request.
-//   - `GET  /v1/sessions/{id}/mode`           – Current permission mode.
-//   - `PUT  /v1/sessions/{id}/mode`           – Set permission mode.
-//   - `GET  /v1/sessions/{id}/changes`        – File-change tracker state.
+//   - `GET  /v1/health`                      – Liveness and initialized workspace summary.
+//   - `POST /v1/shutdown`                    – Graceful shutdown trigger.
+//   - `GET  /v1/events`                      – SSE stream of broker events.
+//   - `POST /v1/events/subscribe`            – Add topics to an active SSE stream.
+//   - `POST /v1/events/unsubscribe`          – Remove topics from an active SSE stream.
+//   - `GET  /v1/workspace`                   – Workspace metadata.
+//   - `GET  /v1/agents`                      – List configured agents.
+//   - `GET  /v1/agents/{name}`               – Fetch a single agent.
+//   - `GET  /v1/models`                      – List available models.
+//   - `GET  /v1/models/{id...}`              – Fetch a single model.
+//   - `POST /v1/sessions`                    – Create or idempotently ensure a session.
+//   - `GET  /v1/sessions`                    – List sessions.
+//   - `GET  /v1/sessions/{id}`               – Fetch a session.
+//   - `PATCH /v1/sessions/{id}`              – Update session metadata.
+//   - `DELETE /v1/sessions/{id}`             – Delete a session.
+//   - `GET  /v1/sessions/{id}/timeline`      – Chronological session timeline events.
+//   - `POST /v1/sessions/{id}/send`          – Send a user message / start turn.
+//   - `POST /v1/sessions/{id}/cancel`        – Cancel an active turn.
+//   - `GET  /v1/sessions/{id}/permissions`   – Pending permission requests.
+//   - `POST /v1/sessions/{id}/permissions`   – Respond to a permission request.
+//   - `GET  /v1/sessions/{id}/mode`          – Current permission mode.
+//   - `PUT  /v1/sessions/{id}/mode`          – Set permission mode.
+//   - `GET  /v1/sessions/{id}/changes`       – File-change tracker state.
 //   - `GET  /v1/sessions/{id}/diff`          – Unified diff for a change entry.
 //   - `POST /v1/sessions/{id}/revert`        – Revert file changes.
 //
 // # Workspace Scoping
 //
-// Requests identify their target workspace either via the `X-CWD` header
-// ([api.HeaderCWD]) or the `workspace` query parameter. The server resolves
-// the raw path to a canonical root directory and caches the runtime per
-// workspace.
+// Requests identify their target workspace either via the `X-TaskSmith-CWD` header
+// ([api.HeaderCWD]) or the `workspace` query parameter.
 //
 // # Error Handling
 //
-// HTTP handlers return structured [github.com/masterkeysrd/tasksmith/api.ErrorResponse]
-// JSON bodies with a machine-readable `code` field
-// (`bad_request`, `not_found`, `conflict`, `internal_error`)
-// and a human-readable `message`.
+// Handlers return structured [github.com/masterkeysrd/tasksmith/api.ErrorResponse]
+// JSON bodies with standardized machine-readable codes (`bad_request`, `not_found`,
+// `conflict`, `internal_error`) and human-readable messages.
 package server

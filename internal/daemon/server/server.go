@@ -8,42 +8,35 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
 )
 
+// Server coordinates HTTP multiplexing and route registration.
 type Server struct {
 	log log.Interface
 }
 
-func NewServer(log log.Interface) *Server {
+// NewServer constructs a new [Server].
+func NewServer(logger log.Interface) *Server {
 	return &Server{
-		log: log,
+		log: logger,
 	}
 }
 
-func (s *Server) CreateMux(ctx context.Context, routers ...*Router) http.Handler {
-	s.log.Info("Registering routers")
+// CreateMux registers all routes across the provided routers on a Go 1.22+
+// http.ServeMux and attaches a fallback 404 handler for unmatched paths.
+func (s *Server) CreateMux(ctx context.Context, routers ...Router) http.Handler {
 	mux := http.NewServeMux()
+	s.log.Info("Registering routers")
 	for _, router := range routers {
-		for _, route := range router.routes {
-			if ctx.Err() != nil {
-				return mux
-			}
-
+		for _, route := range router.Routes() {
 			s.log.Info("Registering route", log.String("path", route.Path), log.String("method", route.Method))
-			mux.HandleFunc(route.Path, func(w http.ResponseWriter, req *http.Request) {
-				if req.Method != route.Method {
-					http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
-					return
-				}
-				route.Handler(w, req)
-			})
+			mux.HandleFunc(route.Method+" "+route.Path, route.Handler)
 		}
 	}
 
 	// Setup a default handler for unmatched routes
 	mux.HandleFunc("/", func(w http.ResponseWriter, req *http.Request) {
-		WriteJSON(w, http.StatusNotFound, &api.APIError{
-			Code:       "route_not_found",
-			StatusCode: http.StatusNotFound,
-			Message:    "Route not found",
+		WriteJSON(w, http.StatusNotFound, api.ErrorResponse{
+			Code:    "route_not_found",
+			Message: "Route not found",
 		})
 	})
 

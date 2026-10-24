@@ -14,6 +14,7 @@ import (
 	"sync"
 
 	"github.com/masterkeysrd/tasksmith/internal/core/env"
+	"github.com/masterkeysrd/tasksmith/internal/core/fsutils"
 	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
 	"github.com/masterkeysrd/warp"
 )
@@ -129,18 +130,13 @@ func Open(ctx context.Context, dir string, opts ...Option) (*Workspace, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if strings.TrimSpace(dir) == "" {
-		return nil, errors.New("workspace: directory path must not be empty")
-	}
-
-	absDir, err := filepath.Abs(dir)
+	absDir, err := fsutils.CleanPath(dir)
 	if err != nil {
+		if errors.Is(err, fsutils.ErrEmptyPath) {
+			return nil, errors.New("workspace: directory path must not be empty")
+		}
 		return nil, fmt.Errorf("workspace: resolve directory %q: %w", dir, err)
 	}
-	if eval, evalErr := filepath.EvalSymlinks(absDir); evalErr == nil {
-		absDir = eval
-	}
-	absDir = filepath.Clean(absDir)
 
 	var o openOptions
 	for _, fn := range opts {

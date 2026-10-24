@@ -33,6 +33,86 @@ func conversationTool(id string) api.Block {
 	}}
 }
 
+func testEntryAdded(sessionID string, msg api.Message) api.Event {
+	var topic string
+	if sessionID != "" {
+		topic = api.SessionStreamTopic(sessionID)
+	}
+	return api.Event{
+		Topic: topic,
+		Type:  api.EventEntryAdded,
+		Payload: api.EntryAddedEvent{
+			SessionID: sessionID,
+			Entry: api.TimelineEntry{
+				ID:        msg.ID,
+				SessionID: sessionID,
+				Kind:      api.TimelineKindMessage,
+				Message:   &msg,
+			},
+		},
+	}
+}
+
+func testChunk(sessionID string, chunk api.Chunk) api.Event {
+	var topic string
+	if sessionID != "" {
+		topic = api.SessionStreamTopic(sessionID)
+	}
+	return api.Event{
+		Topic: topic,
+		Type:  api.EventChunk,
+		Payload: api.ChunkEvent{
+			SessionID: sessionID,
+			Chunk:     chunk,
+		},
+	}
+}
+
+func testPermissions(sessionID string, perms ...api.PermissionRequest) api.Event {
+	var topic string
+	if sessionID != "" {
+		topic = api.SessionStreamTopic(sessionID)
+	}
+	return api.Event{
+		Topic: topic,
+		Type:  api.EventPermissionRequested,
+		Payload: api.PermissionRequestedEvent{
+			SessionID:   sessionID,
+			Permissions: perms,
+		},
+	}
+}
+
+func testCompleted(sessionID string, msg *api.Message) api.Event {
+	var topic string
+	if sessionID != "" {
+		topic = api.SessionStreamTopic(sessionID)
+	}
+	return api.Event{
+		Topic: topic,
+		Type:  api.EventCompleted,
+		Payload: api.CompletedEvent{
+			SessionID: sessionID,
+			Message:   msg,
+		},
+	}
+}
+
+func testError(sessionID string, err string) api.Event {
+	var topic string
+	if sessionID != "" {
+		topic = api.SessionStreamTopic(sessionID)
+	}
+	return api.Event{
+		Topic: topic,
+		Type:  api.EventError,
+		Payload: api.ErrorEvent{
+			SessionID: sessionID,
+			Error:     err,
+		},
+	}
+}
+
 func applyConversation(t *testing.T, state *conversationState, events ...api.Event) {
 	t.Helper()
 	for _, event := range events {
@@ -55,9 +135,9 @@ func TestConversationOrderedPartsAndParallelTools(t *testing.T) {
 	}}
 	permission := api.PermissionRequest{ID: "approval", ToolCallID: "a", Diff: "full diff", GrantPatterns: []string{"read:*"}}
 	applyConversation(t, &state,
-		api.Event{Type: api.EventMessageAdded, Message: &user},
-		api.Event{Type: api.EventMessageAdded, Message: &assistant},
-		api.Event{Type: api.EventPermissionRequested, Permissions: []api.PermissionRequest{permission}},
+		testEntryAdded("s1", user),
+		testEntryAdded("s1", assistant),
+		testPermissions("s1", permission),
 	)
 	before := state.view()
 	if len(before.History) != 1 || len(before.Stream.Messages) != 1 {
@@ -79,8 +159,8 @@ func TestConversationOrderedPartsAndParallelTools(t *testing.T) {
 	b.Content = append(b.Content, api.Block{Type: api.BlockText, Text: "\nsecond block"})
 	reply := conversationText("reply", api.RoleAssistant, "finished")
 	applyConversation(t, &state,
-		api.Event{Type: api.EventMessageAdded, Message: &b},
-		api.Event{Type: api.EventMessageAdded, Message: &reply},
+		testEntryAdded("s1", b),
+		testEntryAdded("s1", reply),
 	)
 	during := state.view()
 	if len(during.History) != 1 || len(during.Stream.Messages) != 2 {
@@ -92,8 +172,8 @@ func TestConversationOrderedPartsAndParallelTools(t *testing.T) {
 	a := conversationText("response-a", api.RoleTool, "permission denied, with details")
 	a.ToolCallID, a.IsError = "a", true
 	applyConversation(t, &state,
-		api.Event{Type: api.EventMessageAdded, Message: &a},
-		api.Event{Type: api.EventCompleted, Message: &reply},
+		testEntryAdded("s1", a),
+		testCompleted("s1", &reply),
 	)
 	after := state.view()
 	if len(after.History) != 3 || len(after.Stream.Messages) != 0 || len(after.Permissions) != 0 {
@@ -114,13 +194,13 @@ func TestConversationStructuredContentSnapshotIsolation(t *testing.T) {
 			state := conversationState{sessionID: "s1", draft: -1, status: StreamRunning}
 			if matched {
 				call := api.Message{ID: "call", Role: api.RoleAssistant, Content: []api.Block{conversationTool("a")}}
-				applyConversation(t, &state, api.Event{Type: api.EventMessageAdded, Message: &call})
+				applyConversation(t, &state, testEntryAdded("s1", call))
 			}
 			response := api.Message{
 				ID: "result", Role: api.RoleTool, ToolCallID: "a",
 				StructuredContent: json.RawMessage(output),
 			}
-			applyConversation(t, &state, api.Event{Type: api.EventMessageAdded, Message: &response})
+			applyConversation(t, &state, testEntryAdded("s1", response))
 			response.StructuredContent[0] = '['
 			view := state.view()
 			messages := append(view.History, view.Stream.Messages...)
@@ -140,16 +220,16 @@ func TestConversationStructuredContentSnapshotIsolation(t *testing.T) {
 
 func TestConversationDraftReconciliationAndIdentity(t *testing.T) {
 	state := conversationState{sessionID: "s1", draft: -1, status: StreamIdle}
-	applyConversation(t, &state, api.Event{Type: api.EventChunk, Chunk: &api.Chunk{
+	applyConversation(t, &state, testChunk("s1", api.Chunk{
 		ID: "provider-id", Content: []api.Block{{Type: api.BlockReasoning, Text: "think"}},
-	}})
+	}))
 	first := state.view().Stream.Messages[0]
-	applyConversation(t, &state, api.Event{Type: api.EventChunk, Chunk: &api.Chunk{
+	applyConversation(t, &state, testChunk("s1", api.Chunk{
 		ID: "provider-id", Content: []api.Block{
 			{Type: api.BlockReasoning, Text: " more"},
 			{Type: api.BlockText, Text: "answer"},
 		}, Done: true,
-	}})
+	}))
 	draft := state.view().Stream.Messages[0]
 	if draft.ID != first.ID || draft.Parts[0].ID != first.Parts[0].ID ||
 		draft.Parts[0].Thought.Text != "think more" || first.Parts[0].Thought.Text != "think" ||
@@ -161,9 +241,9 @@ func TestConversationDraftReconciliationAndIdentity(t *testing.T) {
 		{Type: api.BlockText, Text: "answer, finalized"},
 	}}
 	applyConversation(t, &state,
-		api.Event{Type: api.EventMessageAdded, Message: &final},
-		api.Event{Type: api.EventMessageAdded, Message: &final},
-		api.Event{Type: api.EventCompleted, Message: &final},
+		testEntryAdded("s1", final),
+		testEntryAdded("s1", final),
+		testCompleted("s1", &final),
 	)
 	view := state.view()
 	if len(view.History) != 1 || len(view.Stream.Messages) != 0 {
@@ -178,11 +258,11 @@ func TestConversationDraftReconciliationAndIdentity(t *testing.T) {
 
 func TestConversationPartialToolArguments(t *testing.T) {
 	state := conversationState{sessionID: "s1", draft: -1, status: StreamIdle}
-	applyConversation(t, &state, api.Event{Type: api.EventChunk, Chunk: &api.Chunk{Content: []api.Block{
+	applyConversation(t, &state, testChunk("s1", api.Chunk{Content: []api.Block{
 		{Type: api.BlockToolCall, ToolCall: &api.ToolCall{Name: "read_file"}},
-	}}})
+	}}))
 	before := state.view().Stream.Messages[0].Parts[0]
-	applyConversation(t, &state, api.Event{Type: api.EventChunk, Chunk: &api.Chunk{Content: []api.Block{conversationTool("a")}}})
+	applyConversation(t, &state, testChunk("s1", api.Chunk{Content: []api.Block{conversationTool("a")}}))
 	after := state.view().Stream.Messages[0].Parts[0]
 	if before.ID != after.ID || before.Tool.ID != "" || after.Tool.ID != "a" ||
 		after.Tool.Call.Args["path"] != "a.go" || before.Tool.Call.Args != nil || after.Tool.Status != ToolReceiving {
@@ -191,8 +271,8 @@ func TestConversationPartialToolArguments(t *testing.T) {
 	update := conversationTool("a")
 	update.ToolCall.Args["path"] = "updated.go"
 	applyConversation(t, &state,
-		api.Event{Type: api.EventChunk, Chunk: &api.Chunk{Content: []api.Block{conversationTool("b")}}},
-		api.Event{Type: api.EventChunk, Chunk: &api.Chunk{Content: []api.Block{update}}},
+		testChunk("s1", api.Chunk{Content: []api.Block{conversationTool("b")}}),
+		testChunk("s1", api.Chunk{Content: []api.Block{update}}),
 	)
 	parts := state.view().Stream.Messages[0].Parts
 	if len(parts) != 2 || parts[0].ID != before.ID || parts[0].Tool.Call.Args["path"] != "updated.go" ||
@@ -206,9 +286,9 @@ func TestConversationNotificationDuringDraftKeepsPersistedOrder(t *testing.T) {
 	notification := conversationText("notice", api.RoleSystem, "notice")
 	final := conversationText("final", api.RoleAssistant, "answer")
 	applyConversation(t, &state,
-		api.Event{Type: api.EventChunk, Chunk: &api.Chunk{Content: final.Content}},
-		api.Event{Type: api.EventMessageAdded, Message: &notification},
-		api.Event{Type: api.EventMessageAdded, Message: &final},
+		testChunk("s1", api.Chunk{Content: final.Content}),
+		testEntryAdded("s1", notification),
+		testEntryAdded("s1", final),
 	)
 	view := state.view()
 	if len(view.History) != 2 || view.History[0].SourceID != "notice" || view.History[1].SourceID != "final" {
@@ -219,13 +299,13 @@ func TestConversationNotificationDuringDraftKeepsPersistedOrder(t *testing.T) {
 func TestConversationKeepsUnmatchedData(t *testing.T) {
 	state := conversationState{sessionID: "s1", draft: -1, status: StreamRunning}
 	request := api.PermissionRequest{ID: "p1", ToolCallID: "later"}
-	applyConversation(t, &state, api.Event{Type: api.EventPermissionRequested, Permissions: []api.PermissionRequest{request}})
+	applyConversation(t, &state, testPermissions("s1", request))
 	if len(state.view().Permissions) != 1 {
 		t.Fatal("unmatched permission was dropped")
 	}
 	response := conversationText("result", api.RoleTool, "orphan output")
 	response.ToolCallID = "later"
-	applyConversation(t, &state, api.Event{Type: api.EventMessageAdded, Message: &response})
+	applyConversation(t, &state, testEntryAdded("s1", response))
 	view := state.view()
 	if len(view.History) != 0 || len(view.Stream.Messages) != 1 ||
 		view.Stream.Messages[0].Parts[0].Tool.Call != nil ||
@@ -233,7 +313,7 @@ func TestConversationKeepsUnmatchedData(t *testing.T) {
 		t.Fatalf("unmatched response = %+v", view)
 	}
 	call := api.Message{ID: "call", Role: api.RoleAssistant, Content: []api.Block{conversationTool("later")}}
-	applyConversation(t, &state, api.Event{Type: api.EventMessageAdded, Message: &call})
+	applyConversation(t, &state, testEntryAdded("s1", call))
 	view = state.view()
 	if len(view.History) != 1 || len(view.Stream.Messages) != 0 || view.History[0].Parts[0].Tool.Response.ID != "result" {
 		t.Fatalf("late call did not reconcile: %+v", view)
@@ -252,11 +332,11 @@ func TestConversationReplayDoesNotReopenResolvedPermissions(t *testing.T) {
 	}
 	before := state.view()
 	applyConversation(t, &state,
-		api.Event{Type: api.EventChunk, Chunk: &api.Chunk{ID: "provider", Content: call.Content}},
-		api.Event{Type: api.EventMessageAdded, Message: &call},
-		api.Event{Type: api.EventPermissionRequested, Permissions: []api.PermissionRequest{{ID: "p", ToolCallID: "tool"}}},
-		api.Event{Type: api.EventMessageAdded, Message: &result},
-		api.Event{Type: api.EventCompleted},
+		testChunk("s1", api.Chunk{ID: "provider", Content: call.Content}),
+		testEntryAdded("s1", call),
+		testPermissions("s1", api.PermissionRequest{ID: "p", ToolCallID: "tool"}),
+		testEntryAdded("s1", result),
+		testCompleted("s1", nil),
 	)
 	after := state.view()
 	if !reflect.DeepEqual(before.History, after.History) || len(after.Stream.Messages) != 0 || len(after.Permissions) != 0 {
@@ -267,11 +347,11 @@ func TestConversationReplayDoesNotReopenResolvedPermissions(t *testing.T) {
 func TestConversationFailureRetainsDraftAndPermissions(t *testing.T) {
 	state := conversationState{sessionID: "s1", draft: -1, status: StreamIdle}
 	applyConversation(t, &state,
-		api.Event{Type: api.EventChunk, Chunk: &api.Chunk{Content: []api.Block{
+		testChunk("s1", api.Chunk{Content: []api.Block{
 			{Type: api.BlockText, Text: "partial"}, conversationTool("a"),
-		}}},
-		api.Event{Type: api.EventPermissionRequested, Permissions: []api.PermissionRequest{{ID: "p", ToolCallID: "a"}}},
-		api.Event{Type: api.EventError, Error: "cancelled"},
+		}}),
+		testPermissions("s1", api.PermissionRequest{ID: "p", ToolCallID: "a"}),
+		testError("s1", "cancelled"),
 	)
 	view := state.view()
 	if view.Error == nil || view.Stream.Status != StreamFailed || view.Stream.Messages[0].Streaming ||
@@ -289,20 +369,20 @@ func TestConversationRejectsMalformedData(t *testing.T) {
 		prepare []api.Event
 		event   api.Event
 	}{
-		{name: "missing message", event: api.Event{Type: api.EventMessageAdded}},
+		{name: "missing message", event: api.Event{Type: api.EventEntryAdded, Payload: api.EntryAddedEvent{Entry: api.TimelineEntry{Kind: api.TimelineKindMessage}}}},
 		{name: "missing chunk", event: api.Event{Type: api.EventChunk}},
 		{name: "unknown event", event: api.Event{Type: "future"}},
-		{name: "unknown block", event: api.Event{Type: api.EventChunk, Chunk: &api.Chunk{Content: []api.Block{{Type: "image"}}}}},
-		{name: "nil call", event: api.Event{Type: api.EventChunk, Chunk: &api.Chunk{Content: []api.Block{{Type: api.BlockToolCall}}}}},
-		{name: "missing ID", event: api.Event{Type: api.EventMessageAdded, Message: &api.Message{Role: api.RoleUser}}},
-		{name: "unlinked response", event: api.Event{Type: api.EventMessageAdded, Message: &api.Message{ID: "result", Role: api.RoleTool}}},
-		{name: "invalid permission", event: api.Event{Type: api.EventPermissionRequested, Permissions: []api.PermissionRequest{{ID: "p"}}}},
-		{name: "incomplete draft", prepare: []api.Event{{Type: api.EventChunk, Chunk: &api.Chunk{}}}, event: api.Event{Type: api.EventCompleted}},
-		{name: "missing response", prepare: []api.Event{{Type: api.EventMessageAdded, Message: &call}}, event: api.Event{Type: api.EventCompleted}},
-		{name: "conflicting ID", prepare: []api.Event{{Type: api.EventMessageAdded, Message: &call}},
-			event: api.Event{Type: api.EventMessageAdded, Message: &api.Message{ID: "call", Role: api.RoleAssistant}}},
-		{name: "reused tool ID", prepare: []api.Event{{Type: api.EventMessageAdded, Message: &call}},
-			event: api.Event{Type: api.EventMessageAdded, Message: &api.Message{ID: "other", Role: api.RoleAssistant, Content: call.Content}}},
+		{name: "unknown block", event: testChunk("", api.Chunk{Content: []api.Block{{Type: "image"}}})},
+		{name: "nil call", event: testChunk("", api.Chunk{Content: []api.Block{{Type: api.BlockToolCall}}})},
+		{name: "missing ID", event: testEntryAdded("", api.Message{Role: api.RoleUser})},
+		{name: "unlinked response", event: testEntryAdded("", api.Message{ID: "result", Role: api.RoleTool})},
+		{name: "invalid permission", event: testPermissions("", api.PermissionRequest{ID: "p"})},
+		{name: "incomplete draft", prepare: []api.Event{testChunk("", api.Chunk{})}, event: testCompleted("", nil)},
+		{name: "missing response", prepare: []api.Event{testEntryAdded("", call)}, event: testCompleted("", nil)},
+		{name: "conflicting ID", prepare: []api.Event{testEntryAdded("", call)},
+			event: testEntryAdded("", api.Message{ID: "call", Role: api.RoleAssistant})},
+		{name: "reused tool ID", prepare: []api.Event{testEntryAdded("", call)},
+			event: testEntryAdded("", api.Message{ID: "other", Role: api.RoleAssistant, Content: call.Content})},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -347,9 +427,6 @@ func (s *conversationTestStream) send(t *testing.T, events ...api.Event) {
 	t.Helper()
 	var frame bytes.Buffer
 	for _, event := range events {
-		if event.SessionID == "" {
-			event.SessionID = "s1"
-		}
 		frame.WriteString("data: ")
 		if err := json.NewEncoder(&frame).Encode(event); err != nil {
 			t.Fatal(err)
@@ -389,7 +466,7 @@ func newConversationTestServer() *conversationTestServer {
 }
 
 func (s *conversationTestServer) roundTrip(r *http.Request) (*http.Response, error) {
-	if strings.HasSuffix(r.URL.Path, "/messages") && s.onHistory != nil {
+	if (strings.HasSuffix(r.URL.Path, "/messages") || strings.HasSuffix(r.URL.Path, "/timeline")) && s.onHistory != nil {
 		if err := s.onHistory(r); err != nil {
 			return nil, err
 		}
@@ -402,10 +479,42 @@ func (s *conversationTestServer) roundTrip(r *http.Request) (*http.Response, err
 	switch {
 	case r.URL.Path == "/v1/events":
 		stream := &conversationTestStream{ctx: r.Context(), frames: make(chan []byte, 10), closed: make(chan struct{})}
+		var initialFrame bytes.Buffer
+		connEv := api.Event{
+			Type: api.EventConnected,
+			Payload: api.ConnectedEvent{
+				SubscriberID: "test-sub",
+				Topics:       r.URL.Query()["topic"],
+			},
+		}
+		initialFrame.WriteString("data: ")
+		_ = json.NewEncoder(&initialFrame).Encode(connEv)
+		initialFrame.WriteByte('\n')
+		stream.frames <- initialFrame.Bytes()
+
 		s.connections <- stream
-		return &http.Response{StatusCode: http.StatusOK, Body: stream, Header: http.Header{"Content-Type": {"text/event-stream"}}, Request: r}, nil
+		return &http.Response{StatusCode: http.StatusOK, Body: stream, Header: http.Header{
+			"Content-Type":         {"text/event-stream"},
+			api.HeaderSubscriberID: {"test-sub"},
+		}, Request: r}, nil
+	case r.URL.Path == "/v1/events/subscribe" || r.URL.Path == "/v1/events/unsubscribe":
+		var req api.SubscriptionRequest
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		return response(r, http.StatusOK, api.SubscriptionResponse{Topics: req.Topics}), nil
 	case strings.HasSuffix(r.URL.Path, "/messages"):
 		return response(r, http.StatusOK, s.history), nil
+	case strings.HasSuffix(r.URL.Path, "/timeline"):
+		entries := make([]api.TimelineEntry, len(s.history))
+		for i, msg := range s.history {
+			m := msg
+			entries[i] = api.TimelineEntry{
+				ID:        msg.ID,
+				SessionID: "s1",
+				Kind:      api.TimelineKindMessage,
+				Message:   &m,
+			}
+		}
+		return response(r, http.StatusOK, entries), nil
 	case strings.HasSuffix(r.URL.Path, "/permissions"):
 		return response(r, http.StatusOK, s.permissions), nil
 	default:
@@ -431,9 +540,9 @@ func TestUseConversationHydratesAfterConnectingAndFoldsEveryEvent(t *testing.T) 
 	for i := range 100 {
 		delta := fmt.Sprintf("%d ", i)
 		text.WriteString(delta)
-		events = append(events, api.Event{Type: api.EventChunk, Chunk: &api.Chunk{
+		events = append(events, testChunk("s1", api.Chunk{
 			ID: "provider", Content: []api.Block{{Type: api.BlockText, Text: delta}},
-		}})
+		}))
 	}
 	stream.send(t, events...)
 	draft := awaitHooks(t, load, func(c *Conversation) bool {
@@ -442,8 +551,8 @@ func TestUseConversationHydratesAfterConnectingAndFoldsEveryEvent(t *testing.T) 
 	id := draft.Stream.Messages[0].ID
 	final := conversationText("persisted", api.RoleAssistant, text.String())
 	stream.send(t,
-		api.Event{Type: api.EventMessageAdded, Message: &final},
-		api.Event{Type: api.EventCompleted, Message: &final},
+		testEntryAdded("s1", final),
+		testCompleted("s1", &final),
 	)
 	result := awaitHooks(t, load, func(c *Conversation) bool { return c.Stream.Status == StreamCompleted })
 	if result.Error != nil || len(result.History) != 2 || result.History[1].ID != id ||
@@ -488,10 +597,10 @@ func TestUseConversationReconcilesEventsBufferedDuringHydration(t *testing.T) {
 			user := conversationText("new-user", api.RoleUser, "new")
 			reply := conversationText("new-assistant", api.RoleAssistant, "new response")
 			stream.send(t,
-				api.Event{Type: api.EventMessageAdded, Message: &user},
-				api.Event{Type: api.EventChunk, Chunk: &api.Chunk{ID: "provider", Content: reply.Content}},
-				api.Event{Type: api.EventMessageAdded, Message: &reply},
-				api.Event{Type: api.EventCompleted, Message: &reply},
+				testEntryAdded("s1", user),
+				testChunk("s1", api.Chunk{ID: "provider", Content: reply.Content}),
+				testEntryAdded("s1", reply),
+				testCompleted("s1", &reply),
 			)
 			if included {
 				server.mu.Lock()
@@ -523,7 +632,7 @@ func TestUseConversationHydratesPendingToolsAndPermissions(t *testing.T) {
 	stream := awaitConversationConnection(t, server.connections)
 	output := conversationText("response", api.RoleTool, "full output")
 	output.ToolCallID = "a"
-	stream.send(t, api.Event{Type: api.EventMessageAdded, Message: &output})
+	stream.send(t, testEntryAdded("s1", output))
 	result = awaitHooks(t, load, func(c *Conversation) bool { return len(c.History) == 1 })
 	if len(result.Permissions) != 0 || result.History[0].Parts[0].Tool.Status != ToolSucceeded || result.Stream.Status != StreamRunning {
 		t.Fatalf("resolved conversation = %+v", result)
@@ -550,14 +659,14 @@ func TestUseConversationRefetchRetainsDataWhileLoadingAndOnFailure(t *testing.T)
 	inst, load, _ := mountHooks(t, c, func() Conversation { return UseConversation("s1") })
 	stream := awaitConversationConnection(t, server.connections)
 	stream.send(t,
-		api.Event{Type: api.EventChunk, Chunk: &api.Chunk{Content: []api.Block{
+		testChunk("s1", api.Chunk{Content: []api.Block{
 			{Type: api.BlockText, Text: "partial"}, conversationTool("a"),
-		}}},
-		api.Event{Type: api.EventPermissionRequested, Permissions: []api.PermissionRequest{{ID: "p", ToolCallID: "a"}}},
+		}}),
+		testPermissions("s1", api.PermissionRequest{ID: "p", ToolCallID: "a"}),
 	)
 	before := awaitHooks(t, load, func(c *Conversation) bool { return len(c.Permissions) == 1 })
 	server.mu.Lock()
-	server.failPath = "/v1/sessions/s1/messages"
+	server.failPath = "/v1/sessions/s1/timeline"
 	server.mu.Unlock()
 	block.Store(true)
 	inst.Engine().PostMacro(func() { load().Refetch() })
@@ -605,7 +714,7 @@ func TestUseConversationUnmountCancelsHydration(t *testing.T) {
 }
 
 func TestUseConversationFailuresAndRefetch(t *testing.T) {
-	for _, path := range []string{"/v1/events", "/v1/sessions/s1/messages", "/v1/sessions/s1/permissions", "/v1/sessions/s1"} {
+	for _, path := range []string{"/v1/events", "/v1/sessions/s1/timeline", "/v1/sessions/s1/permissions", "/v1/sessions/s1"} {
 		t.Run(path, func(t *testing.T) {
 			server := newConversationTestServer()
 			server.failPath = path
@@ -639,7 +748,7 @@ func TestUseConversationDisconnectPreservesPartialData(t *testing.T) {
 	c := hookClient(t, "/daemon.sock", "/workspace", server.roundTrip)
 	_, load, _ := mountHooks(t, c, func() Conversation { return UseConversation("s1") })
 	stream := awaitConversationConnection(t, server.connections)
-	stream.send(t, api.Event{Type: api.EventChunk, Chunk: &api.Chunk{Content: []api.Block{{Type: api.BlockText, Text: "partial"}}}})
+	stream.send(t, testChunk("s1", api.Chunk{Content: []api.Block{{Type: api.BlockText, Text: "partial"}}}))
 	awaitHooks(t, load, func(c *Conversation) bool { return len(c.Stream.Messages) == 1 })
 	_ = stream.Close()
 	result := awaitHooks(t, load, func(c *Conversation) bool { return c.Error != nil })
@@ -679,9 +788,9 @@ func TestUseConversationSessionSwitchDisablesAndCancels(t *testing.T) {
 	inst.Engine().PostMacro(func() { load().selectSession("s2") })
 	current := awaitConversationConnection(t, server.connections)
 	awaitHooks(t, load, func(s *snapshot) bool { return len(s.History) == 1 && s.History[0].ID == "new" })
-	old.send(t, api.Event{Type: api.EventError, SessionID: "s1", Error: "late old error"})
-	current.send(t, api.Event{Type: api.EventChunk, SessionID: "s1", Chunk: &api.Chunk{Content: []api.Block{{Type: api.BlockText, Text: "wrong session"}}}},
-		api.Event{Type: api.EventCompleted, SessionID: "s2"})
+	old.send(t, testError("s1", "late old error"))
+	current.send(t, testChunk("s1", api.Chunk{Content: []api.Block{{Type: api.BlockText, Text: "wrong session"}}}),
+		testCompleted("s2", nil))
 	result := awaitHooks(t, load, func(s *snapshot) bool { return s.Stream.Status == StreamCompleted })
 	if result.Error != nil || len(result.Stream.Messages) != 0 || result.History[0].ID != "new" {
 		t.Fatalf("old session leaked: %+v", result)

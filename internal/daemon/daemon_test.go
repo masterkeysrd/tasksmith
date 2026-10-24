@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net"
 	"net/http"
@@ -23,6 +24,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/gateway"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/timeline"
 )
 
 type fakeProvider struct {
@@ -138,7 +140,7 @@ func shortTempDir(t *testing.T) string {
 	return dir
 }
 
-func setupDaemonTest(t *testing.T, prov *fakeProvider) (*Server, *client.Client, string) {
+func setupDaemonTest(t *testing.T, prov *fakeProvider) (*Daemon, *client.Client, string) {
 	t.Helper()
 
 	xdgRoot := t.TempDir()
@@ -165,7 +167,7 @@ func setupDaemonTest(t *testing.T, prov *fakeProvider) (*Server, *client.Client,
 		t.Fatalf("srv.Start: %v", err)
 	}
 	t.Cleanup(func() {
-		_ = srv.Close()
+		_ = srv.Close(context.Background())
 	})
 
 	wsDir := shortTempDir(t)
@@ -275,7 +277,7 @@ func TestLockfileSingleInstanceProtection(t *testing.T) {
 		t.Fatalf("srv1.Start: %v", err)
 	}
 	defer func() {
-		_ = srv1.Close()
+		_ = srv1.Close(context.Background())
 	}()
 
 	srv2, err := New(Config{
@@ -293,13 +295,13 @@ func TestLockfileSingleInstanceProtection(t *testing.T) {
 	}
 
 	// After closing srv1, srv2 can acquire the lock and start cleanly.
-	if err := srv1.Close(); err != nil {
+	if err := srv1.Close(context.Background()); err != nil {
 		t.Fatalf("srv1.Close: %v", err)
 	}
 	if err := srv2.Start(context.Background()); err != nil {
 		t.Fatalf("srv2.Start after srv1 closed: %v", err)
 	}
-	_ = srv2.Close()
+	_ = srv2.Close(context.Background())
 }
 
 func TestHealthAndSessionCRUD(t *testing.T) {
@@ -423,13 +425,9 @@ func TestSSESubscribeAndStreamingTurn(t *testing.T) {
 	eventsCh := make(chan api.Event, 32)
 	subReady := make(chan struct{})
 	go func() {
-		first := true
-		for ev, err := range cli.Subscribe(subCtx, sess.ID) {
+		for ev, err := range cli.EventsWithReady(subCtx, "", func(string) { close(subReady) }, api.SessionStreamTopic(sess.ID)) {
 			if err != nil {
 				return
-			}
-			if first {
-				first = false
 			}
 			eventsCh <- ev
 			if ev.Type == api.EventCompleted {
@@ -437,10 +435,11 @@ func TestSSESubscribeAndStreamingTurn(t *testing.T) {
 			}
 		}
 	}()
-	// Give Subscribe a brief moment to connect and flush `: connected\n\n`
-	close(subReady)
-	<-subReady
-	time.Sleep(30 * time.Millisecond)
+	select {
+	case <-subReady:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for subscription ready")
+	}
 
 	if err := cli.Send(ctx, sess.ID, api.SendRequest{
 		Content: "Stream me",
@@ -455,6 +454,9 @@ collectLoop:
 	for {
 		select {
 		case ev := <-eventsCh:
+			if ev.Type == api.EventConnected {
+				continue
+			}
 			received = append(received, ev)
 			if ev.Type == api.EventCompleted {
 				break collectLoop
@@ -465,31 +467,34 @@ collectLoop:
 	}
 
 	// Expected sequence:
-	// 1. message_added (user)
+	// 1. entry_added (user message)
 	// 2..4. chunk ("Alpha", " Beta", " Gamma")
-	// 5. message_added (assistant)
+	// 5. entry_added (assistant message)
 	// 6. completed
 	if len(received) != 6 {
 		t.Fatalf("expected 6 SSE events, got %d: %+v", len(received), received)
 	}
-	if received[0].Type != api.EventMessageAdded || received[0].Message == nil || received[0].Message.Role != api.RoleUser {
-		t.Errorf("received[0] = %+v, want user message_added", received[0])
+	p0, ok := received[0].Payload.(api.EntryAddedEvent)
+	if received[0].Type != api.EventEntryAdded || !ok || p0.Entry.Message == nil || p0.Entry.Message.Role != api.RoleUser {
+		t.Errorf("received[0] = %+v, want user entry_added", received[0])
 	}
 	var streamed strings.Builder
 	for i := 1; i <= 3; i++ {
-		if received[i].Type != api.EventChunk || received[i].Chunk == nil {
+		chPayload, ok := received[i].Payload.(api.ChunkEvent)
+		if received[i].Type != api.EventChunk || !ok {
 			t.Errorf("received[%d] = %+v, want chunk", i, received[i])
 			continue
 		}
-		for _, b := range received[i].Chunk.Content {
+		for _, b := range chPayload.Chunk.Content {
 			streamed.WriteString(b.Text)
 		}
 	}
 	if streamed.String() != "Alpha Beta Gamma" {
 		t.Errorf("streamed chunks = %q, want \"Alpha Beta Gamma\"", streamed.String())
 	}
-	if received[4].Type != api.EventMessageAdded || received[4].Message == nil || received[4].Message.Role != api.RoleAssistant {
-		t.Errorf("received[4] = %+v, want assistant message_added", received[4])
+	p4, ok := received[4].Payload.(api.EntryAddedEvent)
+	if received[4].Type != api.EventEntryAdded || !ok || p4.Entry.Message == nil || p4.Entry.Message.Role != api.RoleAssistant {
+		t.Errorf("received[4] = %+v, want assistant entry_added", received[4])
 	}
 	if received[5].Type != api.EventCompleted {
 		t.Errorf("received[5] = %+v, want completed", received[5])
@@ -583,15 +588,21 @@ func TestBackgroundTurnSurvivesClientDisconnect(t *testing.T) {
 		t.Fatalf("afterSess.Status = %q, want %q", afterSess.Status, api.StatusIdle)
 	}
 
-	history, err := cli.History(ctx, sess.ID)
+	timelineEntries, err := cli.Timeline(ctx, sess.ID)
 	if err != nil {
-		t.Fatalf("History: %v", err)
+		t.Fatalf("Timeline: %v", err)
 	}
-	if len(history) != 2 {
-		t.Fatalf("expected 2 persisted messages in History after client disconnect, got %d: %+v", len(history), history)
+	var messages []api.Message
+	for _, entry := range timelineEntries {
+		if entry.Kind == api.TimelineKindMessage && entry.Message != nil {
+			messages = append(messages, *entry.Message)
+		}
 	}
-	if history[1].Role != api.RoleAssistant || extractAPIMessageText(history[1]) != "Completed in background!" {
-		t.Errorf("history[1] = %+v, want 'Completed in background!'", history[1])
+	if len(messages) != 2 {
+		t.Fatalf("expected 2 persisted messages in Timeline after client disconnect, got %d: %+v", len(messages), messages)
+	}
+	if messages[1].Role != api.RoleAssistant || extractAPIMessageText(messages[1]) != "Completed in background!" {
+		t.Errorf("messages[1] = %+v, want 'Completed in background!'", messages[1])
 	}
 }
 
@@ -717,8 +728,9 @@ func TestPermissionsModesAndFileChangesRevert(t *testing.T) {
 	subCtx, cancelSub := context.WithCancel(ctx)
 	defer cancelSub()
 	permEvents := make(chan api.Event, 16)
+	permReady := make(chan struct{})
 	go func() {
-		for ev, err := range cli.Subscribe(subCtx, sess.ID) {
+		for ev, err := range cli.EventsWithReady(subCtx, "", func(string) { close(permReady) }, api.SessionStreamTopic(sess.ID)) {
 			if err != nil {
 				return
 			}
@@ -727,7 +739,11 @@ func TestPermissionsModesAndFileChangesRevert(t *testing.T) {
 			}
 		}
 	}()
-	time.Sleep(30 * time.Millisecond)
+	select {
+	case <-permReady:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for permission sub ready")
+	}
 
 	// 2. Send triggers write tool call -> pauses on permission gate
 	if err := cli.Send(ctx, sess.ID, api.SendRequest{
@@ -739,7 +755,8 @@ func TestPermissionsModesAndFileChangesRevert(t *testing.T) {
 
 	select {
 	case ev := <-permEvents:
-		if len(ev.Permissions) != 1 || ev.Permissions[0].ToolName != "write" {
+		p, ok := ev.Payload.(api.PermissionRequestedEvent)
+		if !ok || len(p.Permissions) != 1 || p.Permissions[0].ToolName != "write" {
 			t.Errorf("unexpected permission_requested event: %+v", ev)
 		}
 	case <-time.After(2 * time.Second):
@@ -901,8 +918,9 @@ func TestConversionsAndErrorPublishing(t *testing.T) {
 	defer cancelSub()
 
 	errEvents := make(chan api.Event, 4)
+	errReady := make(chan struct{})
 	go func() {
-		for ev, sErr := range cli.Subscribe(subCtx, sess.ID) {
+		for ev, sErr := range cli.EventsWithReady(subCtx, "", func(string) { close(errReady) }, api.SessionStreamTopic(sess.ID)) {
 			if sErr != nil {
 				return
 			}
@@ -912,7 +930,11 @@ func TestConversionsAndErrorPublishing(t *testing.T) {
 			}
 		}
 	}()
-	time.Sleep(30 * time.Millisecond)
+	select {
+	case <-errReady:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for error sub ready")
+	}
 
 	if err := cli.Send(ctx, sess.ID, api.SendRequest{Content: "trigger error", Wait: false}); err != nil {
 		t.Fatalf("Send(Wait: false): %v", err)
@@ -920,8 +942,9 @@ func TestConversionsAndErrorPublishing(t *testing.T) {
 
 	select {
 	case ev := <-errEvents:
-		if !strings.Contains(ev.Error, "upstream llm failure") {
-			t.Errorf("EventError = %q, want to contain 'upstream llm failure'", ev.Error)
+		p, ok := ev.Payload.(api.ErrorEvent)
+		if !ok || !strings.Contains(p.Error, "upstream llm failure") {
+			t.Errorf("EventError = %+v, want to contain 'upstream llm failure'", ev)
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for EventError on SSE stream")
@@ -977,8 +1000,9 @@ func TestSubdirectorySharesCanonicalWorkspaceRuntime(t *testing.T) {
 	defer cancelSub()
 
 	doneCh := make(chan struct{}, 1)
+	subReady := make(chan struct{})
 	go func() {
-		for ev, sErr := range subCLI.Subscribe(subCtx, sess.ID) {
+		for ev, sErr := range subCLI.EventsWithReady(subCtx, "", func(string) { close(subReady) }, api.SessionStreamTopic(sess.ID)) {
 			if sErr != nil {
 				return
 			}
@@ -988,7 +1012,11 @@ func TestSubdirectorySharesCanonicalWorkspaceRuntime(t *testing.T) {
 			}
 		}
 	}()
-	time.Sleep(30 * time.Millisecond)
+	select {
+	case <-subReady:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for subDir sub ready")
+	}
 
 	if err := cli.Send(ctx, sess.ID, api.SendRequest{Content: "hello from root", Wait: true}); err != nil {
 		t.Fatalf("Send: %v", err)
@@ -1362,4 +1390,129 @@ Subproject agent instructions.
 	if subAgent.Effort != "low" || subAgent.Description != "Subproject agent" {
 		t.Errorf("subAgent = %+v, want Effort='low' and Description='Subproject agent'", subAgent)
 	}
+}
+
+func TestStructuredContentConversionFailure(t *testing.T) {
+	tool := &message.Tool{
+		Base: message.Base{ID: "result"}, ToolCallID: "call",
+		StructuredContent: make(chan int),
+	}
+	converted, err := toAPIMessage(tool)
+	var unsupported *json.UnsupportedTypeError
+	if converted != nil || !errors.As(err, &unsupported) {
+		t.Fatalf("toAPIMessage = (%+v, %v), want an unsupported type error", converted, err)
+	}
+	entry := timeline.NewMessageEntry("session", tool)
+	_, entryErr := toAPITimelineEntry(*entry)
+	if entryErr == nil || !errors.As(entryErr, &unsupported) {
+		t.Fatalf("toAPITimelineEntry = %v, want unsupported type error", entryErr)
+	}
+}
+
+func TestToolStructuredContentInEventsAndHistory(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	var step int
+	provider := &fakeProvider{
+		chunkHandler: func(_ context.Context, req *llm.Request) (llm.StreamResponse, error) {
+			step++
+			var content message.Content
+			if step == 1 {
+				content = message.Content{&message.ToolCall{
+					ID: "view-call", Name: "view",
+					Args: map[string]any{"path": "source.go", "offset": 2, "limit": 1},
+				}}
+			} else {
+				content = message.Content{&message.TextBlock{Text: "Read complete."}}
+			}
+			return func(yield func(message.AssistantChunk, error) bool) {
+				yield(message.AssistantChunk{
+					BaseChunk: message.BaseChunk{ID: uuid.NewString()},
+					Model:     req.Model, Content: content, Done: true,
+				}, nil)
+			}, nil
+		},
+	}
+	_, cli, workspace := setupDaemonTest(t, provider)
+	if err := os.WriteFile(filepath.Join(workspace, "source.go"), []byte("first\nsecond\nthird\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sess, err := cli.CreateSession(ctx, api.CreateSessionRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ready := make(chan struct{})
+	results := make(chan api.Message, 1)
+	subErrors := make(chan error, 1)
+	go func() {
+		for event, err := range cli.EventsWithReady(ctx, "", func(string) { close(ready) }, api.SessionStreamTopic(sess.ID)) {
+			if err != nil {
+				subErrors <- err
+				return
+			}
+			if event.Type == api.EventError {
+				if p, ok := event.Payload.(api.ErrorEvent); ok {
+					subErrors <- errors.New(p.Error)
+				} else {
+					subErrors <- errors.New("event error")
+				}
+				return
+			}
+			if event.Type == api.EventEntryAdded {
+				if p, ok := event.Payload.(api.EntryAddedEvent); ok && p.Entry.Message != nil && p.Entry.Message.Role == api.RoleTool {
+					results <- *p.Entry.Message
+					return
+				}
+			}
+		}
+	}()
+	select {
+	case <-ready:
+	case err := <-subErrors:
+		t.Fatalf("subscribe: %v", err)
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
+	if err := cli.Send(ctx, sess.ID, api.SendRequest{Content: "Read source.go.", Wait: true}); err != nil {
+		t.Fatal(err)
+	}
+	var live api.Message
+	select {
+	case live = <-results:
+	case err := <-subErrors:
+		t.Fatalf("subscribe: %v", err)
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
+	if live.IsError {
+		t.Fatalf("view failed: %+v", live)
+	}
+	var liveOutput api.ViewOutput
+	if err := json.Unmarshal(live.StructuredContent, &liveOutput); err != nil {
+		t.Fatalf("decode live structured content: %v", err)
+	}
+	if liveOutput.Path == "" || liveOutput.StartLine != 2 || liveOutput.EndLine != 2 || liveOutput.Content != "second" {
+		t.Fatalf("live output = %+v", liveOutput)
+	}
+	if len(live.Content) != 0 {
+		t.Fatalf("expected tool content text block to be omitted when structured content is returned: %+v", live.Content)
+	}
+	timelineEntries, err := cli.Timeline(ctx, sess.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range timelineEntries {
+		if entry.Kind != api.TimelineKindMessage || entry.Message == nil || entry.Message.ID != live.ID {
+			continue
+		}
+		var output api.ViewOutput
+		if err := json.Unmarshal(entry.Message.StructuredContent, &output); err != nil {
+			t.Fatalf("decode persisted structured content: %v", err)
+		}
+		if output != liveOutput {
+			t.Fatalf("persisted output = %+v, want %+v", output, liveOutput)
+		}
+		return
+	}
+	t.Fatalf("tool result %q missing from timeline", live.ID)
 }

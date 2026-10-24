@@ -48,77 +48,77 @@ type EventPayload interface {
 	EventType() string
 }
 
-// ConnectedPayload represents the payload for an [EventConnected] event.
-type ConnectedPayload struct {
+// ConnectedEvent represents the payload for an [EventConnected] event.
+type ConnectedEvent struct {
 	SubscriberID string   `json:"subscriber_id"`
 	Topics       []string `json:"topics,omitempty"`
 }
 
-func (ConnectedPayload) EventType() string { return string(EventConnected) }
+func (ConnectedEvent) EventType() string { return string(EventConnected) }
 
-// SessionCreatedPayload represents the payload for an [EventSessionCreated] event.
-type SessionCreatedPayload struct {
+// SessionCreatedEvent represents the payload for an [EventSessionCreated] event.
+type SessionCreatedEvent struct {
 	Workspace string  `json:"workspace"`
 	Session   Session `json:"session"`
 }
 
-func (SessionCreatedPayload) EventType() string { return string(EventSessionCreated) }
+func (SessionCreatedEvent) EventType() string { return string(EventSessionCreated) }
 
-// SessionUpdatedPayload represents the payload for an [EventSessionUpdated] event.
-type SessionUpdatedPayload struct {
+// SessionUpdatedEvent represents the payload for an [EventSessionUpdated] event.
+type SessionUpdatedEvent struct {
 	Workspace string  `json:"workspace"`
 	Session   Session `json:"session"`
 }
 
-func (SessionUpdatedPayload) EventType() string { return string(EventSessionUpdated) }
+func (SessionUpdatedEvent) EventType() string { return string(EventSessionUpdated) }
 
-// SessionDeletedPayload represents the payload for an [EventSessionDeleted] event.
-type SessionDeletedPayload struct {
+// SessionDeletedEvent represents the payload for an [EventSessionDeleted] event.
+type SessionDeletedEvent struct {
 	Workspace string `json:"workspace"`
 	SessionID string `json:"session_id"`
 }
 
-func (SessionDeletedPayload) EventType() string { return string(EventSessionDeleted) }
+func (SessionDeletedEvent) EventType() string { return string(EventSessionDeleted) }
 
-// EntryAddedPayload represents the payload for an [EventEntryAdded] event.
-type EntryAddedPayload struct {
+// EntryAddedEvent represents the payload for an [EventEntryAdded] event.
+type EntryAddedEvent struct {
 	SessionID string        `json:"session_id"`
 	Entry     TimelineEntry `json:"entry"`
 }
 
-func (EntryAddedPayload) EventType() string { return string(EventEntryAdded) }
+func (EntryAddedEvent) EventType() string { return string(EventEntryAdded) }
 
-// ChunkPayload represents the payload for an [EventChunk] event.
-type ChunkPayload struct {
+// ChunkEvent represents the payload for an [EventChunk] event.
+type ChunkEvent struct {
 	SessionID string `json:"session_id"`
 	Chunk     Chunk  `json:"chunk"`
 }
 
-func (ChunkPayload) EventType() string { return string(EventChunk) }
+func (ChunkEvent) EventType() string { return string(EventChunk) }
 
-// PermissionRequestedPayload represents the payload for an [EventPermissionRequested] event.
-type PermissionRequestedPayload struct {
+// PermissionRequestedEvent represents the payload for an [EventPermissionRequested] event.
+type PermissionRequestedEvent struct {
 	SessionID   string              `json:"session_id"`
 	Permissions []PermissionRequest `json:"permissions"`
 }
 
-func (PermissionRequestedPayload) EventType() string { return string(EventPermissionRequested) }
+func (PermissionRequestedEvent) EventType() string { return string(EventPermissionRequested) }
 
-// CompletedPayload represents the payload for an [EventCompleted] event.
-type CompletedPayload struct {
+// CompletedEvent represents the payload for an [EventCompleted] event.
+type CompletedEvent struct {
 	SessionID string   `json:"session_id"`
 	Message   *Message `json:"message,omitempty"`
 }
 
-func (CompletedPayload) EventType() string { return string(EventCompleted) }
+func (CompletedEvent) EventType() string { return string(EventCompleted) }
 
-// ErrorPayload represents the payload for an [EventError] event.
-type ErrorPayload struct {
+// ErrorEvent represents the payload for an [EventError] event.
+type ErrorEvent struct {
 	SessionID string `json:"session_id"`
 	Error     string `json:"error"`
 }
 
-func (ErrorPayload) EventType() string { return string(EventError) }
+func (ErrorEvent) EventType() string { return string(EventError) }
 
 // Event is the real-time notification payload streamed over SSE.
 type Event struct {
@@ -151,55 +151,55 @@ func (e *Event) UnmarshalJSON(data []byte) error {
 
 	switch w.Type {
 	case EventConnected:
-		var p ConnectedPayload
+		var p ConnectedEvent
 		if err := json.Unmarshal(raw, &p); err != nil {
 			return fmt.Errorf("api: unmarshal connected payload: %w", err)
 		}
 		e.Payload = p
 	case EventSessionCreated:
-		var p SessionCreatedPayload
+		var p SessionCreatedEvent
 		if err := json.Unmarshal(raw, &p); err != nil {
 			return fmt.Errorf("api: unmarshal session_created payload: %w", err)
 		}
 		e.Payload = p
 	case EventSessionUpdated:
-		var p SessionUpdatedPayload
+		var p SessionUpdatedEvent
 		if err := json.Unmarshal(raw, &p); err != nil {
 			return fmt.Errorf("api: unmarshal session_updated payload: %w", err)
 		}
 		e.Payload = p
 	case EventSessionDeleted:
-		var p SessionDeletedPayload
+		var p SessionDeletedEvent
 		if err := json.Unmarshal(raw, &p); err != nil {
 			return fmt.Errorf("api: unmarshal session_deleted payload: %w", err)
 		}
 		e.Payload = p
 	case EventEntryAdded:
-		var p EntryAddedPayload
+		var p EntryAddedEvent
 		if err := json.Unmarshal(raw, &p); err != nil {
 			return fmt.Errorf("api: unmarshal entry_added payload: %w", err)
 		}
 		e.Payload = p
 	case EventChunk:
-		var p ChunkPayload
+		var p ChunkEvent
 		if err := json.Unmarshal(raw, &p); err != nil {
 			return fmt.Errorf("api: unmarshal chunk payload: %w", err)
 		}
 		e.Payload = p
 	case EventPermissionRequested:
-		var p PermissionRequestedPayload
+		var p PermissionRequestedEvent
 		if err := json.Unmarshal(raw, &p); err != nil {
 			return fmt.Errorf("api: unmarshal permission_requested payload: %w", err)
 		}
 		e.Payload = p
 	case EventCompleted:
-		var p CompletedPayload
+		var p CompletedEvent
 		if err := json.Unmarshal(raw, &p); err != nil {
 			return fmt.Errorf("api: unmarshal completed payload: %w", err)
 		}
 		e.Payload = p
 	case EventError:
-		var p ErrorPayload
+		var p ErrorEvent
 		if err := json.Unmarshal(raw, &p); err != nil {
 			return fmt.Errorf("api: unmarshal error payload: %w", err)
 		}

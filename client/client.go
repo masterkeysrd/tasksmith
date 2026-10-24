@@ -52,6 +52,7 @@ type Client struct {
 	socketPath string
 	cwd        string
 	httpClient *http.Client
+	mux        *eventMux
 }
 
 // New constructs a new [Client] connected to socketPath.
@@ -73,6 +74,7 @@ func New(socketPath string, opts ...Option) (*Client, error) {
 		httpClient: &http.Client{
 			Transport: transport,
 		},
+		mux: newEventMux(),
 	}
 	for _, opt := range opts {
 		if opt != nil {

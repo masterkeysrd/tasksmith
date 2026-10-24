@@ -16,6 +16,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/masterkeysrd/loom/message"
+	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	"github.com/masterkeysrd/tasksmith/internal/core/shellguard"
 	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
@@ -294,12 +295,20 @@ func (m *Manager) Update(ctx context.Context, id string, params UpdateParams) (*
 		if err := m.timeline.Append(ctx, entry); err != nil {
 			return nil, err
 		}
+		m.publisher.Publish(api.SessionStreamTopic(sess.ID), EntryAddedEvent{
+			SessionID: sess.ID,
+			Entry:     entry.Clone(),
+		})
 	}
 	if oldModel != sess.Model {
 		entry := timeline.NewModelEntry(sess.ID, timeline.ModelChange{From: oldModel, To: sess.Model})
 		if err := m.timeline.Append(ctx, entry); err != nil {
 			return nil, err
 		}
+		m.publisher.Publish(api.SessionStreamTopic(sess.ID), EntryAddedEvent{
+			SessionID: sess.ID,
+			Entry:     entry.Clone(),
+		})
 	}
 
 	cp := *sess
@@ -484,6 +493,10 @@ func (m *Manager) SetPermissionMode(ctx context.Context, sessionID string, mode 
 		if err := m.store.touchSession(ctx, sess.ID, entry.CreatedAt); err != nil {
 			return err
 		}
+		m.publisher.Publish(api.SessionStreamTopic(sess.ID), EntryAddedEvent{
+			SessionID: sess.ID,
+			Entry:     entry.Clone(),
+		})
 	}
 	return nil
 }
@@ -525,7 +538,7 @@ func (m *Manager) History(ctx context.Context, sessionID string) (message.Messag
 }
 
 // AppendMessage appends a message directly to the session's timeline, updates
-// the session's updated_at timestamp, and publishes an [EventMessageAdded]
+// the session's updated_at timestamp, and publishes an [EventEntryAdded]
 // notification without modifying the underlying [harness.Harness] graph
 // checkpoint. It is used for system-emitted UI history messages.
 func (m *Manager) AppendMessage(ctx context.Context, sessionID string, msg message.Message) error {
@@ -546,10 +559,9 @@ func (m *Manager) AppendMessage(ctx context.Context, sessionID string, msg messa
 		return err
 	}
 
-	m.publisher.Publish(ctx, Event{
-		Type:      EventMessageAdded,
+	m.publisher.Publish(api.SessionStreamTopic(sess.ID), EntryAddedEvent{
 		SessionID: sess.ID,
-		Message:   message.CloneMessage(entry.Message),
+		Entry:     entry.Clone(),
 	})
 
 	return nil
@@ -676,6 +688,10 @@ func (m *Manager) RecordDecision(ctx context.Context, sessionID string, decision
 		m.mu.Unlock()
 		return false, err
 	}
+	m.publisher.Publish(api.SessionStreamTopic(sess.ID), EntryAddedEvent{
+		SessionID: sess.ID,
+		Entry:     entry.Clone(),
+	})
 
 	return allResolved, nil
 }
@@ -759,11 +775,9 @@ func (m *Manager) send(ctx context.Context, sessID string, stream iter.Seq2[harn
 		switch hev.Type {
 		case harness.EventChunk:
 			if hev.Chunk != nil {
-				chunkCopy := message.CloneAssistantChunk(*hev.Chunk)
-				m.publisher.Publish(ctx, Event{
-					Type:      EventChunk,
+				m.publisher.Publish(api.SessionStreamTopic(sessID), ChunkEvent{
 					SessionID: sessID,
-					Chunk:     &chunkCopy,
+					Chunk:     message.CloneAssistantChunk(*hev.Chunk),
 				})
 			}
 
@@ -776,10 +790,9 @@ func (m *Manager) send(ctx context.Context, sessID string, stream iter.Seq2[harn
 				if err := m.store.touchSession(ctx, sessID, entry.CreatedAt); err != nil {
 					return nil, err
 				}
-				m.publisher.Publish(ctx, Event{
-					Type:      EventMessageAdded,
+				m.publisher.Publish(api.SessionStreamTopic(sessID), EntryAddedEvent{
 					SessionID: sessID,
-					Message:   message.CloneMessage(entry.Message),
+					Entry:     entry.Clone(),
 				})
 			}
 
@@ -790,21 +803,21 @@ func (m *Manager) send(ctx context.Context, sessID string, stream iter.Seq2[harn
 				p.GrantPatterns = slices.Clone(p.GrantPatterns)
 				perms[i] = p
 			}
-			m.publisher.Publish(ctx, Event{
-				Type:        EventPermissionRequested,
+			m.publisher.Publish(api.SessionStreamTopic(sessID), PermissionRequestedEvent{
 				SessionID:   sessID,
 				Permissions: perms,
 			})
 
 		case harness.EventCompleted:
 			if hev.Message != nil {
+				var asstMsg *message.Assistant
 				if asst, ok := message.CloneMessage(hev.Message).(*message.Assistant); ok {
 					reply = asst
+					asstMsg = asst
 				}
-				m.publisher.Publish(ctx, Event{
-					Type:      EventCompleted,
+				m.publisher.Publish(api.SessionStreamTopic(sessID), CompletedEvent{
 					SessionID: sessID,
-					Message:   message.CloneMessage(hev.Message),
+					Message:   asstMsg,
 				})
 			}
 		}

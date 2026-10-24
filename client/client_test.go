@@ -9,8 +9,11 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/masterkeysrd/tasksmith/api"
 )
@@ -489,12 +492,207 @@ func TestStreamSSEParsing(t *testing.T) {
 	if len(events) != 2 {
 		t.Fatalf("expected 2 SSE events, got %d: %+v", len(events), events)
 	}
-	cp, ok := events[0].Payload.(api.ChunkPayload)
+	cp, ok := events[0].Payload.(api.ChunkEvent)
 	if !ok || events[0].Type != api.EventChunk || len(cp.Chunk.Content) != 1 || cp.Chunk.Content[0].Text != "hi" {
 		t.Errorf("unexpected events[0]: %+v", events[0])
 	}
-	comp, ok := events[1].Payload.(api.CompletedPayload)
+	comp, ok := events[1].Payload.(api.CompletedEvent)
 	if !ok || events[1].Type != api.EventCompleted || comp.SessionID != "s1" {
 		t.Errorf("unexpected events[1]: %+v", events[1])
+	}
+}
+
+func TestSharedSSEMultiplexer(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	dir, err := os.MkdirTemp("", "tasksmith-mux-test-*")
+	if err != nil {
+		t.Fatalf("MkdirTemp: %v", err)
+	}
+	defer os.RemoveAll(dir)
+	sockPath := filepath.Join(dir, "test.sock")
+
+	ln, err := net.Listen("unix", sockPath)
+	if err != nil {
+		t.Fatalf("net.Listen: %v", err)
+	}
+	defer ln.Close()
+
+	var (
+		mu           sync.Mutex
+		subCalls     []string
+		unsubCalls   []string
+		eventsConns  int
+		eventCh      = make(chan string, 10)
+		streamClosed = make(chan struct{})
+	)
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /v1/events", func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		eventsConns++
+		mu.Unlock()
+
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			http.Error(w, "no flusher", 500)
+			return
+		}
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set(api.HeaderSubscriberID, "sub-multiplex")
+		w.WriteHeader(http.StatusOK)
+
+		connEv := api.Event{
+			Type: api.EventConnected,
+			Payload: api.ConnectedEvent{
+				SubscriberID: "sub-multiplex",
+				Topics:       r.URL.Query()["topic"],
+			},
+		}
+		data, _ := json.Marshal(connEv)
+		fmt.Fprintf(w, "event: %s\ndata: %s\n\n", connEv.Type, data)
+		flusher.Flush()
+
+		for {
+			select {
+			case <-r.Context().Done():
+				close(streamClosed)
+				return
+			case msg := <-eventCh:
+				fmt.Fprint(w, msg)
+				flusher.Flush()
+			}
+		}
+	})
+
+	mux.HandleFunc("POST /v1/events/subscribe", func(w http.ResponseWriter, r *http.Request) {
+		var req api.SubscriptionRequest
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		mu.Lock()
+		subCalls = append(subCalls, req.Topics...)
+		mu.Unlock()
+		_ = json.NewEncoder(w).Encode(api.SubscriptionResponse{Topics: req.Topics})
+	})
+
+	mux.HandleFunc("POST /v1/events/unsubscribe", func(w http.ResponseWriter, r *http.Request) {
+		var req api.SubscriptionRequest
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		mu.Lock()
+		unsubCalls = append(unsubCalls, req.Topics...)
+		mu.Unlock()
+		_ = json.NewEncoder(w).Encode(api.SubscriptionResponse{Topics: req.Topics})
+	})
+
+	srv := &http.Server{Handler: mux}
+	go func() { _ = srv.Serve(ln) }()
+	defer srv.Close()
+
+	cli, err := New(sockPath, WithCWD("/test"))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	w1Ready := make(chan struct{})
+	w1Ctx, w1Cancel := context.WithCancel(ctx)
+	defer w1Cancel()
+
+	w1Events := make(chan api.Event, 10)
+	go func() {
+		for ev, err := range cli.Watch(w1Ctx, func() { close(w1Ready) }, "topic.one") {
+			if err != nil {
+				return
+			}
+			w1Events <- ev
+		}
+	}()
+
+	select {
+	case <-w1Ready:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for w1Ready")
+	}
+
+	mu.Lock()
+	if eventsConns != 1 {
+		t.Errorf("eventsConns = %d, want 1", eventsConns)
+	}
+	mu.Unlock()
+
+	// Now start watcher 2 on derived client (WithCWD) for topic.two
+	derivedCli := cli.WithCWD("/derived")
+	w2Ready := make(chan struct{})
+	w2Ctx, w2Cancel := context.WithCancel(ctx)
+
+	w2Events := make(chan api.Event, 10)
+	go func() {
+		for ev, err := range derivedCli.Watch(w2Ctx, func() { close(w2Ready) }, "topic.two") {
+			if err != nil {
+				return
+			}
+			w2Events <- ev
+		}
+	}()
+
+	select {
+	case <-w2Ready:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for w2Ready")
+	}
+
+	// Should still be only 1 underlying connection!
+	mu.Lock()
+	if eventsConns != 1 {
+		t.Errorf("eventsConns after w2 = %d, want 1", eventsConns)
+	}
+	if !slices.Contains(subCalls, "topic.two") {
+		t.Errorf("subCalls = %v, want to contain topic.two", subCalls)
+	}
+	mu.Unlock()
+
+	// Emit an event for topic.one
+	ev1Data := `data: {"type":"chunk","topic":"topic.one","payload":{"session_id":"s1","chunk":{"id":"c1","content":[{"type":"text","text":"msg1"}]}}}` + "\n\n"
+	eventCh <- ev1Data
+
+	// Emit an event for topic.two
+	ev2Data := `data: {"type":"chunk","topic":"topic.two","payload":{"session_id":"s2","chunk":{"id":"c2","content":[{"type":"text","text":"msg2"}]}}}` + "\n\n"
+	eventCh <- ev2Data
+
+	select {
+	case ev := <-w1Events:
+		if ev.Topic != "topic.one" {
+			t.Errorf("w1 received unexpected event: %+v", ev)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for w1 event")
+	}
+
+	select {
+	case ev := <-w2Events:
+		if ev.Topic != "topic.two" {
+			t.Errorf("w2 received unexpected event: %+v", ev)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for w2 event")
+	}
+
+	// Cancel w2 -> should trigger unsubscribe for topic.two
+	w2Cancel()
+	time.Sleep(100 * time.Millisecond)
+
+	mu.Lock()
+	if !slices.Contains(unsubCalls, "topic.two") {
+		t.Errorf("unsubCalls = %v, want to contain topic.two", unsubCalls)
+	}
+	mu.Unlock()
+
+	// Cancel w1 -> last watcher, should close stream
+	w1Cancel()
+	select {
+	case <-streamClosed:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for stream to close after all watchers exited")
 	}
 }

@@ -24,6 +24,71 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/repl/command"
 )
 
+func replEntryAdded(sessionID string, msg api.Message) api.Event {
+	var topic string
+	if sessionID != "" {
+		topic = api.SessionStreamTopic(sessionID)
+	}
+	return api.Event{
+		Topic: topic,
+		Type:  api.EventEntryAdded,
+		Payload: api.EntryAddedEvent{
+			SessionID: sessionID,
+			Entry: api.TimelineEntry{
+				ID:        msg.ID,
+				SessionID: sessionID,
+				Kind:      api.TimelineKindMessage,
+				Message:   &msg,
+			},
+		},
+	}
+}
+
+func replChunk(sessionID string, chunk api.Chunk) api.Event {
+	var topic string
+	if sessionID != "" {
+		topic = api.SessionStreamTopic(sessionID)
+	}
+	return api.Event{
+		Topic: topic,
+		Type:  api.EventChunk,
+		Payload: api.ChunkEvent{
+			SessionID: sessionID,
+			Chunk:     chunk,
+		},
+	}
+}
+
+func replPermissions(sessionID string, perms ...api.PermissionRequest) api.Event {
+	var topic string
+	if sessionID != "" {
+		topic = api.SessionStreamTopic(sessionID)
+	}
+	return api.Event{
+		Topic: topic,
+		Type:  api.EventPermissionRequested,
+		Payload: api.PermissionRequestedEvent{
+			SessionID:   sessionID,
+			Permissions: perms,
+		},
+	}
+}
+
+func replCompleted(sessionID string, msg *api.Message) api.Event {
+	var topic string
+	if sessionID != "" {
+		topic = api.SessionStreamTopic(sessionID)
+	}
+	return api.Event{
+		Topic: topic,
+		Type:  api.EventCompleted,
+		Payload: api.CompletedEvent{
+			SessionID: sessionID,
+			Message:   msg,
+		},
+	}
+}
+
 type testDaemonState struct {
 	mu          sync.Mutex
 	sessions    map[string]api.Session
@@ -273,10 +338,28 @@ func registerTestDaemonRoutes(mux *http.ServeMux, st *testDaemonState) {
 		}
 		_ = json.NewEncoder(w).Encode(msgs)
 	}
+	getTimeline := func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+		st.mu.Lock()
+		defer st.mu.Unlock()
+		msgs := st.history[id]
+		entries := make([]api.TimelineEntry, len(msgs))
+		for i, m := range msgs {
+			msg := m
+			entries[i] = api.TimelineEntry{
+				ID:        msg.ID,
+				SessionID: id,
+				Kind:      api.TimelineKindMessage,
+				Message:   &msg,
+			}
+		}
+		_ = json.NewEncoder(w).Encode(entries)
+	}
+	mux.HandleFunc("GET /v1/sessions/{id}/timeline", getTimeline)
 	mux.HandleFunc("GET /v1/sessions/{id}/history", getHistory)
 	mux.HandleFunc("GET /v1/sessions/{id}/messages", getHistory)
 
-	mux.HandleFunc("POST /v1/sessions/{id}/messages", func(w http.ResponseWriter, r *http.Request) {
+	postSend := func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
 		var req api.SendRequest
 		_ = json.NewDecoder(r.Body).Decode(&req)
@@ -291,7 +374,9 @@ func registerTestDaemonRoutes(mux *http.ServeMux, st *testDaemonState) {
 		st.mu.Unlock()
 
 		w.WriteHeader(http.StatusAccepted)
-	})
+	}
+	mux.HandleFunc("POST /v1/sessions/{id}/send", postSend)
+	mux.HandleFunc("POST /v1/sessions/{id}/messages", postSend)
 
 	mux.HandleFunc("POST /v1/sessions/{id}/cancel", func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
@@ -656,46 +741,32 @@ func TestAppFunctionalComponentLifecycle(t *testing.T) {
 	}
 
 	// The daemon echoes the persisted user message over SSE.
-	st.sseCh <- api.Event{
-		Type:      api.EventMessageAdded,
-		SessionID: "s1",
-		Message: &api.Message{
-			ID:      "m3",
-			Role:    api.RoleUser,
-			Content: []api.Block{{Type: api.BlockText, Text: "Hello assistant"}},
-		},
-	}
+	st.sseCh <- replEntryAdded("s1", api.Message{
+		ID:      "m3",
+		Role:    api.RoleUser,
+		Content: []api.Block{{Type: api.BlockText, Text: "Hello assistant"}},
+	})
 	time.Sleep(50 * time.Millisecond)
 
 	// 2. Stream chunk via SSE
-	st.sseCh <- api.Event{
-		Type:      api.EventChunk,
-		SessionID: "s1",
-		Chunk: &api.Chunk{
-			ID: "c1",
-			Content: []api.Block{
-				{Type: api.BlockReasoning, Text: "Analyzing request"},
-				{Type: api.BlockText, Text: "Working on it"},
-			},
+	st.sseCh <- replChunk("s1", api.Chunk{
+		ID: "c1",
+		Content: []api.Block{
+			{Type: api.BlockReasoning, Text: "Analyzing request"},
+			{Type: api.BlockText, Text: "Working on it"},
 		},
-	}
+	})
 	time.Sleep(50 * time.Millisecond)
 
 	// 3. Permission request via SSE
-	st.sseCh <- api.Event{
-		Type:      api.EventPermissionRequested,
-		SessionID: "s1",
-		Permissions: []api.PermissionRequest{
-			{
-				ID:         "p1",
-				ToolCallID: "tc-write",
-				Action:     api.ActionWrite,
-				Safety:     api.SafetySafe,
-				ToolName:   "write_file",
-				Summary:    "Write test.go",
-			},
-		},
-	}
+	st.sseCh <- replPermissions("s1", api.PermissionRequest{
+		ID:         "p1",
+		ToolCallID: "tc-write",
+		Action:     api.ActionWrite,
+		Safety:     api.SafetySafe,
+		ToolName:   "write_file",
+		Summary:    "Write test.go",
+	})
 	time.Sleep(50 * time.Millisecond)
 
 	// Press 'y' to allow once
@@ -710,18 +781,16 @@ func TestAppFunctionalComponentLifecycle(t *testing.T) {
 	}
 
 	// 4. Complete turn with the persisted assistant message
-	st.sseCh <- api.Event{
-		Type:      api.EventCompleted,
-		SessionID: "s1",
-		Message: &api.Message{
-			ID:   "m4",
-			Role: api.RoleAssistant,
-			Content: []api.Block{
-				{Type: api.BlockReasoning, Text: "Analyzing request"},
-				{Type: api.BlockText, Text: "Working on it"},
-			},
+	m4 := api.Message{
+		ID:   "m4",
+		Role: api.RoleAssistant,
+		Content: []api.Block{
+			{Type: api.BlockReasoning, Text: "Analyzing request"},
+			{Type: api.BlockText, Text: "Working on it"},
 		},
 	}
+	st.sseCh <- replEntryAdded("s1", m4)
+	st.sseCh <- replCompleted("s1", &m4)
 	time.Sleep(50 * time.Millisecond)
 
 	// 5. Submit /exit
@@ -796,92 +865,69 @@ func TestLiveToolCallStreamingAndReasoningDuration(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 
 	// 1. Stream reasoning chunk
-	st.sseCh <- api.Event{
-		Type:      api.EventChunk,
-		SessionID: "s1",
-		Chunk: &api.Chunk{
-			ID: "c1",
-			Content: []api.Block{
-				{Type: api.BlockReasoning, Text: "planning commands to execute"},
-			},
+	st.sseCh <- replChunk("s1", api.Chunk{
+		ID: "c1",
+		Content: []api.Block{
+			{Type: api.BlockReasoning, Text: "planning commands to execute"},
 		},
-	}
+	})
 	time.Sleep(30 * time.Millisecond)
 
 	// 2. Assistant message with reasoning + tool call arrives
-	st.sseCh <- api.Event{
-		Type:      api.EventMessageAdded,
-		SessionID: "s1",
-		Message: &api.Message{
-			ID:   "m3",
-			Role: api.RoleAssistant,
-			Content: []api.Block{
-				{Type: api.BlockReasoning, Text: "planning commands to execute"},
-				{Type: api.BlockToolCall, ToolCall: &api.ToolCall{
-					ID:   "tc1",
-					Name: "bash",
-					Args: map[string]any{"command": "echo running-cmd"},
-				}},
-			},
+	st.sseCh <- replEntryAdded("s1", api.Message{
+		ID:   "m3",
+		Role: api.RoleAssistant,
+		Content: []api.Block{
+			{Type: api.BlockReasoning, Text: "planning commands to execute"},
+			{Type: api.BlockToolCall, ToolCall: &api.ToolCall{
+				ID:   "tc1",
+				Name: "bash",
+				Args: map[string]any{"command": "echo running-cmd"},
+			}},
 		},
-	}
+	})
 	time.Sleep(30 * time.Millisecond)
 
 	// 3. Tool completion arrives (success)
-	st.sseCh <- api.Event{
-		Type:      api.EventMessageAdded,
-		SessionID: "s1",
-		Message: &api.Message{
-			ID:         "m4",
-			Role:       api.RoleTool,
-			ToolCallID: "tc1",
-			IsError:    false,
-			Content: []api.Block{
-				{Type: api.BlockText, Text: "running-cmd output\nmore output"},
-			},
+	st.sseCh <- replEntryAdded("s1", api.Message{
+		ID:         "m4",
+		Role:       api.RoleTool,
+		ToolCallID: "tc1",
+		IsError:    false,
+		Content: []api.Block{
+			{Type: api.BlockText, Text: "running-cmd output\nmore output"},
 		},
-	}
+	})
 	time.Sleep(30 * time.Millisecond)
 
 	// 4. Now send another assistant message with a failing tool call
-	st.sseCh <- api.Event{
-		Type:      api.EventMessageAdded,
-		SessionID: "s1",
-		Message: &api.Message{
-			ID:   "m5",
-			Role: api.RoleAssistant,
-			Content: []api.Block{
-				{Type: api.BlockToolCall, ToolCall: &api.ToolCall{
-					ID:   "tc2",
-					Name: "view",
-					Args: map[string]any{"path": "/pkg/missing.go"},
-				}},
-			},
+	st.sseCh <- replEntryAdded("s1", api.Message{
+		ID:   "m5",
+		Role: api.RoleAssistant,
+		Content: []api.Block{
+			{Type: api.BlockToolCall, ToolCall: &api.ToolCall{
+				ID:   "tc2",
+				Name: "view",
+				Args: map[string]any{"path": "/pkg/missing.go"},
+			}},
 		},
-	}
+	})
 	time.Sleep(30 * time.Millisecond)
 
 	// 5. Tool completion arrives (error)
-	st.sseCh <- api.Event{
-		Type:      api.EventMessageAdded,
-		SessionID: "s1",
-		Message: &api.Message{
-			ID:         "m6",
-			Role:       api.RoleTool,
-			ToolCallID: "tc2",
-			IsError:    true,
-			Content: []api.Block{
-				{Type: api.BlockText, Text: "file not found: missing.go\ndetails here"},
-			},
+	st.sseCh <- replEntryAdded("s1", api.Message{
+		ID:         "m6",
+		Role:       api.RoleTool,
+		ToolCallID: "tc2",
+		IsError:    true,
+		Content: []api.Block{
+			{Type: api.BlockText, Text: "file not found: missing.go\ndetails here"},
 		},
-	}
+	})
 	time.Sleep(30 * time.Millisecond)
 
 	// 6. Complete
-	st.sseCh <- api.Event{
-		Type:      api.EventCompleted,
-		SessionID: "s1",
-	}
+	st.sseCh <- replCompleted("s1", nil)
 	time.Sleep(30 * time.Millisecond)
 
 	inst.Exit(nil)

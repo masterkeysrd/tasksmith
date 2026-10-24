@@ -12,8 +12,10 @@ import (
 	"github.com/google/uuid"
 	"github.com/masterkeysrd/loom/message"
 	"github.com/masterkeysrd/tasksmith/api"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/broker"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/session"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/std"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/timeline"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tools"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/workspace"
 )
@@ -238,20 +240,64 @@ func fromAPIPermissionDecision(dec api.PermissionDecision) tools.PermissionDecis
 	}
 }
 
-func toAPIEvent(workspaceDir string, ev session.Event) api.Event {
-	out := api.Event{
-		Type:        api.EventType(ev.Type),
-		Workspace:   workspaceDir,
-		SessionID:   ev.SessionID,
-		Chunk:       toAPIChunk(ev.Chunk),
-		Permissions: toAPIPermissionRequests(ev.Permissions),
+func toAPITimelineEntry(entry timeline.Entry) (api.TimelineEntry, error) {
+	out := api.TimelineEntry{
+		ID:        entry.ID,
+		SessionID: entry.SessionID,
+		Kind:      api.TimelineKind(entry.Kind),
+		CreatedAt: entry.CreatedAt,
 	}
-	var err error
-	out.Message, err = toAPIMessage(ev.Message)
-	if err != nil {
-		out.Type, out.Error = api.EventError, err.Error()
+
+	if entry.Message != nil {
+		msg, err := toAPIMessage(entry.Message)
+		if err != nil {
+			return api.TimelineEntry{}, err
+		}
+		out.Message = msg
 	}
-	return out
+
+	if entry.Model != nil {
+		out.Model = &api.ModelChange{
+			From: entry.Model.From,
+			To:   entry.Model.To,
+		}
+	}
+
+	if entry.Effort != nil {
+		out.Effort = &api.EffortChange{
+			From: entry.Effort.From,
+			To:   entry.Effort.To,
+		}
+	}
+
+	if entry.Agent != nil {
+		out.Agent = &api.AgentChange{
+			From: entry.Agent.From,
+			To:   entry.Agent.To,
+		}
+	}
+
+	if entry.Mode != nil {
+		out.Mode = &api.ModeChange{
+			From: api.PermissionMode(entry.Mode.From),
+			To:   api.PermissionMode(entry.Mode.To),
+		}
+	}
+
+	if entry.Permission != nil {
+		out.Permission = &api.PermissionRecord{
+			Request: toAPIPermissionRequest(entry.Permission.Request),
+			Decision: api.PermissionDecision{
+				RequestID:    entry.Permission.Decision.RequestID,
+				ToolCallID:   entry.Permission.Decision.ToolCallID,
+				Kind:         api.DecisionKind(entry.Permission.Decision.Kind),
+				GrantPattern: entry.Permission.Decision.GrantPattern,
+				Feedback:     entry.Permission.Decision.Feedback,
+			},
+		}
+	}
+
+	return out, nil
 }
 
 func toAPIFileChange(fc std.FileChange) api.FileChange {
@@ -373,5 +419,90 @@ func resolveAPIModel(ws *workspace.Workspace, rawID string) api.Model {
 		Provider: providerName,
 		Name:     modelName,
 		Label:    cmp.Or(modelName, targetID),
+	}
+}
+
+// FormatEvent converts an internal broker message into a public API event.
+func (d *Daemon) FormatEvent(msg broker.Message) (api.Event, error) {
+	switch ev := msg.Event.(type) {
+	case session.EntryAddedEvent:
+		apiEntry, err := toAPITimelineEntry(ev.Entry)
+		if err != nil {
+			return api.Event{
+				Type:  api.EventError,
+				Topic: msg.Topic,
+				Payload: api.ErrorEvent{
+					SessionID: ev.SessionID,
+					Error:     err.Error(),
+				},
+			}, nil
+		}
+		return api.Event{
+			Type:  api.EventEntryAdded,
+			Topic: msg.Topic,
+			Payload: api.EntryAddedEvent{
+				SessionID: ev.SessionID,
+				Entry:     apiEntry,
+			},
+		}, nil
+
+	case session.ChunkEvent:
+		var ch api.Chunk
+		if converted := toAPIChunk(&ev.Chunk); converted != nil {
+			ch = *converted
+		}
+		return api.Event{
+			Type:  api.EventChunk,
+			Topic: msg.Topic,
+			Payload: api.ChunkEvent{
+				SessionID: ev.SessionID,
+				Chunk:     ch,
+			},
+		}, nil
+
+	case session.PermissionRequestedEvent:
+		return api.Event{
+			Type:  api.EventPermissionRequested,
+			Topic: msg.Topic,
+			Payload: api.PermissionRequestedEvent{
+				SessionID:   ev.SessionID,
+				Permissions: toAPIPermissionRequests(ev.Permissions),
+			},
+		}, nil
+
+	case session.CompletedEvent:
+		var msgObj *api.Message
+		if ev.Message != nil {
+			var err error
+			msgObj, err = toAPIMessage(ev.Message)
+			if err != nil {
+				return api.Event{
+					Type:  api.EventError,
+					Topic: msg.Topic,
+					Payload: api.ErrorEvent{
+						SessionID: ev.SessionID,
+						Error:     err.Error(),
+					},
+				}, nil
+			}
+		}
+		return api.Event{
+			Type:  api.EventCompleted,
+			Topic: msg.Topic,
+			Payload: api.CompletedEvent{
+				SessionID: ev.SessionID,
+				Message:   msgObj,
+			},
+		}, nil
+
+	case api.EventPayload:
+		return api.Event{
+			Type:    api.EventType(ev.EventType()),
+			Topic:   msg.Topic,
+			Payload: ev,
+		}, nil
+
+	default:
+		return api.Event{}, fmt.Errorf("daemon: unknown broker event type %T", msg.Event)
 	}
 }
