@@ -8,6 +8,7 @@ import (
 
 	"github.com/masterkeysrd/kite/backend"
 	"github.com/masterkeysrd/kite/extras/trail"
+	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/client"
 	"github.com/masterkeysrd/tasksmith/internal/repl/store"
 	"github.com/masterkeysrd/tasksmith/internal/ui/theme"
@@ -75,4 +76,9 @@ func Run(ctx context.Context, opts Options) error {
 		return err
 	}
 	return nil
+}
+
+// ActiveSession returns the currently active session from the store, or nil if none.
+func ActiveSession() *api.Session {
+	return store.GetSession().Session
 }

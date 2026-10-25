@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -26,6 +27,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/daemon"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/gateway"
 	"github.com/masterkeysrd/tasksmith/internal/repl"
+	"github.com/spf13/cobra"
 )
 
 type fakeProvider struct {
@@ -288,6 +290,9 @@ func TestREPLPromptAndSlashCommands(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("repl no-prompt run failed: %v", err)
 	}
+	if sess := repl.ActiveSession(); sess != nil {
+		t.Errorf("expected nil ActiveSession() after exiting draft REPL, got %+v", sess)
+	}
 	initialSessions, err := c.ListSessions(context.Background())
 	if err != nil {
 		t.Fatalf("ListSessions: %v", err)
@@ -333,6 +338,44 @@ func TestREPLPromptAndSlashCommands(t *testing.T) {
 	}
 	if resumedSess.Title != "Resumed Mutated Session" {
 		t.Errorf("resumed session title = %q, want 'Resumed Mutated Session'", resumedSess.Title)
+	}
+	if active := repl.ActiveSession(); active == nil || active.ID != sess.ID {
+		t.Errorf("expected ActiveSession().ID = %q, got %+v", sess.ID, active)
+	}
+
+	// 3. Verify runREPL prints resume command summary on exit of active session and prints nothing on draft exit
+	rootOpts := &rootOptions{
+		workspace: wsDir,
+		socket:    sockPath,
+	}
+
+	var bufActive bytes.Buffer
+	cmdActive := &cobra.Command{}
+	cmdActive.SetOut(&bufActive)
+	cmdActive.SetContext(context.Background())
+	b3 := mock.New(80, 24)
+	feedMockREPLInput(b3, "/exit")
+
+	if err := runREPL(cmdActive, rootOpts, &replOptions{sessionID: sess.ID, backend: b3}); err != nil {
+		t.Fatalf("runREPL active session: %v", err)
+	}
+	expectedMsg := fmt.Sprintf("Resume this session with:\n    tasksmith --session %s", sess.ID)
+	if !strings.Contains(bufActive.String(), expectedMsg) {
+		t.Errorf("expected stdout to contain %q, got:\n%s", expectedMsg, bufActive.String())
+	}
+
+	var bufDraft bytes.Buffer
+	cmdDraft := &cobra.Command{}
+	cmdDraft.SetOut(&bufDraft)
+	cmdDraft.SetContext(context.Background())
+	b4 := mock.New(80, 24)
+	feedMockREPLInput(b4, "/exit")
+
+	if err := runREPL(cmdDraft, rootOpts, &replOptions{backend: b4}); err != nil {
+		t.Fatalf("runREPL draft session: %v", err)
+	}
+	if strings.Contains(bufDraft.String(), "Resume this session with:") {
+		t.Errorf("expected no resume message on draft session exit, got:\n%s", bufDraft.String())
 	}
 }
 

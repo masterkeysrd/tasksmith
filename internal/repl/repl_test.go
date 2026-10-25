@@ -259,6 +259,10 @@ func TestRunCtrlCDisarmedByOtherKey(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for Run to exit after fourth Ctrl+C")
 	}
+
+	if active := ActiveSession(); active != nil {
+		t.Errorf("expected nil ActiveSession() on draft REPL exit, got %+v", active)
+	}
 }
 
 func TestRunContextCanceled(t *testing.T) {
@@ -723,6 +727,9 @@ func TestRunResumeSessionHeaderIsItem0(t *testing.T) {
 	}
 	if items[2].Kind != store.TranscriptKindMessage {
 		t.Fatalf("expected items[2] to be message, got %s", items[2].Kind)
+	}
+	if active := ActiveSession(); active == nil || active.ID != sess.ID {
+		t.Errorf("expected ActiveSession().ID = %q, got %+v", sess.ID, active)
 	}
 }
 

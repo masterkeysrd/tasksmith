@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/masterkeysrd/kite/backend"
 	"github.com/masterkeysrd/tasksmith/internal/repl"
 	"github.com/spf13/cobra"
 )
@@ -13,6 +14,7 @@ type replOptions struct {
 	agent     string
 	model     string
 	title     string
+	backend   backend.Backend
 }
 
 func bindREPLFlags(cmd *cobra.Command, opts *replOptions) {
@@ -54,12 +56,21 @@ func runREPL(cmd *cobra.Command, rootOpts *rootOptions, opts *replOptions) error
 		return fmt.Errorf("connect to daemon: %w", err)
 	}
 
-	return repl.Run(ctx, repl.Options{
+	if err := repl.Run(ctx, repl.Options{
 		Client:    c,
 		Workspace: wsDir,
 		SessionID: strings.TrimSpace(opts.sessionID),
 		Agent:     strings.TrimSpace(opts.agent),
 		Model:     strings.TrimSpace(opts.model),
 		Title:     strings.TrimSpace(opts.title),
-	})
+		Backend:   opts.backend,
+	}); err != nil {
+		return err
+	}
+
+	if sess := repl.ActiveSession(); sess != nil && sess.ID != "" {
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "\n\n\nResume this session with:\n    tasksmith --session %s\n", sess.ID)
+	}
+
+	return nil
 }
