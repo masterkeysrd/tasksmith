@@ -9,7 +9,7 @@ import (
 	"github.com/masterkeysrd/kite/extras/kitex"
 	"github.com/masterkeysrd/kite/extras/trail"
 	"github.com/masterkeysrd/kite/key"
-	"github.com/masterkeysrd/tasksmith/internal/repl2/store"
+	"github.com/masterkeysrd/tasksmith/internal/repl/store"
 	uicomponents "github.com/masterkeysrd/tasksmith/internal/ui/components"
 )
 

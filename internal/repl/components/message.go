@@ -7,12 +7,12 @@ import (
 	"github.com/masterkeysrd/kite/extras/trail"
 	"github.com/masterkeysrd/kite/style"
 	"github.com/masterkeysrd/tasksmith/api"
-	"github.com/masterkeysrd/tasksmith/internal/ui/hooks"
+	"github.com/masterkeysrd/tasksmith/internal/repl/store"
 	"github.com/masterkeysrd/tasksmith/internal/ui/theme"
 )
 
 type MessageProps struct {
-	Message hooks.Message
+	Message store.Message
 }
 
 var Message = trail.FC("Message", func(props MessageProps) trail.Node {
@@ -61,8 +61,8 @@ var SystemMessage = trail.FC("SystemMessage", func(props MessageProps) trail.Nod
 		return nil
 	}
 	rowStyle := messageStyle.FlexDirection(style.FlexRow)
-	if scheme != nil {
-		rowStyle = rowStyle.Foreground(scheme.Color.Text.Tertiary)
+	if scheme != nil && scheme.Color.Text.Secondary != nil {
+		rowStyle = rowStyle.Foreground(scheme.Color.Text.Secondary)
 	}
 	return trail.Box(trail.BoxProps{Key: props.Message.ID, Style: rowStyle},
 		trail.Span(trail.SpanProps{
@@ -82,7 +82,7 @@ var messageStyle = style.S().
 	MinWidth(style.Cells(0)).
 	MarginBottom(1)
 
-func messageBody(message hooks.Message) trail.Node {
+func messageBody(message store.Message) trail.Node {
 	parts := messageParts(message)
 	if len(parts) == 0 {
 		return nil
@@ -90,12 +90,12 @@ func messageBody(message hooks.Message) trail.Node {
 	return trail.Box(trail.BoxProps{Key: message.ID, Style: messageStyle}, parts...)
 }
 
-func messageParts(message hooks.Message) []trail.Node {
+func messageParts(message store.Message) []trail.Node {
 	parts := make([]trail.Node, 0, len(message.Parts))
 	for _, part := range message.Parts {
 		var node trail.Node
 		switch part.Type {
-		case hooks.PartText:
+		case store.PartText:
 			if strings.TrimSpace(part.Text.Text) == "" {
 				continue
 			}
@@ -106,12 +106,12 @@ func messageParts(message hooks.Message) []trail.Node {
 			} else {
 				node = MessageText(MessageTextProps{Text: part.Text.Text})
 			}
-		case hooks.PartThought:
+		case store.PartThought:
 			if strings.TrimSpace(part.Thought.Text) == "" {
 				continue
 			}
 			node = MessageThought(MessageThoughtProps{Text: part.Thought.Text, Streaming: part.Thought.Streaming})
-		case hooks.PartTool:
+		case store.PartTool:
 			node = MessageTool(MessageToolProps{Tool: *part.Tool})
 		default:
 			node = messageError(fmt.Sprintf("Unable to render message part: unsupported type %q", part.Type))

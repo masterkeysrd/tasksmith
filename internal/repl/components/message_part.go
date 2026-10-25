@@ -5,13 +5,13 @@ import (
 
 	"github.com/masterkeysrd/kite/extras/trail"
 	"github.com/masterkeysrd/kite/style"
+	"github.com/masterkeysrd/tasksmith/internal/repl/store"
 	uicomponents "github.com/masterkeysrd/tasksmith/internal/ui/components"
-	"github.com/masterkeysrd/tasksmith/internal/ui/hooks"
 	"github.com/masterkeysrd/tasksmith/internal/ui/theme"
 )
 
 type MessageToolProps struct {
-	Tool hooks.ToolPart
+	Tool store.ToolPart
 }
 
 var MessageTool = trail.FC("MessageTool", func(props MessageToolProps) trail.Node {
@@ -72,8 +72,8 @@ var MessageThought = trail.FC("MessageThought", func(props MessageThoughtProps) 
 		MinWidth(style.Cells(0)).
 		Overflow(style.OverflowHidden).
 		Italic(true)
-	if scheme != nil {
-		rowStyle = rowStyle.Foreground(scheme.Color.Text.Tertiary)
+	if scheme != nil && scheme.Color.Text.Secondary != nil {
+		rowStyle = rowStyle.Foreground(scheme.Color.Text.Secondary)
 	}
 	labelStyle := style.S().WhiteSpace(style.WhiteSpaceNoWrap).Flex(0, 0)
 	detailsStyle := style.S().

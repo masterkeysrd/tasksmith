@@ -277,22 +277,16 @@ func TestREPLPromptAndSlashCommands(t *testing.T) {
 	// 1. Verify starting REPL and running slash commands without sending a prompt creates 0 sessions
 	b1 := mock.New(80, 24)
 	feedMockREPLInput(b1,
-		"/sessions",
-		"/mode",
 		"/mode plan",
-		"/changes",
 		"/new claude-opus-4-6",
 		"/exit",
 	)
-	if err := repl.Run(context.Background(), repl.Config{
+	if err := repl.Run(context.Background(), repl.Options{
 		Client:    c,
 		Workspace: wsDir,
 		Backend:   b1,
 	}); err != nil {
 		t.Fatalf("repl no-prompt run failed: %v", err)
-	}
-	if len(b1.InsertedAbove) == 0 {
-		t.Errorf("expected header banner flushed to InsertedAbove")
 	}
 	initialSessions, err := c.ListSessions(context.Background())
 	if err != nil {
@@ -302,7 +296,7 @@ func TestREPLPromptAndSlashCommands(t *testing.T) {
 		t.Fatalf("expected 0 sessions before first user prompt, got %d", len(initialSessions))
 	}
 
-	// 2. Create a session via client, then resume and mutate it via repl.Config
+	// 2. Create a session via client, then resume and mutate it via repl.Options
 	sess, err := c.CreateSession(context.Background(), api.CreateSessionRequest{
 		Title: "Initial Session",
 		Config: api.SessionConfig{
@@ -315,7 +309,7 @@ func TestREPLPromptAndSlashCommands(t *testing.T) {
 
 	b2 := mock.New(80, 24)
 	feedMockREPLInput(b2, "/exit")
-	if err := repl.Run(context.Background(), repl.Config{
+	if err := repl.Run(context.Background(), repl.Options{
 		Client:    c,
 		Workspace: wsDir,
 		SessionID: sess.ID,

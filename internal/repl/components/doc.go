@@ -1,2 +1,2 @@
-// Package components provides the components for the REPL.
+// Package components provides UI components for the repl terminal interface.
 package components

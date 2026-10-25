@@ -4,8 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	// "github.com/masterkeysrd/tasksmith/internal/repl"
-	"github.com/masterkeysrd/tasksmith/internal/repl2"
+	"github.com/masterkeysrd/tasksmith/internal/repl"
 	"github.com/spf13/cobra"
 )
 
@@ -55,15 +54,7 @@ func runREPL(cmd *cobra.Command, rootOpts *rootOptions, opts *replOptions) error
 		return fmt.Errorf("connect to daemon: %w", err)
 	}
 
-	// return repl.Run(ctx, repl.Config{
-	// 	Client:    c,
-	// 	Workspace: wsDir,
-	// 	SessionID: strings.TrimSpace(opts.sessionID),
-	// 	Agent:     strings.TrimSpace(opts.agent),
-	// 	Model:     strings.TrimSpace(opts.model),
-	// 	Title:     strings.TrimSpace(opts.title),
-	// })
-	return repl2.Run(ctx, repl2.Options{
+	return repl.Run(ctx, repl.Options{
 		Client:    c,
 		Workspace: wsDir,
 		SessionID: strings.TrimSpace(opts.sessionID),

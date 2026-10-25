@@ -9,8 +9,8 @@ import (
 	"github.com/masterkeysrd/kite/extras/wind"
 	"github.com/masterkeysrd/kite/promise"
 	"github.com/masterkeysrd/tasksmith/api"
-	"github.com/masterkeysrd/tasksmith/internal/repl2/components"
-	"github.com/masterkeysrd/tasksmith/internal/repl2/store"
+	"github.com/masterkeysrd/tasksmith/internal/repl/components"
+	"github.com/masterkeysrd/tasksmith/internal/repl/store"
 )
 
 func (r *Registry) registerPermissionCommands() {

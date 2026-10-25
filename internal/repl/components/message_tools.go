@@ -8,16 +8,16 @@ import (
 	"github.com/masterkeysrd/kite/extras/trail"
 	"github.com/masterkeysrd/kite/style"
 	"github.com/masterkeysrd/tasksmith/api"
+	"github.com/masterkeysrd/tasksmith/internal/repl/store"
 	"github.com/masterkeysrd/tasksmith/internal/ui/components/icon"
-	"github.com/masterkeysrd/tasksmith/internal/ui/hooks"
 	"github.com/masterkeysrd/tasksmith/internal/ui/theme"
 )
 
-type ToolRenderer func(tool hooks.ToolPart) trail.Node
+type ToolRenderer func(tool store.ToolPart) trail.Node
 
-func ViewToolRenderer(tool hooks.ToolPart) trail.Node {
+func ViewToolRenderer(tool store.ToolPart) trail.Node {
 	props := ViewToolWidgetProps{
-		IsRunning: tool.Status == hooks.ToolRunning || tool.Status == hooks.ToolReceiving,
+		IsRunning: tool.Status == store.ToolRunning || tool.Status == store.ToolReceiving,
 	}
 	if tool.Call != nil && tool.Call.Args != nil {
 		data, err := json.Marshal(tool.Call.Args)
@@ -45,11 +45,11 @@ func ViewToolRenderer(tool hooks.ToolPart) trail.Node {
 		}
 		state, failed := "pending", false
 		switch tool.Status {
-		case hooks.ToolWaitingPermission:
+		case store.ToolWaitingPermission:
 			state = "waiting for permission"
-		case hooks.ToolFailed:
+		case store.ToolFailed:
 			state, failed = "failed without a result", true
-		case hooks.ToolInterrupted:
+		case store.ToolInterrupted:
 			state, failed = "interrupted", true
 		}
 		return viewToolNotice(viewToolNoticeProps{
@@ -168,13 +168,13 @@ var viewToolNotice = trail.FC("ViewToolNotice", func(props viewToolNoticeProps) 
 	return trail.Span(trail.SpanProps{Style: textStyle}, trail.Text(props.Text))
 })
 
-func WriteToolRenderer(tool hooks.ToolPart) trail.Node { return genericToolRenderer(tool) }
+func WriteToolRenderer(tool store.ToolPart) trail.Node { return genericToolRenderer(tool) }
 
-func LsRenderer(tool hooks.ToolPart) trail.Node { return genericToolRenderer(tool) }
+func LsRenderer(tool store.ToolPart) trail.Node { return genericToolRenderer(tool) }
 
-func BashToolRenderer(tool hooks.ToolPart) trail.Node { return genericToolRenderer(tool) }
+func BashToolRenderer(tool store.ToolPart) trail.Node { return genericToolRenderer(tool) }
 
-func DefaultToolRenderer(tool hooks.ToolPart) trail.Node { return genericToolRenderer(tool) }
+func DefaultToolRenderer(tool store.ToolPart) trail.Node { return genericToolRenderer(tool) }
 
 // toolVerbs maps a tool name to its present-progressive and past-tense labels.
 var toolVerbs = map[string][2]string{
@@ -213,7 +213,7 @@ func toolPrimaryArg(call *api.ToolCall) string {
 	return ""
 }
 
-func genericToolRenderer(tool hooks.ToolPart) trail.Node {
+func genericToolRenderer(tool store.ToolPart) trail.Node {
 	name := tool.ID
 	if tool.Call != nil {
 		name = tool.Call.Name
@@ -224,14 +224,14 @@ func genericToolRenderer(tool hooks.ToolPart) trail.Node {
 	if !ok {
 		verbs = [2]string{"Calling " + name, "Called " + name}
 	}
-	running := tool.Status == hooks.ToolRunning || tool.Status == hooks.ToolReceiving
+	running := tool.Status == store.ToolRunning || tool.Status == store.ToolReceiving
 	label, circle := verbs[1], "●"
 	if running {
 		label, circle = verbs[0], "○"
 	}
-	failed := tool.Status == hooks.ToolFailed || tool.Status == hooks.ToolInterrupted
+	failed := tool.Status == store.ToolFailed || tool.Status == store.ToolInterrupted
 	switch tool.Status {
-	case hooks.ToolPending, hooks.ToolWaitingPermission, hooks.ToolInterrupted:
+	case store.ToolPending, store.ToolWaitingPermission, store.ToolInterrupted:
 		label, circle = verbs[0], "○"
 	}
 	arg := toolPrimaryArg(tool.Call)
@@ -240,9 +240,9 @@ func genericToolRenderer(tool hooks.ToolPart) trail.Node {
 		text += " (" + arg + ")"
 	}
 	switch tool.Status {
-	case hooks.ToolWaitingPermission:
+	case store.ToolWaitingPermission:
 		text += " (waiting for permission)"
-	case hooks.ToolInterrupted:
+	case store.ToolInterrupted:
 		text += " (interrupted)"
 	}
 	nodes := []trail.Node{genericToolLine(genericToolLineProps{Text: text, Error: failed})}

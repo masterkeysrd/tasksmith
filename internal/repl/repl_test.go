@@ -2,524 +2,45 @@ package repl
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
-	"fmt"
-	"net"
-	"net/http"
-	"os"
-	"path/filepath"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/masterkeysrd/kite/backend"
 	"github.com/masterkeysrd/kite/backend/mock"
-	"github.com/masterkeysrd/kite/extras/trail"
 	"github.com/masterkeysrd/kite/key"
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/client"
-	"github.com/masterkeysrd/tasksmith/internal/repl/command"
+	"github.com/masterkeysrd/tasksmith/internal/repl/store"
 )
 
-func replEntryAdded(sessionID string, msg api.Message) api.Event {
-	var topic string
-	if sessionID != "" {
-		topic = api.SessionStreamTopic(sessionID)
+func surfaceText(b *mock.Backend) string {
+	frame := b.LastFrame().Surface
+	if frame == nil {
+		return ""
 	}
-	return api.Event{
-		Topic: topic,
-		Type:  api.EventEntryAdded,
-		Payload: api.EntryAddedEvent{
-			SessionID: sessionID,
-			Entry: api.TimelineEntry{
-				ID:        msg.ID,
-				SessionID: sessionID,
-				Kind:      api.TimelineKindMessage,
-				Message:   &msg,
-			},
-		},
-	}
-}
-
-func replChunk(sessionID string, chunk api.Chunk) api.Event {
-	var topic string
-	if sessionID != "" {
-		topic = api.SessionStreamTopic(sessionID)
-	}
-	return api.Event{
-		Topic: topic,
-		Type:  api.EventChunk,
-		Payload: api.ChunkEvent{
-			SessionID: sessionID,
-			Chunk:     chunk,
-		},
-	}
-}
-
-func replPermissions(sessionID string, perms ...api.PermissionRequest) api.Event {
-	var topic string
-	if sessionID != "" {
-		topic = api.SessionStreamTopic(sessionID)
-	}
-	return api.Event{
-		Topic: topic,
-		Type:  api.EventPermissionRequested,
-		Payload: api.PermissionRequestedEvent{
-			SessionID:   sessionID,
-			Permissions: perms,
-		},
-	}
-}
-
-func replCompleted(sessionID string, _ *api.Message) api.Event {
-	var topic string
-	if sessionID != "" {
-		topic = api.SessionStreamTopic(sessionID)
-	}
-	return api.Event{
-		Topic: topic,
-		Type:  api.EventCompleted,
-		Payload: api.CompletedEvent{
-			SessionID: sessionID,
-		},
-	}
-}
-
-type testDaemonState struct {
-	mu          sync.Mutex
-	sessions    map[string]api.Session
-	history     map[string][]api.Message
-	modes       map[string]api.PermissionMode
-	changes     map[string][]api.FileChange
-	diffs       map[string]string
-	permissions map[string][]api.PermissionRequest
-	decisions   []api.PermissionDecision
-	reverts     []api.RevertRequest
-	cancels     []string
-	sent        []api.SendRequest
-	sseCh       chan api.Event
-	nextID      int
-}
-
-func startTestUnixDaemon(t *testing.T) (*client.Client, *testDaemonState) {
-	t.Helper()
-
-	dir, err := os.MkdirTemp("/tmp", "tsrepl-*")
-	if err != nil {
-		t.Fatalf("MkdirTemp: %v", err)
-	}
-	t.Cleanup(func() {
-		_ = os.RemoveAll(dir)
-	})
-
-	sockPath := filepath.Join(dir, "d.sock")
-	ln, err := net.Listen("unix", sockPath)
-	if err != nil {
-		t.Fatalf("net.Listen unix: %v", err)
-	}
-	t.Cleanup(func() {
-		_ = ln.Close()
-	})
-
-	now := time.Date(2026, 10, 21, 12, 0, 0, 0, time.UTC)
-	st := &testDaemonState{
-		sessions: map[string]api.Session{
-			"s1": {
-				ID:    "s1",
-				Title: "Initial",
-				Config: api.SessionConfig{
-					Agent: "build",
-					Model: "claude-sonnet-4-6",
-					Mode:  api.ModeDefault,
-				},
-				Status:    api.StatusIdle,
-				CreatedAt: now,
-				UpdatedAt: now,
-			},
-		},
-		history: map[string][]api.Message{
-			"s1": {
-				{
-					ID:   "m1",
-					Role: api.RoleUser,
-					Content: []api.Block{
-						{Type: api.BlockText, Text: "Hello REPL"},
-					},
-				},
-				{
-					ID:   "m2",
-					Role: api.RoleAssistant,
-					Content: []api.Block{
-						{Type: api.BlockReasoning, Text: "Thinking..."},
-						{Type: api.BlockText, Text: "Hi there!"},
-					},
-				},
-			},
-		},
-		modes: map[string]api.PermissionMode{
-			"s1": api.ModeDefault,
-		},
-		changes: map[string][]api.FileChange{
-			"s1": {
-				{
-					ID:        "e1",
-					Path:      "main.go",
-					Kind:      "modify",
-					Additions: 3,
-					Deletions: 1,
-					Timestamp: now,
-				},
-			},
-		},
-		diffs: map[string]string{
-			"main.go:e1": "--- a/main.go\n+++ b/main.go\n@@ -1,2 +1,4 @@\n-old\n+new\n",
-		},
-		permissions: make(map[string][]api.PermissionRequest),
-		sseCh:       make(chan api.Event, 32),
-		nextID:      1,
-	}
-
-	mux := http.NewServeMux()
-	registerTestDaemonRoutes(mux, st)
-
-	srv := &http.Server{Handler: mux}
-	go func() {
-		_ = srv.Serve(ln)
-	}()
-	t.Cleanup(func() {
-		close(st.sseCh)
-		_ = srv.Close()
-	})
-
-	c, err := client.New(sockPath, client.WithCWD("/workspace/project"))
-	if err != nil {
-		t.Fatalf("client.New: %v", err)
-	}
-	return c, st
-}
-
-func registerTestDaemonRoutes(mux *http.ServeMux, st *testDaemonState) {
-	mux.HandleFunc("GET /v1/workspace", func(w http.ResponseWriter, r *http.Request) {
-		cwd := r.Header.Get(api.HeaderCWD)
-		if cwd == "" {
-			cwd = "/workspace/project"
-		}
-		_ = json.NewEncoder(w).Encode(api.Workspace{
-			Name:         "test-workspace",
-			RootDir:      "/workspace/project",
-			CWD:          cwd,
-			DefaultAgent: "build",
-			DefaultModel: "claude-sonnet-4-6",
-		})
-	})
-	mux.HandleFunc("GET /v1/agents", func(w http.ResponseWriter, _ *http.Request) {
-		_ = json.NewEncoder(w).Encode([]api.Agent{{Name: "build", Models: []string{"claude-sonnet-4-6"}, Effort: "high"}})
-	})
-	mux.HandleFunc("GET /v1/agents/{name}", func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode(api.Agent{
-			Name:   r.PathValue("name"),
-			Models: []string{"claude-sonnet-4-6"},
-			Effort: "high",
-		})
-	})
-	mux.HandleFunc("GET /v1/models", func(w http.ResponseWriter, _ *http.Request) {
-		_ = json.NewEncoder(w).Encode([]api.Model{{ID: "claude-sonnet-4-6", Name: "claude-sonnet-4-6", Label: "Claude 3.7 Sonnet", DefaultEffort: "medium"}})
-	})
-	mux.HandleFunc("GET /v1/models/{id...}", func(w http.ResponseWriter, r *http.Request) {
-		id := r.PathValue("id")
-		_ = json.NewEncoder(w).Encode(api.Model{
-			ID:            id,
-			Name:          id,
-			Label:         "Claude 3.7 Sonnet",
-			DefaultEffort: "medium",
-		})
-	})
-
-	mux.HandleFunc("POST /v1/sessions", func(w http.ResponseWriter, r *http.Request) {
-		var req api.CreateSessionRequest
-		_ = json.NewDecoder(r.Body).Decode(&req)
-
-		st.mu.Lock()
-		id := req.ID
-		if id == "" {
-			st.nextID++
-			id = fmt.Sprintf("s%d", st.nextID)
-		}
-		model := req.Config.Model
-		if model == "" {
-			model = "default-model"
-		}
-		agent := req.Config.Agent
-		if agent == "" {
-			agent = "build"
-		}
-		mode := req.Config.Mode
-		if mode == "" {
-			mode = api.ModeDefault
-		}
-		sess := api.Session{
-			ID:    id,
-			Title: req.Title,
-			Config: api.SessionConfig{
-				Agent:  agent,
-				Model:  model,
-				Effort: req.Config.Effort,
-				Mode:   mode,
-			},
-			Status:    api.StatusIdle,
-			UpdatedAt: time.Date(2026, 10, 21, 12, 5, 0, 0, time.UTC),
-		}
-		st.sessions[id] = sess
-		st.modes[id] = mode
-		st.mu.Unlock()
-
-		w.WriteHeader(http.StatusCreated)
-		_ = json.NewEncoder(w).Encode(sess)
-	})
-
-	mux.HandleFunc("GET /v1/sessions", func(w http.ResponseWriter, _ *http.Request) {
-		st.mu.Lock()
-		defer st.mu.Unlock()
-		var list []api.Session
-		for _, s := range st.sessions {
-			list = append(list, s)
-		}
-		_ = json.NewEncoder(w).Encode(list)
-	})
-
-	mux.HandleFunc("GET /v1/sessions/{id}", func(w http.ResponseWriter, r *http.Request) {
-		id := r.PathValue("id")
-		st.mu.Lock()
-		defer st.mu.Unlock()
-		s, ok := st.sessions[id]
-		if !ok {
-			http.NotFound(w, r)
-			return
-		}
-		_ = json.NewEncoder(w).Encode(s)
-	})
-
-	mux.HandleFunc("PATCH /v1/sessions/{id}", func(w http.ResponseWriter, r *http.Request) {
-		id := r.PathValue("id")
-		var req api.UpdateSessionRequest
-		_ = json.NewDecoder(r.Body).Decode(&req)
-
-		st.mu.Lock()
-		defer st.mu.Unlock()
-		s, ok := st.sessions[id]
-		if !ok {
-			http.NotFound(w, r)
-			return
-		}
-		if req.Title != "" {
-			s.Title = req.Title
-		}
-		if req.Config.Agent != "" {
-			s.Config.Agent = req.Config.Agent
-		}
-		if req.Config.Model != "" {
-			s.Config.Model = req.Config.Model
-		}
-		if req.Config.Effort != "" {
-			s.Config.Effort = req.Config.Effort
-		}
-		if req.Config.Mode != "" {
-			s.Config.Mode = req.Config.Mode
-		}
-		st.sessions[id] = s
-		_ = json.NewEncoder(w).Encode(s)
-	})
-
-	mux.HandleFunc("DELETE /v1/sessions/{id}", func(w http.ResponseWriter, r *http.Request) {
-		id := r.PathValue("id")
-		st.mu.Lock()
-		delete(st.sessions, id)
-		delete(st.history, id)
-		delete(st.modes, id)
-		delete(st.changes, id)
-		st.mu.Unlock()
-		w.WriteHeader(http.StatusNoContent)
-	})
-
-	getHistory := func(w http.ResponseWriter, r *http.Request) {
-		id := r.PathValue("id")
-		st.mu.Lock()
-		defer st.mu.Unlock()
-		msgs := st.history[id]
-		if msgs == nil {
-			msgs = []api.Message{}
-		}
-		_ = json.NewEncoder(w).Encode(msgs)
-	}
-	getTimeline := func(w http.ResponseWriter, r *http.Request) {
-		id := r.PathValue("id")
-		st.mu.Lock()
-		defer st.mu.Unlock()
-		msgs := st.history[id]
-		entries := make([]api.TimelineEntry, len(msgs))
-		for i, m := range msgs {
-			msg := m
-			entries[i] = api.TimelineEntry{
-				ID:        msg.ID,
-				SessionID: id,
-				Kind:      api.TimelineKindMessage,
-				Message:   &msg,
+	var sb strings.Builder
+	for y := 0; y < frame.Height; y++ {
+		var line strings.Builder
+		for x := 0; x < frame.Width; x++ {
+			c := frame.CellAt(x, y)
+			if c.Content != "" {
+				line.WriteString(c.Content)
+			} else {
+				line.WriteByte(' ')
 			}
 		}
-		_ = json.NewEncoder(w).Encode(entries)
+		trimmed := strings.TrimRight(line.String(), " ")
+		if trimmed != "" {
+			sb.WriteString(trimmed)
+			sb.WriteString("\n")
+		}
 	}
-	mux.HandleFunc("GET /v1/sessions/{id}/timeline", getTimeline)
-	mux.HandleFunc("GET /v1/sessions/{id}/history", getHistory)
-	mux.HandleFunc("GET /v1/sessions/{id}/messages", getHistory)
-
-	postSend := func(w http.ResponseWriter, r *http.Request) {
-		id := r.PathValue("id")
-		var req api.SendRequest
-		_ = json.NewDecoder(r.Body).Decode(&req)
-
-		st.mu.Lock()
-		st.sent = append(st.sent, req)
-		if req.Decision != nil {
-			st.decisions = append(st.decisions, *req.Decision)
-		}
-		if req.Content != "" {
-			st.history[id] = append(st.history[id], api.Message{
-				ID:      fmt.Sprintf("m-%d", len(st.sent)),
-				Role:    api.RoleUser,
-				Content: []api.Block{{Type: api.BlockText, Text: req.Content}},
-			})
-		}
-		st.mu.Unlock()
-
-		w.WriteHeader(http.StatusAccepted)
-	}
-	mux.HandleFunc("POST /v1/sessions/{id}/send", postSend)
-	mux.HandleFunc("POST /v1/sessions/{id}/messages", postSend)
-
-	mux.HandleFunc("POST /v1/sessions/{id}/cancel", func(w http.ResponseWriter, r *http.Request) {
-		id := r.PathValue("id")
-		st.mu.Lock()
-		st.cancels = append(st.cancels, id)
-		st.mu.Unlock()
-		w.WriteHeader(http.StatusAccepted)
-	})
-
-	mux.HandleFunc("GET /v1/sessions/{id}/permissions", func(w http.ResponseWriter, r *http.Request) {
-		id := r.PathValue("id")
-		st.mu.Lock()
-		defer st.mu.Unlock()
-		perms := st.permissions[id]
-		if perms == nil {
-			perms = []api.PermissionRequest{}
-		}
-		_ = json.NewEncoder(w).Encode(perms)
-	})
-
-	respondPerm := func(w http.ResponseWriter, r *http.Request) {
-		var dec api.PermissionDecision
-		_ = json.NewDecoder(r.Body).Decode(&dec)
-
-		st.mu.Lock()
-		st.decisions = append(st.decisions, dec)
-		st.mu.Unlock()
-
-		w.WriteHeader(http.StatusAccepted)
-	}
-	mux.HandleFunc("POST /v1/sessions/{id}/permissions", respondPerm)
-	mux.HandleFunc("POST /v1/sessions/{id}/permissions/respond", respondPerm)
-
-	mux.HandleFunc("GET /v1/sessions/{id}/mode", func(w http.ResponseWriter, r *http.Request) {
-		id := r.PathValue("id")
-		st.mu.Lock()
-		defer st.mu.Unlock()
-		m := st.modes[id]
-		if m == "" {
-			m = api.ModeDefault
-		}
-		_ = json.NewEncoder(w).Encode(m)
-	})
-
-	mux.HandleFunc("PUT /v1/sessions/{id}/mode", func(w http.ResponseWriter, r *http.Request) {
-		id := r.PathValue("id")
-		var m api.PermissionMode
-		_ = json.NewDecoder(r.Body).Decode(&m)
-
-		st.mu.Lock()
-		st.modes[id] = m
-		st.mu.Unlock()
-
-		_ = json.NewEncoder(w).Encode(m)
-	})
-
-	mux.HandleFunc("GET /v1/sessions/{id}/changes", func(w http.ResponseWriter, r *http.Request) {
-		id := r.PathValue("id")
-		st.mu.Lock()
-		defer st.mu.Unlock()
-		changes := st.changes[id]
-		if changes == nil {
-			changes = []api.FileChange{}
-		}
-		_ = json.NewEncoder(w).Encode(changes)
-	})
-
-	mux.HandleFunc("GET /v1/sessions/{id}/diff", func(w http.ResponseWriter, r *http.Request) {
-		path := r.URL.Query().Get("path")
-		entryID := r.URL.Query().Get("entry_id")
-		key := fmt.Sprintf("%s:%s", path, entryID)
-
-		st.mu.Lock()
-		diff := st.diffs[key]
-		st.mu.Unlock()
-
-		_ = json.NewEncoder(w).Encode(diff)
-	})
-
-	mux.HandleFunc("POST /v1/sessions/{id}/revert", func(w http.ResponseWriter, r *http.Request) {
-		var req api.RevertRequest
-		_ = json.NewDecoder(r.Body).Decode(&req)
-
-		st.mu.Lock()
-		st.reverts = append(st.reverts, req)
-		st.mu.Unlock()
-
-		w.WriteHeader(http.StatusAccepted)
-	})
-
-	mux.HandleFunc("GET /v1/events", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/event-stream")
-		w.Header().Set("Cache-Control", "no-cache")
-		w.Header().Set("Connection", "keep-alive")
-
-		flusher, ok := w.(http.Flusher)
-		if !ok {
-			http.Error(w, "no flusher", http.StatusInternalServerError)
-			return
-		}
-		flusher.Flush()
-
-		for {
-			select {
-			case <-r.Context().Done():
-				return
-			case ev, open := <-st.sseCh:
-				if !open {
-					return
-				}
-				data, err := json.Marshal(ev)
-				if err != nil {
-					continue
-				}
-				_, _ = fmt.Fprintf(w, "data: %s\n\n", data)
-				flusher.Flush()
-			}
-		}
-	})
+	return sb.String()
 }
 
-func insertedAboveText(b *mock.Backend) string {
+func allText(b *mock.Backend) string {
 	var sb strings.Builder
 	for _, buf := range b.InsertedAbove {
 		for y := 0; y < buf.Height; y++ {
@@ -539,471 +60,763 @@ func insertedAboveText(b *mock.Backend) string {
 			}
 		}
 	}
+	sb.WriteString(surfaceText(b))
 	return sb.String()
 }
 
-func TestConfigValidate(t *testing.T) {
-	c, _ := startTestUnixDaemon(t)
-
-	valid := Config{
-		Client:    c,
-		Workspace: "/tmp/ws",
+func waitFor(t *testing.T, condition func() bool, timeout time.Duration, msg string) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if condition() {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
-	if err := valid.Validate(); err != nil {
-		t.Fatalf("expected valid Config, got %v", err)
+	t.Fatalf("timed out waiting for %s", msg)
+}
+
+func TestOptionsValidate(t *testing.T) {
+	c, err := client.New("/tmp/mock.sock")
+	if err != nil {
+		t.Fatalf("failed to create client: %v", err)
 	}
 
-	cases := []struct {
-		name   string
-		mutate func(*Config)
+	tests := []struct {
+		name    string
+		opts    Options
+		wantErr bool
 	}{
-		{"nil client", func(cfg *Config) { cfg.Client = nil }},
-		{"empty workspace", func(cfg *Config) { cfg.Workspace = "   " }},
+		{
+			name:    "nil client",
+			opts:    Options{Client: nil, Workspace: "/tmp/ws"},
+			wantErr: true,
+		},
+		{
+			name:    "empty workspace",
+			opts:    Options{Client: c, Workspace: ""},
+			wantErr: true,
+		},
+		{
+			name:    "whitespace workspace",
+			opts:    Options{Client: c, Workspace: "   "},
+			wantErr: true,
+		},
+		{
+			name:    "valid options",
+			opts:    Options{Client: c, Workspace: "/tmp/ws"},
+			wantErr: false,
+		},
 	}
 
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			cfg := valid
-			tc.mutate(&cfg)
-			if err := cfg.Validate(); !errors.Is(err, ErrInvalidConfig) {
-				t.Errorf("Validate() error = %v, want %v", err, ErrInvalidConfig)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.opts.Validate()
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("Validate() error = %v, wantErr %v", err, tt.wantErr)
 			}
-			if err := Run(context.Background(), cfg); !errors.Is(err, ErrInvalidConfig) {
-				t.Errorf("Run() error = %v, want %v", err, ErrInvalidConfig)
+			if tt.wantErr && !errors.Is(err, ErrInvalidOptions) {
+				t.Fatalf("expected error wrapping ErrInvalidOptions, got: %v", err)
 			}
 		})
 	}
+
+	// Verify Run also returns validation error
+	if err := Run(context.Background(), Options{}); !errors.Is(err, ErrInvalidOptions) {
+		t.Fatalf("Run() error = %v, want ErrInvalidOptions", err)
+	}
 }
 
-func feedMockCommands(b *mock.Backend, lines ...string) {
-	go func() {
-		time.Sleep(100 * time.Millisecond)
-		for _, line := range lines {
-			for _, r := range line {
-				b.PostEvent(&backend.RawKeyEvent{
-					Key: key.Key{Code: r, Text: string(r)},
-				})
-				time.Sleep(2 * time.Millisecond)
-			}
-			// These tests submit complete commands rather than accepting suggestions.
-			time.Sleep(25 * time.Millisecond)
-			b.PostEvent(&backend.RawKeyEvent{Key: key.Key{Code: key.KeyEscape}})
-			time.Sleep(25 * time.Millisecond)
-			b.PostEvent(&backend.RawKeyEvent{
-				Key: key.Key{Code: key.KeyEnter},
-			})
-			time.Sleep(50 * time.Millisecond)
-			b.PostEvent(&backend.RawKeyEvent{Key: key.Key{Code: key.KeyEscape}})
-			time.Sleep(50 * time.Millisecond)
-		}
-	}()
-}
-
-func TestLazySessionCreationNoPrompts(t *testing.T) {
-	c, st := startTestUnixDaemon(t)
-	st.mu.Lock()
-	clear(st.sessions)
-	st.mu.Unlock()
-
+func TestRunCtrlCDoublePressExits(t *testing.T) {
 	b := mock.New(80, 24)
-	feedMockCommands(b,
-		"/sessions",
-		"/mode",
-		"/mode plan",
-		"/changes",
-		"/new claude-opus-4-6",
-		"/exit",
-	)
-
-	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
-	defer cancel()
-	err := Run(ctx, Config{
-		Client:    c,
-		Workspace: "/tmp/ws",
-		Agent:     "build",
-		Model:     "claude-sonnet-4-6",
-		Title:     "Lazy Test",
-		Backend:   b,
-	})
+	c, err := client.New("/tmp/mock.sock")
 	if err != nil {
-		t.Fatalf("Run failed: %v", err)
+		t.Fatalf("failed to create client: %v", err)
 	}
 
-	st.mu.Lock()
-	sessionCount := len(st.sessions)
-	st.mu.Unlock()
-	if sessionCount != 0 {
-		t.Fatalf("expected 0 sessions created when no prompt was sent, got %d", sessionCount)
-	}
-}
-
-func TestFirstMessageCreatesTheDraftUnderItsOwnID(t *testing.T) {
-	c, st := startTestUnixDaemon(t)
-	st.mu.Lock()
-	clear(st.sessions)
-	st.mu.Unlock()
-
-	b := mock.New(80, 24)
-	feedMockCommands(b, "hello draft", "/exit")
-
-	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
-	defer cancel()
-	err := Run(ctx, Config{
-		Client:    c,
-		Workspace: "/tmp/ws",
-		Agent:     "build",
-		Model:     "claude-sonnet-4-6",
-		Backend:   b,
-	})
-	if err != nil {
-		t.Fatalf("Run failed: %v", err)
-	}
-
-	st.mu.Lock()
-	defer st.mu.Unlock()
-	if len(st.sessions) != 1 {
-		t.Fatalf("expected the first message to create exactly 1 session, got %d", len(st.sessions))
-	}
-	for id, sess := range st.sessions {
-		parsed, err := uuid.Parse(id)
-		if err != nil || parsed.Version() != 7 {
-			t.Errorf("session ID %q is not a UUIDv7 generated by the UI", id)
-		}
-		if sess.Title != "hello draft" || sess.Config.Agent != "build" || sess.Config.Model != "claude-sonnet-4-6" {
-			t.Errorf("created session = %+v", sess)
-		}
-	}
-	if len(st.sent) != 1 || st.sent[0].Content != "hello draft" {
-		t.Errorf("sent = %+v, want the first message", st.sent)
-	}
-}
-
-func TestRunResumeSessionWithMutation(t *testing.T) {
-	c, st := startTestUnixDaemon(t)
-	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
-	defer cancel()
-
-	b := mock.New(80, 24)
-	feedMockCommands(b, "/exit")
-
-	cfg := Config{
-		Client:    c,
-		Workspace: "/workspace/project",
-		SessionID: "s1",
-		Title:     "Mutated Title",
-		Agent:     "build",
-		Model:     "claude-haiku-4-5",
-		Backend:   b,
-	}
-
-	if err := Run(ctx, cfg); err != nil {
-		t.Fatalf("Run failed: %v", err)
-	}
-
-	st.mu.Lock()
-	sess := st.sessions["s1"]
-	st.mu.Unlock()
-
-	if sess.Title != "Mutated Title" {
-		t.Errorf("session title = %q, want 'Mutated Title'", sess.Title)
-	}
-	if sess.Config.Model != "claude-haiku-4-5" {
-		t.Errorf("session model = %q, want 'claude-haiku-4-5'", sess.Config.Model)
-	}
-}
-
-func TestAppFunctionalComponentLifecycle(t *testing.T) {
-	c, st := startTestUnixDaemon(t)
 	ctx := t.Context()
 
-	sess, err := c.GetSession(ctx, "s1")
-	if err != nil {
-		t.Fatalf("GetSession: %v", err)
-	}
-
-	b := mock.New(80, 24)
-	props := AppProps{
-		Client:            c,
-		Workspace:         "/workspace/project",
-		Version:           "v0.1.0",
-		SessionID:         "s1",
-		InitialSess:       sess,
-		InitialMode:       api.ModeDefault,
-		InitialModelLabel: "Claude 3.7 Sonnet",
-		InitialThinking:   "high",
-		Registry:          command.NewRegistry(),
-	}
-
-	inst, err := trail.New(App(props), trail.WithBackend(b))
-	if err != nil {
-		t.Fatalf("trail.New: %v", err)
-	}
-
-	runDone := make(chan error, 1)
+	errCh := make(chan error, 1)
 	go func() {
-		runDone <- inst.Run(ctx)
+		errCh <- Run(ctx, Options{
+			Client:    c,
+			Workspace: "/tmp/ws",
+			Backend:   b,
+		})
 	}()
 
-	// Wait for REPL header and initial history to render
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		if strings.Contains(insertedAboveText(b), "Hi there!") {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
+	waitFor(t, func() bool {
+		return b.LastFrame().Surface != nil
+	}, 2*time.Second, "initial frame render")
+
+	if store.GetApp().CtrlCPending {
+		t.Fatal("expected CtrlCPending to be false initially")
 	}
 
-	// 1. Submit prompt via key events
-	for _, ch := range "Hello assistant" {
-		b.PostEvent(&backend.RawKeyEvent{Key: key.Key{Code: ch, Text: string(ch)}})
-		time.Sleep(2 * time.Millisecond)
+	// Send first Ctrl+C
+	b.PostEvent(&backend.RawKeyEvent{
+		Key: key.Key{Code: 'c', Mod: key.ModCtrl},
+	})
+
+	// Verify store.GetApp().CtrlCPending becomes true and screen contains "Press Ctrl+C again to exit"
+	waitFor(t, func() bool {
+		return store.GetApp().CtrlCPending && strings.Contains(surfaceText(b), "Press Ctrl+C again to exit")
+	}, 2*time.Second, "CtrlCPending and screen update on first Ctrl+C")
+
+	// Verify Run is still running
+	select {
+	case err := <-errCh:
+		t.Fatalf("Run exited prematurely after single Ctrl+C: %v", err)
+	default:
+	}
+
+	// Send second Ctrl+C
+	b.PostEvent(&backend.RawKeyEvent{
+		Key: key.Key{Code: 'c', Mod: key.ModCtrl},
+	})
+
+	// Verify Run exits cleanly with nil error
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("expected nil error on double Ctrl+C exit, got: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for Run to exit after second Ctrl+C")
+	}
+}
+
+func TestRunCtrlCDisarmedByOtherKey(t *testing.T) {
+	b := mock.New(80, 24)
+	c, err := client.New("/tmp/mock.sock")
+	if err != nil {
+		t.Fatalf("failed to create client: %v", err)
+	}
+
+	ctx := t.Context()
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- Run(ctx, Options{
+			Client:    c,
+			Workspace: "/tmp/ws",
+			Backend:   b,
+		})
+	}()
+
+	waitFor(t, func() bool {
+		return b.LastFrame().Surface != nil
+	}, 2*time.Second, "initial frame render")
+
+	// 1. Send first Ctrl+C
+	b.PostEvent(&backend.RawKeyEvent{
+		Key: key.Key{Code: key.CtrlC},
+	})
+
+	waitFor(t, func() bool {
+		return store.GetApp().CtrlCPending
+	}, 2*time.Second, "CtrlCPending to become true")
+
+	// 2. Send 'a'
+	b.PostEvent(&backend.RawKeyEvent{
+		Key: key.Key{Code: 'a', Text: "a"},
+	})
+
+	waitFor(t, func() bool {
+		return !store.GetApp().CtrlCPending
+	}, 2*time.Second, "CtrlCPending to be disarmed by other key")
+
+	if strings.Contains(surfaceText(b), "Press Ctrl+C again to exit") {
+		t.Fatalf("screen should no longer contain exit warning, got:\n%s", surfaceText(b))
+	}
+
+	// 3. Send third Ctrl+C (only re-arms)
+	b.PostEvent(&backend.RawKeyEvent{
+		Key: key.Key{Code: key.CtrlC},
+	})
+
+	waitFor(t, func() bool {
+		return store.GetApp().CtrlCPending && strings.Contains(surfaceText(b), "Press Ctrl+C again to exit")
+	}, 2*time.Second, "CtrlCPending to re-arm")
+
+	// Verify Run is still running
+	select {
+	case err := <-errCh:
+		t.Fatalf("Run exited prematurely after third Ctrl+C: %v", err)
+	default:
+	}
+
+	// 4. Send fourth Ctrl+C (exits)
+	b.PostEvent(&backend.RawKeyEvent{
+		Key: key.Key{Code: key.CtrlC},
+	})
+
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("expected nil error on fourth Ctrl+C exit, got: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for Run to exit after fourth Ctrl+C")
+	}
+}
+
+func TestRunContextCanceled(t *testing.T) {
+	b := mock.New(80, 24)
+	c, err := client.New("/tmp/mock.sock")
+	if err != nil {
+		t.Fatalf("failed to create client: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- Run(ctx, Options{
+			Client:    c,
+			Workspace: "/tmp/ws",
+			Backend:   b,
+		})
+	}()
+
+	waitFor(t, func() bool {
+		return b.LastFrame().Surface != nil
+	}, 2*time.Second, "initial frame render")
+
+	cancel()
+
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("expected nil error on context cancel, got: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for Run to exit after context cancel")
+	}
+}
+
+func TestRunWithCWD(t *testing.T) {
+	b := mock.New(80, 24)
+	c, err := client.New("/tmp/mock.sock")
+	if err != nil {
+		t.Fatalf("failed to create client: %v", err)
+	}
+	if c.CWD() != "" {
+		t.Fatalf("expected client CWD to be empty, got: %q", c.CWD())
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	opts := Options{
+		Client:    c,
+		Workspace: "/tmp/custom-ws",
+		Backend:   b,
+	}
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- Run(ctx, opts)
+	}()
+
+	waitFor(t, func() bool {
+		return b.LastFrame().Surface != nil
+	}, 2*time.Second, "initial frame render")
+
+	cancel()
+	<-errCh
+}
+
+func TestRunStartupHeader(t *testing.T) {
+	b := mock.New(80, 24)
+	c, err := client.New("/tmp/mock.sock")
+	if err != nil {
+		t.Fatalf("failed to create client: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	opts := Options{
+		Client:    c,
+		Workspace: "/tmp/ws",
+		Version:   "0.2.0",
+		Model:     "test-model",
+		Backend:   b,
+	}
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- Run(ctx, opts)
+	}()
+
+	// The startup banner is initially rendered live on the surface (not in static scrollback)
+	waitFor(t, func() bool {
+		return strings.Contains(surfaceText(b), "TaskSmith v0.2.0") &&
+			strings.Contains(surfaceText(b), "test-model with auto effort") &&
+			strings.Contains(surfaceText(b), "/tmp/ws")
+	}, 2*time.Second, "live startup banner on screen surface")
+
+	if len(b.InsertedAbove) != 0 {
+		t.Fatalf("expected 0 scrollback buffers while transcript is clean, got %d", len(b.InsertedAbove))
+	}
+
+	waitFor(t, func() bool {
+		return strings.Contains(surfaceText(b), "shift+tab cycle mode")
+	}, 2*time.Second, "default hint on status line")
+}
+
+func TestRunShiftTabCyclesPermissionMode(t *testing.T) {
+	b := mock.New(80, 24)
+	c, err := client.New("/tmp/mock.sock")
+	if err != nil {
+		t.Fatalf("failed to create client: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	opts := Options{
+		Client:    c,
+		Workspace: "/tmp/ws",
+		Version:   "0.1.0",
+		Model:     "test-model",
+		Backend:   b,
+	}
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- Run(ctx, opts)
+	}()
+
+	// Wait for initial render where ModeDefault is hidden
+	waitFor(t, func() bool {
+		return b.LastFrame().Surface != nil && strings.Contains(surfaceText(b), ">")
+	}, 2*time.Second, "initial composer render")
+
+	if store.GetSession().Config.Mode != api.ModeDefault {
+		t.Fatalf("expected ModeDefault initially, got %q", store.GetSession().Config.Mode)
+	}
+
+	// Press Shift+Tab -> cycles to accept_edits
+	b.PostEvent(&backend.RawKeyEvent{
+		Key: key.Key{Code: key.KeyTab, Mod: key.ModShift},
+	})
+
+	waitFor(t, func() bool {
+		return store.GetSession().Config.Mode == api.ModeAcceptEdits &&
+			strings.Contains(surfaceText(b), "accept_edits")
+	}, 2*time.Second, "status line to show accept_edits mode")
+
+	// Press Shift+Tab again -> cycles to plan
+	b.PostEvent(&backend.RawKeyEvent{
+		Key: key.Key{Code: key.KeyTab, Mod: key.ModShift},
+	})
+
+	waitFor(t, func() bool {
+		return store.GetSession().Config.Mode == api.ModePlan &&
+			strings.Contains(surfaceText(b), "plan")
+	}, 2*time.Second, "status line to show plan mode")
+}
+
+func TestRunSubmitPromptAndActiveStream(t *testing.T) {
+	b := mock.New(80, 24)
+	c, st := startTestUnixDaemon(t)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	opts := Options{
+		Client:    c,
+		Workspace: "/workspace/project",
+		Version:   "0.1.0",
+		Model:     "claude-sonnet-4-6",
+		Backend:   b,
+	}
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- Run(ctx, opts)
+	}()
+
+	waitFor(t, func() bool {
+		return b.LastFrame().Surface != nil && strings.Contains(surfaceText(b), ">")
+	}, 2*time.Second, "initial composer render")
+
+	// Type "Hello Tasksmith" into Composer
+	for _, ch := range "Hello Tasksmith" {
+		b.PostEvent(&backend.RawKeyEvent{
+			Key: key.Key{Code: ch, Text: string(ch)},
+		})
+	}
+
+	waitFor(t, func() bool {
+		return strings.Contains(surfaceText(b), "Hello Tasksmith")
+	}, 2*time.Second, "typed text in composer")
+
+	// Press Enter
+	b.PostEvent(&backend.RawKeyEvent{
+		Key: key.Key{Code: key.KeyEnter},
+	})
+
+	// Composer should clear, pending user message should appear in ActiveStream,
+	// hint should become "streaming • esc to cancel", and message sent to daemon
+	waitFor(t, func() bool {
+		st.mu.Lock()
+		sentCount := len(st.sent)
+		st.mu.Unlock()
+		txt := surfaceText(b)
+		return sentCount > 0 &&
+			strings.Contains(txt, "Hello Tasksmith") &&
+			(strings.Contains(txt, "Thinking...") || strings.Contains(txt, "streaming • esc to cancel"))
+	}, 2*time.Second, "active stream prompt submission and hint")
+
+	// Verify client-supplied message ID was generated (UUIDv7)
+	st.mu.Lock()
+	if len(st.sent) == 0 {
+		st.mu.Unlock()
+		t.Fatal("expected message to be sent")
+	}
+	sentReq := st.sent[0]
+	st.mu.Unlock()
+	if sentReq.ID == "" {
+		t.Fatal("expected client-generated UUIDv7 ID on SendRequest, got empty")
+	}
+	if sentReq.Content != "Hello Tasksmith" {
+		t.Fatalf("expected SendRequest content 'Hello Tasksmith', got %q", sentReq.Content)
+	}
+
+	// Press Escape to cancel
+	b.PostEvent(&backend.RawKeyEvent{
+		Key: key.Key{Code: key.KeyEscape},
+	})
+
+	waitFor(t, func() bool {
+		st.mu.Lock()
+		defer st.mu.Unlock()
+		return len(st.cancels) > 0
+	}, 2*time.Second, "cancel request delivered to daemon")
+
+	waitFor(t, func() bool {
+		txt := surfaceText(b)
+		return !store.GetStream().Streaming &&
+			!strings.Contains(txt, "Thinking...") &&
+			!strings.Contains(txt, "streaming • esc to cancel") &&
+			strings.Contains(txt, "shift+tab cycle mode • /help commands")
+	}, 2*time.Second, "UI state reset on cancel")
+}
+
+func TestRunSlashCommandModeAndExit(t *testing.T) {
+	b := mock.New(80, 24)
+	c, err := client.New("/tmp/mock.sock")
+	if err != nil {
+		t.Fatalf("failed to create client: %v", err)
+	}
+
+	ctx := t.Context()
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- Run(ctx, Options{
+			Client:    c,
+			Workspace: "/tmp/ws",
+			Backend:   b,
+		})
+	}()
+
+	waitFor(t, func() bool {
+		return b.LastFrame().Surface != nil && strings.Contains(surfaceText(b), ">")
+	}, 2*time.Second, "initial composer render")
+
+	// Type "/mode auto"
+	for _, ch := range "/mode auto" {
+		b.PostEvent(&backend.RawKeyEvent{
+			Key: key.Key{Code: ch, Text: string(ch)},
+		})
 	}
 	b.PostEvent(&backend.RawKeyEvent{Key: key.Key{Code: key.KeyEnter}})
 
-	deadline = time.Now().Add(5 * time.Second)
-	var sentCount int
-	for time.Now().Before(deadline) {
-		st.mu.Lock()
-		sentCount = len(st.sent)
-		st.mu.Unlock()
-		if sentCount > 0 {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	if sentCount == 0 {
-		t.Errorf("expected SendRequest to daemon, got 0")
-	}
+	waitFor(t, func() bool {
+		return store.GetSession().Config.Mode == api.ModeAuto
+	}, 2*time.Second, "mode to switch to auto")
 
-	// The daemon echoes the persisted user message over SSE.
-	st.sseCh <- replEntryAdded("s1", api.Message{
-		ID:      "m3",
-		Role:    api.RoleUser,
-		Content: []api.Block{{Type: api.BlockText, Text: "Hello assistant"}},
-	})
-	time.Sleep(50 * time.Millisecond)
-
-	// 2. Stream chunk via SSE
-	st.sseCh <- replChunk("s1", api.Chunk{
-		ID: "c1",
-		Content: []api.Block{
-			{Type: api.BlockReasoning, Text: "Analyzing request"},
-			{Type: api.BlockText, Text: "Working on it"},
-		},
-	})
-	time.Sleep(50 * time.Millisecond)
-
-	// 3. Permission request via SSE
-	st.sseCh <- replPermissions("s1", api.PermissionRequest{
-		ID:         "p1",
-		ToolCallID: "tc-write",
-		Action:     api.ActionWrite,
-		Safety:     api.SafetySafe,
-		ToolName:   "write_file",
-		Summary:    "Write test.go",
-	})
-	time.Sleep(50 * time.Millisecond)
-
-	// Press 'y' to allow once
-	b.PostEvent(&backend.RawKeyEvent{Key: key.Key{Code: 'y', Text: "y"}})
-
-	deadline = time.Now().Add(5 * time.Second)
-	var decCount int
-	for time.Now().Before(deadline) {
-		st.mu.Lock()
-		decCount = len(st.decisions)
-		st.mu.Unlock()
-		if decCount > 0 {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	if decCount == 0 || st.decisions[0].Kind != api.DecisionAllowOnce {
-		t.Errorf("expected DecisionAllowOnce sent to daemon, got %+v", st.decisions)
-	}
-
-	// 4. Complete turn with the persisted assistant message
-	m4 := api.Message{
-		ID:   "m4",
-		Role: api.RoleAssistant,
-		Content: []api.Block{
-			{Type: api.BlockReasoning, Text: "Analyzing request"},
-			{Type: api.BlockText, Text: "Working on it"},
-		},
-	}
-	st.sseCh <- replEntryAdded("s1", m4)
-	st.sseCh <- replCompleted("s1", &m4)
-	time.Sleep(50 * time.Millisecond)
-
-	// 5. Submit /exit
+	// Type "/exit"
 	for _, ch := range "/exit" {
-		b.PostEvent(&backend.RawKeyEvent{Key: key.Key{Code: ch, Text: string(ch)}})
-		time.Sleep(2 * time.Millisecond)
+		b.PostEvent(&backend.RawKeyEvent{
+			Key: key.Key{Code: ch, Text: string(ch)},
+		})
 	}
-	time.Sleep(25 * time.Millisecond)
-	b.PostEvent(&backend.RawKeyEvent{Key: key.Key{Code: key.KeyEscape}})
-	time.Sleep(25 * time.Millisecond)
 	b.PostEvent(&backend.RawKeyEvent{Key: key.Key{Code: key.KeyEnter}})
 
 	select {
-	case runErr := <-runDone:
-		if runErr != nil {
-			t.Fatalf("inst.Run error: %v", runErr)
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("expected nil error on /exit, got: %v", err)
 		}
-	case <-time.After(3 * time.Second):
-		inst.Exit(nil)
-		<-runDone
-		t.Error("timed out submitting /exit")
-	}
-
-	// Now that inst.Run has exited, safely verify output
-	above := insertedAboveText(b)
-	if !strings.Contains(above, "TaskSmith v0.1.0") {
-		t.Errorf("expected header banner in scrollback, got:\n%s", above)
-	}
-	if !strings.Contains(above, "Hi there!") {
-		t.Errorf("expected loaded history in scrollback, got:\n%s", above)
-	}
-	if !strings.Contains(above, "Hello assistant") {
-		t.Errorf("expected submitted prompt in scrollback, got:\n%s", above)
-	}
-	if !strings.Contains(above, "Write test.go") {
-		t.Errorf("expected decision in scrollback, got:\n%s", above)
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for Run to exit after /exit")
 	}
 }
 
-func TestLiveToolCallStreamingAndReasoningDuration(t *testing.T) {
-	c, st := startTestUnixDaemon(t)
-	ctx := t.Context()
+func TestAppSlashCommandHelpAndEscapeRestoresComposerFocus(t *testing.T) {
+	store.ClearTranscript()
+	store.ClearSlot()
+	defer store.ClearTranscript()
+	defer store.ClearSlot()
 
-	sess, err := c.GetSession(ctx, "s1")
+	b := mock.New(80, 24)
+	c, err := client.New("/tmp/mock.sock")
 	if err != nil {
-		t.Fatalf("GetSession: %v", err)
+		t.Fatalf("failed to create client: %v", err)
 	}
 
-	b := mock.New(100, 30)
-	props := AppProps{
-		Client:            c,
-		Workspace:         "/workspace/project",
-		Version:           "v0.1.0",
-		SessionID:         "s1",
-		InitialSess:       sess,
-		InitialMode:       api.ModeDefault,
-		InitialModelLabel: "Claude 3.7 Sonnet",
-		InitialThinking:   "high",
-		Registry:          command.NewRegistry(),
-	}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
 
-	inst, err := trail.New(App(props), trail.WithBackend(b))
-	if err != nil {
-		t.Fatalf("trail.New: %v", err)
-	}
-
-	runDone := make(chan error, 1)
+	errCh := make(chan error, 1)
 	go func() {
-		runDone <- inst.Run(ctx)
+		errCh <- Run(ctx, Options{
+			Client:    c,
+			Workspace: "/tmp/ws",
+			Backend:   b,
+		})
 	}()
 
-	// Wait for REPL header to render
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		if strings.Contains(insertedAboveText(b), "TaskSmith v0.1.0") {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
+	waitFor(t, func() bool {
+		return b.LastFrame().Surface != nil && strings.Contains(surfaceText(b), ">")
+	}, 2*time.Second, "initial composer render")
 
-	// 1. Stream reasoning chunk
-	st.sseCh <- replChunk("s1", api.Chunk{
-		ID: "c1",
-		Content: []api.Block{
-			{Type: api.BlockReasoning, Text: "planning commands to execute"},
+	// 1. Type "/help" and press Enter
+	for _, ch := range "/help" {
+		b.PostEvent(&backend.RawKeyEvent{
+			Key: key.Key{Code: ch, Text: string(ch)},
+		})
+	}
+	b.PostEvent(&backend.RawKeyEvent{Key: key.Key{Code: key.KeyEnter}})
+
+	waitFor(t, func() bool {
+		txt := surfaceText(b)
+		return store.GetSlot().Active != nil &&
+			strings.Contains(txt, "Available commands:") &&
+			strings.Contains(txt, "Filter:")
+	}, 2*time.Second, "help picker to open in slot")
+
+	// 2. Press Esc while /help picker is open
+	b.PostEvent(&backend.RawKeyEvent{Key: key.Key{Code: key.KeyEscape}})
+
+	waitFor(t, func() bool {
+		txt := allText(b)
+		return store.GetSlot().Active == nil &&
+			strings.Contains(txt, "Exited /help command") &&
+			strings.Contains(surfaceText(b), ">")
+	}, 2*time.Second, "help picker to close and exit notice to appear")
+
+	// 3. Immediately type "/mode" and press Enter
+	for _, ch := range "/mode" {
+		b.PostEvent(&backend.RawKeyEvent{
+			Key: key.Key{Code: ch, Text: string(ch)},
+		})
+	}
+	b.PostEvent(&backend.RawKeyEvent{Key: key.Key{Code: key.KeyEnter}})
+
+	waitFor(t, func() bool {
+		txt := surfaceText(b)
+		return store.GetSlot().Active != nil &&
+			strings.Contains(txt, "Select permission mode:")
+	}, 2*time.Second, "mode picker to open in slot")
+
+	// 4. Press Esc on /mode picker
+	b.PostEvent(&backend.RawKeyEvent{Key: key.Key{Code: key.KeyEscape}})
+
+	waitFor(t, func() bool {
+		txt := allText(b)
+		return store.GetSlot().Active == nil &&
+			strings.Contains(txt, "Exited /mode command") &&
+			strings.Contains(surfaceText(b), ">")
+	}, 2*time.Second, "mode picker to close and exit notice to appear")
+
+	// 5. Verify Composer can be typed into again
+	for _, ch := range "echo test" {
+		b.PostEvent(&backend.RawKeyEvent{
+			Key: key.Key{Code: ch, Text: string(ch)},
+		})
+	}
+	waitFor(t, func() bool {
+		return strings.Contains(surfaceText(b), "echo test")
+	}, 2*time.Second, "typed text in composer after mode picker closed")
+
+	// 5. Verify Composer can be typed into again
+	for _, ch := range "echo test" {
+		b.PostEvent(&backend.RawKeyEvent{
+			Key: key.Key{Code: ch, Text: string(ch)},
+		})
+	}
+	waitFor(t, func() bool {
+		return strings.Contains(surfaceText(b), "echo test")
+	}, 2*time.Second, "typed text in composer after mode picker closed")
+}
+
+func TestRunResumeSessionHeaderIsItem0(t *testing.T) {
+	store.ClearTranscript()
+	store.ClearSlot()
+	defer store.ClearTranscript()
+	defer store.ClearSlot()
+
+	b := mock.New(80, 24)
+	c, st := startTestUnixDaemon(t)
+
+	sess, err := c.CreateSession(t.Context(), api.CreateSessionRequest{
+		Config: api.SessionConfig{
+			Model: "test-model-42",
 		},
 	})
-	time.Sleep(30 * time.Millisecond)
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
 
-	// 2. Assistant message with reasoning + tool call arrives
-	st.sseCh <- replEntryAdded("s1", api.Message{
-		ID:   "m3",
-		Role: api.RoleAssistant,
-		Content: []api.Block{
-			{Type: api.BlockReasoning, Text: "planning commands to execute"},
-			{Type: api.BlockToolCall, ToolCall: &api.ToolCall{
-				ID:   "tc1",
-				Name: "bash",
-				Args: map[string]any{"command": "echo running-cmd"},
-			}},
+	st.mu.Lock()
+	st.history[sess.ID] = []api.Message{
+		{
+			ID:   "msg-1",
+			Role: api.RoleUser,
+			Content: []api.Block{
+				{Type: api.BlockText, Text: "Initial question"},
+			},
 		},
-	})
-	time.Sleep(30 * time.Millisecond)
-
-	// 3. Tool completion arrives (success)
-	st.sseCh <- replEntryAdded("s1", api.Message{
-		ID:         "m4",
-		Role:       api.RoleTool,
-		ToolCallID: "tc1",
-		IsError:    false,
-		Content: []api.Block{
-			{Type: api.BlockText, Text: "running-cmd output\nmore output"},
+		{
+			ID:   "msg-2",
+			Role: api.RoleAssistant,
+			Content: []api.Block{
+				{Type: api.BlockText, Text: "Initial answer"},
+			},
 		},
+	}
+	st.mu.Unlock()
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	opts := Options{
+		Client:    c,
+		Workspace: "/workspace/project",
+		Version:   "0.1.0",
+		SessionID: sess.ID,
+		Backend:   b,
+	}
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- Run(ctx, opts)
+	}()
+
+	waitFor(t, func() bool {
+		return b.LastFrame().Surface != nil && strings.Contains(surfaceText(b), ">")
+	}, 2*time.Second, "initial composer render")
+
+	waitFor(t, func() bool {
+		items := store.GetTranscript().Items
+		return items != nil && len(*items) >= 3
+	}, 2*time.Second, "transcript to load header and timeline entries")
+
+	items := *store.GetTranscript().Items
+	if items[0].Kind != store.TranscriptKindHeader {
+		t.Fatalf("expected items[0] to be header, got %s", items[0].Kind)
+	}
+	if items[1].Kind != store.TranscriptKindMessage {
+		t.Fatalf("expected items[1] to be message, got %s", items[1].Kind)
+	}
+	if items[2].Kind != store.TranscriptKindMessage {
+		t.Fatalf("expected items[2] to be message, got %s", items[2].Kind)
+	}
+}
+
+type clearMockBackend struct {
+	*mock.Backend
+}
+
+func (c *clearMockBackend) Clear() {
+	c.Backend.Clear()
+	c.InsertedAbove = nil
+}
+
+func TestRunClearReprintHeader(t *testing.T) {
+	store.ClearTranscript()
+	store.ClearSlot()
+	defer store.ClearTranscript()
+	defer store.ClearSlot()
+
+	rawBackend := mock.New(80, 24)
+	b := &clearMockBackend{Backend: rawBackend}
+	c, _ := startTestUnixDaemon(t)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	opts := Options{
+		Client:    c,
+		Workspace: "/workspace/clear-repl",
+		Version:   "0.1.0",
+		Backend:   b,
+	}
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- Run(ctx, opts)
+	}()
+
+	waitFor(t, func() bool {
+		return b.LastFrame().Surface != nil && strings.Contains(surfaceText(b.Backend), ">")
+	}, 2*time.Second, "initial composer render")
+
+	// Wait for initial header to be printed into InsertedAbove
+	waitFor(t, func() bool {
+		return strings.Contains(allText(b.Backend), "TaskSmith v0.1.0")
+	}, 2*time.Second, "initial header in InsertedAbove")
+
+	// Append a notice to make transcript dirty
+	store.AppendNotice("old notice that must be cleared")
+
+	waitFor(t, func() bool {
+		return strings.Contains(allText(b.Backend), "old notice that must be cleared")
+	}, 2*time.Second, "dirty notice in InsertedAbove")
+
+	// Type /clear in draft mode: clears draft items from surface without calling Clear()
+	for _, ch := range "/clear" {
+		b.PostEvent(&backend.RawKeyEvent{
+			Key: key.Key{Code: ch, Text: string(ch)},
+		})
+	}
+	b.PostEvent(&backend.RawKeyEvent{
+		Key: key.Key{Code: key.KeyEnter},
 	})
-	time.Sleep(30 * time.Millisecond)
 
-	// 4. Now send another assistant message with a failing tool call
-	st.sseCh <- replEntryAdded("s1", api.Message{
-		ID:   "m5",
-		Role: api.RoleAssistant,
-		Content: []api.Block{
-			{Type: api.BlockToolCall, ToolCall: &api.ToolCall{
-				ID:   "tc2",
-				Name: "view",
-				Args: map[string]any{"path": "/pkg/missing.go"},
-			}},
-		},
+	waitFor(t, func() bool {
+		return !strings.Contains(surfaceText(b.Backend), "old notice that must be cleared") && strings.Contains(surfaceText(b.Backend), "TaskSmith v0.1.0")
+	}, 2*time.Second, "draft notice cleared from surface")
+
+	// Now test frozen mode: freeze transcript, append notice, and /clear should wipe backend
+	store.FreezeTranscript()
+	store.AppendNotice("frozen notice to be cleared")
+
+	waitFor(t, func() bool {
+		return strings.Contains(allText(b.Backend), "frozen notice to be cleared")
+	}, 2*time.Second, "frozen notice in scrollback")
+
+	for _, ch := range "/clear" {
+		b.PostEvent(&backend.RawKeyEvent{
+			Key: key.Key{Code: ch, Text: string(ch)},
+		})
+	}
+	b.PostEvent(&backend.RawKeyEvent{
+		Key: key.Key{Code: key.KeyEnter},
 	})
-	time.Sleep(30 * time.Millisecond)
 
-	// 5. Tool completion arrives (error)
-	st.sseCh <- replEntryAdded("s1", api.Message{
-		ID:         "m6",
-		Role:       api.RoleTool,
-		ToolCallID: "tc2",
-		IsError:    true,
-		Content: []api.Block{
-			{Type: api.BlockText, Text: "file not found: missing.go\ndetails here"},
-		},
-	})
-	time.Sleep(30 * time.Millisecond)
+	// Wait for /clear to execute in frozen mode, clearing backend and reprinting Header
+	waitFor(t, func() bool {
+		return b.ClearCalls >= 1 && strings.Contains(allText(b.Backend), "TaskSmith v0.1.0")
+	}, 2*time.Second, "Clear() called and header reprinted")
 
-	// 6. Complete
-	st.sseCh <- replCompleted("s1", nil)
-
-	deadline = time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		above := insertedAboveText(b)
-		if strings.Contains(above, "● Read failed /pkg/missing.go") {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
+	txt := allText(b.Backend)
+	if !strings.Contains(txt, "TaskSmith v0.1.0") {
+		t.Fatalf("expected header to be reprinted after /clear, got:\n%s", txt)
 	}
-
-	inst.Exit(nil)
-	<-runDone
-
-	above := insertedAboveText(b)
-	if !strings.Contains(above, "● Thought (planning commands to execute)") {
-		t.Errorf("expected thought in transcript, got:\n%s", above)
-	}
-	if !strings.Contains(above, "● Ran (echo running-cmd)") {
-		t.Errorf("expected finished bash tool call in transcript, got:\n%s", above)
-	}
-	if strings.Contains(above, "more output") {
-		t.Errorf("expected raw tool output to be suppressed, got:\n%s", above)
-	}
-	if !strings.Contains(above, "● Read failed /pkg/missing.go") {
-		t.Errorf("expected finished view tool call in transcript, got:\n%s", above)
-	}
-	if !strings.Contains(above, "file not found: missing.go") {
-		t.Errorf("expected indented error indicator in transcript, got:\n%s", above)
+	if strings.Contains(txt, "frozen notice to be cleared") {
+		t.Fatalf("expected frozen notice to be cleared from scrollback, got:\n%s", txt)
 	}
 }

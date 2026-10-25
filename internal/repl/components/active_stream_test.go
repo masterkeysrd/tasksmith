@@ -9,7 +9,7 @@ import (
 	"github.com/masterkeysrd/kite/backend/mock"
 	"github.com/masterkeysrd/kite/extras/trail"
 	"github.com/masterkeysrd/tasksmith/api"
-	"github.com/masterkeysrd/tasksmith/internal/repl2/store"
+	"github.com/masterkeysrd/tasksmith/internal/repl/store"
 )
 
 func TestActiveStreamNilWhenIdle(t *testing.T) {

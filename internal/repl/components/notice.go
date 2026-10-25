@@ -4,7 +4,7 @@ import (
 	"github.com/masterkeysrd/kite/extras/trail"
 	"github.com/masterkeysrd/kite/style"
 	"github.com/masterkeysrd/tasksmith/api"
-	"github.com/masterkeysrd/tasksmith/internal/repl2/store"
+	"github.com/masterkeysrd/tasksmith/internal/repl/store"
 	"github.com/masterkeysrd/tasksmith/internal/ui/theme"
 )
 

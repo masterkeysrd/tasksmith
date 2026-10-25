@@ -1,176 +1,155 @@
 package components
 
 import (
+	"context"
 	"strings"
 	"testing"
+	"time"
 
-	"github.com/google/uuid"
 	"github.com/masterkeysrd/kite/backend/mock"
-	"github.com/masterkeysrd/kite/extras/kitex"
 	"github.com/masterkeysrd/kite/extras/trail"
-	"github.com/masterkeysrd/kite/extras/wind"
 	"github.com/masterkeysrd/tasksmith/api"
-	"github.com/masterkeysrd/tasksmith/client"
-	"github.com/masterkeysrd/tasksmith/internal/repl/ui"
-	uiclient "github.com/masterkeysrd/tasksmith/internal/ui/client"
-	uihooks "github.com/masterkeysrd/tasksmith/internal/ui/hooks"
+	"github.com/masterkeysrd/tasksmith/internal/repl/store"
 )
 
-// statusFixture is what the status line is rendered against. Segments read the
-// mode and model from the session providers, so the fixture mounts them. The
-// model is given up front, so nothing is requested from a daemon.
-type statusFixture struct {
-	State    ui.State
-	Hint     string
-	Mode     api.PermissionMode
-	Model    string
-	Thinking string
-}
-
-func renderStatus(t *testing.T, fixture statusFixture, node func() trail.Node) (string, int) {
+func renderNode(t *testing.T, node trail.Node) string {
 	t.Helper()
-	c, err := client.New(t.TempDir()+"/unused.sock", client.WithCWD("/work"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	session := &api.Session{ID: uuid.Must(uuid.NewV7()).String(), Config: api.SessionConfig{Agent: "build", Model: "m"}}
-
 	b := mock.New(80, 24)
-	app := trail.SimpleFC("TestApp", func() kitex.Node {
-		return uiclient.Provider(uiclient.Props{Client: c},
-			wind.Provider(wind.ProviderProps{Client: wind.NewClient()},
-				uihooks.SessionProvider(uihooks.SessionProviderProps{
-					Initial:         session,
-					Mode:            fixture.Mode,
-					InitialModel:    fixture.Model,
-					InitialThinking: fixture.Thinking,
-				}, StatusProvider(StatusContext{State: fixture.State, Hint: fixture.Hint}, node()))))
-	})
-	inst, err := trail.New(app(), trail.WithBackend(b))
-	if err != nil {
-		t.Fatalf("trail.New: %v", err)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	go func() {
+		_ = trail.Run(ctx, node, trail.WithBackend(b))
+	}()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if b.LastFrame().Surface != nil {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
-	inst.Frame()
-	return surfaceText(b), b.LastFrame().Surface.Height
+	return surfaceText(b)
 }
 
-func renderDefaultStatusLine(t *testing.T, fixture statusFixture) (string, int) {
-	t.Helper()
-	return renderStatus(t, fixture, func() trail.Node { return DefaultStatusLine() })
-}
+func TestHintSegment(t *testing.T) {
+	store.ResetApp()
+	defer store.ResetApp()
 
-func TestStatusLine(t *testing.T) {
-	// 1. Default mode: shows "<Model> · <Thinking>" without "default · "
-	out1, h := renderDefaultStatusLine(t, statusFixture{
-		State: ui.StateIdle, Mode: api.ModeDefault, Model: "Claude 3.7 Sonnet", Thinking: "high",
-	})
-	if h != 1 {
-		t.Errorf("expected StatusLine height 1, got %d:\n%s", h, out1)
-	}
-	if !strings.Contains(out1, "Claude 3.7 Sonnet · high") {
-		t.Errorf("expected model · thinking in status line:\n%s", out1)
-	}
-	if strings.Contains(out1, "default · ") {
-		t.Errorf("default mode should not be prefixed with 'default · ':\n%s", out1)
-	}
-	if !strings.Contains(out1, "shift+tab cycle mode") {
-		t.Errorf("idle state hint missing on left:\n%s", out1)
+	// 1. Default hint
+	out := renderNode(t, HintSegment(SegmentProps{}))
+	if !strings.Contains(out, store.DefaultHint) {
+		t.Fatalf("expected default hint %q, got:\n%s", store.DefaultHint, out)
 	}
 
-	// 2. Non-default mode: shows "<mode> · <Model> · <Thinking>"
-	out2, h := renderDefaultStatusLine(t, statusFixture{
-		State: ui.StateStreaming, Mode: api.ModeAcceptEdits, Model: "Claude 3.7 Sonnet", Thinking: "high",
-	})
-	if h != 1 {
-		t.Errorf("expected StatusLine height 1 in non-default mode, got %d:\n%s", h, out2)
-	}
-	if !strings.Contains(out2, "accept_edits · Claude 3.7 Sonnet · high") {
-		t.Errorf("expected mode · model · thinking:\n%s", out2)
-	}
-	if !strings.Contains(out2, "streaming • esc to cancel") {
-		t.Errorf("streaming hint missing:\n%s", out2)
+	// 2. Custom hint via SetHint
+	store.SetHint("custom picker hint")
+	out = renderNode(t, HintSegment(SegmentProps{}))
+	if !strings.Contains(out, "custom picker hint") {
+		t.Fatalf("expected custom hint, got:\n%s", out)
 	}
 
-	// 3. Custom hint override
-	out3, _ := renderDefaultStatusLine(t, statusFixture{State: ui.StatePicker, Hint: "custom hint override", Model: "m"})
-	if !strings.Contains(out3, "custom hint override") {
-		t.Errorf("expected custom hint:\n%s", out3)
+	// 3. CtrlCPending priority over custom hint
+	store.SetCtrlCPending(true)
+	out = renderNode(t, HintSegment(SegmentProps{}))
+	if !strings.Contains(out, store.CtrlCHint) {
+		t.Fatalf("expected CtrlCHint %q, got:\n%s", store.CtrlCHint, out)
+	}
+	if strings.Contains(out, "custom picker hint") {
+		t.Fatalf("custom hint should be overridden by CtrlCHint, got:\n%s", out)
 	}
 
-	// 4. Picker with an empty hint: nothing on the left, model/thinking on the right
-	out4, _ := renderDefaultStatusLine(t, statusFixture{State: ui.StatePicker, Model: "Claude 3.7 Sonnet", Thinking: "high"})
-	if !strings.Contains(out4, "Claude 3.7 Sonnet · high") {
-		t.Errorf("expected model · thinking on right:\n%s", out4)
+	// 4. When a slot is active, HintSegment is hidden (nil) unless CtrlCPending is true
+	store.SetCtrlCPending(false)
+	store.ClearSlot()
+	store.EnqueueSlot(store.SlotItem{ID: "test-slot", Kind: store.SlotKindPicker})
+	defer store.ClearSlot()
+
+	out = renderNode(t, HintSegment(SegmentProps{}))
+	if strings.Contains(out, "custom picker hint") || strings.Contains(out, store.DefaultHint) {
+		t.Fatalf("expected HintSegment to be hidden when slot is active, got:\n%s", out)
 	}
-	if strings.Contains(out4, "navigate") || strings.Contains(out4, "select") {
-		t.Errorf("expected no hint on left in StatePicker, got:\n%s", out4)
+
+	// 5. CtrlCPending overrides active slot hiding
+	store.SetCtrlCPending(true)
+	out = renderNode(t, HintSegment(SegmentProps{}))
+	if !strings.Contains(out, store.CtrlCHint) {
+		t.Fatalf("expected CtrlCHint %q when CtrlCPending is true even with active slot, got:\n%s", store.CtrlCHint, out)
 	}
 }
 
-func TestStatusSegmentsReadTheSessionThemselvesAndComposeFreely(t *testing.T) {
-	// Segments are self-sufficient: composing them in another order needs no props.
-	out, _ := renderStatus(t, statusFixture{Mode: api.ModePlan, Model: "m", Thinking: "high"}, func() trail.Node {
-		return StatusLine(StatusLineProps{},
-			ModelSegment(SegmentProps{Separator: " | "}),
-			ModeSegment(SegmentProps{}),
-		)
-	})
-	if !strings.Contains(out, "m · high | plan") {
-		t.Errorf("composed segments = %q", out)
+func TestModeSegment(t *testing.T) {
+	store.ResetSession()
+	defer store.ResetSession()
+
+	// 1. Default mode: hidden (nil)
+	store.SetMode(api.ModeDefault)
+	out := renderNode(t, ModeSegment(SegmentProps{Separator: " · "}))
+	if strings.Contains(out, "default") {
+		t.Fatalf("expected default mode to be hidden, got:\n%s", out)
+	}
+
+	// 2. Non-default modes
+	modes := []api.PermissionMode{
+		api.ModePlan,
+		api.ModeAcceptEdits,
+		api.ModeAsk,
+		api.ModeAuto,
+	}
+
+	for _, mode := range modes {
+		t.Run(string(mode), func(t *testing.T) {
+			store.SetMode(mode)
+			out := renderNode(t, ModeSegment(SegmentProps{Separator: " · "}))
+			if !strings.Contains(out, string(mode)) {
+				t.Fatalf("expected mode %q in output, got:\n%s", mode, out)
+			}
+			if !strings.Contains(out, "·") {
+				t.Fatalf("expected separator '·' in output, got:\n%s", out)
+			}
+		})
 	}
 }
 
-func TestStatusSegmentHidesSeparatorWithItself(t *testing.T) {
-	// The mode segment is hidden in default mode, and so is its separator.
-	out, _ := renderDefaultStatusLine(t, statusFixture{Mode: api.ModeDefault, Model: "m", Thinking: "high"})
-	if strings.Contains(out, "·  m") || strings.Contains(out, " · m · high") {
-		t.Errorf("hidden mode segment left a separator: %q", out)
+func TestModelSegment(t *testing.T) {
+	store.ResetSession()
+	defer store.ResetSession()
+
+	// 1. Not ready: hidden (nil)
+	out := renderNode(t, ModelSegment(SegmentProps{}))
+	if strings.TrimSpace(out) != "" {
+		t.Fatalf("expected ModelSegment to be hidden when !Ready, got:\n%s", out)
 	}
-	if !strings.Contains(out, "m · high") {
-		t.Errorf("model segment missing: %q", out)
+
+	// 2. Ready with model info
+	store.SetModelInfo("Claude 3.7 Sonnet", "high")
+	out = renderNode(t, ModelSegment(SegmentProps{}))
+	if !strings.Contains(out, "Claude 3.7 Sonnet · high") {
+		t.Fatalf("expected 'Claude 3.7 Sonnet · high', got:\n%s", out)
+	}
+
+	// 3. Ready with empty values defaults to "default · auto"
+	store.SetModelInfo("", "")
+	out = renderNode(t, ModelSegment(SegmentProps{}))
+	if !strings.Contains(out, "default · auto") {
+		t.Fatalf("expected 'default · auto', got:\n%s", out)
 	}
 }
 
-func TestStatusSegmentDefaults(t *testing.T) {
-	// A model with no effort reported falls back to "auto".
-	out, _ := renderStatus(t, statusFixture{State: ui.StatePicker, Model: "m"}, func() trail.Node {
-		return StatusLine(StatusLineProps{}, HintSegment(SegmentProps{}), ModelSegment(SegmentProps{}))
-	})
-	if !strings.Contains(out, "m · auto") {
-		t.Errorf("blank thinking default missing: %q", out)
-	}
-}
+func TestDefaultStatusLine(t *testing.T) {
+	store.ResetApp()
+	store.ResetSession()
+	defer store.ResetApp()
+	defer store.ResetSession()
 
-// A mode that is hidden at first and shown later must appear before the model,
-// not after it: kite inserts content of a component that rendered nothing at
-// the end of its parent unless the segment keeps an empty box in place.
-func TestStatusModeSegmentAppearsLateInItsPlace(t *testing.T) {
-	c, err := client.New(t.TempDir()+"/unused.sock", client.WithCWD("/work"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	session := &api.Session{ID: uuid.Must(uuid.NewV7()).String(), Config: api.SessionConfig{Agent: "build", Model: "m"}}
-	var setMode func(api.PermissionMode)
-	capture := trail.SimpleFC("Capture", func() trail.Node {
-		setMode = uihooks.UsePermissionMode().Set
-		return nil
-	})
+	store.SetMode(api.ModePlan)
+	store.SetModelInfo("TestModel", "medium")
 
-	b := mock.New(80, 24)
-	inst, err := trail.New(uiclient.Provider(uiclient.Props{Client: c},
-		wind.Provider(wind.ProviderProps{Client: wind.NewClient()},
-			uihooks.SessionProvider(uihooks.SessionProviderProps{
-				Initial: session, InitialModel: "m", InitialThinking: "high",
-			}, StatusProvider(StatusContext{}, capture(), DefaultStatusLine())))),
-		trail.WithBackend(b))
-	if err != nil {
-		t.Fatal(err)
+	out := renderNode(t, DefaultStatusLine())
+	if !strings.Contains(out, store.DefaultHint) {
+		t.Fatalf("expected hint in status line, got:\n%s", out)
 	}
-	inst.Frame()
-	setMode(api.ModePlan)
-	inst.Frame()
-
-	if out := surfaceText(b); !strings.Contains(out, "plan · m · high") {
-		t.Errorf("late mode segment rendered out of place:\n%s", out)
+	if !strings.Contains(out, "plan · TestModel · medium") {
+		t.Fatalf("expected 'plan · TestModel · medium' in status line, got:\n%s", out)
 	}
 }

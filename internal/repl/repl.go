@@ -8,18 +8,16 @@ import (
 
 	"github.com/masterkeysrd/kite/backend"
 	"github.com/masterkeysrd/kite/extras/trail"
-	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/client"
-	"github.com/masterkeysrd/tasksmith/internal/repl/command"
-	"github.com/masterkeysrd/tasksmith/internal/repl/components"
-	uihooks "github.com/masterkeysrd/tasksmith/internal/ui/hooks"
+	"github.com/masterkeysrd/tasksmith/internal/repl/store"
+	"github.com/masterkeysrd/tasksmith/internal/ui/theme"
 )
 
-// ErrInvalidConfig is returned when required [Config] fields are missing.
-var ErrInvalidConfig = errors.New("repl: invalid configuration")
+// ErrInvalidOptions is returned when required [Options] fields are missing.
+var ErrInvalidOptions = errors.New("repl: invalid options")
 
-// Config holds the parameters for starting a REPL session.
-type Config struct {
+// Options holds configuration for starting the REPL.
+type Options struct {
 	Client    *client.Client
 	Workspace string
 	Version   string
@@ -30,90 +28,51 @@ type Config struct {
 	Backend   backend.Backend
 }
 
-// Validate checks that all required fields in [Config] are provided.
-func (c Config) Validate() error {
-	if c.Client == nil {
-		return fmt.Errorf("%w: client is required", ErrInvalidConfig)
+// Validate checks that all required fields in [Options] are provided.
+func (o Options) Validate() error {
+	if o.Client == nil {
+		return fmt.Errorf("%w: client is required", ErrInvalidOptions)
 	}
-	if strings.TrimSpace(c.Workspace) == "" {
-		return fmt.Errorf("%w: workspace is required", ErrInvalidConfig)
+	if strings.TrimSpace(o.Workspace) == "" {
+		return fmt.Errorf("%w: workspace is required", ErrInvalidOptions)
 	}
 	return nil
 }
 
-// Run starts the REPL using the Kite trail inline application engine.
-func Run(ctx context.Context, cfg Config) error {
-	if err := cfg.Validate(); err != nil {
+// Run starts the REPL application using the Kite trail inline engine.
+func Run(ctx context.Context, opts Options) error {
+	if err := opts.Validate(); err != nil {
 		return err
 	}
 
-	cfg.Version = components.NormalizeVersion(cfg.Version)
+	theme.SetTransparent(true)
 
-	if cfg.Client.CWD() == "" && cfg.Workspace != "" {
-		cfg.Client = cfg.Client.WithCWD(cfg.Workspace)
+	if opts.Client.CWD() == "" && opts.Workspace != "" {
+		opts.Client = opts.Client.WithCWD(opts.Workspace)
 	}
 
-	var sess *api.Session
-	mode := api.ModeDefault
+	store.ResetApp()
+	store.ClearSlot()
+	store.ResetSession()
+	store.ClearTranscript()
+	store.ResetStream()
 
-	if sid := strings.TrimSpace(cfg.SessionID); sid != "" {
-		loaded, err := cfg.Client.GetSession(ctx, sid)
-		if err != nil {
-			return fmt.Errorf("get session %q: %w", sid, err)
-		}
-		sess = loaded
+	store.SetHeaderMeta(opts.Version, opts.Workspace)
 
-		title := strings.TrimSpace(cfg.Title)
-		agent := strings.TrimSpace(cfg.Agent)
-		model := strings.TrimSpace(cfg.Model)
-		if title != "" || agent != "" || model != "" {
-			updated, err := cfg.Client.UpdateSession(ctx, sid, api.UpdateSessionRequest{
-				Title: title,
-				Config: api.SessionConfig{
-					Agent: agent,
-					Model: model,
-				},
-			})
-			if err != nil {
-				return fmt.Errorf("update session %q: %w", sid, err)
-			}
-			sess = updated
-		}
+	store.InitSession(ctx, opts.Client, store.InitSessionOptions{
+		SessionID: opts.SessionID,
+		Agent:     opts.Agent,
+		Model:     opts.Model,
+		Title:     opts.Title,
+	})
 
-		if sess.Config.Mode != "" {
-			mode = sess.Config.Mode
-		}
+	trailOpts := []trail.Option{trail.WithCtrlCExit(false)}
+	if opts.Backend != nil {
+		trailOpts = append(trailOpts, trail.WithBackend(opts.Backend))
 	}
 
-	return runTUI(ctx, cfg, sess, mode)
-}
-
-func runTUI(ctx context.Context, cfg Config, sess *api.Session, mode api.PermissionMode) error {
-	modelLabel, thinking := uihooks.ResolveModelInfo(ctx, cfg.Client, cfg.Agent, cfg.Model, sess)
-
-	props := AppProps{
-		Client:            cfg.Client,
-		Workspace:         cfg.Workspace,
-		Version:           cfg.Version,
-		SessionID:         cfg.SessionID,
-		Agent:             cfg.Agent,
-		Model:             cfg.Model,
-		Title:             cfg.Title,
-		InitialSess:       sess,
-		InitialMode:       mode,
-		InitialModelLabel: modelLabel,
-		InitialThinking:   thinking,
-		Registry:          command.NewRegistry(),
+	if err := trail.Run(ctx, App(), trailOpts...); err != nil && !errors.Is(err, context.Canceled) {
+		return err
 	}
-
-	opts := []trail.Option{trail.WithCtrlCExit(true)}
-	if cfg.Backend != nil {
-		opts = append(opts, trail.WithBackend(cfg.Backend))
-	}
-
-	runErr := trail.Run(ctx, App(props), opts...)
-	if errors.Is(runErr, context.Canceled) {
-		return nil
-	}
-	return runErr
+	return nil
 }

@@ -3,7 +3,7 @@ package components
 import (
 	"github.com/masterkeysrd/kite/extras/trail"
 	"github.com/masterkeysrd/kite/style"
-	"github.com/masterkeysrd/tasksmith/internal/repl2/store"
+	"github.com/masterkeysrd/tasksmith/internal/repl/store"
 )
 
 // StreamingHint registers the streaming cancellation hint in the store while mounted.

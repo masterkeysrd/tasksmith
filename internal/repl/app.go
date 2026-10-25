@@ -1,73 +1,113 @@
 package repl
 
 import (
+	"strings"
+	"time"
+
+	"github.com/masterkeysrd/kite/event"
 	"github.com/masterkeysrd/kite/extras/kitex"
 	"github.com/masterkeysrd/kite/extras/trail"
 	"github.com/masterkeysrd/kite/extras/wind"
+	"github.com/masterkeysrd/kite/key"
+	"github.com/masterkeysrd/kite/style"
 	"github.com/masterkeysrd/tasksmith/api"
-	"github.com/masterkeysrd/tasksmith/client"
 	"github.com/masterkeysrd/tasksmith/internal/repl/command"
-	uiclient "github.com/masterkeysrd/tasksmith/internal/ui/client"
-	uihooks "github.com/masterkeysrd/tasksmith/internal/ui/hooks"
-	uitheme "github.com/masterkeysrd/tasksmith/internal/ui/theme"
+	"github.com/masterkeysrd/tasksmith/internal/repl/components"
+	"github.com/masterkeysrd/tasksmith/internal/repl/store"
+	"github.com/masterkeysrd/tasksmith/internal/ui/autocomplete"
+	uicomponents "github.com/masterkeysrd/tasksmith/internal/ui/components"
 )
 
-// AppProps configures the root REPL trail functional component.
-type AppProps struct {
-	Client            *client.Client
-	Workspace         string
-	Version           string
-	SessionID         string
-	Agent             string
-	Model             string
-	Title             string
-	InitialSess       *api.Session
-	InitialMode       api.PermissionMode
-	InitialModelLabel string
-	InitialThinking   string
-	Registry          *command.Registry
+// CtrlCTimeout is the duration before the Ctrl+C confirmation resets.
+const CtrlCTimeout = 2 * time.Second
+
+func isCtrlC(k event.KeyEvent) bool {
+	return k.Code == key.CtrlC || k.MatchString("ctrl+c")
 }
 
-// App is the root trail functional component for the TaskSmith REPL. It only
-// composes providers and lays out the two regions of the screen; every
-// component below reads what it needs through hooks.
-var App = trail.FC("App", func(props AppProps) trail.Node {
-	queryClient := kitex.UseMemo(wind.NewClient, []any{})
-	return uiclient.Provider(uiclient.Props{Client: props.Client},
-		wind.Provider(wind.ProviderProps{Client: queryClient},
-			uitheme.Provider(uitheme.Props{Transparent: true},
-				replProviders(props, trail.Fragment(
-					TranscriptOutput(),
-					ActiveArea(),
-				)),
-			),
-		),
+var appContent = trail.SimpleFC("AppContent", func() trail.Node {
+	app := trail.UseApp()
+	ctrlCPending := store.UseApp(func(s store.AppState) bool { return s.CtrlCPending })
+	exitRequested := store.UseApp(func(s store.AppState) bool { return s.ExitRequested })
+
+	kitex.UseLayoutEffect(func() {
+		if exitRequested && app != nil {
+			app.Exit(nil)
+		}
+	}, []any{exitRequested})
+
+	mode := store.UseSession(func(s store.SessionState) api.PermissionMode {
+		return s.Config.Mode
+	})
+
+	registry := kitex.UseMemo(func() *command.Registry {
+		return command.NewRegistry()
+	}, nil)
+
+	engine := kitex.UseMemo(func() *autocomplete.Engine {
+		e := autocomplete.New()
+		for _, s := range registry.Sources() {
+			_ = e.Register(s)
+		}
+		return e
+	}, []any{registry})
+
+	views := kitex.UseMemo(func() map[string]uicomponents.AutocompleteView {
+		return command.CompletionViews(mode)
+	}, []any{mode})
+
+	trail.UseInput(func(_ string, k event.KeyEvent) {
+		if isCtrlC(k) {
+			if store.GetApp().CtrlCPending {
+				app.Exit(nil)
+			} else {
+				store.SetCtrlCPending(true)
+			}
+		} else if store.GetApp().CtrlCPending {
+			store.SetCtrlCPending(false)
+		}
+	})
+
+	trail.UseTimeout(func() {
+		if store.GetApp().CtrlCPending {
+			store.SetCtrlCPending(false)
+		}
+	}, CtrlCTimeout, []any{ctrlCPending})
+
+	return trail.Box(trail.BoxProps{
+		Style: style.S().
+			FlexDirection(style.FlexColumn).
+			Width(style.Percent(100)),
+	},
+		components.Transcript(),
+		components.ActiveStream(),
+		components.Composer(components.ComposerProps{
+			Autocomplete:    engine,
+			CompletionViews: views,
+			OnSubmit: func(text string) {
+				if strings.HasPrefix(text, "/") {
+					if err := registry.Execute(text); err != nil {
+						store.AppendError("Error", err.Error())
+					}
+				} else if store.GetStream().Streaming {
+					store.AppendNotice("A response is already running.")
+				} else {
+					store.Send(text)
+				}
+			},
+			OnCancel:    store.Cancel,
+			OnCycleMode: func() { _ = store.CycleMode() },
+		}),
+		components.Slot(),
+		components.DefaultStatusLine(),
 	)
 })
 
-// replProviders nests the REPL's providers around children. The order matters:
-// each provider may use the ones above it.
-func replProviders(props AppProps, children ...trail.Node) trail.Node {
-	return uihooks.SessionProvider(uihooks.SessionProviderProps{
-		Initial:         props.InitialSess,
-		Agent:           props.Agent,
-		Model:           props.Model,
-		Mode:            props.InitialMode,
-		InitialModel:    props.InitialModelLabel,
-		InitialThinking: props.InitialThinking,
-	}, uihooks.ConversationProvider(uihooks.ConversationProviderProps{},
-		TranscriptProvider(TranscriptProviderProps{Version: props.Version, Workspace: props.Workspace},
-			OverlayProvider(OverlayProviderProps{},
-				SessionActionsProvider(SessionActionsProviderProps{},
-					PermissionsProvider(PermissionsProviderProps{},
-						SendProvider(SendProviderProps{},
-							CommandsProvider(CommandsProviderProps{Registry: props.Registry, Agent: props.Agent, Model: props.Model},
-								StatusScope(StatusScopeProps{}, children...),
-							),
-						),
-					),
-				),
-			),
-		),
-	))
-}
+// App is the root REPL UI component, wrapped in a wind.Provider.
+var App = trail.SimpleFC("App", func() trail.Node {
+	queryClient := kitex.UseMemo(func() *wind.Client {
+		return wind.NewClient()
+	}, nil)
+
+	return wind.Provider(wind.ProviderProps{Client: queryClient}, appContent())
+})

@@ -198,7 +198,7 @@ func getOrCreateSession(ctx context.Context, initialTitle string) (*api.Session,
 	}
 	if activeClient == nil {
 		sessMu.Unlock()
-		return nil, errors.New("repl2: no active client to create session")
+		return nil, errors.New("repl: no active client to create session")
 	}
 	title := strings.TrimSpace(activeOpts.Title)
 	if title == "" {
@@ -249,7 +249,7 @@ func Send(text string) {
 	sessMu.Unlock()
 
 	if c == nil {
-		globalConversation.cancelPendingUser(msgID, errors.New("repl2: no active client"))
+		globalConversation.cancelPendingUser(msgID, errors.New("repl: no active client"))
 		return
 	}
 

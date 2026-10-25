@@ -1,4 +1,4 @@
-package repl2
+package repl
 
 import (
 	"context"
@@ -14,7 +14,7 @@ import (
 
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/client"
-	"github.com/masterkeysrd/tasksmith/internal/repl2/store"
+	"github.com/masterkeysrd/tasksmith/internal/repl/store"
 )
 
 type testDaemonState struct {
@@ -31,7 +31,7 @@ type testDaemonState struct {
 func startTestUnixDaemon(t *testing.T) (*client.Client, *testDaemonState) {
 	t.Helper()
 
-	dir, err := os.MkdirTemp("/tmp", "tsrepl2-*")
+	dir, err := os.MkdirTemp("/tmp", "tsrepl-*")
 	if err != nil {
 		t.Fatalf("MkdirTemp: %v", err)
 	}

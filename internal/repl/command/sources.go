@@ -4,12 +4,12 @@ import (
 	"context"
 
 	"github.com/masterkeysrd/tasksmith/api"
+	"github.com/masterkeysrd/tasksmith/internal/repl/store"
 	"github.com/masterkeysrd/tasksmith/internal/ui/autocomplete"
+	"github.com/masterkeysrd/tasksmith/internal/ui/theme"
 )
 
 // Sources snapshots the registered commands as headless autocomplete sources.
-// Register commands before calling it. Argument completers run on demand with
-// the engine's request context.
 func (r *Registry) Sources() []autocomplete.Source {
 	commands := r.List()
 	candidates := make([]autocomplete.Candidate, len(commands))
@@ -68,6 +68,96 @@ func completeModes(ctx context.Context, _ autocomplete.Request) ([]autocomplete.
 			Label:       opt.Label,
 			Description: opt.Description,
 			Data:        api.PermissionMode(opt.Value),
+		}
+	}
+	return candidates, nil
+}
+
+func completeModels(ctx context.Context, _ autocomplete.Request) ([]autocomplete.Candidate, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	c := store.Client()
+	if c == nil {
+		return nil, nil
+	}
+
+	models, err := c.ListModels(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	candidates := make([]autocomplete.Candidate, len(models))
+	for i, m := range models {
+		label := m.ID
+		if m.Label != "" {
+			label = m.Label
+		} else if m.Name != "" {
+			label = m.Name
+		}
+		candidates[i] = autocomplete.Candidate{
+			Value:       m.ID,
+			Label:       label,
+			Description: m.Provider,
+		}
+	}
+	return candidates, nil
+}
+
+func completeAgents(ctx context.Context, _ autocomplete.Request) ([]autocomplete.Candidate, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	c := store.Client()
+	if c == nil {
+		return nil, nil
+	}
+
+	agents, err := c.ListAgents(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	candidates := make([]autocomplete.Candidate, len(agents))
+	for i, a := range agents {
+		candidates[i] = autocomplete.Candidate{
+			Value:       a.Name,
+			Label:       a.Name,
+			Description: a.Description,
+		}
+	}
+	return candidates, nil
+}
+
+func completeEffort(ctx context.Context, _ autocomplete.Request) ([]autocomplete.Candidate, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	efforts := []string{"auto", "low", "medium", "high", "max"}
+	candidates := make([]autocomplete.Candidate, len(efforts))
+	for i, e := range efforts {
+		candidates[i] = autocomplete.Candidate{
+			Value: e,
+			Label: e,
+		}
+	}
+	return candidates, nil
+}
+
+func completeThemes(ctx context.Context, _ autocomplete.Request) ([]autocomplete.Candidate, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	themes := theme.List()
+	candidates := make([]autocomplete.Candidate, len(themes))
+	for i, name := range themes {
+		candidates[i] = autocomplete.Candidate{
+			Value: name,
+			Label: name,
 		}
 	}
 	return candidates, nil
