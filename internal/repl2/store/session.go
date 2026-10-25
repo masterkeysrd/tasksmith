@@ -87,9 +87,9 @@ func InitSession(ctx context.Context, c *client.Client, opts InitSessionOptions)
 
 	modelLabel, thinking := ResolveModelInfo(subCtx, c, opts.Agent, opts.Model, sess)
 	SetModelInfo(modelLabel, thinking)
-	SyncHeaderOrClear(modelLabel, thinking, false)
 
 	if c != nil && sid != "" && sess != nil {
+		FreezeTranscript()
 		if tl, err := c.Timeline(subCtx, sid); err == nil {
 			globalConversation.loadTimeline(tl)
 		}
@@ -207,15 +207,17 @@ func getOrCreateSession(ctx context.Context, initialTitle string) (*api.Session,
 	c := activeClient
 	agent := activeOpts.Agent
 	model := activeOpts.Model
-	mode := GetSession().Config.Mode
+	cfg := GetSession().Config
+	mode := cfg.Mode
 	sessMu.Unlock()
 
 	created, err := c.CreateSession(ctx, api.CreateSessionRequest{
 		Title: title,
 		Config: api.SessionConfig{
-			Agent: agent,
-			Model: model,
-			Mode:  mode,
+			Agent:  cmp.Or(cfg.Agent, agent),
+			Model:  cmp.Or(cfg.Model, model),
+			Effort: cfg.Effort,
+			Mode:   mode,
 		},
 	})
 	if err != nil {
@@ -234,6 +236,7 @@ func Send(text string) {
 	if trimmed == "" {
 		return
 	}
+	FreezeTranscript()
 	msgID := uuid.Must(uuid.NewV7()).String()
 	globalConversation.addPendingUser(msgID, text)
 
@@ -463,7 +466,7 @@ func NewDraftSession(modelOverride string) {
 	}
 	modelLabel, thinking := ResolveModelInfo(ctx, c, cfg.Agent, cfg.Model, nil)
 	SetModelInfo(modelLabel, thinking)
-	SyncHeaderOrClear(modelLabel, thinking, true)
+	ResetToDraft()
 }
 
 // SwitchSession loads an existing session and switches to it asynchronously.
@@ -500,7 +503,7 @@ func SwitchSession(sessionID string) {
 		globalConversation.setSessionID(loaded.ID)
 		modelLabel, thinking := ResolveModelInfo(ctx, c, defAgent, defModel, loaded)
 		SetModelInfo(modelLabel, thinking)
-		SyncHeaderOrClear(modelLabel, thinking, true)
+		ResetForSessionSwitch()
 
 		if tl, err := c.Timeline(ctx, loaded.ID); err == nil {
 			globalConversation.loadTimeline(tl)

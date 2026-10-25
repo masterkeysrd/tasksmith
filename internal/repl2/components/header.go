@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 
 	"github.com/masterkeysrd/kite/extras/trail"
@@ -13,11 +14,15 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/ui/theme"
 )
 
-// NormalizeVersion ensures a version string starts with 'v' and defaults to "v0.1.0".
+// NormalizeVersion ensures a version string starts with 'v' and defaults to build info or "v0.0.0-dev".
 func NormalizeVersion(version string) string {
 	version = strings.TrimSpace(version)
 	if version == "" {
-		return "v0.1.0"
+		if info, ok := debug.ReadBuildInfo(); ok && info.Main.Version != "" && info.Main.Version != "(devel)" {
+			version = info.Main.Version
+		} else {
+			return "v0.0.0-dev"
+		}
 	}
 	if !strings.HasPrefix(version, "v") {
 		return "v" + version

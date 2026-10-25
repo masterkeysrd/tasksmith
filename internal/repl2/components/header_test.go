@@ -46,8 +46,8 @@ func TestNormalizeVersion(t *testing.T) {
 	}{
 		{"0.1.0", "v0.1.0"},
 		{"v1.2.3", "v1.2.3"},
-		{"", "v0.1.0"},
-		{"   ", "v0.1.0"},
+		{"", "v0.0.0-dev"},
+		{"   ", "v0.0.0-dev"},
 		{"  v2.0.0  ", "v2.0.0"},
 	}
 	for _, tt := range tests {
@@ -141,7 +141,7 @@ func TestHeaderDefaults(t *testing.T) {
 		"◥██████████◣",
 		"▐██▌",
 		"◢████◣",
-		"TaskSmith v0.1.0",
+		"TaskSmith v0.0.0-dev",
 		"default with auto effort",
 		"/work",
 	} {

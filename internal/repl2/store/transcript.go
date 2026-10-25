@@ -49,13 +49,45 @@ type TranscriptItem struct {
 	Data any
 }
 
-// TranscriptState holds the current transcript epoch and finalized items.
+// TranscriptState holds the current transcript epoch, frozen status, and finalized items.
 type TranscriptState struct {
-	Epoch int
-	Items *[]TranscriptItem
+	Epoch  int
+	Frozen bool
+	Items  *[]TranscriptItem
 }
 
 var transcript = kites.Create(TranscriptState{})
+
+// CurrentHeaderData returns a snapshot of HeaderData combining AppState metadata
+// with the active session's ModelLabel and Thinking effort.
+func CurrentHeaderData() HeaderData {
+	appState := GetApp()
+	sess := GetSession()
+	return HeaderData{
+		Version:   appState.Version,
+		Workspace: appState.Workspace,
+		Model:     sess.ModelLabel,
+		Thinking:  sess.Thinking,
+	}
+}
+
+// UseHeaderData returns reactive HeaderData subscribed to changes in AppState metadata,
+// ModelLabel, and Thinking effort.
+func UseHeaderData() HeaderData {
+	appMeta := UseApp(func(s AppState) [2]string {
+		return [2]string{s.Version, s.Workspace}
+	})
+	sessionInfo := UseSession(func(s SessionState) [2]string {
+		return [2]string{s.ModelLabel, s.Thinking}
+	})
+
+	return HeaderData{
+		Version:   appMeta[0],
+		Workspace: appMeta[1],
+		Model:     sessionInfo[0],
+		Thinking:  sessionInfo[1],
+	}
+}
 
 // UseTranscript subscribes a component to a comparable slice of TranscriptState.
 func UseTranscript[U comparable](selector func(TranscriptState) U) U {
@@ -67,10 +99,12 @@ func GetTranscript() TranscriptState {
 	return transcript.Get()
 }
 
-// AppendTranscript appends items to the transcript scrollback. It allocates a new
+// AppendTranscript appends items to the transcript. It allocates a new
 // slice copy so Items gets a new pointer for kites.Use. If an incoming item has
 // an ID != "" that already exists in Items, it is skipped to avoid duplicates within
-// the current epoch.
+// the current epoch. In frozen mode, if the transcript is currently empty and the
+// first item being appended is not a Header, a snapshot HeaderItem is prepended.
+// In draft mode (!Frozen), items are simply appended without a Header item.
 func AppendTranscript(items ...TranscriptItem) {
 	if len(items) == 0 {
 		return
@@ -78,9 +112,20 @@ func AppendTranscript(items ...TranscriptItem) {
 	transcript.Set(func(s TranscriptState) TranscriptState {
 		var current []TranscriptItem
 		if s.Items != nil {
-			current = make([]TranscriptItem, len(*s.Items), len(*s.Items)+len(items))
+			current = make([]TranscriptItem, len(*s.Items), len(*s.Items)+len(items)+1)
 			copy(current, *s.Items)
+		} else {
+			current = make([]TranscriptItem, 0, len(items)+1)
 		}
+
+		if s.Frozen && len(current) == 0 && len(items) > 0 && items[0].Kind != TranscriptKindHeader {
+			current = append(current, TranscriptItem{
+				ID:   "header",
+				Kind: TranscriptKindHeader,
+				Data: CurrentHeaderData(),
+			})
+		}
+
 		for _, item := range items {
 			if item.ID != "" {
 				duplicate := false
@@ -101,8 +146,81 @@ func AppendTranscript(items ...TranscriptItem) {
 			itemsPtr = &current
 		}
 		return TranscriptState{
-			Epoch: s.Epoch,
-			Items: itemsPtr,
+			Epoch:  s.Epoch,
+			Frozen: s.Frozen,
+			Items:  itemsPtr,
+		}
+	})
+}
+
+// FreezeTranscript transitions the transcript from live draft mode to frozen static scrollback.
+// If items does not already start with a Header item, one is prepended with CurrentHeaderData().
+func FreezeTranscript() {
+	transcript.Set(func(s TranscriptState) TranscriptState {
+		if s.Frozen {
+			return s
+		}
+		var current []TranscriptItem
+		if s.Items != nil {
+			current = make([]TranscriptItem, len(*s.Items))
+			copy(current, *s.Items)
+		}
+		hasHeader := len(current) > 0 && current[0].Kind == TranscriptKindHeader
+		if !hasHeader {
+			hdr := TranscriptItem{
+				ID:   "header",
+				Kind: TranscriptKindHeader,
+				Data: CurrentHeaderData(),
+			}
+			current = append([]TranscriptItem{hdr}, current...)
+		}
+		var itemsPtr *[]TranscriptItem
+		if len(current) > 0 {
+			itemsPtr = &current
+		}
+		return TranscriptState{
+			Epoch:  s.Epoch,
+			Frozen: true,
+			Items:  itemsPtr,
+		}
+	})
+}
+
+// ResetToDraft resets the transcript back to draft mode.
+// If the transcript was frozen, Epoch is incremented to clear terminal scrollback.
+// If it was not frozen (draft), Epoch is preserved and items are simply cleared.
+func ResetToDraft() {
+	transcript.Set(func(s TranscriptState) TranscriptState {
+		epoch := s.Epoch
+		if s.Frozen {
+			epoch++
+		}
+		return TranscriptState{
+			Epoch:  epoch,
+			Frozen: false,
+			Items:  nil,
+		}
+	})
+}
+
+// ResetForSessionSwitch prepares the transcript for a loaded or resumed session.
+// It snapshots the Header and enters Frozen mode. If previously frozen, it increments Epoch.
+func ResetForSessionSwitch() {
+	hdr := TranscriptItem{
+		ID:   "header",
+		Kind: TranscriptKindHeader,
+		Data: CurrentHeaderData(),
+	}
+	items := []TranscriptItem{hdr}
+	transcript.Set(func(s TranscriptState) TranscriptState {
+		epoch := s.Epoch
+		if s.Frozen {
+			epoch++
+		}
+		return TranscriptState{
+			Epoch:  epoch,
+			Frozen: true,
+			Items:  &items,
 		}
 	})
 }
@@ -113,71 +231,6 @@ func AppendHeader(d HeaderData) {
 		ID:   "header",
 		Kind: TranscriptKindHeader,
 		Data: d,
-	})
-}
-
-// SyncHeaderOrClear synchronizes the header banner with model and thinking.
-// It only increments Epoch (clearing scrollback) if either:
-// 1) The transcript is dirty (has items other than just the header) and forceIfDirty is true, OR
-// 2) The model label or thinking differs from the current header banner.
-// On initial startup before the header has model/thinking populated, it updates in place without incrementing Epoch.
-func SyncHeaderOrClear(model, thinking string, forceIfDirty bool) {
-	transcript.Set(func(s TranscriptState) TranscriptState {
-		if s.Items == nil || len(*s.Items) == 0 {
-			return s
-		}
-		items := *s.Items
-		headerIdx := -1
-		var currentHeader HeaderData
-		for i, item := range items {
-			if item.Kind == TranscriptKindHeader {
-				if hd, ok := item.Data.(HeaderData); ok {
-					headerIdx = i
-					currentHeader = hd
-					break
-				}
-			}
-		}
-		if headerIdx == -1 {
-			return s
-		}
-
-		if currentHeader.Model == "" && currentHeader.Thinking == "" {
-			currentHeader.Model = model
-			currentHeader.Thinking = thinking
-			updatedHeaderItem := TranscriptItem{
-				ID:   items[headerIdx].ID,
-				Kind: TranscriptKindHeader,
-				Data: currentHeader,
-			}
-			cp := make([]TranscriptItem, len(items))
-			copy(cp, items)
-			cp[headerIdx] = updatedHeaderItem
-			return TranscriptState{
-				Epoch: s.Epoch,
-				Items: &cp,
-			}
-		}
-
-		isClean := len(items) == 1 && headerIdx == 0
-		modelChanged := currentHeader.Model != model || currentHeader.Thinking != thinking
-		shouldClear := (forceIfDirty && !isClean) || modelChanged
-		if !shouldClear {
-			return s
-		}
-
-		currentHeader.Model = model
-		currentHeader.Thinking = thinking
-		updatedHeaderItem := TranscriptItem{
-			ID:   items[headerIdx].ID,
-			Kind: TranscriptKindHeader,
-			Data: currentHeader,
-		}
-		cp := []TranscriptItem{updatedHeaderItem}
-		return TranscriptState{
-			Epoch: s.Epoch + 1,
-			Items: &cp,
-		}
 	})
 }
 
@@ -234,34 +287,51 @@ func ResetTranscript(initial ...TranscriptItem) {
 			itemsPtr = &cp
 		}
 		return TranscriptState{
-			Epoch: s.Epoch + 1,
-			Items: itemsPtr,
+			Epoch:  s.Epoch + 1,
+			Frozen: s.Frozen,
+			Items:  itemsPtr,
 		}
 	})
 }
 
-// ClearScreen clears the terminal transcript while preserving the header banner item.
-// If the transcript is already clean (only header present or empty), it does not increment Epoch.
+// ClearScreen clears the transcript screen.
+// In draft mode (!Frozen), it simply clears draft items without incrementing Epoch.
+// In frozen mode, it clears terminal scrollback and repaints only the header banner.
 func ClearScreen() {
-	s := GetTranscript()
-	if s.Items == nil || len(*s.Items) == 0 || (len(*s.Items) == 1 && (*s.Items)[0].Kind == TranscriptKindHeader) {
-		return
-	}
-	var headers []TranscriptItem
-	for _, item := range *s.Items {
-		if item.Kind == TranscriptKindHeader {
-			headers = append(headers, item)
+	transcript.Set(func(s TranscriptState) TranscriptState {
+		if !s.Frozen {
+			return TranscriptState{
+				Epoch:  s.Epoch,
+				Frozen: false,
+				Items:  nil,
+			}
 		}
-	}
-	ResetTranscript(headers...)
+
+		if s.Items != nil && len(*s.Items) == 1 && (*s.Items)[0].Kind == TranscriptKindHeader {
+			return s
+		}
+
+		hdr := TranscriptItem{
+			ID:   "header",
+			Kind: TranscriptKindHeader,
+			Data: CurrentHeaderData(),
+		}
+		items := []TranscriptItem{hdr}
+		return TranscriptState{
+			Epoch:  s.Epoch + 1,
+			Frozen: true,
+			Items:  &items,
+		}
+	})
 }
 
-// ClearTranscript resets TranscriptState to Epoch 0 and nil Items.
+// ClearTranscript resets TranscriptState to Epoch 0, Frozen false, and nil Items.
 func ClearTranscript() {
 	transcript.Set(func(TranscriptState) TranscriptState {
 		return TranscriptState{
-			Epoch: 0,
-			Items: nil,
+			Epoch:  0,
+			Frozen: false,
+			Items:  nil,
 		}
 	})
 }

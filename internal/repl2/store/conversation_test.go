@@ -11,6 +11,7 @@ import (
 func TestConversationOptimisticUserAndConfirmation(t *testing.T) {
 	ResetStream()
 	ClearTranscript()
+	FreezeTranscript()
 	defer ResetStream()
 	defer ClearTranscript()
 
@@ -35,10 +36,14 @@ func TestConversationOptimisticUserAndConfirmation(t *testing.T) {
 		t.Fatalf("unexpected message parts: %+v", msg.Parts)
 	}
 
-	// Transcript should not yet have the message
+	// Transcript should not yet have the message (only the snapshot header from FreezeTranscript)
 	tr := GetTranscript()
-	if tr.Items != nil && len(*tr.Items) > 0 {
-		t.Fatalf("expected empty transcript before confirmation, got %d items", len(*tr.Items))
+	if tr.Items != nil {
+		for _, item := range *tr.Items {
+			if item.Kind == TranscriptKindMessage {
+				t.Fatalf("expected no message in transcript before confirmation")
+			}
+		}
 	}
 
 	// 2. Confirm message via EventEntryAdded
@@ -61,12 +66,15 @@ func TestConversationOptimisticUserAndConfirmation(t *testing.T) {
 		},
 	})
 
-	// Message should now be flushed to Transcript
+	// Message should now be flushed to Transcript (preceded by auto-prepended Header)
 	tr = GetTranscript()
-	if tr.Items == nil || len(*tr.Items) != 1 {
-		t.Fatalf("expected 1 transcript item after confirmation, got %+v", tr.Items)
+	if tr.Items == nil || len(*tr.Items) != 2 {
+		t.Fatalf("expected 2 transcript items (header + confirmed msg), got %+v", tr.Items)
 	}
-	item := (*tr.Items)[0]
+	if (*tr.Items)[0].Kind != TranscriptKindHeader {
+		t.Fatalf("expected item 0 kind %q, got %q", TranscriptKindHeader, (*tr.Items)[0].Kind)
+	}
+	item := (*tr.Items)[1]
 	if item.Kind != TranscriptKindMessage {
 		t.Fatalf("expected item kind %q, got %q", TranscriptKindMessage, item.Kind)
 	}
@@ -160,6 +168,7 @@ func TestConversationDraftAccumulationAndCompletion(t *testing.T) {
 func TestConversationCancelPendingUser(t *testing.T) {
 	ResetStream()
 	ClearTranscript()
+	FreezeTranscript()
 	defer ResetStream()
 	defer ClearTranscript()
 
@@ -183,19 +192,23 @@ func TestConversationCancelPendingUser(t *testing.T) {
 		t.Fatal("expected Streaming to be false after error cancel")
 	}
 
-	// Error banner should be appended to transcript
+	// Error banner should be appended to transcript (preceded by auto-prepended Header)
 	tr := GetTranscript()
-	if tr.Items == nil || len(*tr.Items) != 1 {
-		t.Fatalf("expected 1 error transcript item, got %+v", tr.Items)
+	if tr.Items == nil || len(*tr.Items) != 2 {
+		t.Fatalf("expected 2 transcript items (header + error), got %+v", tr.Items)
 	}
-	if (*tr.Items)[0].Kind != TranscriptKindError {
-		t.Fatalf("expected TranscriptKindError, got %q", (*tr.Items)[0].Kind)
+	if (*tr.Items)[0].Kind != TranscriptKindHeader {
+		t.Fatalf("expected item 0 kind %q, got %q", TranscriptKindHeader, (*tr.Items)[0].Kind)
+	}
+	if (*tr.Items)[1].Kind != TranscriptKindError {
+		t.Fatalf("expected TranscriptKindError for item 1, got %q", (*tr.Items)[1].Kind)
 	}
 }
 
 func TestConversationInterruptedTurnFlushesMessages(t *testing.T) {
 	ResetStream()
 	ClearTranscript()
+	FreezeTranscript()
 	defer ResetStream()
 	defer ClearTranscript()
 
@@ -278,25 +291,29 @@ func TestConversationInterruptedTurnFlushesMessages(t *testing.T) {
 		t.Fatalf("expected 0 active stream messages, got %d", len(*GetStream().Messages))
 	}
 
-	// Transcript should have user msg, assistant partial msg, and interrupted notice
+	// Transcript should have header, user msg, assistant partial msg, and interrupted notice
 	tr := GetTranscript()
-	if tr.Items == nil || len(*tr.Items) != 3 {
-		t.Fatalf("expected 3 transcript items (user, assistant, interrupted), got %d", len(*tr.Items))
+	if tr.Items == nil || len(*tr.Items) != 4 {
+		t.Fatalf("expected 4 transcript items (header, user, assistant, interrupted), got %d", len(*tr.Items))
 	}
-	if (*tr.Items)[0].Kind != TranscriptKindMessage {
-		t.Errorf("item 0 kind = %q, want message", (*tr.Items)[0].Kind)
+	if (*tr.Items)[0].Kind != TranscriptKindHeader {
+		t.Errorf("item 0 kind = %q, want header", (*tr.Items)[0].Kind)
 	}
 	if (*tr.Items)[1].Kind != TranscriptKindMessage {
 		t.Errorf("item 1 kind = %q, want message", (*tr.Items)[1].Kind)
 	}
-	if (*tr.Items)[2].Kind != TranscriptKindTimeline {
-		t.Errorf("item 2 kind = %q, want timeline", (*tr.Items)[2].Kind)
+	if (*tr.Items)[2].Kind != TranscriptKindMessage {
+		t.Errorf("item 2 kind = %q, want message", (*tr.Items)[2].Kind)
+	}
+	if (*tr.Items)[3].Kind != TranscriptKindTimeline {
+		t.Errorf("item 3 kind = %q, want timeline", (*tr.Items)[3].Kind)
 	}
 }
 
 func TestConversationInterruptedToolCall(t *testing.T) {
 	ResetStream()
 	ClearTranscript()
+	FreezeTranscript()
 	defer ResetStream()
 	defer ClearTranscript()
 
@@ -379,17 +396,20 @@ func TestConversationInterruptedToolCall(t *testing.T) {
 
 	// Tool message should be flushed to Transcript with ToolInterrupted status!
 	tr := GetTranscript()
-	if tr.Items == nil || len(*tr.Items) != 3 {
-		t.Fatalf("expected 3 transcript items (user + flushed tool message + interrupted), got %d", len(*tr.Items))
+	if tr.Items == nil || len(*tr.Items) != 4 {
+		t.Fatalf("expected 4 transcript items (header + user + flushed tool message + interrupted), got %d", len(*tr.Items))
 	}
-	msgItem, ok := (*tr.Items)[1].Data.(Message)
+	if (*tr.Items)[0].Kind != TranscriptKindHeader {
+		t.Fatalf("expected item 0 kind %q, got %q", TranscriptKindHeader, (*tr.Items)[0].Kind)
+	}
+	msgItem, ok := (*tr.Items)[2].Data.(Message)
 	if !ok || len(msgItem.Parts) != 1 || msgItem.Parts[0].Tool == nil {
-		t.Fatalf("unexpected transcript item 1: %+v", (*tr.Items)[1].Data)
+		t.Fatalf("unexpected transcript item 2: %+v", (*tr.Items)[2].Data)
 	}
 	if msgItem.Parts[0].Tool.Status != ToolInterrupted {
 		t.Fatalf("expected ToolInterrupted, got %q", msgItem.Parts[0].Tool.Status)
 	}
-	if (*tr.Items)[2].Kind != TranscriptKindTimeline {
-		t.Fatalf("expected TranscriptKindTimeline for item 2, got %q", (*tr.Items)[2].Kind)
+	if (*tr.Items)[3].Kind != TranscriptKindTimeline {
+		t.Fatalf("expected TranscriptKindTimeline for item 3, got %q", (*tr.Items)[3].Kind)
 	}
 }

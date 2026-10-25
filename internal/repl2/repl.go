@@ -57,10 +57,7 @@ func Run(ctx context.Context, opts Options) error {
 	store.ClearTranscript()
 	store.ResetStream()
 
-	store.AppendHeader(store.HeaderData{
-		Version:   opts.Version,
-		Workspace: opts.Workspace,
-	})
+	store.SetHeaderMeta(opts.Version, opts.Workspace)
 
 	store.InitSession(ctx, opts.Client, store.InitSessionOptions{
 		SessionID: opts.SessionID,

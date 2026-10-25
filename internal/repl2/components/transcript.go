@@ -42,14 +42,17 @@ func renderTranscriptItem(item store.TranscriptItem, _ int) trail.Node {
 	return nil
 }
 
-// Transcript is the host component that permanently prints finalized items into
-// terminal scrollback via trail.Static. When Epoch changes (e.g. /clear or session reset),
-// it coordinates app.Clear() before mounting the new epoch's items to guarantee
-// the new items are printed after the terminal scrollback is cleared.
+// Transcript is the host component that prints the header and finalized items.
+// In draft mode (!Frozen), Header and draft command outputs remain live children.
+// When Frozen, the snapshot Header and items are frozen into trail.Static and flushed into scrollback.
 var Transcript = trail.SimpleFC("Transcript", func() trail.Node {
 	app := trail.UseApp()
+	liveHeader := store.UseHeaderData()
 	epoch := store.UseTranscript(func(s store.TranscriptState) int {
 		return s.Epoch
+	})
+	frozen := store.UseTranscript(func(s store.TranscriptState) bool {
+		return s.Frozen
 	})
 	itemsPtr := store.UseTranscript(func(s store.TranscriptState) *[]store.TranscriptItem {
 		return s.Items
@@ -74,9 +77,26 @@ var Transcript = trail.SimpleFC("Transcript", func() trail.Node {
 		}
 	}, []any{epoch, clearedEpoch()})
 
-	var items []store.TranscriptItem
-	if epoch == clearedEpoch() && itemsPtr != nil {
-		items = *itemsPtr
+	var children []trail.Node
+	if epoch == clearedEpoch() {
+		var items []store.TranscriptItem
+		if itemsPtr != nil {
+			items = *itemsPtr
+		}
+
+		if !frozen {
+			children = make([]trail.Node, 0, len(items)+1)
+			children = append(children, Header(liveHeader))
+			for i, item := range items {
+				if n := renderTranscriptItem(item, i); n != nil {
+					children = append(children, n)
+				}
+			}
+		} else {
+			if len(items) > 0 {
+				children = []trail.Node{trail.Static(items, renderTranscriptItem)}
+			}
+		}
 	}
 
 	return trail.Box(trail.BoxProps{
@@ -84,5 +104,5 @@ var Transcript = trail.SimpleFC("Transcript", func() trail.Node {
 		Style: style.S().
 			FlexDirection(style.FlexColumn).
 			Width(style.Percent(100)),
-	}, trail.Static(items, renderTranscriptItem))
+	}, children...)
 })

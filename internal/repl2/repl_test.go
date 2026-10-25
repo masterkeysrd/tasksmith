@@ -347,23 +347,16 @@ func TestRunStartupHeader(t *testing.T) {
 		errCh <- Run(ctx, opts)
 	}()
 
+	// The startup banner is initially rendered live on the surface (not in static scrollback)
 	waitFor(t, func() bool {
-		for _, buf := range b.InsertedAbove {
-			for y := 0; y < buf.Height; y++ {
-				var line strings.Builder
-				for x := 0; x < buf.Width; x++ {
-					c := buf.CellAt(x, y)
-					if c.Content != "" {
-						line.WriteString(c.Content)
-					}
-				}
-				if strings.Contains(line.String(), "TaskSmith v0.2.0") {
-					return true
-				}
-			}
-		}
-		return false
-	}, 2*time.Second, "startup banner in inserted above scrollback")
+		return strings.Contains(surfaceText(b), "TaskSmith v0.2.0") &&
+			strings.Contains(surfaceText(b), "test-model with auto effort") &&
+			strings.Contains(surfaceText(b), "/tmp/ws")
+	}, 2*time.Second, "live startup banner on screen surface")
+
+	if len(b.InsertedAbove) != 0 {
+		t.Fatalf("expected 0 scrollback buffers while transcript is clean, got %d", len(b.InsertedAbove))
+	}
 
 	waitFor(t, func() bool {
 		return strings.Contains(surfaceText(b), "shift+tab cycle mode")
@@ -783,7 +776,7 @@ func TestRunClearReprintHeader(t *testing.T) {
 		return strings.Contains(allText(b.Backend), "old notice that must be cleared")
 	}, 2*time.Second, "dirty notice in InsertedAbove")
 
-	// Type /clear and press Enter
+	// Type /clear in draft mode: clears draft items from surface without calling Clear()
 	for _, ch := range "/clear" {
 		b.PostEvent(&backend.RawKeyEvent{
 			Key: key.Key{Code: ch, Text: string(ch)},
@@ -793,7 +786,28 @@ func TestRunClearReprintHeader(t *testing.T) {
 		Key: key.Key{Code: key.KeyEnter},
 	})
 
-	// Wait for /clear to execute, clearing backend and reprinting Header
+	waitFor(t, func() bool {
+		return !strings.Contains(surfaceText(b.Backend), "old notice that must be cleared") && strings.Contains(surfaceText(b.Backend), "TaskSmith v0.1.0")
+	}, 2*time.Second, "draft notice cleared from surface")
+
+	// Now test frozen mode: freeze transcript, append notice, and /clear should wipe backend
+	store.FreezeTranscript()
+	store.AppendNotice("frozen notice to be cleared")
+
+	waitFor(t, func() bool {
+		return strings.Contains(allText(b.Backend), "frozen notice to be cleared")
+	}, 2*time.Second, "frozen notice in scrollback")
+
+	for _, ch := range "/clear" {
+		b.PostEvent(&backend.RawKeyEvent{
+			Key: key.Key{Code: ch, Text: string(ch)},
+		})
+	}
+	b.PostEvent(&backend.RawKeyEvent{
+		Key: key.Key{Code: key.KeyEnter},
+	})
+
+	// Wait for /clear to execute in frozen mode, clearing backend and reprinting Header
 	waitFor(t, func() bool {
 		return b.ClearCalls >= 1 && strings.Contains(allText(b.Backend), "TaskSmith v0.1.0")
 	}, 2*time.Second, "Clear() called and header reprinted")
@@ -802,7 +816,7 @@ func TestRunClearReprintHeader(t *testing.T) {
 	if !strings.Contains(txt, "TaskSmith v0.1.0") {
 		t.Fatalf("expected header to be reprinted after /clear, got:\n%s", txt)
 	}
-	if strings.Contains(txt, "old notice that must be cleared") {
-		t.Fatalf("expected old notice to be cleared from scrollback, got:\n%s", txt)
+	if strings.Contains(txt, "frozen notice to be cleared") {
+		t.Fatalf("expected frozen notice to be cleared from scrollback, got:\n%s", txt)
 	}
 }

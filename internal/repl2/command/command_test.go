@@ -61,7 +61,9 @@ func TestCommandExecute(t *testing.T) {
 		store.ClearTranscript()
 		defer store.ClearTranscript()
 
-		store.AppendHeader(store.HeaderData{Version: "v1.0.0"})
+		store.SetHeaderMeta("v1.0.0", "/ws")
+
+		// 1. /clear in draft mode clears draft items without incrementing epoch
 		store.AppendNotice("hello")
 		epochBefore := store.GetTranscript().Epoch
 
@@ -69,20 +71,36 @@ func TestCommandExecute(t *testing.T) {
 			t.Fatalf("Execute /clear: %v", err)
 		}
 		epochAfter := store.GetTranscript().Epoch
-		if epochAfter != epochBefore+1 {
-			t.Errorf("expected epoch to increment on /clear when dirty, was %d now %d", epochBefore, epochAfter)
+		if epochAfter != epochBefore {
+			t.Errorf("expected epoch NOT to increment on /clear in draft mode, was %d now %d", epochBefore, epochAfter)
 		}
-		if len(*store.GetTranscript().Items) != 1 {
-			t.Errorf("expected 1 item (header) remaining after /clear")
+		if store.GetTranscript().Items != nil {
+			t.Errorf("expected nil items (live header) remaining after /clear in draft, got %v", store.GetTranscript().Items)
 		}
 
-		// /clear on clean transcript should NOT increment epoch
+		// 2. /clear in frozen mode increments epoch and resets items to [Header]
+		store.FreezeTranscript()
+		store.AppendNotice("frozen notice")
+		epochFrozenBefore := store.GetTranscript().Epoch
+
 		if err := r.Execute("/clear"); err != nil {
-			t.Fatalf("Execute /clear on clean transcript: %v", err)
+			t.Fatalf("Execute /clear in frozen mode: %v", err)
+		}
+		epochFrozenAfter := store.GetTranscript().Epoch
+		if epochFrozenAfter != epochFrozenBefore+1 {
+			t.Errorf("expected epoch to increment on /clear in frozen mode, was %d now %d", epochFrozenBefore, epochFrozenAfter)
+		}
+		if store.GetTranscript().Items == nil || len(*store.GetTranscript().Items) != 1 {
+			t.Errorf("expected [Header] remaining after /clear in frozen mode, got %v", store.GetTranscript().Items)
+		}
+
+		// 3. /clear on clean frozen transcript should NOT increment epoch
+		if err := r.Execute("/clear"); err != nil {
+			t.Fatalf("Execute /clear on clean frozen transcript: %v", err)
 		}
 		epochClean := store.GetTranscript().Epoch
-		if epochClean != epochAfter {
-			t.Errorf("expected epoch NOT to increment on clean transcript, was %d now %d", epochAfter, epochClean)
+		if epochClean != epochFrozenAfter {
+			t.Errorf("expected epoch NOT to increment on clean frozen transcript, was %d now %d", epochFrozenAfter, epochClean)
 		}
 	})
 
@@ -121,12 +139,7 @@ func TestCommandExecute(t *testing.T) {
 		defer store.ResetSession()
 		defer store.ClearTranscript()
 
-		// Setup clean transcript with header matching the model
-		store.AppendHeader(store.HeaderData{
-			Version:  "v1.0.0",
-			Model:    "test-model-1",
-			Thinking: "auto",
-		})
+		store.SetHeaderMeta("v1.0.0", "/ws")
 		store.SetModelInfo("test-model-1", "auto")
 
 		epoch0 := store.GetTranscript().Epoch
@@ -142,25 +155,48 @@ func TestCommandExecute(t *testing.T) {
 			t.Errorf("expected model test-model-1, got %q", store.GetSession().Config.Model)
 		}
 
-		// 2. /new on dirty transcript should increment epoch
+		// 2. /new on draft transcript clears items without incrementing epoch
 		store.AppendNotice("dirty notice")
 		if err := r.Execute("/new test-model-1"); err != nil {
-			t.Fatalf("Execute /new on dirty transcript: %v", err)
+			t.Fatalf("Execute /new on draft transcript: %v", err)
 		}
-		if store.GetTranscript().Epoch != epoch0+1 {
-			t.Errorf("expected epoch to increment on dirty transcript, was %d now %d", epoch0, store.GetTranscript().Epoch)
+		if store.GetTranscript().Epoch != epoch0 {
+			t.Errorf("expected epoch to remain %d on draft transcript, got %d", epoch0, store.GetTranscript().Epoch)
+		}
+		if store.GetTranscript().Items != nil {
+			t.Errorf("expected nil items after /new in draft, got %v", store.GetTranscript().Items)
 		}
 
-		// 3. /new with different model should increment epoch
+		// 3. /new on frozen transcript increments epoch and transitions to draft
+		store.FreezeTranscript()
+		store.AppendNotice("frozen notice")
+		epochFrozenBefore := store.GetTranscript().Epoch
+		if err := r.Execute("/new test-model-1"); err != nil {
+			t.Fatalf("Execute /new on frozen transcript: %v", err)
+		}
+		if store.GetTranscript().Epoch != epochFrozenBefore+1 {
+			t.Errorf("expected epoch to increment on frozen transcript, was %d now %d", epochFrozenBefore, store.GetTranscript().Epoch)
+		}
+		if store.GetTranscript().Frozen {
+			t.Errorf("expected Frozen=false after /new")
+		}
+		if store.GetTranscript().Items != nil {
+			t.Errorf("expected nil items after /new, got %v", store.GetTranscript().Items)
+		}
+
+		// 4. /new with different model updates live header without incrementing epoch
 		epoch1 := store.GetTranscript().Epoch
 		if err := r.Execute("/new diff-model"); err != nil {
 			t.Fatalf("Execute /new diff-model: %v", err)
 		}
-		if store.GetTranscript().Epoch != epoch1+1 {
-			t.Errorf("expected epoch to increment on model change, was %d now %d", epoch1, store.GetTranscript().Epoch)
+		if store.GetTranscript().Epoch != epoch1 {
+			t.Errorf("expected epoch to remain %d on clean transcript, got %d", epoch1, store.GetTranscript().Epoch)
 		}
 		if store.GetSession().Config.Model != "diff-model" {
 			t.Errorf("expected model diff-model, got %q", store.GetSession().Config.Model)
+		}
+		if store.CurrentHeaderData().Model != "diff-model" {
+			t.Errorf("expected live header model diff-model, got %q", store.CurrentHeaderData().Model)
 		}
 	})
 }

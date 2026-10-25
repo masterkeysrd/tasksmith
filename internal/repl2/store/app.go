@@ -17,6 +17,8 @@ type AppState struct {
 	CtrlCPending  bool
 	ExitRequested bool
 	Hint          string
+	Version       string
+	Workspace     string
 }
 
 var app = kites.Create(AppState{Hint: DefaultHint})
@@ -29,6 +31,15 @@ func UseApp[U comparable](selector func(AppState) U) U {
 // GetApp returns the current AppState snapshot.
 func GetApp() AppState {
 	return app.Get()
+}
+
+// SetHeaderMeta updates the version and workspace metadata in AppState.
+func SetHeaderMeta(version, workspace string) {
+	app.Set(func(s AppState) AppState {
+		s.Version = version
+		s.Workspace = workspace
+		return s
+	})
 }
 
 // SetCtrlCPending updates the Ctrl+C exit confirmation state.
@@ -69,9 +80,13 @@ func UseHint(hint string) {
 	}, []any{hint})
 }
 
-// ResetApp resets AppState to its default values.
+// ResetApp resets AppState to its default values while preserving version and workspace.
 func ResetApp() {
-	app.Set(func(AppState) AppState {
-		return AppState{Hint: DefaultHint}
+	app.Set(func(s AppState) AppState {
+		return AppState{
+			Hint:      DefaultHint,
+			Version:   s.Version,
+			Workspace: s.Workspace,
+		}
 	})
 }
