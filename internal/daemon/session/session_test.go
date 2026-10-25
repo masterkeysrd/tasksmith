@@ -29,6 +29,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/daemon/broker"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/gateway"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/harness"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/permissions"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/sandbox"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/std"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/timeline"
@@ -244,12 +245,18 @@ func setupTestEnv(t *testing.T, prov *fakeProvider) (*sql.DB, workspace.Workspac
 	gw := newFakeGateway(prov)
 	pub := &testPublisher{}
 
+	permMgr, err := permissions.New(permissions.Config{Workspace: ws})
+	if err != nil {
+		t.Fatalf("permissions.New: %v", err)
+	}
+
 	mgr, err := New(Config{
-		DB:        db,
-		Workspace: ws,
-		Gateway:   gw,
-		Publisher: pub,
-		Logger:    logger,
+		DB:          db,
+		Workspace:   ws,
+		Gateway:     gw,
+		Publisher:   pub,
+		Logger:      logger,
+		Permissions: permMgr,
 	})
 	if err != nil {
 		t.Fatalf("session.New: %v", err)
@@ -269,11 +276,12 @@ func loadHarnessState(t *testing.T, mgr Manager, db *sql.DB, gw *fakeGateway, se
 		t.Fatalf("mgr.Get: %v", err)
 	}
 	h, err := harness.New(harness.Config{
-		ID:     sessionID,
-		DB:     db,
-		Model:  llmModel,
-		Tools:  sess.Tools,
-		Logger: log.Default(),
+		ID:          sessionID,
+		DB:          db,
+		Model:       llmModel,
+		Tools:       sess.Tools,
+		Permissions: sess.PermManager,
+		Logger:      log.Default(),
 	})
 	if err != nil {
 		t.Fatalf("harness.New: %v", err)
@@ -305,6 +313,10 @@ func msgText(m message.Message) string {
 func TestConfigValidate(t *testing.T) {
 	db, ws, gw, pub, _ := setupTestEnv(t, nil)
 	logger := log.Default()
+	permMgr, err := permissions.New(permissions.Config{Workspace: ws})
+	if err != nil {
+		t.Fatalf("permissions.New: %v", err)
+	}
 
 	tests := []struct {
 		name string
@@ -313,46 +325,61 @@ func TestConfigValidate(t *testing.T) {
 		{
 			name: "missing DB",
 			cfg: Config{
-				Workspace: ws,
-				Gateway:   gw,
-				Publisher: pub,
-				Logger:    logger,
+				Workspace:   ws,
+				Gateway:     gw,
+				Publisher:   pub,
+				Logger:      logger,
+				Permissions: permMgr,
 			},
 		},
 		{
 			name: "missing Workspace",
 			cfg: Config{
-				DB:        db,
-				Gateway:   gw,
-				Publisher: pub,
-				Logger:    logger,
+				DB:          db,
+				Gateway:     gw,
+				Publisher:   pub,
+				Logger:      logger,
+				Permissions: permMgr,
 			},
 		},
 		{
 			name: "missing Gateway",
 			cfg: Config{
-				DB:        db,
-				Workspace: ws,
-				Publisher: pub,
-				Logger:    logger,
+				DB:          db,
+				Workspace:   ws,
+				Publisher:   pub,
+				Logger:      logger,
+				Permissions: permMgr,
 			},
 		},
 		{
 			name: "missing Publisher",
 			cfg: Config{
-				DB:        db,
-				Workspace: ws,
-				Gateway:   gw,
-				Logger:    logger,
+				DB:          db,
+				Workspace:   ws,
+				Gateway:     gw,
+				Logger:      logger,
+				Permissions: permMgr,
 			},
 		},
 		{
 			name: "missing Logger",
 			cfg: Config{
+				DB:          db,
+				Workspace:   ws,
+				Gateway:     gw,
+				Publisher:   pub,
+				Permissions: permMgr,
+			},
+		},
+		{
+			name: "missing Permissions",
+			cfg: Config{
 				DB:        db,
 				Workspace: ws,
 				Gateway:   gw,
 				Publisher: pub,
+				Logger:    logger,
 			},
 		},
 	}
@@ -580,12 +607,18 @@ OVERRIDE_AGENT_PROMPT_MARKER {{ if call .HasTool "shell" }}HAS_SHELL_TOOL{{ end 
 	gw := newFakeGateway(prov)
 	pub := &testPublisher{}
 
+	permMgr, err := permissions.New(permissions.Config{Workspace: ws})
+	if err != nil {
+		t.Fatalf("permissions.New: %v", err)
+	}
+
 	mgr, err := New(Config{
-		DB:        db,
-		Workspace: ws,
-		Gateway:   gw,
-		Publisher: pub,
-		Logger:    log.Default(),
+		DB:          db,
+		Workspace:   ws,
+		Gateway:     gw,
+		Publisher:   pub,
+		Logger:      log.Default(),
+		Permissions: permMgr,
 	})
 	if err != nil {
 		t.Fatalf("session.New: %v", err)
@@ -1315,12 +1348,17 @@ func TestFileTrackerReloadAndDeleteSessionCleanup(t *testing.T) {
 	}
 
 	// Construct a second Manager over the same DB and Workspace (simulating process restart)
+	permMgr, err := permissions.New(permissions.Config{Workspace: ws})
+	if err != nil {
+		t.Fatalf("permissions.New: %v", err)
+	}
 	mgr2, err := New(Config{
-		DB:        db,
-		Workspace: ws,
-		Gateway:   gw,
-		Publisher: pub,
-		Logger:    log.Default(),
+		DB:          db,
+		Workspace:   ws,
+		Gateway:     gw,
+		Publisher:   pub,
+		Logger:      log.Default(),
+		Permissions: permMgr,
 	})
 	if err != nil {
 		t.Fatalf("New mgr2 error: %v", err)
@@ -2322,12 +2360,17 @@ func TestTargetedSessionFixes(t *testing.T) {
 	}
 
 	// Load session via a new manager (simulating fresh loadOrCacheSession)
+	permMgr, err := permissions.New(permissions.Config{Workspace: ws})
+	if err != nil {
+		t.Fatalf("permissions.New: %v", err)
+	}
 	mgr2, err := New(Config{
-		DB:        db,
-		Workspace: ws,
-		Gateway:   gw,
-		Publisher: pub,
-		Logger:    log.Default(),
+		DB:          db,
+		Workspace:   ws,
+		Gateway:     gw,
+		Publisher:   pub,
+		Logger:      log.Default(),
+		Permissions: permMgr,
 	})
 	if err != nil {
 		t.Fatalf("New mgr2: %v", err)
@@ -2356,5 +2399,90 @@ func TestTargetedSessionFixes(t *testing.T) {
 	}
 	if sess.Sandbox.Platform().WorkDir != ws.RootDir() {
 		t.Errorf("Sandbox.WorkDir = %q, want %q", sess.Sandbox.Platform().WorkDir, ws.RootDir())
+	}
+}
+
+func TestSessionPermissionsPersistence(t *testing.T) {
+	ctx := context.Background()
+	db, ws, gw, pub, mgr := setupTestEnv(t, &fakeProvider{})
+
+	sess, _, err := mgr.Create(ctx, CreateParams{
+		Title: "Perm Test Session",
+	})
+	if err != nil {
+		t.Fatalf("mgr.Create: %v", err)
+	}
+
+	if len(sess.Permissions.Allow) != 0 || len(sess.Permissions.Deny) != 0 {
+		t.Fatalf("expected empty permissions initially, got %+v", sess.Permissions)
+	}
+
+	if sess.PermManager == nil {
+		t.Fatalf("expected non-nil PermManager")
+	}
+
+	if err := sess.PermManager.AddAllow("write(internal/**)"); err != nil {
+		t.Fatalf("PermManager.AddAllow: %v", err)
+	}
+
+	sess.Lock()
+	hasAllow := slices.Contains(sess.Permissions.Allow, "write(internal/**)")
+	sess.Unlock()
+	if !hasAllow {
+		t.Fatalf("expected sess.Permissions to reflect added allow rule")
+	}
+
+	// Verify directly in SQLite store
+	st, err := newStore(ctx, db)
+	if err != nil {
+		t.Fatalf("newStore: %v", err)
+	}
+	dbSess, err := st.getSession(ctx, sess.ID)
+	if err != nil {
+		t.Fatalf("st.getSession: %v", err)
+	}
+	if !slices.Contains(dbSess.Permissions.Allow, "write(internal/**)") {
+		t.Fatalf("expected persisted permissions in store to contain allow rule, got %+v", dbSess.Permissions)
+	}
+
+	// Load via a fresh manager instance
+	permMgr, err := permissions.New(permissions.Config{Workspace: ws})
+	if err != nil {
+		t.Fatalf("permissions.New: %v", err)
+	}
+	mgr2, err := New(Config{
+		DB:          db,
+		Workspace:   ws,
+		Gateway:     gw,
+		Publisher:   pub,
+		Logger:      log.Default(),
+		Permissions: permMgr,
+	})
+	if err != nil {
+		t.Fatalf("New mgr2: %v", err)
+	}
+
+	sess2, err := mgr2.Get(ctx, sess.ID)
+	if err != nil {
+		t.Fatalf("mgr2.Get: %v", err)
+	}
+	if !slices.Contains(sess2.Permissions.Allow, "write(internal/**)") {
+		t.Fatalf("expected sess2 to restore permissions, got %+v", sess2.Permissions)
+	}
+
+	// Update permissions directly via store helper
+	newPerms := permissions.Permissions{
+		Allow: []string{"write(internal/**)"},
+		Deny:  []string{"bash(*)"},
+	}
+	if err := st.updateSessionPermissions(ctx, sess.ID, newPerms); err != nil {
+		t.Fatalf("updateSessionPermissions: %v", err)
+	}
+	dbSess2, err := st.getSession(ctx, sess.ID)
+	if err != nil {
+		t.Fatalf("st.getSession after update: %v", err)
+	}
+	if !slices.Contains(dbSess2.Permissions.Deny, "bash(*)") {
+		t.Fatalf("expected updated deny rule in store, got %+v", dbSess2.Permissions)
 	}
 }

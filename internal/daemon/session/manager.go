@@ -17,6 +17,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/gateway"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/permissions"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/timeline"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tools"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/workspace"
@@ -24,11 +25,12 @@ import (
 
 // Config holds runtime dependencies required to construct a [Manager].
 type Config struct {
-	DB        *sql.DB
-	Workspace workspace.Workspace
-	Gateway   gateway.Gateway
-	Publisher Publisher
-	Logger    log.Interface
+	DB          *sql.DB
+	Workspace   workspace.Workspace
+	Gateway     gateway.Gateway
+	Publisher   Publisher
+	Logger      log.Interface
+	Permissions permissions.Manager
 }
 
 // Validate checks that all required configuration dependencies are non-nil.
@@ -47,6 +49,9 @@ func (c Config) Validate() error {
 	}
 	if c.Logger == nil {
 		return fmt.Errorf("%w: logger is required", ErrInvalidConfig)
+	}
+	if c.Permissions == nil {
+		return fmt.Errorf("%w: permissions is required", ErrInvalidConfig)
 	}
 	return nil
 }
@@ -68,6 +73,7 @@ type manager struct {
 	gateway   gateway.Gateway
 	publisher Publisher
 	logger    log.Interface
+	perms     permissions.Manager
 
 	bgCtx    context.Context
 	bgCancel context.CancelFunc
@@ -100,6 +106,7 @@ func New(cfg Config) (Manager, error) {
 		gateway:   cfg.Gateway,
 		publisher: cfg.Publisher,
 		logger:    cfg.Logger,
+		perms:     cfg.Permissions,
 		bgCtx:     bgCtx,
 		bgCancel:  bgCancel,
 		sessions:  make(map[string]*Session),
@@ -197,21 +204,23 @@ func (m *manager) loadOrCacheSession(ctx context.Context, dbSess *Session) (*Ses
 	}
 
 	sess := &Session{
-		State:     NewState(),
-		ID:        dbSess.ID,
-		Title:     dbSess.Title,
-		Config:    dbSess.Config,
-		CreatedAt: dbSess.CreatedAt,
-		UpdatedAt: dbSess.UpdatedAt,
-		Root:      dir,
-		db:        m.db,
-		store:     m.store,
-		workspace: m.workspace,
-		gateway:   m.gateway,
-		publisher: m.publisher,
-		logger:    m.logger,
-		bgCtx:     m.bgCtx,
-		wg:        &m.wg,
+		State:       NewState(),
+		ID:          dbSess.ID,
+		Title:       dbSess.Title,
+		Config:      dbSess.Config,
+		CreatedAt:   dbSess.CreatedAt,
+		UpdatedAt:   dbSess.UpdatedAt,
+		Permissions: dbSess.Permissions.Clone(),
+		permRoot:    m.perms,
+		Root:        dir,
+		db:          m.db,
+		store:       m.store,
+		workspace:   m.workspace,
+		gateway:     m.gateway,
+		publisher:   m.publisher,
+		logger:      m.logger,
+		bgCtx:       m.bgCtx,
+		wg:          &m.wg,
 	}
 
 	if err := sess.initResources(ctx); err != nil {
@@ -325,17 +334,19 @@ func (m *manager) Create(ctx context.Context, params CreateParams) (sess *Sessio
 			Effort: effort,
 			Mode:   mode,
 		},
-		CreatedAt: now,
-		UpdatedAt: now,
-		Root:      sessDir,
-		db:        m.db,
-		store:     m.store,
-		workspace: m.workspace,
-		gateway:   m.gateway,
-		publisher: m.publisher,
-		logger:    m.logger,
-		bgCtx:     m.bgCtx,
-		wg:        &m.wg,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+		Permissions: permissions.Permissions{},
+		permRoot:    m.perms,
+		Root:        sessDir,
+		db:          m.db,
+		store:       m.store,
+		workspace:   m.workspace,
+		gateway:     m.gateway,
+		publisher:   m.publisher,
+		logger:      m.logger,
+		bgCtx:       m.bgCtx,
+		wg:          &m.wg,
 	}
 
 	if err := newSession.initResources(ctx); err != nil {
@@ -451,8 +462,8 @@ func (m *manager) Update(ctx context.Context, id string, params UpdateParams) (*
 	if oldConfig.Agent != newConfig.Agent || oldConfig.Model != newConfig.Model || oldConfig.Effort != newConfig.Effort {
 		sess.Harness = nil
 	}
-	if oldConfig.Mode != newConfig.Mode && sess.Tools != nil {
-		sess.Tools.SetMode(newConfig.Mode)
+	if oldConfig.Mode != newConfig.Mode && sess.PermManager != nil {
+		sess.PermManager.SetMode(newConfig.Mode)
 	}
 	sess.Unlock()
 

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/masterkeysrd/tasksmith/internal/core/sqlite"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/permissions"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tools"
 )
 
@@ -32,12 +33,17 @@ func (s *store) insertSession(ctx context.Context, sess *Session) error {
 	if err != nil {
 		return fmt.Errorf("session: marshal config: %w", err)
 	}
+	permsBytes, err := json.Marshal(sess.Permissions)
+	if err != nil {
+		return fmt.Errorf("session: marshal permissions: %w", err)
+	}
 	_, err = s.db.ExecContext(
 		ctx,
-		`INSERT INTO sessions (id, title, config, created_at, updated_at) VALUES (?, ?, ?, ?, ?)`,
+		`INSERT INTO sessions (id, title, config, permissions, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)`,
 		sess.ID,
 		sess.Title,
 		string(configBytes),
+		string(permsBytes),
 		formatTime(sess.CreatedAt),
 		formatTime(sess.UpdatedAt),
 	)
@@ -52,11 +58,16 @@ func (s *store) updateSession(ctx context.Context, sess *Session) error {
 	if err != nil {
 		return fmt.Errorf("session: marshal config: %w", err)
 	}
+	permsBytes, err := json.Marshal(sess.Permissions)
+	if err != nil {
+		return fmt.Errorf("session: marshal permissions: %w", err)
+	}
 	res, err := s.db.ExecContext(
 		ctx,
-		`UPDATE sessions SET title = ?, config = ?, updated_at = ? WHERE id = ?`,
+		`UPDATE sessions SET title = ?, config = ?, permissions = ?, updated_at = ? WHERE id = ?`,
 		sess.Title,
 		string(configBytes),
+		string(permsBytes),
 		formatTime(sess.UpdatedAt),
 		sess.ID,
 	)
@@ -66,6 +77,30 @@ func (s *store) updateSession(ctx context.Context, sess *Session) error {
 	affected, err := res.RowsAffected()
 	if err != nil {
 		return fmt.Errorf("session: check rows affected for session %q: %w", sess.ID, err)
+	}
+	if affected == 0 {
+		return ErrSessionNotFound
+	}
+	return nil
+}
+
+func (s *store) updateSessionPermissions(ctx context.Context, sessionID string, perms permissions.Permissions) error {
+	permsBytes, err := json.Marshal(perms)
+	if err != nil {
+		return fmt.Errorf("session: marshal permissions: %w", err)
+	}
+	res, err := s.db.ExecContext(
+		ctx,
+		`UPDATE sessions SET permissions = ? WHERE id = ?`,
+		string(permsBytes),
+		sessionID,
+	)
+	if err != nil {
+		return fmt.Errorf("session: update session permissions %q: %w", sessionID, err)
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("session: check rows affected for session %q: %w", sessionID, err)
 	}
 	if affected == 0 {
 		return ErrSessionNotFound
@@ -96,7 +131,7 @@ func (s *store) touchSession(ctx context.Context, sessionID string, updatedAt ti
 func (s *store) getSession(ctx context.Context, id string) (*Session, error) {
 	row := s.db.QueryRowContext(
 		ctx,
-		`SELECT id, title, config, created_at, updated_at FROM sessions WHERE id = ?`,
+		`SELECT id, title, config, permissions, created_at, updated_at FROM sessions WHERE id = ?`,
 		id,
 	)
 	sess, err := scanSession(row)
@@ -112,7 +147,7 @@ func (s *store) getSession(ctx context.Context, id string) (*Session, error) {
 func (s *store) listSessions(ctx context.Context) ([]*Session, error) {
 	rows, err := s.db.QueryContext(
 		ctx,
-		`SELECT id, title, config, created_at, updated_at FROM sessions ORDER BY updated_at DESC, id DESC`,
+		`SELECT id, title, config, permissions, created_at, updated_at FROM sessions ORDER BY updated_at DESC, id DESC`,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("session: list sessions: %w", err)
@@ -156,10 +191,11 @@ func scanSession(r rowScanner) (*Session, error) {
 	var (
 		sess         Session
 		configRaw    string
+		permsRaw     string
 		createdAtRaw string
 		updatedAtRaw string
 	)
-	if err := r.Scan(&sess.ID, &sess.Title, &configRaw, &createdAtRaw, &updatedAtRaw); err != nil {
+	if err := r.Scan(&sess.ID, &sess.Title, &configRaw, &permsRaw, &createdAtRaw, &updatedAtRaw); err != nil {
 		return nil, err
 	}
 
@@ -170,6 +206,12 @@ func scanSession(r rowScanner) (*Session, error) {
 	}
 	if sess.Config.Mode == "" {
 		sess.Config.Mode = tools.ModeDefault
+	}
+
+	if permsRaw != "" {
+		if err := json.Unmarshal([]byte(permsRaw), &sess.Permissions); err != nil {
+			return nil, fmt.Errorf("parse permissions: %w", err)
+		}
 	}
 
 	createdAt, err := parseTime(createdAtRaw)

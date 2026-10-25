@@ -14,6 +14,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/core/sqlite"
 	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/gateway"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/permissions"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/session"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tools/builtin"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/workspace"
@@ -31,6 +32,7 @@ type Runtime interface {
 	Dir() string
 	Workspace() workspace.Workspace
 	Gateway() gateway.Gateway
+	Permissions() permissions.Manager
 	Sessions() session.Manager
 	Close() error
 }
@@ -53,16 +55,18 @@ type workspaceRuntime struct {
 	dir      string
 	ws       workspace.Workspace
 	gw       gateway.Gateway
+	perms    permissions.Manager
 	sessions session.Manager
 	db       *sql.DB
 }
 
 var _ Runtime = (*workspaceRuntime)(nil)
 
-func (r *workspaceRuntime) Dir() string                    { return r.dir }
-func (r *workspaceRuntime) Workspace() workspace.Workspace { return r.ws }
-func (r *workspaceRuntime) Gateway() gateway.Gateway       { return r.gw }
-func (r *workspaceRuntime) Sessions() session.Manager      { return r.sessions }
+func (r *workspaceRuntime) Dir() string                      { return r.dir }
+func (r *workspaceRuntime) Workspace() workspace.Workspace   { return r.ws }
+func (r *workspaceRuntime) Gateway() gateway.Gateway         { return r.gw }
+func (r *workspaceRuntime) Permissions() permissions.Manager { return r.perms }
+func (r *workspaceRuntime) Sessions() session.Manager        { return r.sessions }
 
 func (r *workspaceRuntime) Close() error {
 	sessErr := r.sessions.Close()
@@ -145,11 +149,13 @@ func (m *manager) Get(ctx context.Context, dir string) (Runtime, error) {
 	var db *sql.DB
 	var gw gateway.Gateway
 	var sessMgr session.Manager
+	var permMgr permissions.Manager
 	for _, existing := range m.runtimes {
 		if existing.ws.RootDir() == rootDir {
 			db = existing.db
 			gw = existing.gw
 			sessMgr = existing.sessions
+			permMgr = existing.perms
 			break
 		}
 	}
@@ -176,12 +182,20 @@ func (m *manager) Get(ctx context.Context, dir string) (Runtime, error) {
 			return nil, fmt.Errorf("runtime: open sqlite db %q: %w", dbPath, err)
 		}
 
+		permMgr, err = permissions.New(permissions.Config{Workspace: ws})
+		if err != nil {
+			_ = db.Close()
+			m.mu.Unlock()
+			return nil, fmt.Errorf("runtime: initialize permissions manager for %q: %w", rootDir, err)
+		}
+
 		sessMgr, err = session.New(session.Config{
-			DB:        db,
-			Workspace: ws,
-			Gateway:   gw,
-			Publisher: m.publisher,
-			Logger:    m.logger,
+			DB:          db,
+			Workspace:   ws,
+			Gateway:     gw,
+			Publisher:   m.publisher,
+			Logger:      m.logger,
+			Permissions: permMgr,
 		})
 		if err != nil {
 			_ = db.Close()
@@ -194,6 +208,7 @@ func (m *manager) Get(ctx context.Context, dir string) (Runtime, error) {
 		dir:      cleanDir,
 		ws:       ws,
 		gw:       gw,
+		perms:    permMgr,
 		sessions: sessMgr,
 		db:       db,
 	}

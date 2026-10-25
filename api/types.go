@@ -209,6 +209,15 @@ const (
 	SafetyUnsafe  SafetyLevel = "unsafe"
 )
 
+// PermissionScope specifies the boundary tier for an allowed permission rule.
+type PermissionScope string
+
+const (
+	ScopeSession PermissionScope = "session"
+	ScopeProject PermissionScope = "project"
+	ScopeGlobal  PermissionScope = "global"
+)
+
 // DecisionKind represents a user's approval or rejection choice for a permission request.
 type DecisionKind string
 
@@ -233,11 +242,12 @@ type PermissionRequest struct {
 
 // PermissionDecision submits a user's resolution for a pending [PermissionRequest].
 type PermissionDecision struct {
-	RequestID    string       `json:"request_id,omitempty"`
-	ToolCallID   string       `json:"tool_call_id,omitempty"`
-	Kind         DecisionKind `json:"kind"`
-	GrantPattern string       `json:"grant_pattern,omitempty"`
-	Feedback     string       `json:"feedback,omitempty"`
+	RequestID    string          `json:"request_id,omitempty"`
+	ToolCallID   string          `json:"tool_call_id,omitempty"`
+	Kind         DecisionKind    `json:"kind"`
+	GrantPattern string          `json:"grant_pattern,omitempty"`
+	Scope        PermissionScope `json:"scope,omitempty"`
+	Feedback     string          `json:"feedback,omitempty"`
 }
 
 // FileChange represents a single recorded file mutation entry in a session's change journal.

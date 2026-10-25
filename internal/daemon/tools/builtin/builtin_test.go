@@ -17,6 +17,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	"github.com/masterkeysrd/tasksmith/internal/core/shellguard"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/permissions"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/sandbox"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/std"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tools"
@@ -191,7 +192,16 @@ func TestFSAndWorkspaceResolution(t *testing.T) {
 
 func TestReadOnlyToolsPrepareEvaluateExecute(t *testing.T) {
 	ctx := context.Background()
-	dir, c, _, _, _ := setupBuiltinEnv(t, false)
+	dir, c, _, _, ws := setupBuiltinEnv(t, false)
+
+	permMgr, err := permissions.New(permissions.Config{
+		Workspace:  ws,
+		GlobalPath: filepath.Join(t.TempDir(), "permissions.json"),
+	})
+	if err != nil {
+		t.Fatalf("permissions.New: %v", err)
+	}
+	perm := permMgr.Attach(tools.ModeDefault, permissions.Permissions{}, nil)
 
 	if err := os.MkdirAll(filepath.Join(dir, "pkg"), 0o755); err != nil {
 		t.Fatal(err)
@@ -233,7 +243,7 @@ func TestReadOnlyToolsPrepareEvaluateExecute(t *testing.T) {
 				t.Fatalf("unexpected plan for %s: %+v", tc.Name, plan)
 			}
 
-			dec, permReq, err := c.Evaluate(plan)
+			dec, permReq, err := perm.Evaluate(plan)
 			if err != nil {
 				t.Fatalf("Evaluate(%s) failed: %v", tc.Name, err)
 			}
@@ -261,7 +271,16 @@ func TestReadOnlyToolsPrepareEvaluateExecute(t *testing.T) {
 
 func TestWriteEditAndCASConflict(t *testing.T) {
 	ctx := context.Background()
-	dir, c, _, _, _ := setupBuiltinEnv(t, false)
+	dir, c, _, _, ws := setupBuiltinEnv(t, false)
+
+	permMgr, err := permissions.New(permissions.Config{
+		Workspace:  ws,
+		GlobalPath: filepath.Join(t.TempDir(), "permissions.json"),
+	})
+	if err != nil {
+		t.Fatalf("permissions.New: %v", err)
+	}
+	perm := permMgr.Attach(tools.ModeDefault, permissions.Permissions{}, nil)
 
 	// 1. Write new file (DryRun in Prepare, then Execute)
 	writeCall := &message.ToolCall{
@@ -283,12 +302,12 @@ func TestWriteEditAndCASConflict(t *testing.T) {
 	if !strings.Contains(plan.Diff, "+line 1") {
 		t.Fatalf("expected unified diff preview in plan, got %q", plan.Diff)
 	}
-	dec, permReq, err := c.Evaluate(plan)
+	dec, permReq, err := perm.Evaluate(plan)
 	if err != nil || dec != tools.AccessAsk || permReq == nil {
 		t.Fatalf("expected AccessAsk with PermissionRequest, got %s, %+v, %v", dec, permReq, err)
 	}
-	if !slices.Contains(permReq.GrantPatterns, "sub/**") {
-		t.Fatalf("expected sub/** in permReq.GrantPatterns, got %v", permReq.GrantPatterns)
+	if !slices.Contains(permReq.GrantPatterns, "write(sub/**)") {
+		t.Fatalf("expected write(sub/**) in permReq.GrantPatterns, got %v", permReq.GrantPatterns)
 	}
 	if _, statErr := os.Stat(filepath.Join(dir, "sub", "newfile.txt")); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("expected file not to exist after Prepare DryRun")
@@ -372,7 +391,7 @@ func TestWriteEditAndCASConflict(t *testing.T) {
 
 func TestBashWebFetchDownloadRemoveAndEdgeCases(t *testing.T) {
 	ctx := context.Background()
-	dir, c, _, _, _ := setupBuiltinEnv(t, true)
+	dir, c, _, _, ws := setupBuiltinEnv(t, true)
 
 	// 1. Bash classifications and execution
 	for _, bashCase := range []struct {
@@ -442,7 +461,7 @@ func TestBashWebFetchDownloadRemoveAndEdgeCases(t *testing.T) {
 	}
 	fetchRes, err := c.Execute(ctx, fetchCall)
 	if err != nil || fetchRes.IsError {
-		t.Fatalf("Execute(web_fetch) failed: err=%v, res=%+v", err, fetchRes)
+		t.Fatalf("Execute(web_fetch) failed: err=%v, res=%+v, text=%s", err, fetchRes, fetchRes.Content.Text())
 	}
 	fetchOut, ok := fetchRes.StructuredContent.(api.WebFetchOutput)
 	if !ok || !strings.Contains(fetchOut.Text, "remote payload") {
@@ -507,6 +526,15 @@ func TestBashWebFetchDownloadRemoveAndEdgeCases(t *testing.T) {
 		t.Fatalf("expected SafetyUnsafe for .agents/ write, got %+v, err=%v", protPlan, err)
 	}
 
+	permMgr, err := permissions.New(permissions.Config{
+		Workspace:  ws,
+		GlobalPath: filepath.Join(t.TempDir(), "permissions.json"),
+	})
+	if err != nil {
+		t.Fatalf("permissions.New: %v", err)
+	}
+	perm := permMgr.Attach(tools.ModeDefault, permissions.Permissions{}, nil)
+
 	// Read-only tools targeting ../somefile.txt produce SafetyOutside and evaluate to AccessAsk,
 	// and can be granted for the session via DecisionAllowSession.
 	for _, roOutside := range []*message.ToolCall{
@@ -522,22 +550,22 @@ func TestBashWebFetchDownloadRemoveAndEdgeCases(t *testing.T) {
 		if outPlan.Safety != tools.SafetyOutside || outPlan.Action != tools.ActionRead || !outPlan.ReadOnly {
 			t.Fatalf("expected SafetyOutside + ActionRead + ReadOnly for %s on ../somefile.txt, got %+v", roOutside.Name, outPlan)
 		}
-		dec, permReq, err := c.Evaluate(outPlan)
+		dec, permReq, err := perm.Evaluate(outPlan)
 		if err != nil || dec != tools.AccessAsk || permReq == nil {
 			t.Fatalf("expected AccessAsk for %s on SafetyOutside plan, got %s, %+v, %v", roOutside.Name, dec, permReq, err)
 		}
-		if err := c.Gate().ApplyDecision(permReq, tools.PermissionDecision{Kind: tools.DecisionAllowSession}); err != nil {
+		if err := perm.ApplyDecision(permReq, tools.PermissionDecision{Kind: tools.DecisionAllowSession}); err != nil {
 			t.Fatalf("ApplyDecision(DecisionAllowSession) failed: %v", err)
 		}
-		if dec2, _, err := c.Evaluate(outPlan); err != nil || dec2 != tools.AccessAllow {
+		if dec2, _, err := perm.Evaluate(outPlan); err != nil || dec2 != tools.AccessAllow {
 			t.Fatalf("expected AccessAllow after session grant for SafetyOutside (%s), got %s, %v", roOutside.Name, dec2, err)
 		}
-		c.ClearGrants()
+		_ = perm.Clear()
 	}
 
 	// Read-only tools targeting sensitive system/credential paths (/etc/hosts, ~/.ssh/id_rsa)
 	// produce SafetyUnsafe and always prompt even if a wildcard session grant exists.
-	c.AddGrant(tools.Grant{ToolName: "*", Action: tools.ActionRead, Pattern: "*"})
+	_ = perm.AddAllow("*(*)")
 	for _, sensPath := range []string{"/etc/hosts", "~/.ssh/id_rsa"} {
 		for _, roSens := range []*message.ToolCall{
 			{ID: "sens-view", Name: builtin.ToolView, Args: map[string]any{"path": sensPath}},
@@ -552,13 +580,13 @@ func TestBashWebFetchDownloadRemoveAndEdgeCases(t *testing.T) {
 			if sensPlan.Safety != tools.SafetyUnsafe {
 				t.Fatalf("expected SafetyUnsafe for %s on %q, got %s", roSens.Name, sensPath, sensPlan.Safety)
 			}
-			dec, permReq, err := c.Evaluate(sensPlan)
+			dec, permReq, err := perm.Evaluate(sensPlan)
 			if err != nil || dec != tools.AccessAsk || permReq == nil {
 				t.Fatalf("expected SafetyUnsafe on %s (%q) to always evaluate to AccessAsk despite session grant, got %s", roSens.Name, sensPath, dec)
 			}
 		}
 	}
-	c.ClearGrants()
+	_ = perm.Clear()
 
 	for _, bad := range []*message.ToolCall{
 		{ID: "1", Name: builtin.ToolView, Args: map[string]any{"path": "   "}},

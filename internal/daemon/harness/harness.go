@@ -14,6 +14,7 @@ import (
 	"github.com/masterkeysrd/loom/llm"
 	"github.com/masterkeysrd/loom/message"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/permissions"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tools"
 )
 
@@ -23,6 +24,7 @@ type Config struct {
 	DB           *sql.DB
 	Model        *llm.Model
 	Tools        tools.Container
+	Permissions  permissions.SessionManager
 	SystemPrompt string
 	Logger       log.Interface
 }
@@ -40,6 +42,9 @@ func (c Config) Validate() error {
 	}
 	if c.Tools == nil {
 		return fmt.Errorf("%w: tools container is required", ErrInvalidConfig)
+	}
+	if c.Permissions == nil {
+		return fmt.Errorf("%w: permissions manager is required", ErrInvalidConfig)
 	}
 	if c.Logger == nil {
 		return fmt.Errorf("%w: logger is required", ErrInvalidConfig)
@@ -75,7 +80,7 @@ func New(cfg Config) (Harness, error) {
 
 	logger := cfg.Logger.ForComponent("harness")
 
-	g, err := buildGraph(cp, cfg.Model, cfg.Tools, cfg.SystemPrompt, logger)
+	g, err := buildGraph(cp, cfg.Model, cfg.Tools, cfg.Permissions, cfg.SystemPrompt, logger)
 	if err != nil {
 		return nil, err
 	}

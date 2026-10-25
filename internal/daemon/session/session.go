@@ -21,6 +21,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/daemon/gateway"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/harness"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/journal"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/permissions"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/sandbox"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/scope"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/std"
@@ -62,6 +63,10 @@ type Session struct {
 	CreatedAt time.Time     `json:"created_at"`
 	UpdatedAt time.Time     `json:"updated_at"`
 
+	Permissions permissions.Permissions    `json:"-"`
+	PermManager permissions.SessionManager `json:"-"`
+	permRoot    permissions.Manager        `json:"-"`
+
 	Root     string            `json:"-"` // Path to <WorkspaceDir>/sessions/<id>
 	Sandbox  sandbox.Sandbox   `json:"-"`
 	Timeline timeline.Timeline `json:"-"`
@@ -90,25 +95,28 @@ func (s *Session) Clone() *Session {
 		defer s.Unlock()
 	}
 	cp := &Session{
-		ID:        s.ID,
-		Title:     s.Title,
-		Config:    s.Config,
-		CreatedAt: s.CreatedAt,
-		UpdatedAt: s.UpdatedAt,
-		Root:      s.Root,
-		Sandbox:   s.Sandbox,
-		Timeline:  s.Timeline,
-		Journal:   s.Journal,
-		Tools:     s.Tools,
-		Harness:   s.Harness,
-		db:        s.db,
-		store:     s.store,
-		workspace: s.workspace,
-		gateway:   s.gateway,
-		publisher: s.publisher,
-		logger:    s.logger,
-		bgCtx:     s.bgCtx,
-		wg:        s.wg,
+		ID:          s.ID,
+		Title:       s.Title,
+		Config:      s.Config,
+		CreatedAt:   s.CreatedAt,
+		UpdatedAt:   s.UpdatedAt,
+		Permissions: s.Permissions.Clone(),
+		PermManager: s.PermManager,
+		permRoot:    s.permRoot,
+		Root:        s.Root,
+		Sandbox:     s.Sandbox,
+		Timeline:    s.Timeline,
+		Journal:     s.Journal,
+		Tools:       s.Tools,
+		Harness:     s.Harness,
+		db:          s.db,
+		store:       s.store,
+		workspace:   s.workspace,
+		gateway:     s.gateway,
+		publisher:   s.publisher,
+		logger:      s.logger,
+		bgCtx:       s.bgCtx,
+		wg:          s.wg,
 	}
 	if s.State != nil {
 		cp.State = s.State.Clone()
@@ -182,10 +190,18 @@ func (s *Session) initResources(ctx context.Context) error {
 			return fmt.Errorf("session: initialize tools container: %w", err)
 		}
 
-		if s.Config.Mode != "" {
-			container.SetMode(s.Config.Mode)
-		}
 		s.Tools = container
+	}
+	if s.PermManager == nil && s.permRoot != nil {
+		s.PermManager = s.permRoot.Attach(s.Config.Mode, s.Permissions, func(p permissions.Permissions) error {
+			s.Lock()
+			s.Permissions = p.Clone()
+			s.Unlock()
+			if s.store != nil {
+				return s.store.updateSessionPermissions(s.bgCtx, s.ID, p)
+			}
+			return nil
+		})
 	}
 	return nil
 }
@@ -225,6 +241,7 @@ func (s *Session) harness(ctx context.Context) (harness.Harness, error) {
 		DB:           s.db,
 		Model:        llmModel,
 		Tools:        s.Tools,
+		Permissions:  s.PermManager,
 		SystemPrompt: systemPrompt,
 		Logger:       s.logger,
 	})

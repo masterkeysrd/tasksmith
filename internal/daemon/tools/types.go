@@ -43,7 +43,7 @@ const (
 	SafetyUnsafe  = guard.SafetyUnsafe
 )
 
-// PermissionMode controls the session-wide approval behavior of a [Gate].
+// PermissionMode controls the session-wide approval behavior.
 type PermissionMode string
 
 const (
@@ -67,7 +67,7 @@ func (m PermissionMode) IsValid() bool {
 	}
 }
 
-// AccessDecision represents the policy evaluation outcome returned by [Gate.Evaluate].
+// AccessDecision represents the policy evaluation outcome.
 type AccessDecision string
 
 const (
@@ -98,8 +98,8 @@ type Plan struct {
 	ReadOnly   bool        `json:"read_only,omitempty"`
 }
 
-// PermissionRequest is the user-facing approval request minted by [Gate.Evaluate]
-// when a [Plan] evaluates to [AccessAsk].
+// PermissionRequest is the user-facing approval request minted when a [Plan]
+// evaluates to [AccessAsk].
 type PermissionRequest struct {
 	ID            string      `json:"id"`
 	ToolCallID    string      `json:"tool_call_id"`
@@ -118,14 +118,8 @@ type PermissionDecision struct {
 	ToolCallID   string                 `json:"tool_call_id"`
 	Kind         PermissionDecisionKind `json:"kind"`
 	GrantPattern string                 `json:"grant_pattern,omitempty"`
+	Scope        string                 `json:"scope,omitempty"`
 	Feedback     string                 `json:"feedback,omitempty"`
-}
-
-// Grant represents an active session-scoped permission rule stored in [Gate].
-type Grant struct {
-	ToolName string     `json:"tool_name"`
-	Action   ActionType `json:"action,omitempty"`
-	Pattern  string     `json:"pattern"` // e.g. "*", "internal/foo.go", "internal/**", "go test*"
 }
 
 // Tool is an executable LLM-callable tool with two-phase Prepare and Execute

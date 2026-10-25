@@ -19,6 +19,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	"github.com/masterkeysrd/tasksmith/internal/core/shellguard"
 	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/permissions"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/sandbox"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/std"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tools"
@@ -161,7 +162,7 @@ func openTestSQLite(t *testing.T) *sql.DB {
 	return db
 }
 
-func newTestToolsRegistry(t *testing.T) (string, tools.Container) {
+func newTestToolsRegistry(t *testing.T) (string, tools.Container, permissions.SessionManager) {
 	t.Helper()
 	xdgRoot := t.TempDir()
 	xdg.SetTestEnv(xdgRoot, "tasksmith-harness-test")
@@ -222,7 +223,16 @@ func newTestToolsRegistry(t *testing.T) (string, tools.Container) {
 		t.Fatalf("tools.NewContainer: %v", err)
 	}
 
-	return dir, container
+	permMgr, err := permissions.New(permissions.Config{
+		Workspace:  ws,
+		GlobalPath: filepath.Join(t.TempDir(), "permissions.json"),
+	})
+	if err != nil {
+		t.Fatalf("permissions.New: %v", err)
+	}
+	sessPerm := permMgr.Attach(tools.ModeDefault, permissions.Permissions{}, nil)
+
+	return dir, container, sessPerm
 }
 
 func extractBlocksText(blocks []message.Block) string {
@@ -268,7 +278,7 @@ func drainStream(ctx context.Context, h Harness, input message.Message) ([]strin
 func TestSingleTurnStreaming(t *testing.T) {
 	ctx := context.Background()
 	db := openTestSQLite(t)
-	_, reg := newTestToolsRegistry(t)
+	_, reg, perm := newTestToolsRegistry(t)
 	prov := &fakeProvider{
 		handler: func(_ context.Context, _ *llm.Request) ([]string, string, error) {
 			return []string{"Task", "Smith", " v2", " ready."}, "msg-assistant-1", nil
@@ -276,11 +286,12 @@ func TestSingleTurnStreaming(t *testing.T) {
 	}
 
 	h, err := New(Config{
-		ID:     "thread-1",
-		DB:     db,
-		Model:  newTestModel(t, prov),
-		Tools:  reg,
-		Logger: log.Default(),
+		ID:          "thread-1",
+		DB:          db,
+		Model:       newTestModel(t, prov),
+		Tools:       reg,
+		Permissions: perm,
+		Logger:      log.Default(),
 	})
 	if err != nil {
 		t.Fatalf("New error: %v", err)
@@ -316,7 +327,7 @@ func TestSingleTurnStreaming(t *testing.T) {
 func TestMultiTurnSQLitePersistence(t *testing.T) {
 	ctx := context.Background()
 	db := openTestSQLite(t)
-	_, reg := newTestToolsRegistry(t)
+	_, reg, perm := newTestToolsRegistry(t)
 
 	turnCount := 0
 	prov := &fakeProvider{
@@ -331,11 +342,12 @@ func TestMultiTurnSQLitePersistence(t *testing.T) {
 	model := newTestModel(t, prov)
 
 	h, err := New(Config{
-		ID:     "thread-alice",
-		DB:     db,
-		Model:  model,
-		Tools:  reg,
-		Logger: log.Default(),
+		ID:          "thread-alice",
+		DB:          db,
+		Model:       model,
+		Tools:       reg,
+		Permissions: perm,
+		Logger:      log.Default(),
 	})
 	if err != nil {
 		t.Fatalf("New error: %v", err)
@@ -361,11 +373,12 @@ func TestMultiTurnSQLitePersistence(t *testing.T) {
 
 	// Turn 2 on the same threadID across a freshly constructed Harness sharing the same SQLite DB
 	h2, err := New(Config{
-		ID:     "thread-alice",
-		DB:     db,
-		Model:  model,
-		Tools:  reg,
-		Logger: log.Default(),
+		ID:          "thread-alice",
+		DB:          db,
+		Model:       model,
+		Tools:       reg,
+		Permissions: perm,
+		Logger:      log.Default(),
 	})
 	if err != nil {
 		t.Fatalf("New h2 error: %v", err)
@@ -430,7 +443,7 @@ func TestMultiTurnSQLitePersistence(t *testing.T) {
 func TestSystemPromptIsolation(t *testing.T) {
 	ctx := context.Background()
 	db := openTestSQLite(t)
-	_, reg := newTestToolsRegistry(t)
+	_, reg, perm := newTestToolsRegistry(t)
 
 	prov := &fakeProvider{
 		handler: func(_ context.Context, _ *llm.Request) ([]string, string, error) {
@@ -444,6 +457,7 @@ func TestSystemPromptIsolation(t *testing.T) {
 		DB:           db,
 		Model:        newTestModel(t, prov),
 		Tools:        reg,
+		Permissions:  perm,
 		SystemPrompt: sysPrompt,
 		Logger:       log.Default(),
 	})
@@ -497,7 +511,7 @@ func TestSystemPromptIsolation(t *testing.T) {
 func TestThreadIsolation(t *testing.T) {
 	ctx := context.Background()
 	db := openTestSQLite(t)
-	_, reg := newTestToolsRegistry(t)
+	_, reg, perm := newTestToolsRegistry(t)
 
 	prov := &fakeProvider{
 		handler: func(_ context.Context, req *llm.Request) ([]string, string, error) {
@@ -507,22 +521,24 @@ func TestThreadIsolation(t *testing.T) {
 	}
 
 	hA, err := New(Config{
-		ID:     "thread-A",
-		DB:     db,
-		Model:  newTestModel(t, prov),
-		Tools:  reg,
-		Logger: log.Default(),
+		ID:          "thread-A",
+		DB:          db,
+		Model:       newTestModel(t, prov),
+		Tools:       reg,
+		Permissions: perm,
+		Logger:      log.Default(),
 	})
 	if err != nil {
 		t.Fatalf("New hA error: %v", err)
 	}
 
 	hB, err := New(Config{
-		ID:     "thread-B",
-		DB:     db,
-		Model:  newTestModel(t, prov),
-		Tools:  reg,
-		Logger: log.Default(),
+		ID:          "thread-B",
+		DB:          db,
+		Model:       newTestModel(t, prov),
+		Tools:       reg,
+		Permissions: perm,
+		Logger:      log.Default(),
 	})
 	if err != nil {
 		t.Fatalf("New hB error: %v", err)
@@ -564,7 +580,7 @@ func TestThreadIsolation(t *testing.T) {
 func TestMultiStepToolExecution(t *testing.T) {
 	ctx := context.Background()
 	db := openTestSQLite(t)
-	workDir, reg := newTestToolsRegistry(t)
+	workDir, reg, perm := newTestToolsRegistry(t)
 
 	targetFile := filepath.Join(workDir, "hello.txt")
 	if err := os.WriteFile(targetFile, []byte("secret-file-contents\n"), 0o644); err != nil {
@@ -602,11 +618,12 @@ func TestMultiStepToolExecution(t *testing.T) {
 	}
 
 	h, err := New(Config{
-		ID:     "thread-tools",
-		DB:     db,
-		Model:  newTestModel(t, prov),
-		Tools:  reg,
-		Logger: log.Default(),
+		ID:          "thread-tools",
+		DB:          db,
+		Model:       newTestModel(t, prov),
+		Tools:       reg,
+		Permissions: perm,
+		Logger:      log.Default(),
 	})
 	if err != nil {
 		t.Fatalf("New error: %v", err)
@@ -670,7 +687,7 @@ func TestMultiStepToolExecution(t *testing.T) {
 func TestPermissionInterruptAndResume(t *testing.T) {
 	ctx := context.Background()
 	db := openTestSQLite(t)
-	workDir, reg := newTestToolsRegistry(t)
+	workDir, reg, perm := newTestToolsRegistry(t)
 
 	prov := &fakeProvider{
 		stepHandler: func(_ context.Context, _ *llm.Request, turn int) ([]message.AssistantChunk, error) {
@@ -718,11 +735,12 @@ func TestPermissionInterruptAndResume(t *testing.T) {
 	}
 
 	h, err := New(Config{
-		ID:     "thread-perm",
-		DB:     db,
-		Model:  newTestModel(t, prov),
-		Tools:  reg,
-		Logger: log.Default(),
+		ID:          "thread-perm",
+		DB:          db,
+		Model:       newTestModel(t, prov),
+		Tools:       reg,
+		Permissions: perm,
+		Logger:      log.Default(),
 	})
 	if err != nil {
 		t.Fatalf("New error: %v", err)
@@ -851,7 +869,7 @@ func TestPermissionInterruptAndResume(t *testing.T) {
 func TestCancelPendingPermissionsOnNewUserMessage(t *testing.T) {
 	ctx := context.Background()
 	db := openTestSQLite(t)
-	workDir, reg := newTestToolsRegistry(t)
+	workDir, reg, perm := newTestToolsRegistry(t)
 
 	prov := &fakeProvider{
 		stepHandler: func(_ context.Context, _ *llm.Request, turn int) ([]message.AssistantChunk, error) {
@@ -886,11 +904,12 @@ func TestCancelPendingPermissionsOnNewUserMessage(t *testing.T) {
 	}
 
 	h, err := New(Config{
-		ID:     "thread-cancel-perm",
-		DB:     db,
-		Model:  newTestModel(t, prov),
-		Tools:  reg,
-		Logger: log.Default(),
+		ID:          "thread-cancel-perm",
+		DB:          db,
+		Model:       newTestModel(t, prov),
+		Tools:       reg,
+		Permissions: perm,
+		Logger:      log.Default(),
 	})
 	if err != nil {
 		t.Fatalf("New error: %v", err)
@@ -981,14 +1000,14 @@ func TestCancelPendingPermissionsOnNewUserMessage(t *testing.T) {
 func TestMixedToolCallsAndPlanModeDeny(t *testing.T) {
 	ctx := context.Background()
 	db := openTestSQLite(t)
-	workDir, reg := newTestToolsRegistry(t)
+	workDir, reg, perm := newTestToolsRegistry(t)
 
 	if err := os.WriteFile(filepath.Join(workDir, "readme.txt"), []byte("hello plan\n"), 0o644); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
-	// Put registry in ModePlan: view is allowed, write is denied (AccessDeny without interrupt) and unknown tool fails Prepare
-	reg.SetMode(tools.ModePlan)
+	// Put permissions manager in ModePlan: view is allowed, write is denied (AccessDeny without interrupt) and unknown tool fails Prepare
+	perm.SetMode(tools.ModePlan)
 
 	prov := &fakeProvider{
 		stepHandler: func(_ context.Context, _ *llm.Request, turn int) ([]message.AssistantChunk, error) {
@@ -1030,11 +1049,12 @@ func TestMixedToolCallsAndPlanModeDeny(t *testing.T) {
 	}
 
 	h, err := New(Config{
-		ID:     "thread-plan",
-		DB:     db,
-		Model:  newTestModel(t, prov),
-		Tools:  reg,
-		Logger: log.Default(),
+		ID:          "thread-plan",
+		DB:          db,
+		Model:       newTestModel(t, prov),
+		Tools:       reg,
+		Permissions: perm,
+		Logger:      log.Default(),
 	})
 	if err != nil {
 		t.Fatalf("New error: %v", err)
@@ -1073,36 +1093,40 @@ func TestMixedToolCallsAndPlanModeDeny(t *testing.T) {
 func TestValidationAndContextCancellation(t *testing.T) {
 	ctx := context.Background()
 	db := openTestSQLite(t)
-	_, reg := newTestToolsRegistry(t)
+	_, reg, perm := newTestToolsRegistry(t)
 	model := newTestModel(t, nil)
 	logger := log.Default()
 
 	// 1. Validate all required Config fields
-	if _, err := New(Config{DB: db, Model: model, Tools: reg, Logger: logger}); !errors.Is(err, ErrInvalidConfig) {
+	if _, err := New(Config{DB: db, Model: model, Tools: reg, Permissions: perm, Logger: logger}); !errors.Is(err, ErrInvalidConfig) {
 		t.Errorf("missing ID error = %v, want %v", err, ErrInvalidConfig)
 	}
-	if _, err := New(Config{ID: "   ", DB: db, Model: model, Tools: reg, Logger: logger}); !errors.Is(err, ErrInvalidConfig) {
+	if _, err := New(Config{ID: "   ", DB: db, Model: model, Tools: reg, Permissions: perm, Logger: logger}); !errors.Is(err, ErrInvalidConfig) {
 		t.Errorf("whitespace ID error = %v, want %v", err, ErrInvalidConfig)
 	}
-	if _, err := New(Config{ID: "thread-valid", Model: model, Tools: reg, Logger: logger}); !errors.Is(err, ErrInvalidConfig) {
+	if _, err := New(Config{ID: "thread-valid", Model: model, Tools: reg, Permissions: perm, Logger: logger}); !errors.Is(err, ErrInvalidConfig) {
 		t.Errorf("missing DB error = %v, want %v", err, ErrInvalidConfig)
 	}
-	if _, err := New(Config{ID: "thread-valid", DB: db, Tools: reg, Logger: logger}); !errors.Is(err, ErrInvalidConfig) {
+	if _, err := New(Config{ID: "thread-valid", DB: db, Tools: reg, Permissions: perm, Logger: logger}); !errors.Is(err, ErrInvalidConfig) {
 		t.Errorf("missing Model error = %v, want %v", err, ErrInvalidConfig)
 	}
-	if _, err := New(Config{ID: "thread-valid", DB: db, Model: model, Logger: logger}); !errors.Is(err, ErrInvalidConfig) {
+	if _, err := New(Config{ID: "thread-valid", DB: db, Model: model, Permissions: perm, Logger: logger}); !errors.Is(err, ErrInvalidConfig) {
 		t.Errorf("missing Tools error = %v, want %v", err, ErrInvalidConfig)
 	}
-	if _, err := New(Config{ID: "thread-valid", DB: db, Model: model, Tools: reg}); !errors.Is(err, ErrInvalidConfig) {
+	if _, err := New(Config{ID: "thread-valid", DB: db, Model: model, Tools: reg, Logger: logger}); !errors.Is(err, ErrInvalidConfig) {
+		t.Errorf("missing Permissions error = %v, want %v", err, ErrInvalidConfig)
+	}
+	if _, err := New(Config{ID: "thread-valid", DB: db, Model: model, Tools: reg, Permissions: perm}); !errors.Is(err, ErrInvalidConfig) {
 		t.Errorf("missing Logger error = %v, want %v", err, ErrInvalidConfig)
 	}
 
 	h, err := New(Config{
-		ID:     "thread-valid",
-		DB:     db,
-		Model:  model,
-		Tools:  reg,
-		Logger: logger,
+		ID:          "thread-valid",
+		DB:          db,
+		Model:       model,
+		Tools:       reg,
+		Permissions: perm,
+		Logger:      logger,
 	})
 	if err != nil {
 		t.Fatalf("New error: %v", err)
@@ -1137,11 +1161,12 @@ func TestValidationAndContextCancellation(t *testing.T) {
 		},
 	}
 	hCancel, err := New(Config{
-		ID:     "thread-stream-cancel",
-		DB:     db,
-		Model:  newTestModel(t, cancelProv),
-		Tools:  reg,
-		Logger: logger,
+		ID:          "thread-stream-cancel",
+		DB:          db,
+		Model:       newTestModel(t, cancelProv),
+		Tools:       reg,
+		Permissions: perm,
+		Logger:      logger,
 	})
 	if err != nil {
 		t.Fatalf("New hCancel error: %v", err)
@@ -1154,7 +1179,7 @@ func TestValidationAndContextCancellation(t *testing.T) {
 func TestCallerSuppliedUserMessageID(t *testing.T) {
 	ctx := context.Background()
 	db := openTestSQLite(t)
-	_, reg := newTestToolsRegistry(t)
+	_, reg, perm := newTestToolsRegistry(t)
 	prov := &fakeProvider{
 		handler: func(_ context.Context, _ *llm.Request) ([]string, string, error) {
 			return []string{"response"}, "msg-asst-1", nil
@@ -1162,11 +1187,12 @@ func TestCallerSuppliedUserMessageID(t *testing.T) {
 	}
 
 	h, err := New(Config{
-		ID:     "thread-custom-id",
-		DB:     db,
-		Model:  newTestModel(t, prov),
-		Tools:  reg,
-		Logger: log.Default(),
+		ID:          "thread-custom-id",
+		DB:          db,
+		Model:       newTestModel(t, prov),
+		Tools:       reg,
+		Permissions: perm,
+		Logger:      log.Default(),
 	})
 	if err != nil {
 		t.Fatalf("New error: %v", err)

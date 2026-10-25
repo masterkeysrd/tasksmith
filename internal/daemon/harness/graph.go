@@ -12,15 +12,16 @@ import (
 	"github.com/masterkeysrd/loom/message"
 	"github.com/masterkeysrd/loom/stream"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/permissions"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/scope"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tools"
 )
 
 const eventNodeMessage = "on_node_message"
 
-func buildGraph(cp graph.Checkpointer, model *llm.Model, container tools.Container, systemPrompt string, logger log.Interface) (*graph.Graph[State], error) {
+func buildGraph(cp graph.Checkpointer, model *llm.Model, container tools.Container, perms permissions.SessionManager, systemPrompt string, logger log.Interface) (*graph.Graph[State], error) {
 	agentNode := NewAgentNode(model, container, systemPrompt, logger)
-	toolsNode := NewToolsNode(container, logger)
+	toolsNode := NewToolsNode(container, perms, logger)
 
 	g, err := graph.New[State]().
 		WithName("harness").
@@ -110,15 +111,17 @@ func (n *AgentNode) Execute(ctx context.Context, state State) (graph.Command[Sta
 // interrupt/resume lifecycles, and tool execution.
 // It implements [github.com/masterkeysrd/loom/graph.Node].
 type ToolsNode struct {
-	tools  tools.Container
-	logger log.Interface
+	tools       tools.Container
+	permissions permissions.SessionManager
+	logger      log.Interface
 }
 
-// NewToolsNode constructs a new [ToolsNode] bound to the tool container and logger.
-func NewToolsNode(container tools.Container, logger log.Interface) *ToolsNode {
+// NewToolsNode constructs a new [ToolsNode] bound to the tool container, permission manager, and logger.
+func NewToolsNode(container tools.Container, perms permissions.SessionManager, logger log.Interface) *ToolsNode {
 	return &ToolsNode{
-		tools:  container,
-		logger: logger.ForComponent("harness.tools"),
+		tools:       container,
+		permissions: perms,
+		logger:      logger.ForComponent("harness.tools"),
 	}
 }
 
@@ -223,7 +226,7 @@ func (n *ToolsNode) evaluateSingleCall(ctx context.Context, tc *message.ToolCall
 		return msg, nil, msgErr
 	}
 
-	access, req, err := n.tools.Evaluate(plan)
+	access, req, err := n.permissions.Evaluate(plan)
 	if err != nil {
 		msg, msgErr := newErrorToolMessage(tc, err.Error())
 		return msg, nil, msgErr
@@ -271,7 +274,7 @@ func (n *ToolsNode) resumeSingleCall(ctx context.Context, tc *message.ToolCall, 
 	if !ok {
 		return nil, ErrPendingPermissionsUnresolved
 	}
-	if err := n.tools.ApplyDecision(&req, dec); err != nil {
+	if err := n.permissions.ApplyDecision(&req, dec); err != nil {
 		return newErrorToolMessage(tc, err.Error())
 	}
 	toolMsg, err := n.tools.Execute(ctx, tc)

@@ -11,4 +11,6 @@ CREATE TABLE IF NOT EXISTS sessions (
     updated_at TEXT NOT NULL
 );
 `,
+	// 1: Add permissions column
+	`ALTER TABLE sessions ADD COLUMN permissions TEXT NOT NULL DEFAULT '{}';`,
 }

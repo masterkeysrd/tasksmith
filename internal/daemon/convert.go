@@ -267,6 +267,7 @@ func fromAPIPermissionDecision(dec api.PermissionDecision) tools.PermissionDecis
 		ToolCallID:   dec.ToolCallID,
 		Kind:         tools.PermissionDecisionKind(dec.Kind),
 		GrantPattern: dec.GrantPattern,
+		Scope:        string(dec.Scope),
 		Feedback:     dec.Feedback,
 	}
 }
@@ -323,6 +324,7 @@ func toAPITimelineEntry(entry timeline.Entry) (api.TimelineEntry, error) {
 				ToolCallID:   entry.Permission.Decision.ToolCallID,
 				Kind:         api.DecisionKind(entry.Permission.Decision.Kind),
 				GrantPattern: entry.Permission.Decision.GrantPattern,
+				Scope:        api.PermissionScope(entry.Permission.Decision.Scope),
 				Feedback:     entry.Permission.Decision.Feedback,
 			},
 		}

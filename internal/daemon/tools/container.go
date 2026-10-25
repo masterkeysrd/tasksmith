@@ -3,7 +3,9 @@ package tools
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/google/uuid"
 	"github.com/masterkeysrd/loom/message"
@@ -43,20 +45,12 @@ func (c Config) Validate() error {
 }
 
 // Container manages registered [Tool] instances, custom workspace command
-// tools, two-phase Prepare/Execute orchestration, and the session permission [Gate].
+// tools, and two-phase Prepare/Execute orchestration.
 type Container interface {
-	Gate() *Gate
 	Definitions() []tool.Definition
 	List() []Tool
 	Get(name string) (Tool, bool)
-	Mode() PermissionMode
-	SetMode(mode PermissionMode)
-	AddGrant(grant Grant)
-	Grants() []Grant
-	ClearGrants()
-	ApplyDecision(req *PermissionRequest, dec PermissionDecision) error
 	Prepare(ctx context.Context, tc *message.ToolCall) (*Plan, error)
-	Evaluate(plan *Plan) (AccessDecision, *PermissionRequest, error)
 	Execute(ctx context.Context, tc *message.ToolCall) (*message.Tool, error)
 }
 
@@ -64,9 +58,10 @@ type container struct {
 	sandbox   sandbox.Sandbox
 	workspace workspace.Workspace
 	logger    log.Interface
-	gate      *Gate
 	order     []string
 	tools     map[string]Tool
+	locksMu   sync.Mutex
+	pathLocks map[string]*sync.Mutex
 }
 
 var _ Container = (*container)(nil)
@@ -82,8 +77,8 @@ func NewContainer(cfg Config) (Container, error) {
 		sandbox:   cfg.Sandbox,
 		workspace: cfg.Workspace,
 		logger:    cfg.Logger.ForComponent("tools"),
-		gate:      NewGate(cfg.Workspace),
 		tools:     make(map[string]Tool, len(cfg.Tools)),
+		pathLocks: make(map[string]*sync.Mutex),
 	}
 
 	for _, t := range cfg.Tools {
@@ -108,12 +103,6 @@ func (c *container) addTool(t Tool) {
 		c.order = append(c.order, name)
 	}
 	c.tools[name] = t
-	c.gate.registerAnnotation(name, t.Definition().Annotation)
-}
-
-// Gate returns the permission and policy [Gate] associated with c.
-func (c *container) Gate() *Gate {
-	return c.gate
 }
 
 // Definitions returns the LLM tool definitions for all registered tools in
@@ -145,36 +134,6 @@ func (c *container) Get(name string) (Tool, bool) {
 	return t, ok
 }
 
-// Mode returns the Gate's active [PermissionMode].
-func (c *container) Mode() PermissionMode {
-	return c.gate.Mode()
-}
-
-// SetMode sets the Gate's active [PermissionMode].
-func (c *container) SetMode(mode PermissionMode) {
-	c.gate.SetMode(mode)
-}
-
-// AddGrant adds a session-scoped [Grant] to the Gate.
-func (c *container) AddGrant(grant Grant) {
-	c.gate.AddGrant(grant)
-}
-
-// Grants returns a defensive copy of all active session grants in the Gate.
-func (c *container) Grants() []Grant {
-	return c.gate.Grants()
-}
-
-// ClearGrants clears all active session grants in the Gate.
-func (c *container) ClearGrants() {
-	c.gate.ClearGrants()
-}
-
-// ApplyDecision delegates applying a permission decision to the Gate.
-func (c *container) ApplyDecision(req *PermissionRequest, dec PermissionDecision) error {
-	return c.gate.ApplyDecision(req, dec)
-}
-
 // Prepare validates the tool call and delegates pre-flight analysis to the
 // target [Tool.Prepare] implementation.
 func (c *container) Prepare(ctx context.Context, tc *message.ToolCall) (*Plan, error) {
@@ -203,9 +162,22 @@ func (c *container) Prepare(ctx context.Context, tc *message.ToolCall) (*Plan, e
 	return plan, nil
 }
 
-// Evaluate delegates plan evaluation to [Gate.Evaluate].
-func (c *container) Evaluate(plan *Plan) (AccessDecision, *PermissionRequest, error) {
-	return c.gate.Evaluate(plan)
+// lockPath acquires the per-path mutex for targetPath and returns an unlock function.
+func (c *container) lockPath(targetPath string) func() {
+	key := filepath.ToSlash(filepath.Clean(strings.TrimSpace(targetPath)))
+	c.locksMu.Lock()
+	if c.pathLocks == nil {
+		c.pathLocks = make(map[string]*sync.Mutex)
+	}
+	mu, ok := c.pathLocks[key]
+	if !ok {
+		mu = &sync.Mutex{}
+		c.pathLocks[key] = mu
+	}
+	c.locksMu.Unlock()
+
+	mu.Lock()
+	return mu.Unlock
 }
 
 // Execute invokes the target [Tool.Execute], serializing concurrent mutations
@@ -238,7 +210,7 @@ func (c *container) Execute(ctx context.Context, tc *message.ToolCall) (*message
 		}
 	} else {
 		if targetPath, shouldLock := c.mutatingPathForTool(t, tc.Args); shouldLock {
-			unlock := c.gate.lockPath(targetPath)
+			unlock := c.lockPath(targetPath)
 			defer unlock()
 		}
 
