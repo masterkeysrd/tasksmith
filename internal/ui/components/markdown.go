@@ -187,7 +187,7 @@ var Markdown = kitex.FC("Markdown", func(props MarkdownProps) kitex.Node {
 					OverflowWrap(style.OverflowWrapAnywhere).
 					Merge(props.Style)
 				if t != nil {
-					docStyle = docStyle.Foreground(t.Color.Text.Secondary)
+					docStyle = docStyle.Foreground(t.Color.Text.Primary)
 				}
 				return kitex.Box(kitex.BoxProps{Style: docStyle},
 					renderBlockChildren(node)...)
