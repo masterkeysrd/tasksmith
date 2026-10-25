@@ -42,7 +42,9 @@ func ShortenHomePath(path string) string {
 	return path
 }
 
-// Header is a trail functional component rendering the 3-line startup banner:
+// Header is a trail functional component rendering the startup banner:
+// Left: 3-line ASCII brand Logo
+// Right: 3 session info lines:
 // 1. TaskSmith <version>
 // 2. <model> with <thinking> effort
 // 3. <ShortenHomePath(workspace)>
@@ -50,7 +52,7 @@ var Header = trail.FC("Header", func(props store.HeaderData) trail.Node {
 	scheme := theme.UseTheme()
 
 	titleStyle := style.S().Bold(true)
-	metaStyle := style.S()
+	metaStyle := style.S().WhiteSpace(style.WhiteSpacePre)
 	dimStyle := style.S()
 
 	if scheme != nil {
@@ -66,35 +68,50 @@ var Header = trail.FC("Header", func(props store.HeaderData) trail.Node {
 
 	return trail.Box(trail.BoxProps{
 		Style: style.S().
-			FlexDirection(style.FlexColumn).
+			Display(style.DisplayFlex).
+			FlexDirection(style.FlexRow).
+			MarginTop(1).
 			MarginBottom(1),
 	},
-		// Line 1: TaskSmith (bold purple) + <version> (secondary)
+		Logo(),
 		trail.Box(trail.BoxProps{
-			Style: style.S().FlexDirection(style.FlexRow),
+			Style: style.S().
+				Display(style.DisplayFlex).
+				FlexDirection(style.FlexColumn),
 		},
-			trail.Span(trail.SpanProps{
-				Style: titleStyle,
-			}, trail.Text("TaskSmith")),
-			trail.Span(trail.SpanProps{
-				Style: metaStyle,
-			}, trail.Text(" "+version)),
-		),
-		// Line 2: <model> with <thinking> effort (secondary)
-		trail.Box(trail.BoxProps{
-			Style: style.S().FlexDirection(style.FlexRow),
-		},
-			trail.Span(trail.SpanProps{
-				Style: metaStyle,
-			}, trail.Text(fmt.Sprintf("%s with %s effort", model, thinking))),
-		),
-		// Line 3: <shortened workspace path> (tertiary)
-		trail.Box(trail.BoxProps{
-			Style: style.S().FlexDirection(style.FlexRow),
-		},
-			trail.Span(trail.SpanProps{
-				Style: dimStyle,
-			}, trail.Text(workspace)),
+			// Line 1: TaskSmith (bold purple) + <version> (secondary)
+			trail.Box(trail.BoxProps{
+				Style: style.S().
+					Display(style.DisplayFlex).
+					FlexDirection(style.FlexRow),
+			},
+				trail.Span(trail.SpanProps{
+					Style: titleStyle,
+				}, trail.Text("TaskSmith")),
+				trail.Span(trail.SpanProps{
+					Style: metaStyle,
+				}, trail.Text(" "+version)),
+			),
+			// Line 2: <model> with <thinking> effort (secondary)
+			trail.Box(trail.BoxProps{
+				Style: style.S().
+					Display(style.DisplayFlex).
+					FlexDirection(style.FlexRow),
+			},
+				trail.Span(trail.SpanProps{
+					Style: metaStyle,
+				}, trail.Text(fmt.Sprintf("%s with %s effort", model, thinking))),
+			),
+			// Line 3: <shortened workspace path> (tertiary)
+			trail.Box(trail.BoxProps{
+				Style: style.S().
+					Display(style.DisplayFlex).
+					FlexDirection(style.FlexRow),
+			},
+				trail.Span(trail.SpanProps{
+					Style: dimStyle,
+				}, trail.Text(workspace)),
+			),
 		),
 	)
 })

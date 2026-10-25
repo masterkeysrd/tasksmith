@@ -101,6 +101,9 @@ func TestHeaderRender(t *testing.T) {
 	}
 
 	for _, want := range []string{
+		"◥██████████◣",
+		"▐██▌",
+		"◢████◣",
 		"TaskSmith v0.1.0",
 		"Claude 3.7 Sonnet with high effort",
 		"/workspace/project",
@@ -135,6 +138,9 @@ func TestHeaderDefaults(t *testing.T) {
 	}
 
 	for _, want := range []string{
+		"◥██████████◣",
+		"▐██▌",
+		"◢████◣",
 		"TaskSmith v0.1.0",
 		"default with auto effort",
 		"/work",
@@ -179,11 +185,24 @@ func TestHeaderThemeSwitching(t *testing.T) {
 		t.Fatal("expected rendered surface")
 	}
 
-	initialCell := frame.CellAt(0, 0)
-	if initialCell.Content != "T" {
-		t.Fatalf("expected cell (0, 0) to be 'T', got %q", initialCell.Content)
+	var textX, textY int = -1, -1
+	var initialFg any
+	for y := 0; y < frame.Height; y++ {
+		for x := 0; x < frame.Width; x++ {
+			c := frame.CellAt(x, y)
+			if c.Content == "T" {
+				textX, textY = x, y
+				initialFg = c.Fg
+				break
+			}
+		}
+		if textX != -1 {
+			break
+		}
 	}
-	initialFg := initialCell.Fg
+	if textX == -1 {
+		t.Fatalf("expected 'T' in rendered surface, got surface:\n%s", surfaceText(b))
+	}
 
 	// Switch theme to "github-dark"
 	if err := theme.Set("github-dark"); err != nil {
@@ -196,7 +215,7 @@ func TestHeaderThemeSwitching(t *testing.T) {
 	for time.Now().Before(deadline) {
 		frame = b.LastFrame().Surface
 		if frame != nil {
-			c := frame.CellAt(0, 0)
+			c := frame.CellAt(textX, textY)
 			if c.Fg != initialFg {
 				updatedFg = c.Fg
 				break
