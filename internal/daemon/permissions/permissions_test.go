@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/permissions"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tools"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/workspace"
@@ -459,7 +460,11 @@ func TestEvaluateMalformedPermissionsFile(t *testing.T) {
 	sess := mgr.Attach(tools.ModeDefault, permissions.Permissions{}, nil)
 
 	// Write corrupt JSON to project permissions file
-	projectFile := filepath.Join(dir, ".agents", "permissions.json")
+	wsDataDir, err := xdg.WorkspaceDir(dir)
+	if err != nil {
+		t.Fatalf("xdg.WorkspaceDir: %v", err)
+	}
+	projectFile := filepath.Join(wsDataDir, "permissions.json")
 	if err := os.MkdirAll(filepath.Dir(projectFile), 0o755); err != nil {
 		t.Fatalf("MkdirAll: %v", err)
 	}

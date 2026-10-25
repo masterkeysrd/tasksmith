@@ -55,7 +55,11 @@ func New(cfg Config) (Manager, error) {
 		globalPath = p
 	}
 
-	projectPath := filepath.Join(cfg.Workspace.RootDir(), ".agents", "permissions.json")
+	wsDataDir, err := xdg.WorkspaceDir(cfg.Workspace.RootDir())
+	if err != nil {
+		return nil, fmt.Errorf("permissions: resolve workspace dir: %w", err)
+	}
+	projectPath := filepath.Join(wsDataDir, "permissions.json")
 
 	return &manager{
 		ws:          cfg.Workspace,
