@@ -1,6 +1,12 @@
 package store
 
-import "github.com/masterkeysrd/kite/extras/kites"
+import (
+	"strconv"
+	"strings"
+	"sync/atomic"
+
+	"github.com/masterkeysrd/kite/extras/kites"
+)
 
 // SlotKind identifies the kind of UI component rendered in the Slot.
 type SlotKind string
@@ -76,20 +82,24 @@ func UseHideComposer() bool {
 	})
 }
 
-// EnqueueSlot enqueues an item into the slot queue. If item.ID is non-empty and
-// an item with the same ID already exists, it is updated in place to prevent duplicates.
+var nextSlotID atomic.Uint64
+
+// EnqueueSlot enqueues an item into the slot queue. If item.ID is empty, a unique
+// non-empty ID is automatically assigned. If an item with the same ID already exists,
+// it is updated in place to prevent duplicates.
 func EnqueueSlot(item SlotItem) {
+	if strings.TrimSpace(item.ID) == "" {
+		item.ID = "slot-" + strconv.FormatUint(nextSlotID.Add(1), 10)
+	}
 	slot.Set(func(s SlotState) SlotState {
 		var current []SlotItem
 		if s.Queue != nil {
 			current = append(current, *s.Queue...)
 		}
-		if item.ID != "" {
-			for i, existing := range current {
-				if existing.ID == item.ID {
-					current[i] = item
-					return normalizeSlotState(current)
-				}
+		for i, existing := range current {
+			if existing.ID == item.ID {
+				current[i] = item
+				return normalizeSlotState(current)
 			}
 		}
 		current = append(current, item)

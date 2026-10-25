@@ -40,6 +40,30 @@ func surfaceText(b *mock.Backend) string {
 	return sb.String()
 }
 
+func allText(b *mock.Backend) string {
+	var sb strings.Builder
+	for _, buf := range b.InsertedAbove {
+		for y := 0; y < buf.Height; y++ {
+			var line strings.Builder
+			for x := 0; x < buf.Width; x++ {
+				c := buf.CellAt(x, y)
+				if c.Content != "" {
+					line.WriteString(c.Content)
+				} else {
+					line.WriteByte(' ')
+				}
+			}
+			trimmed := strings.TrimRight(line.String(), " ")
+			if trimmed != "" {
+				sb.WriteString(trimmed)
+				sb.WriteString("\n")
+			}
+		}
+	}
+	sb.WriteString(surfaceText(b))
+	return sb.String()
+}
+
 func waitFor(t *testing.T, condition func() bool, timeout time.Duration, msg string) {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
@@ -484,4 +508,301 @@ func TestRunSubmitPromptAndActiveStream(t *testing.T) {
 			!strings.Contains(txt, "streaming • esc to cancel") &&
 			strings.Contains(txt, "shift+tab cycle mode • /help commands")
 	}, 2*time.Second, "UI state reset on cancel")
+}
+
+func TestRunSlashCommandModeAndExit(t *testing.T) {
+	b := mock.New(80, 24)
+	c, err := client.New("/tmp/mock.sock")
+	if err != nil {
+		t.Fatalf("failed to create client: %v", err)
+	}
+
+	ctx := t.Context()
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- Run(ctx, Options{
+			Client:    c,
+			Workspace: "/tmp/ws",
+			Backend:   b,
+		})
+	}()
+
+	waitFor(t, func() bool {
+		return b.LastFrame().Surface != nil && strings.Contains(surfaceText(b), ">")
+	}, 2*time.Second, "initial composer render")
+
+	// Type "/mode auto"
+	for _, ch := range "/mode auto" {
+		b.PostEvent(&backend.RawKeyEvent{
+			Key: key.Key{Code: ch, Text: string(ch)},
+		})
+	}
+	b.PostEvent(&backend.RawKeyEvent{Key: key.Key{Code: key.KeyEnter}})
+
+	waitFor(t, func() bool {
+		return store.GetSession().Config.Mode == api.ModeAuto
+	}, 2*time.Second, "mode to switch to auto")
+
+	// Type "/exit"
+	for _, ch := range "/exit" {
+		b.PostEvent(&backend.RawKeyEvent{
+			Key: key.Key{Code: ch, Text: string(ch)},
+		})
+	}
+	b.PostEvent(&backend.RawKeyEvent{Key: key.Key{Code: key.KeyEnter}})
+
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("expected nil error on /exit, got: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for Run to exit after /exit")
+	}
+}
+
+func TestAppSlashCommandHelpAndEscapeRestoresComposerFocus(t *testing.T) {
+	store.ClearTranscript()
+	store.ClearSlot()
+	defer store.ClearTranscript()
+	defer store.ClearSlot()
+
+	b := mock.New(80, 24)
+	c, err := client.New("/tmp/mock.sock")
+	if err != nil {
+		t.Fatalf("failed to create client: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- Run(ctx, Options{
+			Client:    c,
+			Workspace: "/tmp/ws",
+			Backend:   b,
+		})
+	}()
+
+	waitFor(t, func() bool {
+		return b.LastFrame().Surface != nil && strings.Contains(surfaceText(b), ">")
+	}, 2*time.Second, "initial composer render")
+
+	// 1. Type "/help" and press Enter
+	for _, ch := range "/help" {
+		b.PostEvent(&backend.RawKeyEvent{
+			Key: key.Key{Code: ch, Text: string(ch)},
+		})
+	}
+	b.PostEvent(&backend.RawKeyEvent{Key: key.Key{Code: key.KeyEnter}})
+
+	waitFor(t, func() bool {
+		txt := surfaceText(b)
+		return store.GetSlot().Active != nil &&
+			strings.Contains(txt, "Available commands:") &&
+			strings.Contains(txt, "Filter:")
+	}, 2*time.Second, "help picker to open in slot")
+
+	// 2. Press Esc while /help picker is open
+	b.PostEvent(&backend.RawKeyEvent{Key: key.Key{Code: key.KeyEscape}})
+
+	waitFor(t, func() bool {
+		txt := allText(b)
+		return store.GetSlot().Active == nil &&
+			strings.Contains(txt, "Exited /help command") &&
+			strings.Contains(surfaceText(b), ">")
+	}, 2*time.Second, "help picker to close and exit notice to appear")
+
+	// 3. Immediately type "/mode" and press Enter
+	for _, ch := range "/mode" {
+		b.PostEvent(&backend.RawKeyEvent{
+			Key: key.Key{Code: ch, Text: string(ch)},
+		})
+	}
+	b.PostEvent(&backend.RawKeyEvent{Key: key.Key{Code: key.KeyEnter}})
+
+	waitFor(t, func() bool {
+		txt := surfaceText(b)
+		return store.GetSlot().Active != nil &&
+			strings.Contains(txt, "Select permission mode:")
+	}, 2*time.Second, "mode picker to open in slot")
+
+	// 4. Press Esc on /mode picker
+	b.PostEvent(&backend.RawKeyEvent{Key: key.Key{Code: key.KeyEscape}})
+
+	waitFor(t, func() bool {
+		txt := allText(b)
+		return store.GetSlot().Active == nil &&
+			strings.Contains(txt, "Exited /mode command") &&
+			strings.Contains(surfaceText(b), ">")
+	}, 2*time.Second, "mode picker to close and exit notice to appear")
+
+	// 5. Verify Composer can be typed into again
+	for _, ch := range "echo test" {
+		b.PostEvent(&backend.RawKeyEvent{
+			Key: key.Key{Code: ch, Text: string(ch)},
+		})
+	}
+	waitFor(t, func() bool {
+		return strings.Contains(surfaceText(b), "echo test")
+	}, 2*time.Second, "typed text in composer after mode picker closed")
+
+	// 5. Verify Composer can be typed into again
+	for _, ch := range "echo test" {
+		b.PostEvent(&backend.RawKeyEvent{
+			Key: key.Key{Code: ch, Text: string(ch)},
+		})
+	}
+	waitFor(t, func() bool {
+		return strings.Contains(surfaceText(b), "echo test")
+	}, 2*time.Second, "typed text in composer after mode picker closed")
+}
+
+func TestRunResumeSessionHeaderIsItem0(t *testing.T) {
+	store.ClearTranscript()
+	store.ClearSlot()
+	defer store.ClearTranscript()
+	defer store.ClearSlot()
+
+	b := mock.New(80, 24)
+	c, st := startTestUnixDaemon(t)
+
+	sess, err := c.CreateSession(t.Context(), api.CreateSessionRequest{
+		Config: api.SessionConfig{
+			Model: "test-model-42",
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+
+	st.mu.Lock()
+	st.history[sess.ID] = []api.Message{
+		{
+			ID:   "msg-1",
+			Role: api.RoleUser,
+			Content: []api.Block{
+				{Type: api.BlockText, Text: "Initial question"},
+			},
+		},
+		{
+			ID:   "msg-2",
+			Role: api.RoleAssistant,
+			Content: []api.Block{
+				{Type: api.BlockText, Text: "Initial answer"},
+			},
+		},
+	}
+	st.mu.Unlock()
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	opts := Options{
+		Client:    c,
+		Workspace: "/workspace/project",
+		Version:   "0.1.0",
+		SessionID: sess.ID,
+		Backend:   b,
+	}
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- Run(ctx, opts)
+	}()
+
+	waitFor(t, func() bool {
+		return b.LastFrame().Surface != nil && strings.Contains(surfaceText(b), ">")
+	}, 2*time.Second, "initial composer render")
+
+	waitFor(t, func() bool {
+		items := store.GetTranscript().Items
+		return items != nil && len(*items) >= 3
+	}, 2*time.Second, "transcript to load header and timeline entries")
+
+	items := *store.GetTranscript().Items
+	if items[0].Kind != store.TranscriptKindHeader {
+		t.Fatalf("expected items[0] to be header, got %s", items[0].Kind)
+	}
+	if items[1].Kind != store.TranscriptKindMessage {
+		t.Fatalf("expected items[1] to be message, got %s", items[1].Kind)
+	}
+	if items[2].Kind != store.TranscriptKindMessage {
+		t.Fatalf("expected items[2] to be message, got %s", items[2].Kind)
+	}
+}
+
+type clearMockBackend struct {
+	*mock.Backend
+}
+
+func (c *clearMockBackend) Clear() {
+	c.Backend.Clear()
+	c.InsertedAbove = nil
+}
+
+func TestRunClearReprintHeader(t *testing.T) {
+	store.ClearTranscript()
+	store.ClearSlot()
+	defer store.ClearTranscript()
+	defer store.ClearSlot()
+
+	rawBackend := mock.New(80, 24)
+	b := &clearMockBackend{Backend: rawBackend}
+	c, _ := startTestUnixDaemon(t)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	opts := Options{
+		Client:    c,
+		Workspace: "/workspace/clear-repl",
+		Version:   "0.1.0",
+		Backend:   b,
+	}
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- Run(ctx, opts)
+	}()
+
+	waitFor(t, func() bool {
+		return b.LastFrame().Surface != nil && strings.Contains(surfaceText(b.Backend), ">")
+	}, 2*time.Second, "initial composer render")
+
+	// Wait for initial header to be printed into InsertedAbove
+	waitFor(t, func() bool {
+		return strings.Contains(allText(b.Backend), "TaskSmith v0.1.0")
+	}, 2*time.Second, "initial header in InsertedAbove")
+
+	// Append a notice to make transcript dirty
+	store.AppendNotice("old notice that must be cleared")
+
+	waitFor(t, func() bool {
+		return strings.Contains(allText(b.Backend), "old notice that must be cleared")
+	}, 2*time.Second, "dirty notice in InsertedAbove")
+
+	// Type /clear and press Enter
+	for _, ch := range "/clear" {
+		b.PostEvent(&backend.RawKeyEvent{
+			Key: key.Key{Code: ch, Text: string(ch)},
+		})
+	}
+	b.PostEvent(&backend.RawKeyEvent{
+		Key: key.Key{Code: key.KeyEnter},
+	})
+
+	// Wait for /clear to execute, clearing backend and reprinting Header
+	waitFor(t, func() bool {
+		return b.ClearCalls >= 1 && strings.Contains(allText(b.Backend), "TaskSmith v0.1.0")
+	}, 2*time.Second, "Clear() called and header reprinted")
+
+	txt := allText(b.Backend)
+	if !strings.Contains(txt, "TaskSmith v0.1.0") {
+		t.Fatalf("expected header to be reprinted after /clear, got:\n%s", txt)
+	}
+	if strings.Contains(txt, "old notice that must be cleared") {
+		t.Fatalf("expected old notice to be cleared from scrollback, got:\n%s", txt)
+	}
 }

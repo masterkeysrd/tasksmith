@@ -82,15 +82,19 @@ func InitSession(ctx context.Context, c *client.Client, opts InitSessionOptions)
 			}
 			SetSession(sess)
 			globalConversation.setSessionID(sid)
-			if tl, err := c.Timeline(subCtx, sid); err == nil {
-				globalConversation.loadTimeline(tl)
-			}
-			startSessionStreamWatcher(subCtx, sid)
 		}
 	}
 
 	modelLabel, thinking := ResolveModelInfo(subCtx, c, opts.Agent, opts.Model, sess)
 	SetModelInfo(modelLabel, thinking)
+	SyncHeaderOrClear(modelLabel, thinking, false)
+
+	if c != nil && sid != "" && sess != nil {
+		if tl, err := c.Timeline(subCtx, sid); err == nil {
+			globalConversation.loadTimeline(tl)
+		}
+		startSessionStreamWatcher(subCtx, sid)
+	}
 
 	if c != nil {
 		startSessionsWatcher(subCtx)
@@ -390,6 +394,265 @@ func SetModelInfo(label, thinking string) {
 	})
 }
 
+// SetSessionAgent updates the active agent name in SessionState.
+func SetSessionAgent(agent string) {
+	session.Set(func(s SessionState) SessionState {
+		s.Config.Agent = agent
+		if s.Session != nil {
+			s.Session.Config.Agent = agent
+		}
+		return s
+	})
+}
+
+// Client returns the currently active daemon client, if any.
+func Client() *client.Client {
+	sessMu.Lock()
+	defer sessMu.Unlock()
+	return activeClient
+}
+
+// DefaultAgent returns the default agent configured at startup.
+func DefaultAgent() string {
+	sessMu.Lock()
+	defer sessMu.Unlock()
+	return activeOpts.Agent
+}
+
+// DefaultModel returns the default model configured at startup.
+func DefaultModel() string {
+	sessMu.Lock()
+	defer sessMu.Unlock()
+	return activeOpts.Model
+}
+
+// NewDraftSession resets the REPL to a new draft session, preserving mode.
+func NewDraftSession(modelOverride string) {
+	sessMu.Lock()
+	if streamCancel != nil {
+		streamCancel()
+		streamCancel = nil
+	}
+	c := activeClient
+	ctx := activeCtx
+	defAgent := activeOpts.Agent
+	defModel := activeOpts.Model
+	sessMu.Unlock()
+
+	globalConversation.reset()
+
+	currentMode := GetSession().Config.Mode
+	if currentMode == "" {
+		currentMode = api.ModeDefault
+	}
+	targetModel := cmp.Or(strings.TrimSpace(modelOverride), defModel)
+	cfg := api.SessionConfig{
+		Mode:  currentMode,
+		Agent: defAgent,
+		Model: targetModel,
+	}
+
+	session.Set(func(s SessionState) SessionState {
+		s.Session = nil
+		s.Config = cfg
+		return s
+	})
+
+	if ctx == nil || ctx.Err() != nil {
+		ctx = context.Background()
+	}
+	modelLabel, thinking := ResolveModelInfo(ctx, c, cfg.Agent, cfg.Model, nil)
+	SetModelInfo(modelLabel, thinking)
+	SyncHeaderOrClear(modelLabel, thinking, true)
+}
+
+// SwitchSession loads an existing session and switches to it asynchronously.
+func SwitchSession(sessionID string) {
+	sessMu.Lock()
+	c := activeClient
+	ctx := activeCtx
+	defAgent := activeOpts.Agent
+	defModel := activeOpts.Model
+	sessMu.Unlock()
+
+	if c == nil || strings.TrimSpace(sessionID) == "" {
+		return
+	}
+
+	go func() {
+		if ctx == nil || ctx.Err() != nil {
+			ctx = context.Background()
+		}
+		loaded, err := c.GetSession(ctx, sessionID)
+		if err != nil {
+			AppendError("Error", err.Error())
+			return
+		}
+
+		sessMu.Lock()
+		if streamCancel != nil {
+			streamCancel()
+			streamCancel = nil
+		}
+		sessMu.Unlock()
+
+		SetSession(loaded)
+		globalConversation.setSessionID(loaded.ID)
+		modelLabel, thinking := ResolveModelInfo(ctx, c, defAgent, defModel, loaded)
+		SetModelInfo(modelLabel, thinking)
+		SyncHeaderOrClear(modelLabel, thinking, true)
+
+		if tl, err := c.Timeline(ctx, loaded.ID); err == nil {
+			globalConversation.loadTimeline(tl)
+		}
+		startSessionStreamWatcher(ctx, loaded.ID)
+	}()
+}
+
+// SetModel updates the model for the session, either via daemon API or in draft config.
+func SetModel(modelID string) {
+	st := GetSession()
+	sessMu.Lock()
+	c := activeClient
+	ctx := activeCtx
+	defAgent := activeOpts.Agent
+	defModel := activeOpts.Model
+	sessMu.Unlock()
+
+	if st.Session != nil && st.Session.ID != "" {
+		if c == nil {
+			return
+		}
+		go func() {
+			if ctx == nil || ctx.Err() != nil {
+				ctx = context.Background()
+			}
+			updated, err := c.UpdateSession(ctx, st.Session.ID, api.UpdateSessionRequest{
+				Config: api.SessionConfig{Model: modelID},
+			})
+			if err != nil {
+				AppendError("Error", err.Error())
+				return
+			}
+			SetSession(updated)
+			modelLabel, thinking := ResolveModelInfo(ctx, c, defAgent, defModel, updated)
+			SetModelInfo(modelLabel, thinking)
+		}()
+		return
+	}
+
+	session.Set(func(s SessionState) SessionState {
+		s.Config.Model = modelID
+		return s
+	})
+	if ctx == nil || ctx.Err() != nil {
+		ctx = context.Background()
+	}
+	cfg := GetSession().Config
+	modelLabel, thinking := ResolveModelInfo(ctx, c, cfg.Agent, cfg.Model, &api.Session{Config: cfg})
+	if cfg.Effort != "" {
+		thinking = cfg.Effort
+	}
+	SetModelInfo(modelLabel, thinking)
+	AppendCommandOutput("/model "+modelID, "Model set to "+modelID)
+}
+
+// SetAgent updates the agent for the session, either via daemon API or in draft config.
+func SetAgent(agentName string) {
+	st := GetSession()
+	sessMu.Lock()
+	c := activeClient
+	ctx := activeCtx
+	defAgent := activeOpts.Agent
+	defModel := activeOpts.Model
+	sessMu.Unlock()
+
+	if st.Session != nil && st.Session.ID != "" {
+		if c == nil {
+			return
+		}
+		go func() {
+			if ctx == nil || ctx.Err() != nil {
+				ctx = context.Background()
+			}
+			updated, err := c.UpdateSession(ctx, st.Session.ID, api.UpdateSessionRequest{
+				Config: api.SessionConfig{Agent: agentName},
+			})
+			if err != nil {
+				AppendError("Error", err.Error())
+				return
+			}
+			SetSession(updated)
+			modelLabel, thinking := ResolveModelInfo(ctx, c, defAgent, defModel, updated)
+			SetModelInfo(modelLabel, thinking)
+		}()
+		return
+	}
+
+	session.Set(func(s SessionState) SessionState {
+		s.Config.Agent = agentName
+		return s
+	})
+	if ctx == nil || ctx.Err() != nil {
+		ctx = context.Background()
+	}
+	cfg := GetSession().Config
+	modelLabel, thinking := ResolveModelInfo(ctx, c, cfg.Agent, cfg.Model, &api.Session{Config: cfg})
+	if cfg.Effort != "" {
+		thinking = cfg.Effort
+	}
+	SetModelInfo(modelLabel, thinking)
+	AppendCommandOutput("/agent "+agentName, "Agent set to "+agentName)
+}
+
+// SetEffort updates the reasoning effort for the session, either via daemon API or in draft config.
+func SetEffort(effort string) {
+	st := GetSession()
+	sessMu.Lock()
+	c := activeClient
+	ctx := activeCtx
+	defAgent := activeOpts.Agent
+	defModel := activeOpts.Model
+	sessMu.Unlock()
+
+	if st.Session != nil && st.Session.ID != "" {
+		if c == nil {
+			return
+		}
+		go func() {
+			if ctx == nil || ctx.Err() != nil {
+				ctx = context.Background()
+			}
+			updated, err := c.UpdateSession(ctx, st.Session.ID, api.UpdateSessionRequest{
+				Config: api.SessionConfig{Effort: effort},
+			})
+			if err != nil {
+				AppendError("Error", err.Error())
+				return
+			}
+			SetSession(updated)
+			modelLabel, thinking := ResolveModelInfo(ctx, c, defAgent, defModel, updated)
+			SetModelInfo(modelLabel, thinking)
+		}()
+		return
+	}
+
+	session.Set(func(s SessionState) SessionState {
+		s.Config.Effort = effort
+		return s
+	})
+	if ctx == nil || ctx.Err() != nil {
+		ctx = context.Background()
+	}
+	cfg := GetSession().Config
+	modelLabel, thinking := ResolveModelInfo(ctx, c, cfg.Agent, cfg.Model, &api.Session{Config: cfg})
+	if cfg.Effort != "" {
+		thinking = cfg.Effort
+	}
+	SetModelInfo(modelLabel, thinking)
+	AppendCommandOutput("/effort "+effort, "Effort set to "+effort)
+}
+
 // ResetSession resets the session state to its initial default mode and cancels any active watchers.
 func ResetSession() {
 	sessMu.Lock()
@@ -450,7 +713,10 @@ func ResolveModelInfo(ctx context.Context, c *client.Client, cfgAgent, cfgModel 
 		mdl, _ = c.GetModel(ctx, modelID)
 	}
 
-	var agEffort, mdlLabel, mdlEffort string
+	var agEffort, mdlLabel, mdlEffort, explicitEffort string
+	if sess != nil && strings.TrimSpace(sess.Config.Effort) != "" {
+		explicitEffort = strings.TrimSpace(sess.Config.Effort)
+	}
 	if ag != nil {
 		agEffort = strings.TrimSpace(ag.Effort)
 	}
@@ -460,6 +726,6 @@ func ResolveModelInfo(ctx context.Context, c *client.Client, cfgAgent, cfgModel 
 	}
 
 	modelLabel = cmp.Or(mdlLabel, modelID, "default")
-	thinking = cmp.Or(agEffort, mdlEffort, "auto")
+	thinking = cmp.Or(explicitEffort, agEffort, mdlEffort, "auto")
 	return modelLabel, thinking
 }

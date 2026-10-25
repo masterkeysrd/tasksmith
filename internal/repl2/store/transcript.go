@@ -116,6 +116,71 @@ func AppendHeader(d HeaderData) {
 	})
 }
 
+// SyncHeaderOrClear synchronizes the header banner with model and thinking.
+// It only increments Epoch (clearing scrollback) if either:
+// 1) The transcript is dirty (has items other than just the header) and forceIfDirty is true, OR
+// 2) The model label or thinking differs from the current header banner.
+// On initial startup before the header has model/thinking populated, it updates in place without incrementing Epoch.
+func SyncHeaderOrClear(model, thinking string, forceIfDirty bool) {
+	transcript.Set(func(s TranscriptState) TranscriptState {
+		if s.Items == nil || len(*s.Items) == 0 {
+			return s
+		}
+		items := *s.Items
+		headerIdx := -1
+		var currentHeader HeaderData
+		for i, item := range items {
+			if item.Kind == TranscriptKindHeader {
+				if hd, ok := item.Data.(HeaderData); ok {
+					headerIdx = i
+					currentHeader = hd
+					break
+				}
+			}
+		}
+		if headerIdx == -1 {
+			return s
+		}
+
+		if currentHeader.Model == "" && currentHeader.Thinking == "" {
+			currentHeader.Model = model
+			currentHeader.Thinking = thinking
+			updatedHeaderItem := TranscriptItem{
+				ID:   items[headerIdx].ID,
+				Kind: TranscriptKindHeader,
+				Data: currentHeader,
+			}
+			cp := make([]TranscriptItem, len(items))
+			copy(cp, items)
+			cp[headerIdx] = updatedHeaderItem
+			return TranscriptState{
+				Epoch: s.Epoch,
+				Items: &cp,
+			}
+		}
+
+		isClean := len(items) == 1 && headerIdx == 0
+		modelChanged := currentHeader.Model != model || currentHeader.Thinking != thinking
+		shouldClear := (forceIfDirty && !isClean) || modelChanged
+		if !shouldClear {
+			return s
+		}
+
+		currentHeader.Model = model
+		currentHeader.Thinking = thinking
+		updatedHeaderItem := TranscriptItem{
+			ID:   items[headerIdx].ID,
+			Kind: TranscriptKindHeader,
+			Data: currentHeader,
+		}
+		cp := []TranscriptItem{updatedHeaderItem}
+		return TranscriptState{
+			Epoch: s.Epoch + 1,
+			Items: &cp,
+		}
+	})
+}
+
 // AppendTimelineEntry appends an API timeline entry to the transcript scrollback.
 func AppendTimelineEntry(e api.TimelineEntry) {
 	AppendTranscript(TranscriptItem{
@@ -173,6 +238,22 @@ func ResetTranscript(initial ...TranscriptItem) {
 			Items: itemsPtr,
 		}
 	})
+}
+
+// ClearScreen clears the terminal transcript while preserving the header banner item.
+// If the transcript is already clean (only header present or empty), it does not increment Epoch.
+func ClearScreen() {
+	s := GetTranscript()
+	if s.Items == nil || len(*s.Items) == 0 || (len(*s.Items) == 1 && (*s.Items)[0].Kind == TranscriptKindHeader) {
+		return
+	}
+	var headers []TranscriptItem
+	for _, item := range *s.Items {
+		if item.Kind == TranscriptKindHeader {
+			headers = append(headers, item)
+		}
+	}
+	ResetTranscript(headers...)
 }
 
 // ClearTranscript resets TranscriptState to Epoch 0 and nil Items.

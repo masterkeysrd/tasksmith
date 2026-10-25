@@ -7,6 +7,7 @@ import (
 	"github.com/masterkeysrd/kite/backend"
 	"github.com/masterkeysrd/kite/backend/mock"
 	"github.com/masterkeysrd/kite/extras/trail"
+	"github.com/masterkeysrd/kite/extras/wind"
 	"github.com/masterkeysrd/kite/key"
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/repl2/store"
@@ -15,8 +16,9 @@ import (
 func createComposerInstance(t *testing.T, props ComposerProps) (*trail.Instance, *mock.Backend) {
 	t.Helper()
 	b := mock.New(80, 24)
+	qc := wind.NewClient()
 	app := trail.SimpleFC("TestApp", func() trail.Node {
-		return Composer(props)
+		return wind.Provider(wind.ProviderProps{Client: qc}, Composer(props))
 	})
 	inst, err := trail.New(app(), trail.WithBackend(b))
 	if err != nil {

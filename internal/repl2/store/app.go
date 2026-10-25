@@ -14,8 +14,9 @@ const (
 
 // AppState holds global application UI state for the REPL.
 type AppState struct {
-	CtrlCPending bool
-	Hint         string
+	CtrlCPending  bool
+	ExitRequested bool
+	Hint          string
 }
 
 var app = kites.Create(AppState{Hint: DefaultHint})
@@ -34,6 +35,14 @@ func GetApp() AppState {
 func SetCtrlCPending(pending bool) {
 	app.Set(func(s AppState) AppState {
 		s.CtrlCPending = pending
+		return s
+	})
+}
+
+// RequestExit requests the REPL application to terminate.
+func RequestExit() {
+	app.Set(func(s AppState) AppState {
+		s.ExitRequested = true
 		return s
 	})
 }

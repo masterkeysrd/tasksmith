@@ -3,6 +3,7 @@ package components
 import (
 	"fmt"
 
+	"github.com/masterkeysrd/kite/extras/kitex"
 	"github.com/masterkeysrd/kite/extras/trail"
 	"github.com/masterkeysrd/kite/style"
 	"github.com/masterkeysrd/tasksmith/api"
@@ -42,9 +43,11 @@ func renderTranscriptItem(item store.TranscriptItem, _ int) trail.Node {
 }
 
 // Transcript is the host component that permanently prints finalized items into
-// terminal scrollback via trail.Static. Remounting (e.g. on new epoch) resets
-// the static scrollback region.
+// terminal scrollback via trail.Static. When Epoch changes (e.g. /clear or session reset),
+// it coordinates app.Clear() before mounting the new epoch's items to guarantee
+// the new items are printed after the terminal scrollback is cleared.
 var Transcript = trail.SimpleFC("Transcript", func() trail.Node {
+	app := trail.UseApp()
 	epoch := store.UseTranscript(func(s store.TranscriptState) int {
 		return s.Epoch
 	})
@@ -52,13 +55,32 @@ var Transcript = trail.SimpleFC("Transcript", func() trail.Node {
 		return s.Items
 	})
 
+	clearedEpoch, setClearedEpoch := kitex.UseState(epoch)
+
+	kitex.UseLayoutEffect(func() {
+		if epoch != clearedEpoch() {
+			if app != nil {
+				app.Clear()
+				if eng := app.Engine(); eng != nil {
+					eng.Post(func() {
+						setClearedEpoch(epoch)
+					})
+				} else {
+					setClearedEpoch(epoch)
+				}
+			} else {
+				setClearedEpoch(epoch)
+			}
+		}
+	}, []any{epoch, clearedEpoch()})
+
 	var items []store.TranscriptItem
-	if itemsPtr != nil {
+	if epoch == clearedEpoch() && itemsPtr != nil {
 		items = *itemsPtr
 	}
 
 	return trail.Box(trail.BoxProps{
-		Key: fmt.Sprintf("transcript-%d", epoch),
+		Key: fmt.Sprintf("transcript-%d", clearedEpoch()),
 		Style: style.S().
 			FlexDirection(style.FlexColumn).
 			Width(style.Percent(100)),

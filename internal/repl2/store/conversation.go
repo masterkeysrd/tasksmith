@@ -290,6 +290,10 @@ func (acc *conversationAccumulator) applyEvent(event api.Event) {
 				if p.Entry.Model != nil {
 					SetModelInfo(p.Entry.Model.To, GetSession().Thinking)
 				}
+			case api.TimelineKindAgent:
+				if p.Entry.Agent != nil {
+					SetSessionAgent(p.Entry.Agent.To)
+				}
 			case api.TimelineKindEffort:
 				if p.Entry.Effort != nil {
 					SetModelInfo(GetSession().ModelLabel, p.Entry.Effort.To)
@@ -406,6 +410,10 @@ func (acc *conversationAccumulator) loadTimeline(entries []api.TimelineEntry) {
 			case api.TimelineKindModel:
 				if entry.Model != nil {
 					SetModelInfo(entry.Model.To, GetSession().Thinking)
+				}
+			case api.TimelineKindAgent:
+				if entry.Agent != nil {
+					SetSessionAgent(entry.Agent.To)
 				}
 			case api.TimelineKindEffort:
 				if entry.Effort != nil {

@@ -97,6 +97,25 @@ func TestSlotEnqueueAndDequeueFIFO(t *testing.T) {
 	}
 }
 
+func TestSlotEnqueueGeneratesIDWhenEmpty(t *testing.T) {
+	ClearSlot()
+	defer ClearSlot()
+
+	EnqueueSlot(SlotItem{Kind: SlotKindPicker, Data: "picker-1"})
+	s := GetSlot()
+	if s.Active == nil {
+		t.Fatal("expected Active to be non-nil")
+	}
+	if s.Active.ID == "" {
+		t.Fatal("expected auto-generated non-empty ID")
+	}
+
+	RemoveSlot(s.Active.ID)
+	if GetSlot().Active != nil {
+		t.Fatal("expected Active to be removed after RemoveSlot")
+	}
+}
+
 func TestSlotEnqueueDeduplication(t *testing.T) {
 	ClearSlot()
 	defer ClearSlot()

@@ -168,6 +168,125 @@ func TestTranscriptResetAndClear(t *testing.T) {
 	}
 }
 
+func TestClearScreen(t *testing.T) {
+	ClearTranscript()
+	defer ClearTranscript()
+
+	// 1. Empty transcript: ClearScreen should be a no-op
+	ClearScreen()
+	s := GetTranscript()
+	if s.Epoch != 0 || s.Items != nil {
+		t.Fatalf("expected Epoch=0 and nil items on empty ClearScreen, got Epoch=%d, items=%v", s.Epoch, s.Items)
+	}
+
+	// 2. Clean transcript (only header): ClearScreen should NOT increment Epoch
+	AppendHeader(HeaderData{Version: "1.0", Model: "m1"})
+	s = GetTranscript()
+	if s.Epoch != 0 || len(*s.Items) != 1 {
+		t.Fatalf("setup failed: %+v", s)
+	}
+	ClearScreen()
+	s = GetTranscript()
+	if s.Epoch != 0 {
+		t.Fatalf("expected Epoch=0 after ClearScreen on clean transcript, got %d", s.Epoch)
+	}
+	if len(*s.Items) != 1 || (*s.Items)[0].Kind != TranscriptKindHeader {
+		t.Fatalf("expected 1 header item preserved, got %v", s.Items)
+	}
+
+	// 3. Dirty transcript (header + notices): ClearScreen should increment Epoch and keep only header
+	AppendNotice("line 1")
+	AppendNotice("line 2")
+	if len(*GetTranscript().Items) != 3 {
+		t.Fatalf("expected 3 items before clear")
+	}
+	ClearScreen()
+	s = GetTranscript()
+	if s.Epoch != 1 {
+		t.Fatalf("expected Epoch=1 after ClearScreen on dirty transcript, got %d", s.Epoch)
+	}
+	if len(*s.Items) != 1 || (*s.Items)[0].Kind != TranscriptKindHeader {
+		t.Fatalf("expected only header item preserved after clear, got %v", s.Items)
+	}
+
+	// 4. Dirty transcript without header: ClearScreen increments Epoch and clears items
+	ClearTranscript()
+	AppendNotice("notice only")
+	ClearScreen()
+	s = GetTranscript()
+	if s.Epoch != 1 {
+		t.Fatalf("expected Epoch=1 after ClearScreen on dirty non-header transcript, got %d", s.Epoch)
+	}
+	if s.Items != nil {
+		t.Fatalf("expected nil items after clearing non-header transcript, got %v", s.Items)
+	}
+}
+
+func TestSyncHeaderOrClear(t *testing.T) {
+	ClearTranscript()
+	defer ClearTranscript()
+
+	// 1. Initial startup: header present with empty Model and Thinking
+	AppendHeader(HeaderData{Version: "1.0.0", Workspace: "/ws"})
+	SyncHeaderOrClear("model-a", "low", false)
+	s := GetTranscript()
+	if s.Epoch != 0 {
+		t.Fatalf("expected Epoch=0 on initial startup SyncHeaderOrClear, got %d", s.Epoch)
+	}
+	if len(*s.Items) != 1 {
+		t.Fatalf("expected 1 item, got %d", len(*s.Items))
+	}
+	hd := (*s.Items)[0].Data.(HeaderData)
+	if hd.Model != "model-a" || hd.Thinking != "low" {
+		t.Fatalf("expected model-a/low, got %+v", hd)
+	}
+
+	// 2. Clean transcript, same model & thinking, forceIfDirty=true -> no Epoch increment
+	SyncHeaderOrClear("model-a", "low", true)
+	s = GetTranscript()
+	if s.Epoch != 0 {
+		t.Fatalf("expected Epoch=0 on clean transcript with same model, got %d", s.Epoch)
+	}
+	if len(*s.Items) != 1 {
+		t.Fatalf("expected 1 item, got %d", len(*s.Items))
+	}
+
+	// 3. Dirty transcript, same model & thinking, forceIfDirty=false -> no Epoch increment
+	AppendNotice("dirty notice")
+	SyncHeaderOrClear("model-a", "low", false)
+	s = GetTranscript()
+	if s.Epoch != 0 {
+		t.Fatalf("expected Epoch=0 when forceIfDirty=false and same model, got %d", s.Epoch)
+	}
+	if len(*s.Items) != 2 {
+		t.Fatalf("expected 2 items, got %d", len(*s.Items))
+	}
+
+	// 4. Dirty transcript, same model & thinking, forceIfDirty=true -> increments Epoch, resets to header
+	SyncHeaderOrClear("model-a", "low", true)
+	s = GetTranscript()
+	if s.Epoch != 1 {
+		t.Fatalf("expected Epoch=1 on dirty transcript with forceIfDirty=true, got %d", s.Epoch)
+	}
+	if len(*s.Items) != 1 || (*s.Items)[0].Kind != TranscriptKindHeader {
+		t.Fatalf("expected only header item remaining, got %v", s.Items)
+	}
+
+	// 5. Clean transcript, model change -> increments Epoch, updates header
+	SyncHeaderOrClear("model-b", "high", false)
+	s = GetTranscript()
+	if s.Epoch != 2 {
+		t.Fatalf("expected Epoch=2 on model change, got %d", s.Epoch)
+	}
+	if len(*s.Items) != 1 {
+		t.Fatalf("expected 1 item, got %d", len(*s.Items))
+	}
+	hd = (*s.Items)[0].Data.(HeaderData)
+	if hd.Model != "model-b" || hd.Thinking != "high" {
+		t.Fatalf("expected model-b/high, got %+v", hd)
+	}
+}
+
 func TestUseTranscript(t *testing.T) {
 	ClearTranscript()
 	defer ClearTranscript()

@@ -10,6 +10,7 @@ import (
 	"github.com/masterkeysrd/kite/extras/trail"
 	"github.com/masterkeysrd/tasksmith/client"
 	"github.com/masterkeysrd/tasksmith/internal/repl2/store"
+	"github.com/masterkeysrd/tasksmith/internal/ui/theme"
 )
 
 // ErrInvalidOptions is returned when required [Options] fields are missing.
@@ -44,6 +45,8 @@ func Run(ctx context.Context, opts Options) error {
 		return err
 	}
 
+	theme.SetTransparent(true)
+
 	if opts.Client.CWD() == "" && opts.Workspace != "" {
 		opts.Client = opts.Client.WithCWD(opts.Workspace)
 	}
@@ -54,19 +57,16 @@ func Run(ctx context.Context, opts Options) error {
 	store.ClearTranscript()
 	store.ResetStream()
 
+	store.AppendHeader(store.HeaderData{
+		Version:   opts.Version,
+		Workspace: opts.Workspace,
+	})
+
 	store.InitSession(ctx, opts.Client, store.InitSessionOptions{
 		SessionID: opts.SessionID,
 		Agent:     opts.Agent,
 		Model:     opts.Model,
 		Title:     opts.Title,
-	})
-
-	sess := store.GetSession()
-	store.AppendHeader(store.HeaderData{
-		Version:   opts.Version,
-		Model:     sess.ModelLabel,
-		Thinking:  sess.Thinking,
-		Workspace: opts.Workspace,
 	})
 
 	trailOpts := []trail.Option{trail.WithCtrlCExit(false)}

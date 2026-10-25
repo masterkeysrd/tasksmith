@@ -450,13 +450,15 @@ func parseColor(hex string) (color.RGBA, error) {
 var themeCtx = kitex.CreateContext[*Scheme](nil)
 
 type state struct {
-	themeName string
-	scheme    *Scheme
+	themeName   string
+	scheme      *Scheme
+	transparent bool
 }
 
 var store = kites.Create(state{
-	themeName: Default,
-	scheme:    nil,
+	themeName:   Default,
+	scheme:      nil,
+	transparent: false,
 })
 
 func init() {
@@ -491,6 +493,7 @@ func init() {
 		store.Set(func(st state) state {
 			st.themeName = themeName
 			st.scheme = s
+			st.transparent = transparent
 			return st
 		})
 	}
@@ -508,10 +511,39 @@ func Set(name string) error {
 	}
 	store.Set(func(st state) state {
 		st.themeName = name
+		if st.transparent && s != nil {
+			s = s.WithTransparent(true)
+		}
 		st.scheme = s
 		return st
 	})
 	return nil
+}
+
+// SetTransparent sets whether the active global theme should be transparent.
+func SetTransparent(transparent bool) {
+	store.Set(func(st state) state {
+		st.transparent = transparent
+		t, err := Find(st.themeName)
+		if err != nil {
+			t, err = getBuiltin(Default)
+		}
+		if err == nil {
+			if s, err := Resolve(t); err == nil {
+				st.scheme = s.WithTransparent(transparent)
+				return st
+			}
+		}
+		if st.scheme != nil {
+			st.scheme = st.scheme.WithTransparent(transparent)
+		}
+		return st
+	})
+}
+
+// IsTransparent returns whether the active global theme is configured as transparent.
+func IsTransparent() bool {
+	return store.Get().transparent
 }
 
 // GetName returns the current global theme name.

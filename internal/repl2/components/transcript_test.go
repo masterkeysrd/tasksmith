@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/masterkeysrd/kite/backend"
 	"github.com/masterkeysrd/kite/backend/mock"
 	"github.com/masterkeysrd/kite/extras/trail"
 	"github.com/masterkeysrd/tasksmith/api"
@@ -138,5 +139,80 @@ func TestTranscriptPlaceholderKinds(t *testing.T) {
 	// Verify nothing broke and surface is clean
 	if b.LastFrame().Surface == nil {
 		t.Fatal("expected rendered surface")
+	}
+}
+
+type clearMockBackend struct {
+	*mock.Backend
+}
+
+func (c *clearMockBackend) Clear() {
+	c.Backend.Clear()
+	c.InsertedAbove = nil
+}
+
+func (c *clearMockBackend) InsertAbove(buf *backend.Buffer) {
+	c.Backend.InsertAbove(buf)
+}
+
+func TestTranscriptClearReprintHeader(t *testing.T) {
+	store.ClearTranscript()
+	defer store.ClearTranscript()
+
+	store.AppendHeader(store.HeaderData{
+		Version:   "1.0.0",
+		Model:     "TestModel",
+		Thinking:  "medium",
+		Workspace: "/workspace/clear-test",
+	})
+	store.AppendNotice("old message that should be cleared")
+
+	rawBackend := mock.New(80, 24)
+	b := &clearMockBackend{Backend: rawBackend}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	go func() {
+		_ = trail.Run(ctx, Transcript(), trail.WithBackend(b))
+	}()
+
+	// Wait for initial header and notice to be committed to InsertedAbove
+	var initialText string
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		initialText = insertedAboveText(b.Backend)
+		if strings.Contains(initialText, "TaskSmith v1.0.0") && strings.Contains(initialText, "old message that should be cleared") {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	if !strings.Contains(initialText, "TaskSmith v1.0.0") || !strings.Contains(initialText, "old message that should be cleared") {
+		t.Fatalf("expected initial header and notice in scrollback, got:\n%s", initialText)
+	}
+
+	// Trigger ClearScreen on dirty transcript
+	store.ClearScreen()
+
+	// Wait for clear to take effect and new header to be reprinted into InsertedAbove
+	var postClearText string
+	deadline = time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		postClearText = insertedAboveText(b.Backend)
+		if b.ClearCalls > 0 && strings.Contains(postClearText, "TaskSmith v1.0.0") {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	if b.ClearCalls < 1 {
+		t.Fatalf("expected backend Clear() to have been called at least once, got %d", b.ClearCalls)
+	}
+	if !strings.Contains(postClearText, "TaskSmith v1.0.0") {
+		t.Fatalf("expected reprinted Header after clear in scrollback, got:\n%s", postClearText)
+	}
+	if strings.Contains(postClearText, "old message that should be cleared") {
+		t.Fatalf("expected old messages to be cleared from scrollback, got:\n%s", postClearText)
 	}
 }

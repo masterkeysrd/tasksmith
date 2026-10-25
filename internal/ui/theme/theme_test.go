@@ -255,3 +255,52 @@ func TestProviderTransparent(t *testing.T) {
 		t.Errorf("expected BaseFocus %v, got %v", focusColor, captured.Color.Surface.BaseFocus)
 	}
 }
+
+func TestSetTransparentAndThemeSwitch(t *testing.T) {
+	// Restore original state after test
+	origName := GetName()
+	origTrans := IsTransparent()
+	defer func() {
+		_ = Set(origName)
+		SetTransparent(origTrans)
+	}()
+
+	SetTransparent(true)
+	if !IsTransparent() {
+		t.Fatal("expected IsTransparent() to be true")
+	}
+
+	sch := UseTheme()
+	if sch == nil || !sch.Transparent || sch.Color.Surface.Base != nil {
+		t.Fatalf("expected transparent scheme with nil Base surface, got %+v", sch)
+	}
+
+	// Switch theme with Set
+	if err := Set("github-dark"); err != nil {
+		t.Fatalf("Set theme failed: %v", err)
+	}
+
+	sch2 := UseTheme()
+	if sch2.Name != "github-dark" {
+		t.Errorf("expected theme github-dark, got %s", sch2.Name)
+	}
+	if !sch2.Transparent {
+		t.Errorf("expected scheme to preserve Transparent=true after Set")
+	}
+	if sch2.Color.Surface.Base != nil {
+		t.Errorf("expected Base surface to be nil after theme switch with transparency, got %v", sch2.Color.Surface.Base)
+	}
+
+	// Toggle transparency back off
+	SetTransparent(false)
+	if IsTransparent() {
+		t.Fatal("expected IsTransparent() to be false")
+	}
+	sch3 := UseTheme()
+	if sch3.Transparent {
+		t.Errorf("expected Transparent=false after SetTransparent(false)")
+	}
+	if sch3.Color.Surface.Base == nil {
+		t.Errorf("expected non-nil Base surface after SetTransparent(false)")
+	}
+}
