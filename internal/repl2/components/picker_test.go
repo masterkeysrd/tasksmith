@@ -34,10 +34,7 @@ func TestFilterOptions(t *testing.T) {
 	}
 }
 
-func TestPickerComponentAndHint(t *testing.T) {
-	store.ResetApp()
-	defer store.ResetApp()
-
+func TestPickerComponentAndKeyboardHint(t *testing.T) {
 	opts := []uicomponents.Option{
 		{Value: "opt1", Label: "Option One", Description: "First option", Current: true},
 		{Value: "opt2", Label: "Option Two", Description: "Second option"},
@@ -46,6 +43,8 @@ func TestPickerComponentAndHint(t *testing.T) {
 	var selectedValue string
 	var canceled bool
 	var opened bool
+	var confirmed bool
+	var submittedVal string
 
 	b := mock.New(80, 24)
 	app := trail.SimpleFC("TestApp", func() kitex.Node {
@@ -61,6 +60,24 @@ func TestPickerComponentAndHint(t *testing.T) {
 			OnCancel: func() {
 				canceled = true
 			},
+			ConfirmActions: map[string]ConfirmAction{
+				"d": {
+					Prompt: func(opt uicomponents.Option) string {
+						return "Delete " + opt.Label + "?"
+					},
+					OnConfirm: func(opt uicomponents.Option) {
+						confirmed = true
+					},
+				},
+			},
+			InputActions: map[string]InputAction{
+				"r": {
+					Prompt: "Rename:",
+					OnSubmit: func(opt uicomponents.Option, value string) {
+						submittedVal = value
+					},
+				},
+			},
 		})
 	})
 
@@ -75,12 +92,6 @@ func TestPickerComponentAndHint(t *testing.T) {
 		t.Errorf("expected OnOpen to be called on mount")
 	}
 
-	// Hint should be published to AppState
-	hint := store.GetApp().Hint
-	if hint != DefaultPickerFooter {
-		t.Errorf("expected hint %q, got %q", DefaultPickerFooter, hint)
-	}
-
 	out := surfaceText(b)
 	if !strings.Contains(out, "Select an option:") {
 		t.Errorf("expected title in output: %s", out)
@@ -89,19 +100,54 @@ func TestPickerComponentAndHint(t *testing.T) {
 		t.Errorf("expected options in output: %s", out)
 	}
 
-	// Press Enter on opt1
+	// 1. Verify Browse mode KeyboardHint
+	if !strings.Contains(out, "Keyboard:") || !strings.Contains(out, "↑/↓ Navigate") || !strings.Contains(out, "enter Confirm") || !strings.Contains(out, "esc Cancel") {
+		t.Errorf("expected default KeyboardHint in browse mode: %s", out)
+	}
+
+	// 2. Trigger Confirm mode via 'd'
+	inst.Engine().ProcessRawEvent(&backend.RawKeyEvent{Key: key.Key{Code: 'd', Text: "d"}})
+	inst.Frame()
+	out = surfaceText(b)
+	if !strings.Contains(out, "Delete Option One?") {
+		t.Errorf("expected confirm prompt in output: %s", out)
+	}
+	if !strings.Contains(out, "y/enter Confirm") || !strings.Contains(out, "n/esc Cancel") {
+		t.Errorf("expected confirm mode KeyboardHint: %s", out)
+	}
+	// Cancel confirm mode via 'n'
+	inst.Engine().ProcessRawEvent(&backend.RawKeyEvent{Key: key.Key{Code: 'n', Text: "n"}})
+	inst.Frame()
+
+	// 3. Trigger Input mode via 'r'
+	inst.Engine().ProcessRawEvent(&backend.RawKeyEvent{Key: key.Key{Code: 'r', Text: "r"}})
+	inst.Frame()
+	out = surfaceText(b)
+	if !strings.Contains(out, "Rename:") {
+		t.Errorf("expected input prompt in output: %s", out)
+	}
+	if !strings.Contains(out, "enter Submit") || !strings.Contains(out, "esc Cancel") {
+		t.Errorf("expected input mode KeyboardHint: %s", out)
+	}
+	// Cancel input mode via Esc
+	inst.Engine().ProcessRawEvent(&backend.RawKeyEvent{Key: key.Key{Code: key.KeyEscape}})
+	inst.Frame()
+
+	// 4. Press Enter on opt1
 	inst.Engine().ProcessRawEvent(&backend.RawKeyEvent{Key: key.Key{Code: key.KeyEnter}})
 	inst.Frame()
 	if selectedValue != "opt1" {
 		t.Errorf("expected selectedValue=opt1, got %q", selectedValue)
 	}
 
-	// Press Esc
+	// 5. Press Esc
 	inst.Engine().ProcessRawEvent(&backend.RawKeyEvent{Key: key.Key{Code: key.KeyEscape}})
 	inst.Frame()
 	if !canceled {
 		t.Errorf("expected canceled=true after Escape")
 	}
+	_ = confirmed
+	_ = submittedVal
 }
 
 func TestSlotRendersPickerAndRemovesOnAction(t *testing.T) {

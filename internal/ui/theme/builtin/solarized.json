@@ -43,7 +43,7 @@
       "primary": "fg",
       "inverse_primary": "bg_dark",
       "secondary": "fg_dark",
-      "tertiary": "comment",
+      "tertiary": "fg_dark",
       "purple": "purple",
       "magenta": "magenta",
       "error": "red"

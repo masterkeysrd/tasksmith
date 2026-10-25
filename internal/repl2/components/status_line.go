@@ -42,7 +42,7 @@ func (t Tone) color(scheme *theme.Scheme) color.Color {
 	case ToneError:
 		return scheme.Color.Text.Error
 	default:
-		return scheme.Color.Text.Tertiary
+		return scheme.Color.Text.Secondary
 	}
 }
 
@@ -106,6 +106,11 @@ var HintSegment = trail.FC("HintSegment", func(props SegmentProps) trail.Node {
 	hint := store.UseApp(func(s store.AppState) string {
 		return s.Hint
 	})
+	hasSlot := store.UseHasActiveSlot()
+
+	if !ctrlCPending && hasSlot {
+		return nil
+	}
 
 	text := hint
 	if ctrlCPending {

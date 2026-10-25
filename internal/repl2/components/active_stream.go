@@ -43,7 +43,7 @@ var ActiveStream = trail.SimpleFC("ActiveStream", func() trail.Node {
 		children = append(children, Message(MessageProps{Message: msg}))
 	}
 
-	if streaming {
+	if streaming && !waitingPerm {
 		children = append(children, trail.Box(trail.BoxProps{
 			Style: style.S().MarginBottom(1),
 		}, Spinner(SpinnerProps{Text: "Thinking..."})))

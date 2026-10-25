@@ -165,7 +165,13 @@ var SessionBrowser = trail.FC("SessionBrowser", func(slotID string) trail.Node {
 		{Width: 26, Align: style.TextAlignRight},
 	}
 	pickerProps.Filterable = true
-	pickerProps.Footer = "↑/↓ to select • enter to switch • f2 to rename • f4 to delete • esc to cancel"
+	pickerProps.Bindings = []components.KeyBinding{
+		{Key: "↑/↓", Label: "Select"},
+		{Key: "enter", Label: "Switch"},
+		{Key: "f2", Label: "Rename"},
+		{Key: "f4", Label: "Delete"},
+		{Key: "esc", Label: "Cancel"},
+	}
 	pickerProps.OnCancel = func() {
 		store.RemoveSlot(slotID)
 		store.AppendCommandOutput("/sessions", "Exited /sessions command")

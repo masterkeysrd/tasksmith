@@ -63,7 +63,7 @@ var Header = trail.FC("Header", func(props store.HeaderData) trail.Node {
 	if scheme != nil {
 		titleStyle = titleStyle.Foreground(scheme.Color.Text.Purple)
 		metaStyle = metaStyle.Foreground(scheme.Color.Text.Secondary)
-		dimStyle = dimStyle.Foreground(scheme.Color.Text.Tertiary)
+		dimStyle = dimStyle.Foreground(scheme.Color.Text.Secondary)
 	}
 
 	version := NormalizeVersion(props.Version)

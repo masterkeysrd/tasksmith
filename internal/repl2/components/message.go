@@ -61,8 +61,8 @@ var SystemMessage = trail.FC("SystemMessage", func(props MessageProps) trail.Nod
 		return nil
 	}
 	rowStyle := messageStyle.FlexDirection(style.FlexRow)
-	if scheme != nil {
-		rowStyle = rowStyle.Foreground(scheme.Color.Text.Tertiary)
+	if scheme != nil && scheme.Color.Text.Secondary != nil {
+		rowStyle = rowStyle.Foreground(scheme.Color.Text.Secondary)
 	}
 	return trail.Box(trail.BoxProps{Key: props.Message.ID, Style: rowStyle},
 		trail.Span(trail.SpanProps{

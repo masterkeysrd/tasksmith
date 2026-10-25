@@ -93,6 +93,9 @@ func InitSession(ctx context.Context, c *client.Client, opts InitSessionOptions)
 		if tl, err := c.Timeline(subCtx, sid); err == nil {
 			globalConversation.loadTimeline(tl)
 		}
+		if len(sess.PendingPermissions) > 0 {
+			globalConversation.SeedPermissions(sess.PendingPermissions)
+		}
 		startSessionStreamWatcher(subCtx, sid)
 	}
 
@@ -293,6 +296,39 @@ func Cancel() {
 		}
 		_ = c.Cancel(ctx, sess.ID)
 		globalConversation.cancelTurn()
+	}()
+}
+
+// DecidePermission submits a user decision on a pending permission request.
+func DecidePermission(req api.PermissionRequest, dec api.PermissionDecision) {
+	if req.ID == "" {
+		return
+	}
+	dec.RequestID = req.ID
+	dec.ToolCallID = req.ToolCallID
+
+	RemoveSlot("perm-" + req.ID)
+	globalConversation.removePermission(req.ID)
+
+	sessMu.Lock()
+	c := activeClient
+	ctx := activeCtx
+	sess := GetSession().Session
+	sessMu.Unlock()
+
+	if c == nil || sess == nil || sess.ID == "" {
+		return
+	}
+
+	go func() {
+		if ctx == nil || ctx.Err() != nil {
+			ctx = context.Background()
+		}
+		err := c.Send(ctx, sess.ID, api.SendRequest{Decision: &dec})
+		if err != nil {
+			AppendError("Error", err.Error())
+			globalConversation.SeedPermissions([]api.PermissionRequest{req})
+		}
 	}()
 }
 
@@ -507,6 +543,9 @@ func SwitchSession(sessionID string) {
 
 		if tl, err := c.Timeline(ctx, loaded.ID); err == nil {
 			globalConversation.loadTimeline(tl)
+		}
+		if len(loaded.PendingPermissions) > 0 {
+			globalConversation.SeedPermissions(loaded.PendingPermissions)
 		}
 		startSessionStreamWatcher(ctx, loaded.ID)
 	}()

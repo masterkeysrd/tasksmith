@@ -413,3 +413,143 @@ func TestConversationInterruptedToolCall(t *testing.T) {
 		t.Fatalf("expected TranscriptKindTimeline for item 3, got %q", (*tr.Items)[3].Kind)
 	}
 }
+
+func TestConversationPermissionSlotEnqueueAndResolution(t *testing.T) {
+	ResetStream()
+	ClearTranscript()
+	ClearSlot()
+	defer ResetStream()
+	defer ClearTranscript()
+	defer ClearSlot()
+
+	acc := newConversationAccumulator()
+	acc.setSessionID("sess-1")
+
+	permReq := api.PermissionRequest{
+		ID:         "perm-1",
+		ToolCallID: "tc-1",
+		ToolName:   "bash",
+		Action:     api.ActionExec,
+		Target:     "go test ./...",
+	}
+
+	// 1. EventPermissionRequested enqueues SlotKindPermission
+	acc.applyEvent(api.Event{
+		Type: api.EventPermissionRequested,
+		Payload: api.PermissionRequestedEvent{
+			SessionID:   "sess-1",
+			Permissions: []api.PermissionRequest{permReq},
+		},
+	})
+
+	active := GetSlot().Active
+	if active == nil || active.Kind != SlotKindPermission {
+		t.Fatalf("expected active SlotKindPermission after EventPermissionRequested, got %+v", active)
+	}
+	if active.ID != "perm-perm-1" {
+		t.Errorf("expected slot ID perm-perm-1, got %q", active.ID)
+	}
+	if reqData, ok := active.Data.(api.PermissionRequest); !ok || reqData.ID != "perm-1" {
+		t.Errorf("expected PermissionRequest in slot Data, got %+v", active.Data)
+	}
+
+	// 2. EventEntryAdded with matching tool message removes the permission slot
+	acc.applyEvent(api.Event{
+		Type: api.EventEntryAdded,
+		Payload: api.EntryAddedEvent{
+			SessionID: "sess-1",
+			Entry: api.TimelineEntry{
+				ID:   "entry-tool-1",
+				Kind: api.TimelineKindMessage,
+				Message: &api.Message{
+					ID:         "msg-tool-1",
+					Role:       api.RoleTool,
+					ToolCallID: "tc-1",
+					CreatedAt:  time.Now(),
+				},
+			},
+		},
+	})
+
+	if GetSlot().Active != nil {
+		t.Errorf("expected permission slot to be removed after tool message, got %+v", GetSlot().Active)
+	}
+
+	// 3. SeedPermissions enqueues SlotKindPermission
+	permReq2 := api.PermissionRequest{
+		ID:         "perm-2",
+		ToolCallID: "tc-2",
+		ToolName:   "write_file",
+		Action:     api.ActionWrite,
+		Target:     "main.go",
+	}
+	acc.SeedPermissions([]api.PermissionRequest{permReq2})
+
+	active2 := GetSlot().Active
+	if active2 == nil || active2.Kind != SlotKindPermission {
+		t.Fatalf("expected active SlotKindPermission after SeedPermissions, got %+v", active2)
+	}
+	if active2.ID != "perm-perm-2" {
+		t.Errorf("expected slot ID perm-perm-2, got %q", active2.ID)
+	}
+
+	// 4. DecidePermission removes the slot and removes permission from accumulator
+	DecidePermission(permReq2, api.PermissionDecision{
+		Kind: api.DecisionAllowOnce,
+	})
+
+	if GetSlot().Active != nil {
+		t.Errorf("expected permission slot to be removed after DecidePermission, got %+v", GetSlot().Active)
+	}
+
+	// 5. EventEntryAdded with TimelineKindPermission dequeues permission slot and does NOT append to transcript
+	permReq3 := api.PermissionRequest{
+		ID:         "perm-3",
+		ToolCallID: "tc-3",
+		ToolName:   "bash",
+		Action:     api.ActionExec,
+		Target:     "cat README.md",
+	}
+	acc.SeedPermissions([]api.PermissionRequest{permReq3})
+	if GetSlot().Active == nil || GetSlot().Active.ID != "perm-perm-3" {
+		t.Fatalf("expected active slot perm-perm-3, got %+v", GetSlot().Active)
+	}
+
+	initialTranscriptCount := 0
+	if tr := GetTranscript(); tr.Items != nil {
+		initialTranscriptCount = len(*tr.Items)
+	}
+
+	acc.applyEvent(api.Event{
+		Type: api.EventEntryAdded,
+		Payload: api.EntryAddedEvent{
+			SessionID: "sess-1",
+			Entry: api.TimelineEntry{
+				ID:   "entry-perm-3",
+				Kind: api.TimelineKindPermission,
+				Permission: &api.PermissionRecord{
+					Request: permReq3,
+					Decision: api.PermissionDecision{
+						RequestID:  "perm-3",
+						ToolCallID: "tc-3",
+						Kind:       api.DecisionAllowOnce,
+					},
+				},
+			},
+		},
+	})
+
+	// Permission slot should be removed
+	if GetSlot().Active != nil {
+		t.Errorf("expected permission slot to be removed after TimelineKindPermission, got %+v", GetSlot().Active)
+	}
+
+	// Transcript items count should NOT have increased
+	afterTranscriptCount := 0
+	if tr := GetTranscript(); tr.Items != nil {
+		afterTranscriptCount = len(*tr.Items)
+	}
+	if afterTranscriptCount != initialTranscriptCount {
+		t.Errorf("expected transcript items not to increase on TimelineKindPermission (was %d, now %d)", initialTranscriptCount, afterTranscriptCount)
+	}
+}

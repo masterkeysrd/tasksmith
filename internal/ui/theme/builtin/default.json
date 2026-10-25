@@ -7,7 +7,7 @@
     "bg_highlight": "#292e42",
     "terminal_black": "#090a0f",
     "dark3": "#0c0d12",
-    "comment": "#565f89",
+    "comment": "#a9b1d6",
     "fg": "#c0caf5",
     "white": "#ffffff",
     "fg_dark": "#a9b1d6",
@@ -43,7 +43,7 @@
       "primary": "fg",
       "inverse_primary": "bg_dark",
       "secondary": "fg_dark",
-      "tertiary": "comment",
+      "tertiary": "fg_dark",
       "purple": "purple",
       "magenta": "magenta",
       "error": "red"

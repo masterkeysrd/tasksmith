@@ -82,6 +82,13 @@ func UseHideComposer() bool {
 	})
 }
 
+// UseHasActiveSlot reports whether there is currently an active slot.
+func UseHasActiveSlot() bool {
+	return UseSlot(func(s SlotState) bool {
+		return s.Active != nil
+	})
+}
+
 var nextSlotID atomic.Uint64
 
 // EnqueueSlot enqueues an item into the slot queue. If item.ID is empty, a unique

@@ -35,7 +35,7 @@ var Spinner = trail.FC("Spinner", func(props SpinnerProps) trail.Node {
 			Style: style.S().Foreground(scheme.Color.Text.Purple).Bold(true),
 		}, trail.Text(frameGlyph+" ")),
 		trail.Span(trail.SpanProps{
-			Style: style.S().Foreground(scheme.Color.Text.Tertiary),
+			Style: style.S().Foreground(scheme.Color.Text.Secondary),
 		}, trail.Text(text)),
 	)
 })

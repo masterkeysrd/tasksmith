@@ -58,6 +58,24 @@ func TestHintSegment(t *testing.T) {
 	if strings.Contains(out, "custom picker hint") {
 		t.Fatalf("custom hint should be overridden by CtrlCHint, got:\n%s", out)
 	}
+
+	// 4. When a slot is active, HintSegment is hidden (nil) unless CtrlCPending is true
+	store.SetCtrlCPending(false)
+	store.ClearSlot()
+	store.EnqueueSlot(store.SlotItem{ID: "test-slot", Kind: store.SlotKindPicker})
+	defer store.ClearSlot()
+
+	out = renderNode(t, HintSegment(SegmentProps{}))
+	if strings.Contains(out, "custom picker hint") || strings.Contains(out, store.DefaultHint) {
+		t.Fatalf("expected HintSegment to be hidden when slot is active, got:\n%s", out)
+	}
+
+	// 5. CtrlCPending overrides active slot hiding
+	store.SetCtrlCPending(true)
+	out = renderNode(t, HintSegment(SegmentProps{}))
+	if !strings.Contains(out, store.CtrlCHint) {
+		t.Fatalf("expected CtrlCHint %q when CtrlCPending is true even with active slot, got:\n%s", store.CtrlCHint, out)
+	}
 }
 
 func TestModeSegment(t *testing.T) {

@@ -3,6 +3,7 @@ package components
 import (
 	"github.com/masterkeysrd/kite/extras/trail"
 	"github.com/masterkeysrd/kite/style"
+	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/repl2/store"
 	uicomponents "github.com/masterkeysrd/tasksmith/internal/ui/components"
 )
@@ -20,8 +21,14 @@ var Slot = trail.SimpleFC("Slot", func() trail.Node {
 	var child trail.Node
 	switch active.Kind {
 	case store.SlotKindPermission:
-		// Placeholder until Permission component is added.
-		child = nil
+		if p, ok := active.Data.(PermissionPromptProps); ok {
+			child = PermissionPrompt(p)
+		} else if req, ok := active.Data.(api.PermissionRequest); ok {
+			child = PermissionPrompt(PermissionPromptProps{
+				Request:    req,
+				OnDecision: store.DecidePermission,
+			})
+		}
 	case store.SlotKindQuestion:
 		// Placeholder until Question component is added.
 		child = nil

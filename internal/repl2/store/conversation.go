@@ -155,12 +155,23 @@ func newConversationAccumulator() *conversationAccumulator {
 	}
 }
 
+func permSlotID(reqID string) string {
+	return "perm-" + reqID
+}
+
+func (acc *conversationAccumulator) clearPermissionsLocked() {
+	for _, req := range acc.permissions {
+		RemoveSlot(permSlotID(req.ID))
+	}
+	acc.permissions = nil
+}
+
 func (acc *conversationAccumulator) reset() {
 	acc.mu.Lock()
 	defer acc.mu.Unlock()
 	acc.sessionID = ""
 	acc.messages = nil
-	acc.permissions = nil
+	acc.clearPermissionsLocked()
 	acc.status = StreamIdle
 	acc.err = nil
 	acc.draft = -1
@@ -176,7 +187,7 @@ func (acc *conversationAccumulator) setSessionID(id string) {
 	if acc.sessionID != id {
 		acc.sessionID = id
 		acc.messages = nil
-		acc.permissions = nil
+		acc.clearPermissionsLocked()
 		acc.status = StreamIdle
 		acc.err = nil
 		acc.draft = -1
@@ -240,7 +251,7 @@ func (acc *conversationAccumulator) cancelTurn() {
 	acc.status = StreamIdle
 	acc.err = nil
 	acc.pendingUser = nil
-	acc.permissions = nil
+	acc.clearPermissionsLocked()
 	acc.discardDraftLocked()
 	acc.publishLocked()
 }
@@ -272,10 +283,24 @@ func (acc *conversationAccumulator) applyEvent(event api.Event) {
 				acc.status = StreamIdle
 				acc.err = nil
 				acc.pendingUser = nil
-				acc.permissions = nil
+				acc.clearPermissionsLocked()
 				acc.discardDraftLocked()
 				acc.publishLocked()
 				AppendTimelineEntry(p.Entry)
+				return
+			}
+			if p.Entry.Kind == api.TimelineKindPermission {
+				if p.Entry.Permission != nil {
+					reqID := p.Entry.Permission.Request.ID
+					acc.permissions = slices.DeleteFunc(acc.permissions, func(r api.PermissionRequest) bool {
+						return r.ID == reqID
+					})
+					RemoveSlot(permSlotID(reqID))
+					if len(acc.permissions) == 0 && acc.status == StreamWaitingPermission {
+						acc.status = StreamRunning
+					}
+					acc.publishLocked()
+				}
 				return
 			}
 
@@ -361,7 +386,7 @@ func (acc *conversationAccumulator) applyEvent(event api.Event) {
 		}
 		acc.status, acc.err = StreamCompleted, nil
 		acc.discardDraftLocked()
-		acc.permissions = nil
+		acc.clearPermissionsLocked()
 		acc.publishLocked()
 
 	case api.EventError:
@@ -394,10 +419,20 @@ func (acc *conversationAccumulator) loadTimeline(entries []api.TimelineEntry) {
 				acc.status = StreamIdle
 				acc.err = nil
 				acc.pendingUser = nil
-				acc.permissions = nil
+				acc.clearPermissionsLocked()
 				acc.discardDraftLocked()
 				acc.publishLocked()
 				AppendTimelineEntry(entry)
+				continue
+			}
+			if entry.Kind == api.TimelineKindPermission {
+				if entry.Permission != nil {
+					reqID := entry.Permission.Request.ID
+					acc.permissions = slices.DeleteFunc(acc.permissions, func(r api.PermissionRequest) bool {
+						return r.ID == reqID
+					})
+					RemoveSlot(permSlotID(reqID))
+				}
 				continue
 			}
 
@@ -426,6 +461,29 @@ func (acc *conversationAccumulator) loadTimeline(entries []api.TimelineEntry) {
 			}
 			_ = acc.addMessageLocked(*entry.Message)
 		}
+	}
+	acc.publishLocked()
+}
+
+// SeedPermissions imports pending permission requests (e.g. from session state) into the active turn.
+func (acc *conversationAccumulator) SeedPermissions(requests []api.PermissionRequest) {
+	acc.mu.Lock()
+	defer acc.mu.Unlock()
+	_ = acc.addPermissionsLocked(requests)
+	if len(acc.permissions) > 0 {
+		acc.status, acc.err = StreamWaitingPermission, nil
+	}
+	acc.publishLocked()
+}
+
+func (acc *conversationAccumulator) removePermission(reqID string) {
+	acc.mu.Lock()
+	defer acc.mu.Unlock()
+	acc.permissions = slices.DeleteFunc(acc.permissions, func(r api.PermissionRequest) bool {
+		return r.ID == reqID
+	})
+	if len(acc.permissions) == 0 && acc.status == StreamWaitingPermission {
+		acc.status = StreamRunning
 	}
 	acc.publishLocked()
 }
@@ -463,6 +521,11 @@ func (acc *conversationAccumulator) addMessageLocked(message api.Message) error 
 		})
 	}
 	if message.Role == api.RoleTool {
+		for _, req := range acc.permissions {
+			if req.ToolCallID == message.ToolCallID {
+				RemoveSlot(permSlotID(req.ID))
+			}
+		}
 		acc.permissions = slices.DeleteFunc(acc.permissions, func(request api.PermissionRequest) bool {
 			return request.ToolCallID == message.ToolCallID
 		})
@@ -518,6 +581,11 @@ func (acc *conversationAccumulator) addPermissionsLocked(requests []api.Permissi
 		} else {
 			acc.permissions = append(acc.permissions, request)
 		}
+		EnqueueSlot(SlotItem{
+			ID:   permSlotID(request.ID),
+			Kind: SlotKindPermission,
+			Data: request,
+		})
 	}
 	return nil
 }

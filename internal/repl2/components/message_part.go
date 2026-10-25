@@ -72,8 +72,8 @@ var MessageThought = trail.FC("MessageThought", func(props MessageThoughtProps) 
 		MinWidth(style.Cells(0)).
 		Overflow(style.OverflowHidden).
 		Italic(true)
-	if scheme != nil {
-		rowStyle = rowStyle.Foreground(scheme.Color.Text.Tertiary)
+	if scheme != nil && scheme.Color.Text.Secondary != nil {
+		rowStyle = rowStyle.Foreground(scheme.Color.Text.Secondary)
 	}
 	labelStyle := style.S().WhiteSpace(style.WhiteSpaceNoWrap).Flex(0, 0)
 	detailsStyle := style.S().

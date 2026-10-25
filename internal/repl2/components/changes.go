@@ -94,8 +94,8 @@ var ChangesList = trail.FC("ChangesList", func(props ChangesListProps) trail.Nod
 	addStyle := style.S()
 
 	if scheme != nil {
-		if scheme.Color.Text.Tertiary != nil {
-			idStyle = idStyle.Foreground(scheme.Color.Text.Tertiary)
+		if scheme.Color.Text.Secondary != nil {
+			idStyle = idStyle.Foreground(scheme.Color.Text.Secondary)
 		}
 		if scheme.Color.Text.Purple != nil {
 			kindStyle = kindStyle.Foreground(scheme.Color.Text.Purple)

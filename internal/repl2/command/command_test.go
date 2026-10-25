@@ -1,16 +1,18 @@
 package command
 
 import (
+	"context"
 	"testing"
 
 	"github.com/masterkeysrd/tasksmith/api"
+	"github.com/masterkeysrd/tasksmith/client"
 	"github.com/masterkeysrd/tasksmith/internal/repl2/store"
 )
 
 func TestRegistryBuiltinsAndLookup(t *testing.T) {
 	r := NewRegistry()
 
-	cmds := []string{"help", "mode", "model", "agent", "effort", "theme", "new", "sessions", "changes", "diff", "revert", "clear", "exit"}
+	cmds := []string{"help", "mode", "model", "agent", "effort", "theme", "new", "sessions", "changes", "diff", "revert", "clear", "exit", "permissions"}
 	for _, name := range cmds {
 		cmd, ok := r.Lookup(name)
 		if !ok {
@@ -29,6 +31,8 @@ func TestRegistryBuiltinsAndLookup(t *testing.T) {
 		"ls":      "sessions",
 		"quit":    "exit",
 		"q":       "exit",
+		"perm":    "permissions",
+		"perms":   "permissions",
 	}
 	for alias, expectedName := range aliases {
 		cmd, ok := r.Lookup(alias)
@@ -130,6 +134,45 @@ func TestCommandExecute(t *testing.T) {
 		}
 		if store.GetSlot().Active == nil {
 			t.Fatalf("expected slot to be enqueued for /help")
+		}
+	})
+
+	t.Run("permissions", func(t *testing.T) {
+		store.ClearSlot()
+		defer store.ClearSlot()
+		defer store.ResetSession()
+
+		if err := r.Execute("/permissions"); err != nil {
+			t.Fatalf("Execute /permissions without client: %v", err)
+		}
+		if store.GetSlot().Active != nil {
+			t.Errorf("expected no active slot when client is nil")
+		}
+
+		cli, _ := client.New("/tmp/dummy.sock")
+		store.InitSession(context.Background(), cli, store.InitSessionOptions{})
+
+		if err := r.Execute("/permissions"); err != nil {
+			t.Fatalf("Execute /permissions: %v", err)
+		}
+		if store.GetSlot().Active == nil || store.GetSlot().Active.Kind != store.SlotKindPicker {
+			t.Fatalf("expected SlotKindPicker active slot after /permissions, got %+v", store.GetSlot().Active)
+		}
+		store.ClearSlot()
+
+		if err := r.Execute("/perm"); err != nil {
+			t.Fatalf("Execute /perm: %v", err)
+		}
+		if store.GetSlot().Active == nil || store.GetSlot().Active.Kind != store.SlotKindPicker {
+			t.Fatalf("expected SlotKindPicker active slot after /perm, got %+v", store.GetSlot().Active)
+		}
+		store.ClearSlot()
+
+		if err := r.Execute("/perms"); err != nil {
+			t.Fatalf("Execute /perms: %v", err)
+		}
+		if store.GetSlot().Active == nil || store.GetSlot().Active.Kind != store.SlotKindPicker {
+			t.Fatalf("expected SlotKindPicker active slot after /perms, got %+v", store.GetSlot().Active)
 		}
 	})
 

@@ -106,3 +106,75 @@ func TestActiveStreamStreamingAndHint(t *testing.T) {
 		t.Fatalf("expected DefaultHint restored after streaming reset, got %q", store.GetApp().Hint)
 	}
 }
+
+func TestActiveStreamWaitingPermissionHidesSpinner(t *testing.T) {
+	store.ResetApp()
+	store.ResetStream()
+	defer store.ResetApp()
+	defer store.ResetStream()
+
+	b := mock.New(80, 24)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	go func() {
+		_ = trail.Run(ctx, ActiveStream(), trail.WithBackend(b))
+	}()
+
+	// Trigger streaming prompt via chunk event
+	store.ApplyEvent(api.Event{
+		Type: api.EventChunk,
+		Payload: api.ChunkEvent{
+			Chunk: api.Chunk{
+				ID: "asst-1",
+				Content: []api.Block{
+					{Type: api.BlockText, Text: "Checking permissions..."},
+				},
+			},
+		},
+	})
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		txt := surfaceText(b)
+		if strings.Contains(txt, "Thinking...") {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	txt := surfaceText(b)
+	if !strings.Contains(txt, "Thinking...") {
+		t.Fatalf("expected Thinking... while streaming, got %q", txt)
+	}
+
+	// Trigger EventPermissionRequested -> WaitingPermission becomes true
+	store.ApplyEvent(api.Event{
+		Type: api.EventPermissionRequested,
+		Payload: api.PermissionRequestedEvent{
+			Permissions: []api.PermissionRequest{
+				{
+					ID:         "req-1",
+					ToolCallID: "tc-1",
+					ToolName:   "bash",
+					Action:     api.ActionExec,
+				},
+			},
+		},
+	})
+
+	for time.Now().Before(deadline) {
+		txt = surfaceText(b)
+		if !strings.Contains(txt, "Thinking...") {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	txt = surfaceText(b)
+	if strings.Contains(txt, "Thinking...") {
+		t.Fatalf("expected Thinking... spinner to be hidden when WaitingPermission is true, got %q", txt)
+	}
+	if !strings.Contains(txt, "Checking permissions...") {
+		t.Fatalf("expected message to remain rendered, got %q", txt)
+	}
+}

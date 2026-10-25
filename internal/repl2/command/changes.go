@@ -132,7 +132,6 @@ type changeDiffProps struct {
 
 var changeDiffViewer = trail.FC("ChangeDiffViewer", func(props changeDiffProps) trail.Node {
 	c := store.Client()
-	store.UseHint("esc to return to changes")
 
 	diffQuery := wind.Use("diff:"+props.sessionID+":"+props.change.ID, promise.WrapWithProps(func(ctx context.Context, _ string) (string, error) {
 		if c == nil {
@@ -169,6 +168,11 @@ var changeDiffViewer = trail.FC("ChangeDiffViewer", func(props changeDiffProps) 
 			Style: style.S().Bold(true).Margin(0, 0, 1, 0),
 		}, trail.Text(fmt.Sprintf("Diff for %s (%s):", props.change.Path, props.change.Kind))),
 		content,
+		components.KeyboardHint(components.KeyboardHintProps{
+			Bindings: []components.KeyBinding{
+				{Key: "esc", Label: "Return to changes"},
+			},
+		}),
 	)
 })
 
@@ -279,7 +283,12 @@ var ChangesBrowser = trail.FC("ChangesBrowser", func(slotID string) trail.Node {
 		{Width: 16, Align: style.TextAlignRight},
 	}
 	pickerProps.Filterable = true
-	pickerProps.Footer = "↑/↓ to select • enter to view diff • f4/r to revert • esc to cancel"
+	pickerProps.Bindings = []components.KeyBinding{
+		{Key: "↑/↓", Label: "Select"},
+		{Key: "enter", Label: "View diff"},
+		{Key: "f4/r", Label: "Revert"},
+		{Key: "esc", Label: "Cancel"},
+	}
 	pickerProps.OnCancel = func() {
 		store.RemoveSlot(slotID)
 		store.AppendCommandOutput("/changes", "Exited /changes command")

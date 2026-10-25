@@ -10,13 +10,16 @@ import (
 	"github.com/masterkeysrd/kite/extras/kitex"
 	"github.com/masterkeysrd/kite/extras/trail"
 	"github.com/masterkeysrd/kite/style"
-	"github.com/masterkeysrd/tasksmith/internal/repl2/store"
 	uicomponents "github.com/masterkeysrd/tasksmith/internal/ui/components"
 	"github.com/masterkeysrd/tasksmith/internal/ui/theme"
 )
 
-// DefaultPickerFooter is the default navigation hint displayed on the status line for a picker.
-const DefaultPickerFooter = "↑/↓ or j/k to select • enter to confirm • esc to cancel"
+// DefaultPickerBindings defines the default keyboard shortcuts displayed on the picker.
+var DefaultPickerBindings = []KeyBinding{
+	{Key: "↑/↓", Label: "Navigate"},
+	{Key: "enter", Label: "Confirm"},
+	{Key: "esc", Label: "Cancel"},
+}
 
 // ConfirmAction defines an inline confirmation prompt triggered by a custom key.
 type ConfirmAction struct {
@@ -53,7 +56,7 @@ type PickerProps struct {
 	Options        []uicomponents.Option
 	MaxVisible     int                   // Max visible options before scrolling (defaults to uicomponents.DefaultPickerMaxVisible)
 	Columns        []uicomponents.Column // Column specifications forwarded to OptionList
-	Footer         string                // Optional navigation hint published to store.UseHint
+	Bindings       []KeyBinding          // Optional navigation shortcuts rendered inline via KeyboardHint
 	Filterable     bool
 	OnOpen         func()
 	OnSelect       func(opt uicomponents.Option)
@@ -63,12 +66,12 @@ type PickerProps struct {
 	OnCancel       func()
 }
 
-// NewPicker constructs an initialized PickerProps with default footer and cursor at current.
+// NewPicker constructs an initialized PickerProps with default bindings and cursor at current.
 func NewPicker(title string, opts []uicomponents.Option, onSelect func(opt uicomponents.Option)) PickerProps {
 	return PickerProps{
 		Title:    title,
 		Options:  opts,
-		Footer:   DefaultPickerFooter,
+		Bindings: DefaultPickerBindings,
 		OnSelect: onSelect,
 	}
 }
@@ -252,19 +255,6 @@ var Picker = trail.FC("Picker", func(props PickerProps) trail.Node {
 		}
 	})
 
-	// Footer navigation hint sent to global status bar
-	footerHint := props.Footer
-	if footerHint == "" {
-		footerHint = DefaultPickerFooter
-	}
-	switch st.mode {
-	case pickerModeConfirm:
-		footerHint = "y/enter to confirm • n/esc to cancel"
-	case pickerModeInput:
-		footerHint = "enter to submit • esc to cancel"
-	}
-	store.UseHint(footerHint)
-
 	var rows []trail.Node
 
 	// Title
@@ -335,8 +325,8 @@ var Picker = trail.FC("Picker", func(props PickerProps) trail.Node {
 		if scheme.Color.Icon.Primary != nil {
 			optionStyles.Selected = optionStyles.Selected.Foreground(scheme.Color.Icon.Primary)
 		}
-		if scheme.Color.Text.Tertiary != nil {
-			optionStyles.Description = optionStyles.Description.Foreground(scheme.Color.Text.Tertiary)
+		if scheme.Color.Text.Secondary != nil {
+			optionStyles.Description = optionStyles.Description.Foreground(scheme.Color.Text.Secondary)
 		}
 	}
 
@@ -361,8 +351,8 @@ var Picker = trail.FC("Picker", func(props PickerProps) trail.Node {
 			warnStyle = warnStyle.Foreground(scheme.Color.Text.Purple)
 		}
 		hintStyle := style.S()
-		if scheme != nil && scheme.Color.Text.Tertiary != nil {
-			hintStyle = hintStyle.Foreground(scheme.Color.Text.Tertiary)
+		if scheme != nil && scheme.Color.Text.Secondary != nil {
+			hintStyle = hintStyle.Foreground(scheme.Color.Text.Secondary)
 		}
 		rows = append(rows, trail.Newline(1), trail.Box(trail.BoxProps{
 			Style: style.S().FlexDirection(style.FlexRow),
@@ -423,6 +413,29 @@ var Picker = trail.FC("Picker", func(props PickerProps) trail.Node {
 			}),
 		))
 	}
+
+	var activeBindings []KeyBinding
+	switch st.mode {
+	case pickerModeConfirm:
+		activeBindings = []KeyBinding{
+			{Key: "y/enter", Label: "Confirm"},
+			{Key: "n/esc", Label: "Cancel"},
+		}
+	case pickerModeInput:
+		activeBindings = []KeyBinding{
+			{Key: "enter", Label: "Submit"},
+			{Key: "esc", Label: "Cancel"},
+		}
+	default:
+		activeBindings = props.Bindings
+		if len(activeBindings) == 0 {
+			activeBindings = DefaultPickerBindings
+		}
+	}
+
+	rows = append(rows, KeyboardHint(KeyboardHintProps{
+		Bindings: activeBindings,
+	}))
 
 	border := style.SingleBorder().Top(true).Bottom(false).Left(false).Right(false)
 	if scheme != nil && scheme.Color.Border.Primary != nil {

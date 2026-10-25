@@ -12,8 +12,8 @@ import (
 var Notice = trail.FC("Notice", func(props store.NoticeData) trail.Node {
 	scheme := theme.UseTheme()
 	s := style.S().FlexDirection(style.FlexRow).MarginBottom(1)
-	if scheme != nil {
-		s = s.Foreground(scheme.Color.Text.Tertiary)
+	if scheme != nil && scheme.Color.Text.Secondary != nil {
+		s = s.Foreground(scheme.Color.Text.Secondary)
 	}
 	return trail.Box(trail.BoxProps{Style: s},
 		trail.Span(trail.SpanProps{}, trail.Text(props.Text)),
@@ -84,6 +84,8 @@ var TimelineEvent = trail.FC("TimelineEvent", func(entry api.TimelineEntry) trai
 		if entry.Agent != nil {
 			text = "Agent set to " + entry.Agent.To
 		}
+	case api.TimelineKindPermission:
+		return nil
 	case api.TimelineKindInterrupted:
 		text = "Interrupted by user"
 	default:
