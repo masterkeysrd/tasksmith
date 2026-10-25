@@ -204,6 +204,9 @@ func (w *workspaceRouter) initRoutes() {
 		GetRoute("/v1/agents/{name}", w.getAgent),
 		GetRoute("/v1/models", w.getModelsList),
 		GetRoute("/v1/models/{id...}", w.getModel),
+		GetRoute("/v1/permissions", w.getPermissions),
+		PostRoute("/v1/permissions", w.postPermissionRule),
+		DeleteRoute("/v1/permissions", w.deletePermissionRule),
 	}
 }
 
@@ -252,6 +255,43 @@ func (w *workspaceRouter) getModel(rw http.ResponseWriter, r *http.Request) {
 		return
 	}
 	WriteJSON(rw, http.StatusOK, model)
+}
+
+func (w *workspaceRouter) getPermissions(rw http.ResponseWriter, r *http.Request) {
+	perms, err := w.b.GetPermissions(r.Context(), RequestWorkspace(r))
+	if err != nil {
+		WriteError(rw, err)
+		return
+	}
+	WriteJSON(rw, http.StatusOK, perms)
+}
+
+func (w *workspaceRouter) postPermissionRule(rw http.ResponseWriter, r *http.Request) {
+	req, err := DecodeJSON[api.PermissionRuleRequest](r)
+	if err != nil {
+		WriteError(rw, err)
+		return
+	}
+	perms, err := w.b.AddPermissionRule(r.Context(), RequestWorkspace(r), req)
+	if err != nil {
+		WriteError(rw, err)
+		return
+	}
+	WriteJSON(rw, http.StatusOK, perms)
+}
+
+func (w *workspaceRouter) deletePermissionRule(rw http.ResponseWriter, r *http.Request) {
+	req, err := DecodeJSON[api.PermissionRuleRequest](r)
+	if err != nil {
+		WriteError(rw, err)
+		return
+	}
+	perms, err := w.b.RemovePermissionRule(r.Context(), RequestWorkspace(r), req)
+	if err != nil {
+		WriteError(rw, err)
+		return
+	}
+	WriteJSON(rw, http.StatusOK, perms)
 }
 
 type sessionRouter struct {

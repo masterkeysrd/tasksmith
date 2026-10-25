@@ -13,6 +13,7 @@ import (
 	"github.com/masterkeysrd/loom/message"
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/broker"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/permissions"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/session"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/std"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/timeline"
@@ -269,6 +270,24 @@ func fromAPIPermissionDecision(dec api.PermissionDecision) tools.PermissionDecis
 		GrantPattern: dec.GrantPattern,
 		Scope:        string(dec.Scope),
 		Feedback:     dec.Feedback,
+	}
+}
+
+func toAPIPermissions(p permissions.Permissions) api.Permissions {
+	return api.Permissions{
+		Allow: slices.Clone(p.Allow),
+		Deny:  slices.Clone(p.Deny),
+	}
+}
+
+func fromAPIPermissionEffect(eff api.PermissionEffect) (permissions.Effect, error) {
+	switch eff {
+	case api.EffectAllow:
+		return permissions.EffectAllow, nil
+	case api.EffectDeny:
+		return permissions.EffectDeny, nil
+	default:
+		return "", fmt.Errorf("%w: invalid effect %q", permissions.ErrInvalidRule, eff)
 	}
 }
 

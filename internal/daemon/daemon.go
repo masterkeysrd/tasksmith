@@ -20,6 +20,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/broker"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/gateway"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/permissions"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/runtime"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/server"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/session"
@@ -454,6 +455,65 @@ func (d *Daemon) GetModel(ctx context.Context, rawWS, id string) (*api.Model, er
 
 	m := resolveAPIModel(rt.Workspace(), rawID)
 	return &m, nil
+}
+
+func (d *Daemon) GetPermissions(ctx context.Context, rawWS string) (*api.PermissionsResponse, error) {
+	rt, err := d.runtimes.Get(ctx, rawWS)
+	if err != nil {
+		return nil, err
+	}
+
+	proj, err := rt.Permissions().Get(permissions.ScopeProject)
+	if err != nil {
+		return nil, err
+	}
+	glob, err := rt.Permissions().Get(permissions.ScopeGlobal)
+	if err != nil {
+		return nil, err
+	}
+
+	return &api.PermissionsResponse{
+		Project: toAPIPermissions(proj),
+		Global:  toAPIPermissions(glob),
+	}, nil
+}
+
+func (d *Daemon) AddPermissionRule(ctx context.Context, rawWS string, req api.PermissionRuleRequest) (*api.PermissionsResponse, error) {
+	rt, err := d.runtimes.Get(ctx, rawWS)
+	if err != nil {
+		return nil, err
+	}
+
+	effect, err := fromAPIPermissionEffect(req.Effect)
+	if err != nil {
+		return nil, err
+	}
+
+	scope := permissions.Scope(strings.TrimSpace(string(req.Scope)))
+	if err := rt.Permissions().AddRule(scope, effect, req.Rule); err != nil {
+		return nil, err
+	}
+
+	return d.GetPermissions(ctx, rawWS)
+}
+
+func (d *Daemon) RemovePermissionRule(ctx context.Context, rawWS string, req api.PermissionRuleRequest) (*api.PermissionsResponse, error) {
+	rt, err := d.runtimes.Get(ctx, rawWS)
+	if err != nil {
+		return nil, err
+	}
+
+	effect, err := fromAPIPermissionEffect(req.Effect)
+	if err != nil {
+		return nil, err
+	}
+
+	scope := permissions.Scope(strings.TrimSpace(string(req.Scope)))
+	if err := rt.Permissions().RemoveRule(scope, effect, req.Rule); err != nil {
+		return nil, err
+	}
+
+	return d.GetPermissions(ctx, rawWS)
 }
 
 // SessionBackend implementation

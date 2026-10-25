@@ -9,6 +9,7 @@ import (
 
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/broker"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/permissions"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/session"
 )
 
@@ -122,6 +123,8 @@ func classifyError(err error) (int, string) {
 		errors.Is(err, session.ErrInvalidSessionID),
 		errors.Is(err, session.ErrNoPendingPermissions),
 		errors.Is(err, session.ErrNilMessage),
+		errors.Is(err, permissions.ErrInvalidRule),
+		errors.Is(err, permissions.ErrInvalidScope),
 		errors.Is(err, broker.ErrInvalidTopic),
 		errors.Is(err, broker.ErrTooManyTopics),
 		errors.Is(err, broker.ErrNotRegistered),

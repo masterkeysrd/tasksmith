@@ -27,6 +27,9 @@ type WorkspaceBackend interface {
 	GetAgent(ctx context.Context, workspace, name string) (*api.Agent, error)
 	ListModels(ctx context.Context, workspace string) ([]api.Model, error)
 	GetModel(ctx context.Context, workspace, id string) (*api.Model, error)
+	GetPermissions(ctx context.Context, workspace string) (*api.PermissionsResponse, error)
+	AddPermissionRule(ctx context.Context, workspace string, req api.PermissionRuleRequest) (*api.PermissionsResponse, error)
+	RemovePermissionRule(ctx context.Context, workspace string, req api.PermissionRuleRequest) (*api.PermissionsResponse, error)
 }
 
 type SessionBackend interface {

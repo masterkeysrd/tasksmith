@@ -218,6 +218,33 @@ const (
 	ScopeGlobal  PermissionScope = "global"
 )
 
+// PermissionEffect defines whether a permission rule allows or denies matching tool calls.
+type PermissionEffect string
+
+const (
+	EffectAllow PermissionEffect = "allow"
+	EffectDeny  PermissionEffect = "deny"
+)
+
+// Permissions holds allow and deny rules for a single scope.
+type Permissions struct {
+	Allow []string `json:"allow,omitempty"`
+	Deny  []string `json:"deny,omitempty"`
+}
+
+// PermissionsResponse returns the configured project and global permissions.
+type PermissionsResponse struct {
+	Project Permissions `json:"project"`
+	Global  Permissions `json:"global"`
+}
+
+// PermissionRuleRequest specifies a rule mutation on project or global permissions.
+type PermissionRuleRequest struct {
+	Scope  PermissionScope  `json:"scope"`
+	Effect PermissionEffect `json:"effect"`
+	Rule   string           `json:"rule"`
+}
+
 // DecisionKind represents a user's approval or rejection choice for a permission request.
 type DecisionKind string
 

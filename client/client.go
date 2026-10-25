@@ -218,6 +218,42 @@ func (c *Client) GetModel(ctx context.Context, id string) (*api.Model, error) {
 	return &out, nil
 }
 
+// Permissions retrieves configured project and global permission rules.
+func (c *Client) Permissions(ctx context.Context) (*api.PermissionsResponse, error) {
+	if err := c.requireCWD(); err != nil {
+		return nil, err
+	}
+	var out api.PermissionsResponse
+	if err := c.doJSON(ctx, http.MethodGet, "/v1/permissions", nil, nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// AddPermissionRule appends an allow or deny rule to project or global permissions.
+func (c *Client) AddPermissionRule(ctx context.Context, req api.PermissionRuleRequest) (*api.PermissionsResponse, error) {
+	if err := c.requireCWD(); err != nil {
+		return nil, err
+	}
+	var out api.PermissionsResponse
+	if err := c.doJSON(ctx, http.MethodPost, "/v1/permissions", nil, req, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// RemovePermissionRule deletes a rule from project or global permissions.
+func (c *Client) RemovePermissionRule(ctx context.Context, req api.PermissionRuleRequest) (*api.PermissionsResponse, error) {
+	if err := c.requireCWD(); err != nil {
+		return nil, err
+	}
+	var out api.PermissionsResponse
+	if err := c.doJSON(ctx, http.MethodDelete, "/v1/permissions", nil, req, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 // CreateSession creates a new session in workspace.
 func (c *Client) CreateSession(ctx context.Context, req api.CreateSessionRequest) (*api.Session, error) {
 	if err := c.requireCWD(); err != nil {

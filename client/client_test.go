@@ -69,6 +69,15 @@ func TestNewAndValidation(t *testing.T) {
 	if _, err := emptyCWDClient.GetModel(ctx, "m1"); !errors.Is(err, ErrEmptyWorkspace) {
 		t.Errorf("GetModel empty CWD error = %v, want %v", err, ErrEmptyWorkspace)
 	}
+	if _, err := emptyCWDClient.Permissions(ctx); !errors.Is(err, ErrEmptyWorkspace) {
+		t.Errorf("Permissions empty CWD error = %v, want %v", err, ErrEmptyWorkspace)
+	}
+	if _, err := emptyCWDClient.AddPermissionRule(ctx, api.PermissionRuleRequest{}); !errors.Is(err, ErrEmptyWorkspace) {
+		t.Errorf("AddPermissionRule empty CWD error = %v, want %v", err, ErrEmptyWorkspace)
+	}
+	if _, err := emptyCWDClient.RemovePermissionRule(ctx, api.PermissionRuleRequest{}); !errors.Is(err, ErrEmptyWorkspace) {
+		t.Errorf("RemovePermissionRule empty CWD error = %v, want %v", err, ErrEmptyWorkspace)
+	}
 	if _, err := emptyCWDClient.CreateSession(ctx, api.CreateSessionRequest{}); !errors.Is(err, ErrEmptyWorkspace) {
 		t.Errorf("CreateSession empty CWD error = %v, want %v", err, ErrEmptyWorkspace)
 	}
@@ -194,6 +203,39 @@ func TestClientAllMethodsOverUnixSocket(t *testing.T) {
 			return
 		}
 		_ = json.NewEncoder(w).Encode(api.Model{ID: id, Name: id, Label: "Test Model"})
+	})
+
+	mux.HandleFunc("GET /v1/permissions", func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get(api.HeaderCWD) != "/ws" {
+			http.Error(w, "bad header", http.StatusBadRequest)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(api.PermissionsResponse{
+			Project: api.Permissions{Allow: []string{"bash(go *)"}},
+			Global:  api.Permissions{Deny: []string{"bash(rm *)"}},
+		})
+	})
+	mux.HandleFunc("POST /v1/permissions", func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get(api.HeaderCWD) != "/ws" {
+			http.Error(w, "bad header", http.StatusBadRequest)
+			return
+		}
+		var req api.PermissionRuleRequest
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		_ = json.NewEncoder(w).Encode(api.PermissionsResponse{
+			Project: api.Permissions{Allow: []string{req.Rule}},
+		})
+	})
+	mux.HandleFunc("DELETE /v1/permissions", func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get(api.HeaderCWD) != "/ws" {
+			http.Error(w, "bad header", http.StatusBadRequest)
+			return
+		}
+		var req api.PermissionRuleRequest
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		_ = json.NewEncoder(w).Encode(api.PermissionsResponse{
+			Project: api.Permissions{},
+		})
 	})
 
 	mux.HandleFunc("POST /v1/sessions", func(w http.ResponseWriter, r *http.Request) {
@@ -342,6 +384,29 @@ func TestClientAllMethodsOverUnixSocket(t *testing.T) {
 	mdlBare, err := c.GetModel(ctx, "qwen3.8")
 	if err != nil || mdlBare.ID != "qwen3.8" {
 		t.Errorf("GetModel bare = (%+v, %v)", mdlBare, err)
+	}
+
+	perms, err := c.Permissions(ctx)
+	if err != nil || len(perms.Project.Allow) != 1 || perms.Project.Allow[0] != "bash(go *)" {
+		t.Errorf("Permissions = (%+v, %v)", perms, err)
+	}
+
+	addResp, err := c.AddPermissionRule(ctx, api.PermissionRuleRequest{
+		Scope:  api.ScopeProject,
+		Effect: api.EffectAllow,
+		Rule:   "bash(git *)",
+	})
+	if err != nil || len(addResp.Project.Allow) != 1 || addResp.Project.Allow[0] != "bash(git *)" {
+		t.Errorf("AddPermissionRule = (%+v, %v)", addResp, err)
+	}
+
+	delResp, err := c.RemovePermissionRule(ctx, api.PermissionRuleRequest{
+		Scope:  api.ScopeProject,
+		Effect: api.EffectAllow,
+		Rule:   "bash(git *)",
+	})
+	if err != nil || len(delResp.Project.Allow) != 0 {
+		t.Errorf("RemovePermissionRule = (%+v, %v)", delResp, err)
 	}
 
 	if s, err := c.CreateSession(ctx, api.CreateSessionRequest{Title: "Test"}); err != nil || s.ID != "s1" {

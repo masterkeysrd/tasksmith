@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -1198,6 +1199,97 @@ func TestWorkspaceAgentsModelsEndpoints(t *testing.T) {
 	}
 	if m2.ID != "ollama/qwen3.8" || m2.Provider != "ollama" || m2.Name != "qwen3.8" {
 		t.Errorf("m2 = %+v, want qualified model", m2)
+	}
+}
+
+func TestWorkspacePermissionsEndpoints(t *testing.T) {
+	ctx := context.Background()
+	_, cli, _ := setupDaemonTest(t, nil)
+
+	// 1. Initial Permissions (empty)
+	perms, err := cli.Permissions(ctx)
+	if err != nil {
+		t.Fatalf("Permissions: %v", err)
+	}
+	if len(perms.Project.Allow) != 0 || len(perms.Global.Allow) != 0 {
+		t.Fatalf("expected empty initial permissions, got %+v", perms)
+	}
+
+	// 2. Add Project Allow Rule
+	addResp, err := cli.AddPermissionRule(ctx, api.PermissionRuleRequest{
+		Scope:  api.ScopeProject,
+		Effect: api.EffectAllow,
+		Rule:   "bash(go *)",
+	})
+	if err != nil {
+		t.Fatalf("AddPermissionRule (project allow): %v", err)
+	}
+	if !slices.Contains(addResp.Project.Allow, "bash(go *)") {
+		t.Fatalf("expected bash(go *) in project allow, got %v", addResp.Project.Allow)
+	}
+
+	// 3. Add Global Deny Rule
+	addGlobResp, err := cli.AddPermissionRule(ctx, api.PermissionRuleRequest{
+		Scope:  api.ScopeGlobal,
+		Effect: api.EffectDeny,
+		Rule:   "bash(rm *)",
+	})
+	if err != nil {
+		t.Fatalf("AddPermissionRule (global deny): %v", err)
+	}
+	if !slices.Contains(addGlobResp.Global.Deny, "bash(rm *)") {
+		t.Fatalf("expected bash(rm *) in global deny, got %v", addGlobResp.Global.Deny)
+	}
+
+	// 4. Verify Permissions endpoint reflects both
+	pResp, err := cli.Permissions(ctx)
+	if err != nil {
+		t.Fatalf("Permissions after add: %v", err)
+	}
+	if !slices.Contains(pResp.Project.Allow, "bash(go *)") {
+		t.Errorf("expected bash(go *) in project allow, got %v", pResp.Project.Allow)
+	}
+	if !slices.Contains(pResp.Global.Deny, "bash(rm *)") {
+		t.Errorf("expected bash(rm *) in global deny, got %v", pResp.Global.Deny)
+	}
+
+	// 5. Remove Project Rule
+	delResp, err := cli.RemovePermissionRule(ctx, api.PermissionRuleRequest{
+		Scope:  api.ScopeProject,
+		Effect: api.EffectAllow,
+		Rule:   "bash(go *)",
+	})
+	if err != nil {
+		t.Fatalf("RemovePermissionRule: %v", err)
+	}
+	if slices.Contains(delResp.Project.Allow, "bash(go *)") {
+		t.Errorf("expected bash(go *) removed from project allow, got %v", delResp.Project.Allow)
+	}
+
+	// 6. Validation errors (invalid rule, invalid scope, invalid effect)
+	var apiErr *api.APIError
+	if _, err := cli.AddPermissionRule(ctx, api.PermissionRuleRequest{
+		Scope:  api.ScopeProject,
+		Effect: api.EffectAllow,
+		Rule:   "invalid-rule-format",
+	}); !errors.As(err, &apiErr) || apiErr.StatusCode != http.StatusBadRequest {
+		t.Errorf("expected 400 Bad Request for invalid rule format, got %v", err)
+	}
+
+	if _, err := cli.AddPermissionRule(ctx, api.PermissionRuleRequest{
+		Scope:  "unknown-scope",
+		Effect: api.EffectAllow,
+		Rule:   "bash(*)",
+	}); !errors.As(err, &apiErr) || apiErr.StatusCode != http.StatusBadRequest {
+		t.Errorf("expected 400 Bad Request for invalid scope, got %v", err)
+	}
+
+	if _, err := cli.AddPermissionRule(ctx, api.PermissionRuleRequest{
+		Scope:  api.ScopeProject,
+		Effect: "unknown-effect",
+		Rule:   "bash(*)",
+	}); !errors.As(err, &apiErr) || apiErr.StatusCode != http.StatusBadRequest {
+		t.Errorf("expected 400 Bad Request for invalid effect, got %v", err)
 	}
 }
 

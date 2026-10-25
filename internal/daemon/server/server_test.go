@@ -39,6 +39,8 @@ type mockBackend struct {
 	modelsErr         error
 	modelResp         *api.Model
 	modelErr          error
+	permsResp         *api.PermissionsResponse
+	permsErr          error
 	createSessResp    *api.Session
 	createSessCreated bool
 	createSessErr     error
@@ -120,6 +122,18 @@ func (m *mockBackend) ListModels(ctx context.Context, workspace string) ([]api.M
 
 func (m *mockBackend) GetModel(ctx context.Context, workspace, id string) (*api.Model, error) {
 	return m.modelResp, m.modelErr
+}
+
+func (m *mockBackend) GetPermissions(ctx context.Context, workspace string) (*api.PermissionsResponse, error) {
+	return m.permsResp, m.permsErr
+}
+
+func (m *mockBackend) AddPermissionRule(ctx context.Context, workspace string, req api.PermissionRuleRequest) (*api.PermissionsResponse, error) {
+	return m.permsResp, m.permsErr
+}
+
+func (m *mockBackend) RemovePermissionRule(ctx context.Context, workspace string, req api.PermissionRuleRequest) (*api.PermissionsResponse, error) {
+	return m.permsResp, m.permsErr
 }
 
 func (m *mockBackend) CreateSession(ctx context.Context, workspace string, req api.CreateSessionRequest) (*api.Session, bool, error) {
@@ -285,6 +299,34 @@ func TestWorkspaceRouterEndpoints(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("get model status = %d", rec.Code)
+	}
+
+	// Permissions
+	mock.permsResp = &api.PermissionsResponse{
+		Project: api.Permissions{Allow: []string{"bash(go *)"}},
+		Global:  api.Permissions{Deny: []string{"bash(rm *)"}},
+	}
+	req = httptest.NewRequest(http.MethodGet, "/v1/permissions", nil)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("get permissions status = %d", rec.Code)
+	}
+
+	// Add Permission Rule
+	req = httptest.NewRequest(http.MethodPost, "/v1/permissions", strings.NewReader(`{"scope":"project","effect":"allow","rule":"bash(ls *)"}`))
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("post permission rule status = %d", rec.Code)
+	}
+
+	// Remove Permission Rule
+	req = httptest.NewRequest(http.MethodDelete, "/v1/permissions", strings.NewReader(`{"scope":"project","effect":"allow","rule":"bash(ls *)"}`))
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("delete permission rule status = %d", rec.Code)
 	}
 }
 
