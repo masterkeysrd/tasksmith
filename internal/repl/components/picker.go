@@ -23,8 +23,9 @@ var DefaultPickerBindings = []KeyBinding{
 
 // ConfirmAction defines an inline confirmation prompt triggered by a custom key.
 type ConfirmAction struct {
-	Prompt    func(opt uicomponents.Option) string
-	OnConfirm func(opt uicomponents.Option)
+	Prompt         func(opt uicomponents.Option) string
+	DisabledReason func(opt uicomponents.Option) string
+	OnConfirm      func(opt uicomponents.Option)
 }
 
 // InputAction defines an inline text input prompt triggered by a custom key.
@@ -120,6 +121,7 @@ var Picker = trail.FC("Picker", func(props PickerProps) trail.Node {
 	cursor, setCursor := kitex.UseState(initialCursor(props.Options))
 	filter, setFilter := kitex.UseState("")
 	modal, setModal := kitex.UseState(pickerModalState{mode: pickerModeBrowse})
+	notice, setNotice := kitex.UseState("")
 
 	filterInputRef := kitex.UseRef[dom.Element](nil)
 	actionInputRef := kitex.UseRef[dom.Element](nil)
@@ -169,6 +171,9 @@ var Picker = trail.FC("Picker", func(props PickerProps) trail.Node {
 	}
 
 	handleBrowseKey := func(ke event.KeyEvent) bool {
+		if notice() != "" {
+			setNotice("")
+		}
 		switch {
 		case ke.MatchString("up", "k"):
 			if cur > 0 {
@@ -197,10 +202,20 @@ var Picker = trail.FC("Picker", func(props PickerProps) trail.Node {
 
 		for _, k := range slices.Sorted(maps.Keys(props.ConfirmActions)) {
 			if ke.MatchString(k) && len(filtered) > 0 {
+				ca := props.ConfirmActions[k]
+				if ca.DisabledReason != nil {
+					if reason := strings.TrimSpace(ca.DisabledReason(filtered[cur])); reason != "" {
+						setNotice(reason)
+						return true
+					}
+				}
+				if ca.Prompt != nil && strings.TrimSpace(ca.Prompt(filtered[cur])) == "" {
+					return true
+				}
 				setModal(pickerModalState{
 					mode:          pickerModeConfirm,
 					targetOpt:     filtered[cur],
-					activeConfirm: props.ConfirmActions[k],
+					activeConfirm: ca,
 				})
 				return true
 			}
@@ -431,6 +446,14 @@ var Picker = trail.FC("Picker", func(props PickerProps) trail.Node {
 		if len(activeBindings) == 0 {
 			activeBindings = DefaultPickerBindings
 		}
+	}
+
+	if n := notice(); n != "" {
+		noticeStyle := style.S().Margin(1, 0, 0, 0)
+		if scheme != nil && scheme.Color.Text.Secondary != nil {
+			noticeStyle = noticeStyle.Foreground(scheme.Color.Text.Secondary)
+		}
+		rows = append(rows, trail.Span(trail.SpanProps{Style: noticeStyle}, trail.Text("  "+n)))
 	}
 
 	rows = append(rows, KeyboardHint(KeyboardHintProps{

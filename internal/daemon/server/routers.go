@@ -324,6 +324,9 @@ func (s *sessionRouter) initRoutes() {
 		GetRoute("/v1/sessions/{id}/changes", s.getChanges),
 		GetRoute("/v1/sessions/{id}/diff", s.getDiff),
 		PostRoute("/v1/sessions/{id}/revert", s.postRevert),
+		GetRoute("/v1/sessions/{id}/tasks", s.getTasks),
+		PostRoute("/v1/sessions/{id}/tasks/{task_id}/kill", s.postKillTask),
+		GetRoute("/v1/sessions/{id}/tasks/{task_id}/output", s.getTaskOutput),
 	}
 }
 
@@ -455,4 +458,70 @@ func (s *sessionRouter) postRevert(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusOK)
+}
+
+func (s *sessionRouter) getTasks(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	list, err := s.b.Tasks(r.Context(), RequestWorkspace(r), id)
+	if err != nil {
+		WriteError(w, err)
+		return
+	}
+	if list == nil {
+		list = []api.Task{}
+	}
+	WriteJSON(w, http.StatusOK, api.TasksResponse{Tasks: list})
+}
+
+func (s *sessionRouter) postKillTask(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	taskID := r.PathValue("task_id")
+	if err := s.b.KillTask(r.Context(), RequestWorkspace(r), id, taskID); err != nil {
+		WriteError(w, err)
+		return
+	}
+	WriteJSON(w, http.StatusOK, map[string]string{"status": "killed"})
+}
+
+func (s *sessionRouter) getTaskOutput(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	taskID := r.PathValue("task_id")
+	ch, initial, cancel, err := s.b.StreamTaskOutput(r.Context(), RequestWorkspace(r), id, taskID)
+	if err != nil {
+		WriteError(w, err)
+		return
+	}
+	defer cancel()
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		WriteError(w, fmt.Errorf("streaming unsupported"))
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
+	w.WriteHeader(http.StatusOK)
+
+	if initial != "" {
+		_, _ = w.Write([]byte(initial))
+		flusher.Flush()
+	}
+
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case chunk, open := <-ch:
+			if !open {
+				return
+			}
+			if chunk != "" {
+				_, _ = w.Write([]byte(chunk))
+				flusher.Flush()
+			}
+		}
+	}
 }

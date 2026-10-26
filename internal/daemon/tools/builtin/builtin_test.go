@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/masterkeysrd/loom/message"
@@ -168,6 +169,7 @@ func TestFSAndWorkspaceResolution(t *testing.T) {
 		builtin.ToolGrep,
 		builtin.ToolLS,
 		builtin.ToolRemove,
+		builtin.ToolTasks,
 		builtin.ToolView,
 		builtin.ToolWebFetch,
 		builtin.ToolWrite,
@@ -968,5 +970,177 @@ func TestSessionOutputsAndOutsidePathOperations(t *testing.T) {
 	}
 	if !strings.Contains(viewOutsideOut.Content, "outside data") {
 		t.Fatalf("expected 'outside data' in view output, got %q", viewOutsideOut.Content)
+	}
+}
+
+func TestBashBackgroundAndTasksManagement(t *testing.T) {
+	ctx := context.Background()
+	_, container, _, _, _ := setupBuiltinEnv(t, false)
+
+	// 1. Launch a background bash command with run_in_background: true
+	bgCall := &message.ToolCall{
+		ID:   "call-bash-bg",
+		Name: builtin.ToolBash,
+		Args: map[string]any{
+			"command":           "echo 'server started' && read line && echo \"got: $line\"",
+			"run_in_background": true,
+		},
+	}
+
+	plan, err := container.Prepare(ctx, bgCall)
+	if err != nil {
+		t.Fatalf("Prepare(bash bg) failed: %v", err)
+	}
+	if plan.ToolName != builtin.ToolBash {
+		t.Fatalf("unexpected plan ToolName: %q", plan.ToolName)
+	}
+
+	res, err := container.Execute(ctx, bgCall)
+	if err != nil || res.IsError {
+		t.Fatalf("Execute(bash bg) failed: err=%v, res=%+v", err, res)
+	}
+
+	out, ok := res.StructuredContent.(api.BashOutput)
+	if !ok {
+		t.Fatalf("expected api.BashOutput, got %T", res.StructuredContent)
+	}
+	if out.TaskID == "" {
+		t.Fatal("expected non-empty TaskID for background bash command")
+	}
+	if out.Status != "running" {
+		t.Fatalf("expected status 'running', got %q", out.Status)
+	}
+	if !strings.Contains(out.Output, "<background_task") {
+		t.Fatalf("expected output to contain <background_task notice, got %q", out.Output)
+	}
+
+	taskID := out.TaskID
+
+	// 2. tasks list
+	listCall := &message.ToolCall{
+		ID:   "call-tasks-list",
+		Name: builtin.ToolTasks,
+		Args: map[string]any{
+			"action": "list",
+		},
+	}
+	listPlan, err := container.Prepare(ctx, listCall)
+	if err != nil {
+		t.Fatalf("Prepare(tasks list) failed: %v", err)
+	}
+	if !listPlan.ReadOnly || listPlan.Action != tools.ActionRead {
+		t.Fatalf("expected ReadOnly ActionRead for list, got %+v", listPlan)
+	}
+
+	listRes, err := container.Execute(ctx, listCall)
+	if err != nil || listRes.IsError {
+		t.Fatalf("Execute(tasks list) failed: err=%v, res=%+v", err, listRes)
+	}
+	listOut, ok := listRes.StructuredContent.(api.TasksOutput)
+	if !ok {
+		t.Fatalf("expected api.TasksOutput, got %T", listRes.StructuredContent)
+	}
+	if len(listOut.Tasks) != 1 || listOut.Tasks[0].ID != taskID {
+		t.Fatalf("expected 1 task with ID %q, got %+v", taskID, listOut.Tasks)
+	}
+
+	// 3. tasks status
+	statusCall := &message.ToolCall{
+		ID:   "call-tasks-status",
+		Name: builtin.ToolTasks,
+		Args: map[string]any{
+			"action":  "status",
+			"task_id": taskID,
+		},
+	}
+	statusRes, err := container.Execute(ctx, statusCall)
+	if err != nil || statusRes.IsError {
+		t.Fatalf("Execute(tasks status) failed: err=%v, res=%+v", err, statusRes)
+	}
+	statusOut, ok := statusRes.StructuredContent.(api.TasksOutput)
+	if !ok {
+		t.Fatalf("expected api.TasksOutput, got %T", statusRes.StructuredContent)
+	}
+	if statusOut.Status != "running" {
+		t.Fatalf("expected task status 'running', got %q", statusOut.Status)
+	}
+
+	// 4. tasks send_input
+	inputCall := &message.ToolCall{
+		ID:   "call-tasks-input",
+		Name: builtin.ToolTasks,
+		Args: map[string]any{
+			"action":  "send_input",
+			"task_id": taskID,
+			"input":   "hello from test\n",
+		},
+	}
+	inputRes, err := container.Execute(ctx, inputCall)
+	if err != nil || inputRes.IsError {
+		t.Fatalf("Execute(tasks send_input) failed: err=%v, res=%+v", err, inputRes)
+	}
+
+	// Wait briefly for command to read stdin and finish
+	time.Sleep(100 * time.Millisecond)
+
+	// 5. Verify status again after completion
+	statusRes2, err := container.Execute(ctx, statusCall)
+	if err != nil || statusRes2.IsError {
+		t.Fatalf("Execute(tasks status 2) failed: err=%v, res=%+v", err, statusRes2)
+	}
+	statusOut2 := statusRes2.StructuredContent.(api.TasksOutput)
+	if statusOut2.Status != "completed" {
+		t.Fatalf("expected task status 'completed', got %q", statusOut2.Status)
+	}
+	if !strings.Contains(statusOut2.Output, "got: hello from test") {
+		t.Fatalf("expected task output to contain 'got: hello from test', got %q", statusOut2.Output)
+	}
+
+	// 6. Test kill on a long-running background command
+	killBashCall := &message.ToolCall{
+		ID:   "call-bash-hang",
+		Name: builtin.ToolBash,
+		Args: map[string]any{
+			"command":           "sleep 60",
+			"run_in_background": true,
+		},
+	}
+	killBashRes, err := container.Execute(ctx, killBashCall)
+	if err != nil || killBashRes.IsError {
+		t.Fatalf("Execute(bash sleep) failed: err=%v, res=%+v", err, killBashRes)
+	}
+	hangTaskID := killBashRes.StructuredContent.(api.BashOutput).TaskID
+
+	killCall := &message.ToolCall{
+		ID:   "call-tasks-kill",
+		Name: builtin.ToolTasks,
+		Args: map[string]any{
+			"action":  "kill",
+			"task_id": hangTaskID,
+		},
+	}
+	killRes, err := container.Execute(ctx, killCall)
+	if err != nil || killRes.IsError {
+		t.Fatalf("Execute(tasks kill) failed: err=%v, res=%+v", err, killRes)
+	}
+
+	time.Sleep(50 * time.Millisecond)
+
+	// Verify status is canceled
+	statusHangCall := &message.ToolCall{
+		ID:   "call-tasks-status-hang",
+		Name: builtin.ToolTasks,
+		Args: map[string]any{
+			"action":  "status",
+			"task_id": hangTaskID,
+		},
+	}
+	statusHangRes, err := container.Execute(ctx, statusHangCall)
+	if err != nil || statusHangRes.IsError {
+		t.Fatalf("Execute(tasks status hang) failed: err=%v, res=%+v", err, statusHangRes)
+	}
+	statusHangOut := statusHangRes.StructuredContent.(api.TasksOutput)
+	if statusHangOut.Status != "canceled" {
+		t.Fatalf("expected status 'canceled', got %q", statusHangOut.Status)
 	}
 }

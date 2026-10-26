@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"errors"
+	"iter"
 	"strings"
 	"sync"
 	"time"
@@ -15,12 +16,13 @@ import (
 )
 
 // SessionState holds the active session and its configuration, permission mode,
-// and display model label.
+// display model label, and background tasks.
 type SessionState struct {
 	Session    *api.Session
 	Config     api.SessionConfig
 	ModelLabel string
 	Thinking   string
+	Tasks      *[]api.Task
 	Ready      bool
 }
 
@@ -362,9 +364,125 @@ func SetSession(sess *api.Session) {
 			if s.Config.Mode == "" {
 				s.Config.Mode = api.ModeDefault
 			}
+			if sess.Tasks != nil {
+				tasksCopy := make([]api.Task, len(sess.Tasks))
+				copy(tasksCopy, sess.Tasks)
+				s.Tasks = &tasksCopy
+			} else {
+				s.Tasks = nil
+			}
+		} else {
+			s.Tasks = nil
 		}
 		return s
 	})
+}
+
+// UpsertTask updates an existing task in SessionState by ID, or appends it.
+func UpsertTask(task api.Task) {
+	session.Set(func(s SessionState) SessionState {
+		var current []api.Task
+		if s.Tasks != nil {
+			current = make([]api.Task, len(*s.Tasks))
+			copy(current, *s.Tasks)
+		}
+		found := false
+		for i, t := range current {
+			if t.ID == task.ID {
+				current[i] = task
+				found = true
+				break
+			}
+		}
+		if !found {
+			current = append(current, task)
+		}
+		s.Tasks = &current
+		if s.Session != nil {
+			s.Session.Tasks = current
+		}
+		return s
+	})
+}
+
+// UseTasks subscribes a component to the active session's tasks.
+func UseTasks() []api.Task {
+	ptr := UseSession(func(s SessionState) *[]api.Task {
+		return s.Tasks
+	})
+	if ptr == nil {
+		return nil
+	}
+	return *ptr
+}
+
+// UseRunningTasks subscribes a component to the active session's running and pending tasks.
+func UseRunningTasks() []api.Task {
+	all := UseTasks()
+	var running []api.Task
+	for _, t := range all {
+		if t.Status == api.TaskStatusRunning || t.Status == api.TaskStatusPending {
+			running = append(running, t)
+		}
+	}
+	return running
+}
+
+// GetTasks returns a snapshot of background tasks for the active session.
+func GetTasks() []api.Task {
+	st := GetSession()
+	if st.Tasks == nil {
+		return nil
+	}
+	return *st.Tasks
+}
+
+// GetRunningTasks returns a snapshot of active running and pending tasks for the active session.
+func GetRunningTasks() []api.Task {
+	all := GetTasks()
+	var running []api.Task
+	for _, t := range all {
+		if t.Status == api.TaskStatusRunning || t.Status == api.TaskStatusPending {
+			running = append(running, t)
+		}
+	}
+	return running
+}
+
+// KillTask sends a kill request for an active background task in the active session.
+func KillTask(taskID string) error {
+	taskID = strings.TrimSpace(taskID)
+	if taskID == "" {
+		return errors.New("repl: task ID must not be empty")
+	}
+	sessMu.Lock()
+	c := activeClient
+	ctx := activeCtx
+	sess := GetSession().Session
+	sessMu.Unlock()
+
+	if c == nil || sess == nil || sess.ID == "" {
+		return errors.New("repl: no active session")
+	}
+	if ctx == nil || ctx.Err() != nil {
+		ctx = context.Background()
+	}
+	return c.KillTask(ctx, sess.ID, taskID)
+}
+
+// StreamTaskOutput streams live output chunks for a background task.
+func StreamTaskOutput(ctx context.Context, taskID string) iter.Seq2[string, error] {
+	sessMu.Lock()
+	c := activeClient
+	sess := GetSession().Session
+	sessMu.Unlock()
+
+	if c == nil || sess == nil || sess.ID == "" {
+		return func(yield func(string, error) bool) {
+			yield("", errors.New("repl: no active session"))
+		}
+	}
+	return c.StreamTaskOutput(ctx, sess.ID, taskID)
 }
 
 // NextPermissionMode returns the next permission mode in the cycle sequence:
@@ -494,6 +612,7 @@ func NewDraftSession(modelOverride string) {
 	session.Set(func(s SessionState) SessionState {
 		s.Session = nil
 		s.Config = cfg
+		s.Tasks = nil
 		return s
 	})
 

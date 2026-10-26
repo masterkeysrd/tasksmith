@@ -24,6 +24,12 @@ spec:
       dir:
         type: string
         description: Optional working directory relative to the sandbox root.
+      run_in_background:
+        type: boolean
+        description: Set to true to run long-running commands, servers, or watchers in the background and return a task_id immediately.
+      wait_ms:
+        type: integer
+        description: Milliseconds to wait for synchronous completion before transitioning the command to a background task. Defaults to 60000 (1 minute), or 500 when run_in_background is true.
     required:
       - command
   outputSchema:
@@ -39,6 +45,12 @@ spec:
         type: integer
         format: int64
         description: Execution duration in milliseconds.
+      task_id:
+        type: string
+        description: Background task ID if execution transitioned to the background.
+      status:
+        type: string
+        description: Execution status ('completed', 'running', 'failed', 'canceled').
     required:
       - output
       - exit_code
@@ -51,7 +63,8 @@ Execute shell commands in the workspace sandbox.
 1. Directory Verification: If creating directories or files via shell, use the `ls` tool first to verify the parent directory exists.
 2. Security & Permissions Check: Safe read-only commands inside the workspace execute without prompts; commands that modify state or access paths outside the workspace require user approval.
 3. Command Execution: Execute via `sh -c` with proper quoting and capture combined `stdout` and `stderr`.
-4. Output Processing: Output exceeding 500 lines or 32 KB is automatically truncated, keeping the first 100 lines and last 100 lines. The truncation notice includes the saved file path holding the complete output — inspect it with `view` (using `offset` and `limit`) or `grep` when the omitted middle matters instead of re-running the command.
+4. Auto-Backgrounding: Commands running longer than `wait_ms` (default 60000ms / 1 minute) or explicitly launched with `run_in_background: true` automatically transition into a background task and return a `task_id`.
+5. Output Processing: Output exceeding 500 lines or 32 KB is automatically truncated, keeping the first 100 lines and last 100 lines. The truncation notice includes the saved file path holding the complete output — inspect it with `view` (using `offset` and `limit`) or `grep` when the omitted middle matters instead of re-running the command.
 </execution_steps>
 
 <usage_notes>
@@ -62,6 +75,21 @@ Execute shell commands in the workspace sandbox.
 - Prefer setting `dir` or passing direct paths over `cd` (use `cd` only if the user explicitly requests it).
 - Do not run interactive commands or flags (e.g., `git rebase -i`, `git add -i`, TUI editors, or pagers); pass non-interactive flags (`--no-pager`, `-y`) when applicable.
 </usage_notes>
+
+<background_execution>
+- Set `run_in_background: true` to run commands in a background task, or set `wait_ms` to customize how long to wait synchronously before transitioning to the background (defaults to 60000ms / 1 minute).
+- When a command transitions to the background, `bash` returns a `task_id` and `status: "running"`.
+- IMPORTANT: You do NOT need to poll a background task's status in a loop. The system will automatically notify and wake you up when the background task finishes execution. You can continue with other work or stop calling tools to wait.
+- Use the `tasks` tool (`list`, `status`, `kill`, `send_input`) to inspect intermediate output, send stdin input, or terminate a running background task.
+- IMPORTANT: NEVER append `&` to commands to background them manually — always use `run_in_background: true` so the task manager tracks and controls the process.
+- Commands that SHOULD run in background (`run_in_background: true`):
+  * Long-running dev servers (e.g., `npm start`, `python -m http.server`, `go run ./cmd/server`)
+  * Watchers and continuous monitors (e.g., `npm run watch`, `tail -f logfile`)
+  * Processes expected to run indefinitely
+- Commands that should NOT set `run_in_background: true`:
+  * Standard builds and test suites (`go build`, `go test`, `npm test`, `pytest`)
+  * Git operations and short-lived scripts
+</background_execution>
 
 <git_message_quality>
 These rules apply whenever creating or updating commit messages, PR titles, or PR bodies:

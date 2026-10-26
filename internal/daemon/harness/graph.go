@@ -19,21 +19,37 @@ import (
 
 const eventNodeMessage = "on_node_message"
 
-func buildGraph(cp graph.Checkpointer, model *llm.Model, container tools.Container, perms permissions.SessionManager, systemPrompt string, logger log.Interface) (*graph.Graph[State], error) {
+func buildGraph(cp graph.Checkpointer, model *llm.Model, container tools.Container, perms permissions.SessionManager, systemPrompt string, inbox func() []message.Message, logger log.Interface) (*graph.Graph[State], error) {
 	agentNode := NewAgentNode(model, container, systemPrompt, logger)
 	toolsNode := NewToolsNode(container, perms, logger)
+	inboxNode := NewInboxNode(inbox, logger)
 
 	g, err := graph.New[State]().
 		WithName("harness").
 		WithCheckpointer(cp).
+		AddNode("inbox", inboxNode).
 		AddNode("agent", agentNode).
 		AddNode("tools", toolsNode).
-		AddEdge(graph.START, "agent").
+		AddEdge(graph.START, "inbox").
+		AddConditionalEdge("inbox", "agent", func(s State) bool {
+			if len(s.Messages) == 0 {
+				return false
+			}
+			_, isAssistant := s.Messages[len(s.Messages)-1].(*message.Assistant)
+			return !isAssistant
+		}).
+		AddConditionalEdge("inbox", graph.END, func(s State) bool {
+			if len(s.Messages) == 0 {
+				return true
+			}
+			_, isAssistant := s.Messages[len(s.Messages)-1].(*message.Assistant)
+			return isAssistant
+		}).
 		AddConditionalEdge("agent", "tools", State.HasPendingToolCalls).
-		AddConditionalEdge("agent", graph.END, func(s State) bool {
+		AddConditionalEdge("agent", "inbox", func(s State) bool {
 			return !s.HasPendingToolCalls()
 		}).
-		AddEdge("tools", "agent").
+		AddEdge("tools", "inbox").
 		Build()
 	if err != nil {
 		return nil, fmt.Errorf("harness: build graph: %w", err)
@@ -103,6 +119,56 @@ func (n *AgentNode) Execute(ctx context.Context, state State) (graph.Command[Sta
 
 	return graph.Update[State](func(s State) State {
 		s.Messages = append(s.Messages, resp)
+		return s
+	}), nil
+}
+
+// InboxNode drains messages from the session inbox and injects them into the conversation state.
+// It implements [github.com/masterkeysrd/loom/graph.Node].
+type InboxNode struct {
+	inbox  func() []message.Message
+	logger log.Interface
+}
+
+// NewInboxNode constructs a new [InboxNode] bound to the inbox supplier function and logger.
+func NewInboxNode(inbox func() []message.Message, logger log.Interface) *InboxNode {
+	return &InboxNode{
+		inbox:  inbox,
+		logger: logger.ForComponent("harness.inbox"),
+	}
+}
+
+// Execute drains queued messages from the inbox, generates IDs if needed, emits notifications,
+// and appends them to [State.Messages].
+func (n *InboxNode) Execute(ctx context.Context, state State) (graph.Command[State], error) {
+	if n.inbox == nil {
+		return graph.Update[State](func(s State) State { return s }), nil
+	}
+	queued := n.inbox()
+	if len(queued) == 0 {
+		return graph.Update[State](func(s State) State { return s }), nil
+	}
+
+	drained := make(message.MessageList, 0, len(queued))
+	for _, msg := range queued {
+		if msg == nil {
+			continue
+		}
+		cloned := message.CloneMessage(msg)
+		if cloned.GetID() == "" || uuid.Validate(cloned.GetID()) != nil {
+			if id, err := uuid.NewV7(); err == nil {
+				cloned.SetID(id.String())
+			}
+		}
+		drained = append(drained, cloned)
+	}
+
+	if len(drained) == 0 {
+		return graph.Update[State](func(s State) State { return s }), nil
+	}
+
+	return graph.Update[State](func(s State) State {
+		s.Messages = append(s.Messages, drained...)
 		return s
 	}), nil
 }

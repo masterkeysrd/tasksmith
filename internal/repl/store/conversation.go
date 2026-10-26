@@ -376,6 +376,16 @@ func (acc *conversationAccumulator) applyEvent(event api.Event) {
 		}
 		acc.publishLocked()
 
+	case api.EventTaskUpdated:
+		p, ok := event.Payload.(api.TaskUpdatedEvent)
+		if !ok {
+			return
+		}
+		if acc.sessionID != "" && p.SessionID != acc.sessionID {
+			return
+		}
+		UpsertTask(p.Task)
+
 	case api.EventCompleted:
 		p, ok := event.Payload.(api.CompletedEvent)
 		if !ok {

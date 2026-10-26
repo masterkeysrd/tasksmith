@@ -367,6 +367,33 @@ func TestGeneratedToolTypesJSONRoundTrip(t *testing.T) {
 		})
 	})
 
+	t.Run("Tasks", func(t *testing.T) {
+		testJSONRoundTrip(t, TasksInput{
+			Action: "status",
+			TaskID: "task-1",
+			Limit:  50,
+			Input:  "stdin input",
+		})
+		testJSONRoundTrip(t, TasksOutput{
+			Status:   "running",
+			ExitCode: 0,
+			LogPath:  "/tmp/task-1.log",
+			Output:   "some logs",
+			Message:  "Task is running.",
+			Tasks: []TasksTask{
+				{
+					ID:         "task-1",
+					Kind:       "bash",
+					Title:      "server",
+					Status:     "running",
+					DurationMs: 1200,
+					Command:    "go run main.go",
+					LogPath:    "/tmp/task-1.log",
+				},
+			},
+		})
+	})
+
 	t.Run("View", func(t *testing.T) {
 		testJSONRoundTrip(t, ViewInput{
 			Path:   "README.md",
@@ -635,6 +662,30 @@ func TestEventPayloadsAndJSONRoundTrip(t *testing.T) {
 				},
 			},
 			wantTyp: EventCompleted,
+		},
+		{
+			name: "task_updated",
+			ev: Event{
+				ID:    "0192e4c0-0000-7000-8000-000000000002",
+				Type:  EventTaskUpdated,
+				Topic: SessionStreamTopic("s1"),
+				Payload: TaskUpdatedEvent{
+					SessionID: "s1",
+					Task: Task{
+						ID:           "task-123",
+						Kind:         "bash",
+						Title:        "npm test",
+						Command:      "npm test",
+						Status:       TaskStatusRunning,
+						ExitCode:     0,
+						LogPath:      "/tmp/task-123.log",
+						StartedAt:    now,
+						DurationMs:   1500,
+						Backgrounded: true,
+					},
+				},
+			},
+			wantTyp: EventTaskUpdated,
 		},
 		{
 			name: "error",

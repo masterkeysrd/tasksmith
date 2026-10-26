@@ -44,6 +44,7 @@ const (
 	EventChunk               EventType = "chunk"
 	EventPermissionRequested EventType = "permission_requested"
 	EventCompleted           EventType = "completed"
+	EventTaskUpdated         EventType = "task_updated"
 	EventError               EventType = "error"
 )
 
@@ -115,6 +116,14 @@ type CompletedEvent struct {
 }
 
 func (CompletedEvent) EventType() string { return string(EventCompleted) }
+
+// TaskUpdatedEvent represents the payload for an [EventTaskUpdated] event.
+type TaskUpdatedEvent struct {
+	SessionID string `json:"session_id"`
+	Task      Task   `json:"task"`
+}
+
+func (TaskUpdatedEvent) EventType() string { return string(EventTaskUpdated) }
 
 // ErrorEvent represents the payload for an [EventError] event.
 type ErrorEvent struct {
@@ -203,6 +212,12 @@ func (e *Event) UnmarshalJSON(data []byte) error {
 		var p CompletedEvent
 		if err := json.Unmarshal(raw, &p); err != nil {
 			return fmt.Errorf("api: unmarshal completed payload: %w", err)
+		}
+		e.Payload = p
+	case EventTaskUpdated:
+		var p TaskUpdatedEvent
+		if err := json.Unmarshal(raw, &p); err != nil {
+			return fmt.Errorf("api: unmarshal task_updated payload: %w", err)
 		}
 		e.Payload = p
 	case EventError:

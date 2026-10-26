@@ -187,6 +187,7 @@ var toolVerbs = map[string][2]string{
 	"remove":    {"Removing", "Removed"},
 	"web_fetch": {"Fetching", "Fetched"},
 	"download":  {"Downloading", "Downloaded"},
+	"tasks":     {"Managing tasks", "Managed tasks"},
 }
 
 // toolPrimaryArg returns the most descriptive single-line argument of a call.
@@ -204,6 +205,8 @@ func toolPrimaryArg(call *api.ToolCall) string {
 		keys = []string{"pattern"}
 	case "web_fetch", "download":
 		keys = []string{"url"}
+	case "tasks":
+		keys = []string{"action", "task_id"}
 	}
 	for _, key := range keys {
 		if v, ok := call.Args[key].(string); ok && strings.TrimSpace(v) != "" {

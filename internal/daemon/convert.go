@@ -16,6 +16,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/daemon/permissions"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/session"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/std"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/tasks"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/timeline"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tools"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/workspace"
@@ -27,11 +28,13 @@ func toAPISession(sess *session.Session) api.Session {
 	}
 	status := api.StatusIdle
 	var perms []api.PermissionRequest
+	var ts []api.Task
 	if sess.State != nil {
 		if sess.Status != "" {
 			status = api.SessionStatus(sess.Status)
 		}
 		perms = toAPIPermissionRequests(sess.PendingPermissions)
+		ts = toAPITasks(sess.State.Tasks)
 	}
 	return api.Session{
 		ID:    sess.ID,
@@ -44,9 +47,38 @@ func toAPISession(sess *session.Session) api.Session {
 		},
 		Status:             status,
 		PendingPermissions: perms,
+		Tasks:              ts,
 		CreatedAt:          sess.CreatedAt,
 		UpdatedAt:          sess.UpdatedAt,
 	}
+}
+
+func toAPITask(t tasks.Snapshot) api.Task {
+	return api.Task{
+		ID:           t.ID,
+		Kind:         t.Kind,
+		Title:        t.Title,
+		Command:      t.Command,
+		Status:       api.TaskStatus(t.Status),
+		ExitCode:     t.ExitCode,
+		Error:        t.Error,
+		LogPath:      t.LogPath,
+		StartedAt:    t.StartedAt,
+		FinishedAt:   t.FinishedAt,
+		DurationMs:   t.DurationMs,
+		Backgrounded: t.Backgrounded,
+	}
+}
+
+func toAPITasks(ts []tasks.Snapshot) []api.Task {
+	if len(ts) == 0 {
+		return nil
+	}
+	out := make([]api.Task, len(ts))
+	for i, t := range ts {
+		out[i] = toAPITask(t)
+	}
+	return out
 }
 
 func toAPIMessage(msg message.Message) (*api.Message, error) {
@@ -569,6 +601,17 @@ func (d *Daemon) FormatEvent(msg broker.Message) (api.Event, error) {
 			Payload: api.SessionUpdatedEvent{
 				Workspace: ev.Workspace,
 				Session:   toAPISession(ev.Session),
+			},
+		}, nil
+
+	case session.TaskUpdatedEvent:
+		return api.Event{
+			ID:    msg.ID,
+			Type:  api.EventTaskUpdated,
+			Topic: msg.Topic,
+			Payload: api.TaskUpdatedEvent{
+				SessionID: ev.SessionID,
+				Task:      toAPITask(ev.Task),
 			},
 		}, nil
 

@@ -26,6 +26,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/daemon/sandbox"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/scope"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/std"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/tasks"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/timeline"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tools"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tools/builtin"
@@ -73,6 +74,7 @@ type Session struct {
 	Timeline timeline.Timeline `json:"-"`
 	Journal  journal.Journal   `json:"-"`
 	Tools    tools.Container   `json:"-"`
+	Tasks    tasks.Manager     `json:"-"`
 	Harness  harness.Harness   `json:"-"`
 
 	db        *sql.DB             `json:"-"`
@@ -109,6 +111,7 @@ func (s *Session) Clone() *Session {
 		Timeline:    s.Timeline,
 		Journal:     s.Journal,
 		Tools:       s.Tools,
+		Tasks:       s.Tasks,
 		Harness:     s.Harness,
 		db:          s.db,
 		store:       s.store,
@@ -158,6 +161,21 @@ func (s *Session) initResources(ctx context.Context) error {
 		}
 		s.Journal = jr
 	}
+	outputsDir := ""
+	if s.Root != "" {
+		outputsDir = filepath.Join(s.Root, "outputs")
+	} else if wsDir, err := xdg.WorkspaceDir(s.workspace.RootDir()); err == nil && s.ID != "" {
+		outputsDir = filepath.Join(wsDir, "sessions", s.ID, "outputs")
+	}
+
+	if s.Tasks == nil {
+		s.Tasks = tasks.New(tasks.Config{
+			Context:    s.bgCtx,
+			OutputsDir: outputsDir,
+			OnUpdate:   s.onTaskUpdate,
+		})
+	}
+
 	if s.Tools == nil {
 		stdInst, err := std.New(std.Config{
 			Sandbox: s.Sandbox,
@@ -166,13 +184,6 @@ func (s *Session) initResources(ctx context.Context) error {
 		})
 		if err != nil {
 			return fmt.Errorf("session: initialize std tools: %w", err)
-		}
-
-		outputsDir := ""
-		if s.Root != "" {
-			outputsDir = filepath.Join(s.Root, "outputs")
-		} else if wsDir, err := xdg.WorkspaceDir(s.workspace.RootDir()); err == nil && s.ID != "" {
-			outputsDir = filepath.Join(wsDir, "sessions", s.ID, "outputs")
 		}
 
 		var readDirs []string
@@ -189,6 +200,7 @@ func (s *Session) initResources(ctx context.Context) error {
 			Std:     stdInst,
 			Sandbox: s.Sandbox,
 			Guard:   guardInst,
+			Tasks:   s.Tasks,
 		})
 		if err != nil {
 			return fmt.Errorf("session: initialize builtin tools: %w", err)
@@ -224,6 +236,10 @@ func (s *Session) initResources(ctx context.Context) error {
 func (s *Session) Close() error {
 	s.Lock()
 	defer s.Unlock()
+	if s.Tasks != nil {
+		_ = s.Tasks.Close()
+		s.Tasks = nil
+	}
 	if s.Sandbox != nil {
 		err := s.Sandbox.Close()
 		s.Sandbox = nil
@@ -257,6 +273,7 @@ func (s *Session) harness(ctx context.Context) (harness.Harness, error) {
 		Tools:        s.Tools,
 		Permissions:  s.PermManager,
 		SystemPrompt: systemPrompt,
+		Inbox:        s.popInbox,
 		Logger:       s.logger,
 	})
 	if err != nil {
@@ -400,6 +417,10 @@ func (s *Session) Send(ctx context.Context, input SendInput) error {
 		hInput = harness.Input{Message: input.Message}
 	}
 
+	return s.startTurn(hInput)
+}
+
+func (s *Session) startTurn(hInput harness.Input) error {
 	s.Lock()
 	if s.Running {
 		s.Unlock()
@@ -412,7 +433,7 @@ func (s *Session) Send(ctx context.Context, input SendInput) error {
 	s.Status = StatusRunning
 	s.Running = true
 	s.WaitingPermission = false
-	if input.Message != nil {
+	if hInput.Message != nil {
 		s.PendingPermissions = nil
 		clear(s.decisions)
 	}
@@ -450,9 +471,89 @@ func (s *Session) Send(ctx context.Context, input SendInput) error {
 		sCtx := scope.With(runCtx, scope.Scope{SessionID: s.ID})
 		if _, err := s.send(sCtx, h.Stream(sCtx, hInput)); err != nil {
 			s.handleAsyncError(err)
+			return
+		}
+
+		for {
+			s.Lock()
+			if s.WaitingPermission || runCtx.Err() != nil {
+				s.Unlock()
+				return
+			}
+			if len(s.inbox) == 0 {
+				if s.done == done {
+					s.Running = false
+					if s.Status == StatusRunning {
+						s.Status = StatusIdle
+					}
+					s.cancel = nil
+					s.done = nil
+				}
+				s.Unlock()
+				return
+			}
+			s.Unlock()
+
+			if _, err := s.send(sCtx, h.Stream(sCtx, harness.Input{})); err != nil {
+				s.handleAsyncError(err)
+				return
+			}
 		}
 	}()
 	return nil
+}
+
+func (s *Session) popInbox() []message.Message {
+	s.Lock()
+	defer s.Unlock()
+	if len(s.inbox) == 0 {
+		return nil
+	}
+	msgs := s.inbox
+	s.inbox = nil
+	return msgs
+}
+
+// Enqueue adds a message to the session's execution queue or initiates an immediate turn if idle.
+func (s *Session) Enqueue(msg message.Message) {
+	if msg == nil {
+		return
+	}
+	s.Lock()
+	s.inbox = append(s.inbox, message.CloneMessage(msg))
+	if !s.Running && !s.WaitingPermission {
+		s.Unlock()
+		_ = s.startTurn(harness.Input{})
+		return
+	}
+	s.Unlock()
+}
+
+func (s *Session) onTaskUpdate(snap tasks.Snapshot) {
+	s.Lock()
+	if s.Tasks != nil {
+		s.State.Tasks = s.Tasks.List()
+	}
+	s.Unlock()
+
+	if s.publisher != nil {
+		s.publisher.Publish(api.SessionStreamTopic(s.ID), TaskUpdatedEvent{
+			SessionID: s.ID,
+			Task:      snap,
+		})
+	}
+
+	if snap.Status == tasks.StatusCompleted || snap.Status == tasks.StatusFailed {
+		var tail string
+		if s.Tasks != nil {
+			if t, ok := s.Tasks.Get(snap.ID); ok {
+				tail, _ = t.Tail(100)
+			}
+		}
+		text := fmt.Sprintf("<background_task_completed task_id=%q kind=%q title=%q status=%q exit_code=\"%d\" log_path=%q>\n%s\n</background_task_completed>",
+			snap.ID, snap.Kind, snap.Title, snap.Status, snap.ExitCode, snap.LogPath, tail)
+		s.Enqueue(message.NewUserText(text))
+	}
 }
 
 func (s *Session) recordDecision(ctx context.Context, decision tools.PermissionDecision) (bool, error) {

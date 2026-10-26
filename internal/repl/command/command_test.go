@@ -12,7 +12,7 @@ import (
 func TestRegistryBuiltinsAndLookup(t *testing.T) {
 	r := NewRegistry()
 
-	cmds := []string{"help", "mode", "model", "agent", "effort", "theme", "new", "sessions", "changes", "diff", "revert", "clear", "exit", "permissions"}
+	cmds := []string{"help", "mode", "model", "agent", "effort", "theme", "new", "sessions", "changes", "diff", "revert", "clear", "exit", "permissions", "tasks"}
 	for _, name := range cmds {
 		cmd, ok := r.Lookup(name)
 		if !ok {
@@ -240,6 +240,21 @@ func TestCommandExecute(t *testing.T) {
 		}
 		if store.CurrentHeaderData().Model != "diff-model" {
 			t.Errorf("expected live header model diff-model, got %q", store.CurrentHeaderData().Model)
+		}
+	})
+
+	t.Run("tasks command", func(t *testing.T) {
+		store.ResetSession()
+		store.ClearSlot()
+		defer store.ResetSession()
+		defer store.ClearSlot()
+
+		// Always enqueues slot
+		if err := r.Execute("/tasks"); err != nil {
+			t.Fatalf("Execute /tasks: %v", err)
+		}
+		if slot := store.GetSlot().Active; slot == nil || slot.Kind != store.SlotKindPicker {
+			t.Fatalf("expected SlotKindPicker slot active, got %+v", slot)
 		}
 	})
 }

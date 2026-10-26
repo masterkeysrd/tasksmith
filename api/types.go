@@ -86,6 +86,38 @@ type SessionConfig struct {
 	Mode   PermissionMode `json:"mode,omitempty"`
 }
 
+// TaskStatus describes the operational state of a background task.
+type TaskStatus string
+
+const (
+	TaskStatusPending   TaskStatus = "pending"
+	TaskStatusRunning   TaskStatus = "running"
+	TaskStatusCompleted TaskStatus = "completed"
+	TaskStatusFailed    TaskStatus = "failed"
+	TaskStatusCanceled  TaskStatus = "canceled"
+)
+
+// Task describes a background task running or finished within a session.
+type Task struct {
+	ID           string     `json:"id"`
+	Kind         string     `json:"kind"`
+	Title        string     `json:"title"`
+	Command      string     `json:"command,omitempty"`
+	Status       TaskStatus `json:"status"`
+	ExitCode     int        `json:"exit_code"`
+	Error        string     `json:"error,omitempty"`
+	LogPath      string     `json:"log_path,omitempty"`
+	StartedAt    time.Time  `json:"started_at"`
+	FinishedAt   time.Time  `json:"finished_at,omitzero"`
+	DurationMs   int64      `json:"duration_ms"`
+	Backgrounded bool       `json:"backgrounded"`
+}
+
+// TasksResponse returns the list of background tasks in a session.
+type TasksResponse struct {
+	Tasks []Task `json:"tasks"`
+}
+
 // Session represents a persistent conversational session managed by the daemon.
 type Session struct {
 	ID                 string              `json:"id"`
@@ -93,6 +125,7 @@ type Session struct {
 	Config             SessionConfig       `json:"config"`
 	Status             SessionStatus       `json:"status"`
 	PendingPermissions []PermissionRequest `json:"pending_permissions,omitempty"`
+	Tasks              []Task              `json:"tasks,omitempty"`
 	CreatedAt          time.Time           `json:"created_at"`
 	UpdatedAt          time.Time           `json:"updated_at"`
 }

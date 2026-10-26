@@ -26,6 +26,7 @@ type Config struct {
 	Tools        tools.Container
 	Permissions  permissions.SessionManager
 	SystemPrompt string
+	Inbox        func() []message.Message
 	Logger       log.Interface
 }
 
@@ -63,6 +64,7 @@ type harness struct {
 	id     string
 	logger log.Interface
 	graph  *graph.Graph[State]
+	inbox  func() []message.Message
 }
 
 var _ Harness = (*harness)(nil)
@@ -80,7 +82,7 @@ func New(cfg Config) (Harness, error) {
 
 	logger := cfg.Logger.ForComponent("harness")
 
-	g, err := buildGraph(cp, cfg.Model, cfg.Tools, cfg.Permissions, cfg.SystemPrompt, logger)
+	g, err := buildGraph(cp, cfg.Model, cfg.Tools, cfg.Permissions, cfg.SystemPrompt, cfg.Inbox, logger)
 	if err != nil {
 		return nil, err
 	}
@@ -89,6 +91,7 @@ func New(cfg Config) (Harness, error) {
 		id:     strings.TrimSpace(cfg.ID),
 		logger: logger,
 		graph:  g,
+		inbox:  cfg.Inbox,
 	}, nil
 }
 
@@ -97,7 +100,8 @@ func New(cfg Config) (Harness, error) {
 // and [EventCompleted] notifications.
 //
 // If input.Decisions is provided, it resumes an interrupted execution awaiting permission
-// decisions. If input.Message is provided, it streams a new user message.
+// decisions. If input.Message is provided, it streams a new user message. If both are nil
+// and an inbox function is configured, it executes a turn draining pending inbox messages.
 func (h *harness) Stream(ctx context.Context, input Input) iter.Seq2[Event, error] {
 	return func(yield func(Event, error) bool) {
 		if err := ctx.Err(); err != nil {
@@ -109,8 +113,10 @@ func (h *harness) Stream(ctx context.Context, input Input) iter.Seq2[Event, erro
 			return
 		}
 		if input.Decisions == nil && input.Message == nil {
-			yield(Event{}, ErrNilMessage)
-			return
+			if h.inbox == nil {
+				yield(Event{}, ErrNilMessage)
+				return
+			}
 		}
 
 		state, err := h.LoadState(ctx)
@@ -141,7 +147,7 @@ func (h *harness) Stream(ctx context.Context, input Input) iter.Seq2[Event, erro
 				s.PermissionDecisions = normalized
 				return s
 			})
-		} else {
+		} else if input.Message != nil {
 			in := message.CloneMessage(input.Message)
 			_, _, unfulfilled, _ := state.ActiveToolCalls()
 			if len(unfulfilled) == 0 {
@@ -162,6 +168,10 @@ func (h *harness) Stream(ctx context.Context, input Input) iter.Seq2[Event, erro
 			}
 			update = graph.Update[State](func(s State) State {
 				s.Messages = append(s.Messages, in)
+				return s
+			})
+		} else {
+			update = graph.Update[State](func(s State) State {
 				return s
 			})
 		}

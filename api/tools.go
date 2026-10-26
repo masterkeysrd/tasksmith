@@ -4,9 +4,11 @@ package api
 
 // BashInput defines the input parameters for the bash tool.
 type BashInput struct {
-	Command     string `json:"command" jsonschema:"Shell command string passed to sh -c."`
-	Description string `json:"description,omitempty" jsonschema:"Clear, concise description of what this command does."`
-	Dir         string `json:"dir,omitempty" jsonschema:"Optional working directory relative to the sandbox root."`
+	Command         string `json:"command" jsonschema:"Shell command string passed to sh -c."`
+	Description     string `json:"description,omitempty" jsonschema:"Clear, concise description of what this command does."`
+	Dir             string `json:"dir,omitempty" jsonschema:"Optional working directory relative to the sandbox root."`
+	RunInBackground bool   `json:"run_in_background,omitempty" jsonschema:"Set to true to run long-running commands, servers, or watchers in the background and return a task_id immediately."`
+	WaitMs          int    `json:"wait_ms,omitempty" jsonschema:"Milliseconds to wait for synchronous completion before transitioning the command to a background task. Defaults to 60000 (1 minute), or 500 when run_in_background is true."`
 }
 
 // BashOutput defines the structured output of the bash tool.
@@ -14,6 +16,8 @@ type BashOutput struct {
 	Output     string `json:"output" jsonschema:"Combined standard output and standard error from the command."`
 	ExitCode   int    `json:"exit_code" jsonschema:"Process exit status code."`
 	DurationMs int64  `json:"duration_ms" jsonschema:"Execution duration in milliseconds."`
+	Status     string `json:"status,omitempty" jsonschema:"Execution status ('completed', 'running', 'failed', 'canceled')."`
+	TaskID     string `json:"task_id,omitempty" jsonschema:"Background task ID if execution transitioned to the background."`
 }
 
 // DownloadInput defines the input parameters for the download tool.
@@ -141,6 +145,37 @@ type RemoveOutput struct {
 	Deletions  int    `json:"deletions" jsonschema:"Number of deleted lines."`
 	BeforeHash string `json:"before_hash" jsonschema:"SHA-256 hex digest of the file prior to removal."`
 	Diff       string `json:"diff,omitempty" jsonschema:"Unified deletion diff."`
+}
+
+// TasksTask represents an item in tasks.
+type TasksTask struct {
+	ID         string `json:"id" jsonschema:"Unique task identifier."`
+	Kind       string `json:"kind" jsonschema:"Task kind (e.g., 'bash')."`
+	Title      string `json:"title" jsonschema:"Concise description of the task."`
+	Status     string `json:"status" jsonschema:"Current task status ('running', 'completed', 'failed', 'canceled')."`
+	DurationMs int64  `json:"duration_ms" jsonschema:"Execution duration in milliseconds."`
+	Command    string `json:"command,omitempty" jsonschema:"Command or target associated with the task."`
+	Error      string `json:"error,omitempty" jsonschema:"Error message if the task failed."`
+	ExitCode   int    `json:"exit_code,omitempty" jsonschema:"Process exit status code (when finished)."`
+	LogPath    string `json:"log_path,omitempty" jsonschema:"Path to the full task output log file."`
+}
+
+// TasksInput defines the input parameters for the tasks tool.
+type TasksInput struct {
+	Action string `json:"action" jsonschema:"The action to perform: 'list', 'status', 'kill', or 'send_input'."`
+	Input  string `json:"input,omitempty" jsonschema:"Input string to write to the task's standard input (required for 'send_input')."`
+	Limit  int    `json:"limit,omitempty" jsonschema:"Maximum number of trailing log lines to return for 'status' (defaults to 100)."`
+	TaskID string `json:"task_id,omitempty" jsonschema:"The ID of the background task (required for 'status', 'kill', and 'send_input')."`
+}
+
+// TasksOutput defines the structured output of the tasks tool.
+type TasksOutput struct {
+	ExitCode int         `json:"exit_code,omitempty" jsonschema:"Exit code of the requested task (when finished)."`
+	LogPath  string      `json:"log_path,omitempty" jsonschema:"Path to the full output log file for the task."`
+	Message  string      `json:"message,omitempty" jsonschema:"Human-readable status or action summary."`
+	Output   string      `json:"output,omitempty" jsonschema:"Trailing output lines from the task log (returned for 'status')."`
+	Status   string      `json:"status,omitempty" jsonschema:"Current status of the requested task."`
+	Tasks    []TasksTask `json:"tasks,omitempty" jsonschema:"List of background tasks in the session (returned for 'list')."`
 }
 
 // ViewInput defines the input parameters for the view tool.

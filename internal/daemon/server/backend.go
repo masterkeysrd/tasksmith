@@ -45,6 +45,10 @@ type SessionBackend interface {
 	Changes(ctx context.Context, workspace, id string) ([]api.FileChange, error)
 	Diff(ctx context.Context, workspace, id, path, entryID string) (*api.DiffResponse, error)
 	Revert(ctx context.Context, workspace, id string, req api.RevertRequest) error
+
+	Tasks(ctx context.Context, workspace, id string) ([]api.Task, error)
+	KillTask(ctx context.Context, workspace, id, taskID string) error
+	StreamTaskOutput(ctx context.Context, workspace, id, taskID string) (<-chan string, string, func(), error)
 }
 
 type Backend interface {

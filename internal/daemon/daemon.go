@@ -24,6 +24,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/daemon/runtime"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/server"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/session"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/tasks"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tools"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/workspace"
 )
@@ -746,4 +747,111 @@ func (d *Daemon) Revert(ctx context.Context, rawWS, id string, req api.RevertReq
 	}
 
 	return sess.Journal.RevertSession(ctx, sess.Sandbox.FS(), req.Force)
+}
+
+func (d *Daemon) Tasks(ctx context.Context, rawWS, id string) ([]api.Task, error) {
+	rt, err := d.runtimes.Get(ctx, rawWS)
+	if err != nil {
+		return nil, err
+	}
+
+	sess, err := rt.Sessions().Get(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+
+	if sess.Tasks == nil {
+		return []api.Task{}, nil
+	}
+
+	return toAPITasks(sess.Tasks.List()), nil
+}
+
+func (d *Daemon) KillTask(ctx context.Context, rawWS, id, taskID string) error {
+	rt, err := d.runtimes.Get(ctx, rawWS)
+	if err != nil {
+		return err
+	}
+
+	taskID = strings.TrimSpace(taskID)
+	if taskID == "" {
+		return &api.APIError{
+			StatusCode: http.StatusBadRequest,
+			Code:       "bad_request",
+			Message:    "task ID must not be empty",
+		}
+	}
+
+	sess, err := rt.Sessions().Get(ctx, id)
+	if err != nil {
+		return err
+	}
+
+	if sess.Tasks == nil {
+		return &api.APIError{
+			StatusCode: http.StatusNotFound,
+			Code:       "not_found",
+			Message:    "task not found",
+		}
+	}
+
+	if err := sess.Tasks.Kill(taskID); err != nil {
+		if errors.Is(err, tasks.ErrTaskNotFound) {
+			return &api.APIError{
+				StatusCode: http.StatusNotFound,
+				Code:       "not_found",
+				Message:    fmt.Sprintf("task %q not found", taskID),
+			}
+		}
+		if errors.Is(err, tasks.ErrNotRunning) {
+			return &api.APIError{
+				StatusCode: http.StatusConflict,
+				Code:       "conflict",
+				Message:    err.Error(),
+			}
+		}
+		return err
+	}
+	return nil
+}
+
+func (d *Daemon) StreamTaskOutput(ctx context.Context, rawWS, id, taskID string) (<-chan string, string, func(), error) {
+	rt, err := d.runtimes.Get(ctx, rawWS)
+	if err != nil {
+		return nil, "", nil, err
+	}
+
+	taskID = strings.TrimSpace(taskID)
+	if taskID == "" {
+		return nil, "", nil, &api.APIError{
+			StatusCode: http.StatusBadRequest,
+			Code:       "bad_request",
+			Message:    "task ID must not be empty",
+		}
+	}
+
+	sess, err := rt.Sessions().Get(ctx, id)
+	if err != nil {
+		return nil, "", nil, err
+	}
+
+	if sess.Tasks == nil {
+		return nil, "", nil, &api.APIError{
+			StatusCode: http.StatusNotFound,
+			Code:       "not_found",
+			Message:    "task not found",
+		}
+	}
+
+	t, ok := sess.Tasks.Get(taskID)
+	if !ok {
+		return nil, "", nil, &api.APIError{
+			StatusCode: http.StatusNotFound,
+			Code:       "not_found",
+			Message:    fmt.Sprintf("task %q not found", taskID),
+		}
+	}
+
+	ch, initial, cancel := t.SubscribeOutput()
+	return ch, initial, cancel, nil
 }

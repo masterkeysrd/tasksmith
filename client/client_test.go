@@ -304,6 +304,16 @@ func TestClientAllMethodsOverUnixSocket(t *testing.T) {
 	mux.HandleFunc("POST /v1/sessions/{id}/revert", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
+	mux.HandleFunc("GET /v1/sessions/{id}/tasks", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(api.TasksResponse{Tasks: []api.Task{{ID: "t-1", Command: "sleep 1"}}})
+	})
+	mux.HandleFunc("POST /v1/sessions/{id}/tasks/{task_id}/kill", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	mux.HandleFunc("GET /v1/sessions/{id}/tasks/{task_id}/output", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		_, _ = fmt.Fprint(w, "chunk1\nchunk2\n")
+	})
 	mux.HandleFunc("POST /v1/events/subscribe", func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get(api.HeaderSubscriberID) == "" {
 			http.Error(w, "missing subscriber", http.StatusBadRequest)
@@ -451,6 +461,23 @@ func TestClientAllMethodsOverUnixSocket(t *testing.T) {
 	}
 	if err := c.Revert(ctx, "s1", api.RevertRequest{Path: "a.go"}); err != nil {
 		t.Errorf("Revert: %v", err)
+	}
+
+	if tasks, err := c.Tasks(ctx, "s1"); err != nil || len(tasks) != 1 || tasks[0].ID != "t-1" {
+		t.Errorf("Tasks = (%+v, %v)", tasks, err)
+	}
+	if err := c.KillTask(ctx, "s1", "t-1"); err != nil {
+		t.Errorf("KillTask: %v", err)
+	}
+	var outputChunks []string
+	for chunk, err := range c.StreamTaskOutput(ctx, "s1", "t-1") {
+		if err != nil {
+			t.Fatalf("StreamTaskOutput err: %v", err)
+		}
+		outputChunks = append(outputChunks, chunk)
+	}
+	if strings.Join(outputChunks, "") != "chunk1\nchunk2\n" {
+		t.Errorf("StreamTaskOutput got %q, want 'chunk1\nchunk2\n'", strings.Join(outputChunks, ""))
 	}
 
 	if subResp, err := c.Subscribe(ctx, "sub-1", "", "topic1", "topic2"); err != nil || len(subResp.Topics) != 2 {

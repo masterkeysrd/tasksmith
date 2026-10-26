@@ -11,6 +11,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/daemon/broker"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/permissions"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/session"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/tasks"
 )
 
 // HandlerFunc defines the signature of a route handler.
@@ -138,12 +139,14 @@ func classifyError(err error) (int, string) {
 		errors.Is(err, session.ErrJournalNotFound),
 		errors.Is(err, session.ErrEntryNotFound),
 		errors.Is(err, session.ErrBlobNotFound),
+		errors.Is(err, tasks.ErrTaskNotFound),
 		strings.Contains(err.Error(), "subscriber not found"):
 		return http.StatusNotFound, "not_found"
 
 	case errors.Is(err, session.ErrSessionConflict),
 		errors.Is(err, session.ErrRevertConflict),
 		errors.Is(err, broker.ErrExists),
+		errors.Is(err, tasks.ErrNotRunning),
 		strings.Contains(err.Error(), "session already has an active turn"):
 		return http.StatusConflict, "conflict"
 

@@ -384,6 +384,93 @@ func (c *Client) Revert(ctx context.Context, sessionID string, req api.RevertReq
 	return c.doJSON(ctx, http.MethodPost, path, nil, req, nil)
 }
 
+// Tasks returns all background tasks for a session.
+func (c *Client) Tasks(ctx context.Context, sessionID string) ([]api.Task, error) {
+	path, err := c.sessionEndpoint(sessionID, "/tasks")
+	if err != nil {
+		return nil, err
+	}
+	var out api.TasksResponse
+	if err := c.doJSON(ctx, http.MethodGet, path, nil, nil, &out); err != nil {
+		return nil, err
+	}
+	return out.Tasks, nil
+}
+
+// KillTask requests termination of an active background task.
+func (c *Client) KillTask(ctx context.Context, sessionID, taskID string) error {
+	taskID = strings.TrimSpace(taskID)
+	if taskID == "" {
+		return errors.New("client: task ID must not be empty")
+	}
+	path, err := c.sessionEndpoint(sessionID, "/tasks/"+url.PathEscape(taskID)+"/kill")
+	if err != nil {
+		return err
+	}
+	return c.doJSON(ctx, http.MethodPost, path, nil, nil, nil)
+}
+
+// StreamTaskOutput streams live task output (both backlog and live updates) for a task.
+func (c *Client) StreamTaskOutput(ctx context.Context, sessionID, taskID string) iter.Seq2[string, error] {
+	return func(yield func(string, error) bool) {
+		taskID = strings.TrimSpace(taskID)
+		if taskID == "" {
+			yield("", errors.New("client: task ID must not be empty"))
+			return
+		}
+		path, err := c.sessionEndpoint(sessionID, "/tasks/"+url.PathEscape(taskID)+"/output")
+		if err != nil {
+			yield("", err)
+			return
+		}
+
+		u := baseURL + path
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+		if err != nil {
+			yield("", fmt.Errorf("client: build request: %w", err))
+			return
+		}
+		req.Header.Set("Accept", "text/plain")
+		if c.cwd != "" {
+			req.Header.Set(api.HeaderCWD, c.cwd)
+		}
+
+		resp, err := c.httpClient.Do(req)
+		if err != nil {
+			yield("", err)
+			return
+		}
+		defer func() {
+			_ = resp.Body.Close()
+		}()
+
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			yield("", decodeErrorResponse(resp))
+			return
+		}
+
+		buf := make([]byte, 4096)
+		for {
+			n, readErr := resp.Body.Read(buf)
+			if n > 0 {
+				if !yield(string(buf[:n]), nil) {
+					return
+				}
+			}
+			if readErr != nil {
+				if errors.Is(readErr, io.EOF) {
+					return
+				}
+				if ctx.Err() != nil {
+					return
+				}
+				yield("", readErr)
+				return
+			}
+		}
+	}
+}
+
 // Subscribe subscribes an active SSE stream (identified by subscriberID) to additional topics.
 func (c *Client) Subscribe(ctx context.Context, subscriberID, since string, topics ...string) (*api.SubscriptionResponse, error) {
 	subID := strings.TrimSpace(subscriberID)

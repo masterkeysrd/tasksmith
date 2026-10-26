@@ -23,7 +23,9 @@ func (s *Std) Bash(ctx context.Context, req BashRequest) (*BashResult, error) {
 		Env:     req.Env,
 		Timeout: req.Timeout,
 	}
-	if req.Stdin != "" {
+	if req.StdinReader != nil {
+		cmd.Stdin = req.StdinReader
+	} else if req.Stdin != "" {
 		cmd.Stdin = strings.NewReader(req.Stdin)
 	}
 	if req.Output != nil {

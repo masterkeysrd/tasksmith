@@ -1703,3 +1703,147 @@ func TestToolStructuredContentInEventsAndHistory(t *testing.T) {
 	}
 	t.Fatalf("tool result %q missing from timeline", live.ID)
 }
+
+func TestDaemonTasksEndpoints(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+
+	var step int
+	provider := &fakeProvider{
+		chunkHandler: func(_ context.Context, req *llm.Request) (llm.StreamResponse, error) {
+			step++
+			var content message.Content
+			if step == 1 {
+				content = message.Content{&message.ToolCall{
+					ID:   "bash-call",
+					Name: "bash",
+					Args: map[string]any{
+						"command":           "echo 'hello from task' && sleep 5",
+						"run_in_background": true,
+					},
+				}}
+			} else {
+				content = message.Content{&message.TextBlock{Text: "Task started."}}
+			}
+			return func(yield func(message.AssistantChunk, error) bool) {
+				yield(message.AssistantChunk{
+					BaseChunk: message.BaseChunk{ID: uuid.NewString()},
+					Model:     req.Model,
+					Content:   content,
+					Done:      true,
+				}, nil)
+			}, nil
+		},
+	}
+
+	_, cli, _ := setupDaemonTest(t, provider)
+	_, err := cli.AddPermissionRule(ctx, api.PermissionRuleRequest{
+		Scope:  api.ScopeGlobal,
+		Effect: api.EffectAllow,
+		Rule:   "bash(*)",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	sess, err := cli.CreateSession(ctx, api.CreateSessionRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tasks, err := cli.Tasks(ctx, sess.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tasks) != 0 {
+		t.Fatalf("expected 0 initial tasks, got %d", len(tasks))
+	}
+
+	ready := make(chan struct{})
+	doneTurn := make(chan struct{})
+	go func() {
+		for event, err := range cli.EventsWithReady(ctx, "", "", func(string) { close(ready) }, api.SessionStreamTopic(sess.ID)) {
+			if err != nil {
+				return
+			}
+			if event.Type == api.EventCompleted {
+				close(doneTurn)
+				return
+			}
+		}
+	}()
+
+	select {
+	case <-ready:
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
+
+	if err := cli.Send(ctx, sess.ID, api.SendRequest{Content: "Run background command."}); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case <-doneTurn:
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
+
+	tasks, err = cli.Tasks(ctx, sess.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tasks) != 1 {
+		t.Fatalf("expected 1 background task, got %d", len(tasks))
+	}
+	taskID := tasks[0].ID
+	if tasks[0].Status != api.TaskStatusRunning {
+		t.Fatalf("task status = %q, want %q", tasks[0].Status, api.TaskStatusRunning)
+	}
+
+	// Stream output
+	outputCtx, cancelOutput := context.WithTimeout(ctx, 3*time.Second)
+	defer cancelOutput()
+
+	var output string
+	for chunk, err := range cli.StreamTaskOutput(outputCtx, sess.ID, taskID) {
+		if err != nil {
+			break
+		}
+		output += chunk
+		if strings.Contains(output, "hello from task") {
+			break
+		}
+	}
+	if !strings.Contains(output, "hello from task") {
+		t.Fatalf("streamed output does not contain expected text, got %q", output)
+	}
+
+	// Kill task
+	if err := cli.KillTask(ctx, sess.ID, taskID); err != nil {
+		t.Fatalf("kill task: %v", err)
+	}
+
+	// Verify task is now canceled or completed/failed
+	time.Sleep(100 * time.Millisecond)
+	tasks, err = cli.Tasks(ctx, sess.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tasks) != 1 {
+		t.Fatalf("expected 1 task, got %d", len(tasks))
+	}
+	if tasks[0].Status != api.TaskStatusCanceled && tasks[0].Status != api.TaskStatusFailed {
+		t.Fatalf("killed task status = %q, want canceled or failed", tasks[0].Status)
+	}
+
+	// Killing an already finished/canceled task returns conflict (409)
+	err = cli.KillTask(ctx, sess.ID, taskID)
+	if err == nil {
+		t.Fatal("expected error killing already finished task, got nil")
+	}
+	var apiErr *api.APIError
+	if !errors.As(err, &apiErr) || apiErr.StatusCode != http.StatusConflict {
+		t.Fatalf("expected 409 Conflict, got %v", err)
+	}
+}

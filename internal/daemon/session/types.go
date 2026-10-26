@@ -6,6 +6,7 @@ import (
 	"github.com/masterkeysrd/loom/message"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/broker"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/journal"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/tasks"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/timeline"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tools"
 )
@@ -81,6 +82,9 @@ const (
 
 	// EventSessionDeleted is published when a session is deleted.
 	EventSessionDeleted EventType = "session_deleted"
+
+	// EventTaskUpdated is published when a background task updates in a session.
+	EventTaskUpdated EventType = "task_updated"
 )
 
 // Event is implemented by all real-time session notifications published by [Manager].
@@ -135,6 +139,13 @@ type CompletedEvent struct {
 }
 
 func (CompletedEvent) EventType() string { return string(EventCompleted) }
+
+type TaskUpdatedEvent struct {
+	SessionID string
+	Task      tasks.Snapshot
+}
+
+func (TaskUpdatedEvent) EventType() string { return string(EventTaskUpdated) }
 
 type ErrorEvent struct {
 	SessionID string

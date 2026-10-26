@@ -133,3 +133,72 @@ func TestCycleMode(t *testing.T) {
 		}
 	}
 }
+
+func TestTasksStore(t *testing.T) {
+	ResetSession()
+	defer ResetSession()
+
+	if tasks := GetTasks(); len(tasks) != 0 {
+		t.Fatalf("expected 0 initial tasks, got %d", len(tasks))
+	}
+	if running := GetRunningTasks(); len(running) != 0 {
+		t.Fatalf("expected 0 running tasks, got %d", len(running))
+	}
+
+	task1 := api.Task{
+		ID:      "t-1",
+		Command: "sleep 10",
+		Status:  api.TaskStatusRunning,
+	}
+	UpsertTask(task1)
+
+	tasks := GetTasks()
+	if len(tasks) != 1 || tasks[0].ID != "t-1" || tasks[0].Status != api.TaskStatusRunning {
+		t.Fatalf("unexpected tasks after UpsertTask: %+v", tasks)
+	}
+
+	running := GetRunningTasks()
+	if len(running) != 1 || running[0].ID != "t-1" {
+		t.Fatalf("unexpected running tasks: %+v", running)
+	}
+
+	// Update task1 to completed
+	task1.Status = api.TaskStatusCompleted
+	UpsertTask(task1)
+
+	tasks = GetTasks()
+	if len(tasks) != 1 || tasks[0].Status != api.TaskStatusCompleted {
+		t.Fatalf("unexpected tasks after completion update: %+v", tasks)
+	}
+
+	running = GetRunningTasks()
+	if len(running) != 0 {
+		t.Fatalf("expected 0 running tasks after completion, got %d", len(running))
+	}
+
+	// Upsert second task
+	task2 := api.Task{
+		ID:      "t-2",
+		Command: "npm run dev",
+		Status:  api.TaskStatusPending,
+	}
+	UpsertTask(task2)
+
+	tasks = GetTasks()
+	if len(tasks) != 2 {
+		t.Fatalf("expected 2 tasks, got %d", len(tasks))
+	}
+	running = GetRunningTasks()
+	if len(running) != 1 || running[0].ID != "t-2" {
+		t.Fatalf("expected 1 running task (t-2), got %+v", running)
+	}
+
+	// Verify NewDraftSession clears tasks
+	NewDraftSession("")
+	if tasks = GetTasks(); len(tasks) != 0 {
+		t.Fatalf("expected 0 tasks after NewDraftSession, got %d", len(tasks))
+	}
+	if running = GetRunningTasks(); len(running) != 0 {
+		t.Fatalf("expected 0 running tasks after NewDraftSession, got %d", len(running))
+	}
+}

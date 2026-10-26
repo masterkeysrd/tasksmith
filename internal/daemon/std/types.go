@@ -328,6 +328,10 @@ type BashRequest struct {
 	// Stdin provides optional standard input to the command.
 	Stdin string `json:"stdin,omitempty"`
 
+	// StdinReader provides optional streaming standard input to the command.
+	// When non-nil, StdinReader takes precedence over Stdin.
+	StdinReader io.Reader `json:"-"`
+
 	// Output optionally receives combined stdout and stderr from the command.
 	Output io.Writer `json:"-"`
 

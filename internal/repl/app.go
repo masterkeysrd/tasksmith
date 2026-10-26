@@ -99,6 +99,7 @@ var appContent = trail.SimpleFC("AppContent", func() trail.Node {
 			OnCycleMode: func() { _ = store.CycleMode() },
 		}),
 		components.Slot(),
+		components.Tasks(),
 		components.DefaultStatusLine(),
 	)
 })

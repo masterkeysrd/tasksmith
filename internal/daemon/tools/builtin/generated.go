@@ -11,6 +11,7 @@ const (
 	ToolGrep     = "grep"
 	ToolLS       = "ls"
 	ToolRemove   = "remove"
+	ToolTasks    = "tasks"
 	ToolView     = "view"
 	ToolWebFetch = "web_fetch"
 	ToolWrite    = "write"

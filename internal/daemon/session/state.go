@@ -6,6 +6,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/masterkeysrd/loom/message"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/tasks"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tools"
 )
 
@@ -18,6 +20,7 @@ type State struct {
 	Running            bool                      `json:"running"`
 	WaitingPermission  bool                      `json:"waiting_permission"`
 	PendingPermissions []tools.PermissionRequest `json:"pending_permissions,omitempty"`
+	Tasks              []tasks.Snapshot          `json:"tasks,omitempty"`
 	Error              string                    `json:"error,omitempty"`
 	StartedAt          time.Time                 `json:"started_at,omitzero"`
 	FinishedAt         time.Time                 `json:"finished_at,omitzero"`
@@ -26,6 +29,7 @@ type State struct {
 	done      chan struct{}                       `json:"-"`
 	err       error                               `json:"-"`
 	decisions map[string]tools.PermissionDecision `json:"-"`
+	inbox     []message.Message                   `json:"-"`
 }
 
 // NewState constructs a new [State] initialized to [StatusIdle].
@@ -59,6 +63,7 @@ func (s *State) Clone() *State {
 		Running:            s.Running,
 		WaitingPermission:  s.WaitingPermission,
 		PendingPermissions: perms,
+		Tasks:              slices.Clone(s.Tasks),
 		Error:              s.Error,
 		StartedAt:          s.StartedAt,
 		FinishedAt:         s.FinishedAt,

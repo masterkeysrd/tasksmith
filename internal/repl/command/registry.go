@@ -109,4 +109,5 @@ func (r *Registry) registerBuiltins() {
 	r.registerSessionCommands()
 	r.registerChangesCommands()
 	r.registerPermissionCommands()
+	r.registerTaskCommands()
 }

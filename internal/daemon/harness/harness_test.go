@@ -1216,3 +1216,309 @@ func TestCallerSuppliedUserMessageID(t *testing.T) {
 		t.Fatalf("emitted user message ID = %q, want exact %q", emittedUserMsgID, customID)
 	}
 }
+
+func TestInboxDrainAfterToolExecution(t *testing.T) {
+	ctx := context.Background()
+	db := openTestSQLite(t)
+	workDir, reg, perm := newTestToolsRegistry(t)
+
+	targetFile := filepath.Join(workDir, "hello.txt")
+	if err := os.WriteFile(targetFile, []byte("inbox-test-file\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	var toolRequested bool
+	prov := &fakeProvider{
+		stepHandler: func(_ context.Context, req *llm.Request, turn int) ([]message.AssistantChunk, error) {
+			if turn == 1 {
+				toolRequested = true
+				return []message.AssistantChunk{
+					{
+						BaseChunk: message.BaseChunk{ID: "asst-tool-call"},
+						Content: []message.Block{
+							&message.ToolCall{
+								ID:   "call-view-1",
+								Name: "view",
+								Args: map[string]any{"path": "hello.txt"},
+							},
+						},
+						Done: true,
+					},
+				}, nil
+			}
+
+			// Verify in turn 2 that the inbox message is visible in req.Messages
+			var foundInbox bool
+			for _, m := range req.Messages {
+				if strings.Contains(msgText(m), "task completed from inbox") {
+					foundInbox = true
+					break
+				}
+			}
+			if !foundInbox {
+				t.Errorf("turn 2 LLM request did not contain inbox message: %+v", req.Messages)
+			}
+
+			return []message.AssistantChunk{
+				{
+					BaseChunk: message.BaseChunk{ID: "asst-final"},
+					Content: []message.Block{
+						&message.TextBlock{Text: "All done."},
+					},
+					Done: true,
+				},
+			}, nil
+		},
+	}
+
+	inboxMsg := message.NewUserText("task completed from inbox")
+	var inboxDrained bool
+	inboxFn := func() []message.Message {
+		if toolRequested && !inboxDrained {
+			inboxDrained = true
+			return []message.Message{inboxMsg}
+		}
+		return nil
+	}
+
+	h, err := New(Config{
+		ID:          "thread-inbox-test",
+		DB:          db,
+		Model:       newTestModel(t, prov),
+		Tools:       reg,
+		Permissions: perm,
+		Inbox:       inboxFn,
+		Logger:      log.Default(),
+	})
+	if err != nil {
+		t.Fatalf("New error: %v", err)
+	}
+
+	var emittedMessages []message.Message
+	for ev, err := range h.Stream(ctx, Input{Message: message.NewUserText("Read file")}) {
+		if err != nil {
+			t.Fatalf("Stream error: %v", err)
+		}
+		if ev.Type == EventMessage {
+			emittedMessages = append(emittedMessages, ev.Message)
+		}
+	}
+
+	if !inboxDrained {
+		t.Fatal("expected inbox to be drained")
+	}
+
+	// Verify emittedMessages contains:
+	// 0: User ("Read file")
+	// 1: Assistant (ToolCall)
+	// 2: Tool (Result)
+	// 3: Assistant (Final "All done.")
+	// (Inbox messages are NOT emitted to the user-facing stream to avoid polluting chat history)
+	if len(emittedMessages) != 4 {
+		t.Fatalf("expected 4 emitted messages, got %d: %+v", len(emittedMessages), emittedMessages)
+	}
+
+	finalAsst := emittedMessages[3]
+	if !strings.Contains(msgText(finalAsst), "All done.") {
+		t.Fatalf("emittedMessages[3] = %q, want final assistant message", msgText(finalAsst))
+	}
+
+	// Verify checkpointed state contains the inbox message
+	state, err := h.LoadState(ctx)
+	if err != nil {
+		t.Fatalf("LoadState error: %v", err)
+	}
+	if len(state.Messages) != 5 {
+		t.Fatalf("expected 5 messages in state, got %d", len(state.Messages))
+	}
+	if !strings.Contains(msgText(state.Messages[3]), "task completed from inbox") {
+		t.Fatalf("state.Messages[3] = %q, want inbox message", msgText(state.Messages[3]))
+	}
+	if state.Messages[3].GetID() == "" {
+		t.Fatal("expected non-empty ID for drained inbox message in state")
+	}
+}
+
+func TestInboxDrainDuringAgentWithoutTools(t *testing.T) {
+	ctx := context.Background()
+	db := openTestSQLite(t)
+	_, reg, perm := newTestToolsRegistry(t)
+
+	var queueMsg bool
+	var drained bool
+	inboxMsg := message.NewUserText("inbox message arrived during agent turn")
+
+	prov := &fakeProvider{
+		stepHandler: func(_ context.Context, req *llm.Request, turn int) ([]message.AssistantChunk, error) {
+			if turn == 1 {
+				// While agent turn 1 is running, queue an inbox message!
+				queueMsg = true
+				return []message.AssistantChunk{
+					{
+						BaseChunk: message.BaseChunk{ID: "asst-first"},
+						Content: []message.Block{
+							&message.TextBlock{Text: "Initial response without tools."},
+						},
+						Done: true,
+					},
+				}, nil
+			}
+
+			// In turn 2, verify agent received the inbox message!
+			var foundInbox bool
+			for _, m := range req.Messages {
+				if strings.Contains(msgText(m), "inbox message arrived during agent turn") {
+					foundInbox = true
+					break
+				}
+			}
+			if !foundInbox {
+				t.Errorf("turn 2 LLM request did not contain inbox message: %+v", req.Messages)
+			}
+
+			return []message.AssistantChunk{
+				{
+					BaseChunk: message.BaseChunk{ID: "asst-second"},
+					Content: []message.Block{
+						&message.TextBlock{Text: "Acknowledged inbox message."},
+					},
+					Done: true,
+				},
+			}, nil
+		},
+	}
+
+	inboxFn := func() []message.Message {
+		if queueMsg && !drained {
+			drained = true
+			return []message.Message{inboxMsg}
+		}
+		return nil
+	}
+
+	h, err := New(Config{
+		ID:          "thread-inbox-agent-loop",
+		DB:          db,
+		Model:       newTestModel(t, prov),
+		Tools:       reg,
+		Permissions: perm,
+		Inbox:       inboxFn,
+		Logger:      log.Default(),
+	})
+	if err != nil {
+		t.Fatalf("New error: %v", err)
+	}
+
+	var emittedMessages []message.Message
+	for ev, err := range h.Stream(ctx, Input{Message: message.NewUserText("Start turn")}) {
+		if err != nil {
+			t.Fatalf("Stream error: %v", err)
+		}
+		if ev.Type == EventMessage {
+			emittedMessages = append(emittedMessages, ev.Message)
+		}
+	}
+
+	if !drained {
+		t.Fatal("expected inbox to be drained after agent step")
+	}
+
+	// Sequence for emittedMessages:
+	// 0: User ("Start turn")
+	// 1: Assistant ("Initial response without tools.")
+	// 2: Assistant ("Acknowledged inbox message.")
+	// (Inbox messages are internal and not emitted to the user-facing stream)
+	if len(emittedMessages) != 3 {
+		t.Fatalf("expected 3 emitted messages, got %d: %+v", len(emittedMessages), emittedMessages)
+	}
+
+	if !strings.Contains(msgText(emittedMessages[1]), "Initial response without tools") {
+		t.Fatalf("emittedMessages[1] = %q, want first assistant message", msgText(emittedMessages[1]))
+	}
+	if !strings.Contains(msgText(emittedMessages[2]), "Acknowledged inbox message") {
+		t.Fatalf("emittedMessages[2] = %q, want final assistant message", msgText(emittedMessages[2]))
+	}
+
+	// Verify checkpointed state contains 4 messages:
+	state, err := h.LoadState(ctx)
+	if err != nil {
+		t.Fatalf("LoadState error: %v", err)
+	}
+	if len(state.Messages) != 4 {
+		t.Fatalf("expected 4 messages in state, got %d", len(state.Messages))
+	}
+	if !strings.Contains(msgText(state.Messages[2]), "inbox message arrived during agent turn") {
+		t.Fatalf("state.Messages[2] = %q, want inbox message", msgText(state.Messages[2]))
+	}
+}
+
+func TestInboxDirectTurnWithEmptyInput(t *testing.T) {
+	ctx := context.Background()
+	db := openTestSQLite(t)
+	_, reg, perm := newTestToolsRegistry(t)
+
+	var drained bool
+	prov := &fakeProvider{
+		stepHandler: func(_ context.Context, _ *llm.Request, _ int) ([]message.AssistantChunk, error) {
+			return []message.AssistantChunk{
+				{
+					BaseChunk: message.BaseChunk{ID: "asst-reply"},
+					Content: []message.Block{
+						&message.TextBlock{Text: "Processed inbox task."},
+					},
+					Done: true,
+				},
+			}, nil
+		},
+	}
+
+	inboxFn := func() []message.Message {
+		if !drained {
+			drained = true
+			return []message.Message{message.NewUserText("inbox task notification")}
+		}
+		return nil
+	}
+
+	h, err := New(Config{
+		ID:          "thread-inbox-empty-input",
+		DB:          db,
+		Model:       newTestModel(t, prov),
+		Tools:       reg,
+		Permissions: perm,
+		Inbox:       inboxFn,
+		Logger:      log.Default(),
+	})
+	if err != nil {
+		t.Fatalf("New error: %v", err)
+	}
+
+	// Calling Stream with empty Input{} initiates an inbox drain turn!
+	var emittedMessages []message.Message
+	for ev, err := range h.Stream(ctx, Input{}) {
+		if err != nil {
+			t.Fatalf("Stream error: %v", err)
+		}
+		if ev.Type == EventMessage {
+			emittedMessages = append(emittedMessages, ev.Message)
+		}
+	}
+
+	if !drained {
+		t.Fatal("expected inbox to be drained on Input{} turn")
+	}
+
+	// Only the assistant response is emitted
+	if len(emittedMessages) != 1 || !strings.Contains(msgText(emittedMessages[0]), "Processed inbox task.") {
+		t.Fatalf("expected 1 emitted assistant message, got %+v", emittedMessages)
+	}
+
+	// But state contains both the drained inbox user message and the assistant reply
+	state, err := h.LoadState(ctx)
+	if err != nil {
+		t.Fatalf("LoadState error: %v", err)
+	}
+	if len(state.Messages) != 2 {
+		t.Fatalf("expected 2 messages in state, got %d: %+v", len(state.Messages), state.Messages)
+	}
+}
