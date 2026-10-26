@@ -471,19 +471,34 @@ collectLoop:
 	}
 
 	// Expected sequence:
+	// 0. status_changed (thinking)
 	// 1. entry_added (user message)
-	// 2..4. chunk ("Alpha", " Beta", " Gamma")
-	// 5. entry_added (assistant message)
-	// 6. completed
-	if len(received) != 6 {
-		t.Fatalf("expected 6 SSE events, got %d: %+v", len(received), received)
+	// 2. status_changed (generating)
+	// 3..5. chunk ("Alpha", " Beta", " Gamma")
+	// 6. entry_added (assistant message)
+	// 7. status_changed (idle)
+	// 8. completed
+	if len(received) != 9 {
+		t.Fatalf("expected 9 SSE events, got %d: %+v", len(received), received)
 	}
-	p0, ok := received[0].Payload.(api.EntryAddedEvent)
-	if received[0].Type != api.EventEntryAdded || !ok || p0.Entry.Message == nil || p0.Entry.Message.Role != api.RoleUser {
-		t.Errorf("received[0] = %+v, want user entry_added", received[0])
+	if received[0].Type != api.EventStatusChanged {
+		t.Errorf("received[0] = %+v, want status_changed", received[0])
+	}
+	if p, ok := received[0].Payload.(api.StatusChangedEvent); !ok || p.Status != api.StatusThinking {
+		t.Errorf("received[0].Payload = %+v, want StatusThinking", received[0].Payload)
+	}
+	p1, ok := received[1].Payload.(api.EntryAddedEvent)
+	if received[1].Type != api.EventEntryAdded || !ok || p1.Entry.Message == nil || p1.Entry.Message.Role != api.RoleUser {
+		t.Errorf("received[1] = %+v, want user entry_added", received[1])
+	}
+	if received[2].Type != api.EventStatusChanged {
+		t.Errorf("received[2] = %+v, want status_changed", received[2])
+	}
+	if p, ok := received[2].Payload.(api.StatusChangedEvent); !ok || p.Status != api.StatusGenerating {
+		t.Errorf("received[2].Payload = %+v, want StatusGenerating", received[2].Payload)
 	}
 	var streamed strings.Builder
-	for i := 1; i <= 3; i++ {
+	for i := 3; i <= 5; i++ {
 		chPayload, ok := received[i].Payload.(api.ChunkEvent)
 		if received[i].Type != api.EventChunk || !ok {
 			t.Errorf("received[%d] = %+v, want chunk", i, received[i])
@@ -496,12 +511,18 @@ collectLoop:
 	if streamed.String() != "Alpha Beta Gamma" {
 		t.Errorf("streamed chunks = %q, want \"Alpha Beta Gamma\"", streamed.String())
 	}
-	p4, ok := received[4].Payload.(api.EntryAddedEvent)
-	if received[4].Type != api.EventEntryAdded || !ok || p4.Entry.Message == nil || p4.Entry.Message.Role != api.RoleAssistant {
-		t.Errorf("received[4] = %+v, want assistant entry_added", received[4])
+	p6, ok := received[6].Payload.(api.EntryAddedEvent)
+	if received[6].Type != api.EventEntryAdded || !ok || p6.Entry.Message == nil || p6.Entry.Message.Role != api.RoleAssistant {
+		t.Errorf("received[6] = %+v, want assistant entry_added", received[6])
 	}
-	if received[5].Type != api.EventCompleted {
-		t.Errorf("received[5] = %+v, want completed", received[5])
+	if received[7].Type != api.EventStatusChanged {
+		t.Errorf("received[7] = %+v, want status_changed", received[7])
+	}
+	if p, ok := received[7].Payload.(api.StatusChangedEvent); !ok || p.Status != api.StatusIdle {
+		t.Errorf("received[7].Payload = %+v, want StatusIdle", received[7].Payload)
+	}
+	if received[8].Type != api.EventCompleted {
+		t.Errorf("received[8] = %+v, want completed", received[8])
 	}
 }
 
@@ -552,13 +573,13 @@ func TestBackgroundTurnSurvivesClientDisconnect(t *testing.T) {
 		t.Fatal("timed out waiting for turn to start")
 	}
 
-	// Verify GetSession reports StatusRunning while turn is active
+	// Verify GetSession reports active status (thinking) while turn is active
 	runningSess, err := cli.GetSession(ctx, sess.ID)
 	if err != nil {
 		t.Fatalf("GetSession while running: %v", err)
 	}
-	if runningSess.Status != api.StatusRunning {
-		t.Errorf("GetSession.Status = %q, want %q", runningSess.Status, api.StatusRunning)
+	if runningSess.Status != api.StatusThinking {
+		t.Errorf("GetSession.Status = %q, want %q", runningSess.Status, api.StatusThinking)
 	}
 
 	// Concurrent Send while running must return 409 Conflict

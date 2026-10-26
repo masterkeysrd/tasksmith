@@ -87,6 +87,7 @@ type StreamState struct {
 	Messages          *[]Message
 	Streaming         bool
 	WaitingPermission bool
+	Status            api.SessionStatus
 }
 
 var stream = kites.Create(StreamState{})
@@ -131,27 +132,29 @@ type conversationMessage struct {
 // conversationAccumulator folds TimelineEntries and SSE events into view messages,
 // splitting them into a finalized prefix flushed to Transcript and a mutable suffix in StreamState.
 type conversationAccumulator struct {
-	mu          sync.Mutex
-	sessionID   string
-	messages    []conversationMessage
-	permissions []api.PermissionRequest
-	status      StreamStatus
-	err         error
-	draft       int
-	pendingUser *Message
-	flushedIDs  map[string]bool
-	identities  map[string]string
-	nextDraft   uint64
+	mu            sync.Mutex
+	sessionID     string
+	messages      []conversationMessage
+	permissions   []api.PermissionRequest
+	status        StreamStatus
+	sessionStatus api.SessionStatus
+	err           error
+	draft         int
+	pendingUser   *Message
+	flushedIDs    map[string]bool
+	identities    map[string]string
+	nextDraft     uint64
 }
 
 var globalConversation = newConversationAccumulator()
 
 func newConversationAccumulator() *conversationAccumulator {
 	return &conversationAccumulator{
-		draft:      -1,
-		status:     StreamIdle,
-		flushedIDs: make(map[string]bool),
-		identities: make(map[string]string),
+		draft:         -1,
+		status:        StreamIdle,
+		sessionStatus: api.StatusIdle,
+		flushedIDs:    make(map[string]bool),
+		identities:    make(map[string]string),
 	}
 }
 
@@ -173,6 +176,7 @@ func (acc *conversationAccumulator) reset() {
 	acc.messages = nil
 	acc.clearPermissionsLocked()
 	acc.status = StreamIdle
+	acc.sessionStatus = api.StatusIdle
 	acc.err = nil
 	acc.draft = -1
 	acc.pendingUser = nil
@@ -189,6 +193,7 @@ func (acc *conversationAccumulator) setSessionID(id string) {
 		acc.messages = nil
 		acc.clearPermissionsLocked()
 		acc.status = StreamIdle
+		acc.sessionStatus = api.StatusIdle
 		acc.err = nil
 		acc.draft = -1
 		acc.pendingUser = nil
@@ -217,6 +222,7 @@ func (acc *conversationAccumulator) addPendingUser(id, text string) {
 	acc.mu.Lock()
 	defer acc.mu.Unlock()
 	acc.status = StreamRunning
+	acc.sessionStatus = api.StatusThinking
 	acc.pendingUser = &Message{
 		ID:        id,
 		SourceID:  id,
@@ -240,6 +246,7 @@ func (acc *conversationAccumulator) cancelPendingUser(id string, err error) {
 		acc.pendingUser = nil
 	}
 	acc.status = StreamFailed
+	acc.sessionStatus = api.StatusIdle
 	acc.err = err
 	acc.publishLocked()
 	AppendError("Error", err.Error())
@@ -249,6 +256,7 @@ func (acc *conversationAccumulator) cancelTurn() {
 	acc.mu.Lock()
 	defer acc.mu.Unlock()
 	acc.status = StreamIdle
+	acc.sessionStatus = api.StatusIdle
 	acc.err = nil
 	acc.pendingUser = nil
 	acc.clearPermissionsLocked()
@@ -269,6 +277,24 @@ func (acc *conversationAccumulator) applyEvent(event api.Event) {
 	case api.EventConnected:
 		return
 
+	case api.EventStatusChanged:
+		p, ok := event.Payload.(api.StatusChangedEvent)
+		if !ok {
+			return
+		}
+		if acc.sessionID != "" && p.SessionID != acc.sessionID {
+			return
+		}
+		acc.sessionStatus = p.Status
+		if p.Status == api.StatusWaitingPermission {
+			acc.status = StreamWaitingPermission
+		} else if p.Status == api.StatusIdle {
+			acc.status = StreamIdle
+		} else {
+			acc.status = StreamRunning
+		}
+		acc.publishLocked()
+
 	case api.EventEntryAdded:
 		p, ok := event.Payload.(api.EntryAddedEvent)
 		if !ok {
@@ -281,6 +307,7 @@ func (acc *conversationAccumulator) applyEvent(event api.Event) {
 		if p.Entry.Kind != api.TimelineKindMessage {
 			if p.Entry.Kind == api.TimelineKindInterrupted {
 				acc.status = StreamIdle
+				acc.sessionStatus = api.StatusIdle
 				acc.err = nil
 				acc.pendingUser = nil
 				acc.clearPermissionsLocked()
@@ -340,8 +367,23 @@ func (acc *conversationAccumulator) applyEvent(event api.Event) {
 		_ = acc.addMessageLocked(msg)
 		if msg.Role == api.RoleUser {
 			acc.status, acc.err = StreamRunning, nil
-		} else if msg.Role == api.RoleTool && acc.status == StreamWaitingPermission && len(acc.permissions) == 0 {
-			acc.status = StreamRunning
+			acc.sessionStatus = api.StatusThinking
+		} else if msg.Role == api.RoleAssistant {
+			hasToolCall := false
+			for _, b := range msg.Content {
+				if b.Type == api.BlockToolCall {
+					hasToolCall = true
+					break
+				}
+			}
+			if hasToolCall {
+				acc.sessionStatus = api.StatusExecuting
+			}
+		} else if msg.Role == api.RoleTool {
+			acc.sessionStatus = api.StatusThinking
+			if acc.status == StreamWaitingPermission && len(acc.permissions) == 0 {
+				acc.status = StreamRunning
+			}
 		}
 		acc.publishLocked()
 
@@ -360,6 +402,23 @@ func (acc *conversationAccumulator) applyEvent(event api.Event) {
 		}
 		_ = acc.addChunkLocked(p.Chunk)
 		acc.status, acc.err = StreamRunning, nil
+		hasGenerating := false
+		hasThinking := false
+		for _, b := range p.Chunk.Content {
+			switch b.Type {
+			case api.BlockText, api.BlockToolCall:
+				hasGenerating = true
+			case api.BlockReasoning:
+				hasThinking = true
+			}
+		}
+		if hasGenerating {
+			acc.sessionStatus = api.StatusGenerating
+		} else if hasThinking {
+			acc.sessionStatus = api.StatusThinking
+		} else if acc.sessionStatus == "" || acc.sessionStatus == api.StatusIdle {
+			acc.sessionStatus = api.StatusGenerating
+		}
 		acc.publishLocked()
 
 	case api.EventPermissionRequested:
@@ -373,6 +432,7 @@ func (acc *conversationAccumulator) applyEvent(event api.Event) {
 		_ = acc.addPermissionsLocked(p.Permissions)
 		if len(acc.permissions) > 0 {
 			acc.status, acc.err = StreamWaitingPermission, nil
+			acc.sessionStatus = api.StatusWaitingPermission
 		}
 		acc.publishLocked()
 
@@ -395,6 +455,7 @@ func (acc *conversationAccumulator) applyEvent(event api.Event) {
 			return
 		}
 		acc.status, acc.err = StreamCompleted, nil
+		acc.sessionStatus = api.StatusIdle
 		acc.discardDraftLocked()
 		acc.clearPermissionsLocked()
 		acc.publishLocked()
@@ -408,6 +469,7 @@ func (acc *conversationAccumulator) applyEvent(event api.Event) {
 			return
 		}
 		acc.status = StreamFailed
+		acc.sessionStatus = api.StatusIdle
 		if p.Error == "" {
 			acc.err = errors.New("server reported a failure without details")
 		} else {
@@ -427,6 +489,7 @@ func (acc *conversationAccumulator) loadTimeline(entries []api.TimelineEntry) {
 		if entry.Kind != api.TimelineKindMessage {
 			if entry.Kind == api.TimelineKindInterrupted {
 				acc.status = StreamIdle
+				acc.sessionStatus = api.StatusIdle
 				acc.err = nil
 				acc.pendingUser = nil
 				acc.clearPermissionsLocked()
@@ -622,11 +685,25 @@ func (acc *conversationAccumulator) publishLocked() {
 		(msgsPtr != nil && len(*msgsPtr) > 0 && acc.status != StreamIdle && acc.status != StreamCompleted && acc.status != StreamFailed)
 	isWaiting := acc.status == StreamWaitingPermission || len(acc.permissions) > 0
 
+	sessionStatus := acc.sessionStatus
+	if sessionStatus == "" {
+		if isWaiting {
+			sessionStatus = api.StatusWaitingPermission
+		} else if isStreaming {
+			sessionStatus = api.StatusThinking
+		} else {
+			sessionStatus = api.StatusIdle
+		}
+	} else if !isStreaming && !isWaiting {
+		sessionStatus = api.StatusIdle
+	}
+
 	stream.Set(func(StreamState) StreamState {
 		return StreamState{
 			Messages:          msgsPtr,
 			Streaming:         isStreaming,
 			WaitingPermission: isWaiting,
+			Status:            sessionStatus,
 		}
 	})
 }

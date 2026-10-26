@@ -572,13 +572,25 @@ func TestEventPayloadsAndJSONRoundTrip(t *testing.T) {
 							Agent: "developer",
 							Model: "gpt-4o",
 						},
-						Status:    StatusRunning,
+						Status:    StatusThinking,
 						CreatedAt: now,
 						UpdatedAt: now,
 					},
 				},
 			},
 			wantTyp: EventSessionUpdated,
+		},
+		{
+			name: "status_changed",
+			ev: Event{
+				Type:  EventStatusChanged,
+				Topic: SessionStreamTopic("s1"),
+				Payload: StatusChangedEvent{
+					SessionID: "s1",
+					Status:    StatusGenerating,
+				},
+			},
+			wantTyp: EventStatusChanged,
 		},
 		{
 			name: "session_deleted",

@@ -41,6 +41,7 @@ const (
 	EventSessionUpdated      EventType = "session_updated"
 	EventSessionDeleted      EventType = "session_deleted"
 	EventEntryAdded          EventType = "entry_added"
+	EventStatusChanged       EventType = "status_changed"
 	EventChunk               EventType = "chunk"
 	EventPermissionRequested EventType = "permission_requested"
 	EventCompleted           EventType = "completed"
@@ -93,6 +94,14 @@ type EntryAddedEvent struct {
 }
 
 func (EntryAddedEvent) EventType() string { return string(EventEntryAdded) }
+
+// StatusChangedEvent represents the payload for an [EventStatusChanged] event.
+type StatusChangedEvent struct {
+	SessionID string        `json:"session_id"`
+	Status    SessionStatus `json:"status"`
+}
+
+func (StatusChangedEvent) EventType() string { return string(EventStatusChanged) }
 
 // ChunkEvent represents the payload for an [EventChunk] event.
 type ChunkEvent struct {
@@ -194,6 +203,12 @@ func (e *Event) UnmarshalJSON(data []byte) error {
 		var p EntryAddedEvent
 		if err := json.Unmarshal(raw, &p); err != nil {
 			return fmt.Errorf("api: unmarshal entry_added payload: %w", err)
+		}
+		e.Payload = p
+	case EventStatusChanged:
+		var p StatusChangedEvent
+		if err := json.Unmarshal(raw, &p); err != nil {
+			return fmt.Errorf("api: unmarshal status_changed payload: %w", err)
 		}
 		e.Payload = p
 	case EventChunk:

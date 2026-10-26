@@ -561,6 +561,17 @@ func (d *Daemon) FormatEvent(msg broker.Message) (api.Event, error) {
 			},
 		}, nil
 
+	case session.StatusChangedEvent:
+		return api.Event{
+			ID:    msg.ID,
+			Type:  api.EventStatusChanged,
+			Topic: msg.Topic,
+			Payload: api.StatusChangedEvent{
+				SessionID: ev.SessionID,
+				Status:    api.SessionStatus(ev.Status),
+			},
+		}, nil
+
 	case session.CompletedEvent:
 		return api.Event{
 			ID:    msg.ID,

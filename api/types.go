@@ -74,7 +74,9 @@ type SessionStatus string
 
 const (
 	StatusIdle              SessionStatus = "idle"
-	StatusRunning           SessionStatus = "running"
+	StatusThinking          SessionStatus = "thinking"
+	StatusGenerating        SessionStatus = "generating"
+	StatusExecuting         SessionStatus = "executing"
 	StatusWaitingPermission SessionStatus = "waiting_permission"
 )
 

@@ -23,7 +23,7 @@ func TestToAPISessionWithTasks(t *testing.T) {
 		CreatedAt: now,
 		UpdatedAt: now,
 		State: &session.State{
-			Status: session.StatusRunning,
+			Status: session.StatusThinking,
 			Tasks: []tasks.Snapshot{
 				{
 					ID:           "task-1",
@@ -93,5 +93,34 @@ func TestToAPIEventTaskUpdated(t *testing.T) {
 	}
 	if payload.SessionID != "sess-1" || payload.Task.ID != "task-2" || payload.Task.Status != api.TaskStatusCompleted {
 		t.Fatalf("unexpected TaskUpdatedEvent payload: %+v", payload)
+	}
+}
+
+func TestToAPIEventStatusChanged(t *testing.T) {
+	rawMsg := broker.Message{
+		ID:    "evt-status-1",
+		Topic: api.SessionStreamTopic("sess-1"),
+		Event: session.StatusChangedEvent{
+			SessionID: "sess-1",
+			Status:    session.StatusExecuting,
+		},
+	}
+
+	d := &Daemon{}
+	apiEv, err := d.FormatEvent(rawMsg)
+	if err != nil {
+		t.Fatalf("FormatEvent error: %v", err)
+	}
+
+	if apiEv.Type != api.EventStatusChanged {
+		t.Fatalf("apiEv.Type = %q, want %q", apiEv.Type, api.EventStatusChanged)
+	}
+
+	payload, ok := apiEv.Payload.(api.StatusChangedEvent)
+	if !ok {
+		t.Fatalf("expected api.StatusChangedEvent payload, got %T", apiEv.Payload)
+	}
+	if payload.SessionID != "sess-1" || payload.Status != api.StatusExecuting {
+		t.Fatalf("unexpected StatusChangedEvent payload: %+v", payload)
 	}
 }

@@ -59,6 +59,9 @@ const (
 	// session timeline (e.g. messages, model/agent transitions, permission changes).
 	EventEntryAdded EventType = "entry_added"
 
+	// EventStatusChanged is published when a session changes its execution status.
+	EventStatusChanged EventType = "status_changed"
+
 	// EventChunk is published for each incremental streaming chunk produced by
 	// the assistant during a conversational turn.
 	EventChunk EventType = "chunk"
@@ -119,6 +122,13 @@ type EntryAddedEvent struct {
 }
 
 func (EntryAddedEvent) EventType() string { return string(EventEntryAdded) }
+
+type StatusChangedEvent struct {
+	SessionID string
+	Status    Status
+}
+
+func (StatusChangedEvent) EventType() string { return string(EventStatusChanged) }
 
 type ChunkEvent struct {
 	SessionID string

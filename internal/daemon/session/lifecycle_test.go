@@ -22,13 +22,13 @@ func TestStateAndSessionClone(t *testing.T) {
 		t.Fatalf("expected NewState not running, got running=%v waiting=%v", st.Running, st.WaitingPermission)
 	}
 
-	st.Status = StatusRunning
+	st.Status = StatusThinking
 	st.Running = true
 	st.StartedAt = time.Now().UTC()
 	st.Error = "some error"
 
 	clonedSt := st.Clone()
-	if clonedSt.Status != StatusRunning || !clonedSt.Running || clonedSt.Error != "some error" {
+	if clonedSt.Status != StatusThinking || !clonedSt.Running || clonedSt.Error != "some error" {
 		t.Fatalf("clonedSt mismatch: %+v", clonedSt)
 	}
 
@@ -54,7 +54,7 @@ func TestStateAndSessionClone(t *testing.T) {
 	}
 
 	clonedSess := sess.Clone()
-	if clonedSess.ID != sess.ID || clonedSess.Title != sess.Title || clonedSess.Status != StatusRunning {
+	if clonedSess.ID != sess.ID || clonedSess.Title != sess.Title || clonedSess.Status != StatusThinking {
 		t.Fatalf("clonedSess mismatch: %+v", clonedSess)
 	}
 
@@ -67,7 +67,7 @@ func TestStateAndSessionClone(t *testing.T) {
 
 	sess.Lock()
 	defer sess.Unlock()
-	if sess.Status != StatusRunning || !sess.Running || sess.Title != "Test Session" {
+	if sess.Status != StatusThinking || !sess.Running || sess.Title != "Test Session" {
 		t.Errorf("original sess modified after mutating clone: %+v", sess)
 	}
 }
@@ -154,8 +154,8 @@ func TestManagerConcurrentTurnRejection(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-	if got.Status != StatusRunning || !got.Running {
-		t.Errorf("got.Status = %q, Running = %v; want StatusRunning and Running=true", got.Status, got.Running)
+	if got.Status != StatusThinking || !got.Running {
+		t.Errorf("got.Status = %q, Running = %v; want StatusThinking and Running=true", got.Status, got.Running)
 	}
 
 	// Second Send should fail with ErrSessionRunning

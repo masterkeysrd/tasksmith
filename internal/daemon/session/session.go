@@ -39,9 +39,27 @@ type Status string
 
 const (
 	StatusIdle              Status = "idle"
-	StatusRunning           Status = "running"
+	StatusThinking          Status = "thinking"
+	StatusGenerating        Status = "generating"
+	StatusExecuting         Status = "executing"
 	StatusWaitingPermission Status = "waiting_permission"
 )
+
+func (s *Session) setStatus(next Status) {
+	s.Lock()
+	if s.Status == next {
+		s.Unlock()
+		return
+	}
+	s.Status = next
+	s.Running = (next == StatusThinking || next == StatusGenerating || next == StatusExecuting)
+	s.Unlock()
+
+	s.publisher.Publish(api.SessionStreamTopic(s.ID), StatusChangedEvent{
+		SessionID: s.ID,
+		Status:    next,
+	})
+}
 
 // SessionConfig holds configurable runtime settings for a [Session].
 type SessionConfig struct {
@@ -219,17 +237,12 @@ func (s *Session) initResources(ctx context.Context) error {
 
 		s.Tools = container
 	}
-	if s.PermManager == nil && s.permRoot != nil {
-		s.PermManager = s.permRoot.Attach(s.Config.Mode, s.Permissions, func(p permissions.Permissions) error {
-			s.Lock()
-			s.Permissions = p.Clone()
-			s.Unlock()
-			if s.store != nil {
-				return s.store.updateSessionPermissions(s.bgCtx, s.ID, p)
-			}
-			return nil
-		})
-	}
+	s.PermManager = s.permRoot.Attach(s.Config.Mode, s.Permissions, func(p permissions.Permissions) error {
+		s.Lock()
+		s.Permissions = p.Clone()
+		s.Unlock()
+		return s.store.updateSessionPermissions(s.bgCtx, s.ID, p)
+	})
 	return nil
 }
 
@@ -320,9 +333,6 @@ func (s *Session) renderSystemPrompt(agentName string) string {
 
 // History returns the conversation messages persisted for this session.
 func (s *Session) History(ctx context.Context) (message.MessageList, error) {
-	if s == nil || s.Timeline == nil {
-		return nil, errors.New("session: uninitialized session")
-	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -331,9 +341,6 @@ func (s *Session) History(ctx context.Context) (message.MessageList, error) {
 
 // appendMessage appends a chat-only message directly to the session timeline.
 func (s *Session) appendMessage(ctx context.Context, msg message.Message) error {
-	if s == nil || s.Timeline == nil {
-		return errors.New("session: uninitialized session")
-	}
 	if msg == nil {
 		return ErrNilMessage
 	}
@@ -445,7 +452,7 @@ func (s *Session) startTurn(hInput harness.Input) error {
 	runCtx, cancel := context.WithCancel(s.bgCtx)
 	done := make(chan struct{})
 
-	s.Status = StatusRunning
+	s.Status = StatusThinking
 	s.Running = true
 	s.WaitingPermission = false
 	if hInput.Message != nil {
@@ -459,18 +466,31 @@ func (s *Session) startTurn(hInput harness.Input) error {
 	s.done = done
 	s.Unlock()
 
+	s.publisher.Publish(api.SessionStreamTopic(s.ID), StatusChangedEvent{
+		SessionID: s.ID,
+		Status:    StatusThinking,
+	})
+
 	s.wg.Go(func() {
 		defer func() {
+			var statusChanged bool
 			s.Lock()
 			if s.done == done {
 				s.Running = false
-				if s.Status == StatusRunning {
+				if s.Status != StatusWaitingPermission && s.Status != StatusIdle {
 					s.Status = StatusIdle
+					statusChanged = true
 				}
 				s.cancel = nil
 				s.done = nil
 			}
 			s.Unlock()
+			if statusChanged && s.publisher != nil {
+				s.publisher.Publish(api.SessionStreamTopic(s.ID), StatusChangedEvent{
+					SessionID: s.ID,
+					Status:    StatusIdle,
+				})
+			}
 			cancel()
 			close(done)
 		}()
@@ -494,15 +514,23 @@ func (s *Session) startTurn(hInput harness.Input) error {
 				return
 			}
 			if len(s.inbox) == 0 {
+				var statusChanged bool
 				if s.done == done {
 					s.Running = false
-					if s.Status == StatusRunning {
+					if s.Status != StatusWaitingPermission && s.Status != StatusIdle {
 						s.Status = StatusIdle
+						statusChanged = true
 					}
 					s.cancel = nil
 					s.done = nil
 				}
 				s.Unlock()
+				if statusChanged {
+					s.publisher.Publish(api.SessionStreamTopic(s.ID), StatusChangedEvent{
+						SessionID: s.ID,
+						Status:    StatusIdle,
+					})
+				}
 				return
 			}
 			s.Unlock()
@@ -549,12 +577,10 @@ func (s *Session) onTaskUpdate(snap tasks.Snapshot) {
 	}
 	s.Unlock()
 
-	if s.publisher != nil {
-		s.publisher.Publish(api.SessionStreamTopic(s.ID), TaskUpdatedEvent{
-			SessionID: s.ID,
-			Task:      snap,
-		})
-	}
+	s.publisher.Publish(api.SessionStreamTopic(s.ID), TaskUpdatedEvent{
+		SessionID: s.ID,
+		Task:      snap,
+	})
 
 	if snap.Status == tasks.StatusCompleted || snap.Status == tasks.StatusFailed {
 		var tail string
@@ -663,6 +689,11 @@ func (s *Session) handleAsyncError(err error) {
 	}
 	s.Unlock()
 
+	s.publisher.Publish(api.SessionStreamTopic(s.ID), StatusChangedEvent{
+		SessionID: s.ID,
+		Status:    StatusIdle,
+	})
+
 	if errors.Is(err, context.Canceled) {
 		entry := timeline.NewInterruptedEntry(s.ID)
 		if appErr := s.Timeline.Append(s.bgCtx, entry); appErr == nil {
@@ -686,6 +717,7 @@ func (s *Session) handleAsyncError(err error) {
 func (s *Session) send(ctx context.Context, stream iter.Seq2[harness.Event, error]) (*message.Assistant, error) {
 	var reply *message.Assistant
 	var interrupted bool
+	var pendingTools int
 	agg := message.NewAssistantAggregator()
 
 	for hev, err := range stream {
@@ -717,6 +749,21 @@ func (s *Session) send(ctx context.Context, stream iter.Seq2[harness.Event, erro
 		case harness.EventChunk:
 			if hev.Chunk != nil {
 				agg.Add(hev.Chunk)
+				hasGenerating := false
+				hasThinking := false
+				for _, b := range hev.Chunk.Content {
+					switch b.(type) {
+					case *message.TextBlock, *message.ToolCall, *message.ToolCallChunk:
+						hasGenerating = true
+					case *message.ThinkingBlock:
+						hasThinking = true
+					}
+				}
+				if hasGenerating {
+					s.setStatus(StatusGenerating)
+				} else if hasThinking {
+					s.setStatus(StatusThinking)
+				}
 				s.publisher.Publish(api.SessionStreamTopic(s.ID), ChunkEvent{
 					SessionID: s.ID,
 					Chunk:     message.CloneAssistantChunk(*hev.Chunk),
@@ -741,6 +788,22 @@ func (s *Session) send(ctx context.Context, stream iter.Seq2[harness.Event, erro
 					SessionID: s.ID,
 					Entry:     entry.Clone(),
 				})
+
+				if asst, ok := hev.Message.(*message.Assistant); ok {
+					if len(asst.ToolCalls()) > 0 {
+						pendingTools = len(asst.ToolCalls())
+						s.setStatus(StatusExecuting)
+					}
+				} else if _, ok := hev.Message.(*message.Tool); ok {
+					if pendingTools > 0 {
+						pendingTools--
+						if pendingTools == 0 {
+							s.setStatus(StatusThinking)
+						}
+					} else {
+						s.setStatus(StatusThinking)
+					}
+				}
 			}
 
 		case harness.EventInterrupted:
@@ -759,6 +822,10 @@ func (s *Session) send(ctx context.Context, stream iter.Seq2[harness.Event, erro
 			s.FinishedAt = time.Now().UTC()
 			s.Unlock()
 
+			s.publisher.Publish(api.SessionStreamTopic(s.ID), StatusChangedEvent{
+				SessionID: s.ID,
+				Status:    StatusWaitingPermission,
+			})
 			s.publisher.Publish(api.SessionStreamTopic(s.ID), PermissionRequestedEvent{
 				SessionID:   s.ID,
 				Permissions: perms,
@@ -779,6 +846,10 @@ func (s *Session) send(ctx context.Context, stream iter.Seq2[harness.Event, erro
 			s.FinishedAt = time.Now().UTC()
 			s.Unlock()
 
+			s.publisher.Publish(api.SessionStreamTopic(s.ID), StatusChangedEvent{
+				SessionID: s.ID,
+				Status:    StatusIdle,
+			})
 			s.publisher.Publish(api.SessionStreamTopic(s.ID), CompletedEvent{
 				SessionID: s.ID,
 			})
@@ -816,15 +887,7 @@ func (s *Session) Wait(ctx context.Context) error {
 }
 
 func (s *Session) generateTitle(userText string) {
-	if s.workspace == nil || s.gateway == nil {
-		return
-	}
-
-	bgCtx := s.bgCtx
-	if bgCtx == nil {
-		bgCtx = context.Background()
-	}
-	ctx, cancel := context.WithTimeout(bgCtx, 30*time.Second)
+	ctx, cancel := context.WithTimeout(s.bgCtx, 30*time.Second)
 	defer cancel()
 
 	sysPrompt, err := s.workspace.RenderAgent(workspace.AgentNameTitleGenerator, nil, nil)
@@ -928,14 +991,12 @@ func (s *Session) generateTitle(userText string) {
 	s.Unlock()
 
 	cloned := s.Clone()
-	if s.publisher != nil {
-		var wsRoot string
-		if s.workspace != nil {
-			wsRoot = s.workspace.RootDir()
-		}
-		s.publisher.Publish(api.TopicSessions, UpdatedEvent{
-			Workspace: wsRoot,
-			Session:   cloned,
-		})
+	var wsRoot string
+	if s.workspace != nil {
+		wsRoot = s.workspace.RootDir()
 	}
+	s.publisher.Publish(api.TopicSessions, UpdatedEvent{
+		Workspace: wsRoot,
+		Session:   cloned,
+	})
 }

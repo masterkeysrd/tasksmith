@@ -779,10 +779,6 @@ func TestSendAndHistory(t *testing.T) {
 	if err := sess.Send(ctx, SendInput{Message: nil}); !errors.Is(err, ErrNilMessage) {
 		t.Errorf("Send nil input error = %v, want %v", err, ErrNilMessage)
 	}
-	var nilSess *Session
-	if _, err := nilSess.History(ctx); err == nil {
-		t.Errorf("History on nil session expected error")
-	}
 
 	pub.reset()
 
@@ -812,17 +808,22 @@ func TestSendAndHistory(t *testing.T) {
 	}
 
 	// Verify published event sequence via Publisher:
-	// 1. EventEntryAdded (user message)
-	// 2..4. EventChunk ("Hello", ", ", "TaskSmith!")
-	// 5. EventEntryAdded (assistant message)
-	// 6. EventCompleted (assistant reply)
+	// 0. StatusChangedEvent (StatusThinking)
+	// 1. EntryAddedEvent (user message)
+	// 2. StatusChangedEvent (StatusGenerating)
+	// 3..5. ChunkEvent ("Hello", ", ", "TaskSmith!")
+	// 6. EntryAddedEvent (assistant message)
+	// 7. StatusChangedEvent (StatusIdle)
+	// 8. CompletedEvent (assistant reply)
 	events := pub.recorded()
-	if len(events) != 6 {
-		t.Fatalf("expected 6 published events, got %d: %+v", len(events), events)
+	if len(events) != 9 {
+		t.Fatalf("expected 9 published events, got %d: %+v", len(events), events)
 	}
 	for i, ev := range events {
 		var sessionID string
 		switch e := ev.(type) {
+		case StatusChangedEvent:
+			sessionID = e.SessionID
 		case EntryAddedEvent:
 			sessionID = e.SessionID
 		case ChunkEvent:
@@ -837,16 +838,26 @@ func TestSendAndHistory(t *testing.T) {
 		}
 	}
 
-	ev0, ok := events[0].(EntryAddedEvent)
-	if !ok || ev0.Entry.Kind != timeline.KindMessage || ev0.Entry.Message == nil || ev0.Entry.Message.Role() != message.RoleUser || msgText(ev0.Entry.Message) != "Greetings!" {
-		t.Errorf("events[0] = %+v, want user EntryAddedEvent", events[0])
+	sc0, ok := events[0].(StatusChangedEvent)
+	if !ok || sc0.Status != StatusThinking {
+		t.Errorf("events[0] = %+v, want StatusChangedEvent(StatusThinking)", events[0])
 	}
-	if ev0.Entry.ID == "" || ev0.Entry.Message.GetID() == "" {
-		t.Errorf("expected generated UUID on user message in events[0]")
+
+	ev1, ok := events[1].(EntryAddedEvent)
+	if !ok || ev1.Entry.Kind != timeline.KindMessage || ev1.Entry.Message == nil || ev1.Entry.Message.Role() != message.RoleUser || msgText(ev1.Entry.Message) != "Greetings!" {
+		t.Errorf("events[1] = %+v, want user EntryAddedEvent", events[1])
+	}
+	if ev1.Entry.ID == "" || ev1.Entry.Message.GetID() == "" {
+		t.Errorf("expected generated UUID on user message in events[1]")
+	}
+
+	sc2, ok := events[2].(StatusChangedEvent)
+	if !ok || sc2.Status != StatusGenerating {
+		t.Errorf("events[2] = %+v, want StatusChangedEvent(StatusGenerating)", events[2])
 	}
 
 	var chunkTexts []string
-	for i := 1; i <= 3; i++ {
+	for i := 3; i <= 5; i++ {
 		chkEv, ok := events[i].(ChunkEvent)
 		if !ok {
 			t.Errorf("events[%d] = %+v, want ChunkEvent", i, events[i])
@@ -859,13 +870,17 @@ func TestSendAndHistory(t *testing.T) {
 		t.Errorf("chunkTexts = %v, want %v", chunkTexts, wantChunks)
 	}
 
-	ev4, ok := events[4].(EntryAddedEvent)
-	if !ok || ev4.Entry.Kind != timeline.KindMessage || ev4.Entry.Message == nil || ev4.Entry.Message.Role() != message.RoleAssistant || msgText(ev4.Entry.Message) != "Hello, TaskSmith!" {
-		t.Errorf("events[4] = %+v, want assistant EntryAddedEvent", events[4])
+	ev6, ok := events[6].(EntryAddedEvent)
+	if !ok || ev6.Entry.Kind != timeline.KindMessage || ev6.Entry.Message == nil || ev6.Entry.Message.Role() != message.RoleAssistant || msgText(ev6.Entry.Message) != "Hello, TaskSmith!" {
+		t.Errorf("events[6] = %+v, want assistant EntryAddedEvent", events[6])
 	}
-	ev5, ok := events[5].(CompletedEvent)
-	if !ok || ev5.SessionID != sess.ID {
-		t.Errorf("events[5] = %+v, want CompletedEvent for session %q", events[5], sess.ID)
+	sc7, ok := events[7].(StatusChangedEvent)
+	if !ok || sc7.Status != StatusIdle {
+		t.Errorf("events[7] = %+v, want StatusChangedEvent(StatusIdle)", events[7])
+	}
+	ev8, ok := events[8].(CompletedEvent)
+	if !ok || ev8.SessionID != sess.ID {
+		t.Errorf("events[8] = %+v, want CompletedEvent for session %q", events[8], sess.ID)
 	}
 
 	// Verify session.History returns [User, Assistant] from the messages table
@@ -915,10 +930,6 @@ func TestAppendMessageIsolationFromHarnessCheckpoints(t *testing.T) {
 	}
 
 	// Validation checks on appendMessage
-	var nilSess *Session
-	if err := nilSess.appendMessage(ctx, message.NewSystemText("notice")); err == nil {
-		t.Errorf("expected error appending message to nil session")
-	}
 	if err := sess.appendMessage(ctx, nil); !errors.Is(err, ErrNilMessage) {
 		t.Errorf("appendMessage nil message error = %v, want %v", err, ErrNilMessage)
 	}

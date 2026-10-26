@@ -3,6 +3,7 @@ package components
 import (
 	"github.com/masterkeysrd/kite/extras/trail"
 	"github.com/masterkeysrd/kite/style"
+	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/repl/store"
 )
 
@@ -23,6 +24,9 @@ var ActiveStream = trail.SimpleFC("ActiveStream", func() trail.Node {
 	})
 	waitingPerm := store.UseStream(func(s store.StreamState) bool {
 		return s.WaitingPermission
+	})
+	status := store.UseStream(func(s store.StreamState) api.SessionStatus {
+		return s.Status
 	})
 
 	var msgs []store.Message
@@ -46,7 +50,7 @@ var ActiveStream = trail.SimpleFC("ActiveStream", func() trail.Node {
 	if streaming && !waitingPerm {
 		children = append(children, trail.Box(trail.BoxProps{
 			Style: style.S().MarginBottom(1),
-		}, Spinner(SpinnerProps{Text: "Thinking..."})))
+		}, Spinner(SpinnerProps{Status: status})))
 	}
 
 	return trail.Box(trail.BoxProps{
