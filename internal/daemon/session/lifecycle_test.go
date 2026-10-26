@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -49,6 +50,7 @@ func TestStateAndSessionClone(t *testing.T) {
 		CreatedAt: now,
 		UpdatedAt: now,
 		Root:      "/tmp/session-dir",
+		wg:        &sync.WaitGroup{},
 	}
 
 	clonedSess := sess.Clone()

@@ -1624,7 +1624,9 @@ func TestToolStructuredContentInEventsAndHistory(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(workspace, "source.go"), []byte("first\nsecond\nthird\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	sess, err := cli.CreateSession(ctx, api.CreateSessionRequest{})
+	sess, err := cli.CreateSession(ctx, api.CreateSessionRequest{
+		Title: "Structured Tool Result",
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1746,7 +1748,9 @@ func TestDaemonTasksEndpoints(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	sess, err := cli.CreateSession(ctx, api.CreateSessionRequest{})
+	sess, err := cli.CreateSession(ctx, api.CreateSessionRequest{
+		Title: "Tasks Endpoints",
+	})
 	if err != nil {
 		t.Fatal(err)
 	}

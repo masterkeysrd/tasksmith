@@ -189,16 +189,23 @@ func (g *fakeGateway) Close() error {
 	return nil
 }
 
-type testPublisher struct {
-	mu     sync.Mutex
-	events []Event
+type pubRecord struct {
+	topic string
+	event Event
 }
 
-func (p *testPublisher) Publish(_ string, ev broker.Event) {
+type testPublisher struct {
+	mu      sync.Mutex
+	events  []Event
+	records []pubRecord
+}
+
+func (p *testPublisher) Publish(topic string, ev broker.Event) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if sev, ok := ev.(Event); ok {
 		p.events = append(p.events, sev)
+		p.records = append(p.records, pubRecord{topic: topic, event: sev})
 	}
 }
 
@@ -212,10 +219,19 @@ func (p *testPublisher) recorded() []Event {
 	return out
 }
 
+func (p *testPublisher) recordedRecords() []pubRecord {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	out := make([]pubRecord, len(p.records))
+	copy(out, p.records)
+	return out
+}
+
 func (p *testPublisher) reset() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.events = nil
+	p.records = nil
 }
 
 func setupTestEnv(t *testing.T, prov *fakeProvider) (*sql.DB, workspace.Workspace, *fakeGateway, *testPublisher, Manager) {
@@ -2484,5 +2500,151 @@ func TestSessionPermissionsPersistence(t *testing.T) {
 	}
 	if !slices.Contains(dbSess2.Permissions.Deny, "bash(*)") {
 		t.Fatalf("expected updated deny rule in store, got %+v", dbSess2.Permissions)
+	}
+}
+
+func TestSessionAutoGenerateTitle(t *testing.T) {
+	ctx := t.Context()
+
+	var mu sync.Mutex
+	prov := &fakeProvider{
+		chunkHandler: func(ctx context.Context, req *llm.Request) ([]message.AssistantChunk, error) {
+			mu.Lock()
+			defer mu.Unlock()
+			isTitleGen := false
+			for _, m := range req.Messages {
+				if m.Role() == message.RoleSystem {
+					for _, b := range m.GetContent() {
+						if tb, ok := b.(*message.TextBlock); ok && strings.Contains(tb.Text, "short title") {
+							isTitleGen = true
+						}
+					}
+				}
+			}
+			if isTitleGen {
+				return []message.AssistantChunk{
+					{
+						BaseChunk: message.BaseChunk{ID: uuid.NewString()},
+						Content: []message.Block{
+							&message.TextBlock{Text: "\"Database Refactoring\"\nExtra explanation to ignore"},
+						},
+					},
+				}, nil
+			}
+			return []message.AssistantChunk{
+				{
+					BaseChunk: message.BaseChunk{ID: uuid.NewString()},
+					Content: []message.Block{
+						&message.TextBlock{Text: "I will help refactor the database."},
+					},
+				},
+			}, nil
+		},
+	}
+	db, _, _, pub, mgr := setupTestEnv(t, prov)
+
+	// 1. Create a session with Title: ""
+	sess, _, err := mgr.Create(ctx, CreateParams{})
+	if err != nil {
+		t.Fatalf("mgr.Create: %v", err)
+	}
+	if sess.Title != "" {
+		t.Fatalf("expected initial title to be empty, got %q", sess.Title)
+	}
+
+	// 2. Send first user message
+	err = sess.Send(ctx, SendInput{
+		Message: message.NewUserText("Help me refactor the database layer"),
+	})
+	if err != nil {
+		t.Fatalf("sess.Send: %v", err)
+	}
+	if err := sess.Wait(ctx); err != nil {
+		t.Fatalf("sess.Wait: %v", err)
+	}
+
+	// Wait for background title generator to complete
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		sess.Lock()
+		curTitle := sess.Title
+		sess.Unlock()
+		if curTitle != "" {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	// 3. Verify sess.Title updated in memory and sanitized
+	sess.Lock()
+	titleInMemory := sess.Title
+	sess.Unlock()
+	if titleInMemory != "Database Refactoring" {
+		t.Fatalf("expected in-memory title %q, got %q", "Database Refactoring", titleInMemory)
+	}
+
+	// Verify title in SQLite DB
+	var dbTitle string
+	err = db.QueryRowContext(ctx, "SELECT title FROM sessions WHERE id = ?", sess.ID).Scan(&dbTitle)
+	if err != nil {
+		t.Fatalf("failed to query session title from DB: %v", err)
+	}
+	if dbTitle != "Database Refactoring" {
+		t.Fatalf("expected DB title %q, got %q", "Database Refactoring", dbTitle)
+	}
+
+	// Verify UpdatedEvent was published on api.TopicSessions
+	var foundUpdatedEvent bool
+	for _, r := range pub.recordedRecords() {
+		if r.topic == api.TopicSessions {
+			if uev, ok := r.event.(UpdatedEvent); ok && uev.Session.ID == sess.ID && uev.Session.Title == "Database Refactoring" {
+				foundUpdatedEvent = true
+				break
+			}
+		}
+	}
+	if !foundUpdatedEvent {
+		t.Fatal("expected UpdatedEvent with generated title on TopicSessions")
+	}
+
+	// 4. Verify subsequent Send does not overwrite title
+	pub.reset()
+	err = sess.Send(ctx, SendInput{
+		Message: message.NewUserText("Another follow-up prompt"),
+	})
+	if err != nil {
+		t.Fatalf("sess.Send follow-up: %v", err)
+	}
+	if err := sess.Wait(ctx); err != nil {
+		t.Fatalf("sess.Wait follow-up: %v", err)
+	}
+	time.Sleep(50 * time.Millisecond)
+	sess.Lock()
+	titleAfterFollowUp := sess.Title
+	sess.Unlock()
+	if titleAfterFollowUp != "Database Refactoring" {
+		t.Fatalf("expected title to remain %q, got %q", "Database Refactoring", titleAfterFollowUp)
+	}
+
+	// Verify manual update or explicit initial title is not overwritten
+	sessManual, _, err := mgr.Create(ctx, CreateParams{Title: "Manual Title"})
+	if err != nil {
+		t.Fatalf("mgr.Create sessManual: %v", err)
+	}
+	err = sessManual.Send(ctx, SendInput{
+		Message: message.NewUserText("First prompt in manual session"),
+	})
+	if err != nil {
+		t.Fatalf("sessManual.Send: %v", err)
+	}
+	if err := sessManual.Wait(ctx); err != nil {
+		t.Fatalf("sessManual.Wait: %v", err)
+	}
+	time.Sleep(50 * time.Millisecond)
+	sessManual.Lock()
+	manualTitle := sessManual.Title
+	sessManual.Unlock()
+	if manualTitle != "Manual Title" {
+		t.Fatalf("expected manual title to remain %q, got %q", "Manual Title", manualTitle)
 	}
 }

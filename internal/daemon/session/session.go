@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/masterkeysrd/loom/llm"
 	"github.com/masterkeysrd/loom/message"
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
@@ -417,6 +418,20 @@ func (s *Session) Send(ctx context.Context, input SendInput) error {
 		hInput = harness.Input{Message: input.Message}
 	}
 
+	if input.Message != nil {
+		s.Lock()
+		if strings.TrimSpace(s.Title) == "" && !s.titleGenerating {
+			text := input.Message.GetContent().Text()
+			if text != "" {
+				s.titleGenerating = true
+				s.wg.Go(func() {
+					s.generateTitle(text)
+				})
+			}
+		}
+		s.Unlock()
+	}
+
 	return s.startTurn(hInput)
 }
 
@@ -444,8 +459,7 @@ func (s *Session) startTurn(hInput harness.Input) error {
 	s.done = done
 	s.Unlock()
 
-	s.wg.Add(1)
-	go func() {
+	s.wg.Go(func() {
 		defer func() {
 			s.Lock()
 			if s.done == done {
@@ -459,7 +473,6 @@ func (s *Session) startTurn(hInput harness.Input) error {
 			s.Unlock()
 			cancel()
 			close(done)
-			s.wg.Done()
 		}()
 
 		h, err := s.harness(runCtx)
@@ -499,7 +512,7 @@ func (s *Session) startTurn(hInput harness.Input) error {
 				return
 			}
 		}
-	}()
+	})
 	return nil
 }
 
@@ -799,5 +812,130 @@ func (s *Session) Wait(ctx context.Context) error {
 		return s.err
 	case <-ctx.Done():
 		return ctx.Err()
+	}
+}
+
+func (s *Session) generateTitle(userText string) {
+	if s.workspace == nil || s.gateway == nil {
+		return
+	}
+
+	bgCtx := s.bgCtx
+	if bgCtx == nil {
+		bgCtx = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(bgCtx, 30*time.Second)
+	defer cancel()
+
+	sysPrompt, err := s.workspace.RenderAgent(workspace.AgentNameTitleGenerator, nil, nil)
+	if err != nil || strings.TrimSpace(sysPrompt) == "" {
+		if s.logger != nil && err != nil {
+			s.logger.Warn("failed to render title generator prompt", log.String("error", err.Error()))
+		}
+		return
+	}
+
+	ag, ok := s.workspace.GetAgent(workspace.AgentNameTitleGenerator)
+	var modelName string
+	if ok && len(ag.Models) > 0 {
+		models := s.workspace.ResolveModels(workspace.RoleCompletion, ag.Models...)
+		if len(models) > 0 {
+			modelName = models[0]
+		} else {
+			modelName = ag.Models[0]
+		}
+	}
+	if modelName == "" {
+		s.Lock()
+		modelName = s.Config.Model
+		s.Unlock()
+	}
+
+	var opts []gateway.LLMOption
+	if ok && ag.Temperature != nil {
+		t32 := float32(*ag.Temperature)
+		opts = append(opts, gateway.WithLLMConfig(&llm.ModelConfig{Temperature: &t32}))
+	}
+
+	llmModel, err := s.gateway.ResolveLLM(ctx, modelName, opts...)
+	if err != nil {
+		if s.logger != nil {
+			s.logger.Warn("failed to resolve LLM for title generation", log.String("error", err.Error()))
+		}
+		return
+	}
+
+	msgs := []message.Message{
+		message.NewSystemText(strings.TrimSpace(sysPrompt)),
+		message.NewUserText(userText),
+	}
+	resp, err := llmModel.Invoke(ctx, msgs)
+	if err != nil || resp == nil {
+		if s.logger != nil && err != nil {
+			s.logger.Warn("failed to invoke title generator model", log.String("error", err.Error()))
+		}
+		return
+	}
+
+	textContent := resp.GetContent().Text()
+
+	var title string
+	for line := range strings.SplitSeq(textContent, "\n") {
+		line = strings.TrimSpace(line)
+		line = strings.Trim(line, "\"'`")
+		line = strings.TrimSpace(line)
+		if line != "" {
+			title = line
+			break
+		}
+	}
+
+	runes := []rune(title)
+	if len(runes) > 50 {
+		title = strings.TrimSpace(string(runes[:50]))
+	}
+
+	if title == "" {
+		return
+	}
+
+	s.Lock()
+	if strings.TrimSpace(s.Title) != "" {
+		s.Unlock()
+		return
+	}
+
+	now := time.Now().UTC()
+	dbSess := &Session{
+		ID:          s.ID,
+		Title:       title,
+		Config:      s.Config,
+		Permissions: s.Permissions.Clone(),
+		CreatedAt:   s.CreatedAt,
+		UpdatedAt:   now,
+	}
+	if s.store != nil {
+		if err := s.store.updateSession(ctx, dbSess); err != nil {
+			s.Unlock()
+			if s.logger != nil {
+				s.logger.Warn("failed to persist generated title", log.String("error", err.Error()))
+			}
+			return
+		}
+	}
+	s.Title = title
+	s.UpdatedAt = now
+	s.Unlock()
+
+	cloned := s.Clone()
+	if s.publisher != nil {
+		var wsRoot string
+		if s.workspace != nil {
+			wsRoot = s.workspace.RootDir()
+		}
+		s.publisher.Publish(api.TopicSessions, UpdatedEvent{
+			Workspace: wsRoot,
+			Session:   cloned,
+		})
 	}
 }

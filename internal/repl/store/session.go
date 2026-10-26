@@ -191,7 +191,7 @@ func startSessionsWatcher(ctx context.Context) {
 	}()
 }
 
-func getOrCreateSession(ctx context.Context, initialTitle string) (*api.Session, error) {
+func getOrCreateSession(ctx context.Context) (*api.Session, error) {
 	sessMu.Lock()
 	sess := GetSession().Session
 	if sess != nil && sess.ID != "" {
@@ -203,12 +203,6 @@ func getOrCreateSession(ctx context.Context, initialTitle string) (*api.Session,
 		return nil, errors.New("repl: no active client to create session")
 	}
 	title := strings.TrimSpace(activeOpts.Title)
-	if title == "" {
-		title = strings.TrimSpace(initialTitle)
-	}
-	if title == "" {
-		title = "New Session"
-	}
 	c := activeClient
 	agent := activeOpts.Agent
 	model := activeOpts.Model
@@ -260,7 +254,7 @@ func Send(text string) {
 			ctx = context.Background()
 		}
 
-		sess, err := getOrCreateSession(ctx, trimmed)
+		sess, err := getOrCreateSession(ctx)
 		if err != nil {
 			globalConversation.cancelPendingUser(msgID, err)
 			return

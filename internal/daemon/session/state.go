@@ -25,11 +25,12 @@ type State struct {
 	StartedAt          time.Time                 `json:"started_at,omitzero"`
 	FinishedAt         time.Time                 `json:"finished_at,omitzero"`
 
-	cancel    context.CancelFunc                  `json:"-"`
-	done      chan struct{}                       `json:"-"`
-	err       error                               `json:"-"`
-	decisions map[string]tools.PermissionDecision `json:"-"`
-	inbox     []message.Message                   `json:"-"`
+	cancel          context.CancelFunc                  `json:"-"`
+	done            chan struct{}                       `json:"-"`
+	err             error                               `json:"-"`
+	decisions       map[string]tools.PermissionDecision `json:"-"`
+	inbox           []message.Message                   `json:"-"`
+	titleGenerating bool                                `json:"-"`
 }
 
 // NewState constructs a new [State] initialized to [StatusIdle].

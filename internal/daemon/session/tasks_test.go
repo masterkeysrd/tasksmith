@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -87,6 +88,7 @@ func TestSessionTasksInitAndBackgroundUpdate(t *testing.T) {
 func TestSessionEnqueueAndInbox(t *testing.T) {
 	sess := &Session{
 		State: NewState(),
+		wg:    &sync.WaitGroup{},
 	}
 
 	// 1. When Running is true, Enqueue should append to inbox
