@@ -11,7 +11,8 @@ import (
 
 // FileIconProps defines properties for the FileIcon component.
 type FileIconProps struct {
-	Path string
+	Path  string
+	IsDir bool
 }
 
 // FileIcon resolves a Nerd Font icon dynamically by the given file path.
@@ -22,6 +23,16 @@ var FileIcon = kitex.FC("FileIcon", func(props FileIconProps) kitex.Node {
 	dark := true
 	if t != nil && t.Type == "light" {
 		dark = false
+	}
+
+	if props.IsDir {
+		var fg color.Color
+		if t != nil {
+			fg = t.Color.Text.Secondary
+		}
+		return kitex.Span(kitex.SpanProps{
+			Style: style.S().Foreground(fg),
+		}, Directory)
 	}
 
 	res := neo.ByPath(props.Path)

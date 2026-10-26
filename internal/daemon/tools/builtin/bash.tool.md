@@ -20,7 +20,7 @@ spec:
         description: Shell command string passed to sh -c.
       description:
         type: string
-        description: Clear, concise description of what this command does.
+        description: Clear, concise description of what this command does (recommend 3-6 words for UI display).
       dir:
         type: string
         description: Optional working directory relative to the sandbox root.
@@ -68,7 +68,7 @@ Execute shell commands in the workspace sandbox.
 </execution_steps>
 
 <usage_notes>
-- `command` is required; `description` (concise summary of what the command does) and `dir` (working directory relative to workspace root, defaults to current directory) are optional.
+- `command` is required; `description` (recommend 3-6 words describing what the command does for UI display) and `dir` (working directory relative to workspace root, defaults to current directory) are optional.
 - IMPORTANT: Use `grep` and `glob` tools instead of `find` or `grep`. Use `view` and `ls` tools instead of `cat`, `head`, `tail`, or `ls`. Use `write`, `edit`, and `remove` tools instead of `sed`, `awk`, `echo >`, or `rm`.
 - Chain dependent commands with `&&` or `;`; avoid newlines except inside quoted strings.
 - Each command runs in an independent subshell (no `cd` or environment variable persistence between calls).

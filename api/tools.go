@@ -5,7 +5,7 @@ package api
 // BashInput defines the input parameters for the bash tool.
 type BashInput struct {
 	Command         string `json:"command" jsonschema:"Shell command string passed to sh -c."`
-	Description     string `json:"description,omitempty" jsonschema:"Clear, concise description of what this command does."`
+	Description     string `json:"description,omitempty" jsonschema:"Clear, concise description of what this command does (recommend 3-6 words for UI display)."`
 	Dir             string `json:"dir,omitempty" jsonschema:"Optional working directory relative to the sandbox root."`
 	RunInBackground bool   `json:"run_in_background,omitempty" jsonschema:"Set to true to run long-running commands, servers, or watchers in the background and return a task_id immediately."`
 	WaitMs          int    `json:"wait_ms,omitempty" jsonschema:"Milliseconds to wait for synchronous completion before transitioning the command to a background task. Defaults to 60000 (1 minute), or 500 when run_in_background is true."`

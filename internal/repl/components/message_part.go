@@ -25,12 +25,26 @@ var MessageTool = trail.FC("MessageTool", func(props MessageToolProps) trail.Nod
 	switch name {
 	case "view":
 		return ViewToolRenderer(props.Tool)
+	case "ls":
+		return LsToolRenderer(props.Tool)
+	case "glob":
+		return GlobToolRenderer(props.Tool)
+	case "grep":
+		return GrepToolRenderer(props.Tool)
 	case "write":
 		return WriteToolRenderer(props.Tool)
-	case "ls":
-		return LsRenderer(props.Tool)
+	case "edit":
+		return EditToolRenderer(props.Tool)
+	case "remove":
+		return RemoveToolRenderer(props.Tool)
 	case "bash":
 		return BashToolRenderer(props.Tool)
+	case "web_fetch":
+		return WebFetchToolRenderer(props.Tool)
+	case "download":
+		return DownloadToolRenderer(props.Tool)
+	case "tasks":
+		return TasksToolRenderer(props.Tool)
 	default:
 		return DefaultToolRenderer(props.Tool)
 	}
