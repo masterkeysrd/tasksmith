@@ -1,6 +1,7 @@
 package components
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -10,6 +11,7 @@ import (
 	"github.com/masterkeysrd/kite/extras/wind"
 	"github.com/masterkeysrd/kite/key"
 	"github.com/masterkeysrd/tasksmith/api"
+	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
 	"github.com/masterkeysrd/tasksmith/internal/repl/store"
 )
 
@@ -42,6 +44,9 @@ func pressKey(inst *trail.Instance, code rune, mod key.Mod) {
 }
 
 func TestComposerEnterSubmitsAndClears(t *testing.T) {
+	xdg.SetTestEnv(t.TempDir(), "tasksmith")
+	defer xdg.ClearCache()
+
 	store.ClearSlot()
 	store.ResetApp()
 	defer store.ClearSlot()
@@ -96,6 +101,9 @@ func TestComposerShiftEnterInsertsNewline(t *testing.T) {
 }
 
 func TestComposerHistoryNavigation(t *testing.T) {
+	xdg.SetTestEnv(t.TempDir(), "tasksmith")
+	defer xdg.ClearCache()
+
 	store.ClearSlot()
 	store.ResetApp()
 	defer store.ClearSlot()
@@ -259,5 +267,121 @@ func TestComposerCtrlCClearsDraft(t *testing.T) {
 
 	if strings.Contains(surfaceText(b), "abandon this draft") {
 		t.Fatalf("expected draft to be cleared on CtrlCPending, got:\n%s", surfaceText(b))
+	}
+}
+
+func TestComposerHistoryPersistsToDisk(t *testing.T) {
+	xdg.SetTestEnv(t.TempDir(), "tasksmith")
+	defer xdg.ClearCache()
+	store.ClearSlot()
+	store.ResetApp()
+	defer store.ClearSlot()
+	defer store.ResetApp()
+
+	// Instance 1: submit a prompt which is persisted to disk.
+	var submitted []string
+	inst1, _ := createComposerInstance(t, ComposerProps{
+		OnSubmit: func(text string) { submitted = append(submitted, text) },
+	})
+	typeText(inst1, "persisted prompt")
+	pressKey(inst1, key.KeyEnter, 0)
+	if len(submitted) != 1 || submitted[0] != "persisted prompt" {
+		t.Fatalf("expected submission, got %v", submitted)
+	}
+	inst1.Unmount()
+
+	// Instance 2: should load "persisted prompt" from disk on mount.
+	inst2, b2 := createComposerInstance(t, ComposerProps{})
+	pressKey(inst2, key.KeyUp, 0)
+	if !strings.Contains(surfaceText(b2), "persisted prompt") {
+		t.Fatalf("expected 'persisted prompt' in new instance, got:\n%s", surfaceText(b2))
+	}
+}
+
+func TestComposerHistoryMultiLineRoundTrip(t *testing.T) {
+	xdg.SetTestEnv(t.TempDir(), "tasksmith")
+	defer xdg.ClearCache()
+	store.ClearSlot()
+	store.ResetApp()
+	defer store.ClearSlot()
+	defer store.ResetApp()
+
+	// Instance 1: submit a multi-line prompt via Shift+Enter.
+	var submitted string
+	inst1, _ := createComposerInstance(t, ComposerProps{
+		OnSubmit: func(text string) { submitted = text },
+	})
+	typeText(inst1, "first line")
+	pressKey(inst1, key.KeyEnter, key.ModShift)
+	typeText(inst1, "second line")
+	pressKey(inst1, key.KeyEnter, 0)
+
+	if submitted != "first line\nsecond line" {
+		t.Fatalf("expected multi-line submission, got %q", submitted)
+	}
+	inst1.Unmount()
+
+	// Instance 2: navigate to find the multi-line prompt intact.
+	inst2, b2 := createComposerInstance(t, ComposerProps{})
+	pressKey(inst2, key.KeyUp, 0)
+	out := surfaceText(b2)
+	if !strings.Contains(out, "first line") || !strings.Contains(out, "second line") {
+		t.Fatalf("expected multi-line prompt in new instance, got:\n%s", out)
+	}
+}
+
+func TestComposerHistoryDeduplication(t *testing.T) {
+	xdg.SetTestEnv(t.TempDir(), "tasksmith")
+	defer xdg.ClearCache()
+	store.ClearSlot()
+	store.ResetApp()
+	defer store.ClearSlot()
+	defer store.ResetApp()
+
+	// Submit "hello" in instance 1.
+	inst1, _ := createComposerInstance(t, ComposerProps{})
+	typeText(inst1, "hello")
+	pressKey(inst1, key.KeyEnter, 0)
+	inst1.Unmount()
+
+	// Instance 2 loads "hello" from disk; submitting "hello" again should be deduped.
+	inst2, _ := createComposerInstance(t, ComposerProps{})
+	typeText(inst2, "hello")
+	pressKey(inst2, key.KeyEnter, 0)
+	inst2.Unmount()
+
+	// Verify only one entry on disk.
+	entries := loadHistoryFromFile()
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 entry after dedup, got %d: %v", len(entries), entries)
+	}
+	if entries[0] != "hello" {
+		t.Fatalf("expected 'hello', got %q", entries[0])
+	}
+}
+
+func TestComposerHistoryCap500(t *testing.T) {
+	xdg.SetTestEnv(t.TempDir(), "tasksmith")
+	defer xdg.ClearCache()
+
+	// Write 600 entries directly, then verify loadHistoryFromFile caps at 500.
+	entries := make([]string, 0, 600)
+	for i := 0; i < 600; i++ {
+		entries = append(entries, fmt.Sprintf("entry-%d", i))
+	}
+	if err := persistHistory(entries); err != nil {
+		t.Fatalf("persistHistory: %v", err)
+	}
+
+	loaded := loadHistoryFromFile()
+	if len(loaded) != 500 {
+		t.Fatalf("expected 500 entries after cap, got %d", len(loaded))
+	}
+	// The most recent 500 are entries[100:600].
+	if loaded[0] != "entry-100" {
+		t.Fatalf("expected first entry to be 'entry-100', got %q", loaded[0])
+	}
+	if loaded[499] != "entry-599" {
+		t.Fatalf("expected last entry to be 'entry-599', got %q", loaded[499])
 	}
 }

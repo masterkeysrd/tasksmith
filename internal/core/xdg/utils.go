@@ -44,3 +44,18 @@ func LogFilePath(filename string) (string, error) {
 func SocketPath(name string) (string, error) {
 	return SubRuntimeDir(name)
 }
+
+// HistoryDir returns the directory path for persistent history files
+// (<StateHome>/history), mirroring LogsDir() under XDG_STATE_HOME.
+func HistoryDir() (string, error) {
+	return SubStateDir("history")
+}
+
+// HistoryFilePath returns the full path for a given history filename within HistoryDir().
+func HistoryFilePath(filename string) (string, error) {
+	dir, err := HistoryDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, filename), nil
+}

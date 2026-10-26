@@ -1,6 +1,9 @@
 package components
 
 import (
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/masterkeysrd/kite/dom"
@@ -9,11 +12,15 @@ import (
 	"github.com/masterkeysrd/kite/extras/kitex"
 	"github.com/masterkeysrd/kite/extras/trail"
 	"github.com/masterkeysrd/kite/style"
+	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
 	"github.com/masterkeysrd/tasksmith/internal/repl/store"
 	"github.com/masterkeysrd/tasksmith/internal/ui/autocomplete"
 	uicomponents "github.com/masterkeysrd/tasksmith/internal/ui/components"
 	"github.com/masterkeysrd/tasksmith/internal/ui/theme"
 )
+
+// maxHistoryEntries is the maximum number of entries kept in prompt history.
+const maxHistoryEntries = 500
 
 // ComposerProps defines the properties for the Composer functional component.
 type ComposerProps struct {
@@ -38,11 +45,20 @@ type PromptHistory struct {
 	Add        func(text string)
 }
 
-// usePromptHistory manages input prompt history navigation and draft preservation.
+// usePromptHistory manages input prompt history navigation, draft preservation,
+// and disk persistence of submitted prompts.
 func usePromptHistory() PromptHistory {
 	history, setHistory := kitex.UseState([]string(nil))
 	historyIdx, setHistoryIdx := kitex.UseState(0)
 	draft, setDraft := kitex.UseState("")
+
+	// Load persisted history from disk on first mount.
+	kitex.UseLayoutEffect(func() {
+		if entries := loadHistoryFromFile(); entries != nil {
+			setHistory(entries)
+			setHistoryIdx(len(entries))
+		}
+	}, []any{})
 
 	up := func(currentValue string) (string, bool) {
 		hist := history()
@@ -81,10 +97,23 @@ func usePromptHistory() PromptHistory {
 	}
 
 	add := func(text string) {
-		hist := append(history(), text)
+		hist := history()
+		// Skip consecutive duplicates.
+		if len(hist) > 0 && hist[len(hist)-1] == text {
+			setHistoryIdx(len(hist))
+			setDraft("")
+			return
+		}
+		hist = append(hist, text)
+		// Cap at maxHistoryEntries (keep most recent).
+		if len(hist) > maxHistoryEntries {
+			hist = hist[len(hist)-maxHistoryEntries:]
+		}
 		setHistory(hist)
 		setHistoryIdx(len(hist))
 		setDraft("")
+		// Fail-safe: disk errors must not crash the REPL.
+		_ = persistHistory(hist)
 	}
 
 	return PromptHistory{
@@ -95,6 +124,63 @@ func usePromptHistory() PromptHistory {
 		Down:       down,
 		Add:        add,
 	}
+}
+
+// loadHistoryFromFile reads persisted prompt history from disk.
+// Returns nil on any error (including missing file).
+func loadHistoryFromFile() []string {
+	path, err := xdg.HistoryFilePath("repl.jsonl")
+	if err != nil {
+		return nil
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil // gracefully handle missing file
+	}
+	var entries []string
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		var entry string
+		if err := json.Unmarshal([]byte(line), &entry); err == nil {
+			entries = append(entries, entry)
+		}
+	}
+	if len(entries) > maxHistoryEntries {
+		entries = entries[len(entries)-maxHistoryEntries:]
+	}
+	return entries
+}
+
+// persistHistory writes the given entries to the history file in JSONL format.
+// Each entry is encoded as a JSON string on its own line.
+func persistHistory(entries []string) error {
+	path, err := xdg.HistoryFilePath("repl.jsonl")
+	if err != nil {
+		return err
+	}
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	for _, entry := range entries {
+		b, err := json.Marshal(entry)
+		if err != nil {
+			return err
+		}
+		b = append(b, '\n')
+		if _, err := f.Write(b); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // Composer is a trail functional component managing multi-line user prompt drafting,

@@ -243,6 +243,26 @@ func TestHelpers(t *testing.T) {
 			t.Errorf("SocketPath: want %q, got %q", wantSock, sock)
 		}
 	})
+
+	t.Run("HistoryDirAndHistoryFilePath", func(t *testing.T) {
+		histDir, err := HistoryDir()
+		if err != nil {
+			t.Fatalf("HistoryDir error: %v", err)
+		}
+		wantHistDir := filepath.Join(tmpDir, "state", "tasksmith-test", "history")
+		if histDir != wantHistDir {
+			t.Errorf("HistoryDir: want %q, got %q", wantHistDir, histDir)
+		}
+
+		histFile, err := HistoryFilePath("repl.jsonl")
+		if err != nil {
+			t.Fatalf("HistoryFilePath error: %v", err)
+		}
+		wantHistFile := filepath.Join(wantHistDir, "repl.jsonl")
+		if histFile != wantHistFile {
+			t.Errorf("HistoryFilePath: want %q, got %q", wantHistFile, histFile)
+		}
+	})
 }
 
 func TestConcurrentAccess(t *testing.T) {
@@ -268,6 +288,7 @@ func TestConcurrentAccess(t *testing.T) {
 				_, _ = WorkspaceDir("ws")
 				_, _ = LogFilePath("app.log")
 				_, _ = SocketPath("brain.sock")
+				_, _ = HistoryFilePath("repl.jsonl")
 			}
 		}(i)
 	}
