@@ -18,24 +18,11 @@ spec:
       url:
         type: string
         description: Target HTTP or HTTPS URL to fetch.
-      method:
-        type: string
-        description: HTTP method verb (defaults to GET).
       headers:
         type: object
         description: Optional HTTP request headers.
         additionalProperties:
           type: string
-      body:
-        type: string
-        description: Optional HTTP request body payload.
-      timeout_ms:
-        type: integer
-        description: Optional request timeout in milliseconds.
-      max_bytes:
-        type: integer
-        format: int64
-        description: Maximum number of response body bytes to read.
     required:
       - url
   outputSchema:
@@ -47,28 +34,18 @@ spec:
       status_code:
         type: integer
         description: HTTP response status code.
-      status:
-        type: string
-        description: HTTP response status string.
-      headers:
-        type: object
-        description: Response HTTP headers.
-        additionalProperties:
-          type: string
       content_type:
         type: string
         description: Response Content-Type header.
       text:
         type: string
         description: Decoded text response body.
-      truncated:
-        type: boolean
-        description: Whether the response body was truncated at max_bytes.
     required:
       - url
       - status_code
-      - status
 ---
 
 Use the `web_fetch` tool to retrieve content from an `http` or `https` `url`.
-You may optionally specify `method` (defaults to `GET`), `headers`, `body`, `timeout_ms`, and `max_bytes`.
+You may optionally specify `headers`.
+
+Responses exceeding 500 lines or 32 KB are automatically truncated, keeping the head and tail lines. The truncation notice includes the saved session output file path holding the complete response — inspect it with `view` (using `offset` and `limit`) or `grep` when the omitted content matters.

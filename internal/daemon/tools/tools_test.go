@@ -8,6 +8,7 @@ import (
 	"github.com/masterkeysrd/loom/tool"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/sandbox"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/scope"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tools"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/workspace"
 	"os"
@@ -453,5 +454,109 @@ spec:
 		return strings.Contains(s, tools.ErrToolNotFound.Error())
 	}) {
 		t.Fatalf("expected ErrToolNotFound in unknown tool Execute result, got %q", unkExecRes.Content.Text())
+	}
+}
+
+func TestCustomToolStreamingSpill(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	if realDir, err := filepath.EvalSymlinks(dir); err == nil {
+		dir = realDir
+	}
+
+	toolsDir := filepath.Join(dir, ".agents", "tools")
+	if err := os.MkdirAll(toolsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	spillManifest := `---
+apiVersion: warp/v1alpha1
+kind: Tool
+metadata:
+  name: custom_spill
+  description: Generates high volume output.
+spec:
+  command: ["sh", "-c", "for i in $(seq 1 600); do echo \"custom line $i\"; done"]
+  annotations:
+    isReadOnly: true
+---
+`
+	if err := os.WriteFile(filepath.Join(toolsDir, "custom_spill.tool.md"), []byte(spillManifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	ws, err := workspace.Open(ctx, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	sb, err := sandbox.New(sandbox.Config{
+		Mode:    sandbox.ModeLocal,
+		WorkDir: dir,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sb.Close()
+
+	sp, err := tools.NewSpiller(tools.SpillerConfig{
+		BaseDir: filepath.Join(dir, ".spill"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	c, err := tools.NewContainer(tools.Config{
+		Sandbox:   sb,
+		Workspace: ws,
+		Logger:    log.Default(),
+		Spiller:   sp,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	execCtx := scope.With(ctx, scope.Scope{
+		SessionID:  "sess-custom-spill",
+		ToolCallID: "call-custom-spill",
+	})
+
+	res, err := c.Execute(execCtx, &message.ToolCall{
+		ID:   "call-custom-spill",
+		Name: "custom_spill",
+	})
+	if err != nil || res.IsError {
+		t.Fatalf("Execute(custom_spill) failed: err=%v, res=%+v", err, res)
+	}
+
+	outText := res.Content.Text()
+	if !strings.Contains(outText, "truncated — full output saved to") {
+		t.Fatalf("expected truncation notice in Content text, got:\n%s", outText)
+	}
+	structStr, ok := res.StructuredContent.(string)
+	if !ok || !strings.Contains(structStr, "truncated — full output saved to") {
+		t.Fatalf("expected truncation notice in StructuredContent, got:\n%v", res.StructuredContent)
+	}
+
+	// Extract spilled file path from notice
+	startIdx := strings.Index(outText, "full output saved to ")
+	if startIdx == -1 {
+		t.Fatalf("did not find 'full output saved to ' in notice: %s", outText)
+	}
+	startPath := startIdx + len("full output saved to ")
+	endIdx := strings.Index(outText[startPath:], ". Use view or grep")
+	if endIdx == -1 {
+		t.Fatalf("did not find end of path in notice: %s", outText)
+	}
+	spillPath := outText[startPath : startPath+endIdx]
+
+	spillData, err := os.ReadFile(spillPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%s): %v", spillPath, err)
+	}
+
+	spillStr := string(spillData)
+	if !strings.Contains(spillStr, "custom line 1\n") || !strings.Contains(spillStr, "custom line 600\n") {
+		t.Fatalf("spilled content missing initial or final lines")
 	}
 }

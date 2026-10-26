@@ -2,6 +2,7 @@ package sandbox
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -96,18 +97,46 @@ func (f *sandboxFS) checkPreconditions(ctx context.Context, writeOp bool) error 
 	return nil
 }
 
+type targetPathInfo struct {
+	rel   string
+	abs   string
+	isRel bool
+}
+
+func (f *sandboxFS) resolveTarget(path string) (targetPathInfo, error) {
+	rel, err := f.resolvePath(path)
+	if err == nil {
+		return targetPathInfo{rel: rel, isRel: true}, nil
+	}
+	if !errors.Is(err, ErrPathEscape) {
+		return targetPathInfo{}, err
+	}
+	trimmed := strings.TrimSpace(path)
+	if filepath.IsAbs(trimmed) {
+		return targetPathInfo{abs: filepath.Clean(trimmed), isRel: false}, nil
+	}
+	return targetPathInfo{abs: filepath.Clean(filepath.Join(f.s.workDir, trimmed)), isRel: false}, nil
+}
+
 // Open implements io/fs.FS for read-only standard library compatibility.
 func (f *sandboxFS) Open(name string) (fs.File, error) {
 	if err := f.checkPreconditions(context.Background(), false); err != nil {
 		return nil, err
 	}
-	rel, err := f.resolvePath(name)
+	target, err := f.resolveTarget(name)
 	if err != nil {
 		return nil, err
 	}
-	file, err := f.s.root.Open(rel)
+	if target.isRel {
+		file, err := f.s.root.Open(target.rel)
+		if err != nil {
+			return nil, wrapRootError(err)
+		}
+		return &sandboxFile{File: file, readOnly: true}, nil
+	}
+	file, err := os.Open(target.abs)
 	if err != nil {
-		return nil, wrapRootError(err)
+		return nil, err
 	}
 	return &sandboxFile{File: file, readOnly: true}, nil
 }
@@ -116,26 +145,32 @@ func (f *sandboxFS) ReadFile(ctx context.Context, path string) ([]byte, error) {
 	if err := f.checkPreconditions(ctx, false); err != nil {
 		return nil, err
 	}
-	rel, err := f.resolvePath(path)
+	target, err := f.resolveTarget(path)
 	if err != nil {
 		return nil, err
 	}
-	data, err := f.s.root.ReadFile(rel)
-	if err != nil {
-		return nil, wrapRootError(err)
+	if target.isRel {
+		data, err := f.s.root.ReadFile(target.rel)
+		if err != nil {
+			return nil, wrapRootError(err)
+		}
+		return data, nil
 	}
-	return data, nil
+	return os.ReadFile(target.abs)
 }
 
 func (f *sandboxFS) WriteFile(ctx context.Context, path string, data []byte, perm fs.FileMode) error {
 	if err := f.checkPreconditions(ctx, true); err != nil {
 		return err
 	}
-	rel, err := f.resolvePath(path)
+	target, err := f.resolveTarget(path)
 	if err != nil {
 		return err
 	}
-	return wrapRootError(f.s.root.WriteFile(rel, data, perm))
+	if target.isRel {
+		return wrapRootError(f.s.root.WriteFile(target.rel, data, perm))
+	}
+	return os.WriteFile(target.abs, data, perm)
 }
 
 func (f *sandboxFS) OpenFile(ctx context.Context, path string, flag int, perm fs.FileMode) (File, error) {
@@ -143,13 +178,20 @@ func (f *sandboxFS) OpenFile(ctx context.Context, path string, flag int, perm fs
 	if err := f.checkPreconditions(ctx, isWrite); err != nil {
 		return nil, err
 	}
-	rel, err := f.resolvePath(path)
+	target, err := f.resolveTarget(path)
 	if err != nil {
 		return nil, err
 	}
-	file, err := f.s.root.OpenFile(rel, flag, perm)
+	if target.isRel {
+		file, err := f.s.root.OpenFile(target.rel, flag, perm)
+		if err != nil {
+			return nil, wrapRootError(err)
+		}
+		return &sandboxFile{File: file, readOnly: f.s.cfg.ReadOnly || !isWrite}, nil
+	}
+	file, err := os.OpenFile(target.abs, flag, perm)
 	if err != nil {
-		return nil, wrapRootError(err)
+		return nil, err
 	}
 	return &sandboxFile{File: file, readOnly: f.s.cfg.ReadOnly || !isWrite}, nil
 }
@@ -158,49 +200,64 @@ func (f *sandboxFS) Stat(ctx context.Context, path string) (fs.FileInfo, error) 
 	if err := f.checkPreconditions(ctx, false); err != nil {
 		return nil, err
 	}
-	rel, err := f.resolvePath(path)
+	target, err := f.resolveTarget(path)
 	if err != nil {
 		return nil, err
 	}
-	info, err := f.s.root.Stat(rel)
-	if err != nil {
-		return nil, wrapRootError(err)
+	if target.isRel {
+		info, err := f.s.root.Stat(target.rel)
+		if err != nil {
+			return nil, wrapRootError(err)
+		}
+		return info, nil
 	}
-	return info, nil
+	return os.Stat(target.abs)
 }
 
 func (f *sandboxFS) Lstat(ctx context.Context, path string) (fs.FileInfo, error) {
 	if err := f.checkPreconditions(ctx, false); err != nil {
 		return nil, err
 	}
-	rel, err := f.resolvePath(path)
+	target, err := f.resolveTarget(path)
 	if err != nil {
 		return nil, err
 	}
-	info, err := f.s.root.Lstat(rel)
-	if err != nil {
-		return nil, wrapRootError(err)
+	if target.isRel {
+		info, err := f.s.root.Lstat(target.rel)
+		if err != nil {
+			return nil, wrapRootError(err)
+		}
+		return info, nil
 	}
-	return info, nil
+	return os.Lstat(target.abs)
 }
 
 func (f *sandboxFS) ReadDir(ctx context.Context, path string) ([]fs.DirEntry, error) {
 	if err := f.checkPreconditions(ctx, false); err != nil {
 		return nil, err
 	}
-	rel, err := f.resolvePath(path)
+	target, err := f.resolveTarget(path)
 	if err != nil {
 		return nil, err
 	}
-	dir, err := f.s.root.Open(rel)
-	if err != nil {
-		return nil, wrapRootError(err)
-	}
-	defer dir.Close()
+	var entries []fs.DirEntry
+	if target.isRel {
+		dir, err := f.s.root.Open(target.rel)
+		if err != nil {
+			return nil, wrapRootError(err)
+		}
+		defer dir.Close()
 
-	entries, err := dir.ReadDir(-1)
-	if err != nil {
-		return nil, wrapRootError(err)
+		entries, err = dir.ReadDir(-1)
+		if err != nil {
+			return nil, wrapRootError(err)
+		}
+	} else {
+		var err error
+		entries, err = os.ReadDir(target.abs)
+		if err != nil {
+			return nil, err
+		}
 	}
 	sort.Slice(entries, func(i, j int) bool {
 		return entries[i].Name() < entries[j].Name()
@@ -212,68 +269,100 @@ func (f *sandboxFS) MkdirAll(ctx context.Context, path string, perm fs.FileMode)
 	if err := f.checkPreconditions(ctx, true); err != nil {
 		return err
 	}
-	rel, err := f.resolvePath(path)
+	target, err := f.resolveTarget(path)
 	if err != nil {
 		return err
 	}
-	if rel == "." {
+	if target.isRel {
+		if target.rel == "." {
+			return nil
+		}
+		return wrapRootError(f.s.root.MkdirAll(target.rel, perm))
+	}
+	if target.abs == "/" || target.abs == f.s.workDir || (f.s.realWorkDir != "" && target.abs == f.s.realWorkDir) {
 		return nil
 	}
-	return wrapRootError(f.s.root.MkdirAll(rel, perm))
+	return os.MkdirAll(target.abs, perm)
 }
 
 func (f *sandboxFS) Remove(ctx context.Context, path string) error {
 	if err := f.checkPreconditions(ctx, true); err != nil {
 		return err
 	}
-	rel, err := f.resolvePath(path)
+	target, err := f.resolveTarget(path)
 	if err != nil {
 		return err
 	}
-	if rel == "." {
-		return fmt.Errorf("%w: cannot remove sandbox root directory", ErrPathEscape)
+	if target.isRel {
+		if target.rel == "." {
+			return fmt.Errorf("%w: cannot remove sandbox root directory", ErrPathEscape)
+		}
+		return wrapRootError(f.s.root.Remove(target.rel))
 	}
-	return wrapRootError(f.s.root.Remove(rel))
+	if target.abs == "/" || target.abs == f.s.workDir || (f.s.realWorkDir != "" && target.abs == f.s.realWorkDir) {
+		return fmt.Errorf("%w: cannot remove root directory", ErrPathEscape)
+	}
+	return os.Remove(target.abs)
 }
 
 func (f *sandboxFS) RemoveAll(ctx context.Context, path string) error {
 	if err := f.checkPreconditions(ctx, true); err != nil {
 		return err
 	}
-	rel, err := f.resolvePath(path)
+	target, err := f.resolveTarget(path)
 	if err != nil {
 		return err
 	}
-	if rel == "." {
-		return fmt.Errorf("%w: cannot remove sandbox root directory", ErrPathEscape)
+	if target.isRel {
+		if target.rel == "." {
+			return fmt.Errorf("%w: cannot remove sandbox root directory", ErrPathEscape)
+		}
+		return wrapRootError(f.s.root.RemoveAll(target.rel))
 	}
-	return wrapRootError(f.s.root.RemoveAll(rel))
+	if target.abs == "/" || target.abs == f.s.workDir || (f.s.realWorkDir != "" && target.abs == f.s.realWorkDir) {
+		return fmt.Errorf("%w: cannot remove root directory", ErrPathEscape)
+	}
+	return os.RemoveAll(target.abs)
 }
 
 func (f *sandboxFS) Rename(ctx context.Context, oldpath, newpath string) error {
 	if err := f.checkPreconditions(ctx, true); err != nil {
 		return err
 	}
-	oldRel, err := f.resolvePath(oldpath)
+	targetOld, err := f.resolveTarget(oldpath)
 	if err != nil {
 		return err
 	}
-	newRel, err := f.resolvePath(newpath)
+	targetNew, err := f.resolveTarget(newpath)
 	if err != nil {
 		return err
 	}
-	return wrapRootError(f.s.root.Rename(oldRel, newRel))
+	if targetOld.isRel && targetNew.isRel {
+		return wrapRootError(f.s.root.Rename(targetOld.rel, targetNew.rel))
+	}
+	oldAbs := targetOld.abs
+	if targetOld.isRel {
+		oldAbs = filepath.Join(f.s.workDir, targetOld.rel)
+	}
+	newAbs := targetNew.abs
+	if targetNew.isRel {
+		newAbs = filepath.Join(f.s.workDir, targetNew.rel)
+	}
+	return os.Rename(oldAbs, newAbs)
 }
 
 func (f *sandboxFS) Chmod(ctx context.Context, path string, perm fs.FileMode) error {
 	if err := f.checkPreconditions(ctx, true); err != nil {
 		return err
 	}
-	rel, err := f.resolvePath(path)
+	target, err := f.resolveTarget(path)
 	if err != nil {
 		return err
 	}
-	return wrapRootError(f.s.root.Chmod(rel, perm))
+	if target.isRel {
+		return wrapRootError(f.s.root.Chmod(target.rel, perm))
+	}
+	return os.Chmod(target.abs, perm)
 }
 
 // sandboxFile wraps *os.File to enforce read-only protections on the handle if opened read-only.

@@ -166,6 +166,14 @@ type Command struct {
 	// Stdin supplies standard input when calling Proc.Exec.
 	Stdin io.Reader
 
+	// Stdout optionally receives standard output when calling Proc.Exec.
+	// If nil, output is captured in ExecResult.Stdout.
+	Stdout io.Writer
+
+	// Stderr optionally receives standard error when calling Proc.Exec.
+	// If nil, output is captured in ExecResult.Stderr.
+	Stderr io.Writer
+
 	// Timeout overrides the sandbox's DefaultTimeout for Proc.Exec.
 	Timeout time.Duration
 }

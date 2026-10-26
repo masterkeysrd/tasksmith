@@ -2,7 +2,6 @@ package builtin
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -15,21 +14,11 @@ import (
 )
 
 func resolveReadTarget(sb sandbox.Sandbox, g *shellguard.Guard, rawPath string) (string, tools.SafetyLevel, error) {
-	trimmed := strings.TrimSpace(rawPath)
-	if trimmed == "~" || strings.HasPrefix(trimmed, "~/") {
-		resolved, safety := g.EvaluatePath(trimmed, tools.ActionRead)
-		return filepath.ToSlash(resolved), safety, nil
+	resolved, safety := g.EvaluatePath(rawPath, tools.ActionRead)
+	if rel, err := sb.FS().ResolvePath(resolved); err == nil {
+		return rel, safety, nil
 	}
-	target, err := sb.FS().ResolvePath(rawPath)
-	if err == nil {
-		_, safety := g.EvaluatePath(target, tools.ActionRead)
-		return target, safety, nil
-	}
-	if errors.Is(err, sandbox.ErrPathEscape) {
-		resolved, safety := g.EvaluatePath(rawPath, tools.ActionRead)
-		return filepath.ToSlash(resolved), safety, nil
-	}
-	return "", "", err
+	return filepath.ToSlash(resolved), safety, nil
 }
 
 type viewTool struct {
@@ -251,10 +240,7 @@ func (t *writeTool) Prepare(ctx context.Context, in api.WriteInput) (*tools.Plan
 	if err != nil {
 		return nil, err
 	}
-	safety := tools.SafetySafe
-	if t.guard.IsProtectedPath(res.Path) {
-		safety = tools.SafetyUnsafe
-	}
+	_, safety := t.guard.EvaluatePath(res.Path, tools.ActionWrite)
 	return &tools.Plan{
 		ToolName: ToolWrite,
 		Action:   tools.ActionWrite,
@@ -305,10 +291,7 @@ func (t *editTool) Prepare(ctx context.Context, in api.EditInput) (*tools.Plan, 
 	if err != nil {
 		return nil, err
 	}
-	safety := tools.SafetySafe
-	if t.guard.IsProtectedPath(res.Path) {
-		safety = tools.SafetyUnsafe
-	}
+	_, safety := t.guard.EvaluatePath(res.Path, tools.ActionWrite)
 	return &tools.Plan{
 		ToolName: ToolEdit,
 		Action:   tools.ActionWrite,
@@ -358,8 +341,10 @@ func (t *removeTool) Prepare(ctx context.Context, in api.RemoveInput) (*tools.Pl
 		return nil, err
 	}
 	safety := tools.SafetyUnknown
-	if t.guard.IsProtectedPath(res.Path) {
+	if _, evalSafety := t.guard.EvaluatePath(res.Path, tools.ActionDelete); evalSafety == tools.SafetyUnsafe {
 		safety = tools.SafetyUnsafe
+	} else if t.guard.IsInWriteDirs(res.Path) {
+		safety = tools.SafetySafe
 	}
 	return &tools.Plan{
 		ToolName: ToolRemove,

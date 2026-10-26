@@ -3,7 +3,9 @@ package shellguard
 import (
 	"os"
 	"path/filepath"
+	"strings"
 
+	"github.com/masterkeysrd/tasksmith/internal/core/fsutils"
 	"github.com/masterkeysrd/tasksmith/internal/core/guard"
 )
 
@@ -56,6 +58,8 @@ type Config struct {
 	WorkspaceDir  string
 	HomeDir       string   // Optional; used for ~ expansion (falls back to os.UserHomeDir once at New() time)
 	ProtectedDirs []string // Defaults to DefaultProtectedDirs (.git, .bare, .agents)
+	ReadDirs      []string // Additional read-allowed directories outside WorkspaceDir (marked SafetySafe for reads)
+	WriteDirs     []string // Additional read/write/delete-allowed directories outside WorkspaceDir (marked SafetySafe)
 	MaxOperations int      // Defaults to DefaultMaxOperations (3)
 	Policy        *Policy  // Defaults to DefaultPolicy()
 }
@@ -65,8 +69,25 @@ type Guard struct {
 	workspaceDir  string
 	homeDir       string
 	protectedDirs []string
+	readDirs      []string
+	writeDirs     []string
 	maxOperations int
 	policy        Policy
+}
+
+func cleanDirList(dirs []string, homeDir string) []string {
+	if len(dirs) == 0 {
+		return nil
+	}
+	cleaned := make([]string, 0, len(dirs))
+	for _, d := range dirs {
+		d = strings.TrimSpace(d)
+		if d == "" {
+			continue
+		}
+		cleaned = append(cleaned, fsutils.ExpandAndCleanPath(d, "", homeDir))
+	}
+	return cleaned
 }
 
 // New constructs a Guard with the provided configuration, applying sensible
@@ -105,6 +126,8 @@ func New(cfg Config) *Guard {
 		workspaceDir:  wsDir,
 		homeDir:       homeDir,
 		protectedDirs: protected,
+		readDirs:      cleanDirList(cfg.ReadDirs, homeDir),
+		writeDirs:     cleanDirList(cfg.WriteDirs, homeDir),
 		maxOperations: maxOps,
 		policy:        policy,
 	}

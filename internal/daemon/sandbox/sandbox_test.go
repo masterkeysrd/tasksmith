@@ -178,12 +178,24 @@ func TestFSCapabilityAndConfinement(t *testing.T) {
 		"/etc/passwd",
 	}
 	for _, p := range escapePaths {
-		if _, err := fsys.ReadFile(ctx, p); !errors.Is(err, ErrPathEscape) {
-			t.Fatalf("ReadFile(%q): expected ErrPathEscape, got %v", p, err)
+		if _, err := fsys.ResolvePath(p); !errors.Is(err, ErrPathEscape) {
+			t.Fatalf("ResolvePath(%q): expected ErrPathEscape, got %v", p, err)
 		}
-		if err := fsys.WriteFile(ctx, p, []byte("x"), 0o644); !errors.Is(err, ErrPathEscape) {
-			t.Fatalf("WriteFile(%q): expected ErrPathEscape, got %v", p, err)
-		}
+	}
+
+	// Outside files can be accessed directly via fsys when outside workDir
+	got, err := fsys.ReadFile(ctx, outsideFile)
+	if err != nil {
+		t.Fatalf("ReadFile(outsideFile): expected success, got %v", err)
+	}
+	if string(got) != "secret" {
+		t.Fatalf("ReadFile(outsideFile): expected 'secret', got %q", string(got))
+	}
+	if err := fsys.WriteFile(ctx, outsideFile, []byte("updated"), 0o644); err != nil {
+		t.Fatalf("WriteFile(outsideFile): expected success, got %v", err)
+	}
+	if gotUpdated, err := fsys.ReadFile(ctx, outsideFile); err != nil || string(gotUpdated) != "updated" {
+		t.Fatalf("ReadFile(outsideFile) after write: got %q (err=%v)", string(gotUpdated), err)
 	}
 
 	// Symlink escape inside workDir pointing outside workDir

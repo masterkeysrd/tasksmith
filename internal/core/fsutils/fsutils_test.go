@@ -42,3 +42,58 @@ func TestCleanPathValid(t *testing.T) {
 		t.Errorf("CleanPath(symlink) = %q, want %q", cleanedSym, cleanedSub)
 	}
 }
+
+func TestExpandAndCleanPath(t *testing.T) {
+	home := "/Users/testuser"
+	base := "/Users/testuser/project"
+
+	tests := []struct {
+		target   string
+		baseDir  string
+		homeDir  string
+		expected string
+	}{
+		{"", base, home, base},
+		{"~", base, home, home},
+		{"~/", base, home, home},
+		{"~/docs", base, home, "/Users/testuser/docs"},
+		{"file.txt", base, home, "/Users/testuser/project/file.txt"},
+		{"./sub/file.txt", base, home, "/Users/testuser/project/sub/file.txt"},
+		{"../other.txt", base, home, "/Users/testuser/other.txt"},
+		{"/abs/path.txt", base, home, "/abs/path.txt"},
+		{"relative.txt", "", home, "relative.txt"},
+		{"~/file.txt", base, "", "/Users/testuser/project/~/file.txt"},
+	}
+
+	for _, tt := range tests {
+		got := ExpandAndCleanPath(tt.target, tt.baseDir, tt.homeDir)
+		if got != tt.expected {
+			t.Errorf("ExpandAndCleanPath(%q, %q, %q) = %q, want %q", tt.target, tt.baseDir, tt.homeDir, got, tt.expected)
+		}
+	}
+}
+
+func TestIsInsideDir(t *testing.T) {
+	tests := []struct {
+		target   string
+		dir      string
+		expected bool
+	}{
+		{"/a/b/c", "/a/b", true},
+		{"/a/b", "/a/b", true},
+		{"/a/b/", "/a/b", true},
+		{"/a/b/c/d", "/a/b", true},
+		{"/a/bc", "/a/b", false},
+		{"/a", "/a/b", false},
+		{"/other/path", "/a/b", false},
+		{"/any/file", "/", true},
+		{"/", "/", true},
+	}
+
+	for _, tt := range tests {
+		got := IsInsideDir(tt.target, tt.dir)
+		if got != tt.expected {
+			t.Errorf("IsInsideDir(%q, %q) = %t, want %t", tt.target, tt.dir, got, tt.expected)
+		}
+	}
+}

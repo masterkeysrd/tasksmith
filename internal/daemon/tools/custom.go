@@ -232,11 +232,15 @@ func (ct *customTool) Execute(ctx context.Context, call *message.ToolCall) (*mes
 		return nil, fmt.Errorf("marshal custom tool args: %w", err)
 	}
 
+	w := NewSpillWriter(ctx)
+	defer w.Close()
+
 	cmd := sandbox.Command{
-		Name:  ct.command[0],
-		Args:  ct.command[1:],
-		Env:   ct.env,
-		Stdin: bytes.NewReader(inputBytes),
+		Name:   ct.command[0],
+		Args:   ct.command[1:],
+		Env:    ct.env,
+		Stdin:  bytes.NewReader(inputBytes),
+		Stdout: w,
 	}
 
 	res, err := ct.sandbox.Proc().Exec(ctx, cmd)
@@ -246,7 +250,7 @@ func (ct *customTool) Execute(ctx context.Context, call *message.ToolCall) (*mes
 	if res.ExitCode != 0 {
 		errMsg := strings.TrimSpace(string(res.Stderr))
 		if errMsg == "" {
-			errMsg = strings.TrimSpace(string(res.Stdout))
+			errMsg = strings.TrimSpace(w.String())
 		}
 		if errMsg == "" {
 			return nil, fmt.Errorf("custom tool %q exited with code %d", ct.def.Name, res.ExitCode)
@@ -254,11 +258,11 @@ func (ct *customTool) Execute(ctx context.Context, call *message.ToolCall) (*mes
 		return nil, errors.New(errMsg)
 	}
 
-	stdout := string(res.Stdout)
+	out := w.String()
 	return &message.Tool{
 		ToolCallID:        callID,
 		Name:              name,
-		Content:           message.Content{&message.TextBlock{Text: stdout}},
-		StructuredContent: stdout,
+		Content:           message.Content{&message.TextBlock{Text: out}},
+		StructuredContent: out,
 	}, nil
 }

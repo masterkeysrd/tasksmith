@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/core/guard"
@@ -26,6 +25,11 @@ func (t *bashTool) Prepare(_ context.Context, in api.BashInput) (*tools.Plan, er
 		return nil, fmt.Errorf("%w: command is required", std.ErrInvalidArgument)
 	}
 
+	summary := fmt.Sprintf("Run shell command: %s", cmdStr)
+	if desc := strings.TrimSpace(in.Description); desc != "" {
+		summary = desc
+	}
+
 	analysisCmd := cmdStr
 	if strings.TrimSpace(in.Dir) != "" {
 		relDir, err := t.sandbox.FS().ResolvePath(in.Dir)
@@ -42,7 +46,7 @@ func (t *bashTool) Prepare(_ context.Context, in api.BashInput) (*tools.Plan, er
 			Action:   tools.ActionExec,
 			Safety:   tools.SafetyUnsafe,
 			Target:   cmdStr,
-			Summary:  fmt.Sprintf("Run shell command: %s", cmdStr),
+			Summary:  summary,
 			ReadOnly: false,
 		}, nil
 	}
@@ -68,29 +72,25 @@ func (t *bashTool) Prepare(_ context.Context, in api.BashInput) (*tools.Plan, er
 		Action:   worstAction,
 		Safety:   worstSafety,
 		Target:   cmdStr,
-		Summary:  fmt.Sprintf("Run shell command: %s", cmdStr),
+		Summary:  summary,
 		ReadOnly: readOnly,
 	}, nil
 }
 
 func (t *bashTool) Execute(ctx context.Context, in api.BashInput) (api.BashOutput, error) {
-	var timeout time.Duration
-	if in.TimeoutMs > 0 {
-		timeout = time.Duration(in.TimeoutMs) * time.Millisecond
-	}
+	w := tools.NewSpillWriter(ctx)
+	defer w.Close()
+
 	res, err := t.std.Bash(ctx, std.BashRequest{
 		Command: in.Command,
 		Dir:     in.Dir,
-		Env:     in.Env,
-		Stdin:   in.Stdin,
-		Timeout: timeout,
+		Output:  w,
 	})
 	if err != nil {
 		return api.BashOutput{}, err
 	}
 	return api.BashOutput{
-		Stdout:     res.Stdout,
-		Stderr:     res.Stderr,
+		Output:     w.String(),
 		ExitCode:   res.ExitCode,
 		DurationMs: res.Duration.Milliseconds(),
 	}, nil

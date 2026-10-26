@@ -1,10 +1,10 @@
 package shellguard
 
 import (
-	"path/filepath"
 	"slices"
 	"strings"
 
+	"github.com/masterkeysrd/tasksmith/internal/core/fsutils"
 	"github.com/masterkeysrd/tasksmith/internal/core/guard"
 )
 
@@ -349,28 +349,12 @@ func (g *Guard) applyCdCommand(cmd ParsedCommand, state *trackerState) {
 		targetDir = cmd.Args[0]
 	}
 
-	// Tilde expansion using the Guard's configured homeDir (no OS syscall during evaluation)
-	if targetDir == "~" {
-		if g.homeDir == "" {
-			state.isCWDUnknown = true
-			return
-		}
-		targetDir = g.homeDir
-	} else if strings.HasPrefix(targetDir, "~/") {
-		if g.homeDir == "" {
-			state.isCWDUnknown = true
-			return
-		}
-		targetDir = g.homeDir + targetDir[1:]
+	if (targetDir == "~" || strings.HasPrefix(targetDir, "~/")) && g.homeDir == "" {
+		state.isCWDUnknown = true
+		return
 	}
-
 	if !state.isCWDUnknown {
-		cleanTarget := filepath.Clean(targetDir)
-		if strings.HasPrefix(cleanTarget, "/") {
-			state.virtualCWD = cleanTarget
-		} else {
-			state.virtualCWD = filepath.Clean(filepath.Join(state.virtualCWD, targetDir))
-		}
+		state.virtualCWD = fsutils.ExpandAndCleanPath(targetDir, state.virtualCWD, g.homeDir)
 	}
 }
 
@@ -568,6 +552,9 @@ func (g *Guard) determineOperation(cmd ParsedCommand, state *trackerState) Opera
 				safety = SafetyUnsafe
 				if !state.isCWDUnknown && !check.isDynamic && check.path != "" {
 					resolved = g.resolveTarget(check.path, state.virtualCWD)
+					if g.IsInWriteDirs(resolved) && !guard.IsSensitivePath(resolved, g.homeDir) {
+						safety = SafetySafe
+					}
 				}
 			} else if state.isCWDUnknown || check.isDynamic || check.path == "" {
 				safety = SafetyUnknown
@@ -804,19 +791,7 @@ func isPatternOrScriptFlag(arg string) bool {
 
 // resolveTarget resolves a target against baseDir, expanding ~ with the Guard's homeDir.
 func (g *Guard) resolveTarget(target string, baseDir string) string {
-	t := strings.TrimSpace(target)
-	if g.homeDir != "" {
-		if t == "~" {
-			return g.homeDir
-		}
-		if strings.HasPrefix(t, "~/") {
-			return filepath.Clean(g.homeDir + t[1:])
-		}
-	}
-	if strings.HasPrefix(t, "/") {
-		return filepath.Clean(t)
-	}
-	return filepath.Clean(filepath.Join(baseDir, t))
+	return fsutils.ExpandAndCleanPath(target, baseDir, g.homeDir)
 }
 
 // IsProtectedPath reports whether targetPath (either workspace-relative or
@@ -829,13 +804,41 @@ func (g *Guard) IsProtectedPath(targetPath string) bool {
 // EvaluatePath resolves targetPath against the Guard's workspaceDir (and expands ~
 // with homeDir) and classifies its SafetyLevel for the given ActionType.
 func (g *Guard) EvaluatePath(targetPath string, action ActionType) (string, SafetyLevel) {
-	return guard.EvaluatePath(targetPath, g.workspaceDir, g.homeDir, action, g.protectedDirs...)
+	return guard.EvaluatePathWithConfig(targetPath, action, guard.PathConfig{
+		WorkspaceDir:  g.workspaceDir,
+		HomeDir:       g.homeDir,
+		ProtectedDirs: g.protectedDirs,
+		ReadDirs:      g.readDirs,
+		WriteDirs:     g.writeDirs,
+	})
 }
 
 // evaluatePath classifies resolvedPath using g.EvaluatePath.
 func (g *Guard) evaluatePath(resolvedPath string, action ActionType) SafetyLevel {
 	_, safety := g.EvaluatePath(resolvedPath, action)
 	return safety
+}
+
+// IsInWriteDirs reports whether targetPath resolves inside one of the Guard's configured WriteDirs.
+func (g *Guard) IsInWriteDirs(targetPath string) bool {
+	resolved := fsutils.ExpandAndCleanPath(targetPath, g.workspaceDir, g.homeDir)
+	for _, wd := range g.writeDirs {
+		if fsutils.IsInsideDir(resolved, wd) {
+			return true
+		}
+	}
+	return false
+}
+
+// IsInReadDirs reports whether targetPath resolves inside one of the Guard's configured ReadDirs.
+func (g *Guard) IsInReadDirs(targetPath string) bool {
+	resolved := fsutils.ExpandAndCleanPath(targetPath, g.workspaceDir, g.homeDir)
+	for _, rd := range g.readDirs {
+		if fsutils.IsInsideDir(resolved, rd) {
+			return true
+		}
+	}
+	return false
 }
 
 // matchRule evaluates a CommandRule against the given arguments.

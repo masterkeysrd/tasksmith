@@ -1,6 +1,7 @@
 package std
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -360,8 +361,17 @@ func TestViewAndExternalChangeDetection(t *testing.T) {
 	if _, err := s.View(ctx, ViewRequest{Path: "."}); !errors.Is(err, ErrInvalidArgument) {
 		t.Fatalf("expected ErrInvalidArgument for dot path, got %v", err)
 	}
-	if _, err := s.View(ctx, ViewRequest{Path: "../outside.txt"}); !errors.Is(err, sandbox.ErrPathEscape) {
-		t.Fatalf("expected sandbox.ErrPathEscape, got %v", err)
+	outsideDir := t.TempDir()
+	outsideFile := filepath.Join(outsideDir, "outside.txt")
+	if err := os.WriteFile(outsideFile, []byte("outside content\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile outside: %v", err)
+	}
+	viewOutside, err := s.View(ctx, ViewRequest{Path: outsideFile})
+	if err != nil {
+		t.Fatalf("expected View on outside path to succeed, got %v", err)
+	}
+	if viewOutside.Content != "outside content" {
+		t.Fatalf("expected 'outside content', got %q", viewOutside.Content)
 	}
 }
 
@@ -693,6 +703,22 @@ func TestBashAndSyncExternalChanges(t *testing.T) {
 	}
 	if _, ok := tracker.LastHash("tracked_mod.txt"); !ok {
 		t.Fatal("expected modified file to have updated hash in tracker")
+	}
+
+	// Test streaming Output writer capturing combined stdout and stderr
+	var streamBuf bytes.Buffer
+	streamRes, err := s.Bash(ctx, BashRequest{
+		Command: "printf 'stdout text\\n' && printf 'stderr text\\n' >&2",
+		Output:  &streamBuf,
+	})
+	if err != nil {
+		t.Fatalf("Bash with Output failed: %v", err)
+	}
+	if streamRes.ExitCode != 0 {
+		t.Fatalf("expected exit code 0, got %d", streamRes.ExitCode)
+	}
+	if !strings.Contains(streamBuf.String(), "stdout text\n") || !strings.Contains(streamBuf.String(), "stderr text\n") {
+		t.Fatalf("expected streamBuf to contain both stdout and stderr, got: %q", streamBuf.String())
 	}
 }
 

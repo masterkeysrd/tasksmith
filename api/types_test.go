@@ -231,15 +231,12 @@ func testJSONRoundTrip[T any](t *testing.T, original T) {
 func TestGeneratedToolTypesJSONRoundTrip(t *testing.T) {
 	t.Run("Bash", func(t *testing.T) {
 		testJSONRoundTrip(t, BashInput{
-			Command:   "ls -la",
-			Dir:       "src",
-			Env:       map[string]string{"DEBUG": "1"},
-			Stdin:     "input line",
-			TimeoutMs: 5000,
+			Command:     "ls -la",
+			Description: "List directory contents",
+			Dir:         "src",
 		})
 		testJSONRoundTrip(t, BashOutput{
-			Stdout:     "output",
-			Stderr:     "warning",
+			Output:     "output",
 			ExitCode:   0,
 			DurationMs: 123,
 		})
@@ -390,21 +387,14 @@ func TestGeneratedToolTypesJSONRoundTrip(t *testing.T) {
 
 	t.Run("WebFetch", func(t *testing.T) {
 		testJSONRoundTrip(t, WebFetchInput{
-			URL:       "https://example.com/api",
-			Body:      `{"key":"val"}`,
-			Headers:   map[string]string{"Content-Type": "application/json"},
-			MaxBytes:  4096,
-			Method:    "POST",
-			TimeoutMs: 5000,
+			URL:     "https://example.com/api",
+			Headers: map[string]string{"Content-Type": "application/json"},
 		})
 		testJSONRoundTrip(t, WebFetchOutput{
 			URL:         "https://example.com/api",
 			StatusCode:  200,
-			Status:      "200 OK",
 			ContentType: "application/json",
-			Headers:     map[string]string{"Content-Type": "application/json"},
 			Text:        `{"status":"ok"}`,
-			Truncated:   false,
 		})
 	})
 

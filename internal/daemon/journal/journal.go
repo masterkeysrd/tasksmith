@@ -752,7 +752,6 @@ func normalizeTrackPath(path string) string {
 	}
 	clean := filepath.ToSlash(filepath.Clean(trimmed))
 	clean = strings.TrimPrefix(clean, "./")
-	clean = strings.TrimPrefix(clean, "/")
 	if clean == "" {
 		return "."
 	}

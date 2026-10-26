@@ -18,7 +18,6 @@ type webFetchTool struct {
 func (t *webFetchTool) Prepare(ctx context.Context, in api.WebFetchInput) (*tools.Plan, error) {
 	res, err := t.std.Fetch(ctx, std.FetchRequest{
 		URL:    in.URL,
-		Method: in.Method,
 		DryRun: true,
 	})
 	if err != nil {
@@ -35,21 +34,9 @@ func (t *webFetchTool) Prepare(ctx context.Context, in api.WebFetchInput) (*tool
 }
 
 func (t *webFetchTool) Execute(ctx context.Context, in api.WebFetchInput) (api.WebFetchOutput, error) {
-	var timeout time.Duration
-	if in.TimeoutMs > 0 {
-		timeout = time.Duration(in.TimeoutMs) * time.Millisecond
-	}
-	var body []byte
-	if in.Body != "" {
-		body = []byte(in.Body)
-	}
 	res, err := t.std.Fetch(ctx, std.FetchRequest{
-		URL:      in.URL,
-		Method:   in.Method,
-		Headers:  in.Headers,
-		Body:     body,
-		Timeout:  timeout,
-		MaxBytes: in.MaxBytes,
+		URL:     in.URL,
+		Headers: in.Headers,
 	})
 	if err != nil {
 		return api.WebFetchOutput{}, err
@@ -57,11 +44,8 @@ func (t *webFetchTool) Execute(ctx context.Context, in api.WebFetchInput) (api.W
 	return api.WebFetchOutput{
 		URL:         res.URL,
 		StatusCode:  res.StatusCode,
-		Status:      res.Status,
-		Headers:     res.Headers,
 		ContentType: res.ContentType,
-		Text:        res.Text,
-		Truncated:   res.Truncated,
+		Text:        tools.Spill(ctx, res.Text),
 	}, nil
 }
 
@@ -83,7 +67,7 @@ func (t *downloadTool) Prepare(ctx context.Context, in api.DownloadInput) (*tool
 		return nil, err
 	}
 	safety := tools.SafetyUnknown
-	if t.guard.IsProtectedPath(res.Path) {
+	if _, evalSafety := t.guard.EvaluatePath(res.Path, tools.ActionWrite); evalSafety == tools.SafetyUnsafe {
 		safety = tools.SafetyUnsafe
 	}
 	return &tools.Plan{

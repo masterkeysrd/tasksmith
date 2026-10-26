@@ -1,6 +1,8 @@
 package shellguard
 
 import (
+	"fmt"
+	"path/filepath"
 	"reflect"
 	"testing"
 )
@@ -1331,5 +1333,84 @@ func TestNetworkCommands(t *testing.T) {
 				t.Errorf("Analyze(%q) safety = %q, want %q", tt.command, ops[0].Safety, tt.expectedSafety)
 			}
 		})
+	}
+}
+
+func TestGuardReadDirsAndWriteDirs(t *testing.T) {
+	wsDir := "/tmp/test-ws"
+	readDir := "/tmp/test-readonly-outputs"
+	writeDir := "/tmp/test-scratch-writable"
+
+	g := New(Config{
+		WorkspaceDir: wsDir,
+		ReadDirs:     []string{readDir},
+		WriteDirs:    []string{writeDir},
+	})
+
+	// 1. EvaluatePath checks
+	// Workspace
+	if p, s := g.EvaluatePath(filepath.Join(wsDir, "file.txt"), ActionRead); s != SafetySafe {
+		t.Errorf("expected SafetySafe for reading in workspace, got %s (path=%s)", s, p)
+	}
+	if p, s := g.EvaluatePath(filepath.Join(wsDir, "file.txt"), ActionWrite); s != SafetySafe {
+		t.Errorf("expected SafetySafe for writing in workspace, got %s (path=%s)", s, p)
+	}
+
+	// ReadDirs: reads are SafetySafe, writes/deletes are SafetyUnsafe
+	readTarget := filepath.Join(readDir, "session-output.txt")
+	if p, s := g.EvaluatePath(readTarget, ActionRead); s != SafetySafe {
+		t.Errorf("expected SafetySafe for reading in ReadDirs, got %s (path=%s)", s, p)
+	}
+	if p, s := g.EvaluatePath(readTarget, ActionWrite); s != SafetyUnsafe {
+		t.Errorf("expected SafetyUnsafe for writing in ReadDirs, got %s (path=%s)", s, p)
+	}
+	if p, s := g.EvaluatePath(readTarget, ActionDelete); s != SafetyUnsafe {
+		t.Errorf("expected SafetyUnsafe for deleting in ReadDirs, got %s (path=%s)", s, p)
+	}
+
+	// WriteDirs: reads, writes, and deletes are SafetySafe
+	writeTarget := filepath.Join(writeDir, "temp.txt")
+	if p, s := g.EvaluatePath(writeTarget, ActionRead); s != SafetySafe {
+		t.Errorf("expected SafetySafe for reading in WriteDirs, got %s (path=%s)", s, p)
+	}
+	if p, s := g.EvaluatePath(writeTarget, ActionWrite); s != SafetySafe {
+		t.Errorf("expected SafetySafe for writing in WriteDirs, got %s (path=%s)", s, p)
+	}
+	if p, s := g.EvaluatePath(writeTarget, ActionDelete); s != SafetySafe {
+		t.Errorf("expected SafetySafe for deleting in WriteDirs, got %s (path=%s)", s, p)
+	}
+
+	// Outside path (not in workspace, readDirs, or writeDirs)
+	outsideTarget := "/var/log/other.log"
+	if p, s := g.EvaluatePath(outsideTarget, ActionRead); s != SafetyOutside {
+		t.Errorf("expected SafetyOutside for reading outside path, got %s (path=%s)", s, p)
+	}
+	if p, s := g.EvaluatePath(outsideTarget, ActionWrite); s != SafetyUnsafe {
+		t.Errorf("expected SafetyUnsafe for writing outside path, got %s (path=%s)", s, p)
+	}
+
+	// 2. Analyze command checks (cat vs rm)
+	readOps, err := g.Analyze(fmt.Sprintf("cat %s", readTarget))
+	if err != nil {
+		t.Fatalf("Analyze cat readTarget: %v", err)
+	}
+	if len(readOps) != 1 || readOps[0].Safety != SafetySafe || readOps[0].Action != ActionRead {
+		t.Errorf("expected cat on readTarget to be ActionRead SafetySafe, got %+v", readOps)
+	}
+
+	rmOps, err := g.Analyze(fmt.Sprintf("rm %s", readTarget))
+	if err != nil {
+		t.Fatalf("Analyze rm readTarget: %v", err)
+	}
+	if len(rmOps) != 1 || rmOps[0].Safety != SafetyUnsafe || rmOps[0].Action != ActionDelete {
+		t.Errorf("expected rm on readTarget to be ActionDelete SafetyUnsafe, got %+v", rmOps)
+	}
+
+	writeOps, err := g.Analyze(fmt.Sprintf("touch %s && rm %s", writeTarget, writeTarget))
+	if err != nil {
+		t.Fatalf("Analyze touch && rm writeTarget: %v", err)
+	}
+	if len(writeOps) != 2 || writeOps[0].Safety != SafetySafe || writeOps[1].Safety != SafetySafe {
+		t.Errorf("expected touch and rm in writeTarget to both be SafetySafe, got %+v", writeOps)
 	}
 }

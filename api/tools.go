@@ -4,17 +4,14 @@ package api
 
 // BashInput defines the input parameters for the bash tool.
 type BashInput struct {
-	Command   string            `json:"command" jsonschema:"Shell command string passed to sh -c."`
-	Dir       string            `json:"dir,omitempty" jsonschema:"Optional working directory relative to the sandbox root."`
-	Env       map[string]string `json:"env,omitempty" jsonschema:"Optional per-command environment variable overrides."`
-	Stdin     string            `json:"stdin,omitempty" jsonschema:"Optional standard input passed to the command."`
-	TimeoutMs int               `json:"timeout_ms,omitempty" jsonschema:"Optional execution timeout in milliseconds."`
+	Command     string `json:"command" jsonschema:"Shell command string passed to sh -c."`
+	Description string `json:"description,omitempty" jsonschema:"Clear, concise description of what this command does."`
+	Dir         string `json:"dir,omitempty" jsonschema:"Optional working directory relative to the sandbox root."`
 }
 
 // BashOutput defines the structured output of the bash tool.
 type BashOutput struct {
-	Stdout     string `json:"stdout" jsonschema:"Captured standard output from the command."`
-	Stderr     string `json:"stderr" jsonschema:"Captured standard error from the command."`
+	Output     string `json:"output" jsonschema:"Combined standard output and standard error from the command."`
 	ExitCode   int    `json:"exit_code" jsonschema:"Process exit status code."`
 	DurationMs int64  `json:"duration_ms" jsonschema:"Execution duration in milliseconds."`
 }
@@ -167,23 +164,16 @@ type ViewOutput struct {
 
 // WebFetchInput defines the input parameters for the web_fetch tool.
 type WebFetchInput struct {
-	URL       string            `json:"url" jsonschema:"Target HTTP or HTTPS URL to fetch."`
-	Body      string            `json:"body,omitempty" jsonschema:"Optional HTTP request body payload."`
-	Headers   map[string]string `json:"headers,omitempty" jsonschema:"Optional HTTP request headers."`
-	MaxBytes  int64             `json:"max_bytes,omitempty" jsonschema:"Maximum number of response body bytes to read."`
-	Method    string            `json:"method,omitempty" jsonschema:"HTTP method verb (defaults to GET)."`
-	TimeoutMs int               `json:"timeout_ms,omitempty" jsonschema:"Optional request timeout in milliseconds."`
+	URL     string            `json:"url" jsonschema:"Target HTTP or HTTPS URL to fetch."`
+	Headers map[string]string `json:"headers,omitempty" jsonschema:"Optional HTTP request headers."`
 }
 
 // WebFetchOutput defines the structured output of the web_fetch tool.
 type WebFetchOutput struct {
-	URL         string            `json:"url" jsonschema:"Normalized request URL."`
-	StatusCode  int               `json:"status_code" jsonschema:"HTTP response status code."`
-	Status      string            `json:"status" jsonschema:"HTTP response status string."`
-	ContentType string            `json:"content_type,omitempty" jsonschema:"Response Content-Type header."`
-	Headers     map[string]string `json:"headers,omitempty" jsonschema:"Response HTTP headers."`
-	Text        string            `json:"text,omitempty" jsonschema:"Decoded text response body."`
-	Truncated   bool              `json:"truncated,omitempty" jsonschema:"Whether the response body was truncated at max_bytes."`
+	URL         string `json:"url" jsonschema:"Normalized request URL."`
+	StatusCode  int    `json:"status_code" jsonschema:"HTTP response status code."`
+	ContentType string `json:"content_type,omitempty" jsonschema:"Response Content-Type header."`
+	Text        string `json:"text,omitempty" jsonschema:"Decoded text response body."`
 }
 
 // WriteInput defines the input parameters for the write tool.

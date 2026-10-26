@@ -5,8 +5,11 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 
+	"github.com/masterkeysrd/tasksmith/internal/core/fsutils"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/sandbox"
 )
@@ -81,15 +84,39 @@ func (s *Std) Tracker() FileTracker {
 	return s.tracker
 }
 
-// normalizePath delegates path normalization to s.sandbox.FS().ResolvePath.
-// If the path attempts to escape the sandbox root, it is returned unstripped so
-// that the subsequent sandbox.FS operation rejects it with sandbox.ErrPathEscape.
+// normalizePath delegates path normalization to s.sandbox.FS().ResolvePath
+// if the path is within WorkDir. If the path escapes WorkDir, it returns
+// a clean slash-separated absolute host path.
 func (s *Std) normalizePath(rawPath string) string {
-	rel, err := s.sandbox.FS().ResolvePath(rawPath)
-	if err != nil {
-		return strings.TrimSpace(rawPath)
+	trimmed := strings.TrimSpace(rawPath)
+	if trimmed == "" {
+		return ""
 	}
-	return rel
+	expanded := trimmed
+	if trimmed == "~" || strings.HasPrefix(trimmed, "~/") {
+		var home string
+		if s.sandbox != nil {
+			if env := s.sandbox.Env(); env != nil {
+				home = env["HOME"]
+			}
+		}
+		if home == "" {
+			if uHome, err := os.UserHomeDir(); err == nil {
+				home = uHome
+			}
+		}
+		if home != "" {
+			expanded = fsutils.ExpandAndCleanPath(trimmed, "", home)
+		}
+	}
+
+	if rel, err := s.sandbox.FS().ResolvePath(expanded); err == nil {
+		return rel
+	}
+	if filepath.IsAbs(expanded) {
+		return filepath.ToSlash(filepath.Clean(expanded))
+	}
+	return filepath.ToSlash(filepath.Clean(filepath.Join(s.sandbox.Platform().WorkDir, expanded)))
 }
 
 func sha256Hex(data []byte) string {

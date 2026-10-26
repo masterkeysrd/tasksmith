@@ -3,6 +3,7 @@ package std
 import (
 	"context"
 	"errors"
+	"io"
 	"io/fs"
 	"time"
 )
@@ -326,6 +327,9 @@ type BashRequest struct {
 
 	// Stdin provides optional standard input to the command.
 	Stdin string `json:"stdin,omitempty"`
+
+	// Output optionally receives combined stdout and stderr from the command.
+	Output io.Writer `json:"-"`
 
 	// Timeout overrides the sandbox's default execution timeout.
 	Timeout time.Duration `json:"timeout,omitempty"`

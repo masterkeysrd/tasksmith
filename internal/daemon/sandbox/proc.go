@@ -194,8 +194,16 @@ func (p *sandboxProc) Exec(ctx context.Context, cmd Command) (*ExecResult, error
 	}
 
 	var stdoutBuf, stderrBuf bytes.Buffer
-	execCmd.Stdout = &stdoutBuf
-	execCmd.Stderr = &stderrBuf
+	if cmd.Stdout != nil {
+		execCmd.Stdout = cmd.Stdout
+	} else {
+		execCmd.Stdout = &stdoutBuf
+	}
+	if cmd.Stderr != nil {
+		execCmd.Stderr = cmd.Stderr
+	} else {
+		execCmd.Stderr = &stderrBuf
+	}
 	if cmd.Stdin != nil {
 		execCmd.Stdin = cmd.Stdin
 	}
@@ -235,10 +243,18 @@ func (p *sandboxProc) Exec(ctx context.Context, cmd Command) (*ExecResult, error
 
 	duration := time.Since(start)
 
+	var resStdout, resStderr []byte
+	if cmd.Stdout == nil {
+		resStdout = stdoutBuf.Bytes()
+	}
+	if cmd.Stderr == nil {
+		resStderr = stderrBuf.Bytes()
+	}
+
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return &ExecResult{
-			Stdout:   stdoutBuf.Bytes(),
-			Stderr:   stderrBuf.Bytes(),
+			Stdout:   resStdout,
+			Stderr:   resStderr,
 			ExitCode: exitCodeFromError(waitErr),
 			Duration: duration,
 		}, ctxErr
@@ -254,8 +270,8 @@ func (p *sandboxProc) Exec(ctx context.Context, cmd Command) (*ExecResult, error
 	}
 
 	return &ExecResult{
-		Stdout:   stdoutBuf.Bytes(),
-		Stderr:   stderrBuf.Bytes(),
+		Stdout:   resStdout,
+		Stderr:   resStderr,
 		ExitCode: exitCode,
 		Duration: duration,
 	}, nil

@@ -18,6 +18,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	"github.com/masterkeysrd/tasksmith/internal/core/shellguard"
+	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/gateway"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/harness"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/journal"
@@ -167,8 +168,21 @@ func (s *Session) initResources(ctx context.Context) error {
 			return fmt.Errorf("session: initialize std tools: %w", err)
 		}
 
+		outputsDir := ""
+		if s.Root != "" {
+			outputsDir = filepath.Join(s.Root, "outputs")
+		} else if wsDir, err := xdg.WorkspaceDir(s.workspace.RootDir()); err == nil && s.ID != "" {
+			outputsDir = filepath.Join(wsDir, "sessions", s.ID, "outputs")
+		}
+
+		var readDirs []string
+		if outputsDir != "" {
+			readDirs = []string{outputsDir}
+		}
+
 		guardInst := shellguard.New(shellguard.Config{
 			WorkspaceDir: s.workspace.RootDir(),
+			ReadDirs:     readDirs,
 		})
 
 		builtinTools, err := builtin.New(builtin.Config{

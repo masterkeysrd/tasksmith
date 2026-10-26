@@ -19,6 +19,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/core/shellguard"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/permissions"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/sandbox"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/scope"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/std"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tools"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tools/builtin"
@@ -74,11 +75,19 @@ func setupBuiltinEnv(t *testing.T, allowLoopback bool) (string, tools.Container,
 		t.Fatalf("builtin.New failed: %v", err)
 	}
 
+	sp, err := tools.NewSpiller(tools.SpillerConfig{
+		BaseDir: filepath.Join(dir, ".spill"),
+	})
+	if err != nil {
+		t.Fatalf("tools.NewSpiller failed: %v", err)
+	}
+
 	container, err := tools.NewContainer(tools.Config{
 		Tools:     builtinTools,
 		Sandbox:   sb,
 		Workspace: ws,
 		Logger:    log.Default(),
+		Spiller:   sp,
 	})
 	if err != nil {
 		t.Fatalf("tools.NewContainer failed: %v", err)
@@ -428,13 +437,13 @@ func TestBashWebFetchDownloadRemoveAndEdgeCases(t *testing.T) {
 	echoRes, err := c.Execute(ctx, &message.ToolCall{
 		ID:   "bash-echo",
 		Name: builtin.ToolBash,
-		Args: map[string]any{"command": "echo hello", "timeout_ms": 5000},
+		Args: map[string]any{"command": "echo hello"},
 	})
 	if err != nil || echoRes.IsError {
 		t.Fatalf("Execute(echo hello) failed: err=%v, res=%+v", err, echoRes)
 	}
 	bashOut, ok := echoRes.StructuredContent.(api.BashOutput)
-	if !ok || !strings.Contains(bashOut.Stdout, "hello") {
+	if !ok || !strings.Contains(bashOut.Output, "hello") {
 		t.Fatalf("unexpected bash output: %+v", echoRes.StructuredContent)
 	}
 
@@ -449,10 +458,7 @@ func TestBashWebFetchDownloadRemoveAndEdgeCases(t *testing.T) {
 		ID:   "call-fetch",
 		Name: builtin.ToolWebFetch,
 		Args: map[string]any{
-			"url":        ts.URL + "/hello",
-			"method":     "POST",
-			"body":       "ping",
-			"timeout_ms": 5000,
+			"url": ts.URL + "/hello",
 		},
 	}
 	fetchPlan, err := c.Prepare(ctx, fetchCall)
@@ -600,5 +606,367 @@ func TestBashWebFetchDownloadRemoveAndEdgeCases(t *testing.T) {
 		if _, err := c.Prepare(ctx, bad); !errors.Is(err, std.ErrInvalidArgument) {
 			t.Fatalf("expected ErrInvalidArgument for %s (%v), got %v", bad.Name, bad.Args, err)
 		}
+	}
+}
+
+func TestBashPrepareDescription(t *testing.T) {
+	_, c, _, _, _ := setupBuiltinEnv(t, false)
+	ctx := context.Background()
+
+	plan, err := c.Prepare(ctx, &message.ToolCall{
+		ID:   "call-desc",
+		Name: builtin.ToolBash,
+		Args: map[string]any{
+			"command":     "go test ./...",
+			"description": "Run project unit tests",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Prepare failed: %v", err)
+	}
+	if plan.Summary != "Run project unit tests" {
+		t.Fatalf("expected Summary %q, got %q", "Run project unit tests", plan.Summary)
+	}
+
+	planNoDesc, err := c.Prepare(ctx, &message.ToolCall{
+		ID:   "call-nodesc",
+		Name: builtin.ToolBash,
+		Args: map[string]any{
+			"command": "go test ./...",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Prepare without desc failed: %v", err)
+	}
+	if planNoDesc.Summary != "Run shell command: go test ./..." {
+		t.Fatalf("expected default Summary, got %q", planNoDesc.Summary)
+	}
+}
+
+func TestBashStreamingSpill(t *testing.T) {
+	_, c, _, _, _ := setupBuiltinEnv(t, false)
+	ctx := scope.With(context.Background(), scope.Scope{
+		SessionID:  "sess-bash-spill",
+		ToolCallID: "call-bash-spill",
+	})
+
+	// Command outputs 600 lines total (> DefaultSpillMaxLines 500), mixing stdout and stderr
+	cmd := `for i in $(seq 1 300); do echo "stdout line $i"; echo "stderr line $i" >&2; done`
+	res, err := c.Execute(ctx, &message.ToolCall{
+		ID:   "call-bash-spill",
+		Name: builtin.ToolBash,
+		Args: map[string]any{
+			"command":     cmd,
+			"description": "Generate high volume output mixing stdout and stderr",
+		},
+	})
+	if err != nil || res.IsError {
+		t.Fatalf("Execute(bash spill) failed: err=%v, res=%+v", err, res)
+	}
+
+	bashOut, ok := res.StructuredContent.(api.BashOutput)
+	if !ok {
+		t.Fatalf("expected api.BashOutput, got: %T", res.StructuredContent)
+	}
+	if bashOut.ExitCode != 0 {
+		t.Fatalf("expected exit code 0, got %d", bashOut.ExitCode)
+	}
+
+	// Verify truncation preview in Output
+	if !strings.Contains(bashOut.Output, "truncated — full output saved to") {
+		t.Fatalf("expected truncation notice in bash output, got:\n%s", bashOut.Output)
+	}
+
+	// Extract spilled file path from notice
+	startIdx := strings.Index(bashOut.Output, "full output saved to ")
+	if startIdx == -1 {
+		t.Fatalf("did not find 'full output saved to ' in notice: %s", bashOut.Output)
+	}
+	startPath := startIdx + len("full output saved to ")
+	endIdx := strings.Index(bashOut.Output[startPath:], ". Use view or grep")
+	if endIdx == -1 {
+		t.Fatalf("did not find end of path in notice: %s", bashOut.Output)
+	}
+	spillPath := bashOut.Output[startPath : startPath+endIdx]
+
+	spillData, err := os.ReadFile(spillPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%s): %v", spillPath, err)
+	}
+
+	// Full output on disk must contain lines from both stdout and stderr
+	spillStr := string(spillData)
+	if !strings.Contains(spillStr, "stdout line 1\n") || !strings.Contains(spillStr, "stderr line 1\n") {
+		t.Fatalf("spilled content missing initial stdout/stderr lines")
+	}
+	if !strings.Contains(spillStr, "stdout line 300\n") || !strings.Contains(spillStr, "stderr line 300\n") {
+		t.Fatalf("spilled content missing final stdout/stderr lines")
+	}
+}
+
+func TestWebFetchStreamingSpill(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		for i := 1; i <= 600; i++ {
+			fmt.Fprintf(w, "web line %03d\n", i)
+		}
+	}))
+	defer ts.Close()
+
+	_, c, _, _, _ := setupBuiltinEnv(t, true)
+	ctx := scope.With(context.Background(), scope.Scope{
+		SessionID:  "sess-fetch-spill",
+		ToolCallID: "call-fetch-spill",
+	})
+
+	res, err := c.Execute(ctx, &message.ToolCall{
+		ID:   "call-fetch-spill",
+		Name: builtin.ToolWebFetch,
+		Args: map[string]any{
+			"url": ts.URL + "/large",
+		},
+	})
+	if err != nil || res.IsError {
+		t.Fatalf("Execute(web_fetch spill) failed: err=%v, res=%+v", err, res)
+	}
+
+	fetchOut, ok := res.StructuredContent.(api.WebFetchOutput)
+	if !ok {
+		t.Fatalf("expected api.WebFetchOutput, got: %T", res.StructuredContent)
+	}
+	if fetchOut.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 OK, got %d", fetchOut.StatusCode)
+	}
+
+	// Verify truncation preview in Text
+	if !strings.Contains(fetchOut.Text, "truncated — full output saved to") {
+		t.Fatalf("expected truncation notice in web_fetch text, got:\n%s", fetchOut.Text)
+	}
+
+	// Extract spilled file path from notice
+	startIdx := strings.Index(fetchOut.Text, "full output saved to ")
+	if startIdx == -1 {
+		t.Fatalf("did not find 'full output saved to ' in notice: %s", fetchOut.Text)
+	}
+	startPath := startIdx + len("full output saved to ")
+	endIdx := strings.Index(fetchOut.Text[startPath:], ". Use view or grep")
+	if endIdx == -1 {
+		t.Fatalf("did not find end of path in notice: %s", fetchOut.Text)
+	}
+	spillPath := fetchOut.Text[startPath : startPath+endIdx]
+
+	spillData, err := os.ReadFile(spillPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%s): %v", spillPath, err)
+	}
+
+	spillStr := string(spillData)
+	if !strings.Contains(spillStr, "web line 001\n") || !strings.Contains(spillStr, "web line 600\n") {
+		t.Fatalf("spilled content missing initial or final lines")
+	}
+}
+
+func TestSessionOutputsAndOutsidePathOperations(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	if realDir, err := filepath.EvalSymlinks(dir); err == nil {
+		dir = realDir
+	}
+	sessionID := "sess-output-test"
+	baseSpillDir := t.TempDir()
+	if realBase, err := filepath.EvalSymlinks(baseSpillDir); err == nil {
+		baseSpillDir = realBase
+	}
+	outputsDir := filepath.Join(baseSpillDir, "sessions", sessionID, "outputs")
+	if err := os.MkdirAll(outputsDir, 0o755); err != nil {
+		t.Fatalf("mkdir outputsDir: %v", err)
+	}
+
+	ws, err := workspace.Open(ctx, dir, workspace.WithBuiltinFS(builtin.FS()))
+	if err != nil {
+		t.Fatalf("workspace.Open failed: %v", err)
+	}
+
+	sb, err := sandbox.New(sandbox.Config{
+		Mode:    sandbox.ModeLocal,
+		WorkDir: dir,
+	})
+	if err != nil {
+		t.Fatalf("sandbox.New failed: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = sb.Close()
+	})
+
+	stdLib, err := std.New(std.Config{
+		Sandbox: sb,
+		Tracker: std.NewMemoryTracker(),
+		Logger:  log.Default(),
+	})
+	if err != nil {
+		t.Fatalf("std.New failed: %v", err)
+	}
+
+	guard := shellguard.New(shellguard.Config{
+		WorkspaceDir: dir,
+		ReadDirs:     []string{outputsDir},
+	})
+
+	builtinTools, err := builtin.New(builtin.Config{
+		Std:     stdLib,
+		Sandbox: sb,
+		Guard:   guard,
+	})
+	if err != nil {
+		t.Fatalf("builtin.New failed: %v", err)
+	}
+
+	sp, err := tools.NewSpiller(tools.SpillerConfig{
+		BaseDir: baseSpillDir,
+	})
+	if err != nil {
+		t.Fatalf("tools.NewSpiller failed: %v", err)
+	}
+
+	c, err := tools.NewContainer(tools.Config{
+		Tools:     builtinTools,
+		Sandbox:   sb,
+		Workspace: ws,
+		Logger:    log.Default(),
+		Spiller:   sp,
+	})
+	if err != nil {
+		t.Fatalf("tools.NewContainer failed: %v", err)
+	}
+
+	// 1. Bash command spills > 500 lines to <outputsDir>/<tool_call_id>.txt
+	toolCallID := "call-spill-test"
+	scopedCtx := scope.With(ctx, scope.Scope{
+		SessionID:  sessionID,
+		ToolCallID: toolCallID,
+	})
+
+	bashCmd := `for i in $(seq 1 600); do echo "spilled line $i"; done`
+	res, err := c.Execute(scopedCtx, &message.ToolCall{
+		ID:   toolCallID,
+		Name: builtin.ToolBash,
+		Args: map[string]any{
+			"command": bashCmd,
+		},
+	})
+	if err != nil || res.IsError {
+		t.Fatalf("Execute(bash spill) failed: err=%v, res=%+v", err, res)
+	}
+
+	expectedSpillPath := filepath.Join(outputsDir, toolCallID+".txt")
+	if _, err := os.Stat(expectedSpillPath); err != nil {
+		t.Fatalf("expected spilled file at %s: %v", expectedSpillPath, err)
+	}
+
+	// 2. View on spilled file path: Prepare (SafetySafe, ReadOnly: true) and Execute
+	viewCall := &message.ToolCall{
+		ID:   "call-view-spill",
+		Name: builtin.ToolView,
+		Args: map[string]any{
+			"path": expectedSpillPath,
+		},
+	}
+	viewPlan, err := c.Prepare(ctx, viewCall)
+	if err != nil {
+		t.Fatalf("Prepare(view spill) failed: %v", err)
+	}
+	if viewPlan.Safety != tools.SafetySafe || !viewPlan.ReadOnly || viewPlan.Action != tools.ActionRead {
+		t.Fatalf("unexpected view plan on spilled path: %+v", viewPlan)
+	}
+	viewRes, err := c.Execute(ctx, viewCall)
+	if err != nil || viewRes.IsError {
+		t.Fatalf("Execute(view spill) failed: err=%v, res=%+v", err, viewRes)
+	}
+	viewOut, ok := viewRes.StructuredContent.(api.ViewOutput)
+	if !ok {
+		t.Fatalf("expected api.ViewOutput, got %T", viewRes.StructuredContent)
+	}
+	if !strings.Contains(viewOut.Content, "spilled line 1") || !strings.Contains(viewOut.Content, "spilled line 600") {
+		t.Fatalf("view output missing expected spilled lines")
+	}
+
+	// 3. Grep on spilled file path: Prepare (SafetySafe, ReadOnly: true) and Execute
+	grepCall := &message.ToolCall{
+		ID:   "call-grep-spill",
+		Name: builtin.ToolGrep,
+		Args: map[string]any{
+			"pattern": "spilled line 345",
+			"path":    expectedSpillPath,
+		},
+	}
+	grepPlan, err := c.Prepare(ctx, grepCall)
+	if err != nil {
+		t.Fatalf("Prepare(grep spill) failed: %v", err)
+	}
+	if grepPlan.Safety != tools.SafetySafe || !grepPlan.ReadOnly || grepPlan.Action != tools.ActionRead {
+		t.Fatalf("unexpected grep plan on spilled path: %+v", grepPlan)
+	}
+	grepRes, err := c.Execute(ctx, grepCall)
+	if err != nil || grepRes.IsError {
+		t.Fatalf("Execute(grep spill) failed: err=%v, res=%+v", err, grepRes)
+	}
+	grepOut, ok := grepRes.StructuredContent.(api.GrepOutput)
+	if !ok {
+		t.Fatalf("expected api.GrepOutput, got %T", grepRes.StructuredContent)
+	}
+	if len(grepOut.Matches) == 0 || !strings.Contains(grepOut.Matches[0].Text, "spilled line 345") {
+		t.Fatalf("grep output did not find expected match: %+v", grepOut)
+	}
+
+	// 4. Outside path operations (../outside.txt)
+	outsideFilePath := filepath.Join(dir, "..", "outside.txt")
+	t.Cleanup(func() {
+		_ = os.Remove(outsideFilePath)
+	})
+
+	writeOutsideCall := &message.ToolCall{
+		ID:   "call-write-outside",
+		Name: builtin.ToolWrite,
+		Args: map[string]any{
+			"path":    "../outside.txt",
+			"content": "outside data\nline two\n",
+		},
+	}
+	writeOutsidePlan, err := c.Prepare(ctx, writeOutsideCall)
+	if err != nil {
+		t.Fatalf("Prepare(write outside) failed: %v", err)
+	}
+	if writeOutsidePlan.Safety != tools.SafetyUnsafe || writeOutsidePlan.Action != tools.ActionWrite {
+		t.Fatalf("expected SafetyUnsafe for write ../outside.txt, got %+v", writeOutsidePlan)
+	}
+	writeOutsideRes, err := c.Execute(ctx, writeOutsideCall)
+	if err != nil || writeOutsideRes.IsError {
+		t.Fatalf("Execute(write outside) failed: err=%v, res=%+v", err, writeOutsideRes)
+	}
+
+	viewOutsideCall := &message.ToolCall{
+		ID:   "call-view-outside",
+		Name: builtin.ToolView,
+		Args: map[string]any{
+			"path": "../outside.txt",
+		},
+	}
+	viewOutsidePlan, err := c.Prepare(ctx, viewOutsideCall)
+	if err != nil {
+		t.Fatalf("Prepare(view outside) failed: %v", err)
+	}
+	if viewOutsidePlan.Safety != tools.SafetyOutside || !viewOutsidePlan.ReadOnly || viewOutsidePlan.Action != tools.ActionRead {
+		t.Fatalf("expected SafetyOutside + ReadOnly for view ../outside.txt, got %+v", viewOutsidePlan)
+	}
+	viewOutsideRes, err := c.Execute(ctx, viewOutsideCall)
+	if err != nil || viewOutsideRes.IsError {
+		t.Fatalf("Execute(view outside) failed: err=%v, res=%+v", err, viewOutsideRes)
+	}
+	viewOutsideOut, ok := viewOutsideRes.StructuredContent.(api.ViewOutput)
+	if !ok {
+		t.Fatalf("expected api.ViewOutput, got %T", viewOutsideRes.StructuredContent)
+	}
+	if !strings.Contains(viewOutsideOut.Content, "outside data") {
+		t.Fatalf("expected 'outside data' in view output, got %q", viewOutsideOut.Content)
 	}
 }

@@ -4,6 +4,8 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+
+	"github.com/masterkeysrd/tasksmith/internal/core/fsutils"
 )
 
 // DefaultProtectedDirs is the default list of protected workspace directories
@@ -141,7 +143,7 @@ func IsProtectedPath(targetPath, workspaceDir string, protectedDirs ...string) b
 // IsSensitivePath reports whether targetPath points to a sensitive system path
 // (e.g. /etc, /proc, /dev) or user credential path (e.g. ~/.ssh, ~/.aws).
 func IsSensitivePath(targetPath, homeDir string) bool {
-	cleaned := expandAndCleanPath(targetPath, "", homeDir)
+	cleaned := fsutils.ExpandAndCleanPath(targetPath, "", homeDir)
 	for _, sp := range DefaultSensitivePaths {
 		spClean := filepath.Clean(sp)
 		if cleaned == spClean || strings.HasPrefix(cleaned, spClean+string(filepath.Separator)) {
@@ -165,23 +167,51 @@ func IsSensitivePath(targetPath, homeDir string) bool {
 	return false
 }
 
-// EvaluatePath resolves targetPath against workspaceDir (and expands ~ with homeDir)
+// PathConfig encapsulates the path configuration used by EvaluatePathWithConfig.
+type PathConfig struct {
+	WorkspaceDir  string
+	HomeDir       string
+	ProtectedDirs []string
+	ReadDirs      []string
+	WriteDirs     []string
+}
+
+// EvaluatePathWithConfig resolves targetPath against cfg.WorkspaceDir (and expands ~ with cfg.HomeDir)
 // and classifies its SafetyLevel for the given ActionType:
 //   - Sensitive system or credential paths always return SafetyUnsafe.
-//   - Paths inside workspaceDir return SafetyUnsafe if targeting a protected directory
+//   - Paths inside cfg.WorkspaceDir return SafetyUnsafe if targeting a protected directory
 //     with a non-read action, or SafetySafe otherwise.
-//   - Paths outside workspaceDir return SafetyOutside for ActionRead, or SafetyUnsafe
-//     for non-read actions.
-func EvaluatePath(targetPath, workspaceDir, homeDir string, action ActionType, protectedDirs ...string) (string, SafetyLevel) {
-	resolved := expandAndCleanPath(targetPath, workspaceDir, homeDir)
-	if IsSensitivePath(resolved, homeDir) {
+//   - Paths inside cfg.WriteDirs return SafetySafe for ActionRead, ActionWrite, ActionDelete,
+//     and SafetyUnsafe for other actions.
+//   - Paths inside cfg.ReadDirs return SafetySafe for ActionRead, and SafetyUnsafe for other actions.
+//   - Otherwise (outside cfg.WorkspaceDir, cfg.WriteDirs, cfg.ReadDirs):
+//     returns SafetyOutside for ActionRead, or SafetyUnsafe for non-read actions.
+func EvaluatePathWithConfig(targetPath string, action ActionType, cfg PathConfig) (string, SafetyLevel) {
+	resolved := fsutils.ExpandAndCleanPath(targetPath, cfg.WorkspaceDir, cfg.HomeDir)
+	if IsSensitivePath(resolved, cfg.HomeDir) {
 		return resolved, SafetyUnsafe
 	}
-	if workspaceDir != "" && isInsideDir(resolved, workspaceDir) {
-		if IsProtectedPath(resolved, workspaceDir, protectedDirs...) && action != ActionRead {
+	if cfg.WorkspaceDir != "" && fsutils.IsInsideDir(resolved, cfg.WorkspaceDir) {
+		if IsProtectedPath(resolved, cfg.WorkspaceDir, cfg.ProtectedDirs...) && action != ActionRead {
 			return resolved, SafetyUnsafe
 		}
 		return resolved, SafetySafe
+	}
+	for _, wd := range cfg.WriteDirs {
+		if fsutils.IsInsideDir(resolved, wd) {
+			if action == ActionRead || action == ActionWrite || action == ActionDelete {
+				return resolved, SafetySafe
+			}
+			return resolved, SafetyUnsafe
+		}
+	}
+	for _, rd := range cfg.ReadDirs {
+		if fsutils.IsInsideDir(resolved, rd) {
+			if action == ActionRead {
+				return resolved, SafetySafe
+			}
+			return resolved, SafetyUnsafe
+		}
 	}
 	if action == ActionRead {
 		return resolved, SafetyOutside
@@ -189,24 +219,12 @@ func EvaluatePath(targetPath, workspaceDir, homeDir string, action ActionType, p
 	return resolved, SafetyUnsafe
 }
 
-func expandAndCleanPath(targetPath, baseDir, homeDir string) string {
-	p := strings.TrimSpace(targetPath)
-	if homeDir != "" {
-		homeClean := filepath.Clean(homeDir)
-		if p == "~" {
-			p = homeClean
-		} else if strings.HasPrefix(p, "~/") {
-			p = homeClean + p[1:]
-		}
-	}
-	if filepath.IsAbs(p) || baseDir == "" {
-		return filepath.Clean(p)
-	}
-	return filepath.Clean(filepath.Join(baseDir, p))
-}
-
-func isInsideDir(resolved, dir string) bool {
-	dirClean := filepath.Clean(dir)
-	resClean := filepath.Clean(resolved)
-	return resClean == dirClean || strings.HasPrefix(resClean, dirClean+string(filepath.Separator))
+// EvaluatePath resolves targetPath against workspaceDir (and expands ~ with homeDir)
+// and classifies its SafetyLevel for the given ActionType.
+func EvaluatePath(targetPath, workspaceDir, homeDir string, action ActionType, protectedDirs ...string) (string, SafetyLevel) {
+	return EvaluatePathWithConfig(targetPath, action, PathConfig{
+		WorkspaceDir:  workspaceDir,
+		HomeDir:       homeDir,
+		ProtectedDirs: protectedDirs,
+	})
 }

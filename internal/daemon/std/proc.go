@@ -26,6 +26,10 @@ func (s *Std) Bash(ctx context.Context, req BashRequest) (*BashResult, error) {
 	if req.Stdin != "" {
 		cmd.Stdin = strings.NewReader(req.Stdin)
 	}
+	if req.Output != nil {
+		cmd.Stdout = req.Output
+		cmd.Stderr = req.Output
+	}
 
 	execRes, execErr := s.sandbox.Proc().Exec(ctx, cmd)
 

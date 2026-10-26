@@ -22,6 +22,7 @@ type Config struct {
 	Sandbox   sandbox.Sandbox
 	Workspace workspace.Workspace
 	Logger    log.Interface
+	Spiller   Spiller
 }
 
 // Validate ensures that all required dependencies are non-nil. Zero silent
@@ -58,6 +59,7 @@ type container struct {
 	sandbox   sandbox.Sandbox
 	workspace workspace.Workspace
 	logger    log.Interface
+	spiller   Spiller
 	order     []string
 	tools     map[string]Tool
 	locksMu   sync.Mutex
@@ -73,10 +75,20 @@ func NewContainer(cfg Config) (Container, error) {
 		return nil, err
 	}
 
+	sp := cfg.Spiller
+	if sp == nil {
+		var err error
+		sp, err = NewSpiller(SpillerConfig{Workspace: cfg.Workspace})
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	c := &container{
 		sandbox:   cfg.Sandbox,
 		workspace: cfg.Workspace,
 		logger:    cfg.Logger.ForComponent("tools"),
+		spiller:   sp,
 		tools:     make(map[string]Tool, len(cfg.Tools)),
 		pathLocks: make(map[string]*sync.Mutex),
 	}
@@ -216,6 +228,9 @@ func (c *container) Execute(ctx context.Context, tc *message.ToolCall) (*message
 
 		var execErr error
 		ctx = scope.With(ctx, scope.Scope{ToolCallID: tc.ID, ToolName: tc.Name})
+		if _, ok := SpillerFrom(ctx); !ok && c.spiller != nil {
+			ctx = WithSpiller(ctx, c.spiller)
+		}
 		resp, execErr = t.Execute(ctx, tc)
 		if execErr != nil {
 			resp = &message.Tool{
