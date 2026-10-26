@@ -429,13 +429,50 @@ ORDER BY e.id ASC;
 }
 
 // DiffEntry computes the unified diff for a specific journal entry by loading
-// before and after blobs.
+// before and after blobs, or for the whole file relative to session baseline
+// when entryID is empty.
 func (j *sqliteJournal) DiffEntry(ctx context.Context, path, entryID string) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
 
 	normPath := normalizeTrackPath(path)
+
+	if strings.TrimSpace(entryID) == "" {
+		var baseline string
+		err := j.db.QueryRowContext(ctx, "SELECT baseline FROM journal_files WHERE session_id = ? AND path = ?", j.sessionID, normPath).Scan(&baseline)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return "", fmt.Errorf("%w: %s", ErrNotFound, normPath)
+			}
+			return "", fmt.Errorf("journal: query baseline for %q: %w", normPath, err)
+		}
+
+		var afterHash, kind string
+		err = j.db.QueryRowContext(ctx, "SELECT after_hash, kind FROM journal_entries WHERE session_id = ? AND path = ? ORDER BY id DESC LIMIT 1", j.sessionID, normPath).Scan(&afterHash, &kind)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return "", fmt.Errorf("%w: %s", ErrNotFound, normPath)
+			}
+			return "", fmt.Errorf("journal: query latest entry for %q: %w", normPath, err)
+		}
+
+		if kind == string(std.KindDeleted) {
+			afterHash = ""
+		}
+
+		beforeBytes, err := j.readBlob(baseline)
+		if err != nil {
+			return "", err
+		}
+		afterBytes, err := j.readBlob(afterHash)
+		if err != nil {
+			return "", err
+		}
+
+		return diff.FormatUnified("a/"+normPath, "b/"+normPath, string(beforeBytes), string(afterBytes)), nil
+	}
+
 	const query = `
 SELECT before_hash, after_hash
 FROM journal_entries

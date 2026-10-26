@@ -29,6 +29,7 @@ type Option struct {
 	Label       string
 	Description string
 	Cells       []string
+	CellNodes   []trail.Node
 	Current     bool
 }
 
@@ -167,9 +168,15 @@ var OptionList = trail.FC("OptionList", func(props OptionListProps) trail.Node {
 						spanStyle = rowStyle.Merge(colSpec.Style)
 					}
 				}
-				tds = append(tds, kitex.TD(kitex.TDProps{
-					Style: tdStyle,
-				}, trail.Span(trail.SpanProps{Style: spanStyle}, trail.Text(text))))
+				if colIdx < len(opt.CellNodes) && opt.CellNodes[colIdx] != nil {
+					tds = append(tds, kitex.TD(kitex.TDProps{
+						Style: tdStyle,
+					}, opt.CellNodes[colIdx]))
+				} else {
+					tds = append(tds, kitex.TD(kitex.TDProps{
+						Style: tdStyle,
+					}, trail.Span(trail.SpanProps{Style: spanStyle}, trail.Text(text))))
+				}
 			}
 		} else {
 			tds = []trail.Node{

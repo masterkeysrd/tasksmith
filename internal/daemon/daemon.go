@@ -699,11 +699,11 @@ func (d *Daemon) Diff(ctx context.Context, rawWS, id, path, entryID string) (*ap
 
 	path = strings.TrimSpace(path)
 	entryID = strings.TrimSpace(entryID)
-	if path == "" || entryID == "" {
+	if path == "" {
 		return nil, &api.APIError{
 			StatusCode: http.StatusBadRequest,
 			Code:       "bad_request",
-			Message:    "path and entry_id query parameters are required",
+			Message:    "path query parameter is required",
 		}
 	}
 

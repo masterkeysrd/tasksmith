@@ -366,7 +366,7 @@ func TestComposerHistoryCap500(t *testing.T) {
 
 	// Write 600 entries directly, then verify loadHistoryFromFile caps at 500.
 	entries := make([]string, 0, 600)
-	for i := 0; i < 600; i++ {
+	for i := range 600 {
 		entries = append(entries, fmt.Sprintf("entry-%d", i))
 	}
 	if err := persistHistory(entries); err != nil {

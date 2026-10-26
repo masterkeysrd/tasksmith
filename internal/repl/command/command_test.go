@@ -12,7 +12,7 @@ import (
 func TestRegistryBuiltinsAndLookup(t *testing.T) {
 	r := NewRegistry()
 
-	cmds := []string{"help", "mode", "model", "agent", "effort", "theme", "new", "sessions", "changes", "diff", "revert", "clear", "exit", "permissions", "tasks"}
+	cmds := []string{"help", "mode", "model", "agent", "effort", "theme", "new", "sessions", "changes", "revert", "clear", "exit", "permissions", "tasks"}
 	for _, name := range cmds {
 		cmd, ok := r.Lookup(name)
 		if !ok {

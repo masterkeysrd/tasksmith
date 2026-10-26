@@ -262,6 +262,7 @@ var PermissionPrompt = trail.FC("PermissionPrompt", func(props PermissionPromptP
 	if perm.Diff != "" {
 		boxChildren = append(boxChildren, trail.Newline(1), DiffView(DiffProps{
 			Text: strings.TrimRight(perm.Diff, "\n"),
+			Path: perm.Target,
 		}))
 	}
 

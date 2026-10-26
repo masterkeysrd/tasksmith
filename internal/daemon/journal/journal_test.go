@@ -205,6 +205,20 @@ func TestJournalRecordChangeAndScope(t *testing.T) {
 	if _, err := j.DiffEntry(ctx, "main.go", "unknown-entry"); !errors.Is(err, journal.ErrEntryNotFound) {
 		t.Errorf("DiffEntry unknown-entry error = %v, want %v", err, journal.ErrEntryNotFound)
 	}
+
+	// Whole-file DiffEntry with empty entryID
+	diffWhole, err := j.DiffEntry(ctx, "main.go", "")
+	if err != nil {
+		t.Fatalf("DiffEntry empty entryID: %v", err)
+	}
+	if !strings.Contains(diffWhole, "+hello external") {
+		t.Errorf("unexpected whole-file diffText:\n%s", diffWhole)
+	}
+
+	// Whole-file DiffEntry for non-existent file
+	if _, err := j.DiffEntry(ctx, "unknown.go", ""); !errors.Is(err, journal.ErrNotFound) {
+		t.Errorf("DiffEntry unknown file error = %v, want %v", err, journal.ErrNotFound)
+	}
 }
 
 func TestJournalRecoverAt(t *testing.T) {

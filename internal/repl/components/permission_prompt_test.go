@@ -25,7 +25,7 @@ func TestPermissionPromptRendering(t *testing.T) {
 		Safety:        api.SafetyOutside,
 		Target:        "git status",
 		Summary:       "Execute git status",
-		Diff:          "--- old\n+++ new\n",
+		Diff:          "--- old\n+++ new\n@@ -1 +1 @@\n-old\n+new\n",
 		GrantPatterns: []string{"bash(git status *)", "bash(git *)"},
 	}
 
@@ -54,7 +54,7 @@ func TestPermissionPromptRendering(t *testing.T) {
 	}
 
 	// Check unified diff
-	if !strings.Contains(out, "--- old") || !strings.Contains(out, "+++ new") {
+	if !strings.Contains(out, "old") || !strings.Contains(out, "new") {
 		t.Errorf("expected Diff in output, got:\n%s", out)
 	}
 

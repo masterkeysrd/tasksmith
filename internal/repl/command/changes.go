@@ -2,20 +2,18 @@ package command
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strings"
 
 	"github.com/masterkeysrd/kite/event"
 	"github.com/masterkeysrd/kite/extras/kitex"
 	"github.com/masterkeysrd/kite/extras/trail"
-	"github.com/masterkeysrd/kite/extras/wind"
-	"github.com/masterkeysrd/kite/promise"
 	"github.com/masterkeysrd/kite/style"
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/repl/components"
 	"github.com/masterkeysrd/tasksmith/internal/repl/store"
 	uicomponents "github.com/masterkeysrd/tasksmith/internal/ui/components"
+	"github.com/masterkeysrd/tasksmith/internal/ui/theme"
 )
 
 func (r *Registry) registerChangesCommands() {
@@ -24,12 +22,6 @@ func (r *Registry) registerChangesCommands() {
 		Usage:       "/changes",
 		Description: "List and inspect tracked file changes",
 		Handler:     handleChanges,
-	})
-	r.Register(Command{
-		Name:        "diff",
-		Usage:       "/diff <path> <entry_id>",
-		Description: "Show unified diff for a tracked file change",
-		Handler:     handleDiff,
 	})
 	r.Register(Command{
 		Name:        "revert",
@@ -50,35 +42,6 @@ func handleChanges(_ []string) error {
 		Kind: store.SlotKindPicker,
 		Data: ChangesBrowser,
 	})
-	return nil
-}
-
-func handleDiff(args []string) error {
-	sess := store.GetSession().Session
-	if sess == nil || sess.ID == "" {
-		store.AppendNotice("No active session.")
-		return nil
-	}
-	if len(args) < 2 || strings.TrimSpace(args[0]) == "" || strings.TrimSpace(args[1]) == "" {
-		return errors.New("usage: /diff <path> <entry_id>")
-	}
-
-	c := store.Client()
-	if c == nil {
-		store.AppendNotice("Client unavailable.")
-		return nil
-	}
-
-	path := strings.TrimSpace(args[0])
-	entryID := strings.TrimSpace(args[1])
-	go func() {
-		diff, err := c.DiffChange(context.Background(), sess.ID, path, entryID)
-		if err != nil {
-			store.AppendError("Diff Error", err.Error())
-			return
-		}
-		store.AppendCommandOutput(fmt.Sprintf("/diff %s %s", path, entryID), diff)
-	}()
 	return nil
 }
 
@@ -124,6 +87,131 @@ func handleRevert(args []string) error {
 	return nil
 }
 
+func aggregateFileChanges(entries []api.FileChange) []api.FileChange {
+	if len(entries) == 0 {
+		return nil
+	}
+
+	type fileGroup struct {
+		path    string
+		entries []api.FileChange
+	}
+
+	var groups []fileGroup
+	groupIndices := make(map[string]int)
+
+	for _, ch := range entries {
+		idx, ok := groupIndices[ch.Path]
+		if !ok {
+			groupIndices[ch.Path] = len(groups)
+			groups = append(groups, fileGroup{
+				path:    ch.Path,
+				entries: []api.FileChange{ch},
+			})
+		} else {
+			groups[idx].entries = append(groups[idx].entries, ch)
+		}
+	}
+
+	var result []api.FileChange
+	for _, g := range groups {
+		if len(g.entries) == 0 {
+			continue
+		}
+		first := g.entries[0]
+		last := g.entries[len(g.entries)-1]
+
+		baselineHash := first.BeforeHash
+		currentHash := last.AfterHash
+		if last.Kind == "deleted" {
+			currentHash = ""
+		}
+
+		if baselineHash == currentHash && !(first.Kind == "created" && last.Kind != "deleted") {
+			continue
+		}
+
+		var netKind string
+		if (first.Kind == "created" || first.BeforeHash == "") && last.Kind != "deleted" {
+			netKind = "created"
+		} else if last.Kind == "deleted" {
+			netKind = "deleted"
+		} else {
+			netKind = "modified"
+		}
+
+		lastRevertIdx := -1
+		for i, e := range g.entries {
+			if e.Tool == "revert" {
+				lastRevertIdx = i
+			}
+		}
+
+		totalAdd := 0
+		totalDel := 0
+		for i := lastRevertIdx + 1; i < len(g.entries); i++ {
+			if g.entries[i].Tool != "revert" {
+				totalAdd += g.entries[i].Additions
+				totalDel += g.entries[i].Deletions
+			}
+		}
+
+		result = append(result, api.FileChange{
+			ID:        last.ID,
+			Path:      g.path,
+			Kind:      netKind,
+			Additions: totalAdd,
+			Deletions: totalDel,
+			Timestamp: last.Timestamp,
+		})
+	}
+
+	return result
+}
+
+type emptyChangesViewProps struct {
+	slotID string
+}
+
+var emptyChangesView = trail.FC("EmptyChangesView", func(props emptyChangesViewProps) trail.Node {
+	trail.UseInput(func(_ string, k event.KeyEvent) {
+		if k.MatchString("esc", "escape") {
+			store.RemoveSlot(props.slotID)
+		}
+	})
+
+	scheme := theme.UseTheme()
+	border := style.SingleBorder().Top(true).Bottom(false).Left(false).Right(false)
+	if scheme != nil && scheme.Color.Border.Primary != nil {
+		border = border.Color(scheme.Color.Border.Primary)
+	}
+	boxStyle := style.S().
+		Border(border).
+		Width(style.Percent(100)).
+		FlexDirection(style.FlexColumn)
+	titleStyle := style.S().Bold(true).Margin(0, 0, 1, 0)
+	emptyStyle := style.S().Margin(0, 0, 1, 0)
+
+	if scheme != nil {
+		if scheme.Color.Text.Primary != nil {
+			titleStyle = titleStyle.Foreground(scheme.Color.Text.Primary)
+		}
+		if scheme.Color.Text.Secondary != nil {
+			emptyStyle = emptyStyle.Foreground(scheme.Color.Text.Secondary)
+		}
+	}
+
+	return trail.Box(trail.BoxProps{Style: boxStyle},
+		trail.Span(trail.SpanProps{Style: titleStyle}, trail.Text("Tracked Changes")),
+		trail.Span(trail.SpanProps{Style: emptyStyle}, trail.Text("  No tracked file changes.")),
+		components.KeyboardHint(components.KeyboardHintProps{
+			Bindings: []components.KeyBinding{
+				{Key: "esc", Label: "Close"},
+			},
+		}),
+	)
+})
+
 type changeDiffProps struct {
 	sessionID string
 	change    *api.FileChange
@@ -132,13 +220,33 @@ type changeDiffProps struct {
 
 var changeDiffViewer = trail.FC("ChangeDiffViewer", func(props changeDiffProps) trail.Node {
 	c := store.Client()
+	diffText, setDiffText := kitex.UseState("")
+	isLoading, setIsLoading := kitex.UseState(true)
+	errText, setErrText := kitex.UseState("")
 
-	diffQuery := wind.Use("diff:"+props.sessionID+":"+props.change.ID, promise.WrapWithProps(func(ctx context.Context, _ string) (string, error) {
+	kitex.UseEffectCleanup(func() func() {
 		if c == nil {
-			return "", errors.New("client unavailable")
+			setIsLoading(false)
+			setErrText("client unavailable")
+			return nil
 		}
-		return c.DiffChange(ctx, props.sessionID, props.change.Path, props.change.ID)
-	}), wind.Options{Enabled: c != nil})
+		ctx, cancel := context.WithCancel(context.Background())
+		setIsLoading(true)
+		go func() {
+			diff, err := c.DiffChange(ctx, props.sessionID, props.change.Path, "")
+			if ctx.Err() != nil {
+				return
+			}
+			if err != nil {
+				setErrText(err.Error())
+			} else {
+				setDiffText(diff)
+				setErrText("")
+			}
+			setIsLoading(false)
+		}()
+		return cancel
+	}, []any{props.sessionID, props.change.Path})
 
 	trail.UseInput(func(_ string, k event.KeyEvent) {
 		if k.MatchString("esc", "escape") {
@@ -148,16 +256,37 @@ var changeDiffViewer = trail.FC("ChangeDiffViewer", func(props changeDiffProps) 
 		}
 	})
 
-	var content trail.Node
-	if diffQuery.IsLoading {
-		content = trail.Text("Loading diff...")
-	} else if diffQuery.IsError {
-		content = trail.Text("Error loading diff: " + diffQuery.Error.Error())
-	} else {
-		content = components.DiffView(components.DiffProps{Text: diffQuery.Data})
+	scheme := theme.UseTheme()
+	border := style.SingleBorder().Top(true).Bottom(false).Left(false).Right(false)
+	if scheme != nil && scheme.Color.Border.Primary != nil {
+		border = border.Color(scheme.Color.Border.Primary)
 	}
 
-	border := style.SingleBorder().Top(true).Bottom(false).Left(false).Right(false)
+	headerStyle := style.S().Bold(true).Margin(0, 0, 1, 0)
+	if scheme != nil && scheme.Color.Text.Primary != nil {
+		headerStyle = headerStyle.Foreground(scheme.Color.Text.Primary)
+	}
+
+	var content trail.Node
+	if isLoading() {
+		content = trail.Box(trail.BoxProps{
+			Style: style.S().FlexDirection(style.FlexRow).Margin(0, 0, 1, 0),
+		}, trail.Span(trail.SpanProps{
+			Style: style.S().Foreground(scheme.Color.Text.Secondary),
+		}, trail.Text("Loading diff...")))
+	} else if err := errText(); err != "" {
+		content = trail.Box(trail.BoxProps{
+			Style: style.S().FlexDirection(style.FlexRow).Margin(0, 0, 1, 0),
+		}, trail.Span(trail.SpanProps{
+			Style: style.S().Foreground(scheme.Color.Text.Error),
+		}, trail.Text("Error loading diff: "+err)))
+	} else {
+		content = components.DiffView(components.DiffProps{
+			Text: diffText(),
+			Path: props.change.Path,
+		})
+	}
+
 	return trail.Box(trail.BoxProps{
 		Style: style.S().
 			Border(border).
@@ -165,7 +294,7 @@ var changeDiffViewer = trail.FC("ChangeDiffViewer", func(props changeDiffProps) 
 			FlexDirection(style.FlexColumn),
 	},
 		trail.Span(trail.SpanProps{
-			Style: style.S().Bold(true).Margin(0, 0, 1, 0),
+			Style: headerStyle,
 		}, trail.Text(fmt.Sprintf("Diff for %s (%s):", props.change.Path, props.change.Kind))),
 		content,
 		components.KeyboardHint(components.KeyboardHintProps{
@@ -182,61 +311,51 @@ var ChangesBrowser = trail.FC("ChangesBrowser", func(slotID string) trail.Node {
 	c := store.Client()
 
 	selectedChange, setSelectedChange := kitex.UseState[*api.FileChange](nil)
+	changesState, setChangesState := kitex.UseState[[]api.FileChange](nil)
+	isLoading, setIsLoading := kitex.UseState(true)
+	errorState, setErrorState := kitex.UseState[error](nil)
+	fetchCount, setFetchCount := kitex.UseState(0)
 
 	sessID := ""
 	if sess != nil {
 		sessID = sess.ID
 	}
 
-	changesQuery := wind.Use("changes:"+sessID, promise.WrapWithProps(func(ctx context.Context, _ string) ([]api.FileChange, error) {
-		if c == nil || sessID == "" {
-			return nil, nil
-		}
-		return c.Changes(ctx, sessID)
-	}), wind.Options{Enabled: c != nil && sessID != ""})
+	refetch := func() {
+		setFetchCount(fetchCount() + 1)
+	}
 
-	revertMutation := wind.UseMutation(func(ctx context.Context, req api.RevertRequest) *promise.Promise[any] {
-		return promise.Wrap(func(ctx context.Context) (any, error) {
-			if c == nil || sessID == "" {
-				return nil, errors.New("session or client unavailable")
+	kitex.UseEffectCleanup(func() func() {
+		if sess == nil || sess.ID == "" || c == nil {
+			setIsLoading(false)
+			return nil
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		setIsLoading(true)
+		go func() {
+			data, err := c.Changes(ctx, sess.ID)
+			if ctx.Err() != nil {
+				return
 			}
-			err := c.Revert(ctx, sessID, req)
-			return nil, err
-		})(ctx)
-	}, wind.MutationOptions[api.RevertRequest, any]{
-		OnSuccess: func(_ any, _ api.RevertRequest, _ wind.MutationContext) {
-			changesQuery.Refetch()
-			setSelectedChange(nil)
-		},
-		OnError: func(err error, _ api.RevertRequest, _ wind.MutationContext) {
-			store.AppendError("Revert Error", err.Error())
-		},
-	})
+			if err != nil {
+				setErrorState(err)
+			} else {
+				setChangesState(data)
+				setErrorState(nil)
+			}
+			setIsLoading(false)
+		}()
+		return cancel
+	}, []any{sessID, fetchCount()})
 
-	kitex.UseEffect(func() {
-		if sess == nil || sess.ID == "" {
-			store.RemoveSlot(slotID)
-			store.AppendCommandOutput("/changes", "No active session.")
-			return
-		}
-		if c == nil {
-			store.RemoveSlot(slotID)
-			store.AppendNotice("Client unavailable.")
-			return
-		}
-		if changesQuery.IsLoading {
-			return
-		}
-		if changesQuery.IsError {
-			store.RemoveSlot(slotID)
-			store.AppendError("Error", changesQuery.Error.Error())
-		} else if len(changesQuery.Data) == 0 {
-			store.RemoveSlot(slotID)
-			store.AppendCommandOutput("/changes", "No tracked file changes.")
-		}
-	}, []any{sess == nil, c == nil, changesQuery.IsLoading, changesQuery.IsError, changesQuery.Error, len(changesQuery.Data)})
-
-	if sess == nil || sess.ID == "" || c == nil {
+	if sess == nil || sess.ID == "" {
+		store.RemoveSlot(slotID)
+		store.AppendCommandOutput("/changes", "No active session.")
+		return nil
+	}
+	if c == nil {
+		store.RemoveSlot(slotID)
+		store.AppendNotice("Client unavailable.")
 		return nil
 	}
 
@@ -250,28 +369,49 @@ var ChangesBrowser = trail.FC("ChangesBrowser", func(slotID string) trail.Node {
 		})
 	}
 
-	if changesQuery.IsLoading {
+	if isLoading() {
 		return loadingHint("Loading changes...")
 	}
-	if changesQuery.IsError || len(changesQuery.Data) == 0 {
+	if err := errorState(); err != nil {
+		store.RemoveSlot(slotID)
+		store.AppendError("Error", err.Error())
 		return nil
 	}
 
-	changes := changesQuery.Data
-	opts := make([]uicomponents.Option, len(changes))
-	for i, ch := range changes {
+	aggregated := aggregateFileChanges(changesState())
+	if len(aggregated) == 0 {
+		return emptyChangesView(emptyChangesViewProps{slotID: slotID})
+	}
+
+	scheme := theme.UseTheme()
+	opts := make([]uicomponents.Option, len(aggregated))
+	for i, ch := range aggregated {
 		stats := fmt.Sprintf("+%d/-%d", ch.Additions, ch.Deletions)
+		statsNode := trail.Span(trail.SpanProps{
+			Style: style.S().WhiteSpace(style.WhiteSpacePre),
+		},
+			trail.Span(trail.SpanProps{
+				Style: style.S().Foreground(scheme.Color.Surface.Success),
+			}, trail.Text(fmt.Sprintf("+%d", ch.Additions))),
+			trail.Span(trail.SpanProps{
+				Style: style.S().Foreground(scheme.Color.Text.Secondary),
+			}, trail.Text("/")),
+			trail.Span(trail.SpanProps{
+				Style: style.S().Foreground(scheme.Color.Text.Error),
+			}, trail.Text(fmt.Sprintf("-%d", ch.Deletions))),
+		)
 		opts[i] = uicomponents.Option{
-			Value: ch.ID,
-			Label: ch.Path,
-			Cells: []string{ch.Path, ch.Kind, stats},
+			Value:     ch.Path,
+			Label:     ch.Path,
+			Cells:     []string{ch.Path, ch.Kind, stats},
+			CellNodes: []trail.Node{nil, nil, statsNode},
 		}
 	}
 
 	pickerProps := components.NewPicker("Tracked Changes", opts, func(opt uicomponents.Option) {
-		for i := range changes {
-			if changes[i].ID == opt.Value {
-				ch := changes[i]
+		for i := range aggregated {
+			if aggregated[i].Path == opt.Value {
+				ch := aggregated[i]
 				setSelectedChange(&ch)
 				break
 			}
@@ -286,44 +426,28 @@ var ChangesBrowser = trail.FC("ChangesBrowser", func(slotID string) trail.Node {
 	pickerProps.Bindings = []components.KeyBinding{
 		{Key: "↑/↓", Label: "Select"},
 		{Key: "enter", Label: "View diff"},
-		{Key: "f4/r", Label: "Revert"},
-		{Key: "esc", Label: "Cancel"},
+		{Key: "r", Label: "Revert"},
+		{Key: "esc", Label: "Close"},
 	}
 	pickerProps.OnCancel = func() {
 		store.RemoveSlot(slotID)
-		store.AppendCommandOutput("/changes", "Exited /changes command")
 	}
 	pickerProps.ConfirmActions = map[string]components.ConfirmAction{
-		"f4": {
-			Prompt: func(opt uicomponents.Option) string {
-				return fmt.Sprintf("Revert changes to %s?", opt.Label)
-			},
-			OnConfirm: func(opt uicomponents.Option) {
-				for i := range changes {
-					if changes[i].ID == opt.Value {
-						revertMutation.Mutate(api.RevertRequest{
-							Path:    changes[i].Path,
-							EntryID: changes[i].ID,
-						})
-						break
-					}
-				}
-			},
-		},
 		"r": {
 			Prompt: func(opt uicomponents.Option) string {
 				return fmt.Sprintf("Revert changes to %s?", opt.Label)
 			},
 			OnConfirm: func(opt uicomponents.Option) {
-				for i := range changes {
-					if changes[i].ID == opt.Value {
-						revertMutation.Mutate(api.RevertRequest{
-							Path:    changes[i].Path,
-							EntryID: changes[i].ID,
-						})
-						break
+				go func() {
+					err := c.Revert(context.Background(), sess.ID, api.RevertRequest{
+						Path: opt.Value,
+					})
+					if err != nil {
+						store.AppendError("Revert Error", err.Error())
+						return
 					}
-				}
+					refetch()
+				}()
 			},
 		},
 	}
