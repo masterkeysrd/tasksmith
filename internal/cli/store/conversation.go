@@ -196,22 +196,20 @@ func (acc *conversationAccumulator) reset() {
 func (acc *conversationAccumulator) setSessionID(id string) {
 	acc.mu.Lock()
 	defer acc.mu.Unlock()
-	if acc.sessionID != id {
-		acc.sessionID = id
-		acc.messages = nil
-		acc.clearPermissionsLocked()
-		acc.status = StreamIdle
-		acc.sessionStatus = api.StatusIdle
-		acc.err = nil
-		acc.draft = -1
-		acc.pendingUser = nil
-		acc.pendingCommand = ""
-		acc.pendingCommandID = ""
-		acc.queue = nil
-		acc.flushedIDs = make(map[string]bool)
-		acc.identities = make(map[string]string)
-		acc.nextDraft = 0
-	}
+	acc.sessionID = id
+	acc.messages = nil
+	acc.clearPermissionsLocked()
+	acc.status = StreamIdle
+	acc.sessionStatus = api.StatusIdle
+	acc.err = nil
+	acc.draft = -1
+	acc.pendingUser = nil
+	acc.pendingCommand = ""
+	acc.pendingCommandID = ""
+	acc.queue = nil
+	acc.flushedIDs = make(map[string]bool)
+	acc.identities = make(map[string]string)
+	acc.nextDraft = 0
 }
 
 func (acc *conversationAccumulator) messageID(sourceID, draftID string) string {
@@ -419,7 +417,7 @@ func (acc *conversationAccumulator) applyEvent(event api.Event) {
 			switch p.Entry.Kind {
 			case api.TimelineKindMode:
 				if p.Entry.Mode != nil {
-					SetMode(p.Entry.Mode.To)
+					SetSessionMode(p.Entry.Mode.To)
 				}
 			case api.TimelineKindModel:
 				if p.Entry.Model != nil {
@@ -603,59 +601,76 @@ func (acc *conversationAccumulator) loadTimeline(entries []api.TimelineEntry) {
 	acc.mu.Lock()
 	defer acc.mu.Unlock()
 
+	// Pass 1: Process state mutations and accumulate messages
 	for _, entry := range entries {
-		if entry.Kind != api.TimelineKindMessage {
-			if entry.Kind == api.TimelineKindInterrupted {
-				acc.status = StreamIdle
-				acc.sessionStatus = api.StatusIdle
-				acc.err = nil
-				acc.pendingUser = nil
-				acc.clearPermissionsLocked()
-				acc.discardDraftLocked()
-				acc.publishLocked()
-				AppendTimelineEntry(entry)
-				continue
+		switch entry.Kind {
+		case api.TimelineKindInterrupted:
+			acc.status = StreamIdle
+			acc.sessionStatus = api.StatusIdle
+			acc.err = nil
+			acc.pendingUser = nil
+			acc.clearPermissionsLocked()
+			acc.discardDraftLocked()
+		case api.TimelineKindPermission:
+			if entry.Permission != nil {
+				reqID := entry.Permission.Request.ID
+				acc.permissions = slices.DeleteFunc(acc.permissions, func(r api.PermissionRequest) bool {
+					return r.ID == reqID
+				})
+				RemoveSlot(permSlotID(reqID))
 			}
-			if entry.Kind == api.TimelineKindPermission {
-				if entry.Permission != nil {
-					reqID := entry.Permission.Request.ID
-					acc.permissions = slices.DeleteFunc(acc.permissions, func(r api.PermissionRequest) bool {
-						return r.ID == reqID
-					})
-					RemoveSlot(permSlotID(reqID))
-				}
-				continue
+		case api.TimelineKindMode:
+			if entry.Mode != nil {
+				SetSessionMode(entry.Mode.To)
 			}
-
-			AppendTimelineEntry(entry)
-			switch entry.Kind {
-			case api.TimelineKindMode:
-				if entry.Mode != nil {
-					SetMode(entry.Mode.To)
-				}
-			case api.TimelineKindModel:
-				if entry.Model != nil {
-					SetModelInfo(entry.Model.To, GetSession().Thinking)
-				}
-			case api.TimelineKindAgent:
-				if entry.Agent != nil {
-					SetSessionAgent(entry.Agent.To)
-				}
-			case api.TimelineKindEffort:
-				if entry.Effort != nil {
-					SetModelInfo(GetSession().ModelLabel, entry.Effort.To)
-				}
+		case api.TimelineKindModel:
+			if entry.Model != nil {
+				SetModelInfo(entry.Model.To, GetSession().Thinking)
 			}
-		} else if entry.Message != nil {
-			if acc.pendingUser != nil && acc.pendingUser.ID == entry.Message.ID {
-				acc.pendingUser = nil
+		case api.TimelineKindAgent:
+			if entry.Agent != nil {
+				SetSessionAgent(entry.Agent.To)
 			}
-			acc.queue = slices.DeleteFunc(acc.queue, func(item api.QueueItem) bool {
-				return item.ID == entry.Message.ID
-			})
-			_ = acc.addMessageLocked(*entry.Message)
+		case api.TimelineKindEffort:
+			if entry.Effort != nil {
+				SetModelInfo(GetSession().ModelLabel, entry.Effort.To)
+			}
+		case api.TimelineKindMessage:
+			if entry.Message != nil {
+				if acc.pendingUser != nil && acc.pendingUser.ID == entry.Message.ID {
+					acc.pendingUser = nil
+				}
+				acc.queue = slices.DeleteFunc(acc.queue, func(item api.QueueItem) bool {
+					return item.ID == entry.Message.ID
+				})
+				_ = acc.addMessageLocked(*entry.Message)
+			}
 		}
 	}
+
+	// Project history after all messages are accumulated so tool calls & responses are properly paired
+	history, _ := acc.projectLocked()
+	historyBySourceID := make(map[string]Message, len(history))
+	for _, h := range history {
+		if h.SourceID != "" {
+			historyBySourceID[h.SourceID] = h
+		}
+	}
+
+	// Pass 2: Flush in exact chronological timeline order
+	for _, entry := range entries {
+		if entry.Kind == api.TimelineKindMessage {
+			if entry.Message != nil {
+				if h, ok := historyBySourceID[entry.Message.ID]; ok && !acc.flushedIDs[h.ID] {
+					acc.flushedIDs[h.ID] = true
+					AppendMessage(h)
+				}
+			}
+		} else if entry.Kind != api.TimelineKindPermission {
+			AppendTimelineEntry(entry)
+		}
+	}
+
 	acc.publishLocked()
 }
 

@@ -1,11 +1,17 @@
 package store
 
 import (
+	"context"
 	"errors"
+	"io"
+	"net/http"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/masterkeysrd/tasksmith/api"
+	"github.com/masterkeysrd/tasksmith/client"
 )
 
 func TestConversationOptimisticUserAndConfirmation(t *testing.T) {
@@ -678,5 +684,296 @@ func TestConversationOptimisticQueueingAndEventRemovals(t *testing.T) {
 	st = GetStream()
 	if st.Queue != nil {
 		t.Fatalf("expected nil Queue after cancelTurn, got %+v", st.Queue)
+	}
+}
+
+type trackingRoundTripper struct {
+	updateSessionCount atomic.Int32
+}
+
+func (t *trackingRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	if req.Method == http.MethodPatch {
+		t.updateSessionCount.Add(1)
+		resp := &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader(`{"id":"sess-1","config":{"mode":"acceptEdits"}}`)),
+			Header:     make(http.Header),
+		}
+		resp.Header.Set("Content-Type", "application/json")
+		return resp, nil
+	}
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Body:       io.NopCloser(strings.NewReader(`{"id":"sess-1","config":{"mode":"default"}}`)),
+		Header:     make(http.Header),
+	}
+	resp.Header.Set("Content-Type", "application/json")
+	return resp, nil
+}
+
+func TestTimelineKindModeDoesNotTriggerUpdateSession(t *testing.T) {
+	ResetSession()
+	ResetStream()
+	ClearTranscript()
+	defer ResetSession()
+	defer ResetStream()
+	defer ClearTranscript()
+
+	origDelay := modeDebounceDelay
+	modeDebounceDelay = 30 * time.Millisecond
+	defer func() { modeDebounceDelay = origDelay }()
+
+	rt := &trackingRoundTripper{}
+	c, err := client.New("/tmp/dummy.sock", client.WithCWD("/workspace"), client.WithHTTPClient(&http.Client{Transport: rt}))
+	if err != nil {
+		t.Fatalf("client.New: %v", err)
+	}
+
+	sessMu.Lock()
+	activeClient = c
+	activeCtx = context.Background()
+	sessMu.Unlock()
+
+	SetSession(&api.Session{
+		ID:     "sess-1",
+		Config: api.SessionConfig{Mode: api.ModeDefault},
+	})
+
+	if GetSession().Config.Mode != api.ModeDefault {
+		t.Fatalf("expected ModeDefault, got %s", GetSession().Config.Mode)
+	}
+
+	acc := newConversationAccumulator()
+	acc.setSessionID("sess-1")
+
+	// 1. Receiving api.TimelineKindMode via applyEvent (SSE event)
+	acc.applyEvent(api.Event{
+		Type: api.EventEntryAdded,
+		Payload: api.EntryAddedEvent{
+			SessionID: "sess-1",
+			Entry: api.TimelineEntry{
+				ID:   "entry-mode-1",
+				Kind: api.TimelineKindMode,
+				Mode: &api.ModeChange{From: api.ModeDefault, To: api.ModePlan},
+			},
+		},
+	})
+
+	if got := GetSession().Config.Mode; got != api.ModePlan {
+		t.Fatalf("expected mode updated to ModePlan by applyEvent, got %q", got)
+	}
+
+	// Give any async goroutines time to run
+	time.Sleep(50 * time.Millisecond)
+	if count := rt.updateSessionCount.Load(); count != 0 {
+		t.Fatalf("expected 0 UpdateSession calls from applyEvent TimelineKindMode, got %d", count)
+	}
+
+	// 2. Receiving api.TimelineKindMode via loadTimeline
+	acc.loadTimeline([]api.TimelineEntry{
+		{
+			ID:   "entry-mode-2",
+			Kind: api.TimelineKindMode,
+			Mode: &api.ModeChange{From: api.ModePlan, To: api.ModeAcceptEdits},
+		},
+	})
+
+	if got := GetSession().Config.Mode; got != api.ModeAcceptEdits {
+		t.Fatalf("expected mode updated to ModeAcceptEdits by loadTimeline, got %q", got)
+	}
+
+	time.Sleep(50 * time.Millisecond)
+	if count := rt.updateSessionCount.Load(); count != 0 {
+		t.Fatalf("expected 0 UpdateSession calls from loadTimeline TimelineKindMode, got %d", count)
+	}
+
+	// 3. In contrast, calling SetMode directly SHOULD call UpdateSession
+	SetMode(api.ModeAuto)
+	if got := GetSession().Config.Mode; got != api.ModeAuto {
+		t.Fatalf("expected mode updated to ModeAuto by SetMode, got %q", got)
+	}
+
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		if rt.updateSessionCount.Load() > 0 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if count := rt.updateSessionCount.Load(); count != 1 {
+		t.Fatalf("expected 1 UpdateSession call from SetMode, got %d", count)
+	}
+}
+
+func TestLoadTimelineChronologicalOrderAndToolPairing(t *testing.T) {
+	ResetSession()
+	ResetStream()
+	ClearTranscript()
+	FreezeTranscript()
+	defer ResetSession()
+	defer ResetStream()
+	defer ClearTranscript()
+
+	acc := newConversationAccumulator()
+	acc.setSessionID("sess-timeline-order")
+
+	now := time.Now()
+	entries := []api.TimelineEntry{
+		// 1. User message
+		{
+			ID:   "e-user",
+			Kind: api.TimelineKindMessage,
+			Message: &api.Message{
+				ID:        "msg-user",
+				Role:      api.RoleUser,
+				CreatedAt: now,
+				Content: []api.Block{
+					{Type: api.BlockText, Text: "Please view file"},
+				},
+			},
+		},
+		// 2. Assistant tool call
+		{
+			ID:   "e-assistant-call",
+			Kind: api.TimelineKindMessage,
+			Message: &api.Message{
+				ID:        "msg-assistant-call",
+				Role:      api.RoleAssistant,
+				CreatedAt: now.Add(time.Second),
+				Content: []api.Block{
+					{
+						Type: api.BlockToolCall,
+						ToolCall: &api.ToolCall{
+							ID:   "tc-1",
+							Name: "view",
+							Args: map[string]any{"path": "main.go"},
+						},
+					},
+				},
+			},
+		},
+		// 3. Mode change interleaved between tool call and tool response!
+		{
+			ID:   "e-mode",
+			Kind: api.TimelineKindMode,
+			Mode: &api.ModeChange{From: api.ModeDefault, To: api.ModeAcceptEdits},
+		},
+		// 4. Tool response message
+		{
+			ID:   "e-tool-resp",
+			Kind: api.TimelineKindMessage,
+			Message: &api.Message{
+				ID:         "msg-tool-resp",
+				Role:       api.RoleTool,
+				ToolCallID: "tc-1",
+				CreatedAt:  now.Add(2 * time.Second),
+				Content: []api.Block{
+					{Type: api.BlockText, Text: "package main"},
+				},
+			},
+		},
+		// 5. Non-message command
+		{
+			ID:   "e-cmd",
+			Kind: api.TimelineKindCommand,
+			Command: &api.CommandRecord{
+				Command:  "ls -la",
+				ExitCode: 0,
+			},
+		},
+		// 6. Assistant final text message
+		{
+			ID:   "e-assistant-final",
+			Kind: api.TimelineKindMessage,
+			Message: &api.Message{
+				ID:        "msg-assistant-final",
+				Role:      api.RoleAssistant,
+				CreatedAt: now.Add(3 * time.Second),
+				Content: []api.Block{
+					{Type: api.BlockText, Text: "Done viewing file."},
+				},
+			},
+		},
+	}
+
+	acc.loadTimeline(entries)
+
+	tr := GetTranscript()
+	if tr.Items == nil {
+		t.Fatal("expected non-nil transcript items")
+	}
+
+	// Filter out the auto-prepended Header item
+	var items []TranscriptItem
+	for _, it := range *tr.Items {
+		if it.Kind != TranscriptKindHeader {
+			items = append(items, it)
+		}
+	}
+
+	for i, it := range items {
+		t.Logf("item %d: ID=%s, Kind=%s", i, it.ID, it.Kind)
+	}
+
+	if len(items) != 5 {
+		t.Fatalf("expected 5 transcript items (user, assistant-with-tool, mode, cmd, assistant-final), got %d: %+v", len(items), items)
+	}
+
+	// 1. User message
+	if items[0].Kind != TranscriptKindMessage {
+		t.Fatalf("expected item 0 to be Message, got %v", items[0].Kind)
+	}
+	userMsg := items[0].Data.(Message)
+	if userMsg.ID != "msg-user" {
+		t.Fatalf("expected item 0 ID msg-user, got %q", userMsg.ID)
+	}
+
+	// 2. Assistant message with paired tool call and response
+	if items[1].Kind != TranscriptKindMessage {
+		t.Fatalf("expected item 1 to be Message, got %v", items[1].Kind)
+	}
+	asstMsg := items[1].Data.(Message)
+	if asstMsg.ID != "msg-assistant-call" {
+		t.Fatalf("expected item 1 ID msg-assistant-call, got %q", asstMsg.ID)
+	}
+	if len(asstMsg.Parts) != 1 || asstMsg.Parts[0].Tool == nil {
+		t.Fatalf("expected 1 tool part, got %+v", asstMsg.Parts)
+	}
+	toolPart := asstMsg.Parts[0].Tool
+	if toolPart.Call == nil || toolPart.Call.Name != "view" {
+		t.Fatalf("expected tool call view, got %+v", toolPart.Call)
+	}
+	if toolPart.Response == nil {
+		t.Fatal("expected tool response to be paired with tool call even with interleaved mode change")
+	}
+	if toolPart.Status != ToolSucceeded {
+		t.Fatalf("expected ToolSucceeded, got %v", toolPart.Status)
+	}
+
+	// 3. Mode change
+	if items[2].Kind != TranscriptKindTimeline {
+		t.Fatalf("expected item 2 to be TranscriptKindTimeline (mode), got %v", items[2].Kind)
+	}
+	modeEntry := items[2].Data.(api.TimelineEntry)
+	if modeEntry.ID != "e-mode" || modeEntry.Kind != api.TimelineKindMode {
+		t.Fatalf("expected item 2 ID e-mode, got %+v", modeEntry)
+	}
+
+	// 4. Command
+	if items[3].Kind != TranscriptKindTimeline {
+		t.Fatalf("expected item 3 to be TranscriptKindTimeline (command), got %v", items[3].Kind)
+	}
+	cmdEntry := items[3].Data.(api.TimelineEntry)
+	if cmdEntry.ID != "e-cmd" || cmdEntry.Command == nil || cmdEntry.Command.Command != "ls -la" {
+		t.Fatalf("expected command ls -la, got %+v", cmdEntry.Command)
+	}
+
+	// 5. Final assistant message
+	if items[4].Kind != TranscriptKindMessage {
+		t.Fatalf("expected item 4 to be Message, got %v", items[4].Kind)
+	}
+	finalMsg := items[4].Data.(Message)
+	if finalMsg.ID != "msg-assistant-final" {
+		t.Fatalf("expected item 4 ID msg-assistant-final, got %q", finalMsg.ID)
 	}
 }

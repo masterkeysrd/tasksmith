@@ -1,10 +1,18 @@
 package store
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"io"
+	"net/http"
+	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/masterkeysrd/tasksmith/api"
+	"github.com/masterkeysrd/tasksmith/client"
 )
 
 func TestSessionStoreBasic(t *testing.T) {
@@ -134,6 +142,25 @@ func TestCycleMode(t *testing.T) {
 	}
 }
 
+func TestSetSessionMode(t *testing.T) {
+	ResetSession()
+	defer ResetSession()
+
+	sess := &api.Session{
+		ID:     "sess-1",
+		Config: api.SessionConfig{Mode: api.ModeDefault},
+	}
+	SetSession(sess)
+
+	SetSessionMode(api.ModePlan)
+	if got := GetSession().Config.Mode; got != api.ModePlan {
+		t.Fatalf("expected ModePlan, got %q", got)
+	}
+	if got := GetSession().Session.Config.Mode; got != api.ModePlan {
+		t.Fatalf("expected session.Config.Mode ModePlan, got %q", got)
+	}
+}
+
 func TestTasksStore(t *testing.T) {
 	ResetSession()
 	defer ResetSession()
@@ -200,5 +227,287 @@ func TestTasksStore(t *testing.T) {
 	}
 	if running = GetRunningTasks(); len(running) != 0 {
 		t.Fatalf("expected 0 running tasks after NewDraftSession, got %d", len(running))
+	}
+}
+
+type mockSessionRoundTripper struct {
+	handler func(req *http.Request) (*http.Response, error)
+}
+
+func (m *mockSessionRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	return m.handler(req)
+}
+
+func TestCycleModeDebounce(t *testing.T) {
+	ResetSession()
+	defer ResetSession()
+
+	origDelay := modeDebounceDelay
+	modeDebounceDelay = 40 * time.Millisecond
+	defer func() { modeDebounceDelay = origDelay }()
+
+	var updateRequests []api.UpdateSessionRequest
+	var mu sync.Mutex
+
+	rt := &mockSessionRoundTripper{
+		handler: func(req *http.Request) (*http.Response, error) {
+			if req.Method == http.MethodPatch && strings.Contains(req.URL.Path, "/sessions/") {
+				var upReq api.UpdateSessionRequest
+				_ = json.NewDecoder(req.Body).Decode(&upReq)
+				mu.Lock()
+				updateRequests = append(updateRequests, upReq)
+				mu.Unlock()
+				resp := &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader(`{"id":"sess-1","config":{"mode":"plan"}}`)),
+					Header:     make(http.Header),
+				}
+				resp.Header.Set("Content-Type", "application/json")
+				return resp, nil
+			}
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader(`{}`)),
+				Header:     make(http.Header),
+			}, nil
+		},
+	}
+
+	c, err := client.New("/tmp/dummy.sock", client.WithCWD("/workspace"), client.WithHTTPClient(&http.Client{Transport: rt}))
+	if err != nil {
+		t.Fatalf("client.New: %v", err)
+	}
+
+	sessMu.Lock()
+	activeClient = c
+	activeCtx = context.Background()
+	sessMu.Unlock()
+
+	SetSession(&api.Session{
+		ID:     "sess-1",
+		Config: api.SessionConfig{Mode: api.ModeDefault},
+	})
+
+	// 1. Rapidly cycle modes: Default -> AcceptEdits -> Plan
+	m1 := CycleMode()
+	if m1 != api.ModeAcceptEdits || GetSession().Config.Mode != api.ModeAcceptEdits {
+		t.Fatalf("expected immediate mode AcceptEdits, got %q", GetSession().Config.Mode)
+	}
+
+	// Immediate next cycle (within debounce window)
+	m2 := CycleMode()
+	if m2 != api.ModePlan || GetSession().Config.Mode != api.ModePlan {
+		t.Fatalf("expected immediate mode Plan, got %q", GetSession().Config.Mode)
+	}
+
+	// Wait before debounce window elapses: no request should have been sent yet
+	time.Sleep(15 * time.Millisecond)
+	mu.Lock()
+	if len(updateRequests) != 0 {
+		mu.Unlock()
+		t.Fatalf("expected 0 requests before debounce expires, got %d", len(updateRequests))
+	}
+	mu.Unlock()
+
+	// Wait for debounce timer to fire (delay is 40ms, total elapsed > 40ms)
+	deadline := time.Now().Add(300 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		mu.Lock()
+		count := len(updateRequests)
+		mu.Unlock()
+		if count > 0 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	mu.Lock()
+	if len(updateRequests) != 1 {
+		mu.Unlock()
+		t.Fatalf("expected exactly 1 UpdateSession request after debounce, got %d", len(updateRequests))
+	}
+	if updateRequests[0].Config.Mode != api.ModePlan {
+		mu.Unlock()
+		t.Fatalf("expected persisted mode to be Plan, got %q", updateRequests[0].Config.Mode)
+	}
+	updateRequests = nil
+	mu.Unlock()
+
+	// 2. Cycle full-circle back to the persisted mode: Plan -> Ask -> Auto -> Default -> AcceptEdits -> Plan
+	for range 5 {
+		CycleMode()
+		time.Sleep(2 * time.Millisecond) // rapid cycling
+	}
+	if GetSession().Config.Mode != api.ModePlan {
+		t.Fatalf("expected cycled back to Plan, got %q", GetSession().Config.Mode)
+	}
+
+	// Wait past debounce window
+	time.Sleep(60 * time.Millisecond)
+	mu.Lock()
+	if len(updateRequests) != 0 {
+		mu.Unlock()
+		t.Fatalf("expected 0 requests when cycled full-circle back to persisted mode, got %d", len(updateRequests))
+	}
+	mu.Unlock()
+
+	// 3. Test with a brand-new session whose Session.Config.Mode is "" (empty string)
+	SetSession(&api.Session{
+		ID:     "sess-2",
+		Config: api.SessionConfig{Mode: ""},
+	})
+	session.Set(func(s SessionState) SessionState {
+		s.Session.Config.Mode = ""
+		return s
+	})
+
+	// Cycle full-circle back to ModeDefault: Default -> AcceptEdits -> Plan -> Ask -> Auto -> Default
+	for range 5 {
+		CycleMode()
+		time.Sleep(2 * time.Millisecond)
+	}
+	if GetSession().Config.Mode != api.ModeDefault {
+		t.Fatalf("expected cycled back to Default, got %q", GetSession().Config.Mode)
+	}
+
+	time.Sleep(60 * time.Millisecond)
+	mu.Lock()
+	if len(updateRequests) != 0 {
+		mu.Unlock()
+		t.Fatalf("expected 0 requests when cycling back to default with empty persisted mode, got %d", len(updateRequests))
+	}
+	mu.Unlock()
+}
+
+func TestSwitchSessionSameIDReloadsTranscript(t *testing.T) {
+	ResetSession()
+	ResetStream()
+	ClearTranscript()
+	FreezeTranscript()
+	defer ResetSession()
+	defer ResetStream()
+	defer ClearTranscript()
+
+	now := time.Now()
+	timelineEntries := []api.TimelineEntry{
+		{
+			ID:   "e-msg-1",
+			Kind: api.TimelineKindMessage,
+			Message: &api.Message{
+				ID:        "msg-1",
+				Role:      api.RoleUser,
+				CreatedAt: now,
+				Content: []api.Block{
+					{Type: api.BlockText, Text: "Message 1"},
+				},
+			},
+		},
+		{
+			ID:   "e-msg-2",
+			Kind: api.TimelineKindMessage,
+			Message: &api.Message{
+				ID:        "msg-2",
+				Role:      api.RoleAssistant,
+				CreatedAt: now.Add(time.Second),
+				Content: []api.Block{
+					{Type: api.BlockText, Text: "Message 2"},
+				},
+			},
+		},
+	}
+
+	rt := &mockSessionRoundTripper{
+		handler: func(req *http.Request) (*http.Response, error) {
+			if req.Method == http.MethodGet && strings.HasSuffix(req.URL.Path, "/v1/sessions/sess-same-id") {
+				resp := &http.Response{
+					StatusCode: http.StatusOK,
+					Body: io.NopCloser(strings.NewReader(`{
+						"id": "sess-same-id",
+						"config": {"mode": "default", "agent": "coding", "model": "claude-3-7"}
+					}`)),
+					Header: make(http.Header),
+				}
+				resp.Header.Set("Content-Type", "application/json")
+				return resp, nil
+			}
+			if req.Method == http.MethodGet && strings.Contains(req.URL.Path, "/v1/sessions/sess-same-id/timeline") {
+				data, _ := json.Marshal(timelineEntries)
+				resp := &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(bytes.NewReader(data)),
+					Header:     make(http.Header),
+				}
+				resp.Header.Set("Content-Type", "application/json")
+				return resp, nil
+			}
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader(`{}`)),
+				Header:     make(http.Header),
+			}, nil
+		},
+	}
+
+	c, err := client.New("/tmp/dummy.sock", client.WithCWD("/workspace"), client.WithHTTPClient(&http.Client{Transport: rt}))
+	if err != nil {
+		t.Fatalf("client.New: %v", err)
+	}
+
+	sessMu.Lock()
+	activeClient = c
+	activeCtx = context.Background()
+	sessMu.Unlock()
+
+	// Initial SwitchSession to sess-same-id
+	SwitchSession("sess-same-id")
+
+	// Wait for timeline to load
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		tr := GetTranscript()
+		if tr.Items != nil && len(*tr.Items) >= 3 { // Header + 2 messages
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	tr := GetTranscript()
+	if tr.Items == nil || len(*tr.Items) < 3 {
+		t.Fatalf("expected at least 3 transcript items after first switch, got %+v", tr.Items)
+	}
+
+	// Verify the active session ID is now sess-same-id
+	if GetSession().Session == nil || GetSession().Session.ID != "sess-same-id" {
+		t.Fatalf("expected active session sess-same-id, got %+v", GetSession().Session)
+	}
+
+	// Now call SwitchSession again with the EXACT SAME session ID (e.g. user re-selects active session in /sessions)
+	SwitchSession("sess-same-id")
+
+	// Wait for reload
+	deadline = time.Now().Add(time.Second)
+	var reloadedItems []TranscriptItem
+	for time.Now().Before(deadline) {
+		tr = GetTranscript()
+		if tr.Items != nil {
+			var msgs []TranscriptItem
+			for _, it := range *tr.Items {
+				if it.Kind == TranscriptKindMessage {
+					msgs = append(msgs, it)
+				}
+			}
+			if len(msgs) == 2 {
+				reloadedItems = msgs
+				break
+			}
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	if len(reloadedItems) != 2 {
+		t.Fatalf("expected 2 reloaded messages after switching to same session ID, got %d (transcript items: %+v)", len(reloadedItems), GetTranscript().Items)
+	}
+	if reloadedItems[0].Data.(Message).ID != "msg-1" || reloadedItems[1].Data.(Message).ID != "msg-2" {
+		t.Fatalf("unexpected reloaded message IDs: %+v", reloadedItems)
 	}
 }

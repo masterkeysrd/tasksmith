@@ -29,13 +29,22 @@ type SessionState struct {
 var session = kites.Create(SessionState{Config: api.SessionConfig{Mode: api.ModeDefault}})
 
 var (
-	sessMu       sync.Mutex
-	activeClient *client.Client
-	activeOpts   InitSessionOptions
-	activeCtx    context.Context
-	activeCancel context.CancelFunc
-	streamCancel context.CancelFunc
+	sessMu            sync.Mutex
+	activeClient      *client.Client
+	activeOpts        InitSessionOptions
+	activeCtx         context.Context
+	activeCancel      context.CancelFunc
+	streamCancel      context.CancelFunc
+	modeDebounceTimer *time.Timer
+	modeDebounceDelay = 250 * time.Millisecond
 )
+
+func cancelModeDebounceLocked() {
+	if modeDebounceTimer != nil {
+		modeDebounceTimer.Stop()
+		modeDebounceTimer = nil
+	}
+}
 
 // InitSessionOptions specifies options for initializing or connecting to a session.
 type InitSessionOptions struct {
@@ -49,6 +58,7 @@ type InitSessionOptions struct {
 // for session metadata and stream events.
 func InitSession(ctx context.Context, c *client.Client, opts InitSessionOptions) {
 	sessMu.Lock()
+	cancelModeDebounceLocked()
 	if activeCancel != nil {
 		activeCancel()
 	}
@@ -83,6 +93,7 @@ func InitSession(ctx context.Context, c *client.Client, opts InitSessionOptions)
 				}
 			}
 			SetSession(sess)
+			globalConversation.reset()
 			globalConversation.setSessionID(sid)
 		}
 	}
@@ -396,12 +407,19 @@ func UseMode() api.PermissionMode {
 // SetSession updates the session and its configuration. If sess is non-nil,
 // Mode defaults to api.ModeDefault if empty.
 func SetSession(sess *api.Session) {
+	sessMu.Lock()
+	cancelModeDebounceLocked()
+	sessMu.Unlock()
+
 	session.Set(func(s SessionState) SessionState {
 		s.Session = sess
 		if sess != nil {
 			s.Config = sess.Config
 			if s.Config.Mode == "" {
 				s.Config.Mode = api.ModeDefault
+			}
+			if s.Session.Config.Mode == "" {
+				s.Session.Config.Mode = api.ModeDefault
 			}
 			if sess.Tasks != nil {
 				tasksCopy := make([]api.Task, len(sess.Tasks))
@@ -548,7 +566,21 @@ func CycleMode() api.PermissionMode {
 	return next
 }
 
-// SetMode updates the active permission mode.
+// SetSessionMode updates the permission mode in SessionState without syncing to the daemon.
+func SetSessionMode(mode api.PermissionMode) {
+	if mode == "" {
+		mode = api.ModeDefault
+	}
+	session.Set(func(s SessionState) SessionState {
+		s.Config.Mode = mode
+		if s.Session != nil {
+			s.Session.Config.Mode = mode
+		}
+		return s
+	})
+}
+
+// SetMode updates the active permission mode immediately and debounces syncing to the daemon.
 func SetMode(mode api.PermissionMode) {
 	if mode == "" {
 		mode = api.ModeDefault
@@ -557,26 +589,51 @@ func SetMode(mode api.PermissionMode) {
 	session.Set(func(s SessionState) SessionState {
 		s.Config.Mode = mode
 		if s.Session != nil {
-			s.Session.Config.Mode = mode
 			sessID = s.Session.ID
 		}
 		return s
 	})
 	if sessID != "" {
 		sessMu.Lock()
+		defer sessMu.Unlock()
+		cancelModeDebounceLocked()
 		c := activeClient
-		ctx := activeCtx
-		sessMu.Unlock()
-		if c != nil {
-			go func() {
-				if ctx == nil || ctx.Err() != nil {
-					ctx = context.Background()
-				}
-				_, _ = c.UpdateSession(ctx, sessID, api.UpdateSessionRequest{
-					Config: api.SessionConfig{Mode: mode},
-				})
-			}()
+		if c == nil {
+			return
 		}
+		targetSessID := sessID
+		modeDebounceTimer = time.AfterFunc(modeDebounceDelay, func() {
+			sessMu.Lock()
+			cl := activeClient
+			ctx := activeCtx
+			sessMu.Unlock()
+			if cl == nil {
+				return
+			}
+			current := GetSession()
+			if current.Session == nil || current.Session.ID != targetSessID {
+				return
+			}
+			currentMode := cmp.Or(current.Config.Mode, api.ModeDefault)
+			persistedMode := cmp.Or(current.Session.Config.Mode, api.ModeDefault)
+			if currentMode == persistedMode {
+				return
+			}
+			if ctx == nil || ctx.Err() != nil {
+				ctx = context.Background()
+			}
+			updated, err := cl.UpdateSession(ctx, targetSessID, api.UpdateSessionRequest{
+				Config: api.SessionConfig{Mode: currentMode},
+			})
+			if err == nil && updated != nil {
+				session.Set(func(s SessionState) SessionState {
+					if s.Session != nil && s.Session.ID == targetSessID {
+						s.Session.Config.Mode = currentMode
+					}
+					return s
+				})
+			}
+		})
 	}
 }
 
@@ -625,6 +682,7 @@ func DefaultModel() string {
 // NewDraftSession resets the REPL to a new draft session, preserving mode.
 func NewDraftSession(modelOverride string) {
 	sessMu.Lock()
+	cancelModeDebounceLocked()
 	if streamCancel != nil {
 		streamCancel()
 		streamCancel = nil
@@ -666,6 +724,7 @@ func NewDraftSession(modelOverride string) {
 // SwitchSession loads an existing session and switches to it asynchronously.
 func SwitchSession(sessionID string) {
 	sessMu.Lock()
+	cancelModeDebounceLocked()
 	c := activeClient
 	ctx := activeCtx
 	defAgent := activeOpts.Agent
@@ -694,6 +753,7 @@ func SwitchSession(sessionID string) {
 		sessMu.Unlock()
 
 		SetSession(loaded)
+		globalConversation.reset()
 		globalConversation.setSessionID(loaded.ID)
 		modelLabel, thinking := ResolveModelInfo(ctx, c, defAgent, defModel, loaded)
 		SetModelInfo(modelLabel, thinking)
@@ -859,6 +919,7 @@ func SetEffort(effort string) {
 // ResetSession resets the session state to its initial default mode and cancels any active watchers.
 func ResetSession() {
 	sessMu.Lock()
+	cancelModeDebounceLocked()
 	if activeCancel != nil {
 		activeCancel()
 		activeCancel = nil
