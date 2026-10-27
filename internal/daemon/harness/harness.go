@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"iter"
+	"slices"
 	"strings"
 
 	"github.com/google/uuid"
@@ -258,6 +259,19 @@ func (h *harness) consumeGraphStream(stream iter.Seq2[graph.StreamEvent, error],
 			if !yield(Event{
 				Type:             EventCommandCompleted,
 				CommandCompleted: &res,
+			}, nil) {
+				stopped = true
+				return false
+			}
+
+		case eventTodosUpdated:
+			todos, ok := ev.Data.([]tools.TodoItem)
+			if !ok {
+				return true
+			}
+			if !yield(Event{
+				Type:  EventTodosUpdated,
+				Todos: slices.Clone(todos),
 			}, nil) {
 				stopped = true
 				return false

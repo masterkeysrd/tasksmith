@@ -8,6 +8,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/daemon/broker"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/session"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tasks"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/tools"
 )
 
 func TestToAPISessionWithTasks(t *testing.T) {
@@ -122,5 +123,80 @@ func TestToAPIEventStatusChanged(t *testing.T) {
 	}
 	if payload.SessionID != "sess-1" || payload.Status != api.StatusExecuting {
 		t.Fatalf("unexpected StatusChangedEvent payload: %+v", payload)
+	}
+}
+
+func TestToAPISessionWithTodos(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+
+	sess := &session.Session{
+		ID:    "sess-todos",
+		Title: "Todos Session",
+		Config: session.SessionConfig{
+			Agent: "developer",
+		},
+		CreatedAt: now,
+		UpdatedAt: now,
+		State: &session.State{
+			Status: session.StatusThinking,
+			Todos: []tools.TodoItem{
+				{
+					Content:    "Implement feature",
+					ActiveText: "Implementing feature",
+					Status:     tools.TodoStatusInProgress,
+				},
+				{
+					Content:    "Run tests",
+					ActiveText: "Running tests",
+					Status:     tools.TodoStatusPending,
+				},
+			},
+		},
+	}
+
+	apiSess := toAPISession(sess)
+	if len(apiSess.Todos) != 2 {
+		t.Fatalf("expected 2 todos, got %d", len(apiSess.Todos))
+	}
+	if apiSess.Todos[0].Content != "Implement feature" || apiSess.Todos[0].Status != "in_progress" {
+		t.Fatalf("unexpected todo[0]: %+v", apiSess.Todos[0])
+	}
+	if apiSess.Todos[1].Content != "Run tests" || apiSess.Todos[1].Status != "pending" {
+		t.Fatalf("unexpected todo[1]: %+v", apiSess.Todos[1])
+	}
+}
+
+func TestToAPIEventTodosUpdated(t *testing.T) {
+	rawMsg := broker.Message{
+		ID:    "evt-todos-1",
+		Topic: api.SessionStreamTopic("sess-todos"),
+		Event: session.TodosUpdatedEvent{
+			SessionID: "sess-todos",
+			Todos: []tools.TodoItem{
+				{
+					Content:    "Deploy",
+					ActiveText: "Deploying",
+					Status:     tools.TodoStatusCompleted,
+				},
+			},
+		},
+	}
+
+	d := &Daemon{}
+	apiEv, err := d.FormatEvent(rawMsg)
+	if err != nil {
+		t.Fatalf("FormatEvent error: %v", err)
+	}
+
+	if apiEv.Type != api.EventTodosUpdated {
+		t.Fatalf("apiEv.Type = %q, want %q", apiEv.Type, api.EventTodosUpdated)
+	}
+
+	payload, ok := apiEv.Payload.(api.TodosUpdatedEvent)
+	if !ok {
+		t.Fatalf("expected api.TodosUpdatedEvent payload, got %T", apiEv.Payload)
+	}
+	if payload.SessionID != "sess-todos" || len(payload.Todos) != 1 || payload.Todos[0].Status != "completed" {
+		t.Fatalf("unexpected TodosUpdatedEvent payload: %+v", payload)
 	}
 }

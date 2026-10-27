@@ -49,7 +49,7 @@ func (c Config) Validate() error {
 	return nil
 }
 
-// New validates cfg and constructs the 11 built-in system tools backed by
+// New validates cfg and constructs the 12 built-in system tools backed by
 // [std.Std], [shellguard.Guard], and [tasks.Manager].
 func New(cfg Config) ([]tools.Tool, error) {
 	if err := cfg.Validate(); err != nil {
@@ -73,5 +73,6 @@ func New(cfg Config) ([]tools.Tool, error) {
 		tools.NewHandler(ToolWebFetch, &webFetchTool{std: cfg.Std}),
 		tools.NewHandler(ToolDownload, &downloadTool{std: cfg.Std, guard: cfg.Guard}),
 		tools.NewHandler(ToolTasks, &tasksTool{tasks: tasksMgr}),
+		tools.NewHandler(ToolTodos, &todosTool{}),
 	}, nil
 }

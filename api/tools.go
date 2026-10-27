@@ -178,6 +178,28 @@ type TasksOutput struct {
 	Tasks    []TasksTask `json:"tasks,omitempty" jsonschema:"List of background tasks in the session (returned for 'list')."`
 }
 
+// TodoItem represents an item in todos.
+type TodoItem struct {
+	Content    string `json:"content" jsonschema:"Short description of the task or milestone."`
+	ActiveText string `json:"active_text" jsonschema:"Present-tense action phrase describing work underway (e.g., 'Writing unit tests')."`
+	Status     string `json:"status" jsonschema:"Status of the task ('pending', 'in_progress', 'completed')."`
+}
+
+// TodosInput defines the input parameters for the todos tool.
+type TodosInput struct {
+	Todos []TodoItem `json:"todos" jsonschema:"Complete checklist of tasks and milestones."`
+}
+
+// TodosOutput defines the structured output of the todos tool.
+type TodosOutput struct {
+	Todos      []TodoItem `json:"todos" jsonschema:"Complete updated checklist of tasks and milestones."`
+	Total      int        `json:"total" jsonschema:"Total number of todos in the checklist."`
+	Completed  int        `json:"completed" jsonschema:"Number of completed todos."`
+	InProgress int        `json:"in_progress" jsonschema:"Number of in-progress todos."`
+	Pending    int        `json:"pending" jsonschema:"Number of pending todos."`
+	Message    string     `json:"message" jsonschema:"Summary message describing the updated checklist state."`
+}
+
 // ViewInput defines the input parameters for the view tool.
 type ViewInput struct {
 	Path   string `json:"path" jsonschema:"File path relative to the workspace root or an absolute path inside the workspace."`

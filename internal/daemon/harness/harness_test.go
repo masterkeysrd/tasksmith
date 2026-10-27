@@ -1913,3 +1913,99 @@ func TestUnifiedQueueOrderingAcrossGraph(t *testing.T) {
 		t.Fatalf("expected git status command in last message, got %s", lastMsg.GetContent().Text())
 	}
 }
+
+func TestTodosToolExecutionAndCheckpoint(t *testing.T) {
+	ctx := context.Background()
+	db := openTestSQLite(t)
+	_, reg, perm := newTestToolsRegistry(t)
+
+	prov := &fakeProvider{
+		stepHandler: func(_ context.Context, _ *llm.Request, turn int) ([]message.AssistantChunk, error) {
+			if turn == 1 {
+				return []message.AssistantChunk{
+					{
+						BaseChunk: message.BaseChunk{ID: "asst-todos-call"},
+						Content: []message.Block{
+							&message.TextBlock{Text: "Updating checklist."},
+							&message.ToolCall{
+								ID:   "call-todos-1",
+								Name: "todos",
+								Args: map[string]any{
+									"todos": []any{
+										map[string]any{
+											"content":     "Step 1",
+											"active_text": "Doing step 1",
+											"status":      "in_progress",
+										},
+										map[string]any{
+											"content":     "Step 2",
+											"active_text": "Queued step 2",
+											"status":      "pending",
+										},
+									},
+								},
+							},
+						},
+						Done: true,
+					},
+				}, nil
+			}
+			return []message.AssistantChunk{
+				{
+					BaseChunk: message.BaseChunk{ID: "asst-final"},
+					Content: []message.Block{
+						&message.TextBlock{Text: "Checklist created."},
+					},
+					Done: true,
+				},
+			}, nil
+		},
+	}
+
+	h, err := New(Config{
+		ID:          "thread-todos",
+		DB:          db,
+		Model:       newTestModel(t, prov),
+		Tools:       reg,
+		Bash:        &fakeBashRunner{},
+		Spiller:     newTestSpiller(t),
+		Permissions: perm,
+		Queue:       &fakeQueue{},
+		Logger:      log.Default(),
+	})
+	if err != nil {
+		t.Fatalf("New error: %v", err)
+	}
+
+	var todosEvents []Event
+	for ev, err := range h.Stream(ctx, Input{Message: message.NewUserText("Start work")}) {
+		if err != nil {
+			t.Fatalf("Stream error: %v", err)
+		}
+		if ev.Type == EventTodosUpdated {
+			todosEvents = append(todosEvents, ev)
+		}
+	}
+
+	if len(todosEvents) != 1 {
+		t.Fatalf("expected 1 EventTodosUpdated, got %d", len(todosEvents))
+	}
+	if len(todosEvents[0].Todos) != 2 {
+		t.Fatalf("expected 2 items in EventTodosUpdated, got %d", len(todosEvents[0].Todos))
+	}
+	if todosEvents[0].Todos[0].Content != "Step 1" || todosEvents[0].Todos[0].Status != tools.TodoStatusInProgress {
+		t.Fatalf("unexpected todo item 0: %+v", todosEvents[0].Todos[0])
+	}
+
+	// Verify State checkpoint includes Todos
+	state, err := h.LoadState(ctx)
+	if err != nil {
+		t.Fatalf("LoadState error: %v", err)
+	}
+	if len(state.Todos) != 2 {
+		t.Fatalf("expected 2 todos in checkpointed State, got %d", len(state.Todos))
+	}
+	if state.Todos[0].ActiveText != "Doing step 1" || state.Todos[1].Status != tools.TodoStatusPending {
+		t.Fatalf("unexpected checkpointed todos: %+v", state.Todos)
+	}
+}

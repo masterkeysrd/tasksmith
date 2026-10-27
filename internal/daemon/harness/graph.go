@@ -2,6 +2,7 @@ package harness
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"slices"
 	"strings"
@@ -11,6 +12,7 @@ import (
 	"github.com/masterkeysrd/loom/llm"
 	"github.com/masterkeysrd/loom/message"
 	"github.com/masterkeysrd/loom/stream"
+	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/permissions"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/scope"
@@ -22,6 +24,7 @@ const (
 	eventNodeMessage      = "on_node_message"
 	eventCommandStarted   = "on_command_started"
 	eventCommandCompleted = "on_command_completed"
+	eventTodosUpdated     = "on_todos_updated"
 )
 
 func buildGraph(cp graph.Checkpointer, model *llm.Model, container tools.Container, perms permissions.SessionManager, systemPrompt string, queue Queue, bash BashRunner, spiller tools.Spiller, logger log.Interface) (*graph.Graph[State], error) {
@@ -102,6 +105,43 @@ func emitCommandCompleted(ctx context.Context, res CommandCompleted) {
 			Data: res,
 		})
 	}
+}
+
+func emitTodosUpdated(ctx context.Context, todos []tools.TodoItem) {
+	if sw, ok := stream.WriterFromContext(ctx); ok && sw != nil {
+		_ = sw.Write(ctx, stream.Event{
+			Name: eventTodosUpdated,
+			Data: slices.Clone(todos),
+		})
+	}
+}
+
+func extractTodos(msg *message.Tool) ([]tools.TodoItem, bool) {
+	if msg == nil || msg.Name != "todos" || msg.IsError {
+		return nil, false
+	}
+	out, ok := msg.StructuredContent.(api.TodosOutput)
+	if !ok {
+		if m, ok := msg.StructuredContent.(map[string]any); ok {
+			data, err := json.Marshal(m)
+			if err == nil {
+				_ = json.Unmarshal(data, &out)
+			} else {
+				return nil, false
+			}
+		} else {
+			return nil, false
+		}
+	}
+	res := make([]tools.TodoItem, len(out.Todos))
+	for i, it := range out.Todos {
+		res[i] = tools.TodoItem{
+			Content:    it.Content,
+			ActiveText: it.ActiveText,
+			Status:     tools.TodoStatus(it.Status),
+		}
+	}
+	return res, true
 }
 
 // CommandNode executes shell commands and injects their outputs into the conversation state.
@@ -350,6 +390,8 @@ func (n *ToolsNode) cancelCalls(ctx context.Context, asstIdx int, unfulfilled []
 func (n *ToolsNode) evaluateCalls(ctx context.Context, unfulfilled []*message.ToolCall) (graph.Command[State], error) {
 	toolMsgs := make(message.MessageList, 0, len(unfulfilled))
 	var pending []tools.PermissionRequest
+	var updatedTodos []tools.TodoItem
+	var hasTodos bool
 
 	for _, tc := range unfulfilled {
 		toolMsg, req, err := n.evaluateSingleCall(ctx, tc)
@@ -362,6 +404,11 @@ func (n *ToolsNode) evaluateCalls(ctx context.Context, unfulfilled []*message.To
 		}
 		emitNodeMessage(ctx, toolMsg)
 		toolMsgs = append(toolMsgs, toolMsg)
+		if todos, ok := extractTodos(toolMsg); ok {
+			updatedTodos = todos
+			hasTodos = true
+			emitTodosUpdated(ctx, updatedTodos)
+		}
 	}
 
 	if len(pending) > 0 {
@@ -369,11 +416,14 @@ func (n *ToolsNode) evaluateCalls(ctx context.Context, unfulfilled []*message.To
 			s.Messages = append(s.Messages, toolMsgs...)
 			s.PendingPermissions = clonePermissionRequests(pending)
 			s.PermissionDecisions = nil
+			if hasTodos {
+				s.Todos = slices.Clone(updatedTodos)
+			}
 			return s
 		}), nil
 	}
 
-	return appendToolMessagesUpdate(toolMsgs), nil
+	return appendToolMessagesUpdate(toolMsgs, updatedTodos, hasTodos), nil
 }
 
 func (n *ToolsNode) evaluateSingleCall(ctx context.Context, tc *message.ToolCall) (*message.Tool, *tools.PermissionRequest, error) {
@@ -410,6 +460,9 @@ func (n *ToolsNode) resumeCalls(ctx context.Context, unfulfilled []*message.Tool
 	}
 
 	toolMsgs := make(message.MessageList, 0, len(unfulfilled))
+	var updatedTodos []tools.TodoItem
+	var hasTodos bool
+
 	for _, tc := range unfulfilled {
 		req, ok := pendingByCall[tc.ID]
 		if !ok {
@@ -421,9 +474,14 @@ func (n *ToolsNode) resumeCalls(ctx context.Context, unfulfilled []*message.Tool
 		}
 		emitNodeMessage(ctx, toolMsg)
 		toolMsgs = append(toolMsgs, toolMsg)
+		if todos, ok := extractTodos(toolMsg); ok {
+			updatedTodos = todos
+			hasTodos = true
+			emitTodosUpdated(ctx, updatedTodos)
+		}
 	}
 
-	return appendToolMessagesUpdate(toolMsgs), nil
+	return appendToolMessagesUpdate(toolMsgs, updatedTodos, hasTodos), nil
 }
 
 func (n *ToolsNode) resumeSingleCall(ctx context.Context, tc *message.ToolCall, req tools.PermissionRequest, decisions map[string]tools.PermissionDecision) (*message.Tool, error) {
@@ -460,11 +518,14 @@ func clearPermissionsUpdate() graph.Update[State] {
 	}
 }
 
-func appendToolMessagesUpdate(toolMsgs message.MessageList) graph.Update[State] {
+func appendToolMessagesUpdate(toolMsgs message.MessageList, todos []tools.TodoItem, hasTodos bool) graph.Update[State] {
 	return func(s State) State {
 		s.Messages = append(s.Messages, toolMsgs...)
 		s.PendingPermissions = nil
 		s.PermissionDecisions = nil
+		if hasTodos {
+			s.Todos = slices.Clone(todos)
+		}
 		return s
 	}
 }

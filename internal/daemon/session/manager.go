@@ -228,9 +228,12 @@ func (m *manager) loadOrCacheSession(ctx context.Context, dbSess *Session) (*Ses
 	}
 
 	if h, err := sess.harness(ctx); err == nil {
-		if st, err := h.LoadState(ctx); err == nil && len(st.PendingPermissions) > 0 {
+		if st, err := h.LoadState(ctx); err == nil {
 			sess.Lock()
-			if sess.Status == StatusIdle {
+			if len(st.Todos) > 0 {
+				sess.Todos = slices.Clone(st.Todos)
+			}
+			if len(st.PendingPermissions) > 0 && sess.Status == StatusIdle {
 				sess.Status = StatusWaitingPermission
 				sess.WaitingPermission = true
 				perms := make([]tools.PermissionRequest, len(st.PendingPermissions))

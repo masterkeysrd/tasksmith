@@ -112,6 +112,9 @@ const (
 
 	// EventQueueUpdated is published when the visible queue of items updates.
 	EventQueueUpdated EventType = "queue_updated"
+
+	// EventTodosUpdated is published when the session's todos checklist updates.
+	EventTodosUpdated EventType = "todos_updated"
 )
 
 // Event is implemented by all real-time session notifications published by [Manager].
@@ -202,6 +205,13 @@ type ErrorEvent struct {
 }
 
 func (ErrorEvent) EventType() string { return string(EventError) }
+
+type TodosUpdatedEvent struct {
+	SessionID string
+	Todos     []tools.TodoItem
+}
+
+func (TodosUpdatedEvent) EventType() string { return string(EventTodosUpdated) }
 
 // Publisher broadcasts real-time session events to a topic.
 type Publisher interface {

@@ -112,6 +112,9 @@ func InitSession(ctx context.Context, c *client.Client, opts InitSessionOptions)
 		if len(sess.Queue) > 0 {
 			SeedQueue(sess.Queue)
 		}
+		if len(sess.Todos) > 0 {
+			SeedTodos(sess.Todos)
+		}
 		startSessionStreamWatcher(subCtx, sid)
 	}
 
@@ -767,6 +770,9 @@ func SwitchSession(sessionID string) {
 		}
 		if len(loaded.Queue) > 0 {
 			SeedQueue(loaded.Queue)
+		}
+		if len(loaded.Todos) > 0 {
+			SeedTodos(loaded.Todos)
 		}
 		startSessionStreamWatcher(ctx, loaded.ID)
 	}()

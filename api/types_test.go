@@ -394,6 +394,32 @@ func TestGeneratedToolTypesJSONRoundTrip(t *testing.T) {
 		})
 	})
 
+	t.Run("Todos", func(t *testing.T) {
+		testJSONRoundTrip(t, TodosInput{
+			Todos: []TodoItem{
+				{
+					Content:    "Task 1",
+					ActiveText: "Working on Task 1",
+					Status:     "in_progress",
+				},
+			},
+		})
+		testJSONRoundTrip(t, TodosOutput{
+			Todos: []TodoItem{
+				{
+					Content:    "Task 1",
+					ActiveText: "Working on Task 1",
+					Status:     "in_progress",
+				},
+			},
+			Total:      1,
+			Completed:  0,
+			InProgress: 1,
+			Pending:    0,
+			Message:    "1 total",
+		})
+	})
+
 	t.Run("View", func(t *testing.T) {
 		testJSONRoundTrip(t, ViewInput{
 			Path:   "README.md",
@@ -698,6 +724,25 @@ func TestEventPayloadsAndJSONRoundTrip(t *testing.T) {
 				},
 			},
 			wantTyp: EventTaskUpdated,
+		},
+		{
+			name: "todos_updated",
+			ev: Event{
+				ID:    "0192e4c0-0000-7000-8000-000000000003",
+				Type:  EventTodosUpdated,
+				Topic: SessionStreamTopic("s1"),
+				Payload: TodosUpdatedEvent{
+					SessionID: "s1",
+					Todos: []TodoItem{
+						{
+							Content:    "Write tests",
+							ActiveText: "Writing tests",
+							Status:     "in_progress",
+						},
+					},
+				},
+			},
+			wantTyp: EventTodosUpdated,
 		},
 		{
 			name: "error",

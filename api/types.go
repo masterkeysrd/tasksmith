@@ -200,6 +200,7 @@ type Session struct {
 	Status             SessionStatus       `json:"status"`
 	PendingPermissions []PermissionRequest `json:"pending_permissions,omitempty"`
 	Tasks              []Task              `json:"tasks,omitempty"`
+	Todos              []TodoItem          `json:"todos,omitempty"`
 	Queue              []QueueItem         `json:"queue,omitempty"`
 	CreatedAt          time.Time           `json:"created_at"`
 	UpdatedAt          time.Time           `json:"updated_at"`

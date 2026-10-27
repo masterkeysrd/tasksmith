@@ -29,6 +29,7 @@ func toAPISession(sess *session.Session) api.Session {
 	status := api.StatusIdle
 	var perms []api.PermissionRequest
 	var ts []api.Task
+	var todos []api.TodoItem
 	var queueItems []api.QueueItem
 	if sess.State != nil {
 		if sess.Status != "" {
@@ -36,6 +37,7 @@ func toAPISession(sess *session.Session) api.Session {
 		}
 		perms = toAPIPermissionRequests(sess.PendingPermissions)
 		ts = toAPITasks(sess.State.Tasks)
+		todos = toAPITodos(sess.State.Todos)
 		queueItems = toAPIQueueItems(sess.VisibleQueue())
 	}
 	return api.Session{
@@ -50,6 +52,7 @@ func toAPISession(sess *session.Session) api.Session {
 		Status:             status,
 		PendingPermissions: perms,
 		Tasks:              ts,
+		Todos:              todos,
 		Queue:              queueItems,
 		CreatedAt:          sess.CreatedAt,
 		UpdatedAt:          sess.UpdatedAt,
@@ -126,6 +129,21 @@ func toAPITasks(ts []tasks.Snapshot) []api.Task {
 	out := make([]api.Task, len(ts))
 	for i, t := range ts {
 		out[i] = toAPITask(t)
+	}
+	return out
+}
+
+func toAPITodos(items []tools.TodoItem) []api.TodoItem {
+	if len(items) == 0 {
+		return nil
+	}
+	out := make([]api.TodoItem, len(items))
+	for i, it := range items {
+		out[i] = api.TodoItem{
+			Content:    it.Content,
+			ActiveText: it.ActiveText,
+			Status:     string(it.Status),
+		}
 	}
 	return out
 }
@@ -710,6 +728,17 @@ func (d *Daemon) FormatEvent(msg broker.Message) (api.Event, error) {
 			Payload: api.QueueUpdatedEvent{
 				SessionID: ev.SessionID,
 				Queue:     toAPIQueueItems(ev.Queue),
+			},
+		}, nil
+
+	case session.TodosUpdatedEvent:
+		return api.Event{
+			ID:    msg.ID,
+			Type:  api.EventTodosUpdated,
+			Topic: msg.Topic,
+			Payload: api.TodosUpdatedEvent{
+				SessionID: ev.SessionID,
+				Todos:     toAPITodos(ev.Todos),
 			},
 		}, nil
 

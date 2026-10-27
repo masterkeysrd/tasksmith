@@ -877,6 +877,52 @@ func TestTasksToolWidget(t *testing.T) {
 	}
 }
 
+func TestTodosToolWidget(t *testing.T) {
+	render := renderComponent(t, 100)
+
+	// 1. Running state
+	toolRunning := store.ToolPart{
+		ID:     "todos-1",
+		Status: store.ToolRunning,
+		Call: &api.ToolCall{
+			ID:   "todos-1",
+			Name: "todos",
+			Args: map[string]any{
+				"todos": []any{
+					map[string]any{"content": "T1", "status": "completed"},
+					map[string]any{"content": "T2", "status": "in_progress"},
+					map[string]any{"content": "T3", "status": "pending"},
+				},
+			},
+		},
+	}
+	got := render(MessageTool(MessageToolProps{Tool: toolRunning}))
+	if !strings.Contains(got, "○ Updating todos (1 done, 1 in progress, 1 pending)") {
+		t.Fatalf("expected '○ Updating todos (1 done, 1 in progress, 1 pending)', got %q", got)
+	}
+
+	// 2. Succeeded state
+	out := api.TodosOutput{
+		Total:      3,
+		Completed:  1,
+		InProgress: 1,
+		Pending:    1,
+	}
+	outData, _ := json.Marshal(out)
+	toolRunning.Status = store.ToolSucceeded
+	toolRunning.Response = &api.Message{
+		ID:                "resp-todos-1",
+		Role:              api.RoleTool,
+		ToolCallID:        "todos-1",
+		Name:              "todos",
+		StructuredContent: outData,
+	}
+	got = render(MessageTool(MessageToolProps{Tool: toolRunning}))
+	if !strings.Contains(got, "● Updated todos (1 done, 1 in progress, 1 pending)") {
+		t.Fatalf("expected '● Updated todos (1 done, 1 in progress, 1 pending)', got %q", got)
+	}
+}
+
 func TestTimelineEventBashCommand(t *testing.T) {
 	t.Run("SuccessZeroExit", func(t *testing.T) {
 		render := renderComponent(t, 100)

@@ -1174,3 +1174,60 @@ var TasksToolWidget = trail.FC("TasksToolWidget", func(props TasksToolWidgetProp
 func TasksToolRenderer(tool store.ToolPart) trail.Node {
 	return TasksToolWidget(TasksToolWidgetProps{Tool: tool})
 }
+
+type TodosToolWidgetProps struct {
+	Tool store.ToolPart
+}
+
+var TodosToolWidget = trail.FC("TodosToolWidget", func(props TodosToolWidgetProps) trail.Node {
+	scheme := theme.UseTheme()
+	tool := props.Tool
+	status := tool.Status
+	isDone := status == store.ToolSucceeded || status == store.ToolFailed
+
+	input := parseToolInput[api.TodosInput](tool.Call)
+	output := parseToolOutput[api.TodosOutput](tool.Response)
+
+	verb := "Updating todos"
+	if isDone {
+		verb = "Updated todos"
+	}
+
+	done := output.Completed
+	inProgress := output.InProgress
+	pending := output.Pending
+	if output.Total == 0 && len(input.Todos) > 0 {
+		for _, item := range input.Todos {
+			switch item.Status {
+			case "completed":
+				done++
+			case "in_progress":
+				inProgress++
+			case "pending":
+				pending++
+			}
+		}
+	}
+
+	suffix := ""
+	if done > 0 || inProgress > 0 || pending > 0 || output.Total > 0 || len(input.Todos) > 0 {
+		suffix = fmt.Sprintf(" (%d done, %d in progress, %d pending)", done, inProgress, pending)
+	}
+
+	leading := toolHeaderLeading(status, verb, false, scheme)
+	headerNodes := append([]trail.Node{}, leading...)
+
+	if suffixNode := renderSuffixSpan(suffix, scheme); suffixNode != nil {
+		headerNodes = append(headerNodes, suffixNode)
+	}
+
+	if stateSuffix := toolStateSuffix(tool.Status, scheme); stateSuffix != nil {
+		headerNodes = append(headerNodes, stateSuffix)
+	}
+
+	return wrapToolWidget(headerNodes, toolErrorSubline(tool, scheme))
+})
+
+func TodosToolRenderer(tool store.ToolPart) trail.Node {
+	return TodosToolWidget(TodosToolWidgetProps{Tool: tool})
+}

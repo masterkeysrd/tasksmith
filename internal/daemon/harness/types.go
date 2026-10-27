@@ -118,6 +118,7 @@ type State struct {
 	Messages            message.MessageList                 `json:"messages"`
 	PendingPermissions  []tools.PermissionRequest           `json:"pending_permissions,omitempty"`
 	PermissionDecisions map[string]tools.PermissionDecision `json:"permission_decisions,omitempty"`
+	Todos               []tools.TodoItem                    `json:"todos,omitempty"`
 }
 
 // Copy returns a deep copy of the State so graph transitions do not mutate
@@ -138,10 +139,16 @@ func (s State) Copy() State {
 		decisions = maps.Clone(s.PermissionDecisions)
 	}
 
+	var todos []tools.TodoItem
+	if len(s.Todos) > 0 {
+		todos = slices.Clone(s.Todos)
+	}
+
 	return State{
 		Messages:            msgs,
 		PendingPermissions:  pending,
 		PermissionDecisions: decisions,
+		Todos:               todos,
 	}
 }
 
@@ -227,6 +234,9 @@ const (
 
 	// EventCommandCompleted is emitted when a command finishes executing in the harness.
 	EventCommandCompleted EventType = "command_completed"
+
+	// EventTodosUpdated is emitted whenever the todos tool updates the session's todos.
+	EventTodosUpdated EventType = "todos_updated"
 )
 
 // Event represents a real-time notification yielded by [Harness.Stream] or
@@ -238,4 +248,5 @@ type Event struct {
 	Permissions      []tools.PermissionRequest `json:"permissions,omitempty"`
 	CommandStarted   *CommandStarted           `json:"command_started,omitempty"`
 	CommandCompleted *CommandCompleted         `json:"command_completed,omitempty"`
+	Todos            []tools.TodoItem          `json:"todos,omitempty"`
 }

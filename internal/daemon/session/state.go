@@ -21,6 +21,7 @@ type State struct {
 	WaitingPermission  bool                      `json:"waiting_permission"`
 	PendingPermissions []tools.PermissionRequest `json:"pending_permissions,omitempty"`
 	Tasks              []tasks.Snapshot          `json:"tasks,omitempty"`
+	Todos              []tools.TodoItem          `json:"todos,omitempty"`
 	Error              string                    `json:"error,omitempty"`
 	StartedAt          time.Time                 `json:"started_at,omitzero"`
 	FinishedAt         time.Time                 `json:"finished_at,omitzero"`
@@ -78,6 +79,7 @@ func (s *State) Clone() *State {
 		WaitingPermission:  s.WaitingPermission,
 		PendingPermissions: perms,
 		Tasks:              slices.Clone(s.Tasks),
+		Todos:              slices.Clone(s.Todos),
 		Error:              s.Error,
 		StartedAt:          s.StartedAt,
 		FinishedAt:         s.FinishedAt,

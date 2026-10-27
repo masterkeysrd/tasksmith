@@ -1035,6 +1035,16 @@ func (s *Session) send(ctx context.Context, stream iter.Seq2[harness.Event, erro
 				Permissions: perms,
 			})
 
+		case harness.EventTodosUpdated:
+			s.Lock()
+			s.Todos = slices.Clone(hev.Todos)
+			s.Unlock()
+
+			s.publisher.Publish(api.SessionStreamTopic(s.ID), TodosUpdatedEvent{
+				SessionID: s.ID,
+				Todos:     slices.Clone(hev.Todos),
+			})
+
 		case harness.EventCompleted:
 			if hev.Message != nil {
 				if asst, ok := message.CloneMessage(hev.Message).(*message.Assistant); ok {

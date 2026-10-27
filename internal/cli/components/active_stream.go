@@ -1,6 +1,8 @@
 package components
 
 import (
+	"fmt"
+
 	"github.com/masterkeysrd/kite/extras/trail"
 	"github.com/masterkeysrd/kite/style"
 	"github.com/masterkeysrd/tasksmith/api"
@@ -14,9 +16,11 @@ var StreamingHint = trail.SimpleFC("StreamingHint", func() trail.Node {
 	return nil
 })
 
-// ActiveStream renders the in-flight conversation messages and animated spinner
-// for the current active LLM turn.
+// ActiveStream renders the in-flight conversation messages, animated spinner,
+// and pinned task checklist for the current active LLM turn.
 var ActiveStream = trail.SimpleFC("ActiveStream", func() trail.Node {
+	scheme := theme.UseTheme()
+
 	msgsPtr := store.UseStream(func(s store.StreamState) *[]store.Message {
 		return s.Messages
 	})
@@ -32,13 +36,22 @@ var ActiveStream = trail.SimpleFC("ActiveStream", func() trail.Node {
 	pendingCmd := store.UseStream(func(s store.StreamState) string {
 		return s.PendingCommand
 	})
+	todosPtr := store.UseStream(func(s store.StreamState) *[]api.TodoItem {
+		return s.Todos
+	})
 
 	var msgs []store.Message
 	if msgsPtr != nil {
 		msgs = *msgsPtr
 	}
 
-	if !streaming && len(msgs) == 0 && pendingCmd == "" {
+	var todos []api.TodoItem
+	if todosPtr != nil {
+		todos = *todosPtr
+	}
+
+	hasIncomplete := hasIncompleteTodos(todos)
+	if !streaming && len(msgs) == 0 && pendingCmd == "" && !hasIncomplete {
 		return nil
 	}
 
@@ -52,7 +65,6 @@ var ActiveStream = trail.SimpleFC("ActiveStream", func() trail.Node {
 	}
 
 	if pendingCmd != "" {
-		scheme := theme.UseTheme()
 		bashColor := scheme.Color.Mode.Bash
 		primaryColor := scheme.Color.Text.Primary
 		children = append(children, trail.Box(trail.BoxProps{
@@ -71,10 +83,63 @@ var ActiveStream = trail.SimpleFC("ActiveStream", func() trail.Node {
 		))
 	}
 
+	activeText := activeTodoText(todos)
+
 	if streaming && !waitingPerm {
+		spinnerBlock := []trail.Node{
+			Spinner(SpinnerProps{Status: status, ActiveText: activeText}),
+		}
+		if hasIncomplete {
+			for i, item := range todos {
+				prefix := "     "
+				if i == 0 {
+					prefix = "  ⎿  "
+				}
+				spinnerBlock = append(spinnerBlock, renderChecklistRow(item, prefix, scheme))
+			}
+		}
 		children = append(children, trail.Box(trail.BoxProps{
-			Style: style.S().MarginBottom(1),
-		}, Spinner(SpinnerProps{Status: status})))
+			Style: style.S().
+				Display(style.DisplayFlex).
+				FlexDirection(style.FlexColumn).
+				MarginBottom(1),
+		}, spinnerBlock...))
+	} else if hasIncomplete {
+		var done, inProgress, pending int
+		for _, item := range todos {
+			switch item.Status {
+			case "completed":
+				done++
+			case "in_progress":
+				inProgress++
+			case "pending":
+				pending++
+			}
+		}
+		headerText := fmt.Sprintf("%d todos (%d done, %d in progress, %d pending)", len(todos), done, inProgress, pending)
+		headerNode := trail.Box(trail.BoxProps{
+			Style: style.S().
+				Display(style.DisplayFlex).
+				FlexDirection(style.FlexRow).
+				Width(style.Percent(100)),
+		}, trail.Span(trail.SpanProps{
+			Style: style.S().Foreground(scheme.Color.Text.Secondary),
+		}, trail.Text(headerText)))
+
+		checklistBlock := []trail.Node{headerNode}
+		for i, item := range todos {
+			prefix := "     "
+			if i == 0 {
+				prefix = "  ⎿  "
+			}
+			checklistBlock = append(checklistBlock, renderChecklistRow(item, prefix, scheme))
+		}
+		children = append(children, trail.Box(trail.BoxProps{
+			Style: style.S().
+				Display(style.DisplayFlex).
+				FlexDirection(style.FlexColumn).
+				MarginBottom(1),
+		}, checklistBlock...))
 	}
 
 	return trail.Box(trail.BoxProps{
@@ -85,3 +150,65 @@ var ActiveStream = trail.SimpleFC("ActiveStream", func() trail.Node {
 			MinWidth(style.Cells(0)),
 	}, children...)
 })
+
+func hasIncompleteTodos(todos []api.TodoItem) bool {
+	if len(todos) == 0 {
+		return false
+	}
+	for _, it := range todos {
+		if it.Status != "completed" {
+			return true
+		}
+	}
+	return false
+}
+
+func activeTodoText(todos []api.TodoItem) string {
+	for _, it := range todos {
+		if it.Status == "in_progress" {
+			return it.ActiveText
+		}
+	}
+	return ""
+}
+
+func renderChecklistRow(item api.TodoItem, prefix string, scheme *theme.Scheme) trail.Node {
+	var (
+		marker       string
+		markerStyle  style.Style
+		contentStyle style.Style
+	)
+	switch item.Status {
+	case "in_progress":
+		marker = "◼ "
+		markerStyle = style.S().Bold(true).Foreground(scheme.Color.Text.Accent).Flex(0, 0).WhiteSpace(style.WhiteSpacePre)
+		contentStyle = style.S().Bold(true).Foreground(scheme.Color.Text.Primary)
+	case "completed":
+		marker = "✔ "
+		markerStyle = style.S().Foreground(scheme.Color.Text.Success).Flex(0, 0).WhiteSpace(style.WhiteSpacePre)
+		contentStyle = style.S().Foreground(scheme.Color.Text.Muted)
+	case "pending":
+		fallthrough
+	default:
+		marker = "◻ "
+		markerStyle = style.S().Foreground(scheme.Color.Text.Secondary).Flex(0, 0).WhiteSpace(style.WhiteSpacePre)
+		contentStyle = style.S().Foreground(scheme.Color.Text.Secondary)
+	}
+
+	return trail.Box(trail.BoxProps{
+		Style: style.S().
+			Display(style.DisplayFlex).
+			FlexDirection(style.FlexRow).
+			Width(style.Percent(100)),
+	},
+		trail.Span(trail.SpanProps{
+			Style: style.S().Foreground(scheme.Color.Text.Secondary).Flex(0, 0).WhiteSpace(style.WhiteSpacePre),
+		}, trail.Text(prefix)),
+		trail.Span(trail.SpanProps{
+			Style: markerStyle,
+		}, trail.Text(marker)),
+		trail.Span(trail.SpanProps{
+			Style: contentStyle,
+		}, trail.Text(item.Content)),
+	)
+}

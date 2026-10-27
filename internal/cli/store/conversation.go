@@ -1,6 +1,7 @@
 package store
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
@@ -90,6 +91,7 @@ type StreamState struct {
 	Status            api.SessionStatus
 	PendingCommand    string
 	Queue             *[]api.QueueItem
+	Todos             *[]api.TodoItem
 }
 
 var stream = kites.Create(StreamState{})
@@ -146,6 +148,7 @@ type conversationAccumulator struct {
 	pendingCommand   string
 	pendingCommandID string
 	queue            []api.QueueItem
+	todos            []api.TodoItem
 	flushedIDs       map[string]bool
 	identities       map[string]string
 	nextDraft        uint64
@@ -188,6 +191,7 @@ func (acc *conversationAccumulator) reset() {
 	acc.pendingCommand = ""
 	acc.pendingCommandID = ""
 	acc.queue = nil
+	acc.todos = nil
 	acc.flushedIDs = make(map[string]bool)
 	acc.identities = make(map[string]string)
 	acc.nextDraft = 0
@@ -207,6 +211,7 @@ func (acc *conversationAccumulator) setSessionID(id string) {
 	acc.pendingCommand = ""
 	acc.pendingCommandID = ""
 	acc.queue = nil
+	acc.todos = nil
 	acc.flushedIDs = make(map[string]bool)
 	acc.identities = make(map[string]string)
 	acc.nextDraft = 0
@@ -531,6 +536,17 @@ func (acc *conversationAccumulator) applyEvent(event api.Event) {
 		}
 		UpsertTask(p.Task)
 
+	case api.EventTodosUpdated:
+		p, ok := event.Payload.(api.TodosUpdatedEvent)
+		if !ok {
+			return
+		}
+		if acc.sessionID != "" && p.SessionID != acc.sessionID {
+			return
+		}
+		acc.todos = slices.Clone(p.Todos)
+		acc.publishLocked()
+
 	case api.EventCommandStarted:
 		p, ok := event.Payload.(api.CommandStartedEvent)
 		if !ok {
@@ -699,6 +715,19 @@ func (acc *conversationAccumulator) SeedQueue(items []api.QueueItem) {
 	acc.publishLocked()
 }
 
+// SeedTodos imports initial todos (e.g. from session state) into the active conversation checklist.
+func SeedTodos(items []api.TodoItem) {
+	globalConversation.SeedTodos(items)
+}
+
+// SeedTodos imports initial todos (e.g. from session state) into the active conversation checklist.
+func (acc *conversationAccumulator) SeedTodos(items []api.TodoItem) {
+	acc.mu.Lock()
+	defer acc.mu.Unlock()
+	acc.todos = slices.Clone(items)
+	acc.publishLocked()
+}
+
 func (acc *conversationAccumulator) removePermission(reqID string) {
 	acc.mu.Lock()
 	defer acc.mu.Unlock()
@@ -744,6 +773,12 @@ func (acc *conversationAccumulator) addMessageLocked(message api.Message) error 
 		})
 	}
 	if message.Role == api.RoleTool {
+		if message.Name == "todos" && len(message.StructuredContent) > 0 {
+			var out api.TodosOutput
+			if err := json.Unmarshal(message.StructuredContent, &out); err == nil && out.Todos != nil {
+				acc.todos = slices.Clone(out.Todos)
+			}
+		}
 		for _, req := range acc.permissions {
 			if req.ToolCallID == message.ToolCallID {
 				RemoveSlot(permSlotID(req.ID))
@@ -854,6 +889,12 @@ func (acc *conversationAccumulator) publishLocked() {
 		queuePtr = &cp
 	}
 
+	var todosPtr *[]api.TodoItem
+	if len(acc.todos) > 0 {
+		cp := slices.Clone(acc.todos)
+		todosPtr = &cp
+	}
+
 	stream.Set(func(StreamState) StreamState {
 		return StreamState{
 			Messages:          msgsPtr,
@@ -862,6 +903,7 @@ func (acc *conversationAccumulator) publishLocked() {
 			Status:            sessionStatus,
 			PendingCommand:    acc.pendingCommand,
 			Queue:             queuePtr,
+			Todos:             todosPtr,
 		}
 	})
 }

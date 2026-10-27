@@ -3082,3 +3082,122 @@ func TestQueueKindTaskFilteredAndNoEvent(t *testing.T) {
 		t.Fatalf("sess.Wait: %v", err)
 	}
 }
+
+func TestSessionTodosRestoreOnLoad(t *testing.T) {
+	ctx := context.Background()
+
+	var turn int
+	prov := &fakeProvider{
+		chunkHandler: func(_ context.Context, req *llm.Request) ([]message.AssistantChunk, error) {
+			turn++
+			if turn == 1 {
+				return []message.AssistantChunk{
+					{
+						BaseChunk: message.BaseChunk{ID: uuid.NewString()},
+						Model:     req.Model,
+						Content: []message.Block{
+							&message.ToolCall{
+								ID:   "call-todos-1",
+								Name: "todos",
+								Args: map[string]any{
+									"todos": []any{
+										map[string]any{
+											"content":     "Task A",
+											"active_text": "Working on Task A",
+											"status":      "in_progress",
+										},
+										map[string]any{
+											"content":     "Task B",
+											"active_text": "Task B queued",
+											"status":      "pending",
+										},
+									},
+								},
+							},
+						},
+						Done: true,
+					},
+				}, nil
+			}
+			return []message.AssistantChunk{
+				{
+					BaseChunk: message.BaseChunk{ID: uuid.NewString()},
+					Model:     req.Model,
+					Content: []message.Block{
+						&message.TextBlock{Text: "Checklist updated."},
+					},
+					Done: true,
+				},
+			}, nil
+		},
+	}
+
+	db, ws, gw, pub, mgr := setupTestEnv(t, prov)
+
+	sess, _, err := mgr.Create(ctx, CreateParams{
+		Title: "Todos Test",
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	if err := sess.Send(ctx, SendInput{Message: message.NewUserText("Make checklist")}); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	if err := sess.Wait(ctx); err != nil {
+		t.Fatalf("Wait: %v", err)
+	}
+
+	sess.Lock()
+	if len(sess.Todos) != 2 {
+		t.Fatalf("expected 2 todos in sess.Todos, got %d", len(sess.Todos))
+	}
+	if sess.Todos[0].Content != "Task A" || sess.Todos[0].Status != tools.TodoStatusInProgress {
+		t.Fatalf("unexpected sess.Todos[0]: %+v", sess.Todos[0])
+	}
+	sess.Unlock()
+
+	// Verify TodosUpdatedEvent was published
+	var foundTodosEvent bool
+	for _, ev := range pub.recorded() {
+		if te, ok := ev.(TodosUpdatedEvent); ok {
+			foundTodosEvent = true
+			if len(te.Todos) != 2 {
+				t.Fatalf("expected 2 todos in published event, got %d", len(te.Todos))
+			}
+		}
+	}
+	if !foundTodosEvent {
+		t.Fatal("expected TodosUpdatedEvent to be published")
+	}
+
+	// Create a new manager to test fresh loadOrCacheSession
+	permMgr, err := permissions.New(permissions.Config{Workspace: ws})
+	if err != nil {
+		t.Fatalf("permissions.New: %v", err)
+	}
+	mgr2, err := New(Config{
+		DB:          db,
+		Workspace:   ws,
+		Gateway:     gw,
+		Publisher:   pub,
+		Logger:      log.Default(),
+		Permissions: permMgr,
+	})
+	if err != nil {
+		t.Fatalf("New mgr2: %v", err)
+	}
+
+	sess2, err := mgr2.Get(ctx, sess.ID)
+	if err != nil {
+		t.Fatalf("mgr2.Get: %v", err)
+	}
+	sess2.Lock()
+	defer sess2.Unlock()
+	if len(sess2.Todos) != 2 {
+		t.Fatalf("expected 2 todos restored in sess2.Todos, got %d", len(sess2.Todos))
+	}
+	if sess2.Todos[0].ActiveText != "Working on Task A" || sess2.Todos[1].Status != tools.TodoStatusPending {
+		t.Fatalf("unexpected restored todos in sess2: %+v", sess2.Todos)
+	}
+}

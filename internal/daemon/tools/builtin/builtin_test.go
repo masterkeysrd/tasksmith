@@ -170,6 +170,7 @@ func TestFSAndWorkspaceResolution(t *testing.T) {
 		builtin.ToolLS,
 		builtin.ToolRemove,
 		builtin.ToolTasks,
+		builtin.ToolTodos,
 		builtin.ToolView,
 		builtin.ToolWebFetch,
 		builtin.ToolWrite,
@@ -1142,5 +1143,97 @@ func TestBashBackgroundAndTasksManagement(t *testing.T) {
 	statusHangOut := statusHangRes.StructuredContent.(api.TasksOutput)
 	if statusHangOut.Status != "canceled" {
 		t.Fatalf("expected status 'canceled', got %q", statusHangOut.Status)
+	}
+}
+
+func TestTodosTool(t *testing.T) {
+	ctx := context.Background()
+	_, container, _, _, _ := setupBuiltinEnv(t, false)
+
+	// 1. Prepare valid todos
+	call := &message.ToolCall{
+		ID:   "call-todos-1",
+		Name: builtin.ToolTodos,
+		Args: map[string]any{
+			"todos": []any{
+				map[string]any{
+					"content":     "First task",
+					"active_text": "Doing first task",
+					"status":      "completed",
+				},
+				map[string]any{
+					"content":     "Second task",
+					"active_text": "Working on second task",
+					"status":      "in_progress",
+				},
+				map[string]any{
+					"content":     "Third task",
+					"active_text": "Queued third task",
+					"status":      "pending",
+				},
+			},
+		},
+	}
+
+	plan, err := container.Prepare(ctx, call)
+	if err != nil {
+		t.Fatalf("Prepare(todos) failed: %v", err)
+	}
+	if !plan.ReadOnly || plan.Action != tools.ActionRead || plan.Safety != tools.SafetySafe {
+		t.Fatalf("unexpected plan: %+v", plan)
+	}
+
+	// 2. Execute valid todos
+	res, err := container.Execute(ctx, call)
+	if err != nil || res.IsError {
+		t.Fatalf("Execute(todos) failed: err=%v, res=%+v", err, res)
+	}
+	out, ok := res.StructuredContent.(api.TodosOutput)
+	if !ok {
+		t.Fatalf("expected api.TodosOutput, got %T", res.StructuredContent)
+	}
+	if out.Total != 3 || out.Completed != 1 || out.InProgress != 1 || out.Pending != 1 {
+		t.Fatalf("unexpected counts: total=%d, completed=%d, in_progress=%d, pending=%d",
+			out.Total, out.Completed, out.InProgress, out.Pending)
+	}
+	if len(out.Todos) != 3 {
+		t.Fatalf("expected 3 todos, got %d", len(out.Todos))
+	}
+	if out.Todos[1].ActiveText != "Working on second task" {
+		t.Fatalf("expected active_text 'Working on second task', got %q", out.Todos[1].ActiveText)
+	}
+
+	// 3. Validation: missing content
+	invalidCall := &message.ToolCall{
+		ID:   "call-todos-invalid",
+		Name: builtin.ToolTodos,
+		Args: map[string]any{
+			"todos": []any{
+				map[string]any{
+					"content": "",
+					"status":  "pending",
+				},
+			},
+		},
+	}
+	if _, err := container.Prepare(ctx, invalidCall); err == nil {
+		t.Fatal("expected Prepare to fail on empty content")
+	}
+
+	// 4. Validation: invalid status
+	invalidStatusCall := &message.ToolCall{
+		ID:   "call-todos-invalid-status",
+		Name: builtin.ToolTodos,
+		Args: map[string]any{
+			"todos": []any{
+				map[string]any{
+					"content": "Valid task",
+					"status":  "not_a_valid_status",
+				},
+			},
+		},
+	}
+	if _, err := container.Prepare(ctx, invalidStatusCall); err == nil {
+		t.Fatal("expected Prepare to fail on invalid status")
 	}
 }

@@ -99,7 +99,12 @@ Before making ANY plans, you must explicitly evaluate which skills from your `<a
 ### 1. High-Level Planning
 For any multi-step task, your very first action (after activating relevant skills) should be to break the task down into actionable steps.
 {{ if call .HasTool "todos" }}
-- **Use the `todos` tool:** Create a checklist immediately. Update it as you complete phases or encounter blockers.
+- **Use the `todos` tool:** Create a checklist immediately. Keep tasks granular and actionable.
+  - Set `active_text` on items to a concise present-tense action phrase describing work underway (e.g., "Implementing todos tool", "Running unit tests"). This is displayed directly in the user interface spinner while work is ongoing.
+  - Keep at most one item with `status: "in_progress"` at any time.
+  - Update the checklist immediately when a task finishes by marking it `completed` and setting the next task to `in_progress`.
+  - Add new `pending` items if unexpected work or blockers arise.
+  - When all tasks are finished, mark all items as `completed`.
 {{ else }}
 - **Create a Markdown checklist:** Write a simple checklist (`- [ ] Step 1`) in your first response, and briefly print the updated checklist in subsequent responses as you complete major milestones.
 {{ end }}
@@ -262,14 +267,24 @@ Adapt your verbosity to match the scope and complexity of the work completed.
 - Only use the tools you know exist based on your provided schema.
 - When to use tools: use search tools to gather context, view tools to inspect file contents, write/replace tools to make modifications, and execution tools (like bash) to run tests or build commands.
 
-### `batch` tool
+### `bash` tool
 
-**IMPORTANT**: The `description` field is REQUIRED for all `batch` tool calls. Always provide it.
+**IMPORTANT**: The `description` field is REQUIRED for all `bash` tool calls. Always provide it.
 
 When running non-trivial bash commands (especially those that modify the system):
 - Always provide a clear description of what the command does and why you are running it, this ensures that the user understands the intent and can trust your actions.
 - Simple read-only commands does not require a detailed description.
 - Avoid interactive commmands - use non-interactive flags (e.g., `-y` for npm init) to prevent blocking.
+
+{{if call .HasTool "todos"}}
+### `todos` tool
+
+Use the `todos` tool to manage and track the task checklist for complex tasks.
+- Provide the complete updated list of todos each time you invoke the tool.
+- Each todo item must contain `content` (short description), `active_text` (present-tense action phrase for the live spinner, e.g. "Running unit tests"), and `status` (`pending`, `in_progress`, or `completed`).
+- Keep at most one item `in_progress` while actively working on it.
+- Mark items as `completed` as soon as their work is finished.
+{{end}}
 </tools_usage>
 {{else}}
 <tools_usage>

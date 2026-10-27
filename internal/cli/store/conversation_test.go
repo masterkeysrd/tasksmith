@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -975,5 +976,115 @@ func TestLoadTimelineChronologicalOrderAndToolPairing(t *testing.T) {
 	finalMsg := items[4].Data.(Message)
 	if finalMsg.ID != "msg-assistant-final" {
 		t.Fatalf("expected item 4 ID msg-assistant-final, got %q", finalMsg.ID)
+	}
+}
+
+func TestConversationTodosStateAndEvents(t *testing.T) {
+	ResetStream()
+	defer ResetStream()
+
+	// 1. SeedTodos
+	initialTodos := []api.TodoItem{
+		{
+			Content:    "Step 1",
+			ActiveText: "Doing step 1",
+			Status:     "in_progress",
+		},
+		{
+			Content:    "Step 2",
+			ActiveText: "Queued step 2",
+			Status:     "pending",
+		},
+	}
+	SeedTodos(initialTodos)
+
+	st := GetStream()
+	if st.Todos == nil {
+		t.Fatal("expected non-nil stream.Todos after SeedTodos")
+	}
+	if len(*st.Todos) != 2 || (*st.Todos)[0].Content != "Step 1" || (*st.Todos)[0].Status != "in_progress" {
+		t.Fatalf("unexpected stream.Todos: %+v", *st.Todos)
+	}
+
+	// 2. EventTodosUpdated
+	updatedTodos := []api.TodoItem{
+		{
+			Content:    "Step 1",
+			ActiveText: "Doing step 1",
+			Status:     "completed",
+		},
+		{
+			Content:    "Step 2",
+			ActiveText: "Doing step 2",
+			Status:     "in_progress",
+		},
+	}
+	ApplyEvent(api.Event{
+		Type: api.EventTodosUpdated,
+		Payload: api.TodosUpdatedEvent{
+			SessionID: "test-sess",
+			Todos:     updatedTodos,
+		},
+	})
+
+	st = GetStream()
+	if st.Todos == nil {
+		t.Fatal("expected non-nil stream.Todos after EventTodosUpdated")
+	}
+	if len(*st.Todos) != 2 || (*st.Todos)[0].Status != "completed" || (*st.Todos)[1].Status != "in_progress" {
+		t.Fatalf("unexpected stream.Todos after update: %+v", *st.Todos)
+	}
+
+	// 3. Tool response message with todos
+	outBytes, _ := json.Marshal(api.TodosOutput{
+		Todos: []api.TodoItem{
+			{
+				Content:    "Step 1",
+				ActiveText: "Doing step 1",
+				Status:     "completed",
+			},
+			{
+				Content:    "Step 2",
+				ActiveText: "Doing step 2",
+				Status:     "completed",
+			},
+		},
+		Total:      2,
+		Completed:  2,
+		InProgress: 0,
+		Pending:    0,
+		Message:    "All done",
+	})
+	ApplyEvent(api.Event{
+		Type: api.EventEntryAdded,
+		Payload: api.EntryAddedEvent{
+			SessionID: "test-sess",
+			Entry: api.TimelineEntry{
+				ID:   "e-tool-todos",
+				Kind: api.TimelineKindMessage,
+				Message: &api.Message{
+					ID:                "msg-tool-todos",
+					Role:              api.RoleTool,
+					ToolCallID:        "call-todos-1",
+					Name:              "todos",
+					StructuredContent: outBytes,
+				},
+			},
+		},
+	})
+
+	st = GetStream()
+	if st.Todos == nil {
+		t.Fatal("expected non-nil stream.Todos after tool response")
+	}
+	if len(*st.Todos) != 2 || (*st.Todos)[0].Status != "completed" || (*st.Todos)[1].Status != "completed" {
+		t.Fatalf("unexpected stream.Todos after tool response: %+v", *st.Todos)
+	}
+
+	// 4. ResetStream clears todos
+	ResetStream()
+	st = GetStream()
+	if st.Todos != nil {
+		t.Fatalf("expected nil stream.Todos after ResetStream, got %+v", *st.Todos)
 	}
 }

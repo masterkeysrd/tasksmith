@@ -85,6 +85,31 @@ const (
 	DecisionReject       PermissionDecisionKind = "reject"
 )
 
+// TodoStatus describes the completion status of a task checklist item.
+type TodoStatus string
+
+const (
+	TodoStatusPending    TodoStatus = "pending"
+	TodoStatusInProgress TodoStatus = "in_progress"
+	TodoStatusCompleted  TodoStatus = "completed"
+)
+
+func (s TodoStatus) IsValid() bool {
+	switch s {
+	case TodoStatusPending, TodoStatusInProgress, TodoStatusCompleted:
+		return true
+	default:
+		return false
+	}
+}
+
+// TodoItem represents a task checklist item.
+type TodoItem struct {
+	Content    string     `json:"content"`
+	ActiveText string     `json:"active_text"`
+	Status     TodoStatus `json:"status"`
+}
+
 // Plan describes the pre-flight impact and unified diff preview of a validated
 // tool invocation produced by [Tool.Prepare] or [Container.Prepare].
 type Plan struct {

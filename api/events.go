@@ -48,6 +48,7 @@ const (
 	EventTaskUpdated         EventType = "task_updated"
 	EventCommandStarted      EventType = "command_started"
 	EventQueueUpdated        EventType = "queue_updated"
+	EventTodosUpdated        EventType = "todos_updated"
 	EventError               EventType = "error"
 )
 
@@ -161,6 +162,14 @@ type ErrorEvent struct {
 
 func (ErrorEvent) EventType() string { return string(EventError) }
 
+// TodosUpdatedEvent represents the payload for an [EventTodosUpdated] event.
+type TodosUpdatedEvent struct {
+	SessionID string     `json:"session_id"`
+	Todos     []TodoItem `json:"todos"`
+}
+
+func (TodosUpdatedEvent) EventType() string { return string(EventTodosUpdated) }
+
 // Event is the real-time notification payload streamed over SSE.
 type Event struct {
 	ID      string       `json:"id,omitempty"`
@@ -264,6 +273,12 @@ func (e *Event) UnmarshalJSON(data []byte) error {
 		var p QueueUpdatedEvent
 		if err := json.Unmarshal(raw, &p); err != nil {
 			return fmt.Errorf("api: unmarshal queue_updated payload: %w", err)
+		}
+		e.Payload = p
+	case EventTodosUpdated:
+		var p TodosUpdatedEvent
+		if err := json.Unmarshal(raw, &p); err != nil {
+			return fmt.Errorf("api: unmarshal todos_updated payload: %w", err)
 		}
 		e.Payload = p
 	case EventError:

@@ -284,3 +284,95 @@ func TestActiveStreamSpinnerStates(t *testing.T) {
 		t.Fatalf("expected Thinking... spinner after tool completion, got %q", txt)
 	}
 }
+
+func TestActiveStreamPinnedChecklistWhileIdle(t *testing.T) {
+	store.ResetStream()
+	defer store.ResetStream()
+
+	// 1. Seed todos with incomplete items
+	store.SeedTodos([]api.TodoItem{
+		{
+			Content:    "Implement todos tool",
+			ActiveText: "Implementing todos tool",
+			Status:     "in_progress",
+		},
+		{
+			Content:    "Run unit tests",
+			ActiveText: "Running unit tests",
+			Status:     "pending",
+		},
+	})
+
+	render := renderComponent(t, 100)
+	got := render(ActiveStream())
+	if got == "" {
+		t.Fatal("expected ActiveStream to render pinned checklist when incomplete todos exist")
+	}
+	if !strings.Contains(got, "2 todos (0 done, 1 in progress, 1 pending)") {
+		t.Fatalf("expected header with count, got %q", got)
+	}
+	if !strings.Contains(got, "⎿") || !strings.Contains(got, "◼ Implement todos tool") {
+		t.Fatalf("expected row 1 with ⎿ and in_progress marker, got %q", got)
+	}
+	if !strings.Contains(got, "◻ Run unit tests") {
+		t.Fatalf("expected row 2 with pending marker, got %q", got)
+	}
+
+	// 2. Mark all as completed -> pinned checklist hides automatically
+	store.SeedTodos([]api.TodoItem{
+		{
+			Content:    "Implement todos tool",
+			ActiveText: "Implementing todos tool",
+			Status:     "completed",
+		},
+		{
+			Content:    "Run unit tests",
+			ActiveText: "Running unit tests",
+			Status:     "completed",
+		},
+	})
+
+	got = render(ActiveStream())
+	if got != "" {
+		t.Fatalf("expected ActiveStream to be empty when all todos completed, got %q", got)
+	}
+}
+
+func TestActiveStreamStreamingSpinnerWithActiveTextAndChecklist(t *testing.T) {
+	store.ResetStream()
+	defer store.ResetStream()
+
+	// Seed todos
+	store.SeedTodos([]api.TodoItem{
+		{
+			Content:    "Implement todos tool",
+			ActiveText: "Implementing todos tool",
+			Status:     "in_progress",
+		},
+		{
+			Content:    "Run unit tests",
+			ActiveText: "Running unit tests",
+			Status:     "pending",
+		},
+	})
+
+	// Trigger streaming status
+	store.ApplyEvent(api.Event{
+		Type: api.EventStatusChanged,
+		Payload: api.StatusChangedEvent{
+			Status: api.StatusThinking,
+		},
+	})
+
+	render := renderComponent(t, 100)
+	got := render(ActiveStream())
+	if !strings.Contains(got, "Thinking (Implementing todos tool)...") {
+		t.Fatalf("expected spinner with active text 'Thinking (Implementing todos tool)...', got %q", got)
+	}
+	if !strings.Contains(got, "⎿") || !strings.Contains(got, "◼ Implement todos tool") {
+		t.Fatalf("expected checklist row 1 underneath spinner, got %q", got)
+	}
+	if !strings.Contains(got, "◻ Run unit tests") {
+		t.Fatalf("expected checklist row 2 underneath spinner, got %q", got)
+	}
+}

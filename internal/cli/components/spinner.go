@@ -2,6 +2,7 @@ package components
 
 import (
 	"cmp"
+	"fmt"
 	"image/color"
 	"time"
 
@@ -17,8 +18,9 @@ var SpinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "�
 
 // SpinnerProps defines the properties for the animated thinking spinner.
 type SpinnerProps struct {
-	Text   string
-	Status api.SessionStatus
+	Text       string
+	Status     api.SessionStatus
+	ActiveText string
 }
 
 // Spinner is a trail functional component rendering an animated braille spinner and status text.
@@ -31,22 +33,29 @@ var Spinner = trail.FC("Spinner", func(props SpinnerProps) trail.Node {
 	}, 80*time.Millisecond, nil)
 
 	var (
-		fgColor     color.Color
-		defaultText string
+		fgColor  color.Color
+		baseVerb string
 	)
 	switch props.Status {
 	case api.StatusGenerating:
 		fgColor = scheme.Color.Agent.Generating
-		defaultText = "Generating..."
+		baseVerb = "Generating"
 	case api.StatusExecuting:
 		fgColor = scheme.Color.Agent.Executing
-		defaultText = "Executing..."
+		baseVerb = "Executing"
 	case api.StatusThinking:
 		fgColor = scheme.Color.Agent.Thinking
-		defaultText = "Thinking..."
+		baseVerb = "Thinking"
 	default:
 		fgColor = scheme.Color.Agent.Thinking
-		defaultText = "Thinking..."
+		baseVerb = "Thinking"
+	}
+
+	var defaultText string
+	if props.ActiveText != "" {
+		defaultText = fmt.Sprintf("%s (%s)...", baseVerb, props.ActiveText)
+	} else {
+		defaultText = baseVerb + "..."
 	}
 
 	frameGlyph := SpinnerFrames[frame()%len(SpinnerFrames)]
