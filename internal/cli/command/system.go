@@ -62,15 +62,6 @@ func (r *Registry) registerSystemCommands() {
 		Complete:    completeThemes,
 	})
 	r.Register(Command{
-		Name:        "clear",
-		Usage:       "/clear",
-		Description: "Clear the terminal screen",
-		Handler: func(_ []string) error {
-			store.ClearScreen()
-			return nil
-		},
-	})
-	r.Register(Command{
 		Name:        "exit",
 		Aliases:     []string{"quit", "q"},
 		Usage:       "/exit",

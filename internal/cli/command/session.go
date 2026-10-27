@@ -28,6 +28,15 @@ func (r *Registry) registerSessionCommands() {
 		},
 	})
 	r.Register(Command{
+		Name:        "clear",
+		Usage:       "/clear",
+		Description: "Create and switch to a new session",
+		Handler: func(_ []string) error {
+			store.NewDraftSession("")
+			return nil
+		},
+	})
+	r.Register(Command{
 		Name:        "sessions",
 		Aliases:     []string{"session", "ls"},
 		Usage:       "/sessions [session_id]",

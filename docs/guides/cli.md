@@ -122,7 +122,7 @@ Type `/` in the composer to open the interactive autocomplete menu for slash com
 | `/tasks` | `/tasks` | Open the background task monitor. |
 | `/permissions` | `/permissions` | Open the interactive permission rules manager. |
 | `/theme` | `/theme [name]` | Switch the terminal color theme. |
-| `/clear` | `/clear` | Clear the terminal viewport. |
+| `/clear` | `/clear` | Start a fresh session draft. |
 | `/exit` | `/exit` (or `/quit`, `/q`) | Exit the REPL. |
 
 For a complete reference of flags, keybindings, and autocomplete shortcuts, see the [CLI Reference](../reference/cli.md).

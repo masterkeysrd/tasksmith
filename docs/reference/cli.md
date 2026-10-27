@@ -58,7 +58,7 @@ Inside the TaskSmith interactive REPL, slash commands provide instant control ov
 | **`/agent`** | | `[agent_name]` | Displays active agent, switches to `agent_name`, or opens the interactive agent picker if no argument is provided. |
 | **`/effort`** | | `[level]` (`auto`, `low`, `medium`, `high`, `max`) | Displays reasoning effort, sets effort level, or opens the effort picker if no argument is provided. |
 | **`/theme`** | | `[theme_name]` | Changes terminal UI color theme, or opens the interactive theme picker if no argument is provided. |
-| **`/clear`** | | *(none)* | Clears the terminal screen viewport and scrollback buffer. |
+| **`/clear`** | | *(none)* | Creates and transitions to a fresh draft session. |
 | **`/exit`** | `/quit`, `/q` | *(none)* | Gracefully terminates and exits the interactive REPL. |
 | **`/new`** | | `[model]` | Creates and transitions to a fresh draft session, optionally overriding the model. |
 | **`/sessions`** | `/session`, `/ls` | `[session_id]` | Switches to `session_id`, or opens the interactive session browser to switch, rename, or delete sessions. |
