@@ -440,9 +440,9 @@ var GlobToolWidget = trail.FC("GlobToolWidget", func(props GlobToolWidgetProps) 
 	output := parseToolOutput[api.GlobOutput](tool.Response)
 
 	failed := tool.Status == store.ToolFailed || (tool.Response != nil && tool.Response.IsError)
-	verb := "Finding"
+	verb := "Matching"
 	if tool.Status == store.ToolSucceeded || failed {
-		verb = "Found"
+		verb = "Matched"
 	}
 
 	status := tool.Status

@@ -316,7 +316,7 @@ func TestGlobToolWidget(t *testing.T) {
 	}
 	render := renderComponent(t, 100)
 	got := render(MessageTool(MessageToolProps{Tool: tool}))
-	if !strings.Contains(got, "● Found *.go in") || !strings.Contains(got, "src") || !strings.Contains(got, "(3 files)") {
+	if !strings.Contains(got, "● Matched *.go in") || !strings.Contains(got, "src") || !strings.Contains(got, "(3 files)") {
 		t.Fatalf("unexpected glob output: %q", got)
 	}
 
