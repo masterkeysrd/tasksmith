@@ -358,11 +358,12 @@ func (acc *conversationAccumulator) applyEvent(event api.Event) {
 			return
 		}
 		acc.sessionStatus = p.Status
-		if p.Status == api.StatusWaitingPermission {
+		switch p.Status {
+		case api.StatusWaitingPermission:
 			acc.status = StreamWaitingPermission
-		} else if p.Status == api.StatusIdle {
+		case api.StatusIdle:
 			acc.status = StreamIdle
-		} else {
+		default:
 			acc.status = StreamRunning
 		}
 		acc.publishLocked()
