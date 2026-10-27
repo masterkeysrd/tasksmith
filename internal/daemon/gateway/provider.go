@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strings"
 
 	"github.com/anthropics/anthropic-sdk-go"
 	anthropicopt "github.com/anthropics/anthropic-sdk-go/option"
@@ -25,13 +26,14 @@ import (
 )
 
 type providerInstance struct {
-	cfg           ProviderConfig
-	llmProv       llm.Provider
-	decisionProv  decision.Provider
-	embeddingProv embedding.Provider
-	models        map[string]ModelSpec
-	authErr       error
-	warning       string
+	cfg                 ProviderConfig
+	llmProv             llm.Provider
+	decisionProv        decision.Provider
+	embeddingProv       embedding.Provider
+	models              map[string]ModelSpec
+	authErr             error
+	warning             string
+	openaiResponsesOpts *loomopenai.ResponsesOptions
 }
 
 func initProvider(ctx context.Context, cfg ProviderConfig, env map[string]string) (*providerInstance, error) {
@@ -54,7 +56,13 @@ func initProvider(ctx context.Context, cfg ProviderConfig, env map[string]string
 		if _, err := url.Parse(endpoint); err != nil {
 			return nil, fmt.Errorf("gateway: invalid ollama endpoint %q: %w", endpoint, err)
 		}
-	case "openai", "anthropic", "typesafe", "genai", "antigravity":
+	case "openai":
+		_, respOpts, err := parseOpenAIConfig(cfg.Name, cfg.Config)
+		if err != nil {
+			return nil, err
+		}
+		inst.openaiResponsesOpts = respOpts
+	case "anthropic", "typesafe", "genai", "google-genai", "gemini", "antigravity":
 		// valid provider types
 	default:
 		return nil, fmt.Errorf("%w: unknown provider type %q", ErrInvalidConfig, cfg.Type)
@@ -95,6 +103,7 @@ func initProvider(ctx context.Context, cfg ProviderConfig, env map[string]string
 		inst.embeddingProv = ollamaProv
 
 	case "openai":
+		openaiOpts, _, _ := parseOpenAIConfig(cfg.Name, cfg.Config)
 		var opts []openaiopt.RequestOption
 		opts = append(opts, openaiopt.WithHTTPClient(httpClient))
 		if token != "" {
@@ -104,7 +113,7 @@ func initProvider(ctx context.Context, cfg ProviderConfig, env map[string]string
 			opts = append(opts, openaiopt.WithBaseURL(cfg.Endpoint))
 		}
 		client := openai.NewClient(opts...)
-		openaiProv := loomopenai.NewProvider(&client)
+		openaiProv := loomopenai.NewProvider(&client, openaiOpts...)
 		inst.llmProv = openaiProv
 		inst.decisionProv = openaiProv
 		inst.embeddingProv = openaiProv
@@ -137,7 +146,7 @@ func initProvider(ctx context.Context, cfg ProviderConfig, env map[string]string
 		}
 		inst.decisionProv = typesafeProv
 
-	case "genai":
+	case "genai", "google-genai", "gemini":
 		clientCfg := &genai.ClientConfig{
 			APIKey:     token,
 			Backend:    genai.BackendGeminiAPI,
@@ -167,4 +176,161 @@ func initProvider(ctx context.Context, cfg ProviderConfig, env map[string]string
 	}
 
 	return inst, nil
+}
+
+func parseOpenAIConfig(provName string, raw map[string]any) ([]loomopenai.Option, *loomopenai.ResponsesOptions, error) {
+	var loomOpts []loomopenai.Option
+
+	var apiModeVal string
+	if v, ok := getMapValue(raw, "apiMode", "api_mode"); ok {
+		if s, ok := v.(string); ok {
+			apiModeVal = strings.TrimSpace(s)
+		} else {
+			return nil, nil, fmt.Errorf("gateway: provider %q: invalid openai apiMode %v (must be \"responses\" or \"chat_completions\")", provName, v)
+		}
+	}
+
+	switch apiModeVal {
+	case "":
+		// auto-detect per model
+	case "responses":
+		loomOpts = append(loomOpts, loomopenai.WithAPIMode(loomopenai.APIModeResponses))
+	case "chat_completions":
+		loomOpts = append(loomOpts, loomopenai.WithAPIMode(loomopenai.APIModeChatCompletions))
+	default:
+		return nil, nil, fmt.Errorf("gateway: provider %q: invalid openai apiMode %q (must be \"responses\" or \"chat_completions\")", provName, apiModeVal)
+	}
+
+	if apiModeVal == "" {
+		if v, ok := getMapValue(raw, "responsesAPI", "responses_api"); ok {
+			if b, ok := v.(bool); ok {
+				loomOpts = append(loomOpts, loomopenai.WithResponsesAPI(b))
+			}
+		}
+	}
+
+	storeVal := false
+	if v, ok := getMapValue(raw, "store", "store"); ok {
+		if b, ok := v.(bool); ok {
+			storeVal = b
+		}
+	}
+
+	respOpts := &loomopenai.ResponsesOptions{
+		Store: &storeVal,
+	}
+
+	if v, ok := getMapValue(raw, "usePreviousResponseID", "use_previous_response_id"); ok {
+		if b, ok := v.(bool); ok {
+			respOpts.UsePreviousResponseID = b
+		}
+	}
+
+	if v, ok := getMapValue(raw, "webSearch", "web_search"); ok {
+		if b, ok := v.(bool); ok {
+			respOpts.WebSearch = b
+		}
+	}
+
+	if v, ok := getMapValue(raw, "codeInterpreter", "code_interpreter"); ok {
+		if b, ok := v.(bool); ok {
+			respOpts.CodeInterpreter = b
+		}
+	}
+
+	if v, ok := getMapValue(raw, "fileSearch", "file_search"); ok {
+		if fsMap, ok := v.(map[string]any); ok {
+			fsc := &loomopenai.FileSearchConfig{}
+			if vsIDs, ok := getMapValue(fsMap, "vectorStoreIDs", "vector_store_ids"); ok {
+				switch val := vsIDs.(type) {
+				case []string:
+					fsc.VectorStoreIDs = val
+				case []any:
+					for _, item := range val {
+						if s, ok := item.(string); ok && strings.TrimSpace(s) != "" {
+							fsc.VectorStoreIDs = append(fsc.VectorStoreIDs, strings.TrimSpace(s))
+						}
+					}
+				}
+			}
+			if maxResults, ok := getMapValue(fsMap, "maxNumResults", "max_num_results"); ok {
+				switch n := maxResults.(type) {
+				case int:
+					fsc.MaxNumResults = int64(n)
+				case int64:
+					fsc.MaxNumResults = n
+				case float64:
+					fsc.MaxNumResults = int64(n)
+				}
+			}
+			respOpts.FileSearch = fsc
+		}
+	}
+
+	return loomOpts, respOpts, nil
+}
+
+func getMapValue(m map[string]any, camel, snake string) (any, bool) {
+	if m == nil {
+		return nil, false
+	}
+	if v, ok := m[camel]; ok {
+		return v, true
+	}
+	if v, ok := m[snake]; ok {
+		return v, true
+	}
+	return nil, false
+}
+
+func openAIResponsesOptionsMiddleware(defaults *loomopenai.ResponsesOptions) llm.Middleware {
+	if defaults == nil {
+		return nil
+	}
+	return func(next llm.Streamer) llm.Streamer {
+		return func(ctx context.Context, req *llm.Request) (llm.StreamResponse, error) {
+			if req != nil {
+				extensions := make(map[string]llm.Extension, len(req.Extensions)+1)
+				for k, v := range req.Extensions {
+					extensions[k] = v
+				}
+
+				if ext, ok := extensions[loomopenai.ResponsesExtensionID]; ok {
+					var opts loomopenai.ResponsesOptions
+					switch v := ext.(type) {
+					case loomopenai.ResponsesOptions:
+						opts = v
+					case *loomopenai.ResponsesOptions:
+						if v != nil {
+							opts = *v
+						}
+					}
+					if opts.Store == nil && defaults.Store != nil {
+						opts.Store = defaults.Store
+					}
+					if !opts.UsePreviousResponseID && defaults.UsePreviousResponseID {
+						opts.UsePreviousResponseID = defaults.UsePreviousResponseID
+					}
+					if !opts.WebSearch && defaults.WebSearch {
+						opts.WebSearch = defaults.WebSearch
+					}
+					if !opts.CodeInterpreter && defaults.CodeInterpreter {
+						opts.CodeInterpreter = defaults.CodeInterpreter
+					}
+					if opts.FileSearch == nil && defaults.FileSearch != nil {
+						opts.FileSearch = defaults.FileSearch
+					}
+					extensions[loomopenai.ResponsesExtensionID] = opts
+				} else {
+					var opts loomopenai.ResponsesOptions = *defaults
+					extensions[loomopenai.ResponsesExtensionID] = opts
+				}
+
+				reqCopy := *req
+				reqCopy.Extensions = extensions
+				req = &reqCopy
+			}
+			return next(ctx, req)
+		}
+	}
 }

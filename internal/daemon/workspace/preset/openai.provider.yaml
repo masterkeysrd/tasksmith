@@ -6,6 +6,10 @@ spec:
   type: openai
   endpoint: https://api.openai.com/v1
   defaultModel: gpt-5.5
+  config:
+    # apiMode: responses | chat_completions (omitted = auto-detect per model)
+    # store: false disables server-side conversation state retention (ZDR mode)
+    store: false
   auth:
     type: env
     env: OPENAI_API_KEY

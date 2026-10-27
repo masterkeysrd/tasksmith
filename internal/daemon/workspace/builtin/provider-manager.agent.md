@@ -27,10 +27,10 @@ Interact with the user to create new model provider configs or maintain existing
 
 ### Presets
 To make setup fast, here are standard preset configurations for common providers:
-- **gemini**:
-  Type: gemini
-  Default Env: GEMINI_API_KEY
-  Default Model: gemini-1.5-flash
+- **gemini** (types `google-genai`, `genai`, and `gemini` are all supported):
+  Type: google-genai
+  Default Env: GOOGLE_API_KEY
+  Default Model: gemini-3.1-pro-preview
 - **anthropic**:
   Type: anthropic
   Default Env: ANTHROPIC_API_KEY
@@ -38,7 +38,7 @@ To make setup fast, here are standard preset configurations for common providers
 - **openai**:
   Type: openai
   Default Env: OPENAI_API_KEY
-  Default Model: gpt-4o
+  Default Model: gpt-5.5
 - **ollama**:
   Type: ollama
   Endpoint: http://localhost:11434
@@ -56,9 +56,19 @@ metadata:
   labels:
     category: provider
 spec:
-  type: <type> # e.g. openai, anthropic, gemini, ollama
+  type: <type> # e.g. openai, anthropic, google-genai (or gemini/genai), ollama, typesafe, antigravity
   endpoint: <base-url> # optional for local/custom endpoints
   defaultModel: <model-id>
+  config: # optional provider-specific configuration
+    # OpenAI options:
+    #   apiMode: responses | chat_completions (omitted = auto-detect per model)
+    #   store: false (default false; disables server-side conversation state retention)
+    #   usePreviousResponseID: false (auto previous_response_id continuation)
+    #   webSearch: false (enables OpenAI built-in web search)
+    #   codeInterpreter: false (enables OpenAI built-in code interpreter)
+    #   fileSearch:
+    #     vectorStoreIDs: ["vs_..."]
+    #     maxNumResults: 10
   auth:
     type: bearer # bearer, api-key, basic
     env: <environment-variable-name-for-credentials>

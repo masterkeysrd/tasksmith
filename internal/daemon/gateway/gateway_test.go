@@ -12,6 +12,7 @@ import (
 	"github.com/masterkeysrd/loom/llm"
 	"github.com/masterkeysrd/loom/message"
 	"github.com/masterkeysrd/loom/profile"
+	loomopenai "github.com/masterkeysrd/loom/providers/openai"
 	"github.com/openai/openai-go/v3"
 )
 
@@ -523,5 +524,283 @@ func TestAnthropicErrorEnrichment(t *testing.T) {
 	var target *anthropic.Error
 	if !errors.As(enriched, &target) || target == nil {
 		t.Fatalf("expected errors.As for *anthropic.Error to succeed")
+	}
+}
+
+type mockCapturingProvider struct {
+	llm.Provider
+	lastReq *llm.Request
+}
+
+func (m *mockCapturingProvider) Name() string                             { return "openai" }
+func (m *mockCapturingProvider) ListProfiles() []profile.Profile          { return nil }
+func (m *mockCapturingProvider) GetProfile(string) (profile.Profile, bool) { return profile.Profile{}, false }
+func (m *mockCapturingProvider) SearchProfiles(string) []profile.Profile  { return nil }
+func (m *mockCapturingProvider) OverrideProfile(string, profile.Profile)  {}
+
+func (m *mockCapturingProvider) Stream(ctx context.Context, req *llm.Request) (llm.StreamResponse, error) {
+	m.lastReq = req
+	return func(yield func(message.AssistantChunk, error) bool) {
+		yield(message.AssistantChunk{Done: true}, nil)
+	}, nil
+}
+
+func TestOpenAIResponsesOptionsMiddleware_Defaults(t *testing.T) {
+	ctx := context.Background()
+
+	mock := &mockCapturingProvider{}
+	storeDefault := false
+	gw := &gatewayImpl{
+		providers: map[string]*providerInstance{
+			"openai": {
+				cfg:     ProviderConfig{Name: "openai", Type: "openai"},
+				llmProv: mock,
+				openaiResponsesOpts: &loomopenai.ResponsesOptions{
+					Store: &storeDefault,
+				},
+			},
+		},
+		providerList: []*providerInstance{
+			{
+				cfg:     ProviderConfig{Name: "openai", Type: "openai"},
+				llmProv: mock,
+				openaiResponsesOpts: &loomopenai.ResponsesOptions{
+					Store: &storeDefault,
+				},
+			},
+		},
+	}
+
+	model, err := gw.ResolveLLM(ctx, "openai/gpt-5.5")
+	if err != nil {
+		t.Fatalf("ResolveLLM failed: %v", err)
+	}
+
+	_, err = model.Invoke(ctx, []message.Message{message.NewUserText("Hello")})
+	if err != nil {
+		t.Fatalf("Invoke failed: %v", err)
+	}
+
+	if mock.lastReq == nil {
+		t.Fatal("expected request to be captured by mock provider")
+	}
+
+	ext, ok := mock.lastReq.Extensions[loomopenai.ResponsesExtensionID]
+	if !ok {
+		t.Fatalf("expected extension %q to be set", loomopenai.ResponsesExtensionID)
+	}
+
+	respOpts, ok := ext.(loomopenai.ResponsesOptions)
+	if !ok {
+		t.Fatalf("expected extension to be of type loomopenai.ResponsesOptions, got %T", ext)
+	}
+
+	if respOpts.Store == nil {
+		t.Fatal("expected respOpts.Store to be non-nil")
+	}
+	if *respOpts.Store != false {
+		t.Errorf("expected *respOpts.Store == false, got %v", *respOpts.Store)
+	}
+}
+
+func TestOpenAIConfig_ParsingAndOptions(t *testing.T) {
+	ctx := context.Background()
+
+	// 1. camelCase options with store: true
+	cfgCamel := Config{
+		Providers: []ProviderConfig{
+			{
+				Name: "openai",
+				Type: "openai",
+				Auth: &AuthConfig{Env: "OPENAI_API_KEY"},
+				Config: map[string]any{
+					"store":                 true,
+					"apiMode":               "responses",
+					"usePreviousResponseID": true,
+					"webSearch":             true,
+					"codeInterpreter":       true,
+					"fileSearch": map[string]any{
+						"vectorStoreIDs": []any{"vs_1", "vs_2"},
+						"maxNumResults":  20,
+					},
+				},
+				Models: []ModelSpec{{ID: "gpt-5.5"}},
+			},
+		},
+		Env: map[string]string{"OPENAI_API_KEY": "test-key"},
+	}
+
+	gw, err := New(ctx, cfgCamel)
+	if err != nil {
+		t.Fatalf("New(cfgCamel) failed: %v", err)
+	}
+	defer gw.Close()
+
+	impl := gw.(*gatewayImpl)
+	inst := impl.providers["openai"]
+	if inst.openaiResponsesOpts == nil {
+		t.Fatal("expected inst.openaiResponsesOpts to be populated")
+	}
+	opts := inst.openaiResponsesOpts
+	if opts.Store == nil || *opts.Store != true {
+		t.Errorf("expected Store=true, got %v", opts.Store)
+	}
+	if !opts.UsePreviousResponseID {
+		t.Errorf("expected UsePreviousResponseID=true")
+	}
+	if !opts.WebSearch {
+		t.Errorf("expected WebSearch=true")
+	}
+	if !opts.CodeInterpreter {
+		t.Errorf("expected CodeInterpreter=true")
+	}
+	if opts.FileSearch == nil {
+		t.Fatal("expected FileSearch to be non-nil")
+	}
+	if len(opts.FileSearch.VectorStoreIDs) != 2 || opts.FileSearch.VectorStoreIDs[0] != "vs_1" {
+		t.Errorf("unexpected VectorStoreIDs: %v", opts.FileSearch.VectorStoreIDs)
+	}
+	if opts.FileSearch.MaxNumResults != 20 {
+		t.Errorf("expected MaxNumResults=20, got %d", opts.FileSearch.MaxNumResults)
+	}
+
+	// 2. snake_case options
+	cfgSnake := Config{
+		Providers: []ProviderConfig{
+			{
+				Name: "openai-snake",
+				Type: "openai",
+				Auth: &AuthConfig{Env: "OPENAI_API_KEY"},
+				Config: map[string]any{
+					"store":                    false,
+					"api_mode":                 "chat_completions",
+					"use_previous_response_id": true,
+					"web_search":               true,
+					"code_interpreter":         true,
+					"file_search": map[string]any{
+						"vector_store_ids": []string{"vs_snake"},
+						"max_num_results":  5,
+					},
+				},
+				Models: []ModelSpec{{ID: "gpt-5.5"}},
+			},
+		},
+		Env: map[string]string{"OPENAI_API_KEY": "test-key"},
+	}
+
+	gwSnake, err := New(ctx, cfgSnake)
+	if err != nil {
+		t.Fatalf("New(cfgSnake) failed: %v", err)
+	}
+	defer gwSnake.Close()
+
+	implSnake := gwSnake.(*gatewayImpl)
+	instSnake := implSnake.providers["openai-snake"]
+	if instSnake.openaiResponsesOpts == nil {
+		t.Fatal("expected instSnake.openaiResponsesOpts to be populated")
+	}
+	optsSnake := instSnake.openaiResponsesOpts
+	if optsSnake.Store == nil || *optsSnake.Store != false {
+		t.Errorf("expected Store=false, got %v", optsSnake.Store)
+	}
+	if !optsSnake.UsePreviousResponseID || !optsSnake.WebSearch || !optsSnake.CodeInterpreter {
+		t.Errorf("expected all boolean options true on snake config")
+	}
+	if optsSnake.FileSearch == nil || len(optsSnake.FileSearch.VectorStoreIDs) != 1 || optsSnake.FileSearch.VectorStoreIDs[0] != "vs_snake" {
+		t.Errorf("unexpected FileSearch on snake config: %+v", optsSnake.FileSearch)
+	}
+}
+
+func TestOpenAIConfig_InvalidAPIMode(t *testing.T) {
+	ctx := context.Background()
+
+	cfg := Config{
+		Providers: []ProviderConfig{
+			{
+				Name: "openai-invalid",
+				Type: "openai",
+				Config: map[string]any{
+					"apiMode": "unsupported_mode",
+				},
+			},
+		},
+	}
+
+	_, err := New(ctx, cfg)
+	if err == nil {
+		t.Fatal("expected error for invalid apiMode, got nil")
+	}
+	expectedSubstring := `invalid openai apiMode "unsupported_mode"`
+	if !strings.Contains(err.Error(), expectedSubstring) {
+		t.Errorf("expected error containing %q, got: %v", expectedSubstring, err)
+	}
+}
+
+func TestGoogleGenAIAndGeminiProviderTypes(t *testing.T) {
+	ctx := context.Background()
+
+	cfg := Config{
+		Providers: []ProviderConfig{
+			{
+				Name: "my-google-genai",
+				Type: "google-genai",
+				Auth: &AuthConfig{Env: "GOOGLE_API_KEY"},
+				Models: []ModelSpec{
+					{
+						ID:   "gemini-3.1-pro",
+						Name: "Gemini 3.1 Pro",
+						Capabilities: &ModelCapabilities{
+							Completion: new(true),
+							Embedding:  new(true),
+						},
+					},
+				},
+			},
+			{
+				Name: "my-gemini",
+				Type: "gemini",
+				Auth: &AuthConfig{Env: "GEMINI_API_KEY"},
+				Models: []ModelSpec{
+					{
+						ID:   "gemini-3.7-flash",
+						Name: "Gemini 3.7 Flash",
+						Capabilities: &ModelCapabilities{
+							Completion: new(true),
+							Embedding:  new(true),
+						},
+					},
+				},
+			},
+		},
+		Env: map[string]string{
+			"GOOGLE_API_KEY": "fake-google-key",
+			"GEMINI_API_KEY": "fake-gemini-key",
+		},
+	}
+
+	gw, err := New(ctx, cfg)
+	if err != nil {
+		t.Fatalf("failed to initialize gateway with google-genai and gemini types: %v", err)
+	}
+	defer gw.Close()
+
+	if !providerSupportsRole("google-genai", RoleCompletion) {
+		t.Error("expected google-genai to support RoleCompletion")
+	}
+	if !providerSupportsRole("google-genai", RoleEmbedding) {
+		t.Error("expected google-genai to support RoleEmbedding")
+	}
+	if providerSupportsRole("google-genai", RoleDecision) {
+		t.Error("expected google-genai to NOT support RoleDecision natively")
+	}
+
+	if !providerSupportsRole("gemini", RoleCompletion) {
+		t.Error("expected gemini to support RoleCompletion")
+	}
+	if !providerSupportsRole("gemini", RoleEmbedding) {
+		t.Error("expected gemini to support RoleEmbedding")
+	}
+	if providerSupportsRole("gemini", RoleDecision) {
+		t.Error("expected gemini to NOT support RoleDecision natively")
 	}
 }

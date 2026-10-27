@@ -10,7 +10,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/lrstanley/go-nf v0.0.0-20260418212552-215ab243b591
 	github.com/masterkeysrd/kite v0.0.6-0.20261022053628-4a0d9aff0b59
-	github.com/masterkeysrd/loom v0.0.8
+	github.com/masterkeysrd/loom v0.0.9-0.20261027202854-131fab4665d7
 	github.com/masterkeysrd/warp v0.0.6
 	github.com/ollama/ollama v0.40.8
 	github.com/openai/openai-go/v3 v3.79.0

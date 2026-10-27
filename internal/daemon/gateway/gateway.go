@@ -110,6 +110,9 @@ func (g *gatewayImpl) ResolveLLM(ctx context.Context, explicit string, opts ...L
 	}
 
 	model = model.WithMiddleware(errorEnrichingLLMMiddleware())
+	if mw := openAIResponsesOptionsMiddleware(inst.openaiResponsesOpts); mw != nil {
+		model = model.WithMiddleware(mw)
+	}
 	if len(options.middleware) > 0 {
 		model = model.WithMiddleware(options.middleware...)
 	}
@@ -167,6 +170,9 @@ func (g *gatewayImpl) ResolveDecision(ctx context.Context, explicit string, opts
 		return nil, fmt.Errorf("gateway: failed to create underlying llm for decision adapter: %w", err)
 	}
 	llmModel = llmModel.WithMiddleware(errorEnrichingLLMMiddleware())
+	if mw := openAIResponsesOptionsMiddleware(inst.openaiResponsesOpts); mw != nil {
+		llmModel = llmModel.WithMiddleware(mw)
+	}
 
 	decModel, err := decision.NewFromLLM(llmModel, options.config)
 	if err != nil {
@@ -381,11 +387,11 @@ func (g *gatewayImpl) findModelAndProvider(role ModelRole, explicit string) (*pr
 func providerSupportsRole(pType string, role ModelRole) bool {
 	switch role {
 	case RoleCompletion:
-		return pType == "ollama" || pType == "openai" || pType == "anthropic" || pType == "genai" || pType == "antigravity"
+		return pType == "ollama" || pType == "openai" || pType == "anthropic" || pType == "genai" || pType == "google-genai" || pType == "gemini" || pType == "antigravity"
 	case RoleDecision:
 		return pType == "ollama" || pType == "openai" || pType == "typesafe"
 	case RoleEmbedding:
-		return pType == "ollama" || pType == "openai" || pType == "genai"
+		return pType == "ollama" || pType == "openai" || pType == "genai" || pType == "google-genai" || pType == "gemini"
 	default:
 		return false
 	}
