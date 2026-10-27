@@ -25,6 +25,17 @@ type permissionOptionRow struct {
 	decision api.PermissionDecision
 }
 
+func compactSingleLine(s string, maxRunes int) string {
+	collapsed := strings.Join(strings.Fields(s), " ")
+	if maxRunes > 0 {
+		runes := []rune(collapsed)
+		if len(runes) > maxRunes {
+			return string(runes[:maxRunes-1]) + "…"
+		}
+	}
+	return collapsed
+}
+
 // PermissionPrompt is a trail functional component rendering a tool authorization request.
 var PermissionPrompt = trail.FC("PermissionPrompt", func(props PermissionPromptProps) trail.Node {
 	scheme := theme.UseTheme()
@@ -143,15 +154,16 @@ var PermissionPrompt = trail.FC("PermissionPrompt", func(props PermissionPromptP
 	// Rows 1 .. len(patterns): Always allow
 	maxAllowLen := 0
 	for _, pat := range patterns {
-		lbl := "Always allow " + pat
+		lbl := "Always allow " + compactSingleLine(pat, 60)
 		if len(lbl) > maxAllowLen {
 			maxAllowLen = len(lbl)
 		}
 	}
 
 	for _, pat := range patterns {
+		displayPat := compactSingleLine(pat, 60)
 		optionRows = append(optionRows, permissionOptionRow{
-			label:    "Always allow " + pat,
+			label:    "Always allow " + displayPat,
 			scopeTag: fmt.Sprintf("[%s]", scope()),
 			decision: api.PermissionDecision{
 				Kind:         api.DecisionAllowSession,
@@ -193,6 +205,7 @@ var PermissionPrompt = trail.FC("PermissionPrompt", func(props PermissionPromptP
 	if targetText == "" {
 		targetText = strings.TrimSpace(perm.Summary)
 	}
+	targetText = compactSingleLine(targetText, 80)
 
 	var subtitleNodes []trail.Node
 	if perm.ToolName != "" && targetText != "" {

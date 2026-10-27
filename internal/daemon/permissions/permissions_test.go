@@ -109,6 +109,24 @@ func TestDeriveGrantRules(t *testing.T) {
 		t.Fatalf("exec rules with flag: got %v", execSingle)
 	}
 
+	// Bash command classified as ActionWrite with multi-line commit message
+	commitRules := permissions.DeriveGrantRules("bash", tools.ActionWrite, "git commit --amend -m \"feat(daemon): add fsutils\n\nBody text\"")
+	if !slices.Equal(commitRules, []string{"bash(git commit *)", "bash(git *)"}) {
+		t.Fatalf("commit rules: got %v", commitRules)
+	}
+
+	// Compound command
+	compoundRules := permissions.DeriveGrantRules("bash", tools.ActionExec, "make && ./run")
+	if !slices.Equal(compoundRules, []string{"bash(make *)"}) {
+		t.Fatalf("compound rules: got %v", compoundRules)
+	}
+
+	// Leading environment variable assignments
+	envRules := permissions.DeriveGrantRules("bash", tools.ActionExec, "GOOS=linux go build ./...")
+	if !slices.Equal(envRules, []string{"bash(go build *)", "bash(go *)"}) {
+		t.Fatalf("env rules: got %v", envRules)
+	}
+
 	// ActionNet with host
 	netRules := permissions.DeriveGrantRules("web_fetch", tools.ActionNet, "https://api.github.com/v1")
 	if !slices.Equal(netRules, []string{"web_fetch(api.github.com)", "web_fetch(https://api.github.com/v1)"}) {

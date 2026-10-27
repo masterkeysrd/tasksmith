@@ -324,3 +324,71 @@ func TestPermissionPromptFeedbackMode(t *testing.T) {
 		t.Errorf("expected standard KeyboardHint restored after Escape, got:\n%s", txt)
 	}
 }
+
+func TestCompactSingleLine(t *testing.T) {
+	cases := []struct {
+		input    string
+		maxRunes int
+		want     string
+	}{
+		{"hello\nworld", 0, "hello world"},
+		{"  lots   of   \t  whitespace\n\n\r  ", 0, "lots of whitespace"},
+		{"abcdefghij", 5, "abcd…"},
+		{"abcdefghij", 10, "abcdefghij"},
+		{"abcdefghij", 15, "abcdefghij"},
+	}
+	for _, tc := range cases {
+		got := compactSingleLine(tc.input, tc.maxRunes)
+		if got != tc.want {
+			t.Errorf("compactSingleLine(%q, %d) = %q, want %q", tc.input, tc.maxRunes, got, tc.want)
+		}
+	}
+}
+
+func TestPermissionPromptMultilineTargetAndLongPattern(t *testing.T) {
+	store.ResetApp()
+	defer store.ResetApp()
+
+	longPattern := "bash(git commit --amend -m \"very very long commit message that exceeds sixty characters easily\" *)"
+	multiLineTarget := "git commit --amend -m \"feat(daemon): add fsutils\n\nDetailed multiline body\nwith additional instructions\nand notes\""
+
+	req := api.PermissionRequest{
+		ID:            "req-multiline",
+		ToolCallID:    "call-1",
+		ToolName:      "bash",
+		Action:        api.ActionWrite,
+		Target:        multiLineTarget,
+		GrantPatterns: []string{longPattern},
+	}
+
+	b := mock.New(120, 24)
+	app := trail.SimpleFC("TestPromptApp", func() kitex.Node {
+		return PermissionPrompt(PermissionPromptProps{
+			Request: req,
+		})
+	})
+
+	inst, err := trail.New(app(), trail.WithBackend(b))
+	if err != nil {
+		t.Fatalf("trail.New: %v", err)
+	}
+	defer inst.Unmount()
+	inst.Frame()
+
+	out := surfaceText(b)
+
+	// Subtitle should contain compacted target (with newlines replaced by space) and truncated at 80 runes with "…"
+	expectedTargetSub := compactSingleLine(multiLineTarget, 80)
+	if !strings.Contains(out, expectedTargetSub) {
+		t.Errorf("expected compacted target %q in surface output, got:\n%s", expectedTargetSub, out)
+	}
+	if strings.Contains(out, "Detailed multiline body\n") {
+		t.Errorf("expected no raw newlines in subtitle output, got:\n%s", out)
+	}
+
+	// Long pattern should be compacted to 60 runes with "…" in the option row label
+	expectedPatternLabel := "Always allow " + compactSingleLine(longPattern, 60)
+	if !strings.Contains(out, expectedPatternLabel) {
+		t.Errorf("expected compacted pattern label %q in surface output, got:\n%s", expectedPatternLabel, out)
+	}
+}

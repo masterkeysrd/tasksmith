@@ -147,12 +147,56 @@ func globToRegex(glob string) string {
 	return sb.String()
 }
 
+func isEnvAssignment(f string) bool {
+	return !strings.HasPrefix(f, "-") && strings.Contains(f, "=")
+}
+
+func isShellOperator(s string) bool {
+	switch s {
+	case "&&", "||", ";", "|", "&", ">", ">>", "<":
+		return true
+	default:
+		return false
+	}
+}
+
+func deriveCommandGrantRules(toolName, target string) []string {
+	fields := strings.Fields(target)
+	for len(fields) > 0 && isEnvAssignment(fields[0]) {
+		fields = fields[1:]
+	}
+	if len(fields) == 0 {
+		return []string{FormatRule(toolName, "*")}
+	}
+	cmd := strings.TrimRight(fields[0], ";&|")
+	if cmd == "" || strings.ContainsAny(cmd, "()\"'\n\r") || len(cmd) > 40 {
+		return []string{FormatRule(toolName, "*")}
+	}
+	if len(fields) >= 2 {
+		sub := fields[1]
+		if !strings.HasPrefix(sub, "-") &&
+			!isShellOperator(sub) &&
+			!strings.ContainsAny(sub, "()\"'=/\\;|&<>") &&
+			len(sub) <= 24 {
+			return deduplicateRules([]string{
+				FormatRule(toolName, cmd+" "+sub+" *"),
+				FormatRule(toolName, cmd+" *"),
+			})
+		}
+	}
+	return []string{FormatRule(toolName, cmd+" *")}
+}
+
 // DeriveGrantRules generates candidate "tool(pattern)" permission rules
 // suitable for PermissionRequest.GrantPatterns based on action and target.
 func DeriveGrantRules(toolName string, action tools.ActionType, target string) []string {
 	target = strings.TrimSpace(target)
 	if target == "" {
 		return []string{FormatRule(toolName, "*")}
+	}
+
+	if toolName == "bash" || action == tools.ActionExec {
+		return deriveCommandGrantRules(toolName, target)
 	}
 
 	switch action {
@@ -163,18 +207,6 @@ func DeriveGrantRules(toolName string, action tools.ActionType, target string) [
 			rules = append(rules, FormatRule(toolName, dir+"/**"))
 		}
 		return deduplicateRules(rules)
-	case tools.ActionExec:
-		fields := strings.Fields(target)
-		if len(fields) >= 2 && !strings.HasPrefix(fields[1], "-") {
-			return deduplicateRules([]string{
-				FormatRule(toolName, fields[0]+" "+fields[1]+" *"),
-				FormatRule(toolName, fields[0]+" *"),
-			})
-		}
-		if len(fields) > 0 {
-			return []string{FormatRule(toolName, fields[0]+" *")}
-		}
-		return []string{FormatRule(toolName, "*")}
 	case tools.ActionNet:
 		if u, err := url.Parse(target); err == nil && u.Host != "" {
 			return deduplicateRules([]string{
