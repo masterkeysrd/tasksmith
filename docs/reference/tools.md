@@ -496,8 +496,8 @@ Maintains the agent's task checklist and milestone tracking throughout a multi-s
 
 Prompts the user with structured interactive questions to resolve ambiguities or confirm architectural choices.
 
-- **Annotations**: `isReadOnly: false`, `isIdempotent: false`, `isDangerous: false`, `isOpenWorld: false`
-- **User Hint**: `"Ask clarification questions"`
+- **Annotations**: `isReadOnly: true`, `isIdempotent: false`, `isDangerous: false`, `isOpenWorld: false`
+- **User Hint**: `"Ask user: %s"`
 
 #### Input Parameters
 
@@ -518,7 +518,7 @@ Each item in `questions` includes:
 
 | Field | Type | Description |
 | :--- | :--- | :--- |
-| `answers` | array of objects | User responses: `question` (string), `selected` (array of string IDs), `text` (string), `confirmed` (boolean). |
+| `answers` | array of objects | User responses: `question` (string), `selected` (array of string IDs), `text` (string), and `confirmed` (boolean for confirmation questions only). |
 | `canceled` | boolean | `true` if the user dismissed or canceled the prompt without submitting. |
 
 ```json
