@@ -1,434 +1,829 @@
 package cli
 
 import (
-	"bytes"
 	"context"
-	"fmt"
-	"os"
-	"path/filepath"
+	"errors"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/masterkeysrd/kite/backend"
 	"github.com/masterkeysrd/kite/backend/mock"
 	"github.com/masterkeysrd/kite/key"
-	"github.com/masterkeysrd/loom/decision"
-	"github.com/masterkeysrd/loom/embedding"
-	"github.com/masterkeysrd/loom/llm"
-	"github.com/masterkeysrd/loom/message"
-	"github.com/masterkeysrd/loom/profile"
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/client"
-	"github.com/masterkeysrd/tasksmith/internal/core/log"
-	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
-	"github.com/masterkeysrd/tasksmith/internal/daemon"
-	"github.com/masterkeysrd/tasksmith/internal/daemon/gateway"
-	"github.com/masterkeysrd/tasksmith/internal/repl"
-	"github.com/spf13/cobra"
+	"github.com/masterkeysrd/tasksmith/internal/cli/store"
 )
 
-type fakeProvider struct {
-	mu           sync.Mutex
-	chunkHandler func(ctx context.Context, req *llm.Request) (llm.StreamResponse, error)
-}
-
-func (p *fakeProvider) Name() string                              { return "fake" }
-func (p *fakeProvider) ListProfiles() []profile.Profile           { return nil }
-func (p *fakeProvider) GetProfile(string) (profile.Profile, bool) { return profile.Profile{}, false }
-func (p *fakeProvider) SearchProfiles(string) []profile.Profile   { return nil }
-func (p *fakeProvider) OverrideProfile(string, profile.Profile)   {}
-
-func (p *fakeProvider) Stream(ctx context.Context, req *llm.Request) (llm.StreamResponse, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
+func surfaceText(b *mock.Backend) string {
+	frame := b.LastFrame().Surface
+	if frame == nil {
+		return ""
 	}
-
-	p.mu.Lock()
-	h := p.chunkHandler
-	p.mu.Unlock()
-
-	if h != nil {
-		return h(ctx, req)
+	var sb strings.Builder
+	for y := 0; y < frame.Height; y++ {
+		var line strings.Builder
+		for x := 0; x < frame.Width; x++ {
+			c := frame.CellAt(x, y)
+			if c.Content != "" {
+				line.WriteString(c.Content)
+			} else {
+				line.WriteByte(' ')
+			}
+		}
+		trimmed := strings.TrimRight(line.String(), " ")
+		if trimmed != "" {
+			sb.WriteString(trimmed)
+			sb.WriteString("\n")
+		}
 	}
-
-	return func(yield func(message.AssistantChunk, error) bool) {
-		yield(message.AssistantChunk{
-			BaseChunk: message.BaseChunk{ID: uuid.NewString()},
-			Model:     req.Model,
-			Content: []message.Block{
-				&message.TextBlock{Text: "Hello from the Brain Daemon!"},
-			},
-			Done: true,
-		}, nil)
-	}, nil
+	return sb.String()
 }
 
-type fakeGateway struct {
-	provider *fakeProvider
-}
-
-func (g *fakeGateway) ResolveLLM(ctx context.Context, explicit string, _ ...gateway.LLMOption) (*llm.Model, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
+func allText(b *mock.Backend) string {
+	var sb strings.Builder
+	for _, buf := range b.InsertedAbove {
+		for y := 0; y < buf.Height; y++ {
+			var line strings.Builder
+			for x := 0; x < buf.Width; x++ {
+				c := buf.CellAt(x, y)
+				if c.Content != "" {
+					line.WriteString(c.Content)
+				} else {
+					line.WriteByte(' ')
+				}
+			}
+			trimmed := strings.TrimRight(line.String(), " ")
+			if trimmed != "" {
+				sb.WriteString(trimmed)
+				sb.WriteString("\n")
+			}
+		}
 	}
-	modelName := strings.TrimSpace(explicit)
-	if modelName == "" {
-		modelName = "fake-default-model"
-	}
-	return llm.NewModel(g.provider, modelName, nil)
+	sb.WriteString(surfaceText(b))
+	return sb.String()
 }
 
-func (g *fakeGateway) ResolveDecision(context.Context, string, ...gateway.DecisionOption) (*decision.Model, error) {
-	return nil, gateway.ErrUnsupportedCapability
-}
-
-func (g *fakeGateway) ResolveEmbedding(context.Context, string, ...gateway.EmbeddingOption) (*embedding.Model, error) {
-	return nil, gateway.ErrUnsupportedCapability
-}
-
-func (g *fakeGateway) ListProviders() []gateway.ProviderInfo { return nil }
-func (g *fakeGateway) Close() error                          { return nil }
-
-type fakeGatewayPool struct {
-	gw *fakeGateway
-}
-
-func newFakeGatewayPool(prov *fakeProvider) *fakeGatewayPool {
-	if prov == nil {
-		prov = &fakeProvider{}
-	}
-	return &fakeGatewayPool{
-		gw: &fakeGateway{provider: prov},
-	}
-}
-
-func (p *fakeGatewayPool) Acquire(ctx context.Context, _ gateway.Config) (gateway.Gateway, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	return p.gw, nil
-}
-
-func (p *fakeGatewayPool) Close() error {
-	return nil
-}
-
-func setupCLITestDaemon(t *testing.T, prov *fakeProvider) (*daemon.Daemon, string, string) {
+func waitFor(t *testing.T, condition func() bool, timeout time.Duration, msg string) {
 	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if condition() {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for %s", msg)
+}
 
-	xdgRoot := t.TempDir()
-	xdg.SetTestEnv(xdgRoot, "tasksmith-cli-test")
-	t.Cleanup(func() {
-		xdg.ClearCache()
-	})
-
-	shortTmp, err := os.MkdirTemp("/tmp", "tscli-*")
+func TestOptionsValidate(t *testing.T) {
+	c, err := client.New("/tmp/mock.sock")
 	if err != nil {
-		t.Fatalf("MkdirTemp /tmp: %v", err)
+		t.Fatalf("failed to create client: %v", err)
 	}
-	t.Cleanup(func() {
-		_ = os.RemoveAll(shortTmp)
-	})
-	sockPath := filepath.Join(shortTmp, "d.sock")
-	lockPath := filepath.Join(shortTmp, "d.lock")
 
-	srv, err := daemon.New(daemon.Config{
-		SocketPath:  sockPath,
-		LockPath:    lockPath,
-		GatewayPool: newFakeGatewayPool(prov),
-		Logger:      log.Default(),
-	})
+	tests := []struct {
+		name    string
+		opts    Options
+		wantErr bool
+	}{
+		{
+			name:    "nil client",
+			opts:    Options{Client: nil, Workspace: "/tmp/ws"},
+			wantErr: true,
+		},
+		{
+			name:    "empty workspace",
+			opts:    Options{Client: c, Workspace: ""},
+			wantErr: true,
+		},
+		{
+			name:    "whitespace workspace",
+			opts:    Options{Client: c, Workspace: "   "},
+			wantErr: true,
+		},
+		{
+			name:    "valid options",
+			opts:    Options{Client: c, Workspace: "/tmp/ws"},
+			wantErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.opts.Validate()
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("Validate() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if tt.wantErr && !errors.Is(err, ErrInvalidOptions) {
+				t.Fatalf("expected error wrapping ErrInvalidOptions, got: %v", err)
+			}
+		})
+	}
+
+	// Verify Run also returns validation error
+	if err := Run(context.Background(), Options{}); !errors.Is(err, ErrInvalidOptions) {
+		t.Fatalf("Run() error = %v, want ErrInvalidOptions", err)
+	}
+}
+
+func TestRunCtrlCDoublePressExits(t *testing.T) {
+	b := mock.New(80, 24)
+	c, err := client.New("/tmp/mock.sock")
 	if err != nil {
-		t.Fatalf("daemon.New: %v", err)
+		t.Fatalf("failed to create client: %v", err)
 	}
 
-	if err := srv.Start(context.Background()); err != nil {
-		t.Fatalf("srv.Start: %v", err)
+	ctx := t.Context()
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- Run(ctx, Options{
+			Client:    c,
+			Workspace: "/tmp/ws",
+			Backend:   b,
+		})
+	}()
+
+	waitFor(t, func() bool {
+		return b.LastFrame().Surface != nil
+	}, 2*time.Second, "initial frame render")
+
+	if store.GetApp().CtrlCPending {
+		t.Fatal("expected CtrlCPending to be false initially")
 	}
-	t.Cleanup(func() {
-		_ = srv.Close(context.Background())
+
+	// Send first Ctrl+C
+	b.PostEvent(&backend.RawKeyEvent{
+		Key: key.Key{Code: 'c', Mod: key.ModCtrl},
 	})
 
-	wsDir := filepath.Join(shortTmp, "ws")
-	if err := os.MkdirAll(wsDir, 0o755); err != nil {
-		t.Fatalf("MkdirAll wsDir: %v", err)
+	// Verify store.GetApp().CtrlCPending becomes true and screen contains "Press Ctrl+C again to exit"
+	waitFor(t, func() bool {
+		return store.GetApp().CtrlCPending && strings.Contains(surfaceText(b), "Press Ctrl+C again to exit")
+	}, 2*time.Second, "CtrlCPending and screen update on first Ctrl+C")
+
+	// Verify Run is still running
+	select {
+	case err := <-errCh:
+		t.Fatalf("Run exited prematurely after single Ctrl+C: %v", err)
+	default:
 	}
 
-	return srv, sockPath, wsDir
+	// Send second Ctrl+C
+	b.PostEvent(&backend.RawKeyEvent{
+		Key: key.Key{Code: 'c', Mod: key.ModCtrl},
+	})
+
+	// Verify Run exits cleanly with nil error
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("expected nil error on double Ctrl+C exit, got: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for Run to exit after second Ctrl+C")
+	}
 }
 
-type syncBuffer struct {
-	mu sync.Mutex
-	b  bytes.Buffer
+func TestRunCtrlCDisarmedByOtherKey(t *testing.T) {
+	b := mock.New(80, 24)
+	c, err := client.New("/tmp/mock.sock")
+	if err != nil {
+		t.Fatalf("failed to create client: %v", err)
+	}
+
+	ctx := t.Context()
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- Run(ctx, Options{
+			Client:    c,
+			Workspace: "/tmp/ws",
+			Backend:   b,
+		})
+	}()
+
+	waitFor(t, func() bool {
+		return b.LastFrame().Surface != nil
+	}, 2*time.Second, "initial frame render")
+
+	// 1. Send first Ctrl+C
+	b.PostEvent(&backend.RawKeyEvent{
+		Key: key.Key{Code: key.CtrlC},
+	})
+
+	waitFor(t, func() bool {
+		return store.GetApp().CtrlCPending
+	}, 2*time.Second, "CtrlCPending to become true")
+
+	// 2. Send 'a'
+	b.PostEvent(&backend.RawKeyEvent{
+		Key: key.Key{Code: 'a', Text: "a"},
+	})
+
+	waitFor(t, func() bool {
+		return !store.GetApp().CtrlCPending
+	}, 2*time.Second, "CtrlCPending to be disarmed by other key")
+
+	if strings.Contains(surfaceText(b), "Press Ctrl+C again to exit") {
+		t.Fatalf("screen should no longer contain exit warning, got:\n%s", surfaceText(b))
+	}
+
+	// 3. Send third Ctrl+C (only re-arms)
+	b.PostEvent(&backend.RawKeyEvent{
+		Key: key.Key{Code: key.CtrlC},
+	})
+
+	waitFor(t, func() bool {
+		return store.GetApp().CtrlCPending && strings.Contains(surfaceText(b), "Press Ctrl+C again to exit")
+	}, 2*time.Second, "CtrlCPending to re-arm")
+
+	// Verify Run is still running
+	select {
+	case err := <-errCh:
+		t.Fatalf("Run exited prematurely after third Ctrl+C: %v", err)
+	default:
+	}
+
+	// 4. Send fourth Ctrl+C (exits)
+	b.PostEvent(&backend.RawKeyEvent{
+		Key: key.Key{Code: key.CtrlC},
+	})
+
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("expected nil error on fourth Ctrl+C exit, got: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for Run to exit after fourth Ctrl+C")
+	}
+
+	if active := ActiveSession(); active != nil {
+		t.Errorf("expected nil ActiveSession() on draft REPL exit, got %+v", active)
+	}
 }
 
-func (s *syncBuffer) Write(p []byte) (int, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.b.Write(p)
+func TestRunContextCanceled(t *testing.T) {
+	b := mock.New(80, 24)
+	c, err := client.New("/tmp/mock.sock")
+	if err != nil {
+		t.Fatalf("failed to create client: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- Run(ctx, Options{
+			Client:    c,
+			Workspace: "/tmp/ws",
+			Backend:   b,
+		})
+	}()
+
+	waitFor(t, func() bool {
+		return b.LastFrame().Surface != nil
+	}, 2*time.Second, "initial frame render")
+
+	cancel()
+
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("expected nil error on context cancel, got: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for Run to exit after context cancel")
+	}
 }
 
-func (s *syncBuffer) String() string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.b.String()
+func TestRunWithCWD(t *testing.T) {
+	b := mock.New(80, 24)
+	c, err := client.New("/tmp/mock.sock")
+	if err != nil {
+		t.Fatalf("failed to create client: %v", err)
+	}
+	if c.CWD() != "" {
+		t.Fatalf("expected client CWD to be empty, got: %q", c.CWD())
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	opts := Options{
+		Client:    c,
+		Workspace: "/tmp/custom-ws",
+		Backend:   b,
+	}
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- Run(ctx, opts)
+	}()
+
+	waitFor(t, func() bool {
+		return b.LastFrame().Surface != nil
+	}, 2*time.Second, "initial frame render")
+
+	cancel()
+	<-errCh
 }
 
-func execCLI(t *testing.T, stdin string, args ...string) (string, string, error) {
-	t.Helper()
-	cmd := NewRootCmd()
-	var outBuf, errBuf syncBuffer
-	cmd.SetIn(strings.NewReader(stdin))
-	cmd.SetOut(&outBuf)
-	cmd.SetErr(&errBuf)
-	cmd.SetArgs(args)
+func TestRunStartupHeader(t *testing.T) {
+	b := mock.New(80, 24)
+	c, err := client.New("/tmp/mock.sock")
+	if err != nil {
+		t.Fatalf("failed to create client: %v", err)
+	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
-	err := cmd.ExecuteContext(ctx)
-	return outBuf.String(), errBuf.String(), err
-}
-
-func TestDaemonStatusStartAndStopCommands(t *testing.T) {
-	// 1. Check status when daemon is not running
-	shortTmp, err := os.MkdirTemp("/tmp", "tscli-stopped-*")
-	if err != nil {
-		t.Fatalf("MkdirTemp: %v", err)
-	}
-	t.Cleanup(func() {
-		_ = os.RemoveAll(shortTmp)
-	})
-	missingSock := filepath.Join(shortTmp, "none.sock")
-
-	out, _, err := execCLI(t, "", "daemon", "status", "--socket", missingSock)
-	if err != nil {
-		t.Fatalf("daemon status (stopped) error: %v", err)
-	}
-	if !strings.Contains(out, "Daemon is not running") {
-		t.Errorf("daemon status (stopped) output = %q, want 'Daemon is not running'", out)
-	}
-
-	// 2. Start in-process daemon and test `daemon start` and `daemon status`
-	_, sockPath, wsDir := setupCLITestDaemon(t, nil)
-
-	startOut, _, err := execCLI(t, "", "daemon", "start", "--socket", sockPath)
-	if err != nil {
-		t.Fatalf("daemon start error: %v", err)
-	}
-	if !strings.Contains(startOut, "Daemon running") || !strings.Contains(startOut, sockPath) {
-		t.Errorf("daemon start output = %q, want 'Daemon running'", startOut)
-	}
-
-	// Open a workspace so status lists 1 open workspace (with 0 sessions created)
-	c, err := client.New(sockPath, client.WithCWD(wsDir))
-	if err != nil {
-		t.Fatalf("client.New: %v", err)
-	}
-	if _, err := c.GetWorkspace(context.Background()); err != nil {
-		t.Fatalf("GetWorkspace: %v", err)
-	}
-
-	statusOut, _, err := execCLI(t, "", "daemon", "status", "--socket", sockPath)
-	if err != nil {
-		t.Fatalf("daemon status (running) error: %v", err)
-	}
-	if !strings.Contains(statusOut, "Daemon running") || !strings.Contains(statusOut, "workspaces=1") {
-		t.Errorf("daemon status (running) output = %q, want 'Daemon running' and 'workspaces=1'", statusOut)
-	}
-
-	// 3. Test `daemon stop`
-	stopOut, _, err := execCLI(t, "", "daemon", "stop", "--socket", sockPath)
-	if err != nil {
-		t.Fatalf("daemon stop error: %v", err)
-	}
-	if !strings.Contains(stopOut, "Daemon stopped.") {
-		t.Errorf("daemon stop output = %q, want 'Daemon stopped.'", stopOut)
-	}
-}
-
-func feedMockREPLInput(b *mock.Backend, lines ...string) {
-	go func() {
-		time.Sleep(100 * time.Millisecond)
-		for _, line := range lines {
-			for _, r := range line {
-				b.PostEvent(&backend.RawKeyEvent{
-					Key: key.Key{Code: r, Text: string(r)},
-				})
-				time.Sleep(2 * time.Millisecond)
-			}
-			b.PostEvent(&backend.RawKeyEvent{
-				Key: key.Key{Code: key.KeyEnter},
-			})
-			time.Sleep(50 * time.Millisecond)
-		}
-	}()
-}
-
-func TestREPLPromptAndSlashCommands(t *testing.T) {
-	_, sockPath, wsDir := setupCLITestDaemon(t, nil)
-
-	c, err := client.New(sockPath, client.WithCWD(wsDir))
-	if err != nil {
-		t.Fatalf("client.New: %v", err)
-	}
-
-	// 1. Verify starting REPL and running slash commands without sending a prompt creates 0 sessions
-	b1 := mock.New(80, 24)
-	feedMockREPLInput(b1,
-		"/mode plan",
-		"/new claude-opus-4-6",
-		"/exit",
-	)
-	if err := repl.Run(context.Background(), repl.Options{
+	opts := Options{
 		Client:    c,
-		Workspace: wsDir,
-		Backend:   b1,
-	}); err != nil {
-		t.Fatalf("repl no-prompt run failed: %v", err)
-	}
-	if sess := repl.ActiveSession(); sess != nil {
-		t.Errorf("expected nil ActiveSession() after exiting draft REPL, got %+v", sess)
-	}
-	initialSessions, err := c.ListSessions(context.Background())
-	if err != nil {
-		t.Fatalf("ListSessions: %v", err)
-	}
-	if len(initialSessions) != 0 {
-		t.Fatalf("expected 0 sessions before first user prompt, got %d", len(initialSessions))
+		Workspace: "/tmp/ws",
+		Version:   "0.2.0",
+		Model:     "test-model",
+		Backend:   b,
 	}
 
-	// 2. Create a session via client, then resume and mutate it via repl.Options
-	sess, err := c.CreateSession(context.Background(), api.CreateSessionRequest{
-		Title: "Initial Session",
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- Run(ctx, opts)
+	}()
+
+	// The startup banner is initially rendered live on the surface (not in static scrollback)
+	waitFor(t, func() bool {
+		return strings.Contains(surfaceText(b), "TaskSmith v0.2.0") &&
+			strings.Contains(surfaceText(b), "test-model with auto effort") &&
+			strings.Contains(surfaceText(b), "/tmp/ws")
+	}, 2*time.Second, "live startup banner on screen surface")
+
+	if len(b.InsertedAbove) != 0 {
+		t.Fatalf("expected 0 scrollback buffers while transcript is clean, got %d", len(b.InsertedAbove))
+	}
+
+	waitFor(t, func() bool {
+		return strings.Contains(surfaceText(b), "shift+tab cycle mode")
+	}, 2*time.Second, "default hint on status line")
+}
+
+func TestRunShiftTabCyclesPermissionMode(t *testing.T) {
+	b := mock.New(80, 24)
+	c, err := client.New("/tmp/mock.sock")
+	if err != nil {
+		t.Fatalf("failed to create client: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	opts := Options{
+		Client:    c,
+		Workspace: "/tmp/ws",
+		Version:   "0.1.0",
+		Model:     "test-model",
+		Backend:   b,
+	}
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- Run(ctx, opts)
+	}()
+
+	// Wait for initial render where ModeDefault is hidden
+	waitFor(t, func() bool {
+		return b.LastFrame().Surface != nil && strings.Contains(surfaceText(b), ">")
+	}, 2*time.Second, "initial composer render")
+
+	if store.GetSession().Config.Mode != api.ModeDefault {
+		t.Fatalf("expected ModeDefault initially, got %q", store.GetSession().Config.Mode)
+	}
+
+	// Press Shift+Tab -> cycles to accept_edits
+	b.PostEvent(&backend.RawKeyEvent{
+		Key: key.Key{Code: key.KeyTab, Mod: key.ModShift},
+	})
+
+	waitFor(t, func() bool {
+		return store.GetSession().Config.Mode == api.ModeAcceptEdits &&
+			strings.Contains(surfaceText(b), "accept_edits")
+	}, 2*time.Second, "status line to show accept_edits mode")
+
+	// Press Shift+Tab again -> cycles to plan
+	b.PostEvent(&backend.RawKeyEvent{
+		Key: key.Key{Code: key.KeyTab, Mod: key.ModShift},
+	})
+
+	waitFor(t, func() bool {
+		return store.GetSession().Config.Mode == api.ModePlan &&
+			strings.Contains(surfaceText(b), "plan")
+	}, 2*time.Second, "status line to show plan mode")
+}
+
+func TestRunSubmitPromptAndActiveStream(t *testing.T) {
+	b := mock.New(80, 24)
+	c, st := startTestUnixDaemon(t)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	opts := Options{
+		Client:    c,
+		Workspace: "/workspace/project",
+		Version:   "0.1.0",
+		Model:     "claude-sonnet-4-6",
+		Backend:   b,
+	}
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- Run(ctx, opts)
+	}()
+
+	waitFor(t, func() bool {
+		return b.LastFrame().Surface != nil && strings.Contains(surfaceText(b), ">")
+	}, 2*time.Second, "initial composer render")
+
+	// Type "Hello Tasksmith" into Composer
+	for _, ch := range "Hello Tasksmith" {
+		b.PostEvent(&backend.RawKeyEvent{
+			Key: key.Key{Code: ch, Text: string(ch)},
+		})
+	}
+
+	waitFor(t, func() bool {
+		return strings.Contains(surfaceText(b), "Hello Tasksmith")
+	}, 2*time.Second, "typed text in composer")
+
+	// Press Enter
+	b.PostEvent(&backend.RawKeyEvent{
+		Key: key.Key{Code: key.KeyEnter},
+	})
+
+	// Composer should clear, pending user message should appear in ActiveStream,
+	// hint should become "streaming • esc to cancel", and message sent to daemon
+	waitFor(t, func() bool {
+		st.mu.Lock()
+		sentCount := len(st.sent)
+		st.mu.Unlock()
+		txt := surfaceText(b)
+		return sentCount > 0 &&
+			strings.Contains(txt, "Hello Tasksmith") &&
+			(strings.Contains(txt, "Thinking...") || strings.Contains(txt, "streaming • esc to cancel"))
+	}, 2*time.Second, "active stream prompt submission and hint")
+
+	// Verify client-supplied message ID was generated (UUIDv7)
+	st.mu.Lock()
+	if len(st.sent) == 0 {
+		st.mu.Unlock()
+		t.Fatal("expected message to be sent")
+	}
+	sentReq := st.sent[0]
+	st.mu.Unlock()
+	if sentReq.ID == "" {
+		t.Fatal("expected client-generated UUIDv7 ID on SendRequest, got empty")
+	}
+	if sentReq.Content != "Hello Tasksmith" {
+		t.Fatalf("expected SendRequest content 'Hello Tasksmith', got %q", sentReq.Content)
+	}
+
+	// Press Escape to cancel
+	b.PostEvent(&backend.RawKeyEvent{
+		Key: key.Key{Code: key.KeyEscape},
+	})
+
+	waitFor(t, func() bool {
+		st.mu.Lock()
+		defer st.mu.Unlock()
+		return len(st.cancels) > 0
+	}, 2*time.Second, "cancel request delivered to daemon")
+
+	waitFor(t, func() bool {
+		txt := surfaceText(b)
+		return !store.GetStream().Streaming &&
+			!strings.Contains(txt, "Thinking...") &&
+			!strings.Contains(txt, "streaming • esc to cancel") &&
+			strings.Contains(txt, "shift+tab cycle mode • /help commands")
+	}, 2*time.Second, "UI state reset on cancel")
+}
+
+func TestRunSlashCommandModeAndExit(t *testing.T) {
+	b := mock.New(80, 24)
+	c, err := client.New("/tmp/mock.sock")
+	if err != nil {
+		t.Fatalf("failed to create client: %v", err)
+	}
+
+	ctx := t.Context()
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- Run(ctx, Options{
+			Client:    c,
+			Workspace: "/tmp/ws",
+			Backend:   b,
+		})
+	}()
+
+	waitFor(t, func() bool {
+		return b.LastFrame().Surface != nil && strings.Contains(surfaceText(b), ">")
+	}, 2*time.Second, "initial composer render")
+
+	// Type "/mode auto"
+	for _, ch := range "/mode auto" {
+		b.PostEvent(&backend.RawKeyEvent{
+			Key: key.Key{Code: ch, Text: string(ch)},
+		})
+	}
+	b.PostEvent(&backend.RawKeyEvent{Key: key.Key{Code: key.KeyEnter}})
+
+	waitFor(t, func() bool {
+		return store.GetSession().Config.Mode == api.ModeAuto
+	}, 2*time.Second, "mode to switch to auto")
+
+	// Type "/exit"
+	for _, ch := range "/exit" {
+		b.PostEvent(&backend.RawKeyEvent{
+			Key: key.Key{Code: ch, Text: string(ch)},
+		})
+	}
+	b.PostEvent(&backend.RawKeyEvent{Key: key.Key{Code: key.KeyEnter}})
+
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("expected nil error on /exit, got: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for Run to exit after /exit")
+	}
+}
+
+func TestAppSlashCommandHelpAndEscapeRestoresComposerFocus(t *testing.T) {
+	store.ClearTranscript()
+	store.ClearSlot()
+	defer store.ClearTranscript()
+	defer store.ClearSlot()
+
+	b := mock.New(80, 24)
+	c, err := client.New("/tmp/mock.sock")
+	if err != nil {
+		t.Fatalf("failed to create client: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- Run(ctx, Options{
+			Client:    c,
+			Workspace: "/tmp/ws",
+			Backend:   b,
+		})
+	}()
+
+	waitFor(t, func() bool {
+		return b.LastFrame().Surface != nil && strings.Contains(surfaceText(b), ">")
+	}, 2*time.Second, "initial composer render")
+
+	// 1. Type "/help" and press Enter
+	for _, ch := range "/help" {
+		b.PostEvent(&backend.RawKeyEvent{
+			Key: key.Key{Code: ch, Text: string(ch)},
+		})
+	}
+	b.PostEvent(&backend.RawKeyEvent{Key: key.Key{Code: key.KeyEnter}})
+
+	waitFor(t, func() bool {
+		txt := surfaceText(b)
+		return store.GetSlot().Active != nil &&
+			strings.Contains(txt, "Available commands:") &&
+			strings.Contains(txt, "Filter:")
+	}, 2*time.Second, "help picker to open in slot")
+
+	// 2. Press Esc while /help picker is open
+	b.PostEvent(&backend.RawKeyEvent{Key: key.Key{Code: key.KeyEscape}})
+
+	waitFor(t, func() bool {
+		txt := allText(b)
+		return store.GetSlot().Active == nil &&
+			strings.Contains(txt, "Exited /help command") &&
+			strings.Contains(surfaceText(b), ">")
+	}, 2*time.Second, "help picker to close and exit notice to appear")
+
+	// 3. Immediately type "/mode" and press Enter
+	for _, ch := range "/mode" {
+		b.PostEvent(&backend.RawKeyEvent{
+			Key: key.Key{Code: ch, Text: string(ch)},
+		})
+	}
+	b.PostEvent(&backend.RawKeyEvent{Key: key.Key{Code: key.KeyEnter}})
+
+	waitFor(t, func() bool {
+		txt := surfaceText(b)
+		return store.GetSlot().Active != nil &&
+			strings.Contains(txt, "Select permission mode:")
+	}, 2*time.Second, "mode picker to open in slot")
+
+	// 4. Press Esc on /mode picker
+	b.PostEvent(&backend.RawKeyEvent{Key: key.Key{Code: key.KeyEscape}})
+
+	waitFor(t, func() bool {
+		txt := allText(b)
+		return store.GetSlot().Active == nil &&
+			strings.Contains(txt, "Exited /mode command") &&
+			strings.Contains(surfaceText(b), ">")
+	}, 2*time.Second, "mode picker to close and exit notice to appear")
+
+	// 5. Verify Composer can be typed into again
+	for _, ch := range "echo test" {
+		b.PostEvent(&backend.RawKeyEvent{
+			Key: key.Key{Code: ch, Text: string(ch)},
+		})
+	}
+	waitFor(t, func() bool {
+		return strings.Contains(surfaceText(b), "echo test")
+	}, 2*time.Second, "typed text in composer after mode picker closed")
+
+	// 5. Verify Composer can be typed into again
+	for _, ch := range "echo test" {
+		b.PostEvent(&backend.RawKeyEvent{
+			Key: key.Key{Code: ch, Text: string(ch)},
+		})
+	}
+	waitFor(t, func() bool {
+		return strings.Contains(surfaceText(b), "echo test")
+	}, 2*time.Second, "typed text in composer after mode picker closed")
+}
+
+func TestRunResumeSessionHeaderIsItem0(t *testing.T) {
+	store.ClearTranscript()
+	store.ClearSlot()
+	defer store.ClearTranscript()
+	defer store.ClearSlot()
+
+	b := mock.New(80, 24)
+	c, st := startTestUnixDaemon(t)
+
+	sess, err := c.CreateSession(t.Context(), api.CreateSessionRequest{
 		Config: api.SessionConfig{
-			Model: "claude-sonnet-4-6",
+			Model: "test-model-42",
 		},
 	})
 	if err != nil {
 		t.Fatalf("CreateSession: %v", err)
 	}
 
-	b2 := mock.New(80, 24)
-	feedMockREPLInput(b2, "/exit")
-	if err := repl.Run(context.Background(), repl.Options{
+	st.mu.Lock()
+	st.history[sess.ID] = []api.Message{
+		{
+			ID:   "msg-1",
+			Role: api.RoleUser,
+			Content: []api.Block{
+				{Type: api.BlockText, Text: "Initial question"},
+			},
+		},
+		{
+			ID:   "msg-2",
+			Role: api.RoleAssistant,
+			Content: []api.Block{
+				{Type: api.BlockText, Text: "Initial answer"},
+			},
+		},
+	}
+	st.mu.Unlock()
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	opts := Options{
 		Client:    c,
-		Workspace: wsDir,
+		Workspace: "/workspace/project",
+		Version:   "0.1.0",
 		SessionID: sess.ID,
-		Title:     "Resumed Mutated Session",
-		Model:     "claude-haiku-4-5",
-		Backend:   b2,
-	}); err != nil {
-		t.Fatalf("repl resume failed: %v", err)
-	}
-	if len(b2.InsertedAbove) == 0 {
-		t.Errorf("resumed session missing header banner in InsertedAbove")
+		Backend:   b,
 	}
 
-	// Verify model and title were mutated on resume
-	resumedSess, err := c.GetSession(context.Background(), sess.ID)
-	if err != nil {
-		t.Fatalf("GetSession sess.ID: %v", err)
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- Run(ctx, opts)
+	}()
+
+	waitFor(t, func() bool {
+		return b.LastFrame().Surface != nil && strings.Contains(surfaceText(b), ">")
+	}, 2*time.Second, "initial composer render")
+
+	waitFor(t, func() bool {
+		items := store.GetTranscript().Items
+		return items != nil && len(*items) >= 3
+	}, 2*time.Second, "transcript to load header and timeline entries")
+
+	items := *store.GetTranscript().Items
+	if items[0].Kind != store.TranscriptKindHeader {
+		t.Fatalf("expected items[0] to be header, got %s", items[0].Kind)
 	}
-	if resumedSess.Config.Model != "claude-haiku-4-5" {
-		t.Errorf("resumed session model = %q, want 'claude-haiku-4-5'", resumedSess.Config.Model)
+	if items[1].Kind != store.TranscriptKindMessage {
+		t.Fatalf("expected items[1] to be message, got %s", items[1].Kind)
 	}
-	if resumedSess.Title != "Resumed Mutated Session" {
-		t.Errorf("resumed session title = %q, want 'Resumed Mutated Session'", resumedSess.Title)
+	if items[2].Kind != store.TranscriptKindMessage {
+		t.Fatalf("expected items[2] to be message, got %s", items[2].Kind)
 	}
-	if active := repl.ActiveSession(); active == nil || active.ID != sess.ID {
+	if active := ActiveSession(); active == nil || active.ID != sess.ID {
 		t.Errorf("expected ActiveSession().ID = %q, got %+v", sess.ID, active)
-	}
-
-	// 3. Verify runREPL prints resume command summary on exit of active session and prints nothing on draft exit
-	rootOpts := &rootOptions{
-		workspace: wsDir,
-		socket:    sockPath,
-	}
-
-	var bufActive bytes.Buffer
-	cmdActive := &cobra.Command{}
-	cmdActive.SetOut(&bufActive)
-	cmdActive.SetContext(context.Background())
-	b3 := mock.New(80, 24)
-	feedMockREPLInput(b3, "/exit")
-
-	if err := runREPL(cmdActive, rootOpts, &replOptions{sessionID: sess.ID, backend: b3}); err != nil {
-		t.Fatalf("runREPL active session: %v", err)
-	}
-	expectedMsg := fmt.Sprintf("Resume this session with:\n    tasksmith --session %s", sess.ID)
-	if !strings.Contains(bufActive.String(), expectedMsg) {
-		t.Errorf("expected stdout to contain %q, got:\n%s", expectedMsg, bufActive.String())
-	}
-
-	var bufDraft bytes.Buffer
-	cmdDraft := &cobra.Command{}
-	cmdDraft.SetOut(&bufDraft)
-	cmdDraft.SetContext(context.Background())
-	b4 := mock.New(80, 24)
-	feedMockREPLInput(b4, "/exit")
-
-	if err := runREPL(cmdDraft, rootOpts, &replOptions{backend: b4}); err != nil {
-		t.Fatalf("runREPL draft session: %v", err)
-	}
-	if strings.Contains(bufDraft.String(), "Resume this session with:") {
-		t.Errorf("expected no resume message on draft session exit, got:\n%s", bufDraft.String())
 	}
 }
 
-func TestDaemonServeCommandLifecycle(t *testing.T) {
-	xdgRoot := t.TempDir()
-	xdg.SetTestEnv(xdgRoot, "tasksmith-cli-serve-test")
-	t.Cleanup(func() {
-		xdg.ClearCache()
-	})
+type clearMockBackend struct {
+	*mock.Backend
+}
 
-	shortTmp, err := os.MkdirTemp("/tmp", "tsserve-*")
-	if err != nil {
-		t.Fatalf("MkdirTemp: %v", err)
-	}
-	t.Cleanup(func() {
-		_ = os.RemoveAll(shortTmp)
-	})
-	sockPath := filepath.Join(shortTmp, "s.sock")
-	lockPath := filepath.Join(shortTmp, "s.lock")
+func (c *clearMockBackend) Clear() {
+	c.Backend.Clear()
+	c.InsertedAbove = nil
+}
 
-	ctx, cancel := context.WithCancel(context.Background())
+func TestRunClearReprintHeader(t *testing.T) {
+	store.ClearTranscript()
+	store.ClearSlot()
+	defer store.ClearTranscript()
+	defer store.ClearSlot()
+
+	rawBackend := mock.New(80, 24)
+	b := &clearMockBackend{Backend: rawBackend}
+	c, _ := startTestUnixDaemon(t)
+
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
-	serveDone := make(chan error, 1)
+	opts := Options{
+		Client:    c,
+		Workspace: "/workspace/clear-repl",
+		Version:   "0.1.0",
+		Backend:   b,
+	}
+
+	errCh := make(chan error, 1)
 	go func() {
-		cmd := NewRootCmd()
-		cmd.SetArgs([]string{"daemon", "serve", "--socket", sockPath, "--lock", lockPath})
-		serveDone <- cmd.ExecuteContext(ctx)
+		errCh <- Run(ctx, opts)
 	}()
 
-	c, err := client.New(sockPath)
-	if err != nil {
-		t.Fatalf("client.New: %v", err)
-	}
-	deadline := time.Now().Add(3 * time.Second)
-	for time.Now().Before(deadline) {
-		if _, hErr := c.Health(ctx); hErr == nil {
-			break
-		}
-		time.Sleep(15 * time.Millisecond)
-	}
+	waitFor(t, func() bool {
+		return b.LastFrame().Surface != nil && strings.Contains(surfaceText(b.Backend), ">")
+	}, 2*time.Second, "initial composer render")
 
-	if _, hErr := c.Health(ctx); hErr != nil {
-		t.Fatalf("daemon serve did not become healthy: %v", hErr)
-	}
+	// Wait for initial header to be printed into InsertedAbove
+	waitFor(t, func() bool {
+		return strings.Contains(allText(b.Backend), "TaskSmith v0.1.0")
+	}, 2*time.Second, "initial header in InsertedAbove")
 
-	cancel()
-	select {
-	case sErr := <-serveDone:
-		if sErr != nil {
-			t.Errorf("daemon serve returned error on cancel: %v", sErr)
-		}
-	case <-time.After(3 * time.Second):
-		t.Fatal("timed out waiting for daemon serve to exit")
+	// Append a notice to make transcript dirty
+	store.AppendNotice("old notice that must be cleared")
+
+	waitFor(t, func() bool {
+		return strings.Contains(allText(b.Backend), "old notice that must be cleared")
+	}, 2*time.Second, "dirty notice in InsertedAbove")
+
+	// Type /clear in draft mode: clears draft items from surface without calling Clear()
+	for _, ch := range "/clear" {
+		b.PostEvent(&backend.RawKeyEvent{
+			Key: key.Key{Code: ch, Text: string(ch)},
+		})
+	}
+	b.PostEvent(&backend.RawKeyEvent{
+		Key: key.Key{Code: key.KeyEnter},
+	})
+
+	waitFor(t, func() bool {
+		return !strings.Contains(surfaceText(b.Backend), "old notice that must be cleared") && strings.Contains(surfaceText(b.Backend), "TaskSmith v0.1.0")
+	}, 2*time.Second, "draft notice cleared from surface")
+
+	// Now test frozen mode: freeze transcript, append notice, and /clear should wipe backend
+	store.FreezeTranscript()
+	store.AppendNotice("frozen notice to be cleared")
+
+	waitFor(t, func() bool {
+		return strings.Contains(allText(b.Backend), "frozen notice to be cleared")
+	}, 2*time.Second, "frozen notice in scrollback")
+
+	for _, ch := range "/clear" {
+		b.PostEvent(&backend.RawKeyEvent{
+			Key: key.Key{Code: ch, Text: string(ch)},
+		})
+	}
+	b.PostEvent(&backend.RawKeyEvent{
+		Key: key.Key{Code: key.KeyEnter},
+	})
+
+	// Wait for /clear to execute in frozen mode, clearing backend and reprinting Header
+	waitFor(t, func() bool {
+		return b.ClearCalls >= 1 && strings.Contains(allText(b.Backend), "TaskSmith v0.1.0")
+	}, 2*time.Second, "Clear() called and header reprinted")
+
+	txt := allText(b.Backend)
+	if !strings.Contains(txt, "TaskSmith v0.1.0") {
+		t.Fatalf("expected header to be reprinted after /clear, got:\n%s", txt)
+	}
+	if strings.Contains(txt, "frozen notice to be cleared") {
+		t.Fatalf("expected frozen notice to be cleared from scrollback, got:\n%s", txt)
 	}
 }
