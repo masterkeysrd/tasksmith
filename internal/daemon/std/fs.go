@@ -7,13 +7,16 @@ import (
 	"io/fs"
 	"os"
 	"path"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/masterkeysrd/tasksmith/internal/core/diff"
+	"github.com/masterkeysrd/tasksmith/internal/core/fsutils"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
+	"github.com/masterkeysrd/tasksmith/internal/core/ripgrep"
 )
 
 // View reads a text file from the sandbox filesystem, records its SHA-256
@@ -205,15 +208,27 @@ func (s *Std) List(ctx context.Context, req ListRequest) (*ListResult, error) {
 // paths matching req.Pattern (including ** multi-directory wildcards).
 // It skips .git and .bare directories by default.
 func (s *Std) Glob(ctx context.Context, req GlobRequest) (*GlobResult, error) {
-	pattern := strings.TrimSpace(req.Pattern)
-	if pattern == "" {
+	rawPattern := strings.TrimSpace(req.Pattern)
+	if rawPattern == "" {
 		return nil, fmt.Errorf("%w: glob pattern is required", ErrInvalidArgument)
 	}
-	if err := validateGlobPattern(pattern); err != nil {
+	if err := validateGlobPattern(rawPattern); err != nil {
 		return nil, err
 	}
 	if err := validateGlobPatterns(req.Ignore); err != nil {
 		return nil, err
+	}
+	normPattern := strings.TrimPrefix(rawPattern, "./")
+	if !strings.Contains(normPattern, "/") {
+		normPattern = "**/" + normPattern
+	}
+	g, err := fsutils.Compile(normPattern)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrInvalidArgument, err)
+	}
+	var dirGlob *fsutils.Glob
+	if !strings.HasSuffix(normPattern, "/*") && !strings.HasSuffix(normPattern, "**") {
+		dirGlob, _ = fsutils.Compile(strings.TrimSuffix(normPattern, "/") + "/**")
 	}
 
 	basePath := s.normalizePath(req.Path)
@@ -226,12 +241,51 @@ func (s *Std) Glob(ctx context.Context, req GlobRequest) (*GlobResult, error) {
 	}
 
 	res := &GlobResult{
-		Pattern: pattern,
+		Pattern: rawPattern,
 		Path:    basePath,
 		Matches: []string{},
 	}
 
-	includeHidden := req.IncludeHidden || patternTargetsHidden(pattern)
+	limit := req.Limit
+	if limit <= 0 {
+		limit = DefaultGlobLimit
+	}
+
+	includeHidden := req.IncludeHidden || patternTargetsHidden(rawPattern)
+
+	if s.rg != nil && s.rg.IsAvailable(ctx) && !filepath.IsAbs(basePath) {
+		rawMatches, err := s.rg.Glob(ctx, basePath, normPattern, ripgrep.GlobOptions{
+			IncludeHidden: includeHidden,
+			Ignore:        req.Ignore,
+		})
+		if err == nil {
+			for _, entryPath := range rawMatches {
+				relToBase := entryPath
+				if basePath != "." {
+					relToBase = strings.TrimPrefix(entryPath, basePath+"/")
+				}
+
+				if matchesAnyIgnore(req.Ignore, path.Base(entryPath), relToBase, entryPath) {
+					continue
+				}
+
+				if !includeHidden && hasDotSegment(relToBase) && !patternTargetsHidden(rawPattern) {
+					continue
+				}
+
+				matched := g.Match(relToBase) || (dirGlob != nil && dirGlob.Match(relToBase)) || (basePath != "." && (g.Match(entryPath) || (dirGlob != nil && dirGlob.Match(entryPath))))
+				if matched {
+					if limit > 0 && len(res.Matches) >= limit {
+						res.Truncated = true
+						break
+					}
+					res.Matches = append(res.Matches, entryPath)
+				}
+			}
+			sort.Strings(res.Matches)
+			return res, nil
+		}
+	}
 
 	var walk func(currDir string) error
 	walk = func(currDir string) error {
@@ -275,15 +329,12 @@ func (s *Std) Glob(ctx context.Context, req GlobRequest) (*GlobResult, error) {
 				continue
 			}
 
-			matched, err := matchGlob(pattern, relToBase)
-			if err != nil {
-				return fmt.Errorf("%w: %v", ErrInvalidArgument, err)
-			}
+			matched := g.Match(relToBase) || (dirGlob != nil && dirGlob.Match(relToBase))
 			if !matched && basePath != "." {
-				matched, _ = matchGlob(pattern, entryPath)
+				matched = g.Match(entryPath) || (dirGlob != nil && dirGlob.Match(entryPath))
 			}
 			if matched {
-				if req.Limit > 0 && len(res.Matches) >= req.Limit {
+				if limit > 0 && len(res.Matches) >= limit {
 					res.Truncated = true
 					return nil
 				}
@@ -330,6 +381,29 @@ func (s *Std) Grep(ctx context.Context, req GrepRequest) (*GrepResult, error) {
 	res := &GrepResult{
 		Pattern: req.Pattern,
 		Matches: []GrepMatch{},
+	}
+
+	if s.rg != nil && s.rg.IsAvailable(ctx) && !filepath.IsAbs(basePath) && req.ContextLines == 0 {
+		rgMatches, err := s.rg.Search(ctx, basePath, req.Pattern, ripgrep.SearchOptions{
+			Include:         req.Include,
+			CaseInsensitive: req.CaseInsensitive,
+			IncludeHidden:   req.IncludeHidden,
+		})
+		if err == nil {
+			for _, m := range rgMatches {
+				if req.Limit > 0 && len(res.Matches) >= req.Limit {
+					res.Truncated = true
+					break
+				}
+				res.Matches = append(res.Matches, GrepMatch{
+					Path:   m.Path,
+					Line:   m.Line,
+					Column: m.Column,
+					Text:   m.Content,
+				})
+			}
+			return res, nil
+		}
 	}
 
 	searchFile := func(filePath, relToBase string) error {
@@ -852,21 +926,25 @@ func validateGlobPatterns(patterns []string) error {
 }
 
 func validateGlobPattern(pattern string) error {
-	segs := splitGlobSegments(pattern)
-	for _, seg := range segs {
-		if seg == "**" {
-			continue
-		}
-		if _, err := path.Match(seg, "x"); err != nil {
-			return fmt.Errorf("%w: invalid glob pattern %q: %v", ErrInvalidArgument, pattern, err)
-		}
+	if _, err := fsutils.Compile(pattern); err != nil {
+		return fmt.Errorf("%w: invalid glob pattern %q: %v", ErrInvalidArgument, pattern, err)
 	}
 	return nil
 }
 
 func patternTargetsHidden(pattern string) bool {
-	for _, seg := range splitGlobSegments(pattern) {
+	norm := strings.TrimPrefix(strings.TrimSpace(pattern), "./")
+	for _, seg := range strings.Split(norm, "/") {
 		if strings.HasPrefix(seg, ".") && seg != "." && seg != ".." {
+			return true
+		}
+	}
+	return false
+}
+
+func hasDotSegment(p string) bool {
+	for _, part := range strings.Split(p, "/") {
+		if strings.HasPrefix(part, ".") && part != "." && part != ".." {
 			return true
 		}
 	}
@@ -908,61 +986,12 @@ func matchesIncludeGlob(pattern, name, relToBase, fullPath string) bool {
 	return false
 }
 
-func splitGlobSegments(p string) []string {
-	p = strings.TrimSpace(p)
-	p = strings.TrimPrefix(p, "./")
-	p = strings.TrimPrefix(p, "/")
-	p = strings.TrimSuffix(p, "/")
-	if p == "" || p == "." {
-		return nil
-	}
-	return strings.Split(p, "/")
-}
-
 // matchGlob matches a slash-separated target path against a glob pattern that
 // supports *, ?, [...], and ** (zero or more directory segments).
 func matchGlob(pattern, target string) (bool, error) {
-	patSegs := splitGlobSegments(pattern)
-	targetSegs := splitGlobSegments(target)
-	return matchSegments(patSegs, targetSegs)
-}
-
-func matchSegments(patSegs, targetSegs []string) (bool, error) {
-	for len(patSegs) > 0 {
-		if patSegs[0] == "**" {
-			for len(patSegs) > 1 && patSegs[1] == "**" {
-				patSegs = patSegs[1:]
-			}
-			if len(patSegs) == 1 {
-				return true, nil
-			}
-			for i := 0; i <= len(targetSegs); i++ {
-				ok, err := matchSegments(patSegs[1:], targetSegs[i:])
-				if err != nil {
-					return false, err
-				}
-				if ok {
-					return true, nil
-				}
-			}
-			return false, nil
-		}
-
-		if len(targetSegs) == 0 {
-			return false, nil
-		}
-
-		ok, err := path.Match(patSegs[0], targetSegs[0])
-		if err != nil {
-			return false, err
-		}
-		if !ok {
-			return false, nil
-		}
-
-		patSegs = patSegs[1:]
-		targetSegs = targetSegs[1:]
+	g, err := fsutils.Compile(pattern)
+	if err != nil {
+		return false, fmt.Errorf("%w: invalid glob pattern %q: %v", ErrInvalidArgument, pattern, err)
 	}
-
-	return len(targetSegs) == 0, nil
+	return g.Match(target), nil
 }

@@ -441,6 +441,28 @@ func TestListGlobAndGrep(t *testing.T) {
 		t.Fatalf("expected glob matches %q, got %q", expectedGo, strings.Join(globRes.Matches, ","))
 	}
 
+	// Bare pattern expands to **/pattern
+	bareGlob, err := s.Glob(ctx, GlobRequest{
+		Pattern: "alpha.go",
+	})
+	if err != nil {
+		t.Fatalf("bareGlob failed: %v", err)
+	}
+	if len(bareGlob.Matches) != 1 || bareGlob.Matches[0] != "pkg/alpha/alpha.go" {
+		t.Fatalf("expected [pkg/alpha/alpha.go], got %v", bareGlob.Matches)
+	}
+
+	// Directory prefix glob matching nested files
+	dirPrefixGlob, err := s.Glob(ctx, GlobRequest{
+		Pattern: "**/beta*",
+	})
+	if err != nil {
+		t.Fatalf("dirPrefixGlob failed: %v", err)
+	}
+	if len(dirPrefixGlob.Matches) != 1 || dirPrefixGlob.Matches[0] != "pkg/beta/deep/beta.go" {
+		t.Fatalf("expected [pkg/beta/deep/beta.go], got %v", dirPrefixGlob.Matches)
+	}
+
 	// Glob scoped to subdirectory with Limit
 	subGlob, err := s.Glob(ctx, GlobRequest{
 		Path:    "pkg",

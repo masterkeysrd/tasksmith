@@ -2,6 +2,7 @@ package std
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -11,12 +12,16 @@ import (
 
 	"github.com/masterkeysrd/tasksmith/internal/core/fsutils"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
+	"github.com/masterkeysrd/tasksmith/internal/core/ripgrep"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/sandbox"
 )
 
 const (
 	// DefaultViewLimit is the default maximum number of lines returned by View.
 	DefaultViewLimit = 2000
+
+	// DefaultGlobLimit is the default maximum number of matches returned by Glob.
+	DefaultGlobLimit = 200
 
 	// DefaultMaxFetchBytes is the default response body cap for Fetch (10 MiB).
 	DefaultMaxFetchBytes int64 = 10 * 1024 * 1024
@@ -60,6 +65,7 @@ type Std struct {
 	sandbox sandbox.Sandbox
 	tracker FileTracker
 	logger  log.Interface
+	rg      *ripgrep.Runner
 }
 
 // New validates cfg and constructs a new [Std] operations library instance.
@@ -71,6 +77,17 @@ func New(cfg Config) (*Std, error) {
 		sandbox: cfg.Sandbox,
 		tracker: cfg.Tracker,
 		logger:  cfg.Logger.ForComponent("std"),
+		rg: ripgrep.New(func(ctx context.Context, name string, args []string, dir string) ([]byte, int, error) {
+			res, err := cfg.Sandbox.Proc().Exec(ctx, sandbox.Command{
+				Name: name,
+				Args: args,
+				Dir:  dir,
+			})
+			if err != nil {
+				return nil, -1, err
+			}
+			return res.Stdout, res.ExitCode, nil
+		}),
 	}, nil
 }
 
