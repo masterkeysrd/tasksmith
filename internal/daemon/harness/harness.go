@@ -24,9 +24,11 @@ type Config struct {
 	DB           *sql.DB
 	Model        *llm.Model
 	Tools        tools.Container
+	Bash         BashRunner
+	Spiller      tools.Spiller
 	Permissions  permissions.SessionManager
 	SystemPrompt string
-	Inbox        func() []message.Message
+	Queue        Queue
 	Logger       log.Interface
 }
 
@@ -44,8 +46,17 @@ func (c Config) Validate() error {
 	if c.Tools == nil {
 		return fmt.Errorf("%w: tools container is required", ErrInvalidConfig)
 	}
+	if c.Bash == nil {
+		return fmt.Errorf("%w: bash runner is required", ErrInvalidConfig)
+	}
+	if c.Spiller == nil {
+		return fmt.Errorf("%w: spiller is required", ErrInvalidConfig)
+	}
 	if c.Permissions == nil {
 		return fmt.Errorf("%w: permissions manager is required", ErrInvalidConfig)
+	}
+	if c.Queue == nil {
+		return fmt.Errorf("%w: queue is required", ErrInvalidConfig)
 	}
 	if c.Logger == nil {
 		return fmt.Errorf("%w: logger is required", ErrInvalidConfig)
@@ -64,7 +75,7 @@ type harness struct {
 	id     string
 	logger log.Interface
 	graph  *graph.Graph[State]
-	inbox  func() []message.Message
+	queue  Queue
 }
 
 var _ Harness = (*harness)(nil)
@@ -82,7 +93,7 @@ func New(cfg Config) (Harness, error) {
 
 	logger := cfg.Logger.ForComponent("harness")
 
-	g, err := buildGraph(cp, cfg.Model, cfg.Tools, cfg.Permissions, cfg.SystemPrompt, cfg.Inbox, logger)
+	g, err := buildGraph(cp, cfg.Model, cfg.Tools, cfg.Permissions, cfg.SystemPrompt, cfg.Queue, cfg.Bash, cfg.Spiller, logger)
 	if err != nil {
 		return nil, err
 	}
@@ -91,7 +102,7 @@ func New(cfg Config) (Harness, error) {
 		id:     strings.TrimSpace(cfg.ID),
 		logger: logger,
 		graph:  g,
-		inbox:  cfg.Inbox,
+		queue:  cfg.Queue,
 	}, nil
 }
 
@@ -113,7 +124,7 @@ func (h *harness) Stream(ctx context.Context, input Input) iter.Seq2[Event, erro
 			return
 		}
 		if input.Decisions == nil && input.Message == nil {
-			if h.inbox == nil {
+			if _, ok := h.queue.Peek(); !ok {
 				yield(Event{}, ErrNilMessage)
 				return
 			}
@@ -226,6 +237,32 @@ func (h *harness) consumeGraphStream(stream iter.Seq2[graph.StreamEvent, error],
 				return false
 			}
 
+		case eventCommandStarted:
+			cmd, ok := ev.Data.(CommandStarted)
+			if !ok {
+				return true
+			}
+			if !yield(Event{
+				Type:           EventCommandStarted,
+				CommandStarted: &cmd,
+			}, nil) {
+				stopped = true
+				return false
+			}
+
+		case eventCommandCompleted:
+			res, ok := ev.Data.(CommandCompleted)
+			if !ok {
+				return true
+			}
+			if !yield(Event{
+				Type:             EventCommandCompleted,
+				CommandCompleted: &res,
+			}, nil) {
+				stopped = true
+				return false
+			}
+
 		case graph.EventInterrupted:
 			snap, ok := ev.Data.(graph.Snapshot[State])
 			if !ok {
@@ -242,9 +279,24 @@ func (h *harness) consumeGraphStream(stream iter.Seq2[graph.StreamEvent, error],
 		case graph.EventCompleted:
 			snap, ok := ev.Data.(graph.Snapshot[State])
 			if !ok || len(snap.State.Messages) == 0 {
+				if !yield(Event{
+					Type: EventCompleted,
+				}, nil) {
+					stopped = true
+					return false
+				}
 				return true
 			}
 			lastMsg := snap.State.Messages[len(snap.State.Messages)-1]
+			if SystemKindOf(lastMsg) == SystemKindCommand {
+				if !yield(Event{
+					Type: EventCompleted,
+				}, nil) {
+					stopped = true
+					return false
+				}
+				return true
+			}
 			if !yield(Event{
 				Type:    EventCompleted,
 				Message: message.CloneMessage(lastMsg),

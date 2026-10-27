@@ -296,7 +296,10 @@ func loadHarnessState(t *testing.T, mgr Manager, db *sql.DB, gw *fakeGateway, se
 		DB:          db,
 		Model:       llmModel,
 		Tools:       sess.Tools,
+		Bash:        sess.Std,
+		Spiller:     sess.spiller,
 		Permissions: sess.PermManager,
+		Queue:       sess,
 		Logger:      log.Default(),
 	})
 	if err != nil {
@@ -2657,5 +2660,425 @@ func TestSessionAutoGenerateTitle(t *testing.T) {
 	sessManual.Unlock()
 	if manualTitle != "Manual Title" {
 		t.Fatalf("expected manual title to remain %q, got %q", "Manual Title", manualTitle)
+	}
+}
+
+func TestSessionDirectShellEscape(t *testing.T) {
+	ctx := context.Background()
+	provider := &fakeProvider{}
+	db, ws, gw, pub, mgr := setupTestEnv(t, provider)
+	_ = db
+	_ = ws
+	_ = gw
+	_ = pub
+
+	sess, _, err := mgr.Create(ctx, CreateParams{
+		Title: "Direct Shell Escape Test",
+	})
+	if err != nil {
+		t.Fatalf("mgr.Create: %v", err)
+	}
+
+	// 1. Send direct shell command "echo hello"
+	err = sess.Send(ctx, SendInput{
+		Command: "echo hello",
+	})
+	if err != nil {
+		t.Fatalf("sess.Send command: %v", err)
+	}
+	if err := sess.Wait(ctx); err != nil {
+		t.Fatalf("sess.Wait: %v", err)
+	}
+
+	// 2. Verify NO LLM turn was triggered
+	provider.mu.Lock()
+	turnCount := len(provider.turns)
+	provider.mu.Unlock()
+	if turnCount != 0 {
+		t.Fatalf("expected 0 LLM turns after direct command, got %d", turnCount)
+	}
+
+	// 3. Verify timeline contains KindCommand entry (not a KindMessage)
+	entries, err := sess.Timeline.List(ctx)
+	if err != nil {
+		t.Fatalf("sess.Timeline.List: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 timeline entry, got %d", len(entries))
+	}
+	if entries[0].Kind != timeline.KindCommand {
+		t.Fatalf("expected timeline entry kind %q, got %q", timeline.KindCommand, entries[0].Kind)
+	}
+	if entries[0].Command == nil {
+		t.Fatal("expected non-nil entries[0].Command")
+	}
+	if entries[0].Command.Command != "echo hello" {
+		t.Fatalf("expected Command 'echo hello', got %q", entries[0].Command.Command)
+	}
+	if entries[0].Command.ExitCode != 0 {
+		t.Fatalf("expected ExitCode 0, got %d", entries[0].Command.ExitCode)
+	}
+	if strings.TrimSpace(entries[0].Command.Output) != "hello" {
+		t.Fatalf("expected Output 'hello', got %q", entries[0].Command.Output)
+	}
+
+	// sess.History only returns KindMessage entries; verify it returns none
+	msgs, err := sess.History(ctx)
+	if err != nil {
+		t.Fatalf("sess.History: %v", err)
+	}
+	if len(msgs) != 0 {
+		t.Fatalf("expected 0 timeline messages in History, got %d", len(msgs))
+	}
+
+	// 4. Verify command was checkpointed in harness state and queue is drained
+	vis := sess.VisibleQueue()
+	if len(vis) != 0 {
+		t.Fatalf("expected visible queue to be empty, got %d", len(vis))
+	}
+	h, err := sess.harness(ctx)
+	if err != nil {
+		t.Fatalf("sess.harness: %v", err)
+	}
+	state, err := h.LoadState(ctx)
+	if err != nil {
+		t.Fatalf("h.LoadState: %v", err)
+	}
+	if len(state.Messages) != 1 {
+		t.Fatalf("expected 1 message in harness state, got %d", len(state.Messages))
+	}
+	if harness.SystemKindOf(state.Messages[0]) != harness.SystemKindCommand {
+		t.Fatalf("expected message to be marked SystemKindCommand, got %q", harness.SystemKindOf(state.Messages[0]))
+	}
+	inboxText := state.Messages[0].GetContent().Text()
+	if !strings.Contains(inboxText, `<bash_command command="echo hello" exit_code="0">`) {
+		t.Fatalf("expected text to contain bash_command tag, got %s", inboxText)
+	}
+
+	// 5. Send a normal user prompt and verify harness receives both previous command and new user prompt
+	err = sess.Send(ctx, SendInput{
+		Message: message.NewUserText("What did I just run?"),
+	})
+	if err != nil {
+		t.Fatalf("sess.Send user prompt: %v", err)
+	}
+	if err := sess.Wait(ctx); err != nil {
+		t.Fatalf("sess.Wait user prompt: %v", err)
+	}
+
+	provider.mu.Lock()
+	turns := provider.turns
+	provider.mu.Unlock()
+	if len(turns) != 1 {
+		t.Fatalf("expected 1 LLM turn after user prompt, got %d", len(turns))
+	}
+
+	// The harness should have received messages including the bash command output and the new user prompt
+	reqMsgs := turns[0].messages
+	var foundBashMsg, foundPromptMsg bool
+	for _, m := range reqMsgs {
+		txt := m.GetContent().Text()
+		if strings.Contains(txt, `<bash_command command="echo hello"`) {
+			foundBashMsg = true
+		}
+		if strings.Contains(txt, "What did I just run?") {
+			foundPromptMsg = true
+		}
+	}
+	if !foundBashMsg {
+		t.Fatalf("expected harness request to contain bash_command message, got: %+v", reqMsgs)
+	}
+	if !foundPromptMsg {
+		t.Fatalf("expected harness request to contain prompt message, got: %+v", reqMsgs)
+	}
+
+	// 6. Verify queue is now empty
+	if len(sess.VisibleQueue()) != 0 {
+		t.Fatalf("expected queue to be empty, got %d remaining", len(sess.VisibleQueue()))
+	}
+
+	// 7. Verify timeline messages do NOT have duplicate <bash_command> message
+	timelineMsgs, err := sess.History(ctx)
+	if err != nil {
+		t.Fatalf("sess.History after turn: %v", err)
+	}
+	for _, m := range timelineMsgs {
+		if strings.Contains(m.GetContent().Text(), "<bash_command") {
+			t.Fatalf("unexpected <bash_command> in History: %s", m.GetContent().Text())
+		}
+	}
+}
+
+func TestSessionEnqueueCommandWhileRunning(t *testing.T) {
+	ctx := context.Background()
+	provider := &fakeProvider{}
+	db, ws, gw, pub, mgr := setupTestEnv(t, provider)
+	_ = db
+	_ = ws
+	_ = gw
+	_ = pub
+
+	sess, _, err := mgr.Create(ctx, CreateParams{
+		Title: "Enqueue Command Test",
+	})
+	if err != nil {
+		t.Fatalf("mgr.Create: %v", err)
+	}
+
+	// 1. Send first command that sleeps briefly
+	if err := sess.Send(ctx, SendInput{Command: "sleep 0.1 && echo first"}); err != nil {
+		t.Fatalf("sess.Send first command: %v", err)
+	}
+
+	// Wait until command begins executing (and has been popped from the queue)
+	for range 100 {
+		sess.Lock()
+		running := sess.Running
+		sess.Unlock()
+		if running && len(sess.VisibleQueue()) == 0 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	// 2. While running, enqueue second and third commands
+	if err := sess.Send(ctx, SendInput{Command: "echo second"}); err != nil {
+		t.Fatalf("sess.Send second command: %v", err)
+	}
+	if err := sess.Send(ctx, SendInput{Command: "echo third"}); err != nil {
+		t.Fatalf("sess.Send third command: %v", err)
+	}
+
+	// Verify visible queue has 2 commands
+	pending := sess.VisibleQueue()
+	if len(pending) != 2 {
+		t.Fatalf("expected 2 pending commands in visible queue, got %d", len(pending))
+	}
+
+	// 3. Wait for all to complete
+	if err := sess.Wait(ctx); err != nil {
+		t.Fatalf("sess.Wait: %v", err)
+	}
+
+	// Verify session is now idle and no pending commands remain
+	sess.Lock()
+	running := sess.Running
+	status := sess.Status
+	sess.Unlock()
+	pending = sess.VisibleQueue()
+	if running || status != StatusIdle || len(pending) != 0 {
+		t.Fatalf("expected idle not running with 0 pending commands, got running=%v status=%s pending=%d", running, status, len(pending))
+	}
+
+	// 4. Verify timeline has all 3 commands executed in FIFO order
+	entries, err := sess.Timeline.List(ctx)
+	if err != nil {
+		t.Fatalf("sess.Timeline.List: %v", err)
+	}
+	if len(entries) != 3 {
+		t.Fatalf("expected 3 timeline entries, got %d", len(entries))
+	}
+	for i, expectedCmd := range []string{"sleep 0.1 && echo first", "echo second", "echo third"} {
+		if entries[i].Kind != timeline.KindCommand {
+			t.Fatalf("entry %d: expected KindCommand, got %q", i, entries[i].Kind)
+		}
+		if entries[i].Command == nil || entries[i].Command.Command != expectedCmd {
+			t.Fatalf("entry %d: expected command %q, got %+v", i, expectedCmd, entries[i].Command)
+		}
+		if entries[i].Command.ExitCode != 0 {
+			t.Fatalf("entry %d: expected exit code 0, got %d", i, entries[i].Command.ExitCode)
+		}
+	}
+
+	// Verify all 3 commands were also checkpointed in harness state
+	h, err := sess.harness(ctx)
+	if err != nil {
+		t.Fatalf("sess.harness: %v", err)
+	}
+	state, err := h.LoadState(ctx)
+	if err != nil {
+		t.Fatalf("h.LoadState: %v", err)
+	}
+	if len(state.Messages) != 3 {
+		t.Fatalf("expected 3 harness messages, got %d", len(state.Messages))
+	}
+}
+
+func TestSessionEnqueueCommandDuringTurn(t *testing.T) {
+	ctx := context.Background()
+	turnStarted := make(chan struct{})
+	allowTurnToFinish := make(chan struct{})
+
+	provider := &fakeProvider{
+		handler: func(ctx context.Context, req *llm.Request) ([]string, string, error) {
+			select {
+			case <-turnStarted:
+			default:
+				close(turnStarted)
+			}
+			select {
+			case <-allowTurnToFinish:
+				return []string{"Turn response"}, "", nil
+			case <-ctx.Done():
+				return nil, "", ctx.Err()
+			}
+		},
+	}
+	db, ws, gw, pub, mgr := setupTestEnv(t, provider)
+	_ = db
+	_ = ws
+	_ = gw
+	_ = pub
+
+	sess, _, err := mgr.Create(ctx, CreateParams{
+		Title: "Enqueue Command During Turn",
+	})
+	if err != nil {
+		t.Fatalf("mgr.Create: %v", err)
+	}
+
+	// 1. Start a turn
+	if err := sess.Send(ctx, SendInput{Message: message.NewUserText("Hello")}); err != nil {
+		t.Fatalf("sess.Send message: %v", err)
+	}
+
+	// Wait until turn starts
+	<-turnStarted
+
+	// 2. While turn is running, send a direct command
+	if err := sess.Send(ctx, SendInput{Command: "echo while_turn"}); err != nil {
+		t.Fatalf("sess.Send command during turn: %v", err)
+	}
+
+	pending := sess.VisibleQueue()
+	if len(pending) != 1 {
+		t.Fatalf("expected 1 pending command, got %d", len(pending))
+	}
+
+	// 3. Allow turn to finish
+	close(allowTurnToFinish)
+	if err := sess.Wait(ctx); err != nil {
+		t.Fatalf("sess.Wait: %v", err)
+	}
+
+	// 4. Verify the pending command was drained and executed
+	entries, err := sess.Timeline.List(ctx)
+	if err != nil {
+		t.Fatalf("sess.Timeline.List: %v", err)
+	}
+
+	var foundCmd bool
+	for _, e := range entries {
+		if e.Kind == timeline.KindCommand && e.Command != nil && e.Command.Command == "echo while_turn" {
+			foundCmd = true
+			if e.Command.ExitCode != 0 {
+				t.Fatalf("expected exit code 0, got %d", e.Command.ExitCode)
+			}
+			if strings.TrimSpace(e.Command.Output) != "while_turn" {
+				t.Fatalf("expected output 'while_turn', got %q", e.Command.Output)
+			}
+		}
+	}
+	if !foundCmd {
+		t.Fatalf("expected KindCommand 'echo while_turn' in timeline, got entries: %+v", entries)
+	}
+}
+
+func TestQueueKindTaskFilteredAndNoEvent(t *testing.T) {
+	ctx := context.Background()
+	turnStarted := make(chan struct{})
+	allowTurnToFinish := make(chan struct{})
+
+	provider := &fakeProvider{
+		handler: func(ctx context.Context, req *llm.Request) ([]string, string, error) {
+			select {
+			case <-turnStarted:
+			default:
+				close(turnStarted)
+			}
+			select {
+			case <-allowTurnToFinish:
+				return []string{"Turn done"}, "", nil
+			case <-ctx.Done():
+				return nil, "", ctx.Err()
+			}
+		},
+	}
+	_, _, _, pub, mgr := setupTestEnv(t, provider)
+
+	sess, _, err := mgr.Create(ctx, CreateParams{
+		Title: "Task Queue Filter Test",
+	})
+	if err != nil {
+		t.Fatalf("mgr.Create: %v", err)
+	}
+
+	// 1. Start a turn
+	if err := sess.Send(ctx, SendInput{Message: message.NewUserText("Hello")}); err != nil {
+		t.Fatalf("sess.Send: %v", err)
+	}
+	<-turnStarted
+
+	// 2. Enqueue a user message while running -> should emit QueueUpdatedEvent
+	if err := sess.Send(ctx, SendInput{Message: message.NewUserText("Queued user message")}); err != nil {
+		t.Fatalf("sess.Send queued: %v", err)
+	}
+
+	// Verify QueueUpdatedEvent was published for the user message
+	var queueUpdatedCountBefore int
+	for _, ev := range pub.recorded() {
+		if qe, ok := ev.(QueueUpdatedEvent); ok {
+			queueUpdatedCountBefore++
+			if len(qe.Queue) != 1 || qe.Queue[0].Kind != QueueKindMessage {
+				t.Fatalf("expected 1 item in queue event, got %+v", qe.Queue)
+			}
+		}
+	}
+	if queueUpdatedCountBefore == 0 {
+		t.Fatal("expected QueueUpdatedEvent for queued user message")
+	}
+
+	// 3. Enqueue a task message -> should NOT emit QueueUpdatedEvent and should NOT be in VisibleQueue
+	taskMsg := message.NewUserTextMeta("task complete background", map[string]any{harness.MetaSystemKind: harness.SystemKindTask})
+	sess.Enqueue(taskMsg)
+
+	// Verify task item is NOT in VisibleQueue
+	vis := sess.VisibleQueue()
+	if len(vis) != 1 {
+		t.Fatalf("expected VisibleQueue to have only 1 item, got %d: %+v", len(vis), vis)
+	}
+	if vis[0].Kind != QueueKindMessage {
+		t.Fatalf("expected VisibleQueue[0] to be QueueKindMessage, got %s", vis[0].Kind)
+	}
+
+	// Verify internal queue has 2 items: 1 message + 1 task
+	sess.Lock()
+	qLen := len(sess.queue)
+	var hasTaskKind bool
+	for _, it := range sess.queue {
+		if it.Kind == QueueKindTask {
+			hasTaskKind = true
+		}
+	}
+	sess.Unlock()
+	if qLen != 2 || !hasTaskKind {
+		t.Fatalf("expected 2 items in internal queue with QueueKindTask, got qLen=%d hasTaskKind=%v", qLen, hasTaskKind)
+	}
+
+	// Verify NO additional QueueUpdatedEvent was published for the task enqueue
+	var queueUpdatedCountAfter int
+	for _, ev := range pub.recorded() {
+		if _, ok := ev.(QueueUpdatedEvent); ok {
+			queueUpdatedCountAfter++
+		}
+	}
+	if queueUpdatedCountAfter != queueUpdatedCountBefore {
+		t.Fatalf("unexpected QueueUpdatedEvent received for QueueKindTask (before=%d, after=%d)", queueUpdatedCountBefore, queueUpdatedCountAfter)
+	}
+
+	// 4. Finish the turn and let the queued items process
+	close(allowTurnToFinish)
+	if err := sess.Wait(ctx); err != nil {
+		t.Fatalf("sess.Wait: %v", err)
 	}
 }

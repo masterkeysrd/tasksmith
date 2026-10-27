@@ -7,6 +7,7 @@ type TimelineKind string
 
 const (
 	TimelineKindMessage     TimelineKind = "message"
+	TimelineKindCommand     TimelineKind = "command"
 	TimelineKindModel       TimelineKind = "model"
 	TimelineKindEffort      TimelineKind = "effort"
 	TimelineKindAgent       TimelineKind = "agent"
@@ -14,6 +15,14 @@ const (
 	TimelineKindPermission  TimelineKind = "permission"
 	TimelineKindInterrupted TimelineKind = "interrupted"
 )
+
+// CommandRecord captures a direct user shell command (!) and its output.
+type CommandRecord struct {
+	Command    string `json:"command"`
+	Output     string `json:"output,omitempty"`
+	ExitCode   int    `json:"exit_code"`
+	DurationMs int64  `json:"duration_ms,omitempty"`
+}
 
 // ModelChange captures a transition of the active LLM.
 type ModelChange struct {
@@ -52,6 +61,7 @@ type TimelineEntry struct {
 	Kind       TimelineKind      `json:"kind"`
 	CreatedAt  time.Time         `json:"created_at"`
 	Message    *Message          `json:"message,omitempty"`
+	Command    *CommandRecord    `json:"command,omitempty"`
 	Model      *ModelChange      `json:"model,omitempty"`
 	Effort     *EffortChange     `json:"effort,omitempty"`
 	Agent      *AgentChange      `json:"agent,omitempty"`

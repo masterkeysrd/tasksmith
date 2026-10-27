@@ -5,6 +5,7 @@ import (
 
 	"github.com/masterkeysrd/loom/message"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/broker"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/harness"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/journal"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tasks"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/timeline"
@@ -47,9 +48,26 @@ type UpdateParams struct {
 
 // SendInput provides the input to Session.Send, carrying either a new user message or a permission decision.
 type SendInput struct {
+	ID       string
 	Message  message.Message
+	Command  string
 	Decision *tools.PermissionDecision
 }
+
+type (
+	QueueKind           = harness.QueueKind
+	QueueItemPayload    = harness.QueueItemPayload
+	QueueMessagePayload = harness.QueueMessagePayload
+	QueueCommandPayload = harness.QueueCommandPayload
+	QueueTaskPayload    = harness.QueueTaskPayload
+	QueueItem           = harness.QueueItem
+)
+
+const (
+	QueueKindMessage = harness.QueueKindMessage
+	QueueKindCommand = harness.QueueKindCommand
+	QueueKindTask    = harness.QueueKindTask
+)
 
 // EventType identifies the kind of real-time notification published by [Manager].
 type EventType string
@@ -88,6 +106,12 @@ const (
 
 	// EventTaskUpdated is published when a background task updates in a session.
 	EventTaskUpdated EventType = "task_updated"
+
+	// EventCommandStarted is published when a direct command starts executing.
+	EventCommandStarted EventType = "command_started"
+
+	// EventQueueUpdated is published when the visible queue of items updates.
+	EventQueueUpdated EventType = "queue_updated"
 )
 
 // Event is implemented by all real-time session notifications published by [Manager].
@@ -156,6 +180,21 @@ type TaskUpdatedEvent struct {
 }
 
 func (TaskUpdatedEvent) EventType() string { return string(EventTaskUpdated) }
+
+type CommandStartedEvent struct {
+	SessionID string
+	ID        string
+	Command   string
+}
+
+func (CommandStartedEvent) EventType() string { return string(EventCommandStarted) }
+
+type QueueUpdatedEvent struct {
+	SessionID string
+	Queue     []QueueItem
+}
+
+func (QueueUpdatedEvent) EventType() string { return string(EventQueueUpdated) }
 
 type ErrorEvent struct {
 	SessionID string

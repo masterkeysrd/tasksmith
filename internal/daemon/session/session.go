@@ -95,6 +95,8 @@ type Session struct {
 	Tools    tools.Container   `json:"-"`
 	Tasks    tasks.Manager     `json:"-"`
 	Harness  harness.Harness   `json:"-"`
+	Std      *std.Std          `json:"-"`
+	spiller  tools.Spiller     `json:"-"`
 
 	db        *sql.DB             `json:"-"`
 	store     *store              `json:"-"`
@@ -132,6 +134,8 @@ func (s *Session) Clone() *Session {
 		Tools:       s.Tools,
 		Tasks:       s.Tasks,
 		Harness:     s.Harness,
+		Std:         s.Std,
+		spiller:     s.spiller,
 		db:          s.db,
 		store:       s.store,
 		workspace:   s.workspace,
@@ -195,7 +199,7 @@ func (s *Session) initResources(ctx context.Context) error {
 		})
 	}
 
-	if s.Tools == nil {
+	if s.Std == nil {
 		stdInst, err := std.New(std.Config{
 			Sandbox: s.Sandbox,
 			Tracker: s.Journal,
@@ -204,7 +208,18 @@ func (s *Session) initResources(ctx context.Context) error {
 		if err != nil {
 			return fmt.Errorf("session: initialize std tools: %w", err)
 		}
+		s.Std = stdInst
+	}
 
+	if s.spiller == nil {
+		sp, err := tools.NewSpiller(tools.SpillerConfig{Workspace: s.workspace})
+		if err != nil {
+			return fmt.Errorf("session: initialize spiller: %w", err)
+		}
+		s.spiller = sp
+	}
+
+	if s.Tools == nil {
 		var readDirs []string
 		if outputsDir != "" {
 			readDirs = []string{outputsDir}
@@ -216,7 +231,7 @@ func (s *Session) initResources(ctx context.Context) error {
 		})
 
 		builtinTools, err := builtin.New(builtin.Config{
-			Std:     stdInst,
+			Std:     s.Std,
 			Sandbox: s.Sandbox,
 			Guard:   guardInst,
 			Tasks:   s.Tasks,
@@ -230,6 +245,7 @@ func (s *Session) initResources(ctx context.Context) error {
 			Sandbox:   s.Sandbox,
 			Workspace: s.workspace,
 			Logger:    s.logger,
+			Spiller:   s.spiller,
 		})
 		if err != nil {
 			return fmt.Errorf("session: initialize tools container: %w", err)
@@ -285,9 +301,11 @@ func (s *Session) harness(ctx context.Context) (harness.Harness, error) {
 		DB:           s.db,
 		Model:        llmModel,
 		Tools:        s.Tools,
+		Bash:         s.Std,
+		Spiller:      s.spiller,
 		Permissions:  s.PermManager,
 		SystemPrompt: systemPrompt,
-		Inbox:        s.popInbox,
+		Queue:        s,
 		Logger:       s.logger,
 	})
 	if err != nil {
@@ -373,6 +391,7 @@ func (s *Session) Cancel(ctx context.Context) error {
 	s.Lock()
 	cancel := s.cancel
 	done := s.done
+	s.queue = nil
 	s.Unlock()
 
 	if done == nil {
@@ -388,11 +407,154 @@ func (s *Session) Cancel(ctx context.Context) error {
 	return nil
 }
 
+func (s *Session) VisibleQueue() []QueueItem {
+	s.Lock()
+	defer s.Unlock()
+	return s.visibleQueueLocked()
+}
+
+func (s *Session) visibleQueueLocked() []QueueItem {
+	if len(s.queue) == 0 {
+		return nil
+	}
+	var vis []QueueItem
+	for _, it := range s.queue {
+		if it.Kind == QueueKindMessage || it.Kind == QueueKindCommand {
+			vis = append(vis, it)
+		}
+	}
+	return vis
+}
+
+func (s *Session) enqueueItem(item QueueItem) {
+	if item.ID == "" || uuid.Validate(item.ID) != nil {
+		if u, err := uuid.NewV7(); err == nil {
+			item.ID = u.String()
+		}
+	}
+	if item.CreatedAt.IsZero() {
+		item.CreatedAt = time.Now().UTC()
+	}
+
+	var vis []QueueItem
+	s.Lock()
+	s.queue = append(s.queue, item)
+	if item.Kind != QueueKindTask {
+		vis = s.visibleQueueLocked()
+	}
+	s.Unlock()
+
+	if item.Kind != QueueKindTask {
+		s.publisher.Publish(api.SessionStreamTopic(s.ID), QueueUpdatedEvent{
+			SessionID: s.ID,
+			Queue:     vis,
+		})
+	}
+}
+
+func (s *Session) Peek() (QueueItem, bool) {
+	s.Lock()
+	defer s.Unlock()
+	if len(s.queue) == 0 {
+		return QueueItem{}, false
+	}
+	return s.queue[0], true
+}
+
+func (s *Session) PopCommand() (QueueItem, bool) {
+	s.Lock()
+	if len(s.queue) == 0 || s.queue[0].Kind != QueueKindCommand {
+		s.Unlock()
+		return QueueItem{}, false
+	}
+	item := s.queue[0]
+	s.queue = s.queue[1:]
+	vis := s.visibleQueueLocked()
+	s.Unlock()
+
+	s.publisher.Publish(api.SessionStreamTopic(s.ID), QueueUpdatedEvent{
+		SessionID: s.ID,
+		Queue:     vis,
+	})
+	return item, true
+}
+
+func (s *Session) PopMessages() []message.Message {
+	s.Lock()
+	if len(s.queue) == 0 {
+		s.Unlock()
+		return nil
+	}
+
+	var popped []QueueItem
+	var hadMessage bool
+	for len(s.queue) > 0 {
+		if s.queue[0].Kind == QueueKindCommand {
+			break
+		}
+		item := s.queue[0]
+		s.queue = s.queue[1:]
+		if item.Kind == QueueKindMessage {
+			hadMessage = true
+		}
+		popped = append(popped, item)
+	}
+
+	var vis []QueueItem
+	if hadMessage {
+		vis = s.visibleQueueLocked()
+	}
+	s.Unlock()
+
+	if hadMessage {
+		s.publisher.Publish(api.SessionStreamTopic(s.ID), QueueUpdatedEvent{
+			SessionID: s.ID,
+			Queue:     vis,
+		})
+	}
+
+	if len(popped) == 0 {
+		return nil
+	}
+
+	msgs := make([]message.Message, 0, len(popped))
+	for _, it := range popped {
+		switch it.Kind {
+		case QueueKindMessage:
+			if p, ok := it.Payload.(QueueMessagePayload); ok && p.Message != nil {
+				msgs = append(msgs, p.Message)
+			}
+		case QueueKindTask:
+			if p, ok := it.Payload.(QueueTaskPayload); ok && p.Message != nil {
+				msgs = append(msgs, p.Message)
+			}
+		}
+	}
+	return msgs
+}
+
 // Send initiates an asynchronous conversational turn with a user message or resolves
 // a pending permission decision.
 func (s *Session) Send(ctx context.Context, input SendInput) error {
 	if s == nil {
 		return errors.New("session: uninitialized session")
+	}
+	if cmd := strings.TrimSpace(input.Command); cmd != "" {
+		if input.Decision != nil || input.Message != nil {
+			return fmt.Errorf("%w: cannot specify command with message or decision", ErrInvalidConfig)
+		}
+		s.enqueueItem(QueueItem{
+			ID:      input.ID,
+			Kind:    QueueKindCommand,
+			Payload: QueueCommandPayload{Command: cmd},
+		})
+		s.Lock()
+		running := s.Running
+		s.Unlock()
+		if running {
+			return nil
+		}
+		return s.startTurn(harness.Input{})
 	}
 	if input.Decision != nil && input.Message != nil {
 		return fmt.Errorf("%w: cannot specify both message and decision", ErrInvalidConfig)
@@ -401,7 +563,6 @@ func (s *Session) Send(ctx context.Context, input SendInput) error {
 		return ErrNilMessage
 	}
 
-	var hInput harness.Input
 	if input.Decision != nil {
 		s.Lock()
 		if s.Running {
@@ -420,26 +581,32 @@ func (s *Session) Send(ctx context.Context, input SendInput) error {
 		clear(s.decisions)
 		s.Unlock()
 
-		hInput = harness.Input{Decisions: fullDecisions}
-	} else {
-		hInput = harness.Input{Message: input.Message}
+		return s.startTurn(harness.Input{Decisions: fullDecisions})
 	}
 
-	if input.Message != nil {
-		s.Lock()
-		if strings.TrimSpace(s.Title) == "" && !s.titleGenerating {
-			text := input.Message.GetContent().Text()
-			if text != "" {
-				s.titleGenerating = true
-				s.wg.Go(func() {
-					s.generateTitle(text)
-				})
-			}
+	s.Lock()
+	if strings.TrimSpace(s.Title) == "" && !s.titleGenerating {
+		text := input.Message.GetContent().Text()
+		if text != "" {
+			s.titleGenerating = true
+			s.wg.Go(func() {
+				s.generateTitle(text)
+			})
 		}
-		s.Unlock()
+	}
+	running := s.Running
+	s.Unlock()
+
+	if running {
+		s.enqueueItem(QueueItem{
+			ID:      input.Message.GetID(),
+			Kind:    QueueKindMessage,
+			Payload: QueueMessagePayload{Message: message.CloneMessage(input.Message)},
+		})
+		return nil
 	}
 
-	return s.startTurn(hInput)
+	return s.startTurn(harness.Input{Message: input.Message})
 }
 
 func (s *Session) startTurn(hInput harness.Input) error {
@@ -452,7 +619,12 @@ func (s *Session) startTurn(hInput harness.Input) error {
 	runCtx, cancel := context.WithCancel(s.bgCtx)
 	done := make(chan struct{})
 
-	s.Status = StatusThinking
+	initialStatus := StatusThinking
+	if hInput.Message == nil && hInput.Decisions == nil && len(s.queue) > 0 && s.queue[0].Kind == QueueKindCommand {
+		initialStatus = StatusExecuting
+	}
+
+	s.Status = initialStatus
 	s.Running = true
 	s.WaitingPermission = false
 	if hInput.Message != nil {
@@ -468,7 +640,7 @@ func (s *Session) startTurn(hInput harness.Input) error {
 
 	s.publisher.Publish(api.SessionStreamTopic(s.ID), StatusChangedEvent{
 		SessionID: s.ID,
-		Status:    StatusThinking,
+		Status:    initialStatus,
 	})
 
 	s.wg.Go(func() {
@@ -485,7 +657,7 @@ func (s *Session) startTurn(hInput harness.Input) error {
 				s.done = nil
 			}
 			s.Unlock()
-			if statusChanged && s.publisher != nil {
+			if statusChanged {
 				s.publisher.Publish(api.SessionStreamTopic(s.ID), StatusChangedEvent{
 					SessionID: s.ID,
 					Status:    StatusIdle,
@@ -509,50 +681,30 @@ func (s *Session) startTurn(hInput harness.Input) error {
 
 		for {
 			s.Lock()
-			if s.WaitingPermission || runCtx.Err() != nil {
-				s.Unlock()
-				return
-			}
-			if len(s.inbox) == 0 {
-				var statusChanged bool
-				if s.done == done {
-					s.Running = false
-					if s.Status != StatusWaitingPermission && s.Status != StatusIdle {
-						s.Status = StatusIdle
-						statusChanged = true
-					}
-					s.cancel = nil
-					s.done = nil
-				}
-				s.Unlock()
-				if statusChanged {
-					s.publisher.Publish(api.SessionStreamTopic(s.ID), StatusChangedEvent{
-						SessionID: s.ID,
-						Status:    StatusIdle,
-					})
-				}
-				return
-			}
+			hasMore := !s.WaitingPermission && runCtx.Err() == nil && len(s.queue) > 0
 			s.Unlock()
+			if !hasMore {
+				break
+			}
 
 			if _, err := s.send(sCtx, h.Stream(sCtx, harness.Input{})); err != nil {
 				s.handleAsyncError(err)
 				return
 			}
 		}
+
+		s.Lock()
+		waiting := s.WaitingPermission
+		s.Unlock()
+
+		if !waiting && runCtx.Err() == nil {
+			s.setStatus(StatusIdle)
+			s.publisher.Publish(api.SessionStreamTopic(s.ID), CompletedEvent{
+				SessionID: s.ID,
+			})
+		}
 	})
 	return nil
-}
-
-func (s *Session) popInbox() []message.Message {
-	s.Lock()
-	defer s.Unlock()
-	if len(s.inbox) == 0 {
-		return nil
-	}
-	msgs := s.inbox
-	s.inbox = nil
-	return msgs
 }
 
 // Enqueue adds a message to the session's execution queue or initiates an immediate turn if idle.
@@ -560,14 +712,28 @@ func (s *Session) Enqueue(msg message.Message) {
 	if msg == nil {
 		return
 	}
-	s.Lock()
-	s.inbox = append(s.inbox, message.CloneMessage(msg))
-	if !s.Running && !s.WaitingPermission {
-		s.Unlock()
-		_ = s.startTurn(harness.Input{})
-		return
+	var item QueueItem
+	if harness.SystemKindOf(msg) == harness.SystemKindTask {
+		item = QueueItem{
+			ID:      msg.GetID(),
+			Kind:    QueueKindTask,
+			Payload: QueueTaskPayload{Message: message.CloneMessage(msg)},
+		}
+	} else {
+		item = QueueItem{
+			ID:      msg.GetID(),
+			Kind:    QueueKindMessage,
+			Payload: QueueMessagePayload{Message: message.CloneMessage(msg)},
+		}
 	}
+	s.enqueueItem(item)
+
+	s.Lock()
+	canStart := !s.Running && !s.WaitingPermission
 	s.Unlock()
+	if canStart {
+		_ = s.startTurn(harness.Input{})
+	}
 }
 
 func (s *Session) onTaskUpdate(snap tasks.Snapshot) {
@@ -591,7 +757,7 @@ func (s *Session) onTaskUpdate(snap tasks.Snapshot) {
 		}
 		text := fmt.Sprintf("<background_task_completed task_id=%q kind=%q title=%q status=%q exit_code=\"%d\" log_path=%q>\n%s\n</background_task_completed>",
 			snap.ID, snap.Kind, snap.Title, snap.Status, snap.ExitCode, snap.LogPath, tail)
-		s.Enqueue(message.NewUserText(text))
+		s.Enqueue(message.NewUserTextMeta(text, map[string]any{harness.MetaSystemKind: harness.SystemKindTask}))
 	}
 }
 
@@ -681,6 +847,7 @@ func (s *Session) handleAsyncError(err error) {
 	s.Running = false
 	s.WaitingPermission = false
 	s.PendingPermissions = nil
+	s.queue = nil
 	s.Status = StatusIdle
 	s.FinishedAt = time.Now().UTC()
 	s.err = err
@@ -806,6 +973,43 @@ func (s *Session) send(ctx context.Context, stream iter.Seq2[harness.Event, erro
 				}
 			}
 
+		case harness.EventCommandStarted:
+			if hev.CommandStarted != nil {
+				s.setStatus(StatusExecuting)
+				s.publisher.Publish(api.SessionStreamTopic(s.ID), CommandStartedEvent{
+					SessionID: s.ID,
+					ID:        hev.CommandStarted.ID,
+					Command:   hev.CommandStarted.Command,
+				})
+			}
+
+		case harness.EventCommandCompleted:
+			if hev.CommandCompleted != nil {
+				entry := timeline.NewCommandEntry(s.ID, timeline.CommandRecord{
+					Command:    hev.CommandCompleted.Command,
+					Output:     hev.CommandCompleted.Output,
+					ExitCode:   hev.CommandCompleted.ExitCode,
+					DurationMs: hev.CommandCompleted.DurationMs,
+				})
+				if hev.CommandCompleted.ID != "" && uuid.Validate(hev.CommandCompleted.ID) == nil {
+					entry.ID = hev.CommandCompleted.ID
+				}
+				if err := s.Timeline.Append(ctx, entry); err != nil {
+					return nil, err
+				}
+				if err := s.store.touchSession(ctx, s.ID, entry.CreatedAt); err != nil {
+					return nil, err
+				}
+				s.Lock()
+				s.UpdatedAt = entry.CreatedAt
+				s.Unlock()
+
+				s.publisher.Publish(api.SessionStreamTopic(s.ID), EntryAddedEvent{
+					SessionID: s.ID,
+					Entry:     entry.Clone(),
+				})
+			}
+
 		case harness.EventInterrupted:
 			interrupted = true
 			perms := make([]tools.PermissionRequest, len(hev.Permissions))
@@ -837,30 +1041,11 @@ func (s *Session) send(ctx context.Context, stream iter.Seq2[harness.Event, erro
 					reply = asst
 				}
 			}
-
-			s.Lock()
-			s.Status = StatusIdle
-			s.Running = false
-			s.WaitingPermission = false
-			s.PendingPermissions = nil
-			s.FinishedAt = time.Now().UTC()
-			s.Unlock()
-
-			s.publisher.Publish(api.SessionStreamTopic(s.ID), StatusChangedEvent{
-				SessionID: s.ID,
-				Status:    StatusIdle,
-			})
-			s.publisher.Publish(api.SessionStreamTopic(s.ID), CompletedEvent{
-				SessionID: s.ID,
-			})
 		}
 	}
 
 	if interrupted {
 		return nil, nil
-	}
-	if reply == nil {
-		return nil, fmt.Errorf("session: harness returned nil assistant reply for session %q", s.ID)
 	}
 	return reply, nil
 }

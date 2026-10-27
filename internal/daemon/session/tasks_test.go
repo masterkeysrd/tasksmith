@@ -10,6 +10,7 @@ import (
 
 	"github.com/masterkeysrd/loom/llm"
 	"github.com/masterkeysrd/loom/message"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/harness"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tasks"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/timeline"
 )
@@ -87,8 +88,9 @@ func TestSessionTasksInitAndBackgroundUpdate(t *testing.T) {
 
 func TestSessionEnqueueAndInbox(t *testing.T) {
 	sess := &Session{
-		State: NewState(),
-		wg:    &sync.WaitGroup{},
+		State:     NewState(),
+		wg:        &sync.WaitGroup{},
+		publisher: &testPublisher{},
 	}
 
 	// 1. When Running is true, Enqueue should append to inbox
@@ -101,7 +103,7 @@ func TestSessionEnqueueAndInbox(t *testing.T) {
 	sess.Enqueue(msg1)
 	sess.Enqueue(msg2)
 
-	queued := sess.popInbox()
+	queued := sess.PopMessages()
 	if len(queued) != 2 {
 		t.Fatalf("expected 2 messages in inbox, got %d", len(queued))
 	}
@@ -109,8 +111,8 @@ func TestSessionEnqueueAndInbox(t *testing.T) {
 		t.Fatalf("unexpected messages in inbox: %+v", queued)
 	}
 
-	// After popInbox, inbox should be empty
-	if after := sess.popInbox(); len(after) != 0 {
+	// After PopMessages, inbox should be empty
+	if after := sess.PopMessages(); len(after) != 0 {
 		t.Fatalf("expected empty inbox after pop, got %d", len(after))
 	}
 
@@ -121,7 +123,7 @@ func TestSessionEnqueueAndInbox(t *testing.T) {
 	sess.Unlock()
 
 	sess.Enqueue(message.NewUserText("msg3"))
-	queued2 := sess.popInbox()
+	queued2 := sess.PopMessages()
 	if len(queued2) != 1 || msgText(queued2[0]) != "msg3" {
 		t.Fatalf("expected msg3 in inbox when waiting permission, got %+v", queued2)
 	}
@@ -169,7 +171,7 @@ func TestSessionOnTaskUpdateCompletedNotification(t *testing.T) {
 	// Wait briefly for onTaskUpdate to enqueue notification
 	time.Sleep(20 * time.Millisecond)
 
-	queued := sess.popInbox()
+	queued := sess.PopMessages()
 	if len(queued) != 1 {
 		t.Fatalf("expected 1 notification in inbox, got %d", len(queued))
 	}
@@ -232,7 +234,10 @@ func TestSessionBackgroundNotificationDoesNotAppearInTimeline(t *testing.T) {
 	}
 
 	// Enqueue notification directly while session is idle
-	sess.Enqueue(message.NewUserText("<background_task_completed task_id=\"t-1\" status=\"completed\" exit_code=\"0\">\noutput\n</background_task_completed>"))
+	sess.Enqueue(message.NewUserTextMeta(
+		"<background_task_completed task_id=\"t-1\" status=\"completed\" exit_code=\"0\">\noutput\n</background_task_completed>",
+		map[string]any{harness.MetaSystemKind: harness.SystemKindTask},
+	))
 
 	// Wait for the turn to finish
 	if err := sess.Wait(ctx); err != nil {

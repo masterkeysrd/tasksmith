@@ -14,39 +14,55 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/permissions"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/scope"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/std"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tools"
 )
 
-const eventNodeMessage = "on_node_message"
+const (
+	eventNodeMessage      = "on_node_message"
+	eventCommandStarted   = "on_command_started"
+	eventCommandCompleted = "on_command_completed"
+)
 
-func buildGraph(cp graph.Checkpointer, model *llm.Model, container tools.Container, perms permissions.SessionManager, systemPrompt string, inbox func() []message.Message, logger log.Interface) (*graph.Graph[State], error) {
+func buildGraph(cp graph.Checkpointer, model *llm.Model, container tools.Container, perms permissions.SessionManager, systemPrompt string, queue Queue, bash BashRunner, spiller tools.Spiller, logger log.Interface) (*graph.Graph[State], error) {
 	agentNode := NewAgentNode(model, container, systemPrompt, logger)
 	toolsNode := NewToolsNode(container, perms, logger)
-	inboxNode := NewInboxNode(inbox, logger)
+	inboxNode := NewInboxNode(queue, logger)
+	commandNode := NewCommandNode(queue, bash, spiller, logger)
+
+	hasLeadingCommand := func(_ State) bool {
+		item, ok := queue.Peek()
+		return ok && item.Kind == QueueKindCommand
+	}
+	shouldWakeAgent := func(s State) bool {
+		if len(s.Messages) == 0 {
+			return false
+		}
+		last := s.Messages[len(s.Messages)-1]
+		if _, isAssistant := last.(*message.Assistant); isAssistant {
+			return false
+		}
+		return SystemKindOf(last) != SystemKindCommand
+	}
 
 	g, err := graph.New[State]().
 		WithName("harness").
 		WithCheckpointer(cp).
+		AddNode("command", commandNode).
 		AddNode("inbox", inboxNode).
 		AddNode("agent", agentNode).
 		AddNode("tools", toolsNode).
-		AddEdge(graph.START, "inbox").
-		AddConditionalEdge("inbox", "agent", func(s State) bool {
-			if len(s.Messages) == 0 {
-				return false
-			}
-			_, isAssistant := s.Messages[len(s.Messages)-1].(*message.Assistant)
-			return !isAssistant
+		AddEdge(graph.START, "command").
+		AddConditionalEdge("command", "command", hasLeadingCommand).
+		AddConditionalEdge("command", "inbox", func(s State) bool {
+			return !hasLeadingCommand(s)
 		}).
+		AddConditionalEdge("inbox", "agent", shouldWakeAgent).
 		AddConditionalEdge("inbox", graph.END, func(s State) bool {
-			if len(s.Messages) == 0 {
-				return true
-			}
-			_, isAssistant := s.Messages[len(s.Messages)-1].(*message.Assistant)
-			return isAssistant
+			return !shouldWakeAgent(s)
 		}).
 		AddConditionalEdge("agent", "tools", State.HasPendingToolCalls).
-		AddConditionalEdge("agent", "inbox", func(s State) bool {
+		AddConditionalEdge("agent", "command", func(s State) bool {
 			return !s.HasPendingToolCalls()
 		}).
 		AddEdge("tools", "inbox").
@@ -59,7 +75,7 @@ func buildGraph(cp graph.Checkpointer, model *llm.Model, container tools.Contain
 }
 
 func emitNodeMessage(ctx context.Context, msg message.Message) {
-	if msg == nil {
+	if msg == nil || SystemKindOf(msg) != "" {
 		return
 	}
 	if sw, ok := stream.WriterFromContext(ctx); ok && sw != nil {
@@ -68,6 +84,87 @@ func emitNodeMessage(ctx context.Context, msg message.Message) {
 			Data: message.CloneMessage(msg),
 		})
 	}
+}
+
+func emitCommandStarted(ctx context.Context, cmd CommandStarted) {
+	if sw, ok := stream.WriterFromContext(ctx); ok && sw != nil {
+		_ = sw.Write(ctx, stream.Event{
+			Name: eventCommandStarted,
+			Data: cmd,
+		})
+	}
+}
+
+func emitCommandCompleted(ctx context.Context, res CommandCompleted) {
+	if sw, ok := stream.WriterFromContext(ctx); ok && sw != nil {
+		_ = sw.Write(ctx, stream.Event{
+			Name: eventCommandCompleted,
+			Data: res,
+		})
+	}
+}
+
+// CommandNode executes shell commands and injects their outputs into the conversation state.
+type CommandNode struct {
+	queue   Queue
+	bash    BashRunner
+	spiller tools.Spiller
+	logger  log.Interface
+}
+
+func NewCommandNode(queue Queue, bash BashRunner, spiller tools.Spiller, logger log.Interface) *CommandNode {
+	return &CommandNode{
+		queue:   queue,
+		bash:    bash,
+		spiller: spiller,
+		logger:  logger.ForComponent("harness.command"),
+	}
+}
+
+func (n *CommandNode) Execute(ctx context.Context, state State) (graph.Command[State], error) {
+	item, ok := n.queue.PopCommand()
+	if !ok {
+		return graph.Update[State](func(s State) State { return s }), nil
+	}
+	payload, ok := item.Payload.(QueueCommandPayload)
+	if !ok {
+		return graph.Update[State](func(s State) State { return s }), nil
+	}
+	cmdID := item.ID
+	if cmdID == "" || uuid.Validate(cmdID) != nil {
+		if id, err := uuid.NewV7(); err == nil {
+			cmdID = id.String()
+		}
+	}
+
+	emitCommandStarted(ctx, CommandStarted{ID: cmdID, Command: payload.Command})
+
+	w := n.spiller.NewWriter(ctx)
+	defer w.Close()
+
+	res, err := n.bash.Bash(ctx, std.BashRequest{Command: payload.Command, Output: w})
+	w.Close()
+	if err != nil {
+		return nil, err
+	}
+	outText := strings.TrimRight(w.String(), "\r\n")
+
+	emitCommandCompleted(ctx, CommandCompleted{
+		ID:         cmdID,
+		Command:    payload.Command,
+		Output:     outText,
+		ExitCode:   res.ExitCode,
+		DurationMs: res.Duration.Milliseconds(),
+	})
+
+	msgText := fmt.Sprintf("<bash_command command=%q exit_code=\"%d\">\n%s\n</bash_command>", payload.Command, res.ExitCode, outText)
+	msg := message.NewUserTextMeta(msgText, map[string]any{MetaSystemKind: SystemKindCommand})
+	msg.SetID(cmdID)
+
+	return graph.Update[State](func(s State) State {
+		s.Messages = append(s.Messages, msg)
+		return s
+	}), nil
 }
 
 // AgentNode is the primary reasoning and completion node in the harness workflow graph.
@@ -123,28 +220,25 @@ func (n *AgentNode) Execute(ctx context.Context, state State) (graph.Command[Sta
 	}), nil
 }
 
-// InboxNode drains messages from the session inbox and injects them into the conversation state.
+// InboxNode drains messages from the session queue and injects them into the conversation state.
 // It implements [github.com/masterkeysrd/loom/graph.Node].
 type InboxNode struct {
-	inbox  func() []message.Message
+	queue  Queue
 	logger log.Interface
 }
 
-// NewInboxNode constructs a new [InboxNode] bound to the inbox supplier function and logger.
-func NewInboxNode(inbox func() []message.Message, logger log.Interface) *InboxNode {
+// NewInboxNode constructs a new [InboxNode] bound to the queue and logger.
+func NewInboxNode(queue Queue, logger log.Interface) *InboxNode {
 	return &InboxNode{
-		inbox:  inbox,
+		queue:  queue,
 		logger: logger.ForComponent("harness.inbox"),
 	}
 }
 
-// Execute drains queued messages from the inbox, generates IDs if needed, emits notifications,
+// Execute drains queued messages from the queue, generates IDs if needed, emits notifications,
 // and appends them to [State.Messages].
 func (n *InboxNode) Execute(ctx context.Context, state State) (graph.Command[State], error) {
-	if n.inbox == nil {
-		return graph.Update[State](func(s State) State { return s }), nil
-	}
-	queued := n.inbox()
+	queued := n.queue.PopMessages()
 	if len(queued) == 0 {
 		return graph.Update[State](func(s State) State { return s }), nil
 	}
@@ -160,11 +254,8 @@ func (n *InboxNode) Execute(ctx context.Context, state State) (graph.Command[Sta
 				cloned.SetID(id.String())
 			}
 		}
+		emitNodeMessage(ctx, cloned)
 		drained = append(drained, cloned)
-	}
-
-	if len(drained) == 0 {
-		return graph.Update[State](func(s State) State { return s }), nil
 	}
 
 	return graph.Update[State](func(s State) State {

@@ -158,10 +158,19 @@ func TestManagerConcurrentTurnRejection(t *testing.T) {
 		t.Errorf("got.Status = %q, Running = %v; want StatusThinking and Running=true", got.Status, got.Running)
 	}
 
-	// Second Send should fail with ErrSessionRunning
-	err = sess.Send(ctx, SendInput{Message: message.NewUserText("Second")})
+	// Decision while session is running should fail with ErrSessionRunning
+	err = sess.Send(ctx, SendInput{Decision: &tools.PermissionDecision{Kind: tools.DecisionAllowOnce}})
 	if !errors.Is(err, ErrSessionRunning) {
-		t.Errorf("concurrent Send err = %v, want %v", err, ErrSessionRunning)
+		t.Errorf("concurrent Send decision err = %v, want %v", err, ErrSessionRunning)
+	}
+
+	// User message while running should be enqueued without error
+	err = sess.Send(ctx, SendInput{Message: message.NewUserText("Second")})
+	if err != nil {
+		t.Errorf("concurrent Send message err = %v, want nil", err)
+	}
+	if len(sess.VisibleQueue()) != 1 {
+		t.Errorf("expected 1 queued message in VisibleQueue, got %d", len(sess.VisibleQueue()))
 	}
 
 	// Unblock first turn

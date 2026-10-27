@@ -876,3 +876,68 @@ func TestTasksToolWidget(t *testing.T) {
 		t.Fatalf("expected sent input output, got %q", got)
 	}
 }
+
+func TestTimelineEventBashCommand(t *testing.T) {
+	t.Run("SuccessZeroExit", func(t *testing.T) {
+		render := renderComponent(t, 100)
+		entry := api.TimelineEntry{
+			ID:   "cmd-1",
+			Kind: api.TimelineKindCommand,
+			Command: &api.CommandRecord{
+				Command:  "echo hello",
+				ExitCode: 0,
+				Output:   "hello",
+			},
+		}
+		got := render(TimelineEvent(entry))
+		if !strings.Contains(got, "! echo hello") {
+			t.Fatalf("expected header '! echo hello', got %q", got)
+		}
+		if !strings.Contains(got, "⎿  hello") {
+			t.Fatalf("expected body with prefix '⎿  hello', got %q", got)
+		}
+		if strings.Contains(got, "exit") {
+			t.Fatalf("did not expect exit code for exit_code=0, got %q", got)
+		}
+	})
+
+	t.Run("FailureNonZeroExit", func(t *testing.T) {
+		render := renderComponent(t, 100)
+		entry := api.TimelineEntry{
+			ID:   "cmd-2",
+			Kind: api.TimelineKindCommand,
+			Command: &api.CommandRecord{
+				Command:  "ls /nonexistent",
+				ExitCode: 1,
+				Output:   "ls: /nonexistent: No such file or directory",
+			},
+		}
+		got := render(TimelineEvent(entry))
+		if !strings.Contains(got, "! ls /nonexistent (exit 1)") {
+			t.Fatalf("expected header '! ls /nonexistent (exit 1)', got %q", got)
+		}
+		if !strings.Contains(got, "⎿  ls: /nonexistent: No such file or directory") {
+			t.Fatalf("expected output body, got %q", got)
+		}
+	})
+
+	t.Run("NonZeroExitEmptyOutput", func(t *testing.T) {
+		render := renderComponent(t, 100)
+		entry := api.TimelineEntry{
+			ID:   "cmd-3",
+			Kind: api.TimelineKindCommand,
+			Command: &api.CommandRecord{
+				Command:  "false",
+				ExitCode: 1,
+				Output:   "",
+			},
+		}
+		got := render(TimelineEvent(entry))
+		if !strings.Contains(got, "! false (exit 1)") {
+			t.Fatalf("expected header '! false (exit 1)', got %q", got)
+		}
+		if !strings.Contains(got, "⎿  (no output)") {
+			t.Fatalf("expected '(no output)', got %q", got)
+		}
+	})
+}

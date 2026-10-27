@@ -29,7 +29,7 @@ type State struct {
 	done            chan struct{}                       `json:"-"`
 	err             error                               `json:"-"`
 	decisions       map[string]tools.PermissionDecision `json:"-"`
-	inbox           []message.Message                   `json:"-"`
+	queue           []QueueItem                         `json:"-"`
 	titleGenerating bool                                `json:"-"`
 }
 
@@ -59,6 +59,19 @@ func (s *State) Clone() *State {
 			perms[i] = p
 		}
 	}
+	var q []QueueItem
+	if len(s.queue) > 0 {
+		q = make([]QueueItem, len(s.queue))
+		for i, it := range s.queue {
+			switch p := it.Payload.(type) {
+			case QueueMessagePayload:
+				it.Payload = QueueMessagePayload{Message: message.CloneMessage(p.Message)}
+			case QueueTaskPayload:
+				it.Payload = QueueTaskPayload{Message: message.CloneMessage(p.Message)}
+			}
+			q[i] = it
+		}
+	}
 	return &State{
 		Status:             status,
 		Running:            s.Running,
@@ -69,5 +82,6 @@ func (s *State) Clone() *State {
 		StartedAt:          s.StartedAt,
 		FinishedAt:         s.FinishedAt,
 		decisions:          make(map[string]tools.PermissionDecision),
+		queue:              q,
 	}
 }

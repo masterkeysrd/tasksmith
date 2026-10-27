@@ -553,3 +553,130 @@ func TestConversationPermissionSlotEnqueueAndResolution(t *testing.T) {
 		t.Errorf("expected transcript items not to increase on TimelineKindPermission (was %d, now %d)", initialTranscriptCount, afterTranscriptCount)
 	}
 }
+
+func TestConversationOptimisticQueueingAndEventRemovals(t *testing.T) {
+	ResetStream()
+	ClearTranscript()
+	defer ResetStream()
+	defer ClearTranscript()
+
+	acc := newConversationAccumulator()
+	acc.setSessionID("sess-queue-test")
+
+	// 1. Initial turn starts
+	acc.addPendingUser("user-1", "Primary prompt")
+	st := GetStream()
+	if !st.Streaming {
+		t.Fatal("expected Streaming to be true")
+	}
+	if st.Queue != nil {
+		t.Fatalf("expected nil Queue on initial turn, got %+v", st.Queue)
+	}
+
+	// 2. Queue user message while turn is running
+	acc.addPendingUser("user-2", "Queued prompt message")
+	st = GetStream()
+	if st.Queue == nil || len(*st.Queue) != 1 {
+		t.Fatalf("expected 1 item in Queue, got %+v", st.Queue)
+	}
+	q1 := (*st.Queue)[0]
+	if q1.ID != "user-2" || q1.Kind != api.QueueKindMessage {
+		t.Fatalf("expected QueueKindMessage item user-2, got %+v", q1)
+	}
+
+	// 3. Queue command while turn is running
+	acc.addPendingCommand("cmd-1", "git status")
+	st = GetStream()
+	if st.Queue == nil || len(*st.Queue) != 2 {
+		t.Fatalf("expected 2 items in Queue, got %+v", st.Queue)
+	}
+	q2 := (*st.Queue)[1]
+	if q2.ID != "cmd-1" || q2.Kind != api.QueueKindCommand {
+		t.Fatalf("expected QueueKindCommand item cmd-1, got %+v", q2)
+	}
+
+	// 4. Dedup check: re-adding existing ID does not duplicate
+	acc.addPendingUser("user-2", "Queued prompt message")
+	st = GetStream()
+	if len(*st.Queue) != 2 {
+		t.Fatalf("expected 2 items in Queue after dedup attempt, got %d", len(*st.Queue))
+	}
+
+	// 5. Cancel user-2 by ID
+	acc.cancelPendingUser("user-2", errors.New("network failure"))
+	st = GetStream()
+	if len(*st.Queue) != 1 || (*st.Queue)[0].ID != "cmd-1" {
+		t.Fatalf("expected only cmd-1 in Queue after cancel, got %+v", st.Queue)
+	}
+
+	// 6. EventCommandStarted for cmd-1 removes it from queue and sets pendingCommand
+	acc.applyEvent(api.Event{
+		Type: api.EventCommandStarted,
+		Payload: api.CommandStartedEvent{
+			SessionID: "sess-queue-test",
+			ID:        "cmd-1",
+			Command:   "git status",
+		},
+	})
+	st = GetStream()
+	if st.Queue != nil {
+		t.Fatalf("expected empty Queue after cmd-1 started, got %+v", st.Queue)
+	}
+	if st.PendingCommand != "git status" {
+		t.Fatalf("expected PendingCommand 'git status', got %q", st.PendingCommand)
+	}
+
+	// 7. Enqueue user-3 and remove via EventEntryAdded
+	acc.addPendingUser("user-3", "Third message")
+	st = GetStream()
+	if st.Queue == nil || len(*st.Queue) != 1 || (*st.Queue)[0].ID != "user-3" {
+		t.Fatalf("expected user-3 in Queue, got %+v", st.Queue)
+	}
+
+	acc.applyEvent(api.Event{
+		Type: api.EventEntryAdded,
+		Payload: api.EntryAddedEvent{
+			SessionID: "sess-queue-test",
+			Entry: api.TimelineEntry{
+				ID:   "entry-u3",
+				Kind: api.TimelineKindMessage,
+				Message: &api.Message{
+					ID:        "user-3",
+					Role:      api.RoleUser,
+					CreatedAt: time.Now().UTC(),
+					Content: []api.Block{
+						{
+							Type: api.BlockText,
+							Text: "Third message",
+						},
+					},
+				},
+			},
+		},
+	})
+	st = GetStream()
+	if st.Queue != nil {
+		t.Fatalf("expected empty Queue after EventEntryAdded for user-3, got %+v", st.Queue)
+	}
+
+	// 8. SeedQueue and CancelTurn
+	acc.SeedQueue([]api.QueueItem{
+		{
+			ID:   "seed-1",
+			Kind: api.QueueKindCommand,
+			Payload: api.QueueCommandPayload{
+				Command: "ls -l",
+			},
+		},
+	})
+	st = GetStream()
+	if st.Queue == nil || len(*st.Queue) != 1 || (*st.Queue)[0].ID != "seed-1" {
+		t.Fatalf("expected seed-1 in Queue, got %+v", st.Queue)
+	}
+
+	acc.cancelTurn()
+	st = GetStream()
+	if st.Queue != nil {
+		t.Fatalf("expected nil Queue after cancelTurn, got %+v", st.Queue)
+	}
+}

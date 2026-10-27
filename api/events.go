@@ -46,6 +46,8 @@ const (
 	EventPermissionRequested EventType = "permission_requested"
 	EventCompleted           EventType = "completed"
 	EventTaskUpdated         EventType = "task_updated"
+	EventCommandStarted      EventType = "command_started"
+	EventQueueUpdated        EventType = "queue_updated"
 	EventError               EventType = "error"
 )
 
@@ -133,6 +135,23 @@ type TaskUpdatedEvent struct {
 }
 
 func (TaskUpdatedEvent) EventType() string { return string(EventTaskUpdated) }
+
+// CommandStartedEvent represents the payload for an [EventCommandStarted] event.
+type CommandStartedEvent struct {
+	SessionID string `json:"session_id"`
+	ID        string `json:"id"`
+	Command   string `json:"command"`
+}
+
+func (CommandStartedEvent) EventType() string { return string(EventCommandStarted) }
+
+// QueueUpdatedEvent represents the payload for an [EventQueueUpdated] event.
+type QueueUpdatedEvent struct {
+	SessionID string      `json:"session_id"`
+	Queue     []QueueItem `json:"queue,omitempty"`
+}
+
+func (QueueUpdatedEvent) EventType() string { return string(EventQueueUpdated) }
 
 // ErrorEvent represents the payload for an [EventError] event.
 type ErrorEvent struct {
@@ -233,6 +252,18 @@ func (e *Event) UnmarshalJSON(data []byte) error {
 		var p TaskUpdatedEvent
 		if err := json.Unmarshal(raw, &p); err != nil {
 			return fmt.Errorf("api: unmarshal task_updated payload: %w", err)
+		}
+		e.Payload = p
+	case EventCommandStarted:
+		var p CommandStartedEvent
+		if err := json.Unmarshal(raw, &p); err != nil {
+			return fmt.Errorf("api: unmarshal command_started payload: %w", err)
+		}
+		e.Payload = p
+	case EventQueueUpdated:
+		var p QueueUpdatedEvent
+		if err := json.Unmarshal(raw, &p); err != nil {
+			return fmt.Errorf("api: unmarshal queue_updated payload: %w", err)
 		}
 		e.Payload = p
 	case EventError:

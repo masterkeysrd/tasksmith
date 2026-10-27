@@ -64,6 +64,10 @@ func (s *sqliteTimeline) Append(ctx context.Context, entry *Entry) error {
 		if entry.Message == nil {
 			return ErrInvalidEntry
 		}
+	case KindCommand:
+		if entry.Command == nil || strings.TrimSpace(entry.Command.Command) == "" {
+			return ErrInvalidEntry
+		}
 	case KindModel:
 		if entry.Model == nil || strings.TrimSpace(entry.Model.To) == "" {
 			return ErrInvalidEntry
@@ -118,6 +122,11 @@ func (s *sqliteTimeline) Append(ctx context.Context, entry *Entry) error {
 		payload, err = json.Marshal(message.MessageList{entry.Message})
 		if err != nil {
 			return fmt.Errorf("timeline: marshal message %q: %w", entry.ID, err)
+		}
+	case KindCommand:
+		payload, err = json.Marshal(entry.Command)
+		if err != nil {
+			return fmt.Errorf("timeline: marshal command %q: %w", entry.ID, err)
 		}
 	case KindModel:
 		payload, err = json.Marshal(entry.Model)
@@ -313,6 +322,12 @@ func scanEntry(r rowScanner) (*Entry, error) {
 			return nil, err
 		}
 		entry.Message = msg
+	case KindCommand:
+		var c CommandRecord
+		if err := json.Unmarshal(payload, &c); err != nil {
+			return nil, fmt.Errorf("timeline: unmarshal command record for %q: %w", id, err)
+		}
+		entry.Command = &c
 	case KindModel:
 		var m ModelChange
 		if err := json.Unmarshal(payload, &m); err != nil {

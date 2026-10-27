@@ -25,6 +25,7 @@ type Kind string
 
 const (
 	KindMessage     Kind = "message"
+	KindCommand     Kind = "command"
 	KindModel       Kind = "model"
 	KindEffort      Kind = "effort"
 	KindAgent       Kind = "agent"
@@ -32,6 +33,14 @@ const (
 	KindPermission  Kind = "permission"
 	KindInterrupted Kind = "interrupted"
 )
+
+// CommandRecord captures a direct user shell command (!) and its output.
+type CommandRecord struct {
+	Command    string `json:"command"`
+	Output     string `json:"output,omitempty"`
+	ExitCode   int    `json:"exit_code"`
+	DurationMs int64  `json:"duration_ms,omitempty"`
+}
 
 // ModelChange captures a transition of the active LLM / model.
 type ModelChange struct {
@@ -72,6 +81,7 @@ type Entry struct {
 	CreatedAt time.Time `json:"created_at"`
 
 	Message    message.Message   `json:"message,omitempty"`
+	Command    *CommandRecord    `json:"command,omitempty"`
 	Model      *ModelChange      `json:"model,omitempty"`
 	Effort     *EffortChange     `json:"effort,omitempty"`
 	Agent      *AgentChange      `json:"agent,omitempty"`
@@ -84,6 +94,10 @@ func (e Entry) Clone() Entry {
 	cp := e
 	if e.Message != nil {
 		cp.Message = message.CloneMessage(e.Message)
+	}
+	if e.Command != nil {
+		c := *e.Command
+		cp.Command = &c
 	}
 	if e.Model != nil {
 		m := *e.Model
@@ -227,6 +241,16 @@ func NewPermissionEntry(sessionID string, record PermissionRecord) *Entry {
 		SessionID:  sessionID,
 		Kind:       KindPermission,
 		Permission: &r,
+	}
+}
+
+// NewCommandEntry creates an Entry initialized with a CommandRecord payload.
+func NewCommandEntry(sessionID string, cmd CommandRecord) *Entry {
+	c := cmd
+	return &Entry{
+		SessionID: sessionID,
+		Kind:      KindCommand,
+		Command:   &c,
 	}
 }
 

@@ -88,6 +88,8 @@ type StreamState struct {
 	Streaming         bool
 	WaitingPermission bool
 	Status            api.SessionStatus
+	PendingCommand    string
+	Queue             *[]api.QueueItem
 }
 
 var stream = kites.Create(StreamState{})
@@ -132,18 +134,21 @@ type conversationMessage struct {
 // conversationAccumulator folds TimelineEntries and SSE events into view messages,
 // splitting them into a finalized prefix flushed to Transcript and a mutable suffix in StreamState.
 type conversationAccumulator struct {
-	mu            sync.Mutex
-	sessionID     string
-	messages      []conversationMessage
-	permissions   []api.PermissionRequest
-	status        StreamStatus
-	sessionStatus api.SessionStatus
-	err           error
-	draft         int
-	pendingUser   *Message
-	flushedIDs    map[string]bool
-	identities    map[string]string
-	nextDraft     uint64
+	mu               sync.Mutex
+	sessionID        string
+	messages         []conversationMessage
+	permissions      []api.PermissionRequest
+	status           StreamStatus
+	sessionStatus    api.SessionStatus
+	err              error
+	draft            int
+	pendingUser      *Message
+	pendingCommand   string
+	pendingCommandID string
+	queue            []api.QueueItem
+	flushedIDs       map[string]bool
+	identities       map[string]string
+	nextDraft        uint64
 }
 
 var globalConversation = newConversationAccumulator()
@@ -180,6 +185,9 @@ func (acc *conversationAccumulator) reset() {
 	acc.err = nil
 	acc.draft = -1
 	acc.pendingUser = nil
+	acc.pendingCommand = ""
+	acc.pendingCommandID = ""
+	acc.queue = nil
 	acc.flushedIDs = make(map[string]bool)
 	acc.identities = make(map[string]string)
 	acc.nextDraft = 0
@@ -197,6 +205,9 @@ func (acc *conversationAccumulator) setSessionID(id string) {
 		acc.err = nil
 		acc.draft = -1
 		acc.pendingUser = nil
+		acc.pendingCommand = ""
+		acc.pendingCommandID = ""
+		acc.queue = nil
 		acc.flushedIDs = make(map[string]bool)
 		acc.identities = make(map[string]string)
 		acc.nextDraft = 0
@@ -221,6 +232,30 @@ func (acc *conversationAccumulator) messageID(sourceID, draftID string) string {
 func (acc *conversationAccumulator) addPendingUser(id, text string) {
 	acc.mu.Lock()
 	defer acc.mu.Unlock()
+	if acc.status == StreamRunning || acc.status == StreamWaitingPermission {
+		if !slices.ContainsFunc(acc.queue, func(item api.QueueItem) bool { return item.ID == id }) {
+			acc.queue = append(acc.queue, api.QueueItem{
+				ID:   id,
+				Kind: api.QueueKindMessage,
+				Payload: api.QueueMessagePayload{
+					Message: api.Message{
+						ID:        id,
+						Role:      api.RoleUser,
+						CreatedAt: time.Now().UTC(),
+						Content: []api.Block{
+							{
+								Type: api.BlockText,
+								Text: text,
+							},
+						},
+					},
+				},
+				CreatedAt: time.Now().UTC(),
+			})
+		}
+		acc.publishLocked()
+		return
+	}
 	acc.status = StreamRunning
 	acc.sessionStatus = api.StatusThinking
 	acc.pendingUser = &Message{
@@ -239,15 +274,51 @@ func (acc *conversationAccumulator) addPendingUser(id, text string) {
 	acc.publishLocked()
 }
 
+func (acc *conversationAccumulator) addPendingCommand(id, cmd string) {
+	acc.mu.Lock()
+	defer acc.mu.Unlock()
+	if acc.status == StreamRunning || acc.status == StreamWaitingPermission {
+		if !slices.ContainsFunc(acc.queue, func(item api.QueueItem) bool { return item.ID == id }) {
+			acc.queue = append(acc.queue, api.QueueItem{
+				ID:   id,
+				Kind: api.QueueKindCommand,
+				Payload: api.QueueCommandPayload{
+					Command: cmd,
+				},
+				CreatedAt: time.Now().UTC(),
+			})
+		}
+		acc.publishLocked()
+		return
+	}
+	acc.status = StreamRunning
+	acc.sessionStatus = api.StatusExecuting
+	acc.pendingCommandID = id
+	acc.pendingCommand = cmd
+	acc.publishLocked()
+}
+
 func (acc *conversationAccumulator) cancelPendingUser(id string, err error) {
 	acc.mu.Lock()
 	defer acc.mu.Unlock()
+	wasPending := false
 	if acc.pendingUser != nil && acc.pendingUser.ID == id {
 		acc.pendingUser = nil
+		wasPending = true
 	}
-	acc.status = StreamFailed
-	acc.sessionStatus = api.StatusIdle
-	acc.err = err
+	if acc.pendingCommandID == id {
+		acc.pendingCommand = ""
+		acc.pendingCommandID = ""
+		wasPending = true
+	}
+	acc.queue = slices.DeleteFunc(acc.queue, func(item api.QueueItem) bool {
+		return item.ID == id
+	})
+	if wasPending {
+		acc.status = StreamFailed
+		acc.sessionStatus = api.StatusIdle
+		acc.err = err
+	}
 	acc.publishLocked()
 	AppendError("Error", err.Error())
 }
@@ -259,6 +330,9 @@ func (acc *conversationAccumulator) cancelTurn() {
 	acc.sessionStatus = api.StatusIdle
 	acc.err = nil
 	acc.pendingUser = nil
+	acc.pendingCommand = ""
+	acc.pendingCommandID = ""
+	acc.queue = nil
 	acc.clearPermissionsLocked()
 	acc.discardDraftLocked()
 	acc.publishLocked()
@@ -305,11 +379,20 @@ func (acc *conversationAccumulator) applyEvent(event api.Event) {
 		}
 
 		if p.Entry.Kind != api.TimelineKindMessage {
+			if p.Entry.Kind == api.TimelineKindCommand {
+				acc.pendingCommand = ""
+				acc.pendingCommandID = ""
+				acc.publishLocked()
+				AppendTimelineEntry(p.Entry)
+				return
+			}
 			if p.Entry.Kind == api.TimelineKindInterrupted {
 				acc.status = StreamIdle
 				acc.sessionStatus = api.StatusIdle
 				acc.err = nil
 				acc.pendingUser = nil
+				acc.pendingCommand = ""
+				acc.pendingCommandID = ""
 				acc.clearPermissionsLocked()
 				acc.discardDraftLocked()
 				acc.publishLocked()
@@ -363,6 +446,9 @@ func (acc *conversationAccumulator) applyEvent(event api.Event) {
 		if acc.pendingUser != nil && acc.pendingUser.ID == msg.ID {
 			acc.pendingUser = nil
 		}
+		acc.queue = slices.DeleteFunc(acc.queue, func(item api.QueueItem) bool {
+			return item.ID == msg.ID
+		})
 
 		_ = acc.addMessageLocked(msg)
 		if msg.Role == api.RoleUser {
@@ -446,6 +532,34 @@ func (acc *conversationAccumulator) applyEvent(event api.Event) {
 		}
 		UpsertTask(p.Task)
 
+	case api.EventCommandStarted:
+		p, ok := event.Payload.(api.CommandStartedEvent)
+		if !ok {
+			return
+		}
+		if acc.sessionID != "" && p.SessionID != acc.sessionID {
+			return
+		}
+		acc.queue = slices.DeleteFunc(acc.queue, func(item api.QueueItem) bool {
+			return item.ID == p.ID
+		})
+		acc.status = StreamRunning
+		acc.sessionStatus = api.StatusExecuting
+		acc.pendingCommandID = p.ID
+		acc.pendingCommand = p.Command
+		acc.publishLocked()
+
+	case api.EventQueueUpdated:
+		p, ok := event.Payload.(api.QueueUpdatedEvent)
+		if !ok {
+			return
+		}
+		if acc.sessionID != "" && p.SessionID != acc.sessionID {
+			return
+		}
+		acc.queue = slices.Clone(p.Queue)
+		acc.publishLocked()
+
 	case api.EventCompleted:
 		p, ok := event.Payload.(api.CompletedEvent)
 		if !ok {
@@ -454,6 +568,8 @@ func (acc *conversationAccumulator) applyEvent(event api.Event) {
 		if acc.sessionID != "" && p.SessionID != acc.sessionID {
 			return
 		}
+		acc.pendingCommand = ""
+		acc.pendingCommandID = ""
 		acc.status, acc.err = StreamCompleted, nil
 		acc.sessionStatus = api.StatusIdle
 		acc.discardDraftLocked()
@@ -468,6 +584,8 @@ func (acc *conversationAccumulator) applyEvent(event api.Event) {
 		if acc.sessionID != "" && p.SessionID != acc.sessionID {
 			return
 		}
+		acc.pendingCommand = ""
+		acc.pendingCommandID = ""
 		acc.status = StreamFailed
 		acc.sessionStatus = api.StatusIdle
 		if p.Error == "" {
@@ -532,6 +650,9 @@ func (acc *conversationAccumulator) loadTimeline(entries []api.TimelineEntry) {
 			if acc.pendingUser != nil && acc.pendingUser.ID == entry.Message.ID {
 				acc.pendingUser = nil
 			}
+			acc.queue = slices.DeleteFunc(acc.queue, func(item api.QueueItem) bool {
+				return item.ID == entry.Message.ID
+			})
 			_ = acc.addMessageLocked(*entry.Message)
 		}
 	}
@@ -546,6 +667,19 @@ func (acc *conversationAccumulator) SeedPermissions(requests []api.PermissionReq
 	if len(acc.permissions) > 0 {
 		acc.status, acc.err = StreamWaitingPermission, nil
 	}
+	acc.publishLocked()
+}
+
+// SeedQueue imports initial queue items (e.g. from session state) into the active conversation queue.
+func SeedQueue(items []api.QueueItem) {
+	globalConversation.SeedQueue(items)
+}
+
+// SeedQueue imports initial queue items (e.g. from session state) into the active conversation queue.
+func (acc *conversationAccumulator) SeedQueue(items []api.QueueItem) {
+	acc.mu.Lock()
+	defer acc.mu.Unlock()
+	acc.queue = slices.Clone(items)
 	acc.publishLocked()
 }
 
@@ -681,7 +815,7 @@ func (acc *conversationAccumulator) publishLocked() {
 		msgsPtr = &cp
 	}
 
-	isStreaming := acc.status == StreamRunning || acc.status == StreamWaitingPermission || acc.pendingUser != nil ||
+	isStreaming := acc.status == StreamRunning || acc.status == StreamWaitingPermission || acc.pendingUser != nil || acc.pendingCommand != "" ||
 		(msgsPtr != nil && len(*msgsPtr) > 0 && acc.status != StreamIdle && acc.status != StreamCompleted && acc.status != StreamFailed)
 	isWaiting := acc.status == StreamWaitingPermission || len(acc.permissions) > 0
 
@@ -698,12 +832,20 @@ func (acc *conversationAccumulator) publishLocked() {
 		sessionStatus = api.StatusIdle
 	}
 
+	var queuePtr *[]api.QueueItem
+	if len(acc.queue) > 0 {
+		cp := slices.Clone(acc.queue)
+		queuePtr = &cp
+	}
+
 	stream.Set(func(StreamState) StreamState {
 		return StreamState{
 			Messages:          msgsPtr,
 			Streaming:         isStreaming,
 			WaitingPermission: isWaiting,
 			Status:            sessionStatus,
+			PendingCommand:    acc.pendingCommand,
+			Queue:             queuePtr,
 		}
 	})
 }

@@ -2,6 +2,7 @@ package components
 
 import (
 	"encoding/json"
+	"image/color"
 	"os"
 	"path/filepath"
 	"strings"
@@ -21,6 +22,9 @@ import (
 
 // maxHistoryEntries is the maximum number of entries kept in prompt history.
 const maxHistoryEntries = 500
+
+// BashModeHint is the status line hint shown when interactive bash mode is active.
+const BashModeHint = "activated bash mode · esc to cancel"
 
 // ComposerProps defines the properties for the Composer functional component.
 type ComposerProps struct {
@@ -193,6 +197,7 @@ var Composer = trail.FC("Composer", func(props ComposerProps) trail.Node {
 	scheme := theme.UseTheme()
 
 	draft, setDraft := kitex.UseState(DraftEdit{})
+	bashMode, setBashMode := kitex.UseState(false)
 	history := usePromptHistory()
 
 	disabled := props.Disabled || hide
@@ -200,7 +205,7 @@ var Composer = trail.FC("Composer", func(props ComposerProps) trail.Node {
 		Engine:   props.Autocomplete,
 		Value:    draft().Value,
 		Cursor:   draft().Cursor,
-		Disabled: disabled,
+		Disabled: disabled || bashMode(),
 	})
 
 	inputRef := kitex.UseRef[dom.Element](nil)
@@ -242,6 +247,10 @@ var Composer = trail.FC("Composer", func(props ComposerProps) trail.Node {
 	kitex.UseLayoutEffect(func() {
 		if ctrlCPending {
 			replaceDraft(DraftEdit{})
+			if bashMode() {
+				setBashMode(false)
+				store.SetHint(store.DefaultHint)
+			}
 		}
 	}, []any{ctrlCPending})
 
@@ -253,6 +262,14 @@ var Composer = trail.FC("Composer", func(props ComposerProps) trail.Node {
 		kitex.PostMacro(syncDraft)
 		current := readDraft()
 		isCurrent := current.Value == auto.Result.Input && current.Cursor == auto.Result.Cursor
+
+		if !bashMode() && current.Value == "" && (ke.Text == "!" || ke.MatchString("!")) {
+			e.PreventDefault()
+			e.StopPropagation()
+			setBashMode(true)
+			store.SetHint(BashModeHint)
+			return
+		}
 
 		switch {
 		case ke.MatchString("shift+tab"):
@@ -267,11 +284,25 @@ var Composer = trail.FC("Composer", func(props ComposerProps) trail.Node {
 		case ke.MatchString("esc", "escape"):
 			e.PreventDefault()
 			e.StopPropagation()
+			if bashMode() {
+				setBashMode(false)
+				store.SetHint(store.DefaultHint)
+				return
+			}
 			if auto.Dismiss() {
 				return
 			}
 			if props.OnCancel != nil {
 				props.OnCancel()
+			}
+
+		case ke.MatchString("backspace"):
+			if bashMode() && current.Value == "" {
+				e.PreventDefault()
+				e.StopPropagation()
+				setBashMode(false)
+				store.SetHint(store.DefaultHint)
+				return
 			}
 
 		case ke.MatchString("tab"):
@@ -298,8 +329,25 @@ var Composer = trail.FC("Composer", func(props ComposerProps) trail.Node {
 			}
 			e.PreventDefault()
 			e.StopPropagation()
-			if prevVal, ok := history.Up(current.Value); ok {
-				replaceDraft(DraftEdit{Value: prevVal, Cursor: len(prevVal)})
+			valToPass := current.Value
+			if bashMode() && current.Value != "" {
+				valToPass = "!" + current.Value
+			}
+			if prevVal, ok := history.Up(valToPass); ok {
+				if strings.HasPrefix(prevVal, "!") {
+					if !bashMode() {
+						setBashMode(true)
+						store.SetHint(BashModeHint)
+					}
+					stripped := strings.TrimPrefix(prevVal, "!")
+					replaceDraft(DraftEdit{Value: stripped, Cursor: len(stripped)})
+				} else {
+					if bashMode() {
+						setBashMode(false)
+						store.SetHint(store.DefaultHint)
+					}
+					replaceDraft(DraftEdit{Value: prevVal, Cursor: len(prevVal)})
+				}
 			}
 
 		case ke.MatchString("down"):
@@ -317,7 +365,20 @@ var Composer = trail.FC("Composer", func(props ComposerProps) trail.Node {
 			e.PreventDefault()
 			e.StopPropagation()
 			if nextVal, ok := history.Down(); ok {
-				replaceDraft(DraftEdit{Value: nextVal, Cursor: len(nextVal)})
+				if strings.HasPrefix(nextVal, "!") {
+					if !bashMode() {
+						setBashMode(true)
+						store.SetHint(BashModeHint)
+					}
+					stripped := strings.TrimPrefix(nextVal, "!")
+					replaceDraft(DraftEdit{Value: stripped, Cursor: len(stripped)})
+				} else {
+					if bashMode() {
+						setBashMode(false)
+						store.SetHint(store.DefaultHint)
+					}
+					replaceDraft(DraftEdit{Value: nextVal, Cursor: len(nextVal)})
+				}
 			}
 
 		case ke.MatchString("shift+enter", "alt+enter"):
@@ -335,6 +396,19 @@ var Composer = trail.FC("Composer", func(props ComposerProps) trail.Node {
 		case ke.MatchString("enter"):
 			e.PreventDefault()
 			e.StopPropagation()
+			if bashMode() {
+				text := strings.TrimSpace(current.Value)
+				replaceDraft(DraftEdit{})
+				setBashMode(false)
+				store.SetHint(store.DefaultHint)
+				if text != "" {
+					history.Add("!" + text)
+					if props.OnSubmit != nil {
+						props.OnSubmit("!" + text)
+					}
+				}
+				return
+			}
 			if isCurrent && auto.IsOpen {
 				if auto.IsLoading || auto.Error != nil || len(auto.Result.Candidates) == 0 {
 					return
@@ -389,8 +463,23 @@ var Composer = trail.FC("Composer", func(props ComposerProps) trail.Node {
 		Width(style.Percent(100))
 
 	promptStyle := style.S().Bold(true).Margin(0, 1, 0, 0)
-	if scheme != nil && scheme.Color.Icon.Primary != nil {
-		promptStyle = promptStyle.Foreground(scheme.Color.Icon.Primary)
+	promptIndicator := ">"
+	if bashMode() {
+		promptIndicator = "!"
+		var magentaColor color.Color
+		if scheme != nil {
+			magentaColor = scheme.Color.Text.Magenta
+			if magentaColor == nil {
+				magentaColor = scheme.Color.Icon.Primary
+			}
+		}
+		if magentaColor != nil {
+			promptStyle = promptStyle.Foreground(magentaColor)
+		}
+	} else {
+		if scheme != nil && scheme.Color.Icon.Primary != nil {
+			promptStyle = promptStyle.Foreground(scheme.Color.Icon.Primary)
+		}
 	}
 
 	outerStyle := style.S().
@@ -409,7 +498,7 @@ var Composer = trail.FC("Composer", func(props ComposerProps) trail.Node {
 		},
 			trail.Span(trail.SpanProps{
 				Style: promptStyle,
-			}, trail.Text(">")),
+			}, trail.Text(promptIndicator)),
 			kitex.TextArea(kitex.TextAreaProps{
 				Ref:      inputRef,
 				Value:    draft().Value,

@@ -532,9 +532,12 @@ func TestBackgroundTurnSurvivesClientDisconnect(t *testing.T) {
 	turnStarted := make(chan struct{})
 	releaseTurn := make(chan struct{})
 
+	var startOnce sync.Once
 	prov := &fakeProvider{
 		chunkHandler: func(runCtx context.Context, req *llm.Request) (llm.StreamResponse, error) {
-			close(turnStarted)
+			startOnce.Do(func() {
+				close(turnStarted)
+			})
 			select {
 			case <-releaseTurn:
 			case <-runCtx.Done():
@@ -582,10 +585,10 @@ func TestBackgroundTurnSurvivesClientDisconnect(t *testing.T) {
 		t.Errorf("GetSession.Status = %q, want %q", runningSess.Status, api.StatusThinking)
 	}
 
-	// Concurrent Send while running must return 409 Conflict
+	// Concurrent Decision while running must return 409 Conflict
 	var apiErr *api.APIError
-	if err := cli.Send(ctx, sess.ID, api.SendRequest{Content: "concurrent"}); !errors.As(err, &apiErr) || apiErr.StatusCode != 409 {
-		t.Errorf("concurrent Send error = %v, want 409 Conflict", err)
+	if err := cli.Send(ctx, sess.ID, api.SendRequest{Decision: &api.PermissionDecision{Kind: api.DecisionAllowOnce}}); !errors.As(err, &apiErr) || apiErr.StatusCode != 409 {
+		t.Errorf("concurrent Decision error = %v, want 409 Conflict", err)
 	}
 
 	// Disconnect the client HTTP request mid-turn!

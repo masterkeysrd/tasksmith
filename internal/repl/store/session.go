@@ -98,6 +98,9 @@ func InitSession(ctx context.Context, c *client.Client, opts InitSessionOptions)
 		if len(sess.PendingPermissions) > 0 {
 			globalConversation.SeedPermissions(sess.PendingPermissions)
 		}
+		if len(sess.Queue) > 0 {
+			SeedQueue(sess.Queue)
+		}
 		startSessionStreamWatcher(subCtx, sid)
 	}
 
@@ -263,6 +266,48 @@ func Send(text string) {
 		err = c.Send(ctx, sess.ID, api.SendRequest{
 			ID:      msgID,
 			Content: text,
+		})
+		if err != nil {
+			globalConversation.cancelPendingUser(msgID, err)
+		}
+	}()
+}
+
+// SendCommand executes a direct user shell command (!) in the active session sandbox
+// without triggering an LLM turn. If no session exists yet, one is created lazily.
+func SendCommand(cmd string) {
+	trimmed := strings.TrimSpace(cmd)
+	if trimmed == "" {
+		return
+	}
+	FreezeTranscript()
+	msgID := uuid.Must(uuid.NewV7()).String()
+	globalConversation.addPendingCommand(msgID, trimmed)
+
+	sessMu.Lock()
+	c := activeClient
+	ctx := activeCtx
+	sessMu.Unlock()
+
+	if c == nil {
+		globalConversation.cancelPendingUser(msgID, errors.New("repl: no active client"))
+		return
+	}
+
+	go func() {
+		if ctx == nil || ctx.Err() != nil {
+			ctx = context.Background()
+		}
+
+		sess, err := getOrCreateSession(ctx)
+		if err != nil {
+			globalConversation.cancelPendingUser(msgID, err)
+			return
+		}
+
+		err = c.Send(ctx, sess.ID, api.SendRequest{
+			ID:      msgID,
+			Command: trimmed,
 		})
 		if err != nil {
 			globalConversation.cancelPendingUser(msgID, err)
@@ -659,6 +704,9 @@ func SwitchSession(sessionID string) {
 		}
 		if len(loaded.PendingPermissions) > 0 {
 			globalConversation.SeedPermissions(loaded.PendingPermissions)
+		}
+		if len(loaded.Queue) > 0 {
+			SeedQueue(loaded.Queue)
 		}
 		startSessionStreamWatcher(ctx, loaded.ID)
 	}()

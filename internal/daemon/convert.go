@@ -29,12 +29,14 @@ func toAPISession(sess *session.Session) api.Session {
 	status := api.StatusIdle
 	var perms []api.PermissionRequest
 	var ts []api.Task
+	var queueItems []api.QueueItem
 	if sess.State != nil {
 		if sess.Status != "" {
 			status = api.SessionStatus(sess.Status)
 		}
 		perms = toAPIPermissionRequests(sess.PendingPermissions)
 		ts = toAPITasks(sess.State.Tasks)
+		queueItems = toAPIQueueItems(sess.VisibleQueue())
 	}
 	return api.Session{
 		ID:    sess.ID,
@@ -48,8 +50,55 @@ func toAPISession(sess *session.Session) api.Session {
 		Status:             status,
 		PendingPermissions: perms,
 		Tasks:              ts,
+		Queue:              queueItems,
 		CreatedAt:          sess.CreatedAt,
 		UpdatedAt:          sess.UpdatedAt,
+	}
+}
+
+func toAPIQueueItems(items []session.QueueItem) []api.QueueItem {
+	if len(items) == 0 {
+		return nil
+	}
+	out := make([]api.QueueItem, 0, len(items))
+	for _, it := range items {
+		if apiItem, ok := toAPIQueueItem(it); ok {
+			out = append(out, apiItem)
+		}
+	}
+	return out
+}
+
+func toAPIQueueItem(it session.QueueItem) (api.QueueItem, bool) {
+	switch it.Kind {
+	case session.QueueKindMessage:
+		p, ok := it.Payload.(session.QueueMessagePayload)
+		if !ok {
+			return api.QueueItem{}, false
+		}
+		apiMsg, err := toAPIMessage(p.Message)
+		if err != nil || apiMsg == nil {
+			return api.QueueItem{}, false
+		}
+		return api.QueueItem{
+			ID:        it.ID,
+			Kind:      api.QueueKindMessage,
+			Payload:   api.QueueMessagePayload{Message: *apiMsg},
+			CreatedAt: it.CreatedAt,
+		}, true
+	case session.QueueKindCommand:
+		p, ok := it.Payload.(session.QueueCommandPayload)
+		if !ok {
+			return api.QueueItem{}, false
+		}
+		return api.QueueItem{
+			ID:        it.ID,
+			Kind:      api.QueueKindCommand,
+			Payload:   api.QueueCommandPayload{Command: p.Command},
+			CreatedAt: it.CreatedAt,
+		}, true
+	default:
+		return api.QueueItem{}, false
 	}
 }
 
@@ -200,7 +249,7 @@ func toAPIChunk(ch *message.AssistantChunk) *api.Chunk {
 }
 
 func fromSendRequest(req api.SendRequest) (session.SendInput, error) {
-	if req.Decision != nil && (strings.TrimSpace(req.Content) != "" || len(req.Blocks) > 0 || strings.TrimSpace(req.ID) != "") {
+	if req.Decision != nil && (strings.TrimSpace(req.Content) != "" || len(req.Blocks) > 0 || strings.TrimSpace(req.Command) != "" || strings.TrimSpace(req.ID) != "") {
 		return session.SendInput{}, fmt.Errorf("%w: cannot specify both message and decision", session.ErrInvalidConfig)
 	}
 	if req.Decision != nil {
@@ -213,6 +262,12 @@ func fromSendRequest(req api.SendRequest) (session.SendInput, error) {
 		if err != nil || parsed.Version() != 7 || parsed.String() != id {
 			return session.SendInput{}, fmt.Errorf("%w: invalid message id %q", session.ErrInvalidConfig, id)
 		}
+	}
+	if cmd := strings.TrimSpace(req.Command); cmd != "" {
+		if strings.TrimSpace(req.Content) != "" || len(req.Blocks) > 0 {
+			return session.SendInput{}, fmt.Errorf("%w: cannot specify both message and command", session.ErrInvalidConfig)
+		}
+		return session.SendInput{ID: id, Command: cmd}, nil
 	}
 	var blocks []message.Block
 	if strings.TrimSpace(req.Content) != "" {
@@ -230,7 +285,7 @@ func fromSendRequest(req api.SendRequest) (session.SendInput, error) {
 	if id != "" {
 		msg.SetID(id)
 	}
-	return session.SendInput{Message: msg}, nil
+	return session.SendInput{ID: id, Message: msg}, nil
 }
 
 func fromAPIBlock(b api.Block) (message.Block, bool) {
@@ -337,6 +392,15 @@ func toAPITimelineEntry(entry timeline.Entry) (api.TimelineEntry, error) {
 			return api.TimelineEntry{}, err
 		}
 		out.Message = msg
+	}
+
+	if entry.Command != nil {
+		out.Command = &api.CommandRecord{
+			Command:    entry.Command.Command,
+			Output:     entry.Command.Output,
+			ExitCode:   entry.Command.ExitCode,
+			DurationMs: entry.Command.DurationMs,
+		}
 	}
 
 	if entry.Model != nil {
@@ -623,6 +687,29 @@ func (d *Daemon) FormatEvent(msg broker.Message) (api.Event, error) {
 			Payload: api.TaskUpdatedEvent{
 				SessionID: ev.SessionID,
 				Task:      toAPITask(ev.Task),
+			},
+		}, nil
+
+	case session.CommandStartedEvent:
+		return api.Event{
+			ID:    msg.ID,
+			Type:  api.EventCommandStarted,
+			Topic: msg.Topic,
+			Payload: api.CommandStartedEvent{
+				SessionID: ev.SessionID,
+				ID:        ev.ID,
+				Command:   ev.Command,
+			},
+		}, nil
+
+	case session.QueueUpdatedEvent:
+		return api.Event{
+			ID:    msg.ID,
+			Type:  api.EventQueueUpdated,
+			Topic: msg.Topic,
+			Payload: api.QueueUpdatedEvent{
+				SessionID: ev.SessionID,
+				Queue:     toAPIQueueItems(ev.Queue),
 			},
 		}, nil
 

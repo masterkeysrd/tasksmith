@@ -235,6 +235,15 @@ func newTestToolsRegistry(t *testing.T) (string, tools.Container, permissions.Se
 	return dir, container, sessPerm
 }
 
+func newTestSpiller(t *testing.T) tools.Spiller {
+	t.Helper()
+	sp, err := tools.NewSpiller(tools.SpillerConfig{BaseDir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("tools.NewSpiller: %v", err)
+	}
+	return sp
+}
+
 func extractBlocksText(blocks []message.Block) string {
 	var sb strings.Builder
 	for _, b := range blocks {
@@ -290,7 +299,10 @@ func TestSingleTurnStreaming(t *testing.T) {
 		DB:          db,
 		Model:       newTestModel(t, prov),
 		Tools:       reg,
+		Bash:        &fakeBashRunner{},
+		Spiller:     newTestSpiller(t),
 		Permissions: perm,
+		Queue:       &fakeQueue{},
 		Logger:      log.Default(),
 	})
 	if err != nil {
@@ -346,7 +358,10 @@ func TestMultiTurnSQLitePersistence(t *testing.T) {
 		DB:          db,
 		Model:       model,
 		Tools:       reg,
+		Bash:        &fakeBashRunner{},
+		Spiller:     newTestSpiller(t),
 		Permissions: perm,
+		Queue:       &fakeQueue{},
 		Logger:      log.Default(),
 	})
 	if err != nil {
@@ -377,7 +392,10 @@ func TestMultiTurnSQLitePersistence(t *testing.T) {
 		DB:          db,
 		Model:       model,
 		Tools:       reg,
+		Bash:        &fakeBashRunner{},
+		Spiller:     newTestSpiller(t),
 		Permissions: perm,
+		Queue:       &fakeQueue{},
 		Logger:      log.Default(),
 	})
 	if err != nil {
@@ -457,7 +475,10 @@ func TestSystemPromptIsolation(t *testing.T) {
 		DB:           db,
 		Model:        newTestModel(t, prov),
 		Tools:        reg,
+		Bash:         &fakeBashRunner{},
+		Spiller:      newTestSpiller(t),
 		Permissions:  perm,
+		Queue:        &fakeQueue{},
 		SystemPrompt: sysPrompt,
 		Logger:       log.Default(),
 	})
@@ -525,7 +546,10 @@ func TestThreadIsolation(t *testing.T) {
 		DB:          db,
 		Model:       newTestModel(t, prov),
 		Tools:       reg,
+		Bash:        &fakeBashRunner{},
+		Spiller:     newTestSpiller(t),
 		Permissions: perm,
+		Queue:       &fakeQueue{},
 		Logger:      log.Default(),
 	})
 	if err != nil {
@@ -537,7 +561,10 @@ func TestThreadIsolation(t *testing.T) {
 		DB:          db,
 		Model:       newTestModel(t, prov),
 		Tools:       reg,
+		Bash:        &fakeBashRunner{},
+		Spiller:     newTestSpiller(t),
 		Permissions: perm,
+		Queue:       &fakeQueue{},
 		Logger:      log.Default(),
 	})
 	if err != nil {
@@ -622,7 +649,10 @@ func TestMultiStepToolExecution(t *testing.T) {
 		DB:          db,
 		Model:       newTestModel(t, prov),
 		Tools:       reg,
+		Bash:        &fakeBashRunner{},
+		Spiller:     newTestSpiller(t),
 		Permissions: perm,
+		Queue:       &fakeQueue{},
 		Logger:      log.Default(),
 	})
 	if err != nil {
@@ -739,7 +769,10 @@ func TestPermissionInterruptAndResume(t *testing.T) {
 		DB:          db,
 		Model:       newTestModel(t, prov),
 		Tools:       reg,
+		Bash:        &fakeBashRunner{},
+		Spiller:     newTestSpiller(t),
 		Permissions: perm,
+		Queue:       &fakeQueue{},
 		Logger:      log.Default(),
 	})
 	if err != nil {
@@ -908,7 +941,10 @@ func TestCancelPendingPermissionsOnNewUserMessage(t *testing.T) {
 		DB:          db,
 		Model:       newTestModel(t, prov),
 		Tools:       reg,
+		Bash:        &fakeBashRunner{},
+		Spiller:     newTestSpiller(t),
 		Permissions: perm,
+		Queue:       &fakeQueue{},
 		Logger:      log.Default(),
 	})
 	if err != nil {
@@ -1053,7 +1089,10 @@ func TestMixedToolCallsAndPlanModeDeny(t *testing.T) {
 		DB:          db,
 		Model:       newTestModel(t, prov),
 		Tools:       reg,
+		Bash:        &fakeBashRunner{},
+		Spiller:     newTestSpiller(t),
 		Permissions: perm,
+		Queue:       &fakeQueue{},
 		Logger:      log.Default(),
 	})
 	if err != nil {
@@ -1097,26 +1136,39 @@ func TestValidationAndContextCancellation(t *testing.T) {
 	model := newTestModel(t, nil)
 	logger := log.Default()
 
+	bash := &fakeBashRunner{}
+	spiller := newTestSpiller(t)
+	q := &fakeQueue{}
+
 	// 1. Validate all required Config fields
-	if _, err := New(Config{DB: db, Model: model, Tools: reg, Permissions: perm, Logger: logger}); !errors.Is(err, ErrInvalidConfig) {
+	if _, err := New(Config{DB: db, Model: model, Tools: reg, Bash: bash, Spiller: spiller, Permissions: perm, Queue: q, Logger: logger}); !errors.Is(err, ErrInvalidConfig) {
 		t.Errorf("missing ID error = %v, want %v", err, ErrInvalidConfig)
 	}
-	if _, err := New(Config{ID: "   ", DB: db, Model: model, Tools: reg, Permissions: perm, Logger: logger}); !errors.Is(err, ErrInvalidConfig) {
+	if _, err := New(Config{ID: "   ", DB: db, Model: model, Tools: reg, Bash: bash, Spiller: spiller, Permissions: perm, Queue: q, Logger: logger}); !errors.Is(err, ErrInvalidConfig) {
 		t.Errorf("whitespace ID error = %v, want %v", err, ErrInvalidConfig)
 	}
-	if _, err := New(Config{ID: "thread-valid", Model: model, Tools: reg, Permissions: perm, Logger: logger}); !errors.Is(err, ErrInvalidConfig) {
+	if _, err := New(Config{ID: "thread-valid", Model: model, Tools: reg, Bash: bash, Spiller: spiller, Permissions: perm, Queue: q, Logger: logger}); !errors.Is(err, ErrInvalidConfig) {
 		t.Errorf("missing DB error = %v, want %v", err, ErrInvalidConfig)
 	}
-	if _, err := New(Config{ID: "thread-valid", DB: db, Tools: reg, Permissions: perm, Logger: logger}); !errors.Is(err, ErrInvalidConfig) {
+	if _, err := New(Config{ID: "thread-valid", DB: db, Tools: reg, Bash: bash, Spiller: spiller, Permissions: perm, Queue: q, Logger: logger}); !errors.Is(err, ErrInvalidConfig) {
 		t.Errorf("missing Model error = %v, want %v", err, ErrInvalidConfig)
 	}
-	if _, err := New(Config{ID: "thread-valid", DB: db, Model: model, Permissions: perm, Logger: logger}); !errors.Is(err, ErrInvalidConfig) {
+	if _, err := New(Config{ID: "thread-valid", DB: db, Model: model, Bash: bash, Spiller: spiller, Permissions: perm, Queue: q, Logger: logger}); !errors.Is(err, ErrInvalidConfig) {
 		t.Errorf("missing Tools error = %v, want %v", err, ErrInvalidConfig)
 	}
-	if _, err := New(Config{ID: "thread-valid", DB: db, Model: model, Tools: reg, Logger: logger}); !errors.Is(err, ErrInvalidConfig) {
+	if _, err := New(Config{ID: "thread-valid", DB: db, Model: model, Tools: reg, Spiller: spiller, Permissions: perm, Queue: q, Logger: logger}); !errors.Is(err, ErrInvalidConfig) {
+		t.Errorf("missing Bash error = %v, want %v", err, ErrInvalidConfig)
+	}
+	if _, err := New(Config{ID: "thread-valid", DB: db, Model: model, Tools: reg, Bash: bash, Permissions: perm, Queue: q, Logger: logger}); !errors.Is(err, ErrInvalidConfig) {
+		t.Errorf("missing Spiller error = %v, want %v", err, ErrInvalidConfig)
+	}
+	if _, err := New(Config{ID: "thread-valid", DB: db, Model: model, Tools: reg, Bash: bash, Spiller: spiller, Logger: logger}); !errors.Is(err, ErrInvalidConfig) {
 		t.Errorf("missing Permissions error = %v, want %v", err, ErrInvalidConfig)
 	}
-	if _, err := New(Config{ID: "thread-valid", DB: db, Model: model, Tools: reg, Permissions: perm}); !errors.Is(err, ErrInvalidConfig) {
+	if _, err := New(Config{ID: "thread-valid", DB: db, Model: model, Tools: reg, Bash: bash, Spiller: spiller, Permissions: perm, Logger: logger}); !errors.Is(err, ErrInvalidConfig) {
+		t.Errorf("missing Queue error = %v, want %v", err, ErrInvalidConfig)
+	}
+	if _, err := New(Config{ID: "thread-valid", DB: db, Model: model, Tools: reg, Bash: bash, Spiller: spiller, Permissions: perm, Queue: q}); !errors.Is(err, ErrInvalidConfig) {
 		t.Errorf("missing Logger error = %v, want %v", err, ErrInvalidConfig)
 	}
 
@@ -1125,7 +1177,10 @@ func TestValidationAndContextCancellation(t *testing.T) {
 		DB:          db,
 		Model:       model,
 		Tools:       reg,
+		Bash:        bash,
+		Spiller:     spiller,
 		Permissions: perm,
+		Queue:       q,
 		Logger:      logger,
 	})
 	if err != nil {
@@ -1165,7 +1220,10 @@ func TestValidationAndContextCancellation(t *testing.T) {
 		DB:          db,
 		Model:       newTestModel(t, cancelProv),
 		Tools:       reg,
+		Bash:        bash,
+		Spiller:     spiller,
 		Permissions: perm,
+		Queue:       q,
 		Logger:      logger,
 	})
 	if err != nil {
@@ -1191,7 +1249,10 @@ func TestCallerSuppliedUserMessageID(t *testing.T) {
 		DB:          db,
 		Model:       newTestModel(t, prov),
 		Tools:       reg,
+		Bash:        &fakeBashRunner{},
+		Spiller:     newTestSpiller(t),
 		Permissions: perm,
+		Queue:       &fakeQueue{},
 		Logger:      log.Default(),
 	})
 	if err != nil {
@@ -1215,6 +1276,78 @@ func TestCallerSuppliedUserMessageID(t *testing.T) {
 	if emittedUserMsgID != customID {
 		t.Fatalf("emitted user message ID = %q, want exact %q", emittedUserMsgID, customID)
 	}
+}
+
+type fakeQueue struct {
+	mu       sync.Mutex
+	items    []QueueItem
+	onPopMsg func()
+}
+
+func (q *fakeQueue) Peek() (QueueItem, bool) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if len(q.items) == 0 {
+		return QueueItem{}, false
+	}
+	return q.items[0], true
+}
+
+func (q *fakeQueue) PopCommand() (QueueItem, bool) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if len(q.items) == 0 || q.items[0].Kind != QueueKindCommand {
+		return QueueItem{}, false
+	}
+	it := q.items[0]
+	q.items = q.items[1:]
+	return it, true
+}
+
+func (q *fakeQueue) PopMessages() []message.Message {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if q.onPopMsg != nil {
+		q.onPopMsg()
+	}
+	if len(q.items) == 0 {
+		return nil
+	}
+	var msgs []message.Message
+	for len(q.items) > 0 {
+		if q.items[0].Kind == QueueKindCommand {
+			break
+		}
+		it := q.items[0]
+		q.items = q.items[1:]
+		switch p := it.Payload.(type) {
+		case QueueMessagePayload:
+			msgs = append(msgs, p.Message)
+		case QueueTaskPayload:
+			msgs = append(msgs, p.Message)
+		}
+	}
+	return msgs
+}
+
+type fakeBashRunner struct {
+	mu       sync.Mutex
+	executed []std.BashRequest
+	handler  func(ctx context.Context, req std.BashRequest) (*std.BashResult, error)
+}
+
+func (b *fakeBashRunner) Bash(ctx context.Context, req std.BashRequest) (*std.BashResult, error) {
+	b.mu.Lock()
+	b.executed = append(b.executed, req)
+	h := b.handler
+	b.mu.Unlock()
+	if h != nil {
+		return h(ctx, req)
+	}
+	if req.Output != nil {
+		_, _ = req.Output.Write([]byte("output of " + req.Command))
+	}
+	return &std.BashResult{ExitCode: 0}, nil
 }
 
 func TestInboxDrainAfterToolExecution(t *testing.T) {
@@ -1271,14 +1404,20 @@ func TestInboxDrainAfterToolExecution(t *testing.T) {
 		},
 	}
 
-	inboxMsg := message.NewUserText("task completed from inbox")
+	inboxMsg := message.NewUserTextMeta("task completed from inbox", map[string]any{MetaSystemKind: SystemKindTask})
 	var inboxDrained bool
-	inboxFn := func() []message.Message {
-		if toolRequested && !inboxDrained {
-			inboxDrained = true
-			return []message.Message{inboxMsg}
-		}
-		return nil
+	var q *fakeQueue
+	q = &fakeQueue{
+		onPopMsg: func() {
+			if toolRequested && !inboxDrained {
+				inboxDrained = true
+				q.items = append(q.items, QueueItem{
+					ID:      "task-item-1",
+					Kind:    QueueKindTask,
+					Payload: QueueTaskPayload{Message: inboxMsg},
+				})
+			}
+		},
 	}
 
 	h, err := New(Config{
@@ -1287,7 +1426,9 @@ func TestInboxDrainAfterToolExecution(t *testing.T) {
 		Model:       newTestModel(t, prov),
 		Tools:       reg,
 		Permissions: perm,
-		Inbox:       inboxFn,
+		Queue:       q,
+		Bash:        &fakeBashRunner{},
+		Spiller:     newTestSpiller(t),
 		Logger:      log.Default(),
 	})
 	if err != nil {
@@ -1346,7 +1487,7 @@ func TestInboxDrainDuringAgentWithoutTools(t *testing.T) {
 
 	var queueMsg bool
 	var drained bool
-	inboxMsg := message.NewUserText("inbox message arrived during agent turn")
+	inboxMsg := message.NewUserTextMeta("inbox message arrived during agent turn", map[string]any{MetaSystemKind: SystemKindTask})
 
 	prov := &fakeProvider{
 		stepHandler: func(_ context.Context, req *llm.Request, turn int) ([]message.AssistantChunk, error) {
@@ -1388,12 +1529,18 @@ func TestInboxDrainDuringAgentWithoutTools(t *testing.T) {
 		},
 	}
 
-	inboxFn := func() []message.Message {
-		if queueMsg && !drained {
-			drained = true
-			return []message.Message{inboxMsg}
-		}
-		return nil
+	var q *fakeQueue
+	q = &fakeQueue{
+		onPopMsg: func() {
+			if queueMsg && !drained {
+				drained = true
+				q.items = append(q.items, QueueItem{
+					ID:      "msg-item-1",
+					Kind:    QueueKindMessage,
+					Payload: QueueMessagePayload{Message: inboxMsg},
+				})
+			}
+		},
 	}
 
 	h, err := New(Config{
@@ -1402,7 +1549,9 @@ func TestInboxDrainDuringAgentWithoutTools(t *testing.T) {
 		Model:       newTestModel(t, prov),
 		Tools:       reg,
 		Permissions: perm,
-		Inbox:       inboxFn,
+		Queue:       q,
+		Bash:        &fakeBashRunner{},
+		Spiller:     newTestSpiller(t),
 		Logger:      log.Default(),
 	})
 	if err != nil {
@@ -1471,13 +1620,17 @@ func TestInboxDirectTurnWithEmptyInput(t *testing.T) {
 			}, nil
 		},
 	}
-
-	inboxFn := func() []message.Message {
-		if !drained {
+	q := &fakeQueue{
+		items: []QueueItem{
+			{
+				ID:      "task-item-1",
+				Kind:    QueueKindTask,
+				Payload: QueueTaskPayload{Message: message.NewUserTextMeta("inbox task notification", map[string]any{MetaSystemKind: SystemKindTask})},
+			},
+		},
+		onPopMsg: func() {
 			drained = true
-			return []message.Message{message.NewUserText("inbox task notification")}
-		}
-		return nil
+		},
 	}
 
 	h, err := New(Config{
@@ -1486,7 +1639,9 @@ func TestInboxDirectTurnWithEmptyInput(t *testing.T) {
 		Model:       newTestModel(t, prov),
 		Tools:       reg,
 		Permissions: perm,
-		Inbox:       inboxFn,
+		Queue:       q,
+		Bash:        &fakeBashRunner{},
+		Spiller:     newTestSpiller(t),
 		Logger:      log.Default(),
 	})
 	if err != nil {
@@ -1520,5 +1675,241 @@ func TestInboxDirectTurnWithEmptyInput(t *testing.T) {
 	}
 	if len(state.Messages) != 2 {
 		t.Fatalf("expected 2 messages in state, got %d: %+v", len(state.Messages), state.Messages)
+	}
+}
+
+func TestCommandNodeDoesNotWakeAgent(t *testing.T) {
+	ctx := context.Background()
+	db := openTestSQLite(t)
+	_, reg, perm := newTestToolsRegistry(t)
+
+	cmdID := uuid.Must(uuid.NewV7()).String()
+	q := &fakeQueue{
+		items: []QueueItem{
+			{
+				ID:      cmdID,
+				Kind:    QueueKindCommand,
+				Payload: QueueCommandPayload{Command: "echo direct"},
+			},
+		},
+	}
+	bash := &fakeBashRunner{}
+
+	prov := &fakeProvider{
+		stepHandler: func(_ context.Context, _ *llm.Request, _ int) ([]message.AssistantChunk, error) {
+			t.Fatal("agent should NOT be woken by command execution")
+			return nil, nil
+		},
+	}
+
+	h, err := New(Config{
+		ID:          "thread-command-no-agent",
+		DB:          db,
+		Model:       newTestModel(t, prov),
+		Tools:       reg,
+		Permissions: perm,
+		Queue:       q,
+		Bash:        bash,
+		Spiller:     newTestSpiller(t),
+		Logger:      log.Default(),
+	})
+	if err != nil {
+		t.Fatalf("New error: %v", err)
+	}
+
+	var events []Event
+	for ev, err := range h.Stream(ctx, Input{}) {
+		if err != nil {
+			t.Fatalf("Stream error: %v", err)
+		}
+		events = append(events, ev)
+	}
+
+	if len(events) != 3 {
+		t.Fatalf("expected 3 events, got %d: %+v", len(events), events)
+	}
+	if events[0].Type != EventCommandStarted || events[0].CommandStarted == nil || events[0].CommandStarted.ID != cmdID {
+		t.Fatalf("expected EventCommandStarted %s, got %+v", cmdID, events[0])
+	}
+	if events[1].Type != EventCommandCompleted || events[1].CommandCompleted == nil || events[1].CommandCompleted.ID != cmdID {
+		t.Fatalf("expected EventCommandCompleted %s, got %+v", cmdID, events[1])
+	}
+	if events[2].Type != EventCompleted || events[2].Message != nil {
+		t.Fatalf("expected EventCompleted with nil Message, got %+v", events[2])
+	}
+
+	state, err := h.LoadState(ctx)
+	if err != nil {
+		t.Fatalf("LoadState error: %v", err)
+	}
+	if len(state.Messages) != 1 {
+		t.Fatalf("expected 1 message in state, got %d", len(state.Messages))
+	}
+	cmdMsg := state.Messages[0]
+	if SystemKindOf(cmdMsg) != SystemKindCommand {
+		t.Fatalf("expected SystemKindCommand, got %q", SystemKindOf(cmdMsg))
+	}
+	if !strings.Contains(cmdMsg.GetContent().Text(), `<bash_command command="echo direct" exit_code="0">`) {
+		t.Fatalf("expected bash_command tag in state, got %s", cmdMsg.GetContent().Text())
+	}
+}
+
+func TestUnifiedQueueOrderingAcrossGraph(t *testing.T) {
+	ctx := context.Background()
+	db := openTestSQLite(t)
+	_, reg, perm := newTestToolsRegistry(t)
+
+	q := &fakeQueue{}
+	bash := &fakeBashRunner{}
+
+	var toolRequested bool
+	var queuePopulated bool
+	q.onPopMsg = func() {
+		if toolRequested && !queuePopulated {
+			queuePopulated = true
+			q.items = append(q.items,
+				QueueItem{ID: "u1", Kind: QueueKindMessage, Payload: QueueMessagePayload{Message: message.NewUserText("user msg 1")}},
+				QueueItem{ID: "u2", Kind: QueueKindMessage, Payload: QueueMessagePayload{Message: message.NewUserText("user msg 2")}},
+				QueueItem{ID: "t1", Kind: QueueKindTask, Payload: QueueTaskPayload{Message: message.NewUserTextMeta("task update 1", map[string]any{MetaSystemKind: SystemKindTask})}},
+				QueueItem{ID: "cmd-c1", Kind: QueueKindCommand, Payload: QueueCommandPayload{Command: "git status"}},
+			)
+		}
+	}
+
+	var toolTurnRan bool
+	var agentSecondTurnRan bool
+	prov := &fakeProvider{
+		stepHandler: func(_ context.Context, req *llm.Request, turn int) ([]message.AssistantChunk, error) {
+			if turn == 1 {
+				toolTurnRan = true
+				toolRequested = true
+				return []message.AssistantChunk{
+					{
+						BaseChunk: message.BaseChunk{ID: "asst-tool-call"},
+						Content: []message.Block{
+							&message.ToolCall{
+								ID:   "tc-1",
+								Name: "view",
+								Args: map[string]any{"path": "hello.txt"},
+							},
+						},
+						Done: true,
+					},
+				}, nil
+			}
+
+			// Turn 2 should see the initial user message, tool call, tool result, U1, U2, and T1!
+			agentSecondTurnRan = true
+			var foundU1, foundU2, foundT1 bool
+			for _, m := range req.Messages {
+				txt := msgText(m)
+				if strings.Contains(txt, "user msg 1") {
+					foundU1 = true
+				}
+				if strings.Contains(txt, "user msg 2") {
+					foundU2 = true
+				}
+				if strings.Contains(txt, "task update 1") {
+					foundT1 = true
+				}
+			}
+			if !foundU1 || !foundU2 || !foundT1 {
+				t.Errorf("turn 2 missing expected messages (u1=%v, u2=%v, t1=%v): %+v", foundU1, foundU2, foundT1, req.Messages)
+			}
+
+			return []message.AssistantChunk{
+				{
+					BaseChunk: message.BaseChunk{ID: "asst-done"},
+					Content: []message.Block{
+						&message.TextBlock{Text: "All done."},
+					},
+					Done: true,
+				},
+			}, nil
+		},
+	}
+
+	h, err := New(Config{
+		ID:          "thread-unified-queue-ordering",
+		DB:          db,
+		Model:       newTestModel(t, prov),
+		Tools:       reg,
+		Permissions: perm,
+		Queue:       q,
+		Bash:        bash,
+		Spiller:     newTestSpiller(t),
+		Logger:      log.Default(),
+	})
+	if err != nil {
+		t.Fatalf("New error: %v", err)
+	}
+
+	var emittedMessages []message.Message
+	var cmdStartedCount, cmdCompletedCount int
+	for ev, err := range h.Stream(ctx, Input{Message: message.NewUserText("Initial turn")}) {
+		if err != nil {
+			t.Fatalf("Stream error: %v", err)
+		}
+		switch ev.Type {
+		case EventMessage:
+			emittedMessages = append(emittedMessages, ev.Message)
+		case EventCommandStarted:
+			cmdStartedCount++
+		case EventCommandCompleted:
+			cmdCompletedCount++
+		}
+	}
+
+	if !toolTurnRan {
+		t.Fatal("expected first agent tool turn to run")
+	}
+	if !agentSecondTurnRan {
+		t.Fatal("expected second agent turn to run after inbox drain")
+	}
+	if cmdStartedCount != 1 || cmdCompletedCount != 1 {
+		t.Fatalf("expected 1 command started/completed, got started=%d completed=%d", cmdStartedCount, cmdCompletedCount)
+	}
+
+	// Verify emittedMessages:
+	// 0: User ("Initial turn")
+	// 1: Assistant (tool call)
+	// 2: Tool (result)
+	// 3: User ("user msg 1")  -- emitted by InboxNode
+	// 4: User ("user msg 2")  -- emitted by InboxNode
+	// (task update 1 is NOT emitted because SystemKindOf != "")
+	// 5: Assistant ("All done.")
+	if len(emittedMessages) != 6 {
+		t.Fatalf("expected 6 emitted messages, got %d: %+v", len(emittedMessages), emittedMessages)
+	}
+	if !strings.Contains(msgText(emittedMessages[3]), "user msg 1") {
+		t.Errorf("expected emittedMessages[3] = user msg 1, got %q", msgText(emittedMessages[3]))
+	}
+	if !strings.Contains(msgText(emittedMessages[4]), "user msg 2") {
+		t.Errorf("expected emittedMessages[4] = user msg 2, got %q", msgText(emittedMessages[4]))
+	}
+
+	// Verify state has all messages in exact order:
+	// 0: Initial turn (U0)
+	// 1: Assistant (tool call)
+	// 2: Tool (result)
+	// 3: user msg 1 (U1)
+	// 4: user msg 2 (U2)
+	// 5: task update 1 (T1)
+	// 6: Assistant ("All done.")
+	// 7: <bash_command command="git status"...> (C1)
+	state, err := h.LoadState(ctx)
+	if err != nil {
+		t.Fatalf("LoadState error: %v", err)
+	}
+	if len(state.Messages) != 8 {
+		t.Fatalf("expected 8 messages in state, got %d: %+v", len(state.Messages), state.Messages)
+	}
+
+	lastMsg := state.Messages[7]
+	if SystemKindOf(lastMsg) != SystemKindCommand {
+		t.Fatalf("expected last message to be SystemKindCommand, got %q", SystemKindOf(lastMsg))
+	}
+	if !strings.Contains(lastMsg.GetContent().Text(), `<bash_command command="git status"`) {
+		t.Fatalf("expected git status command in last message, got %s", lastMsg.GetContent().Text())
 	}
 }

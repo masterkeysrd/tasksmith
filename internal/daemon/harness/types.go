@@ -1,11 +1,14 @@
 package harness
 
 import (
+	"context"
 	"errors"
 	"maps"
 	"slices"
+	"time"
 
 	"github.com/masterkeysrd/loom/message"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/std"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tools"
 )
 
@@ -17,6 +20,90 @@ var (
 	ErrNoPendingPermissions         = errors.New("harness: no pending permissions for thread")
 	ErrPendingPermissionsUnresolved = errors.New("harness: all pending permissions must be resolved before resuming")
 )
+
+const MetaSystemKind = "tasksmith.system.kind"
+
+const (
+	SystemKindCommand = "command"
+	SystemKindTask    = "task"
+)
+
+// SystemKindOf returns the "tasksmith.system.kind" metadata value on msg, or "" if unset.
+func SystemKindOf(msg message.Message) string {
+	if msg == nil {
+		return ""
+	}
+	meta := msg.GetMetadata()
+	if meta == nil {
+		return ""
+	}
+	v, _ := meta[MetaSystemKind].(string)
+	return v
+}
+
+type QueueKind string
+
+const (
+	QueueKindMessage QueueKind = "message"
+	QueueKindCommand QueueKind = "command"
+	QueueKindTask    QueueKind = "task" // internal only; filtered out of API
+)
+
+type QueueItemPayload interface {
+	QueueKind() QueueKind
+}
+
+type QueueMessagePayload struct {
+	Message message.Message
+}
+
+func (QueueMessagePayload) QueueKind() QueueKind { return QueueKindMessage }
+
+type QueueCommandPayload struct {
+	Command string
+}
+
+func (QueueCommandPayload) QueueKind() QueueKind { return QueueKindCommand }
+
+type QueueTaskPayload struct {
+	Message message.Message
+}
+
+func (QueueTaskPayload) QueueKind() QueueKind { return QueueKindTask }
+
+type QueueItem struct {
+	ID        string
+	Kind      QueueKind
+	Payload   QueueItemPayload
+	CreatedAt time.Time
+}
+
+// Queue is the unified FIFO queue of pending messages, tasks, and shell commands
+// shared between Session and the Harness execution graph.
+type Queue interface {
+	Peek() (QueueItem, bool)
+	PopCommand() (QueueItem, bool)
+	PopMessages() []message.Message
+}
+
+// BashRunner executes a shell command inside the session environment.
+// Satisfied by *std.Std.
+type BashRunner interface {
+	Bash(ctx context.Context, req std.BashRequest) (*std.BashResult, error)
+}
+
+type CommandStarted struct {
+	ID      string
+	Command string
+}
+
+type CommandCompleted struct {
+	ID         string
+	Command    string
+	Output     string
+	ExitCode   int
+	DurationMs int64
+}
 
 // Input represents the conversational input to [Harness.Stream].
 // It can provide either a new user message or resolved permission decisions.
@@ -134,13 +221,21 @@ const (
 	// EventCompleted is emitted once the graph finishes execution and the final
 	// [*message.Assistant] message has been assembled and checkpointed.
 	EventCompleted EventType = "completed"
+
+	// EventCommandStarted is emitted when a command starts executing in the harness.
+	EventCommandStarted EventType = "command_started"
+
+	// EventCommandCompleted is emitted when a command finishes executing in the harness.
+	EventCommandCompleted EventType = "command_completed"
 )
 
 // Event represents a real-time notification yielded by [Harness.Stream] or
 // [Harness.Resume].
 type Event struct {
-	Type        EventType                 `json:"type"`
-	Chunk       *message.AssistantChunk   `json:"chunk,omitempty"`
-	Message     message.Message           `json:"message,omitempty"`
-	Permissions []tools.PermissionRequest `json:"permissions,omitempty"`
+	Type             EventType                 `json:"type"`
+	Chunk            *message.AssistantChunk   `json:"chunk,omitempty"`
+	Message          message.Message           `json:"message,omitempty"`
+	Permissions      []tools.PermissionRequest `json:"permissions,omitempty"`
+	CommandStarted   *CommandStarted           `json:"command_started,omitempty"`
+	CommandCompleted *CommandCompleted         `json:"command_completed,omitempty"`
 }

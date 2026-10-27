@@ -1,6 +1,10 @@
 package components
 
 import (
+	"fmt"
+	"image/color"
+	"strings"
+
 	"github.com/masterkeysrd/kite/extras/trail"
 	"github.com/masterkeysrd/kite/style"
 	"github.com/masterkeysrd/tasksmith/api"
@@ -64,10 +68,74 @@ var CommandOutput = trail.FC("CommandOutput", func(props store.CommandData) trai
 	)
 })
 
+// BashCommand renders a completed direct user shell command (!) from the timeline.
+var BashCommand = trail.FC("BashCommand", func(record api.CommandRecord) trail.Node {
+	scheme := theme.UseTheme()
+
+	var magentaColor, primaryColor, secondaryColor, errorColor color.Color
+	if scheme != nil {
+		magentaColor = scheme.Color.Text.Magenta
+		if magentaColor == nil {
+			magentaColor = scheme.Color.Text.Primary
+		}
+		primaryColor = scheme.Color.Text.Primary
+		secondaryColor = scheme.Color.Text.Secondary
+		errorColor = scheme.Color.Text.Error
+	}
+
+	headerChildren := []trail.Node{
+		trail.Span(trail.SpanProps{
+			Style: style.S().Bold(true).Foreground(magentaColor).WhiteSpace(style.WhiteSpaceNoWrap).Flex(0, 0),
+		}, trail.Text("! ")),
+		trail.Span(trail.SpanProps{
+			Style: style.S().Foreground(primaryColor),
+		}, trail.Text(record.Command)),
+	}
+	if record.ExitCode != 0 {
+		headerChildren = append(headerChildren, trail.Span(trail.SpanProps{
+			Style: style.S().Foreground(errorColor).WhiteSpace(style.WhiteSpacePre),
+		}, trail.Text(fmt.Sprintf(" (exit %d)", record.ExitCode))))
+	}
+
+	row1 := trail.Box(trail.BoxProps{
+		Style: style.S().Display(style.DisplayFlex).FlexDirection(style.FlexRow).Width(style.Percent(100)),
+	}, headerChildren...)
+
+	outText := record.Output
+	if strings.TrimSpace(outText) == "" {
+		outText = "(no output)"
+	}
+	row2 := trail.Box(trail.BoxProps{
+		Style: style.S().Display(style.DisplayFlex).FlexDirection(style.FlexRow).Width(style.Percent(100)),
+	},
+		trail.Span(trail.SpanProps{
+			Style: style.S().Foreground(secondaryColor).WhiteSpace(style.WhiteSpacePre).Flex(0, 0),
+		}, trail.Text("  ⎿  ")),
+		trail.Span(trail.SpanProps{
+			Style: style.S().Foreground(secondaryColor).WhiteSpace(style.WhiteSpacePreWrap).OverflowWrap(style.OverflowWrapAnywhere).Flex(1, 1).MinWidth(style.Cells(0)),
+		}, trail.Text(outText)),
+	)
+
+	return trail.Box(trail.BoxProps{
+		Style: style.S().
+			Display(style.DisplayFlex).
+			FlexDirection(style.FlexColumn).
+			Width(style.Percent(100)).
+			MaxWidth(style.Percent(100)).
+			MinWidth(style.Cells(0)).
+			MarginBottom(1),
+	}, row1, row2)
+})
+
 // TimelineEvent renders a timeline state change (mode, model, effort) as a notice.
 var TimelineEvent = trail.FC("TimelineEvent", func(entry api.TimelineEntry) trail.Node {
 	var text string
 	switch entry.Kind {
+	case api.TimelineKindCommand:
+		if entry.Command != nil {
+			return BashCommand(*entry.Command)
+		}
+		return nil
 	case api.TimelineKindMode:
 		if entry.Mode != nil {
 			text = "Mode set to " + string(entry.Mode.To)

@@ -81,6 +81,7 @@ var appContent = trail.SimpleFC("AppContent", func() trail.Node {
 	},
 		components.Transcript(),
 		components.ActiveStream(),
+		components.Queue(),
 		components.Composer(components.ComposerProps{
 			Autocomplete:    engine,
 			CompletionViews: views,
@@ -89,8 +90,8 @@ var appContent = trail.SimpleFC("AppContent", func() trail.Node {
 					if err := registry.Execute(text); err != nil {
 						store.AppendError("Error", err.Error())
 					}
-				} else if store.GetStream().Streaming {
-					store.AppendNotice("A response is already running.")
+				} else if after, ok := strings.CutPrefix(text, "!"); ok {
+					store.SendCommand(strings.TrimSpace(after))
 				} else {
 					store.Send(text)
 				}
