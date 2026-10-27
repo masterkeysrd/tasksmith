@@ -934,7 +934,7 @@ func validateGlobPattern(pattern string) error {
 
 func patternTargetsHidden(pattern string) bool {
 	norm := strings.TrimPrefix(strings.TrimSpace(pattern), "./")
-	for _, seg := range strings.Split(norm, "/") {
+	for seg := range strings.SplitSeq(norm, "/") {
 		if strings.HasPrefix(seg, ".") && seg != "." && seg != ".." {
 			return true
 		}
@@ -943,7 +943,7 @@ func patternTargetsHidden(pattern string) bool {
 }
 
 func hasDotSegment(p string) bool {
-	for _, part := range strings.Split(p, "/") {
+	for part := range strings.SplitSeq(p, "/") {
 		if strings.HasPrefix(part, ".") && part != "." && part != ".." {
 			return true
 		}
