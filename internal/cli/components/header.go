@@ -11,6 +11,7 @@ import (
 	"github.com/masterkeysrd/kite/extras/trail"
 	"github.com/masterkeysrd/kite/style"
 	"github.com/masterkeysrd/tasksmith/internal/cli/store"
+	"github.com/masterkeysrd/tasksmith/internal/ui/components/icon"
 	"github.com/masterkeysrd/tasksmith/internal/ui/theme"
 )
 
@@ -53,6 +54,7 @@ func ShortenHomePath(path string) string {
 // 1. TaskSmith <version>
 // 2. <model> with <thinking> effort
 // 3. <ShortenHomePath(workspace)>
+// Below (optional): workspace warnings
 var Header = trail.FC("Header", func(props store.HeaderData) trail.Node {
 	scheme := theme.UseTheme()
 
@@ -65,13 +67,7 @@ var Header = trail.FC("Header", func(props store.HeaderData) trail.Node {
 	thinking := cmp.Or(strings.TrimSpace(props.Thinking), "auto")
 	workspace := ShortenHomePath(props.Workspace)
 
-	return trail.Box(trail.BoxProps{
-		Style: style.S().
-			Display(style.DisplayFlex).
-			FlexDirection(style.FlexRow).
-			MarginTop(1).
-			MarginBottom(1),
-	},
+	bannerContent := []trail.Node{
 		Logo(),
 		trail.Box(trail.BoxProps{
 			Style: style.S().
@@ -112,5 +108,52 @@ var Header = trail.FC("Header", func(props store.HeaderData) trail.Node {
 				}, trail.Text(workspace)),
 			),
 		),
+	}
+
+	if len(props.Warnings) == 0 {
+		return trail.Box(trail.BoxProps{
+			Style: style.S().
+				Display(style.DisplayFlex).
+				FlexDirection(style.FlexRow).
+				MarginTop(1).
+				MarginBottom(1),
+		}, bannerContent...)
+	}
+
+	warningStyle := style.S().
+		Foreground(scheme.Color.Text.Warning).
+		WhiteSpace(style.WhiteSpacePre)
+
+	warningNodes := make([]trail.Node, 0, len(props.Warnings))
+	for _, w := range props.Warnings {
+		warningNodes = append(warningNodes, trail.Box(trail.BoxProps{
+			Style: style.S().
+				Display(style.DisplayFlex).
+				FlexDirection(style.FlexRow),
+		},
+			trail.Span(trail.SpanProps{
+				Style: warningStyle,
+			}, icon.Warning, trail.Text(" "+w)),
+		))
+	}
+
+	return trail.Box(trail.BoxProps{
+		Style: style.S().
+			Display(style.DisplayFlex).
+			FlexDirection(style.FlexColumn).
+			MarginTop(1).
+			MarginBottom(1),
+	},
+		trail.Box(trail.BoxProps{
+			Style: style.S().
+				Display(style.DisplayFlex).
+				FlexDirection(style.FlexRow),
+		}, bannerContent...),
+		trail.Box(trail.BoxProps{
+			Style: style.S().
+				Display(style.DisplayFlex).
+				FlexDirection(style.FlexColumn).
+				MarginTop(1),
+		}, warningNodes...),
 	)
 })

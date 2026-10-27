@@ -76,7 +76,8 @@ func (p *fakeProvider) Stream(ctx context.Context, req *llm.Request) (llm.Stream
 }
 
 type fakeGateway struct {
-	provider *fakeProvider
+	provider  *fakeProvider
+	providers []gateway.ProviderInfo
 }
 
 func (g *fakeGateway) ResolveLLM(ctx context.Context, explicit string, _ ...gateway.LLMOption) (*llm.Model, error) {
@@ -98,8 +99,10 @@ func (g *fakeGateway) ResolveEmbedding(context.Context, string, ...gateway.Embed
 	return nil, gateway.ErrUnsupportedCapability
 }
 
-func (g *fakeGateway) ListProviders() []gateway.ProviderInfo { return nil }
-func (g *fakeGateway) Close() error                          { return nil }
+func (g *fakeGateway) ListProviders() []gateway.ProviderInfo {
+	return g.providers
+}
+func (g *fakeGateway) Close() error { return nil }
 
 type fakeGatewayPool struct {
 	gw *fakeGateway
@@ -1873,5 +1876,73 @@ func TestDaemonTasksEndpoints(t *testing.T) {
 	var apiErr *api.APIError
 	if !errors.As(err, &apiErr) || apiErr.StatusCode != http.StatusConflict {
 		t.Fatalf("expected 409 Conflict, got %v", err)
+	}
+}
+
+func TestGetWorkspaceSurfacesWarnings(t *testing.T) {
+	ctx := context.Background()
+	xdgRoot := t.TempDir()
+	xdg.SetTestEnv(xdgRoot, "tasksmith-daemon-warnings-test")
+	t.Cleanup(func() {
+		xdg.ClearCache()
+	})
+
+	runDir := shortTempDir(t)
+	sockPath := filepath.Join(runDir, "b.sock")
+	lockPath := filepath.Join(runDir, "b.lock")
+
+	pool := &fakeGatewayPool{
+		gw: &fakeGateway{
+			provider: &fakeProvider{},
+			providers: []gateway.ProviderInfo{
+				{
+					Name:    "anthropic",
+					Warning: `provider "anthropic": missing required environment variable "ANTHROPIC_API_KEY"`,
+				},
+				{
+					Name:    "ollama",
+					Warning: "",
+				},
+			},
+		},
+	}
+
+	srv, err := New(Config{
+		SocketPath:  sockPath,
+		LockPath:    lockPath,
+		GatewayPool: pool,
+		Logger:      log.Default(),
+	})
+	if err != nil {
+		t.Fatalf("daemon.New: %v", err)
+	}
+
+	if err := srv.Start(ctx); err != nil {
+		t.Fatalf("srv.Start: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = srv.Close(ctx)
+	})
+
+	wsDir := shortTempDir(t)
+	cli, err := client.New(sockPath, client.WithCWD(wsDir))
+	if err != nil {
+		t.Fatalf("client.New: %v", err)
+	}
+
+	ws, err := cli.GetWorkspace(ctx)
+	if err != nil {
+		t.Fatalf("cli.GetWorkspace: %v", err)
+	}
+
+	var foundAnthropicWarning bool
+	for _, w := range ws.Warnings {
+		if strings.Contains(w, "ANTHROPIC_API_KEY") {
+			foundAnthropicWarning = true
+			break
+		}
+	}
+	if !foundAnthropicWarning {
+		t.Errorf("expected provider warning in ws.Warnings, got: %v", ws.Warnings)
 	}
 }

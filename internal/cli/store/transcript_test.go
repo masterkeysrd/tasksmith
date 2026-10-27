@@ -257,12 +257,85 @@ func TestResetForSessionSwitch(t *testing.T) {
 }
 
 func TestHeaderMetaAndCurrentHeaderData(t *testing.T) {
+	ResetApp()
+	defer ResetApp()
+
 	SetHeaderMeta("v1.2.3", "/workspace/test")
 	SetModelInfo("test-model", "high")
+	SetWorkspaceWarnings([]string{"warning 1", "warning 2"})
 
 	hd := CurrentHeaderData()
 	if hd.Version != "v1.2.3" || hd.Workspace != "/workspace/test" || hd.Model != "test-model" || hd.Thinking != "high" {
 		t.Fatalf("unexpected CurrentHeaderData: %+v", hd)
+	}
+	if len(hd.Warnings) != 2 || hd.Warnings[0] != "warning 1" || hd.Warnings[1] != "warning 2" {
+		t.Fatalf("unexpected Warnings in CurrentHeaderData: %v", hd.Warnings)
+	}
+
+	// ResetApp should preserve warnings, version, and workspace
+	ResetApp()
+	hd = CurrentHeaderData()
+	if hd.Version != "v1.2.3" || hd.Workspace != "/workspace/test" {
+		t.Fatalf("expected Version and Workspace to be preserved, got %+v", hd)
+	}
+	if len(hd.Warnings) != 2 || hd.Warnings[0] != "warning 1" || hd.Warnings[1] != "warning 2" {
+		t.Fatalf("expected Warnings to be preserved after ResetApp, got: %v", hd.Warnings)
+	}
+
+	// Clearing warnings
+	SetWorkspaceWarnings(nil)
+	hd = CurrentHeaderData()
+	if len(hd.Warnings) != 0 {
+		t.Fatalf("expected Warnings to be empty after SetWorkspaceWarnings(nil), got: %v", hd.Warnings)
+	}
+}
+
+func TestUseHeaderData(t *testing.T) {
+	ResetApp()
+	defer ResetApp()
+
+	SetHeaderMeta("v1.0.0", "/ws")
+	SetModelInfo("model-a", "low")
+	SetWorkspaceWarnings(nil)
+
+	var lastHeader HeaderData
+	Comp := trail.SimpleFC("Comp", func() trail.Node {
+		lastHeader = UseHeaderData()
+		return trail.Text("ok")
+	})
+
+	b := mock.New(80, 24)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	go func() {
+		_ = trail.Run(ctx, Comp(), trail.WithBackend(b))
+	}()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if lastHeader.Version == "v1.0.0" {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	if len(lastHeader.Warnings) != 0 {
+		t.Fatalf("expected 0 warnings initially, got %v", lastHeader.Warnings)
+	}
+
+	// Update warnings reactively
+	SetWorkspaceWarnings([]string{"dyn warning"})
+	deadline = time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if len(lastHeader.Warnings) == 1 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	if len(lastHeader.Warnings) != 1 || lastHeader.Warnings[0] != "dyn warning" {
+		t.Fatalf("expected reactive update of warnings, got %v", lastHeader.Warnings)
 	}
 }
 

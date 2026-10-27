@@ -94,6 +94,111 @@ func TestResolveModelInfoNilClient(t *testing.T) {
 	}
 }
 
+func TestResolveModelInfoWithWorkspaceWarnings(t *testing.T) {
+	ResetApp()
+	defer ResetApp()
+	ResetSession()
+	defer ResetSession()
+
+	var getWorkspaceCalled bool
+	rt := &mockSessionRoundTripper{
+		handler: func(req *http.Request) (*http.Response, error) {
+			if req.Method == http.MethodGet && req.URL.Path == "/v1/workspace" {
+				getWorkspaceCalled = true
+				ws := api.Workspace{
+					Name:         "test-ws",
+					RootDir:      "/workspace",
+					DefaultAgent: "default-agent",
+					DefaultModel: "default-model",
+					Warnings:     []string{"Workspace warning: invalid rule in config"},
+				}
+				data, _ := json.Marshal(ws)
+				resp := &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(bytes.NewReader(data)),
+					Header:     make(http.Header),
+				}
+				resp.Header.Set("Content-Type", "application/json")
+				return resp, nil
+			}
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader(`{}`)),
+				Header:     make(http.Header),
+			}, nil
+		},
+	}
+
+	c, err := client.New("/tmp/dummy.sock", client.WithCWD("/workspace"), client.WithHTTPClient(&http.Client{Transport: rt}))
+	if err != nil {
+		t.Fatalf("client.New: %v", err)
+	}
+
+	ctx := context.Background()
+
+	// Both agent and model specified: previously GetWorkspace was skipped, now it must be called!
+	label, thinking := ResolveModelInfo(ctx, c, "my-agent", "my-model", nil)
+	if !getWorkspaceCalled {
+		t.Fatal("expected GetWorkspace to be called even when agent and model are explicitly provided")
+	}
+	if label != "my-model" || thinking != "auto" {
+		t.Fatalf("unexpected label/thinking: %q/%q", label, thinking)
+	}
+
+	hd := CurrentHeaderData()
+	if len(hd.Warnings) != 1 || hd.Warnings[0] != "Workspace warning: invalid rule in config" {
+		t.Fatalf("unexpected Warnings in CurrentHeaderData: %v", hd.Warnings)
+	}
+}
+
+func TestInitSessionWithWorkspaceWarnings(t *testing.T) {
+	ResetApp()
+	defer ResetApp()
+	ResetSession()
+	defer ResetSession()
+
+	rt := &mockSessionRoundTripper{
+		handler: func(req *http.Request) (*http.Response, error) {
+			if req.Method == http.MethodGet && req.URL.Path == "/v1/workspace" {
+				ws := api.Workspace{
+					Name:     "test-ws",
+					RootDir:  "/workspace",
+					Warnings: []string{"warning 1", "warning 2"},
+				}
+				data, _ := json.Marshal(ws)
+				resp := &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(bytes.NewReader(data)),
+					Header:     make(http.Header),
+				}
+				resp.Header.Set("Content-Type", "application/json")
+				return resp, nil
+			}
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader(`{}`)),
+				Header:     make(http.Header),
+			}, nil
+		},
+	}
+
+	c, err := client.New("/tmp/dummy.sock", client.WithCWD("/workspace"), client.WithHTTPClient(&http.Client{Transport: rt}))
+	if err != nil {
+		t.Fatalf("client.New: %v", err)
+	}
+
+	ctx := context.Background()
+	InitSession(ctx, c, InitSessionOptions{
+		Agent: "test-agent",
+		Model: "test-model",
+	})
+
+	hd := CurrentHeaderData()
+	if len(hd.Warnings) != 2 || hd.Warnings[0] != "warning 1" || hd.Warnings[1] != "warning 2" {
+		t.Fatalf("unexpected Warnings in CurrentHeaderData after InitSession: %v", hd.Warnings)
+	}
+}
+
 func TestNextPermissionMode(t *testing.T) {
 	tests := []struct {
 		current api.PermissionMode

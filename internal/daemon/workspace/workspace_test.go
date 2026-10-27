@@ -379,6 +379,10 @@ func TestIsolatedEnvManagement(t *testing.T) {
 	setupTestXDG(t)
 	ctx := context.Background()
 
+	// 0. Set host environment variables to test host fallback and precedence
+	t.Setenv("HOST_FALLBACK_KEY", "from-host-env")
+	t.Setenv("SHARED_KEY", "from-host-env-should-be-overridden")
+
 	// 1. Create global user .env in XDG config dir
 	userEnvPath, err := xdg.SubConfigDir(".env")
 	if err != nil {
@@ -405,6 +409,9 @@ func TestIsolatedEnvManagement(t *testing.T) {
 	}
 
 	envMap := ws.Env()
+	if envMap["HOST_FALLBACK_KEY"] != "from-host-env" {
+		t.Errorf("HOST_FALLBACK_KEY = %q, want %q", envMap["HOST_FALLBACK_KEY"], "from-host-env")
+	}
 	if envMap["GLOBAL_KEY"] != "from-user-global" {
 		t.Errorf("GLOBAL_KEY = %q, want %q", envMap["GLOBAL_KEY"], "from-user-global")
 	}

@@ -874,6 +874,7 @@ func (s *Session) handleAsyncError(err error) {
 			})
 		}
 	} else {
+		s.logger.Error("session turn failed", log.String("session_id", s.ID), log.String("error", err.Error()))
 		s.publisher.Publish(api.SessionStreamTopic(s.ID), ErrorEvent{
 			SessionID: s.ID,
 			Error:     err.Error(),
@@ -1087,7 +1088,7 @@ func (s *Session) generateTitle(userText string) {
 
 	sysPrompt, err := s.workspace.RenderAgent(workspace.AgentNameTitleGenerator, nil, nil)
 	if err != nil || strings.TrimSpace(sysPrompt) == "" {
-		if s.logger != nil && err != nil {
+		if err != nil {
 			s.logger.Warn("failed to render title generator prompt", log.String("error", err.Error()))
 		}
 		return
@@ -1117,9 +1118,7 @@ func (s *Session) generateTitle(userText string) {
 
 	llmModel, err := s.gateway.ResolveLLM(ctx, modelName, opts...)
 	if err != nil {
-		if s.logger != nil {
-			s.logger.Warn("failed to resolve LLM for title generation", log.String("error", err.Error()))
-		}
+		s.logger.Warn("failed to resolve LLM for title generation", log.String("error", err.Error()))
 		return
 	}
 
@@ -1129,7 +1128,7 @@ func (s *Session) generateTitle(userText string) {
 	}
 	resp, err := llmModel.Invoke(ctx, msgs)
 	if err != nil || resp == nil {
-		if s.logger != nil && err != nil {
+		if err != nil {
 			s.logger.Warn("failed to invoke title generator model", log.String("error", err.Error()))
 		}
 		return
@@ -1175,9 +1174,7 @@ func (s *Session) generateTitle(userText string) {
 	if s.store != nil {
 		if err := s.store.updateSession(ctx, dbSess); err != nil {
 			s.Unlock()
-			if s.logger != nil {
-				s.logger.Warn("failed to persist generated title", log.String("error", err.Error()))
-			}
+			s.logger.Warn("failed to persist generated title", log.String("error", err.Error()))
 			return
 		}
 	}

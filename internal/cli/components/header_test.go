@@ -151,6 +151,86 @@ func TestHeaderDefaults(t *testing.T) {
 	}
 }
 
+func TestHeaderWithWarnings(t *testing.T) {
+	b := mock.New(80, 24)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	node := Header(store.HeaderData{
+		Version:   "0.2.0",
+		Model:     "Claude 3.7 Sonnet",
+		Thinking:  "high",
+		Workspace: "/workspace/project",
+		Warnings: []string{
+			"Agent configuration missing tools",
+			"Workspace config overrides default model",
+		},
+	})
+
+	go func() {
+		_ = trail.Run(ctx, node, trail.WithBackend(b))
+	}()
+
+	var text string
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		text = surfaceText(b)
+		if strings.Contains(text, "Agent configuration missing tools") {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	for _, want := range []string{
+		"TaskSmith v0.2.0",
+		"Claude 3.7 Sonnet with high effort",
+		"/workspace/project",
+		"⚠ Agent configuration missing tools",
+		"⚠ Workspace config overrides default model",
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("header output missing %q, got:\n%s", want, text)
+		}
+	}
+
+	bannerIdx := strings.Index(text, "TaskSmith v0.2.0")
+	warn1Idx := strings.Index(text, "⚠ Agent configuration missing tools")
+	warn2Idx := strings.Index(text, "⚠ Workspace config overrides default model")
+
+	if warn1Idx <= bannerIdx {
+		t.Errorf("expected warning 1 to appear after banner (banner=%d, warn1=%d)", bannerIdx, warn1Idx)
+	}
+	if warn2Idx <= warn1Idx {
+		t.Errorf("expected warning 2 to appear after warning 1 (warn1=%d, warn2=%d)", warn1Idx, warn2Idx)
+	}
+
+	frame := b.LastFrame().Surface
+	if frame == nil {
+		t.Fatal("expected rendered surface")
+	}
+	scheme := theme.Get()
+	expectedFg := scheme.Color.Text.Warning
+	var foundIcon bool
+	for y := 0; y < frame.Height; y++ {
+		for x := 0; x < frame.Width; x++ {
+			c := frame.CellAt(x, y)
+			if c.Content == "⚠" {
+				foundIcon = true
+				if c.Fg != expectedFg {
+					t.Errorf("expected warning icon color %v, got %v", expectedFg, c.Fg)
+				}
+				break
+			}
+		}
+		if foundIcon {
+			break
+		}
+	}
+	if !foundIcon {
+		t.Errorf("warning icon '⚠' not found in surface")
+	}
+}
+
 func TestHeaderThemeSwitching(t *testing.T) {
 	origTheme := theme.GetName()
 	defer func() {

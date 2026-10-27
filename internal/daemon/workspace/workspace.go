@@ -301,6 +301,15 @@ func ensureSubprojectLoaded(ctx context.Context, reg *warp.Registry, rootDir, cw
 func loadIsolatedEnv(cwd, rootDir string) (map[string]string, error) {
 	var layers []map[string]string
 
+	// Layer 0: Host process environment variables (os.Environ())
+	hostEnv := make(map[string]string)
+	for _, entry := range os.Environ() {
+		if k, v, ok := strings.Cut(entry, "="); ok && k != "" {
+			hostEnv[k] = v
+		}
+	}
+	layers = append(layers, hostEnv)
+
 	// Layer 1: Global user .env ($XDG_CONFIG_HOME/<app>/.env)
 	if userEnvPath, err := xdg.SubConfigDir(".env"); err == nil {
 		m, loadErr := env.LoadFile(userEnvPath)

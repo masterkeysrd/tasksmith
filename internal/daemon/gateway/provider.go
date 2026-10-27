@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -29,17 +30,11 @@ type providerInstance struct {
 	decisionProv  decision.Provider
 	embeddingProv embedding.Provider
 	models        map[string]ModelSpec
+	authErr       error
+	warning       string
 }
 
 func initProvider(ctx context.Context, cfg ProviderConfig, env map[string]string) (*providerInstance, error) {
-	token, err := resolveCredential(cfg.Auth, env)
-	if err != nil {
-		return nil, fmt.Errorf("provider %q auth error: %w", cfg.Name, err)
-	}
-
-	transport := buildHTTPTransport(nil, cfg.Auth, token, cfg.Headers)
-	httpClient := &http.Client{Transport: transport}
-
 	modelsMap := make(map[string]ModelSpec, len(cfg.Models))
 	for _, m := range cfg.Models {
 		modelsMap[m.ID] = m
@@ -49,6 +44,39 @@ func initProvider(ctx context.Context, cfg ProviderConfig, env map[string]string
 		cfg:    cfg,
 		models: modelsMap,
 	}
+
+	switch cfg.Type {
+	case "ollama":
+		endpoint := cfg.Endpoint
+		if endpoint == "" {
+			endpoint = "http://127.0.0.1:11434"
+		}
+		if _, err := url.Parse(endpoint); err != nil {
+			return nil, fmt.Errorf("gateway: invalid ollama endpoint %q: %w", endpoint, err)
+		}
+	case "openai", "anthropic", "typesafe", "genai", "antigravity":
+		// valid provider types
+	default:
+		return nil, fmt.Errorf("%w: unknown provider type %q", ErrInvalidConfig, cfg.Type)
+	}
+
+	token, err := resolveCredential(cfg.Auth, env)
+	if err != nil {
+		if errors.Is(err, ErrMissingCredential) {
+			if cfg.Auth != nil && cfg.Auth.Env != "" {
+				inst.authErr = fmt.Errorf("%w: provider %q requires environment variable %q", ErrMissingCredential, cfg.Name, cfg.Auth.Env)
+				inst.warning = fmt.Sprintf("provider %q: missing required environment variable %q", cfg.Name, cfg.Auth.Env)
+			} else {
+				inst.authErr = fmt.Errorf("provider %q auth error: %w", cfg.Name, err)
+				inst.warning = inst.authErr.Error()
+			}
+			return inst, nil
+		}
+		return nil, fmt.Errorf("provider %q auth error: %w", cfg.Name, err)
+	}
+
+	transport := buildHTTPTransport(nil, cfg.Auth, token, cfg.Headers)
+	httpClient := &http.Client{Transport: transport}
 
 	switch cfg.Type {
 	case "ollama":

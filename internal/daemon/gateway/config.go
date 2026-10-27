@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"os"
 	"sort"
 	"strings"
 )
@@ -34,10 +35,10 @@ func (c *Config) Fingerprint() string {
 	relevantEnv := make(map[string]string)
 	for _, p := range c.Providers {
 		if p.Auth != nil && p.Auth.Env != "" {
-			if val, ok := c.Env[p.Auth.Env]; ok {
-				relevantEnv[p.Auth.Env] = val
+			if val := strings.TrimSpace(c.Env[p.Auth.Env]); val != "" {
+				relevantEnv[p.Auth.Env] = c.Env[p.Auth.Env]
 			} else {
-				relevantEnv[p.Auth.Env] = ""
+				relevantEnv[p.Auth.Env] = os.Getenv(p.Auth.Env)
 			}
 		}
 	}
@@ -85,8 +86,7 @@ func (c *Config) Fingerprint() string {
 	return hex.EncodeToString(sum[:])
 }
 
-// Validate checks the configuration for structural integrity and ensures
-// all referenced authentication credentials exist in the injected Env map.
+// Validate checks the configuration for structural integrity (provider names, types, uniqueness).
 func (c *Config) Validate() error {
 	if c == nil {
 		return fmt.Errorf("%w: config cannot be nil", ErrInvalidConfig)
@@ -106,16 +106,6 @@ func (c *Config) Validate() error {
 		pType := strings.TrimSpace(p.Type)
 		if pType == "" {
 			return fmt.Errorf("%w: provider %q is missing a type", ErrInvalidConfig, name)
-		}
-
-		// Verify authentication
-		if p.Auth != nil {
-			if p.Auth.Env != "" {
-				val, ok := c.Env[p.Auth.Env]
-				if !ok || strings.TrimSpace(val) == "" {
-					return fmt.Errorf("%w: provider %q requires environment variable %q", ErrMissingCredential, name, p.Auth.Env)
-				}
-			}
 		}
 	}
 

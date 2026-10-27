@@ -123,6 +123,7 @@ type ProviderInfo struct {
 	Endpoint      string               `json:"endpoint,omitempty"`
 	DefaultModels map[ModelRole]string `json:"default_models,omitempty"`
 	Models        []ModelSpec          `json:"models,omitempty"`
+	Warning       string               `json:"warning,omitempty"`
 }
 
 // LLMOption configures a call to ResolveLLM.

@@ -89,6 +89,7 @@ func TestWireTypesJSONRoundTrip(t *testing.T) {
 		CWD:          "/path/to/root/pkg",
 		DefaultAgent: "developer",
 		DefaultModel: "ollama/qwen3.8",
+		Warnings:     []string{`provider "openai": missing required environment variable "OPENAI_API_KEY"`},
 	}
 	wsRaw, err := json.Marshal(ws)
 	if err != nil {
@@ -98,7 +99,7 @@ func TestWireTypesJSONRoundTrip(t *testing.T) {
 	if err := json.Unmarshal(wsRaw, &wsDecoded); err != nil {
 		t.Fatalf("Unmarshal Workspace: %v", err)
 	}
-	if wsDecoded != ws {
+	if !reflect.DeepEqual(wsDecoded, ws) {
 		t.Fatalf("Workspace roundtrip mismatch: got %+v, want %+v", wsDecoded, ws)
 	}
 

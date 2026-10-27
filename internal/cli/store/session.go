@@ -957,10 +957,13 @@ func ResolveModelInfo(ctx context.Context, c *client.Client, cfgAgent, cfgModel 
 	}
 
 	var ws *api.Workspace
-	if c != nil && (agentName == "" || modelID == "") {
+	if c != nil {
 		ws, _ = c.GetWorkspace(ctx)
-		if ws != nil && agentName == "" {
-			agentName = strings.TrimSpace(ws.DefaultAgent)
+		if ws != nil {
+			SetWorkspaceWarnings(ws.Warnings)
+			if agentName == "" {
+				agentName = strings.TrimSpace(ws.DefaultAgent)
+			}
 		}
 	}
 

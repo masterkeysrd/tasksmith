@@ -19,6 +19,8 @@ var (
 	ErrNilMessage                   = errors.New("harness: input message must not be nil")
 	ErrNoPendingPermissions         = errors.New("harness: no pending permissions for thread")
 	ErrPendingPermissionsUnresolved = errors.New("harness: all pending permissions must be resolved before resuming")
+	ErrNoPendingQuestions           = errors.New("harness: no pending questions for thread")
+	ErrPendingQuestionsUnresolved   = errors.New("harness: all pending questions must be resolved before resuming")
 )
 
 const MetaSystemKind = "tasksmith.system.kind"
@@ -106,10 +108,11 @@ type CommandCompleted struct {
 }
 
 // Input represents the conversational input to [Harness.Stream].
-// It can provide either a new user message or resolved permission decisions.
+// It can provide either a new user message or resolved permission decisions and question answers.
 type Input struct {
 	Message   message.Message
 	Decisions map[string]tools.PermissionDecision
+	Answers   map[string]tools.QuestionResponse
 }
 
 // State holds the checkpointed conversation and permission state for a thread.
@@ -118,6 +121,8 @@ type State struct {
 	Messages            message.MessageList                 `json:"messages"`
 	PendingPermissions  []tools.PermissionRequest           `json:"pending_permissions,omitempty"`
 	PermissionDecisions map[string]tools.PermissionDecision `json:"permission_decisions,omitempty"`
+	PendingQuestions    []tools.QuestionRequest             `json:"pending_questions,omitempty"`
+	QuestionResponses   map[string]tools.QuestionResponse   `json:"question_responses,omitempty"`
 	Todos               []tools.TodoItem                    `json:"todos,omitempty"`
 }
 

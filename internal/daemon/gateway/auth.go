@@ -9,8 +9,8 @@ import (
 	"strings"
 )
 
-// resolveCredential strictly extracts credentials from the injected in-memory env map
-// or an explicit file path. It NEVER inspects os.Getenv or the global process environment.
+// resolveCredential extracts credentials from the injected in-memory env map,
+// falling back to os.Getenv, or reading from an explicit file path.
 func resolveCredential(auth *AuthConfig, env map[string]string) (string, error) {
 	if auth == nil {
 		return "", nil
@@ -19,6 +19,9 @@ func resolveCredential(auth *AuthConfig, env map[string]string) (string, error) 
 	if auth.Env != "" {
 		val, ok := env[auth.Env]
 		if !ok || strings.TrimSpace(val) == "" {
+			val = os.Getenv(auth.Env)
+		}
+		if strings.TrimSpace(val) == "" {
 			return "", fmt.Errorf("%w: missing required environment key %q", ErrMissingCredential, auth.Env)
 		}
 		return strings.TrimSpace(val), nil

@@ -23,6 +23,7 @@ type HeaderData struct {
 	Model     string
 	Thinking  string
 	Workspace string
+	Warnings  []string
 }
 
 // NoticeData holds a local informational notice.
@@ -63,29 +64,52 @@ var transcript = kites.Create(TranscriptState{})
 func CurrentHeaderData() HeaderData {
 	appState := GetApp()
 	sess := GetSession()
+	var warnings []string
+	if appState.Warnings != nil {
+		warnings = make([]string, len(*appState.Warnings))
+		copy(warnings, *appState.Warnings)
+	}
 	return HeaderData{
 		Version:   appState.Version,
 		Workspace: appState.Workspace,
 		Model:     sess.ModelLabel,
 		Thinking:  sess.Thinking,
+		Warnings:  warnings,
 	}
+}
+
+type headerAppMeta struct {
+	version   string
+	workspace string
+	warnings  *[]string
 }
 
 // UseHeaderData returns reactive HeaderData subscribed to changes in AppState metadata,
 // ModelLabel, and Thinking effort.
 func UseHeaderData() HeaderData {
-	appMeta := UseApp(func(s AppState) [2]string {
-		return [2]string{s.Version, s.Workspace}
+	appMeta := UseApp(func(s AppState) headerAppMeta {
+		return headerAppMeta{
+			version:   s.Version,
+			workspace: s.Workspace,
+			warnings:  s.Warnings,
+		}
 	})
 	sessionInfo := UseSession(func(s SessionState) [2]string {
 		return [2]string{s.ModelLabel, s.Thinking}
 	})
 
+	var warnings []string
+	if appMeta.warnings != nil {
+		warnings = make([]string, len(*appMeta.warnings))
+		copy(warnings, *appMeta.warnings)
+	}
+
 	return HeaderData{
-		Version:   appMeta[0],
-		Workspace: appMeta[1],
+		Version:   appMeta.version,
+		Workspace: appMeta.workspace,
 		Model:     sessionInfo[0],
 		Thinking:  sessionInfo[1],
+		Warnings:  warnings,
 	}
 }
 

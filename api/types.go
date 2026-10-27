@@ -12,11 +12,12 @@ const HeaderCWD = "X-TaskSmith-CWD"
 
 // Workspace describes the resolved configuration metadata for a workspace directory.
 type Workspace struct {
-	Name         string `json:"name"`
-	RootDir      string `json:"root_dir"`
-	CWD          string `json:"cwd,omitempty"`
-	DefaultAgent string `json:"default_agent"`
-	DefaultModel string `json:"default_model,omitempty"`
+	Name         string   `json:"name"`
+	RootDir      string   `json:"root_dir"`
+	CWD          string   `json:"cwd,omitempty"`
+	DefaultAgent string   `json:"default_agent"`
+	DefaultModel string   `json:"default_model,omitempty"`
+	Warnings     []string `json:"warnings,omitempty"`
 }
 
 // Agent describes an effective agent configuration in a workspace.

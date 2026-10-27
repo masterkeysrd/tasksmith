@@ -2,8 +2,17 @@ package gateway
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"strings"
 	"testing"
+
+	"github.com/anthropics/anthropic-sdk-go"
+	"github.com/masterkeysrd/loom/llm"
+	"github.com/masterkeysrd/loom/message"
+	"github.com/masterkeysrd/loom/profile"
+	"github.com/openai/openai-go/v3"
 )
 
 func TestConfigFingerprint(t *testing.T) {
@@ -86,12 +95,41 @@ func TestConfigFingerprint(t *testing.T) {
 func TestStrictAuthValidation(t *testing.T) {
 	ctx := context.Background()
 
+	// 1. Missing credentials: New() must succeed lazily, with warning populated
 	cfgMissing := Config{
 		Providers: []ProviderConfig{
 			{
 				Name: "anthropic",
 				Type: "anthropic",
 				Auth: &AuthConfig{Env: "ANTHROPIC_API_KEY"},
+				Models: []ModelSpec{
+					{
+						ID:   "claude-3-7-sonnet",
+						Name: "Claude 3.7 Sonnet",
+						Capabilities: &ModelCapabilities{
+							Completion: new(true),
+						},
+					},
+				},
+			},
+			{
+				Name:     "ollama",
+				Type:     "ollama",
+				Endpoint: "http://127.0.0.1:11434",
+				Models: []ModelSpec{
+					{
+						ID:   "llama3.2",
+						Name: "Llama 3.2",
+						Capabilities: &ModelCapabilities{
+							Completion: new(true),
+							Decision:   new(true),
+							Embedding:  new(true),
+						},
+					},
+				},
+				DefaultModels: map[ModelRole]string{
+					RoleCompletion: "llama3.2",
+				},
 			},
 		},
 		Env: map[string]string{
@@ -99,16 +137,92 @@ func TestStrictAuthValidation(t *testing.T) {
 		},
 	}
 
-	_, err := New(ctx, cfgMissing)
-	if err == nil {
-		t.Fatalf("expected error when required Auth.Env key is missing from Env map")
+	gw, err := New(ctx, cfgMissing)
+	if err != nil {
+		t.Fatalf("expected New() to succeed lazily with missing provider credentials, got: %v", err)
 	}
-	if !errors.Is(err, ErrMissingCredential) {
-		t.Fatalf("expected ErrMissingCredential, got %v", err)
+	defer gw.Close()
+
+	// Verify ListProviders includes warning on unauthenticated provider
+	providers := gw.ListProviders()
+	var anthropicInfo, ollamaInfo *ProviderInfo
+	for i := range providers {
+		if providers[i].Name == "anthropic" {
+			anthropicInfo = &providers[i]
+		}
+		if providers[i].Name == "ollama" {
+			ollamaInfo = &providers[i]
+		}
+	}
+	if anthropicInfo == nil || anthropicInfo.Warning == "" {
+		t.Fatalf("expected warning on anthropic provider, got info: %+v", anthropicInfo)
+	}
+	expectedWarning := `provider "anthropic": missing required environment variable "ANTHROPIC_API_KEY"`
+	if anthropicInfo.Warning != expectedWarning {
+		t.Errorf("anthropic warning = %q, want %q", anthropicInfo.Warning, expectedWarning)
+	}
+	if ollamaInfo == nil || ollamaInfo.Warning != "" {
+		t.Errorf("expected no warning on ollama provider, got: %q", ollamaInfo.Warning)
 	}
 
-	// With required key provided
-	cfgValid := Config{
+	// Calling ResolveLLM for unauthenticated provider returns ErrMissingCredential
+	_, err = gw.ResolveLLM(ctx, "anthropic/claude-3-7-sonnet")
+	if !errors.Is(err, ErrMissingCredential) {
+		t.Fatalf("expected ErrMissingCredential for ResolveLLM on unauthenticated provider, got %v", err)
+	}
+	_, err = gw.ResolveDecision(ctx, "anthropic/claude-3-7-sonnet")
+	if !errors.Is(err, ErrMissingCredential) {
+		t.Fatalf("expected ErrMissingCredential for ResolveDecision on unauthenticated provider, got %v", err)
+	}
+	_, err = gw.ResolveEmbedding(ctx, "anthropic/claude-3-7-sonnet")
+	if !errors.Is(err, ErrMissingCredential) {
+		t.Fatalf("expected ErrMissingCredential for ResolveEmbedding on unauthenticated provider, got %v", err)
+	}
+
+	// Calling ResolveLLM for healthy provider succeeds!
+	healthyLLM, err := gw.ResolveLLM(ctx, "ollama/llama3.2")
+	if err != nil {
+		t.Fatalf("expected healthy provider ResolveLLM to succeed, got %v", err)
+	}
+	if healthyLLM.Name() != "llama3.2" {
+		t.Errorf("expected llama3.2, got %q", healthyLLM.Name())
+	}
+
+	// Default role resolution prefers the healthy provider over the unauthenticated provider
+	defaultLLM, err := gw.ResolveLLM(ctx, "")
+	if err != nil {
+		t.Fatalf("expected default ResolveLLM to route to healthy provider, got %v", err)
+	}
+	if defaultLLM.Name() != "llama3.2" {
+		t.Errorf("expected default LLM llama3.2, got %q", defaultLLM.Name())
+	}
+
+	// 2. Test os.Getenv fallback via t.Setenv
+	t.Setenv("ANTHROPIC_API_KEY", "env-fallback-secret")
+	gwWithHostEnv, err := New(ctx, Config{
+		Providers: []ProviderConfig{
+			{
+				Name: "anthropic",
+				Type: "anthropic",
+				Auth: &AuthConfig{Env: "ANTHROPIC_API_KEY"},
+				Models: []ModelSpec{
+					{ID: "claude-3-7-sonnet", Name: "Claude 3.7 Sonnet"},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("expected New() to succeed with host env fallback, got: %v", err)
+	}
+	defer gwWithHostEnv.Close()
+
+	hostProviders := gwWithHostEnv.ListProviders()
+	if len(hostProviders) != 1 || hostProviders[0].Warning != "" {
+		t.Errorf("expected no warning when credential is provided via os.Getenv, got: %+v", hostProviders)
+	}
+
+	// Verify fingerprint includes the host env fallback
+	fp := (&Config{
 		Providers: []ProviderConfig{
 			{
 				Name: "anthropic",
@@ -116,16 +230,10 @@ func TestStrictAuthValidation(t *testing.T) {
 				Auth: &AuthConfig{Env: "ANTHROPIC_API_KEY"},
 			},
 		},
-		Env: map[string]string{
-			"ANTHROPIC_API_KEY": "test-key",
-		},
+	}).Fingerprint()
+	if fp == "" || fp == "nil" {
+		t.Fatalf("expected valid fingerprint with os.Getenv fallback, got %q", fp)
 	}
-
-	gw, err := New(ctx, cfgValid)
-	if err != nil {
-		t.Fatalf("unexpected error with valid credentials: %v", err)
-	}
-	defer gw.Close()
 }
 
 func TestPoolContentAddressable(t *testing.T) {
@@ -304,5 +412,116 @@ func TestGatewayClose(t *testing.T) {
 	// Post-close resolution should fail
 	if _, err := gw.ResolveLLM(ctx, "llama3.2"); !errors.Is(err, ErrGatewayClosed) {
 		t.Fatalf("expected ErrGatewayClosed, got %v", err)
+	}
+}
+
+type mockStreamProvider struct {
+	llm.Provider
+	streamErr error
+	syncErr   error
+}
+
+func (m *mockStreamProvider) Name() string                             { return "mock" }
+func (m *mockStreamProvider) ListProfiles() []profile.Profile          { return nil }
+func (m *mockStreamProvider) GetProfile(string) (profile.Profile, bool) { return profile.Profile{}, false }
+func (m *mockStreamProvider) SearchProfiles(string) []profile.Profile  { return nil }
+func (m *mockStreamProvider) OverrideProfile(string, profile.Profile)  {}
+
+func (m *mockStreamProvider) Stream(ctx context.Context, req *llm.Request) (llm.StreamResponse, error) {
+	if m.syncErr != nil {
+		return nil, m.syncErr
+	}
+	return func(yield func(message.AssistantChunk, error) bool) {
+		if m.streamErr != nil {
+			yield(message.AssistantChunk{}, m.streamErr)
+			return
+		}
+		yield(message.AssistantChunk{
+			Content: []message.Block{&message.TextBlock{Text: "ok"}},
+			Done:    true,
+		}, nil)
+	}, nil
+}
+
+func TestOpenAIErrorEnrichment(t *testing.T) {
+	ctx := context.Background()
+
+	openaiErr := &openai.Error{
+		StatusCode: 400,
+		Message:    "Invalid model 'gpt-6.1-terra'",
+	}
+
+	// Verify that the SDK's raw Error() sanitizes away the message
+	if strings.Contains(openaiErr.Error(), "Invalid model 'gpt-6.1-terra'") {
+		t.Fatalf("expected openai.Error.Error() to be sanitized, but it contained the message: %q", openaiErr.Error())
+	}
+
+	wrappedErr := fmt.Errorf("stream error: %w", openaiErr)
+
+	mockProv := &mockStreamProvider{
+		streamErr: wrappedErr,
+	}
+
+	gw := &gatewayImpl{
+		providers: map[string]*providerInstance{
+			"mock": {
+				cfg:     ProviderConfig{Name: "mock", Type: "openai"},
+				llmProv: mockProv,
+			},
+		},
+		providerList: []*providerInstance{
+			{
+				cfg:     ProviderConfig{Name: "mock", Type: "openai"},
+				llmProv: mockProv,
+			},
+		},
+	}
+
+	model, err := gw.ResolveLLM(ctx, "mock/gpt-6.1-terra")
+	if err != nil {
+		t.Fatalf("ResolveLLM failed: %v", err)
+	}
+
+	// Invoke the model which drains the stream and returns the stream error
+	_, err = model.Invoke(ctx, []message.Message{message.NewUserText("Hello")})
+	if err == nil {
+		t.Fatal("expected error from model.Invoke, got nil")
+	}
+
+	// Verify err.Error() contains the enriched message
+	if !strings.Contains(err.Error(), "Invalid model 'gpt-6.1-terra'") {
+		t.Errorf("expected err.Error() to contain 'Invalid model \\'gpt-6.1-terra\\'', got: %q", err.Error())
+	}
+
+	// Verify errors.As succeeds for *openai.Error
+	var target *openai.Error
+	if !errors.As(err, &target) || target == nil {
+		t.Fatalf("expected errors.As(err, &target) to succeed, got %v", err)
+	}
+	if target.StatusCode != 400 {
+		t.Errorf("target.StatusCode = %d, want 400", target.StatusCode)
+	}
+	if target.Message != "Invalid model 'gpt-6.1-terra'" {
+		t.Errorf("target.Message = %q, want 'Invalid model \\'gpt-6.1-terra\\''", target.Message)
+	}
+}
+
+func TestAnthropicErrorEnrichment(t *testing.T) {
+	rawJSON := `{"type":"error","error":{"type":"invalid_request_error","message":"model not found: claude-custom-4"}}`
+	var anthropicErr anthropic.Error
+	if err := json.Unmarshal([]byte(rawJSON), &anthropicErr); err != nil {
+		t.Fatalf("json.Unmarshal anthropic.Error: %v", err)
+	}
+
+	wrapped := fmt.Errorf("provider failure: %w", &anthropicErr)
+	enriched := formatProviderError(wrapped)
+
+	if !strings.Contains(enriched.Error(), "model not found: claude-custom-4") {
+		t.Errorf("expected enriched anthropic error to contain message, got: %q", enriched.Error())
+	}
+
+	var target *anthropic.Error
+	if !errors.As(enriched, &target) || target == nil {
+		t.Fatalf("expected errors.As for *anthropic.Error to succeed")
 	}
 }

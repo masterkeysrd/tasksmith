@@ -1,8 +1,11 @@
 package session
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -10,7 +13,13 @@ import (
 	"github.com/google/uuid"
 	"github.com/masterkeysrd/loom/llm"
 	"github.com/masterkeysrd/loom/message"
+	"github.com/masterkeysrd/tasksmith/internal/core/log"
+	"github.com/masterkeysrd/tasksmith/internal/core/sqlite"
+	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/permissions"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tools"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/tools/builtin"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/workspace"
 )
 
 func TestStateAndSessionClone(t *testing.T) {
@@ -234,6 +243,77 @@ func TestManagerTurnErrorPublishing(t *testing.T) {
 	}
 	if !foundErrorEvent {
 		t.Errorf("expected ErrorEvent to be published: %+v", pub.recorded())
+	}
+}
+
+func TestManagerTurnErrorLogging(t *testing.T) {
+	ctx := context.Background()
+	prov := &fakeProvider{
+		handler: func(_ context.Context, _ *llm.Request) ([]string, string, error) {
+			return nil, "", errors.New("simulated fatal llm turn failure")
+		},
+	}
+	var logBuf bytes.Buffer
+	testLogger := log.New(&logBuf, log.LevelDebug)
+
+	xdgRoot := t.TempDir()
+	xdg.SetTestEnv(xdgRoot, "tasksmith-session-log-test")
+	t.Cleanup(func() {
+		xdg.ClearCache()
+	})
+
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	db, err := sqlite.Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("sqlite.Open: %v", err)
+	}
+	defer db.Close()
+
+	ws, err := workspace.Open(ctx, t.TempDir(), workspace.WithBuiltinFS(builtin.FS()))
+	if err != nil {
+		t.Fatalf("workspace.Open: %v", err)
+	}
+
+	gw := newFakeGateway(prov)
+	pub := &testPublisher{}
+
+	permMgr, err := permissions.New(permissions.Config{Workspace: ws})
+	if err != nil {
+		t.Fatalf("permissions.New: %v", err)
+	}
+
+	mgr, err := New(Config{
+		DB:          db,
+		Workspace:   ws,
+		Gateway:     gw,
+		Publisher:   pub,
+		Logger:      testLogger,
+		Permissions: permMgr,
+	})
+	if err != nil {
+		t.Fatalf("session.New: %v", err)
+	}
+	defer mgr.Close()
+
+	sess, _, err := mgr.Create(ctx, CreateParams{Title: "Turn Error Log Test"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	if err := sess.Send(ctx, SendInput{Message: message.NewUserText("Fail turn")}); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	_ = sess.Wait(ctx)
+
+	logOutput := logBuf.String()
+	if !strings.Contains(logOutput, "session turn failed") {
+		t.Errorf("expected log output to contain 'session turn failed', got:\n%s", logOutput)
+	}
+	if !strings.Contains(logOutput, "simulated fatal llm turn failure") {
+		t.Errorf("expected log output to contain 'simulated fatal llm turn failure', got:\n%s", logOutput)
+	}
+	if !strings.Contains(logOutput, sess.ID) {
+		t.Errorf("expected log output to contain session id %q, got:\n%s", sess.ID, logOutput)
 	}
 }
 

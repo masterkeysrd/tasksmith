@@ -1,6 +1,8 @@
 package store
 
 import (
+	"slices"
+
 	"github.com/masterkeysrd/kite/extras/kites"
 	"github.com/masterkeysrd/kite/extras/trail"
 )
@@ -19,6 +21,7 @@ type AppState struct {
 	Hint          string
 	Version       string
 	Workspace     string
+	Warnings      *[]string
 }
 
 var app = kites.Create(AppState{Hint: DefaultHint})
@@ -80,13 +83,34 @@ func UseHint(hint string) {
 	}, []any{hint})
 }
 
-// ResetApp resets AppState to its default values while preserving version and workspace.
+// SetWorkspaceWarnings updates the workspace warnings in AppState.
+func SetWorkspaceWarnings(warnings []string) {
+	app.Set(func(s AppState) AppState {
+		if len(warnings) == 0 {
+			if s.Warnings == nil {
+				return s
+			}
+			s.Warnings = nil
+			return s
+		}
+		if s.Warnings != nil && slices.Equal(*s.Warnings, warnings) {
+			return s
+		}
+		w := make([]string, len(warnings))
+		copy(w, warnings)
+		s.Warnings = &w
+		return s
+	})
+}
+
+// ResetApp resets AppState to its default values while preserving version, workspace, and warnings.
 func ResetApp() {
 	app.Set(func(s AppState) AppState {
 		return AppState{
 			Hint:      DefaultHint,
 			Version:   s.Version,
 			Workspace: s.Workspace,
+			Warnings:  s.Warnings,
 		}
 	})
 }

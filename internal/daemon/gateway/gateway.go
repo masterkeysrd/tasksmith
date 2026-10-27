@@ -67,6 +67,7 @@ func (g *gatewayImpl) ListProviders() []ProviderInfo {
 			Endpoint:      inst.cfg.Endpoint,
 			DefaultModels: inst.cfg.DefaultModels,
 			Models:        inst.cfg.Models,
+			Warning:       inst.warning,
 		})
 	}
 	return res
@@ -92,6 +93,10 @@ func (g *gatewayImpl) ResolveLLM(ctx context.Context, explicit string, opts ...L
 		return nil, err
 	}
 
+	if inst.authErr != nil {
+		return nil, inst.authErr
+	}
+
 	if inst.llmProv == nil {
 		return nil, fmt.Errorf("%w: provider %q does not support chat/completion", ErrUnsupportedCapability, inst.cfg.Name)
 	}
@@ -104,6 +109,7 @@ func (g *gatewayImpl) ResolveLLM(ctx context.Context, explicit string, opts ...L
 		return nil, fmt.Errorf("gateway: failed to create llm model: %w", err)
 	}
 
+	model = model.WithMiddleware(errorEnrichingLLMMiddleware())
 	if len(options.middleware) > 0 {
 		model = model.WithMiddleware(options.middleware...)
 	}
@@ -131,12 +137,17 @@ func (g *gatewayImpl) ResolveDecision(ctx context.Context, explicit string, opts
 		return nil, err
 	}
 
+	if inst.authErr != nil {
+		return nil, inst.authErr
+	}
+
 	// 1. Native decision provider check
 	if inst.decisionProv != nil && (spec == nil || spec.Capabilities.SupportsDecision()) {
 		model, err := decision.NewModel(inst.decisionProv, modelID, options.config)
 		if err != nil {
 			return nil, fmt.Errorf("gateway: failed to create native decision model: %w", err)
 		}
+		model = model.WithMiddleware(errorEnrichingDecisionMiddleware())
 		if len(options.middleware) > 0 {
 			model = model.WithMiddleware(options.middleware...)
 		}
@@ -155,12 +166,14 @@ func (g *gatewayImpl) ResolveDecision(ctx context.Context, explicit string, opts
 	if err != nil {
 		return nil, fmt.Errorf("gateway: failed to create underlying llm for decision adapter: %w", err)
 	}
+	llmModel = llmModel.WithMiddleware(errorEnrichingLLMMiddleware())
 
 	decModel, err := decision.NewFromLLM(llmModel, options.config)
 	if err != nil {
 		return nil, fmt.Errorf("gateway: failed to adapt llm into decision model: %w", err)
 	}
 
+	decModel = decModel.WithMiddleware(errorEnrichingDecisionMiddleware())
 	if len(options.middleware) > 0 {
 		decModel = decModel.WithMiddleware(options.middleware...)
 	}
@@ -188,6 +201,10 @@ func (g *gatewayImpl) ResolveEmbedding(ctx context.Context, explicit string, opt
 		return nil, err
 	}
 
+	if inst.authErr != nil {
+		return nil, inst.authErr
+	}
+
 	if inst.embeddingProv == nil {
 		return nil, fmt.Errorf("%w: provider %q does not support vector embeddings", ErrUnsupportedCapability, inst.cfg.Name)
 	}
@@ -200,6 +217,7 @@ func (g *gatewayImpl) ResolveEmbedding(ctx context.Context, explicit string, opt
 		return nil, fmt.Errorf("gateway: failed to create embedding model: %w", err)
 	}
 
+	model = model.WithMiddleware(errorEnrichingEmbeddingMiddleware())
 	if len(options.middleware) > 0 {
 		model = model.WithMiddleware(options.middleware...)
 	}
@@ -229,14 +247,28 @@ func (g *gatewayImpl) findModelAndProvider(role ModelRole, explicit string) (*pr
 			return inst, modelID, specPtr, nil
 		}
 
-		// Bare model ID: Search all providers for a match
+		// Bare model ID: Search all providers for a match, preferring healthy providers
 		for _, inst := range g.providerList {
-			if spec, ok := inst.models[explicit]; ok {
-				return inst, explicit, &spec, nil
+			if inst.authErr == nil {
+				if spec, ok := inst.models[explicit]; ok {
+					return inst, explicit, &spec, nil
+				}
+			}
+		}
+		for _, inst := range g.providerList {
+			if inst.authErr != nil {
+				if spec, ok := inst.models[explicit]; ok {
+					return inst, explicit, &spec, nil
+				}
 			}
 		}
 
-		// If no provider explicitly registered the model ID, route to the first provider
+		// If no provider explicitly registered the model ID, route to the first healthy provider, or first provider
+		for _, inst := range g.providerList {
+			if inst.authErr == nil {
+				return inst, explicit, nil, nil
+			}
+		}
 		if len(g.providerList) > 0 {
 			return g.providerList[0], explicit, nil, nil
 		}
@@ -248,18 +280,28 @@ func (g *gatewayImpl) findModelAndProvider(role ModelRole, explicit string) (*pr
 		return g.findModelAndProvider(role, defaultModel)
 	}
 
-	// Case 3: Provider-level default for role
+	// Case 3 (healthy): Provider-level default for role on healthy providers
 	for _, inst := range g.providerList {
+		if inst.authErr != nil {
+			continue
+		}
 		if def, ok := inst.cfg.DefaultModels[role]; ok && strings.TrimSpace(def) != "" {
-			return g.findModelAndProvider(role, def)
+			if targetInst, mID, spec, err := g.findModelAndProvider(role, def); err == nil && targetInst.authErr == nil {
+				return targetInst, mID, spec, nil
+			}
 		}
 		if role == RoleCompletion && strings.TrimSpace(inst.cfg.DefaultModel) != "" {
-			return g.findModelAndProvider(role, inst.cfg.DefaultModel)
+			if targetInst, mID, spec, err := g.findModelAndProvider(role, inst.cfg.DefaultModel); err == nil && targetInst.authErr == nil {
+				return targetInst, mID, spec, nil
+			}
 		}
 	}
 
-	// Case 4: Search model catalogs for first model supporting the role
+	// Case 4 (healthy): Search model catalogs on healthy providers
 	for _, inst := range g.providerList {
+		if inst.authErr != nil {
+			continue
+		}
 		for _, m := range inst.cfg.Models {
 			switch role {
 			case RoleCompletion:
@@ -281,10 +323,70 @@ func (g *gatewayImpl) findModelAndProvider(role ModelRole, explicit string) (*pr
 		}
 	}
 
-	// Case 5: If role is Decision and no native decision model found, fallback to completion default for adapter
+	// Healthy Decision adapter fallback: If role is Decision and no native decision model found among healthy providers,
+	// fallback to completion model on healthy providers
+	if role == RoleDecision {
+		if inst, mID, spec, err := g.findModelAndProvider(RoleCompletion, ""); err == nil && inst.authErr == nil {
+			return inst, mID, spec, nil
+		}
+	}
+
+	// Fallback Case 3: Provider-level default for role on unauthenticated providers
+	for _, inst := range g.providerList {
+		if inst.authErr == nil {
+			continue
+		}
+		if def, ok := inst.cfg.DefaultModels[role]; ok && strings.TrimSpace(def) != "" {
+			return g.findModelAndProvider(role, def)
+		}
+		if role == RoleCompletion && strings.TrimSpace(inst.cfg.DefaultModel) != "" {
+			return g.findModelAndProvider(role, inst.cfg.DefaultModel)
+		}
+	}
+
+	// Fallback Case 4: Search model catalogs on unauthenticated providers
+	for _, inst := range g.providerList {
+		if inst.authErr == nil {
+			continue
+		}
+		for _, m := range inst.cfg.Models {
+			switch role {
+			case RoleCompletion:
+				if m.Capabilities.SupportsCompletion() && providerSupportsRole(inst.cfg.Type, RoleCompletion) {
+					spec := m
+					return inst, m.ID, &spec, nil
+				}
+			case RoleDecision:
+				if m.Capabilities.SupportsDecision() && providerSupportsRole(inst.cfg.Type, RoleDecision) {
+					spec := m
+					return inst, m.ID, &spec, nil
+				}
+			case RoleEmbedding:
+				if m.Capabilities.SupportsEmbedding() && providerSupportsRole(inst.cfg.Type, RoleEmbedding) {
+					spec := m
+					return inst, m.ID, &spec, nil
+				}
+			}
+		}
+	}
+
+	// Fallback Case 5: If role is Decision, fallback to completion default for adapter on unauthenticated providers
 	if role == RoleDecision {
 		return g.findModelAndProvider(RoleCompletion, "")
 	}
 
 	return nil, "", nil, fmt.Errorf("%w: no default model found for role %q", ErrModelNotFound, role)
+}
+
+func providerSupportsRole(pType string, role ModelRole) bool {
+	switch role {
+	case RoleCompletion:
+		return pType == "ollama" || pType == "openai" || pType == "anthropic" || pType == "genai" || pType == "antigravity"
+	case RoleDecision:
+		return pType == "ollama" || pType == "openai" || pType == "typesafe"
+	case RoleEmbedding:
+		return pType == "ollama" || pType == "openai" || pType == "genai"
+	default:
+		return false
+	}
 }

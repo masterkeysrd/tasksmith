@@ -45,6 +45,34 @@ func TestStoreApp(t *testing.T) {
 	}
 }
 
+func TestStoreAppWarnings(t *testing.T) {
+	ResetApp()
+	defer ResetApp()
+
+	if GetApp().Warnings != nil {
+		t.Fatal("expected Warnings to be nil initially")
+	}
+
+	SetWorkspaceWarnings([]string{"w1", "w2"})
+	app := GetApp()
+	if app.Warnings == nil || len(*app.Warnings) != 2 || (*app.Warnings)[0] != "w1" || (*app.Warnings)[1] != "w2" {
+		t.Fatalf("unexpected warnings: %v", app.Warnings)
+	}
+
+	// ResetApp preserves warnings
+	ResetApp()
+	app = GetApp()
+	if app.Warnings == nil || len(*app.Warnings) != 2 {
+		t.Fatalf("expected warnings preserved after ResetApp: %v", app.Warnings)
+	}
+
+	// SetWorkspaceWarnings(nil) clears warnings
+	SetWorkspaceWarnings(nil)
+	if GetApp().Warnings != nil {
+		t.Fatal("expected Warnings to be nil after SetWorkspaceWarnings(nil)")
+	}
+}
+
 func TestUseHintMountUnmount(t *testing.T) {
 	ResetApp()
 	defer ResetApp()

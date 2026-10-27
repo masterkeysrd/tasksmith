@@ -380,12 +380,25 @@ func (d *Daemon) GetWorkspace(ctx context.Context, rawWS string) (*api.Workspace
 
 	cleanDir, _ := fsutils.CleanPath(rawWS)
 
+	var warnings []string
+	if wsWarnings := rt.Workspace().Warnings(); len(wsWarnings) > 0 {
+		warnings = append(warnings, wsWarnings...)
+	}
+	if gw := rt.Gateway(); gw != nil {
+		for _, p := range gw.ListProviders() {
+			if p.Warning != "" {
+				warnings = append(warnings, p.Warning)
+			}
+		}
+	}
+
 	return &api.Workspace{
 		Name:         rt.Workspace().Name(),
 		RootDir:      rt.Workspace().RootDir(),
 		CWD:          cleanDir,
 		DefaultAgent: rt.Workspace().DefaultAgentName(),
 		DefaultModel: defModel,
+		Warnings:     warnings,
 	}, nil
 }
 
