@@ -100,5 +100,5 @@ For the complete schema of capabilities, costs, and token limits, see the [Provi
 ## Related Documentation
 
 - [Providers Overview & Manifest Reference](../providers.md)
-- [Gateway Architecture](../gateway.md)
+- [Gateway Architecture](../../architecture/gateway.md)
 - [Google GenAI Provider Guide](./google-genai.md)

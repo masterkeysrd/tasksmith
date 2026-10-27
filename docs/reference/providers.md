@@ -2,7 +2,7 @@
 
 In TaskSmith, **Model Providers** represent the upstream AI engines—such as OpenAI, Anthropic, Ollama, Google GenAI, and TypeSafe—that power agents, tools, and semantic embeddings.
 
-TaskSmith decouples agents and skills from specific vendor APIs. For details on how workspaces resolve model roles, load hierarchical `.env` secrets, and prioritize configuration tiers, see [Workspaces](./workspace.md).
+TaskSmith decouples agents and skills from specific vendor APIs. For details on how workspaces resolve model roles, load hierarchical `.env` secrets, and prioritize configuration tiers, see [Workspaces](../guides/workspaces.md).
 
 ---
 
@@ -126,6 +126,6 @@ When configuring an agent, tool, or decision manifest, reference models using ei
 
 ## Related Documentation
 
-- [Gateway Architecture](./gateway.md)
-- [Workspace Configuration](./workspace.md)
+- [Gateway Architecture](../architecture/gateway.md)
+- [Workspaces Guide](../guides/workspaces.md)
 - [OpenAI Provider Guide](./providers/openai.md)

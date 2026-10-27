@@ -336,5 +336,5 @@ spec:
 ## Related Documentation
 
 - [Providers Overview & Manifest Reference](../providers.md)
-- [Gateway Architecture](../gateway.md)
-- [Workspace Configuration](../workspace.md)
+- [Gateway Architecture](../../architecture/gateway.md)
+- [Workspaces Guide](../../guides/workspaces.md)

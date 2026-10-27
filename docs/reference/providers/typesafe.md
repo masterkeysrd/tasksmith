@@ -85,6 +85,6 @@ For general manifest properties and `.env` secret resolution, see the [Providers
 ## Related Documentation
 
 - [Providers Overview & Manifest Reference](../providers.md)
-- [Gateway Architecture](../gateway.md)
+- [Gateway Architecture](../../architecture/gateway.md)
 - [Anthropic Provider Guide](./anthropic.md)
 - [OpenAI Provider Guide](./openai.md)

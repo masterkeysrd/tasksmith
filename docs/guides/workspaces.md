@@ -111,6 +111,8 @@ default_agent: backend-engineer
 - Run `go test -race ./...` to verify changes in this service.
 ```
 
+For complete schema specifications of `WORKSPACE.md` and `AGENTS.md`, see the [Manifests Reference](../reference/manifests.md).
+
 ---
 
 ## Model Role Resolution
@@ -146,7 +148,7 @@ TaskSmith isolates credentials per workspace and never mutates the host shell en
 
 Higher-priority `.env` files override variables set in lower tiers. If an environment variable is omitted across all `.env` files, TaskSmith falls back to `os.Getenv`.
 
-For detailed information on authentication schemes, provider manifests, and lazy credential validation, see the [Providers Overview](./providers.md).
+For detailed information on authentication schemes, provider manifests, and lazy credential validation, see the [Providers Reference](../reference/providers.md).
 
 > [!IMPORTANT]
 > When TaskSmith saves an API key during setup or provider configuration, it writes the key to `.env` with `0600` permissions and automatically ensures `.env` is listed in `.gitignore`.

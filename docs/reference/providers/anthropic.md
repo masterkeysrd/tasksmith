@@ -115,5 +115,5 @@ spec:
 ## Related Documentation
 
 - [Providers Overview & Manifest Reference](../providers.md)
-- [Gateway Architecture](../gateway.md)
+- [Gateway Architecture](../../architecture/gateway.md)
 - [OpenAI Provider Guide](./openai.md)
