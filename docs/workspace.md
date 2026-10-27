@@ -134,14 +134,19 @@ flowchart TD
 
 ## Environment Variables & Secrets (`.env`)
 
-TaskSmith isolates credentials per workspace and never mutates the host shell environment. When opening or reloading a workspace, `.env` files are merged in ascending order of precedence:
+TaskSmith isolates credentials per workspace and never mutates the host shell environment. When opening or reloading a workspace, secrets are resolved using a layered hierarchy where process environment variables serve as the foundation fallback layer and on-disk `.env` files override them in increasing order of specificity:
 
-| Priority | File Path | Typical Use Case |
+| Priority | Source / File Path | Typical Use Case |
 | :--- | :--- | :--- |
-| **1 (Lowest)** | `$XDG_CONFIG_HOME/tasksmith/.env` | Personal API keys shared across all workspaces (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`). |
-| **2** | `<worktree-hub>/.env` | Shared secrets located in the parent directory of a bare-repository worktree hub. |
-| **3** | `<workspace-root>/.env` | Repository-specific API keys and endpoints. |
-| **4 (Highest)** | `<subproject>/.env` | Service-local overrides when working inside a monorepo subproject. |
+| **1 (Base Fallback)** | Process Environment (`os.Getenv`) | Host shell environment variables passed directly when starting the daemon or CLI. |
+| **2** | `$XDG_CONFIG_HOME/tasksmith/.env` | Personal API keys shared across all workspaces (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`). |
+| **3** | `<worktree-hub>/.env` | Shared secrets located in the parent directory of a bare-repository worktree hub. |
+| **4** | `<workspace-root>/.env` | Repository-specific API keys and endpoints committed or kept at workspace root. |
+| **5 (Highest)** | `<subproject>/.env` | Service-local overrides when working inside a monorepo subproject or package. |
+
+Higher-priority `.env` files override variables set in lower tiers. If an environment variable is omitted across all `.env` files, TaskSmith falls back to `os.Getenv`.
+
+For detailed information on authentication schemes, provider manifests, and lazy credential validation, see the [Providers Overview](./providers.md).
 
 > [!IMPORTANT]
 > When TaskSmith saves an API key during setup or provider configuration, it writes the key to `.env` with `0600` permissions and automatically ensures `.env` is listed in `.gitignore`.

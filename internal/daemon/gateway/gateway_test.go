@@ -422,11 +422,13 @@ type mockStreamProvider struct {
 	syncErr   error
 }
 
-func (m *mockStreamProvider) Name() string                             { return "mock" }
-func (m *mockStreamProvider) ListProfiles() []profile.Profile          { return nil }
-func (m *mockStreamProvider) GetProfile(string) (profile.Profile, bool) { return profile.Profile{}, false }
-func (m *mockStreamProvider) SearchProfiles(string) []profile.Profile  { return nil }
-func (m *mockStreamProvider) OverrideProfile(string, profile.Profile)  {}
+func (m *mockStreamProvider) Name() string                    { return "mock" }
+func (m *mockStreamProvider) ListProfiles() []profile.Profile { return nil }
+func (m *mockStreamProvider) GetProfile(string) (profile.Profile, bool) {
+	return profile.Profile{}, false
+}
+func (m *mockStreamProvider) SearchProfiles(string) []profile.Profile { return nil }
+func (m *mockStreamProvider) OverrideProfile(string, profile.Profile) {}
 
 func (m *mockStreamProvider) Stream(ctx context.Context, req *llm.Request) (llm.StreamResponse, error) {
 	if m.syncErr != nil {
@@ -532,11 +534,13 @@ type mockCapturingProvider struct {
 	lastReq *llm.Request
 }
 
-func (m *mockCapturingProvider) Name() string                             { return "openai" }
-func (m *mockCapturingProvider) ListProfiles() []profile.Profile          { return nil }
-func (m *mockCapturingProvider) GetProfile(string) (profile.Profile, bool) { return profile.Profile{}, false }
-func (m *mockCapturingProvider) SearchProfiles(string) []profile.Profile  { return nil }
-func (m *mockCapturingProvider) OverrideProfile(string, profile.Profile)  {}
+func (m *mockCapturingProvider) Name() string                    { return "openai" }
+func (m *mockCapturingProvider) ListProfiles() []profile.Profile { return nil }
+func (m *mockCapturingProvider) GetProfile(string) (profile.Profile, bool) {
+	return profile.Profile{}, false
+}
+func (m *mockCapturingProvider) SearchProfiles(string) []profile.Profile { return nil }
+func (m *mockCapturingProvider) OverrideProfile(string, profile.Profile) {}
 
 func (m *mockCapturingProvider) Stream(ctx context.Context, req *llm.Request) (llm.StreamResponse, error) {
 	m.lastReq = req

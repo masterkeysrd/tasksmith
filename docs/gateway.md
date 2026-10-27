@@ -1,6 +1,6 @@
 # Gateway Architecture
 
-The **Provider Gateway** is the subsystem in the TaskSmith daemon that manages connections, authentication, and model routing between workspaces and upstream AI providers.
+The **Provider Gateway** is the subsystem in the TaskSmith daemon that manages connections, authentication, and model routing between workspaces and upstream AI providers. For user-facing provider configuration and manifest schemas, see [Providers](./providers.md).
 
 ---
 
@@ -18,7 +18,7 @@ flowchart TD
         Pool["Content-Addressable Gateway Pool\n(Keyed by Config Fingerprint)"]
         
         subgraph GatewayInstance ["Gateway Instance"]
-            Auth["Strict Credential Resolver\n(In-Memory Env Map / File)"]
+            Auth["Resilient Credential Resolver\n(In-Memory Env Map + Getenv Fallback)"]
             Router["Role-Based Model Router\n(Completion / Decision / Embedding)"]
             Adapter["Decision Fallback Adapter\n(Structured LLM Wrapper)"]
         end
@@ -57,10 +57,10 @@ Rather than creating a gateway per session or keying gateways by a mutable works
 - **Zero-Race Hot Reloading**: When a user edits a provider configuration or rotates an API key, the configuration fingerprint changes automatically. New turns acquire a freshly initialized gateway for the new hash without disrupting in-flight turns on the previous instance.
 - **Scoped Hash Inputs**: Only environment variables explicitly referenced by a provider's authentication config are included in the fingerprint; unrelated environment variables never cause cache misses.
 
-### 3. Strict Credential Resolver
-To guarantee deterministic behavior and prevent secret leakage, the gateway enforces strict authentication rules:
-- **No Global Environment Probing**: The gateway never reads the daemon process's global environment or searches the filesystem for undeclared `.env` files.
-- **Explicit Resolution**: Each provider declares whether its credential comes from a named key in the injected environment map or an explicit credential file path, and how it is attached (`Bearer`, `API-Key`, or `Basic` auth headers). If a required credential is missing, gateway initialization fails immediately.
+### 3. Credential Resolver & Lazy Validation
+The gateway resolves authentication credentials without mutating process state or probing global files:
+- **Layered Resolution**: Credentials resolve from the workspace's injected environment map, falling back to process environment variables (`os.Getenv`), or reading from an explicit file path (`auth.file`).
+- **Lazy Validation**: Providers missing required credentials do not fail gateway initialization at startup. Instead, the provider is flagged with a warning in the CLI header, and an authentication error is only raised when a turn or agent explicitly resolves a model from that provider.
 
 ### 4. Triple-Role Model Router & Decision Adapter
 The gateway routes requests across three cognitive roles following a strict fallback chain (**Explicit Override $\to$ Workspace Role Default $\to$ Provider Role Default $\to$ Catalog Capability Match**):

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"net/url"
 	"strings"
@@ -291,9 +292,7 @@ func openAIResponsesOptionsMiddleware(defaults *loomopenai.ResponsesOptions) llm
 		return func(ctx context.Context, req *llm.Request) (llm.StreamResponse, error) {
 			if req != nil {
 				extensions := make(map[string]llm.Extension, len(req.Extensions)+1)
-				for k, v := range req.Extensions {
-					extensions[k] = v
-				}
+				maps.Copy(extensions, req.Extensions)
 
 				if ext, ok := extensions[loomopenai.ResponsesExtensionID]; ok {
 					var opts loomopenai.ResponsesOptions

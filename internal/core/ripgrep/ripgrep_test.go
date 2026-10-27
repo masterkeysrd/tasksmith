@@ -25,8 +25,7 @@ func newHostRunner(workDir string) *Runner {
 		cmd.Dir = cmdDir
 		out, err := cmd.Output()
 		if err != nil {
-			var exitErr *exec.ExitError
-			if errors.As(err, &exitErr) {
+			if exitErr, ok := errors.AsType[*exec.ExitError](err); ok {
 				return out, exitErr.ExitCode(), nil
 			}
 			return nil, -1, err
