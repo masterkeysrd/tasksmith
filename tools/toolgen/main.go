@@ -48,6 +48,7 @@ type schemaNode struct {
 	Properties           []namedSchemaProp
 	Items                *schemaNode
 	AdditionalProperties *schemaNode
+	GoPointer            bool
 }
 
 type namedSchemaProp struct {
@@ -195,6 +196,8 @@ func parseSchemaMap(m map[string]any) schemaNode {
 		Description: stringVal(m["description"]),
 	}
 
+	sn.GoPointer, _ = m["x-go-pointer"].(bool)
+
 	switch req := m["required"].(type) {
 	case []any:
 		for _, item := range req {
@@ -273,6 +276,9 @@ func buildStructDef(structName, comment, toolPascal string, sn schemaNode, neste
 	for _, prop := range sn.Properties {
 		req := slices.Contains(sn.Required, prop.Name)
 		goType := resolveGoType(toolPascal, prop.Name, prop.Schema, nested, seen)
+		if prop.Schema.GoPointer && goType == "bool" {
+			goType = "*bool"
+		}
 		sd.Fields = append(sd.Fields, fieldDef{
 			Name:        toFieldPascal(prop.Name),
 			GoType:      goType,

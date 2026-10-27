@@ -144,6 +144,15 @@ func (s State) Copy() State {
 		decisions = maps.Clone(s.PermissionDecisions)
 	}
 
+	questions := cloneQuestionRequests(s.PendingQuestions)
+	var responses map[string]tools.QuestionResponse
+	if s.QuestionResponses != nil {
+		responses = make(map[string]tools.QuestionResponse, len(s.QuestionResponses))
+		for key, response := range s.QuestionResponses {
+			responses[key] = *response.Clone()
+		}
+	}
+
 	var todos []tools.TodoItem
 	if len(s.Todos) > 0 {
 		todos = slices.Clone(s.Todos)
@@ -153,6 +162,8 @@ func (s State) Copy() State {
 		Messages:            msgs,
 		PendingPermissions:  pending,
 		PermissionDecisions: decisions,
+		PendingQuestions:    questions,
+		QuestionResponses:   responses,
 		Todos:               todos,
 	}
 }
@@ -212,6 +223,17 @@ func clonePermissionRequests(in []tools.PermissionRequest) []tools.PermissionReq
 	return out
 }
 
+func cloneQuestionRequests(in []tools.QuestionRequest) []tools.QuestionRequest {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]tools.QuestionRequest, len(in))
+	for i := range in {
+		out[i] = *in[i].Clone()
+	}
+	return out
+}
+
 // EventType identifies the kind of streaming event emitted during [Harness.Stream]
 // or [Harness.Resume].
 type EventType string
@@ -251,6 +273,7 @@ type Event struct {
 	Chunk            *message.AssistantChunk   `json:"chunk,omitempty"`
 	Message          message.Message           `json:"message,omitempty"`
 	Permissions      []tools.PermissionRequest `json:"permissions,omitempty"`
+	Questions        []tools.QuestionRequest   `json:"questions,omitempty"`
 	CommandStarted   *CommandStarted           `json:"command_started,omitempty"`
 	CommandCompleted *CommandCompleted         `json:"command_completed,omitempty"`
 	Todos            []tools.TodoItem          `json:"todos,omitempty"`

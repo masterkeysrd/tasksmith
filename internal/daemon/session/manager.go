@@ -243,6 +243,16 @@ func (m *manager) loadOrCacheSession(ctx context.Context, dbSess *Session) (*Ses
 				}
 				sess.PendingPermissions = perms
 			}
+			if len(st.PendingQuestions) > 0 && sess.Status != StatusThinking {
+				sess.WaitingQuestion = true
+				sess.PendingQuestions = make([]tools.QuestionRequest, len(st.PendingQuestions))
+				for i := range st.PendingQuestions {
+					sess.PendingQuestions[i] = *st.PendingQuestions[i].Clone()
+				}
+				if !sess.WaitingPermission {
+					sess.Status = StatusWaitingQuestion
+				}
+			}
 			sess.Unlock()
 		}
 	}

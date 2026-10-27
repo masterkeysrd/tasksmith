@@ -20,6 +20,8 @@ type State struct {
 	Running            bool                      `json:"running"`
 	WaitingPermission  bool                      `json:"waiting_permission"`
 	PendingPermissions []tools.PermissionRequest `json:"pending_permissions,omitempty"`
+	WaitingQuestion    bool                      `json:"waiting_question"`
+	PendingQuestions   []tools.QuestionRequest   `json:"pending_questions,omitempty"`
 	Tasks              []tasks.Snapshot          `json:"tasks,omitempty"`
 	Todos              []tools.TodoItem          `json:"todos,omitempty"`
 	Error              string                    `json:"error,omitempty"`
@@ -30,6 +32,7 @@ type State struct {
 	done            chan struct{}                       `json:"-"`
 	err             error                               `json:"-"`
 	decisions       map[string]tools.PermissionDecision `json:"-"`
+	answers         map[string]tools.QuestionResponse   `json:"-"`
 	queue           []QueueItem                         `json:"-"`
 	titleGenerating bool                                `json:"-"`
 }
@@ -39,6 +42,7 @@ func NewState() *State {
 	return &State{
 		Status:    StatusIdle,
 		decisions: make(map[string]tools.PermissionDecision),
+		answers:   make(map[string]tools.QuestionResponse),
 	}
 }
 
@@ -60,6 +64,10 @@ func (s *State) Clone() *State {
 			perms[i] = p
 		}
 	}
+	var questions []tools.QuestionRequest
+	for i := range s.PendingQuestions {
+		questions = append(questions, *s.PendingQuestions[i].Clone())
+	}
 	var q []QueueItem
 	if len(s.queue) > 0 {
 		q = make([]QueueItem, len(s.queue))
@@ -78,12 +86,15 @@ func (s *State) Clone() *State {
 		Running:            s.Running,
 		WaitingPermission:  s.WaitingPermission,
 		PendingPermissions: perms,
+		WaitingQuestion:    s.WaitingQuestion,
+		PendingQuestions:   questions,
 		Tasks:              slices.Clone(s.Tasks),
 		Todos:              slices.Clone(s.Todos),
 		Error:              s.Error,
 		StartedAt:          s.StartedAt,
 		FinishedAt:         s.FinishedAt,
 		decisions:          make(map[string]tools.PermissionDecision),
+		answers:            make(map[string]tools.QuestionResponse),
 		queue:              q,
 	}
 }

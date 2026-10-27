@@ -337,8 +337,8 @@ func (n *ToolsNode) Execute(ctx context.Context, state State) (graph.Command[Sta
 	turnID := lastUserMessageID(state.Messages)
 	ctx = scope.With(ctx, scope.Scope{TurnID: turnID, MessageID: asstMsgID})
 
-	if len(state.PendingPermissions) > 0 {
-		return n.resumeCalls(ctx, unfulfilled, state.PendingPermissions, state.PermissionDecisions)
+	if len(state.PendingPermissions) > 0 || len(state.PendingQuestions) > 0 {
+		return n.resumeCalls(ctx, unfulfilled, state.PendingPermissions, state.PermissionDecisions, state.PendingQuestions, state.QuestionResponses)
 	}
 	return n.evaluateCalls(ctx, unfulfilled)
 }
@@ -383,6 +383,8 @@ func (n *ToolsNode) cancelCalls(ctx context.Context, asstIdx int, unfulfilled []
 		s.Messages = updated
 		s.PendingPermissions = nil
 		s.PermissionDecisions = nil
+		s.PendingQuestions = nil
+		s.QuestionResponses = nil
 		return s
 	}), nil
 }
@@ -390,10 +392,37 @@ func (n *ToolsNode) cancelCalls(ctx context.Context, asstIdx int, unfulfilled []
 func (n *ToolsNode) evaluateCalls(ctx context.Context, unfulfilled []*message.ToolCall) (graph.Command[State], error) {
 	toolMsgs := make(message.MessageList, 0, len(unfulfilled))
 	var pending []tools.PermissionRequest
+	var questions []tools.QuestionRequest
 	var updatedTodos []tools.TodoItem
 	var hasTodos bool
 
 	for _, tc := range unfulfilled {
+		if tc.Name == "ask_question" {
+			_, err := n.tools.Prepare(ctx, tc)
+			var input api.AskQuestionInput
+			if err == nil {
+				var data []byte
+				data, err = json.Marshal(tc.Args)
+				if err == nil {
+					err = json.Unmarshal(data, &input)
+				}
+			}
+			if err != nil {
+				msg, msgErr := newErrorToolMessage(tc, err.Error())
+				if msgErr != nil {
+					return nil, msgErr
+				}
+				emitNodeMessage(ctx, msg)
+				toolMsgs = append(toolMsgs, msg)
+				continue
+			}
+			id, err := uuid.NewV7()
+			if err != nil {
+				return nil, err
+			}
+			questions = append(questions, tools.QuestionRequest{ID: id.String(), ToolCallID: tc.ID, Title: input.Title, Description: input.Description, Questions: input.Questions})
+			continue
+		}
 		toolMsg, req, err := n.evaluateSingleCall(ctx, tc)
 		if err != nil {
 			return nil, err
@@ -411,11 +440,13 @@ func (n *ToolsNode) evaluateCalls(ctx context.Context, unfulfilled []*message.To
 		}
 	}
 
-	if len(pending) > 0 {
+	if len(pending) > 0 || len(questions) > 0 {
 		return graph.InterruptUpdate[State](func(s State) State {
 			s.Messages = append(s.Messages, toolMsgs...)
 			s.PendingPermissions = clonePermissionRequests(pending)
 			s.PermissionDecisions = nil
+			s.PendingQuestions = cloneQuestionRequests(questions)
+			s.QuestionResponses = nil
 			if hasTodos {
 				s.Todos = slices.Clone(updatedTodos)
 			}
@@ -453,10 +484,14 @@ func (n *ToolsNode) evaluateSingleCall(ctx context.Context, tc *message.ToolCall
 	return msg, nil, nil
 }
 
-func (n *ToolsNode) resumeCalls(ctx context.Context, unfulfilled []*message.ToolCall, pending []tools.PermissionRequest, decisions map[string]tools.PermissionDecision) (graph.Command[State], error) {
+func (n *ToolsNode) resumeCalls(ctx context.Context, unfulfilled []*message.ToolCall, pending []tools.PermissionRequest, decisions map[string]tools.PermissionDecision, questions []tools.QuestionRequest, answers map[string]tools.QuestionResponse) (graph.Command[State], error) {
 	pendingByCall := make(map[string]tools.PermissionRequest, len(pending))
 	for _, req := range pending {
 		pendingByCall[req.ToolCallID] = req
+	}
+	questionsByCall := make(map[string]tools.QuestionRequest, len(questions))
+	for _, req := range questions {
+		questionsByCall[req.ToolCallID] = req
 	}
 
 	toolMsgs := make(message.MessageList, 0, len(unfulfilled))
@@ -464,6 +499,31 @@ func (n *ToolsNode) resumeCalls(ctx context.Context, unfulfilled []*message.Tool
 	var hasTodos bool
 
 	for _, tc := range unfulfilled {
+		if req, ok := questionsByCall[tc.ID]; ok {
+			response, found := lookupQuestionResponse(answers, req)
+			if !found {
+				return nil, ErrPendingQuestionsUnresolved
+			}
+			out := api.AskQuestionOutput{Canceled: response.Canceled, Answers: make([]api.QuestionAnswer, len(response.Answers))}
+			for i, answer := range response.Answers {
+				out.Answers[i] = api.QuestionAnswer{Question: answer.Question, Selected: slices.Clone(answer.Selected), Text: answer.Text}
+				if i < len(req.Questions) && req.Questions[i].Type == string(api.QuestionTypeConfirm) {
+					out.Answers[i].Confirmed = new(answer.Confirmed)
+				}
+			}
+			data, err := json.Marshal(out)
+			if err != nil {
+				return nil, err
+			}
+			id, err := uuid.NewV7()
+			if err != nil {
+				return nil, err
+			}
+			msg := &message.Tool{Base: message.Base{ID: id.String()}, ToolCallID: tc.ID, Name: tc.Name, Content: message.Content{&message.TextBlock{Text: string(data)}}, StructuredContent: out}
+			emitNodeMessage(ctx, msg)
+			toolMsgs = append(toolMsgs, msg)
+			continue
+		}
 		req, ok := pendingByCall[tc.ID]
 		if !ok {
 			return nil, ErrPendingPermissionsUnresolved
@@ -514,6 +574,8 @@ func clearPermissionsUpdate() graph.Update[State] {
 	return func(s State) State {
 		s.PendingPermissions = nil
 		s.PermissionDecisions = nil
+		s.PendingQuestions = nil
+		s.QuestionResponses = nil
 		return s
 	}
 }
@@ -523,11 +585,21 @@ func appendToolMessagesUpdate(toolMsgs message.MessageList, todos []tools.TodoIt
 		s.Messages = append(s.Messages, toolMsgs...)
 		s.PendingPermissions = nil
 		s.PermissionDecisions = nil
+		s.PendingQuestions = nil
+		s.QuestionResponses = nil
 		if hasTodos {
 			s.Todos = slices.Clone(todos)
 		}
 		return s
 	}
+}
+
+func lookupQuestionResponse(answers map[string]tools.QuestionResponse, req tools.QuestionRequest) (tools.QuestionResponse, bool) {
+	if response, ok := answers[req.ID]; ok {
+		return response, true
+	}
+	response, ok := answers[req.ToolCallID]
+	return response, ok
 }
 
 func lookupDecision(decisions map[string]tools.PermissionDecision, req tools.PermissionRequest) (tools.PermissionDecision, bool) {

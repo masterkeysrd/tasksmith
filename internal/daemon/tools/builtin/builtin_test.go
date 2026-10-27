@@ -162,6 +162,7 @@ func TestFSAndWorkspaceResolution(t *testing.T) {
 	}
 
 	expected := []string{
+		builtin.ToolAskQuestion,
 		builtin.ToolBash,
 		builtin.ToolDownload,
 		builtin.ToolEdit,

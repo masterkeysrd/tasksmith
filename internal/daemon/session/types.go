@@ -25,6 +25,9 @@ var (
 	ErrNoPendingPermissions = errors.New("session: no pending permissions")
 	ErrPermissionNotFound   = errors.New("session: permission request not found")
 	ErrInvalidDecision      = errors.New("session: invalid permission decision")
+	ErrNoPendingQuestions   = errors.New("session: no pending questions")
+	ErrQuestionNotFound     = errors.New("session: question request not found")
+	ErrInvalidQuestion      = errors.New("session: invalid question response")
 	ErrInvalidSessionID     = errors.New("session: session ID must be a canonical lowercase UUIDv7")
 	ErrSessionConflict      = errors.New("session: session already exists with different parameters")
 	ErrSessionRunning       = errors.New("session: session already has an active turn")
@@ -52,6 +55,7 @@ type SendInput struct {
 	Message  message.Message
 	Command  string
 	Decision *tools.PermissionDecision
+	Question *tools.QuestionResponse
 }
 
 type (
@@ -91,6 +95,7 @@ const (
 	// EventPermissionRequested is published when the harness pauses execution to
 	// request user approval for one or more pending tool executions.
 	EventPermissionRequested EventType = "permission_requested"
+	EventQuestionRequested   EventType = "question_requested"
 
 	// EventError is published when an asynchronous conversational turn fails with an error.
 	EventError EventType = "error"
@@ -170,6 +175,13 @@ type PermissionRequestedEvent struct {
 }
 
 func (PermissionRequestedEvent) EventType() string { return string(EventPermissionRequested) }
+
+type QuestionRequestedEvent struct {
+	SessionID string
+	Questions []tools.QuestionRequest
+}
+
+func (QuestionRequestedEvent) EventType() string { return string(EventQuestionRequested) }
 
 type CompletedEvent struct {
 	SessionID string

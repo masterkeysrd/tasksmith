@@ -71,6 +71,7 @@ type ToolPart struct {
 	Response    *api.Message
 	Status      ToolStatus
 	Permissions []api.PermissionRequest
+	Question    *api.QuestionRecord
 }
 
 type StreamStatus string
@@ -79,6 +80,7 @@ const (
 	StreamIdle              StreamStatus = "idle"
 	StreamRunning           StreamStatus = "running"
 	StreamWaitingPermission StreamStatus = "waiting_permission"
+	StreamWaitingQuestion   StreamStatus = "waiting_question"
 	StreamCompleted         StreamStatus = "completed"
 	StreamFailed            StreamStatus = "failed"
 )
@@ -88,6 +90,7 @@ type StreamState struct {
 	Messages          *[]Message
 	Streaming         bool
 	WaitingPermission bool
+	WaitingQuestion   bool
 	Status            api.SessionStatus
 	PendingCommand    string
 	Queue             *[]api.QueueItem
@@ -136,22 +139,25 @@ type conversationMessage struct {
 // conversationAccumulator folds TimelineEntries and SSE events into view messages,
 // splitting them into a finalized prefix flushed to Transcript and a mutable suffix in StreamState.
 type conversationAccumulator struct {
-	mu               sync.Mutex
-	sessionID        string
-	messages         []conversationMessage
-	permissions      []api.PermissionRequest
-	status           StreamStatus
-	sessionStatus    api.SessionStatus
-	err              error
-	draft            int
-	pendingUser      *Message
-	pendingCommand   string
-	pendingCommandID string
-	queue            []api.QueueItem
-	todos            []api.TodoItem
-	flushedIDs       map[string]bool
-	identities       map[string]string
-	nextDraft        uint64
+	mu                sync.Mutex
+	sessionID         string
+	messages          []conversationMessage
+	permissions       []api.PermissionRequest
+	questions         []api.QuestionRequest
+	resolvedQuestions map[string]bool
+	questionRecords   map[string]api.QuestionRecord
+	status            StreamStatus
+	sessionStatus     api.SessionStatus
+	err               error
+	draft             int
+	pendingUser       *Message
+	pendingCommand    string
+	pendingCommandID  string
+	queue             []api.QueueItem
+	todos             []api.TodoItem
+	flushedIDs        map[string]bool
+	identities        map[string]string
+	nextDraft         uint64
 }
 
 var globalConversation = newConversationAccumulator()
@@ -170,6 +176,17 @@ func permSlotID(reqID string) string {
 	return "perm-" + reqID
 }
 
+func questionSlotID(reqID string) string {
+	return "question-" + reqID
+}
+
+func (acc *conversationAccumulator) clearQuestionsLocked() {
+	for _, req := range acc.questions {
+		RemoveSlot(questionSlotID(req.ID))
+	}
+	acc.questions = nil
+}
+
 func (acc *conversationAccumulator) clearPermissionsLocked() {
 	for _, req := range acc.permissions {
 		RemoveSlot(permSlotID(req.ID))
@@ -183,6 +200,9 @@ func (acc *conversationAccumulator) reset() {
 	acc.sessionID = ""
 	acc.messages = nil
 	acc.clearPermissionsLocked()
+	acc.clearQuestionsLocked()
+	acc.resolvedQuestions = nil
+	acc.questionRecords = nil
 	acc.status = StreamIdle
 	acc.sessionStatus = api.StatusIdle
 	acc.err = nil
@@ -203,6 +223,9 @@ func (acc *conversationAccumulator) setSessionID(id string) {
 	acc.sessionID = id
 	acc.messages = nil
 	acc.clearPermissionsLocked()
+	acc.clearQuestionsLocked()
+	acc.resolvedQuestions = nil
+	acc.questionRecords = nil
 	acc.status = StreamIdle
 	acc.sessionStatus = api.StatusIdle
 	acc.err = nil
@@ -235,7 +258,7 @@ func (acc *conversationAccumulator) messageID(sourceID, draftID string) string {
 func (acc *conversationAccumulator) addPendingUser(id, text string) {
 	acc.mu.Lock()
 	defer acc.mu.Unlock()
-	if acc.status == StreamRunning || acc.status == StreamWaitingPermission {
+	if acc.status == StreamRunning || acc.status == StreamWaitingPermission || acc.status == StreamWaitingQuestion {
 		if !slices.ContainsFunc(acc.queue, func(item api.QueueItem) bool { return item.ID == id }) {
 			acc.queue = append(acc.queue, api.QueueItem{
 				ID:   id,
@@ -280,7 +303,7 @@ func (acc *conversationAccumulator) addPendingUser(id, text string) {
 func (acc *conversationAccumulator) addPendingCommand(id, cmd string) {
 	acc.mu.Lock()
 	defer acc.mu.Unlock()
-	if acc.status == StreamRunning || acc.status == StreamWaitingPermission {
+	if acc.status == StreamRunning || acc.status == StreamWaitingPermission || acc.status == StreamWaitingQuestion {
 		if !slices.ContainsFunc(acc.queue, func(item api.QueueItem) bool { return item.ID == id }) {
 			acc.queue = append(acc.queue, api.QueueItem{
 				ID:   id,
@@ -337,6 +360,7 @@ func (acc *conversationAccumulator) cancelTurn() {
 	acc.pendingCommandID = ""
 	acc.queue = nil
 	acc.clearPermissionsLocked()
+	acc.clearQuestionsLocked()
 	acc.discardDraftLocked()
 	acc.publishLocked()
 }
@@ -366,6 +390,8 @@ func (acc *conversationAccumulator) applyEvent(event api.Event) {
 		switch p.Status {
 		case api.StatusWaitingPermission:
 			acc.status = StreamWaitingPermission
+		case api.StatusWaitingQuestion:
+			acc.status = StreamWaitingQuestion
 		case api.StatusIdle:
 			acc.status = StreamIdle
 		default:
@@ -398,9 +424,16 @@ func (acc *conversationAccumulator) applyEvent(event api.Event) {
 				acc.pendingCommand = ""
 				acc.pendingCommandID = ""
 				acc.clearPermissionsLocked()
+				acc.clearQuestionsLocked()
 				acc.discardDraftLocked()
 				acc.publishLocked()
 				AppendTimelineEntry(p.Entry)
+				return
+			}
+			if p.Entry.Kind == api.TimelineKindQuestion && p.Entry.Question != nil {
+				acc.recordQuestionLocked(*p.Entry.Question)
+				acc.removeQuestionLocked(p.Entry.Question.Request.ID)
+				acc.publishLocked()
 				return
 			}
 			if p.Entry.Kind == api.TimelineKindPermission {
@@ -411,7 +444,11 @@ func (acc *conversationAccumulator) applyEvent(event api.Event) {
 					})
 					RemoveSlot(permSlotID(reqID))
 					if len(acc.permissions) == 0 && acc.status == StreamWaitingPermission {
-						acc.status = StreamRunning
+						if len(acc.questions) > 0 {
+							acc.status, acc.sessionStatus = StreamWaitingQuestion, api.StatusWaitingQuestion
+						} else {
+							acc.status = StreamRunning
+						}
 					}
 					acc.publishLocked()
 				}
@@ -526,6 +563,18 @@ func (acc *conversationAccumulator) applyEvent(event api.Event) {
 		}
 		acc.publishLocked()
 
+	case api.EventQuestionRequested:
+		p, ok := event.Payload.(api.QuestionRequestedEvent)
+		if !ok || (acc.sessionID != "" && p.SessionID != acc.sessionID) {
+			return
+		}
+		acc.addQuestionsLocked(p.Questions)
+		if len(acc.questions) > 0 && len(acc.permissions) == 0 {
+			acc.status, acc.err = StreamWaitingQuestion, nil
+			acc.sessionStatus = api.StatusWaitingQuestion
+		}
+		acc.publishLocked()
+
 	case api.EventTaskUpdated:
 		p, ok := event.Payload.(api.TaskUpdatedEvent)
 		if !ok {
@@ -589,6 +638,7 @@ func (acc *conversationAccumulator) applyEvent(event api.Event) {
 		acc.sessionStatus = api.StatusIdle
 		acc.discardDraftLocked()
 		acc.clearPermissionsLocked()
+		acc.clearQuestionsLocked()
 		acc.publishLocked()
 
 	case api.EventError:
@@ -614,7 +664,7 @@ func (acc *conversationAccumulator) applyEvent(event api.Event) {
 	}
 }
 
-func (acc *conversationAccumulator) loadTimeline(entries []api.TimelineEntry) {
+func (acc *conversationAccumulator) loadTimeline(entries []api.TimelineEntry, pending ...[]api.QuestionRequest) {
 	acc.mu.Lock()
 	defer acc.mu.Unlock()
 
@@ -627,7 +677,13 @@ func (acc *conversationAccumulator) loadTimeline(entries []api.TimelineEntry) {
 			acc.err = nil
 			acc.pendingUser = nil
 			acc.clearPermissionsLocked()
+			acc.clearQuestionsLocked()
 			acc.discardDraftLocked()
+		case api.TimelineKindQuestion:
+			if entry.Question != nil {
+				acc.recordQuestionLocked(*entry.Question)
+				acc.removeQuestionLocked(entry.Question.Request.ID)
+			}
 		case api.TimelineKindPermission:
 			if entry.Permission != nil {
 				reqID := entry.Permission.Request.ID
@@ -665,6 +721,13 @@ func (acc *conversationAccumulator) loadTimeline(entries []api.TimelineEntry) {
 		}
 	}
 
+	if len(pending) > 0 {
+		acc.addQuestionsLocked(pending[0])
+		if len(acc.questions) > 0 && len(acc.permissions) == 0 {
+			acc.status, acc.sessionStatus = StreamWaitingQuestion, api.StatusWaitingQuestion
+		}
+	}
+
 	// Project history after all messages are accumulated so tool calls & responses are properly paired
 	history, _ := acc.projectLocked()
 	historyBySourceID := make(map[string]Message, len(history))
@@ -683,7 +746,7 @@ func (acc *conversationAccumulator) loadTimeline(entries []api.TimelineEntry) {
 					AppendMessage(h)
 				}
 			}
-		} else if entry.Kind != api.TimelineKindPermission {
+		} else if entry.Kind != api.TimelineKindPermission && entry.Kind != api.TimelineKindQuestion {
 			AppendTimelineEntry(entry)
 		}
 	}
@@ -698,6 +761,28 @@ func (acc *conversationAccumulator) SeedPermissions(requests []api.PermissionReq
 	_ = acc.addPermissionsLocked(requests)
 	if len(acc.permissions) > 0 {
 		acc.status, acc.err = StreamWaitingPermission, nil
+	}
+	acc.publishLocked()
+}
+
+func (acc *conversationAccumulator) reconcilePermissions(requests []api.PermissionRequest) {
+	acc.mu.Lock()
+	defer acc.mu.Unlock()
+	for _, existing := range acc.permissions {
+		if !slices.ContainsFunc(requests, func(req api.PermissionRequest) bool { return req.ID == existing.ID }) {
+			RemoveSlot(permSlotID(existing.ID))
+		}
+	}
+	acc.permissions = slices.DeleteFunc(acc.permissions, func(existing api.PermissionRequest) bool {
+		return !slices.ContainsFunc(requests, func(req api.PermissionRequest) bool { return req.ID == existing.ID })
+	})
+	_ = acc.addPermissionsLocked(requests)
+	if len(acc.permissions) > 0 {
+		acc.status, acc.sessionStatus, acc.err = StreamWaitingPermission, api.StatusWaitingPermission, nil
+	} else if len(acc.questions) > 0 {
+		acc.status, acc.sessionStatus = StreamWaitingQuestion, api.StatusWaitingQuestion
+	} else if acc.status == StreamWaitingPermission {
+		acc.status, acc.sessionStatus = StreamRunning, api.StatusThinking
 	}
 	acc.publishLocked()
 }
@@ -728,6 +813,72 @@ func (acc *conversationAccumulator) SeedTodos(items []api.TodoItem) {
 	acc.publishLocked()
 }
 
+func (acc *conversationAccumulator) SeedQuestions(requests []api.QuestionRequest) {
+	acc.mu.Lock()
+	defer acc.mu.Unlock()
+	for _, existing := range acc.questions {
+		if !slices.ContainsFunc(requests, func(r api.QuestionRequest) bool { return r.ID == existing.ID }) {
+			RemoveSlot(questionSlotID(existing.ID))
+		}
+	}
+	acc.questions = slices.DeleteFunc(acc.questions, func(r api.QuestionRequest) bool {
+		return !slices.ContainsFunc(requests, func(req api.QuestionRequest) bool { return req.ID == r.ID })
+	})
+	for _, req := range requests {
+		delete(acc.resolvedQuestions, req.ID)
+	}
+	acc.addQuestionsLocked(requests)
+	if len(acc.questions) > 0 && len(acc.permissions) == 0 {
+		acc.status, acc.sessionStatus = StreamWaitingQuestion, api.StatusWaitingQuestion
+	} else if len(acc.questions) == 0 && acc.status == StreamWaitingQuestion {
+		acc.status, acc.sessionStatus = StreamRunning, api.StatusThinking
+	}
+	acc.publishLocked()
+}
+
+func (acc *conversationAccumulator) addQuestionsLocked(requests []api.QuestionRequest) {
+	for _, req := range requests {
+		if req.ID == "" || req.ToolCallID == "" || len(req.Questions) == 0 || acc.resolvedQuestions[req.ID] {
+			continue
+		}
+		if slices.ContainsFunc(acc.messages, func(m conversationMessage) bool {
+			return m.message.Role == api.RoleTool && m.message.ToolCallID == req.ToolCallID
+		}) {
+			continue
+		}
+		if slices.ContainsFunc(acc.questions, func(r api.QuestionRequest) bool { return r.ID == req.ID }) {
+			continue
+		}
+		acc.questions = append(acc.questions, req)
+		EnqueueSlot(SlotItem{ID: questionSlotID(req.ID), Kind: SlotKindQuestion, Data: req})
+	}
+}
+
+func (acc *conversationAccumulator) recordQuestionLocked(record api.QuestionRecord) {
+	if record.Request.ToolCallID == "" {
+		return
+	}
+	if acc.questionRecords == nil {
+		acc.questionRecords = make(map[string]api.QuestionRecord)
+	}
+	acc.questionRecords[record.Request.ToolCallID] = record
+}
+
+func (acc *conversationAccumulator) removeQuestionLocked(id string) {
+	if id == "" {
+		return
+	}
+	if acc.resolvedQuestions == nil {
+		acc.resolvedQuestions = make(map[string]bool)
+	}
+	acc.resolvedQuestions[id] = true
+	RemoveSlot(questionSlotID(id))
+	acc.questions = slices.DeleteFunc(acc.questions, func(r api.QuestionRequest) bool { return r.ID == id })
+	if len(acc.questions) == 0 && len(acc.permissions) == 0 && acc.status == StreamWaitingQuestion {
+		acc.status, acc.sessionStatus = StreamRunning, api.StatusThinking
+	}
+}
+
 func (acc *conversationAccumulator) removePermission(reqID string) {
 	acc.mu.Lock()
 	defer acc.mu.Unlock()
@@ -735,7 +886,11 @@ func (acc *conversationAccumulator) removePermission(reqID string) {
 		return r.ID == reqID
 	})
 	if len(acc.permissions) == 0 && acc.status == StreamWaitingPermission {
-		acc.status = StreamRunning
+		if len(acc.questions) > 0 {
+			acc.status, acc.sessionStatus = StreamWaitingQuestion, api.StatusWaitingQuestion
+		} else {
+			acc.status = StreamRunning
+		}
 	}
 	acc.publishLocked()
 }
@@ -777,6 +932,11 @@ func (acc *conversationAccumulator) addMessageLocked(message api.Message) error 
 			var out api.TodosOutput
 			if err := json.Unmarshal(message.StructuredContent, &out); err == nil && out.Todos != nil {
 				acc.todos = slices.Clone(out.Todos)
+			}
+		}
+		for _, req := range slices.Clone(acc.questions) {
+			if req.ToolCallID == message.ToolCallID {
+				acc.removeQuestionLocked(req.ID)
 			}
 		}
 		for _, req := range acc.permissions {
@@ -866,9 +1026,10 @@ func (acc *conversationAccumulator) publishLocked() {
 		msgsPtr = &cp
 	}
 
-	isStreaming := acc.status == StreamRunning || acc.status == StreamWaitingPermission || acc.pendingUser != nil || acc.pendingCommand != "" ||
+	isStreaming := acc.status == StreamRunning || acc.status == StreamWaitingPermission || acc.status == StreamWaitingQuestion || acc.pendingUser != nil || acc.pendingCommand != "" ||
 		(msgsPtr != nil && len(*msgsPtr) > 0 && acc.status != StreamIdle && acc.status != StreamCompleted && acc.status != StreamFailed)
 	isWaiting := acc.status == StreamWaitingPermission || len(acc.permissions) > 0
+	isWaitingQuestion := acc.status == StreamWaitingQuestion || len(acc.questions) > 0
 
 	sessionStatus := acc.sessionStatus
 	if sessionStatus == "" {
@@ -900,6 +1061,7 @@ func (acc *conversationAccumulator) publishLocked() {
 			Messages:          msgsPtr,
 			Streaming:         isStreaming,
 			WaitingPermission: isWaiting,
+			WaitingQuestion:   isWaitingQuestion,
 			Status:            sessionStatus,
 			PendingCommand:    acc.pendingCommand,
 			Queue:             queuePtr,
@@ -960,7 +1122,14 @@ func (acc *conversationAccumulator) projectLocked() (history []Message, streamMs
 		}
 	}
 
-	isActive := acc.status == StreamRunning || acc.status == StreamWaitingPermission
+	for id, record := range acc.questionRecords {
+		if tool := tools[id]; tool != nil {
+			copy := record
+			tool.Question = &copy
+		}
+	}
+
+	isActive := acc.status == StreamRunning || acc.status == StreamWaitingPermission || acc.status == StreamWaitingQuestion
 	mutableSuffix := false
 	for i, message := range messages {
 		if message.Role == api.RoleTool && len(message.Parts) == 0 {

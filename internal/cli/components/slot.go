@@ -30,8 +30,11 @@ var Slot = trail.SimpleFC("Slot", func() trail.Node {
 			})
 		}
 	case store.SlotKindQuestion:
-		// Placeholder until Question component is added.
-		child = nil
+		if props, ok := active.Data.(QuestionPromptProps); ok {
+			child = QuestionPrompt(props)
+		} else if req, ok := active.Data.(api.QuestionRequest); ok {
+			child = QuestionPrompt(QuestionPromptProps{Request: req, OnSubmit: store.SubmitQuestion})
+		}
 	case store.SlotKindPicker:
 		switch v := active.Data.(type) {
 		case PickerProps:

@@ -120,6 +120,8 @@ func classifyError(err error) (int, string) {
 
 	case errors.Is(err, session.ErrEmptySessionID),
 		errors.Is(err, session.ErrInvalidDecision),
+		errors.Is(err, session.ErrInvalidQuestion),
+		errors.Is(err, session.ErrNoPendingQuestions),
 		errors.Is(err, session.ErrInvalidConfig),
 		errors.Is(err, session.ErrInvalidSessionID),
 		errors.Is(err, session.ErrNoPendingPermissions),
@@ -136,6 +138,7 @@ func classifyError(err error) (int, string) {
 
 	case errors.Is(err, session.ErrSessionNotFound),
 		errors.Is(err, session.ErrPermissionNotFound),
+		errors.Is(err, session.ErrQuestionNotFound),
 		errors.Is(err, session.ErrJournalNotFound),
 		errors.Is(err, session.ErrEntryNotFound),
 		errors.Is(err, session.ErrBlobNotFound),

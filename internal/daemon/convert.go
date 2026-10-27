@@ -28,6 +28,7 @@ func toAPISession(sess *session.Session) api.Session {
 	}
 	status := api.StatusIdle
 	var perms []api.PermissionRequest
+	var questions []api.QuestionRequest
 	var ts []api.Task
 	var todos []api.TodoItem
 	var queueItems []api.QueueItem
@@ -36,6 +37,7 @@ func toAPISession(sess *session.Session) api.Session {
 			status = api.SessionStatus(sess.Status)
 		}
 		perms = toAPIPermissionRequests(sess.PendingPermissions)
+		questions = toAPIQuestionRequests(sess.PendingQuestions)
 		ts = toAPITasks(sess.State.Tasks)
 		todos = toAPITodos(sess.State.Todos)
 		queueItems = toAPIQueueItems(sess.VisibleQueue())
@@ -51,6 +53,7 @@ func toAPISession(sess *session.Session) api.Session {
 		},
 		Status:             status,
 		PendingPermissions: perms,
+		PendingQuestions:   questions,
 		Tasks:              ts,
 		Todos:              todos,
 		Queue:              queueItems,
@@ -267,6 +270,13 @@ func toAPIChunk(ch *message.AssistantChunk) *api.Chunk {
 }
 
 func fromSendRequest(req api.SendRequest) (session.SendInput, error) {
+	if req.Question != nil {
+		if req.Decision != nil || strings.TrimSpace(req.Content) != "" || len(req.Blocks) > 0 || strings.TrimSpace(req.Command) != "" || strings.TrimSpace(req.ID) != "" {
+			return session.SendInput{}, fmt.Errorf("%w: cannot combine question response with other input", session.ErrInvalidConfig)
+		}
+		answer := fromAPIQuestionResponse(*req.Question)
+		return session.SendInput{Question: &answer}, nil
+	}
 	if req.Decision != nil && (strings.TrimSpace(req.Content) != "" || len(req.Blocks) > 0 || strings.TrimSpace(req.Command) != "" || strings.TrimSpace(req.ID) != "") {
 		return session.SendInput{}, fmt.Errorf("%w: cannot specify both message and decision", session.ErrInvalidConfig)
 	}
@@ -367,6 +377,39 @@ func toAPIPermissionRequests(reqs []tools.PermissionRequest) []api.PermissionReq
 	return out
 }
 
+func toAPIQuestionRequests(reqs []tools.QuestionRequest) []api.QuestionRequest {
+	var out []api.QuestionRequest
+	for i := range reqs {
+		r := reqs[i].Clone()
+		out = append(out, api.QuestionRequest{ID: r.ID, ToolCallID: r.ToolCallID, Title: r.Title, Description: r.Description, Questions: r.Questions})
+	}
+	return out
+}
+
+func toAPIQuestionResponse(r tools.QuestionResponse, questions []api.Question) api.QuestionResponse {
+	out := api.QuestionResponse{RequestID: r.RequestID, ToolCallID: r.ToolCallID, Canceled: r.Canceled}
+	for i, a := range r.Answers {
+		answer := api.QuestionAnswer{Question: a.Question, Selected: slices.Clone(a.Selected), Text: a.Text}
+		if i < len(questions) && questions[i].Type == string(api.QuestionTypeConfirm) {
+			answer.Confirmed = new(a.Confirmed)
+		}
+		out.Answers = append(out.Answers, answer)
+	}
+	return out
+}
+
+func fromAPIQuestionResponse(r api.QuestionResponse) tools.QuestionResponse {
+	out := tools.QuestionResponse{RequestID: r.RequestID, ToolCallID: r.ToolCallID, Canceled: r.Canceled}
+	for _, a := range r.Answers {
+		answer := tools.QuestionAnswer{Question: a.Question, Selected: slices.Clone(a.Selected), Text: a.Text}
+		if a.Confirmed != nil {
+			answer.Confirmed = *a.Confirmed
+		}
+		out.Answers = append(out.Answers, answer)
+	}
+	return out
+}
+
 func fromAPIPermissionDecision(dec api.PermissionDecision) tools.PermissionDecision {
 	return tools.PermissionDecision{
 		RequestID:    dec.RequestID,
@@ -461,6 +504,10 @@ func toAPITimelineEntry(entry timeline.Entry) (api.TimelineEntry, error) {
 				Feedback:     entry.Permission.Decision.Feedback,
 			},
 		}
+	}
+
+	if entry.Question != nil {
+		out.Question = &api.QuestionRecord{Request: toAPIQuestionRequests([]tools.QuestionRequest{entry.Question.Request})[0], Response: toAPIQuestionResponse(entry.Question.Response, entry.Question.Request.Questions)}
 	}
 
 	return out, nil
@@ -642,6 +689,9 @@ func (d *Daemon) FormatEvent(msg broker.Message) (api.Event, error) {
 				Permissions: toAPIPermissionRequests(ev.Permissions),
 			},
 		}, nil
+
+	case session.QuestionRequestedEvent:
+		return api.Event{ID: msg.ID, Type: api.EventQuestionRequested, Topic: msg.Topic, Payload: api.QuestionRequestedEvent{SessionID: ev.SessionID, Questions: toAPIQuestionRequests(ev.Questions)}}, nil
 
 	case session.StatusChangedEvent:
 		return api.Event{

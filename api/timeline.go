@@ -13,6 +13,7 @@ const (
 	TimelineKindAgent       TimelineKind = "agent"
 	TimelineKindMode        TimelineKind = "mode"
 	TimelineKindPermission  TimelineKind = "permission"
+	TimelineKindQuestion    TimelineKind = "question"
 	TimelineKindInterrupted TimelineKind = "interrupted"
 )
 
@@ -54,6 +55,11 @@ type PermissionRecord struct {
 	Decision PermissionDecision `json:"decision"`
 }
 
+type QuestionRecord struct {
+	Request  QuestionRequest  `json:"request"`
+	Response QuestionResponse `json:"response"`
+}
+
 // TimelineEntry represents an append-only entry in a session's chronological timeline.
 type TimelineEntry struct {
 	ID         string            `json:"id"`
@@ -67,4 +73,5 @@ type TimelineEntry struct {
 	Agent      *AgentChange      `json:"agent,omitempty"`
 	Mode       *ModeChange       `json:"mode,omitempty"`
 	Permission *PermissionRecord `json:"permission,omitempty"`
+	Question   *QuestionRecord   `json:"question,omitempty"`
 }

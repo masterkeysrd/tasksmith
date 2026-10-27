@@ -120,11 +120,11 @@ func (h *harness) Stream(ctx context.Context, input Input) iter.Seq2[Event, erro
 			yield(Event{}, err)
 			return
 		}
-		if input.Decisions != nil && input.Message != nil {
-			yield(Event{}, fmt.Errorf("%w: cannot specify both message and decisions", ErrInvalidConfig))
+		if (input.Decisions != nil || input.Answers != nil) && input.Message != nil {
+			yield(Event{}, fmt.Errorf("%w: cannot specify both message and responses", ErrInvalidConfig))
 			return
 		}
-		if input.Decisions == nil && input.Message == nil {
+		if input.Decisions == nil && input.Answers == nil && input.Message == nil {
 			if _, ok := h.queue.Peek(); !ok {
 				yield(Event{}, ErrNilMessage)
 				return
@@ -138,9 +138,13 @@ func (h *harness) Stream(ctx context.Context, input Input) iter.Seq2[Event, erro
 		}
 
 		var update graph.Update[State]
-		if input.Decisions != nil {
-			if len(state.PendingPermissions) == 0 {
-				yield(Event{}, ErrNoPendingPermissions)
+		if input.Decisions != nil || input.Answers != nil {
+			if len(state.PendingPermissions) == 0 && len(state.PendingQuestions) == 0 {
+				if input.Answers != nil {
+					yield(Event{}, ErrNoPendingQuestions)
+				} else {
+					yield(Event{}, ErrNoPendingPermissions)
+				}
 				return
 			}
 			normalized := make(map[string]tools.PermissionDecision, len(state.PendingPermissions)*2)
@@ -155,8 +159,21 @@ func (h *harness) Stream(ctx context.Context, input Input) iter.Seq2[Event, erro
 				normalized[req.ID] = dec
 				normalized[req.ToolCallID] = dec
 			}
+			answers := make(map[string]tools.QuestionResponse, len(state.PendingQuestions)*2)
+			for _, req := range state.PendingQuestions {
+				response, ok := lookupQuestionResponse(input.Answers, req)
+				if !ok {
+					yield(Event{}, ErrPendingQuestionsUnresolved)
+					return
+				}
+				response = *response.Clone()
+				response.RequestID, response.ToolCallID = req.ID, req.ToolCallID
+				answers[req.ID] = response
+				answers[req.ToolCallID] = response
+			}
 			update = graph.Update[State](func(s State) State {
 				s.PermissionDecisions = normalized
+				s.QuestionResponses = answers
 				return s
 			})
 		} else if input.Message != nil {
@@ -285,6 +302,7 @@ func (h *harness) consumeGraphStream(stream iter.Seq2[graph.StreamEvent, error],
 			if !yield(Event{
 				Type:        EventInterrupted,
 				Permissions: clonePermissionRequests(snap.State.PendingPermissions),
+				Questions:   cloneQuestionRequests(snap.State.PendingQuestions),
 			}, nil) {
 				stopped = true
 				return false

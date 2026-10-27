@@ -2,6 +2,43 @@
 
 package api
 
+// QuestionOption represents an item in options.
+type QuestionOption struct {
+	ID          string `json:"id" jsonschema:"Concise identifier returned when this option is selected."`
+	Label       string `json:"label" jsonschema:"Display label for the option. Prefix with '(Recommended)' if recommended."`
+	Description string `json:"description,omitempty" jsonschema:"Optional short explanation of the option (max 100 chars)."`
+}
+
+// Question represents an item in questions.
+type Question struct {
+	Type        string           `json:"type" jsonschema:"Question kind ('single', 'multi', 'text', or 'confirm')."`
+	Question    string           `json:"question" jsonschema:"Short, direct one-line question."`
+	Description string           `json:"description" jsonschema:"Required context below the question explaining details, tradeoffs, or examples (max 300 chars)."`
+	Label       string           `json:"label,omitempty" jsonschema:"Short tab header (max 3 words) used when asking multiple questions."`
+	Options     []QuestionOption `json:"options,omitempty" jsonschema:"Choices for 'single' and 'multi' questions (2 to 5 options)."`
+}
+
+// QuestionAnswer represents an item in answers.
+type QuestionAnswer struct {
+	Question  string   `json:"question" jsonschema:"The question that was answered."`
+	Confirmed *bool    `json:"confirmed,omitempty" jsonschema:"Boolean response for 'confirm' questions."`
+	Selected  []string `json:"selected,omitempty" jsonschema:"Selected option IDs for 'single' or 'multi' questions."`
+	Text      string   `json:"text,omitempty" jsonschema:"Free-form text entered for 'text' questions or custom write-in answers."`
+}
+
+// AskQuestionInput defines the input parameters for the ask_question tool.
+type AskQuestionInput struct {
+	Questions   []Question `json:"questions" jsonschema:"List of 1 to 5 structured questions to present to the user."`
+	Description string     `json:"description,omitempty" jsonschema:"Optional summary of what will happen based on the answers when asking multiple questions."`
+	Title       string     `json:"title,omitempty" jsonschema:"Optional header / confirmation title when asking multiple questions (e.g. 'Ready to configure?')."`
+}
+
+// AskQuestionOutput defines the structured output of the ask_question tool.
+type AskQuestionOutput struct {
+	Answers  []QuestionAnswer `json:"answers" jsonschema:"User answers corresponding to each question."`
+	Canceled bool             `json:"canceled,omitempty" jsonschema:"True if the user dismissed or canceled the prompt without submitting."`
+}
+
 // BashInput defines the input parameters for the bash tool.
 type BashInput struct {
 	Command         string `json:"command" jsonschema:"Shell command string passed to sh -c."`

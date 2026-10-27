@@ -31,6 +31,7 @@ const (
 	KindAgent       Kind = "agent"
 	KindMode        Kind = "mode"
 	KindPermission  Kind = "permission"
+	KindQuestion    Kind = "question"
 	KindInterrupted Kind = "interrupted"
 )
 
@@ -73,6 +74,11 @@ type PermissionRecord struct {
 	Decision tools.PermissionDecision `json:"decision"`
 }
 
+type QuestionRecord struct {
+	Request  tools.QuestionRequest  `json:"request"`
+	Response tools.QuestionResponse `json:"response"`
+}
+
 // Entry is a single append-only timeline event in a session log.
 type Entry struct {
 	ID        string    `json:"id"`
@@ -87,6 +93,7 @@ type Entry struct {
 	Agent      *AgentChange      `json:"agent,omitempty"`
 	Mode       *ModeChange       `json:"mode,omitempty"`
 	Permission *PermissionRecord `json:"permission,omitempty"`
+	Question   *QuestionRecord   `json:"question,omitempty"`
 }
 
 // Clone returns a deep copy of the timeline entry.
@@ -119,6 +126,9 @@ func (e Entry) Clone() Entry {
 		perm := *e.Permission
 		perm.Request.GrantPatterns = slices.Clone(e.Permission.Request.GrantPatterns)
 		cp.Permission = &perm
+	}
+	if e.Question != nil {
+		cp.Question = &QuestionRecord{Request: *e.Question.Request.Clone(), Response: *e.Question.Response.Clone()}
 	}
 	return cp
 }
@@ -242,6 +252,10 @@ func NewPermissionEntry(sessionID string, record PermissionRecord) *Entry {
 		Kind:       KindPermission,
 		Permission: &r,
 	}
+}
+
+func NewQuestionEntry(sessionID string, record QuestionRecord) *Entry {
+	return &Entry{SessionID: sessionID, Kind: KindQuestion, Question: &record}
 }
 
 // NewCommandEntry creates an Entry initialized with a CommandRecord payload.

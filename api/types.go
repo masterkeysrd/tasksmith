@@ -80,6 +80,7 @@ const (
 	StatusGenerating        SessionStatus = "generating"
 	StatusExecuting         SessionStatus = "executing"
 	StatusWaitingPermission SessionStatus = "waiting_permission"
+	StatusWaitingQuestion   SessionStatus = "waiting_question"
 )
 
 // SessionConfig holds configurable runtime settings for a [Session].
@@ -193,6 +194,30 @@ func (q *QueueItem) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+type QuestionType string
+
+const (
+	QuestionTypeSingle  QuestionType = "single"
+	QuestionTypeMulti   QuestionType = "multi"
+	QuestionTypeText    QuestionType = "text"
+	QuestionTypeConfirm QuestionType = "confirm"
+)
+
+type QuestionRequest struct {
+	ID          string     `json:"id"`
+	ToolCallID  string     `json:"tool_call_id"`
+	Title       string     `json:"title,omitempty"`
+	Description string     `json:"description,omitempty"`
+	Questions   []Question `json:"questions"`
+}
+
+type QuestionResponse struct {
+	RequestID  string           `json:"request_id"`
+	ToolCallID string           `json:"tool_call_id"`
+	Canceled   bool             `json:"canceled,omitempty"`
+	Answers    []QuestionAnswer `json:"answers,omitempty"`
+}
+
 // Session represents a persistent conversational session managed by the daemon.
 type Session struct {
 	ID                 string              `json:"id"`
@@ -200,6 +225,7 @@ type Session struct {
 	Config             SessionConfig       `json:"config"`
 	Status             SessionStatus       `json:"status"`
 	PendingPermissions []PermissionRequest `json:"pending_permissions,omitempty"`
+	PendingQuestions   []QuestionRequest   `json:"pending_questions,omitempty"`
 	Tasks              []Task              `json:"tasks,omitempty"`
 	Todos              []TodoItem          `json:"todos,omitempty"`
 	Queue              []QueueItem         `json:"queue,omitempty"`
@@ -285,6 +311,7 @@ type SendRequest struct {
 	Blocks   []Block             `json:"blocks,omitempty"`
 	Command  string              `json:"command,omitempty"`
 	Decision *PermissionDecision `json:"decision,omitempty"`
+	Question *QuestionResponse   `json:"question,omitempty"`
 }
 
 // PermissionMode controls the session-wide tool approval policy.

@@ -1,0 +1,189 @@
+package harness
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"strings"
+	"testing"
+
+	"github.com/masterkeysrd/loom/llm"
+	"github.com/masterkeysrd/loom/message"
+	"github.com/masterkeysrd/tasksmith/internal/core/log"
+
+	"github.com/masterkeysrd/tasksmith/api"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/tools"
+)
+
+func TestQuestionInterruptResume(t *testing.T) {
+	ctx := context.Background()
+	_, registry, perms := newTestToolsRegistry(t)
+	provider := &fakeProvider{stepHandler: func(_ context.Context, _ *llm.Request, turn int) ([]message.AssistantChunk, error) {
+		if turn == 1 {
+			return []message.AssistantChunk{{BaseChunk: message.BaseChunk{ID: "question-turn"}, Content: []message.Block{&message.ToolCall{ID: "ask-1", Name: "ask_question", Args: map[string]any{"questions": []any{map[string]any{"type": "confirm", "question": "Proceed?", "description": "Confirm the operation."}}}}}, Done: true}}, nil
+		}
+		return []message.AssistantChunk{{BaseChunk: message.BaseChunk{ID: "final"}, Content: []message.Block{&message.TextBlock{Text: "done"}}, Done: true}}, nil
+	}}
+	h, err := New(Config{ID: "question-test", DB: openTestSQLite(t), Model: newTestModel(t, provider), Tools: registry, Bash: &fakeBashRunner{}, Spiller: newTestSpiller(t), Permissions: perms, Queue: &fakeQueue{}, Logger: log.Default()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var req tools.QuestionRequest
+	for event, err := range h.Stream(ctx, Input{Message: message.NewUserText("start")}) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		if event.Type == EventInterrupted && len(event.Questions) == 1 {
+			req = event.Questions[0]
+		}
+	}
+	if req.ID == "" || req.ToolCallID != "ask-1" {
+		t.Fatalf("missing question: %+v", req)
+	}
+	state, err := h.LoadState(ctx)
+	if err != nil || len(state.PendingQuestions) != 1 {
+		t.Fatalf("checkpoint: %+v, %v", state, err)
+	}
+	for _, err := range h.Stream(ctx, Input{Answers: map[string]tools.QuestionResponse{}}) {
+		if !errors.Is(err, ErrPendingQuestionsUnresolved) {
+			t.Fatalf("missing response: %v", err)
+		}
+	}
+	var result *message.Tool
+	for event, err := range h.Stream(ctx, Input{Answers: map[string]tools.QuestionResponse{req.ID: {Answers: []tools.QuestionAnswer{{Question: "Proceed?", Confirmed: true}}}}}) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		if msg, ok := event.Message.(*message.Tool); ok {
+			result = msg
+		}
+	}
+	if result == nil || !strings.Contains(result.Content.Text(), `"confirmed":true`) {
+		t.Fatalf("missing answer tool result: %+v", result)
+	}
+}
+
+func TestMixedQuestionAndPermission(t *testing.T) {
+	ctx := context.Background()
+	_, registry, perms := newTestToolsRegistry(t)
+	provider := &fakeProvider{stepHandler: func(_ context.Context, _ *llm.Request, turn int) ([]message.AssistantChunk, error) {
+		if turn == 1 {
+			return []message.AssistantChunk{{BaseChunk: message.BaseChunk{ID: "mixed"}, Content: []message.Block{
+				&message.ToolCall{ID: "ask", Name: "ask_question", Args: map[string]any{"questions": []any{map[string]any{"type": "confirm", "question": "Proceed?", "description": "Confirm."}}}},
+				&message.ToolCall{ID: "write", Name: "write", Args: map[string]any{"path": "mixed.txt", "content": "data"}},
+			}, Done: true}}, nil
+		}
+		return []message.AssistantChunk{{BaseChunk: message.BaseChunk{ID: "done"}, Content: []message.Block{&message.TextBlock{Text: "done"}}, Done: true}}, nil
+	}}
+	h, err := New(Config{ID: "mixed", DB: openTestSQLite(t), Model: newTestModel(t, provider), Tools: registry, Bash: &fakeBashRunner{}, Spiller: newTestSpiller(t), Permissions: perms, Queue: &fakeQueue{}, Logger: log.Default()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var q tools.QuestionRequest
+	var p tools.PermissionRequest
+	for event, err := range h.Stream(ctx, Input{Message: message.NewUserText("start")}) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		if event.Type == EventInterrupted && len(event.Questions) == 1 && len(event.Permissions) == 1 {
+			q, p = event.Questions[0], event.Permissions[0]
+		}
+	}
+	if q.ID == "" || p.ID == "" {
+		t.Fatalf("missing mixed requests: %+v %+v", q, p)
+	}
+	decisions := map[string]tools.PermissionDecision{p.ID: {Kind: tools.DecisionReject}}
+	for _, err := range h.Stream(ctx, Input{Decisions: decisions}) {
+		if !errors.Is(err, ErrPendingQuestionsUnresolved) {
+			t.Fatalf("missing answer error: %v", err)
+		}
+	}
+	var result *message.Tool
+	for event, err := range h.Stream(ctx, Input{Decisions: decisions, Answers: map[string]tools.QuestionResponse{q.ID: {Answers: []tools.QuestionAnswer{{Question: "Proceed?", Confirmed: false}}}}}) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		if msg, ok := event.Message.(*message.Tool); ok && msg.ToolCallID == "ask" {
+			result = msg
+		}
+	}
+	if result == nil || !strings.Contains(result.Content.Text(), `"confirmed":false`) {
+		t.Fatalf("missing no answer: %+v", result)
+	}
+}
+
+func TestQuestionOutputOmitsUnrelatedConfirmation(t *testing.T) {
+	ctx := context.Background()
+	_, registry, perms := newTestToolsRegistry(t)
+	provider := &fakeProvider{stepHandler: func(_ context.Context, _ *llm.Request, turn int) ([]message.AssistantChunk, error) {
+		if turn == 1 {
+			return []message.AssistantChunk{{BaseChunk: message.BaseChunk{ID: "ask"}, Content: []message.Block{&message.ToolCall{ID: "ask", Name: "ask_question", Args: map[string]any{"questions": []any{
+				map[string]any{"type": "single", "question": "Choice?", "description": "Choose.", "options": []any{map[string]any{"id": "a", "label": "A"}, map[string]any{"id": "b", "label": "B"}}},
+				map[string]any{"type": "multi", "question": "Choices?", "description": "Choose.", "options": []any{map[string]any{"id": "a", "label": "A"}, map[string]any{"id": "b", "label": "B"}}},
+				map[string]any{"type": "text", "question": "Why?", "description": "Explain."},
+				map[string]any{"type": "confirm", "question": "Yes?", "description": "Confirm."},
+				map[string]any{"type": "confirm", "question": "No?", "description": "Confirm."},
+			}}}}, Done: true}}, nil
+		}
+		return []message.AssistantChunk{{BaseChunk: message.BaseChunk{ID: "done"}, Content: []message.Block{&message.TextBlock{Text: "done"}}, Done: true}}, nil
+	}}
+	h, err := New(Config{ID: "question-output", DB: openTestSQLite(t), Model: newTestModel(t, provider), Tools: registry, Bash: &fakeBashRunner{}, Spiller: newTestSpiller(t), Permissions: perms, Queue: &fakeQueue{}, Logger: log.Default()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var req tools.QuestionRequest
+	for event, err := range h.Stream(ctx, Input{Message: message.NewUserText("start")}) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		if event.Type == EventInterrupted && len(event.Questions) == 1 {
+			req = event.Questions[0]
+		}
+	}
+	if req.ID == "" {
+		t.Fatal("missing question request")
+	}
+	answers := []tools.QuestionAnswer{{Question: "Choice?", Selected: []string{"a"}}, {Question: "Choices?", Selected: []string{"b"}}, {Question: "Why?", Text: "Reason"}, {Question: "Yes?", Confirmed: true}, {Question: "No?", Confirmed: false}}
+	var result *message.Tool
+	for event, err := range h.Stream(ctx, Input{Answers: map[string]tools.QuestionResponse{req.ID: {Answers: answers}}}) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		if msg, ok := event.Message.(*message.Tool); ok {
+			result = msg
+		}
+	}
+	if result == nil {
+		t.Fatal("missing tool response")
+	}
+	var decoded struct {
+		Answers []map[string]any `json:"answers"`
+	}
+	if err := json.Unmarshal([]byte(result.Content.Text()), &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if len(decoded.Answers) != 5 {
+		t.Fatalf("unexpected output: %+v", decoded)
+	}
+	for i := 0; i < 3; i++ {
+		if _, ok := decoded.Answers[i]["confirmed"]; ok {
+			t.Fatalf("unexpected confirmation: %+v", decoded.Answers[i])
+		}
+	}
+	if decoded.Answers[3]["confirmed"] != true || decoded.Answers[4]["confirmed"] != false {
+		t.Fatalf("confirmation lost: %+v", decoded.Answers)
+	}
+}
+
+func TestQuestionStateCopy(t *testing.T) {
+	state := State{
+		PendingQuestions:  []tools.QuestionRequest{{ID: "q", Questions: []api.Question{{Options: []api.QuestionOption{{ID: "a"}}}}}},
+		QuestionResponses: map[string]tools.QuestionResponse{"q": {Answers: []tools.QuestionAnswer{{Selected: []string{"a"}}}}},
+	}
+	copy := state.Copy()
+	copy.PendingQuestions[0].Questions[0].Options[0].ID = "changed"
+	copy.QuestionResponses["q"].Answers[0].Selected[0] = "changed"
+	if state.PendingQuestions[0].Questions[0].Options[0].ID != "a" || state.QuestionResponses["q"].Answers[0].Selected[0] != "a" {
+		t.Fatal("question state copy aliases original")
+	}
+}

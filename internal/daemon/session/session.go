@@ -43,6 +43,7 @@ const (
 	StatusGenerating        Status = "generating"
 	StatusExecuting         Status = "executing"
 	StatusWaitingPermission Status = "waiting_permission"
+	StatusWaitingQuestion   Status = "waiting_question"
 )
 
 func (s *Session) setStatus(next Status) {
@@ -540,7 +541,7 @@ func (s *Session) Send(ctx context.Context, input SendInput) error {
 		return errors.New("session: uninitialized session")
 	}
 	if cmd := strings.TrimSpace(input.Command); cmd != "" {
-		if input.Decision != nil || input.Message != nil {
+		if input.Decision != nil || input.Question != nil || input.Message != nil {
 			return fmt.Errorf("%w: cannot specify command with message or decision", ErrInvalidConfig)
 		}
 		s.enqueueItem(QueueItem{
@@ -556,14 +557,14 @@ func (s *Session) Send(ctx context.Context, input SendInput) error {
 		}
 		return s.startTurn(harness.Input{})
 	}
-	if input.Decision != nil && input.Message != nil {
-		return fmt.Errorf("%w: cannot specify both message and decision", ErrInvalidConfig)
+	if (input.Decision != nil && input.Message != nil) || (input.Question != nil && (input.Message != nil || input.Decision != nil)) {
+		return fmt.Errorf("%w: cannot combine message, decision, or question", ErrInvalidConfig)
 	}
-	if input.Decision == nil && input.Message == nil {
+	if input.Decision == nil && input.Question == nil && input.Message == nil {
 		return ErrNilMessage
 	}
 
-	if input.Decision != nil {
+	if input.Decision != nil || input.Question != nil {
 		s.Lock()
 		if s.Running {
 			s.Unlock()
@@ -571,17 +572,25 @@ func (s *Session) Send(ctx context.Context, input SendInput) error {
 		}
 		s.Unlock()
 
-		ready, err := s.recordDecision(ctx, *input.Decision)
+		var ready bool
+		var err error
+		if input.Decision != nil {
+			ready, err = s.recordDecision(ctx, *input.Decision)
+		} else {
+			ready, err = s.recordQuestion(ctx, *input.Question)
+		}
 		if err != nil || !ready {
 			return err
 		}
 
 		s.Lock()
 		fullDecisions := maps.Clone(s.decisions)
+		fullAnswers := maps.Clone(s.answers)
 		clear(s.decisions)
+		clear(s.answers)
 		s.Unlock()
 
-		return s.startTurn(harness.Input{Decisions: fullDecisions})
+		return s.startTurn(harness.Input{Decisions: fullDecisions, Answers: fullAnswers})
 	}
 
 	s.Lock()
@@ -627,9 +636,12 @@ func (s *Session) startTurn(hInput harness.Input) error {
 	s.Status = initialStatus
 	s.Running = true
 	s.WaitingPermission = false
+	s.WaitingQuestion = false
 	if hInput.Message != nil {
 		s.PendingPermissions = nil
+		s.PendingQuestions = nil
 		clear(s.decisions)
+		clear(s.answers)
 	}
 	s.Error = ""
 	s.err = nil
@@ -649,7 +661,7 @@ func (s *Session) startTurn(hInput harness.Input) error {
 			s.Lock()
 			if s.done == done {
 				s.Running = false
-				if s.Status != StatusWaitingPermission && s.Status != StatusIdle {
+				if s.Status != StatusWaitingPermission && s.Status != StatusWaitingQuestion && s.Status != StatusIdle {
 					s.Status = StatusIdle
 					statusChanged = true
 				}
@@ -681,7 +693,7 @@ func (s *Session) startTurn(hInput harness.Input) error {
 
 		for {
 			s.Lock()
-			hasMore := !s.WaitingPermission && runCtx.Err() == nil && len(s.queue) > 0
+			hasMore := !s.WaitingPermission && !s.WaitingQuestion && runCtx.Err() == nil && len(s.queue) > 0
 			s.Unlock()
 			if !hasMore {
 				break
@@ -694,7 +706,7 @@ func (s *Session) startTurn(hInput harness.Input) error {
 		}
 
 		s.Lock()
-		waiting := s.WaitingPermission
+		waiting := s.WaitingPermission || s.WaitingQuestion
 		s.Unlock()
 
 		if !waiting && runCtx.Err() == nil {
@@ -729,7 +741,7 @@ func (s *Session) Enqueue(msg message.Message) {
 	s.enqueueItem(item)
 
 	s.Lock()
-	canStart := !s.Running && !s.WaitingPermission
+	canStart := !s.Running && !s.WaitingPermission && !s.WaitingQuestion
 	s.Unlock()
 	if canStart {
 		_ = s.startTurn(harness.Input{})
@@ -808,7 +820,11 @@ func (s *Session) recordDecision(ctx context.Context, decision tools.PermissionD
 		}
 	}
 	s.PendingPermissions = remaining
-	allResolved := len(remaining) == 0
+	allResolved := len(remaining) == 0 && len(s.PendingQuestions) == 0
+	s.WaitingPermission = len(remaining) > 0
+	if !s.WaitingPermission && s.WaitingQuestion {
+		s.Status = StatusWaitingQuestion
+	}
 	s.Unlock()
 
 	matchedReq := *matched
@@ -842,11 +858,73 @@ func (s *Session) recordDecision(ctx context.Context, decision tools.PermissionD
 	return allResolved, nil
 }
 
+func (s *Session) recordQuestion(ctx context.Context, response tools.QuestionResponse) (bool, error) {
+	h, err := s.harness(ctx)
+	if err != nil {
+		return false, err
+	}
+	state, err := h.LoadState(ctx)
+	if err != nil {
+		return false, err
+	}
+	if len(state.PendingQuestions) == 0 {
+		return false, ErrNoPendingQuestions
+	}
+	var matched *tools.QuestionRequest
+	for i := range state.PendingQuestions {
+		req := &state.PendingQuestions[i]
+		if (response.RequestID != "" && response.RequestID == req.ID) || (response.ToolCallID != "" && response.ToolCallID == req.ToolCallID) {
+			matched = req
+			break
+		}
+	}
+	if matched == nil {
+		return false, ErrQuestionNotFound
+	}
+	if !response.Canceled && len(response.Answers) != len(matched.Questions) {
+		return false, ErrInvalidQuestion
+	}
+	for i, answer := range response.Answers {
+		if i >= len(matched.Questions) || answer.Question != matched.Questions[i].Question {
+			return false, ErrInvalidQuestion
+		}
+	}
+	response = *response.Clone()
+	response.RequestID, response.ToolCallID = matched.ID, matched.ToolCallID
+	entry := timeline.NewQuestionEntry(s.ID, timeline.QuestionRecord{Request: *matched.Clone(), Response: response})
+	if err := s.Timeline.Append(ctx, entry); err != nil {
+		return false, err
+	}
+	if err := s.store.touchSession(ctx, s.ID, entry.CreatedAt); err != nil {
+		return false, err
+	}
+	s.Lock()
+	if s.answers == nil {
+		s.answers = make(map[string]tools.QuestionResponse)
+	}
+	s.answers[matched.ID] = response
+	var remaining []tools.QuestionRequest
+	for i := range state.PendingQuestions {
+		if _, ok := s.answers[state.PendingQuestions[i].ID]; !ok {
+			remaining = append(remaining, *state.PendingQuestions[i].Clone())
+		}
+	}
+	s.PendingQuestions = remaining
+	s.WaitingQuestion = len(remaining) > 0
+	s.UpdatedAt = entry.CreatedAt
+	ready := len(remaining) == 0 && len(s.PendingPermissions) == 0
+	s.Unlock()
+	s.publisher.Publish(api.SessionStreamTopic(s.ID), EntryAddedEvent{SessionID: s.ID, Entry: entry.Clone()})
+	return ready, nil
+}
+
 func (s *Session) handleAsyncError(err error) {
 	s.Lock()
 	s.Running = false
 	s.WaitingPermission = false
 	s.PendingPermissions = nil
+	s.WaitingQuestion = false
+	s.PendingQuestions = nil
 	s.queue = nil
 	s.Status = StatusIdle
 	s.FinishedAt = time.Now().UTC()
@@ -1019,22 +1097,34 @@ func (s *Session) send(ctx context.Context, stream iter.Seq2[harness.Event, erro
 				perms[i] = p
 			}
 
+			questions := make([]tools.QuestionRequest, len(hev.Questions))
+			for i := range hev.Questions {
+				questions[i] = *hev.Questions[i].Clone()
+			}
+			nextStatus := StatusWaitingQuestion
+			if len(perms) > 0 {
+				nextStatus = StatusWaitingPermission
+			}
 			s.Lock()
-			s.Status = StatusWaitingPermission
+			s.Status = nextStatus
 			s.Running = false
-			s.WaitingPermission = true
+			s.WaitingPermission = len(perms) > 0
 			s.PendingPermissions = perms
+			s.WaitingQuestion = len(questions) > 0
+			s.PendingQuestions = questions
 			s.FinishedAt = time.Now().UTC()
 			s.Unlock()
 
 			s.publisher.Publish(api.SessionStreamTopic(s.ID), StatusChangedEvent{
 				SessionID: s.ID,
-				Status:    StatusWaitingPermission,
+				Status:    nextStatus,
 			})
-			s.publisher.Publish(api.SessionStreamTopic(s.ID), PermissionRequestedEvent{
-				SessionID:   s.ID,
-				Permissions: perms,
-			})
+			if len(perms) > 0 {
+				s.publisher.Publish(api.SessionStreamTopic(s.ID), PermissionRequestedEvent{SessionID: s.ID, Permissions: perms})
+			}
+			if len(questions) > 0 {
+				s.publisher.Publish(api.SessionStreamTopic(s.ID), QuestionRequestedEvent{SessionID: s.ID, Questions: questions})
+			}
 
 		case harness.EventTodosUpdated:
 			s.Lock()

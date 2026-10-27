@@ -28,7 +28,7 @@ var ActiveStream = trail.SimpleFC("ActiveStream", func() trail.Node {
 		return s.Streaming
 	})
 	waitingPerm := store.UseStream(func(s store.StreamState) bool {
-		return s.WaitingPermission
+		return s.WaitingPermission || s.WaitingQuestion
 	})
 	status := store.UseStream(func(s store.StreamState) api.SessionStatus {
 		return s.Status

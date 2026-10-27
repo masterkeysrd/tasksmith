@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"errors"
+	"fmt"
 	"iter"
 	"strings"
 	"sync"
@@ -104,11 +105,12 @@ func InitSession(ctx context.Context, c *client.Client, opts InitSessionOptions)
 	if c != nil && sid != "" && sess != nil {
 		FreezeTranscript()
 		if tl, err := c.Timeline(subCtx, sid); err == nil {
-			globalConversation.loadTimeline(tl)
+			globalConversation.loadTimeline(tl, sess.PendingQuestions)
 		}
 		if len(sess.PendingPermissions) > 0 {
 			globalConversation.SeedPermissions(sess.PendingPermissions)
 		}
+		globalConversation.SeedQuestions(sess.PendingQuestions)
 		if len(sess.Queue) > 0 {
 			SeedQueue(sess.Queue)
 		}
@@ -146,8 +148,17 @@ func startSessionStreamWatcher(ctx context.Context, sessionID string) {
 			for ev, err := range c.Watch(watchCtx, since, api.SessionStreamTopic(sessionID)) {
 				if err != nil {
 					if client.IsNeedSync(err) {
+						sess, sessErr := c.GetSession(watchCtx, sessionID)
 						if tl, tlErr := c.Timeline(watchCtx, sessionID); tlErr == nil {
-							globalConversation.loadTimeline(tl)
+							if sessErr == nil && sess != nil {
+								globalConversation.loadTimeline(tl, sess.PendingQuestions)
+							} else {
+								globalConversation.loadTimeline(tl)
+							}
+						}
+						if sessErr == nil && sess != nil {
+							globalConversation.reconcilePermissions(sess.PendingPermissions)
+							globalConversation.SeedQuestions(sess.PendingQuestions)
 						}
 						since = ""
 					}
@@ -351,6 +362,38 @@ func Cancel() {
 		}
 		_ = c.Cancel(ctx, sess.ID)
 		globalConversation.cancelTurn()
+	}()
+}
+
+func SubmitQuestion(req api.QuestionRequest, response api.QuestionResponse, done func(error)) {
+	sessMu.Lock()
+	c, ctx := activeClient, activeCtx
+	sess := GetSession().Session
+	sessMu.Unlock()
+	if c == nil || sess == nil || sess.ID == "" || req.ID == "" {
+		if done != nil {
+			done(fmt.Errorf("no active session for question"))
+		}
+		return
+	}
+	response.RequestID, response.ToolCallID = req.ID, req.ToolCallID
+	sessionID := sess.ID
+	go func() {
+		if ctx == nil || ctx.Err() != nil {
+			ctx = context.Background()
+		}
+		err := c.Send(ctx, sessionID, api.SendRequest{Question: &response})
+		if err == nil {
+			globalConversation.mu.Lock()
+			if globalConversation.sessionID == sessionID {
+				globalConversation.removeQuestionLocked(req.ID)
+				globalConversation.publishLocked()
+			}
+			globalConversation.mu.Unlock()
+		}
+		if done != nil {
+			done(err)
+		}
 	}()
 }
 
@@ -763,11 +806,12 @@ func SwitchSession(sessionID string) {
 		ResetForSessionSwitch()
 
 		if tl, err := c.Timeline(ctx, loaded.ID); err == nil {
-			globalConversation.loadTimeline(tl)
+			globalConversation.loadTimeline(tl, loaded.PendingQuestions)
 		}
 		if len(loaded.PendingPermissions) > 0 {
 			globalConversation.SeedPermissions(loaded.PendingPermissions)
 		}
+		globalConversation.SeedQuestions(loaded.PendingQuestions)
 		if len(loaded.Queue) > 0 {
 			SeedQueue(loaded.Queue)
 		}

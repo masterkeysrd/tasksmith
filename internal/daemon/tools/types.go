@@ -5,11 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/masterkeysrd/loom/message"
 	"github.com/masterkeysrd/loom/tool"
+	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/core/guard"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/workspace"
 )
@@ -145,6 +147,91 @@ type PermissionDecision struct {
 	GrantPattern string                 `json:"grant_pattern,omitempty"`
 	Scope        string                 `json:"scope,omitempty"`
 	Feedback     string                 `json:"feedback,omitempty"`
+}
+
+// QuestionType classifies the interaction style of a user question.
+type QuestionType string
+
+const (
+	QuestionTypeSingle  QuestionType = "single"
+	QuestionTypeMulti   QuestionType = "multi"
+	QuestionTypeText    QuestionType = "text"
+	QuestionTypeConfirm QuestionType = "confirm"
+)
+
+// QuestionRequest is the user-facing prompt minted when the agent invokes ask_question.
+type QuestionRequest struct {
+	ID          string         `json:"id"`
+	ToolCallID  string         `json:"tool_call_id"`
+	Title       string         `json:"title,omitempty"`
+	Description string         `json:"description,omitempty"`
+	Questions   []api.Question `json:"questions"`
+}
+
+// QuestionAnswer captures the user's answer to a single [Question].
+type QuestionAnswer struct {
+	Question  string   `json:"question"`
+	Selected  []string `json:"selected,omitempty"`
+	Text      string   `json:"text,omitempty"`
+	Confirmed bool     `json:"confirmed,omitempty"`
+}
+
+// QuestionResponse captures the user's resolution of a [QuestionRequest].
+type QuestionResponse struct {
+	RequestID  string           `json:"request_id"`
+	ToolCallID string           `json:"tool_call_id"`
+	Canceled   bool             `json:"canceled,omitempty"`
+	Answers    []QuestionAnswer `json:"answers,omitempty"`
+}
+
+// Clone returns a deep copy of the QuestionRequest with cloned slices.
+func (r *QuestionRequest) Clone() *QuestionRequest {
+	if r == nil {
+		return nil
+	}
+	cp := &QuestionRequest{
+		ID:          r.ID,
+		ToolCallID:  r.ToolCallID,
+		Title:       r.Title,
+		Description: r.Description,
+		Questions:   make([]api.Question, len(r.Questions)),
+	}
+	for i, q := range r.Questions {
+		o := make([]api.QuestionOption, len(q.Options))
+		for j, opt := range q.Options {
+			o[j] = opt
+		}
+		cp.Questions[i] = api.Question{
+			Type:        q.Type,
+			Question:    q.Question,
+			Description: q.Description,
+			Label:       q.Label,
+			Options:     o,
+		}
+	}
+	return cp
+}
+
+// Clone returns a deep copy of the QuestionResponse with cloned slices.
+func (r *QuestionResponse) Clone() *QuestionResponse {
+	if r == nil {
+		return nil
+	}
+	cp := &QuestionResponse{
+		RequestID:  r.RequestID,
+		ToolCallID: r.ToolCallID,
+		Canceled:   r.Canceled,
+		Answers:    make([]QuestionAnswer, len(r.Answers)),
+	}
+	for i, a := range r.Answers {
+		cp.Answers[i] = QuestionAnswer{
+			Question:  a.Question,
+			Selected:  slices.Clone(a.Selected),
+			Text:      a.Text,
+			Confirmed: a.Confirmed,
+		}
+	}
+	return cp
 }
 
 // Tool is an executable LLM-callable tool with two-phase Prepare and Execute

@@ -74,5 +74,6 @@ func New(cfg Config) ([]tools.Tool, error) {
 		tools.NewHandler(ToolDownload, &downloadTool{std: cfg.Std, guard: cfg.Guard}),
 		tools.NewHandler(ToolTasks, &tasksTool{tasks: tasksMgr}),
 		tools.NewHandler(ToolTodos, &todosTool{}),
+		tools.NewHandler(ToolAskQuestion, &askQuestionTool{}),
 	}, nil
 }

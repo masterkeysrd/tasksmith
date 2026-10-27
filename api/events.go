@@ -44,6 +44,7 @@ const (
 	EventStatusChanged       EventType = "status_changed"
 	EventChunk               EventType = "chunk"
 	EventPermissionRequested EventType = "permission_requested"
+	EventQuestionRequested   EventType = "question_requested"
 	EventCompleted           EventType = "completed"
 	EventTaskUpdated         EventType = "task_updated"
 	EventCommandStarted      EventType = "command_started"
@@ -121,6 +122,13 @@ type PermissionRequestedEvent struct {
 }
 
 func (PermissionRequestedEvent) EventType() string { return string(EventPermissionRequested) }
+
+type QuestionRequestedEvent struct {
+	SessionID string            `json:"session_id"`
+	Questions []QuestionRequest `json:"questions"`
+}
+
+func (QuestionRequestedEvent) EventType() string { return string(EventQuestionRequested) }
 
 // CompletedEvent represents the payload for an [EventCompleted] event.
 type CompletedEvent struct {
@@ -249,6 +257,12 @@ func (e *Event) UnmarshalJSON(data []byte) error {
 		var p PermissionRequestedEvent
 		if err := json.Unmarshal(raw, &p); err != nil {
 			return fmt.Errorf("api: unmarshal permission_requested payload: %w", err)
+		}
+		e.Payload = p
+	case EventQuestionRequested:
+		var p QuestionRequestedEvent
+		if err := json.Unmarshal(raw, &p); err != nil {
+			return fmt.Errorf("api: unmarshal question_requested payload: %w", err)
 		}
 		e.Payload = p
 	case EventCompleted:
