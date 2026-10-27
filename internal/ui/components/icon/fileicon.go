@@ -1,8 +1,6 @@
 package icon
 
 import (
-	"image/color"
-
 	"github.com/lrstanley/go-nf/glyphs/neo"
 	"github.com/masterkeysrd/kite/extras/kitex"
 	"github.com/masterkeysrd/kite/style"
@@ -20,29 +18,18 @@ type FileIconProps struct {
 // and falls back to a default file icon if no matching icon is found.
 var FileIcon = kitex.FC("FileIcon", func(props FileIconProps) kitex.Node {
 	t := theme.UseTheme()
-	dark := true
-	if t != nil && t.Type == "light" {
-		dark = false
-	}
+	dark := t.Type != "light"
 
 	if props.IsDir {
-		var fg color.Color
-		if t != nil {
-			fg = t.Color.Text.Secondary
-		}
 		return kitex.Span(kitex.SpanProps{
-			Style: style.S().Foreground(fg),
+			Style: style.S().Foreground(t.Color.Text.Secondary),
 		}, Directory)
 	}
 
 	res := neo.ByPath(props.Path)
 	if res == nil {
-		var fg color.Color
-		if t != nil {
-			fg = t.Color.Text.Secondary
-		}
 		return kitex.Span(kitex.SpanProps{
-			Style: style.S().Foreground(fg),
+			Style: style.S().Foreground(t.Color.Text.Secondary),
 		}, File)
 	}
 

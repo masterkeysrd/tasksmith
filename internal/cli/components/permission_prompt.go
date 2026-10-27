@@ -170,55 +170,14 @@ var PermissionPrompt = trail.FC("PermissionPrompt", func(props PermissionPromptP
 	})
 
 	// Styles
-	border := style.RoundedBorder()
-	if scheme != nil && scheme.Color.Border.Primary != nil {
-		border = border.Color(scheme.Color.Border.Primary)
-	}
-
-	titleStyle := style.S().Bold(true).WhiteSpace(style.WhiteSpacePre)
-	if scheme != nil && scheme.Color.Text.Purple != nil {
-		titleStyle = titleStyle.Foreground(scheme.Color.Text.Purple)
-	} else if scheme != nil && scheme.Color.Icon.Primary != nil {
-		titleStyle = titleStyle.Foreground(scheme.Color.Icon.Primary)
-	} else if scheme != nil && scheme.Color.Text.Primary != nil {
-		titleStyle = titleStyle.Foreground(scheme.Color.Text.Primary)
-	}
-
-	toolStyle := style.S().Bold(true).WhiteSpace(style.WhiteSpacePre)
-	if scheme != nil && scheme.Color.Text.Primary != nil {
-		toolStyle = toolStyle.Foreground(scheme.Color.Text.Primary)
-	}
-
-	dotStyle := style.S().WhiteSpace(style.WhiteSpacePre)
-	if scheme != nil && scheme.Color.Text.Secondary != nil {
-		dotStyle = dotStyle.Foreground(scheme.Color.Text.Secondary)
-	}
-
-	targetStyle := style.S().WhiteSpace(style.WhiteSpacePre)
-	if scheme != nil && scheme.Color.Text.Secondary != nil {
-		targetStyle = targetStyle.Foreground(scheme.Color.Text.Secondary)
-	}
-
-	selectedStyle := style.S().Bold(true).WhiteSpace(style.WhiteSpacePre)
-	if scheme != nil && scheme.Color.Icon.Primary != nil {
-		selectedStyle = selectedStyle.Foreground(scheme.Color.Icon.Primary)
-	} else if scheme != nil && scheme.Color.Text.Primary != nil {
-		selectedStyle = selectedStyle.Foreground(scheme.Color.Text.Primary)
-	}
-
-	unselectedStyle := style.S().WhiteSpace(style.WhiteSpacePre)
-	if scheme != nil && scheme.Color.Text.Secondary != nil {
-		unselectedStyle = unselectedStyle.Foreground(scheme.Color.Text.Secondary)
-	}
-
-	scopeStyle := style.S().WhiteSpace(style.WhiteSpacePre)
-	if scheme != nil && scheme.Color.Surface.Tertiary != nil {
-		scopeStyle = scopeStyle.Foreground(scheme.Color.Surface.Tertiary)
-	} else if scheme != nil && scheme.Color.Text.Purple != nil {
-		scopeStyle = scopeStyle.Foreground(scheme.Color.Text.Purple)
-	} else if scheme != nil && scheme.Color.Text.Secondary != nil {
-		scopeStyle = scopeStyle.Foreground(scheme.Color.Text.Secondary)
-	}
+	border := style.RoundedBorder().Color(scheme.Color.Border.Default)
+	titleStyle := style.S().Bold(true).WhiteSpace(style.WhiteSpacePre).Foreground(scheme.Color.Agent.Permission)
+	toolStyle := style.S().Bold(true).WhiteSpace(style.WhiteSpacePre).Foreground(scheme.Color.Text.Primary)
+	dotStyle := style.S().WhiteSpace(style.WhiteSpacePre).Foreground(scheme.Color.Text.Secondary)
+	targetStyle := style.S().WhiteSpace(style.WhiteSpacePre).Foreground(scheme.Color.Text.Secondary)
+	selectedStyle := style.S().Bold(true).WhiteSpace(style.WhiteSpacePre).Foreground(scheme.Color.Icon.Primary)
+	unselectedStyle := style.S().WhiteSpace(style.WhiteSpacePre).Foreground(scheme.Color.Text.Secondary)
+	scopeStyle := style.S().WhiteSpace(style.WhiteSpacePre).Foreground(scheme.Color.Agent.Permission)
 
 	perm := props.Request
 
@@ -297,12 +256,7 @@ var PermissionPrompt = trail.FC("PermissionPrompt", func(props PermissionPromptP
 
 	// Inline feedback input
 	if feedbackMode() {
-		feedbackPromptStyle := style.S().Bold(true)
-		if scheme != nil && scheme.Color.Text.Purple != nil {
-			feedbackPromptStyle = feedbackPromptStyle.Foreground(scheme.Color.Text.Purple)
-		} else if scheme != nil && scheme.Color.Text.Primary != nil {
-			feedbackPromptStyle = feedbackPromptStyle.Foreground(scheme.Color.Text.Primary)
-		}
+		feedbackPromptStyle := style.S().Bold(true).Foreground(scheme.Color.Agent.Permission)
 
 		boxChildren = append(boxChildren, trail.Box(trail.BoxProps{
 			Style: style.S().

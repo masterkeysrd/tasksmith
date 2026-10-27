@@ -12,7 +12,7 @@ import (
 // LspKindIcon resolves a Nerd Font icon and theme color for a given LSP symbol kind.
 func LspKindIcon(kind string, t *theme.Scheme) (kitex.Node, color.Color) {
 	if t == nil {
-		return nil, nil
+		t = theme.UseTheme()
 	}
 	var glyph string
 	var col color.Color
@@ -23,43 +23,43 @@ func LspKindIcon(kind string, t *theme.Scheme) (kitex.Node, color.Color) {
 		col = t.Color.Text.Primary
 	case "module", "namespace", "package":
 		glyph = "󰏗" // Package icon
-		col = t.Color.Surface.Info
+		col = t.Color.Icon.Info
 	case "class":
 		glyph = "󰠱" // Class
-		col = t.Color.Text.Purple
+		col = t.Color.Syntax.Type
 	case "method":
 		glyph = "󰆧" // Method/cube
-		col = t.Color.Text.Purple
+		col = t.Color.Syntax.Function
 	case "property", "field":
 		glyph = "󰫧" // Field
 		col = t.Color.Text.Secondary
 	case "constructor":
 		glyph = "󰡱" // Constructor
-		col = t.Color.Text.Purple
+		col = t.Color.Syntax.Function
 	case "enum":
 		glyph = "󰦻" // Enum
-		col = t.Color.Text.Purple
+		col = t.Color.Syntax.Type
 	case "interface":
 		glyph = "󰓡" // Interface / Connection
-		col = t.Color.Surface.Info
+		col = t.Color.Icon.Info
 	case "function":
 		glyph = "󰊕" // Function
-		col = t.Color.Text.Purple
+		col = t.Color.Syntax.Function
 	case "variable":
 		glyph = "󰆦" // Variable
-		col = t.Color.Text.Secondary
+		col = t.Color.Syntax.Variable
 	case "constant":
 		glyph = "󰏿" // Tag / Constant
-		col = t.Color.Text.Purple
+		col = t.Color.Syntax.Number
 	case "struct":
 		glyph = "󰆼" // Struct / database/structure icon
-		col = t.Color.Text.Primary
+		col = t.Color.Syntax.Type
 	case "typeparameter":
 		glyph = "󰗄" // Type parameter
-		col = t.Color.Text.Primary
+		col = t.Color.Syntax.Type
 	default:
 		glyph = "󰚞" // Diamond
-		col = t.Color.Text.Tertiary
+		col = t.Color.Text.Muted
 	}
 
 	return kitex.Span(kitex.SpanProps{Style: style.S().Foreground(col)}, kitex.Text(glyph)), col

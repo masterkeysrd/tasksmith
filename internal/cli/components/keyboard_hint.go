@@ -25,22 +25,9 @@ var KeyboardHint = trail.FC("KeyboardHint", func(props KeyboardHintProps) trail.
 
 	scheme := theme.UseTheme()
 
-	prefixStyle := style.S().WhiteSpace(style.WhiteSpacePre)
-	if scheme != nil && scheme.Color.Text.Primary != nil {
-		prefixStyle = prefixStyle.Foreground(scheme.Color.Text.Primary)
-	}
-
-	keyStyle := style.S().Bold(true).WhiteSpace(style.WhiteSpacePre)
-	if scheme != nil && scheme.Color.Icon.Primary != nil {
-		keyStyle = keyStyle.Foreground(scheme.Color.Icon.Primary)
-	} else if scheme != nil && scheme.Color.Text.Primary != nil {
-		keyStyle = keyStyle.Foreground(scheme.Color.Text.Primary)
-	}
-
-	labelStyle := style.S().WhiteSpace(style.WhiteSpacePre)
-	if scheme != nil && scheme.Color.Text.Primary != nil {
-		labelStyle = labelStyle.Foreground(scheme.Color.Text.Primary)
-	}
+	prefixStyle := style.S().WhiteSpace(style.WhiteSpacePre).Foreground(scheme.Color.Text.Muted)
+	keyStyle := style.S().Bold(true).WhiteSpace(style.WhiteSpacePre).Foreground(scheme.Color.Icon.Primary)
+	labelStyle := style.S().WhiteSpace(style.WhiteSpacePre).Foreground(scheme.Color.Text.Secondary)
 
 	var spans []trail.Node
 	spans = append(spans, trail.Span(trail.SpanProps{Style: prefixStyle}, trail.Text("Keyboard: ")))

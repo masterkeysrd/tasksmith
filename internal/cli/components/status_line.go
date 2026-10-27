@@ -13,37 +13,9 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/ui/theme"
 )
 
-// Tone is a semantic color role resolved against the active theme.
-type Tone int
-
-const (
-	// ToneMuted is the default, low-emphasis status text.
-	ToneMuted Tone = iota
-	ToneInfo
-	ToneSuccess
-	TonePurple
-	ToneMagenta
-	ToneError
-)
-
-func (t Tone) color(scheme *theme.Scheme) color.Color {
-	if scheme == nil {
-		return nil
-	}
-	switch t {
-	case ToneInfo:
-		return scheme.Color.Surface.Info
-	case ToneSuccess:
-		return scheme.Color.Surface.Success
-	case TonePurple:
-		return scheme.Color.Text.Purple
-	case ToneMagenta:
-		return scheme.Color.Text.Magenta
-	case ToneError:
-		return scheme.Color.Text.Error
-	default:
-		return scheme.Color.Text.Secondary
-	}
+// StatusLineProps defines the properties for the StatusLine layout.
+type StatusLineProps struct {
+	Children []trail.Node
 }
 
 // SegmentProps defines the properties shared by status segments.
@@ -52,17 +24,24 @@ type SegmentProps struct {
 	Separator string
 }
 
-// StatusLineProps defines the properties for the StatusLine layout.
-type StatusLineProps struct {
-	Children []trail.Node
+func modeColor(scheme *theme.Scheme, mode api.PermissionMode) color.Color {
+	switch mode {
+	case api.ModeAcceptEdits:
+		return scheme.Color.Mode.AcceptEdits
+	case api.ModePlan:
+		return scheme.Color.Mode.Plan
+	case api.ModeAsk:
+		return scheme.Color.Mode.Ask
+	case api.ModeAuto:
+		return scheme.Color.Mode.Auto
+	default:
+		return scheme.Color.Mode.Default
+	}
 }
 
-// statusText renders text in the given tone.
-func statusText(text string, tone Tone, bold bool) trail.Node {
-	spanStyle := style.S().WhiteSpace(style.WhiteSpacePre)
-	if fg := tone.color(theme.UseTheme()); fg != nil {
-		spanStyle = spanStyle.Foreground(fg)
-	}
+// statusText renders text in the given color.
+func statusText(text string, col color.Color, bold bool) trail.Node {
+	spanStyle := style.S().WhiteSpace(style.WhiteSpacePre).Foreground(col)
 	if bold {
 		spanStyle = spanStyle.Bold(true)
 	}
@@ -70,7 +49,7 @@ func statusText(text string, tone Tone, bold bool) trail.Node {
 }
 
 // segment appends the separator to a rendered segment and hides empty ones.
-func segment(props SegmentProps, content trail.Node, text string) trail.Node {
+func segment(props SegmentProps, content trail.Node, text string, sepColor color.Color) trail.Node {
 	if text == "" {
 		return nil
 	}
@@ -79,27 +58,13 @@ func segment(props SegmentProps, content trail.Node, text string) trail.Node {
 	}
 	return trail.Box(trail.BoxProps{},
 		content,
-		statusText(props.Separator, ToneMuted, false),
+		statusText(props.Separator, sepColor, false),
 	)
-}
-
-func modeTone(mode api.PermissionMode) Tone {
-	switch mode {
-	case api.ModeAcceptEdits:
-		return ToneSuccess
-	case api.ModePlan:
-		return TonePurple
-	case api.ModeAsk:
-		return ToneMagenta
-	case api.ModeAuto:
-		return ToneError
-	default:
-		return ToneInfo
-	}
 }
 
 // HintSegment shows the shortcut hint or Ctrl+C exit confirmation from store.App.
 var HintSegment = trail.FC("HintSegment", func(props SegmentProps) trail.Node {
+	scheme := theme.UseTheme()
 	ctrlCPending := store.UseApp(func(s store.AppState) bool {
 		return s.CtrlCPending
 	})
@@ -116,21 +81,23 @@ var HintSegment = trail.FC("HintSegment", func(props SegmentProps) trail.Node {
 	if ctrlCPending {
 		text = store.CtrlCHint
 	}
-	return segment(props, statusText(text, ToneMuted, false), text)
+	return segment(props, statusText(text, scheme.Color.Text.Secondary, false), text, scheme.Color.Text.Secondary)
 })
 
 // ModeSegment shows a colored badge for non-default permission modes.
 var ModeSegment = trail.FC("ModeSegment", func(props SegmentProps) trail.Node {
+	scheme := theme.UseTheme()
 	mode := store.UseMode()
 	if mode == "" || mode == api.ModeDefault {
 		return nil
 	}
 	text := string(mode)
-	return segment(props, statusText(text, modeTone(mode), true), text)
+	return segment(props, statusText(text, modeColor(scheme, mode), true), text, scheme.Color.Text.Secondary)
 })
 
 // ModelSegment shows "<model> · <thinking>" once session model info is ready.
 var ModelSegment = trail.FC("ModelSegment", func(props SegmentProps) trail.Node {
+	scheme := theme.UseTheme()
 	ready := store.UseSession(func(s store.SessionState) bool {
 		return s.Ready
 	})
@@ -147,7 +114,7 @@ var ModelSegment = trail.FC("ModelSegment", func(props SegmentProps) trail.Node 
 	model := cmp.Or(strings.TrimSpace(modelLabel), "default")
 	effort := cmp.Or(strings.TrimSpace(thinking), "auto")
 	text := fmt.Sprintf("%s · %s", model, effort)
-	return segment(props, statusText(text, ToneMuted, false), text)
+	return segment(props, statusText(text, scheme.Color.Text.Secondary, false), text, scheme.Color.Text.Secondary)
 })
 
 // StatusLine lays its children out horizontally across the full width.

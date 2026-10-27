@@ -4,15 +4,11 @@ import (
 	"testing"
 
 	"github.com/masterkeysrd/kite/extras/kitex"
-	"github.com/masterkeysrd/tasksmith/internal/ui/theme"
 )
 
 func TestButton(t *testing.T) {
-	// Create a dummy theme for testing
-	thm := &theme.Scheme{}
-
 	render := func(node kitex.Node) kitex.Node {
-		return theme.Provider(theme.Props{Theme: thm}, node)
+		return node
 	}
 
 	t.Run("Basic", func(t *testing.T) {

@@ -127,7 +127,7 @@ func aggregateFileChanges(entries []api.FileChange) []api.FileChange {
 			currentHash = ""
 		}
 
-		if baselineHash == currentHash && !(first.Kind == "created" && last.Kind != "deleted") {
+		if baselineHash == currentHash && (first.Kind != "created" || last.Kind == "deleted") {
 			continue
 		}
 
@@ -181,25 +181,13 @@ var emptyChangesView = trail.FC("EmptyChangesView", func(props emptyChangesViewP
 	})
 
 	scheme := theme.UseTheme()
-	border := style.SingleBorder().Top(true).Bottom(false).Left(false).Right(false)
-	if scheme != nil && scheme.Color.Border.Primary != nil {
-		border = border.Color(scheme.Color.Border.Primary)
-	}
+	border := style.SingleBorder().Top(true).Bottom(false).Left(false).Right(false).Color(scheme.Color.Border.Default)
 	boxStyle := style.S().
 		Border(border).
 		Width(style.Percent(100)).
 		FlexDirection(style.FlexColumn)
-	titleStyle := style.S().Bold(true).Margin(0, 0, 1, 0)
-	emptyStyle := style.S().Margin(0, 0, 1, 0)
-
-	if scheme != nil {
-		if scheme.Color.Text.Primary != nil {
-			titleStyle = titleStyle.Foreground(scheme.Color.Text.Primary)
-		}
-		if scheme.Color.Text.Secondary != nil {
-			emptyStyle = emptyStyle.Foreground(scheme.Color.Text.Secondary)
-		}
-	}
+	titleStyle := style.S().Bold(true).Margin(0, 0, 1, 0).Foreground(scheme.Color.Text.Primary)
+	emptyStyle := style.S().Margin(0, 0, 1, 0).Foreground(scheme.Color.Text.Secondary)
 
 	return trail.Box(trail.BoxProps{Style: boxStyle},
 		trail.Span(trail.SpanProps{Style: titleStyle}, trail.Text("Tracked Changes")),
@@ -257,15 +245,8 @@ var changeDiffViewer = trail.FC("ChangeDiffViewer", func(props changeDiffProps) 
 	})
 
 	scheme := theme.UseTheme()
-	border := style.SingleBorder().Top(true).Bottom(false).Left(false).Right(false)
-	if scheme != nil && scheme.Color.Border.Primary != nil {
-		border = border.Color(scheme.Color.Border.Primary)
-	}
-
-	headerStyle := style.S().Bold(true).Margin(0, 0, 1, 0)
-	if scheme != nil && scheme.Color.Text.Primary != nil {
-		headerStyle = headerStyle.Foreground(scheme.Color.Text.Primary)
-	}
+	border := style.SingleBorder().Top(true).Bottom(false).Left(false).Right(false).Color(scheme.Color.Border.Default)
+	headerStyle := style.S().Bold(true).Margin(0, 0, 1, 0).Foreground(scheme.Color.Text.Primary)
 
 	var content trail.Node
 	if isLoading() {
@@ -391,13 +372,13 @@ var ChangesBrowser = trail.FC("ChangesBrowser", func(slotID string) trail.Node {
 			Style: style.S().WhiteSpace(style.WhiteSpacePre),
 		},
 			trail.Span(trail.SpanProps{
-				Style: style.S().Foreground(scheme.Color.Surface.Success),
+				Style: style.S().Foreground(scheme.Color.Diff.AddedText),
 			}, trail.Text(fmt.Sprintf("+%d", ch.Additions))),
 			trail.Span(trail.SpanProps{
 				Style: style.S().Foreground(scheme.Color.Text.Secondary),
 			}, trail.Text("/")),
 			trail.Span(trail.SpanProps{
-				Style: style.S().Foreground(scheme.Color.Text.Error),
+				Style: style.S().Foreground(scheme.Color.Diff.RemovedText),
 			}, trail.Text(fmt.Sprintf("-%d", ch.Deletions))),
 		)
 		opts[i] = uicomponents.Option{

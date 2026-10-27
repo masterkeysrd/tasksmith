@@ -56,15 +56,9 @@ func ShortenHomePath(path string) string {
 var Header = trail.FC("Header", func(props store.HeaderData) trail.Node {
 	scheme := theme.UseTheme()
 
-	titleStyle := style.S().Bold(true)
-	metaStyle := style.S().WhiteSpace(style.WhiteSpacePre)
-	dimStyle := style.S()
-
-	if scheme != nil {
-		titleStyle = titleStyle.Foreground(scheme.Color.Text.Purple)
-		metaStyle = metaStyle.Foreground(scheme.Color.Text.Secondary)
-		dimStyle = dimStyle.Foreground(scheme.Color.Text.Secondary)
-	}
+	titleStyle := style.S().Bold(true).Foreground(scheme.Color.Agent.Brand)
+	metaStyle := style.S().WhiteSpace(style.WhiteSpacePre).Foreground(scheme.Color.Text.Secondary)
+	dimStyle := style.S().Foreground(scheme.Color.Text.Secondary)
 
 	version := NormalizeVersion(props.Version)
 	model := cmp.Or(strings.TrimSpace(props.Model), "default")

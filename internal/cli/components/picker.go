@@ -274,10 +274,7 @@ var Picker = trail.FC("Picker", func(props PickerProps) trail.Node {
 
 	// Title
 	if props.Title != "" {
-		titleStyle := style.S().Bold(true)
-		if scheme != nil && scheme.Color.Text.Primary != nil {
-			titleStyle = titleStyle.Foreground(scheme.Color.Text.Primary)
-		}
+		titleStyle := style.S().Bold(true).Foreground(scheme.Color.Text.Primary)
 		rows = append(rows, trail.Box(trail.BoxProps{
 			Style: style.S().FlexDirection(style.FlexRow),
 		}, trail.Span(trail.SpanProps{
@@ -287,10 +284,7 @@ var Picker = trail.FC("Picker", func(props PickerProps) trail.Node {
 
 	// Filter input row
 	if props.Filterable && st.mode == pickerModeBrowse {
-		filterPromptStyle := style.S().Bold(true).Margin(0, 1, 0, 0).Flex(0, 0).WhiteSpace(style.WhiteSpacePre)
-		if scheme != nil && scheme.Color.Text.Primary != nil {
-			filterPromptStyle = filterPromptStyle.Foreground(scheme.Color.Text.Primary)
-		}
+		filterPromptStyle := style.S().Bold(true).Margin(0, 1, 0, 0).Flex(0, 0).WhiteSpace(style.WhiteSpacePre).Foreground(scheme.Color.Text.Primary)
 		rows = append(rows, trail.Box(trail.BoxProps{
 			Style: style.S().
 				Display(style.DisplayFlex).
@@ -329,20 +323,9 @@ var Picker = trail.FC("Picker", func(props PickerProps) trail.Node {
 	}
 
 	optionStyles := &uicomponents.OptionListStyles{
-		Option:      style.S(),
-		Selected:    style.S().Bold(true),
-		Description: style.S(),
-	}
-	if scheme != nil {
-		if scheme.Color.Text.Secondary != nil {
-			optionStyles.Option = optionStyles.Option.Foreground(scheme.Color.Text.Secondary)
-		}
-		if scheme.Color.Icon.Primary != nil {
-			optionStyles.Selected = optionStyles.Selected.Foreground(scheme.Color.Icon.Primary)
-		}
-		if scheme.Color.Text.Secondary != nil {
-			optionStyles.Description = optionStyles.Description.Foreground(scheme.Color.Text.Secondary)
-		}
+		Option:      style.S().Foreground(scheme.Color.Text.Secondary),
+		Selected:    style.S().Bold(true).Foreground(scheme.Color.Icon.Primary),
+		Description: style.S().Foreground(scheme.Color.Text.Muted),
 	}
 
 	rows = append(rows, uicomponents.OptionList(uicomponents.OptionListProps{
@@ -361,14 +344,8 @@ var Picker = trail.FC("Picker", func(props PickerProps) trail.Node {
 		if st.activeConfirm.Prompt != nil {
 			promptText = st.activeConfirm.Prompt(st.targetOpt)
 		}
-		warnStyle := style.S().Bold(true)
-		if scheme != nil && scheme.Color.Text.Purple != nil {
-			warnStyle = warnStyle.Foreground(scheme.Color.Text.Purple)
-		}
-		hintStyle := style.S()
-		if scheme != nil && scheme.Color.Text.Secondary != nil {
-			hintStyle = hintStyle.Foreground(scheme.Color.Text.Secondary)
-		}
+		warnStyle := style.S().Bold(true).Foreground(scheme.Color.Icon.Primary)
+		hintStyle := style.S().Foreground(scheme.Color.Text.Secondary)
 		rows = append(rows, trail.Newline(1), trail.Box(trail.BoxProps{
 			Style: style.S().FlexDirection(style.FlexRow),
 		},
@@ -381,10 +358,7 @@ var Picker = trail.FC("Picker", func(props PickerProps) trail.Node {
 		))
 
 	case pickerModeInput:
-		infoStyle := style.S().Bold(true).Margin(0, 1, 0, 0).Flex(0, 0).WhiteSpace(style.WhiteSpacePre)
-		if scheme != nil && scheme.Color.Surface.Info != nil {
-			infoStyle = infoStyle.Foreground(scheme.Color.Surface.Info)
-		}
+		infoStyle := style.S().Bold(true).Margin(0, 1, 0, 0).Flex(0, 0).WhiteSpace(style.WhiteSpacePre).Foreground(scheme.Color.Icon.Primary)
 		rows = append(rows, trail.Newline(1), trail.Box(trail.BoxProps{
 			Style: style.S().
 				Display(style.DisplayFlex).
@@ -449,10 +423,7 @@ var Picker = trail.FC("Picker", func(props PickerProps) trail.Node {
 	}
 
 	if n := notice(); n != "" {
-		noticeStyle := style.S().Margin(1, 0, 0, 0)
-		if scheme != nil && scheme.Color.Text.Secondary != nil {
-			noticeStyle = noticeStyle.Foreground(scheme.Color.Text.Secondary)
-		}
+		noticeStyle := style.S().Margin(1, 0, 0, 0).Foreground(scheme.Color.Text.Secondary)
 		rows = append(rows, trail.Span(trail.SpanProps{Style: noticeStyle}, trail.Text("  "+n)))
 	}
 
@@ -460,10 +431,7 @@ var Picker = trail.FC("Picker", func(props PickerProps) trail.Node {
 		Bindings: activeBindings,
 	}))
 
-	border := style.SingleBorder().Top(true).Bottom(false).Left(false).Right(false)
-	if scheme != nil && scheme.Color.Border.Primary != nil {
-		border = border.Color(scheme.Color.Border.Primary)
-	}
+	border := style.SingleBorder().Top(true).Bottom(false).Left(false).Right(false).Color(scheme.Color.Border.Default)
 
 	return trail.Box(trail.BoxProps{
 		Style: style.S().

@@ -68,7 +68,7 @@ var OptionList = trail.FC("OptionList", func(props OptionListProps) trail.Node {
 	styles := OptionListStyles{
 		Option:      style.S().Foreground(scheme.Color.Text.Secondary),
 		Selected:    style.S().Bold(true).Foreground(scheme.Color.Icon.Primary),
-		Description: style.S().Foreground(scheme.Color.Text.Tertiary),
+		Description: style.S().Foreground(scheme.Color.Text.Muted),
 	}
 	if props.Styles != nil {
 		styles = *props.Styles

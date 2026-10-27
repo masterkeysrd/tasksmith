@@ -1,8 +1,6 @@
 package components
 
 import (
-	"image/color"
-
 	"github.com/masterkeysrd/kite/extras/trail"
 	"github.com/masterkeysrd/kite/style"
 	"github.com/masterkeysrd/tasksmith/api"
@@ -55,14 +53,8 @@ var ActiveStream = trail.SimpleFC("ActiveStream", func() trail.Node {
 
 	if pendingCmd != "" {
 		scheme := theme.UseTheme()
-		var magentaColor, primaryColor color.Color
-		if scheme != nil {
-			magentaColor = scheme.Color.Text.Magenta
-			if magentaColor == nil {
-				magentaColor = scheme.Color.Text.Primary
-			}
-			primaryColor = scheme.Color.Text.Primary
-		}
+		bashColor := scheme.Color.Mode.Bash
+		primaryColor := scheme.Color.Text.Primary
 		children = append(children, trail.Box(trail.BoxProps{
 			Style: style.S().
 				Display(style.DisplayFlex).
@@ -71,7 +63,7 @@ var ActiveStream = trail.SimpleFC("ActiveStream", func() trail.Node {
 				MarginBottom(1),
 		},
 			trail.Span(trail.SpanProps{
-				Style: style.S().Bold(true).Foreground(magentaColor).WhiteSpace(style.WhiteSpaceNoWrap).Flex(0, 0),
+				Style: style.S().Bold(true).Foreground(bashColor).WhiteSpace(style.WhiteSpaceNoWrap).Flex(0, 0),
 			}, trail.Text("! ")),
 			trail.Span(trail.SpanProps{
 				Style: style.S().Foreground(primaryColor),

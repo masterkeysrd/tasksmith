@@ -36,16 +36,16 @@ var Spinner = trail.FC("Spinner", func(props SpinnerProps) trail.Node {
 	)
 	switch props.Status {
 	case api.StatusGenerating:
-		fgColor = scheme.Color.Text.Magenta
+		fgColor = scheme.Color.Agent.Generating
 		defaultText = "Generating..."
 	case api.StatusExecuting:
-		fgColor = scheme.Color.Surface.Info
+		fgColor = scheme.Color.Agent.Executing
 		defaultText = "Executing..."
 	case api.StatusThinking:
-		fgColor = scheme.Color.Text.Purple
+		fgColor = scheme.Color.Agent.Thinking
 		defaultText = "Thinking..."
 	default:
-		fgColor = scheme.Color.Text.Purple
+		fgColor = scheme.Color.Agent.Thinking
 		defaultText = "Thinking..."
 	}
 

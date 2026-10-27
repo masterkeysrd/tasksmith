@@ -2,7 +2,6 @@ package components
 
 import (
 	"encoding/json"
-	"image/color"
 	"os"
 	"path/filepath"
 	"strings"
@@ -450,10 +449,7 @@ var Composer = trail.FC("Composer", func(props ComposerProps) trail.Node {
 		return nil
 	}, []any{})
 
-	border := style.SingleBorder().Top(true).Bottom(true).Left(false).Right(false)
-	if scheme != nil && scheme.Color.Border.Primary != nil {
-		border = border.Color(scheme.Color.Border.Primary)
-	}
+	border := style.SingleBorder().Top(true).Bottom(true).Left(false).Right(false).Color(scheme.Color.Border.Default)
 
 	composerStyle := style.S().
 		Border(border).
@@ -466,20 +462,9 @@ var Composer = trail.FC("Composer", func(props ComposerProps) trail.Node {
 	promptIndicator := ">"
 	if bashMode() {
 		promptIndicator = "!"
-		var magentaColor color.Color
-		if scheme != nil {
-			magentaColor = scheme.Color.Text.Magenta
-			if magentaColor == nil {
-				magentaColor = scheme.Color.Icon.Primary
-			}
-		}
-		if magentaColor != nil {
-			promptStyle = promptStyle.Foreground(magentaColor)
-		}
+		promptStyle = promptStyle.Foreground(scheme.Color.Mode.Bash)
 	} else {
-		if scheme != nil && scheme.Color.Icon.Primary != nil {
-			promptStyle = promptStyle.Foreground(scheme.Color.Icon.Primary)
-		}
+		promptStyle = promptStyle.Foreground(scheme.Color.Icon.Primary)
 	}
 
 	outerStyle := style.S().

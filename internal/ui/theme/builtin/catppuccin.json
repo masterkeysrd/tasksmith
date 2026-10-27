@@ -1,0 +1,66 @@
+{
+  "name": "catppuccin",
+  "extends": "dark",
+  "type": "dark",
+  "palette": {
+    "base": "#1e1e2e",
+    "mantle": "#181825",
+    "crust": "#11111b",
+    "surface0": "#313244",
+    "surface1": "#45475a",
+    "surface2": "#585b70",
+    "overlay0": "#6c7086",
+    "text": "#cdd6f4",
+    "subtext1": "#bac2de",
+    "subtext0": "#a6adc8",
+    "blue": "#89b4fa",
+    "teal": "#94e2d5",
+    "green": "#a6e3a1",
+    "yellow": "#f9e2af",
+    "peach": "#fab387",
+    "red": "#f38ba8",
+    "mauve": "#cba6f7",
+    "pink": "#f5c2e7",
+    "lavender": "#b4befe"
+  },
+  "colors": {
+    "text": {
+      "primary": "text",
+      "secondary": "subtext1",
+      "muted": "subtext0",
+      "accent": "mauve",
+      "info": "blue",
+      "success": "green",
+      "warning": "yellow",
+      "error": "red"
+    },
+    "surface": {
+      "canvas": "base",
+      "panel": "mantle",
+      "elevated": "surface0",
+      "code": "mantle",
+      "hover": "surface0",
+      "active": "surface1",
+      "selected": "surface0"
+    },
+    "border": {
+      "default": "surface0",
+      "subtle": "surface0",
+      "focus": "mauve",
+      "accent": "mauve"
+    },
+    "icon": {
+      "primary": "teal"
+    },
+    "syntax": {
+      "keyword": "mauve",
+      "function": "blue",
+      "string": "green",
+      "number": "peach",
+      "type": "yellow",
+      "comment": "overlay0",
+      "operator": "teal",
+      "variable": "text"
+    }
+  }
+}

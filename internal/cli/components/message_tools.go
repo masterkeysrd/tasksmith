@@ -76,10 +76,10 @@ func toolHeaderLeading(status store.ToolStatus, verb string, hasTarget bool, sch
 	switch status {
 	case store.ToolSucceeded:
 		dotChar = "●"
-		dotColor = scheme.Color.Surface.Success
+		dotColor = scheme.Color.Text.Success
 	case store.ToolRunning, store.ToolReceiving:
 		dotChar = "○"
-		dotColor = scheme.Color.Surface.Info
+		dotColor = scheme.Color.Icon.Primary
 	case store.ToolFailed:
 		dotChar = "●"
 		dotColor = scheme.Color.Text.Error
@@ -90,10 +90,7 @@ func toolHeaderLeading(status store.ToolStatus, verb string, hasTarget bool, sch
 		dotColor = scheme.Color.Text.Secondary
 	}
 
-	verbColor := scheme.Color.Text.Primary
-	if status == store.ToolFailed {
-		verbColor = scheme.Color.Text.Error
-	}
+	verbColor := scheme.Color.Text.Accent
 
 	verbText := verb
 	if hasTarget {
@@ -227,8 +224,8 @@ func renderDiffStatNodes(additions int, deletions int, replacements int, scheme 
 	}
 
 	secStyle := style.S().Flex(0, 0).WhiteSpace(style.WhiteSpacePre).Foreground(scheme.Color.Text.Secondary)
-	addStyle := style.S().Flex(0, 0).WhiteSpace(style.WhiteSpacePre).Foreground(scheme.Color.Surface.Success)
-	delStyle := style.S().Flex(0, 0).WhiteSpace(style.WhiteSpacePre).Foreground(scheme.Color.Text.Error)
+	addStyle := style.S().Flex(0, 0).WhiteSpace(style.WhiteSpacePre).Foreground(scheme.Color.Diff.AddedText)
+	delStyle := style.S().Flex(0, 0).WhiteSpace(style.WhiteSpacePre).Foreground(scheme.Color.Diff.RemovedText)
 
 	var nodes []trail.Node
 	nodes = append(nodes, trail.Span(trail.SpanProps{Style: secStyle}, trail.Text(" (")))

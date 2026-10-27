@@ -171,12 +171,9 @@ var DiffView = trail.FC("DiffView", func(props DiffProps) trail.Node {
 
 	scheme := theme.UseTheme()
 
-	var redBg, greenBg, cyanBg color.Color
-	if scheme != nil {
-		redBg = scheme.Color.Surface.ErrorFocus
-		greenBg = scheme.Color.Surface.SuccessFocus
-		cyanBg = scheme.Color.Surface.InfoFocus
-	}
+	redBg := scheme.Color.Diff.RemovedBg
+	greenBg := scheme.Color.Diff.AddedBg
+	cyanBg := scheme.Color.Diff.HunkBg
 
 	var gutterSpans []trail.Node
 	var sepSpans []trail.Node
@@ -214,37 +211,44 @@ var DiffView = trail.FC("DiffView", func(props DiffProps) trail.Node {
 			gutterText = fmt.Sprintf("%5s%5s %s\n", numAStr, numBStr, sign)
 		}
 
-		gutterStyle := style.S().WhiteSpace(style.WhiteSpacePre)
-		if scheme != nil && scheme.Color.Text.Tertiary != nil {
-			gutterStyle = gutterStyle.Foreground(scheme.Color.Text.Tertiary)
-		}
+		gutterStyle := style.S().
+			WhiteSpace(style.WhiteSpacePre).
+			Foreground(scheme.Color.Text.Muted)
 		if bg != nil {
 			gutterStyle = gutterStyle.Background(bg)
 		}
-		gutterSpans = append(gutterSpans, trail.Span(trail.SpanProps{Style: gutterStyle}, trail.Text(gutterText)))
+		gutterSpans = append(gutterSpans, trail.Span(trail.SpanProps{
+			Style: gutterStyle,
+		}, trail.Text(gutterText)))
 
-		sepStyle := style.S().WhiteSpace(style.WhiteSpacePre)
-		if scheme != nil && scheme.Color.Border.Primary != nil {
-			sepStyle = sepStyle.Foreground(scheme.Color.Border.Primary)
-		}
+		sepStyle := style.S().
+			WhiteSpace(style.WhiteSpacePre).
+			Foreground(scheme.Color.Border.Default)
 		if bg != nil {
 			sepStyle = sepStyle.Background(bg)
 		}
-		sepSpans = append(sepSpans, trail.Span(trail.SpanProps{Style: sepStyle}, trail.Text("│\n")))
+		sepSpans = append(sepSpans, trail.Span(trail.SpanProps{
+			Style: sepStyle,
+		}, trail.Text("│\n")))
 
 		if row.IsHeader {
-			headerStyle := style.S().WhiteSpace(style.WhiteSpacePre).Bold(true)
-			if scheme != nil && scheme.Color.Surface.Info != nil {
-				headerStyle = headerStyle.Foreground(scheme.Color.Surface.Info)
-			}
+			headerStyle := style.S().
+				Bold(true).
+				WhiteSpace(style.WhiteSpacePre).
+				Foreground(scheme.Color.Diff.HunkText)
 			if bg != nil {
 				headerStyle = headerStyle.Background(bg)
 			}
-			codeSpans = append(codeSpans, trail.Span(trail.SpanProps{Style: headerStyle}, trail.Text(row.HeaderText)))
+			codeSpans = append(codeSpans, trail.Span(trail.SpanProps{
+				Style: headerStyle,
+			}, trail.Text(row.HeaderText)))
 			if bg != nil {
 				if paddingLength := 500 - len(row.HeaderText); paddingLength > 0 {
-					codeSpans = append(codeSpans, trail.Span(
-						trail.SpanProps{Style: style.S().Background(bg).WhiteSpace(style.WhiteSpacePre)},
+					codeSpans = append(codeSpans, trail.Span(trail.SpanProps{
+						Style: style.S().
+							Background(bg).
+							WhiteSpace(style.WhiteSpacePre),
+					},
 						trail.Text(strings.Repeat(" ", paddingLength)),
 					))
 				}
@@ -253,32 +257,40 @@ var DiffView = trail.FC("DiffView", func(props DiffProps) trail.Node {
 			if bg != nil {
 				nlStyle = nlStyle.Background(bg)
 			}
-			codeSpans = append(codeSpans, trail.Span(trail.SpanProps{Style: nlStyle}, trail.Text("\n")))
+			codeSpans = append(codeSpans, trail.Span(trail.SpanProps{
+				Style: nlStyle,
+			}, trail.Text("\n")))
 		} else {
 			codeLine := strings.ReplaceAll(row.Text, "\t", "    ")
 			iterator, err := lexer.Tokenise(nil, codeLine)
 			if err != nil {
-				fallbackStyle := style.S().WhiteSpace(style.WhiteSpacePre)
-				if scheme != nil && scheme.Color.Text.Primary != nil {
-					fallbackStyle = fallbackStyle.Foreground(scheme.Color.Text.Primary)
-				}
+				fallbackStyle := style.S().
+					WhiteSpace(style.WhiteSpacePre).
+					Foreground(scheme.Color.Text.Primary)
 				if bg != nil {
 					fallbackStyle = fallbackStyle.Background(bg)
 				}
-				codeSpans = append(codeSpans, trail.Span(trail.SpanProps{Style: fallbackStyle}, trail.Text(codeLine)))
+				codeSpans = append(codeSpans, trail.Span(trail.SpanProps{
+					Style: fallbackStyle,
+				}, trail.Text(codeLine)))
 			} else {
 				for tok := iterator(); tok != chroma.EOF; tok = iterator() {
 					tokStyle := uicomponents.ResolveTokenStyle(scheme, tok.Type)
 					if bg != nil {
 						tokStyle = tokStyle.Background(bg)
 					}
-					codeSpans = append(codeSpans, trail.Span(trail.SpanProps{Style: tokStyle}, trail.Text(tok.Value)))
+					codeSpans = append(codeSpans, trail.Span(trail.SpanProps{
+						Style: tokStyle,
+					}, trail.Text(tok.Value)))
 				}
 			}
 			if bg != nil {
 				if paddingLength := 500 - len(codeLine); paddingLength > 0 {
-					codeSpans = append(codeSpans, trail.Span(
-						trail.SpanProps{Style: style.S().Background(bg).WhiteSpace(style.WhiteSpacePre)},
+					codeSpans = append(codeSpans, trail.Span(trail.SpanProps{
+						Style: style.S().
+							Background(bg).
+							WhiteSpace(style.WhiteSpacePre),
+					},
 						trail.Text(strings.Repeat(" ", paddingLength)),
 					))
 				}
@@ -287,7 +299,9 @@ var DiffView = trail.FC("DiffView", func(props DiffProps) trail.Node {
 			if bg != nil {
 				nlStyle = nlStyle.Background(bg)
 			}
-			codeSpans = append(codeSpans, trail.Span(trail.SpanProps{Style: nlStyle}, trail.Text("\n")))
+			codeSpans = append(codeSpans, trail.Span(trail.SpanProps{
+				Style: nlStyle,
+			}, trail.Text("\n")))
 		}
 	}
 

@@ -86,22 +86,14 @@ var MessageThought = trail.FC("MessageThought", func(props MessageThoughtProps) 
 		MinWidth(style.Cells(0)).
 		Overflow(style.OverflowHidden)
 
-	labelStyle := style.S().WhiteSpace(style.WhiteSpaceNoWrap).Flex(0, 0).Italic(true)
+	labelStyle := style.S().WhiteSpace(style.WhiteSpaceNoWrap).Flex(0, 0).Foreground(scheme.Color.Text.Secondary)
 	detailsStyle := style.S().
 		WhiteSpace(style.WhiteSpaceNoWrap).
 		Flex(0, 1).
 		MinWidth(style.Cells(0)).
 		Overflow(style.OverflowHidden).
 		TextOverflow(style.TextOverflowEllipsis).
-		Italic(true)
-
-	if scheme != nil && scheme.Color.Text.Purple != nil {
-		labelStyle = labelStyle.Foreground(scheme.Color.Text.Purple)
-		detailsStyle = detailsStyle.Foreground(scheme.Color.Text.Purple)
-	} else if scheme != nil && scheme.Color.Text.Secondary != nil {
-		labelStyle = labelStyle.Foreground(scheme.Color.Text.Secondary)
-		detailsStyle = detailsStyle.Foreground(scheme.Color.Text.Secondary)
-	}
+		Foreground(scheme.Color.Text.Secondary)
 	return trail.Box(trail.BoxProps{Style: rowStyle},
 		trail.Span(trail.SpanProps{Style: labelStyle}, trail.Text(prefix)),
 		trail.Span(trail.SpanProps{Style: detailsStyle}, trail.Text(line)),

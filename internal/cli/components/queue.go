@@ -1,7 +1,6 @@
 package components
 
 import (
-	"image/color"
 	"strings"
 
 	"github.com/masterkeysrd/kite/extras/trail"
@@ -22,10 +21,7 @@ var Queue = trail.SimpleFC("Queue", func() trail.Node {
 	items := *queuePtr
 
 	scheme := theme.UseTheme()
-	var secondary color.Color
-	if scheme != nil && scheme.Color.Text.Secondary != nil {
-		secondary = scheme.Color.Text.Secondary
-	}
+	queuedColor := scheme.Color.Transcript.QueuedText
 
 	rows := make([]trail.Node, 0, len(items))
 	for _, item := range items {
@@ -38,23 +34,17 @@ var Queue = trail.SimpleFC("Queue", func() trail.Node {
 		rowStyle := style.S().
 			Display(style.DisplayFlex).
 			FlexDirection(style.FlexRow).
-			Width(style.Percent(100))
-		if secondary != nil {
-			rowStyle = rowStyle.Foreground(secondary)
-		}
+			Width(style.Percent(100)).
+			Foreground(queuedColor)
 
 		prefixStyle := style.S().
 			Bold(true).
 			WhiteSpace(style.WhiteSpaceNoWrap).
-			Flex(0, 0)
-		if secondary != nil {
-			prefixStyle = prefixStyle.Foreground(secondary)
-		}
+			Flex(0, 0).
+			Foreground(queuedColor)
 
-		textStyle := style.S()
-		if secondary != nil {
-			textStyle = textStyle.Foreground(secondary)
-		}
+		textStyle := style.S().
+			Foreground(queuedColor)
 
 		rows = append(rows, trail.Box(trail.BoxProps{
 			Style: rowStyle,

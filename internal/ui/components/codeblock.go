@@ -2,7 +2,6 @@ package components
 
 import (
 	"fmt"
-	"image/color"
 	"strings"
 
 	"github.com/alecthomas/chroma/v2"
@@ -46,14 +45,10 @@ var CodeBlock = kitex.FC("CodeBlock", func(props CodeBlockProps) kitex.Node {
 			FlexDirection(style.FlexRow).
 			JustifyContent(style.JustifyBetween).
 			PaddingHorizontal(1).
-			BorderBottom(true, style.SingleBorder()).
-			Bold(true)
-		if t != nil {
-			titleStyle = titleStyle.
-				Background(t.Color.Surface.BaseHover).
-				Foreground(t.Color.Text.Primary).
-				BorderBottom(true, style.SingleBorder(), t.Color.Border.Primary)
-		}
+			Bold(true).
+			Background(t.Color.Surface.Code).
+			Foreground(t.Color.Text.Primary).
+			BorderBottom(true, style.SingleBorder(), t.Color.Border.Default)
 
 		padCode := 1
 		if props.Compact {
@@ -69,10 +64,8 @@ var CodeBlock = kitex.FC("CodeBlock", func(props CodeBlockProps) kitex.Node {
 			Width(style.Percent(100)).
 			MaxWidth(style.Percent(100)).
 			MinWidth(style.Percent(0)).
-			WhiteSpace(whiteSpace)
-		if t != nil {
-			codeStyle = codeStyle.Foreground(t.Color.Text.Secondary)
-		}
+			WhiteSpace(whiteSpace).
+			Foreground(t.Color.Text.Secondary)
 		if props.Wrap {
 			codeStyle = codeStyle.
 				OverflowX(style.OverflowHidden).
@@ -98,14 +91,10 @@ var CodeBlock = kitex.FC("CodeBlock", func(props CodeBlockProps) kitex.Node {
 		if !props.HideHeader {
 			wrapperStyle = wrapperStyle.
 				MarginBottom(1).
-				Border(style.SingleBorder())
-			if t != nil {
-				wrapperStyle = wrapperStyle.
-					Background(t.Color.Surface.BaseHover).
-					Border(true, style.SingleBorder(), t.Color.Border.Primary)
-			}
-		} else if t != nil && !props.Compact {
-			wrapperStyle = wrapperStyle.Background(t.Color.Surface.BaseHover)
+				Background(t.Color.Surface.Code).
+				Border(true, style.SingleBorder(), t.Color.Border.Default)
+		} else if !props.Compact {
+			wrapperStyle = wrapperStyle.Background(t.Color.Surface.Code)
 		}
 
 		wrapperStyle = wrapperStyle.Merge(props.Style)
@@ -199,15 +188,11 @@ var CodeBlock = kitex.FC("CodeBlock", func(props CodeBlockProps) kitex.Node {
 		if props.GutterMinWidth > 0 {
 			gutterStyle = gutterStyle.MinWidth(style.Cells(props.GutterMinWidth))
 		}
-		if t != nil {
-			gutterStyle = gutterStyle.Foreground(t.Color.Text.Tertiary)
-		}
+		gutterStyle = gutterStyle.Foreground(t.Color.Text.Muted)
 
 		separatorStyle := style.S().
-			PaddingVertical(padY)
-		if t != nil {
-			separatorStyle = separatorStyle.Foreground(t.Color.Border.Primary)
-		}
+			PaddingVertical(padY).
+			Foreground(t.Color.Border.Default)
 
 		codeBoxStyle := style.S().
 			PaddingVertical(padY).
@@ -218,10 +203,8 @@ var CodeBlock = kitex.FC("CodeBlock", func(props CodeBlockProps) kitex.Node {
 			MaxWidth(style.Percent(100)).
 			MinWidth(style.Percent(0)).
 			MinHeight(style.Cells(0)).
-			WhiteSpace(whiteSpace)
-		if t != nil {
-			codeBoxStyle = codeBoxStyle.Foreground(t.Color.Text.Secondary)
-		}
+			WhiteSpace(whiteSpace).
+			Foreground(t.Color.Text.Secondary)
 		if props.Wrap {
 			codeBoxStyle = codeBoxStyle.
 				OverflowX(style.OverflowHidden).
@@ -298,37 +281,18 @@ var CodeBlock = kitex.FC("CodeBlock", func(props CodeBlockProps) kitex.Node {
 	})
 })
 
-func getThemeColor(t *theme.Scheme, key string, fallback color.Color) color.Color {
-	if t != nil && t.Palette != nil {
-		if c, ok := t.Palette[key]; ok {
-			return c
-		}
-	}
-	return fallback
-}
-
 // ResolveTokenStyle maps a chroma.TokenType to an editor color dynamically from the active theme.
 func ResolveTokenStyle(t *theme.Scheme, tokType chroma.TokenType) style.Style {
-	// Fallbacks match the One Dark color palette
-	themeText := color.Color(color.RGBA{R: 171, G: 178, B: 191, A: 255})
-	themeMuted := color.Color(color.RGBA{R: 92, G: 99, B: 112, A: 255})
-	themeKeyword := color.Color(color.RGBA{R: 198, G: 120, B: 221, A: 255})
-	themeFunction := color.Color(color.RGBA{R: 97, G: 175, B: 239, A: 255})
-	themeString := color.Color(color.RGBA{R: 152, G: 195, B: 121, A: 255})
-	themeNumber := color.Color(color.RGBA{R: 209, G: 154, B: 102, A: 255})
-	themeType := color.Color(color.RGBA{R: 229, G: 192, B: 123, A: 255})
-	themeOperator := color.Color(color.RGBA{R: 86, G: 182, B: 194, A: 255})
-
-	if t != nil {
-		themeText = t.Color.Text.Primary
-		themeMuted = t.Color.Text.Tertiary
-		themeKeyword = t.Color.Text.Purple
-		themeFunction = getThemeColor(t, "blue", getThemeColor(t, "cyan", t.Color.Text.Magenta))
-		themeString = getThemeColor(t, "green", t.Color.Text.Primary)
-		themeNumber = getThemeColor(t, "orange", getThemeColor(t, "yellow", t.Color.Text.Secondary))
-		themeType = getThemeColor(t, "yellow", t.Color.Text.Primary)
-		themeOperator = getThemeColor(t, "cyan", t.Color.Text.Secondary)
-	}
+	themeText := t.Color.Text.Primary
+	themeMuted := t.Color.Syntax.Comment
+	themeKeyword := t.Color.Syntax.Keyword
+	themeFunction := t.Color.Syntax.Function
+	themeString := t.Color.Syntax.String
+	themeNumber := t.Color.Syntax.Number
+	themeType := t.Color.Syntax.Type
+	themeOperator := t.Color.Syntax.Operator
+	themeVariable := t.Color.Syntax.Variable
+	themePunctuation := t.Color.Syntax.Punctuation
 
 	styled := style.S().WhiteSpace(style.WhiteSpacePre)
 
@@ -353,6 +317,8 @@ func ResolveTokenStyle(t *theme.Scheme, tokType chroma.TokenType) style.Style {
 			styled = styled.Foreground(themeKeyword)
 		case chroma.NameAttribute:
 			styled = styled.Foreground(themeNumber)
+		case chroma.NameVariable, chroma.NameVariableClass, chroma.NameVariableGlobal, chroma.NameVariableInstance:
+			styled = styled.Foreground(themeVariable)
 		default:
 			styled = styled.Foreground(themeText)
 		}
@@ -367,7 +333,7 @@ func ResolveTokenStyle(t *theme.Scheme, tokType chroma.TokenType) style.Style {
 	} else if tokType.InCategory(chroma.Operator) {
 		styled = styled.Foreground(themeOperator)
 	} else if tokType.InCategory(chroma.Punctuation) {
-		styled = styled.Foreground(themeText)
+		styled = styled.Foreground(themePunctuation)
 	} else if tokType.InCategory(chroma.Generic) {
 		switch tokType {
 		case chroma.GenericInserted:

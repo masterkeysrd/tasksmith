@@ -2,305 +2,218 @@ package theme
 
 import (
 	"image/color"
+	"strings"
 	"testing"
-
-	"github.com/masterkeysrd/kite/element"
-	"github.com/masterkeysrd/kite/extras/kitex"
-	"github.com/masterkeysrd/kite/testenv"
 )
 
-func TestResolve(t *testing.T) {
-	theme := &Theme{
-		Name: "test",
-		Type: "dark",
+func TestBuiltinThemesLoadAndResolve(t *testing.T) {
+	builtins := []string{"dark", "light", "tokyo-night", "solarized", "github-dark", "catppuccin", "gruvbox"}
+
+	for _, name := range builtins {
+		t.Run(name, func(t *testing.T) {
+			th, err := Find(name)
+			if err != nil {
+				t.Fatalf("Find(%q) failed: %v", name, err)
+			}
+			if th.Name != name {
+				t.Errorf("expected theme name %q, got %q", name, th.Name)
+			}
+
+			for _, client := range []Client{ClientCLI, ClientTUI, ClientDesktop} {
+				s, err := ResolveFor(th, client)
+				if err != nil {
+					t.Fatalf("ResolveFor(%q, %q) failed: %v", name, client, err)
+				}
+				if s == nil {
+					t.Fatalf("expected non-nil Scheme for %q", name)
+				}
+				if s.Color.Text.Primary == nil {
+					t.Errorf("theme %q client %q has nil Text.Primary", name, client)
+				}
+				if s.Color.Border.Default == nil {
+					t.Errorf("theme %q client %q has nil Border.Default", name, client)
+				}
+				if s.Color.Agent.Thinking == nil {
+					t.Errorf("theme %q client %q has nil Agent.Thinking", name, client)
+				}
+				if s.Color.Mode.Plan == nil {
+					t.Errorf("theme %q client %q has nil Mode.Plan", name, client)
+				}
+				if s.Color.Diff.AddedText == nil {
+					t.Errorf("theme %q client %q has nil Diff.AddedText", name, client)
+				}
+				if s.Color.Syntax.Keyword == nil {
+					t.Errorf("theme %q client %q has nil Syntax.Keyword", name, client)
+				}
+			}
+		})
+	}
+}
+
+func TestExtendsInheritanceAndCycleDetection(t *testing.T) {
+	// 1. Inheritance
+	th, err := Find("tokyo-night")
+	if err != nil {
+		t.Fatalf("Find(tokyo-night): %v", err)
+	}
+	s, err := ResolveFor(th, ClientTUI)
+	if err != nil {
+		t.Fatalf("ResolveFor(tokyo-night): %v", err)
+	}
+	// tokyo-night overrides text.primary to #c0caf5
+	expected := color.RGBA{R: 0xc0, G: 0xca, B: 0xf5, A: 255}
+	if s.Color.Text.Primary != expected {
+		t.Errorf("expected Text.Primary %v, got %v", expected, s.Color.Text.Primary)
+	}
+	// Inherited from dark theme (agent.executing = #56d4dd)
+	expectedAgent := color.RGBA{R: 0x56, G: 0xd4, B: 0xdd, A: 255}
+	if s.Color.Agent.Executing != expectedAgent {
+		t.Errorf("expected Agent.Executing %v, got %v", expectedAgent, s.Color.Agent.Executing)
+	}
+
+	// 2. Cycle detection: theme A extends A
+	cycleTheme := &Theme{
+		Name:    "self-cycle",
+		Extends: "self-cycle",
+	}
+	_, err = ResolveFor(cycleTheme, ClientCLI)
+	if err == nil || !strings.Contains(err.Error(), "cycle detected") {
+		t.Errorf("expected cycle detected error, got %v", err)
+	}
+
+	// 3. Missing parent
+	missingParent := &Theme{
+		Name:    "child",
+		Extends: "non-existent-parent",
+	}
+	_, err = ResolveFor(missingParent, ClientCLI)
+	if err == nil || !strings.Contains(err.Error(), "parent theme") {
+		t.Errorf("expected parent not found error, got %v", err)
+	}
+}
+
+func TestClientsPerClientOverrides(t *testing.T) {
+	th, err := Find("dark")
+	if err != nil {
+		t.Fatalf("Find(dark): %v", err)
+	}
+
+	cliScheme, err := ResolveFor(th, ClientCLI)
+	if err != nil {
+		t.Fatalf("ResolveFor(dark, cli): %v", err)
+	}
+	if !cliScheme.Transparent {
+		t.Error("expected ClientCLI to be transparent")
+	}
+	if cliScheme.Color.Surface.Canvas != nil {
+		t.Errorf("expected Surface.Canvas nil for transparent CLI, got %v", cliScheme.Color.Surface.Canvas)
+	}
+	if cliScheme.Color.Transcript.UserBg != nil {
+		t.Errorf("expected Transcript.UserBg nil for CLI override, got %v", cliScheme.Color.Transcript.UserBg)
+	}
+
+	tuiScheme, err := ResolveFor(th, ClientTUI)
+	if err != nil {
+		t.Fatalf("ResolveFor(dark, tui): %v", err)
+	}
+	if tuiScheme.Transparent {
+		t.Error("expected ClientTUI not to be transparent")
+	}
+	if tuiScheme.Color.Surface.Canvas == nil {
+		t.Error("expected Surface.Canvas non-nil for non-transparent TUI")
+	}
+	if tuiScheme.Color.Transcript.UserBg == nil {
+		t.Error("expected Transcript.UserBg non-nil for TUI")
+	}
+}
+
+func TestMissingRequiredTokenError(t *testing.T) {
+	// Copy a valid theme and blank out a token
+	th := &Theme{
+		Name: "missing-token",
 		Palette: map[string]string{
-			"bg": "#16161e",
-			"fg": "#7dcfff",
+			"fg": "#ffffff",
 		},
 		Colors: ThemeColors{
-			Surface: ThemeSurfaceColor{
-				Primary: "bg",
-			},
 			Text: ThemeTextColor{
-				Primary: "fg",
+				// Primary is empty!
+				Secondary: "fg",
 			},
 		},
 	}
-
-	scheme, err := Resolve(theme)
-	if err != nil {
-		t.Fatalf("Resolve failed: %v", err)
-	}
-
-	if scheme.Name != "test" {
-		t.Errorf("expected name test, got %s", scheme.Name)
-	}
-
-	expectedPrimaryText := color.RGBA{R: 0x7d, G: 0xcf, B: 0xff, A: 255}
-	if scheme.Color.Text.Primary != expectedPrimaryText {
-		t.Errorf("expected text primary %v, got %v", expectedPrimaryText, scheme.Color.Text.Primary)
-	}
-
-	expectedPrimarySurface := color.RGBA{R: 0x16, G: 0x16, B: 0x1e, A: 255}
-	if scheme.Color.Surface.Primary != expectedPrimarySurface {
-		t.Errorf("expected surface primary %v, got %v", expectedPrimarySurface, scheme.Color.Surface.Primary)
+	_, err := ResolveFor(th, ClientCLI)
+	if err == nil || !strings.Contains(err.Error(), "missing required color token") {
+		t.Fatalf("expected missing required color token error, got %v", err)
 	}
 }
 
-func TestFindBuiltin(t *testing.T) {
-	theme, err := Find(Default)
-	if err != nil {
-		t.Fatalf("Find(Default) failed: %v", err)
-	}
-
-	if theme.Name != "tokyo-night" {
-		t.Errorf("expected tokyo-night theme, got %s", theme.Name)
-	}
-}
-
-func TestParseColor(t *testing.T) {
-	tests := []struct {
-		hex  string
-		want color.RGBA
-	}{
-		{"#ffffff", color.RGBA{255, 255, 255, 255}},
-		{"#00000000", color.RGBA{0, 0, 0, 0}},
-		{"#ff0000", color.RGBA{255, 0, 0, 255}},
-		{"112233", color.RGBA{0x11, 0x22, 0x33, 255}},
-	}
-
-	for _, tt := range tests {
-		got, err := parseColor(tt.hex)
-		if err != nil {
-			t.Errorf("parseColor(%q) failed: %v", tt.hex, err)
-			continue
-		}
-		if got != tt.want {
-			t.Errorf("parseColor(%q) = %v, want %v", tt.hex, got, tt.want)
-		}
-	}
-}
-
-func TestUseThemeFallback(t *testing.T) {
-	scheme := UseTheme()
-	if scheme == nil {
-		t.Fatal("expected UseTheme() to fall back to global scheme when outside provider, got nil")
-	}
-	if scheme.Name == "" {
-		t.Error("expected non-empty scheme name")
-	}
-}
-
-func TestResolveColorTransparent(t *testing.T) {
-	s := &Scheme{Palette: map[string]color.Color{}}
-	for _, val := range []string{"", "transparent", "TRANSPARENT", "none", "NONE", "None"} {
-		c, err := s.resolveColor(val)
-		if err != nil {
-			t.Fatalf("resolveColor(%q) error: %v", val, err)
-		}
-		if c != nil {
-			t.Errorf("resolveColor(%q) = %v, want nil", val, c)
-		}
-	}
-}
-
-func TestSchemeWithTransparent(t *testing.T) {
-	if (*Scheme)(nil).WithTransparent(true) != nil {
-		t.Fatal("expected nil scheme WithTransparent to return nil")
-	}
-
-	focusColor := color.RGBA{R: 40, G: 40, B: 40, A: 255}
-	s := &Scheme{
-		Name: "test-scheme",
-		Color: Color{
-			Surface: SurfaceColor{
-				Base:         color.RGBA{R: 10, G: 10, B: 10, A: 255},
-				BaseHover:    color.RGBA{R: 20, G: 20, B: 20, A: 255},
-				BasePressed:  color.RGBA{R: 30, G: 30, B: 30, A: 255},
-				BaseFocus:    focusColor,
-				BaseDisabled: color.RGBA{R: 50, G: 50, B: 50, A: 255},
+func TestInvalidHexColorError(t *testing.T) {
+	th := &Theme{
+		Name: "invalid-hex",
+		Colors: ThemeColors{
+			Text: ThemeTextColor{
+				Primary: "#not-a-hex",
 			},
 		},
+	}
+	_, err := ResolveFor(th, ClientCLI)
+	if err == nil || !strings.Contains(err.Error(), "invalid hex color") {
+		t.Fatalf("expected invalid hex color error, got %v", err)
+	}
+}
+
+func TestTransparentSurfacesCleared(t *testing.T) {
+	th, err := Find("dark")
+	if err != nil {
+		t.Fatalf("Find(dark): %v", err)
+	}
+	s, err := ResolveFor(th, ClientTUI)
+	if err != nil {
+		t.Fatalf("ResolveFor: %v", err)
+	}
+
+	// In TUI (non-transparent), canvas and panel are non-nil
+	if s.Color.Surface.Canvas == nil || s.Color.Surface.Panel == nil {
+		t.Fatal("expected non-nil surfaces before transparency")
 	}
 
 	trans := s.WithTransparent(true)
-	if !trans.Transparent {
-		t.Errorf("expected trans.Transparent to be true")
+	if trans.Color.Surface.Canvas != nil {
+		t.Errorf("expected Canvas nil, got %v", trans.Color.Surface.Canvas)
 	}
-	if trans.Color.Surface.Base != nil {
-		t.Errorf("expected Base to be nil, got %v", trans.Color.Surface.Base)
+	if trans.Color.Surface.Panel != nil {
+		t.Errorf("expected Panel nil, got %v", trans.Color.Surface.Panel)
 	}
-	if trans.Color.Surface.BaseHover != nil {
-		t.Errorf("expected BaseHover to be nil, got %v", trans.Color.Surface.BaseHover)
+	if trans.Color.Surface.Hover != nil {
+		t.Errorf("expected Hover nil, got %v", trans.Color.Surface.Hover)
 	}
-	if trans.Color.Surface.BasePressed != nil {
-		t.Errorf("expected BasePressed to be nil, got %v", trans.Color.Surface.BasePressed)
+	if trans.Color.Surface.Active != nil {
+		t.Errorf("expected Active nil, got %v", trans.Color.Surface.Active)
 	}
-	if trans.Color.Surface.BaseDisabled != nil {
-		t.Errorf("expected BaseDisabled to be nil, got %v", trans.Color.Surface.BaseDisabled)
+	if trans.Color.Surface.Disabled != nil {
+		t.Errorf("expected Disabled nil, got %v", trans.Color.Surface.Disabled)
 	}
-	if trans.Color.Surface.BaseFocus != focusColor {
-		t.Errorf("expected BaseFocus to remain %v, got %v", focusColor, trans.Color.Surface.BaseFocus)
+	// Preserved surfaces and tints
+	if trans.Color.Surface.Elevated == nil {
+		t.Error("expected Elevated to be preserved")
 	}
-
-	// Verify original scheme is unchanged
-	if s.Color.Surface.Base == nil {
-		t.Errorf("original scheme mutated by WithTransparent")
+	if trans.Color.Surface.Code == nil {
+		t.Error("expected Code to be preserved")
 	}
-
-	nonTrans := trans.WithTransparent(false)
-	if nonTrans.Transparent {
-		t.Errorf("expected nonTrans.Transparent to be false")
+	if trans.Color.Surface.Selected == nil {
+		t.Error("expected Selected to be preserved")
 	}
-}
-
-func TestResolveTransparentTheme(t *testing.T) {
-	theme := &Theme{
-		Name:        "trans-theme",
-		Type:        "dark",
-		Transparent: true,
-		Palette: map[string]string{
-			"bg":    "#111111",
-			"focus": "#444444",
-		},
-		Colors: ThemeColors{
-			Surface: ThemeSurfaceColor{
-				Base:         "bg",
-				BaseHover:    "bg",
-				BasePressed:  "bg",
-				BaseFocus:    "focus",
-				BaseDisabled: "bg",
-			},
-		},
-	}
-
-	scheme, err := Resolve(theme)
-	if err != nil {
-		t.Fatalf("Resolve failed: %v", err)
-	}
-	if !scheme.Transparent {
-		t.Errorf("expected scheme.Transparent to be true")
-	}
-	if scheme.Color.Surface.Base != nil {
-		t.Errorf("expected Base to be nil, got %v", scheme.Color.Surface.Base)
-	}
-	if scheme.Color.Surface.BaseHover != nil {
-		t.Errorf("expected BaseHover to be nil, got %v", scheme.Color.Surface.BaseHover)
-	}
-	if scheme.Color.Surface.BasePressed != nil {
-		t.Errorf("expected BasePressed to be nil, got %v", scheme.Color.Surface.BasePressed)
-	}
-	if scheme.Color.Surface.BaseDisabled != nil {
-		t.Errorf("expected BaseDisabled to be nil, got %v", scheme.Color.Surface.BaseDisabled)
-	}
-	expectedFocus := color.RGBA{R: 0x44, G: 0x44, B: 0x44, A: 255}
-	if scheme.Color.Surface.BaseFocus != expectedFocus {
-		t.Errorf("expected BaseFocus %v, got %v", expectedFocus, scheme.Color.Surface.BaseFocus)
+	if trans.Color.Tint.Accent == nil {
+		t.Error("expected Tint.Accent to be preserved")
 	}
 }
 
-func TestProviderTransparent(t *testing.T) {
-	var captured *Scheme
-	TestComp := kitex.FC("TestComp", func(struct{}) kitex.Node {
-		captured = UseTheme()
-		return nil
-	})
-
-	env := testenv.Default(80, 24)
-	defer env.Close()
-	container := element.NewBox(env.Document())
-	env.Mount(container)
-
-	focusColor := color.RGBA{R: 0x55, G: 0x55, B: 0x55, A: 255}
-	baseScheme := &Scheme{
-		Name: "provider-test",
-		Color: Color{
-			Surface: SurfaceColor{
-				Base:         color.RGBA{R: 1, G: 1, B: 1, A: 255},
-				BaseHover:    color.RGBA{R: 2, G: 2, B: 2, A: 255},
-				BasePressed:  color.RGBA{R: 3, G: 3, B: 3, A: 255},
-				BaseFocus:    focusColor,
-				BaseDisabled: color.RGBA{R: 5, G: 5, B: 5, A: 255},
-			},
-		},
+func TestZeroFallbacksGet(t *testing.T) {
+	sch := Get()
+	if sch == nil {
+		t.Fatal("expected Get() to never return nil")
 	}
-
-	kitex.Render(
-		Provider(Props{Theme: baseScheme, Transparent: true},
-			TestComp(struct{}{}),
-		),
-		container,
-	)
-	env.Flush()
-
-	if captured == nil {
-		t.Fatal("expected UseTheme() to capture scheme in Provider, got nil")
-	}
-	if !captured.Transparent {
-		t.Errorf("expected captured.Transparent to be true")
-	}
-	if captured.Color.Surface.Base != nil {
-		t.Errorf("expected Base to be nil, got %v", captured.Color.Surface.Base)
-	}
-	if captured.Color.Surface.BaseHover != nil {
-		t.Errorf("expected BaseHover to be nil, got %v", captured.Color.Surface.BaseHover)
-	}
-	if captured.Color.Surface.BasePressed != nil {
-		t.Errorf("expected BasePressed to be nil, got %v", captured.Color.Surface.BasePressed)
-	}
-	if captured.Color.Surface.BaseDisabled != nil {
-		t.Errorf("expected BaseDisabled to be nil, got %v", captured.Color.Surface.BaseDisabled)
-	}
-	if captured.Color.Surface.BaseFocus != focusColor {
-		t.Errorf("expected BaseFocus %v, got %v", focusColor, captured.Color.Surface.BaseFocus)
-	}
-}
-
-func TestSetTransparentAndThemeSwitch(t *testing.T) {
-	// Restore original state after test
-	origName := GetName()
-	origTrans := IsTransparent()
-	defer func() {
-		_ = Set(origName)
-		SetTransparent(origTrans)
-	}()
-
-	SetTransparent(true)
-	if !IsTransparent() {
-		t.Fatal("expected IsTransparent() to be true")
-	}
-
-	sch := UseTheme()
-	if sch == nil || !sch.Transparent || sch.Color.Surface.Base != nil {
-		t.Fatalf("expected transparent scheme with nil Base surface, got %+v", sch)
-	}
-
-	// Switch theme with Set
-	if err := Set("github-dark"); err != nil {
-		t.Fatalf("Set theme failed: %v", err)
-	}
-
-	sch2 := UseTheme()
-	if sch2.Name != "github-dark" {
-		t.Errorf("expected theme github-dark, got %s", sch2.Name)
-	}
-	if !sch2.Transparent {
-		t.Errorf("expected scheme to preserve Transparent=true after Set")
-	}
-	if sch2.Color.Surface.Base != nil {
-		t.Errorf("expected Base surface to be nil after theme switch with transparency, got %v", sch2.Color.Surface.Base)
-	}
-
-	// Toggle transparency back off
-	SetTransparent(false)
-	if IsTransparent() {
-		t.Fatal("expected IsTransparent() to be false")
-	}
-	sch3 := UseTheme()
-	if sch3.Transparent {
-		t.Errorf("expected Transparent=false after SetTransparent(false)")
-	}
-	if sch3.Color.Surface.Base == nil {
-		t.Errorf("expected non-nil Base surface after SetTransparent(false)")
+	if sch.Color.Text.Primary == nil {
+		t.Fatal("expected Get().Color.Text.Primary to be non-nil")
 	}
 }

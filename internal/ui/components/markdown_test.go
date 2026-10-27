@@ -1,7 +1,6 @@
 package components
 
 import (
-	"image/color"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -9,7 +8,6 @@ import (
 	"github.com/masterkeysrd/kite/element"
 	"github.com/masterkeysrd/kite/extras/kitex"
 	"github.com/masterkeysrd/kite/testenv"
-	"github.com/masterkeysrd/tasksmith/internal/ui/theme"
 )
 
 func TestMarkdown(t *testing.T) {
@@ -160,23 +158,8 @@ func renderMarkdownEnv(t *testing.T, width, height int, source string) *testenv.
 	container := element.NewBox(env.Document())
 	env.Mount(container)
 
-	scheme := &theme.Scheme{
-		Color: theme.Color{
-			Text: theme.TextColor{
-				Primary:   color.RGBA{R: 255, G: 255, B: 255, A: 255},
-				Secondary: color.RGBA{R: 210, G: 210, B: 210, A: 255},
-			},
-			Surface: theme.SurfaceColor{
-				BaseFocus: color.RGBA{R: 60, G: 60, B: 60, A: 255},
-				Primary:   color.RGBA{R: 120, G: 180, B: 255, A: 255},
-			},
-		},
-	}
-
 	kitex.Render(
-		theme.Provider(theme.Props{Theme: scheme},
-			Markdown(MarkdownProps{Source: source}),
-		),
+		Markdown(MarkdownProps{Source: source}),
 		container,
 	)
 	env.Flush()

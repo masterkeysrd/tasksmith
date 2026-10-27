@@ -176,53 +176,14 @@ var PermissionConfigEditor = trail.FC("PermissionConfigEditor", func(props Permi
 	})
 
 	// Styles
-	border := style.SingleBorder().Top(true).Bottom(false).Left(false).Right(false)
-	if scheme != nil && scheme.Color.Border.Primary != nil {
-		border = border.Color(scheme.Color.Border.Primary)
-	}
-
-	titleStyle := style.S().Bold(true)
-	if scheme != nil && scheme.Color.Text.Purple != nil {
-		titleStyle = titleStyle.Foreground(scheme.Color.Text.Purple)
-	} else if scheme != nil && scheme.Color.Text.Primary != nil {
-		titleStyle = titleStyle.Foreground(scheme.Color.Text.Primary)
-	}
-
-	primaryStyle := style.S().Bold(true).WhiteSpace(style.WhiteSpacePre)
-	if scheme != nil && scheme.Color.Icon.Primary != nil {
-		primaryStyle = primaryStyle.Foreground(scheme.Color.Icon.Primary)
-	} else if scheme != nil && scheme.Color.Text.Primary != nil {
-		primaryStyle = primaryStyle.Foreground(scheme.Color.Text.Primary)
-	}
-
-	secondaryStyle := style.S().WhiteSpace(style.WhiteSpacePre)
-	if scheme != nil && scheme.Color.Text.Secondary != nil {
-		secondaryStyle = secondaryStyle.Foreground(scheme.Color.Text.Secondary)
-	}
-
-	hintStyle := style.S().WhiteSpace(style.WhiteSpacePre)
-	if scheme != nil && scheme.Color.Text.Secondary != nil {
-		hintStyle = hintStyle.Foreground(scheme.Color.Text.Secondary)
-	} else if scheme != nil && scheme.Color.Text.Primary != nil {
-		hintStyle = hintStyle.Foreground(scheme.Color.Text.Primary)
-	}
-
-	errorStyle := style.S()
-	if scheme != nil && scheme.Color.Text.Error != nil {
-		errorStyle = errorStyle.Foreground(scheme.Color.Text.Error)
-	}
-
-	activeTabStyle := style.S().Bold(true).WhiteSpace(style.WhiteSpacePre)
-	if scheme != nil && scheme.Color.Icon.Primary != nil {
-		activeTabStyle = activeTabStyle.Foreground(scheme.Color.Icon.Primary)
-	} else if scheme != nil && scheme.Color.Text.Primary != nil {
-		activeTabStyle = activeTabStyle.Foreground(scheme.Color.Text.Primary)
-	}
-
-	inactiveTabStyle := style.S().WhiteSpace(style.WhiteSpacePre)
-	if scheme != nil && scheme.Color.Text.Secondary != nil {
-		inactiveTabStyle = inactiveTabStyle.Foreground(scheme.Color.Text.Secondary)
-	}
+	border := style.SingleBorder().Top(true).Bottom(false).Left(false).Right(false).Color(scheme.Color.Border.Default)
+	titleStyle := style.S().Bold(true).Foreground(scheme.Color.Agent.Permission)
+	primaryStyle := style.S().Bold(true).WhiteSpace(style.WhiteSpacePre).Foreground(scheme.Color.Icon.Primary)
+	secondaryStyle := style.S().WhiteSpace(style.WhiteSpacePre).Foreground(scheme.Color.Text.Secondary)
+	hintStyle := style.S().WhiteSpace(style.WhiteSpacePre).Foreground(scheme.Color.Text.Muted)
+	errorStyle := style.S().Foreground(scheme.Color.Text.Error)
+	activeTabStyle := style.S().Bold(true).WhiteSpace(style.WhiteSpacePre).Foreground(scheme.Color.Icon.Primary)
+	inactiveTabStyle := style.S().WhiteSpace(style.WhiteSpacePre).Foreground(scheme.Color.Text.Secondary)
 
 	var children []trail.Node
 

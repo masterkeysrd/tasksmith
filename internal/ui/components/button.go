@@ -94,124 +94,65 @@ var Button = kitex.FCC("Button", func(props ButtonProps) kitex.Node {
 		}, props.Children...)
 	}
 
-	// Resolve surface colors based on component color
-	var base, hover, pressed, focus, disabled color.Color
+	var textCol, bgCol, borderCol color.Color
 	switch props.Color {
 	case ButtonSecondary:
-		base = t.Color.Surface.Secondary
-		hover = t.Color.Surface.SecondaryHover
-		pressed = t.Color.Surface.SecondaryPressed
-		focus = t.Color.Surface.SecondaryFocus
-		disabled = t.Color.Surface.SecondaryDisabled
+		textCol = t.Color.Text.Secondary
+		bgCol = t.Color.Surface.Selected
+		borderCol = t.Color.Border.Default
 	case ButtonTertiary:
-		base = t.Color.Surface.Tertiary
-		hover = t.Color.Surface.TertiaryHover
-		pressed = t.Color.Surface.TertiaryPressed
-		focus = t.Color.Surface.TertiaryFocus
-		disabled = t.Color.Surface.TertiaryDisabled
+		textCol = t.Color.Text.Warning
+		bgCol = t.Color.Tint.Warning
+		borderCol = t.Color.Border.Warning
 	case ButtonSuccess:
-		base = t.Color.Surface.Success
-		hover = t.Color.Surface.SuccessHover
-		pressed = t.Color.Surface.SuccessPressed
-		focus = t.Color.Surface.SuccessFocus
-		disabled = t.Color.Surface.SuccessDisabled
+		textCol = t.Color.Text.Success
+		bgCol = t.Color.Tint.Success
+		borderCol = t.Color.Border.Success
 	case ButtonInfo:
-		base = t.Color.Surface.Info
-		hover = t.Color.Surface.InfoHover
-		pressed = t.Color.Surface.InfoPressed
-		focus = t.Color.Surface.InfoFocus
-		disabled = t.Color.Surface.InfoDisabled
+		textCol = t.Color.Text.Info
+		bgCol = t.Color.Tint.Info
+		borderCol = t.Color.Border.Info
 	case ButtonError:
-		base = t.Color.Surface.Error
-		hover = t.Color.Surface.ErrorHover
-		pressed = t.Color.Surface.ErrorPressed
-		focus = t.Color.Surface.ErrorFocus
-		disabled = t.Color.Surface.ErrorDisabled
+		textCol = t.Color.Text.Error
+		bgCol = t.Color.Tint.Error
+		borderCol = t.Color.Border.Error
 	case ButtonBase:
-		base = t.Color.Surface.BaseFocus
-		hover = t.Color.Surface.BaseHover
-		pressed = t.Color.Surface.BasePressed
-		focus = t.Color.Surface.BaseFocus
-		disabled = t.Color.Surface.BaseDisabled
-	default:
-		base = t.Color.Surface.Primary
-		hover = t.Color.Surface.PrimaryHover
-		pressed = t.Color.Surface.PrimaryPressed
-		focus = t.Color.Surface.PrimaryFocus
-		disabled = t.Color.Surface.PrimaryDisabled
+		textCol = t.Color.Text.Primary
+		bgCol = t.Color.Surface.Panel
+		borderCol = t.Color.Border.Default
+	default: // ButtonPrimary
+		textCol = t.Color.Text.Accent
+		bgCol = t.Color.Tint.Accent
+		borderCol = t.Color.Border.Accent
 	}
 
-	// Determine active color based on state
-	var currentColor color.Color
 	if props.Disabled {
-		currentColor = disabled
+		textCol = t.Color.Text.Disabled
+		bgCol = t.Color.Surface.Disabled
+		borderCol = t.Color.Border.Subtle
 	} else if isHovered() || isFocused() {
-		currentColor = hover
-	} else if props.Active {
-		if focus != nil {
-			currentColor = focus
-		} else {
-			currentColor = pressed
-		}
-	} else {
-		currentColor = base
+		borderCol = t.Color.Border.Focus
 	}
 
 	// Build style based on variant
 	s := ButtonBaseStyle
 	switch props.Variant {
 	case ButtonTonal:
-		var bg, fg color.Color
-		if props.Disabled {
-			bg = disabled
-			fg = t.Color.Text.Tertiary
-		} else if props.Color == ButtonBase {
-			if isHovered() || isFocused() {
-				bg = t.Color.Surface.InfoFocus
-				fg = t.Color.Surface.Primary
-			} else {
-				bg = t.Color.Surface.BaseFocus
-				fg = t.Color.Text.Secondary
-			}
-		} else {
-			if isHovered() || isFocused() {
-				if props.Color == ButtonInfo {
-					bg = t.Color.Surface.PrimaryPressed
-				} else {
-					bg = hover
-				}
-			} else {
-				bg = focus
-			}
-			if props.Color == ButtonInfo {
-				fg = t.Color.Surface.Primary
-			} else {
-				fg = base
-			}
-		}
-		s = s.Background(bg).Foreground(fg)
+		s = s.Background(bgCol).Foreground(textCol)
 	case ButtonSolid:
-		var fg color.Color
-		if props.Active && focus != nil {
-			fg = base
-		} else {
-			fg = t.Color.Text.InversePrimary
-		}
-		s = s.Background(currentColor).Foreground(fg)
+		s = s.Background(bgCol).Foreground(textCol)
 	case ButtonOutline:
-		s = s.Border(style.SingleBorder().Color(currentColor)).Foreground(currentColor)
+		s = s.Border(style.SingleBorder().Color(borderCol)).Foreground(textCol)
+		if isHovered() || isFocused() {
+			s = s.Background(t.Color.Surface.Hover)
+		}
 	case ButtonText:
-		if props.Color == ButtonBase {
-			if isHovered() || isFocused() {
-				s = s.Foreground(t.Color.Text.Primary)
-			} else {
-				s = s.Foreground(t.Color.Text.Secondary)
-			}
-		} else {
-			s = s.Foreground(currentColor)
+		s = s.Foreground(textCol)
+		if isHovered() || isFocused() {
+			s = s.Background(t.Color.Surface.Hover)
 		}
 	default: // Default to Solid
-		s = s.Background(currentColor).Foreground(t.Color.Text.InversePrimary)
+		s = s.Background(bgCol).Foreground(textCol)
 	}
 
 	// Merge with explicit style overrides

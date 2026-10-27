@@ -17,33 +17,18 @@ type tasksBarProps struct {
 var tasksBar = trail.FC("TasksBar", func(props tasksBarProps) trail.Node {
 	scheme := theme.UseTheme()
 
-	dotStyle := style.S().Flex(0, 0).WhiteSpace(style.WhiteSpaceNoWrap)
-	timeStyle := style.S().Flex(0, 0).WhiteSpace(style.WhiteSpaceNoWrap)
+	dotStyle := style.S().Flex(0, 0).WhiteSpace(style.WhiteSpaceNoWrap).Foreground(scheme.Color.Icon.Primary)
+	timeStyle := style.S().Flex(0, 0).WhiteSpace(style.WhiteSpaceNoWrap).Foreground(scheme.Color.Text.Secondary)
 	summaryStyle := style.S().
 		Flex(1, 1).
 		MinWidth(style.Cells(0)).
 		WhiteSpace(style.WhiteSpaceNoWrap).
 		Overflow(style.OverflowHidden).
-		TextOverflow(style.TextOverflowEllipsis)
-	statusStyle := style.S().Flex(0, 0).WhiteSpace(style.WhiteSpaceNoWrap).Margin(0, 0, 0, 2)
+		TextOverflow(style.TextOverflowEllipsis).
+		Foreground(scheme.Color.Text.Primary)
+	statusStyle := style.S().Flex(0, 0).WhiteSpace(style.WhiteSpaceNoWrap).Margin(0, 0, 0, 2).Foreground(scheme.Color.Icon.Primary)
 
-	border := style.SingleBorder().Top(false).Bottom(true).Left(false).Right(false)
-
-	if scheme != nil {
-		if scheme.Color.Surface.Info != nil {
-			dotStyle = dotStyle.Foreground(scheme.Color.Surface.Info)
-			statusStyle = statusStyle.Foreground(scheme.Color.Surface.Info)
-		}
-		if scheme.Color.Text.Secondary != nil {
-			timeStyle = timeStyle.Foreground(scheme.Color.Text.Secondary)
-		}
-		if scheme.Color.Text.Primary != nil {
-			summaryStyle = summaryStyle.Foreground(scheme.Color.Text.Primary)
-		}
-		if scheme.Color.Border.Primary != nil {
-			border = border.Color(scheme.Color.Border.Primary)
-		}
-	}
+	border := style.SingleBorder().Top(false).Bottom(true).Left(false).Right(false).Color(scheme.Color.Border.Default)
 
 	rows := make([]trail.Node, len(props.Tasks))
 	for i, t := range props.Tasks {

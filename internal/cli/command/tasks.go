@@ -90,10 +90,7 @@ var taskOutputViewer = trail.FC("TaskOutputViewer", func(props taskOutputProps) 
 	})
 
 	scheme := theme.UseTheme()
-	border := style.SingleBorder().Top(true).Bottom(false).Left(false).Right(false)
-	if scheme != nil && scheme.Color.Border.Primary != nil {
-		border = border.Color(scheme.Color.Border.Primary)
-	}
+	border := style.SingleBorder().Top(true).Bottom(false).Left(false).Right(false).Color(scheme.Color.Border.Default)
 
 	text := output()
 	if text == "" {
@@ -116,22 +113,12 @@ var taskOutputViewer = trail.FC("TaskOutputViewer", func(props taskOutputProps) 
 	cmd := strings.TrimSpace(strings.ReplaceAll(t.Command, "\n", " "))
 
 	headerText := fmt.Sprintf("%s (%s):", title, t.Status)
-	headerStyle := style.S().Bold(true)
-	if scheme != nil && scheme.Color.Text.Primary != nil {
-		headerStyle = headerStyle.Foreground(scheme.Color.Text.Primary)
-	}
-
-	cmdStyle := style.S().Margin(0, 0, 1, 0)
-	if scheme != nil && scheme.Color.Text.Secondary != nil {
-		cmdStyle = cmdStyle.Foreground(scheme.Color.Text.Secondary)
-	}
-
+	headerStyle := style.S().Bold(true).Foreground(scheme.Color.Text.Primary)
+	cmdStyle := style.S().Margin(0, 0, 1, 0).Foreground(scheme.Color.Text.Secondary)
 	outputStyle := style.S().
 		WhiteSpace(style.WhiteSpacePre).
-		Margin(0, 0, 1, 0)
-	if scheme != nil && scheme.Color.Text.Secondary != nil {
-		outputStyle = outputStyle.Foreground(scheme.Color.Text.Secondary)
-	}
+		Margin(0, 0, 1, 0).
+		Foreground(scheme.Color.Text.Secondary)
 
 	bindings := []components.KeyBinding{
 		{Key: "esc", Label: "Return to tasks"},
@@ -150,10 +137,7 @@ var taskOutputViewer = trail.FC("TaskOutputViewer", func(props taskOutputProps) 
 		trail.Span(trail.SpanProps{Style: outputStyle}, trail.Text(text)),
 	)
 	if n := notice(); n != "" {
-		noticeStyle := style.S().Margin(0, 0, 1, 0)
-		if scheme != nil && scheme.Color.Text.Secondary != nil {
-			noticeStyle = noticeStyle.Foreground(scheme.Color.Text.Secondary)
-		}
+		noticeStyle := style.S().Margin(0, 0, 1, 0).Foreground(scheme.Color.Text.Secondary)
 		children = append(children, trail.Span(trail.SpanProps{Style: noticeStyle}, trail.Text(n)))
 	}
 	children = append(children,
@@ -191,25 +175,13 @@ var emptyTasksView = trail.FC("EmptyTasksView", func(props emptyTasksViewProps) 
 	})
 
 	scheme := theme.UseTheme()
-	border := style.SingleBorder().Top(true).Bottom(false).Left(false).Right(false)
-	if scheme != nil && scheme.Color.Border.Primary != nil {
-		border = border.Color(scheme.Color.Border.Primary)
-	}
+	border := style.SingleBorder().Top(true).Bottom(false).Left(false).Right(false).Color(scheme.Color.Border.Default)
 	boxStyle := style.S().
 		Border(border).
 		Width(style.Percent(100)).
 		FlexDirection(style.FlexColumn)
-	titleStyle := style.S().Bold(true).Margin(0, 0, 1, 0)
-	emptyStyle := style.S().Margin(0, 0, 1, 0)
-
-	if scheme != nil {
-		if scheme.Color.Text.Primary != nil {
-			titleStyle = titleStyle.Foreground(scheme.Color.Text.Primary)
-		}
-		if scheme.Color.Text.Secondary != nil {
-			emptyStyle = emptyStyle.Foreground(scheme.Color.Text.Secondary)
-		}
-	}
+	titleStyle := style.S().Bold(true).Margin(0, 0, 1, 0).Foreground(scheme.Color.Text.Primary)
+	emptyStyle := style.S().Margin(0, 0, 1, 0).Foreground(scheme.Color.Text.Secondary)
 
 	var bindings []components.KeyBinding
 	if props.hasAllTasks {

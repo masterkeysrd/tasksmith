@@ -2,7 +2,6 @@ package components
 
 import (
 	"fmt"
-	"image/color"
 	"strings"
 
 	"github.com/masterkeysrd/kite/extras/trail"
@@ -15,10 +14,7 @@ import (
 // Notice is a trail functional component rendering a dim informational notice line.
 var Notice = trail.FC("Notice", func(props store.NoticeData) trail.Node {
 	scheme := theme.UseTheme()
-	s := style.S().FlexDirection(style.FlexRow).MarginBottom(1)
-	if scheme != nil && scheme.Color.Text.Secondary != nil {
-		s = s.Foreground(scheme.Color.Text.Secondary)
-	}
+	s := style.S().FlexDirection(style.FlexRow).MarginBottom(1).Foreground(scheme.Color.Text.Secondary)
 	return trail.Box(trail.BoxProps{Style: s},
 		trail.Span(trail.SpanProps{}, trail.Text(props.Text)),
 	)
@@ -31,12 +27,8 @@ var ErrorBanner = trail.FC("ErrorBanner", func(props store.ErrorData) trail.Node
 	if title == "" {
 		title = "error"
 	}
-	badgeStyle := style.S().Bold(true)
-	msgStyle := style.S()
-	if scheme != nil {
-		badgeStyle = badgeStyle.Foreground(scheme.Color.Text.Error)
-		msgStyle = msgStyle.Foreground(scheme.Color.Text.Error)
-	}
+	badgeStyle := style.S().Bold(true).Foreground(scheme.Color.Text.Error)
+	msgStyle := style.S().Foreground(scheme.Color.Text.Error)
 	return trail.Box(trail.BoxProps{
 		Style: style.S().FlexDirection(style.FlexRow).MarginBottom(1),
 	},
@@ -48,12 +40,8 @@ var ErrorBanner = trail.FC("ErrorBanner", func(props store.ErrorData) trail.Node
 // CommandOutput is a trail functional component rendering a slash command execution and output.
 var CommandOutput = trail.FC("CommandOutput", func(props store.CommandData) trail.Node {
 	scheme := theme.UseTheme()
-	promptStyle := style.S().FlexDirection(style.FlexRow)
-	outStyle := style.S().FlexDirection(style.FlexRow)
-	if scheme != nil {
-		promptStyle = promptStyle.Foreground(scheme.Color.Text.Primary)
-		outStyle = outStyle.Foreground(scheme.Color.Text.Secondary)
-	}
+	promptStyle := style.S().FlexDirection(style.FlexRow).Foreground(scheme.Color.Text.Primary)
+	outStyle := style.S().FlexDirection(style.FlexRow).Foreground(scheme.Color.Text.Secondary)
 	return trail.Box(trail.BoxProps{
 		Style: style.S().FlexDirection(style.FlexColumn).MarginBottom(1),
 	},
@@ -72,20 +60,14 @@ var CommandOutput = trail.FC("CommandOutput", func(props store.CommandData) trai
 var BashCommand = trail.FC("BashCommand", func(record api.CommandRecord) trail.Node {
 	scheme := theme.UseTheme()
 
-	var magentaColor, primaryColor, secondaryColor, errorColor color.Color
-	if scheme != nil {
-		magentaColor = scheme.Color.Text.Magenta
-		if magentaColor == nil {
-			magentaColor = scheme.Color.Text.Primary
-		}
-		primaryColor = scheme.Color.Text.Primary
-		secondaryColor = scheme.Color.Text.Secondary
-		errorColor = scheme.Color.Text.Error
-	}
+	bashColor := scheme.Color.Mode.Bash
+	primaryColor := scheme.Color.Text.Primary
+	secondaryColor := scheme.Color.Text.Secondary
+	errorColor := scheme.Color.Text.Error
 
 	headerChildren := []trail.Node{
 		trail.Span(trail.SpanProps{
-			Style: style.S().Bold(true).Foreground(magentaColor).WhiteSpace(style.WhiteSpaceNoWrap).Flex(0, 0),
+			Style: style.S().Bold(true).Foreground(bashColor).WhiteSpace(style.WhiteSpaceNoWrap).Flex(0, 0),
 		}, trail.Text("! ")),
 		trail.Span(trail.SpanProps{
 			Style: style.S().Foreground(primaryColor),

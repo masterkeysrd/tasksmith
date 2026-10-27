@@ -36,13 +36,10 @@ var UserMessage = trail.FC("UserMessage", func(props MessageProps) trail.Node {
 	if len(parts) == 0 {
 		return nil
 	}
-	rowStyle := messageStyle.FlexDirection(style.FlexRow)
-	if scheme != nil {
-		rowStyle = rowStyle.Foreground(scheme.Color.Text.Primary)
-	}
+	rowStyle := messageStyle.FlexDirection(style.FlexRow).Bold(true).Foreground(scheme.Color.Icon.Primary)
 	return trail.Box(trail.BoxProps{Key: props.Message.ID, Style: rowStyle},
 		trail.Span(trail.SpanProps{
-			Style: style.S().WhiteSpace(style.WhiteSpaceNoWrap).Flex(0, 0),
+			Style: style.S().WhiteSpace(style.WhiteSpaceNoWrap).Flex(0, 0).Bold(true).Foreground(scheme.Color.Icon.Primary),
 		}, trail.Text("> ")),
 		trail.Box(trail.BoxProps{
 			Style: style.S().Display(style.DisplayFlex).FlexDirection(style.FlexColumn).Flex(1, 1).MinWidth(style.Cells(0)),
@@ -60,10 +57,7 @@ var SystemMessage = trail.FC("SystemMessage", func(props MessageProps) trail.Nod
 	if len(parts) == 0 {
 		return nil
 	}
-	rowStyle := messageStyle.FlexDirection(style.FlexRow)
-	if scheme != nil && scheme.Color.Text.Secondary != nil {
-		rowStyle = rowStyle.Foreground(scheme.Color.Text.Secondary)
-	}
+	rowStyle := messageStyle.FlexDirection(style.FlexRow).Foreground(scheme.Color.Text.Secondary)
 	return trail.Box(trail.BoxProps{Key: props.Message.ID, Style: rowStyle},
 		trail.Span(trail.SpanProps{
 			Style: style.S().WhiteSpace(style.WhiteSpaceNoWrap).Flex(0, 0),
@@ -91,6 +85,7 @@ func messageBody(message store.Message) trail.Node {
 }
 
 func messageParts(message store.Message) []trail.Node {
+	scheme := theme.UseTheme()
 	parts := make([]trail.Node, 0, len(message.Parts))
 	for _, part := range message.Parts {
 		var node trail.Node
@@ -99,7 +94,15 @@ func messageParts(message store.Message) []trail.Node {
 			if strings.TrimSpace(part.Text.Text) == "" {
 				continue
 			}
-			if message.Role == api.RoleUser || message.Role == api.RoleSystem {
+			if message.Role == api.RoleUser {
+				node = trail.Span(trail.SpanProps{
+					Style: style.S().
+						WhiteSpace(style.WhiteSpacePreWrap).
+						OverflowWrap(style.OverflowWrapAnywhere).
+						Bold(true).
+						Foreground(scheme.Color.Icon.Primary),
+				}, trail.Text(part.Text.Text))
+			} else if message.Role == api.RoleSystem {
 				node = trail.Span(trail.SpanProps{
 					Style: style.S().WhiteSpace(style.WhiteSpacePreWrap).OverflowWrap(style.OverflowWrapAnywhere),
 				}, trail.Text(part.Text.Text))
@@ -129,9 +132,7 @@ func messageParts(message store.Message) []trail.Node {
 }
 
 var messageError = trail.FC("MessageError", func(text string) trail.Node {
-	textStyle := style.S().WhiteSpace(style.WhiteSpacePreWrap).OverflowWrap(style.OverflowWrapAnywhere)
-	if scheme := theme.UseTheme(); scheme != nil {
-		textStyle = textStyle.Foreground(scheme.Color.Text.Error)
-	}
+	scheme := theme.UseTheme()
+	textStyle := style.S().WhiteSpace(style.WhiteSpacePreWrap).OverflowWrap(style.OverflowWrapAnywhere).Foreground(scheme.Color.Text.Error)
 	return trail.Span(trail.SpanProps{Style: textStyle}, trail.Text(text))
 })

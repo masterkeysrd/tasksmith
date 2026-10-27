@@ -129,12 +129,9 @@ var Markdown = kitex.FC("Markdown", func(props MarkdownProps) kitex.Node {
 				spanStyle := style.S().
 					Display(style.DisplayInlineBlock).
 					WhiteSpace(style.WhiteSpacePreWrap).
-					OverflowWrap(style.OverflowWrapAnywhere)
-				if t != nil {
-					spanStyle = spanStyle.
-						Background(t.Color.Surface.BaseFocus).
-						Foreground(t.Color.Surface.Primary)
-				}
+					OverflowWrap(style.OverflowWrapAnywhere).
+					Background(t.Color.Surface.Code).
+					Foreground(t.Color.Text.Accent)
 				return kitex.Span(kitex.SpanProps{Style: spanStyle},
 					kitex.Text(spanText),
 				)
@@ -157,10 +154,7 @@ var Markdown = kitex.FC("Markdown", func(props MarkdownProps) kitex.Node {
 				if len(children) == 0 {
 					return nil
 				}
-				linkStyle := style.S().Underline(true)
-				if t != nil {
-					linkStyle = linkStyle.Foreground(t.Color.Surface.Primary)
-				}
+				linkStyle := style.S().Underline(true).Foreground(t.Color.Text.Accent)
 				return kitex.Span(kitex.SpanProps{Style: linkStyle}, children...)
 
 			default:
@@ -185,10 +179,8 @@ var Markdown = kitex.FC("Markdown", func(props MarkdownProps) kitex.Node {
 					MinWidth(style.Percent(0)).
 					WhiteSpace(style.WhiteSpacePreWrap).
 					OverflowWrap(style.OverflowWrapAnywhere).
+					Foreground(t.Color.Text.Primary).
 					Merge(props.Style)
-				if t != nil {
-					docStyle = docStyle.Foreground(t.Color.Text.Primary)
-				}
 				return kitex.Box(kitex.BoxProps{Style: docStyle},
 					renderBlockChildren(node)...)
 
@@ -273,10 +265,8 @@ var Markdown = kitex.FC("Markdown", func(props MarkdownProps) kitex.Node {
 				spanStyle := style.S().
 					Bold(true).
 					WhiteSpace(style.WhiteSpacePreWrap).
-					OverflowWrap(style.OverflowWrapAnywhere)
-				if t != nil {
-					spanStyle = spanStyle.Foreground(t.Color.Text.Primary)
-				}
+					OverflowWrap(style.OverflowWrapAnywhere).
+					Foreground(t.Color.Text.Primary)
 				return kitex.Box(kitex.BoxProps{Style: hStyle},
 					kitex.Span(kitex.SpanProps{Style: spanStyle}, children...),
 				)
@@ -291,7 +281,7 @@ var Markdown = kitex.FC("Markdown", func(props MarkdownProps) kitex.Node {
 				if node.NextSibling() == nil {
 					marginBottom = 0
 				}
-				plain := props.PlainCodeBlocks || (t != nil && t.Transparent)
+				plain := props.PlainCodeBlocks || t.Transparent
 				cbStyle := style.S().MarginBottom(marginBottom)
 				if plain {
 					cbStyle = cbStyle.PaddingLeft(2)
@@ -320,7 +310,7 @@ var Markdown = kitex.FC("Markdown", func(props MarkdownProps) kitex.Node {
 				if node.NextSibling() == nil {
 					marginBottom = 0
 				}
-				plain := props.PlainCodeBlocks || (t != nil && t.Transparent)
+				plain := props.PlainCodeBlocks || t.Transparent
 				cbStyle := style.S().MarginBottom(marginBottom)
 				if plain {
 					cbStyle = cbStyle.PaddingLeft(2)
@@ -341,10 +331,8 @@ var Markdown = kitex.FC("Markdown", func(props MarkdownProps) kitex.Node {
 				if len(children) == 0 {
 					return nil
 				}
-				qStyle := style.S().PaddingLeft(1)
-				if t != nil {
-					qStyle = qStyle.BorderLeft(true, style.SingleBorder(), t.Color.Border.Primary)
-				}
+				qStyle := style.S().PaddingLeft(1).
+					BorderLeft(true, style.SingleBorder(), t.Color.Border.Default)
 				innerBox := kitex.Box(kitex.BoxProps{Style: qStyle}, children...)
 				marginBottom := 1
 				if node.NextSibling() == nil {
@@ -357,11 +345,9 @@ var Markdown = kitex.FC("Markdown", func(props MarkdownProps) kitex.Node {
 				if node.NextSibling() == nil {
 					marginBottom = 0
 				}
-				tbStyle := style.S().MarginBottom(marginBottom)
-				if t != nil {
-					tbStyle = tbStyle.Foreground(t.Color.Border.Primary).
-						BorderBottom(true, style.SingleBorder(), t.Color.Border.Primary)
-				}
+				tbStyle := style.S().MarginBottom(marginBottom).
+					Foreground(t.Color.Border.Default).
+					BorderBottom(true, style.SingleBorder(), t.Color.Border.Default)
 				return kitex.Box(kitex.BoxProps{Style: tbStyle}) // kitex.Text(strings.Repeat("─", 40)),
 
 			case *extast.Table:
@@ -398,11 +384,7 @@ var Markdown = kitex.FC("Markdown", func(props MarkdownProps) kitex.Node {
 func renderAttachmentRefPill(node *AttachmentRefNode, t *theme.Scheme, onAttachmentClick func(refType, rawValue string), isDirectory func(path string) bool) kitex.Node {
 	var iconNode kitex.Node
 	var labelText string
-	var iconColor color.Color
-
-	if t != nil {
-		iconColor = t.Color.Text.Secondary
-	}
+	iconColor := t.Color.Text.Secondary
 
 	switch node.RefType {
 	case "file":
@@ -426,9 +408,7 @@ func renderAttachmentRefPill(node *AttachmentRefNode, t *theme.Scheme, onAttachm
 		}
 		labelText = node.Label
 	case "skill":
-		if t != nil {
-			iconColor = t.Color.Surface.Info
-		}
+		iconColor = t.Color.Icon.Info
 		iconNode = kitex.Span(kitex.SpanProps{
 			Style: style.S().Foreground(iconColor),
 		}, icon.Plugin)
@@ -437,10 +417,7 @@ func renderAttachmentRefPill(node *AttachmentRefNode, t *theme.Scheme, onAttachm
 
 	_ = iconColor // used for icon coloring above
 
-	var bg color.Color
-	if t != nil {
-		bg = t.Color.Surface.BaseFocus
-	}
+	bg := t.Color.Surface.Elevated
 
 	pillBoxStyle := style.S().
 		Display(style.DisplayFlex).
@@ -523,10 +500,9 @@ func renderList(
 			continue
 		}
 
-		bulletStyle := style.S().WhiteSpace(style.WhiteSpaceNoWrap)
-		if t != nil {
-			bulletStyle = bulletStyle.Foreground(t.Color.Surface.Primary)
-		}
+		bulletStyle := style.S().
+			WhiteSpace(style.WhiteSpaceNoWrap).
+			Foreground(t.Color.Text.Accent)
 
 		items = append(items, kitex.Box(kitex.BoxProps{
 			Style: style.S().
@@ -579,10 +555,7 @@ func renderTable(
 				}
 			}
 			if len(cells) > 0 {
-				trStyle := style.S()
-				if t != nil {
-					trStyle = trStyle.Background(t.Color.Surface.BaseDisabled)
-				}
+				trStyle := style.S().Background(t.Color.Surface.Elevated)
 				headRows = append(headRows, kitex.TR(kitex.TRProps{Style: trStyle}, cells...))
 			}
 
@@ -599,8 +572,8 @@ func renderTable(
 			}
 			if len(cells) > 0 {
 				trStyle := style.S()
-				if t != nil && rowIdx%2 == 1 {
-					trStyle = trStyle.Background(t.Color.Surface.BaseHover)
+				if rowIdx%2 == 1 {
+					trStyle = trStyle.Background(t.Color.Surface.Hover)
 				}
 				bodyRows = append(bodyRows, kitex.TR(kitex.TRProps{Style: trStyle}, cells...))
 				rowIdx++

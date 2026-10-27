@@ -1,0 +1,60 @@
+{
+  "name": "tokyo-night",
+  "extends": "dark",
+  "type": "dark",
+  "palette": {
+    "bg": "#1a1b26",
+    "bg_dark": "#16161e",
+    "bg_highlight": "#292e42",
+    "fg": "#c0caf5",
+    "fg_dark": "#a9b1d6",
+    "fg_muted": "#9aa5ce",
+    "comment": "#565f89",
+    "blue": "#7aa2f7",
+    "cyan": "#7dcfff",
+    "magenta": "#bb9af7",
+    "purple": "#9d7cd8",
+    "orange": "#ff9e64",
+    "yellow": "#e0af68",
+    "green": "#9ece6a",
+    "teal": "#73daca",
+    "red": "#f7768e"
+  },
+  "colors": {
+    "text": {
+      "primary": "fg",
+      "secondary": "fg_dark",
+      "muted": "fg_muted",
+      "accent": "blue",
+      "info": "cyan",
+      "success": "green",
+      "warning": "yellow",
+      "error": "red"
+    },
+    "surface": {
+      "canvas": "bg",
+      "panel": "bg_dark",
+      "elevated": "bg_highlight",
+      "code": "bg_dark",
+      "hover": "bg_highlight"
+    },
+    "border": {
+      "default": "bg_highlight",
+      "focus": "blue",
+      "accent": "blue"
+    },
+    "icon": {
+      "primary": "cyan"
+    },
+    "syntax": {
+      "keyword": "magenta",
+      "function": "blue",
+      "string": "green",
+      "number": "orange",
+      "type": "teal",
+      "comment": "comment",
+      "operator": "cyan",
+      "variable": "fg"
+    }
+  }
+}

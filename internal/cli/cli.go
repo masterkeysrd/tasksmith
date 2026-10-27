@@ -46,7 +46,7 @@ func Run(ctx context.Context, opts Options) error {
 		return err
 	}
 
-	theme.SetTransparent(true)
+	theme.SetClient(theme.ClientCLI)
 
 	if opts.Client.CWD() == "" && opts.Workspace != "" {
 		opts.Client = opts.Client.WithCWD(opts.Workspace)

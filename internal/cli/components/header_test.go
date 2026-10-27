@@ -157,7 +157,7 @@ func TestHeaderThemeSwitching(t *testing.T) {
 		_ = theme.Set(origTheme)
 	}()
 
-	_ = theme.Set("default")
+	_ = theme.Set("dark")
 
 	b := mock.New(80, 24)
 	ctx, cancel := context.WithCancel(t.Context())
