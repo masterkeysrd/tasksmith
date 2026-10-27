@@ -338,6 +338,25 @@ func TestActiveStreamPinnedChecklistWhileIdle(t *testing.T) {
 	}
 }
 
+func TestActiveStreamClearsChecklistOnNewDraft(t *testing.T) {
+	store.ResetSession()
+	store.ResetStream()
+	store.ClearTranscript()
+	defer store.ResetSession()
+	defer store.ResetStream()
+	defer store.ClearTranscript()
+
+	store.SeedTodos([]api.TodoItem{{Content: "Previous task", Status: "pending"}})
+	render := renderComponent(t, 100)
+	if got := render(ActiveStream()); !strings.Contains(got, "Previous task") {
+		t.Fatalf("expected previous checklist, got %q", got)
+	}
+	store.NewDraftSession("")
+	if got := render(ActiveStream()); strings.Contains(got, "Previous task") || strings.Contains(got, "todos") {
+		t.Fatalf("checklist remained after new draft: %q", got)
+	}
+}
+
 func TestActiveStreamStreamingSpinnerWithActiveTextAndChecklist(t *testing.T) {
 	store.ResetStream()
 	defer store.ResetStream()

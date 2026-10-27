@@ -739,7 +739,7 @@ func NewDraftSession(modelOverride string) {
 	defModel := activeOpts.Model
 	sessMu.Unlock()
 
-	globalConversation.reset()
+	ResetStream()
 
 	currentMode := GetSession().Config.Mode
 	if currentMode == "" {

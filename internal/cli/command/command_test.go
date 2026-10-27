@@ -259,6 +259,36 @@ func TestCommandExecute(t *testing.T) {
 	})
 }
 
+func TestNewClearsSessionTodos(t *testing.T) {
+	store.ResetSession()
+	store.ResetStream()
+	store.ClearTranscript()
+	defer store.ResetSession()
+	defer store.ResetStream()
+	defer store.ClearTranscript()
+
+	store.SetSession(&api.Session{ID: "old-session"})
+	store.SetMode(api.ModePlan)
+	store.SeedTodos([]api.TodoItem{{Content: "Old task", ActiveText: "Working", Status: "in_progress"}})
+	store.ApplyEvent(api.Event{Type: api.EventStatusChanged, Payload: api.StatusChangedEvent{SessionID: "old-session", Status: api.StatusThinking}})
+	if store.GetStream().Todos == nil {
+		t.Fatal("expected existing checklist")
+	}
+	if err := NewRegistry().Execute("/new"); err != nil {
+		t.Fatal(err)
+	}
+	if stream := store.GetStream(); stream.Todos != nil || stream.Streaming || stream.Messages != nil || stream.Queue != nil {
+		t.Fatalf("previous session stream remained after /new: %+v", stream)
+	}
+	if session := store.GetSession(); session.Session != nil || session.Config.Mode != api.ModePlan {
+		t.Fatalf("expected draft session retaining mode: %+v", session)
+	}
+	store.ApplyEvent(api.Event{Type: api.EventStatusChanged, Payload: api.StatusChangedEvent{Status: api.StatusThinking}})
+	if store.GetStream().Todos != nil {
+		t.Fatal("previous checklist returned after a new event")
+	}
+}
+
 func TestSources(t *testing.T) {
 	r := NewRegistry()
 	sources := r.Sources()
