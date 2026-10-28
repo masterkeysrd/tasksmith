@@ -10,6 +10,7 @@ const (
 	TimelineKindCommand     TimelineKind = "command"
 	TimelineKindModel       TimelineKind = "model"
 	TimelineKindEffort      TimelineKind = "effort"
+	TimelineKindThinking    TimelineKind = "thinking"
 	TimelineKindAgent       TimelineKind = "agent"
 	TimelineKindMode        TimelineKind = "mode"
 	TimelineKindPermission  TimelineKind = "permission"
@@ -37,6 +38,11 @@ type ModelChange struct {
 type EffortChange struct {
 	From string `json:"from,omitempty"`
 	To   string `json:"to"`
+}
+
+type ThinkingChange struct {
+	From *ThinkingSetting `json:"from,omitempty"`
+	To   *ThinkingSetting `json:"to,omitempty"`
 }
 
 // AgentChange captures a change of the active agent persona.
@@ -89,6 +95,7 @@ type TimelineEntry struct {
 	Command     *CommandRecord     `json:"command,omitempty"`
 	Model       *ModelChange       `json:"model,omitempty"`
 	Effort      *EffortChange      `json:"effort,omitempty"`
+	Thinking    *ThinkingChange    `json:"thinking,omitempty"`
 	Agent       *AgentChange       `json:"agent,omitempty"`
 	Mode        *ModeChange        `json:"mode,omitempty"`
 	Permission  *PermissionRecord  `json:"permission,omitempty"`

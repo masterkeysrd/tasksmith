@@ -40,18 +40,18 @@ func toAPISession(sess *session.Session) api.Session {
 		perms = toAPIPermissionRequests(sess.PendingPermissions)
 		questions = toAPIQuestionRequests(sess.PendingQuestions)
 		ts = toAPITasks(sess.State.Tasks)
-		todos = toAPITodos(sess.State.Todos)
+		todos = toAPITodos(sess.Todos)
 		queueItems = toAPIQueueItems(sess.VisibleQueue())
-		ctxState = sess.State.Context
+		ctxState = sess.Context
 	}
 	return api.Session{
 		ID:    sess.ID,
 		Title: sess.Title,
 		Config: api.SessionConfig{
-			Agent:  sess.Config.Agent,
-			Model:  sess.Config.Model,
-			Effort: sess.Config.Effort,
-			Mode:   api.PermissionMode(sess.Config.Mode),
+			Agent:    sess.Config.Agent,
+			Model:    sess.Config.Model,
+			Thinking: sess.Config.Thinking,
+			Mode:     api.PermissionMode(sess.Config.Mode),
 		},
 		Status:             status,
 		Context:            ctxState,
@@ -494,6 +494,10 @@ func toAPITimelineEntry(entry timeline.Entry) (api.TimelineEntry, error) {
 		}
 	}
 
+	if entry.Thinking != nil {
+		out.Thinking = entry.Clone().Thinking
+	}
+
 	if entry.Agent != nil {
 		out.Agent = &api.AgentChange{
 			From: entry.Agent.From,
@@ -566,48 +570,46 @@ func toAPIFileChange(fc std.FileChange) api.FileChange {
 	}
 }
 
-func extractAgentEffort(thinking map[string]any) string {
-	if thinking == nil {
-		return ""
-	}
-	if v, ok := thinking["effort"].(string); ok && strings.TrimSpace(v) != "" {
-		return strings.TrimSpace(v)
-	}
-	if t, ok := thinking["type"].(string); ok && strings.EqualFold(t, "effort") {
-		if v, ok := thinking["default"].(string); ok && strings.TrimSpace(v) != "" {
-			return strings.TrimSpace(v)
-		}
-	}
-	return ""
-}
-
 func toAPIAgent(ag workspace.Agent) api.Agent {
 	return api.Agent{
 		Name:        ag.Name,
 		DisplayName: ag.DisplayName,
 		Description: ag.Description,
 		Models:      slices.Clone(ag.Models),
-		Effort:      extractAgentEffort(ag.Thinking),
+		Thinking:    session.AgentThinking(ag.Thinking),
 		Context:     ag.Context,
 	}
 }
 
-func extractModelEffort(caps *workspace.ModelCapabilities) (defaultEffort string, allowedEfforts []string) {
-	if caps == nil || len(caps.Thinking) == 0 {
-		return "", nil
+func toAPIThinkingValues(kind string, values []string) []api.ThinkingValue {
+	if len(values) == 0 {
+		return nil
 	}
-	for _, tc := range caps.Thinking {
-		if strings.EqualFold(tc.Type, "effort") {
-			if len(tc.AllowedEfforts) > 0 {
-				allowedEfforts = slices.Clone(tc.AllowedEfforts)
+	out := make([]api.ThinkingValue, len(values))
+	for i, value := range values {
+		out[i].Value = value
+		if strings.EqualFold(kind, "effort") {
+			switch strings.ToLower(strings.TrimSpace(value)) {
+			case "none":
+				out[i].Description = "Requests no reasoning effort, where supported."
+			case "minimal":
+				out[i].Description = "Minimal reasoning; potentially faster."
+			case "low":
+				out[i].Description = "Less reasoning; potentially faster."
+			case "medium":
+				out[i].Description = "Balances reasoning depth and speed."
+			case "high":
+				out[i].Description = "More reasoning; potentially slower."
+			case "xhigh":
+				out[i].Description = "More extensive reasoning; potentially slower."
+			case "max":
+				out[i].Description = "Maximum reasoning; potentially slower."
+			case "auto":
+				out[i].Description = "Lets the provider choose the reasoning effort."
 			}
-			if s, ok := tc.Default.(string); ok && strings.TrimSpace(s) != "" {
-				defaultEffort = strings.TrimSpace(s)
-			}
-			break
 		}
 	}
-	return defaultEffort, allowedEfforts
+	return out
 }
 
 func toAPIModel(providerName string, pm workspace.ProviderModel) api.Model {
@@ -617,18 +619,29 @@ func toAPIModel(providerName string, pm workspace.ProviderModel) api.Model {
 	}
 	name := cmp.Or(pm.Name, pm.ID)
 	label := cmp.Or(pm.Label, pm.Name, pm.ID)
-	defEffort, allowedEfforts := extractModelEffort(pm.Capabilities)
 
-	return api.Model{
-		ID:             id,
-		Provider:       providerName,
-		Name:           name,
-		Label:          label,
-		DefaultEffort:  defEffort,
-		AllowedEfforts: allowedEfforts,
-		ContextLimit:   pm.Limits.Context,
-		OutputLimit:    pm.Limits.Output,
+	model := api.Model{
+		ID:           id,
+		Provider:     providerName,
+		Name:         name,
+		Label:        label,
+		ContextLimit: pm.Limits.Context,
+		OutputLimit:  pm.Limits.Output,
 	}
+	if pm.Capabilities != nil {
+		for _, capability := range pm.Capabilities.Thinking {
+			kind := strings.ToLower(strings.TrimSpace(capability.Type))
+			if kind == "budget" {
+				kind = "budget_tokens"
+			}
+			def := ""
+			if capability.Default != nil {
+				def = fmt.Sprint(capability.Default)
+			}
+			model.Thinking = append(model.Thinking, api.ThinkingCapability{Type: kind, Values: toAPIThinkingValues(kind, capability.AllowedEfforts), Default: def, Max: capability.MaxBudgetTokens})
+		}
+	}
+	return model
 }
 
 // resolveAPIModel resolves a model identifier against the workspace catalog and defaults,

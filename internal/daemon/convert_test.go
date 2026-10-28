@@ -4,12 +4,38 @@ import (
 	"testing"
 	"time"
 
+	"github.com/masterkeysrd/loom/profile"
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/broker"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/session"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tasks"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tools"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/workspace"
 )
+
+func TestThinkingDescriptions(t *testing.T) {
+	values := []string{"none", "minimal", "low", "medium", "high", "xhigh", "max", "auto", "custom", "HIGH"}
+	got := toAPIThinkingValues("effort", values)
+	for i, value := range values {
+		if got[i].Value != value {
+			t.Fatalf("value %d changed: %+v", i, got[i])
+		}
+		if (got[i].Description == "") != (value == "custom") {
+			t.Fatalf("unexpected description for %q: %q", value, got[i].Description)
+		}
+	}
+	if other := toAPIThinkingValues("toggle", []string{"high"}); other[0].Description != "" {
+		t.Fatalf("non-effort value received a hint: %+v", other)
+	}
+	model := toAPIModel("test", workspace.ProviderModel{ID: "model", Capabilities: &workspace.ModelCapabilities{Thinking: []workspace.ThinkingCapability{{Type: "effort", AllowedEfforts: values}}}})
+	if len(model.Thinking) != 1 || len(model.Thinking[0].Values) != len(values) || model.Thinking[0].Values[2].Description == "" {
+		t.Fatalf("workspace model missing descriptions: %+v", model.Thinking)
+	}
+	enrichModelFromProfile(&model, &profile.Profile{Capabilities: profile.Capabilities{ReasoningOptions: []profile.ReasoningOption{{Type: "effort", Values: values}}}}, "model")
+	if len(model.Thinking) != 1 || len(model.Thinking[0].Values) != len(values) || model.Thinking[0].Values[2].Description == "" || model.Thinking[0].Values[8].Description != "" {
+		t.Fatalf("profile model has incorrect descriptions: %+v", model.Thinking)
+	}
+}
 
 func TestToAPISessionWithTasks(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)

@@ -170,7 +170,7 @@ func TestClientAllMethodsOverUnixSocket(t *testing.T) {
 			http.Error(w, "bad header", http.StatusBadRequest)
 			return
 		}
-		_ = json.NewEncoder(w).Encode([]api.Agent{{Name: "developer", Effort: "high"}})
+		_ = json.NewEncoder(w).Encode([]api.Agent{{Name: "developer", Thinking: &api.ThinkingSetting{Type: "effort", Effort: "high"}}})
 	})
 	mux.HandleFunc("GET /v1/agents/{name}", func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get(api.HeaderCWD) != "/ws" {
@@ -182,7 +182,7 @@ func TestClientAllMethodsOverUnixSocket(t *testing.T) {
 			_ = json.NewEncoder(w).Encode(api.ErrorResponse{Code: "not_found", Message: "agent not found"})
 			return
 		}
-		_ = json.NewEncoder(w).Encode(api.Agent{Name: r.PathValue("name"), Effort: "high"})
+		_ = json.NewEncoder(w).Encode(api.Agent{Name: r.PathValue("name"), Thinking: &api.ThinkingSetting{Type: "effort", Effort: "high"}})
 	})
 	mux.HandleFunc("GET /v1/models", func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get(api.HeaderCWD) != "/ws" {

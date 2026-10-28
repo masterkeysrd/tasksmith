@@ -113,7 +113,9 @@ Type `/` in the composer to open the interactive autocomplete menu for slash com
 | `/help` | `/help` | List all available slash commands and descriptions. |
 | `/model` | `/model [model_id]` | Open an interactive model picker or switch directly to a registered model. |
 | `/agent` | `/agent [agent_name]` | Switch the active agent persona (e.g., `main`, `agent-creator`, `skill-creator`). |
-| `/effort` | `/effort [auto\|low\|medium\|high\|max]` | Set the reasoning budget / thinking effort for models that support extended thinking. |
+| `/effort` | `/effort [level\|default]` | Select a model-supported thinking effort; the picker and autocomplete show available descriptions. |
+| `/budget` | `/budget [tokens\|default]` | Show or set a model-supported thinking token budget. |
+| `/thinking` | `/thinking [on\|off\|default]` | Show or change a model-supported thinking toggle. |
 | `/mode` | `/mode [default\|accept_edits\|plan\|ask\|auto]` | Inspect or change the session permission mode. |
 | `/sessions` | `/sessions [session_id]` | Open the interactive session browser to switch, rename (`F2`), or delete (`F4`) sessions. |
 | `/new` | `/new [model]` | Start a fresh session draft. |
@@ -126,6 +128,8 @@ Type `/` in the composer to open the interactive autocomplete menu for slash com
 | `/compact` | `/compact [focus]` | Compact conversation history to free context window space, with optional focus instructions. |
 | `/context` | `/context` | Show visual token usage grid and context window breakdown by category. |
 | `/exit` | `/exit` (or `/quit`, `/q`) | Exit the REPL. |
+
+For `/effort`, `/budget`, and `/thinking`, the active model determines supported controls. Unsupported commands remain visible and report why they cannot be used. `default` clears the session thinking override and returns to the agent or provider default. When no default is known, the UI shows `provider default` and leaves the choice to the provider. Changing one control replaces the previous thinking override.
 
 For a complete reference of flags, keybindings, and autocomplete shortcuts, see the [CLI Reference](../reference/cli.md).
 

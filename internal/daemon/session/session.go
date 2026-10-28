@@ -65,10 +65,10 @@ func (s *Session) setStatus(next Status) {
 
 // SessionConfig holds configurable runtime settings for a [Session].
 type SessionConfig struct {
-	Agent  string               `json:"agent,omitempty"`
-	Model  string               `json:"model,omitempty"`
-	Effort string               `json:"effort,omitempty"`
-	Mode   tools.PermissionMode `json:"mode,omitempty"`
+	Agent    string               `json:"agent,omitempty"`
+	Model    string               `json:"model,omitempty"`
+	Thinking *api.ThinkingSetting `json:"thinking,omitempty"`
+	Mode     tools.PermissionMode `json:"mode,omitempty"`
 }
 
 // Session represents a persistent user-facing chat thread and its runtime state.
@@ -289,9 +289,25 @@ func (s *Session) harness(ctx context.Context) (harness.Harness, error) {
 	}
 	agentName := s.Config.Agent
 	modelName := s.Config.Model
+	setting := s.Config.Thinking
 	s.Unlock()
 
-	llmModel, err := s.gateway.ResolveLLM(ctx, modelName)
+	if setting == nil {
+		if agent, ok := s.workspace.GetAgent(agentName); ok {
+			setting = AgentThinking(agent.Thinking)
+		}
+	}
+	if setting != nil {
+		prof, _ := s.gateway.ModelProfile(modelName)
+		if err := validateThinking(setting, prof); err != nil {
+			return nil, err
+		}
+	}
+	var opts []gateway.LLMOption
+	if thinking := thinkingConfig(setting); thinking != nil {
+		opts = append(opts, gateway.WithLLMConfig(&llm.ModelConfig{Thinking: thinking}))
+	}
+	llmModel, err := s.gateway.ResolveLLM(ctx, modelName, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("session: resolve model %q: %w", modelName, err)
 	}

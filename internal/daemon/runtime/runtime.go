@@ -7,7 +7,10 @@ import (
 	"fmt"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
+
+	"github.com/masterkeysrd/loom/profile"
 
 	"github.com/masterkeysrd/tasksmith/internal/core/fsutils"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
@@ -323,6 +326,17 @@ func toGatewayProvider(p workspace.Provider) gateway.ProviderConfig {
 					Attachment: m.Capabilities.Attachment,
 					Tools:      m.Capabilities.Tools,
 					Dimensions: m.Capabilities.Dimensions,
+				}
+				for _, thinking := range m.Capabilities.Thinking {
+					typ := strings.ToLower(strings.TrimSpace(thinking.Type))
+					if typ == "budget" {
+						typ = "budget_tokens"
+					}
+					def := ""
+					if thinking.Default != nil {
+						def = fmt.Sprint(thinking.Default)
+					}
+					caps.Thinking = append(caps.Thinking, profile.ReasoningOption{Type: typ, Values: thinking.AllowedEfforts, Default: def, Max: thinking.MaxBudgetTokens})
 				}
 			}
 			models[i] = gateway.ModelSpec{

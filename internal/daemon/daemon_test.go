@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -1429,7 +1430,7 @@ Custom agent instructions.
 	if err != nil {
 		t.Fatalf("GetAgent('custom-agent'): %v", err)
 	}
-	if ag.Name != "custom-agent" || ag.DisplayName != "Custom Agent" || ag.Effort != "medium" {
+	if ag.Name != "custom-agent" || ag.DisplayName != "Custom Agent" || ag.Thinking == nil || ag.Thinking.Effort != "medium" {
 		t.Errorf("ag = %+v, want Effort='medium'", ag)
 	}
 
@@ -1440,8 +1441,11 @@ Custom agent instructions.
 	if mdl.ID != "my-ollama/qwen3.8" || mdl.Provider != "my-ollama" || mdl.Name != "qwen3.8" || mdl.Label != "Qwen 3.8" {
 		t.Errorf("mdl = %+v, want Qwen 3.8", mdl)
 	}
-	if mdl.DefaultEffort != "high" || len(mdl.AllowedEfforts) != 3 {
-		t.Errorf("mdl effort = %q, allowed=%v, want 'high' and [low, medium, high]", mdl.DefaultEffort, mdl.AllowedEfforts)
+	if len(mdl.Thinking) != 1 || mdl.Thinking[0].Default != "high" || len(mdl.Thinking[0].Values) != 3 {
+		t.Fatalf("unexpected model thinking: %+v", mdl.Thinking)
+	}
+	if mdl.Thinking[0].Values[0].Value != "low" || mdl.Thinking[0].Values[0].Description == "" {
+		t.Fatalf("missing effort description: %+v", mdl.Thinking[0].Values)
 	}
 
 	models, err := wsCLI.ListModels(ctx)
@@ -1452,7 +1456,7 @@ Custom agent instructions.
 	for _, m := range models {
 		if m.ID == "my-ollama/qwen3.8" {
 			foundOllama = true
-			if m.DefaultEffort != "high" || m.Label != "Qwen 3.8" {
+			if len(m.Thinking) != 1 || m.Thinking[0].Default != "high" || m.Label != "Qwen 3.8" || !reflect.DeepEqual(m.Thinking, mdl.Thinking) {
 				t.Errorf("listed model mismatch: %+v", m)
 			}
 			break
@@ -1698,7 +1702,7 @@ Subproject agent instructions.
 	if err != nil {
 		t.Fatalf("rootCLI.GetAgent('main'): %v", err)
 	}
-	if rootAgent.Effort != "high" || rootAgent.Description != "Root agent" {
+	if rootAgent.Thinking == nil || rootAgent.Thinking.Effort != "high" || rootAgent.Description != "Root agent" {
 		t.Errorf("rootAgent = %+v, want Effort='high' and Description='Root agent'", rootAgent)
 	}
 
@@ -1717,7 +1721,7 @@ Subproject agent instructions.
 	if err != nil {
 		t.Fatalf("subCLI.GetAgent('main'): %v", err)
 	}
-	if subAgent.Effort != "low" || subAgent.Description != "Subproject agent" {
+	if subAgent.Thinking == nil || subAgent.Thinking.Effort != "low" || subAgent.Description != "Subproject agent" {
 		t.Errorf("subAgent = %+v, want Effort='low' and Description='Subproject agent'", subAgent)
 	}
 }

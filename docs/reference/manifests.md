@@ -158,8 +158,7 @@ spec:
     - openai/o3
   temperature: 0.2
   thinking:
-    type: max
-    budget_tokens: 8192
+    effort: high
   skills:
     - go-security
     - owasp-checklist
@@ -193,8 +192,11 @@ Never attempt to modify code directly; report your findings with precise line re
 | `triggers` | array of strings | Phrases or patterns that trigger automatic agent suggestion or routing. |
 | `models` | array of strings | Prioritized list of model identifiers to use for this agent. |
 | `temperature` | float | Sampling temperature (0.0 to 2.0). |
-| `thinking.type` | string | Reasoning tier strategy: `auto`, `low`, `medium`, `high`, `max`. |
-| `thinking.budget_tokens` | integer | Maximum token budget allocated for internal chain-of-thought. |
+| `thinking.effort` | string | Model-supported effort level for the agent. |
+| `thinking.type` | string | `effort` when specifying the level through `thinking.default`. |
+| `thinking.default` | string | Default effort level when `thinking.type` is `effort`. |
+| `thinking.budget_tokens` | integer | Thinking token budget for models that support budgets. |
+| `thinking.enabled` | boolean | Thinking toggle for models that support it. |
 | `skills` | array of strings | Names of domain skills made available to this agent. |
 | `commands` | array of strings | Names of invokable slash commands made available to this agent. |
 | `subagents` | array of strings | Names of subagents this agent is permitted to invoke. |

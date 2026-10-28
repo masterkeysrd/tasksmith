@@ -116,25 +116,25 @@ func registerTestDaemonRoutes(mux *http.ServeMux, st *testDaemonState) {
 		})
 	})
 	mux.HandleFunc("GET /v1/agents", func(w http.ResponseWriter, _ *http.Request) {
-		_ = json.NewEncoder(w).Encode([]api.Agent{{Name: "build", Models: []string{"claude-sonnet-4-6"}, Effort: "high"}})
+		_ = json.NewEncoder(w).Encode([]api.Agent{{Name: "build", Models: []string{"claude-sonnet-4-6"}, Thinking: &api.ThinkingSetting{Type: "effort", Effort: "high"}}})
 	})
 	mux.HandleFunc("GET /v1/agents/{name}", func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(api.Agent{
-			Name:   r.PathValue("name"),
-			Models: []string{"claude-sonnet-4-6"},
-			Effort: "high",
+			Name:     r.PathValue("name"),
+			Models:   []string{"claude-sonnet-4-6"},
+			Thinking: &api.ThinkingSetting{Type: "effort", Effort: "high"},
 		})
 	})
 	mux.HandleFunc("GET /v1/models", func(w http.ResponseWriter, _ *http.Request) {
-		_ = json.NewEncoder(w).Encode([]api.Model{{ID: "claude-sonnet-4-6", Name: "claude-sonnet-4-6", Label: "Claude 3.7 Sonnet", DefaultEffort: "medium"}})
+		_ = json.NewEncoder(w).Encode([]api.Model{{ID: "claude-sonnet-4-6", Name: "claude-sonnet-4-6", Label: "Claude 3.7 Sonnet", Thinking: []api.ThinkingCapability{{Type: "effort", Default: "medium"}}}})
 	})
 	mux.HandleFunc("GET /v1/models/{id...}", func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
 		_ = json.NewEncoder(w).Encode(api.Model{
-			ID:            id,
-			Name:          id,
-			Label:         "Claude 3.7 Sonnet",
-			DefaultEffort: "medium",
+			ID:       id,
+			Name:     id,
+			Label:    "Claude 3.7 Sonnet",
+			Thinking: []api.ThinkingCapability{{Type: "effort", Default: "medium"}},
 		})
 	})
 
@@ -164,10 +164,10 @@ func registerTestDaemonRoutes(mux *http.ServeMux, st *testDaemonState) {
 			ID:    id,
 			Title: req.Title,
 			Config: api.SessionConfig{
-				Agent:  agent,
-				Model:  model,
-				Effort: req.Config.Effort,
-				Mode:   mode,
+				Agent:    agent,
+				Model:    model,
+				Thinking: req.Config.Thinking,
+				Mode:     mode,
 			},
 			Status:    api.StatusIdle,
 			UpdatedAt: time.Date(2026, 10, 24, 12, 5, 0, 0, time.UTC),
@@ -223,8 +223,12 @@ func registerTestDaemonRoutes(mux *http.ServeMux, st *testDaemonState) {
 		if req.Config.Model != "" {
 			s.Config.Model = req.Config.Model
 		}
-		if req.Config.Effort != "" {
-			s.Config.Effort = req.Config.Effort
+		if req.Config.Thinking != nil {
+			if req.Config.Thinking.Type == "default" {
+				s.Config.Thinking = nil
+			} else {
+				s.Config.Thinking = req.Config.Thinking
+			}
 		}
 		if req.Config.Mode != "" {
 			s.Config.Mode = req.Config.Mode

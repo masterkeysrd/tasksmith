@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -180,8 +181,7 @@ func (m *manager) matchesParams(s *Session, params CreateParams) error {
 	if wantModel != "" && s.Config.Model != wantModel {
 		return ErrSessionConflict
 	}
-	wantEffort := strings.TrimSpace(params.Config.Effort)
-	if wantEffort != "" && s.Config.Effort != wantEffort {
+	if params.Config.Thinking != nil && !reflect.DeepEqual(s.Config.Thinking, params.Config.Thinking) {
 		return ErrSessionConflict
 	}
 	wantMode := params.Config.Mode
@@ -323,7 +323,15 @@ func (m *manager) Create(ctx context.Context, params CreateParams) (sess *Sessio
 	}
 
 	agent, model := m.resolveAgentAndModel(params.Config.Agent, params.Config.Model)
-	effort := strings.TrimSpace(params.Config.Effort)
+	if params.Config.Thinking != nil {
+		prof, _ := m.gateway.ModelProfile(model)
+		if err := validateThinking(params.Config.Thinking, prof); err != nil {
+			return nil, false, err
+		}
+		if params.Config.Thinking.Type == "default" {
+			params.Config.Thinking = nil
+		}
+	}
 
 	now := time.Now().UTC()
 	if id == "" {
@@ -344,10 +352,10 @@ func (m *manager) Create(ctx context.Context, params CreateParams) (sess *Sessio
 		ID:    id,
 		Title: strings.TrimSpace(params.Title),
 		Config: SessionConfig{
-			Agent:  agent,
-			Model:  model,
-			Effort: effort,
-			Mode:   mode,
+			Agent:    agent,
+			Model:    model,
+			Thinking: params.Config.Thinking,
+			Mode:     mode,
 		},
 		CreatedAt:   now,
 		UpdatedAt:   now,
@@ -449,8 +457,24 @@ func (m *manager) Update(ctx context.Context, id string, params UpdateParams) (*
 	} else if strings.TrimSpace(params.Config.Agent) != "" && sess.Config.Model == "" {
 		_, newConfig.Model = m.resolveAgentAndModel(newConfig.Agent, "")
 	}
-	if effort := strings.TrimSpace(params.Config.Effort); effort != "" {
-		newConfig.Effort = effort
+	if oldConfig.Model != newConfig.Model || oldConfig.Agent != newConfig.Agent {
+		prof, _ := m.gateway.ModelProfile(newConfig.Model)
+		if newConfig.Thinking != nil && validateThinking(newConfig.Thinking, prof) != nil {
+			newConfig.Thinking = nil
+		}
+	}
+	if params.Config.Thinking != nil {
+		prof, _ := m.gateway.ModelProfile(newConfig.Model)
+		if err := validateThinking(params.Config.Thinking, prof); err != nil {
+			sess.Unlock()
+			return nil, err
+		}
+		if params.Config.Thinking.Type == "default" {
+			newConfig.Thinking = nil
+		} else {
+			value := *params.Config.Thinking
+			newConfig.Thinking = &value
+		}
 	}
 	if params.Config.Mode != "" {
 		newConfig.Mode = params.Config.Mode
@@ -474,7 +498,7 @@ func (m *manager) Update(ctx context.Context, id string, params UpdateParams) (*
 	sess.Title = newTitle
 	sess.Config = newConfig
 	sess.UpdatedAt = updatedAt
-	if oldConfig.Agent != newConfig.Agent || oldConfig.Model != newConfig.Model || oldConfig.Effort != newConfig.Effort {
+	if oldConfig.Agent != newConfig.Agent || oldConfig.Model != newConfig.Model || !reflect.DeepEqual(oldConfig.Thinking, newConfig.Thinking) {
 		sess.Harness = nil
 	}
 	if oldConfig.Mode != newConfig.Mode && sess.PermManager != nil {
@@ -502,15 +526,12 @@ func (m *manager) Update(ctx context.Context, id string, params UpdateParams) (*
 			Entry:     entry.Clone(),
 		})
 	}
-	if oldConfig.Effort != newConfig.Effort {
-		entry := timeline.NewEffortEntry(sess.ID, timeline.EffortChange{From: oldConfig.Effort, To: newConfig.Effort})
+	if !reflect.DeepEqual(oldConfig.Thinking, newConfig.Thinking) {
+		entry := &timeline.Entry{SessionID: sess.ID, Kind: timeline.KindThinking, Thinking: &api.ThinkingChange{From: oldConfig.Thinking, To: newConfig.Thinking}}
 		if err := sess.Timeline.Append(ctx, entry); err != nil {
 			return nil, err
 		}
-		m.publisher.Publish(api.SessionStreamTopic(sess.ID), EntryAddedEvent{
-			SessionID: sess.ID,
-			Entry:     entry.Clone(),
-		})
+		m.publisher.Publish(api.SessionStreamTopic(sess.ID), EntryAddedEvent{SessionID: sess.ID, Entry: entry.Clone()})
 	}
 	if oldConfig.Mode != newConfig.Mode {
 		entry := timeline.NewModeEntry(sess.ID, timeline.ModeChange{From: oldConfig.Mode, To: newConfig.Mode})

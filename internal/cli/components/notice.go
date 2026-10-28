@@ -131,6 +131,26 @@ var TimelineEvent = trail.FC("TimelineEvent", func(entry api.TimelineEntry) trai
 		if entry.Effort != nil {
 			text = "Thinking effort set to " + entry.Effort.To
 		}
+	case api.TimelineKindThinking:
+		if entry.Thinking != nil {
+			value := entry.Thinking.To
+			if value == nil {
+				text = "Thinking reset to default"
+			} else {
+				switch value.Type {
+				case "effort":
+					text = "Thinking effort set to " + value.Effort
+				case "budget", "budget_tokens":
+					text = fmt.Sprintf("Thinking budget set to %d tokens", value.Budget)
+				case "toggle":
+					if value.Enabled {
+						text = "Thinking enabled"
+					} else {
+						text = "Thinking disabled"
+					}
+				}
+			}
+		}
 	case api.TimelineKindAgent:
 		if entry.Agent != nil {
 			text = "Agent set to " + entry.Agent.To

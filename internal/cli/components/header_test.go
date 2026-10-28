@@ -142,7 +142,7 @@ func TestHeaderDefaults(t *testing.T) {
 		"▐██▌",
 		"◢████◣",
 		"TaskSmith v0.0.0-dev",
-		"default with auto effort",
+		"default · provider default",
 		"/work",
 	} {
 		if !strings.Contains(text, want) {

@@ -101,6 +101,15 @@ spec:
 ```
 
 > [!NOTE]
+> Thinking capabilities come from provider model profiles or workspace model declarations. Declared strategies replace profile strategies for that model. `/effort`, `/budget`, and `/thinking` report when the resolved model does not support the requested strategy. `default` clears the session thinking override and restores the agent or provider default.
+
+The model endpoints (`GET /v1/models` and `GET /v1/models/{id}`) return `thinking[].values` as objects with a required `value` and optional `description`. Common effort levels receive general hints; model-specific values may have no description. Descriptions are informational and do not change the supported values.
+
+```json
+{"type":"effort","values":[{"value":"low","description":"Less reasoning; potentially faster."},{"value":"custom"}]}
+```
+
+> [!NOTE]
 > Detailed vendor-specific engine parameters (such as `apiMode`, `store: false`, and built-in server tools) are documented in the [OpenAI Provider Guide](./providers/openai.md).
 
 ---

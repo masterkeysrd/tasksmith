@@ -137,7 +137,7 @@ var ModelSegment = trail.FC("ModelSegment", func(props SegmentProps) trail.Node 
 	}
 
 	model := cmp.Or(strings.TrimSpace(modelLabel), "default")
-	effort := cmp.Or(strings.TrimSpace(thinking), "auto")
+	effort := cmp.Or(strings.TrimSpace(thinking), store.ThinkingProviderDefault)
 	text := fmt.Sprintf("%s · %s", model, effort)
 	return segment(props, statusText(text, scheme.Color.Text.Secondary, false), text, scheme.Color.Text.Secondary)
 })

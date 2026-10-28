@@ -49,10 +49,22 @@ func (r *Registry) registerSystemCommands() {
 	})
 	r.Register(Command{
 		Name:        "effort",
-		Usage:       "/effort [auto|low|medium|high|max]",
+		Usage:       "/effort [level|default]",
 		Description: "Set reasoning effort for the model",
 		Handler:     handleEffort,
 		Complete:    completeEffort,
+	})
+	r.Register(Command{
+		Name:        "budget",
+		Usage:       "/budget [tokens|default]",
+		Description: "Set the thinking token budget",
+		Handler:     handleBudget,
+	})
+	r.Register(Command{
+		Name:        "thinking",
+		Usage:       "/thinking [on|off|default]",
+		Description: "Toggle thinking for supported models",
+		Handler:     handleThinking,
 	})
 	r.Register(Command{
 		Name:        "theme",
@@ -342,37 +354,41 @@ var AgentPicker = trail.FC("AgentPicker", func(slotID string) trail.Node {
 })
 
 func handleEffort(args []string) error {
-	validEfforts := []string{"auto", "low", "medium", "high", "max"}
-	if len(args) > 0 && strings.TrimSpace(args[0]) != "" {
-		effort := strings.ToLower(strings.TrimSpace(args[0]))
-		valid := slices.Contains(validEfforts, effort)
-		if !valid {
-			return fmt.Errorf("invalid reasoning effort %q (valid: auto, low, medium, high, max)", effort)
+	capability, err := thinkingCapability("effort")
+	if err != nil {
+		return err
+	}
+	if len(args) > 1 {
+		return fmt.Errorf("usage: /effort [level|default]")
+	}
+	if len(args) == 1 {
+		value := strings.ToLower(args[0])
+		if value == "default" {
+			store.SetThinking(api.ThinkingSetting{Type: "default"}, "/effort default", "Thinking reset to default")
+			return nil
 		}
-		store.SetEffort(effort)
+		values := make([]string, 0, len(capability.Values))
+		for _, option := range capability.Values {
+			values = append(values, option.Value)
+		}
+		if !slices.Contains(values, value) {
+			return fmt.Errorf("unsupported effort %q (available: %s)", value, strings.Join(values, ", "))
+		}
+		store.SetThinking(api.ThinkingSetting{Type: "effort", Effort: value}, "/effort "+value, "Thinking effort set to "+value)
 		return nil
 	}
-
-	currentEffort := store.GetSession().Thinking
-	opts := make([]uicomponents.Option, len(validEfforts))
-	for i, e := range validEfforts {
-		opts[i] = uicomponents.Option{
-			Value:   e,
-			Label:   e,
-			Current: strings.EqualFold(e, currentEffort),
+	opts := make([]uicomponents.Option, 0, len(capability.Values)+1)
+	for _, value := range capability.Values {
+		opts = append(opts, uicomponents.Option{Value: value.Value, Label: value.Value, Description: value.Description, Current: strings.EqualFold(value.Value, store.GetSession().Thinking)})
+	}
+	opts = append(opts, uicomponents.Option{Value: "default", Label: "default"})
+	picker := components.NewPicker("Select thinking effort:", opts, func(opt uicomponents.Option) {
+		if err := handleEffort([]string{opt.Value}); err != nil {
+			store.AppendError("Error", err.Error())
 		}
-	}
-
-	picker := components.NewPicker("Select reasoning effort:", opts, func(opt uicomponents.Option) {
-		store.SetEffort(opt.Value)
 	})
-	picker.OnCancel = func() {
-		store.AppendCommandOutput("/effort", "Exited /effort command")
-	}
-	store.EnqueueSlot(store.SlotItem{
-		Kind: store.SlotKindPicker,
-		Data: picker,
-	})
+	picker.OnCancel = func() { store.AppendCommandOutput("/effort", "Exited /effort command") }
+	store.EnqueueSlot(store.SlotItem{Kind: store.SlotKindPicker, Data: picker})
 	return nil
 }
 

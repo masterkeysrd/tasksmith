@@ -128,11 +128,11 @@ func TestModelSegment(t *testing.T) {
 		t.Fatalf("expected 'Claude 3.7 Sonnet · high', got:\n%s", out)
 	}
 
-	// 3. Ready with empty values defaults to "default · auto"
+	// 3. Ready with empty values defaults to "default · provider default"
 	store.SetModelInfo("", "")
 	out = renderNode(t, ModelSegment(SegmentProps{}))
-	if !strings.Contains(out, "default · auto") {
-		t.Fatalf("expected 'default · auto', got:\n%s", out)
+	if !strings.Contains(out, "default · provider default") {
+		t.Fatalf("expected 'default · provider default', got:\n%s", out)
 	}
 }
 

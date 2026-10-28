@@ -95,7 +95,7 @@ spec:
 
 ## 3. Large Context Windows & Thinking Effort
 
-Gemini models feature 1,048,576-token context windows, ideal for repository-wide refactoring passes and multimodal asset analysis. For models supporting thinking effort, control reasoning depth using `/effort <low|medium|high>`.
+Gemini models feature large context windows, ideal for repository-wide refactoring passes and multimodal asset analysis. Use `/effort` or `/budget` when supported by the active model.
 
 For the complete schema of capability flags and token limits, see the [Providers Overview](../providers.md).
 

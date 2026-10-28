@@ -86,7 +86,23 @@ spec:
 
 ---
 
-## 3. Remote Ollama Instances & Authentication
+## 3. Thinking Controls
+
+TaskSmith uses the resolved Ollama model profile to determine which thinking controls are available. Explicit `capabilities.thinking` declarations in the provider manifest replace the profile's thinking strategies.
+
+| Command | Availability | Behavior |
+| :--- | :--- | :--- |
+| `/effort [level\|default]` | Models with effort levels | Select a model-supported level, or open the picker without an argument. |
+| `/thinking [on\|off\|default]` | Models with a thinking toggle | Show or change whether thinking is enabled. |
+| `/budget [tokens\|default]` | Models with a thinking budget | Show or set a model-supported thinking token budget. |
+
+All three commands remain visible, even when the active model does not support them. `default` clears the session's thinking override and restores the agent or provider default. Setting one control replaces the previous thinking override.
+
+See the [CLI Reference](../cli.md) for command details and the [Providers Overview](../providers.md) for manifest properties.
+
+---
+
+## 4. Remote Ollama Instances & Authentication
 
 For remote GPU workstations or cloud-hosted Ollama servers requiring authentication, specify `spec.endpoint` and configure Bearer or Basic auth:
 

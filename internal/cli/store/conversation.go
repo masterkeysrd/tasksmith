@@ -495,6 +495,10 @@ func (acc *conversationAccumulator) applyEvent(event api.Event) {
 				if p.Entry.Agent != nil {
 					SetSessionAgent(p.Entry.Agent.To)
 				}
+			case api.TimelineKindThinking:
+				if p.Entry.Thinking != nil {
+					ApplyThinkingChange(p.Entry.Thinking.To)
+				}
 			case api.TimelineKindEffort:
 				if p.Entry.Effort != nil {
 					SetModelInfo(GetSession().ModelLabel, p.Entry.Effort.To)

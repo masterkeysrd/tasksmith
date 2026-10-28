@@ -48,7 +48,7 @@ The following flags apply to `tasksmith`, `tasksmith repl`, and `tasksmith daemo
 
 ## 2. Interactive Slash Commands
 
-Inside the TaskSmith interactive REPL, slash commands provide instant control over session state, permission modes, reasoning effort, and resource inspection:
+Inside the TaskSmith interactive REPL, slash commands provide instant control over session state, permission modes, thinking, and resource inspection. When no thinking default is known, the UI shows `provider default` and leaves the choice to the provider:
 
 | Slash Command | Aliases | Arguments | Description |
 | :--- | :--- | :--- | :--- |
@@ -56,7 +56,9 @@ Inside the TaskSmith interactive REPL, slash commands provide instant control ov
 | **`/mode`** | | `[mode]` (`default`, `accept_edits`, `plan`, `ask`, `auto`) | Inspects current permission mode or switches to the specified mode. |
 | **`/model`** | | `[model_id]` | Displays active model, switches to `model_id`, or opens the interactive model picker if no argument is provided. |
 | **`/agent`** | | `[agent_name]` | Displays active agent, switches to `agent_name`, or opens the interactive agent picker if no argument is provided. |
-| **`/effort`** | | `[level]` (`auto`, `low`, `medium`, `high`, `max`) | Displays reasoning effort, sets effort level, or opens the effort picker if no argument is provided. |
+| **`/effort`** | | `[level\|default]` | Set an allowed model-specific effort or open the picker, which shows available descriptions. |
+| **`/budget`** | | `[tokens\|default]` | Show or set a supported thinking token budget. |
+| **`/thinking`** | | `[on\|off\|default]` | Show or set a supported thinking toggle. |
 | **`/theme`** | | `[theme_name]` | Changes terminal UI color theme, or opens the interactive theme picker if no argument is provided. |
 | **`/clear`** | | *(none)* | Creates and transitions to a fresh draft session. |
 | **`/exit`** | `/quit`, `/q` | *(none)* | Gracefully terminates and exits the interactive REPL. |

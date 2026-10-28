@@ -138,7 +138,9 @@ TaskSmith provides a rich terminal interface designed for continuous pair progra
 | :--- | :--- | :--- |
 | `/model` | Select Model | Switch the active LLM or view registered provider catalogs. |
 | `/agent` | Switch Agent | Switch between specialized personas (`main`, `reviewer`, `architect`). |
-| `/effort` | Set Thinking Effort | Adjust reasoning intensity (`low`, `medium`, `high`) for thinking models. |
+| `/effort` | Set Thinking Effort | Select a model-supported thinking intensity. |
+| `/budget` | Set Thinking Budget | Set a supported thinking-token budget. |
+| `/thinking` | Toggle Thinking | Turn thinking on or off when supported. |
 | `/mode` | Permission Mode | Switch operational mode (`default`, `plan`, `auto`) or press `Shift+Tab`. |
 | `/changes` | Review Diff | Inspect unified syntax-highlighted diffs of files modified in the session. |
 | `/revert` | Rollback Turn | Atomically restore modified files to their pre-turn state on disk. |

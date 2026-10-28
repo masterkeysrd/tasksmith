@@ -242,10 +242,10 @@ func getOrCreateSession(ctx context.Context) (*api.Session, error) {
 	created, err := c.CreateSession(ctx, api.CreateSessionRequest{
 		Title: title,
 		Config: api.SessionConfig{
-			Agent:  cmp.Or(cfg.Agent, agent),
-			Model:  cmp.Or(cfg.Model, model),
-			Effort: cfg.Effort,
-			Mode:   mode,
+			Agent:    cmp.Or(cfg.Agent, agent),
+			Model:    cmp.Or(cfg.Model, model),
+			Thinking: cfg.Thinking,
+			Mode:     mode,
 		},
 	})
 	if err != nil {
@@ -898,6 +898,9 @@ func SetModel(modelID string) {
 				AppendError("Error", err.Error())
 				return
 			}
+			if st.Session.Config.Thinking != nil && updated.Config.Thinking == nil {
+				AppendNotice("Thinking override cleared because it is not supported by the selected model.")
+			}
 			SetSession(updated)
 			modelLabel, thinking := ResolveModelInfo(ctx, c, defAgent, defModel, updated)
 			SetModelInfo(modelLabel, thinking)
@@ -905,7 +908,13 @@ func SetModel(modelID string) {
 		return
 	}
 
+	if st.Config.Model != modelID && st.Config.Thinking != nil {
+		AppendNotice("Thinking override cleared after changing the model.")
+	}
 	session.Set(func(s SessionState) SessionState {
+		if s.Config.Model != modelID && s.Config.Thinking != nil {
+			s.Config.Thinking = nil
+		}
 		s.Config.Model = modelID
 		return s
 	})
@@ -914,9 +923,6 @@ func SetModel(modelID string) {
 	}
 	cfg := GetSession().Config
 	modelLabel, thinking := ResolveModelInfo(ctx, c, cfg.Agent, cfg.Model, &api.Session{Config: cfg})
-	if cfg.Effort != "" {
-		thinking = cfg.Effort
-	}
 	SetModelInfo(modelLabel, thinking)
 	AppendCommandOutput("/model "+modelID, "Model set to "+modelID)
 }
@@ -962,59 +968,8 @@ func SetAgent(agentName string) {
 	}
 	cfg := GetSession().Config
 	modelLabel, thinking := ResolveModelInfo(ctx, c, cfg.Agent, cfg.Model, &api.Session{Config: cfg})
-	if cfg.Effort != "" {
-		thinking = cfg.Effort
-	}
 	SetModelInfo(modelLabel, thinking)
 	AppendCommandOutput("/agent "+agentName, "Agent set to "+agentName)
-}
-
-// SetEffort updates the reasoning effort for the session, either via daemon API or in draft config.
-func SetEffort(effort string) {
-	st := GetSession()
-	sessMu.Lock()
-	c := activeClient
-	ctx := activeCtx
-	defAgent := activeOpts.Agent
-	defModel := activeOpts.Model
-	sessMu.Unlock()
-
-	if st.Session != nil && st.Session.ID != "" {
-		if c == nil {
-			return
-		}
-		go func() {
-			if ctx == nil || ctx.Err() != nil {
-				ctx = context.Background()
-			}
-			updated, err := c.UpdateSession(ctx, st.Session.ID, api.UpdateSessionRequest{
-				Config: api.SessionConfig{Effort: effort},
-			})
-			if err != nil {
-				AppendError("Error", err.Error())
-				return
-			}
-			SetSession(updated)
-			modelLabel, thinking := ResolveModelInfo(ctx, c, defAgent, defModel, updated)
-			SetModelInfo(modelLabel, thinking)
-		}()
-		return
-	}
-
-	session.Set(func(s SessionState) SessionState {
-		s.Config.Effort = effort
-		return s
-	})
-	if ctx == nil || ctx.Err() != nil {
-		ctx = context.Background()
-	}
-	cfg := GetSession().Config
-	modelLabel, thinking := ResolveModelInfo(ctx, c, cfg.Agent, cfg.Model, &api.Session{Config: cfg})
-	if cfg.Effort != "" {
-		thinking = cfg.Effort
-	}
-	SetModelInfo(modelLabel, thinking)
-	AppendCommandOutput("/effort "+effort, "Effort set to "+effort)
 }
 
 // ResetSession resets the session state to its initial default mode and cancels any active watchers.
@@ -1081,20 +1036,25 @@ func ResolveModelInfo(ctx context.Context, c *client.Client, cfgAgent, cfgModel 
 		mdl, _ = c.GetModel(ctx, modelID)
 	}
 
-	var agEffort, mdlLabel, mdlEffort, explicitEffort string
-	if sess != nil && strings.TrimSpace(sess.Config.Effort) != "" {
-		explicitEffort = strings.TrimSpace(sess.Config.Effort)
-	}
-	if ag != nil {
-		agEffort = strings.TrimSpace(ag.Effort)
-	}
+	var mdlLabel string
+	thinking = ThinkingProviderDefault
 	if mdl != nil {
 		mdlLabel = cmp.Or(strings.TrimSpace(mdl.Label), strings.TrimSpace(mdl.Name), strings.TrimSpace(mdl.ID))
-		mdlEffort = strings.TrimSpace(mdl.DefaultEffort)
+		for _, option := range mdl.Thinking {
+			if option.Type == "effort" && option.Default != "" {
+				thinking = option.Default
+				break
+			}
+		}
+	}
+	if ag != nil && ag.Thinking != nil {
+		thinking = thinkingDisplay(ag.Thinking)
 	}
 
 	modelLabel = cmp.Or(mdlLabel, modelID, "default")
-	thinking = cmp.Or(explicitEffort, agEffort, mdlEffort, "auto")
+	if sess != nil && sess.Config.Thinking != nil {
+		thinking = thinkingDisplay(sess.Config.Thinking)
+	}
 
 	var initContext api.ContextState
 	if sess != nil && sess.Context.MaxTokens > 0 {

@@ -430,6 +430,10 @@ func MergeProfile(spec *ModelSpec, base *profile.Profile) *profile.Profile {
 		out.Limits.Dimensions = spec.Limits.Dimensions
 	}
 	if spec.Capabilities != nil {
+		if len(spec.Capabilities.Thinking) > 0 {
+			out.Capabilities.Reasoning = true
+			out.Capabilities.ReasoningOptions = append([]profile.ReasoningOption(nil), spec.Capabilities.Thinking...)
+		}
 		if spec.Capabilities.Completion != nil {
 			out.Capabilities.Completion = *spec.Capabilities.Completion
 		}

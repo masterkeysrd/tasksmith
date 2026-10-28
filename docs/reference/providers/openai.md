@@ -255,7 +255,7 @@ The following options can be set under `spec.config` in `.agents/providers/opena
 
 Models are declared under `spec.models`. For models supporting variable reasoning intensity (such as `gpt-5.5`, `gpt-5.5-pro`, and `o3`), declare reasoning capabilities using `thinking` with `type: effort` (`allowedEfforts: [low, medium, high]`).
 
-In the TaskSmith CLI, users can adjust reasoning depth dynamically via `/effort <low|medium|high>`. For complete documentation on capability flags, token limits, and cost schemas, see the [Providers Overview](../providers.md).
+In the TaskSmith CLI, `/effort` offers the levels supported by the active model. For complete documentation on capability flags, token limits, and cost schemas, see the [Providers Overview](../providers.md).
 
 ---
 

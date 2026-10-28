@@ -23,7 +23,7 @@ func handleContext(_ []string) error {
 	if modelName == "" {
 		modelName = "default"
 	}
-	if sess.Thinking != "" && sess.Thinking != "auto" {
+	if sess.Thinking != "" {
 		modelName = fmt.Sprintf("%s (%s)", modelName, sess.Thinking)
 	}
 	cfgModel := strings.TrimSpace(sess.Config.Model)

@@ -2329,9 +2329,6 @@ func TestTargetedSessionFixes(t *testing.T) {
 	// 1. Verify sessionDir uses xdg.WorkspaceDir and does NOT create a sessions/ dir in ws.RootDir()
 	sess, _, err := mgr.Create(ctx, CreateParams{
 		Title: "Test Fixes",
-		Config: SessionConfig{
-			Effort: "low",
-		},
 	})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
@@ -2348,50 +2345,6 @@ func TestTargetedSessionFixes(t *testing.T) {
 	workspaceSessionsDir := filepath.Join(ws.RootDir(), "sessions")
 	if _, err := os.Stat(workspaceSessionsDir); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("expected no sessions/ dir in workspace root, got stat err: %v", err)
-	}
-
-	// 2. Verify Update Effort appends and publishes timeline.NewEffortEntry
-	pub.reset()
-	updated, err := mgr.Update(ctx, sess.ID, UpdateParams{
-		Config: SessionConfig{
-			Effort: "high",
-		},
-	})
-	if err != nil {
-		t.Fatalf("Update effort: %v", err)
-	}
-	if updated.Config.Effort != "high" {
-		t.Errorf("updated.Config.Effort = %q, want 'high'", updated.Config.Effort)
-	}
-
-	tl, err := sess.Timeline.List(ctx)
-	if err != nil {
-		t.Fatalf("Timeline.List: %v", err)
-	}
-	var foundEffort bool
-	for _, entry := range tl {
-		if entry.Kind == timeline.KindEffort && entry.Effort != nil {
-			if entry.Effort.From == "low" && entry.Effort.To == "high" {
-				foundEffort = true
-				break
-			}
-		}
-	}
-	if !foundEffort {
-		t.Errorf("expected timeline EffortEntry with From='low' To='high'")
-	}
-
-	var foundEffortEvent bool
-	for _, ev := range pub.recorded() {
-		if ea, ok := ev.(EntryAddedEvent); ok && ea.Entry.Kind == timeline.KindEffort {
-			if ea.Entry.Effort != nil && ea.Entry.Effort.From == "low" && ea.Entry.Effort.To == "high" {
-				foundEffortEvent = true
-				break
-			}
-		}
-	}
-	if !foundEffortEvent {
-		t.Errorf("expected EntryAddedEvent with KindEffort published")
 	}
 
 	// 3. Trigger permission interrupt and verify loadOrCacheSession restores StatusWaitingPermission

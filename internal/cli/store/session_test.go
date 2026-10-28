@@ -71,14 +71,14 @@ func TestResolveModelInfoNilClient(t *testing.T) {
 
 	// Default fallback
 	label, thinking := ResolveModelInfo(ctx, nil, "", "", nil)
-	if label != "default" || thinking != "auto" {
-		t.Fatalf("expected default/auto, got %q/%q", label, thinking)
+	if label != "default" || thinking != ThinkingProviderDefault {
+		t.Fatalf("expected default/provider default, got %q/%q", label, thinking)
 	}
 
 	// Passed config
 	label, thinking = ResolveModelInfo(ctx, nil, "agent1", "gpt-4", nil)
-	if label != "gpt-4" || thinking != "auto" {
-		t.Fatalf("expected gpt-4/auto, got %q/%q", label, thinking)
+	if label != "gpt-4" || thinking != ThinkingProviderDefault {
+		t.Fatalf("expected gpt-4/provider default, got %q/%q", label, thinking)
 	}
 
 	// Sess overrides cfg
@@ -89,9 +89,19 @@ func TestResolveModelInfoNilClient(t *testing.T) {
 		},
 	}
 	label, thinking = ResolveModelInfo(ctx, nil, "agent1", "gpt-4", sess)
-	if label != "claude-3-7" || thinking != "auto" {
-		t.Fatalf("expected claude-3-7/auto from sess, got %q/%q", label, thinking)
+	if label != "claude-3-7" || thinking != ThinkingProviderDefault {
+		t.Fatalf("expected claude-3-7/provider default from sess, got %q/%q", label, thinking)
 	}
+	sess.Config.Thinking = &api.ThinkingSetting{Type: "effort", Effort: "auto"}
+	_, thinking = ResolveModelInfo(ctx, nil, "", "", sess)
+	if thinking != "auto" {
+		t.Fatalf("expected explicit auto effort, got %q", thinking)
+	}
+	ApplyThinkingChange(nil)
+	if got := GetSession(); got.Thinking != ThinkingProviderDefault || got.Config.Thinking != nil {
+		t.Fatalf("expected provider default after reset, got %+v", got)
+	}
+	ResetSession()
 }
 
 func TestResolveModelInfoWithWorkspaceWarnings(t *testing.T) {
@@ -141,7 +151,7 @@ func TestResolveModelInfoWithWorkspaceWarnings(t *testing.T) {
 	if !getWorkspaceCalled {
 		t.Fatal("expected GetWorkspace to be called even when agent and model are explicitly provided")
 	}
-	if label != "my-model" || thinking != "auto" {
+	if label != "my-model" || thinking != ThinkingProviderDefault {
 		t.Fatalf("unexpected label/thinking: %q/%q", label, thinking)
 	}
 

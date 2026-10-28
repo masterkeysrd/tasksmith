@@ -89,7 +89,7 @@ spec:
 
 ## 3. Extended Thinking & Prompt Caching
 
-- **Thinking Effort**: Models configured with `thinking.type: effort` support dynamic session-level reasoning intensity via `/effort <low|medium|high>`.
+- **Thinking**: Use `/effort` for model-supported effort levels or `/budget` for supported token budgets. Available values depend on the resolved model profile.
 - **Prompt Caching**: Claude models automatically cache system prompts and conversation history. Declare `cost.cacheRead` and `cost.cacheWrite` to track savings in session metrics.
 
 For the complete manifest schema and capability properties, see the [Providers Overview](../providers.md).

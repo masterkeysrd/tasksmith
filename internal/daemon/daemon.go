@@ -494,6 +494,10 @@ func enrichModelFromProfile(m *api.Model, prof *profile.Profile, rawID string) {
 	if prof == nil {
 		return
 	}
+	m.Thinking = nil
+	for _, option := range prof.Capabilities.ReasoningOptions {
+		m.Thinking = append(m.Thinking, api.ThinkingCapability{Type: option.Type, Values: toAPIThinkingValues(option.Type, option.Values), Default: option.Default, Min: option.Min, Max: option.Max})
+	}
 	if m.ContextLimit <= 0 && prof.Limits.Context > 0 {
 		m.ContextLimit = prof.Limits.Context
 	}
@@ -598,10 +602,10 @@ func (d *Daemon) CreateSession(ctx context.Context, rawWS string, req api.Create
 		ID:    req.ID,
 		Title: req.Title,
 		Config: session.SessionConfig{
-			Agent:  req.Config.Agent,
-			Model:  req.Config.Model,
-			Effort: req.Config.Effort,
-			Mode:   tools.PermissionMode(req.Config.Mode),
+			Agent:    req.Config.Agent,
+			Model:    req.Config.Model,
+			Thinking: req.Config.Thinking,
+			Mode:     tools.PermissionMode(req.Config.Mode),
 		},
 	})
 	if err != nil {
@@ -654,10 +658,10 @@ func (d *Daemon) UpdateSession(ctx context.Context, rawWS, id string, req api.Up
 	sess, err := rt.Sessions().Update(ctx, id, session.UpdateParams{
 		Title: req.Title,
 		Config: session.SessionConfig{
-			Agent:  req.Config.Agent,
-			Model:  req.Config.Model,
-			Effort: req.Config.Effort,
-			Mode:   tools.PermissionMode(req.Config.Mode),
+			Agent:    req.Config.Agent,
+			Model:    req.Config.Model,
+			Thinking: req.Config.Thinking,
+			Mode:     tools.PermissionMode(req.Config.Mode),
 		},
 	})
 	if err != nil {

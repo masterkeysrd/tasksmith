@@ -91,7 +91,7 @@ spec:
 
 ## 3. Reasoning & Effort Levels
 
-All models in the Antigravity catalog include thinking capability declarations. Adjust reasoning depth dynamically via `/effort <low|medium|high>` or set `effort` directly in agent definitions.
+Models may declare thinking capabilities. Use `/effort` or `/budget` when supported, or set thinking defaults in agent definitions.
 
 For the complete schema of capabilities, costs, and token limits, see the [Providers Overview](../providers.md).
 

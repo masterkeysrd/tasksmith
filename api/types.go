@@ -57,20 +57,39 @@ type Agent struct {
 	DisplayName string           `json:"display_name,omitempty"`
 	Description string           `json:"description,omitempty"`
 	Models      []string         `json:"models,omitempty"`
-	Effort      string           `json:"effort,omitempty"`
+	Thinking    *ThinkingSetting `json:"thinking,omitempty"`
 	Context     ContextBreakdown `json:"context"`
+}
+
+type ThinkingValue struct {
+	Value       string `json:"value"`
+	Description string `json:"description,omitempty"`
+}
+
+type ThinkingCapability struct {
+	Type    string          `json:"type"`
+	Values  []ThinkingValue `json:"values,omitempty"`
+	Default string          `json:"default,omitempty"`
+	Min     int             `json:"min,omitempty"`
+	Max     int             `json:"max,omitempty"`
+}
+
+type ThinkingSetting struct {
+	Type    string `json:"type"`
+	Effort  string `json:"effort,omitempty"`
+	Budget  int    `json:"budget,omitempty"`
+	Enabled bool   `json:"enabled,omitempty"`
 }
 
 // Model describes a resolved model and its capabilities from a workspace provider.
 type Model struct {
-	ID             string   `json:"id"`
-	Provider       string   `json:"provider,omitempty"`
-	Name           string   `json:"name"`
-	Label          string   `json:"label,omitempty"`
-	DefaultEffort  string   `json:"default_effort,omitempty"`
-	AllowedEfforts []string `json:"allowed_efforts,omitempty"`
-	ContextLimit   int      `json:"context_limit,omitempty"`
-	OutputLimit    int      `json:"output_limit,omitempty"`
+	ID           string               `json:"id"`
+	Provider     string               `json:"provider,omitempty"`
+	Name         string               `json:"name"`
+	Label        string               `json:"label,omitempty"`
+	Thinking     []ThinkingCapability `json:"thinking,omitempty"`
+	ContextLimit int                  `json:"context_limit,omitempty"`
+	OutputLimit  int                  `json:"output_limit,omitempty"`
 }
 
 // HealthResponse reports the daemon's process identity, startup timestamp,
@@ -120,10 +139,10 @@ const (
 
 // SessionConfig holds configurable runtime settings for a [Session].
 type SessionConfig struct {
-	Agent  string         `json:"agent,omitempty"`
-	Model  string         `json:"model,omitempty"`
-	Effort string         `json:"effort,omitempty"`
-	Mode   PermissionMode `json:"mode,omitempty"`
+	Agent    string           `json:"agent,omitempty"`
+	Model    string           `json:"model,omitempty"`
+	Thinking *ThinkingSetting `json:"thinking,omitempty"`
+	Mode     PermissionMode   `json:"mode,omitempty"`
 }
 
 // TaskStatus describes the operational state of a background task.

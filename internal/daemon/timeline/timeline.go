@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/masterkeysrd/loom/message"
+	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/core/sqlite"
 )
 
@@ -74,6 +75,10 @@ func (s *sqliteTimeline) Append(ctx context.Context, entry *Entry) error {
 		}
 	case KindEffort:
 		if entry.Effort == nil || strings.TrimSpace(entry.Effort.To) == "" {
+			return ErrInvalidEntry
+		}
+	case KindThinking:
+		if entry.Thinking == nil {
 			return ErrInvalidEntry
 		}
 	case KindAgent:
@@ -149,6 +154,11 @@ func (s *sqliteTimeline) Append(ctx context.Context, entry *Entry) error {
 		payload, err = json.Marshal(entry.Effort)
 		if err != nil {
 			return fmt.Errorf("timeline: marshal effort %q: %w", entry.ID, err)
+		}
+	case KindThinking:
+		payload, err = json.Marshal(entry.Thinking)
+		if err != nil {
+			return fmt.Errorf("timeline: marshal thinking %q: %w", entry.ID, err)
 		}
 	case KindAgent:
 		payload, err = json.Marshal(entry.Agent)
@@ -367,6 +377,12 @@ func scanEntry(r rowScanner) (*Entry, error) {
 			return nil, fmt.Errorf("timeline: unmarshal effort change for %q: %w", id, err)
 		}
 		entry.Effort = &e
+	case KindThinking:
+		var change api.ThinkingChange
+		if err := json.Unmarshal(payload, &change); err != nil {
+			return nil, fmt.Errorf("timeline: unmarshal thinking change for %q: %w", id, err)
+		}
+		entry.Thinking = &change
 	case KindAgent:
 		var a AgentChange
 		if err := json.Unmarshal(payload, &a); err != nil {

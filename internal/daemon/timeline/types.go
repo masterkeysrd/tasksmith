@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/masterkeysrd/loom/message"
+	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tools"
 )
 
@@ -28,6 +29,7 @@ const (
 	KindCommand     Kind = "command"
 	KindModel       Kind = "model"
 	KindEffort      Kind = "effort"
+	KindThinking    Kind = "thinking"
 	KindAgent       Kind = "agent"
 	KindMode        Kind = "mode"
 	KindPermission  Kind = "permission"
@@ -105,16 +107,17 @@ type Entry struct {
 	Kind      Kind      `json:"kind"`
 	CreatedAt time.Time `json:"created_at"`
 
-	Message     message.Message    `json:"message,omitempty"`
-	Command     *CommandRecord     `json:"command,omitempty"`
-	Model       *ModelChange       `json:"model,omitempty"`
-	Effort      *EffortChange      `json:"effort,omitempty"`
-	Agent       *AgentChange       `json:"agent,omitempty"`
-	Mode        *ModeChange        `json:"mode,omitempty"`
-	Permission  *PermissionRecord  `json:"permission,omitempty"`
-	Question    *QuestionRecord    `json:"question,omitempty"`
-	Compacted   *CompactedRecord   `json:"compacted,omitempty"`
-	CacheBroken *CacheBrokenRecord `json:"cache_broken,omitempty"`
+	Message     message.Message     `json:"message,omitempty"`
+	Command     *CommandRecord      `json:"command,omitempty"`
+	Model       *ModelChange        `json:"model,omitempty"`
+	Effort      *EffortChange       `json:"effort,omitempty"`
+	Thinking    *api.ThinkingChange `json:"thinking,omitempty"`
+	Agent       *AgentChange        `json:"agent,omitempty"`
+	Mode        *ModeChange         `json:"mode,omitempty"`
+	Permission  *PermissionRecord   `json:"permission,omitempty"`
+	Question    *QuestionRecord     `json:"question,omitempty"`
+	Compacted   *CompactedRecord    `json:"compacted,omitempty"`
+	CacheBroken *CacheBrokenRecord  `json:"cache_broken,omitempty"`
 }
 
 // Clone returns a deep copy of the timeline entry.
@@ -134,6 +137,18 @@ func (e Entry) Clone() Entry {
 	if e.Effort != nil {
 		eff := *e.Effort
 		cp.Effort = &eff
+	}
+	if e.Thinking != nil {
+		change := *e.Thinking
+		if change.From != nil {
+			value := *change.From
+			change.From = &value
+		}
+		if change.To != nil {
+			value := *change.To
+			change.To = &value
+		}
+		cp.Thinking = &change
 	}
 	if e.Agent != nil {
 		ag := *e.Agent

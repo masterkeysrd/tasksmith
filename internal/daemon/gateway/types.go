@@ -53,12 +53,13 @@ type AuthConfig struct {
 
 // ModelCapabilities specifies the workload capabilities supported by a model.
 type ModelCapabilities struct {
-	Completion *bool `json:"completion,omitempty"`
-	Decision   *bool `json:"decision,omitempty"`
-	Embedding  *bool `json:"embedding,omitempty"`
-	Attachment *bool `json:"attachment,omitempty"`
-	Tools      *bool `json:"tools,omitempty"`
-	Dimensions []int `json:"dimensions,omitempty"`
+	Completion *bool                     `json:"completion,omitempty"`
+	Decision   *bool                     `json:"decision,omitempty"`
+	Embedding  *bool                     `json:"embedding,omitempty"`
+	Attachment *bool                     `json:"attachment,omitempty"`
+	Tools      *bool                     `json:"tools,omitempty"`
+	Dimensions []int                     `json:"dimensions,omitempty"`
+	Thinking   []profile.ReasoningOption `json:"thinking,omitempty"`
 }
 
 // SupportsCompletion reports whether the model supports text/chat completion.

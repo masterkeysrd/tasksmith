@@ -64,7 +64,11 @@ var Header = trail.FC("Header", func(props store.HeaderData) trail.Node {
 
 	version := NormalizeVersion(props.Version)
 	model := cmp.Or(strings.TrimSpace(props.Model), "default")
-	thinking := cmp.Or(strings.TrimSpace(props.Thinking), "auto")
+	thinking := cmp.Or(strings.TrimSpace(props.Thinking), store.ThinkingProviderDefault)
+	modelThinking := fmt.Sprintf("%s with %s effort", model, thinking)
+	if thinking == store.ThinkingProviderDefault || strings.HasPrefix(thinking, "budget ") || strings.HasPrefix(thinking, "thinking ") {
+		modelThinking = fmt.Sprintf("%s · %s", model, thinking)
+	}
 	workspace := ShortenHomePath(props.Workspace)
 
 	bannerContent := []trail.Node{
@@ -95,7 +99,7 @@ var Header = trail.FC("Header", func(props store.HeaderData) trail.Node {
 			},
 				trail.Span(trail.SpanProps{
 					Style: metaStyle,
-				}, trail.Text(fmt.Sprintf("%s with %s effort", model, thinking))),
+				}, trail.Text(modelThinking)),
 			),
 			// Line 3: <shortened workspace path> (tertiary)
 			trail.Box(trail.BoxProps{

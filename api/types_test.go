@@ -108,7 +108,7 @@ func TestWireTypesJSONRoundTrip(t *testing.T) {
 		DisplayName: "Dev Agent",
 		Description: "General coding agent",
 		Models:      []string{"ollama/qwen3.8"},
-		Effort:      "high",
+		Thinking:    &ThinkingSetting{Type: "effort", Effort: "high"},
 	}
 	agRaw, err := json.Marshal(ag)
 	if err != nil {
@@ -118,17 +118,16 @@ func TestWireTypesJSONRoundTrip(t *testing.T) {
 	if err := json.Unmarshal(agRaw, &agDecoded); err != nil {
 		t.Fatalf("Unmarshal Agent: %v", err)
 	}
-	if agDecoded.Name != ag.Name || agDecoded.Effort != "high" || len(agDecoded.Models) != 1 {
+	if agDecoded.Name != ag.Name || agDecoded.Thinking == nil || agDecoded.Thinking.Effort != "high" || len(agDecoded.Models) != 1 {
 		t.Fatalf("Agent roundtrip mismatch: got %+v, want %+v", agDecoded, ag)
 	}
 
 	mdl := Model{
-		ID:             "ollama/qwen3.8",
-		Provider:       "ollama",
-		Name:           "qwen3.8",
-		Label:          "Qwen 3.8",
-		DefaultEffort:  "medium",
-		AllowedEfforts: []string{"low", "medium", "high"},
+		ID:       "ollama/qwen3.8",
+		Provider: "ollama",
+		Name:     "qwen3.8",
+		Label:    "Qwen 3.8",
+		Thinking: []ThinkingCapability{{Type: "effort", Default: "medium", Values: []ThinkingValue{{Value: "low", Description: "Less reasoning; potentially faster."}, {Value: "medium"}, {Value: "custom"}}}},
 	}
 	mdlRaw, err := json.Marshal(mdl)
 	if err != nil {
@@ -138,7 +137,7 @@ func TestWireTypesJSONRoundTrip(t *testing.T) {
 	if err := json.Unmarshal(mdlRaw, &mdlDecoded); err != nil {
 		t.Fatalf("Unmarshal Model: %v", err)
 	}
-	if mdlDecoded.ID != mdl.ID || mdlDecoded.Label != "Qwen 3.8" || len(mdlDecoded.AllowedEfforts) != 3 {
+	if !reflect.DeepEqual(mdlDecoded, mdl) {
 		t.Fatalf("Model roundtrip mismatch: got %+v, want %+v", mdlDecoded, mdl)
 	}
 

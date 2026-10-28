@@ -136,12 +136,17 @@ func completeEffort(ctx context.Context, _ autocomplete.Request) ([]autocomplete
 		return nil, err
 	}
 
-	efforts := []string{"auto", "low", "medium", "high", "max"}
-	candidates := make([]autocomplete.Candidate, len(efforts))
-	for i, e := range efforts {
-		candidates[i] = autocomplete.Candidate{
-			Value: e,
-			Label: e,
+	model, err := store.CurrentThinkingModel(ctx)
+	if err != nil {
+		return nil, nil
+	}
+	var candidates []autocomplete.Candidate
+	for _, capability := range model.Thinking {
+		if capability.Type == "effort" {
+			for _, value := range capability.Values {
+				candidates = append(candidates, autocomplete.Candidate{Value: value.Value, Label: value.Value, Description: value.Description})
+			}
+			candidates = append(candidates, autocomplete.Candidate{Value: "default", Label: "default"})
 		}
 	}
 	return candidates, nil
