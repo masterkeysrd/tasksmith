@@ -12,12 +12,12 @@ import (
 	"text/template"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/masterkeysrd/loom/graph"
 	"github.com/masterkeysrd/loom/llm"
 	"github.com/masterkeysrd/loom/message"
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
+	"github.com/masterkeysrd/tasksmith/internal/core/uuid"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tools"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/workspace"
 )
@@ -433,9 +433,9 @@ func (n *CompactionNode) Execute(ctx context.Context, state State) (graph.Comman
 		focus = state.PendingCompaction.Focus
 	}
 
-	compactID, _ := uuid.NewUUID()
+	compactID := uuid.NewString()
 	emit(ctx, CompactionStarted{
-		ID:      compactID.String(),
+		ID:      compactID,
 		Trigger: trigger,
 		Focus:   focus,
 	})
@@ -482,7 +482,7 @@ func (n *CompactionNode) Execute(ctx context.Context, state State) (graph.Comman
 	userRequests := extractUserRequests(history)
 	hasTrailing := len(trailing) > 0
 	summaryMsg := buildContextSummaryMessage(userRequests, state.Todos, summaryText, trigger, focus, hasTrailing)
-	summaryMsg.SetID(compactID.String())
+	summaryMsg.SetID(compactID)
 
 	return graph.Update[State](func(s State) State {
 		s.Messages = slices.Clone(trailing)
@@ -493,7 +493,7 @@ func (n *CompactionNode) Execute(ctx context.Context, state State) (graph.Comman
 		durationMs := time.Since(startTime).Milliseconds()
 
 		emit(ctx, CompactionCompleted{
-			ID:           compactID.String(),
+			ID:           compactID,
 			Trigger:      trigger,
 			Focus:        focus,
 			Summary:      summaryText,

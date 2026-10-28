@@ -3,7 +3,7 @@ package uuid
 
 import "github.com/google/uuid"
 
-func New() string {
+func NewString() string {
 	return uuid.Must(uuid.NewV7()).String()
 }
 

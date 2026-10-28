@@ -240,7 +240,7 @@ func (h *harness) prepareMessage(msg message.Message, state State) (graph.Update
 	_, _, unfulfilled, _ := state.ActiveToolCalls()
 	if len(unfulfilled) == 0 {
 		if strings.TrimSpace(in.GetID()) == "" {
-			in.SetID(uuid.New())
+			in.SetID(uuid.NewString())
 		}
 		event = &Event{Type: EventMessage, Message: message.CloneMessage(in)}
 	}

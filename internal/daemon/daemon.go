@@ -298,7 +298,7 @@ func (d *Daemon) Shutdown(_ context.Context) error {
 func (d *Daemon) AddSubscriber(_ context.Context, subscriberID, since string, topics ...string) (*broker.Subscriber, []string, error) {
 	subID := strings.TrimSpace(subscriberID)
 	if subID == "" {
-		subID = uuid.New()
+		subID = uuid.NewString()
 	}
 
 	var cleanTopics []string

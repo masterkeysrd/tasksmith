@@ -442,7 +442,7 @@ func (s *Session) visibleQueueLocked() []QueueItem {
 
 func (s *Session) enqueueItem(item QueueItem) {
 	if item.ID == "" && !uuid.Validate(item.ID) {
-		item.ID = uuid.New()
+		item.ID = uuid.NewString()
 	}
 
 	if item.CreatedAt.IsZero() {
@@ -1184,7 +1184,7 @@ func (s *Session) send(ctx context.Context, stream iter.Seq2[harness.Event, erro
 				partialMsg, buildErr := agg.Build()
 				if buildErr == nil && partialMsg != nil && len(partialMsg.Content) > 0 {
 					if partialMsg.GetID() == "" || !uuid.Validate(partialMsg.GetID()) {
-						partialMsg.SetID(uuid.New())
+						partialMsg.SetID(uuid.NewString())
 					}
 					entry := timeline.NewMessageEntry(s.ID, partialMsg)
 					if appErr := s.Timeline.Append(s.bgCtx, entry); appErr == nil {
