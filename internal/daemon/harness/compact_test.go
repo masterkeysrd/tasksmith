@@ -347,7 +347,7 @@ func TestBuildContextSummaryMessage(t *testing.T) {
 	summary := "Refactored the core logic and verified test suite."
 
 	// Auto trigger should include continuation directive
-	msgAuto := buildContextSummaryMessage(userRequests, todos, summary, "auto", "")
+	msgAuto := buildContextSummaryMessage(userRequests, todos, summary, "auto", "", false)
 	textAuto := msgAuto.GetContent().Text()
 
 	if !strings.Contains(textAuto, "<context_summary>") || !strings.Contains(textAuto, "</context_summary>") {
@@ -373,7 +373,7 @@ func TestBuildContextSummaryMessage(t *testing.T) {
 	}
 
 	// Manual trigger with focus
-	msgManual := buildContextSummaryMessage(userRequests, todos, summary, "manual", "memory optimization")
+	msgManual := buildContextSummaryMessage(userRequests, todos, summary, "manual", "memory optimization", false)
 	textManual := msgManual.GetContent().Text()
 	if strings.Contains(textManual, "Continue working on the latest user request above") {
 		t.Errorf("msgManual should not have auto continuation directive: %s", textManual)
@@ -453,7 +453,6 @@ func TestCompactionNodeExecute(t *testing.T) {
 		t.Errorf("summarization prompt missing focus: %s", lastTurnMsg.GetContent().Text())
 	}
 
-	// Case 2: Model invocation error -> state remains untouched
 	provErr := &fakeProvider{
 		handler: func(_ context.Context, _ *llm.Request) ([]string, string, error) {
 			return nil, "", errors.New("provider failure")
@@ -470,14 +469,19 @@ func TestCompactionNodeExecute(t *testing.T) {
 	if err != nil {
 		t.Fatalf("nodeErr.Execute should return nil error, got %v", err)
 	}
-	if cmdErr != nil {
-		t.Fatal("expected nil command on model invocation failure")
+	if cmdErr == nil {
+		t.Fatal("expected a recovery update on model invocation failure")
+	}
+	recovered := cmdErr.Apply(initState)
+	if recovered.PendingCompaction != nil || len(recovered.Messages) != len(initState.Messages) {
+		t.Fatalf("unexpected recovery state: %+v", recovered)
 	}
 }
 
 func TestStateMethodsAndMutators(t *testing.T) {
 	static := StaticContext{SystemPrompt: 100}
 	limits := workspace.ModelLimits{Context: 128000, Output: 16384}
+	opts := MessageUpdateOptions{Static: static, Limits: limits}
 
 	s := State{}
 	if s.HasLeadingCompact() {
@@ -494,7 +498,7 @@ func TestStateMethodsAndMutators(t *testing.T) {
 
 	u1 := message.NewUserText("User prompt 1")
 	u1.SetID("user-1")
-	s = s.AppendMessage(u1, static, limits)
+	s = s.AppendMessage(u1, opts)
 	if s.LastUserMessageID() != "user-1" {
 		t.Errorf("LastUserMessageID = %q, want user-1", s.LastUserMessageID())
 	}
@@ -504,27 +508,29 @@ func TestStateMethodsAndMutators(t *testing.T) {
 
 	asst1 := message.NewAssistantText("Asst reply")
 	asst1.SetID("asst-1")
-	s = s.AppendMessage(asst1, static, limits)
+	s = s.AppendMessage(asst1, opts)
 	if s.ShouldWakeAgent() {
 		t.Errorf("ShouldWakeAgent with assistant message should be false")
 	}
 
 	cmdMsg := message.NewUserTextMeta("cmd output", map[string]any{MetaSystemKind: SystemKindCommand})
-	s = s.AppendMessage(cmdMsg, static, limits)
+	s = s.AppendMessage(cmdMsg, opts)
 	if s.ShouldWakeAgent() {
 		t.Errorf("ShouldWakeAgent with command message should be false")
 	}
 
 	u2 := message.NewUserText("User prompt 2")
 	u2.SetID("user-2")
-	s = s.AppendMessages(message.MessageList{u2}, static, limits)
+	s = s.AppendMessages(message.MessageList{u2}, opts)
 	if s.LastUserMessageID() != "user-2" {
 		t.Errorf("LastUserMessageID = %q, want user-2", s.LastUserMessageID())
 	}
 
 	// ApplyCompaction
-	summary := buildContextSummaryMessage([]string{"User prompt 1", "User prompt 2"}, nil, "Summary text", "auto", "")
-	s = s.ApplyCompaction(summary, static, limits)
+	summary := buildContextSummaryMessage([]string{"User prompt 1", "User prompt 2"}, nil, "Summary text", "auto", "", false)
+	s.Messages = nil
+	s = s.PrependMessage(summary, MessageUpdateOptions{SkipContextRecalculation: true})
+	s = s.ApplyCompaction(static, limits)
 	if len(s.Messages) != 1 {
 		t.Fatalf("expected 1 message after compaction, got %d", len(s.Messages))
 	}

@@ -148,13 +148,13 @@ func buildGraph(cfg GraphConfig) (*graph.Graph[State], error) {
 		}).
 		// Inbox routing:
 		AddConditionalEdge("inbox", "compact", func(s State) bool {
-			return s.HasLeadingCompact() || s.ShouldAutoCompact()
+			return s.HasLeadingCompact() || (s.ShouldWakeAgent() && s.ShouldAutoCompact())
 		}).
 		AddConditionalEdge("inbox", "agent", func(s State) bool {
 			return !s.HasLeadingCompact() && !s.ShouldAutoCompact() && s.ShouldWakeAgent()
 		}).
 		AddConditionalEdge("inbox", graph.END, func(s State) bool {
-			return !s.HasLeadingCompact() && !s.ShouldAutoCompact() && !s.ShouldWakeAgent()
+			return !s.HasLeadingCompact() && !s.ShouldWakeAgent()
 		}).
 		// Agent routing:
 		AddConditionalEdge("agent", "tools", State.HasPendingToolCalls).
@@ -170,15 +170,17 @@ func buildGraph(cfg GraphConfig) (*graph.Graph[State], error) {
 			return !s.ShouldAutoCompact()
 		}).
 		// Compact routing:
-		AddConditionalEdge("compact", "agent", State.IsAutoCompacted).
+		AddConditionalEdge("compact", "agent", func(s State) bool {
+			return s.IsAutoCompacted() || s.ShouldWakeAgent()
+		}).
 		AddConditionalEdge("compact", "command", func(s State) bool {
-			return !s.IsAutoCompacted() && hasLeadingCommand(s)
+			return !s.IsAutoCompacted() && !s.ShouldWakeAgent() && hasLeadingCommand(s)
 		}).
 		AddConditionalEdge("compact", "inbox", func(s State) bool {
-			return !s.IsAutoCompacted() && !hasLeadingCommand(s) && queueHasItems(s)
+			return !s.IsAutoCompacted() && !s.ShouldWakeAgent() && !hasLeadingCommand(s) && queueHasItems(s)
 		}).
 		AddConditionalEdge("compact", graph.END, func(s State) bool {
-			return !s.IsAutoCompacted() && !hasLeadingCommand(s) && !queueHasItems(s)
+			return !s.IsAutoCompacted() && !s.ShouldWakeAgent() && !hasLeadingCommand(s) && !queueHasItems(s)
 		}).
 		Build()
 	if err != nil {
@@ -295,7 +297,7 @@ func (n *CommandNode) Execute(ctx context.Context, state State) (graph.Command[S
 	msg.SetID(cmdID)
 
 	return graph.Update[State](func(s State) State {
-		s = s.AppendMessage(msg, n.static, n.limits)
+		s = s.AppendMessage(msg, MessageUpdateOptions{Static: n.static, Limits: n.limits})
 		emit(ctx, ContextUpdatedEvent{Context: s.Context})
 		return s
 	}), nil
@@ -368,7 +370,7 @@ func (n *AgentNode) Execute(ctx context.Context, state State) (graph.Command[Sta
 	}
 
 	return graph.Update[State](func(s State) State {
-		s = s.AppendMessage(resp, n.static, n.limits)
+		s = s.AppendMessage(resp, MessageUpdateOptions{Static: n.static, Limits: n.limits})
 		emit(ctx, ContextUpdatedEvent{Context: s.Context})
 		return s
 	}), nil
@@ -417,7 +419,7 @@ func (n *InboxNode) Execute(ctx context.Context, state State) (graph.Command[Sta
 	}
 
 	return graph.Update[State](func(s State) State {
-		s = s.AppendMessages(drained, n.static, n.limits)
+		s = s.AppendMessages(drained, MessageUpdateOptions{Static: n.static, Limits: n.limits})
 		emit(ctx, ContextUpdatedEvent{Context: s.Context})
 		return s
 	}), nil
@@ -700,7 +702,7 @@ func clearPermissionsUpdate() graph.Update[State] {
 
 func (n *ToolsNode) appendToolMessagesUpdate(ctx context.Context, toolMsgs message.MessageList, todos []tools.TodoItem, hasTodos bool) graph.Update[State] {
 	return func(s State) State {
-		s = s.AppendMessages(toolMsgs, n.static, n.limits)
+		s = s.AppendMessages(toolMsgs, MessageUpdateOptions{Static: n.static, Limits: n.limits})
 		s.PendingPermissions = nil
 		s.PermissionDecisions = nil
 		s.PendingQuestions = nil

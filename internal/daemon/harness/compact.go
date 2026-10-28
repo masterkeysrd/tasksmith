@@ -316,6 +316,33 @@ func extractUserRequests(messages message.MessageList) []string {
 	return userRequests
 }
 
+// splitEntryCompactionMessages splits messages into the history prefix up to the last
+// Assistant message and any trailing non-tool messages (such as a newly arrived user prompt)
+// when triggered by entry auto-compaction. For mid-turn or manual compaction, returns all
+// messages without splitting.
+func splitEntryCompactionMessages(msgs message.MessageList, trigger string) (history, trailing message.MessageList) {
+	if trigger != "auto" {
+		return msgs, nil
+	}
+	lastAsstIdx := -1
+	for i, m := range slices.Backward(msgs) {
+		if _, ok := m.(*message.Assistant); ok {
+			lastAsstIdx = i
+			break
+		}
+	}
+	if lastAsstIdx <= 0 || lastAsstIdx == len(msgs)-1 {
+		return msgs, nil
+	}
+	for _, m := range msgs[lastAsstIdx+1:] {
+		if _, isTool := m.(*message.Tool); isTool {
+			// Mid-turn after tools: tool results cannot be separated from their Assistant tool_call.
+			return msgs, nil
+		}
+	}
+	return msgs[:lastAsstIdx+1], msgs[lastAsstIdx+1:]
+}
+
 // formatTodos formats the session todo checklist for compaction summary injection.
 func formatTodos(todos []tools.TodoItem) string {
 	if len(todos) == 0 {
@@ -332,7 +359,7 @@ func formatTodos(todos []tools.TodoItem) string {
 }
 
 // buildContextSummaryMessage creates the synthetic <context_summary> message replacing state.Messages.
-func buildContextSummaryMessage(userRequests []string, todos []tools.TodoItem, summary string, trigger string, focus string) message.Message {
+func buildContextSummaryMessage(userRequests []string, todos []tools.TodoItem, summary string, trigger string, focus string, hasTrailing bool) message.Message {
 	var sb strings.Builder
 	sb.WriteString("<context_summary>\n")
 	sb.WriteString("The conversation history prior to this point was compacted to free context window space.\n\n")
@@ -355,7 +382,7 @@ func buildContextSummaryMessage(userRequests []string, todos []tools.TodoItem, s
 	sb.WriteString(strings.TrimSpace(summary))
 	sb.WriteString("\n</context_summary>")
 
-	if trigger == "auto" {
+	if trigger == "auto" && !hasTrailing {
 		sb.WriteString("\n\nContinue working on the latest user request above from the current state without asking for confirmation or repeating completed steps.")
 	}
 
@@ -413,15 +440,17 @@ func (n *CompactionNode) Execute(ctx context.Context, state State) (graph.Comman
 		Focus:   focus,
 	})
 
+	// For entry auto-compaction, split messages into history prefix and trailing user message.
 	startTime := time.Now()
 	beforeTokens := state.Context.UsedTokens
+	history, trailing := splitEntryCompactionMessages(state.Messages, trigger)
 
-	// Clone state.Messages into a temporary slice for the summarization prompt
-	messages := make([]message.Message, 0, len(state.Messages)+2)
+	// Clone history into a temporary slice for the summarization prompt.
+	messages := make([]message.Message, 0, len(history)+2)
 	if n.systemPrompt != "" {
 		messages = append(messages, message.NewSystemText(n.systemPrompt))
 	}
-	messages = append(messages, state.Messages...)
+	messages = append(messages, history...)
 
 	var buf strings.Builder
 	compactCtx := struct{ Focus string }{
@@ -429,7 +458,10 @@ func (n *CompactionNode) Execute(ctx context.Context, state State) (graph.Comman
 	}
 	if err := summarizeTemplate.Execute(&buf, compactCtx); err != nil {
 		n.logger.Warn("compaction prompt template execute failed", log.Err(err))
-		return nil, nil
+		return graph.Update[State](func(s State) State {
+			s.PendingCompaction = nil
+			return s
+		}), nil
 	}
 	messages = append(messages, message.NewUserText(buf.String()))
 
@@ -441,7 +473,10 @@ func (n *CompactionNode) Execute(ctx context.Context, state State) (graph.Comman
 	resp, err := model.Invoke(ctx, messages)
 	if err != nil {
 		n.logger.Warn("compaction model invocation failed", log.Err(err))
-		return nil, nil
+		return graph.Update[State](func(s State) State {
+			s.PendingCompaction = nil
+			return s
+		}), nil
 	}
 
 	summaryText := ""
@@ -450,15 +485,21 @@ func (n *CompactionNode) Execute(ctx context.Context, state State) (graph.Comman
 	}
 	if summaryText == "" {
 		n.logger.Warn("compaction returned empty summary; skipping replacement")
-		return graph.Update[State](func(s State) State { return s }), nil
+		return graph.Update[State](func(s State) State {
+			s.PendingCompaction = nil
+			return s
+		}), nil
 	}
 
-	userRequests := extractUserRequests(state.Messages)
-	summaryMsg := buildContextSummaryMessage(userRequests, state.Todos, summaryText, trigger, focus)
+	userRequests := extractUserRequests(history)
+	hasTrailing := len(trailing) > 0
+	summaryMsg := buildContextSummaryMessage(userRequests, state.Todos, summaryText, trigger, focus, hasTrailing)
 	summaryMsg.SetID(compactID.String())
 
 	return graph.Update[State](func(s State) State {
-		s = s.ApplyCompaction(summaryMsg, n.static, n.limits)
+		s.Messages = slices.Clone(trailing)
+		s = s.PrependMessage(summaryMsg, MessageUpdateOptions{SkipContextRecalculation: true})
+		s = s.ApplyCompaction(n.static, n.limits)
 
 		afterTokens := s.Context.UsedTokens
 		durationMs := time.Since(startTime).Milliseconds()

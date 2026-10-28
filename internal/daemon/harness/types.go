@@ -367,10 +367,13 @@ func (s State) LastUserMessageID() string {
 	return ""
 }
 
-// ApplyCompaction atomically replaces messages with the compaction summary message,
-// clears pending compaction, updates compaction statistics, and recomputes the context state.
-func (s State) ApplyCompaction(summaryMsg message.Message, static StaticContext, limits workspace.ModelLimits) State {
-	s.Messages = message.MessageList{summaryMsg}
+type MessageUpdateOptions struct {
+	Static                   StaticContext
+	Limits                   workspace.ModelLimits
+	SkipContextRecalculation bool
+}
+
+func (s State) ApplyCompaction(static StaticContext, limits workspace.ModelLimits) State {
 	s.PendingCompaction = nil
 	s.Context.CachedTokens = 0
 	s.Context.Compactions++
@@ -379,17 +382,23 @@ func (s State) ApplyCompaction(summaryMsg message.Message, static StaticContext,
 	return s
 }
 
-// AppendMessage appends a message and recomputes the context state.
-func (s State) AppendMessage(msg message.Message, static StaticContext, limits workspace.ModelLimits) State {
-	s.Messages = append(s.Messages, msg)
-	s.Context = computeContextState(static, s, limits)
+func (s State) PrependMessage(msg message.Message, opts MessageUpdateOptions) State {
+	s.Messages = append(message.MessageList{msg}, s.Messages...)
+	if !opts.SkipContextRecalculation {
+		s.Context = computeContextState(opts.Static, s, opts.Limits)
+	}
 	return s
 }
 
-// AppendMessages appends multiple messages and recomputes the context state.
-func (s State) AppendMessages(msgs message.MessageList, static StaticContext, limits workspace.ModelLimits) State {
+func (s State) AppendMessage(msg message.Message, opts MessageUpdateOptions) State {
+	return s.AppendMessages(message.MessageList{msg}, opts)
+}
+
+func (s State) AppendMessages(msgs message.MessageList, opts MessageUpdateOptions) State {
 	s.Messages = append(s.Messages, msgs...)
-	s.Context = computeContextState(static, s, limits)
+	if !opts.SkipContextRecalculation {
+		s.Context = computeContextState(opts.Static, s, opts.Limits)
+	}
 	return s
 }
 
