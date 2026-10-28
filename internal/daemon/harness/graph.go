@@ -78,15 +78,8 @@ type CommandNodeConfig struct {
 }
 
 func buildGraph(cfg GraphConfig) (*graph.Graph[State], error) {
-	boundModel := cfg.Model
-	if cfg.Container != nil {
-		if defs := cfg.Container.Definitions(); len(defs) > 0 {
-			boundModel = cfg.Model.BindToolDefs(defs...)
-		}
-	}
-
 	compactNode := NewCompactionNode(CompactionNodeConfig{
-		Model:        boundModel,
+		Model:        cfg.Model,
 		Container:    cfg.Container,
 		SystemPrompt: cfg.SystemPrompt,
 		Limits:       cfg.Limits,
@@ -94,7 +87,7 @@ func buildGraph(cfg GraphConfig) (*graph.Graph[State], error) {
 		Logger:       cfg.Logger,
 	})
 	agentNode := NewAgentNode(AgentNodeConfig{
-		Model:        boundModel,
+		Model:        cfg.Model,
 		Container:    cfg.Container,
 		SystemPrompt: cfg.SystemPrompt,
 		Limits:       cfg.Limits,
