@@ -17,10 +17,11 @@ import (
 )
 
 // SessionState holds the active session and its configuration, permission mode,
-// display model label, and background tasks.
+// display model label, background tasks, and context window state.
 type SessionState struct {
 	Session    *api.Session
 	Config     api.SessionConfig
+	Context    api.ContextState
 	ModelLabel string
 	Thinking   string
 	Tasks      *[]api.Task
@@ -340,6 +341,41 @@ func SendCommand(cmd string) {
 	}()
 }
 
+// SendCompact triggers manual context compaction for the active session.
+func SendCompact(focus string) {
+	sessMu.Lock()
+	sess := GetSession().Session
+	c := activeClient
+	ctx := activeCtx
+	sessMu.Unlock()
+
+	if sess == nil || sess.ID == "" {
+		AppendNotice("Nothing to compact")
+		return
+	}
+
+	FreezeTranscript()
+	msgID := uuid.Must(uuid.NewV7()).String()
+
+	if c == nil {
+		AppendError("Error", "repl: no active client")
+		return
+	}
+
+	go func() {
+		if ctx == nil || ctx.Err() != nil {
+			ctx = context.Background()
+		}
+		err := c.Send(ctx, sess.ID, api.SendRequest{
+			ID:      msgID,
+			Compact: &api.CompactRequest{Focus: strings.TrimSpace(focus)},
+		})
+		if err != nil {
+			AppendError("Error", err.Error())
+		}
+	}()
+}
+
 // Cancel aborts the active turn if streaming.
 func Cancel() {
 	if !GetStream().Streaming {
@@ -440,6 +476,18 @@ func GetSession() SessionState {
 	return session.Get()
 }
 
+// UseContext subscribes a component to the active session's ContextState.
+func UseContext() api.ContextState {
+	return UseSession(func(s SessionState) api.ContextState {
+		return s.Context
+	})
+}
+
+// GetContext returns the current ContextState snapshot.
+func GetContext() api.ContextState {
+	return GetSession().Context
+}
+
 // UseMode returns the active permission mode, defaulting to api.ModeDefault if unset.
 func UseMode() api.PermissionMode {
 	return UseSession(func(s SessionState) api.PermissionMode {
@@ -460,6 +508,9 @@ func SetSession(sess *api.Session) {
 	session.Set(func(s SessionState) SessionState {
 		s.Session = sess
 		if sess != nil {
+			if sess.Context.MaxTokens > 0 {
+				s.Context = sess.Context
+			}
 			s.Config = sess.Config
 			if s.Config.Mode == "" {
 				s.Config.Mode = api.ModeDefault
@@ -1044,5 +1095,59 @@ func ResolveModelInfo(ctx context.Context, c *client.Client, cfgAgent, cfgModel 
 
 	modelLabel = cmp.Or(mdlLabel, modelID, "default")
 	thinking = cmp.Or(explicitEffort, agEffort, mdlEffort, "auto")
+
+	var initContext api.ContextState
+	if sess != nil && sess.Context.MaxTokens > 0 {
+		initContext = sess.Context
+	} else if ag != nil && mdl != nil {
+		ctxLimit := mdl.ContextLimit
+		outLimit := mdl.OutputLimit
+		if ctxLimit <= 0 {
+			ctxLimit = 128000
+		}
+		if outLimit <= 0 {
+			outLimit = 16384
+		}
+		reserve, trigger := computeCompactionThresholds(ctxLimit, outLimit)
+		used := ag.Context.SystemPrompt + ag.Context.ContextFiles + ag.Context.SystemTools + ag.Context.CustomTools + ag.Context.MCPTools + ag.Context.Skills + ag.Context.Subagents
+		free := max(0, trigger-used)
+		initContext = api.ContextState{
+			UsedTokens:    used,
+			MaxTokens:     ctxLimit,
+			OutputLimit:   outLimit,
+			ReserveTokens: reserve,
+			TriggerTokens: trigger,
+			FreeTokens:    free,
+			Breakdown:     ag.Context,
+		}
+	}
+	if initContext.MaxTokens > 0 {
+		session.Set(func(s SessionState) SessionState {
+			s.Context = initContext
+			return s
+		})
+	}
+
 	return modelLabel, thinking
+}
+
+func computeCompactionThresholds(contextLimit, outputLimit int) (reserveTokens, triggerTokens int) {
+	if contextLimit <= 0 {
+		contextLimit = 128000
+	}
+	if outputLimit <= 0 {
+		outputLimit = 16384
+	}
+
+	outputReserve := min(outputLimit, 32000)
+	margin := int(float64(contextLimit) * 0.03)
+	if margin < 8000 {
+		margin = 8000
+	} else if margin > 32000 {
+		margin = 32000
+	}
+
+	reserveTokens = outputReserve + margin
+	triggerTokens = contextLimit - reserveTokens
+	return reserveTokens, triggerTokens
 }

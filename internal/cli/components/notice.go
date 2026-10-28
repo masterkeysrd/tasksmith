@@ -8,6 +8,7 @@ import (
 	"github.com/masterkeysrd/kite/style"
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/cli/store"
+	"github.com/masterkeysrd/tasksmith/internal/ui/format"
 	"github.com/masterkeysrd/tasksmith/internal/ui/theme"
 )
 
@@ -138,6 +139,20 @@ var TimelineEvent = trail.FC("TimelineEvent", func(entry api.TimelineEntry) trai
 		return nil
 	case api.TimelineKindInterrupted:
 		text = "Interrupted by user"
+	case api.TimelineKindCompacted:
+		if entry.Compacted != nil && entry.Compacted.BeforeTokens > 0 {
+			text = fmt.Sprintf("Context compacted (%s → %s)", format.FormatTokens(entry.Compacted.BeforeTokens), format.FormatTokens(entry.Compacted.AfterTokens))
+		} else {
+			text = "Context compacted"
+		}
+		return Notice(store.NoticeData{Text: text})
+	case api.TimelineKindCacheBroken:
+		if entry.CacheBroken != nil {
+			text = fmt.Sprintf("Prompt cache miss (%s → %s cached tokens)", format.FormatTokens(entry.CacheBroken.PrevCached), format.FormatTokens(entry.CacheBroken.CurrCached))
+		} else {
+			text = "Prompt cache miss"
+		}
+		return Notice(store.NoticeData{Text: text})
 	default:
 		text = "Timeline event: " + string(entry.Kind)
 	}

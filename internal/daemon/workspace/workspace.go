@@ -3,17 +3,20 @@ package workspace
 import (
 	"context"
 	"embed"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
 	"maps"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"sort"
 	"strings"
 	"sync"
 
+	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/core/env"
 	"github.com/masterkeysrd/tasksmith/internal/core/fsutils"
 	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
@@ -642,11 +645,14 @@ func (w *workspace) Agents() []Agent {
 	for _, r := range raw {
 		if ag, ok := r.(*warp.Agent); ok {
 			merged, resolved, ok := w.resolveWarpAgentLocked(ag.GetName())
+			var da Agent
 			if ok {
-				out = append(out, convertAgent(merged, resolved, w.registry))
+				da = convertAgent(merged, resolved, w.registry)
 			} else {
-				out = append(out, convertAgent(ag, nil, w.registry))
+				da = convertAgent(ag, nil, w.registry)
 			}
+			da.Context = w.agentContextLocked(da.Name)
+			out = append(out, da)
 		}
 	}
 	sort.Slice(out, func(i, j int) bool {
@@ -664,6 +670,7 @@ func (w *workspace) GetAgent(name string) (*Agent, bool) {
 		return nil, false
 	}
 	domainAgent := convertAgent(ag, resolved, w.registry)
+	domainAgent.Context = w.agentContextLocked(name)
 	return &domainAgent, true
 }
 
@@ -1224,4 +1231,231 @@ func buildPositionalArgsFromAnyMap(hints []string, inputs map[string]any) []stri
 		out = append(out, fmt.Sprint(val))
 	}
 	return out
+}
+
+var (
+	reProjectContext = regexp.MustCompile(`(?s)<project_context\b[^>]*>.*?</project_context>`)
+	reSkillsSection  = regexp.MustCompile(`(?s)<skills_and_specialized_knowledge\b[^>]*>.*?</skills_and_specialized_knowledge>`)
+	reSubagentsSec   = regexp.MustCompile(`(?s)<subagents_and_delegation\b[^>]*>.*?</subagents_and_delegation>`)
+)
+
+func estimateTokens(s string) int {
+	if len(s) == 0 {
+		return 0
+	}
+	return (len(s) + 3) / 4
+}
+
+func (w *workspace) AgentContext(name string) api.ContextBreakdown {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	return w.agentContextLocked(name)
+}
+
+func (w *workspace) agentContextLocked(name string) api.ContextBreakdown {
+	if name == "" {
+		name = w.defaultAgentNameLocked()
+	}
+
+	var wsPrompt string
+	if w.registry != nil {
+		if wsSpec := w.registry.WorkspaceSpec(); wsSpec != nil {
+			wsPrompt, _ = wsSpec.Render(&warp.WorkspaceRenderOptions{})
+		}
+	}
+	contextFiles := estimateTokens(wsPrompt)
+
+	ag, resolved, ok := w.resolveWarpAgentLocked(name)
+	if !ok {
+		return api.ContextBreakdown{ContextFiles: contextFiles}
+	}
+
+	globals := map[string]any{
+		"HasTool": func(toolName string) bool {
+			return true
+		},
+	}
+	agentPrompt, _ := ag.Render(&warp.AgentRenderOptions{
+		Workspace: w.registry.WorkspaceSpec(),
+		Project:   w.currentWarpProjectLocked(),
+		Resolved:  resolved,
+		Globals:   globals,
+	})
+
+	var skills, subagents int
+
+	// Extract <project_context> sections
+	projMatches := reProjectContext.FindAllString(agentPrompt, -1)
+	for _, m := range projMatches {
+		contextFiles += estimateTokens(m)
+	}
+	agentPrompt = reProjectContext.ReplaceAllString(agentPrompt, "")
+
+	// Extract <skills_and_specialized_knowledge> sections
+	skillMatches := reSkillsSection.FindAllString(agentPrompt, -1)
+	for _, m := range skillMatches {
+		skills += estimateTokens(m)
+	}
+	agentPrompt = reSkillsSection.ReplaceAllString(agentPrompt, "")
+
+	// Extract <subagents_and_delegation> sections
+	subagentMatches := reSubagentsSec.FindAllString(agentPrompt, -1)
+	for _, m := range subagentMatches {
+		subagents += estimateTokens(m)
+	}
+	agentPrompt = reSubagentsSec.ReplaceAllString(agentPrompt, "")
+
+	systemPrompt := estimateTokens(strings.TrimSpace(agentPrompt))
+
+	// Tool definition schemas
+	var systemTools, customTools, mcpTools int
+	toolsList := w.toolsLocked()
+	for _, t := range toolsList {
+		if resolved != nil && len(resolved.Tools) > 0 {
+			var found bool
+			for _, rt := range resolved.Tools {
+				if rt.Metadata.Name == t.Name {
+					found = true
+					break
+				}
+			}
+			if !found {
+				continue
+			}
+		}
+
+		toolTokens := estimateTokens(t.Name) + estimateTokens(t.Description) + estimateTokens(t.Instructions)
+		if len(t.InputSchema) > 0 {
+			if data, err := json.Marshal(t.InputSchema); err == nil {
+				toolTokens += estimateTokens(string(data))
+			}
+		}
+
+		ns := strings.ToLower(t.Namespace)
+		if ns == NamespaceSystem || ns == "system" || ns == "" {
+			systemTools += toolTokens
+		} else if ns == "mcp" || strings.HasPrefix(t.Name, "mcp__") {
+			mcpTools += toolTokens
+		} else {
+			customTools += toolTokens
+		}
+	}
+
+	return api.ContextBreakdown{
+		SystemPrompt: systemPrompt,
+		ContextFiles: contextFiles,
+		SystemTools:  systemTools,
+		CustomTools:  customTools,
+		MCPTools:     mcpTools,
+		Skills:       skills,
+		Subagents:    subagents,
+	}
+}
+
+func (w *workspace) defaultAgentNameLocked() string {
+	if w.agentOverride != "" {
+		return w.agentOverride
+	}
+	if w.registry != nil {
+		if ws := w.registry.WorkspaceSpec(); ws != nil && ws.Def != nil && ws.Def.Spec.DefaultAgent != "" {
+			return ws.Def.Spec.DefaultAgent
+		}
+	}
+	return AgentNameMain
+}
+
+func (w *workspace) toolsLocked() []Tool {
+	resolver := w.resolverLocked()
+	if resolver == nil {
+		return nil
+	}
+	raw := resolver.ListResources(warp.QueryOptions{
+		Kinds:     []warp.Kind{warp.KindTool},
+		Effective: true,
+	})
+	out := make([]Tool, 0, len(raw))
+	seen := make(map[string]bool, len(raw))
+	for _, r := range raw {
+		if t, ok := r.(*warp.Tool); ok {
+			dt := convertTool(t, w.registry)
+			out = append(out, dt)
+			seen[dt.Name] = true
+		}
+	}
+
+	toolkits := resolver.ListResources(warp.QueryOptions{
+		Kinds:     []warp.Kind{warp.KindToolkit},
+		Effective: true,
+	})
+	for _, r := range toolkits {
+		tk, ok := r.(*warp.Toolkit)
+		if !ok {
+			continue
+		}
+		dtk := convertToolkit(tk, w.registry)
+		for _, item := range dtk.Tools {
+			if item.Ref == "" && item.Name != "" && !seen[item.Name] {
+				seen[item.Name] = true
+				out = append(out, item.Tool)
+			}
+		}
+	}
+
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].Name < out[j].Name
+	})
+	return out
+}
+
+func (w *workspace) ModelLimits(rawID string) ModelLimits {
+	rawID = strings.TrimSpace(rawID)
+	targetID := rawID
+	if resolved := w.ResolveModels(RoleCompletion, rawID); len(resolved) > 0 && resolved[0] != "" {
+		targetID = resolved[0]
+	}
+
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+
+	providerName, modelName, hasSlash := strings.Cut(targetID, "/")
+	if !hasSlash {
+		modelName = targetID
+		providerName = ""
+	}
+
+	if providerName != "" {
+		if res, ok := w.resolveByKindLocked(warp.KindModelProvider, providerName); ok {
+			if mp, ok := res.(*warp.ModelProvider); ok {
+				p := convertProvider(mp, w.registry)
+				for _, m := range p.Models {
+					if m.ID == modelName || m.Name == modelName || p.Name+"/"+m.ID == targetID {
+						return m.Limits
+					}
+				}
+			}
+		}
+	} else {
+		resolver := w.resolverLocked()
+		if resolver != nil {
+			raw := resolver.ListResources(warp.QueryOptions{
+				Kinds:     []warp.Kind{warp.KindModelProvider},
+				Effective: true,
+			})
+			for _, r := range raw {
+				if mp, ok := r.(*warp.ModelProvider); ok {
+					p := convertProvider(mp, w.registry)
+					for _, m := range p.Models {
+						if m.ID == modelName || m.Name == modelName {
+							return m.Limits
+						}
+					}
+				}
+			}
+		}
+	}
+
+	return ModelLimits{
+		Context: 128000,
+		Output:  16384,
+	}
 }

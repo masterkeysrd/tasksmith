@@ -45,7 +45,7 @@ flowchart LR
 
 | Tier | Namespace | Location | Purpose |
 | :--- | :--- | :--- | :--- |
-| **1. System** | `system` | Embedded in TaskSmith binary | Built-in agents (`main`, `agent-creator`, `skill-creator`, `tool-creator`, `project-initializer`, `provider-manager`, `compaction-summarizer`, `title-generator`) and core tools (`view`, `write`, `edit`, `bash`, `grep`, `glob`, `web_fetch`). |
+| **1. System** | `system` | Embedded in TaskSmith binary | Built-in agents (`main`, `agent-creator`, `skill-creator`, `tool-creator`, `project-initializer`, `provider-manager`, `title-generator`) and core tools (`view`, `write`, `edit`, `bash`, `grep`, `glob`, `web_fetch`). |
 | **2. User** | `user` | `$XDG_CONFIG_HOME/tasksmith/agents/` | Personal providers, custom agents, and global skills available across every project on your machine. |
 | **3. Workspace** | `workspace` | `<root>/WORKSPACE.md` & `<root>/.agents/` | Shared team configuration, repository conventions, and project-wide agents and tools. |
 | **4. Local** | `local` | `<project>/AGENTS.md` & `<project>/.agents/` | Subproject-specific instructions and overrides when working inside a monorepo package or service. |

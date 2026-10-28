@@ -1088,3 +1088,103 @@ func TestConversationTodosStateAndEvents(t *testing.T) {
 		t.Fatalf("expected nil stream.Todos after ResetStream, got %+v", *st.Todos)
 	}
 }
+
+func TestCompactionEventsAndTimeline(t *testing.T) {
+	ResetStream()
+	ClearTranscript()
+	ResetSession()
+	defer ResetStream()
+	defer ClearTranscript()
+	defer ResetSession()
+
+	acc := newConversationAccumulator()
+	acc.setSessionID("sess-comp")
+
+	// 1. EventCompactionStarted sets stream status to StreamRunning and sessionStatus to StatusCompacting
+	acc.applyEvent(api.Event{
+		Type: api.EventCompactionStarted,
+		Payload: api.CompactionStartedEvent{
+			SessionID: "sess-comp",
+			ID:        "comp-1",
+		},
+	})
+	st := GetStream()
+	if !st.Streaming || st.Status != api.StatusCompacting {
+		t.Fatalf("expected Streaming=true and Status=StatusCompacting, got Streaming=%v, Status=%q", st.Streaming, st.Status)
+	}
+
+	// 2. EventContextUpdated updates session context
+	ctxState := api.ContextState{
+		UsedTokens:    45000,
+		MaxTokens:     200000,
+		OutputLimit:   32000,
+		ReserveTokens: 40000,
+		TriggerTokens: 160000,
+		FreeTokens:    115000,
+		Breakdown: api.ContextBreakdown{
+			Summary: 15000,
+		},
+	}
+	acc.applyEvent(api.Event{
+		Type: api.EventContextUpdated,
+		Payload: api.ContextUpdatedEvent{
+			SessionID: "sess-comp",
+			Context:   ctxState,
+		},
+	})
+	if GetContext().UsedTokens != 45000 || GetContext().Breakdown.Summary != 15000 {
+		t.Fatalf("expected session context updated, got %+v", GetContext())
+	}
+
+	// 3. EventEntryAdded with TimelineKindCompacted flushes to transcript
+	acc.applyEvent(api.Event{
+		Type: api.EventEntryAdded,
+		Payload: api.EntryAddedEvent{
+			SessionID: "sess-comp",
+			Entry: api.TimelineEntry{
+				ID:        "tl-comp-1",
+				SessionID: "sess-comp",
+				Kind:      api.TimelineKindCompacted,
+				Compacted: &api.CompactedRecord{
+					BeforeTokens: 140000,
+					AfterTokens:  15000,
+				},
+			},
+		},
+	})
+	tr := GetTranscript()
+	if tr.Items == nil || len(*tr.Items) == 0 {
+		t.Fatalf("expected timeline entry flushed to transcript")
+	}
+	lastItem := (*tr.Items)[len(*tr.Items)-1]
+	if lastItem.Kind != TranscriptKindTimeline {
+		t.Fatalf("expected TranscriptKindTimeline, got %v", lastItem.Kind)
+	}
+	entry, ok := lastItem.Data.(api.TimelineEntry)
+	if !ok || entry.Kind != api.TimelineKindCompacted || entry.Compacted.BeforeTokens != 140000 {
+		t.Fatalf("unexpected timeline entry data: %+v", lastItem.Data)
+	}
+
+	// 4. EventEntryAdded with TimelineKindCacheBroken flushes to transcript
+	acc.applyEvent(api.Event{
+		Type: api.EventEntryAdded,
+		Payload: api.EntryAddedEvent{
+			SessionID: "sess-comp",
+			Entry: api.TimelineEntry{
+				ID:        "tl-cb-1",
+				SessionID: "sess-comp",
+				Kind:      api.TimelineKindCacheBroken,
+				CacheBroken: &api.CacheBrokenRecord{
+					PrevCached: 50000,
+					CurrCached: 0,
+				},
+			},
+		},
+	})
+	tr = GetTranscript()
+	lastItem = (*tr.Items)[len(*tr.Items)-1]
+	entry, ok = lastItem.Data.(api.TimelineEntry)
+	if !ok || entry.Kind != api.TimelineKindCacheBroken || entry.CacheBroken.PrevCached != 50000 {
+		t.Fatalf("unexpected cache_broken entry data: %+v", lastItem.Data)
+	}
+}

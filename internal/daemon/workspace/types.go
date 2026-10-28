@@ -4,6 +4,7 @@ import (
 	"context"
 	"maps"
 
+	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/warp"
 )
 
@@ -47,6 +48,8 @@ type Workspace interface {
 	RenderCommand(name string, args map[string]string, globals map[string]any) (string, error)
 	RenderDecision(name string, inputs map[string]any, globals map[string]any) (string, error)
 	RenderWorkspace(globals map[string]any) (string, error)
+	AgentContext(name string) api.ContextBreakdown
+	ModelLimits(rawID string) ModelLimits
 }
 
 // Namespace constants identifying the 4-tier resource resolution hierarchy.
@@ -59,14 +62,13 @@ const (
 
 // Builtin agent identifiers shipped in the system namespace.
 const (
-	AgentNameMain                 = "main"
-	AgentNameAgentCreator         = "agent-creator"
-	AgentNameCompactionSummarizer = "compaction-summarizer"
-	AgentNameProjectInitializer   = "project-initializer"
-	AgentNameProviderManager      = "provider-manager"
-	AgentNameSkillCreator         = "skill-creator"
-	AgentNameTitleGenerator       = "title-generator"
-	AgentNameToolCreator          = "tool-creator"
+	AgentNameMain               = "main"
+	AgentNameAgentCreator       = "agent-creator"
+	AgentNameProjectInitializer = "project-initializer"
+	AgentNameProviderManager    = "provider-manager"
+	AgentNameSkillCreator       = "skill-creator"
+	AgentNameTitleGenerator     = "title-generator"
+	AgentNameToolCreator        = "tool-creator"
 )
 
 // ModelRole identifies the cognitive capability role for model resolution.
@@ -214,17 +216,18 @@ type ModelCostTier struct {
 // Agent describes an autonomous agent, its persona instructions, and its allowed capabilities.
 type Agent struct {
 	Metadata
-	Extends      string         `json:"extends,omitempty"`
-	Instructions string         `json:"instructions,omitempty"`
-	Triggers     []string       `json:"triggers,omitempty"`
-	Models       []string       `json:"models,omitempty"`
-	Temperature  *float64       `json:"temperature,omitempty"`
-	Thinking     map[string]any `json:"thinking,omitempty"`
-	Skills       []string       `json:"skills,omitempty"`
-	Commands     []string       `json:"commands,omitempty"`
-	Subagents    []string       `json:"subagents,omitempty"`
-	Tools        []string       `json:"tools,omitempty"`
-	Policies     *Policies      `json:"policies,omitempty"`
+	Extends      string               `json:"extends,omitempty"`
+	Instructions string               `json:"instructions,omitempty"`
+	Triggers     []string             `json:"triggers,omitempty"`
+	Models       []string             `json:"models,omitempty"`
+	Temperature  *float64             `json:"temperature,omitempty"`
+	Thinking     map[string]any       `json:"thinking,omitempty"`
+	Skills       []string             `json:"skills,omitempty"`
+	Commands     []string             `json:"commands,omitempty"`
+	Subagents    []string             `json:"subagents,omitempty"`
+	Tools        []string             `json:"tools,omitempty"`
+	Policies     *Policies            `json:"policies,omitempty"`
+	Context      api.ContextBreakdown `json:"context"`
 }
 
 // DecisionQuestionType identifies the evaluation mode of a DecisionQuestion.

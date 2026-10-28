@@ -33,6 +33,8 @@ const (
 	KindPermission  Kind = "permission"
 	KindQuestion    Kind = "question"
 	KindInterrupted Kind = "interrupted"
+	KindCompacted   Kind = "compacted"
+	KindCacheBroken Kind = "cache_broken"
 )
 
 // CommandRecord captures a direct user shell command (!) and its output.
@@ -79,6 +81,23 @@ type QuestionRecord struct {
 	Response tools.QuestionResponse `json:"response"`
 }
 
+// CompactedRecord captures a context compaction event in the session timeline.
+type CompactedRecord struct {
+	Trigger      string `json:"trigger,omitempty"`
+	Focus        string `json:"focus,omitempty"`
+	Summary      string `json:"summary,omitempty"`
+	BeforeTokens int    `json:"before_tokens,omitempty"`
+	AfterTokens  int    `json:"after_tokens,omitempty"`
+	DurationMs   int64  `json:"duration_ms,omitempty"`
+}
+
+// CacheBrokenRecord captures a prompt cache drop between turns in the session timeline.
+type CacheBrokenRecord struct {
+	PrevCached  int `json:"prev_cached"`
+	CurrCached  int `json:"curr_cached"`
+	InputTokens int `json:"input_tokens,omitempty"`
+}
+
 // Entry is a single append-only timeline event in a session log.
 type Entry struct {
 	ID        string    `json:"id"`
@@ -86,14 +105,16 @@ type Entry struct {
 	Kind      Kind      `json:"kind"`
 	CreatedAt time.Time `json:"created_at"`
 
-	Message    message.Message   `json:"message,omitempty"`
-	Command    *CommandRecord    `json:"command,omitempty"`
-	Model      *ModelChange      `json:"model,omitempty"`
-	Effort     *EffortChange     `json:"effort,omitempty"`
-	Agent      *AgentChange      `json:"agent,omitempty"`
-	Mode       *ModeChange       `json:"mode,omitempty"`
-	Permission *PermissionRecord `json:"permission,omitempty"`
-	Question   *QuestionRecord   `json:"question,omitempty"`
+	Message     message.Message    `json:"message,omitempty"`
+	Command     *CommandRecord     `json:"command,omitempty"`
+	Model       *ModelChange       `json:"model,omitempty"`
+	Effort      *EffortChange      `json:"effort,omitempty"`
+	Agent       *AgentChange       `json:"agent,omitempty"`
+	Mode        *ModeChange        `json:"mode,omitempty"`
+	Permission  *PermissionRecord  `json:"permission,omitempty"`
+	Question    *QuestionRecord    `json:"question,omitempty"`
+	Compacted   *CompactedRecord   `json:"compacted,omitempty"`
+	CacheBroken *CacheBrokenRecord `json:"cache_broken,omitempty"`
 }
 
 // Clone returns a deep copy of the timeline entry.
@@ -129,6 +150,14 @@ func (e Entry) Clone() Entry {
 	}
 	if e.Question != nil {
 		cp.Question = &QuestionRecord{Request: *e.Question.Request.Clone(), Response: *e.Question.Response.Clone()}
+	}
+	if e.Compacted != nil {
+		comp := *e.Compacted
+		cp.Compacted = &comp
+	}
+	if e.CacheBroken != nil {
+		cb := *e.CacheBroken
+		cp.CacheBroken = &cb
 	}
 	return cp
 }
@@ -273,5 +302,25 @@ func NewInterruptedEntry(sessionID string) *Entry {
 	return &Entry{
 		SessionID: sessionID,
 		Kind:      KindInterrupted,
+	}
+}
+
+// NewCompactedEntry creates an Entry initialized with a CompactedRecord payload.
+func NewCompactedEntry(sessionID string, rec CompactedRecord) *Entry {
+	r := rec
+	return &Entry{
+		SessionID: sessionID,
+		Kind:      KindCompacted,
+		Compacted: &r,
+	}
+}
+
+// NewCacheBrokenEntry creates an Entry initialized with a CacheBrokenRecord payload.
+func NewCacheBrokenEntry(sessionID string, rec CacheBrokenRecord) *Entry {
+	r := rec
+	return &Entry{
+		SessionID:   sessionID,
+		Kind:        KindCacheBroken,
+		CacheBroken: &r,
 	}
 }

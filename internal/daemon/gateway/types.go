@@ -7,6 +7,7 @@ import (
 	"github.com/masterkeysrd/loom/decision"
 	"github.com/masterkeysrd/loom/embedding"
 	"github.com/masterkeysrd/loom/llm"
+	"github.com/masterkeysrd/loom/profile"
 )
 
 // Common errors returned by the gateway package.
@@ -207,6 +208,9 @@ type Gateway interface {
 
 	// ListProviders returns information about all registered providers and their models.
 	ListProviders() []ProviderInfo
+
+	// ModelProfile returns the discovered model profile from the matching provider or catalog, if available.
+	ModelProfile(model string) (*profile.Profile, bool)
 
 	// Close releases all client resources and connections.
 	Close() error

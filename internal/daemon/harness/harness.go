@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"iter"
-	"slices"
 	"strings"
 
 	"github.com/google/uuid"
@@ -17,6 +16,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/permissions"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tools"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/workspace"
 )
 
 // Config holds the mandatory dependencies required to construct a [Harness].
@@ -31,6 +31,8 @@ type Config struct {
 	SystemPrompt string
 	Queue        Queue
 	Logger       log.Interface
+	Limits       workspace.ModelLimits
+	Static       StaticContext
 }
 
 // Validate checks that all required configuration dependencies are present.
@@ -94,7 +96,19 @@ func New(cfg Config) (Harness, error) {
 
 	logger := cfg.Logger.ForComponent("harness")
 
-	g, err := buildGraph(cp, cfg.Model, cfg.Tools, cfg.Permissions, cfg.SystemPrompt, cfg.Queue, cfg.Bash, cfg.Spiller, logger)
+	g, err := buildGraph(GraphConfig{
+		Checkpointer: cp,
+		Model:        cfg.Model,
+		Container:    cfg.Tools,
+		Permissions:  cfg.Permissions,
+		SystemPrompt: cfg.SystemPrompt,
+		Queue:        cfg.Queue,
+		Bash:         cfg.Bash,
+		Spiller:      cfg.Spiller,
+		Limits:       cfg.Limits,
+		Static:       cfg.Static,
+		Logger:       logger,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -120,11 +134,15 @@ func (h *harness) Stream(ctx context.Context, input Input) iter.Seq2[Event, erro
 			yield(Event{}, err)
 			return
 		}
+		if input.Compact != nil && (input.Message != nil || input.Decisions != nil || input.Answers != nil) {
+			yield(Event{}, fmt.Errorf("%w: cannot specify both compact and message/responses", ErrInvalidConfig))
+			return
+		}
 		if (input.Decisions != nil || input.Answers != nil) && input.Message != nil {
 			yield(Event{}, fmt.Errorf("%w: cannot specify both message and responses", ErrInvalidConfig))
 			return
 		}
-		if input.Decisions == nil && input.Answers == nil && input.Message == nil {
+		if input.Compact == nil && input.Decisions == nil && input.Answers == nil && input.Message == nil {
 			if _, ok := h.queue.Peek(); !ok {
 				yield(Event{}, ErrNilMessage)
 				return
@@ -138,7 +156,12 @@ func (h *harness) Stream(ctx context.Context, input Input) iter.Seq2[Event, erro
 		}
 
 		var update graph.Update[State]
-		if input.Decisions != nil || input.Answers != nil {
+		if input.Compact != nil {
+			update = graph.Update[State](func(s State) State {
+				s.PendingCompaction = input.Compact
+				return s
+			})
+		} else if input.Decisions != nil || input.Answers != nil {
 			if len(state.PendingPermissions) == 0 && len(state.PendingQuestions) == 0 {
 				if input.Answers != nil {
 					yield(Event{}, ErrNoPendingQuestions)
@@ -227,8 +250,7 @@ func (h *harness) consumeGraphStream(stream iter.Seq2[graph.StreamEvent, error],
 			return false
 		}
 
-		switch ev.Event {
-		case graph.EventLLMChunk:
+		if ev.Event == graph.EventLLMChunk {
 			chunk, ok := ev.Data.(message.AssistantChunk)
 			if !ok {
 				return true
@@ -241,59 +263,18 @@ func (h *harness) consumeGraphStream(stream iter.Seq2[graph.StreamEvent, error],
 				stopped = true
 				return false
 			}
+			return true
+		}
 
-		case eventNodeMessage:
-			msg, ok := ev.Data.(message.Message)
-			if !ok || msg == nil {
-				return true
-			}
-			if !yield(Event{
-				Type:    EventMessage,
-				Message: message.CloneMessage(msg),
-			}, nil) {
+		if se, ok := ev.Data.(StreamEvent); ok && se != nil {
+			if !yield(se.ToEvent(), nil) {
 				stopped = true
 				return false
 			}
+			return true
+		}
 
-		case eventCommandStarted:
-			cmd, ok := ev.Data.(CommandStarted)
-			if !ok {
-				return true
-			}
-			if !yield(Event{
-				Type:           EventCommandStarted,
-				CommandStarted: &cmd,
-			}, nil) {
-				stopped = true
-				return false
-			}
-
-		case eventCommandCompleted:
-			res, ok := ev.Data.(CommandCompleted)
-			if !ok {
-				return true
-			}
-			if !yield(Event{
-				Type:             EventCommandCompleted,
-				CommandCompleted: &res,
-			}, nil) {
-				stopped = true
-				return false
-			}
-
-		case eventTodosUpdated:
-			todos, ok := ev.Data.([]tools.TodoItem)
-			if !ok {
-				return true
-			}
-			if !yield(Event{
-				Type:  EventTodosUpdated,
-				Todos: slices.Clone(todos),
-			}, nil) {
-				stopped = true
-				return false
-			}
-
+		switch ev.Event {
 		case graph.EventInterrupted:
 			snap, ok := ev.Data.(graph.Snapshot[State])
 			if !ok {
@@ -320,7 +301,7 @@ func (h *harness) consumeGraphStream(stream iter.Seq2[graph.StreamEvent, error],
 				return true
 			}
 			lastMsg := snap.State.Messages[len(snap.State.Messages)-1]
-			if SystemKindOf(lastMsg) == SystemKindCommand {
+			if SystemKindOf(lastMsg) == SystemKindCommand || SystemKindOf(lastMsg) == SystemKindCompaction {
 				if !yield(Event{
 					Type: EventCompleted,
 				}, nil) {

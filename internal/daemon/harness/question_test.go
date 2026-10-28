@@ -165,7 +165,7 @@ func TestQuestionOutputOmitsUnrelatedConfirmation(t *testing.T) {
 	if len(decoded.Answers) != 5 {
 		t.Fatalf("unexpected output: %+v", decoded)
 	}
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		if _, ok := decoded.Answers[i]["confirmed"]; ok {
 			t.Fatalf("unexpected confirmation: %+v", decoded.Answers[i])
 		}

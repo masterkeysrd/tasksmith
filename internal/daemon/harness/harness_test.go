@@ -1725,8 +1725,8 @@ func TestCommandNodeDoesNotWakeAgent(t *testing.T) {
 		events = append(events, ev)
 	}
 
-	if len(events) != 3 {
-		t.Fatalf("expected 3 events, got %d: %+v", len(events), events)
+	if len(events) != 4 {
+		t.Fatalf("expected 4 events, got %d: %+v", len(events), events)
 	}
 	if events[0].Type != EventCommandStarted || events[0].CommandStarted == nil || events[0].CommandStarted.ID != cmdID {
 		t.Fatalf("expected EventCommandStarted %s, got %+v", cmdID, events[0])
@@ -1734,8 +1734,11 @@ func TestCommandNodeDoesNotWakeAgent(t *testing.T) {
 	if events[1].Type != EventCommandCompleted || events[1].CommandCompleted == nil || events[1].CommandCompleted.ID != cmdID {
 		t.Fatalf("expected EventCommandCompleted %s, got %+v", cmdID, events[1])
 	}
-	if events[2].Type != EventCompleted || events[2].Message != nil {
-		t.Fatalf("expected EventCompleted with nil Message, got %+v", events[2])
+	if events[2].Type != EventContextUpdated || events[2].Context == nil {
+		t.Fatalf("expected EventContextUpdated, got %+v", events[2])
+	}
+	if events[3].Type != EventCompleted || events[3].Message != nil {
+		t.Fatalf("expected EventCompleted with nil Message, got %+v", events[3])
 	}
 
 	state, err := h.LoadState(ctx)

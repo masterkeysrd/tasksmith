@@ -123,6 +123,8 @@ Type `/` in the composer to open the interactive autocomplete menu for slash com
 | `/permissions` | `/permissions` | Open the interactive permission rules manager. |
 | `/theme` | `/theme [name]` | Switch the terminal color theme. |
 | `/clear` | `/clear` | Start a fresh session draft. |
+| `/compact` | `/compact [focus]` | Compact conversation history to free context window space, with optional focus instructions. |
+| `/context` | `/context` | Show visual token usage grid and context window breakdown by category. |
 | `/exit` | `/exit` (or `/quit`, `/q`) | Exit the REPL. |
 
 For a complete reference of flags, keybindings, and autocomplete shortcuts, see the [CLI Reference](../reference/cli.md).

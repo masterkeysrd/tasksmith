@@ -378,6 +378,31 @@ func (acc *conversationAccumulator) applyEvent(event api.Event) {
 	case api.EventConnected:
 		return
 
+	case api.EventCompactionStarted:
+		p, ok := event.Payload.(api.CompactionStartedEvent)
+		if ok && acc.sessionID != "" && p.SessionID != acc.sessionID {
+			return
+		}
+		acc.status = StreamRunning
+		acc.sessionStatus = api.StatusCompacting
+		acc.publishLocked()
+
+	case api.EventContextUpdated:
+		p, ok := event.Payload.(api.ContextUpdatedEvent)
+		if !ok {
+			return
+		}
+		if acc.sessionID != "" && p.SessionID != acc.sessionID {
+			return
+		}
+		session.Set(func(s SessionState) SessionState {
+			s.Context = p.Context
+			if s.Session != nil {
+				s.Session.Context = p.Context
+			}
+			return s
+		})
+
 	case api.EventStatusChanged:
 		p, ok := event.Payload.(api.StatusChangedEvent)
 		if !ok {
@@ -746,7 +771,7 @@ func (acc *conversationAccumulator) loadTimeline(entries []api.TimelineEntry, pe
 					AppendMessage(h)
 				}
 			}
-		} else if entry.Kind != api.TimelineKindPermission && entry.Kind != api.TimelineKindQuestion {
+		} else if entry.Kind == api.TimelineKindCompacted || entry.Kind == api.TimelineKindCacheBroken || (entry.Kind != api.TimelineKindPermission && entry.Kind != api.TimelineKindQuestion) {
 			AppendTimelineEntry(entry)
 		}
 	}

@@ -66,6 +66,8 @@ Inside the TaskSmith interactive REPL, slash commands provide instant control ov
 | **`/revert`** | | `[path] [entry_id]` | Reverts uncommitted file mutations for a specific file, change entry, or the entire session. |
 | **`/permissions`** | `/perm`, `/perms` | *(none)* | Opens the interactive permissions browser to inspect and edit project and global allow/deny rules. |
 | **`/tasks`** | | *(none)* | Opens the background task manager to inspect running commands and stream task logs. |
+| **`/compact`** | | `[focus]` | Compacts conversation history to free context window space, with optional focus instructions. |
+| **`/context`** | | *(none)* | Displays visual token usage grid and detailed context window breakdown by category. |
 
 ---
 

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/masterkeysrd/loom/message"
+	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tasks"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tools"
 )
@@ -24,6 +25,7 @@ type State struct {
 	PendingQuestions   []tools.QuestionRequest   `json:"pending_questions,omitempty"`
 	Tasks              []tasks.Snapshot          `json:"tasks,omitempty"`
 	Todos              []tools.TodoItem          `json:"todos,omitempty"`
+	Context            api.ContextState          `json:"context"`
 	Error              string                    `json:"error,omitempty"`
 	StartedAt          time.Time                 `json:"started_at,omitzero"`
 	FinishedAt         time.Time                 `json:"finished_at,omitzero"`
@@ -90,6 +92,7 @@ func (s *State) Clone() *State {
 		PendingQuestions:   questions,
 		Tasks:              slices.Clone(s.Tasks),
 		Todos:              slices.Clone(s.Todos),
+		Context:            s.Context,
 		Error:              s.Error,
 		StartedAt:          s.StartedAt,
 		FinishedAt:         s.FinishedAt,

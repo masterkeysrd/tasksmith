@@ -15,6 +15,8 @@ const (
 	TimelineKindPermission  TimelineKind = "permission"
 	TimelineKindQuestion    TimelineKind = "question"
 	TimelineKindInterrupted TimelineKind = "interrupted"
+	TimelineKindCompacted   TimelineKind = "compacted"
+	TimelineKindCacheBroken TimelineKind = "cache_broken"
 )
 
 // CommandRecord captures a direct user shell command (!) and its output.
@@ -60,18 +62,37 @@ type QuestionRecord struct {
 	Response QuestionResponse `json:"response"`
 }
 
+// CompactedRecord captures a context compaction event in the session timeline.
+type CompactedRecord struct {
+	Trigger      string `json:"trigger,omitempty"`
+	Focus        string `json:"focus,omitempty"`
+	Summary      string `json:"summary,omitempty"`
+	BeforeTokens int    `json:"before_tokens,omitempty"`
+	AfterTokens  int    `json:"after_tokens,omitempty"`
+	DurationMs   int64  `json:"duration_ms,omitempty"`
+}
+
+// CacheBrokenRecord captures a prompt cache drop between turns in the session timeline.
+type CacheBrokenRecord struct {
+	PrevCached  int `json:"prev_cached"`
+	CurrCached  int `json:"curr_cached"`
+	InputTokens int `json:"input_tokens,omitempty"`
+}
+
 // TimelineEntry represents an append-only entry in a session's chronological timeline.
 type TimelineEntry struct {
-	ID         string            `json:"id"`
-	SessionID  string            `json:"session_id"`
-	Kind       TimelineKind      `json:"kind"`
-	CreatedAt  time.Time         `json:"created_at"`
-	Message    *Message          `json:"message,omitempty"`
-	Command    *CommandRecord    `json:"command,omitempty"`
-	Model      *ModelChange      `json:"model,omitempty"`
-	Effort     *EffortChange     `json:"effort,omitempty"`
-	Agent      *AgentChange      `json:"agent,omitempty"`
-	Mode       *ModeChange       `json:"mode,omitempty"`
-	Permission *PermissionRecord `json:"permission,omitempty"`
-	Question   *QuestionRecord   `json:"question,omitempty"`
+	ID          string             `json:"id"`
+	SessionID   string             `json:"session_id"`
+	Kind        TimelineKind       `json:"kind"`
+	CreatedAt   time.Time          `json:"created_at"`
+	Message     *Message           `json:"message,omitempty"`
+	Command     *CommandRecord     `json:"command,omitempty"`
+	Model       *ModelChange       `json:"model,omitempty"`
+	Effort      *EffortChange      `json:"effort,omitempty"`
+	Agent       *AgentChange       `json:"agent,omitempty"`
+	Mode        *ModeChange        `json:"mode,omitempty"`
+	Permission  *PermissionRecord  `json:"permission,omitempty"`
+	Question    *QuestionRecord    `json:"question,omitempty"`
+	Compacted   *CompactedRecord   `json:"compacted,omitempty"`
+	CacheBroken *CacheBrokenRecord `json:"cache_broken,omitempty"`
 }

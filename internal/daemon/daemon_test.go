@@ -31,13 +31,21 @@ import (
 type fakeProvider struct {
 	mu           sync.Mutex
 	chunkHandler func(ctx context.Context, req *llm.Request) (llm.StreamResponse, error)
+	profiles     map[string]profile.Profile
 }
 
-func (p *fakeProvider) Name() string                              { return "fake" }
-func (p *fakeProvider) ListProfiles() []profile.Profile           { return nil }
-func (p *fakeProvider) GetProfile(string) (profile.Profile, bool) { return profile.Profile{}, false }
-func (p *fakeProvider) SearchProfiles(string) []profile.Profile   { return nil }
-func (p *fakeProvider) OverrideProfile(string, profile.Profile)   {}
+func (p *fakeProvider) Name() string                    { return "fake" }
+func (p *fakeProvider) ListProfiles() []profile.Profile { return nil }
+func (p *fakeProvider) GetProfile(id string) (profile.Profile, bool) {
+	if p.profiles != nil {
+		if prof, ok := p.profiles[id]; ok {
+			return prof, true
+		}
+	}
+	return profile.Profile{}, false
+}
+func (p *fakeProvider) SearchProfiles(string) []profile.Profile { return nil }
+func (p *fakeProvider) OverrideProfile(string, profile.Profile) {}
 
 func (p *fakeProvider) Stream(ctx context.Context, req *llm.Request) (llm.StreamResponse, error) {
 	if err := ctx.Err(); err != nil {
@@ -102,6 +110,16 @@ func (g *fakeGateway) ResolveEmbedding(context.Context, string, ...gateway.Embed
 func (g *fakeGateway) ListProviders() []gateway.ProviderInfo {
 	return g.providers
 }
+
+func (g *fakeGateway) ModelProfile(model string) (*profile.Profile, bool) {
+	if g.provider != nil {
+		if prof, found := g.provider.GetProfile(model); found {
+			return &prof, true
+		}
+	}
+	return nil, false
+}
+
 func (g *fakeGateway) Close() error { return nil }
 
 type fakeGatewayPool struct {
@@ -479,10 +497,11 @@ collectLoop:
 	// 2. status_changed (generating)
 	// 3..5. chunk ("Alpha", " Beta", " Gamma")
 	// 6. entry_added (assistant message)
-	// 7. status_changed (idle)
-	// 8. completed
-	if len(received) != 9 {
-		t.Fatalf("expected 9 SSE events, got %d: %+v", len(received), received)
+	// 7. context_updated (context)
+	// 8. status_changed (idle)
+	// 9. completed
+	if len(received) != 10 {
+		t.Fatalf("expected 10 SSE events, got %d: %+v", len(received), received)
 	}
 	if received[0].Type != api.EventStatusChanged {
 		t.Errorf("received[0] = %+v, want status_changed", received[0])
@@ -518,14 +537,17 @@ collectLoop:
 	if received[6].Type != api.EventEntryAdded || !ok || p6.Entry.Message == nil || p6.Entry.Message.Role != api.RoleAssistant {
 		t.Errorf("received[6] = %+v, want assistant entry_added", received[6])
 	}
-	if received[7].Type != api.EventStatusChanged {
-		t.Errorf("received[7] = %+v, want status_changed", received[7])
+	if received[7].Type != api.EventContextUpdated {
+		t.Errorf("received[7] = %+v, want context_updated", received[7])
 	}
-	if p, ok := received[7].Payload.(api.StatusChangedEvent); !ok || p.Status != api.StatusIdle {
-		t.Errorf("received[7].Payload = %+v, want StatusIdle", received[7].Payload)
+	if received[8].Type != api.EventStatusChanged {
+		t.Errorf("received[8] = %+v, want status_changed", received[8])
 	}
-	if received[8].Type != api.EventCompleted {
-		t.Errorf("received[8] = %+v, want completed", received[8])
+	if p, ok := received[8].Payload.(api.StatusChangedEvent); !ok || p.Status != api.StatusIdle {
+		t.Errorf("received[8].Payload = %+v, want StatusIdle", received[8].Payload)
+	}
+	if received[9].Type != api.EventCompleted {
+		t.Errorf("received[9] = %+v, want completed", received[9])
 	}
 }
 
@@ -1438,6 +1460,100 @@ Custom agent instructions.
 	}
 	if !foundOllama {
 		t.Errorf("expected 'my-ollama/qwen3.8' in ListModels: %+v", models)
+	}
+}
+
+func TestDaemonModelProfileEnrichment(t *testing.T) {
+	ctx := context.Background()
+	prov := &fakeProvider{
+		profiles: map[string]profile.Profile{
+			"fake-prov/enriched-model": {
+				ID:   "enriched-model",
+				Name: "Enriched Model Name",
+				Limits: profile.Limits{
+					Context: 128000,
+					Output:  16384,
+				},
+			},
+			"enriched-model": {
+				ID:   "enriched-model",
+				Name: "Enriched Model Name",
+				Limits: profile.Limits{
+					Context: 128000,
+					Output:  16384,
+				},
+			},
+		},
+	}
+	_, cli, wsDir := setupDaemonTest(t, prov)
+
+	provDir := filepath.Join(wsDir, ".agents", "providers")
+	if err := os.MkdirAll(provDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+
+	provYAML := `apiVersion: warp/v1alpha1
+kind: ModelProvider
+metadata:
+  name: fake-prov
+spec:
+  type: fake
+  models:
+    - id: enriched-model
+`
+	if err := os.WriteFile(filepath.Join(provDir, "fake.yaml"), []byte(provYAML), 0o644); err != nil {
+		t.Fatalf("WriteFile fake.yaml: %v", err)
+	}
+
+	wsCLI := cli.WithCWD(wsDir)
+
+	// Test ListModels enrichment
+	models, err := wsCLI.ListModels(ctx)
+	if err != nil {
+		t.Fatalf("ListModels: %v", err)
+	}
+	var found bool
+	for _, m := range models {
+		if m.ID == "fake-prov/enriched-model" {
+			found = true
+			if m.Name != "Enriched Model Name" {
+				t.Errorf("m.Name = %q, want 'Enriched Model Name'", m.Name)
+			}
+			if m.Label != "Enriched Model Name" {
+				t.Errorf("m.Label = %q, want 'Enriched Model Name'", m.Label)
+			}
+			if m.ContextLimit != 128000 || m.OutputLimit != 16384 {
+				t.Errorf("m limits = Context:%d Output:%d, want 128000/16384", m.ContextLimit, m.OutputLimit)
+			}
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected 'fake-prov/enriched-model' in ListModels: %+v", models)
+	}
+
+	// Test GetModel enrichment with qualified ID
+	m1, err := wsCLI.GetModel(ctx, "fake-prov/enriched-model")
+	if err != nil {
+		t.Fatalf("GetModel('fake-prov/enriched-model'): %v", err)
+	}
+	if m1.Name != "Enriched Model Name" || m1.Label != "Enriched Model Name" {
+		t.Errorf("m1 Name/Label = %q/%q, want 'Enriched Model Name'", m1.Name, m1.Label)
+	}
+	if m1.ContextLimit != 128000 || m1.OutputLimit != 16384 {
+		t.Errorf("m1 limits = Context:%d Output:%d, want 128000/16384", m1.ContextLimit, m1.OutputLimit)
+	}
+
+	// Test GetModel enrichment with unlisted / bare model
+	m2, err := wsCLI.GetModel(ctx, "enriched-model")
+	if err != nil {
+		t.Fatalf("GetModel('enriched-model'): %v", err)
+	}
+	if m2.Name != "Enriched Model Name" || m2.Label != "Enriched Model Name" {
+		t.Errorf("m2 Name/Label = %q/%q, want 'Enriched Model Name'", m2.Name, m2.Label)
+	}
+	if m2.ContextLimit != 128000 || m2.OutputLimit != 16384 {
+		t.Errorf("m2 limits = Context:%d Output:%d, want 128000/16384", m2.ContextLimit, m2.OutputLimit)
 	}
 }
 

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/masterkeysrd/loom/profile"
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/core/fsutils"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
@@ -449,6 +450,11 @@ func (d *Daemon) ListModels(ctx context.Context, rawWS string) ([]api.Model, err
 			out = append(out, toAPIModel(p.Name, m))
 		}
 	}
+	for i := range out {
+		if prof, ok := rt.Gateway().ModelProfile(out[i].ID); ok && prof != nil {
+			enrichModelFromProfile(&out[i], prof, out[i].ID)
+		}
+	}
 	return out, nil
 }
 
@@ -468,7 +474,57 @@ func (d *Daemon) GetModel(ctx context.Context, rawWS, id string) (*api.Model, er
 	}
 
 	m := resolveAPIModel(rt.Workspace(), rawID)
+	lookupID := rawID
+	if m.ID != "" {
+		lookupID = m.ID
+	}
+	prof, ok := rt.Gateway().ModelProfile(lookupID)
+	if (!ok || prof == nil) && lookupID != rawID {
+		prof, ok = rt.Gateway().ModelProfile(rawID)
+	}
+	if ok && prof != nil {
+		enrichModelFromProfile(&m, prof, rawID)
+	}
 	return &m, nil
+}
+
+// enrichModelFromProfile populates unpopulated limits and fallback names/labels
+// using discovered model profile metadata.
+func enrichModelFromProfile(m *api.Model, prof *profile.Profile, rawID string) {
+	if prof == nil {
+		return
+	}
+	if m.ContextLimit <= 0 && prof.Limits.Context > 0 {
+		m.ContextLimit = prof.Limits.Context
+	}
+	if m.OutputLimit <= 0 && prof.Limits.Output > 0 {
+		m.OutputLimit = prof.Limits.Output
+	}
+	if profName := strings.TrimSpace(prof.Name); profName != "" {
+		isRawID := func(s string) bool {
+			if s == "" {
+				return true
+			}
+			if s == m.ID || (rawID != "" && s == rawID) {
+				return true
+			}
+			if _, bare, hasSlash := strings.Cut(m.ID, "/"); hasSlash && s == bare {
+				return true
+			}
+			if rawID != "" {
+				if _, bare, hasSlash := strings.Cut(rawID, "/"); hasSlash && s == bare {
+					return true
+				}
+			}
+			return false
+		}
+		if isRawID(m.Name) {
+			m.Name = profName
+		}
+		if isRawID(m.Label) {
+			m.Label = profName
+		}
+	}
 }
 
 func (d *Daemon) GetPermissions(ctx context.Context, rawWS string) (*api.PermissionsResponse, error) {

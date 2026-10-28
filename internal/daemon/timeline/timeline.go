@@ -92,6 +92,14 @@ func (s *sqliteTimeline) Append(ctx context.Context, entry *Entry) error {
 		if entry.Question == nil {
 			return ErrInvalidEntry
 		}
+	case KindCompacted:
+		if entry.Compacted == nil {
+			return ErrInvalidEntry
+		}
+	case KindCacheBroken:
+		if entry.CacheBroken == nil {
+			return ErrInvalidEntry
+		}
 	case KindInterrupted:
 		// no additional struct field validation needed
 	default:
@@ -161,6 +169,16 @@ func (s *sqliteTimeline) Append(ctx context.Context, entry *Entry) error {
 		payload, err = json.Marshal(entry.Question)
 		if err != nil {
 			return fmt.Errorf("timeline: marshal question %q: %w", entry.ID, err)
+		}
+	case KindCompacted:
+		payload, err = json.Marshal(entry.Compacted)
+		if err != nil {
+			return fmt.Errorf("timeline: marshal compacted %q: %w", entry.ID, err)
+		}
+	case KindCacheBroken:
+		payload, err = json.Marshal(entry.CacheBroken)
+		if err != nil {
+			return fmt.Errorf("timeline: marshal cache broken %q: %w", entry.ID, err)
 		}
 	case KindInterrupted:
 		payload = []byte("{}")
@@ -373,6 +391,18 @@ func scanEntry(r rowScanner) (*Entry, error) {
 			return nil, fmt.Errorf("timeline: unmarshal question record for %q: %w", id, err)
 		}
 		entry.Question = &q
+	case KindCompacted:
+		var c CompactedRecord
+		if err := json.Unmarshal(payload, &c); err != nil {
+			return nil, fmt.Errorf("timeline: unmarshal compacted record for %q: %w", id, err)
+		}
+		entry.Compacted = &c
+	case KindCacheBroken:
+		var c CacheBrokenRecord
+		if err := json.Unmarshal(payload, &c); err != nil {
+			return nil, fmt.Errorf("timeline: unmarshal cache broken record for %q: %w", id, err)
+		}
+		entry.CacheBroken = &c
 	case KindInterrupted:
 		// No extra payload unmarshaling needed
 	default:

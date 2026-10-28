@@ -42,6 +42,7 @@ const (
 	StatusThinking          Status = "thinking"
 	StatusGenerating        Status = "generating"
 	StatusExecuting         Status = "executing"
+	StatusCompacting        Status = "compacting"
 	StatusWaitingPermission Status = "waiting_permission"
 	StatusWaitingQuestion   Status = "waiting_question"
 )
@@ -53,7 +54,7 @@ func (s *Session) setStatus(next Status) {
 		return
 	}
 	s.Status = next
-	s.Running = (next == StatusThinking || next == StatusGenerating || next == StatusExecuting)
+	s.Running = (next == StatusThinking || next == StatusGenerating || next == StatusExecuting || next == StatusCompacting)
 	s.Unlock()
 
 	s.publisher.Publish(api.SessionStreamTopic(s.ID), StatusChangedEvent{
@@ -296,6 +297,26 @@ func (s *Session) harness(ctx context.Context) (harness.Harness, error) {
 	}
 
 	systemPrompt := s.renderSystemPrompt(agentName)
+	agentBreakdown := s.workspace.AgentContext(agentName)
+	staticCtx := harness.StaticContextFromBreakdown(agentBreakdown)
+	limits := s.workspace.ModelLimits(modelName)
+	if prof := llmModel.Profile(); prof != nil {
+		if prof.Limits.Context > 0 {
+			limits.Context = prof.Limits.Context
+		}
+		if prof.Limits.Output > 0 {
+			limits.Output = prof.Limits.Output
+		}
+	} else if s.gateway != nil {
+		if prof, ok := s.gateway.ModelProfile(modelName); ok && prof != nil {
+			if prof.Limits.Context > 0 {
+				limits.Context = prof.Limits.Context
+			}
+			if prof.Limits.Output > 0 {
+				limits.Output = prof.Limits.Output
+			}
+		}
+	}
 
 	h, err := harness.New(harness.Config{
 		ID:           s.ID,
@@ -308,6 +329,8 @@ func (s *Session) harness(ctx context.Context) (harness.Harness, error) {
 		SystemPrompt: systemPrompt,
 		Queue:        s,
 		Logger:       s.logger,
+		Limits:       limits,
+		Static:       staticCtx,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("session: construct harness: %w", err)
@@ -540,6 +563,18 @@ func (s *Session) Send(ctx context.Context, input SendInput) error {
 	if s == nil {
 		return errors.New("session: uninitialized session")
 	}
+	if input.Compact != nil {
+		if input.Decision != nil || input.Question != nil || input.Message != nil || strings.TrimSpace(input.Command) != "" {
+			return fmt.Errorf("%w: cannot specify compact with other input", ErrInvalidConfig)
+		}
+		s.Lock()
+		if s.Running {
+			s.Unlock()
+			return ErrSessionRunning
+		}
+		s.Unlock()
+		return s.startTurn(harness.Input{Compact: &harness.CompactInput{Focus: input.Compact.Focus}})
+	}
 	if cmd := strings.TrimSpace(input.Command); cmd != "" {
 		if input.Decision != nil || input.Question != nil || input.Message != nil {
 			return fmt.Errorf("%w: cannot specify command with message or decision", ErrInvalidConfig)
@@ -629,8 +664,12 @@ func (s *Session) startTurn(hInput harness.Input) error {
 	done := make(chan struct{})
 
 	initialStatus := StatusThinking
-	if hInput.Message == nil && hInput.Decisions == nil && len(s.queue) > 0 && s.queue[0].Kind == QueueKindCommand {
-		initialStatus = StatusExecuting
+	if hInput.Compact != nil {
+		initialStatus = StatusCompacting
+	} else if hInput.Message == nil && hInput.Decisions == nil && len(s.queue) > 0 {
+		if s.queue[0].Kind == QueueKindCommand {
+			initialStatus = StatusExecuting
+		}
 	}
 
 	s.Status = initialStatus
@@ -1135,6 +1174,87 @@ func (s *Session) send(ctx context.Context, stream iter.Seq2[harness.Event, erro
 				SessionID: s.ID,
 				Todos:     slices.Clone(hev.Todos),
 			})
+
+		case harness.EventCompactionStarted:
+			s.setStatus(StatusCompacting)
+			var compID, trig, focus string
+			if hev.CompactionStarted != nil {
+				compID = hev.CompactionStarted.ID
+				trig = hev.CompactionStarted.Trigger
+				focus = hev.CompactionStarted.Focus
+			}
+			s.publisher.Publish(api.SessionStreamTopic(s.ID), CompactionStartedEvent{
+				SessionID: s.ID,
+				ID:        compID,
+				Trigger:   trig,
+				Focus:     focus,
+			})
+
+		case harness.EventCompactionCompleted:
+			if hev.CompactionCompleted != nil {
+				rec := timeline.CompactedRecord{
+					Trigger:      hev.CompactionCompleted.Trigger,
+					Focus:        hev.CompactionCompleted.Focus,
+					Summary:      hev.CompactionCompleted.Summary,
+					BeforeTokens: hev.CompactionCompleted.BeforeTokens,
+					AfterTokens:  hev.CompactionCompleted.AfterTokens,
+					DurationMs:   hev.CompactionCompleted.DurationMs,
+				}
+				entry := timeline.NewCompactedEntry(s.ID, rec)
+				if hev.CompactionCompleted.ID != "" && uuid.Validate(hev.CompactionCompleted.ID) == nil {
+					entry.ID = hev.CompactionCompleted.ID
+				}
+				if err := s.Timeline.Append(ctx, entry); err != nil {
+					return nil, err
+				}
+				if err := s.store.touchSession(ctx, s.ID, entry.CreatedAt); err != nil {
+					return nil, err
+				}
+				s.Lock()
+				s.UpdatedAt = entry.CreatedAt
+				s.Unlock()
+
+				s.publisher.Publish(api.SessionStreamTopic(s.ID), EntryAddedEvent{
+					SessionID: s.ID,
+					Entry:     entry.Clone(),
+				})
+			}
+
+		case harness.EventCacheBroken:
+			if hev.CacheBroken != nil {
+				rec := timeline.CacheBrokenRecord{
+					PrevCached:  hev.CacheBroken.PrevCached,
+					CurrCached:  hev.CacheBroken.CurrCached,
+					InputTokens: hev.CacheBroken.InputTokens,
+				}
+				entry := timeline.NewCacheBrokenEntry(s.ID, rec)
+				if err := s.Timeline.Append(ctx, entry); err != nil {
+					return nil, err
+				}
+				if err := s.store.touchSession(ctx, s.ID, entry.CreatedAt); err != nil {
+					return nil, err
+				}
+				s.Lock()
+				s.UpdatedAt = entry.CreatedAt
+				s.Unlock()
+
+				s.publisher.Publish(api.SessionStreamTopic(s.ID), EntryAddedEvent{
+					SessionID: s.ID,
+					Entry:     entry.Clone(),
+				})
+			}
+
+		case harness.EventContextUpdated:
+			if hev.Context != nil {
+				s.Lock()
+				s.State.Context = *hev.Context
+				s.Unlock()
+
+				s.publisher.Publish(api.SessionStreamTopic(s.ID), ContextUpdatedEvent{
+					SessionID: s.ID,
+					Context:   *hev.Context,
+				})
+			}
 
 		case harness.EventCompleted:
 			if hev.Message != nil {

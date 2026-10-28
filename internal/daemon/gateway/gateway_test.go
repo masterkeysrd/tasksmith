@@ -808,3 +808,208 @@ func TestGoogleGenAIAndGeminiProviderTypes(t *testing.T) {
 		t.Error("expected gemini to NOT support RoleDecision natively")
 	}
 }
+
+func TestGatewayModelProfile(t *testing.T) {
+	ctx := context.Background()
+	cfg := Config{
+		Providers: []ProviderConfig{
+			{
+				Name: "test-openai",
+				Type: "openai",
+				Auth: &AuthConfig{Type: AuthTypeAPIKey},
+				Models: []ModelSpec{
+					{
+						ID:   "custom-spec-model",
+						Name: "Custom Spec Model",
+						Limits: ModelLimits{
+							Context: 256000,
+							Output:  32000,
+						},
+					},
+				},
+			},
+		},
+		Env: map[string]string{
+			"OPENAI_API_KEY": "fake-openai-key",
+		},
+	}
+
+	gw, err := New(ctx, cfg)
+	if err != nil {
+		t.Fatalf("failed to initialize gateway: %v", err)
+	}
+	defer gw.Close()
+
+	// 1. Discovered from ModelSpec in manifest
+	prof, ok := gw.ModelProfile("test-openai/custom-spec-model")
+	if !ok || prof == nil {
+		t.Fatalf("expected profile for custom-spec-model, got ok=%v, prof=%v", ok, prof)
+	}
+	if prof.Limits.Context != 256000 || prof.Limits.Output != 32000 {
+		t.Errorf("unexpected limits from spec: %+v", prof.Limits)
+	}
+
+	// 2. Discovered from underlying provider catalog (gpt-4o)
+	profCatalog, okCatalog := gw.ModelProfile("test-openai/gpt-4o")
+	if okCatalog && profCatalog != nil {
+		if profCatalog.Limits.Context <= 0 {
+			t.Errorf("expected positive context limit for gpt-4o, got %d", profCatalog.Limits.Context)
+		}
+	}
+}
+
+func TestMergeProfile(t *testing.T) {
+	// 1. Both nil returns nil
+	if res := MergeProfile(nil, nil); res != nil {
+		t.Fatalf("expected nil when both spec and base are nil, got %+v", res)
+	}
+
+	// 2. Base only returns clone of base
+	base := &profile.Profile{
+		ID:          "gpt-4o",
+		Name:        "GPT-4o",
+		Description: "Base description",
+		Family:      "gpt-4",
+		Knowledge:   "2024-10",
+		Limits: profile.Limits{
+			Context: 128000,
+			Output:  16384,
+		},
+		Capabilities: profile.Capabilities{
+			Completion: true,
+			ToolCall:   true,
+		},
+	}
+	clone := MergeProfile(nil, base)
+	if clone == nil || clone.ID != "gpt-4o" || clone.Limits.Context != 128000 {
+		t.Fatalf("unexpected clone from base: %+v", clone)
+	}
+
+	// 3. Spec only creates profile with limits and explicit capabilities
+	completionTrue := true
+	specOnly := &ModelSpec{
+		ID:   "spec-model",
+		Name: "Spec Model",
+		Limits: ModelLimits{
+			Context:    64000,
+			Output:     8192,
+			Dimensions: 1536,
+		},
+		Capabilities: &ModelCapabilities{
+			Completion: &completionTrue,
+		},
+	}
+	fromSpec := MergeProfile(specOnly, nil)
+	if fromSpec == nil || fromSpec.ID != "spec-model" || fromSpec.Limits.Context != 64000 || fromSpec.Limits.Dimensions != 1536 {
+		t.Fatalf("unexpected profile from spec: %+v", fromSpec)
+	}
+	if !fromSpec.Capabilities.Completion {
+		t.Errorf("expected Completion capability to be true when explicitly configured")
+	}
+
+	// Spec only without capabilities leaves them false/zero-valued
+	specNoCaps := &ModelSpec{ID: "no-caps"}
+	fromNoCaps := MergeProfile(specNoCaps, nil)
+	if fromNoCaps == nil || fromNoCaps.Capabilities.Completion {
+		t.Errorf("expected Completion to be false when omitted on spec-only profile")
+	}
+
+	// 4. Base + Spec overrides
+	completionFalse := false
+	decisionTrue := true
+	toolsFalse := false
+	specOverride := &ModelSpec{
+		Name: "Overridden Name",
+		Limits: ModelLimits{
+			Context:    200000,
+			Output:     32000,
+			Dimensions: 768,
+		},
+		Capabilities: &ModelCapabilities{
+			Completion: &completionFalse,
+			Decision:   &decisionTrue,
+			Tools:      &toolsFalse,
+		},
+	}
+
+	merged := MergeProfile(specOverride, base)
+	if merged == nil {
+		t.Fatalf("expected non-nil merged profile")
+	}
+	// Overridden fields
+	if merged.Name != "Overridden Name" {
+		t.Errorf("Name = %q, want 'Overridden Name'", merged.Name)
+	}
+	if merged.Limits.Context != 200000 || merged.Limits.Output != 32000 || merged.Limits.Dimensions != 768 {
+		t.Errorf("Limits = %+v, want Context=200000, Output=32000, Dimensions=768", merged.Limits)
+	}
+	if merged.Capabilities.Completion {
+		t.Errorf("expected Completion to be overridden to false")
+	}
+	if !merged.Capabilities.Decision {
+		t.Errorf("expected Decision to be overridden to true")
+	}
+	if merged.Capabilities.ToolCall {
+		t.Errorf("expected ToolCall to be overridden to false")
+	}
+	// Preserved base fields
+	if merged.ID != "gpt-4o" {
+		t.Errorf("ID = %q, want 'gpt-4o'", merged.ID)
+	}
+	if merged.Description != "Base description" {
+		t.Errorf("Description = %q, want 'Base description'", merged.Description)
+	}
+	if merged.Family != "gpt-4" {
+		t.Errorf("Family = %q, want 'gpt-4'", merged.Family)
+	}
+	if merged.Knowledge != "2024-10" {
+		t.Errorf("Knowledge = %q, want '2024-10'", merged.Knowledge)
+	}
+}
+
+func TestGatewayModelProfile_MergedOverrides(t *testing.T) {
+	ctx := context.Background()
+	cfg := Config{
+		Providers: []ProviderConfig{
+			{
+				Name: "test-openai",
+				Type: "openai",
+				Auth: &AuthConfig{Type: AuthTypeAPIKey},
+				Models: []ModelSpec{
+					{
+						ID:   "gpt-4o",
+						Name: "Custom GPT-4o Override",
+						Limits: ModelLimits{
+							Context: 300000,
+							Output:  40000,
+						},
+					},
+				},
+			},
+		},
+		Env: map[string]string{
+			"OPENAI_API_KEY": "fake-openai-key",
+		},
+	}
+
+	gw, err := New(ctx, cfg)
+	if err != nil {
+		t.Fatalf("failed to initialize gateway: %v", err)
+	}
+	defer gw.Close()
+
+	prof, ok := gw.ModelProfile("test-openai/gpt-4o")
+	if !ok || prof == nil {
+		t.Fatalf("expected profile for test-openai/gpt-4o, got ok=%v, prof=%v", ok, prof)
+	}
+	if prof.Name != "Custom GPT-4o Override" {
+		t.Errorf("Name = %q, want 'Custom GPT-4o Override'", prof.Name)
+	}
+	if prof.Limits.Context != 300000 || prof.Limits.Output != 40000 {
+		t.Errorf("unexpected limits: %+v, want Context=300000, Output=40000", prof.Limits)
+	}
+	// Base profile description / family / modalities should still be present from catalog
+	if prof.Family == "" && prof.Description == "" {
+		t.Errorf("expected base catalog metadata to be preserved, got family=%q description=%q", prof.Family, prof.Description)
+	}
+}

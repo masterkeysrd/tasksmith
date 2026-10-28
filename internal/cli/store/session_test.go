@@ -616,3 +616,74 @@ func TestSwitchSessionSameIDReloadsTranscript(t *testing.T) {
 		t.Fatalf("unexpected reloaded message IDs: %+v", reloadedItems)
 	}
 }
+
+func TestCompactionThresholds(t *testing.T) {
+	// Table from compaction.md Section 2.4:
+	// 128k: reserve=24,384, trigger=103,616
+	// 200k: reserve=40,000, trigger=160,000
+	// 400k: reserve=44,000, trigger=356,000
+	// 1M:   reserve=62,000, trigger=938,000
+	tests := []struct {
+		ctxLimit, outLimit int
+		wantReserve        int
+		wantTrigger        int
+	}{
+		{128000, 16384, 24384, 103616},
+		{200000, 32000, 40000, 160000},
+		{400000, 128000, 44000, 356000},
+		{1000000, 65536, 62000, 938000},
+	}
+	for _, tc := range tests {
+		res, trig := computeCompactionThresholds(tc.ctxLimit, tc.outLimit)
+		if res != tc.wantReserve || trig != tc.wantTrigger {
+			t.Errorf("computeCompactionThresholds(%d, %d) = (%d, %d), want (%d, %d)",
+				tc.ctxLimit, tc.outLimit, res, trig, tc.wantReserve, tc.wantTrigger)
+		}
+	}
+}
+
+func TestSessionContextStateAndHelpers(t *testing.T) {
+	ResetSession()
+	defer ResetSession()
+
+	ctxState := api.ContextState{
+		UsedTokens:    15000,
+		MaxTokens:     200000,
+		OutputLimit:   32000,
+		ReserveTokens: 40000,
+		TriggerTokens: 160000,
+		FreeTokens:    145000,
+		Breakdown: api.ContextBreakdown{
+			SystemPrompt: 5000,
+			SystemTools:  10000,
+		},
+	}
+
+	sess := &api.Session{
+		ID:      "sess-ctx",
+		Context: ctxState,
+	}
+	SetSession(sess)
+
+	if GetContext().UsedTokens != 15000 {
+		t.Errorf("expected GetContext().UsedTokens = 15000, got %d", GetContext().UsedTokens)
+	}
+	if GetContext().MaxTokens != 200000 {
+		t.Errorf("expected GetContext().MaxTokens = 200000, got %d", GetContext().MaxTokens)
+	}
+
+	// SendCompact in draft mode (no session) appends "Nothing to compact" notice
+	ResetSession()
+	SendCompact("")
+	tr := GetTranscript()
+	if tr.Items == nil || len(*tr.Items) == 0 {
+		t.Fatalf("expected transcript item for SendCompact in draft mode")
+	}
+	lastItem := (*tr.Items)[len(*tr.Items)-1]
+	if lastItem.Kind != TranscriptKindNotice {
+		t.Errorf("expected Notice transcript item, got %v", lastItem.Kind)
+	}
+	if d, ok := lastItem.Data.(NoticeData); !ok || d.Text != "Nothing to compact" {
+		t.Errorf("expected 'Nothing to compact' notice, got %+v", lastItem.Data)
+	}
+}

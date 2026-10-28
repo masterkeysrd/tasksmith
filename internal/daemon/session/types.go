@@ -4,6 +4,7 @@ import (
 	"errors"
 
 	"github.com/masterkeysrd/loom/message"
+	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/broker"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/harness"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/journal"
@@ -56,6 +57,7 @@ type SendInput struct {
 	Command  string
 	Decision *tools.PermissionDecision
 	Question *tools.QuestionResponse
+	Compact  *api.CompactRequest
 }
 
 type (
@@ -120,6 +122,12 @@ const (
 
 	// EventTodosUpdated is published when the session's todos checklist updates.
 	EventTodosUpdated EventType = "todos_updated"
+
+	// EventCompactionStarted is published when context compaction starts.
+	EventCompactionStarted EventType = "compaction_started"
+
+	// EventContextUpdated is published when the session's context window state is recomputed.
+	EventContextUpdated EventType = "context_updated"
 )
 
 // Event is implemented by all real-time session notifications published by [Manager].
@@ -224,6 +232,22 @@ type TodosUpdatedEvent struct {
 }
 
 func (TodosUpdatedEvent) EventType() string { return string(EventTodosUpdated) }
+
+type CompactionStartedEvent struct {
+	SessionID string
+	ID        string
+	Trigger   string
+	Focus     string
+}
+
+func (CompactionStartedEvent) EventType() string { return string(EventCompactionStarted) }
+
+type ContextUpdatedEvent struct {
+	SessionID string
+	Context   api.ContextState
+}
+
+func (ContextUpdatedEvent) EventType() string { return string(EventContextUpdated) }
 
 // Publisher broadcasts real-time session events to a topic.
 type Publisher interface {

@@ -746,6 +746,57 @@ func TestEventPayloadsAndJSONRoundTrip(t *testing.T) {
 			wantTyp: EventTodosUpdated,
 		},
 		{
+			name: "compaction_started",
+			ev: Event{
+				Type:  EventCompactionStarted,
+				Topic: SessionStreamTopic("s1"),
+				Payload: CompactionStartedEvent{
+					SessionID: "s1",
+					ID:        "compact-1",
+					Trigger:   "auto",
+					Focus:     "tests",
+				},
+			},
+			wantTyp: EventCompactionStarted,
+		},
+		{
+			name: "context_updated",
+			ev: Event{
+				Type:  EventContextUpdated,
+				Topic: SessionStreamTopic("s1"),
+				Payload: ContextUpdatedEvent{
+					SessionID: "s1",
+					Context: ContextState{
+						UsedTokens:    12000,
+						MaxTokens:     128000,
+						OutputLimit:   16384,
+						ReserveTokens: 24384,
+						TriggerTokens: 103616,
+						FreeTokens:    91616,
+						Breakdown: ContextBreakdown{
+							SystemPrompt:   3000,
+							ContextFiles:   1000,
+							SystemTools:    2000,
+							CustomTools:    500,
+							MCPTools:       200,
+							Skills:         400,
+							Subagents:      300,
+							Summary:        1000,
+							UserMessages:   600,
+							AgentResponses: 1500,
+							ToolCalls:      1500,
+						},
+						InputTokens:   11500,
+						OutputTokens:  500,
+						CachedTokens:  8000,
+						Compactions:   1,
+						LastCompacted: now,
+					},
+				},
+			},
+			wantTyp: EventContextUpdated,
+		},
+		{
 			name: "error",
 			ev: Event{
 				Type:  EventError,
@@ -811,5 +862,201 @@ func TestEventNullAndUnknownPayload(t *testing.T) {
 		t.Fatalf("expected error for unknown event type, got nil")
 	} else if !strings.Contains(err.Error(), `unknown event type "future_type"`) {
 		t.Fatalf("expected unknown event type error, got %v", err)
+	}
+}
+
+func TestContextAndCompactionTypes(t *testing.T) {
+	// 1. SessionStatus compacting
+	if StatusCompacting != "compacting" {
+		t.Fatalf("StatusCompacting = %q, want %q", StatusCompacting, "compacting")
+	}
+
+	// 2. QueueKind compact and QueueCompactPayload
+	cp := QueueCompactPayload{Focus: "preserve test instructions"}
+	if cp.QueueKind() != QueueKindCompact {
+		t.Fatalf("cp.QueueKind() = %q, want %q", cp.QueueKind(), QueueKindCompact)
+	}
+
+	queueItem := QueueItem{
+		ID:        "qi-1",
+		Kind:      QueueKindCompact,
+		Payload:   cp,
+		CreatedAt: time.Now().UTC().Truncate(time.Second),
+	}
+	qiData, err := json.Marshal(queueItem)
+	if err != nil {
+		t.Fatalf("Marshal QueueItem: %v", err)
+	}
+	var qiDecoded QueueItem
+	if err := json.Unmarshal(qiData, &qiDecoded); err != nil {
+		t.Fatalf("Unmarshal QueueItem: %v", err)
+	}
+	if qiDecoded.Kind != QueueKindCompact {
+		t.Errorf("qiDecoded.Kind = %q, want %q", qiDecoded.Kind, QueueKindCompact)
+	}
+	qiPayload, ok := qiDecoded.Payload.(QueueCompactPayload)
+	if !ok || qiPayload.Focus != "preserve test instructions" {
+		t.Errorf("qiDecoded.Payload = %+v, want focus %q", qiDecoded.Payload, "preserve test instructions")
+	}
+
+	// 3. Agent and Model context limit fields
+	agent := Agent{
+		Name: "coder",
+		Context: ContextBreakdown{
+			SystemPrompt: 1200,
+			Skills:       300,
+		},
+	}
+	agentData, err := json.Marshal(agent)
+	if err != nil {
+		t.Fatalf("Marshal Agent: %v", err)
+	}
+	var agentDecoded Agent
+	if err := json.Unmarshal(agentData, &agentDecoded); err != nil {
+		t.Fatalf("Unmarshal Agent: %v", err)
+	}
+	if agentDecoded.Context.SystemPrompt != 1200 || agentDecoded.Context.Skills != 300 {
+		t.Errorf("agentDecoded.Context mismatch: %+v", agentDecoded.Context)
+	}
+
+	model := Model{
+		ID:           "test-model",
+		ContextLimit: 200000,
+		OutputLimit:  32000,
+	}
+	modelData, err := json.Marshal(model)
+	if err != nil {
+		t.Fatalf("Marshal Model: %v", err)
+	}
+	var modelDecoded Model
+	if err := json.Unmarshal(modelData, &modelDecoded); err != nil {
+		t.Fatalf("Unmarshal Model: %v", err)
+	}
+	if modelDecoded.ContextLimit != 200000 || modelDecoded.OutputLimit != 32000 {
+		t.Errorf("modelDecoded limits mismatch: ContextLimit=%d, OutputLimit=%d", modelDecoded.ContextLimit, modelDecoded.OutputLimit)
+	}
+
+	// 4. SendRequest with CompactRequest
+	sr := SendRequest{
+		ID:      "sr-1",
+		Compact: &CompactRequest{Focus: "api focus"},
+	}
+	srData, err := json.Marshal(sr)
+	if err != nil {
+		t.Fatalf("Marshal SendRequest: %v", err)
+	}
+	var srDecoded SendRequest
+	if err := json.Unmarshal(srData, &srDecoded); err != nil {
+		t.Fatalf("Unmarshal SendRequest: %v", err)
+	}
+	if srDecoded.Compact == nil || srDecoded.Compact.Focus != "api focus" {
+		t.Errorf("srDecoded.Compact mismatch: %+v", srDecoded.Compact)
+	}
+
+	// 5. Session with ContextState
+	now := time.Now().UTC().Truncate(time.Second)
+	sess := Session{
+		ID:     "s-1",
+		Title:  "Test Session",
+		Status: StatusCompacting,
+		Context: ContextState{
+			UsedTokens:    50000,
+			MaxTokens:     200000,
+			OutputLimit:   32000,
+			ReserveTokens: 40000,
+			TriggerTokens: 160000,
+			FreeTokens:    110000,
+			Breakdown: ContextBreakdown{
+				SystemPrompt:   4000,
+				ContextFiles:   2000,
+				SystemTools:    3000,
+				CustomTools:    1000,
+				MCPTools:       500,
+				Skills:         500,
+				Subagents:      500,
+				Summary:        10000,
+				UserMessages:   2500,
+				AgentResponses: 12000,
+				ToolCalls:      14000,
+			},
+			InputTokens:   48000,
+			OutputTokens:  2000,
+			CachedTokens:  35000,
+			Compactions:   2,
+			LastCompacted: now,
+		},
+	}
+	sessData, err := json.Marshal(sess)
+	if err != nil {
+		t.Fatalf("Marshal Session: %v", err)
+	}
+	var sessDecoded Session
+	if err := json.Unmarshal(sessData, &sessDecoded); err != nil {
+		t.Fatalf("Unmarshal Session: %v", err)
+	}
+	if sessDecoded.Status != StatusCompacting {
+		t.Errorf("sessDecoded.Status = %q, want %q", sessDecoded.Status, StatusCompacting)
+	}
+	if sessDecoded.Context.UsedTokens != 50000 || sessDecoded.Context.Breakdown.Summary != 10000 {
+		t.Errorf("sessDecoded.Context mismatch: %+v", sessDecoded.Context)
+	}
+	if sessDecoded.Context.Compactions != 2 {
+		t.Errorf("sessDecoded.Context.Compactions = %d, want 2", sessDecoded.Context.Compactions)
+	}
+
+	// 6. TimelineEntry with CompactedRecord and CacheBrokenRecord
+	compactedEntry := TimelineEntry{
+		ID:        "tl-comp-1",
+		SessionID: "s-1",
+		Kind:      TimelineKindCompacted,
+		CreatedAt: now,
+		Compacted: &CompactedRecord{
+			Trigger:      "auto",
+			Focus:        "focus-area",
+			Summary:      "## Summary text",
+			BeforeTokens: 162000,
+			AfterTokens:  15000,
+			DurationMs:   2340,
+		},
+	}
+	ceData, err := json.Marshal(compactedEntry)
+	if err != nil {
+		t.Fatalf("Marshal TimelineEntry(compacted): %v", err)
+	}
+	var ceDecoded TimelineEntry
+	if err := json.Unmarshal(ceData, &ceDecoded); err != nil {
+		t.Fatalf("Unmarshal TimelineEntry(compacted): %v", err)
+	}
+	if ceDecoded.Kind != TimelineKindCompacted || ceDecoded.Compacted == nil {
+		t.Fatalf("ceDecoded compacted mismatch: %+v", ceDecoded)
+	}
+	if ceDecoded.Compacted.BeforeTokens != 162000 || ceDecoded.Compacted.AfterTokens != 15000 || ceDecoded.Compacted.DurationMs != 2340 {
+		t.Errorf("CompactedRecord fields mismatch: %+v", ceDecoded.Compacted)
+	}
+
+	cacheBrokenEntry := TimelineEntry{
+		ID:        "tl-cb-1",
+		SessionID: "s-1",
+		Kind:      TimelineKindCacheBroken,
+		CreatedAt: now,
+		CacheBroken: &CacheBrokenRecord{
+			PrevCached:  50000,
+			CurrCached:  0,
+			InputTokens: 55000,
+		},
+	}
+	cbData, err := json.Marshal(cacheBrokenEntry)
+	if err != nil {
+		t.Fatalf("Marshal TimelineEntry(cache_broken): %v", err)
+	}
+	var cbDecoded TimelineEntry
+	if err := json.Unmarshal(cbData, &cbDecoded); err != nil {
+		t.Fatalf("Unmarshal TimelineEntry(cache_broken): %v", err)
+	}
+	if cbDecoded.Kind != TimelineKindCacheBroken || cbDecoded.CacheBroken == nil {
+		t.Fatalf("cbDecoded cache_broken mismatch: %+v", cbDecoded)
+	}
+	if cbDecoded.CacheBroken.PrevCached != 50000 || cbDecoded.CacheBroken.CurrCached != 0 || cbDecoded.CacheBroken.InputTokens != 55000 {
+		t.Errorf("CacheBrokenRecord fields mismatch: %+v", cbDecoded.CacheBroken)
 	}
 }

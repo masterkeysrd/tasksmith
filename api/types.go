@@ -20,13 +20,45 @@ type Workspace struct {
 	Warnings     []string `json:"warnings,omitempty"`
 }
 
+// ContextBreakdown categorizes token usage within the context window.
+type ContextBreakdown struct {
+	SystemPrompt   int `json:"system_prompt"`
+	ContextFiles   int `json:"context_files,omitempty"`
+	SystemTools    int `json:"system_tools,omitempty"`
+	CustomTools    int `json:"custom_tools,omitempty"`
+	MCPTools       int `json:"mcp_tools,omitempty"`
+	Skills         int `json:"skills,omitempty"`
+	Subagents      int `json:"subagents,omitempty"`
+	Summary        int `json:"summary,omitempty"`
+	UserMessages   int `json:"user_messages,omitempty"`
+	AgentResponses int `json:"agent_responses,omitempty"`
+	ToolCalls      int `json:"tool_calls,omitempty"`
+}
+
+// ContextState tracks token usage, limits, and breakdown for a session context window.
+type ContextState struct {
+	UsedTokens    int              `json:"used_tokens"`
+	MaxTokens     int              `json:"max_tokens"`
+	OutputLimit   int              `json:"output_limit,omitempty"`
+	ReserveTokens int              `json:"reserve_tokens"`
+	TriggerTokens int              `json:"trigger_tokens"`
+	FreeTokens    int              `json:"free_tokens"`
+	Breakdown     ContextBreakdown `json:"breakdown"`
+	InputTokens   int              `json:"input_tokens,omitempty"`
+	OutputTokens  int              `json:"output_tokens,omitempty"`
+	CachedTokens  int              `json:"cached_tokens,omitempty"`
+	Compactions   int              `json:"compactions,omitempty"`
+	LastCompacted time.Time        `json:"last_compacted,omitzero"`
+}
+
 // Agent describes an effective agent configuration in a workspace.
 type Agent struct {
-	Name        string   `json:"name"`
-	DisplayName string   `json:"display_name,omitempty"`
-	Description string   `json:"description,omitempty"`
-	Models      []string `json:"models,omitempty"`
-	Effort      string   `json:"effort,omitempty"`
+	Name        string           `json:"name"`
+	DisplayName string           `json:"display_name,omitempty"`
+	Description string           `json:"description,omitempty"`
+	Models      []string         `json:"models,omitempty"`
+	Effort      string           `json:"effort,omitempty"`
+	Context     ContextBreakdown `json:"context"`
 }
 
 // Model describes a resolved model and its capabilities from a workspace provider.
@@ -37,6 +69,8 @@ type Model struct {
 	Label          string   `json:"label,omitempty"`
 	DefaultEffort  string   `json:"default_effort,omitempty"`
 	AllowedEfforts []string `json:"allowed_efforts,omitempty"`
+	ContextLimit   int      `json:"context_limit,omitempty"`
+	OutputLimit    int      `json:"output_limit,omitempty"`
 }
 
 // HealthResponse reports the daemon's process identity, startup timestamp,
@@ -79,6 +113,7 @@ const (
 	StatusThinking          SessionStatus = "thinking"
 	StatusGenerating        SessionStatus = "generating"
 	StatusExecuting         SessionStatus = "executing"
+	StatusCompacting        SessionStatus = "compacting"
 	StatusWaitingPermission SessionStatus = "waiting_permission"
 	StatusWaitingQuestion   SessionStatus = "waiting_question"
 )
@@ -128,6 +163,7 @@ type QueueKind string
 const (
 	QueueKindMessage QueueKind = "message"
 	QueueKindCommand QueueKind = "command"
+	QueueKindCompact QueueKind = "compact"
 )
 
 type QueueItemPayload interface {
@@ -145,6 +181,12 @@ type QueueCommandPayload struct {
 }
 
 func (QueueCommandPayload) QueueKind() QueueKind { return QueueKindCommand }
+
+type QueueCompactPayload struct {
+	Focus string `json:"focus,omitempty"`
+}
+
+func (QueueCompactPayload) QueueKind() QueueKind { return QueueKindCompact }
 
 type QueueItem struct {
 	ID        string           `json:"id"`
@@ -187,6 +229,12 @@ func (q *QueueItem) UnmarshalJSON(data []byte) error {
 			return fmt.Errorf("api: unmarshal queue command payload: %w", err)
 		}
 		q.Payload = p
+	case QueueKindCompact:
+		var p QueueCompactPayload
+		if err := json.Unmarshal(raw, &p); err != nil {
+			return fmt.Errorf("api: unmarshal queue compact payload: %w", err)
+		}
+		q.Payload = p
 	default:
 		return fmt.Errorf("api: unknown queue kind %q", w.Kind)
 	}
@@ -224,6 +272,7 @@ type Session struct {
 	Title              string              `json:"title"`
 	Config             SessionConfig       `json:"config"`
 	Status             SessionStatus       `json:"status"`
+	Context            ContextState        `json:"context"`
 	PendingPermissions []PermissionRequest `json:"pending_permissions,omitempty"`
 	PendingQuestions   []QuestionRequest   `json:"pending_questions,omitempty"`
 	Tasks              []Task              `json:"tasks,omitempty"`
@@ -304,6 +353,11 @@ type Chunk struct {
 	Done    bool    `json:"done,omitempty"`
 }
 
+// CompactRequest specifies optional focus parameters for manual context compaction.
+type CompactRequest struct {
+	Focus string `json:"focus,omitempty"`
+}
+
 // SendRequest specifies the user message payload or permission decision to submit to the session.
 type SendRequest struct {
 	ID       string              `json:"id,omitempty"`
@@ -312,6 +366,7 @@ type SendRequest struct {
 	Command  string              `json:"command,omitempty"`
 	Decision *PermissionDecision `json:"decision,omitempty"`
 	Question *QuestionResponse   `json:"question,omitempty"`
+	Compact  *CompactRequest     `json:"compact,omitempty"`
 }
 
 // PermissionMode controls the session-wide tool approval policy.

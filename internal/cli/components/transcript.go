@@ -36,6 +36,10 @@ func renderTranscriptItem(item store.TranscriptItem, _ int) trail.Node {
 		if d, ok := item.Data.(store.CommandData); ok {
 			return CommandOutput(d)
 		}
+	case store.TranscriptKindContextUsage:
+		if d, ok := item.Data.(store.ContextUsageData); ok {
+			return ContextUsage(d)
+		}
 	default:
 		return nil
 	}

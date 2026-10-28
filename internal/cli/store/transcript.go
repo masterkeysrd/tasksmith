@@ -9,13 +9,20 @@ import (
 type TranscriptKind string
 
 const (
-	TranscriptKindHeader   TranscriptKind = "header"
-	TranscriptKindTimeline TranscriptKind = "timeline"
-	TranscriptKindNotice   TranscriptKind = "notice"
-	TranscriptKindError    TranscriptKind = "error"
-	TranscriptKindCommand  TranscriptKind = "command"
-	TranscriptKindMessage  TranscriptKind = "message"
+	TranscriptKindHeader       TranscriptKind = "header"
+	TranscriptKindTimeline     TranscriptKind = "timeline"
+	TranscriptKindNotice       TranscriptKind = "notice"
+	TranscriptKindError        TranscriptKind = "error"
+	TranscriptKindCommand      TranscriptKind = "command"
+	TranscriptKindMessage      TranscriptKind = "message"
+	TranscriptKindContextUsage TranscriptKind = "context_usage"
 )
+
+// ContextUsageData holds the data for the /context usage view.
+type ContextUsageData struct {
+	ModelName string
+	Context   api.ContextState
+}
 
 // HeaderData holds the data for the startup banner.
 type HeaderData struct {
@@ -297,6 +304,14 @@ func AppendCommandOutput(cmd, out string) {
 	AppendTranscript(TranscriptItem{
 		Kind: TranscriptKindCommand,
 		Data: CommandData{Command: cmd, Output: out},
+	})
+}
+
+// AppendContextUsage appends a /context usage view to the transcript scrollback.
+func AppendContextUsage(d ContextUsageData) {
+	AppendTranscript(TranscriptItem{
+		Kind: TranscriptKindContextUsage,
+		Data: d,
 	})
 }
 

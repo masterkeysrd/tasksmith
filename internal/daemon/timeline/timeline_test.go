@@ -239,6 +239,51 @@ func TestAppendAndGet_AllKinds(t *testing.T) {
 				}
 			},
 		},
+		{
+			name: "compacted record",
+			makeEntry: func() *Entry {
+				return NewCompactedEntry(sessionID, CompactedRecord{
+					Trigger:      "auto",
+					Focus:        "test focus",
+					Summary:      "## Summary",
+					BeforeTokens: 100000,
+					AfterTokens:  10000,
+					DurationMs:   1500,
+				})
+			},
+			verify: func(t *testing.T, original, loaded *Entry) {
+				if loaded.Kind != KindCompacted {
+					t.Fatalf("loaded.Kind = %q, want %q", loaded.Kind, KindCompacted)
+				}
+				if loaded.Compacted == nil {
+					t.Fatal("loaded.Compacted is nil")
+				}
+				if *loaded.Compacted != *original.Compacted {
+					t.Errorf("loaded.Compacted = %+v, want %+v", *loaded.Compacted, *original.Compacted)
+				}
+			},
+		},
+		{
+			name: "cache broken record",
+			makeEntry: func() *Entry {
+				return NewCacheBrokenEntry(sessionID, CacheBrokenRecord{
+					PrevCached:  80000,
+					CurrCached:  1000,
+					InputTokens: 85000,
+				})
+			},
+			verify: func(t *testing.T, original, loaded *Entry) {
+				if loaded.Kind != KindCacheBroken {
+					t.Fatalf("loaded.Kind = %q, want %q", loaded.Kind, KindCacheBroken)
+				}
+				if loaded.CacheBroken == nil {
+					t.Fatal("loaded.CacheBroken is nil")
+				}
+				if *loaded.CacheBroken != *original.CacheBroken {
+					t.Errorf("loaded.CacheBroken = %+v, want %+v", *loaded.CacheBroken, *original.CacheBroken)
+				}
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -394,6 +439,31 @@ func TestJSONRoundTrip_AllKinds(t *testing.T) {
 				},
 			},
 		},
+		{
+			ID:        uuid.Must(uuid.NewV7()).String(),
+			SessionID: sessionID,
+			Kind:      KindCompacted,
+			CreatedAt: now,
+			Compacted: &CompactedRecord{
+				Trigger:      "auto",
+				Focus:        "deep reasoning",
+				Summary:      "## Compaction Summary",
+				BeforeTokens: 150000,
+				AfterTokens:  12000,
+				DurationMs:   3400,
+			},
+		},
+		{
+			ID:        uuid.Must(uuid.NewV7()).String(),
+			SessionID: sessionID,
+			Kind:      KindCacheBroken,
+			CreatedAt: now,
+			CacheBroken: &CacheBrokenRecord{
+				PrevCached:  75000,
+				CurrCached:  0,
+				InputTokens: 78000,
+			},
+		},
 	}
 
 	for _, original := range entries {
@@ -451,6 +521,14 @@ func TestJSONRoundTrip_AllKinds(t *testing.T) {
 			case KindPermission:
 				if !reflect.DeepEqual(decoded.Permission, original.Permission) {
 					t.Errorf("permission = %+v, want %+v", decoded.Permission, original.Permission)
+				}
+			case KindCompacted:
+				if *decoded.Compacted != *original.Compacted {
+					t.Errorf("compacted = %+v, want %+v", *decoded.Compacted, *original.Compacted)
+				}
+			case KindCacheBroken:
+				if *decoded.CacheBroken != *original.CacheBroken {
+					t.Errorf("cache_broken = %+v, want %+v", *decoded.CacheBroken, *original.CacheBroken)
 				}
 			}
 		})
@@ -770,6 +848,14 @@ func TestErrorCases(t *testing.T) {
 			entry: &Entry{SessionID: validSession, Kind: KindPermission, Permission: nil},
 		},
 		{
+			name:  "KindCompacted nil",
+			entry: &Entry{SessionID: validSession, Kind: KindCompacted, Compacted: nil},
+		},
+		{
+			name:  "KindCacheBroken nil",
+			entry: &Entry{SessionID: validSession, Kind: KindCacheBroken, CacheBroken: nil},
+		},
+		{
 			name:  "Unknown Kind",
 			entry: &Entry{SessionID: validSession, Kind: "nonexistent"},
 		},
@@ -836,5 +922,182 @@ func TestInterruptedEntry(t *testing.T) {
 	}
 	if len(byKind) != 1 || byKind[0].ID != entry.ID {
 		t.Fatalf("unexpected ListByKind result: %+v", byKind)
+	}
+}
+
+func TestCompactedAndCacheBrokenEntries(t *testing.T) {
+	sessionID := "sess-comp-cb"
+	tl, _, ctx := openTestTimeline(t, sessionID)
+
+	// 1. Compacted Entry
+	compactRec := CompactedRecord{
+		Trigger:      "auto",
+		Focus:        "architecture",
+		Summary:      "## Current State\n- building API types",
+		BeforeTokens: 120000,
+		AfterTokens:  15000,
+		DurationMs:   2150,
+	}
+	compEntry := NewCompactedEntry(sessionID, compactRec)
+	if compEntry.Kind != KindCompacted {
+		t.Fatalf("expected KindCompacted, got %q", compEntry.Kind)
+	}
+	if compEntry.SessionID != sessionID {
+		t.Fatalf("expected sessionID %q, got %q", sessionID, compEntry.SessionID)
+	}
+	if err := tl.Append(ctx, compEntry); err != nil {
+		t.Fatalf("Append(NewCompactedEntry): %v", err)
+	}
+	if compEntry.ID == "" {
+		t.Fatal("expected non-empty generated ID")
+	}
+
+	gotComp, err := tl.Get(ctx, compEntry.ID)
+	if err != nil {
+		t.Fatalf("Get(%q): %v", compEntry.ID, err)
+	}
+	if gotComp.Kind != KindCompacted || gotComp.Compacted == nil {
+		t.Fatalf("gotComp = %+v, want KindCompacted with Compacted != nil", gotComp)
+	}
+	if *gotComp.Compacted != compactRec {
+		t.Errorf("gotComp.Compacted = %+v, want %+v", *gotComp.Compacted, compactRec)
+	}
+
+	// 2. Cache Broken Entry
+	cbRec := CacheBrokenRecord{
+		PrevCached:  64000,
+		CurrCached:  0,
+		InputTokens: 70000,
+	}
+	cbEntry := NewCacheBrokenEntry(sessionID, cbRec)
+	if cbEntry.Kind != KindCacheBroken {
+		t.Fatalf("expected KindCacheBroken, got %q", cbEntry.Kind)
+	}
+	if cbEntry.SessionID != sessionID {
+		t.Fatalf("expected sessionID %q, got %q", sessionID, cbEntry.SessionID)
+	}
+	if err := tl.Append(ctx, cbEntry); err != nil {
+		t.Fatalf("Append(NewCacheBrokenEntry): %v", err)
+	}
+	if cbEntry.ID == "" {
+		t.Fatal("expected non-empty generated ID")
+	}
+
+	gotCB, err := tl.Get(ctx, cbEntry.ID)
+	if err != nil {
+		t.Fatalf("Get(%q): %v", cbEntry.ID, err)
+	}
+	if gotCB.Kind != KindCacheBroken || gotCB.CacheBroken == nil {
+		t.Fatalf("gotCB = %+v, want KindCacheBroken with CacheBroken != nil", gotCB)
+	}
+	if *gotCB.CacheBroken != cbRec {
+		t.Errorf("gotCB.CacheBroken = %+v, want %+v", *gotCB.CacheBroken, cbRec)
+	}
+
+	// ListByKind checks
+	compList, err := tl.ListByKind(ctx, KindCompacted)
+	if err != nil {
+		t.Fatalf("ListByKind(KindCompacted): %v", err)
+	}
+	if len(compList) != 1 || compList[0].ID != compEntry.ID {
+		t.Fatalf("unexpected compList: %+v", compList)
+	}
+
+	cbList, err := tl.ListByKind(ctx, KindCacheBroken)
+	if err != nil {
+		t.Fatalf("ListByKind(KindCacheBroken): %v", err)
+	}
+	if len(cbList) != 1 || cbList[0].ID != cbEntry.ID {
+		t.Fatalf("unexpected cbList: %+v", cbList)
+	}
+}
+
+func TestEntryClone(t *testing.T) {
+	now := time.Now().UTC()
+	original := Entry{
+		ID:        "entry-1",
+		SessionID: "sess-1",
+		Kind:      KindCompacted,
+		CreatedAt: now,
+		Command: &CommandRecord{
+			Command:    "echo test",
+			Output:     "test",
+			ExitCode:   0,
+			DurationMs: 10,
+		},
+		Model: &ModelChange{
+			From:   "model-a",
+			To:     "model-b",
+			Effort: "high",
+		},
+		Effort: &EffortChange{
+			From: "low",
+			To:   "high",
+		},
+		Agent: &AgentChange{
+			From: "agent-a",
+			To:   "agent-b",
+		},
+		Mode: &ModeChange{
+			From: tools.ModeAsk,
+			To:   tools.ModeAuto,
+		},
+		Permission: &PermissionRecord{
+			Request: tools.PermissionRequest{
+				ID:            "req-1",
+				GrantPatterns: []string{"pattern-1"},
+			},
+			Decision: tools.PermissionDecision{
+				RequestID: "req-1",
+			},
+		},
+		Compacted: &CompactedRecord{
+			Trigger:      "manual",
+			Focus:        "focus-orig",
+			Summary:      "summary-orig",
+			BeforeTokens: 50000,
+			AfterTokens:  5000,
+			DurationMs:   1200,
+		},
+		CacheBroken: &CacheBrokenRecord{
+			PrevCached:  30000,
+			CurrCached:  0,
+			InputTokens: 32000,
+		},
+	}
+
+	cloned := original.Clone()
+
+	// Verify values match
+	if cloned.ID != original.ID || cloned.SessionID != original.SessionID || cloned.Kind != original.Kind {
+		t.Fatalf("cloned header fields mismatch: %+v vs %+v", cloned, original)
+	}
+	if *cloned.Compacted != *original.Compacted {
+		t.Fatalf("cloned Compacted mismatch: %+v vs %+v", *cloned.Compacted, *original.Compacted)
+	}
+	if *cloned.CacheBroken != *original.CacheBroken {
+		t.Fatalf("cloned CacheBroken mismatch: %+v vs %+v", *cloned.CacheBroken, *original.CacheBroken)
+	}
+
+	// Verify deep copy isolation: mutating original doesn't affect clone
+	original.Compacted.Focus = "focus-mutated"
+	original.CacheBroken.PrevCached = 99999
+	original.Command.Command = "mutated cmd"
+
+	if cloned.Compacted.Focus != "focus-orig" {
+		t.Errorf("cloned Compacted was mutated: got %q, want %q", cloned.Compacted.Focus, "focus-orig")
+	}
+	if cloned.CacheBroken.PrevCached != 30000 {
+		t.Errorf("cloned CacheBroken was mutated: got %d, want 30000", cloned.CacheBroken.PrevCached)
+	}
+	if cloned.Command.Command != "echo test" {
+		t.Errorf("cloned Command was mutated: got %q, want %q", cloned.Command.Command, "echo test")
+	}
+
+	// Verify empty clone works
+	emptyEntry := Entry{ID: "empty"}
+	emptyCloned := emptyEntry.Clone()
+	if emptyCloned.Compacted != nil || emptyCloned.CacheBroken != nil {
+		t.Errorf("empty cloned has non-nil records: %+v", emptyCloned)
 	}
 }

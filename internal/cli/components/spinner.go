@@ -37,6 +37,9 @@ var Spinner = trail.FC("Spinner", func(props SpinnerProps) trail.Node {
 		baseVerb string
 	)
 	switch props.Status {
+	case api.StatusCompacting:
+		fgColor = scheme.Color.Agent.Thinking
+		baseVerb = "Compacting"
 	case api.StatusGenerating:
 		fgColor = scheme.Color.Agent.Generating
 		baseVerb = "Generating"

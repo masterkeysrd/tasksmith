@@ -50,6 +50,8 @@ const (
 	EventCommandStarted      EventType = "command_started"
 	EventQueueUpdated        EventType = "queue_updated"
 	EventTodosUpdated        EventType = "todos_updated"
+	EventCompactionStarted   EventType = "compaction_started"
+	EventContextUpdated      EventType = "context_updated"
 	EventError               EventType = "error"
 )
 
@@ -178,6 +180,24 @@ type TodosUpdatedEvent struct {
 
 func (TodosUpdatedEvent) EventType() string { return string(EventTodosUpdated) }
 
+// CompactionStartedEvent represents the payload for an [EventCompactionStarted] event.
+type CompactionStartedEvent struct {
+	SessionID string `json:"session_id"`
+	ID        string `json:"id"`
+	Trigger   string `json:"trigger,omitempty"`
+	Focus     string `json:"focus,omitempty"`
+}
+
+func (CompactionStartedEvent) EventType() string { return string(EventCompactionStarted) }
+
+// ContextUpdatedEvent represents the payload for an [EventContextUpdated] event.
+type ContextUpdatedEvent struct {
+	SessionID string       `json:"session_id"`
+	Context   ContextState `json:"context"`
+}
+
+func (ContextUpdatedEvent) EventType() string { return string(EventContextUpdated) }
+
 // Event is the real-time notification payload streamed over SSE.
 type Event struct {
 	ID      string       `json:"id,omitempty"`
@@ -293,6 +313,18 @@ func (e *Event) UnmarshalJSON(data []byte) error {
 		var p TodosUpdatedEvent
 		if err := json.Unmarshal(raw, &p); err != nil {
 			return fmt.Errorf("api: unmarshal todos_updated payload: %w", err)
+		}
+		e.Payload = p
+	case EventCompactionStarted:
+		var p CompactionStartedEvent
+		if err := json.Unmarshal(raw, &p); err != nil {
+			return fmt.Errorf("api: unmarshal compaction_started payload: %w", err)
+		}
+		e.Payload = p
+	case EventContextUpdated:
+		var p ContextUpdatedEvent
+		if err := json.Unmarshal(raw, &p); err != nil {
+			return fmt.Errorf("api: unmarshal context_updated payload: %w", err)
 		}
 		e.Payload = p
 	case EventError:

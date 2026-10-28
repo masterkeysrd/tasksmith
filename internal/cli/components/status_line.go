@@ -10,6 +10,7 @@ import (
 	"github.com/masterkeysrd/kite/style"
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/cli/store"
+	"github.com/masterkeysrd/tasksmith/internal/ui/format"
 	"github.com/masterkeysrd/tasksmith/internal/ui/theme"
 )
 
@@ -95,6 +96,30 @@ var ModeSegment = trail.FC("ModeSegment", func(props SegmentProps) trail.Node {
 	return segment(props, statusText(text, modeColor(scheme, mode), true), text, scheme.Color.Text.Secondary)
 })
 
+// ContextSegment shows compact context usage (e.g. "109.5k/400.0k (27%)") once session context is known.
+var ContextSegment = trail.FC("ContextSegment", func(props SegmentProps) trail.Node {
+	scheme := theme.UseTheme()
+	ctx := store.UseContext()
+	if ctx.MaxTokens == 0 {
+		return nil
+	}
+
+	pct := 0
+	if ctx.MaxTokens > 0 {
+		pct = min(int(float64(ctx.UsedTokens)/float64(ctx.MaxTokens)*100), 100)
+	}
+	text := fmt.Sprintf("%s/%s (%d%%)", format.FormatTokens(ctx.UsedTokens), format.FormatTokens(ctx.MaxTokens), pct)
+
+	col := scheme.Color.Text.Secondary
+	if ctx.TriggerTokens > 0 && ctx.UsedTokens >= ctx.TriggerTokens {
+		col = scheme.Color.Text.Error
+	} else if ctx.TriggerTokens > 0 && ctx.UsedTokens >= (ctx.TriggerTokens*3)/4 {
+		col = scheme.Color.Text.Warning
+	}
+
+	return segment(props, statusText(text, col, false), text, scheme.Color.Text.Secondary)
+})
+
 // ModelSegment shows "<model> · <thinking>" once session model info is ready.
 var ModelSegment = trail.FC("ModelSegment", func(props SegmentProps) trail.Node {
 	scheme := theme.UseTheme()
@@ -135,6 +160,7 @@ var DefaultStatusLine = trail.SimpleFC("DefaultStatusLine", func() trail.Node {
 		HintSegment(SegmentProps{}),
 		trail.Spacer(),
 		ModeSegment(SegmentProps{Separator: " · "}),
+		ContextSegment(SegmentProps{Separator: " · "}),
 		ModelSegment(SegmentProps{}),
 	)
 })

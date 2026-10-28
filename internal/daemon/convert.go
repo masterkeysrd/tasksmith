@@ -32,6 +32,7 @@ func toAPISession(sess *session.Session) api.Session {
 	var ts []api.Task
 	var todos []api.TodoItem
 	var queueItems []api.QueueItem
+	var ctxState api.ContextState
 	if sess.State != nil {
 		if sess.Status != "" {
 			status = api.SessionStatus(sess.Status)
@@ -41,6 +42,7 @@ func toAPISession(sess *session.Session) api.Session {
 		ts = toAPITasks(sess.State.Tasks)
 		todos = toAPITodos(sess.State.Todos)
 		queueItems = toAPIQueueItems(sess.VisibleQueue())
+		ctxState = sess.State.Context
 	}
 	return api.Session{
 		ID:    sess.ID,
@@ -52,6 +54,7 @@ func toAPISession(sess *session.Session) api.Session {
 			Mode:   api.PermissionMode(sess.Config.Mode),
 		},
 		Status:             status,
+		Context:            ctxState,
 		PendingPermissions: perms,
 		PendingQuestions:   questions,
 		Tasks:              ts,
@@ -270,6 +273,19 @@ func toAPIChunk(ch *message.AssistantChunk) *api.Chunk {
 }
 
 func fromSendRequest(req api.SendRequest) (session.SendInput, error) {
+	if req.Compact != nil {
+		if req.Question != nil || req.Decision != nil || strings.TrimSpace(req.Content) != "" || len(req.Blocks) > 0 || strings.TrimSpace(req.Command) != "" {
+			return session.SendInput{}, fmt.Errorf("%w: cannot combine compaction request with other input", session.ErrInvalidConfig)
+		}
+		id := strings.TrimSpace(req.ID)
+		if id != "" {
+			parsed, err := uuid.Parse(id)
+			if err != nil || parsed.Version() != 7 || parsed.String() != id {
+				return session.SendInput{}, fmt.Errorf("%w: invalid message id %q", session.ErrInvalidConfig, id)
+			}
+		}
+		return session.SendInput{ID: id, Compact: req.Compact}, nil
+	}
 	if req.Question != nil {
 		if req.Decision != nil || strings.TrimSpace(req.Content) != "" || len(req.Blocks) > 0 || strings.TrimSpace(req.Command) != "" || strings.TrimSpace(req.ID) != "" {
 			return session.SendInput{}, fmt.Errorf("%w: cannot combine question response with other input", session.ErrInvalidConfig)
@@ -510,6 +526,25 @@ func toAPITimelineEntry(entry timeline.Entry) (api.TimelineEntry, error) {
 		out.Question = &api.QuestionRecord{Request: toAPIQuestionRequests([]tools.QuestionRequest{entry.Question.Request})[0], Response: toAPIQuestionResponse(entry.Question.Response, entry.Question.Request.Questions)}
 	}
 
+	if entry.Compacted != nil {
+		out.Compacted = &api.CompactedRecord{
+			Trigger:      entry.Compacted.Trigger,
+			Focus:        entry.Compacted.Focus,
+			Summary:      entry.Compacted.Summary,
+			BeforeTokens: entry.Compacted.BeforeTokens,
+			AfterTokens:  entry.Compacted.AfterTokens,
+			DurationMs:   entry.Compacted.DurationMs,
+		}
+	}
+
+	if entry.CacheBroken != nil {
+		out.CacheBroken = &api.CacheBrokenRecord{
+			PrevCached:  entry.CacheBroken.PrevCached,
+			CurrCached:  entry.CacheBroken.CurrCached,
+			InputTokens: entry.CacheBroken.InputTokens,
+		}
+	}
+
 	return out, nil
 }
 
@@ -553,6 +588,7 @@ func toAPIAgent(ag workspace.Agent) api.Agent {
 		Description: ag.Description,
 		Models:      slices.Clone(ag.Models),
 		Effort:      extractAgentEffort(ag.Thinking),
+		Context:     ag.Context,
 	}
 }
 
@@ -590,6 +626,8 @@ func toAPIModel(providerName string, pm workspace.ProviderModel) api.Model {
 		Label:          label,
 		DefaultEffort:  defEffort,
 		AllowedEfforts: allowedEfforts,
+		ContextLimit:   pm.Limits.Context,
+		OutputLimit:    pm.Limits.Output,
 	}
 }
 
@@ -789,6 +827,30 @@ func (d *Daemon) FormatEvent(msg broker.Message) (api.Event, error) {
 			Payload: api.TodosUpdatedEvent{
 				SessionID: ev.SessionID,
 				Todos:     toAPITodos(ev.Todos),
+			},
+		}, nil
+
+	case session.CompactionStartedEvent:
+		return api.Event{
+			ID:    msg.ID,
+			Type:  api.EventCompactionStarted,
+			Topic: msg.Topic,
+			Payload: api.CompactionStartedEvent{
+				SessionID: ev.SessionID,
+				ID:        ev.ID,
+				Trigger:   ev.Trigger,
+				Focus:     ev.Focus,
+			},
+		}, nil
+
+	case session.ContextUpdatedEvent:
+		return api.Event{
+			ID:    msg.ID,
+			Type:  api.EventContextUpdated,
+			Topic: msg.Topic,
+			Payload: api.ContextUpdatedEvent{
+				SessionID: ev.SessionID,
+				Context:   ev.Context,
 			},
 		}, nil
 

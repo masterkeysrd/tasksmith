@@ -153,3 +153,28 @@ func TestDefaultStatusLine(t *testing.T) {
 		t.Fatalf("expected 'plan · TestModel · medium' in status line, got:\n%s", out)
 	}
 }
+
+func TestContextSegment(t *testing.T) {
+	store.ResetSession()
+	defer store.ResetSession()
+
+	// 1. Hidden when MaxTokens == 0
+	out := renderNode(t, ContextSegment(SegmentProps{Separator: " · "}))
+	if strings.TrimSpace(out) != "" {
+		t.Fatalf("expected ContextSegment to be hidden when MaxTokens == 0, got:\n%s", out)
+	}
+
+	// 2. Visible when MaxTokens > 0
+	store.SetSession(&api.Session{
+		ID: "sess-ctx-test",
+		Context: api.ContextState{
+			UsedTokens:    109500,
+			MaxTokens:     400000,
+			TriggerTokens: 356000,
+		},
+	})
+	out = renderNode(t, ContextSegment(SegmentProps{Separator: " · "}))
+	if !strings.Contains(out, "109.5k/400.0k (27%)") {
+		t.Fatalf("expected '109.5k/400.0k (27%%)' in ContextSegment, got:\n%s", out)
+	}
+}

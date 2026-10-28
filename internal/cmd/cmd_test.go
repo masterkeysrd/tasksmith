@@ -90,7 +90,15 @@ func (g *fakeGateway) ResolveEmbedding(context.Context, string, ...gateway.Embed
 }
 
 func (g *fakeGateway) ListProviders() []gateway.ProviderInfo { return nil }
-func (g *fakeGateway) Close() error                          { return nil }
+func (g *fakeGateway) ModelProfile(model string) (*profile.Profile, bool) {
+	if g.provider != nil {
+		if prof, found := g.provider.GetProfile(model); found {
+			return &prof, true
+		}
+	}
+	return nil, false
+}
+func (g *fakeGateway) Close() error { return nil }
 
 type fakeGatewayPool struct {
 	gw *fakeGateway

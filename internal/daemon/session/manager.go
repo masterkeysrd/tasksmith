@@ -17,6 +17,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/gateway"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/harness"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/permissions"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/timeline"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tools"
@@ -230,6 +231,7 @@ func (m *manager) loadOrCacheSession(ctx context.Context, dbSess *Session) (*Ses
 	if h, err := sess.harness(ctx); err == nil {
 		if st, err := h.LoadState(ctx); err == nil {
 			sess.Lock()
+			sess.State.Context = st.Context
 			if len(st.Todos) > 0 {
 				sess.Todos = slices.Clone(st.Todos)
 			}
@@ -518,6 +520,42 @@ func (m *manager) Update(ctx context.Context, id string, params UpdateParams) (*
 		m.publisher.Publish(api.SessionStreamTopic(sess.ID), EntryAddedEvent{
 			SessionID: sess.ID,
 			Entry:     entry.Clone(),
+		})
+	}
+
+	if oldConfig.Model != newConfig.Model || oldConfig.Agent != newConfig.Agent {
+		limits := m.workspace.ModelLimits(newConfig.Model)
+		if m.gateway != nil {
+			if prof, ok := m.gateway.ModelProfile(newConfig.Model); ok && prof != nil {
+				if prof.Limits.Context > 0 {
+					limits.Context = prof.Limits.Context
+				}
+				if prof.Limits.Output > 0 {
+					limits.Output = prof.Limits.Output
+				}
+			}
+		}
+		breakdown := m.workspace.AgentContext(newConfig.Agent)
+		staticCtx := harness.StaticContextFromBreakdown(breakdown)
+		sess.Lock()
+		res, trig := harness.CompactionTriggerTokens(limits)
+		sess.State.Context.MaxTokens = limits.Context
+		sess.State.Context.OutputLimit = limits.Output
+		sess.State.Context.ReserveTokens = res
+		sess.State.Context.TriggerTokens = trig
+		sess.State.Context.FreeTokens = max(0, trig-sess.State.Context.UsedTokens)
+		sess.State.Context.Breakdown.SystemPrompt = staticCtx.SystemPrompt
+		sess.State.Context.Breakdown.ContextFiles = staticCtx.ContextFiles
+		sess.State.Context.Breakdown.SystemTools = staticCtx.SystemTools
+		sess.State.Context.Breakdown.CustomTools = staticCtx.CustomTools
+		sess.State.Context.Breakdown.MCPTools = staticCtx.MCPTools
+		sess.State.Context.Breakdown.Skills = staticCtx.Skills
+		sess.State.Context.Breakdown.Subagents = staticCtx.Subagents
+		ctxState := sess.State.Context
+		sess.Unlock()
+		m.publisher.Publish(api.SessionStreamTopic(sess.ID), ContextUpdatedEvent{
+			SessionID: sess.ID,
+			Context:   ctxState,
 		})
 	}
 

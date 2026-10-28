@@ -185,6 +185,15 @@ func (g *fakeGateway) ListProviders() []gateway.ProviderInfo {
 	return nil
 }
 
+func (g *fakeGateway) ModelProfile(model string) (*profile.Profile, bool) {
+	if g.provider != nil {
+		if prof, found := g.provider.GetProfile(model); found {
+			return &prof, true
+		}
+	}
+	return nil, false
+}
+
 func (g *fakeGateway) Close() error {
 	return nil
 }
@@ -816,11 +825,12 @@ func TestSendAndHistory(t *testing.T) {
 	// 2. StatusChangedEvent (StatusGenerating)
 	// 3..5. ChunkEvent ("Hello", ", ", "TaskSmith!")
 	// 6. EntryAddedEvent (assistant message)
-	// 7. StatusChangedEvent (StatusIdle)
-	// 8. CompletedEvent (assistant reply)
+	// 7. ContextUpdatedEvent (Context state)
+	// 8. StatusChangedEvent (StatusIdle)
+	// 9. CompletedEvent (assistant reply)
 	events := pub.recorded()
-	if len(events) != 9 {
-		t.Fatalf("expected 9 published events, got %d: %+v", len(events), events)
+	if len(events) != 10 {
+		t.Fatalf("expected 10 published events, got %d: %+v", len(events), events)
 	}
 	for i, ev := range events {
 		var sessionID string
@@ -832,6 +842,8 @@ func TestSendAndHistory(t *testing.T) {
 		case ChunkEvent:
 			sessionID = e.SessionID
 		case PermissionRequestedEvent:
+			sessionID = e.SessionID
+		case ContextUpdatedEvent:
 			sessionID = e.SessionID
 		case CompletedEvent:
 			sessionID = e.SessionID
@@ -877,13 +889,17 @@ func TestSendAndHistory(t *testing.T) {
 	if !ok || ev6.Entry.Kind != timeline.KindMessage || ev6.Entry.Message == nil || ev6.Entry.Message.Role() != message.RoleAssistant || msgText(ev6.Entry.Message) != "Hello, TaskSmith!" {
 		t.Errorf("events[6] = %+v, want assistant EntryAddedEvent", events[6])
 	}
-	sc7, ok := events[7].(StatusChangedEvent)
-	if !ok || sc7.Status != StatusIdle {
-		t.Errorf("events[7] = %+v, want StatusChangedEvent(StatusIdle)", events[7])
+	ctxEv7, ok := events[7].(ContextUpdatedEvent)
+	if !ok || ctxEv7.SessionID != sess.ID || ctxEv7.Context.UsedTokens == 0 {
+		t.Errorf("events[7] = %+v, want ContextUpdatedEvent", events[7])
 	}
-	ev8, ok := events[8].(CompletedEvent)
-	if !ok || ev8.SessionID != sess.ID {
-		t.Errorf("events[8] = %+v, want CompletedEvent for session %q", events[8], sess.ID)
+	sc8, ok := events[8].(StatusChangedEvent)
+	if !ok || sc8.Status != StatusIdle {
+		t.Errorf("events[8] = %+v, want StatusChangedEvent(StatusIdle)", events[8])
+	}
+	ev9, ok := events[9].(CompletedEvent)
+	if !ok || ev9.SessionID != sess.ID {
+		t.Errorf("events[9] = %+v, want CompletedEvent for session %q", events[9], sess.ID)
 	}
 
 	// Verify session.History returns [User, Assistant] from the messages table
@@ -3199,5 +3215,89 @@ func TestSessionTodosRestoreOnLoad(t *testing.T) {
 	}
 	if sess2.Todos[0].ActiveText != "Working on Task A" || sess2.Todos[1].Status != tools.TodoStatusPending {
 		t.Fatalf("unexpected restored todos in sess2: %+v", sess2.Todos)
+	}
+}
+
+func TestSessionSendCompactDirect(t *testing.T) {
+	ctx := context.Background()
+	provider := &fakeProvider{
+		handler: func(_ context.Context, _ *llm.Request) ([]string, string, error) {
+			return []string{"Compacted summary of work"}, "reply-1", nil
+		},
+	}
+	db, ws, gw, pub, mgr := setupTestEnv(t, provider)
+	_ = db
+	_ = ws
+	_ = gw
+	_ = pub
+
+	sess, _, err := mgr.Create(ctx, CreateParams{
+		Title: "Direct Compaction Test",
+	})
+	if err != nil {
+		t.Fatalf("mgr.Create: %v", err)
+	}
+
+	// Invalid input: Compact combined with Message
+	err = sess.Send(ctx, SendInput{
+		Message: message.NewUserText("hello"),
+		Compact: &api.CompactRequest{Focus: "focus"},
+	})
+	if err == nil {
+		t.Fatal("expected error combining compact with message, got nil")
+	}
+
+	// 1. Initial turn with user message
+	err = sess.Send(ctx, SendInput{
+		Message: message.NewUserText("First prompt"),
+	})
+	if err != nil {
+		t.Fatalf("sess.Send message: %v", err)
+	}
+	if err := sess.Wait(ctx); err != nil {
+		t.Fatalf("sess.Wait: %v", err)
+	}
+
+	// 2. Direct compact while idle
+	err = sess.Send(ctx, SendInput{
+		Compact: &api.CompactRequest{Focus: "preserve test instructions"},
+	})
+	if err != nil {
+		t.Fatalf("sess.Send compact: %v", err)
+	}
+	if err := sess.Wait(ctx); err != nil {
+		t.Fatalf("sess.Wait: %v", err)
+	}
+
+	// 3. Verify timeline contains compacted entry
+	entries, err := sess.Timeline.List(ctx)
+	if err != nil {
+		t.Fatalf("sess.Timeline.List: %v", err)
+	}
+	var hasCompacted bool
+	for _, e := range entries {
+		if e.Kind == timeline.KindCompacted {
+			hasCompacted = true
+			if e.Compacted == nil || e.Compacted.Focus != "preserve test instructions" {
+				t.Errorf("unexpected compacted entry: %+v", e.Compacted)
+			}
+		}
+	}
+	if !hasCompacted {
+		t.Errorf("expected KindCompacted entry in timeline")
+	}
+
+	// 4. Compaction rejected if session is currently running
+	sess.Lock()
+	sess.Running = true
+	sess.Unlock()
+	err = sess.Send(ctx, SendInput{
+		Compact: &api.CompactRequest{Focus: "should fail"},
+	})
+	sess.Lock()
+	sess.Running = false
+	sess.Unlock()
+	if !errors.Is(err, ErrSessionRunning) {
+		t.Fatalf("expected ErrSessionRunning when session is running, got %v", err)
 	}
 }

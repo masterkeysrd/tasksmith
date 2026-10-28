@@ -12,7 +12,7 @@ import (
 func TestRegistryBuiltinsAndLookup(t *testing.T) {
 	r := NewRegistry()
 
-	cmds := []string{"help", "mode", "model", "agent", "effort", "theme", "new", "clear", "sessions", "changes", "revert", "exit", "permissions", "tasks"}
+	cmds := []string{"help", "mode", "model", "agent", "effort", "theme", "new", "clear", "sessions", "changes", "revert", "exit", "permissions", "tasks", "compact", "context"}
 	for _, name := range cmds {
 		cmd, ok := r.Lookup(name)
 		if !ok {
@@ -264,4 +264,58 @@ func TestSources(t *testing.T) {
 	if !foundMode {
 		t.Errorf("expected /mode sub-source")
 	}
+}
+
+func TestCompactAndContextCommands(t *testing.T) {
+	r := NewRegistry()
+
+	t.Run("compact in draft mode", func(t *testing.T) {
+		store.ResetSession()
+		store.ClearTranscript()
+		defer store.ResetSession()
+		defer store.ClearTranscript()
+
+		if err := r.Execute("/compact some focus area"); err != nil {
+			t.Fatalf("Execute /compact: %v", err)
+		}
+
+		tr := store.GetTranscript()
+		if tr.Items == nil || len(*tr.Items) == 0 {
+			t.Fatalf("expected transcript item for /compact in draft mode")
+		}
+		last := (*tr.Items)[len(*tr.Items)-1]
+		if last.Kind != store.TranscriptKindNotice {
+			t.Errorf("expected Notice transcript item, got %v", last.Kind)
+		}
+		if d, ok := last.Data.(store.NoticeData); !ok || d.Text != "Nothing to compact" {
+			t.Errorf("expected 'Nothing to compact' notice, got %+v", last.Data)
+		}
+	})
+
+	t.Run("context command", func(t *testing.T) {
+		store.ResetSession()
+		store.ClearTranscript()
+		defer store.ResetSession()
+		defer store.ClearTranscript()
+
+		if err := r.Execute("/context"); err != nil {
+			t.Fatalf("Execute /context: %v", err)
+		}
+
+		tr := store.GetTranscript()
+		if tr.Items == nil || len(*tr.Items) == 0 {
+			t.Fatalf("expected transcript item for /context")
+		}
+		last := (*tr.Items)[len(*tr.Items)-1]
+		if last.Kind != store.TranscriptKindContextUsage {
+			t.Fatalf("expected TranscriptKindContextUsage, got %v", last.Kind)
+		}
+		d, ok := last.Data.(store.ContextUsageData)
+		if !ok {
+			t.Fatalf("expected ContextUsageData, got %T", last.Data)
+		}
+		if d.ModelName == "" {
+			t.Errorf("expected non-empty ModelName")
+		}
+	})
 }
