@@ -12,12 +12,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/masterkeysrd/loom/profile"
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/core/fsutils"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	"github.com/masterkeysrd/tasksmith/internal/core/sys"
+	"github.com/masterkeysrd/tasksmith/internal/core/uuid"
 	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/broker"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/gateway"
@@ -298,11 +298,7 @@ func (d *Daemon) Shutdown(_ context.Context) error {
 func (d *Daemon) AddSubscriber(_ context.Context, subscriberID, since string, topics ...string) (*broker.Subscriber, []string, error) {
 	subID := strings.TrimSpace(subscriberID)
 	if subID == "" {
-		u, err := uuid.NewV7()
-		if err != nil {
-			return nil, nil, fmt.Errorf("daemon: generate subscriber id: %w", err)
-		}
-		subID = u.String()
+		subID = uuid.New()
 	}
 
 	var cleanTopics []string

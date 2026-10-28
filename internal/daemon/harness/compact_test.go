@@ -225,7 +225,7 @@ func TestShouldAutoCompact(t *testing.T) {
 			TriggerTokens: trigger,
 		},
 	}
-	if shouldAutoCompact(state) {
+	if state.ShouldAutoCompact() {
 		t.Error("shouldAutoCompact returned true when UsedTokens < TriggerTokens")
 	}
 
@@ -243,7 +243,7 @@ func TestShouldAutoCompact(t *testing.T) {
 			TriggerTokens: trigger,
 		},
 	}
-	if shouldAutoCompact(stateTool) {
+	if stateTool.ShouldAutoCompact() {
 		t.Error("shouldAutoCompact returned true with pending tool calls")
 	}
 
@@ -255,7 +255,7 @@ func TestShouldAutoCompact(t *testing.T) {
 			TriggerTokens: trigger,
 		},
 	}
-	if shouldAutoCompact(stateFewMsgs) {
+	if stateFewMsgs.ShouldAutoCompact() {
 		t.Error("shouldAutoCompact returned true with < 2 messages")
 	}
 
@@ -270,7 +270,7 @@ func TestShouldAutoCompact(t *testing.T) {
 			TriggerTokens: trigger,
 		},
 	}
-	if shouldAutoCompact(stateAlreadyCompacted) {
+	if stateAlreadyCompacted.ShouldAutoCompact() {
 		t.Error("shouldAutoCompact returned true when last message is compaction")
 	}
 
@@ -282,7 +282,7 @@ func TestShouldAutoCompact(t *testing.T) {
 			TriggerTokens: trigger,
 		},
 	}
-	if !shouldAutoCompact(stateValid) {
+	if !stateValid.ShouldAutoCompact() {
 		t.Error("shouldAutoCompact returned false on valid candidate")
 	}
 }
@@ -470,9 +470,8 @@ func TestCompactionNodeExecute(t *testing.T) {
 	if err != nil {
 		t.Fatalf("nodeErr.Execute should return nil error, got %v", err)
 	}
-	untouchedState := cmdErr.Apply(initState)
-	if len(untouchedState.Messages) != len(initState.Messages) {
-		t.Errorf("expected untouched messages on failure, got %d", len(untouchedState.Messages))
+	if cmdErr != nil {
+		t.Fatal("expected nil command on model invocation failure")
 	}
 }
 

@@ -337,10 +337,7 @@ func (s State) ShouldAutoCompact() bool {
 		return false
 	}
 	lastMsg := s.Messages[len(s.Messages)-1]
-	if SystemKindOf(lastMsg) == SystemKindCompaction {
-		return false
-	}
-	return true
+	return SystemKindOf(lastMsg) != SystemKindCompaction
 }
 
 // HasLeadingCompact reports whether there is a manual compaction request pending.

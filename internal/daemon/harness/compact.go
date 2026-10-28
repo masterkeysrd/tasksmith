@@ -136,10 +136,6 @@ func CompactionTriggerTokens(limits workspace.ModelLimits) (reserveTokens, trigg
 	return reserveTokens, triggerTokens
 }
 
-func compactionTriggerTokens(limits workspace.ModelLimits) (reserveTokens, triggerTokens int) {
-	return CompactionTriggerTokens(limits)
-}
-
 // computeContextState computes the context window token usage and calibrated breakdown
 // according to compaction.md Section 2.3.
 func computeContextState(static StaticContext, state State, limits workspace.ModelLimits) api.ContextState {
@@ -151,7 +147,7 @@ func computeContextState(static StaticContext, state State, limits workspace.Mod
 	if outputLimit <= 0 {
 		outputLimit = 16384
 	}
-	reserveTokens, triggerTokens := compactionTriggerTokens(limits)
+	reserveTokens, triggerTokens := CompactionTriggerTokens(limits)
 
 	rawSummary := 0
 	rawUser := 0
@@ -263,12 +259,6 @@ func computeContextState(static StaticContext, state State, limits workspace.Mod
 	}
 }
 
-// shouldAutoCompact reports whether the current conversation state qualifies for
-// mid-turn or entry auto-compaction per Section 4 of compaction.md.
-func shouldAutoCompact(state State) bool {
-	return state.ShouldAutoCompact()
-}
-
 var reUserRequestLine = regexp.MustCompile(`^\s*\d+\.\s*(.+)$`)
 
 // extractUserRequests deterministically extracts chronological user prompts across turns,
@@ -336,7 +326,7 @@ func formatTodos(todos []tools.TodoItem) string {
 		if i > 0 {
 			sb.WriteString("\n")
 		}
-		sb.WriteString(fmt.Sprintf("- [%s] %s", t.Status, t.Content))
+		fmt.Fprintf(&sb, "- [%s] %s", t.Status, t.Content)
 	}
 	return sb.String()
 }
@@ -352,7 +342,7 @@ func buildContextSummaryMessage(userRequests []string, todos []tools.TodoItem, s
 		sb.WriteString("1. (none)\n")
 	} else {
 		for i, req := range userRequests {
-			sb.WriteString(fmt.Sprintf("%d. %s\n", i+1, req))
+			fmt.Fprintf(&sb, "%d. %s\n", i+1, req)
 		}
 	}
 	sb.WriteString("\n")
@@ -409,22 +399,16 @@ func NewCompactionNode(cfg CompactionNodeConfig) *CompactionNode {
 
 // Execute performs in-chat summarization and atomically replaces state.Messages with <context_summary>.
 func (n *CompactionNode) Execute(ctx context.Context, state State) (graph.Command[State], error) {
-	trigger := "auto"
 	focus := ""
-	compactID := ""
-
+	trigger := "auto"
 	if state.PendingCompaction != nil {
 		trigger = "manual"
 		focus = state.PendingCompaction.Focus
 	}
-	if compactID == "" || uuid.Validate(compactID) != nil {
-		if id, err := uuid.NewV7(); err == nil {
-			compactID = id.String()
-		}
-	}
 
+	compactID, _ := uuid.NewUUID()
 	emit(ctx, CompactionStarted{
-		ID:      compactID,
+		ID:      compactID.String(),
 		Trigger: trigger,
 		Focus:   focus,
 	})
@@ -433,30 +417,31 @@ func (n *CompactionNode) Execute(ctx context.Context, state State) (graph.Comman
 	beforeTokens := state.Context.UsedTokens
 
 	// Clone state.Messages into a temporary slice for the summarization prompt
-	reqMsgs := make([]message.Message, 0, len(state.Messages)+2)
+	messages := make([]message.Message, 0, len(state.Messages)+2)
 	if n.systemPrompt != "" {
-		reqMsgs = append(reqMsgs, message.NewSystemText(n.systemPrompt))
+		messages = append(messages, message.NewSystemText(n.systemPrompt))
 	}
-	reqMsgs = append(reqMsgs, state.Messages...)
+	messages = append(messages, state.Messages...)
 
 	var buf strings.Builder
-	if err := summarizeTemplate.Execute(&buf, struct{ Focus string }{Focus: strings.TrimSpace(focus)}); err != nil {
-		n.logger.Warn("compaction prompt template execute failed", log.String("error", err.Error()))
-		return graph.Update[State](func(s State) State { return s }), nil
+	compactCtx := struct{ Focus string }{
+		Focus: strings.TrimSpace(focus),
 	}
-	reqMsgs = append(reqMsgs, message.NewUserText(buf.String()))
+	if err := summarizeTemplate.Execute(&buf, compactCtx); err != nil {
+		n.logger.Warn("compaction prompt template execute failed", log.Err(err))
+		return nil, nil
+	}
+	messages = append(messages, message.NewUserText(buf.String()))
 
-	boundModel := n.model
-	if n.tools != nil {
-		if defs := n.tools.Definitions(); len(defs) > 0 {
-			boundModel = boundModel.BindToolDefs(defs...)
-		}
+	model := n.model
+	if defs := n.tools.Definitions(); len(defs) > 0 {
+		model = model.BindToolDefs(defs...)
 	}
 
-	resp, err := boundModel.Invoke(ctx, reqMsgs)
+	resp, err := model.Invoke(ctx, messages)
 	if err != nil {
-		n.logger.Warn("compaction model invocation failed", log.String("error", err.Error()))
-		return graph.Update[State](func(s State) State { return s }), nil
+		n.logger.Warn("compaction model invocation failed", log.Err(err))
+		return nil, nil
 	}
 
 	summaryText := ""
@@ -470,7 +455,7 @@ func (n *CompactionNode) Execute(ctx context.Context, state State) (graph.Comman
 
 	userRequests := extractUserRequests(state.Messages)
 	summaryMsg := buildContextSummaryMessage(userRequests, state.Todos, summaryText, trigger, focus)
-	summaryMsg.SetID(compactID)
+	summaryMsg.SetID(compactID.String())
 
 	return graph.Update[State](func(s State) State {
 		s = s.ApplyCompaction(summaryMsg, n.static, n.limits)
@@ -479,7 +464,7 @@ func (n *CompactionNode) Execute(ctx context.Context, state State) (graph.Comman
 		durationMs := time.Since(startTime).Milliseconds()
 
 		emit(ctx, CompactionCompleted{
-			ID:           compactID,
+			ID:           compactID.String(),
 			Trigger:      trigger,
 			Focus:        focus,
 			Summary:      summaryText,

@@ -231,7 +231,7 @@ func (m *manager) loadOrCacheSession(ctx context.Context, dbSess *Session) (*Ses
 	if h, err := sess.harness(ctx); err == nil {
 		if st, err := h.LoadState(ctx); err == nil {
 			sess.Lock()
-			sess.State.Context = st.Context
+			sess.Context = st.Context
 			if len(st.Todos) > 0 {
 				sess.Todos = slices.Clone(st.Todos)
 			}
@@ -560,19 +560,19 @@ func (m *manager) Update(ctx context.Context, id string, params UpdateParams) (*
 		staticCtx := harness.StaticContextFromBreakdown(breakdown)
 		sess.Lock()
 		res, trig := harness.CompactionTriggerTokens(limits)
-		sess.State.Context.MaxTokens = limits.Context
-		sess.State.Context.OutputLimit = limits.Output
-		sess.State.Context.ReserveTokens = res
-		sess.State.Context.TriggerTokens = trig
-		sess.State.Context.FreeTokens = max(0, trig-sess.State.Context.UsedTokens)
-		sess.State.Context.Breakdown.SystemPrompt = staticCtx.SystemPrompt
-		sess.State.Context.Breakdown.ContextFiles = staticCtx.ContextFiles
-		sess.State.Context.Breakdown.SystemTools = staticCtx.SystemTools
-		sess.State.Context.Breakdown.CustomTools = staticCtx.CustomTools
-		sess.State.Context.Breakdown.MCPTools = staticCtx.MCPTools
-		sess.State.Context.Breakdown.Skills = staticCtx.Skills
-		sess.State.Context.Breakdown.Subagents = staticCtx.Subagents
-		ctxState := sess.State.Context
+		sess.Context.MaxTokens = limits.Context
+		sess.Context.OutputLimit = limits.Output
+		sess.Context.ReserveTokens = res
+		sess.Context.TriggerTokens = trig
+		sess.Context.FreeTokens = max(0, trig-sess.Context.UsedTokens)
+		sess.Context.Breakdown.SystemPrompt = staticCtx.SystemPrompt
+		sess.Context.Breakdown.ContextFiles = staticCtx.ContextFiles
+		sess.Context.Breakdown.SystemTools = staticCtx.SystemTools
+		sess.Context.Breakdown.CustomTools = staticCtx.CustomTools
+		sess.Context.Breakdown.MCPTools = staticCtx.MCPTools
+		sess.Context.Breakdown.Skills = staticCtx.Skills
+		sess.Context.Breakdown.Subagents = staticCtx.Subagents
+		ctxState := sess.Context
 		sess.Unlock()
 		m.publisher.Publish(api.SessionStreamTopic(sess.ID), ContextUpdatedEvent{
 			SessionID: sess.ID,

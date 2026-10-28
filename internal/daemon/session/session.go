@@ -13,12 +13,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/masterkeysrd/loom/llm"
 	"github.com/masterkeysrd/loom/message"
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	"github.com/masterkeysrd/tasksmith/internal/core/shellguard"
+	"github.com/masterkeysrd/tasksmith/internal/core/uuid"
 	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/gateway"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/harness"
@@ -450,11 +450,10 @@ func (s *Session) visibleQueueLocked() []QueueItem {
 }
 
 func (s *Session) enqueueItem(item QueueItem) {
-	if item.ID == "" || uuid.Validate(item.ID) != nil {
-		if u, err := uuid.NewV7(); err == nil {
-			item.ID = u.String()
-		}
+	if item.ID == "" && !uuid.Validate(item.ID) {
+		item.ID = uuid.New()
 	}
+
 	if item.CreatedAt.IsZero() {
 		item.CreatedAt = time.Now().UTC()
 	}
@@ -1182,10 +1181,8 @@ func (s *Session) send(ctx context.Context, stream iter.Seq2[harness.Event, erro
 			if errors.Is(err, context.Canceled) {
 				partialMsg, buildErr := agg.Build()
 				if buildErr == nil && partialMsg != nil && len(partialMsg.Content) > 0 {
-					if partialMsg.GetID() == "" || uuid.Validate(partialMsg.GetID()) != nil {
-						if u, uErr := uuid.NewV7(); uErr == nil {
-							partialMsg.SetID(u.String())
-						}
+					if partialMsg.GetID() == "" || !uuid.Validate(partialMsg.GetID()) {
+						partialMsg.SetID(uuid.New())
 					}
 					entry := timeline.NewMessageEntry(s.ID, partialMsg)
 					if appErr := s.Timeline.Append(s.bgCtx, entry); appErr == nil {
@@ -1281,7 +1278,7 @@ func (s *Session) send(ctx context.Context, stream iter.Seq2[harness.Event, erro
 					ExitCode:   hev.CommandCompleted.ExitCode,
 					DurationMs: hev.CommandCompleted.DurationMs,
 				})
-				if hev.CommandCompleted.ID != "" && uuid.Validate(hev.CommandCompleted.ID) == nil {
+				if hev.CommandCompleted.ID != "" && uuid.Validate(hev.CommandCompleted.ID) {
 					entry.ID = hev.CommandCompleted.ID
 				}
 				if err := s.Timeline.Append(ctx, entry); err != nil {
@@ -1373,7 +1370,7 @@ func (s *Session) send(ctx context.Context, stream iter.Seq2[harness.Event, erro
 					DurationMs:   hev.CompactionCompleted.DurationMs,
 				}
 				entry := timeline.NewCompactedEntry(s.ID, rec)
-				if hev.CompactionCompleted.ID != "" && uuid.Validate(hev.CompactionCompleted.ID) == nil {
+				if hev.CompactionCompleted.ID != "" && uuid.Validate(hev.CompactionCompleted.ID) {
 					entry.ID = hev.CompactionCompleted.ID
 				}
 				if err := s.Timeline.Append(ctx, entry); err != nil {
