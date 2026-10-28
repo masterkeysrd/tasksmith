@@ -38,7 +38,7 @@ var (
 	activeCancel      context.CancelFunc
 	streamCancel      context.CancelFunc
 	modeDebounceTimer *time.Timer
-	modeDebounceDelay = 250 * time.Millisecond
+	modeDebounceDelay = 500 * time.Millisecond
 )
 
 func cancelModeDebounceLocked() {
