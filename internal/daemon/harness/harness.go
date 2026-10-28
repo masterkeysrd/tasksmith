@@ -79,6 +79,8 @@ type harness struct {
 	logger log.Interface
 	graph  *graph.Graph[State]
 	queue  Queue
+	static StaticContext
+	limits workspace.ModelLimits
 }
 
 var _ Harness = (*harness)(nil)
@@ -118,6 +120,8 @@ func New(cfg Config) (Harness, error) {
 		logger: logger,
 		graph:  g,
 		queue:  cfg.Queue,
+		static: cfg.Static,
+		limits: cfg.Limits,
 	}, nil
 }
 
@@ -183,7 +187,7 @@ func (h *harness) prepareInput(input Input, state State) (graph.Update[State], *
 		update, err := prepareResponses(input, state)
 		return update, nil, err
 	}
-	return prepareMessage(input.Message, state)
+	return h.prepareMessage(input.Message, state)
 }
 
 func prepareCompaction(input *CompactInput) graph.Update[State] {
@@ -230,7 +234,7 @@ func prepareResponses(input Input, state State) (graph.Update[State], error) {
 	}), nil
 }
 
-func prepareMessage(msg message.Message, state State) (graph.Update[State], *Event, error) {
+func (h *harness) prepareMessage(msg message.Message, state State) (graph.Update[State], *Event, error) {
 	in := message.CloneMessage(msg)
 	var event *Event
 	_, _, unfulfilled, _ := state.ActiveToolCalls()
@@ -241,8 +245,7 @@ func prepareMessage(msg message.Message, state State) (graph.Update[State], *Eve
 		event = &Event{Type: EventMessage, Message: message.CloneMessage(in)}
 	}
 	return graph.Update[State](func(s State) State {
-		s.Messages = append(s.Messages, in)
-		return s
+		return s.AppendMessage(in, MessageUpdateOptions{Static: h.static, Limits: h.limits, SkipContextRecalculation: len(unfulfilled) > 0})
 	}), event, nil
 }
 

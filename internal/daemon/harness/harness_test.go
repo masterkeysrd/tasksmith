@@ -2077,6 +2077,87 @@ func TestDeferredMessageUpdatesBeforeCompaction(t *testing.T) {
 	}
 }
 
+func TestIncomingMessageUpdatesContextBeforeRouting(t *testing.T) {
+	ctx := context.Background()
+	_, reg, perm := newTestToolsRegistry(t)
+	failure := errors.New("provider unavailable")
+	provider := &fakeProvider{stepHandler: func(_ context.Context, _ *llm.Request, turn int) ([]message.AssistantChunk, error) {
+		if turn == 1 {
+			return nil, failure
+		}
+		return nil, errors.New("unexpected invocation")
+	}}
+	static := StaticContext{SystemPrompt: 123}
+	limits := workspace.ModelLimits{Context: 10000, Output: 1000}
+	h, err := New(Config{ID: "entry-context", DB: openTestSQLite(t), Model: newTestModel(t, provider), Tools: reg, Permissions: perm, Queue: &fakeQueue{}, Bash: &fakeBashRunner{}, Spiller: newTestSpiller(t), Logger: log.Default(), Static: static, Limits: limits})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, err := range h.Stream(ctx, Input{Message: message.NewUserText("first request")}) {
+		if err != nil && !errors.Is(err, failure) {
+			t.Fatal(err)
+		}
+	}
+	state, err := h.LoadState(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(state.Messages) != 1 || !reflect.DeepEqual(state.Context, computeContextState(static, state, limits)) || state.Context.Breakdown.SystemPrompt != static.SystemPrompt || state.Context.TriggerTokens == 0 {
+		t.Fatalf("first input context not recorded: %+v", state)
+	}
+}
+
+func TestIncomingMessageCrossesCompactionThreshold(t *testing.T) {
+	ctx := context.Background()
+	_, reg, perm := newTestToolsRegistry(t)
+	provider := &fakeProvider{stepHandler: func(_ context.Context, _ *llm.Request, turn int) ([]message.AssistantChunk, error) {
+		text := "answer"
+		var metrics *message.TokenMetrics
+		if turn == 1 {
+			text = strings.Repeat("a", 2400)
+			metrics = &message.TokenMetrics{TotalTokens: 800}
+		} else if turn == 2 {
+			text = "summary"
+		}
+		return []message.AssistantChunk{{Content: []message.Block{&message.TextBlock{Text: text}}, Metrics: metrics, Done: true}}, nil
+	}}
+	h, err := New(Config{ID: "entry-threshold", DB: openTestSQLite(t), Model: newTestModel(t, provider), Tools: reg, Permissions: perm, Queue: &fakeQueue{}, Bash: &fakeBashRunner{}, Spiller: newTestSpiller(t), Logger: log.Default(), Limits: workspace.ModelLimits{Context: 10000, Output: 1000}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, err := range h.Stream(ctx, Input{Message: message.NewUserText("first")}) {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	state, err := h.LoadState(ctx)
+	if err != nil || state.Context.UsedTokens >= state.Context.TriggerTokens {
+		t.Fatalf("expected below-threshold state: %+v, %v", state.Context, err)
+	}
+	prompt := strings.Repeat("x", 1800)
+	projected := state.Copy().AppendMessage(message.NewUserText(prompt), MessageUpdateOptions{Limits: workspace.ModelLimits{Context: 10000, Output: 1000}})
+	if !projected.ShouldAutoCompact() {
+		t.Fatalf("test prompt does not cross threshold: before=%+v after=%+v", state.Context, projected.Context)
+	}
+	var starts int
+	for event, err := range h.Stream(ctx, Input{Message: message.NewUserText(prompt)}) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		if event.Type == EventCompactionStarted {
+			starts++
+		}
+	}
+	turns := provider.recordedTurns()
+	if starts != 1 || len(turns) != 3 {
+		t.Fatalf("expected compaction before answering: starts=%d model calls=%d", starts, len(turns))
+	}
+	last := turns[2].messages
+	if len(last) < 2 || SystemKindOf(last[0]) != SystemKindCompaction || msgText(last[len(last)-1]) != prompt {
+		t.Fatalf("agent did not receive summary and original prompt: %+v", last)
+	}
+}
+
 func TestAutoCompactionTurnAndCommandBoundaries(t *testing.T) {
 	ctx := context.Background()
 	_, reg, perm := newTestToolsRegistry(t)
