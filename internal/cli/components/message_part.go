@@ -31,6 +31,8 @@ var MessageTool = trail.FC("MessageTool", func(props MessageToolProps) trail.Nod
 		return GlobToolRenderer(props.Tool)
 	case "grep":
 		return GrepToolRenderer(props.Tool)
+	case "load_skill":
+		return LoadSkillToolWidget(LoadSkillToolWidgetProps{Tool: props.Tool})
 	case "write":
 		return WriteToolRenderer(props.Tool)
 	case "edit":
