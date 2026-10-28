@@ -457,11 +457,7 @@ func (n *CompactionNode) Execute(ctx context.Context, state State) (graph.Comman
 		Focus: strings.TrimSpace(focus),
 	}
 	if err := summarizeTemplate.Execute(&buf, compactCtx); err != nil {
-		n.logger.Warn("compaction prompt template execute failed", log.Err(err))
-		return graph.Update[State](func(s State) State {
-			s.PendingCompaction = nil
-			return s
-		}), nil
+		return nil, fmt.Errorf("harness: execute compaction prompt template: %w", err)
 	}
 	messages = append(messages, message.NewUserText(buf.String()))
 
@@ -472,11 +468,7 @@ func (n *CompactionNode) Execute(ctx context.Context, state State) (graph.Comman
 
 	resp, err := model.Invoke(ctx, messages)
 	if err != nil {
-		n.logger.Warn("compaction model invocation failed", log.Err(err))
-		return graph.Update[State](func(s State) State {
-			s.PendingCompaction = nil
-			return s
-		}), nil
+		return nil, fmt.Errorf("harness: invoke compaction llm: %w", err)
 	}
 
 	summaryText := ""
@@ -484,11 +476,7 @@ func (n *CompactionNode) Execute(ctx context.Context, state State) (graph.Comman
 		summaryText = strings.TrimSpace(resp.GetContent().Text())
 	}
 	if summaryText == "" {
-		n.logger.Warn("compaction returned empty summary; skipping replacement")
-		return graph.Update[State](func(s State) State {
-			s.PendingCompaction = nil
-			return s
-		}), nil
+		return nil, fmt.Errorf("harness: compaction returned empty summary")
 	}
 
 	userRequests := extractUserRequests(history)

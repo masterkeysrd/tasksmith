@@ -453,9 +453,10 @@ func TestCompactionNodeExecute(t *testing.T) {
 		t.Errorf("summarization prompt missing focus: %s", lastTurnMsg.GetContent().Text())
 	}
 
+	providerErr := errors.New("provider failure")
 	provErr := &fakeProvider{
 		handler: func(_ context.Context, _ *llm.Request) ([]string, string, error) {
-			return nil, "", errors.New("provider failure")
+			return nil, "", providerErr
 		},
 	}
 	nodeErr := NewCompactionNode(CompactionNodeConfig{
@@ -466,15 +467,11 @@ func TestCompactionNodeExecute(t *testing.T) {
 		Logger:    log.Default(),
 	})
 	cmdErr, err := nodeErr.Execute(ctx, initState)
-	if err != nil {
-		t.Fatalf("nodeErr.Execute should return nil error, got %v", err)
+	if !errors.Is(err, providerErr) || cmdErr != nil {
+		t.Fatalf("expected provider failure and no update, got command=%v error=%v", cmdErr, err)
 	}
-	if cmdErr == nil {
-		t.Fatal("expected a recovery update on model invocation failure")
-	}
-	recovered := cmdErr.Apply(initState)
-	if recovered.PendingCompaction != nil || len(recovered.Messages) != len(initState.Messages) {
-		t.Fatalf("unexpected recovery state: %+v", recovered)
+	if initState.PendingCompaction == nil || len(initState.Messages) != 2 {
+		t.Fatalf("compaction mutated the input state: %+v", initState)
 	}
 }
 

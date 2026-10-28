@@ -170,17 +170,15 @@ func buildGraph(cfg GraphConfig) (*graph.Graph[State], error) {
 			return !s.ShouldAutoCompact()
 		}).
 		// Compact routing:
-		AddConditionalEdge("compact", "agent", func(s State) bool {
-			return s.IsAutoCompacted() || s.ShouldWakeAgent()
-		}).
+		AddConditionalEdge("compact", "agent", State.IsAutoCompacted).
 		AddConditionalEdge("compact", "command", func(s State) bool {
-			return !s.IsAutoCompacted() && !s.ShouldWakeAgent() && hasLeadingCommand(s)
+			return !s.IsAutoCompacted() && hasLeadingCommand(s)
 		}).
 		AddConditionalEdge("compact", "inbox", func(s State) bool {
-			return !s.IsAutoCompacted() && !s.ShouldWakeAgent() && !hasLeadingCommand(s) && queueHasItems(s)
+			return !s.IsAutoCompacted() && !hasLeadingCommand(s) && queueHasItems(s)
 		}).
 		AddConditionalEdge("compact", graph.END, func(s State) bool {
-			return !s.IsAutoCompacted() && !s.ShouldWakeAgent() && !hasLeadingCommand(s) && !queueHasItems(s)
+			return !s.IsAutoCompacted() && !hasLeadingCommand(s) && !queueHasItems(s)
 		}).
 		Build()
 	if err != nil {

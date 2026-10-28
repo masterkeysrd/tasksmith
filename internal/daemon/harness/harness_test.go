@@ -2225,17 +2225,17 @@ func TestManualCompactionDoesNotStreamSummaryChunks(t *testing.T) {
 			finished++
 		}
 	}
-	if started != 1 || completed != 1 || finished != 1 || len(provider.recordedTurns()) != 3 {
+	if started != 1 || completed != 1 || finished != 1 || len(provider.recordedTurns()) != 2 {
 		t.Fatalf("unexpected lifecycle events: started=%d completed=%d finished=%d calls=%d", started, completed, finished, len(provider.recordedTurns()))
 	}
-	if len(chunks) != 1 || chunks[0] != "answer" {
-		t.Fatalf("expected only agent answer chunks, got %v", chunks)
+	if len(chunks) != 0 {
+		t.Fatalf("expected no summary or agent chunks, got %v", chunks)
 	}
 	state, err := h.LoadState(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(state.Messages) != 2 || SystemKindOf(state.Messages[0]) != SystemKindCompaction || state.Context.Compactions != 1 {
+	if len(state.Messages) != 1 || SystemKindOf(state.Messages[0]) != SystemKindCompaction || state.Context.Compactions != 1 {
 		t.Fatalf("compaction was not persisted: %+v", state)
 	}
 }

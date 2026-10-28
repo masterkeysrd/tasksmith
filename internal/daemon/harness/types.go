@@ -312,10 +312,10 @@ func (s State) Copy() State {
 	}
 }
 
-// IsAutoCompacted reports whether the last message was produced by auto-compaction.
+// IsAutoCompacted reports whether the leading message was produced by auto-compaction.
 func (s State) IsAutoCompacted() bool {
-	if len(s.Messages) > 0 {
-		if meta := s.Messages[len(s.Messages)-1].GetMetadata(); meta != nil {
+	if len(s.Messages) > 0 && SystemKindOf(s.Messages[0]) == SystemKindCompaction {
+		if meta := s.Messages[0].GetMetadata(); meta != nil {
 			if trig, ok := meta[MetaCompactionTrigger].(string); ok && trig == "auto" {
 				return true
 			}
