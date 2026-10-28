@@ -3,6 +3,7 @@ package harness
 import (
 	"context"
 	"errors"
+	"fmt"
 	"maps"
 	"slices"
 	"time"
@@ -248,6 +249,24 @@ type Input struct {
 	Decisions map[string]tools.PermissionDecision
 	Answers   map[string]tools.QuestionResponse
 	Compact   *CompactInput
+}
+
+func (input Input) HasResponses() bool {
+	return input.Decisions != nil || input.Answers != nil
+}
+
+func (input Input) HasInteractiveContent() bool {
+	return input.Message != nil || input.HasResponses()
+}
+
+func (input Input) Validate() error {
+	if input.Compact != nil && input.HasInteractiveContent() {
+		return fmt.Errorf("%w: cannot specify both compact and message/responses", ErrInvalidConfig)
+	}
+	if input.Message != nil && input.HasResponses() {
+		return fmt.Errorf("%w: cannot specify both message and responses", ErrInvalidConfig)
+	}
+	return nil
 }
 
 // State holds the checkpointed conversation and permission state for a thread.

@@ -38,6 +38,34 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/daemon/workspace"
 )
 
+func TestWaitingForInteractionLocked(t *testing.T) {
+	tests := []struct {
+		name              string
+		status            Status
+		waitingPermission bool
+		waitingQuestion   bool
+		want              bool
+	}{
+		{name: "idle", status: StatusIdle},
+		{name: "permission flag", status: StatusIdle, waitingPermission: true, want: true},
+		{name: "question flag", status: StatusIdle, waitingQuestion: true, want: true},
+		{name: "permission handoff", status: StatusWaitingPermission, want: true},
+		{name: "question handoff", status: StatusWaitingQuestion, want: true},
+		{name: "both flags", status: StatusWaitingPermission, waitingPermission: true, waitingQuestion: true, want: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := &Session{State: &State{Status: tt.status, WaitingPermission: tt.waitingPermission, WaitingQuestion: tt.waitingQuestion}}
+			s.Lock()
+			got := s.waitingForInteractionLocked()
+			s.Unlock()
+			if got != tt.want {
+				t.Errorf("waitingForInteractionLocked() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func sha256Hex(data []byte) string {
 	sum := sha256.Sum256(data)
 	return hex.EncodeToString(sum[:])

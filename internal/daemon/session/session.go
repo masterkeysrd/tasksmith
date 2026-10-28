@@ -815,11 +815,22 @@ func (s *Session) resolveSlashCommand(msg message.Message) (message.Message, err
 	return msg, nil
 }
 
+func (s *Session) waitingForInteractionLocked() bool {
+	return s.WaitingPermission || s.WaitingQuestion || s.Status == StatusWaitingPermission || s.Status == StatusWaitingQuestion
+}
+
 func (s *Session) startTurn(hInput harness.Input) error {
 	s.Lock()
 	if s.Running {
 		s.Unlock()
 		return ErrSessionRunning
+	}
+	if s.waitingForInteractionLocked() && !hInput.HasInteractiveContent() {
+		s.Unlock()
+		if hInput.Compact != nil {
+			return fmt.Errorf("%w: resolve pending permissions or questions before compacting", ErrInvalidConfig)
+		}
+		return nil
 	}
 
 	runCtx, cancel := context.WithCancel(s.bgCtx)

@@ -8,12 +8,12 @@ import (
 	"iter"
 	"strings"
 
-	"github.com/google/uuid"
 	"github.com/masterkeysrd/loom/checkpoint/sqlite"
 	"github.com/masterkeysrd/loom/graph"
 	"github.com/masterkeysrd/loom/llm"
 	"github.com/masterkeysrd/loom/message"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
+	"github.com/masterkeysrd/tasksmith/internal/core/uuid"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/permissions"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tools"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/workspace"
@@ -134,98 +134,23 @@ func (h *harness) Stream(ctx context.Context, input Input) iter.Seq2[Event, erro
 			yield(Event{}, err)
 			return
 		}
-		if input.Compact != nil && (input.Message != nil || input.Decisions != nil || input.Answers != nil) {
-			yield(Event{}, fmt.Errorf("%w: cannot specify both compact and message/responses", ErrInvalidConfig))
+		if err := input.Validate(); err != nil {
+			yield(Event{}, err)
 			return
 		}
-		if (input.Decisions != nil || input.Answers != nil) && input.Message != nil {
-			yield(Event{}, fmt.Errorf("%w: cannot specify both message and responses", ErrInvalidConfig))
-			return
-		}
-		if input.Compact == nil && input.Decisions == nil && input.Answers == nil && input.Message == nil {
-			if _, ok := h.queue.Peek(); !ok {
-				yield(Event{}, ErrNilMessage)
-				return
-			}
-		}
-
 		state, err := h.LoadState(ctx)
 		if err != nil {
 			yield(Event{}, err)
 			return
 		}
 
-		var update graph.Update[State]
-		if input.Compact != nil {
-			update = graph.Update[State](func(s State) State {
-				s.PendingCompaction = input.Compact
-				return s
-			})
-		} else if input.Decisions != nil || input.Answers != nil {
-			if len(state.PendingPermissions) == 0 && len(state.PendingQuestions) == 0 {
-				if input.Answers != nil {
-					yield(Event{}, ErrNoPendingQuestions)
-				} else {
-					yield(Event{}, ErrNoPendingPermissions)
-				}
-				return
-			}
-			normalized := make(map[string]tools.PermissionDecision, len(state.PendingPermissions)*2)
-			for _, req := range state.PendingPermissions {
-				dec, ok := lookupDecision(input.Decisions, req)
-				if !ok {
-					yield(Event{}, ErrPendingPermissionsUnresolved)
-					return
-				}
-				dec.RequestID = req.ID
-				dec.ToolCallID = req.ToolCallID
-				normalized[req.ID] = dec
-				normalized[req.ToolCallID] = dec
-			}
-			answers := make(map[string]tools.QuestionResponse, len(state.PendingQuestions)*2)
-			for _, req := range state.PendingQuestions {
-				response, ok := lookupQuestionResponse(input.Answers, req)
-				if !ok {
-					yield(Event{}, ErrPendingQuestionsUnresolved)
-					return
-				}
-				response = *response.Clone()
-				response.RequestID, response.ToolCallID = req.ID, req.ToolCallID
-				answers[req.ID] = response
-				answers[req.ToolCallID] = response
-			}
-			update = graph.Update[State](func(s State) State {
-				s.PermissionDecisions = normalized
-				s.QuestionResponses = answers
-				return s
-			})
-		} else if input.Message != nil {
-			in := message.CloneMessage(input.Message)
-			_, _, unfulfilled, _ := state.ActiveToolCalls()
-			if len(unfulfilled) == 0 {
-				if strings.TrimSpace(in.GetID()) == "" {
-					id, err := uuid.NewV7()
-					if err != nil {
-						yield(Event{}, fmt.Errorf("harness: generate user message id: %w", err))
-						return
-					}
-					in.SetID(id.String())
-				}
-				if !yield(Event{
-					Type:    EventMessage,
-					Message: message.CloneMessage(in),
-				}, nil) {
-					return
-				}
-			}
-			update = graph.Update[State](func(s State) State {
-				s.Messages = append(s.Messages, in)
-				return s
-			})
-		} else {
-			update = graph.Update[State](func(s State) State {
-				return s
-			})
+		update, event, err := h.prepareInput(input, state)
+		if err != nil {
+			yield(Event{}, err)
+			return
+		}
+		if event != nil && !yield(*event, nil) {
+			return
 		}
 
 		stream, err := h.graph.Stream(ctx, update, &graph.Location{ThreadID: h.id})
@@ -236,6 +161,89 @@ func (h *harness) Stream(ctx context.Context, input Input) iter.Seq2[Event, erro
 
 		h.consumeGraphStream(stream, yield)
 	}
+}
+
+func (h *harness) prepareInput(input Input, state State) (graph.Update[State], *Event, error) {
+	if !input.HasInteractiveContent() {
+		if len(state.PendingPermissions) > 0 {
+			return nil, nil, ErrPendingPermissionsUnresolved
+		}
+		if len(state.PendingQuestions) > 0 {
+			return nil, nil, ErrPendingQuestionsUnresolved
+		}
+		if input.Compact != nil {
+			return prepareCompaction(input.Compact), nil, nil
+		}
+		if _, ok := h.queue.Peek(); !ok {
+			return nil, nil, ErrNilMessage
+		}
+		return graph.Update[State](func(s State) State { return s }), nil, nil
+	}
+	if input.HasResponses() {
+		update, err := prepareResponses(input, state)
+		return update, nil, err
+	}
+	return prepareMessage(input.Message, state)
+}
+
+func prepareCompaction(input *CompactInput) graph.Update[State] {
+	return graph.Update[State](func(s State) State {
+		s.PendingCompaction = input
+		return s
+	})
+}
+
+func prepareResponses(input Input, state State) (graph.Update[State], error) {
+	if len(state.PendingPermissions) == 0 && len(state.PendingQuestions) == 0 {
+		if input.Answers != nil {
+			return nil, ErrNoPendingQuestions
+		}
+		return nil, ErrNoPendingPermissions
+	}
+
+	normalized := make(map[string]tools.PermissionDecision, len(state.PendingPermissions)*2)
+	for _, req := range state.PendingPermissions {
+		dec, ok := lookupDecision(input.Decisions, req)
+		if !ok {
+			return nil, ErrPendingPermissionsUnresolved
+		}
+		dec.RequestID = req.ID
+		dec.ToolCallID = req.ToolCallID
+		normalized[req.ID] = dec
+		normalized[req.ToolCallID] = dec
+	}
+	answers := make(map[string]tools.QuestionResponse, len(state.PendingQuestions)*2)
+	for _, req := range state.PendingQuestions {
+		response, ok := lookupQuestionResponse(input.Answers, req)
+		if !ok {
+			return nil, ErrPendingQuestionsUnresolved
+		}
+		response = *response.Clone()
+		response.RequestID, response.ToolCallID = req.ID, req.ToolCallID
+		answers[req.ID] = response
+		answers[req.ToolCallID] = response
+	}
+	return graph.Update[State](func(s State) State {
+		s.PermissionDecisions = normalized
+		s.QuestionResponses = answers
+		return s
+	}), nil
+}
+
+func prepareMessage(msg message.Message, state State) (graph.Update[State], *Event, error) {
+	in := message.CloneMessage(msg)
+	var event *Event
+	_, _, unfulfilled, _ := state.ActiveToolCalls()
+	if len(unfulfilled) == 0 {
+		if strings.TrimSpace(in.GetID()) == "" {
+			in.SetID(uuid.New())
+		}
+		event = &Event{Type: EventMessage, Message: message.CloneMessage(in)}
+	}
+	return graph.Update[State](func(s State) State {
+		s.Messages = append(s.Messages, in)
+		return s
+	}), event, nil
 }
 
 func (h *harness) consumeGraphStream(stream iter.Seq2[graph.StreamEvent, error], yield func(Event, error) bool) {
