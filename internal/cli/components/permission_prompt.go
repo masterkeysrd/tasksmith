@@ -10,6 +10,7 @@ import (
 	"github.com/masterkeysrd/kite/extras/trail"
 	"github.com/masterkeysrd/kite/style"
 	"github.com/masterkeysrd/tasksmith/api"
+	"github.com/masterkeysrd/tasksmith/internal/ui/format"
 	"github.com/masterkeysrd/tasksmith/internal/ui/theme"
 )
 
@@ -26,14 +27,7 @@ type permissionOptionRow struct {
 }
 
 func compactSingleLine(s string, maxRunes int) string {
-	collapsed := strings.Join(strings.Fields(s), " ")
-	if maxRunes > 0 {
-		runes := []rune(collapsed)
-		if len(runes) > maxRunes {
-			return string(runes[:maxRunes-1]) + "…"
-		}
-	}
-	return collapsed
+	return format.CompactSingleLine(s, maxRunes)
 }
 
 // PermissionPrompt is a trail functional component rendering a tool authorization request.

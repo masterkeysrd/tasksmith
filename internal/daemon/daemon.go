@@ -403,6 +403,14 @@ func (d *Daemon) GetWorkspace(ctx context.Context, rawWS string) (*api.Workspace
 	}, nil
 }
 
+func (d *Daemon) ReloadWorkspace(ctx context.Context, rawWS string) error {
+	rt, err := d.runtimes.Get(ctx, rawWS)
+	if err != nil {
+		return err
+	}
+	return rt.Workspace().Reload(ctx)
+}
+
 func (d *Daemon) ListAgents(ctx context.Context, rawWS string) ([]api.Agent, error) {
 	rt, err := d.runtimes.Get(ctx, rawWS)
 	if err != nil {

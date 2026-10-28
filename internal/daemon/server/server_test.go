@@ -31,6 +31,8 @@ type mockBackend struct {
 	doneCh            chan struct{}
 	wsResp            *api.Workspace
 	wsErr             error
+	reloadWsCalled    bool
+	reloadWsErr       error
 	agentsResp        []api.Agent
 	agentsErr         error
 	agentResp         *api.Agent
@@ -114,6 +116,11 @@ func (m *mockBackend) Done() <-chan struct{} {
 
 func (m *mockBackend) GetWorkspace(ctx context.Context, workspace string) (*api.Workspace, error) {
 	return m.wsResp, m.wsErr
+}
+
+func (m *mockBackend) ReloadWorkspace(ctx context.Context, workspace string) error {
+	m.reloadWsCalled = true
+	return m.reloadWsErr
 }
 
 func (m *mockBackend) ListAgents(ctx context.Context, workspace string) ([]api.Agent, error) {
@@ -299,6 +306,14 @@ func TestWorkspaceRouterEndpoints(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("get workspace status = %d", rec.Code)
+	}
+
+	// Reload Workspace
+	req = httptest.NewRequest(http.MethodPost, "/v1/workspace/reload", nil)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || !mock.reloadWsCalled {
+		t.Fatalf("reload workspace status = %d, called = %v", rec.Code, mock.reloadWsCalled)
 	}
 
 	// Agents

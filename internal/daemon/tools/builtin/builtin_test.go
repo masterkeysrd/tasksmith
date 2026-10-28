@@ -1318,6 +1318,9 @@ Deploying image {{.image}}:{{.tag}}
 	if !strings.Contains(res.Content.Text(), "Deploying image my-service:latest") {
 		t.Errorf("expected rendered skill with default tag, got: %q", res.Content.Text())
 	}
+	if !strings.Contains(res.Content.Text(), "Base directory: .agents/skills") {
+		t.Errorf("expected base directory in output, got: %q", res.Content.Text())
+	}
 
 	// 2. Missing required argument
 	callMissingArg := &message.ToolCall{

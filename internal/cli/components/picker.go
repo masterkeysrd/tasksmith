@@ -54,6 +54,7 @@ type pickerModalState struct {
 // PickerProps defines the properties for the interactive Picker component.
 type PickerProps struct {
 	Title          string
+	Header         trail.Node // Optional custom header row (e.g. column headers)
 	Options        []uicomponents.Option
 	MaxVisible     int                   // Max visible options before scrolling (defaults to uicomponents.DefaultPickerMaxVisible)
 	Columns        []uicomponents.Column // Column specifications forwarded to OptionList
@@ -326,6 +327,10 @@ var Picker = trail.FC("Picker", func(props PickerProps) trail.Node {
 		Option:      style.S().Foreground(scheme.Color.Text.Secondary),
 		Selected:    style.S().Bold(true).Foreground(scheme.Color.Icon.Primary),
 		Description: style.S().Foreground(scheme.Color.Text.Muted),
+	}
+
+	if props.Header != nil {
+		rows = append(rows, props.Header)
 	}
 
 	rows = append(rows, uicomponents.OptionList(uicomponents.OptionListProps{

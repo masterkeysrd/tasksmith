@@ -110,6 +110,9 @@ func (r *Registry) RegisterCommandResource(cmd api.Command) {
 
 // RegisterSkillResource registers a workspace Skill manifest as a REPL slash command.
 func (r *Registry) RegisterSkillResource(sk api.Skill) {
+	if strings.ToLower(sk.Name) == "skills" {
+		return
+	}
 	usage := "/" + sk.Name
 	if sk.ArgumentHint != "" {
 		hint := strings.TrimSpace(sk.ArgumentHint)
@@ -263,4 +266,5 @@ func (r *Registry) registerBuiltins() {
 	r.registerTaskCommands()
 	r.registerCompactCommand()
 	r.registerContextCommand()
+	r.registerSkillCommands()
 }

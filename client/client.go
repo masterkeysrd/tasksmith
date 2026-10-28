@@ -156,6 +156,14 @@ func (c *Client) GetWorkspace(ctx context.Context) (*api.Workspace, error) {
 	return &out, nil
 }
 
+// ReloadWorkspace requests the daemon to reload workspace resources from disk.
+func (c *Client) ReloadWorkspace(ctx context.Context) error {
+	if err := c.requireCWD(); err != nil {
+		return err
+	}
+	return c.doJSON(ctx, http.MethodPost, "/v1/workspace/reload", nil, nil, nil)
+}
+
 // ListAgents returns all effective agents in the workspace scope.
 func (c *Client) ListAgents(ctx context.Context) ([]api.Agent, error) {
 	if err := c.requireCWD(); err != nil {

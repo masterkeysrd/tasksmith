@@ -97,3 +97,29 @@ func TestIsInsideDir(t *testing.T) {
 		}
 	}
 }
+
+func TestPortablePath(t *testing.T) {
+	home := filepath.Join(string(filepath.Separator), "mock", "home", "user")
+	root := filepath.Join(home, "project")
+
+	tests := []struct {
+		target   string
+		rootDir  string
+		homeDir  string
+		expected string
+	}{
+		{"", root, home, ""},
+		{filepath.Join(root, ".agents", "skills", "loom"), root, home, filepath.Join(".agents", "skills", "loom")},
+		{root, root, home, "."},
+		{filepath.Join(home, ".config", "tasksmith", "skills", "custom"), root, home, filepath.Join("~", ".config", "tasksmith", "skills", "custom")},
+		{filepath.Join(string(filepath.Separator), "opt", "global", "skill"), root, home, filepath.Join(string(filepath.Separator), "opt", "global", "skill")},
+		{"relative/path/skill", "", "", "relative/path/skill"},
+	}
+
+	for _, tt := range tests {
+		got := PortablePath(tt.target, tt.rootDir, tt.homeDir)
+		if got != tt.expected {
+			t.Errorf("PortablePath(%q, %q, %q) = %q, want %q", tt.target, tt.rootDir, tt.homeDir, got, tt.expected)
+		}
+	}
+}

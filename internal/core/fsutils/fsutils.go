@@ -60,3 +60,27 @@ func IsInsideDir(targetPath, dir string) bool {
 	}
 	return strings.HasPrefix(resClean, dirClean+string(filepath.Separator))
 }
+
+// PortablePath converts targetPath into a portable representation. If targetPath
+// is located within rootDir, it returns the relative path from rootDir. Otherwise,
+// if located within homeDir, it returns the path prefixed with "~". If it cannot
+// be made relative, the cleaned targetPath is returned.
+func PortablePath(targetPath, rootDir, homeDir string) string {
+	if strings.TrimSpace(targetPath) == "" {
+		return ""
+	}
+	cleanTarget := filepath.Clean(targetPath)
+	if rootDir != "" {
+		cleanRoot := filepath.Clean(rootDir)
+		if rel, err := filepath.Rel(cleanRoot, cleanTarget); err == nil && !strings.HasPrefix(rel, "..") {
+			return rel
+		}
+	}
+	if homeDir != "" {
+		cleanHome := filepath.Clean(homeDir)
+		if rel, err := filepath.Rel(cleanHome, cleanTarget); err == nil && !strings.HasPrefix(rel, "..") {
+			return filepath.Join("~", rel)
+		}
+	}
+	return cleanTarget
+}

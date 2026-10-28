@@ -86,20 +86,42 @@ func New(cfg Config) ([]tools.Tool, error) {
 		name    string
 		factory func(meta tools.Metadata) tools.Tool
 	}{
-		{ToolView, func(m tools.Metadata) tools.Tool { return tools.NewHandler(ToolView, m, &viewTool{std: cfg.Std, sandbox: cfg.Sandbox, guard: cfg.Guard}) }},
-		{ToolLS, func(m tools.Metadata) tools.Tool { return tools.NewHandler(ToolLS, m, &lsTool{std: cfg.Std, sandbox: cfg.Sandbox, guard: cfg.Guard}) }},
-		{ToolGlob, func(m tools.Metadata) tools.Tool { return tools.NewHandler(ToolGlob, m, &globTool{std: cfg.Std, sandbox: cfg.Sandbox, guard: cfg.Guard}) }},
-		{ToolGrep, func(m tools.Metadata) tools.Tool { return tools.NewHandler(ToolGrep, m, &grepTool{std: cfg.Std, sandbox: cfg.Sandbox, guard: cfg.Guard}) }},
-		{ToolWrite, func(m tools.Metadata) tools.Tool { return tools.NewHandler(ToolWrite, m, &writeTool{std: cfg.Std, guard: cfg.Guard}) }},
-		{ToolEdit, func(m tools.Metadata) tools.Tool { return tools.NewHandler(ToolEdit, m, &editTool{std: cfg.Std, guard: cfg.Guard}) }},
-		{ToolRemove, func(m tools.Metadata) tools.Tool { return tools.NewHandler(ToolRemove, m, &removeTool{std: cfg.Std, guard: cfg.Guard}) }},
-		{ToolBash, func(m tools.Metadata) tools.Tool { return tools.NewHandler(ToolBash, m, &bashTool{std: cfg.Std, sandbox: cfg.Sandbox, guard: cfg.Guard, tasks: tasksMgr}) }},
-		{ToolWebFetch, func(m tools.Metadata) tools.Tool { return tools.NewHandler(ToolWebFetch, m, &webFetchTool{std: cfg.Std}) }},
-		{ToolDownload, func(m tools.Metadata) tools.Tool { return tools.NewHandler(ToolDownload, m, &downloadTool{std: cfg.Std, guard: cfg.Guard}) }},
+		{ToolView, func(m tools.Metadata) tools.Tool {
+			return tools.NewHandler(ToolView, m, &viewTool{std: cfg.Std, sandbox: cfg.Sandbox, guard: cfg.Guard})
+		}},
+		{ToolLS, func(m tools.Metadata) tools.Tool {
+			return tools.NewHandler(ToolLS, m, &lsTool{std: cfg.Std, sandbox: cfg.Sandbox, guard: cfg.Guard})
+		}},
+		{ToolGlob, func(m tools.Metadata) tools.Tool {
+			return tools.NewHandler(ToolGlob, m, &globTool{std: cfg.Std, sandbox: cfg.Sandbox, guard: cfg.Guard})
+		}},
+		{ToolGrep, func(m tools.Metadata) tools.Tool {
+			return tools.NewHandler(ToolGrep, m, &grepTool{std: cfg.Std, sandbox: cfg.Sandbox, guard: cfg.Guard})
+		}},
+		{ToolWrite, func(m tools.Metadata) tools.Tool {
+			return tools.NewHandler(ToolWrite, m, &writeTool{std: cfg.Std, guard: cfg.Guard})
+		}},
+		{ToolEdit, func(m tools.Metadata) tools.Tool {
+			return tools.NewHandler(ToolEdit, m, &editTool{std: cfg.Std, guard: cfg.Guard})
+		}},
+		{ToolRemove, func(m tools.Metadata) tools.Tool {
+			return tools.NewHandler(ToolRemove, m, &removeTool{std: cfg.Std, guard: cfg.Guard})
+		}},
+		{ToolBash, func(m tools.Metadata) tools.Tool {
+			return tools.NewHandler(ToolBash, m, &bashTool{std: cfg.Std, sandbox: cfg.Sandbox, guard: cfg.Guard, tasks: tasksMgr})
+		}},
+		{ToolWebFetch, func(m tools.Metadata) tools.Tool {
+			return tools.NewHandler(ToolWebFetch, m, &webFetchTool{std: cfg.Std})
+		}},
+		{ToolDownload, func(m tools.Metadata) tools.Tool {
+			return tools.NewHandler(ToolDownload, m, &downloadTool{std: cfg.Std, guard: cfg.Guard})
+		}},
 		{ToolTasks, func(m tools.Metadata) tools.Tool { return tools.NewHandler(ToolTasks, m, &tasksTool{tasks: tasksMgr}) }},
 		{ToolTodos, func(m tools.Metadata) tools.Tool { return tools.NewHandler(ToolTodos, m, &todosTool{}) }},
 		{ToolAskQuestion, func(m tools.Metadata) tools.Tool { return tools.NewHandler(ToolAskQuestion, m, &askQuestionTool{}) }},
-		{ToolLoadSkill, func(m tools.Metadata) tools.Tool { return tools.NewHandler(ToolLoadSkill, m, newLoadSkillTool(cfg.Skills, cfg.RenderSkill)) }},
+		{ToolLoadSkill, func(m tools.Metadata) tools.Tool {
+			return tools.NewHandler(ToolLoadSkill, m, newLoadSkillTool(cfg.Skills, cfg.RenderSkill, cfg.Workspace))
+		}},
 	}
 
 	var out []tools.Tool

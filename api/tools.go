@@ -154,6 +154,7 @@ type LoadSkillInput struct {
 // LoadSkillOutput defines the structured output of the load_skill tool.
 type LoadSkillOutput struct {
 	Skill        string `json:"skill" jsonschema:"Name of the skill that was loaded."`
+	Path         string `json:"path,omitempty" jsonschema:"Base directory where the skill is located on disk, for resolving relative assets (scripts, references)."`
 	Instructions string `json:"instructions" jsonschema:"Rendered instructions and domain guidelines for the skill."`
 }
 

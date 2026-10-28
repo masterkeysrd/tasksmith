@@ -31,6 +31,9 @@ spec:
       skill:
         type: string
         description: Name of the skill that was loaded.
+      path:
+        type: string
+        description: Base directory where the skill is located on disk, for resolving relative assets (scripts, references).
       instructions:
         type: string
         description: Rendered instructions and domain guidelines for the skill.

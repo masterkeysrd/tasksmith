@@ -620,6 +620,27 @@ func toAPISkill(sk workspace.Skill) api.Skill {
 		ArgumentHint: sk.ArgumentHint,
 		Arguments:    toAPIArguments(sk.Arguments),
 		Namespace:    sk.Namespace,
+		Scope:        formatSkillScope(sk.Namespace),
+		Instructions: sk.Instructions,
+	}
+}
+
+func formatSkillScope(ns string) string {
+	switch strings.ToLower(strings.TrimSpace(ns)) {
+	case "workspace":
+		return "Workspace"
+	case "local", "project":
+		return "Project"
+	case "user":
+		return "User"
+	case "system", "builtin", "":
+		return "Builtin"
+	default:
+		s := strings.TrimSpace(ns)
+		if len(s) > 0 {
+			return strings.ToUpper(s[:1]) + s[1:]
+		}
+		return "Builtin"
 	}
 }
 

@@ -7,6 +7,7 @@ import (
 	"github.com/masterkeysrd/kite/extras/kitex"
 	"github.com/masterkeysrd/kite/extras/trail"
 	"github.com/masterkeysrd/kite/style"
+	"github.com/masterkeysrd/tasksmith/internal/ui/format"
 	"github.com/masterkeysrd/tasksmith/internal/ui/theme"
 )
 
@@ -161,7 +162,11 @@ var OptionList = trail.FC("OptionList", func(props OptionListProps) trail.Node {
 					if colSpec.Align != 0 {
 						tdStyle = tdStyle.TextAlign(colSpec.Align)
 						if colSpec.Align == style.TextAlignRight {
-							tdStyle = tdStyle.Padding(0, 0, 0, 0)
+							if colIdx == len(cells)-1 {
+								tdStyle = tdStyle.Padding(0, 0, 0, 0)
+							} else {
+								tdStyle = tdStyle.Padding(0, 2, 0, 0)
+							}
 						}
 					}
 					if props.Selected != origIdx {
@@ -179,6 +184,7 @@ var OptionList = trail.FC("OptionList", func(props OptionListProps) trail.Node {
 				}
 			}
 		} else {
+			desc := format.CompactSingleLine(opt.Description, 60)
 			tds = []trail.Node{
 				kitex.TD(kitex.TDProps{
 					Style: style.S().Padding(0, 2, 0, 0).WhiteSpace(style.WhiteSpacePre),
@@ -189,7 +195,7 @@ var OptionList = trail.FC("OptionList", func(props OptionListProps) trail.Node {
 					Style: style.S(),
 				}, trail.Span(trail.SpanProps{
 					Style: styles.Description,
-				}, trail.Text(withCurrentSuffix(opt.Description, opt.Current)))),
+				}, trail.Text(withCurrentSuffix(desc, opt.Current)))),
 			}
 		}
 

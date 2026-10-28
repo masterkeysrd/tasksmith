@@ -800,3 +800,27 @@ spec:
 		t.Errorf("expected 1 resolved skill (go-style), got: %v", resolvedAg.Skills)
 	}
 }
+
+func TestWorkspacePortablePath(t *testing.T) {
+	ctx := context.Background()
+	wsDir := t.TempDir()
+
+	ws, err := Open(ctx, wsDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ws.Initialize(ctx, InitOptions{}); err != nil {
+		t.Fatal(err)
+	}
+
+	// 1. Path inside workspace root
+	inside := filepath.Join(ws.RootDir(), ".agents", "skills", "test-skill")
+	if got := ws.PortablePath(inside); got != filepath.Join(".agents", "skills", "test-skill") {
+		t.Errorf("PortablePath inside = %q, want %q", got, filepath.Join(".agents", "skills", "test-skill"))
+	}
+
+	// 2. Empty path
+	if got := ws.PortablePath(""); got != "" {
+		t.Errorf("PortablePath empty = %q, want empty", got)
+	}
+}

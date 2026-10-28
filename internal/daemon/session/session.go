@@ -800,7 +800,22 @@ func (s *Session) resolveSlashCommand(msg message.Message) (message.Message, err
 		if err != nil {
 			return msg, fmt.Errorf("failed to render skill %q: %w", sk.Name, err)
 		}
-		newMsg := message.NewUser(&message.TextBlock{Text: rendered})
+
+		skillPath := s.workspace.PortablePath(sk.Directory)
+		pathAttr := ""
+		pathNote := ""
+		if skillPath != "" {
+			pathAttr = fmt.Sprintf(" path=%q", skillPath)
+			pathNote = fmt.Sprintf("\nSupporting assets and files for this skill are located in %q.", skillPath)
+		}
+
+		promptText := fmt.Sprintf("<embedded_skill name=%q%s>\n<instructions>\n%s\n</instructions>\n</embedded_skill>\n\nThe user invoked: %s%s\nFollow the skill instructions above.", sk.Name, pathAttr, rendered, text, pathNote)
+
+		newMsg := message.NewUserTextMeta(promptText, map[string]any{
+			"skill":   sk.Name,
+			"path":    skillPath,
+			"command": text,
+		})
 		if msg.GetID() != "" {
 			newMsg.SetID(msg.GetID())
 		}

@@ -8,6 +8,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/std"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tools"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/workspace"
 	"github.com/masterkeysrd/warp"
 )
 
@@ -15,19 +16,21 @@ import (
 type SkillRenderer func(name string, args map[string]string) (string, error)
 
 type loadSkillTool struct {
-	skills map[string]struct{}
+	skills map[string]warp.Skill
 	render SkillRenderer
+	ws     workspace.Workspace
 }
 
-func newLoadSkillTool(skills []warp.Skill, render SkillRenderer) *loadSkillTool {
-	allowed := make(map[string]struct{}, len(skills))
+func newLoadSkillTool(skills []warp.Skill, render SkillRenderer, ws workspace.Workspace) *loadSkillTool {
+	allowed := make(map[string]warp.Skill, len(skills))
 	for _, sk := range skills {
-		allowed[strings.ToLower(sk.Metadata.Name)] = struct{}{}
+		allowed[strings.ToLower(sk.Metadata.Name)] = sk
 	}
 
 	return &loadSkillTool{
 		skills: allowed,
 		render: render,
+		ws:     ws,
 	}
 }
 
@@ -52,7 +55,8 @@ func (t *loadSkillTool) Execute(_ context.Context, in api.LoadSkillInput) (api.L
 		return api.LoadSkillOutput{}, fmt.Errorf("%w: skill name is required", std.ErrInvalidArgument)
 	}
 
-	if _, ok := t.skills[strings.ToLower(name)]; !ok {
+	sk, ok := t.skills[strings.ToLower(name)]
+	if !ok {
 		return api.LoadSkillOutput{}, fmt.Errorf("skill %q is not accessible to this agent", name)
 	}
 
@@ -61,8 +65,14 @@ func (t *loadSkillTool) Execute(_ context.Context, in api.LoadSkillInput) (api.L
 		return api.LoadSkillOutput{}, err
 	}
 
+	var skillPath string
+	if t.ws != nil {
+		skillPath = t.ws.PortablePath(sk.Directory)
+	}
+
 	return api.LoadSkillOutput{
 		Skill:        name,
+		Path:         skillPath,
 		Instructions: rendered,
 	}, nil
 }

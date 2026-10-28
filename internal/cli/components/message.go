@@ -95,13 +95,32 @@ func messageParts(message store.Message) []trail.Node {
 				continue
 			}
 			if message.Role == api.RoleUser {
-				node = trail.Span(trail.SpanProps{
-					Style: style.S().
-						WhiteSpace(style.WhiteSpacePreWrap).
-						OverflowWrap(style.OverflowWrapAnywhere).
-						Bold(true).
-						Foreground(scheme.Color.Icon.Primary),
-				}, trail.Text(part.Text.Text))
+				text := part.Text.Text
+				if strings.Contains(text, "<embedded_skill") {
+					skillName := extractEmbeddedSkillName(text)
+					cmdText := extractEmbeddedSkillCommand(text)
+					node = trail.Box(trail.BoxProps{
+						Style: style.S().FlexDirection(style.FlexRow).AlignItems(style.AlignCenter),
+					},
+						trail.Span(trail.SpanProps{
+							Style: style.S().
+								WhiteSpace(style.WhiteSpacePreWrap).
+								Bold(true).
+								Foreground(scheme.Color.Icon.Primary),
+						}, trail.Text(cmdText+" ")),
+						trail.Span(trail.SpanProps{
+							Style: style.S().Bold(true).Foreground(scheme.Color.Text.Secondary),
+						}, trail.Text(fmt.Sprintf("[Skill: %s]", skillName))),
+					)
+				} else {
+					node = trail.Span(trail.SpanProps{
+						Style: style.S().
+							WhiteSpace(style.WhiteSpacePreWrap).
+							OverflowWrap(style.OverflowWrapAnywhere).
+							Bold(true).
+							Foreground(scheme.Color.Icon.Primary),
+					}, trail.Text(part.Text.Text))
+				}
 			} else if message.Role == api.RoleSystem {
 				node = trail.Span(trail.SpanProps{
 					Style: style.S().WhiteSpace(style.WhiteSpacePreWrap).OverflowWrap(style.OverflowWrapAnywhere),
@@ -136,3 +155,34 @@ var messageError = trail.FC("MessageError", func(text string) trail.Node {
 	textStyle := style.S().WhiteSpace(style.WhiteSpacePreWrap).OverflowWrap(style.OverflowWrapAnywhere).Foreground(scheme.Color.Text.Error)
 	return trail.Span(trail.SpanProps{Style: textStyle}, trail.Text(text))
 })
+
+func extractEmbeddedSkillName(s string) string {
+	idx := strings.Index(s, "<embedded_skill name=\"")
+	if idx == -1 {
+		return ""
+	}
+	start := idx + len("<embedded_skill name=\"")
+	end := strings.Index(s[start:], "\"")
+	if end == -1 {
+		return ""
+	}
+	return s[start : start+end]
+}
+
+func extractEmbeddedSkillCommand(s string) string {
+	if _, after, ok := strings.Cut(s, "The user invoked: "); ok {
+		after := after
+		line, _, _ := strings.Cut(after, "\n")
+		return strings.TrimSpace(line)
+	}
+	if _, after, ok := strings.Cut(s, "The user explicitly invoked the skill \""); ok {
+		after := after
+		line, _, _ := strings.Cut(after, "\"")
+		return strings.TrimSpace(line)
+	}
+	name := extractEmbeddedSkillName(s)
+	if name != "" {
+		return "/" + name
+	}
+	return ""
+}

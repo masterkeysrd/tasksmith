@@ -91,6 +91,8 @@ type Skill struct {
 	ArgumentHint string     `json:"argument_hint,omitempty"`
 	Arguments    []Argument `json:"arguments,omitempty"`
 	Namespace    string     `json:"namespace,omitempty"`
+	Scope        string     `json:"scope,omitempty"`
+	Instructions string     `json:"instructions,omitempty"`
 }
 
 type ThinkingValue struct {

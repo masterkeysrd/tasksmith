@@ -573,6 +573,7 @@ Loads and renders instructions, coding conventions, or runbooks for a specialize
 | Field | Type | Description |
 | :--- | :--- | :--- |
 | `skill` | string | Name of the skill that was loaded. |
+| `path` | string | Base directory where the skill is located on disk, for resolving relative assets (scripts, references). |
 | `instructions` | string | Rendered instructions and guidelines populated from the skill package. |
 
 ```json

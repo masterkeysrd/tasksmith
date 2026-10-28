@@ -1117,3 +1117,22 @@ func computeCompactionThresholds(contextLimit, outputLimit int) (reserveTokens, 
 	triggerTokens = contextLimit - reserveTokens
 	return reserveTokens, triggerTokens
 }
+
+// ReloadWorkspace instructs the daemon to reload workspace resources from disk
+// and refreshes AppState with updated skills and commands.
+func ReloadWorkspace(ctx context.Context) error {
+	c := Client()
+	if c == nil {
+		return errors.New("client unavailable")
+	}
+	if err := c.ReloadWorkspace(ctx); err != nil {
+		return err
+	}
+	if sks, err := c.ListSkills(ctx); err == nil {
+		SetWorkspaceSkills(sks)
+	}
+	if cmds, err := c.ListCommands(ctx); err == nil {
+		SetWorkspaceCommands(cmds)
+	}
+	return nil
+}

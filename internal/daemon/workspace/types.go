@@ -51,6 +51,7 @@ type Workspace interface {
 	RenderWorkspace(globals map[string]any) (string, error)
 	AgentContext(name string) api.ContextBreakdown
 	ModelLimits(rawID string) ModelLimits
+	PortablePath(targetPath string) string
 }
 
 // Namespace constants identifying the 4-tier resource resolution hierarchy.

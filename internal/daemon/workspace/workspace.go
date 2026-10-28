@@ -1188,6 +1188,18 @@ func (w *workspace) RenderWorkspace(globals map[string]any) (string, error) {
 	})
 }
 
+// PortablePath converts targetPath into a portable representation relative to the
+// workspace root, or prefixed with "~" if within the user's home directory.
+func (w *workspace) PortablePath(targetPath string) string {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	var home string
+	if w.env != nil {
+		home = w.env["HOME"]
+	}
+	return fsutils.PortablePath(targetPath, w.rootDir, home)
+}
+
 func mergeStringArgsIntoGlobals(args map[string]string, globals map[string]any) map[string]any {
 	merged := make(map[string]any)
 	maps.Copy(merged, globals)

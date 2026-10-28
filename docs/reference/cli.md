@@ -70,6 +70,7 @@ Inside the TaskSmith interactive REPL, slash commands provide instant control ov
 | **`/tasks`** | | *(none)* | Opens the background task manager to inspect running commands and stream task logs. |
 | **`/compact`** | | `[focus]` | Compacts conversation history to free context window space, with optional focus instructions. |
 | **`/context`** | | *(none)* | Displays visual token usage grid and detailed context window breakdown by category. |
+| **`/skills`** | | *(none)* | Opens the interactive skills browser to inspect runbooks, token estimates, and reload workspace skills. |
 
 ### Workspace Commands, Skills & Plugin Extensions
 

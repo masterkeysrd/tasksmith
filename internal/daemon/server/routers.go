@@ -200,6 +200,7 @@ func (w *workspaceRouter) Routes() []Route {
 func (w *workspaceRouter) initRoutes() {
 	w.routes = []Route{
 		GetRoute("/v1/workspace", w.getWorkspace),
+		PostRoute("/v1/workspace/reload", w.postWorkspaceReload),
 		GetRoute("/v1/agents", w.getAgentsList),
 		GetRoute("/v1/agents/{name}", w.getAgent),
 		GetRoute("/v1/commands", w.getCommandsList),
@@ -221,6 +222,14 @@ func (w *workspaceRouter) getWorkspace(rw http.ResponseWriter, r *http.Request) 
 		return
 	}
 	WriteJSON(rw, http.StatusOK, ws)
+}
+
+func (w *workspaceRouter) postWorkspaceReload(rw http.ResponseWriter, r *http.Request) {
+	if err := w.b.ReloadWorkspace(r.Context(), RequestWorkspace(r)); err != nil {
+		WriteError(rw, err)
+		return
+	}
+	WriteJSON(rw, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 func (w *workspaceRouter) getAgentsList(rw http.ResponseWriter, r *http.Request) {

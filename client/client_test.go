@@ -165,6 +165,14 @@ func TestClientAllMethodsOverUnixSocket(t *testing.T) {
 			DefaultModel: "ollama/qwen3.8",
 		})
 	})
+	mux.HandleFunc("POST /v1/workspace/reload", func(w http.ResponseWriter, r *http.Request) {
+		cwd := r.Header.Get(api.HeaderCWD)
+		if cwd != "/ws" {
+			http.Error(w, "missing or bad HeaderCWD", http.StatusBadRequest)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	})
 	mux.HandleFunc("GET /v1/agents", func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get(api.HeaderCWD) != "/ws" {
 			http.Error(w, "bad header", http.StatusBadRequest)
@@ -367,6 +375,10 @@ func TestClientAllMethodsOverUnixSocket(t *testing.T) {
 	ws, err := c.GetWorkspace(ctx)
 	if err != nil || ws.Name != "test-ws" || ws.CWD != "/ws" {
 		t.Errorf("GetWorkspace = (%+v, %v)", ws, err)
+	}
+
+	if err := c.ReloadWorkspace(ctx); err != nil {
+		t.Errorf("ReloadWorkspace: %v", err)
 	}
 
 	agents, err := c.ListAgents(ctx)

@@ -3365,3 +3365,72 @@ Reviewer agent.
 		t.Fatalf("expected 1 tool (view) for reviewer, got %d: %v", len(defsReviewer), defsReviewer)
 	}
 }
+
+func TestSessionSlashCommandSkillResolution(t *testing.T) {
+	ctx := context.Background()
+	prov := &fakeProvider{
+		handler: func(_ context.Context, _ *llm.Request) ([]string, string, error) {
+			return []string{"Skill acknowledged."}, uuid.NewString(), nil
+		},
+	}
+	db, ws, gw, pub, mgr := setupTestEnv(t, prov)
+	_ = db
+	_ = gw
+	_ = pub
+
+	wsDir := ws.RootDir()
+	skillDir := filepath.Join(wsDir, ".agents", "skills", "test-skill")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	skillContent := `---
+apiVersion: warp/v1alpha1
+kind: Skill
+metadata:
+  name: test-skill
+  description: A test skill
+spec:
+  title: Test Skill
+---
+Follow these instructions carefully.`
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte(skillContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := ws.Reload(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	sess, _, err := mgr.Create(ctx, CreateParams{
+		Title: "Slash Command Skill Test",
+	})
+	if err != nil {
+		t.Fatalf("mgr.Create: %v", err)
+	}
+
+	userMsg := message.NewUserText("/test-skill help me do something")
+	if err := sess.Send(ctx, SendInput{Message: userMsg}); err != nil {
+		t.Fatalf("sess.Send: %v", err)
+	}
+	if err := sess.Wait(ctx); err != nil {
+		t.Fatalf("sess.Wait: %v", err)
+	}
+
+	hist, err := sess.History(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hist) < 1 {
+		t.Fatalf("expected at least 1 message in history, got %d", len(hist))
+	}
+	firstMsg := hist[0]
+	text := msgText(firstMsg)
+	if !strings.Contains(text, `name="test-skill"`) {
+		t.Errorf("expected skill name attribute in: %s", text)
+	}
+	if !strings.Contains(text, `path=".agents/skills/test-skill"`) {
+		t.Errorf("expected skill path attribute in: %s", text)
+	}
+	if !strings.Contains(text, `Supporting assets and files for this skill are located in ".agents/skills/test-skill".`) {
+		t.Errorf("expected supporting assets note in: %s", text)
+	}
+}

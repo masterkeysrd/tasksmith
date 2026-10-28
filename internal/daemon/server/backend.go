@@ -23,6 +23,7 @@ type EventBackend interface {
 
 type WorkspaceBackend interface {
 	GetWorkspace(ctx context.Context, workspace string) (*api.Workspace, error)
+	ReloadWorkspace(ctx context.Context, workspace string) error
 	ListAgents(ctx context.Context, workspace string) ([]api.Agent, error)
 	GetAgent(ctx context.Context, workspace, name string) (*api.Agent, error)
 	ListCommands(ctx context.Context, workspace string) ([]api.Command, error)
