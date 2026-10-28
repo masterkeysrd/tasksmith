@@ -1015,6 +1015,12 @@ func ResolveModelInfo(ctx context.Context, c *client.Client, cfgAgent, cfgModel 
 				agentName = strings.TrimSpace(ws.DefaultAgent)
 			}
 		}
+		if cmds, err := c.ListCommands(ctx); err == nil {
+			SetWorkspaceCommands(cmds)
+		}
+		if sks, err := c.ListSkills(ctx); err == nil {
+			SetWorkspaceSkills(sks)
+		}
 	}
 
 	var ag *api.Agent

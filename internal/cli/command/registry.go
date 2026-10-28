@@ -1,9 +1,12 @@
 package command
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
+	"github.com/masterkeysrd/tasksmith/api"
+	"github.com/masterkeysrd/tasksmith/internal/cli/store"
 	"github.com/masterkeysrd/tasksmith/internal/ui/autocomplete"
 )
 
@@ -59,6 +62,154 @@ func (r *Registry) Register(cmd Command) {
 		if key != "" {
 			r.byName[key] = idx
 		}
+	}
+}
+
+// RegisterWorkspace registers workspace commands and skills as interactive slash commands.
+func (r *Registry) RegisterWorkspace(commands []api.Command, skills []api.Skill) {
+	for _, cmd := range commands {
+		r.RegisterCommandResource(cmd)
+	}
+	for _, sk := range skills {
+		r.RegisterSkillResource(sk)
+	}
+}
+
+// RegisterCommandResource registers a workspace Command manifest as a REPL slash command.
+func (r *Registry) RegisterCommandResource(cmd api.Command) {
+	usage := "/" + cmd.Name
+	if cmd.ArgumentHint != "" {
+		hint := strings.TrimSpace(cmd.ArgumentHint)
+		if strings.HasPrefix(hint, "/") {
+			usage = hint
+		} else {
+			usage = "/" + cmd.Name + " " + hint
+		}
+	} else if len(cmd.Arguments) > 0 {
+		usage = formatUsageFromArguments("/"+cmd.Name, cmd.Arguments)
+	}
+
+	r.Register(Command{
+		Name:        cmd.Name,
+		Usage:       usage,
+		Description: cmd.Description,
+		Handler: func(args []string) error {
+			if err := validateArguments(cmd.Arguments, args, usage); err != nil {
+				return err
+			}
+			line := "/" + cmd.Name
+			if len(args) > 0 {
+				line += " " + strings.Join(args, " ")
+			}
+			store.Send(line)
+			return nil
+		},
+		Complete: argumentCompleter(cmd.Arguments),
+	})
+}
+
+// RegisterSkillResource registers a workspace Skill manifest as a REPL slash command.
+func (r *Registry) RegisterSkillResource(sk api.Skill) {
+	usage := "/" + sk.Name
+	if sk.ArgumentHint != "" {
+		hint := strings.TrimSpace(sk.ArgumentHint)
+		if strings.HasPrefix(hint, "/") {
+			usage = hint
+		} else {
+			usage = "/" + sk.Name + " " + hint
+		}
+	} else if len(sk.Arguments) > 0 {
+		usage = formatUsageFromArguments("/"+sk.Name, sk.Arguments)
+	}
+
+	r.Register(Command{
+		Name:        sk.Name,
+		Usage:       usage,
+		Description: sk.Description,
+		Handler: func(args []string) error {
+			if err := validateArguments(sk.Arguments, args, usage); err != nil {
+				return err
+			}
+			line := "/" + sk.Name
+			if len(args) > 0 {
+				line += " " + strings.Join(args, " ")
+			}
+			store.Send(line)
+			return nil
+		},
+		Complete: argumentCompleter(sk.Arguments),
+	})
+}
+
+func validateArguments(argDefs []api.Argument, args []string, usage string) error {
+	if len(argDefs) == 0 {
+		return nil
+	}
+
+	named := make(map[string]string)
+	var positional []string
+	for _, arg := range args {
+		if strings.Contains(arg, "=") {
+			parts := strings.SplitN(arg, "=", 2)
+			k := strings.TrimPrefix(parts[0], "--")
+			named[strings.ToLower(k)] = parts[1]
+		} else {
+			positional = append(positional, arg)
+		}
+	}
+
+	for i, def := range argDefs {
+		if !def.Required || def.Default != "" {
+			continue
+		}
+		// Check named
+		if val, ok := named[strings.ToLower(def.Name)]; ok && strings.TrimSpace(val) != "" {
+			continue
+		}
+		// Check positional
+		if i < len(positional) && strings.TrimSpace(positional[i]) != "" {
+			continue
+		}
+		return fmt.Errorf("missing required argument %q. Usage: %s", def.Name, usage)
+	}
+	return nil
+}
+
+func formatUsageFromArguments(prefix string, args []api.Argument) string {
+	parts := []string{prefix}
+	for _, a := range args {
+		if a.Required && a.Default == "" {
+			parts = append(parts, "<"+a.Name+">")
+		} else if a.Default != "" {
+			parts = append(parts, "["+a.Name+"="+a.Default+"]")
+		} else {
+			parts = append(parts, "["+a.Name+"]")
+		}
+	}
+	return strings.Join(parts, " ")
+}
+
+func argumentCompleter(argDefs []api.Argument) autocomplete.Completer {
+	if len(argDefs) == 0 {
+		return nil
+	}
+	return func(ctx context.Context, req autocomplete.Request) ([]autocomplete.Candidate, error) {
+		candidates := make([]autocomplete.Candidate, 0, len(argDefs))
+		for _, a := range argDefs {
+			label := a.Name
+			if a.Required {
+				label += " (required)"
+			} else if a.Default != "" {
+				label += " (default: " + a.Default + ")"
+			}
+			desc := a.Description
+			candidates = append(candidates, autocomplete.Candidate{
+				Value:       a.Name,
+				Label:       label,
+				Description: desc,
+			})
+		}
+		return candidates, nil
 	}
 }
 

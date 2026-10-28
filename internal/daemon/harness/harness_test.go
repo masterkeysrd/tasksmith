@@ -205,9 +205,10 @@ func newTestToolsRegistry(t *testing.T) (string, tools.Container, permissions.Se
 	})
 
 	builtinTools, err := builtin.New(builtin.Config{
-		Std:     stdLib,
-		Sandbox: sb,
-		Guard:   guard,
+		Std:       stdLib,
+		Sandbox:   sb,
+		Guard:     guard,
+		Workspace: ws,
 	})
 	if err != nil {
 		t.Fatalf("builtin.New: %v", err)

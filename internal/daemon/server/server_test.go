@@ -35,6 +35,14 @@ type mockBackend struct {
 	agentsErr         error
 	agentResp         *api.Agent
 	agentErr          error
+	commandsResp      []api.Command
+	commandsErr       error
+	commandResp       *api.Command
+	commandErr        error
+	skillsResp        []api.Skill
+	skillsErr         error
+	skillResp         *api.Skill
+	skillErr          error
 	modelsResp        []api.Model
 	modelsErr         error
 	modelResp         *api.Model
@@ -114,6 +122,22 @@ func (m *mockBackend) ListAgents(ctx context.Context, workspace string) ([]api.A
 
 func (m *mockBackend) GetAgent(ctx context.Context, workspace, name string) (*api.Agent, error) {
 	return m.agentResp, m.agentErr
+}
+
+func (m *mockBackend) ListCommands(ctx context.Context, workspace string) ([]api.Command, error) {
+	return m.commandsResp, m.commandsErr
+}
+
+func (m *mockBackend) GetCommand(ctx context.Context, workspace, name string) (*api.Command, error) {
+	return m.commandResp, m.commandErr
+}
+
+func (m *mockBackend) ListSkills(ctx context.Context, workspace string) ([]api.Skill, error) {
+	return m.skillsResp, m.skillsErr
+}
+
+func (m *mockBackend) GetSkill(ctx context.Context, workspace, name string) (*api.Skill, error) {
+	return m.skillResp, m.skillErr
 }
 
 func (m *mockBackend) ListModels(ctx context.Context, workspace string) ([]api.Model, error) {
@@ -254,6 +278,14 @@ func TestWorkspaceRouterEndpoints(t *testing.T) {
 			{Name: "main", DisplayName: "Main Agent"},
 		},
 		agentResp: &api.Agent{Name: "main", DisplayName: "Main Agent"},
+		commandsResp: []api.Command{
+			{Name: "refactor", DisplayName: "Refactor Code"},
+		},
+		commandResp: &api.Command{Name: "refactor", DisplayName: "Refactor Code"},
+		skillsResp: []api.Skill{
+			{Name: "git-release", DisplayName: "Git Release"},
+		},
+		skillResp: &api.Skill{Name: "git-release", DisplayName: "Git Release"},
 		modelsResp: []api.Model{
 			{ID: "anthropic/claude-3-5-sonnet", Name: "claude-3-5-sonnet"},
 		},
@@ -283,6 +315,38 @@ func TestWorkspaceRouterEndpoints(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("get agent status = %d", rec.Code)
+	}
+
+	// Commands
+	req = httptest.NewRequest(http.MethodGet, "/v1/commands", nil)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list commands status = %d", rec.Code)
+	}
+
+	// Get Command
+	req = httptest.NewRequest(http.MethodGet, "/v1/commands/refactor", nil)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("get command status = %d", rec.Code)
+	}
+
+	// Skills
+	req = httptest.NewRequest(http.MethodGet, "/v1/skills", nil)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list skills status = %d", rec.Code)
+	}
+
+	// Get Skill
+	req = httptest.NewRequest(http.MethodGet, "/v1/skills/git-release", nil)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("get skill status = %d", rec.Code)
 	}
 
 	// Models

@@ -13,7 +13,6 @@ import (
 	"github.com/masterkeysrd/loom/tool"
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/core/guard"
-	"github.com/masterkeysrd/tasksmith/internal/daemon/workspace"
 )
 
 // Sentinel errors returned by the tools package.
@@ -260,32 +259,33 @@ type Spec[In, Out any] struct {
 	Execute     func(ctx context.Context, in In) (Out, error)
 }
 
-type workspaceBinder interface {
-	bindWorkspace(ws workspace.Workspace) error
+// Metadata provides display and permission metadata for a tool.
+type Metadata struct {
+	Title       string
+	Description string
+	Annotation  tool.Annotation
 }
 
 type typedTool[In, Out any] struct {
-	def                  tool.Definition
-	resolvedInputSchema  *jsonschema.Resolved
-	prepare              func(ctx context.Context, in In) (*Plan, error)
-	execute              func(ctx context.Context, in In) (Out, error)
-	requireWorkspaceMeta bool
+	def                 tool.Definition
+	resolvedInputSchema *jsonschema.Resolved
+	prepare             func(ctx context.Context, in In) (*Plan, error)
+	execute             func(ctx context.Context, in In) (Out, error)
 }
 
-// NewHandler constructs a [Tool] from a typed [Handler], inferring its JSON
-// schemas from In and Out. Display metadata and annotations are bound from the
-// workspace when the tool is registered in a [Container].
-func NewHandler[In, Out any](name string, h Handler[In, Out]) Tool {
+// NewHandler constructs a [Tool] from a typed [Handler] and explicit [Metadata],
+// inferring its JSON schemas from In and Out.
+func NewHandler[In, Out any](name string, meta Metadata, h Handler[In, Out]) Tool {
 	t, err := New(Spec[In, Out]{
-		Name:    name,
-		Prepare: h.Prepare,
-		Execute: h.Execute,
+		Name:        name,
+		Title:       meta.Title,
+		Description: meta.Description,
+		Annotation:  meta.Annotation,
+		Prepare:     h.Prepare,
+		Execute:     h.Execute,
 	})
 	if err != nil {
 		panic(err)
-	}
-	if tt, ok := t.(*typedTool[In, Out]); ok {
-		tt.requireWorkspaceMeta = true
 	}
 	return t
 }
@@ -340,39 +340,6 @@ func (t *typedTool[In, Out]) Name() string {
 
 func (t *typedTool[In, Out]) Definition() tool.Definition {
 	return t.def
-}
-
-func (t *typedTool[In, Out]) bindWorkspace(ws workspace.Workspace) error {
-	if ws == nil {
-		return nil
-	}
-	wsTool, ok := ws.GetTool(t.def.Name)
-	if !ok {
-		if t.requireWorkspaceMeta {
-			return fmt.Errorf("%w: tool %q not found in workspace", ErrToolNotFound, t.def.Name)
-		}
-		return nil
-	}
-	if wsTool.DisplayName != "" {
-		t.def.Title = wsTool.DisplayName
-	} else if wsTool.Name != "" {
-		t.def.Title = wsTool.Name
-	}
-	if wsTool.Instructions != "" {
-		t.def.Description = wsTool.Instructions
-	} else if wsTool.Description != "" {
-		t.def.Description = wsTool.Description
-	}
-	if wsTool.Annotations != nil {
-		t.def.Annotation = tool.Annotation{
-			IsOpenWorld:  wsTool.Annotations.IsOpenWorld,
-			IsDangerous:  wsTool.Annotations.IsDangerous,
-			IsReadOnly:   wsTool.Annotations.IsReadOnly,
-			IsIdempotent: wsTool.Annotations.IsIdempotent,
-			UserHint:     wsTool.Annotations.UserHint,
-		}
-	}
-	return nil
 }
 
 func (t *typedTool[In, Out]) decodeAndValidate(args map[string]any) (In, error) {

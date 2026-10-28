@@ -10,6 +10,7 @@ const (
 	ToolEdit        = "edit"
 	ToolGlob        = "glob"
 	ToolGrep        = "grep"
+	ToolLoadSkill   = "load_skill"
 	ToolLS          = "ls"
 	ToolRemove      = "remove"
 	ToolTasks       = "tasks"

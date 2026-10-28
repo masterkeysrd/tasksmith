@@ -202,6 +202,10 @@ func (w *workspaceRouter) initRoutes() {
 		GetRoute("/v1/workspace", w.getWorkspace),
 		GetRoute("/v1/agents", w.getAgentsList),
 		GetRoute("/v1/agents/{name}", w.getAgent),
+		GetRoute("/v1/commands", w.getCommandsList),
+		GetRoute("/v1/commands/{name...}", w.getCommand),
+		GetRoute("/v1/skills", w.getSkillsList),
+		GetRoute("/v1/skills/{name...}", w.getSkill),
 		GetRoute("/v1/models", w.getModelsList),
 		GetRoute("/v1/models/{id...}", w.getModel),
 		GetRoute("/v1/permissions", w.getPermissions),
@@ -236,6 +240,44 @@ func (w *workspaceRouter) getAgent(rw http.ResponseWriter, r *http.Request) {
 		return
 	}
 	WriteJSON(rw, http.StatusOK, agent)
+}
+
+func (w *workspaceRouter) getCommandsList(rw http.ResponseWriter, r *http.Request) {
+	commands, err := w.b.ListCommands(r.Context(), RequestWorkspace(r))
+	if err != nil {
+		WriteError(rw, err)
+		return
+	}
+	WriteJSON(rw, http.StatusOK, commands)
+}
+
+func (w *workspaceRouter) getCommand(rw http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	cmd, err := w.b.GetCommand(r.Context(), RequestWorkspace(r), name)
+	if err != nil {
+		WriteError(rw, err)
+		return
+	}
+	WriteJSON(rw, http.StatusOK, cmd)
+}
+
+func (w *workspaceRouter) getSkillsList(rw http.ResponseWriter, r *http.Request) {
+	skills, err := w.b.ListSkills(r.Context(), RequestWorkspace(r))
+	if err != nil {
+		WriteError(rw, err)
+		return
+	}
+	WriteJSON(rw, http.StatusOK, skills)
+}
+
+func (w *workspaceRouter) getSkill(rw http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	sk, err := w.b.GetSkill(r.Context(), RequestWorkspace(r), name)
+	if err != nil {
+		WriteError(rw, err)
+		return
+	}
+	WriteJSON(rw, http.StatusOK, sk)
 }
 
 func (w *workspaceRouter) getModelsList(rw http.ResponseWriter, r *http.Request) {

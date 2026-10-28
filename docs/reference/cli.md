@@ -71,6 +71,20 @@ Inside the TaskSmith interactive REPL, slash commands provide instant control ov
 | **`/compact`** | | `[focus]` | Compacts conversation history to free context window space, with optional focus instructions. |
 | **`/context`** | | *(none)* | Displays visual token usage grid and detailed context window breakdown by category. |
 
+### Workspace Commands, Skills & Plugin Extensions
+
+In addition to built-in commands, TaskSmith dynamically registers all workspace, user, and plugin resources:
+
+| Invocation Syntax | Source | Description |
+| :--- | :--- | :--- |
+| **`/<command> [args...]`** | `.agents/commands/` | Executes a workspace command prompt template with arguments. |
+| **`/<skill> [args...]`** | `.agents/skills/` | Renders a skill runbook into the session prompt with arguments. |
+| **`/<plugin>/<command> [args...]`** | Plugin resources | Invokes a namespaced command contributed by an installed plugin or extension. |
+
+- **Argument Autocomplete & Hints**: Typing `/<name> ` presents autocomplete suggestions and highlights argument requirements (`<required>`, `[optional=default]`).
+- **Pre-Flight Validation**: Missing required parameters are caught immediately client-side before sending any network request.
+- **Automatic Default Population**: Arguments omitted by the user are automatically filled by the renderer from `spec.arguments[].default`.
+
 ---
 
 ## 3. Keyboard Shortcuts

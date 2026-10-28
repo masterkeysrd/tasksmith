@@ -145,6 +145,18 @@ type GrepOutput struct {
 	Truncated bool        `json:"truncated,omitempty" jsonschema:"Whether matches were truncated at limit."`
 }
 
+// LoadSkillInput defines the input parameters for the load_skill tool.
+type LoadSkillInput struct {
+	Skill     string            `json:"skill" jsonschema:"Name of the skill to load (e.g. 'postgres-migrations', 'git-release')."`
+	Arguments map[string]string `json:"arguments,omitempty" jsonschema:"Optional key-value parameters passed to configure the skill template."`
+}
+
+// LoadSkillOutput defines the structured output of the load_skill tool.
+type LoadSkillOutput struct {
+	Skill        string `json:"skill" jsonschema:"Name of the skill that was loaded."`
+	Instructions string `json:"instructions" jsonschema:"Rendered instructions and domain guidelines for the skill."`
+}
+
 // LsEntry represents an item in entries.
 type LsEntry struct {
 	Path  string `json:"path" jsonschema:"Entry path relative to the workspace root."`

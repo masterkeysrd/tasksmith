@@ -25,6 +25,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tools"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tools/builtin"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/workspace"
+	"github.com/masterkeysrd/warp"
 )
 
 func setupBuiltinEnv(t *testing.T, allowLoopback bool) (string, tools.Container, *std.Std, sandbox.Sandbox, workspace.Workspace) {
@@ -68,9 +69,11 @@ func setupBuiltinEnv(t *testing.T, allowLoopback bool) (string, tools.Container,
 	})
 
 	builtinTools, err := builtin.New(builtin.Config{
-		Std:     stdLib,
-		Sandbox: sb,
-		Guard:   guard,
+		Std:         stdLib,
+		Sandbox:     sb,
+		Guard:       guard,
+		Workspace:   ws,
+		RenderSkill: func(name string, args map[string]string) (string, error) { return ws.RenderSkill(name, args, nil) },
 	})
 	if err != nil {
 		t.Fatalf("builtin.New failed: %v", err)
@@ -133,21 +136,14 @@ func TestBuiltinConfigValidate(t *testing.T) {
 		})
 	}
 
-	// Workspace opened without builtin.FS() must fail with tools.ErrToolNotFound in tools.NewContainer.
+	// Workspace opened without builtin.FS() must fail with tools.ErrToolNotFound in builtin.New.
 	emptyWS, err := workspace.Open(context.Background(), t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	builtinTools, err := builtin.New(valid)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := tools.NewContainer(tools.Config{
-		Tools:     builtinTools,
-		Sandbox:   sb,
-		Workspace: emptyWS,
-		Logger:    log.Default(),
-	}); !errors.Is(err, tools.ErrToolNotFound) {
+	cfgWithEmptyWS := valid
+	cfgWithEmptyWS.Workspace = emptyWS
+	if _, err := builtin.New(cfgWithEmptyWS); !errors.Is(err, tools.ErrToolNotFound) {
 		t.Fatalf("expected tools.ErrToolNotFound when workspace lacks built-in manifests, got %v", err)
 	}
 }
@@ -168,6 +164,7 @@ func TestFSAndWorkspaceResolution(t *testing.T) {
 		builtin.ToolEdit,
 		builtin.ToolGlob,
 		builtin.ToolGrep,
+		builtin.ToolLoadSkill,
 		builtin.ToolLS,
 		builtin.ToolRemove,
 		builtin.ToolTasks,
@@ -817,9 +814,11 @@ func TestSessionOutputsAndOutsidePathOperations(t *testing.T) {
 	})
 
 	builtinTools, err := builtin.New(builtin.Config{
-		Std:     stdLib,
-		Sandbox: sb,
-		Guard:   guard,
+		Std:         stdLib,
+		Sandbox:     sb,
+		Guard:       guard,
+		Workspace:   ws,
+		RenderSkill: func(name string, args map[string]string) (string, error) { return ws.RenderSkill(name, args, nil) },
 	})
 	if err != nil {
 		t.Fatalf("builtin.New failed: %v", err)
@@ -1236,5 +1235,203 @@ func TestTodosTool(t *testing.T) {
 	}
 	if _, err := container.Prepare(ctx, invalidStatusCall); err == nil {
 		t.Fatal("expected Prepare to fail on invalid status")
+	}
+}
+
+func TestLoadSkillTool(t *testing.T) {
+	ctx := context.Background()
+	dir, _, stdLib, sb, ws := setupBuiltinEnv(t, false)
+
+	// Create a skill manifest in the workspace
+	skillsDir := filepath.Join(dir, ".agents", "skills")
+	if err := os.MkdirAll(skillsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	skillContent := `---
+apiVersion: warp/v1alpha1
+kind: Skill
+metadata:
+  name: docker-deploy
+  description: Docker deployment guidelines
+spec:
+  arguments:
+    - name: tag
+      default: latest
+    - name: image
+      required: true
+---
+Deploying image {{.image}}:{{.tag}}
+`
+	if err := os.WriteFile(filepath.Join(skillsDir, "docker-deploy.skill.md"), []byte(skillContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Reload workspace to pick up new skill
+	if err := ws.Reload(ctx); err != nil {
+		t.Fatalf("ws.Reload: %v", err)
+	}
+
+	resolvedMain, err := ws.ResolveAgent("main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	guard := shellguard.New(shellguard.Config{WorkspaceDir: dir})
+	mainTools, err := builtin.New(builtin.Config{
+		Std:         stdLib,
+		Sandbox:     sb,
+		Guard:       guard,
+		Workspace:   ws,
+		Skills:      resolvedMain.Skills,
+		RenderSkill: func(name string, args map[string]string) (string, error) { return ws.RenderSkill(name, args, nil) },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	agentContainer, err := tools.NewContainer(tools.Config{
+		Tools:     mainTools,
+		Sandbox:   sb,
+		Workspace: ws,
+		Logger:    log.Default(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// 1. Success execution with required arg and defaulted arg
+	call := &message.ToolCall{
+		ID:   "call-load-skill-1",
+		Name: builtin.ToolLoadSkill,
+		Args: map[string]any{
+			"skill": "docker-deploy",
+			"arguments": map[string]any{
+				"image": "my-service",
+			},
+		},
+	}
+	res, err := agentContainer.Execute(ctx, call)
+	if err != nil {
+		t.Fatalf("Execute load_skill: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("unexpected tool error: %s", res.Content.Text())
+	}
+	if !strings.Contains(res.Content.Text(), "Deploying image my-service:latest") {
+		t.Errorf("expected rendered skill with default tag, got: %q", res.Content.Text())
+	}
+
+	// 2. Missing required argument
+	callMissingArg := &message.ToolCall{
+		ID:   "call-load-skill-missing",
+		Name: builtin.ToolLoadSkill,
+		Args: map[string]any{
+			"skill": "docker-deploy",
+		},
+	}
+	resMissing, err := agentContainer.Execute(ctx, callMissingArg)
+	if err != nil {
+		t.Fatalf("Execute load_skill missing: %v", err)
+	}
+	if !resMissing.IsError || !strings.Contains(resMissing.Content.Text(), "required argument") {
+		t.Errorf("expected error mentioning required argument, got IsError=%v content=%q", resMissing.IsError, resMissing.Content.Text())
+	}
+
+	// 3. Non-existent skill
+	callNotFound := &message.ToolCall{
+		ID:   "call-load-skill-notfound",
+		Name: builtin.ToolLoadSkill,
+		Args: map[string]any{
+			"skill": "non-existent-skill",
+		},
+	}
+	resNotFound, err := agentContainer.Execute(ctx, callNotFound)
+	if err != nil {
+		t.Fatalf("Execute load_skill not found: %v", err)
+	}
+	if !resNotFound.IsError || (!strings.Contains(resNotFound.Content.Text(), "not found") && !strings.Contains(resNotFound.Content.Text(), "not accessible")) {
+		t.Errorf("expected error mentioning not found, got IsError=%v content=%q", resNotFound.IsError, resNotFound.Content.Text())
+	}
+
+	// 4. Agent scoping: restricted agent cannot access skill outside its resolved skills
+	otherSkill := `---
+apiVersion: warp/v1alpha1
+kind: Skill
+metadata:
+  name: other-skill
+---
+Other skill instructions.
+`
+	if err := os.WriteFile(filepath.Join(skillsDir, "other.skill.md"), []byte(otherSkill), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	agentsDir := filepath.Join(dir, ".agents")
+	agentContent := `---
+apiVersion: warp/v1alpha1
+kind: Agent
+metadata:
+  name: restricted-agent
+spec:
+  skills:
+    - other-skill
+---
+Restricted agent instructions.
+`
+	if err := os.WriteFile(filepath.Join(agentsDir, "restricted.agent.md"), []byte(agentContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := ws.Reload(ctx); err != nil {
+		t.Fatalf("ws.Reload: %v", err)
+	}
+
+	// Resolve restricted agent and construct tools using its resolved skills
+	resolved, err := ws.ResolveAgent("restricted-agent")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	skills := resolved.Skills
+	if skills == nil {
+		skills = []warp.Skill{}
+	}
+
+	guard = shellguard.New(shellguard.Config{WorkspaceDir: dir})
+	scopedTools, err := builtin.New(builtin.Config{
+		Std:         stdLib,
+		Sandbox:     sb,
+		Guard:       guard,
+		Workspace:   ws,
+		Skills:      skills,
+		RenderSkill: func(name string, args map[string]string) (string, error) { return ws.RenderSkill(name, args, nil) },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	scopedContainer, err := tools.NewContainer(tools.Config{
+		Tools:     scopedTools,
+		Sandbox:   sb,
+		Workspace: ws,
+		Logger:    log.Default(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	callDisallowed := &message.ToolCall{
+		ID:   "call-disallowed",
+		Name: builtin.ToolLoadSkill,
+		Args: map[string]any{
+			"skill": "docker-deploy",
+			"arguments": map[string]any{
+				"image": "my-service",
+			},
+		},
+	}
+	resDisallowed, err := scopedContainer.Execute(ctx, callDisallowed)
+	if err != nil {
+		t.Fatalf("Execute load_skill disallowed: %v", err)
+	}
+	t.Logf("resDisallowed: IsError=%v, Content=%q", resDisallowed.IsError, resDisallowed.Content.Text())
+	if !resDisallowed.IsError || !strings.Contains(resDisallowed.Content.Text(), "not accessible to this agent") {
+		t.Errorf("expected skill to be rejected for restricted-agent, got: %q", resDisallowed.Content.Text())
 	}
 }

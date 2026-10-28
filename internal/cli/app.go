@@ -40,9 +40,22 @@ var appContent = trail.SimpleFC("AppContent", func() trail.Node {
 		return s.Config.Mode
 	})
 
+	commands := store.UseApp(func(s store.AppState) *[]api.Command { return s.Commands })
+	skills := store.UseApp(func(s store.AppState) *[]api.Skill { return s.Skills })
+
 	registry := kitex.UseMemo(func() *command.Registry {
-		return command.NewRegistry()
-	}, nil)
+		r := command.NewRegistry()
+		var cmds []api.Command
+		if commands != nil {
+			cmds = *commands
+		}
+		var sks []api.Skill
+		if skills != nil {
+			sks = *skills
+		}
+		r.RegisterWorkspace(cmds, sks)
+		return r
+	}, []any{commands, skills})
 
 	engine := kitex.UseMemo(func() *autocomplete.Engine {
 		e := autocomplete.New()

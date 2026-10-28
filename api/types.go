@@ -61,6 +61,38 @@ type Agent struct {
 	Context     ContextBreakdown `json:"context"`
 }
 
+// Argument defines a structured parameter accepted by a command or skill.
+type Argument struct {
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	Required    bool   `json:"required,omitempty"`
+	Default     string `json:"default,omitempty"`
+}
+
+// Command describes an executable slash command prompt template in the workspace.
+type Command struct {
+	Name         string     `json:"name"`
+	DisplayName  string     `json:"display_name,omitempty"`
+	Description  string     `json:"description,omitempty"`
+	ArgumentHint string     `json:"argument_hint,omitempty"`
+	Arguments    []Argument `json:"arguments,omitempty"`
+	Models       []string   `json:"models,omitempty"`
+	Tools        []string   `json:"tools,omitempty"`
+	Namespace    string     `json:"namespace,omitempty"`
+}
+
+// Skill describes an expertise module or workflow in the workspace.
+type Skill struct {
+	Name         string     `json:"name"`
+	DisplayName  string     `json:"display_name,omitempty"`
+	Description  string     `json:"description,omitempty"`
+	UseWhen      string     `json:"use_when,omitempty"`
+	Keywords     []string   `json:"keywords,omitempty"`
+	ArgumentHint string     `json:"argument_hint,omitempty"`
+	Arguments    []Argument `json:"arguments,omitempty"`
+	Namespace    string     `json:"namespace,omitempty"`
+}
+
 type ThinkingValue struct {
 	Value       string `json:"value"`
 	Description string `json:"description,omitempty"`

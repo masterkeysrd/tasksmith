@@ -437,6 +437,74 @@ func (d *Daemon) GetAgent(ctx context.Context, rawWS, name string) (*api.Agent, 
 	return &res, nil
 }
 
+func (d *Daemon) ListCommands(ctx context.Context, rawWS string) ([]api.Command, error) {
+	rt, err := d.runtimes.Get(ctx, rawWS)
+	if err != nil {
+		return nil, err
+	}
+
+	commands := rt.Workspace().Commands()
+	out := make([]api.Command, len(commands))
+	for i, cmd := range commands {
+		out[i] = toAPICommand(cmd)
+	}
+	return out, nil
+}
+
+func (d *Daemon) GetCommand(ctx context.Context, rawWS, name string) (*api.Command, error) {
+	rt, err := d.runtimes.Get(ctx, rawWS)
+	if err != nil {
+		return nil, err
+	}
+
+	name = strings.TrimSpace(name)
+	cmd, ok := rt.Workspace().GetCommand(name)
+	if !ok {
+		return nil, &api.APIError{
+			StatusCode: http.StatusNotFound,
+			Code:       "not_found",
+			Message:    fmt.Sprintf("command %q not found", name),
+		}
+	}
+
+	res := toAPICommand(*cmd)
+	return &res, nil
+}
+
+func (d *Daemon) ListSkills(ctx context.Context, rawWS string) ([]api.Skill, error) {
+	rt, err := d.runtimes.Get(ctx, rawWS)
+	if err != nil {
+		return nil, err
+	}
+
+	skills := rt.Workspace().Skills()
+	out := make([]api.Skill, len(skills))
+	for i, sk := range skills {
+		out[i] = toAPISkill(sk)
+	}
+	return out, nil
+}
+
+func (d *Daemon) GetSkill(ctx context.Context, rawWS, name string) (*api.Skill, error) {
+	rt, err := d.runtimes.Get(ctx, rawWS)
+	if err != nil {
+		return nil, err
+	}
+
+	name = strings.TrimSpace(name)
+	sk, ok := rt.Workspace().GetSkill(name)
+	if !ok {
+		return nil, &api.APIError{
+			StatusCode: http.StatusNotFound,
+			Code:       "not_found",
+			Message:    fmt.Sprintf("skill %q not found", name),
+		}
+	}
+
+	res := toAPISkill(*sk)
+	return &res, nil
+}
+
 func (d *Daemon) ListModels(ctx context.Context, rawWS string) ([]api.Model, error) {
 	rt, err := d.runtimes.Get(ctx, rawWS)
 	if err != nil {
@@ -724,7 +792,17 @@ func (d *Daemon) Send(ctx context.Context, rawWS, id string, req api.SendRequest
 		return err
 	}
 
-	return sess.Send(ctx, in)
+	if err := sess.Send(ctx, in); err != nil {
+		if errors.Is(err, session.ErrInvalidConfig) || errors.Is(err, session.ErrNilMessage) || strings.Contains(err.Error(), "required argument") || strings.Contains(err.Error(), "failed to render") {
+			return &api.APIError{
+				StatusCode: http.StatusBadRequest,
+				Code:       "bad_request",
+				Message:    err.Error(),
+			}
+		}
+		return err
+	}
+	return nil
 }
 
 func (d *Daemon) Cancel(ctx context.Context, rawWS, id string) error {

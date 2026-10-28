@@ -117,7 +117,7 @@ Before making a specific, complex tool call (like a file edit or a bash executio
 
 **Example Workflow:**
 1. User asks for a new feature that involves git commits.
-2. You evaluate skills: *"The user asked to commit, which matches the `conventional-commits` skill. I will activate it first."* followed by the `skill_activate` tool.
+2. You evaluate skills: *"The user asked to commit, which matches the `conventional-commits` skill. I will load it first."* followed by the `load_skill` tool.
 3. You create a 3-step checklist {{if call .HasTool "todos"}}using the `todos` tool{{else}}using Markdown{{end}}.
 4. You write: *"I need to check the current schema before making changes. I will read `internal/db/schema.sql` now."* followed by the read tool.
 5. You write: *"Now that I see the table structure, I will use the edit tool to add the `email` column at line 45."* followed by the edit tool.
@@ -303,17 +303,25 @@ You have access to specialized knowledge modules called "Skills". Each skill pro
   <description>{{.Description}}</description>
   {{if .UseWhen}}<use_when>{{.UseWhen}}</use_when>{{end}}
   {{if .Keywords}}<keywords>{{range .Keywords}}{{.}} {{end}}</keywords>{{end}}
+  {{if .ArgumentHint}}<argument_hint>{{.ArgumentHint}}</argument_hint>{{end}}
+  {{if .Arguments}}
+  <arguments>
+    {{range .Arguments}}
+    <argument name="{{.Name}}"{{if .Required}} required="true"{{end}}{{if .Default}} default="{{.Default}}"{{end}}>{{.Description}}</argument>
+    {{end}}
+  </arguments>
+  {{end}}
 </skill>
 {{end}}
 </available_skills>
 
 <skill_usage_rules>
-- **Triggers**: Treat the `<description>`, `<use_when>`, and `<keywords>` of each `<skill>` as *triggers**. If your current task or sub-task involves the concepts mentioned in these fields, you MUST activate that skill to access the required knowledge.
-- **First Action**: If a task matches a skill trigger, activating that skill must be the **absolute first action** you take, before searching the codebase, reading files, or formulating plans.
-- **Activation Mechanism**: You do not have the skill's knowledge by default. You must call the `skill_activate` tool with the skill's `<name>` to load its instructions.
-- **Context Retention**: Activate a relevant skill only once per task. Do not repeatedly activate it once its knowledge is loaded into your context.
+- **Triggers**: Treat the `<description>`, `<use_when>`, and `<keywords>` of each `<skill>` as *triggers*. If your current task or sub-task involves the concepts mentioned in these fields, you MUST load that skill to access the required knowledge.
+- **First Action**: If a task matches a skill trigger, loading that skill must be the **absolute first action** you take, before searching the codebase, reading files, or formulating plans.
+- **Loading Mechanism**: You do not have the skill's knowledge by default. You must call the `load_skill` tool with the skill's `<name>` (and any applicable `arguments`) to load its instructions.
+- **Context Retention**: Load a relevant skill only once per task. Do not repeatedly load it once its knowledge is loaded into your context.
 - **Deep Exploration**: If a skill provides additional assets (like `scripts/`, `examples/`, or `references/`), use your tools to read and utilize them as guided by the skill's main instructions.
-- **Subagent Delegation**: If delegating a task to a subagent, instruct the subagent to activate the relevant skill itself rather than trying to summarize the skill for them.
+- **Subagent Delegation**: If delegating a task to a subagent, instruct the subagent to load the relevant skill itself rather than trying to summarize the skill for them.
 </skill_usage_rules>
 </skills_and_specialized_knowledge>
 {{else}}

@@ -32,6 +32,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tools"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tools/builtin"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/workspace"
+	"github.com/masterkeysrd/warp"
 )
 
 // Status represents the operational execution state of a [Session].
@@ -186,13 +187,7 @@ func (s *Session) initResources(ctx context.Context) error {
 		}
 		s.Journal = jr
 	}
-	outputsDir := ""
-	if s.Root != "" {
-		outputsDir = filepath.Join(s.Root, "outputs")
-	} else if wsDir, err := xdg.WorkspaceDir(s.workspace.RootDir()); err == nil && s.ID != "" {
-		outputsDir = filepath.Join(wsDir, "sessions", s.ID, "outputs")
-	}
-
+	outputsDir := s.outputsDir()
 	if s.Tasks == nil {
 		s.Tasks = tasks.New(tasks.Config{
 			Context:    s.bgCtx,
@@ -222,37 +217,14 @@ func (s *Session) initResources(ctx context.Context) error {
 	}
 
 	if s.Tools == nil {
-		var readDirs []string
-		if outputsDir != "" {
-			readDirs = []string{outputsDir}
+		initialAgent := s.Config.Agent
+		if initialAgent == "" && s.workspace != nil {
+			initialAgent = s.workspace.DefaultAgentName()
 		}
-
-		guardInst := shellguard.New(shellguard.Config{
-			WorkspaceDir: s.workspace.RootDir(),
-			ReadDirs:     readDirs,
-		})
-
-		builtinTools, err := builtin.New(builtin.Config{
-			Std:     s.Std,
-			Sandbox: s.Sandbox,
-			Guard:   guardInst,
-			Tasks:   s.Tasks,
-		})
+		container, err := s.buildToolsForAgent(initialAgent)
 		if err != nil {
-			return fmt.Errorf("session: initialize builtin tools: %w", err)
+			return err
 		}
-
-		container, err := tools.NewContainer(tools.Config{
-			Tools:     builtinTools,
-			Sandbox:   s.Sandbox,
-			Workspace: s.workspace,
-			Logger:    s.logger,
-			Spiller:   s.spiller,
-		})
-		if err != nil {
-			return fmt.Errorf("session: initialize tools container: %w", err)
-		}
-
 		s.Tools = container
 	}
 	s.PermManager = s.permRoot.Attach(s.Config.Mode, s.Permissions, func(p permissions.Permissions) error {
@@ -334,11 +306,20 @@ func (s *Session) harness(ctx context.Context) (harness.Harness, error) {
 		}
 	}
 
+	container, err := s.buildToolsForAgent(agentName)
+	if err != nil {
+		return nil, fmt.Errorf("session: build tools for agent %q: %w", agentName, err)
+	}
+
+	s.Lock()
+	s.Tools = container
+	s.Unlock()
+
 	h, err := harness.New(harness.Config{
 		ID:           s.ID,
 		DB:           s.db,
 		Model:        llmModel,
-		Tools:        s.Tools,
+		Tools:        container,
 		Bash:         s.Std,
 		Spiller:      s.spiller,
 		Permissions:  s.PermManager,
@@ -368,9 +349,11 @@ func (s *Session) renderSystemPrompt(agentName string) string {
 
 	globals := map[string]any{
 		"HasTool": func(toolName string) bool {
-			if ag, ok := s.workspace.GetAgent(agentName); ok {
-				if slices.Contains(ag.Tools, toolName) {
-					return true
+			if resolved, err := s.workspace.ResolveAgent(agentName); err == nil && resolved != nil {
+				for _, t := range resolved.Tools {
+					if strings.EqualFold(t.Metadata.Name, toolName) {
+						return true
+					}
 				}
 			}
 			return false
@@ -644,9 +627,18 @@ func (s *Session) Send(ctx context.Context, input SendInput) error {
 		return s.startTurn(harness.Input{Decisions: fullDecisions, Answers: fullAnswers})
 	}
 
+	msg := input.Message
+	if msg != nil {
+		renderedMsg, err := s.resolveSlashCommand(msg)
+		if err != nil {
+			return err
+		}
+		msg = renderedMsg
+	}
+
 	s.Lock()
 	if strings.TrimSpace(s.Title) == "" && !s.titleGenerating {
-		text := input.Message.GetContent().Text()
+		text := msg.GetContent().Text()
 		if text != "" {
 			s.titleGenerating = true
 			s.wg.Go(func() {
@@ -659,14 +651,163 @@ func (s *Session) Send(ctx context.Context, input SendInput) error {
 
 	if running {
 		s.enqueueItem(QueueItem{
-			ID:      input.Message.GetID(),
+			ID:      msg.GetID(),
 			Kind:    QueueKindMessage,
-			Payload: QueueMessagePayload{Message: message.CloneMessage(input.Message)},
+			Payload: QueueMessagePayload{Message: message.CloneMessage(msg)},
 		})
 		return nil
 	}
 
-	return s.startTurn(harness.Input{Message: input.Message})
+	return s.startTurn(harness.Input{Message: msg})
+}
+
+func (s *Session) outputsDir() string {
+	if s.Root != "" {
+		return filepath.Join(s.Root, "outputs")
+	}
+	if s.workspace != nil && s.ID != "" {
+		if wsDir, err := xdg.WorkspaceDir(s.workspace.RootDir()); err == nil {
+			return filepath.Join(wsDir, "sessions", s.ID, "outputs")
+		}
+	}
+	return ""
+}
+
+func (s *Session) buildToolsForAgent(agentName string) (tools.Container, error) {
+	if agentName == "" && s.workspace != nil {
+		agentName = s.workspace.DefaultAgentName()
+	}
+
+	var allowedToolNames []string
+	var skills []warp.Skill
+
+	if s.workspace != nil && agentName != "" {
+		if resolved, err := s.workspace.ResolveAgent(agentName); err == nil && resolved != nil {
+			if resolved.Tools != nil {
+				allowedToolNames = make([]string, 0, len(resolved.Tools))
+				for _, t := range resolved.Tools {
+					allowedToolNames = append(allowedToolNames, t.Metadata.Name)
+				}
+			}
+			skills = resolved.Skills
+			if skills == nil {
+				skills = []warp.Skill{}
+			}
+		}
+	}
+
+	var readDirs []string
+	if outputsDir := s.outputsDir(); outputsDir != "" {
+		readDirs = []string{outputsDir}
+	}
+
+	guardInst := shellguard.New(shellguard.Config{
+		WorkspaceDir: s.workspace.RootDir(),
+		ReadDirs:     readDirs,
+	})
+
+	builtinTools, err := builtin.New(builtin.Config{
+		Std:          s.Std,
+		Sandbox:      s.Sandbox,
+		Guard:        guardInst,
+		Tasks:        s.Tasks,
+		Workspace:    s.workspace,
+		AllowedTools: allowedToolNames,
+		Skills:       skills,
+		RenderSkill: func(name string, args map[string]string) (string, error) {
+			return s.workspace.RenderSkill(name, args, nil)
+		},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("session: initialize builtin tools: %w", err)
+	}
+
+	container, err := tools.NewContainer(tools.Config{
+		Tools:        builtinTools,
+		Sandbox:      s.Sandbox,
+		Workspace:    s.workspace,
+		Logger:       s.logger,
+		Spiller:      s.spiller,
+		AllowedTools: allowedToolNames,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("session: initialize tools container: %w", err)
+	}
+
+	return container, nil
+}
+
+func parseSlashCommandArgs(argsDef []workspace.Argument, rawArgs []string) map[string]string {
+	argsMap := make(map[string]string)
+	var positional []string
+	for _, arg := range rawArgs {
+		if strings.Contains(arg, "=") {
+			parts := strings.SplitN(arg, "=", 2)
+			k := strings.TrimPrefix(parts[0], "--")
+			argsMap[k] = parts[1]
+		} else {
+			positional = append(positional, arg)
+		}
+	}
+	for i, p := range positional {
+		argsMap[fmt.Sprintf("%d", i+1)] = p
+		if i < len(argsDef) {
+			if _, exists := argsMap[argsDef[i].Name]; !exists {
+				argsMap[argsDef[i].Name] = p
+			}
+		}
+	}
+	return argsMap
+}
+
+func (s *Session) resolveSlashCommand(msg message.Message) (message.Message, error) {
+	if msg == nil {
+		return nil, nil
+	}
+	cnt := msg.GetContent()
+	text := strings.TrimSpace(cnt.Text())
+	if !strings.HasPrefix(text, "/") || len(cnt) > 1 {
+		return msg, nil
+	}
+
+	fields := strings.Fields(text)
+	if len(fields) == 0 {
+		return msg, nil
+	}
+
+	rawKey := strings.TrimPrefix(fields[0], "/")
+	cmdKey := strings.ToLower(rawKey)
+	rawArgs := fields[1:]
+
+	// 1. Try resolving as Command
+	if cmd, ok := s.workspace.GetCommand(cmdKey); ok {
+		argsMap := parseSlashCommandArgs(cmd.Arguments, rawArgs)
+		rendered, err := s.workspace.RenderCommand(cmd.Name, argsMap, nil)
+		if err != nil {
+			return msg, fmt.Errorf("failed to render command %q: %w", cmd.Name, err)
+		}
+		newMsg := message.NewUser(&message.TextBlock{Text: rendered})
+		if msg.GetID() != "" {
+			newMsg.SetID(msg.GetID())
+		}
+		return newMsg, nil
+	}
+
+	// 2. Try resolving as Skill
+	if sk, ok := s.workspace.GetSkill(cmdKey); ok {
+		argsMap := parseSlashCommandArgs(sk.Arguments, rawArgs)
+		rendered, err := s.workspace.RenderSkill(sk.Name, argsMap, nil)
+		if err != nil {
+			return msg, fmt.Errorf("failed to render skill %q: %w", sk.Name, err)
+		}
+		newMsg := message.NewUser(&message.TextBlock{Text: rendered})
+		if msg.GetID() != "" {
+			newMsg.SetID(msg.GetID())
+		}
+		return newMsg, nil
+	}
+
+	return msg, nil
 }
 
 func (s *Session) startTurn(hInput harness.Input) error {
@@ -1263,7 +1404,7 @@ func (s *Session) send(ctx context.Context, stream iter.Seq2[harness.Event, erro
 		case harness.EventContextUpdated:
 			if hev.Context != nil {
 				s.Lock()
-				s.State.Context = *hev.Context
+				s.Context = *hev.Context
 				s.Unlock()
 
 				s.publisher.Publish(api.SessionStreamTopic(s.ID), ContextUpdatedEvent{

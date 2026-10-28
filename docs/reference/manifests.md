@@ -228,12 +228,18 @@ spec:
     - sql
     - migration
     - schema
+  argumentHint: "Usage: /postgres-migrations [table_name]"
+  arguments:
+    - name: table_name
+      description: Target database table being modified
+      required: false
+      default: "users"
 ---
 
 # PostgreSQL Migration Rules
 
 1. Always add new columns as `NULL` or provide a default with `DEFAULT ... NOT NULL` on PostgreSQL 11+.
-2. Create indexes concurrently: `CREATE INDEX CONCURRENTLY idx_users_email ON users(email);`.
+2. Create indexes concurrently: `CREATE INDEX CONCURRENTLY idx_{{.table_name}}_email ON {{.table_name}}(email);`.
 3. Never drop columns in the same release that removes the application code reading them.
 ```
 
@@ -241,8 +247,10 @@ spec:
 
 | Field | Type | Description |
 | :--- | :--- | :--- |
-| `useWhen` | string | Natural language condition explaining when agents should activate this skill. |
-| `keywords` | array of strings | List of keywords that trigger skill loading. |
+| `useWhen` | string | Natural language condition explaining when agents should load this skill. |
+| `keywords` | array of strings | List of keywords that trigger skill discovery. |
+| `argumentHint` | string | Usage signature hint displayed during autocomplete and validation. |
+| `arguments` | array of objects | Structured parameter declarations accepted by this skill. |
 
 *The Markdown body below the frontmatter contains the domain instructions.*
 
@@ -270,11 +278,18 @@ spec:
     - edit
     - write
     - bash
-  hints:
-    - "Specify target file path as an argument"
+  argumentHint: "Usage: /refactor <target_file> [focus]"
+  arguments:
+    - name: target_file
+      description: Source file to refactor
+      required: true
+    - name: focus
+      description: Refactoring focus area (e.g. modularity, concurrency)
+      required: false
+      default: "readability"
 ---
 
-Please analyze the file specified in the prompt:
+Please analyze the file {{$target_file}} focusing on {{$focus}}:
 1. Identify code duplication, high cyclomatic complexity, or violation of single-responsibility.
 2. Formulate a refactoring plan and present a unified diff using `edit`.
 3. Verify that all tests pass using `bash(go test ./...)`.
@@ -286,7 +301,19 @@ Please analyze the file specified in the prompt:
 | :--- | :--- | :--- |
 | `models` | array of strings | Preferred model identifiers for executing this command. |
 | `tools` | array of strings | Tools made accessible during command execution. |
-| `hints` | array of strings | Usage hints displayed in the terminal UI when invoking the command. |
+| `argumentHint` | string | Usage signature hint displayed during autocomplete and validation. |
+| `arguments` | array of objects | Structured parameter declarations accepted by this command. |
+
+### Argument Object Reference
+
+Every parameter declared in `spec.arguments` supports:
+
+| Field | Type | Required | Description |
+| :--- | :--- | :--- | :--- |
+| `name` | string | **Yes** | Identifier used for template variable substitution (`{{.name}}` or `$name`). |
+| `description` | string | No | Guidance describing the purpose and expected format of the argument. |
+| `required` | boolean | No | When `true`, invocation fails validation if the argument is omitted and has no default. |
+| `default` | string | No | Fallback value automatically injected by the renderer when omitted. |
 
 *The Markdown body below the frontmatter contains the execution instructions.*
 
@@ -309,8 +336,11 @@ metadata:
 spec:
   models:
     - typesafe/jev-latest
-  hints:
-    - "Evaluate code diff against security criteria"
+  argumentHint: "Usage: evaluate code diff against security criteria"
+  arguments:
+    - name: diff
+      description: Unified diff to evaluate
+      required: true
   questions:
     - name: introduces_vulnerability
       type: predicate
@@ -350,7 +380,8 @@ Evaluate the provided pull request diff against the defined criteria.
 | Field | Type | Description |
 | :--- | :--- | :--- |
 | `models` | array of strings | Preferred decision models (e.g. `typesafe/jev-latest`). |
-| `hints` | array of strings | Guidance strings for decision evaluation. |
+| `argumentHint` | string | Guidance string for invocation syntax. |
+| `arguments` | array of objects | Structured parameter declarations accepted by this decision. |
 | `questions` | array of objects | Structured evaluation questions. |
 
 #### Question Object Fields

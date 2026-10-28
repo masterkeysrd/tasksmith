@@ -2,11 +2,13 @@ package command
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/client"
 	"github.com/masterkeysrd/tasksmith/internal/cli/store"
+	"github.com/masterkeysrd/tasksmith/internal/ui/autocomplete"
 )
 
 func TestRegistryBuiltinsAndLookup(t *testing.T) {
@@ -318,4 +320,114 @@ func TestCompactAndContextCommands(t *testing.T) {
 			t.Errorf("expected non-empty ModelName")
 		}
 	})
+}
+
+func TestWorkspaceCommandsAndSkillsSlashExecutionAndValidation(t *testing.T) {
+	r := NewRegistry()
+
+	cmds := []api.Command{
+		{
+			Name:        "review",
+			Description: "Review a pull request",
+			Arguments: []api.Argument{
+				{Name: "pr_number", Required: true},
+				{Name: "branch", Default: "main"},
+			},
+		},
+		{
+			Name:        "git/review",
+			Description: "Plugin git review command",
+			Arguments: []api.Argument{
+				{Name: "target", Required: true},
+			},
+		},
+	}
+	skills := []api.Skill{
+		{
+			Name:        "deploy",
+			Description: "Deploy application",
+			Arguments: []api.Argument{
+				{Name: "env", Required: true},
+			},
+		},
+	}
+
+	r.RegisterWorkspace(cmds, skills)
+
+	// 1. Verify Lookups
+	if _, ok := r.Lookup("review"); !ok {
+		t.Fatal("expected /review command to be registered")
+	}
+	if _, ok := r.Lookup("/review"); !ok {
+		t.Fatal("expected /review with slash prefix to resolve")
+	}
+	if _, ok := r.Lookup("git/review"); !ok {
+		t.Fatal("expected /git/review plugin command to be registered")
+	}
+	if _, ok := r.Lookup("deploy"); !ok {
+		t.Fatal("expected /deploy skill to be registered")
+	}
+
+	// 2. Client-side argument validation: Missing required argument fails immediately
+	err := r.Execute("/review")
+	if err == nil || !strings.Contains(err.Error(), "missing required argument \"pr_number\"") {
+		t.Fatalf("expected missing required argument error for /review, got: %v", err)
+	}
+
+	// 3. Client-side argument validation: Passing positional argument satisfies required argument
+	// Initialize fake store client to verify store.Send
+	store.ResetSession()
+	store.ClearTranscript()
+	defer store.ResetSession()
+	defer store.ClearTranscript()
+
+	if err := r.Execute("/review 123"); err != nil {
+		t.Fatalf("unexpected error for valid /review positional: %v", err)
+	}
+
+	// 4. Client-side argument validation: Passing named flag satisfies required argument
+	if err := r.Execute("/review --pr_number=456"); err != nil {
+		t.Fatalf("unexpected error for valid /review flag: %v", err)
+	}
+
+	// 5. Plugin namespaced command validation
+	if err := r.Execute("/git/review"); err == nil || !strings.Contains(err.Error(), "missing required argument \"target\"") {
+		t.Fatalf("expected missing required argument error for /git/review, got: %v", err)
+	}
+	if err := r.Execute("/git/review prod"); err != nil {
+		t.Fatalf("unexpected error for valid /git/review: %v", err)
+	}
+
+	// 6. Skill validation
+	if err := r.Execute("/deploy"); err == nil || !strings.Contains(err.Error(), "missing required argument \"env\"") {
+		t.Fatalf("expected missing required argument error for /deploy, got: %v", err)
+	}
+	if err := r.Execute("/deploy production"); err != nil {
+		t.Fatalf("unexpected error for valid /deploy: %v", err)
+	}
+
+	// 7. Verify Autocomplete Sources
+	sources := r.Sources()
+	if len(sources) == 0 {
+		t.Fatal("expected autocomplete sources")
+	}
+	// Verify candidates contains review, git/review, deploy
+	mainCandidates, err := sources[0].Complete(context.Background(), autocomplete.Request{})
+	if err != nil {
+		t.Fatalf("complete sources: %v", err)
+	}
+	var foundReview, foundPluginReview, foundDeploy bool
+	for _, c := range mainCandidates {
+		switch c.Value {
+		case "review":
+			foundReview = true
+		case "git/review":
+			foundPluginReview = true
+		case "deploy":
+			foundDeploy = true
+		}
+	}
+	if !foundReview || !foundPluginReview || !foundDeploy {
+		t.Errorf("missing candidates: review=%v, git/review=%v, deploy=%v", foundReview, foundPluginReview, foundDeploy)
+	}
 }

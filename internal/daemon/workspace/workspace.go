@@ -674,6 +674,24 @@ func (w *workspace) GetAgent(name string) (*Agent, bool) {
 	return &domainAgent, true
 }
 
+// ResolveAgent resolves an effective agent by name, applying inheritance,
+// policies, and returning the fully hydrated WARP ResolvedAgent.
+func (w *workspace) ResolveAgent(name string) (*warp.ResolvedAgent, error) {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+
+	target := strings.TrimSpace(name)
+	if target == "" {
+		target = w.defaultAgentNameLocked()
+	}
+
+	_, resolved, ok := w.resolveWarpAgentLocked(target)
+	if !ok || resolved == nil {
+		return nil, fmt.Errorf("workspace: agent %q not found", target)
+	}
+	return resolved, nil
+}
+
 // Decisions returns all effective decision resources in the workspace scope,
 // sorted by name.
 func (w *workspace) Decisions() []Decision {
@@ -1057,13 +1075,13 @@ func (w *workspace) RenderAgent(name string, args map[string]string, globals map
 	w.mu.RLock()
 	defer w.mu.RUnlock()
 
-	ag, resolved, ok := w.resolveWarpAgentLocked(name)
-	if !ok {
+	_, resolved, ok := w.resolveWarpAgentLocked(name)
+	if !ok || resolved == nil || resolved.Agent == nil {
 		return "", fmt.Errorf("workspace: agent %q not found", name)
 	}
 
 	mergedGlobals := mergeStringArgsIntoGlobals(args, globals)
-	return ag.Render(&warp.AgentRenderOptions{
+	return resolved.Agent.Render(&warp.AgentRenderOptions{
 		Workspace: w.registry.WorkspaceSpec(),
 		Project:   w.currentWarpProjectLocked(),
 		Resolved:  resolved,
@@ -1087,9 +1105,11 @@ func (w *workspace) RenderSkill(name string, args map[string]string, globals map
 	}
 
 	mergedGlobals := mergeStringArgsIntoGlobals(args, globals)
+	positionalArgs := buildPositionalArgsFromArguments(sk.Spec.Arguments, args)
 	return sk.Render(&warp.SkillRenderOptions{
 		Workspace: w.registry.WorkspaceSpec(),
 		Project:   w.currentWarpProjectLocked(),
+		Args:      positionalArgs,
 		Globals:   mergedGlobals,
 	})
 }
@@ -1110,7 +1130,7 @@ func (w *workspace) RenderCommand(name string, args map[string]string, globals m
 	}
 
 	mergedGlobals := mergeStringArgsIntoGlobals(args, globals)
-	positionalArgs := buildPositionalArgsFromStringMap(cmd.Spec.Hints, args)
+	positionalArgs := buildPositionalArgsFromArguments(cmd.Spec.Arguments, args)
 
 	return cmd.Render(&warp.CommandRenderOptions{
 		Workspace: w.registry.WorkspaceSpec(),
@@ -1142,7 +1162,7 @@ func (w *workspace) RenderDecision(name string, inputs map[string]any, globals m
 		mergedGlobals["Inputs"] = inputs
 	}
 
-	positionalArgs := buildPositionalArgsFromAnyMap(dec.Spec.Hints, inputs)
+	positionalArgs := buildPositionalArgsFromAnyMap(dec.Spec.Arguments, inputs)
 
 	return dec.Render(&warp.DecisionRenderOptions{
 		Workspace: w.registry.WorkspaceSpec(),
@@ -1180,18 +1200,20 @@ func mergeStringArgsIntoGlobals(args map[string]string, globals map[string]any) 
 	return merged
 }
 
-func buildPositionalArgsFromStringMap(hints []string, args map[string]string) []string {
+func buildPositionalArgsFromArguments(argsDef []warp.Argument, args map[string]string) []string {
 	if len(args) == 0 {
 		return nil
 	}
 	var out []string
-	if len(hints) > 0 {
-		out = make([]string, len(hints))
-		for i, h := range hints {
-			if val, ok := args[h]; ok {
+	if len(argsDef) > 0 {
+		out = make([]string, len(argsDef))
+		for i, a := range argsDef {
+			if val, ok := args[a.Name]; ok {
 				out[i] = val
 			} else if val, ok := args[fmt.Sprintf("%d", i+1)]; ok {
 				out[i] = val
+			} else if a.Default != "" {
+				out[i] = a.Default
 			}
 		}
 		return out
@@ -1207,18 +1229,20 @@ func buildPositionalArgsFromStringMap(hints []string, args map[string]string) []
 	return out
 }
 
-func buildPositionalArgsFromAnyMap(hints []string, inputs map[string]any) []string {
+func buildPositionalArgsFromAnyMap(argsDef []warp.Argument, inputs map[string]any) []string {
 	if len(inputs) == 0 {
 		return nil
 	}
 	var out []string
-	if len(hints) > 0 {
-		out = make([]string, len(hints))
-		for i, h := range hints {
-			if val, ok := inputs[h]; ok && val != nil {
+	if len(argsDef) > 0 {
+		out = make([]string, len(argsDef))
+		for i, a := range argsDef {
+			if val, ok := inputs[a.Name]; ok && val != nil {
 				out[i] = fmt.Sprint(val)
 			} else if val, ok := inputs[fmt.Sprintf("%d", i+1)]; ok && val != nil {
 				out[i] = fmt.Sprint(val)
+			} else if a.Default != "" {
+				out[i] = a.Default
 			}
 		}
 		return out

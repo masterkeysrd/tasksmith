@@ -3254,3 +3254,114 @@ func TestSessionSendCompactDirect(t *testing.T) {
 		t.Fatalf("expected ErrSessionRunning when session is running, got %v", err)
 	}
 }
+
+func TestSessionAgentToolScopingAndRebuildOnAgentChange(t *testing.T) {
+	ctx := context.Background()
+	prov := &fakeProvider{
+		handler: func(_ context.Context, _ *llm.Request) ([]string, string, error) {
+			return []string{"OK"}, uuid.NewString(), nil
+		},
+	}
+	_, ws, _, _, mgr := setupTestEnv(t, prov)
+
+	// Create coder agent
+	agentsDir := filepath.Join(ws.RootDir(), ".agents")
+	if err := os.MkdirAll(agentsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	coderContent := `---
+apiVersion: warp/v1alpha1
+kind: Agent
+metadata:
+  name: coder
+spec:
+  policies:
+    tools:
+      include:
+        - view
+        - ls
+        - load_skill
+---
+Coder agent.
+`
+	if err := os.WriteFile(filepath.Join(agentsDir, "coder.agent.md"), []byte(coderContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create reviewer agent with only view
+	reviewerContent := `---
+apiVersion: warp/v1alpha1
+kind: Agent
+metadata:
+  name: reviewer
+spec:
+  policies:
+    tools:
+      include:
+        - view
+---
+Reviewer agent.
+`
+	if err := os.WriteFile(filepath.Join(agentsDir, "reviewer.agent.md"), []byte(reviewerContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := ws.Reload(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	// 1. Create session configured with coder agent
+	sess, _, err := mgr.Create(ctx, CreateParams{
+		Title: "Agent Tool Scoping Test",
+		Config: SessionConfig{
+			Agent: "coder",
+		},
+	})
+	if err != nil {
+		t.Fatalf("mgr.Create: %v", err)
+	}
+
+	// First turn: builds tools for coder
+	userMsg := message.NewUserText("start")
+	if err := sess.Send(ctx, SendInput{Message: userMsg}); err != nil {
+		t.Fatalf("sess.Send: %v", err)
+	}
+	if err := sess.Wait(ctx); err != nil {
+		t.Fatalf("sess.Wait: %v", err)
+	}
+
+	// Verify container has view, ls, load_skill
+	defs := sess.Tools.Definitions()
+	if len(defs) != 3 {
+		t.Fatalf("expected 3 tools for coder, got %d: %v", len(defs), defs)
+	}
+	for _, d := range defs {
+		if d.Name != "view" && d.Name != "ls" && d.Name != "load_skill" {
+			t.Errorf("unexpected tool in coder definitions: %s", d.Name)
+		}
+	}
+
+	// 2. Update session to reviewer agent
+	_, err = mgr.Update(ctx, sess.ID, UpdateParams{
+		Config: SessionConfig{
+			Agent: "reviewer",
+		},
+	})
+	if err != nil {
+		t.Fatalf("mgr.Update: %v", err)
+	}
+
+	// Second turn: triggers rebuilding tools for reviewer
+	userMsg2 := message.NewUserText("review now")
+	if err := sess.Send(ctx, SendInput{Message: userMsg2}); err != nil {
+		t.Fatalf("sess.Send 2: %v", err)
+	}
+	if err := sess.Wait(ctx); err != nil {
+		t.Fatalf("sess.Wait 2: %v", err)
+	}
+
+	// Verify container now ONLY has view
+	defsReviewer := sess.Tools.Definitions()
+	if len(defsReviewer) != 1 || defsReviewer[0].Name != "view" {
+		t.Fatalf("expected 1 tool (view) for reviewer, got %d: %v", len(defsReviewer), defsReviewer)
+	}
+}

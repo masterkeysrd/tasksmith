@@ -11,7 +11,7 @@ require (
 	github.com/lrstanley/go-nf v0.0.0-20260418212552-215ab243b591
 	github.com/masterkeysrd/kite v0.0.6-0.20261022053628-4a0d9aff0b59
 	github.com/masterkeysrd/loom v0.0.9-0.20261027202854-131fab4665d7
-	github.com/masterkeysrd/warp v0.0.6
+	github.com/masterkeysrd/warp v0.0.7-0.20261028041754-892f1a8beb3b
 	github.com/ollama/ollama v0.40.8
 	github.com/openai/openai-go/v3 v3.79.0
 	github.com/spf13/cobra v1.10.2
@@ -97,7 +97,7 @@ require (
 	go.opentelemetry.io/otel/trace v1.47.0 // indirect
 	go.opentelemetry.io/proto/otlp v1.11.1 // indirect
 	golang.org/x/crypto v0.58.0 // indirect
-	golang.org/x/net v0.61.0 // indirect
+	golang.org/x/net v0.62.0 // indirect
 	golang.org/x/oauth2 v0.37.0 // indirect
 	golang.org/x/sync v0.24.0 // indirect
 	golang.org/x/sys v0.49.0 // indirect

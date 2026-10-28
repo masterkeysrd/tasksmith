@@ -106,6 +106,12 @@ spec:
     - sql
     - migrations
     - schema
+  argumentHint: "Usage: /postgres-migrations [table]"
+  arguments:
+    - name: table
+      description: Target table name
+      required: false
+      default: "users"
 ---
 
 # PostgreSQL Zero-Downtime Migrations
@@ -144,6 +150,21 @@ When a skill needs supporting helper scripts or templates, organize it as a dire
 
 Agents can read these supporting files using `view` or execute helper scripts using `bash`.
 
+### Triggering & Loading Skills
+- **User Invocation**: Developers can invoke any skill directly in the CLI composer:
+  ```text
+  /postgres-migrations accounts
+  ```
+- **Autonomous Agent Loading**: Agents load skill instructions on demand using the built-in `load_skill` tool:
+  ```json
+  {
+    "skill": "postgres-migrations",
+    "arguments": {
+      "table": "accounts"
+    }
+  }
+  ```
+
 ---
 
 ## 3. Custom Slash Commands (`*.command.md`)
@@ -173,17 +194,23 @@ spec:
     - edit
     - write
     - bash
-  hints:
-    - "Usage: /benchmark <package-path> <function-name>"
+  argumentHint: "Usage: /benchmark <package_path> <function_name>"
+  arguments:
+    - name: package_path
+      description: Package import path or directory
+      required: true
+    - name: function_name
+      description: Target function name to benchmark
+      required: true
 ---
 
 # Benchmark Workflow
 
 Please benchmark the function specified by the user:
 
-1. Locate the file containing the function under the specified package.
-2. Create or update the corresponding `_test.go` file with a standard Go `Benchmark<FunctionName>(b *testing.B)` implementation.
-3. Run `go test -benchmem -run=^$ -bench=^Benchmark<FunctionName>$ <package-path>` using the `bash` tool.
+1. Locate the file containing the function under the specified package: `{{.package_path}}`.
+2. Create or update the corresponding `_test.go` file with a standard Go `Benchmark{{.function_name}}(b *testing.B)` implementation.
+3. Run `go test -benchmem -run=^$ -bench=^Benchmark{{.function_name}}$ {{.package_path}}` using the `bash` tool.
 4. Report the allocations per operation (`allocs/op`) and nanoseconds per operation (`ns/op`), identifying any obvious performance bottlenecks.
 ```
 
@@ -191,6 +218,12 @@ Trigger your custom command in the CLI:
 
 ```text
 /benchmark ./internal/daemon/permissions MatchRule
+```
+
+For commands contributed by plugins, use the namespaced syntax:
+
+```text
+/<plugin-name>/<command> [args...]
 ```
 
 ---

@@ -581,6 +581,48 @@ func toAPIAgent(ag workspace.Agent) api.Agent {
 	}
 }
 
+func toAPIArguments(args []workspace.Argument) []api.Argument {
+	if args == nil {
+		return nil
+	}
+	out := make([]api.Argument, len(args))
+	for i, a := range args {
+		out[i] = api.Argument{
+			Name:        a.Name,
+			Description: a.Description,
+			Required:    a.Required,
+			Default:     a.Default,
+		}
+	}
+	return out
+}
+
+func toAPICommand(cmd workspace.Command) api.Command {
+	return api.Command{
+		Name:         cmd.Name,
+		DisplayName:  cmd.DisplayName,
+		Description:  cmd.Description,
+		ArgumentHint: cmd.ArgumentHint,
+		Arguments:    toAPIArguments(cmd.Arguments),
+		Models:       slices.Clone(cmd.Models),
+		Tools:        slices.Clone(cmd.Tools),
+		Namespace:    cmd.Namespace,
+	}
+}
+
+func toAPISkill(sk workspace.Skill) api.Skill {
+	return api.Skill{
+		Name:         sk.Name,
+		DisplayName:  sk.DisplayName,
+		Description:  sk.Description,
+		UseWhen:      sk.UseWhen,
+		Keywords:     slices.Clone(sk.Keywords),
+		ArgumentHint: sk.ArgumentHint,
+		Arguments:    toAPIArguments(sk.Arguments),
+		Namespace:    sk.Namespace,
+	}
+}
+
 func toAPIThinkingValues(kind string, values []string) []api.ThinkingValue {
 	if len(values) == 0 {
 		return nil

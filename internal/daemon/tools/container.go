@@ -18,11 +18,12 @@ import (
 
 // Config holds the mandatory dependencies required to construct a [Container].
 type Config struct {
-	Tools     []Tool
-	Sandbox   sandbox.Sandbox
-	Workspace workspace.Workspace
-	Logger    log.Interface
-	Spiller   Spiller
+	Tools        []Tool
+	Sandbox      sandbox.Sandbox
+	Workspace    workspace.Workspace
+	Logger       log.Interface
+	Spiller      Spiller
+	AllowedTools []string
 }
 
 // Validate ensures that all required dependencies are non-nil. Zero silent
@@ -56,14 +57,15 @@ type Container interface {
 }
 
 type container struct {
-	sandbox   sandbox.Sandbox
-	workspace workspace.Workspace
-	logger    log.Interface
-	spiller   Spiller
-	order     []string
-	tools     map[string]Tool
-	locksMu   sync.Mutex
-	pathLocks map[string]*sync.Mutex
+	sandbox      sandbox.Sandbox
+	workspace    workspace.Workspace
+	logger       log.Interface
+	spiller      Spiller
+	order        []string
+	tools        map[string]Tool
+	locksMu      sync.Mutex
+	pathLocks    map[string]*sync.Mutex
+	allowedTools []string
 }
 
 var _ Container = (*container)(nil)
@@ -85,20 +87,16 @@ func NewContainer(cfg Config) (Container, error) {
 	}
 
 	c := &container{
-		sandbox:   cfg.Sandbox,
-		workspace: cfg.Workspace,
-		logger:    cfg.Logger.ForComponent("tools"),
-		spiller:   sp,
-		tools:     make(map[string]Tool, len(cfg.Tools)),
-		pathLocks: make(map[string]*sync.Mutex),
+		sandbox:      cfg.Sandbox,
+		workspace:    cfg.Workspace,
+		logger:       cfg.Logger.ForComponent("tools"),
+		spiller:      sp,
+		tools:        make(map[string]Tool, len(cfg.Tools)),
+		pathLocks:    make(map[string]*sync.Mutex),
+		allowedTools: cfg.AllowedTools,
 	}
 
 	for _, t := range cfg.Tools {
-		if wb, ok := t.(workspaceBinder); ok {
-			if err := wb.bindWorkspace(cfg.Workspace); err != nil {
-				return nil, err
-			}
-		}
 		c.addTool(t)
 	}
 

@@ -5,6 +5,7 @@ import (
 
 	"github.com/masterkeysrd/kite/extras/kites"
 	"github.com/masterkeysrd/kite/extras/trail"
+	"github.com/masterkeysrd/tasksmith/api"
 )
 
 const (
@@ -22,6 +23,8 @@ type AppState struct {
 	Version       string
 	Workspace     string
 	Warnings      *[]string
+	Commands      *[]api.Command
+	Skills        *[]api.Skill
 }
 
 var app = kites.Create(AppState{Hint: DefaultHint})
@@ -99,6 +102,38 @@ func SetWorkspaceWarnings(warnings []string) {
 		w := make([]string, len(warnings))
 		copy(w, warnings)
 		s.Warnings = &w
+		return s
+	})
+}
+
+// SetWorkspaceCommands updates the workspace commands in AppState.
+func SetWorkspaceCommands(commands []api.Command) {
+	app.Set(func(s AppState) AppState {
+		if len(commands) == 0 {
+			if s.Commands == nil {
+				return s
+			}
+			s.Commands = nil
+			return s
+		}
+		c := slices.Clone(commands)
+		s.Commands = &c
+		return s
+	})
+}
+
+// SetWorkspaceSkills updates the workspace skills in AppState.
+func SetWorkspaceSkills(skills []api.Skill) {
+	app.Set(func(s AppState) AppState {
+		if len(skills) == 0 {
+			if s.Skills == nil {
+				return s
+			}
+			s.Skills = nil
+			return s
+		}
+		sk := slices.Clone(skills)
+		s.Skills = &sk
 		return s
 	})
 }

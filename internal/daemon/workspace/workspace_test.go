@@ -633,7 +633,9 @@ metadata:
   name: review
   description: Review a pull request
 spec:
-  hints: ["pr_number", "branch"]
+  arguments:
+    - name: pr_number
+    - name: branch
 ---
 Review PR #{{.pr_number}} on branch $branch (arg1=$1).
 `
@@ -646,7 +648,8 @@ metadata:
   description: Evaluate command safety
 spec:
   models: ["typesafe/jev-latest"]
-  hints: ["command"]
+  arguments:
+    - name: command
   questions:
     - name: is_safe
       type: predicate
@@ -783,5 +786,17 @@ spec:
 	}
 	if !strings.Contains(renderedDec, "Evaluate command: rm -rf /tmp/foo in directory /workspace.") {
 		t.Errorf("unexpected RenderDecision output: %q", renderedDec)
+	}
+
+	// Verify ResolveAgent
+	resolvedAg, err := ws.ResolveAgent("custom-coder")
+	if err != nil {
+		t.Fatalf("ResolveAgent error: %v", err)
+	}
+	if resolvedAg == nil || resolvedAg.Agent == nil || resolvedAg.Agent.GetName() != "custom-coder" {
+		t.Fatalf("expected resolved agent custom-coder, got: %+v", resolvedAg)
+	}
+	if len(resolvedAg.Skills) != 1 || resolvedAg.Skills[0].Metadata.Name != "go-style" {
+		t.Errorf("expected 1 resolved skill (go-style), got: %v", resolvedAg.Skills)
 	}
 }

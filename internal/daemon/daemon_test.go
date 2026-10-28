@@ -2066,3 +2066,155 @@ func TestGetWorkspaceSurfacesWarnings(t *testing.T) {
 		t.Errorf("expected provider warning in ws.Warnings, got: %v", ws.Warnings)
 	}
 }
+
+func TestWorkspaceCommandsAndSkillsEndpointsAndExecution(t *testing.T) {
+	ctx := context.Background()
+	var lastPrompt string
+	prov := &fakeProvider{
+		chunkHandler: func(ctx context.Context, req *llm.Request) (llm.StreamResponse, error) {
+			if len(req.Messages) > 0 {
+				for _, b := range req.Messages[len(req.Messages)-1].GetContent() {
+					if tb, ok := b.(*message.TextBlock); ok && tb != nil {
+						lastPrompt += tb.Text
+					}
+				}
+			}
+			return func(yield func(message.AssistantChunk, error) bool) {
+				yield(message.AssistantChunk{
+					BaseChunk: message.BaseChunk{ID: uuid.NewString()},
+					Model:     req.Model,
+					Content:   []message.Block{&message.TextBlock{Text: "Command executed"}},
+					Done:      true,
+				}, nil)
+			}, nil
+		},
+	}
+	_, cli, wsDir := setupDaemonTest(t, prov)
+
+	// Create command manifest
+	cmdsDir := filepath.Join(wsDir, ".agents", "commands")
+	if err := os.MkdirAll(cmdsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cmdContent := `---
+apiVersion: warp/v1alpha1
+kind: Command
+metadata:
+  name: review
+  displayName: Review PR
+  description: Review a pull request
+spec:
+  argumentHint: "Usage: /review <pr_number> [branch]"
+  arguments:
+    - name: pr_number
+      required: true
+    - name: branch
+      default: main
+---
+Reviewing PR #{{.pr_number}} on branch {{.branch}}.
+`
+	if err := os.WriteFile(filepath.Join(cmdsDir, "review.command.md"), []byte(cmdContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create skill manifest
+	skillsDir := filepath.Join(wsDir, ".agents", "skills")
+	if err := os.MkdirAll(skillsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	skillContent := `---
+apiVersion: warp/v1alpha1
+kind: Skill
+metadata:
+  name: deploy
+  displayName: Deploy App
+  description: Deployment instructions
+spec:
+  argumentHint: "Usage: /deploy <target>"
+  arguments:
+    - name: target
+      required: true
+---
+Deploying to environment {{.target}}.
+`
+	if err := os.WriteFile(filepath.Join(skillsDir, "deploy.skill.md"), []byte(skillContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// 1. ListCommands
+	commands, err := cli.ListCommands(ctx)
+	if err != nil {
+		t.Fatalf("ListCommands: %v", err)
+	}
+	if len(commands) != 1 || commands[0].Name != "review" {
+		t.Fatalf("unexpected ListCommands: %+v", commands)
+	}
+	if len(commands[0].Arguments) != 2 || commands[0].Arguments[0].Name != "pr_number" || !commands[0].Arguments[0].Required {
+		t.Errorf("unexpected command arguments: %+v", commands[0].Arguments)
+	}
+
+	// 2. GetCommand (found & 404)
+	cmd, err := cli.GetCommand(ctx, "review")
+	if err != nil {
+		t.Fatalf("GetCommand: %v", err)
+	}
+	if cmd.Name != "review" || cmd.ArgumentHint != "Usage: /review <pr_number> [branch]" {
+		t.Errorf("unexpected cmd: %+v", cmd)
+	}
+	var apiErr *api.APIError
+	if _, err := cli.GetCommand(ctx, "nonexistent"); !errors.As(err, &apiErr) || apiErr.StatusCode != 404 {
+		t.Errorf("GetCommand non-existent = %v, want 404 APIError", err)
+	}
+
+	// 3. ListSkills
+	skills, err := cli.ListSkills(ctx)
+	if err != nil {
+		t.Fatalf("ListSkills: %v", err)
+	}
+	if len(skills) != 1 || skills[0].Name != "deploy" {
+		t.Fatalf("unexpected ListSkills: %+v", skills)
+	}
+
+	// 4. GetSkill (found & 404)
+	sk, err := cli.GetSkill(ctx, "deploy")
+	if err != nil {
+		t.Fatalf("GetSkill: %v", err)
+	}
+	if sk.Name != "deploy" || sk.ArgumentHint != "Usage: /deploy <target>" {
+		t.Errorf("unexpected sk: %+v", sk)
+	}
+	if _, err := cli.GetSkill(ctx, "nonexistent"); !errors.As(err, &apiErr) || apiErr.StatusCode != 404 {
+		t.Errorf("GetSkill non-existent = %v, want 404 APIError", err)
+	}
+
+	// 5. Execution: Create session and run command with positional args and defaulted arg
+	sess, err := cli.CreateSession(ctx, api.CreateSessionRequest{Title: "Cmd Test"})
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+
+	if err := cli.Send(ctx, sess.ID, api.SendRequest{Content: "/review 456"}); err != nil {
+		t.Fatalf("Send /review 456: %v", err)
+	}
+	// Wait a moment for turn to process
+	time.Sleep(50 * time.Millisecond)
+
+	if !strings.Contains(lastPrompt, "Reviewing PR #456 on branch main.") {
+		t.Errorf("expected rendered command prompt, got: %q", lastPrompt)
+	}
+
+	// 6. Execution: Missing required argument returns 400 Bad Request
+	if err := cli.Send(ctx, sess.ID, api.SendRequest{Content: "/review"}); !errors.As(err, &apiErr) || apiErr.StatusCode != 400 {
+		t.Errorf("expected 400 Bad Request on missing required argument, got: %v", err)
+	}
+
+	// 7. Execution: Run skill via slash command
+	if err := cli.Send(ctx, sess.ID, api.SendRequest{Content: "/deploy staging"}); err != nil {
+		t.Fatalf("Send /deploy staging: %v", err)
+	}
+	time.Sleep(50 * time.Millisecond)
+
+	if !strings.Contains(lastPrompt, "Deploying to environment staging.") {
+		t.Errorf("expected rendered skill prompt, got: %q", lastPrompt)
+	}
+}

@@ -22,6 +22,9 @@ Required sections:
 - Commands executed that succeeded or failed (and why)
 - Important constraints, rules, or environment details discovered
 
+## Recommended Skills
+- If applicable, any specific skill to load for the next steps.
+
 ## Strategy & Exact Next Steps
 - Overall approach being taken and any blockers/risks identified
 - Concrete, actionable next steps with exact file paths and commands

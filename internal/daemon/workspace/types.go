@@ -28,6 +28,7 @@ type Workspace interface {
 	GetProvider(name string) (*Provider, bool)
 	Agents() []Agent
 	GetAgent(name string) (*Agent, bool)
+	ResolveAgent(name string) (*warp.ResolvedAgent, error)
 	Decisions() []Decision
 	GetDecision(name string) (*Decision, bool)
 	Skills() []Skill
@@ -249,7 +250,8 @@ type Decision struct {
 	Metadata
 	Instructions string             `json:"instructions,omitempty"`
 	Models       []string           `json:"models,omitempty"`
-	Hints        []string           `json:"hints,omitempty"`
+	ArgumentHint string             `json:"argument_hint,omitempty"`
+	Arguments    []Argument         `json:"arguments,omitempty"`
 	Questions    []DecisionQuestion `json:"questions,omitempty"`
 }
 
@@ -283,21 +285,32 @@ type DecisionLevel struct {
 	Description string `json:"description,omitempty"`
 }
 
+// Argument defines a structured parameter accepted by a command, skill, or decision.
+type Argument struct {
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	Required    bool   `json:"required,omitempty"`
+	Default     string `json:"default,omitempty"`
+}
+
 // Skill describes a reusable domain expertise bundle.
 type Skill struct {
 	Metadata
-	UseWhen      string   `json:"use_when,omitempty"`
-	Keywords     []string `json:"keywords,omitempty"`
-	Instructions string   `json:"instructions,omitempty"`
+	UseWhen      string     `json:"use_when,omitempty"`
+	Keywords     []string   `json:"keywords,omitempty"`
+	ArgumentHint string     `json:"argument_hint,omitempty"`
+	Arguments    []Argument `json:"arguments,omitempty"`
+	Instructions string     `json:"instructions,omitempty"`
 }
 
 // Command describes a reusable user- or agent-invokable command prompt.
 type Command struct {
 	Metadata
-	Instructions string   `json:"instructions,omitempty"`
-	Models       []string `json:"models,omitempty"`
-	Tools        []string `json:"tools,omitempty"`
-	Hints        []string `json:"hints,omitempty"`
+	Instructions string     `json:"instructions,omitempty"`
+	Models       []string   `json:"models,omitempty"`
+	Tools        []string   `json:"tools,omitempty"`
+	ArgumentHint string     `json:"argument_hint,omitempty"`
+	Arguments    []Argument `json:"arguments,omitempty"`
 }
 
 // Tool describes a declarative tool manifest.
@@ -682,7 +695,8 @@ func convertDecision(in *warp.Decision, reg *warp.Registry) Decision {
 		Metadata:     convertMetadata(in.BaseResource, reg),
 		Instructions: in.Spec.Instructions,
 		Models:       cloneSlice(in.Spec.Models),
-		Hints:        cloneSlice(in.Spec.Hints),
+		ArgumentHint: in.Spec.ArgumentHint,
+		Arguments:    convertArguments(in.Spec.Arguments),
 		Questions:    questions,
 	}
 }
@@ -695,6 +709,8 @@ func convertSkill(in *warp.Skill, reg *warp.Registry) Skill {
 		Metadata:     convertMetadata(in.BaseResource, reg),
 		UseWhen:      in.Spec.UseWhen,
 		Keywords:     cloneSlice(in.Spec.Keywords),
+		ArgumentHint: in.Spec.ArgumentHint,
+		Arguments:    convertArguments(in.Spec.Arguments),
 		Instructions: in.Spec.Instructions,
 	}
 }
@@ -708,8 +724,25 @@ func convertCommand(in *warp.Command, reg *warp.Registry) Command {
 		Instructions: in.Spec.Instructions,
 		Models:       cloneSlice(in.Spec.Models),
 		Tools:        cloneSlice(in.Spec.Tools),
-		Hints:        cloneSlice(in.Spec.Hints),
+		ArgumentHint: in.Spec.ArgumentHint,
+		Arguments:    convertArguments(in.Spec.Arguments),
 	}
+}
+
+func convertArguments(in []warp.Argument) []Argument {
+	if in == nil {
+		return nil
+	}
+	out := make([]Argument, len(in))
+	for i, a := range in {
+		out[i] = Argument{
+			Name:        a.Name,
+			Description: a.Description,
+			Required:    a.Required,
+			Default:     a.Default,
+		}
+	}
+	return out
 }
 
 func convertToolAnnotation(in *warp.ToolAnnotation) *ToolAnnotation {

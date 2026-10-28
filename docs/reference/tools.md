@@ -21,6 +21,7 @@ TaskSmith provides 13 core built-in system tools backed by virtualized OS sandbo
 | **`tasks`** | `Proc`, `Session` | Safe / Auto-allowed | Lists, inspects, feeds input to, or terminates running background tasks. |
 | **`todos`** | `Session` | Safe / Auto-allowed | Manages the session progress checklist, tracking pending and completed items. |
 | **`ask_question`** | `Session` | Safe / Auto-allowed | Prompts the user with structured interactive questions (`single`, `multi`, `text`, `confirm`). |
+| **`load_skill`** | `Session`, `Workspace` | Safe / Auto-allowed | Loads domain guidelines, coding conventions, or workflows for a specified skill on demand. |
 
 ---
 
@@ -40,7 +41,7 @@ Every built-in tool defines safety properties in its manifest:
 
 ### Behavior Across Permission Modes
 
-| Permission Mode | Safe Read-Only (`view`, `ls`, `glob`, `grep`, `todos`, `tasks`, `ask_question`) | Filesystem Writes (`write`, `edit`, `remove`) | Execution & Network (`bash`, `web_fetch`, `download`) |
+| Permission Mode | Safe Read-Only (`view`, `ls`, `glob`, `grep`, `todos`, `tasks`, `ask_question`, `load_skill`) | Filesystem Writes (`write`, `edit`, `remove`) | Execution & Network (`bash`, `web_fetch`, `download`) |
 | :--- | :--- | :--- | :--- |
 | **`default`** | Auto-allowed | Prompts user for approval | Prompts user for approval |
 | **`accept_edits`** | Auto-allowed | Auto-allowed (unified diff recorded) | Prompts user for approval |
@@ -544,5 +545,42 @@ Each item in `questions` includes:
       ]
     }
   ]
+}
+```
+
+---
+
+### `load_skill`
+
+Loads and renders instructions, coding conventions, or runbooks for a specialized workspace skill into the agent's context on demand.
+
+#### Safety Profile
+- **`isReadOnly`**: `true`
+- **`isIdempotent`**: `true`
+- **`isDangerous`**: `false`
+- **`isOpenWorld`**: `false`
+- **User Hint**: `"Load skill knowledge"`
+
+#### Input Parameters
+
+| Parameter | Type | Required | Description |
+| :--- | :--- | :--- | :--- |
+| `skill` | string | **Yes** | Identifier of the skill to load (e.g. `'postgres-migrations'`, `'docker-deploy'`). |
+| `arguments` | object | No | Optional key-value parameters passed to render the skill template. |
+
+#### Output Fields
+
+| Field | Type | Description |
+| :--- | :--- | :--- |
+| `skill` | string | Name of the skill that was loaded. |
+| `instructions` | string | Rendered instructions and guidelines populated from the skill package. |
+
+```json
+{
+  "skill": "docker-deploy",
+  "arguments": {
+    "image": "my-service",
+    "tag": "v1.2.0"
+  }
 }
 ```

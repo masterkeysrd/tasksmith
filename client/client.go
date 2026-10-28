@@ -185,6 +185,64 @@ func (c *Client) GetAgent(ctx context.Context, name string) (*api.Agent, error) 
 	return &out, nil
 }
 
+// ListCommands returns all effective command resources in the workspace.
+func (c *Client) ListCommands(ctx context.Context) ([]api.Command, error) {
+	if err := c.requireCWD(); err != nil {
+		return nil, err
+	}
+	var out []api.Command
+	if err := c.doJSON(ctx, http.MethodGet, "/v1/commands", nil, nil, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// GetCommand retrieves a command resource by name.
+func (c *Client) GetCommand(ctx context.Context, name string) (*api.Command, error) {
+	if err := c.requireCWD(); err != nil {
+		return nil, err
+	}
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return nil, errors.New("client: command name must not be empty")
+	}
+	path := "/v1/commands/" + url.PathEscape(name)
+	var out api.Command
+	if err := c.doJSON(ctx, http.MethodGet, path, nil, nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// ListSkills returns all effective skill resources in the workspace.
+func (c *Client) ListSkills(ctx context.Context) ([]api.Skill, error) {
+	if err := c.requireCWD(); err != nil {
+		return nil, err
+	}
+	var out []api.Skill
+	if err := c.doJSON(ctx, http.MethodGet, "/v1/skills", nil, nil, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// GetSkill retrieves a skill resource by name.
+func (c *Client) GetSkill(ctx context.Context, name string) (*api.Skill, error) {
+	if err := c.requireCWD(); err != nil {
+		return nil, err
+	}
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return nil, errors.New("client: skill name must not be empty")
+	}
+	path := "/v1/skills/" + url.PathEscape(name)
+	var out api.Skill
+	if err := c.doJSON(ctx, http.MethodGet, path, nil, nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 // ListModels returns all resolved models across providers in the workspace.
 func (c *Client) ListModels(ctx context.Context) ([]api.Model, error) {
 	if err := c.requireCWD(); err != nil {
