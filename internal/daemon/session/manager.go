@@ -546,14 +546,12 @@ func (m *manager) Update(ctx context.Context, id string, params UpdateParams) (*
 
 	if oldConfig.Model != newConfig.Model || oldConfig.Agent != newConfig.Agent {
 		limits := m.workspace.ModelLimits(newConfig.Model)
-		if m.gateway != nil {
-			if prof, ok := m.gateway.ModelProfile(newConfig.Model); ok && prof != nil {
-				if prof.Limits.Context > 0 {
-					limits.Context = prof.Limits.Context
-				}
-				if prof.Limits.Output > 0 {
-					limits.Output = prof.Limits.Output
-				}
+		if prof, ok := m.gateway.ModelProfile(newConfig.Model); ok && prof != nil {
+			if prof.Limits.Context > 0 {
+				limits.Context = prof.Limits.Context
+			}
+			if prof.Limits.Output > 0 {
+				limits.Output = prof.Limits.Output
 			}
 		}
 		breakdown := m.workspace.AgentContext(newConfig.Agent)

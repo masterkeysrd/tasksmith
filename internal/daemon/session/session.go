@@ -288,21 +288,12 @@ func (s *Session) harness(ctx context.Context) (harness.Harness, error) {
 	agentBreakdown := s.workspace.AgentContext(agentName)
 	staticCtx := harness.StaticContextFromBreakdown(agentBreakdown)
 	limits := s.workspace.ModelLimits(modelName)
-	if prof := llmModel.Profile(); prof != nil {
+	if prof, ok := s.gateway.ModelProfile(modelName); ok && prof != nil {
 		if prof.Limits.Context > 0 {
 			limits.Context = prof.Limits.Context
 		}
 		if prof.Limits.Output > 0 {
 			limits.Output = prof.Limits.Output
-		}
-	} else if s.gateway != nil {
-		if prof, ok := s.gateway.ModelProfile(modelName); ok && prof != nil {
-			if prof.Limits.Context > 0 {
-				limits.Context = prof.Limits.Context
-			}
-			if prof.Limits.Output > 0 {
-				limits.Output = prof.Limits.Output
-			}
 		}
 	}
 
