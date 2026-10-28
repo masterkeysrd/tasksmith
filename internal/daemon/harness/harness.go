@@ -251,6 +251,9 @@ func (h *harness) consumeGraphStream(stream iter.Seq2[graph.StreamEvent, error],
 		}
 
 		if ev.Event == graph.EventLLMChunk {
+			if ev.Node != "agent" {
+				return true
+			}
 			chunk, ok := ev.Data.(message.AssistantChunk)
 			if !ok {
 				return true

@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/masterkeysrd/loom/graph"
 	"github.com/masterkeysrd/loom/llm"
 	"github.com/masterkeysrd/loom/message"
 	"github.com/masterkeysrd/loom/profile"
@@ -1027,7 +1028,7 @@ func TestCancelPendingPermissionsOnNewUserMessage(t *testing.T) {
 		t.Fatalf("expected 5 persisted messages in state, got %d", len(state.Messages))
 	}
 	for i := 1; i < len(state.Messages); i++ {
-		if !(state.Messages[i-1].GetID() < state.Messages[i].GetID()) {
+		if state.Messages[i-1].GetID() >= state.Messages[i].GetID() {
 			t.Errorf("expected strictly increasing UUIDv7 IDs: state.Messages[%d].ID (%s) >= state.Messages[%d].ID (%s)",
 				i-1, state.Messages[i-1].GetID(), i, state.Messages[i].GetID())
 		}
@@ -2011,5 +2012,256 @@ func TestTodosToolExecutionAndCheckpoint(t *testing.T) {
 	}
 	if state.Todos[0].ActiveText != "Doing step 1" || state.Todos[1].Status != tools.TodoStatusPending {
 		t.Fatalf("unexpected checkpointed todos: %+v", state.Todos)
+	}
+}
+
+func TestMessageUpdateContextOptions(t *testing.T) {
+	first := message.NewUserText("first")
+	second := message.NewUserText("second")
+	third := message.NewUserText("third")
+	cases := []struct {
+		name   string
+		update func(State, MessageUpdateOptions) State
+		want   message.MessageList
+	}{
+		{"prepend", func(s State, opts MessageUpdateOptions) State { return s.PrependMessage(first, opts) }, message.MessageList{first, second}},
+		{"append", func(s State, opts MessageUpdateOptions) State { return s.AppendMessage(third, opts) }, message.MessageList{second, third}},
+		{"append multiple", func(s State, opts MessageUpdateOptions) State {
+			return s.AppendMessages(message.MessageList{first, third}, opts)
+		}, message.MessageList{second, first, third}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			initial := State{Messages: message.MessageList{second}, Context: api.ContextState{UsedTokens: 999, CachedTokens: 12}}
+			deferred := tc.update(initial.Copy(), MessageUpdateOptions{SkipContextRecalculation: true})
+			if !reflect.DeepEqual(deferred.Messages, tc.want) || !reflect.DeepEqual(deferred.Context, initial.Context) {
+				t.Fatalf("deferred update changed context or message order: %+v", deferred)
+			}
+
+			opts := MessageUpdateOptions{Static: StaticContext{SystemPrompt: 42}, Limits: workspace.ModelLimits{Context: 100000, Output: 1000}}
+			updated := tc.update(initial.Copy(), opts)
+			if !reflect.DeepEqual(updated.Messages, tc.want) || !reflect.DeepEqual(updated.Context, computeContextState(opts.Static, updated, opts.Limits)) {
+				t.Fatalf("update did not recalculate context: %+v", updated)
+			}
+			defaults := tc.update(initial.Copy(), MessageUpdateOptions{})
+			if defaults.Context.MaxTokens != 128000 {
+				t.Fatalf("zero-value options did not recalculate with default limits: %+v", defaults.Context)
+			}
+		})
+	}
+}
+
+func TestDeferredMessageUpdatesBeforeCompaction(t *testing.T) {
+	static := StaticContext{SystemPrompt: 10}
+	limits := workspace.ModelLimits{Context: 100000, Output: 1000}
+	original := State{PendingCompaction: &CompactInput{}, Context: api.ContextState{UsedTokens: 999, CachedTokens: 80, Compactions: 2}}
+	summary := message.NewUserText("summary")
+	first := message.NewUserText("first")
+	second := message.NewUserText("second")
+	deferred := MessageUpdateOptions{SkipContextRecalculation: true}
+	state := original.AppendMessage(first, deferred)
+	state = state.AppendMessages(message.MessageList{second}, deferred)
+	state = state.PrependMessage(summary, deferred)
+	if !reflect.DeepEqual(state.Context, original.Context) {
+		t.Fatalf("context changed during deferred updates: %+v", state.Context)
+	}
+	state = state.ApplyCompaction(static, limits)
+	if !reflect.DeepEqual(state.Messages, message.MessageList{summary, first, second}) {
+		t.Fatalf("unexpected message order: %+v", state.Messages)
+	}
+	if state.PendingCompaction != nil || state.Context.CachedTokens != 0 || state.Context.Compactions != 3 || state.Context.LastCompacted.IsZero() {
+		t.Fatalf("unexpected compaction state: %+v", state)
+	}
+	if want := computeContextState(static, state, limits); !reflect.DeepEqual(state.Context, want) {
+		t.Fatalf("context not recalculated after compaction: got %+v, want %+v", state.Context, want)
+	}
+}
+
+func TestAutoCompactionTurnAndCommandBoundaries(t *testing.T) {
+	ctx := context.Background()
+	_, reg, perm := newTestToolsRegistry(t)
+	q := &fakeQueue{}
+	prov := &fakeProvider{
+		stepHandler: func(_ context.Context, _ *llm.Request, turn int) ([]message.AssistantChunk, error) {
+			text := "answer"
+			var metrics *message.TokenMetrics
+			switch turn {
+			case 1:
+				text = strings.Repeat("a", 4000)
+				metrics = &message.TokenMetrics{TotalTokens: 1000}
+			case 2:
+				text = "previous conversation summary"
+			}
+			return []message.AssistantChunk{{Content: []message.Block{&message.TextBlock{Text: text}}, Metrics: metrics, Done: true}}, nil
+		},
+	}
+	h, err := New(Config{
+		ID: "compact-boundaries", DB: openTestSQLite(t), Model: newTestModel(t, prov),
+		Tools: reg, Permissions: perm, Queue: q, Bash: &fakeBashRunner{},
+		Spiller: newTestSpiller(t), Logger: log.Default(),
+		Limits: workspace.ModelLimits{Context: 10000, Output: 1000},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	run := func(input Input) []Event {
+		t.Helper()
+		var events []Event
+		for event, err := range h.Stream(ctx, input) {
+			if err != nil {
+				t.Fatal(err)
+			}
+			events = append(events, event)
+		}
+		return events
+	}
+	assertNoCompaction := func(events []Event) {
+		t.Helper()
+		for _, event := range events {
+			if event.Type == EventCompactionStarted || event.Type == EventCompactionCompleted {
+				t.Fatalf("unexpected compaction event: %+v", event)
+			}
+		}
+	}
+
+	assertNoCompaction(run(Input{Message: message.NewUserText("first request")}))
+	state, err := h.LoadState(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Context.UsedTokens != state.Context.TriggerTokens || len(prov.recordedTurns()) != 1 {
+		t.Fatalf("expected one completed turn at the threshold: context=%+v calls=%d", state.Context, len(prov.recordedTurns()))
+	}
+
+	q.items = append(q.items, QueueItem{Kind: QueueKindCommand, Payload: QueueCommandPayload{Command: "show status"}})
+	assertNoCompaction(run(Input{}))
+	state, err = h.LoadState(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Context.UsedTokens < state.Context.TriggerTokens || len(prov.recordedTurns()) != 1 {
+		t.Fatalf("command unexpectedly invoked the model: context=%+v calls=%d", state.Context, len(prov.recordedTurns()))
+	}
+
+	const prompt = "new request with exact stack trace\nline 42"
+	events := run(Input{Message: message.NewUserText(prompt)})
+	starts, completions := 0, 0
+	var chunks []string
+	for _, event := range events {
+		switch event.Type {
+		case EventCompactionStarted:
+			starts++
+		case EventCompactionCompleted:
+			completions++
+		case EventChunk:
+			chunks = append(chunks, extractBlocksText(event.Chunk.Content))
+		}
+	}
+	if len(chunks) != 1 || chunks[0] != "answer" {
+		t.Fatalf("expected only assistant answer chunks, got %v", chunks)
+	}
+	turns := prov.recordedTurns()
+	if starts != 1 || completions != 1 || len(turns) != 3 {
+		t.Fatalf("expected one compaction and one answer: starts=%d completions=%d calls=%d", starts, completions, len(turns))
+	}
+	if len(turns[1].messages) != 3 || msgText(turns[1].messages[0]) != "first request" || msgText(turns[1].messages[1]) != strings.Repeat("a", 4000) {
+		t.Fatalf("summarization did not preserve the prior prefix: %+v", turns[1].messages)
+	}
+	messages := turns[2].messages
+	if len(messages) != 3 || SystemKindOf(messages[0]) != SystemKindCompaction || SystemKindOf(messages[1]) != SystemKindCommand || msgText(messages[2]) != prompt {
+		t.Fatalf("agent did not receive summary, command output, and exact prompt: %+v", messages)
+	}
+	if strings.Contains(msgText(messages[0]), "Continue working on the latest user request above") {
+		t.Fatal("entry summary contains a continuation directive")
+	}
+}
+
+func TestManualCompactionDoesNotStreamSummaryChunks(t *testing.T) {
+	ctx := context.Background()
+	_, reg, perm := newTestToolsRegistry(t)
+	provider := &fakeProvider{
+		stepHandler: func(_ context.Context, _ *llm.Request, turn int) ([]message.AssistantChunk, error) {
+			text := "answer"
+			if turn == 2 {
+				text = "private summary"
+			}
+			return []message.AssistantChunk{{Content: []message.Block{&message.TextBlock{Text: text}}, Done: true}}, nil
+		},
+	}
+	h, err := New(Config{
+		ID: "manual-compact-stream", DB: openTestSQLite(t), Model: newTestModel(t, provider),
+		Tools: reg, Permissions: perm, Queue: &fakeQueue{}, Bash: &fakeBashRunner{},
+		Spiller: newTestSpiller(t), Logger: log.Default(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, err := range h.Stream(ctx, Input{Message: message.NewUserText("request")}) {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	started, completed, finished := 0, 0, 0
+	var chunks []string
+	for event, err := range h.Stream(ctx, Input{Compact: &CompactInput{Focus: "focus"}}) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		switch event.Type {
+		case EventChunk:
+			chunks = append(chunks, extractBlocksText(event.Chunk.Content))
+		case EventCompactionStarted:
+			started++
+			if event.CompactionStarted.Trigger != "manual" || event.CompactionStarted.Focus != "focus" {
+				t.Fatalf("unexpected compaction start: %+v", event.CompactionStarted)
+			}
+		case EventCompactionCompleted:
+			completed++
+			if event.CompactionCompleted.Summary != "private summary" {
+				t.Fatalf("unexpected compaction summary: %+v", event.CompactionCompleted)
+			}
+		case EventCompleted:
+			finished++
+		}
+	}
+	if started != 1 || completed != 1 || finished != 1 || len(provider.recordedTurns()) != 3 {
+		t.Fatalf("unexpected lifecycle events: started=%d completed=%d finished=%d calls=%d", started, completed, finished, len(provider.recordedTurns()))
+	}
+	if len(chunks) != 1 || chunks[0] != "answer" {
+		t.Fatalf("expected only agent answer chunks, got %v", chunks)
+	}
+	state, err := h.LoadState(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(state.Messages) != 2 || SystemKindOf(state.Messages[0]) != SystemKindCompaction || state.Context.Compactions != 1 {
+		t.Fatalf("compaction was not persisted: %+v", state)
+	}
+}
+
+func TestConsumeGraphStreamFiltersNonAgentChunks(t *testing.T) {
+	chunk := message.AssistantChunk{Content: []message.Block{&message.TextBlock{Text: "text"}}}
+	events := []graph.StreamEvent{
+		{Node: "compact", Event: graph.EventLLMChunk, Data: chunk},
+		{Node: "tools", Event: graph.EventLLMChunk, Data: chunk},
+		{Node: "agent", Event: graph.EventLLMChunk, Data: chunk},
+	}
+	var received []Event
+	(&harness{}).consumeGraphStream(func(yield func(graph.StreamEvent, error) bool) {
+		for _, event := range events {
+			if !yield(event, nil) {
+				return
+			}
+		}
+	}, func(event Event, err error) bool {
+		if err != nil {
+			t.Fatal(err)
+		}
+		received = append(received, event)
+		return true
+	})
+	if len(received) != 1 || received[0].Type != EventChunk || extractBlocksText(received[0].Chunk.Content) != "text" {
+		t.Fatalf("expected only agent chunk, got %+v", received)
 	}
 }
