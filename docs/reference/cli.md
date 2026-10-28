@@ -68,7 +68,7 @@ Inside the TaskSmith interactive REPL, slash commands provide instant control ov
 | **`/revert`** | | `[path] [entry_id]` | Reverts uncommitted file mutations for a specific file, change entry, or the entire session. |
 | **`/permissions`** | `/perm`, `/perms` | *(none)* | Opens the interactive permissions browser to inspect and edit project and global allow/deny rules. |
 | **`/tasks`** | | *(none)* | Opens the background task manager to inspect running commands and stream task logs. |
-| **`/compact`** | | `[focus]` | Compacts conversation history to free context window space, with optional focus instructions. |
+| **`/compact`** | | `[focus]` | Compacts conversation history to free context window space, with optional focus instructions. Requires pending permissions and questions to be resolved first. |
 | **`/context`** | | *(none)* | Displays visual token usage grid and detailed context window breakdown by category. |
 | **`/skills`** | | *(none)* | Opens the interactive skills browser to inspect runbooks, token estimates, and reload workspace skills. |
 
@@ -85,6 +85,10 @@ In addition to built-in commands, TaskSmith dynamically registers all workspace,
 - **Argument Autocomplete & Hints**: Typing `/<name> ` presents autocomplete suggestions and highlights argument requirements (`<required>`, `[optional=default]`).
 - **Pre-Flight Validation**: Missing required parameters are caught immediately client-side before sending any network request.
 - **Automatic Default Population**: Arguments omitted by the user are automatically filled by the renderer from `spec.arguments[].default`.
+
+### Skill Loading in the Transcript
+
+Agent calls to `load_skill` show the skill name and loading, loaded, or failed status. Failures include the first error line below the status. Skill arguments and rendered instructions are not displayed in the widget.
 
 ---
 

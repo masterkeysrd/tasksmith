@@ -129,6 +129,10 @@ Type `/` in the composer to open the interactive autocomplete menu for slash com
 | `/context` | `/context` | Show visual token usage grid and context window breakdown by category. |
 | `/exit` | `/exit` (or `/quit`, `/q`) | Exit the REPL. |
 
+Resolve any pending permission request or question before using `/compact`. Commands and background task notifications remain queued until the interaction is resolved.
+
+If compaction fails, TaskSmith reports the error and preserves the existing conversation instead of continuing with an incomplete summary.
+
 For `/effort`, `/budget`, and `/thinking`, the active model determines supported controls. Unsupported commands remain visible and report why they cannot be used. `default` clears the session thinking override and returns to the agent or provider default. When no default is known, the UI shows `provider default` and leaves the choice to the provider. Changing one control replaces the previous thinking override.
 
 For a complete reference of flags, keybindings, and autocomplete shortcuts, see the [CLI Reference](../reference/cli.md).

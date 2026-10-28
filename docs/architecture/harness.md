@@ -64,6 +64,7 @@ AI agents often encounter sensitive actions or require user clarification mid-tu
 - **Zero-Block Suspension**: When a tool requires explicit user authorization (e.g. executing an unapproved shell command) or triggers an interactive prompt (`ask_question`), the harness suspends execution immediately.
 - **Durable Checkpointing**: The graph state, unfulfilled tool calls, and pending questions are serialized to the session journal, placing the session in `waiting_permission` or `waiting_question` state.
 - **Seamless Resumption**: When the user approves, denies, or answers via the CLI, the daemon feeds the decisions into the suspended graph and resumes execution without re-running earlier steps.
+- **Protected Suspension**: Manual compaction is rejected while an interaction is pending; queued commands and background task notifications wait for resolution. A new user message can instead cancel the pending tool calls.
 
 ### 3. Context Compaction & Summarization
 
@@ -98,6 +99,8 @@ The harness supports two primary compaction entry points:
 | :--- | :--- | :--- |
 | **Autonomous Compaction** | Context utilization reaches or exceeds `TriggerTokens` post-tool or on turn entry. | The harness autonomously routes through the `compact` node before continuing execution. Following summarization, the harness routes directly to `agent`, allowing the agent to continue solving the active objective uninterrupted. |
 | **Manual Compaction** | Explicit compaction request received via daemon API. | The harness executes the `compact` node with optional user-supplied focus guidelines. Following summarization, the session transitions cleanly to `idle`. |
+
+If prompt rendering or model invocation fails, or the model returns an empty summary, the turn fails without replacing the conversation. The checkpoint remains at `compact`, so graph resumption retries compaction before continuing.
 
 #### 4. Structured Summary Anatomy
 When compaction executes, the harness distills history into a standardized context summary message:
