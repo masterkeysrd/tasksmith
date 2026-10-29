@@ -61,7 +61,7 @@ The harness structures agent turns as a directed execution graph built on Loom's
 
 ### 2. Interactive Suspension & Resumption
 AI agents often encounter sensitive actions or require user clarification mid-turn:
-- **Zero-Block Suspension**: When a tool requires explicit user authorization (e.g. executing an unapproved shell command) or triggers an interactive prompt (`ask_question`), the harness suspends execution immediately.
+- **Zero-Block Suspension**: Calls that require authorization or trigger an interactive prompt (`ask_question`) remain pending, while other allowed calls in the same batch execute before the harness suspends.
 - **Durable Checkpointing**: The graph state, unfulfilled tool calls, and pending questions are serialized to the session journal, placing the session in `waiting_permission` or `waiting_question` state.
 - **Seamless Resumption**: When the user approves, denies, or answers via the CLI, the daemon feeds the decisions into the suspended graph and resumes execution without re-running earlier steps.
 - **Protected Suspension**: Manual compaction is rejected while an interaction is pending; queued commands and background task notifications wait for resolution. A new user message can instead cancel the pending tool calls.

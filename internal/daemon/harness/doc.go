@@ -32,17 +32,17 @@
 // message containing tool calls, the graph transitions to [ToolsNode]:
 //   - Pre-flight Prepare & Evaluate: Every tool call is validated via
 //     [github.com/masterkeysrd/tasksmith/internal/daemon/tools.Container.Prepare] and
-//     evaluated against the permission gate via [github.com/masterkeysrd/tasksmith/internal/daemon/tools.Container.Evaluate].
+//     evaluated against the permission gate via [github.com/masterkeysrd/tasksmith/internal/daemon/permissions.SessionManager.Evaluate].
 //   - Interrupt on AccessAsk: If one or more tool calls require user approval
 //     ([github.com/masterkeysrd/tasksmith/internal/daemon/tools.AccessAsk]), [ToolsNode]
-//     does not execute the batch yet. Instead, it persists the
-//     [github.com/masterkeysrd/tasksmith/internal/daemon/tools.PermissionRequest] slice
+//     executes allowed calls and records denied calls before interrupting. It persists
+//     the pending [github.com/masterkeysrd/tasksmith/internal/daemon/tools.PermissionRequest] slice
 //     in [State.PendingPermissions] and returns a [github.com/masterkeysrd/loom/graph.InterruptUpdate]
 //     command. [Harness.Stream] yields an [EventInterrupted] notification carrying
 //     the pending permission requests.
-//   - Strict All-or-Nothing Resume: [Harness.Resume] validates that every request
+//   - Strict All-or-Nothing Resume: [Harness.Stream] validates that every request
 //     in [State.PendingPermissions] has a corresponding decision before invoking
-//     the graph. If any pending request is missing a decision, [Harness.Resume]
+//     the graph. If any pending request is missing a decision, [Harness.Stream]
 //     yields [ErrPendingPermissionsUnresolved] immediately without calling the graph.
 //   - Canceled by New User Message: If the caller sends a new user message via
 //     [Harness.Stream] while a thread is paused at [ToolsNode], [ToolsNode]

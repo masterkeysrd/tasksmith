@@ -310,7 +310,7 @@ func TestQuestionOutputOmitsUnrelatedConfirmation(t *testing.T) {
 	if req.ID == "" {
 		t.Fatal("missing question request")
 	}
-	answers := []tools.QuestionAnswer{{Question: "Choice?", Selected: []string{"a"}}, {Question: "Choices?", Selected: []string{"b"}}, {Question: "Why?", Text: "Reason"}, {Question: "Yes?", Confirmed: true}, {Question: "No?", Confirmed: false}}
+	answers := []tools.QuestionAnswer{{Question: "No?", Confirmed: false}, {Question: "Choices?", Selected: []string{"b"}}, {Question: "Yes?", Confirmed: true}, {Question: "Choice?", Selected: []string{"a"}}, {Question: "Why?", Text: "Reason"}}
 	var result *message.Tool
 	for event, err := range h.Stream(ctx, Input{Answers: map[string]tools.QuestionResponse{req.ID: {Answers: answers}}}) {
 		if err != nil {
@@ -332,6 +332,11 @@ func TestQuestionOutputOmitsUnrelatedConfirmation(t *testing.T) {
 	if len(decoded.Answers) != 5 {
 		t.Fatalf("unexpected output: %+v", decoded)
 	}
+	for i, question := range []string{"Choice?", "Choices?", "Why?", "Yes?", "No?"} {
+		if decoded.Answers[i]["question"] != question {
+			t.Fatalf("answer %d associated with wrong question: %+v", i, decoded.Answers)
+		}
+	}
 	for i := range 3 {
 		if _, ok := decoded.Answers[i]["confirmed"]; ok {
 			t.Fatalf("unexpected confirmation: %+v", decoded.Answers[i])
@@ -339,6 +344,37 @@ func TestQuestionOutputOmitsUnrelatedConfirmation(t *testing.T) {
 	}
 	if decoded.Answers[3]["confirmed"] != true || decoded.Answers[4]["confirmed"] != false {
 		t.Fatalf("confirmation lost: %+v", decoded.Answers)
+	}
+}
+
+func TestQuestionResumeDuplicateText(t *testing.T) {
+	call := &message.ToolCall{ID: "call", Name: "ask_question"}
+	request := tools.QuestionRequest{ID: "request", ToolCallID: call.ID, Questions: []api.Question{
+		{Type: "text", Question: "Same?"},
+		{Type: "confirm", Question: "Same?"},
+		{Type: "text", Question: "Other?"},
+	}}
+	answers := tools.QuestionResponse{Answers: []tools.QuestionAnswer{
+		{Question: "Same?", Text: "reason"},
+		{Question: "Same?", Confirmed: false},
+		{Question: "Other?", Text: "detail"},
+	}}
+	node := &ToolsNode{}
+	cmd, err := node.resumeCalls(context.Background(), []*message.ToolCall{call}, nil, nil, []tools.QuestionRequest{request}, map[string]tools.QuestionResponse{request.ID: answers})
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := cmd.Apply(State{})
+	if len(state.Messages) != 1 {
+		t.Fatalf("messages = %+v", state.Messages)
+	}
+	result, ok := state.Messages[0].(*message.Tool)
+	if !ok {
+		t.Fatalf("unexpected message: %+v", state.Messages[0])
+	}
+	output, ok := result.StructuredContent.(api.AskQuestionOutput)
+	if !ok || len(output.Answers) != 3 || output.Answers[0].Text != "reason" || output.Answers[0].Confirmed != nil || output.Answers[1].Confirmed == nil || *output.Answers[1].Confirmed || output.Answers[2].Text != "detail" {
+		t.Fatalf("unexpected answer associations: %+v", result.StructuredContent)
 	}
 }
 

@@ -640,11 +640,42 @@ func (n *ToolsNode) resumeCalls(ctx context.Context, unfulfilled []*message.Tool
 			if !found {
 				return nil, ErrPendingQuestionsUnresolved
 			}
-			out := api.AskQuestionOutput{Canceled: response.Canceled, Answers: make([]api.QuestionAnswer, len(response.Answers))}
+			out := api.AskQuestionOutput{Canceled: response.Canceled, Answers: make([]api.QuestionAnswer, 0, len(response.Answers))}
+			matched := make([]int, len(req.Questions))
+			used := make([]bool, len(response.Answers))
+			for i := range matched {
+				matched[i] = -1
+				if i < len(response.Answers) && response.Answers[i].Question == req.Questions[i].Question {
+					matched[i] = i
+					used[i] = true
+				}
+			}
+			for i, question := range req.Questions {
+				if matched[i] >= 0 {
+					continue
+				}
+				for j, answer := range response.Answers {
+					if !used[j] && answer.Question == question.Question {
+						matched[i] = j
+						used[j] = true
+						break
+					}
+				}
+			}
+			for i, j := range matched {
+				if j < 0 {
+					continue
+				}
+				answer := response.Answers[j]
+				converted := api.QuestionAnswer{Question: answer.Question, Selected: slices.Clone(answer.Selected), Text: answer.Text}
+				if req.Questions[i].Type == string(api.QuestionTypeConfirm) {
+					converted.Confirmed = new(answer.Confirmed)
+				}
+				out.Answers = append(out.Answers, converted)
+			}
 			for i, answer := range response.Answers {
-				out.Answers[i] = api.QuestionAnswer{Question: answer.Question, Selected: slices.Clone(answer.Selected), Text: answer.Text}
-				if i < len(req.Questions) && req.Questions[i].Type == string(api.QuestionTypeConfirm) {
-					out.Answers[i].Confirmed = new(answer.Confirmed)
+				if !used[i] {
+					out.Answers = append(out.Answers, api.QuestionAnswer{Question: answer.Question, Selected: slices.Clone(answer.Selected), Text: answer.Text})
 				}
 			}
 			data, err := json.Marshal(out)
