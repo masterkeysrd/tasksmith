@@ -91,6 +91,7 @@ As the agent works, the transcript streams live updates directly into your termi
   - **Action Verb & Target**: Clearly labeled operations such as `Read internal/config.go`, `Write src/util.ts`, `Bash go test ./...`, or `Fetch api.github.com`.
   - **Metrics & Timing**: Execution duration in milliseconds or seconds, bytes transferred, and unified line change statistics (`+14/-2`).
   - **Diff Previews**: Inline unified diffs for `edit` and `write` tools showing exact additions and deletions in color.
+- **Warnings**: Model configuration warnings appear in the transcript with a colored left border. Use `/clear` to dismiss them.
 - **Markdown Rendering**: Agent responses render GitHub-flavored Markdown with bold text, lists, syntax-highlighted code blocks, and formatted tables.
 
 ### 3. Multi-Line Composer

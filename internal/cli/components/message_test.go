@@ -5,8 +5,12 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/masterkeysrd/kite/element"
+	"github.com/masterkeysrd/kite/extras/kitex"
+	"github.com/masterkeysrd/kite/testenv"
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/cli/store"
+	"github.com/masterkeysrd/tasksmith/internal/ui/theme"
 )
 
 func TestMessageUserAndSystemLayouts(t *testing.T) {
@@ -132,6 +136,58 @@ func TestMessageToolGenericRenderers(t *testing.T) {
 	got = render(MessageTool(MessageToolProps{Tool: tool}))
 	if !strings.Contains(got, "● Called custom_deploy (prod-v2)") {
 		t.Fatalf("unexpected custom tool completed output: %q", got)
+	}
+}
+
+func TestWarningNoticeStyle(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		severity store.NoticeSeverity
+		border   bool
+	}{
+		{name: "warning", severity: store.NoticeSeverityWarning, border: true},
+		{name: "notice"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			env := testenv.Default(40, 12)
+			defer env.Close()
+			container := element.NewBox(env.Document())
+			env.Mount(container)
+			kitex.Render(Notice(store.NoticeData{Text: "Warning: example", Severity: tc.severity}), container)
+			env.Flush()
+			frame := env.Backend.LastFrame().Surface
+			if frame == nil || !strings.Contains(env.DumpText(), "Warning: example") {
+				t.Fatal("notice was not rendered")
+			}
+			found := false
+			for y := 0; y < frame.Height; y++ {
+				for x := 0; x < frame.Width; x++ {
+					cell := frame.CellAt(x, y)
+					if cell.Content == "│" {
+						found = true
+						if cell.Fg != theme.Get().Color.Border.Warning {
+							t.Errorf("border color = %v, want %v", cell.Fg, theme.Get().Color.Border.Warning)
+						}
+					}
+				}
+			}
+			if found != tc.border {
+				t.Fatalf("warning border = %v, want %v; output: %q", found, tc.border, env.DumpText())
+			}
+		})
+	}
+}
+
+func TestWarningNoticeWraps(t *testing.T) {
+	render := renderComponent(t, 24)
+	got := render(Notice(store.NoticeData{Text: "Warning: temperature is unsupported by this model", Severity: store.NoticeSeverityWarning}))
+	for _, part := range []string{"Warning:", "temperature", "unsupported", "model"} {
+		if !strings.Contains(got, part) {
+			t.Fatalf("warning lost %q at narrow width: %q", part, got)
+		}
+	}
+	if strings.Count(got, "│") < 2 {
+		t.Fatalf("wrapped warning is missing its border: %q", got)
 	}
 }
 

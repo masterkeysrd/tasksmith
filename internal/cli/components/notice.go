@@ -16,6 +16,9 @@ import (
 var Notice = trail.FC("Notice", func(props store.NoticeData) trail.Node {
 	scheme := theme.UseTheme()
 	s := style.S().FlexDirection(style.FlexRow).MarginBottom(1).Foreground(scheme.Color.Text.Secondary)
+	if props.Severity == store.NoticeSeverityWarning {
+		s = s.PaddingLeft(1).BorderLeft(true, style.SingleBorder(), scheme.Color.Border.Warning).Foreground(scheme.Color.Text.Warning)
+	}
 	return trail.Box(trail.BoxProps{Style: s},
 		trail.Span(trail.SpanProps{}, trail.Text(props.Text)),
 	)

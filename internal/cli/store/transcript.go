@@ -33,9 +33,14 @@ type HeaderData struct {
 	Warnings  []string
 }
 
+type NoticeSeverity string
+
+const NoticeSeverityWarning NoticeSeverity = "warning"
+
 // NoticeData holds a local informational notice.
 type NoticeData struct {
-	Text string
+	Text     string
+	Severity NoticeSeverity
 }
 
 // ErrorData holds a local or turn error message.
@@ -288,6 +293,13 @@ func AppendNotice(text string) {
 	AppendTranscript(TranscriptItem{
 		Kind: TranscriptKindNotice,
 		Data: NoticeData{Text: text},
+	})
+}
+
+func AppendWarning(text string) {
+	AppendTranscript(TranscriptItem{
+		Kind: TranscriptKindNotice,
+		Data: NoticeData{Text: text, Severity: NoticeSeverityWarning},
 	})
 }
 

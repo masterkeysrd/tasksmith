@@ -167,7 +167,7 @@ func TestTranscriptClearReprintHeader(t *testing.T) {
 	store.SetHeaderMeta("1.0.0", "/workspace/clear-test")
 	store.SetModelInfo("TestModel", "medium")
 	store.FreezeTranscript()
-	store.AppendNotice("old message that should be cleared")
+	store.AppendWarning("old message that should be cleared")
 
 	rawBackend := mock.New(80, 24)
 	b := &clearMockBackend{Backend: rawBackend}

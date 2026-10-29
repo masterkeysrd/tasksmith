@@ -533,7 +533,7 @@ func showSessionDiagnostics(sess *api.Session, force bool) {
 	displayedDiagnostics = slices.Clone(sess.Diagnostics)
 	sessMu.Unlock()
 	for _, notice := range notices {
-		AppendNotice("Warning: " + notice)
+		AppendWarning("Warning: " + notice)
 	}
 }
 

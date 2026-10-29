@@ -25,7 +25,7 @@ func TestDiagnosticNotices(t *testing.T) {
 	sess.Diagnostics = append(sess.Diagnostics, sess.Diagnostics[0])
 	showSessionDiagnostics(sess, false)
 	items := GetTranscript().Items
-	if items == nil || len(*items) != 1 || (*items)[0].Kind != TranscriptKindNotice || (*items)[0].Data.(NoticeData).Text != "Warning: Temperature omitted" {
+	if items == nil || len(*items) != 1 || (*items)[0].Kind != TranscriptKindNotice || (*items)[0].Data.(NoticeData) != (NoticeData{Text: "Warning: Temperature omitted", Severity: NoticeSeverityWarning}) {
 		t.Fatalf("notices: %+v", items)
 	}
 	ClearScreen()
