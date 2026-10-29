@@ -36,7 +36,9 @@ You can change permission modes at any time without restarting your session:
 
 ## Interactive Tool Approvals
 
-When an agent proposes an action requiring authorization, TaskSmith pauses execution and presents an interactive permission modal in the terminal:
+When an agent proposes an action requiring authorization, TaskSmith pauses execution and presents an interactive permission modal in the terminal. This includes `ask_question` in `ask` mode unless an allow rule matches; after approval, the question form appears. A deny rule or rejection prevents the question from appearing.
+
+For example:
 
 ```text
 ┌─ Permission required ──────────────────────────────────────────────────┐

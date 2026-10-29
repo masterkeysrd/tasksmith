@@ -171,7 +171,9 @@ For full details on rules and pattern syntax, see the [Permissions Guide](./perm
 
 ### Structured Agent Questions (`ask_question`)
 
-When an agent needs human guidance or clarifying requirements, it invokes the built-in `ask_question` tool. This opens an interactive question form:
+When an agent needs human guidance or clarifying requirements, it invokes the built-in `ask_question` tool. Permission rules apply; in `ask` mode, approve the tool call before the question form appears unless an allow rule matches. Denied calls do not show a question.
+
+The interactive question form supports:
 
 - **Single Select**: Use `↑` / `↓` to highlight an option, then press `Enter` to select. Selecting the final *"Custom answer..."* option opens an inline input field to enter free-form text.
 - **Multi-Select**: Use `↑` / `↓` to highlight options and press `Space` to toggle selections (`[✓]` / `[ ]`). Press `Enter` to confirm your selections.

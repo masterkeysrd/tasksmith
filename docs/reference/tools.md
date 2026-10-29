@@ -495,7 +495,7 @@ Maintains the agent's task checklist and milestone tracking throughout a multi-s
 
 ### `ask_question`
 
-Prompts the user with structured interactive questions to resolve ambiguities or confirm architectural choices.
+Prompts the user with structured interactive questions to resolve ambiguities or confirm architectural choices. Permission rules and workspace policies apply; in `ask` mode, approval is required before the question is shown unless an allow rule matches.
 
 - **Annotations**: `isReadOnly: true`, `isIdempotent: false`, `isDangerous: false`, `isOpenWorld: false`
 - **User Hint**: `"Ask user: %s"`

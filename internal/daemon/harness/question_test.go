@@ -13,7 +13,174 @@ import (
 
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tools"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/workspace"
 )
+
+func TestQuestionPermissionEvaluation(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		deny     bool
+		policy   bool
+		decision tools.PermissionDecisionKind
+	}{
+		{name: "deny rule", deny: true},
+		{name: "workspace policy", deny: true, policy: true},
+		{name: "allow once", decision: tools.DecisionAllowOnce},
+		{name: "allow session", decision: tools.DecisionAllowSession},
+		{name: "reject", decision: tools.DecisionReject},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			_, registry, perms := newTestToolsRegistry(t)
+			if tc.policy {
+				perms.SetPolicies(&workspace.Policies{Tools: &workspace.ToolPolicies{Exclude: []string{"ask_question"}}})
+			} else if tc.deny {
+				if err := perms.AddDeny("ask_question(*)"); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				perms.SetMode(tools.ModeAsk)
+			}
+			provider := &fakeProvider{stepHandler: func(_ context.Context, _ *llm.Request, turn int) ([]message.AssistantChunk, error) {
+				if turn == 1 {
+					return []message.AssistantChunk{{Content: []message.Block{&message.ToolCall{ID: "ask", Name: "ask_question", Args: map[string]any{"questions": []any{map[string]any{"type": "confirm", "question": "Proceed?", "description": "Confirm."}}}}}, Done: true}}, nil
+				}
+				return []message.AssistantChunk{{Content: []message.Block{&message.TextBlock{Text: "done"}}, Done: true}}, nil
+			}}
+			h, err := New(Config{ID: "question-permission", DB: openTestSQLite(t), Model: newTestModel(t, provider), Tools: registry, Bash: &fakeBashRunner{}, Spiller: newTestSpiller(t), Permissions: perms, Queue: &fakeQueue{}, Logger: log.Default()})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var permission tools.PermissionRequest
+			var result *message.Tool
+			for event, err := range h.Stream(ctx, Input{Message: message.NewUserText("start")}) {
+				if err != nil {
+					t.Fatal(err)
+				}
+				if event.Type == EventInterrupted {
+					if len(event.Questions) != 0 || len(event.Permissions) != 1 {
+						t.Fatalf("expected permission only, got %+v", event)
+					}
+					permission = event.Permissions[0]
+				}
+				if msg, ok := event.Message.(*message.Tool); ok {
+					result = msg
+				}
+			}
+			if tc.deny {
+				if permission.ID != "" || result == nil || !strings.Contains(result.Content.Text(), tools.ErrPermissionDenied.Error()) {
+					t.Fatalf("expected denied result without prompt: permission=%+v result=%+v", permission, result)
+				}
+				return
+			}
+			if permission.ID == "" || permission.ToolCallID != "ask" {
+				t.Fatalf("missing permission: %+v", permission)
+			}
+			var question tools.QuestionRequest
+			for event, err := range h.Stream(ctx, Input{Decisions: map[string]tools.PermissionDecision{permission.ID: {Kind: tc.decision}}}) {
+				if err != nil {
+					t.Fatal(err)
+				}
+				if event.Type == EventInterrupted && len(event.Questions) == 1 && len(event.Permissions) == 0 {
+					question = event.Questions[0]
+				}
+				if msg, ok := event.Message.(*message.Tool); ok {
+					result = msg
+				}
+			}
+			if tc.decision == tools.DecisionReject {
+				if question.ID != "" || result == nil || !strings.Contains(result.Content.Text(), tools.ErrPermissionDenied.Error()) {
+					t.Fatalf("expected rejected result without question: question=%+v result=%+v", question, result)
+				}
+				return
+			}
+			if question.ID == "" || question.ToolCallID != "ask" || result != nil {
+				t.Fatalf("expected question after approval: question=%+v result=%+v", question, result)
+			}
+			for event, err := range h.Stream(ctx, Input{Answers: map[string]tools.QuestionResponse{question.ID: {Answers: []tools.QuestionAnswer{{Question: "Proceed?", Confirmed: true}}}}}) {
+				if err != nil {
+					t.Fatal(err)
+				}
+				if msg, ok := event.Message.(*message.Tool); ok {
+					result = msg
+				}
+			}
+			if result == nil || !strings.Contains(result.Content.Text(), `"confirmed":true`) {
+				t.Fatalf("missing answer result: %+v", result)
+			}
+		})
+	}
+}
+
+func TestApprovedQuestionWithOtherToolCalls(t *testing.T) {
+	ctx := context.Background()
+	_, registry, perms := newTestToolsRegistry(t)
+	perms.SetMode(tools.ModeAsk)
+	provider := &fakeProvider{stepHandler: func(_ context.Context, _ *llm.Request, turn int) ([]message.AssistantChunk, error) {
+		if turn == 1 {
+			return []message.AssistantChunk{{Content: []message.Block{
+				&message.ToolCall{ID: "ask", Name: "ask_question", Args: map[string]any{"questions": []any{map[string]any{"type": "confirm", "question": "Proceed?", "description": "Confirm."}}}},
+				&message.ToolCall{ID: "write", Name: "write", Args: map[string]any{"path": "mixed.txt", "content": "data"}},
+			}, Done: true}}, nil
+		}
+		return []message.AssistantChunk{{Content: []message.Block{&message.TextBlock{Text: "done"}}, Done: true}}, nil
+	}}
+	h, err := New(Config{ID: "question-permission-mixed", DB: openTestSQLite(t), Model: newTestModel(t, provider), Tools: registry, Bash: &fakeBashRunner{}, Spiller: newTestSpiller(t), Permissions: perms, Queue: &fakeQueue{}, Logger: log.Default()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	decisions := map[string]tools.PermissionDecision{}
+	for event, err := range h.Stream(ctx, Input{Message: message.NewUserText("start")}) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		if event.Type == EventInterrupted {
+			if len(event.Permissions) != 2 || len(event.Questions) != 0 {
+				t.Fatalf("expected two permission requests: %+v", event)
+			}
+			for _, req := range event.Permissions {
+				kind := tools.DecisionReject
+				if req.ToolCallID == "ask" {
+					kind = tools.DecisionAllowOnce
+				}
+				decisions[req.ID] = tools.PermissionDecision{Kind: kind}
+			}
+		}
+	}
+	if len(decisions) != 2 {
+		t.Fatalf("missing permission requests: %+v", decisions)
+	}
+	var question tools.QuestionRequest
+	var writes int
+	for event, err := range h.Stream(ctx, Input{Decisions: decisions}) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		if event.Type == EventInterrupted && len(event.Questions) == 1 && len(event.Permissions) == 0 {
+			question = event.Questions[0]
+		}
+		if msg, ok := event.Message.(*message.Tool); ok && msg.ToolCallID == "write" {
+			writes++
+			if !strings.Contains(msg.Content.Text(), tools.ErrPermissionDenied.Error()) {
+				t.Fatalf("unexpected write result: %+v", msg)
+			}
+		}
+	}
+	if question.ID == "" || writes != 1 {
+		t.Fatalf("expected question and one write result: question=%+v writes=%d", question, writes)
+	}
+	for event, err := range h.Stream(ctx, Input{Answers: map[string]tools.QuestionResponse{question.ID: {Answers: []tools.QuestionAnswer{{Question: "Proceed?", Confirmed: true}}}}}) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		if msg, ok := event.Message.(*message.Tool); ok && msg.ToolCallID == "write" {
+			writes++
+		}
+	}
+	if writes != 1 || len(provider.recordedTurns()) != 2 {
+		t.Fatalf("unexpected repeated work: write results=%d model calls=%d", writes, len(provider.recordedTurns()))
+	}
+}
 
 func TestQuestionInterruptResume(t *testing.T) {
 	ctx := context.Background()
