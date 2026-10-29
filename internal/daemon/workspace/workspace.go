@@ -167,6 +167,23 @@ func Open(ctx context.Context, dir string, opts ...Option) (Workspace, error) {
 	return w, nil
 }
 
+func (w *workspace) PrepareReload(ctx context.Context) (Workspace, func(), error) {
+	w.mu.RLock()
+	next := &workspace{cwd: w.cwd, rootDir: w.rootDir, opts: w.opts, agentOverride: w.agentOverride}
+	w.mu.RUnlock()
+	if err := next.Reload(ctx); err != nil {
+		return nil, nil, err
+	}
+	commit := func() {
+		w.mu.Lock()
+		defer w.mu.Unlock()
+		w.registry = next.registry
+		w.rootDir = next.rootDir
+		w.env = next.env
+	}
+	return next, commit, nil
+}
+
 // Reload re-reads all 4 resource tiers and .env layers from disk into the Workspace.
 func (w *workspace) Reload(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {

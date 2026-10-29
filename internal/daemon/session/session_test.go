@@ -7,6 +7,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -37,6 +39,169 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tools/builtin"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/workspace"
 )
+
+func TestSessionModelDiagnosticsAndRequests(t *testing.T) {
+	ctx := context.Background()
+	requests := make(chan map[string]any, 4)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/chat" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, err.Error(), 400)
+			return
+		}
+		requests <- body
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"model":"model","message":{"role":"assistant","content":"done"},"done":true}` + "\n"))
+	}))
+	defer server.Close()
+	db, ws, _, pub, _ := setupTestEnv(t, nil)
+	dir := filepath.Join(ws.RootDir(), ".agents")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	manifest := "---\napiVersion: warp/v1alpha1\nkind: Agent\nmetadata:\n  name: cold\nspec:\n  temperature: 0.0\n---\nYou are helpful.\n"
+	if err := os.WriteFile(filepath.Join(dir, "cold.agent.md"), []byte(manifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := ws.Reload(ctx); err != nil {
+		t.Fatal(err)
+	}
+	gw, err := gateway.New(ctx, gateway.Config{Providers: []gateway.ProviderConfig{{Name: "local", Type: "ollama", Endpoint: server.URL, Models: []gateway.ModelSpec{
+		{ID: "supported", Capabilities: &gateway.ModelCapabilities{Temperature: new(true), Thinking: []profile.ReasoningOption{{Type: "effort", Values: []string{"low", "high"}}}}},
+		{ID: "unsupported", Capabilities: &gateway.ModelCapabilities{Temperature: new(false)}},
+	}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer gw.Close()
+	perms, err := permissions.New(permissions.Config{Workspace: ws})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mgr, err := New(Config{DB: db, Workspace: ws, Gateway: gw, Publisher: pub, Logger: log.Default(), Permissions: perms})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mgr.Close()
+	sess, _, err := mgr.Create(ctx, CreateParams{Title: "test", Config: SessionConfig{Agent: "cold", Model: "local/unsupported"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sess.Diagnostics) != 1 || sess.Diagnostics[0].Code != "temperature_unsupported" {
+		t.Fatalf("diagnostics: %+v", sess.Diagnostics)
+	}
+	if err := sess.Send(ctx, SendInput{Message: message.NewUserText("hello")}); err != nil {
+		t.Fatal(err)
+	}
+	if err := sess.Wait(ctx); err != nil {
+		t.Fatal(err)
+	}
+	first := <-requests
+	if options, ok := first["options"].(map[string]any); ok {
+		if _, exists := options["temperature"]; exists {
+			t.Fatalf("unexpected temperature: %#v", first)
+		}
+	}
+	updated, err := mgr.Update(ctx, sess.ID, UpdateParams{Config: SessionConfig{Model: "local/supported"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(updated.Diagnostics) != 0 {
+		t.Fatalf("diagnostics not cleared: %+v", updated.Diagnostics)
+	}
+	if err := sess.Send(ctx, SendInput{Message: message.NewUserText("hello again")}); err != nil {
+		t.Fatal(err)
+	}
+	if err := sess.Wait(ctx); err != nil {
+		t.Fatal(err)
+	}
+	second := <-requests
+	options, ok := second["options"].(map[string]any)
+	if !ok || options["temperature"] != float64(0) {
+		t.Fatalf("zero temperature missing: %#v", second)
+	}
+	updated, err = mgr.Update(ctx, sess.ID, UpdateParams{Config: SessionConfig{Agent: "main", Model: "local/unsupported"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(updated.Diagnostics) != 1 || updated.Diagnostics[0].Code != "temperature_unsupported" {
+		t.Fatalf("agent switch diagnostics: %+v", updated.Diagnostics)
+	}
+	reopened, err := New(Config{DB: db, Workspace: ws, Gateway: gw, Publisher: pub, Logger: log.Default(), Permissions: perms})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	loaded, err := reopened.Get(ctx, sess.ID)
+	if err != nil || len(loaded.Diagnostics) != 1 || loaded.Diagnostics[0].Code != "temperature_unsupported" {
+		t.Fatalf("reopened diagnostics: %+v, %v", loaded, err)
+	}
+	mgr.Refresh()
+	if len(sess.Diagnostics) != 1 || sess.Harness != nil {
+		t.Fatalf("refresh state: %+v", sess.Diagnostics)
+	}
+	for _, tc := range []struct {
+		model           string
+		wantTemperature bool
+	}{
+		{"local/supported", true},
+		{"local/unsupported", false},
+	} {
+		titleSession, _, err := mgr.Create(ctx, CreateParams{Config: SessionConfig{Agent: "cold", Model: tc.model}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		titleSession.generateTitle("test title")
+		body := <-requests
+		options, _ := body["options"].(map[string]any)
+		temp, present := options["temperature"]
+		if present != tc.wantTemperature {
+			t.Fatalf("title request for %s: %#v", tc.model, body)
+		}
+		if present && (temp.(float64) < 0.099 || temp.(float64) > 0.101) {
+			t.Fatalf("title temperature: %v", temp)
+		}
+	}
+
+	titleManifest := "---\napiVersion: warp/v1alpha1\nkind: Agent\nmetadata:\n  name: title-generator\nspec:\n  temperature: 0.0\n  thinking:\n    effort: high\n---\nGenerate a title.\n"
+	if err := os.WriteFile(filepath.Join(dir, "title-generator.agent.md"), []byte(titleManifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := ws.Reload(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		model     string
+		thinking  *api.ThinkingSetting
+		wantThink any
+	}{
+		{"local/supported", &api.ThinkingSetting{Type: "effort", Effort: "low"}, "high"},
+		{"local/unsupported", nil, nil},
+	} {
+		titleSession, _, err := mgr.Create(ctx, CreateParams{Config: SessionConfig{Agent: "cold", Model: tc.model, Thinking: tc.thinking}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		titleSession.generateTitle("test title")
+		body := <-requests
+		if body["think"] != tc.wantThink {
+			t.Fatalf("title thinking for %s: %#v", tc.model, body)
+		}
+		options, _ := body["options"].(map[string]any)
+		if tc.model == "local/supported" && options["temperature"] != float64(0) {
+			t.Fatalf("title agent zero temperature missing: %#v", body)
+		}
+		if tc.model == "local/unsupported" {
+			if _, present := options["temperature"]; present {
+				t.Fatalf("unsupported title temperature sent: %#v", body)
+			}
+		}
+	}
+}
 
 func TestWaitingForInteractionLocked(t *testing.T) {
 	tests := []struct {
@@ -81,6 +246,8 @@ type fakeProvider struct {
 	turns        []capturedTurn
 	handler      func(ctx context.Context, req *llm.Request) ([]string, string, error)
 	chunkHandler func(ctx context.Context, req *llm.Request) ([]message.AssistantChunk, error)
+	profile      profile.Profile
+	hasProfile   bool
 }
 
 func (p *fakeProvider) Name() string {
@@ -92,6 +259,9 @@ func (p *fakeProvider) ListProfiles() []profile.Profile {
 }
 
 func (p *fakeProvider) GetProfile(string) (profile.Profile, bool) {
+	if p.hasProfile {
+		return p.profile, true
+	}
 	return profile.Profile{}, false
 }
 
@@ -228,6 +398,11 @@ func (g *fakeGateway) ModelProfile(provider, modelID string) (*profile.Profile, 
 		}
 	}
 	return nil, false
+}
+
+func (g *fakeGateway) ResolveConfig(provider, modelID string, settings gateway.ModelSettings) (gateway.ResolvedConfig, error) {
+	p, ok := g.ModelProfile(provider, modelID)
+	return gateway.ResolveSettings(gateway.EffectiveProfile{Profile: p, TemperatureKnown: ok}, settings)
 }
 
 func (g *fakeGateway) Close() error {
@@ -2665,6 +2840,162 @@ func TestSessionAutoGenerateTitle(t *testing.T) {
 	sessManual.Unlock()
 	if manualTitle != "Manual Title" {
 		t.Fatalf("expected manual title to remain %q, got %q", "Manual Title", manualTitle)
+	}
+}
+
+// TestSessionTitleRetriesAfterFailure verifies that a failed title-generation
+// attempt does not permanently leave the session untitled: because the in-flight
+// latch is released when a generation produces no title, a later user message
+// retries the generation and succeeds.
+func TestSessionTitleRetriesAfterFailure(t *testing.T) {
+	ctx := t.Context()
+
+	var mu sync.Mutex
+	var titleGenAttempts int
+	prov := &fakeProvider{
+		chunkHandler: func(_ context.Context, req *llm.Request) ([]message.AssistantChunk, error) {
+			mu.Lock()
+			isTitleGen := false
+			for _, m := range req.Messages {
+				if m.Role() == message.RoleSystem {
+					for _, b := range m.GetContent() {
+						if tb, ok := b.(*message.TextBlock); ok && strings.Contains(tb.Text, "short title") {
+							isTitleGen = true
+						}
+					}
+				}
+			}
+			if isTitleGen {
+				titleGenAttempts++
+				attempt := titleGenAttempts
+				mu.Unlock()
+				// Simulate a transient failure (e.g. a slow local model timing
+				// out) on the first attempt, then succeed on the retry.
+				if attempt == 1 {
+					return nil, errors.New("simulated title generation failure")
+				}
+				return []message.AssistantChunk{
+					{
+						BaseChunk: message.BaseChunk{ID: uuid.NewString()},
+						Content:   []message.Block{&message.TextBlock{Text: "\"Database Refactoring\""}},
+						Done:      true,
+					},
+				}, nil
+			}
+			mu.Unlock()
+			return []message.AssistantChunk{
+				{
+					BaseChunk: message.BaseChunk{ID: uuid.NewString()},
+					Content:   []message.Block{&message.TextBlock{Text: "I will help refactor the database."}},
+					Done:      true,
+				},
+			}, nil
+		},
+	}
+	db, _, _, _, mgr := setupTestEnv(t, prov)
+	_ = db
+
+	sess, _, err := mgr.Create(ctx, CreateParams{})
+	if err != nil {
+		t.Fatalf("mgr.Create: %v", err)
+	}
+	if sess.Title != "" {
+		t.Fatalf("expected initial title to be empty, got %q", sess.Title)
+	}
+
+	// 1. First message: the title generator fails on its first attempt.
+	if err := sess.Send(ctx, SendInput{Message: message.NewUserText("Help me refactor the database layer")}); err != nil {
+		t.Fatalf("sess.Send (1): %v", err)
+	}
+	if err := sess.Wait(ctx); err != nil {
+		t.Fatalf("sess.Wait (1): %v", err)
+	}
+
+	// Wait for the first (failed) attempt to fully settle, including the latch
+	// release, so the next message is guaranteed to retry.
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		mu.Lock()
+		ran := titleGenAttempts >= 1
+		mu.Unlock()
+		sess.Lock()
+		untitled := sess.Title == ""
+		latchReleased := !sess.titleGenerating
+		sess.Unlock()
+		if ran && untitled && latchReleased {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	sess.Lock()
+	gotTitle := sess.Title
+	sess.Unlock()
+	if gotTitle != "" {
+		t.Fatalf("expected empty title after failed generation, got %q", gotTitle)
+	}
+
+	// 2. Second message: because the latch was released, title generation retries
+	// and succeeds.
+	if err := sess.Send(ctx, SendInput{Message: message.NewUserText("Continue")}); err != nil {
+		t.Fatalf("sess.Send (2): %v", err)
+	}
+	if err := sess.Wait(ctx); err != nil {
+		t.Fatalf("sess.Wait (2): %v", err)
+	}
+
+	deadline = time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		sess.Lock()
+		cur := sess.Title
+		sess.Unlock()
+		if cur != "" {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	sess.Lock()
+	gotTitle = sess.Title
+	sess.Unlock()
+	if gotTitle != "Database Refactoring" {
+		mu.Lock()
+		attempts := titleGenAttempts
+		mu.Unlock()
+		t.Fatalf("expected title to be generated on retry, got %q (attempts=%d)", gotTitle, attempts)
+	}
+}
+
+// TestTemperatureSupported verifies that title generation only forwards the
+// configured temperature when the resolved model's profile advertises support for
+// it, omitting it otherwise.
+func temperatureSupported(g gateway.Gateway, provider, model string) bool {
+	value := float32(0.1)
+	resolved, err := g.ResolveConfig(provider, model, gateway.ModelSettings{Config: &llm.ModelConfig{Temperature: &value}})
+	return err == nil && resolved.Config.Temperature != nil
+}
+
+func TestTemperatureSupported(t *testing.T) {
+	// A model profile that does not advertise temperature support.
+	unsupported := newFakeGateway(&fakeProvider{
+		hasProfile: true,
+		profile:    profile.Profile{Capabilities: profile.Capabilities{}},
+	})
+	if temperatureSupported(unsupported, "prov", "model") {
+		t.Error("expected temperature unsupported for a profile without the temperature capability")
+	}
+
+	// A model profile that advertises temperature support.
+	supported := newFakeGateway(&fakeProvider{
+		hasProfile: true,
+		profile:    profile.Profile{Capabilities: profile.Capabilities{Temperature: true}},
+	})
+	if !temperatureSupported(supported, "prov", "model") {
+		t.Error("expected temperature supported for a profile with the temperature capability")
+	}
+
+	// When no profile is available, preserve the historical behavior.
+	none := newFakeGateway(&fakeProvider{})
+	if !temperatureSupported(none, "prov", "model") {
+		t.Error("expected temperature supported when no profile is available")
 	}
 }
 

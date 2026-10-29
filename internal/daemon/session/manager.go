@@ -33,6 +33,7 @@ type Config struct {
 	Publisher   Publisher
 	Logger      log.Interface
 	Permissions permissions.Manager
+	ReloadLock  *sync.RWMutex
 }
 
 // Validate checks that all required configuration dependencies are non-nil.
@@ -64,18 +65,20 @@ type Manager interface {
 	Get(ctx context.Context, id string) (*Session, error)
 	List(ctx context.Context) ([]*Session, error)
 	Update(ctx context.Context, id string, params UpdateParams) (*Session, error)
+	Refresh()
 	Delete(ctx context.Context, id string) error
 	Close() error
 }
 
 type manager struct {
-	db        *sql.DB
-	store     *store
-	workspace workspace.Workspace
-	gateway   gateway.Gateway
-	publisher Publisher
-	logger    log.Interface
-	perms     permissions.Manager
+	db         *sql.DB
+	store      *store
+	workspace  workspace.Workspace
+	gateway    gateway.Gateway
+	publisher  Publisher
+	logger     log.Interface
+	perms      permissions.Manager
+	reloadLock *sync.RWMutex
 
 	bgCtx    context.Context
 	bgCancel context.CancelFunc
@@ -100,18 +103,22 @@ func New(cfg Config) (Manager, error) {
 		return nil, err
 	}
 
+	if cfg.ReloadLock == nil {
+		cfg.ReloadLock = &sync.RWMutex{}
+	}
 	bgCtx, bgCancel := context.WithCancel(context.Background())
 	return &manager{
-		db:        cfg.DB,
-		store:     st,
-		workspace: cfg.Workspace,
-		gateway:   cfg.Gateway,
-		publisher: cfg.Publisher,
-		logger:    cfg.Logger,
-		perms:     cfg.Permissions,
-		bgCtx:     bgCtx,
-		bgCancel:  bgCancel,
-		sessions:  make(map[string]*Session),
+		db:         cfg.DB,
+		store:      st,
+		workspace:  cfg.Workspace,
+		gateway:    cfg.Gateway,
+		publisher:  cfg.Publisher,
+		logger:     cfg.Logger,
+		perms:      cfg.Permissions,
+		reloadLock: cfg.ReloadLock,
+		bgCtx:      bgCtx,
+		bgCancel:   bgCancel,
+		sessions:   make(map[string]*Session),
 	}, nil
 }
 
@@ -219,17 +226,20 @@ func (m *manager) loadOrCacheSession(ctx context.Context, dbSess *Session) (*Ses
 		store:       m.store,
 		workspace:   m.workspace,
 		gateway:     m.gateway,
+		reloadLock:  m.reloadLock,
 		publisher:   m.publisher,
 		logger:      m.logger,
 		bgCtx:       m.bgCtx,
 		wg:          &m.wg,
 	}
 
+	sess.Diagnostics = sess.modelDiagnostics(sess.Config)
+
 	if err := sess.initResources(ctx); err != nil {
 		return nil, err
 	}
 
-	if h, err := sess.harness(ctx); err == nil {
+	if h, err := sess.buildHarness(ctx); err == nil {
 		if st, err := h.LoadState(ctx); err == nil {
 			sess.Lock()
 			sess.Context = st.Context
@@ -288,6 +298,8 @@ func (m *manager) getLiveSession(ctx context.Context, id string) (*Session, erro
 }
 
 func (m *manager) Create(ctx context.Context, params CreateParams) (sess *Session, created bool, err error) {
+	m.reloadLock.RLock()
+	defer m.reloadLock.RUnlock()
 	if err := ctx.Err(); err != nil {
 		return nil, false, err
 	}
@@ -326,9 +338,8 @@ func (m *manager) Create(ctx context.Context, params CreateParams) (sess *Sessio
 	agent, model := m.resolveAgentAndModel(params.Config.Agent, params.Config.Model)
 	if params.Config.Thinking != nil {
 		prov, mID := resolveProviderAndModel(m.workspace, model)
-		prof, _ := m.gateway.ModelProfile(prov, mID)
-		if err := validateThinking(params.Config.Thinking, prof); err != nil {
-			return nil, false, err
+		if _, err := m.gateway.ResolveConfig(prov, mID, gateway.ModelSettings{SessionThinking: params.Config.Thinking}); err != nil {
+			return nil, false, fmt.Errorf("%w: %v", ErrInvalidConfig, err)
 		}
 		if params.Config.Thinking.Type == "default" {
 			params.Config.Thinking = nil
@@ -368,11 +379,14 @@ func (m *manager) Create(ctx context.Context, params CreateParams) (sess *Sessio
 		store:       m.store,
 		workspace:   m.workspace,
 		gateway:     m.gateway,
+		reloadLock:  m.reloadLock,
 		publisher:   m.publisher,
 		logger:      m.logger,
 		bgCtx:       m.bgCtx,
 		wg:          &m.wg,
 	}
+
+	newSession.Diagnostics = newSession.modelDiagnostics(newSession.Config)
 
 	if err := newSession.initResources(ctx); err != nil {
 		return nil, false, err
@@ -395,7 +409,26 @@ func (m *manager) Create(ctx context.Context, params CreateParams) (sess *Sessio
 	return newSession, true, nil
 }
 
+func (m *manager) Refresh() {
+	m.mu.Lock()
+	sessions := make([]*Session, 0, len(m.sessions))
+	for _, sess := range m.sessions {
+		sessions = append(sessions, sess)
+	}
+	m.mu.Unlock()
+	for _, sess := range sessions {
+		sess.Lock()
+		sess.Diagnostics = sess.modelDiagnostics(sess.Config)
+		sess.Harness = nil
+		sess.configGeneration++
+		sess.Unlock()
+		m.publisher.Publish(api.TopicSessions, UpdatedEvent{Workspace: m.workspace.RootDir(), Session: sess.Clone()})
+	}
+}
+
 func (m *manager) Get(ctx context.Context, id string) (*Session, error) {
+	m.reloadLock.RLock()
+	defer m.reloadLock.RUnlock()
 	id = strings.TrimSpace(id)
 	if id == "" {
 		return nil, ErrEmptySessionID
@@ -407,6 +440,8 @@ func (m *manager) Get(ctx context.Context, id string) (*Session, error) {
 }
 
 func (m *manager) List(ctx context.Context) ([]*Session, error) {
+	m.reloadLock.RLock()
+	defer m.reloadLock.RUnlock()
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -426,6 +461,8 @@ func (m *manager) List(ctx context.Context) ([]*Session, error) {
 }
 
 func (m *manager) Update(ctx context.Context, id string, params UpdateParams) (*Session, error) {
+	m.reloadLock.RLock()
+	defer m.reloadLock.RUnlock()
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -447,6 +484,7 @@ func (m *manager) Update(ctx context.Context, id string, params UpdateParams) (*
 	oldConfig := sess.Config
 	newConfig := sess.Config
 	newTitle := sess.Title
+	thinkingCleared := false
 
 	if title := strings.TrimSpace(params.Title); title != "" {
 		newTitle = title
@@ -459,19 +497,19 @@ func (m *manager) Update(ctx context.Context, id string, params UpdateParams) (*
 	} else if strings.TrimSpace(params.Config.Agent) != "" && sess.Config.Model == "" {
 		_, newConfig.Model = m.resolveAgentAndModel(newConfig.Agent, "")
 	}
-	if oldConfig.Model != newConfig.Model || oldConfig.Agent != newConfig.Agent {
+	if (oldConfig.Model != newConfig.Model || oldConfig.Agent != newConfig.Agent) && newConfig.Thinking != nil {
 		prov, mID := resolveProviderAndModel(m.workspace, newConfig.Model)
-		prof, _ := m.gateway.ModelProfile(prov, mID)
-		if newConfig.Thinking != nil && validateThinking(newConfig.Thinking, prof) != nil {
+		if _, err := m.gateway.ResolveConfig(prov, mID, gateway.ModelSettings{SessionThinking: newConfig.Thinking}); errors.Is(err, gateway.ErrInvalidConfig) {
 			newConfig.Thinking = nil
+			thinkingCleared = true
 		}
 	}
 	if params.Config.Thinking != nil {
+		thinkingCleared = false
 		prov, mID := resolveProviderAndModel(m.workspace, newConfig.Model)
-		prof, _ := m.gateway.ModelProfile(prov, mID)
-		if err := validateThinking(params.Config.Thinking, prof); err != nil {
+		if _, err := m.gateway.ResolveConfig(prov, mID, gateway.ModelSettings{SessionThinking: params.Config.Thinking}); err != nil {
 			sess.Unlock()
-			return nil, err
+			return nil, fmt.Errorf("%w: %v", ErrInvalidConfig, err)
 		}
 		if params.Config.Thinking.Type == "default" {
 			newConfig.Thinking = nil
@@ -501,10 +539,15 @@ func (m *manager) Update(ctx context.Context, id string, params UpdateParams) (*
 
 	sess.Title = newTitle
 	sess.Config = newConfig
-	sess.UpdatedAt = updatedAt
 	if oldConfig.Agent != newConfig.Agent || oldConfig.Model != newConfig.Model || !reflect.DeepEqual(oldConfig.Thinking, newConfig.Thinking) {
+		sess.Diagnostics = sess.modelDiagnostics(newConfig)
+		if thinkingCleared {
+			sess.Diagnostics = append(sess.Diagnostics, gateway.Diagnostic{Code: "thinking_override_cleared", Setting: "thinking", Message: fmt.Sprintf("The thinking override was cleared because it is unsupported by model %q.", newConfig.Model)})
+		}
 		sess.Harness = nil
+		sess.configGeneration++
 	}
+	sess.UpdatedAt = updatedAt
 	if oldConfig.Mode != newConfig.Mode && sess.PermManager != nil {
 		sess.PermManager.SetMode(newConfig.Mode)
 	}

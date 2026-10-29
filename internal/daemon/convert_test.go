@@ -7,6 +7,7 @@ import (
 	"github.com/masterkeysrd/loom/profile"
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/broker"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/gateway"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/session"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tasks"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tools"
@@ -34,6 +35,24 @@ func TestThinkingDescriptions(t *testing.T) {
 	enrichModelFromProfile(&model, &profile.Profile{Capabilities: profile.Capabilities{ReasoningOptions: []profile.ReasoningOption{{Type: "effort", Values: values}}}}, "model")
 	if len(model.Thinking) != 1 || len(model.Thinking[0].Values) != len(values) || model.Thinking[0].Values[2].Description == "" || model.Thinking[0].Values[8].Description != "" {
 		t.Fatalf("profile model has incorrect descriptions: %+v", model.Thinking)
+	}
+}
+
+func TestSessionDiagnosticsConversion(t *testing.T) {
+	sess := &session.Session{ID: "test", State: session.NewState(), Diagnostics: []gateway.Diagnostic{{Code: "temperature_unsupported", Setting: "temperature", Message: "omitted"}}}
+	want := api.SessionDiagnostic{Code: "temperature_unsupported", Setting: "temperature", Message: "omitted"}
+	converted := toAPISession(sess)
+	if len(converted.Diagnostics) != 1 || converted.Diagnostics[0] != want {
+		t.Fatalf("session diagnostics: %+v", converted.Diagnostics)
+	}
+	d := &Daemon{}
+	event, err := d.FormatEvent(broker.Message{Topic: api.TopicSessions, Event: session.UpdatedEvent{Session: sess}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, ok := event.Payload.(api.SessionUpdatedEvent)
+	if !ok || len(payload.Session.Diagnostics) != 1 || payload.Session.Diagnostics[0] != want {
+		t.Fatalf("event diagnostics: %+v", event.Payload)
 	}
 }
 

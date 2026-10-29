@@ -106,6 +106,10 @@ func (g *fakeGateway) ModelProfile(provider, modelID string) (*profile.Profile, 
 	}
 	return nil, false
 }
+func (g *fakeGateway) ResolveConfig(provider, modelID string, settings gateway.ModelSettings) (gateway.ResolvedConfig, error) {
+	p, ok := g.ModelProfile(provider, modelID)
+	return gateway.ResolveSettings(gateway.EffectiveProfile{Profile: p, TemperatureKnown: ok}, settings)
+}
 func (g *fakeGateway) Close() error { return nil }
 
 type fakeGatewayPool struct {

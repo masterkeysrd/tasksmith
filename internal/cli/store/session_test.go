@@ -15,6 +15,38 @@ import (
 	"github.com/masterkeysrd/tasksmith/client"
 )
 
+func TestDiagnosticNotices(t *testing.T) {
+	ResetSession()
+	ClearTranscript()
+	defer ResetSession()
+	defer ClearTranscript()
+	sess := &api.Session{ID: "one", Config: api.SessionConfig{Agent: "agent", Model: "model"}, Diagnostics: []api.SessionDiagnostic{{Code: "temperature_unsupported", Message: "Temperature omitted"}}}
+	showSessionDiagnostics(sess, true)
+	sess.Diagnostics = append(sess.Diagnostics, sess.Diagnostics[0])
+	showSessionDiagnostics(sess, false)
+	items := GetTranscript().Items
+	if items == nil || len(*items) != 1 || (*items)[0].Kind != TranscriptKindNotice || (*items)[0].Data.(NoticeData).Text != "Warning: Temperature omitted" {
+		t.Fatalf("notices: %+v", items)
+	}
+	ClearScreen()
+	showSessionDiagnostics(sess, false)
+	if items := GetTranscript().Items; items != nil && len(*items) != 0 {
+		t.Fatalf("dismissed notice returned: %+v", *items)
+	}
+	sess.Config.Model = "other"
+	showSessionDiagnostics(sess, false)
+	if items := GetTranscript().Items; items == nil || len(*items) != 1 {
+		t.Fatalf("changed model notice missing: %+v", items)
+	}
+	sess.Diagnostics = nil
+	showSessionDiagnostics(sess, false)
+	sess.Diagnostics = []api.SessionDiagnostic{{Code: "temperature_unsupported", Message: "Temperature omitted"}}
+	showSessionDiagnostics(sess, false)
+	if items := GetTranscript().Items; items == nil || len(*items) != 2 {
+		t.Fatalf("reappearing notice missing: %+v", items)
+	}
+}
+
 func TestSessionStoreBasic(t *testing.T) {
 	ResetSession()
 	defer ResetSession()

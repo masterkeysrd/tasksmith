@@ -8,6 +8,7 @@ import (
 	"github.com/masterkeysrd/loom/embedding"
 	"github.com/masterkeysrd/loom/llm"
 	"github.com/masterkeysrd/loom/profile"
+	"github.com/masterkeysrd/tasksmith/api"
 )
 
 // Common errors returned by the gateway package.
@@ -39,13 +40,16 @@ type AuthConfig struct {
 
 // ModelCapabilities specifies the workload capabilities supported by a model.
 type ModelCapabilities struct {
-	Completion *bool                     `json:"completion,omitempty"`
-	Decision   *bool                     `json:"decision,omitempty"`
-	Embedding  *bool                     `json:"embedding,omitempty"`
-	Attachment *bool                     `json:"attachment,omitempty"`
-	Tools      *bool                     `json:"tools,omitempty"`
-	Dimensions []int                     `json:"dimensions,omitempty"`
-	Thinking   []profile.ReasoningOption `json:"thinking,omitempty"`
+	Completion       *bool                     `json:"completion,omitempty"`
+	Decision         *bool                     `json:"decision,omitempty"`
+	Embedding        *bool                     `json:"embedding,omitempty"`
+	Attachment       *bool                     `json:"attachment,omitempty"`
+	Tools            *bool                     `json:"tools,omitempty"`
+	StructuredOutput *bool                     `json:"structured_output,omitempty"`
+	Temperature      *bool                     `json:"temperature,omitempty"`
+	Dimensions       []int                     `json:"dimensions,omitempty"`
+	Thinking         []profile.ReasoningOption `json:"thinking,omitempty"`
+	Modalities       *profile.Modalities       `json:"modalities,omitempty"`
 }
 
 // SupportsCompletion reports whether the model supports text/chat completion.
@@ -116,6 +120,7 @@ type LLMOption func(*llmResolveOptions)
 
 type llmResolveOptions struct {
 	config     *llm.ModelConfig
+	settings   *ModelSettings
 	middleware []llm.Middleware
 }
 
@@ -123,6 +128,12 @@ type llmResolveOptions struct {
 func WithLLMConfig(cfg *llm.ModelConfig) LLMOption {
 	return func(o *llmResolveOptions) {
 		o.config = cfg
+	}
+}
+
+func WithModelSettings(settings ModelSettings) LLMOption {
+	return func(o *llmResolveOptions) {
+		o.settings = &settings
 	}
 }
 
@@ -177,6 +188,32 @@ func WithEmbeddingMiddleware(mw ...embedding.Middleware) EmbeddingOption {
 	}
 }
 
+type Diagnostic struct {
+	Code    string `json:"code"`
+	Setting string `json:"setting"`
+	Message string `json:"message"`
+}
+
+type EffectiveProfile struct {
+	Profile          *profile.Profile
+	TemperatureKnown bool
+	ProviderType     string
+	StructuredOutput *bool
+	Dimensions       []int
+}
+
+type ModelSettings struct {
+	Config          *llm.ModelConfig
+	AgentThinking   *api.ThinkingSetting
+	SessionThinking *api.ThinkingSetting
+}
+
+type ResolvedConfig struct {
+	Profile     EffectiveProfile
+	Config      *llm.ModelConfig
+	Diagnostics []Diagnostic
+}
+
 // Gateway provides access to initialized AI models across providers.
 type Gateway interface {
 	// ResolveLLM instantiates a conversational/completion model (System Two) for the given provider and model ID.
@@ -195,6 +232,7 @@ type Gateway interface {
 
 	// ModelProfile returns the discovered model profile from the matching provider or catalog, if available.
 	ModelProfile(provider, modelID string) (*profile.Profile, bool)
+	ResolveConfig(provider, modelID string, settings ModelSettings) (ResolvedConfig, error)
 
 	// Close releases all client resources and connections.
 	Close() error

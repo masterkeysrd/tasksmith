@@ -61,7 +61,7 @@ TaskSmith builds its workspace environment from the process environment and `.en
 
 A thinking entry has `type` (`toggle`, `effort`, `budget`, or `adaptive`), optional `isDefault`, `allowedEfforts`, `maxBudgetTokens`, and a strategy-specific `default`. Omitted optional feature flags are unspecified metadata, not proof of support.
 
-The workspace preserves all these schema fields, but the current gateway conversion forwards only completion, decision, embedding, attachment, tools, dimensions, and selected thinking details. It does not forward `structuredOutput`, `temperature`, `modalities`, or the thinking `isDefault` flag to the gateway model configuration. The actual provider and model still determine supported features.
+The workspace preserves all these schema fields. Gateway conversion forwards completion, decision, embedding, attachment, tools, temperature, dimensions, and selected thinking details. Explicit temperature capability values override the provider profile; if neither source specifies support, it is unknown. The gateway does not forward `structuredOutput`, `modalities`, or the thinking `isDefault` flag to the gateway model configuration. The actual provider and model still determine supported features.
 
 ### Cost metadata
 

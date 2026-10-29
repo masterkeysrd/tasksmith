@@ -13,6 +13,7 @@ import (
 type Workspace interface {
 	Initialize(ctx context.Context, opts InitOptions) error
 	Reload(ctx context.Context) error
+	PrepareReload(ctx context.Context) (Workspace, func(), error)
 	RootDir() string
 	CWD() string
 	Name() string

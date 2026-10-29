@@ -37,6 +37,7 @@ type Runtime interface {
 	Gateway() gateway.Gateway
 	Permissions() permissions.Manager
 	Sessions() session.Manager
+	Reload(ctx context.Context) error
 	Close() error
 }
 
@@ -55,12 +56,15 @@ type Config struct {
 }
 
 type workspaceRuntime struct {
-	dir      string
-	ws       workspace.Workspace
-	gw       gateway.Gateway
-	perms    permissions.Manager
-	sessions session.Manager
-	db       *sql.DB
+	dir              string
+	ws               workspace.Workspace
+	sessionWorkspace workspace.Workspace
+	reloadMu         *sync.RWMutex
+	gw               gateway.Gateway
+	pool             gateway.Pool
+	perms            permissions.Manager
+	sessions         session.Manager
+	db               *sql.DB
 }
 
 var _ Runtime = (*workspaceRuntime)(nil)
@@ -70,6 +74,36 @@ func (r *workspaceRuntime) Workspace() workspace.Workspace   { return r.ws }
 func (r *workspaceRuntime) Gateway() gateway.Gateway         { return r.gw }
 func (r *workspaceRuntime) Permissions() permissions.Manager { return r.perms }
 func (r *workspaceRuntime) Sessions() session.Manager        { return r.sessions }
+
+func (r *workspaceRuntime) Reload(ctx context.Context) error {
+	r.reloadMu.Lock()
+	defer r.reloadMu.Unlock()
+	nextWorkspace, commitWorkspace, err := r.ws.PrepareReload(ctx)
+	if err != nil {
+		return err
+	}
+	sessionWorkspace := nextWorkspace
+	var commitSession func()
+	if r.sessionWorkspace != r.ws {
+		sessionWorkspace, commitSession, err = r.sessionWorkspace.PrepareReload(ctx)
+		if err != nil {
+			return err
+		}
+	}
+	next, err := r.pool.Acquire(ctx, buildGatewayConfig(sessionWorkspace))
+	if err != nil {
+		return err
+	}
+	commitWorkspace()
+	if commitSession != nil {
+		commitSession()
+	}
+	if sw, ok := r.gw.(*switchingGateway); ok {
+		sw.set(next)
+	}
+	r.sessions.Refresh()
+	return nil
+}
 
 func (r *workspaceRuntime) Close() error {
 	sessErr := r.sessions.Close()
@@ -153,12 +187,16 @@ func (m *manager) Get(ctx context.Context, dir string) (Runtime, error) {
 	var gw gateway.Gateway
 	var sessMgr session.Manager
 	var permMgr permissions.Manager
+	sessionWorkspace := ws
+	reloadMu := &sync.RWMutex{}
 	for _, existing := range m.runtimes {
 		if existing.ws.RootDir() == rootDir {
 			db = existing.db
 			gw = existing.gw
 			sessMgr = existing.sessions
 			permMgr = existing.perms
+			sessionWorkspace = existing.sessionWorkspace
+			reloadMu = existing.reloadMu
 			break
 		}
 	}
@@ -172,6 +210,7 @@ func (m *manager) Get(ctx context.Context, dir string) (Runtime, error) {
 			return nil, fmt.Errorf("runtime: acquire gateway for %q: %w", rootDir, err)
 		}
 
+		gw = &switchingGateway{current: gw}
 		wsDataDir, err := xdg.WorkspaceDir(rootDir)
 		if err != nil {
 			m.mu.Unlock()
@@ -199,6 +238,7 @@ func (m *manager) Get(ctx context.Context, dir string) (Runtime, error) {
 			Publisher:   m.publisher,
 			Logger:      m.logger,
 			Permissions: permMgr,
+			ReloadLock:  reloadMu,
 		})
 		if err != nil {
 			_ = db.Close()
@@ -208,12 +248,15 @@ func (m *manager) Get(ctx context.Context, dir string) (Runtime, error) {
 	}
 
 	rt := &workspaceRuntime{
-		dir:      cleanDir,
-		ws:       ws,
-		gw:       gw,
-		perms:    permMgr,
-		sessions: sessMgr,
-		db:       db,
+		dir:              cleanDir,
+		ws:               ws,
+		sessionWorkspace: sessionWorkspace,
+		reloadMu:         reloadMu,
+		gw:               gw,
+		pool:             m.pool,
+		perms:            permMgr,
+		sessions:         sessMgr,
+		db:               db,
 	}
 	m.runtimes[cleanDir] = rt
 	m.mu.Unlock()
@@ -300,12 +343,29 @@ func toGatewayProvider(p workspace.Provider) gateway.ProviderConfig {
 			var caps *gateway.ModelCapabilities
 			if m.Capabilities != nil {
 				caps = &gateway.ModelCapabilities{
-					Completion: m.Capabilities.Completion,
-					Decision:   m.Capabilities.Decision,
-					Embedding:  m.Capabilities.Embedding,
-					Attachment: m.Capabilities.Attachment,
-					Tools:      m.Capabilities.Tools,
-					Dimensions: m.Capabilities.Dimensions,
+					Completion:       m.Capabilities.Completion,
+					Decision:         m.Capabilities.Decision,
+					Embedding:        m.Capabilities.Embedding,
+					Attachment:       m.Capabilities.Attachment,
+					Tools:            m.Capabilities.Tools,
+					StructuredOutput: m.Capabilities.StructuredOutput,
+					Temperature:      m.Capabilities.Temperature,
+					Dimensions:       m.Capabilities.Dimensions,
+				}
+				if m.Capabilities.Modalities != nil {
+					caps.Modalities = &profile.Modalities{}
+					if m.Capabilities.Modalities.Input != nil {
+						caps.Modalities.Inputs = []profile.Modality{}
+					}
+					if m.Capabilities.Modalities.Output != nil {
+						caps.Modalities.Outputs = []profile.Modality{}
+					}
+					for _, modality := range m.Capabilities.Modalities.Input {
+						caps.Modalities.Inputs = append(caps.Modalities.Inputs, profile.Modality(modality))
+					}
+					for _, modality := range m.Capabilities.Modalities.Output {
+						caps.Modalities.Outputs = append(caps.Modalities.Outputs, profile.Modality(modality))
+					}
 				}
 				for _, thinking := range m.Capabilities.Thinking {
 					typ := strings.ToLower(strings.TrimSpace(thinking.Type))

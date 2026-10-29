@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 
@@ -104,7 +105,15 @@ func (g *gatewayImpl) ResolveLLM(ctx context.Context, provider, modelID string, 
 		return nil, fmt.Errorf("%w: model %q does not support completion", ErrUnsupportedCapability, modelID)
 	}
 
-	model, err := llm.NewModel(inst.llmProv, modelID, options.config)
+	settings := ModelSettings{Config: options.config}
+	if options.settings != nil {
+		settings = *options.settings
+	}
+	resolved, err := ResolveSettings(effectiveProfile(inst, modelID, spec), settings)
+	if err != nil {
+		return nil, err
+	}
+	model, err := llm.NewModel(inst.llmProv, modelID, resolved.Config)
 	if err != nil {
 		return nil, fmt.Errorf("gateway: failed to create llm model: %w", err)
 	}
@@ -235,6 +244,13 @@ func (g *gatewayImpl) lookupProviderAndModel(provider, modelID string) (*provide
 	provider = strings.TrimSpace(provider)
 	modelID = strings.TrimSpace(modelID)
 	if provider == "" {
+		if name, id, ok := strings.Cut(modelID, "/"); ok && id != "" {
+			if _, exists := g.providers[name]; exists {
+				provider, modelID = name, id
+			}
+		}
+	}
+	if provider == "" {
 		return nil, "", nil, fmt.Errorf("%w: provider name is required", ErrProviderNotFound)
 	}
 	if modelID == "" {
@@ -262,6 +278,9 @@ func MergeProfile(spec *ModelSpec, base *profile.Profile) *profile.Profile {
 	var out profile.Profile
 	if base != nil {
 		out = *base
+		out.Modalities.Inputs = slices.Clone(base.Modalities.Inputs)
+		out.Modalities.Outputs = slices.Clone(base.Modalities.Outputs)
+		out.Capabilities.ReasoningOptions = cloneReasoningOptions(base.Capabilities.ReasoningOptions)
 	}
 	if spec == nil {
 		return &out
@@ -285,9 +304,17 @@ func MergeProfile(spec *ModelSpec, base *profile.Profile) *profile.Profile {
 		out.Limits.Dimensions = spec.Limits.Dimensions
 	}
 	if spec.Capabilities != nil {
+		if spec.Capabilities.Modalities != nil {
+			if spec.Capabilities.Modalities.Inputs != nil {
+				out.Modalities.Inputs = append([]profile.Modality{}, spec.Capabilities.Modalities.Inputs...)
+			}
+			if spec.Capabilities.Modalities.Outputs != nil {
+				out.Modalities.Outputs = append([]profile.Modality{}, spec.Capabilities.Modalities.Outputs...)
+			}
+		}
 		if len(spec.Capabilities.Thinking) > 0 {
 			out.Capabilities.Reasoning = true
-			out.Capabilities.ReasoningOptions = append([]profile.ReasoningOption(nil), spec.Capabilities.Thinking...)
+			out.Capabilities.ReasoningOptions = cloneReasoningOptions(spec.Capabilities.Thinking)
 		}
 		if spec.Capabilities.Completion != nil {
 			out.Capabilities.Completion = *spec.Capabilities.Completion
@@ -304,11 +331,22 @@ func MergeProfile(spec *ModelSpec, base *profile.Profile) *profile.Profile {
 		if spec.Capabilities.Tools != nil {
 			out.Capabilities.ToolCall = *spec.Capabilities.Tools
 		}
-		if len(spec.Capabilities.Dimensions) > 0 && out.Limits.Dimensions == 0 {
+		if spec.Capabilities.Temperature != nil {
+			out.Capabilities.Temperature = *spec.Capabilities.Temperature
+		}
+		if len(spec.Capabilities.Dimensions) > 0 && spec.Limits.Dimensions == 0 {
 			out.Limits.Dimensions = spec.Capabilities.Dimensions[0]
 		}
 	}
 	return &out
+}
+
+func cloneReasoningOptions(options []profile.ReasoningOption) []profile.ReasoningOption {
+	cloned := slices.Clone(options)
+	for i := range cloned {
+		cloned[i].Values = slices.Clone(cloned[i].Values)
+	}
+	return cloned
 }
 
 // ModelProfile looks up the discovered model profile from the matching provider or catalog,
@@ -321,7 +359,11 @@ func (g *gatewayImpl) ModelProfile(provider, modelID string) (*profile.Profile, 
 	if err != nil || inst == nil {
 		return nil, false
 	}
+	resolved := effectiveProfile(inst, modelID, spec)
+	return resolved.Profile, resolved.Profile != nil
+}
 
+func effectiveProfile(inst *providerInstance, modelID string, spec *ModelSpec) EffectiveProfile {
 	var base *profile.Profile
 	if pp, ok := inst.llmProv.(profile.Provider); ok && pp != nil {
 		if prof, found := pp.GetProfile(modelID); found {
@@ -343,16 +385,18 @@ func (g *gatewayImpl) ModelProfile(provider, modelID string) (*profile.Profile, 
 		}
 	}
 
-	if base == nil && spec == nil {
-		return nil, false
-	}
-
 	merged := MergeProfile(spec, base)
-	if merged == nil {
-		return nil, false
-	}
-	if merged.ID == "" {
+	if merged != nil && merged.ID == "" {
 		merged.ID = modelID
 	}
-	return merged, true
+	known := base != nil || (spec != nil && spec.Capabilities != nil && spec.Capabilities.Temperature != nil)
+	result := EffectiveProfile{Profile: merged, TemperatureKnown: known, ProviderType: inst.cfg.Type}
+	if spec != nil && spec.Capabilities != nil {
+		if spec.Capabilities.StructuredOutput != nil {
+			value := *spec.Capabilities.StructuredOutput
+			result.StructuredOutput = &value
+		}
+		result.Dimensions = append([]int(nil), spec.Capabilities.Dimensions...)
+	}
+	return result
 }

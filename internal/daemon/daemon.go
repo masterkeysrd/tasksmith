@@ -404,7 +404,7 @@ func (d *Daemon) ReloadWorkspace(ctx context.Context, rawWS string) error {
 	if err != nil {
 		return err
 	}
-	return rt.Workspace().Reload(ctx)
+	return rt.Reload(ctx)
 }
 
 func (d *Daemon) ListAgents(ctx context.Context, rawWS string) ([]api.Agent, error) {

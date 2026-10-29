@@ -12,6 +12,7 @@ import (
 	"github.com/masterkeysrd/loom/message"
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/broker"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/gateway"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/permissions"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/session"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/std"
@@ -25,6 +26,7 @@ func toAPISession(sess *session.Session) api.Session {
 	if sess == nil {
 		return api.Session{}
 	}
+	sess = sess.Clone()
 	status := api.StatusIdle
 	var perms []api.PermissionRequest
 	var questions []api.QuestionRequest
@@ -53,6 +55,7 @@ func toAPISession(sess *session.Session) api.Session {
 			Mode:     api.PermissionMode(sess.Config.Mode),
 		},
 		Status:             status,
+		Diagnostics:        toSessionDiagnostics(sess.Diagnostics),
 		Context:            ctxState,
 		PendingPermissions: perms,
 		PendingQuestions:   questions,
@@ -62,6 +65,14 @@ func toAPISession(sess *session.Session) api.Session {
 		CreatedAt:          sess.CreatedAt,
 		UpdatedAt:          sess.UpdatedAt,
 	}
+}
+
+func toSessionDiagnostics(in []gateway.Diagnostic) []api.SessionDiagnostic {
+	out := make([]api.SessionDiagnostic, len(in))
+	for i, d := range in {
+		out[i] = api.SessionDiagnostic{Code: d.Code, Setting: d.Setting, Message: d.Message}
+	}
+	return out
 }
 
 func toAPIQueueItems(items []session.QueueItem) []api.QueueItem {

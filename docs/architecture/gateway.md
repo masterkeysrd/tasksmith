@@ -46,7 +46,7 @@ flowchart TD
 ## 2. Core Architectural Components
 
 ### 1. Decoupled Configuration Boundary
-The gateway is completely decoupled from on-disk manifest formats and model name resolution. The workspace layer resolves model references and role defaults into an explicit `(provider, modelID)` pair and translates provider manifests into a normalized gateway configuration containing:
+The gateway is decoupled from on-disk manifest formats. The workspace layer resolves model references and role defaults and translates provider manifests into a normalized gateway configuration. If workspace resolution does not resolve a qualified model ID, the gateway recognizes its provider prefix only when that provider is registered. Gateway configuration contains:
 - Registered providers (endpoints, headers, model catalogs, and capability flags).
 - An isolated, in-memory environment map containing workspace secrets.
 
@@ -61,7 +61,10 @@ The gateway resolves authentication credentials without mutating process state o
 - **Layered Resolution**: Credentials resolve from the workspace's injected environment map, falling back to process environment variables (`os.Getenv`), or reading from an explicit file path (`auth.file`).
 - **Lazy Validation**: Providers missing required credentials do not fail gateway initialization at startup. Instead, the provider is flagged with a warning in the CLI header, and an authentication error is only raised when a turn or agent explicitly resolves a model from that provider.
 
-### 4. Triple-Role Model Instantiation & Decision Adapter
+### 4. Effective Model Configuration
+The gateway merges the provider's Loom model profile with explicit workspace model overrides and resolves requested settings into a configuration and structured diagnostics. Declared capabilities, limits, modalities and thinking strategies take precedence over the provider profile. Session thinking overrides agent thinking; unsupported agent settings produce diagnostics, while invalid explicit overrides fail validation. Explicit temperature support overrides the provider profile; when support is unknown, configured temperature is forwarded with a warning. Known unsupported temperature and Anthropic extended-thinking conflicts are omitted. Session creation, model or agent changes, and workspace reload refresh session diagnostics. Reload stages workspace and gateway changes before publishing them, and session configuration and model construction use a shared reload barrier.
+
+### 5. Triple-Role Model Instantiation & Decision Adapter
 Given a resolved `(provider, modelID)` from the workspace layer, the gateway instantiates and adapts models across three cognitive roles:
 
 - **System 1 — Decision (`decision`)**: Evaluates calibrated probabilistic questions (classification, routing, confidence checks).

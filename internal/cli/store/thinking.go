@@ -113,6 +113,7 @@ func SetThinking(setting api.ThinkingSetting, command, description string) {
 				return
 			}
 			SetSession(updated)
+			showSessionDiagnostics(updated, false)
 			label, thinking := ResolveModelInfo(context.Background(), c, updated.Config.Agent, updated.Config.Model, updated)
 			SetModelInfo(label, thinking)
 		}()

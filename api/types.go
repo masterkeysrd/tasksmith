@@ -319,11 +319,18 @@ type QuestionResponse struct {
 	Answers    []QuestionAnswer `json:"answers,omitempty"`
 }
 
+type SessionDiagnostic struct {
+	Code    string `json:"code"`
+	Setting string `json:"setting"`
+	Message string `json:"message"`
+}
+
 // Session represents a persistent conversational session managed by the daemon.
 type Session struct {
 	ID                 string              `json:"id"`
 	Title              string              `json:"title"`
 	Config             SessionConfig       `json:"config"`
+	Diagnostics        []SessionDiagnostic `json:"diagnostics,omitempty"`
 	Status             SessionStatus       `json:"status"`
 	Context            ContextState        `json:"context"`
 	PendingPermissions []PermissionRequest `json:"pending_permissions,omitempty"`

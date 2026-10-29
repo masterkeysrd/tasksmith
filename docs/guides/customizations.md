@@ -69,6 +69,8 @@ You are a senior application security engineer conducting rigorous code reviews.
 - Suggest remediations using secure coding best practices.
 ```
 
+TaskSmith checks the agent's temperature and thinking settings against the selected model when a session is created or its agent or model changes. Unsupported settings are omitted and shown as warnings in the chat. Use `/clear` to dismiss them; warnings may appear again when the configuration changes or the session is reopened. If temperature support is unknown, the value is sent with a warning; the provider may reject it. You can correct model capability metadata in the provider manifest and reload the workspace. If a reload makes an explicit session thinking override unsupported, the override is retained and requests fail until you change or reset it. Title generation uses the title-generator agent's settings rather than the session's thinking override. See [Providers](../reference/providers.md).
+
 ### Specifying Inheritance (`extends`)
 - **Extending Built-in Agents (`extends: system:main`)**: Inherits base prompt instructions, core coding workflows, and tool access from TaskSmith's default developer agent while layering your specialized guidelines on top.
 - **Standalone Agents**: Omit `extends` for specialized roles (like code reviewers or documentation writers) where you want a pure, unpolluted prompt focused entirely on that domain.

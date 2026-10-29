@@ -89,7 +89,7 @@ spec:
 
 ## 3. Extended Thinking & Prompt Caching
 
-- **Thinking**: Use `/effort` for model-supported effort levels or `/budget` for supported token budgets. Available values depend on the resolved model profile.
+- **Thinking**: Use `/effort` for model-supported effort levels or `/budget` for supported token budgets. Available values depend on the resolved model profile. When budgeted or adaptive extended thinking is active, TaskSmith omits configured temperature and displays a session warning.
 - **Prompt Caching**: Claude models automatically cache system prompts and conversation history. Declare `cost.cacheRead` and `cost.cacheWrite` to track savings in session metrics.
 
 For the complete manifest schema and capability properties, see the [Providers Overview](../providers.md).

@@ -191,7 +191,7 @@ Never attempt to modify code directly; report your findings with precise line re
 | `extends` | string | Qualified or short name of a base agent to inherit prompts and capabilities from. |
 | `triggers` | array of strings | Phrases or patterns that trigger automatic agent suggestion or routing. |
 | `models` | array of strings | Prioritized list of model identifiers to use for this agent. |
-| `temperature` | float | Sampling temperature (0.0 to 2.0). |
+| `temperature` | float | Sampling temperature (0.0 to 2.0). Sent when supported; omitted with a session warning when unsupported. |
 | `thinking.effort` | string | Model-supported effort level for the agent. |
 | `thinking.type` | string | `effort` when specifying the level through `thinking.default`. |
 | `thinking.default` | string | Default effort level when `thinking.type` is `effort`. |

@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"iter"
+	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -31,14 +33,17 @@ type SessionState struct {
 var session = kites.Create(SessionState{Config: api.SessionConfig{Mode: api.ModeDefault}})
 
 var (
-	sessMu            sync.Mutex
-	activeClient      *client.Client
-	activeOpts        InitSessionOptions
-	activeCtx         context.Context
-	activeCancel      context.CancelFunc
-	streamCancel      context.CancelFunc
-	modeDebounceTimer *time.Timer
-	modeDebounceDelay = 500 * time.Millisecond
+	sessMu               sync.Mutex
+	activeClient         *client.Client
+	activeOpts           InitSessionOptions
+	activeCtx            context.Context
+	activeCancel         context.CancelFunc
+	streamCancel         context.CancelFunc
+	modeDebounceTimer    *time.Timer
+	modeDebounceDelay    = 500 * time.Millisecond
+	diagnosticSession    string
+	diagnosticConfig     api.SessionConfig
+	displayedDiagnostics []api.SessionDiagnostic
 )
 
 func cancelModeDebounceLocked() {
@@ -118,6 +123,7 @@ func InitSession(ctx context.Context, c *client.Client, opts InitSessionOptions)
 		if len(sess.Todos) > 0 {
 			SeedTodos(sess.Todos)
 		}
+		showSessionDiagnostics(sess, true)
 		startSessionStreamWatcher(subCtx, sid)
 	}
 
@@ -208,6 +214,7 @@ func startSessionsWatcher(ctx context.Context) {
 					if curr != nil && curr.ID == p.Session.ID {
 						sess := p.Session
 						SetSession(&sess)
+						showSessionDiagnostics(&sess, false)
 					}
 				}
 			}
@@ -253,6 +260,7 @@ func getOrCreateSession(ctx context.Context) (*api.Session, error) {
 	}
 	SetSession(created)
 	globalConversation.setSessionID(created.ID)
+	showSessionDiagnostics(created, false)
 	startSessionStreamWatcher(ctx, created.ID)
 	return created, nil
 }
@@ -496,6 +504,37 @@ func UseMode() api.PermissionMode {
 		}
 		return s.Config.Mode
 	})
+}
+
+func showSessionDiagnostics(sess *api.Session, force bool) {
+	if sess == nil {
+		return
+	}
+	sessMu.Lock()
+	changed := force || diagnosticSession != sess.ID || diagnosticConfig.Agent != sess.Config.Agent || diagnosticConfig.Model != sess.Config.Model || !reflect.DeepEqual(diagnosticConfig.Thinking, sess.Config.Thinking)
+	previous := displayedDiagnostics
+	if changed {
+		previous = nil
+	}
+	var notices []string
+	seen := slices.Clone(previous)
+	for _, diagnostic := range sess.Diagnostics {
+		if !slices.Contains(seen, diagnostic) {
+			notices = append(notices, diagnostic.Message)
+			seen = append(seen, diagnostic)
+		}
+	}
+	diagnosticSession = sess.ID
+	diagnosticConfig = sess.Config
+	if sess.Config.Thinking != nil {
+		thinking := *sess.Config.Thinking
+		diagnosticConfig.Thinking = &thinking
+	}
+	displayedDiagnostics = slices.Clone(sess.Diagnostics)
+	sessMu.Unlock()
+	for _, notice := range notices {
+		AppendNotice("Warning: " + notice)
+	}
 }
 
 // SetSession updates the session and its configuration. If sess is non-nil,
@@ -869,6 +908,7 @@ func SwitchSession(sessionID string) {
 		if len(loaded.Todos) > 0 {
 			SeedTodos(loaded.Todos)
 		}
+		showSessionDiagnostics(loaded, true)
 		startSessionStreamWatcher(ctx, loaded.ID)
 	}()
 }
@@ -898,10 +938,8 @@ func SetModel(modelID string) {
 				AppendError("Error", err.Error())
 				return
 			}
-			if st.Session.Config.Thinking != nil && updated.Config.Thinking == nil {
-				AppendNotice("Thinking override cleared because it is not supported by the selected model.")
-			}
 			SetSession(updated)
+			showSessionDiagnostics(updated, false)
 			modelLabel, thinking := ResolveModelInfo(ctx, c, defAgent, defModel, updated)
 			SetModelInfo(modelLabel, thinking)
 		}()
@@ -953,6 +991,7 @@ func SetAgent(agentName string) {
 				return
 			}
 			SetSession(updated)
+			showSessionDiagnostics(updated, false)
 			modelLabel, thinking := ResolveModelInfo(ctx, c, defAgent, defModel, updated)
 			SetModelInfo(modelLabel, thinking)
 		}()
@@ -987,6 +1026,9 @@ func ResetSession() {
 	activeClient = nil
 	activeOpts = InitSessionOptions{}
 	activeCtx = nil
+	diagnosticSession = ""
+	diagnosticConfig = api.SessionConfig{}
+	displayedDiagnostics = nil
 	sessMu.Unlock()
 
 	session.Set(func(SessionState) SessionState {
