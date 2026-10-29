@@ -2077,6 +2077,56 @@ func TestDeferredMessageUpdatesBeforeCompaction(t *testing.T) {
 	}
 }
 
+func TestCacheBrokenRequiresReportedMetrics(t *testing.T) {
+	ctx := context.Background()
+	_, reg, perm := newTestToolsRegistry(t)
+	provider := &fakeProvider{stepHandler: func(_ context.Context, _ *llm.Request, turn int) ([]message.AssistantChunk, error) {
+		var metrics *message.TokenMetrics
+		switch turn {
+		case 1:
+			metrics = &message.TokenMetrics{TotalTokens: 200, Tokens: message.TokenDetails{Input: 180, Output: 20, CacheRead: 100}}
+		case 4:
+			metrics = &message.TokenMetrics{TotalTokens: 250, Tokens: message.TokenDetails{Input: 220, Output: 30}}
+		}
+		return []message.AssistantChunk{{Content: []message.Block{&message.TextBlock{Text: "answer"}}, Metrics: metrics, Done: true}}, nil
+	}}
+	h, err := New(Config{ID: "cache-metrics", DB: openTestSQLite(t), Model: newTestModel(t, provider), Tools: reg, Permissions: perm, Queue: &fakeQueue{}, Bash: &fakeBashRunner{}, Spiller: newTestSpiller(t), Logger: log.Default()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for turn := 1; turn <= 4; turn++ {
+		var events []CacheBroken
+		for event, err := range h.Stream(ctx, Input{Message: message.NewUserText("request")}) {
+			if err != nil {
+				t.Fatal(err)
+			}
+			if event.Type == EventCacheBroken {
+				if event.CacheBroken == nil {
+					t.Fatal("cache broken event has no details")
+				}
+				events = append(events, *event.CacheBroken)
+			}
+		}
+		if turn < 4 && len(events) != 0 {
+			t.Fatalf("turn %d: unexpected cache broken events: %+v", turn, events)
+		}
+		if turn == 4 && (len(events) != 1 || events[0] != (CacheBroken{PrevCached: 100, CurrCached: 0, InputTokens: 220})) {
+			t.Fatalf("turn %d: expected reported cache drop, got %+v", turn, events)
+		}
+		state, err := h.LoadState(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		wantCached := 100
+		if turn == 4 {
+			wantCached = 0
+		}
+		if state.Context.CachedTokens != wantCached {
+			t.Fatalf("turn %d: cached tokens = %d, want %d", turn, state.Context.CachedTokens, wantCached)
+		}
+	}
+}
+
 func TestIncomingMessageUpdatesContextBeforeRouting(t *testing.T) {
 	ctx := context.Background()
 	_, reg, perm := newTestToolsRegistry(t)

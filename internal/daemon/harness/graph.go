@@ -352,19 +352,16 @@ func (n *AgentNode) Execute(ctx context.Context, state State) (graph.Command[Sta
 	resp.ID = id.String()
 	emit(ctx, NodeMessageEvent{Message: resp})
 
-	prevCached := state.Context.CachedTokens
-	var currCached int
-	var inputTokens int
 	if resp.Metrics != nil {
-		currCached = resp.Metrics.Tokens.CacheRead
-		inputTokens = resp.Metrics.Tokens.Input
-	}
-	if prevCached > 0 && currCached < prevCached {
-		emit(ctx, CacheBroken{
-			PrevCached:  prevCached,
-			CurrCached:  currCached,
-			InputTokens: inputTokens,
-		})
+		prevCached := state.Context.CachedTokens
+		currCached := resp.Metrics.Tokens.CacheRead
+		if prevCached > 0 && currCached < prevCached {
+			emit(ctx, CacheBroken{
+				PrevCached:  prevCached,
+				CurrCached:  currCached,
+				InputTokens: resp.Metrics.Tokens.Input,
+			})
+		}
 	}
 
 	return graph.Update[State](func(s State) State {
