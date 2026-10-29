@@ -386,7 +386,7 @@ func TestCompactionRequestMetadataIsolation(t *testing.T) {
 	}
 
 	values := make([]any, 0, 11)
-	for i := 0; i < 11; i++ {
+	for i := range 11 {
 		values = append(values, string(rune('A'+i)))
 	}
 	restored := message.NewUserTextMeta("summary", map[string]any{MetaSystemKind: SystemKindCompaction, MetaCompactionRequests: values})

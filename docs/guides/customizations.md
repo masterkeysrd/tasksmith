@@ -283,35 +283,11 @@ Focus strictly on production stability, backward compatibility, and customer imp
 
 ---
 
-## 5. Using Built-in Creator Agents
+## 5. Using the Built-in Customizations Skill
 
-TaskSmith includes interactive wizard agents that guide you through creating agents, skills, and tools directly within the CLI.
+Ask the active agent to create or update a TaskSmith resource. It can load `tasksmith-customizations` and consult its focused references for agents, skills, rules, tools, MCP servers, providers, and workspace context without switching personas. Built-in skill files are materialized under `$XDG_DATA_HOME/tasksmith/builtin/` (normally `~/.local/share/tasksmith/builtin/`) and can be read by the agent. If that directory cannot be written, TaskSmith falls back to embedded resources; supporting files may then be unavailable.
 
-### Creating an Agent with `agent-creator`
-
-1. Switch to the creator agent in the CLI:
-   ```text
-   /agent agent-creator
-   ```
-2. The agent explores your workspace root (`WORKSPACE.md`), inspects available skills, tools, and providers, and asks what kind of agent you want to build.
-3. It gathers requirements via interactive questions:
-   - **Identity**: Agent name, display name, and purpose.
-   - **Inheritance**: Whether to extend `system:main` or create a standalone agent.
-   - **Model & Reasoning**: Default model and reasoning effort.
-   - **Allowed Tools**: Selects workspace tools to include or exclude.
-   - **Instructions & Persona**: Gathers domain guidelines and checklist steps.
-4. The agent writes the completed manifest to `.agents/agents/<name>.agent.md` and restores your default developer agent.
-
-### Creating a Skill with `skill-creator`
-
-1. Switch to the skill creator agent:
-   ```text
-   /agent skill-creator
-   ```
-2. The agent analyzes existing code patterns and directory conventions in your project.
-3. It gathers requirements for the skill name, trigger scenarios (`useWhen`), and coding rules.
-4. It scaffolds `.agents/skills/<name>/SKILL.md` along with any necessary helper scripts in `scripts/`.
-5. Once written, control automatically returns to your primary agent.
+Rule manifests can be authored using the skill, but automatic rule activation is not yet integrated into TaskSmith.
 
 ---
 

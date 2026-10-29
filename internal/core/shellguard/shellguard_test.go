@@ -1368,6 +1368,14 @@ func TestGuardReadDirsAndWriteDirs(t *testing.T) {
 		t.Errorf("expected SafetyUnsafe for deleting in ReadDirs, got %s (path=%s)", s, p)
 	}
 
+	overlap := filepath.Join(wsDir, "builtin")
+	overlapGuard := New(Config{WorkspaceDir: wsDir, ReadDirs: []string{overlap}})
+	for _, action := range []ActionType{ActionWrite, ActionDelete} {
+		if _, safety := overlapGuard.EvaluatePath(filepath.Join(overlap, "file"), action); safety != SafetyUnsafe {
+			t.Errorf("read-only workspace overlap: action %s got %s", action, safety)
+		}
+	}
+
 	// WriteDirs: reads, writes, and deletes are SafetySafe
 	writeTarget := filepath.Join(writeDir, "temp.txt")
 	if p, s := g.EvaluatePath(writeTarget, ActionRead); s != SafetySafe {

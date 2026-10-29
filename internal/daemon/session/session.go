@@ -688,7 +688,10 @@ func (s *Session) buildToolsForAgent(agentName string) (tools.Container, error) 
 
 	var readDirs []string
 	if outputsDir := s.outputsDir(); outputsDir != "" {
-		readDirs = []string{outputsDir}
+		readDirs = append(readDirs, outputsDir)
+	}
+	if builtinDir, err := xdg.BuiltinDir(); err == nil && builtinDir != "" {
+		readDirs = append(readDirs, builtinDir)
 	}
 
 	guardInst := shellguard.New(shellguard.Config{

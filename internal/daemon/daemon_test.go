@@ -2171,7 +2171,11 @@ Deploying to environment {{.target}}.
 	if err != nil {
 		t.Fatalf("ListSkills: %v", err)
 	}
-	if len(skills) != 1 || skills[0].Name != "deploy" {
+	foundSkills := map[string]bool{}
+	for _, skill := range skills {
+		foundSkills[skill.Name] = true
+	}
+	if !foundSkills["deploy"] || !foundSkills["tasksmith-customizations"] {
 		t.Fatalf("unexpected ListSkills: %+v", skills)
 	}
 

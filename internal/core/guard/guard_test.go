@@ -1,6 +1,37 @@
 package guard
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
+
+func TestReadDirSymlinkBoundaries(t *testing.T) {
+	workspace := t.TempDir()
+	readDir := t.TempDir()
+	outside := t.TempDir()
+	secret := filepath.Join(outside, "secret")
+	if err := os.WriteFile(secret, []byte("secret"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(secret, filepath.Join(readDir, "escape")); err != nil {
+		t.Skip(err)
+	}
+	if err := os.Symlink(readDir, filepath.Join(workspace, "alias")); err != nil {
+		t.Skip(err)
+	}
+	file := filepath.Join(readDir, "resource")
+	if err := os.WriteFile(file, []byte("resource"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	cfg := PathConfig{WorkspaceDir: workspace, ReadDirs: []string{readDir}}
+	if _, safety := EvaluatePathWithConfig(filepath.Join(readDir, "escape"), ActionRead, cfg); safety != SafetyUnsafe {
+		t.Fatalf("symlink escape classified %s", safety)
+	}
+	if _, safety := EvaluatePathWithConfig(filepath.Join(workspace, "alias", "resource"), ActionWrite, cfg); safety != SafetyUnsafe {
+		t.Fatalf("symlink write classified %s", safety)
+	}
+}
 
 func TestActionTypeAndSafetyLevel(t *testing.T) {
 	actions := []struct {

@@ -712,7 +712,7 @@ spec:
 	}
 
 	// Verify Queries
-	if _, ok := ws.GetSkill("go-style"); !ok || len(ws.Skills()) != 1 {
+	if _, ok := ws.GetSkill("go-style"); !ok {
 		t.Errorf("expected go-style skill to be loaded")
 	}
 	if _, ok := ws.GetCommand("review"); !ok || len(ws.Commands()) != 1 {

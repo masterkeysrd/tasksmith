@@ -18,6 +18,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	"github.com/masterkeysrd/tasksmith/internal/core/shellguard"
+	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/permissions"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/sandbox"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/scope"
@@ -1235,6 +1236,56 @@ func TestTodosTool(t *testing.T) {
 	}
 	if _, err := container.Prepare(ctx, invalidStatusCall); err == nil {
 		t.Fatal("expected Prepare to fail on invalid status")
+	}
+}
+
+func TestBuiltinCustomizationSkillAndReference(t *testing.T) {
+	ctx := context.Background()
+	dir, _, stdLib, sb, ws := setupBuiltinEnv(t, false)
+	builtinDir, err := xdg.BuiltinDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := ws.ResolveAgent("main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	guard := shellguard.New(shellguard.Config{WorkspaceDir: dir, ReadDirs: []string{builtinDir}})
+	builtins, err := builtin.New(builtin.Config{Std: stdLib, Sandbox: sb, Guard: guard, Workspace: ws, Skills: resolved.Skills, RenderSkill: func(name string, args map[string]string) (string, error) { return ws.RenderSkill(name, args, nil) }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	container, err := tools.NewContainer(tools.Config{Tools: builtins, Sandbox: sb, Workspace: ws, Logger: log.Default()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	load := &message.ToolCall{ID: "load", Name: builtin.ToolLoadSkill, Args: map[string]any{"skill": "tasksmith-customizations"}}
+	result, err := container.Execute(ctx, load)
+	if err != nil || result.IsError || !strings.Contains(result.Content.Text(), "references/rules.md") || !strings.Contains(result.Content.Text(), "tasksmith-customizations") {
+		t.Fatalf("load skill: %v %+v", err, result)
+	}
+	skill, ok := ws.GetSkill("tasksmith-customizations")
+	if !ok {
+		t.Fatal("skill not found")
+	}
+	ref := filepath.Join(skill.Directory, "references", "rules.md")
+	view := &message.ToolCall{ID: "view", Name: builtin.ToolView, Args: map[string]any{"path": ref}}
+	plan, err := container.Prepare(ctx, view)
+	if err != nil || plan.Safety != tools.SafetySafe {
+		t.Fatalf("view plan: %+v %v", plan, err)
+	}
+	result, err = container.Execute(ctx, view)
+	if err != nil || result.IsError {
+		t.Fatalf("view reference: %v %+v", err, result)
+	}
+	output, ok := result.StructuredContent.(api.ViewOutput)
+	if !ok || !strings.Contains(output.Content, "# Rules") {
+		t.Fatalf("unexpected view output: %+v", result.StructuredContent)
+	}
+	write := &message.ToolCall{ID: "write", Name: builtin.ToolWrite, Args: map[string]any{"path": ref, "content": "modified"}}
+	plan, err = container.Prepare(ctx, write)
+	if err != nil || plan.Safety != tools.SafetyUnsafe {
+		t.Fatalf("write plan: %+v %v", plan, err)
 	}
 }
 

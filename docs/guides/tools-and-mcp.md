@@ -230,20 +230,9 @@ Use `policies.tools` to control which tools from the MCP server are exposed to a
 
 ---
 
-## Scaffolding Tools with `tool-creator`
+## Scaffolding Tools with the Customizations Skill
 
-You can create custom tools and MCP server definitions interactively inside the CLI using the built-in `tool-creator` agent:
-
-1. Switch to the creator agent:
-   ```text
-   /agent tool-creator
-   ```
-2. The agent prompts you for:
-   - Tool name and description.
-   - Command line executable and arguments.
-   - Input properties (names, types, descriptions, required fields).
-   - Safety annotations (`isReadOnly`, `isDangerous`, `userHint`).
-3. The agent formats and writes the manifest to `.agents/tools/<name>.tool.md` (or `.agents/mcps/<name>.mcp.yaml`) and restores your active agent.
+Ask the active agent to create a custom tool or MCP server. It can load `tasksmith-customizations`, inspect the tools and MCP reference, and write the appropriate manifest without switching agents. Describe the command, input schema, and intended side effects so safety annotations are accurate.
 
 ---
 

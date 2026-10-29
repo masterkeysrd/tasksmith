@@ -845,7 +845,7 @@ func (g *Guard) IsInReadDirs(targetPath string) bool {
 func matchRule(rule CommandRule, args []string) ActionType {
 	subcmd := findSubcommand(rule, args)
 	for _, argRule := range rule.ArgRules {
-		if matchesArgRule(rule, subcmd, args, argRule) {
+		if matchesArgRule(subcmd, args, argRule) {
 			return argRule.Category
 		}
 	}
@@ -853,7 +853,7 @@ func matchRule(rule CommandRule, args []string) ActionType {
 }
 
 // matchesArgRule checks if args satisfy an ArgRule's conditions.
-func matchesArgRule(rule CommandRule, subcmd string, args []string, argRule ArgRule) bool {
+func matchesArgRule(subcmd string, args []string, argRule ArgRule) bool {
 	if len(argRule.Subcommands) > 0 {
 		if subcmd == "" || !slices.Contains(argRule.Subcommands, subcmd) {
 			return false

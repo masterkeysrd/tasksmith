@@ -191,6 +191,24 @@ func EvaluatePathWithConfig(targetPath string, action ActionType, cfg PathConfig
 	if IsSensitivePath(resolved, cfg.HomeDir) {
 		return resolved, SafetyUnsafe
 	}
+	for _, rd := range cfg.ReadDirs {
+		if fsutils.IsInsideDir(resolved, rd) {
+			if action == ActionRead {
+				canonical, err := filepath.EvalSymlinks(resolved)
+				base, baseErr := filepath.EvalSymlinks(rd)
+				if err == nil && baseErr == nil && (!fsutils.IsInsideDir(canonical, base) || IsSensitivePath(canonical, cfg.HomeDir)) {
+					return resolved, SafetyUnsafe
+				}
+				return resolved, SafetySafe
+			}
+			return resolved, SafetyUnsafe
+		}
+		if canonical, err := filepath.EvalSymlinks(resolved); err == nil {
+			if base, err := filepath.EvalSymlinks(rd); err == nil && fsutils.IsInsideDir(canonical, base) && action != ActionRead {
+				return resolved, SafetyUnsafe
+			}
+		}
+	}
 	if cfg.WorkspaceDir != "" && fsutils.IsInsideDir(resolved, cfg.WorkspaceDir) {
 		if IsProtectedPath(resolved, cfg.WorkspaceDir, cfg.ProtectedDirs...) && action != ActionRead {
 			return resolved, SafetyUnsafe
@@ -200,14 +218,6 @@ func EvaluatePathWithConfig(targetPath string, action ActionType, cfg PathConfig
 	for _, wd := range cfg.WriteDirs {
 		if fsutils.IsInsideDir(resolved, wd) {
 			if action == ActionRead || action == ActionWrite || action == ActionDelete {
-				return resolved, SafetySafe
-			}
-			return resolved, SafetyUnsafe
-		}
-	}
-	for _, rd := range cfg.ReadDirs {
-		if fsutils.IsInsideDir(resolved, rd) {
-			if action == ActionRead {
 				return resolved, SafetySafe
 			}
 			return resolved, SafetyUnsafe

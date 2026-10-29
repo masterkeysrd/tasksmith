@@ -12,7 +12,7 @@ Resources can be defined across four priority tiers:
 
 | Tier | Priority | Namespace | Location |
 | :--- | :--- | :--- | :--- |
-| **System** | 1 (Base) | `system` | Embedded in the TaskSmith binary. |
+| **System** | 1 (Base) | `system` | Embedded in the TaskSmith binary; workspace built-ins are mirrored under `$XDG_DATA_HOME/tasksmith/builtin/`. |
 | **User** | 2 | `user` | `~/.config/tasksmith/` (`$XDG_CONFIG_HOME`). |
 | **Workspace** | 3 | `workspace` | `<workspace-root>/WORKSPACE.md` and `<workspace-root>/.agents/`. |
 | **Local** | 4 (Highest)| `local` | `<subproject>/AGENTS.md` and `<subproject>/.agents/`. |

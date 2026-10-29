@@ -112,7 +112,7 @@ Type `/` in the composer to open the interactive autocomplete menu for slash com
 | :--- | :--- | :--- |
 | `/help` | `/help` | List all available slash commands and descriptions. |
 | `/model` | `/model [model_id]` | Open an interactive model picker or switch directly to a registered model. |
-| `/agent` | `/agent [agent_name]` | Switch the active agent persona (e.g., `main`, `agent-creator`, `skill-creator`). |
+| `/agent` | `/agent [agent_name]` | Switch the active agent persona (e.g., `main` or a custom agent). |
 | `/effort` | `/effort [level\|default]` | Select a model-supported thinking effort; the picker and autocomplete show available descriptions. |
 | `/budget` | `/budget [tokens\|default]` | Show or set a model-supported thinking token budget. |
 | `/thinking` | `/thinking [on\|off\|default]` | Show or change a model-supported thinking toggle. |

@@ -208,6 +208,10 @@ func SubDataDir(subdirs ...string) (string, error) {
 	return Subdir(VarTypeData, subdirs...)
 }
 
+func BuiltinDir(subdirs ...string) (string, error) {
+	return SubDataDir(append([]string{"builtin"}, subdirs...)...)
+}
+
 // SubStateDir returns a subdirectory within the application's state directory.
 func SubStateDir(subdirs ...string) (string, error) {
 	return Subdir(VarTypeState, subdirs...)

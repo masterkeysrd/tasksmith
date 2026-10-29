@@ -59,7 +59,8 @@ Rather than relying on naive regex pattern matching, TaskSmith parses every shel
 - **Destructive Command Classification**: High-risk system patterns (such as root deletions, raw device writes, and unconfined network downloads piped into shells) are intercepted and rejected before execution.
 
 ### 3. Path Confinement & Boundary Guards (`guard`)
-File manipulation tools (`view`, `edit`, `write`, `glob`) are strictly bound to the workspace:
+File manipulation tools (`view`, `edit`, `write`, `glob`) use workspace boundaries and explicit read-only directories:
+- **Built-in resources**: Reads in `$XDG_DATA_HOME/tasksmith/builtin/` are classified safe; writes and deletes are unsafe, including when the directory overlaps the workspace. Permission modes and explicit rules still apply.
 - **Path Canonicalization**: Evaluates relative paths and resolves symlinks to ensure targets remain within the workspace root directory.
 - **Boundary Validation**: Traversal attempts (`../../etc/passwd`) or symlinks resolving to external files are immediately blocked at the guard layer before reaching the sandbox filesystem capability.
 

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log/slog"
 	"maps"
 	"os"
 	"path/filepath"
@@ -23,7 +24,7 @@ import (
 	"github.com/masterkeysrd/warp"
 )
 
-//go:embed all:builtin/*.md
+//go:embed all:builtin
 var builtinFS embed.FS
 
 //go:embed all:preset/*.yaml
@@ -177,10 +178,15 @@ func (w *workspace) Reload(ctx context.Context) error {
 
 	// 1. Build system-tier providers (embedded builtin agents + WithBuiltinFS)
 	var sysProviders []warp.ResourceProvider
-	if subBuiltin, err := fs.Sub(builtinFS, "builtin"); err == nil {
-		sysProviders = append(sysProviders, warp.NewFSResourceProvider(subBuiltin, ""))
+	if builtinDir, err := EnsureBuiltinDir(); err == nil {
+		sysProviders = append(sysProviders, warp.NewFSResourceProvider(os.DirFS(builtinDir), builtinDir))
 	} else {
-		sysProviders = append(sysProviders, warp.NewFSResourceProvider(builtinFS, ""))
+		slog.Warn("workspace: unable to materialize built-in resources; using embedded resources", "error", err)
+		subBuiltin, subErr := fs.Sub(builtinFS, "builtin")
+		if subErr != nil {
+			return fmt.Errorf("workspace: load embedded resources: %w", subErr)
+		}
+		sysProviders = append(sysProviders, warp.NewFSResourceProvider(subBuiltin, ""))
 	}
 	for _, fsys := range w.opts.builtinFS {
 		sysProviders = append(sysProviders, warp.NewFSResourceProvider(fsys, ""))
