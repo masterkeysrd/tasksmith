@@ -110,7 +110,7 @@ func findWarpPreset(name string) *warp.ModelProvider {
 		return nil
 	}
 	for _, p := range loadWarpPresets() {
-		if p.Metadata.Name == name || p.Spec.Type == name {
+		if p.Metadata.Name == name {
 			return p
 		}
 	}
@@ -585,7 +585,7 @@ func (w *workspace) Providers() []Provider {
 	return out
 }
 
-// GetProvider resolves an effective model provider by name or type.
+// GetProvider resolves an effective model provider by name.
 func (w *workspace) GetProvider(name string) (*Provider, bool) {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
@@ -593,19 +593,6 @@ func (w *workspace) GetProvider(name string) (*Provider, bool) {
 		if mp, ok := res.(*warp.ModelProvider); ok {
 			p := convertProvider(mp, w.registry)
 			return &p, true
-		}
-	}
-	// Also allow lookup by provider Spec.Type
-	resolver := w.resolverLocked()
-	if resolver != nil {
-		for _, r := range resolver.ListResources(warp.QueryOptions{
-			Kinds:     []warp.Kind{warp.KindModelProvider},
-			Effective: true,
-		}) {
-			if mp, ok := r.(*warp.ModelProvider); ok && mp.Spec.Type == name {
-				p := convertProvider(mp, w.registry)
-				return &p, true
-			}
 		}
 	}
 	return nil, false
@@ -1042,16 +1029,16 @@ func (w *workspace) ResolveModels(role ModelRole, explicit ...string) []string {
 func (w *workspace) ResolveModel(role ModelRole, explicit ...string) (*ResolvedModel, bool) {
 	w.mu.RLock()
 	resolver := w.resolverLocked()
-	var resolved []warp.ResolvedModel
+	var rm *warp.ResolvedModel
+	var ok bool
 	if resolver != nil {
-		resolved = resolver.ResolveModels(warp.ModelRole(role), explicit...)
+		rm, ok = resolver.ResolveModel(warp.ModelRole(role), explicit...)
 	}
 	w.mu.RUnlock()
 
-	if len(resolved) == 0 {
+	if !ok || rm == nil {
 		return nil, false
 	}
-	rm := resolved[0]
 	var pm *ProviderModel
 	if rm.Model != nil {
 		converted := convertProviderModel(*rm.Model)
@@ -1059,13 +1046,7 @@ func (w *workspace) ResolveModel(role ModelRole, explicit ...string) (*ResolvedM
 	}
 	var provName string
 	if rm.Provider != nil {
-		if rm.Provider.Metadata.Name != "" {
-			provName = rm.Provider.Metadata.Name
-		} else {
-			provName = rm.Provider.Spec.Type
-		}
-	} else if before, _, ok := strings.Cut(rm.QualifiedID, "/"); ok {
-		provName = before
+		provName = rm.Provider.Metadata.Name
 	}
 	return &ResolvedModel{
 		ProviderName: provName,

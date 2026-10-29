@@ -102,7 +102,7 @@ func estimateMessageTokens(msg message.Message) int {
 	if toolMsg, ok := msg.(*message.Tool); ok {
 		total += estimateTokens(toolMsg.Name)
 		if toolMsg.StructuredContent != nil {
-			if data, err := json.Marshal(toolMsg.StructuredContent); err == nil {
+			if data, err := toolMsg.CanonicalStructuredContent(); err == nil {
 				total += estimateTokens(string(data))
 			}
 		}

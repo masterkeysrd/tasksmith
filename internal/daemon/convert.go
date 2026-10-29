@@ -2,7 +2,6 @@ package daemon
 
 import (
 	"cmp"
-	"encoding/json"
 	"fmt"
 	"maps"
 	"slices"
@@ -171,7 +170,7 @@ func toAPIMessage(msg message.Message) (*api.Message, error) {
 		out.Name = tm.Name
 		out.IsError = tm.IsError
 		if tm.StructuredContent != nil {
-			data, err := json.Marshal(tm.StructuredContent)
+			data, err := tm.CanonicalStructuredContent()
 			if err != nil {
 				return nil, fmt.Errorf("daemon: marshal structured content for message %q: %w", msg.GetID(), err)
 			}
