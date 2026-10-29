@@ -46,9 +46,8 @@ flowchart TD
 ## 2. Core Architectural Components
 
 ### 1. Decoupled Configuration Boundary
-The gateway is completely decoupled from on-disk manifest formats. The workspace layer parses declarative configuration files and translates them into a normalized gateway configuration containing:
+The gateway is completely decoupled from on-disk manifest formats and model name resolution. The workspace layer resolves model references and role defaults into an explicit `(provider, modelID)` pair and translates provider manifests into a normalized gateway configuration containing:
 - Registered providers (endpoints, headers, model catalogs, and capability flags).
-- Role-based default model mappings.
 - An isolated, in-memory environment map containing workspace secrets.
 
 ### 2. Content-Addressable Gateway Pool
@@ -62,8 +61,8 @@ The gateway resolves authentication credentials without mutating process state o
 - **Layered Resolution**: Credentials resolve from the workspace's injected environment map, falling back to process environment variables (`os.Getenv`), or reading from an explicit file path (`auth.file`).
 - **Lazy Validation**: Providers missing required credentials do not fail gateway initialization at startup. Instead, the provider is flagged with a warning in the CLI header, and an authentication error is only raised when a turn or agent explicitly resolves a model from that provider.
 
-### 4. Triple-Role Model Router & Decision Adapter
-The gateway routes requests across three cognitive roles following a strict fallback chain (**Explicit Override $\to$ Workspace Role Default $\to$ Provider Role Default $\to$ Catalog Capability Match**):
+### 4. Triple-Role Model Instantiation & Decision Adapter
+Given a resolved `(provider, modelID)` from the workspace layer, the gateway instantiates and adapts models across three cognitive roles:
 
 - **System 1 — Decision (`decision`)**: Evaluates calibrated probabilistic questions (classification, routing, confidence checks).
   - *Native Path*: If the target provider and model support native decision evaluation (e.g., Ollama `nimble-v3`, TypeSafe `jev-latest`, OpenAI decision models), the gateway routes directly to the provider's native decision API.
