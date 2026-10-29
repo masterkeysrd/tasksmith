@@ -27,9 +27,10 @@ var (
 )
 
 const (
-	MetaSystemKind        = "tasksmith.system.kind"
-	MetaCompactionTrigger = "tasksmith.compaction.trigger"
-	MetaCompactionFocus   = "tasksmith.compaction.focus"
+	MetaSystemKind         = "tasksmith.system.kind"
+	MetaCompactionTrigger  = "tasksmith.compaction.trigger"
+	MetaCompactionFocus    = "tasksmith.compaction.focus"
+	MetaCompactionRequests = "tasksmith.compaction.requests"
 )
 
 const (

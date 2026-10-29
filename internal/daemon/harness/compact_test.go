@@ -3,6 +3,7 @@ package harness
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 
@@ -290,7 +291,8 @@ func TestShouldAutoCompact(t *testing.T) {
 func TestExtractUserRequests(t *testing.T) {
 	// History with earlier compaction message and several turns
 	earlierCompaction := message.NewUserTextMeta("<context_summary>\n# User Requests (Chronological)\n1. First task\n2. Second task\n\n# Active Todos\n- (none)\n</context_summary>", map[string]any{
-		MetaSystemKind: SystemKindCompaction,
+		MetaSystemKind:         SystemKindCompaction,
+		MetaCompactionRequests: []string{"First task", "Second task"},
 	})
 	u3 := message.NewUserText("Third task")
 	a3 := message.NewAssistantText("Working on it")
@@ -324,6 +326,82 @@ func TestExtractUserRequests(t *testing.T) {
 	// Last one should be req-O
 	if !strings.HasSuffix(truncated[9], "-O") {
 		t.Errorf("truncated[9] = %q, want suffix -O", truncated[9])
+	}
+}
+
+func TestCompactionRequestsSurviveCheckpoint(t *testing.T) {
+	ctx := context.Background()
+	_, registry, permissions := newTestToolsRegistry(t)
+	cfg := Config{
+		ID: "compaction-requests", DB: openTestSQLite(t), Model: newTestModel(t, nil),
+		Tools: registry, Permissions: permissions, Queue: &fakeQueue{}, Bash: &fakeBashRunner{},
+		Spiller: newTestSpiller(t), Logger: log.Default(),
+	}
+	h, err := New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := func(input Input) {
+		t.Helper()
+		for _, err := range h.Stream(ctx, input) {
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	first := "Implement these changes:\n1. First item\n2. Second item\n# Details\nKeep all lines."
+	second := "Another request\nwith multiple lines"
+	run(Input{Message: message.NewUserText(first)})
+	run(Input{Compact: &CompactInput{}})
+
+	h, err = New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := h.LoadState(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := extractUserRequests(state.Messages); !slices.Equal(got, []string{first}) {
+		t.Fatalf("requests after checkpoint = %q, want %q", got, []string{first})
+	}
+	run(Input{Message: message.NewUserText(second)})
+	run(Input{Compact: &CompactInput{}})
+	run(Input{Compact: &CompactInput{}})
+	state, err = h.LoadState(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := extractUserRequests(state.Messages); !slices.Equal(got, []string{first, second}) {
+		t.Fatalf("requests after repeated compactions = %q, want %q", got, []string{first, second})
+	}
+}
+
+func TestCompactionRequestMetadataIsolation(t *testing.T) {
+	requests := []string{"first\n1. nested", "second\n# heading"}
+	summary := buildContextSummaryMessage(requests, nil, "summary", "manual", "", false)
+	requests[0] = "modified"
+	if got := extractUserRequests(message.MessageList{summary}); !slices.Equal(got, []string{"first\n1. nested", "second\n# heading"}) {
+		t.Fatalf("metadata requests = %q", got)
+	}
+
+	values := make([]any, 0, 11)
+	for i := 0; i < 11; i++ {
+		values = append(values, string(rune('A'+i)))
+	}
+	restored := message.NewUserTextMeta("summary", map[string]any{MetaSystemKind: SystemKindCompaction, MetaCompactionRequests: values})
+	got := extractUserRequests(message.MessageList{restored, message.NewUserText("latest")})
+	want := []string{"C", "D", "E", "F", "G", "H", "I", "J", "K", "latest"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("truncated requests = %q, want %q", got, want)
+	}
+}
+
+func TestExtractUserRequestsIgnoresLegacySummaryText(t *testing.T) {
+	old := message.NewUserTextMeta("<context_summary>\n# User Requests (Chronological)\n1. Old request\n</context_summary>", map[string]any{MetaSystemKind: SystemKindCompaction})
+	got := extractUserRequests(message.MessageList{old, message.NewUserText("New request")})
+	if !slices.Equal(got, []string{"New request"}) {
+		t.Fatalf("requests = %q, want only the new request", got)
 	}
 }
 

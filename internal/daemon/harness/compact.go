@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
-	"regexp"
 	"slices"
 	"strings"
 	"text/template"
@@ -259,33 +258,20 @@ func computeContextState(static StaticContext, state State, limits workspace.Mod
 	}
 }
 
-var reUserRequestLine = regexp.MustCompile(`^\s*\d+\.\s*(.+)$`)
-
 // extractUserRequests deterministically extracts chronological user prompts across turns,
 // preserving any earlier # User Requests from preceding compaction messages.
 func extractUserRequests(messages message.MessageList) []string {
 	var userRequests []string
 
-	// If an earlier message is a compaction summary, extract previously recorded user requests
 	for _, msg := range messages {
 		if SystemKindOf(msg) == SystemKindCompaction {
-			text := msg.GetContent().Text()
-			_, after, ok := strings.Cut(text, "# User Requests (Chronological)")
-			if ok {
-				sub := after
-				if nextHdr := strings.Index(sub, "\n# "); nextHdr >= 0 {
-					sub = sub[:nextHdr]
-				} else if endTag := strings.Index(sub, "</context_summary>"); endTag >= 0 {
-					sub = sub[:endTag]
-				}
-				lines := strings.SplitSeq(sub, "\n")
-				for line := range lines {
-					line = strings.TrimSpace(line)
-					if m := reUserRequestLine.FindStringSubmatch(line); len(m) > 1 {
-						req := strings.TrimSpace(m[1])
-						if req != "" && req != "(none)" {
-							userRequests = append(userRequests, req)
-						}
+			switch requests := msg.GetMetadata()[MetaCompactionRequests].(type) {
+			case []string:
+				userRequests = append(userRequests, requests...)
+			case []any:
+				for _, value := range requests {
+					if request, ok := value.(string); ok {
+						userRequests = append(userRequests, request)
 					}
 				}
 			}
@@ -387,8 +373,9 @@ func buildContextSummaryMessage(userRequests []string, todos []tools.TodoItem, s
 	}
 
 	meta := map[string]any{
-		MetaSystemKind:        SystemKindCompaction,
-		MetaCompactionTrigger: trigger,
+		MetaSystemKind:         SystemKindCompaction,
+		MetaCompactionTrigger:  trigger,
+		MetaCompactionRequests: slices.Clone(userRequests),
 	}
 	if strings.TrimSpace(focus) != "" {
 		meta[MetaCompactionFocus] = strings.TrimSpace(focus)
