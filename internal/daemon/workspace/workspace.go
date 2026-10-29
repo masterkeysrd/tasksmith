@@ -1015,62 +1015,64 @@ func (w *workspace) Policies() *Policies {
 // the given role following the hierarchy:
 //  1. Explicit model overrides.
 //  2. Workspace role default (spec.defaultModels.<role> or spec.defaultModel for completion).
-//  3. Default Provider role default (spec.defaultModels.<role> or spec.defaultModel for completion).
+//  3. Provider role default (spec.defaultModels.<role> or spec.defaultModel for completion).
 //  4. Capability match across registered providers.
 func (w *workspace) ResolveModels(role ModelRole, explicit ...string) []string {
 	w.mu.RLock()
 	resolver := w.resolverLocked()
-	var resolved []string
+	var resolved []warp.ResolvedModel
 	if resolver != nil {
 		resolved = resolver.ResolveModels(warp.ModelRole(role), explicit...)
 	}
 	w.mu.RUnlock()
 
-	if len(resolved) > 0 {
-		return resolved
-	}
-
-	// Fallback: inspect effective providers for role defaults or capability match
-	providers := w.Providers()
-	if len(providers) == 0 {
+	if len(resolved) == 0 {
 		return nil
 	}
-
-	for _, p := range providers {
-		if m, ok := p.DefaultModels[role]; ok && m != "" {
-			if strings.Contains(m, "/") {
-				return []string{m}
-			}
-			return []string{p.Name + "/" + m}
-		}
-		if role == RoleCompletion && p.DefaultModel != "" {
-			if strings.Contains(p.DefaultModel, "/") {
-				return []string{p.DefaultModel}
-			}
-			return []string{p.Name + "/" + p.DefaultModel}
-		}
+	out := make([]string, len(resolved))
+	for i, rm := range resolved {
+		out[i] = rm.QualifiedID
 	}
+	return out
+}
 
-	for _, p := range providers {
-		for _, m := range p.Models {
-			switch role {
-			case RoleCompletion:
-				if m.Capabilities.SupportsCompletion() {
-					return []string{p.Name + "/" + m.ID}
-				}
-			case RoleDecision:
-				if m.Capabilities.SupportsDecision() {
-					return []string{p.Name + "/" + m.ID}
-				}
-			case RoleEmbedding:
-				if m.Capabilities.SupportsEmbedding() {
-					return []string{p.Name + "/" + m.ID}
-				}
-			}
-		}
+// ResolveModel resolves the highest-priority model reference for the given role
+// and explicit overrides, returning its provider name, canonical qualified ID,
+// and catalog metadata when available.
+func (w *workspace) ResolveModel(role ModelRole, explicit ...string) (*ResolvedModel, bool) {
+	w.mu.RLock()
+	resolver := w.resolverLocked()
+	var resolved []warp.ResolvedModel
+	if resolver != nil {
+		resolved = resolver.ResolveModels(warp.ModelRole(role), explicit...)
 	}
+	w.mu.RUnlock()
 
-	return nil
+	if len(resolved) == 0 {
+		return nil, false
+	}
+	rm := resolved[0]
+	var pm *ProviderModel
+	if rm.Model != nil {
+		converted := convertProviderModel(*rm.Model)
+		pm = &converted
+	}
+	var provName string
+	if rm.Provider != nil {
+		if rm.Provider.Metadata.Name != "" {
+			provName = rm.Provider.Metadata.Name
+		} else {
+			provName = rm.Provider.Spec.Type
+		}
+	} else if before, _, ok := strings.Cut(rm.QualifiedID, "/"); ok {
+		provName = before
+	}
+	return &ResolvedModel{
+		ProviderName: provName,
+		ModelID:      rm.ModelID,
+		QualifiedID:  rm.QualifiedID,
+		Model:        pm,
+	}, true
 }
 
 // ─── Template Rendering Helpers ─────────────────────────────────────────────
@@ -1450,52 +1452,9 @@ func (w *workspace) toolsLocked() []Tool {
 }
 
 func (w *workspace) ModelLimits(rawID string) ModelLimits {
-	rawID = strings.TrimSpace(rawID)
-	targetID := rawID
-	if resolved := w.ResolveModels(RoleCompletion, rawID); len(resolved) > 0 && resolved[0] != "" {
-		targetID = resolved[0]
+	if rm, ok := w.ResolveModel(RoleCompletion, strings.TrimSpace(rawID)); ok && rm.Model != nil {
+		return rm.Model.Limits
 	}
-
-	w.mu.RLock()
-	defer w.mu.RUnlock()
-
-	providerName, modelName, hasSlash := strings.Cut(targetID, "/")
-	if !hasSlash {
-		modelName = targetID
-		providerName = ""
-	}
-
-	if providerName != "" {
-		if res, ok := w.resolveByKindLocked(warp.KindModelProvider, providerName); ok {
-			if mp, ok := res.(*warp.ModelProvider); ok {
-				p := convertProvider(mp, w.registry)
-				for _, m := range p.Models {
-					if m.ID == modelName || m.Name == modelName || p.Name+"/"+m.ID == targetID {
-						return m.Limits
-					}
-				}
-			}
-		}
-	} else {
-		resolver := w.resolverLocked()
-		if resolver != nil {
-			raw := resolver.ListResources(warp.QueryOptions{
-				Kinds:     []warp.Kind{warp.KindModelProvider},
-				Effective: true,
-			})
-			for _, r := range raw {
-				if mp, ok := r.(*warp.ModelProvider); ok {
-					p := convertProvider(mp, w.registry)
-					for _, m := range p.Models {
-						if m.ID == modelName || m.Name == modelName {
-							return m.Limits
-						}
-					}
-				}
-			}
-		}
-	}
-
 	return ModelLimits{
 		Context: 128000,
 		Output:  16384,

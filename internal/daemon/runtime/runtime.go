@@ -276,21 +276,9 @@ func buildGatewayConfig(ws workspace.Workspace) gateway.Config {
 		providers = append(providers, toGatewayProvider(p))
 	}
 
-	defaultModels := make(map[gateway.ModelRole]string)
-	if models := ws.ResolveModels(workspace.RoleCompletion); len(models) > 0 {
-		defaultModels[gateway.RoleCompletion] = models[0]
-	}
-	if models := ws.ResolveModels(workspace.RoleDecision); len(models) > 0 {
-		defaultModels[gateway.RoleDecision] = models[0]
-	}
-	if models := ws.ResolveModels(workspace.RoleEmbedding); len(models) > 0 {
-		defaultModels[gateway.RoleEmbedding] = models[0]
-	}
-
 	return gateway.Config{
-		Providers:     providers,
-		DefaultModels: defaultModels,
-		Env:           wsEnv,
+		Providers: providers,
+		Env:       wsEnv,
 	}
 }
 
@@ -302,14 +290,6 @@ func toGatewayProvider(p workspace.Provider) gateway.ProviderConfig {
 			Header: p.Auth.Header,
 			Env:    p.Auth.Env,
 			File:   p.Auth.File,
-		}
-	}
-
-	var defaultModels map[gateway.ModelRole]string
-	if len(p.DefaultModels) > 0 {
-		defaultModels = make(map[gateway.ModelRole]string, len(p.DefaultModels))
-		for r, m := range p.DefaultModels {
-			defaultModels[gateway.ModelRole(r)] = m
 		}
 	}
 
@@ -354,14 +334,12 @@ func toGatewayProvider(p workspace.Provider) gateway.ProviderConfig {
 	}
 
 	return gateway.ProviderConfig{
-		Name:          p.Name,
-		Type:          p.Type,
-		Endpoint:      p.Endpoint,
-		DefaultModel:  p.DefaultModel,
-		DefaultModels: defaultModels,
-		Auth:          auth,
-		Headers:       p.Headers,
-		Config:        p.Config,
-		Models:        models,
+		Name:     p.Name,
+		Type:     p.Type,
+		Endpoint: p.Endpoint,
+		Auth:     auth,
+		Headers:  p.Headers,
+		Config:   p.Config,
+		Models:   models,
 	}
 }

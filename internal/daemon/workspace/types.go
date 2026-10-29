@@ -44,6 +44,7 @@ type Workspace interface {
 	Projects() []Project
 	Policies() *Policies
 	ResolveModels(role ModelRole, explicit ...string) []string
+	ResolveModel(role ModelRole, explicit ...string) (*ResolvedModel, bool)
 	RenderAgent(name string, args map[string]string, globals map[string]any) (string, error)
 	RenderSkill(name string, args map[string]string, globals map[string]any) (string, error)
 	RenderCommand(name string, args map[string]string, globals map[string]any) (string, error)
@@ -130,6 +131,15 @@ type ProviderModel struct {
 	Limits       ModelLimits        `json:"limits"`
 	Capabilities *ModelCapabilities `json:"capabilities,omitempty"`
 	Cost         *ModelCost         `json:"cost,omitempty"`
+}
+
+// ResolvedModel represents a resolved model reference paired with its owning
+// provider name and declared ProviderModel metadata (when present in catalog).
+type ResolvedModel struct {
+	ProviderName string         `json:"provider_name,omitempty"`
+	ModelID      string         `json:"model_id"`
+	QualifiedID  string         `json:"qualified_id"`
+	Model        *ProviderModel `json:"model,omitempty"`
 }
 
 // ModelLimits defines token and vector dimension limits for a model.

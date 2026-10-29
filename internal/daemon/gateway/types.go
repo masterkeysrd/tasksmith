@@ -20,20 +20,6 @@ var (
 	ErrGatewayClosed         = errors.New("gateway: gateway is closed")
 )
 
-// ModelRole identifies the capability role for model resolution.
-type ModelRole string
-
-const (
-	// RoleCompletion is the role for conversational and tool-calling completion models.
-	RoleCompletion ModelRole = "completion"
-
-	// RoleDecision is the role for probabilistic decision evaluation models.
-	RoleDecision ModelRole = "decision"
-
-	// RoleEmbedding is the role for dense vector embedding generation models.
-	RoleEmbedding ModelRole = "embedding"
-)
-
 // AuthType describes the HTTP authentication scheme.
 type AuthType string
 
@@ -107,25 +93,22 @@ type ModelSpec struct {
 
 // ProviderConfig configures a single upstream backend provider.
 type ProviderConfig struct {
-	Name          string               `json:"name"`
-	Type          string               `json:"type"` // e.g. "ollama", "openai", "anthropic", "genai", "typesafe", "antigravity"
-	Endpoint      string               `json:"endpoint,omitempty"`
-	DefaultModel  string               `json:"default_model,omitempty"`
-	DefaultModels map[ModelRole]string `json:"default_models,omitempty"`
-	Auth          *AuthConfig          `json:"auth,omitempty"`
-	Headers       map[string]string    `json:"headers,omitempty"`
-	Config        map[string]any       `json:"config,omitempty"`
-	Models        []ModelSpec          `json:"models,omitempty"`
+	Name     string            `json:"name"`
+	Type     string            `json:"type"` // e.g. "ollama", "openai", "anthropic", "genai", "typesafe", "antigravity"
+	Endpoint string            `json:"endpoint,omitempty"`
+	Auth     *AuthConfig       `json:"auth,omitempty"`
+	Headers  map[string]string `json:"headers,omitempty"`
+	Config   map[string]any    `json:"config,omitempty"`
+	Models   []ModelSpec       `json:"models,omitempty"`
 }
 
 // ProviderInfo provides read-only summary information about an initialized provider.
 type ProviderInfo struct {
-	Name          string               `json:"name"`
-	Type          string               `json:"type"`
-	Endpoint      string               `json:"endpoint,omitempty"`
-	DefaultModels map[ModelRole]string `json:"default_models,omitempty"`
-	Models        []ModelSpec          `json:"models,omitempty"`
-	Warning       string               `json:"warning,omitempty"`
+	Name     string      `json:"name"`
+	Type     string      `json:"type"`
+	Endpoint string      `json:"endpoint,omitempty"`
+	Models   []ModelSpec `json:"models,omitempty"`
+	Warning  string      `json:"warning,omitempty"`
 }
 
 // LLMOption configures a call to ResolveLLM.
@@ -196,22 +179,22 @@ func WithEmbeddingMiddleware(mw ...embedding.Middleware) EmbeddingOption {
 
 // Gateway provides access to initialized AI models across providers.
 type Gateway interface {
-	// ResolveLLM resolves and instantiates a conversational/completion model (System Two).
-	ResolveLLM(ctx context.Context, explicit string, opts ...LLMOption) (*llm.Model, error)
+	// ResolveLLM instantiates a conversational/completion model (System Two) for the given provider and model ID.
+	ResolveLLM(ctx context.Context, provider, modelID string, opts ...LLMOption) (*llm.Model, error)
 
-	// ResolveDecision resolves and instantiates a probabilistic decision model (System One).
-	// If the resolved provider/model natively supports decisions, a native model is returned.
+	// ResolveDecision instantiates a probabilistic decision model (System One) for the given provider and model ID.
+	// If the provider/model natively supports decisions, a native model is returned.
 	// Otherwise, it automatically wraps a completion model using decision.NewFromLLM.
-	ResolveDecision(ctx context.Context, explicit string, opts ...DecisionOption) (*decision.Model, error)
+	ResolveDecision(ctx context.Context, provider, modelID string, opts ...DecisionOption) (*decision.Model, error)
 
-	// ResolveEmbedding resolves and instantiates a vector embedding model (System Three).
-	ResolveEmbedding(ctx context.Context, explicit string, opts ...EmbeddingOption) (*embedding.Model, error)
+	// ResolveEmbedding instantiates a vector embedding model (System Three) for the given provider and model ID.
+	ResolveEmbedding(ctx context.Context, provider, modelID string, opts ...EmbeddingOption) (*embedding.Model, error)
 
 	// ListProviders returns information about all registered providers and their models.
 	ListProviders() []ProviderInfo
 
 	// ModelProfile returns the discovered model profile from the matching provider or catalog, if available.
-	ModelProfile(model string) (*profile.Profile, bool)
+	ModelProfile(provider, modelID string) (*profile.Profile, bool)
 
 	// Close releases all client resources and connections.
 	Close() error

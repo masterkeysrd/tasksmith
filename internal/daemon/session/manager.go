@@ -134,12 +134,18 @@ func (m *manager) sessionDir(sessionID string) (string, error) {
 
 func (m *manager) resolveModelName(model string) string {
 	model = strings.TrimSpace(model)
-	if model != "" && !strings.Contains(model, "/") {
-		if models := m.workspace.ResolveModels(workspace.RoleCompletion, model); len(models) > 0 {
-			return models[0]
-		}
+	if rm, ok := m.workspace.ResolveModel(workspace.RoleCompletion, model); ok {
+		return rm.QualifiedID
 	}
 	return model
+}
+
+func resolveProviderAndModel(ws workspace.Workspace, raw string) (provider, modelID string) {
+	raw = strings.TrimSpace(raw)
+	if rm, ok := ws.ResolveModel(workspace.RoleCompletion, raw); ok {
+		return rm.ProviderName, rm.ModelID
+	}
+	return "", raw
 }
 
 func (m *manager) resolveAgentAndModel(agent, model string) (string, string) {
@@ -148,19 +154,14 @@ func (m *manager) resolveAgentAndModel(agent, model string) (string, string) {
 		agent = m.workspace.DefaultAgentName()
 	}
 
-	model = strings.TrimSpace(model)
-	if model != "" {
-		model = m.resolveModelName(model)
-	} else {
-		var explicit []string
-		if ag, ok := m.workspace.GetAgent(agent); ok && len(ag.Models) > 0 {
-			explicit = ag.Models
-		}
-		if models := m.workspace.ResolveModels(workspace.RoleCompletion, explicit...); len(models) > 0 {
-			model = models[0]
-		} else if len(explicit) > 0 {
-			model = explicit[0]
-		}
+	var explicit []string
+	if model = strings.TrimSpace(model); model != "" {
+		explicit = []string{model}
+	} else if ag, ok := m.workspace.GetAgent(agent); ok {
+		explicit = ag.Models
+	}
+	if rm, ok := m.workspace.ResolveModel(workspace.RoleCompletion, explicit...); ok {
+		model = rm.QualifiedID
 	}
 
 	return agent, model
@@ -324,7 +325,8 @@ func (m *manager) Create(ctx context.Context, params CreateParams) (sess *Sessio
 
 	agent, model := m.resolveAgentAndModel(params.Config.Agent, params.Config.Model)
 	if params.Config.Thinking != nil {
-		prof, _ := m.gateway.ModelProfile(model)
+		prov, mID := resolveProviderAndModel(m.workspace, model)
+		prof, _ := m.gateway.ModelProfile(prov, mID)
 		if err := validateThinking(params.Config.Thinking, prof); err != nil {
 			return nil, false, err
 		}
@@ -458,13 +460,15 @@ func (m *manager) Update(ctx context.Context, id string, params UpdateParams) (*
 		_, newConfig.Model = m.resolveAgentAndModel(newConfig.Agent, "")
 	}
 	if oldConfig.Model != newConfig.Model || oldConfig.Agent != newConfig.Agent {
-		prof, _ := m.gateway.ModelProfile(newConfig.Model)
+		prov, mID := resolveProviderAndModel(m.workspace, newConfig.Model)
+		prof, _ := m.gateway.ModelProfile(prov, mID)
 		if newConfig.Thinking != nil && validateThinking(newConfig.Thinking, prof) != nil {
 			newConfig.Thinking = nil
 		}
 	}
 	if params.Config.Thinking != nil {
-		prof, _ := m.gateway.ModelProfile(newConfig.Model)
+		prov, mID := resolveProviderAndModel(m.workspace, newConfig.Model)
+		prof, _ := m.gateway.ModelProfile(prov, mID)
 		if err := validateThinking(params.Config.Thinking, prof); err != nil {
 			sess.Unlock()
 			return nil, err
@@ -546,7 +550,8 @@ func (m *manager) Update(ctx context.Context, id string, params UpdateParams) (*
 
 	if oldConfig.Model != newConfig.Model || oldConfig.Agent != newConfig.Agent {
 		limits := m.workspace.ModelLimits(newConfig.Model)
-		if prof, ok := m.gateway.ModelProfile(newConfig.Model); ok && prof != nil {
+		prov, mID := resolveProviderAndModel(m.workspace, newConfig.Model)
+		if prof, ok := m.gateway.ModelProfile(prov, mID); ok && prof != nil {
 			if prof.Limits.Context > 0 {
 				limits.Context = prof.Limits.Context
 			}

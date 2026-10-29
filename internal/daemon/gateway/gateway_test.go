@@ -36,10 +36,6 @@ func TestConfigFingerprint(t *testing.T) {
 				},
 			},
 		},
-		DefaultModels: map[ModelRole]string{
-			RoleCompletion: "claude-3-7-sonnet",
-			RoleDecision:   "nimble-v3",
-		},
 		Env: map[string]string{
 			"ANTHROPIC_API_KEY": "sk-ant-12345",
 			"UNRELATED_VAR":     "should_not_affect_hash",
@@ -65,10 +61,6 @@ func TestConfigFingerprint(t *testing.T) {
 					{ID: "llama3.2", Name: "Llama 3.2"},
 				},
 			},
-		},
-		DefaultModels: map[ModelRole]string{
-			RoleCompletion: "claude-3-7-sonnet",
-			RoleDecision:   "nimble-v3",
 		},
 		Env: map[string]string{
 			"ANTHROPIC_API_KEY": "sk-ant-12345",
@@ -128,9 +120,6 @@ func TestStrictAuthValidation(t *testing.T) {
 						},
 					},
 				},
-				DefaultModels: map[ModelRole]string{
-					RoleCompletion: "llama3.2",
-				},
 			},
 		},
 		Env: map[string]string{
@@ -167,35 +156,26 @@ func TestStrictAuthValidation(t *testing.T) {
 	}
 
 	// Calling ResolveLLM for unauthenticated provider returns ErrMissingCredential
-	_, err = gw.ResolveLLM(ctx, "anthropic/claude-3-7-sonnet")
+	_, err = gw.ResolveLLM(ctx, "anthropic", "claude-3-7-sonnet")
 	if !errors.Is(err, ErrMissingCredential) {
 		t.Fatalf("expected ErrMissingCredential for ResolveLLM on unauthenticated provider, got %v", err)
 	}
-	_, err = gw.ResolveDecision(ctx, "anthropic/claude-3-7-sonnet")
+	_, err = gw.ResolveDecision(ctx, "anthropic", "claude-3-7-sonnet")
 	if !errors.Is(err, ErrMissingCredential) {
 		t.Fatalf("expected ErrMissingCredential for ResolveDecision on unauthenticated provider, got %v", err)
 	}
-	_, err = gw.ResolveEmbedding(ctx, "anthropic/claude-3-7-sonnet")
+	_, err = gw.ResolveEmbedding(ctx, "anthropic", "claude-3-7-sonnet")
 	if !errors.Is(err, ErrMissingCredential) {
 		t.Fatalf("expected ErrMissingCredential for ResolveEmbedding on unauthenticated provider, got %v", err)
 	}
 
 	// Calling ResolveLLM for healthy provider succeeds!
-	healthyLLM, err := gw.ResolveLLM(ctx, "ollama/llama3.2")
+	healthyLLM, err := gw.ResolveLLM(ctx, "ollama", "llama3.2")
 	if err != nil {
 		t.Fatalf("expected healthy provider ResolveLLM to succeed, got %v", err)
 	}
 	if healthyLLM.Name() != "llama3.2" {
 		t.Errorf("expected llama3.2, got %q", healthyLLM.Name())
-	}
-
-	// Default role resolution prefers the healthy provider over the unauthenticated provider
-	defaultLLM, err := gw.ResolveLLM(ctx, "")
-	if err != nil {
-		t.Fatalf("expected default ResolveLLM to route to healthy provider, got %v", err)
-	}
-	if defaultLLM.Name() != "llama3.2" {
-		t.Errorf("expected default LLM llama3.2, got %q", defaultLLM.Name())
 	}
 
 	// 2. Test os.Getenv fallback via t.Setenv
@@ -270,8 +250,18 @@ func TestPoolContentAddressable(t *testing.T) {
 	}
 
 	// Change configuration -> new gateway
-	cfg2 := cfg
-	cfg2.DefaultModels = map[ModelRole]string{RoleCompletion: "llama3.2"}
+	cfg2 := Config{
+		Providers: []ProviderConfig{
+			{
+				Name:     "ollama",
+				Type:     "ollama",
+				Endpoint: "http://127.0.0.1:11435",
+				Models: []ModelSpec{
+					{ID: "llama3.2", Name: "Llama 3.2"},
+				},
+			},
+		},
+	}
 
 	gw3, err := pool.Acquire(ctx, cfg2)
 	if err != nil {
@@ -320,11 +310,6 @@ func TestModelResolution(t *testing.T) {
 						},
 					},
 				},
-				DefaultModels: map[ModelRole]string{
-					RoleCompletion: "llama3.2",
-					RoleDecision:   "nimble-v3",
-					RoleEmbedding:  "nomic-embed-text",
-				},
 			},
 		},
 	}
@@ -336,25 +321,25 @@ func TestModelResolution(t *testing.T) {
 	defer gw.Close()
 
 	// 1. Resolve LLM (Completion)
-	llmModel, err := gw.ResolveLLM(ctx, "")
+	llmModel, err := gw.ResolveLLM(ctx, "ollama", "llama3.2")
 	if err != nil {
-		t.Fatalf("failed to resolve default LLM: %v", err)
+		t.Fatalf("failed to resolve LLM: %v", err)
 	}
 	if llmModel.Name() != "llama3.2" {
 		t.Fatalf("expected resolved model name 'llama3.2', got %q", llmModel.Name())
 	}
 
 	// 2. Resolve Native Decision
-	decModel, err := gw.ResolveDecision(ctx, "")
+	decModel, err := gw.ResolveDecision(ctx, "ollama", "nimble-v3")
 	if err != nil {
-		t.Fatalf("failed to resolve default decision model: %v", err)
+		t.Fatalf("failed to resolve decision model: %v", err)
 	}
 	if decModel.Name() != "nimble-v3" {
 		t.Fatalf("expected resolved decision model 'nimble-v3', got %q", decModel.Name())
 	}
 
 	// 3. Resolve Decision on a completion-only model -> Transparent LLM Adapter fallback
-	adaptedDecModel, err := gw.ResolveDecision(ctx, "llama3.2")
+	adaptedDecModel, err := gw.ResolveDecision(ctx, "ollama", "llama3.2")
 	if err != nil {
 		t.Fatalf("failed to resolve adapted decision model on llama3.2: %v", err)
 	}
@@ -363,16 +348,16 @@ func TestModelResolution(t *testing.T) {
 	}
 
 	// 4. Resolve Embedding
-	embModel, err := gw.ResolveEmbedding(ctx, "")
+	embModel, err := gw.ResolveEmbedding(ctx, "ollama", "nomic-embed-text")
 	if err != nil {
-		t.Fatalf("failed to resolve default embedding model: %v", err)
+		t.Fatalf("failed to resolve embedding model: %v", err)
 	}
 	if embModel.Name() != "nomic-embed-text" {
 		t.Fatalf("expected resolved embedding model 'nomic-embed-text', got %q", embModel.Name())
 	}
 
 	// 5. Embedding resolution on non-embedding model fails
-	_, err = gw.ResolveEmbedding(ctx, "llama3.2")
+	_, err = gw.ResolveEmbedding(ctx, "ollama", "llama3.2")
 	if err == nil {
 		t.Fatalf("expected error when resolving embedding on non-embedding model")
 	}
@@ -411,7 +396,7 @@ func TestGatewayClose(t *testing.T) {
 	}
 
 	// Post-close resolution should fail
-	if _, err := gw.ResolveLLM(ctx, "llama3.2"); !errors.Is(err, ErrGatewayClosed) {
+	if _, err := gw.ResolveLLM(ctx, "ollama", "llama3.2"); !errors.Is(err, ErrGatewayClosed) {
 		t.Fatalf("expected ErrGatewayClosed, got %v", err)
 	}
 }
@@ -472,15 +457,9 @@ func TestOpenAIErrorEnrichment(t *testing.T) {
 				llmProv: mockProv,
 			},
 		},
-		providerList: []*providerInstance{
-			{
-				cfg:     ProviderConfig{Name: "mock", Type: "openai"},
-				llmProv: mockProv,
-			},
-		},
 	}
 
-	model, err := gw.ResolveLLM(ctx, "mock/gpt-6.1-terra")
+	model, err := gw.ResolveLLM(ctx, "mock", "gpt-6.1-terra")
 	if err != nil {
 		t.Fatalf("ResolveLLM failed: %v", err)
 	}
@@ -564,18 +543,9 @@ func TestOpenAIResponsesOptionsMiddleware_Defaults(t *testing.T) {
 				},
 			},
 		},
-		providerList: []*providerInstance{
-			{
-				cfg:     ProviderConfig{Name: "openai", Type: "openai"},
-				llmProv: mock,
-				openaiResponsesOpts: &loomopenai.ResponsesOptions{
-					Store: &storeDefault,
-				},
-			},
-		},
 	}
 
-	model, err := gw.ResolveLLM(ctx, "openai/gpt-5.5")
+	model, err := gw.ResolveLLM(ctx, "openai", "gpt-5.5")
 	if err != nil {
 		t.Fatalf("ResolveLLM failed: %v", err)
 	}
@@ -787,26 +757,6 @@ func TestGoogleGenAIAndGeminiProviderTypes(t *testing.T) {
 		t.Fatalf("failed to initialize gateway with google-genai and gemini types: %v", err)
 	}
 	defer gw.Close()
-
-	if !providerSupportsRole("google-genai", RoleCompletion) {
-		t.Error("expected google-genai to support RoleCompletion")
-	}
-	if !providerSupportsRole("google-genai", RoleEmbedding) {
-		t.Error("expected google-genai to support RoleEmbedding")
-	}
-	if providerSupportsRole("google-genai", RoleDecision) {
-		t.Error("expected google-genai to NOT support RoleDecision natively")
-	}
-
-	if !providerSupportsRole("gemini", RoleCompletion) {
-		t.Error("expected gemini to support RoleCompletion")
-	}
-	if !providerSupportsRole("gemini", RoleEmbedding) {
-		t.Error("expected gemini to support RoleEmbedding")
-	}
-	if providerSupportsRole("gemini", RoleDecision) {
-		t.Error("expected gemini to NOT support RoleDecision natively")
-	}
 }
 
 func TestGatewayModelProfile(t *testing.T) {
@@ -841,7 +791,7 @@ func TestGatewayModelProfile(t *testing.T) {
 	defer gw.Close()
 
 	// 1. Discovered from ModelSpec in manifest
-	prof, ok := gw.ModelProfile("test-openai/custom-spec-model")
+	prof, ok := gw.ModelProfile("test-openai", "custom-spec-model")
 	if !ok || prof == nil {
 		t.Fatalf("expected profile for custom-spec-model, got ok=%v, prof=%v", ok, prof)
 	}
@@ -850,7 +800,7 @@ func TestGatewayModelProfile(t *testing.T) {
 	}
 
 	// 2. Discovered from underlying provider catalog (gpt-4o)
-	profCatalog, okCatalog := gw.ModelProfile("test-openai/gpt-4o")
+	profCatalog, okCatalog := gw.ModelProfile("test-openai", "gpt-4o")
 	if okCatalog && profCatalog != nil {
 		if profCatalog.Limits.Context <= 0 {
 			t.Errorf("expected positive context limit for gpt-4o, got %d", profCatalog.Limits.Context)
@@ -998,7 +948,7 @@ func TestGatewayModelProfile_MergedOverrides(t *testing.T) {
 	}
 	defer gw.Close()
 
-	prof, ok := gw.ModelProfile("test-openai/gpt-4o")
+	prof, ok := gw.ModelProfile("test-openai", "gpt-4o")
 	if !ok || prof == nil {
 		t.Fatalf("expected profile for test-openai/gpt-4o, got ok=%v, prof=%v", ok, prof)
 	}
@@ -1011,5 +961,55 @@ func TestGatewayModelProfile_MergedOverrides(t *testing.T) {
 	// Base profile description / family / modalities should still be present from catalog
 	if prof.Family == "" && prof.Description == "" {
 		t.Errorf("expected base catalog metadata to be preserved, got family=%q description=%q", prof.Family, prof.Description)
+	}
+}
+
+func TestModelResolutionWithSlashInModelID(t *testing.T) {
+	ctx := context.Background()
+
+	cfg := Config{
+		Providers: []ProviderConfig{
+			{
+				Name:     "mlx-serve",
+				Type:     "ollama",
+				Endpoint: "http://localhost:11234",
+				Models: []ModelSpec{
+					{
+						ID:    "ddalcu/Qwen3.8-27B-MLX-Serve-4bit",
+						Name:  "qwen3.8-27b-mlx-serve-4bit",
+						Label: "Qwen 3.8 (MLX Serve)",
+						Limits: ModelLimits{
+							Context: 262144,
+							Output:  32768,
+						},
+					},
+				},
+			},
+		},
+	}
+
+	gw, err := New(ctx, cfg)
+	if err != nil {
+		t.Fatalf("failed to initialize gateway: %v", err)
+	}
+	defer gw.Close()
+
+	m, err := gw.ResolveLLM(ctx, "mlx-serve", "ddalcu/Qwen3.8-27B-MLX-Serve-4bit")
+	if err != nil {
+		t.Fatalf("ResolveLLM unexpected error: %v", err)
+	}
+	if m.Name() != "ddalcu/Qwen3.8-27B-MLX-Serve-4bit" {
+		t.Errorf("ResolveLLM.Name() = %q, want %q", m.Name(), "ddalcu/Qwen3.8-27B-MLX-Serve-4bit")
+	}
+	prof, ok := gw.ModelProfile("mlx-serve", "ddalcu/Qwen3.8-27B-MLX-Serve-4bit")
+	if !ok || prof == nil {
+		t.Fatalf("ModelProfile returned false/nil")
+	}
+	if prof.Limits.Context != 262144 || prof.Limits.Output != 32768 {
+		t.Errorf("ModelProfile limits = %+v, want 262144/32768", prof.Limits)
+	}
+
+	if _, err := gw.ResolveLLM(ctx, "unknown-prov", "some-model"); !errors.Is(err, ErrProviderNotFound) {
+		t.Fatalf("expected ErrProviderNotFound for unknown provider, got: %v", err)
 	}
 }

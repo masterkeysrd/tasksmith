@@ -13,11 +13,10 @@ import (
 )
 
 type gatewayImpl struct {
-	cfg          Config
-	providers    map[string]*providerInstance
-	providerList []*providerInstance
-	mu           sync.RWMutex
-	closed       bool
+	cfg       Config
+	providers map[string]*providerInstance
+	mu        sync.RWMutex
+	closed    bool
 }
 
 // New constructs and initializes a new Gateway from the provided configuration.
@@ -27,7 +26,6 @@ func New(ctx context.Context, cfg Config) (Gateway, error) {
 	}
 
 	providers := make(map[string]*providerInstance, len(cfg.Providers))
-	providerList := make([]*providerInstance, 0, len(cfg.Providers))
 
 	for _, pCfg := range cfg.Providers {
 		inst, err := initProvider(ctx, pCfg, cfg.Env)
@@ -35,13 +33,11 @@ func New(ctx context.Context, cfg Config) (Gateway, error) {
 			return nil, fmt.Errorf("gateway: failed to initialize provider %q: %w", pCfg.Name, err)
 		}
 		providers[pCfg.Name] = inst
-		providerList = append(providerList, inst)
 	}
 
 	return &gatewayImpl{
-		cfg:          cfg,
-		providers:    providers,
-		providerList: providerList,
+		cfg:       cfg,
+		providers: providers,
 	}, nil
 }
 
@@ -60,21 +56,24 @@ func (g *gatewayImpl) ListProviders() []ProviderInfo {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
 
-	res := make([]ProviderInfo, 0, len(g.providerList))
-	for _, inst := range g.providerList {
+	res := make([]ProviderInfo, 0, len(g.cfg.Providers))
+	for _, pCfg := range g.cfg.Providers {
+		inst, ok := g.providers[pCfg.Name]
+		if !ok {
+			continue
+		}
 		res = append(res, ProviderInfo{
-			Name:          inst.cfg.Name,
-			Type:          inst.cfg.Type,
-			Endpoint:      inst.cfg.Endpoint,
-			DefaultModels: inst.cfg.DefaultModels,
-			Models:        inst.cfg.Models,
-			Warning:       inst.warning,
+			Name:     inst.cfg.Name,
+			Type:     inst.cfg.Type,
+			Endpoint: inst.cfg.Endpoint,
+			Models:   inst.cfg.Models,
+			Warning:  inst.warning,
 		})
 	}
 	return res
 }
 
-func (g *gatewayImpl) ResolveLLM(ctx context.Context, explicit string, opts ...LLMOption) (*llm.Model, error) {
+func (g *gatewayImpl) ResolveLLM(ctx context.Context, provider, modelID string, opts ...LLMOption) (*llm.Model, error) {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
 
@@ -89,7 +88,7 @@ func (g *gatewayImpl) ResolveLLM(ctx context.Context, explicit string, opts ...L
 		}
 	}
 
-	inst, modelID, spec, err := g.findModelAndProvider(RoleCompletion, explicit)
+	inst, modelID, spec, err := g.lookupProviderAndModel(provider, modelID)
 	if err != nil {
 		return nil, err
 	}
@@ -121,7 +120,7 @@ func (g *gatewayImpl) ResolveLLM(ctx context.Context, explicit string, opts ...L
 	return model, nil
 }
 
-func (g *gatewayImpl) ResolveDecision(ctx context.Context, explicit string, opts ...DecisionOption) (*decision.Model, error) {
+func (g *gatewayImpl) ResolveDecision(ctx context.Context, provider, modelID string, opts ...DecisionOption) (*decision.Model, error) {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
 
@@ -136,7 +135,7 @@ func (g *gatewayImpl) ResolveDecision(ctx context.Context, explicit string, opts
 		}
 	}
 
-	inst, modelID, spec, err := g.findModelAndProvider(RoleDecision, explicit)
+	inst, modelID, spec, err := g.lookupProviderAndModel(provider, modelID)
 	if err != nil {
 		return nil, err
 	}
@@ -188,7 +187,7 @@ func (g *gatewayImpl) ResolveDecision(ctx context.Context, explicit string, opts
 	return decModel, nil
 }
 
-func (g *gatewayImpl) ResolveEmbedding(ctx context.Context, explicit string, opts ...EmbeddingOption) (*embedding.Model, error) {
+func (g *gatewayImpl) ResolveEmbedding(ctx context.Context, provider, modelID string, opts ...EmbeddingOption) (*embedding.Model, error) {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
 
@@ -203,7 +202,7 @@ func (g *gatewayImpl) ResolveEmbedding(ctx context.Context, explicit string, opt
 		}
 	}
 
-	inst, modelID, spec, err := g.findModelAndProvider(RoleEmbedding, explicit)
+	inst, modelID, spec, err := g.lookupProviderAndModel(provider, modelID)
 	if err != nil {
 		return nil, err
 	}
@@ -232,170 +231,26 @@ func (g *gatewayImpl) ResolveEmbedding(ctx context.Context, explicit string, opt
 	return model, nil
 }
 
-// findModelAndProvider resolves a model identifier and its hosting provider using
-// role fallback precedence: explicit -> config default for role -> provider default for role -> catalog capability check.
-func (g *gatewayImpl) findModelAndProvider(role ModelRole, explicit string) (*providerInstance, string, *ModelSpec, error) {
-	explicit = strings.TrimSpace(explicit)
-
-	// Case 1: Explicit target given
-	if explicit != "" {
-		// Format: "provider/model"
-		if parts := strings.SplitN(explicit, "/", 2); len(parts) == 2 {
-			provName, modelID := parts[0], parts[1]
-			inst, ok := g.providers[provName]
-			if !ok {
-				return nil, "", nil, fmt.Errorf("%w: %q", ErrProviderNotFound, provName)
-			}
-			spec, hasSpec := inst.models[modelID]
-			var specPtr *ModelSpec
-			if hasSpec {
-				specPtr = &spec
-			}
-			return inst, modelID, specPtr, nil
-		}
-
-		// Bare model ID: Search all providers for a match, preferring healthy providers
-		for _, inst := range g.providerList {
-			if inst.authErr == nil {
-				if spec, ok := inst.models[explicit]; ok {
-					return inst, explicit, &spec, nil
-				}
-			}
-		}
-		for _, inst := range g.providerList {
-			if inst.authErr != nil {
-				if spec, ok := inst.models[explicit]; ok {
-					return inst, explicit, &spec, nil
-				}
-			}
-		}
-
-		// If no provider explicitly registered the model ID, route to the first healthy provider, or first provider
-		for _, inst := range g.providerList {
-			if inst.authErr == nil {
-				return inst, explicit, nil, nil
-			}
-		}
-		if len(g.providerList) > 0 {
-			return g.providerList[0], explicit, nil, nil
-		}
-		return nil, "", nil, fmt.Errorf("%w: no providers registered", ErrProviderNotFound)
+func (g *gatewayImpl) lookupProviderAndModel(provider, modelID string) (*providerInstance, string, *ModelSpec, error) {
+	provider = strings.TrimSpace(provider)
+	modelID = strings.TrimSpace(modelID)
+	if provider == "" {
+		return nil, "", nil, fmt.Errorf("%w: provider name is required", ErrProviderNotFound)
+	}
+	if modelID == "" {
+		return nil, "", nil, fmt.Errorf("%w: model ID is required", ErrModelNotFound)
 	}
 
-	// Case 2: Config-level default for role
-	if defaultModel, ok := g.cfg.DefaultModels[role]; ok && strings.TrimSpace(defaultModel) != "" {
-		return g.findModelAndProvider(role, defaultModel)
+	inst, ok := g.providers[provider]
+	if !ok {
+		return nil, "", nil, fmt.Errorf("%w: %q", ErrProviderNotFound, provider)
 	}
 
-	// Case 3 (healthy): Provider-level default for role on healthy providers
-	for _, inst := range g.providerList {
-		if inst.authErr != nil {
-			continue
-		}
-		if def, ok := inst.cfg.DefaultModels[role]; ok && strings.TrimSpace(def) != "" {
-			if targetInst, mID, spec, err := g.findModelAndProvider(role, def); err == nil && targetInst.authErr == nil {
-				return targetInst, mID, spec, nil
-			}
-		}
-		if role == RoleCompletion && strings.TrimSpace(inst.cfg.DefaultModel) != "" {
-			if targetInst, mID, spec, err := g.findModelAndProvider(role, inst.cfg.DefaultModel); err == nil && targetInst.authErr == nil {
-				return targetInst, mID, spec, nil
-			}
-		}
+	var specPtr *ModelSpec
+	if spec, hasSpec := inst.models[modelID]; hasSpec {
+		specPtr = &spec
 	}
-
-	// Case 4 (healthy): Search model catalogs on healthy providers
-	for _, inst := range g.providerList {
-		if inst.authErr != nil {
-			continue
-		}
-		for _, m := range inst.cfg.Models {
-			switch role {
-			case RoleCompletion:
-				if m.Capabilities.SupportsCompletion() && inst.llmProv != nil {
-					spec := m
-					return inst, m.ID, &spec, nil
-				}
-			case RoleDecision:
-				if m.Capabilities.SupportsDecision() && inst.decisionProv != nil {
-					spec := m
-					return inst, m.ID, &spec, nil
-				}
-			case RoleEmbedding:
-				if m.Capabilities.SupportsEmbedding() && inst.embeddingProv != nil {
-					spec := m
-					return inst, m.ID, &spec, nil
-				}
-			}
-		}
-	}
-
-	// Healthy Decision adapter fallback: If role is Decision and no native decision model found among healthy providers,
-	// fallback to completion model on healthy providers
-	if role == RoleDecision {
-		if inst, mID, spec, err := g.findModelAndProvider(RoleCompletion, ""); err == nil && inst.authErr == nil {
-			return inst, mID, spec, nil
-		}
-	}
-
-	// Fallback Case 3: Provider-level default for role on unauthenticated providers
-	for _, inst := range g.providerList {
-		if inst.authErr == nil {
-			continue
-		}
-		if def, ok := inst.cfg.DefaultModels[role]; ok && strings.TrimSpace(def) != "" {
-			return g.findModelAndProvider(role, def)
-		}
-		if role == RoleCompletion && strings.TrimSpace(inst.cfg.DefaultModel) != "" {
-			return g.findModelAndProvider(role, inst.cfg.DefaultModel)
-		}
-	}
-
-	// Fallback Case 4: Search model catalogs on unauthenticated providers
-	for _, inst := range g.providerList {
-		if inst.authErr == nil {
-			continue
-		}
-		for _, m := range inst.cfg.Models {
-			switch role {
-			case RoleCompletion:
-				if m.Capabilities.SupportsCompletion() && providerSupportsRole(inst.cfg.Type, RoleCompletion) {
-					spec := m
-					return inst, m.ID, &spec, nil
-				}
-			case RoleDecision:
-				if m.Capabilities.SupportsDecision() && providerSupportsRole(inst.cfg.Type, RoleDecision) {
-					spec := m
-					return inst, m.ID, &spec, nil
-				}
-			case RoleEmbedding:
-				if m.Capabilities.SupportsEmbedding() && providerSupportsRole(inst.cfg.Type, RoleEmbedding) {
-					spec := m
-					return inst, m.ID, &spec, nil
-				}
-			}
-		}
-	}
-
-	// Fallback Case 5: If role is Decision, fallback to completion default for adapter on unauthenticated providers
-	if role == RoleDecision {
-		return g.findModelAndProvider(RoleCompletion, "")
-	}
-
-	return nil, "", nil, fmt.Errorf("%w: no default model found for role %q", ErrModelNotFound, role)
-}
-
-func providerSupportsRole(pType string, role ModelRole) bool {
-	switch role {
-	case RoleCompletion:
-		return pType == "ollama" || pType == "openai" || pType == "anthropic" || pType == "genai" || pType == "google-genai" || pType == "gemini" || pType == "antigravity"
-	case RoleDecision:
-		return pType == "ollama" || pType == "openai" || pType == "typesafe"
-	case RoleEmbedding:
-		return pType == "ollama" || pType == "openai" || pType == "genai" || pType == "google-genai" || pType == "gemini"
-	default:
-		return false
-	}
+	return inst, modelID, specPtr, nil
 }
 
 // MergeProfile merges workspace ModelSpec overrides (name, limits, capabilities) on top of
@@ -458,11 +313,11 @@ func MergeProfile(spec *ModelSpec, base *profile.Profile) *profile.Profile {
 
 // ModelProfile looks up the discovered model profile from the matching provider or catalog,
 // merging any workspace ModelSpec overrides configured for the model.
-func (g *gatewayImpl) ModelProfile(model string) (*profile.Profile, bool) {
+func (g *gatewayImpl) ModelProfile(provider, modelID string) (*profile.Profile, bool) {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
 
-	inst, modelID, spec, err := g.findModelAndProvider(RoleCompletion, model)
+	inst, modelID, spec, err := g.lookupProviderAndModel(provider, modelID)
 	if err != nil || inst == nil {
 		return nil, false
 	}

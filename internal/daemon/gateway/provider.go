@@ -321,7 +321,7 @@ func openAIResponsesOptionsMiddleware(defaults *loomopenai.ResponsesOptions) llm
 					}
 					extensions[loomopenai.ResponsesExtensionID] = opts
 				} else {
-					var opts loomopenai.ResponsesOptions = *defaults
+					var opts = *defaults
 					extensions[loomopenai.ResponsesExtensionID] = opts
 				}
 

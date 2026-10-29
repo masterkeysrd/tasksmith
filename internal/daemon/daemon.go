@@ -519,12 +519,11 @@ func (d *Daemon) ListModels(ctx context.Context, rawWS string) ([]api.Model, err
 	var out []api.Model
 	for _, p := range providers {
 		for _, m := range p.Models {
-			out = append(out, toAPIModel(p.Name, m))
-		}
-	}
-	for i := range out {
-		if prof, ok := rt.Gateway().ModelProfile(out[i].ID); ok && prof != nil {
-			enrichModelFromProfile(&out[i], prof, out[i].ID)
+			apiModel := toAPIModel(p.Name, m)
+			if prof, ok := rt.Gateway().ModelProfile(p.Name, m.ID); ok && prof != nil {
+				enrichModelFromProfile(&apiModel, prof, apiModel.ID)
+			}
+			out = append(out, apiModel)
 		}
 	}
 	return out, nil
@@ -536,8 +535,8 @@ func (d *Daemon) GetModel(ctx context.Context, rawWS, id string) (*api.Model, er
 		return nil, err
 	}
 
-	rawID := strings.TrimSpace(id)
-	if rawID == "" {
+	id = strings.TrimSpace(id)
+	if id == "" {
 		return nil, &api.APIError{
 			StatusCode: http.StatusBadRequest,
 			Code:       "bad_request",
@@ -545,17 +544,13 @@ func (d *Daemon) GetModel(ctx context.Context, rawWS, id string) (*api.Model, er
 		}
 	}
 
-	m := resolveAPIModel(rt.Workspace(), rawID)
-	lookupID := rawID
-	if m.ID != "" {
-		lookupID = m.ID
+	rm, ok := rt.Workspace().ResolveModel(workspace.RoleCompletion, id)
+	if !ok {
+		rm = &workspace.ResolvedModel{ModelID: id, QualifiedID: id}
 	}
-	prof, ok := rt.Gateway().ModelProfile(lookupID)
-	if (!ok || prof == nil) && lookupID != rawID {
-		prof, ok = rt.Gateway().ModelProfile(rawID)
-	}
-	if ok && prof != nil {
-		enrichModelFromProfile(&m, prof, rawID)
+	m := resolvedToAPIModel(rm)
+	if prof, ok := rt.Gateway().ModelProfile(rm.ProviderName, rm.ModelID); ok && prof != nil {
+		enrichModelFromProfile(&m, prof, id)
 	}
 	return &m, nil
 }

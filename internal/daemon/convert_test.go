@@ -226,3 +226,25 @@ func TestToAPIEventTodosUpdated(t *testing.T) {
 		t.Fatalf("unexpected TodosUpdatedEvent payload: %+v", payload)
 	}
 }
+
+func TestToAPIModelWithSlashInID(t *testing.T) {
+	pm := workspace.ProviderModel{
+		ID:    "ddalcu/Qwen3.8-27B-MLX-Serve-4bit",
+		Name:  "qwen3.8-27b-mlx-serve-4bit",
+		Label: "Qwen 3.8 (MLX Serve)",
+		Limits: workspace.ModelLimits{
+			Context: 262144,
+			Output:  32768,
+		},
+	}
+	got := toAPIModel("mlx-serve", pm)
+	if got.ID != "mlx-serve/ddalcu/Qwen3.8-27B-MLX-Serve-4bit" {
+		t.Errorf("got.ID = %q, want %q", got.ID, "mlx-serve/ddalcu/Qwen3.8-27B-MLX-Serve-4bit")
+	}
+	if got.Provider != "mlx-serve" {
+		t.Errorf("got.Provider = %q, want %q", got.Provider, "mlx-serve")
+	}
+	if got.Label != "Qwen 3.8 (MLX Serve)" {
+		t.Errorf("got.Label = %q, want %q", got.Label, "Qwen 3.8 (MLX Serve)")
+	}
+}

@@ -559,6 +559,46 @@ spec:
 	if len(embModels) != 1 || embModels[0] != "openai/text-embedding-3-large" {
 		t.Errorf("RoleEmbedding models = %v, want [openai/text-embedding-3-large]", embModels)
 	}
+
+	// 5. Provider with slash in model ID (e.g. "ddalcu/Qwen3.8-27B-MLX-Serve-4bit")
+	mlxProvider := `apiVersion: warp/v1alpha1
+kind: ModelProvider
+metadata:
+  name: mlx-serve
+spec:
+  type: ollama
+  endpoint: http://localhost:11234
+  defaultModel: qwen3.8
+  models:
+    - id: ddalcu/Qwen3.8-27B-MLX-Serve-4bit
+      name: qwen3.8-27b-mlx-serve-4bit
+      label: Qwen 3.8 (MLX Serve)
+      limits:
+        context: 262144
+        output: 32768
+`
+	if err := os.WriteFile(filepath.Join(provDir, "mlx-serve.yaml"), []byte(mlxProvider), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := ws.Reload(ctx); err != nil {
+		t.Fatalf("Reload error: %v", err)
+	}
+
+	for _, ref := range []string{
+		"ddalcu/Qwen3.8-27B-MLX-Serve-4bit",
+		"mlx-serve/ddalcu/Qwen3.8-27B-MLX-Serve-4bit",
+		"qwen3.8-27b-mlx-serve-4bit",
+		"mlx-serve/qwen3.8-27b-mlx-serve-4bit",
+	} {
+		resolved := ws.ResolveModels(RoleCompletion, ref)
+		if len(resolved) != 1 || resolved[0] != "mlx-serve/ddalcu/Qwen3.8-27B-MLX-Serve-4bit" {
+			t.Errorf("ResolveModels(%q) = %v, want [mlx-serve/ddalcu/Qwen3.8-27B-MLX-Serve-4bit]", ref, resolved)
+		}
+		limits := ws.ModelLimits(ref)
+		if limits.Context != 262144 || limits.Output != 32768 {
+			t.Errorf("ModelLimits(%q) = %+v, want 262144/32768", ref, limits)
+		}
+	}
 }
 
 func TestResourcesAndTemplateRendering(t *testing.T) {

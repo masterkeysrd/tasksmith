@@ -264,13 +264,14 @@ func (s *Session) harness(ctx context.Context) (harness.Harness, error) {
 	setting := s.Config.Thinking
 	s.Unlock()
 
+	provName, modelID := resolveProviderAndModel(s.workspace, modelName)
 	if setting == nil {
 		if agent, ok := s.workspace.GetAgent(agentName); ok {
 			setting = AgentThinking(agent.Thinking)
 		}
 	}
 	if setting != nil {
-		prof, _ := s.gateway.ModelProfile(modelName)
+		prof, _ := s.gateway.ModelProfile(provName, modelID)
 		if err := validateThinking(setting, prof); err != nil {
 			return nil, err
 		}
@@ -279,7 +280,7 @@ func (s *Session) harness(ctx context.Context) (harness.Harness, error) {
 	if thinking := thinkingConfig(setting); thinking != nil {
 		opts = append(opts, gateway.WithLLMConfig(&llm.ModelConfig{Thinking: thinking}))
 	}
-	llmModel, err := s.gateway.ResolveLLM(ctx, modelName, opts...)
+	llmModel, err := s.gateway.ResolveLLM(ctx, provName, modelID, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("session: resolve model %q: %w", modelName, err)
 	}
@@ -288,7 +289,7 @@ func (s *Session) harness(ctx context.Context) (harness.Harness, error) {
 	agentBreakdown := s.workspace.AgentContext(agentName)
 	staticCtx := harness.StaticContextFromBreakdown(agentBreakdown)
 	limits := s.workspace.ModelLimits(modelName)
-	if prof, ok := s.gateway.ModelProfile(modelName); ok && prof != nil {
+	if prof, ok := s.gateway.ModelProfile(provName, modelID); ok && prof != nil {
 		if prof.Limits.Context > 0 {
 			limits.Context = prof.Limits.Context
 		}
@@ -1481,11 +1482,8 @@ func (s *Session) generateTitle(userText string) {
 	ag, ok := s.workspace.GetAgent(workspace.AgentNameTitleGenerator)
 	var modelName string
 	if ok && len(ag.Models) > 0 {
-		models := s.workspace.ResolveModels(workspace.RoleCompletion, ag.Models...)
-		if len(models) > 0 {
-			modelName = models[0]
-		} else {
-			modelName = ag.Models[0]
+		if rm, ok := s.workspace.ResolveModel(workspace.RoleCompletion, ag.Models...); ok {
+			modelName = rm.QualifiedID
 		}
 	}
 	if modelName == "" {
@@ -1500,7 +1498,8 @@ func (s *Session) generateTitle(userText string) {
 		opts = append(opts, gateway.WithLLMConfig(&llm.ModelConfig{Temperature: &t32}))
 	}
 
-	llmModel, err := s.gateway.ResolveLLM(ctx, modelName, opts...)
+	provName, modelID := resolveProviderAndModel(s.workspace, modelName)
+	llmModel, err := s.gateway.ResolveLLM(ctx, provName, modelID, opts...)
 	if err != nil {
 		s.logger.Warn("failed to resolve LLM for title generation", log.String("error", err.Error()))
 		return

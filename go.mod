@@ -11,7 +11,7 @@ require (
 	github.com/lrstanley/go-nf v0.0.0-20260418212552-215ab243b591
 	github.com/masterkeysrd/kite v0.0.6-0.20261022053628-4a0d9aff0b59
 	github.com/masterkeysrd/loom v0.0.9-0.20261027202854-131fab4665d7
-	github.com/masterkeysrd/warp v0.0.7-0.20261029013709-e569b0ac79df
+	github.com/masterkeysrd/warp v0.0.7-0.20261029051839-892d1fca38da
 	github.com/ollama/ollama v0.40.8
 	github.com/openai/openai-go/v3 v3.79.0
 	github.com/spf13/cobra v1.10.2

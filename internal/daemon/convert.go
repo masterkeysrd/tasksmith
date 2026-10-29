@@ -677,7 +677,7 @@ func toAPIThinkingValues(kind string, values []string) []api.ThinkingValue {
 
 func toAPIModel(providerName string, pm workspace.ProviderModel) api.Model {
 	id := pm.ID
-	if !strings.Contains(id, "/") && providerName != "" {
+	if providerName != "" && !strings.HasPrefix(id, providerName+"/") {
 		id = providerName + "/" + id
 	}
 	name := cmp.Or(pm.Name, pm.ID)
@@ -707,48 +707,15 @@ func toAPIModel(providerName string, pm workspace.ProviderModel) api.Model {
 	return model
 }
 
-// resolveAPIModel resolves a model identifier against the workspace catalog and defaults,
-// returning an api.Model with populated metadata.
-func resolveAPIModel(ws workspace.Workspace, rawID string) api.Model {
-	rawID = strings.TrimSpace(rawID)
-	targetID := rawID
-	if ws != nil {
-		if resolved := ws.ResolveModels(workspace.RoleCompletion, rawID); len(resolved) > 0 && resolved[0] != "" {
-			targetID = resolved[0]
-		}
+func resolvedToAPIModel(rm *workspace.ResolvedModel) api.Model {
+	if rm.Model != nil {
+		return toAPIModel(rm.ProviderName, *rm.Model)
 	}
-
-	providerName, modelName, hasSlash := strings.Cut(targetID, "/")
-	if !hasSlash {
-		modelName = targetID
-		providerName = ""
-	}
-
-	if ws != nil {
-		if providerName != "" {
-			if p, ok := ws.GetProvider(providerName); ok {
-				for _, m := range p.Models {
-					if m.ID == modelName || m.Name == modelName || p.Name+"/"+m.ID == targetID {
-						return toAPIModel(p.Name, m)
-					}
-				}
-			}
-		} else {
-			for _, p := range ws.Providers() {
-				for _, m := range p.Models {
-					if m.ID == modelName || m.Name == modelName {
-						return toAPIModel(p.Name, m)
-					}
-				}
-			}
-		}
-	}
-
 	return api.Model{
-		ID:       targetID,
-		Provider: providerName,
-		Name:     modelName,
-		Label:    cmp.Or(modelName, targetID),
+		ID:       rm.QualifiedID,
+		Provider: rm.ProviderName,
+		Name:     rm.ModelID,
+		Label:    cmp.Or(rm.ModelID, rm.QualifiedID),
 	}
 }
 

@@ -50,7 +50,7 @@ func TestThinkingCapabilitiesPreserved(t *testing.T) {
 				}
 				inst := &providerInstance{cfg: ProviderConfig{Name: "test", Type: providerType}, llmProv: provider, models: map[string]ModelSpec{"model": spec}}
 				gw := &gatewayImpl{providers: map[string]*providerInstance{"test": inst}}
-				got, ok := gw.ModelProfile("test/model")
+				got, ok := gw.ModelProfile("test", "model")
 				if !ok || !reflect.DeepEqual(got.Capabilities.ReasoningOptions, options) {
 					t.Fatalf("thinking options changed: %+v", got)
 				}
@@ -68,8 +68,8 @@ func TestThinkingProfileAndRequest(t *testing.T) {
 	}
 	provider := &thinkingTestProvider{}
 	inst := &providerInstance{cfg: ProviderConfig{Name: "test", Type: "ollama", Models: []ModelSpec{spec}}, llmProv: provider, models: map[string]ModelSpec{"model": spec}}
-	gw := &gatewayImpl{providers: map[string]*providerInstance{"test": inst}, providerList: []*providerInstance{inst}}
-	model, err := gw.ResolveLLM(context.Background(), "test/model", WithLLMConfig(&llm.ModelConfig{Thinking: &llm.ThinkingConfig{Enabled: true, Effort: "minimal"}}))
+	gw := &gatewayImpl{providers: map[string]*providerInstance{"test": inst}}
+	model, err := gw.ResolveLLM(context.Background(), "test", "model", WithLLMConfig(&llm.ModelConfig{Thinking: &llm.ThinkingConfig{Enabled: true, Effort: "minimal"}}))
 	if err != nil {
 		t.Fatal(err)
 	}

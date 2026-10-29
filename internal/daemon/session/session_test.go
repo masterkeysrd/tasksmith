@@ -190,22 +190,25 @@ func newFakeGateway(p *fakeProvider) *fakeGateway {
 	return &fakeGateway{provider: p}
 }
 
-func (g *fakeGateway) ResolveLLM(ctx context.Context, explicit string, _ ...gateway.LLMOption) (*llm.Model, error) {
+func (g *fakeGateway) ResolveLLM(ctx context.Context, provider, modelID string, _ ...gateway.LLMOption) (*llm.Model, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	modelName := strings.TrimSpace(explicit)
+	modelName := strings.TrimSpace(modelID)
+	if provider = strings.TrimSpace(provider); provider != "" && modelName != "" {
+		modelName = provider + "/" + modelName
+	}
 	if modelName == "" {
 		modelName = "fake-default-model"
 	}
 	return llm.NewModel(g.provider, modelName, nil)
 }
 
-func (g *fakeGateway) ResolveDecision(context.Context, string, ...gateway.DecisionOption) (*decision.Model, error) {
+func (g *fakeGateway) ResolveDecision(context.Context, string, string, ...gateway.DecisionOption) (*decision.Model, error) {
 	return nil, gateway.ErrUnsupportedCapability
 }
 
-func (g *fakeGateway) ResolveEmbedding(context.Context, string, ...gateway.EmbeddingOption) (*embedding.Model, error) {
+func (g *fakeGateway) ResolveEmbedding(context.Context, string, string, ...gateway.EmbeddingOption) (*embedding.Model, error) {
 	return nil, gateway.ErrUnsupportedCapability
 }
 
@@ -213,10 +216,15 @@ func (g *fakeGateway) ListProviders() []gateway.ProviderInfo {
 	return nil
 }
 
-func (g *fakeGateway) ModelProfile(model string) (*profile.Profile, bool) {
+func (g *fakeGateway) ModelProfile(provider, modelID string) (*profile.Profile, bool) {
 	if g.provider != nil {
-		if prof, found := g.provider.GetProfile(model); found {
+		if prof, found := g.provider.GetProfile(modelID); found {
 			return &prof, true
+		}
+		if provider != "" {
+			if prof, found := g.provider.GetProfile(provider + "/" + modelID); found {
+				return &prof, true
+			}
 		}
 	}
 	return nil, false
@@ -320,7 +328,7 @@ func setupTestEnv(t *testing.T, prov *fakeProvider) (*sql.DB, workspace.Workspac
 
 func loadHarnessState(t *testing.T, mgr Manager, db *sql.DB, gw *fakeGateway, sessionID string) harness.State {
 	t.Helper()
-	llmModel, err := gw.ResolveLLM(context.Background(), "fake-default-model")
+	llmModel, err := gw.ResolveLLM(context.Background(), "", "fake-default-model")
 	if err != nil {
 		t.Fatalf("ResolveLLM: %v", err)
 	}

@@ -15,9 +15,6 @@ type Config struct {
 	// Providers lists the configured model providers.
 	Providers []ProviderConfig `json:"providers"`
 
-	// DefaultModels defines role-based defaults (completion, decision, embedding).
-	DefaultModels map[ModelRole]string `json:"default_models,omitempty"`
-
 	// Env contains injected environment variables strictly keyed by name.
 	// The gateway will only read variables explicitly referenced by a provider's Auth.Env.
 	Env map[string]string `json:"env,omitempty"`
@@ -66,13 +63,11 @@ func (c *Config) Fingerprint() string {
 
 	// 3. Build canonical structure for JSON marshaling
 	canonical := struct {
-		Providers     []ProviderConfig     `json:"providers"`
-		DefaultModels map[ModelRole]string `json:"default_models,omitempty"`
-		RelevantEnv   map[string]string    `json:"relevant_env,omitempty"`
+		Providers   []ProviderConfig  `json:"providers"`
+		RelevantEnv map[string]string `json:"relevant_env,omitempty"`
 	}{
-		Providers:     normalizedProviders,
-		DefaultModels: c.DefaultModels,
-		RelevantEnv:   relevantEnv,
+		Providers:   normalizedProviders,
+		RelevantEnv: relevantEnv,
 	}
 
 	data, err := json.Marshal(canonical)
