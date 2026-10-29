@@ -88,6 +88,8 @@ func TestConfigFingerprint(t *testing.T) {
 func TestStrictAuthValidation(t *testing.T) {
 	ctx := context.Background()
 
+	t.Setenv("ANTHROPIC_API_KEY", "")
+
 	// 1. Missing credentials: New() must succeed lazily, with warning populated
 	cfgMissing := Config{
 		Providers: []ProviderConfig{

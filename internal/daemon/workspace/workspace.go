@@ -1046,16 +1046,16 @@ func (w *workspace) ResolveModels(role ModelRole, explicit ...string) []string {
 func (w *workspace) ResolveModel(role ModelRole, explicit ...string) (*ResolvedModel, bool) {
 	w.mu.RLock()
 	resolver := w.resolverLocked()
-	var rm *warp.ResolvedModel
-	var ok bool
+	var resolved []warp.ResolvedModel
 	if resolver != nil {
-		rm, ok = resolver.ResolveModel(warp.ModelRole(role), explicit...)
+		resolved = resolver.ResolveModels(warp.ModelRole(role), explicit...)
 	}
 	w.mu.RUnlock()
 
-	if !ok || rm == nil {
+	if len(resolved) == 0 {
 		return nil, false
 	}
+	rm := resolved[0]
 	var pm *ProviderModel
 	if rm.Model != nil {
 		converted := convertProviderModel(*rm.Model)
@@ -1064,6 +1064,8 @@ func (w *workspace) ResolveModel(role ModelRole, explicit ...string) (*ResolvedM
 	var provName string
 	if rm.Provider != nil {
 		provName = rm.Provider.Metadata.Name
+	} else if before, _, ok := strings.Cut(rm.QualifiedID, "/"); ok {
+		provName = before
 	}
 	return &ResolvedModel{
 		ProviderName: provName,
