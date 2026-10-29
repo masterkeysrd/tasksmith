@@ -268,6 +268,75 @@ func TestSources(t *testing.T) {
 	}
 }
 
+func TestSkillAutocompleteOrderingAndCompletion(t *testing.T) {
+	r := NewRegistry()
+	baseline, err := r.Sources()[0].Complete(context.Background(), autocomplete.Request{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, cmd := range r.List() {
+		if baseline[i].Value != cmd.Name {
+			t.Fatalf("command-only ordering changed at %d: got %q, want %q", i, baseline[i].Value, cmd.Name)
+		}
+	}
+
+	r.RegisterWorkspace([]api.Command{{Name: "review"}}, []api.Skill{
+		{Name: "tasksmith-customizations", Namespace: "system"},
+		{Name: "deploy", Arguments: []api.Argument{{Name: "env", Required: true}}},
+	})
+	engine := autocomplete.New()
+	for _, source := range r.Sources() {
+		if err := engine.Register(source); err != nil {
+			t.Fatal(err)
+		}
+	}
+	complete := func(input string) autocomplete.Result {
+		t.Helper()
+		result, err := engine.Complete(context.Background(), input, len(input))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return result
+	}
+	result := complete("/")
+	if len(result.Candidates) != len(r.List()) {
+		t.Fatalf("got %d candidates for %d registered commands", len(result.Candidates), len(r.List()))
+	}
+	for i, want := range []string{baseline[0].Value, "tasksmith-customizations", baseline[1].Value, "deploy"} {
+		if result.Candidates[i].Value != want {
+			t.Errorf("candidate %d = %q, want %q", i, result.Candidates[i].Value, want)
+		}
+	}
+	seen := make(map[string]int)
+	for _, candidate := range result.Candidates {
+		seen[candidate.Value]++
+	}
+	for _, cmd := range r.List() {
+		if seen[cmd.Name] != 1 {
+			t.Errorf("candidate %q appears %d times", cmd.Name, seen[cmd.Name])
+		}
+	}
+
+	result = complete("/tasksmith")
+	if len(result.Candidates) != 1 || result.Candidates[0].Value != "tasksmith-customizations" {
+		t.Fatalf("unexpected filtered candidates: %+v", result.Candidates)
+	}
+	if text, _, err := result.Apply(0); err != nil || text != "/tasksmith-customizations" {
+		t.Fatalf("applying built-in skill: text=%q err=%v", text, err)
+	}
+	result = complete("/deploy")
+	if len(result.Candidates) != 1 {
+		t.Fatalf("unexpected deploy candidates: %+v", result.Candidates)
+	}
+	if text, _, err := result.Apply(0); err != nil || text != "/deploy " {
+		t.Fatalf("applying skill with arguments: text=%q err=%v", text, err)
+	}
+	result = complete("/deploy ")
+	if len(result.Candidates) != 1 || result.Candidates[0].Value != "env" {
+		t.Fatalf("unexpected skill argument candidates: %+v", result.Candidates)
+	}
+}
+
 func TestCompactAndContextCommands(t *testing.T) {
 	r := NewRegistry()
 

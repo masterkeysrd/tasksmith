@@ -9,6 +9,7 @@ import (
 
 	"github.com/masterkeysrd/kite/backend"
 	"github.com/masterkeysrd/kite/backend/mock"
+	"github.com/masterkeysrd/kite/extras/trail"
 	"github.com/masterkeysrd/kite/key"
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/client"
@@ -74,6 +75,38 @@ func waitFor(t *testing.T, condition func() bool, timeout time.Duration, msg str
 		time.Sleep(5 * time.Millisecond)
 	}
 	t.Fatalf("timed out waiting for %s", msg)
+}
+
+func TestBuiltinSkillAutocomplete(t *testing.T) {
+	store.ResetApp()
+	store.ResetSession()
+	store.ClearSlot()
+	t.Cleanup(func() {
+		store.ResetApp()
+		store.ResetSession()
+		store.ClearSlot()
+	})
+	store.SetWorkspaceSkills([]api.Skill{{Name: "tasksmith-customizations", Namespace: "system", Description: "Built-in customization guidance"}})
+	b := mock.New(100, 24)
+	inst, err := trail.New(App(), trail.WithBackend(b))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer inst.Unmount()
+	inst.Frame()
+	for _, r := range "/" {
+		inst.Engine().ProcessRawEvent(&backend.RawKeyEvent{Key: key.Key{Code: r, Text: string(r)}})
+		inst.Frame()
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		inst.Frame()
+		if strings.Contains(surfaceText(b), "/tasksmith-customizations") {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("built-in skill missing from autocomplete:\n%s", surfaceText(b))
 }
 
 func TestOptionsValidate(t *testing.T) {

@@ -21,6 +21,7 @@ type Command struct {
 	Description string
 	Handler     Handler
 	Complete    autocomplete.Completer
+	skill       bool
 }
 
 // Registry maintains the collection of REPL slash commands.
@@ -129,6 +130,7 @@ func (r *Registry) RegisterSkillResource(sk api.Skill) {
 		Name:        sk.Name,
 		Usage:       usage,
 		Description: sk.Description,
+		skill:       true,
 		Handler: func(args []string) error {
 			if err := validateArguments(sk.Arguments, args, usage); err != nil {
 				return err

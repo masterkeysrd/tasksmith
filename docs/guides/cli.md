@@ -107,7 +107,9 @@ The bottom composer is your command center:
 
 ## Slash Commands & Configuration
 
-Type `/` in the composer to open the interactive autocomplete menu for slash commands:
+Type `/` in the composer to open the interactive autocomplete menu. Commands and available skills, including built-in skills, appear together; type a name to filter them. Use the arrow keys to navigate and `Tab` to insert a suggestion.
+
+Some built-in commands:
 
 | Command | Usage | Description |
 | :--- | :--- | :--- |

@@ -12,14 +12,14 @@ import (
 // Sources snapshots the registered commands as headless autocomplete sources.
 func (r *Registry) Sources() []autocomplete.Source {
 	commands := r.List()
-	candidates := make([]autocomplete.Candidate, len(commands))
+	var commandCandidates, skillCandidates []autocomplete.Candidate
 	sources := []autocomplete.Source{{
 		Name:      "commands",
 		Trigger:   "/",
 		StartOnly: true,
 	}}
 
-	for i, cmd := range commands {
+	for _, cmd := range commands {
 		keys := []string{cmd.Name}
 		seen := map[string]bool{cmd.Name: true}
 		for _, alias := range cmd.Aliases {
@@ -30,17 +30,24 @@ func (r *Registry) Sources() []autocomplete.Source {
 			}
 		}
 
-		candidates[i] = autocomplete.Candidate{
+		candidate := autocomplete.Candidate{
 			Value:       cmd.Name,
 			Label:       cmd.Usage,
 			Description: cmd.Description,
 			Aliases:     keys[1:],
 			Data:        cmd,
 		}
+		if cmd.Complete != nil {
+			candidate.InsertText = cmd.Name + " "
+		}
+		if cmd.skill {
+			skillCandidates = append(skillCandidates, candidate)
+		} else {
+			commandCandidates = append(commandCandidates, candidate)
+		}
 		if cmd.Complete == nil {
 			continue
 		}
-		candidates[i].InsertText = cmd.Name + " "
 		for _, key := range keys {
 			sources = append(sources, autocomplete.Source{
 				Name:      "commands:" + key,
@@ -51,6 +58,15 @@ func (r *Registry) Sources() []autocomplete.Source {
 		}
 	}
 
+	candidates := make([]autocomplete.Candidate, 0, len(commands))
+	for i := 0; i < len(commandCandidates) || i < len(skillCandidates); i++ {
+		if i < len(commandCandidates) {
+			candidates = append(candidates, commandCandidates[i])
+		}
+		if i < len(skillCandidates) {
+			candidates = append(candidates, skillCandidates[i])
+		}
+	}
 	sources[0].Complete = autocomplete.Static(candidates...)
 	return sources
 }
