@@ -872,7 +872,8 @@ func TestSessionOutputsAndOutsidePathOperations(t *testing.T) {
 		ID:   "call-view-spill",
 		Name: builtin.ToolView,
 		Args: map[string]any{
-			"path": expectedSpillPath,
+			"path":  expectedSpillPath,
+			"limit": 600,
 		},
 	}
 	viewPlan, err := c.Prepare(ctx, viewCall)
@@ -1487,5 +1488,105 @@ Restricted agent instructions.
 	t.Logf("resDisallowed: IsError=%v, Content=%q", resDisallowed.IsError, resDisallowed.Content.Text())
 	if !resDisallowed.IsError || !strings.Contains(resDisallowed.Content.Text(), "not accessible to this agent") {
 		t.Errorf("expected skill to be rejected for restricted-agent, got: %q", resDisallowed.Content.Text())
+	}
+
+	// 5. Large skill truncation (> 500 lines)
+	bigSkillDir := filepath.Join(skillsDir, "big-skill")
+	if err := os.MkdirAll(bigSkillDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	var bigSkill strings.Builder
+	bigSkill.WriteString("---\napiVersion: warp/v1alpha1\nkind: Skill\nmetadata:\n  name: big-skill\n  description: Large skill\n---\n")
+	for i := 1; i <= 600; i++ {
+		fmt.Fprintf(&bigSkill, "Instruction line %d\n", i)
+	}
+	if err := os.WriteFile(filepath.Join(bigSkillDir, "SKILL.md"), []byte(bigSkill.String()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := ws.Reload(ctx); err != nil {
+		t.Fatalf("ws.Reload: %v", err)
+	}
+	resolvedBig, err := ws.ResolveAgent("main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bigTools, err := builtin.New(builtin.Config{
+		Std:         stdLib,
+		Sandbox:     sb,
+		Guard:       guard,
+		Workspace:   ws,
+		Skills:      resolvedBig.Skills,
+		RenderSkill: func(name string, args map[string]string) (string, error) { return ws.RenderSkill(name, args, nil) },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bigContainer, err := tools.NewContainer(tools.Config{
+		Tools:     bigTools,
+		Sandbox:   sb,
+		Workspace: ws,
+		Logger:    log.Default(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resBig, err := bigContainer.Execute(ctx, &message.ToolCall{
+		ID:   "call-big-skill",
+		Name: builtin.ToolLoadSkill,
+		Args: map[string]any{"skill": "big-skill"},
+	})
+	if err != nil || resBig.IsError {
+		t.Fatalf("Execute load_skill big-skill: err=%v, res=%+v", err, resBig)
+	}
+	bigOut, ok := resBig.StructuredContent.(api.LoadSkillOutput)
+	if !ok {
+		t.Fatalf("expected api.LoadSkillOutput, got %T", resBig.StructuredContent)
+	}
+	if !bigOut.Truncated {
+		t.Errorf("expected Truncated=true for 600-line skill")
+	}
+	if !strings.Contains(bigOut.Instructions, "Instruction line 500") || strings.Contains(bigOut.Instructions, "Instruction line 501") {
+		t.Errorf("expected instructions truncated at line 500")
+	}
+	if !strings.Contains(bigOut.Instructions, ".agents/skills/big-skill") || !strings.Contains(bigOut.Instructions, "`ls`, `glob`, `grep`, and `view`") {
+		t.Errorf("expected continuation hint referencing .agents/skills/big-skill and ls/glob/grep/view, got: %q", bigOut.Instructions)
+	}
+}
+
+func TestWriteEditRemoveDiffCap(t *testing.T) {
+	ctx := context.Background()
+	_, c, _, _, _ := setupBuiltinEnv(t, false)
+
+	var bigContent strings.Builder
+	for i := 1; i <= 250; i++ {
+		fmt.Fprintf(&bigContent, "line %d content for large file\n", i)
+	}
+
+	writeCall := &message.ToolCall{
+		ID:   "call-write-big",
+		Name: builtin.ToolWrite,
+		Args: map[string]any{
+			"path":    "big.txt",
+			"content": bigContent.String(),
+		},
+	}
+	plan, err := c.Prepare(ctx, writeCall)
+	if err != nil {
+		t.Fatalf("Prepare(write): %v", err)
+	}
+	if !strings.Contains(plan.Diff, "+line 250 content") {
+		t.Fatalf("expected full diff in Prepare plan, got len=%d", len(plan.Diff))
+	}
+
+	res, err := c.Execute(ctx, writeCall)
+	if err != nil || res.IsError {
+		t.Fatalf("Execute(write): err=%v, res=%+v", err, res)
+	}
+	writeOut, ok := res.StructuredContent.(api.WriteOutput)
+	if !ok {
+		t.Fatalf("expected api.WriteOutput, got %T", res.StructuredContent)
+	}
+	if !strings.HasPrefix(writeOut.Diff, "[diff omitted:") {
+		t.Fatalf("expected capped diff notice in WriteOutput.Diff, got: %q", writeOut.Diff)
 	}
 }

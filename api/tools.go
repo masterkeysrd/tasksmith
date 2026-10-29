@@ -154,8 +154,9 @@ type LoadSkillInput struct {
 // LoadSkillOutput defines the structured output of the load_skill tool.
 type LoadSkillOutput struct {
 	Skill        string `json:"skill" jsonschema:"Name of the skill that was loaded."`
-	Path         string `json:"path,omitempty" jsonschema:"Base directory where the skill is located on disk, for resolving relative assets (scripts, references)."`
 	Instructions string `json:"instructions" jsonschema:"Rendered instructions and domain guidelines for the skill."`
+	Path         string `json:"path,omitempty" jsonschema:"Base directory where the skill is located on disk, for resolving relative assets (scripts, references)."`
+	Truncated    bool   `json:"truncated,omitempty" jsonschema:"Whether the skill instructions exceeded limits and were truncated."`
 }
 
 // LsEntry represents an item in entries.
@@ -260,8 +261,7 @@ type ViewInput struct {
 // ViewOutput defines the structured output of the view tool.
 type ViewOutput struct {
 	Path       string `json:"path" jsonschema:"Normalized workspace-relative file path."`
-	Content    string `json:"content" jsonschema:"Raw text content of the selected line range."`
-	Numbered   string `json:"numbered" jsonschema:"Line-numbered text content."`
+	Content    string `json:"content" jsonschema:"Line-numbered text content of the selected line range."`
 	StartLine  int    `json:"start_line" jsonschema:"1-based first line number returned."`
 	EndLine    int    `json:"end_line" jsonschema:"1-based last line number returned."`
 	TotalLines int    `json:"total_lines" jsonschema:"Total number of lines in the file."`

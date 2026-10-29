@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -257,7 +258,7 @@ func TestViewAndExternalChangeDetection(t *testing.T) {
 	if res.Content != "line2\nline3" {
 		t.Fatalf("unexpected content: %q", res.Content)
 	}
-	if !strings.Contains(res.Numbered, "2\tline2") || !strings.Contains(res.Numbered, "3\tline3") {
+	if res.Numbered != "2\tline2\n3\tline3" {
 		t.Fatalf("unexpected numbered output: %q", res.Numbered)
 	}
 
@@ -1081,5 +1082,53 @@ func TestExpectedHashCASAndUUIDv7(t *testing.T) {
 		if len(ch.ID) != 36 || ch.ID[14] != '7' {
 			t.Fatalf("change %d expected UUIDv7 ID, got %q", i, ch.ID)
 		}
+	}
+}
+
+func TestViewGrepAndListLimitsAndDynamicGutter(t *testing.T) {
+	s, _, workDir := newTestStd(t, false)
+	ctx := context.Background()
+
+	// 1. Dynamic gutter width (1..12 -> width 2)
+	var twelveLines strings.Builder
+	for i := 1; i <= 12; i++ {
+		fmt.Fprintf(&twelveLines, "line-%d\n", i)
+	}
+	if err := os.WriteFile(filepath.Join(workDir, "twelve.txt"), []byte(twelveLines.String()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	res12, err := s.View(ctx, ViewRequest{Path: "twelve.txt"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(res12.Numbered, " 1\tline-1\n") || !strings.Contains(res12.Numbered, "\n12\tline-12") {
+		t.Fatalf("expected 2-char dynamic gutter, got:\n%s", res12.Numbered)
+	}
+
+	// 2. Long line truncation (> MaxViewLineBytes) and byte budget cap (> MaxViewBytes)
+	longLine := strings.Repeat("x", MaxViewLineBytes+500)
+	var bigFile strings.Builder
+	for range 30 {
+		bigFile.WriteString(longLine)
+		bigFile.WriteByte('\n')
+	}
+	if err := os.WriteFile(filepath.Join(workDir, "big.txt"), []byte(bigFile.String()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	resBig, err := s.View(ctx, ViewRequest{Path: "big.txt"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !resBig.Truncated || len(resBig.Content) > MaxViewBytes || !strings.Contains(resBig.Content, "[line truncated]") || resBig.EndLine >= 30 {
+		t.Fatalf("expected byte-capped and line-truncated view result: len=%d, EndLine=%d, Truncated=%v", len(resBig.Content), resBig.EndLine, resBig.Truncated)
+	}
+
+	// 3. Grep long line truncation (> MaxGrepLineBytes)
+	grepRes, err := s.Grep(ctx, GrepRequest{Path: "big.txt", Pattern: "xxx"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(grepRes.Matches) == 0 || len(grepRes.Matches[0].Text) > MaxGrepLineBytes+3 || !strings.HasSuffix(grepRes.Matches[0].Text, "...") {
+		t.Fatalf("expected truncated grep match line, got len=%d", len(grepRes.Matches[0].Text))
 	}
 }

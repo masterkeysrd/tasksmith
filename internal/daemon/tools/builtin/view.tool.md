@@ -34,10 +34,7 @@ spec:
         description: Normalized workspace-relative file path.
       content:
         type: string
-        description: Raw text content of the selected line range.
-      numbered:
-        type: string
-        description: Line-numbered text content.
+        description: Line-numbered text content of the selected line range.
       start_line:
         type: integer
         description: 1-based first line number returned.
@@ -56,7 +53,6 @@ spec:
     required:
       - path
       - content
-      - numbered
       - start_line
       - end_line
       - total_lines

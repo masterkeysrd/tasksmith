@@ -18,10 +18,46 @@ import (
 
 const (
 	// DefaultViewLimit is the default maximum number of lines returned by View.
-	DefaultViewLimit = 2000
+	DefaultViewLimit = 500
+
+	// MaxViewLimit is the maximum number of lines that View can return in a single call.
+	MaxViewLimit = 2000
+
+	// MaxViewBytes is the maximum total byte size of content returned by View (32 KiB).
+	MaxViewBytes = 32 * 1024
+
+	// MaxViewLineBytes is the maximum byte length of a single line in View before line truncation.
+	MaxViewLineBytes = 2048
+
+	// DefaultListLimit is the default maximum number of entries returned by List.
+	DefaultListLimit = 200
+
+	// MaxListLimit is the maximum number of entries that List can return in a single call.
+	MaxListLimit = 500
+
+	// MaxListBytes is the maximum total byte budget for List entries (32 KiB).
+	MaxListBytes = 32 * 1024
 
 	// DefaultGlobLimit is the default maximum number of matches returned by Glob.
 	DefaultGlobLimit = 200
+
+	// MaxGlobLimit is the maximum number of matches that Glob can return in a single call.
+	MaxGlobLimit = 500
+
+	// MaxGlobBytes is the maximum total byte budget for Glob match paths (32 KiB).
+	MaxGlobBytes = 32 * 1024
+
+	// DefaultGrepLimit is the default maximum number of matches returned by Grep.
+	DefaultGrepLimit = 100
+
+	// MaxGrepLimit is the maximum number of matches that Grep can return in a single call.
+	MaxGrepLimit = 500
+
+	// MaxGrepLineBytes is the maximum byte length of a matched or context line in Grep.
+	MaxGrepLineBytes = 500
+
+	// MaxGrepBytes is the maximum total byte budget for Grep matches (32 KiB).
+	MaxGrepBytes = 32 * 1024
 
 	// DefaultMaxFetchBytes is the default response body cap for Fetch (10 MiB).
 	DefaultMaxFetchBytes int64 = 10 * 1024 * 1024

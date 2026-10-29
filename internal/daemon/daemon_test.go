@@ -1835,7 +1835,7 @@ func TestToolStructuredContentInEventsAndHistory(t *testing.T) {
 	if err := json.Unmarshal(live.StructuredContent, &liveOutput); err != nil {
 		t.Fatalf("decode live structured content: %v", err)
 	}
-	if liveOutput.Path == "" || liveOutput.StartLine != 2 || liveOutput.EndLine != 2 || liveOutput.Content != "second" {
+	if liveOutput.Path == "" || liveOutput.StartLine != 2 || liveOutput.EndLine != 2 || liveOutput.Content != "2\tsecond" {
 		t.Fatalf("live output = %+v", liveOutput)
 	}
 	if len(live.Content) != 0 {

@@ -73,8 +73,7 @@ Reads text content from a file inside the workspace. Supports pagination via lin
 | Field | Type | Description |
 | :--- | :--- | :--- |
 | `path` | string | Normalized workspace-relative file path. |
-| `content` | string | Raw text content of the selected line range. |
-| `numbered` | string | Line-numbered text content formatted for LLM inspection. |
+| `content` | string | Line-numbered text content of the selected line range. |
 | `start_line` | integer | 1-based first line number returned. |
 | `end_line` | integer | 1-based last line number returned. |
 | `total_lines` | integer | Total line count of the file on disk. |
@@ -575,6 +574,7 @@ Loads and renders instructions, coding conventions, or runbooks for a specialize
 | `skill` | string | Name of the skill that was loaded. |
 | `path` | string | Base directory where the skill is located on disk, for resolving relative assets (scripts, references). |
 | `instructions` | string | Rendered instructions and guidelines populated from the skill package. |
+| `truncated` | boolean | `true` if the skill instructions exceeded size limits (500 lines / 32 KB) and were truncated. |
 
 ```json
 {

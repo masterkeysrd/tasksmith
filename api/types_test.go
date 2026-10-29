@@ -428,8 +428,7 @@ func TestGeneratedToolTypesJSONRoundTrip(t *testing.T) {
 		})
 		testJSONRoundTrip(t, ViewOutput{
 			Path:       "README.md",
-			Content:    "Hello world\nLine 2",
-			Numbered:   "1\tHello world\n2\tLine 2",
+			Content:    "1\tHello world\n2\tLine 2",
 			StartLine:  1,
 			EndLine:    2,
 			TotalLines: 2,

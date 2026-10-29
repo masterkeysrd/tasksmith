@@ -8,6 +8,7 @@ import (
 
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/core/shellguard"
+	"github.com/masterkeysrd/tasksmith/internal/core/strutils"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/sandbox"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/std"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tools"
@@ -56,8 +57,7 @@ func (t *viewTool) Execute(ctx context.Context, in api.ViewInput) (api.ViewOutpu
 	}
 	return api.ViewOutput{
 		Path:       res.Path,
-		Content:    res.Content,
-		Numbered:   res.Numbered,
+		Content:    res.Numbered,
 		StartLine:  res.StartLine,
 		EndLine:    res.EndLine,
 		TotalLines: res.TotalLines,
@@ -252,6 +252,22 @@ func (t *writeTool) Prepare(ctx context.Context, in api.WriteInput) (*tools.Plan
 	}, nil
 }
 
+const (
+	maxToolDiffBytes = 8 * 1024
+	maxToolDiffLines = 200
+)
+
+func capToolDiff(diffStr string) string {
+	if diffStr == "" {
+		return ""
+	}
+	lines := strutils.CountLines(diffStr)
+	if len(diffStr) <= maxToolDiffBytes && lines <= maxToolDiffLines {
+		return diffStr
+	}
+	return fmt.Sprintf("[diff omitted: %d bytes (%d lines) exceeds limit]", len(diffStr), lines)
+}
+
 func (t *writeTool) Execute(ctx context.Context, in api.WriteInput) (api.WriteOutput, error) {
 	res, err := t.std.Write(ctx, std.WriteRequest{
 		Path:    in.Path,
@@ -268,7 +284,7 @@ func (t *writeTool) Execute(ctx context.Context, in api.WriteInput) (api.WriteOu
 		BytesWritten: res.BytesWritten,
 		Additions:    res.Additions,
 		Deletions:    res.Deletions,
-		Diff:         res.Diff,
+		Diff:         capToolDiff(res.Diff),
 		BeforeHash:   res.BeforeHash,
 		AfterHash:    res.AfterHash,
 	}, nil
@@ -320,7 +336,7 @@ func (t *editTool) Execute(ctx context.Context, in api.EditInput) (api.EditOutpu
 		Replacements: res.Replacements,
 		Additions:    res.Additions,
 		Deletions:    res.Deletions,
-		Diff:         res.Diff,
+		Diff:         capToolDiff(res.Diff),
 		BeforeHash:   res.BeforeHash,
 		AfterHash:    res.AfterHash,
 	}, nil
@@ -369,7 +385,7 @@ func (t *removeTool) Execute(ctx context.Context, in api.RemoveInput) (api.Remov
 	return api.RemoveOutput{
 		Path:       res.Path,
 		Deletions:  res.Deletions,
-		Diff:       res.Diff,
+		Diff:       capToolDiff(res.Diff),
 		BeforeHash: res.BeforeHash,
 	}, nil
 }

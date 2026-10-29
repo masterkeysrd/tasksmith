@@ -37,6 +37,9 @@ spec:
       instructions:
         type: string
         description: Rendered instructions and domain guidelines for the skill.
+      truncated:
+        type: boolean
+        description: Whether the skill instructions exceeded limits and were truncated.
     required:
       - skill
       - instructions

@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -17,6 +18,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/core/fsutils"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	"github.com/masterkeysrd/tasksmith/internal/core/ripgrep"
+	"github.com/masterkeysrd/tasksmith/internal/core/strutils"
 )
 
 // View reads a text file from the sandbox filesystem, records its SHA-256
@@ -78,6 +80,8 @@ func (s *Std) View(ctx context.Context, req ViewRequest) (*ViewResult, error) {
 	limit := req.Limit
 	if limit <= 0 {
 		limit = DefaultViewLimit
+	} else if limit > MaxViewLimit {
+		limit = MaxViewLimit
 	}
 
 	res := &ViewResult{
@@ -98,17 +102,36 @@ func (s *Std) View(ctx context.Context, req ViewRequest) (*ViewResult, error) {
 		endIdx = totalLines
 	}
 
-	selected := lines[startIdx:endIdx]
+	var selected []string
+	var contentBytes int
+	for i := startIdx; i < endIdx; i++ {
+		line, lineTrunc := strutils.TruncateLine(lines[i], MaxViewLineBytes, " ... [line truncated]")
+		if lineTrunc {
+			res.Truncated = true
+		}
+		addedBytes := len(line)
+		if len(selected) > 0 {
+			addedBytes++
+		}
+		if len(selected) > 0 && contentBytes+addedBytes > MaxViewBytes {
+			res.Truncated = true
+			break
+		}
+		selected = append(selected, line)
+		contentBytes += addedBytes
+	}
+
 	res.StartLine = startIdx + 1
-	res.EndLine = endIdx
+	res.EndLine = startIdx + len(selected)
 	res.Content = strings.Join(selected, "\n")
 
+	width := len(strconv.Itoa(res.EndLine))
 	var numbered strings.Builder
 	for i, line := range selected {
 		if i > 0 {
 			numbered.WriteByte('\n')
 		}
-		fmt.Fprintf(&numbered, "%6d\t%s", startIdx+i+1, line)
+		fmt.Fprintf(&numbered, "%*d\t%s", width, startIdx+i+1, line)
 	}
 	res.Numbered = numbered.String()
 
@@ -134,6 +157,14 @@ func (s *Std) List(ctx context.Context, req ListRequest) (*ListResult, error) {
 		Path:    basePath,
 		Entries: []ListEntry{},
 	}
+
+	limit := req.Limit
+	if limit <= 0 {
+		limit = DefaultListLimit
+	} else if limit > MaxListLimit {
+		limit = MaxListLimit
+	}
+	var totalBytes int
 
 	var walk func(currDir string, depth int) error
 	walk = func(currDir string, depth int) error {
@@ -164,7 +195,8 @@ func (s *Std) List(ctx context.Context, req ListRequest) (*ListResult, error) {
 				continue
 			}
 
-			if req.Limit > 0 && len(res.Entries) >= req.Limit {
+			entryBytes := len(entryPath) + len(name) + 48
+			if len(res.Entries) >= limit || (len(res.Entries) > 0 && totalBytes+entryBytes > MaxListBytes) {
 				res.Truncated = true
 				return nil
 			}
@@ -182,6 +214,7 @@ func (s *Std) List(ctx context.Context, req ListRequest) (*ListResult, error) {
 				Mode:    fi.Mode(),
 				ModTime: fi.ModTime().UTC(),
 			})
+			totalBytes += entryBytes
 
 			if de.IsDir() && req.Recursive {
 				if req.MaxDepth <= 0 || depth < req.MaxDepth {
@@ -249,7 +282,10 @@ func (s *Std) Glob(ctx context.Context, req GlobRequest) (*GlobResult, error) {
 	limit := req.Limit
 	if limit <= 0 {
 		limit = DefaultGlobLimit
+	} else if limit > MaxGlobLimit {
+		limit = MaxGlobLimit
 	}
+	var totalBytes int
 
 	includeHidden := req.IncludeHidden || patternTargetsHidden(rawPattern)
 
@@ -275,11 +311,13 @@ func (s *Std) Glob(ctx context.Context, req GlobRequest) (*GlobResult, error) {
 
 				matched := g.Match(relToBase) || (dirGlob != nil && dirGlob.Match(relToBase)) || (basePath != "." && (g.Match(entryPath) || (dirGlob != nil && dirGlob.Match(entryPath))))
 				if matched {
-					if limit > 0 && len(res.Matches) >= limit {
+					entryBytes := len(entryPath) + 4
+					if len(res.Matches) >= limit || (len(res.Matches) > 0 && totalBytes+entryBytes > MaxGlobBytes) {
 						res.Truncated = true
 						break
 					}
 					res.Matches = append(res.Matches, entryPath)
+					totalBytes += entryBytes
 				}
 			}
 			sort.Strings(res.Matches)
@@ -334,11 +372,13 @@ func (s *Std) Glob(ctx context.Context, req GlobRequest) (*GlobResult, error) {
 				matched = g.Match(entryPath) || (dirGlob != nil && dirGlob.Match(entryPath))
 			}
 			if matched {
-				if limit > 0 && len(res.Matches) >= limit {
+				entryBytes := len(entryPath) + 4
+				if len(res.Matches) >= limit || (len(res.Matches) > 0 && totalBytes+entryBytes > MaxGlobBytes) {
 					res.Truncated = true
 					return nil
 				}
 				res.Matches = append(res.Matches, entryPath)
+				totalBytes += entryBytes
 			}
 		}
 		return nil
@@ -383,6 +423,14 @@ func (s *Std) Grep(ctx context.Context, req GrepRequest) (*GrepResult, error) {
 		Matches: []GrepMatch{},
 	}
 
+	limit := req.Limit
+	if limit <= 0 {
+		limit = DefaultGrepLimit
+	} else if limit > MaxGrepLimit {
+		limit = MaxGrepLimit
+	}
+	var totalBytes int
+
 	if s.rg != nil && s.rg.IsAvailable(ctx) && !filepath.IsAbs(basePath) && req.ContextLines == 0 {
 		rgMatches, err := s.rg.Search(ctx, basePath, req.Pattern, ripgrep.SearchOptions{
 			Include:         req.Include,
@@ -391,7 +439,9 @@ func (s *Std) Grep(ctx context.Context, req GrepRequest) (*GrepResult, error) {
 		})
 		if err == nil {
 			for _, m := range rgMatches {
-				if req.Limit > 0 && len(res.Matches) >= req.Limit {
+				text, _ := strutils.TruncateLine(m.Content, MaxGrepLineBytes, "...")
+				matchBytes := len(m.Path) + len(text) + 32
+				if len(res.Matches) >= limit || (len(res.Matches) > 0 && totalBytes+matchBytes > MaxGrepBytes) {
 					res.Truncated = true
 					break
 				}
@@ -399,8 +449,9 @@ func (s *Std) Grep(ctx context.Context, req GrepRequest) (*GrepResult, error) {
 					Path:   m.Path,
 					Line:   m.Line,
 					Column: m.Column,
-					Text:   m.Content,
+					Text:   text,
 				})
+				totalBytes += matchBytes
 			}
 			return res, nil
 		}
@@ -431,35 +482,44 @@ func (s *Std) Grep(ctx context.Context, req GrepRequest) (*GrepResult, error) {
 				continue
 			}
 
-			if req.Limit > 0 && len(res.Matches) >= req.Limit {
-				res.Truncated = true
-				return nil
-			}
-
+			text, _ := strutils.TruncateLine(line, MaxGrepLineBytes, "...")
 			match := GrepMatch{
 				Path:   filePath,
 				Line:   i + 1,
 				Column: loc[0] + 1,
-				Text:   line,
+				Text:   text,
 			}
+			matchBytes := len(filePath) + len(text) + 32
 
 			if req.ContextLines > 0 {
 				startCtx := max(i-req.ContextLines, 0)
 				if startCtx < i {
 					before := make([]string, i-startCtx)
-					copy(before, lines[startCtx:i])
+					for j, ctxLine := range lines[startCtx:i] {
+						before[j], _ = strutils.TruncateLine(ctxLine, MaxGrepLineBytes, "...")
+						matchBytes += len(before[j]) + 4
+					}
 					match.Before = before
 				}
 
 				endCtx := min(i+1+req.ContextLines, len(lines))
 				if i+1 < endCtx {
 					after := make([]string, endCtx-(i+1))
-					copy(after, lines[i+1:endCtx])
+					for j, ctxLine := range lines[i+1 : endCtx] {
+						after[j], _ = strutils.TruncateLine(ctxLine, MaxGrepLineBytes, "...")
+						matchBytes += len(after[j]) + 4
+					}
 					match.After = after
 				}
 			}
 
+			if len(res.Matches) >= limit || (len(res.Matches) > 0 && totalBytes+matchBytes > MaxGrepBytes) {
+				res.Truncated = true
+				return nil
+			}
+
 			res.Matches = append(res.Matches, match)
+			totalBytes += matchBytes
 		}
 		return nil
 	}
