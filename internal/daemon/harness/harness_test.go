@@ -22,6 +22,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/permissions"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/sandbox"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/scope"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/std"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tools"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tools/builtin"
@@ -1806,6 +1807,138 @@ func TestCommandNodeDoesNotWakeAgent(t *testing.T) {
 	}
 	if !strings.Contains(cmdMsg.GetContent().Text(), `<bash_command command="echo direct" exit_code="0">`) {
 		t.Fatalf("expected bash_command tag in state, got %s", cmdMsg.GetContent().Text())
+	}
+}
+
+func TestToolSpillUsesHarnessSessionScope(t *testing.T) {
+	baseDir := t.TempDir()
+	spiller, err := tools.NewSpiller(tools.SpillerConfig{BaseDir: baseDir, MaxBytes: 8})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, registry, permissions := newTestToolsRegistry(t)
+	permissions.SetMode(tools.ModeAuto)
+	const sessionID = "tool-spill-session"
+	const callID = "tool-spill-call"
+	provider := &fakeProvider{stepHandler: func(_ context.Context, _ *llm.Request, turn int) ([]message.AssistantChunk, error) {
+		if turn == 1 {
+			return []message.AssistantChunk{{BaseChunk: message.BaseChunk{ID: "assistant-tool"}, Content: []message.Block{
+				&message.ToolCall{ID: callID, Name: "bash", Args: map[string]any{"command": "printf 'a long tool output'"}},
+			}, Done: true}}, nil
+		}
+		return []message.AssistantChunk{{BaseChunk: message.BaseChunk{ID: "assistant-final"}, Content: []message.Block{
+			&message.TextBlock{Text: "done"},
+		}, Done: true}}, nil
+	}}
+	h, err := New(Config{
+		ID: sessionID, DB: openTestSQLite(t), Model: newTestModel(t, provider), Tools: registry,
+		Permissions: permissions, Queue: &fakeQueue{}, Bash: &fakeBashRunner{}, Spiller: spiller, Logger: log.Default(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := tools.WithSpiller(context.Background(), spiller)
+	var output api.BashOutput
+	var found bool
+	for ev, err := range h.Stream(ctx, Input{Message: message.NewUserText("run the command")}) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result, ok := ev.Message.(*message.Tool); ok && result.ToolCallID == callID {
+			if result.IsError {
+				t.Fatalf("tool call failed: %+v", result)
+			}
+			output, found = result.StructuredContent.(api.BashOutput)
+		}
+	}
+	if !found {
+		t.Fatal("missing bash tool result")
+	}
+	path := filepath.Join(baseDir, "sessions", sessionID, "outputs", callID+".txt")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read tool spill: %v", err)
+	}
+	if string(data) != "a long tool output" || !strings.Contains(output.Output, path) {
+		t.Fatalf("unexpected spill content or preview: content=%q preview=%q", data, output.Output)
+	}
+}
+
+func TestCommandSpillUsesSessionAndCommandScope(t *testing.T) {
+	validID := uuid.Must(uuid.NewV7()).String()
+	for _, tc := range []struct {
+		name     string
+		id       string
+		conflict bool
+	}{
+		{name: "supplied ID", id: validID},
+		{name: "missing ID"},
+		{name: "invalid ID with caller scope", id: "invalid", conflict: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			baseDir := t.TempDir()
+			spiller, err := tools.NewSpiller(tools.SpillerConfig{BaseDir: baseDir, MaxBytes: 8})
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, registry, permissions := newTestToolsRegistry(t)
+			queue := &fakeQueue{items: []QueueItem{{ID: tc.id, Kind: QueueKindCommand, Payload: QueueCommandPayload{Command: "test"}}}}
+			output := strings.Repeat("long output\n", 20)
+			var bashScope scope.Scope
+			bash := &fakeBashRunner{handler: func(ctx context.Context, req std.BashRequest) (*std.BashResult, error) {
+				bashScope, _ = scope.From(ctx)
+				_, err := req.Output.Write([]byte(output))
+				return &std.BashResult{}, err
+			}}
+			const sessionID = "spill-test-session"
+			h, err := New(Config{
+				ID: sessionID, DB: openTestSQLite(t), Model: newTestModel(t, nil), Tools: registry,
+				Permissions: permissions, Queue: queue, Bash: bash, Spiller: spiller, Logger: log.Default(),
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx := context.Background()
+			if tc.conflict {
+				ctx = scope.With(ctx, scope.Scope{SessionID: "other-session", TurnID: "caller-turn", MessageID: "caller-message", ToolCallID: "other-call", ToolName: "other-tool"})
+			}
+			var started *CommandStarted
+			var completed *CommandCompleted
+			for ev, err := range h.Stream(ctx, Input{}) {
+				if err != nil {
+					t.Fatal(err)
+				}
+				if ev.CommandStarted != nil {
+					started = ev.CommandStarted
+				}
+				if ev.CommandCompleted != nil {
+					completed = ev.CommandCompleted
+				}
+			}
+			if started == nil || completed == nil || started.ID != completed.ID {
+				t.Fatalf("inconsistent command events: started=%+v completed=%+v", started, completed)
+			}
+			if _, err := uuid.Parse(started.ID); err != nil {
+				t.Fatalf("command ID %q is not a UUID: %v", started.ID, err)
+			}
+			if tc.id == validID && started.ID != validID {
+				t.Fatalf("command ID = %q, want %q", started.ID, validID)
+			}
+			path := filepath.Join(baseDir, "sessions", sessionID, "outputs", started.ID+".txt")
+			data, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatalf("read command spill: %v", err)
+			}
+			if string(data) != output || !strings.Contains(completed.Output, path) {
+				t.Fatalf("unexpected spill content or preview: content=%q preview=%q", data, completed.Output)
+			}
+			if bashScope.SessionID != sessionID || bashScope.ToolCallID != started.ID || bashScope.ToolName != "command" {
+				t.Fatalf("command scope = %+v", bashScope)
+			}
+			if tc.conflict && (bashScope.TurnID != "caller-turn" || bashScope.MessageID != "caller-message") {
+				t.Fatalf("caller scope was not preserved: %+v", bashScope)
+			}
+		})
 	}
 }
 

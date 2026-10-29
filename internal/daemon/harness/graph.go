@@ -270,10 +270,11 @@ func (n *CommandNode) Execute(ctx context.Context, state State) (graph.Command[S
 
 	emit(ctx, CommandStarted{ID: cmdID, Command: payload.Command})
 
-	w := n.spiller.NewWriter(ctx)
+	cmdCtx := scope.With(ctx, scope.Scope{ToolCallID: cmdID, ToolName: "command"})
+	w := n.spiller.NewWriter(cmdCtx)
 	defer w.Close()
 
-	res, err := n.bash.Bash(ctx, std.BashRequest{Command: payload.Command, Output: w})
+	res, err := n.bash.Bash(cmdCtx, std.BashRequest{Command: payload.Command, Output: w})
 	w.Close()
 	if err != nil {
 		return nil, err

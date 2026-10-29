@@ -15,6 +15,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	"github.com/masterkeysrd/tasksmith/internal/core/uuid"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/permissions"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/scope"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tools"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/workspace"
 )
@@ -157,7 +158,8 @@ func (h *harness) Stream(ctx context.Context, input Input) iter.Seq2[Event, erro
 			return
 		}
 
-		stream, err := h.graph.Stream(ctx, update, &graph.Location{ThreadID: h.id})
+		runCtx := scope.With(ctx, scope.Scope{SessionID: h.id})
+		stream, err := h.graph.Stream(runCtx, update, &graph.Location{ThreadID: h.id})
 		if err != nil {
 			yield(Event{}, err)
 			return
