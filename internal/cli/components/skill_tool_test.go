@@ -37,6 +37,7 @@ func TestLoadSkillToolWidget(t *testing.T) {
 		{"waiting", store.ToolPart{Call: call, Status: store.ToolWaitingPermission}, "○ Loading Skill postgres-migrations (waiting for permission)", nil},
 		{"interrupted", store.ToolPart{Call: call, Status: store.ToolInterrupted}, "○ Loading Skill postgres-migrations (interrupted)", nil},
 		{"succeeded", store.ToolPart{Call: call, Response: response, Status: store.ToolSucceeded}, "● Loaded Skill postgres-migrations", []string{".agents/", "secret-instructions"}},
+		{"truncated", store.ToolPart{Call: call, Response: &api.Message{Name: "load_skill", StructuredContent: []byte(`{"skill":"postgres-migrations","instructions":"head","truncated":true}`)}, Status: store.ToolSucceeded}, "● Loaded Skill postgres-migrations\n  ⎿  ⚠ Skill exceeds size limit (500 lines / 32 KB) and was truncated", nil},
 		{"failed", store.ToolPart{Call: call, Response: failure, Status: store.ToolFailed}, "● Failed to load Skill postgres-migrations\n  ⎿  ✗ skill is not accessible", []string{"additional details"}},
 		{"error response", store.ToolPart{Call: call, Response: failure, Status: store.ToolSucceeded}, "● Failed to load Skill postgres-migrations\n  ⎿  ✗ skill is not accessible", nil},
 		{"missing name", store.ToolPart{Call: &api.ToolCall{Name: "load_skill"}, Status: store.ToolRunning}, "○ Loading Skill", nil},

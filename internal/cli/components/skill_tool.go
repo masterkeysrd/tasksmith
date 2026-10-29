@@ -51,5 +51,17 @@ var LoadSkillToolWidget = trail.FC("LoadSkillToolWidget", func(props LoadSkillTo
 		headerNodes = append(headerNodes, stateSuffix)
 	}
 
-	return wrapToolWidget(headerNodes, toolErrorSubline(tool, scheme))
+	subline := toolErrorSubline(tool, scheme)
+	if subline == nil && !failed && output.Truncated {
+		subline = trail.Span(trail.SpanProps{
+			Style: style.S().
+				Flex(0, 0).
+				WhiteSpace(style.WhiteSpacePre).
+				Overflow(style.OverflowHidden).
+				TextOverflow(style.TextOverflowEllipsis).
+				Foreground(scheme.Color.Text.Warning),
+		}, trail.Text("  ⎿  ⚠ Skill exceeds size limit (500 lines / 32 KB) and was truncated"))
+	}
+
+	return wrapToolWidget(headerNodes, subline)
 })
