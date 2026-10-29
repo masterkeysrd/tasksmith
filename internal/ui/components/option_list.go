@@ -154,8 +154,10 @@ var OptionList = trail.FC("OptionList", func(props OptionListProps) trail.Node {
 					colSpec := props.Columns[colIdx]
 					if colSpec.Width > 0 {
 						tdStyle = tdStyle.Width(style.Cells(colSpec.Width)).
-							MinWidth(style.Cells(colSpec.Width)).
-							WhiteSpace(style.WhiteSpaceNoWrap)
+							MinWidth(style.Cells(colSpec.Width))
+						if colIdx != 0 {
+							tdStyle = tdStyle.WhiteSpace(style.WhiteSpaceNoWrap)
+						}
 					} else {
 						tdStyle = tdStyle.Width(style.Percent(100))
 					}

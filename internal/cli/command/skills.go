@@ -72,17 +72,6 @@ func EstimateSkillTokens(instructions string) int {
 	return (len(trimmed) + 3) / 4
 }
 
-// FormatTokenCount formats a token count into a human-readable estimate label.
-func FormatTokenCount(tokens int) string {
-	if tokens <= 0 {
-		return "~0 tok"
-	}
-	if tokens >= 1000 {
-		return fmt.Sprintf("~%.1fk tok", float64(tokens)/1000.0)
-	}
-	return fmt.Sprintf("~%d tok", tokens)
-}
-
 type skillMarkdownProps struct {
 	slotID  string
 	skill   api.Skill
@@ -136,7 +125,7 @@ var skillMarkdownViewer = trail.FC("SkillMarkdownViewer", func(props skillMarkdo
 
 	scope := SkillScope(props.skill)
 	estTokens := EstimateSkillTokens(props.skill.Instructions)
-	tokStr := FormatTokenCount(estTokens)
+	tokStr := format.FormatTokens(estTokens) + " tok"
 
 	titleStyle := style.S().Bold(true).Foreground(scheme.Color.Text.Primary)
 	scopeBadgeStyle := style.S().Bold(true).Foreground(scheme.Color.Icon.Primary)
@@ -327,14 +316,14 @@ var SkillsBrowser = trail.FC("SkillsBrowser", func(slotID string) trail.Node {
 	winSize := trail.UseWindowSize()
 	availDescWidth := 0
 	if winSize.Width > 0 {
-		availDescWidth = max(20, winSize.Width-56)
+		availDescWidth = max(20, winSize.Width-30-10-8-4) // 30 for name, 10 for scope, 8 for tokens, 4 for padding
 	}
 
 	opts := make([]uicomponents.Option, len(skills))
 	for i, sk := range skills {
 		scope := SkillScope(sk)
 		estTokens := EstimateSkillTokens(sk.Instructions)
-		tokStr := FormatTokenCount(estTokens)
+		tokStr := format.FormatTokens(estTokens)
 
 		scopeCol := fmt.Sprintf("[%s]", scope)
 		desc := format.CompactSingleLine(sk.Description, availDescWidth)
@@ -372,9 +361,9 @@ var SkillsBrowser = trail.FC("SkillsBrowser", func(slotID string) trail.Node {
 		}
 	})
 	pickerProps.Columns = []uicomponents.Column{
-		{Width: 20, Align: style.TextAlignLeft},
-		{Width: 14, Align: style.TextAlignLeft},
-		{Width: 14, Align: style.TextAlignRight},
+		{Width: 30, Align: style.TextAlignLeft},
+		{Width: 10, Align: style.TextAlignLeft},
+		{Width: 8, Align: style.TextAlignRight},
 		{Width: 0, Align: style.TextAlignLeft},
 	}
 	pickerProps.Filterable = false

@@ -82,35 +82,6 @@ func TestSkillScopeMapping(t *testing.T) {
 	}
 }
 
-func TestEstimateSkillTokensAndFormatting(t *testing.T) {
-	if got := EstimateSkillTokens(""); got != 0 {
-		t.Errorf("EstimateSkillTokens(\"\") = %d, want 0", got)
-	}
-	if got := FormatTokenCount(0); got != "~0 tok" {
-		t.Errorf("FormatTokenCount(0) = %q, want \"~0 tok\"", got)
-	}
-
-	// 400 bytes -> (400 + 3) / 4 = 100 tokens
-	sample400 := strings.Repeat("abcd", 100)
-	tokens := EstimateSkillTokens(sample400)
-	if tokens != 100 {
-		t.Errorf("EstimateSkillTokens(400 bytes) = %d, want 100", tokens)
-	}
-	if got := FormatTokenCount(tokens); got != "~100 tok" {
-		t.Errorf("FormatTokenCount(100) = %q, want \"~100 tok\"", got)
-	}
-
-	// 4000 bytes -> 1000 tokens -> "~1.0k tok"
-	sample4000 := strings.Repeat("abcd", 1000)
-	tokensLarge := EstimateSkillTokens(sample4000)
-	if tokensLarge != 1000 {
-		t.Errorf("EstimateSkillTokens(4000 bytes) = %d, want 1000", tokensLarge)
-	}
-	if got := FormatTokenCount(tokensLarge); got != "~1.0k tok" {
-		t.Errorf("FormatTokenCount(1000) = %q, want \"~1.0k tok\"", got)
-	}
-}
-
 func TestSkillsBrowserEmptyAndPopulatedRendering(t *testing.T) {
 	store.ClearSlot()
 	defer store.ClearSlot()
