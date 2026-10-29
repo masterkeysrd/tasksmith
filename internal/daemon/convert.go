@@ -327,10 +327,15 @@ func fromSendRequest(req api.SendRequest) (session.SendInput, error) {
 	if strings.TrimSpace(req.Content) != "" {
 		blocks = append(blocks, &message.TextBlock{Text: req.Content})
 	}
-	for _, b := range req.Blocks {
-		if converted, ok := fromAPIBlock(b); ok {
-			blocks = append(blocks, converted)
+	for i, b := range req.Blocks {
+		if b.Type != api.BlockText {
+			return session.SendInput{}, fmt.Errorf("%w: block %d of type %q is not supported in user messages", session.ErrInvalidConfig, i, b.Type)
 		}
+		converted, ok := fromAPIBlock(b)
+		if !ok {
+			return session.SendInput{}, fmt.Errorf("%w: invalid or unsupported block %d of type %q", session.ErrInvalidConfig, i, b.Type)
+		}
+		blocks = append(blocks, converted)
 	}
 	if len(blocks) == 0 {
 		return session.SendInput{}, ErrEmptyMessage

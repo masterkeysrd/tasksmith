@@ -102,6 +102,8 @@ spec:
 
 Explicit model `capabilities.temperature` overrides the provider profile. An agent's configured temperature is sent when supported, omitted with a chat warning when unsupported, and sent with a warning when support is unknown. Anthropic extended thinking omits temperature. Workspace reload refreshes provider configuration and session warnings; `/clear` dismisses visible warnings.
 
+Requests requiring tools, tool history, media, or a response schema fail when the model is known not to support them. Workspace capability declarations override provider profiles. Requests with an unknown structured-output capability are forwarded to Loom; media is rejected if the provider adapter cannot preserve it. Start a new session or choose a compatible model when existing history is incompatible. The send API accepts text blocks in user messages; other, unrecognized, or invalid blocks are rejected.
+
 > [!NOTE]
 > Thinking capabilities come from provider model profiles or workspace model declarations. Declared strategies replace profile strategies for that model. `/effort`, `/budget`, and `/thinking` report when the resolved model does not support the requested strategy. `default` clears the session thinking override and restores the agent or provider default.
 

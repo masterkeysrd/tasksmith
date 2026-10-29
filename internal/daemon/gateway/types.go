@@ -197,6 +197,7 @@ type Diagnostic struct {
 type EffectiveProfile struct {
 	Profile          *profile.Profile
 	TemperatureKnown bool
+	ToolsKnown       bool
 	ProviderType     string
 	StructuredOutput *bool
 	Dimensions       []int

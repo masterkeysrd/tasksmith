@@ -788,6 +788,9 @@ func (d *Daemon) Send(ctx context.Context, rawWS, id string, req api.SendRequest
 
 	in, err := fromSendRequest(req)
 	if err != nil {
+		if errors.Is(err, session.ErrInvalidConfig) {
+			return &api.APIError{StatusCode: http.StatusBadRequest, Code: "bad_request", Message: err.Error()}
+		}
 		return err
 	}
 

@@ -64,6 +64,8 @@ The gateway resolves authentication credentials without mutating process state o
 ### 4. Effective Model Configuration
 The gateway merges the provider's Loom model profile with explicit workspace model overrides and resolves requested settings into a configuration and structured diagnostics. Declared capabilities, limits, modalities and thinking strategies take precedence over the provider profile. Session thinking overrides agent thinking; unsupported agent settings produce diagnostics, while invalid explicit overrides fail validation. Explicit temperature support overrides the provider profile; when support is unknown, configured temperature is forwarded with a warning. Known unsupported temperature and Anthropic extended-thinking conflicts are omitted. Session creation, model or agent changes, and workspace reload refresh session diagnostics. Reload stages workspace and gateway changes before publishing them, and session configuration and model construction use a shared reload barrier.
 
+At the provider boundary, request validation rejects known unsupported tools, tool history, input modalities, and response schemas. Structured-output requests with unknown support are forwarded to Loom. Media formats that the adapter would discard are rejected independently of model capabilities. Input blocks that cannot be converted are rejected before entering a session.
+
 ### 5. Triple-Role Model Instantiation & Decision Adapter
 Given a resolved `(provider, modelID)` from the workspace layer, the gateway instantiates and adapts models across three cognitive roles:
 

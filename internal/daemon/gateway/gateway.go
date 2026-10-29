@@ -125,6 +125,7 @@ func (g *gatewayImpl) ResolveLLM(ctx context.Context, provider, modelID string, 
 	if len(options.middleware) > 0 {
 		model = model.WithMiddleware(options.middleware...)
 	}
+	model = model.WithMiddleware(validateRequestMiddleware(resolved.Profile))
 
 	return model, nil
 }
@@ -182,6 +183,7 @@ func (g *gatewayImpl) ResolveDecision(ctx context.Context, provider, modelID str
 	if mw := openAIResponsesOptionsMiddleware(inst.openaiResponsesOpts); mw != nil {
 		llmModel = llmModel.WithMiddleware(mw)
 	}
+	llmModel = llmModel.WithMiddleware(validateRequestMiddleware(effectiveProfile(inst, modelID, spec)))
 
 	decModel, err := decision.NewFromLLM(llmModel, options.config)
 	if err != nil {
@@ -389,8 +391,12 @@ func effectiveProfile(inst *providerInstance, modelID string, spec *ModelSpec) E
 	if merged != nil && merged.ID == "" {
 		merged.ID = modelID
 	}
-	known := base != nil || (spec != nil && spec.Capabilities != nil && spec.Capabilities.Temperature != nil)
-	result := EffectiveProfile{Profile: merged, TemperatureKnown: known, ProviderType: inst.cfg.Type}
+	result := EffectiveProfile{
+		Profile:          merged,
+		TemperatureKnown: base != nil || (spec != nil && spec.Capabilities != nil && spec.Capabilities.Temperature != nil),
+		ToolsKnown:       base != nil || (spec != nil && spec.Capabilities != nil && spec.Capabilities.Tools != nil),
+		ProviderType:     inst.cfg.Type,
+	}
 	if spec != nil && spec.Capabilities != nil {
 		if spec.Capabilities.StructuredOutput != nil {
 			value := *spec.Capabilities.StructuredOutput
