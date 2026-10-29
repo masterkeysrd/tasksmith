@@ -1035,6 +1035,56 @@ func TestCancelPendingPermissionsOnNewUserMessage(t *testing.T) {
 	}
 }
 
+func TestCancelPendingCallsPreservesUserMessageID(t *testing.T) {
+	ctx := context.Background()
+	_, reg, perm := newTestToolsRegistry(t)
+	provider := &fakeProvider{stepHandler: func(_ context.Context, _ *llm.Request, turn int) ([]message.AssistantChunk, error) {
+		if turn == 1 {
+			return []message.AssistantChunk{{Content: []message.Block{&message.ToolCall{ID: "write", Name: "write", Args: map[string]any{"path": "pending.txt", "content": "data"}}}, Done: true}}, nil
+		}
+		return []message.AssistantChunk{{Content: []message.Block{&message.TextBlock{Text: "done"}}, Done: true}}, nil
+	}}
+	h, err := New(Config{ID: "cancel-id", DB: openTestSQLite(t), Model: newTestModel(t, provider), Tools: reg, Bash: &fakeBashRunner{}, Spiller: newTestSpiller(t), Permissions: perm, Queue: &fakeQueue{}, Logger: log.Default()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var interrupted bool
+	for event, err := range h.Stream(ctx, Input{Message: message.NewUserText("start")}) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		interrupted = interrupted || event.Type == EventInterrupted
+	}
+	if !interrupted {
+		t.Fatal("expected permission interrupt")
+	}
+	input := message.NewUserText("cancel")
+	input.SetID("caller-provided-id")
+	var userEvents []message.Message
+	for event, err := range h.Stream(ctx, Input{Message: input}) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		if event.Type == EventMessage && event.Message.Role() == message.RoleUser {
+			userEvents = append(userEvents, event.Message)
+		}
+	}
+	if len(userEvents) != 1 || userEvents[0].GetID() != input.GetID() {
+		t.Fatalf("unexpected user events: %+v", userEvents)
+	}
+	turns := provider.recordedTurns()
+	if len(turns) != 2 || len(turns[1].messages) != 4 || turns[1].messages[3].GetID() != input.GetID() {
+		t.Fatalf("unexpected model messages: %+v", turns)
+	}
+	state, err := h.LoadState(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(state.Messages) != 5 || state.Messages[3].GetID() != input.GetID() || input.GetID() != "caller-provided-id" {
+		t.Fatalf("message ID not preserved: state=%+v input=%q", state.Messages, input.GetID())
+	}
+}
+
 func TestMixedToolCallsAndPlanModeDeny(t *testing.T) {
 	ctx := context.Background()
 	db := openTestSQLite(t)
@@ -2163,10 +2213,11 @@ func TestIncomingMessageCrossesCompactionThreshold(t *testing.T) {
 	provider := &fakeProvider{stepHandler: func(_ context.Context, _ *llm.Request, turn int) ([]message.AssistantChunk, error) {
 		text := "answer"
 		var metrics *message.TokenMetrics
-		if turn == 1 {
+		switch turn {
+		case 1:
 			text = strings.Repeat("a", 2400)
 			metrics = &message.TokenMetrics{TotalTokens: 800}
-		} else if turn == 2 {
+		case 2:
 			text = "summary"
 		}
 		return []message.AssistantChunk{{Content: []message.Block{&message.TextBlock{Text: text}}, Metrics: metrics, Done: true}}, nil

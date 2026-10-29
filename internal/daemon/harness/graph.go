@@ -7,13 +7,13 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/google/uuid"
 	"github.com/masterkeysrd/loom/graph"
 	"github.com/masterkeysrd/loom/llm"
 	"github.com/masterkeysrd/loom/message"
 	"github.com/masterkeysrd/loom/stream"
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
+	"github.com/masterkeysrd/tasksmith/internal/core/uuid"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/permissions"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/scope"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/std"
@@ -264,10 +264,8 @@ func (n *CommandNode) Execute(ctx context.Context, state State) (graph.Command[S
 		return graph.Update[State](func(s State) State { return s }), nil
 	}
 	cmdID := item.ID
-	if cmdID == "" || uuid.Validate(cmdID) != nil {
-		if id, err := uuid.NewV7(); err == nil {
-			cmdID = id.String()
-		}
+	if cmdID == "" || !uuid.Validate(cmdID) {
+		cmdID = uuid.NewString()
 	}
 
 	emit(ctx, CommandStarted{ID: cmdID, Command: payload.Command})
@@ -345,11 +343,7 @@ func (n *AgentNode) Execute(ctx context.Context, state State) (graph.Command[Sta
 		return nil, fmt.Errorf("harness: invoke llm: %w", err)
 	}
 
-	id, err := uuid.NewV7()
-	if err != nil {
-		return nil, fmt.Errorf("harness: generate message id: %w", err)
-	}
-	resp.ID = id.String()
+	resp.ID = uuid.NewString()
 	emit(ctx, NodeMessageEvent{Message: resp})
 
 	if resp.Metrics != nil {
@@ -404,10 +398,8 @@ func (n *InboxNode) Execute(ctx context.Context, state State) (graph.Command[Sta
 			continue
 		}
 		cloned := message.CloneMessage(msg)
-		if cloned.GetID() == "" || uuid.Validate(cloned.GetID()) != nil {
-			if id, err := uuid.NewV7(); err == nil {
-				cloned.SetID(id.String())
-			}
+		if cloned.GetID() == "" || !uuid.Validate(cloned.GetID()) {
+			cloned.SetID(uuid.NewString())
 		}
 		emit(ctx, NodeMessageEvent{Message: cloned})
 		drained = append(drained, cloned)
@@ -474,17 +466,15 @@ func (n *ToolsNode) cancelCalls(ctx context.Context, asstIdx int, unfulfilled []
 		canceledMsgs = append(canceledMsgs, toolMsg)
 	}
 
-	userID, err := uuid.NewV7()
-	if err != nil {
-		return nil, fmt.Errorf("harness: generate user message id: %w", err)
-	}
 	trailingUser := message.CloneMessage(messages[len(messages)-1])
-	trailingUser.SetID(userID.String())
+	if strings.TrimSpace(trailingUser.GetID()) == "" {
+		trailingUser.SetID(uuid.NewString())
+	}
 	emit(ctx, NodeMessageEvent{Message: trailingUser})
 
 	return graph.Update[State](func(s State) State {
 		if len(s.Messages) > 0 {
-			s.Messages[len(s.Messages)-1].SetID(userID.String())
+			s.Messages[len(s.Messages)-1].SetID(trailingUser.GetID())
 		}
 		insertIdx := firstNonToolIndex(s.Messages, asstIdx+1)
 		updated := make(message.MessageList, 0, len(s.Messages)+len(canceledMsgs))
@@ -592,11 +582,13 @@ func newQuestionRequest(tc *message.ToolCall) (tools.QuestionRequest, error) {
 	if err := json.Unmarshal(data, &input); err != nil {
 		return tools.QuestionRequest{}, err
 	}
-	id, err := uuid.NewV7()
-	if err != nil {
-		return tools.QuestionRequest{}, err
-	}
-	return tools.QuestionRequest{ID: id.String(), ToolCallID: tc.ID, Title: input.Title, Description: input.Description, Questions: input.Questions}, nil
+	return tools.QuestionRequest{
+		ID:          uuid.NewString(),
+		ToolCallID:  tc.ID,
+		Title:       input.Title,
+		Description: input.Description,
+		Questions:   input.Questions,
+	}, nil
 }
 
 func (n *ToolsNode) evaluateSingleCall(ctx context.Context, tc *message.ToolCall) (*message.Tool, *tools.PermissionRequest, error) {
@@ -658,11 +650,13 @@ func (n *ToolsNode) resumeCalls(ctx context.Context, unfulfilled []*message.Tool
 			if err != nil {
 				return nil, err
 			}
-			id, err := uuid.NewV7()
-			if err != nil {
-				return nil, err
+			msg := &message.Tool{
+				Base:              message.Base{ID: uuid.NewString()},
+				ToolCallID:        tc.ID,
+				Name:              tc.Name,
+				Content:           message.Content{&message.TextBlock{Text: string(data)}},
+				StructuredContent: out,
 			}
-			msg := &message.Tool{Base: message.Base{ID: id.String()}, ToolCallID: tc.ID, Name: tc.Name, Content: message.Content{&message.TextBlock{Text: string(data)}}, StructuredContent: out}
 			emit(ctx, NodeMessageEvent{Message: msg})
 			toolMsgs = append(toolMsgs, msg)
 			continue
@@ -797,12 +791,8 @@ func isValidDecisionKind(k tools.PermissionDecisionKind) bool {
 }
 
 func newErrorToolMessage(tc *message.ToolCall, errText string) (*message.Tool, error) {
-	id, err := uuid.NewV7()
-	if err != nil {
-		return nil, fmt.Errorf("harness: generate tool message id: %w", err)
-	}
 	return &message.Tool{
-		Base:       message.Base{ID: id.String()},
+		Base:       message.Base{ID: uuid.NewString()},
 		ToolCallID: tc.ID,
 		Name:       tc.Name,
 		IsError:    true,
