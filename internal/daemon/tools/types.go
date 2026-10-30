@@ -197,9 +197,7 @@ func (r *QuestionRequest) Clone() *QuestionRequest {
 	}
 	for i, q := range r.Questions {
 		o := make([]api.QuestionOption, len(q.Options))
-		for j, opt := range q.Options {
-			o[j] = opt
-		}
+		copy(o, q.Options)
 		cp.Questions[i] = api.Question{
 			Type:        q.Type,
 			Question:    q.Question,
