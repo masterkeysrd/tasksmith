@@ -365,6 +365,25 @@ func TestTasksStore(t *testing.T) {
 	}
 }
 
+func TestNewDraftSessionClearsUsage(t *testing.T) {
+	ResetSession()
+	defer ResetSession()
+
+	SetSession(&api.Session{ID: "s-1", Config: api.SessionConfig{Mode: api.ModeDefault}})
+	SetUsage(api.SessionUsage{
+		SessionID: "s-1",
+		Totals:    api.UsageGroup{Calls: 3, Tokens: api.UsageTokens{Input: 1000, Output: 250}},
+	})
+	if u := GetUsage(); u.Totals.Calls != 3 || u.Totals.Tokens.Input != 1000 {
+		t.Fatalf("expected seeded usage, got %+v", u.Totals)
+	}
+
+	NewDraftSession("")
+	if u := GetUsage(); u.Totals.Calls != 0 || u.Totals.Tokens.Input != 0 || u.Totals.Tokens.Output != 0 {
+		t.Fatalf("expected usage cleared after NewDraftSession, got %+v", u.Totals)
+	}
+}
+
 type mockSessionRoundTripper struct {
 	handler func(req *http.Request) (*http.Response, error)
 }

@@ -910,6 +910,7 @@ func NewDraftSession(modelOverride string) {
 		s.Session = nil
 		s.Config = cfg
 		s.Tasks = nil
+		s.Usage = api.SessionUsage{}
 		return s
 	})
 
