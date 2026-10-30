@@ -120,6 +120,20 @@ var ContextSegment = trail.FC("ContextSegment", func(props SegmentProps) trail.N
 	return segment(props, statusText(text, col, false), text, scheme.Color.Text.Secondary)
 })
 
+// UsageSegment shows the session cost with input and output tokens (e.g. "$0.42 · ↑128.4k ↓8.3k")
+// once the session has recorded LLM calls. A leading "≥" marks costs that are
+// a lower bound because some calls had no pricing.
+var UsageSegment = trail.FC("UsageSegment", func(props SegmentProps) trail.Node {
+	scheme := theme.UseTheme()
+	usage := store.UseUsageTotals()
+	if usage.Calls == 0 {
+		return nil
+	}
+	text := fmt.Sprintf("%s · ↑%s ↓%s", format.FormatCostNano(usage.CostNano, usage.UnpricedCalls > 0),
+		format.FormatTokens(int(usage.InputTokens)), format.FormatTokens(int(usage.OutputTokens)))
+	return segment(props, statusText(text, scheme.Color.Text.Secondary, false), text, scheme.Color.Text.Secondary)
+})
+
 // ModelSegment shows "<model> · <thinking>" once session model info is ready.
 var ModelSegment = trail.FC("ModelSegment", func(props SegmentProps) trail.Node {
 	scheme := theme.UseTheme()
@@ -161,6 +175,7 @@ var DefaultStatusLine = trail.SimpleFC("DefaultStatusLine", func() trail.Node {
 		trail.Spacer(),
 		ModeSegment(SegmentProps{Separator: " · "}),
 		ContextSegment(SegmentProps{Separator: " · "}),
+		UsageSegment(SegmentProps{Separator: " · "}),
 		ModelSegment(SegmentProps{}),
 	)
 })

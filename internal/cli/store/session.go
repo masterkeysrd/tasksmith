@@ -24,6 +24,7 @@ type SessionState struct {
 	Session    *api.Session
 	Config     api.SessionConfig
 	Context    api.ContextState
+	Usage      api.SessionUsage
 	ModelLabel string
 	Thinking   string
 	Tasks      *[]api.Task
@@ -170,6 +171,7 @@ func startSessionStreamWatcher(ctx context.Context, sessionID string) {
 	}
 
 	go func() {
+		loadSessionUsage(watchCtx, c, sessionID)
 		var since string
 		for {
 			if watchCtx.Err() != nil {
@@ -178,6 +180,7 @@ func startSessionStreamWatcher(ctx context.Context, sessionID string) {
 			for ev, err := range c.Watch(watchCtx, since, api.SessionStreamTopic(sessionID)) {
 				if err != nil {
 					if client.IsNeedSync(err) {
+						loadSessionUsage(watchCtx, c, sessionID)
 						sess, sessErr := c.GetSession(watchCtx, sessionID)
 						if tl, tlErr := c.Timeline(watchCtx, sessionID); tlErr == nil {
 							if sessErr == nil && sess != nil {
@@ -560,6 +563,9 @@ func SetSession(sess *api.Session) {
 	sessMu.Unlock()
 
 	session.Set(func(s SessionState) SessionState {
+		if sess == nil || s.Session == nil || s.Session.ID != sess.ID {
+			s.Usage = api.SessionUsage{}
+		}
 		s.Session = sess
 		if sess != nil {
 			s.ModelLabel, s.Thinking = modelDisplay(sess.Model, sess.Config.Thinking)
@@ -583,6 +589,50 @@ func SetSession(sess *api.Session) {
 		}
 		return s
 	})
+}
+
+// loadSessionUsage fetches the persisted usage of a session so that totals
+// are available before the first usage_updated event arrives.
+func loadSessionUsage(parent context.Context, c *client.Client, sessionID string) {
+	ctx, cancel := context.WithTimeout(parent, 10*time.Second)
+	defer cancel()
+	usage, err := c.SessionUsage(ctx, sessionID)
+	if err != nil {
+		return
+	}
+	SetUsage(usage)
+}
+
+// SetUsage stores usage as the active session's usage when it belongs to that session.
+func SetUsage(usage api.SessionUsage) {
+	session.Set(func(s SessionState) SessionState {
+		if s.Session != nil && s.Session.ID == usage.SessionID {
+			s.Usage = usage
+		}
+		return s
+	})
+}
+
+// UsageTotals is the comparable subset of session usage shown in the status line.
+type UsageTotals struct {
+	Calls         int64
+	UnpricedCalls int64
+	CostNano      int64
+	InputTokens   int64
+	OutputTokens  int64
+}
+
+// UseUsageTotals subscribes a component to the active session's usage totals.
+func UseUsageTotals() UsageTotals {
+	return UseSession(func(s SessionState) UsageTotals {
+		t := s.Usage.Totals
+		return UsageTotals{Calls: t.Calls, UnpricedCalls: t.UnpricedCalls, CostNano: t.CostNano, InputTokens: t.Tokens.Input, OutputTokens: t.Tokens.Output}
+	})
+}
+
+// GetUsage returns the active session's usage snapshot.
+func GetUsage() api.SessionUsage {
+	return GetSession().Usage
 }
 
 // UpsertTask updates an existing task in SessionState by ID, or appends it.

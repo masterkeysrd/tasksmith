@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/json"
 	"errors"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/metrics"
 	"io"
 	"net/http"
 	"strings"
@@ -132,6 +133,7 @@ func classifyError(err error) (int, string) {
 		errors.Is(err, broker.ErrTooManyTopics),
 		errors.Is(err, broker.ErrNotRegistered),
 		errors.Is(err, broker.ErrInvalidCursor),
+		errors.Is(err, metrics.ErrInvalidQuery),
 		strings.Contains(err.Error(), "workspace parameter is required"),
 		strings.Contains(err.Error(), "message content must not be empty"):
 		return http.StatusBadRequest, "bad_request"

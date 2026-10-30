@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/masterkeysrd/tasksmith/api"
@@ -781,4 +782,54 @@ func decodeErrorResponse(resp *http.Response) error {
 		StatusCode: resp.StatusCode,
 		Message:    msg,
 	}
+}
+
+// SessionUsage returns the token, cost and tool usage of a session.
+func (c *Client) SessionUsage(ctx context.Context, sessionID string) (api.SessionUsage, error) {
+	path, err := c.sessionEndpoint(sessionID, "/usage")
+	if err != nil {
+		return api.SessionUsage{}, err
+	}
+	var out api.SessionUsage
+	if err := c.doJSON(ctx, http.MethodGet, path, nil, nil, &out); err != nil {
+		return api.SessionUsage{}, err
+	}
+	return out, nil
+}
+
+// Usage returns the usage summary of the workspace or of all workspaces.
+func (c *Client) Usage(ctx context.Context, req api.UsageRequest) (api.UsageSummary, error) {
+	if err := c.requireCWD(); err != nil {
+		return api.UsageSummary{}, err
+	}
+	query := url.Values{}
+	if req.Scope != "" {
+		query.Set("scope", string(req.Scope))
+	}
+	if req.GroupBy != "" {
+		query.Set("group_by", string(req.GroupBy))
+	}
+	if !req.Since.IsZero() {
+		query.Set("since", req.Since.UTC().Format(time.RFC3339))
+	}
+	if !req.Until.IsZero() {
+		query.Set("until", req.Until.UTC().Format(time.RFC3339))
+	}
+	var out api.UsageSummary
+	if err := c.doJSON(ctx, http.MethodGet, "/v1/usage", query, nil, &out); err != nil {
+		return api.UsageSummary{}, err
+	}
+	return out, nil
+}
+
+// QueryMetrics runs a generic metrics query.
+func (c *Client) QueryMetrics(ctx context.Context, q api.MetricsQuery) (api.MetricsResult, error) {
+	if err := c.requireCWD(); err != nil {
+		return api.MetricsResult{}, err
+	}
+	var out api.MetricsResult
+	if err := c.doJSON(ctx, http.MethodPost, "/v1/metrics/query", nil, q, &out); err != nil {
+		return api.MetricsResult{}, err
+	}
+	return out, nil
 }

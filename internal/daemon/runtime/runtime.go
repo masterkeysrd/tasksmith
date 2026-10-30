@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/metrics"
 	"path/filepath"
 	"sort"
 	"sync"
@@ -53,6 +54,8 @@ type Config struct {
 	GatewayPool gateway.Pool
 	Publisher   session.Publisher
 	Logger      log.Interface
+	// Metrics receives LLM and tool call metrics. A nil recorder disables them.
+	Metrics metrics.Recorder
 }
 
 type catalogSlot struct {
@@ -80,6 +83,7 @@ type workspaceRuntime struct {
 	gw           gateway.Gateway
 	catalog      *catalogSlot
 	pool         gateway.Pool
+	metrics      metrics.Recorder
 	perms        permissions.Manager
 	sessions     session.Manager
 	db           *sql.DB
@@ -110,7 +114,7 @@ func (r *workspaceRuntime) Reload(ctx context.Context) error {
 			return err
 		}
 	}
-	next, err := r.pool.Acquire(ctx, buildGatewayConfig(sessionWorkspace))
+	next, err := r.pool.Acquire(ctx, buildGatewayConfig(sessionWorkspace, r.metrics))
 	if err != nil {
 		return err
 	}
@@ -148,6 +152,7 @@ func (r *workspaceRuntime) Close() error {
 
 type manager struct {
 	pool      gateway.Pool
+	metrics   metrics.Recorder
 	publisher session.Publisher
 	logger    log.Interface
 
@@ -172,6 +177,7 @@ func New(cfg Config) (Manager, error) {
 	}
 	return &manager{
 		pool:      cfg.GatewayPool,
+		metrics:   cfg.Metrics,
 		publisher: cfg.Publisher,
 		logger:    cfg.Logger.ForComponent("runtime"),
 		runtimes:  make(map[string]*workspaceRuntime),
@@ -237,7 +243,7 @@ func (m *manager) Get(ctx context.Context, dir string) (Runtime, error) {
 	}
 
 	if sessMgr == nil {
-		gwCfg := buildGatewayConfig(ws)
+		gwCfg := buildGatewayConfig(ws, m.metrics)
 		var err error
 		gw, err = m.pool.Acquire(ctx, gwCfg)
 		if err != nil {
@@ -275,6 +281,7 @@ func (m *manager) Get(ctx context.Context, dir string) (Runtime, error) {
 			Permissions: permMgr,
 			ReloadLock:  reloadMu,
 			Catalog:     owner.catalog.get,
+			Metrics:     m.metrics,
 		})
 		if err != nil {
 			_ = db.Close()
@@ -304,6 +311,7 @@ func (m *manager) Get(ctx context.Context, dir string) (Runtime, error) {
 	rt.reloadMu = reloadMu
 	rt.gw = gw
 	rt.pool = m.pool
+	rt.metrics = m.metrics
 	rt.perms = permMgr
 	rt.sessions = sessMgr
 	rt.db = db
@@ -360,7 +368,7 @@ func (m *manager) Close() error {
 	return errors.Join(errs...)
 }
 
-func buildGatewayConfig(ws workspace.Workspace) gateway.Config {
+func buildGatewayConfig(ws workspace.Workspace, rec metrics.Recorder) gateway.Config {
 	wsEnv := ws.Env()
 	wsProviders := ws.Providers()
 	providers := make([]gateway.ProviderConfig, 0, len(wsProviders))
@@ -371,6 +379,7 @@ func buildGatewayConfig(ws workspace.Workspace) gateway.Config {
 	return gateway.Config{
 		Providers: providers,
 		Env:       wsEnv,
+		Metrics:   rec,
 	}
 }
 

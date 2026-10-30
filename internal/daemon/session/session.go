@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/metrics"
 	"iter"
 	"maps"
 	"path/filepath"
@@ -109,6 +110,7 @@ type Session struct {
 	workspace  workspace.Workspace   `json:"-"`
 	gateway    gateway.Gateway       `json:"-"`
 	catalog    func() models.Catalog `json:"-"`
+	metrics    metrics.Recorder      `json:"-"`
 	reloadLock *sync.RWMutex         `json:"-"`
 	publisher  Publisher             `json:"-"`
 	logger     log.Interface         `json:"-"`
@@ -205,7 +207,7 @@ func (s *Session) initResources(ctx context.Context) error {
 	}
 	if s.Journal == nil {
 		blobsDir := filepath.Join(s.Root, "blobs")
-		jr, err := journal.New(ctx, s.db, s.ID, blobsDir)
+		jr, err := journal.New(ctx, s.db, s.ID, blobsDir, journal.WithMetrics(s.metrics))
 		if err != nil {
 			return fmt.Errorf("session: initialize journal: %w", err)
 		}
@@ -334,6 +336,7 @@ func (s *Session) buildHarness(ctx context.Context) (harness.Harness, error) {
 		Logger:       s.logger,
 		Limits:       limits,
 		Static:       staticCtx,
+		Metrics:      s.metrics,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("session: construct harness: %w", err)
@@ -920,7 +923,14 @@ func (s *Session) startTurn(hInput harness.Input) error {
 			return
 		}
 
-		sCtx := scope.With(runCtx, scope.Scope{SessionID: s.ID})
+		s.Lock()
+		agentName := s.Config.Agent
+		s.Unlock()
+		sCtx := scope.With(runCtx, scope.Scope{
+			SessionID:     s.ID,
+			WorkspaceRoot: s.workspace.RootDir(),
+			Agent:         agentName,
+		})
 		if _, err := s.send(sCtx, h.Stream(sCtx, hInput)); err != nil {
 			s.handleAsyncError(err)
 			return
@@ -1552,7 +1562,16 @@ func (s *Session) generateTitle(userText string) {
 		message.NewSystemText(strings.TrimSpace(sysPrompt)),
 		message.NewUserText(userText),
 	}
-	resp, err := llmModel.Invoke(ctx, msgs)
+	s.Lock()
+	sessionAgent := s.Config.Agent
+	s.Unlock()
+	titleCtx := scope.With(ctx, scope.Scope{
+		SessionID:     s.ID,
+		WorkspaceRoot: s.workspace.RootDir(),
+		Agent:         sessionAgent,
+		Purpose:       string(metrics.PurposeTitle),
+	})
+	resp, err := llmModel.Invoke(titleCtx, msgs)
 	if err != nil || resp == nil {
 		if err != nil {
 			s.logger.Warn("failed to invoke title generator model", log.String("error", err.Error()))

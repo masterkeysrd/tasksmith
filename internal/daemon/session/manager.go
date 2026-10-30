@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/metrics"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -37,6 +38,9 @@ type Config struct {
 	Permissions permissions.Manager
 	ReloadLock  *sync.RWMutex
 	Catalog     func() models.Catalog
+	// Metrics receives tool call metrics from session harnesses. A nil
+	// recorder disables them.
+	Metrics metrics.Recorder
 }
 
 // Validate checks that all required configuration dependencies are non-nil.
@@ -84,6 +88,7 @@ type manager struct {
 	perms      permissions.Manager
 	reloadLock *sync.RWMutex
 	catalog    func() models.Catalog
+	metrics    metrics.Recorder
 
 	bgCtx    context.Context
 	bgCancel context.CancelFunc
@@ -129,6 +134,7 @@ func New(cfg Config) (Manager, error) {
 		perms:      cfg.Permissions,
 		reloadLock: cfg.ReloadLock,
 		catalog:    cfg.Catalog,
+		metrics:    cfg.Metrics,
 		bgCtx:      bgCtx,
 		bgCancel:   bgCancel,
 		sessions:   make(map[string]*Session),
@@ -213,6 +219,7 @@ func (m *manager) loadOrCacheSession(ctx context.Context, dbSess *Session) (*Ses
 		workspace:   m.workspace,
 		gateway:     m.gateway,
 		catalog:     m.catalog,
+		metrics:     m.metrics,
 		reloadLock:  m.reloadLock,
 		publisher:   m.publisher,
 		logger:      m.logger,
@@ -328,9 +335,9 @@ func (m *manager) Create(ctx context.Context, params CreateParams) (sess *Sessio
 
 	now := time.Now().UTC()
 	newSession := &Session{
-		State: NewState(),
-		ID:    id,
-		Title: strings.TrimSpace(params.Title),
+		State:       NewState(),
+		ID:          id,
+		Title:       strings.TrimSpace(params.Title),
 		Config:      resolvedConfig,
 		CreatedAt:   now,
 		UpdatedAt:   now,
@@ -342,6 +349,7 @@ func (m *manager) Create(ctx context.Context, params CreateParams) (sess *Sessio
 		workspace:   m.workspace,
 		gateway:     m.gateway,
 		catalog:     m.catalog,
+		metrics:     m.metrics,
 		reloadLock:  m.reloadLock,
 		publisher:   m.publisher,
 		logger:      m.logger,

@@ -9,6 +9,11 @@ type Scope struct {
 	MessageID  string // Assistant message ID that emitted the tool call
 	ToolCallID string // Active ToolCall.ID
 	ToolName   string // Active ToolCall.Name
+
+	WorkspaceRoot   string // Canonical workspace root path
+	Agent           string // The session's agent
+	Purpose         string // LLM call purpose: chat, compaction or title
+	ParentSessionID string // Parent session for subagents; empty otherwise
 }
 
 type contextKey struct{}
@@ -34,6 +39,18 @@ func With(ctx context.Context, s Scope) context.Context {
 	}
 	if s.ToolName != "" {
 		existing.ToolName = s.ToolName
+	}
+	if s.WorkspaceRoot != "" {
+		existing.WorkspaceRoot = s.WorkspaceRoot
+	}
+	if s.Agent != "" {
+		existing.Agent = s.Agent
+	}
+	if s.Purpose != "" {
+		existing.Purpose = s.Purpose
+	}
+	if s.ParentSessionID != "" {
+		existing.ParentSessionID = s.ParentSessionID
 	}
 	return context.WithValue(ctx, contextKey{}, existing)
 }

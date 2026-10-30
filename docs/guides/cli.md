@@ -130,6 +130,7 @@ Some built-in commands:
 | `/clear` | `/clear` | Start a fresh session draft. |
 | `/compact` | `/compact [focus]` | Compact conversation history to free context window space, with optional focus instructions. |
 | `/context` | `/context` | Show visual token usage grid and context window breakdown by category. |
+| `/usage` | `/usage [session\|workspace\|global]` | Open the usage browser for the session, the workspace, or all workspaces. |
 | `/exit` | `/exit` (or `/quit`, `/q`) | Exit the REPL. |
 
 Resolve any pending permission request or question before using `/compact`. Commands and background task notifications remain queued until the interaction is resolved.
@@ -208,6 +209,33 @@ Run `/changes` to open the Tracked Changes browser:
 - **View Diff**: Press `Enter` on any file to open a full, colored unified diff viewer inside `<Slot />`. Press `Esc` to return to the file list.
 - **Revert File**: Press `r` while highlighting a file to open a confirmation dialog (`Revert changes to internal/server/server.go?`). Confirming reverts the file on disk to its baseline state before the session began.
 - **Revert Entire Session**: Run `/revert` in the composer to roll back all file modifications across the workspace.
+
+---
+
+## Usage and Cost (`/usage`)
+
+TaskSmith records every LLM call (chat turns, compaction and title generation, including failed and canceled calls), every tool execution, and every file change. The status line shows the session's running cost and token total; run `/usage` to open the usage browser in the slot above the status line:
+
+```text
+Usage
+[1 Session]  2 Workspace  3 Global
+
+Total cost:            $0.42
+Total duration (API):  41s
+Total duration (wall): 18m 20s
+Total code changes:    312 lines added, 48 lines removed
+Usage by model:
+    anthropic/claude-sonnet:  20.0k uncached input, 76.0k cache read, 8.0k cache write, 6.2k output ($0.35)
+Prompt cache:          12 requests · 79% of input tokens from cache · 2 misses (last 6m 00s ago; 1h 02m since the previous call; 8.0k tokens re-cached)
+Tool calls:            41 total · 38 ok · 1 error · 2 denied · 0 canceled
+```
+
+- **Tabs** (`1`/`2`/`3` or `←`/`→`): the current session, the current workspace, and all workspaces. `/usage workspace` and `/usage global` open the browser on that tab.
+- **Group by** (`m` model, `p` provider, `a` agent, `u` purpose, `i` pricing tier, `d` day) and **range** (`t`: 24 hours, 7 days, 30 days, all time) apply to the Workspace and Global tabs.
+- **Tools** show calls, errors, permission denials, cancellations, total and slowest time, and lines changed per tool.
+- **Insights** such as "40% of cost came from calls above 150k context" or "`bash` failed 40% of its calls" appear only when they apply, each with a short hint.
+
+Input tokens are shown split into **uncached**, **cache read** and **cache write**, so the three never overlap. Cost is estimated from the model's `cost` pricing when the call is made and then frozen, so later price changes don't rewrite history. If a model has no pricing, its calls are **unpriced**: they still count toward calls and tokens, but their cost is unknown, so totals are shown as a lower bound (for example `≥ $1.23`) with a note. Usage survives session deletion.
 
 ---
 

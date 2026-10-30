@@ -62,7 +62,16 @@ To ensure complete reversibility of AI-driven code edits, the daemon wraps file 
 - **Instant Unified Diffs**: Clients can query the timeline at any point to render syntax-highlighted diffs across an entire turn or individual tool execution.
 - **Atomic File Reverts**: Users can revert specific turns or rollback entire sessions, restoring modified files to their exact pre-turn state on disk.
 
-### 5. Structured Observability
+### 5. Metrics Engine & `daemon.db`
+The daemon owns a global SQLite database at `~/.local/share/tasksmith/daemon.db` (`$XDG_DATA_HOME/tasksmith/daemon.db`), opened at startup and closed at shutdown. Its first migration scope is `metrics`, which stores one row per recorded occurrence in `metrics_records` plus any number of named integer values in `metrics_measurements`.
+- **Records**: An LLM call (`llm_call`: tokens, nano-USD cost frozen with its pricing tier and a priced flag, latency, time to first token), a tool call (`tool_call`: status and execution duration), or a file change (`file_change`: lines added and removed, written by the session journal for every recorded change, with reverts flagged so views can exclude them). Failed and canceled calls are recorded too. New kinds need no schema change.
+- **Attribution**: Each record is attributed from the `scope.Scope` carried in the context: workspace root, session, parent session, turn, message, agent and (for LLM calls) purpose (`chat`, `compaction`, `title`). The assistant message ID is generated before the LLM call so the call is attributed to its message.
+- **Write path**: Recording is asynchronous. Records go through a bounded in-memory queue to a batching writer; a full queue drops the record with a warning, recording failures never fail a turn, and shutdown flushes the queue before the database closes.
+- **Live totals**: A decorator keeps per-session running totals (loaded from the database on first access) and publishes a `usage_updated` event on the session's stream topic after each record.
+- **Queries**: A generic query engine aggregates records for the session, workspace and global usage views and the read-only `/v1/metrics/query`, `/v1/sessions/{id}/usage` and `/v1/usage` endpoints.
+- **Retention**: Records outlive their sessions, so historical spend stays accurate after a session is deleted.
+
+### 6. Structured Observability
 The daemon provides detailed diagnostics without polluting user terminal outputs:
 - Diagnostic events, HTTP request logs, and subsystem errors are written as structured JSON Lines records to `~/.local/state/tasksmith/logs/daemon.jsonl`.
 - Session turn failures and LLM error messages are enriched with vendor diagnostics for rapid troubleshooting.

@@ -387,6 +387,16 @@ func (acc *conversationAccumulator) applyEvent(event api.Event) {
 		acc.sessionStatus = api.StatusCompacting
 		acc.publishLocked()
 
+	case api.EventUsageUpdated:
+		p, ok := event.Payload.(api.UsageUpdatedEvent)
+		if !ok {
+			return
+		}
+		if acc.sessionID != "" && p.SessionID != acc.sessionID {
+			return
+		}
+		SetUsage(p.Usage)
+
 	case api.EventContextUpdated:
 		p, ok := event.Payload.(api.ContextUpdatedEvent)
 		if !ok {

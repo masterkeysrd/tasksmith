@@ -17,7 +17,9 @@ import (
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	"github.com/masterkeysrd/tasksmith/internal/core/uuid"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/metrics"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/models"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/scope"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tools"
 )
 
@@ -453,7 +455,7 @@ func (n *CompactionNode) Execute(ctx context.Context, state State) (graph.Comman
 		model = model.BindToolDefs(defs...)
 	}
 
-	resp, err := model.Invoke(ctx, messages)
+	resp, err := model.Invoke(scope.With(ctx, scope.Scope{Purpose: string(metrics.PurposeCompaction)}), messages)
 	if err != nil {
 		return nil, fmt.Errorf("harness: invoke compaction llm: %w", err)
 	}

@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/metrics"
 	"os"
 	"sort"
 	"strings"
@@ -18,6 +19,10 @@ type Config struct {
 	// Env contains injected environment variables strictly keyed by name.
 	// The gateway will only read variables explicitly referenced by a provider's Auth.Env.
 	Env map[string]string `json:"env,omitempty"`
+
+	// Metrics receives a record for every LLM call. It is not part of the
+	// configuration fingerprint. A nil recorder disables LLM call metrics.
+	Metrics metrics.Recorder `json:"-"`
 }
 
 // Fingerprint returns a canonical SHA-256 hex fingerprint of the effective configuration.

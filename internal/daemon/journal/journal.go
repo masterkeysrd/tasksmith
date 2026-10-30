@@ -16,7 +16,9 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/masterkeysrd/tasksmith/internal/core/diff"
+	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	"github.com/masterkeysrd/tasksmith/internal/core/sqlite"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/metrics"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/sandbox"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/scope"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/std"
@@ -33,13 +35,23 @@ type sqliteJournal struct {
 	sessionID string
 	blobsDir  string
 	files     map[string]fileState
+	metrics   metrics.Recorder
+}
+
+// Option configures a journal created by [New].
+type Option func(*sqliteJournal)
+
+// WithMetrics makes the journal record a file_change metric for every
+// recorded change. A nil recorder disables them.
+func WithMetrics(r metrics.Recorder) Option {
+	return func(j *sqliteJournal) { j.metrics = r }
 }
 
 var _ Journal = (*sqliteJournal)(nil)
 
 // New loads or initializes the Journal for a session, running schema migrations
 // and restoring in-memory CAS tracked file state from SQLite metadata.
-func New(ctx context.Context, db *sql.DB, sessionID, blobsDir string) (Journal, error) {
+func New(ctx context.Context, db *sql.DB, sessionID, blobsDir string, opts ...Option) (Journal, error) {
 	if db == nil {
 		return nil, ErrInvalidConfig
 	}
@@ -103,12 +115,16 @@ func New(ctx context.Context, db *sql.DB, sessionID, blobsDir string) (Journal, 
 		return nil, fmt.Errorf("journal: iterate entries: %w", err)
 	}
 
-	return &sqliteJournal{
+	j := &sqliteJournal{
 		db:        db,
 		sessionID: sessionID,
 		blobsDir:  blobsDir,
 		files:     files,
-	}, nil
+	}
+	for _, opt := range opts {
+		opt(j)
+	}
+	return j, nil
 }
 
 // Delete removes all journal entries and file tracking records for this session.
@@ -317,6 +333,22 @@ INSERT INTO journal_entries (
 		changed: true,
 	}
 	j.mu.Unlock()
+
+	{
+		mErr := metrics.RecordFileChange(scope.With(ctx, scope.Scope{SessionID: j.sessionID}), j.metrics, metrics.FileChange{
+			Tool:       change.Tool,
+			ToolCallID: change.ToolCallID,
+			Path:       change.Path,
+			Source:     string(change.Source),
+			Change:     string(change.Kind),
+			Added:      int64(change.Additions),
+			Removed:    int64(change.Deletions),
+			Revert:     change.Tool == "revert",
+		})
+		if mErr != nil {
+			log.Warn("failed to record file change metrics", log.String("error", mErr.Error()))
+		}
+	}
 
 	return nil
 }

@@ -268,5 +268,6 @@ func (r *Registry) registerBuiltins() {
 	r.registerTaskCommands()
 	r.registerCompactCommand()
 	r.registerContextCommand()
+	r.registerUsageCommand()
 	r.registerSkillCommands()
 }

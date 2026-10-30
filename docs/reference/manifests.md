@@ -2,6 +2,8 @@
 
 TaskSmith uses declarative YAML manifests and Markdown frontmatter to configure workspaces, projects, agents, skills, commands, decisions, tools, toolkits, and external MCP servers.
 
+Model `cost` pricing and tiers (`label`, `tier.type`, `tier.size`) drive the cost estimates recorded for every LLM call (shown by `/usage` and the status line); a model without `cost` and without a built-in profile price is recorded as unpriced.
+
 For model provider configurations (`kind: ModelProvider`), including `cost` and tier precedence over built-in pricing, see the [Providers Reference](./providers.md).
 
 ---

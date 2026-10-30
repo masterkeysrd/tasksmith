@@ -3,9 +3,11 @@ package harness
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/masterkeysrd/loom/graph"
 	"github.com/masterkeysrd/loom/llm"
@@ -14,6 +16,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	"github.com/masterkeysrd/tasksmith/internal/core/uuid"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/metrics"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/models"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/permissions"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/scope"
@@ -33,6 +36,7 @@ type GraphConfig struct {
 	Limits       models.Limits
 	Static       StaticContext
 	Logger       log.Interface
+	Metrics      metrics.Recorder
 }
 
 type AgentNodeConfig struct {
@@ -54,6 +58,7 @@ type CompactionNodeConfig struct {
 }
 
 type ToolsNodeConfig struct {
+	Metrics     metrics.Recorder
 	Container   tools.Container
 	Permissions permissions.SessionManager
 	Limits      models.Limits
@@ -95,6 +100,7 @@ func buildGraph(cfg GraphConfig) (*graph.Graph[State], error) {
 		Logger:       cfg.Logger,
 	})
 	toolsNode := NewToolsNode(ToolsNodeConfig{
+		Metrics:     cfg.Metrics,
 		Container:   cfg.Container,
 		Permissions: cfg.Permissions,
 		Limits:      cfg.Limits,
@@ -339,12 +345,16 @@ func (n *AgentNode) Execute(ctx context.Context, state State) (graph.Command[Sta
 		boundModel = n.model.BindToolDefs(defs...)
 	}
 
-	resp, err := boundModel.Invoke(ctx, llmMessages)
+	// The message ID is generated before the call so that the metrics
+	// middleware can attribute the LLM call to its assistant message.
+	msgID := uuid.NewString()
+	callCtx := scope.With(ctx, scope.Scope{MessageID: msgID, Purpose: string(metrics.PurposeChat)})
+	resp, err := boundModel.Invoke(callCtx, llmMessages)
 	if err != nil {
 		return nil, fmt.Errorf("harness: invoke llm: %w", err)
 	}
 
-	resp.ID = uuid.NewString()
+	resp.ID = msgID
 	emit(ctx, NodeMessageEvent{Message: resp})
 
 	if resp.Metrics != nil {
@@ -422,6 +432,7 @@ type ToolsNode struct {
 	limits      models.Limits
 	static      StaticContext
 	logger      log.Interface
+	metrics     metrics.Recorder
 }
 
 // NewToolsNode constructs a new [ToolsNode] bound to the tool container, permission manager, and logger.
@@ -432,6 +443,49 @@ func NewToolsNode(cfg ToolsNodeConfig) *ToolsNode {
 		limits:      cfg.Limits,
 		static:      cfg.Static,
 		logger:      cfg.Logger.ForComponent("harness.tools"),
+		metrics:     cfg.Metrics,
+	}
+}
+
+// executeTool runs the tool and records a tool_call metric. The duration
+// covers execution only; permission and question waits happen before it.
+func (n *ToolsNode) executeTool(ctx context.Context, tc *message.ToolCall) (*message.Tool, error) {
+	start := time.Now()
+	msg, err := n.tools.Execute(ctx, tc)
+	dur := time.Since(start)
+	switch {
+	case errors.Is(ctx.Err(), context.Canceled):
+		n.recordTool(ctx, tc, metrics.StatusCanceled, "canceled", dur)
+	case err != nil:
+		n.recordTool(ctx, tc, metrics.StatusError, "execute_error", dur)
+	case msg != nil && msg.IsError:
+		n.recordTool(ctx, tc, metrics.StatusError, "tool_error", dur)
+	default:
+		n.recordTool(ctx, tc, metrics.StatusOK, "", dur)
+	}
+	return msg, err
+}
+
+// recordFailure records a tool call that failed before executing, classifying
+// permission rejections as denied.
+func (n *ToolsNode) recordFailure(ctx context.Context, tc *message.ToolCall, err error) {
+	if errors.Is(err, tools.ErrPermissionDenied) {
+		n.recordTool(ctx, tc, metrics.StatusDenied, "permission_denied", 0)
+		return
+	}
+	n.recordTool(ctx, tc, metrics.StatusError, "prepare_error", 0)
+}
+
+func (n *ToolsNode) recordTool(ctx context.Context, tc *message.ToolCall, status metrics.Status, errKind string, dur time.Duration) {
+	err := metrics.RecordToolCall(ctx, n.metrics, metrics.ToolCall{
+		Tool:       tc.Name,
+		ToolCallID: tc.ID,
+		Status:     status,
+		ErrorKind:  errKind,
+		Duration:   dur,
+	})
+	if err != nil {
+		n.logger.Warn("failed to record tool call metrics", log.String("error", err.Error()))
 	}
 }
 
@@ -463,6 +517,7 @@ func (n *ToolsNode) cancelCalls(ctx context.Context, asstIdx int, unfulfilled []
 		if err != nil {
 			return nil, err
 		}
+		n.recordTool(ctx, tc, metrics.StatusCanceled, "canceled", 0)
 		emit(ctx, NodeMessageEvent{Message: toolMsg})
 		canceledMsgs = append(canceledMsgs, toolMsg)
 	}
@@ -527,6 +582,7 @@ func (n *ToolsNode) evaluateCalls(ctx context.Context, unfulfilled []*message.To
 				question, err = newQuestionRequest(tc)
 			}
 			if err != nil {
+				n.recordFailure(ctx, tc, err)
 				msg, msgErr := newErrorToolMessage(tc, err.Error())
 				if msgErr != nil {
 					return nil, msgErr
@@ -595,12 +651,14 @@ func newQuestionRequest(tc *message.ToolCall) (tools.QuestionRequest, error) {
 func (n *ToolsNode) evaluateSingleCall(ctx context.Context, tc *message.ToolCall) (*message.Tool, *tools.PermissionRequest, error) {
 	plan, err := n.tools.Prepare(ctx, tc)
 	if err != nil {
+		n.recordFailure(ctx, tc, err)
 		msg, msgErr := newErrorToolMessage(tc, err.Error())
 		return msg, nil, msgErr
 	}
 
 	access, req, err := n.permissions.Evaluate(plan)
 	if err != nil {
+		n.recordFailure(ctx, tc, err)
 		msg, msgErr := newErrorToolMessage(tc, err.Error())
 		return msg, nil, msgErr
 	}
@@ -608,11 +666,12 @@ func (n *ToolsNode) evaluateSingleCall(ctx context.Context, tc *message.ToolCall
 		return nil, req, nil
 	}
 	if access == tools.AccessDeny {
+		n.recordTool(ctx, tc, metrics.StatusDenied, "permission_denied", 0)
 		msg, msgErr := newErrorToolMessage(tc, tools.ErrPermissionDenied.Error())
 		return msg, nil, msgErr
 	}
 
-	msg, execErr := n.tools.Execute(ctx, tc)
+	msg, execErr := n.executeTool(ctx, tc)
 	if execErr != nil {
 		return nil, nil, fmt.Errorf("harness: execute tool %q: %w", tc.Name, execErr)
 	}
@@ -689,6 +748,7 @@ func (n *ToolsNode) resumeCalls(ctx context.Context, unfulfilled []*message.Tool
 				Content:           message.Content{&message.TextBlock{Text: string(data)}},
 				StructuredContent: out,
 			}
+			n.recordTool(ctx, tc, metrics.StatusOK, "", 0)
 			emit(ctx, NodeMessageEvent{Message: msg})
 			toolMsgs = append(toolMsgs, msg)
 			continue
@@ -703,6 +763,7 @@ func (n *ToolsNode) resumeCalls(ctx context.Context, unfulfilled []*message.Tool
 				return nil, ErrPendingPermissionsUnresolved
 			}
 			if err := n.permissions.ApplyDecision(&req, dec); err != nil {
+				n.recordFailure(ctx, tc, err)
 				msg, msgErr := newErrorToolMessage(tc, err.Error())
 				if msgErr != nil {
 					return nil, msgErr
@@ -747,9 +808,10 @@ func (n *ToolsNode) resumeSingleCall(ctx context.Context, tc *message.ToolCall, 
 		return nil, ErrPendingPermissionsUnresolved
 	}
 	if err := n.permissions.ApplyDecision(&req, dec); err != nil {
+		n.recordFailure(ctx, tc, err)
 		return newErrorToolMessage(tc, err.Error())
 	}
-	toolMsg, err := n.tools.Execute(ctx, tc)
+	toolMsg, err := n.executeTool(ctx, tc)
 	if err != nil {
 		return nil, fmt.Errorf("harness: execute tool %q: %w", tc.Name, err)
 	}

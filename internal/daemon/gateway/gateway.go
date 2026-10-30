@@ -103,6 +103,7 @@ func (g *gatewayImpl) LLM(ctx context.Context, m models.Model, cfg llm.ModelConf
 		model = model.WithMiddleware(mw)
 	}
 	model = model.WithMiddleware(validateRequestMiddleware(m))
+	model = model.WithMiddleware(metricsLLMMiddleware(m, g.cfg.Metrics))
 	return model, nil
 }
 

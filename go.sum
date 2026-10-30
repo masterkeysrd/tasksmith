@@ -166,6 +166,8 @@ github.com/mailru/easyjson v0.9.2 h1:dX8U45hQsZpxd80nLvDGihsQ/OxlvTkVUXH2r/8cb2M
 github.com/mailru/easyjson v0.9.2/go.mod h1:1+xMtQp2MRNVL/V1bOzuP3aP8VNwRW55fQUto+XFtTU=
 github.com/masterkeysrd/loom v0.0.9-0.20261029072048-3cd0df34eee1 h1:gSgpKotD8JWDPN1v4wTXXEGEhgyz4p58Z8yUk/MAzGU=
 github.com/masterkeysrd/loom v0.0.9-0.20261029072048-3cd0df34eee1/go.mod h1:iyosTFy9p/G/fyxmnWD1be4UL0Inuj1cycbOha0JlXw=
+github.com/masterkeysrd/loom v0.0.9-0.20261030020147-5c0513ff3ae6 h1:RMKV3/6q/MwyPAEaOVCSQtwBNyHydKrfhyHHlGEyk9Q=
+github.com/masterkeysrd/loom v0.0.9-0.20261030020147-5c0513ff3ae6/go.mod h1:iyosTFy9p/G/fyxmnWD1be4UL0Inuj1cycbOha0JlXw=
 github.com/masterkeysrd/warp v0.0.7-0.20261029051839-892d1fca38da h1:SfpYzbDEhycnAoh8qKdRZUrjkNcPMIoLPhFeSjVD6ko=
 github.com/masterkeysrd/warp v0.0.7-0.20261029051839-892d1fca38da/go.mod h1:6siby/YEZ/ltdHyABFT4mzecXRQcr2Vuye2okawDCQE=
 github.com/masterkeysrd/warp v0.0.7-0.20261029074357-d817526e40a5 h1:S2eF6ANcnqzfEDcLfq0kBYOkk0SWnn/m+icpCOkKge4=

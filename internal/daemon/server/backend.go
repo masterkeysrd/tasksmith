@@ -57,9 +57,17 @@ type SessionBackend interface {
 	StreamTaskOutput(ctx context.Context, workspace, id, taskID string) (<-chan string, string, func(), error)
 }
 
+// MetricsBackend serves read-only usage and metrics queries.
+type MetricsBackend interface {
+	MetricsQuery(ctx context.Context, req api.MetricsQuery) (*api.MetricsResult, error)
+	SessionUsage(ctx context.Context, workspace, id string) (*api.SessionUsage, error)
+	Usage(ctx context.Context, workspace string, req api.UsageRequest) (*api.UsageSummary, error)
+}
+
 type Backend interface {
 	SystemBackend
 	EventBackend
 	WorkspaceBackend
 	SessionBackend
+	MetricsBackend
 }

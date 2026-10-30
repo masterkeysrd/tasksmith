@@ -52,6 +52,7 @@ const (
 	EventTodosUpdated        EventType = "todos_updated"
 	EventCompactionStarted   EventType = "compaction_started"
 	EventContextUpdated      EventType = "context_updated"
+	EventUsageUpdated        EventType = "usage_updated"
 	EventError               EventType = "error"
 )
 
@@ -325,6 +326,12 @@ func (e *Event) UnmarshalJSON(data []byte) error {
 		var p ContextUpdatedEvent
 		if err := json.Unmarshal(raw, &p); err != nil {
 			return fmt.Errorf("api: unmarshal context_updated payload: %w", err)
+		}
+		e.Payload = p
+	case EventUsageUpdated:
+		var p UsageUpdatedEvent
+		if err := json.Unmarshal(raw, &p); err != nil {
+			return fmt.Errorf("api: unmarshal usage_updated payload: %w", err)
 		}
 		e.Payload = p
 	case EventError:

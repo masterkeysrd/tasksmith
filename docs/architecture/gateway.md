@@ -66,6 +66,9 @@ The workspace model catalog merges Loom profiles with explicit workspace model o
 
 At the provider boundary, request validation rejects known unsupported tools, tool history, input modalities, and response schemas. Structured-output requests with unknown support are forwarded to Loom. Media formats that the adapter would discard are rejected independently of model capabilities. Input blocks that cannot be converted are rejected before entering a session.
 
+### 4a. Metrics Middleware
+Every completion model the gateway builds carries a metrics middleware that closes over the effective model. It measures time to first token and total duration, keeps the last token metrics reported by the stream, and estimates cost from the model's effective pricing profile (loom attaches cost outside the middleware chain, so the middleware estimates it itself). One `llm_call` record is written when the stream ends, fails, is canceled, or is abandoned by the consumer; models without pricing are recorded as unpriced. Workspace-defined pricing and tiers are merged into the effective profile by the model catalog and handed to loom, so loom's estimates and the recorded costs agree. The recorder is not part of the gateway configuration fingerprint. See the [Daemon Architecture](./daemon.md) for the metrics engine.
+
 ### 5. Triple-Role Model Instantiation & Decision Adapter
 Given a resolved `(provider, modelID)` from the workspace layer, the gateway instantiates and adapts models across three cognitive roles:
 

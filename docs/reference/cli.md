@@ -70,6 +70,7 @@ Inside the TaskSmith interactive REPL, slash commands provide instant control ov
 | **`/tasks`** | | *(none)* | Opens the background task manager to inspect running commands and stream task logs. |
 | **`/compact`** | | `[focus]` | Compacts conversation history to free context window space, with optional focus instructions. Requires pending permissions and questions to be resolved first. |
 | **`/context`** | | *(none)* | Displays visual token usage grid and detailed context window breakdown by category. |
+| **`/usage`** | | `[session\|workspace\|global]` | Opens the usage browser slot on the Session, Workspace or Global tab (default: Session). See [Usage Browser](#usage-browser-usage). |
 | **`/skills`** | | *(none)* | Opens the interactive skills browser to inspect runbooks, token estimates, and reload workspace skills. |
 
 ### Workspace Commands, Skills & Plugin Extensions
@@ -179,3 +180,36 @@ TaskSmith adheres to the XDG Base Directory Specification for state persistence,
 | **Workspace Root** | `<workspace-root>/WORKSPACE.md` | Workspace declaration, project boundaries, defaults, and security policies. | Permanent |
 | **Workspace Env** | `<workspace-root>/.env` | Workspace-scoped secrets and environment variables. | Permanent |
 | **Workspace Agents** | `<workspace-root>/.agents/` | Workspace-tier agents, skills, commands, decisions, and tool manifests. | Permanent |
+
+## Status Line Fields
+
+The REPL status line shows, from left to right: the shortcut hint, the permission mode (non-default only), context window usage, session usage, and the model with its thinking effort. Session usage is rendered as `<cost> · ↑<input> ↓<output>` (for example `$0.42 · ↑128.4k ↓8.3k`) once the session has recorded an LLM call, and updates live from `usage_updated` events. `↑` is the total prompt size (including cached tokens) and `↓` is output tokens. A leading `≥` on the cost means some calls had no pricing data.
+
+## Usage Browser (`/usage`)
+
+| Tab | Content |
+| :--- | :--- |
+| **Session** (`1`) | Total cost; API and wall-clock duration; code changes (lines added and removed); usage by model (uncached input, cache read, cache write, output, cost); prompt cache (requests, share of input from cache, misses, expected rebuilds after compaction, last use); cache read and write cost; tool calls with per-tool calls, errors, denied, canceled, total and slowest time, and lines changed; usage insights. |
+| **Workspace** (`2`) | The selected range for the current workspace: cost and trend versus the previous period, sessions and average cost per session, API duration, code changes and cost per 100 changed lines, tokens, cache, usage grouped by the selected dimension, top sessions by cost, tools, insights. |
+| **Global** (`3`) | The same as Workspace across all workspaces, plus usage by workspace and top sessions across workspaces. |
+
+| Key | Action |
+| :--- | :--- |
+| `←` / `→` / `Tab` / `Shift+Tab` / `1` `2` `3` | Switch tab. |
+| `↑` / `↓` / `PgUp` / `PgDn` | Scroll long views. |
+| `m` `p` `a` `u` `i` `d` | Group Workspace and Global tabs by model, provider, agent, purpose, pricing tier, or day (the busiest day is marked with `*`). |
+| `t` | Cycle the range: last 24 hours, 7 days, 30 days, all time (default 30 days). |
+| `r` | Refresh. |
+| `Esc` / `q` | Close. |
+
+Input tokens are shown as uncached, cache read and cache write, which do not overlap. A cost prefixed with `≥` is a lower bound because some calls had no pricing. Insights (large-context share, cache write share, cache misses, compaction share, idle sessions, unpriced models, provider failure rates, tool error, denial and slow-tool rates, spend trend) appear only when a fixed threshold is met. A cache miss is a drop in cache read versus the previous chat call; calls after a compaction are counted as expected rebuilds. The cause of a miss is not guessed: the view shows the time since the previous call.
+
+## Usage HTTP Endpoints
+
+All usage endpoints are read-only.
+
+| Method | Path | Description |
+| :--- | :--- | :--- |
+| `GET` | `/v1/sessions/{id}/usage` | `SessionUsage` for one session (including child sessions): totals, breakdowns by model, pricing tier, purpose and tool (calls, errors, denied, canceled, total and slowest duration, lines changed), code changes, prompt cache statistics, and first and last activity time. |
+| `GET` | `/v1/usage` | Usage summary (totals, groups, sessions count, top sessions, tools, code changes, previous-period totals, and per-workspace groups for global scope). Query params: `scope=workspace\|global` (default `workspace`, resolved from `X-TaskSmith-CWD`), `since` and `until` (RFC 3339 or `YYYY-MM-DD`; `since` defaults to 30 days ago), `group_by=model\|provider\|agent\|purpose\|tier\|day` (default `model`). |
+| `POST` | `/v1/metrics/query` | Runs a generic metrics query (`kind`, `aggregates`, `group_by`, `bucket`, `filter`, `since`, `until`) and returns grouped rows. |

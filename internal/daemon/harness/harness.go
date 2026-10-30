@@ -14,6 +14,7 @@ import (
 	"github.com/masterkeysrd/loom/message"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	"github.com/masterkeysrd/tasksmith/internal/core/uuid"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/metrics"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/models"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/permissions"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/scope"
@@ -34,6 +35,8 @@ type Config struct {
 	Logger       log.Interface
 	Limits       models.Limits
 	Static       StaticContext
+	// Metrics receives tool call metrics. A nil recorder disables them.
+	Metrics metrics.Recorder
 }
 
 // Validate checks that all required configuration dependencies are present.
@@ -111,6 +114,7 @@ func New(cfg Config) (Harness, error) {
 		Limits:       cfg.Limits,
 		Static:       cfg.Static,
 		Logger:       logger,
+		Metrics:      cfg.Metrics,
 	})
 	if err != nil {
 		return nil, err

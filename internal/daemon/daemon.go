@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"net"
@@ -15,11 +16,13 @@ import (
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/core/fsutils"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
+	"github.com/masterkeysrd/tasksmith/internal/core/sqlite"
 	"github.com/masterkeysrd/tasksmith/internal/core/sys"
 	"github.com/masterkeysrd/tasksmith/internal/core/uuid"
 	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/broker"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/gateway"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/metrics"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/models"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/permissions"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/runtime"
@@ -90,6 +93,9 @@ type Daemon struct {
 	started      bool
 	closed       bool
 	runtimes     runtime.Manager
+	db           *sql.DB
+	metricsStore *metrics.Store
+	usage        *metrics.Live
 	shutdownCh   chan struct{}
 	shutdownOnce sync.Once
 	closeOnce    sync.Once
@@ -122,24 +128,47 @@ func New(cfg Config) (*Daemon, error) {
 		return 128
 	}))
 
+	dbPath, err := xdg.SubDataDir("daemon.db")
+	if err != nil {
+		return nil, fmt.Errorf("daemon: resolve database path: %w", err)
+	}
+	db, err := sqlite.Open(context.Background(), dbPath)
+	if err != nil {
+		return nil, fmt.Errorf("daemon: open database: %w", err)
+	}
+	store, err := metrics.NewStore(context.Background(), db, daemonLogger)
+	if err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	usage := metrics.NewLive(store, func(sessionID string, u api.SessionUsage) {
+		b.Publish(api.SessionStreamTopic(sessionID), api.UsageUpdatedEvent{SessionID: sessionID, Usage: u})
+	})
+
 	rtMgr, err := runtime.New(runtime.Config{
 		GatewayPool: cfg.GatewayPool,
 		Publisher:   b,
 		Logger:      daemonLogger,
+		Metrics:     usage,
 	})
 	if err != nil {
+		_ = store.Close()
+		_ = db.Close()
 		return nil, err
 	}
 
 	d := &Daemon{
-		cfg:        cfg,
-		logger:     daemonLogger,
-		startedAt:  time.Now().UTC(),
-		broker:     b,
-		srv:        server.NewServer(serverLogger),
-		runtimes:   rtMgr,
-		shutdownCh: make(chan struct{}),
-		serveErrCh: make(chan error, 1),
+		db:           db,
+		metricsStore: store,
+		usage:        usage,
+		cfg:          cfg,
+		logger:       daemonLogger,
+		startedAt:    time.Now().UTC(),
+		broker:       b,
+		srv:          server.NewServer(serverLogger),
+		runtimes:     rtMgr,
+		shutdownCh:   make(chan struct{}),
+		serveErrCh:   make(chan error, 1),
 	}
 
 	mux := d.srv.CreateMux(
@@ -148,6 +177,7 @@ func New(cfg Config) (*Daemon, error) {
 		server.NewEventRouter(d),
 		server.NewWorkspaceRouter(d),
 		server.NewSessionRouter(d),
+		server.NewMetricsRouter(d),
 	)
 
 	d.httpServer = &http.Server{
@@ -264,6 +294,14 @@ func (d *Daemon) Close(ctx context.Context) error {
 		}
 
 		if err := d.cfg.GatewayPool.Close(); err != nil {
+			errs = append(errs, err)
+		}
+
+		// Flush queued metrics before the database is closed.
+		if err := d.metricsStore.Close(); err != nil {
+			errs = append(errs, err)
+		}
+		if err := d.db.Close(); err != nil {
 			errs = append(errs, err)
 		}
 
