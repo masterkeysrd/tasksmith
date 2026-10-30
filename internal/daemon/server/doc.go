@@ -48,6 +48,7 @@
 //   - `GET  /v1/models`                      – List available models.
 //   - `GET  /v1/models/{id...}`              – Fetch a single model.
 //   - `POST /v1/sessions`                    – Create or idempotently ensure a session.
+//   - `POST /v1/sessions/preview`            – Preview draft session model resolution and diagnostics.
 //   - `GET  /v1/sessions`                    – List sessions.
 //   - `GET  /v1/sessions/{id}`               – Fetch a session.
 //   - `PATCH /v1/sessions/{id}`              – Update session metadata.

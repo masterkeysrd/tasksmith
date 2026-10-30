@@ -12,7 +12,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/masterkeysrd/loom/profile"
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/core/fsutils"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
@@ -21,6 +20,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/broker"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/gateway"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/models"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/permissions"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/runtime"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/server"
@@ -370,10 +370,8 @@ func (d *Daemon) GetWorkspace(ctx context.Context, rawWS string) (*api.Workspace
 		return nil, err
 	}
 
-	var defModel string
-	if models := rt.Workspace().ResolveModels(workspace.RoleCompletion); len(models) > 0 {
-		defModel = models[0]
-	}
+	owner := rt.SessionRuntime()
+	resolvedDefault := draftModel(owner.Workspace(), owner.Catalog(), "", "")
 
 	cleanDir, _ := fsutils.CleanPath(rawWS)
 
@@ -393,10 +391,26 @@ func (d *Daemon) GetWorkspace(ctx context.Context, rawWS string) (*api.Workspace
 		Name:         rt.Workspace().Name(),
 		RootDir:      rt.Workspace().RootDir(),
 		CWD:          cleanDir,
-		DefaultAgent: rt.Workspace().DefaultAgentName(),
-		DefaultModel: defModel,
+		DefaultAgent: owner.Workspace().DefaultAgentName(),
+		DefaultModel: resolvedDefault,
 		Warnings:     warnings,
 	}, nil
+}
+
+func draftModel(ws workspace.Workspace, catalog models.Catalog, agent, id string) *api.Model {
+	agent, selected := models.ResolveAgentModel(ws, catalog, agent, models.ID(id))
+	if !selected.Valid() {
+		return nil
+	}
+	model, ok := catalog.Get(selected)
+	if !ok {
+		return nil
+	}
+	converted := catalogToAPIModel(model)
+	if ag, ok := ws.GetAgent(agent); ok && ag != nil {
+		converted.ThinkingDefault = session.AgentThinking(ag.Thinking)
+	}
+	return &converted
 }
 
 func (d *Daemon) ReloadWorkspace(ctx context.Context, rawWS string) error {
@@ -515,16 +529,10 @@ func (d *Daemon) ListModels(ctx context.Context, rawWS string) ([]api.Model, err
 		return nil, err
 	}
 
-	providers := rt.Workspace().Providers()
-	var out []api.Model
-	for _, p := range providers {
-		for _, m := range p.Models {
-			apiModel := toAPIModel(p.Name, m)
-			if prof, ok := rt.Gateway().ModelProfile(p.Name, m.ID); ok && prof != nil {
-				enrichModelFromProfile(&apiModel, prof, apiModel.ID)
-			}
-			out = append(out, apiModel)
-		}
+	listed := rt.Catalog().List()
+	out := make([]api.Model, 0, len(listed))
+	for _, m := range listed {
+		out = append(out, catalogToAPIModel(m))
 	}
 	return out, nil
 }
@@ -544,58 +552,18 @@ func (d *Daemon) GetModel(ctx context.Context, rawWS, id string) (*api.Model, er
 		}
 	}
 
-	rm, ok := rt.Workspace().ResolveModel(workspace.RoleCompletion, id)
+	var model models.Model
+	var ok bool
+	if models.ID(id).Valid() {
+		model, ok = rt.Catalog().Get(models.ID(id))
+	} else {
+		model, ok = rt.Catalog().Resolve(models.RoleCompletion, id)
+	}
 	if !ok {
-		rm = &workspace.ResolvedModel{ModelID: id, QualifiedID: id}
+		return &api.Model{ID: id, Name: id, Label: id}, nil
 	}
-	m := resolvedToAPIModel(rm)
-	if prof, ok := rt.Gateway().ModelProfile(rm.ProviderName, rm.ModelID); ok && prof != nil {
-		enrichModelFromProfile(&m, prof, id)
-	}
+	m := catalogToAPIModel(model)
 	return &m, nil
-}
-
-// enrichModelFromProfile populates unpopulated limits and fallback names/labels
-// using discovered model profile metadata.
-func enrichModelFromProfile(m *api.Model, prof *profile.Profile, rawID string) {
-	if prof == nil {
-		return
-	}
-	m.Thinking = nil
-	for _, option := range prof.Capabilities.ReasoningOptions {
-		m.Thinking = append(m.Thinking, api.ThinkingCapability{Type: option.Type, Values: toAPIThinkingValues(option.Type, option.Values), Default: option.Default, Min: option.Min, Max: option.Max})
-	}
-	if m.ContextLimit <= 0 && prof.Limits.Context > 0 {
-		m.ContextLimit = prof.Limits.Context
-	}
-	if m.OutputLimit <= 0 && prof.Limits.Output > 0 {
-		m.OutputLimit = prof.Limits.Output
-	}
-	if profName := strings.TrimSpace(prof.Name); profName != "" {
-		isRawID := func(s string) bool {
-			if s == "" {
-				return true
-			}
-			if s == m.ID || (rawID != "" && s == rawID) {
-				return true
-			}
-			if _, bare, hasSlash := strings.Cut(m.ID, "/"); hasSlash && s == bare {
-				return true
-			}
-			if rawID != "" {
-				if _, bare, hasSlash := strings.Cut(rawID, "/"); hasSlash && s == bare {
-					return true
-				}
-			}
-			return false
-		}
-		if isRawID(m.Name) {
-			m.Name = profName
-		}
-		if isRawID(m.Label) {
-			m.Label = profName
-		}
-	}
 }
 
 func (d *Daemon) GetPermissions(ctx context.Context, rawWS string) (*api.PermissionsResponse, error) {
@@ -670,7 +638,7 @@ func (d *Daemon) CreateSession(ctx context.Context, rawWS string, req api.Create
 		Title: req.Title,
 		Config: session.SessionConfig{
 			Agent:    req.Config.Agent,
-			Model:    req.Config.Model,
+			Model:    models.ID(req.Config.Model),
 			Thinking: req.Config.Thinking,
 			Mode:     tools.PermissionMode(req.Config.Mode),
 		},
@@ -681,6 +649,43 @@ func (d *Daemon) CreateSession(ctx context.Context, rawWS string, req api.Create
 
 	out := toAPISession(sess)
 	return &out, created, nil
+}
+
+func (d *Daemon) PreviewSession(ctx context.Context, rawWS string, req api.PreviewSessionRequest) (*api.SessionPreview, error) {
+	rt, err := d.runtimes.Get(ctx, rawWS)
+	if err != nil {
+		return nil, err
+	}
+
+	cfg, model, diags, hasModel, err := rt.Sessions().Preview(ctx, session.SessionConfig{
+		Agent:    req.Config.Agent,
+		Model:    models.ID(req.Config.Model),
+		Thinking: req.Config.Thinking,
+		Mode:     tools.PermissionMode(req.Config.Mode),
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	var resolvedModel *api.Model
+	if hasModel {
+		converted := catalogToAPIModel(model)
+		if ag, ok := rt.SessionRuntime().Workspace().GetAgent(cfg.Agent); ok && ag != nil {
+			converted.ThinkingDefault = session.AgentThinking(ag.Thinking)
+		}
+		resolvedModel = &converted
+	}
+
+	return &api.SessionPreview{
+		Config: api.SessionConfig{
+			Agent:    cfg.Agent,
+			Model:    string(cfg.Model),
+			Thinking: cfg.Thinking,
+			Mode:     api.PermissionMode(cfg.Mode),
+		},
+		Model:       resolvedModel,
+		Diagnostics: toSessionDiagnostics(diags),
+	}, nil
 }
 
 func (d *Daemon) ListSessions(ctx context.Context, rawWS string) ([]api.Session, error) {
@@ -726,7 +731,7 @@ func (d *Daemon) UpdateSession(ctx context.Context, rawWS, id string, req api.Up
 		Title: req.Title,
 		Config: session.SessionConfig{
 			Agent:    req.Config.Agent,
-			Model:    req.Config.Model,
+			Model:    models.ID(req.Config.Model),
 			Thinking: req.Config.Thinking,
 			Mode:     tools.PermissionMode(req.Config.Mode),
 		},

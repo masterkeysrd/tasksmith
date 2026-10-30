@@ -16,7 +16,7 @@ type Workspace struct {
 	RootDir      string   `json:"root_dir"`
 	CWD          string   `json:"cwd,omitempty"`
 	DefaultAgent string   `json:"default_agent"`
-	DefaultModel string   `json:"default_model,omitempty"`
+	DefaultModel *Model   `json:"default_model,omitempty"`
 	Warnings     []string `json:"warnings,omitempty"`
 }
 
@@ -115,15 +115,51 @@ type ThinkingSetting struct {
 	Enabled bool   `json:"enabled,omitempty"`
 }
 
+type ModelCapabilities struct {
+	Completion       *bool    `json:"completion,omitempty"`
+	Decision         *bool    `json:"decision,omitempty"`
+	Embedding        *bool    `json:"embedding,omitempty"`
+	Tools            *bool    `json:"tools,omitempty"`
+	Attachment       *bool    `json:"attachment,omitempty"`
+	StructuredOutput *bool    `json:"structured_output,omitempty"`
+	Temperature      *bool    `json:"temperature,omitempty"`
+	Dimensions       []int    `json:"dimensions,omitempty"`
+	InputModalities  []string `json:"input_modalities,omitempty"`
+	OutputModalities []string `json:"output_modalities,omitempty"`
+}
+
+type ModelPricing struct {
+	Input      float64            `json:"input"`
+	Output     float64            `json:"output"`
+	CacheRead  float64            `json:"cache_read"`
+	CacheWrite float64            `json:"cache_write"`
+	Reasoning  float64            `json:"reasoning"`
+	Tiers      []ModelPricingTier `json:"tiers,omitempty"`
+}
+
+type ModelPricingTier struct {
+	Label         string  `json:"label,omitempty"`
+	ConditionType string  `json:"condition_type,omitempty"`
+	ConditionSize int     `json:"condition_size,omitempty"`
+	Input         float64 `json:"input"`
+	Output        float64 `json:"output"`
+	CacheRead     float64 `json:"cache_read"`
+	CacheWrite    float64 `json:"cache_write"`
+	Reasoning     float64 `json:"reasoning"`
+}
+
 // Model describes a resolved model and its capabilities from a workspace provider.
 type Model struct {
-	ID           string               `json:"id"`
-	Provider     string               `json:"provider,omitempty"`
-	Name         string               `json:"name"`
-	Label        string               `json:"label,omitempty"`
-	Thinking     []ThinkingCapability `json:"thinking,omitempty"`
-	ContextLimit int                  `json:"context_limit,omitempty"`
-	OutputLimit  int                  `json:"output_limit,omitempty"`
+	ID              string               `json:"id"`
+	Provider        string               `json:"provider,omitempty"`
+	Name            string               `json:"name"`
+	Label           string               `json:"label,omitempty"`
+	Thinking        []ThinkingCapability `json:"thinking,omitempty"`
+	ThinkingDefault *ThinkingSetting     `json:"thinking_default,omitempty"`
+	ContextLimit    int                  `json:"context_limit,omitempty"`
+	OutputLimit     int                  `json:"output_limit,omitempty"`
+	Capabilities    ModelCapabilities    `json:"capabilities"`
+	Pricing         *ModelPricing        `json:"pricing,omitempty"`
 }
 
 // HealthResponse reports the daemon's process identity, startup timestamp,
@@ -330,6 +366,7 @@ type Session struct {
 	ID                 string              `json:"id"`
 	Title              string              `json:"title"`
 	Config             SessionConfig       `json:"config"`
+	Model              *Model              `json:"model,omitempty"`
 	Diagnostics        []SessionDiagnostic `json:"diagnostics,omitempty"`
 	Status             SessionStatus       `json:"status"`
 	Context            ContextState        `json:"context"`
@@ -352,6 +389,18 @@ type CreateSessionRequest struct {
 	ID     string        `json:"id,omitempty"`
 	Title  string        `json:"title,omitempty"`
 	Config SessionConfig `json:"config"`
+}
+
+// PreviewSessionRequest holds parameters for previewing draft session resolution.
+type PreviewSessionRequest struct {
+	Config SessionConfig `json:"config"`
+}
+
+// SessionPreview holds resolved model, configuration, and diagnostics for a draft session.
+type SessionPreview struct {
+	Config      SessionConfig       `json:"config"`
+	Model       *Model              `json:"model,omitempty"`
+	Diagnostics []SessionDiagnostic `json:"diagnostics,omitempty"`
 }
 
 // UpdateSessionRequest holds optional fields to update on an existing session.

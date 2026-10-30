@@ -20,6 +20,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	"github.com/masterkeysrd/tasksmith/internal/core/shellguard"
 	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/models"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/permissions"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/sandbox"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/scope"
@@ -2221,7 +2222,7 @@ func TestMessageUpdateContextOptions(t *testing.T) {
 				t.Fatalf("deferred update changed context or message order: %+v", deferred)
 			}
 
-			opts := MessageUpdateOptions{Static: StaticContext{SystemPrompt: 42}, Limits: workspace.ModelLimits{Context: 100000, Output: 1000}}
+			opts := MessageUpdateOptions{Static: StaticContext{SystemPrompt: 42}, Limits: models.Limits{Context: 100000, Output: 1000}}
 			updated := tc.update(initial.Copy(), opts)
 			if !reflect.DeepEqual(updated.Messages, tc.want) || !reflect.DeepEqual(updated.Context, computeContextState(opts.Static, updated, opts.Limits)) {
 				t.Fatalf("update did not recalculate context: %+v", updated)
@@ -2236,7 +2237,7 @@ func TestMessageUpdateContextOptions(t *testing.T) {
 
 func TestDeferredMessageUpdatesBeforeCompaction(t *testing.T) {
 	static := StaticContext{SystemPrompt: 10}
-	limits := workspace.ModelLimits{Context: 100000, Output: 1000}
+	limits := models.Limits{Context: 100000, Output: 1000}
 	original := State{PendingCompaction: &CompactInput{}, Context: api.ContextState{UsedTokens: 999, CachedTokens: 80, Compactions: 2}}
 	summary := message.NewUserText("summary")
 	first := message.NewUserText("first")
@@ -2321,7 +2322,7 @@ func TestIncomingMessageUpdatesContextBeforeRouting(t *testing.T) {
 		return nil, errors.New("unexpected invocation")
 	}}
 	static := StaticContext{SystemPrompt: 123}
-	limits := workspace.ModelLimits{Context: 10000, Output: 1000}
+	limits := models.Limits{Context: 10000, Output: 1000}
 	h, err := New(Config{ID: "entry-context", DB: openTestSQLite(t), Model: newTestModel(t, provider), Tools: reg, Permissions: perm, Queue: &fakeQueue{}, Bash: &fakeBashRunner{}, Spiller: newTestSpiller(t), Logger: log.Default(), Static: static, Limits: limits})
 	if err != nil {
 		t.Fatal(err)
@@ -2355,7 +2356,7 @@ func TestIncomingMessageCrossesCompactionThreshold(t *testing.T) {
 		}
 		return []message.AssistantChunk{{Content: []message.Block{&message.TextBlock{Text: text}}, Metrics: metrics, Done: true}}, nil
 	}}
-	h, err := New(Config{ID: "entry-threshold", DB: openTestSQLite(t), Model: newTestModel(t, provider), Tools: reg, Permissions: perm, Queue: &fakeQueue{}, Bash: &fakeBashRunner{}, Spiller: newTestSpiller(t), Logger: log.Default(), Limits: workspace.ModelLimits{Context: 10000, Output: 1000}})
+	h, err := New(Config{ID: "entry-threshold", DB: openTestSQLite(t), Model: newTestModel(t, provider), Tools: reg, Permissions: perm, Queue: &fakeQueue{}, Bash: &fakeBashRunner{}, Spiller: newTestSpiller(t), Logger: log.Default(), Limits: models.Limits{Context: 10000, Output: 1000}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2369,7 +2370,7 @@ func TestIncomingMessageCrossesCompactionThreshold(t *testing.T) {
 		t.Fatalf("expected below-threshold state: %+v, %v", state.Context, err)
 	}
 	prompt := strings.Repeat("x", 1800)
-	projected := state.Copy().AppendMessage(message.NewUserText(prompt), MessageUpdateOptions{Limits: workspace.ModelLimits{Context: 10000, Output: 1000}})
+	projected := state.Copy().AppendMessage(message.NewUserText(prompt), MessageUpdateOptions{Limits: models.Limits{Context: 10000, Output: 1000}})
 	if !projected.ShouldAutoCompact() {
 		t.Fatalf("test prompt does not cross threshold: before=%+v after=%+v", state.Context, projected.Context)
 	}
@@ -2414,7 +2415,7 @@ func TestAutoCompactionTurnAndCommandBoundaries(t *testing.T) {
 		ID: "compact-boundaries", DB: openTestSQLite(t), Model: newTestModel(t, prov),
 		Tools: reg, Permissions: perm, Queue: q, Bash: &fakeBashRunner{},
 		Spiller: newTestSpiller(t), Logger: log.Default(),
-		Limits: workspace.ModelLimits{Context: 10000, Output: 1000},
+		Limits: models.Limits{Context: 10000, Output: 1000},
 	})
 	if err != nil {
 		t.Fatal(err)

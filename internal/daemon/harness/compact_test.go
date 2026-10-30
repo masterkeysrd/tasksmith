@@ -11,8 +11,8 @@ import (
 	"github.com/masterkeysrd/loom/message"
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/models"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tools"
-	"github.com/masterkeysrd/tasksmith/internal/daemon/workspace"
 )
 
 func TestStaticContext(t *testing.T) {
@@ -100,43 +100,43 @@ func TestEstimateTokens(t *testing.T) {
 func TestCompactionTriggerTokens(t *testing.T) {
 	tests := []struct {
 		name        string
-		limits      workspace.ModelLimits
+		limits      models.Limits
 		wantReserve int
 		wantTrigger int
 	}{
 		{
 			name:        "128k context with 16k output",
-			limits:      workspace.ModelLimits{Context: 128000, Output: 16384},
+			limits:      models.Limits{Context: 128000, Output: 16384},
 			wantReserve: 16384 + 8000, // min(16384, 32000) + max(8000, min(32000, 128000*0.03=3840->8000)) = 24384
 			wantTrigger: 128000 - 24384,
 		},
 		{
 			name:        "200k context with 16k output",
-			limits:      workspace.ModelLimits{Context: 200000, Output: 16384},
+			limits:      models.Limits{Context: 200000, Output: 16384},
 			wantReserve: 16384 + 8000, // 200k * 0.03 = 6000 -> clamped to 8000
 			wantTrigger: 200000 - 24384,
 		},
 		{
 			name:        "400k context with 64k output",
-			limits:      workspace.ModelLimits{Context: 400000, Output: 64000},
+			limits:      models.Limits{Context: 400000, Output: 64000},
 			wantReserve: 32000 + 12000, // min(64000, 32000)=32000 + (400000*0.03=12000) = 44000
 			wantTrigger: 400000 - 44000,
 		},
 		{
 			name:        "1M context with 64k output",
-			limits:      workspace.ModelLimits{Context: 1000000, Output: 64000},
+			limits:      models.Limits{Context: 1000000, Output: 64000},
 			wantReserve: 32000 + 30000, // 32000 + (1000000*0.03=30000) = 62000
 			wantTrigger: 1000000 - 62000,
 		},
 		{
 			name:        "2M context with 64k output (safety margin clamped to 32k)",
-			limits:      workspace.ModelLimits{Context: 2000000, Output: 64000},
+			limits:      models.Limits{Context: 2000000, Output: 64000},
 			wantReserve: 32000 + 32000, // 32000 + clamp(60000, 8000, 32000) = 64000
 			wantTrigger: 2000000 - 64000,
 		},
 		{
 			name:        "zero values default to 128k context and 16k output",
-			limits:      workspace.ModelLimits{Context: 0, Output: 0},
+			limits:      models.Limits{Context: 0, Output: 0},
 			wantReserve: 16384 + 8000,
 			wantTrigger: 128000 - 24384,
 		},
@@ -161,7 +161,7 @@ func TestComputeContextState(t *testing.T) {
 		ContextFiles: 500,
 		SystemTools:  1000,
 	}
-	limits := workspace.ModelLimits{Context: 100000, Output: 10000}
+	limits := models.Limits{Context: 100000, Output: 10000}
 	// reserve = 10000 + 8000 = 18000. trigger = 82000.
 
 	// Case 1: Without Assistant token metrics (fallback to byte estimation)
@@ -212,7 +212,7 @@ func TestComputeContextState(t *testing.T) {
 }
 
 func TestShouldAutoCompact(t *testing.T) {
-	limits := workspace.ModelLimits{Context: 100000, Output: 10000}
+	limits := models.Limits{Context: 100000, Output: 10000}
 	_, trigger := CompactionTriggerTokens(limits)
 
 	u1 := message.NewUserText("User 1")
@@ -472,7 +472,7 @@ func TestCompactionNodeExecute(t *testing.T) {
 		},
 	}
 	model := newTestModel(t, prov)
-	limits := workspace.ModelLimits{Context: 128000, Output: 16384}
+	limits := models.Limits{Context: 128000, Output: 16384}
 	static := StaticContext{SystemPrompt: 100, SystemTools: 500}
 
 	node := NewCompactionNode(CompactionNodeConfig{
@@ -555,7 +555,7 @@ func TestCompactionNodeExecute(t *testing.T) {
 
 func TestStateMethodsAndMutators(t *testing.T) {
 	static := StaticContext{SystemPrompt: 100}
-	limits := workspace.ModelLimits{Context: 128000, Output: 16384}
+	limits := models.Limits{Context: 128000, Output: 16384}
 	opts := MessageUpdateOptions{Static: static, Limits: limits}
 
 	s := State{}

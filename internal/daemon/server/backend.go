@@ -39,6 +39,7 @@ type WorkspaceBackend interface {
 
 type SessionBackend interface {
 	CreateSession(ctx context.Context, workspace string, req api.CreateSessionRequest) (*api.Session, bool, error)
+	PreviewSession(ctx context.Context, workspace string, req api.PreviewSessionRequest) (*api.SessionPreview, error)
 	ListSessions(ctx context.Context, workspace string) ([]api.Session, error)
 	GetSession(ctx context.Context, workspace, id string) (*api.Session, error)
 	UpdateSession(ctx context.Context, workspace, id string, req api.UpdateSessionRequest) (*api.Session, error)

@@ -594,9 +594,9 @@ spec:
 		if len(resolved) != 1 || resolved[0] != "mlx-serve/ddalcu/Qwen3.8-27B-MLX-Serve-4bit" {
 			t.Errorf("ResolveModels(%q) = %v, want [mlx-serve/ddalcu/Qwen3.8-27B-MLX-Serve-4bit]", ref, resolved)
 		}
-		limits := ws.ModelLimits(ref)
-		if limits.Context != 262144 || limits.Output != 32768 {
-			t.Errorf("ModelLimits(%q) = %+v, want 262144/32768", ref, limits)
+		model, ok := ws.ResolveModel(RoleCompletion, ref)
+		if !ok || model.Model == nil || model.Model.Limits.Context != 262144 || model.Model.Limits.Output != 32768 {
+			t.Errorf("ResolveModel(%q) = %+v, want limits 262144/32768", ref, model)
 		}
 	}
 }

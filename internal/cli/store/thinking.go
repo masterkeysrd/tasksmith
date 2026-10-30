@@ -3,52 +3,27 @@ package store
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	"github.com/masterkeysrd/tasksmith/api"
 )
 
 func CurrentThinkingModel(ctx context.Context) (*api.Model, error) {
 	c := Client()
-	if c == nil {
-		return nil, fmt.Errorf("model capabilities are unavailable")
-	}
 	state := GetSession()
-	cfg := state.Config
 	if state.Session != nil {
-		cfg = state.Session.Config
-	}
-	sessMu.Lock()
-	model := strings.TrimSpace(cfg.Model)
-	agent := strings.TrimSpace(cfg.Agent)
-	if model == "" {
-		model = strings.TrimSpace(activeOpts.Model)
-	}
-	if agent == "" {
-		agent = strings.TrimSpace(activeOpts.Agent)
-	}
-	sessMu.Unlock()
-	if model == "" {
-		ws, err := c.GetWorkspace(ctx)
-		if err != nil {
-			return nil, err
+		if state.Session.Model != nil {
+			return state.Session.Model, nil
 		}
-		if agent == "" {
-			agent = ws.DefaultAgent
-		}
-		if agent != "" {
-			if ag, err := c.GetAgent(ctx, agent); err == nil && len(ag.Models) > 0 {
-				model = ag.Models[0]
-			}
-		}
-		if model == "" {
-			model = ws.DefaultModel
-		}
-	}
-	if model == "" {
 		return nil, fmt.Errorf("model capabilities are unavailable")
 	}
-	return c.GetModel(ctx, model)
+	preview, err := c.PreviewSession(ctx, api.PreviewSessionRequest{Config: state.Config})
+	if err != nil {
+		return nil, err
+	}
+	if preview == nil || preview.Model == nil {
+		return nil, fmt.Errorf("model capabilities are unavailable")
+	}
+	return preview.Model, nil
 }
 
 const ThinkingProviderDefault = "provider default"
@@ -84,16 +59,11 @@ func ApplyThinkingChange(setting *api.ThinkingSetting) {
 	})
 	if setting == nil {
 		state := GetSession()
-		c := Client()
-		if state.Session != nil && c != nil {
-			id := state.Session.ID
-			go func() {
-				label, value := ResolveModelInfo(context.Background(), c, state.Config.Agent, state.Config.Model, state.Session)
-				current := GetSession()
-				if current.Session != nil && current.Session.ID == id && current.Config.Thinking == nil {
-					SetModelInfo(label, value)
-				}
-			}()
+		if state.Session != nil {
+			label, value := modelDisplay(state.Session.Model, nil)
+			SetModelInfo(label, value)
+		} else {
+			updateDraftModel(context.Background(), Client(), state.Config)
 		}
 	}
 }
@@ -102,10 +72,6 @@ func SetThinking(setting api.ThinkingSetting, command, description string) {
 	state := GetSession()
 	if state.Session != nil && state.Session.ID != "" {
 		c := Client()
-		if c == nil {
-			AppendError("Error", "model capabilities are unavailable")
-			return
-		}
 		go func() {
 			updated, err := c.UpdateSession(context.Background(), state.Session.ID, api.UpdateSessionRequest{Config: api.SessionConfig{Thinking: &setting}})
 			if err != nil {
@@ -114,8 +80,6 @@ func SetThinking(setting api.ThinkingSetting, command, description string) {
 			}
 			SetSession(updated)
 			showSessionDiagnostics(updated, false)
-			label, thinking := ResolveModelInfo(context.Background(), c, updated.Config.Agent, updated.Config.Model, updated)
-			SetModelInfo(label, thinking)
 		}()
 		return
 	}
@@ -128,7 +92,6 @@ func SetThinking(setting api.ThinkingSetting, command, description string) {
 		}
 		return s
 	})
-	label, thinking := ResolveModelInfo(context.Background(), Client(), state.Config.Agent, state.Config.Model, &api.Session{Config: GetSession().Config})
-	SetModelInfo(label, thinking)
+	updateDraftModel(context.Background(), Client(), GetSession().Config)
 	AppendCommandOutput(command, description)
 }

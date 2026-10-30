@@ -14,8 +14,10 @@ import (
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/gateway"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/models"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/permissions"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/timeline"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/workspace"
 )
 
 func TestThinkingValidationAndConfig(t *testing.T) {
@@ -37,24 +39,25 @@ func TestThinkingValidationAndConfig(t *testing.T) {
 		{"toggle off", api.ThinkingSetting{Type: "toggle", Enabled: false}, true},
 		{"unknown", api.ThinkingSetting{Type: "other"}, false},
 	}
+	model := models.Merge("provider/model", "ollama", nil, prof)
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			resolved, err := gateway.ResolveSettings(gateway.EffectiveProfile{Profile: prof}, gateway.ModelSettings{SessionThinking: &tc.setting})
+			resolved, _, err := models.Configure(model, models.Preferences{SessionThinking: &tc.setting})
 			if (err == nil) != tc.valid {
 				t.Fatalf("resolve thinking: %v", err)
 			}
-			if tc.valid && resolved.Config.Thinking == nil {
-				t.Fatalf("thinking missing: %+v", resolved.Config)
+			if tc.valid && resolved.Thinking == nil {
+				t.Fatalf("thinking missing: %+v", resolved)
 			}
 		})
 	}
-	if _, err := gateway.ResolveSettings(gateway.EffectiveProfile{}, gateway.ModelSettings{SessionThinking: &api.ThinkingSetting{Type: "toggle"}}); err == nil {
+	if _, _, err := models.Configure(models.Model{}, models.Preferences{SessionThinking: &api.ThinkingSetting{Type: "toggle"}}); err == nil {
 		t.Fatal("unknown model must not accept a toggle")
 	}
 	for _, setting := range []api.ThinkingSetting{{Type: "toggle", Enabled: false}, {Type: "budget", Budget: 200}, {Type: "effort", Effort: "minimal"}} {
-		got, err := gateway.ResolveSettings(gateway.EffectiveProfile{Profile: prof}, gateway.ModelSettings{SessionThinking: &setting})
-		if err != nil || got.Config.Thinking == nil || (setting.Type == "toggle" && got.Config.Thinking.Enabled) || (setting.Type == "budget" && got.Config.Thinking.Budget != 200) || (setting.Type == "effort" && got.Config.Thinking.Effort != "minimal") {
-			t.Fatalf("thinking setting %+v: %+v, %v", setting, got.Config, err)
+		got, _, err := models.Configure(model, models.Preferences{SessionThinking: &setting})
+		if err != nil || got.Thinking == nil || (setting.Type == "toggle" && got.Thinking.Enabled) || (setting.Type == "budget" && got.Thinking.Budget != 200) || (setting.Type == "effort" && got.Thinking.Effort != "minimal") {
+			t.Fatalf("thinking setting %+v: %+v, %v", setting, got, err)
 		}
 	}
 }
@@ -73,10 +76,7 @@ func TestThinkingDiagnostics(t *testing.T) {
 	if err := ws.Reload(ctx); err != nil {
 		t.Fatal(err)
 	}
-	gw, err := gateway.New(ctx, gateway.Config{Providers: []gateway.ProviderConfig{{Name: "local", Type: "ollama", Models: []gateway.ModelSpec{
-		{ID: "supported", Capabilities: &gateway.ModelCapabilities{Thinking: []profile.ReasoningOption{{Type: "effort", Values: []string{"high"}}}}},
-		{ID: "unsupported", Capabilities: &gateway.ModelCapabilities{}},
-	}}}})
+	gw, err := gateway.New(ctx, gateway.Config{Providers: []gateway.ProviderConfig{{Name: "local", Type: "ollama"}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,7 +85,11 @@ func TestThinkingDiagnostics(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	mgr, err := New(Config{DB: db, Workspace: ws, Gateway: gw, Publisher: pub, Logger: log.Default(), Permissions: perms})
+	catalog := testCatalog(t, ws,
+		workspace.ProviderModel{ID: "supported", Capabilities: &workspace.ModelCapabilities{Thinking: []workspace.ThinkingCapability{{Type: "effort", AllowedEfforts: []string{"high"}}}}},
+		workspace.ProviderModel{ID: "unsupported", Capabilities: &workspace.ModelCapabilities{}},
+	)
+	mgr, err := New(Config{DB: db, Workspace: ws, Gateway: gw, Publisher: pub, Logger: log.Default(), Permissions: perms, Catalog: catalog})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,20 +98,21 @@ func TestThinkingDiagnostics(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resolved, err := sess.resolveModelConfig(sess.Config)
-	if err != nil || resolved.Config.Thinking != nil || len(resolved.Diagnostics) != 1 || resolved.Diagnostics[0].Code != "thinking_unsupported" {
-		t.Fatalf("agent thinking: %+v, %v", resolved, err)
+	resolved, diagnostics, err := sess.resolveModelConfig(sess.Config)
+	if err != nil || resolved.Thinking != nil || len(diagnostics) != 1 || diagnostics[0].Code != "thinking_unsupported" {
+		t.Fatalf("agent thinking: %+v, %+v, %v", resolved, diagnostics, err)
 	}
 	_, err = mgr.Update(ctx, sess.ID, UpdateParams{Config: SessionConfig{Model: "local/supported", Thinking: &api.ThinkingSetting{Type: "effort", Effort: "high"}}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	changed, err := gateway.New(ctx, gateway.Config{Providers: []gateway.ProviderConfig{{Name: "local", Type: "ollama", Models: []gateway.ModelSpec{{ID: "supported", Capabilities: &gateway.ModelCapabilities{}}}}}})
+	changed, err := gateway.New(ctx, gateway.Config{Providers: []gateway.ProviderConfig{{Name: "local", Type: "ollama"}}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer changed.Close()
-	reopened, err := New(Config{DB: db, Workspace: ws, Gateway: changed, Publisher: pub, Logger: log.Default(), Permissions: perms})
+	changedCatalog := testCatalog(t, ws, workspace.ProviderModel{ID: "supported", Capabilities: &workspace.ModelCapabilities{}})
+	reopened, err := New(Config{DB: db, Workspace: ws, Gateway: changed, Publisher: pub, Logger: log.Default(), Permissions: perms, Catalog: changedCatalog})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -151,7 +156,6 @@ func TestSessionThinkingEndToEnd(t *testing.T) {
 	db, ws, _, pub, _ := setupTestEnv(t, nil)
 	gw, err := gateway.New(ctx, gateway.Config{Providers: []gateway.ProviderConfig{{
 		Name: "local", Type: "ollama", Endpoint: server.URL,
-		Models: []gateway.ModelSpec{{ID: "test-model", Capabilities: &gateway.ModelCapabilities{Thinking: []profile.ReasoningOption{{Type: "effort", Values: []string{"low", "high"}}, {Type: "toggle"}}}}},
 	}}})
 	if err != nil {
 		t.Fatal(err)
@@ -161,7 +165,8 @@ func TestSessionThinkingEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	mgr, err := New(Config{DB: db, Workspace: ws, Gateway: gw, Publisher: pub, Logger: log.Default(), Permissions: perms})
+	catalog := testCatalog(t, ws, workspace.ProviderModel{ID: "test-model", Capabilities: &workspace.ModelCapabilities{Thinking: []workspace.ThinkingCapability{{Type: "effort", AllowedEfforts: []string{"low", "high"}}, {Type: "toggle"}}}})
+	mgr, err := New(Config{DB: db, Workspace: ws, Gateway: gw, Publisher: pub, Logger: log.Default(), Permissions: perms, Catalog: catalog})
 	if err != nil {
 		t.Fatal(err)
 	}

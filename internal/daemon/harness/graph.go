@@ -14,11 +14,11 @@ import (
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	"github.com/masterkeysrd/tasksmith/internal/core/uuid"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/models"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/permissions"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/scope"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/std"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tools"
-	"github.com/masterkeysrd/tasksmith/internal/daemon/workspace"
 )
 
 type GraphConfig struct {
@@ -30,7 +30,7 @@ type GraphConfig struct {
 	Queue        Queue
 	Bash         BashRunner
 	Spiller      tools.Spiller
-	Limits       workspace.ModelLimits
+	Limits       models.Limits
 	Static       StaticContext
 	Logger       log.Interface
 }
@@ -39,7 +39,7 @@ type AgentNodeConfig struct {
 	Model        *llm.Model
 	Container    tools.Container
 	SystemPrompt string
-	Limits       workspace.ModelLimits
+	Limits       models.Limits
 	Static       StaticContext
 	Logger       log.Interface
 }
@@ -48,7 +48,7 @@ type CompactionNodeConfig struct {
 	Model        *llm.Model
 	Container    tools.Container
 	SystemPrompt string
-	Limits       workspace.ModelLimits
+	Limits       models.Limits
 	Static       StaticContext
 	Logger       log.Interface
 }
@@ -56,14 +56,14 @@ type CompactionNodeConfig struct {
 type ToolsNodeConfig struct {
 	Container   tools.Container
 	Permissions permissions.SessionManager
-	Limits      workspace.ModelLimits
+	Limits      models.Limits
 	Static      StaticContext
 	Logger      log.Interface
 }
 
 type InboxNodeConfig struct {
 	Queue  Queue
-	Limits workspace.ModelLimits
+	Limits models.Limits
 	Static StaticContext
 	Logger log.Interface
 }
@@ -72,7 +72,7 @@ type CommandNodeConfig struct {
 	Queue   Queue
 	Bash    BashRunner
 	Spiller tools.Spiller
-	Limits  workspace.ModelLimits
+	Limits  models.Limits
 	Static  StaticContext
 	Logger  log.Interface
 }
@@ -238,7 +238,7 @@ type CommandNode struct {
 	queue   Queue
 	bash    BashRunner
 	spiller tools.Spiller
-	limits  workspace.ModelLimits
+	limits  models.Limits
 	static  StaticContext
 	logger  log.Interface
 }
@@ -306,7 +306,7 @@ type AgentNode struct {
 	model        *llm.Model
 	tools        tools.Container
 	systemPrompt string
-	limits       workspace.ModelLimits
+	limits       models.Limits
 	static       StaticContext
 	logger       log.Interface
 }
@@ -370,7 +370,7 @@ func (n *AgentNode) Execute(ctx context.Context, state State) (graph.Command[Sta
 // It implements [github.com/masterkeysrd/loom/graph.Node].
 type InboxNode struct {
 	queue  Queue
-	limits workspace.ModelLimits
+	limits models.Limits
 	static StaticContext
 	logger log.Interface
 }
@@ -419,7 +419,7 @@ func (n *InboxNode) Execute(ctx context.Context, state State) (graph.Command[Sta
 type ToolsNode struct {
 	tools       tools.Container
 	permissions permissions.SessionManager
-	limits      workspace.ModelLimits
+	limits      models.Limits
 	static      StaticContext
 	logger      log.Interface
 }

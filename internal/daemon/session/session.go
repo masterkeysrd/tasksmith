@@ -23,6 +23,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/daemon/gateway"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/harness"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/journal"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/models"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/permissions"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/sandbox"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/scope"
@@ -67,7 +68,7 @@ func (s *Session) setStatus(next Status) {
 // SessionConfig holds configurable runtime settings for a [Session].
 type SessionConfig struct {
 	Agent    string               `json:"agent,omitempty"`
-	Model    string               `json:"model,omitempty"`
+	Model    models.ID            `json:"model,omitempty"`
 	Thinking *api.ThinkingSetting `json:"thinking,omitempty"`
 	Mode     tools.PermissionMode `json:"mode,omitempty"`
 }
@@ -81,12 +82,12 @@ type Session struct {
 	// the Session and State.
 	*State `json:"state"`
 
-	ID          string               `json:"id"`
-	Title       string               `json:"title"`
-	Config      SessionConfig        `json:"config"`
-	Diagnostics []gateway.Diagnostic `json:"diagnostics,omitempty"`
-	CreatedAt   time.Time            `json:"created_at"`
-	UpdatedAt   time.Time            `json:"updated_at"`
+	ID          string              `json:"id"`
+	Title       string              `json:"title"`
+	Config      SessionConfig       `json:"config"`
+	Diagnostics []models.Diagnostic `json:"diagnostics,omitempty"`
+	CreatedAt   time.Time           `json:"created_at"`
+	UpdatedAt   time.Time           `json:"updated_at"`
 
 	Permissions permissions.Permissions    `json:"-"`
 	PermManager permissions.SessionManager `json:"-"`
@@ -103,15 +104,16 @@ type Session struct {
 	spiller          tools.Spiller     `json:"-"`
 	configGeneration uint64
 
-	db         *sql.DB             `json:"-"`
-	store      *store              `json:"-"`
-	workspace  workspace.Workspace `json:"-"`
-	gateway    gateway.Gateway     `json:"-"`
-	reloadLock *sync.RWMutex       `json:"-"`
-	publisher  Publisher           `json:"-"`
-	logger     log.Interface       `json:"-"`
-	bgCtx      context.Context     `json:"-"`
-	wg         *sync.WaitGroup     `json:"-"`
+	db         *sql.DB               `json:"-"`
+	store      *store                `json:"-"`
+	workspace  workspace.Workspace   `json:"-"`
+	gateway    gateway.Gateway       `json:"-"`
+	catalog    func() models.Catalog `json:"-"`
+	reloadLock *sync.RWMutex         `json:"-"`
+	publisher  Publisher             `json:"-"`
+	logger     log.Interface         `json:"-"`
+	bgCtx      context.Context       `json:"-"`
+	wg         *sync.WaitGroup       `json:"-"`
 }
 
 // Clone returns a deep copy of the session and its exported execution state,
@@ -147,6 +149,7 @@ func (s *Session) Clone() *Session {
 		store:       s.store,
 		workspace:   s.workspace,
 		gateway:     s.gateway,
+		catalog:     s.catalog,
 		publisher:   s.publisher,
 		logger:      s.logger,
 		bgCtx:       s.bgCtx,
@@ -158,6 +161,23 @@ func (s *Session) Clone() *Session {
 		cp.State = NewState()
 	}
 	return cp
+}
+
+func (s *Session) ResolvedModel() (models.Model, *api.ThinkingSetting, bool) {
+	if !s.Config.Model.Valid() {
+		return models.Model{}, nil, false
+	}
+	m, ok := s.catalog().Get(s.Config.Model)
+	if !ok {
+		return models.Model{}, nil, false
+	}
+	var thinking *api.ThinkingSetting
+	if s.workspace != nil {
+		if agent, found := s.workspace.GetAgent(s.Config.Agent); found && agent != nil {
+			thinking = AgentThinking(agent.Thinking)
+		}
+	}
+	return m, thinking, true
 }
 
 func (s *Session) initResources(ctx context.Context) error {
@@ -277,8 +297,17 @@ func (s *Session) buildHarness(ctx context.Context) (harness.Harness, error) {
 	modelName := config.Model
 	s.Unlock()
 
-	provName, modelID := resolveProviderAndModel(s.workspace, modelName)
-	llmModel, err := s.gateway.ResolveLLM(ctx, provName, modelID, gateway.WithModelSettings(s.modelSettings(config)))
+	model, found := s.catalog().Get(modelName)
+	if !found {
+		return nil, fmt.Errorf("session: model %q unavailable", modelName)
+	}
+	settings := s.modelSettings(config)
+	cfg, _, err := models.Configure(model, settings)
+	if err != nil {
+		return nil, fmt.Errorf("session: configure model %q: %w", modelName, err)
+	}
+	llmModel, err := s.gateway.LLM(ctx, model, cfg)
+	limits := model.Limits
 	if err != nil {
 		return nil, fmt.Errorf("session: resolve model %q: %w", modelName, err)
 	}
@@ -286,15 +315,6 @@ func (s *Session) buildHarness(ctx context.Context) (harness.Harness, error) {
 	systemPrompt := s.renderSystemPrompt(agentName)
 	agentBreakdown := s.workspace.AgentContext(agentName)
 	staticCtx := harness.StaticContextFromBreakdown(agentBreakdown)
-	limits := s.workspace.ModelLimits(modelName)
-	if prof, ok := s.gateway.ModelProfile(provName, modelID); ok && prof != nil {
-		if prof.Limits.Context > 0 {
-			limits.Context = prof.Limits.Context
-		}
-		if prof.Limits.Output > 0 {
-			limits.Output = prof.Limits.Output
-		}
-	}
 
 	container, err := s.buildToolsForAgent(agentName)
 	if err != nil {
@@ -1497,22 +1517,27 @@ func (s *Session) generateTitle(userText string) {
 			return false
 		}
 
+		catalog := s.catalog()
 		ag, ok := s.workspace.GetAgent(workspace.AgentNameTitleGenerator)
-		var modelName string
+		var effective models.Model
+		var found bool
 		if ok && len(ag.Models) > 0 {
-			if rm, ok := s.workspace.ResolveModel(workspace.RoleCompletion, ag.Models...); ok {
-				modelName = rm.QualifiedID
-			}
+			effective, found = catalog.Resolve(models.RoleCompletion, ag.Models...)
 		}
-		if modelName == "" {
+		if !found {
 			s.Lock()
-			modelName = s.Config.Model
+			modelName := s.Config.Model
 			s.Unlock()
+			effective, found = catalog.Get(modelName)
 		}
-
-		provName, modelID := resolveProviderAndModel(s.workspace, modelName)
+		if !found {
+			return false
+		}
 		settings := s.modelSettings(SessionConfig{Agent: workspace.AgentNameTitleGenerator})
-		llmModel, err = s.gateway.ResolveLLM(ctx, provName, modelID, gateway.WithModelSettings(settings))
+		cfg, _, err := models.Configure(effective, settings)
+		if err == nil {
+			llmModel, err = s.gateway.LLM(ctx, effective, cfg)
+		}
 		if err != nil {
 			s.logger.Warn("failed to resolve LLM for title generation", log.String("error", err.Error()))
 			return false

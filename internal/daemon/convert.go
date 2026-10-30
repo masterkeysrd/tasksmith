@@ -12,7 +12,7 @@ import (
 	"github.com/masterkeysrd/loom/message"
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/broker"
-	"github.com/masterkeysrd/tasksmith/internal/daemon/gateway"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/models"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/permissions"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/session"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/std"
@@ -45,12 +45,19 @@ func toAPISession(sess *session.Session) api.Session {
 		queueItems = toAPIQueueItems(sess.VisibleQueue())
 		ctxState = sess.Context
 	}
+	var resolvedModel *api.Model
+	if m, thinking, ok := sess.ResolvedModel(); ok {
+		converted := catalogToAPIModel(m)
+		converted.ThinkingDefault = thinking
+		resolvedModel = &converted
+	}
 	return api.Session{
+		Model: resolvedModel,
 		ID:    sess.ID,
 		Title: sess.Title,
 		Config: api.SessionConfig{
 			Agent:    sess.Config.Agent,
-			Model:    sess.Config.Model,
+			Model:    string(sess.Config.Model),
 			Thinking: sess.Config.Thinking,
 			Mode:     api.PermissionMode(sess.Config.Mode),
 		},
@@ -67,7 +74,7 @@ func toAPISession(sess *session.Session) api.Session {
 	}
 }
 
-func toSessionDiagnostics(in []gateway.Diagnostic) []api.SessionDiagnostic {
+func toSessionDiagnostics(in []models.Diagnostic) []api.SessionDiagnostic {
 	out := make([]api.SessionDiagnostic, len(in))
 	for i, d := range in {
 		out[i] = api.SessionDiagnostic{Code: d.Code, Setting: d.Setting, Message: d.Message}
@@ -418,9 +425,17 @@ func toAPIQuestionRequests(reqs []tools.QuestionRequest) []api.QuestionRequest {
 }
 
 func toAPIQuestionResponse(r tools.QuestionResponse, questions []api.Question) api.QuestionResponse {
-	out := api.QuestionResponse{RequestID: r.RequestID, ToolCallID: r.ToolCallID, Canceled: r.Canceled}
+	out := api.QuestionResponse{
+		RequestID:  r.RequestID,
+		ToolCallID: r.ToolCallID,
+		Canceled:   r.Canceled,
+	}
 	for i, a := range r.Answers {
-		answer := api.QuestionAnswer{Question: a.Question, Selected: slices.Clone(a.Selected), Text: a.Text}
+		answer := api.QuestionAnswer{
+			Question: a.Question,
+			Selected: slices.Clone(a.Selected),
+			Text:     a.Text,
+		}
 		if i < len(questions) && questions[i].Type == string(api.QuestionTypeConfirm) {
 			answer.Confirmed = new(a.Confirmed)
 		}
@@ -430,9 +445,17 @@ func toAPIQuestionResponse(r tools.QuestionResponse, questions []api.Question) a
 }
 
 func fromAPIQuestionResponse(r api.QuestionResponse) tools.QuestionResponse {
-	out := tools.QuestionResponse{RequestID: r.RequestID, ToolCallID: r.ToolCallID, Canceled: r.Canceled}
+	out := tools.QuestionResponse{
+		RequestID:  r.RequestID,
+		ToolCallID: r.ToolCallID,
+		Canceled:   r.Canceled,
+	}
 	for _, a := range r.Answers {
-		answer := tools.QuestionAnswer{Question: a.Question, Selected: slices.Clone(a.Selected), Text: a.Text}
+		answer := tools.QuestionAnswer{
+			Question: a.Question,
+			Selected: slices.Clone(a.Selected),
+			Text:     a.Text,
+		}
 		if a.Confirmed != nil {
 			answer.Confirmed = *a.Confirmed
 		}
@@ -542,7 +565,10 @@ func toAPITimelineEntry(entry timeline.Entry) (api.TimelineEntry, error) {
 	}
 
 	if entry.Question != nil {
-		out.Question = &api.QuestionRecord{Request: toAPIQuestionRequests([]tools.QuestionRequest{entry.Question.Request})[0], Response: toAPIQuestionResponse(entry.Question.Response, entry.Question.Request.Questions)}
+		out.Question = &api.QuestionRecord{
+			Request:  toAPIQuestionRequests([]tools.QuestionRequest{entry.Question.Request})[0],
+			Response: toAPIQuestionResponse(entry.Question.Response, entry.Question.Request.Questions),
+		}
 	}
 
 	if entry.Compacted != nil {
@@ -690,48 +716,58 @@ func toAPIThinkingValues(kind string, values []string) []api.ThinkingValue {
 	return out
 }
 
-func toAPIModel(providerName string, pm workspace.ProviderModel) api.Model {
-	id := pm.ID
-	if providerName != "" && !strings.HasPrefix(id, providerName+"/") {
-		id = providerName + "/" + id
+func catalogToAPIModel(m models.Model) api.Model {
+	out := api.Model{
+		ID:           string(m.ID),
+		Provider:     m.ID.Provider(),
+		Name:         m.Name,
+		Label:        cmp.Or(m.Label, m.Name),
+		ContextLimit: m.Limits.Context,
+		OutputLimit:  m.Limits.Output,
+		Capabilities: api.ModelCapabilities{
+			Completion:       m.Capabilities.Completion,
+			Decision:         m.Capabilities.Decision,
+			Embedding:        m.Capabilities.Embedding,
+			Tools:            m.Capabilities.Tools,
+			Attachment:       m.Capabilities.Attachment,
+			StructuredOutput: m.Capabilities.StructuredOutput,
+			Temperature:      m.Capabilities.Temperature,
+			Dimensions:       slices.Clone(m.Capabilities.Dimensions),
+			InputModalities:  slices.Clone(m.Modalities.Input),
+			OutputModalities: slices.Clone(m.Modalities.Output),
+		},
 	}
-	name := cmp.Or(pm.Name, pm.ID)
-	label := cmp.Or(pm.Label, pm.Name, pm.ID)
-
-	model := api.Model{
-		ID:           id,
-		Provider:     providerName,
-		Name:         name,
-		Label:        label,
-		ContextLimit: pm.Limits.Context,
-		OutputLimit:  pm.Limits.Output,
+	for _, o := range m.Capabilities.Thinking {
+		out.Thinking = append(out.Thinking, api.ThinkingCapability{
+			Type:    o.Type,
+			Values:  toAPIThinkingValues(o.Type, o.Values),
+			Default: o.Default,
+			Min:     o.Min,
+			Max:     o.Max,
+		})
 	}
-	if pm.Capabilities != nil {
-		for _, capability := range pm.Capabilities.Thinking {
-			kind := strings.ToLower(strings.TrimSpace(capability.Type))
-			if kind == "budget" {
-				kind = "budget_tokens"
-			}
-			def := ""
-			if capability.Default != nil {
-				def = fmt.Sprint(capability.Default)
-			}
-			model.Thinking = append(model.Thinking, api.ThinkingCapability{Type: kind, Values: toAPIThinkingValues(kind, capability.AllowedEfforts), Default: def, Max: capability.MaxBudgetTokens})
+	if p := m.Pricing; p != nil {
+		out.Pricing = &api.ModelPricing{
+			Input:      p.Input,
+			Output:     p.Output,
+			CacheRead:  p.CacheRead,
+			CacheWrite: p.CacheWrite,
+			Reasoning:  p.Reasoning,
+		}
+		for _, t := range p.Tiers {
+			out.Pricing.Tiers = append(out.Pricing.Tiers, api.ModelPricingTier{
+				Label:         t.Label,
+				ConditionType: t.Condition.Type,
+				ConditionSize: t.Condition.Size,
+				Input:         t.Input,
+				Output:        t.Output,
+				CacheRead:     t.CacheRead,
+				CacheWrite:    t.CacheWrite,
+				Reasoning:     t.Reasoning,
+			})
 		}
 	}
-	return model
-}
-
-func resolvedToAPIModel(rm *workspace.ResolvedModel) api.Model {
-	if rm.Model != nil {
-		return toAPIModel(rm.ProviderName, *rm.Model)
-	}
-	return api.Model{
-		ID:       rm.QualifiedID,
-		Provider: rm.ProviderName,
-		Name:     rm.ModelID,
-		Label:    cmp.Or(rm.ModelID, rm.QualifiedID),
-	}
+	return out
 }
 
 // FormatEvent converts an internal broker message into a public API event.

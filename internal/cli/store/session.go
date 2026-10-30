@@ -82,7 +82,7 @@ func InitSession(ctx context.Context, c *client.Client, opts InitSessionOptions)
 
 	var sess *api.Session
 	sid := strings.TrimSpace(opts.SessionID)
-	if c != nil && sid != "" {
+	if sid != "" {
 		if loaded, err := c.GetSession(subCtx, sid); err == nil && loaded != nil {
 			sess = loaded
 			title := strings.TrimSpace(opts.Title)
@@ -105,10 +105,35 @@ func InitSession(ctx context.Context, c *client.Client, opts InitSessionOptions)
 		}
 	}
 
-	modelLabel, thinking := ResolveModelInfo(subCtx, c, opts.Agent, opts.Model, sess)
-	SetModelInfo(modelLabel, thinking)
+	var ws *api.Workspace
+	if loaded, err := c.GetWorkspace(subCtx); err == nil {
+		ws = loaded
+		SetWorkspaceWarnings(ws.Warnings)
+	}
+	if cmds, err := c.ListCommands(subCtx); err == nil {
+		SetWorkspaceCommands(cmds)
+	}
+	if skills, err := c.ListSkills(subCtx); err == nil {
+		SetWorkspaceSkills(skills)
+	}
 
-	if c != nil && sid != "" && sess != nil {
+	if sess == nil {
+		cfg := GetSession().Config
+		cfg.Agent, cfg.Model = opts.Agent, opts.Model
+		session.Set(func(s SessionState) SessionState {
+			s.Config = cfg
+			return s
+		})
+
+		if ws != nil && strings.TrimSpace(cfg.Agent) == "" && strings.TrimSpace(cfg.Model) == "" {
+			label, thinking := modelDisplay(ws.DefaultModel, cfg.Thinking)
+			SetModelInfo(label, thinking)
+		} else {
+			updateDraftModel(subCtx, c, cfg)
+		}
+	}
+
+	if sid != "" && sess != nil {
 		FreezeTranscript()
 		if tl, err := c.Timeline(subCtx, sid); err == nil {
 			globalConversation.loadTimeline(tl, sess.PendingQuestions)
@@ -127,9 +152,7 @@ func InitSession(ctx context.Context, c *client.Client, opts InitSessionOptions)
 		startSessionStreamWatcher(subCtx, sid)
 	}
 
-	if c != nil {
-		startSessionsWatcher(subCtx)
-	}
+	startSessionsWatcher(subCtx)
 }
 
 func startSessionStreamWatcher(ctx context.Context, sessionID string) {
@@ -323,11 +346,6 @@ func SendCommand(cmd string) {
 	ctx := activeCtx
 	sessMu.Unlock()
 
-	if c == nil {
-		globalConversation.cancelPendingUser(msgID, errors.New("repl: no active client"))
-		return
-	}
-
 	go func() {
 		if ctx == nil || ctx.Err() != nil {
 			ctx = context.Background()
@@ -395,7 +413,7 @@ func Cancel() {
 	sess := GetSession().Session
 	sessMu.Unlock()
 
-	if c == nil || sess == nil || sess.ID == "" {
+	if sess == nil || sess.ID == "" {
 		globalConversation.cancelTurn()
 		return
 	}
@@ -414,7 +432,7 @@ func SubmitQuestion(req api.QuestionRequest, response api.QuestionResponse, done
 	c, ctx := activeClient, activeCtx
 	sess := GetSession().Session
 	sessMu.Unlock()
-	if c == nil || sess == nil || sess.ID == "" || req.ID == "" {
+	if sess == nil || sess.ID == "" || req.ID == "" {
 		if done != nil {
 			done(fmt.Errorf("no active session for question"))
 		}
@@ -458,7 +476,7 @@ func DecidePermission(req api.PermissionRequest, dec api.PermissionDecision) {
 	sess := GetSession().Session
 	sessMu.Unlock()
 
-	if c == nil || sess == nil || sess.ID == "" {
+	if sess == nil || sess.ID == "" {
 		return
 	}
 
@@ -499,10 +517,7 @@ func GetContext() api.ContextState {
 // UseMode returns the active permission mode, defaulting to api.ModeDefault if unset.
 func UseMode() api.PermissionMode {
 	return UseSession(func(s SessionState) api.PermissionMode {
-		if s.Config.Mode == "" {
-			return api.ModeDefault
-		}
-		return s.Config.Mode
+		return cmp.Or(s.Config.Mode, api.ModeDefault)
 	})
 }
 
@@ -547,9 +562,8 @@ func SetSession(sess *api.Session) {
 	session.Set(func(s SessionState) SessionState {
 		s.Session = sess
 		if sess != nil {
-			if sess.Context.MaxTokens > 0 {
-				s.Context = sess.Context
-			}
+			s.ModelLabel, s.Thinking = modelDisplay(sess.Model, sess.Config.Thinking)
+			s.Context = sess.Context
 			s.Config = sess.Config
 			if s.Config.Mode == "" {
 				s.Config.Mode = api.ModeDefault
@@ -600,13 +614,13 @@ func UpsertTask(task api.Task) {
 
 // UseTasks subscribes a component to the active session's tasks.
 func UseTasks() []api.Task {
-	ptr := UseSession(func(s SessionState) *[]api.Task {
+	tasks := UseSession(func(s SessionState) *[]api.Task {
 		return s.Tasks
 	})
-	if ptr == nil {
+	if tasks == nil {
 		return nil
 	}
-	return *ptr
+	return *tasks
 }
 
 // UseRunningTasks subscribes a component to the active session's running and pending tasks.
@@ -654,7 +668,7 @@ func KillTask(taskID string) error {
 	sess := GetSession().Session
 	sessMu.Unlock()
 
-	if c == nil || sess == nil || sess.ID == "" {
+	if sess == nil || sess.ID == "" {
 		return errors.New("repl: no active session")
 	}
 	if ctx == nil || ctx.Err() != nil {
@@ -670,7 +684,7 @@ func StreamTaskOutput(ctx context.Context, taskID string) iter.Seq2[string, erro
 	sess := GetSession().Session
 	sessMu.Unlock()
 
-	if c == nil || sess == nil || sess.ID == "" {
+	if sess == nil || sess.ID == "" {
 		return func(yield func(string, error) bool) {
 			yield("", errors.New("repl: no active session"))
 		}
@@ -852,8 +866,7 @@ func NewDraftSession(modelOverride string) {
 	if ctx == nil || ctx.Err() != nil {
 		ctx = context.Background()
 	}
-	modelLabel, thinking := ResolveModelInfo(ctx, c, cfg.Agent, cfg.Model, nil)
-	SetModelInfo(modelLabel, thinking)
+	updateDraftModel(ctx, c, cfg)
 	ResetToDraft()
 }
 
@@ -863,11 +876,9 @@ func SwitchSession(sessionID string) {
 	cancelModeDebounceLocked()
 	c := activeClient
 	ctx := activeCtx
-	defAgent := activeOpts.Agent
-	defModel := activeOpts.Model
 	sessMu.Unlock()
 
-	if c == nil || strings.TrimSpace(sessionID) == "" {
+	if strings.TrimSpace(sessionID) == "" {
 		return
 	}
 
@@ -891,8 +902,6 @@ func SwitchSession(sessionID string) {
 		SetSession(loaded)
 		globalConversation.reset()
 		globalConversation.setSessionID(loaded.ID)
-		modelLabel, thinking := ResolveModelInfo(ctx, c, defAgent, defModel, loaded)
-		SetModelInfo(modelLabel, thinking)
 		ResetForSessionSwitch()
 
 		if tl, err := c.Timeline(ctx, loaded.ID); err == nil {
@@ -919,8 +928,6 @@ func SetModel(modelID string) {
 	sessMu.Lock()
 	c := activeClient
 	ctx := activeCtx
-	defAgent := activeOpts.Agent
-	defModel := activeOpts.Model
 	sessMu.Unlock()
 
 	if st.Session != nil && st.Session.ID != "" {
@@ -940,8 +947,6 @@ func SetModel(modelID string) {
 			}
 			SetSession(updated)
 			showSessionDiagnostics(updated, false)
-			modelLabel, thinking := ResolveModelInfo(ctx, c, defAgent, defModel, updated)
-			SetModelInfo(modelLabel, thinking)
 		}()
 		return
 	}
@@ -960,8 +965,7 @@ func SetModel(modelID string) {
 		ctx = context.Background()
 	}
 	cfg := GetSession().Config
-	modelLabel, thinking := ResolveModelInfo(ctx, c, cfg.Agent, cfg.Model, &api.Session{Config: cfg})
-	SetModelInfo(modelLabel, thinking)
+	updateDraftModel(ctx, c, cfg)
 	AppendCommandOutput("/model "+modelID, "Model set to "+modelID)
 }
 
@@ -971,8 +975,6 @@ func SetAgent(agentName string) {
 	sessMu.Lock()
 	c := activeClient
 	ctx := activeCtx
-	defAgent := activeOpts.Agent
-	defModel := activeOpts.Model
 	sessMu.Unlock()
 
 	if st.Session != nil && st.Session.ID != "" {
@@ -992,8 +994,6 @@ func SetAgent(agentName string) {
 			}
 			SetSession(updated)
 			showSessionDiagnostics(updated, false)
-			modelLabel, thinking := ResolveModelInfo(ctx, c, defAgent, defModel, updated)
-			SetModelInfo(modelLabel, thinking)
 		}()
 		return
 	}
@@ -1006,8 +1006,7 @@ func SetAgent(agentName string) {
 		ctx = context.Background()
 	}
 	cfg := GetSession().Config
-	modelLabel, thinking := ResolveModelInfo(ctx, c, cfg.Agent, cfg.Model, &api.Session{Config: cfg})
-	SetModelInfo(modelLabel, thinking)
+	updateDraftModel(ctx, c, cfg)
 	AppendCommandOutput("/agent "+agentName, "Agent set to "+agentName)
 }
 
@@ -1036,137 +1035,47 @@ func ResetSession() {
 	})
 }
 
-// ResolveModelInfo returns the display label and reasoning effort for the
-// given agent and model, falling back to the workspace and agent defaults for
-// blank values. When sess is set its agent and model take precedence.
-func ResolveModelInfo(ctx context.Context, c *client.Client, cfgAgent, cfgModel string, sess *api.Session) (modelLabel, thinking string) {
-	agentName := strings.TrimSpace(cfgAgent)
-	modelID := strings.TrimSpace(cfgModel)
-
-	if sess != nil {
-		agentName = strings.TrimSpace(sess.Config.Agent)
-		modelID = strings.TrimSpace(sess.Config.Model)
-	}
-
-	var ws *api.Workspace
-	if c != nil {
-		ws, _ = c.GetWorkspace(ctx)
-		if ws != nil {
-			SetWorkspaceWarnings(ws.Warnings)
-			if agentName == "" {
-				agentName = strings.TrimSpace(ws.DefaultAgent)
-			}
-		}
-		if cmds, err := c.ListCommands(ctx); err == nil {
-			SetWorkspaceCommands(cmds)
-		}
-		if sks, err := c.ListSkills(ctx); err == nil {
-			SetWorkspaceSkills(sks)
-		}
-	}
-
-	var ag *api.Agent
-	if c != nil && agentName != "" {
-		ag, _ = c.GetAgent(ctx, agentName)
-	}
-
-	if modelID == "" {
-		if ag != nil && len(ag.Models) > 0 {
-			modelID = strings.TrimSpace(ag.Models[0])
-		}
-		if modelID == "" && ws != nil {
-			modelID = strings.TrimSpace(ws.DefaultModel)
-		}
-	}
-
-	var mdl *api.Model
-	if c != nil && modelID != "" {
-		mdl, _ = c.GetModel(ctx, modelID)
-	}
-
-	var mdlLabel string
-	thinking = ThinkingProviderDefault
-	if mdl != nil {
-		mdlLabel = cmp.Or(strings.TrimSpace(mdl.Label), strings.TrimSpace(mdl.Name), strings.TrimSpace(mdl.ID))
-		for _, option := range mdl.Thinking {
+func modelDisplay(model *api.Model, setting *api.ThinkingSetting) (string, string) {
+	label, thinking := "default", ThinkingProviderDefault
+	if model != nil {
+		label = cmp.Or(strings.TrimSpace(model.Label), strings.TrimSpace(model.Name), strings.TrimSpace(model.ID), label)
+		for _, option := range model.Thinking {
 			if option.Type == "effort" && option.Default != "" {
 				thinking = option.Default
 				break
 			}
 		}
-	}
-	if ag != nil && ag.Thinking != nil {
-		thinking = thinkingDisplay(ag.Thinking)
-	}
-
-	modelLabel = cmp.Or(mdlLabel, modelID, "default")
-	if sess != nil && sess.Config.Thinking != nil {
-		thinking = thinkingDisplay(sess.Config.Thinking)
-	}
-
-	var initContext api.ContextState
-	if sess != nil && sess.Context.MaxTokens > 0 {
-		initContext = sess.Context
-	} else if ag != nil && mdl != nil {
-		ctxLimit := mdl.ContextLimit
-		outLimit := mdl.OutputLimit
-		if ctxLimit <= 0 {
-			ctxLimit = 128000
-		}
-		if outLimit <= 0 {
-			outLimit = 16384
-		}
-		reserve, trigger := computeCompactionThresholds(ctxLimit, outLimit)
-		used := ag.Context.SystemPrompt + ag.Context.ContextFiles + ag.Context.SystemTools + ag.Context.CustomTools + ag.Context.MCPTools + ag.Context.Skills + ag.Context.Subagents
-		free := max(0, trigger-used)
-		initContext = api.ContextState{
-			UsedTokens:    used,
-			MaxTokens:     ctxLimit,
-			OutputLimit:   outLimit,
-			ReserveTokens: reserve,
-			TriggerTokens: trigger,
-			FreeTokens:    free,
-			Breakdown:     ag.Context,
+		if model.ThinkingDefault != nil {
+			thinking = thinkingDisplay(model.ThinkingDefault)
 		}
 	}
-	if initContext.MaxTokens > 0 {
-		session.Set(func(s SessionState) SessionState {
-			s.Context = initContext
-			return s
-		})
+	if setting != nil {
+		thinking = thinkingDisplay(setting)
 	}
-
-	return modelLabel, thinking
+	return label, thinking
 }
 
-func computeCompactionThresholds(contextLimit, outputLimit int) (reserveTokens, triggerTokens int) {
-	if contextLimit <= 0 {
-		contextLimit = 128000
+func updateDraftModel(ctx context.Context, c *client.Client, cfg api.SessionConfig) {
+	var model *api.Model
+	if c != nil {
+		if preview, _ := c.PreviewSession(ctx, api.PreviewSessionRequest{Config: cfg}); preview != nil {
+			model = preview.Model
+		}
 	}
-	if outputLimit <= 0 {
-		outputLimit = 16384
-	}
-
-	outputReserve := min(outputLimit, 32000)
-	margin := int(float64(contextLimit) * 0.03)
-	if margin < 8000 {
-		margin = 8000
-	} else if margin > 32000 {
-		margin = 32000
-	}
-
-	reserveTokens = outputReserve + margin
-	triggerTokens = contextLimit - reserveTokens
-	return reserveTokens, triggerTokens
+	label, thinking := modelDisplay(model, cfg.Thinking)
+	session.Set(func(s SessionState) SessionState {
+		if s.Session == nil && s.Config.Agent == cfg.Agent && s.Config.Model == cfg.Model && reflect.DeepEqual(s.Config.Thinking, cfg.Thinking) {
+			s.ModelLabel, s.Thinking = label, thinking
+			s.Context = api.ContextState{}
+		}
+		return s
+	})
 }
 
 // ReloadWorkspace instructs the daemon to reload workspace resources from disk
 // and refreshes AppState with updated skills and commands.
 func ReloadWorkspace(ctx context.Context) error {
 	c := Client()
-	if c == nil {
-		return errors.New("client unavailable")
-	}
 	if err := c.ReloadWorkspace(ctx); err != nil {
 		return err
 	}
@@ -1175,6 +1084,15 @@ func ReloadWorkspace(ctx context.Context) error {
 	}
 	if cmds, err := c.ListCommands(ctx); err == nil {
 		SetWorkspaceCommands(cmds)
+	}
+	if ws, err := c.GetWorkspace(ctx); err == nil {
+		SetWorkspaceWarnings(ws.Warnings)
+	}
+	state := GetSession()
+	if state.Session == nil {
+		updateDraftModel(ctx, c, state.Config)
+	} else if updated, err := c.GetSession(ctx, state.Session.ID); err == nil && updated != nil {
+		SetSession(updated)
 	}
 	return nil
 }

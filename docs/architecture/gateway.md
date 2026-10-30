@@ -46,8 +46,8 @@ flowchart TD
 ## 2. Core Architectural Components
 
 ### 1. Decoupled Configuration Boundary
-The gateway is decoupled from on-disk manifest formats. The workspace layer resolves model references and role defaults and translates provider manifests into a normalized gateway configuration. If workspace resolution does not resolve a qualified model ID, the gateway recognizes its provider prefix only when that provider is registered. Gateway configuration contains:
-- Registered providers (endpoints, headers, model catalogs, and capability flags).
+The gateway is decoupled from on-disk manifest formats. The workspace catalog resolves model references and role defaults and supplies effective model metadata. Runtime gateway configuration contains:
+- Registered provider connection settings (type, endpoint, authentication, headers, and provider options).
 - An isolated, in-memory environment map containing workspace secrets.
 
 ### 2. Content-Addressable Gateway Pool
@@ -62,7 +62,7 @@ The gateway resolves authentication credentials without mutating process state o
 - **Lazy Validation**: Providers missing required credentials do not fail gateway initialization at startup. Instead, the provider is flagged with a warning in the CLI header, and an authentication error is only raised when a turn or agent explicitly resolves a model from that provider.
 
 ### 4. Effective Model Configuration
-The gateway merges the provider's Loom model profile with explicit workspace model overrides and resolves requested settings into a configuration and structured diagnostics. Declared capabilities, limits, modalities and thinking strategies take precedence over the provider profile. Session thinking overrides agent thinking; unsupported agent settings produce diagnostics, while invalid explicit overrides fail validation. Explicit temperature support overrides the provider profile; when support is unknown, configured temperature is forwarded with a warning. Known unsupported temperature and Anthropic extended-thinking conflicts are omitted. Session creation, model or agent changes, and workspace reload refresh session diagnostics. Reload stages workspace and gateway changes before publishing them, and session configuration and model construction use a shared reload barrier.
+The workspace model catalog merges Loom profiles with explicit workspace model overrides and resolves requested settings into a configuration and structured diagnostics. Completion models are constructed with the catalog's effective profile, scoped to each model instance so workspace overrides do not alter shared providers. Declared capabilities, limits, modalities and thinking strategies take precedence over the provider profile. Session thinking overrides agent thinking; unsupported agent settings produce diagnostics, while invalid explicit overrides fail validation. Explicit temperature support overrides the provider profile; when support is unknown, configured temperature is forwarded with a warning. Known unsupported temperature and Anthropic extended-thinking conflicts are omitted. Session creation, model or agent changes, and workspace reload refresh session diagnostics. Reload stages workspace and gateway changes before publishing them, and session configuration and model construction use a shared reload barrier.
 
 At the provider boundary, request validation rejects known unsupported tools, tool history, input modalities, and response schemas. Structured-output requests with unknown support are forwarded to Loom. Media formats that the adapter would discard are rejected independently of model capabilities. Input blocks that cannot be converted are rejected before entering a session.
 

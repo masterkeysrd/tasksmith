@@ -48,7 +48,7 @@ The following flags apply to `tasksmith`, `tasksmith repl`, and `tasksmith daemo
 
 ## 2. Interactive Slash Commands
 
-Inside the TaskSmith interactive REPL, slash commands provide instant control over session state, permission modes, thinking, and resource inspection. When no thinking default is known, the UI shows `provider default` and leaves the choice to the provider:
+Inside the TaskSmith interactive REPL, slash commands provide instant control over session state, permission modes, thinking, and resource inspection. The session status shows the model resolved by the daemon. When no thinking default is known, the UI shows `provider default` and leaves the choice to the provider:
 
 | Slash Command | Aliases | Arguments | Description |
 | :--- | :--- | :--- | :--- |

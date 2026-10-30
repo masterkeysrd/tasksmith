@@ -193,8 +193,8 @@ func TestCommandExecute(t *testing.T) {
 		if store.GetSession().Config.Model != "diff-model" {
 			t.Errorf("expected model diff-model, got %q", store.GetSession().Config.Model)
 		}
-		if store.CurrentHeaderData().Model != "diff-model" {
-			t.Errorf("expected live header model diff-model, got %q", store.CurrentHeaderData().Model)
+		if store.CurrentHeaderData().Model != "default" {
+			t.Errorf("expected unresolved model to remain default, got %q", store.CurrentHeaderData().Model)
 		}
 	})
 

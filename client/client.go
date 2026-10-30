@@ -156,6 +156,18 @@ func (c *Client) GetWorkspace(ctx context.Context) (*api.Workspace, error) {
 	return &out, nil
 }
 
+// PreviewSession resolves a proposed draft session configuration without creating it.
+func (c *Client) PreviewSession(ctx context.Context, req api.PreviewSessionRequest) (*api.SessionPreview, error) {
+	if err := c.requireCWD(); err != nil {
+		return nil, err
+	}
+	var out api.SessionPreview
+	if err := c.doJSON(ctx, http.MethodPost, "/v1/sessions/preview", nil, req, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 // ReloadWorkspace requests the daemon to reload workspace resources from disk.
 func (c *Client) ReloadWorkspace(ctx context.Context) error {
 	if err := c.requireCWD(); err != nil {

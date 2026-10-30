@@ -7,12 +7,27 @@ import (
 	"github.com/masterkeysrd/loom/profile"
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/broker"
-	"github.com/masterkeysrd/tasksmith/internal/daemon/gateway"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/models"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/session"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tasks"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tools"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/workspace"
 )
+
+func TestCatalogModelProjection(t *testing.T) {
+	m := models.Merge("provider/model", "openai", &workspace.ProviderModel{
+		ID: "model", Label: "Friendly", Limits: workspace.ModelLimits{Context: 5000},
+		Capabilities: &workspace.ModelCapabilities{Tools: new(false)},
+		Cost:         &workspace.ModelCost{Input: 3, Tiers: []workspace.ModelCostTier{{Label: "large", ConditionType: "context", ConditionSize: 100, Input: 5}}},
+	}, &profile.Profile{Name: "Built-in", Limits: profile.Limits{Context: 9000, Output: 700}, Capabilities: profile.Capabilities{ToolCall: true}, Pricing: profile.Pricing{Input: 1, Output: 2}})
+	got := catalogToAPIModel(m)
+	if got.Label != "Friendly" || got.ContextLimit != 5000 || got.OutputLimit != 700 || got.Capabilities.Tools == nil || *got.Capabilities.Tools {
+		t.Fatalf("unexpected effective model: %+v", got)
+	}
+	if got.Pricing == nil || got.Pricing.Input != 3 || got.Pricing.Output != 0 || len(got.Pricing.Tiers) != 1 || got.Pricing.Tiers[0].ConditionSize != 100 {
+		t.Fatalf("unexpected pricing: %+v", got.Pricing)
+	}
+}
 
 func TestThinkingDescriptions(t *testing.T) {
 	values := []string{"none", "minimal", "low", "medium", "high", "xhigh", "max", "auto", "custom", "HIGH"}
@@ -28,18 +43,18 @@ func TestThinkingDescriptions(t *testing.T) {
 	if other := toAPIThinkingValues("toggle", []string{"high"}); other[0].Description != "" {
 		t.Fatalf("non-effort value received a hint: %+v", other)
 	}
-	model := toAPIModel("test", workspace.ProviderModel{ID: "model", Capabilities: &workspace.ModelCapabilities{Thinking: []workspace.ThinkingCapability{{Type: "effort", AllowedEfforts: values}}}})
+	model := catalogToAPIModel(models.Merge("test/model", "test", &workspace.ProviderModel{ID: "model", Capabilities: &workspace.ModelCapabilities{Thinking: []workspace.ThinkingCapability{{Type: "effort", AllowedEfforts: values}}}}, nil))
 	if len(model.Thinking) != 1 || len(model.Thinking[0].Values) != len(values) || model.Thinking[0].Values[2].Description == "" {
 		t.Fatalf("workspace model missing descriptions: %+v", model.Thinking)
 	}
-	enrichModelFromProfile(&model, &profile.Profile{Capabilities: profile.Capabilities{ReasoningOptions: []profile.ReasoningOption{{Type: "effort", Values: values}}}}, "model")
+	model = catalogToAPIModel(models.Merge("test/model", "test", nil, &profile.Profile{Capabilities: profile.Capabilities{ReasoningOptions: []profile.ReasoningOption{{Type: "effort", Values: values}}}}))
 	if len(model.Thinking) != 1 || len(model.Thinking[0].Values) != len(values) || model.Thinking[0].Values[2].Description == "" || model.Thinking[0].Values[8].Description != "" {
 		t.Fatalf("profile model has incorrect descriptions: %+v", model.Thinking)
 	}
 }
 
 func TestSessionDiagnosticsConversion(t *testing.T) {
-	sess := &session.Session{ID: "test", State: session.NewState(), Diagnostics: []gateway.Diagnostic{{Code: "temperature_unsupported", Setting: "temperature", Message: "omitted"}}}
+	sess := &session.Session{ID: "test", State: session.NewState(), Diagnostics: []models.Diagnostic{{Code: "temperature_unsupported", Setting: "temperature", Message: "omitted"}}}
 	want := api.SessionDiagnostic{Code: "temperature_unsupported", Setting: "temperature", Message: "omitted"}
 	converted := toAPISession(sess)
 	if len(converted.Diagnostics) != 1 || converted.Diagnostics[0] != want {
@@ -256,7 +271,7 @@ func TestToAPIModelWithSlashInID(t *testing.T) {
 			Output:  32768,
 		},
 	}
-	got := toAPIModel("mlx-serve", pm)
+	got := catalogToAPIModel(models.Merge("mlx-serve/"+models.ID(pm.ID), "openai", &pm, nil))
 	if got.ID != "mlx-serve/ddalcu/Qwen3.8-27B-MLX-Serve-4bit" {
 		t.Errorf("got.ID = %q, want %q", got.ID, "mlx-serve/ddalcu/Qwen3.8-27B-MLX-Serve-4bit")
 	}

@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	coreuuid "github.com/masterkeysrd/tasksmith/internal/core/uuid"
 )
 
 func newV7(t *testing.T) string {
@@ -150,7 +151,7 @@ func TestCreateWithoutIDGeneratesV7(t *testing.T) {
 	if err != nil || !created {
 		t.Fatalf("Create: %v, created=%v", err, created)
 	}
-	if err := validateSessionID(sess.ID); err != nil {
-		t.Errorf("generated ID %q is not a canonical UUIDv7: %v", sess.ID, err)
+	if !coreuuid.Validate(sess.ID) {
+		t.Errorf("generated ID %q is not a canonical UUIDv7", sess.ID)
 	}
 }

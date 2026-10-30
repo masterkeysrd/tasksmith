@@ -21,7 +21,7 @@ type Config struct {
 }
 
 // Fingerprint returns a canonical SHA-256 hex fingerprint of the effective configuration.
-// It normalizes provider ordering, sorts models, and isolates only the environment variables
+// It normalizes provider ordering and isolates only the environment variables
 // that are actually referenced by provider authentication configurations.
 func (c *Config) Fingerprint() string {
 	if c == nil {
@@ -42,19 +42,7 @@ func (c *Config) Fingerprint() string {
 
 	// 2. Clone and normalize providers
 	normalizedProviders := make([]ProviderConfig, len(c.Providers))
-	for i, p := range c.Providers {
-		norm := p
-		// Sort models by ID
-		if len(p.Models) > 0 {
-			models := make([]ModelSpec, len(p.Models))
-			copy(models, p.Models)
-			sort.Slice(models, func(a, b int) bool {
-				return models[a].ID < models[b].ID
-			})
-			norm.Models = models
-		}
-		normalizedProviders[i] = norm
-	}
+	copy(normalizedProviders, c.Providers)
 
 	// Sort providers by Name
 	sort.Slice(normalizedProviders, func(a, b int) bool {

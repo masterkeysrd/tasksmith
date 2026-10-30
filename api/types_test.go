@@ -88,7 +88,7 @@ func TestWireTypesJSONRoundTrip(t *testing.T) {
 		RootDir:      "/path/to/root",
 		CWD:          "/path/to/root/pkg",
 		DefaultAgent: "developer",
-		DefaultModel: "ollama/qwen3.8",
+		DefaultModel: &Model{ID: "ollama/qwen3.8"},
 		Warnings:     []string{`provider "openai": missing required environment variable "OPENAI_API_KEY"`},
 	}
 	wsRaw, err := json.Marshal(ws)

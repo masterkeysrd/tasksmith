@@ -12,5 +12,5 @@ func Validate(val string) bool {
 	if err != nil {
 		return false
 	}
-	return id.Version() == 7
+	return id.Version() == 7 && id.String() == val
 }

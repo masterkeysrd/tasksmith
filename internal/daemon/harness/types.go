@@ -10,9 +10,9 @@ import (
 
 	"github.com/masterkeysrd/loom/message"
 	"github.com/masterkeysrd/tasksmith/api"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/models"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/std"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tools"
-	"github.com/masterkeysrd/tasksmith/internal/daemon/workspace"
 )
 
 // Sentinel errors returned by the harness package.
@@ -389,11 +389,11 @@ func (s State) LastUserMessageID() string {
 
 type MessageUpdateOptions struct {
 	Static                   StaticContext
-	Limits                   workspace.ModelLimits
+	Limits                   models.Limits
 	SkipContextRecalculation bool
 }
 
-func (s State) ApplyCompaction(static StaticContext, limits workspace.ModelLimits) State {
+func (s State) ApplyCompaction(static StaticContext, limits models.Limits) State {
 	s.PendingCompaction = nil
 	s.Context.CachedTokens = 0
 	s.Context.Compactions++

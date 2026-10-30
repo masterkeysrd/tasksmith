@@ -98,34 +98,28 @@ func TestSessionStoreBasic(t *testing.T) {
 	}
 }
 
-func TestResolveModelInfoNilClient(t *testing.T) {
-	ctx := context.Background()
+func TestResolvedSessionModelDisplay(t *testing.T) {
+	sess := &api.Session{
+		Config: api.SessionConfig{Model: "unavailable-first"},
+		Model:  &api.Model{ID: "provider/available", Label: "Available model", ThinkingDefault: &api.ThinkingSetting{Type: "effort", Effort: "medium"}},
+	}
+	label, thinking := modelDisplay(sess.Model, sess.Config.Thinking)
+	if label != "Available model" || thinking != "medium" {
+		t.Fatalf("resolved model display: %q / %q", label, thinking)
+	}
+	sess.Config.Thinking = &api.ThinkingSetting{Type: "effort", Effort: "high"}
+	_, thinking = modelDisplay(sess.Model, sess.Config.Thinking)
+	if thinking != "high" {
+		t.Fatalf("session override: %q", thinking)
+	}
+}
 
-	// Default fallback
-	label, thinking := ResolveModelInfo(ctx, nil, "", "", nil)
+func TestModelDisplayWithoutModel(t *testing.T) {
+	label, thinking := modelDisplay(nil, nil)
 	if label != "default" || thinking != ThinkingProviderDefault {
 		t.Fatalf("expected default/provider default, got %q/%q", label, thinking)
 	}
-
-	// Passed config
-	label, thinking = ResolveModelInfo(ctx, nil, "agent1", "gpt-4", nil)
-	if label != "gpt-4" || thinking != ThinkingProviderDefault {
-		t.Fatalf("expected gpt-4/provider default, got %q/%q", label, thinking)
-	}
-
-	// Sess overrides cfg
-	sess := &api.Session{
-		Config: api.SessionConfig{
-			Agent: "sess-agent",
-			Model: "claude-3-7",
-		},
-	}
-	label, thinking = ResolveModelInfo(ctx, nil, "agent1", "gpt-4", sess)
-	if label != "claude-3-7" || thinking != ThinkingProviderDefault {
-		t.Fatalf("expected claude-3-7/provider default from sess, got %q/%q", label, thinking)
-	}
-	sess.Config.Thinking = &api.ThinkingSetting{Type: "effort", Effort: "auto"}
-	_, thinking = ResolveModelInfo(ctx, nil, "", "", sess)
+	_, thinking = modelDisplay(nil, &api.ThinkingSetting{Type: "effort", Effort: "auto"})
 	if thinking != "auto" {
 		t.Fatalf("expected explicit auto effort, got %q", thinking)
 	}
@@ -136,60 +130,54 @@ func TestResolveModelInfoNilClient(t *testing.T) {
 	ResetSession()
 }
 
-func TestResolveModelInfoWithWorkspaceWarnings(t *testing.T) {
-	ResetApp()
-	defer ResetApp()
+func TestDraftModelUsesDaemonSelection(t *testing.T) {
 	ResetSession()
 	defer ResetSession()
-
-	var getWorkspaceCalled bool
-	rt := &mockSessionRoundTripper{
-		handler: func(req *http.Request) (*http.Response, error) {
-			if req.Method == http.MethodGet && req.URL.Path == "/v1/workspace" {
-				getWorkspaceCalled = true
-				ws := api.Workspace{
-					Name:         "test-ws",
-					RootDir:      "/workspace",
-					DefaultAgent: "default-agent",
-					DefaultModel: "default-model",
-					Warnings:     []string{"Workspace warning: invalid rule in config"},
-				}
-				data, _ := json.Marshal(ws)
-				resp := &http.Response{
-					StatusCode: http.StatusOK,
-					Body:       io.NopCloser(bytes.NewReader(data)),
-					Header:     make(http.Header),
-				}
-				resp.Header.Set("Content-Type", "application/json")
-				return resp, nil
-			}
-			return &http.Response{
-				StatusCode: http.StatusOK,
-				Body:       io.NopCloser(strings.NewReader(`{}`)),
-				Header:     make(http.Header),
-			}, nil
-		},
-	}
-
+	cfg := api.SessionConfig{Agent: "custom-agent"}
+	session.Set(func(s SessionState) SessionState { s.Config = cfg; return s })
+	rt := &mockSessionRoundTripper{handler: func(req *http.Request) (*http.Response, error) {
+		if req.URL.Path != "/v1/sessions/preview" || req.Method != http.MethodPost {
+			t.Fatalf("unexpected preview request: %s %s", req.Method, req.URL)
+		}
+		var payload api.PreviewSessionRequest
+		_ = json.NewDecoder(req.Body).Decode(&payload)
+		if payload.Config.Agent != "custom-agent" {
+			t.Fatalf("unexpected preview payload: %+v", payload)
+		}
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"model":{"id":"provider/available","label":"Available model"}}`)), Header: make(http.Header)}, nil
+	}}
 	c, err := client.New("/tmp/dummy.sock", client.WithCWD("/workspace"), client.WithHTTPClient(&http.Client{Transport: rt}))
 	if err != nil {
-		t.Fatalf("client.New: %v", err)
+		t.Fatal(err)
 	}
-
-	ctx := context.Background()
-
-	// Both agent and model specified: previously GetWorkspace was skipped, now it must be called!
-	label, thinking := ResolveModelInfo(ctx, c, "my-agent", "my-model", nil)
-	if !getWorkspaceCalled {
-		t.Fatal("expected GetWorkspace to be called even when agent and model are explicitly provided")
+	updateDraftModel(context.Background(), c, cfg)
+	if got := GetSession(); got.ModelLabel != "Available model" {
+		t.Fatalf("draft model = %q", got.ModelLabel)
 	}
-	if label != "my-model" || thinking != ThinkingProviderDefault {
-		t.Fatalf("unexpected label/thinking: %q/%q", label, thinking)
-	}
+}
 
-	hd := CurrentHeaderData()
-	if len(hd.Warnings) != 1 || hd.Warnings[0] != "Workspace warning: invalid rule in config" {
-		t.Fatalf("unexpected Warnings in CurrentHeaderData: %v", hd.Warnings)
+func TestStaleDraftModelResponseIsIgnored(t *testing.T) {
+	ResetSession()
+	defer ResetSession()
+	started, release, done := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	cfg := api.SessionConfig{Agent: "old"}
+	session.Set(func(s SessionState) SessionState { s.Config = cfg; return s })
+	rt := &mockSessionRoundTripper{handler: func(req *http.Request) (*http.Response, error) {
+		close(started)
+		<-release
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"model":{"id":"provider/old"}}`)), Header: make(http.Header)}, nil
+	}}
+	c, err := client.New("/tmp/dummy.sock", client.WithCWD("/workspace"), client.WithHTTPClient(&http.Client{Transport: rt}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() { updateDraftModel(context.Background(), c, cfg); close(done) }()
+	<-started
+	session.Set(func(s SessionState) SessionState { s.Config.Agent = "new"; s.ModelLabel = "new model"; return s })
+	close(release)
+	<-done
+	if got := GetSession().ModelLabel; got != "new model" {
+		t.Fatalf("stale preview replaced model: %q", got)
 	}
 }
 
@@ -656,31 +644,6 @@ func TestSwitchSessionSameIDReloadsTranscript(t *testing.T) {
 	}
 	if reloadedItems[0].Data.(Message).ID != "msg-1" || reloadedItems[1].Data.(Message).ID != "msg-2" {
 		t.Fatalf("unexpected reloaded message IDs: %+v", reloadedItems)
-	}
-}
-
-func TestCompactionThresholds(t *testing.T) {
-	// Table from compaction.md Section 2.4:
-	// 128k: reserve=24,384, trigger=103,616
-	// 200k: reserve=40,000, trigger=160,000
-	// 400k: reserve=44,000, trigger=356,000
-	// 1M:   reserve=62,000, trigger=938,000
-	tests := []struct {
-		ctxLimit, outLimit int
-		wantReserve        int
-		wantTrigger        int
-	}{
-		{128000, 16384, 24384, 103616},
-		{200000, 32000, 40000, 160000},
-		{400000, 128000, 44000, 356000},
-		{1000000, 65536, 62000, 938000},
-	}
-	for _, tc := range tests {
-		res, trig := computeCompactionThresholds(tc.ctxLimit, tc.outLimit)
-		if res != tc.wantReserve || trig != tc.wantTrigger {
-			t.Errorf("computeCompactionThresholds(%d, %d) = (%d, %d), want (%d, %d)",
-				tc.ctxLimit, tc.outLimit, res, trig, tc.wantReserve, tc.wantTrigger)
-		}
 	}
 }
 

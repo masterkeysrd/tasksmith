@@ -94,10 +94,10 @@ spec:
           input: [text, image]
           output: [text]
       cost:
-        input: 0.0000025      # Token pricing per token
-        output: 0.0000100
-        cacheRead: 0.00000125
-        cacheWrite: 0.0000025
+        input: 2.5            # USD per million tokens
+        output: 10.0
+        cacheRead: 1.25
+        cacheWrite: 2.5
 ```
 
 Explicit model `capabilities.temperature` overrides the provider profile. An agent's configured temperature is sent when supported, omitted with a chat warning when unsupported, and sent with a warning when support is unknown. Anthropic extended thinking omits temperature. Workspace reload refreshes provider configuration and session warnings; `/clear` dismisses visible warnings.
@@ -107,7 +107,7 @@ Requests requiring tools, tool history, media, or a response schema fail when th
 > [!NOTE]
 > Thinking capabilities come from provider model profiles or workspace model declarations. Declared strategies replace profile strategies for that model. `/effort`, `/budget`, and `/thinking` report when the resolved model does not support the requested strategy. `default` clears the session thinking override and restores the agent or provider default.
 
-The model endpoints (`GET /v1/models` and `GET /v1/models/{id}`) return `thinking[].values` as objects with a required `value` and optional `description`. Common effort levels receive general hints; model-specific values may have no description. Descriptions are informational and do not change the supported values.
+The model endpoints (`GET /v1/models` and `GET /v1/models/{id}`) return effective `capabilities`, limits, and optional `pricing` in USD per million tokens. `GET /v1/workspace` includes the resolved default model as `default_model` when available, and session responses include their resolved `model`. `POST /v1/sessions/preview` accepts proposed session configuration (`agent`, `model`, `thinking`, `mode`) and returns the effective configuration, resolved model, and diagnostics without creating or persisting a session. Agent preferences skip providers that are not configured; an explicit model override takes precedence. Manifest values override built-in profile values; pricing, including tiers, comes entirely from the manifest when `cost` is present. Missing context and output limits fall back to 128000 and 16384 tokens. `thinking[].values` contains objects with a required `value` and optional `description`. Common effort levels receive general hints; model-specific values may have no description. Descriptions are informational and do not change the supported values.
 
 ```json
 {"type":"effort","values":[{"value":"low","description":"Less reasoning; potentially faster."},{"value":"custom"}]}

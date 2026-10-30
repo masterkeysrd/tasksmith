@@ -7,16 +7,14 @@ import (
 	"fmt"
 	"path/filepath"
 	"sort"
-	"strings"
 	"sync"
-
-	"github.com/masterkeysrd/loom/profile"
 
 	"github.com/masterkeysrd/tasksmith/internal/core/fsutils"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	"github.com/masterkeysrd/tasksmith/internal/core/sqlite"
 	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/gateway"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/models"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/permissions"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/session"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tools/builtin"
@@ -35,8 +33,10 @@ type Runtime interface {
 	Dir() string
 	Workspace() workspace.Workspace
 	Gateway() gateway.Gateway
+	Catalog() models.Catalog
 	Permissions() permissions.Manager
 	Sessions() session.Manager
+	SessionRuntime() Runtime
 	Reload(ctx context.Context) error
 	Close() error
 }
@@ -55,16 +55,34 @@ type Config struct {
 	Logger      log.Interface
 }
 
+type catalogSlot struct {
+	mu    sync.RWMutex
+	value models.Catalog
+}
+
+func (s *catalogSlot) get() models.Catalog {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.value
+}
+
+func (s *catalogSlot) set(c models.Catalog) {
+	s.mu.Lock()
+	s.value = c
+	s.mu.Unlock()
+}
+
 type workspaceRuntime struct {
-	dir              string
-	ws               workspace.Workspace
-	sessionWorkspace workspace.Workspace
-	reloadMu         *sync.RWMutex
-	gw               gateway.Gateway
-	pool             gateway.Pool
-	perms            permissions.Manager
-	sessions         session.Manager
-	db               *sql.DB
+	dir          string
+	ws           workspace.Workspace
+	sessionOwner *workspaceRuntime
+	reloadMu     *sync.RWMutex
+	gw           gateway.Gateway
+	catalog      *catalogSlot
+	pool         gateway.Pool
+	perms        permissions.Manager
+	sessions     session.Manager
+	db           *sql.DB
 }
 
 var _ Runtime = (*workspaceRuntime)(nil)
@@ -72,8 +90,10 @@ var _ Runtime = (*workspaceRuntime)(nil)
 func (r *workspaceRuntime) Dir() string                      { return r.dir }
 func (r *workspaceRuntime) Workspace() workspace.Workspace   { return r.ws }
 func (r *workspaceRuntime) Gateway() gateway.Gateway         { return r.gw }
+func (r *workspaceRuntime) Catalog() models.Catalog          { return r.catalog.get() }
 func (r *workspaceRuntime) Permissions() permissions.Manager { return r.perms }
 func (r *workspaceRuntime) Sessions() session.Manager        { return r.sessions }
+func (r *workspaceRuntime) SessionRuntime() Runtime          { return r.sessionOwner }
 
 func (r *workspaceRuntime) Reload(ctx context.Context) error {
 	r.reloadMu.Lock()
@@ -84,8 +104,8 @@ func (r *workspaceRuntime) Reload(ctx context.Context) error {
 	}
 	sessionWorkspace := nextWorkspace
 	var commitSession func()
-	if r.sessionWorkspace != r.ws {
-		sessionWorkspace, commitSession, err = r.sessionWorkspace.PrepareReload(ctx)
+	if r.sessionOwner != r {
+		sessionWorkspace, commitSession, err = r.sessionOwner.ws.PrepareReload(ctx)
 		if err != nil {
 			return err
 		}
@@ -94,12 +114,27 @@ func (r *workspaceRuntime) Reload(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	catalog, err := models.Build(nextWorkspace, next)
+	if err != nil {
+		return fmt.Errorf("runtime: build model catalog: %w", err)
+	}
+	sessionCatalog := catalog
+	if r.sessionOwner != r {
+		sessionCatalog, err = models.Build(sessionWorkspace, next)
+		if err != nil {
+			return fmt.Errorf("runtime: build session model catalog: %w", err)
+		}
+	}
 	commitWorkspace()
 	if commitSession != nil {
 		commitSession()
 	}
 	if sw, ok := r.gw.(*switchingGateway); ok {
 		sw.set(next)
+	}
+	r.catalog.set(catalog)
+	if r.sessionOwner != r {
+		r.sessionOwner.catalog.set(sessionCatalog)
 	}
 	r.sessions.Refresh()
 	return nil
@@ -187,7 +222,7 @@ func (m *manager) Get(ctx context.Context, dir string) (Runtime, error) {
 	var gw gateway.Gateway
 	var sessMgr session.Manager
 	var permMgr permissions.Manager
-	sessionWorkspace := ws
+	owner := &workspaceRuntime{catalog: &catalogSlot{}}
 	reloadMu := &sync.RWMutex{}
 	for _, existing := range m.runtimes {
 		if existing.ws.RootDir() == rootDir {
@@ -195,7 +230,7 @@ func (m *manager) Get(ctx context.Context, dir string) (Runtime, error) {
 			gw = existing.gw
 			sessMgr = existing.sessions
 			permMgr = existing.perms
-			sessionWorkspace = existing.sessionWorkspace
+			owner = existing.sessionOwner
 			reloadMu = existing.reloadMu
 			break
 		}
@@ -239,6 +274,7 @@ func (m *manager) Get(ctx context.Context, dir string) (Runtime, error) {
 			Logger:      m.logger,
 			Permissions: permMgr,
 			ReloadLock:  reloadMu,
+			Catalog:     owner.catalog.get,
 		})
 		if err != nil {
 			_ = db.Close()
@@ -247,17 +283,30 @@ func (m *manager) Get(ctx context.Context, dir string) (Runtime, error) {
 		}
 	}
 
-	rt := &workspaceRuntime{
-		dir:              cleanDir,
-		ws:               ws,
-		sessionWorkspace: sessionWorkspace,
-		reloadMu:         reloadMu,
-		gw:               gw,
-		pool:             m.pool,
-		perms:            permMgr,
-		sessions:         sessMgr,
-		db:               db,
+	profileGateway := gw
+	if sw, ok := gw.(*switchingGateway); ok {
+		profileGateway = sw.snapshot()
 	}
+	catalog, err := models.Build(ws, profileGateway)
+	if err != nil {
+		m.mu.Unlock()
+		return nil, fmt.Errorf("runtime: build model catalog for %q: %w", rootDir, err)
+	}
+
+	rt := owner
+	if owner.catalog.get() != nil {
+		rt = &workspaceRuntime{catalog: &catalogSlot{}}
+	}
+	rt.catalog.set(catalog)
+	rt.dir = cleanDir
+	rt.ws = ws
+	rt.sessionOwner = owner
+	rt.reloadMu = reloadMu
+	rt.gw = gw
+	rt.pool = m.pool
+	rt.perms = permMgr
+	rt.sessions = sessMgr
+	rt.db = db
 	m.runtimes[cleanDir] = rt
 	m.mu.Unlock()
 
@@ -336,63 +385,6 @@ func toGatewayProvider(p workspace.Provider) gateway.ProviderConfig {
 		}
 	}
 
-	var models []gateway.ModelSpec
-	if len(p.Models) > 0 {
-		models = make([]gateway.ModelSpec, len(p.Models))
-		for i, m := range p.Models {
-			var caps *gateway.ModelCapabilities
-			if m.Capabilities != nil {
-				caps = &gateway.ModelCapabilities{
-					Completion:       m.Capabilities.Completion,
-					Decision:         m.Capabilities.Decision,
-					Embedding:        m.Capabilities.Embedding,
-					Attachment:       m.Capabilities.Attachment,
-					Tools:            m.Capabilities.Tools,
-					StructuredOutput: m.Capabilities.StructuredOutput,
-					Temperature:      m.Capabilities.Temperature,
-					Dimensions:       m.Capabilities.Dimensions,
-				}
-				if m.Capabilities.Modalities != nil {
-					caps.Modalities = &profile.Modalities{}
-					if m.Capabilities.Modalities.Input != nil {
-						caps.Modalities.Inputs = []profile.Modality{}
-					}
-					if m.Capabilities.Modalities.Output != nil {
-						caps.Modalities.Outputs = []profile.Modality{}
-					}
-					for _, modality := range m.Capabilities.Modalities.Input {
-						caps.Modalities.Inputs = append(caps.Modalities.Inputs, profile.Modality(modality))
-					}
-					for _, modality := range m.Capabilities.Modalities.Output {
-						caps.Modalities.Outputs = append(caps.Modalities.Outputs, profile.Modality(modality))
-					}
-				}
-				for _, thinking := range m.Capabilities.Thinking {
-					typ := strings.ToLower(strings.TrimSpace(thinking.Type))
-					if typ == "budget" {
-						typ = "budget_tokens"
-					}
-					def := ""
-					if thinking.Default != nil {
-						def = fmt.Sprint(thinking.Default)
-					}
-					caps.Thinking = append(caps.Thinking, profile.ReasoningOption{Type: typ, Values: thinking.AllowedEfforts, Default: def, Max: thinking.MaxBudgetTokens})
-				}
-			}
-			models[i] = gateway.ModelSpec{
-				ID:    m.ID,
-				Name:  m.Name,
-				Label: m.Label,
-				Limits: gateway.ModelLimits{
-					Context:    m.Limits.Context,
-					Output:     m.Limits.Output,
-					Dimensions: m.Limits.Dimensions,
-				},
-				Capabilities: caps,
-			}
-		}
-	}
-
 	return gateway.ProviderConfig{
 		Name:     p.Name,
 		Type:     p.Type,
@@ -400,6 +392,5 @@ func toGatewayProvider(p workspace.Provider) gateway.ProviderConfig {
 		Auth:     auth,
 		Headers:  p.Headers,
 		Config:   p.Config,
-		Models:   models,
 	}
 }

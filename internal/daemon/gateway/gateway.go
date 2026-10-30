@@ -3,14 +3,13 @@ package gateway
 import (
 	"context"
 	"fmt"
-	"slices"
-	"strings"
 	"sync"
 
 	"github.com/masterkeysrd/loom/decision"
 	"github.com/masterkeysrd/loom/embedding"
 	"github.com/masterkeysrd/loom/llm"
 	"github.com/masterkeysrd/loom/profile"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/models"
 )
 
 type gatewayImpl struct {
@@ -67,342 +66,153 @@ func (g *gatewayImpl) ListProviders() []ProviderInfo {
 			Name:     inst.cfg.Name,
 			Type:     inst.cfg.Type,
 			Endpoint: inst.cfg.Endpoint,
-			Models:   inst.cfg.Models,
 			Warning:  inst.warning,
 		})
 	}
 	return res
 }
 
-func (g *gatewayImpl) ResolveLLM(ctx context.Context, provider, modelID string, opts ...LLMOption) (*llm.Model, error) {
+func (g *gatewayImpl) LLM(ctx context.Context, m models.Model, cfg llm.ModelConfig) (*llm.Model, error) {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
-
 	if g.closed {
 		return nil, ErrGatewayClosed
 	}
-
-	options := &llmResolveOptions{}
-	for _, opt := range opts {
-		if opt != nil {
-			opt(options)
-		}
+	if !m.ID.Valid() {
+		return nil, fmt.Errorf("%w: invalid model ID %q", ErrModelNotFound, m.ID)
 	}
-
-	inst, modelID, spec, err := g.lookupProviderAndModel(provider, modelID)
-	if err != nil {
-		return nil, err
+	inst, ok := g.providers[m.ID.Provider()]
+	if !ok {
+		return nil, fmt.Errorf("%w: %q", ErrProviderNotFound, m.ID.Provider())
 	}
-
+	id := m.ID.Name()
 	if inst.authErr != nil {
 		return nil, inst.authErr
 	}
-
-	if inst.llmProv == nil {
-		return nil, fmt.Errorf("%w: provider %q does not support chat/completion", ErrUnsupportedCapability, inst.cfg.Name)
+	if inst.llmProv == nil || !m.Capabilities.SupportsCompletion() {
+		return nil, fmt.Errorf("%w: model %q does not support completion", ErrUnsupportedCapability, m.ID)
 	}
-	if spec != nil && !spec.Capabilities.SupportsCompletion() {
-		return nil, fmt.Errorf("%w: model %q does not support completion", ErrUnsupportedCapability, modelID)
-	}
-
-	settings := ModelSettings{Config: options.config}
-	if options.settings != nil {
-		settings = *options.settings
-	}
-	resolved, err := ResolveSettings(effectiveProfile(inst, modelID, spec), settings)
-	if err != nil {
-		return nil, err
-	}
-	model, err := llm.NewModel(inst.llmProv, modelID, resolved.Config)
+	model, err := llm.NewModel(inst.llmProv, id, &cfg)
 	if err != nil {
 		return nil, fmt.Errorf("gateway: failed to create llm model: %w", err)
 	}
-
+	p := m.Profile()
+	model = model.WithProfile(&p)
 	model = model.WithMiddleware(errorEnrichingLLMMiddleware())
 	if mw := openAIResponsesOptionsMiddleware(inst.openaiResponsesOpts); mw != nil {
 		model = model.WithMiddleware(mw)
 	}
-	if len(options.middleware) > 0 {
-		model = model.WithMiddleware(options.middleware...)
-	}
-	model = model.WithMiddleware(validateRequestMiddleware(resolved.Profile))
-
+	model = model.WithMiddleware(validateRequestMiddleware(m))
 	return model, nil
 }
 
-func (g *gatewayImpl) ResolveDecision(ctx context.Context, provider, modelID string, opts ...DecisionOption) (*decision.Model, error) {
+func (g *gatewayImpl) Decision(ctx context.Context, m models.Model, cfg llm.ModelConfig) (*decision.Model, error) {
+	if !m.ID.Valid() {
+		return nil, fmt.Errorf("%w: invalid model ID %q", ErrModelNotFound, m.ID)
+	}
 	g.mu.RLock()
-	defer g.mu.RUnlock()
-
 	if g.closed {
+		g.mu.RUnlock()
 		return nil, ErrGatewayClosed
 	}
-
-	options := &decisionResolveOptions{}
-	for _, opt := range opts {
-		if opt != nil {
-			opt(options)
-		}
+	inst, ok := g.providers[m.ID.Provider()]
+	if !ok {
+		g.mu.RUnlock()
+		return nil, fmt.Errorf("%w: %q", ErrProviderNotFound, m.ID.Provider())
 	}
-
-	inst, modelID, spec, err := g.lookupProviderAndModel(provider, modelID)
+	if inst.authErr != nil {
+		g.mu.RUnlock()
+		return nil, inst.authErr
+	}
+	provider := inst.decisionProv
+	g.mu.RUnlock()
+	if provider != nil && m.Capabilities.SupportsDecision() {
+		decisionCfg := &decision.ModelConfig{Options: cfg.Options}
+		if cfg.Extensions != nil {
+			decisionCfg.Extensions = make(map[string]decision.Extension, len(cfg.Extensions))
+			for key, extension := range cfg.Extensions {
+				decisionCfg.Extensions[key] = extension
+			}
+		}
+		model, err := decision.NewModel(provider, m.ID.Name(), decisionCfg)
+		if err != nil {
+			return nil, fmt.Errorf("gateway: failed to create decision model: %w", err)
+		}
+		p := m.Profile()
+		return model.WithProfile(&p).WithMiddleware(errorEnrichingDecisionMiddleware()), nil
+	}
+	completion, err := g.LLM(ctx, m, cfg)
 	if err != nil {
 		return nil, err
 	}
-
-	if inst.authErr != nil {
-		return nil, inst.authErr
-	}
-
-	// 1. Native decision provider check
-	if inst.decisionProv != nil && (spec == nil || spec.Capabilities.SupportsDecision()) {
-		model, err := decision.NewModel(inst.decisionProv, modelID, options.config)
-		if err != nil {
-			return nil, fmt.Errorf("gateway: failed to create native decision model: %w", err)
-		}
-		model = model.WithMiddleware(errorEnrichingDecisionMiddleware())
-		if len(options.middleware) > 0 {
-			model = model.WithMiddleware(options.middleware...)
-		}
-		return model, nil
-	}
-
-	// 2. Fallback to LLM adapter
-	if inst.llmProv == nil {
-		return nil, fmt.Errorf("%w: provider %q does not support decision evaluation or completion fallback", ErrUnsupportedCapability, inst.cfg.Name)
-	}
-	if spec != nil && !spec.Capabilities.SupportsCompletion() {
-		return nil, fmt.Errorf("%w: model %q supports neither decision nor completion", ErrUnsupportedCapability, modelID)
-	}
-
-	llmModel, err := llm.NewModel(inst.llmProv, modelID, nil)
+	model, err := decision.NewFromLLM(completion, nil)
 	if err != nil {
-		return nil, fmt.Errorf("gateway: failed to create underlying llm for decision adapter: %w", err)
+		return nil, fmt.Errorf("gateway: failed to adapt completion model: %w", err)
 	}
-	llmModel = llmModel.WithMiddleware(errorEnrichingLLMMiddleware())
-	if mw := openAIResponsesOptionsMiddleware(inst.openaiResponsesOpts); mw != nil {
-		llmModel = llmModel.WithMiddleware(mw)
-	}
-	llmModel = llmModel.WithMiddleware(validateRequestMiddleware(effectiveProfile(inst, modelID, spec)))
-
-	decModel, err := decision.NewFromLLM(llmModel, options.config)
-	if err != nil {
-		return nil, fmt.Errorf("gateway: failed to adapt llm into decision model: %w", err)
-	}
-
-	decModel = decModel.WithMiddleware(errorEnrichingDecisionMiddleware())
-	if len(options.middleware) > 0 {
-		decModel = decModel.WithMiddleware(options.middleware...)
-	}
-
-	return decModel, nil
+	return model.WithMiddleware(errorEnrichingDecisionMiddleware()), nil
 }
 
-func (g *gatewayImpl) ResolveEmbedding(ctx context.Context, provider, modelID string, opts ...EmbeddingOption) (*embedding.Model, error) {
+func (g *gatewayImpl) Embedding(ctx context.Context, m models.Model) (*embedding.Model, error) {
+	if !m.ID.Valid() {
+		return nil, fmt.Errorf("%w: invalid model ID %q", ErrModelNotFound, m.ID)
+	}
 	g.mu.RLock()
 	defer g.mu.RUnlock()
-
 	if g.closed {
 		return nil, ErrGatewayClosed
 	}
-
-	options := &embeddingResolveOptions{}
-	for _, opt := range opts {
-		if opt != nil {
-			opt(options)
-		}
+	inst, ok := g.providers[m.ID.Provider()]
+	if !ok {
+		return nil, fmt.Errorf("%w: %q", ErrProviderNotFound, m.ID.Provider())
 	}
-
-	inst, modelID, spec, err := g.lookupProviderAndModel(provider, modelID)
-	if err != nil {
-		return nil, err
-	}
-
 	if inst.authErr != nil {
 		return nil, inst.authErr
 	}
-
-	if inst.embeddingProv == nil {
-		return nil, fmt.Errorf("%w: provider %q does not support vector embeddings", ErrUnsupportedCapability, inst.cfg.Name)
+	if inst.embeddingProv == nil || !m.Capabilities.SupportsEmbedding() {
+		return nil, fmt.Errorf("%w: model %q does not support embeddings", ErrUnsupportedCapability, m.ID)
 	}
-	if spec != nil && !spec.Capabilities.SupportsEmbedding() {
-		return nil, fmt.Errorf("%w: model %q does not support embeddings", ErrUnsupportedCapability, modelID)
-	}
-
-	model, err := embedding.NewModel(inst.embeddingProv, modelID, options.config)
+	model, err := embedding.NewModel(inst.embeddingProv, m.ID.Name(), nil)
 	if err != nil {
 		return nil, fmt.Errorf("gateway: failed to create embedding model: %w", err)
 	}
-
-	model = model.WithMiddleware(errorEnrichingEmbeddingMiddleware())
-	if len(options.middleware) > 0 {
-		model = model.WithMiddleware(options.middleware...)
-	}
-
-	return model, nil
+	p := m.Profile()
+	return model.WithProfile(&p).WithMiddleware(errorEnrichingEmbeddingMiddleware()), nil
 }
 
-func (g *gatewayImpl) lookupProviderAndModel(provider, modelID string) (*providerInstance, string, *ModelSpec, error) {
-	provider = strings.TrimSpace(provider)
-	modelID = strings.TrimSpace(modelID)
-	if provider == "" {
-		if name, id, ok := strings.Cut(modelID, "/"); ok && id != "" {
-			if _, exists := g.providers[name]; exists {
-				provider, modelID = name, id
-			}
+func (inst *providerInstance) profileForModel(modelID string) (*profile.Profile, bool) {
+	if pp, ok := inst.llmProv.(profile.Provider); ok && pp != nil {
+		if prof, found := pp.GetProfile(modelID); found {
+			return &prof, true
 		}
 	}
-	if provider == "" {
-		return nil, "", nil, fmt.Errorf("%w: provider name is required", ErrProviderNotFound)
+	if pp, ok := inst.decisionProv.(profile.Provider); ok && pp != nil {
+		if prof, found := pp.GetProfile(modelID); found {
+			return &prof, true
+		}
 	}
-	if modelID == "" {
-		return nil, "", nil, fmt.Errorf("%w: model ID is required", ErrModelNotFound)
+	if pp, ok := inst.embeddingProv.(profile.Provider); ok && pp != nil {
+		if prof, found := pp.GetProfile(modelID); found {
+			return &prof, true
+		}
 	}
-
-	inst, ok := g.providers[provider]
-	if !ok {
-		return nil, "", nil, fmt.Errorf("%w: %q", ErrProviderNotFound, provider)
-	}
-
-	var specPtr *ModelSpec
-	if spec, hasSpec := inst.models[modelID]; hasSpec {
-		specPtr = &spec
-	}
-	return inst, modelID, specPtr, nil
+	return nil, false
 }
 
-// MergeProfile merges workspace ModelSpec overrides (name, limits, capabilities) on top of
-// a provider's base model profile. If both spec and base are nil, it returns nil.
-func MergeProfile(spec *ModelSpec, base *profile.Profile) *profile.Profile {
-	if spec == nil && base == nil {
-		return nil
+func (g *gatewayImpl) GetProfile(qualifiedID string) (profile.Profile, bool) {
+	id := models.ID(qualifiedID)
+	if !id.Valid() {
+		return profile.Profile{}, false
 	}
-	var out profile.Profile
-	if base != nil {
-		out = *base
-		out.Modalities.Inputs = slices.Clone(base.Modalities.Inputs)
-		out.Modalities.Outputs = slices.Clone(base.Modalities.Outputs)
-		out.Capabilities.ReasoningOptions = cloneReasoningOptions(base.Capabilities.ReasoningOptions)
-	}
-	if spec == nil {
-		return &out
-	}
-
-	if spec.ID != "" && out.ID == "" {
-		out.ID = spec.ID
-	}
-	if spec.Name != "" {
-		out.Name = spec.Name
-	} else if spec.Label != "" && out.Name == "" {
-		out.Name = spec.Label
-	}
-	if spec.Limits.Context > 0 {
-		out.Limits.Context = spec.Limits.Context
-	}
-	if spec.Limits.Output > 0 {
-		out.Limits.Output = spec.Limits.Output
-	}
-	if spec.Limits.Dimensions > 0 {
-		out.Limits.Dimensions = spec.Limits.Dimensions
-	}
-	if spec.Capabilities != nil {
-		if spec.Capabilities.Modalities != nil {
-			if spec.Capabilities.Modalities.Inputs != nil {
-				out.Modalities.Inputs = append([]profile.Modality{}, spec.Capabilities.Modalities.Inputs...)
-			}
-			if spec.Capabilities.Modalities.Outputs != nil {
-				out.Modalities.Outputs = append([]profile.Modality{}, spec.Capabilities.Modalities.Outputs...)
-			}
-		}
-		if len(spec.Capabilities.Thinking) > 0 {
-			out.Capabilities.Reasoning = true
-			out.Capabilities.ReasoningOptions = cloneReasoningOptions(spec.Capabilities.Thinking)
-		}
-		if spec.Capabilities.Completion != nil {
-			out.Capabilities.Completion = *spec.Capabilities.Completion
-		}
-		if spec.Capabilities.Decision != nil {
-			out.Capabilities.Decision = *spec.Capabilities.Decision
-		}
-		if spec.Capabilities.Embedding != nil {
-			out.Capabilities.Embedding = *spec.Capabilities.Embedding
-		}
-		if spec.Capabilities.Attachment != nil {
-			out.Capabilities.Attachment = *spec.Capabilities.Attachment
-		}
-		if spec.Capabilities.Tools != nil {
-			out.Capabilities.ToolCall = *spec.Capabilities.Tools
-		}
-		if spec.Capabilities.Temperature != nil {
-			out.Capabilities.Temperature = *spec.Capabilities.Temperature
-		}
-		if len(spec.Capabilities.Dimensions) > 0 && spec.Limits.Dimensions == 0 {
-			out.Limits.Dimensions = spec.Capabilities.Dimensions[0]
-		}
-	}
-	return &out
-}
-
-func cloneReasoningOptions(options []profile.ReasoningOption) []profile.ReasoningOption {
-	cloned := slices.Clone(options)
-	for i := range cloned {
-		cloned[i].Values = slices.Clone(cloned[i].Values)
-	}
-	return cloned
-}
-
-// ModelProfile looks up the discovered model profile from the matching provider or catalog,
-// merging any workspace ModelSpec overrides configured for the model.
-func (g *gatewayImpl) ModelProfile(provider, modelID string) (*profile.Profile, bool) {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
 
-	inst, modelID, spec, err := g.lookupProviderAndModel(provider, modelID)
-	if err != nil || inst == nil {
-		return nil, false
+	inst, ok := g.providers[id.Provider()]
+	if !ok {
+		return profile.Profile{}, false
 	}
-	resolved := effectiveProfile(inst, modelID, spec)
-	return resolved.Profile, resolved.Profile != nil
-}
-
-func effectiveProfile(inst *providerInstance, modelID string, spec *ModelSpec) EffectiveProfile {
-	var base *profile.Profile
-	if pp, ok := inst.llmProv.(profile.Provider); ok && pp != nil {
-		if prof, found := pp.GetProfile(modelID); found {
-			base = &prof
-		}
+	prof, ok := inst.profileForModel(id.Name())
+	if !ok {
+		return profile.Profile{}, false
 	}
-	if base == nil {
-		if pp, ok := inst.decisionProv.(profile.Provider); ok && pp != nil {
-			if prof, found := pp.GetProfile(modelID); found {
-				base = &prof
-			}
-		}
-	}
-	if base == nil {
-		if pp, ok := inst.embeddingProv.(profile.Provider); ok && pp != nil {
-			if prof, found := pp.GetProfile(modelID); found {
-				base = &prof
-			}
-		}
-	}
-
-	merged := MergeProfile(spec, base)
-	if merged != nil && merged.ID == "" {
-		merged.ID = modelID
-	}
-	result := EffectiveProfile{
-		Profile:          merged,
-		TemperatureKnown: base != nil || (spec != nil && spec.Capabilities != nil && spec.Capabilities.Temperature != nil),
-		ToolsKnown:       base != nil || (spec != nil && spec.Capabilities != nil && spec.Capabilities.Tools != nil),
-		ProviderType:     inst.cfg.Type,
-	}
-	if spec != nil && spec.Capabilities != nil {
-		if spec.Capabilities.StructuredOutput != nil {
-			value := *spec.Capabilities.StructuredOutput
-			result.StructuredOutput = &value
-		}
-		result.Dimensions = append([]int(nil), spec.Capabilities.Dimensions...)
-	}
-	return result
+	return *prof, true
 }

@@ -31,6 +31,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/daemon/broker"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/gateway"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/harness"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/models"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/permissions"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/sandbox"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/std"
@@ -39,6 +40,22 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tools/builtin"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/workspace"
 )
+
+type catalogWorkspace struct {
+	workspace.Workspace
+	providers []workspace.Provider
+}
+
+func (w catalogWorkspace) Providers() []workspace.Provider { return w.providers }
+
+func testCatalog(t *testing.T, ws workspace.Workspace, entries ...workspace.ProviderModel) func() models.Catalog {
+	t.Helper()
+	catalog, err := models.Build(catalogWorkspace{Workspace: ws, providers: []workspace.Provider{{Metadata: workspace.Metadata{Name: "local"}, Type: "ollama", Models: entries}}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return func() models.Catalog { return catalog }
+}
 
 func TestSessionModelDiagnosticsAndRequests(t *testing.T) {
 	ctx := context.Background()
@@ -70,10 +87,7 @@ func TestSessionModelDiagnosticsAndRequests(t *testing.T) {
 	if err := ws.Reload(ctx); err != nil {
 		t.Fatal(err)
 	}
-	gw, err := gateway.New(ctx, gateway.Config{Providers: []gateway.ProviderConfig{{Name: "local", Type: "ollama", Endpoint: server.URL, Models: []gateway.ModelSpec{
-		{ID: "supported", Capabilities: &gateway.ModelCapabilities{Temperature: new(true), Thinking: []profile.ReasoningOption{{Type: "effort", Values: []string{"low", "high"}}}}},
-		{ID: "unsupported", Capabilities: &gateway.ModelCapabilities{Temperature: new(false)}},
-	}}}})
+	gw, err := gateway.New(ctx, gateway.Config{Providers: []gateway.ProviderConfig{{Name: "local", Type: "ollama", Endpoint: server.URL}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,7 +96,11 @@ func TestSessionModelDiagnosticsAndRequests(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	mgr, err := New(Config{DB: db, Workspace: ws, Gateway: gw, Publisher: pub, Logger: log.Default(), Permissions: perms})
+	catalog := testCatalog(t, ws,
+		workspace.ProviderModel{ID: "supported", Capabilities: &workspace.ModelCapabilities{Temperature: new(true), Thinking: []workspace.ThinkingCapability{{Type: "effort", AllowedEfforts: []string{"low", "high"}}}}},
+		workspace.ProviderModel{ID: "unsupported", Capabilities: &workspace.ModelCapabilities{Temperature: new(false)}},
+	)
+	mgr, err := New(Config{DB: db, Workspace: ws, Gateway: gw, Publisher: pub, Logger: log.Default(), Permissions: perms, Catalog: catalog})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -131,7 +149,7 @@ func TestSessionModelDiagnosticsAndRequests(t *testing.T) {
 	if len(updated.Diagnostics) != 1 || updated.Diagnostics[0].Code != "temperature_unsupported" {
 		t.Fatalf("agent switch diagnostics: %+v", updated.Diagnostics)
 	}
-	reopened, err := New(Config{DB: db, Workspace: ws, Gateway: gw, Publisher: pub, Logger: log.Default(), Permissions: perms})
+	reopened, err := New(Config{DB: db, Workspace: ws, Gateway: gw, Publisher: pub, Logger: log.Default(), Permissions: perms, Catalog: catalog})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -151,7 +169,7 @@ func TestSessionModelDiagnosticsAndRequests(t *testing.T) {
 		{"local/supported", true},
 		{"local/unsupported", false},
 	} {
-		titleSession, _, err := mgr.Create(ctx, CreateParams{Config: SessionConfig{Agent: "cold", Model: tc.model}})
+		titleSession, _, err := mgr.Create(ctx, CreateParams{Config: SessionConfig{Agent: "cold", Model: models.ID(tc.model)}})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -182,7 +200,7 @@ func TestSessionModelDiagnosticsAndRequests(t *testing.T) {
 		{"local/supported", &api.ThinkingSetting{Type: "effort", Effort: "low"}, "high"},
 		{"local/unsupported", nil, nil},
 	} {
-		titleSession, _, err := mgr.Create(ctx, CreateParams{Config: SessionConfig{Agent: "cold", Model: tc.model, Thinking: tc.thinking}})
+		titleSession, _, err := mgr.Create(ctx, CreateParams{Config: SessionConfig{Agent: "cold", Model: models.ID(tc.model), Thinking: tc.thinking}})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -360,25 +378,18 @@ func newFakeGateway(p *fakeProvider) *fakeGateway {
 	return &fakeGateway{provider: p}
 }
 
-func (g *fakeGateway) ResolveLLM(ctx context.Context, provider, modelID string, _ ...gateway.LLMOption) (*llm.Model, error) {
+func (g *fakeGateway) LLM(ctx context.Context, model models.Model, cfg llm.ModelConfig) (*llm.Model, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	modelName := strings.TrimSpace(modelID)
-	if provider = strings.TrimSpace(provider); provider != "" && modelName != "" {
-		modelName = provider + "/" + modelName
-	}
-	if modelName == "" {
-		modelName = "fake-default-model"
-	}
-	return llm.NewModel(g.provider, modelName, nil)
+	return llm.NewModel(g.provider, string(model.ID), &cfg)
 }
 
-func (g *fakeGateway) ResolveDecision(context.Context, string, string, ...gateway.DecisionOption) (*decision.Model, error) {
+func (g *fakeGateway) Decision(context.Context, models.Model, llm.ModelConfig) (*decision.Model, error) {
 	return nil, gateway.ErrUnsupportedCapability
 }
 
-func (g *fakeGateway) ResolveEmbedding(context.Context, string, string, ...gateway.EmbeddingOption) (*embedding.Model, error) {
+func (g *fakeGateway) Embedding(context.Context, models.Model) (*embedding.Model, error) {
 	return nil, gateway.ErrUnsupportedCapability
 }
 
@@ -386,23 +397,17 @@ func (g *fakeGateway) ListProviders() []gateway.ProviderInfo {
 	return nil
 }
 
-func (g *fakeGateway) ModelProfile(provider, modelID string) (*profile.Profile, bool) {
+func (g *fakeGateway) GetProfile(qualifiedID string) (profile.Profile, bool) {
+	id := models.ID(qualifiedID)
 	if g.provider != nil {
-		if prof, found := g.provider.GetProfile(modelID); found {
-			return &prof, true
+		if prof, found := g.provider.GetProfile(id.Name()); found {
+			return prof, true
 		}
-		if provider != "" {
-			if prof, found := g.provider.GetProfile(provider + "/" + modelID); found {
-				return &prof, true
-			}
+		if prof, found := g.provider.GetProfile(string(id)); found {
+			return prof, true
 		}
 	}
-	return nil, false
-}
-
-func (g *fakeGateway) ResolveConfig(provider, modelID string, settings gateway.ModelSettings) (gateway.ResolvedConfig, error) {
-	p, ok := g.ModelProfile(provider, modelID)
-	return gateway.ResolveSettings(gateway.EffectiveProfile{Profile: p, TemperatureKnown: ok}, settings)
+	return profile.Profile{}, false
 }
 
 func (g *fakeGateway) Close() error {
@@ -472,7 +477,12 @@ func setupTestEnv(t *testing.T, prov *fakeProvider) (*sql.DB, workspace.Workspac
 		_ = db.Close()
 	})
 
-	ws, err := workspace.Open(context.Background(), t.TempDir(), workspace.WithBuiltinFS(builtin.FS()))
+	wsDir := t.TempDir()
+	manifest := "---\napiVersion: warp/v1alpha1\nkind: Workspace\nmetadata:\n  name: test\nspec:\n  defaultProvider: fake\n  defaultModel: fake-default-model\n---\n"
+	if err := os.WriteFile(filepath.Join(wsDir, "WORKSPACE.md"), []byte(manifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ws, err := workspace.Open(context.Background(), wsDir, workspace.WithBuiltinFS(builtin.FS()))
 	if err != nil {
 		t.Fatalf("workspace.Open: %v", err)
 	}
@@ -503,7 +513,7 @@ func setupTestEnv(t *testing.T, prov *fakeProvider) (*sql.DB, workspace.Workspac
 
 func loadHarnessState(t *testing.T, mgr Manager, db *sql.DB, gw *fakeGateway, sessionID string) harness.State {
 	t.Helper()
-	llmModel, err := gw.ResolveLLM(context.Background(), "", "fake-default-model")
+	llmModel, err := gw.LLM(context.Background(), models.Model{ID: "fake/fake-default-model"}, llm.ModelConfig{})
 	if err != nil {
 		t.Fatalf("ResolveLLM: %v", err)
 	}
@@ -782,6 +792,22 @@ WORKSPACE_SHARED_PROMPT_MARKER
 
 	agentsDir := filepath.Join(wsDir, ".agents")
 	if err := os.MkdirAll(agentsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	providerDir := filepath.Join(agentsDir, "providers")
+	if err := os.MkdirAll(providerDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	providerManifest := `apiVersion: warp/v1alpha1
+kind: ModelProvider
+metadata:
+  name: openai
+spec:
+  type: openai
+  models:
+    - id: gpt-5.5-default
+`
+	if err := os.WriteFile(filepath.Join(providerDir, "openai.yaml"), []byte(providerManifest), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -2311,7 +2337,7 @@ func TestTimelineRecordEvents(t *testing.T) {
 
 	// 3. Update Model and verify KindModel entry
 	oldModel := sess.Config.Model
-	newModelRaw := "claude-3-5-sonnet"
+	newModelRaw := models.ID("claude-3-5-sonnet")
 	updatedSess, err := mgr.Update(ctx, sess.ID, UpdateParams{Config: SessionConfig{Model: newModelRaw}})
 	if err != nil {
 		t.Fatalf("Update model error: %v", err)
@@ -2330,7 +2356,7 @@ func TestTimelineRecordEvents(t *testing.T) {
 	if tl2[1].Kind != timeline.KindModel {
 		t.Errorf("tl2[1].Kind = %q, want %q", tl2[1].Kind, timeline.KindModel)
 	}
-	if tl2[1].Model == nil || tl2[1].Model.From != oldModel || tl2[1].Model.To != updatedSess.Config.Model {
+	if tl2[1].Model == nil || tl2[1].Model.From != string(oldModel) || tl2[1].Model.To != string(updatedSess.Config.Model) {
 		t.Errorf("tl2[1].Model = %+v, want From=%q To=%q", tl2[1].Model, oldModel, updatedSess.Config.Model)
 	}
 
@@ -2969,8 +2995,14 @@ func TestSessionTitleRetriesAfterFailure(t *testing.T) {
 // it, omitting it otherwise.
 func temperatureSupported(g gateway.Gateway, provider, model string) bool {
 	value := float32(0.1)
-	resolved, err := g.ResolveConfig(provider, model, gateway.ModelSettings{Config: &llm.ModelConfig{Temperature: &value}})
-	return err == nil && resolved.Config.Temperature != nil
+	base, ok := g.GetProfile(provider + "/" + model)
+	var prof *profile.Profile
+	if ok {
+		prof = &base
+	}
+	effective := models.Merge(models.ID(provider+"/"+model), "", nil, prof)
+	resolved, _, err := models.Configure(effective, models.Preferences{Temperature: &value})
+	return err == nil && resolved.Temperature != nil
 }
 
 func TestTemperatureSupported(t *testing.T) {

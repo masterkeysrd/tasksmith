@@ -16,10 +16,11 @@ type thinkingTransport struct{}
 
 func (thinkingTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 	body := `{}`
-	if strings.HasPrefix(r.URL.Path, "/v1/models/") {
-		body = `{"id":"test","name":"test","thinking":[{"type":"effort","values":[{"value":"minimal","description":"Provider hint"},{"value":"custom"},{"value":"high","description":"More reasoning"}]},{"type":"budget_tokens","min":100,"max":1000},{"type":"toggle"}]}`
-		if strings.Contains(r.URL.Path, "unsupported") {
-			body = `{"id":"unsupported","name":"unsupported"}`
+	if r.URL.Path == "/v1/sessions/preview" {
+		data, _ := io.ReadAll(r.Body)
+		body = `{"model":{"id":"test","name":"test","thinking":[{"type":"effort","values":[{"value":"minimal","description":"Provider hint"},{"value":"custom"},{"value":"high","description":"More reasoning"}]},{"type":"budget_tokens","min":100,"max":1000},{"type":"toggle"}]}}`
+		if strings.Contains(string(data), `"unsupported"`) {
+			body = `{"model":{"id":"unsupported","name":"unsupported"}}`
 		}
 	}
 	return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body))}, nil

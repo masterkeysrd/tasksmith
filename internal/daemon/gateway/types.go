@@ -8,7 +8,7 @@ import (
 	"github.com/masterkeysrd/loom/embedding"
 	"github.com/masterkeysrd/loom/llm"
 	"github.com/masterkeysrd/loom/profile"
-	"github.com/masterkeysrd/tasksmith/api"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/models"
 )
 
 // Common errors returned by the gateway package.
@@ -38,63 +38,6 @@ type AuthConfig struct {
 	File   string   `json:"file,omitempty"`   // Explicit path to credential file
 }
 
-// ModelCapabilities specifies the workload capabilities supported by a model.
-type ModelCapabilities struct {
-	Completion       *bool                     `json:"completion,omitempty"`
-	Decision         *bool                     `json:"decision,omitempty"`
-	Embedding        *bool                     `json:"embedding,omitempty"`
-	Attachment       *bool                     `json:"attachment,omitempty"`
-	Tools            *bool                     `json:"tools,omitempty"`
-	StructuredOutput *bool                     `json:"structured_output,omitempty"`
-	Temperature      *bool                     `json:"temperature,omitempty"`
-	Dimensions       []int                     `json:"dimensions,omitempty"`
-	Thinking         []profile.ReasoningOption `json:"thinking,omitempty"`
-	Modalities       *profile.Modalities       `json:"modalities,omitempty"`
-}
-
-// SupportsCompletion reports whether the model supports text/chat completion.
-// Defaults to true if unspecified.
-func (c *ModelCapabilities) SupportsCompletion() bool {
-	if c == nil || c.Completion == nil {
-		return true
-	}
-	return *c.Completion
-}
-
-// SupportsDecision reports whether the model supports native decision evaluation.
-// Defaults to false if unspecified.
-func (c *ModelCapabilities) SupportsDecision() bool {
-	if c == nil || c.Decision == nil {
-		return false
-	}
-	return *c.Decision
-}
-
-// SupportsEmbedding reports whether the model supports vector embedding generation.
-// Defaults to false if unspecified.
-func (c *ModelCapabilities) SupportsEmbedding() bool {
-	if c == nil || c.Embedding == nil {
-		return false
-	}
-	return *c.Embedding
-}
-
-// ModelLimits specifies token limits and output dimensions.
-type ModelLimits struct {
-	Context    int `json:"context,omitempty"`
-	Output     int `json:"output,omitempty"`
-	Dimensions int `json:"dimensions,omitempty"`
-}
-
-// ModelSpec describes an available model from a provider.
-type ModelSpec struct {
-	ID           string             `json:"id"`
-	Name         string             `json:"name"`
-	Label        string             `json:"label,omitempty"`
-	Limits       ModelLimits        `json:"limits"`
-	Capabilities *ModelCapabilities `json:"capabilities,omitempty"`
-}
-
 // ProviderConfig configures a single upstream backend provider.
 type ProviderConfig struct {
 	Name     string            `json:"name"`
@@ -103,137 +46,24 @@ type ProviderConfig struct {
 	Auth     *AuthConfig       `json:"auth,omitempty"`
 	Headers  map[string]string `json:"headers,omitempty"`
 	Config   map[string]any    `json:"config,omitempty"`
-	Models   []ModelSpec       `json:"models,omitempty"`
 }
 
 // ProviderInfo provides read-only summary information about an initialized provider.
 type ProviderInfo struct {
-	Name     string      `json:"name"`
-	Type     string      `json:"type"`
-	Endpoint string      `json:"endpoint,omitempty"`
-	Models   []ModelSpec `json:"models,omitempty"`
-	Warning  string      `json:"warning,omitempty"`
-}
-
-// LLMOption configures a call to ResolveLLM.
-type LLMOption func(*llmResolveOptions)
-
-type llmResolveOptions struct {
-	config     *llm.ModelConfig
-	settings   *ModelSettings
-	middleware []llm.Middleware
-}
-
-// WithLLMConfig specifies configuration options for the resolved llm.Model.
-func WithLLMConfig(cfg *llm.ModelConfig) LLMOption {
-	return func(o *llmResolveOptions) {
-		o.config = cfg
-	}
-}
-
-func WithModelSettings(settings ModelSettings) LLMOption {
-	return func(o *llmResolveOptions) {
-		o.settings = &settings
-	}
-}
-
-// WithLLMMiddleware appends middleware to the resolved llm.Model.
-func WithLLMMiddleware(mw ...llm.Middleware) LLMOption {
-	return func(o *llmResolveOptions) {
-		o.middleware = append(o.middleware, mw...)
-	}
-}
-
-// DecisionOption configures a call to ResolveDecision.
-type DecisionOption func(*decisionResolveOptions)
-
-type decisionResolveOptions struct {
-	config     *decision.ModelConfig
-	middleware []decision.Middleware
-}
-
-// WithDecisionConfig specifies configuration options for the resolved decision.Model.
-func WithDecisionConfig(cfg *decision.ModelConfig) DecisionOption {
-	return func(o *decisionResolveOptions) {
-		o.config = cfg
-	}
-}
-
-// WithDecisionMiddleware appends middleware to the resolved decision.Model.
-func WithDecisionMiddleware(mw ...decision.Middleware) DecisionOption {
-	return func(o *decisionResolveOptions) {
-		o.middleware = append(o.middleware, mw...)
-	}
-}
-
-// EmbeddingOption configures a call to ResolveEmbedding.
-type EmbeddingOption func(*embeddingResolveOptions)
-
-type embeddingResolveOptions struct {
-	config     *embedding.ModelConfig
-	middleware []embedding.Middleware
-}
-
-// WithEmbeddingConfig specifies configuration options for the resolved embedding.Model.
-func WithEmbeddingConfig(cfg *embedding.ModelConfig) EmbeddingOption {
-	return func(o *embeddingResolveOptions) {
-		o.config = cfg
-	}
-}
-
-// WithEmbeddingMiddleware appends middleware to the resolved embedding.Model.
-func WithEmbeddingMiddleware(mw ...embedding.Middleware) EmbeddingOption {
-	return func(o *embeddingResolveOptions) {
-		o.middleware = append(o.middleware, mw...)
-	}
-}
-
-type Diagnostic struct {
-	Code    string `json:"code"`
-	Setting string `json:"setting"`
-	Message string `json:"message"`
-}
-
-type EffectiveProfile struct {
-	Profile          *profile.Profile
-	TemperatureKnown bool
-	ToolsKnown       bool
-	ProviderType     string
-	StructuredOutput *bool
-	Dimensions       []int
-}
-
-type ModelSettings struct {
-	Config          *llm.ModelConfig
-	AgentThinking   *api.ThinkingSetting
-	SessionThinking *api.ThinkingSetting
-}
-
-type ResolvedConfig struct {
-	Profile     EffectiveProfile
-	Config      *llm.ModelConfig
-	Diagnostics []Diagnostic
+	Name     string `json:"name"`
+	Type     string `json:"type"`
+	Endpoint string `json:"endpoint,omitempty"`
+	Warning  string `json:"warning,omitempty"`
 }
 
 // Gateway provides access to initialized AI models across providers.
 type Gateway interface {
-	// ResolveLLM instantiates a conversational/completion model (System Two) for the given provider and model ID.
-	ResolveLLM(ctx context.Context, provider, modelID string, opts ...LLMOption) (*llm.Model, error)
-
-	// ResolveDecision instantiates a probabilistic decision model (System One) for the given provider and model ID.
-	// If the provider/model natively supports decisions, a native model is returned.
-	// Otherwise, it automatically wraps a completion model using decision.NewFromLLM.
-	ResolveDecision(ctx context.Context, provider, modelID string, opts ...DecisionOption) (*decision.Model, error)
-
-	// ResolveEmbedding instantiates a vector embedding model (System Three) for the given provider and model ID.
-	ResolveEmbedding(ctx context.Context, provider, modelID string, opts ...EmbeddingOption) (*embedding.Model, error)
-
-	// ListProviders returns information about all registered providers and their models.
+	LLM(ctx context.Context, model models.Model, cfg llm.ModelConfig) (*llm.Model, error)
+	Decision(ctx context.Context, model models.Model, cfg llm.ModelConfig) (*decision.Model, error)
+	Embedding(ctx context.Context, model models.Model) (*embedding.Model, error)
 	ListProviders() []ProviderInfo
 
-	// ModelProfile returns the discovered model profile from the matching provider or catalog, if available.
-	ModelProfile(provider, modelID string) (*profile.Profile, bool)
-	ResolveConfig(provider, modelID string, settings ModelSettings) (ResolvedConfig, error)
+	GetProfile(id string) (profile.Profile, bool)
 
 	// Close releases all client resources and connections.
 	Close() error

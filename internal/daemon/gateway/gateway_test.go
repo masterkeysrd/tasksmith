@@ -13,6 +13,8 @@ import (
 	"github.com/masterkeysrd/loom/message"
 	"github.com/masterkeysrd/loom/profile"
 	loomopenai "github.com/masterkeysrd/loom/providers/openai"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/models"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/workspace"
 	"github.com/openai/openai-go/v3"
 )
 
@@ -22,18 +24,11 @@ func TestConfigFingerprint(t *testing.T) {
 			{
 				Name: "ollama",
 				Type: "ollama",
-				Models: []ModelSpec{
-					{ID: "llama3.2", Name: "Llama 3.2"},
-					{ID: "nimble-v3", Name: "Nimble Decision", Capabilities: &ModelCapabilities{Decision: new(true)}},
-				},
 			},
 			{
 				Name: "anthropic",
 				Type: "anthropic",
 				Auth: &AuthConfig{Env: "ANTHROPIC_API_KEY"},
-				Models: []ModelSpec{
-					{ID: "claude-3-7-sonnet", Name: "Claude 3.7 Sonnet"},
-				},
 			},
 		},
 		Env: map[string]string{
@@ -42,24 +37,16 @@ func TestConfigFingerprint(t *testing.T) {
 		},
 	}
 
-	// cfg2 has providers and models in reversed order, and different irrelevant env vars
 	cfg2 := Config{
 		Providers: []ProviderConfig{
 			{
 				Name: "anthropic",
 				Type: "anthropic",
 				Auth: &AuthConfig{Env: "ANTHROPIC_API_KEY"},
-				Models: []ModelSpec{
-					{ID: "claude-3-7-sonnet", Name: "Claude 3.7 Sonnet"},
-				},
 			},
 			{
 				Name: "ollama",
 				Type: "ollama",
-				Models: []ModelSpec{
-					{ID: "nimble-v3", Name: "Nimble Decision", Capabilities: &ModelCapabilities{Decision: new(true)}},
-					{ID: "llama3.2", Name: "Llama 3.2"},
-				},
 			},
 		},
 		Env: map[string]string{
@@ -97,31 +84,11 @@ func TestStrictAuthValidation(t *testing.T) {
 				Name: "anthropic",
 				Type: "anthropic",
 				Auth: &AuthConfig{Env: "ANTHROPIC_API_KEY"},
-				Models: []ModelSpec{
-					{
-						ID:   "claude-3-7-sonnet",
-						Name: "Claude 3.7 Sonnet",
-						Capabilities: &ModelCapabilities{
-							Completion: new(true),
-						},
-					},
-				},
 			},
 			{
 				Name:     "ollama",
 				Type:     "ollama",
 				Endpoint: "http://127.0.0.1:11434",
-				Models: []ModelSpec{
-					{
-						ID:   "llama3.2",
-						Name: "Llama 3.2",
-						Capabilities: &ModelCapabilities{
-							Completion: new(true),
-							Decision:   new(true),
-							Embedding:  new(true),
-						},
-					},
-				},
 			},
 		},
 		Env: map[string]string{
@@ -158,21 +125,21 @@ func TestStrictAuthValidation(t *testing.T) {
 	}
 
 	// Calling ResolveLLM for unauthenticated provider returns ErrMissingCredential
-	_, err = gw.ResolveLLM(ctx, "anthropic", "claude-3-7-sonnet")
+	_, err = gw.LLM(ctx, models.Model{ID: "anthropic/claude-3-7-sonnet"}, llm.ModelConfig{})
 	if !errors.Is(err, ErrMissingCredential) {
 		t.Fatalf("expected ErrMissingCredential for ResolveLLM on unauthenticated provider, got %v", err)
 	}
-	_, err = gw.ResolveDecision(ctx, "anthropic", "claude-3-7-sonnet")
+	_, err = gw.Decision(ctx, models.Model{ID: "anthropic/claude-3-7-sonnet"}, llm.ModelConfig{})
 	if !errors.Is(err, ErrMissingCredential) {
 		t.Fatalf("expected ErrMissingCredential for ResolveDecision on unauthenticated provider, got %v", err)
 	}
-	_, err = gw.ResolveEmbedding(ctx, "anthropic", "claude-3-7-sonnet")
+	_, err = gw.Embedding(ctx, models.Model{ID: "anthropic/claude-3-7-sonnet"})
 	if !errors.Is(err, ErrMissingCredential) {
 		t.Fatalf("expected ErrMissingCredential for ResolveEmbedding on unauthenticated provider, got %v", err)
 	}
 
 	// Calling ResolveLLM for healthy provider succeeds!
-	healthyLLM, err := gw.ResolveLLM(ctx, "ollama", "llama3.2")
+	healthyLLM, err := gw.LLM(ctx, models.Model{ID: "ollama/llama3.2", ProviderType: "ollama"}, llm.ModelConfig{})
 	if err != nil {
 		t.Fatalf("expected healthy provider ResolveLLM to succeed, got %v", err)
 	}
@@ -188,9 +155,6 @@ func TestStrictAuthValidation(t *testing.T) {
 				Name: "anthropic",
 				Type: "anthropic",
 				Auth: &AuthConfig{Env: "ANTHROPIC_API_KEY"},
-				Models: []ModelSpec{
-					{ID: "claude-3-7-sonnet", Name: "Claude 3.7 Sonnet"},
-				},
 			},
 		},
 	})
@@ -230,9 +194,6 @@ func TestPoolContentAddressable(t *testing.T) {
 				Name:     "ollama",
 				Type:     "ollama",
 				Endpoint: "http://127.0.0.1:11434",
-				Models: []ModelSpec{
-					{ID: "llama3.2", Name: "Llama 3.2"},
-				},
 			},
 		},
 	}
@@ -258,9 +219,6 @@ func TestPoolContentAddressable(t *testing.T) {
 				Name:     "ollama",
 				Type:     "ollama",
 				Endpoint: "http://127.0.0.1:11435",
-				Models: []ModelSpec{
-					{ID: "llama3.2", Name: "Llama 3.2"},
-				},
 			},
 		},
 	}
@@ -283,35 +241,6 @@ func TestModelResolution(t *testing.T) {
 				Name:     "ollama",
 				Type:     "ollama",
 				Endpoint: "http://127.0.0.1:11434",
-				Models: []ModelSpec{
-					{
-						ID:   "llama3.2",
-						Name: "Llama 3.2",
-						Capabilities: &ModelCapabilities{
-							Completion: new(true),
-							Decision:   new(false),
-							Embedding:  new(false),
-						},
-					},
-					{
-						ID:   "nimble-v3",
-						Name: "Nimble v3",
-						Capabilities: &ModelCapabilities{
-							Completion: new(false),
-							Decision:   new(true),
-							Embedding:  new(false),
-						},
-					},
-					{
-						ID:   "nomic-embed-text",
-						Name: "Nomic Embed",
-						Capabilities: &ModelCapabilities{
-							Completion: new(false),
-							Decision:   new(false),
-							Embedding:  new(true),
-						},
-					},
-				},
 			},
 		},
 	}
@@ -322,8 +251,10 @@ func TestModelResolution(t *testing.T) {
 	}
 	defer gw.Close()
 
-	// 1. Resolve LLM (Completion)
-	llmModel, err := gw.ResolveLLM(ctx, "ollama", "llama3.2")
+	completion := models.Model{ID: "ollama/llama3.2", Capabilities: models.Capabilities{Completion: new(true)}}
+	native := models.Model{ID: "ollama/nimble-v3", Capabilities: models.Capabilities{Completion: new(false), Decision: new(true)}, Pricing: &models.Pricing{Input: 2}}
+	embeddingModel := models.Model{ID: "ollama/nomic-embed-text", Capabilities: models.Capabilities{Embedding: new(true)}, Pricing: &models.Pricing{Input: 3}}
+	llmModel, err := gw.LLM(ctx, completion, llm.ModelConfig{})
 	if err != nil {
 		t.Fatalf("failed to resolve LLM: %v", err)
 	}
@@ -332,16 +263,16 @@ func TestModelResolution(t *testing.T) {
 	}
 
 	// 2. Resolve Native Decision
-	decModel, err := gw.ResolveDecision(ctx, "ollama", "nimble-v3")
+	decModel, err := gw.Decision(ctx, native, llm.ModelConfig{})
 	if err != nil {
 		t.Fatalf("failed to resolve decision model: %v", err)
 	}
-	if decModel.Name() != "nimble-v3" {
-		t.Fatalf("expected resolved decision model 'nimble-v3', got %q", decModel.Name())
+	if decModel.Name() != "nimble-v3" || decModel.Profile() == nil || decModel.Profile().Pricing.Input != 2 {
+		t.Fatalf("unexpected decision model: %q, %+v", decModel.Name(), decModel.Profile())
 	}
 
 	// 3. Resolve Decision on a completion-only model -> Transparent LLM Adapter fallback
-	adaptedDecModel, err := gw.ResolveDecision(ctx, "ollama", "llama3.2")
+	adaptedDecModel, err := gw.Decision(ctx, completion, llm.ModelConfig{})
 	if err != nil {
 		t.Fatalf("failed to resolve adapted decision model on llama3.2: %v", err)
 	}
@@ -350,16 +281,16 @@ func TestModelResolution(t *testing.T) {
 	}
 
 	// 4. Resolve Embedding
-	embModel, err := gw.ResolveEmbedding(ctx, "ollama", "nomic-embed-text")
+	embModel, err := gw.Embedding(ctx, embeddingModel)
 	if err != nil {
 		t.Fatalf("failed to resolve embedding model: %v", err)
 	}
-	if embModel.Name() != "nomic-embed-text" {
-		t.Fatalf("expected resolved embedding model 'nomic-embed-text', got %q", embModel.Name())
+	if embModel.Name() != "nomic-embed-text" || embModel.Profile() == nil || embModel.Profile().Pricing.Input != 3 {
+		t.Fatalf("unexpected embedding model: %q, %+v", embModel.Name(), embModel.Profile())
 	}
 
 	// 5. Embedding resolution on non-embedding model fails
-	_, err = gw.ResolveEmbedding(ctx, "ollama", "llama3.2")
+	_, err = gw.Embedding(ctx, completion)
 	if err == nil {
 		t.Fatalf("expected error when resolving embedding on non-embedding model")
 	}
@@ -381,9 +312,6 @@ func TestGatewayClose(t *testing.T) {
 			{
 				Name: "ollama",
 				Type: "ollama",
-				Models: []ModelSpec{
-					{ID: "llama3.2"},
-				},
 			},
 		},
 	}
@@ -398,7 +326,7 @@ func TestGatewayClose(t *testing.T) {
 	}
 
 	// Post-close resolution should fail
-	if _, err := gw.ResolveLLM(ctx, "ollama", "llama3.2"); !errors.Is(err, ErrGatewayClosed) {
+	if _, err := gw.LLM(ctx, models.Model{ID: "ollama/llama3.2", ProviderType: "ollama"}, llm.ModelConfig{}); !errors.Is(err, ErrGatewayClosed) {
 		t.Fatalf("expected ErrGatewayClosed, got %v", err)
 	}
 }
@@ -461,7 +389,7 @@ func TestOpenAIErrorEnrichment(t *testing.T) {
 		},
 	}
 
-	model, err := gw.ResolveLLM(ctx, "mock", "gpt-6.1-terra")
+	model, err := gw.LLM(ctx, models.Model{ID: "mock/gpt-6.1-terra", ProviderType: "openai"}, llm.ModelConfig{})
 	if err != nil {
 		t.Fatalf("ResolveLLM failed: %v", err)
 	}
@@ -547,7 +475,7 @@ func TestOpenAIResponsesOptionsMiddleware_Defaults(t *testing.T) {
 		},
 	}
 
-	model, err := gw.ResolveLLM(ctx, "openai", "gpt-5.5")
+	model, err := gw.LLM(ctx, models.Model{ID: "openai/gpt-5.5", ProviderType: "openai"}, llm.ModelConfig{})
 	if err != nil {
 		t.Fatalf("ResolveLLM failed: %v", err)
 	}
@@ -600,7 +528,6 @@ func TestOpenAIConfig_ParsingAndOptions(t *testing.T) {
 						"maxNumResults":  20,
 					},
 				},
-				Models: []ModelSpec{{ID: "gpt-5.5"}},
 			},
 		},
 		Env: map[string]string{"OPENAI_API_KEY": "test-key"},
@@ -658,7 +585,6 @@ func TestOpenAIConfig_ParsingAndOptions(t *testing.T) {
 						"max_num_results":  5,
 					},
 				},
-				Models: []ModelSpec{{ID: "gpt-5.5"}},
 			},
 		},
 		Env: map[string]string{"OPENAI_API_KEY": "test-key"},
@@ -721,31 +647,11 @@ func TestGoogleGenAIAndGeminiProviderTypes(t *testing.T) {
 				Name: "my-google-genai",
 				Type: "google-genai",
 				Auth: &AuthConfig{Env: "GOOGLE_API_KEY"},
-				Models: []ModelSpec{
-					{
-						ID:   "gemini-3.1-pro",
-						Name: "Gemini 3.1 Pro",
-						Capabilities: &ModelCapabilities{
-							Completion: new(true),
-							Embedding:  new(true),
-						},
-					},
-				},
 			},
 			{
 				Name: "my-gemini",
 				Type: "gemini",
 				Auth: &AuthConfig{Env: "GEMINI_API_KEY"},
-				Models: []ModelSpec{
-					{
-						ID:   "gemini-3.7-flash",
-						Name: "Gemini 3.7 Flash",
-						Capabilities: &ModelCapabilities{
-							Completion: new(true),
-							Embedding:  new(true),
-						},
-					},
-				},
 			},
 		},
 		Env: map[string]string{
@@ -769,16 +675,6 @@ func TestGatewayModelProfile(t *testing.T) {
 				Name: "test-openai",
 				Type: "openai",
 				Auth: &AuthConfig{Type: AuthTypeAPIKey},
-				Models: []ModelSpec{
-					{
-						ID:   "custom-spec-model",
-						Name: "Custom Spec Model",
-						Limits: ModelLimits{
-							Context: 256000,
-							Output:  32000,
-						},
-					},
-				},
 			},
 		},
 		Env: map[string]string{
@@ -792,130 +688,76 @@ func TestGatewayModelProfile(t *testing.T) {
 	}
 	defer gw.Close()
 
-	// 1. Discovered from ModelSpec in manifest
-	prof, ok := gw.ModelProfile("test-openai", "custom-spec-model")
-	if !ok || prof == nil {
-		t.Fatalf("expected profile for custom-spec-model, got ok=%v, prof=%v", ok, prof)
-	}
-	if prof.Limits.Context != 256000 || prof.Limits.Output != 32000 {
-		t.Errorf("unexpected limits from spec: %+v", prof.Limits)
+	merged := models.Merge("test-openai/custom-spec-model", "openai", &workspace.ProviderModel{ID: "custom-spec-model", Name: "Custom Spec Model", Limits: workspace.ModelLimits{Context: 256000, Output: 32000}}, nil)
+	if merged.Limits.Context != 256000 || merged.Limits.Output != 32000 {
+		t.Errorf("unexpected limits from spec: %+v", merged.Limits)
 	}
 
-	// 2. Discovered from underlying provider catalog (gpt-4o)
-	profCatalog, okCatalog := gw.ModelProfile("test-openai", "gpt-4o")
-	if okCatalog && profCatalog != nil {
-		if profCatalog.Limits.Context <= 0 {
-			t.Errorf("expected positive context limit for gpt-4o, got %d", profCatalog.Limits.Context)
-		}
+	profCatalog, okCatalog := gw.GetProfile("test-openai/gpt-4o")
+	if okCatalog && profCatalog.Limits.Context <= 0 {
+		t.Errorf("expected positive context limit for gpt-4o, got %d", profCatalog.Limits.Context)
 	}
 }
 
-func TestMergeProfile(t *testing.T) {
-	// 1. Both nil returns nil
-	if res := MergeProfile(nil, nil); res != nil {
-		t.Fatalf("expected nil when both spec and base are nil, got %+v", res)
+func TestCatalogLLMUsesIsolatedProfiles(t *testing.T) {
+	ctx := context.Background()
+	gw, err := New(ctx, Config{Providers: []ProviderConfig{{Name: "openai", Type: "openai", Auth: &AuthConfig{Type: AuthTypeAPIKey}}}, Env: map[string]string{"OPENAI_API_KEY": "fake"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer gw.Close()
+	factory := gw.(*gatewayImpl)
+	model := models.Model{ID: "openai/gpt-4o", ProviderType: "openai", Limits: models.Limits{Context: 1234, Output: 123}, Pricing: &models.Pricing{Input: 7}}
+	first, err := factory.LLM(ctx, model, llm.ModelConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	model.Pricing = &models.Pricing{Input: 9}
+	second, err := factory.LLM(ctx, model, llm.ModelConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Profile().Pricing.Input != 7 || second.Profile().Pricing.Input != 9 || first.Profile().Limits.Context != 1234 {
+		t.Fatalf("profiles not isolated: %+v / %+v", first.Profile(), second.Profile())
+	}
+	base, ok := gw.GetProfile("openai/gpt-4o")
+	if !ok || base.Pricing.Input == 7 || base.Pricing.Input == 9 {
+		t.Fatalf("shared provider was modified: %+v", base)
+	}
+}
+
+func TestGatewayBaseProfiles(t *testing.T) {
+	ctx := context.Background()
+	cfg := Config{
+		Providers: []ProviderConfig{
+			{Name: "test-openai", Type: "openai", Auth: &AuthConfig{Type: AuthTypeAPIKey}},
+		},
+		Env: map[string]string{"OPENAI_API_KEY": "fake-openai-key"},
+	}
+	gw, err := New(ctx, cfg)
+	if err != nil {
+		t.Fatalf("failed to initialize gateway: %v", err)
+	}
+	defer gw.Close()
+
+	prof, ok := gw.GetProfile("test-openai/gpt-4o")
+	if !ok {
+		t.Fatal("expected base profile for test-openai/gpt-4o")
+	}
+	if prof.ID == "" {
+		t.Fatalf("expected non-empty profile id, got %+v", prof)
 	}
 
-	// 2. Base only returns clone of base
-	base := &profile.Profile{
-		ID:          "gpt-4o",
-		Name:        "GPT-4o",
-		Description: "Base description",
-		Family:      "gpt-4",
-		Knowledge:   "2024-10",
-		Limits: profile.Limits{
-			Context: 128000,
-			Output:  16384,
-		},
-		Capabilities: profile.Capabilities{
-			Completion: true,
-			ToolCall:   true,
-		},
+	if _, ok := gw.GetProfile("gpt-4o"); ok {
+		t.Fatal("unqualified profile ID should be rejected")
 	}
-	clone := MergeProfile(nil, base)
-	if clone == nil || clone.ID != "gpt-4o" || clone.Limits.Context != 128000 {
-		t.Fatalf("unexpected clone from base: %+v", clone)
+	if _, ok := gw.GetProfile("test-openai/gpt-4o"); !ok {
+		t.Fatal("qualified profile ID should be routed")
 	}
 
-	// 3. Spec only creates profile with limits and explicit capabilities
-	completionTrue := true
-	specOnly := &ModelSpec{
-		ID:   "spec-model",
-		Name: "Spec Model",
-		Limits: ModelLimits{
-			Context:    64000,
-			Output:     8192,
-			Dimensions: 1536,
-		},
-		Capabilities: &ModelCapabilities{
-			Completion: &completionTrue,
-		},
-	}
-	fromSpec := MergeProfile(specOnly, nil)
-	if fromSpec == nil || fromSpec.ID != "spec-model" || fromSpec.Limits.Context != 64000 || fromSpec.Limits.Dimensions != 1536 {
-		t.Fatalf("unexpected profile from spec: %+v", fromSpec)
-	}
-	if !fromSpec.Capabilities.Completion {
-		t.Errorf("expected Completion capability to be true when explicitly configured")
-	}
-
-	// Spec only without capabilities leaves them false/zero-valued
-	specNoCaps := &ModelSpec{ID: "no-caps"}
-	fromNoCaps := MergeProfile(specNoCaps, nil)
-	if fromNoCaps == nil || fromNoCaps.Capabilities.Completion {
-		t.Errorf("expected Completion to be false when omitted on spec-only profile")
-	}
-
-	// 4. Base + Spec overrides
-	completionFalse := false
-	decisionTrue := true
-	toolsFalse := false
-	specOverride := &ModelSpec{
-		Name: "Overridden Name",
-		Limits: ModelLimits{
-			Context:    200000,
-			Output:     32000,
-			Dimensions: 768,
-		},
-		Capabilities: &ModelCapabilities{
-			Completion: &completionFalse,
-			Decision:   &decisionTrue,
-			Tools:      &toolsFalse,
-		},
-	}
-
-	merged := MergeProfile(specOverride, base)
-	if merged == nil {
-		t.Fatalf("expected non-nil merged profile")
-	}
-	// Overridden fields
-	if merged.Name != "Overridden Name" {
-		t.Errorf("Name = %q, want 'Overridden Name'", merged.Name)
-	}
-	if merged.Limits.Context != 200000 || merged.Limits.Output != 32000 || merged.Limits.Dimensions != 768 {
-		t.Errorf("Limits = %+v, want Context=200000, Output=32000, Dimensions=768", merged.Limits)
-	}
-	if merged.Capabilities.Completion {
-		t.Errorf("expected Completion to be overridden to false")
-	}
-	if !merged.Capabilities.Decision {
-		t.Errorf("expected Decision to be overridden to true")
-	}
-	if merged.Capabilities.ToolCall {
-		t.Errorf("expected ToolCall to be overridden to false")
-	}
-	// Preserved base fields
-	if merged.ID != "gpt-4o" {
-		t.Errorf("ID = %q, want 'gpt-4o'", merged.ID)
-	}
-	if merged.Description != "Base description" {
-		t.Errorf("Description = %q, want 'Base description'", merged.Description)
-	}
-	if merged.Family != "gpt-4" {
-		t.Errorf("Family = %q, want 'gpt-4'", merged.Family)
-	}
-	if merged.Knowledge != "2024-10" {
-		t.Errorf("Knowledge = %q, want '2024-10'", merged.Knowledge)
+	// Unknown provider/model returns false.
+	if _, ok := gw.GetProfile("nope/model"); ok {
+		t.Fatal("GetProfile should fail for unknown provider")
 	}
 }
 
@@ -927,16 +769,6 @@ func TestGatewayModelProfile_MergedOverrides(t *testing.T) {
 				Name: "test-openai",
 				Type: "openai",
 				Auth: &AuthConfig{Type: AuthTypeAPIKey},
-				Models: []ModelSpec{
-					{
-						ID:   "gpt-4o",
-						Name: "Custom GPT-4o Override",
-						Limits: ModelLimits{
-							Context: 300000,
-							Output:  40000,
-						},
-					},
-				},
 			},
 		},
 		Env: map[string]string{
@@ -950,19 +782,19 @@ func TestGatewayModelProfile_MergedOverrides(t *testing.T) {
 	}
 	defer gw.Close()
 
-	prof, ok := gw.ModelProfile("test-openai", "gpt-4o")
-	if !ok || prof == nil {
-		t.Fatalf("expected profile for test-openai/gpt-4o, got ok=%v, prof=%v", ok, prof)
+	base, ok := gw.GetProfile("test-openai/gpt-4o")
+	if !ok {
+		t.Fatal("expected built-in profile")
 	}
+	prof := models.Merge("test-openai/gpt-4o", "openai", &workspace.ProviderModel{ID: "gpt-4o", Name: "Custom GPT-4o Override", Limits: workspace.ModelLimits{Context: 300000, Output: 40000}}, &base)
 	if prof.Name != "Custom GPT-4o Override" {
 		t.Errorf("Name = %q, want 'Custom GPT-4o Override'", prof.Name)
 	}
 	if prof.Limits.Context != 300000 || prof.Limits.Output != 40000 {
 		t.Errorf("unexpected limits: %+v, want Context=300000, Output=40000", prof.Limits)
 	}
-	// Base profile description / family / modalities should still be present from catalog
-	if prof.Family == "" && prof.Description == "" {
-		t.Errorf("expected base catalog metadata to be preserved, got family=%q description=%q", prof.Family, prof.Description)
+	if prof.Capabilities.Tools == nil || *prof.Capabilities.Tools != base.Capabilities.ToolCall {
+		t.Fatalf("built-in capability lost: %+v", prof.Capabilities)
 	}
 }
 
@@ -975,17 +807,6 @@ func TestModelResolutionWithSlashInModelID(t *testing.T) {
 				Name:     "mlx-serve",
 				Type:     "ollama",
 				Endpoint: "http://localhost:11234",
-				Models: []ModelSpec{
-					{
-						ID:    "ddalcu/Qwen3.8-27B-MLX-Serve-4bit",
-						Name:  "qwen3.8-27b-mlx-serve-4bit",
-						Label: "Qwen 3.8 (MLX Serve)",
-						Limits: ModelLimits{
-							Context: 262144,
-							Output:  32768,
-						},
-					},
-				},
 			},
 		},
 	}
@@ -996,22 +817,19 @@ func TestModelResolutionWithSlashInModelID(t *testing.T) {
 	}
 	defer gw.Close()
 
-	m, err := gw.ResolveLLM(ctx, "mlx-serve", "ddalcu/Qwen3.8-27B-MLX-Serve-4bit")
+	effective := models.Merge("mlx-serve/ddalcu/Qwen3.8-27B-MLX-Serve-4bit", "ollama", &workspace.ProviderModel{ID: "ddalcu/Qwen3.8-27B-MLX-Serve-4bit", Limits: workspace.ModelLimits{Context: 262144, Output: 32768}}, nil)
+	m, err := gw.LLM(ctx, effective, llm.ModelConfig{})
 	if err != nil {
-		t.Fatalf("ResolveLLM unexpected error: %v", err)
+		t.Fatalf("LLM unexpected error: %v", err)
 	}
 	if m.Name() != "ddalcu/Qwen3.8-27B-MLX-Serve-4bit" {
-		t.Errorf("ResolveLLM.Name() = %q, want %q", m.Name(), "ddalcu/Qwen3.8-27B-MLX-Serve-4bit")
+		t.Errorf("LLM.Name() = %q, want %q", m.Name(), "ddalcu/Qwen3.8-27B-MLX-Serve-4bit")
 	}
-	prof, ok := gw.ModelProfile("mlx-serve", "ddalcu/Qwen3.8-27B-MLX-Serve-4bit")
-	if !ok || prof == nil {
-		t.Fatalf("ModelProfile returned false/nil")
-	}
-	if prof.Limits.Context != 262144 || prof.Limits.Output != 32768 {
-		t.Errorf("ModelProfile limits = %+v, want 262144/32768", prof.Limits)
+	if prof := m.Profile(); prof == nil || prof.Limits.Context != 262144 || prof.Limits.Output != 32768 {
+		t.Errorf("model profile = %+v, want limits 262144/32768", prof)
 	}
 
-	if _, err := gw.ResolveLLM(ctx, "unknown-prov", "some-model"); !errors.Is(err, ErrProviderNotFound) {
+	if _, err := gw.LLM(ctx, models.Model{ID: "unknown-prov/some-model"}, llm.ModelConfig{}); !errors.Is(err, ErrProviderNotFound) {
 		t.Fatalf("expected ErrProviderNotFound for unknown provider, got: %v", err)
 	}
 }

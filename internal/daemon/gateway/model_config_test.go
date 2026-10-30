@@ -12,6 +12,8 @@ import (
 	"github.com/masterkeysrd/loom/profile"
 	"github.com/masterkeysrd/loom/tool"
 	"github.com/masterkeysrd/tasksmith/api"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/models"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/workspace"
 )
 
 func TestEffectiveTemperatureConfig(t *testing.T) {
@@ -32,27 +34,27 @@ func TestEffectiveTemperatureConfig(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			p := &thinkingTestProvider{modelProfile: tc.base}
-			spec := ModelSpec{ID: "model", Limits: ModelLimits{Context: 4000, Output: 1000}, Capabilities: &ModelCapabilities{Temperature: tc.override}}
-			g := &gatewayImpl{providers: map[string]*providerInstance{"provider": {cfg: ProviderConfig{Name: "provider", Type: "ollama"}, llmProv: p, models: map[string]ModelSpec{"model": spec}}}}
+			spec := &workspace.ProviderModel{ID: "model", Limits: workspace.ModelLimits{Context: 4000, Output: 1000}, Capabilities: &workspace.ModelCapabilities{Completion: new(true), Temperature: tc.override}}
+			effective := models.Merge("provider/model", "ollama", spec, tc.base)
+			g := &gatewayImpl{providers: map[string]*providerInstance{"provider": {cfg: ProviderConfig{Name: "provider", Type: "ollama"}, llmProv: p}}}
 			zero := float32(0)
-			requested := &llm.ModelConfig{Temperature: &zero, Thinking: &llm.ThinkingConfig{Enabled: true, Effort: "high"}}
-			resolved, err := g.ResolveConfig("provider", "model", ModelSettings{Config: requested})
+			resolved, diagnostics, err := models.Configure(effective, models.Preferences{Temperature: &zero})
 			if err != nil {
 				t.Fatal(err)
 			}
-			if (resolved.Config.Temperature != nil) != tc.wantTemp {
-				t.Fatalf("temperature: %+v", resolved.Config.Temperature)
+			if (resolved.Temperature != nil) != tc.wantTemp {
+				t.Fatalf("temperature: %+v", resolved.Temperature)
 			}
-			if requested.Temperature == nil || *requested.Temperature != 0 {
+			if zero != 0 {
 				t.Fatal("request mutated")
 			}
-			if resolved.Config.MaxTokens != 1000 || resolved.Config.ContextWindow != 4000 || resolved.Config.Thinking == nil {
-				t.Fatalf("config: %+v", resolved.Config)
+			if resolved.MaxTokens != 1000 || resolved.ContextWindow != 4000 {
+				t.Fatalf("config: %+v", resolved)
 			}
-			if tc.warning == "" && len(resolved.Diagnostics) != 0 || tc.warning != "" && (len(resolved.Diagnostics) != 1 || resolved.Diagnostics[0].Code != tc.warning) {
-				t.Fatalf("diagnostics: %+v", resolved.Diagnostics)
+			if tc.warning == "" && len(diagnostics) != 0 || tc.warning != "" && (len(diagnostics) != 1 || diagnostics[0].Code != tc.warning) {
+				t.Fatalf("diagnostics: %+v", diagnostics)
 			}
-			model, err := g.ResolveLLM(context.Background(), "provider", "model", WithLLMConfig(requested))
+			model, err := g.LLM(context.Background(), effective, resolved)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -71,43 +73,27 @@ func TestEffectiveTemperatureConfig(t *testing.T) {
 
 func TestEffectiveProfileAndSettings(t *testing.T) {
 	base := &profile.Profile{Limits: profile.Limits{Context: 100, Output: 10, Dimensions: 1536}, Capabilities: profile.Capabilities{Completion: true, Decision: true, Embedding: true, Attachment: true, ToolCall: true, Temperature: true, ReasoningOptions: []profile.ReasoningOption{{Type: "effort", Values: []string{"low"}}}}, Modalities: profile.Modalities{Inputs: []profile.Modality{"text"}, Outputs: []profile.Modality{"text"}}}
-	if p := MergeProfile(&ModelSpec{Capabilities: &ModelCapabilities{Dimensions: []int{384}, Modalities: &profile.Modalities{Inputs: []profile.Modality{}}}}, base); p.Limits.Dimensions != 384 || p.Modalities.Inputs == nil || len(p.Modalities.Inputs) != 0 {
-		t.Fatalf("explicit capability overrides: %+v", p)
-	}
-	copy := MergeProfile(nil, base)
-	copy.Modalities.Inputs[0] = "audio"
-	copy.Capabilities.ReasoningOptions[0].Values[0] = "changed"
-	if base.Modalities.Inputs[0] != "text" || base.Capabilities.ReasoningOptions[0].Values[0] != "low" {
-		t.Fatal("merged profile mutated provider metadata")
-	}
-	caps := &ModelCapabilities{Completion: new(false), Decision: new(false), Embedding: new(false), Attachment: new(false), Tools: new(false), Temperature: new(false), StructuredOutput: new(true), Dimensions: []int{384, 768}, Thinking: []profile.ReasoningOption{{Type: "effort", Values: []string{"high"}}}, Modalities: &profile.Modalities{Inputs: []profile.Modality{"image"}}}
-	spec := ModelSpec{ID: "model", Limits: ModelLimits{Context: 200, Output: 20, Dimensions: 384}, Capabilities: caps}
-	inst := &providerInstance{cfg: ProviderConfig{Name: "local", Type: "ollama"}, llmProv: &thinkingTestProvider{modelProfile: base}, models: map[string]ModelSpec{"model": spec}}
-	g := &gatewayImpl{providers: map[string]*providerInstance{"local": inst}}
-	value := float32(0)
-	settings := ModelSettings{Config: &llm.ModelConfig{Temperature: &value}, AgentThinking: &api.ThinkingSetting{Type: "effort", Effort: "low"}, SessionThinking: &api.ThinkingSetting{Type: "effort", Effort: "high"}}
-	resolved, err := g.ResolveConfig("", "local/model", settings)
-	if err != nil {
-		t.Fatal(err)
-	}
-	p := resolved.Profile.Profile
+	caps := &workspace.ModelCapabilities{Completion: new(false), Decision: new(false), Embedding: new(false), Attachment: new(false), Tools: new(false), Temperature: new(false), StructuredOutput: new(true), Dimensions: []int{384, 768}, Thinking: []workspace.ThinkingCapability{{Type: "effort", AllowedEfforts: []string{"high"}}}, Modalities: &workspace.ModelModalities{Input: []string{"image"}}}
+	spec := &workspace.ProviderModel{ID: "model", Limits: workspace.ModelLimits{Context: 200, Output: 20, Dimensions: 384}, Capabilities: caps}
+	model := models.Merge("local/model", "ollama", spec, base)
+	p := model.Profile()
 	if p.Capabilities.Completion || p.Capabilities.Decision || p.Capabilities.Embedding || p.Capabilities.Attachment || p.Capabilities.ToolCall || p.Capabilities.Temperature || p.Limits.Context != 200 || p.Limits.Output != 20 || p.Limits.Dimensions != 384 || len(p.Modalities.Inputs) != 1 || p.Modalities.Inputs[0] != "image" || len(p.Modalities.Outputs) != 1 || p.Modalities.Outputs[0] != "text" {
 		t.Fatalf("effective profile: %+v", p)
 	}
-	if resolved.Profile.StructuredOutput == nil || !*resolved.Profile.StructuredOutput || len(resolved.Profile.Dimensions) != 2 || resolved.Config.Thinking == nil || resolved.Config.Thinking.Effort != "high" || resolved.Config.Temperature != nil {
-		t.Fatalf("effective settings: %+v", resolved)
+	value := float32(0)
+	settings := models.Preferences{Temperature: &value, AgentThinking: &api.ThinkingSetting{Type: "effort", Effort: "low"}, SessionThinking: &api.ThinkingSetting{Type: "effort", Effort: "high"}}
+	resolved, diagnostics, err := models.Configure(model, settings)
+	if err != nil || model.Capabilities.StructuredOutput == nil || !*model.Capabilities.StructuredOutput || len(model.Capabilities.Dimensions) != 2 || resolved.Thinking == nil || resolved.Thinking.Effort != "high" || resolved.Temperature != nil {
+		t.Fatalf("effective settings: %+v, %+v, %v", resolved, diagnostics, err)
 	}
 	settings.SessionThinking = nil
-	resolved, err = g.ResolveConfig("local", "model", settings)
-	if err != nil || resolved.Config.Thinking != nil || len(resolved.Diagnostics) != 2 || resolved.Diagnostics[0].Code != "thinking_unsupported" {
-		t.Fatalf("unsupported agent defaults: %+v, %v", resolved, err)
+	resolved, diagnostics, err = models.Configure(model, settings)
+	if err != nil || resolved.Thinking != nil || len(diagnostics) != 2 || diagnostics[0].Code != "thinking_unsupported" {
+		t.Fatalf("unsupported agent defaults: %+v, %+v, %v", resolved, diagnostics, err)
 	}
 	settings.SessionThinking = &api.ThinkingSetting{Type: "effort", Effort: "low"}
-	if _, err := g.ResolveConfig("local", "model", settings); err == nil {
+	if _, _, err := models.Configure(model, settings); err == nil {
 		t.Fatal("unsupported explicit thinking accepted")
-	}
-	if _, err := g.ResolveConfig("", "unknown/model", settings); err == nil {
-		t.Fatal("unregistered provider accepted")
 	}
 }
 
@@ -128,9 +114,10 @@ func TestRequestCapabilities(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			p := &thinkingTestProvider{modelProfile: tc.base}
-			spec := ModelSpec{ID: "model", Capabilities: &ModelCapabilities{Tools: tc.override}}
-			g := &gatewayImpl{providers: map[string]*providerInstance{"provider": {cfg: ProviderConfig{Name: "provider", Type: "ollama"}, llmProv: p, models: map[string]ModelSpec{"model": spec}}}}
-			model, err := g.ResolveLLM(context.Background(), "provider", "model")
+			spec := &workspace.ProviderModel{ID: "model", Capabilities: &workspace.ModelCapabilities{Completion: new(true), Tools: tc.override}}
+			effective := models.Merge("provider/model", "ollama", spec, tc.base)
+			g := &gatewayImpl{providers: map[string]*providerInstance{"provider": {cfg: ProviderConfig{Name: "provider", Type: "ollama"}, llmProv: p}}}
+			model, err := g.LLM(context.Background(), effective, llm.ModelConfig{})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -162,32 +149,32 @@ func TestRequestContentValidation(t *testing.T) {
 	history := []message.Message{&message.Assistant{Content: message.Content{&message.ToolCall{ID: "call", Name: "search"}}}, &message.Tool{ToolCallID: "call"}}
 	for _, tc := range []struct {
 		name string
-		prof EffectiveProfile
+		prof models.Model
 		req  *llm.Request
 		want string
 	}{
-		{"text without tools", EffectiveProfile{ToolsKnown: true, Profile: &profile.Profile{}}, &llm.Request{Messages: []message.Message{text}}, ""},
-		{"text unsupported", EffectiveProfile{Profile: &profile.Profile{Modalities: profile.Modalities{Inputs: []profile.Modality{profile.ModalityImage}}}}, &llm.Request{Messages: []message.Message{text}}, "text input"},
-		{"tool history", EffectiveProfile{ToolsKnown: true, Profile: &profile.Profile{}}, &llm.Request{Messages: history}, "tool history"},
-		{"unknown history", EffectiveProfile{}, &llm.Request{Messages: history}, ""},
-		{"image supported", EffectiveProfile{ProviderType: "ollama", Profile: &profile.Profile{Modalities: profile.Modalities{Inputs: []profile.Modality{profile.ModalityImage}}}}, &llm.Request{Messages: []message.Message{image}}, ""},
-		{"image unsupported", EffectiveProfile{ProviderType: "ollama", Profile: &profile.Profile{Modalities: profile.Modalities{Inputs: []profile.Modality{profile.ModalityText}}}}, &llm.Request{Messages: []message.Message{text, image}}, "image input"},
-		{"unknown modality", EffectiveProfile{ProviderType: "ollama", Profile: &profile.Profile{}}, &llm.Request{Messages: []message.Message{image}}, ""},
-		{"empty modalities", EffectiveProfile{ProviderType: "ollama", Profile: &profile.Profile{Modalities: profile.Modalities{Inputs: []profile.Modality{}}}}, &llm.Request{Messages: []message.Message{image}}, "image input"},
-		{"ollama image url", EffectiveProfile{ProviderType: "ollama"}, &llm.Request{Messages: []message.Message{urlImage}}, "cannot safely send"},
-		{"openai audio", EffectiveProfile{ProviderType: "openai"}, &llm.Request{Messages: []message.Message{audio}}, "cannot safely send"},
-		{"genai audio", EffectiveProfile{ProviderType: "genai"}, &llm.Request{Messages: []message.Message{audio}}, ""},
-		{"assistant image", EffectiveProfile{ProviderType: "genai"}, &llm.Request{Messages: []message.Message{&message.Assistant{Content: image.Content}}}, "cannot safely send"},
-		{"unknown block", EffectiveProfile{}, &llm.Request{Messages: []message.Message{message.NewUser(&message.ToolCallChunk{})}}, "cannot safely send"},
-		{"user tool call", EffectiveProfile{}, &llm.Request{Messages: []message.Message{message.NewUser(&message.ToolCall{})}}, "cannot safely send"},
-		{"unsupported schema", EffectiveProfile{StructuredOutput: new(false)}, &llm.Request{ResponseSchema: &jsonschema.Schema{}}, "structured output"},
-		{"anthropic schema supported", EffectiveProfile{ProviderType: "anthropic", StructuredOutput: new(true)}, &llm.Request{ResponseSchema: &jsonschema.Schema{}}, ""},
-		{"anthropic schema unknown", EffectiveProfile{ProviderType: "anthropic"}, &llm.Request{ResponseSchema: &jsonschema.Schema{}}, ""},
-		{"anthropic json", EffectiveProfile{ProviderType: "anthropic"}, &llm.Request{ResponseFormat: "json_object"}, ""},
-		{"openai schema and json", EffectiveProfile{ProviderType: "openai", StructuredOutput: new(true)}, &llm.Request{ResponseSchema: &jsonschema.Schema{}, ResponseFormat: "json_object"}, ""},
-		{"anthropic schema unsupported", EffectiveProfile{ProviderType: "anthropic", StructuredOutput: new(false)}, &llm.Request{ResponseSchema: &jsonschema.Schema{}}, "structured output"},
-		{"openai schema unsupported", EffectiveProfile{ProviderType: "openai", StructuredOutput: new(false)}, &llm.Request{ResponseSchema: &jsonschema.Schema{}}, "structured output"},
-		{"unknown schema", EffectiveProfile{}, &llm.Request{ResponseSchema: &jsonschema.Schema{}}, ""},
+		{"text without tools", models.Model{Capabilities: models.Capabilities{Tools: new(false)}}, &llm.Request{Messages: []message.Message{text}}, ""},
+		{"text unsupported", models.Model{Modalities: models.Modalities{Input: []string{"image"}}}, &llm.Request{Messages: []message.Message{text}}, "text input"},
+		{"tool history", models.Model{Capabilities: models.Capabilities{Tools: new(false)}}, &llm.Request{Messages: history}, "tool history"},
+		{"unknown history", models.Model{}, &llm.Request{Messages: history}, ""},
+		{"image supported", models.Model{ProviderType: "ollama", Modalities: models.Modalities{Input: []string{"image"}}}, &llm.Request{Messages: []message.Message{image}}, ""},
+		{"image unsupported", models.Model{ProviderType: "ollama", Modalities: models.Modalities{Input: []string{"text"}}}, &llm.Request{Messages: []message.Message{text, image}}, "image input"},
+		{"unknown modality", models.Model{ProviderType: "ollama"}, &llm.Request{Messages: []message.Message{image}}, ""},
+		{"empty modalities", models.Model{ProviderType: "ollama", Modalities: models.Modalities{Input: []string{}}}, &llm.Request{Messages: []message.Message{image}}, "image input"},
+		{"ollama image url", models.Model{ProviderType: "ollama"}, &llm.Request{Messages: []message.Message{urlImage}}, "cannot safely send"},
+		{"openai audio", models.Model{ProviderType: "openai"}, &llm.Request{Messages: []message.Message{audio}}, "cannot safely send"},
+		{"genai audio", models.Model{ProviderType: "genai"}, &llm.Request{Messages: []message.Message{audio}}, ""},
+		{"assistant image", models.Model{ProviderType: "genai"}, &llm.Request{Messages: []message.Message{&message.Assistant{Content: image.Content}}}, "cannot safely send"},
+		{"unknown block", models.Model{}, &llm.Request{Messages: []message.Message{message.NewUser(&message.ToolCallChunk{})}}, "cannot safely send"},
+		{"user tool call", models.Model{}, &llm.Request{Messages: []message.Message{message.NewUser(&message.ToolCall{})}}, "cannot safely send"},
+		{"unsupported schema", models.Model{Capabilities: models.Capabilities{StructuredOutput: new(false)}}, &llm.Request{ResponseSchema: &jsonschema.Schema{}}, "structured output"},
+		{"anthropic schema supported", models.Model{ProviderType: "anthropic", Capabilities: models.Capabilities{StructuredOutput: new(true)}}, &llm.Request{ResponseSchema: &jsonschema.Schema{}}, ""},
+		{"anthropic schema unknown", models.Model{ProviderType: "anthropic"}, &llm.Request{ResponseSchema: &jsonschema.Schema{}}, ""},
+		{"anthropic json", models.Model{ProviderType: "anthropic"}, &llm.Request{ResponseFormat: "json_object"}, ""},
+		{"openai schema and json", models.Model{ProviderType: "openai", Capabilities: models.Capabilities{StructuredOutput: new(true)}}, &llm.Request{ResponseSchema: &jsonschema.Schema{}, ResponseFormat: "json_object"}, ""},
+		{"anthropic schema unsupported", models.Model{ProviderType: "anthropic", Capabilities: models.Capabilities{StructuredOutput: new(false)}}, &llm.Request{ResponseSchema: &jsonschema.Schema{}}, "structured output"},
+		{"openai schema unsupported", models.Model{ProviderType: "openai", Capabilities: models.Capabilities{StructuredOutput: new(false)}}, &llm.Request{ResponseSchema: &jsonschema.Schema{}}, "structured output"},
+		{"unknown schema", models.Model{}, &llm.Request{ResponseSchema: &jsonschema.Schema{}}, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			tc.req.Model = "model"
@@ -201,14 +188,9 @@ func TestRequestContentValidation(t *testing.T) {
 
 func TestAnthropicThinkingTemperatureConflict(t *testing.T) {
 	v := float32(0.5)
-	p := EffectiveProfile{ProviderType: "anthropic", Profile: &profile.Profile{Capabilities: profile.Capabilities{Temperature: true}}, TemperatureKnown: true}
-	for _, thinking := range []*llm.ThinkingConfig{{Budget: 1024}, {Adaptive: true}} {
-		r, err := ResolveSettings(p, ModelSettings{Config: &llm.ModelConfig{Temperature: &v, Thinking: thinking}})
-		if err != nil {
-			t.Fatal(err)
-		}
-		if r.Config.Temperature != nil || len(r.Diagnostics) != 1 || r.Diagnostics[0].Code != "temperature_thinking_conflict" {
-			t.Fatalf("result: %+v", r)
-		}
+	m := models.Model{ProviderType: "anthropic", Capabilities: models.Capabilities{Temperature: new(true), Thinking: []models.ThinkingOption{{Type: "budget_tokens", Min: 1, Max: 4096}}}}
+	cfg, diagnostics, err := models.Configure(m, models.Preferences{Temperature: &v, SessionThinking: &api.ThinkingSetting{Type: "budget", Budget: 1024}})
+	if err != nil || cfg.Temperature != nil || len(diagnostics) != 1 || diagnostics[0].Code != "temperature_thinking_conflict" {
+		t.Fatalf("result: %+v, %+v, %v", cfg, diagnostics, err)
 	}
 }

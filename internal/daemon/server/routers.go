@@ -365,6 +365,7 @@ func (s *sessionRouter) Routes() []Route {
 func (s *sessionRouter) initRoutes() {
 	s.routes = []Route{
 		PostRoute("/v1/sessions", s.postSessionCreate),
+		PostRoute("/v1/sessions/preview", s.postSessionPreview),
 		GetRoute("/v1/sessions", s.getSessionsList),
 		GetRoute("/v1/sessions/{id}", s.getSession),
 		PatchRoute("/v1/sessions/{id}", s.patchSession),
@@ -397,6 +398,20 @@ func (s *sessionRouter) postSessionCreate(w http.ResponseWriter, r *http.Request
 		status = http.StatusCreated
 	}
 	WriteJSON(w, status, sess)
+}
+
+func (s *sessionRouter) postSessionPreview(w http.ResponseWriter, r *http.Request) {
+	req, err := DecodeOptionalJSON[api.PreviewSessionRequest](r)
+	if err != nil {
+		WriteBadRequest(w, err.Error())
+		return
+	}
+	preview, err := s.b.PreviewSession(r.Context(), RequestWorkspace(r), req)
+	if err != nil {
+		WriteError(w, err)
+		return
+	}
+	WriteJSON(w, http.StatusOK, preview)
 }
 
 func (s *sessionRouter) getSessionsList(w http.ResponseWriter, r *http.Request) {

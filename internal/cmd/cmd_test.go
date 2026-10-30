@@ -27,6 +27,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
 	"github.com/masterkeysrd/tasksmith/internal/daemon"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/gateway"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/models"
 	"github.com/spf13/cobra"
 )
 
@@ -70,46 +71,35 @@ type fakeGateway struct {
 	provider *fakeProvider
 }
 
-func (g *fakeGateway) ResolveLLM(ctx context.Context, provider, modelID string, _ ...gateway.LLMOption) (*llm.Model, error) {
+func (g *fakeGateway) LLM(ctx context.Context, model models.Model, cfg llm.ModelConfig) (*llm.Model, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	modelName := strings.TrimSpace(modelID)
-	if provider = strings.TrimSpace(provider); provider != "" && modelName != "" {
-		modelName = provider + "/" + modelName
-	}
-	if modelName == "" {
-		modelName = "fake-default-model"
-	}
-	return llm.NewModel(g.provider, modelName, nil)
+	return llm.NewModel(g.provider, string(model.ID), &cfg)
 }
 
-func (g *fakeGateway) ResolveDecision(context.Context, string, string, ...gateway.DecisionOption) (*decision.Model, error) {
+func (g *fakeGateway) Decision(context.Context, models.Model, llm.ModelConfig) (*decision.Model, error) {
 	return nil, gateway.ErrUnsupportedCapability
 }
 
-func (g *fakeGateway) ResolveEmbedding(context.Context, string, string, ...gateway.EmbeddingOption) (*embedding.Model, error) {
+func (g *fakeGateway) Embedding(context.Context, models.Model) (*embedding.Model, error) {
 	return nil, gateway.ErrUnsupportedCapability
 }
 
 func (g *fakeGateway) ListProviders() []gateway.ProviderInfo { return nil }
-func (g *fakeGateway) ModelProfile(provider, modelID string) (*profile.Profile, bool) {
+func (g *fakeGateway) GetProfile(qualifiedID string) (profile.Profile, bool) {
+	id := models.ID(qualifiedID)
 	if g.provider != nil {
-		if prof, found := g.provider.GetProfile(modelID); found {
-			return &prof, true
+		if prof, found := g.provider.GetProfile(id.Name()); found {
+			return prof, true
 		}
-		if provider != "" {
-			if prof, found := g.provider.GetProfile(provider + "/" + modelID); found {
-				return &prof, true
-			}
+		if prof, found := g.provider.GetProfile(string(id)); found {
+			return prof, true
 		}
 	}
-	return nil, false
+	return profile.Profile{}, false
 }
-func (g *fakeGateway) ResolveConfig(provider, modelID string, settings gateway.ModelSettings) (gateway.ResolvedConfig, error) {
-	p, ok := g.ModelProfile(provider, modelID)
-	return gateway.ResolveSettings(gateway.EffectiveProfile{Profile: p, TemperatureKnown: ok}, settings)
-}
+
 func (g *fakeGateway) Close() error { return nil }
 
 type fakeGatewayPool struct {

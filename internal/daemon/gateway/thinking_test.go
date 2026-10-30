@@ -8,6 +8,8 @@ import (
 	"github.com/masterkeysrd/loom/llm"
 	"github.com/masterkeysrd/loom/message"
 	"github.com/masterkeysrd/loom/profile"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/models"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/workspace"
 )
 
 type thinkingTestProvider struct {
@@ -42,17 +44,25 @@ func TestThinkingCapabilitiesPreserved(t *testing.T) {
 		for _, source := range []string{"profile", "workspace"} {
 			t.Run(providerType+"/"+source, func(t *testing.T) {
 				provider := &thinkingTestProvider{}
-				spec := ModelSpec{ID: "model"}
+				var manifest *workspace.ProviderModel
 				if source == "profile" {
 					provider.modelProfile = &profile.Profile{Capabilities: profile.Capabilities{ReasoningOptions: options}}
 				} else {
-					spec.Capabilities = &ModelCapabilities{Thinking: options}
+					manifest = &workspace.ProviderModel{ID: "model", Capabilities: &workspace.ModelCapabilities{Thinking: []workspace.ThinkingCapability{{Type: "effort", AllowedEfforts: []string{"minimal", "high"}, Default: "minimal"}, {Type: "budget_tokens", MaxBudgetTokens: 1000}, {Type: "toggle", Default: false}}}}
 				}
-				inst := &providerInstance{cfg: ProviderConfig{Name: "test", Type: providerType}, llmProv: provider, models: map[string]ModelSpec{"model": spec}}
+				inst := &providerInstance{cfg: ProviderConfig{Name: "test", Type: providerType}, llmProv: provider}
 				gw := &gatewayImpl{providers: map[string]*providerInstance{"test": inst}}
-				got, ok := gw.ModelProfile("test", "model")
-				if !ok || !reflect.DeepEqual(got.Capabilities.ReasoningOptions, options) {
+				base, found := gw.GetProfile("test/model")
+				var baseProfile *profile.Profile
+				if found {
+					baseProfile = &base
+				}
+				got := models.Merge("test/model", providerType, manifest, baseProfile).Profile().Capabilities.ReasoningOptions
+				if source == "profile" && !reflect.DeepEqual(got, options) {
 					t.Fatalf("thinking options changed: %+v", got)
+				}
+				if source == "workspace" && (len(got) != 3 || !reflect.DeepEqual(got[0].Values, options[0].Values) || got[1].Max != 1000) {
+					t.Fatalf("workspace thinking options changed: %+v", got)
 				}
 			})
 		}
@@ -60,16 +70,16 @@ func TestThinkingCapabilitiesPreserved(t *testing.T) {
 }
 
 func TestThinkingProfileAndRequest(t *testing.T) {
-	base := &profile.Profile{Capabilities: profile.Capabilities{ReasoningOptions: []profile.ReasoningOption{{Type: "effort", Values: []string{"low", "high"}}}}}
-	spec := ModelSpec{ID: "model", Capabilities: &ModelCapabilities{Thinking: []profile.ReasoningOption{{Type: "effort", Values: []string{"minimal"}, Default: "minimal"}}}}
-	merged := MergeProfile(&spec, base)
-	if got := merged.Capabilities.ReasoningOptions; len(got) != 1 || len(got[0].Values) != 1 || got[0].Values[0] != "minimal" {
+	base := &profile.Profile{Capabilities: profile.Capabilities{Completion: true, ReasoningOptions: []profile.ReasoningOption{{Type: "effort", Values: []string{"low", "high"}}}}}
+	spec := &workspace.ProviderModel{ID: "model", Capabilities: &workspace.ModelCapabilities{Thinking: []workspace.ThinkingCapability{{Type: "effort", AllowedEfforts: []string{"minimal"}, Default: "minimal"}}}}
+	merged := models.Merge("test/model", "ollama", spec, base)
+	if got := merged.Capabilities.Thinking; len(got) != 1 || len(got[0].Values) != 1 || got[0].Values[0] != "minimal" {
 		t.Fatalf("workspace thinking override: %+v", got)
 	}
 	provider := &thinkingTestProvider{}
-	inst := &providerInstance{cfg: ProviderConfig{Name: "test", Type: "ollama", Models: []ModelSpec{spec}}, llmProv: provider, models: map[string]ModelSpec{"model": spec}}
+	inst := &providerInstance{cfg: ProviderConfig{Name: "test", Type: "ollama"}, llmProv: provider}
 	gw := &gatewayImpl{providers: map[string]*providerInstance{"test": inst}}
-	model, err := gw.ResolveLLM(context.Background(), "test", "model", WithLLMConfig(&llm.ModelConfig{Thinking: &llm.ThinkingConfig{Enabled: true, Effort: "minimal"}}))
+	model, err := gw.LLM(context.Background(), merged, llm.ModelConfig{Thinking: &llm.ThinkingConfig{Enabled: true, Effort: "minimal"}})
 	if err != nil {
 		t.Fatal(err)
 	}

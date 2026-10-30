@@ -26,6 +26,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/gateway"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/models"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/session"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/timeline"
 )
@@ -90,25 +91,18 @@ type fakeGateway struct {
 	providers []gateway.ProviderInfo
 }
 
-func (g *fakeGateway) ResolveLLM(ctx context.Context, provider, modelID string, _ ...gateway.LLMOption) (*llm.Model, error) {
+func (g *fakeGateway) LLM(ctx context.Context, model models.Model, cfg llm.ModelConfig) (*llm.Model, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	modelName := strings.TrimSpace(modelID)
-	if provider = strings.TrimSpace(provider); provider != "" && modelName != "" {
-		modelName = provider + "/" + modelName
-	}
-	if modelName == "" {
-		modelName = "fake-default-model"
-	}
-	return llm.NewModel(g.provider, modelName, nil)
+	return llm.NewModel(g.provider, string(model.ID), &cfg)
 }
 
-func (g *fakeGateway) ResolveDecision(context.Context, string, string, ...gateway.DecisionOption) (*decision.Model, error) {
+func (g *fakeGateway) Decision(context.Context, models.Model, llm.ModelConfig) (*decision.Model, error) {
 	return nil, gateway.ErrUnsupportedCapability
 }
 
-func (g *fakeGateway) ResolveEmbedding(context.Context, string, string, ...gateway.EmbeddingOption) (*embedding.Model, error) {
+func (g *fakeGateway) Embedding(context.Context, models.Model) (*embedding.Model, error) {
 	return nil, gateway.ErrUnsupportedCapability
 }
 
@@ -116,24 +110,19 @@ func (g *fakeGateway) ListProviders() []gateway.ProviderInfo {
 	return g.providers
 }
 
-func (g *fakeGateway) ModelProfile(provider, modelID string) (*profile.Profile, bool) {
+func (g *fakeGateway) GetProfile(qualifiedID string) (profile.Profile, bool) {
+	id := models.ID(qualifiedID)
 	if g.provider != nil {
-		if prof, found := g.provider.GetProfile(modelID); found {
-			return &prof, true
+		if prof, found := g.provider.GetProfile(id.Name()); found {
+			return prof, true
 		}
-		if provider != "" {
-			if prof, found := g.provider.GetProfile(provider + "/" + modelID); found {
-				return &prof, true
-			}
+		if prof, found := g.provider.GetProfile(string(id)); found {
+			return prof, true
 		}
 	}
-	return nil, false
+	return profile.Profile{}, false
 }
 
-func (g *fakeGateway) ResolveConfig(provider, modelID string, settings gateway.ModelSettings) (gateway.ResolvedConfig, error) {
-	p, ok := g.ModelProfile(provider, modelID)
-	return gateway.ResolveSettings(gateway.EffectiveProfile{Profile: p, TemperatureKnown: ok}, settings)
-}
 func (g *fakeGateway) Close() error { return nil }
 
 type fakeGatewayPool struct {
@@ -207,6 +196,10 @@ func setupDaemonTest(t *testing.T, prov *fakeProvider) (*Daemon, *client.Client,
 	})
 
 	wsDir := shortTempDir(t)
+	manifest := "---\napiVersion: warp/v1alpha1\nkind: Workspace\nmetadata:\n  name: test\nspec:\n  defaultProvider: fake\n  defaultModel: fake-default-model\n---\n"
+	if err := os.WriteFile(filepath.Join(wsDir, "WORKSPACE.md"), []byte(manifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	cli, err := client.New(sockPath, client.WithCWD(wsDir))
 	if err != nil {
 		t.Fatalf("client.New: %v", err)
@@ -1135,7 +1128,7 @@ func TestSubdirectorySharesCanonicalWorkspaceRuntime(t *testing.T) {
 	_, cli, wsDir := setupDaemonTest(t, nil)
 
 	// Write a WORKSPACE.md sentinel in wsDir and create a nested subdirectory
-	wsManifest := "---\napiVersion: warp/v1alpha1\nkind: Workspace\nmetadata:\n  name: root-ws\n---\n"
+	wsManifest := "---\napiVersion: warp/v1alpha1\nkind: Workspace\nmetadata:\n  name: root-ws\nspec:\n  defaultProvider: fake\n  defaultModel: fake-default-model\n---\n"
 	if err := os.WriteFile(filepath.Join(wsDir, "WORKSPACE.md"), []byte(wsManifest), 0o644); err != nil {
 		t.Fatalf("WriteFile WORKSPACE.md: %v", err)
 	}
@@ -1272,8 +1265,8 @@ func TestWorkspaceAgentsModelsEndpoints(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetModel('custom-model'): %v", err)
 	}
-	if m1.ID != "custom-model" || m1.Name != "custom-model" || m1.Label != "custom-model" {
-		t.Errorf("m1 = %+v, want fallback custom-model", m1)
+	if m1.ID != "fake/custom-model" || m1.Provider != "fake" || m1.Name != "custom-model" || m1.Label != "custom-model" {
+		t.Errorf("m1 = %+v, want qualified custom-model", m1)
 	}
 
 	m2, err := cli.GetModel(ctx, "ollama/qwen3.8")
@@ -1434,6 +1427,7 @@ metadata:
   description: "Specialized helper"
 spec:
   models:
+    - unavailable-provider/missing
     - my-ollama/qwen3.8
   thinking:
     type: effort
@@ -1457,6 +1451,21 @@ Custom agent instructions.
 	}
 	if ws.DefaultAgent != "custom-agent" {
 		t.Errorf("ws.DefaultAgent = %q, want 'custom-agent'", ws.DefaultAgent)
+	}
+	preview, err := wsCLI.PreviewSession(ctx, api.PreviewSessionRequest{Config: api.SessionConfig{Agent: "custom-agent"}})
+	if err != nil || preview == nil || preview.Model == nil || preview.Model.ID != "my-ollama/qwen3.8" || preview.Model.ThinkingDefault == nil || preview.Model.ThinkingDefault.Effort != "medium" {
+		t.Fatalf("draft preview = %+v, err = %v", preview, err)
+	}
+	if ws.DefaultModel == nil || ws.DefaultModel.ID != preview.Model.ID {
+		t.Fatalf("workspace default = %+v, preview = %+v", ws.DefaultModel, preview)
+	}
+	explicit, err := wsCLI.PreviewSession(ctx, api.PreviewSessionRequest{Config: api.SessionConfig{Agent: "custom-agent", Model: "my-ollama/other-model"}})
+	if err != nil || explicit == nil || explicit.Model == nil || explicit.Model.ID != "my-ollama/other-model" {
+		t.Fatalf("explicit preview = %+v, err = %v", explicit, err)
+	}
+	created, err := wsCLI.CreateSession(ctx, api.CreateSessionRequest{Config: api.SessionConfig{Agent: "custom-agent"}})
+	if err != nil || created.Model == nil || created.Model.ID != preview.Model.ID {
+		t.Fatalf("created session = %+v, err = %v", created, err)
 	}
 
 	ag, err := wsCLI.GetAgent(ctx, "custom-agent")

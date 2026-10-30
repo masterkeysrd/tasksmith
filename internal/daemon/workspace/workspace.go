@@ -1450,13 +1450,3 @@ func (w *workspace) toolsLocked() []Tool {
 	})
 	return out
 }
-
-func (w *workspace) ModelLimits(rawID string) ModelLimits {
-	if rm, ok := w.ResolveModel(RoleCompletion, strings.TrimSpace(rawID)); ok && rm.Model != nil {
-		return rm.Model.Limits
-	}
-	return ModelLimits{
-		Context: 128000,
-		Output:  16384,
-	}
-}

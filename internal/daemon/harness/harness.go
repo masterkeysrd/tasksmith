@@ -14,10 +14,10 @@ import (
 	"github.com/masterkeysrd/loom/message"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	"github.com/masterkeysrd/tasksmith/internal/core/uuid"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/models"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/permissions"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/scope"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tools"
-	"github.com/masterkeysrd/tasksmith/internal/daemon/workspace"
 )
 
 // Config holds the mandatory dependencies required to construct a [Harness].
@@ -32,7 +32,7 @@ type Config struct {
 	SystemPrompt string
 	Queue        Queue
 	Logger       log.Interface
-	Limits       workspace.ModelLimits
+	Limits       models.Limits
 	Static       StaticContext
 }
 
@@ -81,7 +81,7 @@ type harness struct {
 	graph  *graph.Graph[State]
 	queue  Queue
 	static StaticContext
-	limits workspace.ModelLimits
+	limits models.Limits
 }
 
 var _ Harness = (*harness)(nil)

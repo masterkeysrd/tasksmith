@@ -31,22 +31,13 @@ type providerInstance struct {
 	llmProv             llm.Provider
 	decisionProv        decision.Provider
 	embeddingProv       embedding.Provider
-	models              map[string]ModelSpec
 	authErr             error
 	warning             string
 	openaiResponsesOpts *loomopenai.ResponsesOptions
 }
 
 func initProvider(ctx context.Context, cfg ProviderConfig, env map[string]string) (*providerInstance, error) {
-	modelsMap := make(map[string]ModelSpec, len(cfg.Models))
-	for _, m := range cfg.Models {
-		modelsMap[m.ID] = m
-	}
-
-	inst := &providerInstance{
-		cfg:    cfg,
-		models: modelsMap,
-	}
+	inst := &providerInstance{cfg: cfg}
 
 	switch cfg.Type {
 	case "ollama":

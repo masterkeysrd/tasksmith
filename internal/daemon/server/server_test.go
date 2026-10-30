@@ -54,6 +54,8 @@ type mockBackend struct {
 	createSessResp    *api.Session
 	createSessCreated bool
 	createSessErr     error
+	previewSessResp   *api.SessionPreview
+	previewSessErr    error
 	listSessResp      []api.Session
 	listSessErr       error
 	getSessResp       *api.Session
@@ -116,6 +118,10 @@ func (m *mockBackend) Done() <-chan struct{} {
 
 func (m *mockBackend) GetWorkspace(ctx context.Context, workspace string) (*api.Workspace, error) {
 	return m.wsResp, m.wsErr
+}
+
+func (m *mockBackend) PreviewSession(ctx context.Context, workspace string, req api.PreviewSessionRequest) (*api.SessionPreview, error) {
+	return m.previewSessResp, m.previewSessErr
 }
 
 func (m *mockBackend) ReloadWorkspace(ctx context.Context, workspace string) error {
@@ -426,6 +432,14 @@ func TestSessionRouterEndpoints(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("create session status = %d, want 201", rec.Code)
+	}
+
+	// Preview Session
+	req = httptest.NewRequest(http.MethodPost, "/v1/sessions/preview", strings.NewReader(`{"config":{"agent":"main"}}`))
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("preview session status = %d, want 200", rec.Code)
 	}
 
 	// Get Session

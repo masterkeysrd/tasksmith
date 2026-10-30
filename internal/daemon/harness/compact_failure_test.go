@@ -12,7 +12,7 @@ import (
 	"github.com/masterkeysrd/loom/llm"
 	"github.com/masterkeysrd/loom/message"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
-	"github.com/masterkeysrd/tasksmith/internal/daemon/workspace"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/models"
 )
 
 func TestCompactionNodeFailureCases(t *testing.T) {
@@ -65,7 +65,7 @@ func TestCompactionFailurePreservesCheckpointAndResumes(t *testing.T) {
 					return []message.AssistantChunk{{Content: []message.Block{&message.TextBlock{Text: "answer"}}, Done: true}}, nil
 				}
 			}}
-			h, err := New(Config{ID: "compact-failure-" + name, DB: openTestSQLite(t), Model: newTestModel(t, provider), Tools: reg, Permissions: perm, Queue: &fakeQueue{}, Bash: &fakeBashRunner{}, Spiller: newTestSpiller(t), Logger: log.Default(), Limits: workspace.ModelLimits{Context: 10000, Output: 1000}})
+			h, err := New(Config{ID: "compact-failure-" + name, DB: openTestSQLite(t), Model: newTestModel(t, provider), Tools: reg, Permissions: perm, Queue: &fakeQueue{}, Bash: &fakeBashRunner{}, Spiller: newTestSpiller(t), Logger: log.Default(), Limits: models.Limits{Context: 10000, Output: 1000}})
 			if err != nil {
 				t.Fatal(err)
 			}

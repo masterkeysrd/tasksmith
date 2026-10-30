@@ -162,7 +162,7 @@ func TestClientAllMethodsOverUnixSocket(t *testing.T) {
 			RootDir:      "/ws",
 			CWD:          cwd,
 			DefaultAgent: "developer",
-			DefaultModel: "ollama/qwen3.8",
+			DefaultModel: &api.Model{ID: "ollama/qwen3.8"},
 		})
 	})
 	mux.HandleFunc("POST /v1/workspace/reload", func(w http.ResponseWriter, r *http.Request) {

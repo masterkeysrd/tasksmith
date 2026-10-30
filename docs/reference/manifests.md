@@ -2,7 +2,7 @@
 
 TaskSmith uses declarative YAML manifests and Markdown frontmatter to configure workspaces, projects, agents, skills, commands, decisions, tools, toolkits, and external MCP servers.
 
-For model provider configurations (`kind: ModelProvider`), see the [Providers Reference](./providers.md).
+For model provider configurations (`kind: ModelProvider`), including `cost` and tier precedence over built-in pricing, see the [Providers Reference](./providers.md).
 
 ---
 

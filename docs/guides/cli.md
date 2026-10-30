@@ -78,7 +78,7 @@ The TaskSmith terminal interface is organized into a clean vertical flow:
 
 The top banner displays:
 - **Logo & Version**: Current TaskSmith build version (e.g., `v0.2.0`).
-- **Active Model & Reasoning Effort**: The resolved model ID and current reasoning effort tier (e.g., `anthropic/claude-sonnet-4-5 with auto effort`).
+- **Active Model & Reasoning Effort**: The daemon-resolved model and current reasoning effort tier (e.g., `anthropic/claude-sonnet-4-5 with auto effort`). Draft selections are resolved by the daemon; context usage is available after the session is created.
 - **Workspace Path**: The normalized workspace path (shortening the user home directory to `~`).
 - **Status & Warning Indicators**: If a provider lacks an API key, or if a configuration file contains an issue, a yellow warning banner (`⚠`) highlights the problem with troubleshooting instructions.
 

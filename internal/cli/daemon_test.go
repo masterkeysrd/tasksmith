@@ -112,7 +112,7 @@ func registerTestDaemonRoutes(mux *http.ServeMux, st *testDaemonState) {
 			RootDir:      "/workspace/project",
 			CWD:          cwd,
 			DefaultAgent: "build",
-			DefaultModel: "claude-sonnet-4-6",
+			DefaultModel: &api.Model{ID: "claude-sonnet-4-6", Label: "Claude 3.7 Sonnet", ThinkingDefault: &api.ThinkingSetting{Type: "effort", Effort: "high"}},
 		})
 	})
 	mux.HandleFunc("GET /v1/agents", func(w http.ResponseWriter, _ *http.Request) {

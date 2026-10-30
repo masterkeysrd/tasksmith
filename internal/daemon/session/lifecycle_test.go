@@ -295,7 +295,7 @@ func TestManagerTurnErrorLogging(t *testing.T) {
 	}
 	defer mgr.Close()
 
-	sess, _, err := mgr.Create(ctx, CreateParams{Title: "Turn Error Log Test"})
+	sess, _, err := mgr.Create(ctx, CreateParams{Title: "Turn Error Log Test", Config: SessionConfig{Model: "fake/fake-default-model"}})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}

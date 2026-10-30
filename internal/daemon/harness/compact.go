@@ -17,8 +17,8 @@ import (
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	"github.com/masterkeysrd/tasksmith/internal/core/uuid"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/models"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tools"
-	"github.com/masterkeysrd/tasksmith/internal/daemon/workspace"
 )
 
 // StaticContext represents the token cost of the static prefix (system prompt,
@@ -112,7 +112,7 @@ func estimateMessageTokens(msg message.Message) int {
 
 // CompactionTriggerTokens calculates the safety reserve and auto-compaction trigger
 // threshold per compaction.md Section 2.4.
-func CompactionTriggerTokens(limits workspace.ModelLimits) (reserveTokens, triggerTokens int) {
+func CompactionTriggerTokens(limits models.Limits) (reserveTokens, triggerTokens int) {
 	contextLimit := limits.Context
 	if contextLimit <= 0 {
 		contextLimit = 128000
@@ -137,7 +137,7 @@ func CompactionTriggerTokens(limits workspace.ModelLimits) (reserveTokens, trigg
 
 // computeContextState computes the context window token usage and calibrated breakdown
 // according to compaction.md Section 2.3.
-func computeContextState(static StaticContext, state State, limits workspace.ModelLimits) api.ContextState {
+func computeContextState(static StaticContext, state State, limits models.Limits) api.ContextState {
 	contextLimit := limits.Context
 	if contextLimit <= 0 {
 		contextLimit = 128000
@@ -394,7 +394,7 @@ type CompactionNode struct {
 	model        *llm.Model
 	tools        tools.Container
 	systemPrompt string
-	limits       workspace.ModelLimits
+	limits       models.Limits
 	static       StaticContext
 	logger       log.Interface
 }

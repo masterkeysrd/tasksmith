@@ -52,7 +52,6 @@ type Workspace interface {
 	RenderDecision(name string, inputs map[string]any, globals map[string]any) (string, error)
 	RenderWorkspace(globals map[string]any) (string, error)
 	AgentContext(name string) api.ContextBreakdown
-	ModelLimits(rawID string) ModelLimits
 	PortablePath(targetPath string) string
 }
 

@@ -53,6 +53,17 @@ func (s *store) insertSession(ctx context.Context, sess *Session) error {
 	return nil
 }
 
+func (s *store) updateSessionModel(ctx context.Context, sess *Session) error {
+	configBytes, err := json.Marshal(sess.Config)
+	if err != nil {
+		return fmt.Errorf("session: marshal config: %w", err)
+	}
+	if _, err := s.db.ExecContext(ctx, `UPDATE sessions SET config = ? WHERE id = ?`, string(configBytes), sess.ID); err != nil {
+		return fmt.Errorf("session: normalize model for %q: %w", sess.ID, err)
+	}
+	return nil
+}
+
 func (s *store) updateSession(ctx context.Context, sess *Session) error {
 	configBytes, err := json.Marshal(sess.Config)
 	if err != nil {
