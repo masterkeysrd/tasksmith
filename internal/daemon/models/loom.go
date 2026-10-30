@@ -78,12 +78,12 @@ func fromProfile(base *profile.Profile, id ID, providerType string) Model {
 	}
 	c := base.Capabilities
 	m.Capabilities = Capabilities{
-		Completion:  boolPtr(c.Completion),
-		Decision:    boolPtr(c.Decision),
-		Embedding:   boolPtr(c.Embedding),
-		Tools:       boolPtr(c.ToolCall),
-		Attachment:  boolPtr(c.Attachment),
-		Temperature: boolPtr(c.Temperature),
+		Completion:  new(c.Completion),
+		Decision:    new(c.Decision),
+		Embedding:   new(c.Embedding),
+		Tools:       new(c.ToolCall),
+		Attachment:  new(c.Attachment),
+		Temperature: new(c.Temperature),
 		Thinking:    reasoningToThinking(c.ReasoningOptions),
 	}
 	if base.Modalities.Inputs != nil {

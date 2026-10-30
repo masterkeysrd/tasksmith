@@ -15,8 +15,8 @@ func (id ID) String() string { return string(id) }
 // identifier is returned.
 func (id ID) Provider() string {
 	s := string(id)
-	if i := strings.IndexByte(s, '/'); i >= 0 {
-		return s[:i]
+	if before, _, ok := strings.Cut(s, "/"); ok {
+		return before
 	}
 	return s
 }
@@ -24,8 +24,8 @@ func (id ID) Provider() string {
 // Name returns the text after the first "/". When there is no "/", it returns "".
 func (id ID) Name() string {
 	s := string(id)
-	if i := strings.IndexByte(s, '/'); i >= 0 {
-		return s[i+1:]
+	if _, after, ok := strings.Cut(s, "/"); ok {
+		return after
 	}
 	return ""
 }

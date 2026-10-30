@@ -45,7 +45,7 @@ func TestMergeCapabilitiesFirstNonNil(t *testing.T) {
 
 	// Manifest sets a known false; base would say true. Manifest wins.
 	base := &profile.Profile{Capabilities: profile.Capabilities{Decision: true, Temperature: true}}
-	manifest := &workspace.ProviderModel{ID: "m", Capabilities: &workspace.ModelCapabilities{Decision: boolPtr(false)}}
+	manifest := &workspace.ProviderModel{ID: "m", Capabilities: &workspace.ModelCapabilities{Decision: new(false)}}
 	m = Merge(ID("p/m"), "ollama", manifest, base)
 	if m.Capabilities.Decision == nil || *m.Capabilities.Decision {
 		t.Fatalf("manifest false should override base true: %+v", m.Capabilities.Decision)

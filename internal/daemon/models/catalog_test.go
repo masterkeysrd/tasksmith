@@ -48,7 +48,7 @@ func TestCatalogLazyAndListedOnly(t *testing.T) {
 	if _, ok := c.Get("invalid"); ok {
 		t.Fatal("invalid id accepted")
 	}
-	for i := 0; i < 2; i++ {
+	for range 2 {
 		m, ok := c.Get("local/listed")
 		if !ok || m.ProviderType != "ollama" {
 			t.Fatalf("listed model: %+v, %v", m, ok)

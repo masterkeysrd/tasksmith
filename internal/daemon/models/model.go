@@ -134,6 +134,3 @@ type Source struct {
 	// Manifest reports that a workspace manifest contributed data.
 	Manifest bool
 }
-
-// boolPtr returns a pointer to b.
-func boolPtr(b bool) *bool { return &b }

@@ -16,12 +16,12 @@ func TestConfigureTemperature(t *testing.T) {
 		warning  string
 	}{
 		{"unknown", "ollama", nil, true, "temperature_unknown"},
-		{"supported", "ollama", boolPtr(true), true, ""},
-		{"unsupported", "ollama", boolPtr(false), false, "temperature_unsupported"},
-		{"override true", "ollama", boolPtr(true), true, ""},
-		{"override false", "ollama", boolPtr(false), false, "temperature_unsupported"},
-		{"workspace only true", "ollama", boolPtr(true), true, ""},
-		{"workspace only false", "ollama", boolPtr(false), false, "temperature_unsupported"},
+		{"supported", "ollama", new(true), true, ""},
+		{"unsupported", "ollama", new(false), false, "temperature_unsupported"},
+		{"override true", "ollama", new(true), true, ""},
+		{"override false", "ollama", new(false), false, "temperature_unsupported"},
+		{"workspace only true", "ollama", new(true), true, ""},
+		{"workspace only false", "ollama", new(false), false, "temperature_unsupported"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			m := Model{ID: ID("provider/model"), ProviderType: tc.provider, Limits: Limits{Context: 4000, Output: 1000}}
@@ -52,7 +52,7 @@ func TestConfigureThinking(t *testing.T) {
 		ProviderType: "ollama",
 		Limits:       Limits{Context: 4000, Output: 1000},
 		Capabilities: Capabilities{
-			Temperature: boolPtr(true),
+			Temperature: new(true),
 			Thinking:    []ThinkingOption{{Type: "effort", Values: []string{"low"}}},
 		},
 	}
@@ -91,7 +91,7 @@ func TestConfigureAnthropicThinkingTemperatureConflict(t *testing.T) {
 		ProviderType: "anthropic",
 		Limits:       Limits{Context: 4000, Output: 1000},
 		Capabilities: Capabilities{
-			Temperature: boolPtr(true),
+			Temperature: new(true),
 			Thinking:    []ThinkingOption{{Type: "budget_tokens", Min: 100, Max: 10000}},
 		},
 	}
