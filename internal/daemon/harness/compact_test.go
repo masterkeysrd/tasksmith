@@ -694,3 +694,63 @@ func TestStreamEvents(t *testing.T) {
 		t.Errorf("unexpected event: %+v", ev)
 	}
 }
+
+func TestStateCopyPreservesAssistantMetricsAndCompactionTrigger(t *testing.T) {
+	limits := models.Limits{Context: 262144, Output: 32768}
+	_, trigger := CompactionTriggerTokens(limits) // 222144
+
+	u1 := message.NewUserText("Please edit files")
+	asst := &message.Assistant{
+		Base: message.Base{ID: "asst-1"},
+		Content: message.Content{
+			&message.TextBlock{Text: "Editing file"},
+			&message.ToolCall{ID: "call-1", Name: "edit", Args: map[string]any{"path": "file.go"}},
+		},
+		Metrics: &message.TokenMetrics{
+			TotalTokens: trigger + 500,
+			Tokens: message.TokenDetails{
+				Input:     trigger + 400,
+				Output:    100,
+				CacheRead: trigger + 300,
+			},
+		},
+		Done:       true,
+		DoneReason: "tool_calls",
+	}
+
+	state := State{
+		Messages: message.MessageList{u1, asst},
+	}
+
+	// 1. Verify State.Copy() preserves Metrics, Done, and DoneReason.
+	cloned := state.Copy()
+	clonedAsst, ok := cloned.Messages[1].(*message.Assistant)
+	if !ok || clonedAsst.Metrics == nil {
+		t.Fatalf("cloned Assistant missing Metrics: %+v", cloned.Messages[1])
+	}
+	if clonedAsst.Metrics.TotalTokens != trigger+500 {
+		t.Errorf("cloned TotalTokens = %d, want %d", clonedAsst.Metrics.TotalTokens, trigger+500)
+	}
+	if !clonedAsst.Done || clonedAsst.DoneReason != "tool_calls" {
+		t.Errorf("cloned Done/DoneReason mismatch: Done=%v, DoneReason=%s", clonedAsst.Done, clonedAsst.DoneReason)
+	}
+
+	// 2. Simulate tools node executing tool and appending tool message to cloned state.
+	toolMsg := &message.Tool{
+		ToolCallID: "call-1",
+		Name:       "edit",
+		Content:    message.Content{&message.TextBlock{Text: "ok"}},
+	}
+	static := StaticContext{}
+	updated := cloned.AppendMessage(toolMsg, MessageUpdateOptions{Static: static, Limits: limits})
+
+	// 3. Verify that UsedTokens is calibrated using Assistant metrics and exceeds trigger tokens.
+	if updated.Context.UsedTokens < trigger {
+		t.Fatalf("UsedTokens (%d) < TriggerTokens (%d); failed to preserve calibration across node copy", updated.Context.UsedTokens, trigger)
+	}
+
+	// 4. Verify ShouldAutoCompact evaluates to true now that all tools are fulfilled.
+	if !updated.ShouldAutoCompact() {
+		t.Fatalf("ShouldAutoCompact() returned false when UsedTokens (%d) >= TriggerTokens (%d)", updated.Context.UsedTokens, trigger)
+	}
+}

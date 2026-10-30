@@ -218,6 +218,13 @@ func computeContextState(static StaticContext, state State, limits models.Limits
 		cachedTokens = state.Context.CachedTokens
 	}
 
+	if cachedTokens > usedTokens {
+		usedTokens = cachedTokens
+	}
+	if lastAsstIdx < 0 && state.Context.UsedTokens > usedTokens {
+		usedTokens = state.Context.UsedTokens
+	}
+
 	var summaryTokens, userTokens, agentTokens, toolTokens int
 	if rawConversationEstimate > 0 {
 		convUsed := max(0, usedTokens-staticTotal)
