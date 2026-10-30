@@ -123,15 +123,15 @@ var TimelineEvent = trail.FC("TimelineEvent", func(entry api.TimelineEntry) trai
 		}
 		return nil
 	case api.TimelineKindMode:
-		if entry.Mode != nil {
+		if entry.Mode != nil && entry.Mode.To != "" {
 			text = "Mode set to " + string(entry.Mode.To)
 		}
 	case api.TimelineKindModel:
-		if entry.Model != nil {
+		if entry.Model != nil && entry.Model.To != "" {
 			text = "Model set to " + entry.Model.To
 		}
 	case api.TimelineKindEffort:
-		if entry.Effort != nil {
+		if entry.Effort != nil && entry.Effort.To != "" {
 			text = "Thinking effort set to " + entry.Effort.To
 		}
 	case api.TimelineKindThinking:
@@ -155,7 +155,7 @@ var TimelineEvent = trail.FC("TimelineEvent", func(entry api.TimelineEntry) trai
 			}
 		}
 	case api.TimelineKindAgent:
-		if entry.Agent != nil {
+		if entry.Agent != nil && entry.Agent.To != "" {
 			text = "Agent set to " + entry.Agent.To
 		}
 	case api.TimelineKindPermission:

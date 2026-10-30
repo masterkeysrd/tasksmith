@@ -527,15 +527,15 @@ func (acc *conversationAccumulator) applyEvent(event api.Event) {
 			AppendTimelineEntry(p.Entry)
 			switch p.Entry.Kind {
 			case api.TimelineKindMode:
-				if p.Entry.Mode != nil {
+				if p.Entry.Mode != nil && p.Entry.Mode.To != "" {
 					SetSessionMode(p.Entry.Mode.To)
 				}
 			case api.TimelineKindModel:
-				if p.Entry.Model != nil {
+				if p.Entry.Model != nil && p.Entry.Model.To != "" {
 					SetModelInfo(p.Entry.Model.To, GetSession().Thinking)
 				}
 			case api.TimelineKindAgent:
-				if p.Entry.Agent != nil {
+				if p.Entry.Agent != nil && p.Entry.Agent.To != "" {
 					SetSessionAgent(p.Entry.Agent.To)
 				}
 			case api.TimelineKindThinking:
@@ -543,7 +543,7 @@ func (acc *conversationAccumulator) applyEvent(event api.Event) {
 					ApplyThinkingChange(p.Entry.Thinking.To)
 				}
 			case api.TimelineKindEffort:
-				if p.Entry.Effort != nil {
+				if p.Entry.Effort != nil && p.Entry.Effort.To != "" {
 					SetModelInfo(GetSession().ModelLabel, p.Entry.Effort.To)
 				}
 			}
@@ -769,19 +769,19 @@ func (acc *conversationAccumulator) loadTimeline(entries []api.TimelineEntry, pe
 				RemoveSlot(permSlotID(reqID))
 			}
 		case api.TimelineKindMode:
-			if entry.Mode != nil {
+			if entry.Mode != nil && entry.Mode.To != "" {
 				SetSessionMode(entry.Mode.To)
 			}
 		case api.TimelineKindModel:
-			if entry.Model != nil {
+			if entry.Model != nil && entry.Model.To != "" {
 				SetModelInfo(entry.Model.To, GetSession().Thinking)
 			}
 		case api.TimelineKindAgent:
-			if entry.Agent != nil {
+			if entry.Agent != nil && entry.Agent.To != "" {
 				SetSessionAgent(entry.Agent.To)
 			}
 		case api.TimelineKindEffort:
-			if entry.Effort != nil {
+			if entry.Effort != nil && entry.Effort.To != "" {
 				SetModelInfo(GetSession().ModelLabel, entry.Effort.To)
 			}
 		case api.TimelineKindMessage:
