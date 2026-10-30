@@ -164,14 +164,19 @@ var TimelineEvent = trail.FC("TimelineEvent", func(entry api.TimelineEntry) trai
 		text = "Interrupted by user"
 	case api.TimelineKindCompacted:
 		if entry.Compacted != nil && entry.Compacted.BeforeTokens > 0 {
-			text = fmt.Sprintf("Context compacted (%s → %s)", format.FormatTokens(entry.Compacted.BeforeTokens), format.FormatTokens(entry.Compacted.AfterTokens))
+			text = fmt.Sprintf("Context compacted (%s → %s)", format.Tokens(entry.Compacted.BeforeTokens), format.Tokens(entry.Compacted.AfterTokens))
 		} else {
 			text = "Context compacted"
 		}
 		return Notice(store.NoticeData{Text: text})
+	case api.TimelineKindTurnCompleted:
+		if entry.TurnCompleted == nil {
+			return nil
+		}
+		return Notice(store.NoticeData{Text: FormatTurnSummary(*entry.TurnCompleted, entry.ID, entry.CreatedAt)})
 	case api.TimelineKindCacheBroken:
 		if entry.CacheBroken != nil {
-			text = fmt.Sprintf("Prompt cache miss (%s → %s cached tokens)", format.FormatTokens(entry.CacheBroken.PrevCached), format.FormatTokens(entry.CacheBroken.CurrCached))
+			text = fmt.Sprintf("Prompt cache miss (%s → %s cached tokens)", format.Tokens(entry.CacheBroken.PrevCached), format.Tokens(entry.CacheBroken.CurrCached))
 		} else {
 			text = "Prompt cache miss"
 		}

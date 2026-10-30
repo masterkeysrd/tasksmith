@@ -25,18 +25,19 @@ var (
 type Kind string
 
 const (
-	KindMessage     Kind = "message"
-	KindCommand     Kind = "command"
-	KindModel       Kind = "model"
-	KindEffort      Kind = "effort"
-	KindThinking    Kind = "thinking"
-	KindAgent       Kind = "agent"
-	KindMode        Kind = "mode"
-	KindPermission  Kind = "permission"
-	KindQuestion    Kind = "question"
-	KindInterrupted Kind = "interrupted"
-	KindCompacted   Kind = "compacted"
-	KindCacheBroken Kind = "cache_broken"
+	KindMessage       Kind = "message"
+	KindCommand       Kind = "command"
+	KindModel         Kind = "model"
+	KindEffort        Kind = "effort"
+	KindThinking      Kind = "thinking"
+	KindAgent         Kind = "agent"
+	KindMode          Kind = "mode"
+	KindPermission    Kind = "permission"
+	KindQuestion      Kind = "question"
+	KindInterrupted   Kind = "interrupted"
+	KindCompacted     Kind = "compacted"
+	KindCacheBroken   Kind = "cache_broken"
+	KindTurnCompleted Kind = "turn_completed"
 )
 
 // CommandRecord captures a direct user shell command (!) and its output.
@@ -100,6 +101,20 @@ type CacheBrokenRecord struct {
 	InputTokens int `json:"input_tokens,omitempty"`
 }
 
+// TurnCompletedRecord summarizes a finished turn: the span from a user message
+// until the agent's final answer (or until the turn was canceled or failed).
+type TurnCompletedRecord struct {
+	TurnID       string `json:"turn_id"`
+	Status       string `json:"status"` // "done", "canceled" or "failed"
+	ElapsedMs    int64  `json:"elapsed_ms"`
+	InputTokens  int64  `json:"input_tokens,omitempty"`
+	OutputTokens int64  `json:"output_tokens,omitempty"`
+	CostNano     int64  `json:"cost_nano,omitempty"`
+	// Unpriced reports that some calls of the turn had no pricing, so
+	// CostNano is a lower bound.
+	Unpriced bool `json:"unpriced,omitempty"`
+}
+
 // Entry is a single append-only timeline event in a session log.
 type Entry struct {
 	ID        string    `json:"id"`
@@ -107,17 +122,18 @@ type Entry struct {
 	Kind      Kind      `json:"kind"`
 	CreatedAt time.Time `json:"created_at"`
 
-	Message     message.Message     `json:"message,omitempty"`
-	Command     *CommandRecord      `json:"command,omitempty"`
-	Model       *ModelChange        `json:"model,omitempty"`
-	Effort      *EffortChange       `json:"effort,omitempty"`
-	Thinking    *api.ThinkingChange `json:"thinking,omitempty"`
-	Agent       *AgentChange        `json:"agent,omitempty"`
-	Mode        *ModeChange         `json:"mode,omitempty"`
-	Permission  *PermissionRecord   `json:"permission,omitempty"`
-	Question    *QuestionRecord     `json:"question,omitempty"`
-	Compacted   *CompactedRecord    `json:"compacted,omitempty"`
-	CacheBroken *CacheBrokenRecord  `json:"cache_broken,omitempty"`
+	Message       message.Message      `json:"message,omitempty"`
+	Command       *CommandRecord       `json:"command,omitempty"`
+	Model         *ModelChange         `json:"model,omitempty"`
+	Effort        *EffortChange        `json:"effort,omitempty"`
+	Thinking      *api.ThinkingChange  `json:"thinking,omitempty"`
+	Agent         *AgentChange         `json:"agent,omitempty"`
+	Mode          *ModeChange          `json:"mode,omitempty"`
+	Permission    *PermissionRecord    `json:"permission,omitempty"`
+	Question      *QuestionRecord      `json:"question,omitempty"`
+	Compacted     *CompactedRecord     `json:"compacted,omitempty"`
+	CacheBroken   *CacheBrokenRecord   `json:"cache_broken,omitempty"`
+	TurnCompleted *TurnCompletedRecord `json:"turn_completed,omitempty"`
 }
 
 // Clone returns a deep copy of the timeline entry.
@@ -173,6 +189,10 @@ func (e Entry) Clone() Entry {
 	if e.CacheBroken != nil {
 		cb := *e.CacheBroken
 		cp.CacheBroken = &cb
+	}
+	if e.TurnCompleted != nil {
+		tc := *e.TurnCompleted
+		cp.TurnCompleted = &tc
 	}
 	return cp
 }
@@ -337,5 +357,15 @@ func NewCacheBrokenEntry(sessionID string, rec CacheBrokenRecord) *Entry {
 		SessionID:   sessionID,
 		Kind:        KindCacheBroken,
 		CacheBroken: &r,
+	}
+}
+
+// NewTurnCompletedEntry creates an Entry initialized with a TurnCompletedRecord payload.
+func NewTurnCompletedEntry(sessionID string, rec TurnCompletedRecord) *Entry {
+	r := rec
+	return &Entry{
+		SessionID:     sessionID,
+		Kind:          KindTurnCompleted,
+		TurnCompleted: &r,
 	}
 }

@@ -134,7 +134,7 @@ var ContextUsage = trail.FC("ContextUsage", func(props store.ContextUsageData) t
 	if ctx.MaxTokens > 0 {
 		totalPct = float64(ctx.UsedTokens) / float64(ctx.MaxTokens) * 100.0
 	}
-	modelHeader := fmt.Sprintf("%s · %s/%s (%.1f%%)", modelName, format.FormatTokens(ctx.UsedTokens), format.FormatTokens(ctx.MaxTokens), totalPct)
+	modelHeader := fmt.Sprintf("%s · %s/%s (%.1f%%)", modelName, format.Tokens(ctx.UsedTokens), format.Tokens(ctx.MaxTokens), totalPct)
 
 	categoryHeader := "Token usage by category"
 	if ctx.InputTokens == 0 {
@@ -181,7 +181,7 @@ var ContextUsage = trail.FC("ContextUsage", func(props store.ContextUsageData) t
 		if ctx.MaxTokens > 0 {
 			pct = float64(item.count) / float64(ctx.MaxTokens) * 100.0
 		}
-		rowText := fmt.Sprintf("%s: %s tokens (%.1f%%)", item.label, format.FormatTokens(item.count), pct)
+		rowText := fmt.Sprintf("%s: %s tokens (%.1f%%)", item.label, format.Tokens(item.count), pct)
 		infoNodes = append(infoNodes, trail.Box(trail.BoxProps{
 			Style: style.S().Display(style.DisplayFlex).FlexDirection(style.FlexRow),
 		},

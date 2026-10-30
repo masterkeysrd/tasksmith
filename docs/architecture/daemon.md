@@ -69,6 +69,7 @@ The daemon owns a global SQLite database at `~/.local/share/tasksmith/daemon.db`
 - **Write path**: Recording is asynchronous. Records go through a bounded in-memory queue to a batching writer; a full queue drops the record with a warning, recording failures never fail a turn, and shutdown flushes the queue before the database closes.
 - **Live totals**: A decorator keeps per-session running totals (loaded from the database on first access) and publishes a `usage_updated` event on the session's stream topic after each record.
 - **Queries**: A generic query engine aggregates records for the session, workspace and global usage views and the read-only `/v1/metrics/query`, `/v1/sessions/{id}/usage` and `/v1/usage` endpoints.
+- **Turn summaries**: When a turn ends (final answer, cancel or failure), the session appends a `turn_completed` timeline entry with the elapsed time and the turn's tokens and cost, read from the metrics records by turn ID. Completed turns under 5 seconds are skipped, and the entry is never part of the model's context.
 - **Retention**: Records outlive their sessions, so historical spend stays accurate after a session is deleted.
 
 ### 6. Structured Observability

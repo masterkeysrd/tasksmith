@@ -537,6 +537,23 @@ func (s *Store) summarizeTools(ctx context.Context, base Query, out *api.UsageSu
 	return nil
 }
 
+// Service is a [Recorder] that can also report the usage of a single turn.
+type Service interface {
+	Recorder
+	// TurnUsage returns the LLM usage recorded for the turns started by the
+	// given user message IDs, after all queued records are written.
+	TurnUsage(ctx context.Context, turnIDs ...string) (api.UsageGroup, error)
+}
+
+// TurnUsage returns the LLM usage recorded for the given turns.
+func (s *Store) TurnUsage(ctx context.Context, turnIDs ...string) (api.UsageGroup, error) {
+	if err := s.Flush(ctx); err != nil {
+		return api.UsageGroup{}, err
+	}
+	_, total, err := s.llmGroups(ctx, Query{Filter: Filter{TurnIDs: turnIDs}}, "", func(Row) string { return "" })
+	return total, err
+}
+
 // Live decorates a [Store] with running per-session totals. After each
 // record it calls publish with the updated usage of the affected sessions.
 type Live struct {
@@ -547,7 +564,7 @@ type Live struct {
 	sessions map[string]*Usage
 }
 
-var _ Recorder = (*Live)(nil)
+var _ Service = (*Live)(nil)
 
 // NewLive wraps store. publish is called outside of any lock.
 func NewLive(store *Store, publish func(sessionID string, usage api.SessionUsage)) *Live {
@@ -624,4 +641,9 @@ func (l *Live) SessionUsage(ctx context.Context, sessionID string) (api.SessionU
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return l.sessions[sessionID].Snapshot(), nil
+}
+
+// TurnUsage returns the LLM usage recorded for the given turns.
+func (l *Live) TurnUsage(ctx context.Context, turnIDs ...string) (api.UsageGroup, error) {
+	return l.store.TurnUsage(ctx, turnIDs...)
 }

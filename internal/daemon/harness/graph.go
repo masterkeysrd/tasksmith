@@ -346,9 +346,13 @@ func (n *AgentNode) Execute(ctx context.Context, state State) (graph.Command[Sta
 	}
 
 	// The message ID is generated before the call so that the metrics
-	// middleware can attribute the LLM call to its assistant message.
+	// middleware can attribute the LLM call to its assistant message and turn.
 	msgID := uuid.NewString()
-	callCtx := scope.With(ctx, scope.Scope{MessageID: msgID, Purpose: string(metrics.PurposeChat)})
+	callCtx := scope.With(ctx, scope.Scope{
+		TurnID:    state.LastUserMessageID(),
+		MessageID: msgID,
+		Purpose:   string(metrics.PurposeChat),
+	})
 	resp, err := boundModel.Invoke(callCtx, llmMessages)
 	if err != nil {
 		return nil, fmt.Errorf("harness: invoke llm: %w", err)

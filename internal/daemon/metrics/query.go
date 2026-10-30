@@ -62,7 +62,8 @@ const AttrPrefix = "attr."
 type Filter struct {
 	WorkspaceRoot   string
 	SessionID       string
-	IncludeChildren bool // also match parent_session_id = SessionID
+	TurnIDs         []string // match any of these turns
+	IncludeChildren bool     // also match parent_session_id = SessionID
 	Agent           string
 	Status          []Status
 	Attrs           map[string]string // exact-match attr filters
@@ -184,6 +185,14 @@ func BuildSQL(q Query) (string, []any, error) {
 			where = append(where, "r.session_id = ?")
 			args = append(args, f.SessionID)
 		}
+	}
+	if len(f.TurnIDs) > 0 {
+		ph := make([]string, len(f.TurnIDs))
+		for i, id := range f.TurnIDs {
+			ph[i] = "?"
+			args = append(args, id)
+		}
+		where = append(where, "r.turn_id IN ("+strings.Join(ph, ",")+")")
 	}
 	if f.Agent != "" {
 		where = append(where, "r.agent = ?")

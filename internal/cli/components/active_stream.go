@@ -2,6 +2,7 @@ package components
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/masterkeysrd/kite/extras/trail"
 	"github.com/masterkeysrd/kite/style"
@@ -39,6 +40,10 @@ var ActiveStream = trail.SimpleFC("ActiveStream", func() trail.Node {
 	todosPtr := store.UseStream(func(s store.StreamState) *[]api.TodoItem {
 		return s.Todos
 	})
+	turn := store.UseStream(func(s store.StreamState) turnStats {
+		return turnStats{StartedAt: s.TurnStartedAt, BaseInput: s.BaseInput, BaseOutput: s.BaseOutput, CallInput: s.CallInput, CallOutput: s.CallOutput}
+	})
+	totals := store.UseUsageTotals()
 
 	var msgs []store.Message
 	if msgsPtr != nil {
@@ -87,7 +92,7 @@ var ActiveStream = trail.SimpleFC("ActiveStream", func() trail.Node {
 
 	if streaming && !waitingPerm {
 		spinnerBlock := []trail.Node{
-			Spinner(SpinnerProps{Status: status, ActiveText: activeText}),
+			Spinner(SpinnerProps{Status: status, ActiveText: activeText, StartedAt: turn.StartedAt, Input: turn.input(totals), Output: turn.output(totals)}),
 		}
 		if hasIncomplete {
 			for i, item := range todos {
@@ -211,4 +216,23 @@ func renderChecklistRow(item api.TodoItem, prefix string, scheme *theme.Scheme) 
 			Style: contentStyle,
 		}, trail.Text(item.Content)),
 	)
+}
+
+// turnStats are the spinner statistics of the current turn. The tokens used so
+// far are the session's token growth since the turn started plus the running
+// totals of the LLM call in flight.
+type turnStats struct {
+	StartedAt  time.Time
+	BaseInput  int64
+	BaseOutput int64
+	CallInput  int64
+	CallOutput int64
+}
+
+func (t turnStats) input(totals store.UsageTotals) int64 {
+	return max(0, totals.InputTokens-t.BaseInput) + t.CallInput
+}
+
+func (t turnStats) output(totals store.UsageTotals) int64 {
+	return max(0, totals.OutputTokens-t.BaseOutput) + t.CallOutput
 }

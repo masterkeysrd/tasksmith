@@ -301,3 +301,26 @@ func TestSummaryGlobalSessionsPreviousAndErrors(t *testing.T) {
 		t.Fatalf("previous = %+v", sum.Previous)
 	}
 }
+
+func TestTurnUsageSumsTurns(t *testing.T) {
+	s := newStore(t)
+	turn := func(id string) context.Context {
+		return scope.With(scoped("s1", ""), scope.Scope{TurnID: id})
+	}
+	_ = metrics.RecordLLMCall(turn("t1"), s, llmCall("m", 100, true, ""))
+	_ = metrics.RecordLLMCall(turn("t1"), s, llmCall("m", 200, false, ""))
+	_ = metrics.RecordLLMCall(turn("t2"), s, llmCall("m", 400, true, ""))
+	_ = metrics.RecordLLMCall(turn("t3"), s, llmCall("m", 800, true, ""))
+
+	got, err := s.TurnUsage(context.Background(), "t1", "t2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Calls != 3 || got.CostNano != 700 || got.UnpricedCalls != 1 || got.Tokens.Input != 300 || got.Tokens.Output != 30 {
+		t.Fatalf("usage = %+v", got)
+	}
+	none, err := s.TurnUsage(context.Background(), "missing")
+	if err != nil || none.Calls != 0 {
+		t.Fatalf("missing turn: %+v err=%v", none, err)
+	}
+}

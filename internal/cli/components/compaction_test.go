@@ -50,7 +50,7 @@ func TestFormatTokens(t *testing.T) {
 		{-500, "-500"},
 	}
 	for _, tc := range tests {
-		got := format.FormatTokens(tc.input)
+		got := format.Tokens(tc.input)
 		if got != tc.want {
 			t.Errorf("FormatTokens(%d) = %q, want %q", tc.input, got, tc.want)
 		}

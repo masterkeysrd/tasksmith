@@ -460,6 +460,16 @@ type Chunk struct {
 	ID      string  `json:"id"`
 	Content []Block `json:"content,omitempty"`
 	Done    bool    `json:"done,omitempty"`
+	// Usage is the cumulative input and output token count of the LLM call
+	// this chunk belongs to, when the provider reported it. Each chunk
+	// carries the running total, not a delta.
+	Usage *ChunkUsage `json:"usage,omitempty"`
+}
+
+// ChunkUsage is the cumulative token usage of an in-flight LLM call.
+type ChunkUsage struct {
+	Input  int `json:"input,omitempty"`
+	Output int `json:"output,omitempty"`
 }
 
 // CompactRequest specifies optional focus parameters for manual context compaction.

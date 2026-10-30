@@ -95,6 +95,16 @@ type StreamState struct {
 	PendingCommand    string
 	Queue             *[]api.QueueItem
 	Todos             *[]api.TodoItem
+
+	// TurnStartedAt is when the current turn started streaming. BaseInput and
+	// BaseOutput are the session's token totals at that moment, and CallInput
+	// and CallOutput are the running totals of the LLM call in flight, so the
+	// turn's tokens so far are (session totals - base) + call.
+	TurnStartedAt time.Time
+	BaseInput     int64
+	BaseOutput    int64
+	CallInput     int64
+	CallOutput    int64
 }
 
 var stream = kites.Create(StreamState{})
@@ -158,6 +168,14 @@ type conversationAccumulator struct {
 	flushedIDs        map[string]bool
 	identities        map[string]string
 	nextDraft         uint64
+
+	wasStreaming bool
+	turnStart    time.Time
+	baseInput    int64
+	baseOutput   int64
+	baseCalls    int64
+	callInput    int64
+	callOutput   int64
 }
 
 var globalConversation = newConversationAccumulator()
@@ -215,6 +233,15 @@ func (acc *conversationAccumulator) reset() {
 	acc.flushedIDs = make(map[string]bool)
 	acc.identities = make(map[string]string)
 	acc.nextDraft = 0
+	acc.endTurnLocked()
+}
+
+// endTurnLocked clears the per-turn spinner statistics.
+func (acc *conversationAccumulator) endTurnLocked() {
+	acc.wasStreaming = false
+	acc.turnStart = time.Time{}
+	acc.baseInput, acc.baseOutput, acc.baseCalls = 0, 0, 0
+	acc.callInput, acc.callOutput = 0, 0
 }
 
 func (acc *conversationAccumulator) setSessionID(id string) {
@@ -396,6 +423,12 @@ func (acc *conversationAccumulator) applyEvent(event api.Event) {
 			return
 		}
 		SetUsage(p.Usage)
+		// A finished LLM call is now part of the session totals; drop its running count.
+		if p.Usage.Totals.Calls > acc.baseCalls {
+			acc.baseCalls = p.Usage.Totals.Calls
+			acc.callInput, acc.callOutput = 0, 0
+			acc.publishLocked()
+		}
 
 	case api.EventContextUpdated:
 		p, ok := event.Payload.(api.ContextUpdatedEvent)
@@ -567,6 +600,10 @@ func (acc *conversationAccumulator) applyEvent(event api.Event) {
 			return
 		}
 		_ = acc.addChunkLocked(p.Chunk)
+		if p.Chunk.Usage != nil {
+			// Each chunk carries the call's cumulative usage, so it replaces the last value.
+			acc.callInput, acc.callOutput = int64(p.Chunk.Usage.Input), int64(p.Chunk.Usage.Output)
+		}
 		acc.status, acc.err = StreamRunning, nil
 		hasGenerating := false
 		hasThinking := false
@@ -1095,8 +1132,24 @@ func (acc *conversationAccumulator) publishLocked() {
 		todosPtr = &cp
 	}
 
+	if isStreaming && !acc.wasStreaming {
+		totals := GetUsage().Totals
+		acc.turnStart = time.Now()
+		acc.baseInput, acc.baseOutput, acc.baseCalls = totals.Tokens.Input, totals.Tokens.Output, totals.Calls
+		acc.callInput, acc.callOutput = 0, 0
+	} else if !isStreaming && acc.wasStreaming {
+		acc.endTurnLocked()
+	}
+	acc.wasStreaming = isStreaming
+
+	turnStart, baseIn, baseOut, callIn, callOut := acc.turnStart, acc.baseInput, acc.baseOutput, acc.callInput, acc.callOutput
 	stream.Set(func(StreamState) StreamState {
 		return StreamState{
+			TurnStartedAt:     turnStart,
+			BaseInput:         baseIn,
+			BaseOutput:        baseOut,
+			CallInput:         callIn,
+			CallOutput:        callOut,
 			Messages:          msgsPtr,
 			Streaming:         isStreaming,
 			WaitingPermission: isWaiting,

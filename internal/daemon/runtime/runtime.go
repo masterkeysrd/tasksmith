@@ -55,7 +55,7 @@ type Config struct {
 	Publisher   session.Publisher
 	Logger      log.Interface
 	// Metrics receives LLM and tool call metrics. A nil recorder disables them.
-	Metrics metrics.Recorder
+	Metrics metrics.Service
 }
 
 type catalogSlot struct {
@@ -83,7 +83,7 @@ type workspaceRuntime struct {
 	gw           gateway.Gateway
 	catalog      *catalogSlot
 	pool         gateway.Pool
-	metrics      metrics.Recorder
+	metrics      metrics.Service
 	perms        permissions.Manager
 	sessions     session.Manager
 	db           *sql.DB
@@ -114,7 +114,7 @@ func (r *workspaceRuntime) Reload(ctx context.Context) error {
 			return err
 		}
 	}
-	next, err := r.pool.Acquire(ctx, buildGatewayConfig(sessionWorkspace, r.metrics))
+	next, err := r.pool.Acquire(ctx, buildGatewayConfig(sessionWorkspace, recorderOf(r.metrics)))
 	if err != nil {
 		return err
 	}
@@ -152,7 +152,7 @@ func (r *workspaceRuntime) Close() error {
 
 type manager struct {
 	pool      gateway.Pool
-	metrics   metrics.Recorder
+	metrics   metrics.Service
 	publisher session.Publisher
 	logger    log.Interface
 
@@ -243,7 +243,7 @@ func (m *manager) Get(ctx context.Context, dir string) (Runtime, error) {
 	}
 
 	if sessMgr == nil {
-		gwCfg := buildGatewayConfig(ws, m.metrics)
+		gwCfg := buildGatewayConfig(ws, recorderOf(m.metrics))
 		var err error
 		gw, err = m.pool.Acquire(ctx, gwCfg)
 		if err != nil {
@@ -402,4 +402,13 @@ func toGatewayProvider(p workspace.Provider) gateway.ProviderConfig {
 		Headers:  p.Headers,
 		Config:   p.Config,
 	}
+}
+
+// recorderOf converts a possibly nil [metrics.Service] to a [metrics.Recorder]
+// that is a true nil when no service is configured.
+func recorderOf(s metrics.Service) metrics.Recorder {
+	if s == nil {
+		return nil
+	}
+	return s
 }

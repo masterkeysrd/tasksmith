@@ -120,21 +120,6 @@ func TestDayGroupMarksPeakDay(t *testing.T) {
 	}
 }
 
-func TestFmtDuration(t *testing.T) {
-	for in, want := range map[time.Duration]string{
-		300 * time.Millisecond:               "300ms",
-		4*time.Second + 100*time.Millisecond: "4.1s",
-		41 * time.Second:                     "41s",
-		3*time.Minute + 5*time.Second:        "3m 05s",
-		3*time.Hour + 52*time.Minute:         "3h 52m",
-		8*24*time.Hour + 11*time.Hour:        "8d 11h",
-	} {
-		if got := fmtDuration(in); got != want {
-			t.Errorf("fmtDuration(%v) = %q, want %q", in, got, want)
-		}
-	}
-}
-
 func TestUsageTabBar(t *testing.T) {
 	bar := usageTabBar(usageTabWorkspace, api.UsageGroupByTier, usageRanges[1])
 	for _, want := range []string{"1 Session", "[2 Workspace]", "3 Global", "group: tier", "range: 7d"} {

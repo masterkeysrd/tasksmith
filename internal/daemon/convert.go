@@ -282,11 +282,15 @@ func toAPIChunk(ch *message.AssistantChunk) *api.Chunk {
 	if ch == nil {
 		return nil
 	}
-	return &api.Chunk{
+	out := &api.Chunk{
 		ID:      ch.ID,
 		Content: toAPIBlocks(ch.Content),
 		Done:    ch.Done,
 	}
+	if ch.Metrics != nil && (ch.Metrics.Tokens.Input > 0 || ch.Metrics.Tokens.Output > 0) {
+		out.Usage = &api.ChunkUsage{Input: ch.Metrics.Tokens.Input, Output: ch.Metrics.Tokens.Output}
+	}
+	return out
 }
 
 func fromSendRequest(req api.SendRequest) (session.SendInput, error) {
@@ -587,6 +591,19 @@ func toAPITimelineEntry(entry timeline.Entry) (api.TimelineEntry, error) {
 			PrevCached:  entry.CacheBroken.PrevCached,
 			CurrCached:  entry.CacheBroken.CurrCached,
 			InputTokens: entry.CacheBroken.InputTokens,
+		}
+	}
+
+	if entry.TurnCompleted != nil {
+		tc := entry.TurnCompleted
+		out.TurnCompleted = &api.TurnCompletedRecord{
+			TurnID:       tc.TurnID,
+			Status:       tc.Status,
+			ElapsedMs:    tc.ElapsedMs,
+			InputTokens:  tc.InputTokens,
+			OutputTokens: tc.OutputTokens,
+			CostNano:     tc.CostNano,
+			Unpriced:     tc.Unpriced,
 		}
 	}
 

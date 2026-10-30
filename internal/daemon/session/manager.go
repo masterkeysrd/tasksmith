@@ -38,9 +38,9 @@ type Config struct {
 	Permissions permissions.Manager
 	ReloadLock  *sync.RWMutex
 	Catalog     func() models.Catalog
-	// Metrics receives tool call metrics from session harnesses. A nil
-	// recorder disables them.
-	Metrics metrics.Recorder
+	// Metrics receives tool call metrics from session harnesses and reports
+	// per-turn usage for turn summaries. A nil service disables both.
+	Metrics metrics.Service
 }
 
 // Validate checks that all required configuration dependencies are non-nil.
@@ -88,7 +88,7 @@ type manager struct {
 	perms      permissions.Manager
 	reloadLock *sync.RWMutex
 	catalog    func() models.Catalog
-	metrics    metrics.Recorder
+	metrics    metrics.Service
 
 	bgCtx    context.Context
 	bgCancel context.CancelFunc

@@ -212,6 +212,18 @@ Run `/changes` to open the Tracked Changes browser:
 
 ---
 
+## Turn Progress and Summary
+
+A turn runs from your message until the agent's final answer, including every model call, tool run and automatic compaction in between.
+
+- **While the agent works**, the spinner shows the elapsed time and the tokens used so far, for example `⠋ Thinking...  (12s · ↑12.4k ↓1.8k)`. `↑` is the total tokens sent and `↓` the total received in this turn, summed across all of its model calls. They are not the context size (the status line shows that). They start at zero and count up, including the call in flight when the provider reports running usage, and otherwise update as each call finishes.
+- **When the turn ends**, a dim summary line is added to the conversation, for example `Smithed for 42s · ↑12.4k ↓1.8k · $0.03 · done 2:15 PM`, where `↑` and `↓` are the tokens sent and received in the whole turn. The verb comes from a small rotating set (Smithed, Forged, Crafted, Tempered, Worked). Canceled and failed turns read `Stopped after 3.1s` and `Failed after 9.0s`. A cost with a leading `≥` is a lower bound because some calls had no pricing.
+- Completed turns shorter than 5 seconds get no summary line. A turn waiting for a permission or question is not finished, and its elapsed time keeps counting.
+
+The summary is stored in the session timeline, so it reappears when you reopen or switch back to the session.
+
+---
+
 ## Usage and Cost (`/usage`)
 
 TaskSmith records every LLM call (chat turns, compaction and title generation, including failed and canceled calls), every tool execution, and every file change. The status line shows the session's running cost and token total; run `/usage` to open the usage browser in the slot above the status line:

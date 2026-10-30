@@ -108,7 +108,7 @@ var ContextSegment = trail.FC("ContextSegment", func(props SegmentProps) trail.N
 	if ctx.MaxTokens > 0 {
 		pct = min(int(float64(ctx.UsedTokens)/float64(ctx.MaxTokens)*100), 100)
 	}
-	text := fmt.Sprintf("%s/%s (%d%%)", format.FormatTokens(ctx.UsedTokens), format.FormatTokens(ctx.MaxTokens), pct)
+	text := fmt.Sprintf("%s/%s (%d%%)", format.Tokens(ctx.UsedTokens), format.Tokens(ctx.MaxTokens), pct)
 
 	col := scheme.Color.Text.Secondary
 	if ctx.TriggerTokens > 0 && ctx.UsedTokens >= ctx.TriggerTokens {
@@ -130,7 +130,7 @@ var UsageSegment = trail.FC("UsageSegment", func(props SegmentProps) trail.Node 
 		return nil
 	}
 	text := fmt.Sprintf("%s · ↑%s ↓%s", format.FormatCostNano(usage.CostNano, usage.UnpricedCalls > 0),
-		format.FormatTokens(int(usage.InputTokens)), format.FormatTokens(int(usage.OutputTokens)))
+		format.Tokens(int(usage.InputTokens)), format.Tokens(int(usage.OutputTokens)))
 	return segment(props, statusText(text, scheme.Color.Text.Secondary, false), text, scheme.Color.Text.Secondary)
 })
 

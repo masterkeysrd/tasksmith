@@ -54,7 +54,7 @@ type insight struct {
 	Hint     string
 }
 
-func tok(n int64) string { return format.FormatTokens(int(n)) }
+func tok(n int64) string { return format.Tokens(int(n)) }
 
 func pct(part, whole int64) int {
 	if whole <= 0 {
@@ -73,31 +73,6 @@ func fraction(part, whole int64) float64 {
 func costOf(g api.UsageGroup) string {
 	return format.FormatCostNano(g.CostNano, g.UnpricedCalls > 0)
 }
-
-// fmtDuration renders a duration in its two largest units (e.g. "3h 52m").
-func fmtDuration(d time.Duration) string {
-	if d < 0 {
-		d = 0
-	}
-	switch {
-	case d < time.Second:
-		return fmt.Sprintf("%dms", d.Milliseconds())
-	case d < time.Minute:
-		if d < 10*time.Second {
-			return fmt.Sprintf("%.1fs", d.Seconds())
-		}
-		return fmt.Sprintf("%ds", int(d.Seconds()))
-	case d < time.Hour:
-		return fmt.Sprintf("%dm %02ds", int(d.Minutes()), int(d.Seconds())%60)
-	case d < 24*time.Hour:
-		return fmt.Sprintf("%dh %02dm", int(d.Hours()), int(d.Minutes())%60)
-	default:
-		days := int(d.Hours()) / 24
-		return fmt.Sprintf("%dd %dh", days, int(d.Hours())%24)
-	}
-}
-
-func fmtMS(ms int64) string { return fmtDuration(time.Duration(ms) * time.Millisecond) }
 
 func plural(n int64, one, many string) string {
 	if n == 1 {
@@ -162,9 +137,9 @@ func toolLine(t api.ToolUsage, width int) string {
 	}
 	text := fmt.Sprintf("%*s:  %s", width, t.Tool, strings.Join(parts, ", "))
 	if t.DurationMS > 0 {
-		text += fmt.Sprintf(" · %s total", fmtMS(t.DurationMS))
+		text += fmt.Sprintf(" · %s total", format.DurationMilis(t.DurationMS))
 		if t.MaxDurationMS > 0 && t.Calls > 1 {
-			text += fmt.Sprintf(" (slowest %s)", fmtMS(t.MaxDurationMS))
+			text += fmt.Sprintf(" (slowest %s)", format.DurationMilis(t.MaxDurationMS))
 		}
 	}
 	if t.LinesAdded > 0 || t.LinesRemoved > 0 {
@@ -191,7 +166,7 @@ func toolLines(tools []api.ToolUsage) []usageLine {
 	summary := fmt.Sprintf("%d total · %d ok · %s · %d denied · %d canceled", calls, ok, plural(errs, "error", "errors"), denied, canceled)
 	out := []usageLine{kv("Tool calls", summary)}
 	if durMS > 0 {
-		out = append(out, kv("Tool time", fmt.Sprintf("%s total · avg %s", fmtMS(durMS), fmtMS(durMS/max(calls, 1)))))
+		out = append(out, kv("Tool time", fmt.Sprintf("%s total · avg %s", format.DurationMilis(durMS), format.DurationMilis(durMS/max(calls, 1)))))
 	}
 	out = append(out, usageLine{Text: "Tools:", Style: lineHeading})
 	for _, t := range tools {
@@ -304,7 +279,7 @@ func cacheLines(u api.SessionUsage, now time.Time) []usageLine {
 	text := fmt.Sprintf("%s · %d%% of input tokens from cache · %s",
 		plural(c.Requests, "request", "requests"), int(c.HitRate()*100), plural(c.Misses, "miss", "misses"))
 	if c.Misses > 0 && !c.LastMissAt.IsZero() {
-		text += fmt.Sprintf(" (last %s ago; %s since the previous call", fmtDuration(now.Sub(c.LastMissAt)), fmtMS(c.LastMissGapMS))
+		text += fmt.Sprintf(" (last %s ago; %s since the previous call", format.Duration(now.Sub(c.LastMissAt)), format.DurationMilis(c.LastMissGapMS))
 		if c.LastMissRecachedTokens > 0 {
 			text += fmt.Sprintf("; %s tokens re-cached", tok(c.LastMissRecachedTokens))
 		}
@@ -314,7 +289,7 @@ func cacheLines(u api.SessionUsage, now time.Time) []usageLine {
 		text += fmt.Sprintf(" · %s after compaction", plural(c.Rebuilds, "expected rebuild", "expected rebuilds"))
 	}
 	if !u.LastAt.IsZero() {
-		text += fmt.Sprintf(" · last used %s ago", fmtDuration(now.Sub(u.LastAt)))
+		text += fmt.Sprintf(" · last used %s ago", format.Duration(now.Sub(u.LastAt)))
 	}
 	t := u.Totals
 	out := wrapLine("Prompt cache:          "+text, 23, lineNormal)
@@ -352,10 +327,10 @@ func sessionLines(u api.SessionUsage, now time.Time) []usageLine {
 	}
 	out := []usageLine{
 		kv("Total cost", costOf(t)),
-		kv("Total duration (API)", fmtMS(t.DurationMS)),
+		kv("Total duration (API)", format.DurationMilis(t.DurationMS)),
 	}
 	if !u.FirstAt.IsZero() {
-		out = append(out, kv("Total duration (wall)", fmtDuration(u.LastAt.Sub(u.FirstAt))))
+		out = append(out, kv("Total duration (wall)", format.Duration(u.LastAt.Sub(u.FirstAt))))
 	}
 	out = append(out, kv("Total code changes", changesText(u.Changes)))
 	if len(u.Models) > 0 {
@@ -496,7 +471,7 @@ func summaryLines(s api.UsageSummary, rangeLabel string) []usageLine {
 		sessions += " · avg " + format.FormatCostNano(t.CostNano/s.Sessions, t.UnpricedCalls > 0) + " per session"
 	}
 	out = append(out, kv("Sessions", sessions))
-	out = append(out, kv("Total duration (API)", fmtMS(t.DurationMS)))
+	out = append(out, kv("Total duration (API)", format.DurationMilis(t.DurationMS)))
 	changes := changesText(s.Changes)
 	if lines := s.Changes.LinesAdded + s.Changes.LinesRemoved; lines > 0 && t.CostNano > 0 {
 		changes += fmt.Sprintf(" · %s per 100 changed lines", format.FormatCostNano(t.CostNano*100/lines, t.UnpricedCalls > 0))

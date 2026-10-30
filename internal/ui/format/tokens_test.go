@@ -26,7 +26,7 @@ func TestFormatTokens(t *testing.T) {
 		{-2500000, "-2.5M"},
 	}
 	for _, tc := range tests {
-		got := FormatTokens(tc.input)
+		got := Tokens(tc.input)
 		if got != tc.want {
 			t.Errorf("FormatTokens(%d) = %q, want %q", tc.input, got, tc.want)
 		}
@@ -34,7 +34,7 @@ func TestFormatTokens(t *testing.T) {
 }
 
 func TestFormatTokensMinInt(t *testing.T) {
-	got := FormatTokens(math.MinInt)
+	got := Tokens(math.MinInt)
 	if got == "" || got[0] != '-' {
 		t.Errorf("FormatTokens(math.MinInt) expected negative result, got %q", got)
 	}

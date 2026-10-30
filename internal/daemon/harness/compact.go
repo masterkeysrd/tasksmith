@@ -455,7 +455,10 @@ func (n *CompactionNode) Execute(ctx context.Context, state State) (graph.Comman
 		model = model.BindToolDefs(defs...)
 	}
 
-	resp, err := model.Invoke(scope.With(ctx, scope.Scope{Purpose: string(metrics.PurposeCompaction)}), messages)
+	resp, err := model.Invoke(scope.With(ctx, scope.Scope{
+		TurnID:  state.LastUserMessageID(),
+		Purpose: string(metrics.PurposeCompaction),
+	}), messages)
 	if err != nil {
 		return nil, fmt.Errorf("harness: invoke compaction llm: %w", err)
 	}

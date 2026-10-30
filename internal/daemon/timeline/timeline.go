@@ -105,6 +105,10 @@ func (s *sqliteTimeline) Append(ctx context.Context, entry *Entry) error {
 		if entry.CacheBroken == nil {
 			return ErrInvalidEntry
 		}
+	case KindTurnCompleted:
+		if entry.TurnCompleted == nil {
+			return ErrInvalidEntry
+		}
 	case KindInterrupted:
 		// no additional struct field validation needed
 	default:
@@ -189,6 +193,11 @@ func (s *sqliteTimeline) Append(ctx context.Context, entry *Entry) error {
 		payload, err = json.Marshal(entry.CacheBroken)
 		if err != nil {
 			return fmt.Errorf("timeline: marshal cache broken %q: %w", entry.ID, err)
+		}
+	case KindTurnCompleted:
+		payload, err = json.Marshal(entry.TurnCompleted)
+		if err != nil {
+			return fmt.Errorf("timeline: marshal turn completed %q: %w", entry.ID, err)
 		}
 	case KindInterrupted:
 		payload = []byte("{}")
@@ -419,6 +428,12 @@ func scanEntry(r rowScanner) (*Entry, error) {
 			return nil, fmt.Errorf("timeline: unmarshal cache broken record for %q: %w", id, err)
 		}
 		entry.CacheBroken = &c
+	case KindTurnCompleted:
+		var t TurnCompletedRecord
+		if err := json.Unmarshal(payload, &t); err != nil {
+			return nil, fmt.Errorf("timeline: unmarshal turn completed record for %q: %w", id, err)
+		}
+		entry.TurnCompleted = &t
 	case KindInterrupted:
 		// No extra payload unmarshaling needed
 	default:

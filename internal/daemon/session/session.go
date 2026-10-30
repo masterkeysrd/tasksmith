@@ -105,12 +105,18 @@ type Session struct {
 	spiller          tools.Spiller     `json:"-"`
 	configGeneration uint64
 
+	// turnIDs and turnStart track the turn in progress: the user messages that
+	// started it and when the first of them was recorded. Guarded by the
+	// session lock.
+	turnIDs   []string
+	turnStart time.Time
+
 	db         *sql.DB               `json:"-"`
 	store      *store                `json:"-"`
 	workspace  workspace.Workspace   `json:"-"`
 	gateway    gateway.Gateway       `json:"-"`
 	catalog    func() models.Catalog `json:"-"`
-	metrics    metrics.Recorder      `json:"-"`
+	metrics    metrics.Service       `json:"-"`
 	reloadLock *sync.RWMutex         `json:"-"`
 	publisher  Publisher             `json:"-"`
 	logger     log.Interface         `json:"-"`
@@ -931,9 +937,13 @@ func (s *Session) startTurn(hInput harness.Input) error {
 			WorkspaceRoot: s.workspace.RootDir(),
 			Agent:         agentName,
 		})
-		if _, err := s.send(sCtx, h.Stream(sCtx, hInput)); err != nil {
+		reply, err := s.send(sCtx, h.Stream(sCtx, hInput))
+		if err != nil {
 			s.handleAsyncError(err)
 			return
+		}
+		if reply != nil {
+			s.finishTurn(api.TurnStatusDone)
 		}
 
 		for {
@@ -944,9 +954,13 @@ func (s *Session) startTurn(hInput harness.Input) error {
 				break
 			}
 
-			if _, err := s.send(sCtx, h.Stream(sCtx, harness.Input{})); err != nil {
+			reply, err := s.send(sCtx, h.Stream(sCtx, harness.Input{}))
+			if err != nil {
 				s.handleAsyncError(err)
 				return
+			}
+			if reply != nil {
+				s.finishTurn(api.TurnStatusDone)
 			}
 		}
 
@@ -1184,6 +1198,12 @@ func (s *Session) handleAsyncError(err error) {
 		Status:    StatusIdle,
 	})
 
+	status := api.TurnStatusFailed
+	if errors.Is(err, context.Canceled) {
+		status = api.TurnStatusCanceled
+	}
+	defer s.finishTurn(status)
+
 	if errors.Is(err, context.Canceled) {
 		entry := timeline.NewInterruptedEntry(s.ID)
 		if appErr := s.Timeline.Append(s.bgCtx, entry); appErr == nil {
@@ -1277,6 +1297,10 @@ func (s *Session) send(ctx context.Context, stream iter.Seq2[harness.Event, erro
 					SessionID: s.ID,
 					Entry:     entry.Clone(),
 				})
+
+				if user, ok := hev.Message.(*message.User); ok && harness.SystemKindOf(user) == "" {
+					s.beginTurn(user.GetID(), entry.CreatedAt)
+				}
 
 				if asst, ok := hev.Message.(*message.Assistant); ok {
 					if len(asst.ToolCalls()) > 0 {
@@ -1635,5 +1659,67 @@ func (s *Session) generateTitle(userText string) {
 	s.publisher.Publish(api.TopicSessions, UpdatedEvent{
 		Workspace: wsRoot,
 		Session:   cloned,
+	})
+}
+
+// minTurnSummary is the shortest completed turn that gets a summary entry.
+const minTurnSummary = 5 * time.Second
+
+// beginTurn records that the user message id started (or joined) a turn.
+func (s *Session) beginTurn(id string, at time.Time) {
+	s.Lock()
+	defer s.Unlock()
+	if len(s.turnIDs) == 0 {
+		s.turnStart = at
+	}
+	s.turnIDs = append(s.turnIDs, id)
+}
+
+// finishTurn appends a turn summary entry to the timeline when the turn in
+// progress ends, with the elapsed time and the usage recorded for the turn.
+// Completed turns shorter than [minTurnSummary] get no entry.
+func (s *Session) finishTurn(status string) {
+	s.Lock()
+	ids := s.turnIDs
+	start := s.turnStart
+	s.turnIDs = nil
+	s.turnStart = time.Time{}
+	s.Unlock()
+	if len(ids) == 0 {
+		return
+	}
+
+	elapsed := time.Since(start)
+	if status == api.TurnStatusDone && elapsed < minTurnSummary {
+		return
+	}
+
+	rec := timeline.TurnCompletedRecord{TurnID: ids[len(ids)-1], Status: status, ElapsedMs: elapsed.Milliseconds()}
+	if s.metrics != nil {
+		ctx, cancel := context.WithTimeout(s.bgCtx, 5*time.Second)
+		usage, err := s.metrics.TurnUsage(ctx, ids...)
+		cancel()
+		if err != nil {
+			s.logger.Warn("failed to load turn usage", log.String("session_id", s.ID), log.String("error", err.Error()))
+		} else {
+			rec.InputTokens = usage.Tokens.Input
+			rec.OutputTokens = usage.Tokens.Output
+			rec.CostNano = usage.CostNano
+			rec.Unpriced = usage.UnpricedCalls > 0
+		}
+	}
+
+	entry := timeline.NewTurnCompletedEntry(s.ID, rec)
+	if err := s.Timeline.Append(s.bgCtx, entry); err != nil {
+		s.logger.Warn("failed to append turn summary", log.String("session_id", s.ID), log.String("error", err.Error()))
+		return
+	}
+	_ = s.store.touchSession(s.bgCtx, s.ID, entry.CreatedAt)
+	s.Lock()
+	s.UpdatedAt = entry.CreatedAt
+	s.Unlock()
+	s.publisher.Publish(api.SessionStreamTopic(s.ID), EntryAddedEvent{
+		SessionID: s.ID,
+		Entry:     entry.Clone(),
 	})
 }

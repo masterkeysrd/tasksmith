@@ -185,6 +185,13 @@ TaskSmith adheres to the XDG Base Directory Specification for state persistence,
 
 The REPL status line shows, from left to right: the shortcut hint, the permission mode (non-default only), context window usage, session usage, and the model with its thinking effort. Session usage is rendered as `<cost> · ↑<input> ↓<output>` (for example `$0.42 · ↑128.4k ↓8.3k`) once the session has recorded an LLM call, and updates live from `usage_updated` events. `↑` is the total prompt size (including cached tokens) and `↓` is output tokens. A leading `≥` on the cost means some calls had no pricing data.
 
+## Turn Spinner and Summary
+
+| Element | Format | Source |
+| :--- | :--- | :--- |
+| Spinner statistics | `(<elapsed> · ↑<input> ↓<output>)` | Elapsed time since the turn started streaming. `↑` and `↓` are the tokens sent and received in the turn, summed across its calls (not the context size): the session's token growth since the turn started plus the running usage of the in-flight call (`usage` on the stream chunk, cumulative per call). They start at zero. |
+| Turn summary line | `<Verb> for <elapsed> · ↑<input> ↓<output> · <cost> · done <time>` | `turn_completed` timeline entry written by the daemon when the turn ends. Canceled and failed turns use `Stopped after` and `Failed after`. Completed turns under 5 seconds are skipped. |
+
 ## Usage Browser (`/usage`)
 
 | Tab | Content |
