@@ -12,7 +12,6 @@ import (
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/models"
-	"github.com/masterkeysrd/tasksmith/internal/daemon/tools"
 )
 
 func TestStaticContext(t *testing.T) {
@@ -409,7 +408,7 @@ func TestFormatTodos(t *testing.T) {
 	if got := formatTodos(nil); got != "- (none)" {
 		t.Errorf("formatTodos(nil) = %q, want %q", got, "- (none)")
 	}
-	todos := []tools.TodoItem{
+	todos := []api.TodoItem{
 		{Content: "Task 1", Status: "in_progress"},
 		{Content: "Task 2", Status: "completed"},
 	}
@@ -421,7 +420,7 @@ func TestFormatTodos(t *testing.T) {
 
 func TestBuildContextSummaryMessage(t *testing.T) {
 	userRequests := []string{"Fix issue A", "Add feature B"}
-	todos := []tools.TodoItem{{Content: "Refactor engine", Status: "in_progress"}}
+	todos := []api.TodoItem{{Content: "Refactor engine", Status: "in_progress"}}
 	summary := "Refactored the core logic and verified test suite."
 
 	// Auto trigger should include continuation directive
@@ -650,7 +649,7 @@ func TestStreamEvents(t *testing.T) {
 	}
 
 	// TodosUpdatedEvent
-	tue := TodosUpdatedEvent{Todos: []tools.TodoItem{{Content: "item 1"}}}
+	tue := TodosUpdatedEvent{Todos: []api.TodoItem{{Content: "item 1"}}}
 	if tue.EventName() != eventTodosUpdated {
 		t.Errorf("EventName = %q, want %q", tue.EventName(), eventTodosUpdated)
 	}

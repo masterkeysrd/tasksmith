@@ -35,7 +35,6 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/daemon/permissions"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/sandbox"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/std"
-	"github.com/masterkeysrd/tasksmith/internal/daemon/tools"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tools/builtin"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/workspace"
 )
@@ -1931,7 +1930,7 @@ func TestMultiPermissionInterruptAndAllOrNothingRespondPermission(t *testing.T) 
 
 	// Validation error checks on RespondPermission
 	if err := sess.Send(ctx, SendInput{
-		Decision: &tools.PermissionDecision{
+		Decision: &api.PermissionDecision{
 			RequestID: pending[0].ID,
 			Kind:      "invalid_kind",
 		},
@@ -1939,9 +1938,9 @@ func TestMultiPermissionInterruptAndAllOrNothingRespondPermission(t *testing.T) 
 		t.Errorf("RespondPermission invalid kind error = %v, want %v", err, ErrInvalidDecision)
 	}
 	if err := sess.Send(ctx, SendInput{
-		Decision: &tools.PermissionDecision{
+		Decision: &api.PermissionDecision{
 			RequestID: "non-existent-req-id",
-			Kind:      tools.DecisionAllowOnce,
+			Kind:      api.DecisionAllowOnce,
 		},
 	}); !errors.Is(err, ErrPermissionNotFound) {
 		t.Errorf("RespondPermission unknown request ID error = %v, want %v", err, ErrPermissionNotFound)
@@ -1951,9 +1950,9 @@ func TestMultiPermissionInterruptAndAllOrNothingRespondPermission(t *testing.T) 
 
 	// 2. Respond to permission #1 ONLY -> must buffer decision and return WITHOUT calling the graph!
 	err = sess.Send(ctx, SendInput{
-		Decision: &tools.PermissionDecision{
+		Decision: &api.PermissionDecision{
 			RequestID: pending[0].ID,
-			Kind:      tools.DecisionAllowOnce,
+			Kind:      api.DecisionAllowOnce,
 		},
 	})
 	if err != nil {
@@ -1987,9 +1986,9 @@ func TestMultiPermissionInterruptAndAllOrNothingRespondPermission(t *testing.T) 
 
 	// 3. Respond to permission #2 (rejecting it with feedback) -> triggers h.Resume!
 	err = sess.Send(ctx, SendInput{
-		Decision: &tools.PermissionDecision{
+		Decision: &api.PermissionDecision{
 			RequestID: pending[1].ID,
-			Kind:      tools.DecisionReject,
+			Kind:      api.DecisionReject,
 			Feedback:  "Do not create file2.txt",
 		},
 	})
@@ -2043,9 +2042,9 @@ func TestMultiPermissionInterruptAndAllOrNothingRespondPermission(t *testing.T) 
 		t.Errorf("expected 0 pending permissions after completion, got %d", len(afterPerms))
 	}
 	if err := sess.Send(ctx, SendInput{
-		Decision: &tools.PermissionDecision{
+		Decision: &api.PermissionDecision{
 			RequestID: pending[0].ID,
-			Kind:      tools.DecisionAllowOnce,
+			Kind:      api.DecisionAllowOnce,
 		},
 	}); !errors.Is(err, ErrPermissionNotFound) {
 		t.Errorf("RespondPermission with no pending permissions error = %v, want %v", err, ErrPermissionNotFound)
@@ -2154,9 +2153,9 @@ func TestCancelPendingPermissionsOnNewUserSend(t *testing.T) {
 
 	// Buffer a partial decision for permission #1
 	if err := sess.Send(ctx, SendInput{
-		Decision: &tools.PermissionDecision{
+		Decision: &api.PermissionDecision{
 			RequestID: pending[0].ID,
-			Kind:      tools.DecisionAllowOnce,
+			Kind:      api.DecisionAllowOnce,
 		},
 	}); err != nil {
 		t.Fatalf("RespondPermission partial error: %v", err)
@@ -2237,16 +2236,16 @@ func TestPermissionModeGetAndSet(t *testing.T) {
 		t.Fatalf("Create error: %v", err)
 	}
 
-	if sess.Config.Mode != tools.ModeDefault {
-		t.Errorf("initial PermissionMode = %q, want %q", sess.Config.Mode, tools.ModeDefault)
+	if sess.Config.Mode != api.ModeDefault {
+		t.Errorf("initial PermissionMode = %q, want %q", sess.Config.Mode, api.ModeDefault)
 	}
 
-	for _, nextMode := range []tools.PermissionMode{
-		tools.ModeAcceptEdits,
-		tools.ModePlan,
-		tools.ModeAsk,
-		tools.ModeAuto,
-		tools.ModeDefault,
+	for _, nextMode := range []api.PermissionMode{
+		api.ModeAcceptEdits,
+		api.ModePlan,
+		api.ModeAsk,
+		api.ModeAuto,
+		api.ModeDefault,
 	} {
 		updated, err := mgr.Update(ctx, sess.ID, UpdateParams{Config: SessionConfig{Mode: nextMode}})
 		if err != nil {
@@ -2399,7 +2398,7 @@ func TestTimelineRecordEvents(t *testing.T) {
 	}
 
 	// 5. Change permission mode and verify KindMode entry
-	if _, err := mgr.Update(ctx, sess.ID, UpdateParams{Config: SessionConfig{Mode: tools.ModePlan}}); err != nil {
+	if _, err := mgr.Update(ctx, sess.ID, UpdateParams{Config: SessionConfig{Mode: api.ModePlan}}); err != nil {
 		t.Fatalf("Update(ModePlan) error: %v", err)
 	}
 
@@ -2413,12 +2412,12 @@ func TestTimelineRecordEvents(t *testing.T) {
 	if tl4[3].Kind != api.TimelineKindMode {
 		t.Errorf("tl4[3].Kind = %q, want %q", tl4[3].Kind, api.TimelineKindMode)
 	}
-	if tl4[3].Mode == nil || tl4[3].Mode.From != tools.ModeDefault || tl4[3].Mode.To != tools.ModePlan {
-		t.Errorf("tl4[3].Mode = %+v, want From=%q To=%q", tl4[3].Mode, tools.ModeDefault, tools.ModePlan)
+	if tl4[3].Mode == nil || tl4[3].Mode.From != api.ModeDefault || tl4[3].Mode.To != api.ModePlan {
+		t.Errorf("tl4[3].Mode = %+v, want From=%q To=%q", tl4[3].Mode, api.ModeDefault, api.ModePlan)
 	}
 
 	// Setting the same mode again should NOT append an entry
-	if _, err := mgr.Update(ctx, sess.ID, UpdateParams{Config: SessionConfig{Mode: tools.ModePlan}}); err != nil {
+	if _, err := mgr.Update(ctx, sess.ID, UpdateParams{Config: SessionConfig{Mode: api.ModePlan}}); err != nil {
 		t.Fatalf("Update duplicate error: %v", err)
 	}
 	tl4Dup, err := sess.Timeline.List(ctx)
@@ -2430,7 +2429,7 @@ func TestTimelineRecordEvents(t *testing.T) {
 	}
 
 	// Reset mode to default so the tool call requires approval
-	if _, err := mgr.Update(ctx, sess.ID, UpdateParams{Config: SessionConfig{Mode: tools.ModeDefault}}); err != nil {
+	if _, err := mgr.Update(ctx, sess.ID, UpdateParams{Config: SessionConfig{Mode: api.ModeDefault}}); err != nil {
 		t.Fatalf("Update(ModeDefault) error: %v", err)
 	}
 	tl5, err := sess.Timeline.List(ctx)
@@ -2440,8 +2439,8 @@ func TestTimelineRecordEvents(t *testing.T) {
 	if len(tl5) != 5 {
 		t.Fatalf("expected 5 timeline entries, got %d", len(tl5))
 	}
-	if tl5[4].Kind != api.TimelineKindMode || tl5[4].Mode.From != tools.ModePlan || tl5[4].Mode.To != tools.ModeDefault {
-		t.Errorf("tl5[4].Mode = %+v, want From=%q To=%q", tl5[4].Mode, tools.ModePlan, tools.ModeDefault)
+	if tl5[4].Kind != api.TimelineKindMode || tl5[4].Mode.From != api.ModePlan || tl5[4].Mode.To != api.ModeDefault {
+		t.Errorf("tl5[4].Mode = %+v, want From=%q To=%q", tl5[4].Mode, api.ModePlan, api.ModeDefault)
 	}
 
 	// 6. Send tool-calling turn to trigger permission interrupt
@@ -2465,9 +2464,9 @@ func TestTimelineRecordEvents(t *testing.T) {
 	}
 
 	// Record decision and verify KindPermission entry
-	dec := tools.PermissionDecision{
+	dec := api.PermissionDecision{
 		RequestID: pending[0].ID,
-		Kind:      tools.DecisionAllowOnce,
+		Kind:      api.DecisionAllowOnce,
 	}
 	ready, err := sess.recordDecision(ctx, dec)
 	if err != nil {
@@ -2505,8 +2504,8 @@ func TestTimelineRecordEvents(t *testing.T) {
 	if permEntry.Permission.Request.ID != pending[0].ID {
 		t.Errorf("Permission.Request.ID = %q, want %q", permEntry.Permission.Request.ID, pending[0].ID)
 	}
-	if permEntry.Permission.Decision.Kind != tools.DecisionAllowOnce {
-		t.Errorf("Permission.Decision.Kind = %q, want %q", permEntry.Permission.Decision.Kind, tools.DecisionAllowOnce)
+	if permEntry.Permission.Decision.Kind != api.DecisionAllowOnce {
+		t.Errorf("Permission.Decision.Kind = %q, want %q", permEntry.Permission.Decision.Kind, api.DecisionAllowOnce)
 	}
 
 	// 8. Verify strict UUIDv7 ascending chronological ordering
@@ -3536,7 +3535,7 @@ func TestSessionTodosRestoreOnLoad(t *testing.T) {
 	if len(sess.Todos) != 2 {
 		t.Fatalf("expected 2 todos in sess.Todos, got %d", len(sess.Todos))
 	}
-	if sess.Todos[0].Content != "Task A" || sess.Todos[0].Status != tools.TodoStatusInProgress {
+	if sess.Todos[0].Content != "Task A" || sess.Todos[0].Status != string(api.TodoStatusInProgress) {
 		t.Fatalf("unexpected sess.Todos[0]: %+v", sess.Todos[0])
 	}
 	sess.Unlock()
@@ -3581,7 +3580,7 @@ func TestSessionTodosRestoreOnLoad(t *testing.T) {
 	if len(sess2.Todos) != 2 {
 		t.Fatalf("expected 2 todos restored in sess2.Todos, got %d", len(sess2.Todos))
 	}
-	if sess2.Todos[0].ActiveText != "Working on Task A" || sess2.Todos[1].Status != tools.TodoStatusPending {
+	if sess2.Todos[0].ActiveText != "Working on Task A" || sess2.Todos[1].Status != string(api.TodoStatusPending) {
 		t.Fatalf("unexpected restored todos in sess2: %+v", sess2.Todos)
 	}
 }

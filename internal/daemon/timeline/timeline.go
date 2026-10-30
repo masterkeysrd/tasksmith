@@ -399,19 +399,19 @@ func scanEntry(r rowScanner) (*Entry, error) {
 		}
 		entry.Agent = &a
 	case api.TimelineKindMode:
-		var m ModeChange
+		var m api.ModeChange
 		if err := json.Unmarshal(payload, &m); err != nil {
 			return nil, fmt.Errorf("timeline: unmarshal mode change for %q: %w", id, err)
 		}
 		entry.Mode = &m
 	case api.TimelineKindPermission:
-		var p PermissionRecord
+		var p api.PermissionRecord
 		if err := json.Unmarshal(payload, &p); err != nil {
 			return nil, fmt.Errorf("timeline: unmarshal permission record for %q: %w", id, err)
 		}
 		entry.Permission = &p
 	case api.TimelineKindQuestion:
-		var q QuestionRecord
+		var q api.QuestionRecord
 		if err := json.Unmarshal(payload, &q); err != nil {
 			return nil, fmt.Errorf("timeline: unmarshal question record for %q: %w", id, err)
 		}

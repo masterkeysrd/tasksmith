@@ -10,7 +10,6 @@ import (
 
 	"github.com/masterkeysrd/loom/message"
 	"github.com/masterkeysrd/tasksmith/api"
-	"github.com/masterkeysrd/tasksmith/internal/daemon/tools"
 )
 
 // Sentinel errors returned by the timeline package.
@@ -20,23 +19,6 @@ var (
 	ErrInvalidEntry   = errors.New("timeline: invalid entry")
 	ErrEntryNotFound  = errors.New("timeline: entry not found")
 )
-
-// ModeChange captures a transition of the session permission mode.
-type ModeChange struct {
-	From tools.PermissionMode `json:"from,omitempty"`
-	To   tools.PermissionMode `json:"to"`
-}
-
-// PermissionRecord captures a requested permission and its resolution decision.
-type PermissionRecord struct {
-	Request  tools.PermissionRequest  `json:"request"`
-	Decision tools.PermissionDecision `json:"decision"`
-}
-
-type QuestionRecord struct {
-	Request  tools.QuestionRequest  `json:"request"`
-	Response tools.QuestionResponse `json:"response"`
-}
 
 // Entry is a single append-only timeline event in a session log.
 type Entry struct {
@@ -51,9 +33,9 @@ type Entry struct {
 	Effort        *api.EffortChange        `json:"effort,omitempty"`
 	Thinking      *api.ThinkingChange      `json:"thinking,omitempty"`
 	Agent         *api.AgentChange         `json:"agent,omitempty"`
-	Mode          *ModeChange              `json:"mode,omitempty"`
-	Permission    *PermissionRecord        `json:"permission,omitempty"`
-	Question      *QuestionRecord          `json:"question,omitempty"`
+	Mode          *api.ModeChange          `json:"mode,omitempty"`
+	Permission    *api.PermissionRecord    `json:"permission,omitempty"`
+	Question      *api.QuestionRecord      `json:"question,omitempty"`
 	Compacted     *api.CompactedRecord     `json:"compacted,omitempty"`
 	CacheBroken   *api.CacheBrokenRecord   `json:"cache_broken,omitempty"`
 	TurnCompleted *api.TurnCompletedRecord `json:"turn_completed,omitempty"`
@@ -103,7 +85,10 @@ func (e Entry) Clone() Entry {
 		cp.Permission = &perm
 	}
 	if e.Question != nil {
-		cp.Question = &QuestionRecord{Request: *e.Question.Request.Clone(), Response: *e.Question.Response.Clone()}
+		cp.Question = &api.QuestionRecord{
+			Request:  *e.Question.Request.Clone(),
+			Response: *e.Question.Response.Clone(),
+		}
 	}
 	if e.Compacted != nil {
 		comp := *e.Compacted
@@ -222,7 +207,7 @@ func NewAgentEntry(sessionID string, change api.AgentChange) *Entry {
 }
 
 // NewModeEntry creates an Entry initialized with a ModeChange payload.
-func NewModeEntry(sessionID string, change ModeChange) *Entry {
+func NewModeEntry(sessionID string, change api.ModeChange) *Entry {
 	c := change
 	return &Entry{
 		SessionID: sessionID,
@@ -232,7 +217,7 @@ func NewModeEntry(sessionID string, change ModeChange) *Entry {
 }
 
 // NewPermissionEntry creates an Entry initialized with a PermissionRecord payload.
-func NewPermissionEntry(sessionID string, record PermissionRecord) *Entry {
+func NewPermissionEntry(sessionID string, record api.PermissionRecord) *Entry {
 	r := record
 	return &Entry{
 		SessionID:  sessionID,
@@ -241,7 +226,7 @@ func NewPermissionEntry(sessionID string, record PermissionRecord) *Entry {
 	}
 }
 
-func NewQuestionEntry(sessionID string, record QuestionRecord) *Entry {
+func NewQuestionEntry(sessionID string, record api.QuestionRecord) *Entry {
 	return &Entry{
 		SessionID: sessionID,
 		Kind:      api.TimelineKindQuestion,

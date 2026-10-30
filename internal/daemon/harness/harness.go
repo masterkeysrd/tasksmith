@@ -12,6 +12,7 @@ import (
 	"github.com/masterkeysrd/loom/graph"
 	"github.com/masterkeysrd/loom/llm"
 	"github.com/masterkeysrd/loom/message"
+	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	"github.com/masterkeysrd/tasksmith/internal/core/uuid"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/metrics"
@@ -211,7 +212,7 @@ func prepareResponses(input Input, state State) (graph.Update[State], error) {
 		return nil, ErrNoPendingPermissions
 	}
 
-	normalized := make(map[string]tools.PermissionDecision, len(state.PendingPermissions)*2)
+	normalized := make(map[string]api.PermissionDecision, len(state.PendingPermissions)*2)
 	for _, req := range state.PendingPermissions {
 		dec, ok := lookupDecision(input.Decisions, req)
 		if !ok {
@@ -222,7 +223,7 @@ func prepareResponses(input Input, state State) (graph.Update[State], error) {
 		normalized[req.ID] = dec
 		normalized[req.ToolCallID] = dec
 	}
-	answers := make(map[string]tools.QuestionResponse, len(state.PendingQuestions)*2)
+	answers := make(map[string]api.QuestionResponse, len(state.PendingQuestions)*2)
 	for _, req := range state.PendingQuestions {
 		response, ok := lookupQuestionResponse(input.Answers, req)
 		if !ok {

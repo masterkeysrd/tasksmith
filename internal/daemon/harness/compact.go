@@ -338,7 +338,7 @@ func splitEntryCompactionMessages(msgs message.MessageList, trigger string) (his
 }
 
 // formatTodos formats the session todo checklist for compaction summary injection.
-func formatTodos(todos []tools.TodoItem) string {
+func formatTodos(todos []api.TodoItem) string {
 	if len(todos) == 0 {
 		return "- (none)"
 	}
@@ -353,7 +353,7 @@ func formatTodos(todos []tools.TodoItem) string {
 }
 
 // buildContextSummaryMessage creates the synthetic <context_summary> message replacing state.Messages.
-func buildContextSummaryMessage(userRequests []string, todos []tools.TodoItem, summary string, trigger string, focus string, hasTrailing bool) message.Message {
+func buildContextSummaryMessage(userRequests []string, todos []api.TodoItem, summary string, trigger string, focus string, hasTrailing bool) message.Message {
 	var sb strings.Builder
 	sb.WriteString("<context_summary>\n")
 	sb.WriteString("The conversation history prior to this point was compacted to free context window space.\n\n")

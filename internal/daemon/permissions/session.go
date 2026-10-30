@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/masterkeysrd/loom/tool"
+	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tools"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/workspace"
 )
@@ -15,23 +16,23 @@ import (
 // SessionManager manages permission evaluation, permission modes, and
 // session-scoped permission rules.
 type SessionManager interface {
-	Mode() tools.PermissionMode
-	SetMode(mode tools.PermissionMode)
+	Mode() api.PermissionMode
+	SetMode(mode api.PermissionMode)
 	Permissions() Permissions
 	Policies() *workspace.Policies
 	SetPolicies(p *workspace.Policies)
 	AddAllow(rule string) error
 	AddDeny(rule string) error
 	Clear() error
-	ApplyDecision(req *tools.PermissionRequest, decision tools.PermissionDecision) error
-	Evaluate(plan *tools.Plan) (tools.AccessDecision, *tools.PermissionRequest, error)
+	ApplyDecision(req *api.PermissionRequest, decision api.PermissionDecision) error
+	Evaluate(plan *tools.Plan) (tools.AccessDecision, *api.PermissionRequest, error)
 }
 
 type sessionManager struct {
 	mu          sync.RWMutex
 	manager     Manager
 	ws          workspace.Workspace
-	mode        tools.PermissionMode
+	mode        api.PermissionMode
 	permissions Permissions
 	policies    *workspace.Policies
 	onUpdate    func(Permissions) error
@@ -40,9 +41,9 @@ type sessionManager struct {
 var _ SessionManager = (*sessionManager)(nil)
 
 // NewSession constructs a detached [SessionManager] without an underlying root manager.
-func NewSession(mode tools.PermissionMode, initial Permissions, onUpdate func(Permissions) error) SessionManager {
+func NewSession(mode api.PermissionMode, initial Permissions, onUpdate func(Permissions) error) SessionManager {
 	if mode == "" {
-		mode = tools.ModeDefault
+		mode = api.ModeDefault
 	}
 	return &sessionManager{
 		mode:        mode,
@@ -51,22 +52,22 @@ func NewSession(mode tools.PermissionMode, initial Permissions, onUpdate func(Pe
 	}
 }
 
-// Mode returns the active [tools.PermissionMode].
-func (s *sessionManager) Mode() tools.PermissionMode {
+// Mode returns the active [api.PermissionMode].
+func (s *sessionManager) Mode() api.PermissionMode {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	if s.mode == "" {
-		return tools.ModeDefault
+		return api.ModeDefault
 	}
 	return s.mode
 }
 
-// SetMode updates the active [tools.PermissionMode].
-func (s *sessionManager) SetMode(mode tools.PermissionMode) {
+// SetMode updates the active [api.PermissionMode].
+func (s *sessionManager) SetMode(mode api.PermissionMode) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if mode == "" {
-		mode = tools.ModeDefault
+		mode = api.ModeDefault
 	}
 	s.mode = mode
 }
@@ -156,12 +157,12 @@ func (s *sessionManager) Clear() error {
 	return nil
 }
 
-// ApplyDecision processes a user's [tools.PermissionDecision] for req.
-func (s *sessionManager) ApplyDecision(req *tools.PermissionRequest, decision tools.PermissionDecision) error {
+// ApplyDecision processes a user's [api.PermissionDecision] for req.
+func (s *sessionManager) ApplyDecision(req *api.PermissionRequest, decision api.PermissionDecision) error {
 	switch decision.Kind {
-	case tools.DecisionAllowOnce:
+	case api.DecisionAllowOnce:
 		return nil
-	case tools.DecisionAllowSession:
+	case api.DecisionAllowSession:
 		if req != nil {
 			raw := strings.TrimSpace(decision.GrantPattern)
 			var rule string
@@ -180,7 +181,7 @@ func (s *sessionManager) ApplyDecision(req *tools.PermissionRequest, decision to
 					rule = raw
 				}
 			}
-			scope := Scope(strings.TrimSpace(decision.Scope))
+			scope := Scope(strings.TrimSpace(string(decision.Scope)))
 			if scope == "" {
 				scope = ScopeSession
 			}
@@ -208,7 +209,7 @@ func (s *sessionManager) ApplyDecision(req *tools.PermissionRequest, decision to
 			}
 		}
 		return nil
-	case tools.DecisionReject:
+	case api.DecisionReject:
 		if strings.TrimSpace(decision.Feedback) != "" {
 			return fmt.Errorf("%w: %s", tools.ErrPermissionDenied, strings.TrimSpace(decision.Feedback))
 		}
@@ -220,7 +221,7 @@ func (s *sessionManager) ApplyDecision(req *tools.PermissionRequest, decision to
 
 // Evaluate checks plan against workspace policies, active permission mode,
 // safety classification, and deny/allow permission rules.
-func (s *sessionManager) Evaluate(plan *tools.Plan) (tools.AccessDecision, *tools.PermissionRequest, error) {
+func (s *sessionManager) Evaluate(plan *tools.Plan) (tools.AccessDecision, *api.PermissionRequest, error) {
 	if plan == nil {
 		return tools.AccessDeny, nil, fmt.Errorf("%w: plan cannot be nil", tools.ErrPermissionDenied)
 	}
@@ -285,7 +286,7 @@ func (s *sessionManager) Evaluate(plan *tools.Plan) (tools.AccessDecision, *tool
 
 	mode := s.Mode()
 	switch mode {
-	case tools.ModePlan:
+	case api.ModePlan:
 		if !plan.ReadOnly {
 			return tools.AccessDeny, nil, nil
 		}
@@ -295,17 +296,17 @@ func (s *sessionManager) Evaluate(plan *tools.Plan) (tools.AccessDecision, *tool
 		if plan.Safety != tools.SafetyUnsafe && hasMatchingAllow(plan) {
 			return tools.AccessAllow, nil, nil
 		}
-	case tools.ModeAsk:
+	case api.ModeAsk:
 		if plan.Safety != tools.SafetyUnsafe && hasMatchingAllow(plan) {
 			return tools.AccessAllow, nil, nil
 		}
-	case tools.ModeAuto:
+	case api.ModeAuto:
 		return tools.AccessAllow, nil, nil
 	default: // ModeDefault, ModeAcceptEdits
 		if plan.ReadOnly && plan.Safety == tools.SafetySafe {
 			return tools.AccessAllow, nil, nil
 		}
-		if mode == tools.ModeAcceptEdits && plan.Action == tools.ActionWrite && plan.Safety != tools.SafetyUnsafe {
+		if mode == api.ModeAcceptEdits && plan.Action == tools.ActionWrite && plan.Safety != tools.SafetyUnsafe {
 			return tools.AccessAllow, nil, nil
 		}
 		if plan.Safety != tools.SafetyUnsafe && hasMatchingAllow(plan) {
@@ -319,12 +320,12 @@ func (s *sessionManager) Evaluate(plan *tools.Plan) (tools.AccessDecision, *tool
 		return tools.AccessDeny, nil, fmt.Errorf("permissions: generate request id: %w", err)
 	}
 
-	req := &tools.PermissionRequest{
+	req := &api.PermissionRequest{
 		ID:            id.String(),
 		ToolCallID:    plan.ToolCallID,
 		ToolName:      plan.ToolName,
-		Action:        plan.Action,
-		Safety:        plan.Safety,
+		Action:        api.ActionType(plan.Action),
+		Safety:        api.SafetyLevel(plan.Safety),
 		Target:        plan.Target,
 		Summary:       plan.Summary,
 		Diff:          plan.Diff,

@@ -1,6 +1,8 @@
 package daemon
 
 import (
+	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -10,7 +12,6 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/daemon/models"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/session"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tasks"
-	"github.com/masterkeysrd/tasksmith/internal/daemon/tools"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/workspace"
 )
 
@@ -199,16 +200,16 @@ func TestToAPISessionWithTodos(t *testing.T) {
 		UpdatedAt: now,
 		State: &session.State{
 			Status: session.StatusThinking,
-			Todos: []tools.TodoItem{
+			Todos: []api.TodoItem{
 				{
 					Content:    "Implement feature",
 					ActiveText: "Implementing feature",
-					Status:     tools.TodoStatusInProgress,
+					Status:     string(api.TodoStatusInProgress),
 				},
 				{
 					Content:    "Run tests",
 					ActiveText: "Running tests",
-					Status:     tools.TodoStatusPending,
+					Status:     string(api.TodoStatusPending),
 				},
 			},
 		},
@@ -280,5 +281,21 @@ func TestToAPIModelWithSlashInID(t *testing.T) {
 	}
 	if got.Label != "Qwen 3.8 (MLX Serve)" {
 		t.Errorf("got.Label = %q, want %q", got.Label, "Qwen 3.8 (MLX Serve)")
+	}
+}
+
+func TestQuestionResponseConversionPreservesNo(t *testing.T) {
+	questions := []api.Question{{Type: "text", Question: "Why?"}, {Type: "confirm", Question: "Proceed?"}}
+	input := api.QuestionResponse{Answers: []api.QuestionAnswer{{Question: "Why?", Text: "Reason"}, {Question: "Proceed?", Confirmed: new(false)}}}
+	output := session.ToAPIQuestionResponse(input, questions)
+	data, err := json.Marshal(output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), `"text":"Reason","confirmed"`) || !strings.Contains(string(data), `"confirmed":false`) || output.Answers[0].Confirmed != nil || output.Answers[1].Confirmed == nil {
+		t.Fatalf("unexpected encoded response: %s", data)
+	}
+	if output.Answers[1].Confirmed == nil || *output.Answers[1].Confirmed {
+		t.Fatalf("no answer changed: %+v", output)
 	}
 }

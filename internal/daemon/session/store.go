@@ -8,9 +8,9 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/core/sqlite"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/permissions"
-	"github.com/masterkeysrd/tasksmith/internal/daemon/tools"
 )
 
 // timestampFormat is a fixed-width UTC RFC3339Nano layout so SQLite TEXT
@@ -216,7 +216,7 @@ func scanSession(r rowScanner) (*Session, error) {
 		}
 	}
 	if sess.Config.Mode == "" {
-		sess.Config.Mode = tools.ModeDefault
+		sess.Config.Mode = api.ModeDefault
 	}
 
 	if permsRaw != "" {

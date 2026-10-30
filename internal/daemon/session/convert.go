@@ -14,7 +14,6 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/daemon/models"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tasks"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/timeline"
-	"github.com/masterkeysrd/tasksmith/internal/daemon/tools"
 )
 
 // ToAPISession converts an internal [Session] into the public [api.Session]
@@ -35,10 +34,10 @@ func ToAPISession(sess *Session) api.Session {
 		if sess.Status != "" {
 			status = api.SessionStatus(sess.Status)
 		}
-		perms = toAPIPermissionRequests(sess.PendingPermissions)
-		questions = toAPIQuestionRequests(sess.PendingQuestions)
+		perms = sess.PendingPermissions
+		questions = sess.PendingQuestions
 		ts = ToAPITasks(sess.State.Tasks)
-		todos = toAPITodos(sess.Todos)
+		todos = sess.Todos
 		queueItems = toAPIQueueItems(sess.VisibleQueue())
 		ctxState = sess.Context
 	}
@@ -56,7 +55,7 @@ func ToAPISession(sess *Session) api.Session {
 			Agent:    sess.Config.Agent,
 			Model:    string(sess.Config.Model),
 			Thinking: sess.Config.Thinking,
-			Mode:     api.PermissionMode(sess.Config.Mode),
+			Mode:     sess.Config.Mode,
 		},
 		Status:             status,
 		Diagnostics:        ToSessionDiagnostics(sess.Diagnostics),
@@ -153,21 +152,6 @@ func ToAPITasks(ts []tasks.Snapshot) []api.Task {
 	out := make([]api.Task, len(ts))
 	for i, t := range ts {
 		out[i] = toAPITask(t)
-	}
-	return out
-}
-
-func toAPITodos(items []tools.TodoItem) []api.TodoItem {
-	if len(items) == 0 {
-		return nil
-	}
-	out := make([]api.TodoItem, len(items))
-	for i, it := range items {
-		out[i] = api.TodoItem{
-			Content:    it.Content,
-			ActiveText: it.ActiveText,
-			Status:     string(it.Status),
-		}
 	}
 	return out
 }
@@ -300,44 +284,10 @@ func toAPIChunk(ch *message.AssistantChunk) *api.Chunk {
 	return out
 }
 
-func toAPIPermissionRequest(req tools.PermissionRequest) api.PermissionRequest {
-	return api.PermissionRequest{
-		ID:            req.ID,
-		ToolCallID:    req.ToolCallID,
-		ToolName:      req.ToolName,
-		Action:        api.ActionType(req.Action),
-		Safety:        api.SafetyLevel(req.Safety),
-		Target:        req.Target,
-		Summary:       req.Summary,
-		Diff:          req.Diff,
-		GrantPatterns: slices.Clone(req.GrantPatterns),
-	}
-}
-
-func toAPIPermissionRequests(reqs []tools.PermissionRequest) []api.PermissionRequest {
-	if len(reqs) == 0 {
-		return nil
-	}
-	out := make([]api.PermissionRequest, len(reqs))
-	for i, r := range reqs {
-		out[i] = toAPIPermissionRequest(r)
-	}
-	return out
-}
-
-func toAPIQuestionRequests(reqs []tools.QuestionRequest) []api.QuestionRequest {
-	var out []api.QuestionRequest
-	for i := range reqs {
-		r := reqs[i].Clone()
-		out = append(out, api.QuestionRequest{ID: r.ID, ToolCallID: r.ToolCallID, Title: r.Title, Description: r.Description, Questions: r.Questions})
-	}
-	return out
-}
-
-// ToAPIQuestionResponse converts an internal [tools.QuestionResponse] into the
+// ToAPIQuestionResponse converts an internal [api.QuestionResponse] into the
 // public [api.QuestionResponse] representation, attaching confirmation flags for
 // confirm-typed questions.
-func ToAPIQuestionResponse(r tools.QuestionResponse, questions []api.Question) api.QuestionResponse {
+func ToAPIQuestionResponse(r api.QuestionResponse, questions []api.Question) api.QuestionResponse {
 	out := api.QuestionResponse{
 		RequestID:  r.RequestID,
 		ToolCallID: r.ToolCallID,
@@ -350,7 +300,7 @@ func ToAPIQuestionResponse(r tools.QuestionResponse, questions []api.Question) a
 			Text:     a.Text,
 		}
 		if i < len(questions) && questions[i].Type == string(api.QuestionTypeConfirm) {
-			answer.Confirmed = new(a.Confirmed)
+			answer.Confirmed = a.Confirmed
 		}
 		out.Answers = append(out.Answers, answer)
 	}
@@ -362,8 +312,10 @@ func ToAPIQuestionResponse(r tools.QuestionResponse, questions []api.Question) a
 // an un-marshalable structured message payload) it publishes an
 // [api.ErrorEvent] on the same topic instead of dropping the notification.
 func publishEntryAdded(p Publisher, sessionID string, entry *timeline.Entry) {
-	cloned := entry.Clone()
-	apiEntry, err := ToAPITimelineEntry(cloned)
+	if entry == nil {
+		return
+	}
+	apiEntry, err := ToAPITimelineEntry(*entry)
 	if err != nil {
 		p.Publish(api.SessionStreamTopic(sessionID), api.ErrorEvent{SessionID: sessionID, Error: err.Error()})
 		return
@@ -375,10 +327,21 @@ func publishEntryAdded(p Publisher, sessionID string, entry *timeline.Entry) {
 // [api.TimelineEntry] representation used by the API.
 func ToAPITimelineEntry(entry timeline.Entry) (api.TimelineEntry, error) {
 	out := api.TimelineEntry{
-		ID:        entry.ID,
-		SessionID: entry.SessionID,
-		Kind:      entry.Kind,
-		CreatedAt: entry.CreatedAt,
+		ID:            entry.ID,
+		SessionID:     entry.SessionID,
+		Kind:          entry.Kind,
+		CreatedAt:     entry.CreatedAt,
+		Command:       entry.Command,
+		Model:         entry.Model,
+		Effort:        entry.Effort,
+		Thinking:      entry.Thinking,
+		Agent:         entry.Agent,
+		Mode:          entry.Mode,
+		Permission:    entry.Permission,
+		Question:      entry.Question,
+		Compacted:     entry.Compacted,
+		CacheBroken:   entry.CacheBroken,
+		TurnCompleted: entry.TurnCompleted,
 	}
 
 	if entry.Message != nil {
@@ -387,98 +350,6 @@ func ToAPITimelineEntry(entry timeline.Entry) (api.TimelineEntry, error) {
 			return api.TimelineEntry{}, err
 		}
 		out.Message = msg
-	}
-
-	if entry.Command != nil {
-		out.Command = &api.CommandRecord{
-			Command:    entry.Command.Command,
-			Output:     entry.Command.Output,
-			ExitCode:   entry.Command.ExitCode,
-			DurationMs: entry.Command.DurationMs,
-		}
-	}
-
-	if entry.Model != nil {
-		m := *entry.Model
-		out.Model = &m
-	}
-
-	if entry.Effort != nil {
-		out.Effort = &api.EffortChange{
-			From: entry.Effort.From,
-			To:   entry.Effort.To,
-		}
-	}
-
-	if entry.Thinking != nil {
-		out.Thinking = entry.Clone().Thinking
-	}
-
-	if entry.Agent != nil {
-		out.Agent = &api.AgentChange{
-			From: entry.Agent.From,
-			To:   entry.Agent.To,
-		}
-	}
-
-	if entry.Mode != nil {
-		out.Mode = &api.ModeChange{
-			From: api.PermissionMode(entry.Mode.From),
-			To:   api.PermissionMode(entry.Mode.To),
-		}
-	}
-
-	if entry.Permission != nil {
-		out.Permission = &api.PermissionRecord{
-			Request: toAPIPermissionRequest(entry.Permission.Request),
-			Decision: api.PermissionDecision{
-				RequestID:    entry.Permission.Decision.RequestID,
-				ToolCallID:   entry.Permission.Decision.ToolCallID,
-				Kind:         api.DecisionKind(entry.Permission.Decision.Kind),
-				GrantPattern: entry.Permission.Decision.GrantPattern,
-				Scope:        api.PermissionScope(entry.Permission.Decision.Scope),
-				Feedback:     entry.Permission.Decision.Feedback,
-			},
-		}
-	}
-
-	if entry.Question != nil {
-		out.Question = &api.QuestionRecord{
-			Request:  toAPIQuestionRequests([]tools.QuestionRequest{entry.Question.Request})[0],
-			Response: ToAPIQuestionResponse(entry.Question.Response, entry.Question.Request.Questions),
-		}
-	}
-
-	if entry.Compacted != nil {
-		out.Compacted = &api.CompactedRecord{
-			Trigger:      entry.Compacted.Trigger,
-			Focus:        entry.Compacted.Focus,
-			Summary:      entry.Compacted.Summary,
-			BeforeTokens: entry.Compacted.BeforeTokens,
-			AfterTokens:  entry.Compacted.AfterTokens,
-			DurationMs:   entry.Compacted.DurationMs,
-		}
-	}
-
-	if entry.CacheBroken != nil {
-		out.CacheBroken = &api.CacheBrokenRecord{
-			PrevCached:  entry.CacheBroken.PrevCached,
-			CurrCached:  entry.CacheBroken.CurrCached,
-			InputTokens: entry.CacheBroken.InputTokens,
-		}
-	}
-
-	if entry.TurnCompleted != nil {
-		tc := entry.TurnCompleted
-		out.TurnCompleted = &api.TurnCompletedRecord{
-			TurnID:       tc.TurnID,
-			Status:       tc.Status,
-			ElapsedMs:    tc.ElapsedMs,
-			InputTokens:  tc.InputTokens,
-			OutputTokens: tc.OutputTokens,
-			CostNano:     tc.CostNano,
-			Unpriced:     tc.Unpriced,
-		}
 	}
 
 	return out, nil

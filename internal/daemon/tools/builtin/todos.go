@@ -17,7 +17,7 @@ func (t *todosTool) Prepare(_ context.Context, in api.TodosInput) (*tools.Plan, 
 		if strings.TrimSpace(item.Content) == "" {
 			return nil, fmt.Errorf("%w: todo item %d content is required", std.ErrInvalidArgument, i)
 		}
-		status := tools.TodoStatus(strings.TrimSpace(item.Status))
+		status := api.TodoStatus(strings.TrimSpace(item.Status))
 		if !status.IsValid() {
 			return nil, fmt.Errorf("%w: todo item %d has invalid status %q", std.ErrInvalidArgument, i, item.Status)
 		}
@@ -43,17 +43,17 @@ func (t *todosTool) Execute(_ context.Context, in api.TodosInput) (api.TodosOutp
 			return api.TodosOutput{}, fmt.Errorf("%w: todo item %d content is required", std.ErrInvalidArgument, i)
 		}
 		statusStr := strings.TrimSpace(item.Status)
-		status := tools.TodoStatus(statusStr)
+		status := api.TodoStatus(statusStr)
 		if !status.IsValid() {
 			return api.TodosOutput{}, fmt.Errorf("%w: todo item %d has invalid status %q", std.ErrInvalidArgument, i, item.Status)
 		}
 
 		switch status {
-		case tools.TodoStatusCompleted:
+		case api.TodoStatusCompleted:
 			completed++
-		case tools.TodoStatusInProgress:
+		case api.TodoStatusInProgress:
 			inProgress++
-		case tools.TodoStatusPending:
+		case api.TodoStatusPending:
 			pending++
 		}
 

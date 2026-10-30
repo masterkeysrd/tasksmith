@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/permissions"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tools"
@@ -281,13 +282,13 @@ func TestSessionManagerEvaluationModesAndPrecedence(t *testing.T) {
 
 	var updatedPerms permissions.Permissions
 	updateCount := 0
-	sess := mgr.Attach(tools.ModeDefault, permissions.Permissions{}, func(p permissions.Permissions) error {
+	sess := mgr.Attach(api.ModeDefault, permissions.Permissions{}, func(p permissions.Permissions) error {
 		updatedPerms = p.Clone()
 		updateCount++
 		return nil
 	})
 
-	if sess.Mode() != tools.ModeDefault {
+	if sess.Mode() != api.ModeDefault {
 		t.Fatalf("expected ModeDefault, got %s", sess.Mode())
 	}
 
@@ -341,7 +342,7 @@ func TestSessionManagerEvaluationModesAndPrecedence(t *testing.T) {
 	}
 
 	// ApplyDecision DecisionAllowSession
-	if err := sess.ApplyDecision(outReq, tools.PermissionDecision{Kind: tools.DecisionAllowSession}); err != nil {
+	if err := sess.ApplyDecision(outReq, api.PermissionDecision{Kind: api.DecisionAllowSession}); err != nil {
 		t.Fatalf("ApplyDecision: %v", err)
 	}
 	if updateCount == 0 || len(updatedPerms.Allow) == 0 {
@@ -359,7 +360,7 @@ func TestSessionManagerEvaluationModesAndPrecedence(t *testing.T) {
 	_ = sess.Clear()
 
 	// 2. ModeAcceptEdits
-	sess.SetMode(tools.ModeAcceptEdits)
+	sess.SetMode(api.ModeAcceptEdits)
 	if dec, _, _ := sess.Evaluate(writePlan); dec != tools.AccessAllow {
 		t.Fatalf("ModeAcceptEdits writePlan: expected AccessAllow, got %s", dec)
 	}
@@ -368,7 +369,7 @@ func TestSessionManagerEvaluationModesAndPrecedence(t *testing.T) {
 	}
 
 	// 3. ModePlan
-	sess.SetMode(tools.ModePlan)
+	sess.SetMode(api.ModePlan)
 	if dec, _, _ := sess.Evaluate(writePlan); dec != tools.AccessDeny {
 		t.Fatalf("ModePlan writePlan: expected AccessDeny, got %s", dec)
 	}
@@ -377,7 +378,7 @@ func TestSessionManagerEvaluationModesAndPrecedence(t *testing.T) {
 	}
 
 	// 4. ModeAsk
-	sess.SetMode(tools.ModeAsk)
+	sess.SetMode(api.ModeAsk)
 	if dec, _, _ := sess.Evaluate(safeReadPlan); dec != tools.AccessAsk {
 		t.Fatalf("ModeAsk safeReadPlan: expected AccessAsk, got %s", dec)
 	}
@@ -388,7 +389,7 @@ func TestSessionManagerEvaluationModesAndPrecedence(t *testing.T) {
 	_ = sess.Clear()
 
 	// 5. ModeAuto
-	sess.SetMode(tools.ModeAuto)
+	sess.SetMode(api.ModeAuto)
 	if dec, _, _ := sess.Evaluate(writePlan); dec != tools.AccessAllow {
 		t.Fatalf("ModeAuto writePlan: expected AccessAllow, got %s", dec)
 	}
@@ -425,18 +426,18 @@ func TestSessionManagerEvaluationModesAndPrecedence(t *testing.T) {
 	_ = mgr.RemoveRule(permissions.ScopeGlobal, permissions.EffectDeny, "write_file(*)")
 
 	// 7. ApplyDecision with Reject
-	dummyReq := &tools.PermissionRequest{
+	dummyReq := &api.PermissionRequest{
 		ToolName: "bash",
-		Action:   tools.ActionExec,
+		Action:   api.ActionExec,
 		Target:   "rm -rf /",
 	}
-	if err := sess.ApplyDecision(dummyReq, tools.PermissionDecision{Kind: tools.DecisionReject, Feedback: "blocked"}); !errors.Is(err, tools.ErrPermissionDenied) || !strings.Contains(err.Error(), "blocked") {
+	if err := sess.ApplyDecision(dummyReq, api.PermissionDecision{Kind: api.DecisionReject, Feedback: "blocked"}); !errors.Is(err, tools.ErrPermissionDenied) || !strings.Contains(err.Error(), "blocked") {
 		t.Fatalf("ApplyDecision Reject with feedback failed: %v", err)
 	}
-	if err := sess.ApplyDecision(dummyReq, tools.PermissionDecision{Kind: tools.DecisionReject}); !errors.Is(err, tools.ErrPermissionDenied) {
+	if err := sess.ApplyDecision(dummyReq, api.PermissionDecision{Kind: api.DecisionReject}); !errors.Is(err, tools.ErrPermissionDenied) {
 		t.Fatalf("ApplyDecision Reject without feedback failed: %v", err)
 	}
-	if err := sess.ApplyDecision(dummyReq, tools.PermissionDecision{Kind: "unknown"}); !errors.Is(err, tools.ErrPermissionDenied) {
+	if err := sess.ApplyDecision(dummyReq, api.PermissionDecision{Kind: "unknown"}); !errors.Is(err, tools.ErrPermissionDenied) {
 		t.Fatalf("ApplyDecision unknown kind failed: %v", err)
 	}
 
@@ -475,7 +476,7 @@ func TestEvaluateMalformedPermissionsFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("permissions.New: %v", err)
 	}
-	sess := mgr.Attach(tools.ModeDefault, permissions.Permissions{}, nil)
+	sess := mgr.Attach(api.ModeDefault, permissions.Permissions{}, nil)
 
 	// Write corrupt JSON to project permissions file
 	wsDataDir, err := xdg.WorkspaceDir(dir)
@@ -543,20 +544,20 @@ func TestApplyDecisionWithScopes(t *testing.T) {
 		t.Fatalf("permissions.New: %v", err)
 	}
 
-	sess := mgr.Attach(tools.ModeDefault, permissions.Permissions{}, nil)
+	sess := mgr.Attach(api.ModeDefault, permissions.Permissions{}, nil)
 
-	req := &tools.PermissionRequest{
+	req := &api.PermissionRequest{
 		ToolName:      "bash",
-		Action:        tools.ActionExec,
-		Safety:        tools.SafetyOutside,
+		Action:        api.ActionExec,
+		Safety:        api.SafetyOutside,
 		Target:        "git status",
 		GrantPatterns: []string{"bash(git status *)", "bash(git *)"},
 	}
 
 	// 1. Scope: project
-	err = sess.ApplyDecision(req, tools.PermissionDecision{
-		Kind:  tools.DecisionAllowSession,
-		Scope: string(permissions.ScopeProject),
+	err = sess.ApplyDecision(req, api.PermissionDecision{
+		Kind:  api.DecisionAllowSession,
+		Scope: api.ScopeProject,
 	})
 	if err != nil {
 		t.Fatalf("ApplyDecision ScopeProject failed: %v", err)
@@ -582,16 +583,16 @@ func TestApplyDecisionWithScopes(t *testing.T) {
 	}
 
 	// 2. Scope: global
-	reqGlobal := &tools.PermissionRequest{
+	reqGlobal := &api.PermissionRequest{
 		ToolName:      "bash",
-		Action:        tools.ActionExec,
-		Safety:        tools.SafetyOutside,
+		Action:        api.ActionExec,
+		Safety:        api.SafetyOutside,
 		Target:        "go version",
 		GrantPatterns: []string{"bash(go *)"},
 	}
-	err = sess.ApplyDecision(reqGlobal, tools.PermissionDecision{
-		Kind:  tools.DecisionAllowSession,
-		Scope: string(permissions.ScopeGlobal),
+	err = sess.ApplyDecision(reqGlobal, api.PermissionDecision{
+		Kind:  api.DecisionAllowSession,
+		Scope: api.ScopeGlobal,
 	})
 	if err != nil {
 		t.Fatalf("ApplyDecision ScopeGlobal failed: %v", err)
@@ -606,8 +607,8 @@ func TestApplyDecisionWithScopes(t *testing.T) {
 	}
 
 	// 3. Invalid scope
-	err = sess.ApplyDecision(req, tools.PermissionDecision{
-		Kind:  tools.DecisionAllowSession,
+	err = sess.ApplyDecision(req, api.PermissionDecision{
+		Kind:  api.DecisionAllowSession,
 		Scope: "unsupported_scope",
 	})
 	if !errors.Is(err, permissions.ErrInvalidScope) {
@@ -615,10 +616,10 @@ func TestApplyDecisionWithScopes(t *testing.T) {
 	}
 
 	// 4. ScopeProject with nil manager
-	nilMgrSess := permissions.NewSession(tools.ModeDefault, permissions.Permissions{}, nil)
-	err = nilMgrSess.ApplyDecision(req, tools.PermissionDecision{
-		Kind:  tools.DecisionAllowSession,
-		Scope: string(permissions.ScopeProject),
+	nilMgrSess := permissions.NewSession(api.ModeDefault, permissions.Permissions{}, nil)
+	err = nilMgrSess.ApplyDecision(req, api.PermissionDecision{
+		Kind:  api.DecisionAllowSession,
+		Scope: api.ScopeProject,
 	})
 	if !errors.Is(err, permissions.ErrInvalidConfig) {
 		t.Fatalf("expected ErrInvalidConfig when manager is nil, got %v", err)

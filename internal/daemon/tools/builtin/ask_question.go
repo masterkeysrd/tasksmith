@@ -54,8 +54,8 @@ func validateQuestions(questions []api.Question) error {
 }
 
 func validateQuestion(q api.Question) error {
-	switch tools.QuestionType(q.Type) {
-	case tools.QuestionTypeSingle, tools.QuestionTypeMulti, tools.QuestionTypeText, tools.QuestionTypeConfirm:
+	switch api.QuestionType(q.Type) {
+	case api.QuestionTypeSingle, api.QuestionTypeMulti, api.QuestionTypeText, api.QuestionTypeConfirm:
 		// valid
 	default:
 		return fmt.Errorf("invalid question type %q", q.Type)
@@ -73,8 +73,8 @@ func validateQuestion(q api.Question) error {
 		return fmt.Errorf("description must be at most 300 runes")
 	}
 
-	switch tools.QuestionType(q.Type) {
-	case tools.QuestionTypeSingle, tools.QuestionTypeMulti:
+	switch api.QuestionType(q.Type) {
+	case api.QuestionTypeSingle, api.QuestionTypeMulti:
 		if len(q.Options) < 2 || len(q.Options) > 5 {
 			return fmt.Errorf("must have 2 to 5 options, got %d", len(q.Options))
 		}
@@ -94,7 +94,7 @@ func validateQuestion(q api.Question) error {
 				return fmt.Errorf("option %d: description must be at most 100 runes", j)
 			}
 		}
-	case tools.QuestionTypeText, tools.QuestionTypeConfirm:
+	case api.QuestionTypeText, api.QuestionTypeConfirm:
 		if len(q.Options) > 0 {
 			return fmt.Errorf("must not have options for %q questions", q.Type)
 		}

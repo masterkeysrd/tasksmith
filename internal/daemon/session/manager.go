@@ -24,7 +24,6 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/daemon/models"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/permissions"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/timeline"
-	"github.com/masterkeysrd/tasksmith/internal/daemon/tools"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/workspace"
 )
 
@@ -243,7 +242,7 @@ func (m *manager) loadOrCacheSession(ctx context.Context, dbSess *Session) (*Ses
 			if len(st.PendingPermissions) > 0 && sess.Status == StatusIdle {
 				sess.Status = StatusWaitingPermission
 				sess.WaitingPermission = true
-				perms := make([]tools.PermissionRequest, len(st.PendingPermissions))
+				perms := make([]api.PermissionRequest, len(st.PendingPermissions))
 				for i, p := range st.PendingPermissions {
 					p.GrantPatterns = slices.Clone(p.GrantPatterns)
 					perms[i] = p
@@ -252,7 +251,7 @@ func (m *manager) loadOrCacheSession(ctx context.Context, dbSess *Session) (*Ses
 			}
 			if len(st.PendingQuestions) > 0 && sess.Status != StatusThinking {
 				sess.WaitingQuestion = true
-				sess.PendingQuestions = make([]tools.QuestionRequest, len(st.PendingQuestions))
+				sess.PendingQuestions = make([]api.QuestionRequest, len(st.PendingQuestions))
 				for i := range st.PendingQuestions {
 					sess.PendingQuestions[i] = *st.PendingQuestions[i].Clone()
 				}
@@ -382,7 +381,7 @@ func (m *manager) Create(ctx context.Context, params CreateParams) (sess *Sessio
 // resolveConfig validates config and resolves its agent and model, defaulting
 // the permission mode. A "default" thinking setting is normalized to nil.
 func (m *manager) resolveConfig(config SessionConfig) (SessionConfig, error) {
-	mode := cmp.Or(config.Mode, tools.ModeDefault)
+	mode := cmp.Or(config.Mode, api.ModeDefault)
 	if !mode.IsValid() {
 		return SessionConfig{}, fmt.Errorf("%w: unsupported permission mode %q", ErrInvalidConfig, config.Mode)
 	}
@@ -589,7 +588,7 @@ func (m *manager) Update(ctx context.Context, id string, params UpdateParams) (*
 		publishEntryAdded(m.publisher, sess.ID, entry)
 	}
 	if oldConfig.Mode != newConfig.Mode {
-		entry := timeline.NewModeEntry(sess.ID, timeline.ModeChange{From: oldConfig.Mode, To: newConfig.Mode})
+		entry := timeline.NewModeEntry(sess.ID, api.ModeChange{From: oldConfig.Mode, To: newConfig.Mode})
 		if err := sess.Timeline.Append(ctx, entry); err != nil {
 			return nil, err
 		}

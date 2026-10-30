@@ -8,7 +8,6 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/daemon/broker"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/harness"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/journal"
-	"github.com/masterkeysrd/tasksmith/internal/daemon/tools"
 )
 
 // Sentinel errors returned by the session package.
@@ -53,8 +52,8 @@ type SendInput struct {
 	ID       string
 	Message  message.Message
 	Command  string
-	Decision *tools.PermissionDecision
-	Question *tools.QuestionResponse
+	Decision *api.PermissionDecision
+	Question *api.QuestionResponse
 	Compact  *api.CompactRequest
 }
 

@@ -212,7 +212,7 @@ func TestReadOnlyToolsPrepareEvaluateExecute(t *testing.T) {
 	if err != nil {
 		t.Fatalf("permissions.New: %v", err)
 	}
-	perm := permMgr.Attach(tools.ModeDefault, permissions.Permissions{}, nil)
+	perm := permMgr.Attach(api.ModeDefault, permissions.Permissions{}, nil)
 
 	if err := os.MkdirAll(filepath.Join(dir, "pkg"), 0o755); err != nil {
 		t.Fatal(err)
@@ -291,7 +291,7 @@ func TestWriteEditAndCASConflict(t *testing.T) {
 	if err != nil {
 		t.Fatalf("permissions.New: %v", err)
 	}
-	perm := permMgr.Attach(tools.ModeDefault, permissions.Permissions{}, nil)
+	perm := permMgr.Attach(api.ModeDefault, permissions.Permissions{}, nil)
 
 	// 1. Write new file (DryRun in Prepare, then Execute)
 	writeCall := &message.ToolCall{
@@ -541,7 +541,7 @@ func TestBashWebFetchDownloadRemoveAndEdgeCases(t *testing.T) {
 	if err != nil {
 		t.Fatalf("permissions.New: %v", err)
 	}
-	perm := permMgr.Attach(tools.ModeDefault, permissions.Permissions{}, nil)
+	perm := permMgr.Attach(api.ModeDefault, permissions.Permissions{}, nil)
 
 	// Read-only tools targeting ../somefile.txt produce SafetyOutside and evaluate to AccessAsk,
 	// and can be granted for the session via DecisionAllowSession.
@@ -562,7 +562,7 @@ func TestBashWebFetchDownloadRemoveAndEdgeCases(t *testing.T) {
 		if err != nil || dec != tools.AccessAsk || permReq == nil {
 			t.Fatalf("expected AccessAsk for %s on SafetyOutside plan, got %s, %+v, %v", roOutside.Name, dec, permReq, err)
 		}
-		if err := perm.ApplyDecision(permReq, tools.PermissionDecision{Kind: tools.DecisionAllowSession}); err != nil {
+		if err := perm.ApplyDecision(permReq, api.PermissionDecision{Kind: api.DecisionAllowSession}); err != nil {
 			t.Fatalf("ApplyDecision(DecisionAllowSession) failed: %v", err)
 		}
 		if dec2, _, err := perm.Evaluate(outPlan); err != nil || dec2 != tools.AccessAllow {

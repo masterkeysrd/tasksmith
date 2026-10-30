@@ -211,7 +211,7 @@ func emit(ctx context.Context, ev StreamEvent) {
 	}
 }
 
-func extractTodos(msg *message.Tool) ([]tools.TodoItem, bool) {
+func extractTodos(msg *message.Tool) ([]api.TodoItem, bool) {
 	if msg == nil || msg.Name != "todos" || msg.IsError {
 		return nil, false
 	}
@@ -228,15 +228,7 @@ func extractTodos(msg *message.Tool) ([]tools.TodoItem, bool) {
 			return nil, false
 		}
 	}
-	res := make([]tools.TodoItem, len(out.Todos))
-	for i, it := range out.Todos {
-		res[i] = tools.TodoItem{
-			Content:    it.Content,
-			ActiveText: it.ActiveText,
-			Status:     tools.TodoStatus(it.Status),
-		}
-	}
-	return res, true
+	return slices.Clone(out.Todos), true
 }
 
 // CommandNode executes shell commands and injects their outputs into the conversation state.
@@ -554,9 +546,9 @@ func (n *ToolsNode) cancelCalls(ctx context.Context, asstIdx int, unfulfilled []
 
 func (n *ToolsNode) evaluateCalls(ctx context.Context, unfulfilled []*message.ToolCall) (graph.Command[State], error) {
 	toolMsgs := make(message.MessageList, 0, len(unfulfilled))
-	var pending []tools.PermissionRequest
-	var questions []tools.QuestionRequest
-	var updatedTodos []tools.TodoItem
+	var pending []api.PermissionRequest
+	var questions []api.QuestionRequest
+	var updatedTodos []api.TodoItem
 	var hasTodos bool
 
 	for _, tc := range unfulfilled {
@@ -564,7 +556,7 @@ func (n *ToolsNode) evaluateCalls(ctx context.Context, unfulfilled []*message.To
 			plan, err := n.tools.Prepare(ctx, tc)
 			if err == nil {
 				var access tools.AccessDecision
-				var req *tools.PermissionRequest
+				var req *api.PermissionRequest
 				access, req, err = n.permissions.Evaluate(plan)
 				if err == nil {
 					switch access {
@@ -581,7 +573,7 @@ func (n *ToolsNode) evaluateCalls(ctx context.Context, unfulfilled []*message.To
 					}
 				}
 			}
-			var question tools.QuestionRequest
+			var question api.QuestionRequest
 			if err == nil {
 				question, err = newQuestionRequest(tc)
 			}
@@ -634,16 +626,16 @@ func (n *ToolsNode) evaluateCalls(ctx context.Context, unfulfilled []*message.To
 	return n.appendToolMessagesUpdate(ctx, toolMsgs, updatedTodos, hasTodos), nil
 }
 
-func newQuestionRequest(tc *message.ToolCall) (tools.QuestionRequest, error) {
+func newQuestionRequest(tc *message.ToolCall) (api.QuestionRequest, error) {
 	data, err := json.Marshal(tc.Args)
 	if err != nil {
-		return tools.QuestionRequest{}, err
+		return api.QuestionRequest{}, err
 	}
 	var input api.AskQuestionInput
 	if err := json.Unmarshal(data, &input); err != nil {
-		return tools.QuestionRequest{}, err
+		return api.QuestionRequest{}, err
 	}
-	return tools.QuestionRequest{
+	return api.QuestionRequest{
 		ID:          uuid.NewString(),
 		ToolCallID:  tc.ID,
 		Title:       input.Title,
@@ -652,7 +644,7 @@ func newQuestionRequest(tc *message.ToolCall) (tools.QuestionRequest, error) {
 	}, nil
 }
 
-func (n *ToolsNode) evaluateSingleCall(ctx context.Context, tc *message.ToolCall) (*message.Tool, *tools.PermissionRequest, error) {
+func (n *ToolsNode) evaluateSingleCall(ctx context.Context, tc *message.ToolCall) (*message.Tool, *api.PermissionRequest, error) {
 	plan, err := n.tools.Prepare(ctx, tc)
 	if err != nil {
 		n.recordFailure(ctx, tc, err)
@@ -682,19 +674,19 @@ func (n *ToolsNode) evaluateSingleCall(ctx context.Context, tc *message.ToolCall
 	return msg, nil, nil
 }
 
-func (n *ToolsNode) resumeCalls(ctx context.Context, unfulfilled []*message.ToolCall, pending []tools.PermissionRequest, decisions map[string]tools.PermissionDecision, questions []tools.QuestionRequest, answers map[string]tools.QuestionResponse) (graph.Command[State], error) {
-	pendingByCall := make(map[string]tools.PermissionRequest, len(pending))
+func (n *ToolsNode) resumeCalls(ctx context.Context, unfulfilled []*message.ToolCall, pending []api.PermissionRequest, decisions map[string]api.PermissionDecision, questions []api.QuestionRequest, answers map[string]api.QuestionResponse) (graph.Command[State], error) {
+	pendingByCall := make(map[string]api.PermissionRequest, len(pending))
 	for _, req := range pending {
 		pendingByCall[req.ToolCallID] = req
 	}
-	questionsByCall := make(map[string]tools.QuestionRequest, len(questions))
+	questionsByCall := make(map[string]api.QuestionRequest, len(questions))
 	for _, req := range questions {
 		questionsByCall[req.ToolCallID] = req
 	}
 
 	toolMsgs := make(message.MessageList, 0, len(unfulfilled))
-	var nextQuestions []tools.QuestionRequest
-	var updatedTodos []tools.TodoItem
+	var nextQuestions []api.QuestionRequest
+	var updatedTodos []api.TodoItem
 	var hasTodos bool
 
 	for _, tc := range unfulfilled {
@@ -725,15 +717,12 @@ func (n *ToolsNode) resumeCalls(ctx context.Context, unfulfilled []*message.Tool
 					}
 				}
 			}
-			for i, j := range matched {
+			for _, j := range matched {
 				if j < 0 {
 					continue
 				}
 				answer := response.Answers[j]
-				converted := api.QuestionAnswer{Question: answer.Question, Selected: slices.Clone(answer.Selected), Text: answer.Text}
-				if req.Questions[i].Type == string(api.QuestionTypeConfirm) {
-					converted.Confirmed = new(answer.Confirmed)
-				}
+				converted := api.QuestionAnswer{Question: answer.Question, Selected: slices.Clone(answer.Selected), Text: answer.Text, Confirmed: answer.Confirmed}
 				out.Answers = append(out.Answers, converted)
 			}
 			for i, answer := range response.Answers {
@@ -806,7 +795,7 @@ func (n *ToolsNode) resumeCalls(ctx context.Context, unfulfilled []*message.Tool
 	return n.appendToolMessagesUpdate(ctx, toolMsgs, updatedTodos, hasTodos), nil
 }
 
-func (n *ToolsNode) resumeSingleCall(ctx context.Context, tc *message.ToolCall, req tools.PermissionRequest, decisions map[string]tools.PermissionDecision) (*message.Tool, error) {
+func (n *ToolsNode) resumeSingleCall(ctx context.Context, tc *message.ToolCall, req api.PermissionRequest, decisions map[string]api.PermissionDecision) (*message.Tool, error) {
 	dec, ok := lookupDecision(decisions, req)
 	if !ok {
 		return nil, ErrPendingPermissionsUnresolved
@@ -843,7 +832,7 @@ func clearPermissionsUpdate() graph.Update[State] {
 	}
 }
 
-func (n *ToolsNode) appendToolMessagesUpdate(ctx context.Context, toolMsgs message.MessageList, todos []tools.TodoItem, hasTodos bool) graph.Update[State] {
+func (n *ToolsNode) appendToolMessagesUpdate(ctx context.Context, toolMsgs message.MessageList, todos []api.TodoItem, hasTodos bool) graph.Update[State] {
 	return func(s State) State {
 		s = s.AppendMessages(toolMsgs, MessageUpdateOptions{Static: n.static, Limits: n.limits})
 		s.PendingPermissions = nil
@@ -858,7 +847,7 @@ func (n *ToolsNode) appendToolMessagesUpdate(ctx context.Context, toolMsgs messa
 	}
 }
 
-func lookupQuestionResponse(answers map[string]tools.QuestionResponse, req tools.QuestionRequest) (tools.QuestionResponse, bool) {
+func lookupQuestionResponse(answers map[string]api.QuestionResponse, req api.QuestionRequest) (api.QuestionResponse, bool) {
 	if response, ok := answers[req.ID]; ok {
 		return response, true
 	}
@@ -866,9 +855,9 @@ func lookupQuestionResponse(answers map[string]tools.QuestionResponse, req tools
 	return response, ok
 }
 
-func lookupDecision(decisions map[string]tools.PermissionDecision, req tools.PermissionRequest) (tools.PermissionDecision, bool) {
+func lookupDecision(decisions map[string]api.PermissionDecision, req api.PermissionRequest) (api.PermissionDecision, bool) {
 	if len(decisions) == 0 {
-		return tools.PermissionDecision{}, false
+		return api.PermissionDecision{}, false
 	}
 	if dec, ok := decisions[req.ID]; ok && isValidDecisionKind(dec.Kind) {
 		return dec, true
@@ -876,12 +865,12 @@ func lookupDecision(decisions map[string]tools.PermissionDecision, req tools.Per
 	if dec, ok := decisions[req.ToolCallID]; ok && isValidDecisionKind(dec.Kind) {
 		return dec, true
 	}
-	return tools.PermissionDecision{}, false
+	return api.PermissionDecision{}, false
 }
 
-func isValidDecisionKind(k tools.PermissionDecisionKind) bool {
+func isValidDecisionKind(k api.DecisionKind) bool {
 	switch k {
-	case tools.DecisionAllowOnce, tools.DecisionAllowSession, tools.DecisionReject:
+	case api.DecisionAllowOnce, api.DecisionAllowSession, api.DecisionReject:
 		return true
 	default:
 		return false

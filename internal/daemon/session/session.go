@@ -71,7 +71,7 @@ type SessionConfig struct {
 	Agent    string               `json:"agent,omitempty"`
 	Model    models.ID            `json:"model,omitempty"`
 	Thinking *api.ThinkingSetting `json:"thinking,omitempty"`
-	Mode     tools.PermissionMode `json:"mode,omitempty"`
+	Mode     api.PermissionMode   `json:"mode,omitempty"`
 }
 
 // Session represents a persistent user-facing chat thread and its runtime state.
@@ -1029,9 +1029,9 @@ func (s *Session) onTaskUpdate(snap tasks.Snapshot) {
 	}
 }
 
-func (s *Session) recordDecision(ctx context.Context, decision tools.PermissionDecision) (bool, error) {
+func (s *Session) recordDecision(ctx context.Context, decision api.PermissionDecision) (bool, error) {
 	switch decision.Kind {
-	case tools.DecisionAllowOnce, tools.DecisionAllowSession, tools.DecisionReject:
+	case api.DecisionAllowOnce, api.DecisionAllowSession, api.DecisionReject:
 	default:
 		return false, fmt.Errorf("%w: unsupported decision kind %q", ErrInvalidDecision, decision.Kind)
 	}
@@ -1046,7 +1046,7 @@ func (s *Session) recordDecision(ctx context.Context, decision tools.PermissionD
 		return false, fmt.Errorf("session: load harness state for permissions: %w", err)
 	}
 
-	var matched *tools.PermissionRequest
+	var matched *api.PermissionRequest
 	for i := range state.PendingPermissions {
 		req := &state.PendingPermissions[i]
 		if (decision.RequestID != "" && req.ID == decision.RequestID) ||
@@ -1064,11 +1064,11 @@ func (s *Session) recordDecision(ctx context.Context, decision tools.PermissionD
 
 	s.Lock()
 	if s.decisions == nil {
-		s.decisions = make(map[string]tools.PermissionDecision, len(state.PendingPermissions))
+		s.decisions = make(map[string]api.PermissionDecision, len(state.PendingPermissions))
 	}
 	s.decisions[matched.ID] = decision
 
-	var remaining []tools.PermissionRequest
+	var remaining []api.PermissionRequest
 	for _, req := range state.PendingPermissions {
 		if _, ok := s.decisions[req.ID]; !ok {
 			req.GrantPatterns = slices.Clone(req.GrantPatterns)
@@ -1086,7 +1086,7 @@ func (s *Session) recordDecision(ctx context.Context, decision tools.PermissionD
 	matchedReq := *matched
 	matchedReq.GrantPatterns = slices.Clone(matched.GrantPatterns)
 	fullDec := decision
-	entry := timeline.NewPermissionEntry(s.ID, timeline.PermissionRecord{
+	entry := timeline.NewPermissionEntry(s.ID, api.PermissionRecord{
 		Request:  matchedReq,
 		Decision: fullDec,
 	})
@@ -1111,7 +1111,7 @@ func (s *Session) recordDecision(ctx context.Context, decision tools.PermissionD
 	return allResolved, nil
 }
 
-func (s *Session) recordQuestion(ctx context.Context, response tools.QuestionResponse) (bool, error) {
+func (s *Session) recordQuestion(ctx context.Context, response api.QuestionResponse) (bool, error) {
 	h, err := s.harness(ctx)
 	if err != nil {
 		return false, err
@@ -1123,7 +1123,7 @@ func (s *Session) recordQuestion(ctx context.Context, response tools.QuestionRes
 	if len(state.PendingQuestions) == 0 {
 		return false, ErrNoPendingQuestions
 	}
-	var matched *tools.QuestionRequest
+	var matched *api.QuestionRequest
 	for i := range state.PendingQuestions {
 		req := &state.PendingQuestions[i]
 		if (response.RequestID != "" && response.RequestID == req.ID) || (response.ToolCallID != "" && response.ToolCallID == req.ToolCallID) {
@@ -1144,7 +1144,7 @@ func (s *Session) recordQuestion(ctx context.Context, response tools.QuestionRes
 	}
 	response = *response.Clone()
 	response.RequestID, response.ToolCallID = matched.ID, matched.ToolCallID
-	entry := timeline.NewQuestionEntry(s.ID, timeline.QuestionRecord{Request: *matched.Clone(), Response: response})
+	entry := timeline.NewQuestionEntry(s.ID, api.QuestionRecord{Request: *matched.Clone(), Response: response})
 	if err := s.Timeline.Append(ctx, entry); err != nil {
 		return false, err
 	}
@@ -1153,10 +1153,10 @@ func (s *Session) recordQuestion(ctx context.Context, response tools.QuestionRes
 	}
 	s.Lock()
 	if s.answers == nil {
-		s.answers = make(map[string]tools.QuestionResponse)
+		s.answers = make(map[string]api.QuestionResponse)
 	}
 	s.answers[matched.ID] = response
-	var remaining []tools.QuestionRequest
+	var remaining []api.QuestionRequest
 	for i := range state.PendingQuestions {
 		if _, ok := s.answers[state.PendingQuestions[i].ID]; !ok {
 			remaining = append(remaining, *state.PendingQuestions[i].Clone())
@@ -1339,13 +1339,13 @@ func (s *Session) send(ctx context.Context, stream iter.Seq2[harness.Event, erro
 
 		case harness.EventInterrupted:
 			interrupted = true
-			perms := make([]tools.PermissionRequest, len(hev.Permissions))
+			perms := make([]api.PermissionRequest, len(hev.Permissions))
 			for i, p := range hev.Permissions {
 				p.GrantPatterns = slices.Clone(p.GrantPatterns)
 				perms[i] = p
 			}
 
-			questions := make([]tools.QuestionRequest, len(hev.Questions))
+			questions := make([]api.QuestionRequest, len(hev.Questions))
 			for i := range hev.Questions {
 				questions[i] = *hev.Questions[i].Clone()
 			}
@@ -1368,10 +1368,10 @@ func (s *Session) send(ctx context.Context, stream iter.Seq2[harness.Event, erro
 				Status:    api.SessionStatus(nextStatus),
 			})
 			if len(perms) > 0 {
-				s.publisher.Publish(api.SessionStreamTopic(s.ID), api.PermissionRequestedEvent{SessionID: s.ID, Permissions: toAPIPermissionRequests(perms)})
+				s.publisher.Publish(api.SessionStreamTopic(s.ID), api.PermissionRequestedEvent{SessionID: s.ID, Permissions: perms})
 			}
 			if len(questions) > 0 {
-				s.publisher.Publish(api.SessionStreamTopic(s.ID), api.QuestionRequestedEvent{SessionID: s.ID, Questions: toAPIQuestionRequests(questions)})
+				s.publisher.Publish(api.SessionStreamTopic(s.ID), api.QuestionRequestedEvent{SessionID: s.ID, Questions: questions})
 			}
 
 		case harness.EventTodosUpdated:
@@ -1381,7 +1381,7 @@ func (s *Session) send(ctx context.Context, stream iter.Seq2[harness.Event, erro
 
 			s.publisher.Publish(api.SessionStreamTopic(s.ID), api.TodosUpdatedEvent{
 				SessionID: s.ID,
-				Todos:     toAPITodos(hev.Todos),
+				Todos:     hev.Todos,
 			})
 
 		case harness.EventCompactionStarted:

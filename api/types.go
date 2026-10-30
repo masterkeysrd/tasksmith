@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"time"
 )
 
@@ -348,11 +349,64 @@ type QuestionRequest struct {
 	Questions   []Question `json:"questions"`
 }
 
+// Clone returns a deep copy of QuestionRequest with cloned slices.
+func (r *QuestionRequest) Clone() *QuestionRequest {
+	if r == nil {
+		return nil
+	}
+	cp := &QuestionRequest{
+		ID:          r.ID,
+		ToolCallID:  r.ToolCallID,
+		Title:       r.Title,
+		Description: r.Description,
+		Questions:   make([]Question, len(r.Questions)),
+	}
+	for i, q := range r.Questions {
+		o := make([]QuestionOption, len(q.Options))
+		copy(o, q.Options)
+		cp.Questions[i] = Question{
+			Type:        q.Type,
+			Question:    q.Question,
+			Description: q.Description,
+			Label:       q.Label,
+			Options:     o,
+		}
+	}
+	return cp
+}
+
 type QuestionResponse struct {
 	RequestID  string           `json:"request_id"`
 	ToolCallID string           `json:"tool_call_id"`
 	Canceled   bool             `json:"canceled,omitempty"`
 	Answers    []QuestionAnswer `json:"answers,omitempty"`
+}
+
+// Clone returns a deep copy of QuestionResponse with cloned slices.
+func (r *QuestionResponse) Clone() *QuestionResponse {
+	if r == nil {
+		return nil
+	}
+	cp := &QuestionResponse{
+		RequestID:  r.RequestID,
+		ToolCallID: r.ToolCallID,
+		Canceled:   r.Canceled,
+		Answers:    make([]QuestionAnswer, len(r.Answers)),
+	}
+	for i, a := range r.Answers {
+		var confirmed *bool
+		if a.Confirmed != nil {
+			v := *a.Confirmed
+			confirmed = &v
+		}
+		cp.Answers[i] = QuestionAnswer{
+			Question:  a.Question,
+			Selected:  slices.Clone(a.Selected),
+			Text:      a.Text,
+			Confirmed: confirmed,
+		}
+	}
+	return cp
 }
 
 type SessionDiagnostic struct {
@@ -498,6 +552,37 @@ const (
 	ModeAsk         PermissionMode = "ask"
 	ModeAuto        PermissionMode = "auto"
 )
+
+func (m PermissionMode) String() string {
+	return string(m)
+}
+
+func (m PermissionMode) IsValid() bool {
+	switch m {
+	case ModeDefault, ModeAcceptEdits, ModePlan, ModeAsk, ModeAuto:
+		return true
+	default:
+		return false
+	}
+}
+
+// TodoStatus describes the completion status of a task checklist item.
+type TodoStatus string
+
+const (
+	TodoStatusPending    TodoStatus = "pending"
+	TodoStatusInProgress TodoStatus = "in_progress"
+	TodoStatusCompleted  TodoStatus = "completed"
+)
+
+func (s TodoStatus) IsValid() bool {
+	switch s {
+	case TodoStatusPending, TodoStatusInProgress, TodoStatusCompleted:
+		return true
+	default:
+		return false
+	}
+}
 
 // ActionType classifies the category of a tool operation.
 type ActionType string

@@ -21,13 +21,13 @@ func TestQuestionPermissionEvaluation(t *testing.T) {
 		name     string
 		deny     bool
 		policy   bool
-		decision tools.PermissionDecisionKind
+		decision api.DecisionKind
 	}{
 		{name: "deny rule", deny: true},
 		{name: "workspace policy", deny: true, policy: true},
-		{name: "allow once", decision: tools.DecisionAllowOnce},
-		{name: "allow session", decision: tools.DecisionAllowSession},
-		{name: "reject", decision: tools.DecisionReject},
+		{name: "allow once", decision: api.DecisionAllowOnce},
+		{name: "allow session", decision: api.DecisionAllowSession},
+		{name: "reject", decision: api.DecisionReject},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := context.Background()
@@ -39,7 +39,7 @@ func TestQuestionPermissionEvaluation(t *testing.T) {
 					t.Fatal(err)
 				}
 			} else {
-				perms.SetMode(tools.ModeAsk)
+				perms.SetMode(api.ModeAsk)
 			}
 			provider := &fakeProvider{stepHandler: func(_ context.Context, _ *llm.Request, turn int) ([]message.AssistantChunk, error) {
 				if turn == 1 {
@@ -51,7 +51,7 @@ func TestQuestionPermissionEvaluation(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			var permission tools.PermissionRequest
+			var permission api.PermissionRequest
 			var result *message.Tool
 			for event, err := range h.Stream(ctx, Input{Message: message.NewUserText("start")}) {
 				if err != nil {
@@ -76,8 +76,8 @@ func TestQuestionPermissionEvaluation(t *testing.T) {
 			if permission.ID == "" || permission.ToolCallID != "ask" {
 				t.Fatalf("missing permission: %+v", permission)
 			}
-			var question tools.QuestionRequest
-			for event, err := range h.Stream(ctx, Input{Decisions: map[string]tools.PermissionDecision{permission.ID: {Kind: tc.decision}}}) {
+			var question api.QuestionRequest
+			for event, err := range h.Stream(ctx, Input{Decisions: map[string]api.PermissionDecision{permission.ID: {Kind: tc.decision}}}) {
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -88,7 +88,7 @@ func TestQuestionPermissionEvaluation(t *testing.T) {
 					result = msg
 				}
 			}
-			if tc.decision == tools.DecisionReject {
+			if tc.decision == api.DecisionReject {
 				if question.ID != "" || result == nil || !strings.Contains(result.Content.Text(), tools.ErrPermissionDenied.Error()) {
 					t.Fatalf("expected rejected result without question: question=%+v result=%+v", question, result)
 				}
@@ -97,7 +97,7 @@ func TestQuestionPermissionEvaluation(t *testing.T) {
 			if question.ID == "" || question.ToolCallID != "ask" || result != nil {
 				t.Fatalf("expected question after approval: question=%+v result=%+v", question, result)
 			}
-			for event, err := range h.Stream(ctx, Input{Answers: map[string]tools.QuestionResponse{question.ID: {Answers: []tools.QuestionAnswer{{Question: "Proceed?", Confirmed: true}}}}}) {
+			for event, err := range h.Stream(ctx, Input{Answers: map[string]api.QuestionResponse{question.ID: {Answers: []api.QuestionAnswer{{Question: "Proceed?", Confirmed: new(true)}}}}}) {
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -115,7 +115,7 @@ func TestQuestionPermissionEvaluation(t *testing.T) {
 func TestApprovedQuestionWithOtherToolCalls(t *testing.T) {
 	ctx := context.Background()
 	_, registry, perms := newTestToolsRegistry(t)
-	perms.SetMode(tools.ModeAsk)
+	perms.SetMode(api.ModeAsk)
 	provider := &fakeProvider{stepHandler: func(_ context.Context, _ *llm.Request, turn int) ([]message.AssistantChunk, error) {
 		if turn == 1 {
 			return []message.AssistantChunk{{Content: []message.Block{
@@ -129,7 +129,7 @@ func TestApprovedQuestionWithOtherToolCalls(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	decisions := map[string]tools.PermissionDecision{}
+	decisions := map[string]api.PermissionDecision{}
 	for event, err := range h.Stream(ctx, Input{Message: message.NewUserText("start")}) {
 		if err != nil {
 			t.Fatal(err)
@@ -139,18 +139,18 @@ func TestApprovedQuestionWithOtherToolCalls(t *testing.T) {
 				t.Fatalf("expected two permission requests: %+v", event)
 			}
 			for _, req := range event.Permissions {
-				kind := tools.DecisionReject
+				kind := api.DecisionReject
 				if req.ToolCallID == "ask" {
-					kind = tools.DecisionAllowOnce
+					kind = api.DecisionAllowOnce
 				}
-				decisions[req.ID] = tools.PermissionDecision{Kind: kind}
+				decisions[req.ID] = api.PermissionDecision{Kind: kind}
 			}
 		}
 	}
 	if len(decisions) != 2 {
 		t.Fatalf("missing permission requests: %+v", decisions)
 	}
-	var question tools.QuestionRequest
+	var question api.QuestionRequest
 	var writes int
 	for event, err := range h.Stream(ctx, Input{Decisions: decisions}) {
 		if err != nil {
@@ -169,7 +169,7 @@ func TestApprovedQuestionWithOtherToolCalls(t *testing.T) {
 	if question.ID == "" || writes != 1 {
 		t.Fatalf("expected question and one write result: question=%+v writes=%d", question, writes)
 	}
-	for event, err := range h.Stream(ctx, Input{Answers: map[string]tools.QuestionResponse{question.ID: {Answers: []tools.QuestionAnswer{{Question: "Proceed?", Confirmed: true}}}}}) {
+	for event, err := range h.Stream(ctx, Input{Answers: map[string]api.QuestionResponse{question.ID: {Answers: []api.QuestionAnswer{{Question: "Proceed?", Confirmed: new(true)}}}}}) {
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -195,7 +195,7 @@ func TestQuestionInterruptResume(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var req tools.QuestionRequest
+	var req api.QuestionRequest
 	for event, err := range h.Stream(ctx, Input{Message: message.NewUserText("start")}) {
 		if err != nil {
 			t.Fatal(err)
@@ -211,13 +211,13 @@ func TestQuestionInterruptResume(t *testing.T) {
 	if err != nil || len(state.PendingQuestions) != 1 {
 		t.Fatalf("checkpoint: %+v, %v", state, err)
 	}
-	for _, err := range h.Stream(ctx, Input{Answers: map[string]tools.QuestionResponse{}}) {
+	for _, err := range h.Stream(ctx, Input{Answers: map[string]api.QuestionResponse{}}) {
 		if !errors.Is(err, ErrPendingQuestionsUnresolved) {
 			t.Fatalf("missing response: %v", err)
 		}
 	}
 	var result *message.Tool
-	for event, err := range h.Stream(ctx, Input{Answers: map[string]tools.QuestionResponse{req.ID: {Answers: []tools.QuestionAnswer{{Question: "Proceed?", Confirmed: true}}}}}) {
+	for event, err := range h.Stream(ctx, Input{Answers: map[string]api.QuestionResponse{req.ID: {Answers: []api.QuestionAnswer{{Question: "Proceed?", Confirmed: new(true)}}}}}) {
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -246,8 +246,8 @@ func TestMixedQuestionAndPermission(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var q tools.QuestionRequest
-	var p tools.PermissionRequest
+	var q api.QuestionRequest
+	var p api.PermissionRequest
 	for event, err := range h.Stream(ctx, Input{Message: message.NewUserText("start")}) {
 		if err != nil {
 			t.Fatal(err)
@@ -259,14 +259,14 @@ func TestMixedQuestionAndPermission(t *testing.T) {
 	if q.ID == "" || p.ID == "" {
 		t.Fatalf("missing mixed requests: %+v %+v", q, p)
 	}
-	decisions := map[string]tools.PermissionDecision{p.ID: {Kind: tools.DecisionReject}}
+	decisions := map[string]api.PermissionDecision{p.ID: {Kind: api.DecisionReject}}
 	for _, err := range h.Stream(ctx, Input{Decisions: decisions}) {
 		if !errors.Is(err, ErrPendingQuestionsUnresolved) {
 			t.Fatalf("missing answer error: %v", err)
 		}
 	}
 	var result *message.Tool
-	for event, err := range h.Stream(ctx, Input{Decisions: decisions, Answers: map[string]tools.QuestionResponse{q.ID: {Answers: []tools.QuestionAnswer{{Question: "Proceed?", Confirmed: false}}}}}) {
+	for event, err := range h.Stream(ctx, Input{Decisions: decisions, Answers: map[string]api.QuestionResponse{q.ID: {Answers: []api.QuestionAnswer{{Question: "Proceed?", Confirmed: new(false)}}}}}) {
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -298,7 +298,7 @@ func TestQuestionOutputOmitsUnrelatedConfirmation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var req tools.QuestionRequest
+	var req api.QuestionRequest
 	for event, err := range h.Stream(ctx, Input{Message: message.NewUserText("start")}) {
 		if err != nil {
 			t.Fatal(err)
@@ -310,9 +310,9 @@ func TestQuestionOutputOmitsUnrelatedConfirmation(t *testing.T) {
 	if req.ID == "" {
 		t.Fatal("missing question request")
 	}
-	answers := []tools.QuestionAnswer{{Question: "No?", Confirmed: false}, {Question: "Choices?", Selected: []string{"b"}}, {Question: "Yes?", Confirmed: true}, {Question: "Choice?", Selected: []string{"a"}}, {Question: "Why?", Text: "Reason"}}
+	answers := []api.QuestionAnswer{{Question: "No?", Confirmed: new(false)}, {Question: "Choices?", Selected: []string{"b"}}, {Question: "Yes?", Confirmed: new(true)}, {Question: "Choice?", Selected: []string{"a"}}, {Question: "Why?", Text: "Reason"}}
 	var result *message.Tool
-	for event, err := range h.Stream(ctx, Input{Answers: map[string]tools.QuestionResponse{req.ID: {Answers: answers}}}) {
+	for event, err := range h.Stream(ctx, Input{Answers: map[string]api.QuestionResponse{req.ID: {Answers: answers}}}) {
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -349,18 +349,18 @@ func TestQuestionOutputOmitsUnrelatedConfirmation(t *testing.T) {
 
 func TestQuestionResumeDuplicateText(t *testing.T) {
 	call := &message.ToolCall{ID: "call", Name: "ask_question"}
-	request := tools.QuestionRequest{ID: "request", ToolCallID: call.ID, Questions: []api.Question{
+	request := api.QuestionRequest{ID: "request", ToolCallID: call.ID, Questions: []api.Question{
 		{Type: "text", Question: "Same?"},
 		{Type: "confirm", Question: "Same?"},
 		{Type: "text", Question: "Other?"},
 	}}
-	answers := tools.QuestionResponse{Answers: []tools.QuestionAnswer{
+	answers := api.QuestionResponse{Answers: []api.QuestionAnswer{
 		{Question: "Same?", Text: "reason"},
-		{Question: "Same?", Confirmed: false},
+		{Question: "Same?", Confirmed: new(false)},
 		{Question: "Other?", Text: "detail"},
 	}}
 	node := &ToolsNode{}
-	cmd, err := node.resumeCalls(context.Background(), []*message.ToolCall{call}, nil, nil, []tools.QuestionRequest{request}, map[string]tools.QuestionResponse{request.ID: answers})
+	cmd, err := node.resumeCalls(context.Background(), []*message.ToolCall{call}, nil, nil, []api.QuestionRequest{request}, map[string]api.QuestionResponse{request.ID: answers})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -380,8 +380,8 @@ func TestQuestionResumeDuplicateText(t *testing.T) {
 
 func TestQuestionStateCopy(t *testing.T) {
 	state := State{
-		PendingQuestions:  []tools.QuestionRequest{{ID: "q", Questions: []api.Question{{Options: []api.QuestionOption{{ID: "a"}}}}}},
-		QuestionResponses: map[string]tools.QuestionResponse{"q": {Answers: []tools.QuestionAnswer{{Selected: []string{"a"}}}}},
+		PendingQuestions:  []api.QuestionRequest{{ID: "q", Questions: []api.Question{{Options: []api.QuestionOption{{ID: "a"}}}}}},
+		QuestionResponses: map[string]api.QuestionResponse{"q": {Answers: []api.QuestionAnswer{{Selected: []string{"a"}}}}},
 	}
 	copy := state.Copy()
 	copy.PendingQuestions[0].Questions[0].Options[0].ID = "changed"

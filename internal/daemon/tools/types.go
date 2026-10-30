@@ -5,13 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"slices"
 	"strings"
 
 	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/masterkeysrd/loom/message"
 	"github.com/masterkeysrd/loom/tool"
-	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/core/guard"
 )
 
@@ -44,30 +42,6 @@ const (
 	SafetyUnsafe  = guard.SafetyUnsafe
 )
 
-// PermissionMode controls the session-wide approval behavior.
-type PermissionMode string
-
-const (
-	ModeDefault     PermissionMode = "default"
-	ModeAcceptEdits PermissionMode = "accept_edits"
-	ModePlan        PermissionMode = "plan"
-	ModeAsk         PermissionMode = "ask"
-	ModeAuto        PermissionMode = "auto"
-)
-
-func (m PermissionMode) String() string {
-	return string(m)
-}
-
-func (m PermissionMode) IsValid() bool {
-	switch m {
-	case ModeDefault, ModeAcceptEdits, ModePlan, ModeAsk, ModeAuto:
-		return true
-	default:
-		return false
-	}
-}
-
 // AccessDecision represents the policy evaluation outcome.
 type AccessDecision string
 
@@ -76,40 +50,6 @@ const (
 	AccessAsk   AccessDecision = "ask"
 	AccessDeny  AccessDecision = "deny"
 )
-
-// PermissionDecisionKind represents the user's response to a [PermissionRequest].
-type PermissionDecisionKind string
-
-const (
-	DecisionAllowOnce    PermissionDecisionKind = "allow_once"
-	DecisionAllowSession PermissionDecisionKind = "allow_session"
-	DecisionReject       PermissionDecisionKind = "reject"
-)
-
-// TodoStatus describes the completion status of a task checklist item.
-type TodoStatus string
-
-const (
-	TodoStatusPending    TodoStatus = "pending"
-	TodoStatusInProgress TodoStatus = "in_progress"
-	TodoStatusCompleted  TodoStatus = "completed"
-)
-
-func (s TodoStatus) IsValid() bool {
-	switch s {
-	case TodoStatusPending, TodoStatusInProgress, TodoStatusCompleted:
-		return true
-	default:
-		return false
-	}
-}
-
-// TodoItem represents a task checklist item.
-type TodoItem struct {
-	Content    string     `json:"content"`
-	ActiveText string     `json:"active_text"`
-	Status     TodoStatus `json:"status"`
-}
 
 // Plan describes the pre-flight impact and unified diff preview of a validated
 // tool invocation produced by [Tool.Prepare] or [Container.Prepare].
@@ -122,113 +62,6 @@ type Plan struct {
 	Summary    string      `json:"summary"`
 	Diff       string      `json:"diff,omitempty"`
 	ReadOnly   bool        `json:"read_only,omitempty"`
-}
-
-// PermissionRequest is the user-facing approval request minted when a [Plan]
-// evaluates to [AccessAsk].
-type PermissionRequest struct {
-	ID            string      `json:"id"`
-	ToolCallID    string      `json:"tool_call_id"`
-	ToolName      string      `json:"tool_name"`
-	Action        ActionType  `json:"action"`
-	Safety        SafetyLevel `json:"safety"`
-	Target        string      `json:"target,omitempty"`
-	Summary       string      `json:"summary"`
-	Diff          string      `json:"diff,omitempty"`
-	GrantPatterns []string    `json:"grant_patterns,omitempty"`
-}
-
-// PermissionDecision captures the user's resolution of a [PermissionRequest].
-type PermissionDecision struct {
-	RequestID    string                 `json:"request_id"`
-	ToolCallID   string                 `json:"tool_call_id"`
-	Kind         PermissionDecisionKind `json:"kind"`
-	GrantPattern string                 `json:"grant_pattern,omitempty"`
-	Scope        string                 `json:"scope,omitempty"`
-	Feedback     string                 `json:"feedback,omitempty"`
-}
-
-// QuestionType classifies the interaction style of a user question.
-type QuestionType string
-
-const (
-	QuestionTypeSingle  QuestionType = "single"
-	QuestionTypeMulti   QuestionType = "multi"
-	QuestionTypeText    QuestionType = "text"
-	QuestionTypeConfirm QuestionType = "confirm"
-)
-
-// QuestionRequest is the user-facing prompt minted when the agent invokes ask_question.
-type QuestionRequest struct {
-	ID          string         `json:"id"`
-	ToolCallID  string         `json:"tool_call_id"`
-	Title       string         `json:"title,omitempty"`
-	Description string         `json:"description,omitempty"`
-	Questions   []api.Question `json:"questions"`
-}
-
-// QuestionAnswer captures the user's answer to a single [Question].
-type QuestionAnswer struct {
-	Question  string   `json:"question"`
-	Selected  []string `json:"selected,omitempty"`
-	Text      string   `json:"text,omitempty"`
-	Confirmed bool     `json:"confirmed,omitempty"`
-}
-
-// QuestionResponse captures the user's resolution of a [QuestionRequest].
-type QuestionResponse struct {
-	RequestID  string           `json:"request_id"`
-	ToolCallID string           `json:"tool_call_id"`
-	Canceled   bool             `json:"canceled,omitempty"`
-	Answers    []QuestionAnswer `json:"answers,omitempty"`
-}
-
-// Clone returns a deep copy of the QuestionRequest with cloned slices.
-func (r *QuestionRequest) Clone() *QuestionRequest {
-	if r == nil {
-		return nil
-	}
-	cp := &QuestionRequest{
-		ID:          r.ID,
-		ToolCallID:  r.ToolCallID,
-		Title:       r.Title,
-		Description: r.Description,
-		Questions:   make([]api.Question, len(r.Questions)),
-	}
-	for i, q := range r.Questions {
-		o := make([]api.QuestionOption, len(q.Options))
-		copy(o, q.Options)
-		cp.Questions[i] = api.Question{
-			Type:        q.Type,
-			Question:    q.Question,
-			Description: q.Description,
-			Label:       q.Label,
-			Options:     o,
-		}
-	}
-	return cp
-}
-
-// Clone returns a deep copy of the QuestionResponse with cloned slices.
-func (r *QuestionResponse) Clone() *QuestionResponse {
-	if r == nil {
-		return nil
-	}
-	cp := &QuestionResponse{
-		RequestID:  r.RequestID,
-		ToolCallID: r.ToolCallID,
-		Canceled:   r.Canceled,
-		Answers:    make([]QuestionAnswer, len(r.Answers)),
-	}
-	for i, a := range r.Answers {
-		cp.Answers[i] = QuestionAnswer{
-			Question:  a.Question,
-			Selected:  slices.Clone(a.Selected),
-			Text:      a.Text,
-			Confirmed: a.Confirmed,
-		}
-	}
-	return cp
 }
 
 // Tool is an executable LLM-callable tool with two-phase Prepare and Execute

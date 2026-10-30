@@ -12,7 +12,6 @@ import (
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/models"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/std"
-	"github.com/masterkeysrd/tasksmith/internal/daemon/tools"
 )
 
 // Sentinel errors returned by the harness package.
@@ -164,7 +163,7 @@ func (e CommandCompleted) ToEvent() Event {
 }
 
 type TodosUpdatedEvent struct {
-	Todos []tools.TodoItem
+	Todos []api.TodoItem
 }
 
 func (e TodosUpdatedEvent) EventName() string { return eventTodosUpdated }
@@ -247,8 +246,8 @@ type CompactInput struct {
 // or a compaction request.
 type Input struct {
 	Message   message.Message
-	Decisions map[string]tools.PermissionDecision
-	Answers   map[string]tools.QuestionResponse
+	Decisions map[string]api.PermissionDecision
+	Answers   map[string]api.QuestionResponse
 	Compact   *CompactInput
 }
 
@@ -273,14 +272,14 @@ func (input Input) Validate() error {
 // State holds the checkpointed conversation and permission state for a thread.
 // It implements [github.com/masterkeysrd/loom/graph.State].
 type State struct {
-	Messages            message.MessageList                 `json:"messages"`
-	PendingCompaction   *CompactInput                       `json:"pending_compaction,omitempty"`
-	PendingPermissions  []tools.PermissionRequest           `json:"pending_permissions,omitempty"`
-	PermissionDecisions map[string]tools.PermissionDecision `json:"permission_decisions,omitempty"`
-	PendingQuestions    []tools.QuestionRequest             `json:"pending_questions,omitempty"`
-	QuestionResponses   map[string]tools.QuestionResponse   `json:"question_responses,omitempty"`
-	Todos               []tools.TodoItem                    `json:"todos,omitempty"`
-	Context             api.ContextState                    `json:"context"`
+	Messages            message.MessageList               `json:"messages"`
+	PendingCompaction   *CompactInput                     `json:"pending_compaction,omitempty"`
+	PendingPermissions  []api.PermissionRequest         `json:"pending_permissions,omitempty"`
+	PermissionDecisions map[string]api.PermissionDecision `json:"permission_decisions,omitempty"`
+	PendingQuestions    []api.QuestionRequest           `json:"pending_questions,omitempty"`
+	QuestionResponses   map[string]api.QuestionResponse `json:"question_responses,omitempty"`
+	Todos               []api.TodoItem                  `json:"todos,omitempty"`
+	Context             api.ContextState                  `json:"context"`
 }
 
 // Copy returns a deep copy of the State so graph transitions do not mutate
@@ -291,26 +290,26 @@ func (s State) Copy() State {
 		msgs[i] = message.CloneMessage(m)
 	}
 
-	var pending []tools.PermissionRequest
+	var pending []api.PermissionRequest
 	if len(s.PendingPermissions) > 0 {
 		pending = clonePermissionRequests(s.PendingPermissions)
 	}
 
-	var decisions map[string]tools.PermissionDecision
+	var decisions map[string]api.PermissionDecision
 	if len(s.PermissionDecisions) > 0 {
 		decisions = maps.Clone(s.PermissionDecisions)
 	}
 
 	questions := cloneQuestionRequests(s.PendingQuestions)
-	var responses map[string]tools.QuestionResponse
+	var responses map[string]api.QuestionResponse
 	if s.QuestionResponses != nil {
-		responses = make(map[string]tools.QuestionResponse, len(s.QuestionResponses))
+		responses = make(map[string]api.QuestionResponse, len(s.QuestionResponses))
 		for key, response := range s.QuestionResponses {
 			responses[key] = *response.Clone()
 		}
 	}
 
-	var todos []tools.TodoItem
+	var todos []api.TodoItem
 	if len(s.Todos) > 0 {
 		todos = slices.Clone(s.Todos)
 	}
@@ -465,11 +464,11 @@ func (s State) ActiveToolCalls() (int, *message.Assistant, []*message.ToolCall, 
 	return -1, nil, nil, false
 }
 
-func clonePermissionRequests(in []tools.PermissionRequest) []tools.PermissionRequest {
+func clonePermissionRequests(in []api.PermissionRequest) []api.PermissionRequest {
 	if len(in) == 0 {
 		return nil
 	}
-	out := make([]tools.PermissionRequest, len(in))
+	out := make([]api.PermissionRequest, len(in))
 	for i, r := range in {
 		r.GrantPatterns = slices.Clone(r.GrantPatterns)
 		out[i] = r
@@ -477,11 +476,11 @@ func clonePermissionRequests(in []tools.PermissionRequest) []tools.PermissionReq
 	return out
 }
 
-func cloneQuestionRequests(in []tools.QuestionRequest) []tools.QuestionRequest {
+func cloneQuestionRequests(in []api.QuestionRequest) []api.QuestionRequest {
 	if len(in) == 0 {
 		return nil
 	}
-	out := make([]tools.QuestionRequest, len(in))
+	out := make([]api.QuestionRequest, len(in))
 	for i := range in {
 		out[i] = *in[i].Clone()
 	}
@@ -503,7 +502,7 @@ const (
 	EventMessage EventType = "message"
 
 	// EventInterrupted is emitted when execution pauses at [ToolsNode] awaiting
-	// user approval for one or more [tools.PermissionRequest] items.
+	// user approval for one or more [api.PermissionRequest] items.
 	EventInterrupted EventType = "interrupted"
 
 	// EventCompleted is emitted once the graph finishes execution and the final
@@ -535,16 +534,16 @@ const (
 // Event represents a real-time notification yielded by [Harness.Stream] or
 // [Harness.Resume].
 type Event struct {
-	Type                EventType                 `json:"type"`
-	Chunk               *message.AssistantChunk   `json:"chunk,omitempty"`
-	Message             message.Message           `json:"message,omitempty"`
-	Permissions         []tools.PermissionRequest `json:"permissions,omitempty"`
-	Questions           []tools.QuestionRequest   `json:"questions,omitempty"`
-	CommandStarted      *CommandStarted           `json:"command_started,omitempty"`
-	CommandCompleted    *CommandCompleted         `json:"command_completed,omitempty"`
-	Todos               []tools.TodoItem          `json:"todos,omitempty"`
-	CompactionStarted   *CompactionStarted        `json:"compaction_started,omitempty"`
-	CompactionCompleted *CompactionCompleted      `json:"compaction_completed,omitempty"`
-	CacheBroken         *CacheBroken              `json:"cache_broken,omitempty"`
-	Context             *api.ContextState         `json:"context,omitempty"`
+	Type                EventType               `json:"type"`
+	Chunk               *message.AssistantChunk `json:"chunk,omitempty"`
+	Message             message.Message         `json:"message,omitempty"`
+	Permissions         []api.PermissionRequest `json:"permissions,omitempty"`
+	Questions           []api.QuestionRequest   `json:"questions,omitempty"`
+	CommandStarted      *CommandStarted         `json:"command_started,omitempty"`
+	CommandCompleted    *CommandCompleted       `json:"command_completed,omitempty"`
+	Todos               []api.TodoItem          `json:"todos,omitempty"`
+	CompactionStarted   *CompactionStarted      `json:"compaction_started,omitempty"`
+	CompactionCompleted *CompactionCompleted    `json:"compaction_completed,omitempty"`
+	CacheBroken         *CacheBroken            `json:"cache_broken,omitempty"`
+	Context             *api.ContextState       `json:"context,omitempty"`
 }

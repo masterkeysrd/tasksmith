@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"github.com/masterkeysrd/loom/message"
-	"github.com/masterkeysrd/tasksmith/internal/daemon/tools"
+	"github.com/masterkeysrd/tasksmith/api"
 )
 
 func TestInputHasResponses(t *testing.T) {
@@ -17,10 +17,10 @@ func TestInputHasResponses(t *testing.T) {
 		{name: "nil maps"},
 		{name: "message only", input: Input{Message: message.NewUserText("hello")}},
 		{name: "compact only", input: Input{Compact: &CompactInput{}}},
-		{name: "empty decisions", input: Input{Decisions: map[string]tools.PermissionDecision{}}, want: true},
-		{name: "empty answers", input: Input{Answers: map[string]tools.QuestionResponse{}}, want: true},
-		{name: "populated decisions", input: Input{Decisions: map[string]tools.PermissionDecision{"id": {Kind: tools.DecisionReject}}}, want: true},
-		{name: "populated answers", input: Input{Answers: map[string]tools.QuestionResponse{"id": {Canceled: true}}}, want: true},
+		{name: "empty decisions", input: Input{Decisions: map[string]api.PermissionDecision{}}, want: true},
+		{name: "empty answers", input: Input{Answers: map[string]api.QuestionResponse{}}, want: true},
+		{name: "populated decisions", input: Input{Decisions: map[string]api.PermissionDecision{"id": {Kind: api.DecisionReject}}}, want: true},
+		{name: "populated answers", input: Input{Answers: map[string]api.QuestionResponse{"id": {Canceled: true}}}, want: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -33,8 +33,8 @@ func TestInputHasResponses(t *testing.T) {
 
 func TestInputValidation(t *testing.T) {
 	msg := message.NewUserText("hello")
-	decisions := map[string]tools.PermissionDecision{}
-	answers := map[string]tools.QuestionResponse{}
+	decisions := map[string]api.PermissionDecision{}
+	answers := map[string]api.QuestionResponse{}
 	compact := &CompactInput{}
 	tests := []struct {
 		name        string

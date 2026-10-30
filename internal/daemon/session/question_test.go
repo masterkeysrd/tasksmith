@@ -8,7 +8,6 @@ import (
 	"github.com/masterkeysrd/loom/llm"
 	"github.com/masterkeysrd/loom/message"
 	"github.com/masterkeysrd/tasksmith/api"
-	"github.com/masterkeysrd/tasksmith/internal/daemon/tools"
 )
 
 func TestQuestionSessionPermissionThenAnswer(t *testing.T) {
@@ -26,7 +25,7 @@ func TestQuestionSessionPermissionThenAnswer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sess.PermManager.SetMode(tools.ModeAsk)
+	sess.PermManager.SetMode(api.ModeAsk)
 	if err := sess.Send(ctx, SendInput{Message: message.NewUserText("start")}); err != nil {
 		t.Fatal(err)
 	}
@@ -36,7 +35,7 @@ func TestQuestionSessionPermissionThenAnswer(t *testing.T) {
 	if sess.Status != StatusWaitingPermission || len(sess.PendingPermissions) != 1 || len(sess.PendingQuestions) != 0 {
 		t.Fatalf("expected permission first: %+v", sess.State)
 	}
-	if err := sess.Send(ctx, SendInput{Decision: &tools.PermissionDecision{RequestID: sess.PendingPermissions[0].ID, Kind: tools.DecisionAllowOnce}}); err != nil {
+	if err := sess.Send(ctx, SendInput{Decision: &api.PermissionDecision{RequestID: sess.PendingPermissions[0].ID, Kind: api.DecisionAllowOnce}}); err != nil {
 		t.Fatal(err)
 	}
 	if err := sess.Wait(ctx); err != nil {
@@ -45,7 +44,7 @@ func TestQuestionSessionPermissionThenAnswer(t *testing.T) {
 	if sess.Status != StatusWaitingQuestion || len(sess.PendingQuestions) != 1 || len(sess.PendingPermissions) != 0 {
 		t.Fatalf("expected question after approval: %+v", sess.State)
 	}
-	if err := sess.Send(ctx, SendInput{Question: &tools.QuestionResponse{RequestID: sess.PendingQuestions[0].ID, Answers: []tools.QuestionAnswer{{Question: "Why?", Text: "Because"}}}}); err != nil {
+	if err := sess.Send(ctx, SendInput{Question: &api.QuestionResponse{RequestID: sess.PendingQuestions[0].ID, Answers: []api.QuestionAnswer{{Question: "Why?", Text: "Because"}}}}); err != nil {
 		t.Fatal(err)
 	}
 	if err := sess.Wait(ctx); err != nil {
@@ -90,7 +89,7 @@ func TestQuestionSessionResume(t *testing.T) {
 		t.Fatal("missing question event")
 	}
 	req := sess.PendingQuestions[0]
-	if err := sess.Send(ctx, SendInput{Question: &tools.QuestionResponse{RequestID: req.ID, Answers: []tools.QuestionAnswer{{Question: "Why?", Text: "Because"}}}}); err != nil {
+	if err := sess.Send(ctx, SendInput{Question: &api.QuestionResponse{RequestID: req.ID, Answers: []api.QuestionAnswer{{Question: "Why?", Text: "Because"}}}}); err != nil {
 		t.Fatal(err)
 	}
 	if err := sess.Wait(ctx); err != nil {

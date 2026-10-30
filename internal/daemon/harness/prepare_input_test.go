@@ -5,20 +5,20 @@ import (
 	"testing"
 
 	"github.com/masterkeysrd/loom/message"
+	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
-	"github.com/masterkeysrd/tasksmith/internal/daemon/tools"
 )
 
 func TestPrepareResponsesNormalizesAndClones(t *testing.T) {
 	state := State{
-		PendingPermissions: []tools.PermissionRequest{{ID: "permission", ToolCallID: "write"}},
-		PendingQuestions:   []tools.QuestionRequest{{ID: "question", ToolCallID: "ask"}},
+		PendingPermissions: []api.PermissionRequest{{ID: "permission", ToolCallID: "write"}},
+		PendingQuestions:   []api.QuestionRequest{{ID: "question", ToolCallID: "ask"}},
 	}
 	selected := []string{"original"}
 	input := Input{
-		Decisions: map[string]tools.PermissionDecision{"write": {Kind: tools.DecisionReject}},
-		Answers: map[string]tools.QuestionResponse{"question": {
-			Answers: []tools.QuestionAnswer{{Question: "Choose", Selected: selected}},
+		Decisions: map[string]api.PermissionDecision{"write": {Kind: api.DecisionReject}},
+		Answers: map[string]api.QuestionResponse{"question": {
+			Answers: []api.QuestionAnswer{{Question: "Choose", Selected: selected}},
 		}},
 	}
 	update, err := prepareResponses(input, state)
@@ -29,7 +29,7 @@ func TestPrepareResponsesNormalizesAndClones(t *testing.T) {
 	result := update.Apply(State{})
 	for _, key := range []string{"permission", "write"} {
 		decision, ok := result.PermissionDecisions[key]
-		if !ok || decision.RequestID != "permission" || decision.ToolCallID != "write" || decision.Kind != tools.DecisionReject {
+		if !ok || decision.RequestID != "permission" || decision.ToolCallID != "write" || decision.Kind != api.DecisionReject {
 			t.Fatalf("decision %q: %+v", key, decision)
 		}
 	}

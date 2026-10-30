@@ -13,7 +13,6 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/daemon/permissions"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/session"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/std"
-	"github.com/masterkeysrd/tasksmith/internal/daemon/tools"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/workspace"
 )
 
@@ -35,15 +34,13 @@ func fromSendRequest(req api.SendRequest) (session.SendInput, error) {
 		if req.Decision != nil || strings.TrimSpace(req.Content) != "" || len(req.Blocks) > 0 || strings.TrimSpace(req.Command) != "" || strings.TrimSpace(req.ID) != "" {
 			return session.SendInput{}, fmt.Errorf("%w: cannot combine question response with other input", session.ErrInvalidConfig)
 		}
-		answer := fromAPIQuestionResponse(*req.Question)
-		return session.SendInput{Question: &answer}, nil
+		return session.SendInput{Question: req.Question.Clone()}, nil
 	}
 	if req.Decision != nil && (strings.TrimSpace(req.Content) != "" || len(req.Blocks) > 0 || strings.TrimSpace(req.Command) != "" || strings.TrimSpace(req.ID) != "") {
 		return session.SendInput{}, fmt.Errorf("%w: cannot specify both message and decision", session.ErrInvalidConfig)
 	}
 	if req.Decision != nil {
-		dec := fromAPIPermissionDecision(*req.Decision)
-		return session.SendInput{Decision: &dec}, nil
+		return session.SendInput{Decision: req.Decision}, nil
 	}
 	id := strings.TrimSpace(req.ID)
 	if id != "" {
@@ -115,37 +112,6 @@ func fromAPIBlock(b api.Block) (message.Block, bool) {
 
 	default:
 		return nil, false
-	}
-}
-
-func fromAPIQuestionResponse(r api.QuestionResponse) tools.QuestionResponse {
-	out := tools.QuestionResponse{
-		RequestID:  r.RequestID,
-		ToolCallID: r.ToolCallID,
-		Canceled:   r.Canceled,
-	}
-	for _, a := range r.Answers {
-		answer := tools.QuestionAnswer{
-			Question: a.Question,
-			Selected: slices.Clone(a.Selected),
-			Text:     a.Text,
-		}
-		if a.Confirmed != nil {
-			answer.Confirmed = *a.Confirmed
-		}
-		out.Answers = append(out.Answers, answer)
-	}
-	return out
-}
-
-func fromAPIPermissionDecision(dec api.PermissionDecision) tools.PermissionDecision {
-	return tools.PermissionDecision{
-		RequestID:    dec.RequestID,
-		ToolCallID:   dec.ToolCallID,
-		Kind:         tools.PermissionDecisionKind(dec.Kind),
-		GrantPattern: dec.GrantPattern,
-		Scope:        string(dec.Scope),
-		Feedback:     dec.Feedback,
 	}
 }
 

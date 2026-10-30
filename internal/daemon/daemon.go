@@ -29,7 +29,6 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/daemon/server"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/session"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tasks"
-	"github.com/masterkeysrd/tasksmith/internal/daemon/tools"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/workspace"
 )
 
@@ -678,7 +677,7 @@ func (d *Daemon) CreateSession(ctx context.Context, rawWS string, req api.Create
 			Agent:    req.Config.Agent,
 			Model:    models.ID(req.Config.Model),
 			Thinking: req.Config.Thinking,
-			Mode:     tools.PermissionMode(req.Config.Mode),
+			Mode:     req.Config.Mode,
 		},
 	})
 	if err != nil {
@@ -699,7 +698,7 @@ func (d *Daemon) PreviewSession(ctx context.Context, rawWS string, req api.Previ
 		Agent:    req.Config.Agent,
 		Model:    models.ID(req.Config.Model),
 		Thinking: req.Config.Thinking,
-		Mode:     tools.PermissionMode(req.Config.Mode),
+		Mode:     req.Config.Mode,
 	})
 	if err != nil {
 		return nil, err
@@ -771,7 +770,7 @@ func (d *Daemon) UpdateSession(ctx context.Context, rawWS, id string, req api.Up
 			Agent:    req.Config.Agent,
 			Model:    models.ID(req.Config.Model),
 			Thinking: req.Config.Thinking,
-			Mode:     tools.PermissionMode(req.Config.Mode),
+			Mode:     req.Config.Mode,
 		},
 	})
 	if err != nil {

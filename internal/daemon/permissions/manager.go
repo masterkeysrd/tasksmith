@@ -10,8 +10,8 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
-	"github.com/masterkeysrd/tasksmith/internal/daemon/tools"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/workspace"
 )
 
@@ -28,7 +28,7 @@ type Manager interface {
 	Set(scope Scope, perms Permissions) error
 	AddRule(scope Scope, effect Effect, rule string) error
 	RemoveRule(scope Scope, effect Effect, rule string) error
-	Attach(mode tools.PermissionMode, initial Permissions, onUpdate func(Permissions) error) SessionManager
+	Attach(mode api.PermissionMode, initial Permissions, onUpdate func(Permissions) error) SessionManager
 }
 
 type manager struct {
@@ -231,9 +231,9 @@ func (m *manager) RemoveRule(scope Scope, effect Effect, rule string) error {
 
 // Attach binds a new [SessionManager] initialized with the given permission mode,
 // initial session permissions, and update callback.
-func (m *manager) Attach(mode tools.PermissionMode, initial Permissions, onUpdate func(Permissions) error) SessionManager {
+func (m *manager) Attach(mode api.PermissionMode, initial Permissions, onUpdate func(Permissions) error) SessionManager {
 	if mode == "" {
-		mode = tools.ModeDefault
+		mode = api.ModeDefault
 	}
 	return &sessionManager{
 		manager:     m,

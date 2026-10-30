@@ -14,7 +14,6 @@ import (
 	"github.com/masterkeysrd/loom/message"
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/core/sqlite"
-	"github.com/masterkeysrd/tasksmith/internal/daemon/tools"
 )
 
 func openTestTimeline(t *testing.T, sessionID string) (Timeline, *sql.DB, context.Context) {
@@ -187,9 +186,9 @@ func TestAppendAndGet_AllKinds(t *testing.T) {
 		{
 			name: "mode change",
 			makeEntry: func() *Entry {
-				return NewModeEntry(sessionID, ModeChange{
-					From: tools.ModeDefault,
-					To:   tools.ModeAuto,
+				return NewModeEntry(sessionID, api.ModeChange{
+					From: api.ModeDefault,
+					To:   api.ModeAuto,
 				})
 			},
 			verify: func(t *testing.T, original, loaded *Entry) {
@@ -207,20 +206,20 @@ func TestAppendAndGet_AllKinds(t *testing.T) {
 		{
 			name: "permission record",
 			makeEntry: func() *Entry {
-				return NewPermissionEntry(sessionID, PermissionRecord{
-					Request: tools.PermissionRequest{
+				return NewPermissionEntry(sessionID, api.PermissionRecord{
+					Request: api.PermissionRequest{
 						ID:            "perm-req-1",
 						ToolCallID:    "call-1",
 						ToolName:      "bash",
-						Action:        tools.ActionExec,
-						Safety:        tools.SafetyUnsafe,
+						Action:        api.ActionExec,
+						Safety:        api.SafetyUnsafe,
 						Summary:       "run build script",
 						GrantPatterns: []string{"bash*"},
 					},
-					Decision: tools.PermissionDecision{
+					Decision: api.PermissionDecision{
 						RequestID:    "perm-req-1",
 						ToolCallID:   "call-1",
-						Kind:         tools.DecisionAllowSession,
+						Kind:         api.DecisionAllowSession,
 						GrantPattern: "bash*",
 					},
 				})
@@ -413,9 +412,9 @@ func TestJSONRoundTrip_AllKinds(t *testing.T) {
 			SessionID: sessionID,
 			Kind:      api.TimelineKindMode,
 			CreatedAt: now,
-			Mode: &ModeChange{
-				From: tools.ModePlan,
-				To:   tools.ModeAuto,
+			Mode: &api.ModeChange{
+				From: api.ModePlan,
+				To:   api.ModeAuto,
 			},
 		},
 		{
@@ -423,20 +422,20 @@ func TestJSONRoundTrip_AllKinds(t *testing.T) {
 			SessionID: sessionID,
 			Kind:      api.TimelineKindPermission,
 			CreatedAt: now,
-			Permission: &PermissionRecord{
-				Request: tools.PermissionRequest{
+			Permission: &api.PermissionRecord{
+				Request: api.PermissionRequest{
 					ID:         "req-json-1",
 					ToolCallID: "tc-1",
 					ToolName:   "write",
-					Action:     tools.ActionWrite,
-					Safety:     tools.SafetySafe,
+					Action:     api.ActionWrite,
+					Safety:     api.SafetySafe,
 					Target:     "foo.go",
 					Summary:    "write foo.go",
 				},
-				Decision: tools.PermissionDecision{
+				Decision: api.PermissionDecision{
 					RequestID:  "req-json-1",
 					ToolCallID: "tc-1",
-					Kind:       tools.DecisionAllowOnce,
+					Kind:       api.DecisionAllowOnce,
 				},
 			},
 		},
@@ -620,7 +619,7 @@ func TestListAndListByKind(t *testing.T) {
 	eA1 := NewMessageEntry(sessA, message.NewUserText("A-1"))
 	eA2 := NewModelEntry(sessA, api.ModelChange{From: "m1", To: "m2"})
 	eA3 := NewMessageEntry(sessA, message.NewAssistantText("A-2"))
-	eA4 := NewModeEntry(sessA, ModeChange{From: tools.ModeDefault, To: tools.ModeAsk})
+	eA4 := NewModeEntry(sessA, api.ModeChange{From: api.ModeDefault, To: api.ModeAsk})
 
 	for _, e := range []*Entry{eA1, eA2, eA3, eA4} {
 		if err := tlA.Append(ctx, e); err != nil {
@@ -842,7 +841,7 @@ func TestErrorCases(t *testing.T) {
 		},
 		{
 			name:  "api.TimelineKindMode empty To",
-			entry: &Entry{SessionID: validSession, Kind: api.TimelineKindMode, Mode: &ModeChange{To: ""}},
+			entry: &Entry{SessionID: validSession, Kind: api.TimelineKindMode, Mode: &api.ModeChange{To: ""}},
 		},
 		{
 			name:  "api.TimelineKindPermission nil",
@@ -1039,16 +1038,16 @@ func TestEntryClone(t *testing.T) {
 			From: "agent-a",
 			To:   "agent-b",
 		},
-		Mode: &ModeChange{
-			From: tools.ModeAsk,
-			To:   tools.ModeAuto,
+		Mode: &api.ModeChange{
+			From: api.ModeAsk,
+			To:   api.ModeAuto,
 		},
-		Permission: &PermissionRecord{
-			Request: tools.PermissionRequest{
+		Permission: &api.PermissionRecord{
+			Request: api.PermissionRequest{
 				ID:            "req-1",
 				GrantPatterns: []string{"pattern-1"},
 			},
-			Decision: tools.PermissionDecision{
+			Decision: api.PermissionDecision{
 				RequestID: "req-1",
 			},
 		},

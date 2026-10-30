@@ -18,7 +18,6 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/core/sqlite"
 	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/permissions"
-	"github.com/masterkeysrd/tasksmith/internal/daemon/tools"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tools/builtin"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/workspace"
 )
@@ -169,7 +168,7 @@ func TestManagerConcurrentTurnRejection(t *testing.T) {
 	}
 
 	// Decision while session is running should fail with ErrSessionRunning
-	err = sess.Send(ctx, SendInput{Decision: &tools.PermissionDecision{Kind: tools.DecisionAllowOnce}})
+	err = sess.Send(ctx, SendInput{Decision: &api.PermissionDecision{Kind: api.DecisionAllowOnce}})
 	if !errors.Is(err, ErrSessionRunning) {
 		t.Errorf("concurrent Send decision err = %v, want %v", err, ErrSessionRunning)
 	}
@@ -468,9 +467,9 @@ func TestManagerRespondPermissionAsync(t *testing.T) {
 
 	// Respond to permission via sess.Send with Decision
 	err = sess.Send(ctx, SendInput{
-		Decision: &tools.PermissionDecision{
+		Decision: &api.PermissionDecision{
 			RequestID: got.PendingPermissions[0].ID,
-			Kind:      tools.DecisionAllowOnce,
+			Kind:      api.DecisionAllowOnce,
 		},
 	})
 	if err != nil {

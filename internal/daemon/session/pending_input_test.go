@@ -11,7 +11,6 @@ import (
 	"github.com/masterkeysrd/loom/message"
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/harness"
-	"github.com/masterkeysrd/tasksmith/internal/daemon/tools"
 )
 
 func TestPendingInteractionDefersQueuedWork(t *testing.T) {
@@ -73,7 +72,7 @@ func TestPendingInteractionDefersQueuedWork(t *testing.T) {
 				t.Fatalf("queued work missing: %+v", sess.queue)
 			}
 			if kind != "question" {
-				if err := sess.Send(ctx, SendInput{Decision: &tools.PermissionDecision{RequestID: sess.PendingPermissions[0].ID, Kind: tools.DecisionReject}}); err != nil {
+				if err := sess.Send(ctx, SendInput{Decision: &api.PermissionDecision{RequestID: sess.PendingPermissions[0].ID, Kind: api.DecisionReject}}); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -86,7 +85,7 @@ func TestPendingInteractionDefersQueuedWork(t *testing.T) {
 				}
 			}
 			if kind != "permission" {
-				if err := sess.Send(ctx, SendInput{Question: &tools.QuestionResponse{RequestID: sess.PendingQuestions[0].ID, Answers: []tools.QuestionAnswer{{Question: "Why?", Text: "Because"}}}}); err != nil {
+				if err := sess.Send(ctx, SendInput{Question: &api.QuestionResponse{RequestID: sess.PendingQuestions[0].ID, Answers: []api.QuestionAnswer{{Question: "Why?", Text: "Because"}}}}); err != nil {
 					t.Fatal(err)
 				}
 			}

@@ -234,7 +234,7 @@ func newTestToolsRegistry(t *testing.T) (string, tools.Container, permissions.Se
 	if err != nil {
 		t.Fatalf("permissions.New: %v", err)
 	}
-	sessPerm := permMgr.Attach(tools.ModeDefault, permissions.Permissions{}, nil)
+	sessPerm := permMgr.Attach(api.ModeDefault, permissions.Permissions{}, nil)
 
 	return dir, container, sessPerm
 }
@@ -784,7 +784,7 @@ func TestPermissionInterruptAndResume(t *testing.T) {
 	}
 
 	// 1. Calling Resume on a thread with no pending permissions -> ErrNoPendingPermissions
-	for _, err := range h.Stream(ctx, Input{Decisions: map[string]tools.PermissionDecision{}}) {
+	for _, err := range h.Stream(ctx, Input{Decisions: map[string]api.PermissionDecision{}}) {
 		if !errors.Is(err, ErrNoPendingPermissions) {
 			t.Fatalf("Resume without pending permissions error = %v, want %v", err, ErrNoPendingPermissions)
 		}
@@ -792,7 +792,7 @@ func TestPermissionInterruptAndResume(t *testing.T) {
 
 	// 2. Run Stream -> ls executes immediately, while the 2 write calls pause at ToolsNode with EventInterrupted
 	var streamToolMsgs []*message.Tool
-	var interruptedPerms []tools.PermissionRequest
+	var interruptedPerms []api.PermissionRequest
 	for ev, err := range h.Stream(ctx, Input{Message: message.NewUserText("Write two files")}) {
 		if err != nil {
 			t.Fatalf("Stream error: %v", err)
@@ -827,9 +827,9 @@ func TestPermissionInterruptAndResume(t *testing.T) {
 
 	// 3. Calling Resume with partial/missing decisions MUST fail with ErrPendingPermissionsUnresolved without calling the graph
 	turnsBeforePartial := len(prov.recordedTurns())
-	partialDecisions := map[string]tools.PermissionDecision{
+	partialDecisions := map[string]api.PermissionDecision{
 		interruptedPerms[0].ID: {
-			Kind: tools.DecisionAllowOnce,
+			Kind: api.DecisionAllowOnce,
 		},
 	}
 	var partialErr error
@@ -846,12 +846,12 @@ func TestPermissionInterruptAndResume(t *testing.T) {
 	}
 
 	// 4. Calling Resume with all decisions resolved (1 allow_once, 1 reject with feedback)
-	fullDecisions := map[string]tools.PermissionDecision{
+	fullDecisions := map[string]api.PermissionDecision{
 		interruptedPerms[0].ID: {
-			Kind: tools.DecisionAllowOnce,
+			Kind: api.DecisionAllowOnce,
 		},
 		interruptedPerms[1].ToolCallID: {
-			Kind:     tools.DecisionReject,
+			Kind:     api.DecisionReject,
 			Feedback: "do not touch rejected.txt",
 		},
 	}
@@ -1097,7 +1097,7 @@ func TestMixedToolCallsAndPlanModeDeny(t *testing.T) {
 	}
 
 	// Put permissions manager in ModePlan: view is allowed, write is denied (AccessDeny without interrupt) and unknown tool fails Prepare
-	perm.SetMode(tools.ModePlan)
+	perm.SetMode(api.ModePlan)
 
 	prov := &fakeProvider{
 		stepHandler: func(_ context.Context, _ *llm.Request, turn int) ([]message.AssistantChunk, error) {
@@ -1252,7 +1252,7 @@ func TestValidationAndContextCancellation(t *testing.T) {
 	if _, _, err := drainStream(cancelCtx, h, message.NewUserText("hi")); !errors.Is(err, context.Canceled) {
 		t.Errorf("Stream with canceled ctx error = %v, want %v", err, context.Canceled)
 	}
-	for _, err := range h.Stream(cancelCtx, Input{Decisions: map[string]tools.PermissionDecision{}}) {
+	for _, err := range h.Stream(cancelCtx, Input{Decisions: map[string]api.PermissionDecision{}}) {
 		if !errors.Is(err, context.Canceled) {
 			t.Errorf("Resume with canceled ctx error = %v, want %v", err, context.Canceled)
 		}
@@ -1818,7 +1818,7 @@ func TestToolSpillUsesHarnessSessionScope(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, registry, permissions := newTestToolsRegistry(t)
-	permissions.SetMode(tools.ModeAuto)
+	permissions.SetMode(api.ModeAuto)
 	const sessionID = "tool-spill-session"
 	const callID = "tool-spill-call"
 	provider := &fakeProvider{stepHandler: func(_ context.Context, _ *llm.Request, turn int) ([]message.AssistantChunk, error) {
@@ -2182,7 +2182,7 @@ func TestTodosToolExecutionAndCheckpoint(t *testing.T) {
 	if len(todosEvents[0].Todos) != 2 {
 		t.Fatalf("expected 2 items in EventTodosUpdated, got %d", len(todosEvents[0].Todos))
 	}
-	if todosEvents[0].Todos[0].Content != "Step 1" || todosEvents[0].Todos[0].Status != tools.TodoStatusInProgress {
+	if todosEvents[0].Todos[0].Content != "Step 1" || todosEvents[0].Todos[0].Status != string(api.TodoStatusInProgress) {
 		t.Fatalf("unexpected todo item 0: %+v", todosEvents[0].Todos[0])
 	}
 
@@ -2194,7 +2194,7 @@ func TestTodosToolExecutionAndCheckpoint(t *testing.T) {
 	if len(state.Todos) != 2 {
 		t.Fatalf("expected 2 todos in checkpointed State, got %d", len(state.Todos))
 	}
-	if state.Todos[0].ActiveText != "Doing step 1" || state.Todos[1].Status != tools.TodoStatusPending {
+	if state.Todos[0].ActiveText != "Doing step 1" || state.Todos[1].Status != string(api.TodoStatusPending) {
 		t.Fatalf("unexpected checkpointed todos: %+v", state.Todos)
 	}
 }

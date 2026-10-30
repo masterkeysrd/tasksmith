@@ -9,8 +9,8 @@ import (
 	"github.com/masterkeysrd/loom/graph"
 	"github.com/masterkeysrd/loom/llm"
 	"github.com/masterkeysrd/loom/message"
+	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
-	"github.com/masterkeysrd/tasksmith/internal/daemon/tools"
 )
 
 func TestPendingInteractionBlocksCompactionAndQueue(t *testing.T) {
@@ -75,13 +75,13 @@ func TestPendingInteractionBlocksCompactionAndQueue(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			decisions := map[string]tools.PermissionDecision{}
-			answers := map[string]tools.QuestionResponse{}
+			decisions := map[string]api.PermissionDecision{}
+			answers := map[string]api.QuestionResponse{}
 			for _, p := range state.PendingPermissions {
-				decisions[p.ID] = tools.PermissionDecision{Kind: tools.DecisionReject}
+				decisions[p.ID] = api.PermissionDecision{Kind: api.DecisionReject}
 			}
 			for _, q := range state.PendingQuestions {
-				answers[q.ID] = tools.QuestionResponse{Answers: []tools.QuestionAnswer{{Question: "Why?", Text: "Reason"}}}
+				answers[q.ID] = api.QuestionResponse{Answers: []api.QuestionAnswer{{Question: "Why?", Text: "Reason"}}}
 			}
 			for _, err := range h.Stream(ctx, Input{Decisions: decisions, Answers: answers}) {
 				if err != nil {
