@@ -1133,6 +1133,9 @@ func ReloadWorkspace(ctx context.Context) error {
 	if sks, err := c.ListSkills(ctx); err == nil {
 		SetWorkspaceSkills(sks)
 	}
+	if ags, err := c.ListAgents(ctx); err == nil {
+		SetWorkspaceAgents(ags)
+	}
 	if cmds, err := c.ListCommands(ctx); err == nil {
 		SetWorkspaceCommands(cmds)
 	}

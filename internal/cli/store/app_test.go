@@ -7,6 +7,7 @@ import (
 
 	"github.com/masterkeysrd/kite/backend/mock"
 	"github.com/masterkeysrd/kite/extras/trail"
+	"github.com/masterkeysrd/tasksmith/api"
 )
 
 func TestStoreApp(t *testing.T) {
@@ -70,6 +71,34 @@ func TestStoreAppWarnings(t *testing.T) {
 	SetWorkspaceWarnings(nil)
 	if GetApp().Warnings != nil {
 		t.Fatal("expected Warnings to be nil after SetWorkspaceWarnings(nil)")
+	}
+}
+
+func TestStoreAppAgents(t *testing.T) {
+	ResetApp()
+	defer ResetApp()
+
+	if GetApp().Agents != nil {
+		t.Fatal("expected Agents to be nil initially")
+	}
+
+	SetWorkspaceAgents([]api.Agent{{Name: "main"}, {Name: "reviewer"}})
+	app := GetApp()
+	if app.Agents == nil || len(*app.Agents) != 2 || (*app.Agents)[0].Name != "main" || (*app.Agents)[1].Name != "reviewer" {
+		t.Fatalf("unexpected agents: %v", app.Agents)
+	}
+
+	// ResetApp clears the agents cache (like commands and skills)
+	ResetApp()
+	if GetApp().Agents != nil {
+		t.Fatalf("expected Agents to be cleared after ResetApp: %v", GetApp().Agents)
+	}
+
+	// SetWorkspaceAgents(nil) clears agents
+	SetWorkspaceAgents([]api.Agent{{Name: "main"}})
+	SetWorkspaceAgents(nil)
+	if GetApp().Agents != nil {
+		t.Fatal("expected Agents to be nil after SetWorkspaceAgents(nil)")
 	}
 }
 

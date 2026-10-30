@@ -131,6 +131,7 @@ Some built-in commands:
 | `/compact` | `/compact [focus]` | Compact conversation history to free context window space, with optional focus instructions. |
 | `/context` | `/context` | Show visual token usage grid and context window breakdown by category. |
 | `/usage` | `/usage [session\|workspace\|global]` | Open the usage browser for the session, the workspace, or all workspaces. |
+| `/workspace` | `/workspace [reload]` | Reload the active workspace resources from disk. |
 | `/exit` | `/exit` (or `/quit`, `/q`) | Exit the REPL. |
 
 Resolve any pending permission request or question before using `/compact`. Commands and background task notifications remain queued until the interaction is resolved.

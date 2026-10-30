@@ -319,6 +319,13 @@ func AppendCommandOutput(cmd, out string) {
 	})
 }
 
+func AppendOutput(out string) {
+	AppendTranscript(TranscriptItem{
+		Kind: TranscriptKindNotice,
+		Data: NoticeData{Text: out},
+	})
+}
+
 // AppendContextUsage appends a /context usage view to the transcript scrollback.
 func AppendContextUsage(d ContextUsageData) {
 	AppendTranscript(TranscriptItem{

@@ -72,6 +72,7 @@ Inside the TaskSmith interactive REPL, slash commands provide instant control ov
 | **`/context`** | | *(none)* | Displays visual token usage grid and detailed context window breakdown by category. |
 | **`/usage`** | | `[session\|workspace\|global]` | Opens the usage browser slot on the Session, Workspace or Global tab (default: Session). See [Usage Browser](#usage-browser-usage). |
 | **`/skills`** | | *(none)* | Opens the interactive skills browser to inspect runbooks, token estimates, and reload workspace skills. |
+| **`/workspace`** | `/ws` | `[reload]` | Reloads the active workspace resources from disk. With no subcommand, defaults to `reload`. |
 
 ### Workspace Commands, Skills & Plugin Extensions
 

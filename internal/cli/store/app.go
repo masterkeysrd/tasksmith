@@ -23,6 +23,7 @@ type AppState struct {
 	Version       string
 	Workspace     string
 	Warnings      *[]string
+	Agents        *[]api.Agent
 	Commands      *[]api.Command
 	Skills        *[]api.Skill
 }
@@ -102,6 +103,22 @@ func SetWorkspaceWarnings(warnings []string) {
 		w := make([]string, len(warnings))
 		copy(w, warnings)
 		s.Warnings = &w
+		return s
+	})
+}
+
+// SetWorkspaceAgents updates the workspace agents in AppState.
+func SetWorkspaceAgents(agents []api.Agent) {
+	app.Set(func(s AppState) AppState {
+		if len(agents) == 0 {
+			if s.Agents == nil {
+				return s
+			}
+			s.Agents = nil
+			return s
+		}
+		a := slices.Clone(agents)
+		s.Agents = &a
 		return s
 	})
 }
