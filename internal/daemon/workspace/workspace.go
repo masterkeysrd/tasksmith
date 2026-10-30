@@ -20,6 +20,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/core/env"
 	"github.com/masterkeysrd/tasksmith/internal/core/fsutils"
+	"github.com/masterkeysrd/tasksmith/internal/core/tokenizer"
 	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
 	"github.com/masterkeysrd/warp"
 )
@@ -1284,10 +1285,7 @@ var (
 )
 
 func estimateTokens(s string) int {
-	if len(s) == 0 {
-		return 0
-	}
-	return (len(s) + 3) / 4
+	return tokenizer.Estimate(s)
 }
 
 func (w *workspace) AgentContext(name string) api.ContextBreakdown {

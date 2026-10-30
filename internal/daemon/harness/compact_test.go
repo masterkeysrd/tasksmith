@@ -49,9 +49,9 @@ func TestEstimateTokens(t *testing.T) {
 	}{
 		{"", 0},
 		{"a", 1},
-		{"abcd", 1},
+		{"abcd", 2},
 		{"abcde", 2},
-		{"12345678", 2},
+		{"12345678", 3},
 		{"123456789", 3},
 	}
 	for _, tc := range tests {
@@ -65,12 +65,12 @@ func TestEstimateTokens(t *testing.T) {
 		t.Errorf("estimateBlockTokens(nil) = %d, want 0", got)
 	}
 	tb := &message.TextBlock{Text: "12345678"}
-	if got := estimateBlockTokens(tb); got != 2 {
-		t.Errorf("estimateBlockTokens(TextBlock) = %d, want 2", got)
+	if got := estimateBlockTokens(tb); got != 3 {
+		t.Errorf("estimateBlockTokens(TextBlock) = %d, want 3", got)
 	}
 	thb := &message.ThinkingBlock{Thinking: "1234"}
-	if got := estimateBlockTokens(thb); got != 1 {
-		t.Errorf("estimateBlockTokens(ThinkingBlock) = %d, want 1", got)
+	if got := estimateBlockTokens(thb); got != 2 {
+		t.Errorf("estimateBlockTokens(ThinkingBlock) = %d, want 2", got)
 	}
 	tcb := &message.ToolCall{Name: "bash", Args: map[string]any{"cmd": "ls"}}
 	if got := estimateBlockTokens(tcb); got <= 0 {

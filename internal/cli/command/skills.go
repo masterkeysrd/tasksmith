@@ -14,6 +14,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/cli/components"
 	"github.com/masterkeysrd/tasksmith/internal/cli/store"
+	"github.com/masterkeysrd/tasksmith/internal/core/tokenizer"
 	uicomponents "github.com/masterkeysrd/tasksmith/internal/ui/components"
 	"github.com/masterkeysrd/tasksmith/internal/ui/format"
 	"github.com/masterkeysrd/tasksmith/internal/ui/theme"
@@ -63,13 +64,10 @@ func SkillScope(sk api.Skill) string {
 	}
 }
 
-// EstimateSkillTokens calculates approximate tokens for skill instructions using ⌈bytes / 4⌉.
+// EstimateSkillTokens calculates approximate tokens for skill instructions using
+// the code-calibrated tokenizer density (⌈bytes / 3⌉).
 func EstimateSkillTokens(instructions string) int {
-	trimmed := strings.TrimSpace(instructions)
-	if len(trimmed) == 0 {
-		return 0
-	}
-	return (len(trimmed) + 3) / 4
+	return tokenizer.Estimate(strings.TrimSpace(instructions))
 }
 
 type skillMarkdownProps struct {

@@ -92,7 +92,18 @@ $$\text{TriggerTokens} = \text{ContextLimit} - \text{ReserveTokens}$$
 | **`TriggerTokens`** | Harness Calculation | Utilization threshold that triggers autonomous compaction. |
 | **`UsedTokens`** | Recomputed State | Cumulative token count of static prefix + conversation messages, calibrated against provider usage metrics. |
 
-#### 3. Execution Lifecycle & Trigger Paths
+#### 3. Token Accounting & Calibration Strategy
+Context utilization is measured through a **hybrid ground-truth + delta accounting** model that trades a full re-tokenization on every state update for a provider-anchored total plus a fast heuristic for the uncounted tail:
+
+- **Provider Anchoring**: After each completion turn, `UsedTokens` is anchored to the upstream provider's exact tokenizer count for the most recent assistant message (its prompt and output tokens), keeping the running total calibrated against the model's own tokenizer rather than a heuristic.
+- **Incremental Trailing Delta**: Messages appended *between* assistant turns—tool executions, structured outputs, and new user prompts—have not yet been counted by the provider, so the harness adds a fast, incremental heuristic estimate for only that trailing delta. Before the first completion (when no provider metrics exist yet), the entire conversation is estimated heuristically.
+- **Code-Calibrated Density (3.0 chars/token)**: The heuristic estimates tokens as ⌈bytes ÷ 3.0⌉. Standard English prose averages ~4.0 characters per token, but software-engineering transcripts are denser—indentation, code symbols, diff syntax (`+`/`-`/`@@`), and tool-call JSON schemas pack fewer characters per token. Calibrating to 3.0 yields more conservative estimates than a prose-tuned 4.0 density, preventing the systematic *undercounting* that would otherwise let utilization silently cross `TriggerTokens` and risk a hard provider context-limit failure.
+
+**Defense-in-Depth Safety Invariants.** Two invariants guarantee the measured usage can never understate true consumption:
+- **Cache-Bounded Floor**: `UsedTokens` is bounded below by `CachedTokens`, since the prompt cache is always a subset of a turn's input tokens.
+- **Monotonic Non-Decrease**: Absent compaction, a recomputed conversation total is never allowed to fall below the previously reported `UsedTokens`, so a transient estimation dip can never mask real context growth and delay compaction.
+
+#### 4. Execution Lifecycle & Trigger Paths
 The harness supports two primary compaction entry points:
 
 | Trigger Mode | Activation Source | Graph Routing & Behavior |
@@ -102,7 +113,7 @@ The harness supports two primary compaction entry points:
 
 If prompt rendering or model invocation fails, or the model returns an empty summary, the turn fails without replacing the conversation. The checkpoint remains at `compact`, so graph resumption retries compaction before continuing.
 
-#### 4. Structured Summary Anatomy
+#### 5. Structured Summary Anatomy
 When compaction executes, the harness distills history into a standardized context summary message:
 
 ```markdown
@@ -141,7 +152,7 @@ Continue working on the latest user request above from the current state without
 - **Technical Progress & File Locations**: Captures modified files, relevant symbols, architecture decisions, and remaining steps.
 - **Continuity Directive**: Appends an explicit continuation instruction for autonomous compactions so the model immediately resumes execution without awaiting external confirmation.
 
-#### 5. Atomic State Replacement & Persistence
+#### 6. Atomic State Replacement & Persistence
 1. **Message History Replacement**: The prior conversation message list is atomically replaced with the single `<context_summary>` message tagged with system metadata (`tasksmith.system.kind = compaction`).
 2. **Context Recalibration**: Session context metrics are recomputed (`UsedTokens` drops substantially, `Compactions` counter increments, and `LastCompacted` timestamp updates).
 3. **Durable Timeline Journaling**: A `TimelineKindCompacted` record containing `BeforeTokens`, `AfterTokens`, `Trigger`, `Focus`, and `DurationMs` is appended to the SQLite timeline.

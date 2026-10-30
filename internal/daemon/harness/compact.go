@@ -16,6 +16,7 @@ import (
 	"github.com/masterkeysrd/loom/message"
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
+	"github.com/masterkeysrd/tasksmith/internal/core/tokenizer"
 	"github.com/masterkeysrd/tasksmith/internal/core/uuid"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/metrics"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/models"
@@ -66,12 +67,10 @@ func StaticContextFromBreakdown(b api.ContextBreakdown) StaticContext {
 	}
 }
 
-// estimateTokens returns an approximate token count using ⌈bytes / 4⌉.
+// estimateTokens returns an approximate token count using the code-calibrated
+// tokenizer density (⌈bytes / 3⌉).
 func estimateTokens(s string) int {
-	if len(s) == 0 {
-		return 0
-	}
-	return (len(s) + 3) / 4
+	return tokenizer.Estimate(s)
 }
 
 // estimateBlockTokens estimates token usage for an individual message block.
