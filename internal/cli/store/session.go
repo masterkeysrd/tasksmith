@@ -569,6 +569,7 @@ func SetSession(sess *api.Session) {
 		s.Session = sess
 		if sess != nil {
 			s.ModelLabel, s.Thinking = modelDisplay(sess.Model, sess.Config.Thinking)
+			s.Ready = true
 			s.Context = sess.Context
 			s.Config = sess.Config
 			if s.Config.Mode == "" {
