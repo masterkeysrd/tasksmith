@@ -177,8 +177,8 @@ var skillMarkdownViewer = trail.FC("SkillMarkdownViewer", func(props skillMarkdo
 		Style: scrollBoxStyle,
 	}, mdContent))
 
-	children = append(children, components.KeyboardHint(components.KeyboardHintProps{
-		Bindings: []components.KeyBinding{
+	children = append(children, uicomponents.KeyboardHint(uicomponents.KeyboardHintProps{
+		Bindings: []uicomponents.KeyBinding{
 			{Key: "↑/↓ or j/k", Label: "Scroll"},
 			{Key: "pgup/pgdn", Label: "Page"},
 			{Key: "esc", Label: "Return to skills"},
@@ -230,8 +230,8 @@ var emptySkillsView = trail.FC("EmptySkillsView", func(props emptySkillsViewProp
 			Style: style.S().Margin(0, 0, 1, 0).Foreground(scheme.Color.Text.Primary),
 		}, trail.Text("  "+props.notice)))
 	}
-	children = append(children, components.KeyboardHint(components.KeyboardHintProps{
-		Bindings: []components.KeyBinding{
+	children = append(children, uicomponents.KeyboardHint(uicomponents.KeyboardHintProps{
+		Bindings: []uicomponents.KeyBinding{
 			{Key: "r", Label: "Reload workspace"},
 			{Key: "esc", Label: "Close"},
 		},
@@ -365,7 +365,7 @@ var SkillsBrowser = trail.FC("SkillsBrowser", func(slotID string) trail.Node {
 		{Width: 0, Align: style.TextAlignLeft},
 	}
 	pickerProps.Filterable = false
-	pickerProps.Bindings = []components.KeyBinding{
+	pickerProps.Bindings = []uicomponents.KeyBinding{
 		{Key: "↑/↓", Label: "Select"},
 		{Key: "enter", Label: "Inspect runbook"},
 		{Key: "r", Label: "Reload workspace"},

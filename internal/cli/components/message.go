@@ -94,7 +94,8 @@ func messageParts(message store.Message) []trail.Node {
 			if strings.TrimSpace(part.Text.Text) == "" {
 				continue
 			}
-			if message.Role == api.RoleUser {
+			switch message.Role {
+			case api.RoleUser:
 				text := part.Text.Text
 				if strings.Contains(text, "<embedded_skill") {
 					skillName := extractEmbeddedSkillName(text)
@@ -121,11 +122,11 @@ func messageParts(message store.Message) []trail.Node {
 							Foreground(scheme.Color.Icon.Primary),
 					}, trail.Text(part.Text.Text))
 				}
-			} else if message.Role == api.RoleSystem {
+			case api.RoleSystem:
 				node = trail.Span(trail.SpanProps{
 					Style: style.S().WhiteSpace(style.WhiteSpacePreWrap).OverflowWrap(style.OverflowWrapAnywhere),
 				}, trail.Text(part.Text.Text))
-			} else {
+			default:
 				node = MessageText(MessageTextProps{Text: part.Text.Text})
 			}
 		case store.PartThought:

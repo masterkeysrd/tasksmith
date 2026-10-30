@@ -10,12 +10,12 @@ import (
 	"github.com/masterkeysrd/kite/extras/kitex"
 	"github.com/masterkeysrd/kite/extras/trail"
 	"github.com/masterkeysrd/kite/style"
-	uicomponents "github.com/masterkeysrd/tasksmith/internal/ui/components"
+	"github.com/masterkeysrd/tasksmith/internal/ui/components"
 	"github.com/masterkeysrd/tasksmith/internal/ui/theme"
 )
 
 // DefaultPickerBindings defines the default keyboard shortcuts displayed on the picker.
-var DefaultPickerBindings = []KeyBinding{
+var DefaultPickerBindings = []components.KeyBinding{
 	{Key: "↑/↓", Label: "Navigate"},
 	{Key: "enter", Label: "Confirm"},
 	{Key: "esc", Label: "Cancel"},
@@ -23,16 +23,16 @@ var DefaultPickerBindings = []KeyBinding{
 
 // ConfirmAction defines an inline confirmation prompt triggered by a custom key.
 type ConfirmAction struct {
-	Prompt         func(opt uicomponents.Option) string
-	DisabledReason func(opt uicomponents.Option) string
-	OnConfirm      func(opt uicomponents.Option)
+	Prompt         func(opt components.Option) string
+	DisabledReason func(opt components.Option) string
+	OnConfirm      func(opt components.Option)
 }
 
 // InputAction defines an inline text input prompt triggered by a custom key.
 type InputAction struct {
 	Prompt       string
-	InitialValue func(opt uicomponents.Option) string
-	OnSubmit     func(opt uicomponents.Option, value string)
+	InitialValue func(opt components.Option) string
+	OnSubmit     func(opt components.Option, value string)
 }
 
 type pickerMode int
@@ -45,7 +45,7 @@ const (
 
 type pickerModalState struct {
 	mode          pickerMode
-	targetOpt     uicomponents.Option
+	targetOpt     components.Option
 	activeConfirm ConfirmAction
 	activeInput   InputAction
 	inputVal      string
@@ -55,21 +55,21 @@ type pickerModalState struct {
 type PickerProps struct {
 	Title          string
 	Header         trail.Node // Optional custom header row (e.g. column headers)
-	Options        []uicomponents.Option
-	MaxVisible     int                   // Max visible options before scrolling (defaults to uicomponents.DefaultPickerMaxVisible)
-	Columns        []uicomponents.Column // Column specifications forwarded to OptionList
-	Bindings       []KeyBinding          // Optional navigation shortcuts rendered inline via KeyboardHint
+	Options        []components.Option
+	MaxVisible     int                     // Max visible options before scrolling (defaults to components.DefaultPickerMaxVisible)
+	Columns        []components.Column     // Column specifications forwarded to OptionList
+	Bindings       []components.KeyBinding // Optional navigation shortcuts rendered inline via KeyboardHint
 	Filterable     bool
 	OnOpen         func()
-	OnSelect       func(opt uicomponents.Option)
-	Keys           map[string]func(opt uicomponents.Option)
+	OnSelect       func(opt components.Option)
+	Keys           map[string]func(opt components.Option)
 	ConfirmActions map[string]ConfirmAction
 	InputActions   map[string]InputAction
 	OnCancel       func()
 }
 
 // NewPicker constructs an initialized PickerProps with default bindings and cursor at current.
-func NewPicker(title string, opts []uicomponents.Option, onSelect func(opt uicomponents.Option)) PickerProps {
+func NewPicker(title string, opts []components.Option, onSelect func(opt components.Option)) PickerProps {
 	return PickerProps{
 		Title:    title,
 		Options:  opts,
@@ -78,7 +78,7 @@ func NewPicker(title string, opts []uicomponents.Option, onSelect func(opt uicom
 	}
 }
 
-func initialCursor(opts []uicomponents.Option) int {
+func initialCursor(opts []components.Option) int {
 	for i, opt := range opts {
 		if opt.Current {
 			return i
@@ -87,12 +87,12 @@ func initialCursor(opts []uicomponents.Option) int {
 	return 0
 }
 
-func filterOptions(opts []uicomponents.Option, query string) []uicomponents.Option {
+func filterOptions(opts []components.Option, query string) []components.Option {
 	q := strings.TrimSpace(strings.ToLower(query))
 	if q == "" {
 		return opts
 	}
-	var res []uicomponents.Option
+	var res []components.Option
 	for _, opt := range opts {
 		if strings.Contains(strings.ToLower(opt.Label), q) ||
 			strings.Contains(strings.ToLower(opt.Description), q) ||
@@ -143,7 +143,7 @@ var Picker = trail.FC("Picker", func(props PickerProps) trail.Node {
 		IsActive:  st.mode == pickerModeInput,
 	})
 
-	filtered := kitex.UseMemo(func() []uicomponents.Option {
+	filtered := kitex.UseMemo(func() []components.Option {
 		return filterOptions(props.Options, filter())
 	}, []any{props.Options, filter()})
 
@@ -320,10 +320,10 @@ var Picker = trail.FC("Picker", func(props PickerProps) trail.Node {
 
 	maxVis := props.MaxVisible
 	if maxVis <= 0 {
-		maxVis = uicomponents.DefaultPickerMaxVisible
+		maxVis = components.DefaultPickerMaxVisible
 	}
 
-	optionStyles := &uicomponents.OptionListStyles{
+	optionStyles := &components.OptionListStyles{
 		Option:      style.S().Foreground(scheme.Color.Text.Secondary),
 		Selected:    style.S().Bold(true).Foreground(scheme.Color.Icon.Primary),
 		Description: style.S().Foreground(scheme.Color.Text.Muted),
@@ -333,7 +333,7 @@ var Picker = trail.FC("Picker", func(props PickerProps) trail.Node {
 		rows = append(rows, props.Header)
 	}
 
-	rows = append(rows, uicomponents.OptionList(uicomponents.OptionListProps{
+	rows = append(rows, components.OptionList(components.OptionListProps{
 		Options:    filtered,
 		Selected:   cur,
 		EmptyText:  "  No matching options.",
@@ -408,15 +408,15 @@ var Picker = trail.FC("Picker", func(props PickerProps) trail.Node {
 		))
 	}
 
-	var activeBindings []KeyBinding
+	var activeBindings []components.KeyBinding
 	switch st.mode {
 	case pickerModeConfirm:
-		activeBindings = []KeyBinding{
+		activeBindings = []components.KeyBinding{
 			{Key: "y/enter", Label: "Confirm"},
 			{Key: "n/esc", Label: "Cancel"},
 		}
 	case pickerModeInput:
-		activeBindings = []KeyBinding{
+		activeBindings = []components.KeyBinding{
 			{Key: "enter", Label: "Submit"},
 			{Key: "esc", Label: "Cancel"},
 		}
@@ -432,7 +432,7 @@ var Picker = trail.FC("Picker", func(props PickerProps) trail.Node {
 		rows = append(rows, trail.Span(trail.SpanProps{Style: noticeStyle}, trail.Text("  "+n)))
 	}
 
-	rows = append(rows, KeyboardHint(KeyboardHintProps{
+	rows = append(rows, components.KeyboardHint(components.KeyboardHintProps{
 		Bindings: activeBindings,
 	}))
 

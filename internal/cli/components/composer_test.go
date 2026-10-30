@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/masterkeysrd/kite/backend"
 	"github.com/masterkeysrd/kite/backend/mock"
@@ -13,6 +14,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/cli/store"
 	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
+	"github.com/masterkeysrd/tasksmith/internal/ui/autocomplete"
 )
 
 func createComposerInstance(t *testing.T, props ComposerProps) (*trail.Instance, *mock.Backend) {
@@ -495,5 +497,101 @@ func TestComposerBashModeSubmitAndHistory(t *testing.T) {
 	}
 	if store.GetApp().Hint != BashModeHint {
 		t.Fatalf("expected hint %q when recalling bash command, got %q", BashModeHint, store.GetApp().Hint)
+	}
+}
+
+// waitForAutocomplete drives frames until cond holds or the deadline elapses.
+func waitForAutocomplete(t *testing.T, inst *trail.Instance, cond func() bool, msg string) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		inst.Frame()
+		if cond() {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for %s", msg)
+}
+
+func newAutocompleteComposer(t *testing.T, b *mock.Backend) *trail.Instance {
+	t.Helper()
+	engine := autocomplete.New()
+	if err := engine.Register(autocomplete.Source{
+		Name:    "cmds",
+		Trigger: "@",
+		Complete: autocomplete.Static(
+			autocomplete.Candidate{Value: "alpha"},
+			autocomplete.Candidate{Value: "alpine"},
+			autocomplete.Candidate{Value: "apex"},
+		),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	qc := wind.NewClient()
+	app := trail.SimpleFC("AutocompleteComposerTest", func() trail.Node {
+		return wind.Provider(wind.ProviderProps{Client: qc}, Composer(ComposerProps{
+			Autocomplete: engine,
+		}))
+	})
+	inst, err := trail.New(app(), trail.WithBackend(b))
+	if err != nil {
+		t.Fatalf("trail.New: %v", err)
+	}
+	t.Cleanup(inst.Unmount)
+	inst.Frame()
+	return inst
+}
+
+func TestComposerAutocompleteShowsKeyboardHintAndCtrlN(t *testing.T) {
+	store.ClearSlot()
+	store.ResetApp()
+	defer store.ClearSlot()
+	defer store.ResetApp()
+
+	b := mock.New(80, 24)
+	inst := newAutocompleteComposer(t, b)
+
+	typeText(inst, "@")
+	waitForAutocomplete(t, inst, func() bool {
+		out := surfaceText(b)
+		return strings.Contains(out, "alpha") && strings.Contains(out, "Keyboard:")
+	}, "autocomplete menu with keyboard hint")
+
+	// The keyboard hint is rendered in the autocomplete and advertises Ctrl+P/Ctrl+N.
+	if out := surfaceText(b); !strings.Contains(out, "Ctrl+P/Ctrl+N") {
+		t.Fatalf("expected Ctrl+P/Ctrl+N in the keyboard hint, got:\n%s", out)
+	}
+
+	// Ctrl+N navigates down to the second candidate; Tab accepts it.
+	pressKey(inst, 'n', key.ModCtrl)
+	pressKey(inst, key.KeyTab, 0)
+	if out := surfaceText(b); !strings.Contains(out, "@alpine") {
+		t.Fatalf("expected Ctrl+N to move to 'alpine', got:\n%s", out)
+	}
+}
+
+func TestComposerAutocompleteCtrlPNavigatesUp(t *testing.T) {
+	store.ClearSlot()
+	store.ResetApp()
+	defer store.ClearSlot()
+	defer store.ResetApp()
+
+	b := mock.New(80, 24)
+	inst := newAutocompleteComposer(t, b)
+
+	typeText(inst, "@")
+	waitForAutocomplete(t, inst, func() bool {
+		out := surfaceText(b)
+		return strings.Contains(out, "alpha") && strings.Contains(out, "Keyboard:")
+	}, "autocomplete menu with keyboard hint")
+
+	// Navigate down twice to "apex", then Ctrl+P back up to "alpine"; Tab accepts it.
+	pressKey(inst, 'n', key.ModCtrl)
+	pressKey(inst, 'n', key.ModCtrl)
+	pressKey(inst, 'p', key.ModCtrl)
+	pressKey(inst, key.KeyTab, 0)
+	if out := surfaceText(b); !strings.Contains(out, "@alpine") {
+		t.Fatalf("expected Ctrl+P to move back to 'alpine', got:\n%s", out)
 	}
 }

@@ -174,7 +174,7 @@ var SessionBrowser = trail.FC("SessionBrowser", func(slotID string) trail.Node {
 		{Width: 26, Align: style.TextAlignRight},
 	}
 	pickerProps.Filterable = true
-	pickerProps.Bindings = []components.KeyBinding{
+	pickerProps.Bindings = []uicomponents.KeyBinding{
 		{Key: "↑/↓", Label: "Select"},
 		{Key: "enter", Label: "Switch"},
 		{Key: "f2", Label: "Rename"},

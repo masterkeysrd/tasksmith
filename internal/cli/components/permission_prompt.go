@@ -10,6 +10,7 @@ import (
 	"github.com/masterkeysrd/kite/extras/trail"
 	"github.com/masterkeysrd/kite/style"
 	"github.com/masterkeysrd/tasksmith/api"
+	"github.com/masterkeysrd/tasksmith/internal/ui/components"
 	"github.com/masterkeysrd/tasksmith/internal/ui/format"
 	"github.com/masterkeysrd/tasksmith/internal/ui/theme"
 )
@@ -308,8 +309,8 @@ var PermissionPrompt = trail.FC("PermissionPrompt", func(props PermissionPromptP
 
 	// Inline KeyboardHint at bottom
 	if !feedbackMode() {
-		boxChildren = append(boxChildren, KeyboardHint(KeyboardHintProps{
-			Bindings: []KeyBinding{
+		boxChildren = append(boxChildren, components.KeyboardHint(components.KeyboardHintProps{
+			Bindings: []components.KeyBinding{
 				{Key: "↑/↓", Label: "Navigate"},
 				{Key: "tab", Label: "Scope"},
 				{Key: "enter", Label: "Confirm"},
@@ -317,8 +318,8 @@ var PermissionPrompt = trail.FC("PermissionPrompt", func(props PermissionPromptP
 			},
 		}))
 	} else {
-		boxChildren = append(boxChildren, KeyboardHint(KeyboardHintProps{
-			Bindings: []KeyBinding{
+		boxChildren = append(boxChildren, components.KeyboardHint(components.KeyboardHintProps{
+			Bindings: []components.KeyBinding{
 				{Key: "enter", Label: "Submit"},
 				{Key: "esc", Label: "Cancel"},
 			},

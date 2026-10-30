@@ -11,8 +11,8 @@ import (
 	"github.com/masterkeysrd/kite/extras/trail"
 	"github.com/masterkeysrd/kite/style"
 	"github.com/masterkeysrd/tasksmith/api"
-	"github.com/masterkeysrd/tasksmith/internal/cli/components"
 	"github.com/masterkeysrd/tasksmith/internal/cli/store"
+	uicomponents "github.com/masterkeysrd/tasksmith/internal/ui/components"
 	"github.com/masterkeysrd/tasksmith/internal/ui/theme"
 )
 
@@ -233,20 +233,20 @@ var usageBrowser = trail.FC("UsageBrowser", func(props usageBrowserProps) trail.
 			fmt.Sprintf("lines %d-%d of %d", pos+1, end, len(lines))))
 	}
 
-	bindings := []components.KeyBinding{
+	bindings := []uicomponents.KeyBinding{
 		{Key: "←/→", Label: "Tab"},
 		{Key: "↑/↓", Label: "Scroll"},
 		{Key: "r", Label: "Refresh"},
 	}
 	if tab() != usageTabSession {
 		bindings = append(bindings,
-			components.KeyBinding{Key: "m/p/a/u/i/d", Label: "Group by"},
-			components.KeyBinding{Key: "t", Label: "Range"},
+			uicomponents.KeyBinding{Key: "m/p/a/u/i/d", Label: "Group by"},
+			uicomponents.KeyBinding{Key: "t", Label: "Range"},
 		)
 	}
-	bindings = append(bindings, components.KeyBinding{Key: "esc", Label: "Close"})
+	bindings = append(bindings, uicomponents.KeyBinding{Key: "esc", Label: "Close"})
 	children = append(children, trail.Box(trail.BoxProps{Style: style.S().Margin(1, 0, 0, 0)},
-		components.KeyboardHint(components.KeyboardHintProps{Bindings: bindings})))
+		uicomponents.KeyboardHint(uicomponents.KeyboardHintProps{Bindings: bindings})))
 
 	return trail.Box(trail.BoxProps{
 		Style: style.S().

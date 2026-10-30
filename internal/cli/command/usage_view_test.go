@@ -11,7 +11,8 @@ import (
 func text(lines []usageLine) string {
 	var b strings.Builder
 	for _, l := range lines {
-		b.WriteString(l.Text + "\n")
+		b.WriteString(l.Text)
+		b.WriteString("\n")
 	}
 	return b.String()
 }

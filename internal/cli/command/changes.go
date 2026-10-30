@@ -192,8 +192,8 @@ var emptyChangesView = trail.FC("EmptyChangesView", func(props emptyChangesViewP
 	return trail.Box(trail.BoxProps{Style: boxStyle},
 		trail.Span(trail.SpanProps{Style: titleStyle}, trail.Text("Tracked Changes")),
 		trail.Span(trail.SpanProps{Style: emptyStyle}, trail.Text("  No tracked file changes.")),
-		components.KeyboardHint(components.KeyboardHintProps{
-			Bindings: []components.KeyBinding{
+		uicomponents.KeyboardHint(uicomponents.KeyboardHintProps{
+			Bindings: []uicomponents.KeyBinding{
 				{Key: "esc", Label: "Close"},
 			},
 		}),
@@ -278,8 +278,8 @@ var changeDiffViewer = trail.FC("ChangeDiffViewer", func(props changeDiffProps) 
 			Style: headerStyle,
 		}, trail.Text(fmt.Sprintf("Diff for %s (%s):", props.change.Path, props.change.Kind))),
 		content,
-		components.KeyboardHint(components.KeyboardHintProps{
-			Bindings: []components.KeyBinding{
+		uicomponents.KeyboardHint(uicomponents.KeyboardHintProps{
+			Bindings: []uicomponents.KeyBinding{
 				{Key: "esc", Label: "Return to changes"},
 			},
 		}),
@@ -404,7 +404,7 @@ var ChangesBrowser = trail.FC("ChangesBrowser", func(slotID string) trail.Node {
 		{Width: 16, Align: style.TextAlignRight},
 	}
 	pickerProps.Filterable = true
-	pickerProps.Bindings = []components.KeyBinding{
+	pickerProps.Bindings = []uicomponents.KeyBinding{
 		{Key: "↑/↓", Label: "Select"},
 		{Key: "enter", Label: "View diff"},
 		{Key: "r", Label: "Revert"},

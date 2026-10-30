@@ -315,7 +315,7 @@ var Composer = trail.FC("Composer", func(props ComposerProps) trail.Node {
 				}
 			}
 
-		case ke.MatchString("up"):
+		case ke.MatchString("up", "ctrl+p"):
 			if isCurrent && auto.Up() {
 				e.PreventDefault()
 				e.StopPropagation()
@@ -349,7 +349,7 @@ var Composer = trail.FC("Composer", func(props ComposerProps) trail.Node {
 				}
 			}
 
-		case ke.MatchString("down"):
+		case ke.MatchString("down", "ctrl+n"):
 			if isCurrent && auto.Down() {
 				e.PreventDefault()
 				e.StopPropagation()
@@ -500,6 +500,12 @@ var Composer = trail.FC("Composer", func(props ComposerProps) trail.Node {
 		uicomponents.Autocomplete(uicomponents.AutocompleteProps{
 			State: auto,
 			Views: props.CompletionViews,
+			Bindings: []uicomponents.KeyBinding{
+				{Key: "↑/↓", Label: "Navigate"},
+				{Key: "Ctrl+P/Ctrl+N", Label: "Navigate"},
+				{Key: "Tab", Label: "Select"},
+				{Key: "Esc", Label: "Dismiss"},
+			},
 		}),
 	)
 })

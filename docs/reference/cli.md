@@ -122,6 +122,7 @@ TaskSmith uses structured modal keybindings across its terminal interface:
 | :--- | :--- | :--- |
 | `Tab` | Autocomplete | Inserts or completes the currently highlighted autocomplete suggestion. |
 | `↑` / `↓` | Autocomplete | Navigates candidate suggestions up and down when the autocomplete menu is visible. |
+| `Ctrl+P` / `Ctrl+N` | Autocomplete | Navigates candidate suggestions up and down, mirroring `↑` / `↓`. |
 | `↑` / `↓` | Composer | Cycles backward and forward through prompt history when autocomplete is inactive. |
 
 ### Modals & Pickers (General)

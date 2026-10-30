@@ -10,6 +10,7 @@ import (
 	"github.com/masterkeysrd/kite/extras/trail"
 	"github.com/masterkeysrd/kite/style"
 	"github.com/masterkeysrd/tasksmith/api"
+	"github.com/masterkeysrd/tasksmith/internal/ui/components"
 	"github.com/masterkeysrd/tasksmith/internal/ui/theme"
 )
 
@@ -225,8 +226,8 @@ var PermissionConfigEditor = trail.FC("PermissionConfigEditor", func(props Permi
 			},
 				trail.Span(trail.SpanProps{Style: hintStyle}, trail.Text("  "+scopeItems[scopeIndex()].desc)),
 			),
-			KeyboardHint(KeyboardHintProps{
-				Bindings: []KeyBinding{
+			components.KeyboardHint(components.KeyboardHintProps{
+				Bindings: []components.KeyBinding{
 					{Key: "↑/↓", Label: "Navigate"},
 					{Key: "enter", Label: "Select"},
 					{Key: "esc", Label: "Close"},
@@ -297,8 +298,8 @@ var PermissionConfigEditor = trail.FC("PermissionConfigEditor", func(props Permi
 		}
 
 		children = append(children,
-			KeyboardHint(KeyboardHintProps{
-				Bindings: []KeyBinding{
+			components.KeyboardHint(components.KeyboardHintProps{
+				Bindings: []components.KeyBinding{
 					{Key: "↑/↓", Label: "Navigate"},
 					{Key: "←/→", Label: "Switch View"},
 					{Key: "a", Label: "Add rule"},
@@ -405,8 +406,8 @@ var PermissionConfigEditor = trail.FC("PermissionConfigEditor", func(props Permi
 		children = append(children,
 			trail.Newline(1),
 			trail.Span(trail.SpanProps{Style: hintStyle}, trail.Text("Format: tool(pattern)")),
-			KeyboardHint(KeyboardHintProps{
-				Bindings: []KeyBinding{
+			components.KeyboardHint(components.KeyboardHintProps{
+				Bindings: []components.KeyBinding{
 					{Key: "enter", Label: "Save"},
 					{Key: "esc", Label: "Cancel"},
 				},

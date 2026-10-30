@@ -120,11 +120,11 @@ var taskOutputViewer = trail.FC("TaskOutputViewer", func(props taskOutputProps) 
 		Margin(0, 0, 1, 0).
 		Foreground(scheme.Color.Text.Secondary)
 
-	bindings := []components.KeyBinding{
+	bindings := []uicomponents.KeyBinding{
 		{Key: "esc", Label: "Return to tasks"},
 	}
 	if t.Status == api.TaskStatusRunning || t.Status == api.TaskStatusPending {
-		bindings = append(bindings, components.KeyBinding{Key: "x", Label: "Kill task"})
+		bindings = append(bindings, uicomponents.KeyBinding{Key: "x", Label: "Kill task"})
 	}
 
 	children := []trail.Node{
@@ -141,7 +141,7 @@ var taskOutputViewer = trail.FC("TaskOutputViewer", func(props taskOutputProps) 
 		children = append(children, trail.Span(trail.SpanProps{Style: noticeStyle}, trail.Text(n)))
 	}
 	children = append(children,
-		components.KeyboardHint(components.KeyboardHintProps{
+		uicomponents.KeyboardHint(uicomponents.KeyboardHintProps{
 			Bindings: bindings,
 		}),
 	)
@@ -183,16 +183,16 @@ var emptyTasksView = trail.FC("EmptyTasksView", func(props emptyTasksViewProps) 
 	titleStyle := style.S().Bold(true).Margin(0, 0, 1, 0).Foreground(scheme.Color.Text.Primary)
 	emptyStyle := style.S().Margin(0, 0, 1, 0).Foreground(scheme.Color.Text.Secondary)
 
-	var bindings []components.KeyBinding
+	var bindings []uicomponents.KeyBinding
 	if props.hasAllTasks {
-		bindings = append(bindings, components.KeyBinding{Key: "a", Label: props.toggleLabel})
+		bindings = append(bindings, uicomponents.KeyBinding{Key: "a", Label: props.toggleLabel})
 	}
-	bindings = append(bindings, components.KeyBinding{Key: "esc", Label: "Close"})
+	bindings = append(bindings, uicomponents.KeyBinding{Key: "esc", Label: "Close"})
 
 	return trail.Box(trail.BoxProps{Style: boxStyle},
 		trail.Span(trail.SpanProps{Style: titleStyle}, trail.Text(props.title)),
 		trail.Span(trail.SpanProps{Style: emptyStyle}, trail.Text(props.emptyMsg)),
-		components.KeyboardHint(components.KeyboardHintProps{
+		uicomponents.KeyboardHint(uicomponents.KeyboardHintProps{
 			Bindings: bindings,
 		}),
 	)
@@ -299,16 +299,16 @@ var TasksBrowser = trail.FC("TasksBrowser", func(slotID string) trail.Node {
 		}
 	}
 
-	bindings := []components.KeyBinding{
+	bindings := []uicomponents.KeyBinding{
 		{Key: "↑/↓", Label: "Select"},
 		{Key: "enter", Label: "View output"},
 	}
 	if hasKillable {
-		bindings = append(bindings, components.KeyBinding{Key: "x", Label: "Kill"})
+		bindings = append(bindings, uicomponents.KeyBinding{Key: "x", Label: "Kill"})
 	}
 	bindings = append(bindings,
-		components.KeyBinding{Key: "a", Label: toggleLabel},
-		components.KeyBinding{Key: "esc", Label: "Close"},
+		uicomponents.KeyBinding{Key: "a", Label: toggleLabel},
+		uicomponents.KeyBinding{Key: "esc", Label: "Close"},
 	)
 
 	pickerProps := components.NewPicker(title, opts, func(opt uicomponents.Option) {

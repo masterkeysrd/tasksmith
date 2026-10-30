@@ -11,6 +11,7 @@ import (
 	"github.com/masterkeysrd/kite/extras/trail"
 	"github.com/masterkeysrd/kite/style"
 	"github.com/masterkeysrd/tasksmith/api"
+	"github.com/masterkeysrd/tasksmith/internal/ui/components"
 	"github.com/masterkeysrd/tasksmith/internal/ui/theme"
 )
 
@@ -445,18 +446,18 @@ var QuestionPrompt = trail.FC("QuestionPrompt", func(props QuestionPromptProps) 
 		children = append(children, line(f.err, style.S().Foreground(scheme.Color.Text.Error)))
 	}
 	if !f.submitting && !f.canceling {
-		bindings := []KeyBinding{{Key: "↑/↓", Label: "Navigate"}, {Key: "enter", Label: "Next"}, {Key: "esc", Label: "Cancel"}}
+		bindings := []components.KeyBinding{{Key: "↑/↓", Label: "Navigate"}, {Key: "enter", Label: "Next"}, {Key: "esc", Label: "Cancel"}}
 		if f.step < len(req.Questions) && req.Questions[f.step].Type == string(api.QuestionTypeMulti) {
-			bindings = append(bindings, KeyBinding{Key: "space", Label: "Toggle"})
+			bindings = append(bindings, components.KeyBinding{Key: "space", Label: "Toggle"})
 		}
 		if len(req.Questions) > 1 {
 			backKey := "←/→"
 			if f.editing && req.Questions[f.step].Type == string(api.QuestionTypeText) {
 				backKey = "shift+tab/tab"
 			}
-			bindings = append(bindings, KeyBinding{Key: backKey, Label: "Questions"})
+			bindings = append(bindings, components.KeyBinding{Key: backKey, Label: "Questions"})
 		}
-		children = append(children, KeyboardHint(KeyboardHintProps{Bindings: bindings}))
+		children = append(children, components.KeyboardHint(components.KeyboardHintProps{Bindings: bindings}))
 	}
 	return trail.Box(trail.BoxProps{Style: style.S().Border(style.RoundedBorder().Color(scheme.Color.Border.Default)).Padding(0, 1).Width(style.Percent(100)).FlexDirection(style.FlexColumn)}, children...)
 })
