@@ -60,9 +60,9 @@ func (s *Session) setStatus(next Status) {
 	s.Running = (next == StatusThinking || next == StatusGenerating || next == StatusExecuting || next == StatusCompacting)
 	s.Unlock()
 
-	s.publisher.Publish(api.SessionStreamTopic(s.ID), StatusChangedEvent{
+	s.publisher.Publish(api.SessionStreamTopic(s.ID), api.StatusChangedEvent{
 		SessionID: s.ID,
-		Status:    next,
+		Status:    api.SessionStatus(next),
 	})
 }
 
@@ -418,10 +418,7 @@ func (s *Session) appendMessage(ctx context.Context, msg message.Message) error 
 	s.UpdatedAt = entry.CreatedAt
 	s.Unlock()
 
-	s.publisher.Publish(api.SessionStreamTopic(s.ID), EntryAddedEvent{
-		SessionID: s.ID,
-		Entry:     entry.Clone(),
-	})
+	publishEntryAdded(s.publisher, s.ID, entry)
 
 	return nil
 }
@@ -487,9 +484,9 @@ func (s *Session) enqueueItem(item QueueItem) {
 	s.Unlock()
 
 	if item.Kind != QueueKindTask {
-		s.publisher.Publish(api.SessionStreamTopic(s.ID), QueueUpdatedEvent{
+		s.publisher.Publish(api.SessionStreamTopic(s.ID), api.QueueUpdatedEvent{
 			SessionID: s.ID,
-			Queue:     vis,
+			Queue:     toAPIQueueItems(vis),
 		})
 	}
 }
@@ -514,9 +511,9 @@ func (s *Session) PopCommand() (QueueItem, bool) {
 	vis := s.visibleQueueLocked()
 	s.Unlock()
 
-	s.publisher.Publish(api.SessionStreamTopic(s.ID), QueueUpdatedEvent{
+	s.publisher.Publish(api.SessionStreamTopic(s.ID), api.QueueUpdatedEvent{
 		SessionID: s.ID,
-		Queue:     vis,
+		Queue:     toAPIQueueItems(vis),
 	})
 	return item, true
 }
@@ -549,9 +546,9 @@ func (s *Session) PopMessages() []message.Message {
 	s.Unlock()
 
 	if hadMessage {
-		s.publisher.Publish(api.SessionStreamTopic(s.ID), QueueUpdatedEvent{
+		s.publisher.Publish(api.SessionStreamTopic(s.ID), api.QueueUpdatedEvent{
 			SessionID: s.ID,
-			Queue:     vis,
+			Queue:     toAPIQueueItems(vis),
 		})
 	}
 
@@ -894,9 +891,9 @@ func (s *Session) startTurn(hInput harness.Input) error {
 	s.done = done
 	s.Unlock()
 
-	s.publisher.Publish(api.SessionStreamTopic(s.ID), StatusChangedEvent{
+	s.publisher.Publish(api.SessionStreamTopic(s.ID), api.StatusChangedEvent{
 		SessionID: s.ID,
-		Status:    initialStatus,
+		Status:    api.SessionStatus(initialStatus),
 	})
 
 	s.wg.Go(func() {
@@ -914,9 +911,9 @@ func (s *Session) startTurn(hInput harness.Input) error {
 			}
 			s.Unlock()
 			if statusChanged {
-				s.publisher.Publish(api.SessionStreamTopic(s.ID), StatusChangedEvent{
+				s.publisher.Publish(api.SessionStreamTopic(s.ID), api.StatusChangedEvent{
 					SessionID: s.ID,
-					Status:    StatusIdle,
+					Status:    api.StatusIdle,
 				})
 			}
 			cancel()
@@ -970,7 +967,7 @@ func (s *Session) startTurn(hInput harness.Input) error {
 
 		if !waiting && runCtx.Err() == nil {
 			s.setStatus(StatusIdle)
-			s.publisher.Publish(api.SessionStreamTopic(s.ID), CompletedEvent{
+			s.publisher.Publish(api.SessionStreamTopic(s.ID), api.CompletedEvent{
 				SessionID: s.ID,
 			})
 		}
@@ -1014,9 +1011,9 @@ func (s *Session) onTaskUpdate(snap tasks.Snapshot) {
 	}
 	s.Unlock()
 
-	s.publisher.Publish(api.SessionStreamTopic(s.ID), TaskUpdatedEvent{
+	s.publisher.Publish(api.SessionStreamTopic(s.ID), api.TaskUpdatedEvent{
 		SessionID: s.ID,
-		Task:      snap,
+		Task:      toAPITask(snap),
 	})
 
 	if snap.Status == tasks.StatusCompleted || snap.Status == tasks.StatusFailed {
@@ -1109,10 +1106,7 @@ func (s *Session) recordDecision(ctx context.Context, decision tools.PermissionD
 	s.UpdatedAt = entry.CreatedAt
 	s.Unlock()
 
-	s.publisher.Publish(api.SessionStreamTopic(s.ID), EntryAddedEvent{
-		SessionID: s.ID,
-		Entry:     entry.Clone(),
-	})
+	publishEntryAdded(s.publisher, s.ID, entry)
 
 	return allResolved, nil
 }
@@ -1173,7 +1167,7 @@ func (s *Session) recordQuestion(ctx context.Context, response tools.QuestionRes
 	s.UpdatedAt = entry.CreatedAt
 	ready := len(remaining) == 0 && len(s.PendingPermissions) == 0
 	s.Unlock()
-	s.publisher.Publish(api.SessionStreamTopic(s.ID), EntryAddedEvent{SessionID: s.ID, Entry: entry.Clone()})
+	publishEntryAdded(s.publisher, s.ID, entry)
 	return ready, nil
 }
 
@@ -1193,9 +1187,9 @@ func (s *Session) handleAsyncError(err error) {
 	}
 	s.Unlock()
 
-	s.publisher.Publish(api.SessionStreamTopic(s.ID), StatusChangedEvent{
+	s.publisher.Publish(api.SessionStreamTopic(s.ID), api.StatusChangedEvent{
 		SessionID: s.ID,
-		Status:    StatusIdle,
+		Status:    api.StatusIdle,
 	})
 
 	status := api.TurnStatusFailed
@@ -1211,14 +1205,11 @@ func (s *Session) handleAsyncError(err error) {
 			s.Lock()
 			s.UpdatedAt = entry.CreatedAt
 			s.Unlock()
-			s.publisher.Publish(api.SessionStreamTopic(s.ID), EntryAddedEvent{
-				SessionID: s.ID,
-				Entry:     entry.Clone(),
-			})
+			publishEntryAdded(s.publisher, s.ID, entry)
 		}
 	} else {
 		s.logger.Error("session turn failed", log.String("session_id", s.ID), log.String("error", err.Error()))
-		s.publisher.Publish(api.SessionStreamTopic(s.ID), ErrorEvent{
+		s.publisher.Publish(api.SessionStreamTopic(s.ID), api.ErrorEvent{
 			SessionID: s.ID,
 			Error:     err.Error(),
 		})
@@ -1245,10 +1236,7 @@ func (s *Session) send(ctx context.Context, stream iter.Seq2[harness.Event, erro
 						s.Lock()
 						s.UpdatedAt = entry.CreatedAt
 						s.Unlock()
-						s.publisher.Publish(api.SessionStreamTopic(s.ID), EntryAddedEvent{
-							SessionID: s.ID,
-							Entry:     entry.Clone(),
-						})
+						publishEntryAdded(s.publisher, s.ID, entry)
 					}
 				}
 			}
@@ -1273,10 +1261,9 @@ func (s *Session) send(ctx context.Context, stream iter.Seq2[harness.Event, erro
 				} else if hasThinking {
 					s.setStatus(StatusThinking)
 				}
-				s.publisher.Publish(api.SessionStreamTopic(s.ID), ChunkEvent{
-					SessionID: s.ID,
-					Chunk:     message.CloneAssistantChunk(*hev.Chunk),
-				})
+				clonedChunk := message.CloneAssistantChunk(*hev.Chunk)
+				apiChunk := toAPIChunk(&clonedChunk)
+				s.publisher.Publish(api.SessionStreamTopic(s.ID), api.ChunkEvent{SessionID: s.ID, Chunk: *apiChunk})
 			}
 
 		case harness.EventMessage:
@@ -1293,10 +1280,7 @@ func (s *Session) send(ctx context.Context, stream iter.Seq2[harness.Event, erro
 				s.UpdatedAt = entry.CreatedAt
 				s.Unlock()
 
-				s.publisher.Publish(api.SessionStreamTopic(s.ID), EntryAddedEvent{
-					SessionID: s.ID,
-					Entry:     entry.Clone(),
-				})
+				publishEntryAdded(s.publisher, s.ID, entry)
 
 				if user, ok := hev.Message.(*message.User); ok && harness.SystemKindOf(user) == "" {
 					s.beginTurn(user.GetID(), entry.CreatedAt)
@@ -1322,7 +1306,7 @@ func (s *Session) send(ctx context.Context, stream iter.Seq2[harness.Event, erro
 		case harness.EventCommandStarted:
 			if hev.CommandStarted != nil {
 				s.setStatus(StatusExecuting)
-				s.publisher.Publish(api.SessionStreamTopic(s.ID), CommandStartedEvent{
+				s.publisher.Publish(api.SessionStreamTopic(s.ID), api.CommandStartedEvent{
 					SessionID: s.ID,
 					ID:        hev.CommandStarted.ID,
 					Command:   hev.CommandStarted.Command,
@@ -1331,7 +1315,7 @@ func (s *Session) send(ctx context.Context, stream iter.Seq2[harness.Event, erro
 
 		case harness.EventCommandCompleted:
 			if hev.CommandCompleted != nil {
-				entry := timeline.NewCommandEntry(s.ID, timeline.CommandRecord{
+				entry := timeline.NewCommandEntry(s.ID, api.CommandRecord{
 					Command:    hev.CommandCompleted.Command,
 					Output:     hev.CommandCompleted.Output,
 					ExitCode:   hev.CommandCompleted.ExitCode,
@@ -1350,10 +1334,7 @@ func (s *Session) send(ctx context.Context, stream iter.Seq2[harness.Event, erro
 				s.UpdatedAt = entry.CreatedAt
 				s.Unlock()
 
-				s.publisher.Publish(api.SessionStreamTopic(s.ID), EntryAddedEvent{
-					SessionID: s.ID,
-					Entry:     entry.Clone(),
-				})
+				publishEntryAdded(s.publisher, s.ID, entry)
 			}
 
 		case harness.EventInterrupted:
@@ -1382,15 +1363,15 @@ func (s *Session) send(ctx context.Context, stream iter.Seq2[harness.Event, erro
 			s.FinishedAt = time.Now().UTC()
 			s.Unlock()
 
-			s.publisher.Publish(api.SessionStreamTopic(s.ID), StatusChangedEvent{
+			s.publisher.Publish(api.SessionStreamTopic(s.ID), api.StatusChangedEvent{
 				SessionID: s.ID,
-				Status:    nextStatus,
+				Status:    api.SessionStatus(nextStatus),
 			})
 			if len(perms) > 0 {
-				s.publisher.Publish(api.SessionStreamTopic(s.ID), PermissionRequestedEvent{SessionID: s.ID, Permissions: perms})
+				s.publisher.Publish(api.SessionStreamTopic(s.ID), api.PermissionRequestedEvent{SessionID: s.ID, Permissions: toAPIPermissionRequests(perms)})
 			}
 			if len(questions) > 0 {
-				s.publisher.Publish(api.SessionStreamTopic(s.ID), QuestionRequestedEvent{SessionID: s.ID, Questions: questions})
+				s.publisher.Publish(api.SessionStreamTopic(s.ID), api.QuestionRequestedEvent{SessionID: s.ID, Questions: toAPIQuestionRequests(questions)})
 			}
 
 		case harness.EventTodosUpdated:
@@ -1398,9 +1379,9 @@ func (s *Session) send(ctx context.Context, stream iter.Seq2[harness.Event, erro
 			s.Todos = slices.Clone(hev.Todos)
 			s.Unlock()
 
-			s.publisher.Publish(api.SessionStreamTopic(s.ID), TodosUpdatedEvent{
+			s.publisher.Publish(api.SessionStreamTopic(s.ID), api.TodosUpdatedEvent{
 				SessionID: s.ID,
-				Todos:     slices.Clone(hev.Todos),
+				Todos:     toAPITodos(hev.Todos),
 			})
 
 		case harness.EventCompactionStarted:
@@ -1411,7 +1392,7 @@ func (s *Session) send(ctx context.Context, stream iter.Seq2[harness.Event, erro
 				trig = hev.CompactionStarted.Trigger
 				focus = hev.CompactionStarted.Focus
 			}
-			s.publisher.Publish(api.SessionStreamTopic(s.ID), CompactionStartedEvent{
+			s.publisher.Publish(api.SessionStreamTopic(s.ID), api.CompactionStartedEvent{
 				SessionID: s.ID,
 				ID:        compID,
 				Trigger:   trig,
@@ -1420,7 +1401,7 @@ func (s *Session) send(ctx context.Context, stream iter.Seq2[harness.Event, erro
 
 		case harness.EventCompactionCompleted:
 			if hev.CompactionCompleted != nil {
-				rec := timeline.CompactedRecord{
+				rec := api.CompactedRecord{
 					Trigger:      hev.CompactionCompleted.Trigger,
 					Focus:        hev.CompactionCompleted.Focus,
 					Summary:      hev.CompactionCompleted.Summary,
@@ -1442,15 +1423,12 @@ func (s *Session) send(ctx context.Context, stream iter.Seq2[harness.Event, erro
 				s.UpdatedAt = entry.CreatedAt
 				s.Unlock()
 
-				s.publisher.Publish(api.SessionStreamTopic(s.ID), EntryAddedEvent{
-					SessionID: s.ID,
-					Entry:     entry.Clone(),
-				})
+				publishEntryAdded(s.publisher, s.ID, entry)
 			}
 
 		case harness.EventCacheBroken:
 			if hev.CacheBroken != nil {
-				rec := timeline.CacheBrokenRecord{
+				rec := api.CacheBrokenRecord{
 					PrevCached:  hev.CacheBroken.PrevCached,
 					CurrCached:  hev.CacheBroken.CurrCached,
 					InputTokens: hev.CacheBroken.InputTokens,
@@ -1466,10 +1444,7 @@ func (s *Session) send(ctx context.Context, stream iter.Seq2[harness.Event, erro
 				s.UpdatedAt = entry.CreatedAt
 				s.Unlock()
 
-				s.publisher.Publish(api.SessionStreamTopic(s.ID), EntryAddedEvent{
-					SessionID: s.ID,
-					Entry:     entry.Clone(),
-				})
+				publishEntryAdded(s.publisher, s.ID, entry)
 			}
 
 		case harness.EventContextUpdated:
@@ -1478,7 +1453,7 @@ func (s *Session) send(ctx context.Context, stream iter.Seq2[harness.Event, erro
 				s.Context = *hev.Context
 				s.Unlock()
 
-				s.publisher.Publish(api.SessionStreamTopic(s.ID), ContextUpdatedEvent{
+				s.publisher.Publish(api.SessionStreamTopic(s.ID), api.ContextUpdatedEvent{
 					SessionID: s.ID,
 					Context:   *hev.Context,
 				})
@@ -1651,14 +1626,13 @@ func (s *Session) generateTitle(userText string) {
 	s.UpdatedAt = now
 	s.Unlock()
 
-	cloned := s.Clone()
 	var wsRoot string
 	if s.workspace != nil {
 		wsRoot = s.workspace.RootDir()
 	}
-	s.publisher.Publish(api.TopicSessions, UpdatedEvent{
+	s.publisher.Publish(api.TopicSessions, api.SessionUpdatedEvent{
 		Workspace: wsRoot,
-		Session:   cloned,
+		Session:   ToAPISession(s),
 	})
 }
 
@@ -1694,7 +1668,7 @@ func (s *Session) finishTurn(status string) {
 		return
 	}
 
-	rec := timeline.TurnCompletedRecord{TurnID: ids[len(ids)-1], Status: status, ElapsedMs: elapsed.Milliseconds()}
+	rec := api.TurnCompletedRecord{TurnID: ids[len(ids)-1], Status: status, ElapsedMs: elapsed.Milliseconds()}
 	if s.metrics != nil {
 		ctx, cancel := context.WithTimeout(s.bgCtx, 5*time.Second)
 		usage, err := s.metrics.TurnUsage(ctx, ids...)
@@ -1718,8 +1692,5 @@ func (s *Session) finishTurn(status string) {
 	s.Lock()
 	s.UpdatedAt = entry.CreatedAt
 	s.Unlock()
-	s.publisher.Publish(api.SessionStreamTopic(s.ID), EntryAddedEvent{
-		SessionID: s.ID,
-		Entry:     entry.Clone(),
-	})
+	publishEntryAdded(s.publisher, s.ID, entry)
 }

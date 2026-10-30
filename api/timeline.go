@@ -29,10 +29,11 @@ type CommandRecord struct {
 	DurationMs int64  `json:"duration_ms,omitempty"`
 }
 
-// ModelChange captures a transition of the active LLM.
+// ModelChange captures a transition of the active LLM / model.
 type ModelChange struct {
-	From string `json:"from,omitempty"`
-	To   string `json:"to"`
+	From   string `json:"from,omitempty"`
+	To     string `json:"to"`
+	Effort string `json:"effort,omitempty"`
 }
 
 // EffortChange captures a change in reasoning effort level.

@@ -371,9 +371,9 @@ func (m *manager) Create(ctx context.Context, params CreateParams) (sess *Sessio
 	m.sessions[id] = newSession
 	m.mu.Unlock()
 
-	m.publisher.Publish(api.TopicSessions, CreatedEvent{
+	m.publisher.Publish(api.TopicSessions, api.SessionCreatedEvent{
 		Workspace: m.workspace.RootDir(),
-		Session:   newSession.Clone(),
+		Session:   ToAPISession(newSession),
 	})
 
 	return newSession, true, nil
@@ -438,7 +438,7 @@ func (m *manager) Refresh() {
 		sess.Harness = nil
 		sess.configGeneration++
 		sess.Unlock()
-		m.publisher.Publish(api.TopicSessions, UpdatedEvent{Workspace: m.workspace.RootDir(), Session: sess.Clone()})
+		m.publisher.Publish(api.TopicSessions, api.SessionUpdatedEvent{Workspace: m.workspace.RootDir(), Session: ToAPISession(sess)})
 	}
 }
 
@@ -568,41 +568,32 @@ func (m *manager) Update(ctx context.Context, id string, params UpdateParams) (*
 	sess.Unlock()
 
 	if oldConfig.Agent != newConfig.Agent {
-		entry := timeline.NewAgentEntry(sess.ID, timeline.AgentChange{From: oldConfig.Agent, To: newConfig.Agent})
+		entry := timeline.NewAgentEntry(sess.ID, api.AgentChange{From: oldConfig.Agent, To: newConfig.Agent})
 		if err := sess.Timeline.Append(ctx, entry); err != nil {
 			return nil, err
 		}
-		m.publisher.Publish(api.SessionStreamTopic(sess.ID), EntryAddedEvent{
-			SessionID: sess.ID,
-			Entry:     entry.Clone(),
-		})
+		publishEntryAdded(m.publisher, sess.ID, entry)
 	}
 	if oldConfig.Model != newConfig.Model {
-		entry := timeline.NewModelEntry(sess.ID, timeline.ModelChange{From: string(oldConfig.Model), To: string(newConfig.Model)})
+		entry := timeline.NewModelEntry(sess.ID, api.ModelChange{From: string(oldConfig.Model), To: string(newConfig.Model)})
 		if err := sess.Timeline.Append(ctx, entry); err != nil {
 			return nil, err
 		}
-		m.publisher.Publish(api.SessionStreamTopic(sess.ID), EntryAddedEvent{
-			SessionID: sess.ID,
-			Entry:     entry.Clone(),
-		})
+		publishEntryAdded(m.publisher, sess.ID, entry)
 	}
 	if !reflect.DeepEqual(oldConfig.Thinking, newConfig.Thinking) {
-		entry := &timeline.Entry{SessionID: sess.ID, Kind: timeline.KindThinking, Thinking: &api.ThinkingChange{From: oldConfig.Thinking, To: newConfig.Thinking}}
+		entry := &timeline.Entry{SessionID: sess.ID, Kind: api.TimelineKindThinking, Thinking: &api.ThinkingChange{From: oldConfig.Thinking, To: newConfig.Thinking}}
 		if err := sess.Timeline.Append(ctx, entry); err != nil {
 			return nil, err
 		}
-		m.publisher.Publish(api.SessionStreamTopic(sess.ID), EntryAddedEvent{SessionID: sess.ID, Entry: entry.Clone()})
+		publishEntryAdded(m.publisher, sess.ID, entry)
 	}
 	if oldConfig.Mode != newConfig.Mode {
 		entry := timeline.NewModeEntry(sess.ID, timeline.ModeChange{From: oldConfig.Mode, To: newConfig.Mode})
 		if err := sess.Timeline.Append(ctx, entry); err != nil {
 			return nil, err
 		}
-		m.publisher.Publish(api.SessionStreamTopic(sess.ID), EntryAddedEvent{
-			SessionID: sess.ID,
-			Entry:     entry.Clone(),
-		})
+		publishEntryAdded(m.publisher, sess.ID, entry)
 	}
 
 	if oldConfig.Model != newConfig.Model || oldConfig.Agent != newConfig.Agent {
@@ -628,15 +619,15 @@ func (m *manager) Update(ctx context.Context, id string, params UpdateParams) (*
 		sess.Context.Breakdown.Subagents = staticCtx.Subagents
 		ctxState := sess.Context
 		sess.Unlock()
-		m.publisher.Publish(api.SessionStreamTopic(sess.ID), ContextUpdatedEvent{
+		m.publisher.Publish(api.SessionStreamTopic(sess.ID), api.ContextUpdatedEvent{
 			SessionID: sess.ID,
 			Context:   ctxState,
 		})
 	}
 
-	m.publisher.Publish(api.TopicSessions, UpdatedEvent{
+	m.publisher.Publish(api.TopicSessions, api.SessionUpdatedEvent{
 		Workspace: m.workspace.RootDir(),
-		Session:   sess.Clone(),
+		Session:   ToAPISession(sess),
 	})
 
 	return sess, nil
@@ -685,7 +676,7 @@ func (m *manager) Delete(ctx context.Context, id string) error {
 		_ = os.RemoveAll(sessDir)
 	}
 
-	m.publisher.Publish(api.TopicSessions, DeletedEvent{
+	m.publisher.Publish(api.TopicSessions, api.SessionDeletedEvent{
 		Workspace: m.workspace.RootDir(),
 		SessionID: id,
 	})

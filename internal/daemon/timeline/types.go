@@ -21,52 +21,6 @@ var (
 	ErrEntryNotFound  = errors.New("timeline: entry not found")
 )
 
-// Kind classifies the type of timeline event.
-type Kind string
-
-const (
-	KindMessage       Kind = "message"
-	KindCommand       Kind = "command"
-	KindModel         Kind = "model"
-	KindEffort        Kind = "effort"
-	KindThinking      Kind = "thinking"
-	KindAgent         Kind = "agent"
-	KindMode          Kind = "mode"
-	KindPermission    Kind = "permission"
-	KindQuestion      Kind = "question"
-	KindInterrupted   Kind = "interrupted"
-	KindCompacted     Kind = "compacted"
-	KindCacheBroken   Kind = "cache_broken"
-	KindTurnCompleted Kind = "turn_completed"
-)
-
-// CommandRecord captures a direct user shell command (!) and its output.
-type CommandRecord struct {
-	Command    string `json:"command"`
-	Output     string `json:"output,omitempty"`
-	ExitCode   int    `json:"exit_code"`
-	DurationMs int64  `json:"duration_ms,omitempty"`
-}
-
-// ModelChange captures a transition of the active LLM / model.
-type ModelChange struct {
-	From   string `json:"from,omitempty"`
-	To     string `json:"to"`
-	Effort string `json:"effort,omitempty"`
-}
-
-// EffortChange captures a change in reasoning effort level.
-type EffortChange struct {
-	From string `json:"from,omitempty"`
-	To   string `json:"to"`
-}
-
-// AgentChange captures a change of the active agent persona or role.
-type AgentChange struct {
-	From string `json:"from,omitempty"`
-	To   string `json:"to"`
-}
-
 // ModeChange captures a transition of the session permission mode.
 type ModeChange struct {
 	From tools.PermissionMode `json:"from,omitempty"`
@@ -84,56 +38,25 @@ type QuestionRecord struct {
 	Response tools.QuestionResponse `json:"response"`
 }
 
-// CompactedRecord captures a context compaction event in the session timeline.
-type CompactedRecord struct {
-	Trigger      string `json:"trigger,omitempty"`
-	Focus        string `json:"focus,omitempty"`
-	Summary      string `json:"summary,omitempty"`
-	BeforeTokens int    `json:"before_tokens,omitempty"`
-	AfterTokens  int    `json:"after_tokens,omitempty"`
-	DurationMs   int64  `json:"duration_ms,omitempty"`
-}
-
-// CacheBrokenRecord captures a prompt cache drop between turns in the session timeline.
-type CacheBrokenRecord struct {
-	PrevCached  int `json:"prev_cached"`
-	CurrCached  int `json:"curr_cached"`
-	InputTokens int `json:"input_tokens,omitempty"`
-}
-
-// TurnCompletedRecord summarizes a finished turn: the span from a user message
-// until the agent's final answer (or until the turn was canceled or failed).
-type TurnCompletedRecord struct {
-	TurnID       string `json:"turn_id"`
-	Status       string `json:"status"` // "done", "canceled" or "failed"
-	ElapsedMs    int64  `json:"elapsed_ms"`
-	InputTokens  int64  `json:"input_tokens,omitempty"`
-	OutputTokens int64  `json:"output_tokens,omitempty"`
-	CostNano     int64  `json:"cost_nano,omitempty"`
-	// Unpriced reports that some calls of the turn had no pricing, so
-	// CostNano is a lower bound.
-	Unpriced bool `json:"unpriced,omitempty"`
-}
-
 // Entry is a single append-only timeline event in a session log.
 type Entry struct {
-	ID        string    `json:"id"`
-	SessionID string    `json:"session_id"`
-	Kind      Kind      `json:"kind"`
-	CreatedAt time.Time `json:"created_at"`
+	ID        string           `json:"id"`
+	SessionID string           `json:"session_id"`
+	Kind      api.TimelineKind `json:"kind"`
+	CreatedAt time.Time        `json:"created_at"`
 
-	Message       message.Message      `json:"message,omitempty"`
-	Command       *CommandRecord       `json:"command,omitempty"`
-	Model         *ModelChange         `json:"model,omitempty"`
-	Effort        *EffortChange        `json:"effort,omitempty"`
-	Thinking      *api.ThinkingChange  `json:"thinking,omitempty"`
-	Agent         *AgentChange         `json:"agent,omitempty"`
-	Mode          *ModeChange          `json:"mode,omitempty"`
-	Permission    *PermissionRecord    `json:"permission,omitempty"`
-	Question      *QuestionRecord      `json:"question,omitempty"`
-	Compacted     *CompactedRecord     `json:"compacted,omitempty"`
-	CacheBroken   *CacheBrokenRecord   `json:"cache_broken,omitempty"`
-	TurnCompleted *TurnCompletedRecord `json:"turn_completed,omitempty"`
+	Message       message.Message          `json:"message,omitempty"`
+	Command       *api.CommandRecord       `json:"command,omitempty"`
+	Model         *api.ModelChange         `json:"model,omitempty"`
+	Effort        *api.EffortChange        `json:"effort,omitempty"`
+	Thinking      *api.ThinkingChange      `json:"thinking,omitempty"`
+	Agent         *api.AgentChange         `json:"agent,omitempty"`
+	Mode          *ModeChange              `json:"mode,omitempty"`
+	Permission    *PermissionRecord        `json:"permission,omitempty"`
+	Question      *QuestionRecord          `json:"question,omitempty"`
+	Compacted     *api.CompactedRecord     `json:"compacted,omitempty"`
+	CacheBroken   *api.CacheBrokenRecord   `json:"cache_broken,omitempty"`
+	TurnCompleted *api.TurnCompletedRecord `json:"turn_completed,omitempty"`
 }
 
 // Clone returns a deep copy of the timeline entry.
@@ -200,7 +123,7 @@ func (e Entry) Clone() Entry {
 // MarshalJSON implements json.Marshaler for Entry to ensure polymorphic Message payloads
 // include the role discriminator required by loom/message.
 func (e Entry) MarshalJSON() ([]byte, error) {
-	if e.Kind == KindMessage && e.Message != nil {
+	if e.Kind == api.TimelineKindMessage && e.Message != nil {
 		msgData, err := json.Marshal(message.MessageList{e.Message})
 		if err != nil {
 			return nil, fmt.Errorf("timeline: marshal message: %w", err)
@@ -263,37 +186,37 @@ func NewMessageEntry(sessionID string, msg message.Message) *Entry {
 	return &Entry{
 		ID:        id,
 		SessionID: sessionID,
-		Kind:      KindMessage,
+		Kind:      api.TimelineKindMessage,
 		Message:   msg,
 	}
 }
 
 // NewModelEntry creates an Entry initialized with a ModelChange payload.
-func NewModelEntry(sessionID string, change ModelChange) *Entry {
+func NewModelEntry(sessionID string, change api.ModelChange) *Entry {
 	c := change
 	return &Entry{
 		SessionID: sessionID,
-		Kind:      KindModel,
+		Kind:      api.TimelineKindModel,
 		Model:     &c,
 	}
 }
 
 // NewEffortEntry creates an Entry initialized with an EffortChange payload.
-func NewEffortEntry(sessionID string, change EffortChange) *Entry {
+func NewEffortEntry(sessionID string, change api.EffortChange) *Entry {
 	c := change
 	return &Entry{
 		SessionID: sessionID,
-		Kind:      KindEffort,
+		Kind:      api.TimelineKindEffort,
 		Effort:    &c,
 	}
 }
 
 // NewAgentEntry creates an Entry initialized with an AgentChange payload.
-func NewAgentEntry(sessionID string, change AgentChange) *Entry {
+func NewAgentEntry(sessionID string, change api.AgentChange) *Entry {
 	c := change
 	return &Entry{
 		SessionID: sessionID,
-		Kind:      KindAgent,
+		Kind:      api.TimelineKindAgent,
 		Agent:     &c,
 	}
 }
@@ -303,7 +226,7 @@ func NewModeEntry(sessionID string, change ModeChange) *Entry {
 	c := change
 	return &Entry{
 		SessionID: sessionID,
-		Kind:      KindMode,
+		Kind:      api.TimelineKindMode,
 		Mode:      &c,
 	}
 }
@@ -313,21 +236,25 @@ func NewPermissionEntry(sessionID string, record PermissionRecord) *Entry {
 	r := record
 	return &Entry{
 		SessionID:  sessionID,
-		Kind:       KindPermission,
+		Kind:       api.TimelineKindPermission,
 		Permission: &r,
 	}
 }
 
 func NewQuestionEntry(sessionID string, record QuestionRecord) *Entry {
-	return &Entry{SessionID: sessionID, Kind: KindQuestion, Question: &record}
+	return &Entry{
+		SessionID: sessionID,
+		Kind:      api.TimelineKindQuestion,
+		Question:  &record,
+	}
 }
 
 // NewCommandEntry creates an Entry initialized with a CommandRecord payload.
-func NewCommandEntry(sessionID string, cmd CommandRecord) *Entry {
+func NewCommandEntry(sessionID string, cmd api.CommandRecord) *Entry {
 	c := cmd
 	return &Entry{
 		SessionID: sessionID,
-		Kind:      KindCommand,
+		Kind:      api.TimelineKindCommand,
 		Command:   &c,
 	}
 }
@@ -336,36 +263,36 @@ func NewCommandEntry(sessionID string, cmd CommandRecord) *Entry {
 func NewInterruptedEntry(sessionID string) *Entry {
 	return &Entry{
 		SessionID: sessionID,
-		Kind:      KindInterrupted,
+		Kind:      api.TimelineKindInterrupted,
 	}
 }
 
 // NewCompactedEntry creates an Entry initialized with a CompactedRecord payload.
-func NewCompactedEntry(sessionID string, rec CompactedRecord) *Entry {
+func NewCompactedEntry(sessionID string, rec api.CompactedRecord) *Entry {
 	r := rec
 	return &Entry{
 		SessionID: sessionID,
-		Kind:      KindCompacted,
+		Kind:      api.TimelineKindCompacted,
 		Compacted: &r,
 	}
 }
 
 // NewCacheBrokenEntry creates an Entry initialized with a CacheBrokenRecord payload.
-func NewCacheBrokenEntry(sessionID string, rec CacheBrokenRecord) *Entry {
+func NewCacheBrokenEntry(sessionID string, rec api.CacheBrokenRecord) *Entry {
 	r := rec
 	return &Entry{
 		SessionID:   sessionID,
-		Kind:        KindCacheBroken,
+		Kind:        api.TimelineKindCacheBroken,
 		CacheBroken: &r,
 	}
 }
 
 // NewTurnCompletedEntry creates an Entry initialized with a TurnCompletedRecord payload.
-func NewTurnCompletedEntry(sessionID string, rec TurnCompletedRecord) *Entry {
+func NewTurnCompletedEntry(sessionID string, rec api.TurnCompletedRecord) *Entry {
 	r := rec
 	return &Entry{
 		SessionID:     sessionID,
-		Kind:          KindTurnCompleted,
+		Kind:          api.TimelineKindTurnCompleted,
 		TurnCompleted: &r,
 	}
 }

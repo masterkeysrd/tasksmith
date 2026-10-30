@@ -22,7 +22,7 @@ type Timeline interface {
 	Append(ctx context.Context, entry *Entry) error
 	Get(ctx context.Context, id string) (*Entry, error)
 	List(ctx context.Context) ([]Entry, error)
-	ListByKind(ctx context.Context, kind Kind) ([]Entry, error)
+	ListByKind(ctx context.Context, kind api.TimelineKind) ([]Entry, error)
 	Messages(ctx context.Context) (message.MessageList, error)
 	Delete(ctx context.Context) error
 }
@@ -61,62 +61,62 @@ func (s *sqliteTimeline) Append(ctx context.Context, entry *Entry) error {
 	}
 
 	switch entry.Kind {
-	case KindMessage:
+	case api.TimelineKindMessage:
 		if entry.Message == nil {
 			return ErrInvalidEntry
 		}
-	case KindCommand:
+	case api.TimelineKindCommand:
 		if entry.Command == nil || strings.TrimSpace(entry.Command.Command) == "" {
 			return ErrInvalidEntry
 		}
-	case KindModel:
+	case api.TimelineKindModel:
 		if entry.Model == nil || strings.TrimSpace(entry.Model.To) == "" {
 			return ErrInvalidEntry
 		}
-	case KindEffort:
+	case api.TimelineKindEffort:
 		if entry.Effort == nil || strings.TrimSpace(entry.Effort.To) == "" {
 			return ErrInvalidEntry
 		}
-	case KindThinking:
+	case api.TimelineKindThinking:
 		if entry.Thinking == nil {
 			return ErrInvalidEntry
 		}
-	case KindAgent:
+	case api.TimelineKindAgent:
 		if entry.Agent == nil || strings.TrimSpace(entry.Agent.To) == "" {
 			return ErrInvalidEntry
 		}
-	case KindMode:
+	case api.TimelineKindMode:
 		if entry.Mode == nil || strings.TrimSpace(string(entry.Mode.To)) == "" {
 			return ErrInvalidEntry
 		}
-	case KindPermission:
+	case api.TimelineKindPermission:
 		if entry.Permission == nil {
 			return ErrInvalidEntry
 		}
-	case KindQuestion:
+	case api.TimelineKindQuestion:
 		if entry.Question == nil {
 			return ErrInvalidEntry
 		}
-	case KindCompacted:
+	case api.TimelineKindCompacted:
 		if entry.Compacted == nil {
 			return ErrInvalidEntry
 		}
-	case KindCacheBroken:
+	case api.TimelineKindCacheBroken:
 		if entry.CacheBroken == nil {
 			return ErrInvalidEntry
 		}
-	case KindTurnCompleted:
+	case api.TimelineKindTurnCompleted:
 		if entry.TurnCompleted == nil {
 			return ErrInvalidEntry
 		}
-	case KindInterrupted:
+	case api.TimelineKindInterrupted:
 		// no additional struct field validation needed
 	default:
 		return ErrInvalidEntry
 	}
 
 	if entry.ID == "" {
-		if entry.Kind == KindMessage && entry.Message.GetID() != "" {
+		if entry.Kind == api.TimelineKindMessage && entry.Message.GetID() != "" {
 			entry.ID = entry.Message.GetID()
 		} else {
 			u, err := uuid.NewV7()
@@ -126,7 +126,7 @@ func (s *sqliteTimeline) Append(ctx context.Context, entry *Entry) error {
 			entry.ID = u.String()
 		}
 	}
-	if entry.Kind == KindMessage && entry.Message.GetID() == "" {
+	if entry.Kind == api.TimelineKindMessage && entry.Message.GetID() == "" {
 		entry.Message.SetID(entry.ID)
 	}
 
@@ -139,67 +139,67 @@ func (s *sqliteTimeline) Append(ctx context.Context, entry *Entry) error {
 	var payload []byte
 	var err error
 	switch entry.Kind {
-	case KindMessage:
+	case api.TimelineKindMessage:
 		payload, err = json.Marshal(message.MessageList{entry.Message})
 		if err != nil {
 			return fmt.Errorf("timeline: marshal message %q: %w", entry.ID, err)
 		}
-	case KindCommand:
+	case api.TimelineKindCommand:
 		payload, err = json.Marshal(entry.Command)
 		if err != nil {
 			return fmt.Errorf("timeline: marshal command %q: %w", entry.ID, err)
 		}
-	case KindModel:
+	case api.TimelineKindModel:
 		payload, err = json.Marshal(entry.Model)
 		if err != nil {
 			return fmt.Errorf("timeline: marshal model %q: %w", entry.ID, err)
 		}
-	case KindEffort:
+	case api.TimelineKindEffort:
 		payload, err = json.Marshal(entry.Effort)
 		if err != nil {
 			return fmt.Errorf("timeline: marshal effort %q: %w", entry.ID, err)
 		}
-	case KindThinking:
+	case api.TimelineKindThinking:
 		payload, err = json.Marshal(entry.Thinking)
 		if err != nil {
 			return fmt.Errorf("timeline: marshal thinking %q: %w", entry.ID, err)
 		}
-	case KindAgent:
+	case api.TimelineKindAgent:
 		payload, err = json.Marshal(entry.Agent)
 		if err != nil {
 			return fmt.Errorf("timeline: marshal agent %q: %w", entry.ID, err)
 		}
-	case KindMode:
+	case api.TimelineKindMode:
 		payload, err = json.Marshal(entry.Mode)
 		if err != nil {
 			return fmt.Errorf("timeline: marshal mode %q: %w", entry.ID, err)
 		}
-	case KindPermission:
+	case api.TimelineKindPermission:
 		payload, err = json.Marshal(entry.Permission)
 		if err != nil {
 			return fmt.Errorf("timeline: marshal permission %q: %w", entry.ID, err)
 		}
-	case KindQuestion:
+	case api.TimelineKindQuestion:
 		payload, err = json.Marshal(entry.Question)
 		if err != nil {
 			return fmt.Errorf("timeline: marshal question %q: %w", entry.ID, err)
 		}
-	case KindCompacted:
+	case api.TimelineKindCompacted:
 		payload, err = json.Marshal(entry.Compacted)
 		if err != nil {
 			return fmt.Errorf("timeline: marshal compacted %q: %w", entry.ID, err)
 		}
-	case KindCacheBroken:
+	case api.TimelineKindCacheBroken:
 		payload, err = json.Marshal(entry.CacheBroken)
 		if err != nil {
 			return fmt.Errorf("timeline: marshal cache broken %q: %w", entry.ID, err)
 		}
-	case KindTurnCompleted:
+	case api.TimelineKindTurnCompleted:
 		payload, err = json.Marshal(entry.TurnCompleted)
 		if err != nil {
 			return fmt.Errorf("timeline: marshal turn completed %q: %w", entry.ID, err)
 		}
-	case KindInterrupted:
+	case api.TimelineKindInterrupted:
 		payload = []byte("{}")
 	}
 
@@ -266,7 +266,7 @@ func (s *sqliteTimeline) List(ctx context.Context) ([]Entry, error) {
 }
 
 // ListByKind returns entries for this session and kind ordered by id ASC.
-func (s *sqliteTimeline) ListByKind(ctx context.Context, kind Kind) ([]Entry, error) {
+func (s *sqliteTimeline) ListByKind(ctx context.Context, kind api.TimelineKind) ([]Entry, error) {
 	rows, err := s.db.QueryContext(
 		ctx,
 		`SELECT id, session_id, kind, payload, created_at FROM timeline WHERE session_id = ? AND kind = ? ORDER BY id ASC`,
@@ -298,7 +298,7 @@ func (s *sqliteTimeline) Messages(ctx context.Context) (message.MessageList, err
 		ctx,
 		`SELECT id, payload FROM timeline WHERE session_id = ? AND kind = ? ORDER BY id ASC`,
 		s.sessionID,
-		string(KindMessage),
+		string(api.TimelineKindMessage),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("timeline: query messages for session %q: %w", s.sessionID, err)
@@ -353,7 +353,7 @@ func scanEntry(r rowScanner) (*Entry, error) {
 		return nil, fmt.Errorf("timeline: parse created_at %q: %w", createdAtRaw, err)
 	}
 
-	kind := Kind(kindRaw)
+	kind := api.TimelineKind(kindRaw)
 	entry := &Entry{
 		ID:        id,
 		SessionID: sessionID,
@@ -362,79 +362,79 @@ func scanEntry(r rowScanner) (*Entry, error) {
 	}
 
 	switch kind {
-	case KindMessage:
+	case api.TimelineKindMessage:
 		msg, err := unmarshalMessagePayload(id, payload)
 		if err != nil {
 			return nil, err
 		}
 		entry.Message = msg
-	case KindCommand:
-		var c CommandRecord
+	case api.TimelineKindCommand:
+		var c api.CommandRecord
 		if err := json.Unmarshal(payload, &c); err != nil {
 			return nil, fmt.Errorf("timeline: unmarshal command record for %q: %w", id, err)
 		}
 		entry.Command = &c
-	case KindModel:
-		var m ModelChange
+	case api.TimelineKindModel:
+		var m api.ModelChange
 		if err := json.Unmarshal(payload, &m); err != nil {
 			return nil, fmt.Errorf("timeline: unmarshal model change for %q: %w", id, err)
 		}
 		entry.Model = &m
-	case KindEffort:
-		var e EffortChange
+	case api.TimelineKindEffort:
+		var e api.EffortChange
 		if err := json.Unmarshal(payload, &e); err != nil {
 			return nil, fmt.Errorf("timeline: unmarshal effort change for %q: %w", id, err)
 		}
 		entry.Effort = &e
-	case KindThinking:
+	case api.TimelineKindThinking:
 		var change api.ThinkingChange
 		if err := json.Unmarshal(payload, &change); err != nil {
 			return nil, fmt.Errorf("timeline: unmarshal thinking change for %q: %w", id, err)
 		}
 		entry.Thinking = &change
-	case KindAgent:
-		var a AgentChange
+	case api.TimelineKindAgent:
+		var a api.AgentChange
 		if err := json.Unmarshal(payload, &a); err != nil {
 			return nil, fmt.Errorf("timeline: unmarshal agent change for %q: %w", id, err)
 		}
 		entry.Agent = &a
-	case KindMode:
+	case api.TimelineKindMode:
 		var m ModeChange
 		if err := json.Unmarshal(payload, &m); err != nil {
 			return nil, fmt.Errorf("timeline: unmarshal mode change for %q: %w", id, err)
 		}
 		entry.Mode = &m
-	case KindPermission:
+	case api.TimelineKindPermission:
 		var p PermissionRecord
 		if err := json.Unmarshal(payload, &p); err != nil {
 			return nil, fmt.Errorf("timeline: unmarshal permission record for %q: %w", id, err)
 		}
 		entry.Permission = &p
-	case KindQuestion:
+	case api.TimelineKindQuestion:
 		var q QuestionRecord
 		if err := json.Unmarshal(payload, &q); err != nil {
 			return nil, fmt.Errorf("timeline: unmarshal question record for %q: %w", id, err)
 		}
 		entry.Question = &q
-	case KindCompacted:
-		var c CompactedRecord
+	case api.TimelineKindCompacted:
+		var c api.CompactedRecord
 		if err := json.Unmarshal(payload, &c); err != nil {
 			return nil, fmt.Errorf("timeline: unmarshal compacted record for %q: %w", id, err)
 		}
 		entry.Compacted = &c
-	case KindCacheBroken:
-		var c CacheBrokenRecord
+	case api.TimelineKindCacheBroken:
+		var c api.CacheBrokenRecord
 		if err := json.Unmarshal(payload, &c); err != nil {
 			return nil, fmt.Errorf("timeline: unmarshal cache broken record for %q: %w", id, err)
 		}
 		entry.CacheBroken = &c
-	case KindTurnCompleted:
-		var t TurnCompletedRecord
+	case api.TimelineKindTurnCompleted:
+		var t api.TurnCompletedRecord
 		if err := json.Unmarshal(payload, &t); err != nil {
 			return nil, fmt.Errorf("timeline: unmarshal turn completed record for %q: %w", id, err)
 		}
 		entry.TurnCompleted = &t
-	case KindInterrupted:
+	case api.TimelineKindInterrupted:
 		// No extra payload unmarshaling needed
 	default:
 		return nil, fmt.Errorf("timeline: unknown entry kind %q for %q", kindRaw, id)

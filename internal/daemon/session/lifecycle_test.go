@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/masterkeysrd/loom/llm"
 	"github.com/masterkeysrd/loom/message"
+	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	"github.com/masterkeysrd/tasksmith/internal/core/sqlite"
 	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
@@ -120,7 +121,7 @@ func TestManagerStartTurnAndCancel(t *testing.T) {
 	// Verify completed event was published
 	var foundCompleted bool
 	for _, ev := range pub.recorded() {
-		if cev, ok := ev.(CompletedEvent); ok && cev.SessionID == sess.ID {
+		if cev, ok := ev.(api.CompletedEvent); ok && cev.SessionID == sess.ID {
 			foundCompleted = true
 			break
 		}
@@ -236,7 +237,7 @@ func TestManagerTurnErrorPublishing(t *testing.T) {
 	// Verify ErrorEvent was published
 	var foundErrorEvent bool
 	for _, ev := range pub.recorded() {
-		if eev, ok := ev.(ErrorEvent); ok && eev.SessionID == sess.ID {
+		if eev, ok := ev.(api.ErrorEvent); ok && eev.SessionID == sess.ID {
 			foundErrorEvent = true
 			break
 		}
@@ -489,7 +490,7 @@ func TestManagerRespondPermissionAsync(t *testing.T) {
 	// Verify CompletedEvent published
 	var completedCount int
 	for _, ev := range pub.recorded() {
-		if _, ok := ev.(CompletedEvent); ok {
+		if _, ok := ev.(api.CompletedEvent); ok {
 			completedCount++
 		}
 	}

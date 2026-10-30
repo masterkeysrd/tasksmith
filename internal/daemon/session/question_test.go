@@ -7,7 +7,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/masterkeysrd/loom/llm"
 	"github.com/masterkeysrd/loom/message"
-	"github.com/masterkeysrd/tasksmith/internal/daemon/timeline"
+	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tools"
 )
 
@@ -82,7 +82,7 @@ func TestQuestionSessionResume(t *testing.T) {
 	}
 	var requested bool
 	for _, event := range pub.recorded() {
-		if _, ok := event.(QuestionRequestedEvent); ok {
+		if _, ok := event.(api.QuestionRequestedEvent); ok {
 			requested = true
 		}
 	}
@@ -96,7 +96,7 @@ func TestQuestionSessionResume(t *testing.T) {
 	if err := sess.Wait(ctx); err != nil {
 		t.Fatal(err)
 	}
-	entries, err := sess.Timeline.ListByKind(ctx, timeline.KindQuestion)
+	entries, err := sess.Timeline.ListByKind(ctx, api.TimelineKindQuestion)
 	if err != nil || len(entries) != 1 || entries[0].Question.Response.Answers[0].Text != "Because" {
 		t.Fatalf("question records: %+v, %v", entries, err)
 	}

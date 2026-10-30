@@ -16,7 +16,6 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/daemon/gateway"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/models"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/permissions"
-	"github.com/masterkeysrd/tasksmith/internal/daemon/timeline"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/workspace"
 )
 
@@ -200,7 +199,7 @@ func TestSessionThinkingEndToEnd(t *testing.T) {
 	if got := (<-requests)["think"]; got != false {
 		t.Fatalf("toggle request: %#v", got)
 	}
-	entries, err := sess.Timeline.ListByKind(ctx, timeline.KindThinking)
+	entries, err := sess.Timeline.ListByKind(ctx, api.TimelineKindThinking)
 	if err != nil || len(entries) != 1 || entries[0].Thinking == nil || entries[0].Thinking.To == nil || entries[0].Thinking.To.Enabled {
 		t.Fatalf("thinking timeline: %+v, %v", entries, err)
 	}

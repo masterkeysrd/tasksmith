@@ -8,7 +8,7 @@ import (
 
 func TestThinkingEventPersistence(t *testing.T) {
 	tl, _, ctx := openTestTimeline(t, "thinking-session")
-	entry := &Entry{Kind: KindThinking, Thinking: &api.ThinkingChange{To: &api.ThinkingSetting{Type: "toggle", Enabled: false}}}
+	entry := &Entry{Kind: api.TimelineKindThinking, Thinking: &api.ThinkingChange{To: &api.ThinkingSetting{Type: "toggle", Enabled: false}}}
 	if err := tl.Append(ctx, entry); err != nil {
 		t.Fatal(err)
 	}
@@ -24,7 +24,7 @@ func TestThinkingEventPersistence(t *testing.T) {
 	if loaded.Thinking.To.Enabled {
 		t.Fatal("clone changed original thinking event")
 	}
-	reset := &Entry{Kind: KindThinking, Thinking: &api.ThinkingChange{From: loaded.Thinking.To}}
+	reset := &Entry{Kind: api.TimelineKindThinking, Thinking: &api.ThinkingChange{From: loaded.Thinking.To}}
 	if err := tl.Append(ctx, reset); err != nil {
 		t.Fatal(err)
 	}

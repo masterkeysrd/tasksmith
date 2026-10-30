@@ -6,13 +6,14 @@ import (
 	"testing"
 
 	"github.com/masterkeysrd/tasksmith/api"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/session"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tools"
 )
 
 func TestQuestionResponseConversionPreservesNo(t *testing.T) {
 	questions := []api.Question{{Type: "text", Question: "Why?"}, {Type: "confirm", Question: "Proceed?"}}
 	input := tools.QuestionResponse{Answers: []tools.QuestionAnswer{{Question: "Why?", Text: "Reason"}, {Question: "Proceed?", Confirmed: false}}}
-	output := toAPIQuestionResponse(input, questions)
+	output := session.ToAPIQuestionResponse(input, questions)
 	data, err := json.Marshal(output)
 	if err != nil {
 		t.Fatal(err)

@@ -24,7 +24,7 @@ func (f *fakeTurnMetrics) TurnUsage(_ context.Context, ids ...string) (api.Usage
 
 func turnEntries(t *testing.T, s *Session) []timeline.Entry {
 	t.Helper()
-	entries, err := s.Timeline.ListByKind(context.Background(), timeline.KindTurnCompleted)
+	entries, err := s.Timeline.ListByKind(context.Background(), api.TimelineKindTurnCompleted)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -62,7 +62,7 @@ func TestFinishTurnWritesSummaryEntry(t *testing.T) {
 	}
 	published := false
 	for _, ev := range pub.recorded() {
-		if e, ok := ev.(EntryAddedEvent); ok && e.Entry.Kind == timeline.KindTurnCompleted {
+		if e, ok := ev.(api.EntryAddedEvent); ok && e.Entry.Kind == api.TimelineKindTurnCompleted {
 			published = true
 		}
 	}

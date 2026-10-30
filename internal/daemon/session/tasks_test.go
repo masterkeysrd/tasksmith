@@ -10,9 +10,9 @@ import (
 
 	"github.com/masterkeysrd/loom/llm"
 	"github.com/masterkeysrd/loom/message"
+	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/harness"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tasks"
-	"github.com/masterkeysrd/tasksmith/internal/daemon/timeline"
 )
 
 func TestSessionTasksInitAndBackgroundUpdate(t *testing.T) {
@@ -74,9 +74,9 @@ func TestSessionTasksInitAndBackgroundUpdate(t *testing.T) {
 	events := pub.recorded()
 	var foundEvent bool
 	for _, ev := range events {
-		if tue, ok := ev.(TaskUpdatedEvent); ok && tue.Task.ID == task.ID {
+		if tue, ok := ev.(api.TaskUpdatedEvent); ok && tue.Task.ID == task.ID {
 			foundEvent = true
-			if tue.Task.Status != tasks.StatusCompleted && tue.Task.Status != tasks.StatusRunning {
+			if tue.Task.Status != api.TaskStatusCompleted && tue.Task.Status != api.TaskStatusRunning {
 				t.Fatalf("unexpected status in TaskUpdatedEvent: %v", tue.Task.Status)
 			}
 		}
@@ -191,7 +191,7 @@ func TestSessionOnTaskUpdateCompletedNotification(t *testing.T) {
 	events := pub.recorded()
 	var publishedTaskEvent bool
 	for _, ev := range events {
-		if tue, ok := ev.(TaskUpdatedEvent); ok && tue.Task.ID == task.ID {
+		if tue, ok := ev.(api.TaskUpdatedEvent); ok && tue.Task.ID == task.ID {
 			publishedTaskEvent = true
 			break
 		}
@@ -252,7 +252,7 @@ func TestSessionBackgroundNotificationDoesNotAppearInTimeline(t *testing.T) {
 
 	var hasAssistant bool
 	for _, entry := range entries {
-		if entry.Kind == timeline.KindMessage && entry.Message != nil {
+		if entry.Kind == api.TimelineKindMessage && entry.Message != nil {
 			txt := msgText(entry.Message)
 			if strings.Contains(txt, "<background_task_completed") {
 				t.Fatalf("found background task completed notification in timeline: %+v", entry)

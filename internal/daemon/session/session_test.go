@@ -35,7 +35,6 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/daemon/permissions"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/sandbox"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/std"
-	"github.com/masterkeysrd/tasksmith/internal/daemon/timeline"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tools"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tools/builtin"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/workspace"
@@ -416,30 +415,30 @@ func (g *fakeGateway) Close() error {
 
 type pubRecord struct {
 	topic string
-	event Event
+	event broker.Event
 }
 
 type testPublisher struct {
 	mu      sync.Mutex
-	events  []Event
+	events  []broker.Event
 	records []pubRecord
 }
 
 func (p *testPublisher) Publish(topic string, ev broker.Event) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if sev, ok := ev.(Event); ok {
-		p.events = append(p.events, sev)
-		p.records = append(p.records, pubRecord{topic: topic, event: sev})
+	if _, ok := ev.(api.EventPayload); ok {
+		p.events = append(p.events, ev)
+		p.records = append(p.records, pubRecord{topic: topic, event: ev})
 	}
 }
 
 func (p *testPublisher) DeleteTopic(_ string) {}
 
-func (p *testPublisher) recorded() []Event {
+func (p *testPublisher) recorded() []broker.Event {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	out := make([]Event, len(p.events))
+	out := make([]broker.Event, len(p.events))
 	copy(out, p.events)
 	return out
 }
@@ -557,6 +556,23 @@ func msgText(m message.Message) string {
 		return ""
 	}
 	return extractBlocksText(m.GetContent())
+}
+
+func extractAPIBlocksText(blocks []api.Block) string {
+	var sb strings.Builder
+	for _, b := range blocks {
+		if b.Type == api.BlockText {
+			sb.WriteString(b.Text)
+		}
+	}
+	return sb.String()
+}
+
+func apiMessageText(m *api.Message) string {
+	if m == nil {
+		return ""
+	}
+	return extractAPIBlocksText(m.Content)
 }
 
 func TestConfigValidate(t *testing.T) {
@@ -1072,17 +1088,17 @@ func TestSendAndHistory(t *testing.T) {
 	for i, ev := range events {
 		var sessionID string
 		switch e := ev.(type) {
-		case StatusChangedEvent:
+		case api.StatusChangedEvent:
 			sessionID = e.SessionID
-		case EntryAddedEvent:
+		case api.EntryAddedEvent:
 			sessionID = e.SessionID
-		case ChunkEvent:
+		case api.ChunkEvent:
 			sessionID = e.SessionID
-		case PermissionRequestedEvent:
+		case api.PermissionRequestedEvent:
 			sessionID = e.SessionID
-		case ContextUpdatedEvent:
+		case api.ContextUpdatedEvent:
 			sessionID = e.SessionID
-		case CompletedEvent:
+		case api.CompletedEvent:
 			sessionID = e.SessionID
 		}
 		if sessionID != sess.ID {
@@ -1090,51 +1106,51 @@ func TestSendAndHistory(t *testing.T) {
 		}
 	}
 
-	sc0, ok := events[0].(StatusChangedEvent)
-	if !ok || sc0.Status != StatusThinking {
+	sc0, ok := events[0].(api.StatusChangedEvent)
+	if !ok || sc0.Status != api.StatusThinking {
 		t.Errorf("events[0] = %+v, want StatusChangedEvent(StatusThinking)", events[0])
 	}
 
-	ev1, ok := events[1].(EntryAddedEvent)
-	if !ok || ev1.Entry.Kind != timeline.KindMessage || ev1.Entry.Message == nil || ev1.Entry.Message.Role() != message.RoleUser || msgText(ev1.Entry.Message) != "Greetings!" {
+	ev1, ok := events[1].(api.EntryAddedEvent)
+	if !ok || ev1.Entry.Kind != api.TimelineKindMessage || ev1.Entry.Message == nil || ev1.Entry.Message.Role != api.RoleUser || apiMessageText(ev1.Entry.Message) != "Greetings!" {
 		t.Errorf("events[1] = %+v, want user EntryAddedEvent", events[1])
 	}
-	if ev1.Entry.ID == "" || ev1.Entry.Message.GetID() == "" {
+	if ev1.Entry.ID == "" || ev1.Entry.Message.ID == "" {
 		t.Errorf("expected generated UUID on user message in events[1]")
 	}
 
-	sc2, ok := events[2].(StatusChangedEvent)
-	if !ok || sc2.Status != StatusGenerating {
+	sc2, ok := events[2].(api.StatusChangedEvent)
+	if !ok || sc2.Status != api.StatusGenerating {
 		t.Errorf("events[2] = %+v, want StatusChangedEvent(StatusGenerating)", events[2])
 	}
 
 	var chunkTexts []string
 	for i := 3; i <= 5; i++ {
-		chkEv, ok := events[i].(ChunkEvent)
+		chkEv, ok := events[i].(api.ChunkEvent)
 		if !ok {
 			t.Errorf("events[%d] = %+v, want ChunkEvent", i, events[i])
 			continue
 		}
-		chunkTexts = append(chunkTexts, extractBlocksText(chkEv.Chunk.Content))
+		chunkTexts = append(chunkTexts, extractAPIBlocksText(chkEv.Chunk.Content))
 	}
 	wantChunks := []string{"Hello", ", ", "TaskSmith!"}
 	if !reflect.DeepEqual(chunkTexts, wantChunks) {
 		t.Errorf("chunkTexts = %v, want %v", chunkTexts, wantChunks)
 	}
 
-	ev6, ok := events[6].(EntryAddedEvent)
-	if !ok || ev6.Entry.Kind != timeline.KindMessage || ev6.Entry.Message == nil || ev6.Entry.Message.Role() != message.RoleAssistant || msgText(ev6.Entry.Message) != "Hello, TaskSmith!" {
+	ev6, ok := events[6].(api.EntryAddedEvent)
+	if !ok || ev6.Entry.Kind != api.TimelineKindMessage || ev6.Entry.Message == nil || ev6.Entry.Message.Role != api.RoleAssistant || apiMessageText(ev6.Entry.Message) != "Hello, TaskSmith!" {
 		t.Errorf("events[6] = %+v, want assistant EntryAddedEvent", events[6])
 	}
-	ctxEv7, ok := events[7].(ContextUpdatedEvent)
+	ctxEv7, ok := events[7].(api.ContextUpdatedEvent)
 	if !ok || ctxEv7.SessionID != sess.ID || ctxEv7.Context.UsedTokens == 0 {
 		t.Errorf("events[7] = %+v, want ContextUpdatedEvent", events[7])
 	}
-	sc8, ok := events[8].(StatusChangedEvent)
-	if !ok || sc8.Status != StatusIdle {
+	sc8, ok := events[8].(api.StatusChangedEvent)
+	if !ok || sc8.Status != api.StatusIdle {
 		t.Errorf("events[8] = %+v, want StatusChangedEvent(StatusIdle)", events[8])
 	}
-	ev9, ok := events[9].(CompletedEvent)
+	ev9, ok := events[9].(api.CompletedEvent)
 	if !ok || ev9.SessionID != sess.ID {
 		t.Errorf("events[9] = %+v, want CompletedEvent for session %q", events[9], sess.ID)
 	}
@@ -1210,8 +1226,8 @@ func TestAppendMessageIsolationFromHarnessCheckpoints(t *testing.T) {
 	if len(appendedEvents) != 1 {
 		t.Fatalf("expected 1 event, got %d", len(appendedEvents))
 	}
-	appEv, ok := appendedEvents[0].(EntryAddedEvent)
-	if !ok || appEv.Entry.Kind != timeline.KindMessage || appEv.Entry.Message == nil || appEv.Entry.Message.Role() != message.RoleSystem {
+	appEv, ok := appendedEvents[0].(api.EntryAddedEvent)
+	if !ok || appEv.Entry.Kind != api.TimelineKindMessage || appEv.Entry.Message == nil || appEv.Entry.Message.Role != api.RoleSystem {
 		t.Fatalf("expected 1 EntryAddedEvent for system message, got %+v", appendedEvents)
 	}
 
@@ -1893,9 +1909,9 @@ func TestMultiPermissionInterruptAndAllOrNothingRespondPermission(t *testing.T) 
 
 	// Verify PermissionRequestedEvent was published with 2 permissions
 	events := pub.recorded()
-	var permEvent *PermissionRequestedEvent
+	var permEvent *api.PermissionRequestedEvent
 	for i := range events {
-		if pe, ok := events[i].(PermissionRequestedEvent); ok {
+		if pe, ok := events[i].(api.PermissionRequestedEvent); ok {
 			permEvent = &pe
 		}
 	}
@@ -1950,8 +1966,8 @@ func TestMultiPermissionInterruptAndAllOrNothingRespondPermission(t *testing.T) 
 	if len(recs) != 1 {
 		t.Fatalf("expected 1 event, got %+v", recs)
 	}
-	decEv, ok := recs[0].(EntryAddedEvent)
-	if !ok || decEv.Entry.Kind != timeline.KindPermission {
+	decEv, ok := recs[0].(api.EntryAddedEvent)
+	if !ok || decEv.Entry.Kind != api.TimelineKindPermission {
 		t.Fatalf("expected 1 EntryAddedEvent (permission) published when recording decision, got %+v", recs)
 	}
 	pub.reset()
@@ -2328,8 +2344,8 @@ func TestTimelineRecordEvents(t *testing.T) {
 	if len(tl1) != 1 {
 		t.Fatalf("expected 1 timeline entry, got %d", len(tl1))
 	}
-	if tl1[0].Kind != timeline.KindMessage {
-		t.Errorf("tl1[0].Kind = %q, want %q", tl1[0].Kind, timeline.KindMessage)
+	if tl1[0].Kind != api.TimelineKindMessage {
+		t.Errorf("tl1[0].Kind = %q, want %q", tl1[0].Kind, api.TimelineKindMessage)
 	}
 	if tl1[0].Message == nil || msgText(tl1[0].Message) != "Please review this code" {
 		t.Errorf("tl1[0].Message text = %v, want %q", tl1[0].Message, "Please review this code")
@@ -2353,8 +2369,8 @@ func TestTimelineRecordEvents(t *testing.T) {
 	if len(tl2) != 2 {
 		t.Fatalf("expected 2 timeline entries, got %d", len(tl2))
 	}
-	if tl2[1].Kind != timeline.KindModel {
-		t.Errorf("tl2[1].Kind = %q, want %q", tl2[1].Kind, timeline.KindModel)
+	if tl2[1].Kind != api.TimelineKindModel {
+		t.Errorf("tl2[1].Kind = %q, want %q", tl2[1].Kind, api.TimelineKindModel)
 	}
 	if tl2[1].Model == nil || tl2[1].Model.From != string(oldModel) || tl2[1].Model.To != string(updatedSess.Config.Model) {
 		t.Errorf("tl2[1].Model = %+v, want From=%q To=%q", tl2[1].Model, oldModel, updatedSess.Config.Model)
@@ -2375,8 +2391,8 @@ func TestTimelineRecordEvents(t *testing.T) {
 	if len(tl3) != 3 {
 		t.Fatalf("expected 3 timeline entries, got %d", len(tl3))
 	}
-	if tl3[2].Kind != timeline.KindAgent {
-		t.Errorf("tl3[2].Kind = %q, want %q", tl3[2].Kind, timeline.KindAgent)
+	if tl3[2].Kind != api.TimelineKindAgent {
+		t.Errorf("tl3[2].Kind = %q, want %q", tl3[2].Kind, api.TimelineKindAgent)
 	}
 	if tl3[2].Agent == nil || tl3[2].Agent.From != oldAgent || tl3[2].Agent.To != newAgent {
 		t.Errorf("tl3[2].Agent = %+v, want From=%q To=%q", tl3[2].Agent, oldAgent, newAgent)
@@ -2394,8 +2410,8 @@ func TestTimelineRecordEvents(t *testing.T) {
 	if len(tl4) != 4 {
 		t.Fatalf("expected 4 timeline entries, got %d", len(tl4))
 	}
-	if tl4[3].Kind != timeline.KindMode {
-		t.Errorf("tl4[3].Kind = %q, want %q", tl4[3].Kind, timeline.KindMode)
+	if tl4[3].Kind != api.TimelineKindMode {
+		t.Errorf("tl4[3].Kind = %q, want %q", tl4[3].Kind, api.TimelineKindMode)
 	}
 	if tl4[3].Mode == nil || tl4[3].Mode.From != tools.ModeDefault || tl4[3].Mode.To != tools.ModePlan {
 		t.Errorf("tl4[3].Mode = %+v, want From=%q To=%q", tl4[3].Mode, tools.ModeDefault, tools.ModePlan)
@@ -2424,7 +2440,7 @@ func TestTimelineRecordEvents(t *testing.T) {
 	if len(tl5) != 5 {
 		t.Fatalf("expected 5 timeline entries, got %d", len(tl5))
 	}
-	if tl5[4].Kind != timeline.KindMode || tl5[4].Mode.From != tools.ModePlan || tl5[4].Mode.To != tools.ModeDefault {
+	if tl5[4].Kind != api.TimelineKindMode || tl5[4].Mode.From != tools.ModePlan || tl5[4].Mode.To != tools.ModeDefault {
 		t.Errorf("tl5[4].Mode = %+v, want From=%q To=%q", tl5[4].Mode, tools.ModePlan, tools.ModeDefault)
 	}
 
@@ -2480,8 +2496,8 @@ func TestTimelineRecordEvents(t *testing.T) {
 	}
 
 	permEntry := tl6[7]
-	if permEntry.Kind != timeline.KindPermission {
-		t.Fatalf("tl6[7].Kind = %q, want %q", permEntry.Kind, timeline.KindPermission)
+	if permEntry.Kind != api.TimelineKindPermission {
+		t.Fatalf("tl6[7].Kind = %q, want %q", permEntry.Kind, api.TimelineKindPermission)
 	}
 	if permEntry.Permission == nil {
 		t.Fatalf("expected non-nil Permission payload in entry")
@@ -2511,13 +2527,13 @@ func TestTimelineRecordEvents(t *testing.T) {
 	}
 
 	// Verify EntryAddedEvent published events for all appended entries
-	var publishedKinds []timeline.Kind
+	var publishedKinds []api.TimelineKind
 	for _, ev := range pub.recorded() {
-		if eae, ok := ev.(EntryAddedEvent); ok {
+		if eae, ok := ev.(api.EntryAddedEvent); ok {
 			publishedKinds = append(publishedKinds, eae.Entry.Kind)
 		}
 	}
-	for _, expectedKind := range []timeline.Kind{timeline.KindMessage, timeline.KindModel, timeline.KindAgent, timeline.KindMode, timeline.KindPermission} {
+	for _, expectedKind := range []api.TimelineKind{api.TimelineKindMessage, api.TimelineKindModel, api.TimelineKindAgent, api.TimelineKindMode, api.TimelineKindPermission} {
 		if !slices.Contains(publishedKinds, expectedKind) {
 			t.Errorf("expected EventEntryAdded with kind %q in published events: %v", expectedKind, publishedKinds)
 		}
@@ -2817,7 +2833,7 @@ func TestSessionAutoGenerateTitle(t *testing.T) {
 	var foundUpdatedEvent bool
 	for _, r := range pub.recordedRecords() {
 		if r.topic == api.TopicSessions {
-			if uev, ok := r.event.(UpdatedEvent); ok && uev.Session.ID == sess.ID && uev.Session.Title == "Database Refactoring" {
+			if uev, ok := r.event.(api.SessionUpdatedEvent); ok && uev.Session.ID == sess.ID && uev.Session.Title == "Database Refactoring" {
 				foundUpdatedEvent = true
 				break
 			}
@@ -3074,8 +3090,8 @@ func TestSessionDirectShellEscape(t *testing.T) {
 	if len(entries) != 1 {
 		t.Fatalf("expected 1 timeline entry, got %d", len(entries))
 	}
-	if entries[0].Kind != timeline.KindCommand {
-		t.Fatalf("expected timeline entry kind %q, got %q", timeline.KindCommand, entries[0].Kind)
+	if entries[0].Kind != api.TimelineKindCommand {
+		t.Fatalf("expected timeline entry kind %q, got %q", api.TimelineKindCommand, entries[0].Kind)
 	}
 	if entries[0].Command == nil {
 		t.Fatal("expected non-nil entries[0].Command")
@@ -3247,7 +3263,7 @@ func TestSessionEnqueueCommandWhileRunning(t *testing.T) {
 		t.Fatalf("expected 3 timeline entries, got %d", len(entries))
 	}
 	for i, expectedCmd := range []string{"sleep 0.1 && echo first", "echo second", "echo third"} {
-		if entries[i].Kind != timeline.KindCommand {
+		if entries[i].Kind != api.TimelineKindCommand {
 			t.Fatalf("entry %d: expected KindCommand, got %q", i, entries[i].Kind)
 		}
 		if entries[i].Command == nil || entries[i].Command.Command != expectedCmd {
@@ -3337,7 +3353,7 @@ func TestSessionEnqueueCommandDuringTurn(t *testing.T) {
 
 	var foundCmd bool
 	for _, e := range entries {
-		if e.Kind == timeline.KindCommand && e.Command != nil && e.Command.Command == "echo while_turn" {
+		if e.Kind == api.TimelineKindCommand && e.Command != nil && e.Command.Command == "echo while_turn" {
 			foundCmd = true
 			if e.Command.ExitCode != 0 {
 				t.Fatalf("expected exit code 0, got %d", e.Command.ExitCode)
@@ -3395,9 +3411,9 @@ func TestQueueKindTaskFilteredAndNoEvent(t *testing.T) {
 	// Verify QueueUpdatedEvent was published for the user message
 	var queueUpdatedCountBefore int
 	for _, ev := range pub.recorded() {
-		if qe, ok := ev.(QueueUpdatedEvent); ok {
+		if qe, ok := ev.(api.QueueUpdatedEvent); ok {
 			queueUpdatedCountBefore++
-			if len(qe.Queue) != 1 || qe.Queue[0].Kind != QueueKindMessage {
+			if len(qe.Queue) != 1 || qe.Queue[0].Kind != api.QueueKindMessage {
 				t.Fatalf("expected 1 item in queue event, got %+v", qe.Queue)
 			}
 		}
@@ -3436,7 +3452,7 @@ func TestQueueKindTaskFilteredAndNoEvent(t *testing.T) {
 	// Verify NO additional QueueUpdatedEvent was published for the task enqueue
 	var queueUpdatedCountAfter int
 	for _, ev := range pub.recorded() {
-		if _, ok := ev.(QueueUpdatedEvent); ok {
+		if _, ok := ev.(api.QueueUpdatedEvent); ok {
 			queueUpdatedCountAfter++
 		}
 	}
@@ -3528,7 +3544,7 @@ func TestSessionTodosRestoreOnLoad(t *testing.T) {
 	// Verify TodosUpdatedEvent was published
 	var foundTodosEvent bool
 	for _, ev := range pub.recorded() {
-		if te, ok := ev.(TodosUpdatedEvent); ok {
+		if te, ok := ev.(api.TodosUpdatedEvent); ok {
 			foundTodosEvent = true
 			if len(te.Todos) != 2 {
 				t.Fatalf("expected 2 todos in published event, got %d", len(te.Todos))
@@ -3628,7 +3644,7 @@ func TestSessionSendCompactDirect(t *testing.T) {
 	}
 	var hasCompacted bool
 	for _, e := range entries {
-		if e.Kind == timeline.KindCompacted {
+		if e.Kind == api.TimelineKindCompacted {
 			hasCompacted = true
 			if e.Compacted == nil || e.Compacted.Focus != "preserve test instructions" {
 				t.Errorf("unexpected compacted entry: %+v", e.Compacted)

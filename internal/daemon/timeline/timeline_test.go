@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/masterkeysrd/loom/message"
+	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/core/sqlite"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tools"
 )
@@ -91,8 +92,8 @@ func TestAppendAndGet_AllKinds(t *testing.T) {
 				return NewMessageEntry(sessionID, message.NewUserText("Hello TaskSmith"))
 			},
 			verify: func(t *testing.T, original, loaded *Entry) {
-				if loaded.Kind != KindMessage {
-					t.Fatalf("loaded.Kind = %q, want %q", loaded.Kind, KindMessage)
+				if loaded.Kind != api.TimelineKindMessage {
+					t.Fatalf("loaded.Kind = %q, want %q", loaded.Kind, api.TimelineKindMessage)
 				}
 				if loaded.Message == nil {
 					t.Fatal("loaded.Message is nil")
@@ -111,8 +112,8 @@ func TestAppendAndGet_AllKinds(t *testing.T) {
 				return NewMessageEntry(sessionID, message.NewAssistantText("Hello user!"))
 			},
 			verify: func(t *testing.T, original, loaded *Entry) {
-				if loaded.Kind != KindMessage {
-					t.Fatalf("loaded.Kind = %q, want %q", loaded.Kind, KindMessage)
+				if loaded.Kind != api.TimelineKindMessage {
+					t.Fatalf("loaded.Kind = %q, want %q", loaded.Kind, api.TimelineKindMessage)
 				}
 				if loaded.Message == nil {
 					t.Fatal("loaded.Message is nil")
@@ -125,15 +126,15 @@ func TestAppendAndGet_AllKinds(t *testing.T) {
 		{
 			name: "model change",
 			makeEntry: func() *Entry {
-				return NewModelEntry(sessionID, ModelChange{
+				return NewModelEntry(sessionID, api.ModelChange{
 					From:   "claude-3-haiku",
 					To:     "claude-3-5-sonnet",
 					Effort: "high",
 				})
 			},
 			verify: func(t *testing.T, original, loaded *Entry) {
-				if loaded.Kind != KindModel {
-					t.Fatalf("loaded.Kind = %q, want %q", loaded.Kind, KindModel)
+				if loaded.Kind != api.TimelineKindModel {
+					t.Fatalf("loaded.Kind = %q, want %q", loaded.Kind, api.TimelineKindModel)
 				}
 				if loaded.Model == nil {
 					t.Fatal("loaded.Model is nil")
@@ -146,14 +147,14 @@ func TestAppendAndGet_AllKinds(t *testing.T) {
 		{
 			name: "effort change",
 			makeEntry: func() *Entry {
-				return NewEffortEntry(sessionID, EffortChange{
+				return NewEffortEntry(sessionID, api.EffortChange{
 					From: "low",
 					To:   "high",
 				})
 			},
 			verify: func(t *testing.T, original, loaded *Entry) {
-				if loaded.Kind != KindEffort {
-					t.Fatalf("loaded.Kind = %q, want %q", loaded.Kind, KindEffort)
+				if loaded.Kind != api.TimelineKindEffort {
+					t.Fatalf("loaded.Kind = %q, want %q", loaded.Kind, api.TimelineKindEffort)
 				}
 				if loaded.Effort == nil {
 					t.Fatal("loaded.Effort is nil")
@@ -166,14 +167,14 @@ func TestAppendAndGet_AllKinds(t *testing.T) {
 		{
 			name: "agent change",
 			makeEntry: func() *Entry {
-				return NewAgentEntry(sessionID, AgentChange{
+				return NewAgentEntry(sessionID, api.AgentChange{
 					From: "coder",
 					To:   "planner",
 				})
 			},
 			verify: func(t *testing.T, original, loaded *Entry) {
-				if loaded.Kind != KindAgent {
-					t.Fatalf("loaded.Kind = %q, want %q", loaded.Kind, KindAgent)
+				if loaded.Kind != api.TimelineKindAgent {
+					t.Fatalf("loaded.Kind = %q, want %q", loaded.Kind, api.TimelineKindAgent)
 				}
 				if loaded.Agent == nil {
 					t.Fatal("loaded.Agent is nil")
@@ -192,8 +193,8 @@ func TestAppendAndGet_AllKinds(t *testing.T) {
 				})
 			},
 			verify: func(t *testing.T, original, loaded *Entry) {
-				if loaded.Kind != KindMode {
-					t.Fatalf("loaded.Kind = %q, want %q", loaded.Kind, KindMode)
+				if loaded.Kind != api.TimelineKindMode {
+					t.Fatalf("loaded.Kind = %q, want %q", loaded.Kind, api.TimelineKindMode)
 				}
 				if loaded.Mode == nil {
 					t.Fatal("loaded.Mode is nil")
@@ -225,8 +226,8 @@ func TestAppendAndGet_AllKinds(t *testing.T) {
 				})
 			},
 			verify: func(t *testing.T, original, loaded *Entry) {
-				if loaded.Kind != KindPermission {
-					t.Fatalf("loaded.Kind = %q, want %q", loaded.Kind, KindPermission)
+				if loaded.Kind != api.TimelineKindPermission {
+					t.Fatalf("loaded.Kind = %q, want %q", loaded.Kind, api.TimelineKindPermission)
 				}
 				if loaded.Permission == nil {
 					t.Fatal("loaded.Permission is nil")
@@ -242,7 +243,7 @@ func TestAppendAndGet_AllKinds(t *testing.T) {
 		{
 			name: "compacted record",
 			makeEntry: func() *Entry {
-				return NewCompactedEntry(sessionID, CompactedRecord{
+				return NewCompactedEntry(sessionID, api.CompactedRecord{
 					Trigger:      "auto",
 					Focus:        "test focus",
 					Summary:      "## Summary",
@@ -252,8 +253,8 @@ func TestAppendAndGet_AllKinds(t *testing.T) {
 				})
 			},
 			verify: func(t *testing.T, original, loaded *Entry) {
-				if loaded.Kind != KindCompacted {
-					t.Fatalf("loaded.Kind = %q, want %q", loaded.Kind, KindCompacted)
+				if loaded.Kind != api.TimelineKindCompacted {
+					t.Fatalf("loaded.Kind = %q, want %q", loaded.Kind, api.TimelineKindCompacted)
 				}
 				if loaded.Compacted == nil {
 					t.Fatal("loaded.Compacted is nil")
@@ -266,15 +267,15 @@ func TestAppendAndGet_AllKinds(t *testing.T) {
 		{
 			name: "cache broken record",
 			makeEntry: func() *Entry {
-				return NewCacheBrokenEntry(sessionID, CacheBrokenRecord{
+				return NewCacheBrokenEntry(sessionID, api.CacheBrokenRecord{
 					PrevCached:  80000,
 					CurrCached:  1000,
 					InputTokens: 85000,
 				})
 			},
 			verify: func(t *testing.T, original, loaded *Entry) {
-				if loaded.Kind != KindCacheBroken {
-					t.Fatalf("loaded.Kind = %q, want %q", loaded.Kind, KindCacheBroken)
+				if loaded.Kind != api.TimelineKindCacheBroken {
+					t.Fatalf("loaded.Kind = %q, want %q", loaded.Kind, api.TimelineKindCacheBroken)
 				}
 				if loaded.CacheBroken == nil {
 					t.Fatal("loaded.CacheBroken is nil")
@@ -372,16 +373,16 @@ func TestJSONRoundTrip_AllKinds(t *testing.T) {
 		{
 			ID:        userMsg.GetID(),
 			SessionID: sessionID,
-			Kind:      KindMessage,
+			Kind:      api.TimelineKindMessage,
 			CreatedAt: now,
 			Message:   userMsg,
 		},
 		{
 			ID:        uuid.Must(uuid.NewV7()).String(),
 			SessionID: sessionID,
-			Kind:      KindModel,
+			Kind:      api.TimelineKindModel,
 			CreatedAt: now,
-			Model: &ModelChange{
+			Model: &api.ModelChange{
 				From:   "claude-3-opus",
 				To:     "claude-3-5-sonnet",
 				Effort: "medium",
@@ -390,9 +391,9 @@ func TestJSONRoundTrip_AllKinds(t *testing.T) {
 		{
 			ID:        uuid.Must(uuid.NewV7()).String(),
 			SessionID: sessionID,
-			Kind:      KindEffort,
+			Kind:      api.TimelineKindEffort,
 			CreatedAt: now,
-			Effort: &EffortChange{
+			Effort: &api.EffortChange{
 				From: "low",
 				To:   "high",
 			},
@@ -400,9 +401,9 @@ func TestJSONRoundTrip_AllKinds(t *testing.T) {
 		{
 			ID:        uuid.Must(uuid.NewV7()).String(),
 			SessionID: sessionID,
-			Kind:      KindAgent,
+			Kind:      api.TimelineKindAgent,
 			CreatedAt: now,
-			Agent: &AgentChange{
+			Agent: &api.AgentChange{
 				From: "build",
 				To:   "review",
 			},
@@ -410,7 +411,7 @@ func TestJSONRoundTrip_AllKinds(t *testing.T) {
 		{
 			ID:        uuid.Must(uuid.NewV7()).String(),
 			SessionID: sessionID,
-			Kind:      KindMode,
+			Kind:      api.TimelineKindMode,
 			CreatedAt: now,
 			Mode: &ModeChange{
 				From: tools.ModePlan,
@@ -420,7 +421,7 @@ func TestJSONRoundTrip_AllKinds(t *testing.T) {
 		{
 			ID:        uuid.Must(uuid.NewV7()).String(),
 			SessionID: sessionID,
-			Kind:      KindPermission,
+			Kind:      api.TimelineKindPermission,
 			CreatedAt: now,
 			Permission: &PermissionRecord{
 				Request: tools.PermissionRequest{
@@ -442,9 +443,9 @@ func TestJSONRoundTrip_AllKinds(t *testing.T) {
 		{
 			ID:        uuid.Must(uuid.NewV7()).String(),
 			SessionID: sessionID,
-			Kind:      KindCompacted,
+			Kind:      api.TimelineKindCompacted,
 			CreatedAt: now,
-			Compacted: &CompactedRecord{
+			Compacted: &api.CompactedRecord{
 				Trigger:      "auto",
 				Focus:        "deep reasoning",
 				Summary:      "## Compaction Summary",
@@ -456,9 +457,9 @@ func TestJSONRoundTrip_AllKinds(t *testing.T) {
 		{
 			ID:        uuid.Must(uuid.NewV7()).String(),
 			SessionID: sessionID,
-			Kind:      KindCacheBroken,
+			Kind:      api.TimelineKindCacheBroken,
 			CreatedAt: now,
-			CacheBroken: &CacheBrokenRecord{
+			CacheBroken: &api.CacheBrokenRecord{
 				PrevCached:  75000,
 				CurrCached:  0,
 				InputTokens: 78000,
@@ -492,7 +493,7 @@ func TestJSONRoundTrip_AllKinds(t *testing.T) {
 			}
 
 			switch original.Kind {
-			case KindMessage:
+			case api.TimelineKindMessage:
 				if decoded.Message == nil {
 					t.Fatal("decoded.Message is nil")
 				}
@@ -502,31 +503,31 @@ func TestJSONRoundTrip_AllKinds(t *testing.T) {
 				if decoded.Message.GetID() != original.Message.GetID() {
 					t.Errorf("message id = %q, want %q", decoded.Message.GetID(), original.Message.GetID())
 				}
-			case KindModel:
+			case api.TimelineKindModel:
 				if *decoded.Model != *original.Model {
 					t.Errorf("model = %+v, want %+v", *decoded.Model, *original.Model)
 				}
-			case KindEffort:
+			case api.TimelineKindEffort:
 				if *decoded.Effort != *original.Effort {
 					t.Errorf("effort = %+v, want %+v", *decoded.Effort, *original.Effort)
 				}
-			case KindAgent:
+			case api.TimelineKindAgent:
 				if *decoded.Agent != *original.Agent {
 					t.Errorf("agent = %+v, want %+v", *decoded.Agent, *original.Agent)
 				}
-			case KindMode:
+			case api.TimelineKindMode:
 				if *decoded.Mode != *original.Mode {
 					t.Errorf("mode = %+v, want %+v", *decoded.Mode, *original.Mode)
 				}
-			case KindPermission:
+			case api.TimelineKindPermission:
 				if !reflect.DeepEqual(decoded.Permission, original.Permission) {
 					t.Errorf("permission = %+v, want %+v", decoded.Permission, original.Permission)
 				}
-			case KindCompacted:
+			case api.TimelineKindCompacted:
 				if *decoded.Compacted != *original.Compacted {
 					t.Errorf("compacted = %+v, want %+v", *decoded.Compacted, *original.Compacted)
 				}
-			case KindCacheBroken:
+			case api.TimelineKindCacheBroken:
 				if *decoded.CacheBroken != *original.CacheBroken {
 					t.Errorf("cache_broken = %+v, want %+v", *decoded.CacheBroken, *original.CacheBroken)
 				}
@@ -617,7 +618,7 @@ func TestListAndListByKind(t *testing.T) {
 
 	// Session A entries: 2 messages, 1 model, 1 mode
 	eA1 := NewMessageEntry(sessA, message.NewUserText("A-1"))
-	eA2 := NewModelEntry(sessA, ModelChange{From: "m1", To: "m2"})
+	eA2 := NewModelEntry(sessA, api.ModelChange{From: "m1", To: "m2"})
 	eA3 := NewMessageEntry(sessA, message.NewAssistantText("A-2"))
 	eA4 := NewModeEntry(sessA, ModeChange{From: tools.ModeDefault, To: tools.ModeAsk})
 
@@ -629,7 +630,7 @@ func TestListAndListByKind(t *testing.T) {
 
 	// Session B entries: 1 message, 1 effort
 	eB1 := NewMessageEntry(sessB, message.NewUserText("B-1"))
-	eB2 := NewEffortEntry(sessB, EffortChange{From: "low", To: "high"})
+	eB2 := NewEffortEntry(sessB, api.EffortChange{From: "low", To: "high"})
 
 	for _, e := range []*Entry{eB1, eB2} {
 		if err := tlB.Append(ctx, e); err != nil {
@@ -656,9 +657,9 @@ func TestListAndListByKind(t *testing.T) {
 	}
 
 	// Verify ListByKind for SessA messages
-	msgsA, err := tlA.ListByKind(ctx, KindMessage)
+	msgsA, err := tlA.ListByKind(ctx, api.TimelineKindMessage)
 	if err != nil {
-		t.Fatalf("ListByKind(sessA, KindMessage) failed: %v", err)
+		t.Fatalf("ListByKind(sessA, api.TimelineKindMessage) failed: %v", err)
 	}
 	if len(msgsA) != 2 {
 		t.Fatalf("len(msgsA) = %d, want 2", len(msgsA))
@@ -668,18 +669,18 @@ func TestListAndListByKind(t *testing.T) {
 	}
 
 	// Verify ListByKind for SessA model
-	modelsA, err := tlA.ListByKind(ctx, KindModel)
+	modelsA, err := tlA.ListByKind(ctx, api.TimelineKindModel)
 	if err != nil {
-		t.Fatalf("ListByKind(sessA, KindModel) failed: %v", err)
+		t.Fatalf("ListByKind(sessA, api.TimelineKindModel) failed: %v", err)
 	}
 	if len(modelsA) != 1 || modelsA[0].ID != eA2.ID {
 		t.Errorf("modelsA len/ID mismatch")
 	}
 
 	// Verify ListByKind for nonexistent kind in SessA returns empty slice
-	effortsA, err := tlA.ListByKind(ctx, KindEffort)
+	effortsA, err := tlA.ListByKind(ctx, api.TimelineKindEffort)
 	if err != nil {
-		t.Fatalf("ListByKind(sessA, KindEffort) failed: %v", err)
+		t.Fatalf("ListByKind(sessA, api.TimelineKindEffort) failed: %v", err)
 	}
 	if len(effortsA) != 0 {
 		t.Errorf("len(effortsA) = %d, want 0", len(effortsA))
@@ -691,14 +692,14 @@ func TestMessages(t *testing.T) {
 	tl, _, ctx := openTestTimeline(t, sessionID)
 
 	// Append mix of message and non-message entries
-	if err := tl.Append(ctx, NewModelEntry(sessionID, ModelChange{From: "m1", To: "m2"})); err != nil {
+	if err := tl.Append(ctx, NewModelEntry(sessionID, api.ModelChange{From: "m1", To: "m2"})); err != nil {
 		t.Fatalf("Append model: %v", err)
 	}
 	e1 := NewMessageEntry(sessionID, message.NewUserText("Hello"))
 	if err := tl.Append(ctx, e1); err != nil {
 		t.Fatalf("Append message 1: %v", err)
 	}
-	if err := tl.Append(ctx, NewEffortEntry(sessionID, EffortChange{From: "low", To: "high"})); err != nil {
+	if err := tl.Append(ctx, NewEffortEntry(sessionID, api.EffortChange{From: "low", To: "high"})); err != nil {
 		t.Fatalf("Append effort: %v", err)
 	}
 	e2 := NewMessageEntry(sessionID, message.NewAssistantText("Hi"))
@@ -804,56 +805,56 @@ func TestErrorCases(t *testing.T) {
 		entry *Entry
 	}{
 		{
-			name:  "KindMessage nil",
-			entry: &Entry{SessionID: validSession, Kind: KindMessage, Message: nil},
+			name:  "api.TimelineKindMessage nil",
+			entry: &Entry{SessionID: validSession, Kind: api.TimelineKindMessage, Message: nil},
 		},
 		{
-			name:  "KindModel nil",
-			entry: &Entry{SessionID: validSession, Kind: KindModel, Model: nil},
+			name:  "api.TimelineKindModel nil",
+			entry: &Entry{SessionID: validSession, Kind: api.TimelineKindModel, Model: nil},
 		},
 		{
-			name:  "KindModel empty To",
-			entry: &Entry{SessionID: validSession, Kind: KindModel, Model: &ModelChange{To: ""}},
+			name:  "api.TimelineKindModel empty To",
+			entry: &Entry{SessionID: validSession, Kind: api.TimelineKindModel, Model: &api.ModelChange{To: ""}},
 		},
 		{
-			name:  "KindModel whitespace To",
-			entry: &Entry{SessionID: validSession, Kind: KindModel, Model: &ModelChange{To: "   "}},
+			name:  "api.TimelineKindModel whitespace To",
+			entry: &Entry{SessionID: validSession, Kind: api.TimelineKindModel, Model: &api.ModelChange{To: "   "}},
 		},
 		{
-			name:  "KindEffort nil",
-			entry: &Entry{SessionID: validSession, Kind: KindEffort, Effort: nil},
+			name:  "api.TimelineKindEffort nil",
+			entry: &Entry{SessionID: validSession, Kind: api.TimelineKindEffort, Effort: nil},
 		},
 		{
-			name:  "KindEffort empty To",
-			entry: &Entry{SessionID: validSession, Kind: KindEffort, Effort: &EffortChange{To: ""}},
+			name:  "api.TimelineKindEffort empty To",
+			entry: &Entry{SessionID: validSession, Kind: api.TimelineKindEffort, Effort: &api.EffortChange{To: ""}},
 		},
 		{
-			name:  "KindAgent nil",
-			entry: &Entry{SessionID: validSession, Kind: KindAgent, Agent: nil},
+			name:  "api.TimelineKindAgent nil",
+			entry: &Entry{SessionID: validSession, Kind: api.TimelineKindAgent, Agent: nil},
 		},
 		{
-			name:  "KindAgent empty To",
-			entry: &Entry{SessionID: validSession, Kind: KindAgent, Agent: &AgentChange{To: ""}},
+			name:  "api.TimelineKindAgent empty To",
+			entry: &Entry{SessionID: validSession, Kind: api.TimelineKindAgent, Agent: &api.AgentChange{To: ""}},
 		},
 		{
-			name:  "KindMode nil",
-			entry: &Entry{SessionID: validSession, Kind: KindMode, Mode: nil},
+			name:  "api.TimelineKindMode nil",
+			entry: &Entry{SessionID: validSession, Kind: api.TimelineKindMode, Mode: nil},
 		},
 		{
-			name:  "KindMode empty To",
-			entry: &Entry{SessionID: validSession, Kind: KindMode, Mode: &ModeChange{To: ""}},
+			name:  "api.TimelineKindMode empty To",
+			entry: &Entry{SessionID: validSession, Kind: api.TimelineKindMode, Mode: &ModeChange{To: ""}},
 		},
 		{
-			name:  "KindPermission nil",
-			entry: &Entry{SessionID: validSession, Kind: KindPermission, Permission: nil},
+			name:  "api.TimelineKindPermission nil",
+			entry: &Entry{SessionID: validSession, Kind: api.TimelineKindPermission, Permission: nil},
 		},
 		{
-			name:  "KindCompacted nil",
-			entry: &Entry{SessionID: validSession, Kind: KindCompacted, Compacted: nil},
+			name:  "api.TimelineKindCompacted nil",
+			entry: &Entry{SessionID: validSession, Kind: api.TimelineKindCompacted, Compacted: nil},
 		},
 		{
-			name:  "KindCacheBroken nil",
-			entry: &Entry{SessionID: validSession, Kind: KindCacheBroken, CacheBroken: nil},
+			name:  "api.TimelineKindCacheBroken nil",
+			entry: &Entry{SessionID: validSession, Kind: api.TimelineKindCacheBroken, CacheBroken: nil},
 		},
 		{
 			name:  "Unknown Kind",
@@ -886,8 +887,8 @@ func TestInterruptedEntry(t *testing.T) {
 	tl, _, ctx := openTestTimeline(t, sessionID)
 
 	entry := NewInterruptedEntry(sessionID)
-	if entry.Kind != KindInterrupted {
-		t.Fatalf("expected KindInterrupted, got %q", entry.Kind)
+	if entry.Kind != api.TimelineKindInterrupted {
+		t.Fatalf("expected api.TimelineKindInterrupted, got %q", entry.Kind)
 	}
 
 	if err := tl.Append(ctx, entry); err != nil {
@@ -901,8 +902,8 @@ func TestInterruptedEntry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get(%q): %v", entry.ID, err)
 	}
-	if got.Kind != KindInterrupted {
-		t.Fatalf("got kind %q, want %q", got.Kind, KindInterrupted)
+	if got.Kind != api.TimelineKindInterrupted {
+		t.Fatalf("got kind %q, want %q", got.Kind, api.TimelineKindInterrupted)
 	}
 	if got.SessionID != sessionID {
 		t.Fatalf("got sessionID %q, want %q", got.SessionID, sessionID)
@@ -912,13 +913,13 @@ func TestInterruptedEntry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
-	if len(list) != 1 || list[0].Kind != KindInterrupted {
+	if len(list) != 1 || list[0].Kind != api.TimelineKindInterrupted {
 		t.Fatalf("unexpected List result: %+v", list)
 	}
 
-	byKind, err := tl.ListByKind(ctx, KindInterrupted)
+	byKind, err := tl.ListByKind(ctx, api.TimelineKindInterrupted)
 	if err != nil {
-		t.Fatalf("ListByKind(KindInterrupted): %v", err)
+		t.Fatalf("ListByKind(api.TimelineKindInterrupted): %v", err)
 	}
 	if len(byKind) != 1 || byKind[0].ID != entry.ID {
 		t.Fatalf("unexpected ListByKind result: %+v", byKind)
@@ -930,7 +931,7 @@ func TestCompactedAndCacheBrokenEntries(t *testing.T) {
 	tl, _, ctx := openTestTimeline(t, sessionID)
 
 	// 1. Compacted Entry
-	compactRec := CompactedRecord{
+	compactRec := api.CompactedRecord{
 		Trigger:      "auto",
 		Focus:        "architecture",
 		Summary:      "## Current State\n- building API types",
@@ -939,8 +940,8 @@ func TestCompactedAndCacheBrokenEntries(t *testing.T) {
 		DurationMs:   2150,
 	}
 	compEntry := NewCompactedEntry(sessionID, compactRec)
-	if compEntry.Kind != KindCompacted {
-		t.Fatalf("expected KindCompacted, got %q", compEntry.Kind)
+	if compEntry.Kind != api.TimelineKindCompacted {
+		t.Fatalf("expected api.TimelineKindCompacted, got %q", compEntry.Kind)
 	}
 	if compEntry.SessionID != sessionID {
 		t.Fatalf("expected sessionID %q, got %q", sessionID, compEntry.SessionID)
@@ -956,22 +957,22 @@ func TestCompactedAndCacheBrokenEntries(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get(%q): %v", compEntry.ID, err)
 	}
-	if gotComp.Kind != KindCompacted || gotComp.Compacted == nil {
-		t.Fatalf("gotComp = %+v, want KindCompacted with Compacted != nil", gotComp)
+	if gotComp.Kind != api.TimelineKindCompacted || gotComp.Compacted == nil {
+		t.Fatalf("gotComp = %+v, want api.TimelineKindCompacted with Compacted != nil", gotComp)
 	}
 	if *gotComp.Compacted != compactRec {
 		t.Errorf("gotComp.Compacted = %+v, want %+v", *gotComp.Compacted, compactRec)
 	}
 
 	// 2. Cache Broken Entry
-	cbRec := CacheBrokenRecord{
+	cbRec := api.CacheBrokenRecord{
 		PrevCached:  64000,
 		CurrCached:  0,
 		InputTokens: 70000,
 	}
 	cbEntry := NewCacheBrokenEntry(sessionID, cbRec)
-	if cbEntry.Kind != KindCacheBroken {
-		t.Fatalf("expected KindCacheBroken, got %q", cbEntry.Kind)
+	if cbEntry.Kind != api.TimelineKindCacheBroken {
+		t.Fatalf("expected api.TimelineKindCacheBroken, got %q", cbEntry.Kind)
 	}
 	if cbEntry.SessionID != sessionID {
 		t.Fatalf("expected sessionID %q, got %q", sessionID, cbEntry.SessionID)
@@ -987,25 +988,25 @@ func TestCompactedAndCacheBrokenEntries(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get(%q): %v", cbEntry.ID, err)
 	}
-	if gotCB.Kind != KindCacheBroken || gotCB.CacheBroken == nil {
-		t.Fatalf("gotCB = %+v, want KindCacheBroken with CacheBroken != nil", gotCB)
+	if gotCB.Kind != api.TimelineKindCacheBroken || gotCB.CacheBroken == nil {
+		t.Fatalf("gotCB = %+v, want api.TimelineKindCacheBroken with CacheBroken != nil", gotCB)
 	}
 	if *gotCB.CacheBroken != cbRec {
 		t.Errorf("gotCB.CacheBroken = %+v, want %+v", *gotCB.CacheBroken, cbRec)
 	}
 
 	// ListByKind checks
-	compList, err := tl.ListByKind(ctx, KindCompacted)
+	compList, err := tl.ListByKind(ctx, api.TimelineKindCompacted)
 	if err != nil {
-		t.Fatalf("ListByKind(KindCompacted): %v", err)
+		t.Fatalf("ListByKind(api.TimelineKindCompacted): %v", err)
 	}
 	if len(compList) != 1 || compList[0].ID != compEntry.ID {
 		t.Fatalf("unexpected compList: %+v", compList)
 	}
 
-	cbList, err := tl.ListByKind(ctx, KindCacheBroken)
+	cbList, err := tl.ListByKind(ctx, api.TimelineKindCacheBroken)
 	if err != nil {
-		t.Fatalf("ListByKind(KindCacheBroken): %v", err)
+		t.Fatalf("ListByKind(api.TimelineKindCacheBroken): %v", err)
 	}
 	if len(cbList) != 1 || cbList[0].ID != cbEntry.ID {
 		t.Fatalf("unexpected cbList: %+v", cbList)
@@ -1017,24 +1018,24 @@ func TestEntryClone(t *testing.T) {
 	original := Entry{
 		ID:        "entry-1",
 		SessionID: "sess-1",
-		Kind:      KindCompacted,
+		Kind:      api.TimelineKindCompacted,
 		CreatedAt: now,
-		Command: &CommandRecord{
+		Command: &api.CommandRecord{
 			Command:    "echo test",
 			Output:     "test",
 			ExitCode:   0,
 			DurationMs: 10,
 		},
-		Model: &ModelChange{
+		Model: &api.ModelChange{
 			From:   "model-a",
 			To:     "model-b",
 			Effort: "high",
 		},
-		Effort: &EffortChange{
+		Effort: &api.EffortChange{
 			From: "low",
 			To:   "high",
 		},
-		Agent: &AgentChange{
+		Agent: &api.AgentChange{
 			From: "agent-a",
 			To:   "agent-b",
 		},
@@ -1051,7 +1052,7 @@ func TestEntryClone(t *testing.T) {
 				RequestID: "req-1",
 			},
 		},
-		Compacted: &CompactedRecord{
+		Compacted: &api.CompactedRecord{
 			Trigger:      "manual",
 			Focus:        "focus-orig",
 			Summary:      "summary-orig",
@@ -1059,7 +1060,7 @@ func TestEntryClone(t *testing.T) {
 			AfterTokens:  5000,
 			DurationMs:   1200,
 		},
-		CacheBroken: &CacheBrokenRecord{
+		CacheBroken: &api.CacheBrokenRecord{
 			PrevCached:  30000,
 			CurrCached:  0,
 			InputTokens: 32000,

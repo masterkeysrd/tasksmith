@@ -1038,7 +1038,7 @@ func TestConversionsAndErrorPublishing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("fromSendRequest: %v", err)
 	}
-	apiMsg, err := toAPIMessage(reqMsg.Message)
+	apiMsg, err := session.ToAPIMessage(reqMsg.Message)
 	if err != nil {
 		t.Fatalf("toAPIMessage: %v", err)
 	}
@@ -1053,7 +1053,7 @@ func TestConversionsAndErrorPublishing(t *testing.T) {
 		if !ok {
 			t.Fatalf("fromAPIBlock: %+v", block)
 		}
-		roundTrip, ok := toAPIBlock(converted)
+		roundTrip, ok := session.ToAPIBlock(converted)
 		if !ok || !reflect.DeepEqual(roundTrip, block) {
 			t.Fatalf("block round trip: %+v, want %+v", roundTrip, block)
 		}
@@ -1773,15 +1773,15 @@ func TestStructuredContentConversionFailure(t *testing.T) {
 		Base: message.Base{ID: "result"}, ToolCallID: "call",
 		StructuredContent: make(chan int),
 	}
-	converted, err := toAPIMessage(tool)
+	converted, err := session.ToAPIMessage(tool)
 	var unsupported *json.UnsupportedTypeError
 	if converted != nil || !errors.As(err, &unsupported) {
-		t.Fatalf("toAPIMessage = (%+v, %v), want an unsupported type error", converted, err)
+		t.Fatalf("ToAPIMessage = (%+v, %v), want an unsupported type error", converted, err)
 	}
 	entry := timeline.NewMessageEntry("session", tool)
-	_, entryErr := toAPITimelineEntry(*entry)
+	_, entryErr := session.ToAPITimelineEntry(*entry)
 	if entryErr == nil || !errors.As(entryErr, &unsupported) {
-		t.Fatalf("toAPITimelineEntry = %v, want unsupported type error", entryErr)
+		t.Fatalf("ToAPITimelineEntry = %v, want unsupported type error", entryErr)
 	}
 }
 

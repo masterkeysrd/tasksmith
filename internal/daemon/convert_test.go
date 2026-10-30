@@ -20,7 +20,7 @@ func TestCatalogModelProjection(t *testing.T) {
 		Capabilities: &workspace.ModelCapabilities{Tools: new(false)},
 		Cost:         &workspace.ModelCost{Input: 3, Tiers: []workspace.ModelCostTier{{Label: "large", ConditionType: "context", ConditionSize: 100, Input: 5}}},
 	}, &profile.Profile{Name: "Built-in", Limits: profile.Limits{Context: 9000, Output: 700}, Capabilities: profile.Capabilities{ToolCall: true}, Pricing: profile.Pricing{Input: 1, Output: 2}})
-	got := catalogToAPIModel(m)
+	got := session.CatalogToAPIModel(m)
 	if got.Label != "Friendly" || got.ContextLimit != 5000 || got.OutputLimit != 700 || got.Capabilities.Tools == nil || *got.Capabilities.Tools {
 		t.Fatalf("unexpected effective model: %+v", got)
 	}
@@ -31,7 +31,7 @@ func TestCatalogModelProjection(t *testing.T) {
 
 func TestThinkingDescriptions(t *testing.T) {
 	values := []string{"none", "minimal", "low", "medium", "high", "xhigh", "max", "auto", "custom", "HIGH"}
-	got := toAPIThinkingValues("effort", values)
+	got := session.ToAPIThinkingValues("effort", values)
 	for i, value := range values {
 		if got[i].Value != value {
 			t.Fatalf("value %d changed: %+v", i, got[i])
@@ -40,14 +40,14 @@ func TestThinkingDescriptions(t *testing.T) {
 			t.Fatalf("unexpected description for %q: %q", value, got[i].Description)
 		}
 	}
-	if other := toAPIThinkingValues("toggle", []string{"high"}); other[0].Description != "" {
+	if other := session.ToAPIThinkingValues("toggle", []string{"high"}); other[0].Description != "" {
 		t.Fatalf("non-effort value received a hint: %+v", other)
 	}
-	model := catalogToAPIModel(models.Merge("test/model", "test", &workspace.ProviderModel{ID: "model", Capabilities: &workspace.ModelCapabilities{Thinking: []workspace.ThinkingCapability{{Type: "effort", AllowedEfforts: values}}}}, nil))
+	model := session.CatalogToAPIModel(models.Merge("test/model", "test", &workspace.ProviderModel{ID: "model", Capabilities: &workspace.ModelCapabilities{Thinking: []workspace.ThinkingCapability{{Type: "effort", AllowedEfforts: values}}}}, nil))
 	if len(model.Thinking) != 1 || len(model.Thinking[0].Values) != len(values) || model.Thinking[0].Values[2].Description == "" {
 		t.Fatalf("workspace model missing descriptions: %+v", model.Thinking)
 	}
-	model = catalogToAPIModel(models.Merge("test/model", "test", nil, &profile.Profile{Capabilities: profile.Capabilities{ReasoningOptions: []profile.ReasoningOption{{Type: "effort", Values: values}}}}))
+	model = session.CatalogToAPIModel(models.Merge("test/model", "test", nil, &profile.Profile{Capabilities: profile.Capabilities{ReasoningOptions: []profile.ReasoningOption{{Type: "effort", Values: values}}}}))
 	if len(model.Thinking) != 1 || len(model.Thinking[0].Values) != len(values) || model.Thinking[0].Values[2].Description == "" || model.Thinking[0].Values[8].Description != "" {
 		t.Fatalf("profile model has incorrect descriptions: %+v", model.Thinking)
 	}
@@ -56,12 +56,12 @@ func TestThinkingDescriptions(t *testing.T) {
 func TestSessionDiagnosticsConversion(t *testing.T) {
 	sess := &session.Session{ID: "test", State: session.NewState(), Diagnostics: []models.Diagnostic{{Code: "temperature_unsupported", Setting: "temperature", Message: "omitted"}}}
 	want := api.SessionDiagnostic{Code: "temperature_unsupported", Setting: "temperature", Message: "omitted"}
-	converted := toAPISession(sess)
+	converted := session.ToAPISession(sess)
 	if len(converted.Diagnostics) != 1 || converted.Diagnostics[0] != want {
 		t.Fatalf("session diagnostics: %+v", converted.Diagnostics)
 	}
 	d := &Daemon{}
-	event, err := d.FormatEvent(broker.Message{Topic: api.TopicSessions, Event: session.UpdatedEvent{Session: sess}})
+	event, err := d.FormatEvent(broker.Message{Topic: api.TopicSessions, Event: api.SessionUpdatedEvent{Session: session.ToAPISession(sess)}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,7 +102,7 @@ func TestToAPISessionWithTasks(t *testing.T) {
 		},
 	}
 
-	apiSess := toAPISession(sess)
+	apiSess := session.ToAPISession(sess)
 	if apiSess.ID != "sess-1" || apiSess.Title != "Test Session" {
 		t.Fatalf("unexpected API session ID or Title: %+v", apiSess)
 	}
@@ -121,13 +121,13 @@ func TestToAPIEventTaskUpdated(t *testing.T) {
 	rawMsg := broker.Message{
 		ID:    "evt-1",
 		Topic: api.SessionStreamTopic("sess-1"),
-		Event: session.TaskUpdatedEvent{
+		Event: api.TaskUpdatedEvent{
 			SessionID: "sess-1",
-			Task: tasks.Snapshot{
+			Task: api.Task{
 				ID:           "task-2",
 				Kind:         "download",
 				Title:        "fetch data",
-				Status:       tasks.StatusCompleted,
+				Status:       api.TaskStatusCompleted,
 				ExitCode:     0,
 				LogPath:      "/tmp/task-2.log",
 				StartedAt:    now,
@@ -161,9 +161,9 @@ func TestToAPIEventStatusChanged(t *testing.T) {
 	rawMsg := broker.Message{
 		ID:    "evt-status-1",
 		Topic: api.SessionStreamTopic("sess-1"),
-		Event: session.StatusChangedEvent{
+		Event: api.StatusChangedEvent{
 			SessionID: "sess-1",
-			Status:    session.StatusExecuting,
+			Status:    api.StatusExecuting,
 		},
 	}
 
@@ -214,7 +214,7 @@ func TestToAPISessionWithTodos(t *testing.T) {
 		},
 	}
 
-	apiSess := toAPISession(sess)
+	apiSess := session.ToAPISession(sess)
 	if len(apiSess.Todos) != 2 {
 		t.Fatalf("expected 2 todos, got %d", len(apiSess.Todos))
 	}
@@ -230,13 +230,13 @@ func TestToAPIEventTodosUpdated(t *testing.T) {
 	rawMsg := broker.Message{
 		ID:    "evt-todos-1",
 		Topic: api.SessionStreamTopic("sess-todos"),
-		Event: session.TodosUpdatedEvent{
+		Event: api.TodosUpdatedEvent{
 			SessionID: "sess-todos",
-			Todos: []tools.TodoItem{
+			Todos: []api.TodoItem{
 				{
 					Content:    "Deploy",
 					ActiveText: "Deploying",
-					Status:     tools.TodoStatusCompleted,
+					Status:     "completed",
 				},
 			},
 		},
@@ -271,7 +271,7 @@ func TestToAPIModelWithSlashInID(t *testing.T) {
 			Output:  32768,
 		},
 	}
-	got := catalogToAPIModel(models.Merge("mlx-serve/"+models.ID(pm.ID), "openai", &pm, nil))
+	got := session.CatalogToAPIModel(models.Merge("mlx-serve/"+models.ID(pm.ID), "openai", &pm, nil))
 	if got.ID != "mlx-serve/ddalcu/Qwen3.8-27B-MLX-Serve-4bit" {
 		t.Errorf("got.ID = %q, want %q", got.ID, "mlx-serve/ddalcu/Qwen3.8-27B-MLX-Serve-4bit")
 	}

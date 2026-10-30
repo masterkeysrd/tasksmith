@@ -444,7 +444,7 @@ func draftModel(ws workspace.Workspace, catalog models.Catalog, agent, id string
 	if !ok {
 		return nil
 	}
-	converted := catalogToAPIModel(model)
+	converted := session.CatalogToAPIModel(model)
 	if ag, ok := ws.GetAgent(agent); ok && ag != nil {
 		converted.ThinkingDefault = session.AgentThinking(ag.Thinking)
 	}
@@ -570,7 +570,7 @@ func (d *Daemon) ListModels(ctx context.Context, rawWS string) ([]api.Model, err
 	listed := rt.Catalog().List()
 	out := make([]api.Model, 0, len(listed))
 	for _, m := range listed {
-		out = append(out, catalogToAPIModel(m))
+		out = append(out, session.CatalogToAPIModel(m))
 	}
 	return out, nil
 }
@@ -600,7 +600,7 @@ func (d *Daemon) GetModel(ctx context.Context, rawWS, id string) (*api.Model, er
 	if !ok {
 		return &api.Model{ID: id, Name: id, Label: id}, nil
 	}
-	m := catalogToAPIModel(model)
+	m := session.CatalogToAPIModel(model)
 	return &m, nil
 }
 
@@ -685,7 +685,7 @@ func (d *Daemon) CreateSession(ctx context.Context, rawWS string, req api.Create
 		return nil, false, err
 	}
 
-	out := toAPISession(sess)
+	out := session.ToAPISession(sess)
 	return &out, created, nil
 }
 
@@ -707,7 +707,7 @@ func (d *Daemon) PreviewSession(ctx context.Context, rawWS string, req api.Previ
 
 	var resolvedModel *api.Model
 	if hasModel {
-		converted := catalogToAPIModel(model)
+		converted := session.CatalogToAPIModel(model)
 		if ag, ok := rt.SessionRuntime().Workspace().GetAgent(cfg.Agent); ok && ag != nil {
 			converted.ThinkingDefault = session.AgentThinking(ag.Thinking)
 		}
@@ -722,7 +722,7 @@ func (d *Daemon) PreviewSession(ctx context.Context, rawWS string, req api.Previ
 			Mode:     api.PermissionMode(cfg.Mode),
 		},
 		Model:       resolvedModel,
-		Diagnostics: toSessionDiagnostics(diags),
+		Diagnostics: session.ToSessionDiagnostics(diags),
 	}, nil
 }
 
@@ -739,7 +739,7 @@ func (d *Daemon) ListSessions(ctx context.Context, rawWS string) ([]api.Session,
 
 	out := make([]api.Session, len(list))
 	for i, s := range list {
-		out[i] = toAPISession(s)
+		out[i] = session.ToAPISession(s)
 	}
 	return out, nil
 }
@@ -755,7 +755,7 @@ func (d *Daemon) GetSession(ctx context.Context, rawWS, id string) (*api.Session
 		return nil, err
 	}
 
-	out := toAPISession(sess)
+	out := session.ToAPISession(sess)
 	return &out, nil
 }
 
@@ -778,7 +778,7 @@ func (d *Daemon) UpdateSession(ctx context.Context, rawWS, id string, req api.Up
 		return nil, err
 	}
 
-	out := toAPISession(sess)
+	out := session.ToAPISession(sess)
 	return &out, nil
 }
 
@@ -809,7 +809,7 @@ func (d *Daemon) Timeline(ctx context.Context, rawWS, id string) ([]api.Timeline
 
 	out := make([]api.TimelineEntry, len(entries))
 	for i, e := range entries {
-		apiEntry, err := toAPITimelineEntry(e)
+		apiEntry, err := session.ToAPITimelineEntry(e)
 		if err != nil {
 			return nil, err
 		}
@@ -960,7 +960,7 @@ func (d *Daemon) Tasks(ctx context.Context, rawWS, id string) ([]api.Task, error
 		return []api.Task{}, nil
 	}
 
-	return toAPITasks(sess.Tasks.List()), nil
+	return session.ToAPITasks(sess.Tasks.List()), nil
 }
 
 func (d *Daemon) KillTask(ctx context.Context, rawWS, id, taskID string) error {

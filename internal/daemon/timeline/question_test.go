@@ -19,7 +19,7 @@ func TestQuestionRecordRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Kind != KindQuestion || !reflect.DeepEqual(got.Question, &record) {
+	if got.Kind != api.TimelineKindQuestion || !reflect.DeepEqual(got.Question, &record) {
 		t.Fatalf("unexpected question record: %+v", got.Question)
 	}
 	clone := got.Clone()
