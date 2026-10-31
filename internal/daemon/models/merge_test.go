@@ -93,8 +93,8 @@ func TestMergePricingWholeObject(t *testing.T) {
 	if m.Pricing == nil || m.Pricing.Input != 1 || m.Pricing.Output != 2 || len(m.Pricing.Tiers) != 1 {
 		t.Fatalf("base pricing should be used whole: %+v", m.Pricing)
 	}
-	if m.Pricing.Tiers[0].Condition.Size != 200000 || m.Pricing.Tiers[0].Condition.Type != "context" {
-		t.Fatalf("tier condition: %+v", m.Pricing.Tiers[0].Condition)
+	if m.Pricing.Tiers[0].ConditionSize != 200000 || m.Pricing.Tiers[0].ConditionType != "context" {
+		t.Fatalf("tier condition: %s %d", m.Pricing.Tiers[0].ConditionType, m.Pricing.Tiers[0].ConditionSize)
 	}
 }
 

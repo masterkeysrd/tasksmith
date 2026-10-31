@@ -8,6 +8,7 @@ import (
 
 	"github.com/masterkeysrd/loom/llm"
 	"github.com/masterkeysrd/loom/message"
+	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/metrics"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/models"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/scope"
@@ -49,9 +50,9 @@ func drain(t *testing.T, s llm.Streamer, ctx context.Context) error {
 func TestMetricsMiddlewareTieredCost(t *testing.T) {
 	m := models.Model{
 		ID: "p/m",
-		Pricing: &models.Pricing{
+		Pricing: &api.ModelPricing{
 			Input: 1, Output: 2, CacheRead: 0.5,
-			Tiers: []models.PricingTier{{Label: "long", Condition: models.TierCondition{Type: "context", Size: 1000}, Input: 2, Output: 4, CacheRead: 1}},
+			Tiers: []api.ModelPricingTier{{Label: "long", ConditionType: "context", ConditionSize: 1000, Input: 2, Output: 4, CacheRead: 1}},
 		},
 	}
 	rec := &captureRecorder{}

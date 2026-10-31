@@ -36,7 +36,7 @@ type Config struct {
 	Logger      log.Interface
 	Permissions permissions.Manager
 	ReloadLock  *sync.RWMutex
-	Catalog     func() models.Catalog
+	Catalog     func() *models.Catalog
 	// Metrics receives tool call metrics from session harnesses and reports
 	// per-turn usage for turn summaries. A nil service disables both.
 	Metrics metrics.Service
@@ -68,7 +68,7 @@ func (c Config) Validate() error {
 // Manager coordinates session collection lifecycle.
 type Manager interface {
 	Create(ctx context.Context, params CreateParams) (sess *Session, created bool, err error)
-	Preview(ctx context.Context, config SessionConfig) (SessionConfig, models.Model, []models.Diagnostic, bool, error)
+	Preview(ctx context.Context, config SessionConfig) (SessionConfig, models.Model, []api.SessionDiagnostic, bool, error)
 	Get(ctx context.Context, id string) (*Session, error)
 	List(ctx context.Context) ([]*Session, error)
 	Update(ctx context.Context, id string, params UpdateParams) (*Session, error)
@@ -86,7 +86,7 @@ type manager struct {
 	logger     log.Interface
 	perms      permissions.Manager
 	reloadLock *sync.RWMutex
-	catalog    func() models.Catalog
+	catalog    func() *models.Catalog
 	metrics    metrics.Service
 
 	bgCtx    context.Context
@@ -120,7 +120,7 @@ func New(cfg Config) (Manager, error) {
 		if err != nil {
 			return nil, fmt.Errorf("session: build model catalog: %w", err)
 		}
-		cfg.Catalog = func() models.Catalog { return catalog }
+		cfg.Catalog = func() *models.Catalog { return catalog }
 	}
 	bgCtx, bgCancel := context.WithCancel(context.Background())
 	return &manager{
@@ -148,12 +148,39 @@ func (m *manager) sessionDir(sessionID string) (string, error) {
 	return filepath.Join(wsDir, "sessions", filepath.Base(sessionID)), nil
 }
 
+func (m *manager) resolveAgentModel(agent string, model models.ID) (string, models.ID) {
+	cat := m.workspace.Catalog()
+	if cat == nil {
+		return agent, model
+	}
+	agent = strings.TrimSpace(agent)
+	if agent == "" {
+		agent = cat.DefaultAgentName()
+	}
+	model = models.ID(strings.TrimSpace(string(model)))
+	if model == "" {
+		if resolvedAgent, err := cat.ResolveAgent(agent); err == nil && resolvedAgent != nil && resolvedAgent.Agent != nil && len(resolvedAgent.Agent.Spec.Models) > 0 {
+			if resolved, ok := m.catalog().Resolve(models.RoleCompletion, resolvedAgent.Agent.Spec.Models...); ok {
+				return agent, resolved.ID
+			}
+		}
+	}
+	var explicit []string
+	if model != "" {
+		explicit = []string{string(model)}
+	}
+	if resolved, ok := m.catalog().Resolve(models.RoleCompletion, explicit...); ok {
+		model = resolved.ID
+	}
+	return agent, model
+}
+
 func (m *manager) validateThinking(model models.ID, setting *api.ThinkingSetting) error {
 	resolved, ok := m.catalog().Get(model)
 	if !ok {
 		return fmt.Errorf("%w: model %q unavailable", ErrInvalidConfig, model)
 	}
-	_, _, err := models.Configure(resolved, models.Preferences{SessionThinking: setting})
+	_, _, err := resolved.Configure(models.Settings{Thinking: setting, StrictThinking: true})
 	return err
 }
 
@@ -165,7 +192,7 @@ func (m *manager) matchesParams(s *Session, params CreateParams) error {
 	if wantTitle != "" && s.Title != wantTitle {
 		return ErrSessionConflict
 	}
-	wantAgent, wantModel := models.ResolveAgentModel(m.workspace.Catalog(), m.catalog(), params.Config.Agent, params.Config.Model)
+	wantAgent, wantModel := m.resolveAgentModel(params.Config.Agent, params.Config.Model)
 	if wantAgent != "" && s.Config.Agent != wantAgent {
 		return ErrSessionConflict
 	}
@@ -386,7 +413,7 @@ func (m *manager) resolveConfig(config SessionConfig) (SessionConfig, error) {
 		return SessionConfig{}, fmt.Errorf("%w: unsupported permission mode %q", ErrInvalidConfig, config.Mode)
 	}
 
-	agent, modelID := models.ResolveAgentModel(m.workspace.Catalog(), m.catalog(), config.Agent, config.Model)
+	agent, modelID := m.resolveAgentModel(config.Agent, config.Model)
 	if config.Thinking != nil {
 		if err := m.validateThinking(modelID, config.Thinking); err != nil {
 			return SessionConfig{}, fmt.Errorf("%w: %v", ErrInvalidConfig, err)
@@ -398,7 +425,7 @@ func (m *manager) resolveConfig(config SessionConfig) (SessionConfig, error) {
 	return SessionConfig{Agent: agent, Model: modelID, Thinking: config.Thinking, Mode: mode}, nil
 }
 
-func (m *manager) Preview(ctx context.Context, config SessionConfig) (SessionConfig, models.Model, []models.Diagnostic, bool, error) {
+func (m *manager) Preview(ctx context.Context, config SessionConfig) (SessionConfig, models.Model, []api.SessionDiagnostic, bool, error) {
 	m.reloadLock.RLock()
 	defer m.reloadLock.RUnlock()
 	if err := ctx.Err(); err != nil {
@@ -508,9 +535,9 @@ func (m *manager) Update(ctx context.Context, id string, params UpdateParams) (*
 		newConfig.Agent = agent
 	}
 	if model := models.ID(strings.TrimSpace(string(params.Config.Model))); model != "" {
-		_, newConfig.Model = models.ResolveAgentModel(m.workspace.Catalog(), m.catalog(), newConfig.Agent, model)
+		_, newConfig.Model = m.resolveAgentModel(newConfig.Agent, model)
 	} else if strings.TrimSpace(params.Config.Agent) != "" && sess.Config.Model == "" {
-		_, newConfig.Model = models.ResolveAgentModel(m.workspace.Catalog(), m.catalog(), newConfig.Agent, "")
+		_, newConfig.Model = m.resolveAgentModel(newConfig.Agent, "")
 	}
 	if (oldConfig.Model != newConfig.Model || oldConfig.Agent != newConfig.Agent) && newConfig.Thinking != nil {
 		if err := m.validateThinking(newConfig.Model, newConfig.Thinking); errors.Is(err, models.ErrInvalidConfig) {
@@ -555,7 +582,7 @@ func (m *manager) Update(ctx context.Context, id string, params UpdateParams) (*
 	if oldConfig.Agent != newConfig.Agent || oldConfig.Model != newConfig.Model || !reflect.DeepEqual(oldConfig.Thinking, newConfig.Thinking) {
 		sess.Diagnostics = sess.modelDiagnostics(newConfig)
 		if thinkingCleared {
-			sess.Diagnostics = append(sess.Diagnostics, models.Diagnostic{Code: "thinking_override_cleared", Setting: "thinking", Message: fmt.Sprintf("The thinking override was cleared because it is unsupported by model %q.", newConfig.Model)})
+			sess.Diagnostics = append(sess.Diagnostics, api.SessionDiagnostic{Code: "thinking_override_cleared", Setting: "thinking", Message: fmt.Sprintf("The thinking override was cleared because it is unsupported by model %q.", newConfig.Model)})
 		}
 		sess.Harness = nil
 		sess.configGeneration++

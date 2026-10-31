@@ -40,7 +40,7 @@ import (
 	"github.com/masterkeysrd/warp"
 )
 
-func testCatalog(t *testing.T, ws *workspace.Workspace, entries ...warp.ProviderModel) func() models.Catalog {
+func testCatalog(t *testing.T, ws *workspace.Workspace, entries ...warp.ProviderModel) func() *models.Catalog {
 	t.Helper()
 	reg := warp.NewRegistry(nil)
 	p := &warp.ModelProvider{
@@ -61,7 +61,7 @@ func testCatalog(t *testing.T, ws *workspace.Workspace, entries ...warp.Provider
 	if err != nil {
 		t.Fatal(err)
 	}
-	return func() models.Catalog { return catalog }
+	return func() *models.Catalog { return catalog }
 }
 
 func TestSessionModelDiagnosticsAndRequests(t *testing.T) {
@@ -3028,7 +3028,7 @@ func temperatureSupported(g gateway.Gateway, provider, model string) bool {
 		prof = &base
 	}
 	effective := models.Merge(models.ID(provider+"/"+model), "", nil, prof)
-	resolved, _, err := models.Configure(effective, models.Preferences{Temperature: &value})
+	resolved, _, err := effective.Configure(models.Settings{Temperature: &value})
 	return err == nil && resolved.Temperature != nil
 }
 

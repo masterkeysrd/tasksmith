@@ -41,7 +41,7 @@ func TestThinkingValidationAndConfig(t *testing.T) {
 	model := models.Merge("provider/model", "ollama", nil, prof)
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			resolved, _, err := models.Configure(model, models.Preferences{SessionThinking: &tc.setting})
+			resolved, _, err := model.Configure(models.Settings{Thinking: &tc.setting, StrictThinking: true})
 			if (err == nil) != tc.valid {
 				t.Fatalf("resolve thinking: %v", err)
 			}
@@ -50,8 +50,9 @@ func TestThinkingValidationAndConfig(t *testing.T) {
 			}
 		})
 	}
-	if _, _, err := models.Configure(models.Model{}, models.Preferences{
-		SessionThinking: &api.ThinkingSetting{Type: "toggle"},
+	if _, _, err := (models.Model{}).Configure(models.Settings{
+		Thinking:       &api.ThinkingSetting{Type: "toggle"},
+		StrictThinking: true,
 	}); err == nil {
 		t.Fatal("unknown model must not accept a toggle")
 	}
@@ -60,7 +61,7 @@ func TestThinkingValidationAndConfig(t *testing.T) {
 		{Type: "budget", Budget: 200},
 		{Type: "effort", Effort: "minimal"},
 	} {
-		got, _, err := models.Configure(model, models.Preferences{SessionThinking: &setting})
+		got, _, err := model.Configure(models.Settings{Thinking: &setting, StrictThinking: true})
 		if err != nil || got.Thinking == nil || (setting.Type == "toggle" && got.Thinking.Enabled) ||
 			(setting.Type == "budget" && got.Thinking.Budget != 200) ||
 			(setting.Type == "effort" && got.Thinking.Effort != "minimal") {

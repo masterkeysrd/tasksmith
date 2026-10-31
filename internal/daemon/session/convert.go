@@ -1,17 +1,14 @@
 package session
 
 import (
-	"cmp"
 	"fmt"
 	"maps"
 	"slices"
-	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/masterkeysrd/loom/message"
 	"github.com/masterkeysrd/tasksmith/api"
-	"github.com/masterkeysrd/tasksmith/internal/daemon/models"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tasks"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/timeline"
 )
@@ -43,7 +40,7 @@ func ToAPISession(sess *Session) api.Session {
 	}
 	var resolvedModel *api.Model
 	if m, thinking, ok := sess.ResolvedModel(); ok {
-		converted := CatalogToAPIModel(m)
+		converted := m.ToAPI()
 		converted.ThinkingDefault = thinking
 		resolvedModel = &converted
 	}
@@ -58,7 +55,7 @@ func ToAPISession(sess *Session) api.Session {
 			Mode:     sess.Config.Mode,
 		},
 		Status:             status,
-		Diagnostics:        ToSessionDiagnostics(sess.Diagnostics),
+		Diagnostics:        slices.Clone(sess.Diagnostics),
 		Context:            ctxState,
 		PendingPermissions: perms,
 		PendingQuestions:   questions,
@@ -68,16 +65,6 @@ func ToAPISession(sess *Session) api.Session {
 		CreatedAt:          sess.CreatedAt,
 		UpdatedAt:          sess.UpdatedAt,
 	}
-}
-
-// ToSessionDiagnostics converts internal model diagnostics into the public
-// representation used by the API.
-func ToSessionDiagnostics(in []models.Diagnostic) []api.SessionDiagnostic {
-	out := make([]api.SessionDiagnostic, len(in))
-	for i, d := range in {
-		out[i] = api.SessionDiagnostic{Code: d.Code, Setting: d.Setting, Message: d.Message}
-	}
-	return out
 }
 
 func toAPIQueueItems(items []QueueItem) []api.QueueItem {
@@ -355,92 +342,3 @@ func ToAPITimelineEntry(entry timeline.Entry) (api.TimelineEntry, error) {
 	return out, nil
 }
 
-// ToAPIThinkingValues projects a list of thinking option values onto the public
-// [api.ThinkingValue] representation, attaching human-readable descriptions for
-// known reasoning-effort levels.
-func ToAPIThinkingValues(kind string, values []string) []api.ThinkingValue {
-	if len(values) == 0 {
-		return nil
-	}
-	out := make([]api.ThinkingValue, len(values))
-	for i, value := range values {
-		out[i].Value = value
-		if strings.EqualFold(kind, "effort") {
-			switch strings.ToLower(strings.TrimSpace(value)) {
-			case "none":
-				out[i].Description = "Requests no reasoning effort, where supported."
-			case "minimal":
-				out[i].Description = "Minimal reasoning; potentially faster."
-			case "low":
-				out[i].Description = "Less reasoning; potentially faster."
-			case "medium":
-				out[i].Description = "Balances reasoning depth and speed."
-			case "high":
-				out[i].Description = "More reasoning; potentially slower."
-			case "xhigh":
-				out[i].Description = "More extensive reasoning; potentially slower."
-			case "max":
-				out[i].Description = "Maximum reasoning; potentially slower."
-			case "auto":
-				out[i].Description = "Lets the provider choose the reasoning effort."
-			}
-		}
-	}
-	return out
-}
-
-// CatalogToAPIModel projects an internal catalog [models.Model] onto the public
-// [api.Model] representation used by the API.
-func CatalogToAPIModel(m models.Model) api.Model {
-	out := api.Model{
-		ID:           string(m.ID),
-		Provider:     m.ID.Provider(),
-		Name:         m.Name,
-		Label:        cmp.Or(m.Label, m.Name),
-		ContextLimit: m.Limits.Context,
-		OutputLimit:  m.Limits.Output,
-		Capabilities: api.ModelCapabilities{
-			Completion:       m.Capabilities.Completion,
-			Decision:         m.Capabilities.Decision,
-			Embedding:        m.Capabilities.Embedding,
-			Tools:            m.Capabilities.Tools,
-			Attachment:       m.Capabilities.Attachment,
-			StructuredOutput: m.Capabilities.StructuredOutput,
-			Temperature:      m.Capabilities.Temperature,
-			Dimensions:       slices.Clone(m.Capabilities.Dimensions),
-			InputModalities:  slices.Clone(m.Modalities.Input),
-			OutputModalities: slices.Clone(m.Modalities.Output),
-		},
-	}
-	for _, o := range m.Capabilities.Thinking {
-		out.Thinking = append(out.Thinking, api.ThinkingCapability{
-			Type:    o.Type,
-			Values:  ToAPIThinkingValues(o.Type, o.Values),
-			Default: o.Default,
-			Min:     o.Min,
-			Max:     o.Max,
-		})
-	}
-	if p := m.Pricing; p != nil {
-		out.Pricing = &api.ModelPricing{
-			Input:      p.Input,
-			Output:     p.Output,
-			CacheRead:  p.CacheRead,
-			CacheWrite: p.CacheWrite,
-			Reasoning:  p.Reasoning,
-		}
-		for _, t := range p.Tiers {
-			out.Pricing.Tiers = append(out.Pricing.Tiers, api.ModelPricingTier{
-				Label:         t.Label,
-				ConditionType: t.Condition.Type,
-				ConditionSize: t.Condition.Size,
-				Input:         t.Input,
-				Output:        t.Output,
-				CacheRead:     t.CacheRead,
-				CacheWrite:    t.CacheWrite,
-				Reasoning:     t.Reasoning,
-			})
-		}
-	}
-	return out
-}

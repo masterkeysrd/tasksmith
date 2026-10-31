@@ -4,17 +4,34 @@ import (
 	"testing"
 
 	"github.com/masterkeysrd/loom/profile"
-	"github.com/masterkeysrd/tasksmith/internal/daemon/workspace"
 	"github.com/masterkeysrd/warp"
 )
 
-func testCatalogFromProviders(providers ...*warp.ModelProvider) *workspace.Catalog {
-	reg := warp.NewRegistry(nil)
-	for _, p := range providers {
-		p.Namespace = warp.NamespaceWorkspace
-		reg.Set(p.QualifiedName(), p)
+type stubCatalog struct {
+	providers []*warp.ModelProvider
+}
+
+func (s *stubCatalog) Providers() []*warp.ModelProvider {
+	return s.providers
+}
+
+func (s *stubCatalog) ResolveModels(role warp.ModelRole, explicit ...string) []warp.ResolvedModel {
+	if len(explicit) > 0 && explicit[0] != "" {
+		return []warp.ResolvedModel{{QualifiedID: explicit[0]}}
 	}
-	return workspace.NewCatalog(reg, "/test", "/test")
+	for _, p := range s.providers {
+		if p.Spec.DefaultModel != "" {
+			return []warp.ResolvedModel{{QualifiedID: Normalize(p.Metadata.Name, p.Spec.DefaultModel).String()}}
+		}
+		if len(p.Spec.Models) > 0 {
+			return []warp.ResolvedModel{{QualifiedID: Normalize(p.Metadata.Name, p.Spec.Models[0].ID).String()}}
+		}
+	}
+	return nil
+}
+
+func testCatalogFromProviders(providers ...*warp.ModelProvider) *stubCatalog {
+	return &stubCatalog{providers: providers}
 }
 
 type fakeBase struct {
@@ -45,8 +62,9 @@ func TestCatalogLazyAndListedOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if base.calls != 0 {
-		t.Fatalf("build queried profiles %d times", base.calls)
+	// Listed models are merged eagerly at Build time.
+	if base.calls != 1 {
+		t.Fatalf("build queried profiles %d times, want 1", base.calls)
 	}
 	if _, ok := c.Get("invalid"); ok {
 		t.Fatal("invalid id accepted")
@@ -57,16 +75,18 @@ func TestCatalogLazyAndListedOnly(t *testing.T) {
 			t.Fatalf("listed model: %+v, %v", m, ok)
 		}
 	}
+	// Calling Get on pre-built listed model does not query profile again.
 	if base.calls != 1 {
-		t.Fatalf("listed model queried %d times", base.calls)
+		t.Fatalf("listed model queried %d times, want 1", base.calls)
 	}
 	c.Get("local/unlisted")
 	list := c.List()
 	if len(list) != 1 || list[0].ID != "local/listed" {
 		t.Fatalf("unexpected list: %+v", list)
 	}
+	// Unlisted model queries profile on demand.
 	if base.calls != 2 {
-		t.Fatalf("unexpected profile calls: %d", base.calls)
+		t.Fatalf("unexpected profile calls: %d, want 2", base.calls)
 	}
 }
 
@@ -241,7 +261,7 @@ func TestCatalogResolve(t *testing.T) {
 	}
 
 	// Empty catalog: Resolve returns false.
-	emptyCat := workspace.NewCatalog(warp.NewRegistry(nil), "/test", "/test")
+	emptyCat := &stubCatalog{}
 	cEmpty, err := Build(emptyCat, base)
 	if err != nil {
 		t.Fatal(err)

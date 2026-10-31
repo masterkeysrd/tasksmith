@@ -45,7 +45,7 @@ func TestProfileRoundTrip(t *testing.T) {
 	if m.Pricing == nil || m.Pricing.Input != 1 || m.Pricing.Reasoning != 0.3 || len(m.Pricing.Tiers) != 1 {
 		t.Fatalf("pricing: %+v", m.Pricing)
 	}
-	if m.Pricing.Tiers[0].Condition.Size != 200000 {
+	if m.Pricing.Tiers[0].ConditionSize != 200000 {
 		t.Fatalf("tier: %+v", m.Pricing.Tiers[0])
 	}
 

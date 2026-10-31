@@ -29,7 +29,7 @@ func TestConfigureTemperature(t *testing.T) {
 				m.Capabilities.Temperature = tc.temp
 			}
 			zero := float32(0)
-			cfg, diags, err := Configure(m, Preferences{Temperature: &zero})
+			cfg, diags, err := m.Configure(Settings{Temperature: &zero})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -57,29 +57,26 @@ func TestConfigureThinking(t *testing.T) {
 		},
 	}
 
-	// Valid agent thinking is applied.
-	cfg, _, err := Configure(m, Preferences{AgentThinking: &api.ThinkingSetting{Type: "effort", Effort: "low"}})
+	// Valid thinking is applied.
+	cfg, _, err := m.Configure(Settings{Thinking: &api.ThinkingSetting{Type: "effort", Effort: "low"}})
 	if err != nil || cfg.Thinking == nil || cfg.Thinking.Effort != "low" {
 		t.Fatalf("agent thinking: %+v err=%v", cfg, err)
 	}
 
-	// Unsupported agent thinking becomes a diagnostic, not an error.
-	cfg, diags, err := Configure(m, Preferences{AgentThinking: &api.ThinkingSetting{Type: "effort", Effort: "high"}})
+	// Unsupported thinking with StrictThinking=false becomes a diagnostic, not an error.
+	cfg, diags, err := m.Configure(Settings{Thinking: &api.ThinkingSetting{Type: "effort", Effort: "high"}, StrictThinking: false})
 	if err != nil || cfg.Thinking != nil || len(diags) != 1 || diags[0].Code != "thinking_unsupported" {
 		t.Fatalf("agent thinking diagnostic: %+v diags=%+v err=%v", cfg, diags, err)
 	}
 
-	// Unsupported explicit session thinking is an error.
-	_, _, err = Configure(m, Preferences{SessionThinking: &api.ThinkingSetting{Type: "effort", Effort: "high"}})
+	// Unsupported thinking with StrictThinking=true is an error.
+	_, _, err = m.Configure(Settings{Thinking: &api.ThinkingSetting{Type: "effort", Effort: "high"}, StrictThinking: true})
 	if !errors.Is(err, ErrInvalidConfig) {
 		t.Fatalf("session thinking should error: %v", err)
 	}
 
-	// Session thinking overrides agent thinking.
-	cfg, _, err = Configure(m, Preferences{
-		AgentThinking:   &api.ThinkingSetting{Type: "effort", Effort: "low"},
-		SessionThinking: &api.ThinkingSetting{Type: "effort", Effort: "low"},
-	})
+	// Valid strict thinking is applied.
+	cfg, _, err = m.Configure(Settings{Thinking: &api.ThinkingSetting{Type: "effort", Effort: "low"}, StrictThinking: true})
 	if err != nil || cfg.Thinking == nil || cfg.Thinking.Effort != "low" {
 		t.Fatalf("session override: %+v err=%v", cfg, err)
 	}
@@ -98,7 +95,11 @@ func TestConfigureAnthropicThinkingTemperatureConflict(t *testing.T) {
 	v := float32(0.5)
 	// A supported budget thinking combined with temperature on Anthropic is a
 	// conflict: the temperature is dropped with a diagnostic.
-	cfg, diags, err := Configure(m, Preferences{Temperature: &v, SessionThinking: &api.ThinkingSetting{Type: "budget_tokens", Budget: 1024}})
+	cfg, diags, err := m.Configure(Settings{
+		Temperature:    &v,
+		Thinking:       &api.ThinkingSetting{Type: "budget_tokens", Budget: 1024},
+		StrictThinking: true,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}

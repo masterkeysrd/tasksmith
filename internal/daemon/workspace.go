@@ -24,16 +24,16 @@ import (
 
 type catalogSlot struct {
 	mu    sync.RWMutex
-	value models.Catalog
+	value *models.Catalog
 }
 
-func (s *catalogSlot) get() models.Catalog {
+func (s *catalogSlot) get() *models.Catalog {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.value
 }
 
-func (s *catalogSlot) set(c models.Catalog) {
+func (s *catalogSlot) set(c *models.Catalog) {
 	s.mu.Lock()
 	s.value = c
 	s.mu.Unlock()
@@ -73,7 +73,7 @@ type workspaceRuntime struct {
 func (r *workspaceRuntime) Dir() string                       { return r.dir }
 func (r *workspaceRuntime) Workspace() *workspace.Workspace   { return r.ws }
 func (r *workspaceRuntime) Gateway() gateway.Gateway          { return r.gw.get() }
-func (r *workspaceRuntime) Catalog() models.Catalog           { return r.catalog.get() }
+func (r *workspaceRuntime) Catalog() *models.Catalog          { return r.catalog.get() }
 func (r *workspaceRuntime) Permissions() permissions.Manager  { return r.perms }
 func (r *workspaceRuntime) Sessions() session.Manager         { return r.sessions }
 func (r *workspaceRuntime) SessionRuntime() *workspaceRuntime { return r.sessionOwner }

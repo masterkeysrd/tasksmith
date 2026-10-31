@@ -37,7 +37,7 @@ func TestCatalogModelProjection(t *testing.T) {
 		Capabilities: profile.Capabilities{ToolCall: true},
 		Pricing:      profile.Pricing{Input: 1, Output: 2},
 	})
-	got := session.CatalogToAPIModel(m)
+	got := m.ToAPI()
 	if got.Label != "Friendly" || got.ContextLimit != 5000 || got.OutputLimit != 700 ||
 		got.Capabilities.Tools == nil || *got.Capabilities.Tools {
 		t.Fatalf("unexpected effective model: %+v", got)
@@ -50,7 +50,7 @@ func TestCatalogModelProjection(t *testing.T) {
 
 func TestThinkingDescriptions(t *testing.T) {
 	values := []string{"none", "minimal", "low", "medium", "high", "xhigh", "max", "auto", "custom", "HIGH"}
-	got := session.ToAPIThinkingValues("effort", values)
+	got := models.ToAPIThinkingValues("effort", values)
 	for i, value := range values {
 		if got[i].Value != value {
 			t.Fatalf("value %d changed: %+v", i, got[i])
@@ -59,28 +59,28 @@ func TestThinkingDescriptions(t *testing.T) {
 			t.Fatalf("unexpected description for %q: %q", value, got[i].Description)
 		}
 	}
-	if other := session.ToAPIThinkingValues("toggle", []string{"high"}); other[0].Description != "" {
+	if other := models.ToAPIThinkingValues("toggle", []string{"high"}); other[0].Description != "" {
 		t.Fatalf("non-effort value received a hint: %+v", other)
 	}
-	model := session.CatalogToAPIModel(models.Merge("test/model", "test", &warp.ProviderModel{
+	model := models.Merge("test/model", "test", &warp.ProviderModel{
 		ID: "model",
 		Capabilities: &warp.ProviderModelCapabilities{
 			Thinking: []warp.ProviderModelThinkingCapability{
 				{Type: "effort", AllowedEfforts: values},
 			},
 		},
-	}, nil))
+	}, nil).ToAPI()
 	if len(model.Thinking) != 1 || len(model.Thinking[0].Values) != len(values) ||
 		model.Thinking[0].Values[2].Description == "" {
 		t.Fatalf("workspace model missing descriptions: %+v", model.Thinking)
 	}
-	model = session.CatalogToAPIModel(models.Merge("test/model", "test", nil, &profile.Profile{
+	model = models.Merge("test/model", "test", nil, &profile.Profile{
 		Capabilities: profile.Capabilities{
 			ReasoningOptions: []profile.ReasoningOption{
 				{Type: "effort", Values: values},
 			},
 		},
-	}))
+	}).ToAPI()
 	if len(model.Thinking) != 1 || len(model.Thinking[0].Values) != len(values) ||
 		model.Thinking[0].Values[2].Description == "" || model.Thinking[0].Values[8].Description != "" {
 		t.Fatalf("profile model has incorrect descriptions: %+v", model.Thinking)
@@ -91,7 +91,7 @@ func TestSessionDiagnosticsConversion(t *testing.T) {
 	sess := &session.Session{
 		ID:    "test",
 		State: session.NewState(),
-		Diagnostics: []models.Diagnostic{
+		Diagnostics: []api.SessionDiagnostic{
 			{
 				Code:    "temperature_unsupported",
 				Setting: "temperature",
@@ -318,7 +318,7 @@ func TestToAPIModelWithSlashInID(t *testing.T) {
 			Output:  32768,
 		},
 	}
-	got := session.CatalogToAPIModel(models.Merge("mlx-serve/"+models.ID(pm.ID), "openai", &pm, nil))
+	got := models.Merge("mlx-serve/"+models.ID(pm.ID), "openai", &pm, nil).ToAPI()
 	if got.ID != "mlx-serve/ddalcu/Qwen3.8-27B-MLX-Serve-4bit" {
 		t.Errorf("got.ID = %q, want %q", got.ID, "mlx-serve/ddalcu/Qwen3.8-27B-MLX-Serve-4bit")
 	}

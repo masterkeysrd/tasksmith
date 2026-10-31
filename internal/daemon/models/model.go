@@ -1,5 +1,14 @@
 package models
 
+import (
+	"cmp"
+	"slices"
+	"strings"
+
+	"github.com/masterkeysrd/tasksmith/api"
+	"github.com/masterkeysrd/tasksmith/internal/core/ptr"
+)
+
 // Model is the complete, effective description of a model in a workspace.
 // It is immutable once built.
 type Model struct {
@@ -19,9 +28,110 @@ type Model struct {
 	// Modalities holds the supported input and output data modalities.
 	Modalities Modalities
 	// Pricing is the per-million-token pricing. nil means unpriced.
-	Pricing *Pricing
+	Pricing *api.ModelPricing
 	// Source records where the model's data came from.
 	Source Source
+}
+
+// Clone returns a deep copy of m.
+func (m Model) Clone() Model {
+	m.Capabilities.Completion = ptr.Clone(m.Capabilities.Completion)
+	m.Capabilities.Decision = ptr.Clone(m.Capabilities.Decision)
+	m.Capabilities.Embedding = ptr.Clone(m.Capabilities.Embedding)
+	m.Capabilities.Tools = ptr.Clone(m.Capabilities.Tools)
+	m.Capabilities.Attachment = ptr.Clone(m.Capabilities.Attachment)
+	m.Capabilities.StructuredOutput = ptr.Clone(m.Capabilities.StructuredOutput)
+	m.Capabilities.Temperature = ptr.Clone(m.Capabilities.Temperature)
+	m.Capabilities.Dimensions = slices.Clone(m.Capabilities.Dimensions)
+	if m.Capabilities.Thinking != nil {
+		th := make([]ThinkingOption, len(m.Capabilities.Thinking))
+		for i, opt := range m.Capabilities.Thinking {
+			opt.Values = slices.Clone(opt.Values)
+			th[i] = opt
+		}
+		m.Capabilities.Thinking = th
+	}
+	m.Modalities.Input = slices.Clone(m.Modalities.Input)
+	m.Modalities.Output = slices.Clone(m.Modalities.Output)
+	if m.Pricing != nil {
+		pricing := *m.Pricing
+		pricing.Tiers = slices.Clone(pricing.Tiers)
+		m.Pricing = &pricing
+	}
+	return m
+}
+
+// ToAPI projects an internal catalog [Model] onto the public [api.Model] representation.
+func (m Model) ToAPI() api.Model {
+	out := api.Model{
+		ID:           string(m.ID),
+		Provider:     m.ID.Provider(),
+		Name:         m.Name,
+		Label:        cmp.Or(m.Label, m.Name),
+		ContextLimit: m.Limits.Context,
+		OutputLimit:  m.Limits.Output,
+		Capabilities: api.ModelCapabilities{
+			Completion:       ptr.Clone(m.Capabilities.Completion),
+			Decision:         ptr.Clone(m.Capabilities.Decision),
+			Embedding:        ptr.Clone(m.Capabilities.Embedding),
+			Tools:            ptr.Clone(m.Capabilities.Tools),
+			Attachment:       ptr.Clone(m.Capabilities.Attachment),
+			StructuredOutput: ptr.Clone(m.Capabilities.StructuredOutput),
+			Temperature:      ptr.Clone(m.Capabilities.Temperature),
+			Dimensions:       slices.Clone(m.Capabilities.Dimensions),
+			InputModalities:  slices.Clone(m.Modalities.Input),
+			OutputModalities: slices.Clone(m.Modalities.Output),
+		},
+	}
+	for _, o := range m.Capabilities.Thinking {
+		out.Thinking = append(out.Thinking, api.ThinkingCapability{
+			Type:    o.Type,
+			Values:  ToAPIThinkingValues(o.Type, o.Values),
+			Default: o.Default,
+			Min:     o.Min,
+			Max:     o.Max,
+		})
+	}
+	if p := m.Pricing; p != nil {
+		pricing := *p
+		pricing.Tiers = slices.Clone(p.Tiers)
+		out.Pricing = &pricing
+	}
+	return out
+}
+
+// ToAPIThinkingValues projects a list of thinking option values onto the public
+// [api.ThinkingValue] representation, attaching human-readable descriptions for
+// known reasoning-effort levels.
+func ToAPIThinkingValues(kind string, values []string) []api.ThinkingValue {
+	if len(values) == 0 {
+		return nil
+	}
+	out := make([]api.ThinkingValue, len(values))
+	for i, value := range values {
+		out[i].Value = value
+		if strings.EqualFold(kind, "effort") {
+			switch strings.ToLower(strings.TrimSpace(value)) {
+			case "none":
+				out[i].Description = "Requests no reasoning effort, where supported."
+			case "minimal":
+				out[i].Description = "Minimal reasoning; potentially faster."
+			case "low":
+				out[i].Description = "Less reasoning; potentially faster."
+			case "medium":
+				out[i].Description = "Balances reasoning depth and speed."
+			case "high":
+				out[i].Description = "More reasoning; potentially slower."
+			case "xhigh":
+				out[i].Description = "More extensive reasoning; potentially slower."
+			case "max":
+				out[i].Description = "Maximum reasoning; potentially slower."
+			case "auto":
+				out[i].Description = "Lets the provider choose the reasoning effort."
+			}
+		}
+	}
+	return out
 }
 
 // Limits defines token and vector-dimension limits for a model.
@@ -98,33 +208,6 @@ type ThinkingOption struct {
 type Modalities struct {
 	Input  []string
 	Output []string
-}
-
-// Pricing is per million tokens, in USD.
-type Pricing struct {
-	Input      float64
-	Output     float64
-	CacheRead  float64
-	CacheWrite float64
-	Reasoning  float64
-	Tiers      []PricingTier
-}
-
-// PricingTier is a conditional pricing override.
-type PricingTier struct {
-	Label      string
-	Condition  TierCondition
-	Input      float64
-	Output     float64
-	CacheRead  float64
-	CacheWrite float64
-	Reasoning  float64
-}
-
-// TierCondition is a pricing tier trigger, e.g. {Type: "context", Size: 200000}.
-type TierCondition struct {
-	Type string
-	Size int
 }
 
 // Source records where the model's data came from.

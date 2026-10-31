@@ -83,11 +83,11 @@ type Session struct {
 	// the Session and State.
 	*State `json:"state"`
 
-	ID          string              `json:"id"`
-	Title       string              `json:"title"`
-	Config      SessionConfig       `json:"config"`
-	Diagnostics []models.Diagnostic `json:"diagnostics,omitempty"`
-	CreatedAt   time.Time           `json:"created_at"`
+	ID          string                 `json:"id"`
+	Title       string                 `json:"title"`
+	Config      SessionConfig          `json:"config"`
+	Diagnostics []api.SessionDiagnostic `json:"diagnostics,omitempty"`
+	CreatedAt   time.Time              `json:"created_at"`
 	UpdatedAt   time.Time           `json:"updated_at"`
 
 	Permissions permissions.Permissions    `json:"-"`
@@ -115,7 +115,7 @@ type Session struct {
 	store      *store                `json:"-"`
 	workspace  *workspace.Workspace  `json:"-"`
 	gateway    func() gateway.Gateway `json:"-"`
-	catalog    func() models.Catalog `json:"-"`
+	catalog    func() *models.Catalog `json:"-"`
 	metrics    metrics.Service       `json:"-"`
 	reloadLock *sync.RWMutex         `json:"-"`
 	publisher  Publisher             `json:"-"`
@@ -310,7 +310,7 @@ func (s *Session) buildHarness(ctx context.Context) (harness.Harness, error) {
 		return nil, fmt.Errorf("session: model %q unavailable", modelName)
 	}
 	settings := s.modelSettings(config)
-	cfg, _, err := models.Configure(model, settings)
+	cfg, _, err := model.Configure(settings)
 	if err != nil {
 		return nil, fmt.Errorf("session: configure model %q: %w", modelName, err)
 	}
@@ -1586,7 +1586,7 @@ func (s *Session) generateTitle(userText string) {
 			return false
 		}
 		settings := s.modelSettings(SessionConfig{Agent: workspace.AgentNameTitleGenerator})
-		cfg, _, err := models.Configure(effective, settings)
+		cfg, _, err := effective.Configure(settings)
 		if err == nil {
 			llmModel, err = s.gateway().LLM(ctx, effective, cfg)
 		}

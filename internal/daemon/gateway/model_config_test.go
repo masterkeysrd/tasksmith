@@ -38,7 +38,7 @@ func TestEffectiveTemperatureConfig(t *testing.T) {
 			effective := models.Merge("provider/model", "ollama", spec, tc.base)
 			g := &gatewayImpl{providers: map[string]*providerInstance{"provider": {cfg: ProviderConfig{Name: "provider", Type: "ollama"}, llmProv: p}}}
 			zero := float32(0)
-			resolved, diagnostics, err := models.Configure(effective, models.Preferences{Temperature: &zero})
+			resolved, diagnostics, err := effective.Configure(models.Settings{Temperature: &zero})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -81,18 +81,18 @@ func TestEffectiveProfileAndSettings(t *testing.T) {
 		t.Fatalf("effective profile: %+v", p)
 	}
 	value := float32(0)
-	settings := models.Preferences{Temperature: &value, AgentThinking: &api.ThinkingSetting{Type: "effort", Effort: "low"}, SessionThinking: &api.ThinkingSetting{Type: "effort", Effort: "high"}}
-	resolved, diagnostics, err := models.Configure(model, settings)
+	settings := models.Settings{Temperature: &value, Thinking: &api.ThinkingSetting{Type: "effort", Effort: "high"}, StrictThinking: true}
+	resolved, diagnostics, err := model.Configure(settings)
 	if err != nil || model.Capabilities.StructuredOutput == nil || !*model.Capabilities.StructuredOutput || len(model.Capabilities.Dimensions) != 2 || resolved.Thinking == nil || resolved.Thinking.Effort != "high" || resolved.Temperature != nil {
 		t.Fatalf("effective settings: %+v, %+v, %v", resolved, diagnostics, err)
 	}
-	settings.SessionThinking = nil
-	resolved, diagnostics, err = models.Configure(model, settings)
+	settings = models.Settings{Temperature: &value, Thinking: &api.ThinkingSetting{Type: "effort", Effort: "low"}, StrictThinking: false}
+	resolved, diagnostics, err = model.Configure(settings)
 	if err != nil || resolved.Thinking != nil || len(diagnostics) != 2 || diagnostics[0].Code != "thinking_unsupported" {
 		t.Fatalf("unsupported agent defaults: %+v, %+v, %v", resolved, diagnostics, err)
 	}
-	settings.SessionThinking = &api.ThinkingSetting{Type: "effort", Effort: "low"}
-	if _, _, err := models.Configure(model, settings); err == nil {
+	settings = models.Settings{Temperature: &value, Thinking: &api.ThinkingSetting{Type: "effort", Effort: "low"}, StrictThinking: true}
+	if _, _, err := model.Configure(settings); err == nil {
 		t.Fatal("unsupported explicit thinking accepted")
 	}
 }
@@ -189,7 +189,7 @@ func TestRequestContentValidation(t *testing.T) {
 func TestAnthropicThinkingTemperatureConflict(t *testing.T) {
 	v := float32(0.5)
 	m := models.Model{ProviderType: "anthropic", Capabilities: models.Capabilities{Temperature: new(true), Thinking: []models.ThinkingOption{{Type: "budget_tokens", Min: 1, Max: 4096}}}}
-	cfg, diagnostics, err := models.Configure(m, models.Preferences{Temperature: &v, SessionThinking: &api.ThinkingSetting{Type: "budget", Budget: 1024}})
+	cfg, diagnostics, err := m.Configure(models.Settings{Temperature: &v, Thinking: &api.ThinkingSetting{Type: "budget", Budget: 1024}, StrictThinking: true})
 	if err != nil || cfg.Temperature != nil || len(diagnostics) != 1 || diagnostics[0].Code != "temperature_thinking_conflict" {
 		t.Fatalf("result: %+v, %+v, %v", cfg, diagnostics, err)
 	}

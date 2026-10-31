@@ -1,6 +1,9 @@
 package models
 
-import "github.com/masterkeysrd/loom/profile"
+import (
+	"github.com/masterkeysrd/loom/profile"
+	"github.com/masterkeysrd/tasksmith/api"
+)
 
 // Profile derives the loom profile view of the model. It is the only conversion
 // from TaskSmith to loom and is computed on demand; the result is never stored.
@@ -52,7 +55,7 @@ func (m Model) toLoomPricing() profile.Pricing {
 				CacheWrite: t.CacheWrite,
 				Reasoning:  t.Reasoning,
 				Label:      t.Label,
-				Condition:  profile.TierCondition{Type: profile.TierConditionType(t.Condition.Type), Size: t.Condition.Size},
+				Condition:  profile.TierCondition{Type: profile.TierConditionType(t.ConditionType), Size: t.ConditionSize},
 			})
 		}
 	}
@@ -93,7 +96,7 @@ func fromProfile(base *profile.Profile, id ID, providerType string) Model {
 		m.Modalities.Output = modalitySlice(base.Modalities.Outputs)
 	}
 	if hasPricing(base.Pricing) {
-		m.Pricing = &Pricing{
+		m.Pricing = &api.ModelPricing{
 			Input:      base.Pricing.Input,
 			Output:     base.Pricing.Output,
 			CacheRead:  base.Pricing.CacheRead,
@@ -101,14 +104,15 @@ func fromProfile(base *profile.Profile, id ID, providerType string) Model {
 			Reasoning:  base.Pricing.Reasoning,
 		}
 		for _, t := range base.Pricing.TieredLimits {
-			m.Pricing.Tiers = append(m.Pricing.Tiers, PricingTier{
-				Label:      t.Label,
-				Condition:  TierCondition{Type: string(t.Condition.Type), Size: t.Condition.Size},
-				Input:      t.Input,
-				Output:     t.Output,
-				CacheRead:  t.CacheRead,
-				CacheWrite: t.CacheWrite,
-				Reasoning:  t.Reasoning,
+			m.Pricing.Tiers = append(m.Pricing.Tiers, api.ModelPricingTier{
+				Label:         t.Label,
+				ConditionType: string(t.Condition.Type),
+				ConditionSize: t.Condition.Size,
+				Input:         t.Input,
+				Output:        t.Output,
+				CacheRead:     t.CacheRead,
+				CacheWrite:    t.CacheWrite,
+				Reasoning:     t.Reasoning,
 			})
 		}
 	}

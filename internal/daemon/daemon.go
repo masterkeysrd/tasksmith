@@ -28,7 +28,6 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/daemon/server"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/session"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tasks"
-	"github.com/masterkeysrd/tasksmith/internal/daemon/workspace"
 )
 
 // Sentinel errors returned by the daemon package.
@@ -398,7 +397,20 @@ func (d *Daemon) GetWorkspace(ctx context.Context, rawWS string) (*api.Workspace
 	}
 
 	owner := rt.SessionRuntime()
-	resolvedDefault := draftModel(owner.Workspace().Catalog(), owner.Catalog(), "", "")
+	var resolvedDefault *api.Model
+	cat := owner.Workspace().Catalog()
+	defaultAgent := cat.DefaultAgentName()
+	var candidates []string
+	if resolvedAgent, err := cat.ResolveAgent(defaultAgent); err == nil && resolvedAgent != nil && resolvedAgent.Agent != nil {
+		candidates = resolvedAgent.Agent.Spec.Models
+	}
+	if model, ok := owner.Catalog().Resolve(models.RoleCompletion, candidates...); ok {
+		converted := model.ToAPI()
+		if ag, ok := cat.GetAgent(defaultAgent); ok {
+			converted.ThinkingDefault = ag.Thinking
+		}
+		resolvedDefault = &converted
+	}
 
 	cleanDir, _ := fsutils.CleanPath(rawWS)
 
@@ -422,22 +434,6 @@ func (d *Daemon) GetWorkspace(ctx context.Context, rawWS string) (*api.Workspace
 		DefaultModel: resolvedDefault,
 		Warnings:     warnings,
 	}, nil
-}
-
-func draftModel(cat *workspace.Catalog, catalog models.Catalog, agent, id string) *api.Model {
-	agent, selected := models.ResolveAgentModel(cat, catalog, agent, models.ID(id))
-	if !selected.Valid() {
-		return nil
-	}
-	model, ok := catalog.Get(selected)
-	if !ok {
-		return nil
-	}
-	converted := session.CatalogToAPIModel(model)
-	if ag, ok := cat.GetAgent(agent); ok {
-		converted.ThinkingDefault = ag.Thinking
-	}
-	return &converted
 }
 
 func (d *Daemon) ReloadWorkspace(ctx context.Context, rawWS string) error {
@@ -563,7 +559,7 @@ func (d *Daemon) ListModels(ctx context.Context, rawWS string) ([]api.Model, err
 	listed := rt.Catalog().List()
 	out := make([]api.Model, 0, len(listed))
 	for _, m := range listed {
-		out = append(out, session.CatalogToAPIModel(m))
+		out = append(out, m.ToAPI())
 	}
 	return out, nil
 }
@@ -593,7 +589,7 @@ func (d *Daemon) GetModel(ctx context.Context, rawWS, id string) (*api.Model, er
 	if !ok {
 		return &api.Model{ID: id, Name: id, Label: id}, nil
 	}
-	m := session.CatalogToAPIModel(model)
+	m := model.ToAPI()
 	return &m, nil
 }
 
@@ -700,7 +696,7 @@ func (d *Daemon) PreviewSession(ctx context.Context, rawWS string, req api.Previ
 
 	var resolvedModel *api.Model
 	if hasModel {
-		converted := session.CatalogToAPIModel(model)
+		converted := model.ToAPI()
 		if ag, ok := rt.SessionRuntime().Workspace().Catalog().GetAgent(cfg.Agent); ok {
 			converted.ThinkingDefault = ag.Thinking
 		}
@@ -715,7 +711,7 @@ func (d *Daemon) PreviewSession(ctx context.Context, rawWS string, req api.Previ
 			Mode:     api.PermissionMode(cfg.Mode),
 		},
 		Model:       resolvedModel,
-		Diagnostics: session.ToSessionDiagnostics(diags),
+		Diagnostics: diags,
 	}, nil
 }
 

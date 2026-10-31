@@ -2,9 +2,12 @@ package models
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/masterkeysrd/loom/profile"
+	"github.com/masterkeysrd/tasksmith/api"
+	"github.com/masterkeysrd/tasksmith/internal/core/ptr"
 	"github.com/masterkeysrd/warp"
 )
 
@@ -127,38 +130,39 @@ func fromManifest(manifest *warp.ProviderModel, id ID, providerType string) Mode
 	if manifest.Capabilities != nil {
 		c := manifest.Capabilities
 		m.Capabilities = Capabilities{
-			Completion:       cloneBoolPtr(c.Completion),
-			Decision:         cloneBoolPtr(c.Decision),
-			Embedding:        cloneBoolPtr(c.Embedding),
-			Tools:            cloneBoolPtr(c.Tools),
-			Attachment:       cloneBoolPtr(c.Attachment),
-			StructuredOutput: cloneBoolPtr(c.StructuredOutput),
-			Temperature:      cloneBoolPtr(c.Temperature),
-			Dimensions:       cloneInts(c.Dimensions),
+			Completion:       ptr.Clone(c.Completion),
+			Decision:         ptr.Clone(c.Decision),
+			Embedding:        ptr.Clone(c.Embedding),
+			Tools:            ptr.Clone(c.Tools),
+			Attachment:       ptr.Clone(c.Attachment),
+			StructuredOutput: ptr.Clone(c.StructuredOutput),
+			Temperature:      ptr.Clone(c.Temperature),
+			Dimensions:       slices.Clone(c.Dimensions),
 			Thinking:         fromThinkingCapabilities(c.Thinking),
 		}
 		if c.Modalities != nil {
 			m.Modalities = Modalities{
-				Input:  cloneStrings(c.Modalities.Input),
-				Output: cloneStrings(c.Modalities.Output),
+				Input:  slices.Clone(c.Modalities.Input),
+				Output: slices.Clone(c.Modalities.Output),
 			}
 		}
 	}
 	if manifest.Cost != nil {
-		m.Pricing = &Pricing{
+		m.Pricing = &api.ModelPricing{
 			Input:      manifest.Cost.Input,
 			Output:     manifest.Cost.Output,
 			CacheRead:  manifest.Cost.CacheRead,
 			CacheWrite: manifest.Cost.CacheWrite,
 		}
 		for _, t := range manifest.Cost.Tiers {
-			m.Pricing.Tiers = append(m.Pricing.Tiers, PricingTier{
-				Label:      t.Label,
-				Condition:  TierCondition{Type: t.Tier.Type, Size: t.Tier.Size},
-				Input:      t.Input,
-				Output:     t.Output,
-				CacheRead:  t.CacheRead,
-				CacheWrite: t.CacheWrite,
+			m.Pricing.Tiers = append(m.Pricing.Tiers, api.ModelPricingTier{
+				Label:         t.Label,
+				ConditionType: t.Tier.Type,
+				ConditionSize: t.Tier.Size,
+				Input:         t.Input,
+				Output:        t.Output,
+				CacheRead:     t.CacheRead,
+				CacheWrite:    t.CacheWrite,
 			})
 		}
 	}
@@ -181,7 +185,7 @@ func fromThinkingCapabilities(in []warp.ProviderModelThinkingCapability) []Think
 		}
 		out[i] = ThinkingOption{
 			Type:    kind,
-			Values:  cloneStrings(t.AllowedEfforts),
+			Values:  slices.Clone(t.AllowedEfforts),
 			Default: def,
 			Max:     t.MaxBudgetTokens,
 		}
@@ -208,30 +212,4 @@ func firstNonZero(a, b int) int {
 		return a
 	}
 	return b
-}
-
-func cloneBoolPtr(b *bool) *bool {
-	if b == nil {
-		return nil
-	}
-	v := *b
-	return &v
-}
-
-func cloneInts(in []int) []int {
-	if in == nil {
-		return nil
-	}
-	out := make([]int, len(in))
-	copy(out, in)
-	return out
-}
-
-func cloneStrings(in []string) []string {
-	if in == nil {
-		return nil
-	}
-	out := make([]string, len(in))
-	copy(out, in)
-	return out
 }

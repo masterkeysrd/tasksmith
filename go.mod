@@ -115,3 +115,5 @@ require (
 )
 
 replace github.com/masterkeysrd/kite => ../kite
+
+replace github.com/masterkeysrd/loom => ../loom

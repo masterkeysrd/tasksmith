@@ -13,6 +13,7 @@ import (
 	"github.com/masterkeysrd/loom/message"
 	"github.com/masterkeysrd/loom/profile"
 	loomopenai "github.com/masterkeysrd/loom/providers/openai"
+	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/models"
 	"github.com/masterkeysrd/warp"
 	"github.com/openai/openai-go/v3"
@@ -252,8 +253,8 @@ func TestModelResolution(t *testing.T) {
 	defer gw.Close()
 
 	completion := models.Model{ID: "ollama/llama3.2", Capabilities: models.Capabilities{Completion: new(true)}}
-	native := models.Model{ID: "ollama/nimble-v3", Capabilities: models.Capabilities{Completion: new(false), Decision: new(true)}, Pricing: &models.Pricing{Input: 2}}
-	embeddingModel := models.Model{ID: "ollama/nomic-embed-text", Capabilities: models.Capabilities{Embedding: new(true)}, Pricing: &models.Pricing{Input: 3}}
+	native := models.Model{ID: "ollama/nimble-v3", Capabilities: models.Capabilities{Completion: new(false), Decision: new(true)}, Pricing: &api.ModelPricing{Input: 2}}
+	embeddingModel := models.Model{ID: "ollama/nomic-embed-text", Capabilities: models.Capabilities{Embedding: new(true)}, Pricing: &api.ModelPricing{Input: 3}}
 	llmModel, err := gw.LLM(ctx, completion, llm.ModelConfig{})
 	if err != nil {
 		t.Fatalf("failed to resolve LLM: %v", err)
@@ -707,12 +708,12 @@ func TestCatalogLLMUsesIsolatedProfiles(t *testing.T) {
 	}
 	defer gw.Close()
 	factory := gw.(*gatewayImpl)
-	model := models.Model{ID: "openai/gpt-4o", ProviderType: "openai", Limits: models.Limits{Context: 1234, Output: 123}, Pricing: &models.Pricing{Input: 7}}
+	model := models.Model{ID: "openai/gpt-4o", ProviderType: "openai", Limits: models.Limits{Context: 1234, Output: 123}, Pricing: &api.ModelPricing{Input: 7}}
 	first, err := factory.LLM(ctx, model, llm.ModelConfig{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	model.Pricing = &models.Pricing{Input: 9}
+	model.Pricing = &api.ModelPricing{Input: 9}
 	second, err := factory.LLM(ctx, model, llm.ModelConfig{})
 	if err != nil {
 		t.Fatal(err)

@@ -14,34 +14,21 @@ import (
 // ErrInvalidConfig indicates an invalid explicit session override.
 var ErrInvalidConfig = errors.New("models: invalid configuration")
 
-// Preferences are the caller's desired call settings.
-type Preferences struct {
-	// Temperature is the caller's requested sampling temperature.
-	Temperature *float32
-	// AgentThinking is the agent-level thinking default.
-	AgentThinking *api.ThinkingSetting
-	// SessionThinking is the explicit session-level thinking override.
-	SessionThinking *api.ThinkingSetting
+// Settings holds the caller's desired model execution settings.
+type Settings struct {
+	Temperature    *float32
+	Thinking       *api.ThinkingSetting
+	StrictThinking bool
 }
 
-// Diagnostic describes a non-fatal configuration issue.
-type Diagnostic struct {
-	Code    string `json:"code"`
-	Setting string `json:"setting"`
-	Message string `json:"message"`
-}
-
-// Configure validates prefs against m and returns the effective loom config.
+// Configure validates settings against m and returns the effective loom config.
 //
 // It is a pure function: it moves the gateway's settings resolution out of the
 // gateway, unchanged in behavior. This includes the thinking validation, the
 // Anthropic temperature/thinking conflict, and the unknown/unsupported
 // temperature diagnostics.
-//
-// It returns an error only for invalid explicit session overrides (today's
-// ErrInvalidConfig behavior); agent-level problems become diagnostics.
-func Configure(m Model, prefs Preferences) (llm.ModelConfig, []Diagnostic, error) {
-	cfg := llm.ModelConfig{Temperature: prefs.Temperature}
+func (m Model) Configure(s Settings) (llm.ModelConfig, []api.SessionDiagnostic, error) {
+	cfg := llm.ModelConfig{Temperature: s.Temperature}
 	if cfg.MaxTokens == 0 {
 		cfg.MaxTokens = m.Limits.Output
 	}
@@ -49,20 +36,17 @@ func Configure(m Model, prefs Preferences) (llm.ModelConfig, []Diagnostic, error
 		cfg.ContextWindow = m.Limits.Context
 	}
 
-	var diags []Diagnostic
+	var diags []api.SessionDiagnostic
 
-	setting := prefs.SessionThinking
-	if setting == nil {
-		setting = prefs.AgentThinking
-	}
+	setting := s.Thinking
 	var thinkingErr error
 	if setting != nil {
 		prof := m.Profile()
 		if err := validateThinking(setting, &prof); err != nil {
-			if prefs.SessionThinking != nil {
+			if s.StrictThinking {
 				thinkingErr = err
 			} else {
-				diags = append(diags, Diagnostic{
+				diags = append(diags, api.SessionDiagnostic{
 					Code:    "thinking_unsupported",
 					Setting: "thinking",
 					Message: fmt.Sprintf("Agent thinking setting is unavailable and will be omitted: %v", err),
@@ -76,20 +60,20 @@ func Configure(m Model, prefs Preferences) (llm.ModelConfig, []Diagnostic, error
 
 	if cfg.Temperature != nil {
 		if m.ProviderType == "anthropic" && cfg.Thinking != nil && (cfg.Thinking.Budget > 0 || cfg.Thinking.Adaptive) {
-			diags = append(diags, Diagnostic{
+			diags = append(diags, api.SessionDiagnostic{
 				Code:    "temperature_thinking_conflict",
 				Setting: "temperature",
 				Message: "Temperature cannot be combined with Anthropic extended thinking and will be omitted.",
 			})
 			cfg.Temperature = nil
 		} else if m.Capabilities.Temperature == nil {
-			diags = append(diags, Diagnostic{
+			diags = append(diags, api.SessionDiagnostic{
 				Code:    "temperature_unknown",
 				Setting: "temperature",
 				Message: "Temperature support is unknown; the configured value will be sent and may be rejected by the provider.",
 			})
 		} else if !*m.Capabilities.Temperature {
-			diags = append(diags, Diagnostic{
+			diags = append(diags, api.SessionDiagnostic{
 				Code:    "temperature_unsupported",
 				Setting: "temperature",
 				Message: fmt.Sprintf("Temperature %g is not supported by this model and will be omitted.", *cfg.Temperature),
