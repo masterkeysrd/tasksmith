@@ -81,7 +81,7 @@ type Session struct {
 	Timeline   timeline.Timeline `json:"-"`
 	Journal    journal.Journal   `json:"-"`
 	Tools      tools.Container   `json:"-"`
-	Tasks      tasks.Manager     `json:"-"`
+	Tasks      tasks.Store       `json:"-"`
 	Harness    harness.Harness   `json:"-"`
 	Std        *std.Std          `json:"-"`
 	spiller    tools.Spiller     `json:"-"`

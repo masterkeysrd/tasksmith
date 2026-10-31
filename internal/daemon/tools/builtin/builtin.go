@@ -35,7 +35,7 @@ type Config struct {
 	Std          *std.Std
 	Sandbox      sandbox.Sandbox
 	Guard        *shellguard.Guard
-	Tasks        tasks.Manager
+	Tasks        tasks.Store
 	Workspace    *workspace.Workspace
 	AllowedTools []string
 	Skills       []warp.Skill
@@ -57,7 +57,7 @@ func (c Config) Validate() error {
 }
 
 // New validates cfg and constructs the built-in system tools backed by
-// [std.Std], [shellguard.Guard], and [tasks.Manager]. If [Config.AllowedTools]
+// [std.Std], [shellguard.Guard], and [tasks.Store]. If [Config.AllowedTools]
 // is specified, only tools in that list are constructed.
 func New(cfg Config) ([]tools.Tool, error) {
 	if err := cfg.Validate(); err != nil {

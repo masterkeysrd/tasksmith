@@ -42,7 +42,7 @@ type bashTool struct {
 	std     *std.Std
 	sandbox sandbox.Sandbox
 	guard   *shellguard.Guard
-	tasks   tasks.Manager
+	tasks   tasks.Store
 }
 
 func (t *bashTool) Prepare(_ context.Context, in api.BashInput) (*tools.Plan, error) {
@@ -143,7 +143,10 @@ func (t *bashTool) Execute(ctx context.Context, in api.BashInput) (api.BashOutpu
 		},
 	}
 
-	err := t.tasks.Run(ctx, task)
+	if err := t.tasks.Add(task); err != nil {
+		return api.BashOutput{}, err
+	}
+	err := task.Run(ctx)
 	sw.Close()
 
 	if err != nil && !task.Backgrounded() {
@@ -183,7 +186,7 @@ func (t *bashTool) Execute(ctx context.Context, in api.BashInput) (api.BashOutpu
 }
 
 type tasksTool struct {
-	tasks tasks.Manager
+	tasks tasks.Store
 }
 
 func (t *tasksTool) Prepare(_ context.Context, in api.TasksInput) (*tools.Plan, error) {
@@ -245,8 +248,11 @@ func (t *tasksTool) Prepare(_ context.Context, in api.TasksInput) (*tools.Plan, 
 }
 
 func (t *tasksTool) Execute(ctx context.Context, in api.TasksInput) (api.TasksOutput, error) {
-	switch in.Action {
-	case "list":
+	if in.Action == "" || in.Action != "list" && in.Action != "status" && in.Action != "kill" && in.Action != "send_input" {
+		return api.TasksOutput{}, fmt.Errorf("%w: unsupported action %q", std.ErrInvalidArgument, in.Action)
+	}
+
+	if in.Action == "list" {
 		snaps := t.tasks.List()
 		items := make([]api.TasksTask, 0, len(snaps))
 		for _, snap := range snaps {
@@ -266,12 +272,15 @@ func (t *tasksTool) Execute(ctx context.Context, in api.TasksInput) (api.TasksOu
 			Tasks:   items,
 			Message: fmt.Sprintf("%d background task(s).", len(items)),
 		}, nil
+	}
+
+	task, ok := t.tasks.Get(strings.TrimSpace(in.TaskID))
+	if !ok {
+		return api.TasksOutput{}, tasks.ErrTaskNotFound
+	}
+
+	switch in.Action {
 	case "status":
-		taskID := strings.TrimSpace(in.TaskID)
-		task, ok := t.tasks.Get(taskID)
-		if !ok {
-			return api.TasksOutput{}, tasks.ErrTaskNotFound
-		}
 		snap := task.Snapshot()
 		tail, _ := task.Tail(in.Limit)
 		tail = tools.Spill(ctx, tail)
@@ -283,22 +292,20 @@ func (t *tasksTool) Execute(ctx context.Context, in api.TasksInput) (api.TasksOu
 			Message:  fmt.Sprintf("Task %s is %s.", snap.ID, snap.Status),
 		}, nil
 	case "kill":
-		taskID := strings.TrimSpace(in.TaskID)
-		if err := t.tasks.Kill(taskID); err != nil {
+		if err := task.Kill(); err != nil {
 			return api.TasksOutput{}, err
 		}
 		return api.TasksOutput{
 			Status:  string(api.TaskStatusCanceled),
-			Message: fmt.Sprintf("Killed task %s.", taskID),
+			Message: fmt.Sprintf("Killed task %s.", task.ID),
 		}, nil
 	case "send_input":
-		taskID := strings.TrimSpace(in.TaskID)
-		if err := t.tasks.WriteInput(taskID, in.Input); err != nil {
+		if err := task.WriteInput(in.Input); err != nil {
 			return api.TasksOutput{}, err
 		}
 		return api.TasksOutput{
 			Status:  string(api.TaskStatusRunning),
-			Message: fmt.Sprintf("Sent input to task %s.", taskID),
+			Message: fmt.Sprintf("Sent input to task %s.", task.ID),
 		}, nil
 	default:
 		return api.TasksOutput{}, fmt.Errorf("%w: unsupported action %q", std.ErrInvalidArgument, in.Action)

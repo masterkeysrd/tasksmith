@@ -2,19 +2,21 @@ package tasks
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/masterkeysrd/tasksmith/api"
+	"github.com/masterkeysrd/tasksmith/internal/core/memdb"
+	"github.com/masterkeysrd/tasksmith/internal/core/uuid"
 )
 
 var (
@@ -56,6 +58,10 @@ type Task struct {
 	backgrounded bool
 	canceled     bool
 	subscribers  map[chan string]struct{}
+
+	bgCtx      context.Context
+	outputsDir string
+	onUpdate   func(api.Task)
 }
 
 func (t *Task) Snapshot() api.Task {
@@ -166,6 +172,14 @@ func (t *Task) Cancel() {
 	}
 }
 
+func (t *Task) Kill() error {
+	if st := t.Status(); st != api.TaskStatusRunning && st != api.TaskStatusPending {
+		return ErrNotRunning
+	}
+	t.Cancel()
+	return nil
+}
+
 func (t *Task) WriteInput(data string) error {
 	t.mu.Lock()
 	if t.status != api.TaskStatusRunning || t.stdinW == nil {
@@ -267,13 +281,9 @@ func (t *Task) SubscribeOutput() (<-chan string, string, func()) {
 	return ch, initial, unsubscribe
 }
 
-type taskWriter struct {
-	task *Task
-}
-
-func (w *taskWriter) Write(p []byte) (n int, err error) {
-	w.task.mu.Lock()
-	defer w.task.mu.Unlock()
+func (t *Task) Write(p []byte) (n int, err error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
 
 	if len(p) == 0 {
 		return 0, nil
@@ -281,40 +291,40 @@ func (w *taskWriter) Write(p []byte) (n int, err error) {
 
 	// 1. In-memory rolling buffer capped at MaxLogMemBytes (64 KB)
 	if len(p) >= MaxLogMemBytes {
-		w.task.buf.Reset()
-		w.task.buf.Write(p[len(p)-MaxLogMemBytes:])
+		t.buf.Reset()
+		t.buf.Write(p[len(p)-MaxLogMemBytes:])
 	} else {
-		w.task.buf.Write(p)
-		if w.task.buf.Len() > MaxLogMemBytes {
-			overflow := w.task.buf.Len() - MaxLogMemBytes
-			b := w.task.buf.Bytes()[overflow:]
+		t.buf.Write(p)
+		if t.buf.Len() > MaxLogMemBytes {
+			overflow := t.buf.Len() - MaxLogMemBytes
+			b := t.buf.Bytes()[overflow:]
 			trimmed := make([]byte, len(b))
 			copy(trimmed, b)
-			w.task.buf.Reset()
-			w.task.buf.Write(trimmed)
+			t.buf.Reset()
+			t.buf.Write(trimmed)
 		}
 	}
 
 	// 2. Disk logging capped at MaxLogDiskBytes (16 MB)
-	if w.task.logFile != nil {
-		if w.task.writtenBytes < MaxLogDiskBytes {
+	if t.logFile != nil {
+		if t.writtenBytes < MaxLogDiskBytes {
 			toWrite := p
-			rem := MaxLogDiskBytes - w.task.writtenBytes
+			rem := MaxLogDiskBytes - t.writtenBytes
 			if int64(len(toWrite)) > rem {
 				toWrite = toWrite[:rem]
 			}
 			if len(toWrite) > 0 {
-				nw, _ := w.task.logFile.Write(toWrite)
-				w.task.writtenBytes += int64(nw)
+				nw, _ := t.logFile.Write(toWrite)
+				t.writtenBytes += int64(nw)
 			}
-			if w.task.writtenBytes >= MaxLogDiskBytes {
-				_, _ = w.task.logFile.WriteString("\n[output truncated: exceeded 16MB cap]\n")
+			if t.writtenBytes >= MaxLogDiskBytes {
+				_, _ = t.logFile.WriteString("\n[output truncated: exceeded 16MB cap]\n")
 			}
 		}
 	}
 
 	chunk := string(p)
-	for ch := range w.task.subscribers {
+	for ch := range t.subscribers {
 		select {
 		case ch <- chunk:
 		default:
@@ -324,257 +334,278 @@ func (w *taskWriter) Write(p []byte) (n int, err error) {
 	return len(p), nil
 }
 
-type Config struct {
-	Context    context.Context
-	OutputsDir string
-	OnUpdate   func(api.Task)
-}
-
-type Manager interface {
-	Run(ctx context.Context, task *Task) error
-	Get(id string) (*Task, bool)
-	List() []api.Task
-	Kill(id string) error
-	WriteInput(id string, data string) error
-	Close() error
-}
-
-type manager struct {
-	mu         sync.Mutex
-	bgCtx      context.Context
-	outputsDir string
-	onUpdate   func(api.Task)
-	tasks      map[string]*Task
-	closed     bool
-}
-
-func New(cfg Config) Manager {
-	bgCtx := cfg.Context
-	if bgCtx == nil {
-		bgCtx = context.Background()
-	}
-	return &manager{
-		bgCtx:      bgCtx,
-		outputsDir: strings.TrimSpace(cfg.OutputsDir),
-		onUpdate:   cfg.OnUpdate,
-		tasks:      make(map[string]*Task),
-	}
-}
-
-func (m *manager) Run(ctx context.Context, task *Task) error {
-	if task == nil || task.Fn == nil {
+func (t *Task) Run(ctx context.Context) error {
+	if t == nil || t.Fn == nil {
 		return fmt.Errorf("tasks: task and task.Fn must not be nil")
 	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 
-	m.mu.Lock()
-	if m.closed {
-		m.mu.Unlock()
-		return errors.New("tasks: manager is closed")
+	t.mu.Lock()
+	if t.ID == "" {
+		t.ID = uuid.NewString()
 	}
-	m.mu.Unlock()
-
-	if task.ID == "" {
-		id, err := uuid.NewV7()
-		if err != nil {
-			return fmt.Errorf("tasks: generate task id: %w", err)
-		}
-		task.ID = id.String()
+	if t.startedAt.IsZero() {
+		t.startedAt = time.Now().UTC()
 	}
+	if t.done == nil {
+		t.done = make(chan struct{})
+	}
+	taskID := t.ID
+	outputsDir := t.outputsDir
+	bgCtx := t.bgCtx
+	t.mu.Unlock()
 
-	if m.outputsDir != "" {
-		if err := os.MkdirAll(m.outputsDir, 0o755); err != nil {
+	var logFile *os.File
+	var logPath string
+	if outputsDir != "" {
+		if err := os.MkdirAll(outputsDir, 0o755); err != nil {
 			return fmt.Errorf("tasks: create outputs dir: %w", err)
 		}
-		logPath := filepath.Join(m.outputsDir, task.ID+".log")
+		logPath = filepath.Join(outputsDir, taskID+".log")
 		f, err := os.OpenFile(logPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
 		if err != nil {
 			return fmt.Errorf("tasks: open log file: %w", err)
 		}
-		task.logPath = logPath
-		task.logFile = f
+		logFile = f
 	}
 
 	stdinR, stdinW, pipeErr := os.Pipe()
 	if pipeErr != nil {
+		if logFile != nil {
+			_ = logFile.Close()
+		}
 		return fmt.Errorf("tasks: create stdin pipe: %w", pipeErr)
 	}
-	taskCtx, taskCancel := context.WithCancel(m.bgCtx)
 
-	task.mu.Lock()
-	if task.done == nil {
-		task.done = make(chan struct{})
+	if bgCtx == nil {
+		bgCtx = context.Background()
 	}
-	task.stdinR = stdinR
-	task.stdinW = stdinW
-	task.cancel = taskCancel
-	task.status = api.TaskStatusRunning
-	task.startedAt = time.Now().UTC()
-	task.mu.Unlock()
+	taskCtx, taskCancel := context.WithCancel(bgCtx)
 
-	m.mu.Lock()
-	m.tasks[task.ID] = task
-	m.mu.Unlock()
-
-	writer := &taskWriter{task: task}
+	t.mu.Lock()
+	t.logPath = logPath
+	t.logFile = logFile
+	t.stdinR = stdinR
+	t.stdinW = stdinW
+	t.cancel = taskCancel
+	t.status = api.TaskStatusRunning
+	t.mu.Unlock()
 
 	go func() {
-		exitCode, fnErr := task.Fn(taskCtx, writer, stdinR)
+		exitCode, fnErr := t.Fn(taskCtx, t, stdinR)
 
-		task.mu.Lock()
-		if task.stdinW != nil {
-			_ = task.stdinW.Close()
-			task.stdinW = nil
+		t.mu.Lock()
+		if t.stdinW != nil {
+			_ = t.stdinW.Close()
+			t.stdinW = nil
 		}
-		if task.stdinR != nil {
-			_ = task.stdinR.Close()
-			task.stdinR = nil
+		if t.stdinR != nil {
+			_ = t.stdinR.Close()
+			t.stdinR = nil
 		}
-		if task.logFile != nil {
-			_ = task.logFile.Sync()
-			_ = task.logFile.Close()
-			task.logFile = nil
+		if t.logFile != nil {
+			_ = t.logFile.Sync()
+			_ = t.logFile.Close()
+			t.logFile = nil
 		}
-		for ch := range task.subscribers {
+		for ch := range t.subscribers {
 			close(ch)
 		}
-		task.subscribers = make(map[chan string]struct{})
+		t.subscribers = make(map[chan string]struct{})
 
-		task.finishedAt = time.Now().UTC()
-		task.exitCode = exitCode
-		task.err = fnErr
+		t.finishedAt = time.Now().UTC()
+		t.exitCode = exitCode
+		t.err = fnErr
 
-		if task.canceled || (taskCtx.Err() != nil && errors.Is(fnErr, context.Canceled)) {
-			task.status = api.TaskStatusCanceled
-			if task.err == nil {
-				task.err = context.Canceled
+		if t.canceled || (taskCtx.Err() != nil && errors.Is(fnErr, context.Canceled)) {
+			t.status = api.TaskStatusCanceled
+			if t.err == nil {
+				t.err = context.Canceled
 			}
 		} else if fnErr != nil || exitCode != 0 {
-			task.status = api.TaskStatusFailed
+			t.status = api.TaskStatusFailed
 		} else {
-			task.status = api.TaskStatusCompleted
+			t.status = api.TaskStatusCompleted
 		}
 
-		close(task.done)
-		bg := task.backgrounded
-		snap := task.snapshotLocked()
-		task.mu.Unlock()
+		close(t.done)
+		bg := t.backgrounded
+		snap := t.snapshotLocked()
+		onUpdate := t.onUpdate
+		t.mu.Unlock()
 
-		if bg && m.onUpdate != nil {
-			m.onUpdate(snap)
+		if bg && onUpdate != nil {
+			onUpdate(snap)
 		}
 	}()
 
-	if task.Wait <= 0 {
-		task.mu.Lock()
-		task.backgrounded = true
-		snap := task.snapshotLocked()
-		task.mu.Unlock()
+	if t.Wait <= 0 {
+		t.mu.Lock()
+		t.backgrounded = true
+		snap := t.snapshotLocked()
+		onUpdate := t.onUpdate
+		t.mu.Unlock()
 
-		if m.onUpdate != nil {
-			m.onUpdate(snap)
+		if onUpdate != nil {
+			onUpdate(snap)
 		}
 		return nil
 	}
 
-	timer := time.NewTimer(task.Wait)
+	timer := time.NewTimer(t.Wait)
 	defer timer.Stop()
 
 	select {
-	case <-task.Done():
-		return task.Err()
+	case <-t.Done():
+		return t.Err()
 	case <-ctx.Done():
-		task.Cancel()
-		<-task.Done()
+		t.Cancel()
+		<-t.Done()
 		return ctx.Err()
 	case <-timer.C:
 		var snap api.Task
 		shouldUpdate := false
 
-		task.mu.Lock()
+		t.mu.Lock()
 		select {
-		case <-task.done:
+		case <-t.done:
 			// Task completed before/when timer fired
 		default:
-			task.backgrounded = true
-			snap = task.snapshotLocked()
+			t.backgrounded = true
+			snap = t.snapshotLocked()
 			shouldUpdate = true
 		}
-		task.mu.Unlock()
+		onUpdate := t.onUpdate
+		t.mu.Unlock()
 
-		if shouldUpdate && m.onUpdate != nil {
-			m.onUpdate(snap)
+		if shouldUpdate && onUpdate != nil {
+			onUpdate(snap)
 			return nil
 		}
-		return task.Err()
+		return t.Err()
 	}
 }
 
-func (m *manager) Get(id string) (*Task, bool) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	t, ok := m.tasks[id]
-	return t, ok
+type Config struct {
+	Context    context.Context
+	OutputsDir string
+	OnUpdate   func(api.Task)
 }
 
-func (m *manager) List() []api.Task {
-	m.mu.Lock()
-	tasks := make([]*Task, 0, len(m.tasks))
-	for _, t := range m.tasks {
-		tasks = append(tasks, t)
-	}
-	m.mu.Unlock()
+// Store manages the background task registry for a session.
+type Store interface {
+	Add(task *Task) error
+	Get(id string) (*Task, bool)
+	List() []api.Task
+	Close() error
+}
 
+type store struct {
+	db         *memdb.DB[*Task]
+	bgCtx      context.Context
+	outputsDir string
+	onUpdate   func(api.Task)
+	mu         sync.Mutex
+	closed     bool
+}
+
+var _ Store = (*store)(nil)
+
+func New(cfg Config) Store {
+	bgCtx := cfg.Context
+	if bgCtx == nil {
+		bgCtx = context.Background()
+	}
+	db := memdb.New(func(t *Task) string { return t.ID })
+	return &store{
+		db:         db,
+		bgCtx:      bgCtx,
+		outputsDir: strings.TrimSpace(cfg.OutputsDir),
+		onUpdate:   cfg.OnUpdate,
+	}
+}
+
+func (s *store) Add(task *Task) error {
+	if task == nil || task.Fn == nil {
+		return errors.New("tasks: task and task.Fn must not be nil")
+	}
+
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return errors.New("tasks: store is closed")
+	}
+	s.mu.Unlock()
+
+	task.mu.Lock()
+	if task.ID == "" {
+		task.ID = uuid.NewString()
+	}
+	if task.startedAt.IsZero() {
+		task.startedAt = time.Now().UTC()
+	}
+	if task.done == nil {
+		task.done = make(chan struct{})
+	}
+	task.bgCtx = s.bgCtx
+	task.outputsDir = s.outputsDir
+	task.onUpdate = s.onUpdate
+	task.mu.Unlock()
+
+	s.db.Save(task)
+	return nil
+}
+
+func (s *store) Get(id string) (*Task, bool) {
+	if s == nil || s.db == nil {
+		return nil, false
+	}
+	return s.db.Snapshot().Get(id)
+}
+
+func (s *store) List() []api.Task {
+	if s == nil || s.db == nil {
+		return nil
+	}
+	all := s.db.Snapshot().All()
 	var result []api.Task
-	for _, t := range tasks {
+	for _, t := range all {
 		if t.Backgrounded() {
 			result = append(result, t.Snapshot())
 		}
 	}
-
-	sort.Slice(result, func(i, j int) bool {
-		if result[i].StartedAt.Equal(result[j].StartedAt) {
-			return result[i].ID < result[j].ID
+	hasNonUUID := false
+	for _, t := range result {
+		if !uuid.Validate(t.ID) {
+			hasNonUUID = true
+			break
 		}
-		return result[i].StartedAt.Before(result[j].StartedAt)
-	})
-
+	}
+	if hasNonUUID {
+		slices.SortFunc(result, func(a, b api.Task) int {
+			if a.StartedAt.Before(b.StartedAt) {
+				return -1
+			}
+			if a.StartedAt.After(b.StartedAt) {
+				return 1
+			}
+			return cmp.Compare(a.ID, b.ID)
+		})
+	}
 	return result
 }
 
-func (m *manager) Kill(id string) error {
-	t, ok := m.Get(id)
-	if !ok {
-		return ErrTaskNotFound
-	}
-	if st := t.Status(); st != api.TaskStatusRunning && st != api.TaskStatusPending {
-		return ErrNotRunning
-	}
-	t.Cancel()
-	return nil
-}
+func (s *store) Close() error {
+	s.mu.Lock()
+	s.closed = true
+	s.mu.Unlock()
 
-func (m *manager) WriteInput(id string, data string) error {
-	t, ok := m.Get(id)
-	if !ok {
-		return ErrTaskNotFound
-	}
-	return t.WriteInput(data)
-}
-
-func (m *manager) Close() error {
-	m.mu.Lock()
-	m.closed = true
-	tasks := make([]*Task, 0, len(m.tasks))
-	for _, t := range m.tasks {
-		tasks = append(tasks, t)
-	}
-	m.mu.Unlock()
-
-	for _, t := range tasks {
-		t.Cancel()
+	if s.db != nil {
+		for _, t := range s.db.Snapshot().All() {
+			t.Cancel()
+		}
 	}
 	return nil
 }

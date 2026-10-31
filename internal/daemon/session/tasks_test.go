@@ -47,8 +47,11 @@ func TestSessionTasksInitAndBackgroundUpdate(t *testing.T) {
 		},
 	}
 
-	if err := sess.Tasks.Run(ctx, task); err != nil {
-		t.Fatalf("Tasks.Run: %v", err)
+	if err := sess.Tasks.Add(task); err != nil {
+		t.Fatalf("Tasks.Add: %v", err)
+	}
+	if err := task.Run(ctx); err != nil {
+		t.Fatalf("task.Run: %v", err)
 	}
 
 	<-task.Done()
@@ -163,8 +166,11 @@ func TestSessionOnTaskUpdateCompletedNotification(t *testing.T) {
 		},
 	}
 
-	if err := sess.Tasks.Run(ctx, task); err != nil {
-		t.Fatalf("Tasks.Run: %v", err)
+	if err := sess.Tasks.Add(task); err != nil {
+		t.Fatalf("Tasks.Add: %v", err)
+	}
+	if err := task.Run(ctx); err != nil {
+		t.Fatalf("task.Run: %v", err)
 	}
 	<-task.Done()
 

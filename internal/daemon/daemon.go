@@ -953,14 +953,16 @@ func (d *Daemon) KillTask(ctx context.Context, rawWS, id, taskID string) error {
 		}
 	}
 
-	if err := sess.Tasks.Kill(taskID); err != nil {
-		if errors.Is(err, tasks.ErrTaskNotFound) {
-			return &api.APIError{
-				StatusCode: http.StatusNotFound,
-				Code:       "not_found",
-				Message:    fmt.Sprintf("task %q not found", taskID),
-			}
+	t, ok := sess.Tasks.Get(taskID)
+	if !ok {
+		return &api.APIError{
+			StatusCode: http.StatusNotFound,
+			Code:       "not_found",
+			Message:    fmt.Sprintf("task %q not found", taskID),
 		}
+	}
+
+	if err := t.Kill(); err != nil {
 		if errors.Is(err, tasks.ErrNotRunning) {
 			return &api.APIError{
 				StatusCode: http.StatusConflict,

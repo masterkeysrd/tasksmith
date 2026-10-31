@@ -37,7 +37,10 @@ func TestFastSynchronousCompletion(t *testing.T) {
 		},
 	}
 
-	err := mgr.Run(context.Background(), task)
+	if err := mgr.Add(task); err != nil {
+		t.Fatalf("expected nil error on Add, got %v", err)
+	}
+	err := task.Run(context.Background())
 	if err != nil {
 		t.Fatalf("expected nil error, got %v", err)
 	}
@@ -89,7 +92,10 @@ func TestCallerContextCancellationDuringWait(t *testing.T) {
 		cancel()
 	}()
 
-	err := mgr.Run(ctx, task)
+	if err := mgr.Add(task); err != nil {
+		t.Fatalf("expected nil error on Add, got %v", err)
+	}
+	err := task.Run(ctx)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected context.Canceled, got %v", err)
 	}
@@ -127,7 +133,10 @@ func TestBackgroundTransitionWhenWaitExpires(t *testing.T) {
 		},
 	}
 
-	err := mgr.Run(context.Background(), task)
+	if err := mgr.Add(task); err != nil {
+		t.Fatalf("expected nil error on Add, got %v", err)
+	}
+	err := task.Run(context.Background())
 	if err != nil {
 		t.Fatalf("expected nil error on background transition, got %v", err)
 	}
@@ -210,21 +219,20 @@ func TestWriteInputTailAndSubscribeOutput(t *testing.T) {
 		},
 	}
 
-	err := mgr.Run(context.Background(), task)
+	if err := mgr.Add(task); err != nil {
+		t.Fatalf("Add failed: %v", err)
+	}
+	err := task.Run(context.Background())
 	if err != nil {
 		t.Fatalf("Run failed: %v", err)
 	}
 
 	// Subscribe to output
-	chunks, initial, unsub := task.SubscribeOutput()
+	chunks, _, unsub := task.SubscribeOutput()
 	defer unsub()
 
-	if !strings.Contains(initial, "line 1") {
-		// If initial didn't have it yet, it will arrive via chunks
-	}
-
-	// Feed input
-	if err := mgr.WriteInput(task.ID, "hello stdin"); err != nil {
+	// Feed input directly on task
+	if err := task.WriteInput("hello stdin"); err != nil {
 		t.Fatalf("WriteInput failed: %v", err)
 	}
 
@@ -263,10 +271,7 @@ func TestWriteInputTailAndSubscribeOutput(t *testing.T) {
 
 	// Verify subscriber channel closes on task completion
 	select {
-	case _, ok := <-chunks:
-		if !ok {
-			// closed as expected
-		}
+	case <-chunks:
 	case <-time.After(time.Second):
 		t.Fatal("expected chunks channel to close")
 	}
@@ -286,11 +291,14 @@ func TestKillRunningBackgroundTask(t *testing.T) {
 		},
 	}
 
-	if err := mgr.Run(context.Background(), task); err != nil {
+	if err := mgr.Add(task); err != nil {
+		t.Fatalf("Add failed: %v", err)
+	}
+	if err := task.Run(context.Background()); err != nil {
 		t.Fatalf("Run failed: %v", err)
 	}
 
-	if err := mgr.Kill(task.ID); err != nil {
+	if err := task.Kill(); err != nil {
 		t.Fatalf("Kill failed: %v", err)
 	}
 
@@ -324,9 +332,15 @@ func TestListSorting(t *testing.T) {
 		},
 	}
 
-	_ = mgr.Run(context.Background(), t1)
+	if err := mgr.Add(t1); err != nil {
+		t.Fatalf("Add t1: %v", err)
+	}
+	_ = t1.Run(context.Background())
 	time.Sleep(5 * time.Millisecond)
-	_ = mgr.Run(context.Background(), t2)
+	if err := mgr.Add(t2); err != nil {
+		t.Fatalf("Add t2: %v", err)
+	}
+	_ = t2.Run(context.Background())
 
 	list := mgr.List()
 	if len(list) != 2 {
@@ -359,7 +373,10 @@ func TestBoundedMemoryAndDiskWrites(t *testing.T) {
 		},
 	}
 
-	if err := mgr.Run(context.Background(), task); err != nil {
+	if err := mgr.Add(task); err != nil {
+		t.Fatalf("Add failed: %v", err)
+	}
+	if err := task.Run(context.Background()); err != nil {
 		t.Fatalf("Run failed: %v", err)
 	}
 
@@ -393,9 +410,9 @@ func TestKillTaskLifecycle(t *testing.T) {
 	mgr := New(Config{})
 	defer mgr.Close()
 
-	// 1. Kill unknown task -> ErrTaskNotFound
-	if err := mgr.Kill("missing"); !errors.Is(err, ErrTaskNotFound) {
-		t.Fatalf("expected ErrTaskNotFound, got %v", err)
+	// 1. Lookup unknown task -> not found
+	if _, ok := mgr.Get("missing"); ok {
+		t.Fatalf("expected missing task to not be found")
 	}
 
 	task := &Task{
@@ -408,12 +425,19 @@ func TestKillTaskLifecycle(t *testing.T) {
 		},
 	}
 
-	if err := mgr.Run(context.Background(), task); err != nil {
+	if err := mgr.Add(task); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	if err := task.Run(context.Background()); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 
 	// 2. Kill running task -> nil
-	if err := mgr.Kill("t-kill"); err != nil {
+	kTask, ok := mgr.Get("t-kill")
+	if !ok {
+		t.Fatalf("expected task to be found")
+	}
+	if err := kTask.Kill(); err != nil {
 		t.Fatalf("Kill running task: %v", err)
 	}
 
@@ -423,7 +447,36 @@ func TestKillTaskLifecycle(t *testing.T) {
 	}
 
 	// 3. Kill already canceled task -> ErrNotRunning
-	if err := mgr.Kill("t-kill"); !errors.Is(err, ErrNotRunning) {
+	if err := kTask.Kill(); !errors.Is(err, ErrNotRunning) {
 		t.Fatalf("expected ErrNotRunning on finished task, got %v", err)
+	}
+}
+
+func TestStandaloneTaskExecution(t *testing.T) {
+	// A Task should be runnable directly without Store
+	task := &Task{
+		Title: "standalone",
+		Wait:  time.Second,
+		Fn: func(ctx context.Context, output io.Writer, stdin io.Reader) (int, error) {
+			_, err := io.WriteString(output, "standalone output\n")
+			return 0, err
+		},
+	}
+
+	if err := task.Run(context.Background()); err != nil {
+		t.Fatalf("standalone Run failed: %v", err)
+	}
+	if task.ID == "" {
+		t.Fatal("expected UUID to be assigned")
+	}
+	if task.Status() != api.TaskStatusCompleted {
+		t.Fatalf("expected status completed, got %v", task.Status())
+	}
+	tail, err := task.Tail(1)
+	if err != nil {
+		t.Fatalf("Tail failed: %v", err)
+	}
+	if !strings.Contains(tail, "standalone output") {
+		t.Fatalf("expected output, got %q", tail)
 	}
 }
