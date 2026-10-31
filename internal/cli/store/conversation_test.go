@@ -669,11 +669,9 @@ func TestConversationOptimisticQueueingAndEventRemovals(t *testing.T) {
 	// 8. SeedQueue and CancelTurn
 	acc.SeedQueue([]api.QueueItem{
 		{
-			ID:   "seed-1",
-			Kind: api.QueueKindCommand,
-			Payload: api.QueueCommandPayload{
-				Command: "ls -l",
-			},
+			ID:      "seed-1",
+			Kind:    api.QueueKindCommand,
+			Command: "ls -l",
 		},
 	})
 	st = GetStream()

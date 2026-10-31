@@ -254,12 +254,12 @@ func TestConcurrentSnapshotReadsDuringWrites(t *testing.T) {
 	start := make(chan struct{})
 
 	// Writers
-	for w := 0; w < numWriters; w++ {
+	for w := range numWriters {
 		wg.Add(1)
 		go func(workerID int) {
 			defer wg.Done()
 			<-start
-			for i := 0; i < itemsPerWriter; i++ {
+			for i := range itemsPerWriter {
 				id := fmt.Sprintf("item-%d-%d", workerID, i)
 				db.Save(testItem{ID: id, Value: fmt.Sprintf("val-%d", i)})
 			}
@@ -267,12 +267,10 @@ func TestConcurrentSnapshotReadsDuringWrites(t *testing.T) {
 	}
 
 	// Readers taking concurrent snapshots
-	for r := 0; r < numReaders; r++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range numReaders {
+		wg.Go(func() {
 			<-start
-			for i := 0; i < 500; i++ {
+			for range 500 {
 				snap := db.Snapshot()
 				all := snap.All()
 				// Verify sortedness
@@ -286,7 +284,7 @@ func TestConcurrentSnapshotReadsDuringWrites(t *testing.T) {
 					t.Errorf("Len()=%d != len(All())=%d", snap.Len(), len(all))
 				}
 			}
-		}()
+		})
 	}
 
 	close(start)

@@ -2,11 +2,11 @@ package session
 
 import (
 	"errors"
+	"time"
 
 	"github.com/masterkeysrd/loom/message"
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/broker"
-	"github.com/masterkeysrd/tasksmith/internal/daemon/harness"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/journal"
 )
 
@@ -57,20 +57,21 @@ type SendInput struct {
 	Compact  *api.CompactRequest
 }
 
-type (
-	QueueKind           = harness.QueueKind
-	QueueItemPayload    = harness.QueueItemPayload
-	QueueMessagePayload = harness.QueueMessagePayload
-	QueueCommandPayload = harness.QueueCommandPayload
-	QueueTaskPayload    = harness.QueueTaskPayload
-	QueueItem           = harness.QueueItem
-)
+type QueueKind string
 
 const (
-	QueueKindMessage = harness.QueueKindMessage
-	QueueKindCommand = harness.QueueKindCommand
-	QueueKindTask    = harness.QueueKindTask
+	QueueKindMessage QueueKind = "message"
+	QueueKindCommand QueueKind = "command"
+	QueueKindTask    QueueKind = "task"
 )
+
+type QueueItem struct {
+	ID        string
+	Kind      QueueKind
+	Message   message.Message
+	Command   string
+	CreatedAt time.Time
+}
 
 // Publisher broadcasts real-time session events to a topic.
 type Publisher interface {

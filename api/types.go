@@ -1,7 +1,6 @@
 package api
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"slices"
@@ -257,80 +256,13 @@ const (
 	QueueKindCompact QueueKind = "compact"
 )
 
-type QueueItemPayload interface {
-	QueueKind() QueueKind
-}
-
-type QueueMessagePayload struct {
-	Message Message `json:"message"`
-}
-
-func (QueueMessagePayload) QueueKind() QueueKind { return QueueKindMessage }
-
-type QueueCommandPayload struct {
-	Command string `json:"command"`
-}
-
-func (QueueCommandPayload) QueueKind() QueueKind { return QueueKindCommand }
-
-type QueueCompactPayload struct {
-	Focus string `json:"focus,omitempty"`
-}
-
-func (QueueCompactPayload) QueueKind() QueueKind { return QueueKindCompact }
-
 type QueueItem struct {
-	ID        string           `json:"id"`
-	Kind      QueueKind        `json:"kind"`
-	Payload   QueueItemPayload `json:"payload,omitempty"`
-	CreatedAt time.Time        `json:"created_at"`
-}
-
-func (q *QueueItem) UnmarshalJSON(data []byte) error {
-	type wire struct {
-		ID        string          `json:"id"`
-		Kind      QueueKind       `json:"kind"`
-		Payload   json.RawMessage `json:"payload,omitempty"`
-		CreatedAt time.Time       `json:"created_at"`
-	}
-	var w wire
-	if err := json.Unmarshal(data, &w); err != nil {
-		return err
-	}
-	q.ID = w.ID
-	q.Kind = w.Kind
-	q.CreatedAt = w.CreatedAt
-	q.Payload = nil
-
-	raw := bytes.TrimSpace(w.Payload)
-	if len(raw) == 0 || bytes.Equal(raw, []byte("null")) {
-		return nil
-	}
-
-	switch w.Kind {
-	case QueueKindMessage:
-		var p QueueMessagePayload
-		if err := json.Unmarshal(raw, &p); err != nil {
-			return fmt.Errorf("api: unmarshal queue message payload: %w", err)
-		}
-		q.Payload = p
-	case QueueKindCommand:
-		var p QueueCommandPayload
-		if err := json.Unmarshal(raw, &p); err != nil {
-			return fmt.Errorf("api: unmarshal queue command payload: %w", err)
-		}
-		q.Payload = p
-	case QueueKindCompact:
-		var p QueueCompactPayload
-		if err := json.Unmarshal(raw, &p); err != nil {
-			return fmt.Errorf("api: unmarshal queue compact payload: %w", err)
-		}
-		q.Payload = p
-	default:
-		return fmt.Errorf("api: unknown queue kind %q", w.Kind)
-	}
-
-	return nil
+	ID        string          `json:"id"`
+	Kind      QueueKind       `json:"kind"`
+	Message   *Message        `json:"message,omitempty"`
+	Command   string          `json:"command,omitempty"`
+	Compact   *CompactRequest `json:"compact,omitempty"`
+	CreatedAt time.Time       `json:"created_at"`
 }
 
 type QuestionType string

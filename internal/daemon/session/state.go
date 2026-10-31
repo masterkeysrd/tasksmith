@@ -73,11 +73,8 @@ func (s *State) Clone() *State {
 	if len(s.queue) > 0 {
 		q = make([]QueueItem, len(s.queue))
 		for i, it := range s.queue {
-			switch p := it.Payload.(type) {
-			case QueueMessagePayload:
-				it.Payload = QueueMessagePayload{Message: message.CloneMessage(p.Message)}
-			case QueueTaskPayload:
-				it.Payload = QueueTaskPayload{Message: message.CloneMessage(p.Message)}
+			if it.Message != nil {
+				it.Message = message.CloneMessage(it.Message)
 			}
 			q[i] = it
 		}

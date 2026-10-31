@@ -16,7 +16,7 @@ func TestInputHasResponses(t *testing.T) {
 	}{
 		{name: "nil maps"},
 		{name: "message only", input: Input{Message: message.NewUserText("hello")}},
-		{name: "compact only", input: Input{Compact: &CompactInput{}}},
+		{name: "compact only", input: Input{Compact: &api.CompactRequest{}}},
 		{name: "empty decisions", input: Input{Decisions: map[string]api.PermissionDecision{}}, want: true},
 		{name: "empty answers", input: Input{Answers: map[string]api.QuestionResponse{}}, want: true},
 		{name: "populated decisions", input: Input{Decisions: map[string]api.PermissionDecision{"id": {Kind: api.DecisionReject}}}, want: true},
@@ -35,7 +35,7 @@ func TestInputValidation(t *testing.T) {
 	msg := message.NewUserText("hello")
 	decisions := map[string]api.PermissionDecision{}
 	answers := map[string]api.QuestionResponse{}
-	compact := &CompactInput{}
+	compact := &api.CompactRequest{}
 	tests := []struct {
 		name        string
 		input       Input

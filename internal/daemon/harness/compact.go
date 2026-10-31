@@ -407,15 +407,20 @@ type CompactionNode struct {
 	logger       log.Interface
 }
 
+var _ Node = (*CompactionNode)(nil)
+
+func (n *CompactionNode) Configure(opts NodeOptions) {
+	n.model = opts.Model
+	n.tools = opts.Tools
+	n.systemPrompt = strings.TrimSpace(opts.SystemPrompt)
+	n.limits = opts.Limits
+	n.static = opts.Static
+}
+
 // NewCompactionNode constructs a new CompactionNode bound to dependencies.
 func NewCompactionNode(cfg CompactionNodeConfig) *CompactionNode {
 	return &CompactionNode{
-		model:        cfg.Model,
-		tools:        cfg.Container,
-		systemPrompt: strings.TrimSpace(cfg.SystemPrompt),
-		limits:       cfg.Limits,
-		static:       cfg.Static,
-		logger:       cfg.Logger.ForComponent("harness.compact"),
+		logger: cfg.Logger.ForComponent("harness.compact"),
 	}
 }
 
@@ -429,7 +434,7 @@ func (n *CompactionNode) Execute(ctx context.Context, state State) (graph.Comman
 	}
 
 	compactID := uuid.NewString()
-	emit(ctx, CompactionStarted{
+	emit(ctx, api.CompactionStartedEvent{
 		ID:      compactID,
 		Trigger: trigger,
 		Focus:   focus,
@@ -491,15 +496,19 @@ func (n *CompactionNode) Execute(ctx context.Context, state State) (graph.Comman
 		durationMs := time.Since(startTime).Milliseconds()
 
 		emit(ctx, CompactionCompleted{
-			ID:           compactID,
-			Trigger:      trigger,
-			Focus:        focus,
-			Summary:      summaryText,
-			BeforeTokens: beforeTokens,
-			AfterTokens:  afterTokens,
-			DurationMs:   durationMs,
+			ID: compactID,
+			CompactedRecord: api.CompactedRecord{
+				Trigger:      trigger,
+				Focus:        focus,
+				Summary:      summaryText,
+				BeforeTokens: beforeTokens,
+				AfterTokens:  afterTokens,
+				DurationMs:   durationMs,
+			},
 		})
-		emit(ctx, ContextUpdatedEvent{Context: s.Context})
+		emit(ctx, api.ContextUpdatedEvent{
+			Context: s.Context,
+		})
 
 		return s
 	}), nil

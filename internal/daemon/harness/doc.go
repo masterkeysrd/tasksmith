@@ -38,7 +38,7 @@
 //     executes allowed calls and records denied calls before interrupting. It persists
 //     the pending [github.com/masterkeysrd/tasksmith/internal/daemon/tools.PermissionRequest] slice
 //     in [State.PendingPermissions] and returns a [github.com/masterkeysrd/loom/graph.InterruptUpdate]
-//     command. [Harness.Stream] yields an [EventInterrupted] notification carrying
+//     command. [Harness.Stream] yields an [Interrupted] notification carrying
 //     the pending permission requests.
 //   - Strict All-or-Nothing Resume: [Harness.Stream] validates that every request
 //     in [State.PendingPermissions] has a corresponding decision before invoking

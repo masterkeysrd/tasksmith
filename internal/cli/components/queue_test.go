@@ -26,26 +26,22 @@ func TestQueueComponent(t *testing.T) {
 		{
 			ID:   "item-1",
 			Kind: api.QueueKindMessage,
-			Payload: api.QueueMessagePayload{
-				Message: api.Message{
-					ID:   "item-1",
-					Role: api.RoleUser,
-					Content: []api.Block{
-						{
-							Type: api.BlockText,
-							Text: "queued prompt message",
-						},
+			Message: &api.Message{
+				ID:   "item-1",
+				Role: api.RoleUser,
+				Content: []api.Block{
+					{
+						Type: api.BlockText,
+						Text: "queued prompt message",
 					},
 				},
 			},
 			CreatedAt: time.Now().UTC(),
 		},
 		{
-			ID:   "item-2",
-			Kind: api.QueueKindCommand,
-			Payload: api.QueueCommandPayload{
-				Command: "git status",
-			},
+			ID:        "item-2",
+			Kind:      api.QueueKindCommand,
+			Command:   "git status",
 			CreatedAt: time.Now().UTC(),
 		},
 	})

@@ -376,12 +376,9 @@ func TestManagerUpdateInvalidatesHarness(t *testing.T) {
 	}
 
 	// Ensure harness is created
-	h1, err := sess.harness(ctx)
-	if err != nil {
-		t.Fatalf("harness: %v", err)
-	}
-	if sess.Harness == nil || sess.Harness != h1 {
-		t.Fatalf("expected sess.Harness to be cached")
+	h1 := sess.Harness
+	if h1 == nil {
+		t.Fatalf("expected sess.Harness to be initialized")
 	}
 
 	// Update with same model/agent -> Harness remains cached
@@ -393,13 +390,13 @@ func TestManagerUpdateInvalidatesHarness(t *testing.T) {
 		t.Fatalf("expected sess.Harness to remain non-nil after title update")
 	}
 
-	// Update with new model -> Harness cleared
+	// Update with new model -> Harness remains cached and reconfigures in place
 	_, err = mgr.Update(ctx, sess.ID, UpdateParams{Config: SessionConfig{Model: "custom-model"}})
 	if err != nil {
 		t.Fatalf("Update model: %v", err)
 	}
-	if sess.Harness != nil {
-		t.Errorf("expected sess.Harness to be nil after model change, got %v", sess.Harness)
+	if sess.Harness == nil || sess.Harness != h1 {
+		t.Errorf("expected sess.Harness to remain the same instance, got %v", sess.Harness)
 	}
 }
 

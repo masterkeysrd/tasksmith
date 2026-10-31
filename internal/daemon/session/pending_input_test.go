@@ -48,10 +48,7 @@ func TestPendingInteractionDefersQueuedWork(t *testing.T) {
 			if (len(sess.PendingPermissions) == 1) != (kind != "question") || (len(sess.PendingQuestions) == 1) != (kind != "permission") {
 				t.Fatalf("unexpected pending state: %+v", sess.State)
 			}
-			h, err := sess.harness(ctx)
-			if err != nil {
-				t.Fatal(err)
-			}
+			h := sess.Harness
 			before, err := h.LoadState(ctx)
 			if err != nil {
 				t.Fatal(err)
@@ -106,7 +103,7 @@ func TestPendingInteractionDefersQueuedWork(t *testing.T) {
 func TestWaitingStatusProtectsResponseHandoff(t *testing.T) {
 	for _, status := range []Status{StatusWaitingPermission, StatusWaitingQuestion} {
 		s := &Session{State: &State{Status: status}}
-		if err := s.startTurn(harness.Input{Compact: &harness.CompactInput{}}); !errors.Is(err, ErrInvalidConfig) {
+		if err := s.startTurn(harness.Input{Compact: &api.CompactRequest{}}); !errors.Is(err, ErrInvalidConfig) {
 			t.Fatalf("status %s: compact error %v", status, err)
 		}
 		if err := s.startTurn(harness.Input{}); err != nil || s.Running || s.Status != status {

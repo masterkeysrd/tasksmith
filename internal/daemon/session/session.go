@@ -74,6 +74,8 @@ type SessionConfig struct {
 	Mode     api.PermissionMode   `json:"mode,omitempty"`
 }
 
+var _ harness.Queue = (*Session)(nil)
+
 // Session represents a persistent user-facing chat thread and its runtime state.
 type Session struct {
 	// We embed [State] here so that Session supports state fields and locking
@@ -83,27 +85,27 @@ type Session struct {
 	// the Session and State.
 	*State `json:"state"`
 
-	ID          string                 `json:"id"`
-	Title       string                 `json:"title"`
-	Config      SessionConfig          `json:"config"`
+	ID          string                  `json:"id"`
+	Title       string                  `json:"title"`
+	Config      SessionConfig           `json:"config"`
 	Diagnostics []api.SessionDiagnostic `json:"diagnostics,omitempty"`
-	CreatedAt   time.Time              `json:"created_at"`
-	UpdatedAt   time.Time           `json:"updated_at"`
+	CreatedAt   time.Time               `json:"created_at"`
+	UpdatedAt   time.Time               `json:"updated_at"`
 
 	Permissions permissions.Permissions    `json:"-"`
 	PermManager permissions.SessionManager `json:"-"`
 	permRoot    permissions.Manager        `json:"-"`
 
-	Root             string            `json:"-"` // Path to <WorkspaceDir>/sessions/<id>
-	Sandbox          sandbox.Sandbox   `json:"-"`
-	Timeline         timeline.Timeline `json:"-"`
-	Journal          journal.Journal   `json:"-"`
-	Tools            tools.Container   `json:"-"`
-	Tasks            tasks.Manager     `json:"-"`
-	Harness          harness.Harness   `json:"-"`
-	Std              *std.Std          `json:"-"`
-	spiller          tools.Spiller     `json:"-"`
-	configGeneration uint64
+	Root       string            `json:"-"` // Path to <WorkspaceDir>/sessions/<id>
+	Sandbox    sandbox.Sandbox   `json:"-"`
+	Timeline   timeline.Timeline `json:"-"`
+	Journal    journal.Journal   `json:"-"`
+	Tools      tools.Container   `json:"-"`
+	Tasks      tasks.Manager     `json:"-"`
+	Harness    harness.Harness   `json:"-"`
+	Std        *std.Std          `json:"-"`
+	spiller    tools.Spiller     `json:"-"`
+	harnessErr error
 
 	// turnIDs and turnStart track the turn in progress: the user messages that
 	// started it and when the first of them was recorded. Guarded by the
@@ -111,17 +113,17 @@ type Session struct {
 	turnIDs   []string
 	turnStart time.Time
 
-	db         *sql.DB               `json:"-"`
-	store      *store                `json:"-"`
-	workspace  *workspace.Workspace  `json:"-"`
+	db         *sql.DB                `json:"-"`
+	store      *store                 `json:"-"`
+	workspace  *workspace.Workspace   `json:"-"`
 	gateway    func() gateway.Gateway `json:"-"`
 	catalog    func() *models.Catalog `json:"-"`
-	metrics    metrics.Service       `json:"-"`
-	reloadLock *sync.RWMutex         `json:"-"`
-	publisher  Publisher             `json:"-"`
-	logger     log.Interface         `json:"-"`
-	bgCtx      context.Context       `json:"-"`
-	wg         *sync.WaitGroup       `json:"-"`
+	metrics    metrics.Service        `json:"-"`
+	reloadLock *sync.RWMutex          `json:"-"`
+	publisher  Publisher              `json:"-"`
+	logger     log.Interface          `json:"-"`
+	bgCtx      context.Context        `json:"-"`
+	wg         *sync.WaitGroup        `json:"-"`
 }
 
 // Clone returns a deep copy of the session and its exported execution state,
@@ -265,6 +267,23 @@ func (s *Session) initResources(ctx context.Context) error {
 		s.Unlock()
 		return s.store.updateSessionPermissions(s.bgCtx, s.ID, p)
 	})
+	if s.Harness == nil {
+		h, err := harness.New(harness.Config{
+			ID:          s.ID,
+			DB:          s.db,
+			Bash:        s.Std,
+			Spiller:     s.spiller,
+			Permissions: s.PermManager,
+			Queue:       s,
+			Logger:      s.logger,
+			Metrics:     s.metrics,
+		})
+		if err != nil {
+			return fmt.Errorf("session: initialize harness: %w", err)
+		}
+		s.Harness = h
+	}
+	_ = s.configureHarness(ctx)
 	return nil
 }
 
@@ -284,41 +303,43 @@ func (s *Session) Close() error {
 	return nil
 }
 
-func (s *Session) harness(ctx context.Context) (harness.Harness, error) {
-	if s.reloadLock != nil {
-		s.reloadLock.RLock()
-		defer s.reloadLock.RUnlock()
-	}
-	return s.buildHarness(ctx)
-}
-
-func (s *Session) buildHarness(ctx context.Context) (harness.Harness, error) {
+func (s *Session) configureHarness(ctx context.Context) error {
 	s.Lock()
-	if s.Harness != nil {
-		h := s.Harness
+	if s.Harness == nil {
 		s.Unlock()
-		return h, nil
+		return errors.New("session: harness not initialized")
 	}
 	config := s.Config
-	generation := s.configGeneration
 	agentName := config.Agent
 	modelName := config.Model
 	s.Unlock()
 
 	model, found := s.catalog().Get(modelName)
 	if !found {
-		return nil, fmt.Errorf("session: model %q unavailable", modelName)
+		err := fmt.Errorf("session: model %q unavailable", modelName)
+		s.Lock()
+		s.harnessErr = err
+		s.Unlock()
+		return err
 	}
 	settings := s.modelSettings(config)
 	cfg, _, err := model.Configure(settings)
 	if err != nil {
-		return nil, fmt.Errorf("session: configure model %q: %w", modelName, err)
+		err = fmt.Errorf("session: configure model %q: %w", modelName, err)
+		s.Lock()
+		s.harnessErr = err
+		s.Unlock()
+		return err
 	}
 	llmModel, err := s.gateway().LLM(ctx, model, cfg)
-	limits := model.Limits
 	if err != nil {
-		return nil, fmt.Errorf("session: resolve model %q: %w", modelName, err)
+		err = fmt.Errorf("session: resolve model %q: %w", modelName, err)
+		s.Lock()
+		s.harnessErr = err
+		s.Unlock()
+		return err
 	}
+	limits := model.Limits
 
 	systemPrompt := s.renderSystemPrompt(agentName)
 	var agentBreakdown api.ContextBreakdown
@@ -329,38 +350,28 @@ func (s *Session) buildHarness(ctx context.Context) (harness.Harness, error) {
 
 	container, err := s.buildToolsForAgent(agentName)
 	if err != nil {
-		return nil, fmt.Errorf("session: build tools for agent %q: %w", agentName, err)
+		err = fmt.Errorf("session: build tools for agent %q: %w", agentName, err)
+		s.Lock()
+		s.harnessErr = err
+		s.Unlock()
+		return err
 	}
 
-	h, err := harness.New(harness.Config{
-		ID:           s.ID,
-		DB:           s.db,
+	opts := harness.NodeOptions{
 		Model:        llmModel,
 		Tools:        container,
-		Bash:         s.Std,
-		Spiller:      s.spiller,
-		Permissions:  s.PermManager,
 		SystemPrompt: systemPrompt,
-		Queue:        s,
-		Logger:       s.logger,
 		Limits:       limits,
 		Static:       staticCtx,
-		Metrics:      s.metrics,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("session: construct harness: %w", err)
 	}
+	err = s.Harness.Configure(opts)
 
 	s.Lock()
-	if generation != s.configGeneration {
-		s.Unlock()
-		return s.buildHarness(ctx)
-	}
 	s.Tools = container
-	s.Harness = h
+	s.harnessErr = err
 	s.Unlock()
 
-	return h, nil
+	return err
 }
 
 func (s *Session) renderSystemPrompt(agentName string) string {
@@ -511,20 +522,26 @@ func (s *Session) enqueueItem(item QueueItem) {
 	}
 }
 
-func (s *Session) Peek() (QueueItem, bool) {
+// HasItems reports whether the execution queue has pending items.
+func (s *Session) HasItems() bool {
 	s.Lock()
 	defer s.Unlock()
-	if len(s.queue) == 0 {
-		return QueueItem{}, false
-	}
-	return s.queue[0], true
+	return len(s.queue) > 0
 }
 
-func (s *Session) PopCommand() (QueueItem, bool) {
+// HasLeadingCommand reports whether the next pending item in the queue is a command.
+func (s *Session) HasLeadingCommand() bool {
+	s.Lock()
+	defer s.Unlock()
+	return len(s.queue) > 0 && s.queue[0].Kind == QueueKindCommand
+}
+
+// PopCommand pops and returns the leading command item if present.
+func (s *Session) PopCommand() (id, command string, ok bool) {
 	s.Lock()
 	if len(s.queue) == 0 || s.queue[0].Kind != QueueKindCommand {
 		s.Unlock()
-		return QueueItem{}, false
+		return "", "", false
 	}
 	item := s.queue[0]
 	s.queue = s.queue[1:]
@@ -535,9 +552,10 @@ func (s *Session) PopCommand() (QueueItem, bool) {
 		SessionID: s.ID,
 		Queue:     toAPIQueueItems(vis),
 	})
-	return item, true
+	return item.ID, item.Command, true
 }
 
+// PopMessages pops and returns all leading messages up to the next command item.
 func (s *Session) PopMessages() []message.Message {
 	s.Lock()
 	if len(s.queue) == 0 {
@@ -578,15 +596,8 @@ func (s *Session) PopMessages() []message.Message {
 
 	msgs := make([]message.Message, 0, len(popped))
 	for _, it := range popped {
-		switch it.Kind {
-		case QueueKindMessage:
-			if p, ok := it.Payload.(QueueMessagePayload); ok && p.Message != nil {
-				msgs = append(msgs, p.Message)
-			}
-		case QueueKindTask:
-			if p, ok := it.Payload.(QueueTaskPayload); ok && p.Message != nil {
-				msgs = append(msgs, p.Message)
-			}
+		if it.Message != nil {
+			msgs = append(msgs, it.Message)
 		}
 	}
 	return msgs
@@ -608,7 +619,7 @@ func (s *Session) Send(ctx context.Context, input SendInput) error {
 			return ErrSessionRunning
 		}
 		s.Unlock()
-		return s.startTurn(harness.Input{Compact: &harness.CompactInput{Focus: input.Compact.Focus}})
+		return s.startTurn(harness.Input{Compact: input.Compact})
 	}
 	if cmd := strings.TrimSpace(input.Command); cmd != "" {
 		if input.Decision != nil || input.Question != nil || input.Message != nil {
@@ -617,7 +628,7 @@ func (s *Session) Send(ctx context.Context, input SendInput) error {
 		s.enqueueItem(QueueItem{
 			ID:      input.ID,
 			Kind:    QueueKindCommand,
-			Payload: QueueCommandPayload{Command: cmd},
+			Command: cmd,
 		})
 		s.Lock()
 		running := s.Running
@@ -689,7 +700,7 @@ func (s *Session) Send(ctx context.Context, input SendInput) error {
 		s.enqueueItem(QueueItem{
 			ID:      msg.GetID(),
 			Kind:    QueueKindMessage,
-			Payload: QueueMessagePayload{Message: message.CloneMessage(msg)},
+			Message: message.CloneMessage(msg),
 		})
 		return nil
 	}
@@ -950,9 +961,11 @@ func (s *Session) startTurn(hInput harness.Input) error {
 			close(done)
 		}()
 
-		h, err := s.harness(runCtx)
-		if err != nil {
-			s.handleAsyncError(err)
+		s.Lock()
+		hErr := s.harnessErr
+		s.Unlock()
+		if hErr != nil {
+			s.handleAsyncError(hErr)
 			return
 		}
 
@@ -964,7 +977,7 @@ func (s *Session) startTurn(hInput harness.Input) error {
 			WorkspaceRoot: s.workspace.RootDir(),
 			Agent:         agentName,
 		})
-		reply, err := s.send(sCtx, h.Stream(sCtx, hInput))
+		reply, err := s.send(sCtx, s.Harness.Stream(sCtx, hInput))
 		if err != nil {
 			s.handleAsyncError(err)
 			return
@@ -981,7 +994,7 @@ func (s *Session) startTurn(hInput harness.Input) error {
 				break
 			}
 
-			reply, err := s.send(sCtx, h.Stream(sCtx, harness.Input{}))
+			reply, err := s.send(sCtx, s.Harness.Stream(sCtx, harness.Input{}))
 			if err != nil {
 				s.handleAsyncError(err)
 				return
@@ -1015,13 +1028,13 @@ func (s *Session) Enqueue(msg message.Message) {
 		item = QueueItem{
 			ID:      msg.GetID(),
 			Kind:    QueueKindTask,
-			Payload: QueueTaskPayload{Message: message.CloneMessage(msg)},
+			Message: message.CloneMessage(msg),
 		}
 	} else {
 		item = QueueItem{
 			ID:      msg.GetID(),
 			Kind:    QueueKindMessage,
-			Payload: QueueMessagePayload{Message: message.CloneMessage(msg)},
+			Message: message.CloneMessage(msg),
 		}
 	}
 	s.enqueueItem(item)
@@ -1066,12 +1079,7 @@ func (s *Session) recordDecision(ctx context.Context, decision api.PermissionDec
 		return false, fmt.Errorf("%w: unsupported decision kind %q", ErrInvalidDecision, decision.Kind)
 	}
 
-	h, err := s.harness(ctx)
-	if err != nil {
-		return false, err
-	}
-
-	state, err := h.LoadState(ctx)
+	state, err := s.Harness.LoadState(ctx)
 	if err != nil {
 		return false, fmt.Errorf("session: load harness state for permissions: %w", err)
 	}
@@ -1142,11 +1150,7 @@ func (s *Session) recordDecision(ctx context.Context, decision api.PermissionDec
 }
 
 func (s *Session) recordQuestion(ctx context.Context, response api.QuestionResponse) (bool, error) {
-	h, err := s.harness(ctx)
-	if err != nil {
-		return false, err
-	}
-	state, err := h.LoadState(ctx)
+	state, err := s.Harness.LoadState(ctx)
 	if err != nil {
 		return false, err
 	}
@@ -1246,13 +1250,13 @@ func (s *Session) handleAsyncError(err error) {
 	}
 }
 
-func (s *Session) send(ctx context.Context, stream iter.Seq2[harness.Event, error]) (*message.Assistant, error) {
+func (s *Session) send(ctx context.Context, stream iter.Seq2[any, error]) (*message.Assistant, error) {
 	var reply *message.Assistant
 	var interrupted bool
 	var pendingTools int
 	agg := message.NewAssistantAggregator()
 
-	for hev, err := range stream {
+	for raw, err := range stream {
 		if err != nil {
 			if errors.Is(err, context.Canceled) {
 				partialMsg, buildErr := agg.Build()
@@ -1272,13 +1276,13 @@ func (s *Session) send(ctx context.Context, stream iter.Seq2[harness.Event, erro
 			}
 			return nil, err
 		}
-		switch hev.Type {
-		case harness.EventChunk:
-			if hev.Chunk != nil {
-				agg.Add(hev.Chunk)
+		switch ev := raw.(type) {
+		case *message.AssistantChunk:
+			if ev != nil {
+				agg.Add(ev)
 				hasGenerating := false
 				hasThinking := false
-				for _, b := range hev.Chunk.Content {
+				for _, b := range ev.Content {
 					switch b.(type) {
 					case *message.TextBlock, *message.ToolCall, *message.ToolCallChunk:
 						hasGenerating = true
@@ -1291,15 +1295,15 @@ func (s *Session) send(ctx context.Context, stream iter.Seq2[harness.Event, erro
 				} else if hasThinking {
 					s.setStatus(StatusThinking)
 				}
-				clonedChunk := message.CloneAssistantChunk(*hev.Chunk)
+				clonedChunk := message.CloneAssistantChunk(*ev)
 				apiChunk := toAPIChunk(&clonedChunk)
 				s.publisher.Publish(api.SessionStreamTopic(s.ID), api.ChunkEvent{SessionID: s.ID, Chunk: *apiChunk})
 			}
 
-		case harness.EventMessage:
-			if hev.Message != nil {
+		case message.Message:
+			if ev != nil {
 				agg = message.NewAssistantAggregator()
-				entry := timeline.NewMessageEntry(s.ID, hev.Message)
+				entry := timeline.NewMessageEntry(s.ID, ev)
 				if err := s.Timeline.Append(ctx, entry); err != nil {
 					return nil, err
 				}
@@ -1312,16 +1316,16 @@ func (s *Session) send(ctx context.Context, stream iter.Seq2[harness.Event, erro
 
 				publishEntryAdded(s.publisher, s.ID, entry)
 
-				if user, ok := hev.Message.(*message.User); ok && harness.SystemKindOf(user) == "" {
+				if user, ok := ev.(*message.User); ok && harness.SystemKindOf(user) == "" {
 					s.beginTurn(user.GetID(), entry.CreatedAt)
 				}
 
-				if asst, ok := hev.Message.(*message.Assistant); ok {
+				if asst, ok := ev.(*message.Assistant); ok {
 					if len(asst.ToolCalls()) > 0 {
 						pendingTools = len(asst.ToolCalls())
 						s.setStatus(StatusExecuting)
 					}
-				} else if _, ok := hev.Message.(*message.Tool); ok {
+				} else if _, ok := ev.(*message.Tool); ok {
 					if pendingTools > 0 {
 						pendingTools--
 						if pendingTools == 0 {
@@ -1333,51 +1337,39 @@ func (s *Session) send(ctx context.Context, stream iter.Seq2[harness.Event, erro
 				}
 			}
 
-		case harness.EventCommandStarted:
-			if hev.CommandStarted != nil {
-				s.setStatus(StatusExecuting)
-				s.publisher.Publish(api.SessionStreamTopic(s.ID), api.CommandStartedEvent{
-					SessionID: s.ID,
-					ID:        hev.CommandStarted.ID,
-					Command:   hev.CommandStarted.Command,
-				})
+		case api.CommandStartedEvent:
+			s.setStatus(StatusExecuting)
+			ev.SessionID = s.ID
+			s.publisher.Publish(api.SessionStreamTopic(s.ID), ev)
+
+		case harness.CommandCompleted:
+			entry := timeline.NewCommandEntry(s.ID, ev.CommandRecord)
+			if ev.ID != "" && uuid.Validate(ev.ID) {
+				entry.ID = ev.ID
 			}
-
-		case harness.EventCommandCompleted:
-			if hev.CommandCompleted != nil {
-				entry := timeline.NewCommandEntry(s.ID, api.CommandRecord{
-					Command:    hev.CommandCompleted.Command,
-					Output:     hev.CommandCompleted.Output,
-					ExitCode:   hev.CommandCompleted.ExitCode,
-					DurationMs: hev.CommandCompleted.DurationMs,
-				})
-				if hev.CommandCompleted.ID != "" && uuid.Validate(hev.CommandCompleted.ID) {
-					entry.ID = hev.CommandCompleted.ID
-				}
-				if err := s.Timeline.Append(ctx, entry); err != nil {
-					return nil, err
-				}
-				if err := s.store.touchSession(ctx, s.ID, entry.CreatedAt); err != nil {
-					return nil, err
-				}
-				s.Lock()
-				s.UpdatedAt = entry.CreatedAt
-				s.Unlock()
-
-				publishEntryAdded(s.publisher, s.ID, entry)
+			if err := s.Timeline.Append(ctx, entry); err != nil {
+				return nil, err
 			}
+			if err := s.store.touchSession(ctx, s.ID, entry.CreatedAt); err != nil {
+				return nil, err
+			}
+			s.Lock()
+			s.UpdatedAt = entry.CreatedAt
+			s.Unlock()
 
-		case harness.EventInterrupted:
+			publishEntryAdded(s.publisher, s.ID, entry)
+
+		case harness.Interrupted:
 			interrupted = true
-			perms := make([]api.PermissionRequest, len(hev.Permissions))
-			for i, p := range hev.Permissions {
+			perms := make([]api.PermissionRequest, len(ev.Permissions))
+			for i, p := range ev.Permissions {
 				p.GrantPatterns = slices.Clone(p.GrantPatterns)
 				perms[i] = p
 			}
 
-			questions := make([]api.QuestionRequest, len(hev.Questions))
-			for i := range hev.Questions {
-				questions[i] = *hev.Questions[i].Clone()
+			questions := make([]api.QuestionRequest, len(ev.Questions))
+			for i := range ev.Questions {
+				questions[i] = *ev.Questions[i].Clone()
 			}
 			nextStatus := StatusWaitingQuestion
 			if len(perms) > 0 {
@@ -1404,94 +1396,61 @@ func (s *Session) send(ctx context.Context, stream iter.Seq2[harness.Event, erro
 				s.publisher.Publish(api.SessionStreamTopic(s.ID), api.QuestionRequestedEvent{SessionID: s.ID, Questions: questions})
 			}
 
-		case harness.EventTodosUpdated:
+		case api.TodosUpdatedEvent:
 			s.Lock()
-			s.Todos = slices.Clone(hev.Todos)
+			s.Todos = slices.Clone(ev.Todos)
 			s.Unlock()
 
-			s.publisher.Publish(api.SessionStreamTopic(s.ID), api.TodosUpdatedEvent{
-				SessionID: s.ID,
-				Todos:     hev.Todos,
-			})
+			ev.SessionID = s.ID
+			s.publisher.Publish(api.SessionStreamTopic(s.ID), ev)
 
-		case harness.EventCompactionStarted:
+		case api.CompactionStartedEvent:
 			s.setStatus(StatusCompacting)
-			var compID, trig, focus string
-			if hev.CompactionStarted != nil {
-				compID = hev.CompactionStarted.ID
-				trig = hev.CompactionStarted.Trigger
-				focus = hev.CompactionStarted.Focus
+			ev.SessionID = s.ID
+			s.publisher.Publish(api.SessionStreamTopic(s.ID), ev)
+
+		case harness.CompactionCompleted:
+			entry := timeline.NewCompactedEntry(s.ID, ev.CompactedRecord)
+			if ev.ID != "" && uuid.Validate(ev.ID) {
+				entry.ID = ev.ID
 			}
-			s.publisher.Publish(api.SessionStreamTopic(s.ID), api.CompactionStartedEvent{
-				SessionID: s.ID,
-				ID:        compID,
-				Trigger:   trig,
-				Focus:     focus,
-			})
-
-		case harness.EventCompactionCompleted:
-			if hev.CompactionCompleted != nil {
-				rec := api.CompactedRecord{
-					Trigger:      hev.CompactionCompleted.Trigger,
-					Focus:        hev.CompactionCompleted.Focus,
-					Summary:      hev.CompactionCompleted.Summary,
-					BeforeTokens: hev.CompactionCompleted.BeforeTokens,
-					AfterTokens:  hev.CompactionCompleted.AfterTokens,
-					DurationMs:   hev.CompactionCompleted.DurationMs,
-				}
-				entry := timeline.NewCompactedEntry(s.ID, rec)
-				if hev.CompactionCompleted.ID != "" && uuid.Validate(hev.CompactionCompleted.ID) {
-					entry.ID = hev.CompactionCompleted.ID
-				}
-				if err := s.Timeline.Append(ctx, entry); err != nil {
-					return nil, err
-				}
-				if err := s.store.touchSession(ctx, s.ID, entry.CreatedAt); err != nil {
-					return nil, err
-				}
-				s.Lock()
-				s.UpdatedAt = entry.CreatedAt
-				s.Unlock()
-
-				publishEntryAdded(s.publisher, s.ID, entry)
+			if err := s.Timeline.Append(ctx, entry); err != nil {
+				return nil, err
 			}
-
-		case harness.EventCacheBroken:
-			if hev.CacheBroken != nil {
-				rec := api.CacheBrokenRecord{
-					PrevCached:  hev.CacheBroken.PrevCached,
-					CurrCached:  hev.CacheBroken.CurrCached,
-					InputTokens: hev.CacheBroken.InputTokens,
-				}
-				entry := timeline.NewCacheBrokenEntry(s.ID, rec)
-				if err := s.Timeline.Append(ctx, entry); err != nil {
-					return nil, err
-				}
-				if err := s.store.touchSession(ctx, s.ID, entry.CreatedAt); err != nil {
-					return nil, err
-				}
-				s.Lock()
-				s.UpdatedAt = entry.CreatedAt
-				s.Unlock()
-
-				publishEntryAdded(s.publisher, s.ID, entry)
+			if err := s.store.touchSession(ctx, s.ID, entry.CreatedAt); err != nil {
+				return nil, err
 			}
+			s.Lock()
+			s.UpdatedAt = entry.CreatedAt
+			s.Unlock()
 
-		case harness.EventContextUpdated:
-			if hev.Context != nil {
-				s.Lock()
-				s.Context = *hev.Context
-				s.Unlock()
+			publishEntryAdded(s.publisher, s.ID, entry)
 
-				s.publisher.Publish(api.SessionStreamTopic(s.ID), api.ContextUpdatedEvent{
-					SessionID: s.ID,
-					Context:   *hev.Context,
-				})
+		case api.CacheBrokenRecord:
+			entry := timeline.NewCacheBrokenEntry(s.ID, ev)
+			if err := s.Timeline.Append(ctx, entry); err != nil {
+				return nil, err
 			}
+			if err := s.store.touchSession(ctx, s.ID, entry.CreatedAt); err != nil {
+				return nil, err
+			}
+			s.Lock()
+			s.UpdatedAt = entry.CreatedAt
+			s.Unlock()
 
-		case harness.EventCompleted:
-			if hev.Message != nil {
-				if asst, ok := message.CloneMessage(hev.Message).(*message.Assistant); ok {
+			publishEntryAdded(s.publisher, s.ID, entry)
+
+		case api.ContextUpdatedEvent:
+			s.Lock()
+			s.Context = ev.Context
+			s.Unlock()
+
+			ev.SessionID = s.ID
+			s.publisher.Publish(api.SessionStreamTopic(s.ID), ev)
+
+		case harness.Completed:
+			if ev.Message != nil {
+				if asst, ok := message.CloneMessage(ev.Message).(*message.Assistant); ok {
 					reply = asst
 				}
 			}

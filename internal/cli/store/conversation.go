@@ -290,16 +290,14 @@ func (acc *conversationAccumulator) addPendingUser(id, text string) {
 			acc.queue = append(acc.queue, api.QueueItem{
 				ID:   id,
 				Kind: api.QueueKindMessage,
-				Payload: api.QueueMessagePayload{
-					Message: api.Message{
-						ID:        id,
-						Role:      api.RoleUser,
-						CreatedAt: time.Now().UTC(),
-						Content: []api.Block{
-							{
-								Type: api.BlockText,
-								Text: text,
-							},
+				Message: &api.Message{
+					ID:        id,
+					Role:      api.RoleUser,
+					CreatedAt: time.Now().UTC(),
+					Content: []api.Block{
+						{
+							Type: api.BlockText,
+							Text: text,
 						},
 					},
 				},
@@ -333,11 +331,9 @@ func (acc *conversationAccumulator) addPendingCommand(id, cmd string) {
 	if acc.status == StreamRunning || acc.status == StreamWaitingPermission || acc.status == StreamWaitingQuestion {
 		if !slices.ContainsFunc(acc.queue, func(item api.QueueItem) bool { return item.ID == id }) {
 			acc.queue = append(acc.queue, api.QueueItem{
-				ID:   id,
-				Kind: api.QueueKindCommand,
-				Payload: api.QueueCommandPayload{
-					Command: cmd,
-				},
+				ID:        id,
+				Kind:      api.QueueKindCommand,
+				Command:   cmd,
 				CreatedAt: time.Now().UTC(),
 			})
 		}

@@ -19,20 +19,20 @@ import (
 
 // InitOptions configures the initialization of a workspace directory.
 type InitOptions struct {
-	ProjectName      string               `json:"project_name,omitempty"`
-	Provider         string               `json:"provider,omitempty"`
-	SelectedProvider string               `json:"selected_provider,omitempty"`
-	APIKey           string               `json:"api_key,omitempty"`
-	Endpoint         string               `json:"endpoint,omitempty"`
-	DefaultModel     string               `json:"default_model,omitempty"`
+	ProjectName      string                    `json:"project_name,omitempty"`
+	Provider         string                    `json:"provider,omitempty"`
+	SelectedProvider string                    `json:"selected_provider,omitempty"`
+	APIKey           string                    `json:"api_key,omitempty"`
+	Endpoint         string                    `json:"endpoint,omitempty"`
+	DefaultModel     string                    `json:"default_model,omitempty"`
 	DefaultModels    map[warp.ModelRole]string `json:"default_models,omitempty"`
-	DefaultAgent     string               `json:"default_agent,omitempty"`
-	AuthorizedTools  []string             `json:"authorized_tools,omitempty"`
-	TrustOnly        bool                 `json:"trust_only,omitempty"`
-	AuthType         string               `json:"auth_type,omitempty"`
-	AuthEnv          string               `json:"auth_env,omitempty"`
-	AuthFile         string               `json:"auth_file,omitempty"`
-	AuthHeader       string               `json:"auth_header,omitempty"`
+	DefaultAgent     string                    `json:"default_agent,omitempty"`
+	AuthorizedTools  []string                  `json:"authorized_tools,omitempty"`
+	TrustOnly        bool                      `json:"trust_only,omitempty"`
+	AuthType         string                    `json:"auth_type,omitempty"`
+	AuthEnv          string                    `json:"auth_env,omitempty"`
+	AuthFile         string                    `json:"auth_file,omitempty"`
+	AuthHeader       string                    `json:"auth_header,omitempty"`
 }
 
 func (o InitOptions) providerName() string {

@@ -11,17 +11,19 @@ import (
 	"github.com/masterkeysrd/loom/graph"
 	"github.com/masterkeysrd/loom/llm"
 	"github.com/masterkeysrd/loom/message"
+	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/models"
 )
 
 func TestCompactionNodeFailureCases(t *testing.T) {
 	_, reg, _ := newTestToolsRegistry(t)
-	state := State{PendingCompaction: &CompactInput{Focus: "focus"}, Messages: message.MessageList{message.NewUserText("request")}}
+	state := State{PendingCompaction: &api.CompactRequest{Focus: "focus"}, Messages: message.MessageList{message.NewUserText("request")}}
 	provider := &fakeProvider{handler: func(context.Context, *llm.Request) ([]string, string, error) {
 		return []string{"  \n "}, "response", nil
 	}}
-	node := NewCompactionNode(CompactionNodeConfig{Model: newTestModel(t, provider), Container: reg, Logger: log.Default()})
+	node := NewCompactionNode(CompactionNodeConfig{Logger: log.Default()})
+	node.Configure(NodeOptions{Model: newTestModel(t, provider), Tools: reg})
 
 	cmd, err := node.Execute(context.Background(), state)
 	if cmd != nil || err == nil || !strings.Contains(err.Error(), "compaction returned empty summary") {
@@ -65,21 +67,22 @@ func TestCompactionFailurePreservesCheckpointAndResumes(t *testing.T) {
 					return []message.AssistantChunk{{Content: []message.Block{&message.TextBlock{Text: "answer"}}, Done: true}}, nil
 				}
 			}}
-			h, err := New(Config{ID: "compact-failure-" + name, DB: openTestSQLite(t), Model: newTestModel(t, provider), Tools: reg, Permissions: perm, Queue: &fakeQueue{}, Bash: &fakeBashRunner{}, Spiller: newTestSpiller(t), Logger: log.Default(), Limits: models.Limits{Context: 10000, Output: 1000}})
+			h, err := New(Config{ID: "compact-failure-" + name, DB: openTestSQLite(t), Permissions: perm, Queue: &fakeQueue{}, Bash: &fakeBashRunner{}, Spiller: newTestSpiller(t), Logger: log.Default()})
 			if err != nil {
 				t.Fatal(err)
 			}
+			h.Configure(NodeOptions{Model: newTestModel(t, provider), Tools: reg, Limits: models.Limits{Context: 10000, Output: 1000}})
 			for _, err := range h.Stream(ctx, Input{Message: message.NewUserText("first request")}) {
 				if err != nil {
 					t.Fatal(err)
 				}
 			}
-			input := Input{Compact: &CompactInput{Focus: "focus"}}
+			input := Input{Compact: &api.CompactRequest{Focus: "focus"}}
 			if auto {
 				input = Input{Message: message.NewUserText("new request")}
 			}
 			var streamErr error
-			var events []Event
+			var events []any
 			for ev, err := range h.Stream(ctx, input) {
 				if err != nil {
 					streamErr = err
@@ -91,7 +94,8 @@ func TestCompactionFailurePreservesCheckpointAndResumes(t *testing.T) {
 				t.Fatalf("expected provider error, got %v", streamErr)
 			}
 			for _, ev := range events {
-				if ev.Type == EventCompleted || ev.Type == EventCompactionCompleted {
+				switch ev.(type) {
+				case Completed, CompactionCompleted:
 					t.Fatalf("unexpected completion after failure: %+v", ev)
 				}
 			}

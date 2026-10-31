@@ -332,14 +332,18 @@ func TestCompactionRequestsSurviveCheckpoint(t *testing.T) {
 	ctx := context.Background()
 	_, registry, permissions := newTestToolsRegistry(t)
 	cfg := Config{
-		ID: "compaction-requests", DB: openTestSQLite(t), Model: newTestModel(t, nil),
-		Tools: registry, Permissions: permissions, Queue: &fakeQueue{}, Bash: &fakeBashRunner{},
+		ID: "compaction-requests", DB: openTestSQLite(t),
+		Permissions: permissions, Queue: &fakeQueue{}, Bash: &fakeBashRunner{},
 		Spiller: newTestSpiller(t), Logger: log.Default(),
 	}
 	h, err := New(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
+	h.Configure(NodeOptions{
+		Model: newTestModel(t, nil),
+		Tools: registry,
+	})
 	run := func(input Input) {
 		t.Helper()
 		for _, err := range h.Stream(ctx, input) {
@@ -351,12 +355,16 @@ func TestCompactionRequestsSurviveCheckpoint(t *testing.T) {
 	first := "Implement these changes:\n1. First item\n2. Second item\n# Details\nKeep all lines."
 	second := "Another request\nwith multiple lines"
 	run(Input{Message: message.NewUserText(first)})
-	run(Input{Compact: &CompactInput{}})
+	run(Input{Compact: &api.CompactRequest{}})
 
 	h, err = New(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
+	h.Configure(NodeOptions{
+		Model: newTestModel(t, nil),
+		Tools: registry,
+	})
 	state, err := h.LoadState(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -365,8 +373,8 @@ func TestCompactionRequestsSurviveCheckpoint(t *testing.T) {
 		t.Fatalf("requests after checkpoint = %q, want %q", got, []string{first})
 	}
 	run(Input{Message: message.NewUserText(second)})
-	run(Input{Compact: &CompactInput{}})
-	run(Input{Compact: &CompactInput{}})
+	run(Input{Compact: &api.CompactRequest{}})
+	run(Input{Compact: &api.CompactRequest{}})
 	state, err = h.LoadState(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -475,16 +483,18 @@ func TestCompactionNodeExecute(t *testing.T) {
 	static := StaticContext{SystemPrompt: 100, SystemTools: 500}
 
 	node := NewCompactionNode(CompactionNodeConfig{
+		Logger: log.Default(),
+	})
+	node.Configure(NodeOptions{
 		Model:        model,
-		Container:    reg,
+		Tools:        reg,
 		SystemPrompt: "You are a test agent",
 		Limits:       limits,
 		Static:       static,
-		Logger:       log.Default(),
 	})
 
 	initState := State{
-		PendingCompaction: &CompactInput{
+		PendingCompaction: &api.CompactRequest{
 			Focus: "database migrations",
 		},
 		Messages: message.MessageList{
@@ -537,11 +547,13 @@ func TestCompactionNodeExecute(t *testing.T) {
 		},
 	}
 	nodeErr := NewCompactionNode(CompactionNodeConfig{
-		Model:     newTestModel(t, provErr),
-		Container: reg,
-		Limits:    limits,
-		Static:    static,
-		Logger:    log.Default(),
+		Logger: log.Default(),
+	})
+	nodeErr.Configure(NodeOptions{
+		Model:  newTestModel(t, provErr),
+		Tools:  reg,
+		Limits: limits,
+		Static: static,
 	})
 	cmdErr, err := nodeErr.Execute(ctx, initState)
 	if !errors.Is(err, providerErr) || cmdErr != nil {
@@ -561,7 +573,7 @@ func TestStateMethodsAndMutators(t *testing.T) {
 	if s.HasLeadingCompact() {
 		t.Errorf("empty state HasLeadingCompact should be false")
 	}
-	s.PendingCompaction = &CompactInput{Focus: "test focus"}
+	s.PendingCompaction = &api.CompactRequest{Focus: "test focus"}
 	if !s.HasLeadingCompact() {
 		t.Errorf("state with PendingCompaction HasLeadingCompact should be true")
 	}
@@ -616,81 +628,6 @@ func TestStateMethodsAndMutators(t *testing.T) {
 	}
 	if s.Context.Compactions != 1 {
 		t.Errorf("Compactions = %d, want 1", s.Context.Compactions)
-	}
-}
-
-func TestStreamEvents(t *testing.T) {
-	// NodeMessageEvent
-	nme := NodeMessageEvent{Message: message.NewUserText("hello")}
-	if nme.EventName() != eventNodeMessage {
-		t.Errorf("EventName = %q, want %q", nme.EventName(), eventNodeMessage)
-	}
-	ev := nme.ToEvent()
-	if ev.Type != EventMessage || ev.Message == nil {
-		t.Errorf("unexpected event: %+v", ev)
-	}
-
-	// CommandStarted
-	cs := CommandStarted{ID: "c1", Command: "ls"}
-	if cs.EventName() != eventCommandStarted {
-		t.Errorf("EventName = %q, want %q", cs.EventName(), eventCommandStarted)
-	}
-	if ev := cs.ToEvent(); ev.Type != EventCommandStarted || ev.CommandStarted.ID != "c1" {
-		t.Errorf("unexpected event: %+v", ev)
-	}
-
-	// CommandCompleted
-	cc := CommandCompleted{ID: "c1", Command: "ls", ExitCode: 0}
-	if cc.EventName() != eventCommandCompleted {
-		t.Errorf("EventName = %q, want %q", cc.EventName(), eventCommandCompleted)
-	}
-	if ev := cc.ToEvent(); ev.Type != EventCommandCompleted || ev.CommandCompleted.ID != "c1" {
-		t.Errorf("unexpected event: %+v", ev)
-	}
-
-	// TodosUpdatedEvent
-	tue := TodosUpdatedEvent{Todos: []api.TodoItem{{Content: "item 1"}}}
-	if tue.EventName() != eventTodosUpdated {
-		t.Errorf("EventName = %q, want %q", tue.EventName(), eventTodosUpdated)
-	}
-	if ev := tue.ToEvent(); ev.Type != EventTodosUpdated || len(ev.Todos) != 1 {
-		t.Errorf("unexpected event: %+v", ev)
-	}
-
-	// CompactionStarted
-	cmpS := CompactionStarted{ID: "cmp1", Trigger: "manual", Focus: "focus"}
-	if cmpS.EventName() != eventCompactionStarted {
-		t.Errorf("EventName = %q, want %q", cmpS.EventName(), eventCompactionStarted)
-	}
-	if ev := cmpS.ToEvent(); ev.Type != EventCompactionStarted || ev.CompactionStarted.Focus != "focus" {
-		t.Errorf("unexpected event: %+v", ev)
-	}
-
-	// CompactionCompleted
-	cmpC := CompactionCompleted{ID: "cmp1", Trigger: "manual", Summary: "summary"}
-	if cmpC.EventName() != eventCompactionCompleted {
-		t.Errorf("EventName = %q, want %q", cmpC.EventName(), eventCompactionCompleted)
-	}
-	if ev := cmpC.ToEvent(); ev.Type != EventCompactionCompleted || ev.CompactionCompleted.Summary != "summary" {
-		t.Errorf("unexpected event: %+v", ev)
-	}
-
-	// ContextUpdatedEvent
-	cue := ContextUpdatedEvent{Context: api.ContextState{UsedTokens: 100}}
-	if cue.EventName() != eventContextUpdated {
-		t.Errorf("EventName = %q, want %q", cue.EventName(), eventContextUpdated)
-	}
-	if ev := cue.ToEvent(); ev.Type != EventContextUpdated || ev.Context.UsedTokens != 100 {
-		t.Errorf("unexpected event: %+v", ev)
-	}
-
-	// CacheBroken
-	cb := CacheBroken{PrevCached: 200, CurrCached: 50}
-	if cb.EventName() != eventCacheBroken {
-		t.Errorf("EventName = %q, want %q", cb.EventName(), eventCacheBroken)
-	}
-	if ev := cb.ToEvent(); ev.Type != EventCacheBroken || ev.CacheBroken.PrevCached != 200 {
-		t.Errorf("unexpected event: %+v", ev)
 	}
 }
 

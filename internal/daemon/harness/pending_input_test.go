@@ -32,10 +32,11 @@ func TestPendingInteractionBlocksCompactionAndQueue(t *testing.T) {
 				}
 				return []message.AssistantChunk{{Content: blocks, Done: true}}, nil
 			}}
-			h, err := New(Config{ID: "pending-" + kind, DB: openTestSQLite(t), Model: newTestModel(t, provider), Tools: registry, Bash: &fakeBashRunner{}, Spiller: newTestSpiller(t), Permissions: perms, Queue: queue, Logger: log.Default()})
+			h, err := New(Config{ID: "pending-" + kind, DB: openTestSQLite(t), Bash: &fakeBashRunner{}, Spiller: newTestSpiller(t), Permissions: perms, Queue: queue, Logger: log.Default()})
 			if err != nil {
 				t.Fatal(err)
 			}
+			h.Configure(NodeOptions{Model: newTestModel(t, provider), Tools: registry})
 			for _, err := range h.Stream(ctx, Input{Message: message.NewUserText("start")}) {
 				if err != nil {
 					t.Fatal(err)
@@ -50,7 +51,7 @@ func TestPendingInteractionBlocksCompactionAndQueue(t *testing.T) {
 			if kind == "question" {
 				want = ErrPendingQuestionsUnresolved
 			}
-			for _, input := range []Input{{Compact: &CompactInput{Focus: "focus"}}, {}} {
+			for _, input := range []Input{{Compact: &api.CompactRequest{Focus: "focus"}}, {}} {
 				var got error
 				for _, err := range h.Stream(ctx, input) {
 					got = err
@@ -63,7 +64,7 @@ func TestPendingInteractionBlocksCompactionAndQueue(t *testing.T) {
 					t.Fatalf("checkpoint changed: before=%+v after=%+v err=%v", before, after, err)
 				}
 			}
-			queue.items = append(queue.items, QueueItem{Kind: QueueKindCommand, Payload: QueueCommandPayload{Command: "show status"}})
+			queue.items = append(queue.items, fakeQueueItem{isCmd: true, command: "show status"})
 			var got error
 			for _, err := range h.Stream(ctx, Input{}) {
 				got = err

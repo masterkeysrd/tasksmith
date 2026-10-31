@@ -83,29 +83,24 @@ func toAPIQueueItems(items []QueueItem) []api.QueueItem {
 func toAPIQueueItem(it QueueItem) (api.QueueItem, bool) {
 	switch it.Kind {
 	case QueueKindMessage:
-		p, ok := it.Payload.(QueueMessagePayload)
-		if !ok {
+		if it.Message == nil {
 			return api.QueueItem{}, false
 		}
-		apiMsg, err := ToAPIMessage(p.Message)
+		apiMsg, err := ToAPIMessage(it.Message)
 		if err != nil || apiMsg == nil {
 			return api.QueueItem{}, false
 		}
 		return api.QueueItem{
 			ID:        it.ID,
 			Kind:      api.QueueKindMessage,
-			Payload:   api.QueueMessagePayload{Message: *apiMsg},
+			Message:   apiMsg,
 			CreatedAt: it.CreatedAt,
 		}, true
 	case QueueKindCommand:
-		p, ok := it.Payload.(QueueCommandPayload)
-		if !ok {
-			return api.QueueItem{}, false
-		}
 		return api.QueueItem{
 			ID:        it.ID,
 			Kind:      api.QueueKindCommand,
-			Payload:   api.QueueCommandPayload{Command: p.Command},
+			Command:   it.Command,
 			CreatedAt: it.CreatedAt,
 		}, true
 	default:
@@ -341,4 +336,3 @@ func ToAPITimelineEntry(entry timeline.Entry) (api.TimelineEntry, error) {
 
 	return out, nil
 }
-

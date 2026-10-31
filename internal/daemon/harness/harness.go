@@ -19,23 +19,92 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/daemon/models"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/permissions"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/scope"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/std"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tools"
 )
 
+// Sentinel errors returned by the harness package.
+var (
+	ErrInvalidConfig                = errors.New("harness: invalid configuration")
+	ErrEmptyThreadID                = errors.New("harness: thread ID must not be empty")
+	ErrNilMessage                   = errors.New("harness: input message must not be nil")
+	ErrNoPendingPermissions         = errors.New("harness: no pending permissions for thread")
+	ErrPendingPermissionsUnresolved = errors.New("harness: all pending permissions must be resolved before resuming")
+	ErrNoPendingQuestions           = errors.New("harness: no pending questions for thread")
+	ErrPendingQuestionsUnresolved   = errors.New("harness: all pending questions must be resolved before resuming")
+)
+
+// Queue is the consumer interface for the session's execution queue
+// accessed by the harness execution graph.
+type Queue interface {
+	HasItems() bool
+	HasLeadingCommand() bool
+	PopCommand() (id, command string, ok bool)
+	PopMessages() []message.Message
+}
+
+// BashRunner executes a shell command inside the session environment.
+// Satisfied by *std.Std.
+type BashRunner interface {
+	Bash(ctx context.Context, req std.BashRequest) (*std.BashResult, error)
+}
+
+type CommandCompleted struct {
+	ID string
+	api.CommandRecord
+}
+
+type CompactionCompleted struct {
+	ID string
+	api.CompactedRecord
+}
+
+type Interrupted struct {
+	Permissions []api.PermissionRequest
+	Questions   []api.QuestionRequest
+}
+
+type Completed struct {
+	Message message.Message
+}
+
+// Input represents the conversational input to [Harness.Stream].
+// It can provide either a new user message, resolved permission decisions and question answers,
+// or a compaction request.
+type Input struct {
+	Message   message.Message
+	Decisions map[string]api.PermissionDecision
+	Answers   map[string]api.QuestionResponse
+	Compact   *api.CompactRequest
+}
+
+func (input Input) HasResponses() bool {
+	return input.Decisions != nil || input.Answers != nil
+}
+
+func (input Input) HasInteractiveContent() bool {
+	return input.Message != nil || input.HasResponses()
+}
+
+func (input Input) Validate() error {
+	if input.Compact != nil && input.HasInteractiveContent() {
+		return fmt.Errorf("%w: cannot specify both compact and message/responses", ErrInvalidConfig)
+	}
+	if input.Message != nil && input.HasResponses() {
+		return fmt.Errorf("%w: cannot specify both message and responses", ErrInvalidConfig)
+	}
+	return nil
+}
+
 // Config holds the mandatory dependencies required to construct a [Harness].
 type Config struct {
-	ID           string
-	DB           *sql.DB
-	Model        *llm.Model
-	Tools        tools.Container
-	Bash         BashRunner
-	Spiller      tools.Spiller
-	Permissions  permissions.SessionManager
-	SystemPrompt string
-	Queue        Queue
-	Logger       log.Interface
-	Limits       models.Limits
-	Static       StaticContext
+	ID          string
+	DB          *sql.DB
+	Bash        BashRunner
+	Spiller     tools.Spiller
+	Permissions permissions.SessionManager
+	Queue       Queue
+	Logger      log.Interface
 	// Metrics receives tool call metrics. A nil recorder disables them.
 	Metrics metrics.Recorder
 }
@@ -47,12 +116,6 @@ func (c Config) Validate() error {
 	}
 	if c.DB == nil {
 		return fmt.Errorf("%w: database is required", ErrInvalidConfig)
-	}
-	if c.Model == nil {
-		return fmt.Errorf("%w: model is required", ErrInvalidConfig)
-	}
-	if c.Tools == nil {
-		return fmt.Errorf("%w: tools container is required", ErrInvalidConfig)
 	}
 	if c.Bash == nil {
 		return fmt.Errorf("%w: bash runner is required", ErrInvalidConfig)
@@ -75,14 +138,18 @@ func (c Config) Validate() error {
 // Harness orchestrates stateful, multi-turn agent conversations and tool
 // execution over a compiled Loom workflow graph.
 type Harness interface {
-	Stream(ctx context.Context, input Input) iter.Seq2[Event, error]
+	Stream(ctx context.Context, input Input) iter.Seq2[any, error]
 	LoadState(ctx context.Context) (State, error)
+	Configure(opts NodeOptions) error
 }
 
 type harness struct {
 	id     string
 	logger log.Interface
 	graph  *graph.Graph[State]
+	nodes  []Node
+	model  *llm.Model
+	tools  tools.Container
 	queue  Queue
 	static StaticContext
 	limits models.Limits
@@ -103,17 +170,12 @@ func New(cfg Config) (Harness, error) {
 
 	logger := cfg.Logger.ForComponent("harness")
 
-	g, err := buildGraph(GraphConfig{
+	g, nodes, err := buildGraph(GraphConfig{
 		Checkpointer: cp,
-		Model:        cfg.Model,
-		Container:    cfg.Tools,
 		Permissions:  cfg.Permissions,
-		SystemPrompt: cfg.SystemPrompt,
 		Queue:        cfg.Queue,
 		Bash:         cfg.Bash,
 		Spiller:      cfg.Spiller,
-		Limits:       cfg.Limits,
-		Static:       cfg.Static,
 		Logger:       logger,
 		Metrics:      cfg.Metrics,
 	})
@@ -125,48 +187,59 @@ func New(cfg Config) (Harness, error) {
 		id:     strings.TrimSpace(cfg.ID),
 		logger: logger,
 		graph:  g,
+		nodes:  nodes,
 		queue:  cfg.Queue,
-		static: cfg.Static,
-		limits: cfg.Limits,
 	}, nil
 }
 
+// Configure updates the dynamic model, tool container, system prompt, limits, and static context
+// across the harness and all workflow graph nodes in place.
+func (h *harness) Configure(opts NodeOptions) error {
+	if err := opts.Validate(); err != nil {
+		return err
+	}
+	h.model = opts.Model
+	h.tools = opts.Tools
+	h.static = opts.Static
+	h.limits = opts.Limits
+	for _, n := range h.nodes {
+		n.Configure(opts)
+	}
+	return nil
+}
+
 // Stream executes a conversational turn on the configured session ID, returning an
-// iterator that yields incremental [EventChunk], [EventMessage], [EventInterrupted],
-// and [EventCompleted] notifications.
-//
-// If input.Decisions is provided, it resumes an interrupted execution awaiting permission
-// decisions. If input.Message is provided, it streams a new user message. If both are nil
-// and an inbox function is configured, it executes a turn draining pending inbox messages.
-func (h *harness) Stream(ctx context.Context, input Input) iter.Seq2[Event, error] {
-	return func(yield func(Event, error) bool) {
+// iterator that yields incremental events: *message.AssistantChunk, message.Message,
+// CommandCompleted, CompactionCompleted, Interrupted, Completed, and api.* events.
+func (h *harness) Stream(ctx context.Context, input Input) iter.Seq2[any, error] {
+	return func(yield func(any, error) bool) {
 		if err := ctx.Err(); err != nil {
-			yield(Event{}, err)
+			yield(nil, err)
 			return
 		}
 		if err := input.Validate(); err != nil {
-			yield(Event{}, err)
+			yield(nil, err)
 			return
 		}
 		state, err := h.LoadState(ctx)
 		if err != nil {
-			yield(Event{}, err)
+			yield(nil, err)
 			return
 		}
 
-		update, event, err := h.prepareInput(input, state)
+		update, inputMsg, err := h.prepareInput(input, state)
 		if err != nil {
-			yield(Event{}, err)
+			yield(nil, err)
 			return
 		}
-		if event != nil && !yield(*event, nil) {
+		if inputMsg != nil && !yield(inputMsg, nil) {
 			return
 		}
 
 		runCtx := scope.With(ctx, scope.Scope{SessionID: h.id})
 		stream, err := h.graph.Stream(runCtx, update, &graph.Location{ThreadID: h.id})
 		if err != nil {
-			yield(Event{}, err)
+			yield(nil, err)
 			return
 		}
 
@@ -174,7 +247,7 @@ func (h *harness) Stream(ctx context.Context, input Input) iter.Seq2[Event, erro
 	}
 }
 
-func (h *harness) prepareInput(input Input, state State) (graph.Update[State], *Event, error) {
+func (h *harness) prepareInput(input Input, state State) (graph.Update[State], message.Message, error) {
 	if !input.HasInteractiveContent() {
 		if len(state.PendingPermissions) > 0 {
 			return nil, nil, ErrPendingPermissionsUnresolved
@@ -185,7 +258,7 @@ func (h *harness) prepareInput(input Input, state State) (graph.Update[State], *
 		if input.Compact != nil {
 			return prepareCompaction(input.Compact), nil, nil
 		}
-		if _, ok := h.queue.Peek(); !ok {
+		if !h.queue.HasItems() {
 			return nil, nil, ErrNilMessage
 		}
 		return graph.Update[State](func(s State) State { return s }), nil, nil
@@ -197,7 +270,7 @@ func (h *harness) prepareInput(input Input, state State) (graph.Update[State], *
 	return h.prepareMessage(input.Message, state)
 }
 
-func prepareCompaction(input *CompactInput) graph.Update[State] {
+func prepareCompaction(input *api.CompactRequest) graph.Update[State] {
 	return graph.Update[State](func(s State) State {
 		s.PendingCompaction = input
 		return s
@@ -241,22 +314,22 @@ func prepareResponses(input Input, state State) (graph.Update[State], error) {
 	}), nil
 }
 
-func (h *harness) prepareMessage(msg message.Message, state State) (graph.Update[State], *Event, error) {
+func (h *harness) prepareMessage(msg message.Message, state State) (graph.Update[State], message.Message, error) {
 	in := message.CloneMessage(msg)
-	var event *Event
+	var inputMsg message.Message
 	_, _, unfulfilled, _ := state.ActiveToolCalls()
 	if len(unfulfilled) == 0 {
 		if strings.TrimSpace(in.GetID()) == "" {
 			in.SetID(uuid.NewString())
 		}
-		event = &Event{Type: EventMessage, Message: message.CloneMessage(in)}
+		inputMsg = message.CloneMessage(in)
 	}
 	return graph.Update[State](func(s State) State {
 		return s.AppendMessage(in, MessageUpdateOptions{Static: h.static, Limits: h.limits, SkipContextRecalculation: len(unfulfilled) > 0})
-	}), event, nil
+	}), inputMsg, nil
 }
 
-func (h *harness) consumeGraphStream(stream iter.Seq2[graph.StreamEvent, error], yield func(Event, error) bool) {
+func (h *harness) consumeGraphStream(stream iter.Seq2[graph.StreamEvent, error], yield func(any, error) bool) {
 	var stopped bool
 	stream(func(ev graph.StreamEvent, err error) bool {
 		if stopped {
@@ -264,7 +337,7 @@ func (h *harness) consumeGraphStream(stream iter.Seq2[graph.StreamEvent, error],
 		}
 		if err != nil {
 			stopped = true
-			yield(Event{}, err)
+			yield(nil, err)
 			return false
 		}
 
@@ -277,18 +350,23 @@ func (h *harness) consumeGraphStream(stream iter.Seq2[graph.StreamEvent, error],
 				return true
 			}
 			chunkCopy := message.CloneAssistantChunk(chunk)
-			if !yield(Event{
-				Type:  EventChunk,
-				Chunk: &chunkCopy,
-			}, nil) {
+			if !yield(&chunkCopy, nil) {
 				stopped = true
 				return false
 			}
 			return true
 		}
 
-		if se, ok := ev.Data.(StreamEvent); ok && se != nil {
-			if !yield(se.ToEvent(), nil) {
+		switch custom := ev.Data.(type) {
+		case message.Message,
+			api.CommandStartedEvent,
+			CommandCompleted,
+			api.TodosUpdatedEvent,
+			api.CompactionStartedEvent,
+			CompactionCompleted,
+			api.CacheBrokenRecord,
+			api.ContextUpdatedEvent:
+			if !yield(custom, nil) {
 				stopped = true
 				return false
 			}
@@ -301,8 +379,7 @@ func (h *harness) consumeGraphStream(stream iter.Seq2[graph.StreamEvent, error],
 			if !ok {
 				return true
 			}
-			if !yield(Event{
-				Type:        EventInterrupted,
+			if !yield(Interrupted{
 				Permissions: clonePermissionRequests(snap.State.PendingPermissions),
 				Questions:   cloneQuestionRequests(snap.State.PendingQuestions),
 			}, nil) {
@@ -313,9 +390,7 @@ func (h *harness) consumeGraphStream(stream iter.Seq2[graph.StreamEvent, error],
 		case graph.EventCompleted:
 			snap, ok := ev.Data.(graph.Snapshot[State])
 			if !ok || len(snap.State.Messages) == 0 {
-				if !yield(Event{
-					Type: EventCompleted,
-				}, nil) {
+				if !yield(Completed{}, nil) {
 					stopped = true
 					return false
 				}
@@ -323,18 +398,22 @@ func (h *harness) consumeGraphStream(stream iter.Seq2[graph.StreamEvent, error],
 			}
 			lastMsg := snap.State.Messages[len(snap.State.Messages)-1]
 			if SystemKindOf(lastMsg) == SystemKindCommand || SystemKindOf(lastMsg) == SystemKindCompaction {
-				if !yield(Event{
-					Type: EventCompleted,
+				if !yield(Completed{}, nil) {
+					stopped = true
+					return false
+				}
+				return true
+			}
+			if asst, ok := lastMsg.(*message.Assistant); ok && asst != nil {
+				if !yield(Completed{
+					Message: message.CloneMessage(asst),
 				}, nil) {
 					stopped = true
 					return false
 				}
 				return true
 			}
-			if !yield(Event{
-				Type:    EventCompleted,
-				Message: message.CloneMessage(lastMsg),
-			}, nil) {
+			if !yield(Completed{}, nil) {
 				stopped = true
 				return false
 			}

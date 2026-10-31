@@ -168,8 +168,8 @@ func TestSessionModelDiagnosticsAndRequests(t *testing.T) {
 		t.Fatalf("reopened diagnostics: %+v, %v", loaded, err)
 	}
 	mgr.Refresh()
-	if len(sess.Diagnostics) != 1 || sess.Harness != nil {
-		t.Fatalf("refresh state: %+v", sess.Diagnostics)
+	if len(sess.Diagnostics) != 1 || sess.Harness == nil {
+		t.Fatalf("refresh state: %+v, harness=%v", sess.Diagnostics, sess.Harness)
 	}
 	for _, tc := range []struct {
 		model           string
@@ -522,29 +522,11 @@ func setupTestEnv(t *testing.T, prov *fakeProvider) (*sql.DB, *workspace.Workspa
 
 func loadHarnessState(t *testing.T, mgr Manager, db *sql.DB, gw *fakeGateway, sessionID string) harness.State {
 	t.Helper()
-	llmModel, err := gw.LLM(context.Background(), models.Model{ID: "fake/fake-default-model"}, llm.ModelConfig{})
-	if err != nil {
-		t.Fatalf("ResolveLLM: %v", err)
-	}
 	sess, err := mgr.Get(context.Background(), sessionID)
 	if err != nil {
 		t.Fatalf("mgr.Get: %v", err)
 	}
-	h, err := harness.New(harness.Config{
-		ID:          sessionID,
-		DB:          db,
-		Model:       llmModel,
-		Tools:       sess.Tools,
-		Bash:        sess.Std,
-		Spiller:     sess.spiller,
-		Permissions: sess.PermManager,
-		Queue:       sess,
-		Logger:      log.Default(),
-	})
-	if err != nil {
-		t.Fatalf("harness.New: %v", err)
-	}
-	state, err := h.LoadState(context.Background())
+	state, err := sess.Harness.LoadState(context.Background())
 	if err != nil {
 		t.Fatalf("h.LoadState: %v", err)
 	}
@@ -3131,10 +3113,7 @@ func TestSessionDirectShellEscape(t *testing.T) {
 	if len(vis) != 0 {
 		t.Fatalf("expected visible queue to be empty, got %d", len(vis))
 	}
-	h, err := sess.harness(ctx)
-	if err != nil {
-		t.Fatalf("sess.harness: %v", err)
-	}
+	h := sess.Harness
 	state, err := h.LoadState(ctx)
 	if err != nil {
 		t.Fatalf("h.LoadState: %v", err)
@@ -3286,10 +3265,7 @@ func TestSessionEnqueueCommandWhileRunning(t *testing.T) {
 	}
 
 	// Verify all 3 commands were also checkpointed in harness state
-	h, err := sess.harness(ctx)
-	if err != nil {
-		t.Fatalf("sess.harness: %v", err)
-	}
+	h := sess.Harness
 	state, err := h.LoadState(ctx)
 	if err != nil {
 		t.Fatalf("h.LoadState: %v", err)

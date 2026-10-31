@@ -272,15 +272,13 @@ func drainStream(ctx context.Context, h Harness, input message.Message) ([]strin
 		if err != nil {
 			return deltas, completed, err
 		}
-		switch ev.Type {
-		case EventChunk:
-			if ev.Chunk != nil {
-				if text := extractBlocksText(ev.Chunk.Content); text != "" {
-					deltas = append(deltas, text)
-				}
+		switch val := ev.(type) {
+		case *message.AssistantChunk:
+			if text := extractBlocksText(val.Content); text != "" {
+				deltas = append(deltas, text)
 			}
-		case EventCompleted:
-			if asst, ok := ev.Message.(*message.Assistant); ok {
+		case Completed:
+			if asst, ok := val.Message.(*message.Assistant); ok {
 				completed = asst
 			}
 		}
@@ -301,8 +299,6 @@ func TestSingleTurnStreaming(t *testing.T) {
 	h, err := New(Config{
 		ID:          "thread-1",
 		DB:          db,
-		Model:       newTestModel(t, prov),
-		Tools:       reg,
 		Bash:        &fakeBashRunner{},
 		Spiller:     newTestSpiller(t),
 		Permissions: perm,
@@ -312,6 +308,10 @@ func TestSingleTurnStreaming(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New error: %v", err)
 	}
+	h.Configure(NodeOptions{
+		Model: newTestModel(t, prov),
+		Tools: reg,
+	})
 
 	deltas, reply, err := drainStream(ctx, h, message.NewUserText("Hi there"))
 	if err != nil {
@@ -360,8 +360,6 @@ func TestMultiTurnSQLitePersistence(t *testing.T) {
 	h, err := New(Config{
 		ID:          "thread-alice",
 		DB:          db,
-		Model:       model,
-		Tools:       reg,
 		Bash:        &fakeBashRunner{},
 		Spiller:     newTestSpiller(t),
 		Permissions: perm,
@@ -371,6 +369,10 @@ func TestMultiTurnSQLitePersistence(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New error: %v", err)
 	}
+	h.Configure(NodeOptions{
+		Model: model,
+		Tools: reg,
+	})
 
 	// Verify empty state before any turn on thread
 	initialState, err := h.LoadState(ctx)
@@ -394,8 +396,6 @@ func TestMultiTurnSQLitePersistence(t *testing.T) {
 	h2, err := New(Config{
 		ID:          "thread-alice",
 		DB:          db,
-		Model:       model,
-		Tools:       reg,
 		Bash:        &fakeBashRunner{},
 		Spiller:     newTestSpiller(t),
 		Permissions: perm,
@@ -405,6 +405,10 @@ func TestMultiTurnSQLitePersistence(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New h2 error: %v", err)
 	}
+	h2.Configure(NodeOptions{
+		Model: model,
+		Tools: reg,
+	})
 
 	_, reply2, err := drainStream(ctx, h2, message.NewUserText("What is my name?"))
 	if err != nil {
@@ -475,20 +479,22 @@ func TestSystemPromptIsolation(t *testing.T) {
 
 	sysPrompt := "You are TaskSmith v2.\n\nFollow strict Go conventions."
 	h, err := New(Config{
-		ID:           "thread-sys",
-		DB:           db,
-		Model:        newTestModel(t, prov),
-		Tools:        reg,
-		Bash:         &fakeBashRunner{},
-		Spiller:      newTestSpiller(t),
-		Permissions:  perm,
-		Queue:        &fakeQueue{},
-		SystemPrompt: sysPrompt,
-		Logger:       log.Default(),
+		ID:          "thread-sys",
+		DB:          db,
+		Bash:        &fakeBashRunner{},
+		Spiller:     newTestSpiller(t),
+		Permissions: perm,
+		Queue:       &fakeQueue{},
+		Logger:      log.Default(),
 	})
 	if err != nil {
 		t.Fatalf("New error: %v", err)
 	}
+	h.Configure(NodeOptions{
+		Model:        newTestModel(t, prov),
+		Tools:        reg,
+		SystemPrompt: sysPrompt,
+	})
 
 	_, _, err = drainStream(ctx, h, message.NewUserText("Ping"))
 	if err != nil {
@@ -548,8 +554,6 @@ func TestThreadIsolation(t *testing.T) {
 	hA, err := New(Config{
 		ID:          "thread-A",
 		DB:          db,
-		Model:       newTestModel(t, prov),
-		Tools:       reg,
 		Bash:        &fakeBashRunner{},
 		Spiller:     newTestSpiller(t),
 		Permissions: perm,
@@ -559,12 +563,14 @@ func TestThreadIsolation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New hA error: %v", err)
 	}
+	hA.Configure(NodeOptions{
+		Model: newTestModel(t, prov),
+		Tools: reg,
+	})
 
 	hB, err := New(Config{
 		ID:          "thread-B",
 		DB:          db,
-		Model:       newTestModel(t, prov),
-		Tools:       reg,
 		Bash:        &fakeBashRunner{},
 		Spiller:     newTestSpiller(t),
 		Permissions: perm,
@@ -574,6 +580,10 @@ func TestThreadIsolation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New hB error: %v", err)
 	}
+	hB.Configure(NodeOptions{
+		Model: newTestModel(t, prov),
+		Tools: reg,
+	})
 
 	if _, _, err := drainStream(ctx, hA, message.NewUserText("Message for A")); err != nil {
 		t.Fatalf("Stream thread-A error: %v", err)
@@ -651,8 +661,6 @@ func TestMultiStepToolExecution(t *testing.T) {
 	h, err := New(Config{
 		ID:          "thread-tools",
 		DB:          db,
-		Model:       newTestModel(t, prov),
-		Tools:       reg,
 		Bash:        &fakeBashRunner{},
 		Spiller:     newTestSpiller(t),
 		Permissions: perm,
@@ -662,6 +670,10 @@ func TestMultiStepToolExecution(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New error: %v", err)
 	}
+	h.Configure(NodeOptions{
+		Model: newTestModel(t, prov),
+		Tools: reg,
+	})
 
 	var emittedMessages []message.Message
 	var completedMsg message.Message
@@ -670,13 +682,13 @@ func TestMultiStepToolExecution(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Stream error: %v", err)
 		}
-		switch ev.Type {
-		case EventMessage:
-			emittedMessages = append(emittedMessages, ev.Message)
-		case EventCompleted:
-			completedMsg = ev.Message
-		case EventInterrupted:
-			t.Fatalf("unexpected EventInterrupted for read-only view tool: %+v", ev.Permissions)
+		switch val := ev.(type) {
+		case message.Message:
+			emittedMessages = append(emittedMessages, val)
+		case Completed:
+			completedMsg = val.Message
+		case Interrupted:
+			t.Fatalf("unexpected Interrupted for read-only view tool: %+v", val.Permissions)
 		}
 	}
 
@@ -771,8 +783,6 @@ func TestPermissionInterruptAndResume(t *testing.T) {
 	h, err := New(Config{
 		ID:          "thread-perm",
 		DB:          db,
-		Model:       newTestModel(t, prov),
-		Tools:       reg,
 		Bash:        &fakeBashRunner{},
 		Spiller:     newTestSpiller(t),
 		Permissions: perm,
@@ -782,6 +792,10 @@ func TestPermissionInterruptAndResume(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New error: %v", err)
 	}
+	h.Configure(NodeOptions{
+		Model: newTestModel(t, prov),
+		Tools: reg,
+	})
 
 	// 1. Calling Resume on a thread with no pending permissions -> ErrNoPendingPermissions
 	for _, err := range h.Stream(ctx, Input{Decisions: map[string]api.PermissionDecision{}}) {
@@ -797,16 +811,13 @@ func TestPermissionInterruptAndResume(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Stream error: %v", err)
 		}
-		if ev.Type == EventMessage {
-			if tm, ok := ev.Message.(*message.Tool); ok {
-				streamToolMsgs = append(streamToolMsgs, tm)
-			}
-		}
-		if ev.Type == EventInterrupted {
-			interruptedPerms = ev.Permissions
-		}
-		if ev.Type == EventCompleted {
-			t.Fatalf("expected stream to interrupt for write permissions, but got EventCompleted")
+		switch val := ev.(type) {
+		case *message.Tool:
+			streamToolMsgs = append(streamToolMsgs, val)
+		case Interrupted:
+			interruptedPerms = val.Permissions
+		case Completed:
+			t.Fatalf("expected stream to interrupt for write permissions, but got Completed")
 		}
 	}
 
@@ -862,13 +873,11 @@ func TestPermissionInterruptAndResume(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Resume error: %v", err)
 		}
-		switch ev.Type {
-		case EventMessage:
-			if tm, ok := ev.Message.(*message.Tool); ok {
-				resumeToolMsgs = append(resumeToolMsgs, tm)
-			}
-		case EventCompleted:
-			resumeCompleted = ev.Message
+		switch val := ev.(type) {
+		case *message.Tool:
+			resumeToolMsgs = append(resumeToolMsgs, val)
+		case Completed:
+			resumeCompleted = val.Message
 		}
 	}
 
@@ -943,8 +952,6 @@ func TestCancelPendingPermissionsOnNewUserMessage(t *testing.T) {
 	h, err := New(Config{
 		ID:          "thread-cancel-perm",
 		DB:          db,
-		Model:       newTestModel(t, prov),
-		Tools:       reg,
 		Bash:        &fakeBashRunner{},
 		Spiller:     newTestSpiller(t),
 		Permissions: perm,
@@ -954,6 +961,10 @@ func TestCancelPendingPermissionsOnNewUserMessage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New error: %v", err)
 	}
+	h.Configure(NodeOptions{
+		Model: newTestModel(t, prov),
+		Tools: reg,
+	})
 
 	// Turn 1: Trigger permission interrupt
 	var interrupted bool
@@ -961,7 +972,7 @@ func TestCancelPendingPermissionsOnNewUserMessage(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Turn 1 Stream error: %v", err)
 		}
-		if ev.Type == EventInterrupted {
+		if _, ok := ev.(Interrupted); ok {
 			interrupted = true
 		}
 	}
@@ -977,14 +988,14 @@ func TestCancelPendingPermissionsOnNewUserMessage(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Turn 2 Stream error: %v", err)
 		}
-		switch ev.Type {
-		case EventMessage:
-			turn2Events = append(turn2Events, ev.Message)
-			if tm, ok := ev.Message.(*message.Tool); ok {
+		switch val := ev.(type) {
+		case message.Message:
+			turn2Events = append(turn2Events, val)
+			if tm, ok := val.(*message.Tool); ok {
 				canceledToolMsg = tm
 			}
-		case EventCompleted:
-			finalMsg = ev.Message
+		case Completed:
+			finalMsg = val.Message
 		}
 	}
 
@@ -1046,16 +1057,19 @@ func TestCancelPendingCallsPreservesUserMessageID(t *testing.T) {
 		}
 		return []message.AssistantChunk{{Content: []message.Block{&message.TextBlock{Text: "done"}}, Done: true}}, nil
 	}}
-	h, err := New(Config{ID: "cancel-id", DB: openTestSQLite(t), Model: newTestModel(t, provider), Tools: reg, Bash: &fakeBashRunner{}, Spiller: newTestSpiller(t), Permissions: perm, Queue: &fakeQueue{}, Logger: log.Default()})
+	h, err := New(Config{ID: "cancel-id", DB: openTestSQLite(t), Bash: &fakeBashRunner{}, Spiller: newTestSpiller(t), Permissions: perm, Queue: &fakeQueue{}, Logger: log.Default()})
 	if err != nil {
 		t.Fatal(err)
 	}
+	h.Configure(NodeOptions{Model: newTestModel(t, provider), Tools: reg})
 	var interrupted bool
 	for event, err := range h.Stream(ctx, Input{Message: message.NewUserText("start")}) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		interrupted = interrupted || event.Type == EventInterrupted
+		if _, ok := event.(Interrupted); ok {
+			interrupted = true
+		}
 	}
 	if !interrupted {
 		t.Fatal("expected permission interrupt")
@@ -1067,8 +1081,8 @@ func TestCancelPendingCallsPreservesUserMessageID(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if event.Type == EventMessage && event.Message.Role() == message.RoleUser {
-			userEvents = append(userEvents, event.Message)
+		if msg, ok := event.(message.Message); ok && msg.Role() == message.RoleUser {
+			userEvents = append(userEvents, msg)
 		}
 	}
 	if len(userEvents) != 1 || userEvents[0].GetID() != input.GetID() {
@@ -1141,8 +1155,6 @@ func TestMixedToolCallsAndPlanModeDeny(t *testing.T) {
 	h, err := New(Config{
 		ID:          "thread-plan",
 		DB:          db,
-		Model:       newTestModel(t, prov),
-		Tools:       reg,
 		Bash:        &fakeBashRunner{},
 		Spiller:     newTestSpiller(t),
 		Permissions: perm,
@@ -1152,16 +1164,18 @@ func TestMixedToolCallsAndPlanModeDeny(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New error: %v", err)
 	}
+	h.Configure(NodeOptions{
+		Model: newTestModel(t, prov),
+		Tools: reg,
+	})
 
 	var toolMsgs []*message.Tool
 	for ev, err := range h.Stream(ctx, Input{Message: message.NewUserText("Try view, write, and unknown")}) {
 		if err != nil {
 			t.Fatalf("Stream error: %v", err)
 		}
-		if ev.Type == EventMessage {
-			if tm, ok := ev.Message.(*message.Tool); ok {
-				toolMsgs = append(toolMsgs, tm)
-			}
+		if tm, ok := ev.(*message.Tool); ok {
+			toolMsgs = append(toolMsgs, tm)
 		}
 	}
 
@@ -1195,42 +1209,50 @@ func TestValidationAndContextCancellation(t *testing.T) {
 	q := &fakeQueue{}
 
 	// 1. Validate all required Config fields
-	if _, err := New(Config{DB: db, Model: model, Tools: reg, Bash: bash, Spiller: spiller, Permissions: perm, Queue: q, Logger: logger}); !errors.Is(err, ErrInvalidConfig) {
+	if _, err := New(Config{DB: db, Bash: bash, Spiller: spiller, Permissions: perm, Queue: q, Logger: logger}); !errors.Is(err, ErrInvalidConfig) {
 		t.Errorf("missing ID error = %v, want %v", err, ErrInvalidConfig)
 	}
-	if _, err := New(Config{ID: "   ", DB: db, Model: model, Tools: reg, Bash: bash, Spiller: spiller, Permissions: perm, Queue: q, Logger: logger}); !errors.Is(err, ErrInvalidConfig) {
+	if _, err := New(Config{ID: "   ", DB: db, Bash: bash, Spiller: spiller, Permissions: perm, Queue: q, Logger: logger}); !errors.Is(err, ErrInvalidConfig) {
 		t.Errorf("whitespace ID error = %v, want %v", err, ErrInvalidConfig)
 	}
-	if _, err := New(Config{ID: "thread-valid", Model: model, Tools: reg, Bash: bash, Spiller: spiller, Permissions: perm, Queue: q, Logger: logger}); !errors.Is(err, ErrInvalidConfig) {
+	if _, err := New(Config{ID: "thread-valid", Bash: bash, Spiller: spiller, Permissions: perm, Queue: q, Logger: logger}); !errors.Is(err, ErrInvalidConfig) {
 		t.Errorf("missing DB error = %v, want %v", err, ErrInvalidConfig)
 	}
-	if _, err := New(Config{ID: "thread-valid", DB: db, Tools: reg, Bash: bash, Spiller: spiller, Permissions: perm, Queue: q, Logger: logger}); !errors.Is(err, ErrInvalidConfig) {
-		t.Errorf("missing Model error = %v, want %v", err, ErrInvalidConfig)
+	// Model and Tools are required on Configure (not New).
+	hNoModel, err := New(Config{ID: "thread-valid", DB: db, Bash: bash, Spiller: spiller, Permissions: perm, Queue: q, Logger: logger})
+	if err != nil {
+		t.Fatalf("New error = %v, want nil", err)
 	}
-	if _, err := New(Config{ID: "thread-valid", DB: db, Model: model, Bash: bash, Spiller: spiller, Permissions: perm, Queue: q, Logger: logger}); !errors.Is(err, ErrInvalidConfig) {
-		t.Errorf("missing Tools error = %v, want %v", err, ErrInvalidConfig)
+	if err := hNoModel.Configure(NodeOptions{Tools: reg}); !errors.Is(err, ErrInvalidConfig) || !strings.Contains(err.Error(), "model is required") {
+		t.Errorf("Configure missing Model error = %v, want ErrInvalidConfig (model is required)", err)
 	}
-	if _, err := New(Config{ID: "thread-valid", DB: db, Model: model, Tools: reg, Spiller: spiller, Permissions: perm, Queue: q, Logger: logger}); !errors.Is(err, ErrInvalidConfig) {
+
+	hNoTools, err := New(Config{ID: "thread-valid", DB: db, Bash: bash, Spiller: spiller, Permissions: perm, Queue: q, Logger: logger})
+	if err != nil {
+		t.Fatalf("New error = %v, want nil", err)
+	}
+	if err := hNoTools.Configure(NodeOptions{Model: model}); !errors.Is(err, ErrInvalidConfig) || !strings.Contains(err.Error(), "tools container is required") {
+		t.Errorf("Configure missing Tools error = %v, want ErrInvalidConfig (tools container is required)", err)
+	}
+	if _, err := New(Config{ID: "thread-valid", DB: db, Spiller: spiller, Permissions: perm, Queue: q, Logger: logger}); !errors.Is(err, ErrInvalidConfig) {
 		t.Errorf("missing Bash error = %v, want %v", err, ErrInvalidConfig)
 	}
-	if _, err := New(Config{ID: "thread-valid", DB: db, Model: model, Tools: reg, Bash: bash, Permissions: perm, Queue: q, Logger: logger}); !errors.Is(err, ErrInvalidConfig) {
+	if _, err := New(Config{ID: "thread-valid", DB: db, Bash: bash, Permissions: perm, Queue: q, Logger: logger}); !errors.Is(err, ErrInvalidConfig) {
 		t.Errorf("missing Spiller error = %v, want %v", err, ErrInvalidConfig)
 	}
-	if _, err := New(Config{ID: "thread-valid", DB: db, Model: model, Tools: reg, Bash: bash, Spiller: spiller, Logger: logger}); !errors.Is(err, ErrInvalidConfig) {
+	if _, err := New(Config{ID: "thread-valid", DB: db, Bash: bash, Spiller: spiller, Logger: logger}); !errors.Is(err, ErrInvalidConfig) {
 		t.Errorf("missing Permissions error = %v, want %v", err, ErrInvalidConfig)
 	}
-	if _, err := New(Config{ID: "thread-valid", DB: db, Model: model, Tools: reg, Bash: bash, Spiller: spiller, Permissions: perm, Logger: logger}); !errors.Is(err, ErrInvalidConfig) {
+	if _, err := New(Config{ID: "thread-valid", DB: db, Bash: bash, Spiller: spiller, Permissions: perm, Logger: logger}); !errors.Is(err, ErrInvalidConfig) {
 		t.Errorf("missing Queue error = %v, want %v", err, ErrInvalidConfig)
 	}
-	if _, err := New(Config{ID: "thread-valid", DB: db, Model: model, Tools: reg, Bash: bash, Spiller: spiller, Permissions: perm, Queue: q}); !errors.Is(err, ErrInvalidConfig) {
+	if _, err := New(Config{ID: "thread-valid", DB: db, Bash: bash, Spiller: spiller, Permissions: perm, Queue: q}); !errors.Is(err, ErrInvalidConfig) {
 		t.Errorf("missing Logger error = %v, want %v", err, ErrInvalidConfig)
 	}
 
 	h, err := New(Config{
 		ID:          "thread-valid",
 		DB:          db,
-		Model:       model,
-		Tools:       reg,
 		Bash:        bash,
 		Spiller:     spiller,
 		Permissions: perm,
@@ -1240,6 +1262,10 @@ func TestValidationAndContextCancellation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New error: %v", err)
 	}
+	h.Configure(NodeOptions{
+		Model: model,
+		Tools: reg,
+	})
 
 	// 2. Nil message -> ErrNilMessage
 	if _, _, err := drainStream(ctx, h, nil); !errors.Is(err, ErrNilMessage) {
@@ -1272,8 +1298,6 @@ func TestValidationAndContextCancellation(t *testing.T) {
 	hCancel, err := New(Config{
 		ID:          "thread-stream-cancel",
 		DB:          db,
-		Model:       newTestModel(t, cancelProv),
-		Tools:       reg,
 		Bash:        bash,
 		Spiller:     spiller,
 		Permissions: perm,
@@ -1283,6 +1307,10 @@ func TestValidationAndContextCancellation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New hCancel error: %v", err)
 	}
+	hCancel.Configure(NodeOptions{
+		Model: newTestModel(t, cancelProv),
+		Tools: reg,
+	})
 	if _, _, err := drainStream(streamCancelCtx, hCancel, message.NewUserText("hi")); err == nil {
 		t.Errorf("expected error when context is canceled during streaming, got nil")
 	}
@@ -1301,8 +1329,6 @@ func TestCallerSuppliedUserMessageID(t *testing.T) {
 	h, err := New(Config{
 		ID:          "thread-custom-id",
 		DB:          db,
-		Model:       newTestModel(t, prov),
-		Tools:       reg,
 		Bash:        &fakeBashRunner{},
 		Spiller:     newTestSpiller(t),
 		Permissions: perm,
@@ -1312,6 +1338,10 @@ func TestCallerSuppliedUserMessageID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New error: %v", err)
 	}
+	h.Configure(NodeOptions{
+		Model: newTestModel(t, prov),
+		Tools: reg,
+	})
 
 	customID := uuid.Must(uuid.NewV7()).String()
 	userMsg := message.NewUserText("Hello with custom id")
@@ -1322,8 +1352,8 @@ func TestCallerSuppliedUserMessageID(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Stream error: %v", err)
 		}
-		if ev.Type == EventMessage && ev.Message != nil && ev.Message.Role() == message.RoleUser {
-			emittedUserMsgID = ev.Message.GetID()
+		if msg, ok := ev.(message.Message); ok && msg != nil && msg.Role() == message.RoleUser {
+			emittedUserMsgID = msg.GetID()
 		}
 	}
 
@@ -1332,30 +1362,40 @@ func TestCallerSuppliedUserMessageID(t *testing.T) {
 	}
 }
 
+type fakeQueueItem struct {
+	id      string
+	isCmd   bool
+	command string
+	msg     message.Message
+}
+
 type fakeQueue struct {
 	mu       sync.Mutex
-	items    []QueueItem
+	items    []fakeQueueItem
 	onPopMsg func()
 }
 
-func (q *fakeQueue) Peek() (QueueItem, bool) {
+func (q *fakeQueue) HasItems() bool {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	if len(q.items) == 0 {
-		return QueueItem{}, false
-	}
-	return q.items[0], true
+	return len(q.items) > 0
 }
 
-func (q *fakeQueue) PopCommand() (QueueItem, bool) {
+func (q *fakeQueue) HasLeadingCommand() bool {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	if len(q.items) == 0 || q.items[0].Kind != QueueKindCommand {
-		return QueueItem{}, false
+	return len(q.items) > 0 && q.items[0].isCmd
+}
+
+func (q *fakeQueue) PopCommand() (string, string, bool) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if len(q.items) == 0 || !q.items[0].isCmd {
+		return "", "", false
 	}
 	it := q.items[0]
 	q.items = q.items[1:]
-	return it, true
+	return it.id, it.command, true
 }
 
 func (q *fakeQueue) PopMessages() []message.Message {
@@ -1369,16 +1409,13 @@ func (q *fakeQueue) PopMessages() []message.Message {
 	}
 	var msgs []message.Message
 	for len(q.items) > 0 {
-		if q.items[0].Kind == QueueKindCommand {
+		if q.items[0].isCmd {
 			break
 		}
 		it := q.items[0]
 		q.items = q.items[1:]
-		switch p := it.Payload.(type) {
-		case QueueMessagePayload:
-			msgs = append(msgs, p.Message)
-		case QueueTaskPayload:
-			msgs = append(msgs, p.Message)
+		if it.msg != nil {
+			msgs = append(msgs, it.msg)
 		}
 	}
 	return msgs
@@ -1465,10 +1502,9 @@ func TestInboxDrainAfterToolExecution(t *testing.T) {
 		onPopMsg: func() {
 			if toolRequested && !inboxDrained {
 				inboxDrained = true
-				q.items = append(q.items, QueueItem{
-					ID:      "task-item-1",
-					Kind:    QueueKindTask,
-					Payload: QueueTaskPayload{Message: inboxMsg},
+				q.items = append(q.items, fakeQueueItem{
+					id:  "task-item-1",
+					msg: inboxMsg,
 				})
 			}
 		},
@@ -1477,8 +1513,6 @@ func TestInboxDrainAfterToolExecution(t *testing.T) {
 	h, err := New(Config{
 		ID:          "thread-inbox-test",
 		DB:          db,
-		Model:       newTestModel(t, prov),
-		Tools:       reg,
 		Permissions: perm,
 		Queue:       q,
 		Bash:        &fakeBashRunner{},
@@ -1488,14 +1522,18 @@ func TestInboxDrainAfterToolExecution(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New error: %v", err)
 	}
+	h.Configure(NodeOptions{
+		Model: newTestModel(t, prov),
+		Tools: reg,
+	})
 
 	var emittedMessages []message.Message
 	for ev, err := range h.Stream(ctx, Input{Message: message.NewUserText("Read file")}) {
 		if err != nil {
 			t.Fatalf("Stream error: %v", err)
 		}
-		if ev.Type == EventMessage {
-			emittedMessages = append(emittedMessages, ev.Message)
+		if msg, ok := ev.(message.Message); ok {
+			emittedMessages = append(emittedMessages, msg)
 		}
 	}
 
@@ -1588,10 +1626,9 @@ func TestInboxDrainDuringAgentWithoutTools(t *testing.T) {
 		onPopMsg: func() {
 			if queueMsg && !drained {
 				drained = true
-				q.items = append(q.items, QueueItem{
-					ID:      "msg-item-1",
-					Kind:    QueueKindMessage,
-					Payload: QueueMessagePayload{Message: inboxMsg},
+				q.items = append(q.items, fakeQueueItem{
+					id:  "msg-item-1",
+					msg: inboxMsg,
 				})
 			}
 		},
@@ -1600,8 +1637,6 @@ func TestInboxDrainDuringAgentWithoutTools(t *testing.T) {
 	h, err := New(Config{
 		ID:          "thread-inbox-agent-loop",
 		DB:          db,
-		Model:       newTestModel(t, prov),
-		Tools:       reg,
 		Permissions: perm,
 		Queue:       q,
 		Bash:        &fakeBashRunner{},
@@ -1611,14 +1646,18 @@ func TestInboxDrainDuringAgentWithoutTools(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New error: %v", err)
 	}
+	h.Configure(NodeOptions{
+		Model: newTestModel(t, prov),
+		Tools: reg,
+	})
 
 	var emittedMessages []message.Message
 	for ev, err := range h.Stream(ctx, Input{Message: message.NewUserText("Start turn")}) {
 		if err != nil {
 			t.Fatalf("Stream error: %v", err)
 		}
-		if ev.Type == EventMessage {
-			emittedMessages = append(emittedMessages, ev.Message)
+		if msg, ok := ev.(message.Message); ok {
+			emittedMessages = append(emittedMessages, msg)
 		}
 	}
 
@@ -1675,11 +1714,10 @@ func TestInboxDirectTurnWithEmptyInput(t *testing.T) {
 		},
 	}
 	q := &fakeQueue{
-		items: []QueueItem{
+		items: []fakeQueueItem{
 			{
-				ID:      "task-item-1",
-				Kind:    QueueKindTask,
-				Payload: QueueTaskPayload{Message: message.NewUserTextMeta("inbox task notification", map[string]any{MetaSystemKind: SystemKindTask})},
+				id:  "task-item-1",
+				msg: message.NewUserTextMeta("inbox task notification", map[string]any{MetaSystemKind: SystemKindTask}),
 			},
 		},
 		onPopMsg: func() {
@@ -1690,8 +1728,6 @@ func TestInboxDirectTurnWithEmptyInput(t *testing.T) {
 	h, err := New(Config{
 		ID:          "thread-inbox-empty-input",
 		DB:          db,
-		Model:       newTestModel(t, prov),
-		Tools:       reg,
 		Permissions: perm,
 		Queue:       q,
 		Bash:        &fakeBashRunner{},
@@ -1701,6 +1737,10 @@ func TestInboxDirectTurnWithEmptyInput(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New error: %v", err)
 	}
+	h.Configure(NodeOptions{
+		Model: newTestModel(t, prov),
+		Tools: reg,
+	})
 
 	// Calling Stream with empty Input{} initiates an inbox drain turn!
 	var emittedMessages []message.Message
@@ -1708,8 +1748,8 @@ func TestInboxDirectTurnWithEmptyInput(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Stream error: %v", err)
 		}
-		if ev.Type == EventMessage {
-			emittedMessages = append(emittedMessages, ev.Message)
+		if msg, ok := ev.(message.Message); ok {
+			emittedMessages = append(emittedMessages, msg)
 		}
 	}
 
@@ -1739,11 +1779,11 @@ func TestCommandNodeDoesNotWakeAgent(t *testing.T) {
 
 	cmdID := uuid.Must(uuid.NewV7()).String()
 	q := &fakeQueue{
-		items: []QueueItem{
+		items: []fakeQueueItem{
 			{
-				ID:      cmdID,
-				Kind:    QueueKindCommand,
-				Payload: QueueCommandPayload{Command: "echo direct"},
+				id:      cmdID,
+				isCmd:   true,
+				command: "echo direct",
 			},
 		},
 	}
@@ -1759,8 +1799,6 @@ func TestCommandNodeDoesNotWakeAgent(t *testing.T) {
 	h, err := New(Config{
 		ID:          "thread-command-no-agent",
 		DB:          db,
-		Model:       newTestModel(t, prov),
-		Tools:       reg,
 		Permissions: perm,
 		Queue:       q,
 		Bash:        bash,
@@ -1770,8 +1808,12 @@ func TestCommandNodeDoesNotWakeAgent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New error: %v", err)
 	}
+	h.Configure(NodeOptions{
+		Model: newTestModel(t, prov),
+		Tools: reg,
+	})
 
-	var events []Event
+	var events []any
 	for ev, err := range h.Stream(ctx, Input{}) {
 		if err != nil {
 			t.Fatalf("Stream error: %v", err)
@@ -1782,17 +1824,21 @@ func TestCommandNodeDoesNotWakeAgent(t *testing.T) {
 	if len(events) != 4 {
 		t.Fatalf("expected 4 events, got %d: %+v", len(events), events)
 	}
-	if events[0].Type != EventCommandStarted || events[0].CommandStarted == nil || events[0].CommandStarted.ID != cmdID {
-		t.Fatalf("expected EventCommandStarted %s, got %+v", cmdID, events[0])
+	ev0, ok0 := events[0].(api.CommandStartedEvent)
+	if !ok0 || ev0.ID != cmdID {
+		t.Fatalf("expected api.CommandStartedEvent %s, got %+v", cmdID, events[0])
 	}
-	if events[1].Type != EventCommandCompleted || events[1].CommandCompleted == nil || events[1].CommandCompleted.ID != cmdID {
-		t.Fatalf("expected EventCommandCompleted %s, got %+v", cmdID, events[1])
+	ev1, ok1 := events[1].(CommandCompleted)
+	if !ok1 || ev1.ID != cmdID {
+		t.Fatalf("expected CommandCompleted %s, got %+v", cmdID, events[1])
 	}
-	if events[2].Type != EventContextUpdated || events[2].Context == nil {
-		t.Fatalf("expected EventContextUpdated, got %+v", events[2])
+	_, ok2 := events[2].(api.ContextUpdatedEvent)
+	if !ok2 {
+		t.Fatalf("expected api.ContextUpdatedEvent, got %+v", events[2])
 	}
-	if events[3].Type != EventCompleted || events[3].Message != nil {
-		t.Fatalf("expected EventCompleted with nil Message, got %+v", events[3])
+	ev3, ok3 := events[3].(Completed)
+	if !ok3 || ev3.Message != nil {
+		t.Fatalf("expected Completed with nil Message, got %+v", events[3])
 	}
 
 	state, err := h.LoadState(ctx)
@@ -1832,12 +1878,13 @@ func TestToolSpillUsesHarnessSessionScope(t *testing.T) {
 		}, Done: true}}, nil
 	}}
 	h, err := New(Config{
-		ID: sessionID, DB: openTestSQLite(t), Model: newTestModel(t, provider), Tools: registry,
+		ID: sessionID, DB: openTestSQLite(t),
 		Permissions: permissions, Queue: &fakeQueue{}, Bash: &fakeBashRunner{}, Spiller: spiller, Logger: log.Default(),
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
+	h.Configure(NodeOptions{Model: newTestModel(t, provider), Tools: registry})
 	ctx := tools.WithSpiller(context.Background(), spiller)
 	var output api.BashOutput
 	var found bool
@@ -1845,7 +1892,7 @@ func TestToolSpillUsesHarnessSessionScope(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if result, ok := ev.Message.(*message.Tool); ok && result.ToolCallID == callID {
+		if result, ok := ev.(*message.Tool); ok && result.ToolCallID == callID {
 			if result.IsError {
 				t.Fatalf("tool call failed: %+v", result)
 			}
@@ -1883,7 +1930,7 @@ func TestCommandSpillUsesSessionAndCommandScope(t *testing.T) {
 				t.Fatal(err)
 			}
 			_, registry, permissions := newTestToolsRegistry(t)
-			queue := &fakeQueue{items: []QueueItem{{ID: tc.id, Kind: QueueKindCommand, Payload: QueueCommandPayload{Command: "test"}}}}
+			queue := &fakeQueue{items: []fakeQueueItem{{id: tc.id, isCmd: true, command: "test"}}}
 			output := strings.Repeat("long output\n", 20)
 			var bashScope scope.Scope
 			bash := &fakeBashRunner{handler: func(ctx context.Context, req std.BashRequest) (*std.BashResult, error) {
@@ -1893,27 +1940,28 @@ func TestCommandSpillUsesSessionAndCommandScope(t *testing.T) {
 			}}
 			const sessionID = "spill-test-session"
 			h, err := New(Config{
-				ID: sessionID, DB: openTestSQLite(t), Model: newTestModel(t, nil), Tools: registry,
+				ID: sessionID, DB: openTestSQLite(t),
 				Permissions: permissions, Queue: queue, Bash: bash, Spiller: spiller, Logger: log.Default(),
 			})
 			if err != nil {
 				t.Fatal(err)
 			}
+			h.Configure(NodeOptions{Model: newTestModel(t, nil), Tools: registry})
 			ctx := context.Background()
 			if tc.conflict {
 				ctx = scope.With(ctx, scope.Scope{SessionID: "other-session", TurnID: "caller-turn", MessageID: "caller-message", ToolCallID: "other-call", ToolName: "other-tool"})
 			}
-			var started *CommandStarted
+			var started *api.CommandStartedEvent
 			var completed *CommandCompleted
 			for ev, err := range h.Stream(ctx, Input{}) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if ev.CommandStarted != nil {
-					started = ev.CommandStarted
+				if cs, ok := ev.(api.CommandStartedEvent); ok {
+					started = &cs
 				}
-				if ev.CommandCompleted != nil {
-					completed = ev.CommandCompleted
+				if cc, ok := ev.(CommandCompleted); ok {
+					completed = &cc
 				}
 			}
 			if started == nil || completed == nil || started.ID != completed.ID {
@@ -1957,10 +2005,10 @@ func TestUnifiedQueueOrderingAcrossGraph(t *testing.T) {
 		if toolRequested && !queuePopulated {
 			queuePopulated = true
 			q.items = append(q.items,
-				QueueItem{ID: "u1", Kind: QueueKindMessage, Payload: QueueMessagePayload{Message: message.NewUserText("user msg 1")}},
-				QueueItem{ID: "u2", Kind: QueueKindMessage, Payload: QueueMessagePayload{Message: message.NewUserText("user msg 2")}},
-				QueueItem{ID: "t1", Kind: QueueKindTask, Payload: QueueTaskPayload{Message: message.NewUserTextMeta("task update 1", map[string]any{MetaSystemKind: SystemKindTask})}},
-				QueueItem{ID: "cmd-c1", Kind: QueueKindCommand, Payload: QueueCommandPayload{Command: "git status"}},
+				fakeQueueItem{id: "u1", msg: message.NewUserText("user msg 1")},
+				fakeQueueItem{id: "u2", msg: message.NewUserText("user msg 2")},
+				fakeQueueItem{id: "t1", msg: message.NewUserTextMeta("task update 1", map[string]any{MetaSystemKind: SystemKindTask})},
+				fakeQueueItem{id: "cmd-c1", isCmd: true, command: "git status"},
 			)
 		}
 	}
@@ -2021,8 +2069,6 @@ func TestUnifiedQueueOrderingAcrossGraph(t *testing.T) {
 	h, err := New(Config{
 		ID:          "thread-unified-queue-ordering",
 		DB:          db,
-		Model:       newTestModel(t, prov),
-		Tools:       reg,
 		Permissions: perm,
 		Queue:       q,
 		Bash:        bash,
@@ -2032,6 +2078,10 @@ func TestUnifiedQueueOrderingAcrossGraph(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New error: %v", err)
 	}
+	h.Configure(NodeOptions{
+		Model: newTestModel(t, prov),
+		Tools: reg,
+	})
 
 	var emittedMessages []message.Message
 	var cmdStartedCount, cmdCompletedCount int
@@ -2039,12 +2089,12 @@ func TestUnifiedQueueOrderingAcrossGraph(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Stream error: %v", err)
 		}
-		switch ev.Type {
-		case EventMessage:
-			emittedMessages = append(emittedMessages, ev.Message)
-		case EventCommandStarted:
+		switch val := ev.(type) {
+		case message.Message:
+			emittedMessages = append(emittedMessages, val)
+		case api.CommandStartedEvent:
 			cmdStartedCount++
-		case EventCommandCompleted:
+		case CommandCompleted:
 			cmdCompletedCount++
 		}
 	}
@@ -2154,8 +2204,6 @@ func TestTodosToolExecutionAndCheckpoint(t *testing.T) {
 	h, err := New(Config{
 		ID:          "thread-todos",
 		DB:          db,
-		Model:       newTestModel(t, prov),
-		Tools:       reg,
 		Bash:        &fakeBashRunner{},
 		Spiller:     newTestSpiller(t),
 		Permissions: perm,
@@ -2165,22 +2213,26 @@ func TestTodosToolExecutionAndCheckpoint(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New error: %v", err)
 	}
+	h.Configure(NodeOptions{
+		Model: newTestModel(t, prov),
+		Tools: reg,
+	})
 
-	var todosEvents []Event
+	var todosEvents []api.TodosUpdatedEvent
 	for ev, err := range h.Stream(ctx, Input{Message: message.NewUserText("Start work")}) {
 		if err != nil {
 			t.Fatalf("Stream error: %v", err)
 		}
-		if ev.Type == EventTodosUpdated {
-			todosEvents = append(todosEvents, ev)
+		if te, ok := ev.(api.TodosUpdatedEvent); ok {
+			todosEvents = append(todosEvents, te)
 		}
 	}
 
 	if len(todosEvents) != 1 {
-		t.Fatalf("expected 1 EventTodosUpdated, got %d", len(todosEvents))
+		t.Fatalf("expected 1 api.TodosUpdatedEvent, got %d", len(todosEvents))
 	}
 	if len(todosEvents[0].Todos) != 2 {
-		t.Fatalf("expected 2 items in EventTodosUpdated, got %d", len(todosEvents[0].Todos))
+		t.Fatalf("expected 2 items in api.TodosUpdatedEvent, got %d", len(todosEvents[0].Todos))
 	}
 	if todosEvents[0].Todos[0].Content != "Step 1" || todosEvents[0].Todos[0].Status != string(api.TodoStatusInProgress) {
 		t.Fatalf("unexpected todo item 0: %+v", todosEvents[0].Todos[0])
@@ -2238,7 +2290,7 @@ func TestMessageUpdateContextOptions(t *testing.T) {
 func TestDeferredMessageUpdatesBeforeCompaction(t *testing.T) {
 	static := StaticContext{SystemPrompt: 10}
 	limits := models.Limits{Context: 100000, Output: 1000}
-	original := State{PendingCompaction: &CompactInput{}, Context: api.ContextState{UsedTokens: 999, CachedTokens: 80, Compactions: 2}}
+	original := State{PendingCompaction: &api.CompactRequest{}, Context: api.ContextState{UsedTokens: 999, CachedTokens: 80, Compactions: 2}}
 	summary := message.NewUserText("summary")
 	first := message.NewUserText("first")
 	second := message.NewUserText("second")
@@ -2274,27 +2326,28 @@ func TestCacheBrokenRequiresReportedMetrics(t *testing.T) {
 		}
 		return []message.AssistantChunk{{Content: []message.Block{&message.TextBlock{Text: "answer"}}, Metrics: metrics, Done: true}}, nil
 	}}
-	h, err := New(Config{ID: "cache-metrics", DB: openTestSQLite(t), Model: newTestModel(t, provider), Tools: reg, Permissions: perm, Queue: &fakeQueue{}, Bash: &fakeBashRunner{}, Spiller: newTestSpiller(t), Logger: log.Default()})
+	h, err := New(Config{ID: "cache-metrics", DB: openTestSQLite(t), Permissions: perm, Queue: &fakeQueue{}, Bash: &fakeBashRunner{}, Spiller: newTestSpiller(t), Logger: log.Default()})
 	if err != nil {
 		t.Fatal(err)
 	}
+	h.Configure(NodeOptions{
+		Model: newTestModel(t, provider),
+		Tools: reg,
+	})
 	for turn := 1; turn <= 4; turn++ {
-		var events []CacheBroken
+		var events []api.CacheBrokenRecord
 		for event, err := range h.Stream(ctx, Input{Message: message.NewUserText("request")}) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if event.Type == EventCacheBroken {
-				if event.CacheBroken == nil {
-					t.Fatal("cache broken event has no details")
-				}
-				events = append(events, *event.CacheBroken)
+			if cb, ok := event.(api.CacheBrokenRecord); ok {
+				events = append(events, cb)
 			}
 		}
 		if turn < 4 && len(events) != 0 {
 			t.Fatalf("turn %d: unexpected cache broken events: %+v", turn, events)
 		}
-		if turn == 4 && (len(events) != 1 || events[0] != (CacheBroken{PrevCached: 100, CurrCached: 0, InputTokens: 220})) {
+		if turn == 4 && (len(events) != 1 || events[0] != (api.CacheBrokenRecord{PrevCached: 100, CurrCached: 0, InputTokens: 220})) {
 			t.Fatalf("turn %d: expected reported cache drop, got %+v", turn, events)
 		}
 		state, err := h.LoadState(ctx)
@@ -2323,10 +2376,16 @@ func TestIncomingMessageUpdatesContextBeforeRouting(t *testing.T) {
 	}}
 	static := StaticContext{SystemPrompt: 123}
 	limits := models.Limits{Context: 10000, Output: 1000}
-	h, err := New(Config{ID: "entry-context", DB: openTestSQLite(t), Model: newTestModel(t, provider), Tools: reg, Permissions: perm, Queue: &fakeQueue{}, Bash: &fakeBashRunner{}, Spiller: newTestSpiller(t), Logger: log.Default(), Static: static, Limits: limits})
+	h, err := New(Config{ID: "entry-context", DB: openTestSQLite(t), Permissions: perm, Queue: &fakeQueue{}, Bash: &fakeBashRunner{}, Spiller: newTestSpiller(t), Logger: log.Default()})
 	if err != nil {
 		t.Fatal(err)
 	}
+	h.Configure(NodeOptions{
+		Model:  newTestModel(t, provider),
+		Tools:  reg,
+		Static: static,
+		Limits: limits,
+	})
 	for _, err := range h.Stream(ctx, Input{Message: message.NewUserText("first request")}) {
 		if err != nil && !errors.Is(err, failure) {
 			t.Fatal(err)
@@ -2356,10 +2415,15 @@ func TestIncomingMessageCrossesCompactionThreshold(t *testing.T) {
 		}
 		return []message.AssistantChunk{{Content: []message.Block{&message.TextBlock{Text: text}}, Metrics: metrics, Done: true}}, nil
 	}}
-	h, err := New(Config{ID: "entry-threshold", DB: openTestSQLite(t), Model: newTestModel(t, provider), Tools: reg, Permissions: perm, Queue: &fakeQueue{}, Bash: &fakeBashRunner{}, Spiller: newTestSpiller(t), Logger: log.Default(), Limits: models.Limits{Context: 10000, Output: 1000}})
+	h, err := New(Config{ID: "entry-threshold", DB: openTestSQLite(t), Permissions: perm, Queue: &fakeQueue{}, Bash: &fakeBashRunner{}, Spiller: newTestSpiller(t), Logger: log.Default()})
 	if err != nil {
 		t.Fatal(err)
 	}
+	h.Configure(NodeOptions{
+		Model:  newTestModel(t, provider),
+		Tools:  reg,
+		Limits: models.Limits{Context: 10000, Output: 1000},
+	})
 	for _, err := range h.Stream(ctx, Input{Message: message.NewUserText("first")}) {
 		if err != nil {
 			t.Fatal(err)
@@ -2379,7 +2443,7 @@ func TestIncomingMessageCrossesCompactionThreshold(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if event.Type == EventCompactionStarted {
+		if _, ok := event.(api.CompactionStartedEvent); ok {
 			starts++
 		}
 	}
@@ -2412,18 +2476,22 @@ func TestAutoCompactionTurnAndCommandBoundaries(t *testing.T) {
 		},
 	}
 	h, err := New(Config{
-		ID: "compact-boundaries", DB: openTestSQLite(t), Model: newTestModel(t, prov),
-		Tools: reg, Permissions: perm, Queue: q, Bash: &fakeBashRunner{},
+		ID: "compact-boundaries", DB: openTestSQLite(t),
+		Permissions: perm, Queue: q, Bash: &fakeBashRunner{},
 		Spiller: newTestSpiller(t), Logger: log.Default(),
-		Limits: models.Limits{Context: 10000, Output: 1000},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
+	h.Configure(NodeOptions{
+		Model:  newTestModel(t, prov),
+		Tools:  reg,
+		Limits: models.Limits{Context: 10000, Output: 1000},
+	})
 
-	run := func(input Input) []Event {
+	run := func(input Input) []any {
 		t.Helper()
-		var events []Event
+		var events []any
 		for event, err := range h.Stream(ctx, input) {
 			if err != nil {
 				t.Fatal(err)
@@ -2432,10 +2500,11 @@ func TestAutoCompactionTurnAndCommandBoundaries(t *testing.T) {
 		}
 		return events
 	}
-	assertNoCompaction := func(events []Event) {
+	assertNoCompaction := func(events []any) {
 		t.Helper()
 		for _, event := range events {
-			if event.Type == EventCompactionStarted || event.Type == EventCompactionCompleted {
+			switch event.(type) {
+			case api.CompactionStartedEvent, CompactionCompleted:
 				t.Fatalf("unexpected compaction event: %+v", event)
 			}
 		}
@@ -2450,7 +2519,7 @@ func TestAutoCompactionTurnAndCommandBoundaries(t *testing.T) {
 		t.Fatalf("expected one completed turn at the threshold: context=%+v calls=%d", state.Context, len(prov.recordedTurns()))
 	}
 
-	q.items = append(q.items, QueueItem{Kind: QueueKindCommand, Payload: QueueCommandPayload{Command: "show status"}})
+	q.items = append(q.items, fakeQueueItem{isCmd: true, command: "show status"})
 	assertNoCompaction(run(Input{}))
 	state, err = h.LoadState(ctx)
 	if err != nil {
@@ -2465,13 +2534,13 @@ func TestAutoCompactionTurnAndCommandBoundaries(t *testing.T) {
 	starts, completions := 0, 0
 	var chunks []string
 	for _, event := range events {
-		switch event.Type {
-		case EventCompactionStarted:
+		switch ev := event.(type) {
+		case api.CompactionStartedEvent:
 			starts++
-		case EventCompactionCompleted:
+		case CompactionCompleted:
 			completions++
-		case EventChunk:
-			chunks = append(chunks, extractBlocksText(event.Chunk.Content))
+		case *message.AssistantChunk:
+			chunks = append(chunks, extractBlocksText(ev.Content))
 		}
 	}
 	if len(chunks) != 1 || chunks[0] != "answer" {
@@ -2506,13 +2575,17 @@ func TestManualCompactionDoesNotStreamSummaryChunks(t *testing.T) {
 		},
 	}
 	h, err := New(Config{
-		ID: "manual-compact-stream", DB: openTestSQLite(t), Model: newTestModel(t, provider),
-		Tools: reg, Permissions: perm, Queue: &fakeQueue{}, Bash: &fakeBashRunner{},
+		ID: "manual-compact-stream", DB: openTestSQLite(t),
+		Permissions: perm, Queue: &fakeQueue{}, Bash: &fakeBashRunner{},
 		Spiller: newTestSpiller(t), Logger: log.Default(),
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
+	h.Configure(NodeOptions{
+		Model: newTestModel(t, provider),
+		Tools: reg,
+	})
 	for _, err := range h.Stream(ctx, Input{Message: message.NewUserText("request")}) {
 		if err != nil {
 			t.Fatal(err)
@@ -2520,24 +2593,24 @@ func TestManualCompactionDoesNotStreamSummaryChunks(t *testing.T) {
 	}
 	started, completed, finished := 0, 0, 0
 	var chunks []string
-	for event, err := range h.Stream(ctx, Input{Compact: &CompactInput{Focus: "focus"}}) {
+	for event, err := range h.Stream(ctx, Input{Compact: &api.CompactRequest{Focus: "focus"}}) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		switch event.Type {
-		case EventChunk:
-			chunks = append(chunks, extractBlocksText(event.Chunk.Content))
-		case EventCompactionStarted:
+		switch ev := event.(type) {
+		case *message.AssistantChunk:
+			chunks = append(chunks, extractBlocksText(ev.Content))
+		case api.CompactionStartedEvent:
 			started++
-			if event.CompactionStarted.Trigger != "manual" || event.CompactionStarted.Focus != "focus" {
-				t.Fatalf("unexpected compaction start: %+v", event.CompactionStarted)
+			if ev.Trigger != "manual" || ev.Focus != "focus" {
+				t.Fatalf("unexpected compaction start: %+v", ev)
 			}
-		case EventCompactionCompleted:
+		case CompactionCompleted:
 			completed++
-			if event.CompactionCompleted.Summary != "private summary" {
-				t.Fatalf("unexpected compaction summary: %+v", event.CompactionCompleted)
+			if ev.Summary != "private summary" {
+				t.Fatalf("unexpected compaction summary: %+v", ev)
 			}
-		case EventCompleted:
+		case Completed:
 			finished++
 		}
 	}
@@ -2563,21 +2636,112 @@ func TestConsumeGraphStreamFiltersNonAgentChunks(t *testing.T) {
 		{Node: "tools", Event: graph.EventLLMChunk, Data: chunk},
 		{Node: "agent", Event: graph.EventLLMChunk, Data: chunk},
 	}
-	var received []Event
+	var received []any
 	(&harness{}).consumeGraphStream(func(yield func(graph.StreamEvent, error) bool) {
 		for _, event := range events {
 			if !yield(event, nil) {
 				return
 			}
 		}
-	}, func(event Event, err error) bool {
+	}, func(event any, err error) bool {
 		if err != nil {
 			t.Fatal(err)
 		}
 		received = append(received, event)
 		return true
 	})
-	if len(received) != 1 || received[0].Type != EventChunk || extractBlocksText(received[0].Chunk.Content) != "text" {
+	if len(received) != 1 {
+		t.Fatalf("expected only 1 event, got %+v", received)
+	}
+	chk, ok := received[0].(*message.AssistantChunk)
+	if !ok || extractBlocksText(chk.Content) != "text" {
 		t.Fatalf("expected only agent chunk, got %+v", received)
+	}
+}
+
+func TestHarnessConfigureHotSwap(t *testing.T) {
+	ctx := context.Background()
+	db := openTestSQLite(t)
+	_, reg1, perm := newTestToolsRegistry(t)
+	_, reg2, _ := newTestToolsRegistry(t)
+
+	prov1 := &fakeProvider{}
+	m1, err := llm.NewModel(prov1, "model-1", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	prov2 := &fakeProvider{}
+	m2, err := llm.NewModel(prov2, "model-2", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	bash := &fakeBashRunner{}
+	spiller := newTestSpiller(t)
+	q := &fakeQueue{}
+	logger := log.Default()
+
+	// Construct without Model/Tools initially
+	h, err := New(Config{
+		ID:          "hotswap-thread",
+		DB:          db,
+		Bash:        bash,
+		Spiller:     spiller,
+		Permissions: perm,
+		Queue:       q,
+		Logger:      logger,
+	})
+	if err != nil {
+		t.Fatalf("New without model/tools: %v", err)
+	}
+
+	// Verify LoadState works before Configure
+	st, err := h.LoadState(ctx)
+	if err != nil {
+		t.Fatalf("LoadState before configure: %v", err)
+	}
+	_ = st
+
+	// Configure first model & tools
+	h.Configure(NodeOptions{
+		Model:        m1,
+		Tools:        reg1,
+		SystemPrompt: "System 1",
+		Limits:       models.Limits{Context: 1000},
+	})
+
+	// Run turn 1
+	_, msg1, err := drainStream(ctx, h, message.NewUserText("Turn 1"))
+	if err != nil {
+		t.Fatalf("Turn 1 error: %v", err)
+	}
+	if msg1 == nil {
+		t.Fatalf("expected message from Turn 1")
+	}
+	turns1 := prov1.recordedTurns()
+	if len(turns1) == 0 || turns1[len(turns1)-1].model != "model-1" {
+		t.Errorf("Turn 1 model = %+v, want 'model-1'", turns1)
+	}
+
+	// Hot-swap to second model, tools, and system prompt on existing Harness
+	h.Configure(NodeOptions{
+		Model:        m2,
+		Tools:        reg2,
+		SystemPrompt: "System 2",
+		Limits:       models.Limits{Context: 2000},
+	})
+
+	// Run turn 2 on same Harness instance
+	_, msg2, err := drainStream(ctx, h, message.NewUserText("Turn 2"))
+	if err != nil {
+		t.Fatalf("Turn 2 error: %v", err)
+	}
+	if msg2 == nil {
+		t.Fatalf("expected message from Turn 2")
+	}
+	turns2 := prov2.recordedTurns()
+	if len(turns2) == 0 || turns2[len(turns2)-1].model != "model-2" {
+		t.Errorf("Turn 2 model = %+v, want 'model-2'", turns2)
 	}
 }

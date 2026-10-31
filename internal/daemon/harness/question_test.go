@@ -67,23 +67,24 @@ func TestQuestionPermissionEvaluation(t *testing.T) {
 					}
 					return []message.AssistantChunk{{Content: []message.Block{&message.TextBlock{Text: "done"}}, Done: true}}, nil
 				}}
-			h, err := New(Config{ID: "question-permission", DB: openTestSQLite(t), Model: newTestModel(t, provider), Tools: registry, Bash: &fakeBashRunner{}, Spiller: newTestSpiller(t), Permissions: perms, Queue: &fakeQueue{}, Logger: log.Default()})
+			h, err := New(Config{ID: "question-permission", DB: openTestSQLite(t), Bash: &fakeBashRunner{}, Spiller: newTestSpiller(t), Permissions: perms, Queue: &fakeQueue{}, Logger: log.Default()})
 			if err != nil {
 				t.Fatal(err)
 			}
+			h.Configure(NodeOptions{Model: newTestModel(t, provider), Tools: registry})
 			var permission api.PermissionRequest
 			var result *message.Tool
 			for event, err := range h.Stream(ctx, Input{Message: message.NewUserText("start")}) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if event.Type == EventInterrupted {
-					if len(event.Questions) != 0 || len(event.Permissions) != 1 {
+				if inter, ok := event.(Interrupted); ok {
+					if len(inter.Questions) != 0 || len(inter.Permissions) != 1 {
 						t.Fatalf("expected permission only, got %+v", event)
 					}
-					permission = event.Permissions[0]
+					permission = inter.Permissions[0]
 				}
-				if msg, ok := event.Message.(*message.Tool); ok {
+				if msg, ok := event.(*message.Tool); ok {
 					result = msg
 				}
 			}
@@ -101,10 +102,10 @@ func TestQuestionPermissionEvaluation(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if event.Type == EventInterrupted && len(event.Questions) == 1 && len(event.Permissions) == 0 {
-					question = event.Questions[0]
+				if inter, ok := event.(Interrupted); ok && len(inter.Questions) == 1 && len(inter.Permissions) == 0 {
+					question = inter.Questions[0]
 				}
-				if msg, ok := event.Message.(*message.Tool); ok {
+				if msg, ok := event.(*message.Tool); ok {
 					result = msg
 				}
 			}
@@ -121,7 +122,7 @@ func TestQuestionPermissionEvaluation(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if msg, ok := event.Message.(*message.Tool); ok {
+				if msg, ok := event.(*message.Tool); ok {
 					result = msg
 				}
 			}
@@ -145,20 +146,21 @@ func TestApprovedQuestionWithOtherToolCalls(t *testing.T) {
 		}
 		return []message.AssistantChunk{{Content: []message.Block{&message.TextBlock{Text: "done"}}, Done: true}}, nil
 	}}
-	h, err := New(Config{ID: "question-permission-mixed", DB: openTestSQLite(t), Model: newTestModel(t, provider), Tools: registry, Bash: &fakeBashRunner{}, Spiller: newTestSpiller(t), Permissions: perms, Queue: &fakeQueue{}, Logger: log.Default()})
+	h, err := New(Config{ID: "question-permission-mixed", DB: openTestSQLite(t), Bash: &fakeBashRunner{}, Spiller: newTestSpiller(t), Permissions: perms, Queue: &fakeQueue{}, Logger: log.Default()})
 	if err != nil {
 		t.Fatal(err)
 	}
+	h.Configure(NodeOptions{Model: newTestModel(t, provider), Tools: registry})
 	decisions := map[string]api.PermissionDecision{}
 	for event, err := range h.Stream(ctx, Input{Message: message.NewUserText("start")}) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if event.Type == EventInterrupted {
-			if len(event.Permissions) != 2 || len(event.Questions) != 0 {
+		if inter, ok := event.(Interrupted); ok {
+			if len(inter.Permissions) != 2 || len(inter.Questions) != 0 {
 				t.Fatalf("expected two permission requests: %+v", event)
 			}
-			for _, req := range event.Permissions {
+			for _, req := range inter.Permissions {
 				kind := api.DecisionReject
 				if req.ToolCallID == "ask" {
 					kind = api.DecisionAllowOnce
@@ -176,10 +178,10 @@ func TestApprovedQuestionWithOtherToolCalls(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if event.Type == EventInterrupted && len(event.Questions) == 1 && len(event.Permissions) == 0 {
-			question = event.Questions[0]
+		if inter, ok := event.(Interrupted); ok && len(inter.Questions) == 1 && len(inter.Permissions) == 0 {
+			question = inter.Questions[0]
 		}
-		if msg, ok := event.Message.(*message.Tool); ok && msg.ToolCallID == "write" {
+		if msg, ok := event.(*message.Tool); ok && msg.ToolCallID == "write" {
 			writes++
 			if !strings.Contains(msg.Content.Text(), tools.ErrPermissionDenied.Error()) {
 				t.Fatalf("unexpected write result: %+v", msg)
@@ -193,7 +195,7 @@ func TestApprovedQuestionWithOtherToolCalls(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if msg, ok := event.Message.(*message.Tool); ok && msg.ToolCallID == "write" {
+		if msg, ok := event.(*message.Tool); ok && msg.ToolCallID == "write" {
 			writes++
 		}
 	}
@@ -211,17 +213,18 @@ func TestQuestionInterruptResume(t *testing.T) {
 		}
 		return []message.AssistantChunk{{BaseChunk: message.BaseChunk{ID: "final"}, Content: []message.Block{&message.TextBlock{Text: "done"}}, Done: true}}, nil
 	}}
-	h, err := New(Config{ID: "question-test", DB: openTestSQLite(t), Model: newTestModel(t, provider), Tools: registry, Bash: &fakeBashRunner{}, Spiller: newTestSpiller(t), Permissions: perms, Queue: &fakeQueue{}, Logger: log.Default()})
+	h, err := New(Config{ID: "question-test", DB: openTestSQLite(t), Bash: &fakeBashRunner{}, Spiller: newTestSpiller(t), Permissions: perms, Queue: &fakeQueue{}, Logger: log.Default()})
 	if err != nil {
 		t.Fatal(err)
 	}
+	h.Configure(NodeOptions{Model: newTestModel(t, provider), Tools: registry})
 	var req api.QuestionRequest
 	for event, err := range h.Stream(ctx, Input{Message: message.NewUserText("start")}) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if event.Type == EventInterrupted && len(event.Questions) == 1 {
-			req = event.Questions[0]
+		if inter, ok := event.(Interrupted); ok && len(inter.Questions) == 1 {
+			req = inter.Questions[0]
 		}
 	}
 	if req.ID == "" || req.ToolCallID != "ask-1" {
@@ -241,7 +244,7 @@ func TestQuestionInterruptResume(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if msg, ok := event.Message.(*message.Tool); ok {
+		if msg, ok := event.(*message.Tool); ok {
 			result = msg
 		}
 	}
@@ -262,18 +265,19 @@ func TestMixedQuestionAndPermission(t *testing.T) {
 		}
 		return []message.AssistantChunk{{BaseChunk: message.BaseChunk{ID: "done"}, Content: []message.Block{&message.TextBlock{Text: "done"}}, Done: true}}, nil
 	}}
-	h, err := New(Config{ID: "mixed", DB: openTestSQLite(t), Model: newTestModel(t, provider), Tools: registry, Bash: &fakeBashRunner{}, Spiller: newTestSpiller(t), Permissions: perms, Queue: &fakeQueue{}, Logger: log.Default()})
+	h, err := New(Config{ID: "mixed", DB: openTestSQLite(t), Bash: &fakeBashRunner{}, Spiller: newTestSpiller(t), Permissions: perms, Queue: &fakeQueue{}, Logger: log.Default()})
 	if err != nil {
 		t.Fatal(err)
 	}
+	h.Configure(NodeOptions{Model: newTestModel(t, provider), Tools: registry})
 	var q api.QuestionRequest
 	var p api.PermissionRequest
 	for event, err := range h.Stream(ctx, Input{Message: message.NewUserText("start")}) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if event.Type == EventInterrupted && len(event.Questions) == 1 && len(event.Permissions) == 1 {
-			q, p = event.Questions[0], event.Permissions[0]
+		if inter, ok := event.(Interrupted); ok && len(inter.Questions) == 1 && len(inter.Permissions) == 1 {
+			q, p = inter.Questions[0], inter.Permissions[0]
 		}
 	}
 	if q.ID == "" || p.ID == "" {
@@ -290,7 +294,7 @@ func TestMixedQuestionAndPermission(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if msg, ok := event.Message.(*message.Tool); ok && msg.ToolCallID == "ask" {
+		if msg, ok := event.(*message.Tool); ok && msg.ToolCallID == "ask" {
 			result = msg
 		}
 	}
@@ -314,17 +318,18 @@ func TestQuestionOutputOmitsUnrelatedConfirmation(t *testing.T) {
 		}
 		return []message.AssistantChunk{{BaseChunk: message.BaseChunk{ID: "done"}, Content: []message.Block{&message.TextBlock{Text: "done"}}, Done: true}}, nil
 	}}
-	h, err := New(Config{ID: "question-output", DB: openTestSQLite(t), Model: newTestModel(t, provider), Tools: registry, Bash: &fakeBashRunner{}, Spiller: newTestSpiller(t), Permissions: perms, Queue: &fakeQueue{}, Logger: log.Default()})
+	h, err := New(Config{ID: "question-output", DB: openTestSQLite(t), Bash: &fakeBashRunner{}, Spiller: newTestSpiller(t), Permissions: perms, Queue: &fakeQueue{}, Logger: log.Default()})
 	if err != nil {
 		t.Fatal(err)
 	}
+	h.Configure(NodeOptions{Model: newTestModel(t, provider), Tools: registry})
 	var req api.QuestionRequest
 	for event, err := range h.Stream(ctx, Input{Message: message.NewUserText("start")}) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if event.Type == EventInterrupted && len(event.Questions) == 1 {
-			req = event.Questions[0]
+		if inter, ok := event.(Interrupted); ok && len(inter.Questions) == 1 {
+			req = inter.Questions[0]
 		}
 	}
 	if req.ID == "" {
@@ -336,7 +341,7 @@ func TestQuestionOutputOmitsUnrelatedConfirmation(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if msg, ok := event.Message.(*message.Tool); ok {
+		if msg, ok := event.(*message.Tool); ok {
 			result = msg
 		}
 	}

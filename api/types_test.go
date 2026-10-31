@@ -869,16 +869,11 @@ func TestContextAndCompactionTypes(t *testing.T) {
 		t.Fatalf("StatusCompacting = %q, want %q", StatusCompacting, "compacting")
 	}
 
-	// 2. QueueKind compact and QueueCompactPayload
-	cp := QueueCompactPayload{Focus: "preserve test instructions"}
-	if cp.QueueKind() != QueueKindCompact {
-		t.Fatalf("cp.QueueKind() = %q, want %q", cp.QueueKind(), QueueKindCompact)
-	}
-
+	// 2. QueueKind compact and QueueItem
 	queueItem := QueueItem{
 		ID:        "qi-1",
 		Kind:      QueueKindCompact,
-		Payload:   cp,
+		Compact:   &CompactRequest{Focus: "preserve test instructions"},
 		CreatedAt: time.Now().UTC().Truncate(time.Second),
 	}
 	qiData, err := json.Marshal(queueItem)
@@ -892,9 +887,8 @@ func TestContextAndCompactionTypes(t *testing.T) {
 	if qiDecoded.Kind != QueueKindCompact {
 		t.Errorf("qiDecoded.Kind = %q, want %q", qiDecoded.Kind, QueueKindCompact)
 	}
-	qiPayload, ok := qiDecoded.Payload.(QueueCompactPayload)
-	if !ok || qiPayload.Focus != "preserve test instructions" {
-		t.Errorf("qiDecoded.Payload = %+v, want focus %q", qiDecoded.Payload, "preserve test instructions")
+	if qiDecoded.Compact == nil || qiDecoded.Compact.Focus != "preserve test instructions" {
+		t.Errorf("qiDecoded.Compact = %+v, want focus %q", qiDecoded.Compact, "preserve test instructions")
 	}
 
 	// 3. Agent and Model context limit fields

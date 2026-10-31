@@ -24,52 +24,58 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tools"
 )
 
+// NodeOptions holds the dynamic per-agent/model dependencies for harness graph nodes.
+type NodeOptions struct {
+	Model        *llm.Model
+	Tools        tools.Container
+	SystemPrompt string
+	Limits       models.Limits
+	Static       StaticContext
+}
+
+// Validate checks that required model and tools container dependencies are present.
+func (opts NodeOptions) Validate() error {
+	if opts.Model == nil {
+		return fmt.Errorf("%w: model is required", ErrInvalidConfig)
+	}
+	if opts.Tools == nil {
+		return fmt.Errorf("%w: tools container is required", ErrInvalidConfig)
+	}
+	return nil
+}
+
+// Node is a workflow graph node that can update its dynamic dependencies in place.
+type Node interface {
+	graph.Node[State]
+	Configure(opts NodeOptions)
+}
+
 type GraphConfig struct {
 	Checkpointer graph.Checkpointer
-	Model        *llm.Model
-	Container    tools.Container
 	Permissions  permissions.SessionManager
-	SystemPrompt string
 	Queue        Queue
 	Bash         BashRunner
 	Spiller      tools.Spiller
-	Limits       models.Limits
-	Static       StaticContext
 	Logger       log.Interface
 	Metrics      metrics.Recorder
 }
 
 type AgentNodeConfig struct {
-	Model        *llm.Model
-	Container    tools.Container
-	SystemPrompt string
-	Limits       models.Limits
-	Static       StaticContext
-	Logger       log.Interface
+	Logger log.Interface
 }
 
 type CompactionNodeConfig struct {
-	Model        *llm.Model
-	Container    tools.Container
-	SystemPrompt string
-	Limits       models.Limits
-	Static       StaticContext
-	Logger       log.Interface
+	Logger log.Interface
 }
 
 type ToolsNodeConfig struct {
 	Metrics     metrics.Recorder
-	Container   tools.Container
 	Permissions permissions.SessionManager
-	Limits      models.Limits
-	Static      StaticContext
 	Logger      log.Interface
 }
 
 type InboxNodeConfig struct {
 	Queue  Queue
-	Limits models.Limits
-	Static StaticContext
 	Logger log.Interface
 }
 
@@ -77,58 +83,37 @@ type CommandNodeConfig struct {
 	Queue   Queue
 	Bash    BashRunner
 	Spiller tools.Spiller
-	Limits  models.Limits
-	Static  StaticContext
 	Logger  log.Interface
 }
 
-func buildGraph(cfg GraphConfig) (*graph.Graph[State], error) {
+func buildGraph(cfg GraphConfig) (*graph.Graph[State], []Node, error) {
 	compactNode := NewCompactionNode(CompactionNodeConfig{
-		Model:        cfg.Model,
-		Container:    cfg.Container,
-		SystemPrompt: cfg.SystemPrompt,
-		Limits:       cfg.Limits,
-		Static:       cfg.Static,
-		Logger:       cfg.Logger,
+		Logger: cfg.Logger,
 	})
 	agentNode := NewAgentNode(AgentNodeConfig{
-		Model:        cfg.Model,
-		Container:    cfg.Container,
-		SystemPrompt: cfg.SystemPrompt,
-		Limits:       cfg.Limits,
-		Static:       cfg.Static,
-		Logger:       cfg.Logger,
+		Logger: cfg.Logger,
 	})
 	toolsNode := NewToolsNode(ToolsNodeConfig{
 		Metrics:     cfg.Metrics,
-		Container:   cfg.Container,
 		Permissions: cfg.Permissions,
-		Limits:      cfg.Limits,
-		Static:      cfg.Static,
 		Logger:      cfg.Logger,
 	})
 	inboxNode := NewInboxNode(InboxNodeConfig{
 		Queue:  cfg.Queue,
-		Limits: cfg.Limits,
-		Static: cfg.Static,
 		Logger: cfg.Logger,
 	})
 	commandNode := NewCommandNode(CommandNodeConfig{
 		Queue:   cfg.Queue,
 		Bash:    cfg.Bash,
 		Spiller: cfg.Spiller,
-		Limits:  cfg.Limits,
-		Static:  cfg.Static,
 		Logger:  cfg.Logger,
 	})
 
 	hasLeadingCommand := func(_ State) bool {
-		item, ok := cfg.Queue.Peek()
-		return ok && item.Kind == QueueKindCommand
+		return cfg.Queue.HasLeadingCommand()
 	}
 	queueHasItems := func(_ State) bool {
-		_, ok := cfg.Queue.Peek()
-		return ok
+		return cfg.Queue.HasItems()
 	}
 
 	g, err := graph.New[State]().
@@ -188,24 +173,44 @@ func buildGraph(cfg GraphConfig) (*graph.Graph[State], error) {
 		}).
 		Build()
 	if err != nil {
-		return nil, fmt.Errorf("harness: build graph: %w", err)
+		return nil, nil, fmt.Errorf("harness: build graph: %w", err)
 	}
 
-	return g, nil
+	nodes := []Node{commandNode, inboxNode, agentNode, toolsNode, compactNode}
+	return g, nodes, nil
 }
 
-func emit(ctx context.Context, ev StreamEvent) {
-	if ev == nil {
-		return
-	}
-	if nme, ok := ev.(NodeMessageEvent); ok {
-		if nme.Message == nil || SystemKindOf(nme.Message) != "" {
+func emit(ctx context.Context, ev any) {
+	var name string
+	switch v := ev.(type) {
+	case message.Message:
+		if v == nil || SystemKindOf(v) != "" {
 			return
 		}
+		ev = message.CloneMessage(v)
+		name = "message"
+	case api.CommandStartedEvent:
+		name = "command_started"
+	case CommandCompleted:
+		name = "command_completed"
+	case api.TodosUpdatedEvent:
+		v.Todos = slices.Clone(v.Todos)
+		ev = v
+		name = "todos_updated"
+	case api.CompactionStartedEvent:
+		name = "compaction_started"
+	case CompactionCompleted:
+		name = "compaction_completed"
+	case api.CacheBrokenRecord:
+		name = "cache_broken"
+	case api.ContextUpdatedEvent:
+		name = "context_updated"
+	default:
+		name = "harness"
 	}
 	if sw, ok := stream.WriterFromContext(ctx); ok && sw != nil {
 		_ = sw.Write(ctx, stream.Event{
-			Name: ev.EventName(),
+			Name: name,
 			Data: ev,
 		})
 	}
@@ -241,38 +246,38 @@ type CommandNode struct {
 	logger  log.Interface
 }
 
+var _ Node = (*CommandNode)(nil)
+
+func (n *CommandNode) Configure(opts NodeOptions) {
+	n.limits = opts.Limits
+	n.static = opts.Static
+}
+
 func NewCommandNode(cfg CommandNodeConfig) *CommandNode {
 	return &CommandNode{
 		queue:   cfg.Queue,
 		bash:    cfg.Bash,
 		spiller: cfg.Spiller,
-		limits:  cfg.Limits,
-		static:  cfg.Static,
 		logger:  cfg.Logger.ForComponent("harness.command"),
 	}
 }
 
 func (n *CommandNode) Execute(ctx context.Context, state State) (graph.Command[State], error) {
-	item, ok := n.queue.PopCommand()
+	cmdID, command, ok := n.queue.PopCommand()
 	if !ok {
 		return graph.Update[State](func(s State) State { return s }), nil
 	}
-	payload, ok := item.Payload.(QueueCommandPayload)
-	if !ok {
-		return graph.Update[State](func(s State) State { return s }), nil
-	}
-	cmdID := item.ID
 	if cmdID == "" || !uuid.Validate(cmdID) {
 		cmdID = uuid.NewString()
 	}
 
-	emit(ctx, CommandStarted{ID: cmdID, Command: payload.Command})
+	emit(ctx, api.CommandStartedEvent{ID: cmdID, Command: command})
 
 	cmdCtx := scope.With(ctx, scope.Scope{ToolCallID: cmdID, ToolName: "command"})
 	w := n.spiller.NewWriter(cmdCtx)
 	defer w.Close()
 
-	res, err := n.bash.Bash(cmdCtx, std.BashRequest{Command: payload.Command, Output: w})
+	res, err := n.bash.Bash(cmdCtx, std.BashRequest{Command: command, Output: w})
 	w.Close()
 	if err != nil {
 		return nil, err
@@ -280,20 +285,22 @@ func (n *CommandNode) Execute(ctx context.Context, state State) (graph.Command[S
 	outText := strings.TrimRight(w.String(), "\r\n")
 
 	emit(ctx, CommandCompleted{
-		ID:         cmdID,
-		Command:    payload.Command,
-		Output:     outText,
-		ExitCode:   res.ExitCode,
-		DurationMs: res.Duration.Milliseconds(),
+		ID: cmdID,
+		CommandRecord: api.CommandRecord{
+			Command:    command,
+			Output:     outText,
+			ExitCode:   res.ExitCode,
+			DurationMs: res.Duration.Milliseconds(),
+		},
 	})
 
-	msgText := fmt.Sprintf("<bash_command command=%q exit_code=\"%d\">\n%s\n</bash_command>", payload.Command, res.ExitCode, outText)
+	msgText := fmt.Sprintf("<bash_command command=%q exit_code=\"%d\">\n%s\n</bash_command>", command, res.ExitCode, outText)
 	msg := message.NewUserTextMeta(msgText, map[string]any{MetaSystemKind: SystemKindCommand})
 	msg.SetID(cmdID)
 
 	return graph.Update[State](func(s State) State {
 		s = s.AppendMessage(msg, MessageUpdateOptions{Static: n.static, Limits: n.limits})
-		emit(ctx, ContextUpdatedEvent{Context: s.Context})
+		emit(ctx, api.ContextUpdatedEvent{Context: s.Context})
 		return s
 	}), nil
 }
@@ -309,16 +316,21 @@ type AgentNode struct {
 	logger       log.Interface
 }
 
+var _ Node = (*AgentNode)(nil)
+
+func (n *AgentNode) Configure(opts NodeOptions) {
+	n.model = opts.Model
+	n.tools = opts.Tools
+	n.systemPrompt = strings.TrimSpace(opts.SystemPrompt)
+	n.limits = opts.Limits
+	n.static = opts.Static
+}
+
 // NewAgentNode constructs a new [AgentNode] bound to the resolved LLM model,
 // tool container, system prompt, limits, static context, and structured logger.
 func NewAgentNode(cfg AgentNodeConfig) *AgentNode {
 	return &AgentNode{
-		model:        cfg.Model,
-		tools:        cfg.Container,
-		systemPrompt: strings.TrimSpace(cfg.SystemPrompt),
-		limits:       cfg.Limits,
-		static:       cfg.Static,
-		logger:       cfg.Logger.ForComponent("harness.agent"),
+		logger: cfg.Logger.ForComponent("harness.agent"),
 	}
 }
 
@@ -351,13 +363,13 @@ func (n *AgentNode) Execute(ctx context.Context, state State) (graph.Command[Sta
 	}
 
 	resp.ID = msgID
-	emit(ctx, NodeMessageEvent{Message: resp})
+	emit(ctx, resp)
 
 	if resp.Metrics != nil {
 		prevCached := state.Context.CachedTokens
 		currCached := resp.Metrics.Tokens.CacheRead
 		if prevCached > 0 && currCached < prevCached {
-			emit(ctx, CacheBroken{
+			emit(ctx, api.CacheBrokenRecord{
 				PrevCached:  prevCached,
 				CurrCached:  currCached,
 				InputTokens: resp.Metrics.Tokens.Input,
@@ -367,7 +379,7 @@ func (n *AgentNode) Execute(ctx context.Context, state State) (graph.Command[Sta
 
 	return graph.Update[State](func(s State) State {
 		s = s.AppendMessage(resp, MessageUpdateOptions{Static: n.static, Limits: n.limits})
-		emit(ctx, ContextUpdatedEvent{Context: s.Context})
+		emit(ctx, api.ContextUpdatedEvent{Context: s.Context})
 		return s
 	}), nil
 }
@@ -381,12 +393,17 @@ type InboxNode struct {
 	logger log.Interface
 }
 
+var _ Node = (*InboxNode)(nil)
+
+func (n *InboxNode) Configure(opts NodeOptions) {
+	n.limits = opts.Limits
+	n.static = opts.Static
+}
+
 // NewInboxNode constructs a new [InboxNode] bound to the queue and logger.
 func NewInboxNode(cfg InboxNodeConfig) *InboxNode {
 	return &InboxNode{
 		queue:  cfg.Queue,
-		limits: cfg.Limits,
-		static: cfg.Static,
 		logger: cfg.Logger.ForComponent("harness.inbox"),
 	}
 }
@@ -408,13 +425,13 @@ func (n *InboxNode) Execute(ctx context.Context, state State) (graph.Command[Sta
 		if cloned.GetID() == "" || !uuid.Validate(cloned.GetID()) {
 			cloned.SetID(uuid.NewString())
 		}
-		emit(ctx, NodeMessageEvent{Message: cloned})
+		emit(ctx, cloned)
 		drained = append(drained, cloned)
 	}
 
 	return graph.Update[State](func(s State) State {
 		s = s.AppendMessages(drained, MessageUpdateOptions{Static: n.static, Limits: n.limits})
-		emit(ctx, ContextUpdatedEvent{Context: s.Context})
+		emit(ctx, api.ContextUpdatedEvent{Context: s.Context})
 		return s
 	}), nil
 }
@@ -431,13 +448,18 @@ type ToolsNode struct {
 	metrics     metrics.Recorder
 }
 
+var _ Node = (*ToolsNode)(nil)
+
+func (n *ToolsNode) Configure(opts NodeOptions) {
+	n.tools = opts.Tools
+	n.limits = opts.Limits
+	n.static = opts.Static
+}
+
 // NewToolsNode constructs a new [ToolsNode] bound to the tool container, permission manager, and logger.
 func NewToolsNode(cfg ToolsNodeConfig) *ToolsNode {
 	return &ToolsNode{
-		tools:       cfg.Container,
 		permissions: cfg.Permissions,
-		limits:      cfg.Limits,
-		static:      cfg.Static,
 		logger:      cfg.Logger.ForComponent("harness.tools"),
 		metrics:     cfg.Metrics,
 	}
@@ -514,7 +536,7 @@ func (n *ToolsNode) cancelCalls(ctx context.Context, asstIdx int, unfulfilled []
 			return nil, err
 		}
 		n.recordTool(ctx, tc, metrics.StatusCanceled, "canceled", 0)
-		emit(ctx, NodeMessageEvent{Message: toolMsg})
+		emit(ctx, toolMsg)
 		canceledMsgs = append(canceledMsgs, toolMsg)
 	}
 
@@ -522,7 +544,7 @@ func (n *ToolsNode) cancelCalls(ctx context.Context, asstIdx int, unfulfilled []
 	if strings.TrimSpace(trailingUser.GetID()) == "" {
 		trailingUser.SetID(uuid.NewString())
 	}
-	emit(ctx, NodeMessageEvent{Message: trailingUser})
+	emit(ctx, trailingUser)
 
 	return graph.Update[State](func(s State) State {
 		if len(s.Messages) > 0 {
@@ -539,7 +561,7 @@ func (n *ToolsNode) cancelCalls(ctx context.Context, asstIdx int, unfulfilled []
 		s.PendingQuestions = nil
 		s.QuestionResponses = nil
 		s.Context = computeContextState(n.static, s, n.limits)
-		emit(ctx, ContextUpdatedEvent{Context: s.Context})
+		emit(ctx, api.ContextUpdatedEvent{Context: s.Context})
 		return s
 	}), nil
 }
@@ -583,7 +605,7 @@ func (n *ToolsNode) evaluateCalls(ctx context.Context, unfulfilled []*message.To
 				if msgErr != nil {
 					return nil, msgErr
 				}
-				emit(ctx, NodeMessageEvent{Message: msg})
+				emit(ctx, msg)
 				toolMsgs = append(toolMsgs, msg)
 				continue
 			}
@@ -598,12 +620,12 @@ func (n *ToolsNode) evaluateCalls(ctx context.Context, unfulfilled []*message.To
 			pending = append(pending, *req)
 			continue
 		}
-		emit(ctx, NodeMessageEvent{Message: toolMsg})
+		emit(ctx, toolMsg)
 		toolMsgs = append(toolMsgs, toolMsg)
 		if todos, ok := extractTodos(toolMsg); ok {
 			updatedTodos = todos
 			hasTodos = true
-			emit(ctx, TodosUpdatedEvent{Todos: updatedTodos})
+			emit(ctx, api.TodosUpdatedEvent{Todos: updatedTodos})
 		}
 	}
 
@@ -618,7 +640,7 @@ func (n *ToolsNode) evaluateCalls(ctx context.Context, unfulfilled []*message.To
 				s.Todos = slices.Clone(updatedTodos)
 			}
 			s.Context = computeContextState(n.static, s, n.limits)
-			emit(ctx, ContextUpdatedEvent{Context: s.Context})
+			emit(ctx, api.ContextUpdatedEvent{Context: s.Context})
 			return s
 		}), nil
 	}
@@ -742,7 +764,7 @@ func (n *ToolsNode) resumeCalls(ctx context.Context, unfulfilled []*message.Tool
 				StructuredContent: out,
 			}
 			n.recordTool(ctx, tc, metrics.StatusOK, "", 0)
-			emit(ctx, NodeMessageEvent{Message: msg})
+			emit(ctx, msg)
 			toolMsgs = append(toolMsgs, msg)
 			continue
 		}
@@ -761,7 +783,7 @@ func (n *ToolsNode) resumeCalls(ctx context.Context, unfulfilled []*message.Tool
 				if msgErr != nil {
 					return nil, msgErr
 				}
-				emit(ctx, NodeMessageEvent{Message: msg})
+				emit(ctx, msg)
 				toolMsgs = append(toolMsgs, msg)
 				continue
 			}
@@ -776,12 +798,12 @@ func (n *ToolsNode) resumeCalls(ctx context.Context, unfulfilled []*message.Tool
 		if err != nil {
 			return nil, err
 		}
-		emit(ctx, NodeMessageEvent{Message: toolMsg})
+		emit(ctx, toolMsg)
 		toolMsgs = append(toolMsgs, toolMsg)
 		if todos, ok := extractTodos(toolMsg); ok {
 			updatedTodos = todos
 			hasTodos = true
-			emit(ctx, TodosUpdatedEvent{Todos: updatedTodos})
+			emit(ctx, api.TodosUpdatedEvent{Todos: updatedTodos})
 		}
 	}
 
@@ -842,7 +864,7 @@ func (n *ToolsNode) appendToolMessagesUpdate(ctx context.Context, toolMsgs messa
 		if hasTodos {
 			s.Todos = slices.Clone(todos)
 		}
-		emit(ctx, ContextUpdatedEvent{Context: s.Context})
+		emit(ctx, api.ContextUpdatedEvent{Context: s.Context})
 		return s
 	}
 }

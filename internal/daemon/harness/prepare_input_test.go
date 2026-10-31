@@ -45,14 +45,16 @@ func TestStreamStoppedAtInputEventDoesNotStartGraph(t *testing.T) {
 	ctx := context.Background()
 	_, registry, perms := newTestToolsRegistry(t)
 	provider := &fakeProvider{}
-	h, err := New(Config{ID: "stopped-input", DB: openTestSQLite(t), Model: newTestModel(t, provider), Tools: registry, Bash: &fakeBashRunner{}, Spiller: newTestSpiller(t), Permissions: perms, Queue: &fakeQueue{}, Logger: log.Default()})
+	h, err := New(Config{ID: "stopped-input", DB: openTestSQLite(t), Bash: &fakeBashRunner{}, Spiller: newTestSpiller(t), Permissions: perms, Queue: &fakeQueue{}, Logger: log.Default()})
 	if err != nil {
 		t.Fatal(err)
 	}
+	h.Configure(NodeOptions{Model: newTestModel(t, provider), Tools: registry})
 	input := message.NewUserText("hello")
 	input.SetID("")
 	for event, err := range h.Stream(ctx, Input{Message: input}) {
-		if err != nil || event.Type != EventMessage || event.Message == nil || event.Message.GetID() == "" {
+		msg, ok := event.(message.Message)
+		if err != nil || !ok || msg == nil || msg.GetID() == "" {
 			t.Fatalf("first event: %+v, %v", event, err)
 		}
 		break

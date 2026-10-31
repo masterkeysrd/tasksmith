@@ -65,33 +65,25 @@ var Queue = trail.SimpleFC("Queue", func() trail.Node {
 })
 
 func queueItemText(item api.QueueItem) string {
-	switch p := item.Payload.(type) {
-	case api.QueueMessagePayload:
+	switch item.Kind {
+	case api.QueueKindMessage:
+		if item.Message == nil {
+			return ""
+		}
 		var sb strings.Builder
-		for _, b := range p.Message.Content {
+		for _, b := range item.Message.Content {
 			if b.Text != "" {
 				sb.WriteString(b.Text)
 			}
 		}
 		return sb.String()
-	case *api.QueueMessagePayload:
-		if p == nil {
-			return ""
+	case api.QueueKindCommand:
+		return item.Command
+	case api.QueueKindCompact:
+		if item.Compact != nil {
+			return item.Compact.Focus
 		}
-		var sb strings.Builder
-		for _, b := range p.Message.Content {
-			if b.Text != "" {
-				sb.WriteString(b.Text)
-			}
-		}
-		return sb.String()
-	case api.QueueCommandPayload:
-		return p.Command
-	case *api.QueueCommandPayload:
-		if p == nil {
-			return ""
-		}
-		return p.Command
+		return ""
 	default:
 		return ""
 	}

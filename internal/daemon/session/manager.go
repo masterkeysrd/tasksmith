@@ -259,36 +259,35 @@ func (m *manager) loadOrCacheSession(ctx context.Context, dbSess *Session) (*Ses
 		return nil, err
 	}
 
-	if h, err := sess.buildHarness(ctx); err == nil {
-		if st, err := h.LoadState(ctx); err == nil {
-			sess.Lock()
-			sess.Context = st.Context
-			if len(st.Todos) > 0 {
-				sess.Todos = slices.Clone(st.Todos)
-			}
-			if len(st.PendingPermissions) > 0 && sess.Status == StatusIdle {
-				sess.Status = StatusWaitingPermission
-				sess.WaitingPermission = true
-				perms := make([]api.PermissionRequest, len(st.PendingPermissions))
-				for i, p := range st.PendingPermissions {
-					p.GrantPatterns = slices.Clone(p.GrantPatterns)
-					perms[i] = p
-				}
-				sess.PendingPermissions = perms
-			}
-			if len(st.PendingQuestions) > 0 && sess.Status != StatusThinking {
-				sess.WaitingQuestion = true
-				sess.PendingQuestions = make([]api.QuestionRequest, len(st.PendingQuestions))
-				for i := range st.PendingQuestions {
-					sess.PendingQuestions[i] = *st.PendingQuestions[i].Clone()
-				}
-				if !sess.WaitingPermission {
-					sess.Status = StatusWaitingQuestion
-				}
-			}
-			sess.Unlock()
+	if st, err := sess.Harness.LoadState(ctx); err == nil {
+		sess.Lock()
+		sess.Context = st.Context
+		if len(st.Todos) > 0 {
+			sess.Todos = slices.Clone(st.Todos)
 		}
+		if len(st.PendingPermissions) > 0 && sess.Status == StatusIdle {
+			sess.Status = StatusWaitingPermission
+			sess.WaitingPermission = true
+			perms := make([]api.PermissionRequest, len(st.PendingPermissions))
+			for i, p := range st.PendingPermissions {
+				p.GrantPatterns = slices.Clone(p.GrantPatterns)
+				perms[i] = p
+			}
+			sess.PendingPermissions = perms
+		}
+		if len(st.PendingQuestions) > 0 && sess.Status != StatusThinking {
+			sess.WaitingQuestion = true
+			sess.PendingQuestions = make([]api.QuestionRequest, len(st.PendingQuestions))
+			for i := range st.PendingQuestions {
+				sess.PendingQuestions[i] = *st.PendingQuestions[i].Clone()
+			}
+			if !sess.WaitingPermission {
+				sess.Status = StatusWaitingQuestion
+			}
+		}
+		sess.Unlock()
 	}
+	_ = sess.configureHarness(ctx)
 
 	m.mu.Lock()
 	if existing, ok := m.sessions[sess.ID]; ok {
@@ -461,9 +460,8 @@ func (m *manager) Refresh() {
 	for _, sess := range sessions {
 		sess.Lock()
 		sess.Diagnostics = sess.modelDiagnostics(sess.Config)
-		sess.Harness = nil
-		sess.configGeneration++
 		sess.Unlock()
+		_ = sess.configureHarness(context.Background())
 		m.publisher.Publish(api.TopicSessions, api.SessionUpdatedEvent{Workspace: m.workspace.RootDir(), Session: ToAPISession(sess)})
 	}
 }
@@ -579,19 +577,22 @@ func (m *manager) Update(ctx context.Context, id string, params UpdateParams) (*
 
 	sess.Title = newTitle
 	sess.Config = newConfig
-	if oldConfig.Agent != newConfig.Agent || oldConfig.Model != newConfig.Model || !reflect.DeepEqual(oldConfig.Thinking, newConfig.Thinking) {
+	configChanged := oldConfig.Agent != newConfig.Agent || oldConfig.Model != newConfig.Model || !reflect.DeepEqual(oldConfig.Thinking, newConfig.Thinking)
+	if configChanged {
 		sess.Diagnostics = sess.modelDiagnostics(newConfig)
 		if thinkingCleared {
 			sess.Diagnostics = append(sess.Diagnostics, api.SessionDiagnostic{Code: "thinking_override_cleared", Setting: "thinking", Message: fmt.Sprintf("The thinking override was cleared because it is unsupported by model %q.", newConfig.Model)})
 		}
-		sess.Harness = nil
-		sess.configGeneration++
 	}
 	sess.UpdatedAt = updatedAt
 	if oldConfig.Mode != newConfig.Mode && sess.PermManager != nil {
 		sess.PermManager.SetMode(newConfig.Mode)
 	}
 	sess.Unlock()
+
+	if configChanged {
+		_ = sess.configureHarness(ctx)
+	}
 
 	if oldConfig.Agent != newConfig.Agent {
 		entry := timeline.NewAgentEntry(sess.ID, api.AgentChange{From: oldConfig.Agent, To: newConfig.Agent})
