@@ -13,7 +13,7 @@
 //   - Lazy Workspace Runtime Cache: Each workspace directory is opened on
 //     demand and cached with its own [workspace.Workspace], [sandbox.Sandbox],
 //     pooled [gateway.Gateway], SQLite database (`tasksmith.db`),
-//     [timeline.Store], and [session.Manager].
+//     [timeline.Store], and [session.Store].
 //   - Detached Background Turns: Conversational turns (`Send` and
 //     `RespondPermission`) execute in daemon-owned background goroutines bound
 //     to the workspace runtime's lifecycle rather than the incoming HTTP

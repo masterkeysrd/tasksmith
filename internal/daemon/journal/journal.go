@@ -49,6 +49,17 @@ func WithMetrics(r metrics.Recorder) Option {
 
 var _ Journal = (*sqliteJournal)(nil)
 
+// Migrate executes SQLite migrations for the journal schema.
+func Migrate(ctx context.Context, db *sql.DB) error {
+	if db == nil {
+		return ErrInvalidConfig
+	}
+	if err := sqlite.Migrate(ctx, db, "journal", migrations); err != nil {
+		return fmt.Errorf("journal: migrate schema: %w", err)
+	}
+	return nil
+}
+
 // New loads or initializes the Journal for a session, running schema migrations
 // and restoring in-memory CAS tracked file state from SQLite metadata.
 func New(ctx context.Context, db *sql.DB, sessionID, blobsDir string, opts ...Option) (Journal, error) {
@@ -61,8 +72,8 @@ func New(ctx context.Context, db *sql.DB, sessionID, blobsDir string, opts ...Op
 		return nil, fmt.Errorf("%w: session ID and blobs dir must not be empty", ErrInvalidConfig)
 	}
 
-	if err := sqlite.Migrate(ctx, db, "journal", migrations); err != nil {
-		return nil, fmt.Errorf("journal: migrate schema: %w", err)
+	if err := Migrate(ctx, db); err != nil {
+		return nil, err
 	}
 
 	files := make(map[string]fileState)

@@ -93,13 +93,13 @@ func TestManagerStartTurnAndCancel(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 
-	// 1. Send nil message returns ErrNilMessage
-	if err := sess.Send(ctx, SendInput{}); !errors.Is(err, ErrNilMessage) {
-		t.Errorf("Send nil message err = %v, want %v", err, ErrNilMessage)
+	// 1. Send empty message returns ErrEmptyMessage
+	if err := sess.Send(ctx, api.SendRequest{}); !errors.Is(err, ErrEmptyMessage) {
+		t.Errorf("Send empty message err = %v, want %v", err, ErrEmptyMessage)
 	}
 
 	// 2. Send executes turn in background using default fakeProvider
-	err = sess.Send(ctx, SendInput{Message: message.NewUserText("Hi")})
+	err = sess.Send(ctx, api.SendRequest{Content: "Hi"})
 	if err != nil {
 		t.Fatalf("Send error: %v", err)
 	}
@@ -153,7 +153,7 @@ func TestManagerConcurrentTurnRejection(t *testing.T) {
 	}
 
 	// Start asynchronous turn
-	err = sess.Send(ctx, SendInput{Message: message.NewUserText("First")})
+	err = sess.Send(ctx, api.SendRequest{Content: "First"})
 	if err != nil {
 		t.Fatalf("Send error: %v", err)
 	}
@@ -169,13 +169,13 @@ func TestManagerConcurrentTurnRejection(t *testing.T) {
 	}
 
 	// Decision while session is running should fail with ErrSessionRunning
-	err = sess.Send(ctx, SendInput{Decision: &api.PermissionDecision{Kind: api.DecisionAllowOnce}})
+	err = sess.Send(ctx, api.SendRequest{Decision: &api.PermissionDecision{Kind: api.DecisionAllowOnce}})
 	if !errors.Is(err, ErrSessionRunning) {
 		t.Errorf("concurrent Send decision err = %v, want %v", err, ErrSessionRunning)
 	}
 
 	// User message while running should be enqueued without error
-	err = sess.Send(ctx, SendInput{Message: message.NewUserText("Second")})
+	err = sess.Send(ctx, api.SendRequest{Content: "Second"})
 	if err != nil {
 		t.Errorf("concurrent Send message err = %v, want nil", err)
 	}
@@ -213,7 +213,7 @@ func TestManagerTurnErrorPublishing(t *testing.T) {
 	}
 
 	// Send should launch turn and Wait should return the error
-	err = sess.Send(ctx, SendInput{Message: message.NewUserText("Fail please")})
+	err = sess.Send(ctx, api.SendRequest{Content: "Fail please"})
 	if err != nil {
 		t.Fatalf("Send error: %v", err)
 	}
@@ -283,7 +283,7 @@ func TestManagerTurnErrorLogging(t *testing.T) {
 		t.Fatalf("permissions.New: %v", err)
 	}
 
-	mgr, err := New(Config{
+	mgr, err := newTestCoordinator(Config{
 		DB:          db,
 		Workspace:   ws,
 		Gateway:     func() gateway.Gateway { return gw },
@@ -292,7 +292,7 @@ func TestManagerTurnErrorLogging(t *testing.T) {
 		Permissions: permMgr,
 	})
 	if err != nil {
-		t.Fatalf("session.New: %v", err)
+		t.Fatalf("newTestCoordinator: %v", err)
 	}
 	defer mgr.Close()
 
@@ -301,7 +301,7 @@ func TestManagerTurnErrorLogging(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 
-	if err := sess.Send(ctx, SendInput{Message: message.NewUserText("Fail turn")}); err != nil {
+	if err := sess.Send(ctx, api.SendRequest{Content: "Fail turn"}); err != nil {
 		t.Fatalf("Send: %v", err)
 	}
 	_ = sess.Wait(ctx)
@@ -339,7 +339,7 @@ func TestManagerCancelTurn(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 
-	err = sess.Send(ctx, SendInput{Message: message.NewUserText("Hang")})
+	err = sess.Send(ctx, api.SendRequest{Content: "Hang"})
 	if err != nil {
 		t.Fatalf("Send: %v", err)
 	}
@@ -443,7 +443,7 @@ func TestManagerRespondPermissionAsync(t *testing.T) {
 	}
 
 	// Send stops when interrupted
-	err = sess.Send(ctx, SendInput{Message: message.NewUserText("Write foo.txt")})
+	err = sess.Send(ctx, api.SendRequest{Content: "Write foo.txt"})
 	if err != nil {
 		t.Fatalf("Send: %v", err)
 	}
@@ -464,7 +464,7 @@ func TestManagerRespondPermissionAsync(t *testing.T) {
 	}
 
 	// Respond to permission via sess.Send with Decision
-	err = sess.Send(ctx, SendInput{
+	err = sess.Send(ctx, api.SendRequest{
 		Decision: &api.PermissionDecision{
 			RequestID: got.PendingPermissions[0].ID,
 			Kind:      api.DecisionAllowOnce,

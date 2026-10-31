@@ -9,137 +9,86 @@ import (
 	"time"
 
 	"github.com/masterkeysrd/tasksmith/api"
-	"github.com/masterkeysrd/tasksmith/internal/core/sqlite"
-	"github.com/masterkeysrd/tasksmith/internal/daemon/permissions"
 )
 
 // timestampFormat is a fixed-width UTC RFC3339Nano layout so SQLite TEXT
 // ordering (ORDER BY updated_at DESC, created_at DESC) matches chronological order.
 const timestampFormat = "2006-01-02T15:04:05.000000000Z"
 
-type store struct {
+// Store persists session metadata in SQLite.
+type Store interface {
+	Save(ctx context.Context, sess *Session) error
+	Get(ctx context.Context, id string) (*Session, error)
+	List(ctx context.Context) ([]*Session, error)
+	Delete(ctx context.Context, id string) error
+}
+
+type sqliteStore struct {
 	db *sql.DB
 }
 
-func newStore(ctx context.Context, db *sql.DB) (*store, error) {
-	if err := sqlite.Migrate(ctx, db, "session", migrations); err != nil {
-		return nil, fmt.Errorf("session: migrate schema: %w", err)
+var _ Store = (*sqliteStore)(nil)
+
+// NewStore initializes a SQLite-backed Store and runs schema migrations.
+func NewStore(ctx context.Context, db *sql.DB) (Store, error) {
+	if err := Migrate(ctx, db); err != nil {
+		return nil, err
 	}
-	return &store{db: db}, nil
+	return &sqliteStore{db: db}, nil
 }
 
-func (s *store) insertSession(ctx context.Context, sess *Session) error {
-	configBytes, err := json.Marshal(sess.Config)
+func (s *sqliteStore) Save(ctx context.Context, sess *Session) error {
+	if sess == nil {
+		return errors.New("session: nil session")
+	}
+
+	snap := sess.Clone()
+	if snap.ID == "" {
+		return ErrEmptySessionID
+	}
+	createdAt := snap.CreatedAt
+	if createdAt.IsZero() {
+		createdAt = time.Now().UTC()
+	}
+	updatedAt := snap.UpdatedAt
+	if updatedAt.IsZero() {
+		updatedAt = createdAt
+	}
+
+	configBytes, err := json.Marshal(snap.Config)
 	if err != nil {
 		return fmt.Errorf("session: marshal config: %w", err)
 	}
-	permsBytes, err := json.Marshal(sess.Permissions)
+	permsBytes, err := json.Marshal(snap.Permissions)
 	if err != nil {
 		return fmt.Errorf("session: marshal permissions: %w", err)
 	}
+
+	query := `INSERT INTO sessions (id, title, config, permissions, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?, ?)
+ON CONFLICT(id) DO UPDATE SET
+    title       = excluded.title,
+    config      = excluded.config,
+    permissions = excluded.permissions,
+    updated_at  = excluded.updated_at`
+
 	_, err = s.db.ExecContext(
 		ctx,
-		`INSERT INTO sessions (id, title, config, permissions, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)`,
-		sess.ID,
-		sess.Title,
+		query,
+		snap.ID,
+		snap.Title,
 		string(configBytes),
 		string(permsBytes),
-		formatTime(sess.CreatedAt),
-		formatTime(sess.UpdatedAt),
-	)
-	if err != nil {
-		return fmt.Errorf("session: insert session %q: %w", sess.ID, err)
-	}
-	return nil
-}
-
-func (s *store) updateSessionModel(ctx context.Context, sess *Session) error {
-	configBytes, err := json.Marshal(sess.Config)
-	if err != nil {
-		return fmt.Errorf("session: marshal config: %w", err)
-	}
-	if _, err := s.db.ExecContext(ctx, `UPDATE sessions SET config = ? WHERE id = ?`, string(configBytes), sess.ID); err != nil {
-		return fmt.Errorf("session: normalize model for %q: %w", sess.ID, err)
-	}
-	return nil
-}
-
-func (s *store) updateSession(ctx context.Context, sess *Session) error {
-	configBytes, err := json.Marshal(sess.Config)
-	if err != nil {
-		return fmt.Errorf("session: marshal config: %w", err)
-	}
-	permsBytes, err := json.Marshal(sess.Permissions)
-	if err != nil {
-		return fmt.Errorf("session: marshal permissions: %w", err)
-	}
-	res, err := s.db.ExecContext(
-		ctx,
-		`UPDATE sessions SET title = ?, config = ?, permissions = ?, updated_at = ? WHERE id = ?`,
-		sess.Title,
-		string(configBytes),
-		string(permsBytes),
-		formatTime(sess.UpdatedAt),
-		sess.ID,
-	)
-	if err != nil {
-		return fmt.Errorf("session: update session %q: %w", sess.ID, err)
-	}
-	affected, err := res.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("session: check rows affected for session %q: %w", sess.ID, err)
-	}
-	if affected == 0 {
-		return ErrSessionNotFound
-	}
-	return nil
-}
-
-func (s *store) updateSessionPermissions(ctx context.Context, sessionID string, perms permissions.Permissions) error {
-	permsBytes, err := json.Marshal(perms)
-	if err != nil {
-		return fmt.Errorf("session: marshal permissions: %w", err)
-	}
-	res, err := s.db.ExecContext(
-		ctx,
-		`UPDATE sessions SET permissions = ? WHERE id = ?`,
-		string(permsBytes),
-		sessionID,
-	)
-	if err != nil {
-		return fmt.Errorf("session: update session permissions %q: %w", sessionID, err)
-	}
-	affected, err := res.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("session: check rows affected for session %q: %w", sessionID, err)
-	}
-	if affected == 0 {
-		return ErrSessionNotFound
-	}
-	return nil
-}
-
-func (s *store) touchSession(ctx context.Context, sessionID string, updatedAt time.Time) error {
-	res, err := s.db.ExecContext(
-		ctx,
-		`UPDATE sessions SET updated_at = ? WHERE id = ?`,
+		formatTime(createdAt),
 		formatTime(updatedAt),
-		sessionID,
 	)
 	if err != nil {
-		return fmt.Errorf("session: touch session %q: %w", sessionID, err)
-	}
-	affected, err := res.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("session: check rows affected for session %q: %w", sessionID, err)
-	}
-	if affected == 0 {
-		return ErrSessionNotFound
+		return fmt.Errorf("session: save session %q: %w", snap.ID, err)
 	}
 	return nil
 }
 
-func (s *store) getSession(ctx context.Context, id string) (*Session, error) {
+func (s *sqliteStore) Get(ctx context.Context, id string) (*Session, error) {
 	row := s.db.QueryRowContext(
 		ctx,
 		`SELECT id, title, config, permissions, created_at, updated_at FROM sessions WHERE id = ?`,
@@ -155,7 +104,7 @@ func (s *store) getSession(ctx context.Context, id string) (*Session, error) {
 	return sess, nil
 }
 
-func (s *store) listSessions(ctx context.Context) ([]*Session, error) {
+func (s *sqliteStore) List(ctx context.Context) ([]*Session, error) {
 	rows, err := s.db.QueryContext(
 		ctx,
 		`SELECT id, title, config, permissions, created_at, updated_at FROM sessions ORDER BY updated_at DESC, id DESC`,
@@ -179,7 +128,7 @@ func (s *store) listSessions(ctx context.Context) ([]*Session, error) {
 	return sessions, nil
 }
 
-func (s *store) deleteSession(ctx context.Context, id string) error {
+func (s *sqliteStore) Delete(ctx context.Context, id string) error {
 	res, err := s.db.ExecContext(ctx, `DELETE FROM sessions WHERE id = ?`, id)
 	if err != nil {
 		return fmt.Errorf("session: delete session %q: %w", id, err)

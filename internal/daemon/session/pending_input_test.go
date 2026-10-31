@@ -39,7 +39,7 @@ func TestPendingInteractionDefersQueuedWork(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := sess.Send(ctx, SendInput{Message: message.NewUserText("start")}); err != nil {
+			if err := sess.Send(ctx, api.SendRequest{Content: "start"}); err != nil {
 				t.Fatal(err)
 			}
 			if err := sess.Wait(ctx); err != nil {
@@ -54,10 +54,10 @@ func TestPendingInteractionDefersQueuedWork(t *testing.T) {
 				t.Fatal(err)
 			}
 			status := sess.Status
-			if err := sess.Send(ctx, SendInput{Compact: &api.CompactRequest{}}); !errors.Is(err, ErrInvalidConfig) {
+			if err := sess.Send(ctx, api.SendRequest{Compact: &api.CompactRequest{}}); !errors.Is(err, ErrInvalidConfig) {
 				t.Fatalf("compact: %v", err)
 			}
-			if err := sess.Send(ctx, SendInput{Command: "printf queued"}); err != nil {
+			if err := sess.Send(ctx, api.SendRequest{Command: "printf queued"}); err != nil {
 				t.Fatal(err)
 			}
 			sess.Enqueue(message.NewUserTextMeta("background completed", map[string]any{harness.MetaSystemKind: harness.SystemKindTask}))
@@ -69,7 +69,7 @@ func TestPendingInteractionDefersQueuedWork(t *testing.T) {
 				t.Fatalf("queued work missing: %+v", sess.queue)
 			}
 			if kind != "question" {
-				if err := sess.Send(ctx, SendInput{Decision: &api.PermissionDecision{RequestID: sess.PendingPermissions[0].ID, Kind: api.DecisionReject}}); err != nil {
+				if err := sess.Send(ctx, api.SendRequest{Decision: &api.PermissionDecision{RequestID: sess.PendingPermissions[0].ID, Kind: api.DecisionReject}}); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -77,12 +77,12 @@ func TestPendingInteractionDefersQueuedWork(t *testing.T) {
 				if len(sess.PendingQuestions) != 1 || sess.Running || len(sess.queue) != 2 {
 					t.Fatalf("partial resolution changed waiting state: %+v", sess.State)
 				}
-				if err := sess.Send(ctx, SendInput{Compact: &api.CompactRequest{}}); !errors.Is(err, ErrInvalidConfig) {
+				if err := sess.Send(ctx, api.SendRequest{Compact: &api.CompactRequest{}}); !errors.Is(err, ErrInvalidConfig) {
 					t.Fatalf("compact after partial response: %v", err)
 				}
 			}
 			if kind != "permission" {
-				if err := sess.Send(ctx, SendInput{Question: &api.QuestionResponse{RequestID: sess.PendingQuestions[0].ID, Answers: []api.QuestionAnswer{{Question: "Why?", Text: "Because"}}}}); err != nil {
+				if err := sess.Send(ctx, api.SendRequest{Question: &api.QuestionResponse{RequestID: sess.PendingQuestions[0].ID, Answers: []api.QuestionAnswer{{Question: "Why?", Text: "Because"}}}}); err != nil {
 					t.Fatal(err)
 				}
 			}

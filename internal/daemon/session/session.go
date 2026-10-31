@@ -5,17 +5,13 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"github.com/masterkeysrd/tasksmith/internal/daemon/metrics"
-	"iter"
-	"maps"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/masterkeysrd/loom/llm"
-	"github.com/masterkeysrd/loom/message"
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	"github.com/masterkeysrd/tasksmith/internal/core/ptr"
@@ -25,10 +21,10 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/daemon/gateway"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/harness"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/journal"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/metrics"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/models"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/permissions"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/sandbox"
-	"github.com/masterkeysrd/tasksmith/internal/daemon/scope"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/std"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tasks"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/timeline"
@@ -38,23 +34,198 @@ import (
 	"github.com/masterkeysrd/warp"
 )
 
-func (s *Session) setStatus(next api.SessionStatus) {
-	s.Lock()
-	if s.Status == next {
-		s.Unlock()
-		return
-	}
-	s.Status = next
-	s.Running = (next == api.StatusThinking || next == api.StatusGenerating || next == api.StatusExecuting || next == api.StatusCompacting)
-	s.Unlock()
-
-	s.publisher.Publish(api.SessionStreamTopic(s.ID), api.StatusChangedEvent{
-		SessionID: s.ID,
-		Status:    next,
-	})
+// Config holds runtime dependencies and parameters for initializing a [Session].
+type Config struct {
+	ID          string
+	Title       string
+	Session     api.SessionConfig
+	DB          *sql.DB
+	Workspace   *workspace.Workspace
+	Gateway     func() gateway.Gateway
+	Catalog     func() *models.Catalog
+	Permissions permissions.Manager
+	Publisher   Publisher
+	Logger      log.Interface
+	Metrics     metrics.Service
+	ReloadLock  *sync.RWMutex
+	Context     context.Context
+	WaitGroup   *sync.WaitGroup
+	OnUpdate    func(ctx context.Context, s *Session) error
 }
 
-var _ harness.Queue = (*Session)(nil)
+// Validate checks that all required configuration dependencies are non-nil.
+func (c Config) Validate() error {
+	if c.DB == nil {
+		return fmt.Errorf("%w: database is required", ErrInvalidConfig)
+	}
+	if c.Workspace == nil {
+		return fmt.Errorf("%w: workspace is required", ErrInvalidConfig)
+	}
+	if c.Gateway == nil {
+		return fmt.Errorf("%w: gateway is required", ErrInvalidConfig)
+	}
+	if c.Publisher == nil {
+		return fmt.Errorf("%w: publisher is required", ErrInvalidConfig)
+	}
+	if c.Logger == nil {
+		return fmt.Errorf("%w: logger is required", ErrInvalidConfig)
+	}
+	if c.Permissions == nil {
+		return fmt.Errorf("%w: permissions is required", ErrInvalidConfig)
+	}
+	return nil
+}
+
+func (c *Config) applyDefaults() error {
+	if c.ReloadLock == nil {
+		c.ReloadLock = &sync.RWMutex{}
+	}
+	if c.Catalog == nil {
+		catalog, err := models.Build(c.Workspace.Catalog(), c.Gateway())
+		if err != nil {
+			return fmt.Errorf("session: build model catalog: %w", err)
+		}
+		c.Catalog = func() *models.Catalog { return catalog }
+	}
+	if c.Context == nil {
+		c.Context = context.Background()
+	}
+	if c.WaitGroup == nil {
+		c.WaitGroup = &sync.WaitGroup{}
+	}
+	return nil
+}
+
+func initSession(ctx context.Context, sess *Session, cfg Config) error {
+	dir, err := SessionDir(cfg.Workspace.RootDir(), sess.ID)
+	if err != nil {
+		return err
+	}
+	sess.State = NewState()
+	sess.permRoot = cfg.Permissions
+	sess.Root = dir
+	sess.workspace = cfg.Workspace
+	sess.gateway = cfg.Gateway
+	sess.catalog = cfg.Catalog
+	sess.metrics = cfg.Metrics
+	sess.reloadLock = cfg.ReloadLock
+	sess.publisher = cfg.Publisher
+	sess.logger = cfg.Logger
+	sess.bgCtx = cfg.Context
+	sess.wg = cfg.WaitGroup
+	sess.onUpdate = cfg.OnUpdate
+	sess.Diagnostics = sess.modelDiagnostics(sess.Config)
+	return sess.initSubsystems(ctx, cfg.DB)
+}
+
+// New constructs and initializes a new [Session].
+func New(ctx context.Context, cfg Config) (*Session, error) {
+	if err := cfg.Validate(); err != nil {
+		return nil, err
+	}
+
+	id := strings.TrimSpace(cfg.ID)
+	if id != "" {
+		if !uuid.Validate(id) {
+			return nil, fmt.Errorf("%w: invalid session id %q", ErrInvalidSessionID, id)
+		}
+	} else {
+		id = uuid.NewString()
+	}
+
+	if err := cfg.applyDefaults(); err != nil {
+		return nil, err
+	}
+
+	resolvedConfig, err := resolveConfig(cfg.Workspace, cfg.Catalog(), cfg.Session)
+	if err != nil {
+		return nil, err
+	}
+
+	now := time.Now().UTC()
+	sess := &Session{
+		ID:        id,
+		Title:     strings.TrimSpace(cfg.Title),
+		Config:    resolvedConfig,
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+
+	if err := initSession(ctx, sess, cfg); err != nil {
+		return nil, err
+	}
+	_ = sess.configureHarness(ctx)
+
+	return sess, nil
+}
+
+// Open restores and initializes an existing [Session] from persisted state.
+func Open(ctx context.Context, dbSess *Session, cfg Config) (*Session, error) {
+	if dbSess == nil {
+		return nil, fmt.Errorf("%w: session is nil", ErrInvalidConfig)
+	}
+	if err := cfg.Validate(); err != nil {
+		return nil, err
+	}
+
+	if err := cfg.applyDefaults(); err != nil {
+		return nil, err
+	}
+
+	if !models.ID(dbSess.Config.Model).Valid() {
+		if model, ok := cfg.Catalog().Resolve(models.RoleCompletion, dbSess.Config.Model); ok {
+			dbSess.Config.Model = string(model.ID)
+			if cfg.OnUpdate != nil {
+				if err := cfg.OnUpdate(ctx, dbSess); err != nil {
+					return nil, err
+				}
+			}
+		}
+	}
+
+	sess := &Session{
+		ID:          dbSess.ID,
+		Title:       dbSess.Title,
+		Config:      dbSess.Config,
+		CreatedAt:   dbSess.CreatedAt,
+		UpdatedAt:   dbSess.UpdatedAt,
+		Permissions: dbSess.Permissions.Clone(),
+	}
+
+	if err := initSession(ctx, sess, cfg); err != nil {
+		return nil, err
+	}
+
+	if st, err := sess.Harness.LoadState(ctx); err == nil {
+		sess.Lock()
+		sess.Context = st.Context
+		if len(st.Todos) > 0 {
+			sess.Todos = slices.Clone(st.Todos)
+		}
+		if len(st.PendingPermissions) > 0 && sess.Status == api.StatusIdle {
+			sess.Status = api.StatusWaitingPermission
+			perms := make([]api.PermissionRequest, len(st.PendingPermissions))
+			for i, p := range st.PendingPermissions {
+				p.GrantPatterns = slices.Clone(p.GrantPatterns)
+				perms[i] = p
+			}
+			sess.PendingPermissions = perms
+		}
+		if len(st.PendingQuestions) > 0 && sess.Status != api.StatusThinking {
+			sess.PendingQuestions = make([]api.QuestionRequest, len(st.PendingQuestions))
+			for i := range st.PendingQuestions {
+				sess.PendingQuestions[i] = *st.PendingQuestions[i].Clone()
+			}
+			if len(st.PendingPermissions) == 0 {
+				sess.Status = api.StatusWaitingQuestion
+			}
+		}
+		sess.Unlock()
+	}
+	_ = sess.configureHarness(ctx)
+
+	return sess, nil
+}
 
 // Session represents a persistent user-facing chat thread and its runtime state.
 type Session struct {
@@ -93,8 +264,6 @@ type Session struct {
 	turnIDs   []string
 	turnStart time.Time
 
-	db         *sql.DB                `json:"-"`
-	store      *store                 `json:"-"`
 	workspace  *workspace.Workspace   `json:"-"`
 	gateway    func() gateway.Gateway `json:"-"`
 	catalog    func() *models.Catalog `json:"-"`
@@ -104,6 +273,8 @@ type Session struct {
 	logger     log.Interface          `json:"-"`
 	bgCtx      context.Context        `json:"-"`
 	wg         *sync.WaitGroup        `json:"-"`
+
+	onUpdate func(ctx context.Context, s *Session) error
 }
 
 // Clone returns a deep copy of the session and its exported execution state,
@@ -137,15 +308,16 @@ func (s *Session) Clone() *Session {
 		Harness:     s.Harness,
 		Std:         s.Std,
 		spiller:     s.spiller,
-		db:          s.db,
-		store:       s.store,
 		workspace:   s.workspace,
 		gateway:     s.gateway,
 		catalog:     s.catalog,
+		metrics:     s.metrics,
+		reloadLock:  s.reloadLock,
 		publisher:   s.publisher,
 		logger:      s.logger,
 		bgCtx:       s.bgCtx,
 		wg:          s.wg,
+		onUpdate:    s.onUpdate,
 	}
 	if s.State != nil {
 		cp.State = s.State.Clone()
@@ -155,7 +327,38 @@ func (s *Session) Clone() *Session {
 	return cp
 }
 
+// CheckpointTo persists a snapshot of the session to store.
+func (s *Session) CheckpointTo(ctx context.Context, store Store) error {
+	return store.Save(ctx, s.Clone())
+}
+
+func (s *Session) checkpoint(ctx context.Context) error {
+	if s.onUpdate == nil {
+		return nil
+	}
+	return s.onUpdate(ctx, s)
+}
+
+func (s *Session) setStatus(next api.SessionStatus) {
+	s.Lock()
+	if s.Status == next {
+		s.Unlock()
+		return
+	}
+	s.Status = next
+	s.Running = (next == api.StatusThinking || next == api.StatusGenerating || next == api.StatusExecuting || next == api.StatusCompacting)
+	s.Unlock()
+
+	s.publisher.Publish(api.SessionStreamTopic(s.ID), api.StatusChangedEvent{
+		SessionID: s.ID,
+		Status:    next,
+	})
+}
+
 func (s *Session) ResolvedModel() (models.Model, *api.ThinkingSetting, bool) {
+	if s.catalog == nil {
+		return models.Model{}, nil, false
+	}
 	modelID := models.ID(s.Config.Model)
 	if !modelID.Valid() {
 		return models.Model{}, nil, false
@@ -165,7 +368,7 @@ func (s *Session) ResolvedModel() (models.Model, *api.ThinkingSetting, bool) {
 		return models.Model{}, nil, false
 	}
 	thinking := s.Config.Thinking
-	if thinking == nil && s.workspace != nil && s.workspace.Catalog() != nil {
+	if thinking == nil {
 		if agent, found := s.workspace.Catalog().GetAgent(s.Config.Agent); found {
 			thinking = agent.Thinking
 		}
@@ -173,100 +376,258 @@ func (s *Session) ResolvedModel() (models.Model, *api.ThinkingSetting, bool) {
 	return m, thinking, true
 }
 
-func (s *Session) initResources(ctx context.Context) error {
-	if s.Sandbox == nil {
-		sb, err := sandbox.New(sandbox.Config{
-			ID:      s.ID,
-			WorkDir: s.workspace.RootDir(),
-			Mode:    sandbox.ModeLocal,
-			Env:     s.workspace.Env(),
-			Network: sandbox.NetworkPolicy{
-				AllowLoopback: true,
-			},
-		})
-		if err != nil {
-			return fmt.Errorf("session: initialize sandbox: %w", err)
-		}
-		s.Sandbox = sb
+func (s *Session) initSubsystems(ctx context.Context, db *sql.DB) error {
+	tl, err := timeline.New(ctx, db, s.ID)
+	if err != nil {
+		return fmt.Errorf("session: initialize timeline: %w", err)
 	}
-	if s.Timeline == nil {
-		tl, err := timeline.New(ctx, s.db, s.ID)
-		if err != nil {
-			return fmt.Errorf("session: initialize timeline: %w", err)
-		}
-		s.Timeline = tl
-	}
-	if s.Journal == nil {
-		blobsDir := filepath.Join(s.Root, "blobs")
-		jr, err := journal.New(ctx, s.db, s.ID, blobsDir, journal.WithMetrics(s.metrics))
-		if err != nil {
-			return fmt.Errorf("session: initialize journal: %w", err)
-		}
-		s.Journal = jr
-	}
-	outputsDir := s.outputsDir()
-	if s.Tasks == nil {
-		s.Tasks = tasks.New(tasks.Config{
-			Context:    s.bgCtx,
-			OutputsDir: outputsDir,
-			OnUpdate:   s.onTaskUpdate,
-		})
-	}
+	s.Timeline = tl
 
-	if s.Std == nil {
-		stdInst, err := std.New(std.Config{
-			Sandbox: s.Sandbox,
-			Tracker: s.Journal,
-			Logger:  s.logger,
-		})
-		if err != nil {
-			return fmt.Errorf("session: initialize std tools: %w", err)
-		}
-		s.Std = stdInst
+	blobsDir := filepath.Join(s.Root, "blobs")
+	jr, err := journal.New(ctx, db, s.ID, blobsDir, journal.WithMetrics(s.metrics))
+	if err != nil {
+		return fmt.Errorf("session: initialize journal: %w", err)
 	}
+	s.Journal = jr
 
-	if s.spiller == nil {
-		sp, err := tools.NewSpiller(tools.SpillerConfig{Workspace: s.workspace})
-		if err != nil {
-			return fmt.Errorf("session: initialize spiller: %w", err)
-		}
-		s.spiller = sp
+	sb, err := sandbox.New(sandbox.Config{
+		ID:      s.ID,
+		WorkDir: s.workspace.RootDir(),
+		Mode:    sandbox.ModeLocal,
+		Env:     s.workspace.Env(),
+		Network: sandbox.NetworkPolicy{
+			AllowLoopback: true,
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("session: initialize sandbox: %w", err)
 	}
+	s.Sandbox = sb
 
-	if s.Tools == nil {
-		initialAgent := s.Config.Agent
-		if initialAgent == "" && s.workspace != nil && s.workspace.Catalog() != nil {
-			initialAgent = s.workspace.Catalog().DefaultAgentName()
-		}
-		container, err := s.buildToolsForAgent(initialAgent)
-		if err != nil {
-			return err
-		}
-		s.Tools = container
+	s.Tasks = tasks.New(tasks.Config{
+		Context:    s.bgCtx,
+		OutputsDir: s.outputsDir(),
+		OnUpdate:   s.onTaskUpdate,
+	})
+
+	stdInst, err := std.New(std.Config{
+		Sandbox: s.Sandbox,
+		Tracker: s.Journal,
+		Logger:  s.logger,
+	})
+	if err != nil {
+		return fmt.Errorf("session: initialize std tools: %w", err)
 	}
+	s.Std = stdInst
+
+	sp, err := tools.NewSpiller(tools.SpillerConfig{Workspace: s.workspace})
+	if err != nil {
+		return fmt.Errorf("session: initialize spiller: %w", err)
+	}
+	s.spiller = sp
+
+	initialAgent := s.Config.Agent
+	if initialAgent == "" {
+		initialAgent = s.workspace.Catalog().DefaultAgentName()
+	}
+	container, err := s.buildToolsForAgent(initialAgent)
+	if err != nil {
+		return err
+	}
+	s.Tools = container
+
 	s.PermManager = s.permRoot.Attach(s.Config.Mode, s.Permissions, func(p permissions.Permissions) error {
 		s.Lock()
 		s.Permissions = p.Clone()
 		s.Unlock()
-		return s.store.updateSessionPermissions(s.bgCtx, s.ID, p)
+		return s.checkpoint(s.bgCtx)
 	})
-	if s.Harness == nil {
-		h, err := harness.New(harness.Config{
-			ID:          s.ID,
-			DB:          s.db,
-			Bash:        s.Std,
-			Spiller:     s.spiller,
-			Permissions: s.PermManager,
-			Queue:       s,
-			Logger:      s.logger,
-			Metrics:     s.metrics,
-		})
-		if err != nil {
-			return fmt.Errorf("session: initialize harness: %w", err)
-		}
-		s.Harness = h
+
+	h, err := harness.New(harness.Config{
+		ID:          s.ID,
+		DB:          db,
+		Bash:        s.Std,
+		Spiller:     s.spiller,
+		Permissions: s.PermManager,
+		Queue:       s,
+		Logger:      s.logger,
+		Metrics:     s.metrics,
+	})
+	if err != nil {
+		return fmt.Errorf("session: initialize harness: %w", err)
 	}
+	s.Harness = h
+	return nil
+}
+
+// Matches returns nil if the session matches the parameters of req,
+// or ErrSessionConflict if any parameter conflicts.
+func (s *Session) Matches(req api.CreateSessionRequest) error {
+	s.Lock()
+	defer s.Unlock()
+
+	wantTitle := strings.TrimSpace(req.Title)
+	if wantTitle != "" && s.Title != wantTitle {
+		return ErrSessionConflict
+	}
+	wantAgent, wantModel := resolveAgentModel(s.workspace, s.catalog(), req.Config.Agent, models.ID(req.Config.Model))
+	if wantAgent != "" && s.Config.Agent != wantAgent {
+		return ErrSessionConflict
+	}
+	if wantModel != "" && s.Config.Model != string(wantModel) {
+		return ErrSessionConflict
+	}
+	if req.Config.Thinking != nil && !reflect.DeepEqual(s.Config.Thinking, req.Config.Thinking) {
+		return ErrSessionConflict
+	}
+	wantMode := req.Config.Mode
+	if wantMode != "" && s.Config.Mode != wantMode {
+		return ErrSessionConflict
+	}
+	return nil
+}
+
+// Refresh recalculates session diagnostics and reconfigures the harness
+// (e.g. after a workspace reload), publishing a SessionUpdatedEvent.
+func (s *Session) Refresh(ctx context.Context) {
+	s.Lock()
+	s.Diagnostics = s.modelDiagnostics(s.Config)
+	s.Unlock()
 	_ = s.configureHarness(ctx)
+	s.publisher.Publish(api.TopicSessions, api.SessionUpdatedEvent{
+		Workspace: s.workspace.RootDir(),
+		Session:   ToAPISession(s),
+	})
+}
+
+// Update updates the session title or configuration, persisting changes and reconfiguring runtime harnesses.
+func (s *Session) Update(ctx context.Context, req api.UpdateSessionRequest) error {
+	s.reloadLock.RLock()
+	defer s.reloadLock.RUnlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	if req.Config.Mode != "" && !req.Config.Mode.IsValid() {
+		return fmt.Errorf("%w: unsupported permission mode %q", ErrInvalidConfig, req.Config.Mode)
+	}
+
+	s.Lock()
+	oldConfig := s.Config
+	newConfig := s.Config
+	newTitle := s.Title
+	thinkingCleared := false
+
+	if title := strings.TrimSpace(req.Title); title != "" {
+		newTitle = title
+	}
+	if agent := strings.TrimSpace(req.Config.Agent); agent != "" {
+		newConfig.Agent = agent
+	}
+	cat := s.catalog()
+	if model := models.ID(strings.TrimSpace(req.Config.Model)); model != "" {
+		_, resolved := resolveAgentModel(s.workspace, cat, newConfig.Agent, model)
+		newConfig.Model = string(resolved)
+	} else if strings.TrimSpace(req.Config.Agent) != "" && s.Config.Model == "" {
+		_, resolved := resolveAgentModel(s.workspace, cat, newConfig.Agent, "")
+		newConfig.Model = string(resolved)
+	}
+	if (oldConfig.Model != newConfig.Model || oldConfig.Agent != newConfig.Agent) && newConfig.Thinking != nil {
+		if err := validateThinking(cat, models.ID(newConfig.Model), newConfig.Thinking); errors.Is(err, models.ErrInvalidConfig) {
+			newConfig.Thinking = nil
+			thinkingCleared = true
+		}
+	}
+	if req.Config.Thinking != nil {
+		thinkingCleared = false
+		if err := validateThinking(cat, models.ID(newConfig.Model), req.Config.Thinking); err != nil {
+			s.Unlock()
+			return fmt.Errorf("%w: %v", ErrInvalidConfig, err)
+		}
+		if req.Config.Thinking.Type == "default" {
+			newConfig.Thinking = nil
+		} else {
+			value := *req.Config.Thinking
+			newConfig.Thinking = &value
+		}
+	}
+	if req.Config.Mode != "" {
+		newConfig.Mode = req.Config.Mode
+	}
+
+	updatedAt := time.Now().UTC()
+	prevTitle := s.Title
+	prevConfig := s.Config
+	prevDiagnostics := s.Diagnostics
+	prevUpdatedAt := s.UpdatedAt
+
+	s.Title = newTitle
+	s.Config = newConfig
+	configChanged := oldConfig.Agent != newConfig.Agent || oldConfig.Model != newConfig.Model || !reflect.DeepEqual(oldConfig.Thinking, newConfig.Thinking)
+	if configChanged {
+		s.Diagnostics = s.modelDiagnostics(newConfig)
+		if thinkingCleared {
+			s.Diagnostics = append(s.Diagnostics, api.SessionDiagnostic{Code: "thinking_override_cleared", Setting: "thinking", Message: fmt.Sprintf("The thinking override was cleared because it is unsupported by model %q.", newConfig.Model)})
+		}
+	}
+	s.UpdatedAt = updatedAt
+	if oldConfig.Mode != newConfig.Mode {
+		s.PermManager.SetMode(newConfig.Mode)
+	}
+	s.Unlock()
+
+	if err := s.checkpoint(ctx); err != nil {
+		s.Lock()
+		s.Title = prevTitle
+		s.Config = prevConfig
+		s.Diagnostics = prevDiagnostics
+		s.UpdatedAt = prevUpdatedAt
+		if oldConfig.Mode != newConfig.Mode {
+			s.PermManager.SetMode(oldConfig.Mode)
+		}
+		s.Unlock()
+		return err
+	}
+
+	if configChanged {
+		_ = s.configureHarness(ctx)
+	}
+
+	var entries []*timeline.Entry
+	if oldConfig.Agent != newConfig.Agent {
+		entries = append(entries, timeline.NewAgentEntry(s.ID, api.AgentChange{From: oldConfig.Agent, To: newConfig.Agent}))
+	}
+	if oldConfig.Model != newConfig.Model {
+		entries = append(entries, timeline.NewModelEntry(s.ID, api.ModelChange{From: oldConfig.Model, To: newConfig.Model}))
+	}
+	if !reflect.DeepEqual(oldConfig.Thinking, newConfig.Thinking) {
+		entries = append(entries, &timeline.Entry{SessionID: s.ID, Kind: api.TimelineKindThinking, Thinking: &api.ThinkingChange{From: oldConfig.Thinking, To: newConfig.Thinking}})
+	}
+	if oldConfig.Mode != newConfig.Mode {
+		entries = append(entries, timeline.NewModeEntry(s.ID, api.ModeChange{From: oldConfig.Mode, To: newConfig.Mode}))
+	}
+	for _, entry := range entries {
+		if err := s.Timeline.Append(ctx, entry); err != nil {
+			return err
+		}
+		publishEntryAdded(s.publisher, s.ID, entry)
+	}
+
+	if oldConfig.Model != newConfig.Model || oldConfig.Agent != newConfig.Agent {
+		s.Lock()
+		ctxState := s.Context
+		s.Unlock()
+		s.publisher.Publish(api.SessionStreamTopic(s.ID), api.ContextUpdatedEvent{
+			SessionID: s.ID,
+			Context:   ctxState,
+		})
+	}
+
+	s.publisher.Publish(api.TopicSessions, api.SessionUpdatedEvent{
+		Workspace: s.workspace.RootDir(),
+		Session:   ToAPISession(s),
+	})
+
 	return nil
 }
 
@@ -286,16 +647,41 @@ func (s *Session) Close() error {
 	return nil
 }
 
+func (s *Session) updateContextLimits(agentName, modelName string) (models.Limits, harness.StaticContext) {
+	var limits models.Limits
+	if model, ok := s.catalog().Get(models.ID(modelName)); ok {
+		limits = model.Limits
+	}
+	breakdown := s.workspace.Catalog().AgentContext(agentName)
+	staticCtx := harness.StaticContextFromBreakdown(breakdown)
+
+	s.Lock()
+	res, trig := harness.CompactionTriggerTokens(limits)
+	s.Context.MaxTokens = limits.Context
+	s.Context.OutputLimit = limits.Output
+	s.Context.ReserveTokens = res
+	s.Context.TriggerTokens = trig
+	s.Context.FreeTokens = max(0, trig-s.Context.UsedTokens)
+	s.Context.Breakdown.SystemPrompt = staticCtx.SystemPrompt
+	s.Context.Breakdown.ContextFiles = staticCtx.ContextFiles
+	s.Context.Breakdown.SystemTools = staticCtx.SystemTools
+	s.Context.Breakdown.CustomTools = staticCtx.CustomTools
+	s.Context.Breakdown.MCPTools = staticCtx.MCPTools
+	s.Context.Breakdown.Skills = staticCtx.Skills
+	s.Context.Breakdown.Subagents = staticCtx.Subagents
+	s.Unlock()
+
+	return limits, staticCtx
+}
+
 func (s *Session) configureHarness(ctx context.Context) error {
 	s.Lock()
-	if s.Harness == nil {
-		s.Unlock()
-		return errors.New("session: harness not initialized")
-	}
 	config := s.Config
 	agentName := config.Agent
 	modelName := config.Model
 	s.Unlock()
+
+	limits, staticCtx := s.updateContextLimits(agentName, modelName)
 
 	model, found := s.catalog().Get(models.ID(modelName))
 	if !found {
@@ -322,14 +708,8 @@ func (s *Session) configureHarness(ctx context.Context) error {
 		s.Unlock()
 		return err
 	}
-	limits := model.Limits
 
 	systemPrompt := s.renderSystemPrompt(agentName)
-	var agentBreakdown api.ContextBreakdown
-	if s.workspace != nil && s.workspace.Catalog() != nil {
-		agentBreakdown = s.workspace.Catalog().AgentContext(agentName)
-	}
-	staticCtx := harness.StaticContextFromBreakdown(agentBreakdown)
 
 	container, err := s.buildToolsForAgent(agentName)
 	if err != nil {
@@ -357,362 +737,21 @@ func (s *Session) configureHarness(ctx context.Context) error {
 	return err
 }
 
-func (s *Session) renderSystemPrompt(agentName string) string {
-	var wsPrompt string
-	if s.workspace != nil && s.workspace.Catalog() != nil {
-		if wsSpec := s.workspace.Catalog().WorkspaceSpec(); wsSpec != nil {
-			wsPrompt, _ = wsSpec.Render(&warp.WorkspaceRenderOptions{})
-		}
-	}
-
-	if agentName == "" && s.workspace != nil && s.workspace.Catalog() != nil {
-		agentName = s.workspace.Catalog().DefaultAgentName()
-	}
-
-	globals := map[string]any{
-		"HasTool": func(toolName string) bool {
-			if s.workspace != nil && s.workspace.Catalog() != nil {
-				if resolved, err := s.workspace.Catalog().ResolveAgent(agentName); err == nil && resolved != nil {
-					for _, t := range resolved.Tools {
-						if strings.EqualFold(t.Metadata.Name, toolName) {
-							return true
-						}
-					}
-				}
-			}
-			return false
-		},
-	}
-
-	var agentPrompt string
-	if s.workspace != nil && s.workspace.Catalog() != nil {
-		if resolved, err := s.workspace.Catalog().ResolveAgent(agentName); err == nil && resolved != nil && resolved.Agent != nil {
-			agentPrompt, _ = resolved.Agent.Render(&warp.AgentRenderOptions{
-				Workspace: s.workspace.Catalog().WorkspaceSpec(),
-				Project:   s.workspace.Catalog().Project(),
-				Resolved:  resolved,
-				Globals:   globals,
-			})
-		}
-	}
-
-	var parts []string
-	if s := strings.TrimSpace(wsPrompt); s != "" {
-		parts = append(parts, s)
-	}
-	if s := strings.TrimSpace(agentPrompt); s != "" {
-		parts = append(parts, s)
-	}
-	return strings.Join(parts, "\n\n")
-}
-
-// History returns the conversation messages persisted for this session.
-func (s *Session) History(ctx context.Context) (message.MessageList, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	return s.Timeline.Messages(ctx)
-}
-
-// appendMessage appends a chat-only message directly to the session timeline.
-func (s *Session) appendMessage(ctx context.Context, msg message.Message) error {
-	if msg == nil {
-		return ErrNilMessage
-	}
-
-	entry := timeline.NewMessageEntry(s.ID, msg)
-	if err := s.Timeline.Append(ctx, entry); err != nil {
-		return err
-	}
-
-	if err := s.store.touchSession(ctx, s.ID, entry.CreatedAt); err != nil {
-		return err
-	}
-	s.Lock()
-	s.UpdatedAt = entry.CreatedAt
-	s.Unlock()
-
-	publishEntryAdded(s.publisher, s.ID, entry)
-
-	return nil
-}
-
-// Cancel interrupts any active conversational turn executing on this session.
-func (s *Session) Cancel(ctx context.Context) error {
-	if s == nil {
-		return errors.New("session: uninitialized session")
-	}
-	s.Lock()
-	cancel := s.cancel
-	done := s.done
-	s.queue = nil
-	s.Unlock()
-
-	if done == nil {
-		return nil
-	}
-
-	cancel()
-	select {
-	case <-done:
-	case <-ctx.Done():
-		return ctx.Err()
-	}
-	return nil
-}
-
-func (s *Session) VisibleQueue() []QueueItem {
-	s.Lock()
-	defer s.Unlock()
-	return s.visibleQueueLocked()
-}
-
-func (s *Session) visibleQueueLocked() []QueueItem {
-	if len(s.queue) == 0 {
-		return nil
-	}
-	var vis []QueueItem
-	for _, it := range s.queue {
-		if it.Kind == QueueKindMessage || it.Kind == QueueKindCommand {
-			vis = append(vis, it)
-		}
-	}
-	return vis
-}
-
-func (s *Session) enqueueItem(item QueueItem) {
-	if item.ID == "" && !uuid.Validate(item.ID) {
-		item.ID = uuid.NewString()
-	}
-
-	if item.CreatedAt.IsZero() {
-		item.CreatedAt = time.Now().UTC()
-	}
-
-	var vis []QueueItem
-	s.Lock()
-	s.queue = append(s.queue, item)
-	if item.Kind != QueueKindTask {
-		vis = s.visibleQueueLocked()
-	}
-	s.Unlock()
-
-	if item.Kind != QueueKindTask {
-		s.publisher.Publish(api.SessionStreamTopic(s.ID), api.QueueUpdatedEvent{
-			SessionID: s.ID,
-			Queue:     toAPIQueueItems(vis),
-		})
-	}
-}
-
-// HasItems reports whether the execution queue has pending items.
-func (s *Session) HasItems() bool {
-	s.Lock()
-	defer s.Unlock()
-	return len(s.queue) > 0
-}
-
-// HasLeadingCommand reports whether the next pending item in the queue is a command.
-func (s *Session) HasLeadingCommand() bool {
-	s.Lock()
-	defer s.Unlock()
-	return len(s.queue) > 0 && s.queue[0].Kind == QueueKindCommand
-}
-
-// PopCommand pops and returns the leading command item if present.
-func (s *Session) PopCommand() (id, command string, ok bool) {
-	s.Lock()
-	if len(s.queue) == 0 || s.queue[0].Kind != QueueKindCommand {
-		s.Unlock()
-		return "", "", false
-	}
-	item := s.queue[0]
-	s.queue = s.queue[1:]
-	vis := s.visibleQueueLocked()
-	s.Unlock()
-
-	s.publisher.Publish(api.SessionStreamTopic(s.ID), api.QueueUpdatedEvent{
-		SessionID: s.ID,
-		Queue:     toAPIQueueItems(vis),
-	})
-	return item.ID, item.Command, true
-}
-
-// PopMessages pops and returns all leading messages up to the next command item.
-func (s *Session) PopMessages() []message.Message {
-	s.Lock()
-	if len(s.queue) == 0 {
-		s.Unlock()
-		return nil
-	}
-
-	var popped []QueueItem
-	var hadMessage bool
-	for len(s.queue) > 0 {
-		if s.queue[0].Kind == QueueKindCommand {
-			break
-		}
-		item := s.queue[0]
-		s.queue = s.queue[1:]
-		if item.Kind == QueueKindMessage {
-			hadMessage = true
-		}
-		popped = append(popped, item)
-	}
-
-	var vis []QueueItem
-	if hadMessage {
-		vis = s.visibleQueueLocked()
-	}
-	s.Unlock()
-
-	if hadMessage {
-		s.publisher.Publish(api.SessionStreamTopic(s.ID), api.QueueUpdatedEvent{
-			SessionID: s.ID,
-			Queue:     toAPIQueueItems(vis),
-		})
-	}
-
-	if len(popped) == 0 {
-		return nil
-	}
-
-	msgs := make([]message.Message, 0, len(popped))
-	for _, it := range popped {
-		if it.Message != nil {
-			msgs = append(msgs, it.Message)
-		}
-	}
-	return msgs
-}
-
-// Send initiates an asynchronous conversational turn with a user message or resolves
-// a pending permission decision.
-func (s *Session) Send(ctx context.Context, input SendInput) error {
-	if s == nil {
-		return errors.New("session: uninitialized session")
-	}
-	if input.Compact != nil {
-		if input.Decision != nil || input.Question != nil || input.Message != nil || strings.TrimSpace(input.Command) != "" {
-			return fmt.Errorf("%w: cannot specify compact with other input", ErrInvalidConfig)
-		}
-		s.Lock()
-		if s.Running {
-			s.Unlock()
-			return ErrSessionRunning
-		}
-		s.Unlock()
-		return s.startTurn(harness.Input{Compact: input.Compact})
-	}
-	if cmd := strings.TrimSpace(input.Command); cmd != "" {
-		if input.Decision != nil || input.Question != nil || input.Message != nil {
-			return fmt.Errorf("%w: cannot specify command with message or decision", ErrInvalidConfig)
-		}
-		s.enqueueItem(QueueItem{
-			ID:      input.ID,
-			Kind:    QueueKindCommand,
-			Command: cmd,
-		})
-		s.Lock()
-		running := s.Running
-		s.Unlock()
-		if running {
-			return nil
-		}
-		return s.startTurn(harness.Input{})
-	}
-	if (input.Decision != nil && input.Message != nil) || (input.Question != nil && (input.Message != nil || input.Decision != nil)) {
-		return fmt.Errorf("%w: cannot combine message, decision, or question", ErrInvalidConfig)
-	}
-	if input.Decision == nil && input.Question == nil && input.Message == nil {
-		return ErrNilMessage
-	}
-
-	if input.Decision != nil || input.Question != nil {
-		s.Lock()
-		if s.Running {
-			s.Unlock()
-			return ErrSessionRunning
-		}
-		s.Unlock()
-
-		var ready bool
-		var err error
-		if input.Decision != nil {
-			ready, err = s.recordDecision(ctx, *input.Decision)
-		} else {
-			ready, err = s.recordQuestion(ctx, *input.Question)
-		}
-		if err != nil || !ready {
-			return err
-		}
-
-		s.Lock()
-		fullDecisions := maps.Clone(s.decisions)
-		fullAnswers := maps.Clone(s.answers)
-		clear(s.decisions)
-		clear(s.answers)
-		s.Unlock()
-
-		return s.startTurn(harness.Input{Decisions: fullDecisions, Answers: fullAnswers})
-	}
-
-	msg := input.Message
-	if msg != nil {
-		renderedMsg, err := s.resolveSlashCommand(msg)
-		if err != nil {
-			return err
-		}
-		msg = renderedMsg
-	}
-
-	s.Lock()
-	if strings.TrimSpace(s.Title) == "" && !s.titleGenerating {
-		text := msg.GetContent().Text()
-		if text != "" {
-			s.titleGenerating = true
-			s.wg.Go(func() {
-				s.generateTitle(text)
-			})
-		}
-	}
-	running := s.Running
-	s.Unlock()
-
-	if running {
-		s.enqueueItem(QueueItem{
-			ID:      msg.GetID(),
-			Kind:    QueueKindMessage,
-			Message: message.CloneMessage(msg),
-		})
-		return nil
-	}
-
-	return s.startTurn(harness.Input{Message: msg})
-}
-
 func (s *Session) outputsDir() string {
-	if s.Root != "" {
-		return filepath.Join(s.Root, "outputs")
-	}
-	if s.workspace != nil && s.ID != "" {
-		if wsDir, err := xdg.WorkspaceDir(s.workspace.RootDir()); err == nil {
-			return filepath.Join(wsDir, "sessions", s.ID, "outputs")
-		}
-	}
-	return ""
+	return filepath.Join(s.Root, "outputs")
 }
 
 func (s *Session) buildToolsForAgent(agentName string) (tools.Container, error) {
-	if agentName == "" && s.workspace != nil && s.workspace.Catalog() != nil {
-		agentName = s.workspace.Catalog().DefaultAgentName()
+	cat := s.workspace.Catalog()
+	if agentName == "" {
+		agentName = cat.DefaultAgentName()
 	}
 
 	var allowedToolNames []string
 	var skills []warp.Skill
 
-	if s.workspace != nil && s.workspace.Catalog() != nil && agentName != "" {
-		if resolved, err := s.workspace.Catalog().ResolveAgent(agentName); err == nil && resolved != nil {
+	if agentName != "" {
+		if resolved, err := cat.ResolveAgent(agentName); err == nil && resolved != nil {
 			if resolved.Tools != nil {
 				allowedToolNames = make([]string, 0, len(resolved.Tools))
 				for _, t := range resolved.Tools {
@@ -764,910 +803,3 @@ func (s *Session) buildToolsForAgent(agentName string) (tools.Container, error) 
 	return container, nil
 }
 
-func parseSlashCommandArgs(argsDef []warp.Argument, rawArgs []string) map[string]string {
-	argsMap := make(map[string]string)
-	var positional []string
-	for _, arg := range rawArgs {
-		if strings.Contains(arg, "=") {
-			parts := strings.SplitN(arg, "=", 2)
-			k := strings.TrimPrefix(parts[0], "--")
-			argsMap[k] = parts[1]
-		} else {
-			positional = append(positional, arg)
-		}
-	}
-	for i, p := range positional {
-		argsMap[fmt.Sprintf("%d", i+1)] = p
-		if i < len(argsDef) {
-			if _, exists := argsMap[argsDef[i].Name]; !exists {
-				argsMap[argsDef[i].Name] = p
-			}
-		}
-	}
-	return argsMap
-}
-
-func (s *Session) resolveSlashCommand(msg message.Message) (message.Message, error) {
-	if msg == nil {
-		return nil, nil
-	}
-	cnt := msg.GetContent()
-	text := strings.TrimSpace(cnt.Text())
-	if !strings.HasPrefix(text, "/") || len(cnt) > 1 {
-		return msg, nil
-	}
-
-	fields := strings.Fields(text)
-	if len(fields) == 0 {
-		return msg, nil
-	}
-
-	rawKey := strings.TrimPrefix(fields[0], "/")
-	cmdKey := strings.ToLower(rawKey)
-	rawArgs := fields[1:]
-
-	if s.workspace != nil && s.workspace.Catalog() != nil {
-		// 1. Try resolving as Command
-		if cmd, ok := s.workspace.Catalog().GetCommand(cmdKey); ok && cmd.Def != nil {
-			argsMap := parseSlashCommandArgs(cmd.Def.Spec.Arguments, rawArgs)
-			mergedGlobals := workspace.MergeStringArgs(argsMap, nil)
-			positionalArgs := workspace.BuildPositionalArgs(cmd.Def.Spec.Arguments, argsMap)
-			rendered, err := cmd.Def.Render(&warp.CommandRenderOptions{
-				Workspace: s.workspace.Catalog().WorkspaceSpec(),
-				Project:   s.workspace.Catalog().Project(),
-				Args:      positionalArgs,
-				Globals:   mergedGlobals,
-			})
-			if err != nil {
-				return msg, fmt.Errorf("failed to render command %q: %w", cmd.Name, err)
-			}
-			newMsg := message.NewUser(&message.TextBlock{Text: rendered})
-			if msg.GetID() != "" {
-				newMsg.SetID(msg.GetID())
-			}
-			return newMsg, nil
-		}
-
-		// 2. Try resolving as Skill
-		if sk, ok := s.workspace.Catalog().GetSkill(cmdKey); ok && sk.Def != nil {
-			argsMap := parseSlashCommandArgs(sk.Def.Spec.Arguments, rawArgs)
-			mergedGlobals := workspace.MergeStringArgs(argsMap, nil)
-			positionalArgs := workspace.BuildPositionalArgs(sk.Def.Spec.Arguments, argsMap)
-			rendered, err := sk.Def.Render(&warp.SkillRenderOptions{
-				Workspace: s.workspace.Catalog().WorkspaceSpec(),
-				Project:   s.workspace.Catalog().Project(),
-				Args:      positionalArgs,
-				Globals:   mergedGlobals,
-			})
-			if err != nil {
-				return msg, fmt.Errorf("failed to render skill %q: %w", sk.Name, err)
-			}
-
-			skillPath := s.workspace.PortablePath(sk.Def.Directory)
-			pathAttr := ""
-			pathNote := ""
-			if skillPath != "" {
-				pathAttr = fmt.Sprintf(" path=%q", skillPath)
-				pathNote = fmt.Sprintf("\nSupporting assets and files for this skill are located in %q.", skillPath)
-			}
-
-			promptText := fmt.Sprintf("<embedded_skill name=%q%s>\n<instructions>\n%s\n</instructions>\n</embedded_skill>\n\nThe user invoked: %s%s\nFollow the skill instructions above.", sk.Name, pathAttr, rendered, text, pathNote)
-
-			newMsg := message.NewUserTextMeta(promptText, map[string]any{
-				"skill":   sk.Name,
-				"path":    skillPath,
-				"command": text,
-			})
-			if msg.GetID() != "" {
-				newMsg.SetID(msg.GetID())
-			}
-			return newMsg, nil
-		}
-	}
-
-	return msg, nil
-}
-
-func (s *Session) waitingForInteractionLocked() bool {
-	return len(s.PendingPermissions) > 0 || len(s.PendingQuestions) > 0 || s.Status == api.StatusWaitingPermission || s.Status == api.StatusWaitingQuestion
-}
-
-func (s *Session) startTurn(hInput harness.Input) error {
-	s.Lock()
-	if s.Running {
-		s.Unlock()
-		return ErrSessionRunning
-	}
-	if s.waitingForInteractionLocked() && !hInput.HasInteractiveContent() {
-		s.Unlock()
-		if hInput.Compact != nil {
-			return fmt.Errorf("%w: resolve pending permissions or questions before compacting", ErrInvalidConfig)
-		}
-		return nil
-	}
-
-	runCtx, cancel := context.WithCancel(s.bgCtx)
-	done := make(chan struct{})
-
-	initialStatus := api.StatusThinking
-	if hInput.Compact != nil {
-		initialStatus = api.StatusCompacting
-	} else if hInput.Message == nil && hInput.Decisions == nil && len(s.queue) > 0 {
-		if s.queue[0].Kind == QueueKindCommand {
-			initialStatus = api.StatusExecuting
-		}
-	}
-
-	s.Status = initialStatus
-	s.Running = true
-	if hInput.Message != nil {
-		s.PendingPermissions = nil
-		s.PendingQuestions = nil
-		clear(s.decisions)
-		clear(s.answers)
-	}
-	s.Error = ""
-	s.err = nil
-	s.StartedAt = time.Now().UTC()
-	s.cancel = cancel
-	s.done = done
-	s.Unlock()
-
-	s.publisher.Publish(api.SessionStreamTopic(s.ID), api.StatusChangedEvent{
-		SessionID: s.ID,
-		Status:    initialStatus,
-	})
-
-	s.wg.Go(func() {
-		defer func() {
-			var statusChanged bool
-			s.Lock()
-			if s.done == done {
-				s.Running = false
-				if s.Status != api.StatusWaitingPermission && s.Status != api.StatusWaitingQuestion && s.Status != api.StatusIdle {
-					s.Status = api.StatusIdle
-					statusChanged = true
-				}
-				s.cancel = nil
-				s.done = nil
-			}
-			s.Unlock()
-			if statusChanged {
-				s.publisher.Publish(api.SessionStreamTopic(s.ID), api.StatusChangedEvent{
-					SessionID: s.ID,
-					Status:    api.StatusIdle,
-				})
-			}
-			cancel()
-			close(done)
-		}()
-
-		s.Lock()
-		hErr := s.harnessErr
-		s.Unlock()
-		if hErr != nil {
-			s.handleAsyncError(hErr)
-			return
-		}
-
-		s.Lock()
-		agentName := s.Config.Agent
-		s.Unlock()
-		sCtx := scope.With(runCtx, scope.Scope{
-			SessionID:     s.ID,
-			WorkspaceRoot: s.workspace.RootDir(),
-			Agent:         agentName,
-		})
-		reply, err := s.send(sCtx, s.Harness.Stream(sCtx, hInput))
-		if err != nil {
-			s.handleAsyncError(err)
-			return
-		}
-		if reply != nil {
-			s.finishTurn(api.TurnStatusDone)
-		}
-
-		for {
-			s.Lock()
-			hasMore := !s.waitingForInteractionLocked() && runCtx.Err() == nil && len(s.queue) > 0
-			s.Unlock()
-			if !hasMore {
-				break
-			}
-
-			reply, err := s.send(sCtx, s.Harness.Stream(sCtx, harness.Input{}))
-			if err != nil {
-				s.handleAsyncError(err)
-				return
-			}
-			if reply != nil {
-				s.finishTurn(api.TurnStatusDone)
-			}
-		}
-
-		s.Lock()
-		waiting := s.waitingForInteractionLocked()
-		s.Unlock()
-
-		if !waiting && runCtx.Err() == nil {
-			s.setStatus(api.StatusIdle)
-			s.publisher.Publish(api.SessionStreamTopic(s.ID), api.CompletedEvent{
-				SessionID: s.ID,
-			})
-		}
-	})
-	return nil
-}
-
-// Enqueue adds a message to the session's execution queue or initiates an immediate turn if idle.
-func (s *Session) Enqueue(msg message.Message) {
-	if msg == nil {
-		return
-	}
-	var item QueueItem
-	if harness.SystemKindOf(msg) == harness.SystemKindTask {
-		item = QueueItem{
-			ID:      msg.GetID(),
-			Kind:    QueueKindTask,
-			Message: message.CloneMessage(msg),
-		}
-	} else {
-		item = QueueItem{
-			ID:      msg.GetID(),
-			Kind:    QueueKindMessage,
-			Message: message.CloneMessage(msg),
-		}
-	}
-	s.enqueueItem(item)
-
-	s.Lock()
-	canStart := !s.Running && !s.waitingForInteractionLocked()
-	s.Unlock()
-	if canStart {
-		_ = s.startTurn(harness.Input{})
-	}
-}
-
-func (s *Session) onTaskUpdate(snap api.Task) {
-	s.Lock()
-	if s.Tasks != nil {
-		s.State.Tasks = s.Tasks.List()
-	}
-	s.Unlock()
-
-	s.publisher.Publish(api.SessionStreamTopic(s.ID), api.TaskUpdatedEvent{
-		SessionID: s.ID,
-		Task:      snap,
-	})
-
-	if snap.Status == api.TaskStatusCompleted || snap.Status == api.TaskStatusFailed {
-		var tail string
-		if s.Tasks != nil {
-			if t, ok := s.Tasks.Get(snap.ID); ok {
-				tail, _ = t.Tail(100)
-			}
-		}
-		text := fmt.Sprintf("<background_task_completed task_id=%q kind=%q title=%q status=%q exit_code=\"%d\" log_path=%q>\n%s\n</background_task_completed>",
-			snap.ID, snap.Kind, snap.Title, snap.Status, snap.ExitCode, snap.LogPath, tail)
-		s.Enqueue(message.NewUserTextMeta(text, map[string]any{harness.MetaSystemKind: harness.SystemKindTask}))
-	}
-}
-
-func (s *Session) recordDecision(ctx context.Context, decision api.PermissionDecision) (bool, error) {
-	switch decision.Kind {
-	case api.DecisionAllowOnce, api.DecisionAllowSession, api.DecisionReject:
-	default:
-		return false, fmt.Errorf("%w: unsupported decision kind %q", ErrInvalidDecision, decision.Kind)
-	}
-
-	state, err := s.Harness.LoadState(ctx)
-	if err != nil {
-		return false, fmt.Errorf("session: load harness state for permissions: %w", err)
-	}
-
-	var matched *api.PermissionRequest
-	for i := range state.PendingPermissions {
-		req := &state.PendingPermissions[i]
-		if (decision.RequestID != "" && req.ID == decision.RequestID) ||
-			(decision.ToolCallID != "" && req.ToolCallID == decision.ToolCallID) {
-			matched = req
-			break
-		}
-	}
-	if matched == nil {
-		return false, ErrPermissionNotFound
-	}
-
-	decision.RequestID = matched.ID
-	decision.ToolCallID = matched.ToolCallID
-
-	s.Lock()
-	if s.decisions == nil {
-		s.decisions = make(map[string]api.PermissionDecision, len(state.PendingPermissions))
-	}
-	s.decisions[matched.ID] = decision
-
-	var remaining []api.PermissionRequest
-	for _, req := range state.PendingPermissions {
-		if _, ok := s.decisions[req.ID]; !ok {
-			req.GrantPatterns = slices.Clone(req.GrantPatterns)
-			remaining = append(remaining, req)
-		}
-	}
-	s.PendingPermissions = remaining
-	allResolved := len(remaining) == 0 && len(s.PendingQuestions) == 0
-	if len(remaining) == 0 && len(s.PendingQuestions) > 0 {
-		s.Status = api.StatusWaitingQuestion
-	}
-	s.Unlock()
-
-	matchedReq := *matched
-	matchedReq.GrantPatterns = slices.Clone(matched.GrantPatterns)
-	fullDec := decision
-	entry := timeline.NewPermissionEntry(s.ID, api.PermissionRecord{
-		Request:  matchedReq,
-		Decision: fullDec,
-	})
-	if err := s.Timeline.Append(ctx, entry); err != nil {
-		s.Lock()
-		delete(s.decisions, matched.ID)
-		s.Unlock()
-		return false, err
-	}
-	if err := s.store.touchSession(ctx, s.ID, entry.CreatedAt); err != nil {
-		s.Lock()
-		delete(s.decisions, matched.ID)
-		s.Unlock()
-		return false, err
-	}
-	s.Lock()
-	s.UpdatedAt = entry.CreatedAt
-	s.Unlock()
-
-	publishEntryAdded(s.publisher, s.ID, entry)
-
-	return allResolved, nil
-}
-
-func (s *Session) recordQuestion(ctx context.Context, response api.QuestionResponse) (bool, error) {
-	state, err := s.Harness.LoadState(ctx)
-	if err != nil {
-		return false, err
-	}
-	if len(state.PendingQuestions) == 0 {
-		return false, ErrNoPendingQuestions
-	}
-	var matched *api.QuestionRequest
-	for i := range state.PendingQuestions {
-		req := &state.PendingQuestions[i]
-		if (response.RequestID != "" && response.RequestID == req.ID) || (response.ToolCallID != "" && response.ToolCallID == req.ToolCallID) {
-			matched = req
-			break
-		}
-	}
-	if matched == nil {
-		return false, ErrQuestionNotFound
-	}
-	if !response.Canceled && len(response.Answers) != len(matched.Questions) {
-		return false, ErrInvalidQuestion
-	}
-	for i, answer := range response.Answers {
-		if i >= len(matched.Questions) || answer.Question != matched.Questions[i].Question {
-			return false, ErrInvalidQuestion
-		}
-	}
-	response = *response.Clone()
-	response.RequestID, response.ToolCallID = matched.ID, matched.ToolCallID
-	entry := timeline.NewQuestionEntry(s.ID, api.QuestionRecord{Request: *matched.Clone(), Response: response})
-	if err := s.Timeline.Append(ctx, entry); err != nil {
-		return false, err
-	}
-	if err := s.store.touchSession(ctx, s.ID, entry.CreatedAt); err != nil {
-		return false, err
-	}
-	s.Lock()
-	if s.answers == nil {
-		s.answers = make(map[string]api.QuestionResponse)
-	}
-	s.answers[matched.ID] = response
-	var remaining []api.QuestionRequest
-	for i := range state.PendingQuestions {
-		if _, ok := s.answers[state.PendingQuestions[i].ID]; !ok {
-			remaining = append(remaining, *state.PendingQuestions[i].Clone())
-		}
-	}
-	s.PendingQuestions = remaining
-	s.UpdatedAt = entry.CreatedAt
-	ready := len(remaining) == 0 && len(s.PendingPermissions) == 0
-	s.Unlock()
-	publishEntryAdded(s.publisher, s.ID, entry)
-	return ready, nil
-}
-
-func (s *Session) handleAsyncError(err error) {
-	s.Lock()
-	s.Running = false
-	s.PendingPermissions = nil
-	s.PendingQuestions = nil
-	s.queue = nil
-	s.Status = api.StatusIdle
-	s.FinishedAt = time.Now().UTC()
-	s.err = err
-	if !errors.Is(err, context.Canceled) {
-		s.Error = err.Error()
-	}
-	s.Unlock()
-
-	s.publisher.Publish(api.SessionStreamTopic(s.ID), api.StatusChangedEvent{
-		SessionID: s.ID,
-		Status:    api.StatusIdle,
-	})
-
-	status := api.TurnStatusFailed
-	if errors.Is(err, context.Canceled) {
-		status = api.TurnStatusCanceled
-	}
-	defer s.finishTurn(status)
-
-	if errors.Is(err, context.Canceled) {
-		entry := timeline.NewInterruptedEntry(s.ID)
-		if appErr := s.Timeline.Append(s.bgCtx, entry); appErr == nil {
-			_ = s.store.touchSession(s.bgCtx, s.ID, entry.CreatedAt)
-			s.Lock()
-			s.UpdatedAt = entry.CreatedAt
-			s.Unlock()
-			publishEntryAdded(s.publisher, s.ID, entry)
-		}
-	} else {
-		s.logger.Error("session turn failed", log.String("session_id", s.ID), log.String("error", err.Error()))
-		s.publisher.Publish(api.SessionStreamTopic(s.ID), api.ErrorEvent{
-			SessionID: s.ID,
-			Error:     err.Error(),
-		})
-	}
-}
-
-func (s *Session) send(ctx context.Context, stream iter.Seq2[any, error]) (*message.Assistant, error) {
-	var reply *message.Assistant
-	var interrupted bool
-	var pendingTools int
-	agg := message.NewAssistantAggregator()
-
-	for raw, err := range stream {
-		if err != nil {
-			if errors.Is(err, context.Canceled) {
-				partialMsg, buildErr := agg.Build()
-				if buildErr == nil && partialMsg != nil && len(partialMsg.Content) > 0 {
-					if partialMsg.GetID() == "" || !uuid.Validate(partialMsg.GetID()) {
-						partialMsg.SetID(uuid.NewString())
-					}
-					entry := timeline.NewMessageEntry(s.ID, partialMsg)
-					if appErr := s.Timeline.Append(s.bgCtx, entry); appErr == nil {
-						_ = s.store.touchSession(s.bgCtx, s.ID, entry.CreatedAt)
-						s.Lock()
-						s.UpdatedAt = entry.CreatedAt
-						s.Unlock()
-						publishEntryAdded(s.publisher, s.ID, entry)
-					}
-				}
-			}
-			return nil, err
-		}
-		switch ev := raw.(type) {
-		case *message.AssistantChunk:
-			if ev != nil {
-				agg.Add(ev)
-				hasGenerating := false
-				hasThinking := false
-				for _, b := range ev.Content {
-					switch b.(type) {
-					case *message.TextBlock, *message.ToolCall, *message.ToolCallChunk:
-						hasGenerating = true
-					case *message.ThinkingBlock:
-						hasThinking = true
-					}
-				}
-				if hasGenerating {
-					s.setStatus(api.StatusGenerating)
-				} else if hasThinking {
-					s.setStatus(api.StatusThinking)
-				}
-				clonedChunk := message.CloneAssistantChunk(*ev)
-				apiChunk := toAPIChunk(&clonedChunk)
-				s.publisher.Publish(api.SessionStreamTopic(s.ID), api.ChunkEvent{SessionID: s.ID, Chunk: *apiChunk})
-			}
-
-		case message.Message:
-			if ev != nil {
-				agg = message.NewAssistantAggregator()
-				entry := timeline.NewMessageEntry(s.ID, ev)
-				if err := s.Timeline.Append(ctx, entry); err != nil {
-					return nil, err
-				}
-				if err := s.store.touchSession(ctx, s.ID, entry.CreatedAt); err != nil {
-					return nil, err
-				}
-				s.Lock()
-				s.UpdatedAt = entry.CreatedAt
-				s.Unlock()
-
-				publishEntryAdded(s.publisher, s.ID, entry)
-
-				if user, ok := ev.(*message.User); ok && harness.SystemKindOf(user) == "" {
-					s.beginTurn(user.GetID(), entry.CreatedAt)
-				}
-
-				if asst, ok := ev.(*message.Assistant); ok {
-					if len(asst.ToolCalls()) > 0 {
-						pendingTools = len(asst.ToolCalls())
-						s.setStatus(api.StatusExecuting)
-					}
-				} else if _, ok := ev.(*message.Tool); ok {
-					if pendingTools > 0 {
-						pendingTools--
-						if pendingTools == 0 {
-							s.setStatus(api.StatusThinking)
-						}
-					} else {
-						s.setStatus(api.StatusThinking)
-					}
-				}
-			}
-
-		case api.CommandStartedEvent:
-			s.setStatus(api.StatusExecuting)
-			ev.SessionID = s.ID
-			s.publisher.Publish(api.SessionStreamTopic(s.ID), ev)
-
-		case harness.CommandCompleted:
-			entry := timeline.NewCommandEntry(s.ID, ev.CommandRecord)
-			if ev.ID != "" && uuid.Validate(ev.ID) {
-				entry.ID = ev.ID
-			}
-			if err := s.Timeline.Append(ctx, entry); err != nil {
-				return nil, err
-			}
-			if err := s.store.touchSession(ctx, s.ID, entry.CreatedAt); err != nil {
-				return nil, err
-			}
-			s.Lock()
-			s.UpdatedAt = entry.CreatedAt
-			s.Unlock()
-
-			publishEntryAdded(s.publisher, s.ID, entry)
-
-		case harness.Interrupted:
-			interrupted = true
-			perms := make([]api.PermissionRequest, len(ev.Permissions))
-			for i, p := range ev.Permissions {
-				p.GrantPatterns = slices.Clone(p.GrantPatterns)
-				perms[i] = p
-			}
-
-			questions := make([]api.QuestionRequest, len(ev.Questions))
-			for i := range ev.Questions {
-				questions[i] = *ev.Questions[i].Clone()
-			}
-			nextStatus := api.StatusWaitingQuestion
-			if len(perms) > 0 {
-				nextStatus = api.StatusWaitingPermission
-			}
-			s.Lock()
-			s.Status = nextStatus
-			s.Running = false
-			s.PendingPermissions = perms
-			s.PendingQuestions = questions
-			s.FinishedAt = time.Now().UTC()
-			s.Unlock()
-
-			s.publisher.Publish(api.SessionStreamTopic(s.ID), api.StatusChangedEvent{
-				SessionID: s.ID,
-				Status:    nextStatus,
-			})
-			if len(perms) > 0 {
-				s.publisher.Publish(api.SessionStreamTopic(s.ID), api.PermissionRequestedEvent{SessionID: s.ID, Permissions: perms})
-			}
-			if len(questions) > 0 {
-				s.publisher.Publish(api.SessionStreamTopic(s.ID), api.QuestionRequestedEvent{SessionID: s.ID, Questions: questions})
-			}
-
-		case api.TodosUpdatedEvent:
-			s.Lock()
-			s.Todos = slices.Clone(ev.Todos)
-			s.Unlock()
-
-			ev.SessionID = s.ID
-			s.publisher.Publish(api.SessionStreamTopic(s.ID), ev)
-
-		case api.CompactionStartedEvent:
-			s.setStatus(api.StatusCompacting)
-			ev.SessionID = s.ID
-			s.publisher.Publish(api.SessionStreamTopic(s.ID), ev)
-
-		case harness.CompactionCompleted:
-			entry := timeline.NewCompactedEntry(s.ID, ev.CompactedRecord)
-			if ev.ID != "" && uuid.Validate(ev.ID) {
-				entry.ID = ev.ID
-			}
-			if err := s.Timeline.Append(ctx, entry); err != nil {
-				return nil, err
-			}
-			if err := s.store.touchSession(ctx, s.ID, entry.CreatedAt); err != nil {
-				return nil, err
-			}
-			s.Lock()
-			s.UpdatedAt = entry.CreatedAt
-			s.Unlock()
-
-			publishEntryAdded(s.publisher, s.ID, entry)
-
-		case api.CacheBrokenRecord:
-			entry := timeline.NewCacheBrokenEntry(s.ID, ev)
-			if err := s.Timeline.Append(ctx, entry); err != nil {
-				return nil, err
-			}
-			if err := s.store.touchSession(ctx, s.ID, entry.CreatedAt); err != nil {
-				return nil, err
-			}
-			s.Lock()
-			s.UpdatedAt = entry.CreatedAt
-			s.Unlock()
-
-			publishEntryAdded(s.publisher, s.ID, entry)
-
-		case api.ContextUpdatedEvent:
-			s.Lock()
-			s.Context = ev.Context
-			s.Unlock()
-
-			ev.SessionID = s.ID
-			s.publisher.Publish(api.SessionStreamTopic(s.ID), ev)
-
-		case harness.Completed:
-			if ev.Message != nil {
-				if asst, ok := message.CloneMessage(ev.Message).(*message.Assistant); ok {
-					reply = asst
-				}
-			}
-		}
-	}
-
-	if interrupted {
-		return nil, nil
-	}
-	return reply, nil
-}
-
-// Wait blocks until an in-flight background turn completes or ctx cancels.
-func (s *Session) Wait(ctx context.Context) error {
-	if s == nil {
-		return nil
-	}
-	s.Lock()
-	done := s.done
-	s.Unlock()
-	if done == nil {
-		return nil
-	}
-	select {
-	case <-done:
-		s.Lock()
-		defer s.Unlock()
-		return s.err
-	case <-ctx.Done():
-		return ctx.Err()
-	}
-}
-
-func (s *Session) generateTitle(userText string) {
-	ctx, cancel := context.WithTimeout(s.bgCtx, 30*time.Second)
-	defer cancel()
-
-	// Release the in-flight latch when this attempt produces no title so that a
-	// later user message can retry (e.g. after a transient timeout or provider
-	// error) instead of leaving the session permanently untitled.
-	defer func() {
-		s.Lock()
-		if strings.TrimSpace(s.Title) == "" {
-			s.titleGenerating = false
-		}
-		s.Unlock()
-	}()
-
-	var sysPrompt string
-	var llmModel *llm.Model
-	ready := func() bool {
-		if s.reloadLock != nil {
-			s.reloadLock.RLock()
-			defer s.reloadLock.RUnlock()
-		}
-		if s.workspace == nil || s.workspace.Catalog() == nil {
-			return false
-		}
-		cat := s.workspace.Catalog()
-		resolvedTitle, err := cat.ResolveAgent(workspace.AgentNameTitleGenerator)
-		if err != nil || resolvedTitle == nil || resolvedTitle.Agent == nil {
-			if err != nil {
-				s.logger.Warn("failed to resolve title generator agent", log.String("error", err.Error()))
-			}
-			return false
-		}
-		sysPrompt, err = resolvedTitle.Agent.Render(&warp.AgentRenderOptions{
-			Workspace: cat.WorkspaceSpec(),
-			Project:   cat.Project(),
-			Resolved:  resolvedTitle,
-		})
-		if err != nil || strings.TrimSpace(sysPrompt) == "" {
-			if err != nil {
-				s.logger.Warn("failed to render title generator prompt", log.String("error", err.Error()))
-			}
-			return false
-		}
-
-		catalog := s.catalog()
-		var effective models.Model
-		var found bool
-		if len(resolvedTitle.Agent.Spec.Models) > 0 {
-			effective, found = catalog.Resolve(models.RoleCompletion, resolvedTitle.Agent.Spec.Models...)
-		}
-		if !found {
-			s.Lock()
-			modelName := models.ID(s.Config.Model)
-			s.Unlock()
-			effective, found = catalog.Get(modelName)
-		}
-		if !found {
-			return false
-		}
-		settings := s.modelSettings(api.SessionConfig{Agent: workspace.AgentNameTitleGenerator})
-		cfg, _, err := effective.Configure(settings)
-		if err == nil {
-			llmModel, err = s.gateway().LLM(ctx, effective, cfg)
-		}
-		if err != nil {
-			s.logger.Warn("failed to resolve LLM for title generation", log.String("error", err.Error()))
-			return false
-		}
-		return true
-	}()
-	if !ready {
-		return
-	}
-
-	msgs := []message.Message{
-		message.NewSystemText(strings.TrimSpace(sysPrompt)),
-		message.NewUserText(userText),
-	}
-	s.Lock()
-	sessionAgent := s.Config.Agent
-	s.Unlock()
-	titleCtx := scope.With(ctx, scope.Scope{
-		SessionID:     s.ID,
-		WorkspaceRoot: s.workspace.RootDir(),
-		Agent:         sessionAgent,
-		Purpose:       string(metrics.PurposeTitle),
-	})
-	resp, err := llmModel.Invoke(titleCtx, msgs)
-	if err != nil || resp == nil {
-		if err != nil {
-			s.logger.Warn("failed to invoke title generator model", log.String("error", err.Error()))
-		}
-		return
-	}
-
-	textContent := resp.GetContent().Text()
-
-	var title string
-	for line := range strings.SplitSeq(textContent, "\n") {
-		line = strings.TrimSpace(line)
-		line = strings.Trim(line, "\"'`")
-		line = strings.TrimSpace(line)
-		if line != "" {
-			title = line
-			break
-		}
-	}
-
-	runes := []rune(title)
-	if len(runes) > 50 {
-		title = strings.TrimSpace(string(runes[:50]))
-	}
-
-	if title == "" {
-		return
-	}
-
-	s.Lock()
-	if strings.TrimSpace(s.Title) != "" {
-		s.Unlock()
-		return
-	}
-
-	now := time.Now().UTC()
-	dbSess := &Session{
-		ID:          s.ID,
-		Title:       title,
-		Config:      s.Config,
-		Permissions: s.Permissions.Clone(),
-		CreatedAt:   s.CreatedAt,
-		UpdatedAt:   now,
-	}
-	if s.store != nil {
-		if err := s.store.updateSession(ctx, dbSess); err != nil {
-			s.Unlock()
-			s.logger.Warn("failed to persist generated title", log.String("error", err.Error()))
-			return
-		}
-	}
-	s.Title = title
-	s.UpdatedAt = now
-	s.Unlock()
-
-	var wsRoot string
-	if s.workspace != nil {
-		wsRoot = s.workspace.RootDir()
-	}
-	s.publisher.Publish(api.TopicSessions, api.SessionUpdatedEvent{
-		Workspace: wsRoot,
-		Session:   ToAPISession(s),
-	})
-}
-
-// minTurnSummary is the shortest completed turn that gets a summary entry.
-const minTurnSummary = 5 * time.Second
-
-// beginTurn records that the user message id started (or joined) a turn.
-func (s *Session) beginTurn(id string, at time.Time) {
-	s.Lock()
-	defer s.Unlock()
-	if len(s.turnIDs) == 0 {
-		s.turnStart = at
-	}
-	s.turnIDs = append(s.turnIDs, id)
-}
-
-// finishTurn appends a turn summary entry to the timeline when the turn in
-// progress ends, with the elapsed time and the usage recorded for the turn.
-// Completed turns shorter than [minTurnSummary] get no entry.
-func (s *Session) finishTurn(status string) {
-	s.Lock()
-	ids := s.turnIDs
-	start := s.turnStart
-	s.turnIDs = nil
-	s.turnStart = time.Time{}
-	s.Unlock()
-	if len(ids) == 0 {
-		return
-	}
-
-	elapsed := time.Since(start)
-	if status == api.TurnStatusDone && elapsed < minTurnSummary {
-		return
-	}
-
-	rec := api.TurnCompletedRecord{TurnID: ids[len(ids)-1], Status: status, ElapsedMs: elapsed.Milliseconds()}
-	if s.metrics != nil {
-		ctx, cancel := context.WithTimeout(s.bgCtx, 5*time.Second)
-		usage, err := s.metrics.TurnUsage(ctx, ids...)
-		cancel()
-		if err != nil {
-			s.logger.Warn("failed to load turn usage", log.String("session_id", s.ID), log.String("error", err.Error()))
-		} else {
-			rec.InputTokens = usage.Tokens.Input
-			rec.OutputTokens = usage.Tokens.Output
-			rec.CostNano = usage.CostNano
-			rec.Unpriced = usage.UnpricedCalls > 0
-		}
-	}
-
-	entry := timeline.NewTurnCompletedEntry(s.ID, rec)
-	if err := s.Timeline.Append(s.bgCtx, entry); err != nil {
-		s.logger.Warn("failed to append turn summary", log.String("session_id", s.ID), log.String("error", err.Error()))
-		return
-	}
-	_ = s.store.touchSession(s.bgCtx, s.ID, entry.CreatedAt)
-	s.Lock()
-	s.UpdatedAt = entry.CreatedAt
-	s.Unlock()
-	publishEntryAdded(s.publisher, s.ID, entry)
-}

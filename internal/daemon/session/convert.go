@@ -4,11 +4,10 @@ import (
 	"fmt"
 	"maps"
 	"slices"
-	"time"
 
-	"github.com/google/uuid"
 	"github.com/masterkeysrd/loom/message"
 	"github.com/masterkeysrd/tasksmith/api"
+	"github.com/masterkeysrd/tasksmith/internal/core/uuid"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/timeline"
 )
 
@@ -34,7 +33,7 @@ func ToAPISession(sess *Session) api.Session {
 		questions = sess.PendingQuestions
 		ts = slices.Clone(sess.State.Tasks)
 		todos = sess.Todos
-		queueItems = toAPIQueueItems(sess.VisibleQueue())
+		queueItems = sess.VisibleQueue()
 		ctxState = sess.Context
 	}
 	var resolvedModel *api.Model
@@ -61,22 +60,9 @@ func ToAPISession(sess *Session) api.Session {
 	}
 }
 
-func toAPIQueueItems(items []QueueItem) []api.QueueItem {
-	if len(items) == 0 {
-		return nil
-	}
-	out := make([]api.QueueItem, 0, len(items))
-	for _, it := range items {
-		if apiItem, ok := toAPIQueueItem(it); ok {
-			out = append(out, apiItem)
-		}
-	}
-	return out
-}
-
-func toAPIQueueItem(it QueueItem) (api.QueueItem, bool) {
+func toAPIQueueItem(it queueItem) (api.QueueItem, bool) {
 	switch it.Kind {
-	case QueueKindMessage:
+	case api.QueueKindMessage:
 		if it.Message == nil {
 			return api.QueueItem{}, false
 		}
@@ -90,7 +76,7 @@ func toAPIQueueItem(it QueueItem) (api.QueueItem, bool) {
 			Message:   apiMsg,
 			CreatedAt: it.CreatedAt,
 		}, true
-	case QueueKindCommand:
+	case api.QueueKindCommand:
 		return api.QueueItem{
 			ID:        it.ID,
 			Kind:      api.QueueKindCommand,
@@ -102,6 +88,44 @@ func toAPIQueueItem(it QueueItem) (api.QueueItem, bool) {
 	}
 }
 
+// FromAPIBlock converts a single [api.Block] into an internal [message.Block].
+// The boolean reports whether the block was successfully converted.
+func FromAPIBlock(b api.Block) (message.Block, bool) {
+	switch b.Type {
+	case api.BlockText:
+		if b.Text == "" {
+			return nil, false
+		}
+		return &message.TextBlock{Text: b.Text}, true
+
+	case api.BlockReasoning:
+		if b.Text == "" {
+			return nil, false
+		}
+		var extras map[string]any
+		if b.Signature != "" {
+			extras = map[string]any{"signature": b.Signature}
+		}
+		return &message.ThinkingBlock{
+			Thinking: b.Text,
+			Extras:   extras,
+		}, true
+
+	case api.BlockToolCall:
+		if b.ToolCall == nil {
+			return nil, false
+		}
+		return &message.ToolCall{
+			ID:   b.ToolCall.ID,
+			Name: b.ToolCall.Name,
+			Args: maps.Clone(b.ToolCall.Args),
+		}, true
+
+	default:
+		return nil, false
+	}
+}
+
 // ToAPIMessage converts an internal [message.Message] into the public
 // [api.Message] representation. It returns an error when a structured tool
 // payload cannot be serialized.
@@ -110,11 +134,12 @@ func ToAPIMessage(msg message.Message) (*api.Message, error) {
 		return nil, nil
 	}
 
+	createdAt, _ := uuid.ExtractTime(msg.GetID())
 	out := &api.Message{
 		ID:        msg.GetID(),
 		Role:      api.Role(msg.Role()),
 		Content:   toAPIBlocks(msg.GetContent()),
-		CreatedAt: extractUUIDv7Time(msg.GetID()),
+		CreatedAt: createdAt,
 	}
 
 	if tm, ok := msg.(*message.Tool); ok && tm != nil {
@@ -131,15 +156,6 @@ func ToAPIMessage(msg message.Message) (*api.Message, error) {
 	}
 
 	return out, nil
-}
-
-func extractUUIDv7Time(id string) time.Time {
-	u, err := uuid.Parse(id)
-	if err != nil || u.Version() != 7 {
-		return time.Time{}
-	}
-	sec, nsec := u.Time().UnixTime()
-	return time.Unix(sec, nsec).UTC()
 }
 
 func toAPIBlocks(blocks []message.Block) []api.Block {
@@ -159,20 +175,18 @@ func toAPIBlocks(blocks []message.Block) []api.Block {
 // [api.Block] representation. The boolean reports whether the block type is
 // supported by the public API.
 func ToAPIBlock(b message.Block) (api.Block, bool) {
+	if b == nil {
+		return api.Block{}, false
+	}
+
 	switch v := b.(type) {
 	case *message.TextBlock:
-		if v == nil {
-			return api.Block{}, false
-		}
 		return api.Block{
 			Type: api.BlockText,
 			Text: v.Text,
 		}, true
 
 	case *message.ThinkingBlock:
-		if v == nil {
-			return api.Block{}, false
-		}
 		sig, _ := v.Extras["signature"].(string)
 		return api.Block{
 			Type:      api.BlockReasoning,
@@ -181,9 +195,6 @@ func ToAPIBlock(b message.Block) (api.Block, bool) {
 		}, true
 
 	case *message.ToolCall:
-		if v == nil {
-			return api.Block{}, false
-		}
 		return api.Block{
 			Type: api.BlockToolCall,
 			ToolCall: &api.ToolCall{
@@ -194,9 +205,6 @@ func ToAPIBlock(b message.Block) (api.Block, bool) {
 		}, true
 
 	case *message.ToolCallChunk:
-		if v == nil {
-			return api.Block{}, false
-		}
 		var args map[string]any
 		if tc, err := v.ToToolCall(); err == nil && tc != nil {
 			args = tc.Args
@@ -225,7 +233,10 @@ func toAPIChunk(ch *message.AssistantChunk) *api.Chunk {
 		Done:    ch.Done,
 	}
 	if ch.Metrics != nil && (ch.Metrics.Tokens.Input > 0 || ch.Metrics.Tokens.Output > 0) {
-		out.Usage = &api.ChunkUsage{Input: ch.Metrics.Tokens.Input, Output: ch.Metrics.Tokens.Output}
+		out.Usage = &api.ChunkUsage{
+			Input:  ch.Metrics.Tokens.Input,
+			Output: ch.Metrics.Tokens.Output,
+		}
 	}
 	return out
 }

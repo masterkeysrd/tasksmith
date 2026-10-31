@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/masterkeysrd/loom/message"
 	"github.com/masterkeysrd/loom/profile"
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
@@ -105,7 +104,7 @@ func TestThinkingDiagnostics(t *testing.T) {
 		},
 		warp.ProviderModel{ID: "unsupported", Capabilities: &warp.ProviderModelCapabilities{}},
 	)
-	mgr, err := New(Config{
+	mgr, err := newTestCoordinator(Config{
 		DB:          db,
 		Workspace:   ws,
 		Gateway:     func() gateway.Gateway { return gw },
@@ -150,7 +149,7 @@ func TestThinkingDiagnostics(t *testing.T) {
 		ID:           "supported",
 		Capabilities: &warp.ProviderModelCapabilities{},
 	})
-	reopened, err := New(Config{
+	reopened, err := newTestCoordinator(Config{
 		DB:          db,
 		Workspace:   ws,
 		Gateway:     func() gateway.Gateway { return changed },
@@ -223,7 +222,7 @@ func TestSessionThinkingEndToEnd(t *testing.T) {
 			},
 		},
 	})
-	mgr, err := New(Config{
+	mgr, err := newTestCoordinator(Config{
 		DB:          db,
 		Workspace:   ws,
 		Gateway:     func() gateway.Gateway { return gw },
@@ -245,7 +244,7 @@ func TestSessionThinkingEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := sess.Send(ctx, SendInput{Message: message.NewUserText("hello")}); err != nil {
+	if err := sess.Send(ctx, api.SendRequest{Content: "hello"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := sess.Wait(ctx); err != nil {
@@ -266,7 +265,7 @@ func TestSessionThinkingEndToEnd(t *testing.T) {
 	if updated.Config.Thinking == nil || updated.Config.Thinking.Enabled {
 		t.Fatalf("toggle not stored: %+v", updated.Config)
 	}
-	if err := sess.Send(ctx, SendInput{Message: message.NewUserText("hello")}); err != nil {
+	if err := sess.Send(ctx, api.SendRequest{Content: "hello"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := sess.Wait(ctx); err != nil {

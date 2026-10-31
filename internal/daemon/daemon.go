@@ -36,7 +36,7 @@ var (
 	ErrAlreadyRunning = errors.New("daemon: server is already running")
 	ErrSessionRunning = session.ErrSessionRunning
 	ErrEmptyWorkspace = errors.New("daemon: workspace parameter is required")
-	ErrEmptyMessage   = errors.New("daemon: message content must not be empty")
+	ErrEmptyMessage   = session.ErrEmptyMessage
 )
 
 // DefaultSocketPath returns the default XDG runtime Unix domain socket path ("brain.sock").
@@ -660,7 +660,7 @@ func (d *Daemon) CreateSession(ctx context.Context, rawWS string, req api.Create
 		return nil, false, err
 	}
 
-	sess, created, err := rt.Sessions().Create(ctx, req)
+	sess, created, err := rt.CreateSession(ctx, req)
 	if err != nil {
 		return nil, false, err
 	}
@@ -675,7 +675,7 @@ func (d *Daemon) PreviewSession(ctx context.Context, rawWS string, req api.Previ
 		return nil, err
 	}
 
-	cfg, model, diags, hasModel, err := rt.Sessions().Preview(ctx, req.Config)
+	cfg, model, diags, hasModel, err := rt.PreviewSession(ctx, req.Config)
 	if err != nil {
 		return nil, err
 	}
@@ -702,7 +702,7 @@ func (d *Daemon) ListSessions(ctx context.Context, rawWS string) ([]api.Session,
 		return nil, err
 	}
 
-	list, err := rt.Sessions().List(ctx)
+	list, err := rt.ListSessions(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -720,7 +720,7 @@ func (d *Daemon) GetSession(ctx context.Context, rawWS, id string) (*api.Session
 		return nil, err
 	}
 
-	sess, err := rt.Sessions().Get(ctx, id)
+	sess, err := rt.GetSession(ctx, id)
 	if err != nil {
 		return nil, err
 	}
@@ -735,7 +735,7 @@ func (d *Daemon) UpdateSession(ctx context.Context, rawWS, id string, req api.Up
 		return nil, err
 	}
 
-	sess, err := rt.Sessions().Update(ctx, id, req)
+	sess, err := rt.UpdateSession(ctx, id, req)
 	if err != nil {
 		return nil, err
 	}
@@ -750,7 +750,7 @@ func (d *Daemon) DeleteSession(ctx context.Context, rawWS, id string) error {
 		return err
 	}
 
-	return rt.Sessions().Delete(ctx, id)
+	return rt.DeleteSession(ctx, id)
 }
 
 func (d *Daemon) Timeline(ctx context.Context, rawWS, id string) ([]api.TimelineEntry, error) {
@@ -759,7 +759,7 @@ func (d *Daemon) Timeline(ctx context.Context, rawWS, id string) ([]api.Timeline
 		return nil, err
 	}
 
-	sess, err := rt.Sessions().Get(ctx, id)
+	sess, err := rt.GetSession(ctx, id)
 	if err != nil {
 		return nil, err
 	}
@@ -786,21 +786,13 @@ func (d *Daemon) Send(ctx context.Context, rawWS, id string, req api.SendRequest
 		return err
 	}
 
-	sess, err := rt.Sessions().Get(ctx, id)
+	sess, err := rt.GetSession(ctx, id)
 	if err != nil {
 		return err
 	}
 
-	in, err := fromSendRequest(req)
-	if err != nil {
-		if errors.Is(err, session.ErrInvalidConfig) {
-			return &api.APIError{StatusCode: http.StatusBadRequest, Code: "bad_request", Message: err.Error()}
-		}
-		return err
-	}
-
-	if err := sess.Send(ctx, in); err != nil {
-		if errors.Is(err, session.ErrInvalidConfig) || errors.Is(err, session.ErrNilMessage) || strings.Contains(err.Error(), "required argument") || strings.Contains(err.Error(), "failed to render") {
+	if err := sess.Send(ctx, req); err != nil {
+		if errors.Is(err, session.ErrInvalidConfig) || errors.Is(err, session.ErrNilMessage) || errors.Is(err, session.ErrEmptyMessage) || strings.Contains(err.Error(), "required argument") || strings.Contains(err.Error(), "failed to render") {
 			return &api.APIError{
 				StatusCode: http.StatusBadRequest,
 				Code:       "bad_request",
@@ -818,7 +810,7 @@ func (d *Daemon) Cancel(ctx context.Context, rawWS, id string) error {
 		return err
 	}
 
-	sess, err := rt.Sessions().Get(ctx, id)
+	sess, err := rt.GetSession(ctx, id)
 	if err != nil {
 		return err
 	}
@@ -832,7 +824,7 @@ func (d *Daemon) Changes(ctx context.Context, rawWS, id string) ([]api.FileChang
 		return nil, err
 	}
 
-	sess, err := rt.Sessions().Get(ctx, id)
+	sess, err := rt.GetSession(ctx, id)
 	if err != nil {
 		return nil, err
 	}
@@ -865,7 +857,7 @@ func (d *Daemon) Diff(ctx context.Context, rawWS, id, path, entryID string) (*ap
 		}
 	}
 
-	sess, err := rt.Sessions().Get(ctx, id)
+	sess, err := rt.GetSession(ctx, id)
 	if err != nil {
 		return nil, err
 	}
@@ -888,7 +880,7 @@ func (d *Daemon) Revert(ctx context.Context, rawWS, id string, req api.RevertReq
 		return err
 	}
 
-	sess, err := rt.Sessions().Get(ctx, id)
+	sess, err := rt.GetSession(ctx, id)
 	if err != nil {
 		return err
 	}
@@ -913,7 +905,7 @@ func (d *Daemon) Tasks(ctx context.Context, rawWS, id string) ([]api.Task, error
 		return nil, err
 	}
 
-	sess, err := rt.Sessions().Get(ctx, id)
+	sess, err := rt.GetSession(ctx, id)
 	if err != nil {
 		return nil, err
 	}
@@ -940,7 +932,7 @@ func (d *Daemon) KillTask(ctx context.Context, rawWS, id, taskID string) error {
 		}
 	}
 
-	sess, err := rt.Sessions().Get(ctx, id)
+	sess, err := rt.GetSession(ctx, id)
 	if err != nil {
 		return err
 	}
@@ -990,7 +982,7 @@ func (d *Daemon) StreamTaskOutput(ctx context.Context, rawWS, id, taskID string)
 		}
 	}
 
-	sess, err := rt.Sessions().Get(ctx, id)
+	sess, err := rt.GetSession(ctx, id)
 	if err != nil {
 		return nil, "", nil, err
 	}

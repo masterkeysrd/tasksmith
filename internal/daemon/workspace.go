@@ -10,13 +10,17 @@ import (
 	"sync"
 
 	"github.com/masterkeysrd/tasksmith/internal/core/fsutils"
+	"github.com/masterkeysrd/tasksmith/internal/core/log"
+	"github.com/masterkeysrd/tasksmith/internal/core/memdb"
 	"github.com/masterkeysrd/tasksmith/internal/core/sqlite"
 	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/gateway"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/journal"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/metrics"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/models"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/permissions"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/session"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/timeline"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tools/builtin"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/workspace"
 	"github.com/masterkeysrd/warp"
@@ -66,7 +70,14 @@ type workspaceRuntime struct {
 	pool         gateway.Pool
 	metrics      metrics.Service
 	perms        permissions.Manager
-	sessions     session.Manager
+	sessionStore session.Store
+	sessions     *memdb.DB[*session.Session]
+	bgCtx        context.Context
+	bgCancel     context.CancelFunc
+	wg           sync.WaitGroup
+	createMu     sync.Mutex
+	publisher    session.Publisher
+	logger       log.Interface
 	db           *sql.DB
 }
 
@@ -75,7 +86,6 @@ func (r *workspaceRuntime) Workspace() *workspace.Workspace   { return r.ws }
 func (r *workspaceRuntime) Gateway() gateway.Gateway          { return r.gw.get() }
 func (r *workspaceRuntime) Catalog() *models.Catalog          { return r.catalog.get() }
 func (r *workspaceRuntime) Permissions() permissions.Manager  { return r.perms }
-func (r *workspaceRuntime) Sessions() session.Manager         { return r.sessions }
 func (r *workspaceRuntime) SessionRuntime() *workspaceRuntime { return r.sessionOwner }
 
 func (r *workspaceRuntime) Reload(ctx context.Context) error {
@@ -120,14 +130,28 @@ func (r *workspaceRuntime) Reload(ctx context.Context) error {
 	if r.sessionOwner != r {
 		r.sessionOwner.catalog.set(sessionCatalog)
 	}
-	r.sessions.Refresh()
+	r.RefreshSessions()
 	return nil
 }
 
 func (r *workspaceRuntime) Close() error {
-	sessErr := r.sessions.Close()
-	dbErr := r.db.Close()
-	return errors.Join(sessErr, dbErr)
+	if r.sessionOwner != nil && r.sessionOwner != r {
+		return r.sessionOwner.Close()
+	}
+	if r.bgCancel != nil {
+		r.bgCancel()
+	}
+	if r.sessions != nil {
+		for _, sess := range r.sessions.Snapshot().All() {
+			_ = sess.Close()
+		}
+	}
+	r.wg.Wait()
+	var dbErr error
+	if r.db != nil {
+		dbErr = r.db.Close()
+	}
+	return dbErr
 }
 
 func (d *Daemon) workspace(ctx context.Context, dir string) (*workspaceRuntime, error) {
@@ -168,14 +192,12 @@ func (d *Daemon) workspace(ctx context.Context, dir string) (*workspaceRuntime, 
 	}
 
 	var db *sql.DB
-	var sessMgr session.Manager
 	var permMgr permissions.Manager
 	owner := &workspaceRuntime{catalog: &catalogSlot{}, gw: &gatewaySlot{}}
 	reloadMu := &sync.RWMutex{}
 	for _, existing := range d.workspaces {
 		if existing.ws.RootDir() == rootDir {
 			db = existing.db
-			sessMgr = existing.sessions
 			permMgr = existing.perms
 			owner = existing.sessionOwner
 			reloadMu = existing.reloadMu
@@ -183,7 +205,7 @@ func (d *Daemon) workspace(ctx context.Context, dir string) (*workspaceRuntime, 
 		}
 	}
 
-	if sessMgr == nil {
+	if owner.sessionStore == nil {
 		gwCfg := buildGatewayConfig(ws, recorderOf(d.usage))
 		gw, err := d.cfg.GatewayPool.Acquire(ctx, gwCfg)
 		if err != nil {
@@ -205,6 +227,22 @@ func (d *Daemon) workspace(ctx context.Context, dir string) (*workspaceRuntime, 
 			return nil, fmt.Errorf("daemon: open sqlite db %q: %w", dbPath, err)
 		}
 
+		if err := session.Migrate(ctx, db); err != nil {
+			_ = db.Close()
+			d.wsMu.Unlock()
+			return nil, fmt.Errorf("daemon: migrate session schema for %q: %w", rootDir, err)
+		}
+		if err := timeline.Migrate(ctx, db); err != nil {
+			_ = db.Close()
+			d.wsMu.Unlock()
+			return nil, fmt.Errorf("daemon: migrate timeline schema for %q: %w", rootDir, err)
+		}
+		if err := journal.Migrate(ctx, db); err != nil {
+			_ = db.Close()
+			d.wsMu.Unlock()
+			return nil, fmt.Errorf("daemon: migrate journal schema for %q: %w", rootDir, err)
+		}
+
 		permMgr, err = permissions.New(permissions.Config{Workspace: ws})
 		if err != nil {
 			_ = db.Close()
@@ -212,22 +250,26 @@ func (d *Daemon) workspace(ctx context.Context, dir string) (*workspaceRuntime, 
 			return nil, fmt.Errorf("daemon: initialize permissions manager for %q: %w", rootDir, err)
 		}
 
-		sessMgr, err = session.New(session.Config{
-			DB:          db,
-			Workspace:   ws,
-			Gateway:     owner.gw.get,
-			Publisher:   d.broker,
-			Logger:      d.logger,
-			Permissions: permMgr,
-			ReloadLock:  reloadMu,
-			Catalog:     owner.catalog.get,
-			Metrics:     d.usage,
-		})
+		sessionStore, err := session.NewStore(ctx, db)
 		if err != nil {
 			_ = db.Close()
 			d.wsMu.Unlock()
-			return nil, fmt.Errorf("daemon: initialize session manager for %q: %w", rootDir, err)
+			return nil, fmt.Errorf("daemon: initialize session store for %q: %w", rootDir, err)
 		}
+
+		sessions := memdb.New(func(s *session.Session) string { return s.ID })
+		bgCtx, bgCancel := context.WithCancel(context.Background())
+
+		owner.db = db
+		owner.sessionStore = sessionStore
+		owner.sessions = sessions
+		owner.bgCtx = bgCtx
+		owner.bgCancel = bgCancel
+		owner.perms = permMgr
+		owner.reloadMu = reloadMu
+		owner.publisher = d.broker
+		owner.logger = d.logger
+		owner.metrics = d.usage
 	}
 
 	catalog, err := models.Build(ws.Catalog(), owner.gw.get())
@@ -238,19 +280,38 @@ func (d *Daemon) workspace(ctx context.Context, dir string) (*workspaceRuntime, 
 
 	rt := owner
 	if owner.catalog.get() != nil {
-		rt = &workspaceRuntime{catalog: &catalogSlot{}, gw: owner.gw}
+		rt = &workspaceRuntime{
+			catalog:      &catalogSlot{},
+			dir:          cleanDir,
+			ws:           ws,
+			sessionOwner: owner,
+			reloadMu:     reloadMu,
+			gw:           owner.gw,
+			pool:         d.cfg.GatewayPool,
+			metrics:      d.usage,
+			perms:        permMgr,
+			publisher:    d.broker,
+			logger:       d.logger,
+			db:           db,
+		}
+	} else {
+		rt.dir = cleanDir
+		rt.ws = ws
+		rt.sessionOwner = owner
+		rt.reloadMu = reloadMu
+		rt.gw = owner.gw
+		rt.pool = d.cfg.GatewayPool
+		rt.metrics = d.usage
+		rt.perms = permMgr
+		rt.sessionStore = owner.sessionStore
+		rt.sessions = owner.sessions
+		rt.bgCtx = owner.bgCtx
+		rt.bgCancel = owner.bgCancel
+		rt.publisher = d.broker
+		rt.logger = d.logger
+		rt.db = db
 	}
 	rt.catalog.set(catalog)
-	rt.dir = cleanDir
-	rt.ws = ws
-	rt.sessionOwner = owner
-	rt.reloadMu = reloadMu
-	rt.gw = owner.gw
-	rt.pool = d.cfg.GatewayPool
-	rt.metrics = d.usage
-	rt.perms = permMgr
-	rt.sessions = sessMgr
-	rt.db = db
 	d.workspaces[cleanDir] = rt
 	d.wsMu.Unlock()
 
@@ -285,12 +346,16 @@ func (d *Daemon) closeWorkspaces() error {
 	clear(d.dirToRoot)
 	d.wsMu.Unlock()
 
-	seenDB := make(map[*sql.DB]struct{})
+	seen := make(map[*workspaceRuntime]struct{})
 	var errs []error
 	for _, rt := range runtimes {
-		if _, ok := seenDB[rt.db]; !ok && rt.db != nil {
-			seenDB[rt.db] = struct{}{}
-			if err := rt.Close(); err != nil {
+		owner := rt.SessionRuntime()
+		if owner == nil {
+			owner = rt
+		}
+		if _, ok := seen[owner]; !ok {
+			seen[owner] = struct{}{}
+			if err := owner.Close(); err != nil {
 				errs = append(errs, err)
 			}
 		}

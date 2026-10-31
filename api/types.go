@@ -254,6 +254,7 @@ const (
 	QueueKindMessage QueueKind = "message"
 	QueueKindCommand QueueKind = "command"
 	QueueKindCompact QueueKind = "compact"
+	QueueKindTask    QueueKind = "task"
 )
 
 type QueueItem struct {

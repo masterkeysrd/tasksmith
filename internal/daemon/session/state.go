@@ -31,7 +31,7 @@ type State struct {
 	err             error                             `json:"-"`
 	decisions       map[string]api.PermissionDecision `json:"-"`
 	answers         map[string]api.QuestionResponse   `json:"-"`
-	queue           []QueueItem                       `json:"-"`
+	queue           []queueItem                       `json:"-"`
 	titleGenerating bool                              `json:"-"`
 }
 
@@ -66,9 +66,9 @@ func (s *State) Clone() *State {
 	for i := range s.PendingQuestions {
 		questions = append(questions, *s.PendingQuestions[i].Clone())
 	}
-	var q []QueueItem
+	var q []queueItem
 	if len(s.queue) > 0 {
-		q = make([]QueueItem, len(s.queue))
+		q = make([]queueItem, len(s.queue))
 		for i, it := range s.queue {
 			if it.Message != nil {
 				it.Message = message.CloneMessage(it.Message)

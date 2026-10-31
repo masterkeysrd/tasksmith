@@ -197,7 +197,7 @@ func TestReloadRefreshesModelDiagnostics(t *testing.T) {
 	if sibling.SessionRuntime() != rt || rt.SessionRuntime() != rt {
 		t.Fatal("shared sessions must use the owning runtime")
 	}
-	sess, _, err := rt.Sessions().Create(ctx, api.CreateSessionRequest{Title: "test", Config: api.SessionConfig{Agent: "custom", Model: "local/sample"}})
+	sess, _, err := rt.CreateSession(ctx, api.CreateSessionRequest{Title: "test", Config: api.SessionConfig{Agent: "custom", Model: "local/sample"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -239,7 +239,7 @@ func TestReloadRefreshesModelDiagnostics(t *testing.T) {
 	results := make(chan error, 1)
 	go func() {
 		for range 20 {
-			created, _, err := rt.Sessions().Create(ctx, api.CreateSessionRequest{Title: "concurrent", Config: api.SessionConfig{Agent: "custom", Model: "local/sample"}})
+			created, _, err := rt.CreateSession(ctx, api.CreateSessionRequest{Title: "concurrent", Config: api.SessionConfig{Agent: "custom", Model: "local/sample"}})
 			if err != nil {
 				results <- err
 				return

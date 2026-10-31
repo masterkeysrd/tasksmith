@@ -1030,42 +1030,18 @@ func TestServerShutdownEndpoint(t *testing.T) {
 func TestConversionsAndErrorPublishing(t *testing.T) {
 	ctx := context.Background()
 
-	// Test block conversions (ThinkingBlock, ToolCall, ToolCallChunk, fromSendRequest)
-	reqMsg, err := fromSendRequest(api.SendRequest{
-		Content: "Lead text",
-		Blocks:  []api.Block{{Type: api.BlockText, Text: "more text"}},
-	})
-	if err != nil {
-		t.Fatalf("fromSendRequest: %v", err)
-	}
-	apiMsg, err := session.ToAPIMessage(reqMsg.Message)
-	if err != nil {
-		t.Fatalf("toAPIMessage: %v", err)
-	}
-	if apiMsg == nil || len(apiMsg.Content) != 2 {
-		t.Fatalf("toAPIMessage = %+v, want 2 blocks", apiMsg)
-	}
+	// Test block conversions (ThinkingBlock, ToolCall, ToolCallChunk, session.FromAPIBlock)
 	for _, block := range []api.Block{
 		{Type: api.BlockReasoning, Text: "thought", Signature: "sig1"},
 		{Type: api.BlockToolCall, ToolCall: &api.ToolCall{ID: "tc1", Name: "view", Args: map[string]any{"path": "x.go"}}},
 	} {
-		converted, ok := fromAPIBlock(block)
+		converted, ok := session.FromAPIBlock(block)
 		if !ok {
-			t.Fatalf("fromAPIBlock: %+v", block)
+			t.Fatalf("session.FromAPIBlock: %+v", block)
 		}
 		roundTrip, ok := session.ToAPIBlock(converted)
 		if !ok || !reflect.DeepEqual(roundTrip, block) {
 			t.Fatalf("block round trip: %+v, want %+v", roundTrip, block)
-		}
-	}
-
-	if _, err := fromSendRequest(api.SendRequest{}); !errors.Is(err, ErrEmptyMessage) {
-		t.Errorf("fromSendRequest empty error = %v, want %v", err, ErrEmptyMessage)
-	}
-	for _, block := range []api.Block{{Type: "image"}, {Type: api.BlockText}, {Type: api.BlockReasoning, Text: "thought"}, {Type: api.BlockToolCall}, {Type: api.BlockToolCall, ToolCall: &api.ToolCall{ID: "call", Name: "search"}}} {
-		_, err := fromSendRequest(api.SendRequest{Content: "valid text", Blocks: []api.Block{block}})
-		if !errors.Is(err, session.ErrInvalidConfig) || !strings.Contains(err.Error(), "block 0") {
-			t.Errorf("invalid block %+v: %v", block, err)
 		}
 	}
 

@@ -29,29 +29,12 @@ var (
 	ErrInvalidSessionID     = errors.New("session: session ID must be a canonical lowercase UUIDv7")
 	ErrSessionConflict      = errors.New("session: session already exists with different parameters")
 	ErrSessionRunning       = errors.New("session: session already has an active turn")
+	ErrEmptyMessage         = errors.New("session: message content must not be empty")
 )
 
-// SendInput provides the input to Session.Send, carrying either a new user message or a permission decision.
-type SendInput struct {
-	ID       string
-	Message  message.Message
-	Command  string
-	Decision *api.PermissionDecision
-	Question *api.QuestionResponse
-	Compact  *api.CompactRequest
-}
-
-type QueueKind string
-
-const (
-	QueueKindMessage QueueKind = "message"
-	QueueKindCommand QueueKind = "command"
-	QueueKindTask    QueueKind = "task"
-)
-
-type QueueItem struct {
+type queueItem struct {
 	ID        string
-	Kind      QueueKind
+	Kind      api.QueueKind
 	Message   message.Message
 	Command   string
 	CreatedAt time.Time

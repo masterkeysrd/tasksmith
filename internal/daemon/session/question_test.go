@@ -26,7 +26,7 @@ func TestQuestionSessionPermissionThenAnswer(t *testing.T) {
 		t.Fatal(err)
 	}
 	sess.PermManager.SetMode(api.ModeAsk)
-	if err := sess.Send(ctx, SendInput{Message: message.NewUserText("start")}); err != nil {
+	if err := sess.Send(ctx, api.SendRequest{Content: "start"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := sess.Wait(ctx); err != nil {
@@ -35,7 +35,7 @@ func TestQuestionSessionPermissionThenAnswer(t *testing.T) {
 	if sess.Status != api.StatusWaitingPermission || len(sess.PendingPermissions) != 1 || len(sess.PendingQuestions) != 0 {
 		t.Fatalf("expected permission first: %+v", sess.State)
 	}
-	if err := sess.Send(ctx, SendInput{Decision: &api.PermissionDecision{RequestID: sess.PendingPermissions[0].ID, Kind: api.DecisionAllowOnce}}); err != nil {
+	if err := sess.Send(ctx, api.SendRequest{Decision: &api.PermissionDecision{RequestID: sess.PendingPermissions[0].ID, Kind: api.DecisionAllowOnce}}); err != nil {
 		t.Fatal(err)
 	}
 	if err := sess.Wait(ctx); err != nil {
@@ -44,7 +44,7 @@ func TestQuestionSessionPermissionThenAnswer(t *testing.T) {
 	if sess.Status != api.StatusWaitingQuestion || len(sess.PendingQuestions) != 1 || len(sess.PendingPermissions) != 0 {
 		t.Fatalf("expected question after approval: %+v", sess.State)
 	}
-	if err := sess.Send(ctx, SendInput{Question: &api.QuestionResponse{RequestID: sess.PendingQuestions[0].ID, Answers: []api.QuestionAnswer{{Question: "Why?", Text: "Because"}}}}); err != nil {
+	if err := sess.Send(ctx, api.SendRequest{Question: &api.QuestionResponse{RequestID: sess.PendingQuestions[0].ID, Answers: []api.QuestionAnswer{{Question: "Why?", Text: "Because"}}}}); err != nil {
 		t.Fatal(err)
 	}
 	if err := sess.Wait(ctx); err != nil {
@@ -70,7 +70,7 @@ func TestQuestionSessionResume(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := sess.Send(ctx, SendInput{Message: message.NewUserText("start")}); err != nil {
+	if err := sess.Send(ctx, api.SendRequest{Content: "start"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := sess.Wait(ctx); err != nil {
@@ -89,7 +89,7 @@ func TestQuestionSessionResume(t *testing.T) {
 		t.Fatal("missing question event")
 	}
 	req := sess.PendingQuestions[0]
-	if err := sess.Send(ctx, SendInput{Question: &api.QuestionResponse{RequestID: req.ID, Answers: []api.QuestionAnswer{{Question: "Why?", Text: "Because"}}}}); err != nil {
+	if err := sess.Send(ctx, api.SendRequest{Question: &api.QuestionResponse{RequestID: req.ID, Answers: []api.QuestionAnswer{{Question: "Why?", Text: "Because"}}}}); err != nil {
 		t.Fatal(err)
 	}
 	if err := sess.Wait(ctx); err != nil {

@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -26,6 +27,7 @@ import (
 	"github.com/masterkeysrd/loom/profile"
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
+	"github.com/masterkeysrd/tasksmith/internal/core/memdb"
 	"github.com/masterkeysrd/tasksmith/internal/core/sqlite"
 	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/broker"
@@ -35,10 +37,18 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/daemon/permissions"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/sandbox"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/std"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/timeline"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tools/builtin"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/workspace"
 	"github.com/masterkeysrd/warp"
 )
+
+func testAppendMessage(ctx context.Context, sess *Session, msg message.Message) error {
+	if msg == nil {
+		return ErrNilMessage
+	}
+	return sess.appendTimeline(ctx, timeline.NewMessageEntry(sess.ID, msg))
+}
 
 func testCatalog(t *testing.T, ws *workspace.Workspace, entries ...warp.ProviderModel) func() *models.Catalog {
 	t.Helper()
@@ -109,7 +119,7 @@ func TestSessionModelDiagnosticsAndRequests(t *testing.T) {
 		warp.ProviderModel{ID: "supported", Capabilities: &warp.ProviderModelCapabilities{Temperature: &tempTrue, Thinking: []warp.ProviderModelThinkingCapability{{Type: "effort", AllowedEfforts: []string{"low", "high"}}}}},
 		warp.ProviderModel{ID: "unsupported", Capabilities: &warp.ProviderModelCapabilities{Temperature: &tempFalse}},
 	)
-	mgr, err := New(Config{DB: db, Workspace: ws, Gateway: func() gateway.Gateway { return gw }, Publisher: pub, Logger: log.Default(), Permissions: perms, Catalog: catalog})
+	mgr, err := newTestCoordinator(Config{DB: db, Workspace: ws, Gateway: func() gateway.Gateway { return gw }, Publisher: pub, Logger: log.Default(), Permissions: perms, Catalog: catalog})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -121,7 +131,7 @@ func TestSessionModelDiagnosticsAndRequests(t *testing.T) {
 	if len(sess.Diagnostics) != 1 || sess.Diagnostics[0].Code != "temperature_unsupported" {
 		t.Fatalf("diagnostics: %+v", sess.Diagnostics)
 	}
-	if err := sess.Send(ctx, SendInput{Message: message.NewUserText("hello")}); err != nil {
+	if err := sess.Send(ctx, api.SendRequest{Content: "hello"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := sess.Wait(ctx); err != nil {
@@ -140,7 +150,7 @@ func TestSessionModelDiagnosticsAndRequests(t *testing.T) {
 	if len(updated.Diagnostics) != 0 {
 		t.Fatalf("diagnostics not cleared: %+v", updated.Diagnostics)
 	}
-	if err := sess.Send(ctx, SendInput{Message: message.NewUserText("hello again")}); err != nil {
+	if err := sess.Send(ctx, api.SendRequest{Content: "hello again"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := sess.Wait(ctx); err != nil {
@@ -158,7 +168,7 @@ func TestSessionModelDiagnosticsAndRequests(t *testing.T) {
 	if len(updated.Diagnostics) != 1 || updated.Diagnostics[0].Code != "temperature_unsupported" {
 		t.Fatalf("agent switch diagnostics: %+v", updated.Diagnostics)
 	}
-	reopened, err := New(Config{DB: db, Workspace: ws, Gateway: func() gateway.Gateway { return gw }, Publisher: pub, Logger: log.Default(), Permissions: perms, Catalog: catalog})
+	reopened, err := newTestCoordinator(Config{DB: db, Workspace: ws, Gateway: func() gateway.Gateway { return gw }, Publisher: pub, Logger: log.Default(), Permissions: perms, Catalog: catalog})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -468,7 +478,256 @@ func (p *testPublisher) reset() {
 	p.records = nil
 }
 
-func setupTestEnv(t *testing.T, prov *fakeProvider) (*sql.DB, *workspace.Workspace, *fakeGateway, *testPublisher, Manager) {
+type testCoordinator struct {
+	cfg      Config
+	store    Store
+	sessions *memdb.DB[*Session]
+	createMu sync.Mutex
+	bgCancel context.CancelFunc
+}
+
+func newTestCoordinator(cfg Config) (*testCoordinator, error) {
+	if err := cfg.Validate(); err != nil {
+		return nil, err
+	}
+	st, err := NewStore(context.Background(), cfg.DB)
+	if err != nil {
+		return nil, err
+	}
+	if cfg.ReloadLock == nil {
+		cfg.ReloadLock = &sync.RWMutex{}
+	}
+	if cfg.Catalog == nil {
+		catalog, err := models.Build(cfg.Workspace.Catalog(), cfg.Gateway())
+		if err != nil {
+			return nil, fmt.Errorf("session: build model catalog: %w", err)
+		}
+		cfg.Catalog = func() *models.Catalog { return catalog }
+	}
+	var cancel context.CancelFunc
+	if cfg.Context == nil {
+		cfg.Context, cancel = context.WithCancel(context.Background())
+	}
+	if cfg.WaitGroup == nil {
+		cfg.WaitGroup = &sync.WaitGroup{}
+	}
+	return &testCoordinator{
+		cfg:      cfg,
+		store:    st,
+		sessions: memdb.New(func(s *Session) string { return s.ID }),
+		bgCancel: cancel,
+	}, nil
+}
+
+func (c *testCoordinator) getLive(ctx context.Context, id string) (*Session, error) {
+	if sess, ok := c.sessions.Snapshot().Get(id); ok {
+		return sess, nil
+	}
+
+	dbSess, err := c.store.Get(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+
+	cfg := c.cfg
+	cfg.OnUpdate = func(ctx context.Context, s *Session) error {
+		return s.CheckpointTo(ctx, c.store)
+	}
+
+	sess, err := Open(ctx, dbSess, cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	c.createMu.Lock()
+	if existing, ok := c.sessions.Snapshot().Get(sess.ID); ok {
+		c.createMu.Unlock()
+		_ = sess.Close()
+		return existing, nil
+	}
+	c.sessions.Save(sess)
+	c.createMu.Unlock()
+
+	return sess, nil
+}
+
+func (c *testCoordinator) Create(ctx context.Context, req api.CreateSessionRequest) (*Session, bool, error) {
+	c.cfg.ReloadLock.RLock()
+	defer c.cfg.ReloadLock.RUnlock()
+	if err := ctx.Err(); err != nil {
+		return nil, false, err
+	}
+
+	id := strings.TrimSpace(req.ID)
+	if id != "" {
+		c.createMu.Lock()
+		defer c.createMu.Unlock()
+
+		existing, err := c.getLive(ctx, id)
+		switch {
+		case err == nil:
+			if err := existing.Matches(req); err != nil {
+				return nil, false, err
+			}
+			return existing, false, nil
+		case !errors.Is(err, ErrSessionNotFound):
+			return nil, false, err
+		}
+	}
+
+	cfg := c.cfg
+	cfg.ID = id
+	cfg.Title = req.Title
+	cfg.Session = req.Config
+	cfg.OnUpdate = func(ctx context.Context, s *Session) error {
+		return s.CheckpointTo(ctx, c.store)
+	}
+
+	newSession, err := New(ctx, cfg)
+	if err != nil {
+		return nil, false, err
+	}
+
+	if err := newSession.CheckpointTo(ctx, c.store); err != nil {
+		_ = newSession.Close()
+		return nil, false, err
+	}
+
+	c.sessions.Save(newSession)
+
+	c.cfg.Publisher.Publish(api.TopicSessions, api.SessionCreatedEvent{
+		Workspace: c.cfg.Workspace.RootDir(),
+		Session:   ToAPISession(newSession),
+	})
+
+	return newSession, true, nil
+}
+
+func (c *testCoordinator) Get(ctx context.Context, id string) (*Session, error) {
+	c.cfg.ReloadLock.RLock()
+	defer c.cfg.ReloadLock.RUnlock()
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return nil, ErrEmptySessionID
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return c.getLive(ctx, id)
+}
+
+func (c *testCoordinator) List(ctx context.Context) ([]*Session, error) {
+	c.cfg.ReloadLock.RLock()
+	defer c.cfg.ReloadLock.RUnlock()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	list, err := c.store.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*Session, len(list))
+	for i, dbSess := range list {
+		live, err := c.getLive(ctx, dbSess.ID)
+		if err != nil {
+			return nil, err
+		}
+		out[i] = live
+	}
+	return out, nil
+}
+
+func (c *testCoordinator) Update(ctx context.Context, id string, req api.UpdateSessionRequest) (*Session, error) {
+	sess, err := c.Get(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if err := sess.Update(ctx, req); err != nil {
+		return nil, err
+	}
+	return sess, nil
+}
+
+func (c *testCoordinator) Delete(ctx context.Context, id string) error {
+	c.cfg.ReloadLock.RLock()
+	defer c.cfg.ReloadLock.RUnlock()
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return ErrEmptySessionID
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	sess, _ := c.sessions.Snapshot().Get(id)
+	c.sessions.Delete(id)
+
+	if sess == nil {
+		if live, err := c.getLive(ctx, id); err == nil {
+			sess = live
+			c.sessions.Delete(id)
+		}
+	}
+
+	if sess != nil {
+		_ = sess.Cancel(ctx)
+		_ = sess.Close()
+		if sess.Timeline != nil {
+			_ = sess.Timeline.Delete(ctx)
+		}
+		if sess.Journal != nil {
+			_ = sess.Journal.Delete(ctx)
+		}
+	}
+
+	if err := c.store.Delete(ctx, id); err != nil {
+		return err
+	}
+
+	sessDir, err := SessionDir(c.cfg.Workspace.RootDir(), id)
+	if err == nil {
+		_ = os.RemoveAll(sessDir)
+	}
+
+	c.cfg.Publisher.Publish(api.TopicSessions, api.SessionDeletedEvent{
+		Workspace: c.cfg.Workspace.RootDir(),
+		SessionID: id,
+	})
+	c.cfg.Publisher.DeleteTopic(api.SessionStreamTopic(id))
+
+	return nil
+}
+
+func (c *testCoordinator) Preview(ctx context.Context, config api.SessionConfig) (api.SessionConfig, models.Model, []api.SessionDiagnostic, bool, error) {
+	c.cfg.ReloadLock.RLock()
+	defer c.cfg.ReloadLock.RUnlock()
+	return Preview(ctx, c.cfg.Workspace, c.cfg.Catalog(), config)
+}
+
+func (c *testCoordinator) Refresh() {
+	ctx := c.cfg.Context
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	for _, sess := range c.sessions.Snapshot().All() {
+		sess.Refresh(ctx)
+	}
+}
+
+func (c *testCoordinator) Close() error {
+	if c.bgCancel != nil {
+		c.bgCancel()
+	}
+	for _, sess := range c.sessions.Snapshot().All() {
+		_ = sess.Close()
+	}
+	if c.cfg.WaitGroup != nil {
+		c.cfg.WaitGroup.Wait()
+	}
+	return nil
+}
+
+func setupTestEnv(t *testing.T, prov *fakeProvider) (*sql.DB, *workspace.Workspace, *fakeGateway, *testPublisher, *testCoordinator) {
 	t.Helper()
 
 	xdgRoot := t.TempDir()
@@ -505,7 +764,7 @@ func setupTestEnv(t *testing.T, prov *fakeProvider) (*sql.DB, *workspace.Workspa
 		t.Fatalf("permissions.New: %v", err)
 	}
 
-	mgr, err := New(Config{
+	mgr, err := newTestCoordinator(Config{
 		DB:          db,
 		Workspace:   ws,
 		Gateway:     func() gateway.Gateway { return gw },
@@ -520,7 +779,7 @@ func setupTestEnv(t *testing.T, prov *fakeProvider) (*sql.DB, *workspace.Workspa
 	return db, ws, gw, pub, mgr
 }
 
-func loadHarnessState(t *testing.T, mgr Manager, sessionID string) harness.State {
+func loadHarnessState(t *testing.T, mgr *testCoordinator, sessionID string) harness.State {
 	t.Helper()
 	sess, err := mgr.Get(context.Background(), sessionID)
 	if err != nil {
@@ -647,7 +906,7 @@ func TestConfigValidate(t *testing.T) {
 			if err := tc.cfg.Validate(); !errors.Is(err, ErrInvalidConfig) {
 				t.Errorf("Validate() error = %v, want %v", err, ErrInvalidConfig)
 			}
-			if _, err := New(tc.cfg); !errors.Is(err, ErrInvalidConfig) {
+			if _, err := New(context.Background(), tc.cfg); !errors.Is(err, ErrInvalidConfig) {
 				t.Errorf("New() error = %v, want %v", err, ErrInvalidConfig)
 			}
 		})
@@ -728,7 +987,7 @@ func TestSessionCRUD(t *testing.T) {
 
 	// Append a message to s1 so its updated_at becomes newer than s2
 	time.Sleep(2 * time.Millisecond)
-	if err := s1.appendMessage(ctx, message.NewUserText("Hello on s1")); err != nil {
+	if err := testAppendMessage(ctx, s1, message.NewUserText("Hello on s1")); err != nil {
 		t.Fatalf("appendMessage s1 error: %v", err)
 	}
 
@@ -886,7 +1145,7 @@ OVERRIDE_AGENT_PROMPT_MARKER {{ if call .HasTool "shell" }}HAS_SHELL_TOOL{{ end 
 		t.Fatalf("permissions.New: %v", err)
 	}
 
-	mgr, err := New(Config{
+	mgr, err := newTestCoordinator(Config{
 		DB:          db,
 		Workspace:   ws,
 		Gateway:     func() gateway.Gateway { return gw },
@@ -895,7 +1154,7 @@ OVERRIDE_AGENT_PROMPT_MARKER {{ if call .HasTool "shell" }}HAS_SHELL_TOOL{{ end 
 		Permissions: permMgr,
 	})
 	if err != nil {
-		t.Fatalf("session.New: %v", err)
+		t.Fatalf("newTestCoordinator: %v", err)
 	}
 
 	// Session A: uses workspace defaults for Agent and Model
@@ -929,13 +1188,13 @@ OVERRIDE_AGENT_PROMPT_MARKER {{ if call .HasTool "shell" }}HAS_SHELL_TOOL{{ end 
 	}
 
 	// Send on both concurrent sessions and verify each uses its own Agent prompt and Model
-	if err := sessDefault.Send(ctx, SendInput{Message: message.NewUserText("Hello default")}); err != nil {
+	if err := sessDefault.Send(ctx, api.SendRequest{Content: "Hello default"}); err != nil {
 		t.Fatalf("Send sessDefault error: %v", err)
 	}
 	if err := sessDefault.Wait(ctx); err != nil {
 		t.Fatalf("Wait sessDefault error: %v", err)
 	}
-	if err := sessOverride.Send(ctx, SendInput{Message: message.NewUserText("Hello override")}); err != nil {
+	if err := sessOverride.Send(ctx, api.SendRequest{Content: "Hello override"}); err != nil {
 		t.Fatalf("Send sessOverride error: %v", err)
 	}
 	if err := sessOverride.Wait(ctx); err != nil {
@@ -1034,21 +1293,20 @@ func TestSendAndHistory(t *testing.T) {
 	}
 
 	// Validation checks on Send and History
-	if err := sess.Send(ctx, SendInput{Message: nil}); !errors.Is(err, ErrNilMessage) {
-		t.Errorf("Send nil input error = %v, want %v", err, ErrNilMessage)
+	if err := sess.Send(ctx, api.SendRequest{}); !errors.Is(err, ErrEmptyMessage) {
+		t.Errorf("Send nil input error = %v, want %v", err, ErrEmptyMessage)
 	}
 
 	pub.reset()
 
-	userIn := message.NewUserText("Greetings!")
-	if err := sess.Send(ctx, SendInput{Message: userIn}); err != nil {
+	if err := sess.Send(ctx, api.SendRequest{Content: "Greetings!"}); err != nil {
 		t.Fatalf("Send error: %v", err)
 	}
 	if err := sess.Wait(ctx); err != nil {
 		t.Fatalf("Wait error: %v", err)
 	}
 
-	msgs, err := sess.History(ctx)
+	msgs, err := sess.Timeline.Messages(ctx)
 	if err != nil || len(msgs) < 2 {
 		t.Fatalf("History error (%v) or too few messages (%d)", err, len(msgs))
 	}
@@ -1149,7 +1407,7 @@ func TestSendAndHistory(t *testing.T) {
 	}
 
 	// Verify session.History returns [User, Assistant] from the messages table
-	history, err := sess.History(ctx)
+	history, err := sess.Timeline.Messages(ctx)
 	if err != nil {
 		t.Fatalf("History error: %v", err)
 	}
@@ -1195,12 +1453,12 @@ func TestAppendMessageIsolationFromHarnessCheckpoints(t *testing.T) {
 	}
 
 	// Validation checks on appendMessage
-	if err := sess.appendMessage(ctx, nil); !errors.Is(err, ErrNilMessage) {
+	if err := testAppendMessage(ctx, sess, nil); !errors.Is(err, ErrNilMessage) {
 		t.Errorf("appendMessage nil message error = %v, want %v", err, ErrNilMessage)
 	}
 
 	// 1. Run a conversational turn via Send
-	if err := sess.Send(ctx, SendInput{Message: message.NewUserText("Hello agent")}); err != nil {
+	if err := sess.Send(ctx, api.SendRequest{Content: "Hello agent"}); err != nil {
 		t.Fatalf("Send error: %v", err)
 	}
 	if err := sess.Wait(ctx); err != nil {
@@ -1210,7 +1468,7 @@ func TestAppendMessageIsolationFromHarnessCheckpoints(t *testing.T) {
 	pub.reset()
 
 	// 2. Append a chat-only system message via appendMessage
-	if err := sess.appendMessage(ctx, message.NewSystemText("Notice from system")); err != nil {
+	if err := testAppendMessage(ctx, sess, message.NewSystemText("Notice from system")); err != nil {
 		t.Fatalf("appendMessage error: %v", err)
 	}
 
@@ -1225,7 +1483,7 @@ func TestAppendMessageIsolationFromHarnessCheckpoints(t *testing.T) {
 	}
 
 	// 3. Verify the RoleSystem message appears in session.History (messages table)
-	history, err := sess.History(ctx)
+	history, err := sess.Timeline.Messages(ctx)
 	if err != nil {
 		t.Fatalf("History error: %v", err)
 	}
@@ -1644,7 +1902,7 @@ func TestFileTrackerReloadAndDeleteSessionCleanup(t *testing.T) {
 	if err != nil {
 		t.Fatalf("permissions.New: %v", err)
 	}
-	mgr2, err := New(Config{
+	mgr2, err := newTestCoordinator(Config{
 		DB:          db,
 		Workspace:   ws,
 		Gateway:     func() gateway.Gateway { return gw },
@@ -1758,7 +2016,7 @@ func TestMultiStepToolExecutionAndFileTracker(t *testing.T) {
 
 	pub.reset()
 
-	if err := sess.Send(ctx, SendInput{Message: message.NewUserText("Read hello.txt please")}); err != nil {
+	if err := sess.Send(ctx, api.SendRequest{Content: "Read hello.txt please"}); err != nil {
 		t.Fatalf("Send error: %v", err)
 	}
 	if err := sess.Wait(ctx); err != nil {
@@ -1767,7 +2025,7 @@ func TestMultiStepToolExecutionAndFileTracker(t *testing.T) {
 
 	// Verify History in SQLite messages table contains:
 	// [User, Assistant(ToolCall), Tool(Result), Assistant(Final)] in exact id ASC order!
-	history, err := sess.History(ctx)
+	history, err := sess.Timeline.Messages(ctx)
 	if err != nil {
 		t.Fatalf("History error: %v", err)
 	}
@@ -1889,7 +2147,7 @@ func TestMultiPermissionInterruptAndAllOrNothingRespondPermission(t *testing.T) 
 	pub.reset()
 
 	// 1. Send triggers 2 write tool calls -> interrupts with 2 permissions
-	err = sess.Send(ctx, SendInput{Message: message.NewUserText("Write file1.txt and file2.txt")})
+	err = sess.Send(ctx, api.SendRequest{Content: "Write file1.txt and file2.txt"})
 	if err != nil {
 		t.Fatalf("Send error: %v", err)
 	}
@@ -1923,7 +2181,7 @@ func TestMultiPermissionInterruptAndAllOrNothingRespondPermission(t *testing.T) 
 	}
 
 	// Validation error checks on RespondPermission
-	if err := sess.Send(ctx, SendInput{
+	if err := sess.Send(ctx, api.SendRequest{
 		Decision: &api.PermissionDecision{
 			RequestID: pending[0].ID,
 			Kind:      "invalid_kind",
@@ -1931,7 +2189,7 @@ func TestMultiPermissionInterruptAndAllOrNothingRespondPermission(t *testing.T) 
 	}); !errors.Is(err, ErrInvalidDecision) {
 		t.Errorf("RespondPermission invalid kind error = %v, want %v", err, ErrInvalidDecision)
 	}
-	if err := sess.Send(ctx, SendInput{
+	if err := sess.Send(ctx, api.SendRequest{
 		Decision: &api.PermissionDecision{
 			RequestID: "non-existent-req-id",
 			Kind:      api.DecisionAllowOnce,
@@ -1943,7 +2201,7 @@ func TestMultiPermissionInterruptAndAllOrNothingRespondPermission(t *testing.T) 
 	pub.reset()
 
 	// 2. Respond to permission #1 ONLY -> must buffer decision and return WITHOUT calling the graph!
-	err = sess.Send(ctx, SendInput{
+	err = sess.Send(ctx, api.SendRequest{
 		Decision: &api.PermissionDecision{
 			RequestID: pending[0].ID,
 			Kind:      api.DecisionAllowOnce,
@@ -1979,7 +2237,7 @@ func TestMultiPermissionInterruptAndAllOrNothingRespondPermission(t *testing.T) 
 	}
 
 	// 3. Respond to permission #2 (rejecting it with feedback) -> triggers h.Resume!
-	err = sess.Send(ctx, SendInput{
+	err = sess.Send(ctx, api.SendRequest{
 		Decision: &api.PermissionDecision{
 			RequestID: pending[1].ID,
 			Kind:      api.DecisionReject,
@@ -1993,7 +2251,7 @@ func TestMultiPermissionInterruptAndAllOrNothingRespondPermission(t *testing.T) 
 		t.Fatalf("Wait error: %v", err)
 	}
 
-	history, err := sess.History(ctx)
+	history, err := sess.Timeline.Messages(ctx)
 	if err != nil {
 		t.Fatalf("History error: %v", err)
 	}
@@ -2035,7 +2293,7 @@ func TestMultiPermissionInterruptAndAllOrNothingRespondPermission(t *testing.T) 
 	if len(afterPerms) != 0 {
 		t.Errorf("expected 0 pending permissions after completion, got %d", len(afterPerms))
 	}
-	if err := sess.Send(ctx, SendInput{
+	if err := sess.Send(ctx, api.SendRequest{
 		Decision: &api.PermissionDecision{
 			RequestID: pending[0].ID,
 			Kind:      api.DecisionAllowOnce,
@@ -2125,7 +2383,7 @@ func TestCancelPendingPermissionsOnNewUserSend(t *testing.T) {
 	}
 
 	// 1. First Send pauses awaiting 2 permissions
-	err = sess.Send(ctx, SendInput{Message: message.NewUserText("Write cancel1.txt and cancel2.txt")})
+	err = sess.Send(ctx, api.SendRequest{Content: "Write cancel1.txt and cancel2.txt"})
 	if err != nil {
 		t.Fatalf("Send 1 error: %v", err)
 	}
@@ -2146,7 +2404,7 @@ func TestCancelPendingPermissionsOnNewUserSend(t *testing.T) {
 	}
 
 	// Buffer a partial decision for permission #1
-	if err := sess.Send(ctx, SendInput{
+	if err := sess.Send(ctx, api.SendRequest{
 		Decision: &api.PermissionDecision{
 			RequestID: pending[0].ID,
 			Kind:      api.DecisionAllowOnce,
@@ -2156,7 +2414,7 @@ func TestCancelPendingPermissionsOnNewUserSend(t *testing.T) {
 	}
 
 	// 2. Call Send with a new user message while permissions are pending!
-	err = sess.Send(ctx, SendInput{Message: message.NewUserText("Actually, cancel that and do something else")})
+	err = sess.Send(ctx, api.SendRequest{Content: "Actually, cancel that and do something else"})
 	if err != nil {
 		t.Fatalf("Send 2 error: %v", err)
 	}
@@ -2174,7 +2432,7 @@ func TestCancelPendingPermissionsOnNewUserSend(t *testing.T) {
 	// Verify History (ORDER BY id ASC) returns:
 	// [User1, Assistant1(ToolCalls), Tool1(Canceled), Tool2(Canceled), User2, Assistant2]
 	// in exact chronological order!
-	history, err := sess.History(ctx)
+	history, err := sess.Timeline.Messages(ctx)
 	if err != nil {
 		t.Fatalf("History error: %v", err)
 	}
@@ -2326,7 +2584,7 @@ func TestTimelineRecordEvents(t *testing.T) {
 
 	// 2. Append a user message and verify KindMessage entry
 	userMsg := message.NewUserText("Please review this code")
-	if err := sess.appendMessage(ctx, userMsg); err != nil {
+	if err := testAppendMessage(ctx, sess, userMsg); err != nil {
 		t.Fatalf("AppendMessage error: %v", err)
 	}
 
@@ -2438,7 +2696,7 @@ func TestTimelineRecordEvents(t *testing.T) {
 	}
 
 	// 6. Send tool-calling turn to trigger permission interrupt
-	if err := sess.Send(ctx, SendInput{Message: message.NewUserText("Write a file")}); err != nil {
+	if err := sess.Send(ctx, api.SendRequest{Content: "Write a file"}); err != nil {
 		t.Fatalf("Send error: %v", err)
 	}
 	if err := sess.Wait(ctx); err != nil {
@@ -2511,7 +2769,7 @@ func TestTimelineRecordEvents(t *testing.T) {
 	}
 
 	// 9. Verify History returns only KindMessage entries
-	history, err := sess.History(ctx)
+	history, err := sess.Timeline.Messages(ctx)
 	if err != nil {
 		t.Fatalf("History error: %v", err)
 	}
@@ -2594,7 +2852,7 @@ func TestTargetedSessionFixes(t *testing.T) {
 	}
 
 	// 3. Trigger permission interrupt and verify loadOrCacheSession restores StatusWaitingPermission
-	if err := sess.Send(ctx, SendInput{Message: message.NewUserText("write demo.txt")}); err != nil {
+	if err := sess.Send(ctx, api.SendRequest{Content: "write demo.txt"}); err != nil {
 		t.Fatalf("Send: %v", err)
 	}
 	if err := sess.Wait(ctx); err != nil {
@@ -2609,7 +2867,7 @@ func TestTargetedSessionFixes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("permissions.New: %v", err)
 	}
-	mgr2, err := New(Config{
+	mgr2, err := newTestCoordinator(Config{
 		DB:          db,
 		Workspace:   ws,
 		Gateway:     func() gateway.Gateway { return gw },
@@ -2675,13 +2933,13 @@ func TestSessionPermissionsPersistence(t *testing.T) {
 	}
 
 	// Verify directly in SQLite store
-	st, err := newStore(ctx, db)
+	st, err := NewStore(ctx, db)
 	if err != nil {
-		t.Fatalf("newStore: %v", err)
+		t.Fatalf("NewStore: %v", err)
 	}
-	dbSess, err := st.getSession(ctx, sess.ID)
+	dbSess, err := st.Get(ctx, sess.ID)
 	if err != nil {
-		t.Fatalf("st.getSession: %v", err)
+		t.Fatalf("st.Get: %v", err)
 	}
 	if !slices.Contains(dbSess.Permissions.Allow, "write(internal/**)") {
 		t.Fatalf("expected persisted permissions in store to contain allow rule, got %+v", dbSess.Permissions)
@@ -2692,7 +2950,7 @@ func TestSessionPermissionsPersistence(t *testing.T) {
 	if err != nil {
 		t.Fatalf("permissions.New: %v", err)
 	}
-	mgr2, err := New(Config{
+	mgr2, err := newTestCoordinator(Config{
 		DB:          db,
 		Workspace:   ws,
 		Gateway:     func() gateway.Gateway { return gw },
@@ -2717,12 +2975,13 @@ func TestSessionPermissionsPersistence(t *testing.T) {
 		Allow: []string{"write(internal/**)"},
 		Deny:  []string{"bash(*)"},
 	}
-	if err := st.updateSessionPermissions(ctx, sess.ID, newPerms); err != nil {
-		t.Fatalf("updateSessionPermissions: %v", err)
+	dbSess.Permissions = newPerms
+	if err := st.Save(ctx, dbSess); err != nil {
+		t.Fatalf("st.Save: %v", err)
 	}
-	dbSess2, err := st.getSession(ctx, sess.ID)
+	dbSess2, err := st.Get(ctx, sess.ID)
 	if err != nil {
-		t.Fatalf("st.getSession after update: %v", err)
+		t.Fatalf("st.Get after update: %v", err)
 	}
 	if !slices.Contains(dbSess2.Permissions.Deny, "bash(*)") {
 		t.Fatalf("expected updated deny rule in store, got %+v", dbSess2.Permissions)
@@ -2779,8 +3038,8 @@ func TestSessionAutoGenerateTitle(t *testing.T) {
 	}
 
 	// 2. Send first user message
-	err = sess.Send(ctx, SendInput{
-		Message: message.NewUserText("Help me refactor the database layer"),
+	err = sess.Send(ctx, api.SendRequest{
+		Content: "Help me refactor the database layer",
 	})
 	if err != nil {
 		t.Fatalf("sess.Send: %v", err)
@@ -2791,12 +3050,23 @@ func TestSessionAutoGenerateTitle(t *testing.T) {
 
 	// Wait for background title generator to complete
 	deadline := time.Now().Add(3 * time.Second)
+	var foundUpdatedEvent bool
 	for time.Now().Before(deadline) {
 		sess.Lock()
 		curTitle := sess.Title
 		sess.Unlock()
 		if curTitle != "" {
-			break
+			for _, r := range pub.recordedRecords() {
+				if r.topic == api.TopicSessions {
+					if uev, ok := r.event.(api.SessionUpdatedEvent); ok && uev.Session.ID == sess.ID && uev.Session.Title == "Database Refactoring" {
+						foundUpdatedEvent = true
+						break
+					}
+				}
+			}
+			if foundUpdatedEvent {
+				break
+			}
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
@@ -2820,23 +3090,14 @@ func TestSessionAutoGenerateTitle(t *testing.T) {
 	}
 
 	// Verify UpdatedEvent was published on api.TopicSessions
-	var foundUpdatedEvent bool
-	for _, r := range pub.recordedRecords() {
-		if r.topic == api.TopicSessions {
-			if uev, ok := r.event.(api.SessionUpdatedEvent); ok && uev.Session.ID == sess.ID && uev.Session.Title == "Database Refactoring" {
-				foundUpdatedEvent = true
-				break
-			}
-		}
-	}
 	if !foundUpdatedEvent {
 		t.Fatal("expected UpdatedEvent with generated title on TopicSessions")
 	}
 
 	// 4. Verify subsequent Send does not overwrite title
 	pub.reset()
-	err = sess.Send(ctx, SendInput{
-		Message: message.NewUserText("Another follow-up prompt"),
+	err = sess.Send(ctx, api.SendRequest{
+		Content: "Another follow-up prompt",
 	})
 	if err != nil {
 		t.Fatalf("sess.Send follow-up: %v", err)
@@ -2857,8 +3118,8 @@ func TestSessionAutoGenerateTitle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("mgr.Create sessManual: %v", err)
 	}
-	err = sessManual.Send(ctx, SendInput{
-		Message: message.NewUserText("First prompt in manual session"),
+	err = sessManual.Send(ctx, api.SendRequest{
+		Content: "First prompt in manual session",
 	})
 	if err != nil {
 		t.Fatalf("sessManual.Send: %v", err)
@@ -2936,7 +3197,7 @@ func TestSessionTitleRetriesAfterFailure(t *testing.T) {
 	}
 
 	// 1. First message: the title generator fails on its first attempt.
-	if err := sess.Send(ctx, SendInput{Message: message.NewUserText("Help me refactor the database layer")}); err != nil {
+	if err := sess.Send(ctx, api.SendRequest{Content: "Help me refactor the database layer"}); err != nil {
 		t.Fatalf("sess.Send (1): %v", err)
 	}
 	if err := sess.Wait(ctx); err != nil {
@@ -2968,7 +3229,7 @@ func TestSessionTitleRetriesAfterFailure(t *testing.T) {
 
 	// 2. Second message: because the latch was released, title generation retries
 	// and succeeds.
-	if err := sess.Send(ctx, SendInput{Message: message.NewUserText("Continue")}); err != nil {
+	if err := sess.Send(ctx, api.SendRequest{Content: "Continue"}); err != nil {
 		t.Fatalf("sess.Send (2): %v", err)
 	}
 	if err := sess.Wait(ctx); err != nil {
@@ -3054,7 +3315,7 @@ func TestSessionDirectShellEscape(t *testing.T) {
 	}
 
 	// 1. Send direct shell command "echo hello"
-	err = sess.Send(ctx, SendInput{
+	err = sess.Send(ctx, api.SendRequest{
 		Command: "echo hello",
 	})
 	if err != nil {
@@ -3097,7 +3358,7 @@ func TestSessionDirectShellEscape(t *testing.T) {
 	}
 
 	// sess.History only returns KindMessage entries; verify it returns none
-	msgs, err := sess.History(ctx)
+	msgs, err := sess.Timeline.Messages(ctx)
 	if err != nil {
 		t.Fatalf("sess.History: %v", err)
 	}
@@ -3127,8 +3388,8 @@ func TestSessionDirectShellEscape(t *testing.T) {
 	}
 
 	// 5. Send a normal user prompt and verify harness receives both previous command and new user prompt
-	err = sess.Send(ctx, SendInput{
-		Message: message.NewUserText("What did I just run?"),
+	err = sess.Send(ctx, api.SendRequest{
+		Content: "What did I just run?",
 	})
 	if err != nil {
 		t.Fatalf("sess.Send user prompt: %v", err)
@@ -3169,7 +3430,7 @@ func TestSessionDirectShellEscape(t *testing.T) {
 	}
 
 	// 7. Verify timeline messages do NOT have duplicate <bash_command> message
-	timelineMsgs, err := sess.History(ctx)
+	timelineMsgs, err := sess.Timeline.Messages(ctx)
 	if err != nil {
 		t.Fatalf("sess.History after turn: %v", err)
 	}
@@ -3197,7 +3458,7 @@ func TestSessionEnqueueCommandWhileRunning(t *testing.T) {
 	}
 
 	// 1. Send first command that sleeps briefly
-	if err := sess.Send(ctx, SendInput{Command: "sleep 0.1 && echo first"}); err != nil {
+	if err := sess.Send(ctx, api.SendRequest{Command: "sleep 0.1 && echo first"}); err != nil {
 		t.Fatalf("sess.Send first command: %v", err)
 	}
 
@@ -3213,10 +3474,10 @@ func TestSessionEnqueueCommandWhileRunning(t *testing.T) {
 	}
 
 	// 2. While running, enqueue second and third commands
-	if err := sess.Send(ctx, SendInput{Command: "echo second"}); err != nil {
+	if err := sess.Send(ctx, api.SendRequest{Command: "echo second"}); err != nil {
 		t.Fatalf("sess.Send second command: %v", err)
 	}
-	if err := sess.Send(ctx, SendInput{Command: "echo third"}); err != nil {
+	if err := sess.Send(ctx, api.SendRequest{Command: "echo third"}); err != nil {
 		t.Fatalf("sess.Send third command: %v", err)
 	}
 
@@ -3306,7 +3567,7 @@ func TestSessionEnqueueCommandDuringTurn(t *testing.T) {
 	}
 
 	// 1. Start a turn
-	if err := sess.Send(ctx, SendInput{Message: message.NewUserText("Hello")}); err != nil {
+	if err := sess.Send(ctx, api.SendRequest{Content: "Hello"}); err != nil {
 		t.Fatalf("sess.Send message: %v", err)
 	}
 
@@ -3314,7 +3575,7 @@ func TestSessionEnqueueCommandDuringTurn(t *testing.T) {
 	<-turnStarted
 
 	// 2. While turn is running, send a direct command
-	if err := sess.Send(ctx, SendInput{Command: "echo while_turn"}); err != nil {
+	if err := sess.Send(ctx, api.SendRequest{Command: "echo while_turn"}); err != nil {
 		t.Fatalf("sess.Send command during turn: %v", err)
 	}
 
@@ -3382,13 +3643,13 @@ func TestQueueKindTaskFilteredAndNoEvent(t *testing.T) {
 	}
 
 	// 1. Start a turn
-	if err := sess.Send(ctx, SendInput{Message: message.NewUserText("Hello")}); err != nil {
+	if err := sess.Send(ctx, api.SendRequest{Content: "Hello"}); err != nil {
 		t.Fatalf("sess.Send: %v", err)
 	}
 	<-turnStarted
 
 	// 2. Enqueue a user message while running -> should emit QueueUpdatedEvent
-	if err := sess.Send(ctx, SendInput{Message: message.NewUserText("Queued user message")}); err != nil {
+	if err := sess.Send(ctx, api.SendRequest{Content: "Queued user message"}); err != nil {
 		t.Fatalf("sess.Send queued: %v", err)
 	}
 
@@ -3415,7 +3676,7 @@ func TestQueueKindTaskFilteredAndNoEvent(t *testing.T) {
 	if len(vis) != 1 {
 		t.Fatalf("expected VisibleQueue to have only 1 item, got %d: %+v", len(vis), vis)
 	}
-	if vis[0].Kind != QueueKindMessage {
+	if vis[0].Kind != api.QueueKindMessage {
 		t.Fatalf("expected VisibleQueue[0] to be QueueKindMessage, got %s", vis[0].Kind)
 	}
 
@@ -3424,7 +3685,7 @@ func TestQueueKindTaskFilteredAndNoEvent(t *testing.T) {
 	qLen := len(sess.queue)
 	var hasTaskKind bool
 	for _, it := range sess.queue {
-		if it.Kind == QueueKindTask {
+		if it.Kind == api.QueueKindTask {
 			hasTaskKind = true
 		}
 	}
@@ -3509,7 +3770,7 @@ func TestSessionTodosRestoreOnLoad(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 
-	if err := sess.Send(ctx, SendInput{Message: message.NewUserText("Make checklist")}); err != nil {
+	if err := sess.Send(ctx, api.SendRequest{Content: "Make checklist"}); err != nil {
 		t.Fatalf("Send: %v", err)
 	}
 	if err := sess.Wait(ctx); err != nil {
@@ -3544,7 +3805,7 @@ func TestSessionTodosRestoreOnLoad(t *testing.T) {
 	if err != nil {
 		t.Fatalf("permissions.New: %v", err)
 	}
-	mgr2, err := New(Config{
+	mgr2, err := newTestCoordinator(Config{
 		DB:          db,
 		Workspace:   ws,
 		Gateway:     func() gateway.Gateway { return gw },
@@ -3591,8 +3852,8 @@ func TestSessionSendCompactDirect(t *testing.T) {
 	}
 
 	// Invalid input: Compact combined with Message
-	err = sess.Send(ctx, SendInput{
-		Message: message.NewUserText("hello"),
+	err = sess.Send(ctx, api.SendRequest{
+		Content: "hello",
 		Compact: &api.CompactRequest{Focus: "focus"},
 	})
 	if err == nil {
@@ -3600,8 +3861,8 @@ func TestSessionSendCompactDirect(t *testing.T) {
 	}
 
 	// 1. Initial turn with user message
-	err = sess.Send(ctx, SendInput{
-		Message: message.NewUserText("First prompt"),
+	err = sess.Send(ctx, api.SendRequest{
+		Content: "First prompt",
 	})
 	if err != nil {
 		t.Fatalf("sess.Send message: %v", err)
@@ -3611,7 +3872,7 @@ func TestSessionSendCompactDirect(t *testing.T) {
 	}
 
 	// 2. Direct compact while idle
-	err = sess.Send(ctx, SendInput{
+	err = sess.Send(ctx, api.SendRequest{
 		Compact: &api.CompactRequest{Focus: "preserve test instructions"},
 	})
 	if err != nil {
@@ -3643,7 +3904,7 @@ func TestSessionSendCompactDirect(t *testing.T) {
 	sess.Lock()
 	sess.Running = true
 	sess.Unlock()
-	err = sess.Send(ctx, SendInput{
+	err = sess.Send(ctx, api.SendRequest{
 		Compact: &api.CompactRequest{Focus: "should fail"},
 	})
 	sess.Lock()
@@ -3720,8 +3981,7 @@ Reviewer agent.
 	}
 
 	// First turn: builds tools for coder
-	userMsg := message.NewUserText("start")
-	if err := sess.Send(ctx, SendInput{Message: userMsg}); err != nil {
+	if err := sess.Send(ctx, api.SendRequest{Content: "start"}); err != nil {
 		t.Fatalf("sess.Send: %v", err)
 	}
 	if err := sess.Wait(ctx); err != nil {
@@ -3750,8 +4010,7 @@ Reviewer agent.
 	}
 
 	// Second turn: triggers rebuilding tools for reviewer
-	userMsg2 := message.NewUserText("review now")
-	if err := sess.Send(ctx, SendInput{Message: userMsg2}); err != nil {
+	if err := sess.Send(ctx, api.SendRequest{Content: "review now"}); err != nil {
 		t.Fatalf("sess.Send 2: %v", err)
 	}
 	if err := sess.Wait(ctx); err != nil {
@@ -3806,15 +4065,14 @@ Follow these instructions carefully.`
 		t.Fatalf("mgr.Create: %v", err)
 	}
 
-	userMsg := message.NewUserText("/test-skill help me do something")
-	if err := sess.Send(ctx, SendInput{Message: userMsg}); err != nil {
+	if err := sess.Send(ctx, api.SendRequest{Content: "/test-skill help me do something"}); err != nil {
 		t.Fatalf("sess.Send: %v", err)
 	}
 	if err := sess.Wait(ctx); err != nil {
 		t.Fatalf("sess.Wait: %v", err)
 	}
 
-	hist, err := sess.History(ctx)
+	hist, err := sess.Timeline.Messages(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -3831,5 +4089,222 @@ Follow these instructions carefully.`
 	}
 	if !strings.Contains(text, `Supporting assets and files for this skill are located in ".agents/skills/test-skill".`) {
 		t.Errorf("expected supporting assets note in: %s", text)
+	}
+}
+
+func TestDirectSessionPackageAPIs(t *testing.T) {
+	ctx := context.Background()
+	db, ws, gw, pub, _ := setupTestEnv(t, nil)
+	permMgr, err := permissions.New(permissions.Config{Workspace: ws})
+	if err != nil {
+		t.Fatalf("permissions.New: %v", err)
+	}
+
+	// 1. Test SessionDir
+	dir, err := SessionDir(ws.RootDir(), "test-sess-123")
+	if err != nil {
+		t.Fatalf("SessionDir: %v", err)
+	}
+	if !strings.HasSuffix(dir, filepath.Join("sessions", "test-sess-123")) {
+		t.Errorf("unexpected SessionDir: %s", dir)
+	}
+
+	// 2. Test Preview
+	cat := ws.Catalog()
+	catalog, err := models.Build(cat, gw)
+	if err != nil {
+		t.Fatalf("models.Build: %v", err)
+	}
+	cfg, model, diags, found, err := Preview(ctx, ws, catalog, api.SessionConfig{
+		Agent: "main",
+		Model: "fake/fake-default-model",
+	})
+	if err != nil {
+		t.Fatalf("Preview error: %v", err)
+	}
+	if cfg.Agent != "main" || cfg.Model != "fake/fake-default-model" {
+		t.Errorf("unexpected preview config: %+v", cfg)
+	}
+	if !found || model.ID != "fake/fake-default-model" {
+		t.Errorf("unexpected preview model: found=%v, id=%s", found, model.ID)
+	}
+	if len(diags) != 1 || diags[0].Code != "temperature_unknown" {
+		t.Errorf("unexpected preview diagnostics: %+v", diags)
+	}
+
+	// 3. Test New
+	store, err := NewStore(ctx, db)
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	sess, err := New(ctx, Config{
+		Title:       "Direct Session",
+		Session:     api.SessionConfig{Agent: "main", Model: "fake/fake-default-model"},
+		DB:          db,
+		Workspace:   ws,
+		Gateway:     func() gateway.Gateway { return gw },
+		Catalog:     func() *models.Catalog { return catalog },
+		Permissions: permMgr,
+		Publisher:   pub,
+		Logger:      log.Default(),
+	})
+	if err != nil {
+		t.Fatalf("session.New: %v", err)
+	}
+	defer sess.Close()
+
+	if sess.ID == "" {
+		t.Fatal("expected non-empty session ID")
+	}
+	if sess.Timeline == nil || sess.Journal == nil || sess.Harness == nil {
+		t.Fatal("expected initialized Timeline, Journal, and Harness")
+	}
+
+	// 4. Test Matches
+	if err := sess.Matches(api.CreateSessionRequest{Title: "Direct Session", Config: api.SessionConfig{Agent: "main", Model: "fake/fake-default-model"}}); err != nil {
+		t.Errorf("Matches expected nil error, got: %v", err)
+	}
+	if err := sess.Matches(api.CreateSessionRequest{Title: "Different Title"}); !errors.Is(err, ErrSessionConflict) {
+		t.Errorf("Matches expected ErrSessionConflict on different title, got: %v", err)
+	}
+
+	// 5. Test Update
+	if err := sess.Update(ctx, api.UpdateSessionRequest{
+		Title: "Updated Direct Title",
+		Config: api.SessionConfig{
+			Mode: api.ModeAuto,
+		},
+	}); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if sess.Title != "Updated Direct Title" {
+		t.Errorf("expected updated title, got %s", sess.Title)
+	}
+	if sess.Config.Mode != api.ModeAuto {
+		t.Errorf("expected updated mode, got %s", sess.Config.Mode)
+	}
+
+	// 6. Test Refresh
+	sess.Refresh(ctx)
+
+	// 7. Test CheckpointTo and Open
+	if err := sess.CheckpointTo(ctx, store); err != nil {
+		t.Fatalf("CheckpointTo: %v", err)
+	}
+	dbSess, err := store.Get(ctx, sess.ID)
+	if err != nil {
+		t.Fatalf("store.Get: %v", err)
+	}
+	opened, err := Open(ctx, dbSess, Config{
+		DB:          db,
+		Workspace:   ws,
+		Gateway:     func() gateway.Gateway { return gw },
+		Catalog:     func() *models.Catalog { return catalog },
+		Permissions: permMgr,
+		Publisher:   pub,
+		Logger:      log.Default(),
+	})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer opened.Close()
+
+	if opened.ID != sess.ID {
+		t.Errorf("opened.ID = %s, want %s", opened.ID, sess.ID)
+	}
+	if opened.Title != "Updated Direct Title" {
+		t.Errorf("opened.Title = %s, want %s", opened.Title, "Updated Direct Title")
+	}
+}
+
+func TestSessionSendValidation(t *testing.T) {
+	ctx := context.Background()
+	prov := &fakeProvider{}
+	_, _, _, _, mgr := setupTestEnv(t, prov)
+
+	sess, _, err := mgr.Create(ctx, api.CreateSessionRequest{Title: "Validation Test"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	// 1. Uninitialized session
+	var nilSess *Session
+	if err := nilSess.Send(ctx, api.SendRequest{Content: "test"}); err == nil || !strings.Contains(err.Error(), "uninitialized session") {
+		t.Errorf("nil session Send err = %v, want uninitialized error", err)
+	}
+
+	// 2. Empty message
+	if err := sess.Send(ctx, api.SendRequest{}); !errors.Is(err, ErrEmptyMessage) {
+		t.Errorf("empty Send err = %v, want %v", err, ErrEmptyMessage)
+	}
+
+	// 3. Invalid UUIDv7 ID
+	if err := sess.Send(ctx, api.SendRequest{ID: "invalid-uuid", Content: "hello"}); !errors.Is(err, ErrInvalidConfig) || !strings.Contains(err.Error(), "invalid message id") {
+		t.Errorf("invalid id err = %v, want ErrInvalidConfig", err)
+	}
+
+	// 4. Question combined with ID
+	validID := uuid.Must(uuid.NewV7()).String()
+	if err := sess.Send(ctx, api.SendRequest{ID: validID, Question: &api.QuestionResponse{RequestID: "q1"}}); !errors.Is(err, ErrInvalidConfig) || !strings.Contains(err.Error(), "cannot combine question/decision with id") {
+		t.Errorf("question with id err = %v, want ErrInvalidConfig", err)
+	}
+
+	// 5. Decision combined with ID
+	if err := sess.Send(ctx, api.SendRequest{ID: validID, Decision: &api.PermissionDecision{RequestID: "p1", Kind: api.DecisionAllowOnce}}); !errors.Is(err, ErrInvalidConfig) || !strings.Contains(err.Error(), "cannot combine question/decision with id") {
+		t.Errorf("decision with id err = %v, want ErrInvalidConfig", err)
+	}
+
+	// 6. Compact combined with other input
+	if err := sess.Send(ctx, api.SendRequest{Compact: &api.CompactRequest{}, Content: "text"}); !errors.Is(err, ErrInvalidConfig) || !strings.Contains(err.Error(), "cannot combine compaction request with other input") {
+		t.Errorf("compact with content err = %v, want ErrInvalidConfig", err)
+	}
+
+	// 7. Question combined with other input
+	if err := sess.Send(ctx, api.SendRequest{Question: &api.QuestionResponse{RequestID: "q1"}, Command: "ls"}); !errors.Is(err, ErrInvalidConfig) || !strings.Contains(err.Error(), "cannot combine question response with other input") {
+		t.Errorf("question with command err = %v, want ErrInvalidConfig", err)
+	}
+
+	// 8. Decision combined with other input
+	if err := sess.Send(ctx, api.SendRequest{Decision: &api.PermissionDecision{RequestID: "p1"}, Command: "ls"}); !errors.Is(err, ErrInvalidConfig) || !strings.Contains(err.Error(), "cannot specify both message and decision") {
+		t.Errorf("decision with command err = %v, want ErrInvalidConfig", err)
+	}
+
+	// 9. Command combined with message
+	if err := sess.Send(ctx, api.SendRequest{Command: "ls", Content: "hello"}); !errors.Is(err, ErrInvalidConfig) || !strings.Contains(err.Error(), "cannot specify both message and command") {
+		t.Errorf("command with content err = %v, want ErrInvalidConfig", err)
+	}
+
+	// 10. Unsupported block types in user message
+	for _, block := range []api.Block{
+		{Type: "image"},
+		{Type: api.BlockReasoning, Text: "thought"},
+		{Type: api.BlockToolCall, ToolCall: &api.ToolCall{ID: "tc1", Name: "view"}},
+	} {
+		err := sess.Send(ctx, api.SendRequest{Content: "text", Blocks: []api.Block{block}})
+		if !errors.Is(err, ErrInvalidConfig) || !strings.Contains(err.Error(), "block 0") {
+			t.Errorf("invalid block %+v err = %v, want ErrInvalidConfig block 0", block, err)
+		}
+	}
+
+	// 11. Empty text block
+	emptyBlock := api.Block{Type: api.BlockText, Text: ""}
+	err = sess.Send(ctx, api.SendRequest{Blocks: []api.Block{emptyBlock}})
+	if !errors.Is(err, ErrInvalidConfig) || !strings.Contains(err.Error(), "invalid or unsupported block 0") {
+		t.Errorf("empty text block err = %v, want ErrInvalidConfig block 0", err)
+	}
+
+	// 12. Valid Send with explicit UUIDv7 ID
+	if err := sess.Send(ctx, api.SendRequest{ID: validID, Content: "valid message with ID"}); err != nil {
+		t.Fatalf("valid Send err: %v", err)
+	}
+	if err := sess.Wait(ctx); err != nil {
+		t.Fatalf("Wait err: %v", err)
+	}
+	hist, err := sess.Timeline.Messages(ctx)
+	if err != nil {
+		t.Fatalf("History err: %v", err)
+	}
+	if len(hist) < 1 || hist[0].GetID() != validID {
+		t.Errorf("expected first message ID %s, got %+v", validID, hist)
 	}
 }

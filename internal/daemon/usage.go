@@ -61,7 +61,7 @@ func (d *Daemon) SessionUsage(ctx context.Context, rawWS, id string) (*api.Sessi
 	if err != nil {
 		return nil, err
 	}
-	sess, err := rt.Sessions().Get(ctx, id)
+	sess, err := rt.GetSession(ctx, id)
 	if err != nil {
 		return nil, err
 	}
@@ -111,7 +111,7 @@ func (d *Daemon) fillSessionTitles(ctx context.Context, rawWS string, summary *a
 	if err != nil {
 		return
 	}
-	sessions, err := rt.Sessions().List(ctx)
+	sessions, err := rt.ListSessions(ctx)
 	if err != nil {
 		return
 	}

@@ -24,14 +24,11 @@ func TestSessionTasksInitAndBackgroundUpdate(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 
-	m := mgr.(*manager)
-	m.mu.Lock()
-	sess := m.sessions[sMeta.ID]
-	m.mu.Unlock()
-
-	if err := sess.initResources(ctx); err != nil {
-		t.Fatalf("initResources: %v", err)
+	sess, err := mgr.Get(ctx, sMeta.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
 	}
+
 	if sess.Tasks == nil {
 		t.Fatal("expected sess.Tasks to be initialized")
 	}
@@ -141,13 +138,9 @@ func TestSessionOnTaskUpdateCompletedNotification(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 
-	m := mgr.(*manager)
-	m.mu.Lock()
-	sess := m.sessions[sMeta.ID]
-	m.mu.Unlock()
-
-	if err := sess.initResources(ctx); err != nil {
-		t.Fatalf("initResources: %v", err)
+	sess, err := mgr.Get(ctx, sMeta.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
 	}
 
 	// Simulate session running so Enqueue queues into inbox
@@ -230,13 +223,9 @@ func TestSessionBackgroundNotificationDoesNotAppearInTimeline(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 
-	m := mgr.(*manager)
-	m.mu.Lock()
-	sess := m.sessions[sMeta.ID]
-	m.mu.Unlock()
-
-	if err := sess.initResources(ctx); err != nil {
-		t.Fatalf("initResources: %v", err)
+	sess, err := mgr.Get(ctx, sMeta.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
 	}
 
 	// Enqueue notification directly while session is idle

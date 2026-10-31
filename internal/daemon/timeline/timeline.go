@@ -34,6 +34,17 @@ type sqliteTimeline struct {
 
 var _ Timeline = (*sqliteTimeline)(nil)
 
+// Migrate executes SQLite migrations for timeline schema.
+func Migrate(ctx context.Context, db *sql.DB) error {
+	if db == nil {
+		return ErrInvalidConfig
+	}
+	if err := sqlite.Migrate(ctx, db, "timeline", migrations); err != nil {
+		return fmt.Errorf("timeline: migrate schema: %w", err)
+	}
+	return nil
+}
+
 // New creates and initializes a session-scoped Timeline, running migrations on the provided db.
 func New(ctx context.Context, db *sql.DB, sessionID string) (Timeline, error) {
 	if db == nil {
@@ -43,8 +54,8 @@ func New(ctx context.Context, db *sql.DB, sessionID string) (Timeline, error) {
 	if sessionID == "" {
 		return nil, ErrEmptySessionID
 	}
-	if err := sqlite.Migrate(ctx, db, "timeline", migrations); err != nil {
-		return nil, fmt.Errorf("timeline: migrate schema: %w", err)
+	if err := Migrate(ctx, db); err != nil {
+		return nil, err
 	}
 	return &sqliteTimeline{db: db, sessionID: sessionID}, nil
 }

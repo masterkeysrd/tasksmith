@@ -18,7 +18,7 @@ flowchart TD
         RuntimePool["Workspace Runtime Pool\n(Content-Addressable by Root Path)"]
 
         subgraph RuntimeInstance ["Workspace Runtime Instance"]
-            SessMgr["Session Manager\n(State Machine & Orchestration)"]
+            SessCoord["Session Coordinator\n(State Machine & Store Orchestration)"]
             Timeline["Timeline & Snapshot Engine\n(Unified Diffs & Reverts)"]
             Journal["Durable SQLite Journal\n(Event Log & Turn History)"]
             PermMgr["Permission & Guard Manager\n(AST & Path Policies)"]
@@ -46,9 +46,9 @@ TaskSmith operates as an on-demand, headless background process listening on a l
 
 ### 2. Workspace Runtime Pool
 The daemon maintains a pool of active workspace runtimes indexed by canonical root path:
-- **Workspace Isolation**: Each workspace executes inside its own runtime containing a dedicated session manager, timeline tracker, permission evaluator, and tool container.
+- **Workspace Isolation**: Each workspace executes inside its own runtime directly coordinating its session store, active sessions, timeline tracker, permission evaluator, and tool container.
 - **Zero-Downtime Hot Reloading**: Changes to `.agents/`, `.env`, or workspace configurations trigger automatic in-memory reloads without terminating active sessions.
-- **Model Catalog**: Each workspace indexes model manifests at load and lazily merges provider profiles on first access. Reload replaces the catalog; existing model snapshots remain unchanged.
+- **Model Catalog**: Each workspace builds its model catalog at load time by merging workspace model manifests with provider profiles into an in-memory snapshot. Reload replaces the catalog atomically; existing model snapshots remain unchanged.
 - **Resource De-duplication**: Sibling Git worktrees and independent workspaces sharing identical provider setups automatically share underlying connection pools in the content-addressable Gateway Pool.
 
 ### 3. Session State Machine & Durable Journal
