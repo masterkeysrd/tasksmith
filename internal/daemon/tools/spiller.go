@@ -50,7 +50,7 @@ type Spiller interface {
 // SpillerConfig configures the Spiller.
 type SpillerConfig struct {
 	BaseDir      string // base directory (e.g. from xdg.WorkspaceDir(rootDir)); required if Workspace is nil
-	Workspace    workspace.Workspace
+	Workspace    *workspace.Workspace
 	MaxBytes     int
 	MaxLines     int
 	HeadLines    int

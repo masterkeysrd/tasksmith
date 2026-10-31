@@ -14,7 +14,7 @@ import (
 	"github.com/masterkeysrd/loom/profile"
 	loomopenai "github.com/masterkeysrd/loom/providers/openai"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/models"
-	"github.com/masterkeysrd/tasksmith/internal/daemon/workspace"
+	"github.com/masterkeysrd/warp"
 	"github.com/openai/openai-go/v3"
 )
 
@@ -688,7 +688,7 @@ func TestGatewayModelProfile(t *testing.T) {
 	}
 	defer gw.Close()
 
-	merged := models.Merge("test-openai/custom-spec-model", "openai", &workspace.ProviderModel{ID: "custom-spec-model", Name: "Custom Spec Model", Limits: workspace.ModelLimits{Context: 256000, Output: 32000}}, nil)
+	merged := models.Merge("test-openai/custom-spec-model", "openai", &warp.ProviderModel{ID: "custom-spec-model", Name: "Custom Spec Model", Limits: warp.ProviderModelLimits{Context: 256000, Output: 32000}}, nil)
 	if merged.Limits.Context != 256000 || merged.Limits.Output != 32000 {
 		t.Errorf("unexpected limits from spec: %+v", merged.Limits)
 	}
@@ -786,7 +786,7 @@ func TestGatewayModelProfile_MergedOverrides(t *testing.T) {
 	if !ok {
 		t.Fatal("expected built-in profile")
 	}
-	prof := models.Merge("test-openai/gpt-4o", "openai", &workspace.ProviderModel{ID: "gpt-4o", Name: "Custom GPT-4o Override", Limits: workspace.ModelLimits{Context: 300000, Output: 40000}}, &base)
+	prof := models.Merge("test-openai/gpt-4o", "openai", &warp.ProviderModel{ID: "gpt-4o", Name: "Custom GPT-4o Override", Limits: warp.ProviderModelLimits{Context: 300000, Output: 40000}}, &base)
 	if prof.Name != "Custom GPT-4o Override" {
 		t.Errorf("Name = %q, want 'Custom GPT-4o Override'", prof.Name)
 	}
@@ -817,7 +817,7 @@ func TestModelResolutionWithSlashInModelID(t *testing.T) {
 	}
 	defer gw.Close()
 
-	effective := models.Merge("mlx-serve/ddalcu/Qwen3.8-27B-MLX-Serve-4bit", "ollama", &workspace.ProviderModel{ID: "ddalcu/Qwen3.8-27B-MLX-Serve-4bit", Limits: workspace.ModelLimits{Context: 262144, Output: 32768}}, nil)
+	effective := models.Merge("mlx-serve/ddalcu/Qwen3.8-27B-MLX-Serve-4bit", "ollama", &warp.ProviderModel{ID: "ddalcu/Qwen3.8-27B-MLX-Serve-4bit", Limits: warp.ProviderModelLimits{Context: 262144, Output: 32768}}, nil)
 	m, err := gw.LLM(ctx, effective, llm.ModelConfig{})
 	if err != nil {
 		t.Fatalf("LLM unexpected error: %v", err)

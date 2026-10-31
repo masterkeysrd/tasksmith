@@ -13,7 +13,7 @@
 //   - [Config.Workspace]: Active [github.com/masterkeysrd/tasksmith/internal/daemon/workspace.Workspace]
 //     used to resolve session agents, default completion models, tool policies,
 //     and dynamic system prompts.
-//   - [Config.Gateway]: Active [github.com/masterkeysrd/tasksmith/internal/daemon/gateway.Gateway]
+//   - [Config.Gateway]: Active [github.com/masterkeysrd/tasksmith/internal/daemon/gateway.Gateway] getter
 //     used to resolve concrete [github.com/masterkeysrd/loom/llm.Model] instances.
 //   - [Config.Sandbox]: Active [github.com/masterkeysrd/tasksmith/internal/daemon/sandbox.Sandbox]
 //     used for isolated filesystem, command, and network execution across the

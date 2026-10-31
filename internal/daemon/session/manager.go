@@ -30,8 +30,8 @@ import (
 // Config holds runtime dependencies required to construct a [Manager].
 type Config struct {
 	DB          *sql.DB
-	Workspace   workspace.Workspace
-	Gateway     gateway.Gateway
+	Workspace   *workspace.Workspace
+	Gateway     func() gateway.Gateway
 	Publisher   Publisher
 	Logger      log.Interface
 	Permissions permissions.Manager
@@ -80,8 +80,8 @@ type Manager interface {
 type manager struct {
 	db         *sql.DB
 	store      *store
-	workspace  workspace.Workspace
-	gateway    gateway.Gateway
+	workspace  *workspace.Workspace
+	gateway    func() gateway.Gateway
 	publisher  Publisher
 	logger     log.Interface
 	perms      permissions.Manager
@@ -116,7 +116,7 @@ func New(cfg Config) (Manager, error) {
 		cfg.ReloadLock = &sync.RWMutex{}
 	}
 	if cfg.Catalog == nil {
-		catalog, err := models.Build(cfg.Workspace, cfg.Gateway)
+		catalog, err := models.Build(cfg.Workspace.Catalog(), cfg.Gateway())
 		if err != nil {
 			return nil, fmt.Errorf("session: build model catalog: %w", err)
 		}
@@ -165,7 +165,7 @@ func (m *manager) matchesParams(s *Session, params CreateParams) error {
 	if wantTitle != "" && s.Title != wantTitle {
 		return ErrSessionConflict
 	}
-	wantAgent, wantModel := models.ResolveAgentModel(m.workspace, m.catalog(), params.Config.Agent, params.Config.Model)
+	wantAgent, wantModel := models.ResolveAgentModel(m.workspace.Catalog(), m.catalog(), params.Config.Agent, params.Config.Model)
 	if wantAgent != "" && s.Config.Agent != wantAgent {
 		return ErrSessionConflict
 	}
@@ -386,7 +386,7 @@ func (m *manager) resolveConfig(config SessionConfig) (SessionConfig, error) {
 		return SessionConfig{}, fmt.Errorf("%w: unsupported permission mode %q", ErrInvalidConfig, config.Mode)
 	}
 
-	agent, modelID := models.ResolveAgentModel(m.workspace, m.catalog(), config.Agent, config.Model)
+	agent, modelID := models.ResolveAgentModel(m.workspace.Catalog(), m.catalog(), config.Agent, config.Model)
 	if config.Thinking != nil {
 		if err := m.validateThinking(modelID, config.Thinking); err != nil {
 			return SessionConfig{}, fmt.Errorf("%w: %v", ErrInvalidConfig, err)
@@ -508,9 +508,9 @@ func (m *manager) Update(ctx context.Context, id string, params UpdateParams) (*
 		newConfig.Agent = agent
 	}
 	if model := models.ID(strings.TrimSpace(string(params.Config.Model))); model != "" {
-		_, newConfig.Model = models.ResolveAgentModel(m.workspace, m.catalog(), newConfig.Agent, model)
+		_, newConfig.Model = models.ResolveAgentModel(m.workspace.Catalog(), m.catalog(), newConfig.Agent, model)
 	} else if strings.TrimSpace(params.Config.Agent) != "" && sess.Config.Model == "" {
-		_, newConfig.Model = models.ResolveAgentModel(m.workspace, m.catalog(), newConfig.Agent, "")
+		_, newConfig.Model = models.ResolveAgentModel(m.workspace.Catalog(), m.catalog(), newConfig.Agent, "")
 	}
 	if (oldConfig.Model != newConfig.Model || oldConfig.Agent != newConfig.Agent) && newConfig.Thinking != nil {
 		if err := m.validateThinking(newConfig.Model, newConfig.Thinking); errors.Is(err, models.ErrInvalidConfig) {
@@ -600,7 +600,7 @@ func (m *manager) Update(ctx context.Context, id string, params UpdateParams) (*
 		if model, ok := m.catalog().Get(newConfig.Model); ok {
 			limits = model.Limits
 		}
-		breakdown := m.workspace.AgentContext(newConfig.Agent)
+		breakdown := m.workspace.Catalog().AgentContext(newConfig.Agent)
 		staticCtx := harness.StaticContextFromBreakdown(breakdown)
 		sess.Lock()
 		res, trig := harness.CompactionTriggerTokens(limits)

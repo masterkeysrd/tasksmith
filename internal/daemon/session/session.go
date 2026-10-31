@@ -113,8 +113,8 @@ type Session struct {
 
 	db         *sql.DB               `json:"-"`
 	store      *store                `json:"-"`
-	workspace  workspace.Workspace   `json:"-"`
-	gateway    gateway.Gateway       `json:"-"`
+	workspace  *workspace.Workspace  `json:"-"`
+	gateway    func() gateway.Gateway `json:"-"`
 	catalog    func() models.Catalog `json:"-"`
 	metrics    metrics.Service       `json:"-"`
 	reloadLock *sync.RWMutex         `json:"-"`
@@ -180,9 +180,9 @@ func (s *Session) ResolvedModel() (models.Model, *api.ThinkingSetting, bool) {
 		return models.Model{}, nil, false
 	}
 	var thinking *api.ThinkingSetting
-	if s.workspace != nil {
-		if agent, found := s.workspace.GetAgent(s.Config.Agent); found && agent != nil {
-			thinking = AgentThinking(agent.Thinking)
+	if s.workspace != nil && s.workspace.Catalog() != nil {
+		if agent, found := s.workspace.Catalog().GetAgent(s.Config.Agent); found {
+			thinking = agent.Thinking
 		}
 	}
 	return m, thinking, true
@@ -250,8 +250,8 @@ func (s *Session) initResources(ctx context.Context) error {
 
 	if s.Tools == nil {
 		initialAgent := s.Config.Agent
-		if initialAgent == "" && s.workspace != nil {
-			initialAgent = s.workspace.DefaultAgentName()
+		if initialAgent == "" && s.workspace != nil && s.workspace.Catalog() != nil {
+			initialAgent = s.workspace.Catalog().DefaultAgentName()
 		}
 		container, err := s.buildToolsForAgent(initialAgent)
 		if err != nil {
@@ -314,14 +314,17 @@ func (s *Session) buildHarness(ctx context.Context) (harness.Harness, error) {
 	if err != nil {
 		return nil, fmt.Errorf("session: configure model %q: %w", modelName, err)
 	}
-	llmModel, err := s.gateway.LLM(ctx, model, cfg)
+	llmModel, err := s.gateway().LLM(ctx, model, cfg)
 	limits := model.Limits
 	if err != nil {
 		return nil, fmt.Errorf("session: resolve model %q: %w", modelName, err)
 	}
 
 	systemPrompt := s.renderSystemPrompt(agentName)
-	agentBreakdown := s.workspace.AgentContext(agentName)
+	var agentBreakdown api.ContextBreakdown
+	if s.workspace != nil && s.workspace.Catalog() != nil {
+		agentBreakdown = s.workspace.Catalog().AgentContext(agentName)
+	}
 	staticCtx := harness.StaticContextFromBreakdown(agentBreakdown)
 
 	container, err := s.buildToolsForAgent(agentName)
@@ -361,18 +364,25 @@ func (s *Session) buildHarness(ctx context.Context) (harness.Harness, error) {
 }
 
 func (s *Session) renderSystemPrompt(agentName string) string {
-	wsPrompt, _ := s.workspace.RenderWorkspace(nil)
+	var wsPrompt string
+	if s.workspace != nil && s.workspace.Catalog() != nil {
+		if wsSpec := s.workspace.Catalog().WorkspaceSpec(); wsSpec != nil {
+			wsPrompt, _ = wsSpec.Render(&warp.WorkspaceRenderOptions{})
+		}
+	}
 
-	if agentName == "" {
-		agentName = s.workspace.DefaultAgentName()
+	if agentName == "" && s.workspace != nil && s.workspace.Catalog() != nil {
+		agentName = s.workspace.Catalog().DefaultAgentName()
 	}
 
 	globals := map[string]any{
 		"HasTool": func(toolName string) bool {
-			if resolved, err := s.workspace.ResolveAgent(agentName); err == nil && resolved != nil {
-				for _, t := range resolved.Tools {
-					if strings.EqualFold(t.Metadata.Name, toolName) {
-						return true
+			if s.workspace != nil && s.workspace.Catalog() != nil {
+				if resolved, err := s.workspace.Catalog().ResolveAgent(agentName); err == nil && resolved != nil {
+					for _, t := range resolved.Tools {
+						if strings.EqualFold(t.Metadata.Name, toolName) {
+							return true
+						}
 					}
 				}
 			}
@@ -380,7 +390,17 @@ func (s *Session) renderSystemPrompt(agentName string) string {
 		},
 	}
 
-	agentPrompt, _ := s.workspace.RenderAgent(agentName, nil, globals)
+	var agentPrompt string
+	if s.workspace != nil && s.workspace.Catalog() != nil {
+		if resolved, err := s.workspace.Catalog().ResolveAgent(agentName); err == nil && resolved != nil && resolved.Agent != nil {
+			agentPrompt, _ = resolved.Agent.Render(&warp.AgentRenderOptions{
+				Workspace: s.workspace.Catalog().WorkspaceSpec(),
+				Project:   s.workspace.Catalog().Project(),
+				Resolved:  resolved,
+				Globals:   globals,
+			})
+		}
+	}
 
 	var parts []string
 	if s := strings.TrimSpace(wsPrompt); s != "" {
@@ -690,15 +710,15 @@ func (s *Session) outputsDir() string {
 }
 
 func (s *Session) buildToolsForAgent(agentName string) (tools.Container, error) {
-	if agentName == "" && s.workspace != nil {
-		agentName = s.workspace.DefaultAgentName()
+	if agentName == "" && s.workspace != nil && s.workspace.Catalog() != nil {
+		agentName = s.workspace.Catalog().DefaultAgentName()
 	}
 
 	var allowedToolNames []string
 	var skills []warp.Skill
 
-	if s.workspace != nil && agentName != "" {
-		if resolved, err := s.workspace.ResolveAgent(agentName); err == nil && resolved != nil {
+	if s.workspace != nil && s.workspace.Catalog() != nil && agentName != "" {
+		if resolved, err := s.workspace.Catalog().ResolveAgent(agentName); err == nil && resolved != nil {
 			if resolved.Tools != nil {
 				allowedToolNames = make([]string, 0, len(resolved.Tools))
 				for _, t := range resolved.Tools {
@@ -706,9 +726,6 @@ func (s *Session) buildToolsForAgent(agentName string) (tools.Container, error) 
 				}
 			}
 			skills = resolved.Skills
-			if skills == nil {
-				skills = []warp.Skill{}
-			}
 		}
 	}
 
@@ -733,9 +750,6 @@ func (s *Session) buildToolsForAgent(agentName string) (tools.Container, error) 
 		Workspace:    s.workspace,
 		AllowedTools: allowedToolNames,
 		Skills:       skills,
-		RenderSkill: func(name string, args map[string]string) (string, error) {
-			return s.workspace.RenderSkill(name, args, nil)
-		},
 	})
 	if err != nil {
 		return nil, fmt.Errorf("session: initialize builtin tools: %w", err)
@@ -756,7 +770,7 @@ func (s *Session) buildToolsForAgent(agentName string) (tools.Container, error) 
 	return container, nil
 }
 
-func parseSlashCommandArgs(argsDef []workspace.Argument, rawArgs []string) map[string]string {
+func parseSlashCommandArgs(argsDef []warp.Argument, rawArgs []string) map[string]string {
 	argsMap := make(map[string]string)
 	var positional []string
 	for _, arg := range rawArgs {
@@ -798,47 +812,63 @@ func (s *Session) resolveSlashCommand(msg message.Message) (message.Message, err
 	cmdKey := strings.ToLower(rawKey)
 	rawArgs := fields[1:]
 
-	// 1. Try resolving as Command
-	if cmd, ok := s.workspace.GetCommand(cmdKey); ok {
-		argsMap := parseSlashCommandArgs(cmd.Arguments, rawArgs)
-		rendered, err := s.workspace.RenderCommand(cmd.Name, argsMap, nil)
-		if err != nil {
-			return msg, fmt.Errorf("failed to render command %q: %w", cmd.Name, err)
-		}
-		newMsg := message.NewUser(&message.TextBlock{Text: rendered})
-		if msg.GetID() != "" {
-			newMsg.SetID(msg.GetID())
-		}
-		return newMsg, nil
-	}
-
-	// 2. Try resolving as Skill
-	if sk, ok := s.workspace.GetSkill(cmdKey); ok {
-		argsMap := parseSlashCommandArgs(sk.Arguments, rawArgs)
-		rendered, err := s.workspace.RenderSkill(sk.Name, argsMap, nil)
-		if err != nil {
-			return msg, fmt.Errorf("failed to render skill %q: %w", sk.Name, err)
-		}
-
-		skillPath := s.workspace.PortablePath(sk.Directory)
-		pathAttr := ""
-		pathNote := ""
-		if skillPath != "" {
-			pathAttr = fmt.Sprintf(" path=%q", skillPath)
-			pathNote = fmt.Sprintf("\nSupporting assets and files for this skill are located in %q.", skillPath)
+	if s.workspace != nil && s.workspace.Catalog() != nil {
+		// 1. Try resolving as Command
+		if cmd, ok := s.workspace.Catalog().GetCommand(cmdKey); ok && cmd.Def != nil {
+			argsMap := parseSlashCommandArgs(cmd.Def.Spec.Arguments, rawArgs)
+			mergedGlobals := workspace.MergeStringArgs(argsMap, nil)
+			positionalArgs := workspace.BuildPositionalArgs(cmd.Def.Spec.Arguments, argsMap)
+			rendered, err := cmd.Def.Render(&warp.CommandRenderOptions{
+				Workspace: s.workspace.Catalog().WorkspaceSpec(),
+				Project:   s.workspace.Catalog().Project(),
+				Args:      positionalArgs,
+				Globals:   mergedGlobals,
+			})
+			if err != nil {
+				return msg, fmt.Errorf("failed to render command %q: %w", cmd.Name, err)
+			}
+			newMsg := message.NewUser(&message.TextBlock{Text: rendered})
+			if msg.GetID() != "" {
+				newMsg.SetID(msg.GetID())
+			}
+			return newMsg, nil
 		}
 
-		promptText := fmt.Sprintf("<embedded_skill name=%q%s>\n<instructions>\n%s\n</instructions>\n</embedded_skill>\n\nThe user invoked: %s%s\nFollow the skill instructions above.", sk.Name, pathAttr, rendered, text, pathNote)
+		// 2. Try resolving as Skill
+		if sk, ok := s.workspace.Catalog().GetSkill(cmdKey); ok && sk.Def != nil {
+			argsMap := parseSlashCommandArgs(sk.Def.Spec.Arguments, rawArgs)
+			mergedGlobals := workspace.MergeStringArgs(argsMap, nil)
+			positionalArgs := workspace.BuildPositionalArgs(sk.Def.Spec.Arguments, argsMap)
+			rendered, err := sk.Def.Render(&warp.SkillRenderOptions{
+				Workspace: s.workspace.Catalog().WorkspaceSpec(),
+				Project:   s.workspace.Catalog().Project(),
+				Args:      positionalArgs,
+				Globals:   mergedGlobals,
+			})
+			if err != nil {
+				return msg, fmt.Errorf("failed to render skill %q: %w", sk.Name, err)
+			}
 
-		newMsg := message.NewUserTextMeta(promptText, map[string]any{
-			"skill":   sk.Name,
-			"path":    skillPath,
-			"command": text,
-		})
-		if msg.GetID() != "" {
-			newMsg.SetID(msg.GetID())
+			skillPath := s.workspace.PortablePath(sk.Def.Directory)
+			pathAttr := ""
+			pathNote := ""
+			if skillPath != "" {
+				pathAttr = fmt.Sprintf(" path=%q", skillPath)
+				pathNote = fmt.Sprintf("\nSupporting assets and files for this skill are located in %q.", skillPath)
+			}
+
+			promptText := fmt.Sprintf("<embedded_skill name=%q%s>\n<instructions>\n%s\n</instructions>\n</embedded_skill>\n\nThe user invoked: %s%s\nFollow the skill instructions above.", sk.Name, pathAttr, rendered, text, pathNote)
+
+			newMsg := message.NewUserTextMeta(promptText, map[string]any{
+				"skill":   sk.Name,
+				"path":    skillPath,
+				"command": text,
+			})
+			if msg.GetID() != "" {
+				newMsg.SetID(msg.GetID())
+			}
+			return newMsg, nil
 		}
-		return newMsg, nil
 	}
 
 	return msg, nil
@@ -1517,8 +1547,22 @@ func (s *Session) generateTitle(userText string) {
 			s.reloadLock.RLock()
 			defer s.reloadLock.RUnlock()
 		}
-		var err error
-		sysPrompt, err = s.workspace.RenderAgent(workspace.AgentNameTitleGenerator, nil, nil)
+		if s.workspace == nil || s.workspace.Catalog() == nil {
+			return false
+		}
+		cat := s.workspace.Catalog()
+		resolvedTitle, err := cat.ResolveAgent(workspace.AgentNameTitleGenerator)
+		if err != nil || resolvedTitle == nil || resolvedTitle.Agent == nil {
+			if err != nil {
+				s.logger.Warn("failed to resolve title generator agent", log.String("error", err.Error()))
+			}
+			return false
+		}
+		sysPrompt, err = resolvedTitle.Agent.Render(&warp.AgentRenderOptions{
+			Workspace: cat.WorkspaceSpec(),
+			Project:   cat.Project(),
+			Resolved:  resolvedTitle,
+		})
 		if err != nil || strings.TrimSpace(sysPrompt) == "" {
 			if err != nil {
 				s.logger.Warn("failed to render title generator prompt", log.String("error", err.Error()))
@@ -1527,11 +1571,10 @@ func (s *Session) generateTitle(userText string) {
 		}
 
 		catalog := s.catalog()
-		ag, ok := s.workspace.GetAgent(workspace.AgentNameTitleGenerator)
 		var effective models.Model
 		var found bool
-		if ok && len(ag.Models) > 0 {
-			effective, found = catalog.Resolve(models.RoleCompletion, ag.Models...)
+		if len(resolvedTitle.Agent.Spec.Models) > 0 {
+			effective, found = catalog.Resolve(models.RoleCompletion, resolvedTitle.Agent.Spec.Models...)
 		}
 		if !found {
 			s.Lock()
@@ -1545,7 +1588,7 @@ func (s *Session) generateTitle(userText string) {
 		settings := s.modelSettings(SessionConfig{Agent: workspace.AgentNameTitleGenerator})
 		cfg, _, err := models.Configure(effective, settings)
 		if err == nil {
-			llmModel, err = s.gateway.LLM(ctx, effective, cfg)
+			llmModel, err = s.gateway().LLM(ctx, effective, cfg)
 		}
 		if err != nil {
 			s.logger.Warn("failed to resolve LLM for title generation", log.String("error", err.Error()))

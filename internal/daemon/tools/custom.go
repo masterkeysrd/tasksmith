@@ -13,7 +13,7 @@ import (
 	"github.com/masterkeysrd/loom/message"
 	"github.com/masterkeysrd/loom/tool"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/sandbox"
-	"github.com/masterkeysrd/tasksmith/internal/daemon/workspace"
+	"github.com/masterkeysrd/warp"
 )
 
 type customTool struct {
@@ -25,19 +25,19 @@ type customTool struct {
 }
 
 func (c *container) registerCustomTools() error {
-	if c.workspace == nil {
+	if c.workspace == nil || c.workspace.Catalog() == nil {
 		return nil
 	}
 
-	wsTools := c.workspace.Tools()
+	wsTools := c.workspace.Catalog().Tools()
 	for _, wsTool := range wsTools {
-		if len(wsTool.Command) == 0 {
+		if len(wsTool.Spec.Command) == 0 {
 			continue
 		}
 		if c.allowedTools != nil {
 			var allowed bool
 			for _, a := range c.allowedTools {
-				if strings.EqualFold(a, wsTool.Name) {
+				if strings.EqualFold(a, wsTool.Metadata.Name) {
 					allowed = true
 					break
 				}
@@ -46,47 +46,47 @@ func (c *container) registerCustomTools() error {
 				continue
 			}
 		}
-		if _, exists := c.tools[wsTool.Name]; exists {
+		if _, exists := c.tools[wsTool.Metadata.Name]; exists {
 			continue
 		}
 
 		ct, err := c.buildCustomTool(wsTool)
 		if err != nil {
-			return fmt.Errorf("tools: build custom tool %q: %w", wsTool.Name, err)
+			return fmt.Errorf("tools: build custom tool %q: %w", wsTool.Metadata.Name, err)
 		}
 		c.addTool(ct)
 	}
 	return nil
 }
 
-func (c *container) buildCustomTool(wsTool workspace.Tool) (Tool, error) {
-	title := wsTool.DisplayName
+func (c *container) buildCustomTool(wsTool *warp.Tool) (Tool, error) {
+	title := wsTool.Metadata.DisplayName
 	if title == "" {
-		title = wsTool.Name
+		title = wsTool.Metadata.Name
 	}
 
-	desc := wsTool.Instructions
+	desc := wsTool.Spec.Instructions
 	if desc == "" {
-		desc = wsTool.Description
+		desc = wsTool.Spec.Description
 	}
 	if desc == "" {
-		desc = fmt.Sprintf("Custom workspace tool %s", wsTool.Name)
+		desc = fmt.Sprintf("Custom workspace tool %s", wsTool.Metadata.Name)
 	}
 
 	var ann tool.Annotation
-	if wsTool.Annotations != nil {
+	if wsTool.Spec.Annotations != nil {
 		ann = tool.Annotation{
-			IsOpenWorld:  wsTool.Annotations.IsOpenWorld,
-			IsDangerous:  wsTool.Annotations.IsDangerous,
-			IsReadOnly:   wsTool.Annotations.IsReadOnly,
-			IsIdempotent: wsTool.Annotations.IsIdempotent,
-			UserHint:     wsTool.Annotations.UserHint,
+			IsOpenWorld:  wsTool.Spec.Annotations.IsOpenWorld,
+			IsDangerous:  wsTool.Spec.Annotations.IsDangerous,
+			IsReadOnly:   wsTool.Spec.Annotations.IsReadOnly,
+			IsIdempotent: wsTool.Spec.Annotations.IsIdempotent,
+			UserHint:     wsTool.Spec.Annotations.UserHint,
 		}
 	}
 
 	var inputSchema *jsonschema.Schema
-	if len(wsTool.InputSchema) > 0 {
-		if data, err := json.Marshal(wsTool.InputSchema); err == nil {
+	if len(wsTool.Spec.InputSchema) > 0 {
+		if data, err := json.Marshal(wsTool.Spec.InputSchema); err == nil {
 			var parsed jsonschema.Schema
 			if err := json.Unmarshal(data, &parsed); err == nil {
 				inputSchema = &parsed
@@ -114,8 +114,8 @@ func (c *container) buildCustomTool(wsTool workspace.Tool) (Tool, error) {
 	}
 
 	var outputSchema *jsonschema.Schema
-	if len(wsTool.OutputSchema) > 0 {
-		if data, err := json.Marshal(wsTool.OutputSchema); err == nil {
+	if len(wsTool.Spec.OutputSchema) > 0 {
+		if data, err := json.Marshal(wsTool.Spec.OutputSchema); err == nil {
 			var parsed jsonschema.Schema
 			if err := json.Unmarshal(data, &parsed); err == nil {
 				outputSchema = &parsed
@@ -126,17 +126,17 @@ func (c *container) buildCustomTool(wsTool workspace.Tool) (Tool, error) {
 		outputSchema, _ = jsonschema.For[string](nil)
 	}
 
-	cmdSlice := make([]string, len(wsTool.Command))
-	copy(cmdSlice, wsTool.Command)
+	cmdSlice := make([]string, len(wsTool.Spec.Command))
+	copy(cmdSlice, wsTool.Spec.Command)
 
 	var envMap map[string]string
-	if len(wsTool.Env) > 0 {
-		envMap = maps.Clone(wsTool.Env)
+	if len(wsTool.Spec.Env) > 0 {
+		envMap = maps.Clone(wsTool.Spec.Env)
 	}
 
 	return &customTool{
 		def: tool.Definition{
-			Name:         wsTool.Name,
+			Name:         wsTool.Metadata.Name,
 			Title:        title,
 			Description:  desc,
 			Annotation:   ann,

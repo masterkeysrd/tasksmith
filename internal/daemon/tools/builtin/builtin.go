@@ -36,10 +36,9 @@ type Config struct {
 	Sandbox      sandbox.Sandbox
 	Guard        *shellguard.Guard
 	Tasks        tasks.Manager
-	Workspace    workspace.Workspace
+	Workspace    *workspace.Workspace
 	AllowedTools []string
 	Skills       []warp.Skill
-	RenderSkill  SkillRenderer
 }
 
 // Validate ensures that all required dependencies are non-nil. Zero silent
@@ -120,7 +119,7 @@ func New(cfg Config) ([]tools.Tool, error) {
 		{ToolTodos, func(m tools.Metadata) tools.Tool { return tools.NewHandler(ToolTodos, m, &todosTool{}) }},
 		{ToolAskQuestion, func(m tools.Metadata) tools.Tool { return tools.NewHandler(ToolAskQuestion, m, &askQuestionTool{}) }},
 		{ToolLoadSkill, func(m tools.Metadata) tools.Tool {
-			return tools.NewHandler(ToolLoadSkill, m, newLoadSkillTool(cfg.Skills, cfg.RenderSkill, cfg.Workspace))
+			return tools.NewHandler(ToolLoadSkill, m, newLoadSkillTool(cfg.Skills, cfg.Workspace))
 		}},
 	}
 
@@ -128,28 +127,28 @@ func New(cfg Config) ([]tools.Tool, error) {
 	for _, entry := range toolEntries {
 		if isAllowed(entry.name) {
 			var meta tools.Metadata
-			if cfg.Workspace != nil {
-				wsTool, ok := cfg.Workspace.GetTool(entry.name)
+			if cfg.Workspace != nil && cfg.Workspace.Catalog() != nil {
+				wsTool, ok := cfg.Workspace.Catalog().GetTool(entry.name)
 				if !ok {
 					return nil, fmt.Errorf("%w: tool %q not found in workspace", tools.ErrToolNotFound, entry.name)
 				}
-				if wsTool.DisplayName != "" {
-					meta.Title = wsTool.DisplayName
+				if wsTool.Metadata.DisplayName != "" {
+					meta.Title = wsTool.Metadata.DisplayName
 				} else {
-					meta.Title = wsTool.Name
+					meta.Title = wsTool.Metadata.Name
 				}
-				if wsTool.Instructions != "" {
-					meta.Description = wsTool.Instructions
+				if wsTool.Spec.Instructions != "" {
+					meta.Description = wsTool.Spec.Instructions
 				} else {
-					meta.Description = wsTool.Description
+					meta.Description = wsTool.Spec.Description
 				}
-				if wsTool.Annotations != nil {
+				if wsTool.Spec.Annotations != nil {
 					meta.Annotation = tool.Annotation{
-						IsOpenWorld:  wsTool.Annotations.IsOpenWorld,
-						IsDangerous:  wsTool.Annotations.IsDangerous,
-						IsReadOnly:   wsTool.Annotations.IsReadOnly,
-						IsIdempotent: wsTool.Annotations.IsIdempotent,
-						UserHint:     wsTool.Annotations.UserHint,
+						IsOpenWorld:  wsTool.Spec.Annotations.IsOpenWorld,
+						IsDangerous:  wsTool.Spec.Annotations.IsDangerous,
+						IsReadOnly:   wsTool.Spec.Annotations.IsReadOnly,
+						IsIdempotent: wsTool.Spec.Annotations.IsIdempotent,
+						UserHint:     wsTool.Spec.Annotations.UserHint,
 					}
 				}
 			}

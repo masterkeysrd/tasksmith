@@ -26,10 +26,9 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tools"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tools/builtin"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/workspace"
-	"github.com/masterkeysrd/warp"
 )
 
-func setupBuiltinEnv(t *testing.T, allowLoopback bool) (string, tools.Container, *std.Std, sandbox.Sandbox, workspace.Workspace) {
+func setupBuiltinEnv(t *testing.T, allowLoopback bool) (string, tools.Container, *std.Std, sandbox.Sandbox, *workspace.Workspace) {
 	t.Helper()
 	ctx := context.Background()
 	dir := t.TempDir()
@@ -70,11 +69,10 @@ func setupBuiltinEnv(t *testing.T, allowLoopback bool) (string, tools.Container,
 	})
 
 	builtinTools, err := builtin.New(builtin.Config{
-		Std:         stdLib,
-		Sandbox:     sb,
-		Guard:       guard,
-		Workspace:   ws,
-		RenderSkill: func(name string, args map[string]string) (string, error) { return ws.RenderSkill(name, args, nil) },
+		Std:       stdLib,
+		Sandbox:   sb,
+		Guard:     guard,
+		Workspace: ws,
 	})
 	if err != nil {
 		t.Fatalf("builtin.New failed: %v", err)
@@ -175,24 +173,28 @@ func TestFSAndWorkspaceResolution(t *testing.T) {
 		builtin.ToolWrite,
 	}
 
-	resolvedTools := ws.Tools()
+	resolvedTools := ws.Catalog().Tools()
 	var gotNames []string
 	for _, rt := range resolvedTools {
-		gotNames = append(gotNames, rt.Name)
+		gotNames = append(gotNames, rt.Metadata.Name)
 		if rt.Namespace != workspace.NamespaceSystem {
-			t.Errorf("expected tool %q to be in namespace %q, got %q", rt.Name, workspace.NamespaceSystem, rt.Namespace)
+			t.Errorf("expected tool %q to be in namespace %q, got %q", rt.Metadata.Name, workspace.NamespaceSystem, rt.Namespace)
 		}
-		if rt.DisplayName == "" {
-			t.Errorf("expected tool %q to have DisplayName", rt.Name)
+		if rt.Metadata.DisplayName == "" {
+			t.Errorf("expected tool %q to have DisplayName", rt.Metadata.Name)
 		}
-		if rt.Description == "" {
-			t.Errorf("expected tool %q to have Description", rt.Name)
+		desc := rt.Metadata.Description
+		if desc == "" {
+			desc = rt.Spec.Description
 		}
-		if rt.Instructions == "" {
-			t.Errorf("expected tool %q to have markdown Instructions", rt.Name)
+		if desc == "" {
+			t.Errorf("expected tool %q to have Description", rt.Metadata.Name)
 		}
-		if rt.Annotations == nil {
-			t.Errorf("expected tool %q to have Annotations", rt.Name)
+		if rt.Spec.Instructions == "" {
+			t.Errorf("expected tool %q to have markdown Instructions", rt.Metadata.Name)
+		}
+		if rt.Spec.Annotations == nil {
+			t.Errorf("expected tool %q to have Annotations", rt.Metadata.Name)
 		}
 	}
 	slices.Sort(gotNames)
@@ -815,11 +817,10 @@ func TestSessionOutputsAndOutsidePathOperations(t *testing.T) {
 	})
 
 	builtinTools, err := builtin.New(builtin.Config{
-		Std:         stdLib,
-		Sandbox:     sb,
-		Guard:       guard,
-		Workspace:   ws,
-		RenderSkill: func(name string, args map[string]string) (string, error) { return ws.RenderSkill(name, args, nil) },
+		Std:       stdLib,
+		Sandbox:   sb,
+		Guard:     guard,
+		Workspace: ws,
 	})
 	if err != nil {
 		t.Fatalf("builtin.New failed: %v", err)
@@ -1247,12 +1248,12 @@ func TestBuiltinCustomizationSkillAndReference(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resolved, err := ws.ResolveAgent("main")
+	resolved, err := ws.Catalog().ResolveAgent("main")
 	if err != nil {
 		t.Fatal(err)
 	}
 	guard := shellguard.New(shellguard.Config{WorkspaceDir: dir, ReadDirs: []string{builtinDir}})
-	builtins, err := builtin.New(builtin.Config{Std: stdLib, Sandbox: sb, Guard: guard, Workspace: ws, Skills: resolved.Skills, RenderSkill: func(name string, args map[string]string) (string, error) { return ws.RenderSkill(name, args, nil) }})
+	builtins, err := builtin.New(builtin.Config{Std: stdLib, Sandbox: sb, Guard: guard, Workspace: ws, Skills: resolved.Skills})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1265,11 +1266,11 @@ func TestBuiltinCustomizationSkillAndReference(t *testing.T) {
 	if err != nil || result.IsError || !strings.Contains(result.Content.Text(), "references/rules.md") || !strings.Contains(result.Content.Text(), "tasksmith-customizations") {
 		t.Fatalf("load skill: %v %+v", err, result)
 	}
-	skill, ok := ws.GetSkill("tasksmith-customizations")
+	skill, ok := ws.Catalog().GetSkill("tasksmith-customizations")
 	if !ok {
 		t.Fatal("skill not found")
 	}
-	ref := filepath.Join(skill.Directory, "references", "rules.md")
+	ref := filepath.Join(skill.Def.Directory, "references", "rules.md")
 	view := &message.ToolCall{ID: "view", Name: builtin.ToolView, Args: map[string]any{"path": ref}}
 	plan, err := container.Prepare(ctx, view)
 	if err != nil || plan.Safety != tools.SafetySafe {
@@ -1323,18 +1324,17 @@ Deploying image {{.image}}:{{.tag}}
 		t.Fatalf("ws.Reload: %v", err)
 	}
 
-	resolvedMain, err := ws.ResolveAgent("main")
+	resolvedMain, err := ws.Catalog().ResolveAgent("main")
 	if err != nil {
 		t.Fatal(err)
 	}
 	guard := shellguard.New(shellguard.Config{WorkspaceDir: dir})
 	mainTools, err := builtin.New(builtin.Config{
-		Std:         stdLib,
-		Sandbox:     sb,
-		Guard:       guard,
-		Workspace:   ws,
-		Skills:      resolvedMain.Skills,
-		RenderSkill: func(name string, args map[string]string) (string, error) { return ws.RenderSkill(name, args, nil) },
+		Std:       stdLib,
+		Sandbox:   sb,
+		Guard:     guard,
+		Workspace: ws,
+		Skills:    resolvedMain.Skills,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1439,24 +1439,20 @@ Restricted agent instructions.
 	}
 
 	// Resolve restricted agent and construct tools using its resolved skills
-	resolved, err := ws.ResolveAgent("restricted-agent")
+	resolved, err := ws.Catalog().ResolveAgent("restricted-agent")
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	skills := resolved.Skills
-	if skills == nil {
-		skills = []warp.Skill{}
-	}
 
 	guard = shellguard.New(shellguard.Config{WorkspaceDir: dir})
 	scopedTools, err := builtin.New(builtin.Config{
-		Std:         stdLib,
-		Sandbox:     sb,
-		Guard:       guard,
-		Workspace:   ws,
-		Skills:      skills,
-		RenderSkill: func(name string, args map[string]string) (string, error) { return ws.RenderSkill(name, args, nil) },
+		Std:       stdLib,
+		Sandbox:   sb,
+		Guard:     guard,
+		Workspace: ws,
+		Skills:    skills,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1506,17 +1502,16 @@ Restricted agent instructions.
 	if err := ws.Reload(ctx); err != nil {
 		t.Fatalf("ws.Reload: %v", err)
 	}
-	resolvedBig, err := ws.ResolveAgent("main")
+	resolvedBig, err := ws.Catalog().ResolveAgent("main")
 	if err != nil {
 		t.Fatal(err)
 	}
 	bigTools, err := builtin.New(builtin.Config{
-		Std:         stdLib,
-		Sandbox:     sb,
-		Guard:       guard,
-		Workspace:   ws,
-		Skills:      resolvedBig.Skills,
-		RenderSkill: func(name string, args map[string]string) (string, error) { return ws.RenderSkill(name, args, nil) },
+		Std:       stdLib,
+		Sandbox:   sb,
+		Guard:     guard,
+		Workspace: ws,
+		Skills:    resolvedBig.Skills,
 	})
 	if err != nil {
 		t.Fatal(err)

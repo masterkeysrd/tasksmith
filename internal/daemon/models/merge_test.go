@@ -4,7 +4,7 @@ import (
 	"testing"
 
 	"github.com/masterkeysrd/loom/profile"
-	"github.com/masterkeysrd/tasksmith/internal/daemon/workspace"
+	"github.com/masterkeysrd/warp"
 )
 
 func TestMergeLimitsFallback(t *testing.T) {
@@ -22,7 +22,7 @@ func TestMergeLimitsFallback(t *testing.T) {
 	}
 
 	// Manifest wins over base for scalars.
-	manifest := &workspace.ProviderModel{ID: "m", Limits: workspace.ModelLimits{Context: 100, Output: 10}}
+	manifest := &warp.ProviderModel{ID: "m", Limits: warp.ProviderModelLimits{Context: 100, Output: 10}}
 	m = Merge(ID("p/m"), "ollama", manifest, base)
 	if m.Limits.Context != 100 || m.Limits.Output != 10 {
 		t.Fatalf("manifest scalar precedence: %+v", m.Limits)
@@ -45,7 +45,7 @@ func TestMergeCapabilitiesFirstNonNil(t *testing.T) {
 
 	// Manifest sets a known false; base would say true. Manifest wins.
 	base := &profile.Profile{Capabilities: profile.Capabilities{Decision: true, Temperature: true}}
-	manifest := &workspace.ProviderModel{ID: "m", Capabilities: &workspace.ModelCapabilities{Decision: new(false)}}
+	manifest := &warp.ProviderModel{ID: "m", Capabilities: &warp.ProviderModelCapabilities{Decision: new(false)}}
 	m = Merge(ID("p/m"), "ollama", manifest, base)
 	if m.Capabilities.Decision == nil || *m.Capabilities.Decision {
 		t.Fatalf("manifest false should override base true: %+v", m.Capabilities.Decision)
@@ -58,8 +58,8 @@ func TestMergeCapabilitiesFirstNonNil(t *testing.T) {
 
 func TestMergeListsReplaced(t *testing.T) {
 	base := &profile.Profile{Capabilities: profile.Capabilities{ReasoningOptions: []profile.ReasoningOption{{Type: "effort", Values: []string{"low"}}}}}
-	manifest := &workspace.ProviderModel{ID: "m", Capabilities: &workspace.ModelCapabilities{
-		Thinking: []workspace.ThinkingCapability{{Type: "effort", AllowedEfforts: []string{"high"}}},
+	manifest := &warp.ProviderModel{ID: "m", Capabilities: &warp.ProviderModelCapabilities{
+		Thinking: []warp.ProviderModelThinkingCapability{{Type: "effort", AllowedEfforts: []string{"high"}}},
 	}}
 	m := Merge(ID("p/m"), "ollama", manifest, base)
 	if len(m.Capabilities.Thinking) != 1 || m.Capabilities.Thinking[0].Values[0] != "high" {
@@ -67,8 +67,8 @@ func TestMergeListsReplaced(t *testing.T) {
 	}
 
 	// Modalities replaced, not merged.
-	manifest = &workspace.ProviderModel{ID: "m", Capabilities: &workspace.ModelCapabilities{
-		Modalities: &workspace.ModelModalities{Input: []string{"image"}},
+	manifest = &warp.ProviderModel{ID: "m", Capabilities: &warp.ProviderModelCapabilities{
+		Modalities: &warp.ProviderModelModalities{Input: []string{"image"}},
 	}}
 	m = Merge(ID("p/m"), "ollama", manifest, base)
 	if len(m.Modalities.Input) != 1 || m.Modalities.Input[0] != "image" {
@@ -82,7 +82,7 @@ func TestMergePricingWholeObject(t *testing.T) {
 		Input: 1, Output: 2,
 		TieredLimits: []profile.TierPricing{{Input: 3, Output: 4, Condition: profile.TierCondition{Type: profile.TierConditionContext, Size: 200000}}},
 	}}
-	manifest := &workspace.ProviderModel{ID: "m", Cost: &workspace.ModelCost{Input: 10, Output: 20}}
+	manifest := &warp.ProviderModel{ID: "m", Cost: &warp.ProviderModelCost{Input: 10, Output: 20}}
 	m := Merge(ID("p/m"), "ollama", manifest, base)
 	if m.Pricing == nil || m.Pricing.Input != 10 || m.Pricing.Output != 20 || len(m.Pricing.Tiers) != 0 {
 		t.Fatalf("manifest pricing should win whole: %+v", m.Pricing)
@@ -100,7 +100,7 @@ func TestMergePricingWholeObject(t *testing.T) {
 
 func TestMergeSource(t *testing.T) {
 	base := &profile.Profile{Name: "Base"}
-	manifest := &workspace.ProviderModel{ID: "m", Name: "Manifest"}
+	manifest := &warp.ProviderModel{ID: "m", Name: "Manifest"}
 	m := Merge(ID("p/m"), "ollama", manifest, base)
 	if !m.Source.Manifest || !m.Source.BuiltIn {
 		t.Fatalf("source should record both layers: %+v", m.Source)
@@ -119,12 +119,12 @@ func TestMergeSource(t *testing.T) {
 
 func TestMergeNamePrecedence(t *testing.T) {
 	// Manifest Name wins, then Label, then base Name, then id name.
-	manifest := &workspace.ProviderModel{ID: "m", Label: "labeled"}
+	manifest := &warp.ProviderModel{ID: "m", Label: "labeled"}
 	base := &profile.Profile{Name: "BaseName"}
 	if m := Merge(ID("p/m"), "ollama", manifest, base); m.Name != "labeled" {
 		t.Fatalf("label should fill name: %q", m.Name)
 	}
-	if m := Merge(ID("p/m"), "ollama", &workspace.ProviderModel{ID: "m", Name: "named"}, base); m.Name != "named" {
+	if m := Merge(ID("p/m"), "ollama", &warp.ProviderModel{ID: "m", Name: "named"}, base); m.Name != "named" {
 		t.Fatalf("name should win: %q", m.Name)
 	}
 	if m := Merge(ID("p/m"), "ollama", nil, base); m.Name != "BaseName" {
@@ -136,7 +136,7 @@ func TestMergeNamePrecedence(t *testing.T) {
 }
 
 func TestMergeDimensionsFromCapabilities(t *testing.T) {
-	manifest := &workspace.ProviderModel{ID: "m", Capabilities: &workspace.ModelCapabilities{Dimensions: []int{384, 768}}}
+	manifest := &warp.ProviderModel{ID: "m", Capabilities: &warp.ProviderModelCapabilities{Dimensions: []int{384, 768}}}
 	m := Merge(ID("p/m"), "ollama", manifest, nil)
 	if m.Limits.Dimensions != 384 {
 		t.Fatalf("limits dimensions should come from capabilities: %+v", m.Limits)
@@ -150,9 +150,9 @@ func TestMergeIsolation(t *testing.T) {
 		Modalities:   profile.Modalities{Inputs: []profile.Modality{"text"}},
 		Capabilities: profile.Capabilities{ReasoningOptions: []profile.ReasoningOption{{Type: "effort", Values: []string{"low"}}}},
 	}
-	manifest := &workspace.ProviderModel{ID: "m", Capabilities: &workspace.ModelCapabilities{
-		Thinking:   []workspace.ThinkingCapability{{Type: "effort", AllowedEfforts: []string{"low"}}},
-		Modalities: &workspace.ModelModalities{Input: []string{"text"}},
+	manifest := &warp.ProviderModel{ID: "m", Capabilities: &warp.ProviderModelCapabilities{
+		Thinking:   []warp.ProviderModelThinkingCapability{{Type: "effort", AllowedEfforts: []string{"low"}}},
+		Modalities: &warp.ProviderModelModalities{Input: []string{"text"}},
 	}}
 	m := Merge(ID("p/m"), "ollama", manifest, base)
 	// Mutate the merged model's slices; base must not change.

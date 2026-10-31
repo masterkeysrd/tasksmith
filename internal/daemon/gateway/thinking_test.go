@@ -9,7 +9,7 @@ import (
 	"github.com/masterkeysrd/loom/message"
 	"github.com/masterkeysrd/loom/profile"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/models"
-	"github.com/masterkeysrd/tasksmith/internal/daemon/workspace"
+	"github.com/masterkeysrd/warp"
 )
 
 type thinkingTestProvider struct {
@@ -44,11 +44,11 @@ func TestThinkingCapabilitiesPreserved(t *testing.T) {
 		for _, source := range []string{"profile", "workspace"} {
 			t.Run(providerType+"/"+source, func(t *testing.T) {
 				provider := &thinkingTestProvider{}
-				var manifest *workspace.ProviderModel
+				var manifest *warp.ProviderModel
 				if source == "profile" {
 					provider.modelProfile = &profile.Profile{Capabilities: profile.Capabilities{ReasoningOptions: options}}
 				} else {
-					manifest = &workspace.ProviderModel{ID: "model", Capabilities: &workspace.ModelCapabilities{Thinking: []workspace.ThinkingCapability{{Type: "effort", AllowedEfforts: []string{"minimal", "high"}, Default: "minimal"}, {Type: "budget_tokens", MaxBudgetTokens: 1000}, {Type: "toggle", Default: false}}}}
+					manifest = &warp.ProviderModel{ID: "model", Capabilities: &warp.ProviderModelCapabilities{Thinking: []warp.ProviderModelThinkingCapability{{Type: "effort", AllowedEfforts: []string{"minimal", "high"}, Default: "minimal"}, {Type: "budget_tokens", MaxBudgetTokens: 1000}, {Type: "toggle", Default: false}}}}
 				}
 				inst := &providerInstance{cfg: ProviderConfig{Name: "test", Type: providerType}, llmProv: provider}
 				gw := &gatewayImpl{providers: map[string]*providerInstance{"test": inst}}
@@ -71,7 +71,7 @@ func TestThinkingCapabilitiesPreserved(t *testing.T) {
 
 func TestThinkingProfileAndRequest(t *testing.T) {
 	base := &profile.Profile{Capabilities: profile.Capabilities{Completion: true, ReasoningOptions: []profile.ReasoningOption{{Type: "effort", Values: []string{"low", "high"}}}}}
-	spec := &workspace.ProviderModel{ID: "model", Capabilities: &workspace.ModelCapabilities{Thinking: []workspace.ThinkingCapability{{Type: "effort", AllowedEfforts: []string{"minimal"}, Default: "minimal"}}}}
+	spec := &warp.ProviderModel{ID: "model", Capabilities: &warp.ProviderModelCapabilities{Thinking: []warp.ProviderModelThinkingCapability{{Type: "effort", AllowedEfforts: []string{"minimal"}, Default: "minimal"}}}}
 	merged := models.Merge("test/model", "ollama", spec, base)
 	if got := merged.Capabilities.Thinking; len(got) != 1 || len(got[0].Values) != 1 || got[0].Values[0] != "minimal" {
 		t.Fatalf("workspace thinking override: %+v", got)

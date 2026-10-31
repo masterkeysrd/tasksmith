@@ -5,23 +5,16 @@ import (
 
 	"github.com/masterkeysrd/loom/profile"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/workspace"
+	"github.com/masterkeysrd/warp"
 )
 
-// fakeWorkspace embeds a nil workspace.Workspace and overrides only the methods
-// the catalog uses.
-type fakeWorkspace struct {
-	workspace.Workspace
-	providers []workspace.Provider
-	resolve   func(role workspace.ModelRole, explicit ...string) (*workspace.ResolvedModel, bool)
-}
-
-func (w *fakeWorkspace) Providers() []workspace.Provider { return w.providers }
-
-func (w *fakeWorkspace) ResolveModel(role workspace.ModelRole, explicit ...string) (*workspace.ResolvedModel, bool) {
-	if w.resolve != nil {
-		return w.resolve(role, explicit...)
+func testCatalogFromProviders(providers ...*warp.ModelProvider) *workspace.Catalog {
+	reg := warp.NewRegistry(nil)
+	for _, p := range providers {
+		p.Namespace = warp.NamespaceWorkspace
+		reg.Set(p.QualifiedName(), p)
 	}
-	return nil, false
+	return workspace.NewCatalog(reg, "/test", "/test")
 }
 
 type fakeBase struct {
@@ -36,9 +29,19 @@ func (b *fakeBase) GetProfile(id string) (profile.Profile, bool) {
 }
 
 func TestCatalogLazyAndListedOnly(t *testing.T) {
-	ws := &fakeWorkspace{providers: []workspace.Provider{{Metadata: workspace.Metadata{Name: "local"}, Type: "ollama", Models: []workspace.ProviderModel{{ID: "listed"}}}}}
+	cat := testCatalogFromProviders(&warp.ModelProvider{
+		BaseResource: warp.BaseResource{
+			APIVersion: warp.APIVersion,
+			Kind:       warp.KindModelProvider,
+			Metadata:   warp.Metadata{Name: "local"},
+		},
+		Spec: warp.ModelProviderSpec{
+			Type:   "ollama",
+			Models: []warp.ProviderModel{{ID: "listed"}},
+		},
+	})
 	base := &fakeBase{}
-	c, err := Build(ws, base)
+	c, err := Build(cat, base)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -68,9 +71,19 @@ func TestCatalogLazyAndListedOnly(t *testing.T) {
 }
 
 func TestCatalogReturnsIndependentModels(t *testing.T) {
-	ws := &fakeWorkspace{providers: []workspace.Provider{{Metadata: workspace.Metadata{Name: "local"}, Type: "ollama", Models: []workspace.ProviderModel{{ID: "listed"}}}}}
+	cat := testCatalogFromProviders(&warp.ModelProvider{
+		BaseResource: warp.BaseResource{
+			APIVersion: warp.APIVersion,
+			Kind:       warp.KindModelProvider,
+			Metadata:   warp.Metadata{Name: "local"},
+		},
+		Spec: warp.ModelProviderSpec{
+			Type:   "ollama",
+			Models: []warp.ProviderModel{{ID: "listed"}},
+		},
+	})
 	base := &fakeBase{profiles: map[ID]profile.Profile{"local/listed": {Capabilities: profile.Capabilities{Temperature: true, ReasoningOptions: []profile.ReasoningOption{{Type: "effort", Values: []string{"high"}}}}, Pricing: profile.Pricing{Input: 1}}}}
-	c, err := Build(ws, base)
+	c, err := Build(cat, base)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,22 +98,26 @@ func TestCatalogReturnsIndependentModels(t *testing.T) {
 }
 
 func TestCatalogBuildListed(t *testing.T) {
-	ws := &fakeWorkspace{providers: []workspace.Provider{
-		{
-			Metadata: workspace.Metadata{Name: "anthropic"},
-			Type:     "anthropic",
-			Models: []workspace.ProviderModel{
-				{ID: "claude-3", Name: "Claude 3", Limits: workspace.ModelLimits{Context: 100000, Output: 8192}},
+	cat := testCatalogFromProviders(&warp.ModelProvider{
+		BaseResource: warp.BaseResource{
+			APIVersion: warp.APIVersion,
+			Kind:       warp.KindModelProvider,
+			Metadata:   warp.Metadata{Name: "anthropic"},
+		},
+		Spec: warp.ModelProviderSpec{
+			Type: "anthropic",
+			Models: []warp.ProviderModel{
+				{ID: "claude-3", Name: "Claude 3", Limits: warp.ProviderModelLimits{Context: 100000, Output: 8192}},
 			},
 		},
-	}}
+	})
 	base := &fakeBase{
 		profiles: map[ID]profile.Profile{
 			ID("anthropic/claude-3"): {Name: "Claude 3", Limits: profile.Limits{Context: 200000, Output: 4096}, Capabilities: profile.Capabilities{Temperature: true}},
 		},
 	}
 
-	c, err := Build(ws, base)
+	c, err := Build(cat, base)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -131,13 +148,20 @@ func TestCatalogBuildListed(t *testing.T) {
 }
 
 func TestCatalogUnlistedFromBase(t *testing.T) {
-	ws := &fakeWorkspace{providers: []workspace.Provider{{Metadata: workspace.Metadata{Name: "ollama"}, Type: "ollama"}}}
+	cat := testCatalogFromProviders(&warp.ModelProvider{
+		BaseResource: warp.BaseResource{
+			APIVersion: warp.APIVersion,
+			Kind:       warp.KindModelProvider,
+			Metadata:   warp.Metadata{Name: "ollama"},
+		},
+		Spec: warp.ModelProviderSpec{Type: "ollama"},
+	})
 	base := &fakeBase{
 		profiles: map[ID]profile.Profile{
 			ID("ollama/llama3.2"): {Name: "Llama 3.2", Limits: profile.Limits{Context: 8000, Output: 1000}},
 		},
 	}
-	c, err := Build(ws, base)
+	c, err := Build(cat, base)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -159,9 +183,16 @@ func TestCatalogUnlistedFromBase(t *testing.T) {
 }
 
 func TestCatalogUnknown(t *testing.T) {
-	ws := &fakeWorkspace{providers: []workspace.Provider{{Metadata: workspace.Metadata{Name: "anthropic"}, Type: "anthropic"}}}
+	cat := testCatalogFromProviders(&warp.ModelProvider{
+		BaseResource: warp.BaseResource{
+			APIVersion: warp.APIVersion,
+			Kind:       warp.KindModelProvider,
+			Metadata:   warp.Metadata{Name: "anthropic"},
+		},
+		Spec: warp.ModelProviderSpec{Type: "anthropic"},
+	})
 	base := &fakeBase{}
-	c, err := Build(ws, base)
+	c, err := Build(cat, base)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -184,16 +215,20 @@ func TestCatalogUnknown(t *testing.T) {
 }
 
 func TestCatalogResolve(t *testing.T) {
-	ws := &fakeWorkspace{
-		providers: []workspace.Provider{
-			{Metadata: workspace.Metadata{Name: "anthropic"}, Type: "anthropic", Models: []workspace.ProviderModel{{ID: "claude-3"}}},
+	cat := testCatalogFromProviders(&warp.ModelProvider{
+		BaseResource: warp.BaseResource{
+			APIVersion: warp.APIVersion,
+			Kind:       warp.KindModelProvider,
+			Metadata:   warp.Metadata{Name: "anthropic"},
 		},
-		resolve: func(role workspace.ModelRole, explicit ...string) (*workspace.ResolvedModel, bool) {
-			return &workspace.ResolvedModel{ProviderName: "anthropic", ModelID: "claude-3", QualifiedID: "anthropic/claude-3"}, true
+		Spec: warp.ModelProviderSpec{
+			Type:         "anthropic",
+			DefaultModel: "claude-3",
+			Models:       []warp.ProviderModel{{ID: "claude-3"}},
 		},
-	}
+	})
 	base := &fakeBase{}
-	c, err := Build(ws, base)
+	c, err := Build(cat, base)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -205,18 +240,30 @@ func TestCatalogResolve(t *testing.T) {
 		t.Fatalf("resolved id: %s", m.ID)
 	}
 
-	// No resolver: Resolve returns false.
-	ws.resolve = nil
-	if _, ok := c.Resolve(RoleCompletion); ok {
+	// Empty catalog: Resolve returns false.
+	emptyCat := workspace.NewCatalog(warp.NewRegistry(nil), "/test", "/test")
+	cEmpty, err := Build(emptyCat, base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := cEmpty.Resolve(RoleCompletion); ok {
 		t.Fatal("resolve should fail when resolver returns nothing")
 	}
 }
 
 func TestCatalogNilBase(t *testing.T) {
-	ws := &fakeWorkspace{providers: []workspace.Provider{
-		{Metadata: workspace.Metadata{Name: "ollama"}, Type: "ollama", Models: []workspace.ProviderModel{{ID: "llama3.2", Limits: workspace.ModelLimits{Context: 8000}}}},
-	}}
-	c, err := Build(ws, nil)
+	cat := testCatalogFromProviders(&warp.ModelProvider{
+		BaseResource: warp.BaseResource{
+			APIVersion: warp.APIVersion,
+			Kind:       warp.KindModelProvider,
+			Metadata:   warp.Metadata{Name: "ollama"},
+		},
+		Spec: warp.ModelProviderSpec{
+			Type:   "ollama",
+			Models: []warp.ProviderModel{{ID: "llama3.2", Limits: warp.ProviderModelLimits{Context: 8000}}},
+		},
+	})
+	c, err := Build(cat, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

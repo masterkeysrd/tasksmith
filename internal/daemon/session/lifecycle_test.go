@@ -17,6 +17,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	"github.com/masterkeysrd/tasksmith/internal/core/sqlite"
 	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/gateway"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/permissions"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tools/builtin"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/workspace"
@@ -285,7 +286,7 @@ func TestManagerTurnErrorLogging(t *testing.T) {
 	mgr, err := New(Config{
 		DB:          db,
 		Workspace:   ws,
-		Gateway:     gw,
+		Gateway:     func() gateway.Gateway { return gw },
 		Publisher:   pub,
 		Logger:      testLogger,
 		Permissions: permMgr,

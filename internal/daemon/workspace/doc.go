@@ -17,23 +17,18 @@
 //     active project's .agents/ directory.
 //
 // When a workspace is opened at a directory belonging to a specific subproject,
-// all resource lookups ([Workspace.Agents], [Workspace.Tools],
-// [Workspace.ResolveModels], etc.) automatically scope resolution to that
+// all resource lookups on its [Catalog] automatically scope resolution to that
 // project so local overrides shadow workspace, user, and system definitions.
 //
 // # Isolated Environment Secret Layering
 //
 // Opening or reloading a workspace constructs an isolated in-memory environment
-// map ([Workspace.Env]) without reading or mutating the host process environment
-// ([os.Getenv] / [os.Setenv]). Environment files are layered in ascending order
-// of precedence:
+// map ([Workspace.Env]) without mutating the host process environment
+// ([os.Setenv]). Environment files are layered in ascending order of precedence:
 //
 //  1. User-global secrets ($XDG_CONFIG_HOME/tasksmith/.env).
 //  2. Ancestor .env files discovered while climbing toward WORKSPACE.md (such as
 //     a shared .env in a bare-repository worktree hub).
 //  3. Workspace root secrets (<RootDir>/.env).
 //  4. Working directory secrets (<CWD>/.env) when operating inside a subproject.
-//
-// Calling [Workspace.SetEnv] updates the in-memory environment map and atomically
-// persists the key-value pair to <RootDir>/.env.
 package workspace

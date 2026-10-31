@@ -94,6 +94,7 @@ type Skill struct {
 	Namespace    string     `json:"namespace,omitempty"`
 	Scope        string     `json:"scope,omitempty"`
 	Instructions string     `json:"instructions,omitempty"`
+	Tokens       int        `json:"tokens,omitempty"`
 }
 
 type ThinkingValue struct {

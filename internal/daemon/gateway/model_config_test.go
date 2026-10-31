@@ -13,7 +13,7 @@ import (
 	"github.com/masterkeysrd/loom/tool"
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/models"
-	"github.com/masterkeysrd/tasksmith/internal/daemon/workspace"
+	"github.com/masterkeysrd/warp"
 )
 
 func TestEffectiveTemperatureConfig(t *testing.T) {
@@ -34,7 +34,7 @@ func TestEffectiveTemperatureConfig(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			p := &thinkingTestProvider{modelProfile: tc.base}
-			spec := &workspace.ProviderModel{ID: "model", Limits: workspace.ModelLimits{Context: 4000, Output: 1000}, Capabilities: &workspace.ModelCapabilities{Completion: new(true), Temperature: tc.override}}
+			spec := &warp.ProviderModel{ID: "model", Limits: warp.ProviderModelLimits{Context: 4000, Output: 1000}, Capabilities: &warp.ProviderModelCapabilities{Completion: new(true), Temperature: tc.override}}
 			effective := models.Merge("provider/model", "ollama", spec, tc.base)
 			g := &gatewayImpl{providers: map[string]*providerInstance{"provider": {cfg: ProviderConfig{Name: "provider", Type: "ollama"}, llmProv: p}}}
 			zero := float32(0)
@@ -73,8 +73,8 @@ func TestEffectiveTemperatureConfig(t *testing.T) {
 
 func TestEffectiveProfileAndSettings(t *testing.T) {
 	base := &profile.Profile{Limits: profile.Limits{Context: 100, Output: 10, Dimensions: 1536}, Capabilities: profile.Capabilities{Completion: true, Decision: true, Embedding: true, Attachment: true, ToolCall: true, Temperature: true, ReasoningOptions: []profile.ReasoningOption{{Type: "effort", Values: []string{"low"}}}}, Modalities: profile.Modalities{Inputs: []profile.Modality{"text"}, Outputs: []profile.Modality{"text"}}}
-	caps := &workspace.ModelCapabilities{Completion: new(false), Decision: new(false), Embedding: new(false), Attachment: new(false), Tools: new(false), Temperature: new(false), StructuredOutput: new(true), Dimensions: []int{384, 768}, Thinking: []workspace.ThinkingCapability{{Type: "effort", AllowedEfforts: []string{"high"}}}, Modalities: &workspace.ModelModalities{Input: []string{"image"}}}
-	spec := &workspace.ProviderModel{ID: "model", Limits: workspace.ModelLimits{Context: 200, Output: 20, Dimensions: 384}, Capabilities: caps}
+	caps := &warp.ProviderModelCapabilities{Completion: new(false), Decision: new(false), Embedding: new(false), Attachment: new(false), Tools: new(false), Temperature: new(false), StructuredOutput: new(true), Dimensions: []int{384, 768}, Thinking: []warp.ProviderModelThinkingCapability{{Type: "effort", AllowedEfforts: []string{"high"}}}, Modalities: &warp.ProviderModelModalities{Input: []string{"image"}}}
+	spec := &warp.ProviderModel{ID: "model", Limits: warp.ProviderModelLimits{Context: 200, Output: 20, Dimensions: 384}, Capabilities: caps}
 	model := models.Merge("local/model", "ollama", spec, base)
 	p := model.Profile()
 	if p.Capabilities.Completion || p.Capabilities.Decision || p.Capabilities.Embedding || p.Capabilities.Attachment || p.Capabilities.ToolCall || p.Capabilities.Temperature || p.Limits.Context != 200 || p.Limits.Output != 20 || p.Limits.Dimensions != 384 || len(p.Modalities.Inputs) != 1 || p.Modalities.Inputs[0] != "image" || len(p.Modalities.Outputs) != 1 || p.Modalities.Outputs[0] != "text" {
@@ -114,7 +114,7 @@ func TestRequestCapabilities(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			p := &thinkingTestProvider{modelProfile: tc.base}
-			spec := &workspace.ProviderModel{ID: "model", Capabilities: &workspace.ModelCapabilities{Completion: new(true), Tools: tc.override}}
+			spec := &warp.ProviderModel{ID: "model", Capabilities: &warp.ProviderModelCapabilities{Completion: new(true), Tools: tc.override}}
 			effective := models.Merge("provider/model", "ollama", spec, tc.base)
 			g := &gatewayImpl{providers: map[string]*providerInstance{"provider": {cfg: ProviderConfig{Name: "provider", Type: "ollama"}, llmProv: p}}}
 			model, err := g.LLM(context.Background(), effective, llm.ModelConfig{})

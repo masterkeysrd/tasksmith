@@ -8,6 +8,7 @@ import (
 
 	"github.com/masterkeysrd/loom/profile"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/workspace"
+	"github.com/masterkeysrd/warp"
 )
 
 // Role identifies the cognitive capability role for model resolution.
@@ -22,7 +23,7 @@ const (
 	RoleEmbedding Role = "embedding"
 )
 
-func (r Role) warp() workspace.ModelRole { return workspace.ModelRole(r) }
+func (r Role) warp() warp.ModelRole { return warp.ModelRole(r) }
 
 // Catalog holds the built models of one workspace. It is safe for concurrent use.
 type Catalog interface {
@@ -39,10 +40,10 @@ type Catalog interface {
 }
 
 type catalogImpl struct {
-	ws        workspace.Workspace
+	cat       *workspace.Catalog
 	profiles  profile.Provider
 	providers map[string]string
-	listed    map[ID]workspace.ProviderModel
+	listed    map[ID]warp.ProviderModel
 
 	mu    sync.Mutex
 	built map[ID]Model
@@ -50,18 +51,21 @@ type catalogImpl struct {
 
 var _ Catalog = (*catalogImpl)(nil)
 
-func Build(ws workspace.Workspace, profiles profile.Provider) (Catalog, error) {
+// Build constructs a Catalog using cat for manifest models and profiles for fallback definitions.
+func Build(cat *workspace.Catalog, profiles profile.Provider) (Catalog, error) {
 	c := &catalogImpl{
-		ws:        ws,
+		cat:       cat,
 		profiles:  profiles,
 		providers: make(map[string]string),
-		listed:    make(map[ID]workspace.ProviderModel),
+		listed:    make(map[ID]warp.ProviderModel),
 		built:     make(map[ID]Model),
 	}
-	for _, p := range ws.Providers() {
-		c.providers[p.Name] = p.Type
-		for _, m := range p.Models {
-			c.listed[Normalize(p.Name, m.ID)] = m
+	if cat != nil {
+		for _, p := range cat.Providers() {
+			c.providers[p.Metadata.Name] = p.Spec.Type
+			for _, m := range p.Spec.Models {
+				c.listed[Normalize(p.Metadata.Name, m.ID)] = m
+			}
 		}
 	}
 	return c, nil
@@ -76,7 +80,7 @@ func (c *catalogImpl) Get(id ID) (Model, bool) {
 	if m, ok := c.built[id]; ok {
 		return cloneModel(m), true
 	}
-	var manifest *workspace.ProviderModel
+	var manifest *warp.ProviderModel
 	if entry, ok := c.listed[id]; ok {
 		manifest = &entry
 	}
@@ -99,18 +103,21 @@ func cloneModel(m Model) Model {
 		v := *p
 		return &v
 	}
-	c := &m.Capabilities
-	c.Completion = copyBool(c.Completion)
-	c.Decision = copyBool(c.Decision)
-	c.Embedding = copyBool(c.Embedding)
-	c.Tools = copyBool(c.Tools)
-	c.Attachment = copyBool(c.Attachment)
-	c.StructuredOutput = copyBool(c.StructuredOutput)
-	c.Temperature = copyBool(c.Temperature)
-	c.Dimensions = slices.Clone(c.Dimensions)
-	c.Thinking = slices.Clone(c.Thinking)
-	for i := range c.Thinking {
-		c.Thinking[i].Values = slices.Clone(c.Thinking[i].Values)
+	m.Capabilities.Completion = copyBool(m.Capabilities.Completion)
+	m.Capabilities.Decision = copyBool(m.Capabilities.Decision)
+	m.Capabilities.Embedding = copyBool(m.Capabilities.Embedding)
+	m.Capabilities.Tools = copyBool(m.Capabilities.Tools)
+	m.Capabilities.Attachment = copyBool(m.Capabilities.Attachment)
+	m.Capabilities.StructuredOutput = copyBool(m.Capabilities.StructuredOutput)
+	m.Capabilities.Temperature = copyBool(m.Capabilities.Temperature)
+	m.Capabilities.Dimensions = slices.Clone(m.Capabilities.Dimensions)
+	if m.Capabilities.Thinking != nil {
+		th := make([]ThinkingOption, len(m.Capabilities.Thinking))
+		for i, opt := range m.Capabilities.Thinking {
+			opt.Values = slices.Clone(opt.Values)
+			th[i] = opt
+		}
+		m.Capabilities.Thinking = th
 	}
 	m.Modalities.Input = slices.Clone(m.Modalities.Input)
 	m.Modalities.Output = slices.Clone(m.Modalities.Output)
@@ -122,18 +129,22 @@ func cloneModel(m Model) Model {
 	return m
 }
 
-func ResolveAgentModel(ws workspace.Workspace, catalog Catalog, agent string, model ID) (string, ID) {
+// ResolveAgentModel resolves the effective model ID for agent.
+func ResolveAgentModel(cat *workspace.Catalog, catalog Catalog, agent string, model ID) (string, ID) {
+	if cat == nil {
+		return agent, model
+	}
 	agent = strings.TrimSpace(agent)
 	if agent == "" {
-		agent = ws.DefaultAgentName()
+		agent = cat.DefaultAgentName()
 	}
 	model = ID(strings.TrimSpace(string(model)))
 	if model == "" {
-		if ag, ok := ws.GetAgent(agent); ok && ag != nil && len(ag.Models) > 0 {
-			for _, candidate := range ws.ResolveModels(workspace.RoleCompletion, ag.Models...) {
-				id := ID(candidate)
+		if ag, ok := cat.GetAgent(agent); ok && len(ag.Models) > 0 {
+			for _, candidate := range cat.ResolveModels(warp.ModelRoleCompletion, ag.Models...) {
+				id := ID(candidate.QualifiedID)
 				if id.Valid() {
-					if _, available := ws.GetProvider(id.Provider()); available {
+					if _, available := cat.GetProvider(id.Provider()); available {
 						if resolved, ok := catalog.Get(id); ok {
 							return agent, resolved.ID
 						}
@@ -153,7 +164,10 @@ func ResolveAgentModel(ws workspace.Workspace, catalog Catalog, agent string, mo
 }
 
 func (c *catalogImpl) Resolve(role Role, explicit ...string) (Model, bool) {
-	rm, ok := c.ws.ResolveModel(role.warp(), explicit...)
+	if c.cat == nil {
+		return Model{}, false
+	}
+	rm, ok := c.cat.ResolveModel(role.warp(), explicit...)
 	if !ok {
 		return Model{}, false
 	}

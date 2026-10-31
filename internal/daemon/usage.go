@@ -57,7 +57,7 @@ func (d *Daemon) MetricsQuery(ctx context.Context, req api.MetricsQuery) (*api.M
 }
 
 func (d *Daemon) SessionUsage(ctx context.Context, rawWS, id string) (*api.SessionUsage, error) {
-	rt, err := d.runtimes.Get(ctx, rawWS)
+	rt, err := d.workspace(ctx, rawWS)
 	if err != nil {
 		return nil, err
 	}
@@ -85,7 +85,7 @@ func (d *Daemon) Usage(ctx context.Context, rawWS string, req api.UsageRequest) 
 	sreq := metrics.SummaryRequest{Scope: req.Scope, Since: req.Since, Until: req.Until, GroupBy: req.GroupBy}
 	switch req.Scope {
 	case api.UsageScopeWorkspace:
-		rt, err := d.runtimes.Get(ctx, rawWS)
+		rt, err := d.workspace(ctx, rawWS)
 		if err != nil {
 			return nil, err
 		}
@@ -107,7 +107,7 @@ func (d *Daemon) Usage(ctx context.Context, rawWS string, req api.UsageRequest) 
 // fillSessionTitles adds titles to the top sessions of a workspace summary.
 // Sessions that no longer exist keep an empty title.
 func (d *Daemon) fillSessionTitles(ctx context.Context, rawWS string, summary *api.UsageSummary) {
-	rt, err := d.runtimes.Get(ctx, rawWS)
+	rt, err := d.workspace(ctx, rawWS)
 	if err != nil {
 		return
 	}

@@ -1,4 +1,4 @@
-package runtime
+package daemon
 
 import (
 	"context"
@@ -9,11 +9,30 @@ import (
 
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
-	"github.com/masterkeysrd/tasksmith/internal/daemon/broker"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/gateway"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/models"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/session"
 )
+
+func newTestDaemon(t *testing.T, pool gateway.Pool) *Daemon {
+	t.Helper()
+	runDir := shortTempDir(t)
+	sockPath := filepath.Join(runDir, "b.sock")
+	lockPath := filepath.Join(runDir, "b.lock")
+	d, err := New(Config{
+		SocketPath:  sockPath,
+		LockPath:    lockPath,
+		GatewayPool: pool,
+		Logger:      log.Default(),
+	})
+	if err != nil {
+		t.Fatalf("daemon.New: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = d.Close(context.Background())
+	})
+	return d
+}
 
 func TestRuntimeSharesGatewayAcrossModelOverrides(t *testing.T) {
 	ctx := context.Background()
@@ -21,11 +40,8 @@ func TestRuntimeSharesGatewayAcrossModelOverrides(t *testing.T) {
 	t.Cleanup(xdg.ClearCache)
 	pool := gateway.NewPool()
 	defer pool.Close()
-	mgr, err := New(Config{GatewayPool: pool, Publisher: reloadPublisher{}, Logger: log.Default()})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer mgr.Close()
+	d := newTestDaemon(t, pool)
+
 	var runtimes []*workspaceRuntime
 	for _, limit := range []int{8000, 16000} {
 		root := t.TempDir()
@@ -37,17 +53,17 @@ func TestRuntimeSharesGatewayAcrossModelOverrides(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(dir, "local.provider.yaml"), []byte(manifest), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		rt, err := mgr.Get(ctx, root)
+		rt, err := d.workspace(ctx, root)
 		if err != nil {
 			t.Fatal(err)
 		}
-		runtimes = append(runtimes, rt.(*workspaceRuntime))
+		runtimes = append(runtimes, rt)
 		model, ok := rt.Catalog().Get("local/sample")
 		if !ok || model.Limits.Context != limit {
 			t.Fatalf("catalog limit: %+v", model)
 		}
 	}
-	if runtimes[0].gw.(*switchingGateway).snapshot() != runtimes[1].gw.(*switchingGateway).snapshot() {
+	if runtimes[0].Gateway() != runtimes[1].Gateway() {
 		t.Fatal("identical providers did not share a gateway")
 	}
 }
@@ -77,18 +93,13 @@ func TestRuntimeBuildsAndSwapsCatalog(t *testing.T) {
 
 	pool := gateway.NewPool()
 	defer pool.Close()
-	mgr, err := New(Config{GatewayPool: pool, Publisher: reloadPublisher{}, Logger: log.Default()})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer mgr.Close()
+	d := newTestDaemon(t, pool)
 
-	rt, err := mgr.Get(ctx, root)
+	rt, err := d.workspace(ctx, root)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	// The catalog is built on create and exposes the manifest-listed model.
 	cat := rt.Catalog()
 	if cat == nil {
 		t.Fatal("catalog is nil")
@@ -104,12 +115,10 @@ func TestRuntimeBuildsAndSwapsCatalog(t *testing.T) {
 		t.Fatalf("source should record manifest: %+v", m.Source)
 	}
 
-	// Resolve uses warp's role/priority rules.
 	if m, ok := cat.Resolve(models.RoleCompletion); !ok || m.ID != models.ID("local/sample") {
 		t.Fatalf("resolve: %+v ok=%v", m, ok)
 	}
 
-	// Reload rebuilds and swaps the catalog; the new limits are visible.
 	writeProvider(16000)
 	if err := rt.Reload(ctx); err != nil {
 		t.Fatal(err)
@@ -133,11 +142,6 @@ func (p *failingReloadPool) Acquire(ctx context.Context, cfg gateway.Config) (ga
 	}
 	return p.Pool.Acquire(ctx, cfg)
 }
-
-type reloadPublisher struct{}
-
-func (reloadPublisher) Publish(string, broker.Event) {}
-func (reloadPublisher) DeleteTopic(string)           {}
 
 func TestReloadRefreshesModelDiagnostics(t *testing.T) {
 	ctx := context.Background()
@@ -180,16 +184,13 @@ func TestReloadRefreshesModelDiagnostics(t *testing.T) {
 	writeProvider(false)
 	pool := &failingReloadPool{Pool: gateway.NewPool()}
 	defer pool.Close()
-	mgr, err := New(Config{GatewayPool: pool, Publisher: reloadPublisher{}, Logger: log.Default()})
+	d := newTestDaemon(t, pool)
+
+	rt, err := d.workspace(ctx, root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer mgr.Close()
-	rt, err := mgr.Get(ctx, root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	sibling, err := mgr.Get(ctx, subdir)
+	sibling, err := d.workspace(ctx, subdir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -209,9 +210,9 @@ func TestReloadRefreshesModelDiagnostics(t *testing.T) {
 	if err := sibling.Reload(ctx); err == nil {
 		t.Fatal("reload unexpectedly succeeded")
 	}
-	oldAgent, ok := rt.Workspace().GetAgent("custom")
+	oldAgent, ok := rt.Workspace().Catalog().GetAgent("custom")
 	oldModel, found := rt.Catalog().Get("local/sample")
-	if !ok || oldAgent.Temperature == nil || !found || oldModel.Capabilities.Temperature == nil || *oldModel.Capabilities.Temperature || len(sess.Diagnostics) != 1 {
+	if !ok || oldAgent.Def == nil || oldAgent.Def.Spec.Temperature == nil || !found || oldModel.Capabilities.Temperature == nil || *oldModel.Capabilities.Temperature || len(sess.Diagnostics) != 1 {
 		t.Fatalf("failed reload changed active configuration: %+v, %+v, %+v", oldAgent, oldModel, sess.Diagnostics)
 	}
 	pool.fail = false

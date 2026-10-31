@@ -25,7 +25,6 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/daemon/metrics"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/models"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/permissions"
-	"github.com/masterkeysrd/tasksmith/internal/daemon/runtime"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/server"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/session"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tasks"
@@ -37,7 +36,7 @@ var (
 	ErrInvalidConfig  = errors.New("daemon: invalid configuration")
 	ErrAlreadyRunning = errors.New("daemon: server is already running")
 	ErrSessionRunning = session.ErrSessionRunning
-	ErrEmptyWorkspace = runtime.ErrEmptyWorkspace
+	ErrEmptyWorkspace = errors.New("daemon: workspace parameter is required")
 	ErrEmptyMessage   = errors.New("daemon: message content must not be empty")
 )
 
@@ -91,7 +90,9 @@ type Daemon struct {
 	listener     net.Listener
 	started      bool
 	closed       bool
-	runtimes     runtime.Manager
+	wsMu         sync.Mutex
+	workspaces   map[string]*workspaceRuntime
+	dirToRoot    map[string]string
 	db           *sql.DB
 	metricsStore *metrics.Store
 	usage        *metrics.Live
@@ -144,18 +145,6 @@ func New(cfg Config) (*Daemon, error) {
 		b.Publish(api.SessionStreamTopic(sessionID), api.UsageUpdatedEvent{SessionID: sessionID, Usage: u})
 	})
 
-	rtMgr, err := runtime.New(runtime.Config{
-		GatewayPool: cfg.GatewayPool,
-		Publisher:   b,
-		Logger:      daemonLogger,
-		Metrics:     usage,
-	})
-	if err != nil {
-		_ = store.Close()
-		_ = db.Close()
-		return nil, err
-	}
-
 	d := &Daemon{
 		db:           db,
 		metricsStore: store,
@@ -165,7 +154,8 @@ func New(cfg Config) (*Daemon, error) {
 		startedAt:    time.Now().UTC(),
 		broker:       b,
 		srv:          server.NewServer(serverLogger),
-		runtimes:     rtMgr,
+		workspaces:   make(map[string]*workspaceRuntime),
+		dirToRoot:    make(map[string]string),
 		shutdownCh:   make(chan struct{}),
 		serveErrCh:   make(chan error, 1),
 	}
@@ -288,7 +278,7 @@ func (d *Daemon) Close(ctx context.Context) error {
 			_ = os.Remove(d.cfg.SocketPath)
 		}
 
-		if err := d.runtimes.Close(); err != nil {
+		if err := d.closeWorkspaces(); err != nil {
 			errs = append(errs, err)
 		}
 
@@ -321,7 +311,7 @@ func (d *Daemon) Health(_ context.Context) (*api.HealthResponse, error) {
 	return &api.HealthResponse{
 		PID:        os.Getpid(),
 		StartedAt:  d.startedAt,
-		Workspaces: d.runtimes.Workspaces(),
+		Workspaces: d.Workspaces(),
 	}, nil
 }
 
@@ -402,18 +392,18 @@ func (d *Daemon) Done() <-chan struct{} {
 // WorkspaceBackend implementation
 
 func (d *Daemon) GetWorkspace(ctx context.Context, rawWS string) (*api.Workspace, error) {
-	rt, err := d.runtimes.Get(ctx, rawWS)
+	rt, err := d.workspace(ctx, rawWS)
 	if err != nil {
 		return nil, err
 	}
 
 	owner := rt.SessionRuntime()
-	resolvedDefault := draftModel(owner.Workspace(), owner.Catalog(), "", "")
+	resolvedDefault := draftModel(owner.Workspace().Catalog(), owner.Catalog(), "", "")
 
 	cleanDir, _ := fsutils.CleanPath(rawWS)
 
 	var warnings []string
-	if wsWarnings := rt.Workspace().Warnings(); len(wsWarnings) > 0 {
+	if wsWarnings := rt.Workspace().Catalog().Warnings(); len(wsWarnings) > 0 {
 		warnings = append(warnings, wsWarnings...)
 	}
 	if gw := rt.Gateway(); gw != nil {
@@ -428,14 +418,14 @@ func (d *Daemon) GetWorkspace(ctx context.Context, rawWS string) (*api.Workspace
 		Name:         rt.Workspace().Name(),
 		RootDir:      rt.Workspace().RootDir(),
 		CWD:          cleanDir,
-		DefaultAgent: owner.Workspace().DefaultAgentName(),
+		DefaultAgent: owner.Workspace().Catalog().DefaultAgentName(),
 		DefaultModel: resolvedDefault,
 		Warnings:     warnings,
 	}, nil
 }
 
-func draftModel(ws workspace.Workspace, catalog models.Catalog, agent, id string) *api.Model {
-	agent, selected := models.ResolveAgentModel(ws, catalog, agent, models.ID(id))
+func draftModel(cat *workspace.Catalog, catalog models.Catalog, agent, id string) *api.Model {
+	agent, selected := models.ResolveAgentModel(cat, catalog, agent, models.ID(id))
 	if !selected.Valid() {
 		return nil
 	}
@@ -444,14 +434,14 @@ func draftModel(ws workspace.Workspace, catalog models.Catalog, agent, id string
 		return nil
 	}
 	converted := session.CatalogToAPIModel(model)
-	if ag, ok := ws.GetAgent(agent); ok && ag != nil {
-		converted.ThinkingDefault = session.AgentThinking(ag.Thinking)
+	if ag, ok := cat.GetAgent(agent); ok {
+		converted.ThinkingDefault = ag.Thinking
 	}
 	return &converted
 }
 
 func (d *Daemon) ReloadWorkspace(ctx context.Context, rawWS string) error {
-	rt, err := d.runtimes.Get(ctx, rawWS)
+	rt, err := d.workspace(ctx, rawWS)
 	if err != nil {
 		return err
 	}
@@ -459,27 +449,29 @@ func (d *Daemon) ReloadWorkspace(ctx context.Context, rawWS string) error {
 }
 
 func (d *Daemon) ListAgents(ctx context.Context, rawWS string) ([]api.Agent, error) {
-	rt, err := d.runtimes.Get(ctx, rawWS)
+	rt, err := d.workspace(ctx, rawWS)
 	if err != nil {
 		return nil, err
 	}
 
-	agents := rt.Workspace().Agents()
+	cat := rt.Workspace().Catalog()
+	agents := cat.Agents()
 	out := make([]api.Agent, len(agents))
 	for i, ag := range agents {
-		out[i] = toAPIAgent(ag)
+		out[i] = ag.Agent
 	}
 	return out, nil
 }
 
 func (d *Daemon) GetAgent(ctx context.Context, rawWS, name string) (*api.Agent, error) {
-	rt, err := d.runtimes.Get(ctx, rawWS)
+	rt, err := d.workspace(ctx, rawWS)
 	if err != nil {
 		return nil, err
 	}
 
 	name = strings.TrimSpace(name)
-	ag, ok := rt.Workspace().GetAgent(name)
+	cat := rt.Workspace().Catalog()
+	ag, ok := cat.GetAgent(name)
 	if !ok {
 		return nil, &api.APIError{
 			StatusCode: http.StatusNotFound,
@@ -488,32 +480,32 @@ func (d *Daemon) GetAgent(ctx context.Context, rawWS, name string) (*api.Agent, 
 		}
 	}
 
-	res := toAPIAgent(*ag)
+	res := ag.Agent
 	return &res, nil
 }
 
 func (d *Daemon) ListCommands(ctx context.Context, rawWS string) ([]api.Command, error) {
-	rt, err := d.runtimes.Get(ctx, rawWS)
+	rt, err := d.workspace(ctx, rawWS)
 	if err != nil {
 		return nil, err
 	}
 
-	commands := rt.Workspace().Commands()
+	commands := rt.Workspace().Catalog().Commands()
 	out := make([]api.Command, len(commands))
 	for i, cmd := range commands {
-		out[i] = toAPICommand(cmd)
+		out[i] = cmd.Command
 	}
 	return out, nil
 }
 
 func (d *Daemon) GetCommand(ctx context.Context, rawWS, name string) (*api.Command, error) {
-	rt, err := d.runtimes.Get(ctx, rawWS)
+	rt, err := d.workspace(ctx, rawWS)
 	if err != nil {
 		return nil, err
 	}
 
 	name = strings.TrimSpace(name)
-	cmd, ok := rt.Workspace().GetCommand(name)
+	cmd, ok := rt.Workspace().Catalog().GetCommand(name)
 	if !ok {
 		return nil, &api.APIError{
 			StatusCode: http.StatusNotFound,
@@ -522,32 +514,34 @@ func (d *Daemon) GetCommand(ctx context.Context, rawWS, name string) (*api.Comma
 		}
 	}
 
-	res := toAPICommand(*cmd)
+	res := cmd.Command
 	return &res, nil
 }
 
 func (d *Daemon) ListSkills(ctx context.Context, rawWS string) ([]api.Skill, error) {
-	rt, err := d.runtimes.Get(ctx, rawWS)
+	rt, err := d.workspace(ctx, rawWS)
 	if err != nil {
 		return nil, err
 	}
 
-	skills := rt.Workspace().Skills()
+	cat := rt.Workspace().Catalog()
+	skills := cat.Skills()
 	out := make([]api.Skill, len(skills))
 	for i, sk := range skills {
-		out[i] = toAPISkill(sk)
+		out[i] = sk.Skill
 	}
 	return out, nil
 }
 
 func (d *Daemon) GetSkill(ctx context.Context, rawWS, name string) (*api.Skill, error) {
-	rt, err := d.runtimes.Get(ctx, rawWS)
+	rt, err := d.workspace(ctx, rawWS)
 	if err != nil {
 		return nil, err
 	}
 
 	name = strings.TrimSpace(name)
-	sk, ok := rt.Workspace().GetSkill(name)
+	cat := rt.Workspace().Catalog()
+	sk, ok := cat.GetSkill(name)
 	if !ok {
 		return nil, &api.APIError{
 			StatusCode: http.StatusNotFound,
@@ -556,12 +550,12 @@ func (d *Daemon) GetSkill(ctx context.Context, rawWS, name string) (*api.Skill, 
 		}
 	}
 
-	res := toAPISkill(*sk)
+	res := sk.Skill
 	return &res, nil
 }
 
 func (d *Daemon) ListModels(ctx context.Context, rawWS string) ([]api.Model, error) {
-	rt, err := d.runtimes.Get(ctx, rawWS)
+	rt, err := d.workspace(ctx, rawWS)
 	if err != nil {
 		return nil, err
 	}
@@ -575,7 +569,7 @@ func (d *Daemon) ListModels(ctx context.Context, rawWS string) ([]api.Model, err
 }
 
 func (d *Daemon) GetModel(ctx context.Context, rawWS, id string) (*api.Model, error) {
-	rt, err := d.runtimes.Get(ctx, rawWS)
+	rt, err := d.workspace(ctx, rawWS)
 	if err != nil {
 		return nil, err
 	}
@@ -604,7 +598,7 @@ func (d *Daemon) GetModel(ctx context.Context, rawWS, id string) (*api.Model, er
 }
 
 func (d *Daemon) GetPermissions(ctx context.Context, rawWS string) (*api.PermissionsResponse, error) {
-	rt, err := d.runtimes.Get(ctx, rawWS)
+	rt, err := d.workspace(ctx, rawWS)
 	if err != nil {
 		return nil, err
 	}
@@ -625,7 +619,7 @@ func (d *Daemon) GetPermissions(ctx context.Context, rawWS string) (*api.Permiss
 }
 
 func (d *Daemon) AddPermissionRule(ctx context.Context, rawWS string, req api.PermissionRuleRequest) (*api.PermissionsResponse, error) {
-	rt, err := d.runtimes.Get(ctx, rawWS)
+	rt, err := d.workspace(ctx, rawWS)
 	if err != nil {
 		return nil, err
 	}
@@ -644,7 +638,7 @@ func (d *Daemon) AddPermissionRule(ctx context.Context, rawWS string, req api.Pe
 }
 
 func (d *Daemon) RemovePermissionRule(ctx context.Context, rawWS string, req api.PermissionRuleRequest) (*api.PermissionsResponse, error) {
-	rt, err := d.runtimes.Get(ctx, rawWS)
+	rt, err := d.workspace(ctx, rawWS)
 	if err != nil {
 		return nil, err
 	}
@@ -665,7 +659,7 @@ func (d *Daemon) RemovePermissionRule(ctx context.Context, rawWS string, req api
 // SessionBackend implementation
 
 func (d *Daemon) CreateSession(ctx context.Context, rawWS string, req api.CreateSessionRequest) (*api.Session, bool, error) {
-	rt, err := d.runtimes.Get(ctx, rawWS)
+	rt, err := d.workspace(ctx, rawWS)
 	if err != nil {
 		return nil, false, err
 	}
@@ -689,7 +683,7 @@ func (d *Daemon) CreateSession(ctx context.Context, rawWS string, req api.Create
 }
 
 func (d *Daemon) PreviewSession(ctx context.Context, rawWS string, req api.PreviewSessionRequest) (*api.SessionPreview, error) {
-	rt, err := d.runtimes.Get(ctx, rawWS)
+	rt, err := d.workspace(ctx, rawWS)
 	if err != nil {
 		return nil, err
 	}
@@ -707,8 +701,8 @@ func (d *Daemon) PreviewSession(ctx context.Context, rawWS string, req api.Previ
 	var resolvedModel *api.Model
 	if hasModel {
 		converted := session.CatalogToAPIModel(model)
-		if ag, ok := rt.SessionRuntime().Workspace().GetAgent(cfg.Agent); ok && ag != nil {
-			converted.ThinkingDefault = session.AgentThinking(ag.Thinking)
+		if ag, ok := rt.SessionRuntime().Workspace().Catalog().GetAgent(cfg.Agent); ok {
+			converted.ThinkingDefault = ag.Thinking
 		}
 		resolvedModel = &converted
 	}
@@ -726,7 +720,7 @@ func (d *Daemon) PreviewSession(ctx context.Context, rawWS string, req api.Previ
 }
 
 func (d *Daemon) ListSessions(ctx context.Context, rawWS string) ([]api.Session, error) {
-	rt, err := d.runtimes.Get(ctx, rawWS)
+	rt, err := d.workspace(ctx, rawWS)
 	if err != nil {
 		return nil, err
 	}
@@ -744,7 +738,7 @@ func (d *Daemon) ListSessions(ctx context.Context, rawWS string) ([]api.Session,
 }
 
 func (d *Daemon) GetSession(ctx context.Context, rawWS, id string) (*api.Session, error) {
-	rt, err := d.runtimes.Get(ctx, rawWS)
+	rt, err := d.workspace(ctx, rawWS)
 	if err != nil {
 		return nil, err
 	}
@@ -759,7 +753,7 @@ func (d *Daemon) GetSession(ctx context.Context, rawWS, id string) (*api.Session
 }
 
 func (d *Daemon) UpdateSession(ctx context.Context, rawWS, id string, req api.UpdateSessionRequest) (*api.Session, error) {
-	rt, err := d.runtimes.Get(ctx, rawWS)
+	rt, err := d.workspace(ctx, rawWS)
 	if err != nil {
 		return nil, err
 	}
@@ -782,7 +776,7 @@ func (d *Daemon) UpdateSession(ctx context.Context, rawWS, id string, req api.Up
 }
 
 func (d *Daemon) DeleteSession(ctx context.Context, rawWS, id string) error {
-	rt, err := d.runtimes.Get(ctx, rawWS)
+	rt, err := d.workspace(ctx, rawWS)
 	if err != nil {
 		return err
 	}
@@ -791,7 +785,7 @@ func (d *Daemon) DeleteSession(ctx context.Context, rawWS, id string) error {
 }
 
 func (d *Daemon) Timeline(ctx context.Context, rawWS, id string) ([]api.TimelineEntry, error) {
-	rt, err := d.runtimes.Get(ctx, rawWS)
+	rt, err := d.workspace(ctx, rawWS)
 	if err != nil {
 		return nil, err
 	}
@@ -818,7 +812,7 @@ func (d *Daemon) Timeline(ctx context.Context, rawWS, id string) ([]api.Timeline
 }
 
 func (d *Daemon) Send(ctx context.Context, rawWS, id string, req api.SendRequest) error {
-	rt, err := d.runtimes.Get(ctx, rawWS)
+	rt, err := d.workspace(ctx, rawWS)
 	if err != nil {
 		return err
 	}
@@ -850,7 +844,7 @@ func (d *Daemon) Send(ctx context.Context, rawWS, id string, req api.SendRequest
 }
 
 func (d *Daemon) Cancel(ctx context.Context, rawWS, id string) error {
-	rt, err := d.runtimes.Get(ctx, rawWS)
+	rt, err := d.workspace(ctx, rawWS)
 	if err != nil {
 		return err
 	}
@@ -864,7 +858,7 @@ func (d *Daemon) Cancel(ctx context.Context, rawWS, id string) error {
 }
 
 func (d *Daemon) Changes(ctx context.Context, rawWS, id string) ([]api.FileChange, error) {
-	rt, err := d.runtimes.Get(ctx, rawWS)
+	rt, err := d.workspace(ctx, rawWS)
 	if err != nil {
 		return nil, err
 	}
@@ -887,7 +881,7 @@ func (d *Daemon) Changes(ctx context.Context, rawWS, id string) ([]api.FileChang
 }
 
 func (d *Daemon) Diff(ctx context.Context, rawWS, id, path, entryID string) (*api.DiffResponse, error) {
-	rt, err := d.runtimes.Get(ctx, rawWS)
+	rt, err := d.workspace(ctx, rawWS)
 	if err != nil {
 		return nil, err
 	}
@@ -920,7 +914,7 @@ func (d *Daemon) Diff(ctx context.Context, rawWS, id, path, entryID string) (*ap
 }
 
 func (d *Daemon) Revert(ctx context.Context, rawWS, id string, req api.RevertRequest) error {
-	rt, err := d.runtimes.Get(ctx, rawWS)
+	rt, err := d.workspace(ctx, rawWS)
 	if err != nil {
 		return err
 	}
@@ -945,7 +939,7 @@ func (d *Daemon) Revert(ctx context.Context, rawWS, id string, req api.RevertReq
 }
 
 func (d *Daemon) Tasks(ctx context.Context, rawWS, id string) ([]api.Task, error) {
-	rt, err := d.runtimes.Get(ctx, rawWS)
+	rt, err := d.workspace(ctx, rawWS)
 	if err != nil {
 		return nil, err
 	}
@@ -963,7 +957,7 @@ func (d *Daemon) Tasks(ctx context.Context, rawWS, id string) ([]api.Task, error
 }
 
 func (d *Daemon) KillTask(ctx context.Context, rawWS, id, taskID string) error {
-	rt, err := d.runtimes.Get(ctx, rawWS)
+	rt, err := d.workspace(ctx, rawWS)
 	if err != nil {
 		return err
 	}
@@ -1011,7 +1005,7 @@ func (d *Daemon) KillTask(ctx context.Context, rawWS, id, taskID string) error {
 }
 
 func (d *Daemon) StreamTaskOutput(ctx context.Context, rawWS, id, taskID string) (<-chan string, string, func(), error) {
-	rt, err := d.runtimes.Get(ctx, rawWS)
+	rt, err := d.workspace(ctx, rawWS)
 	if err != nil {
 		return nil, "", nil, err
 	}

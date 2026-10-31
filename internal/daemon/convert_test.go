@@ -12,20 +12,38 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/daemon/models"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/session"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tasks"
-	"github.com/masterkeysrd/tasksmith/internal/daemon/workspace"
+	"github.com/masterkeysrd/warp"
 )
 
 func TestCatalogModelProjection(t *testing.T) {
-	m := models.Merge("provider/model", "openai", &workspace.ProviderModel{
-		ID: "model", Label: "Friendly", Limits: workspace.ModelLimits{Context: 5000},
-		Capabilities: &workspace.ModelCapabilities{Tools: new(false)},
-		Cost:         &workspace.ModelCost{Input: 3, Tiers: []workspace.ModelCostTier{{Label: "large", ConditionType: "context", ConditionSize: 100, Input: 5}}},
-	}, &profile.Profile{Name: "Built-in", Limits: profile.Limits{Context: 9000, Output: 700}, Capabilities: profile.Capabilities{ToolCall: true}, Pricing: profile.Pricing{Input: 1, Output: 2}})
+	m := models.Merge("provider/model", "openai", &warp.ProviderModel{
+		ID:           "model",
+		Label:        "Friendly",
+		Limits:       warp.ProviderModelLimits{Context: 5000},
+		Capabilities: &warp.ProviderModelCapabilities{Tools: new(false)},
+		Cost: &warp.ProviderModelCost{
+			Input: 3,
+			Tiers: []warp.ProviderModelCostTier{
+				{
+					Label: "large",
+					Tier:  warp.ProviderModelCostTierCondition{Type: "context", Size: 100},
+					Input: 5,
+				},
+			},
+		},
+	}, &profile.Profile{
+		Name:         "Built-in",
+		Limits:       profile.Limits{Context: 9000, Output: 700},
+		Capabilities: profile.Capabilities{ToolCall: true},
+		Pricing:      profile.Pricing{Input: 1, Output: 2},
+	})
 	got := session.CatalogToAPIModel(m)
-	if got.Label != "Friendly" || got.ContextLimit != 5000 || got.OutputLimit != 700 || got.Capabilities.Tools == nil || *got.Capabilities.Tools {
+	if got.Label != "Friendly" || got.ContextLimit != 5000 || got.OutputLimit != 700 ||
+		got.Capabilities.Tools == nil || *got.Capabilities.Tools {
 		t.Fatalf("unexpected effective model: %+v", got)
 	}
-	if got.Pricing == nil || got.Pricing.Input != 3 || got.Pricing.Output != 0 || len(got.Pricing.Tiers) != 1 || got.Pricing.Tiers[0].ConditionSize != 100 {
+	if got.Pricing == nil || got.Pricing.Input != 3 || got.Pricing.Output != 0 ||
+		len(got.Pricing.Tiers) != 1 || got.Pricing.Tiers[0].ConditionSize != 100 {
 		t.Fatalf("unexpected pricing: %+v", got.Pricing)
 	}
 }
@@ -44,25 +62,53 @@ func TestThinkingDescriptions(t *testing.T) {
 	if other := session.ToAPIThinkingValues("toggle", []string{"high"}); other[0].Description != "" {
 		t.Fatalf("non-effort value received a hint: %+v", other)
 	}
-	model := session.CatalogToAPIModel(models.Merge("test/model", "test", &workspace.ProviderModel{ID: "model", Capabilities: &workspace.ModelCapabilities{Thinking: []workspace.ThinkingCapability{{Type: "effort", AllowedEfforts: values}}}}, nil))
-	if len(model.Thinking) != 1 || len(model.Thinking[0].Values) != len(values) || model.Thinking[0].Values[2].Description == "" {
+	model := session.CatalogToAPIModel(models.Merge("test/model", "test", &warp.ProviderModel{
+		ID: "model",
+		Capabilities: &warp.ProviderModelCapabilities{
+			Thinking: []warp.ProviderModelThinkingCapability{
+				{Type: "effort", AllowedEfforts: values},
+			},
+		},
+	}, nil))
+	if len(model.Thinking) != 1 || len(model.Thinking[0].Values) != len(values) ||
+		model.Thinking[0].Values[2].Description == "" {
 		t.Fatalf("workspace model missing descriptions: %+v", model.Thinking)
 	}
-	model = session.CatalogToAPIModel(models.Merge("test/model", "test", nil, &profile.Profile{Capabilities: profile.Capabilities{ReasoningOptions: []profile.ReasoningOption{{Type: "effort", Values: values}}}}))
-	if len(model.Thinking) != 1 || len(model.Thinking[0].Values) != len(values) || model.Thinking[0].Values[2].Description == "" || model.Thinking[0].Values[8].Description != "" {
+	model = session.CatalogToAPIModel(models.Merge("test/model", "test", nil, &profile.Profile{
+		Capabilities: profile.Capabilities{
+			ReasoningOptions: []profile.ReasoningOption{
+				{Type: "effort", Values: values},
+			},
+		},
+	}))
+	if len(model.Thinking) != 1 || len(model.Thinking[0].Values) != len(values) ||
+		model.Thinking[0].Values[2].Description == "" || model.Thinking[0].Values[8].Description != "" {
 		t.Fatalf("profile model has incorrect descriptions: %+v", model.Thinking)
 	}
 }
 
 func TestSessionDiagnosticsConversion(t *testing.T) {
-	sess := &session.Session{ID: "test", State: session.NewState(), Diagnostics: []models.Diagnostic{{Code: "temperature_unsupported", Setting: "temperature", Message: "omitted"}}}
+	sess := &session.Session{
+		ID:    "test",
+		State: session.NewState(),
+		Diagnostics: []models.Diagnostic{
+			{
+				Code:    "temperature_unsupported",
+				Setting: "temperature",
+				Message: "omitted",
+			},
+		},
+	}
 	want := api.SessionDiagnostic{Code: "temperature_unsupported", Setting: "temperature", Message: "omitted"}
 	converted := session.ToAPISession(sess)
 	if len(converted.Diagnostics) != 1 || converted.Diagnostics[0] != want {
 		t.Fatalf("session diagnostics: %+v", converted.Diagnostics)
 	}
 	d := &Daemon{}
-	event, err := d.FormatEvent(broker.Message{Topic: api.TopicSessions, Event: api.SessionUpdatedEvent{Session: session.ToAPISession(sess)}})
+	event, err := d.FormatEvent(broker.Message{
+		Topic: api.TopicSessions,
+		Event: api.SessionUpdatedEvent{Session: session.ToAPISession(sess)},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -263,11 +309,11 @@ func TestToAPIEventTodosUpdated(t *testing.T) {
 }
 
 func TestToAPIModelWithSlashInID(t *testing.T) {
-	pm := workspace.ProviderModel{
+	pm := warp.ProviderModel{
 		ID:    "ddalcu/Qwen3.8-27B-MLX-Serve-4bit",
 		Name:  "qwen3.8-27b-mlx-serve-4bit",
 		Label: "Qwen 3.8 (MLX Serve)",
-		Limits: workspace.ModelLimits{
+		Limits: warp.ProviderModelLimits{
 			Context: 262144,
 			Output:  32768,
 		},
@@ -286,13 +332,21 @@ func TestToAPIModelWithSlashInID(t *testing.T) {
 
 func TestQuestionResponseConversionPreservesNo(t *testing.T) {
 	questions := []api.Question{{Type: "text", Question: "Why?"}, {Type: "confirm", Question: "Proceed?"}}
-	input := api.QuestionResponse{Answers: []api.QuestionAnswer{{Question: "Why?", Text: "Reason"}, {Question: "Proceed?", Confirmed: new(false)}}}
+	input := api.QuestionResponse{
+		Answers: []api.QuestionAnswer{
+			{Question: "Why?", Text: "Reason"},
+			{Question: "Proceed?", Confirmed: new(false)},
+		},
+	}
 	output := session.ToAPIQuestionResponse(input, questions)
 	data, err := json.Marshal(output)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(data), `"text":"Reason","confirmed"`) || !strings.Contains(string(data), `"confirmed":false`) || output.Answers[0].Confirmed != nil || output.Answers[1].Confirmed == nil {
+	if strings.Contains(string(data), `"text":"Reason","confirmed"`) ||
+		!strings.Contains(string(data), `"confirmed":false`) ||
+		output.Answers[0].Confirmed != nil ||
+		output.Answers[1].Confirmed == nil {
 		t.Fatalf("unexpected encoded response: %s", data)
 	}
 	if output.Answers[1].Confirmed == nil || *output.Answers[1].Confirmed {

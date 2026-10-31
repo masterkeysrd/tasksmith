@@ -122,7 +122,10 @@ var skillMarkdownViewer = trail.FC("SkillMarkdownViewer", func(props skillMarkdo
 	border := style.SingleBorder().Top(true).Bottom(false).Left(false).Right(false).Color(scheme.Color.Border.Default)
 
 	scope := SkillScope(props.skill)
-	estTokens := EstimateSkillTokens(props.skill.Instructions)
+	estTokens := props.skill.Tokens
+	if estTokens == 0 && props.skill.Instructions != "" {
+		estTokens = EstimateSkillTokens(props.skill.Instructions)
+	}
 	tokStr := format.Tokens(estTokens) + " tok"
 
 	titleStyle := style.S().Bold(true).Foreground(scheme.Color.Text.Primary)
@@ -320,7 +323,10 @@ var SkillsBrowser = trail.FC("SkillsBrowser", func(slotID string) trail.Node {
 	opts := make([]uicomponents.Option, len(skills))
 	for i, sk := range skills {
 		scope := SkillScope(sk)
-		estTokens := EstimateSkillTokens(sk.Instructions)
+		estTokens := sk.Tokens
+		if estTokens == 0 && sk.Instructions != "" {
+			estTokens = EstimateSkillTokens(sk.Instructions)
+		}
 		tokStr := format.Tokens(estTokens)
 
 		scopeCol := fmt.Sprintf("[%s]", scope)

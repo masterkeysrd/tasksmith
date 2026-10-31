@@ -9,6 +9,7 @@ import (
 	"testing/fstest"
 
 	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
+	"github.com/masterkeysrd/warp"
 )
 
 func setupTestXDG(t *testing.T) string {
@@ -39,15 +40,20 @@ func TestPresets(t *testing.T) {
 	}
 
 	for _, p := range presets {
-		if _, ok := expected[p.Name]; ok {
-			expected[p.Name] = true
+		name := p.Metadata.Name
+		if _, ok := expected[name]; ok {
+			expected[name] = true
 		}
-		if p.Name == "typesafe" {
-			if p.DefaultModels[RoleDecision] != "jev-latest" {
-				t.Errorf("typesafe default decision model = %q, want %q", p.DefaultModels[RoleDecision], "jev-latest")
+		if name == "typesafe" {
+			decDefault := ""
+			if p.Spec.DefaultModels != nil {
+				decDefault = p.Spec.DefaultModels.Decision
+			}
+			if decDefault != "jev-latest" {
+				t.Errorf("typesafe default decision model = %q, want %q", decDefault, "jev-latest")
 			}
 			foundJev := false
-			for _, m := range p.Models {
+			for _, m := range p.Spec.Models {
 				if m.ID == "jev-latest" {
 					foundJev = true
 					if !m.Capabilities.SupportsDecision() {
@@ -184,7 +190,7 @@ func TestIsConfigured_IsInitialized_Initialize_CopyConfig(t *testing.T) {
 	if got := ws.Env()["OPENAI_API_KEY"]; got != "sk-test-secret-123" {
 		t.Errorf("ws.Env()[OPENAI_API_KEY] = %q, want %q", got, "sk-test-secret-123")
 	}
-	if pol := ws.Policies(); pol == nil || pol.Tools == nil || len(pol.Tools.Include) != 3 {
+	if pol := ws.Catalog().Policies(); pol == nil || pol.Tools == nil || len(pol.Tools.Include) != 3 {
 		t.Errorf("unexpected workspace policies: %+v", pol)
 	}
 
@@ -253,19 +259,19 @@ Workspace root instructions.
 		t.Fatalf("Open (tier 1) error: %v", err)
 	}
 
-	mainAgent, ok := ws.GetAgent("main")
+	mainAgent, ok := ws.Catalog().GetAgent("main")
 	if !ok {
 		t.Fatalf("expected builtin main agent to be resolved")
 	}
-	if mainAgent.Namespace != NamespaceSystem {
-		t.Errorf("expected main agent namespace %q, got %q", NamespaceSystem, mainAgent.Namespace)
+	if mainAgent.Def.Namespace != NamespaceSystem {
+		t.Errorf("expected main agent namespace %q, got %q", NamespaceSystem, mainAgent.Def.Namespace)
 	}
 
-	bashTool, ok := ws.GetTool("bash")
+	bashTool, ok := ws.Catalog().GetTool("bash")
 	if !ok {
 		t.Fatalf("expected injected bash tool to be resolved")
 	}
-	if bashTool.Namespace != NamespaceSystem || bashTool.Description != "System bash tool" {
+	if bashTool.Namespace != NamespaceSystem || bashTool.Metadata.Description != "System bash tool" {
 		t.Errorf("unexpected tier 1 bash tool: %+v", bashTool)
 	}
 
@@ -309,12 +315,12 @@ User bash instructions.
 	if err := ws.Reload(ctx); err != nil {
 		t.Fatalf("Reload (tier 2) error: %v", err)
 	}
-	mainAgent, ok = ws.GetAgent("main")
-	if !ok || mainAgent.Namespace != NamespaceUser || mainAgent.Description != "User-tier main agent" {
+	mainAgent, ok = ws.Catalog().GetAgent("main")
+	if !ok || mainAgent.Def.Namespace != NamespaceUser || mainAgent.Description != "User-tier main agent" {
 		t.Errorf("expected user tier to shadow system tier for main agent, got %+v", mainAgent)
 	}
-	bashTool, ok = ws.GetTool("bash")
-	if !ok || bashTool.Namespace != NamespaceUser || bashTool.Description != "User bash tool" {
+	bashTool, ok = ws.Catalog().GetTool("bash")
+	if !ok || bashTool.Namespace != NamespaceUser || bashTool.Metadata.Description != "User bash tool" {
 		t.Errorf("expected user tier to shadow system tier for bash tool, got %+v", bashTool)
 	}
 
@@ -341,8 +347,8 @@ Workspace tier instructions.
 	if err := ws.Reload(ctx); err != nil {
 		t.Fatalf("Reload (tier 3) error: %v", err)
 	}
-	mainAgent, ok = ws.GetAgent("main")
-	if !ok || mainAgent.Namespace != NamespaceWorkspace || mainAgent.Description != "Workspace-tier main agent" {
+	mainAgent, ok = ws.Catalog().GetAgent("main")
+	if !ok || mainAgent.Def.Namespace != NamespaceWorkspace || mainAgent.Description != "Workspace-tier main agent" {
 		t.Errorf("expected workspace tier to shadow user tier for main agent, got %+v", mainAgent)
 	}
 
@@ -369,8 +375,8 @@ Local project tier instructions.
 	if err := ws.Reload(ctx); err != nil {
 		t.Fatalf("Reload (tier 4) error: %v", err)
 	}
-	mainAgent, ok = ws.GetAgent("main")
-	if !ok || mainAgent.Namespace != NamespaceLocal || mainAgent.Description != "Local-tier main agent" {
+	mainAgent, ok = ws.Catalog().GetAgent("main")
+	if !ok || ws.Catalog().ScopeNamespace(mainAgent.Def.BaseResource) != NamespaceLocal || mainAgent.Description != "Local-tier main agent" {
 		t.Errorf("expected local tier to shadow workspace tier for main agent, got %+v", mainAgent)
 	}
 }
@@ -431,22 +437,6 @@ func TestIsolatedEnvManagement(t *testing.T) {
 	envMap["MUTATED"] = "true"
 	if _, exists := ws.Env()["MUTATED"]; exists {
 		t.Errorf("mutating returned Env() map should not affect workspace state")
-	}
-
-	// 3. Test SetEnv updates in-memory map and persists to <rootDir>/.env
-	if err := ws.SetEnv("NEW_RUNTIME_KEY", "runtime-val"); err != nil {
-		t.Fatalf("SetEnv error: %v", err)
-	}
-	if got := ws.Env()["NEW_RUNTIME_KEY"]; got != "runtime-val" {
-		t.Errorf("ws.Env()[NEW_RUNTIME_KEY] = %q, want %q", got, "runtime-val")
-	}
-
-	diskBytes, err := os.ReadFile(filepath.Join(wsDir, ".env"))
-	if err != nil {
-		t.Fatalf("read .env after SetEnv: %v", err)
-	}
-	if !strings.Contains(string(diskBytes), "NEW_RUNTIME_KEY=runtime-val") {
-		t.Errorf("expected NEW_RUNTIME_KEY in on-disk .env, got:\n%s", string(diskBytes))
 	}
 }
 
@@ -537,26 +527,26 @@ spec:
 	}
 
 	// 1. Explicit override (unqualified should qualify with defaultProvider "openai")
-	explicitModels := ws.ResolveModels(RoleCompletion, "gpt-5.4", "anthropic/claude-sonnet-4-6")
-	if len(explicitModels) != 2 || explicitModels[0] != "openai/gpt-5.4" || explicitModels[1] != "anthropic/claude-sonnet-4-6" {
+	explicitModels := ws.Catalog().ResolveModels(warp.ModelRoleCompletion, "gpt-5.4", "anthropic/claude-sonnet-4-6")
+	if len(explicitModels) != 2 || explicitModels[0].QualifiedID != "openai/gpt-5.4" || explicitModels[1].QualifiedID != "anthropic/claude-sonnet-4-6" {
 		t.Errorf("unexpected explicit models: %v", explicitModels)
 	}
 
 	// 2. RoleCompletion default from workspace
-	compModels := ws.ResolveModels(RoleCompletion)
-	if len(compModels) != 1 || compModels[0] != "openai/gpt-5.5" {
+	compModels := ws.Catalog().ResolveModels(warp.ModelRoleCompletion)
+	if len(compModels) != 1 || compModels[0].QualifiedID != "openai/gpt-5.5" {
 		t.Errorf("RoleCompletion models = %v, want [openai/gpt-5.5]", compModels)
 	}
 
 	// 3. RoleDecision default from workspace
-	decModels := ws.ResolveModels(RoleDecision)
-	if len(decModels) != 1 || decModels[0] != "typesafe/jev-latest" {
+	decModels := ws.Catalog().ResolveModels(warp.ModelRoleDecision)
+	if len(decModels) != 1 || decModels[0].QualifiedID != "typesafe/jev-latest" {
 		t.Errorf("RoleDecision models = %v, want [typesafe/jev-latest]", decModels)
 	}
 
 	// 4. RoleEmbedding default from defaultProvider ("openai")
-	embModels := ws.ResolveModels(RoleEmbedding)
-	if len(embModels) != 1 || embModels[0] != "openai/text-embedding-3-large" {
+	embModels := ws.Catalog().ResolveModels(warp.ModelRoleEmbedding)
+	if len(embModels) != 1 || embModels[0].QualifiedID != "openai/text-embedding-3-large" {
 		t.Errorf("RoleEmbedding models = %v, want [openai/text-embedding-3-large]", embModels)
 	}
 
@@ -590,11 +580,11 @@ spec:
 		"qwen3.8-27b-mlx-serve-4bit",
 		"mlx-serve/qwen3.8-27b-mlx-serve-4bit",
 	} {
-		resolved := ws.ResolveModels(RoleCompletion, ref)
-		if len(resolved) != 1 || resolved[0] != "mlx-serve/ddalcu/Qwen3.8-27B-MLX-Serve-4bit" {
+		resolved := ws.Catalog().ResolveModels(warp.ModelRoleCompletion, ref)
+		if len(resolved) != 1 || resolved[0].QualifiedID != "mlx-serve/ddalcu/Qwen3.8-27B-MLX-Serve-4bit" {
 			t.Errorf("ResolveModels(%q) = %v, want [mlx-serve/ddalcu/Qwen3.8-27B-MLX-Serve-4bit]", ref, resolved)
 		}
-		model, ok := ws.ResolveModel(RoleCompletion, ref)
+		model, ok := ws.Catalog().ResolveModel(warp.ModelRoleCompletion, ref)
 		if !ok || model.Model == nil || model.Model.Limits.Context != 262144 || model.Model.Limits.Output != 32768 {
 			t.Errorf("ResolveModel(%q) = %+v, want limits 262144/32768", ref, model)
 		}
@@ -679,28 +669,6 @@ spec:
 ---
 Review PR #{{.pr_number}} on branch $branch (arg1=$1).
 `
-	// Decision manifest
-	decisionManifest := `---
-apiVersion: warp/v1alpha1
-kind: Decision
-metadata:
-  name: safety-check
-  description: Evaluate command safety
-spec:
-  models: ["typesafe/jev-latest"]
-  arguments:
-    - name: command
-  questions:
-    - name: is_safe
-      type: predicate
-      instructions: Is the command safe to run unattended?
-      threshold: 0.85
-      criteria:
-        true: Read-only inspection command
-        false: Mutates filesystem or network state
----
-Evaluate command: {{.command}} in directory {{.TargetDir}}.
-`
 	// Toolkit and MCP manifests
 	toolkitManifest := `apiVersion: warp/v1alpha1
 kind: Toolkit
@@ -727,7 +695,6 @@ spec:
 		"custom-coder.agent.md": agentManifest,
 		"go-style.skill.md":     skillManifest,
 		"review.command.md":     cmdManifest,
-		"safety.decision.md":    decisionManifest,
 		"dev.toolkit.yaml":      toolkitManifest,
 		"github.mcp.yaml":       mcpManifest,
 	}
@@ -742,50 +709,54 @@ spec:
 		t.Fatalf("Open error: %v", err)
 	}
 
-	// Verify DefaultAgentName & SetAgentOverride
-	if got := ws.DefaultAgentName(); got != "custom-coder" {
+	// Verify DefaultAgentName
+	if got := ws.Catalog().DefaultAgentName(); got != "custom-coder" {
 		t.Errorf("DefaultAgentName() = %q, want %q", got, "custom-coder")
-	}
-	ws.SetAgentOverride("override-agent")
-	if got := ws.DefaultAgentName(); got != "override-agent" {
-		t.Errorf("DefaultAgentName() after override = %q, want %q", got, "override-agent")
 	}
 
 	// Verify Queries
-	if _, ok := ws.GetSkill("go-style"); !ok {
+	sk, ok := ws.Catalog().GetSkill("go-style")
+	if !ok {
 		t.Errorf("expected go-style skill to be loaded")
 	}
-	if _, ok := ws.GetCommand("review"); !ok || len(ws.Commands()) != 1 {
+	cmd, ok := ws.Catalog().GetCommand("review")
+	if !ok || len(ws.Catalog().Commands()) != 1 {
 		t.Errorf("expected review command to be loaded")
 	}
-	dec, ok := ws.GetDecision("safety-check")
-	if !ok || len(ws.Decisions()) != 1 || len(dec.Questions) != 1 || dec.Questions[0].Type != DecisionQuestionPredicate {
-		t.Errorf("unexpected decision resource: %+v", dec)
-	}
-	if _, ok := ws.GetToolkit("dev-toolkit"); !ok || len(ws.Toolkits()) != 1 {
-		t.Errorf("expected dev-toolkit to be loaded")
-	}
-	if _, ok := ws.GetTool("lint"); !ok {
+	if _, ok := ws.Catalog().GetTool("lint"); !ok {
 		t.Errorf("expected inline tool 'lint' from dev-toolkit to be resolved via GetTool")
 	}
-	if _, ok := ws.GetMCP("github-mcp"); !ok || len(ws.MCPs()) != 1 {
-		t.Errorf("expected github-mcp to be loaded")
-	}
-	if projects := ws.Projects(); len(projects) != 1 || !strings.Contains(projects[0].Instructions, "Follow strict Go conventions.") {
-		t.Errorf("unexpected projects: %+v", projects)
-	}
 
-	// Verify RenderWorkspace
-	renderedWS, err := ws.RenderWorkspace(map[string]any{"RuntimeEnv": "test"})
+	// Verify Render Workspace
+	wsSpec := ws.Catalog().WorkspaceSpec()
+	if wsSpec == nil {
+		t.Fatal("expected workspace spec")
+	}
+	renderedWS, err := wsSpec.Render(&warp.WorkspaceRenderOptions{
+		Globals: map[string]any{"RuntimeEnv": "test"},
+	})
 	if err != nil {
-		t.Fatalf("RenderWorkspace error: %v", err)
+		t.Fatalf("Render Workspace error: %v", err)
 	}
 	if !strings.Contains(renderedWS, ws.RootDir()) || !strings.Contains(renderedWS, "with env test") {
 		t.Errorf("unexpected RenderWorkspace output: %q", renderedWS)
 	}
 
-	// Verify RenderAgent
-	renderedAgent, err := ws.RenderAgent("custom-coder", map[string]string{"Focus": "concurrency"}, nil)
+	// Verify Render Agent
+	ag, ok := ws.Catalog().GetAgent("custom-coder")
+	if !ok {
+		t.Fatal("expected custom-coder agent")
+	}
+	resolvedAg, err := ws.Catalog().ResolveAgent("custom-coder")
+	if err != nil {
+		t.Fatalf("ResolveAgent error: %v", err)
+	}
+	renderedAgent, err := ag.Def.Render(&warp.AgentRenderOptions{
+		Workspace: ws.Catalog().WorkspaceSpec(),
+		Project:   ws.Catalog().Project(),
+		Resolved:  resolvedAg,
+		Globals:   map[string]any{"Focus": "concurrency"},
+	})
 	if err != nil {
 		t.Fatalf("RenderAgent error: %v", err)
 	}
@@ -794,8 +765,12 @@ spec:
 		t.Errorf("unexpected RenderAgent output: %q", renderedAgent)
 	}
 
-	// Verify RenderSkill
-	renderedSkill, err := ws.RenderSkill("go-style", map[string]string{"PackageName": "workspace"}, nil)
+	// Verify Render Skill
+	renderedSkill, err := sk.Def.Render(&warp.SkillRenderOptions{
+		Workspace: ws.Catalog().WorkspaceSpec(),
+		Project:   ws.Catalog().Project(),
+		Globals:   map[string]any{"PackageName": "workspace"},
+	})
 	if err != nil {
 		t.Fatalf("RenderSkill error: %v", err)
 	}
@@ -803,11 +778,17 @@ spec:
 		t.Errorf("unexpected RenderSkill output: %q", renderedSkill)
 	}
 
-	// Verify RenderCommand
-	renderedCmd, err := ws.RenderCommand("review", map[string]string{
+	// Verify Render Command
+	cmdArgs := map[string]string{
 		"pr_number": "42",
 		"branch":    "feat/workspace",
-	}, nil)
+	}
+	renderedCmd, err := cmd.Def.Render(&warp.CommandRenderOptions{
+		Workspace: ws.Catalog().WorkspaceSpec(),
+		Project:   ws.Catalog().Project(),
+		Args:      BuildPositionalArgs(cmd.Def.Spec.Arguments, cmdArgs),
+		Globals:   MergeStringArgs(cmdArgs, nil),
+	})
 	if err != nil {
 		t.Fatalf("RenderCommand error: %v", err)
 	}
@@ -815,24 +796,7 @@ spec:
 		t.Errorf("unexpected RenderCommand output: %q", renderedCmd)
 	}
 
-	// Verify RenderDecision
-	renderedDec, err := ws.RenderDecision("safety-check", map[string]any{
-		"command": "rm -rf /tmp/foo",
-	}, map[string]any{
-		"TargetDir": "/workspace",
-	})
-	if err != nil {
-		t.Fatalf("RenderDecision error: %v", err)
-	}
-	if !strings.Contains(renderedDec, "Evaluate command: rm -rf /tmp/foo in directory /workspace.") {
-		t.Errorf("unexpected RenderDecision output: %q", renderedDec)
-	}
-
 	// Verify ResolveAgent
-	resolvedAg, err := ws.ResolveAgent("custom-coder")
-	if err != nil {
-		t.Fatalf("ResolveAgent error: %v", err)
-	}
 	if resolvedAg == nil || resolvedAg.Agent == nil || resolvedAg.Agent.GetName() != "custom-coder" {
 		t.Fatalf("expected resolved agent custom-coder, got: %+v", resolvedAg)
 	}
@@ -849,13 +813,13 @@ func TestWorkspacePortablePath(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := ws.Initialize(ctx, InitOptions{}); err != nil {
+	insideDir := filepath.Join(ws.RootDir(), ".agents", "skills", "test-skill")
+	if err := os.MkdirAll(insideDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 
 	// 1. Path inside workspace root
-	inside := filepath.Join(ws.RootDir(), ".agents", "skills", "test-skill")
-	if got := ws.PortablePath(inside); got != filepath.Join(".agents", "skills", "test-skill") {
+	if got := ws.PortablePath(insideDir); got != filepath.Join(".agents", "skills", "test-skill") {
 		t.Errorf("PortablePath inside = %q, want %q", got, filepath.Join(".agents", "skills", "test-skill"))
 	}
 

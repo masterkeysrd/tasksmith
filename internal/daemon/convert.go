@@ -13,7 +13,6 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/daemon/permissions"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/session"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/std"
-	"github.com/masterkeysrd/tasksmith/internal/daemon/workspace"
 )
 
 func fromSendRequest(req api.SendRequest) (session.SendInput, error) {
@@ -148,80 +147,6 @@ func toAPIFileChange(fc std.FileChange) api.FileChange {
 		Additions:  fc.Additions,
 		Deletions:  fc.Deletions,
 		Timestamp:  fc.Timestamp,
-	}
-}
-
-func toAPIAgent(ag workspace.Agent) api.Agent {
-	return api.Agent{
-		Name:        ag.Name,
-		DisplayName: ag.DisplayName,
-		Description: ag.Description,
-		Models:      slices.Clone(ag.Models),
-		Thinking:    session.AgentThinking(ag.Thinking),
-		Context:     ag.Context,
-	}
-}
-
-func toAPIArguments(args []workspace.Argument) []api.Argument {
-	if args == nil {
-		return nil
-	}
-	out := make([]api.Argument, len(args))
-	for i, a := range args {
-		out[i] = api.Argument{
-			Name:        a.Name,
-			Description: a.Description,
-			Required:    a.Required,
-			Default:     a.Default,
-		}
-	}
-	return out
-}
-
-func toAPICommand(cmd workspace.Command) api.Command {
-	return api.Command{
-		Name:         cmd.Name,
-		DisplayName:  cmd.DisplayName,
-		Description:  cmd.Description,
-		ArgumentHint: cmd.ArgumentHint,
-		Arguments:    toAPIArguments(cmd.Arguments),
-		Models:       slices.Clone(cmd.Models),
-		Tools:        slices.Clone(cmd.Tools),
-		Namespace:    cmd.Namespace,
-	}
-}
-
-func toAPISkill(sk workspace.Skill) api.Skill {
-	return api.Skill{
-		Name:         sk.Name,
-		DisplayName:  sk.DisplayName,
-		Description:  sk.Description,
-		UseWhen:      sk.UseWhen,
-		Keywords:     slices.Clone(sk.Keywords),
-		ArgumentHint: sk.ArgumentHint,
-		Arguments:    toAPIArguments(sk.Arguments),
-		Namespace:    sk.Namespace,
-		Scope:        formatSkillScope(sk.Namespace),
-		Instructions: sk.Instructions,
-	}
-}
-
-func formatSkillScope(ns string) string {
-	switch strings.ToLower(strings.TrimSpace(ns)) {
-	case "workspace":
-		return "Workspace"
-	case "local", "project":
-		return "Project"
-	case "user":
-		return "User"
-	case "system", "builtin", "":
-		return "Builtin"
-	default:
-		s := strings.TrimSpace(ns)
-		if len(s) > 0 {
-			return strings.ToUpper(s[:1]) + s[1:]
-		}
-		return "Builtin"
 	}
 }
 

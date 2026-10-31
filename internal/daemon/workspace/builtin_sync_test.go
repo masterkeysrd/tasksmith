@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
+	"github.com/masterkeysrd/warp"
 )
 
 func TestBuiltinSync(t *testing.T) {
@@ -107,7 +108,7 @@ func TestBuiltinSkillDiscoveryAndFallback(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sk, ok := ws.GetSkill("tasksmith-customizations")
+	sk, ok := ws.Catalog().GetSkill("tasksmith-customizations")
 	if !ok {
 		t.Fatal("built-in skill missing")
 	}
@@ -115,13 +116,13 @@ func TestBuiltinSkillDiscoveryAndFallback(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if filepath.Clean(sk.Directory) != filepath.Clean(dir) {
-		t.Fatalf("skill directory %q, want %q", sk.Directory, dir)
+	if filepath.Clean(sk.Def.Directory) != filepath.Clean(dir) {
+		t.Fatalf("skill directory %q, want %q", sk.Def.Directory, dir)
 	}
-	if _, err := os.Stat(filepath.Join(sk.Directory, "references", "rules.md")); err != nil {
+	if _, err := os.Stat(filepath.Join(sk.Def.Directory, "references", "rules.md")); err != nil {
 		t.Fatal(err)
 	}
-	resolved, err := ws.ResolveAgent("main")
+	resolved, err := ws.Catalog().ResolveAgent("main")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -135,7 +136,7 @@ func TestBuiltinSkillDiscoveryAndFallback(t *testing.T) {
 		t.Fatal("main agent cannot load customization skill")
 	}
 	for _, name := range []string{"agent-creator", "skill-creator", "tool-creator", "project-initializer", "provider-manager"} {
-		if _, ok := ws.GetAgent(name); ok {
+		if _, ok := ws.Catalog().GetAgent(name); ok {
 			t.Fatalf("obsolete agent %q still registered", name)
 		}
 	}
@@ -149,10 +150,14 @@ func TestBuiltinSkillDiscoveryAndFallback(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := fallback.GetSkill("tasksmith-customizations"); !ok {
+	fbSk, ok := fallback.Catalog().GetSkill("tasksmith-customizations")
+	if !ok {
 		t.Fatal("embedded fallback missing skill")
 	}
-	text, err := fallback.RenderSkill("tasksmith-customizations", nil, nil)
+	text, err := fbSk.Def.Render(&warp.SkillRenderOptions{
+		Workspace: fallback.Catalog().WorkspaceSpec(),
+		Project:   fallback.Catalog().Project(),
+	})
 	if err != nil || !strings.Contains(text, "references/rules.md") {
 		t.Fatalf("fallback render: %v", err)
 	}

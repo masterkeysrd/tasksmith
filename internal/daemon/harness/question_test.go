@@ -13,7 +13,7 @@ import (
 
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tools"
-	"github.com/masterkeysrd/tasksmith/internal/daemon/workspace"
+	"github.com/masterkeysrd/warp"
 )
 
 func TestQuestionPermissionEvaluation(t *testing.T) {
@@ -33,7 +33,7 @@ func TestQuestionPermissionEvaluation(t *testing.T) {
 			ctx := context.Background()
 			_, registry, perms := newTestToolsRegistry(t)
 			if tc.policy {
-				perms.SetPolicies(&workspace.Policies{Tools: &workspace.ToolPolicies{Exclude: []string{"ask_question"}}})
+				perms.SetPolicies(&warp.Policies{Tools: &warp.ToolPolicies{Exclude: []string{"ask_question"}}})
 			} else if tc.deny {
 				if err := perms.AddDeny("ask_question(*)"); err != nil {
 					t.Fatal(err)
@@ -41,12 +41,32 @@ func TestQuestionPermissionEvaluation(t *testing.T) {
 			} else {
 				perms.SetMode(api.ModeAsk)
 			}
-			provider := &fakeProvider{stepHandler: func(_ context.Context, _ *llm.Request, turn int) ([]message.AssistantChunk, error) {
-				if turn == 1 {
-					return []message.AssistantChunk{{Content: []message.Block{&message.ToolCall{ID: "ask", Name: "ask_question", Args: map[string]any{"questions": []any{map[string]any{"type": "confirm", "question": "Proceed?", "description": "Confirm."}}}}}, Done: true}}, nil
-				}
-				return []message.AssistantChunk{{Content: []message.Block{&message.TextBlock{Text: "done"}}, Done: true}}, nil
-			}}
+			provider := &fakeProvider{
+				stepHandler: func(_ context.Context, _ *llm.Request, turn int) ([]message.AssistantChunk, error) {
+					if turn == 1 {
+						return []message.AssistantChunk{
+							{
+								Content: []message.Block{
+									&message.ToolCall{
+										ID:   "ask",
+										Name: "ask_question",
+										Args: map[string]any{
+											"questions": []any{
+												map[string]any{
+													"type":        "confirm",
+													"question":    "Proceed?",
+													"description": "Confirm.",
+												},
+											},
+										},
+									},
+								},
+								Done: true,
+							},
+						}, nil
+					}
+					return []message.AssistantChunk{{Content: []message.Block{&message.TextBlock{Text: "done"}}, Done: true}}, nil
+				}}
 			h, err := New(Config{ID: "question-permission", DB: openTestSQLite(t), Model: newTestModel(t, provider), Tools: registry, Bash: &fakeBashRunner{}, Spiller: newTestSpiller(t), Permissions: perms, Queue: &fakeQueue{}, Logger: log.Default()})
 			if err != nil {
 				t.Fatal(err)

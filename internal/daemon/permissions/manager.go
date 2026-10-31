@@ -17,7 +17,7 @@ import (
 
 // Config configures the root permission [Manager].
 type Config struct {
-	Workspace  workspace.Workspace
+	Workspace  *workspace.Workspace
 	GlobalPath string // optional override for tests; defaults to filepath.Join(xdg.ConfigDir(), "permissions.json")
 }
 
@@ -33,7 +33,7 @@ type Manager interface {
 
 type manager struct {
 	mu          sync.RWMutex
-	ws          workspace.Workspace
+	ws          *workspace.Workspace
 	globalPath  string
 	projectPath string
 }

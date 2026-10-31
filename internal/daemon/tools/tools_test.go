@@ -58,7 +58,7 @@ func (o contentProviderOut) ToolContent() message.Content {
 	return message.Content{&message.TextBlock{Text: "block:" + o.Msg}}
 }
 
-func setupToolsEnv(t *testing.T) (string, sandbox.Sandbox, workspace.Workspace) {
+func setupToolsEnv(t *testing.T) (string, sandbox.Sandbox, *workspace.Workspace) {
 	t.Helper()
 	ctx := context.Background()
 	dir := t.TempDir()

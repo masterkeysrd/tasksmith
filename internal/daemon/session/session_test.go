@@ -37,18 +37,27 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/daemon/std"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tools/builtin"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/workspace"
+	"github.com/masterkeysrd/warp"
 )
 
-type catalogWorkspace struct {
-	workspace.Workspace
-	providers []workspace.Provider
-}
-
-func (w catalogWorkspace) Providers() []workspace.Provider { return w.providers }
-
-func testCatalog(t *testing.T, ws workspace.Workspace, entries ...workspace.ProviderModel) func() models.Catalog {
+func testCatalog(t *testing.T, ws *workspace.Workspace, entries ...warp.ProviderModel) func() models.Catalog {
 	t.Helper()
-	catalog, err := models.Build(catalogWorkspace{Workspace: ws, providers: []workspace.Provider{{Metadata: workspace.Metadata{Name: "local"}, Type: "ollama", Models: entries}}}, nil)
+	reg := warp.NewRegistry(nil)
+	p := &warp.ModelProvider{
+		BaseResource: warp.BaseResource{
+			APIVersion: warp.APIVersion,
+			Kind:       warp.KindModelProvider,
+			Namespace:  warp.NamespaceWorkspace,
+			Metadata:   warp.Metadata{Name: "local"},
+		},
+		Spec: warp.ModelProviderSpec{
+			Type:   "ollama",
+			Models: entries,
+		},
+	}
+	reg.Set(p.QualifiedName(), p)
+	cat := workspace.NewCatalog(reg, ws.RootDir(), ws.CWD())
+	catalog, err := models.Build(cat, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,11 +103,13 @@ func TestSessionModelDiagnosticsAndRequests(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	tempTrue := true
+	tempFalse := false
 	catalog := testCatalog(t, ws,
-		workspace.ProviderModel{ID: "supported", Capabilities: &workspace.ModelCapabilities{Temperature: new(true), Thinking: []workspace.ThinkingCapability{{Type: "effort", AllowedEfforts: []string{"low", "high"}}}}},
-		workspace.ProviderModel{ID: "unsupported", Capabilities: &workspace.ModelCapabilities{Temperature: new(false)}},
+		warp.ProviderModel{ID: "supported", Capabilities: &warp.ProviderModelCapabilities{Temperature: &tempTrue, Thinking: []warp.ProviderModelThinkingCapability{{Type: "effort", AllowedEfforts: []string{"low", "high"}}}}},
+		warp.ProviderModel{ID: "unsupported", Capabilities: &warp.ProviderModelCapabilities{Temperature: &tempFalse}},
 	)
-	mgr, err := New(Config{DB: db, Workspace: ws, Gateway: gw, Publisher: pub, Logger: log.Default(), Permissions: perms, Catalog: catalog})
+	mgr, err := New(Config{DB: db, Workspace: ws, Gateway: func() gateway.Gateway { return gw }, Publisher: pub, Logger: log.Default(), Permissions: perms, Catalog: catalog})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -147,7 +158,7 @@ func TestSessionModelDiagnosticsAndRequests(t *testing.T) {
 	if len(updated.Diagnostics) != 1 || updated.Diagnostics[0].Code != "temperature_unsupported" {
 		t.Fatalf("agent switch diagnostics: %+v", updated.Diagnostics)
 	}
-	reopened, err := New(Config{DB: db, Workspace: ws, Gateway: gw, Publisher: pub, Logger: log.Default(), Permissions: perms, Catalog: catalog})
+	reopened, err := New(Config{DB: db, Workspace: ws, Gateway: func() gateway.Gateway { return gw }, Publisher: pub, Logger: log.Default(), Permissions: perms, Catalog: catalog})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -457,7 +468,7 @@ func (p *testPublisher) reset() {
 	p.records = nil
 }
 
-func setupTestEnv(t *testing.T, prov *fakeProvider) (*sql.DB, workspace.Workspace, *fakeGateway, *testPublisher, Manager) {
+func setupTestEnv(t *testing.T, prov *fakeProvider) (*sql.DB, *workspace.Workspace, *fakeGateway, *testPublisher, Manager) {
 	t.Helper()
 
 	xdgRoot := t.TempDir()
@@ -497,7 +508,7 @@ func setupTestEnv(t *testing.T, prov *fakeProvider) (*sql.DB, workspace.Workspac
 	mgr, err := New(Config{
 		DB:          db,
 		Workspace:   ws,
-		Gateway:     gw,
+		Gateway:     func() gateway.Gateway { return gw },
 		Publisher:   pub,
 		Logger:      logger,
 		Permissions: permMgr,
@@ -582,6 +593,7 @@ func TestConfigValidate(t *testing.T) {
 		t.Fatalf("permissions.New: %v", err)
 	}
 
+	gwFunc := func() gateway.Gateway { return gw }
 	tests := []struct {
 		name string
 		cfg  Config
@@ -590,7 +602,7 @@ func TestConfigValidate(t *testing.T) {
 			name: "missing DB",
 			cfg: Config{
 				Workspace:   ws,
-				Gateway:     gw,
+				Gateway:     gwFunc,
 				Publisher:   pub,
 				Logger:      logger,
 				Permissions: permMgr,
@@ -600,7 +612,7 @@ func TestConfigValidate(t *testing.T) {
 			name: "missing Workspace",
 			cfg: Config{
 				DB:          db,
-				Gateway:     gw,
+				Gateway:     gwFunc,
 				Publisher:   pub,
 				Logger:      logger,
 				Permissions: permMgr,
@@ -621,7 +633,7 @@ func TestConfigValidate(t *testing.T) {
 			cfg: Config{
 				DB:          db,
 				Workspace:   ws,
-				Gateway:     gw,
+				Gateway:     gwFunc,
 				Logger:      logger,
 				Permissions: permMgr,
 			},
@@ -631,7 +643,7 @@ func TestConfigValidate(t *testing.T) {
 			cfg: Config{
 				DB:          db,
 				Workspace:   ws,
-				Gateway:     gw,
+				Gateway:     gwFunc,
 				Publisher:   pub,
 				Permissions: permMgr,
 			},
@@ -641,7 +653,7 @@ func TestConfigValidate(t *testing.T) {
 			cfg: Config{
 				DB:        db,
 				Workspace: ws,
-				Gateway:   gw,
+				Gateway:   gwFunc,
 				Publisher: pub,
 				Logger:    logger,
 			},
@@ -895,7 +907,7 @@ OVERRIDE_AGENT_PROMPT_MARKER {{ if call .HasTool "shell" }}HAS_SHELL_TOOL{{ end 
 	mgr, err := New(Config{
 		DB:          db,
 		Workspace:   ws,
-		Gateway:     gw,
+		Gateway:     func() gateway.Gateway { return gw },
 		Publisher:   pub,
 		Logger:      log.Default(),
 		Permissions: permMgr,
@@ -1653,7 +1665,7 @@ func TestFileTrackerReloadAndDeleteSessionCleanup(t *testing.T) {
 	mgr2, err := New(Config{
 		DB:          db,
 		Workspace:   ws,
-		Gateway:     gw,
+		Gateway:     func() gateway.Gateway { return gw },
 		Publisher:   pub,
 		Logger:      log.Default(),
 		Permissions: permMgr,
@@ -2618,7 +2630,7 @@ func TestTargetedSessionFixes(t *testing.T) {
 	mgr2, err := New(Config{
 		DB:          db,
 		Workspace:   ws,
-		Gateway:     gw,
+		Gateway:     func() gateway.Gateway { return gw },
 		Publisher:   pub,
 		Logger:      log.Default(),
 		Permissions: permMgr,
@@ -2704,7 +2716,7 @@ func TestSessionPermissionsPersistence(t *testing.T) {
 	mgr2, err := New(Config{
 		DB:          db,
 		Workspace:   ws,
-		Gateway:     gw,
+		Gateway:     func() gateway.Gateway { return gw },
 		Publisher:   pub,
 		Logger:      log.Default(),
 		Permissions: permMgr,
@@ -3562,7 +3574,7 @@ func TestSessionTodosRestoreOnLoad(t *testing.T) {
 	mgr2, err := New(Config{
 		DB:          db,
 		Workspace:   ws,
-		Gateway:     gw,
+		Gateway:     func() gateway.Gateway { return gw },
 		Publisher:   pub,
 		Logger:      log.Default(),
 		Permissions: permMgr,

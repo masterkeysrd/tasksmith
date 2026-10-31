@@ -13,24 +13,20 @@ import (
 	"github.com/masterkeysrd/warp"
 )
 
-// SkillRenderer defines the function signature for rendering a skill template.
-type SkillRenderer func(name string, args map[string]string) (string, error)
-
 type loadSkillTool struct {
-	skills map[string]warp.Skill
-	render SkillRenderer
-	ws     workspace.Workspace
+	skills map[string]*warp.Skill
+	ws     *workspace.Workspace
 }
 
-func newLoadSkillTool(skills []warp.Skill, render SkillRenderer, ws workspace.Workspace) *loadSkillTool {
-	allowed := make(map[string]warp.Skill, len(skills))
-	for _, sk := range skills {
+func newLoadSkillTool(skills []warp.Skill, ws *workspace.Workspace) *loadSkillTool {
+	allowed := make(map[string]*warp.Skill, len(skills))
+	for i := range skills {
+		sk := &skills[i]
 		allowed[strings.ToLower(sk.Metadata.Name)] = sk
 	}
 
 	return &loadSkillTool{
 		skills: allowed,
-		render: render,
 		ws:     ws,
 	}
 }
@@ -61,7 +57,21 @@ func (t *loadSkillTool) Execute(_ context.Context, in api.LoadSkillInput) (api.L
 		return api.LoadSkillOutput{}, fmt.Errorf("skill %q is not accessible to this agent", name)
 	}
 
-	rendered, err := t.render(name, in.Arguments)
+	var wsSpec *warp.Workspace
+	var project *warp.Project
+	if t.ws != nil && t.ws.Catalog() != nil {
+		wsSpec = t.ws.Catalog().WorkspaceSpec()
+		project = t.ws.Catalog().Project()
+	}
+
+	positionalArgs := workspace.BuildPositionalArgs(sk.Spec.Arguments, in.Arguments)
+	globals := workspace.MergeStringArgs(in.Arguments, nil)
+	rendered, err := sk.Render(&warp.SkillRenderOptions{
+		Workspace: wsSpec,
+		Project:   project,
+		Args:      positionalArgs,
+		Globals:   globals,
+	})
 	if err != nil {
 		return api.LoadSkillOutput{}, err
 	}

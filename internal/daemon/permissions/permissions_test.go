@@ -15,9 +15,10 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/daemon/permissions"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tools"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/workspace"
+	"github.com/masterkeysrd/warp"
 )
 
-func setupTestWorkspace(t *testing.T) (string, workspace.Workspace) {
+func setupTestWorkspace(t *testing.T) (string, *workspace.Workspace) {
 	t.Helper()
 	dir := t.TempDir()
 	if realDir, err := filepath.EvalSymlinks(dir); err == nil {
@@ -443,8 +444,8 @@ func TestSessionManagerEvaluationModesAndPrecedence(t *testing.T) {
 
 	// 8. Workspace policies: Exclude, Include, AllowDangerous, AllowOpenWorld
 	f := false
-	sess.SetPolicies(&workspace.Policies{
-		Tools: &workspace.ToolPolicies{
+	sess.SetPolicies(&warp.Policies{
+		Tools: &warp.ToolPolicies{
 			Exclude:        []string{"excluded_*"},
 			Include:        []string{"view", "write_file"},
 			AllowDangerous: &f,

@@ -5,7 +5,7 @@ import (
 	"strings"
 
 	"github.com/masterkeysrd/loom/profile"
-	"github.com/masterkeysrd/tasksmith/internal/daemon/workspace"
+	"github.com/masterkeysrd/warp"
 )
 
 // Default context and output limits applied when neither layer sets them.
@@ -29,7 +29,7 @@ const (
 //     (tiers are never mixed across layers).
 //   - Limits fallback: if neither layer sets Context/Output, 128000/16384,
 //     applied once here.
-func Merge(id ID, providerType string, manifest *workspace.ProviderModel, base *profile.Profile) Model {
+func Merge(id ID, providerType string, manifest *warp.ProviderModel, base *profile.Profile) Model {
 	out := mergeModel(fromManifest(manifest, id, providerType), fromProfile(base, id, providerType))
 	if out.Name == "" {
 		out.Name = id.Name()
@@ -106,7 +106,7 @@ func mergeModel(layers ...Model) Model {
 }
 
 // fromManifest builds the workspace-manifest layer of a Model.
-func fromManifest(manifest *workspace.ProviderModel, id ID, providerType string) Model {
+func fromManifest(manifest *warp.ProviderModel, id ID, providerType string) Model {
 	var m Model
 	m.ID = id
 	m.ProviderType = providerType
@@ -154,7 +154,7 @@ func fromManifest(manifest *workspace.ProviderModel, id ID, providerType string)
 		for _, t := range manifest.Cost.Tiers {
 			m.Pricing.Tiers = append(m.Pricing.Tiers, PricingTier{
 				Label:      t.Label,
-				Condition:  TierCondition{Type: t.ConditionType, Size: t.ConditionSize},
+				Condition:  TierCondition{Type: t.Tier.Type, Size: t.Tier.Size},
 				Input:      t.Input,
 				Output:     t.Output,
 				CacheRead:  t.CacheRead,
@@ -165,7 +165,7 @@ func fromManifest(manifest *workspace.ProviderModel, id ID, providerType string)
 	return m
 }
 
-func fromThinkingCapabilities(in []workspace.ThinkingCapability) []ThinkingOption {
+func fromThinkingCapabilities(in []warp.ProviderModelThinkingCapability) []ThinkingOption {
 	if len(in) == 0 {
 		return nil
 	}

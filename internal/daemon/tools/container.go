@@ -20,7 +20,7 @@ import (
 type Config struct {
 	Tools        []Tool
 	Sandbox      sandbox.Sandbox
-	Workspace    workspace.Workspace
+	Workspace    *workspace.Workspace
 	Logger       log.Interface
 	Spiller      Spiller
 	AllowedTools []string
@@ -58,7 +58,7 @@ type Container interface {
 
 type container struct {
 	sandbox      sandbox.Sandbox
-	workspace    workspace.Workspace
+	workspace    *workspace.Workspace
 	logger       log.Interface
 	spiller      Spiller
 	order        []string

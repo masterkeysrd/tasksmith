@@ -10,12 +10,12 @@ import (
 
 func (s *Session) modelSettings(config SessionConfig) models.Preferences {
 	settings := models.Preferences{SessionThinking: config.Thinking}
-	if agent, ok := s.workspace.GetAgent(config.Agent); ok && agent != nil {
-		if agent.Temperature != nil {
-			value := float32(*agent.Temperature)
+	if agent, ok := s.workspace.Catalog().GetAgent(config.Agent); ok {
+		if agent.Def != nil && agent.Def.Spec.Temperature != nil {
+			value := float32(*agent.Def.Spec.Temperature)
 			settings.Temperature = &value
 		}
-		settings.AgentThinking = AgentThinking(agent.Thinking)
+		settings.AgentThinking = agent.Thinking
 	}
 	return settings
 }

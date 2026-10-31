@@ -11,6 +11,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tools"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/workspace"
+	"github.com/masterkeysrd/warp"
 )
 
 // SessionManager manages permission evaluation, permission modes, and
@@ -19,8 +20,8 @@ type SessionManager interface {
 	Mode() api.PermissionMode
 	SetMode(mode api.PermissionMode)
 	Permissions() Permissions
-	Policies() *workspace.Policies
-	SetPolicies(p *workspace.Policies)
+	Policies() *warp.Policies
+	SetPolicies(p *warp.Policies)
 	AddAllow(rule string) error
 	AddDeny(rule string) error
 	Clear() error
@@ -31,10 +32,10 @@ type SessionManager interface {
 type sessionManager struct {
 	mu          sync.RWMutex
 	manager     Manager
-	ws          workspace.Workspace
+	ws          *workspace.Workspace
 	mode        api.PermissionMode
 	permissions Permissions
-	policies    *workspace.Policies
+	policies    *warp.Policies
 	onUpdate    func(Permissions) error
 }
 
@@ -80,20 +81,20 @@ func (s *sessionManager) Permissions() Permissions {
 }
 
 // Policies returns the active workspace policies or override configured on s.
-func (s *sessionManager) Policies() *workspace.Policies {
+func (s *sessionManager) Policies() *warp.Policies {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	if s.policies != nil {
 		return s.policies
 	}
-	if s.ws != nil {
-		return s.ws.Policies()
+	if s.ws != nil && s.ws.Catalog() != nil {
+		return s.ws.Catalog().Policies()
 	}
 	return nil
 }
 
 // SetPolicies overrides the workspace policies evaluated by s.
-func (s *sessionManager) SetPolicies(p *workspace.Policies) {
+func (s *sessionManager) SetPolicies(p *warp.Policies) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.policies = p
@@ -334,7 +335,7 @@ func (s *sessionManager) Evaluate(plan *tools.Plan) (tools.AccessDecision, *api.
 	return tools.AccessAsk, req, nil
 }
 
-func isAllowedByPolicy(plan *tools.Plan, policies *workspace.Policies, ws workspace.Workspace) bool {
+func isAllowedByPolicy(plan *tools.Plan, policies *warp.Policies, ws *workspace.Workspace) bool {
 	if policies == nil || policies.Tools == nil {
 		return true
 	}
@@ -363,14 +364,14 @@ func isAllowedByPolicy(plan *tools.Plan, policies *workspace.Policies, ws worksp
 
 	var ann tool.Annotation
 	hasAnn := false
-	if ws != nil {
-		if wsTool, ok := ws.GetTool(plan.ToolName); ok && wsTool.Annotations != nil {
+	if ws != nil && ws.Catalog() != nil {
+		if wsTool, ok := ws.Catalog().GetTool(plan.ToolName); ok && wsTool.Spec.Annotations != nil {
 			ann = tool.Annotation{
-				IsOpenWorld:  wsTool.Annotations.IsOpenWorld,
-				IsDangerous:  wsTool.Annotations.IsDangerous,
-				IsReadOnly:   wsTool.Annotations.IsReadOnly,
-				IsIdempotent: wsTool.Annotations.IsIdempotent,
-				UserHint:     wsTool.Annotations.UserHint,
+				IsOpenWorld:  wsTool.Spec.Annotations.IsOpenWorld,
+				IsDangerous:  wsTool.Spec.Annotations.IsDangerous,
+				IsReadOnly:   wsTool.Spec.Annotations.IsReadOnly,
+				IsIdempotent: wsTool.Spec.Annotations.IsIdempotent,
+				UserHint:     wsTool.Spec.Annotations.UserHint,
 			}
 			hasAnn = true
 		}

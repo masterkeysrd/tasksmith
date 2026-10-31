@@ -25,7 +25,7 @@ type InitOptions struct {
 	APIKey           string               `json:"api_key,omitempty"`
 	Endpoint         string               `json:"endpoint,omitempty"`
 	DefaultModel     string               `json:"default_model,omitempty"`
-	DefaultModels    map[ModelRole]string `json:"default_models,omitempty"`
+	DefaultModels    map[warp.ModelRole]string `json:"default_models,omitempty"`
 	DefaultAgent     string               `json:"default_agent,omitempty"`
 	AuthorizedTools  []string             `json:"authorized_tools,omitempty"`
 	TrustOnly        bool                 `json:"trust_only,omitempty"`
@@ -233,9 +233,9 @@ func Initialize(ctx context.Context, dir string, opts InitOptions) error {
 	var defaultModels *warp.ModelDefaults
 	if len(opts.DefaultModels) > 0 {
 		defaultModels = &warp.ModelDefaults{
-			Completion: opts.DefaultModels[RoleCompletion],
-			Decision:   opts.DefaultModels[RoleDecision],
-			Embedding:  opts.DefaultModels[RoleEmbedding],
+			Completion: opts.DefaultModels[warp.ModelRoleCompletion],
+			Decision:   opts.DefaultModels[warp.ModelRoleDecision],
+			Embedding:  opts.DefaultModels[warp.ModelRoleEmbedding],
 		}
 	}
 
@@ -349,7 +349,7 @@ func Initialize(ctx context.Context, dir string, opts InitOptions) error {
 }
 
 // Init initializes the workspace directory at dir according to opts and opens it.
-func Init(ctx context.Context, dir string, opts InitOptions, openOpts ...Option) (Workspace, error) {
+func Init(ctx context.Context, dir string, opts InitOptions, openOpts ...Option) (*Workspace, error) {
 	if err := Initialize(ctx, dir, opts); err != nil {
 		return nil, err
 	}
@@ -357,7 +357,7 @@ func Init(ctx context.Context, dir string, opts InitOptions, openOpts ...Option)
 }
 
 // Initialize initializes the workspace's root directory and reloads its registry and environment.
-func (w *workspace) Initialize(ctx context.Context, opts InitOptions) error {
+func (w *Workspace) Initialize(ctx context.Context, opts InitOptions) error {
 	if err := Initialize(ctx, w.RootDir(), opts); err != nil {
 		return err
 	}
