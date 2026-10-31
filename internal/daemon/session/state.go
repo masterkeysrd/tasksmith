@@ -8,7 +8,6 @@ import (
 
 	"github.com/masterkeysrd/loom/message"
 	"github.com/masterkeysrd/tasksmith/api"
-	"github.com/masterkeysrd/tasksmith/internal/daemon/tasks"
 )
 
 // State stores a session's live execution state and provides the [sync.Mutex]
@@ -16,13 +15,11 @@ import (
 type State struct {
 	sync.Mutex `json:"-"`
 
-	Status             Status                  `json:"status"`
+	Status             api.SessionStatus       `json:"status"`
 	Running            bool                    `json:"running"`
-	WaitingPermission  bool                    `json:"waiting_permission"`
 	PendingPermissions []api.PermissionRequest `json:"pending_permissions,omitempty"`
-	WaitingQuestion    bool                    `json:"waiting_question"`
 	PendingQuestions   []api.QuestionRequest   `json:"pending_questions,omitempty"`
-	Tasks              []tasks.Snapshot        `json:"tasks,omitempty"`
+	Tasks              []api.Task              `json:"tasks,omitempty"`
 	Todos              []api.TodoItem          `json:"todos,omitempty"`
 	Context            api.ContextState        `json:"context"`
 	Error              string                  `json:"error,omitempty"`
@@ -38,24 +35,24 @@ type State struct {
 	titleGenerating bool                              `json:"-"`
 }
 
-// NewState constructs a new [State] initialized to [StatusIdle].
+// NewState constructs a new [State] initialized to [api.StatusIdle].
 func NewState() *State {
 	return &State{
-		Status:    StatusIdle,
+		Status:    api.StatusIdle,
 		decisions: make(map[string]api.PermissionDecision),
 		answers:   make(map[string]api.QuestionResponse),
 	}
 }
 
 // Clone returns a copy of the exported state fields with [Status] defaulted
-// to [StatusIdle] if empty. Caller must hold the state lock if s is shared.
+// to [api.StatusIdle] if empty. Caller must hold the state lock if s is shared.
 func (s *State) Clone() *State {
 	if s == nil {
 		return NewState()
 	}
 	status := s.Status
 	if status == "" {
-		status = StatusIdle
+		status = api.StatusIdle
 	}
 	var perms []api.PermissionRequest
 	if len(s.PendingPermissions) > 0 {
@@ -82,9 +79,7 @@ func (s *State) Clone() *State {
 	return &State{
 		Status:             status,
 		Running:            s.Running,
-		WaitingPermission:  s.WaitingPermission,
 		PendingPermissions: perms,
-		WaitingQuestion:    s.WaitingQuestion,
 		PendingQuestions:   questions,
 		Tasks:              slices.Clone(s.Tasks),
 		Todos:              slices.Clone(s.Todos),

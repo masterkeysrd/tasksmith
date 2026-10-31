@@ -147,7 +147,7 @@ func (t *bashTool) Execute(ctx context.Context, in api.BashInput) (api.BashOutpu
 	sw.Close()
 
 	if err != nil && !task.Backgrounded() {
-		if task.Status() == tasks.StatusFailed && task.ExitCode() >= 0 {
+		if task.Status() == api.TaskStatusFailed && task.ExitCode() >= 0 {
 			return api.BashOutput{
 				Output:     w.String(),
 				ExitCode:   task.ExitCode(),
@@ -288,7 +288,7 @@ func (t *tasksTool) Execute(ctx context.Context, in api.TasksInput) (api.TasksOu
 			return api.TasksOutput{}, err
 		}
 		return api.TasksOutput{
-			Status:  string(tasks.StatusCanceled),
+			Status:  string(api.TaskStatusCanceled),
 			Message: fmt.Sprintf("Killed task %s.", taskID),
 		}, nil
 	case "send_input":
@@ -297,7 +297,7 @@ func (t *tasksTool) Execute(ctx context.Context, in api.TasksInput) (api.TasksOu
 			return api.TasksOutput{}, err
 		}
 		return api.TasksOutput{
-			Status:  string(tasks.StatusRunning),
+			Status:  string(api.TaskStatusRunning),
 			Message: fmt.Sprintf("Sent input to task %s.", taskID),
 		}, nil
 	default:

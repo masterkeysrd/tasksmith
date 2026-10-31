@@ -33,7 +33,7 @@ func turnEntries(t *testing.T, s *Session) []timeline.Entry {
 
 func TestFinishTurnWritesSummaryEntry(t *testing.T) {
 	_, _, _, pub, mgr := setupTestEnv(t, nil)
-	s, _, err := mgr.Create(context.Background(), CreateParams{Title: "turns"})
+	s, _, err := mgr.Create(context.Background(), api.CreateSessionRequest{Title: "turns"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,7 +79,7 @@ func TestFinishTurnWritesSummaryEntry(t *testing.T) {
 
 func TestFinishTurnSkipsShortDoneTurnsButNotFailures(t *testing.T) {
 	_, _, _, _, mgr := setupTestEnv(t, nil)
-	s, _, err := mgr.Create(context.Background(), CreateParams{Title: "short"})
+	s, _, err := mgr.Create(context.Background(), api.CreateSessionRequest{Title: "short"})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -7,11 +7,11 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/gateway"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/models"
-	"github.com/masterkeysrd/tasksmith/internal/daemon/session"
 )
 
 func newTestDaemon(t *testing.T, pool gateway.Pool) *Daemon {
@@ -197,7 +197,7 @@ func TestReloadRefreshesModelDiagnostics(t *testing.T) {
 	if sibling.SessionRuntime() != rt || rt.SessionRuntime() != rt {
 		t.Fatal("shared sessions must use the owning runtime")
 	}
-	sess, _, err := rt.Sessions().Create(ctx, session.CreateParams{Title: "test", Config: session.SessionConfig{Agent: "custom", Model: "local/sample"}})
+	sess, _, err := rt.Sessions().Create(ctx, api.CreateSessionRequest{Title: "test", Config: api.SessionConfig{Agent: "custom", Model: "local/sample"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -239,7 +239,7 @@ func TestReloadRefreshesModelDiagnostics(t *testing.T) {
 	results := make(chan error, 1)
 	go func() {
 		for range 20 {
-			created, _, err := rt.Sessions().Create(ctx, session.CreateParams{Title: "concurrent", Config: session.SessionConfig{Agent: "custom", Model: "local/sample"}})
+			created, _, err := rt.Sessions().Create(ctx, api.CreateSessionRequest{Title: "concurrent", Config: api.SessionConfig{Agent: "custom", Model: "local/sample"}})
 			if err != nil {
 				results <- err
 				return

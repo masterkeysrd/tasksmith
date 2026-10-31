@@ -25,27 +25,27 @@ import (
 
 func TestStateAndSessionClone(t *testing.T) {
 	st := NewState()
-	if st.Status != StatusIdle {
-		t.Fatalf("NewState().Status = %q, want %q", st.Status, StatusIdle)
+	if st.Status != api.StatusIdle {
+		t.Fatalf("NewState().Status = %q, want %q", st.Status, api.StatusIdle)
 	}
-	if st.Running || st.WaitingPermission {
-		t.Fatalf("expected NewState not running, got running=%v waiting=%v", st.Running, st.WaitingPermission)
+	if st.Running || len(st.PendingPermissions) > 0 {
+		t.Fatalf("expected NewState not running, got running=%v waiting=%v", st.Running, len(st.PendingPermissions) > 0)
 	}
 
-	st.Status = StatusThinking
+	st.Status = api.StatusThinking
 	st.Running = true
 	st.StartedAt = time.Now().UTC()
 	st.Error = "some error"
 
 	clonedSt := st.Clone()
-	if clonedSt.Status != StatusThinking || !clonedSt.Running || clonedSt.Error != "some error" {
+	if clonedSt.Status != api.StatusThinking || !clonedSt.Running || clonedSt.Error != "some error" {
 		t.Fatalf("clonedSt mismatch: %+v", clonedSt)
 	}
 
 	// Verify empty status defaults to StatusIdle
 	emptySt := &State{}
-	if emptySt.Clone().Status != StatusIdle {
-		t.Errorf("emptySt.Clone().Status = %q, want %q", emptySt.Clone().Status, StatusIdle)
+	if emptySt.Clone().Status != api.StatusIdle {
+		t.Errorf("emptySt.Clone().Status = %q, want %q", emptySt.Clone().Status, api.StatusIdle)
 	}
 
 	now := time.Now().UTC()
@@ -53,7 +53,7 @@ func TestStateAndSessionClone(t *testing.T) {
 		State: st,
 		ID:    "01931f7a-8b83-7182-8924-a7192ba87123",
 		Title: "Test Session",
-		Config: SessionConfig{
+		Config: api.SessionConfig{
 			Agent: "test-agent",
 			Model: "test-model",
 		},
@@ -64,20 +64,20 @@ func TestStateAndSessionClone(t *testing.T) {
 	}
 
 	clonedSess := sess.Clone()
-	if clonedSess.ID != sess.ID || clonedSess.Title != sess.Title || clonedSess.Status != StatusThinking {
+	if clonedSess.ID != sess.ID || clonedSess.Title != sess.Title || clonedSess.Status != api.StatusThinking {
 		t.Fatalf("clonedSess mismatch: %+v", clonedSess)
 	}
 
 	// Mutate cloned session; verify original is untouched
 	clonedSess.Lock()
-	clonedSess.Status = StatusIdle
+	clonedSess.Status = api.StatusIdle
 	clonedSess.Running = false
 	clonedSess.Title = "Mutated"
 	clonedSess.Unlock()
 
 	sess.Lock()
 	defer sess.Unlock()
-	if sess.Status != StatusThinking || !sess.Running || sess.Title != "Test Session" {
+	if sess.Status != api.StatusThinking || !sess.Running || sess.Title != "Test Session" {
 		t.Errorf("original sess modified after mutating clone: %+v", sess)
 	}
 }
@@ -88,7 +88,7 @@ func TestManagerStartTurnAndCancel(t *testing.T) {
 	_, _, _, pub, mgr := setupTestEnv(t, prov)
 	defer mgr.Close()
 
-	sess, _, err := mgr.Create(ctx, CreateParams{Title: "Async Turn Test"})
+	sess, _, err := mgr.Create(ctx, api.CreateSessionRequest{Title: "Async Turn Test"})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -114,7 +114,7 @@ func TestManagerStartTurnAndCancel(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-	if got.Status != StatusIdle || got.Running {
+	if got.Status != api.StatusIdle || got.Running {
 		t.Errorf("got.Status = %q, Running = %v; want StatusIdle and not running", got.Status, got.Running)
 	}
 
@@ -147,7 +147,7 @@ func TestManagerConcurrentTurnRejection(t *testing.T) {
 	_, _, _, _, mgr := setupTestEnv(t, prov)
 	defer mgr.Close()
 
-	sess, _, err := mgr.Create(ctx, CreateParams{Title: "Concurrency Test"})
+	sess, _, err := mgr.Create(ctx, api.CreateSessionRequest{Title: "Concurrency Test"})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -164,7 +164,7 @@ func TestManagerConcurrentTurnRejection(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-	if got.Status != StatusThinking || !got.Running {
+	if got.Status != api.StatusThinking || !got.Running {
 		t.Errorf("got.Status = %q, Running = %v; want StatusThinking and Running=true", got.Status, got.Running)
 	}
 
@@ -192,7 +192,7 @@ func TestManagerConcurrentTurnRejection(t *testing.T) {
 	}
 
 	got, err = mgr.Get(ctx, sess.ID)
-	if err != nil || got.Status != StatusIdle || got.Running {
+	if err != nil || got.Status != api.StatusIdle || got.Running {
 		t.Fatalf("session failed to return to StatusIdle: %+v", got)
 	}
 }
@@ -207,7 +207,7 @@ func TestManagerTurnErrorPublishing(t *testing.T) {
 	_, _, _, pub, mgr := setupTestEnv(t, prov)
 	defer mgr.Close()
 
-	sess, _, err := mgr.Create(ctx, CreateParams{Title: "Error Turn Test"})
+	sess, _, err := mgr.Create(ctx, api.CreateSessionRequest{Title: "Error Turn Test"})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -227,7 +227,7 @@ func TestManagerTurnErrorPublishing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-	if got.Status != StatusIdle || got.Running {
+	if got.Status != api.StatusIdle || got.Running {
 		t.Errorf("got.Status = %q, Running = %v; want StatusIdle and not running", got.Status, got.Running)
 	}
 	if got.Error == "" {
@@ -296,7 +296,7 @@ func TestManagerTurnErrorLogging(t *testing.T) {
 	}
 	defer mgr.Close()
 
-	sess, _, err := mgr.Create(ctx, CreateParams{Title: "Turn Error Log Test", Config: SessionConfig{Model: "fake/fake-default-model"}})
+	sess, _, err := mgr.Create(ctx, api.CreateSessionRequest{Title: "Turn Error Log Test", Config: api.SessionConfig{Model: "fake/fake-default-model"}})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -334,7 +334,7 @@ func TestManagerCancelTurn(t *testing.T) {
 	_, _, _, _, mgr := setupTestEnv(t, prov)
 	defer mgr.Close()
 
-	sess, _, err := mgr.Create(ctx, CreateParams{Title: "Cancel Test"})
+	sess, _, err := mgr.Create(ctx, api.CreateSessionRequest{Title: "Cancel Test"})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -359,7 +359,7 @@ func TestManagerCancelTurn(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-	if got.Status != StatusIdle || got.Running {
+	if got.Status != api.StatusIdle || got.Running {
 		t.Errorf("after Cancel: got.Status = %q, Running = %v", got.Status, got.Running)
 	}
 }
@@ -370,7 +370,7 @@ func TestManagerUpdateInvalidatesHarness(t *testing.T) {
 	_, _, _, _, mgr := setupTestEnv(t, prov)
 	defer mgr.Close()
 
-	sess, _, err := mgr.Create(ctx, CreateParams{Title: "Harness Invalidation"})
+	sess, _, err := mgr.Create(ctx, api.CreateSessionRequest{Title: "Harness Invalidation"})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -382,7 +382,7 @@ func TestManagerUpdateInvalidatesHarness(t *testing.T) {
 	}
 
 	// Update with same model/agent -> Harness remains cached
-	_, err = mgr.Update(ctx, sess.ID, UpdateParams{Title: "New Title"})
+	_, err = mgr.Update(ctx, sess.ID, api.UpdateSessionRequest{Title: "New Title"})
 	if err != nil {
 		t.Fatalf("Update title: %v", err)
 	}
@@ -391,7 +391,7 @@ func TestManagerUpdateInvalidatesHarness(t *testing.T) {
 	}
 
 	// Update with new model -> Harness remains cached and reconfigures in place
-	_, err = mgr.Update(ctx, sess.ID, UpdateParams{Config: SessionConfig{Model: "custom-model"}})
+	_, err = mgr.Update(ctx, sess.ID, api.UpdateSessionRequest{Config: api.SessionConfig{Model: "custom-model"}})
 	if err != nil {
 		t.Fatalf("Update model: %v", err)
 	}
@@ -437,7 +437,7 @@ func TestManagerRespondPermissionAsync(t *testing.T) {
 	_, _, _, pub, mgr := setupTestEnv(t, prov)
 	defer mgr.Close()
 
-	sess, _, err := mgr.Create(ctx, CreateParams{Title: "Async Perm Test"})
+	sess, _, err := mgr.Create(ctx, api.CreateSessionRequest{Title: "Async Perm Test"})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -454,9 +454,9 @@ func TestManagerRespondPermissionAsync(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-	if got.Status != StatusWaitingPermission || !got.WaitingPermission || got.Running {
-		t.Errorf("got.Status = %q, WaitingPermission = %v, Running = %v; want StatusWaitingPermission",
-			got.Status, got.WaitingPermission, got.Running)
+	if got.Status != api.StatusWaitingPermission || got.Running {
+		t.Errorf("got.Status = %q, Running = %v; want StatusWaitingPermission",
+			got.Status, got.Running)
 	}
 
 	if len(got.PendingPermissions) != 1 {
@@ -480,7 +480,7 @@ func TestManagerRespondPermissionAsync(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get after resume: %v", err)
 	}
-	if gotAfter.Status != StatusIdle || gotAfter.Running || gotAfter.WaitingPermission {
+	if gotAfter.Status != api.StatusIdle || gotAfter.Running {
 		t.Errorf("gotAfter = %+v; want StatusIdle", gotAfter)
 	}
 

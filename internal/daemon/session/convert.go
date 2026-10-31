@@ -9,7 +9,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/masterkeysrd/loom/message"
 	"github.com/masterkeysrd/tasksmith/api"
-	"github.com/masterkeysrd/tasksmith/internal/daemon/tasks"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/timeline"
 )
 
@@ -29,11 +28,11 @@ func ToAPISession(sess *Session) api.Session {
 	var ctxState api.ContextState
 	if sess.State != nil {
 		if sess.Status != "" {
-			status = api.SessionStatus(sess.Status)
+			status = sess.Status
 		}
 		perms = sess.PendingPermissions
 		questions = sess.PendingQuestions
-		ts = ToAPITasks(sess.State.Tasks)
+		ts = slices.Clone(sess.State.Tasks)
 		todos = sess.Todos
 		queueItems = toAPIQueueItems(sess.VisibleQueue())
 		ctxState = sess.Context
@@ -45,15 +44,10 @@ func ToAPISession(sess *Session) api.Session {
 		resolvedModel = &converted
 	}
 	return api.Session{
-		Model: resolvedModel,
-		ID:    sess.ID,
-		Title: sess.Title,
-		Config: api.SessionConfig{
-			Agent:    sess.Config.Agent,
-			Model:    string(sess.Config.Model),
-			Thinking: sess.Config.Thinking,
-			Mode:     sess.Config.Mode,
-		},
+		Model:              resolvedModel,
+		ID:                 sess.ID,
+		Title:              sess.Title,
+		Config:             sess.Config,
 		Status:             status,
 		Diagnostics:        slices.Clone(sess.Diagnostics),
 		Context:            ctxState,
@@ -106,36 +100,6 @@ func toAPIQueueItem(it QueueItem) (api.QueueItem, bool) {
 	default:
 		return api.QueueItem{}, false
 	}
-}
-
-func toAPITask(t tasks.Snapshot) api.Task {
-	return api.Task{
-		ID:           t.ID,
-		Kind:         t.Kind,
-		Title:        t.Title,
-		Command:      t.Command,
-		Status:       api.TaskStatus(t.Status),
-		ExitCode:     t.ExitCode,
-		Error:        t.Error,
-		LogPath:      t.LogPath,
-		StartedAt:    t.StartedAt,
-		FinishedAt:   t.FinishedAt,
-		DurationMs:   t.DurationMs,
-		Backgrounded: t.Backgrounded,
-	}
-}
-
-// ToAPITasks converts a slice of internal task snapshots into the public
-// representation used by the API.
-func ToAPITasks(ts []tasks.Snapshot) []api.Task {
-	if len(ts) == 0 {
-		return nil
-	}
-	out := make([]api.Task, len(ts))
-	for i, t := range ts {
-		out[i] = toAPITask(t)
-	}
-	return out
 }
 
 // ToAPIMessage converts an internal [message.Message] into the public

@@ -118,9 +118,9 @@ func TestThinkingDiagnostics(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer mgr.Close()
-	sess, _, err := mgr.Create(ctx, CreateParams{
+	sess, _, err := mgr.Create(ctx, api.CreateSessionRequest{
 		Title: "test",
-		Config: SessionConfig{
+		Config: api.SessionConfig{
 			Agent: "thinker",
 			Model: "local/unsupported",
 		},
@@ -132,8 +132,8 @@ func TestThinkingDiagnostics(t *testing.T) {
 	if err != nil || resolved.Thinking != nil || len(diagnostics) != 1 || diagnostics[0].Code != "thinking_unsupported" {
 		t.Fatalf("agent thinking: %+v, %+v, %v", resolved, diagnostics, err)
 	}
-	_, err = mgr.Update(ctx, sess.ID, UpdateParams{
-		Config: SessionConfig{
+	_, err = mgr.Update(ctx, sess.ID, api.UpdateSessionRequest{
+		Config: api.SessionConfig{
 			Model:    "local/supported",
 			Thinking: &api.ThinkingSetting{Type: "effort", Effort: "high"},
 		},
@@ -168,7 +168,7 @@ func TestThinkingDiagnostics(t *testing.T) {
 		loaded.Diagnostics[0].Code != "thinking_override_unsupported" {
 		t.Fatalf("reopened diagnostics: %+v, %v", loaded, err)
 	}
-	updated, err := mgr.Update(ctx, sess.ID, UpdateParams{Config: SessionConfig{Model: "local/unsupported"}})
+	updated, err := mgr.Update(ctx, sess.ID, api.UpdateSessionRequest{Config: api.SessionConfig{Model: "local/unsupported"}})
 	if err != nil || updated.Config.Thinking != nil || len(updated.Diagnostics) != 2 ||
 		updated.Diagnostics[1].Code != "thinking_override_cleared" {
 		t.Fatalf("model change: %+v, %v", updated, err)
@@ -235,9 +235,9 @@ func TestSessionThinkingEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sess, _, err := mgr.Create(ctx, CreateParams{
+	sess, _, err := mgr.Create(ctx, api.CreateSessionRequest{
 		Title: "test",
-		Config: SessionConfig{
+		Config: api.SessionConfig{
 			Model:    "local/test-model",
 			Thinking: &api.ThinkingSetting{Type: "effort", Effort: "high"},
 		},
@@ -255,8 +255,8 @@ func TestSessionThinkingEndToEnd(t *testing.T) {
 	if got := first["think"]; got != "high" {
 		t.Fatalf("effort request: %#v", first)
 	}
-	updated, err := mgr.Update(ctx, sess.ID, UpdateParams{
-		Config: SessionConfig{
+	updated, err := mgr.Update(ctx, sess.ID, api.UpdateSessionRequest{
+		Config: api.SessionConfig{
 			Thinking: &api.ThinkingSetting{Type: "toggle", Enabled: false},
 		},
 	})
@@ -280,8 +280,8 @@ func TestSessionThinkingEndToEnd(t *testing.T) {
 		entries[0].Thinking.To == nil || entries[0].Thinking.To.Enabled {
 		t.Fatalf("thinking timeline: %+v, %v", entries, err)
 	}
-	updated, err = mgr.Update(ctx, sess.ID, UpdateParams{
-		Config: SessionConfig{
+	updated, err = mgr.Update(ctx, sess.ID, api.UpdateSessionRequest{
+		Config: api.SessionConfig{
 			Thinking: &api.ThinkingSetting{Type: "default"},
 		},
 	})

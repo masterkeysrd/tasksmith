@@ -9,7 +9,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/daemon/models"
 )
 
-func (s *Session) modelSettings(config SessionConfig) models.Settings {
+func (s *Session) modelSettings(config api.SessionConfig) models.Settings {
 	settings := models.Settings{
 		Thinking:       config.Thinking,
 		StrictThinking: config.Thinking != nil,
@@ -27,15 +27,15 @@ func (s *Session) modelSettings(config SessionConfig) models.Settings {
 	return settings
 }
 
-func (s *Session) resolveModelConfig(config SessionConfig) (llm.ModelConfig, []api.SessionDiagnostic, error) {
-	model, ok := s.catalog().Get(config.Model)
+func (s *Session) resolveModelConfig(config api.SessionConfig) (llm.ModelConfig, []api.SessionDiagnostic, error) {
+	model, ok := s.catalog().Get(models.ID(config.Model))
 	if !ok {
 		return llm.ModelConfig{}, nil, fmt.Errorf("session: model %q unavailable", config.Model)
 	}
 	return model.Configure(s.modelSettings(config))
 }
 
-func (s *Session) modelDiagnostics(config SessionConfig) []api.SessionDiagnostic {
+func (s *Session) modelDiagnostics(config api.SessionConfig) []api.SessionDiagnostic {
 	_, diagnostics, err := s.resolveModelConfig(config)
 	for i := range diagnostics {
 		diagnostics[i].Message = fmt.Sprintf("Agent %q, model %q: %s", config.Agent, config.Model, diagnostics[i].Message)

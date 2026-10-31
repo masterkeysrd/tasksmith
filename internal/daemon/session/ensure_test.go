@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/masterkeysrd/tasksmith/api"
 	coreuuid "github.com/masterkeysrd/tasksmith/internal/core/uuid"
 )
 
@@ -24,7 +25,7 @@ func TestEnsureCreatesWithCallerSuppliedID(t *testing.T) {
 	ctx := context.Background()
 	id := newV7(t)
 
-	sess, created, err := mgr.Create(ctx, CreateParams{ID: id, Title: "Draft"})
+	sess, created, err := mgr.Create(ctx, api.CreateSessionRequest{ID: id, Title: "Draft"})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -42,12 +43,12 @@ func TestEnsureIsIdempotentForMatchingParams(t *testing.T) {
 	ctx := context.Background()
 	id := newV7(t)
 
-	first, created, err := mgr.Create(ctx, CreateParams{ID: id, Title: "Same"})
+	first, created, err := mgr.Create(ctx, api.CreateSessionRequest{ID: id, Title: "Same"})
 	if err != nil || !created {
 		t.Fatalf("first Create = %+v created=%v err=%v", first, created, err)
 	}
 
-	for name, params := range map[string]CreateParams{
+	for name, params := range map[string]api.CreateSessionRequest{
 		"identical":      {ID: id, Title: "Same"},
 		"omitted fields": {ID: id},
 	} {
@@ -70,13 +71,13 @@ func TestEnsureConflictsOnDifferentParams(t *testing.T) {
 	_, _, _, _, mgr := setupTestEnv(t, nil)
 	ctx := context.Background()
 	id := newV7(t)
-	if _, _, err := mgr.Create(ctx, CreateParams{ID: id, Title: "Original"}); err != nil {
+	if _, _, err := mgr.Create(ctx, api.CreateSessionRequest{ID: id, Title: "Original"}); err != nil {
 		t.Fatal(err)
 	}
 
-	for name, params := range map[string]CreateParams{
+	for name, params := range map[string]api.CreateSessionRequest{
 		"title": {ID: id, Title: "Other"},
-		"agent": {ID: id, Config: SessionConfig{Agent: "some-other-agent"}},
+		"agent": {ID: id, Config: api.SessionConfig{Agent: "some-other-agent"}},
 	} {
 		if _, _, err := mgr.Create(ctx, params); !errors.Is(err, ErrSessionConflict) {
 			t.Errorf("%s: err = %v, want ErrSessionConflict", name, err)
@@ -105,7 +106,7 @@ func TestEnsureRejectsInvalidIDs(t *testing.T) {
 		"uuid v4":        v4,
 		"uppercase v7":   string(upper),
 	} {
-		if _, _, err := mgr.Create(ctx, CreateParams{ID: id}); !errors.Is(err, ErrInvalidSessionID) {
+		if _, _, err := mgr.Create(ctx, api.CreateSessionRequest{ID: id}); !errors.Is(err, ErrInvalidSessionID) {
 			t.Errorf("%s: err = %v, want ErrInvalidSessionID", name, err)
 		}
 	}
@@ -123,7 +124,7 @@ func TestEnsureConcurrentCreatesOneSession(t *testing.T) {
 	results := make(chan bool, 8)
 	for range 8 {
 		wg.Go(func() {
-			_, created, err := mgr.Create(ctx, CreateParams{ID: id, Title: "Race"})
+			_, created, err := mgr.Create(ctx, api.CreateSessionRequest{ID: id, Title: "Race"})
 			if err != nil {
 				t.Errorf("Create: %v", err)
 				return
@@ -147,7 +148,7 @@ func TestEnsureConcurrentCreatesOneSession(t *testing.T) {
 
 func TestCreateWithoutIDGeneratesV7(t *testing.T) {
 	_, _, _, _, mgr := setupTestEnv(t, nil)
-	sess, created, err := mgr.Create(context.Background(), CreateParams{Title: "Generated"})
+	sess, created, err := mgr.Create(context.Background(), api.CreateSessionRequest{Title: "Generated"})
 	if err != nil || !created {
 		t.Fatalf("Create: %v, created=%v", err, created)
 	}

@@ -35,7 +35,7 @@ func TestPendingInteractionDefersQueuedWork(t *testing.T) {
 			}}
 			_, _, _, _, mgr := setupTestEnv(t, provider)
 			defer mgr.Close()
-			sess, _, err := mgr.Create(ctx, CreateParams{Title: "Pending"})
+			sess, _, err := mgr.Create(ctx, api.CreateSessionRequest{Title: "Pending"})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -74,7 +74,7 @@ func TestPendingInteractionDefersQueuedWork(t *testing.T) {
 				}
 			}
 			if kind == "mixed" {
-				if !sess.WaitingQuestion || sess.Running || len(sess.queue) != 2 {
+				if len(sess.PendingQuestions) != 1 || sess.Running || len(sess.queue) != 2 {
 					t.Fatalf("partial resolution changed waiting state: %+v", sess.State)
 				}
 				if err := sess.Send(ctx, SendInput{Compact: &api.CompactRequest{}}); !errors.Is(err, ErrInvalidConfig) {
@@ -89,7 +89,7 @@ func TestPendingInteractionDefersQueuedWork(t *testing.T) {
 			if err := sess.Wait(ctx); err != nil {
 				t.Fatal(err)
 			}
-			if sess.Status != StatusIdle || sess.WaitingPermission || sess.WaitingQuestion || len(sess.queue) != 0 {
+			if sess.Status != api.StatusIdle || len(sess.PendingPermissions) != 0 || len(sess.PendingQuestions) != 0 || len(sess.queue) != 0 {
 				t.Fatalf("work not completed: state=%+v queue=%+v", sess.State, sess.queue)
 			}
 			entries, err := sess.Timeline.ListByKind(ctx, api.TimelineKindCommand)
@@ -101,7 +101,7 @@ func TestPendingInteractionDefersQueuedWork(t *testing.T) {
 }
 
 func TestWaitingStatusProtectsResponseHandoff(t *testing.T) {
-	for _, status := range []Status{StatusWaitingPermission, StatusWaitingQuestion} {
+	for _, status := range []api.SessionStatus{api.StatusWaitingPermission, api.StatusWaitingQuestion} {
 		s := &Session{State: &State{Status: status}}
 		if err := s.startTurn(harness.Input{Compact: &api.CompactRequest{}}); !errors.Is(err, ErrInvalidConfig) {
 			t.Fatalf("status %s: compact error %v", status, err)

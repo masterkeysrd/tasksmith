@@ -31,22 +31,6 @@ var (
 	ErrSessionRunning       = errors.New("session: session already has an active turn")
 )
 
-// CreateParams holds optional parameters for creating a new [Session].
-//
-// A non-empty ID must be a canonical lowercase UUIDv7 and makes creation
-// idempotent.
-type CreateParams struct {
-	ID     string        `json:"id,omitempty"`
-	Title  string        `json:"title,omitempty"`
-	Config SessionConfig `json:"config"`
-}
-
-// UpdateParams holds optional parameters for updating an existing [Session].
-type UpdateParams struct {
-	Title  string        `json:"title,omitempty"`
-	Config SessionConfig `json:"config"`
-}
-
 // SendInput provides the input to Session.Send, carrying either a new user message or a permission decision.
 type SendInput struct {
 	ID       string

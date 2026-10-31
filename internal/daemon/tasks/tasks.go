@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/masterkeysrd/tasksmith/api"
 )
 
 var (
@@ -26,34 +27,9 @@ const (
 	MaxLogMemBytes  = 64 * 1024        // 64 KB rolling window for in-memory buffer
 )
 
-type Status string
-
-const (
-	StatusPending   Status = "pending"
-	StatusRunning   Status = "running"
-	StatusCompleted Status = "completed"
-	StatusFailed    Status = "failed"
-	StatusCanceled  Status = "canceled"
-)
-
 // Func is the execution workload of a Task.
 // ctx is the task's execution context; output receives combined stdout/stderr; stdin supplies input.
 type Func func(ctx context.Context, output io.Writer, stdin io.Reader) (exitCode int, err error)
-
-type Snapshot struct {
-	ID           string    `json:"id"`
-	Kind         string    `json:"kind"`
-	Title        string    `json:"title"`
-	Command      string    `json:"command,omitempty"`
-	Status       Status    `json:"status"`
-	ExitCode     int       `json:"exit_code"`
-	Error        string    `json:"error,omitempty"`
-	LogPath      string    `json:"log_path,omitempty"`
-	StartedAt    time.Time `json:"started_at"`
-	FinishedAt   time.Time `json:"finished_at,omitzero"`
-	DurationMs   int64     `json:"duration_ms"`
-	Backgrounded bool      `json:"backgrounded"`
-}
 
 type Task struct {
 	ID      string
@@ -64,7 +40,7 @@ type Task struct {
 	Fn      Func
 
 	mu           sync.Mutex
-	status       Status
+	status       api.TaskStatus
 	exitCode     int
 	err          error
 	startedAt    time.Time
@@ -82,13 +58,13 @@ type Task struct {
 	subscribers  map[chan string]struct{}
 }
 
-func (t *Task) Snapshot() Snapshot {
+func (t *Task) Snapshot() api.Task {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return t.snapshotLocked()
 }
 
-func (t *Task) snapshotLocked() Snapshot {
+func (t *Task) snapshotLocked() api.Task {
 	var durMs int64
 	if !t.startedAt.IsZero() {
 		if !t.finishedAt.IsZero() {
@@ -103,9 +79,9 @@ func (t *Task) snapshotLocked() Snapshot {
 	}
 	status := t.status
 	if status == "" {
-		status = StatusPending
+		status = api.TaskStatusPending
 	}
-	return Snapshot{
+	return api.Task{
 		ID:           t.ID,
 		Kind:         t.Kind,
 		Title:        t.Title,
@@ -121,11 +97,11 @@ func (t *Task) snapshotLocked() Snapshot {
 	}
 }
 
-func (t *Task) Status() Status {
+func (t *Task) Status() api.TaskStatus {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.status == "" {
-		return StatusPending
+		return api.TaskStatusPending
 	}
 	return t.status
 }
@@ -192,7 +168,7 @@ func (t *Task) Cancel() {
 
 func (t *Task) WriteInput(data string) error {
 	t.mu.Lock()
-	if t.status != StatusRunning || t.stdinW == nil {
+	if t.status != api.TaskStatusRunning || t.stdinW == nil {
 		t.mu.Unlock()
 		return ErrNotRunning
 	}
@@ -351,13 +327,13 @@ func (w *taskWriter) Write(p []byte) (n int, err error) {
 type Config struct {
 	Context    context.Context
 	OutputsDir string
-	OnUpdate   func(Snapshot)
+	OnUpdate   func(api.Task)
 }
 
 type Manager interface {
 	Run(ctx context.Context, task *Task) error
 	Get(id string) (*Task, bool)
-	List() []Snapshot
+	List() []api.Task
 	Kill(id string) error
 	WriteInput(id string, data string) error
 	Close() error
@@ -367,7 +343,7 @@ type manager struct {
 	mu         sync.Mutex
 	bgCtx      context.Context
 	outputsDir string
-	onUpdate   func(Snapshot)
+	onUpdate   func(api.Task)
 	tasks      map[string]*Task
 	closed     bool
 }
@@ -434,7 +410,7 @@ func (m *manager) Run(ctx context.Context, task *Task) error {
 	task.stdinR = stdinR
 	task.stdinW = stdinW
 	task.cancel = taskCancel
-	task.status = StatusRunning
+	task.status = api.TaskStatusRunning
 	task.startedAt = time.Now().UTC()
 	task.mu.Unlock()
 
@@ -471,14 +447,14 @@ func (m *manager) Run(ctx context.Context, task *Task) error {
 		task.err = fnErr
 
 		if task.canceled || (taskCtx.Err() != nil && errors.Is(fnErr, context.Canceled)) {
-			task.status = StatusCanceled
+			task.status = api.TaskStatusCanceled
 			if task.err == nil {
 				task.err = context.Canceled
 			}
 		} else if fnErr != nil || exitCode != 0 {
-			task.status = StatusFailed
+			task.status = api.TaskStatusFailed
 		} else {
-			task.status = StatusCompleted
+			task.status = api.TaskStatusCompleted
 		}
 
 		close(task.done)
@@ -514,7 +490,7 @@ func (m *manager) Run(ctx context.Context, task *Task) error {
 		<-task.Done()
 		return ctx.Err()
 	case <-timer.C:
-		var snap Snapshot
+		var snap api.Task
 		shouldUpdate := false
 
 		task.mu.Lock()
@@ -543,7 +519,7 @@ func (m *manager) Get(id string) (*Task, bool) {
 	return t, ok
 }
 
-func (m *manager) List() []Snapshot {
+func (m *manager) List() []api.Task {
 	m.mu.Lock()
 	tasks := make([]*Task, 0, len(m.tasks))
 	for _, t := range m.tasks {
@@ -551,7 +527,7 @@ func (m *manager) List() []Snapshot {
 	}
 	m.mu.Unlock()
 
-	var result []Snapshot
+	var result []api.Task
 	for _, t := range tasks {
 		if t.Backgrounded() {
 			result = append(result, t.Snapshot())
@@ -573,7 +549,7 @@ func (m *manager) Kill(id string) error {
 	if !ok {
 		return ErrTaskNotFound
 	}
-	if st := t.Status(); st != StatusRunning && st != StatusPending {
+	if st := t.Status(); st != api.TaskStatusRunning && st != api.TaskStatusPending {
 		return ErrNotRunning
 	}
 	t.Cancel()

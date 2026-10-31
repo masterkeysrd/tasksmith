@@ -21,7 +21,7 @@ func TestQuestionSessionPermissionThenAnswer(t *testing.T) {
 		return []message.AssistantChunk{{BaseChunk: message.BaseChunk{ID: uuid.NewString()}, Model: req.Model, Content: []message.Block{&message.TextBlock{Text: "finished"}}, Done: true}}, nil
 	}}
 	_, _, _, _, mgr := setupTestEnv(t, provider)
-	sess, _, err := mgr.Create(ctx, CreateParams{Title: "Question approval"})
+	sess, _, err := mgr.Create(ctx, api.CreateSessionRequest{Title: "Question approval"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -32,7 +32,7 @@ func TestQuestionSessionPermissionThenAnswer(t *testing.T) {
 	if err := sess.Wait(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if sess.Status != StatusWaitingPermission || len(sess.PendingPermissions) != 1 || len(sess.PendingQuestions) != 0 {
+	if sess.Status != api.StatusWaitingPermission || len(sess.PendingPermissions) != 1 || len(sess.PendingQuestions) != 0 {
 		t.Fatalf("expected permission first: %+v", sess.State)
 	}
 	if err := sess.Send(ctx, SendInput{Decision: &api.PermissionDecision{RequestID: sess.PendingPermissions[0].ID, Kind: api.DecisionAllowOnce}}); err != nil {
@@ -41,7 +41,7 @@ func TestQuestionSessionPermissionThenAnswer(t *testing.T) {
 	if err := sess.Wait(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if sess.Status != StatusWaitingQuestion || len(sess.PendingQuestions) != 1 || len(sess.PendingPermissions) != 0 {
+	if sess.Status != api.StatusWaitingQuestion || len(sess.PendingQuestions) != 1 || len(sess.PendingPermissions) != 0 {
 		t.Fatalf("expected question after approval: %+v", sess.State)
 	}
 	if err := sess.Send(ctx, SendInput{Question: &api.QuestionResponse{RequestID: sess.PendingQuestions[0].ID, Answers: []api.QuestionAnswer{{Question: "Why?", Text: "Because"}}}}); err != nil {
@@ -50,7 +50,7 @@ func TestQuestionSessionPermissionThenAnswer(t *testing.T) {
 	if err := sess.Wait(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if sess.Status != StatusIdle || step != 2 {
+	if sess.Status != api.StatusIdle || step != 2 {
 		t.Fatalf("expected completed session: status=%s model calls=%d", sess.Status, step)
 	}
 }
@@ -66,7 +66,7 @@ func TestQuestionSessionResume(t *testing.T) {
 		return []message.AssistantChunk{{BaseChunk: message.BaseChunk{ID: uuid.NewString()}, Model: req.Model, Content: []message.Block{&message.TextBlock{Text: "finished"}}, Done: true}}, nil
 	}}
 	_, _, _, pub, mgr := setupTestEnv(t, provider)
-	sess, _, err := mgr.Create(ctx, CreateParams{Title: "Questions"})
+	sess, _, err := mgr.Create(ctx, api.CreateSessionRequest{Title: "Questions"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -76,7 +76,7 @@ func TestQuestionSessionResume(t *testing.T) {
 	if err := sess.Wait(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if sess.Status != StatusWaitingQuestion || len(sess.PendingQuestions) != 1 {
+	if sess.Status != api.StatusWaitingQuestion || len(sess.PendingQuestions) != 1 {
 		t.Fatalf("unexpected state: %+v", sess.State)
 	}
 	var requested bool

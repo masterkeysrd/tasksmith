@@ -19,7 +19,7 @@ func TestSessionTasksInitAndBackgroundUpdate(t *testing.T) {
 	ctx := context.Background()
 	_, _, _, pub, mgr := setupTestEnv(t, nil)
 
-	sMeta, _, err := mgr.Create(ctx, CreateParams{Title: "Tasks Session"})
+	sMeta, _, err := mgr.Create(ctx, api.CreateSessionRequest{Title: "Tasks Session"})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -66,7 +66,7 @@ func TestSessionTasksInitAndBackgroundUpdate(t *testing.T) {
 	if stateTasks[0].ID != task.ID {
 		t.Fatalf("expected task ID %q, got %q", task.ID, stateTasks[0].ID)
 	}
-	if stateTasks[0].Status != tasks.StatusCompleted {
+	if stateTasks[0].Status != api.TaskStatusCompleted {
 		t.Fatalf("expected task status completed, got %v", stateTasks[0].Status)
 	}
 
@@ -116,10 +116,10 @@ func TestSessionEnqueueAndInbox(t *testing.T) {
 		t.Fatalf("expected empty inbox after pop, got %d", len(after))
 	}
 
-	// 2. When WaitingPermission is true, Enqueue should append to inbox
+	// 2. When waiting permission, Enqueue should append to inbox
 	sess.Lock()
 	sess.Running = false
-	sess.WaitingPermission = true
+	sess.Status = api.StatusWaitingPermission
 	sess.Unlock()
 
 	sess.Enqueue(message.NewUserText("msg3"))
@@ -133,7 +133,7 @@ func TestSessionOnTaskUpdateCompletedNotification(t *testing.T) {
 	ctx := context.Background()
 	_, _, _, pub, mgr := setupTestEnv(t, nil)
 
-	sMeta, _, err := mgr.Create(ctx, CreateParams{Title: "Notification Session"})
+	sMeta, _, err := mgr.Create(ctx, api.CreateSessionRequest{Title: "Notification Session"})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -219,7 +219,7 @@ func TestSessionBackgroundNotificationDoesNotAppearInTimeline(t *testing.T) {
 
 	_, _, _, _, mgr := setupTestEnv(t, prov)
 
-	sMeta, _, err := mgr.Create(ctx, CreateParams{Title: "Timeline Session"})
+	sMeta, _, err := mgr.Create(ctx, api.CreateSessionRequest{Title: "Timeline Session"})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}

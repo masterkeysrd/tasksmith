@@ -18,6 +18,7 @@ import (
 	"github.com/masterkeysrd/loom/message"
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
+	"github.com/masterkeysrd/tasksmith/internal/core/ptr"
 	"github.com/masterkeysrd/tasksmith/internal/core/shellguard"
 	"github.com/masterkeysrd/tasksmith/internal/core/uuid"
 	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
@@ -37,41 +38,20 @@ import (
 	"github.com/masterkeysrd/warp"
 )
 
-// Status represents the operational execution state of a [Session].
-type Status string
-
-const (
-	StatusIdle              Status = "idle"
-	StatusThinking          Status = "thinking"
-	StatusGenerating        Status = "generating"
-	StatusExecuting         Status = "executing"
-	StatusCompacting        Status = "compacting"
-	StatusWaitingPermission Status = "waiting_permission"
-	StatusWaitingQuestion   Status = "waiting_question"
-)
-
-func (s *Session) setStatus(next Status) {
+func (s *Session) setStatus(next api.SessionStatus) {
 	s.Lock()
 	if s.Status == next {
 		s.Unlock()
 		return
 	}
 	s.Status = next
-	s.Running = (next == StatusThinking || next == StatusGenerating || next == StatusExecuting || next == StatusCompacting)
+	s.Running = (next == api.StatusThinking || next == api.StatusGenerating || next == api.StatusExecuting || next == api.StatusCompacting)
 	s.Unlock()
 
 	s.publisher.Publish(api.SessionStreamTopic(s.ID), api.StatusChangedEvent{
 		SessionID: s.ID,
-		Status:    api.SessionStatus(next),
+		Status:    next,
 	})
-}
-
-// SessionConfig holds configurable runtime settings for a [Session].
-type SessionConfig struct {
-	Agent    string               `json:"agent,omitempty"`
-	Model    models.ID            `json:"model,omitempty"`
-	Thinking *api.ThinkingSetting `json:"thinking,omitempty"`
-	Mode     api.PermissionMode   `json:"mode,omitempty"`
 }
 
 var _ harness.Queue = (*Session)(nil)
@@ -87,7 +67,7 @@ type Session struct {
 
 	ID          string                  `json:"id"`
 	Title       string                  `json:"title"`
-	Config      SessionConfig           `json:"config"`
+	Config      api.SessionConfig       `json:"config"`
 	Diagnostics []api.SessionDiagnostic `json:"diagnostics,omitempty"`
 	CreatedAt   time.Time               `json:"created_at"`
 	UpdatedAt   time.Time               `json:"updated_at"`
@@ -136,10 +116,12 @@ func (s *Session) Clone() *Session {
 		s.Lock()
 		defer s.Unlock()
 	}
+	cpConfig := s.Config
+	cpConfig.Thinking = ptr.Clone(s.Config.Thinking)
 	cp := &Session{
 		ID:          s.ID,
 		Title:       s.Title,
-		Config:      s.Config,
+		Config:      cpConfig,
 		Diagnostics: slices.Clone(s.Diagnostics),
 		CreatedAt:   s.CreatedAt,
 		UpdatedAt:   s.UpdatedAt,
@@ -174,15 +156,16 @@ func (s *Session) Clone() *Session {
 }
 
 func (s *Session) ResolvedModel() (models.Model, *api.ThinkingSetting, bool) {
-	if !s.Config.Model.Valid() {
+	modelID := models.ID(s.Config.Model)
+	if !modelID.Valid() {
 		return models.Model{}, nil, false
 	}
-	m, ok := s.catalog().Get(s.Config.Model)
+	m, ok := s.catalog().Get(modelID)
 	if !ok {
 		return models.Model{}, nil, false
 	}
-	var thinking *api.ThinkingSetting
-	if s.workspace != nil && s.workspace.Catalog() != nil {
+	thinking := s.Config.Thinking
+	if thinking == nil && s.workspace != nil && s.workspace.Catalog() != nil {
 		if agent, found := s.workspace.Catalog().GetAgent(s.Config.Agent); found {
 			thinking = agent.Thinking
 		}
@@ -314,7 +297,7 @@ func (s *Session) configureHarness(ctx context.Context) error {
 	modelName := config.Model
 	s.Unlock()
 
-	model, found := s.catalog().Get(modelName)
+	model, found := s.catalog().Get(models.ID(modelName))
 	if !found {
 		err := fmt.Errorf("session: model %q unavailable", modelName)
 		s.Lock()
@@ -886,7 +869,7 @@ func (s *Session) resolveSlashCommand(msg message.Message) (message.Message, err
 }
 
 func (s *Session) waitingForInteractionLocked() bool {
-	return s.WaitingPermission || s.WaitingQuestion || s.Status == StatusWaitingPermission || s.Status == StatusWaitingQuestion
+	return len(s.PendingPermissions) > 0 || len(s.PendingQuestions) > 0 || s.Status == api.StatusWaitingPermission || s.Status == api.StatusWaitingQuestion
 }
 
 func (s *Session) startTurn(hInput harness.Input) error {
@@ -906,19 +889,17 @@ func (s *Session) startTurn(hInput harness.Input) error {
 	runCtx, cancel := context.WithCancel(s.bgCtx)
 	done := make(chan struct{})
 
-	initialStatus := StatusThinking
+	initialStatus := api.StatusThinking
 	if hInput.Compact != nil {
-		initialStatus = StatusCompacting
+		initialStatus = api.StatusCompacting
 	} else if hInput.Message == nil && hInput.Decisions == nil && len(s.queue) > 0 {
 		if s.queue[0].Kind == QueueKindCommand {
-			initialStatus = StatusExecuting
+			initialStatus = api.StatusExecuting
 		}
 	}
 
 	s.Status = initialStatus
 	s.Running = true
-	s.WaitingPermission = false
-	s.WaitingQuestion = false
 	if hInput.Message != nil {
 		s.PendingPermissions = nil
 		s.PendingQuestions = nil
@@ -934,7 +915,7 @@ func (s *Session) startTurn(hInput harness.Input) error {
 
 	s.publisher.Publish(api.SessionStreamTopic(s.ID), api.StatusChangedEvent{
 		SessionID: s.ID,
-		Status:    api.SessionStatus(initialStatus),
+		Status:    initialStatus,
 	})
 
 	s.wg.Go(func() {
@@ -943,8 +924,8 @@ func (s *Session) startTurn(hInput harness.Input) error {
 			s.Lock()
 			if s.done == done {
 				s.Running = false
-				if s.Status != StatusWaitingPermission && s.Status != StatusWaitingQuestion && s.Status != StatusIdle {
-					s.Status = StatusIdle
+				if s.Status != api.StatusWaitingPermission && s.Status != api.StatusWaitingQuestion && s.Status != api.StatusIdle {
+					s.Status = api.StatusIdle
 					statusChanged = true
 				}
 				s.cancel = nil
@@ -988,7 +969,7 @@ func (s *Session) startTurn(hInput harness.Input) error {
 
 		for {
 			s.Lock()
-			hasMore := !s.WaitingPermission && !s.WaitingQuestion && runCtx.Err() == nil && len(s.queue) > 0
+			hasMore := !s.waitingForInteractionLocked() && runCtx.Err() == nil && len(s.queue) > 0
 			s.Unlock()
 			if !hasMore {
 				break
@@ -1005,11 +986,11 @@ func (s *Session) startTurn(hInput harness.Input) error {
 		}
 
 		s.Lock()
-		waiting := s.WaitingPermission || s.WaitingQuestion
+		waiting := s.waitingForInteractionLocked()
 		s.Unlock()
 
 		if !waiting && runCtx.Err() == nil {
-			s.setStatus(StatusIdle)
+			s.setStatus(api.StatusIdle)
 			s.publisher.Publish(api.SessionStreamTopic(s.ID), api.CompletedEvent{
 				SessionID: s.ID,
 			})
@@ -1040,14 +1021,14 @@ func (s *Session) Enqueue(msg message.Message) {
 	s.enqueueItem(item)
 
 	s.Lock()
-	canStart := !s.Running && !s.WaitingPermission && !s.WaitingQuestion
+	canStart := !s.Running && !s.waitingForInteractionLocked()
 	s.Unlock()
 	if canStart {
 		_ = s.startTurn(harness.Input{})
 	}
 }
 
-func (s *Session) onTaskUpdate(snap tasks.Snapshot) {
+func (s *Session) onTaskUpdate(snap api.Task) {
 	s.Lock()
 	if s.Tasks != nil {
 		s.State.Tasks = s.Tasks.List()
@@ -1056,10 +1037,10 @@ func (s *Session) onTaskUpdate(snap tasks.Snapshot) {
 
 	s.publisher.Publish(api.SessionStreamTopic(s.ID), api.TaskUpdatedEvent{
 		SessionID: s.ID,
-		Task:      toAPITask(snap),
+		Task:      snap,
 	})
 
-	if snap.Status == tasks.StatusCompleted || snap.Status == tasks.StatusFailed {
+	if snap.Status == api.TaskStatusCompleted || snap.Status == api.TaskStatusFailed {
 		var tail string
 		if s.Tasks != nil {
 			if t, ok := s.Tasks.Get(snap.ID); ok {
@@ -1115,9 +1096,8 @@ func (s *Session) recordDecision(ctx context.Context, decision api.PermissionDec
 	}
 	s.PendingPermissions = remaining
 	allResolved := len(remaining) == 0 && len(s.PendingQuestions) == 0
-	s.WaitingPermission = len(remaining) > 0
-	if !s.WaitingPermission && s.WaitingQuestion {
-		s.Status = StatusWaitingQuestion
+	if len(remaining) == 0 && len(s.PendingQuestions) > 0 {
+		s.Status = api.StatusWaitingQuestion
 	}
 	s.Unlock()
 
@@ -1197,7 +1177,6 @@ func (s *Session) recordQuestion(ctx context.Context, response api.QuestionRespo
 		}
 	}
 	s.PendingQuestions = remaining
-	s.WaitingQuestion = len(remaining) > 0
 	s.UpdatedAt = entry.CreatedAt
 	ready := len(remaining) == 0 && len(s.PendingPermissions) == 0
 	s.Unlock()
@@ -1208,12 +1187,10 @@ func (s *Session) recordQuestion(ctx context.Context, response api.QuestionRespo
 func (s *Session) handleAsyncError(err error) {
 	s.Lock()
 	s.Running = false
-	s.WaitingPermission = false
 	s.PendingPermissions = nil
-	s.WaitingQuestion = false
 	s.PendingQuestions = nil
 	s.queue = nil
-	s.Status = StatusIdle
+	s.Status = api.StatusIdle
 	s.FinishedAt = time.Now().UTC()
 	s.err = err
 	if !errors.Is(err, context.Canceled) {
@@ -1291,9 +1268,9 @@ func (s *Session) send(ctx context.Context, stream iter.Seq2[any, error]) (*mess
 					}
 				}
 				if hasGenerating {
-					s.setStatus(StatusGenerating)
+					s.setStatus(api.StatusGenerating)
 				} else if hasThinking {
-					s.setStatus(StatusThinking)
+					s.setStatus(api.StatusThinking)
 				}
 				clonedChunk := message.CloneAssistantChunk(*ev)
 				apiChunk := toAPIChunk(&clonedChunk)
@@ -1323,22 +1300,22 @@ func (s *Session) send(ctx context.Context, stream iter.Seq2[any, error]) (*mess
 				if asst, ok := ev.(*message.Assistant); ok {
 					if len(asst.ToolCalls()) > 0 {
 						pendingTools = len(asst.ToolCalls())
-						s.setStatus(StatusExecuting)
+						s.setStatus(api.StatusExecuting)
 					}
 				} else if _, ok := ev.(*message.Tool); ok {
 					if pendingTools > 0 {
 						pendingTools--
 						if pendingTools == 0 {
-							s.setStatus(StatusThinking)
+							s.setStatus(api.StatusThinking)
 						}
 					} else {
-						s.setStatus(StatusThinking)
+						s.setStatus(api.StatusThinking)
 					}
 				}
 			}
 
 		case api.CommandStartedEvent:
-			s.setStatus(StatusExecuting)
+			s.setStatus(api.StatusExecuting)
 			ev.SessionID = s.ID
 			s.publisher.Publish(api.SessionStreamTopic(s.ID), ev)
 
@@ -1371,23 +1348,21 @@ func (s *Session) send(ctx context.Context, stream iter.Seq2[any, error]) (*mess
 			for i := range ev.Questions {
 				questions[i] = *ev.Questions[i].Clone()
 			}
-			nextStatus := StatusWaitingQuestion
+			nextStatus := api.StatusWaitingQuestion
 			if len(perms) > 0 {
-				nextStatus = StatusWaitingPermission
+				nextStatus = api.StatusWaitingPermission
 			}
 			s.Lock()
 			s.Status = nextStatus
 			s.Running = false
-			s.WaitingPermission = len(perms) > 0
 			s.PendingPermissions = perms
-			s.WaitingQuestion = len(questions) > 0
 			s.PendingQuestions = questions
 			s.FinishedAt = time.Now().UTC()
 			s.Unlock()
 
 			s.publisher.Publish(api.SessionStreamTopic(s.ID), api.StatusChangedEvent{
 				SessionID: s.ID,
-				Status:    api.SessionStatus(nextStatus),
+				Status:    nextStatus,
 			})
 			if len(perms) > 0 {
 				s.publisher.Publish(api.SessionStreamTopic(s.ID), api.PermissionRequestedEvent{SessionID: s.ID, Permissions: perms})
@@ -1405,7 +1380,7 @@ func (s *Session) send(ctx context.Context, stream iter.Seq2[any, error]) (*mess
 			s.publisher.Publish(api.SessionStreamTopic(s.ID), ev)
 
 		case api.CompactionStartedEvent:
-			s.setStatus(StatusCompacting)
+			s.setStatus(api.StatusCompacting)
 			ev.SessionID = s.ID
 			s.publisher.Publish(api.SessionStreamTopic(s.ID), ev)
 
@@ -1537,14 +1512,14 @@ func (s *Session) generateTitle(userText string) {
 		}
 		if !found {
 			s.Lock()
-			modelName := s.Config.Model
+			modelName := models.ID(s.Config.Model)
 			s.Unlock()
 			effective, found = catalog.Get(modelName)
 		}
 		if !found {
 			return false
 		}
-		settings := s.modelSettings(SessionConfig{Agent: workspace.AgentNameTitleGenerator})
+		settings := s.modelSettings(api.SessionConfig{Agent: workspace.AgentNameTitleGenerator})
 		cfg, _, err := effective.Configure(settings)
 		if err == nil {
 			llmModel, err = s.gateway().LLM(ctx, effective, cfg)

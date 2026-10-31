@@ -9,14 +9,16 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/masterkeysrd/tasksmith/api"
 )
 
 func TestFastSynchronousCompletion(t *testing.T) {
-	var updateCalls []Snapshot
+	var updateCalls []api.Task
 	var mu sync.Mutex
 
 	mgr := New(Config{
-		OnUpdate: func(s Snapshot) {
+		OnUpdate: func(s api.Task) {
 			mu.Lock()
 			updateCalls = append(updateCalls, s)
 			mu.Unlock()
@@ -43,8 +45,8 @@ func TestFastSynchronousCompletion(t *testing.T) {
 	if task.Backgrounded() {
 		t.Fatalf("expected task not backgrounded")
 	}
-	if task.Status() != StatusCompleted {
-		t.Fatalf("expected status %v, got %v", StatusCompleted, task.Status())
+	if task.Status() != api.TaskStatusCompleted {
+		t.Fatalf("expected status %v, got %v", api.TaskStatusCompleted, task.Status())
 	}
 	if task.ExitCode() != 0 {
 		t.Fatalf("expected exit code 0, got %d", task.ExitCode())
@@ -95,17 +97,17 @@ func TestCallerContextCancellationDuringWait(t *testing.T) {
 	if task.Backgrounded() {
 		t.Fatalf("expected task not backgrounded")
 	}
-	if task.Status() != StatusCanceled {
-		t.Fatalf("expected status %v, got %v", StatusCanceled, task.Status())
+	if task.Status() != api.TaskStatusCanceled {
+		t.Fatalf("expected status %v, got %v", api.TaskStatusCanceled, task.Status())
 	}
 }
 
 func TestBackgroundTransitionWhenWaitExpires(t *testing.T) {
-	var updates []Snapshot
+	var updates []api.Task
 	var mu sync.Mutex
 
 	mgr := New(Config{
-		OnUpdate: func(s Snapshot) {
+		OnUpdate: func(s api.Task) {
 			mu.Lock()
 			updates = append(updates, s)
 			mu.Unlock()
@@ -143,8 +145,8 @@ func TestBackgroundTransitionWhenWaitExpires(t *testing.T) {
 	first := updates[0]
 	mu.Unlock()
 
-	if first.Status != StatusRunning {
-		t.Fatalf("expected first update status %v, got %v", StatusRunning, first.Status)
+	if first.Status != api.TaskStatusRunning {
+		t.Fatalf("expected first update status %v, got %v", api.TaskStatusRunning, first.Status)
 	}
 	if !first.Backgrounded {
 		t.Fatalf("expected first update backgrounded true")
@@ -155,7 +157,7 @@ func TestBackgroundTransitionWhenWaitExpires(t *testing.T) {
 	<-task.Done()
 
 	// Wait briefly for completion onUpdate callback
-	var last Snapshot
+	var last api.Task
 	for range 50 {
 		mu.Lock()
 		if len(updates) >= 2 {
@@ -167,8 +169,8 @@ func TestBackgroundTransitionWhenWaitExpires(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 
-	if last.Status != StatusCompleted {
-		t.Fatalf("expected second update status %v, got %v", StatusCompleted, last.Status)
+	if last.Status != api.TaskStatusCompleted {
+		t.Fatalf("expected second update status %v, got %v", api.TaskStatusCompleted, last.Status)
 	}
 
 	list := mgr.List()
@@ -294,8 +296,8 @@ func TestKillRunningBackgroundTask(t *testing.T) {
 
 	<-task.Done()
 
-	if task.Status() != StatusCanceled {
-		t.Fatalf("expected status %v, got %v", StatusCanceled, task.Status())
+	if task.Status() != api.TaskStatusCanceled {
+		t.Fatalf("expected status %v, got %v", api.TaskStatusCanceled, task.Status())
 	}
 }
 
@@ -416,8 +418,8 @@ func TestKillTaskLifecycle(t *testing.T) {
 	}
 
 	<-task.Done()
-	if task.Status() != StatusCanceled {
-		t.Fatalf("expected status %v, got %v", StatusCanceled, task.Status())
+	if task.Status() != api.TaskStatusCanceled {
+		t.Fatalf("expected status %v, got %v", api.TaskStatusCanceled, task.Status())
 	}
 
 	// 3. Kill already canceled task -> ErrNotRunning

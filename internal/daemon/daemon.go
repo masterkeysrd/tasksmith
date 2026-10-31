@@ -660,16 +660,7 @@ func (d *Daemon) CreateSession(ctx context.Context, rawWS string, req api.Create
 		return nil, false, err
 	}
 
-	sess, created, err := rt.Sessions().Create(ctx, session.CreateParams{
-		ID:    req.ID,
-		Title: req.Title,
-		Config: session.SessionConfig{
-			Agent:    req.Config.Agent,
-			Model:    models.ID(req.Config.Model),
-			Thinking: req.Config.Thinking,
-			Mode:     req.Config.Mode,
-		},
-	})
+	sess, created, err := rt.Sessions().Create(ctx, req)
 	if err != nil {
 		return nil, false, err
 	}
@@ -684,12 +675,7 @@ func (d *Daemon) PreviewSession(ctx context.Context, rawWS string, req api.Previ
 		return nil, err
 	}
 
-	cfg, model, diags, hasModel, err := rt.Sessions().Preview(ctx, session.SessionConfig{
-		Agent:    req.Config.Agent,
-		Model:    models.ID(req.Config.Model),
-		Thinking: req.Config.Thinking,
-		Mode:     req.Config.Mode,
-	})
+	cfg, model, diags, hasModel, err := rt.Sessions().Preview(ctx, req.Config)
 	if err != nil {
 		return nil, err
 	}
@@ -704,12 +690,7 @@ func (d *Daemon) PreviewSession(ctx context.Context, rawWS string, req api.Previ
 	}
 
 	return &api.SessionPreview{
-		Config: api.SessionConfig{
-			Agent:    cfg.Agent,
-			Model:    string(cfg.Model),
-			Thinking: cfg.Thinking,
-			Mode:     api.PermissionMode(cfg.Mode),
-		},
+		Config:      cfg,
 		Model:       resolvedModel,
 		Diagnostics: diags,
 	}, nil
@@ -754,15 +735,7 @@ func (d *Daemon) UpdateSession(ctx context.Context, rawWS, id string, req api.Up
 		return nil, err
 	}
 
-	sess, err := rt.Sessions().Update(ctx, id, session.UpdateParams{
-		Title: req.Title,
-		Config: session.SessionConfig{
-			Agent:    req.Config.Agent,
-			Model:    models.ID(req.Config.Model),
-			Thinking: req.Config.Thinking,
-			Mode:     req.Config.Mode,
-		},
-	})
+	sess, err := rt.Sessions().Update(ctx, id, req)
 	if err != nil {
 		return nil, err
 	}
@@ -949,7 +922,7 @@ func (d *Daemon) Tasks(ctx context.Context, rawWS, id string) ([]api.Task, error
 		return []api.Task{}, nil
 	}
 
-	return session.ToAPITasks(sess.Tasks.List()), nil
+	return sess.Tasks.List(), nil
 }
 
 func (d *Daemon) KillTask(ctx context.Context, rawWS, id, taskID string) error {

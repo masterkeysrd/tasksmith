@@ -114,7 +114,7 @@ func TestSessionModelDiagnosticsAndRequests(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer mgr.Close()
-	sess, _, err := mgr.Create(ctx, CreateParams{Title: "test", Config: SessionConfig{Agent: "cold", Model: "local/unsupported"}})
+	sess, _, err := mgr.Create(ctx, api.CreateSessionRequest{Title: "test", Config: api.SessionConfig{Agent: "cold", Model: "local/unsupported"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -133,7 +133,7 @@ func TestSessionModelDiagnosticsAndRequests(t *testing.T) {
 			t.Fatalf("unexpected temperature: %#v", first)
 		}
 	}
-	updated, err := mgr.Update(ctx, sess.ID, UpdateParams{Config: SessionConfig{Model: "local/supported"}})
+	updated, err := mgr.Update(ctx, sess.ID, api.UpdateSessionRequest{Config: api.SessionConfig{Model: "local/supported"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -151,7 +151,7 @@ func TestSessionModelDiagnosticsAndRequests(t *testing.T) {
 	if !ok || options["temperature"] != float64(0) {
 		t.Fatalf("zero temperature missing: %#v", second)
 	}
-	updated, err = mgr.Update(ctx, sess.ID, UpdateParams{Config: SessionConfig{Agent: "main", Model: "local/unsupported"}})
+	updated, err = mgr.Update(ctx, sess.ID, api.UpdateSessionRequest{Config: api.SessionConfig{Agent: "main", Model: "local/unsupported"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -178,7 +178,7 @@ func TestSessionModelDiagnosticsAndRequests(t *testing.T) {
 		{"local/supported", true},
 		{"local/unsupported", false},
 	} {
-		titleSession, _, err := mgr.Create(ctx, CreateParams{Config: SessionConfig{Agent: "cold", Model: models.ID(tc.model)}})
+		titleSession, _, err := mgr.Create(ctx, api.CreateSessionRequest{Config: api.SessionConfig{Agent: "cold", Model: tc.model}})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -209,7 +209,7 @@ func TestSessionModelDiagnosticsAndRequests(t *testing.T) {
 		{"local/supported", &api.ThinkingSetting{Type: "effort", Effort: "low"}, "high"},
 		{"local/unsupported", nil, nil},
 	} {
-		titleSession, _, err := mgr.Create(ctx, CreateParams{Config: SessionConfig{Agent: "cold", Model: models.ID(tc.model), Thinking: tc.thinking}})
+		titleSession, _, err := mgr.Create(ctx, api.CreateSessionRequest{Config: api.SessionConfig{Agent: "cold", Model: tc.model, Thinking: tc.thinking}})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -232,22 +232,22 @@ func TestSessionModelDiagnosticsAndRequests(t *testing.T) {
 
 func TestWaitingForInteractionLocked(t *testing.T) {
 	tests := []struct {
-		name              string
-		status            Status
-		waitingPermission bool
-		waitingQuestion   bool
-		want              bool
+		name      string
+		status    api.SessionStatus
+		perms     []api.PermissionRequest
+		questions []api.QuestionRequest
+		want      bool
 	}{
-		{name: "idle", status: StatusIdle},
-		{name: "permission flag", status: StatusIdle, waitingPermission: true, want: true},
-		{name: "question flag", status: StatusIdle, waitingQuestion: true, want: true},
-		{name: "permission handoff", status: StatusWaitingPermission, want: true},
-		{name: "question handoff", status: StatusWaitingQuestion, want: true},
-		{name: "both flags", status: StatusWaitingPermission, waitingPermission: true, waitingQuestion: true, want: true},
+		{name: "idle", status: api.StatusIdle},
+		{name: "pending permissions", status: api.StatusIdle, perms: []api.PermissionRequest{{ID: "p1"}}, want: true},
+		{name: "pending questions", status: api.StatusIdle, questions: []api.QuestionRequest{{ID: "q1"}}, want: true},
+		{name: "permission handoff", status: api.StatusWaitingPermission, want: true},
+		{name: "question handoff", status: api.StatusWaitingQuestion, want: true},
+		{name: "both pending", status: api.StatusWaitingPermission, perms: []api.PermissionRequest{{ID: "p1"}}, questions: []api.QuestionRequest{{ID: "q1"}}, want: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			s := &Session{State: &State{Status: tt.status, WaitingPermission: tt.waitingPermission, WaitingQuestion: tt.waitingQuestion}}
+			s := &Session{State: &State{Status: tt.status, PendingPermissions: tt.perms, PendingQuestions: tt.questions}}
 			s.Lock()
 			got := s.waitingForInteractionLocked()
 			s.Unlock()
@@ -520,7 +520,7 @@ func setupTestEnv(t *testing.T, prov *fakeProvider) (*sql.DB, *workspace.Workspa
 	return db, ws, gw, pub, mgr
 }
 
-func loadHarnessState(t *testing.T, mgr Manager, db *sql.DB, gw *fakeGateway, sessionID string) harness.State {
+func loadHarnessState(t *testing.T, mgr Manager, sessionID string) harness.State {
 	t.Helper()
 	sess, err := mgr.Get(context.Background(), sessionID)
 	if err != nil {
@@ -668,7 +668,7 @@ func TestSessionCRUD(t *testing.T) {
 	}
 
 	// Create session 1
-	s1, _, err := mgr.Create(ctx, CreateParams{Title: "First Session"})
+	s1, _, err := mgr.Create(ctx, api.CreateSessionRequest{Title: "First Session"})
 	if err != nil {
 		t.Fatalf("Create s1 error: %v", err)
 	}
@@ -689,7 +689,7 @@ func TestSessionCRUD(t *testing.T) {
 	time.Sleep(2 * time.Millisecond)
 
 	// Create session 2
-	s2, _, err := mgr.Create(ctx, CreateParams{Title: "Second Session"})
+	s2, _, err := mgr.Create(ctx, api.CreateSessionRequest{Title: "Second Session"})
 	if err != nil {
 		t.Fatalf("Create s2 error: %v", err)
 	}
@@ -899,7 +899,7 @@ OVERRIDE_AGENT_PROMPT_MARKER {{ if call .HasTool "shell" }}HAS_SHELL_TOOL{{ end 
 	}
 
 	// Session A: uses workspace defaults for Agent and Model
-	sessDefault, _, err := mgr.Create(ctx, CreateParams{Title: "Default Session"})
+	sessDefault, _, err := mgr.Create(ctx, api.CreateSessionRequest{Title: "Default Session"})
 	if err != nil {
 		t.Fatalf("Create default session error: %v", err)
 	}
@@ -911,9 +911,9 @@ OVERRIDE_AGENT_PROMPT_MARKER {{ if call .HasTool "shell" }}HAS_SHELL_TOOL{{ end 
 	}
 
 	// Session B: explicit Agent and Model overrides in the same workspace
-	sessOverride, _, err := mgr.Create(ctx, CreateParams{
+	sessOverride, _, err := mgr.Create(ctx, api.CreateSessionRequest{
 		Title: "Override Session",
-		Config: SessionConfig{
+		Config: api.SessionConfig{
 			Agent: "override-agent",
 			Model: "anthropic/claude-4-sonnet",
 		},
@@ -968,9 +968,9 @@ OVERRIDE_AGENT_PROMPT_MARKER {{ if call .HasTool "shell" }}HAS_SHELL_TOOL{{ end 
 	}
 
 	// Update Session A: update title, agent, and bare model (resolving with defaultProvider openai)
-	updatedA, err := mgr.Update(ctx, sessDefault.ID, UpdateParams{
+	updatedA, err := mgr.Update(ctx, sessDefault.ID, api.UpdateSessionRequest{
 		Title: "Renamed Default Session",
-		Config: SessionConfig{
+		Config: api.SessionConfig{
 			Agent: "override-agent",
 			Model: "gpt-5.5-default",
 		},
@@ -989,8 +989,8 @@ OVERRIDE_AGENT_PROMPT_MARKER {{ if call .HasTool "shell" }}HAS_SHELL_TOOL{{ end 
 	}
 
 	// Update Session A again with fully qualified model
-	updatedA2, err := mgr.Update(ctx, sessDefault.ID, UpdateParams{
-		Config: SessionConfig{
+	updatedA2, err := mgr.Update(ctx, sessDefault.ID, api.UpdateSessionRequest{
+		Config: api.SessionConfig{
 			Model: "anthropic/claude-4-sonnet",
 		},
 	})
@@ -1011,10 +1011,10 @@ OVERRIDE_AGENT_PROMPT_MARKER {{ if call .HasTool "shell" }}HAS_SHELL_TOOL{{ end 
 	}
 
 	// Error cases
-	if _, err := mgr.Update(ctx, "", UpdateParams{Title: "X"}); !errors.Is(err, ErrEmptySessionID) {
+	if _, err := mgr.Update(ctx, "", api.UpdateSessionRequest{Title: "X"}); !errors.Is(err, ErrEmptySessionID) {
 		t.Errorf("Update empty ID: got %v, want ErrEmptySessionID", err)
 	}
-	if _, err := mgr.Update(ctx, "non-existent-id", UpdateParams{Title: "X"}); !errors.Is(err, ErrSessionNotFound) {
+	if _, err := mgr.Update(ctx, "non-existent-id", api.UpdateSessionRequest{Title: "X"}); !errors.Is(err, ErrSessionNotFound) {
 		t.Errorf("Update nonexistent ID: got %v, want ErrSessionNotFound", err)
 	}
 }
@@ -1026,9 +1026,9 @@ func TestSendAndHistory(t *testing.T) {
 			return []string{"Hello", ", ", "TaskSmith!"}, "asst-msg-1", nil
 		},
 	}
-	db, _, gw, pub, mgr := setupTestEnv(t, prov)
+	_, _, _, pub, mgr := setupTestEnv(t, prov)
 
-	sess, _, err := mgr.Create(ctx, CreateParams{Title: "Chat Loop"})
+	sess, _, err := mgr.Create(ctx, api.CreateSessionRequest{Title: "Chat Loop"})
 	if err != nil {
 		t.Fatalf("Create error: %v", err)
 	}
@@ -1168,7 +1168,7 @@ func TestSendAndHistory(t *testing.T) {
 	}
 
 	// Verify harness.LoadState returns [User, Assistant] from the checkpoints table
-	state := loadHarnessState(t, mgr, db, gw, sess.ID)
+	state := loadHarnessState(t, mgr, sess.ID)
 	if len(state.Messages) != 2 {
 		t.Fatalf("expected 2 messages in harness checkpoint state, got %d", len(state.Messages))
 	}
@@ -1187,9 +1187,9 @@ func TestAppendMessageIsolationFromHarnessCheckpoints(t *testing.T) {
 			return []string{"Assistant reply"}, "asst-isolation-1", nil
 		},
 	}
-	db, _, gw, pub, mgr := setupTestEnv(t, prov)
+	_, _, _, pub, mgr := setupTestEnv(t, prov)
 
-	sess, _, err := mgr.Create(ctx, CreateParams{Title: "System Notice Thread"})
+	sess, _, err := mgr.Create(ctx, api.CreateSessionRequest{Title: "System Notice Thread"})
 	if err != nil {
 		t.Fatalf("Create error: %v", err)
 	}
@@ -1246,7 +1246,7 @@ func TestAppendMessageIsolationFromHarnessCheckpoints(t *testing.T) {
 	}
 
 	// 4. Verify harness.LoadState (checkpoints table) is NOT polluted with the chat-only system message
-	state := loadHarnessState(t, mgr, db, gw, sess.ID)
+	state := loadHarnessState(t, mgr, sess.ID)
 	if len(state.Messages) != 2 {
 		t.Fatalf("expected 2 messages in harness checkpoint state, got %d: %+v", len(state.Messages), state.Messages)
 	}
@@ -1261,7 +1261,7 @@ func TestFileTrackerCompactJournalAndBlobs(t *testing.T) {
 	ctx := context.Background()
 	_, ws, _, _, mgr := setupTestEnv(t, nil)
 
-	sess, _, err := mgr.Create(ctx, CreateParams{Title: "File Tracker Session"})
+	sess, _, err := mgr.Create(ctx, api.CreateSessionRequest{Title: "File Tracker Session"})
 	if err != nil {
 		t.Fatalf("Create error: %v", err)
 	}
@@ -1402,7 +1402,7 @@ func TestFileTrackerDiffAndRecoverAt(t *testing.T) {
 	ctx := context.Background()
 	_, ws, _, _, mgr := setupTestEnv(t, nil)
 
-	sess, _, err := mgr.Create(ctx, CreateParams{Title: "Recovery Session"})
+	sess, _, err := mgr.Create(ctx, api.CreateSessionRequest{Title: "Recovery Session"})
 	if err != nil {
 		t.Fatalf("Create error: %v", err)
 	}
@@ -1515,7 +1515,7 @@ func TestFileTrackerRevertToBaselineThreeWayMerge(t *testing.T) {
 	ctx := context.Background()
 	_, ws, _, _, mgr := setupTestEnv(t, nil)
 
-	sess, _, err := mgr.Create(ctx, CreateParams{Title: "Merge3 Revert Session"})
+	sess, _, err := mgr.Create(ctx, api.CreateSessionRequest{Title: "Merge3 Revert Session"})
 	if err != nil {
 		t.Fatalf("Create error: %v", err)
 	}
@@ -1618,7 +1618,7 @@ func TestFileTrackerReloadAndDeleteSessionCleanup(t *testing.T) {
 	ctx := context.Background()
 	db, ws, gw, pub, mgr := setupTestEnv(t, nil)
 
-	sess, _, err := mgr.Create(ctx, CreateParams{Title: "Persistent Tracker"})
+	sess, _, err := mgr.Create(ctx, api.CreateSessionRequest{Title: "Persistent Tracker"})
 	if err != nil {
 		t.Fatalf("Create error: %v", err)
 	}
@@ -1751,7 +1751,7 @@ func TestMultiStepToolExecutionAndFileTracker(t *testing.T) {
 		t.Fatalf("WriteFile hello.txt: %v", err)
 	}
 
-	sess, _, err := mgr.Create(ctx, CreateParams{Title: "Multi-step Tool Session"})
+	sess, _, err := mgr.Create(ctx, api.CreateSessionRequest{Title: "Multi-step Tool Session"})
 	if err != nil {
 		t.Fatalf("Create error: %v", err)
 	}
@@ -1881,7 +1881,7 @@ func TestMultiPermissionInterruptAndAllOrNothingRespondPermission(t *testing.T) 
 
 	_, ws, _, pub, mgr := setupTestEnv(t, prov)
 
-	sess, _, err := mgr.Create(ctx, CreateParams{Title: "All-Or-Nothing Permissions"})
+	sess, _, err := mgr.Create(ctx, api.CreateSessionRequest{Title: "All-Or-Nothing Permissions"})
 	if err != nil {
 		t.Fatalf("Create error: %v", err)
 	}
@@ -1896,7 +1896,7 @@ func TestMultiPermissionInterruptAndAllOrNothingRespondPermission(t *testing.T) 
 	if err := sess.Wait(ctx); err != nil {
 		t.Fatalf("Wait error: %v", err)
 	}
-	if sess.Status != StatusWaitingPermission {
+	if sess.Status != api.StatusWaitingPermission {
 		t.Fatalf("expected StatusWaitingPermission, got %v", sess.Status)
 	}
 
@@ -2119,7 +2119,7 @@ func TestCancelPendingPermissionsOnNewUserSend(t *testing.T) {
 
 	_, ws, _, _, mgr := setupTestEnv(t, prov)
 
-	sess, _, err := mgr.Create(ctx, CreateParams{Title: "Cancel Pending Permissions"})
+	sess, _, err := mgr.Create(ctx, api.CreateSessionRequest{Title: "Cancel Pending Permissions"})
 	if err != nil {
 		t.Fatalf("Create error: %v", err)
 	}
@@ -2132,7 +2132,7 @@ func TestCancelPendingPermissionsOnNewUserSend(t *testing.T) {
 	if err := sess.Wait(ctx); err != nil {
 		t.Fatalf("Wait 1 error: %v", err)
 	}
-	if sess.Status != StatusWaitingPermission {
+	if sess.Status != api.StatusWaitingPermission {
 		t.Fatalf("expected StatusWaitingPermission, got %v", sess.Status)
 	}
 
@@ -2225,7 +2225,7 @@ func TestPermissionModeGetAndSet(t *testing.T) {
 	ctx := context.Background()
 	_, _, _, _, mgr := setupTestEnv(t, nil)
 
-	sess, _, err := mgr.Create(ctx, CreateParams{Title: "Permission Modes"})
+	sess, _, err := mgr.Create(ctx, api.CreateSessionRequest{Title: "Permission Modes"})
 	if err != nil {
 		t.Fatalf("Create error: %v", err)
 	}
@@ -2241,7 +2241,7 @@ func TestPermissionModeGetAndSet(t *testing.T) {
 		api.ModeAuto,
 		api.ModeDefault,
 	} {
-		updated, err := mgr.Update(ctx, sess.ID, UpdateParams{Config: SessionConfig{Mode: nextMode}})
+		updated, err := mgr.Update(ctx, sess.ID, api.UpdateSessionRequest{Config: api.SessionConfig{Mode: nextMode}})
 		if err != nil {
 			t.Fatalf("Update(%q) error: %v", nextMode, err)
 		}
@@ -2257,7 +2257,7 @@ func TestPermissionModeGetAndSet(t *testing.T) {
 		}
 	}
 
-	if _, err := mgr.Update(ctx, sess.ID, UpdateParams{Config: SessionConfig{Mode: "invalid_mode"}}); !errors.Is(err, ErrInvalidConfig) {
+	if _, err := mgr.Update(ctx, sess.ID, api.UpdateSessionRequest{Config: api.SessionConfig{Mode: "invalid_mode"}}); !errors.Is(err, ErrInvalidConfig) {
 		t.Errorf("Update invalid mode error = %v, want %v", err, ErrInvalidConfig)
 	}
 }
@@ -2305,9 +2305,9 @@ func TestTimelineRecordEvents(t *testing.T) {
 	db, _, _, pub, mgr := setupTestEnv(t, prov)
 
 	// 1. Create session and verify empty initial timeline
-	sess, _, err := mgr.Create(ctx, CreateParams{
+	sess, _, err := mgr.Create(ctx, api.CreateSessionRequest{
 		Title: "Timeline Lifecycle",
-		Config: SessionConfig{
+		Config: api.SessionConfig{
 			Agent: "code-reviewer",
 			Model: "sonnet",
 		},
@@ -2346,8 +2346,8 @@ func TestTimelineRecordEvents(t *testing.T) {
 
 	// 3. Update Model and verify KindModel entry
 	oldModel := sess.Config.Model
-	newModelRaw := models.ID("claude-3-5-sonnet")
-	updatedSess, err := mgr.Update(ctx, sess.ID, UpdateParams{Config: SessionConfig{Model: newModelRaw}})
+	newModelRaw := "claude-3-5-sonnet"
+	updatedSess, err := mgr.Update(ctx, sess.ID, api.UpdateSessionRequest{Config: api.SessionConfig{Model: newModelRaw}})
 	if err != nil {
 		t.Fatalf("Update model error: %v", err)
 	}
@@ -2365,14 +2365,14 @@ func TestTimelineRecordEvents(t *testing.T) {
 	if tl2[1].Kind != api.TimelineKindModel {
 		t.Errorf("tl2[1].Kind = %q, want %q", tl2[1].Kind, api.TimelineKindModel)
 	}
-	if tl2[1].Model == nil || tl2[1].Model.From != string(oldModel) || tl2[1].Model.To != string(updatedSess.Config.Model) {
+	if tl2[1].Model == nil || tl2[1].Model.From != oldModel || tl2[1].Model.To != updatedSess.Config.Model {
 		t.Errorf("tl2[1].Model = %+v, want From=%q To=%q", tl2[1].Model, oldModel, updatedSess.Config.Model)
 	}
 
 	// 4. Update Agent and verify KindAgent entry
 	oldAgent := updatedSess.Config.Agent
 	newAgent := "general-assistant"
-	_, err = mgr.Update(ctx, sess.ID, UpdateParams{Config: SessionConfig{Agent: newAgent}})
+	_, err = mgr.Update(ctx, sess.ID, api.UpdateSessionRequest{Config: api.SessionConfig{Agent: newAgent}})
 	if err != nil {
 		t.Fatalf("Update agent error: %v", err)
 	}
@@ -2392,7 +2392,7 @@ func TestTimelineRecordEvents(t *testing.T) {
 	}
 
 	// 5. Change permission mode and verify KindMode entry
-	if _, err := mgr.Update(ctx, sess.ID, UpdateParams{Config: SessionConfig{Mode: api.ModePlan}}); err != nil {
+	if _, err := mgr.Update(ctx, sess.ID, api.UpdateSessionRequest{Config: api.SessionConfig{Mode: api.ModePlan}}); err != nil {
 		t.Fatalf("Update(ModePlan) error: %v", err)
 	}
 
@@ -2411,7 +2411,7 @@ func TestTimelineRecordEvents(t *testing.T) {
 	}
 
 	// Setting the same mode again should NOT append an entry
-	if _, err := mgr.Update(ctx, sess.ID, UpdateParams{Config: SessionConfig{Mode: api.ModePlan}}); err != nil {
+	if _, err := mgr.Update(ctx, sess.ID, api.UpdateSessionRequest{Config: api.SessionConfig{Mode: api.ModePlan}}); err != nil {
 		t.Fatalf("Update duplicate error: %v", err)
 	}
 	tl4Dup, err := sess.Timeline.List(ctx)
@@ -2423,7 +2423,7 @@ func TestTimelineRecordEvents(t *testing.T) {
 	}
 
 	// Reset mode to default so the tool call requires approval
-	if _, err := mgr.Update(ctx, sess.ID, UpdateParams{Config: SessionConfig{Mode: api.ModeDefault}}); err != nil {
+	if _, err := mgr.Update(ctx, sess.ID, api.UpdateSessionRequest{Config: api.SessionConfig{Mode: api.ModeDefault}}); err != nil {
 		t.Fatalf("Update(ModeDefault) error: %v", err)
 	}
 	tl5, err := sess.Timeline.List(ctx)
@@ -2444,7 +2444,7 @@ func TestTimelineRecordEvents(t *testing.T) {
 	if err := sess.Wait(ctx); err != nil {
 		t.Fatalf("Wait error: %v", err)
 	}
-	if sess.Status != StatusWaitingPermission {
+	if sess.Status != api.StatusWaitingPermission {
 		t.Fatalf("expected StatusWaitingPermission, got %v", sess.Status)
 	}
 
@@ -2573,7 +2573,7 @@ func TestTargetedSessionFixes(t *testing.T) {
 	db, ws, gw, pub, mgr := setupTestEnv(t, prov)
 
 	// 1. Verify sessionDir uses xdg.WorkspaceDir and does NOT create a sessions/ dir in ws.RootDir()
-	sess, _, err := mgr.Create(ctx, CreateParams{
+	sess, _, err := mgr.Create(ctx, api.CreateSessionRequest{
 		Title: "Test Fixes",
 	})
 	if err != nil {
@@ -2600,7 +2600,7 @@ func TestTargetedSessionFixes(t *testing.T) {
 	if err := sess.Wait(ctx); err != nil {
 		t.Fatalf("Wait: %v", err)
 	}
-	if sess.Status != StatusWaitingPermission {
+	if sess.Status != api.StatusWaitingPermission {
 		t.Fatalf("expected StatusWaitingPermission, got %v", sess.Status)
 	}
 
@@ -2625,11 +2625,8 @@ func TestTargetedSessionFixes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("mgr2.Get: %v", err)
 	}
-	if sess2.Status != StatusWaitingPermission {
+	if sess2.Status != api.StatusWaitingPermission {
 		t.Errorf("sess2.Status = %v, want StatusWaitingPermission", sess2.Status)
-	}
-	if !sess2.WaitingPermission {
-		t.Errorf("sess2.WaitingPermission = false, want true")
 	}
 	if len(sess2.PendingPermissions) == 0 {
 		t.Errorf("sess2.PendingPermissions is empty, want > 0")
@@ -2651,7 +2648,7 @@ func TestSessionPermissionsPersistence(t *testing.T) {
 	ctx := context.Background()
 	db, ws, gw, pub, mgr := setupTestEnv(t, &fakeProvider{})
 
-	sess, _, err := mgr.Create(ctx, CreateParams{
+	sess, _, err := mgr.Create(ctx, api.CreateSessionRequest{
 		Title: "Perm Test Session",
 	})
 	if err != nil {
@@ -2773,7 +2770,7 @@ func TestSessionAutoGenerateTitle(t *testing.T) {
 	db, _, _, pub, mgr := setupTestEnv(t, prov)
 
 	// 1. Create a session with Title: ""
-	sess, _, err := mgr.Create(ctx, CreateParams{})
+	sess, _, err := mgr.Create(ctx, api.CreateSessionRequest{})
 	if err != nil {
 		t.Fatalf("mgr.Create: %v", err)
 	}
@@ -2856,7 +2853,7 @@ func TestSessionAutoGenerateTitle(t *testing.T) {
 	}
 
 	// Verify manual update or explicit initial title is not overwritten
-	sessManual, _, err := mgr.Create(ctx, CreateParams{Title: "Manual Title"})
+	sessManual, _, err := mgr.Create(ctx, api.CreateSessionRequest{Title: "Manual Title"})
 	if err != nil {
 		t.Fatalf("mgr.Create sessManual: %v", err)
 	}
@@ -2930,7 +2927,7 @@ func TestSessionTitleRetriesAfterFailure(t *testing.T) {
 	db, _, _, _, mgr := setupTestEnv(t, prov)
 	_ = db
 
-	sess, _, err := mgr.Create(ctx, CreateParams{})
+	sess, _, err := mgr.Create(ctx, api.CreateSessionRequest{})
 	if err != nil {
 		t.Fatalf("mgr.Create: %v", err)
 	}
@@ -3049,7 +3046,7 @@ func TestSessionDirectShellEscape(t *testing.T) {
 	_ = gw
 	_ = pub
 
-	sess, _, err := mgr.Create(ctx, CreateParams{
+	sess, _, err := mgr.Create(ctx, api.CreateSessionRequest{
 		Title: "Direct Shell Escape Test",
 	})
 	if err != nil {
@@ -3192,7 +3189,7 @@ func TestSessionEnqueueCommandWhileRunning(t *testing.T) {
 	_ = gw
 	_ = pub
 
-	sess, _, err := mgr.Create(ctx, CreateParams{
+	sess, _, err := mgr.Create(ctx, api.CreateSessionRequest{
 		Title: "Enqueue Command Test",
 	})
 	if err != nil {
@@ -3240,7 +3237,7 @@ func TestSessionEnqueueCommandWhileRunning(t *testing.T) {
 	status := sess.Status
 	sess.Unlock()
 	pending = sess.VisibleQueue()
-	if running || status != StatusIdle || len(pending) != 0 {
+	if running || status != api.StatusIdle || len(pending) != 0 {
 		t.Fatalf("expected idle not running with 0 pending commands, got running=%v status=%s pending=%d", running, status, len(pending))
 	}
 
@@ -3301,7 +3298,7 @@ func TestSessionEnqueueCommandDuringTurn(t *testing.T) {
 	_ = gw
 	_ = pub
 
-	sess, _, err := mgr.Create(ctx, CreateParams{
+	sess, _, err := mgr.Create(ctx, api.CreateSessionRequest{
 		Title: "Enqueue Command During Turn",
 	})
 	if err != nil {
@@ -3377,7 +3374,7 @@ func TestQueueKindTaskFilteredAndNoEvent(t *testing.T) {
 	}
 	_, _, _, pub, mgr := setupTestEnv(t, provider)
 
-	sess, _, err := mgr.Create(ctx, CreateParams{
+	sess, _, err := mgr.Create(ctx, api.CreateSessionRequest{
 		Title: "Task Queue Filter Test",
 	})
 	if err != nil {
@@ -3505,7 +3502,7 @@ func TestSessionTodosRestoreOnLoad(t *testing.T) {
 
 	db, ws, gw, pub, mgr := setupTestEnv(t, prov)
 
-	sess, _, err := mgr.Create(ctx, CreateParams{
+	sess, _, err := mgr.Create(ctx, api.CreateSessionRequest{
 		Title: "Todos Test",
 	})
 	if err != nil {
@@ -3586,7 +3583,7 @@ func TestSessionSendCompactDirect(t *testing.T) {
 	_ = gw
 	_ = pub
 
-	sess, _, err := mgr.Create(ctx, CreateParams{
+	sess, _, err := mgr.Create(ctx, api.CreateSessionRequest{
 		Title: "Direct Compaction Test",
 	})
 	if err != nil {
@@ -3712,9 +3709,9 @@ Reviewer agent.
 	}
 
 	// 1. Create session configured with coder agent
-	sess, _, err := mgr.Create(ctx, CreateParams{
+	sess, _, err := mgr.Create(ctx, api.CreateSessionRequest{
 		Title: "Agent Tool Scoping Test",
-		Config: SessionConfig{
+		Config: api.SessionConfig{
 			Agent: "coder",
 		},
 	})
@@ -3743,8 +3740,8 @@ Reviewer agent.
 	}
 
 	// 2. Update session to reviewer agent
-	_, err = mgr.Update(ctx, sess.ID, UpdateParams{
-		Config: SessionConfig{
+	_, err = mgr.Update(ctx, sess.ID, api.UpdateSessionRequest{
+		Config: api.SessionConfig{
 			Agent: "reviewer",
 		},
 	})
@@ -3802,7 +3799,7 @@ Follow these instructions carefully.`
 		t.Fatal(err)
 	}
 
-	sess, _, err := mgr.Create(ctx, CreateParams{
+	sess, _, err := mgr.Create(ctx, api.CreateSessionRequest{
 		Title: "Slash Command Skill Test",
 	})
 	if err != nil {

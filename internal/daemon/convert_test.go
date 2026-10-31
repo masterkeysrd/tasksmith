@@ -11,7 +11,6 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/daemon/broker"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/models"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/session"
-	"github.com/masterkeysrd/tasksmith/internal/daemon/tasks"
 	"github.com/masterkeysrd/warp"
 )
 
@@ -124,21 +123,21 @@ func TestToAPISessionWithTasks(t *testing.T) {
 	sess := &session.Session{
 		ID:    "sess-1",
 		Title: "Test Session",
-		Config: session.SessionConfig{
+		Config: api.SessionConfig{
 			Agent: "developer",
 			Model: "mock-model",
 		},
 		CreatedAt: now,
 		UpdatedAt: now,
 		State: &session.State{
-			Status: session.StatusThinking,
-			Tasks: []tasks.Snapshot{
+			Status: api.StatusThinking,
+			Tasks: []api.Task{
 				{
 					ID:           "task-1",
 					Kind:         "bash",
 					Title:        "go build",
 					Command:      "go build ./...",
-					Status:       tasks.StatusRunning,
+					Status:       api.TaskStatusRunning,
 					ExitCode:     0,
 					LogPath:      "/tmp/task-1.log",
 					StartedAt:    now,
@@ -239,13 +238,13 @@ func TestToAPISessionWithTodos(t *testing.T) {
 	sess := &session.Session{
 		ID:    "sess-todos",
 		Title: "Todos Session",
-		Config: session.SessionConfig{
+		Config: api.SessionConfig{
 			Agent: "developer",
 		},
 		CreatedAt: now,
 		UpdatedAt: now,
 		State: &session.State{
-			Status: session.StatusThinking,
+			Status: api.StatusThinking,
 			Todos: []api.TodoItem{
 				{
 					Content:    "Implement feature",
