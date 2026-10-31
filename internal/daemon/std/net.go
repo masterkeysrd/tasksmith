@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/core/diff"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/sandbox"
@@ -247,24 +248,26 @@ func (s *Std) Download(ctx context.Context, req DownloadRequest) (*DownloadResul
 		add, del = diff.Stats(string(diskBytes), string(bodyBytes))
 	}
 
-	kind := KindCreated
+	kind := api.KindCreated
 	if exists {
-		kind = KindModified
+		kind = api.KindModified
 	}
 
 	change := FileChange{
-		Path:          normPath,
-		Source:        SourceAgent,
-		Tool:          "download",
-		Kind:          kind,
-		BeforeHash:    diskHash,
-		AfterHash:     afterHash,
+		FileChange: api.FileChange{
+			Path:       normPath,
+			Source:     api.SourceAgent,
+			Tool:       "download",
+			Kind:       kind,
+			BeforeHash: diskHash,
+			AfterHash:  afterHash,
+			Additions:  add,
+			Deletions:  del,
+			Timestamp:  time.Now().UTC(),
+		},
 		BeforeContent: diskBytes,
 		AfterContent:  bodyBytes,
-		Additions:     add,
-		Deletions:     del,
 		IsBinary:      isBin,
-		Timestamp:     time.Now().UTC(),
 	}
 	if err := s.tracker.RecordChange(ctx, &change); err != nil {
 		return nil, err

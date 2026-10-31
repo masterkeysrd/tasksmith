@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/scope"
 )
 
@@ -125,7 +126,7 @@ func (t *MemoryTracker) RecordChange(ctx context.Context, change *FileChange) er
 
 	key := cleanTrackerPath(change.Path)
 	change.Path = key
-	if sc, ok := scope.From(ctx); ok && change.Source == SourceAgent {
+	if sc, ok := scope.From(ctx); ok && change.Source == api.SourceAgent {
 		if change.TurnID == "" {
 			change.TurnID = sc.TurnID
 		}
@@ -154,7 +155,7 @@ func (t *MemoryTracker) RecordChange(ctx context.Context, change *FileChange) er
 
 	t.mu.Lock()
 	t.changes = append(t.changes, stored)
-	if stored.Kind == KindDeleted || stored.AfterHash == "" {
+	if stored.Kind == api.KindDeleted || stored.AfterHash == "" {
 		t.files[key] = trackedState{
 			hash:    "",
 			content: nil,

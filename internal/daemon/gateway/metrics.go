@@ -7,6 +7,7 @@ import (
 
 	"github.com/masterkeysrd/loom/llm"
 	"github.com/masterkeysrd/loom/message"
+	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/metrics"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/models"
@@ -51,7 +52,7 @@ func metricsLLMMiddleware(m models.Model, rec metrics.Recorder) llm.Middleware {
 					call.Generation = last.Timing.Generation
 				}
 				est := profile.Estimate(details)
-				call.Tokens = metrics.Tokens{
+				call.Tokens = api.UsageTokens{
 					Input:      int64(details.Input),
 					Output:     int64(details.Output),
 					CacheRead:  int64(details.CacheRead),

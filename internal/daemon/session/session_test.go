@@ -1633,12 +1633,14 @@ func TestFileTrackerCompactJournalAndBlobs(t *testing.T) {
 
 	// RecordChange again with identical after content and verify only 2 blobs exist in blobs/
 	dupChange := &std.FileChange{
-		Path:         "pkg/app.go",
-		Source:       std.SourceAgent,
-		Tool:         "write",
-		Kind:         std.KindModified,
-		BeforeHash:   editRes.AfterHash,
-		AfterHash:    editRes.AfterHash,
+		FileChange: api.FileChange{
+			Path:       "pkg/app.go",
+			Source:     api.SourceAgent,
+			Tool:       "write",
+			Kind:       api.KindModified,
+			BeforeHash: editRes.AfterHash,
+			AfterHash:  editRes.AfterHash,
+		},
 		AfterContent: afterBlob,
 	}
 	if err := jr.RecordChange(ctx, dupChange); err != nil {
@@ -1717,13 +1719,13 @@ func TestFileTrackerDiffAndRecoverAt(t *testing.T) {
 	if len(entries) != 3 {
 		t.Fatalf("expected 3 journal entries, got %d", len(entries))
 	}
-	if entries[0].Source != std.SourceAgent || entries[0].Kind != std.KindCreated {
+	if entries[0].Source != api.SourceAgent || entries[0].Kind != api.KindCreated {
 		t.Errorf("entries[0] = %+v", entries[0])
 	}
-	if entries[1].Source != std.SourceAgent || entries[1].Kind != std.KindModified {
+	if entries[1].Source != api.SourceAgent || entries[1].Kind != api.KindModified {
 		t.Errorf("entries[1] = %+v", entries[1])
 	}
-	if entries[2].Source != std.SourceExternal || entries[2].Kind != std.KindModified {
+	if entries[2].Source != api.SourceExternal || entries[2].Kind != api.KindModified {
 		t.Errorf("entries[2] = %+v", entries[2])
 	}
 
@@ -1886,13 +1888,15 @@ func TestFileTrackerReloadAndDeleteSessionCleanup(t *testing.T) {
 	content := []byte("package main\n")
 	hash := sha256Hex(content)
 	if err := jr1.RecordChange(ctx, &std.FileChange{
-		Path:         "main.go",
-		Source:       std.SourceAgent,
-		Tool:         "write",
-		Kind:         std.KindCreated,
-		AfterHash:    hash,
+		FileChange: api.FileChange{
+			Path:      "main.go",
+			Source:    api.SourceAgent,
+			Tool:      "write",
+			Kind:      api.KindCreated,
+			AfterHash: hash,
+			Additions: 1,
+		},
 		AfterContent: content,
-		Additions:    1,
 	}); err != nil {
 		t.Fatalf("RecordChange: %v", err)
 	}
@@ -2280,7 +2284,7 @@ func TestMultiPermissionInterruptAndAllOrNothingRespondPermission(t *testing.T) 
 	if err != nil {
 		t.Fatalf("ChangesForPath(\"file1.txt\") error: %v", err)
 	}
-	if len(entries) != 1 || entries[0].Kind != std.KindCreated || entries[0].Tool != "write" {
+	if len(entries) != 1 || entries[0].Kind != api.KindCreated || entries[0].Tool != "write" {
 		t.Errorf("unexpected journal entries for file1.txt: %+v", entries)
 	}
 
@@ -2971,7 +2975,7 @@ func TestSessionPermissionsPersistence(t *testing.T) {
 	}
 
 	// Update permissions directly via store helper
-	newPerms := permissions.Permissions{
+	newPerms := api.Permissions{
 		Allow: []string{"write(internal/**)"},
 		Deny:  []string{"bash(*)"},
 	}

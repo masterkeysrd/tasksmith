@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/core/sqlite"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/journal"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/sandbox"
@@ -112,9 +113,11 @@ func TestJournalRecordChangeAndScope(t *testing.T) {
 
 	content1 := []byte("hello world\n")
 	ch1 := &std.FileChange{
-		Path:         "main.go",
-		Source:       std.SourceAgent,
-		Kind:         std.KindCreated,
+		FileChange: api.FileChange{
+			Path:   "main.go",
+			Source: api.SourceAgent,
+			Kind:   api.KindCreated,
+		},
 		AfterContent: content1,
 	}
 	if err := j.RecordChange(scopedCtx, ch1); err != nil {
@@ -156,10 +159,12 @@ func TestJournalRecordChangeAndScope(t *testing.T) {
 	// Record external change without scope inheritance
 	content2 := []byte("hello external\n")
 	ch2 := &std.FileChange{
-		Path:         "main.go",
-		Source:       std.SourceExternal,
-		Kind:         std.KindModified,
-		BeforeHash:   ch1.AfterHash,
+		FileChange: api.FileChange{
+			Path:       "main.go",
+			Source:     api.SourceExternal,
+			Kind:       api.KindModified,
+			BeforeHash: ch1.AfterHash,
+		},
 		AfterContent: content2,
 	}
 	if err := j.RecordChange(scopedCtx, ch2); err != nil {
@@ -235,9 +240,11 @@ func TestJournalRecoverAt(t *testing.T) {
 		t.Fatalf("WriteFile v1: %v", err)
 	}
 	ch1 := &std.FileChange{
-		Path:         "doc.txt",
-		Source:       std.SourceAgent,
-		Kind:         std.KindCreated,
+		FileChange: api.FileChange{
+			Path:   "doc.txt",
+			Source: api.SourceAgent,
+			Kind:   api.KindCreated,
+		},
 		AfterContent: []byte("v1\n"),
 	}
 	if err := j.RecordChange(ctx, ch1); err != nil {
@@ -249,10 +256,12 @@ func TestJournalRecoverAt(t *testing.T) {
 		t.Fatalf("WriteFile v2: %v", err)
 	}
 	ch2 := &std.FileChange{
-		Path:          "doc.txt",
-		Source:        std.SourceAgent,
-		Kind:          std.KindModified,
-		BeforeHash:    ch1.AfterHash,
+		FileChange: api.FileChange{
+			Path:       "doc.txt",
+			Source:     api.SourceAgent,
+			Kind:       api.KindModified,
+			BeforeHash: ch1.AfterHash,
+		},
 		BeforeContent: []byte("v1\n"),
 		AfterContent:  []byte("v2\n"),
 	}
@@ -309,9 +318,11 @@ func TestJournalRevertToBaselineThreeWayMerge(t *testing.T) {
 		t.Fatalf("WriteFile agent: %v", err)
 	}
 	chAgent := &std.FileChange{
-		Path:          "file.txt",
-		Source:        std.SourceAgent,
-		Kind:          std.KindModified,
+		FileChange: api.FileChange{
+			Path:   "file.txt",
+			Source: api.SourceAgent,
+			Kind:   api.KindModified,
+		},
 		BeforeContent: []byte(baseline),
 		AfterContent:  []byte(agentEdited),
 	}
@@ -347,9 +358,11 @@ func TestJournalRevertToBaselineThreeWayMerge(t *testing.T) {
 	// Another agent change on line1
 	agentConflict := "line1_agent_again\nline2\nline3\nline4\nline5_external\n"
 	chAgent2 := &std.FileChange{
-		Path:          "file.txt",
-		Source:        std.SourceAgent,
-		Kind:          std.KindModified,
+		FileChange: api.FileChange{
+			Path:   "file.txt",
+			Source: api.SourceAgent,
+			Kind:   api.KindModified,
+		},
 		BeforeContent: []byte(wantMerged),
 		AfterContent:  []byte(agentConflict),
 	}
@@ -391,9 +404,11 @@ func TestJournalReloadAndSessionDeletion(t *testing.T) {
 
 	content := []byte("package main\n")
 	ch := &std.FileChange{
-		Path:         "main.go",
-		Source:       std.SourceAgent,
-		Kind:         std.KindCreated,
+		FileChange: api.FileChange{
+			Path:   "main.go",
+			Source: api.SourceAgent,
+			Kind:   api.KindCreated,
+		},
 		AfterContent: content,
 	}
 	if err := j1.RecordChange(ctx, ch); err != nil {

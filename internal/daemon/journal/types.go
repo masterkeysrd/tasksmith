@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 
+	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/sandbox"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/std"
 )
@@ -21,8 +22,8 @@ var (
 type Journal interface {
 	std.FileTracker
 
-	Changes(ctx context.Context) ([]std.FileChange, error)
-	ChangesForPath(ctx context.Context, path string) ([]std.FileChange, error)
+	Changes(ctx context.Context) ([]api.FileChange, error)
+	ChangesForPath(ctx context.Context, path string) ([]api.FileChange, error)
 	DiffEntry(ctx context.Context, path, entryID string) (string, error)
 	RecoverAt(ctx context.Context, fsys sandbox.FS, path, entryID string, before bool) error
 	RevertToBaseline(ctx context.Context, fsys sandbox.FS, path string, force bool) error

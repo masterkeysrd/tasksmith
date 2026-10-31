@@ -29,10 +29,10 @@
 //
 // # Provenance Tracking (Agent vs. External)
 //
-// All file mutations are attributed with a [ChangeSource]:
-//   - [SourceAgent]: Mutations performed directly via [Std.Write], [Std.Edit],
+// All file mutations are attributed with a [github.com/masterkeysrd/tasksmith/api.ChangeSource]:
+//   - [github.com/masterkeysrd/tasksmith/api.SourceAgent]: Mutations performed directly via [Std.Write], [Std.Edit],
 //     [Std.Remove], or [Std.Download].
-//   - [SourceExternal]: Mutations detected on disk when re-reading a tracked
+//   - [github.com/masterkeysrd/tasksmith/api.SourceExternal]: Mutations detected on disk when re-reading a tracked
 //     file in [Std.View] or scanning tracked paths in [Std.SyncExternalChanges]
 //     (including after [Std.Bash] command execution).
 package std

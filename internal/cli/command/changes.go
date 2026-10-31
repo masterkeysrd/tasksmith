@@ -123,21 +123,21 @@ func aggregateFileChanges(entries []api.FileChange) []api.FileChange {
 
 		baselineHash := first.BeforeHash
 		currentHash := last.AfterHash
-		if last.Kind == "deleted" {
+		if last.Kind == api.KindDeleted {
 			currentHash = ""
 		}
 
-		if baselineHash == currentHash && (first.Kind != "created" || last.Kind == "deleted") {
+		if baselineHash == currentHash && (first.Kind != api.KindCreated || last.Kind == api.KindDeleted) {
 			continue
 		}
 
-		var netKind string
-		if (first.Kind == "created" || first.BeforeHash == "") && last.Kind != "deleted" {
-			netKind = "created"
-		} else if last.Kind == "deleted" {
-			netKind = "deleted"
+		var netKind api.ChangeKind
+		if (first.Kind == api.KindCreated || first.BeforeHash == "") && last.Kind != api.KindDeleted {
+			netKind = api.KindCreated
+		} else if last.Kind == api.KindDeleted {
+			netKind = api.KindDeleted
 		} else {
-			netKind = "modified"
+			netKind = api.KindModified
 		}
 
 		lastRevertIdx := -1
@@ -384,7 +384,7 @@ var ChangesBrowser = trail.FC("ChangesBrowser", func(slotID string) trail.Node {
 		opts[i] = uicomponents.Option{
 			Value:     ch.Path,
 			Label:     ch.Path,
-			Cells:     []string{ch.Path, ch.Kind, stats},
+			Cells:     []string{ch.Path, string(ch.Kind), stats},
 			CellNodes: []trail.Node{nil, nil, statsNode},
 		}
 	}

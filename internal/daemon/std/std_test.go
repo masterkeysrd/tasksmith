@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/sandbox"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/scope"
@@ -117,11 +118,13 @@ func TestMemoryTrackerConcurrencyAndCloning(t *testing.T) {
 
 	orig := []byte("hello")
 	seedChange := FileChange{
-		Path:         "./dir/file.txt",
-		Source:       SourceAgent,
-		Tool:         "write",
-		Kind:         KindCreated,
-		AfterHash:    "hash1",
+		FileChange: api.FileChange{
+			Path:      "./dir/file.txt",
+			Source:    api.SourceAgent,
+			Tool:      "write",
+			Kind:      api.KindCreated,
+			AfterHash: "hash1",
+		},
 		AfterContent: orig,
 	}
 	if err := tracker.RecordChange(ctx, &seedChange); err != nil {
@@ -148,12 +151,14 @@ func TestMemoryTrackerConcurrencyAndCloning(t *testing.T) {
 		go func(idx int) {
 			defer wg.Done()
 			ch := FileChange{
-				Path:          "dir/file.txt",
-				Source:        SourceAgent,
-				Tool:          "write",
-				Kind:          KindModified,
-				BeforeHash:    "h1",
-				AfterHash:     "h2",
+				FileChange: api.FileChange{
+					Path:       "dir/file.txt",
+					Source:     api.SourceAgent,
+					Tool:       "write",
+					Kind:       api.KindModified,
+					BeforeHash: "h1",
+					AfterHash:  "h2",
+				},
 				BeforeContent: []byte("a"),
 				AfterContent:  []byte("b"),
 			}
@@ -179,7 +184,7 @@ func TestMemoryTrackerConcurrencyAndCloning(t *testing.T) {
 	if err := tracker.RecordRead(cancelCtx, "a.txt", "h"); err == nil {
 		t.Fatal("expected error for canceled context in RecordRead")
 	}
-	if err := tracker.RecordChange(cancelCtx, &FileChange{Path: "a.txt"}); err == nil {
+	if err := tracker.RecordChange(cancelCtx, &FileChange{FileChange: api.FileChange{Path: "a.txt"}}); err == nil {
 		t.Fatal("expected error for canceled context in RecordChange")
 	}
 	if err := tracker.RecordChange(ctx, nil); !errors.Is(err, ErrInvalidArgument) {
@@ -198,10 +203,12 @@ func TestMemoryTrackerScopePropagation(t *testing.T) {
 
 	// Agent change with empty scope fields should inherit from context
 	ch := FileChange{
-		Path:      "test.txt",
-		Source:    SourceAgent,
-		Kind:      KindCreated,
-		AfterHash: "hash-01",
+		FileChange: api.FileChange{
+			Path:      "test.txt",
+			Source:    api.SourceAgent,
+			Kind:      api.KindCreated,
+			AfterHash: "hash-01",
+		},
 	}
 	if err := tracker.RecordChange(ctx, &ch); err != nil {
 		t.Fatalf("RecordChange: %v", err)
@@ -221,10 +228,12 @@ func TestMemoryTrackerScopePropagation(t *testing.T) {
 
 	// External change should NOT inherit from scope
 	extCh := FileChange{
-		Path:      "test.txt",
-		Source:    SourceExternal,
-		Kind:      KindModified,
-		AfterHash: "hash-02",
+		FileChange: api.FileChange{
+			Path:      "test.txt",
+			Source:    api.SourceExternal,
+			Kind:      api.KindModified,
+			AfterHash: "hash-02",
+		},
 	}
 	if err := tracker.RecordChange(ctx, &extCh); err != nil {
 		t.Fatalf("RecordChange ext: %v", err)
@@ -315,7 +324,7 @@ func TestViewAndExternalChangeDetection(t *testing.T) {
 		t.Fatalf("expected 2 changes (1 agent edit + 1 external change), got %d", len(changes))
 	}
 	ch := changes[1]
-	if ch.Source != SourceExternal || ch.Tool != "external" || ch.Kind != KindModified {
+	if ch.Source != api.SourceExternal || ch.Tool != "external" || ch.Kind != api.KindModified {
 		t.Fatalf("unexpected external change attributes: %+v", ch)
 	}
 	if ch.BeforeHash != editRes.AfterHash || ch.AfterHash != res2.Hash {
@@ -654,10 +663,10 @@ func TestWriteEditRemoveCASLifecycle(t *testing.T) {
 	if len(history) != 4 {
 		t.Fatalf("expected 4 changes for src/hello.go, got %d", len(history))
 	}
-	expectedKinds := []ChangeKind{KindCreated, KindModified, KindModified, KindDeleted}
+	expectedKinds := []api.ChangeKind{api.KindCreated, api.KindModified, api.KindModified, api.KindDeleted}
 	expectedTools := []string{"write", "edit", "edit", "remove"}
 	for i := range history {
-		if history[i].Source != SourceAgent {
+		if history[i].Source != api.SourceAgent {
 			t.Fatalf("change %d expected SourceAgent, got %s", i, history[i].Source)
 		}
 		if history[i].Kind != expectedKinds[i] || history[i].Tool != expectedTools[i] {
@@ -697,14 +706,14 @@ func TestBashAndSyncExternalChanges(t *testing.T) {
 		if len(ch.ID) != 36 || ch.ID[14] != '7' {
 			t.Fatalf("expected SyncExternalChanges to return FileChange with populated UUIDv7 ID, got %q", ch.ID)
 		}
-		if ch.Source != SourceExternal || ch.Tool != "external" {
+		if ch.Source != api.SourceExternal || ch.Tool != "external" {
 			t.Fatalf("expected SourceExternal and tool 'external', got %+v", ch)
 		}
 		switch ch.Path {
 		case "tracked_mod.txt":
-			sawMod = ch.Kind == KindModified && ch.Additions == 2 && ch.Deletions == 1
+			sawMod = ch.Kind == api.KindModified && ch.Additions == 2 && ch.Deletions == 1
 		case "tracked_del.txt":
-			sawDel = ch.Kind == KindDeleted && ch.AfterHash == "" && ch.Deletions == 1
+			sawDel = ch.Kind == api.KindDeleted && ch.AfterHash == "" && ch.Deletions == 1
 		}
 	}
 	if !sawMod || !sawDel {
@@ -841,7 +850,7 @@ func TestFetchAndDownload(t *testing.T) {
 
 	// Verify Download recorded SourceAgent + tool "download"
 	dlChanges := tracker.ChangesForPath("downloads/artifact.txt")
-	if len(dlChanges) != 1 || dlChanges[0].Source != SourceAgent || dlChanges[0].Tool != "download" || dlChanges[0].Kind != KindCreated {
+	if len(dlChanges) != 1 || dlChanges[0].Source != api.SourceAgent || dlChanges[0].Tool != "download" || dlChanges[0].Kind != api.KindCreated {
 		t.Fatalf("unexpected download tracker entry: %+v", dlChanges)
 	}
 

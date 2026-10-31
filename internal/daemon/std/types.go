@@ -6,6 +6,8 @@ import (
 	"io"
 	"io/fs"
 	"time"
+
+	"github.com/masterkeysrd/tasksmith/api"
 )
 
 // Sentinel errors returned by the std package.
@@ -19,51 +21,12 @@ var (
 	ErrInvalidArgument = errors.New("std: invalid argument")
 )
 
-// ChangeSource identifies the origin of a recorded file mutation.
-type ChangeSource string
-
-const (
-	// SourceAgent indicates a file change made directly through an agent tool
-	// operation (Write, Edit, Remove, Download).
-	SourceAgent ChangeSource = "agent"
-
-	// SourceExternal indicates a file change made outside of direct agent file
-	// tools (such as user IDE edits or shell commands run via Bash).
-	SourceExternal ChangeSource = "external"
-)
-
-// ChangeKind classifies the type of mutation applied to a file.
-type ChangeKind string
-
-const (
-	// KindCreated indicates a new file was created.
-	KindCreated ChangeKind = "created"
-
-	// KindModified indicates an existing file's content was changed.
-	KindModified ChangeKind = "modified"
-
-	// KindDeleted indicates an existing file was removed.
-	KindDeleted ChangeKind = "deleted"
-)
-
 // FileChange captures metadata and content snapshots for a single file mutation.
 type FileChange struct {
-	ID            string       `json:"id"`
-	Path          string       `json:"path"`
-	Source        ChangeSource `json:"source"`
-	Tool          string       `json:"tool,omitempty"`
-	Kind          ChangeKind   `json:"kind"`
-	BeforeHash    string       `json:"before_hash,omitempty"`
-	AfterHash     string       `json:"after_hash,omitempty"`
-	TurnID        string       `json:"turn_id,omitempty"`
-	MessageID     string       `json:"message_id,omitempty"`
-	ToolCallID    string       `json:"tool_call_id,omitempty"`
-	BeforeContent []byte       `json:"-"`
-	AfterContent  []byte       `json:"-"`
-	Additions     int          `json:"additions,omitempty"`
-	Deletions     int          `json:"deletions,omitempty"`
-	IsBinary      bool         `json:"is_binary,omitempty"`
-	Timestamp     time.Time    `json:"timestamp"`
+	api.FileChange
+	BeforeContent []byte `json:"-"`
+	AfterContent  []byte `json:"-"`
+	IsBinary      bool   `json:"is_binary,omitempty"`
 }
 
 // FileTracker tracks read state for Compare-And-Swap (CAS) conflict detection

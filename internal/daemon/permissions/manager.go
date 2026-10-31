@@ -24,11 +24,11 @@ type Config struct {
 // Manager coordinates global and project-level permission persistence and
 // attaches session-scoped permission managers.
 type Manager interface {
-	Get(scope Scope) (Permissions, error)
-	Set(scope Scope, perms Permissions) error
-	AddRule(scope Scope, effect Effect, rule string) error
-	RemoveRule(scope Scope, effect Effect, rule string) error
-	Attach(mode api.PermissionMode, initial Permissions, onUpdate func(Permissions) error) SessionManager
+	Get(scope api.PermissionScope) (api.Permissions, error)
+	Set(scope api.PermissionScope, perms api.Permissions) error
+	AddRule(scope api.PermissionScope, effect api.PermissionEffect, rule string) error
+	RemoveRule(scope api.PermissionScope, effect api.PermissionEffect, rule string) error
+	Attach(mode api.PermissionMode, initial api.Permissions, onUpdate func(api.Permissions) error) SessionManager
 }
 
 type manager struct {
@@ -68,29 +68,29 @@ func New(cfg Config) (Manager, error) {
 	}, nil
 }
 
-func (m *manager) filePath(scope Scope) (string, error) {
+func (m *manager) filePath(scope api.PermissionScope) (string, error) {
 	switch scope {
-	case ScopeGlobal:
+	case api.ScopeGlobal:
 		return m.globalPath, nil
-	case ScopeProject:
+	case api.ScopeProject:
 		return m.projectPath, nil
 	default:
 		return "", fmt.Errorf("%w: unsupported scope %q", ErrInvalidScope, scope)
 	}
 }
 
-func (m *manager) readFromFile(path string) (Permissions, error) {
+func (m *manager) readFromFile(path string) (api.Permissions, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return Permissions{}, nil
+			return api.Permissions{}, nil
 		}
-		return Permissions{}, fmt.Errorf("permissions: read %q: %w", path, err)
+		return api.Permissions{}, fmt.Errorf("permissions: read %q: %w", path, err)
 	}
 
-	var perms Permissions
+	var perms api.Permissions
 	if err := json.Unmarshal(data, &perms); err != nil {
-		return Permissions{}, fmt.Errorf("permissions: parse %q: %w", path, err)
+		return api.Permissions{}, fmt.Errorf("permissions: parse %q: %w", path, err)
 	}
 	return perms, nil
 }
@@ -114,8 +114,8 @@ func deduplicateRules(rules []string) []string {
 	return result
 }
 
-func (m *manager) writeToFile(path string, perms Permissions) error {
-	if err := perms.Validate(); err != nil {
+func (m *manager) writeToFile(path string, perms api.Permissions) error {
+	if err := ValidatePermissions(perms); err != nil {
 		return err
 	}
 	perms.Allow = deduplicateRules(perms.Allow)
@@ -137,11 +137,11 @@ func (m *manager) writeToFile(path string, perms Permissions) error {
 	return nil
 }
 
-// Get returns the stored [Permissions] for ScopeProject or ScopeGlobal.
-func (m *manager) Get(scope Scope) (Permissions, error) {
+// Get returns the stored [api.Permissions] for ScopeProject or ScopeGlobal.
+func (m *manager) Get(scope api.PermissionScope) (api.Permissions, error) {
 	path, err := m.filePath(scope)
 	if err != nil {
-		return Permissions{}, err
+		return api.Permissions{}, err
 	}
 
 	m.mu.RLock()
@@ -149,13 +149,13 @@ func (m *manager) Get(scope Scope) (Permissions, error) {
 
 	p, err := m.readFromFile(path)
 	if err != nil {
-		return Permissions{}, err
+		return api.Permissions{}, err
 	}
 	return p.Clone(), nil
 }
 
-// Set overwrites the stored [Permissions] for ScopeProject or ScopeGlobal.
-func (m *manager) Set(scope Scope, perms Permissions) error {
+// Set overwrites the stored [api.Permissions] for ScopeProject or ScopeGlobal.
+func (m *manager) Set(scope api.PermissionScope, perms api.Permissions) error {
 	path, err := m.filePath(scope)
 	if err != nil {
 		return err
@@ -168,7 +168,7 @@ func (m *manager) Set(scope Scope, perms Permissions) error {
 }
 
 // AddRule appends rule to the specified scope and effect if not already present.
-func (m *manager) AddRule(scope Scope, effect Effect, rule string) error {
+func (m *manager) AddRule(scope api.PermissionScope, effect api.PermissionEffect, rule string) error {
 	if _, _, err := ParseRule(rule); err != nil {
 		return err
 	}
@@ -187,23 +187,23 @@ func (m *manager) AddRule(scope Scope, effect Effect, rule string) error {
 	}
 
 	switch effect {
-	case EffectAllow:
+	case api.EffectAllow:
 		if !slices.Contains(perms.Allow, rule) {
 			perms.Allow = append(perms.Allow, rule)
 		}
-	case EffectDeny:
+	case api.EffectDeny:
 		if !slices.Contains(perms.Deny, rule) {
 			perms.Deny = append(perms.Deny, rule)
 		}
 	default:
-		return fmt.Errorf("permissions: invalid effect %q", effect)
+		return fmt.Errorf("%w: invalid effect %q", ErrInvalidRule, effect)
 	}
 
 	return m.writeToFile(path, perms)
 }
 
 // RemoveRule deletes all occurrences of rule from the specified scope and effect.
-func (m *manager) RemoveRule(scope Scope, effect Effect, rule string) error {
+func (m *manager) RemoveRule(scope api.PermissionScope, effect api.PermissionEffect, rule string) error {
 	path, err := m.filePath(scope)
 	if err != nil {
 		return err
@@ -218,12 +218,12 @@ func (m *manager) RemoveRule(scope Scope, effect Effect, rule string) error {
 	}
 
 	switch effect {
-	case EffectAllow:
+	case api.EffectAllow:
 		perms.Allow = slices.DeleteFunc(perms.Allow, func(r string) bool { return r == rule })
-	case EffectDeny:
+	case api.EffectDeny:
 		perms.Deny = slices.DeleteFunc(perms.Deny, func(r string) bool { return r == rule })
 	default:
-		return fmt.Errorf("permissions: invalid effect %q", effect)
+		return fmt.Errorf("%w: invalid effect %q", ErrInvalidRule, effect)
 	}
 
 	return m.writeToFile(path, perms)
@@ -231,7 +231,7 @@ func (m *manager) RemoveRule(scope Scope, effect Effect, rule string) error {
 
 // Attach binds a new [SessionManager] initialized with the given permission mode,
 // initial session permissions, and update callback.
-func (m *manager) Attach(mode api.PermissionMode, initial Permissions, onUpdate func(Permissions) error) SessionManager {
+func (m *manager) Attach(mode api.PermissionMode, initial api.Permissions, onUpdate func(api.Permissions) error) SessionManager {
 	if mode == "" {
 		mode = api.ModeDefault
 	}

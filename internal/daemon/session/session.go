@@ -243,7 +243,7 @@ type Session struct {
 	CreatedAt   time.Time               `json:"created_at"`
 	UpdatedAt   time.Time               `json:"updated_at"`
 
-	Permissions permissions.Permissions    `json:"-"`
+	Permissions api.Permissions            `json:"-"`
 	PermManager permissions.SessionManager `json:"-"`
 	permRoot    permissions.Manager        `json:"-"`
 
@@ -436,7 +436,7 @@ func (s *Session) initSubsystems(ctx context.Context, db *sql.DB) error {
 	}
 	s.Tools = container
 
-	s.PermManager = s.permRoot.Attach(s.Config.Mode, s.Permissions, func(p permissions.Permissions) error {
+	s.PermManager = s.permRoot.Attach(s.Config.Mode, s.Permissions, func(p api.Permissions) error {
 		s.Lock()
 		s.Permissions = p.Clone()
 		s.Unlock()
@@ -802,4 +802,3 @@ func (s *Session) buildToolsForAgent(agentName string) (tools.Container, error) 
 
 	return container, nil
 }
-

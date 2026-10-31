@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/core/diff"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	"github.com/masterkeysrd/tasksmith/internal/core/sqlite"
@@ -114,7 +115,7 @@ func New(ctx context.Context, db *sql.DB, sessionID, blobsDir string, opts ...Op
 		}
 		normP := normalizeTrackPath(p)
 		var h string
-		if kind != string(std.KindDeleted) && afterHash != "" {
+		if kind != string(api.KindDeleted) && afterHash != "" {
 			h = afterHash
 		}
 		files[normP] = fileState{
@@ -241,7 +242,7 @@ func (j *sqliteJournal) RecordChange(ctx context.Context, change *std.FileChange
 	normPath := normalizeTrackPath(change.Path)
 	change.Path = normPath
 
-	if sc, ok := scope.From(ctx); ok && change.Source == std.SourceAgent {
+	if sc, ok := scope.From(ctx); ok && change.Source == api.SourceAgent {
 		if change.TurnID == "" {
 			change.TurnID = sc.TurnID
 		}
@@ -336,7 +337,7 @@ INSERT INTO journal_entries (
 
 	j.mu.Lock()
 	afterHash := change.AfterHash
-	if change.Kind == std.KindDeleted {
+	if change.Kind == api.KindDeleted {
 		afterHash = ""
 	}
 	j.files[normPath] = fileState{
@@ -346,16 +347,7 @@ INSERT INTO journal_entries (
 	j.mu.Unlock()
 
 	{
-		mErr := metrics.RecordFileChange(scope.With(ctx, scope.Scope{SessionID: j.sessionID}), j.metrics, metrics.FileChange{
-			Tool:       change.Tool,
-			ToolCallID: change.ToolCallID,
-			Path:       change.Path,
-			Source:     string(change.Source),
-			Change:     string(change.Kind),
-			Added:      int64(change.Additions),
-			Removed:    int64(change.Deletions),
-			Revert:     change.Tool == "revert",
-		})
+		mErr := metrics.RecordFileChange(scope.With(ctx, scope.Scope{SessionID: j.sessionID}), j.metrics, change.FileChange)
 		if mErr != nil {
 			log.Warn("failed to record file change metrics", log.String("error", mErr.Error()))
 		}
@@ -364,37 +356,34 @@ INSERT INTO journal_entries (
 	return nil
 }
 
-// Changes returns all journal entries for this session ordered chronologically by ID ascending.
-func (j *sqliteJournal) Changes(ctx context.Context) ([]std.FileChange, error) {
+func (j *sqliteJournal) queryChanges(ctx context.Context, extraWhere string, args ...any) ([]api.FileChange, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 
-	const query = `
+	query := `
 SELECT e.id, e.path, e.turn_id, e.message_id, e.tool_call_id, e.created_at,
-       e.source, e.tool, e.kind, e.before_hash, e.after_hash, e.additions, e.deletions,
-       COALESCE(f.binary, 0)
+       e.source, e.tool, e.kind, e.before_hash, e.after_hash, e.additions, e.deletions
 FROM journal_entries e
-LEFT JOIN journal_files f ON e.session_id = f.session_id AND e.path = f.path
-WHERE e.session_id = ?
+WHERE e.session_id = ?` + extraWhere + `
 ORDER BY e.id ASC;
 `
-	rows, err := j.db.QueryContext(ctx, query, j.sessionID)
+	allArgs := append([]any{j.sessionID}, args...)
+	rows, err := j.db.QueryContext(ctx, query, allArgs...)
 	if err != nil {
 		return nil, fmt.Errorf("journal: query changes: %w", err)
 	}
 	defer rows.Close()
 
-	out := make([]std.FileChange, 0)
+	out := make([]api.FileChange, 0)
 	for rows.Next() {
-		var fc std.FileChange
+		var fc api.FileChange
 		var createdAt, sourceStr, kindStr string
-		var binaryInt int
 
 		if err := rows.Scan(
 			&fc.ID, &fc.Path, &fc.TurnID, &fc.MessageID, &fc.ToolCallID, &createdAt,
 			&sourceStr, &fc.Tool, &kindStr, &fc.BeforeHash, &fc.AfterHash,
-			&fc.Additions, &fc.Deletions, &binaryInt,
+			&fc.Additions, &fc.Deletions,
 		); err != nil {
 			return nil, fmt.Errorf("journal: scan change: %w", err)
 		}
@@ -404,9 +393,8 @@ ORDER BY e.id ASC;
 			t, _ = time.Parse(time.RFC3339, createdAt)
 		}
 		fc.Timestamp = t
-		fc.Source = std.ChangeSource(sourceStr)
-		fc.Kind = std.ChangeKind(kindStr)
-		fc.IsBinary = binaryInt != 0
+		fc.Source = api.ChangeSource(sourceStr)
+		fc.Kind = api.ChangeKind(kindStr)
 
 		out = append(out, fc)
 	}
@@ -417,58 +405,44 @@ ORDER BY e.id ASC;
 	return out, nil
 }
 
+// Changes returns all journal entries for this session ordered chronologically by ID ascending.
+func (j *sqliteJournal) Changes(ctx context.Context) ([]api.FileChange, error) {
+	return j.queryChanges(ctx, "")
+}
+
 // ChangesForPath returns all journal entries for path in this session ordered by ID ascending.
-func (j *sqliteJournal) ChangesForPath(ctx context.Context, path string) ([]std.FileChange, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-
+func (j *sqliteJournal) ChangesForPath(ctx context.Context, path string) ([]api.FileChange, error) {
 	normPath := normalizeTrackPath(path)
-	const query = `
-SELECT e.id, e.path, e.turn_id, e.message_id, e.tool_call_id, e.created_at,
-       e.source, e.tool, e.kind, e.before_hash, e.after_hash, e.additions, e.deletions,
-       COALESCE(f.binary, 0)
-FROM journal_entries e
-LEFT JOIN journal_files f ON e.session_id = f.session_id AND e.path = f.path
-WHERE e.session_id = ? AND e.path = ?
-ORDER BY e.id ASC;
-`
-	rows, err := j.db.QueryContext(ctx, query, j.sessionID, normPath)
+	return j.queryChanges(ctx, " AND e.path = ?", normPath)
+}
+
+func (j *sqliteJournal) fileMeta(ctx context.Context, normPath string) (baselineHash string, isBinary bool, err error) {
+	var baseline string
+	var binaryInt int
+	err = j.db.QueryRowContext(ctx, "SELECT baseline, binary FROM journal_files WHERE session_id = ? AND path = ?", j.sessionID, normPath).Scan(&baseline, &binaryInt)
 	if err != nil {
-		return nil, fmt.Errorf("journal: query changes for path %q: %w", normPath, err)
-	}
-	defer rows.Close()
-
-	out := make([]std.FileChange, 0)
-	for rows.Next() {
-		var fc std.FileChange
-		var createdAt, sourceStr, kindStr string
-		var binaryInt int
-
-		if err := rows.Scan(
-			&fc.ID, &fc.Path, &fc.TurnID, &fc.MessageID, &fc.ToolCallID, &createdAt,
-			&sourceStr, &fc.Tool, &kindStr, &fc.BeforeHash, &fc.AfterHash,
-			&fc.Additions, &fc.Deletions, &binaryInt,
-		); err != nil {
-			return nil, fmt.Errorf("journal: scan change for path: %w", err)
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", false, fmt.Errorf("%w: %s", ErrNotFound, normPath)
 		}
+		return "", false, fmt.Errorf("journal: query file baseline: %w", err)
+	}
+	return baseline, binaryInt != 0, nil
+}
 
-		t, err := time.Parse(time.RFC3339Nano, createdAt)
-		if err != nil {
-			t, _ = time.Parse(time.RFC3339, createdAt)
+func (j *sqliteJournal) entryHashes(ctx context.Context, normPath, entryID string) (beforeHash, afterHash string, err error) {
+	const query = `
+SELECT before_hash, after_hash
+FROM journal_entries
+WHERE session_id = ? AND path = ? AND id = ?;
+`
+	err = j.db.QueryRowContext(ctx, query, j.sessionID, normPath, entryID).Scan(&beforeHash, &afterHash)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", "", fmt.Errorf("%w: %s", ErrEntryNotFound, entryID)
 		}
-		fc.Timestamp = t
-		fc.Source = std.ChangeSource(sourceStr)
-		fc.Kind = std.ChangeKind(kindStr)
-		fc.IsBinary = binaryInt != 0
-
-		out = append(out, fc)
+		return "", "", fmt.Errorf("journal: query entry %q: %w", entryID, err)
 	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("journal: iterate changes for path: %w", err)
-	}
-
-	return out, nil
+	return beforeHash, afterHash, nil
 }
 
 // DiffEntry computes the unified diff for a specific journal entry by loading
@@ -482,13 +456,9 @@ func (j *sqliteJournal) DiffEntry(ctx context.Context, path, entryID string) (st
 	normPath := normalizeTrackPath(path)
 
 	if strings.TrimSpace(entryID) == "" {
-		var baseline string
-		err := j.db.QueryRowContext(ctx, "SELECT baseline FROM journal_files WHERE session_id = ? AND path = ?", j.sessionID, normPath).Scan(&baseline)
+		baseline, _, err := j.fileMeta(ctx, normPath)
 		if err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
-				return "", fmt.Errorf("%w: %s", ErrNotFound, normPath)
-			}
-			return "", fmt.Errorf("journal: query baseline for %q: %w", normPath, err)
+			return "", err
 		}
 
 		var afterHash, kind string
@@ -500,7 +470,7 @@ func (j *sqliteJournal) DiffEntry(ctx context.Context, path, entryID string) (st
 			return "", fmt.Errorf("journal: query latest entry for %q: %w", normPath, err)
 		}
 
-		if kind == string(std.KindDeleted) {
+		if kind == string(api.KindDeleted) {
 			afterHash = ""
 		}
 
@@ -516,18 +486,9 @@ func (j *sqliteJournal) DiffEntry(ctx context.Context, path, entryID string) (st
 		return diff.FormatUnified("a/"+normPath, "b/"+normPath, string(beforeBytes), string(afterBytes)), nil
 	}
 
-	const query = `
-SELECT before_hash, after_hash
-FROM journal_entries
-WHERE session_id = ? AND path = ? AND id = ?;
-`
-	var beforeHash, afterHash string
-	err := j.db.QueryRowContext(ctx, query, j.sessionID, normPath, entryID).Scan(&beforeHash, &afterHash)
+	beforeHash, afterHash, err := j.entryHashes(ctx, normPath, entryID)
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return "", fmt.Errorf("%w: %s", ErrEntryNotFound, entryID)
-		}
-		return "", fmt.Errorf("journal: query diff entry %q: %w", entryID, err)
+		return "", err
 	}
 
 	beforeBytes, err := j.readBlob(beforeHash)
@@ -550,23 +511,14 @@ func (j *sqliteJournal) RecoverAt(ctx context.Context, fsys sandbox.FS, path, en
 
 	normPath := normalizeTrackPath(path)
 
-	var baseline string
-	var binaryInt int
-	err := j.db.QueryRowContext(ctx, "SELECT baseline, binary FROM journal_files WHERE session_id = ? AND path = ?", j.sessionID, normPath).Scan(&baseline, &binaryInt)
+	_, isBinary, err := j.fileMeta(ctx, normPath)
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return fmt.Errorf("%w: %s", ErrNotFound, normPath)
-		}
-		return fmt.Errorf("journal: query file baseline: %w", err)
+		return err
 	}
 
-	var beforeHash, afterHash string
-	err = j.db.QueryRowContext(ctx, "SELECT before_hash, after_hash FROM journal_entries WHERE session_id = ? AND path = ? AND id = ?", j.sessionID, normPath, entryID).Scan(&beforeHash, &afterHash)
+	beforeHash, afterHash, err := j.entryHashes(ctx, normPath, entryID)
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return fmt.Errorf("%w: %s", ErrEntryNotFound, entryID)
-		}
-		return fmt.Errorf("journal: query entry: %w", err)
+		return err
 	}
 
 	targetHash := afterHash
@@ -574,7 +526,7 @@ func (j *sqliteJournal) RecoverAt(ctx context.Context, fsys sandbox.FS, path, en
 		targetHash = beforeHash
 	}
 
-	return j.applyTargetHash(ctx, fsys, normPath, targetHash, binaryInt != 0)
+	return j.applyTargetHash(ctx, fsys, normPath, targetHash, isBinary)
 }
 
 // RevertToBaseline reverts agent changes to path back to its session baseline,
@@ -586,17 +538,11 @@ func (j *sqliteJournal) RevertToBaseline(ctx context.Context, fsys sandbox.FS, p
 
 	normPath := normalizeTrackPath(path)
 
-	var baseline string
-	var binaryInt int
-	err := j.db.QueryRowContext(ctx, "SELECT baseline, binary FROM journal_files WHERE session_id = ? AND path = ?", j.sessionID, normPath).Scan(&baseline, &binaryInt)
+	baseline, isBinary, err := j.fileMeta(ctx, normPath)
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return fmt.Errorf("%w: %s", ErrNotFound, normPath)
-		}
-		return fmt.Errorf("journal: query file baseline: %w", err)
+		return err
 	}
 
-	isBinary := binaryInt != 0
 	if force {
 		return j.applyTargetHash(ctx, fsys, normPath, baseline, isBinary)
 	}
@@ -612,7 +558,7 @@ func (j *sqliteJournal) RevertToBaseline(ctx context.Context, fsys sandbox.FS, p
 
 	// Determine the last state produced by the agent
 	lastAgentHash := baseline
-	rows, err := j.db.QueryContext(ctx, "SELECT after_hash FROM journal_entries WHERE session_id = ? AND path = ? AND source = ? ORDER BY id ASC", j.sessionID, normPath, string(std.SourceAgent))
+	rows, err := j.db.QueryContext(ctx, "SELECT after_hash FROM journal_entries WHERE session_id = ? AND path = ? AND source = ? ORDER BY id ASC", j.sessionID, normPath, string(api.SourceAgent))
 	if err != nil {
 		return fmt.Errorf("journal: query agent entries: %w", err)
 	}
@@ -677,16 +623,19 @@ func (j *sqliteJournal) RevertToBaseline(ctx context.Context, fsys sandbox.FS, p
 
 	add, del := diff.Stats(string(currentBytes), mergedText)
 	return j.RecordChange(ctx, &std.FileChange{
-		Path:          normPath,
-		Source:        std.SourceAgent,
-		Tool:          "revert",
-		Kind:          std.KindModified,
-		BeforeHash:    currentHash,
-		AfterHash:     mergedHash,
+		FileChange: api.FileChange{
+			Path:       normPath,
+			Source:     api.SourceAgent,
+			Tool:       "revert",
+			Kind:       api.KindModified,
+			BeforeHash: currentHash,
+			AfterHash:  mergedHash,
+			Additions:  add,
+			Deletions:  del,
+			Timestamp:  time.Now().UTC(),
+		},
 		BeforeContent: currentBytes,
 		AfterContent:  mergedBytes,
-		Additions:     add,
-		Deletions:     del,
 		IsBinary:      isBinary,
 	})
 }
@@ -723,14 +672,17 @@ func (j *sqliteJournal) applyTargetHash(ctx context.Context, fsys sandbox.FS, no
 		}
 		_, del := diff.Stats(string(currentBytes), "")
 		return j.RecordChange(ctx, &std.FileChange{
-			Path:          normPath,
-			Source:        std.SourceAgent,
-			Tool:          "revert",
-			Kind:          std.KindDeleted,
-			BeforeHash:    currentHash,
-			AfterHash:     "",
+			FileChange: api.FileChange{
+				Path:       normPath,
+				Source:     api.SourceAgent,
+				Tool:       "revert",
+				Kind:       api.KindDeleted,
+				BeforeHash: currentHash,
+				AfterHash:  "",
+				Deletions:  del,
+				Timestamp:  time.Now().UTC(),
+			},
 			BeforeContent: currentBytes,
-			Deletions:     del,
 			IsBinary:      isBinary,
 		})
 	}
@@ -748,23 +700,26 @@ func (j *sqliteJournal) applyTargetHash(ctx context.Context, fsys sandbox.FS, no
 		return err
 	}
 
-	kind := std.KindModified
+	kind := api.KindModified
 	if !currentExists {
-		kind = std.KindCreated
+		kind = api.KindCreated
 	}
 	add, del := diff.Stats(string(currentBytes), string(targetBytes))
 
 	return j.RecordChange(ctx, &std.FileChange{
-		Path:          normPath,
-		Source:        std.SourceAgent,
-		Tool:          "revert",
-		Kind:          kind,
-		BeforeHash:    currentHash,
-		AfterHash:     targetHash,
+		FileChange: api.FileChange{
+			Path:       normPath,
+			Source:     api.SourceAgent,
+			Tool:       "revert",
+			Kind:       kind,
+			BeforeHash: currentHash,
+			AfterHash:  targetHash,
+			Additions:  add,
+			Deletions:  del,
+			Timestamp:  time.Now().UTC(),
+		},
 		BeforeContent: currentBytes,
 		AfterContent:  targetBytes,
-		Additions:     add,
-		Deletions:     del,
 		IsBinary:      isBinary,
 	})
 }

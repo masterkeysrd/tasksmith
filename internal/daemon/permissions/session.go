@@ -19,7 +19,7 @@ import (
 type SessionManager interface {
 	Mode() api.PermissionMode
 	SetMode(mode api.PermissionMode)
-	Permissions() Permissions
+	Permissions() api.Permissions
 	Policies() *warp.Policies
 	SetPolicies(p *warp.Policies)
 	AddAllow(rule string) error
@@ -34,15 +34,15 @@ type sessionManager struct {
 	manager     Manager
 	ws          *workspace.Workspace
 	mode        api.PermissionMode
-	permissions Permissions
+	permissions api.Permissions
 	policies    *warp.Policies
-	onUpdate    func(Permissions) error
+	onUpdate    func(api.Permissions) error
 }
 
 var _ SessionManager = (*sessionManager)(nil)
 
 // NewSession constructs a detached [SessionManager] without an underlying root manager.
-func NewSession(mode api.PermissionMode, initial Permissions, onUpdate func(Permissions) error) SessionManager {
+func NewSession(mode api.PermissionMode, initial api.Permissions, onUpdate func(api.Permissions) error) SessionManager {
 	if mode == "" {
 		mode = api.ModeDefault
 	}
@@ -73,8 +73,8 @@ func (s *sessionManager) SetMode(mode api.PermissionMode) {
 	s.mode = mode
 }
 
-// Permissions returns a deep copy of the active session [Permissions].
-func (s *sessionManager) Permissions() Permissions {
+// Permissions returns a deep copy of the active session [api.Permissions].
+func (s *sessionManager) Permissions() api.Permissions {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.permissions.Clone()
@@ -100,18 +100,29 @@ func (s *sessionManager) SetPolicies(p *warp.Policies) {
 	s.policies = p
 }
 
-// AddAllow validates rule and adds it to the session allow rules.
-func (s *sessionManager) AddAllow(rule string) error {
+func (s *sessionManager) addRule(effect api.PermissionEffect, rule string) error {
 	if _, _, err := ParseRule(rule); err != nil {
 		return err
 	}
 
 	s.mu.Lock()
-	if slices.Contains(s.permissions.Allow, rule) {
+	switch effect {
+	case api.EffectAllow:
+		if slices.Contains(s.permissions.Allow, rule) {
+			s.mu.Unlock()
+			return nil
+		}
+		s.permissions.Allow = append(s.permissions.Allow, rule)
+	case api.EffectDeny:
+		if slices.Contains(s.permissions.Deny, rule) {
+			s.mu.Unlock()
+			return nil
+		}
+		s.permissions.Deny = append(s.permissions.Deny, rule)
+	default:
 		s.mu.Unlock()
-		return nil
+		return fmt.Errorf("%w: invalid effect %q", ErrInvalidRule, effect)
 	}
-	s.permissions.Allow = append(s.permissions.Allow, rule)
 	updated := s.permissions.Clone()
 	onUpdate := s.onUpdate
 	s.mu.Unlock()
@@ -122,32 +133,20 @@ func (s *sessionManager) AddAllow(rule string) error {
 	return nil
 }
 
+// AddAllow validates rule and adds it to the session allow rules.
+func (s *sessionManager) AddAllow(rule string) error {
+	return s.addRule(api.EffectAllow, rule)
+}
+
 // AddDeny validates rule and adds it to the session deny rules.
 func (s *sessionManager) AddDeny(rule string) error {
-	if _, _, err := ParseRule(rule); err != nil {
-		return err
-	}
-
-	s.mu.Lock()
-	if slices.Contains(s.permissions.Deny, rule) {
-		s.mu.Unlock()
-		return nil
-	}
-	s.permissions.Deny = append(s.permissions.Deny, rule)
-	updated := s.permissions.Clone()
-	onUpdate := s.onUpdate
-	s.mu.Unlock()
-
-	if onUpdate != nil {
-		return onUpdate(updated)
-	}
-	return nil
+	return s.addRule(api.EffectDeny, rule)
 }
 
 // Clear removes all session-scoped allow and deny rules.
 func (s *sessionManager) Clear() error {
 	s.mu.Lock()
-	s.permissions = Permissions{}
+	s.permissions = api.Permissions{}
 	updated := s.permissions.Clone()
 	onUpdate := s.onUpdate
 	s.mu.Unlock()
@@ -182,27 +181,27 @@ func (s *sessionManager) ApplyDecision(req *api.PermissionRequest, decision api.
 					rule = raw
 				}
 			}
-			scope := Scope(strings.TrimSpace(string(decision.Scope)))
+			scope := api.PermissionScope(strings.TrimSpace(string(decision.Scope)))
 			if scope == "" {
-				scope = ScopeSession
+				scope = api.ScopeSession
 			}
 			switch scope {
-			case ScopeSession:
+			case api.ScopeSession:
 				if err := s.AddAllow(rule); err != nil {
 					return err
 				}
-			case ScopeProject:
+			case api.ScopeProject:
 				if s.manager == nil {
 					return ErrInvalidConfig
 				}
-				if err := s.manager.AddRule(ScopeProject, EffectAllow, rule); err != nil {
+				if err := s.manager.AddRule(api.ScopeProject, api.EffectAllow, rule); err != nil {
 					return err
 				}
-			case ScopeGlobal:
+			case api.ScopeGlobal:
 				if s.manager == nil {
 					return ErrInvalidConfig
 				}
-				if err := s.manager.AddRule(ScopeGlobal, EffectAllow, rule); err != nil {
+				if err := s.manager.AddRule(api.ScopeGlobal, api.EffectAllow, rule); err != nil {
 					return err
 				}
 			default:
@@ -235,14 +234,14 @@ func (s *sessionManager) Evaluate(plan *tools.Plan) (tools.AccessDecision, *api.
 
 	// 2. Load current rules for Session (in-memory), Project, and Global.
 	sessPerms := s.Permissions()
-	var projPerms, globPerms Permissions
+	var projPerms, globPerms api.Permissions
 	if s.manager != nil {
 		var err error
-		projPerms, err = s.manager.Get(ScopeProject)
+		projPerms, err = s.manager.Get(api.ScopeProject)
 		if err != nil {
 			return tools.AccessDeny, nil, err
 		}
-		globPerms, err = s.manager.Get(ScopeGlobal)
+		globPerms, err = s.manager.Get(api.ScopeGlobal)
 		if err != nil {
 			return tools.AccessDeny, nil, err
 		}

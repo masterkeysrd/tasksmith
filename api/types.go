@@ -563,6 +563,14 @@ type Permissions struct {
 	Deny  []string `json:"deny,omitempty"`
 }
 
+// Clone returns a deep copy of Permissions.
+func (p Permissions) Clone() Permissions {
+	return Permissions{
+		Allow: slices.Clone(p.Allow),
+		Deny:  slices.Clone(p.Deny),
+	}
+}
+
 // PermissionsResponse returns the configured project and global permissions.
 type PermissionsResponse struct {
 	Project Permissions `json:"project"`
@@ -608,21 +616,38 @@ type PermissionDecision struct {
 	Feedback     string          `json:"feedback,omitempty"`
 }
 
+// ChangeSource identifies whether a file change was made by the agent or externally.
+type ChangeSource string
+
+const (
+	SourceAgent    ChangeSource = "agent"
+	SourceExternal ChangeSource = "external"
+)
+
+// ChangeKind classifies the type of file modification.
+type ChangeKind string
+
+const (
+	KindCreated  ChangeKind = "created"
+	KindModified ChangeKind = "modified"
+	KindDeleted  ChangeKind = "deleted"
+)
+
 // FileChange represents a single recorded file mutation entry in a session's change journal.
 type FileChange struct {
-	ID         string    `json:"id"`
-	Path       string    `json:"path"`
-	Source     string    `json:"source"`
-	Tool       string    `json:"tool,omitempty"`
-	Kind       string    `json:"kind"`
-	BeforeHash string    `json:"before_hash,omitempty"`
-	AfterHash  string    `json:"after_hash,omitempty"`
-	TurnID     string    `json:"turn_id,omitempty"`
-	MessageID  string    `json:"message_id,omitempty"`
-	ToolCallID string    `json:"tool_call_id,omitempty"`
-	Additions  int       `json:"additions,omitempty"`
-	Deletions  int       `json:"deletions,omitempty"`
-	Timestamp  time.Time `json:"timestamp"`
+	ID         string       `json:"id"`
+	Path       string       `json:"path"`
+	Source     ChangeSource `json:"source"`
+	Tool       string       `json:"tool,omitempty"`
+	Kind       ChangeKind   `json:"kind"`
+	BeforeHash string       `json:"before_hash,omitempty"`
+	AfterHash  string       `json:"after_hash,omitempty"`
+	TurnID     string       `json:"turn_id,omitempty"`
+	MessageID  string       `json:"message_id,omitempty"`
+	ToolCallID string       `json:"tool_call_id,omitempty"`
+	Additions  int          `json:"additions,omitempty"`
+	Deletions  int          `json:"deletions,omitempty"`
+	Timestamp  time.Time    `json:"timestamp"`
 }
 
 // DiffResponse carries the unified diff for a specific journal entry.

@@ -6,7 +6,7 @@
 //
 // # Core Types
 //
-// A [Permissions] value is a pair of allow and deny rule lists. Rules follow the
+// An [api.Permissions] value is a pair of allow and deny rule lists. Rules follow the
 // "tool(pattern)" syntax produced by [FormatRule] and parsed by [ParseRule], and
 // are matched against a [github.com/masterkeysrd/tasksmith/internal/daemon/tools.Plan]
 // by [MatchRule].
@@ -30,16 +30,16 @@
 //
 // # Scopes & Persistence
 //
-// [Scope] values bound where rules live:
-//   - [ScopeSession]: in-memory only, owned by the [SessionManager].
-//   - [ScopeProject]: persisted under the workspace data directory
+// [api.PermissionScope] values bound where rules live:
+//   - [api.ScopeSession]: in-memory only, owned by the [SessionManager].
+//   - [api.ScopeProject]: persisted under the workspace data directory
 //     (`<workspace-data-dir>/permissions.json`).
-//   - [ScopeGlobal]: persisted under the user config directory
+//   - [api.ScopeGlobal]: persisted under the user config directory
 //     (`<config-dir>/permissions.json`, resolved via xdg).
 //
 // [Manager.Get], [Manager.Set], [Manager.AddRule], and [Manager.RemoveRule]
-// operate on the project and global scopes; a [ScopeSession] argument is rejected
-// with [ErrInvalidScope]. Writes are validated ([Permissions.Validate]) and
+// operate on the project and global scopes; an [api.ScopeSession] argument is rejected
+// with [ErrInvalidScope]. Writes are validated ([ValidatePermissions]) and
 // deduplicated before being flushed to disk.
 //
 // # Evaluation Flow

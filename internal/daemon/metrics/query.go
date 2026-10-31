@@ -9,18 +9,9 @@ import (
 	"sort"
 	"strings"
 	"time"
-)
 
-// Query describes a generic aggregation over records and measurements.
-type Query struct {
-	Kind       Kind // optional filter
-	Aggregates []Aggregate
-	GroupBy    []Dimension
-	Bucket     Bucket // optional time bucket
-	Filter     Filter
-	Since      time.Time
-	Until      time.Time
-}
+	"github.com/masterkeysrd/tasksmith/api"
+)
 
 // AggFunc is an aggregate function over a metric.
 type AggFunc string
@@ -31,12 +22,6 @@ const (
 	AggMin AggFunc = "min"
 	AggMax AggFunc = "max"
 )
-
-// Aggregate computes Func over Metric.
-type Aggregate struct {
-	Metric Metric
-	Func   AggFunc
-}
 
 // Bucket is a time bucket size.
 type Bucket string
@@ -57,30 +42,6 @@ type Dimension string
 
 // AttrPrefix prefixes attr keys used as a [Dimension].
 const AttrPrefix = "attr."
-
-// Filter restricts the records a query considers.
-type Filter struct {
-	WorkspaceRoot   string
-	SessionID       string
-	TurnIDs         []string // match any of these turns
-	IncludeChildren bool     // also match parent_session_id = SessionID
-	Agent           string
-	Status          []Status
-	Attrs           map[string]string // exact-match attr filters
-}
-
-// Result holds the rows of an executed query.
-type Result struct {
-	Rows []Row
-}
-
-// Row is one group of a [Result].
-type Row struct {
-	Bucket time.Time         // zero when no bucket was requested
-	Group  map[string]string // dimension -> value
-	Count  int64             // number of records in the group
-	Values map[Metric]int64  // aggregated metric values
-}
 
 // ErrInvalidQuery is returned for malformed queries.
 var ErrInvalidQuery = errors.New("metrics: invalid query")
@@ -125,14 +86,14 @@ func bucketExpr(b Bucket) (string, error) {
 
 // BuildSQL returns the parameterized SQL for q and the group dimensions in
 // select order. It is exported for testing.
-func BuildSQL(q Query) (string, []any, error) {
+func BuildSQL(q api.MetricsQuery) (string, []any, error) {
 	var (
 		selects []string
 		args    []any
 		groups  []string
 	)
-	if q.Bucket != BucketNone {
-		expr, err := bucketExpr(q.Bucket)
+	if q.Bucket != "" && Bucket(q.Bucket) != BucketNone {
+		expr, err := bucketExpr(Bucket(q.Bucket))
 		if err != nil {
 			return "", nil, err
 		}
@@ -140,7 +101,7 @@ func BuildSQL(q Query) (string, []any, error) {
 		groups = append(groups, "bucket")
 	}
 	for i, d := range q.GroupBy {
-		expr, err := dimensionExpr(d)
+		expr, err := dimensionExpr(Dimension(d))
 		if err != nil {
 			return "", nil, err
 		}
@@ -149,11 +110,11 @@ func BuildSQL(q Query) (string, []any, error) {
 	}
 	selects = append(selects, "COUNT(DISTINCT r.id) AS cnt")
 	for _, a := range q.Aggregates {
-		if !metricRe.MatchString(string(a.Metric)) {
+		if !metricRe.MatchString(a.Metric) {
 			return "", nil, fmt.Errorf("%w: invalid metric %q", ErrInvalidQuery, a.Metric)
 		}
 		var fn string
-		switch a.Func {
+		switch AggFunc(a.Func) {
 		case AggSum, "":
 			fn = "SUM"
 		case AggMin:
@@ -164,13 +125,13 @@ func BuildSQL(q Query) (string, []any, error) {
 			return "", nil, fmt.Errorf("%w: unknown aggregate %q", ErrInvalidQuery, a.Func)
 		}
 		selects = append(selects, fmt.Sprintf("COALESCE(%s(CASE WHEN m.metric = ? THEN m.value END), 0)", fn))
-		args = append(args, string(a.Metric))
+		args = append(args, a.Metric)
 	}
 
 	var where []string
 	if q.Kind != "" {
 		where = append(where, "r.kind = ?")
-		args = append(args, string(q.Kind))
+		args = append(args, q.Kind)
 	}
 	f := q.Filter
 	if f.WorkspaceRoot != "" {
@@ -202,7 +163,7 @@ func BuildSQL(q Query) (string, []any, error) {
 		ph := make([]string, len(f.Status))
 		for i, s := range f.Status {
 			ph[i] = "?"
-			args = append(args, string(s))
+			args = append(args, s)
 		}
 		where = append(where, "r.status IN ("+strings.Join(ph, ",")+")")
 	}
@@ -235,23 +196,23 @@ func BuildSQL(q Query) (string, []any, error) {
 }
 
 // Query runs q against the database.
-func (s *Store) Query(ctx context.Context, q Query) (Result, error) {
+func (s *Store) Query(ctx context.Context, q api.MetricsQuery) (api.MetricsResult, error) {
 	return RunQuery(ctx, s.db, q)
 }
 
 // RunQuery runs q against db.
-func RunQuery(ctx context.Context, db *sql.DB, q Query) (Result, error) {
+func RunQuery(ctx context.Context, db *sql.DB, q api.MetricsQuery) (api.MetricsResult, error) {
 	query, args, err := BuildSQL(q)
 	if err != nil {
-		return Result{}, err
+		return api.MetricsResult{}, err
 	}
 	rows, err := db.QueryContext(ctx, query, args...)
 	if err != nil {
-		return Result{}, fmt.Errorf("metrics: query: %w", err)
+		return api.MetricsResult{}, fmt.Errorf("metrics: query: %w", err)
 	}
 	defer rows.Close()
 
-	var res Result
+	var res api.MetricsResult
 	for rows.Next() {
 		var (
 			bucket sql.NullString
@@ -260,7 +221,7 @@ func RunQuery(ctx context.Context, db *sql.DB, q Query) (Result, error) {
 			values = make([]int64, len(q.Aggregates))
 			dest   []any
 		)
-		if q.Bucket != BucketNone {
+		if q.Bucket != "" && Bucket(q.Bucket) != BucketNone {
 			dest = append(dest, &bucket)
 		}
 		for i := range groups {
@@ -271,18 +232,18 @@ func RunQuery(ctx context.Context, db *sql.DB, q Query) (Result, error) {
 			dest = append(dest, &values[i])
 		}
 		if err := rows.Scan(dest...); err != nil {
-			return Result{}, fmt.Errorf("metrics: scan: %w", err)
+			return api.MetricsResult{}, fmt.Errorf("metrics: scan: %w", err)
 		}
-		row := Row{Group: make(map[string]string, len(groups)), Count: count, Values: make(map[Metric]int64, len(values))}
+		row := api.MetricsRow{Group: make(map[string]string, len(groups)), Count: count, Values: make(map[string]int64, len(values))}
 		if bucket.Valid {
 			t, err := time.Parse(time.RFC3339, bucket.String)
 			if err != nil {
-				return Result{}, fmt.Errorf("metrics: parse bucket %q: %w", bucket.String, err)
+				return api.MetricsResult{}, fmt.Errorf("metrics: parse bucket %q: %w", bucket.String, err)
 			}
 			row.Bucket = t.UTC()
 		}
 		for i, d := range q.GroupBy {
-			row.Group[string(d)] = groups[i].String
+			row.Group[d] = groups[i].String
 		}
 		for i, a := range q.Aggregates {
 			row.Values[a.Metric] = values[i]
@@ -290,7 +251,7 @@ func RunQuery(ctx context.Context, db *sql.DB, q Query) (Result, error) {
 		res.Rows = append(res.Rows, row)
 	}
 	if err := rows.Err(); err != nil {
-		return Result{}, err
+		return api.MetricsResult{}, err
 	}
 	return res, nil
 }

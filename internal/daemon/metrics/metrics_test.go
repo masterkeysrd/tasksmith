@@ -40,7 +40,7 @@ func scoped(session, parent string) context.Context {
 func llmCall(model string, cost int64, priced bool, tier string) metrics.LLMCall {
 	return metrics.LLMCall{
 		Provider: "p", Model: model, Purpose: metrics.PurposeChat, Status: metrics.StatusOK,
-		Tokens:   metrics.Tokens{Input: 100, Output: 10, CacheRead: 60, CacheWrite: 20},
+		Tokens:   api.UsageTokens{Input: 100, Output: 10, CacheRead: 60, CacheWrite: 20},
 		Cost:     metrics.Cost{Total: cost},
 		CostTier: tier, Priced: priced, Duration: 250 * time.Millisecond,
 	}
@@ -127,12 +127,12 @@ func TestQueryGroupingAndFilters(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	res, err := s.Query(ctx, metrics.Query{
-		Kind:       metrics.KindLLMCall,
-		Aggregates: []metrics.Aggregate{{Metric: metrics.CostTotal, Func: metrics.AggSum}, {Metric: metrics.CostTotal, Func: metrics.AggMax}},
-		GroupBy:    []metrics.Dimension{"attr.model"},
-		Bucket:     metrics.BucketDay,
-		Filter:     metrics.Filter{WorkspaceRoot: "/ws", Attrs: map[string]string{"provider": "p"}},
+	res, err := s.Query(ctx, api.MetricsQuery{
+		Kind:       string(metrics.KindLLMCall),
+		Aggregates: []api.MetricsAggregate{{Metric: string(metrics.CostTotal), Func: string(metrics.AggSum)}, {Metric: string(metrics.CostTotal), Func: string(metrics.AggMax)}},
+		GroupBy:    []string{"attr.model"},
+		Bucket:     string(metrics.BucketDay),
+		Filter:     api.MetricsFilter{WorkspaceRoot: "/ws", Attrs: map[string]string{"provider": "p"}},
 		Since:      time.Now().Add(-time.Hour),
 	})
 	if err != nil {
@@ -142,25 +142,25 @@ func TestQueryGroupingAndFilters(t *testing.T) {
 		t.Fatalf("rows = %+v", res.Rows)
 	}
 	first := res.Rows[0]
-	if first.Group["attr.model"] != "m1" || first.Count != 2 || first.Values[metrics.CostTotal] != 300 || first.Bucket.IsZero() {
+	if first.Group["attr.model"] != "m1" || first.Count != 2 || first.Values[string(metrics.CostTotal)] != 300 || first.Bucket.IsZero() {
 		t.Fatalf("first row = %+v", first)
 	}
 
-	one, err := s.Query(ctx, metrics.Query{
-		Aggregates: []metrics.Aggregate{{Metric: metrics.CostTotal, Func: metrics.AggSum}},
-		Filter:     metrics.Filter{SessionID: "s2", IncludeChildren: true},
+	one, err := s.Query(ctx, api.MetricsQuery{
+		Aggregates: []api.MetricsAggregate{{Metric: string(metrics.CostTotal), Func: string(metrics.AggSum)}},
+		Filter:     api.MetricsFilter{SessionID: "s2", IncludeChildren: true},
 	})
-	if err != nil || len(one.Rows) != 1 || one.Rows[0].Values[metrics.CostTotal] != 50 {
+	if err != nil || len(one.Rows) != 1 || one.Rows[0].Values[string(metrics.CostTotal)] != 50 {
 		t.Fatalf("session filter: %+v err=%v", one, err)
 	}
 }
 
 func TestQueryRejectsUnsafeIdentifiers(t *testing.T) {
-	for _, q := range []metrics.Query{
-		{GroupBy: []metrics.Dimension{"attr.model'); DROP TABLE metrics_records;--"}},
-		{GroupBy: []metrics.Dimension{"not_a_column"}},
-		{Filter: metrics.Filter{Attrs: map[string]string{"a'b": "x"}}},
-		{Aggregates: []metrics.Aggregate{{Metric: "x'; --"}}},
+	for _, q := range []api.MetricsQuery{
+		{GroupBy: []string{"attr.model'); DROP TABLE metrics_records;--"}},
+		{GroupBy: []string{"not_a_column"}},
+		{Filter: api.MetricsFilter{Attrs: map[string]string{"a'b": "x"}}},
+		{Aggregates: []api.MetricsAggregate{{Metric: "x'; --"}}},
 		{Bucket: "year"},
 	} {
 		if _, _, err := metrics.BuildSQL(q); err == nil {
@@ -176,8 +176,8 @@ func TestSummaryAndFlushOnClose(t *testing.T) {
 	_ = metrics.RecordLLMCall(ws, s, llmCall("m1", 200, false, "long"))
 	_ = metrics.RecordToolCall(ws, s, metrics.ToolCall{Tool: "read", Status: metrics.StatusError})
 
-	sum, err := s.Summary(context.Background(), metrics.SummaryRequest{
-		Scope: api.UsageScopeWorkspace, WorkspaceRoot: "/ws", GroupBy: api.UsageGroupByModel,
+	sum, err := s.Summary(context.Background(), "/ws", api.UsageRequest{
+		Scope: api.UsageScopeWorkspace, GroupBy: api.UsageGroupByModel,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -192,8 +192,8 @@ func TestSummaryAndFlushOnClose(t *testing.T) {
 		t.Fatalf("tools = %+v", sum.Tools)
 	}
 
-	other, err := s.Summary(context.Background(), metrics.SummaryRequest{
-		Scope: api.UsageScopeWorkspace, WorkspaceRoot: "/other", GroupBy: api.UsageGroupByTier,
+	other, err := s.Summary(context.Background(), "/other", api.UsageRequest{
+		Scope: api.UsageScopeWorkspace, GroupBy: api.UsageGroupByTier,
 	})
 	if err != nil || other.Totals.Calls != 0 {
 		t.Fatalf("other workspace: %+v err=%v", other, err)
@@ -211,7 +211,7 @@ func TestSummaryAndFlushOnClose(t *testing.T) {
 func chatCall(read, write int64) metrics.LLMCall {
 	return metrics.LLMCall{
 		Provider: "p", Model: "m", Purpose: metrics.PurposeChat, Status: metrics.StatusOK, Priced: true,
-		Tokens: metrics.Tokens{Input: 1000, CacheRead: read, CacheWrite: write},
+		Tokens: api.UsageTokens{Input: 1000, CacheRead: read, CacheWrite: write},
 	}
 }
 
@@ -246,9 +246,9 @@ func TestFileChangesExcludeReverts(t *testing.T) {
 	s := newStore(t)
 	live := metrics.NewLive(s, nil)
 	ctx := scoped("s1", "")
-	_ = metrics.RecordFileChange(ctx, live, metrics.FileChange{Tool: "edit", Path: "a.go", Added: 10, Removed: 2})
-	_ = metrics.RecordFileChange(ctx, live, metrics.FileChange{Tool: "write", Path: "b.go", Added: 5})
-	_ = metrics.RecordFileChange(ctx, live, metrics.FileChange{Tool: "revert", Path: "a.go", Added: 2, Removed: 10, Revert: true})
+	_ = metrics.RecordFileChange(ctx, live, api.FileChange{Tool: "edit", Path: "a.go", Additions: 10, Deletions: 2})
+	_ = metrics.RecordFileChange(ctx, live, api.FileChange{Tool: "write", Path: "b.go", Additions: 5})
+	_ = metrics.RecordFileChange(ctx, live, api.FileChange{Tool: "revert", Path: "a.go", Additions: 2, Deletions: 10})
 
 	u, err := live.SessionUsage(ctx, "s1")
 	if err != nil {
@@ -258,8 +258,8 @@ func TestFileChangesExcludeReverts(t *testing.T) {
 		t.Fatalf("changes = %+v", u.Changes)
 	}
 
-	sum, err := s.Summary(context.Background(), metrics.SummaryRequest{
-		Scope: api.UsageScopeWorkspace, WorkspaceRoot: "/ws", GroupBy: api.UsageGroupByDay,
+	sum, err := s.Summary(context.Background(), "/ws", api.UsageRequest{
+		Scope: api.UsageScopeWorkspace, GroupBy: api.UsageGroupByDay,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -285,7 +285,7 @@ func TestSummaryGlobalSessionsPreviousAndErrors(t *testing.T) {
 	_ = metrics.RecordLLMCall(scoped("s1", ""), s, metrics.LLMCall{Provider: "p", Model: "m", Status: metrics.StatusError})
 	_ = metrics.RecordLLMCall(other, s, llmCall("m", 100, true, ""))
 
-	sum, err := s.Summary(context.Background(), metrics.SummaryRequest{
+	sum, err := s.Summary(context.Background(), "", api.UsageRequest{
 		Scope: api.UsageScopeGlobal, GroupBy: api.UsageGroupByProvider, Since: time.Now().Add(-time.Hour),
 	})
 	if err != nil {

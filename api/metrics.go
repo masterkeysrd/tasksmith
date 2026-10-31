@@ -180,6 +180,7 @@ type MetricsAggregate struct {
 type MetricsFilter struct {
 	WorkspaceRoot   string            `json:"workspace_root,omitempty"`
 	SessionID       string            `json:"session_id,omitempty"`
+	TurnIDs         []string          `json:"turn_ids,omitempty"`
 	IncludeChildren bool              `json:"include_children,omitempty"`
 	Agent           string            `json:"agent,omitempty"`
 	Status          []string          `json:"status,omitempty"`
@@ -210,8 +211,8 @@ func (UsageUpdatedEvent) EventType() string { return string(EventUsageUpdated) }
 // UsageRequest selects a [UsageSummary]. Zero values select the default:
 // workspace scope, grouped by model, over the last 30 days.
 type UsageRequest struct {
-	Scope   UsageScope
-	GroupBy UsageGroupBy
-	Since   time.Time
-	Until   time.Time
+	Scope   UsageScope   `json:"scope,omitempty"`
+	GroupBy UsageGroupBy `json:"group_by,omitempty"`
+	Since   time.Time    `json:"since"`
+	Until   time.Time    `json:"until"`
 }

@@ -16,44 +16,14 @@ const defaultUsageWindow = 30 * 24 * time.Hour
 // MetricsBackend implementation
 
 func (d *Daemon) MetricsQuery(ctx context.Context, req api.MetricsQuery) (*api.MetricsResult, error) {
-	q := metrics.Query{
-		Kind:   metrics.Kind(req.Kind),
-		Bucket: metrics.Bucket(req.Bucket),
-		Since:  req.Since,
-		Until:  req.Until,
-		Filter: metrics.Filter{
-			WorkspaceRoot:   req.Filter.WorkspaceRoot,
-			SessionID:       req.Filter.SessionID,
-			IncludeChildren: req.Filter.IncludeChildren,
-			Agent:           req.Filter.Agent,
-			Attrs:           req.Filter.Attrs,
-		},
-	}
-	for _, a := range req.Aggregates {
-		q.Aggregates = append(q.Aggregates, metrics.Aggregate{Metric: metrics.Metric(a.Metric), Func: metrics.AggFunc(a.Func)})
-	}
-	for _, g := range req.GroupBy {
-		q.GroupBy = append(q.GroupBy, metrics.Dimension(g))
-	}
-	for _, s := range req.Filter.Status {
-		q.Filter.Status = append(q.Filter.Status, metrics.Status(s))
-	}
 	if err := d.metricsStore.Flush(ctx); err != nil {
 		return nil, err
 	}
-	res, err := d.metricsStore.Query(ctx, q)
+	res, err := d.metricsStore.Query(ctx, req)
 	if err != nil {
 		return nil, err
 	}
-	out := &api.MetricsResult{Rows: make([]api.MetricsRow, len(res.Rows))}
-	for i, row := range res.Rows {
-		values := make(map[string]int64, len(row.Values))
-		for m, v := range row.Values {
-			values[string(m)] = v
-		}
-		out.Rows[i] = api.MetricsRow{Bucket: row.Bucket, Group: row.Group, Count: row.Count, Values: values}
-	}
-	return out, nil
+	return &res, nil
 }
 
 func (d *Daemon) SessionUsage(ctx context.Context, rawWS, id string) (*api.SessionUsage, error) {
@@ -82,19 +52,19 @@ func (d *Daemon) Usage(ctx context.Context, rawWS string, req api.UsageRequest) 
 	if req.Since.IsZero() {
 		req.Since = time.Now().UTC().Add(-defaultUsageWindow)
 	}
-	sreq := metrics.SummaryRequest{Scope: req.Scope, Since: req.Since, Until: req.Until, GroupBy: req.GroupBy}
+	var workspaceRoot string
 	switch req.Scope {
 	case api.UsageScopeWorkspace:
 		rt, err := d.workspace(ctx, rawWS)
 		if err != nil {
 			return nil, err
 		}
-		sreq.WorkspaceRoot = rt.Workspace().RootDir()
+		workspaceRoot = rt.Workspace().RootDir()
 	case api.UsageScopeGlobal:
 	default:
 		return nil, fmt.Errorf("%w: unknown scope %q", metrics.ErrInvalidQuery, req.Scope)
 	}
-	summary, err := d.metricsStore.Summary(ctx, sreq)
+	summary, err := d.metricsStore.Summary(ctx, workspaceRoot, req)
 	if err != nil {
 		return nil, err
 	}

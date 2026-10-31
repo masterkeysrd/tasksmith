@@ -234,7 +234,7 @@ func newTestToolsRegistry(t *testing.T) (string, tools.Container, permissions.Se
 	if err != nil {
 		t.Fatalf("permissions.New: %v", err)
 	}
-	sessPerm := permMgr.Attach(api.ModeDefault, permissions.Permissions{}, nil)
+	sessPerm := permMgr.Attach(api.ModeDefault, api.Permissions{}, nil)
 
 	return dir, container, sessPerm
 }

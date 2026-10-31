@@ -23,7 +23,7 @@
 // [Journal.RecordChange] persists a [std.FileChange] atomically: it writes
 // before/after content blobs, inserts the file tracking row and the change
 // entry in a single transaction, and updates the in-memory hash index. When
-// the change source is [std.SourceAgent] and a [scope.Scope] is present in the
+// the change source is [github.com/masterkeysrd/tasksmith/api.SourceAgent] and a [scope.Scope] is present in the
 // context, the journal propagates turn, message, tool-call, and tool-name
 // metadata from the scope onto the change.
 //

@@ -24,7 +24,6 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/daemon/gateway"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/metrics"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/models"
-	"github.com/masterkeysrd/tasksmith/internal/daemon/permissions"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/server"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/session"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tasks"
@@ -599,18 +598,18 @@ func (d *Daemon) GetPermissions(ctx context.Context, rawWS string) (*api.Permiss
 		return nil, err
 	}
 
-	proj, err := rt.Permissions().Get(permissions.ScopeProject)
+	proj, err := rt.Permissions().Get(api.ScopeProject)
 	if err != nil {
 		return nil, err
 	}
-	glob, err := rt.Permissions().Get(permissions.ScopeGlobal)
+	glob, err := rt.Permissions().Get(api.ScopeGlobal)
 	if err != nil {
 		return nil, err
 	}
 
 	return &api.PermissionsResponse{
-		Project: toAPIPermissions(proj),
-		Global:  toAPIPermissions(glob),
+		Project: proj,
+		Global:  glob,
 	}, nil
 }
 
@@ -620,13 +619,7 @@ func (d *Daemon) AddPermissionRule(ctx context.Context, rawWS string, req api.Pe
 		return nil, err
 	}
 
-	effect, err := fromAPIPermissionEffect(req.Effect)
-	if err != nil {
-		return nil, err
-	}
-
-	scope := permissions.Scope(strings.TrimSpace(string(req.Scope)))
-	if err := rt.Permissions().AddRule(scope, effect, req.Rule); err != nil {
+	if err := rt.Permissions().AddRule(req.Scope, req.Effect, req.Rule); err != nil {
 		return nil, err
 	}
 
@@ -639,13 +632,7 @@ func (d *Daemon) RemovePermissionRule(ctx context.Context, rawWS string, req api
 		return nil, err
 	}
 
-	effect, err := fromAPIPermissionEffect(req.Effect)
-	if err != nil {
-		return nil, err
-	}
-
-	scope := permissions.Scope(strings.TrimSpace(string(req.Scope)))
-	if err := rt.Permissions().RemoveRule(scope, effect, req.Rule); err != nil {
+	if err := rt.Permissions().RemoveRule(req.Scope, req.Effect, req.Rule); err != nil {
 		return nil, err
 	}
 
@@ -829,16 +816,7 @@ func (d *Daemon) Changes(ctx context.Context, rawWS, id string) ([]api.FileChang
 		return nil, err
 	}
 
-	changes, err := sess.Journal.Changes(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	out := make([]api.FileChange, len(changes))
-	for i, fc := range changes {
-		out[i] = toAPIFileChange(fc)
-	}
-	return out, nil
+	return sess.Journal.Changes(ctx)
 }
 
 func (d *Daemon) Diff(ctx context.Context, rawWS, id, path, entryID string) (*api.DiffResponse, error) {
@@ -910,10 +888,6 @@ func (d *Daemon) Tasks(ctx context.Context, rawWS, id string) ([]api.Task, error
 		return nil, err
 	}
 
-	if sess.Tasks == nil {
-		return []api.Task{}, nil
-	}
-
 	return sess.Tasks.List(), nil
 }
 
@@ -935,14 +909,6 @@ func (d *Daemon) KillTask(ctx context.Context, rawWS, id, taskID string) error {
 	sess, err := rt.GetSession(ctx, id)
 	if err != nil {
 		return err
-	}
-
-	if sess.Tasks == nil {
-		return &api.APIError{
-			StatusCode: http.StatusNotFound,
-			Code:       "not_found",
-			Message:    "task not found",
-		}
 	}
 
 	t, ok := sess.Tasks.Get(taskID)
@@ -987,14 +953,6 @@ func (d *Daemon) StreamTaskOutput(ctx context.Context, rawWS, id, taskID string)
 		return nil, "", nil, err
 	}
 
-	if sess.Tasks == nil {
-		return nil, "", nil, &api.APIError{
-			StatusCode: http.StatusNotFound,
-			Code:       "not_found",
-			Message:    "task not found",
-		}
-	}
-
 	t, ok := sess.Tasks.Get(taskID)
 	if !ok {
 		return nil, "", nil, &api.APIError{
@@ -1006,4 +964,22 @@ func (d *Daemon) StreamTaskOutput(ctx context.Context, rawWS, id, taskID string)
 
 	ch, initial, cancel := t.SubscribeOutput()
 	return ch, initial, cancel, nil
+}
+
+// FormatEvent converts an internal broker message into a public API event.
+// Sessions publish [api.EventPayload] values directly, so this only needs to
+// wrap the payload with the message envelope.
+func (d *Daemon) FormatEvent(msg broker.Message) (api.Event, error) {
+	switch ev := msg.Event.(type) {
+	case api.EventPayload:
+		return api.Event{
+			ID:      msg.ID,
+			Type:    api.EventType(ev.EventType()),
+			Topic:   msg.Topic,
+			Payload: ev,
+		}, nil
+
+	default:
+		return api.Event{ID: msg.ID}, fmt.Errorf("daemon: unknown broker event type %T", msg.Event)
+	}
 }

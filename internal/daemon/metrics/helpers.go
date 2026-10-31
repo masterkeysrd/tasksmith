@@ -4,6 +4,8 @@ import (
 	"context"
 	"strconv"
 	"time"
+
+	"github.com/masterkeysrd/tasksmith/api"
 )
 
 // LLMCall describes one LLM request for [RecordLLMCall].
@@ -14,7 +16,7 @@ type LLMCall struct {
 	Status    Status
 	ErrorKind string
 
-	Tokens   Tokens
+	Tokens   api.UsageTokens
 	Cost     Cost   // nano-USD
 	CostTier string // empty = base pricing
 	Priced   bool
@@ -24,10 +26,6 @@ type LLMCall struct {
 	Processing time.Duration
 	Generation time.Duration
 }
-
-// Tokens is the token breakdown of an LLM call. Input is the total prompt
-// size and includes CacheRead and CacheWrite.
-type Tokens struct{ Input, Output, CacheRead, CacheWrite, Reasoning int64 }
 
 // Cost is the nano-USD cost breakdown of an LLM call.
 type Cost struct{ Input, Output, CacheRead, CacheWrite, Reasoning, Total int64 }
@@ -109,27 +107,13 @@ func attrs(kv ...string) []Attr {
 	return out
 }
 
-// FileChange describes one file mutation for [RecordFileChange].
-type FileChange struct {
-	Tool       string
-	ToolCallID string
-	Path       string
-	Source     string // "agent" or "external"
-	Change     string // "created", "modified" or "deleted"
-	Added      int64
-	Removed    int64
-	// Revert marks a change that undoes earlier work. Views exclude reverts
-	// from code-change totals.
-	Revert bool
-}
-
 // RecordFileChange records a file_change. A nil recorder disables recording.
-func RecordFileChange(ctx context.Context, r Recorder, c FileChange) error {
+func RecordFileChange(ctx context.Context, r Recorder, c api.FileChange) error {
 	if r == nil {
 		return nil
 	}
 	revert := ""
-	if c.Revert {
+	if c.Tool == "revert" {
 		revert = "true"
 	}
 	rec := Record{
@@ -139,17 +123,17 @@ func RecordFileChange(ctx context.Context, r Recorder, c FileChange) error {
 			AttrTool, c.Tool,
 			AttrToolCallID, c.ToolCallID,
 			AttrPath, c.Path,
-			AttrSource, c.Source,
-			AttrChange, c.Change,
+			AttrSource, string(c.Source),
+			AttrChange, string(c.Kind),
 			AttrRevert, revert,
 		),
 		Measurements: []Measurement{{Metric: FilesChanged, Value: 1}},
 	}
-	if c.Added != 0 {
-		rec.Measurements = append(rec.Measurements, Measurement{Metric: LinesAdded, Value: c.Added})
+	if c.Additions != 0 {
+		rec.Measurements = append(rec.Measurements, Measurement{Metric: LinesAdded, Value: int64(c.Additions)})
 	}
-	if c.Removed != 0 {
-		rec.Measurements = append(rec.Measurements, Measurement{Metric: LinesRemoved, Value: c.Removed})
+	if c.Deletions != 0 {
+		rec.Measurements = append(rec.Measurements, Measurement{Metric: LinesRemoved, Value: int64(c.Deletions)})
 	}
 	return r.Record(ctx, rec)
 }

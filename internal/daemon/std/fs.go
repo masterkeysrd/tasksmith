@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/core/diff"
 	"github.com/masterkeysrd/tasksmith/internal/core/fsutils"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
@@ -48,17 +49,19 @@ func (s *Std) View(ctx context.Context, req ViewRequest) (*ViewResult, error) {
 		if prevContent, hasPriorChange := s.tracker.LastContent(normPath); hasPriorChange {
 			add, del := diff.Stats(string(prevContent), string(data))
 			change := FileChange{
-				Path:          normPath,
-				Source:        SourceExternal,
-				Tool:          "external",
-				Kind:          KindModified,
-				BeforeHash:    prevHash,
-				AfterHash:     hash,
+				FileChange: api.FileChange{
+					Path:       normPath,
+					Source:     api.SourceExternal,
+					Tool:       "external",
+					Kind:       api.KindModified,
+					BeforeHash: prevHash,
+					AfterHash:  hash,
+					Additions:  add,
+					Deletions:  del,
+					Timestamp:  time.Now().UTC(),
+				},
 				BeforeContent: prevContent,
 				AfterContent:  data,
-				Additions:     add,
-				Deletions:     del,
-				Timestamp:     time.Now().UTC(),
 			}
 			if err := s.tracker.RecordChange(ctx, &change); err != nil {
 				return nil, err
@@ -658,24 +661,26 @@ func (s *Std) Write(ctx context.Context, req WriteRequest) (*WriteResult, error)
 			return nil, err
 		}
 
-		kind := KindCreated
+		kind := api.KindCreated
 		if exists {
-			kind = KindModified
+			kind = api.KindModified
 		}
 
 		change := FileChange{
-			Path:          normPath,
-			Source:        SourceAgent,
-			Tool:          "write",
-			Kind:          kind,
-			BeforeHash:    diskHash,
-			AfterHash:     afterHash,
+			FileChange: api.FileChange{
+				Path:       normPath,
+				Source:     api.SourceAgent,
+				Tool:       "write",
+				Kind:       kind,
+				BeforeHash: diskHash,
+				AfterHash:  afterHash,
+				Additions:  add,
+				Deletions:  del,
+				Timestamp:  time.Now().UTC(),
+			},
 			BeforeContent: diskBytes,
 			AfterContent:  afterBytes,
-			Additions:     add,
-			Deletions:     del,
 			IsBinary:      isBinaryContent(afterBytes),
-			Timestamp:     time.Now().UTC(),
 		}
 		if err := s.tracker.RecordChange(ctx, &change); err != nil {
 			return nil, err
@@ -769,17 +774,19 @@ func (s *Std) Edit(ctx context.Context, req EditRequest) (*EditResult, error) {
 		}
 
 		change := FileChange{
-			Path:          normPath,
-			Source:        SourceAgent,
-			Tool:          "edit",
-			Kind:          KindModified,
-			BeforeHash:    diskHash,
-			AfterHash:     afterHash,
+			FileChange: api.FileChange{
+				Path:       normPath,
+				Source:     api.SourceAgent,
+				Tool:       "edit",
+				Kind:       api.KindModified,
+				BeforeHash: diskHash,
+				AfterHash:  afterHash,
+				Additions:  add,
+				Deletions:  del,
+				Timestamp:  time.Now().UTC(),
+			},
 			BeforeContent: diskBytes,
 			AfterContent:  afterBytes,
-			Additions:     add,
-			Deletions:     del,
-			Timestamp:     time.Now().UTC(),
 		}
 		if err := s.tracker.RecordChange(ctx, &change); err != nil {
 			return nil, err
@@ -842,18 +849,20 @@ func (s *Std) Remove(ctx context.Context, req RemoveRequest) (*RemoveResult, err
 		}
 
 		change := FileChange{
-			Path:          normPath,
-			Source:        SourceAgent,
-			Tool:          "remove",
-			Kind:          KindDeleted,
-			BeforeHash:    diskHash,
-			AfterHash:     "",
+			FileChange: api.FileChange{
+				Path:       normPath,
+				Source:     api.SourceAgent,
+				Tool:       "remove",
+				Kind:       api.KindDeleted,
+				BeforeHash: diskHash,
+				AfterHash:  "",
+				Additions:  0,
+				Deletions:  del,
+				Timestamp:  time.Now().UTC(),
+			},
 			BeforeContent: diskBytes,
 			AfterContent:  nil,
-			Additions:     0,
-			Deletions:     del,
 			IsBinary:      isBin,
-			Timestamp:     time.Now().UTC(),
 		}
 		if err := s.tracker.RecordChange(ctx, &change); err != nil {
 			return nil, err
@@ -898,17 +907,19 @@ func (s *Std) SyncExternalChanges(ctx context.Context) ([]FileChange, error) {
 					_, del = diff.Stats(string(prevContent), "")
 				}
 				change := FileChange{
-					Path:          p,
-					Source:        SourceExternal,
-					Tool:          "external",
-					Kind:          KindDeleted,
-					BeforeHash:    lastHash,
-					AfterHash:     "",
+					FileChange: api.FileChange{
+						Path:       p,
+						Source:     api.SourceExternal,
+						Tool:       "external",
+						Kind:       api.KindDeleted,
+						BeforeHash: lastHash,
+						AfterHash:  "",
+						Additions:  0,
+						Deletions:  del,
+						Timestamp:  time.Now().UTC(),
+					},
 					BeforeContent: prevContent,
-					Additions:     0,
-					Deletions:     del,
 					IsBinary:      isBin,
-					Timestamp:     time.Now().UTC(),
 				}
 				if recErr := s.tracker.RecordChange(ctx, &change); recErr != nil {
 					return changes, recErr
@@ -926,25 +937,27 @@ func (s *Std) SyncExternalChanges(ctx context.Context) ([]FileChange, error) {
 			if !isBin {
 				add, del = diff.Stats(string(prevContent), string(diskBytes))
 			}
-			kind := KindModified
+			kind := api.KindModified
 			beforeHash := lastHash
 			if !hasPrevContent {
-				kind = KindCreated
+				kind = api.KindCreated
 				beforeHash = ""
 			}
 			change := FileChange{
-				Path:          p,
-				Source:        SourceExternal,
-				Tool:          "external",
-				Kind:          kind,
-				BeforeHash:    beforeHash,
-				AfterHash:     diskHash,
+				FileChange: api.FileChange{
+					Path:       p,
+					Source:     api.SourceExternal,
+					Tool:       "external",
+					Kind:       kind,
+					BeforeHash: beforeHash,
+					AfterHash:  diskHash,
+					Additions:  add,
+					Deletions:  del,
+					Timestamp:  time.Now().UTC(),
+				},
 				BeforeContent: prevContent,
 				AfterContent:  diskBytes,
-				Additions:     add,
-				Deletions:     del,
 				IsBinary:      isBin,
-				Timestamp:     time.Now().UTC(),
 			}
 			if recErr := s.tracker.RecordChange(ctx, &change); recErr != nil {
 				return changes, recErr

@@ -275,14 +275,6 @@ func (s *Store) loadUsage(ctx context.Context, sessionID string) (*Usage, error)
 	return u, nil
 }
 
-// SummaryRequest selects a [Store.Summary].
-type SummaryRequest struct {
-	Scope         api.UsageScope
-	WorkspaceRoot string
-	Since, Until  time.Time
-	GroupBy       api.UsageGroupBy
-}
-
 const topSessionsLimit = 10
 
 var llmMetrics = []Metric{
@@ -290,23 +282,23 @@ var llmMetrics = []Metric{
 	CostTotal, CostCacheRead, CostCacheWrite, LatencyDuration,
 }
 
-func sumAggregates(ms ...Metric) []Aggregate {
-	out := make([]Aggregate, len(ms))
+func sumAggregates(ms ...Metric) []api.MetricsAggregate {
+	out := make([]api.MetricsAggregate, len(ms))
 	for i, m := range ms {
-		out[i] = Aggregate{Metric: m, Func: AggSum}
+		out[i] = api.MetricsAggregate{Metric: string(m), Func: string(AggSum)}
 	}
 	return out
 }
 
 // llmGroups runs an llm_call query grouped by dim (and bucket) and returns the
 // groups in key order plus their combined totals.
-func (s *Store) llmGroups(ctx context.Context, base Query, dim Dimension, groupKey func(Row) string) ([]api.UsageGroup, api.UsageGroup, error) {
+func (s *Store) llmGroups(ctx context.Context, base api.MetricsQuery, dim string, groupKey func(api.MetricsRow) string) ([]api.UsageGroup, api.UsageGroup, error) {
 	q := base
-	q.Kind = KindLLMCall
+	q.Kind = string(KindLLMCall)
 	q.Aggregates = sumAggregates(llmMetrics...)
-	q.GroupBy = []Dimension{"attr.priced", "status"}
+	q.GroupBy = []string{"attr.priced", "status"}
 	if dim != "" {
-		q.GroupBy = append([]Dimension{dim}, q.GroupBy...)
+		q.GroupBy = append([]string{dim}, q.GroupBy...)
 	}
 	res, err := RunQuery(ctx, s.db, q)
 	if err != nil {
@@ -331,15 +323,15 @@ func (s *Store) llmGroups(ctx context.Context, base Query, dim Dimension, groupK
 			if row.Group["status"] != string(StatusOK) {
 				t.Errors += row.Count
 			}
-			t.Tokens.Input += row.Values[TokensInput]
-			t.Tokens.Output += row.Values[TokensOutput]
-			t.Tokens.CacheRead += row.Values[TokensCacheRead]
-			t.Tokens.CacheWrite += row.Values[TokensCacheWrite]
-			t.Tokens.Reasoning += row.Values[TokensReasoning]
-			t.CostNano += row.Values[CostTotal]
-			t.CostCacheReadNano += row.Values[CostCacheRead]
-			t.CostCacheWriteNano += row.Values[CostCacheWrite]
-			t.DurationMS += row.Values[LatencyDuration]
+			t.Tokens.Input += row.Values[string(TokensInput)]
+			t.Tokens.Output += row.Values[string(TokensOutput)]
+			t.Tokens.CacheRead += row.Values[string(TokensCacheRead)]
+			t.Tokens.CacheWrite += row.Values[string(TokensCacheWrite)]
+			t.Tokens.Reasoning += row.Values[string(TokensReasoning)]
+			t.CostNano += row.Values[string(CostTotal)]
+			t.CostCacheReadNano += row.Values[string(CostCacheRead)]
+			t.CostCacheWriteNano += row.Values[string(CostCacheWrite)]
+			t.DurationMS += row.Values[string(LatencyDuration)]
 		}
 	}
 	sort.Strings(order)
@@ -351,22 +343,22 @@ func (s *Store) llmGroups(ctx context.Context, base Query, dim Dimension, groupK
 }
 
 // Summary aggregates LLM, tool and code-change usage across sessions.
-func (s *Store) Summary(ctx context.Context, req SummaryRequest) (api.UsageSummary, error) {
+func (s *Store) Summary(ctx context.Context, workspaceRoot string, req api.UsageRequest) (api.UsageSummary, error) {
 	if err := s.Flush(ctx); err != nil {
 		return api.UsageSummary{}, err
 	}
-	filter := Filter{}
+	filter := api.MetricsFilter{}
 	switch req.Scope {
 	case api.UsageScopeWorkspace:
-		filter.WorkspaceRoot = req.WorkspaceRoot
+		filter.WorkspaceRoot = workspaceRoot
 	case api.UsageScopeGlobal:
 	default:
 		return api.UsageSummary{}, fmt.Errorf("%w: unknown scope %q", ErrInvalidQuery, req.Scope)
 	}
 
 	var (
-		dim    Dimension
-		bucket Bucket
+		dim    string
+		bucket string
 	)
 	switch req.GroupBy {
 	case api.UsageGroupByModel:
@@ -380,24 +372,24 @@ func (s *Store) Summary(ctx context.Context, req SummaryRequest) (api.UsageSumma
 	case api.UsageGroupByTier:
 		dim = "attr.cost_tier"
 	case api.UsageGroupByDay:
-		bucket = BucketDay
+		bucket = string(BucketDay)
 	default:
 		return api.UsageSummary{}, fmt.Errorf("%w: unknown group_by %q", ErrInvalidQuery, req.GroupBy)
 	}
 
-	base := Query{Filter: filter, Since: req.Since, Until: req.Until, Bucket: bucket}
+	base := api.MetricsQuery{Filter: filter, Since: req.Since, Until: req.Until, Bucket: bucket}
 	out := api.UsageSummary{Scope: req.Scope, GroupBy: req.GroupBy, Since: req.Since, Until: req.Until}
 
 	var err error
-	out.Groups, out.Totals, err = s.llmGroups(ctx, base, dim, func(row Row) string {
+	out.Groups, out.Totals, err = s.llmGroups(ctx, base, dim, func(row api.MetricsRow) string {
 		switch {
 		case dim != "":
-			key := row.Group[string(dim)]
+			key := row.Group[dim]
 			if key == "" && req.GroupBy == api.UsageGroupByTier {
 				return BaseTierKey
 			}
 			return key
-		case bucket != BucketNone:
+		case bucket != "" && Bucket(bucket) != BucketNone:
 			return row.Bucket.Format("2006-01-02")
 		}
 		return ""
@@ -407,8 +399,8 @@ func (s *Store) Summary(ctx context.Context, req SummaryRequest) (api.UsageSumma
 	}
 
 	if req.Scope == api.UsageScopeGlobal {
-		out.Workspaces, _, err = s.llmGroups(ctx, Query{Filter: filter, Since: req.Since, Until: req.Until}, "workspace_root",
-			func(row Row) string { return row.Group["workspace_root"] })
+		out.Workspaces, _, err = s.llmGroups(ctx, api.MetricsQuery{Filter: filter, Since: req.Since, Until: req.Until}, "workspace_root",
+			func(row api.MetricsRow) string { return row.Group["workspace_root"] })
 		if err != nil {
 			return api.UsageSummary{}, err
 		}
@@ -420,8 +412,8 @@ func (s *Store) Summary(ctx context.Context, req SummaryRequest) (api.UsageSumma
 			until = time.Now().UTC()
 		}
 		span := until.Sub(req.Since)
-		_, prev, err := s.llmGroups(ctx, Query{Filter: filter, Since: req.Since.Add(-span), Until: req.Since}, "",
-			func(Row) string { return "" })
+		_, prev, err := s.llmGroups(ctx, api.MetricsQuery{Filter: filter, Since: req.Since.Add(-span), Until: req.Since}, "",
+			func(api.MetricsRow) string { return "" })
 		if err != nil {
 			return api.UsageSummary{}, err
 		}
@@ -437,12 +429,12 @@ func (s *Store) Summary(ctx context.Context, req SummaryRequest) (api.UsageSumma
 	return out, nil
 }
 
-func (s *Store) summarizeSessions(ctx context.Context, base Query, out *api.UsageSummary) error {
+func (s *Store) summarizeSessions(ctx context.Context, base api.MetricsQuery, out *api.UsageSummary) error {
 	q := base
-	q.Bucket = BucketNone
-	q.Kind = KindLLMCall
+	q.Bucket = ""
+	q.Kind = string(KindLLMCall)
 	q.Aggregates = sumAggregates(CostTotal)
-	q.GroupBy = []Dimension{"session_id", "workspace_root"}
+	q.GroupBy = []string{"session_id", "workspace_root"}
 	res, err := RunQuery(ctx, s.db, q)
 	if err != nil {
 		return err
@@ -455,7 +447,7 @@ func (s *Store) summarizeSessions(ctx context.Context, base Query, out *api.Usag
 		}
 		sessions = append(sessions, api.UsageSession{
 			SessionID: id, Workspace: row.Group["workspace_root"],
-			CostNano: row.Values[CostTotal], Calls: row.Count,
+			CostNano: row.Values[string(CostTotal)], Calls: row.Count,
 		})
 	}
 	out.Sessions = int64(len(sessions))
@@ -467,12 +459,12 @@ func (s *Store) summarizeSessions(ctx context.Context, base Query, out *api.Usag
 	return nil
 }
 
-func (s *Store) summarizeTools(ctx context.Context, base Query, out *api.UsageSummary) error {
+func (s *Store) summarizeTools(ctx context.Context, base api.MetricsQuery, out *api.UsageSummary) error {
 	q := base
-	q.Bucket = BucketNone
-	q.Kind = KindToolCall
-	q.Aggregates = []Aggregate{{Metric: LatencyDuration, Func: AggSum}}
-	q.GroupBy = []Dimension{"attr.tool", "status"}
+	q.Bucket = ""
+	q.Kind = string(KindToolCall)
+	q.Aggregates = []api.MetricsAggregate{{Metric: string(LatencyDuration), Func: string(AggSum)}}
+	q.GroupBy = []string{"attr.tool", "status"}
 	res, err := RunQuery(ctx, s.db, q)
 	if err != nil {
 		return err
@@ -497,25 +489,25 @@ func (s *Store) summarizeTools(ctx context.Context, base Query, out *api.UsageSu
 		case StatusCanceled:
 			t.Canceled += row.Count
 		}
-		t.DurationMS += row.Values[LatencyDuration]
+		t.DurationMS += row.Values[string(LatencyDuration)]
 	}
 	// The max aggregate shares the metric key with the sum, so it needs its own query.
 	maxQ := q
-	maxQ.Aggregates = []Aggregate{{Metric: LatencyDuration, Func: AggMax}}
-	maxQ.GroupBy = []Dimension{"attr.tool"}
+	maxQ.Aggregates = []api.MetricsAggregate{{Metric: string(LatencyDuration), Func: string(AggMax)}}
+	maxQ.GroupBy = []string{"attr.tool"}
 	maxRes, err := RunQuery(ctx, s.db, maxQ)
 	if err != nil {
 		return err
 	}
 	for _, row := range maxRes.Rows {
-		get(row.Group["attr.tool"]).MaxDurationMS = row.Values[LatencyDuration]
+		get(row.Group["attr.tool"]).MaxDurationMS = row.Values[string(LatencyDuration)]
 	}
 
 	cq := base
-	cq.Bucket = BucketNone
-	cq.Kind = KindFileChange
+	cq.Bucket = ""
+	cq.Kind = string(KindFileChange)
 	cq.Aggregates = sumAggregates(LinesAdded, LinesRemoved, FilesChanged)
-	cq.GroupBy = []Dimension{"attr.tool", "attr.revert"}
+	cq.GroupBy = []string{"attr.tool", "attr.revert"}
 	cres, err := RunQuery(ctx, s.db, cq)
 	if err != nil {
 		return err
@@ -524,13 +516,13 @@ func (s *Store) summarizeTools(ctx context.Context, base Query, out *api.UsageSu
 		if row.Group["attr.revert"] == "true" {
 			continue
 		}
-		out.Changes.LinesAdded += row.Values[LinesAdded]
-		out.Changes.LinesRemoved += row.Values[LinesRemoved]
-		out.Changes.Files += row.Values[FilesChanged]
+		out.Changes.LinesAdded += row.Values[string(LinesAdded)]
+		out.Changes.LinesRemoved += row.Values[string(LinesRemoved)]
+		out.Changes.Files += row.Values[string(FilesChanged)]
 		if name := row.Group["attr.tool"]; name != "" {
 			t := get(name)
-			t.LinesAdded += row.Values[LinesAdded]
-			t.LinesRemoved += row.Values[LinesRemoved]
+			t.LinesAdded += row.Values[string(LinesAdded)]
+			t.LinesRemoved += row.Values[string(LinesRemoved)]
 		}
 	}
 	out.Tools = sortedTools(byTool)
@@ -550,7 +542,7 @@ func (s *Store) TurnUsage(ctx context.Context, turnIDs ...string) (api.UsageGrou
 	if err := s.Flush(ctx); err != nil {
 		return api.UsageGroup{}, err
 	}
-	_, total, err := s.llmGroups(ctx, Query{Filter: Filter{TurnIDs: turnIDs}}, "", func(Row) string { return "" })
+	_, total, err := s.llmGroups(ctx, api.MetricsQuery{Filter: api.MetricsFilter{TurnIDs: turnIDs}}, "", func(api.MetricsRow) string { return "" })
 	return total, err
 }
 

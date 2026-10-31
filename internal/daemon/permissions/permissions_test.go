@@ -184,7 +184,7 @@ func TestManagerGlobalAndProjectPersistence(t *testing.T) {
 	}
 
 	// Initial reading when file does not exist returns empty Permissions
-	glob, err := mgr.Get(permissions.ScopeGlobal)
+	glob, err := mgr.Get(api.ScopeGlobal)
 	if err != nil {
 		t.Fatalf("mgr.Get(ScopeGlobal): %v", err)
 	}
@@ -192,7 +192,7 @@ func TestManagerGlobalAndProjectPersistence(t *testing.T) {
 		t.Fatalf("expected empty global perms, got %+v", glob)
 	}
 
-	proj, err := mgr.Get(permissions.ScopeProject)
+	proj, err := mgr.Get(api.ScopeProject)
 	if err != nil {
 		t.Fatalf("mgr.Get(ScopeProject): %v", err)
 	}
@@ -201,26 +201,26 @@ func TestManagerGlobalAndProjectPersistence(t *testing.T) {
 	}
 
 	// Invalid scope
-	if _, err := mgr.Get(permissions.ScopeSession); !errors.Is(err, permissions.ErrInvalidScope) {
+	if _, err := mgr.Get(api.ScopeSession); !errors.Is(err, permissions.ErrInvalidScope) {
 		t.Fatalf("expected ErrInvalidScope for ScopeSession on Manager, got %v", err)
 	}
-	if err := mgr.Set(permissions.ScopeSession, permissions.Permissions{}); !errors.Is(err, permissions.ErrInvalidScope) {
+	if err := mgr.Set(api.ScopeSession, api.Permissions{}); !errors.Is(err, permissions.ErrInvalidScope) {
 		t.Fatalf("expected ErrInvalidScope for Set ScopeSession on Manager, got %v", err)
 	}
 
 	// AddRule and RemoveRule with deduplication
-	if err := mgr.AddRule(permissions.ScopeGlobal, permissions.EffectAllow, "bash(go *)"); err != nil {
+	if err := mgr.AddRule(api.ScopeGlobal, api.EffectAllow, "bash(go *)"); err != nil {
 		t.Fatalf("AddRule: %v", err)
 	}
 	// duplicate ignored
-	if err := mgr.AddRule(permissions.ScopeGlobal, permissions.EffectAllow, "bash(go *)"); err != nil {
+	if err := mgr.AddRule(api.ScopeGlobal, api.EffectAllow, "bash(go *)"); err != nil {
 		t.Fatalf("AddRule duplicate: %v", err)
 	}
-	if err := mgr.AddRule(permissions.ScopeGlobal, permissions.EffectDeny, "bash(rm -rf *)"); err != nil {
+	if err := mgr.AddRule(api.ScopeGlobal, api.EffectDeny, "bash(rm -rf *)"); err != nil {
 		t.Fatalf("AddRule deny: %v", err)
 	}
 
-	glob, err = mgr.Get(permissions.ScopeGlobal)
+	glob, err = mgr.Get(api.ScopeGlobal)
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
@@ -241,29 +241,29 @@ func TestManagerGlobalAndProjectPersistence(t *testing.T) {
 	}
 
 	// RemoveRule
-	if err := mgr.RemoveRule(permissions.ScopeGlobal, permissions.EffectAllow, "bash(go *)"); err != nil {
+	if err := mgr.RemoveRule(api.ScopeGlobal, api.EffectAllow, "bash(go *)"); err != nil {
 		t.Fatalf("RemoveRule: %v", err)
 	}
-	glob, _ = mgr.Get(permissions.ScopeGlobal)
+	glob, _ = mgr.Get(api.ScopeGlobal)
 	if len(glob.Allow) != 0 {
 		t.Fatalf("expected empty allow after RemoveRule, got %v", glob.Allow)
 	}
 
 	// Set with validation error
-	if err := mgr.Set(permissions.ScopeProject, permissions.Permissions{
+	if err := mgr.Set(api.ScopeProject, api.Permissions{
 		Allow: []string{"invalid_bare_tool"},
 	}); !errors.Is(err, permissions.ErrInvalidRule) {
 		t.Fatalf("expected ErrInvalidRule on Set, got %v", err)
 	}
 
 	// Project path file persistence
-	if err := mgr.Set(permissions.ScopeProject, permissions.Permissions{
+	if err := mgr.Set(api.ScopeProject, api.Permissions{
 		Allow: []string{"edit(internal/**)", "edit(internal/**)"},
 		Deny:  []string{"bash(kill *)"},
 	}); err != nil {
 		t.Fatalf("Set project perms: %v", err)
 	}
-	proj, _ = mgr.Get(permissions.ScopeProject)
+	proj, _ = mgr.Get(api.ScopeProject)
 	if len(proj.Allow) != 1 || proj.Allow[0] != "edit(internal/**)" {
 		t.Fatalf("expected deduplicated project allow rule, got %v", proj.Allow)
 	}
@@ -281,9 +281,9 @@ func TestSessionManagerEvaluationModesAndPrecedence(t *testing.T) {
 		t.Fatalf("permissions.New: %v", err)
 	}
 
-	var updatedPerms permissions.Permissions
+	var updatedPerms api.Permissions
 	updateCount := 0
-	sess := mgr.Attach(api.ModeDefault, permissions.Permissions{}, func(p permissions.Permissions) error {
+	sess := mgr.Attach(api.ModeDefault, api.Permissions{}, func(p api.Permissions) error {
 		updatedPerms = p.Clone()
 		updateCount++
 		return nil
@@ -408,23 +408,23 @@ func TestSessionManagerEvaluationModesAndPrecedence(t *testing.T) {
 
 	// Project-level Deny rule also takes precedence over Session Allow in ModeAuto
 	_ = sess.Clear()
-	if err := mgr.AddRule(permissions.ScopeProject, permissions.EffectDeny, "write_file(internal/**)"); err != nil {
+	if err := mgr.AddRule(api.ScopeProject, api.EffectDeny, "write_file(internal/**)"); err != nil {
 		t.Fatalf("AddRule ScopeProject Deny: %v", err)
 	}
 	_ = sess.AddAllow("write_file(*)")
 	if dec, _, _ := sess.Evaluate(writePlan); dec != tools.AccessDeny {
 		t.Fatalf("Project Deny rule did not take precedence: got %s", dec)
 	}
-	_ = mgr.RemoveRule(permissions.ScopeProject, permissions.EffectDeny, "write_file(internal/**)")
+	_ = mgr.RemoveRule(api.ScopeProject, api.EffectDeny, "write_file(internal/**)")
 
 	// Global-level Deny rule also takes precedence
-	if err := mgr.AddRule(permissions.ScopeGlobal, permissions.EffectDeny, "write_file(*)"); err != nil {
+	if err := mgr.AddRule(api.ScopeGlobal, api.EffectDeny, "write_file(*)"); err != nil {
 		t.Fatalf("AddRule ScopeGlobal Deny: %v", err)
 	}
 	if dec, _, _ := sess.Evaluate(writePlan); dec != tools.AccessDeny {
 		t.Fatalf("Global Deny rule did not take precedence: got %s", dec)
 	}
-	_ = mgr.RemoveRule(permissions.ScopeGlobal, permissions.EffectDeny, "write_file(*)")
+	_ = mgr.RemoveRule(api.ScopeGlobal, api.EffectDeny, "write_file(*)")
 
 	// 7. ApplyDecision with Reject
 	dummyReq := &api.PermissionRequest{
@@ -477,7 +477,7 @@ func TestEvaluateMalformedPermissionsFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("permissions.New: %v", err)
 	}
-	sess := mgr.Attach(api.ModeDefault, permissions.Permissions{}, nil)
+	sess := mgr.Attach(api.ModeDefault, api.Permissions{}, nil)
 
 	// Write corrupt JSON to project permissions file
 	wsDataDir, err := xdg.WorkspaceDir(dir)
@@ -545,7 +545,7 @@ func TestApplyDecisionWithScopes(t *testing.T) {
 		t.Fatalf("permissions.New: %v", err)
 	}
 
-	sess := mgr.Attach(api.ModeDefault, permissions.Permissions{}, nil)
+	sess := mgr.Attach(api.ModeDefault, api.Permissions{}, nil)
 
 	req := &api.PermissionRequest{
 		ToolName:      "bash",
@@ -564,7 +564,7 @@ func TestApplyDecisionWithScopes(t *testing.T) {
 		t.Fatalf("ApplyDecision ScopeProject failed: %v", err)
 	}
 
-	projPerms, err := mgr.Get(permissions.ScopeProject)
+	projPerms, err := mgr.Get(api.ScopeProject)
 	if err != nil {
 		t.Fatalf("mgr.Get(ScopeProject): %v", err)
 	}
@@ -599,7 +599,7 @@ func TestApplyDecisionWithScopes(t *testing.T) {
 		t.Fatalf("ApplyDecision ScopeGlobal failed: %v", err)
 	}
 
-	globPerms, err := mgr.Get(permissions.ScopeGlobal)
+	globPerms, err := mgr.Get(api.ScopeGlobal)
 	if err != nil {
 		t.Fatalf("mgr.Get(ScopeGlobal): %v", err)
 	}
@@ -617,7 +617,7 @@ func TestApplyDecisionWithScopes(t *testing.T) {
 	}
 
 	// 4. ScopeProject with nil manager
-	nilMgrSess := permissions.NewSession(api.ModeDefault, permissions.Permissions{}, nil)
+	nilMgrSess := permissions.NewSession(api.ModeDefault, api.Permissions{}, nil)
 	err = nilMgrSess.ApplyDecision(req, api.PermissionDecision{
 		Kind:  api.DecisionAllowSession,
 		Scope: api.ScopeProject,
