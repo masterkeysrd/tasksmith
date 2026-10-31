@@ -26,8 +26,8 @@ func (t *askQuestionTool) Prepare(ctx context.Context, in api.AskQuestionInput) 
 
 	return &tools.Plan{
 		ToolName: ToolAskQuestion,
-		Action:   tools.ActionRead,
-		Safety:   tools.SafetySafe,
+		Action:   api.ActionRead,
+		Safety:   api.SafetySafe,
 		Target:   target,
 		Summary:  fmt.Sprintf("Ask user (%d question(s))", len(in.Questions)),
 		ReadOnly: true,

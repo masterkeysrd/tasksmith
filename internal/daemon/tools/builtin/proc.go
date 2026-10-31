@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/masterkeysrd/tasksmith/api"
-	"github.com/masterkeysrd/tasksmith/internal/core/guard"
 	"github.com/masterkeysrd/tasksmith/internal/core/shellguard"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/sandbox"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/std"
@@ -69,16 +68,16 @@ func (t *bashTool) Prepare(_ context.Context, in api.BashInput) (*tools.Plan, er
 	if analyzeErr != nil {
 		return &tools.Plan{
 			ToolName: ToolBash,
-			Action:   tools.ActionExec,
-			Safety:   tools.SafetyUnsafe,
+			Action:   api.ActionExec,
+			Safety:   api.SafetyUnsafe,
 			Target:   cmdStr,
 			Summary:  summary,
 			ReadOnly: false,
 		}, nil
 	}
 
-	worstAction := guard.ActionRead
-	worstSafety := guard.SafetySafe
+	worstAction := api.ActionRead
+	worstSafety := api.SafetySafe
 	for _, op := range ops {
 		if op.Action.Severity() > worstAction.Severity() {
 			worstAction = op.Action
@@ -87,11 +86,11 @@ func (t *bashTool) Prepare(_ context.Context, in api.BashInput) (*tools.Plan, er
 			worstSafety = op.Safety
 		}
 	}
-	if worstAction == guard.ActionUnknown {
-		worstAction = guard.ActionExec
+	if worstAction == api.ActionUnknown {
+		worstAction = api.ActionExec
 	}
 
-	readOnly := worstAction == tools.ActionRead && worstSafety == tools.SafetySafe
+	readOnly := worstAction == api.ActionRead && worstSafety == api.SafetySafe
 
 	return &tools.Plan{
 		ToolName: ToolBash,
@@ -194,8 +193,8 @@ func (t *tasksTool) Prepare(_ context.Context, in api.TasksInput) (*tools.Plan, 
 	case "list":
 		return &tools.Plan{
 			ToolName: ToolTasks,
-			Action:   tools.ActionRead,
-			Safety:   tools.SafetySafe,
+			Action:   api.ActionRead,
+			Safety:   api.SafetySafe,
 			Target:   "list",
 			Summary:  "List background tasks",
 			ReadOnly: true,
@@ -207,8 +206,8 @@ func (t *tasksTool) Prepare(_ context.Context, in api.TasksInput) (*tools.Plan, 
 		}
 		return &tools.Plan{
 			ToolName: ToolTasks,
-			Action:   tools.ActionRead,
-			Safety:   tools.SafetySafe,
+			Action:   api.ActionRead,
+			Safety:   api.SafetySafe,
 			Target:   taskID,
 			Summary:  fmt.Sprintf("Check status of task %s", taskID),
 			ReadOnly: true,
@@ -220,8 +219,8 @@ func (t *tasksTool) Prepare(_ context.Context, in api.TasksInput) (*tools.Plan, 
 		}
 		return &tools.Plan{
 			ToolName: ToolTasks,
-			Action:   tools.ActionExec,
-			Safety:   tools.SafetySafe,
+			Action:   api.ActionExec,
+			Safety:   api.SafetySafe,
 			Target:   fmt.Sprintf("kill %s", taskID),
 			Summary:  fmt.Sprintf("Kill background task %s", taskID),
 			ReadOnly: false,
@@ -236,8 +235,8 @@ func (t *tasksTool) Prepare(_ context.Context, in api.TasksInput) (*tools.Plan, 
 		}
 		return &tools.Plan{
 			ToolName: ToolTasks,
-			Action:   tools.ActionExec,
-			Safety:   tools.SafetySafe,
+			Action:   api.ActionExec,
+			Safety:   api.SafetySafe,
 			Target:   fmt.Sprintf("send_input %s", taskID),
 			Summary:  fmt.Sprintf("Send input to background task %s", taskID),
 			ReadOnly: false,

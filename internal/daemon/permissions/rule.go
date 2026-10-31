@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tools"
 )
 
@@ -189,25 +190,25 @@ func deriveCommandGrantRules(toolName, target string) []string {
 
 // DeriveGrantRules generates candidate "tool(pattern)" permission rules
 // suitable for PermissionRequest.GrantPatterns based on action and target.
-func DeriveGrantRules(toolName string, action tools.ActionType, target string) []string {
+func DeriveGrantRules(toolName string, action api.ActionType, target string) []string {
 	target = strings.TrimSpace(target)
 	if target == "" {
 		return []string{FormatRule(toolName, "*")}
 	}
 
-	if toolName == "bash" || action == tools.ActionExec {
+	if toolName == "bash" || action == api.ActionExec {
 		return deriveCommandGrantRules(toolName, target)
 	}
 
 	switch action {
-	case tools.ActionRead, tools.ActionWrite, tools.ActionDelete:
+	case api.ActionRead, api.ActionWrite, api.ActionDelete:
 		rules := []string{FormatRule(toolName, target)}
 		dir := path.Dir(target)
 		if dir != "." && dir != "" && dir != "/" {
 			rules = append(rules, FormatRule(toolName, dir+"/**"))
 		}
 		return deduplicateRules(rules)
-	case tools.ActionNet:
+	case api.ActionNet:
 		if u, err := url.Parse(target); err == nil && u.Host != "" {
 			return deduplicateRules([]string{
 				FormatRule(toolName, u.Host),

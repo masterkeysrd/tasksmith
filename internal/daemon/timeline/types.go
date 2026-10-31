@@ -1,15 +1,12 @@
 package timeline
 
 import (
-	"bytes"
-	"encoding/json"
 	"errors"
-	"fmt"
 	"slices"
-	"time"
 
 	"github.com/masterkeysrd/loom/message"
 	"github.com/masterkeysrd/tasksmith/api"
+	"github.com/masterkeysrd/tasksmith/internal/core/ptr"
 )
 
 // Sentinel errors returned by the timeline package.
@@ -22,23 +19,8 @@ var (
 
 // Entry is a single append-only timeline event in a session log.
 type Entry struct {
-	ID        string           `json:"id"`
-	SessionID string           `json:"session_id"`
-	Kind      api.TimelineKind `json:"kind"`
-	CreatedAt time.Time        `json:"created_at"`
-
-	Message       message.Message          `json:"message,omitempty"`
-	Command       *api.CommandRecord       `json:"command,omitempty"`
-	Model         *api.ModelChange         `json:"model,omitempty"`
-	Effort        *api.EffortChange        `json:"effort,omitempty"`
-	Thinking      *api.ThinkingChange      `json:"thinking,omitempty"`
-	Agent         *api.AgentChange         `json:"agent,omitempty"`
-	Mode          *api.ModeChange          `json:"mode,omitempty"`
-	Permission    *api.PermissionRecord    `json:"permission,omitempty"`
-	Question      *api.QuestionRecord      `json:"question,omitempty"`
-	Compacted     *api.CompactedRecord     `json:"compacted,omitempty"`
-	CacheBroken   *api.CacheBrokenRecord   `json:"cache_broken,omitempty"`
-	TurnCompleted *api.TurnCompletedRecord `json:"turn_completed,omitempty"`
+	api.TimelineEntry
+	Message message.Message `json:"-"`
 }
 
 // Clone returns a deep copy of the timeline entry.
@@ -47,38 +29,17 @@ func (e Entry) Clone() Entry {
 	if e.Message != nil {
 		cp.Message = message.CloneMessage(e.Message)
 	}
-	if e.Command != nil {
-		c := *e.Command
-		cp.Command = &c
-	}
-	if e.Model != nil {
-		m := *e.Model
-		cp.Model = &m
-	}
-	if e.Effort != nil {
-		eff := *e.Effort
-		cp.Effort = &eff
-	}
+	cp.Command = ptr.Clone(e.Command)
+	cp.Model = ptr.Clone(e.Model)
+	cp.Effort = ptr.Clone(e.Effort)
 	if e.Thinking != nil {
-		change := *e.Thinking
-		if change.From != nil {
-			value := *change.From
-			change.From = &value
+		cp.Thinking = &api.ThinkingChange{
+			From: ptr.Clone(e.Thinking.From),
+			To:   ptr.Clone(e.Thinking.To),
 		}
-		if change.To != nil {
-			value := *change.To
-			change.To = &value
-		}
-		cp.Thinking = &change
 	}
-	if e.Agent != nil {
-		ag := *e.Agent
-		cp.Agent = &ag
-	}
-	if e.Mode != nil {
-		md := *e.Mode
-		cp.Mode = &md
-	}
+	cp.Agent = ptr.Clone(e.Agent)
+	cp.Mode = ptr.Clone(e.Mode)
 	if e.Permission != nil {
 		perm := *e.Permission
 		perm.Request.GrantPatterns = slices.Clone(e.Permission.Request.GrantPatterns)
@@ -90,194 +51,145 @@ func (e Entry) Clone() Entry {
 			Response: *e.Question.Response.Clone(),
 		}
 	}
-	if e.Compacted != nil {
-		comp := *e.Compacted
-		cp.Compacted = &comp
-	}
-	if e.CacheBroken != nil {
-		cb := *e.CacheBroken
-		cp.CacheBroken = &cb
-	}
-	if e.TurnCompleted != nil {
-		tc := *e.TurnCompleted
-		cp.TurnCompleted = &tc
-	}
+	cp.Compacted = ptr.Clone(e.Compacted)
+	cp.CacheBroken = ptr.Clone(e.CacheBroken)
+	cp.TurnCompleted = ptr.Clone(e.TurnCompleted)
 	return cp
 }
 
-// MarshalJSON implements json.Marshaler for Entry to ensure polymorphic Message payloads
-// include the role discriminator required by loom/message.
-func (e Entry) MarshalJSON() ([]byte, error) {
-	if e.Kind == api.TimelineKindMessage && e.Message != nil {
-		msgData, err := json.Marshal(message.MessageList{e.Message})
-		if err != nil {
-			return nil, fmt.Errorf("timeline: marshal message: %w", err)
-		}
-		trimmed := bytes.TrimSpace(msgData)
-		if bytes.HasPrefix(trimmed, []byte("[")) && bytes.HasSuffix(trimmed, []byte("]")) {
-			trimmed = bytes.TrimSpace(trimmed[1 : len(trimmed)-1])
-		}
-		type entryAlias Entry
-		var aux struct {
-			entryAlias
-			Message json.RawMessage `json:"message,omitempty"`
-		}
-		aux.entryAlias = entryAlias(e)
-		aux.Message = trimmed
-		return json.Marshal(aux)
-	}
-
-	type noCustom Entry
-	return json.Marshal(noCustom(e))
-}
-
-// UnmarshalJSON implements json.Unmarshaler for Entry to reconstruct polymorphic Message payloads.
-func (e *Entry) UnmarshalJSON(data []byte) error {
-	type entryAlias Entry
-	var aux struct {
-		entryAlias
-		RawMessage json.RawMessage `json:"message,omitempty"`
-	}
-	if err := json.Unmarshal(data, &aux); err != nil {
-		return err
-	}
-	*e = Entry(aux.entryAlias)
-	if len(aux.RawMessage) > 0 && string(bytes.TrimSpace(aux.RawMessage)) != "null" {
-		raw := bytes.TrimSpace(aux.RawMessage)
-		var list message.MessageList
-		if bytes.HasPrefix(raw, []byte("[")) {
-			if err := json.Unmarshal(raw, &list); err != nil {
-				return fmt.Errorf("timeline: unmarshal message: %w", err)
-			}
-		} else {
-			wrapped := append(append([]byte("["), raw...), ']')
-			if err := json.Unmarshal(wrapped, &list); err != nil {
-				return fmt.Errorf("timeline: unmarshal message: %w", err)
-			}
-		}
-		if len(list) == 1 && list[0] != nil {
-			e.Message = list[0]
-		}
-	}
-	return nil
-}
-
 // NewMessageEntry creates an Entry initialized with a message.Message payload.
-func NewMessageEntry(sessionID string, msg message.Message) *Entry {
+func NewMessageEntry(msg message.Message) *Entry {
 	var id string
 	if msg != nil {
 		id = msg.GetID()
 	}
 	return &Entry{
-		ID:        id,
-		SessionID: sessionID,
-		Kind:      api.TimelineKindMessage,
-		Message:   msg,
+		TimelineEntry: api.TimelineEntry{
+			ID:   id,
+			Kind: api.TimelineKindMessage,
+		},
+		Message: msg,
 	}
 }
 
 // NewModelEntry creates an Entry initialized with a ModelChange payload.
-func NewModelEntry(sessionID string, change api.ModelChange) *Entry {
-	c := change
+func NewModelEntry(change api.ModelChange) *Entry {
 	return &Entry{
-		SessionID: sessionID,
-		Kind:      api.TimelineKindModel,
-		Model:     &c,
+		TimelineEntry: api.TimelineEntry{
+			Kind:  api.TimelineKindModel,
+			Model: &change,
+		},
 	}
 }
 
 // NewEffortEntry creates an Entry initialized with an EffortChange payload.
-func NewEffortEntry(sessionID string, change api.EffortChange) *Entry {
-	c := change
+func NewEffortEntry(change api.EffortChange) *Entry {
 	return &Entry{
-		SessionID: sessionID,
-		Kind:      api.TimelineKindEffort,
-		Effort:    &c,
+		TimelineEntry: api.TimelineEntry{
+			Kind:   api.TimelineKindEffort,
+			Effort: &change,
+		},
+	}
+}
+
+// NewThinkingEntry creates an Entry initialized with a ThinkingChange payload.
+func NewThinkingEntry(change api.ThinkingChange) *Entry {
+	return &Entry{
+		TimelineEntry: api.TimelineEntry{
+			Kind: api.TimelineKindThinking,
+			Thinking: &api.ThinkingChange{
+				From: ptr.Clone(change.From),
+				To:   ptr.Clone(change.To),
+			},
+		},
 	}
 }
 
 // NewAgentEntry creates an Entry initialized with an AgentChange payload.
-func NewAgentEntry(sessionID string, change api.AgentChange) *Entry {
-	c := change
+func NewAgentEntry(change api.AgentChange) *Entry {
 	return &Entry{
-		SessionID: sessionID,
-		Kind:      api.TimelineKindAgent,
-		Agent:     &c,
+		TimelineEntry: api.TimelineEntry{
+			Kind:  api.TimelineKindAgent,
+			Agent: &change,
+		},
 	}
 }
 
 // NewModeEntry creates an Entry initialized with a ModeChange payload.
-func NewModeEntry(sessionID string, change api.ModeChange) *Entry {
-	c := change
+func NewModeEntry(change api.ModeChange) *Entry {
 	return &Entry{
-		SessionID: sessionID,
-		Kind:      api.TimelineKindMode,
-		Mode:      &c,
+		TimelineEntry: api.TimelineEntry{
+			Kind: api.TimelineKindMode,
+			Mode: &change,
+		},
 	}
 }
 
 // NewPermissionEntry creates an Entry initialized with a PermissionRecord payload.
-func NewPermissionEntry(sessionID string, record api.PermissionRecord) *Entry {
-	r := record
+func NewPermissionEntry(record api.PermissionRecord) *Entry {
 	return &Entry{
-		SessionID:  sessionID,
-		Kind:       api.TimelineKindPermission,
-		Permission: &r,
+		TimelineEntry: api.TimelineEntry{
+			Kind:       api.TimelineKindPermission,
+			Permission: &record,
+		},
 	}
 }
 
-func NewQuestionEntry(sessionID string, record api.QuestionRecord) *Entry {
+// NewQuestionEntry creates an Entry initialized with a QuestionRecord payload.
+func NewQuestionEntry(record api.QuestionRecord) *Entry {
 	return &Entry{
-		SessionID: sessionID,
-		Kind:      api.TimelineKindQuestion,
-		Question:  &record,
+		TimelineEntry: api.TimelineEntry{
+			Kind:     api.TimelineKindQuestion,
+			Question: &record,
+		},
 	}
 }
 
 // NewCommandEntry creates an Entry initialized with a CommandRecord payload.
-func NewCommandEntry(sessionID string, cmd api.CommandRecord) *Entry {
-	c := cmd
+func NewCommandEntry(cmd api.CommandRecord) *Entry {
 	return &Entry{
-		SessionID: sessionID,
-		Kind:      api.TimelineKindCommand,
-		Command:   &c,
+		TimelineEntry: api.TimelineEntry{
+			Kind:    api.TimelineKindCommand,
+			Command: &cmd,
+		},
 	}
 }
 
 // NewInterruptedEntry creates an Entry recording that a turn was interrupted/canceled by the user.
-func NewInterruptedEntry(sessionID string) *Entry {
+func NewInterruptedEntry() *Entry {
 	return &Entry{
-		SessionID: sessionID,
-		Kind:      api.TimelineKindInterrupted,
+		TimelineEntry: api.TimelineEntry{
+			Kind: api.TimelineKindInterrupted,
+		},
 	}
 }
 
 // NewCompactedEntry creates an Entry initialized with a CompactedRecord payload.
-func NewCompactedEntry(sessionID string, rec api.CompactedRecord) *Entry {
-	r := rec
+func NewCompactedEntry(rec api.CompactedRecord) *Entry {
 	return &Entry{
-		SessionID: sessionID,
-		Kind:      api.TimelineKindCompacted,
-		Compacted: &r,
+		TimelineEntry: api.TimelineEntry{
+			Kind:      api.TimelineKindCompacted,
+			Compacted: &rec,
+		},
 	}
 }
 
 // NewCacheBrokenEntry creates an Entry initialized with a CacheBrokenRecord payload.
-func NewCacheBrokenEntry(sessionID string, rec api.CacheBrokenRecord) *Entry {
-	r := rec
+func NewCacheBrokenEntry(rec api.CacheBrokenRecord) *Entry {
 	return &Entry{
-		SessionID:   sessionID,
-		Kind:        api.TimelineKindCacheBroken,
-		CacheBroken: &r,
+		TimelineEntry: api.TimelineEntry{
+			Kind:        api.TimelineKindCacheBroken,
+			CacheBroken: &rec,
+		},
 	}
 }
 
 // NewTurnCompletedEntry creates an Entry initialized with a TurnCompletedRecord payload.
-func NewTurnCompletedEntry(sessionID string, rec api.TurnCompletedRecord) *Entry {
-	r := rec
+func NewTurnCompletedEntry(rec api.TurnCompletedRecord) *Entry {
 	return &Entry{
-		SessionID:     sessionID,
-		Kind:          api.TimelineKindTurnCompleted,
-		TurnCompleted: &r,
+		TimelineEntry: api.TimelineEntry{
+			Kind:          api.TimelineKindTurnCompleted,
+			TurnCompleted: &rec,
+		},
 	}
 }

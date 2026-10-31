@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/masterkeysrd/tasksmith/api"
 )
 
 func TestReadDirSymlinkBoundaries(t *testing.T) {
@@ -25,27 +27,27 @@ func TestReadDirSymlinkBoundaries(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg := PathConfig{WorkspaceDir: workspace, ReadDirs: []string{readDir}}
-	if _, safety := EvaluatePathWithConfig(filepath.Join(readDir, "escape"), ActionRead, cfg); safety != SafetyUnsafe {
+	if _, safety := EvaluatePathWithConfig(filepath.Join(readDir, "escape"), api.ActionRead, cfg); safety != api.SafetyUnsafe {
 		t.Fatalf("symlink escape classified %s", safety)
 	}
-	if _, safety := EvaluatePathWithConfig(filepath.Join(workspace, "alias", "resource"), ActionWrite, cfg); safety != SafetyUnsafe {
+	if _, safety := EvaluatePathWithConfig(filepath.Join(workspace, "alias", "resource"), api.ActionWrite, cfg); safety != api.SafetyUnsafe {
 		t.Fatalf("symlink write classified %s", safety)
 	}
 }
 
 func TestActionTypeAndSafetyLevel(t *testing.T) {
 	actions := []struct {
-		action ActionType
+		action api.ActionType
 		str    string
 		sev    int
 	}{
-		{ActionRead, "read", 0},
-		{ActionUnknown, "unknown", 1},
-		{ActionNet, "net", 2},
-		{ActionWrite, "write", 3},
-		{ActionExec, "exec", 4},
-		{ActionDelete, "delete", 5},
-		{ActionType("invalid"), "unknown", 1},
+		{api.ActionRead, "read", 0},
+		{api.ActionUnknown, "unknown", 1},
+		{api.ActionNet, "net", 2},
+		{api.ActionWrite, "write", 3},
+		{api.ActionExec, "exec", 4},
+		{api.ActionDelete, "delete", 5},
+		{api.ActionType("invalid"), "unknown", 1},
 	}
 
 	for _, tc := range actions {
@@ -58,15 +60,15 @@ func TestActionTypeAndSafetyLevel(t *testing.T) {
 	}
 
 	safetys := []struct {
-		safety SafetyLevel
+		safety api.SafetyLevel
 		str    string
 		sev    int
 	}{
-		{SafetySafe, "safe", 0},
-		{SafetyOutside, "outside", 1},
-		{SafetyUnknown, "unknown", 2},
-		{SafetyUnsafe, "unsafe", 3},
-		{SafetyLevel("invalid"), "unknown", 2},
+		{api.SafetySafe, "safe", 0},
+		{api.SafetyOutside, "outside", 1},
+		{api.SafetyUnknown, "unknown", 2},
+		{api.SafetyUnsafe, "unsafe", 3},
+		{api.SafetyLevel("invalid"), "unknown", 2},
 	}
 
 	for _, tc := range safetys {
@@ -142,19 +144,19 @@ func TestIsSensitivePathAndEvaluatePath(t *testing.T) {
 
 	evalCases := []struct {
 		target     string
-		action     ActionType
+		action     api.ActionType
 		wantPath   string
-		wantSafety SafetyLevel
+		wantSafety api.SafetyLevel
 	}{
-		{"file.txt", ActionRead, "/tmp/workspace/file.txt", SafetySafe},
-		{"file.txt", ActionWrite, "/tmp/workspace/file.txt", SafetySafe},
-		{".git/config", ActionRead, "/tmp/workspace/.git/config", SafetySafe},
-		{".git/config", ActionWrite, "/tmp/workspace/.git/config", SafetyUnsafe},
-		{"../somefile.txt", ActionRead, "/tmp/somefile.txt", SafetyOutside},
-		{"../somefile.txt", ActionWrite, "/tmp/somefile.txt", SafetyUnsafe},
-		{"/etc/hosts", ActionRead, "/etc/hosts", SafetyUnsafe},
-		{"~/.ssh/id_rsa", ActionRead, "/Users/tester/.ssh/id_rsa", SafetyUnsafe},
-		{"~", ActionRead, "/Users/tester", SafetyOutside},
+		{"file.txt", api.ActionRead, "/tmp/workspace/file.txt", api.SafetySafe},
+		{"file.txt", api.ActionWrite, "/tmp/workspace/file.txt", api.SafetySafe},
+		{".git/config", api.ActionRead, "/tmp/workspace/.git/config", api.SafetySafe},
+		{".git/config", api.ActionWrite, "/tmp/workspace/.git/config", api.SafetyUnsafe},
+		{"../somefile.txt", api.ActionRead, "/tmp/somefile.txt", api.SafetyOutside},
+		{"../somefile.txt", api.ActionWrite, "/tmp/somefile.txt", api.SafetyUnsafe},
+		{"/etc/hosts", api.ActionRead, "/etc/hosts", api.SafetyUnsafe},
+		{"~/.ssh/id_rsa", api.ActionRead, "/Users/tester/.ssh/id_rsa", api.SafetyUnsafe},
+		{"~", api.ActionRead, "/Users/tester", api.SafetyOutside},
 	}
 
 	for _, tc := range evalCases {

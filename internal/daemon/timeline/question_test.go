@@ -10,7 +10,7 @@ import (
 func TestQuestionRecordRoundTrip(t *testing.T) {
 	tl, _, ctx := openTestTimeline(t, "questions")
 	record := api.QuestionRecord{Request: api.QuestionRequest{ID: "req", ToolCallID: "call", Questions: []api.Question{{Type: "text", Question: "Why?", Description: "Details"}}}, Response: api.QuestionResponse{RequestID: "req", ToolCallID: "call", Answers: []api.QuestionAnswer{{Question: "Why?", Text: "Because"}}}}
-	entry := NewQuestionEntry("questions", record)
+	entry := NewQuestionEntry(record)
 	if err := tl.Append(ctx, entry); err != nil {
 		t.Fatal(err)
 	}

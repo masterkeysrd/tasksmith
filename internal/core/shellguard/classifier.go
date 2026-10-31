@@ -4,6 +4,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/core/fsutils"
 	"github.com/masterkeysrd/tasksmith/internal/core/guard"
 )
@@ -14,7 +15,7 @@ var defaultPolicy = DefaultPolicy()
 // extraction ruleset.
 func DefaultPolicy() Policy {
 	p := Policy{
-		DefaultCategory: ActionUnknown,
+		DefaultCategory: api.ActionUnknown,
 		Rules:           make(map[string]CommandRule),
 	}
 
@@ -23,7 +24,7 @@ func DefaultPolicy() Policy {
 		"cat", "fd", "ls", "file", "wc", "sort", "uniq", "stat", "tree", "diff",
 	} {
 		p.Rules[exec] = CommandRule{
-			DefaultCategory: ActionRead,
+			DefaultCategory: api.ActionRead,
 			TargetMode:      TargetsAll,
 		}
 	}
@@ -34,7 +35,7 @@ func DefaultPolicy() Policy {
 		"whoami", "uname", "date", "env", "printenv", "type",
 	} {
 		p.Rules[exec] = CommandRule{
-			DefaultCategory: ActionRead,
+			DefaultCategory: api.ActionRead,
 			TargetMode:      TargetsNone,
 		}
 	}
@@ -42,7 +43,7 @@ func DefaultPolicy() Policy {
 	// head / tail: -n and -c consume a count value; remaining positional args are paths.
 	for _, exec := range []string{"head", "tail"} {
 		p.Rules[exec] = CommandRule{
-			DefaultCategory: ActionRead,
+			DefaultCategory: api.ActionRead,
 			TargetMode:      TargetsAll,
 			ValueFlags:      []string{"-n", "-c", "--lines", "--bytes"},
 		}
@@ -51,7 +52,7 @@ func DefaultPolicy() Policy {
 	// grep / rg: first positional arg is search pattern (unless -e/-f is used); rest are paths.
 	for _, exec := range []string{"grep", "rg"} {
 		p.Rules[exec] = CommandRule{
-			DefaultCategory: ActionRead,
+			DefaultCategory: api.ActionRead,
 			TargetMode:      TargetsSkipFirst,
 			ValueFlags: []string{
 				"-e", "--regexp", "-m", "--max-count", "-A", "--after-context",
@@ -68,7 +69,7 @@ func DefaultPolicy() Policy {
 	// jq / yq: first positional arg is filter expression (unless -f is used); rest are paths.
 	for _, exec := range []string{"jq", "yq"} {
 		p.Rules[exec] = CommandRule{
-			DefaultCategory: ActionRead,
+			DefaultCategory: api.ActionRead,
 			TargetMode:      TargetsSkipFirst,
 			PathFlags:       []string{"-f", "--from-file"},
 		}
@@ -76,16 +77,16 @@ func DefaultPolicy() Policy {
 
 	// find: positional args before the first "-" predicate/operator are search paths.
 	p.Rules["find"] = CommandRule{
-		DefaultCategory: ActionRead,
+		DefaultCategory: api.ActionRead,
 		TargetMode:      TargetsPredicateStop,
 		PathFlags:       []string{"-f"},
 		ArgRules: []ArgRule{
 			{
-				Category:    ActionDelete,
+				Category:    api.ActionDelete,
 				ContainsAny: []string{"-delete"},
 			},
 			{
-				Category:    ActionExec,
+				Category:    api.ActionExec,
 				ContainsAny: []string{"-exec", "-execdir", "-ok", "-okdir"},
 			},
 		},
@@ -93,13 +94,13 @@ func DefaultPolicy() Policy {
 
 	// sed: first positional arg is script expression (unless -e/-f is used); -i makes it ActionWrite.
 	p.Rules["sed"] = CommandRule{
-		DefaultCategory: ActionRead,
+		DefaultCategory: api.ActionRead,
 		TargetMode:      TargetsSkipFirst,
 		ValueFlags:      []string{"-e", "--expression"},
 		PathFlags:       []string{"-f", "--file"},
 		ArgRules: []ArgRule{
 			{
-				Category:    ActionWrite,
+				Category:    api.ActionWrite,
 				ContainsAny: []string{"-i", "--in-place"},
 			},
 		},
@@ -108,21 +109,21 @@ func DefaultPolicy() Policy {
 	// Write commands whose positional arguments are paths.
 	for _, exec := range []string{"mkdir", "touch", "mv", "ln", "tee"} {
 		p.Rules[exec] = CommandRule{
-			DefaultCategory: ActionWrite,
+			DefaultCategory: api.ActionWrite,
 			TargetMode:      TargetsAll,
 		}
 	}
 
 	// cp: destination is the last positional argument (or all paths checked).
 	p.Rules["cp"] = CommandRule{
-		DefaultCategory: ActionWrite,
+		DefaultCategory: api.ActionWrite,
 		TargetMode:      TargetsLast,
 	}
 
 	// chmod / chown: first positional arg is mode or owner; remaining positional args are paths.
 	for _, exec := range []string{"chmod", "chown"} {
 		p.Rules[exec] = CommandRule{
-			DefaultCategory: ActionWrite,
+			DefaultCategory: api.ActionWrite,
 			TargetMode:      TargetsSkipFirst,
 		}
 	}
@@ -130,14 +131,14 @@ func DefaultPolicy() Policy {
 	// Delete / Destructive commands.
 	for _, exec := range []string{"rm", "rmdir", "dd", "mkfs", "sudo", "shred", "unlink"} {
 		p.Rules[exec] = CommandRule{
-			DefaultCategory: ActionDelete,
+			DefaultCategory: api.ActionDelete,
 			TargetMode:      TargetsAll,
 		}
 	}
 
 	// Network / HTTP / remote commands.
 	p.Rules["curl"] = CommandRule{
-		DefaultCategory: ActionNet,
+		DefaultCategory: api.ActionNet,
 		TargetMode:      TargetsNone,
 		PathFlags: []string{
 			"-o", "--output", "-K", "--config", "-T", "--upload-file",
@@ -146,7 +147,7 @@ func DefaultPolicy() Policy {
 	}
 
 	p.Rules["wget"] = CommandRule{
-		DefaultCategory: ActionNet,
+		DefaultCategory: api.ActionNet,
 		TargetMode:      TargetsNone,
 		PathFlags: []string{
 			"-O", "--output-document", "-P", "--directory-prefix",
@@ -156,7 +157,7 @@ func DefaultPolicy() Policy {
 
 	for _, exec := range []string{"http", "https", "xh"} {
 		p.Rules[exec] = CommandRule{
-			DefaultCategory: ActionNet,
+			DefaultCategory: api.ActionNet,
 			TargetMode:      TargetsNone,
 			PathFlags:       []string{"-o", "--output"},
 		}
@@ -168,14 +169,14 @@ func DefaultPolicy() Policy {
 		"ping", "dig", "nslookup", "host", "traceroute", "whois",
 	} {
 		p.Rules[exec] = CommandRule{
-			DefaultCategory: ActionNet,
+			DefaultCategory: api.ActionNet,
 			TargetMode:      TargetsNone,
 		}
 	}
 
 	// Git: declarative subcommand target modes, path flags (-C), value flags (-m, etc.), and action rules.
 	p.Rules["git"] = CommandRule{
-		DefaultCategory: ActionWrite,
+		DefaultCategory: api.ActionWrite,
 		TargetMode:      TargetsAll,
 		PathFlags:       []string{"-C", "--git-dir", "--work-tree", "-F", "--file"},
 		ValueFlags: []string{
@@ -207,40 +208,40 @@ func DefaultPolicy() Policy {
 		},
 		ArgRules: []ArgRule{
 			{
-				Category:    ActionDelete,
+				Category:    api.ActionDelete,
 				Subcommands: []string{"rm"},
 			},
 			{
-				Category:    ActionDelete,
+				Category:    api.ActionDelete,
 				Subcommands: []string{"reset"},
 				ContainsAll: []string{"--hard"},
 			},
 			{
-				Category:    ActionDelete,
+				Category:    api.ActionDelete,
 				Subcommands: []string{"clean"},
 				ContainsAny: []string{"-f", "-fd", "-df", "-fx", "-fX", "--force", "--remove-untracked"},
 			},
 			{
-				Category:    ActionDelete,
+				Category:    api.ActionDelete,
 				Subcommands: []string{"branch"},
 				ContainsAny: []string{"-D", "-d", "--delete"},
 			},
 			{
-				Category:    ActionDelete,
+				Category:    api.ActionDelete,
 				Subcommands: []string{"tag"},
 				ContainsAny: []string{"-d", "--delete"},
 			},
 			{
-				Category:    ActionDelete,
+				Category:    api.ActionDelete,
 				Subcommands: []string{"push"},
 				ContainsAny: []string{"--force", "-f", "--force-with-lease"},
 			},
 			{
-				Category:    ActionNet,
+				Category:    api.ActionNet,
 				Subcommands: []string{"clone", "fetch", "pull", "push"},
 			},
 			{
-				Category:    ActionRead,
+				Category:    api.ActionRead,
 				Subcommands: []string{"status", "diff", "log", "show", "branch", "rev-parse", "ls-files", "remote", "tag"},
 			},
 		},
@@ -410,8 +411,8 @@ func (g *Guard) determineOperation(cmd ParsedCommand, state *trackerState) Opera
 	if cmd.Executable == "sudo" {
 		return Operation{
 			Command: &cmd,
-			Action:  ActionDelete,
-			Safety:  SafetyUnsafe,
+			Action:  api.ActionDelete,
+			Safety:  api.SafetyUnsafe,
 			Path:    state.virtualCWD,
 			CWD:     state.virtualCWD,
 		}
@@ -421,7 +422,7 @@ func (g *Guard) determineOperation(cmd ParsedCommand, state *trackerState) Opera
 	rule, hasRule := g.policy.Rules[effectiveExec]
 
 	// Determine Action
-	var action ActionType
+	var action api.ActionType
 	hasEval := (effectiveExec == "eval")
 	hasSubst := cmd.HasCmdSubst
 	currSub := &cmd
@@ -436,9 +437,9 @@ func (g *Guard) determineOperation(cmd ParsedCommand, state *trackerState) Opera
 	}
 
 	if hasEval || hasSubst {
-		action = ActionExec
+		action = api.ActionExec
 	} else if strings.Contains(effectiveExec, "/") {
-		action = ActionExec
+		action = api.ActionExec
 	} else if hasRule {
 		action = matchRule(rule, effectiveArgs)
 	} else {
@@ -461,21 +462,21 @@ func (g *Guard) determineOperation(cmd ParsedCommand, state *trackerState) Opera
 		currRedir = currRedir.SubCommand
 	}
 
-	if len(writeRedirs) > 0 && action != ActionDelete && action != ActionNet {
-		action = ActionWrite
+	if len(writeRedirs) > 0 && action != api.ActionDelete && action != api.ActionNet {
+		action = api.ActionWrite
 	}
 
 	// Gather all paths to evaluate
 	type PathCheck struct {
 		path      string
 		isDynamic bool
-		forAction ActionType
+		forAction api.ActionType
 	}
 	var checks []PathCheck
 
-	redirAction := ActionWrite
-	if action == ActionDelete {
-		redirAction = ActionDelete
+	redirAction := api.ActionWrite
+	if action == api.ActionDelete {
+		redirAction = api.ActionDelete
 	}
 	for _, redir := range writeRedirs {
 		checks = append(checks, PathCheck{
@@ -489,7 +490,7 @@ func (g *Guard) determineOperation(cmd ParsedCommand, state *trackerState) Opera
 		checks = append(checks, PathCheck{
 			path:      redir.Target,
 			isDynamic: redir.IsDynamic,
-			forAction: ActionRead,
+			forAction: api.ActionRead,
 		})
 	}
 
@@ -504,30 +505,30 @@ func (g *Guard) determineOperation(cmd ParsedCommand, state *trackerState) Opera
 
 	var op Operation
 	if len(checks) == 0 {
-		safety := SafetySafe
-		if action == ActionDelete {
-			safety = SafetyUnsafe
-		} else if action == ActionNet {
-			safety = SafetyUnknown
+		safety := api.SafetySafe
+		if action == api.ActionDelete {
+			safety = api.SafetyUnsafe
+		} else if action == api.ActionNet {
+			safety = api.SafetyUnknown
 			if !state.isCWDUnknown {
 				if s := g.evaluatePath(state.virtualCWD, action); s.Severity() > safety.Severity() {
 					safety = s
 				}
 			}
-		} else if action == ActionExec && (hasEval || hasSubst) {
-			safety = SafetyUnknown
+		} else if action == api.ActionExec && (hasEval || hasSubst) {
+			safety = api.SafetyUnknown
 		} else if state.isCWDUnknown {
-			safety = SafetyUnknown
+			safety = api.SafetyUnknown
 		} else {
 			pathToCheck := state.virtualCWD
-			if action == ActionExec && strings.Contains(effectiveExec, "/") {
+			if action == api.ActionExec && strings.Contains(effectiveExec, "/") {
 				pathToCheck = g.resolveTarget(effectiveExec, state.virtualCWD)
 			}
 			safety = g.evaluatePath(pathToCheck, action)
 		}
 
 		pathToReport := state.virtualCWD
-		if action == ActionExec && strings.Contains(effectiveExec, "/") {
+		if action == api.ActionExec && strings.Contains(effectiveExec, "/") {
 			pathToReport = g.resolveTarget(effectiveExec, state.virtualCWD)
 		}
 
@@ -539,25 +540,25 @@ func (g *Guard) determineOperation(cmd ParsedCommand, state *trackerState) Opera
 			CWD:     state.virtualCWD,
 		}
 	} else {
-		worstSafety := SafetySafe
-		if (action == ActionExec && (hasEval || hasSubst)) || action == ActionNet {
-			worstSafety = SafetyUnknown
+		worstSafety := api.SafetySafe
+		if (action == api.ActionExec && (hasEval || hasSubst)) || action == api.ActionNet {
+			worstSafety = api.SafetyUnknown
 		}
 
 		var chosenPath string
 		for _, check := range checks {
 			var resolved string
-			var safety SafetyLevel
-			if action == ActionDelete {
-				safety = SafetyUnsafe
+			var safety api.SafetyLevel
+			if action == api.ActionDelete {
+				safety = api.SafetyUnsafe
 				if !state.isCWDUnknown && !check.isDynamic && check.path != "" {
 					resolved = g.resolveTarget(check.path, state.virtualCWD)
 					if g.IsInWriteDirs(resolved) && !guard.IsSensitivePath(resolved, g.homeDir) {
-						safety = SafetySafe
+						safety = api.SafetySafe
 					}
 				}
 			} else if state.isCWDUnknown || check.isDynamic || check.path == "" {
-				safety = SafetyUnknown
+				safety = api.SafetyUnknown
 			} else {
 				resolved = g.resolveTarget(check.path, state.virtualCWD)
 				safety = g.evaluatePath(resolved, check.forAction)
@@ -803,7 +804,7 @@ func (g *Guard) IsProtectedPath(targetPath string) bool {
 
 // EvaluatePath resolves targetPath against the Guard's workspaceDir (and expands ~
 // with homeDir) and classifies its SafetyLevel for the given ActionType.
-func (g *Guard) EvaluatePath(targetPath string, action ActionType) (string, SafetyLevel) {
+func (g *Guard) EvaluatePath(targetPath string, action api.ActionType) (string, api.SafetyLevel) {
 	return guard.EvaluatePathWithConfig(targetPath, action, guard.PathConfig{
 		WorkspaceDir:  g.workspaceDir,
 		HomeDir:       g.homeDir,
@@ -814,7 +815,7 @@ func (g *Guard) EvaluatePath(targetPath string, action ActionType) (string, Safe
 }
 
 // evaluatePath classifies resolvedPath using g.EvaluatePath.
-func (g *Guard) evaluatePath(resolvedPath string, action ActionType) SafetyLevel {
+func (g *Guard) evaluatePath(resolvedPath string, action api.ActionType) api.SafetyLevel {
 	_, safety := g.EvaluatePath(resolvedPath, action)
 	return safety
 }
@@ -842,7 +843,7 @@ func (g *Guard) IsInReadDirs(targetPath string) bool {
 }
 
 // matchRule evaluates a CommandRule against the given arguments.
-func matchRule(rule CommandRule, args []string) ActionType {
+func matchRule(rule CommandRule, args []string) api.ActionType {
 	subcmd := findSubcommand(rule, args)
 	for _, argRule := range rule.ArgRules {
 		if matchesArgRule(subcmd, args, argRule) {

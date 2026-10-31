@@ -290,26 +290,26 @@ func (s *sessionManager) Evaluate(plan *tools.Plan) (tools.AccessDecision, *api.
 		if !plan.ReadOnly {
 			return tools.AccessDeny, nil, nil
 		}
-		if plan.Safety == tools.SafetySafe {
+		if plan.Safety == api.SafetySafe {
 			return tools.AccessAllow, nil, nil
 		}
-		if plan.Safety != tools.SafetyUnsafe && hasMatchingAllow(plan) {
+		if plan.Safety != api.SafetyUnsafe && hasMatchingAllow(plan) {
 			return tools.AccessAllow, nil, nil
 		}
 	case api.ModeAsk:
-		if plan.Safety != tools.SafetyUnsafe && hasMatchingAllow(plan) {
+		if plan.Safety != api.SafetyUnsafe && hasMatchingAllow(plan) {
 			return tools.AccessAllow, nil, nil
 		}
 	case api.ModeAuto:
 		return tools.AccessAllow, nil, nil
 	default: // ModeDefault, ModeAcceptEdits
-		if plan.ReadOnly && plan.Safety == tools.SafetySafe {
+		if plan.ReadOnly && plan.Safety == api.SafetySafe {
 			return tools.AccessAllow, nil, nil
 		}
-		if mode == api.ModeAcceptEdits && plan.Action == tools.ActionWrite && plan.Safety != tools.SafetyUnsafe {
+		if mode == api.ModeAcceptEdits && plan.Action == api.ActionWrite && plan.Safety != api.SafetyUnsafe {
 			return tools.AccessAllow, nil, nil
 		}
-		if plan.Safety != tools.SafetyUnsafe && hasMatchingAllow(plan) {
+		if plan.Safety != api.SafetyUnsafe && hasMatchingAllow(plan) {
 			return tools.AccessAllow, nil, nil
 		}
 	}
@@ -324,8 +324,8 @@ func (s *sessionManager) Evaluate(plan *tools.Plan) (tools.AccessDecision, *api.
 		ID:            id.String(),
 		ToolCallID:    plan.ToolCallID,
 		ToolName:      plan.ToolName,
-		Action:        api.ActionType(plan.Action),
-		Safety:        api.SafetyLevel(plan.Safety),
+		Action:        plan.Action,
+		Safety:        plan.Safety,
 		Target:        plan.Target,
 		Summary:       plan.Summary,
 		Diff:          plan.Diff,
@@ -377,7 +377,7 @@ func isAllowedByPolicy(plan *tools.Plan, policies *warp.Policies, ws *workspace.
 	}
 
 	if tp.AllowDangerous != nil && !*tp.AllowDangerous {
-		isDangerous := plan.Safety == tools.SafetyUnsafe || plan.Action == tools.ActionDelete
+		isDangerous := plan.Safety == api.SafetyUnsafe || plan.Action == api.ActionDelete
 		if hasAnn && ann.IsDangerous {
 			isDangerous = true
 		}
@@ -387,7 +387,7 @@ func isAllowedByPolicy(plan *tools.Plan, policies *warp.Policies, ws *workspace.
 	}
 
 	if tp.AllowOpenWorld != nil && !*tp.AllowOpenWorld {
-		isOpenWorld := plan.Action == tools.ActionNet
+		isOpenWorld := plan.Action == api.ActionNet
 		if hasAnn && ann.IsOpenWorld {
 			isOpenWorld = true
 		}

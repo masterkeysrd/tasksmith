@@ -1,5 +1,7 @@
 package shellguard
 
+import "github.com/masterkeysrd/tasksmith/api"
+
 // CommandChain represents a sequence of commands grouped by ;, &&, ||, or &.
 type CommandChain struct {
 	Pipelines  []Pipeline
@@ -57,13 +59,13 @@ const (
 // Policy defines the declarative ruleset for command classification and argument
 // target extraction.
 type Policy struct {
-	DefaultCategory ActionType
+	DefaultCategory api.ActionType
 	Rules           map[string]CommandRule
 }
 
 // CommandRule defines classification and target extraction rules for a specific executable.
 type CommandRule struct {
-	DefaultCategory ActionType
+	DefaultCategory api.ActionType
 	TargetMode      TargetMode
 	ValueFlags      []string              // Flags that consume the next arg as a non-path value (e.g. "-m", "-e", "-n")
 	PathFlags       []string              // Flags that consume the next arg as a path target (e.g. "-C", "-f", "--file")
@@ -73,7 +75,7 @@ type CommandRule struct {
 
 // ArgRule defines conditional classification based on command arguments.
 type ArgRule struct {
-	Category    ActionType
+	Category    api.ActionType
 	Subcommands []string // Matches if the subcommand matches any of these
 	ContainsAny []string // Matches if args contain any of these flags/words
 	ContainsAll []string // Matches if args contain all of these flags/words

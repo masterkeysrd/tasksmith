@@ -88,55 +88,55 @@ func TestParseAndFormatRule(t *testing.T) {
 
 func TestDeriveGrantRules(t *testing.T) {
 	// Empty target
-	rules := permissions.DeriveGrantRules("tool", tools.ActionExec, "")
+	rules := permissions.DeriveGrantRules("tool", api.ActionExec, "")
 	if !slices.Equal(rules, []string{"tool(*)"}) {
 		t.Fatalf("empty target: got %v", rules)
 	}
 
 	// ActionRead / Write / Delete
-	rwRules := permissions.DeriveGrantRules("write_file", tools.ActionWrite, "internal/pkg/file.go")
+	rwRules := permissions.DeriveGrantRules("write_file", api.ActionWrite, "internal/pkg/file.go")
 	if !slices.Equal(rwRules, []string{"write_file(internal/pkg/file.go)", "write_file(internal/pkg/**)"}) {
 		t.Fatalf("read/write rules: got %v", rwRules)
 	}
 
 	// ActionExec with subcommands
-	execRules := permissions.DeriveGrantRules("bash", tools.ActionExec, "go test ./...")
+	execRules := permissions.DeriveGrantRules("bash", api.ActionExec, "go test ./...")
 	if !slices.Equal(execRules, []string{"bash(go test *)", "bash(go *)"}) {
 		t.Fatalf("exec rules with subcommand: got %v", execRules)
 	}
 
 	// ActionExec with flags or single binary
-	execSingle := permissions.DeriveGrantRules("bash", tools.ActionExec, "ls -la")
+	execSingle := permissions.DeriveGrantRules("bash", api.ActionExec, "ls -la")
 	if !slices.Equal(execSingle, []string{"bash(ls *)"}) {
 		t.Fatalf("exec rules with flag: got %v", execSingle)
 	}
 
 	// Bash command classified as ActionWrite with multi-line commit message
-	commitRules := permissions.DeriveGrantRules("bash", tools.ActionWrite, "git commit --amend -m \"feat(daemon): add fsutils\n\nBody text\"")
+	commitRules := permissions.DeriveGrantRules("bash", api.ActionWrite, "git commit --amend -m \"feat(daemon): add fsutils\n\nBody text\"")
 	if !slices.Equal(commitRules, []string{"bash(git commit *)", "bash(git *)"}) {
 		t.Fatalf("commit rules: got %v", commitRules)
 	}
 
 	// Compound command
-	compoundRules := permissions.DeriveGrantRules("bash", tools.ActionExec, "make && ./run")
+	compoundRules := permissions.DeriveGrantRules("bash", api.ActionExec, "make && ./run")
 	if !slices.Equal(compoundRules, []string{"bash(make *)"}) {
 		t.Fatalf("compound rules: got %v", compoundRules)
 	}
 
 	// Leading environment variable assignments
-	envRules := permissions.DeriveGrantRules("bash", tools.ActionExec, "GOOS=linux go build ./...")
+	envRules := permissions.DeriveGrantRules("bash", api.ActionExec, "GOOS=linux go build ./...")
 	if !slices.Equal(envRules, []string{"bash(go build *)", "bash(go *)"}) {
 		t.Fatalf("env rules: got %v", envRules)
 	}
 
 	// ActionNet with host
-	netRules := permissions.DeriveGrantRules("web_fetch", tools.ActionNet, "https://api.github.com/v1")
+	netRules := permissions.DeriveGrantRules("web_fetch", api.ActionNet, "https://api.github.com/v1")
 	if !slices.Equal(netRules, []string{"web_fetch(api.github.com)", "web_fetch(https://api.github.com/v1)"}) {
 		t.Fatalf("net rules with host: got %v", netRules)
 	}
 
 	// ActionNet without host
-	netNoHost := permissions.DeriveGrantRules("web_fetch", tools.ActionNet, "invalid-url")
+	netNoHost := permissions.DeriveGrantRules("web_fetch", api.ActionNet, "invalid-url")
 	if !slices.Equal(netNoHost, []string{"web_fetch(invalid-url)"}) {
 		t.Fatalf("net rules without host: got %v", netNoHost)
 	}
@@ -295,37 +295,37 @@ func TestSessionManagerEvaluationModesAndPrecedence(t *testing.T) {
 
 	safeReadPlan := &tools.Plan{
 		ToolName: "view",
-		Action:   tools.ActionRead,
-		Safety:   tools.SafetySafe,
+		Action:   api.ActionRead,
+		Safety:   api.SafetySafe,
 		Target:   "README.md",
 		ReadOnly: true,
 	}
 	outsideReadPlan := &tools.Plan{
 		ToolName: "view",
-		Action:   tools.ActionRead,
-		Safety:   tools.SafetyOutside,
+		Action:   api.ActionRead,
+		Safety:   api.SafetyOutside,
 		Target:   "/outside/somefile.txt",
 		ReadOnly: true,
 	}
 	unsafeReadPlan := &tools.Plan{
 		ToolName: "view",
-		Action:   tools.ActionRead,
-		Safety:   tools.SafetyUnsafe,
+		Action:   api.ActionRead,
+		Safety:   api.SafetyUnsafe,
 		Target:   "/etc/hosts",
 		ReadOnly: true,
 	}
 	writePlan := &tools.Plan{
 		ToolName: "write_file",
-		Action:   tools.ActionWrite,
-		Safety:   tools.SafetySafe,
+		Action:   api.ActionWrite,
+		Safety:   api.SafetySafe,
 		Target:   "internal/pkg/a.go",
 		Diff:     "+package pkg",
 		ReadOnly: false,
 	}
 	unsafePlan := &tools.Plan{
 		ToolName: "bash",
-		Action:   tools.ActionDelete,
-		Safety:   tools.SafetyUnsafe,
+		Action:   api.ActionDelete,
+		Safety:   api.SafetyUnsafe,
 		Target:   ".git/config",
 		ReadOnly: false,
 	}
@@ -458,10 +458,10 @@ func TestSessionManagerEvaluationModesAndPrecedence(t *testing.T) {
 	if dec, _, _ := sess.Evaluate(&tools.Plan{ToolName: "unlisted_tool"}); dec != tools.AccessDeny {
 		t.Fatalf("expected unlisted tool to be denied, got %s", dec)
 	}
-	if dec, _, _ := sess.Evaluate(&tools.Plan{ToolName: "view", Safety: tools.SafetyUnsafe}); dec != tools.AccessDeny {
+	if dec, _, _ := sess.Evaluate(&tools.Plan{ToolName: "view", Safety: api.SafetyUnsafe}); dec != tools.AccessDeny {
 		t.Fatalf("expected dangerous plan to be denied when AllowDangerous=false, got %s", dec)
 	}
-	if dec, _, _ := sess.Evaluate(&tools.Plan{ToolName: "view", Action: tools.ActionNet}); dec != tools.AccessDeny {
+	if dec, _, _ := sess.Evaluate(&tools.Plan{ToolName: "view", Action: api.ActionNet}); dec != tools.AccessDeny {
 		t.Fatalf("expected ActionNet plan to be denied when AllowOpenWorld=false, got %s", dec)
 	}
 }
@@ -494,8 +494,8 @@ func TestEvaluateMalformedPermissionsFile(t *testing.T) {
 
 	plan := &tools.Plan{
 		ToolName: "bash",
-		Action:   tools.ActionExec,
-		Safety:   tools.SafetySafe,
+		Action:   api.ActionExec,
+		Safety:   api.SafetySafe,
 		Target:   "ls",
 		ReadOnly: true,
 	}
@@ -575,8 +575,8 @@ func TestApplyDecisionWithScopes(t *testing.T) {
 	// Subsequent evaluate should allow git status
 	plan := &tools.Plan{
 		ToolName: "bash",
-		Action:   tools.ActionExec,
-		Safety:   tools.SafetyOutside,
+		Action:   api.ActionExec,
+		Safety:   api.SafetyOutside,
 		Target:   "git status",
 	}
 	if dec, _, _ := sess.Evaluate(plan); dec != tools.AccessAllow {

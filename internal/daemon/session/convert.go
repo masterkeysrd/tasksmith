@@ -283,24 +283,7 @@ func publishEntryAdded(p Publisher, sessionID string, entry *timeline.Entry) {
 // ToAPITimelineEntry converts an internal [timeline.Entry] into the public
 // [api.TimelineEntry] representation used by the API.
 func ToAPITimelineEntry(entry timeline.Entry) (api.TimelineEntry, error) {
-	out := api.TimelineEntry{
-		ID:            entry.ID,
-		SessionID:     entry.SessionID,
-		Kind:          entry.Kind,
-		CreatedAt:     entry.CreatedAt,
-		Command:       entry.Command,
-		Model:         entry.Model,
-		Effort:        entry.Effort,
-		Thinking:      entry.Thinking,
-		Agent:         entry.Agent,
-		Mode:          entry.Mode,
-		Permission:    entry.Permission,
-		Question:      entry.Question,
-		Compacted:     entry.Compacted,
-		CacheBroken:   entry.CacheBroken,
-		TurnCompleted: entry.TurnCompleted,
-	}
-
+	out := entry.TimelineEntry
 	if entry.Message != nil {
 		msg, err := ToAPIMessage(entry.Message)
 		if err != nil {
@@ -308,6 +291,5 @@ func ToAPITimelineEntry(entry timeline.Entry) (api.TimelineEntry, error) {
 		}
 		out.Message = msg
 	}
-
 	return out, nil
 }

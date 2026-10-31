@@ -1754,7 +1754,7 @@ func TestStructuredContentConversionFailure(t *testing.T) {
 	if converted != nil || !errors.As(err, &unsupported) {
 		t.Fatalf("ToAPIMessage = (%+v, %v), want an unsupported type error", converted, err)
 	}
-	entry := timeline.NewMessageEntry("session", tool)
+	entry := timeline.NewMessageEntry(tool)
 	_, entryErr := session.ToAPITimelineEntry(*entry)
 	if entryErr == nil || !errors.As(entryErr, &unsupported) {
 		t.Fatalf("ToAPITimelineEntry = %v, want unsupported type error", entryErr)

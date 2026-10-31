@@ -15,6 +15,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/daemon/gateway"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/models"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/permissions"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/timeline"
 	"github.com/masterkeysrd/warp"
 )
 
@@ -274,10 +275,19 @@ func TestSessionThinkingEndToEnd(t *testing.T) {
 	if got := (<-requests)["think"]; got != false {
 		t.Fatalf("toggle request: %#v", got)
 	}
-	entries, err := sess.Timeline.ListByKind(ctx, api.TimelineKindThinking)
-	if err != nil || len(entries) != 1 || entries[0].Thinking == nil ||
+	allEntries, err := sess.Timeline.List(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var entries []timeline.Entry
+	for _, e := range allEntries {
+		if e.Kind == api.TimelineKindThinking {
+			entries = append(entries, e)
+		}
+	}
+	if len(entries) != 1 || entries[0].Thinking == nil ||
 		entries[0].Thinking.To == nil || entries[0].Thinking.To.Enabled {
-		t.Fatalf("thinking timeline: %+v, %v", entries, err)
+		t.Fatalf("thinking timeline: %+v", entries)
 	}
 	updated, err = mgr.Update(ctx, sess.ID, api.UpdateSessionRequest{
 		Config: api.SessionConfig{

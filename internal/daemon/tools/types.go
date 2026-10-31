@@ -10,7 +10,7 @@ import (
 	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/masterkeysrd/loom/message"
 	"github.com/masterkeysrd/loom/tool"
-	"github.com/masterkeysrd/tasksmith/internal/core/guard"
+	"github.com/masterkeysrd/tasksmith/api"
 )
 
 // Sentinel errors returned by the tools package.
@@ -18,28 +18,6 @@ var (
 	ErrInvalidConfig    = errors.New("tools: invalid configuration")
 	ErrToolNotFound     = errors.New("tools: tool not found")
 	ErrPermissionDenied = errors.New("tools: permission denied")
-)
-
-// ActionType classifies the fundamental category of a tool operation.
-type ActionType = guard.ActionType
-
-const (
-	ActionRead    = guard.ActionRead
-	ActionUnknown = guard.ActionUnknown
-	ActionWrite   = guard.ActionWrite
-	ActionDelete  = guard.ActionDelete
-	ActionExec    = guard.ActionExec
-	ActionNet     = guard.ActionNet
-)
-
-// SafetyLevel classifies the risk profile of a planned tool operation.
-type SafetyLevel = guard.SafetyLevel
-
-const (
-	SafetySafe    = guard.SafetySafe
-	SafetyOutside = guard.SafetyOutside
-	SafetyUnknown = guard.SafetyUnknown
-	SafetyUnsafe  = guard.SafetyUnsafe
 )
 
 // AccessDecision represents the policy evaluation outcome.
@@ -54,14 +32,14 @@ const (
 // Plan describes the pre-flight impact and unified diff preview of a validated
 // tool invocation produced by [Tool.Prepare] or [Container.Prepare].
 type Plan struct {
-	ToolCallID string      `json:"tool_call_id"`
-	ToolName   string      `json:"tool_name"`
-	Action     ActionType  `json:"action"`
-	Safety     SafetyLevel `json:"safety"`
-	Target     string      `json:"target,omitempty"`
-	Summary    string      `json:"summary"`
-	Diff       string      `json:"diff,omitempty"`
-	ReadOnly   bool        `json:"read_only,omitempty"`
+	ToolCallID string          `json:"tool_call_id"`
+	ToolName   string          `json:"tool_name"`
+	Action     api.ActionType  `json:"action"`
+	Safety     api.SafetyLevel `json:"safety"`
+	Target     string          `json:"target,omitempty"`
+	Summary    string          `json:"summary"`
+	Diff       string          `json:"diff,omitempty"`
+	ReadOnly   bool            `json:"read_only,omitempty"`
 }
 
 // Tool is an executable LLM-callable tool with two-phase Prepare and Execute
@@ -225,18 +203,18 @@ func (t *typedTool[In, Out]) Prepare(ctx context.Context, args map[string]any) (
 		return plan, nil
 	}
 
-	action := ActionExec
-	safety := SafetyUnknown
+	action := api.ActionExec
+	safety := api.SafetyUnknown
 	if t.def.Annotation.IsReadOnly {
-		action = ActionRead
+		action = api.ActionRead
 		if !t.def.Annotation.IsOpenWorld && !t.def.Annotation.IsDangerous {
-			safety = SafetySafe
+			safety = api.SafetySafe
 		}
 	} else if t.def.Annotation.IsOpenWorld && !t.def.Annotation.IsDangerous {
-		action = ActionNet
+		action = api.ActionNet
 	}
 	if t.def.Annotation.IsDangerous {
-		safety = SafetyUnsafe
+		safety = api.SafetyUnsafe
 	}
 
 	return &Plan{

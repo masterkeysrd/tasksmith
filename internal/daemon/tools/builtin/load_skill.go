@@ -39,8 +39,8 @@ func (t *loadSkillTool) Prepare(_ context.Context, in api.LoadSkillInput) (*tool
 
 	return &tools.Plan{
 		ToolName: ToolLoadSkill,
-		Action:   tools.ActionRead,
-		Safety:   tools.SafetySafe,
+		Action:   api.ActionRead,
+		Safety:   api.SafetySafe,
 		Summary:  fmt.Sprintf("Load skill %q", name),
 		ReadOnly: true,
 	}, nil

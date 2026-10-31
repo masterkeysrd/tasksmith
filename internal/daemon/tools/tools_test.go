@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"github.com/masterkeysrd/loom/message"
 	"github.com/masterkeysrd/loom/tool"
+	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/sandbox"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/scope"
@@ -167,7 +168,7 @@ func TestSpecValidationAndDefaultPrepare(t *testing.T) {
 	if err != nil {
 		t.Fatalf("roTool.Prepare failed: %v", err)
 	}
-	if roPlan.Action != tools.ActionRead || roPlan.Safety != tools.SafetySafe || !roPlan.ReadOnly {
+	if roPlan.Action != api.ActionRead || roPlan.Safety != api.SafetySafe || !roPlan.ReadOnly {
 		t.Fatalf("unexpected default read-only plan: %+v", roPlan)
 	}
 	roMsg, err := roTool.Execute(ctx, &message.ToolCall{
@@ -202,7 +203,7 @@ func TestSpecValidationAndDefaultPrepare(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ndPlan.Safety != tools.SafetyUnsafe || ndPlan.ReadOnly {
+	if ndPlan.Safety != api.SafetyUnsafe || ndPlan.ReadOnly {
 		t.Fatalf("expected SafetyUnsafe for dangerous tool, got %+v", ndPlan)
 	}
 	ndMsg, err := netDangTool.Execute(ctx, &message.ToolCall{
@@ -229,7 +230,7 @@ func TestSpecValidationAndDefaultPrepare(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if netPlan.Action != tools.ActionNet || netPlan.Safety != tools.SafetyUnknown {
+	if netPlan.Action != api.ActionNet || netPlan.Safety != api.SafetyUnknown {
 		t.Fatalf("expected ActionNet + SafetyUnknown, got %+v", netPlan)
 	}
 	netMsg, err := netTool.Execute(ctx, &message.ToolCall{
@@ -410,7 +411,7 @@ spec:
 	if err != nil {
 		t.Fatalf("Prepare(custom_echo) failed: %v", err)
 	}
-	if echoPlan.Action != tools.ActionRead || echoPlan.Safety != tools.SafetySafe || !echoPlan.ReadOnly {
+	if echoPlan.Action != api.ActionRead || echoPlan.Safety != api.SafetySafe || !echoPlan.ReadOnly {
 		t.Fatalf("unexpected custom_echo plan: %+v", echoPlan)
 	}
 	echoRes, err := c.Execute(ctx, &message.ToolCall{
@@ -427,7 +428,7 @@ spec:
 		ID:   "fail-1",
 		Name: "custom_fail",
 	})
-	if err != nil || failPlan.Safety != tools.SafetyUnsafe {
+	if err != nil || failPlan.Safety != api.SafetyUnsafe {
 		t.Fatalf("expected SafetyUnsafe for custom_fail, got %+v, err=%v", failPlan, err)
 	}
 	failRes, err := c.Execute(ctx, &message.ToolCall{

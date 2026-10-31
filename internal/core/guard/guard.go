@@ -5,6 +5,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/core/fsutils"
 )
 
@@ -35,86 +36,6 @@ var DefaultSensitiveHomeDirs = []string{
 	".kube",
 	".docker",
 	".netrc",
-}
-
-// ActionType classifies the fundamental category of a tool or shell operation.
-type ActionType string
-
-const (
-	ActionRead    ActionType = "read"
-	ActionUnknown ActionType = "unknown"
-	ActionNet     ActionType = "net"
-	ActionWrite   ActionType = "write"
-	ActionExec    ActionType = "exec"
-	ActionDelete  ActionType = "delete"
-)
-
-// String returns the canonical lowercase name of the action type.
-func (a ActionType) String() string {
-	switch a {
-	case ActionRead, ActionUnknown, ActionNet, ActionWrite, ActionExec, ActionDelete:
-		return string(a)
-	default:
-		return string(ActionUnknown)
-	}
-}
-
-// Severity returns the numeric severity rank of the action type, ordered from
-// lowest (ActionRead = 0) to highest (ActionDelete = 5).
-func (a ActionType) Severity() int {
-	switch a {
-	case ActionRead:
-		return 0
-	case ActionUnknown:
-		return 1
-	case ActionNet:
-		return 2
-	case ActionWrite:
-		return 3
-	case ActionExec:
-		return 4
-	case ActionDelete:
-		return 5
-	default:
-		return 1
-	}
-}
-
-// SafetyLevel classifies the risk profile of an operation.
-type SafetyLevel string
-
-const (
-	SafetySafe    SafetyLevel = "safe"
-	SafetyOutside SafetyLevel = "outside"
-	SafetyUnknown SafetyLevel = "unknown"
-	SafetyUnsafe  SafetyLevel = "unsafe"
-)
-
-// String returns the canonical lowercase name of the safety level.
-func (s SafetyLevel) String() string {
-	switch s {
-	case SafetySafe, SafetyOutside, SafetyUnknown, SafetyUnsafe:
-		return string(s)
-	default:
-		return string(SafetyUnknown)
-	}
-}
-
-// Severity returns the numeric risk rank of the safety level, ordered from
-// safest (SafetySafe = 0) to most unsafe (SafetyUnsafe = 3).
-func (s SafetyLevel) Severity() int {
-	switch s {
-	case SafetySafe:
-		return 0
-	case SafetyOutside:
-		return 1
-	case SafetyUnknown:
-		return 2
-	case SafetyUnsafe:
-		return 3
-	default:
-		return 2
-	}
 }
 
 // IsProtectedPath reports whether targetPath (either workspace-relative or
@@ -186,52 +107,52 @@ type PathConfig struct {
 //   - Paths inside cfg.ReadDirs return SafetySafe for ActionRead, and SafetyUnsafe for other actions.
 //   - Otherwise (outside cfg.WorkspaceDir, cfg.WriteDirs, cfg.ReadDirs):
 //     returns SafetyOutside for ActionRead, or SafetyUnsafe for non-read actions.
-func EvaluatePathWithConfig(targetPath string, action ActionType, cfg PathConfig) (string, SafetyLevel) {
+func EvaluatePathWithConfig(targetPath string, action api.ActionType, cfg PathConfig) (string, api.SafetyLevel) {
 	resolved := fsutils.ExpandAndCleanPath(targetPath, cfg.WorkspaceDir, cfg.HomeDir)
 	if IsSensitivePath(resolved, cfg.HomeDir) {
-		return resolved, SafetyUnsafe
+		return resolved, api.SafetyUnsafe
 	}
 	for _, rd := range cfg.ReadDirs {
 		if fsutils.IsInsideDir(resolved, rd) {
-			if action == ActionRead {
+			if action == api.ActionRead {
 				canonical, err := filepath.EvalSymlinks(resolved)
 				base, baseErr := filepath.EvalSymlinks(rd)
 				if err == nil && baseErr == nil && (!fsutils.IsInsideDir(canonical, base) || IsSensitivePath(canonical, cfg.HomeDir)) {
-					return resolved, SafetyUnsafe
+					return resolved, api.SafetyUnsafe
 				}
-				return resolved, SafetySafe
+				return resolved, api.SafetySafe
 			}
-			return resolved, SafetyUnsafe
+			return resolved, api.SafetyUnsafe
 		}
 		if canonical, err := filepath.EvalSymlinks(resolved); err == nil {
-			if base, err := filepath.EvalSymlinks(rd); err == nil && fsutils.IsInsideDir(canonical, base) && action != ActionRead {
-				return resolved, SafetyUnsafe
+			if base, err := filepath.EvalSymlinks(rd); err == nil && fsutils.IsInsideDir(canonical, base) && action != api.ActionRead {
+				return resolved, api.SafetyUnsafe
 			}
 		}
 	}
 	if cfg.WorkspaceDir != "" && fsutils.IsInsideDir(resolved, cfg.WorkspaceDir) {
-		if IsProtectedPath(resolved, cfg.WorkspaceDir, cfg.ProtectedDirs...) && action != ActionRead {
-			return resolved, SafetyUnsafe
+		if IsProtectedPath(resolved, cfg.WorkspaceDir, cfg.ProtectedDirs...) && action != api.ActionRead {
+			return resolved, api.SafetyUnsafe
 		}
-		return resolved, SafetySafe
+		return resolved, api.SafetySafe
 	}
 	for _, wd := range cfg.WriteDirs {
 		if fsutils.IsInsideDir(resolved, wd) {
-			if action == ActionRead || action == ActionWrite || action == ActionDelete {
-				return resolved, SafetySafe
+			if action == api.ActionRead || action == api.ActionWrite || action == api.ActionDelete {
+				return resolved, api.SafetySafe
 			}
-			return resolved, SafetyUnsafe
+			return resolved, api.SafetyUnsafe
 		}
 	}
-	if action == ActionRead {
-		return resolved, SafetyOutside
+	if action == api.ActionRead {
+		return resolved, api.SafetyOutside
 	}
-	return resolved, SafetyUnsafe
+	return resolved, api.SafetyUnsafe
 }
 
 // EvaluatePath resolves targetPath against workspaceDir (and expands ~ with homeDir)
 // and classifies its SafetyLevel for the given ActionType.
-func EvaluatePath(targetPath, workspaceDir, homeDir string, action ActionType, protectedDirs ...string) (string, SafetyLevel) {
+func EvaluatePath(targetPath, workspaceDir, homeDir string, action api.ActionType, protectedDirs ...string) (string, api.SafetyLevel) {
 	return EvaluatePathWithConfig(targetPath, action, PathConfig{
 		WorkspaceDir:  workspaceDir,
 		HomeDir:       homeDir,

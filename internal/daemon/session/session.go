@@ -595,16 +595,16 @@ func (s *Session) Update(ctx context.Context, req api.UpdateSessionRequest) erro
 
 	var entries []*timeline.Entry
 	if oldConfig.Agent != newConfig.Agent {
-		entries = append(entries, timeline.NewAgentEntry(s.ID, api.AgentChange{From: oldConfig.Agent, To: newConfig.Agent}))
+		entries = append(entries, timeline.NewAgentEntry(api.AgentChange{From: oldConfig.Agent, To: newConfig.Agent}))
 	}
 	if oldConfig.Model != newConfig.Model {
-		entries = append(entries, timeline.NewModelEntry(s.ID, api.ModelChange{From: oldConfig.Model, To: newConfig.Model}))
+		entries = append(entries, timeline.NewModelEntry(api.ModelChange{From: oldConfig.Model, To: newConfig.Model}))
 	}
 	if !reflect.DeepEqual(oldConfig.Thinking, newConfig.Thinking) {
-		entries = append(entries, &timeline.Entry{SessionID: s.ID, Kind: api.TimelineKindThinking, Thinking: &api.ThinkingChange{From: oldConfig.Thinking, To: newConfig.Thinking}})
+		entries = append(entries, timeline.NewThinkingEntry(api.ThinkingChange{From: oldConfig.Thinking, To: newConfig.Thinking}))
 	}
 	if oldConfig.Mode != newConfig.Mode {
-		entries = append(entries, timeline.NewModeEntry(s.ID, api.ModeChange{From: oldConfig.Mode, To: newConfig.Mode}))
+		entries = append(entries, timeline.NewModeEntry(api.ModeChange{From: oldConfig.Mode, To: newConfig.Mode}))
 	}
 	for _, entry := range entries {
 		if err := s.Timeline.Append(ctx, entry); err != nil {

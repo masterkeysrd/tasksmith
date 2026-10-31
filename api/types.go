@@ -530,6 +530,37 @@ const (
 	ActionDelete  ActionType = "delete"
 )
 
+// String returns the canonical lowercase name of the action type.
+func (a ActionType) String() string {
+	switch a {
+	case ActionRead, ActionUnknown, ActionNet, ActionWrite, ActionExec, ActionDelete:
+		return string(a)
+	default:
+		return string(ActionUnknown)
+	}
+}
+
+// Severity returns the numeric severity rank of the action type, ordered from
+// lowest (ActionRead = 0) to highest (ActionDelete = 5).
+func (a ActionType) Severity() int {
+	switch a {
+	case ActionRead:
+		return 0
+	case ActionUnknown:
+		return 1
+	case ActionNet:
+		return 2
+	case ActionWrite:
+		return 3
+	case ActionExec:
+		return 4
+	case ActionDelete:
+		return 5
+	default:
+		return 1
+	}
+}
+
 // SafetyLevel classifies the risk profile of a planned tool operation.
 type SafetyLevel string
 
@@ -539,6 +570,33 @@ const (
 	SafetyUnknown SafetyLevel = "unknown"
 	SafetyUnsafe  SafetyLevel = "unsafe"
 )
+
+// String returns the canonical lowercase name of the safety level.
+func (s SafetyLevel) String() string {
+	switch s {
+	case SafetySafe, SafetyOutside, SafetyUnknown, SafetyUnsafe:
+		return string(s)
+	default:
+		return string(SafetyUnknown)
+	}
+}
+
+// Severity returns the numeric risk rank of the safety level, ordered from
+// safest (SafetySafe = 0) to most unsafe (SafetyUnsafe = 3).
+func (s SafetyLevel) Severity() int {
+	switch s {
+	case SafetySafe:
+		return 0
+	case SafetyOutside:
+		return 1
+	case SafetyUnknown:
+		return 2
+	case SafetyUnsafe:
+		return 3
+	default:
+		return 2
+	}
+}
 
 // PermissionScope specifies the boundary tier for an allowed permission rule.
 type PermissionScope string

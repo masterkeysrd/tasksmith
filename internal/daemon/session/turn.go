@@ -566,7 +566,7 @@ func (s *Session) recordDecision(ctx context.Context, decision api.PermissionDec
 	matchedReq := *matched
 	matchedReq.GrantPatterns = slices.Clone(matched.GrantPatterns)
 	fullDec := decision
-	entry := timeline.NewPermissionEntry(s.ID, api.PermissionRecord{
+	entry := timeline.NewPermissionEntry(api.PermissionRecord{
 		Request:  matchedReq,
 		Decision: fullDec,
 	})
@@ -609,7 +609,7 @@ func (s *Session) recordQuestion(ctx context.Context, response api.QuestionRespo
 	}
 	response = *response.Clone()
 	response.RequestID, response.ToolCallID = matched.ID, matched.ToolCallID
-	entry := timeline.NewQuestionEntry(s.ID, api.QuestionRecord{Request: *matched.Clone(), Response: response})
+	entry := timeline.NewQuestionEntry(api.QuestionRecord{Request: *matched.Clone(), Response: response})
 
 	s.Lock()
 	if s.answers == nil {
@@ -661,7 +661,7 @@ func (s *Session) handleAsyncError(err error) {
 	defer s.finishTurn(status)
 
 	if errors.Is(err, context.Canceled) {
-		_ = s.appendTimeline(s.bgCtx, timeline.NewInterruptedEntry(s.ID))
+		_ = s.appendTimeline(s.bgCtx, timeline.NewInterruptedEntry())
 	} else {
 		s.logger.Error("session turn failed", log.String("session_id", s.ID), log.String("error", err.Error()))
 		s.publisher.Publish(api.SessionStreamTopic(s.ID), api.ErrorEvent{
@@ -685,7 +685,7 @@ func (s *Session) send(ctx context.Context, stream iter.Seq2[any, error]) (*mess
 					if partialMsg.GetID() == "" || !uuid.Validate(partialMsg.GetID()) {
 						partialMsg.SetID(uuid.NewString())
 					}
-					_ = s.appendTimeline(s.bgCtx, timeline.NewMessageEntry(s.ID, partialMsg))
+					_ = s.appendTimeline(s.bgCtx, timeline.NewMessageEntry(partialMsg))
 				}
 			}
 			return nil, err
@@ -713,7 +713,7 @@ func (s *Session) send(ctx context.Context, stream iter.Seq2[any, error]) (*mess
 		case message.Message:
 			if ev != nil {
 				agg = message.NewAssistantAggregator()
-				entry := timeline.NewMessageEntry(s.ID, ev)
+				entry := timeline.NewMessageEntry(ev)
 				if err := s.appendTimeline(ctx, entry); err != nil {
 					return nil, err
 				}
@@ -745,7 +745,7 @@ func (s *Session) send(ctx context.Context, stream iter.Seq2[any, error]) (*mess
 			s.publisher.Publish(api.SessionStreamTopic(s.ID), ev)
 
 		case harness.CommandCompleted:
-			entry := timeline.NewCommandEntry(s.ID, ev.CommandRecord)
+			entry := timeline.NewCommandEntry(ev.CommandRecord)
 			if ev.ID != "" && uuid.Validate(ev.ID) {
 				entry.ID = ev.ID
 			}
@@ -801,7 +801,7 @@ func (s *Session) send(ctx context.Context, stream iter.Seq2[any, error]) (*mess
 			s.publisher.Publish(api.SessionStreamTopic(s.ID), ev)
 
 		case harness.CompactionCompleted:
-			entry := timeline.NewCompactedEntry(s.ID, ev.CompactedRecord)
+			entry := timeline.NewCompactedEntry(ev.CompactedRecord)
 			if ev.ID != "" && uuid.Validate(ev.ID) {
 				entry.ID = ev.ID
 			}
@@ -810,7 +810,7 @@ func (s *Session) send(ctx context.Context, stream iter.Seq2[any, error]) (*mess
 			}
 
 		case api.CacheBrokenRecord:
-			if err := s.appendTimeline(ctx, timeline.NewCacheBrokenEntry(s.ID, ev)); err != nil {
+			if err := s.appendTimeline(ctx, timeline.NewCacheBrokenEntry(ev)); err != nil {
 				return nil, err
 			}
 
@@ -903,7 +903,7 @@ func (s *Session) finishTurn(status string) {
 		}
 	}
 
-	if err := s.appendTimeline(s.bgCtx, timeline.NewTurnCompletedEntry(s.ID, rec)); err != nil {
+	if err := s.appendTimeline(s.bgCtx, timeline.NewTurnCompletedEntry(rec)); err != nil {
 		s.logger.Warn("failed to append turn summary", log.String("session_id", s.ID), log.String("error", err.Error()))
 	}
 }

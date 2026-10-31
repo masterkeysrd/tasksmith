@@ -47,7 +47,7 @@ func testAppendMessage(ctx context.Context, sess *Session, msg message.Message) 
 	if msg == nil {
 		return ErrNilMessage
 	}
-	return sess.appendTimeline(ctx, timeline.NewMessageEntry(sess.ID, msg))
+	return sess.appendTimeline(ctx, timeline.NewMessageEntry(msg))
 }
 
 func testCatalog(t *testing.T, ws *workspace.Workspace, entries ...warp.ProviderModel) func() *models.Catalog {

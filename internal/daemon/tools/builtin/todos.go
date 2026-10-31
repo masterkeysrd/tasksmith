@@ -26,8 +26,8 @@ func (t *todosTool) Prepare(_ context.Context, in api.TodosInput) (*tools.Plan, 
 	summary := fmt.Sprintf("Update task checklist (%d items)", len(in.Todos))
 	return &tools.Plan{
 		ToolName: ToolTodos,
-		Action:   tools.ActionRead,
-		Safety:   tools.SafetySafe,
+		Action:   api.ActionRead,
+		Safety:   api.SafetySafe,
 		Summary:  summary,
 		ReadOnly: true,
 	}, nil

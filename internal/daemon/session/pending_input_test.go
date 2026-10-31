@@ -11,6 +11,7 @@ import (
 	"github.com/masterkeysrd/loom/message"
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/harness"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/timeline"
 )
 
 func TestPendingInteractionDefersQueuedWork(t *testing.T) {
@@ -92,9 +93,18 @@ func TestPendingInteractionDefersQueuedWork(t *testing.T) {
 			if sess.Status != api.StatusIdle || len(sess.PendingPermissions) != 0 || len(sess.PendingQuestions) != 0 || len(sess.queue) != 0 {
 				t.Fatalf("work not completed: state=%+v queue=%+v", sess.State, sess.queue)
 			}
-			entries, err := sess.Timeline.ListByKind(ctx, api.TimelineKindCommand)
-			if err != nil || len(entries) != 1 {
-				t.Fatalf("command entries: %+v, %v", entries, err)
+			allEntries, err := sess.Timeline.List(ctx)
+			if err != nil {
+				t.Fatalf("list entries: %v", err)
+			}
+			var entries []timeline.Entry
+			for _, e := range allEntries {
+				if e.Kind == api.TimelineKindCommand {
+					entries = append(entries, e)
+				}
+			}
+			if len(entries) != 1 {
+				t.Fatalf("command entries: %+v", entries)
 			}
 		})
 	}

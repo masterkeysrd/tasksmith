@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/core/fsutils"
 	"github.com/masterkeysrd/tasksmith/internal/core/guard"
 )
@@ -21,33 +22,11 @@ const MaxGranularOperations = DefaultMaxOperations
 // where write, delete, or exec operations are marked SafetyUnsafe.
 var DefaultProtectedDirs = guard.DefaultProtectedDirs
 
-// ActionType classifies the fundamental category of a command operation.
-type ActionType = guard.ActionType
-
-const (
-	ActionRead    = guard.ActionRead    // Known read-only (cat, ls, git status)
-	ActionUnknown = guard.ActionUnknown // Command not found in classifier rules (e.g., custom binaries)
-	ActionNet     = guard.ActionNet     // Network access operation
-	ActionWrite   = guard.ActionWrite   // Known write (touch, git commit) or explicit shell redirect (>)
-	ActionExec    = guard.ActionExec    // Known arbitrary execution (e.g., explicitly calling ./run.sh)
-	ActionDelete  = guard.ActionDelete  // Known destructive (rm, git rm)
-)
-
-// SafetyLevel classifies the risk profile of an operation.
-type SafetyLevel = guard.SafetyLevel
-
-const (
-	SafetySafe    = guard.SafetySafe    // Inside workspace boundary
-	SafetyOutside = guard.SafetyOutside // Read-only access outside workspace (non-sensitive path)
-	SafetyUnknown = guard.SafetyUnknown // Unresolvable dynamic path
-	SafetyUnsafe  = guard.SafetyUnsafe  // Sensitive path, outside write/exec, or explicitly destructive
-)
-
 // Operation represents an evaluation of a command target.
 type Operation struct {
 	Command    *ParsedCommand // Link back to the AST node (or summary command when collapsed)
-	Action     ActionType
-	Safety     SafetyLevel
+	Action     api.ActionType
+	Safety     api.SafetyLevel
 	Path       string // Resolved virtual CWD or target file
 	CWD        string // Virtual CWD at command execution
 	IsCompound bool   // True when collapsed from a complex script or > MaxOperations

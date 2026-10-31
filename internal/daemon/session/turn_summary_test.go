@@ -24,11 +24,17 @@ func (f *fakeTurnMetrics) TurnUsage(_ context.Context, ids ...string) (api.Usage
 
 func turnEntries(t *testing.T, s *Session) []timeline.Entry {
 	t.Helper()
-	entries, err := s.Timeline.ListByKind(context.Background(), api.TimelineKindTurnCompleted)
+	entries, err := s.Timeline.List(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	return entries
+	var out []timeline.Entry
+	for _, e := range entries {
+		if e.Kind == api.TimelineKindTurnCompleted {
+			out = append(out, e)
+		}
+	}
+	return out
 }
 
 func TestFinishTurnWritesSummaryEntry(t *testing.T) {

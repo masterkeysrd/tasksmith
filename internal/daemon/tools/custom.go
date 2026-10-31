@@ -12,6 +12,7 @@ import (
 	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/masterkeysrd/loom/message"
 	"github.com/masterkeysrd/loom/tool"
+	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/sandbox"
 	"github.com/masterkeysrd/warp"
 )
@@ -178,22 +179,22 @@ func (ct *customTool) Prepare(ctx context.Context, args map[string]any) (*Plan, 
 		return nil, err
 	}
 
-	action := ActionExec
-	safety := SafetyUnknown
+	action := api.ActionExec
+	safety := api.SafetyUnknown
 	readOnly := false
 
 	ann := ct.def.Annotation
 	if ann.IsReadOnly {
-		action = ActionRead
+		action = api.ActionRead
 		readOnly = true
 		if !ann.IsOpenWorld && !ann.IsDangerous {
-			safety = SafetySafe
+			safety = api.SafetySafe
 		}
 	} else if ann.IsOpenWorld && !ann.IsDangerous {
-		action = ActionNet
+		action = api.ActionNet
 	}
 	if ann.IsDangerous {
-		safety = SafetyUnsafe
+		safety = api.SafetyUnsafe
 		readOnly = false
 	}
 

@@ -2,6 +2,7 @@ package shellguard
 
 import (
 	"fmt"
+	"github.com/masterkeysrd/tasksmith/api"
 	"path/filepath"
 	"reflect"
 	"testing"
@@ -221,48 +222,48 @@ func TestStaticClassifications(t *testing.T) {
 	guard := New(Config{WorkspaceDir: "/tmp/workspace"})
 	tests := []struct {
 		command        string
-		expectedAction ActionType
-		expectedSafety SafetyLevel
+		expectedAction api.ActionType
+		expectedSafety api.SafetyLevel
 	}{
-		{"cat file.txt", ActionRead, SafetySafe},
-		{"grep pattern file.txt", ActionRead, SafetySafe},
-		{"rg pattern file.txt", ActionRead, SafetySafe},
-		{"find . -name test", ActionRead, SafetySafe},
-		{"find . -delete", ActionDelete, SafetyUnsafe},
-		{"find . -exec rm {} \\;", ActionExec, SafetySafe},
-		{"fd pattern", ActionRead, SafetySafe},
-		{"ls -la", ActionRead, SafetySafe},
-		{"pwd", ActionRead, SafetySafe},
-		{"head -n 10 file.txt", ActionRead, SafetySafe},
-		{"tail -f log.txt", ActionRead, SafetySafe},
-		{"file test.txt", ActionRead, SafetySafe},
-		{"which go", ActionRead, SafetySafe},
-		{"wc -l file.txt", ActionRead, SafetySafe},
-		{"sort file.txt", ActionRead, SafetySafe},
-		{"uniq file.txt", ActionRead, SafetySafe},
-		{"jq '.foo' data.json", ActionRead, SafetySafe},
-		{"yq '.foo' data.yaml", ActionRead, SafetySafe},
-		{"stat file.txt", ActionRead, SafetySafe},
-		{"tree .", ActionRead, SafetySafe},
-		{"diff a.txt b.txt", ActionRead, SafetySafe},
-		{"sed 's/foo/bar/g' file.txt", ActionRead, SafetySafe},
-		{"sed -i 's/foo/bar/g' file.txt", ActionWrite, SafetySafe},
-		{"rm -rf tmp", ActionDelete, SafetyUnsafe},
-		{"rmdir empty_dir", ActionDelete, SafetyUnsafe},
-		{"shred secret.txt", ActionDelete, SafetyUnsafe},
-		{"unlink file.txt", ActionDelete, SafetyUnsafe},
-		{"dd if=/dev/zero of=out", ActionDelete, SafetyUnsafe},
-		{"mkfs.ext4 /dev/sda", ActionUnknown, SafetyUnsafe},
-		{"mkfs /dev/sda", ActionDelete, SafetyUnsafe},
-		{"sudo apt-get update", ActionDelete, SafetyUnsafe},
-		{"mkdir newdir", ActionWrite, SafetySafe},
-		{"touch file.txt", ActionWrite, SafetySafe},
-		{"cp src.txt dst.txt", ActionWrite, SafetySafe},
-		{"mv src.txt dst.txt", ActionWrite, SafetySafe},
-		{"ln -s src.txt link.txt", ActionWrite, SafetySafe},
-		{"chmod +x script.sh", ActionWrite, SafetySafe},
-		{"chown user:group file.txt", ActionWrite, SafetySafe},
-		{"tee output.log", ActionWrite, SafetySafe},
+		{"cat file.txt", api.ActionRead, api.SafetySafe},
+		{"grep pattern file.txt", api.ActionRead, api.SafetySafe},
+		{"rg pattern file.txt", api.ActionRead, api.SafetySafe},
+		{"find . -name test", api.ActionRead, api.SafetySafe},
+		{"find . -delete", api.ActionDelete, api.SafetyUnsafe},
+		{"find . -exec rm {} \\;", api.ActionExec, api.SafetySafe},
+		{"fd pattern", api.ActionRead, api.SafetySafe},
+		{"ls -la", api.ActionRead, api.SafetySafe},
+		{"pwd", api.ActionRead, api.SafetySafe},
+		{"head -n 10 file.txt", api.ActionRead, api.SafetySafe},
+		{"tail -f log.txt", api.ActionRead, api.SafetySafe},
+		{"file test.txt", api.ActionRead, api.SafetySafe},
+		{"which go", api.ActionRead, api.SafetySafe},
+		{"wc -l file.txt", api.ActionRead, api.SafetySafe},
+		{"sort file.txt", api.ActionRead, api.SafetySafe},
+		{"uniq file.txt", api.ActionRead, api.SafetySafe},
+		{"jq '.foo' data.json", api.ActionRead, api.SafetySafe},
+		{"yq '.foo' data.yaml", api.ActionRead, api.SafetySafe},
+		{"stat file.txt", api.ActionRead, api.SafetySafe},
+		{"tree .", api.ActionRead, api.SafetySafe},
+		{"diff a.txt b.txt", api.ActionRead, api.SafetySafe},
+		{"sed 's/foo/bar/g' file.txt", api.ActionRead, api.SafetySafe},
+		{"sed -i 's/foo/bar/g' file.txt", api.ActionWrite, api.SafetySafe},
+		{"rm -rf tmp", api.ActionDelete, api.SafetyUnsafe},
+		{"rmdir empty_dir", api.ActionDelete, api.SafetyUnsafe},
+		{"shred secret.txt", api.ActionDelete, api.SafetyUnsafe},
+		{"unlink file.txt", api.ActionDelete, api.SafetyUnsafe},
+		{"dd if=/dev/zero of=out", api.ActionDelete, api.SafetyUnsafe},
+		{"mkfs.ext4 /dev/sda", api.ActionUnknown, api.SafetyUnsafe},
+		{"mkfs /dev/sda", api.ActionDelete, api.SafetyUnsafe},
+		{"sudo apt-get update", api.ActionDelete, api.SafetyUnsafe},
+		{"mkdir newdir", api.ActionWrite, api.SafetySafe},
+		{"touch file.txt", api.ActionWrite, api.SafetySafe},
+		{"cp src.txt dst.txt", api.ActionWrite, api.SafetySafe},
+		{"mv src.txt dst.txt", api.ActionWrite, api.SafetySafe},
+		{"ln -s src.txt link.txt", api.ActionWrite, api.SafetySafe},
+		{"chmod +x script.sh", api.ActionWrite, api.SafetySafe},
+		{"chown user:group file.txt", api.ActionWrite, api.SafetySafe},
+		{"tee output.log", api.ActionWrite, api.SafetySafe},
 	}
 
 	for _, tt := range tests {
@@ -289,36 +290,36 @@ func TestGitConditionals(t *testing.T) {
 	guard := New(Config{WorkspaceDir: "/tmp/workspace"})
 	tests := []struct {
 		command        string
-		expectedAction ActionType
-		expectedSafety SafetyLevel
+		expectedAction api.ActionType
+		expectedSafety api.SafetyLevel
 	}{
-		{"git status", ActionRead, SafetySafe},
-		{"git diff", ActionRead, SafetySafe},
-		{"git log", ActionRead, SafetySafe},
-		{"git show HEAD", ActionRead, SafetySafe},
-		{"git branch", ActionRead, SafetySafe},
-		{"git rev-parse HEAD", ActionRead, SafetySafe},
-		{"git ls-files", ActionRead, SafetySafe},
-		{"git remote -v", ActionRead, SafetySafe},
-		{"git tag", ActionRead, SafetySafe},
-		{"git commit -m 'hello'", ActionWrite, SafetySafe},
-		{"git push origin main", ActionNet, SafetyUnknown},
-		{"git add .", ActionWrite, SafetySafe},
-		{"git checkout main", ActionWrite, SafetySafe},
-		{"git switch main", ActionWrite, SafetySafe},
-		{"git merge feature", ActionWrite, SafetySafe},
-		{"git rebase main", ActionWrite, SafetySafe},
-		{"git pull", ActionNet, SafetyUnknown},
-		{"git fetch origin", ActionNet, SafetyUnknown},
-		{"git clone https://github.com/org/repo", ActionNet, SafetyUnknown},
-		{"git stash", ActionWrite, SafetySafe},
-		{"git rm file.txt", ActionDelete, SafetyUnsafe},
-		{"git reset --hard HEAD", ActionDelete, SafetyUnsafe},
-		{"git clean -f -d", ActionDelete, SafetyUnsafe},
-		{"git clean -f", ActionDelete, SafetyUnsafe},
-		{"git branch -D feature", ActionDelete, SafetyUnsafe},
-		{"git push --force origin main", ActionDelete, SafetyUnsafe},
-		{"git push -f origin main", ActionDelete, SafetyUnsafe},
+		{"git status", api.ActionRead, api.SafetySafe},
+		{"git diff", api.ActionRead, api.SafetySafe},
+		{"git log", api.ActionRead, api.SafetySafe},
+		{"git show HEAD", api.ActionRead, api.SafetySafe},
+		{"git branch", api.ActionRead, api.SafetySafe},
+		{"git rev-parse HEAD", api.ActionRead, api.SafetySafe},
+		{"git ls-files", api.ActionRead, api.SafetySafe},
+		{"git remote -v", api.ActionRead, api.SafetySafe},
+		{"git tag", api.ActionRead, api.SafetySafe},
+		{"git commit -m 'hello'", api.ActionWrite, api.SafetySafe},
+		{"git push origin main", api.ActionNet, api.SafetyUnknown},
+		{"git add .", api.ActionWrite, api.SafetySafe},
+		{"git checkout main", api.ActionWrite, api.SafetySafe},
+		{"git switch main", api.ActionWrite, api.SafetySafe},
+		{"git merge feature", api.ActionWrite, api.SafetySafe},
+		{"git rebase main", api.ActionWrite, api.SafetySafe},
+		{"git pull", api.ActionNet, api.SafetyUnknown},
+		{"git fetch origin", api.ActionNet, api.SafetyUnknown},
+		{"git clone https://github.com/org/repo", api.ActionNet, api.SafetyUnknown},
+		{"git stash", api.ActionWrite, api.SafetySafe},
+		{"git rm file.txt", api.ActionDelete, api.SafetyUnsafe},
+		{"git reset --hard HEAD", api.ActionDelete, api.SafetyUnsafe},
+		{"git clean -f -d", api.ActionDelete, api.SafetyUnsafe},
+		{"git clean -f", api.ActionDelete, api.SafetyUnsafe},
+		{"git branch -D feature", api.ActionDelete, api.SafetyUnsafe},
+		{"git push --force origin main", api.ActionDelete, api.SafetyUnsafe},
+		{"git push -f origin main", api.ActionDelete, api.SafetyUnsafe},
 	}
 
 	for _, tt := range tests {
@@ -354,11 +355,11 @@ func TestOutputRedirections(t *testing.T) {
 			t.Fatalf("expected 1 operation, got %d", len(ops))
 		}
 		op := ops[0]
-		if op.Action != ActionWrite {
-			t.Errorf("expected ActionWrite, got %s", op.Action)
+		if op.Action != api.ActionWrite {
+			t.Errorf("expected api.ActionWrite, got %s", op.Action)
 		}
-		if op.Safety != SafetySafe {
-			t.Errorf("expected SafetySafe, got %s", op.Safety)
+		if op.Safety != api.SafetySafe {
+			t.Errorf("expected api.SafetySafe, got %s", op.Safety)
 		}
 	})
 
@@ -372,11 +373,11 @@ func TestOutputRedirections(t *testing.T) {
 			t.Fatalf("expected 1 operation, got %d", len(ops))
 		}
 		op := ops[0]
-		if op.Action != ActionWrite {
-			t.Errorf("expected ActionWrite, got %s", op.Action)
+		if op.Action != api.ActionWrite {
+			t.Errorf("expected api.ActionWrite, got %s", op.Action)
 		}
-		if op.Safety != SafetyUnsafe {
-			t.Errorf("expected SafetyUnsafe, got %s", op.Safety)
+		if op.Safety != api.SafetyUnsafe {
+			t.Errorf("expected api.SafetyUnsafe, got %s", op.Safety)
 		}
 	})
 }
@@ -385,12 +386,12 @@ func TestNestedWrapperResolution(t *testing.T) {
 	guard := New(Config{WorkspaceDir: "/tmp/workspace"})
 	tests := []struct {
 		command        string
-		expectedAction ActionType
-		expectedSafety SafetyLevel
+		expectedAction api.ActionType
+		expectedSafety api.SafetyLevel
 	}{
-		{"sudo rm -rf tmp", ActionDelete, SafetyUnsafe},
-		{"sudo apt-get update", ActionDelete, SafetyUnsafe},
-		{"npx eslint --fix", ActionUnknown, SafetySafe},
+		{"sudo rm -rf tmp", api.ActionDelete, api.SafetyUnsafe},
+		{"sudo apt-get update", api.ActionDelete, api.SafetyUnsafe},
+		{"npx eslint --fix", api.ActionUnknown, api.SafetySafe},
 	}
 
 	for _, tt := range tests {
@@ -491,8 +492,8 @@ func TestAnalyzeBubbling(t *testing.T) {
 	if len(ops) != 2 {
 		t.Fatalf("expected 2 operations, got %d", len(ops))
 	}
-	if ops[1].Action != ActionDelete || ops[1].Safety != SafetyUnsafe {
-		t.Errorf("expected second operation to be ActionDelete SafetyUnsafe, got action %s safety %s", ops[1].Action, ops[1].Safety)
+	if ops[1].Action != api.ActionDelete || ops[1].Safety != api.SafetyUnsafe {
+		t.Errorf("expected second operation to be api.ActionDelete api.SafetyUnsafe, got action %s safety %s", ops[1].Action, ops[1].Safety)
 	}
 }
 
@@ -509,8 +510,8 @@ func TestDynamicStatePreEvaluation(t *testing.T) {
 			t.Fatalf("expected 1 operation, got %d", len(ops))
 		}
 		op := ops[0]
-		if op.Action != ActionWrite || op.Safety != SafetyUnknown {
-			t.Errorf("expected ActionWrite SafetyUnknown for variable in output target, got action %s safety %s", op.Action, op.Safety)
+		if op.Action != api.ActionWrite || op.Safety != api.SafetyUnknown {
+			t.Errorf("expected api.ActionWrite api.SafetyUnknown for variable in output target, got action %s safety %s", op.Action, op.Safety)
 		}
 	})
 
@@ -524,8 +525,8 @@ func TestDynamicStatePreEvaluation(t *testing.T) {
 			t.Fatalf("expected 1 operation, got %d", len(ops))
 		}
 		op := ops[0]
-		if op.Action != ActionExec || op.Safety != SafetyUnknown {
-			t.Errorf("expected ActionExec SafetyUnknown for eval command, got action %s safety %s", op.Action, op.Safety)
+		if op.Action != api.ActionExec || op.Safety != api.SafetyUnknown {
+			t.Errorf("expected api.ActionExec api.SafetyUnknown for eval command, got action %s safety %s", op.Action, op.Safety)
 		}
 	})
 
@@ -539,8 +540,8 @@ func TestDynamicStatePreEvaluation(t *testing.T) {
 			t.Fatalf("expected 1 operation, got %d", len(ops))
 		}
 		op := ops[0]
-		if op.Action != ActionExec || op.Safety != SafetyUnknown {
-			t.Errorf("expected ActionExec SafetyUnknown for command substitution, got action %s safety %s", op.Action, op.Safety)
+		if op.Action != api.ActionExec || op.Safety != api.SafetyUnknown {
+			t.Errorf("expected api.ActionExec api.SafetyUnknown for command substitution, got action %s safety %s", op.Action, op.Safety)
 		}
 	})
 }
@@ -551,116 +552,116 @@ func TestCommandAwareArgumentTargetExtraction(t *testing.T) {
 	tests := []struct {
 		name           string
 		command        string
-		expectedAction ActionType
-		expectedSafety SafetyLevel
+		expectedAction api.ActionType
+		expectedSafety api.SafetyLevel
 	}{
 		{
 			name:           "echo with absolute path string is safe",
 			command:        `echo "/etc/passwd"`,
-			expectedAction: ActionRead,
-			expectedSafety: SafetySafe,
+			expectedAction: api.ActionRead,
+			expectedSafety: api.SafetySafe,
 		},
 		{
 			name:           "printf with absolute path string is safe",
 			command:        `printf "%s\n" "/etc/passwd"`,
-			expectedAction: ActionRead,
-			expectedSafety: SafetySafe,
+			expectedAction: api.ActionRead,
+			expectedSafety: api.SafetySafe,
 		},
 		{
 			name:           "git commit -m with absolute path in message is safe",
 			command:        `git commit -m "fix /etc/passwd"`,
-			expectedAction: ActionWrite,
-			expectedSafety: SafetySafe,
+			expectedAction: api.ActionWrite,
+			expectedSafety: api.SafetySafe,
 		},
 		{
 			name:           "git commit -am with absolute path in message is safe",
 			command:        `git commit -am "update /etc/hosts"`,
-			expectedAction: ActionWrite,
-			expectedSafety: SafetySafe,
+			expectedAction: api.ActionWrite,
+			expectedSafety: api.SafetySafe,
 		},
 		{
 			name:           "git checkout -b branch with slash is safe",
 			command:        `git checkout -b /etc/passwd`,
-			expectedAction: ActionWrite,
-			expectedSafety: SafetySafe,
+			expectedAction: api.ActionWrite,
+			expectedSafety: api.SafetySafe,
 		},
 		{
 			name:           "git switch -c branch is safe",
 			command:        `git switch -c /etc/passwd`,
-			expectedAction: ActionWrite,
-			expectedSafety: SafetySafe,
+			expectedAction: api.ActionWrite,
+			expectedSafety: api.SafetySafe,
 		},
 		{
 			name:           "git branch with slash name is safe",
 			command:        `git branch /etc/passwd`,
-			expectedAction: ActionRead,
-			expectedSafety: SafetySafe,
+			expectedAction: api.ActionRead,
+			expectedSafety: api.SafetySafe,
 		},
 		{
 			name:           "git -C outside workspace is unsafe",
 			command:        `git -C /etc status`,
-			expectedAction: ActionRead,
-			expectedSafety: SafetyUnsafe,
+			expectedAction: api.ActionRead,
+			expectedSafety: api.SafetyUnsafe,
 		},
 		{
 			name:           "git -C inside workspace is safe",
 			command:        `git -C subdir status`,
-			expectedAction: ActionRead,
-			expectedSafety: SafetySafe,
+			expectedAction: api.ActionRead,
+			expectedSafety: api.SafetySafe,
 		},
 		{
 			name:           "grep pattern looking like path on workspace file is safe",
 			command:        `grep "/etc/passwd" file.txt`,
-			expectedAction: ActionRead,
-			expectedSafety: SafetySafe,
+			expectedAction: api.ActionRead,
+			expectedSafety: api.SafetySafe,
 		},
 		{
 			name:           "grep pattern on outside file is unsafe",
 			command:        `grep "root" /etc/passwd`,
-			expectedAction: ActionRead,
-			expectedSafety: SafetyUnsafe,
+			expectedAction: api.ActionRead,
+			expectedSafety: api.SafetyUnsafe,
 		},
 		{
 			name:           "rg pattern looking like path in workspace is safe",
 			command:        `rg "/etc/shadow" src/`,
-			expectedAction: ActionRead,
-			expectedSafety: SafetySafe,
+			expectedAction: api.ActionRead,
+			expectedSafety: api.SafetySafe,
 		},
 		{
 			name:           "sed expression with path on workspace file is safe",
 			command:        `sed 's/\/etc\/passwd/replacement/g' file.txt`,
-			expectedAction: ActionRead,
-			expectedSafety: SafetySafe,
+			expectedAction: api.ActionRead,
+			expectedSafety: api.SafetySafe,
 		},
 		{
 			name:           "sed -i on outside file is unsafe",
 			command:        `sed -i 's/foo/bar/' /etc/hosts`,
-			expectedAction: ActionWrite,
-			expectedSafety: SafetyUnsafe,
+			expectedAction: api.ActionWrite,
+			expectedSafety: api.SafetyUnsafe,
 		},
 		{
-			name:           "cat outside workspace non-sensitive file is SafetyOutside",
+			name:           "cat outside workspace non-sensitive file is api.SafetyOutside",
 			command:        `cat ../somefile.txt`,
-			expectedAction: ActionRead,
-			expectedSafety: SafetyOutside,
+			expectedAction: api.ActionRead,
+			expectedSafety: api.SafetyOutside,
 		},
 		{
-			name:           "cat sensitive /etc/hosts is SafetyUnsafe",
+			name:           "cat sensitive /etc/hosts is api.SafetyUnsafe",
 			command:        `cat /etc/hosts`,
-			expectedAction: ActionRead,
-			expectedSafety: SafetyUnsafe,
+			expectedAction: api.ActionRead,
+			expectedSafety: api.SafetyUnsafe,
 		},
 		{
-			name:           "cat sensitive ~/.ssh/id_rsa is SafetyUnsafe",
+			name:           "cat sensitive ~/.ssh/id_rsa is api.SafetyUnsafe",
 			command:        `cat ~/.ssh/id_rsa`,
-			expectedAction: ActionRead,
-			expectedSafety: SafetyUnsafe,
+			expectedAction: api.ActionRead,
+			expectedSafety: api.SafetyUnsafe,
 		},
 		{
-			name:           "touch outside workspace non-sensitive file is SafetyUnsafe",
+			name:           "touch outside workspace non-sensitive file is api.SafetyUnsafe",
 			command:        `touch ../somefile.txt`,
-			expectedAction: ActionWrite,
-			expectedSafety: SafetyUnsafe,
+			expectedAction: api.ActionWrite,
+			expectedSafety: api.SafetyUnsafe,
 		},
 	}
 
@@ -689,44 +690,44 @@ func TestSubshellsBlocksAndCmdSubst(t *testing.T) {
 	tests := []struct {
 		name           string
 		command        string
-		expectedAction ActionType
-		expectedSafety SafetyLevel
+		expectedAction api.ActionType
+		expectedSafety api.SafetyLevel
 	}{
 		{
 			name:           "subshell destructive rm",
 			command:        "(rm -rf /)",
-			expectedAction: ActionDelete,
-			expectedSafety: SafetyUnsafe,
+			expectedAction: api.ActionDelete,
+			expectedSafety: api.SafetyUnsafe,
 		},
 		{
 			name:           "block destructive rm",
 			command:        "{ rm -rf /; }",
-			expectedAction: ActionDelete,
-			expectedSafety: SafetyUnsafe,
+			expectedAction: api.ActionDelete,
+			expectedSafety: api.SafetyUnsafe,
 		},
 		{
 			name:           "command substitution destructive rm",
 			command:        "echo $(rm foo)",
-			expectedAction: ActionDelete,
-			expectedSafety: SafetyUnsafe,
+			expectedAction: api.ActionDelete,
+			expectedSafety: api.SafetyUnsafe,
 		},
 		{
 			name:           "double-quoted command substitution reading outside workspace",
 			command:        `echo "$(cat /etc/passwd)"`,
-			expectedAction: ActionExec,
-			expectedSafety: SafetyUnsafe,
+			expectedAction: api.ActionExec,
+			expectedSafety: api.SafetyUnsafe,
 		},
 		{
 			name:           "for loop destructive rm",
 			command:        `for f in *; do rm "$f"; done`,
-			expectedAction: ActionDelete,
-			expectedSafety: SafetyUnsafe,
+			expectedAction: api.ActionDelete,
+			expectedSafety: api.SafetyUnsafe,
 		},
 		{
 			name:           "if clause destructive rm",
 			command:        `if [ -f foo ]; then rm -rf bar; fi`,
-			expectedAction: ActionDelete,
-			expectedSafety: SafetyUnsafe,
+			expectedAction: api.ActionDelete,
+			expectedSafety: api.SafetyUnsafe,
 		},
 	}
 
@@ -761,12 +762,12 @@ func TestSubshellCWDIsolation(t *testing.T) {
 		t.Fatalf("expected 2 operations, got %d", len(ops))
 	}
 
-	// First operation: pwd inside subshell after cd /tmp (read-only outside workspace -> SafetyOutside)
+	// First operation: pwd inside subshell after cd /tmp (read-only outside workspace -> api.SafetyOutside)
 	if ops[0].CWD != "/tmp" {
 		t.Errorf("expected first op CWD '/tmp', got %q", ops[0].CWD)
 	}
-	if ops[0].Safety != SafetyOutside {
-		t.Errorf("expected first op SafetyOutside (in /tmp), got %q", ops[0].Safety)
+	if ops[0].Safety != api.SafetyOutside {
+		t.Errorf("expected first op api.SafetyOutside (in /tmp), got %q", ops[0].Safety)
 	}
 
 	// Second operation: ls outside subshell should still resolve in workspaceDir
@@ -776,8 +777,8 @@ func TestSubshellCWDIsolation(t *testing.T) {
 	if ops[1].Path != workspaceDir {
 		t.Errorf("expected second op Path %q, got %q", workspaceDir, ops[1].Path)
 	}
-	if ops[1].Safety != SafetySafe {
-		t.Errorf("expected second op SafetySafe, got %q", ops[1].Safety)
+	if ops[1].Safety != api.SafetySafe {
+		t.Errorf("expected second op api.SafetySafe, got %q", ops[1].Safety)
 	}
 }
 
@@ -797,11 +798,11 @@ func TestCompoundCollapsing(t *testing.T) {
 		if !op.IsCompound {
 			t.Errorf("expected IsCompound=true, got false")
 		}
-		if op.Action != ActionDelete {
-			t.Errorf("expected highest-severity ActionDelete, got %q", op.Action)
+		if op.Action != api.ActionDelete {
+			t.Errorf("expected highest-severity api.ActionDelete, got %q", op.Action)
 		}
-		if op.Safety != SafetyUnsafe {
-			t.Errorf("expected worst SafetyUnsafe, got %q", op.Safety)
+		if op.Safety != api.SafetyUnsafe {
+			t.Errorf("expected worst api.SafetyUnsafe, got %q", op.Safety)
 		}
 		if op.Path != "/etc/passwd" {
 			t.Errorf("expected critical path '/etc/passwd', got %q", op.Path)
@@ -833,11 +834,11 @@ func TestCompoundCollapsing(t *testing.T) {
 		if !op.IsCompound {
 			t.Errorf("expected IsCompound=true for for-loop")
 		}
-		if op.Action != ActionWrite {
-			t.Errorf("expected ActionWrite, got %q", op.Action)
+		if op.Action != api.ActionWrite {
+			t.Errorf("expected api.ActionWrite, got %q", op.Action)
 		}
-		if op.Safety != SafetyUnknown {
-			t.Errorf("expected SafetyUnknown due to dynamic $f, got %q", op.Safety)
+		if op.Safety != api.SafetyUnknown {
+			t.Errorf("expected api.SafetyUnknown due to dynamic $f, got %q", op.Safety)
 		}
 
 		detailed, err := guard.AnalyzeDetailed(cmd)
@@ -870,68 +871,68 @@ func TestProtectedDirectories(t *testing.T) {
 	tests := []struct {
 		name           string
 		command        string
-		expectedAction ActionType
-		expectedSafety SafetyLevel
+		expectedAction api.ActionType
+		expectedSafety api.SafetyLevel
 	}{
 		{
 			name:           "read inside .git is safe",
 			command:        "cat .git/config",
-			expectedAction: ActionRead,
-			expectedSafety: SafetySafe,
+			expectedAction: api.ActionRead,
+			expectedSafety: api.SafetySafe,
 		},
 		{
 			name:           "read inside .agents is safe",
 			command:        "cat .agents/rules.md",
-			expectedAction: ActionRead,
-			expectedSafety: SafetySafe,
+			expectedAction: api.ActionRead,
+			expectedSafety: api.SafetySafe,
 		},
 		{
 			name:           "read inside .bare is safe",
 			command:        "ls .bare/refs",
-			expectedAction: ActionRead,
-			expectedSafety: SafetySafe,
+			expectedAction: api.ActionRead,
+			expectedSafety: api.SafetySafe,
 		},
 		{
 			name:           "write inside .git is unsafe",
 			command:        "touch .git/hooks/pre-commit",
-			expectedAction: ActionWrite,
-			expectedSafety: SafetyUnsafe,
+			expectedAction: api.ActionWrite,
+			expectedSafety: api.SafetyUnsafe,
 		},
 		{
 			name:           "redirect write inside .git is unsafe",
 			command:        "echo 'malicious' > .git/config",
-			expectedAction: ActionWrite,
-			expectedSafety: SafetyUnsafe,
+			expectedAction: api.ActionWrite,
+			expectedSafety: api.SafetyUnsafe,
 		},
 		{
 			name:           "write inside .bare is unsafe",
 			command:        "mkdir .bare/hooks",
-			expectedAction: ActionWrite,
-			expectedSafety: SafetyUnsafe,
+			expectedAction: api.ActionWrite,
+			expectedSafety: api.SafetyUnsafe,
 		},
 		{
 			name:           "write inside .agents is unsafe",
 			command:        "touch .agents/malicious.md",
-			expectedAction: ActionWrite,
-			expectedSafety: SafetyUnsafe,
+			expectedAction: api.ActionWrite,
+			expectedSafety: api.SafetyUnsafe,
 		},
 		{
 			name:           "delete inside .agents is unsafe",
 			command:        "rm .agents/rules.md",
-			expectedAction: ActionDelete,
-			expectedSafety: SafetyUnsafe,
+			expectedAction: api.ActionDelete,
+			expectedSafety: api.SafetyUnsafe,
 		},
 		{
 			name:           "cd into .agents then write is unsafe",
 			command:        "cd .agents && touch rules.md",
-			expectedAction: ActionWrite,
-			expectedSafety: SafetyUnsafe,
+			expectedAction: api.ActionWrite,
+			expectedSafety: api.SafetyUnsafe,
 		},
 		{
 			name:           "cd into .agents then read is safe",
 			command:        "cd .agents && cat rules.md",
-			expectedAction: ActionRead,
-			expectedSafety: SafetySafe,
+			expectedAction: api.ActionRead,
+			expectedSafety: api.SafetySafe,
 		},
 	}
 
@@ -967,8 +968,8 @@ func TestGuardDependencyInjection(t *testing.T) {
 		if len(ops) != 1 {
 			t.Fatalf("expected 1 operation, got %d", len(ops))
 		}
-		if ops[0].Safety != SafetySafe || ops[0].Path != "/tmp/workspace/home/project/file.txt" {
-			t.Errorf("expected SafetySafe at /tmp/workspace/home/project/file.txt, got safety=%s path=%q", ops[0].Safety, ops[0].Path)
+		if ops[0].Safety != api.SafetySafe || ops[0].Path != "/tmp/workspace/home/project/file.txt" {
+			t.Errorf("expected api.SafetySafe at /tmp/workspace/home/project/file.txt, got safety=%s path=%q", ops[0].Safety, ops[0].Path)
 		}
 	})
 
@@ -981,8 +982,8 @@ func TestGuardDependencyInjection(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Analyze failed: %v", err)
 		}
-		if len(ops) != 1 || ops[0].Safety != SafetyUnsafe {
-			t.Errorf("expected write to custom protected dir .vault to be SafetyUnsafe, got %+v", ops)
+		if len(ops) != 1 || ops[0].Safety != api.SafetyUnsafe {
+			t.Errorf("expected write to custom protected dir .vault to be api.SafetyUnsafe, got %+v", ops)
 		}
 	})
 
@@ -1003,7 +1004,7 @@ func TestGuardDependencyInjection(t *testing.T) {
 	t.Run("custom Policy with declarative CommandRule", func(t *testing.T) {
 		policy := DefaultPolicy()
 		policy.Rules["mytool"] = CommandRule{
-			DefaultCategory: ActionWrite,
+			DefaultCategory: api.ActionWrite,
 			TargetMode:      TargetsSkipFirst,
 			ValueFlags:      []string{"--tag"},
 		}
@@ -1018,7 +1019,7 @@ func TestGuardDependencyInjection(t *testing.T) {
 		if len(ops) != 1 {
 			t.Fatalf("expected 1 operation, got %d", len(ops))
 		}
-		if ops[0].Action != ActionWrite || ops[0].Safety != SafetySafe || ops[0].Path != "/tmp/workspace/output.txt" {
+		if ops[0].Action != api.ActionWrite || ops[0].Safety != api.SafetySafe || ops[0].Path != "/tmp/workspace/output.txt" {
 			t.Errorf("unexpected operation for custom rule: %+v", ops[0])
 		}
 	})
@@ -1026,34 +1027,34 @@ func TestGuardDependencyInjection(t *testing.T) {
 
 func TestStringMethods(t *testing.T) {
 	actionCases := []struct {
-		action ActionType
+		action api.ActionType
 		want   string
 	}{
-		{ActionRead, "read"},
-		{ActionUnknown, "unknown"},
-		{ActionWrite, "write"},
-		{ActionExec, "exec"},
-		{ActionDelete, "delete"},
-		{ActionType("invalid"), "unknown"},
+		{api.ActionRead, "read"},
+		{api.ActionUnknown, "unknown"},
+		{api.ActionWrite, "write"},
+		{api.ActionExec, "exec"},
+		{api.ActionDelete, "delete"},
+		{api.ActionType("invalid"), "unknown"},
 	}
 	for _, tc := range actionCases {
 		if got := tc.action.String(); got != tc.want {
-			t.Errorf("ActionType(%q).String() = %q, want %q", tc.action, got, tc.want)
+			t.Errorf("api.ActionType(%q).String() = %q, want %q", tc.action, got, tc.want)
 		}
 	}
 
 	safetyCases := []struct {
-		safety SafetyLevel
+		safety api.SafetyLevel
 		want   string
 	}{
-		{SafetySafe, "safe"},
-		{SafetyUnknown, "unknown"},
-		{SafetyUnsafe, "unsafe"},
-		{SafetyLevel("invalid"), "unknown"},
+		{api.SafetySafe, "safe"},
+		{api.SafetyUnknown, "unknown"},
+		{api.SafetyUnsafe, "unsafe"},
+		{api.SafetyLevel("invalid"), "unknown"},
 	}
 	for _, tc := range safetyCases {
 		if got := tc.safety.String(); got != tc.want {
-			t.Errorf("SafetyLevel(%q).String() = %q, want %q", tc.safety, got, tc.want)
+			t.Errorf("api.SafetyLevel(%q).String() = %q, want %q", tc.safety, got, tc.want)
 		}
 	}
 }
@@ -1067,134 +1068,134 @@ func TestCompoundASTConstructsAndEdgeCases(t *testing.T) {
 	cases := []struct {
 		name       string
 		command    string
-		wantAction ActionType
-		wantSafety SafetyLevel
+		wantAction api.ActionType
+		wantSafety api.SafetyLevel
 		wantComp   bool
 	}{
 		{
 			name:       "while clause with destructive body",
 			command:    "while true; do rm /etc/passwd; done",
-			wantAction: ActionDelete,
-			wantSafety: SafetyUnsafe,
+			wantAction: api.ActionDelete,
+			wantSafety: api.SafetyUnsafe,
 			wantComp:   true,
 		},
 		{
 			name:       "if-elif-else clause",
 			command:    "if true; then ls; elif false; then pwd; else touch out.txt; fi",
-			wantAction: ActionWrite,
-			wantSafety: SafetySafe,
+			wantAction: api.ActionWrite,
+			wantSafety: api.SafetySafe,
 			wantComp:   true,
 		},
 		{
 			name:       "case clause with subst in word and pattern",
 			command:    "case $(pwd) in $(echo foo)) rm /etc/passwd ;; esac",
-			wantAction: ActionDelete,
-			wantSafety: SafetyUnsafe,
+			wantAction: api.ActionDelete,
+			wantSafety: api.SafetyUnsafe,
 			wantComp:   true,
 		},
 		{
 			name:       "function declaration",
 			command:    "cleanup() { rm -rf build; }; cleanup",
-			wantAction: ActionDelete,
-			wantSafety: SafetyUnsafe,
+			wantAction: api.ActionDelete,
+			wantSafety: api.SafetyUnsafe,
 			wantComp:   true,
 		},
 		{
 			name:       "time and coproc clauses",
 			command:    "time ls && coproc pwd",
-			wantAction: ActionRead,
-			wantSafety: SafetySafe,
+			wantAction: api.ActionRead,
+			wantSafety: api.SafetySafe,
 			wantComp:   false,
 		},
 		{
 			name:       "export declaration with command substitution",
 			command:    "export SECRET=$(cat /etc/passwd)",
-			wantAction: ActionRead,
-			wantSafety: SafetyUnsafe,
+			wantAction: api.ActionRead,
+			wantSafety: api.SafetyUnsafe,
 			wantComp:   false,
 		},
 		{
 			name:       "test clause with command substitution",
 			command:    `[[ $(rm /tmp/outside) == "x" ]]`,
-			wantAction: ActionDelete,
-			wantSafety: SafetyUnsafe,
+			wantAction: api.ActionDelete,
+			wantSafety: api.SafetyUnsafe,
 			wantComp:   false,
 		},
 		{
 			name:       "process substitution <(...)",
 			command:    "diff <(cat a.txt) <(cat /etc/passwd)",
-			wantAction: ActionExec,
-			wantSafety: SafetyUnsafe,
+			wantAction: api.ActionExec,
+			wantSafety: api.SafetyUnsafe,
 			wantComp:   false,
 		},
 		{
 			name:       "heredoc with command substitution",
 			command:    "cat <<EOF\n$(rm /etc/passwd)\nEOF",
-			wantAction: ActionDelete,
-			wantSafety: SafetyUnsafe,
+			wantAction: api.ActionDelete,
+			wantSafety: api.SafetyUnsafe,
 			wantComp:   false,
 		},
 		{
 			name:       "bare file truncation redirect",
 			command:    "> truncated.txt",
-			wantAction: ActionWrite,
-			wantSafety: SafetySafe,
+			wantAction: api.ActionWrite,
+			wantSafety: api.SafetySafe,
 			wantComp:   false,
 		},
 		{
 			name:       "multi-command bash -c wrapper",
 			command:    `bash -c "cd /tmp && touch escaped.txt"`,
-			wantAction: ActionWrite,
-			wantSafety: SafetyUnsafe,
+			wantAction: api.ActionWrite,
+			wantSafety: api.SafetyUnsafe,
 			wantComp:   true,
 		},
 		{
 			name:       "node -e inline script",
 			command:    `node -e "console.log(1)"`,
-			wantAction: ActionUnknown,
-			wantSafety: SafetySafe,
+			wantAction: api.ActionUnknown,
+			wantSafety: api.SafetySafe,
 			wantComp:   true,
 		},
 		{
 			name:       "ruby -e inline script",
 			command:    `ruby -e "puts 1"`,
-			wantAction: ActionUnknown,
-			wantSafety: SafetySafe,
+			wantAction: api.ActionUnknown,
+			wantSafety: api.SafetySafe,
 			wantComp:   true,
 		},
 		{
 			name:       "find with -f path flag and predicate stop",
 			command:    `find -f src -name "*.go" -delete`,
-			wantAction: ActionDelete,
-			wantSafety: SafetyUnsafe,
+			wantAction: api.ActionDelete,
+			wantSafety: api.SafetyUnsafe,
 			wantComp:   false,
 		},
 		{
 			name:       "grep with --file= outside workspace",
 			command:    `grep --file=/etc/passwd src/main.go`,
-			wantAction: ActionRead,
-			wantSafety: SafetyUnsafe,
+			wantAction: api.ActionRead,
+			wantSafety: api.SafetyUnsafe,
 			wantComp:   false,
 		},
 		{
 			name:       "git with attached -C outside workspace",
 			command:    `git -C/etc status`,
-			wantAction: ActionRead,
-			wantSafety: SafetyUnsafe,
+			wantAction: api.ActionRead,
+			wantSafety: api.SafetyUnsafe,
 			wantComp:   false,
 		},
 		{
 			name:       "git checkout branch -- outside pathspec",
 			command:    `git checkout main -- ../outside.txt`,
-			wantAction: ActionWrite,
-			wantSafety: SafetyUnsafe,
+			wantAction: api.ActionWrite,
+			wantSafety: api.SafetyUnsafe,
 			wantComp:   false,
 		},
 		{
 			name:       "BSD sed -i '' in-place edit inside workspace",
 			command:    `sed -i '' 's/foo/bar/' file.txt`,
-			wantAction: ActionWrite,
-			wantSafety: SafetySafe,
+			wantAction: api.ActionWrite,
+			wantSafety: api.SafetySafe,
 			wantComp:   false,
 		},
 	}
@@ -1293,28 +1294,28 @@ func TestNetworkCommands(t *testing.T) {
 
 	tests := []struct {
 		command        string
-		expectedAction ActionType
-		expectedSafety SafetyLevel
+		expectedAction api.ActionType
+		expectedSafety api.SafetyLevel
 	}{
-		{"curl https://example.com", ActionNet, SafetyUnknown},
-		{"wget https://example.com/file.tar.gz", ActionNet, SafetyUnknown},
-		{"http GET https://example.com", ActionNet, SafetyUnknown},
-		{"ssh user@example.com", ActionNet, SafetyUnknown},
-		{"scp file.txt user@example.com:/tmp", ActionNet, SafetyUnknown},
-		{"nc localhost 8080", ActionNet, SafetyUnknown},
-		{"dig example.com", ActionNet, SafetyUnknown},
-		{"ping -c 1 8.8.8.8", ActionNet, SafetyUnknown},
-		{"git fetch", ActionNet, SafetyUnknown},
-		{"git pull", ActionNet, SafetyUnknown},
-		{"git push", ActionNet, SafetyUnknown},
-		{"git clone https://github.com/org/repo", ActionNet, SafetyUnknown},
-		{"git clone https://github.com/org/repo subrepo", ActionNet, SafetyUnknown},
-		{"curl -o out.txt https://example.com", ActionNet, SafetyUnknown},
-		{"curl -o ../outside.txt https://example.com", ActionNet, SafetyUnsafe},
-		{"wget -O /etc/passwd https://example.com", ActionNet, SafetyUnsafe},
-		{"curl https://example.com > ../outside.txt", ActionNet, SafetyUnsafe},
-		{"git clone https://github.com/org/repo ../outside", ActionNet, SafetyUnsafe},
-		{"git push --force origin main", ActionDelete, SafetyUnsafe},
+		{"curl https://example.com", api.ActionNet, api.SafetyUnknown},
+		{"wget https://example.com/file.tar.gz", api.ActionNet, api.SafetyUnknown},
+		{"http GET https://example.com", api.ActionNet, api.SafetyUnknown},
+		{"ssh user@example.com", api.ActionNet, api.SafetyUnknown},
+		{"scp file.txt user@example.com:/tmp", api.ActionNet, api.SafetyUnknown},
+		{"nc localhost 8080", api.ActionNet, api.SafetyUnknown},
+		{"dig example.com", api.ActionNet, api.SafetyUnknown},
+		{"ping -c 1 8.8.8.8", api.ActionNet, api.SafetyUnknown},
+		{"git fetch", api.ActionNet, api.SafetyUnknown},
+		{"git pull", api.ActionNet, api.SafetyUnknown},
+		{"git push", api.ActionNet, api.SafetyUnknown},
+		{"git clone https://github.com/org/repo", api.ActionNet, api.SafetyUnknown},
+		{"git clone https://github.com/org/repo subrepo", api.ActionNet, api.SafetyUnknown},
+		{"curl -o out.txt https://example.com", api.ActionNet, api.SafetyUnknown},
+		{"curl -o ../outside.txt https://example.com", api.ActionNet, api.SafetyUnsafe},
+		{"wget -O /etc/passwd https://example.com", api.ActionNet, api.SafetyUnsafe},
+		{"curl https://example.com > ../outside.txt", api.ActionNet, api.SafetyUnsafe},
+		{"git clone https://github.com/org/repo ../outside", api.ActionNet, api.SafetyUnsafe},
+		{"git push --force origin main", api.ActionDelete, api.SafetyUnsafe},
 	}
 
 	for _, tt := range tests {
@@ -1349,52 +1350,52 @@ func TestGuardReadDirsAndWriteDirs(t *testing.T) {
 
 	// 1. EvaluatePath checks
 	// Workspace
-	if p, s := g.EvaluatePath(filepath.Join(wsDir, "file.txt"), ActionRead); s != SafetySafe {
-		t.Errorf("expected SafetySafe for reading in workspace, got %s (path=%s)", s, p)
+	if p, s := g.EvaluatePath(filepath.Join(wsDir, "file.txt"), api.ActionRead); s != api.SafetySafe {
+		t.Errorf("expected api.SafetySafe for reading in workspace, got %s (path=%s)", s, p)
 	}
-	if p, s := g.EvaluatePath(filepath.Join(wsDir, "file.txt"), ActionWrite); s != SafetySafe {
-		t.Errorf("expected SafetySafe for writing in workspace, got %s (path=%s)", s, p)
+	if p, s := g.EvaluatePath(filepath.Join(wsDir, "file.txt"), api.ActionWrite); s != api.SafetySafe {
+		t.Errorf("expected api.SafetySafe for writing in workspace, got %s (path=%s)", s, p)
 	}
 
-	// ReadDirs: reads are SafetySafe, writes/deletes are SafetyUnsafe
+	// ReadDirs: reads are api.SafetySafe, writes/deletes are api.SafetyUnsafe
 	readTarget := filepath.Join(readDir, "session-output.txt")
-	if p, s := g.EvaluatePath(readTarget, ActionRead); s != SafetySafe {
-		t.Errorf("expected SafetySafe for reading in ReadDirs, got %s (path=%s)", s, p)
+	if p, s := g.EvaluatePath(readTarget, api.ActionRead); s != api.SafetySafe {
+		t.Errorf("expected api.SafetySafe for reading in ReadDirs, got %s (path=%s)", s, p)
 	}
-	if p, s := g.EvaluatePath(readTarget, ActionWrite); s != SafetyUnsafe {
-		t.Errorf("expected SafetyUnsafe for writing in ReadDirs, got %s (path=%s)", s, p)
+	if p, s := g.EvaluatePath(readTarget, api.ActionWrite); s != api.SafetyUnsafe {
+		t.Errorf("expected api.SafetyUnsafe for writing in ReadDirs, got %s (path=%s)", s, p)
 	}
-	if p, s := g.EvaluatePath(readTarget, ActionDelete); s != SafetyUnsafe {
-		t.Errorf("expected SafetyUnsafe for deleting in ReadDirs, got %s (path=%s)", s, p)
+	if p, s := g.EvaluatePath(readTarget, api.ActionDelete); s != api.SafetyUnsafe {
+		t.Errorf("expected api.SafetyUnsafe for deleting in ReadDirs, got %s (path=%s)", s, p)
 	}
 
 	overlap := filepath.Join(wsDir, "builtin")
 	overlapGuard := New(Config{WorkspaceDir: wsDir, ReadDirs: []string{overlap}})
-	for _, action := range []ActionType{ActionWrite, ActionDelete} {
-		if _, safety := overlapGuard.EvaluatePath(filepath.Join(overlap, "file"), action); safety != SafetyUnsafe {
+	for _, action := range []api.ActionType{api.ActionWrite, api.ActionDelete} {
+		if _, safety := overlapGuard.EvaluatePath(filepath.Join(overlap, "file"), action); safety != api.SafetyUnsafe {
 			t.Errorf("read-only workspace overlap: action %s got %s", action, safety)
 		}
 	}
 
-	// WriteDirs: reads, writes, and deletes are SafetySafe
+	// WriteDirs: reads, writes, and deletes are api.SafetySafe
 	writeTarget := filepath.Join(writeDir, "temp.txt")
-	if p, s := g.EvaluatePath(writeTarget, ActionRead); s != SafetySafe {
-		t.Errorf("expected SafetySafe for reading in WriteDirs, got %s (path=%s)", s, p)
+	if p, s := g.EvaluatePath(writeTarget, api.ActionRead); s != api.SafetySafe {
+		t.Errorf("expected api.SafetySafe for reading in WriteDirs, got %s (path=%s)", s, p)
 	}
-	if p, s := g.EvaluatePath(writeTarget, ActionWrite); s != SafetySafe {
-		t.Errorf("expected SafetySafe for writing in WriteDirs, got %s (path=%s)", s, p)
+	if p, s := g.EvaluatePath(writeTarget, api.ActionWrite); s != api.SafetySafe {
+		t.Errorf("expected api.SafetySafe for writing in WriteDirs, got %s (path=%s)", s, p)
 	}
-	if p, s := g.EvaluatePath(writeTarget, ActionDelete); s != SafetySafe {
-		t.Errorf("expected SafetySafe for deleting in WriteDirs, got %s (path=%s)", s, p)
+	if p, s := g.EvaluatePath(writeTarget, api.ActionDelete); s != api.SafetySafe {
+		t.Errorf("expected api.SafetySafe for deleting in WriteDirs, got %s (path=%s)", s, p)
 	}
 
 	// Outside path (not in workspace, readDirs, or writeDirs)
 	outsideTarget := "/var/log/other.log"
-	if p, s := g.EvaluatePath(outsideTarget, ActionRead); s != SafetyOutside {
-		t.Errorf("expected SafetyOutside for reading outside path, got %s (path=%s)", s, p)
+	if p, s := g.EvaluatePath(outsideTarget, api.ActionRead); s != api.SafetyOutside {
+		t.Errorf("expected api.SafetyOutside for reading outside path, got %s (path=%s)", s, p)
 	}
-	if p, s := g.EvaluatePath(outsideTarget, ActionWrite); s != SafetyUnsafe {
-		t.Errorf("expected SafetyUnsafe for writing outside path, got %s (path=%s)", s, p)
+	if p, s := g.EvaluatePath(outsideTarget, api.ActionWrite); s != api.SafetyUnsafe {
+		t.Errorf("expected api.SafetyUnsafe for writing outside path, got %s (path=%s)", s, p)
 	}
 
 	// 2. Analyze command checks (cat vs rm)
@@ -1402,23 +1403,23 @@ func TestGuardReadDirsAndWriteDirs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Analyze cat readTarget: %v", err)
 	}
-	if len(readOps) != 1 || readOps[0].Safety != SafetySafe || readOps[0].Action != ActionRead {
-		t.Errorf("expected cat on readTarget to be ActionRead SafetySafe, got %+v", readOps)
+	if len(readOps) != 1 || readOps[0].Safety != api.SafetySafe || readOps[0].Action != api.ActionRead {
+		t.Errorf("expected cat on readTarget to be api.ActionRead api.SafetySafe, got %+v", readOps)
 	}
 
 	rmOps, err := g.Analyze(fmt.Sprintf("rm %s", readTarget))
 	if err != nil {
 		t.Fatalf("Analyze rm readTarget: %v", err)
 	}
-	if len(rmOps) != 1 || rmOps[0].Safety != SafetyUnsafe || rmOps[0].Action != ActionDelete {
-		t.Errorf("expected rm on readTarget to be ActionDelete SafetyUnsafe, got %+v", rmOps)
+	if len(rmOps) != 1 || rmOps[0].Safety != api.SafetyUnsafe || rmOps[0].Action != api.ActionDelete {
+		t.Errorf("expected rm on readTarget to be api.ActionDelete api.SafetyUnsafe, got %+v", rmOps)
 	}
 
 	writeOps, err := g.Analyze(fmt.Sprintf("touch %s && rm %s", writeTarget, writeTarget))
 	if err != nil {
 		t.Fatalf("Analyze touch && rm writeTarget: %v", err)
 	}
-	if len(writeOps) != 2 || writeOps[0].Safety != SafetySafe || writeOps[1].Safety != SafetySafe {
-		t.Errorf("expected touch and rm in writeTarget to both be SafetySafe, got %+v", writeOps)
+	if len(writeOps) != 2 || writeOps[0].Safety != api.SafetySafe || writeOps[1].Safety != api.SafetySafe {
+		t.Errorf("expected touch and rm in writeTarget to both be api.SafetySafe, got %+v", writeOps)
 	}
 }

@@ -14,8 +14,8 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tools"
 )
 
-func resolveReadTarget(sb sandbox.Sandbox, g *shellguard.Guard, rawPath string) (string, tools.SafetyLevel, error) {
-	resolved, safety := g.EvaluatePath(rawPath, tools.ActionRead)
+func resolveReadTarget(sb sandbox.Sandbox, g *shellguard.Guard, rawPath string) (string, api.SafetyLevel, error) {
+	resolved, safety := g.EvaluatePath(rawPath, api.ActionRead)
 	if rel, err := sb.FS().ResolvePath(resolved); err == nil {
 		return rel, safety, nil
 	}
@@ -38,7 +38,7 @@ func (t *viewTool) Prepare(_ context.Context, in api.ViewInput) (*tools.Plan, er
 	}
 	return &tools.Plan{
 		ToolName: ToolView,
-		Action:   tools.ActionRead,
+		Action:   api.ActionRead,
 		Safety:   safety,
 		Target:   target,
 		Summary:  fmt.Sprintf("Read file: %s", target),
@@ -83,7 +83,7 @@ func (t *lsTool) Prepare(_ context.Context, in api.LsInput) (*tools.Plan, error)
 	}
 	return &tools.Plan{
 		ToolName: ToolLS,
-		Action:   tools.ActionRead,
+		Action:   api.ActionRead,
 		Safety:   safety,
 		Target:   target,
 		Summary:  fmt.Sprintf("List directory: %s", target),
@@ -139,7 +139,7 @@ func (t *globTool) Prepare(_ context.Context, in api.GlobInput) (*tools.Plan, er
 	}
 	return &tools.Plan{
 		ToolName: ToolGlob,
-		Action:   tools.ActionRead,
+		Action:   api.ActionRead,
 		Safety:   safety,
 		Target:   target,
 		Summary:  fmt.Sprintf("Glob pattern %q in %s", in.Pattern, target),
@@ -186,7 +186,7 @@ func (t *grepTool) Prepare(_ context.Context, in api.GrepInput) (*tools.Plan, er
 	}
 	return &tools.Plan{
 		ToolName: ToolGrep,
-		Action:   tools.ActionRead,
+		Action:   api.ActionRead,
 		Safety:   safety,
 		Target:   target,
 		Summary:  fmt.Sprintf("Search pattern %q in %s", in.Pattern, target),
@@ -240,10 +240,10 @@ func (t *writeTool) Prepare(ctx context.Context, in api.WriteInput) (*tools.Plan
 	if err != nil {
 		return nil, err
 	}
-	_, safety := t.guard.EvaluatePath(res.Path, tools.ActionWrite)
+	_, safety := t.guard.EvaluatePath(res.Path, api.ActionWrite)
 	return &tools.Plan{
 		ToolName: ToolWrite,
-		Action:   tools.ActionWrite,
+		Action:   api.ActionWrite,
 		Safety:   safety,
 		Target:   res.Path,
 		Summary:  fmt.Sprintf("Write file: %s", res.Path),
@@ -307,10 +307,10 @@ func (t *editTool) Prepare(ctx context.Context, in api.EditInput) (*tools.Plan, 
 	if err != nil {
 		return nil, err
 	}
-	_, safety := t.guard.EvaluatePath(res.Path, tools.ActionWrite)
+	_, safety := t.guard.EvaluatePath(res.Path, api.ActionWrite)
 	return &tools.Plan{
 		ToolName: ToolEdit,
-		Action:   tools.ActionWrite,
+		Action:   api.ActionWrite,
 		Safety:   safety,
 		Target:   res.Path,
 		Summary:  fmt.Sprintf("Edit file: %s", res.Path),
@@ -356,15 +356,15 @@ func (t *removeTool) Prepare(ctx context.Context, in api.RemoveInput) (*tools.Pl
 	if err != nil {
 		return nil, err
 	}
-	safety := tools.SafetyUnknown
-	if _, evalSafety := t.guard.EvaluatePath(res.Path, tools.ActionDelete); evalSafety == tools.SafetyUnsafe {
-		safety = tools.SafetyUnsafe
+	safety := api.SafetyUnknown
+	if _, evalSafety := t.guard.EvaluatePath(res.Path, api.ActionDelete); evalSafety == api.SafetyUnsafe {
+		safety = api.SafetyUnsafe
 	} else if t.guard.IsInWriteDirs(res.Path) {
-		safety = tools.SafetySafe
+		safety = api.SafetySafe
 	}
 	return &tools.Plan{
 		ToolName: ToolRemove,
-		Action:   tools.ActionDelete,
+		Action:   api.ActionDelete,
 		Safety:   safety,
 		Target:   res.Path,
 		Summary:  fmt.Sprintf("Remove file: %s", res.Path),

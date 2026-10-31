@@ -1,6 +1,10 @@
 package shellguard
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/masterkeysrd/tasksmith/api"
+)
 
 func TestVirtualCWDTracker(t *testing.T) {
 	guard := New(Config{
@@ -11,44 +15,44 @@ func TestVirtualCWDTracker(t *testing.T) {
 	tests := []struct {
 		name           string
 		command        string
-		expectedAction ActionType
-		expectedSafety SafetyLevel
+		expectedAction api.ActionType
+		expectedSafety api.SafetyLevel
 	}{
 		{
 			name:           "Literal Absolute Escapes",
 			command:        "cd /etc && touch hosts",
-			expectedAction: ActionWrite,
-			expectedSafety: SafetyUnsafe,
+			expectedAction: api.ActionWrite,
+			expectedSafety: api.SafetyUnsafe,
 		},
 		{
 			name:           "Tilde Expansion Outside Workspace",
 			command:        "cd ~/some_dir && touch file",
-			expectedAction: ActionWrite,
-			expectedSafety: SafetyUnsafe,
+			expectedAction: api.ActionWrite,
+			expectedSafety: api.SafetyUnsafe,
 		},
 		{
 			name:           "Logical Relative Navigation",
 			command:        "cd subdir && cd .. && touch file.txt",
-			expectedAction: ActionWrite,
-			expectedSafety: SafetySafe,
+			expectedAction: api.ActionWrite,
+			expectedSafety: api.SafetySafe,
 		},
 		{
 			name:           "Dynamic Navigation Taints CWD",
 			command:        "cd $TARGET && touch file.txt",
-			expectedAction: ActionWrite,
-			expectedSafety: SafetyUnknown,
+			expectedAction: api.ActionWrite,
+			expectedSafety: api.SafetyUnknown,
 		},
 		{
 			name:           "Relative Escapes from subdir",
 			command:        "cd subdir && touch ../../hosts",
-			expectedAction: ActionWrite,
-			expectedSafety: SafetyUnsafe,
+			expectedAction: api.ActionWrite,
+			expectedSafety: api.SafetyUnsafe,
 		},
 		{
 			name:           "Relative Write Inside subdir",
 			command:        "cd subdir && touch file.txt",
-			expectedAction: ActionWrite,
-			expectedSafety: SafetySafe,
+			expectedAction: api.ActionWrite,
+			expectedSafety: api.SafetySafe,
 		},
 	}
 

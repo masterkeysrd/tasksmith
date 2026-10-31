@@ -25,8 +25,8 @@ func (t *webFetchTool) Prepare(ctx context.Context, in api.WebFetchInput) (*tool
 	}
 	return &tools.Plan{
 		ToolName: ToolWebFetch,
-		Action:   tools.ActionNet,
-		Safety:   tools.SafetyUnknown,
+		Action:   api.ActionNet,
+		Safety:   api.SafetyUnknown,
 		Target:   res.URL,
 		Summary:  fmt.Sprintf("Fetch URL: %s", res.URL),
 		ReadOnly: true,
@@ -66,13 +66,13 @@ func (t *downloadTool) Prepare(ctx context.Context, in api.DownloadInput) (*tool
 	if err != nil {
 		return nil, err
 	}
-	safety := tools.SafetyUnknown
-	if _, evalSafety := t.guard.EvaluatePath(res.Path, tools.ActionWrite); evalSafety == tools.SafetyUnsafe {
-		safety = tools.SafetyUnsafe
+	safety := api.SafetyUnknown
+	if _, evalSafety := t.guard.EvaluatePath(res.Path, api.ActionWrite); evalSafety == api.SafetyUnsafe {
+		safety = api.SafetyUnsafe
 	}
 	return &tools.Plan{
 		ToolName: ToolDownload,
-		Action:   tools.ActionWrite,
+		Action:   api.ActionWrite,
 		Safety:   safety,
 		Target:   res.Path,
 		Summary:  fmt.Sprintf("Download file: %s", res.Path),

@@ -252,7 +252,7 @@ func TestReadOnlyToolsPrepareEvaluateExecute(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Prepare(%s) failed: %v", tc.Name, err)
 			}
-			if plan.Action != tools.ActionRead || plan.Safety != tools.SafetySafe || !plan.ReadOnly {
+			if plan.Action != api.ActionRead || plan.Safety != api.SafetySafe || !plan.ReadOnly {
 				t.Fatalf("unexpected plan for %s: %+v", tc.Name, plan)
 			}
 
@@ -309,7 +309,7 @@ func TestWriteEditAndCASConflict(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Prepare(write) failed: %v", err)
 	}
-	if plan.Action != tools.ActionWrite || plan.Safety != tools.SafetySafe {
+	if plan.Action != api.ActionWrite || plan.Safety != api.SafetySafe {
 		t.Fatalf("expected ActionWrite + SafetySafe, got %+v", plan)
 	}
 	if !strings.Contains(plan.Diff, "+line 1") {
@@ -410,16 +410,16 @@ func TestBashWebFetchDownloadRemoveAndEdgeCases(t *testing.T) {
 	for _, bashCase := range []struct {
 		cmd    string
 		dir    string
-		action tools.ActionType
-		safety tools.SafetyLevel
+		action api.ActionType
+		safety api.SafetyLevel
 	}{
-		{"echo hello", "", tools.ActionRead, tools.SafetySafe},
-		{"rm -rf /", "", tools.ActionDelete, tools.SafetyUnsafe},
-		{"mkdir sub", ".", tools.ActionWrite, tools.SafetySafe},
-		{"echo 'unterminated", "", tools.ActionExec, tools.SafetyUnsafe},
-		{"cd .", "", tools.ActionRead, tools.SafetySafe},
-		{"echo hello > $DYNAMIC_OUT", "", tools.ActionWrite, tools.SafetyUnknown},
-		{"./run.sh", "", tools.ActionExec, tools.SafetySafe},
+		{"echo hello", "", api.ActionRead, api.SafetySafe},
+		{"rm -rf /", "", api.ActionDelete, api.SafetyUnsafe},
+		{"mkdir sub", ".", api.ActionWrite, api.SafetySafe},
+		{"echo 'unterminated", "", api.ActionExec, api.SafetyUnsafe},
+		{"cd .", "", api.ActionRead, api.SafetySafe},
+		{"echo hello > $DYNAMIC_OUT", "", api.ActionWrite, api.SafetyUnknown},
+		{"./run.sh", "", api.ActionExec, api.SafetySafe},
 	} {
 		args := map[string]any{"command": bashCase.cmd}
 		if bashCase.dir != "" {
@@ -466,7 +466,7 @@ func TestBashWebFetchDownloadRemoveAndEdgeCases(t *testing.T) {
 		},
 	}
 	fetchPlan, err := c.Prepare(ctx, fetchCall)
-	if err != nil || fetchPlan.Action != tools.ActionNet || fetchPlan.Safety != tools.SafetyUnknown || !fetchPlan.ReadOnly {
+	if err != nil || fetchPlan.Action != api.ActionNet || fetchPlan.Safety != api.SafetyUnknown || !fetchPlan.ReadOnly {
 		t.Fatalf("unexpected web_fetch plan: %+v, err=%v", fetchPlan, err)
 	}
 	fetchRes, err := c.Execute(ctx, fetchCall)
@@ -503,7 +503,7 @@ func TestBashWebFetchDownloadRemoveAndEdgeCases(t *testing.T) {
 		},
 	}
 	dlPlan, err := c.Prepare(ctx, dlCall)
-	if err != nil || dlPlan.Action != tools.ActionWrite || dlPlan.Safety != tools.SafetyUnknown {
+	if err != nil || dlPlan.Action != api.ActionWrite || dlPlan.Safety != api.SafetyUnknown {
 		t.Fatalf("unexpected download plan: %+v, err=%v", dlPlan, err)
 	}
 	dlRes, err := c.Execute(ctx, dlCall)
@@ -518,7 +518,7 @@ func TestBashWebFetchDownloadRemoveAndEdgeCases(t *testing.T) {
 		Args: map[string]any{"path": "downloaded.txt"},
 	}
 	rmPlan, err := c.Prepare(ctx, rmCall)
-	if err != nil || rmPlan.Action != tools.ActionDelete || rmPlan.Safety != tools.SafetyUnknown {
+	if err != nil || rmPlan.Action != api.ActionDelete || rmPlan.Safety != api.SafetyUnknown {
 		t.Fatalf("unexpected remove plan: %+v, err=%v", rmPlan, err)
 	}
 	rmRes, err := c.Execute(ctx, rmCall)
@@ -532,7 +532,7 @@ func TestBashWebFetchDownloadRemoveAndEdgeCases(t *testing.T) {
 		Name: builtin.ToolWrite,
 		Args: map[string]any{"path": ".agents/config.yaml", "content": "x: 1\n"},
 	})
-	if err != nil || protPlan.Safety != tools.SafetyUnsafe {
+	if err != nil || protPlan.Safety != api.SafetyUnsafe {
 		t.Fatalf("expected SafetyUnsafe for .agents/ write, got %+v, err=%v", protPlan, err)
 	}
 
@@ -557,7 +557,7 @@ func TestBashWebFetchDownloadRemoveAndEdgeCases(t *testing.T) {
 		if err != nil {
 			t.Fatalf("expected Prepare(%s) on ../somefile.txt to succeed, got %v", roOutside.Name, err)
 		}
-		if outPlan.Safety != tools.SafetyOutside || outPlan.Action != tools.ActionRead || !outPlan.ReadOnly {
+		if outPlan.Safety != api.SafetyOutside || outPlan.Action != api.ActionRead || !outPlan.ReadOnly {
 			t.Fatalf("expected SafetyOutside + ActionRead + ReadOnly for %s on ../somefile.txt, got %+v", roOutside.Name, outPlan)
 		}
 		dec, permReq, err := perm.Evaluate(outPlan)
@@ -587,7 +587,7 @@ func TestBashWebFetchDownloadRemoveAndEdgeCases(t *testing.T) {
 			if err != nil {
 				t.Fatalf("expected Prepare(%s, %q) to succeed, got %v", roSens.Name, sensPath, err)
 			}
-			if sensPlan.Safety != tools.SafetyUnsafe {
+			if sensPlan.Safety != api.SafetyUnsafe {
 				t.Fatalf("expected SafetyUnsafe for %s on %q, got %s", roSens.Name, sensPath, sensPlan.Safety)
 			}
 			dec, permReq, err := perm.Evaluate(sensPlan)
@@ -881,7 +881,7 @@ func TestSessionOutputsAndOutsidePathOperations(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Prepare(view spill) failed: %v", err)
 	}
-	if viewPlan.Safety != tools.SafetySafe || !viewPlan.ReadOnly || viewPlan.Action != tools.ActionRead {
+	if viewPlan.Safety != api.SafetySafe || !viewPlan.ReadOnly || viewPlan.Action != api.ActionRead {
 		t.Fatalf("unexpected view plan on spilled path: %+v", viewPlan)
 	}
 	viewRes, err := c.Execute(ctx, viewCall)
@@ -909,7 +909,7 @@ func TestSessionOutputsAndOutsidePathOperations(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Prepare(grep spill) failed: %v", err)
 	}
-	if grepPlan.Safety != tools.SafetySafe || !grepPlan.ReadOnly || grepPlan.Action != tools.ActionRead {
+	if grepPlan.Safety != api.SafetySafe || !grepPlan.ReadOnly || grepPlan.Action != api.ActionRead {
 		t.Fatalf("unexpected grep plan on spilled path: %+v", grepPlan)
 	}
 	grepRes, err := c.Execute(ctx, grepCall)
@@ -942,7 +942,7 @@ func TestSessionOutputsAndOutsidePathOperations(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Prepare(write outside) failed: %v", err)
 	}
-	if writeOutsidePlan.Safety != tools.SafetyUnsafe || writeOutsidePlan.Action != tools.ActionWrite {
+	if writeOutsidePlan.Safety != api.SafetyUnsafe || writeOutsidePlan.Action != api.ActionWrite {
 		t.Fatalf("expected SafetyUnsafe for write ../outside.txt, got %+v", writeOutsidePlan)
 	}
 	writeOutsideRes, err := c.Execute(ctx, writeOutsideCall)
@@ -961,7 +961,7 @@ func TestSessionOutputsAndOutsidePathOperations(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Prepare(view outside) failed: %v", err)
 	}
-	if viewOutsidePlan.Safety != tools.SafetyOutside || !viewOutsidePlan.ReadOnly || viewOutsidePlan.Action != tools.ActionRead {
+	if viewOutsidePlan.Safety != api.SafetyOutside || !viewOutsidePlan.ReadOnly || viewOutsidePlan.Action != api.ActionRead {
 		t.Fatalf("expected SafetyOutside + ReadOnly for view ../outside.txt, got %+v", viewOutsidePlan)
 	}
 	viewOutsideRes, err := c.Execute(ctx, viewOutsideCall)
@@ -1032,7 +1032,7 @@ func TestBashBackgroundAndTasksManagement(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Prepare(tasks list) failed: %v", err)
 	}
-	if !listPlan.ReadOnly || listPlan.Action != tools.ActionRead {
+	if !listPlan.ReadOnly || listPlan.Action != api.ActionRead {
 		t.Fatalf("expected ReadOnly ActionRead for list, got %+v", listPlan)
 	}
 
@@ -1182,7 +1182,7 @@ func TestTodosTool(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Prepare(todos) failed: %v", err)
 	}
-	if !plan.ReadOnly || plan.Action != tools.ActionRead || plan.Safety != tools.SafetySafe {
+	if !plan.ReadOnly || plan.Action != api.ActionRead || plan.Safety != api.SafetySafe {
 		t.Fatalf("unexpected plan: %+v", plan)
 	}
 
@@ -1273,7 +1273,7 @@ func TestBuiltinCustomizationSkillAndReference(t *testing.T) {
 	ref := filepath.Join(skill.Def.Directory, "references", "rules.md")
 	view := &message.ToolCall{ID: "view", Name: builtin.ToolView, Args: map[string]any{"path": ref}}
 	plan, err := container.Prepare(ctx, view)
-	if err != nil || plan.Safety != tools.SafetySafe {
+	if err != nil || plan.Safety != api.SafetySafe {
 		t.Fatalf("view plan: %+v %v", plan, err)
 	}
 	result, err = container.Execute(ctx, view)
@@ -1286,7 +1286,7 @@ func TestBuiltinCustomizationSkillAndReference(t *testing.T) {
 	}
 	write := &message.ToolCall{ID: "write", Name: builtin.ToolWrite, Args: map[string]any{"path": ref, "content": "modified"}}
 	plan, err = container.Prepare(ctx, write)
-	if err != nil || plan.Safety != tools.SafetyUnsafe {
+	if err != nil || plan.Safety != api.SafetyUnsafe {
 		t.Fatalf("write plan: %+v %v", plan, err)
 	}
 }
