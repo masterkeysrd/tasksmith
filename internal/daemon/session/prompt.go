@@ -56,11 +56,21 @@ func (s *Session) renderSystemPrompt(agentName string) string {
 	}
 
 	var parts []string
-	if s := strings.TrimSpace(wsPrompt); s != "" {
-		parts = append(parts, s)
+	if p := strings.TrimSpace(wsPrompt); p != "" {
+		parts = append(parts, p)
 	}
-	if s := strings.TrimSpace(agentPrompt); s != "" {
-		parts = append(parts, s)
+	if p := strings.TrimSpace(agentPrompt); p != "" {
+		parts = append(parts, p)
+	}
+	if s.ParentID != "" {
+		subPrompt := fmt.Sprintf(`<subagent_context>
+You are running as a delegated subagent (agent=%q, session_id=%q, work_dir=%q) invoked by a parent agent.
+- Your caller is the parent agent, not the human user.
+- Execute the delegated task autonomously using your available tools.
+- The parent agent does NOT see your intermediate tool calls or thoughts — it only receives your final response when your turn completes.
+- When you finish the task, write a clear, self-contained final response summarizing your findings, exact file:line references, or changes and verification results. Your final response is automatically delivered back to the parent agent.
+</subagent_context>`, agentName, s.ID, s.WorkDir)
+		parts = append(parts, subPrompt)
 	}
 	return strings.Join(parts, "\n\n")
 }

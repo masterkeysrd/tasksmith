@@ -71,4 +71,17 @@ func TestTasksComponent(t *testing.T) {
 	if got != "" {
 		t.Fatalf("expected empty string when tasks are finished, got %q", got)
 	}
+
+	// Subagent row includes spacing after closing parenthesis before activity
+	store.UpsertSubagent(api.Session{
+		ID:       "sub-1",
+		Title:    "Check in-progress changes",
+		Status:   api.StatusExecuting,
+		Activity: "Reading files",
+		Config:   api.SessionConfig{Agent: "explore"},
+	})
+	got = render(Tasks())
+	if !strings.Contains(got, "Agent(explore: Check in-progress changes)  Reading files") {
+		t.Fatalf("expected spacing between Agent(...) and activity, got %q", got)
+	}
 }

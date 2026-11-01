@@ -28,6 +28,7 @@ type SessionState struct {
 	ModelLabel string
 	Thinking   string
 	Tasks      *[]api.Task
+	Subagents  *[]api.Session
 	Ready      bool
 }
 
@@ -170,8 +171,9 @@ func startSessionStreamWatcher(ctx context.Context, sessionID string) {
 		return
 	}
 
+	go loadSessionUsage(watchCtx, c, sessionID)
+
 	go func() {
-		loadSessionUsage(watchCtx, c, sessionID)
 		var since string
 		for {
 			if watchCtx.Err() != nil {
@@ -237,10 +239,14 @@ func startSessionsWatcher(ctx context.Context) {
 					sessMu.Lock()
 					curr := GetSession().Session
 					sessMu.Unlock()
-					if curr != nil && curr.ID == p.Session.ID {
-						sess := p.Session
-						SetSession(&sess)
-						showSessionDiagnostics(&sess, false)
+					if curr != nil {
+						if curr.ID == p.Session.ID {
+							sess := p.Session
+							SetSession(&sess)
+							showSessionDiagnostics(&sess, false)
+						} else if p.Session.ParentID != "" && p.Session.ParentID == curr.ID {
+							UpsertSubagent(p.Session)
+						}
 					}
 				}
 			}
@@ -585,8 +591,16 @@ func SetSession(sess *api.Session) {
 			} else {
 				s.Tasks = nil
 			}
+			if sess.Subagents != nil {
+				subagentsCopy := make([]api.Session, len(sess.Subagents))
+				copy(subagentsCopy, sess.Subagents)
+				s.Subagents = &subagentsCopy
+			} else {
+				s.Subagents = nil
+			}
 		} else {
 			s.Tasks = nil
+			s.Subagents = nil
 		}
 		return s
 	})
@@ -911,6 +925,7 @@ func NewDraftSession(modelOverride string) {
 		s.Session = nil
 		s.Config = cfg
 		s.Tasks = nil
+		s.Subagents = nil
 		s.Usage = api.SessionUsage{}
 		return s
 	})
@@ -945,6 +960,10 @@ func SwitchSession(sessionID string) {
 		}
 
 		sessMu.Lock()
+		if activeClient != c {
+			sessMu.Unlock()
+			return
+		}
 		if streamCancel != nil {
 			streamCancel()
 			streamCancel = nil

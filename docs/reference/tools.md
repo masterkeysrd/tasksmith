@@ -1,6 +1,6 @@
 # Built-in Tools Reference
 
-TaskSmith provides 13 core built-in system tools backed by virtualized OS sandboxes, compare-and-swap filesystem mutators, background process managers, and interactive user prompts.
+TaskSmith provides 15 core built-in system tools backed by virtualized OS sandboxes, compare-and-swap filesystem mutators, background process managers, child subagent delegators, and interactive user prompts.
 
 ---
 
@@ -22,6 +22,8 @@ TaskSmith provides 13 core built-in system tools backed by virtualized OS sandbo
 | **`todos`** | `Session` | Safe / Auto-allowed | Manages the session progress checklist, tracking pending and completed items. |
 | **`ask_question`** | `Session` | Safe / Auto-allowed | Prompts the user with structured interactive questions (`single`, `multi`, `text`, `confirm`). |
 | **`load_skill`** | `Session`, `Workspace` | Safe / Auto-allowed | Loads domain guidelines, coding conventions, or workflows for a specified skill on demand. |
+| **`invoke_agent`** | `Session` | Safe & Read-Only / Auto-allowed | Spawns a specialized subagent asynchronously in an isolated child session. |
+| **`manage_agents`** | `Session` | Safe / Auto-allowed for `list`/`status`, Prompts for `send`/`kill` | Lists subagents, checks subagent status, sends messages, or terminates running subagents. |
 
 ---
 
@@ -41,7 +43,7 @@ Every built-in tool defines safety properties in its manifest:
 
 ### Behavior Across Permission Modes
 
-| Permission Mode | Safe Read-Only (`view`, `ls`, `glob`, `grep`, `todos`, `tasks`, `ask_question`, `load_skill`) | Filesystem Writes (`write`, `edit`, `remove`) | Execution & Network (`bash`, `web_fetch`, `download`) |
+| Permission Mode | Safe Read-Only (`view`, `ls`, `glob`, `grep`, `todos`, `tasks`, `ask_question`, `load_skill`, `invoke_agent`) | Filesystem Writes (`write`, `edit`, `remove`) | Execution & Network (`bash`, `web_fetch`, `download`) |
 | :--- | :--- | :--- | :--- |
 | **`default`** | Auto-allowed | Prompts user for approval | Prompts user for approval |
 | **`accept_edits`** | Auto-allowed | Auto-allowed (unified diff recorded) | Prompts user for approval |
@@ -583,5 +585,88 @@ Loads and renders instructions, coding conventions, or runbooks for a specialize
     "image": "my-service",
     "tag": "v1.2.0"
   }
+}
+```
+
+---
+
+### `invoke_agent`
+
+Spawns a specialized subagent asynchronously in an isolated child session.
+
+#### Safety Profile
+- **`isReadOnly`**: `true`
+- **`isIdempotent`**: `false`
+- **`isDangerous`**: `false`
+- **`isOpenWorld`**: `false`
+- **User Hint**: `"Delegate to subagent"`
+
+#### Input Parameters
+
+| Parameter | Type | Required | Description |
+| :--- | :--- | :--- | :--- |
+| `agent` | string | **Yes** | Name of the subagent to invoke (must be listed in `<available_subagents>`). |
+| `title` | string | **Yes** | Concise 3-6 word summary of the delegated task for UI display. |
+| `prompt` | string | **Yes** | Detailed task instructions for the subagent. |
+| `workspace` | string | No | Workspace mode for the subagent: `'inherit'` (default, shares current working directory) or `'worktree'` (creates an isolated git worktree). |
+
+#### Output Fields
+
+| Field | Type | Description |
+| :--- | :--- | :--- |
+| `session_id` | string | Session ID of the spawned subagent. |
+| `agent` | string | Name of the subagent executing the task. |
+| `title` | string | Summary title of the delegated task. |
+| `work_dir` | string | Working directory where the subagent is executing. |
+| `status` | string | Execution status of the subagent (`'running'`). |
+| `message` | string | Status message explaining that the subagent is running asynchronously. |
+
+```json
+{
+  "agent": "explore",
+  "title": "Search auth implementation",
+  "prompt": "Find all files defining auth middleware and verify token validation.",
+  "workspace": "inherit"
+}
+```
+
+---
+
+### `manage_agents`
+
+Lists subagents, checks a subagent's status, sends a message to a subagent, or terminates a running subagent.
+
+#### Safety Profile
+- **`isReadOnly`**: `false`
+- **`isIdempotent`**: `false`
+- **`isDangerous`**: `false`
+- **`isOpenWorld`**: `false`
+- **User Hint**: `"Manage subagents"`
+
+#### Input Parameters
+
+| Parameter | Type | Required | Description |
+| :--- | :--- | :--- | :--- |
+| `action` | string | **Yes** | The action to perform: `'list'`, `'status'`, `'send'`, or `'kill'`. |
+| `session_id` | string | No | The session ID of the subagent (required for `'status'`, `'send'`, and `'kill'`). |
+| `message` | string | No | Message to send to the subagent (required for `'send'`). |
+
+#### Output Fields
+
+| Field | Type | Description |
+| :--- | :--- | :--- |
+| `agents` | array of objects | List of child subagents (returned for `'list'`), each containing `session_id`, `agent`, `title`, `status`, `work_dir`, and optional `error`. |
+| `session_id` | string | Session ID of the target subagent. |
+| `agent` | string | Agent name of the target subagent. |
+| `title` | string | Title of the target subagent. |
+| `status` | string | Current status of the target subagent. |
+| `work_dir` | string | Working directory of the target subagent. |
+| `output` | string | Latest assistant response text from the subagent (returned for `'status'`). |
+| `message` | string | Human-readable summary of the action result. |
+
+```json
+{
+  "action": "status",
+  "session_id": "018f6e8b-9d41-7e8c-b631-c48f2195dfb0"
 }
 ```

@@ -145,6 +145,24 @@ type GrepOutput struct {
 	Truncated bool        `json:"truncated,omitempty" jsonschema:"Whether matches were truncated at limit."`
 }
 
+// InvokeAgentInput defines the input parameters for the invoke_agent tool.
+type InvokeAgentInput struct {
+	Agent     string `json:"agent" jsonschema:"Name of the subagent to invoke (must be listed in <available_subagents>)."`
+	Title     string `json:"title" jsonschema:"Concise 3-6 word summary of the delegated task for UI display."`
+	Prompt    string `json:"prompt" jsonschema:"Detailed task instructions for the subagent."`
+	Workspace string `json:"workspace,omitempty" jsonschema:"Workspace mode for the subagent: 'inherit' (default, shares current working directory) or 'worktree' (creates an isolated git worktree)."`
+}
+
+// InvokeAgentOutput defines the structured output of the invoke_agent tool.
+type InvokeAgentOutput struct {
+	SessionID string `json:"session_id" jsonschema:"Session ID of the spawned subagent."`
+	Agent     string `json:"agent" jsonschema:"Name of the subagent executing the task."`
+	Title     string `json:"title" jsonschema:"Summary title of the delegated task."`
+	WorkDir   string `json:"work_dir" jsonschema:"Working directory where the subagent is executing."`
+	Status    string `json:"status" jsonschema:"Execution status of the subagent ('running')."`
+	Message   string `json:"message" jsonschema:"Status message explaining that the subagent is running asynchronously."`
+}
+
 // LoadSkillInput defines the input parameters for the load_skill tool.
 type LoadSkillInput struct {
 	Skill     string            `json:"skill" jsonschema:"Name of the skill to load (e.g. 'postgres-migrations', 'git-release')."`
@@ -182,6 +200,35 @@ type LsOutput struct {
 	Path      string    `json:"path" jsonschema:"Normalized directory path listed."`
 	Entries   []LsEntry `json:"entries" jsonschema:"Directory entries found."`
 	Truncated bool      `json:"truncated,omitempty" jsonschema:"Whether the listing was truncated at limit."`
+}
+
+// ManageAgentsAgent represents an item in agents.
+type ManageAgentsAgent struct {
+	SessionID string `json:"session_id" jsonschema:"Unique session identifier of the subagent."`
+	Agent     string `json:"agent" jsonschema:"Agent persona name."`
+	Title     string `json:"title" jsonschema:"Task summary title."`
+	Status    string `json:"status" jsonschema:"Current session status ('idle', 'thinking', 'generating', 'executing', 'waiting_permission', 'waiting_question', 'compacting')."`
+	WorkDir   string `json:"work_dir" jsonschema:"Working directory of the subagent."`
+	Error     string `json:"error,omitempty" jsonschema:"Error message if the subagent turn failed."`
+}
+
+// ManageAgentsInput defines the input parameters for the manage_agents tool.
+type ManageAgentsInput struct {
+	Action    string `json:"action" jsonschema:"The action to perform: 'list', 'status', 'send', or 'kill'."`
+	Message   string `json:"message,omitempty" jsonschema:"Message to send to the subagent (required for 'send')."`
+	SessionID string `json:"session_id,omitempty" jsonschema:"The session ID of the subagent (required for 'status', 'send', and 'kill')."`
+}
+
+// ManageAgentsOutput defines the structured output of the manage_agents tool.
+type ManageAgentsOutput struct {
+	Agent     string              `json:"agent,omitempty" jsonschema:"Agent name of the target subagent."`
+	Agents    []ManageAgentsAgent `json:"agents,omitempty" jsonschema:"List of child subagents (returned for 'list')."`
+	Message   string              `json:"message,omitempty" jsonschema:"Human-readable summary of the action result."`
+	Output    string              `json:"output,omitempty" jsonschema:"Latest assistant response text from the subagent (returned for 'status')."`
+	SessionID string              `json:"session_id,omitempty" jsonschema:"Session ID of the target subagent."`
+	Status    string              `json:"status,omitempty" jsonschema:"Current status of the target subagent."`
+	Title     string              `json:"title,omitempty" jsonschema:"Title of the target subagent."`
+	WorkDir   string              `json:"work_dir,omitempty" jsonschema:"Working directory of the target subagent."`
 }
 
 // RemoveInput defines the input parameters for the remove tool.

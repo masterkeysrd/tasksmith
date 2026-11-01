@@ -146,6 +146,20 @@ type conversationMessage struct {
 	done    bool
 }
 
+type conversationHooks struct {
+	onAppendMessage    func(msg Message)
+	onAppendTimeline   func(entry api.TimelineEntry)
+	onEnqueueSlot      func(slot SlotItem)
+	onRemoveSlot       func(slotID string)
+	onPublishStream    func(state StreamState)
+	onUsage            func(usage api.SessionUsage)
+	onContext          func(ctx api.ContextState)
+	onSessionUpdated   func(sess api.Session)
+	onTimelineMetadata func(entry api.TimelineEntry)
+	onTaskUpdated      func(task api.Task)
+	onError            func(title, detail string)
+}
+
 // conversationAccumulator folds TimelineEntries and SSE events into view messages,
 // splitting them into a finalized prefix flushed to Transcript and a mutable suffix in StreamState.
 type conversationAccumulator struct {
@@ -168,6 +182,7 @@ type conversationAccumulator struct {
 	flushedIDs        map[string]bool
 	identities        map[string]string
 	nextDraft         uint64
+	hooks             conversationHooks
 
 	wasStreaming bool
 	turnStart    time.Time
@@ -178,10 +193,110 @@ type conversationAccumulator struct {
 	callOutput   int64
 }
 
-var globalConversation = newConversationAccumulator()
+func (acc *conversationAccumulator) appendMessage(msg Message) {
+	if acc.hooks.onAppendMessage != nil {
+		acc.hooks.onAppendMessage(msg)
+	}
+}
+
+func (acc *conversationAccumulator) appendTimeline(entry api.TimelineEntry) {
+	if acc.hooks.onAppendTimeline != nil {
+		acc.hooks.onAppendTimeline(entry)
+	}
+}
+
+func (acc *conversationAccumulator) enqueueSlot(slot SlotItem) {
+	if acc.hooks.onEnqueueSlot != nil {
+		acc.hooks.onEnqueueSlot(slot)
+	}
+}
+
+func (acc *conversationAccumulator) removeSlot(slotID string) {
+	if acc.hooks.onRemoveSlot != nil {
+		acc.hooks.onRemoveSlot(slotID)
+	}
+}
+
+func (acc *conversationAccumulator) publishStream(state StreamState) {
+	if acc.hooks.onPublishStream != nil {
+		acc.hooks.onPublishStream(state)
+	}
+}
+
+func (acc *conversationAccumulator) applyTimelineMetadata(entry api.TimelineEntry) {
+	if acc.hooks.onTimelineMetadata != nil {
+		acc.hooks.onTimelineMetadata(entry)
+	}
+}
 
 func newConversationAccumulator() *conversationAccumulator {
+	acc := &conversationAccumulator{
+		draft:         -1,
+		status:        StreamIdle,
+		sessionStatus: api.StatusIdle,
+		flushedIDs:    make(map[string]bool),
+		identities:    make(map[string]string),
+	}
+	acc.hooks = conversationHooks{
+		onAppendMessage:  AppendMessage,
+		onAppendTimeline: AppendTimelineEntry,
+		onEnqueueSlot:    EnqueueSlot,
+		onRemoveSlot:     RemoveSlot,
+		onPublishStream: func(state StreamState) {
+			stream.Set(func(StreamState) StreamState { return state })
+		},
+		onUsage: SetUsage,
+		onContext: func(c api.ContextState) {
+			session.Set(func(s SessionState) SessionState {
+				s.Context = c
+				if s.Session != nil {
+					s.Session.Context = c
+				}
+				return s
+			})
+		},
+		onSessionUpdated: func(sess api.Session) {
+			if acc.sessionID == "" || sess.ID == acc.sessionID {
+				SetSession(&sess)
+			} else if sess.ParentID != "" && sess.ParentID == acc.sessionID {
+				UpsertSubagent(sess)
+			}
+		},
+		onTimelineMetadata: func(entry api.TimelineEntry) {
+			switch entry.Kind {
+			case api.TimelineKindMode:
+				if entry.Mode != nil && entry.Mode.To != "" {
+					SetSessionMode(entry.Mode.To)
+				}
+			case api.TimelineKindModel:
+				if entry.Model != nil && entry.Model.To != "" {
+					SetModelInfo(entry.Model.To, GetSession().Thinking)
+				}
+			case api.TimelineKindAgent:
+				if entry.Agent != nil && entry.Agent.To != "" {
+					SetSessionAgent(entry.Agent.To)
+				}
+			case api.TimelineKindThinking:
+				if entry.Thinking != nil {
+					ApplyThinkingChange(entry.Thinking.To)
+				}
+			case api.TimelineKindEffort:
+				if entry.Effort != nil && entry.Effort.To != "" {
+					SetModelInfo(GetSession().ModelLabel, entry.Effort.To)
+				}
+			}
+		},
+		onTaskUpdated: UpsertTask,
+		onError:       AppendError,
+	}
+	return acc
+}
+
+var globalConversation = newConversationAccumulator()
+
+func newIsolatedConversationAccumulator(sessionID string) *conversationAccumulator {
 	return &conversationAccumulator{
+		sessionID:     sessionID,
 		draft:         -1,
 		status:        StreamIdle,
 		sessionStatus: api.StatusIdle,
@@ -200,14 +315,14 @@ func questionSlotID(reqID string) string {
 
 func (acc *conversationAccumulator) clearQuestionsLocked() {
 	for _, req := range acc.questions {
-		RemoveSlot(questionSlotID(req.ID))
+		acc.removeSlot(questionSlotID(req.ID))
 	}
 	acc.questions = nil
 }
 
 func (acc *conversationAccumulator) clearPermissionsLocked() {
 	for _, req := range acc.permissions {
-		RemoveSlot(permSlotID(req.ID))
+		acc.removeSlot(permSlotID(req.ID))
 	}
 	acc.permissions = nil
 }
@@ -248,23 +363,24 @@ func (acc *conversationAccumulator) setSessionID(id string) {
 	acc.mu.Lock()
 	defer acc.mu.Unlock()
 	acc.sessionID = id
-	acc.messages = nil
-	acc.clearPermissionsLocked()
-	acc.clearQuestionsLocked()
-	acc.resolvedQuestions = nil
-	acc.questionRecords = nil
-	acc.status = StreamIdle
-	acc.sessionStatus = api.StatusIdle
-	acc.err = nil
-	acc.draft = -1
+}
+
+func (acc *conversationAccumulator) promotePendingUserLocked() {
+	if acc.pendingUser == nil {
+		return
+	}
+	u := acc.pendingUser
 	acc.pendingUser = nil
-	acc.pendingCommand = ""
-	acc.pendingCommandID = ""
-	acc.queue = nil
-	acc.todos = nil
-	acc.flushedIDs = make(map[string]bool)
-	acc.identities = make(map[string]string)
-	acc.nextDraft = 0
+	var text string
+	if len(u.Parts) > 0 && u.Parts[0].Text != nil {
+		text = u.Parts[0].Text.Text
+	}
+	_ = acc.addMessageLocked(api.Message{
+		ID:        u.ID,
+		Role:      api.RoleUser,
+		CreatedAt: u.CreatedAt,
+		Content:   []api.Block{{Type: api.BlockText, Text: text}},
+	})
 }
 
 func (acc *conversationAccumulator) messageID(sourceID, draftID string) string {
@@ -418,7 +534,9 @@ func (acc *conversationAccumulator) applyEvent(event api.Event) {
 		if acc.sessionID != "" && p.SessionID != acc.sessionID {
 			return
 		}
-		SetUsage(p.Usage)
+		if acc.hooks.onUsage != nil {
+			acc.hooks.onUsage(p.Usage)
+		}
 		// A finished LLM call is now part of the session totals; drop its running count.
 		if p.Usage.Totals.Calls > acc.baseCalls {
 			acc.baseCalls = p.Usage.Totals.Calls
@@ -434,13 +552,18 @@ func (acc *conversationAccumulator) applyEvent(event api.Event) {
 		if acc.sessionID != "" && p.SessionID != acc.sessionID {
 			return
 		}
-		session.Set(func(s SessionState) SessionState {
-			s.Context = p.Context
-			if s.Session != nil {
-				s.Session.Context = p.Context
-			}
-			return s
-		})
+		if acc.hooks.onContext != nil {
+			acc.hooks.onContext(p.Context)
+		}
+
+	case api.EventSessionUpdated:
+		p, ok := event.Payload.(api.SessionUpdatedEvent)
+		if !ok {
+			return
+		}
+		if acc.hooks.onSessionUpdated != nil {
+			acc.hooks.onSessionUpdated(p.Session)
+		}
 
 	case api.EventStatusChanged:
 		p, ok := event.Payload.(api.StatusChangedEvent)
@@ -477,7 +600,7 @@ func (acc *conversationAccumulator) applyEvent(event api.Event) {
 				acc.pendingCommand = ""
 				acc.pendingCommandID = ""
 				acc.publishLocked()
-				AppendTimelineEntry(p.Entry)
+				acc.appendTimeline(p.Entry)
 				return
 			}
 			if p.Entry.Kind == api.TimelineKindInterrupted {
@@ -491,7 +614,7 @@ func (acc *conversationAccumulator) applyEvent(event api.Event) {
 				acc.clearQuestionsLocked()
 				acc.discardDraftLocked()
 				acc.publishLocked()
-				AppendTimelineEntry(p.Entry)
+				acc.appendTimeline(p.Entry)
 				return
 			}
 			if p.Entry.Kind == api.TimelineKindQuestion && p.Entry.Question != nil {
@@ -506,7 +629,7 @@ func (acc *conversationAccumulator) applyEvent(event api.Event) {
 					acc.permissions = slices.DeleteFunc(acc.permissions, func(r api.PermissionRequest) bool {
 						return r.ID == reqID
 					})
-					RemoveSlot(permSlotID(reqID))
+					acc.removeSlot(permSlotID(reqID))
 					if len(acc.permissions) == 0 && acc.status == StreamWaitingPermission {
 						if len(acc.questions) > 0 {
 							acc.status, acc.sessionStatus = StreamWaitingQuestion, api.StatusWaitingQuestion
@@ -520,29 +643,8 @@ func (acc *conversationAccumulator) applyEvent(event api.Event) {
 			}
 
 			// Non-message timeline entry: flush to Transcript
-			AppendTimelineEntry(p.Entry)
-			switch p.Entry.Kind {
-			case api.TimelineKindMode:
-				if p.Entry.Mode != nil && p.Entry.Mode.To != "" {
-					SetSessionMode(p.Entry.Mode.To)
-				}
-			case api.TimelineKindModel:
-				if p.Entry.Model != nil && p.Entry.Model.To != "" {
-					SetModelInfo(p.Entry.Model.To, GetSession().Thinking)
-				}
-			case api.TimelineKindAgent:
-				if p.Entry.Agent != nil && p.Entry.Agent.To != "" {
-					SetSessionAgent(p.Entry.Agent.To)
-				}
-			case api.TimelineKindThinking:
-				if p.Entry.Thinking != nil {
-					ApplyThinkingChange(p.Entry.Thinking.To)
-				}
-			case api.TimelineKindEffort:
-				if p.Entry.Effort != nil && p.Entry.Effort.To != "" {
-					SetModelInfo(GetSession().ModelLabel, p.Entry.Effort.To)
-				}
-			}
+			acc.appendTimeline(p.Entry)
+			acc.applyTimelineMetadata(p.Entry)
 			return
 		}
 
@@ -554,6 +656,8 @@ func (acc *conversationAccumulator) applyEvent(event api.Event) {
 		// Check if this confirms our pending user message
 		if acc.pendingUser != nil && acc.pendingUser.ID == msg.ID {
 			acc.pendingUser = nil
+		} else if msg.Role != api.RoleUser {
+			acc.promotePendingUserLocked()
 		}
 		acc.queue = slices.DeleteFunc(acc.queue, func(item api.QueueItem) bool {
 			return item.ID == msg.ID
@@ -595,6 +699,7 @@ func (acc *conversationAccumulator) applyEvent(event api.Event) {
 		}) {
 			return
 		}
+		acc.promotePendingUserLocked()
 		_ = acc.addChunkLocked(p.Chunk)
 		if p.Chunk.Usage != nil {
 			// Each chunk carries the call's cumulative usage, so it replaces the last value.
@@ -655,7 +760,9 @@ func (acc *conversationAccumulator) applyEvent(event api.Event) {
 		if acc.sessionID != "" && p.SessionID != acc.sessionID {
 			return
 		}
-		UpsertTask(p.Task)
+		if acc.hooks.onTaskUpdated != nil {
+			acc.hooks.onTaskUpdated(p.Task)
+		}
 
 	case api.EventTodosUpdated:
 		p, ok := event.Payload.(api.TodosUpdatedEvent)
@@ -732,7 +839,9 @@ func (acc *conversationAccumulator) applyEvent(event api.Event) {
 		}
 		acc.discardDraftLocked()
 		acc.publishLocked()
-		AppendError("Error", p.Error)
+		if acc.hooks.onError != nil {
+			acc.hooks.onError("Error", p.Error)
+		}
 	}
 }
 
@@ -762,24 +871,10 @@ func (acc *conversationAccumulator) loadTimeline(entries []api.TimelineEntry, pe
 				acc.permissions = slices.DeleteFunc(acc.permissions, func(r api.PermissionRequest) bool {
 					return r.ID == reqID
 				})
-				RemoveSlot(permSlotID(reqID))
+				acc.removeSlot(permSlotID(reqID))
 			}
-		case api.TimelineKindMode:
-			if entry.Mode != nil && entry.Mode.To != "" {
-				SetSessionMode(entry.Mode.To)
-			}
-		case api.TimelineKindModel:
-			if entry.Model != nil && entry.Model.To != "" {
-				SetModelInfo(entry.Model.To, GetSession().Thinking)
-			}
-		case api.TimelineKindAgent:
-			if entry.Agent != nil && entry.Agent.To != "" {
-				SetSessionAgent(entry.Agent.To)
-			}
-		case api.TimelineKindEffort:
-			if entry.Effort != nil && entry.Effort.To != "" {
-				SetModelInfo(GetSession().ModelLabel, entry.Effort.To)
-			}
+		case api.TimelineKindMode, api.TimelineKindModel, api.TimelineKindAgent, api.TimelineKindEffort:
+			acc.applyTimelineMetadata(entry)
 		case api.TimelineKindMessage:
 			if entry.Message != nil {
 				if acc.pendingUser != nil && acc.pendingUser.ID == entry.Message.ID {
@@ -815,11 +910,11 @@ func (acc *conversationAccumulator) loadTimeline(entries []api.TimelineEntry, pe
 			if entry.Message != nil {
 				if h, ok := historyBySourceID[entry.Message.ID]; ok && !acc.flushedIDs[h.ID] {
 					acc.flushedIDs[h.ID] = true
-					AppendMessage(h)
+					acc.appendMessage(h)
 				}
 			}
 		} else if entry.Kind == api.TimelineKindCompacted || entry.Kind == api.TimelineKindCacheBroken || (entry.Kind != api.TimelineKindPermission && entry.Kind != api.TimelineKindQuestion) {
-			AppendTimelineEntry(entry)
+			acc.appendTimeline(entry)
 		}
 	}
 
@@ -922,7 +1017,7 @@ func (acc *conversationAccumulator) addQuestionsLocked(requests []api.QuestionRe
 			continue
 		}
 		acc.questions = append(acc.questions, req)
-		EnqueueSlot(SlotItem{ID: questionSlotID(req.ID), Kind: SlotKindQuestion, Data: req})
+		acc.enqueueSlot(SlotItem{ID: questionSlotID(req.ID), Kind: SlotKindQuestion, Data: req})
 	}
 }
 
@@ -944,7 +1039,7 @@ func (acc *conversationAccumulator) removeQuestionLocked(id string) {
 		acc.resolvedQuestions = make(map[string]bool)
 	}
 	acc.resolvedQuestions[id] = true
-	RemoveSlot(questionSlotID(id))
+	acc.removeSlot(questionSlotID(id))
 	acc.questions = slices.DeleteFunc(acc.questions, func(r api.QuestionRequest) bool { return r.ID == id })
 	if len(acc.questions) == 0 && len(acc.permissions) == 0 && acc.status == StreamWaitingQuestion {
 		acc.status, acc.sessionStatus = StreamRunning, api.StatusThinking
@@ -957,6 +1052,7 @@ func (acc *conversationAccumulator) removePermission(reqID string) {
 	acc.permissions = slices.DeleteFunc(acc.permissions, func(r api.PermissionRequest) bool {
 		return r.ID == reqID
 	})
+	acc.removeSlot(permSlotID(reqID))
 	if len(acc.permissions) == 0 && acc.status == StreamWaitingPermission {
 		if len(acc.questions) > 0 {
 			acc.status, acc.sessionStatus = StreamWaitingQuestion, api.StatusWaitingQuestion
@@ -1013,7 +1109,7 @@ func (acc *conversationAccumulator) addMessageLocked(message api.Message) error 
 		}
 		for _, req := range acc.permissions {
 			if req.ToolCallID == message.ToolCallID {
-				RemoveSlot(permSlotID(req.ID))
+				acc.removeSlot(permSlotID(req.ID))
 			}
 		}
 		acc.permissions = slices.DeleteFunc(acc.permissions, func(request api.PermissionRequest) bool {
@@ -1071,7 +1167,7 @@ func (acc *conversationAccumulator) addPermissionsLocked(requests []api.Permissi
 		} else {
 			acc.permissions = append(acc.permissions, request)
 		}
-		EnqueueSlot(SlotItem{
+		acc.enqueueSlot(SlotItem{
 			ID:   permSlotID(request.ID),
 			Kind: SlotKindPermission,
 			Data: request,
@@ -1087,7 +1183,7 @@ func (acc *conversationAccumulator) publishLocked() {
 	for _, h := range history {
 		if !acc.flushedIDs[h.ID] {
 			acc.flushedIDs[h.ID] = true
-			AppendMessage(h)
+			acc.appendMessage(h)
 		}
 	}
 
@@ -1139,22 +1235,20 @@ func (acc *conversationAccumulator) publishLocked() {
 	acc.wasStreaming = isStreaming
 
 	turnStart, baseIn, baseOut, callIn, callOut := acc.turnStart, acc.baseInput, acc.baseOutput, acc.callInput, acc.callOutput
-	stream.Set(func(StreamState) StreamState {
-		return StreamState{
-			TurnStartedAt:     turnStart,
-			BaseInput:         baseIn,
-			BaseOutput:        baseOut,
-			CallInput:         callIn,
-			CallOutput:        callOut,
-			Messages:          msgsPtr,
-			Streaming:         isStreaming,
-			WaitingPermission: isWaiting,
-			WaitingQuestion:   isWaitingQuestion,
-			Status:            sessionStatus,
-			PendingCommand:    acc.pendingCommand,
-			Queue:             queuePtr,
-			Todos:             todosPtr,
-		}
+	acc.publishStream(StreamState{
+		TurnStartedAt:     turnStart,
+		BaseInput:         baseIn,
+		BaseOutput:        baseOut,
+		CallInput:         callIn,
+		CallOutput:        callOut,
+		Messages:          msgsPtr,
+		Streaming:         isStreaming,
+		WaitingPermission: isWaiting,
+		WaitingQuestion:   isWaitingQuestion,
+		Status:            sessionStatus,
+		PendingCommand:    acc.pendingCommand,
+		Queue:             queuePtr,
+		Todos:             todosPtr,
 	})
 }
 

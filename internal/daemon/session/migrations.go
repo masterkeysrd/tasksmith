@@ -21,6 +21,10 @@ CREATE TABLE IF NOT EXISTS sessions (
 `,
 	// 1: Add permissions column
 	`ALTER TABLE sessions ADD COLUMN permissions TEXT NOT NULL DEFAULT '{}';`,
+	// 2: Add parent_id and work_dir columns
+	`ALTER TABLE sessions ADD COLUMN parent_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE sessions ADD COLUMN work_dir TEXT NOT NULL DEFAULT '';
+CREATE INDEX IF NOT EXISTS idx_sessions_parent_id ON sessions(parent_id);`,
 }
 
 // Migrate executes SQLite migrations for the session schema.

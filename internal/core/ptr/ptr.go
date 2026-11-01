@@ -5,6 +5,5 @@ func Clone[T any](p *T) *T {
 	if p == nil {
 		return nil
 	}
-	cp := *p
-	return &cp
+	return new(*p)
 }

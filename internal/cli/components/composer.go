@@ -12,6 +12,7 @@ import (
 	"github.com/masterkeysrd/kite/extras/kitex"
 	"github.com/masterkeysrd/kite/extras/trail"
 	"github.com/masterkeysrd/kite/style"
+	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/cli/store"
 	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
 	"github.com/masterkeysrd/tasksmith/internal/ui/autocomplete"
@@ -271,6 +272,24 @@ var Composer = trail.FC("Composer", func(props ComposerProps) trail.Node {
 		}
 
 		switch {
+		case ke.MatchString("ctrl+y"):
+			waiting := store.GetWaitingSubagents()
+			if len(waiting) > 0 && len(waiting[0].PendingPermissions) > 0 {
+				e.PreventDefault()
+				e.StopPropagation()
+				store.DecideSubagentPermission(waiting[0].ID, waiting[0].PendingPermissions[0], api.PermissionDecision{Kind: api.DecisionAllowOnce})
+				return
+			}
+
+		case ke.MatchString("ctrl+g"):
+			waiting := store.GetWaitingSubagents()
+			if len(waiting) > 0 {
+				e.PreventDefault()
+				e.StopPropagation()
+				store.OpenSubagent(waiting[0].ID)
+				return
+			}
+
 		case ke.MatchString("shift+tab"):
 			e.PreventDefault()
 			e.StopPropagation()

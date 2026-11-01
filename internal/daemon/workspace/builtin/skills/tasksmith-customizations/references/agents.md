@@ -25,7 +25,7 @@ When a session has no explicit model, TaskSmith passes the agent's model list to
 
 For skills, commands, subagents, and rules, an omitted list or `["*"]` selects all effective resources in WARP; an explicit `[]` selects none. Resolution also skips references that cannot be found. These are resolved-resource semantics, not a guarantee that every runtime path enforces every selector. In particular, slash-command lookup uses the workspace's command and skill lookup, rather than the resolved agent command list.
 
-WARP filters resolved subagents to those whose `triggers` are empty or include `agent`. This is a resolution filter, not general enforcement of every invocation source by TaskSmith.
+WARP filters resolved subagents to those whose `triggers` are empty or include `agent`. This is a resolution filter, not general enforcement of every invocation source by TaskSmith. When an agent's resolved `subagents` list is non-empty, TaskSmith registers the built-in `invoke_agent` and `manage_agents` tools for the session. Built-in agents include `system/Agent/main` (default coding persona), `system/Agent/explore` (fast read-only codebase explorer), `system/Agent/general` (general-purpose subagent with `subagents: []`), and `system/Agent/title-generator`.
 
 ## Inheritance
 

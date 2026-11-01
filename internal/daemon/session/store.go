@@ -15,11 +15,16 @@ import (
 // ordering (ORDER BY updated_at DESC, created_at DESC) matches chronological order.
 const timestampFormat = "2006-01-02T15:04:05.000000000Z"
 
+// ListFilter specifies filtering criteria for listing sessions.
+type ListFilter struct {
+	ParentID *string
+}
+
 // Store persists session metadata in SQLite.
 type Store interface {
 	Save(ctx context.Context, sess *Session) error
 	Get(ctx context.Context, id string) (*Session, error)
-	List(ctx context.Context) ([]*Session, error)
+	List(ctx context.Context, filter ListFilter) ([]*Session, error)
 	Delete(ctx context.Context, id string) error
 }
 
@@ -64,12 +69,14 @@ func (s *sqliteStore) Save(ctx context.Context, sess *Session) error {
 		return fmt.Errorf("session: marshal permissions: %w", err)
 	}
 
-	query := `INSERT INTO sessions (id, title, config, permissions, created_at, updated_at)
-VALUES (?, ?, ?, ?, ?, ?)
+	query := `INSERT INTO sessions (id, title, config, permissions, parent_id, work_dir, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(id) DO UPDATE SET
     title       = excluded.title,
     config      = excluded.config,
     permissions = excluded.permissions,
+    parent_id   = excluded.parent_id,
+    work_dir    = excluded.work_dir,
     updated_at  = excluded.updated_at`
 
 	_, err = s.db.ExecContext(
@@ -79,6 +86,8 @@ ON CONFLICT(id) DO UPDATE SET
 		snap.Title,
 		string(configBytes),
 		string(permsBytes),
+		snap.ParentID,
+		snap.WorkDir,
 		formatTime(createdAt),
 		formatTime(updatedAt),
 	)
@@ -91,7 +100,7 @@ ON CONFLICT(id) DO UPDATE SET
 func (s *sqliteStore) Get(ctx context.Context, id string) (*Session, error) {
 	row := s.db.QueryRowContext(
 		ctx,
-		`SELECT id, title, config, permissions, created_at, updated_at FROM sessions WHERE id = ?`,
+		`SELECT id, title, config, permissions, parent_id, work_dir, created_at, updated_at FROM sessions WHERE id = ?`,
 		id,
 	)
 	sess, err := scanSession(row)
@@ -104,11 +113,23 @@ func (s *sqliteStore) Get(ctx context.Context, id string) (*Session, error) {
 	return sess, nil
 }
 
-func (s *sqliteStore) List(ctx context.Context) ([]*Session, error) {
-	rows, err := s.db.QueryContext(
-		ctx,
-		`SELECT id, title, config, permissions, created_at, updated_at FROM sessions ORDER BY updated_at DESC, id DESC`,
+func (s *sqliteStore) List(ctx context.Context, filter ListFilter) ([]*Session, error) {
+	var (
+		rows *sql.Rows
+		err  error
 	)
+	if filter.ParentID != nil {
+		rows, err = s.db.QueryContext(
+			ctx,
+			`SELECT id, title, config, permissions, parent_id, work_dir, created_at, updated_at FROM sessions WHERE parent_id = ? ORDER BY updated_at DESC, id DESC`,
+			*filter.ParentID,
+		)
+	} else {
+		rows, err = s.db.QueryContext(
+			ctx,
+			`SELECT id, title, config, permissions, parent_id, work_dir, created_at, updated_at FROM sessions ORDER BY updated_at DESC, id DESC`,
+		)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("session: list sessions: %w", err)
 	}
@@ -155,7 +176,7 @@ func scanSession(r rowScanner) (*Session, error) {
 		createdAtRaw string
 		updatedAtRaw string
 	)
-	if err := r.Scan(&sess.ID, &sess.Title, &configRaw, &permsRaw, &createdAtRaw, &updatedAtRaw); err != nil {
+	if err := r.Scan(&sess.ID, &sess.Title, &configRaw, &permsRaw, &sess.ParentID, &sess.WorkDir, &createdAtRaw, &updatedAtRaw); err != nil {
 		return nil, err
 	}
 

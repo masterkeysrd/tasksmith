@@ -42,6 +42,22 @@ func ToAPISession(sess *Session) api.Session {
 		converted.ThinkingDefault = thinking
 		resolvedModel = &converted
 	}
+	var subagents []api.Session
+	for _, child := range sess.Children() {
+		subagents = append(subagents, ToAPISession(child))
+	}
+	activity := sess.Activity
+	if status == api.StatusWaitingPermission {
+		activity = "Waiting for permission"
+	} else if status == api.StatusWaitingQuestion {
+		activity = "Waiting for answer"
+	} else if status == api.StatusIdle {
+		activity = ""
+	} else if status == api.StatusThinking && activity == "" {
+		activity = "Thinking..."
+	} else if status == api.StatusGenerating && activity == "" {
+		activity = "Generating"
+	}
 	return api.Session{
 		Model:              resolvedModel,
 		ID:                 sess.ID,
@@ -55,6 +71,10 @@ func ToAPISession(sess *Session) api.Session {
 		Tasks:              ts,
 		Todos:              todos,
 		Queue:              queueItems,
+		ParentID:           sess.ParentID,
+		WorkDir:            sess.WorkDir,
+		Subagents:          subagents,
+		Activity:           activity,
 		CreatedAt:          sess.CreatedAt,
 		UpdatedAt:          sess.UpdatedAt,
 	}

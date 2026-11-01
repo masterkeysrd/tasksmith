@@ -147,6 +147,9 @@ func (s *Session) Cancel(ctx context.Context) error {
 	if s == nil {
 		return errors.New("session: uninitialized session")
 	}
+	for _, ch := range s.Children() {
+		_ = ch.Cancel(ctx)
+	}
 	s.Lock()
 	cancel := s.cancel
 	done := s.done
@@ -199,12 +202,13 @@ func (s *Session) enqueueItem(item queueItem) {
 	var vis []api.QueueItem
 	s.Lock()
 	s.queue = append(s.queue, item)
-	if item.Kind != api.QueueKindTask {
+	isVisible := item.Kind == api.QueueKindMessage || item.Kind == api.QueueKindCommand
+	if isVisible {
 		vis = s.visibleQueueLocked()
 	}
 	s.Unlock()
 
-	if item.Kind != api.QueueKindTask {
+	if isVisible {
 		s.publisher.Publish(api.SessionStreamTopic(s.ID), api.QueueUpdatedEvent{
 			SessionID: s.ID,
 			Queue:     vis,
@@ -379,16 +383,19 @@ func (s *Session) startTurn(hInput harness.Input) error {
 		agentName := s.Config.Agent
 		s.Unlock()
 		sCtx := scope.With(runCtx, scope.Scope{
-			SessionID:     s.ID,
-			WorkspaceRoot: s.workspace.RootDir(),
-			Agent:         agentName,
+			SessionID:       s.ID,
+			ParentSessionID: s.ParentID,
+			WorkspaceRoot:   s.workspace.RootDir(),
+			Agent:           agentName,
 		})
+		var lastReply *message.Assistant
 		reply, err := s.send(sCtx, s.Harness.Stream(sCtx, hInput))
 		if err != nil {
 			s.handleAsyncError(err)
 			return
 		}
 		if reply != nil {
+			lastReply = reply
 			s.finishTurn(api.TurnStatusDone)
 		}
 
@@ -406,6 +413,7 @@ func (s *Session) startTurn(hInput harness.Input) error {
 				return
 			}
 			if reply != nil {
+				lastReply = reply
 				s.finishTurn(api.TurnStatusDone)
 			}
 		}
@@ -419,6 +427,16 @@ func (s *Session) startTurn(hInput harness.Input) error {
 			s.publisher.Publish(api.SessionStreamTopic(s.ID), api.CompletedEvent{
 				SessionID: s.ID,
 			})
+			s.notifyParentUpdate()
+			if s.parent != nil {
+				var outText string
+				if lastReply != nil {
+					outText = strings.TrimSpace(lastReply.GetContent().Text())
+				}
+				text := fmt.Sprintf("<subagent_completed session_id=%q agent=%q title=%q status=\"completed\" work_dir=%q>\n%s\n</subagent_completed>",
+					s.ID, s.Config.Agent, s.Title, s.WorkDir, outText)
+				s.parent.Enqueue(message.NewUserTextMeta(text, map[string]any{harness.MetaSystemKind: harness.SystemKindSubagent}))
+			}
 		}
 	})
 	return nil
@@ -429,19 +447,17 @@ func (s *Session) Enqueue(msg message.Message) {
 	if msg == nil {
 		return
 	}
-	var item queueItem
-	if harness.SystemKindOf(msg) == harness.SystemKindTask {
-		item = queueItem{
-			ID:      msg.GetID(),
-			Kind:    api.QueueKindTask,
-			Message: message.CloneMessage(msg),
-		}
-	} else {
-		item = queueItem{
-			ID:      msg.GetID(),
-			Kind:    api.QueueKindMessage,
-			Message: message.CloneMessage(msg),
-		}
+	kind := api.QueueKindMessage
+	switch harness.SystemKindOf(msg) {
+	case harness.SystemKindTask:
+		kind = api.QueueKindTask
+	case harness.SystemKindSubagent:
+		kind = api.QueueKindSubagent
+	}
+	item := queueItem{
+		ID:      msg.GetID(),
+		Kind:    kind,
+		Message: message.CloneMessage(msg),
 	}
 	s.enqueueItem(item)
 
@@ -669,6 +685,12 @@ func (s *Session) handleAsyncError(err error) {
 			Error:     err.Error(),
 		})
 	}
+	s.notifyParentUpdate()
+	if s.parent != nil && !errors.Is(err, context.Canceled) {
+		text := fmt.Sprintf("<subagent_completed session_id=%q agent=%q title=%q status=\"failed\" error=%q work_dir=%q>\n</subagent_completed>",
+			s.ID, s.Config.Agent, s.Title, err.Error(), s.WorkDir)
+		s.parent.Enqueue(message.NewUserTextMeta(text, map[string]any{harness.MetaSystemKind: harness.SystemKindSubagent}))
+	}
 }
 
 func (s *Session) send(ctx context.Context, stream iter.Seq2[any, error]) (*message.Assistant, error) {
@@ -705,6 +727,13 @@ func (s *Session) send(ctx context.Context, stream iter.Seq2[any, error]) (*mess
 					}
 				}
 				s.setStatus(status)
+				if status == api.StatusThinking {
+					if partialMsg, buildErr := agg.Build(); buildErr == nil && partialMsg != nil && len(partialMsg.Content) > 0 {
+						if blk, ok := partialMsg.Content[len(partialMsg.Content)-1].(*message.ThinkingBlock); ok && blk.Thinking != "" {
+							s.updateActivityFromThought(blk.Thinking)
+						}
+					}
+				}
 				clonedChunk := message.CloneAssistantChunk(*ev)
 				apiChunk := toAPIChunk(&clonedChunk)
 				s.publisher.Publish(api.SessionStreamTopic(s.ID), api.ChunkEvent{SessionID: s.ID, Chunk: *apiChunk})
@@ -725,6 +754,10 @@ func (s *Session) send(ctx context.Context, stream iter.Seq2[any, error]) (*mess
 				if asst, ok := ev.(*message.Assistant); ok {
 					if len(asst.ToolCalls()) > 0 {
 						pendingTools = len(asst.ToolCalls())
+						tc := asst.ToolCalls()[0]
+						s.Lock()
+						s.Activity = toolActivityLabel(*tc)
+						s.Unlock()
 						s.setStatus(api.StatusExecuting)
 					}
 				} else if _, ok := ev.(*message.Tool); ok {
@@ -786,6 +819,7 @@ func (s *Session) send(ctx context.Context, stream iter.Seq2[any, error]) (*mess
 			if len(questions) > 0 {
 				s.publisher.Publish(api.SessionStreamTopic(s.ID), api.QuestionRequestedEvent{SessionID: s.ID, Questions: questions})
 			}
+			s.notifyParentUpdate()
 
 		case api.TodosUpdatedEvent:
 			s.Lock()
@@ -794,6 +828,7 @@ func (s *Session) send(ctx context.Context, stream iter.Seq2[any, error]) (*mess
 
 			ev.SessionID = s.ID
 			s.publisher.Publish(api.SessionStreamTopic(s.ID), ev)
+			s.notifyParentUpdate()
 
 		case api.CompactionStartedEvent:
 			s.setStatus(api.StatusCompacting)
@@ -821,6 +856,7 @@ func (s *Session) send(ctx context.Context, stream iter.Seq2[any, error]) (*mess
 
 			ev.SessionID = s.ID
 			s.publisher.Publish(api.SessionStreamTopic(s.ID), ev)
+			s.notifyParentUpdate()
 
 		case harness.Completed:
 			if ev.Message != nil {

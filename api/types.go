@@ -251,10 +251,11 @@ type TasksResponse struct {
 type QueueKind string
 
 const (
-	QueueKindMessage QueueKind = "message"
-	QueueKindCommand QueueKind = "command"
-	QueueKindCompact QueueKind = "compact"
-	QueueKindTask    QueueKind = "task"
+	QueueKindMessage  QueueKind = "message"
+	QueueKindCommand  QueueKind = "command"
+	QueueKindCompact  QueueKind = "compact"
+	QueueKindTask     QueueKind = "task"
+	QueueKindSubagent QueueKind = "subagent"
 )
 
 type QueueItem struct {
@@ -363,6 +364,10 @@ type Session struct {
 	Tasks              []Task              `json:"tasks,omitempty"`
 	Todos              []TodoItem          `json:"todos,omitempty"`
 	Queue              []QueueItem         `json:"queue,omitempty"`
+	ParentID           string              `json:"parent_id,omitempty"`
+	WorkDir            string              `json:"work_dir,omitempty"`
+	Subagents          []Session           `json:"subagents,omitempty"`
+	Activity           string              `json:"activity,omitempty"`
 	CreatedAt          time.Time           `json:"created_at"`
 	UpdatedAt          time.Time           `json:"updated_at"`
 }

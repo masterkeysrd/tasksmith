@@ -2,20 +2,31 @@ package components
 
 import (
 	"strings"
+	"time"
 
+	"github.com/masterkeysrd/kite/extras/kitex"
 	"github.com/masterkeysrd/kite/extras/trail"
 	"github.com/masterkeysrd/kite/style"
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/cli/store"
+	"github.com/masterkeysrd/tasksmith/internal/ui/format"
 	"github.com/masterkeysrd/tasksmith/internal/ui/theme"
 )
 
 type tasksBarProps struct {
-	Tasks []api.Task
+	Subagents []api.Session
+	Tasks     []api.Task
 }
 
 var tasksBar = trail.FC("TasksBar", func(props tasksBarProps) trail.Node {
 	scheme := theme.UseTheme()
+
+	tick, setTick := kitex.UseState(0)
+	if len(props.Subagents) > 0 {
+		kitex.UseInterval(func() {
+			setTick(tick() + 1)
+		}, time.Second, []any{len(props.Subagents)})
+	}
 
 	dotStyle := style.S().Flex(0, 0).WhiteSpace(style.WhiteSpaceNoWrap).Foreground(scheme.Color.Icon.Primary)
 	timeStyle := style.S().Flex(0, 0).WhiteSpace(style.WhiteSpaceNoWrap).Foreground(scheme.Color.Text.Secondary)
@@ -30,8 +41,64 @@ var tasksBar = trail.FC("TasksBar", func(props tasksBarProps) trail.Node {
 
 	border := style.SingleBorder().Top(false).Bottom(true).Left(false).Right(false).Color(scheme.Color.Border.Default)
 
-	rows := make([]trail.Node, len(props.Tasks))
-	for i, t := range props.Tasks {
+	rows := make([]trail.Node, 0, len(props.Subagents)+len(props.Tasks))
+
+	for _, sub := range props.Subagents {
+		agentColor := SubagentColor(scheme, sub.Config.Agent)
+		title := strings.TrimSpace(strings.ReplaceAll(sub.Title, "\n", " "))
+		if title == "" {
+			title = sub.ID
+		}
+		activity := strings.TrimSpace(strings.ReplaceAll(sub.Activity, "\n", " "))
+		if activity == "" {
+			if sub.Status == api.StatusWaitingPermission {
+				activity = "Waiting for permission"
+			} else if sub.Status == api.StatusWaitingQuestion {
+				activity = "Waiting for answer"
+			} else if sub.Status == api.StatusThinking {
+				activity = "Thinking..."
+			} else if sub.Status == api.StatusGenerating {
+				activity = "Generating"
+			} else if sub.Status != "" {
+				activity = string(sub.Status)
+			}
+		}
+		if runes := []rune(activity); len(runes) > 60 {
+			activity = string(runes[:60]) + "..."
+		}
+		elapsed := "--"
+		if !sub.CreatedAt.IsZero() {
+			elapsed = format.Duration(time.Since(sub.CreatedAt).Truncate(time.Second))
+		}
+
+		subagentRow := trail.Box(trail.BoxProps{
+			Style: style.S().
+				Display(style.DisplayFlex).
+				FlexDirection(style.FlexRow).
+				Width(style.Percent(100)).
+				MinWidth(style.Cells(0)).
+				Overflow(style.OverflowHidden),
+		},
+			trail.Span(trail.SpanProps{Style: style.S().Flex(0, 0).WhiteSpace(style.WhiteSpacePre).Foreground(agentColor)}, trail.Text("● ")),
+			trail.Span(trail.SpanProps{Style: style.S().Flex(0, 0).WhiteSpace(style.WhiteSpacePre).Foreground(scheme.Color.Text.Primary)}, trail.Text("Agent(")),
+			trail.Span(trail.SpanProps{Style: style.S().Flex(0, 0).WhiteSpace(style.WhiteSpacePre).Bold(true).Foreground(agentColor)}, trail.Text(sub.Config.Agent)),
+			trail.Span(trail.SpanProps{Style: style.S().Flex(0, 0).WhiteSpace(style.WhiteSpacePre).Foreground(scheme.Color.Text.Primary)}, trail.Text(": "+title+")")),
+			trail.Span(trail.SpanProps{
+				Style: style.S().
+					Flex(1, 1).
+					MinWidth(style.Cells(0)).
+					Margin(0, 0, 0, 2).
+					WhiteSpace(style.WhiteSpaceNoWrap).
+					Overflow(style.OverflowHidden).
+					TextOverflow(style.TextOverflowEllipsis).
+					Foreground(scheme.Color.Text.Secondary),
+			}, trail.Text(activity)),
+			trail.Span(trail.SpanProps{Style: style.S().Flex(0, 0).WhiteSpace(style.WhiteSpacePre).Foreground(scheme.Color.Text.Secondary)}, trail.Text(" · "+elapsed)),
+		)
+		rows = append(rows, subagentRow)
+	}
+
+	for _, t := range props.Tasks {
 		timeStr := "--:--:--"
 		if !t.StartedAt.IsZero() {
 			timeStr = t.StartedAt.Local().Format("15:04:05")
@@ -58,14 +125,14 @@ var tasksBar = trail.FC("TasksBar", func(props tasksBarProps) trail.Node {
 			trail.Span(trail.SpanProps{Style: statusStyle}, trail.Text(string(t.Status))),
 		}
 
-		rows[i] = trail.Box(trail.BoxProps{
+		rows = append(rows, trail.Box(trail.BoxProps{
 			Style: style.S().
 				Display(style.DisplayFlex).
 				FlexDirection(style.FlexRow).
 				Width(style.Percent(100)).
 				MinWidth(style.Cells(0)).
 				Overflow(style.OverflowHidden),
-		}, rowChildren...)
+		}, rowChildren...))
 	}
 
 	return trail.Box(trail.BoxProps{
@@ -77,14 +144,15 @@ var tasksBar = trail.FC("TasksBar", func(props tasksBarProps) trail.Node {
 	}, rows...)
 })
 
-// Tasks renders an indicator list of active background tasks.
+// Tasks renders an indicator list of active background tasks and running subagents.
 var Tasks = trail.SimpleFC("Tasks", func() trail.Node {
 	if store.UseHasActiveSlot() {
 		return nil
 	}
-	running := store.UseRunningTasks()
-	if len(running) == 0 {
+	runningSubs := store.UseRunningSubagents()
+	runningTasks := store.UseRunningTasks()
+	if len(runningSubs) == 0 && len(runningTasks) == 0 {
 		return nil
 	}
-	return tasksBar(tasksBarProps{Tasks: running})
+	return tasksBar(tasksBarProps{Subagents: runningSubs, Tasks: runningTasks})
 })

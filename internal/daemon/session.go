@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"os/exec"
 	"strings"
 
 	"github.com/masterkeysrd/tasksmith/api"
@@ -41,7 +42,11 @@ func (r *workspaceRuntime) loadOrCacheSession(ctx context.Context, dbSess *sessi
 		Context:     r.bgCtx,
 		WaitGroup:   &r.wg,
 		OnUpdate: func(ctx context.Context, s *session.Session) error {
-			return s.CheckpointTo(ctx, r.sessionStore)
+			if err := s.CheckpointTo(ctx, r.sessionStore); err != nil {
+				return err
+			}
+			r.sessions.Save(s)
+			return nil
 		},
 	}
 
@@ -58,6 +63,18 @@ func (r *workspaceRuntime) loadOrCacheSession(ctx context.Context, dbSess *sessi
 	}
 	r.sessions.Save(sess)
 	r.createMu.Unlock()
+
+	if sess.ParentID == "" {
+		children, err := r.sessionStore.List(ctx, session.ListFilter{ParentID: new(sess.ID)})
+		if err == nil {
+			for _, chDB := range children {
+				if child, err := r.getLiveSession(ctx, chDB.ID); err == nil {
+					sess.AddChild(child)
+					child.SetParent(sess)
+				}
+			}
+		}
+	}
 
 	return sess, nil
 }
@@ -107,7 +124,11 @@ func (r *workspaceRuntime) CreateSession(ctx context.Context, req api.CreateSess
 		Context:     r.bgCtx,
 		WaitGroup:   &r.wg,
 		OnUpdate: func(ctx context.Context, s *session.Session) error {
-			return s.CheckpointTo(ctx, r.sessionStore)
+			if err := s.CheckpointTo(ctx, r.sessionStore); err != nil {
+				return err
+			}
+			r.sessions.Save(s)
+			return nil
 		},
 	}
 
@@ -157,7 +178,19 @@ func (r *workspaceRuntime) GetSession(ctx context.Context, id string) (*session.
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	return r.getLiveSession(ctx, id)
+	sess, err := r.getLiveSession(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+
+	if sess.ParentID != "" && sess.Parent() == nil {
+		if parent, err := r.getLiveSession(ctx, sess.ParentID); err == nil {
+			parent.AddChild(sess)
+			sess.SetParent(parent)
+		}
+	}
+
+	return sess, nil
 }
 
 // ListSessions lists all sessions for this workspace runtime.
@@ -171,19 +204,33 @@ func (r *workspaceRuntime) ListSessions(ctx context.Context) ([]*session.Session
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	list, err := r.sessionStore.List(ctx)
+	list, err := r.sessionStore.List(ctx, session.ListFilter{})
 	if err != nil {
 		return nil, err
 	}
-	out := make([]*session.Session, len(list))
+	all := make([]*session.Session, len(list))
+	byID := make(map[string]*session.Session, len(list))
 	for i, dbSess := range list {
 		live, err := r.getLiveSession(ctx, dbSess.ID)
 		if err != nil {
 			return nil, err
 		}
-		out[i] = live
+		all[i] = live
+		byID[live.ID] = live
 	}
-	return out, nil
+
+	var roots []*session.Session
+	for _, sess := range all {
+		if sess.ParentID != "" {
+			if parent, ok := byID[sess.ParentID]; ok {
+				parent.AddChild(sess)
+				sess.SetParent(parent)
+			}
+		} else {
+			roots = append(roots, sess)
+		}
+	}
+	return roots, nil
 }
 
 // UpdateSession updates an existing session's configuration or title.
@@ -233,6 +280,12 @@ func (r *workspaceRuntime) DeleteSession(ctx context.Context, id string) error {
 	}
 
 	if sess != nil {
+		if parent := sess.Parent(); parent != nil {
+			parent.RemoveChild(sess.ID)
+		}
+		for _, child := range sess.Children() {
+			_ = r.DeleteSession(ctx, child.ID)
+		}
 		_ = sess.Cancel(ctx)
 		_ = sess.Close()
 		if sess.Timeline != nil {
@@ -240,6 +293,10 @@ func (r *workspaceRuntime) DeleteSession(ctx context.Context, id string) error {
 		}
 		if sess.Journal != nil {
 			_ = sess.Journal.Delete(ctx)
+		}
+		if sess.WorkDir != "" && sess.WorkDir != r.ws.RootDir() {
+			_ = exec.CommandContext(ctx, "git", "-C", r.ws.RootDir(), "worktree", "remove", "--force", sess.WorkDir).Run()
+			_ = os.RemoveAll(sess.WorkDir)
 		}
 	}
 

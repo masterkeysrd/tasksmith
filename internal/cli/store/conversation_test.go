@@ -1186,3 +1186,50 @@ func TestCompactionEventsAndTimeline(t *testing.T) {
 		t.Fatalf("unexpected cache_broken entry data: %+v", lastItem.Data)
 	}
 }
+
+func TestDraftFirstMessagePreservesPendingUser(t *testing.T) {
+	ResetStream()
+	ClearTranscript()
+	FreezeTranscript()
+	defer ResetStream()
+	defer ClearTranscript()
+
+	acc := newConversationAccumulator()
+	// 1. User sends first prompt in draft session (sessionID == "")
+	acc.addPendingUser("user-msg-1", "Check what changes are in progress")
+
+	// 2. getOrCreateSession assigns the newly created session ID
+	acc.setSessionID("sess-created-1")
+
+	// Pending user message must still be preserved in StreamState
+	st := GetStream()
+	if st.Messages == nil || len(*st.Messages) != 1 || (*st.Messages)[0].Role != api.RoleUser {
+		t.Fatalf("expected pending user message preserved after setSessionID, got %+v", st.Messages)
+	}
+
+	// 3. Even if the first event received is an assistant chunk (e.g. if user EntryAdded raced),
+	// pendingUser is promoted to history and flushed to the transcript before the assistant reply.
+	acc.applyEvent(api.Event{
+		Type: api.EventChunk,
+		Payload: api.ChunkEvent{
+			SessionID: "sess-created-1",
+			Chunk: api.Chunk{
+				ID:      "asst-1",
+				Content: []api.Block{{Type: api.BlockText, Text: "Checking repository..."}},
+			},
+		},
+	})
+
+	tr := GetTranscript()
+	if tr.Items == nil || len(*tr.Items) < 2 {
+		t.Fatalf("expected user message flushed to transcript (after header), got %+v", tr.Items)
+	}
+	userItem := (*tr.Items)[1]
+	if userItem.Kind != TranscriptKindMessage {
+		t.Fatalf("expected TranscriptKindMessage, got %v", userItem.Kind)
+	}
+	msg, ok := userItem.Data.(Message)
+	if !ok || msg.Role != api.RoleUser || msg.Parts[0].Text.Text != "Check what changes are in progress" {
+		t.Fatalf("unexpected flushed user message: %+v", userItem.Data)
+	}
+}

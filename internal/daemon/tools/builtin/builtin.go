@@ -39,6 +39,8 @@ type Config struct {
 	Workspace    *workspace.Workspace
 	AllowedTools []string
 	Skills       []warp.Skill
+	Subagents    []*warp.Agent
+	Agents       AgentManager
 }
 
 // Validate ensures that all required dependencies are non-nil. Zero silent
@@ -121,6 +123,27 @@ func New(cfg Config) ([]tools.Tool, error) {
 		{ToolLoadSkill, func(m tools.Metadata) tools.Tool {
 			return tools.NewHandler(ToolLoadSkill, m, newLoadSkillTool(cfg.Skills, cfg.Workspace))
 		}},
+	}
+
+	if cfg.Agents != nil && len(cfg.Subagents) > 0 {
+		toolEntries = append(toolEntries,
+			struct {
+				name    string
+				factory func(meta tools.Metadata) tools.Tool
+			}{
+				ToolInvokeAgent, func(m tools.Metadata) tools.Tool {
+					return tools.NewHandler(ToolInvokeAgent, m, newInvokeAgentTool(cfg.Agents, cfg.Subagents))
+				},
+			},
+			struct {
+				name    string
+				factory func(meta tools.Metadata) tools.Tool
+			}{
+				ToolManageAgents, func(m tools.Metadata) tools.Tool {
+					return tools.NewHandler(ToolManageAgents, m, &manageAgentsTool{agents: cfg.Agents})
+				},
+			},
+		)
 	}
 
 	var out []tools.Tool

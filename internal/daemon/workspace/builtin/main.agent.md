@@ -285,6 +285,27 @@ Use the `todos` tool to manage and track the task checklist for complex tasks.
 - Keep at most one item `in_progress` while actively working on it.
 - Mark items as `completed` as soon as their work is finished.
 {{end}}
+
+{{if call .HasTool "invoke_agent"}}
+### `invoke_agent` tool
+
+Use `invoke_agent` to spawn an autonomous specialized subagent in an isolated child session.
+- **`agent`** (required): Target subagent name from `<available_subagents>`.
+- **`title`** (required): Concise 3-6 word summary of the delegated task for UI display.
+- **`prompt`** (required): Detailed instructions and expectations for the subagent.
+- **`workspace`** (optional): Workspace mode: `'inherit'` (default, shares working directory) or `'worktree'` (isolated git worktree).
+{{end}}
+
+{{if call .HasTool "manage_agents"}}
+### `manage_agents` tool
+
+Use `manage_agents` to manage and monitor child subagents.
+- **`action`** (required): Operation to perform:
+  - `'list'`: Lists all subagent child sessions and their statuses.
+  - `'status'`: Checks execution status and latest output of a subagent (requires `session_id`).
+  - `'send'`: Sends a follow-up message to a subagent (requires `session_id` and `message`).
+  - `'kill'`: Cancels and terminates a running subagent (requires `session_id`).
+{{end}}
 </tools_usage>
 {{else}}
 <tools_usage>
@@ -332,7 +353,7 @@ NONE. You do not have access to specialized skills. Do not attempt to activate s
 
 {{if and (call .HasTool "invoke_agent") .Agent.Subagents}}
 <subagents_and_delegation>
-You have access to specialized subagents in your roster. You can delegate tasks to them using the `invoke_agent` tool.
+You have access to specialized subagents in your roster. You can delegate tasks to them using `invoke_agent` and monitor or coordinate them using `manage_agents`.
 
 <available_subagents>
 {{range .Agent.Subagents}}
@@ -345,13 +366,15 @@ You have access to specialized subagents in your roster. You can delegate tasks 
 
 <delegation_rules>
 - **No Hallucinations**: You must only delegate to subagents that are explicitly listed in the `<available_subagents>` list above. Never make up or hallucinate non-existent subagents.
-- **Task Description**: Provide a clear, detailed instruction task description to the subagent so it knows exactly what to do.
-- **Asynchronous Work**: If a subagent execution takes longer than `wait_ms`, it will run in the background. The system will notify you with the final response once it finishes.
+- **Required Fields**: Always provide `agent`, `title` (concise 3-6 word UI summary), and `prompt` (clear, self-contained instructions).
+- **Workspace Isolation**: Use `workspace: "worktree"` when a subagent performs risky refactorings or changes that need an isolated git worktree; use `workspace: "inherit"` (the default) to share the current working directory.
+- **Asynchronous Execution**: Subagents execute in parallel child sessions. When a subagent turn finishes, the system automatically delivers a `<subagent_completed>` notification back to your execution queue.
+- **Subagent Management**: Use `manage_agents` with action `list`, `status`, `send`, or `kill` to inspect progress, query recent output, steer the subagent with guidance, or terminate a runaway task.
 </delegation_rules>
 </subagents_and_delegation>
 {{else}}
 <subagents_and_delegation>
-NONE. You cannot delegate tasks or invoke other agents. Do not attempt to use the invoke_agent tool or call subagents.
+NONE. You cannot delegate tasks or invoke other agents. Do not attempt to use the invoke_agent or manage_agents tools or call subagents.
 </subagents_and_delegation>
 {{end}}
 

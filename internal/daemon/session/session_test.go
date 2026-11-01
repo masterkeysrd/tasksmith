@@ -622,7 +622,7 @@ func (c *testCoordinator) List(ctx context.Context) ([]*Session, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	list, err := c.store.List(ctx)
+	list, err := c.store.List(ctx, ListFilter{})
 	if err != nil {
 		return nil, err
 	}

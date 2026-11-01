@@ -38,6 +38,9 @@ import (
 type Config struct {
 	ID          string
 	Title       string
+	ParentID    string
+	WorkDir     string
+	Parent      *Session
 	Session     api.SessionConfig
 	DB          *sql.DB
 	Workspace   *workspace.Workspace
@@ -114,6 +117,14 @@ func initSession(ctx context.Context, sess *Session, cfg Config) error {
 	sess.bgCtx = cfg.Context
 	sess.wg = cfg.WaitGroup
 	sess.onUpdate = cfg.OnUpdate
+	sess.db = cfg.DB
+	sess.parent = cfg.Parent
+	if sess.parent != nil {
+		sess.ParentID = sess.parent.ID
+	}
+	if strings.TrimSpace(sess.WorkDir) == "" {
+		sess.WorkDir = cfg.Workspace.RootDir()
+	}
 	sess.Diagnostics = sess.modelDiagnostics(sess.Config)
 	return sess.initSubsystems(ctx, cfg.DB)
 }
@@ -147,6 +158,8 @@ func New(ctx context.Context, cfg Config) (*Session, error) {
 		ID:        id,
 		Title:     strings.TrimSpace(cfg.Title),
 		Config:    resolvedConfig,
+		ParentID:  cfg.ParentID,
+		WorkDir:   cfg.WorkDir,
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
@@ -187,6 +200,8 @@ func Open(ctx context.Context, dbSess *Session, cfg Config) (*Session, error) {
 		ID:          dbSess.ID,
 		Title:       dbSess.Title,
 		Config:      dbSess.Config,
+		ParentID:    dbSess.ParentID,
+		WorkDir:     dbSess.WorkDir,
 		CreatedAt:   dbSess.CreatedAt,
 		UpdatedAt:   dbSess.UpdatedAt,
 		Permissions: dbSess.Permissions.Clone(),
@@ -240,8 +255,14 @@ type Session struct {
 	Title       string                  `json:"title"`
 	Config      api.SessionConfig       `json:"config"`
 	Diagnostics []api.SessionDiagnostic `json:"diagnostics,omitempty"`
+	ParentID    string                  `json:"parent_id,omitempty"`
+	WorkDir     string                  `json:"work_dir,omitempty"`
 	CreatedAt   time.Time               `json:"created_at"`
 	UpdatedAt   time.Time               `json:"updated_at"`
+
+	parent   *Session   `json:"-"`
+	children []*Session `json:"-"`
+	db       *sql.DB    `json:"-"`
 
 	Permissions api.Permissions            `json:"-"`
 	PermManager permissions.SessionManager `json:"-"`
@@ -293,6 +314,11 @@ func (s *Session) Clone() *Session {
 		ID:          s.ID,
 		Title:       s.Title,
 		Config:      cpConfig,
+		ParentID:    s.ParentID,
+		WorkDir:     s.WorkDir,
+		parent:      s.parent,
+		children:    slices.Clone(s.children),
+		db:          s.db,
 		Diagnostics: slices.Clone(s.Diagnostics),
 		CreatedAt:   s.CreatedAt,
 		UpdatedAt:   s.UpdatedAt,
@@ -347,12 +373,27 @@ func (s *Session) setStatus(next api.SessionStatus) {
 	}
 	s.Status = next
 	s.Running = (next == api.StatusThinking || next == api.StatusGenerating || next == api.StatusExecuting || next == api.StatusCompacting)
+	switch next {
+	case api.StatusIdle:
+		s.Activity = ""
+	case api.StatusGenerating:
+		s.Activity = "Generating"
+	case api.StatusWaitingPermission:
+		s.Activity = "Waiting for permission"
+	case api.StatusWaitingQuestion:
+		s.Activity = "Waiting for answer"
+	case api.StatusThinking:
+		if s.Activity == "" {
+			s.Activity = "Thinking..."
+		}
+	}
 	s.Unlock()
 
 	s.publisher.Publish(api.SessionStreamTopic(s.ID), api.StatusChangedEvent{
 		SessionID: s.ID,
 		Status:    next,
 	})
+	s.notifyParentUpdate()
 }
 
 func (s *Session) ResolvedModel() (models.Model, *api.ThinkingSetting, bool) {
@@ -392,7 +433,7 @@ func (s *Session) initSubsystems(ctx context.Context, db *sql.DB) error {
 
 	sb, err := sandbox.New(sandbox.Config{
 		ID:      s.ID,
-		WorkDir: s.workspace.RootDir(),
+		WorkDir: s.WorkDir,
 		Mode:    sandbox.ModeLocal,
 		Env:     s.workspace.Env(),
 		Network: sandbox.NetworkPolicy{
@@ -436,12 +477,16 @@ func (s *Session) initSubsystems(ctx context.Context, db *sql.DB) error {
 	}
 	s.Tools = container
 
-	s.PermManager = s.permRoot.Attach(s.Config.Mode, s.Permissions, func(p api.Permissions) error {
-		s.Lock()
-		s.Permissions = p.Clone()
-		s.Unlock()
-		return s.checkpoint(s.bgCtx)
-	})
+	if s.parent != nil {
+		s.PermManager = s.parent.PermManager
+	} else {
+		s.PermManager = s.permRoot.Attach(s.Config.Mode, s.Permissions, func(p api.Permissions) error {
+			s.Lock()
+			s.Permissions = p.Clone()
+			s.Unlock()
+			return s.checkpoint(s.bgCtx)
+		})
+	}
 
 	h, err := harness.New(harness.Config{
 		ID:          s.ID,
@@ -633,6 +678,9 @@ func (s *Session) Update(ctx context.Context, req api.UpdateSessionRequest) erro
 
 // Close closes session-scoped runtime resources like the Sandbox.
 func (s *Session) Close() error {
+	for _, ch := range s.Children() {
+		_ = ch.Close()
+	}
 	s.Lock()
 	defer s.Unlock()
 	if s.Tasks != nil {
@@ -749,6 +797,7 @@ func (s *Session) buildToolsForAgent(agentName string) (tools.Container, error) 
 
 	var allowedToolNames []string
 	var skills []warp.Skill
+	var subagents []*warp.Agent
 
 	if agentName != "" {
 		if resolved, err := cat.ResolveAgent(agentName); err == nil && resolved != nil {
@@ -759,6 +808,7 @@ func (s *Session) buildToolsForAgent(agentName string) (tools.Container, error) 
 				}
 			}
 			skills = resolved.Skills
+			subagents = resolved.Subagents
 		}
 	}
 
@@ -771,7 +821,7 @@ func (s *Session) buildToolsForAgent(agentName string) (tools.Container, error) 
 	}
 
 	guardInst := shellguard.New(shellguard.Config{
-		WorkspaceDir: s.workspace.RootDir(),
+		WorkspaceDir: s.WorkDir,
 		ReadDirs:     readDirs,
 	})
 
@@ -783,6 +833,8 @@ func (s *Session) buildToolsForAgent(agentName string) (tools.Container, error) 
 		Workspace:    s.workspace,
 		AllowedTools: allowedToolNames,
 		Skills:       skills,
+		Subagents:    subagents,
+		Agents:       s,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("session: initialize builtin tools: %w", err)

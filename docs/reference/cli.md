@@ -68,6 +68,7 @@ Inside the TaskSmith interactive REPL, slash commands provide instant control ov
 | **`/revert`** | | `[path] [entry_id]` | Reverts uncommitted file mutations for a specific file, change entry, or the entire session. |
 | **`/permissions`** | `/perm`, `/perms` | *(none)* | Opens the interactive permissions browser to inspect and edit project and global allow/deny rules. |
 | **`/tasks`** | | *(none)* | Opens the background task manager to inspect running commands and stream task logs. |
+| **`/subagents`** | `/subagent` | *(none)* | Opens the interactive subagent browser to inspect running and completed subagents, view live outputs, or terminate tasks. |
 | **`/compact`** | | `[focus]` | Compacts conversation history to free context window space, with optional focus instructions. Requires pending permissions and questions to be resolved first. |
 | **`/context`** | | *(none)* | Displays visual token usage grid and detailed context window breakdown by category. |
 | **`/usage`** | | `[session\|workspace\|global]` | Opens the usage browser slot on the Session, Workspace or Global tab (default: Session). See [Usage Browser](#usage-browser-usage). |
@@ -115,6 +116,8 @@ TaskSmith uses structured modal keybindings across its terminal interface:
 | `Shift+Tab` | Composer | Cycles session permission mode: `default` $\to$ `accept_edits` $\to$ `plan` $\to$ `ask` $\to$ `auto`. |
 | `!` *(on empty input)* | Composer | Switches composer to direct Bash command mode (`!command`). |
 | `Backspace` *(on empty Bash prompt)* | Composer | Exits direct Bash command mode and returns to standard prompt. |
+| `Ctrl+Y` | Composer | Approves the pending tool authorization request for the first waiting subagent once without leaving the composer. |
+| `Ctrl+G` | Composer | Opens the live subagent chat view for the waiting subagent in the slot. |
 
 ### Autocomplete & History
 
@@ -159,6 +162,25 @@ TaskSmith uses structured modal keybindings across its terminal interface:
 | `x` | Tasks Browser | Sends SIGTERM/kill signal to terminate the highlighted running task. |
 | `a` | Tasks Browser | Toggles between displaying all session tasks and active running tasks only. |
 | `Esc` | Output Viewer / Browser | Closes the streaming log viewer or dismisses the task manager. |
+
+### Subagents Browser (`/subagents`)
+
+| Keybinding | Scope | Action |
+| :--- | :--- | :--- |
+| `Enter` | Subagents Browser | Opens the live streaming chat view and history for the highlighted subagent. |
+| `x` | Subagents Browser | Sends cancel signal to terminate the highlighted running subagent. |
+| `a` | Subagents Browser | Toggles between displaying all subagents and active running subagents only. |
+| `Esc` | Subagents Browser | Closes the subagents browser and returns to composer. |
+
+### Subagent Live Viewer
+
+| Keybinding | Scope | Action |
+| :--- | :--- | :--- |
+| `↑` / `↓` or `k` / `j` | Subagent Viewer | Scrolls the live chat view up or down by 1 line. |
+| `PgUp` / `PgDn` or `Ctrl+U` / `Ctrl+D` / `b` / `f` | Subagent Viewer | Scrolls the live chat view up or down by 8 lines. |
+| `Home` / `End` or `g` / `G` | Subagent Viewer | Scrolls directly to the top or bottom of the live chat view. |
+| `x` | Subagent Viewer | Sends cancel signal to terminate the subagent if currently active. |
+| `Esc` | Subagent Viewer | Returns to the subagents browser or dismisses the viewer. |
 
 ---
 

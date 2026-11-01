@@ -125,6 +125,7 @@ Some built-in commands:
 | `/changes` | `/changes` | Open the interactive file changes browser. |
 | `/revert` | `/revert [path] [entry_id]` | Revert tracked file modifications for a specific path or the entire session. |
 | `/tasks` | `/tasks` | Open the background task monitor. |
+| `/subagents` | `/subagents` (or `/subagent`) | Open the subagents browser and live session inspector. |
 | `/permissions` | `/permissions` | Open the interactive permission rules manager. |
 | `/theme` | `/theme [name]` | Switch the terminal color theme. |
 | `/clear` | `/clear` | Start a fresh session draft. |
@@ -271,3 +272,19 @@ When an agent runs a persistent daemon command, dev server, or test suite using 
 - **Live Streaming Output**: Press `Enter` on any task to view a live, auto-scrolling log viewer tailing the last 50 lines of output.
 - **Terminate Tasks (`x`)**: Press `x` while highlighting a running or pending task to terminate the background process immediately.
 - **Toggle View (`a`)**: Press `a` to toggle between showing only currently running tasks or all session tasks (including completed or canceled processes).
+
+---
+
+## Subagents & Live Inspection (`/subagents`)
+
+When an agent delegates work using `invoke_agent`, TaskSmith spawns an asynchronous child session (`@explore`, `@general`, or a custom agent) and surfaces its real-time status in the TUI without interrupting your main conversation flow:
+
+- **Bottom Activity Bar**: Running subagents and running background tasks share the status block directly below the composer. Each running subagent displays its persona, task title, current activity (first line of its active thought, `"Generating"`, or current tool action such as `"Reading files"` / `"Editing files"`), and live elapsed time:
+  ```text
+  ● Agent(explore: Trace auth token refresh)  Reading files · 14s
+  ```
+- **Non-Blocking Permission & Question Alerts**: When a background subagent needs permission or asks a question, a warning banner appears above the composer so your typing is never interrupted:
+  - Press `Ctrl+Y` to approve the pending permission request (`allow_once`) immediately without leaving the composer.
+  - Press `Ctrl+G` to open the waiting subagent's live view inside `<Slot />` to inspect full details, choose a broader permission scope, or answer a questionnaire.
+- **Subagents Browser (`/subagents`)**: Run `/subagents` (or `/subagent`) to list active child subagents (or press `a` to toggle completed/idle subagents), inspect their live conversation (`Enter`), or terminate a running subagent (`x`).
+- **Live Navigable Subagent Viewer**: Selecting a subagent opens its live streaming chat view inside `<Slot />`, complete with inline permission/question prompts and keyboard scrolling (`↑`/`↓` or `j`/`k`, `PgUp`/`PgDn` or `Ctrl+U`/`Ctrl+D`, `g`/`G` for top/bottom, `x` to kill, and `Esc` to return).

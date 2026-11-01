@@ -95,6 +95,7 @@ var appContent = trail.SimpleFC("AppContent", func() trail.Node {
 		components.Transcript(),
 		components.ActiveStream(),
 		components.Queue(),
+		components.SubagentAlert(),
 		components.Composer(components.ComposerProps{
 			Autocomplete:    engine,
 			CompletionViews: views,

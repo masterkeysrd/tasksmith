@@ -25,11 +25,17 @@ var Queue = trail.SimpleFC("Queue", func() trail.Node {
 
 	rows := make([]trail.Node, 0, len(items))
 	for _, item := range items {
+		if item.Kind == api.QueueKindTask || item.Kind == api.QueueKindSubagent {
+			continue
+		}
+		txt := queueItemText(item)
+		if txt == "" {
+			continue
+		}
 		prefix := "> "
 		if item.Kind == api.QueueKindCommand {
 			prefix = "! "
 		}
-		txt := queueItemText(item)
 
 		rowStyle := style.S().
 			Display(style.DisplayFlex).
@@ -53,6 +59,10 @@ var Queue = trail.SimpleFC("Queue", func() trail.Node {
 			trail.Span(trail.SpanProps{Style: prefixStyle}, trail.Text(prefix)),
 			trail.Span(trail.SpanProps{Style: textStyle}, trail.Text(txt)),
 		))
+	}
+
+	if len(rows) == 0 {
+		return nil
 	}
 
 	return trail.Box(trail.BoxProps{

@@ -23,6 +23,7 @@ type State struct {
 	Todos              []api.TodoItem          `json:"todos,omitempty"`
 	Context            api.ContextState        `json:"context"`
 	Error              string                  `json:"error,omitempty"`
+	Activity           string                  `json:"activity,omitempty"`
 	StartedAt          time.Time               `json:"started_at,omitzero"`
 	FinishedAt         time.Time               `json:"finished_at,omitzero"`
 
@@ -85,6 +86,7 @@ func (s *State) Clone() *State {
 		Todos:              slices.Clone(s.Todos),
 		Context:            s.Context,
 		Error:              s.Error,
+		Activity:           s.Activity,
 		StartedAt:          s.StartedAt,
 		FinishedAt:         s.FinishedAt,
 		decisions:          make(map[string]api.PermissionDecision),

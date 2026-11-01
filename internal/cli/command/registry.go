@@ -266,6 +266,7 @@ func (r *Registry) registerBuiltins() {
 	r.registerChangesCommands()
 	r.registerPermissionCommands()
 	r.registerTaskCommands()
+	r.registerSubagentCommands()
 	r.registerCompactCommand()
 	r.registerContextCommand()
 	r.registerUsageCommand()

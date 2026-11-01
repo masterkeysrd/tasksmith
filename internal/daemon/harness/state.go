@@ -21,6 +21,7 @@ const (
 	SystemKindCommand    = "command"
 	SystemKindTask       = "task"
 	SystemKindCompaction = "compaction"
+	SystemKindSubagent   = "subagent"
 )
 
 // SystemKindOf returns the "tasksmith.system.kind" metadata value on msg, or "" if unset.

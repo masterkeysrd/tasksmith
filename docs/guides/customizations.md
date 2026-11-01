@@ -78,7 +78,7 @@ TaskSmith checks the agent's temperature and thinking settings against the selec
 ### Scoping Capabilities
 - **`tools`**: Restrict the agent's actions using `policies.tools.include` or `exclude`. For example, a code reviewer can be restricted to read-only tools (`view`, `grep`, `glob`).
 - **`skills`**: Explicitly list which domain skills this agent should load (`["owasp-top-10"]`), or use `["*"]` to allow all skills in the workspace.
-- **`subagents`**: Define which agents this persona is allowed to invoke for subtasks. Set to `[]` to prevent recursive delegation.
+- **`subagents`**: Define which agents this persona is allowed to invoke for subtasks (e.g., built-in `explore` for read-only codebase research, `general` for general-purpose engineering tasks, or `["*"]` for all agent-triggerable personas). When `subagents` resolves to at least one target agent, TaskSmith automatically provides `invoke_agent` and `manage_agents` to the session. Set to `[]` to prevent recursive delegation.
 
 ---
 

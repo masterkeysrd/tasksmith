@@ -18,6 +18,10 @@ TaskSmith ships with core tools built directly into the daemon binary and execut
 | `glob` | `read` | `safe` | Find files matching wildcard patterns (e.g., `**/*.go`, `src/**/*.tsx`). |
 | `web_fetch`| `net` | `outside` | Fetch web pages or REST API endpoints, converting HTML into clean Markdown for context injection. |
 | `ask_question` | `read` | `safe` | Prompt the user with interactive single-select, multi-select, or free-form questionnaires. |
+| `todos` | `write` | `safe` | Create and update the session's structured task checklist. |
+| `load_skill` | `read` | `safe` | Load specialized domain instructions and runbooks from a workspace or built-in skill. |
+| `invoke_agent` | `exec` | `safe` | Spawn an asynchronous child subagent session (optionally in an isolated Git worktree). |
+| `manage_agents` | `exec` | `safe` | List child subagents, check their status and output, send follow-up messages, or kill them. |
 
 For complete parameter schemas and tool options, see the [Built-in Tools Reference](../reference/tools.md).
 
