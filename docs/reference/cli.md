@@ -74,6 +74,7 @@ Inside the TaskSmith interactive REPL, slash commands provide instant control ov
 | **`/usage`** | | `[session\|workspace\|global]` | Opens the usage browser slot on the Session, Workspace or Global tab (default: Session). See [Usage Browser](#usage-browser-usage). |
 | **`/skills`** | | *(none)* | Opens the interactive skills browser to inspect runbooks, token estimates, and reload workspace skills. |
 | **`/workspace`** | `/ws` | `[reload]` | Reloads the active workspace resources from disk. With no subcommand, defaults to `reload`. |
+| **`/daemon`** | | `[status\|restart\|start\|stop]` | Inspects or manages the background Brain Daemon. With no subcommand, opens the interactive daemon browser. |
 
 ### Workspace Commands, Skills & Plugin Extensions
 
@@ -181,6 +182,16 @@ TaskSmith uses structured modal keybindings across its terminal interface:
 | `Home` / `End` or `g` / `G` | Subagent Viewer | Scrolls directly to the top or bottom of the live chat view. |
 | `x` | Subagent Viewer | Sends cancel signal to terminate the subagent if currently active. |
 | `Esc` | Subagent Viewer | Returns to the subagents browser or dismisses the viewer. |
+
+### Daemon Browser (`/daemon`)
+
+| Keybinding | Scope | Action |
+| :--- | :--- | :--- |
+| `r` | Daemon Browser | Restarts the daemon (or starts if offline) and refreshes health state. |
+| `s` | Daemon Browser | Starts the daemon if currently offline. |
+| `x` | Daemon Browser | Gracefully stops the running daemon. |
+| `g` | Daemon Browser | Re-queries daemon health and refreshes status in-place. |
+| `Esc` / `q` | Daemon Browser | Closes the daemon browser and returns to composer. |
 
 ---
 

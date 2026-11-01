@@ -3,11 +3,7 @@ package cmd
 import (
 	"context"
 	"fmt"
-	"os"
-	"os/exec"
-	"path/filepath"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/masterkeysrd/tasksmith/client"
@@ -182,10 +178,10 @@ func runDaemonStatus(cmd *cobra.Command, rootOpts *rootOptions) error {
 	return nil
 }
 
-// connectOrStart connects to an existing Brain Daemon at socketPath, or spawns
+// ConnectOrStart connects to an existing Brain Daemon at socketPath, or spawns
 // a detached background daemon process (`os.Executable() daemon serve --socket <socketPath>`)
 // and polls `/v1/health` until ready.
-func connectOrStart(ctx context.Context, socketPath string, spawnArgs ...string) (*client.Client, error) {
+func ConnectOrStart(ctx context.Context, socketPath string, spawnArgs ...string) (*client.Client, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -227,6 +223,10 @@ func connectOrStart(ctx context.Context, socketPath string, spawnArgs ...string)
 	}
 }
 
+func connectOrStart(ctx context.Context, socketPath string, spawnArgs ...string) (*client.Client, error) {
+	return ConnectOrStart(ctx, socketPath, spawnArgs...)
+}
+
 func isDaemonHealthy(ctx context.Context, c *client.Client) bool {
 	pingCtx, cancel := context.WithTimeout(ctx, 300*time.Millisecond)
 	defer cancel()
@@ -235,34 +235,5 @@ func isDaemonHealthy(ctx context.Context, c *client.Client) bool {
 }
 
 func spawnDetachedDaemon(socketPath string, spawnArgs []string) error {
-	exe, err := os.Executable()
-	if err != nil {
-		return fmt.Errorf("resolve executable path: %w", err)
-	}
-
-	if err := os.MkdirAll(filepath.Dir(socketPath), 0o700); err != nil {
-		return fmt.Errorf("create socket directory: %w", err)
-	}
-
-	args := spawnArgs
-	if len(args) == 0 {
-		args = []string{"daemon", "serve", "--socket", socketPath}
-	}
-
-	cmd := exec.Command(exe, args...)
-	cmd.Stdin = nil
-	cmd.Stdout = nil
-	cmd.Stderr = nil
-	cmd.SysProcAttr = &syscall.SysProcAttr{
-		Setsid: true,
-	}
-
-	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("spawn background daemon: %w", err)
-	}
-
-	go func() {
-		_ = cmd.Wait()
-	}()
-	return nil
+	return daemon.SpawnDetached(socketPath, spawnArgs...)
 }

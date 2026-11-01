@@ -15,6 +15,15 @@ const (
 	CtrlCHint = "Press Ctrl+C again to exit"
 )
 
+// DaemonStatus represents the connection health state between the REPL and Brain Daemon.
+type DaemonStatus string
+
+const (
+	DaemonConnected    DaemonStatus = "connected"
+	DaemonDisconnected DaemonStatus = "disconnected"
+	DaemonRestarting   DaemonStatus = "restarting"
+)
+
 // AppState holds global application UI state for the REPL.
 type AppState struct {
 	CtrlCPending  bool
@@ -26,9 +35,10 @@ type AppState struct {
 	Agents        *[]api.Agent
 	Commands      *[]api.Command
 	Skills        *[]api.Skill
+	DaemonStatus  DaemonStatus
 }
 
-var app = kites.Create(AppState{Hint: DefaultHint})
+var app = kites.Create(AppState{Hint: DefaultHint, DaemonStatus: DaemonConnected})
 
 // UseApp subscribes a component to a comparable slice of AppState.
 func UseApp[U comparable](selector func(AppState) U) U {
@@ -155,14 +165,30 @@ func SetWorkspaceSkills(skills []api.Skill) {
 	})
 }
 
+// SetDaemonStatus updates the daemon connection status in AppState.
+func SetDaemonStatus(status DaemonStatus) {
+	app.Set(func(s AppState) AppState {
+		s.DaemonStatus = status
+		return s
+	})
+}
+
+// UseDaemonStatus subscribes a component to AppState.DaemonStatus.
+func UseDaemonStatus() DaemonStatus {
+	return UseApp(func(s AppState) DaemonStatus {
+		return s.DaemonStatus
+	})
+}
+
 // ResetApp resets AppState to its default values while preserving version, workspace, and warnings.
 func ResetApp() {
 	app.Set(func(s AppState) AppState {
 		return AppState{
-			Hint:      DefaultHint,
-			Version:   s.Version,
-			Workspace: s.Workspace,
-			Warnings:  s.Warnings,
+			Hint:         DefaultHint,
+			Version:      s.Version,
+			Workspace:    s.Workspace,
+			Warnings:     s.Warnings,
+			DaemonStatus: DaemonConnected,
 		}
 	})
 }

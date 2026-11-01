@@ -19,14 +19,15 @@ var ErrInvalidOptions = errors.New("repl: invalid options")
 
 // Options holds configuration for starting the REPL.
 type Options struct {
-	Client    *client.Client
-	Workspace string
-	Version   string
-	SessionID string
-	Agent     string
-	Model     string
-	Title     string
-	Backend   backend.Backend
+	Client      *client.Client
+	Workspace   string
+	Version     string
+	SessionID   string
+	Agent       string
+	Model       string
+	Title       string
+	Backend     backend.Backend
+	StartDaemon func(ctx context.Context, socketPath string) error
 }
 
 // Validate checks that all required fields in [Options] are provided.
@@ -61,10 +62,11 @@ func Run(ctx context.Context, opts Options) error {
 	store.SetHeaderMeta(opts.Version, opts.Workspace)
 
 	store.InitSession(ctx, opts.Client, store.InitSessionOptions{
-		SessionID: opts.SessionID,
-		Agent:     opts.Agent,
-		Model:     opts.Model,
-		Title:     opts.Title,
+		SessionID:   opts.SessionID,
+		Agent:       opts.Agent,
+		Model:       opts.Model,
+		Title:       opts.Title,
+		StartDaemon: opts.StartDaemon,
 	})
 
 	trailOpts := []trail.Option{trail.WithCtrlCExit(false)}

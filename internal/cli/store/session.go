@@ -16,6 +16,7 @@ import (
 	"github.com/masterkeysrd/kite/extras/kites"
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/client"
+	"github.com/masterkeysrd/tasksmith/internal/daemon"
 )
 
 // SessionState holds the active session and its configuration, permission mode,
@@ -57,10 +58,11 @@ func cancelModeDebounceLocked() {
 
 // InitSessionOptions specifies options for initializing or connecting to a session.
 type InitSessionOptions struct {
-	SessionID string
-	Agent     string
-	Model     string
-	Title     string
+	SessionID   string
+	Agent       string
+	Model       string
+	Title       string
+	StartDaemon func(ctx context.Context, socketPath string) error
 }
 
 // InitSession initializes or attaches to a session. It starts background watchers
@@ -230,6 +232,37 @@ func startSessionsWatcher(ctx context.Context) {
 			}
 			for ev, err := range c.Watch(ctx, since, api.TopicSessions) {
 				if err != nil {
+					if ctx.Err() != nil {
+						return
+					}
+					if client.IsNeedSync(err) {
+						since = ""
+						break
+					}
+					if !isDaemonHealthy(ctx, c) {
+						if GetApp().DaemonStatus == DaemonConnected {
+							SetDaemonStatus(DaemonDisconnected)
+							st := GetStream()
+							if st.Streaming || st.WaitingPermission || st.WaitingQuestion || st.PendingCommand != "" {
+								CancelTurn()
+							}
+						}
+
+						ticker := time.NewTicker(250 * time.Millisecond)
+						for !isDaemonHealthy(ctx, c) {
+							select {
+							case <-ctx.Done():
+								ticker.Stop()
+								return
+							case <-ticker.C:
+							}
+						}
+						ticker.Stop()
+
+						since = ""
+						resyncDaemonState(ctx, c)
+						SetDaemonStatus(DaemonConnected)
+					}
 					break
 				}
 				if ev.ID != "" {
@@ -308,6 +341,11 @@ func Send(text string) {
 	msgID := uuid.Must(uuid.NewV7()).String()
 	globalConversation.addPendingUser(msgID, text)
 
+	if status := GetApp().DaemonStatus; status == DaemonDisconnected || status == DaemonRestarting {
+		globalConversation.cancelPendingUser(msgID, errors.New("daemon is not running (run /daemon start or /daemon restart)"))
+		return
+	}
+
 	sessMu.Lock()
 	c := activeClient
 	ctx := activeCtx
@@ -350,6 +388,11 @@ func SendCommand(cmd string) {
 	msgID := uuid.Must(uuid.NewV7()).String()
 	globalConversation.addPendingCommand(msgID, trimmed)
 
+	if status := GetApp().DaemonStatus; status == DaemonDisconnected || status == DaemonRestarting {
+		globalConversation.cancelPendingUser(msgID, errors.New("daemon is not running (run /daemon start or /daemon restart)"))
+		return
+	}
+
 	sessMu.Lock()
 	c := activeClient
 	ctx := activeCtx
@@ -378,6 +421,11 @@ func SendCommand(cmd string) {
 
 // SendCompact triggers manual context compaction for the active session.
 func SendCompact(focus string) {
+	if status := GetApp().DaemonStatus; status == DaemonDisconnected || status == DaemonRestarting {
+		AppendError("Error", "daemon is not running (run /daemon start or /daemon restart)")
+		return
+	}
+
 	sessMu.Lock()
 	sess := GetSession().Session
 	c := activeClient
@@ -878,6 +926,245 @@ func Client() *client.Client {
 	sessMu.Lock()
 	defer sessMu.Unlock()
 	return activeClient
+}
+
+// SocketPath returns the Unix domain socket path of the active client, if any.
+func SocketPath() string {
+	sessMu.Lock()
+	defer sessMu.Unlock()
+	if activeClient != nil {
+		return activeClient.SocketPath()
+	}
+	return ""
+}
+
+func isDaemonHealthy(ctx context.Context, c *client.Client) bool {
+	if c == nil {
+		return false
+	}
+	pingCtx, cancel := context.WithTimeout(ctx, 300*time.Millisecond)
+	defer cancel()
+	_, err := c.Health(pingCtx)
+	return err == nil
+}
+
+func resyncDaemonState(ctx context.Context, c *client.Client) {
+	if c == nil {
+		return
+	}
+	if ws, err := c.GetWorkspace(ctx); err == nil && ws != nil {
+		SetWorkspaceWarnings(ws.Warnings)
+	}
+	if cmds, err := c.ListCommands(ctx); err == nil {
+		SetWorkspaceCommands(cmds)
+	}
+	if skills, err := c.ListSkills(ctx); err == nil {
+		SetWorkspaceSkills(skills)
+	}
+	if agents, err := c.ListAgents(ctx); err == nil {
+		SetWorkspaceAgents(agents)
+	}
+
+	sessMu.Lock()
+	sess := GetSession().Session
+	opts := activeOpts
+	pCtx := activeCtx
+	sessMu.Unlock()
+
+	if pCtx == nil || pCtx.Err() != nil {
+		pCtx = context.Background()
+	}
+
+	if sess == nil {
+		cfg := GetSession().Config
+		cfg.Agent, cfg.Model = opts.Agent, opts.Model
+		session.Set(func(s SessionState) SessionState {
+			s.Config = cfg
+			return s
+		})
+
+		ws, _ := c.GetWorkspace(ctx)
+		if ws != nil && strings.TrimSpace(cfg.Agent) == "" && strings.TrimSpace(cfg.Model) == "" {
+			label, thinking := modelDisplay(ws.DefaultModel, cfg.Thinking)
+			SetModelInfo(label, thinking)
+		} else {
+			updateDraftModel(ctx, c, cfg)
+		}
+	} else {
+		if loadedSess, err := c.GetSession(ctx, sess.ID); err == nil && loadedSess != nil {
+			SetSession(loadedSess)
+			sess = loadedSess
+		}
+		if tl, err := c.Timeline(ctx, sess.ID); err == nil {
+			globalConversation.loadTimeline(tl, sess.PendingQuestions)
+		}
+		loadSessionUsage(ctx, c, sess.ID)
+		if len(sess.PendingPermissions) > 0 {
+			globalConversation.SeedPermissions(sess.PendingPermissions)
+		}
+		globalConversation.SeedQuestions(sess.PendingQuestions)
+		if len(sess.Queue) > 0 {
+			SeedQueue(sess.Queue)
+		}
+		if len(sess.Todos) > 0 {
+			SeedTodos(sess.Todos)
+		}
+		showSessionDiagnostics(sess, false)
+		startSessionStreamWatcher(pCtx, sess.ID)
+	}
+}
+
+// StartDaemon ensures the background Brain Daemon is running.
+func StartDaemon(ctx context.Context) (*api.HealthResponse, error) {
+	sessMu.Lock()
+	c := activeClient
+	starter := activeOpts.StartDaemon
+	sessMu.Unlock()
+
+	if c == nil {
+		return nil, errors.New("repl: no active client")
+	}
+
+	if h, err := c.Health(ctx); err == nil {
+		SetDaemonStatus(DaemonConnected)
+		return h, nil
+	}
+
+	SetDaemonStatus(DaemonRestarting)
+
+	var spawnErr error
+	if starter != nil {
+		spawnErr = starter(ctx, c.SocketPath())
+	} else {
+		spawnErr = daemon.SpawnDetached(c.SocketPath())
+	}
+	if spawnErr != nil {
+		SetDaemonStatus(DaemonDisconnected)
+		return nil, fmt.Errorf("spawn daemon: %w", spawnErr)
+	}
+
+	pollCtx := ctx
+	var cancelPoll context.CancelFunc
+	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
+		pollCtx, cancelPoll = context.WithTimeout(ctx, 5*time.Second)
+		defer cancelPoll()
+	}
+
+	ticker := time.NewTicker(40 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-pollCtx.Done():
+			SetDaemonStatus(DaemonDisconnected)
+			return nil, fmt.Errorf("timed out waiting for daemon to start: %w", pollCtx.Err())
+		case <-ticker.C:
+			h, err := c.Health(pollCtx)
+			if err == nil {
+				resyncDaemonState(pollCtx, c)
+				SetDaemonStatus(DaemonConnected)
+				return h, nil
+			}
+		}
+	}
+}
+
+// StopDaemon gracefully stops the running Brain Daemon.
+func StopDaemon(ctx context.Context) error {
+	sessMu.Lock()
+	c := activeClient
+	sessMu.Unlock()
+
+	if c == nil {
+		return errors.New("repl: no active client")
+	}
+
+	_ = c.Shutdown(ctx)
+
+	stopCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+
+	ticker := time.NewTicker(40 * time.Millisecond)
+	defer ticker.Stop()
+
+	for isDaemonHealthy(stopCtx, c) {
+		select {
+		case <-stopCtx.Done():
+			break
+		case <-ticker.C:
+		}
+	}
+
+	CancelTurn()
+	SetDaemonStatus(DaemonDisconnected)
+	return nil
+}
+
+// RestartDaemon stops any running daemon, spawns a new background process,
+// waits for it to become healthy, and resyncs state.
+func RestartDaemon(ctx context.Context) (*api.HealthResponse, error) {
+	sessMu.Lock()
+	c := activeClient
+	starter := activeOpts.StartDaemon
+	sessMu.Unlock()
+
+	if c == nil {
+		return nil, errors.New("repl: no active client")
+	}
+
+	SetDaemonStatus(DaemonRestarting)
+	CancelTurn()
+
+	if isDaemonHealthy(ctx, c) {
+		_ = c.Shutdown(ctx)
+		stopCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+		ticker := time.NewTicker(40 * time.Millisecond)
+		for isDaemonHealthy(stopCtx, c) {
+			select {
+			case <-stopCtx.Done():
+				break
+			case <-ticker.C:
+			}
+		}
+		ticker.Stop()
+		cancel()
+	}
+
+	var spawnErr error
+	if starter != nil {
+		spawnErr = starter(ctx, c.SocketPath())
+	} else {
+		spawnErr = daemon.SpawnDetached(c.SocketPath())
+	}
+	if spawnErr != nil {
+		SetDaemonStatus(DaemonDisconnected)
+		return nil, fmt.Errorf("spawn daemon: %w", spawnErr)
+	}
+
+	pollCtx := ctx
+	var cancelPoll context.CancelFunc
+	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
+		pollCtx, cancelPoll = context.WithTimeout(ctx, 10*time.Second)
+		defer cancelPoll()
+	}
+
+	ticker := time.NewTicker(40 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-pollCtx.Done():
+			SetDaemonStatus(DaemonDisconnected)
+			return nil, fmt.Errorf("timed out waiting for daemon to restart: %w", pollCtx.Err())
+		case <-ticker.C:
+			h, err := c.Health(pollCtx)
+			if err == nil {
+				resyncDaemonState(pollCtx, c)
+				SetDaemonStatus(DaemonConnected)
+				return h, nil
+			}
+		}
+	}
 }
 
 // DefaultAgent returns the default agent configured at startup.
