@@ -8,6 +8,7 @@ import (
 	"github.com/masterkeysrd/loom/tool"
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
+	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/sandbox"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/scope"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tools"
@@ -61,6 +62,8 @@ func (o contentProviderOut) ToolContent() message.Content {
 
 func setupToolsEnv(t *testing.T) (string, sandbox.Sandbox, *workspace.Workspace) {
 	t.Helper()
+	xdg.SetTestEnv(t.TempDir(), "tasksmith-tools-test")
+	t.Cleanup(xdg.ClearCache)
 	ctx := context.Background()
 	dir := t.TempDir()
 	if realDir, err := filepath.EvalSymlinks(dir); err == nil {
@@ -459,6 +462,16 @@ spec:
 }
 
 func TestCustomToolStreamingSpill(t *testing.T) {
+	testCustomToolStreamingSpill(t)
+}
+
+func TestCustomToolOutputSpilling(t *testing.T) {
+	testCustomToolStreamingSpill(t)
+}
+
+func testCustomToolStreamingSpill(t *testing.T) {
+	xdg.SetTestEnv(t.TempDir(), "tasksmith-tools-test")
+	t.Cleanup(xdg.ClearCache)
 	ctx := context.Background()
 	dir := t.TempDir()
 	if realDir, err := filepath.EvalSymlinks(dir); err == nil {

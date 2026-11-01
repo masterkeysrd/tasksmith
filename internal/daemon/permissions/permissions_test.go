@@ -20,6 +20,9 @@ import (
 
 func setupTestWorkspace(t *testing.T) (string, *workspace.Workspace) {
 	t.Helper()
+	xdg.SetTestEnv(t.TempDir(), "tasksmith-permissions-test")
+	t.Cleanup(xdg.ClearCache)
+
 	dir := t.TempDir()
 	if realDir, err := filepath.EvalSymlinks(dir); err == nil {
 		dir = realDir

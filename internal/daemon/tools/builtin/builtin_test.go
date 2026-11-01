@@ -30,6 +30,8 @@ import (
 
 func setupBuiltinEnv(t *testing.T, allowLoopback bool) (string, tools.Container, *std.Std, sandbox.Sandbox, *workspace.Workspace) {
 	t.Helper()
+	xdg.SetTestEnv(t.TempDir(), "tasksmith-builtin-test")
+	t.Cleanup(xdg.ClearCache)
 	ctx := context.Background()
 	dir := t.TempDir()
 	if realDir, err := filepath.EvalSymlinks(dir); err == nil {

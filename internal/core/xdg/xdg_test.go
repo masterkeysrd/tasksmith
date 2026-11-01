@@ -182,7 +182,7 @@ func TestHelpers(t *testing.T) {
 	SetTestEnv(tmpDir, "tasksmith-test")
 
 	t.Run("WorkspaceDir", func(t *testing.T) {
-		path1, err := WorkspaceDir("/Users/dev/project-a")
+		path1, err := WorkspaceDir("/workspace/project-a")
 		if err != nil {
 			t.Fatalf("WorkspaceDir error: %v", err)
 		}
@@ -195,7 +195,7 @@ func TestHelpers(t *testing.T) {
 		}
 
 		// Deterministic
-		path2, err := WorkspaceDir("/Users/dev/project-a")
+		path2, err := WorkspaceDir("/workspace/project-a")
 		if err != nil {
 			t.Fatalf("WorkspaceDir error: %v", err)
 		}
@@ -204,7 +204,7 @@ func TestHelpers(t *testing.T) {
 		}
 
 		// Distinct keys yield distinct dirs
-		path3, err := WorkspaceDir("/Users/dev/project-b")
+		path3, err := WorkspaceDir("/workspace/project-b")
 		if err != nil {
 			t.Fatalf("WorkspaceDir error: %v", err)
 		}

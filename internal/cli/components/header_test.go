@@ -11,6 +11,7 @@ import (
 	"github.com/masterkeysrd/kite/backend/mock"
 	"github.com/masterkeysrd/kite/extras/trail"
 	"github.com/masterkeysrd/tasksmith/internal/cli/store"
+	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
 	"github.com/masterkeysrd/tasksmith/internal/ui/theme"
 )
 
@@ -232,6 +233,17 @@ func TestHeaderWithWarnings(t *testing.T) {
 }
 
 func TestHeaderThemeSwitching(t *testing.T) {
+	testHeaderThemeSwitching(t)
+}
+
+func TestHeaderThemeReactivity(t *testing.T) {
+	testHeaderThemeSwitching(t)
+}
+
+func testHeaderThemeSwitching(t *testing.T) {
+	xdg.SetTestEnv(t.TempDir(), "tasksmith-header-test")
+	t.Cleanup(xdg.ClearCache)
+
 	origTheme := theme.GetName()
 	defer func() {
 		_ = theme.Set(origTheme)
@@ -306,5 +318,65 @@ func TestHeaderThemeSwitching(t *testing.T) {
 
 	if updatedFg == nil || updatedFg == initialFg {
 		t.Fatalf("expected foreground color to change after theme switch, initial=%v, updated=%v", initialFg, updatedFg)
+	}
+}
+
+func TestHeaderCustomRegisteredTheme(t *testing.T) {
+	xdg.SetTestEnv(t.TempDir(), "tasksmith-header-test")
+	t.Cleanup(xdg.ClearCache)
+
+	origTheme := theme.GetName()
+	defer func() {
+		_ = theme.Set(origTheme)
+	}()
+
+	dir, err := xdg.SubConfigDir("themes")
+	if err != nil {
+		t.Fatalf("failed to get themes dir: %v", err)
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("failed to create themes dir: %v", err)
+	}
+	customJSON := `{
+		"name": "custom-header-test",
+		"extends": "dark",
+		"colors": {
+			"text": {
+				"primary": "#123456"
+			}
+		}
+	}`
+	if err := os.WriteFile(filepath.Join(dir, "custom-header-test.json"), []byte(customJSON), 0o644); err != nil {
+		t.Fatalf("failed to write custom theme: %v", err)
+	}
+
+	if err := theme.Set("custom-header-test"); err != nil {
+		t.Fatalf("failed to set custom theme: %v", err)
+	}
+
+	b := mock.New(80, 24)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	go func() {
+		_ = trail.Run(ctx, Header(store.HeaderData{
+			Version:   "1.0.0",
+			Model:     "default",
+			Thinking:  "auto",
+			Workspace: "/ws",
+		}), trail.WithBackend(b))
+	}()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if b.LastFrame().Surface != nil {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	frame := b.LastFrame().Surface
+	if frame == nil {
+		t.Fatal("expected rendered surface")
 	}
 }

@@ -73,6 +73,23 @@ var (
 )
 
 func init() {
+	if testing.Testing() {
+		if testRoot, err := os.MkdirTemp("", "tasksmith-xdg-test-*"); err == nil {
+			defaults := map[string]string{
+				"XDG_CONFIG_HOME": filepath.Join(testRoot, "config"),
+				"XDG_DATA_HOME":   filepath.Join(testRoot, "data"),
+				"XDG_STATE_HOME":  filepath.Join(testRoot, "state"),
+				"XDG_CACHE_HOME":  filepath.Join(testRoot, "cache"),
+				"XDG_RUNTIME_DIR": filepath.Join(testRoot, "runtime"),
+			}
+			for k, v := range defaults {
+				if os.Getenv(k) == "" {
+					_ = os.Setenv(k, v)
+				}
+			}
+		}
+	}
+
 	mu.Lock()
 	loadAppNameLocked()
 	mu.Unlock()

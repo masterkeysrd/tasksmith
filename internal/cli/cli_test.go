@@ -14,7 +14,12 @@ import (
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/client"
 	"github.com/masterkeysrd/tasksmith/internal/cli/store"
+	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
 )
+
+func TestMain(m *testing.M) {
+	xdg.RunWithTestEnv(m, "tasksmith-cli-test")
+}
 
 func surfaceText(b *mock.Backend) string {
 	frame := b.LastFrame().Surface
