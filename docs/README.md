@@ -39,7 +39,7 @@ Declarative manifest schemas, CLI command specifications, and provider configura
 | Reference | Description |
 | :--- | :--- |
 | [Providers Overview & Manifest Schema](./reference/providers.md) | General `kind: ModelProvider` Warp manifest schema, authentication schemes, and model capability properties. |
-| [Resource Manifest Reference](./reference/manifests.md) | Formal YAML frontmatter specifications for agents, skills, commands, toolkits, and MCP manifests. |
+| [Resource Manifest Reference](./reference/manifests.md) | Formal YAML frontmatter specifications for agents, skills, commands, and MCP manifests. |
 | [Built-in Tool Reference](./reference/tools.md) | Comprehensive parameter reference and output schemas for `view`, `write`, `edit`, `bash`, `glob`, `grep`, `web_fetch`, and `ask_question`. |
 | [CLI Command Reference](./reference/cli.md) | Command-line flags, startup arguments, daemon management subcommands, and environment variables. |
 

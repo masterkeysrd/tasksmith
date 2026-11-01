@@ -20,8 +20,8 @@ func (s *stubCatalog) ResolveModels(role warp.ModelRole, explicit ...string) []w
 		return []warp.ResolvedModel{{QualifiedID: explicit[0]}}
 	}
 	for _, p := range s.providers {
-		if p.Spec.DefaultModel != "" {
-			return []warp.ResolvedModel{{QualifiedID: Normalize(p.Metadata.Name, p.Spec.DefaultModel).String()}}
+		if def := p.Spec.DefaultModels.ForRole(role); def != "" {
+			return []warp.ResolvedModel{{QualifiedID: Normalize(p.Metadata.Name, def).String()}}
 		}
 		if len(p.Spec.Models) > 0 {
 			return []warp.ResolvedModel{{QualifiedID: Normalize(p.Metadata.Name, p.Spec.Models[0].ID).String()}}
@@ -242,9 +242,9 @@ func TestCatalogResolve(t *testing.T) {
 			Metadata:   warp.Metadata{Name: "anthropic"},
 		},
 		Spec: warp.ModelProviderSpec{
-			Type:         "anthropic",
-			DefaultModel: "claude-3",
-			Models:       []warp.ProviderModel{{ID: "claude-3"}},
+			Type:          "anthropic",
+			DefaultModels: &warp.ModelDefaults{Completion: "claude-3"},
+			Models:        []warp.ProviderModel{{ID: "claude-3"}},
 		},
 	})
 	base := &fakeBase{}

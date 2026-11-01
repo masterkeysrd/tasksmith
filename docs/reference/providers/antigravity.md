@@ -35,7 +35,8 @@ metadata:
 spec:
   type: antigravity
   endpoint: https://daily-cloudcode-pa.googleapis.com
-  defaultModel: gemini-3.8-flash
+  defaultModels:
+    completion: gemini-3.8-flash
   auth:
     type: env
     env: ANTIGRAVITY_TOKEN

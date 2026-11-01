@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"regexp"
 	"slices"
-	"strconv"
 	"strings"
 
 	"github.com/masterkeysrd/tasksmith/api"
@@ -203,54 +202,21 @@ func (c *Catalog) populate() {
 		c.workspaceTokens = tokenizer.Estimate(wsPrompt)
 	}
 
-	// 1. Tools: Standalone tools + inline toolkit tools
+	// 1. Tools
 	var toolsList []*warp.Tool
 	rawTools := resolver.ListResources(warp.QueryOptions{
 		Kinds:     []warp.Kind{warp.KindTool},
 		Effective: true,
 	})
-	seenTools := make(map[string]bool, len(rawTools))
 	for _, r := range rawTools {
 		if t, ok := r.(*warp.Tool); ok {
 			toolsList = append(toolsList, t)
-			seenTools[t.Metadata.Name] = true
-		}
-	}
-	toolkits := resolver.ListResources(warp.QueryOptions{
-		Kinds:     []warp.Kind{warp.KindToolkit},
-		Effective: true,
-	})
-	for _, r := range toolkits {
-		tk, ok := r.(*warp.Toolkit)
-		if !ok {
-			continue
-		}
-		for _, item := range tk.Spec.Tools {
-			if item.Ref == "" && item.Name != "" && !seenTools[item.Name] {
-				seenTools[item.Name] = true
-				tSpec := item.ToolSpec
-				if tSpec.Description == "" {
-					tSpec.Description = item.Description
-				}
-				toolsList = append(toolsList, &warp.Tool{
-					BaseResource: warp.BaseResource{
-						APIVersion: tk.APIVersion,
-						Kind:       warp.KindTool,
-						Namespace:  tk.Namespace,
-						Metadata: warp.Metadata{
-							Name:        item.Name,
-							Description: item.Description,
-						},
-					},
-					Spec: tSpec,
-				})
-			}
 		}
 	}
 	c.toolTokens = make(map[string]int, len(toolsList))
 	for _, t := range toolsList {
 		toolTokens := tokenizer.Estimate(t.Metadata.Name) +
-			tokenizer.Estimate(t.Spec.Description) +
+			tokenizer.Estimate(t.Metadata.Description) +
 			tokenizer.Estimate(t.Spec.Instructions)
 		if len(t.Spec.InputSchema) > 0 {
 			if data, err := json.Marshal(t.Spec.InputSchema); err == nil {
@@ -418,7 +384,7 @@ func (c *Catalog) calculateAgentContext(ag *warp.Agent, resolved *warp.ResolvedA
 		toolTokens, ok := c.toolTokens[t.Metadata.Name]
 		if !ok {
 			toolTokens = tokenizer.Estimate(t.Metadata.Name) +
-				tokenizer.Estimate(t.Spec.Description) +
+				tokenizer.Estimate(t.Metadata.Description) +
 				tokenizer.Estimate(t.Spec.Instructions)
 			if len(t.Spec.InputSchema) > 0 {
 				if data, err := json.Marshal(t.Spec.InputSchema); err == nil {
@@ -675,23 +641,23 @@ func (c *Catalog) ScopeNamespace(b warp.BaseResource) string {
 	return ns
 }
 
-// ParseThinking extracts an api.ThinkingSetting from an agent's thinking configuration map.
-func ParseThinking(thinking map[string]any) *api.ThinkingSetting {
+// ParseThinking extracts an api.ThinkingSetting from an agent's thinking configuration.
+func ParseThinking(thinking *warp.AgentThinking) *api.ThinkingSetting {
 	if thinking == nil {
 		return nil
 	}
-	if effort, ok := thinking["effort"].(string); ok && effort != "" {
-		return &api.ThinkingSetting{Type: "effort", Effort: effort}
-	}
-	if value, err := strconv.Atoi(fmt.Sprint(thinking["budget_tokens"])); err == nil && value > 0 {
-		return &api.ThinkingSetting{Type: "budget", Budget: value}
-	}
-	if value, ok := thinking["enabled"].(bool); ok {
-		return &api.ThinkingSetting{Type: "toggle", Enabled: value}
-	}
-	if typ, _ := thinking["type"].(string); typ == "effort" {
-		if effort, ok := thinking["default"].(string); ok && effort != "" {
-			return &api.ThinkingSetting{Type: "effort", Effort: effort}
+	switch thinking.Type {
+	case warp.ThinkingStrategyEffort:
+		if thinking.Effort != "" {
+			return &api.ThinkingSetting{Type: "effort", Effort: thinking.Effort}
+		}
+	case warp.ThinkingStrategyBudget:
+		if thinking.BudgetTokens > 0 {
+			return &api.ThinkingSetting{Type: "budget", Budget: thinking.BudgetTokens}
+		}
+	case warp.ThinkingStrategyToggle:
+		if thinking.Enabled != nil {
+			return &api.ThinkingSetting{Type: "toggle", Enabled: *thinking.Enabled}
 		}
 	}
 	return nil

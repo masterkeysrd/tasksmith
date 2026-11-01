@@ -11,7 +11,7 @@ require (
 	github.com/lrstanley/go-nf v0.0.0-20260418212552-215ab243b591
 	github.com/masterkeysrd/kite v0.0.6-0.20261022053628-4a0d9aff0b59
 	github.com/masterkeysrd/loom v0.0.9-0.20261030020147-5c0513ff3ae6
-	github.com/masterkeysrd/warp v0.0.7-0.20261029074357-d817526e40a5
+	github.com/masterkeysrd/warp v0.0.7-0.20261101145605-0aceba023e5e
 	github.com/ollama/ollama v0.40.8
 	github.com/openai/openai-go/v3 v3.79.0
 	github.com/spf13/cobra v1.10.2
@@ -33,7 +33,7 @@ require (
 	github.com/cenkalti/backoff/v5 v5.0.3 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/charmbracelet/colorprofile v0.4.3 // indirect
-	github.com/charmbracelet/ultraviolet v0.0.0-20261008173134-6b8d4baf91b4 // indirect
+	github.com/charmbracelet/ultraviolet v0.0.0-20261023060817-a45b7c86333f // indirect
 	github.com/charmbracelet/x/ansi v0.11.9 // indirect
 	github.com/charmbracelet/x/term v0.2.2 // indirect
 	github.com/charmbracelet/x/termios v0.1.1 // indirect
@@ -83,7 +83,7 @@ require (
 	github.com/tidwall/sjson v1.2.5 // indirect
 	github.com/wk8/go-ordered-map/v2 v2.1.8 // indirect
 	github.com/xanzy/ssh-agent v0.3.3 // indirect
-	github.com/xo/terminfo v1.2.0 // indirect
+	github.com/xo/terminfo v1.3.0 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.72.0 // indirect
 	go.opentelemetry.io/otel v1.47.0 // indirect

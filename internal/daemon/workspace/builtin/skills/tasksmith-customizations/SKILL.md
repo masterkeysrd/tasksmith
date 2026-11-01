@@ -43,7 +43,7 @@ Workspace built-ins are mirrored under `$XDG_DATA_HOME/tasksmith/builtin/` (norm
 | Agents | `references/agents.md` | `agents/<name>.agent.md` |
 | Commands | `references/commands.md` | `commands/<name>.command.md` |
 | Decisions | `references/decisions.md` | `decisions/<name>.decision.md` |
-| Tools, toolkits, MCP | `references/tools-and-mcp.md` | `tools/`, `mcps/` |
+| Tools, MCP | `references/tools-and-mcp.md` | `tools/`, `mcps/` |
 | Model providers | `references/providers.md` | `providers/<name>.provider.yaml` |
 | Plugins | `references/workspace-and-context.md` | Repository root `PLUGIN.md` or `PLUGIN.yaml` |
 | Workspace and project context | `references/workspace-and-context.md` | `WORKSPACE.md`, `AGENTS.md` |

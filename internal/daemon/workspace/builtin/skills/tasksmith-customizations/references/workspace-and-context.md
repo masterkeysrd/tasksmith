@@ -19,7 +19,6 @@ A Workspace manifest has WARP YAML frontmatter and an optional Markdown body. It
 | `projects` | string[] | Project paths or the standalone `"*"` discovery selector; defaults to `["."]` when empty. |
 | `defaultAgent` | string | Default Agent when none is selected. |
 | `defaultProvider` | string | Provider reference, resolved by resource name or provider type. |
-| `defaultModel` | string | Workspace completion-model fallback. |
 | `defaultModels` | object | Role-specific model defaults for `completion`, `decision`, and `embedding`. |
 | `plugins` | object[] | External plugin resources to load into the workspace. |
 | `policies` | object | Workspace-wide tool execution restrictions. |
@@ -30,8 +29,8 @@ A Workspace manifest has WARP YAML frontmatter and an optional Markdown body. It
 `defaultModels.completion` selects a text-generation model, `decision` selects a decision model, and `embedding` selects a vector-embedding model. TaskSmith resolves a role in this order:
 
 1. Explicit model identifiers supplied by the caller, such as an agent's model preferences.
-2. The workspace's role default, or `defaultModel` for completion when no completion role default is set.
-3. The default provider's role default, or its `defaultModel` for completion.
+2. The workspace's role default.
+3. The default provider's role default.
 4. If none of those yields a result, TaskSmith checks effective providers for their defaults and then for a model with a matching capability.
 
 An unqualified explicit or workspace-default model is prefixed with `defaultProvider` when that setting is a short provider name. A provider's own unqualified default is prefixed with its resource name. A selected identifier is configuration, not a guarantee that the model is available. See `providers.md` for provider definitions.
@@ -87,12 +86,12 @@ Shared analysis skills and commands.
 
 ### Workspace tool policies
 
-`spec.policies.tools` controls execution independently of agent instructions. Omitted booleans impose no restriction from that field; they do not bypass other permission or sandbox checks.
+`spec.policies.tools` controls execution independently of agent instructions. Omitted actions impose no restriction from that field; they do not bypass other permission or sandbox checks.
 
 | Field | Type | Behavior |
 | --- | --- | --- |
-| `allowDangerous` | bool | When false, denies unsafe or delete plans and tools annotated dangerous. |
-| `allowOpenWorld` | bool | When false, denies network plans and tools annotated open-world. |
+| `dangerous` | string | `deny` denies unsafe or delete plans and tools annotated dangerous. |
+| `openWorld` | string | `deny` denies network plans and tools annotated open-world. |
 | `include` | string[] | When nonempty, a tool name must match an included pattern. |
 | `exclude` | string[] | Matching tool names are denied, even if included. |
 

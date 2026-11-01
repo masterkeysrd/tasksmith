@@ -204,7 +204,7 @@ func TestSessionModelDiagnosticsAndRequests(t *testing.T) {
 		}
 	}
 
-	titleManifest := "---\napiVersion: warp/v1alpha1\nkind: Agent\nmetadata:\n  name: title-generator\nspec:\n  temperature: 0.0\n  thinking:\n    effort: high\n---\nGenerate a title.\n"
+	titleManifest := "---\napiVersion: warp/v1alpha1\nkind: Agent\nmetadata:\n  name: title-generator\nspec:\n  temperature: 0.0\n  thinking:\n    type: effort\n    effort: high\n---\nGenerate a title.\n"
 	if err := os.WriteFile(filepath.Join(dir, "title-generator.agent.md"), []byte(titleManifest), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -746,7 +746,7 @@ func setupTestEnv(t *testing.T, prov *fakeProvider) (*sql.DB, *workspace.Workspa
 	})
 
 	wsDir := t.TempDir()
-	manifest := "---\napiVersion: warp/v1alpha1\nkind: Workspace\nmetadata:\n  name: test\nspec:\n  defaultProvider: fake\n  defaultModel: fake-default-model\n---\n"
+	manifest := "---\napiVersion: warp/v1alpha1\nkind: Workspace\nmetadata:\n  name: test\nspec:\n  defaultProvider: fake\n  defaultModels:\n    completion: fake-default-model\n---\n"
 	if err := os.WriteFile(filepath.Join(wsDir, "WORKSPACE.md"), []byte(manifest), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -3576,7 +3576,11 @@ func TestSessionEnqueueCommandDuringTurn(t *testing.T) {
 	}
 
 	// Wait until turn starts
-	<-turnStarted
+	select {
+	case <-turnStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for turn to start")
+	}
 
 	// 2. While turn is running, send a direct command
 	if err := sess.Send(ctx, api.SendRequest{Command: "echo while_turn"}); err != nil {
@@ -3590,8 +3594,17 @@ func TestSessionEnqueueCommandDuringTurn(t *testing.T) {
 
 	// 3. Allow turn to finish
 	close(allowTurnToFinish)
-	if err := sess.Wait(ctx); err != nil {
-		t.Fatalf("sess.Wait: %v", err)
+	waitDone := make(chan error, 1)
+	go func() {
+		waitDone <- sess.Wait(ctx)
+	}()
+	select {
+	case err := <-waitDone:
+		if err != nil {
+			t.Fatalf("sess.Wait: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for turn to finish")
 	}
 
 	// 4. Verify the pending command was drained and executed

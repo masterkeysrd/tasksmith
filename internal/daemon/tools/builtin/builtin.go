@@ -163,7 +163,7 @@ func New(cfg Config) ([]tools.Tool, error) {
 				if wsTool.Spec.Instructions != "" {
 					meta.Description = wsTool.Spec.Instructions
 				} else {
-					meta.Description = wsTool.Spec.Description
+					meta.Description = wsTool.Metadata.Description
 				}
 				if wsTool.Spec.Annotations != nil {
 					meta.Annotation = tool.Annotation{

@@ -47,8 +47,12 @@ func TestStoreApp(t *testing.T) {
 }
 
 func TestStoreAppWarnings(t *testing.T) {
+	SetWorkspaceWarnings(nil)
 	ResetApp()
-	defer ResetApp()
+	defer func() {
+		SetWorkspaceWarnings(nil)
+		ResetApp()
+	}()
 
 	if GetApp().Warnings != nil {
 		t.Fatal("expected Warnings to be nil initially")

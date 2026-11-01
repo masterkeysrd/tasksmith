@@ -189,9 +189,6 @@ func TestFSAndWorkspaceResolution(t *testing.T) {
 		}
 		desc := rt.Metadata.Description
 		if desc == "" {
-			desc = rt.Spec.Description
-		}
-		if desc == "" {
 			t.Errorf("expected tool %q to have Description", rt.Metadata.Name)
 		}
 		if rt.Spec.Instructions == "" {

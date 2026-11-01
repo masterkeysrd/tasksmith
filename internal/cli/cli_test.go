@@ -261,12 +261,8 @@ func TestRunCtrlCDisarmedByOtherKey(t *testing.T) {
 	})
 
 	waitFor(t, func() bool {
-		return !store.GetApp().CtrlCPending
+		return !store.GetApp().CtrlCPending && !strings.Contains(surfaceText(b), "Press Ctrl+C again to exit")
 	}, 2*time.Second, "CtrlCPending to be disarmed by other key")
-
-	if strings.Contains(surfaceText(b), "Press Ctrl+C again to exit") {
-		t.Fatalf("screen should no longer contain exit warning, got:\n%s", surfaceText(b))
-	}
 
 	// 3. Send third Ctrl+C (only re-arms)
 	b.PostEvent(&backend.RawKeyEvent{

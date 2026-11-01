@@ -38,7 +38,6 @@ metadata:
 spec:
   type: ollama
   endpoint: http://localhost:11434
-  defaultModel: qwen3.8
   defaultModels:
     completion: qwen3.8
     decision: nimble-v3

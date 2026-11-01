@@ -84,7 +84,7 @@ func TestRuntimeBuildsAndSwapsCatalog(t *testing.T) {
 	provider := filepath.Join(dir, "local.provider.yaml")
 	writeProvider := func(context int) {
 		t.Helper()
-		content := fmt.Sprintf("apiVersion: warp/v1alpha1\nkind: ModelProvider\nmetadata:\n  name: local\nspec:\n  type: ollama\n  defaultModel: sample\n  models:\n    - id: sample\n      limits:\n        context: %d\n        output: 1000\n", context)
+		content := fmt.Sprintf("apiVersion: warp/v1alpha1\nkind: ModelProvider\nmetadata:\n  name: local\nspec:\n  type: ollama\n  defaultModels:\n    completion: sample\n  models:\n    - id: sample\n      limits:\n        context: %d\n        output: 1000\n", context)
 		if err := os.WriteFile(provider, []byte(content), 0o644); err != nil {
 			t.Fatal(err)
 		}
@@ -163,7 +163,7 @@ func TestReloadRefreshesModelDiagnostics(t *testing.T) {
 	provider := filepath.Join(dir, "local.provider.yaml")
 	writeProvider := func(supported bool) {
 		t.Helper()
-		content := fmt.Sprintf("apiVersion: warp/v1alpha1\nkind: ModelProvider\nmetadata:\n  name: local\nspec:\n  type: ollama\n  defaultModel: sample\n  models:\n    - id: sample\n      capabilities:\n        completion: true\n        temperature: %t\n", supported)
+		content := fmt.Sprintf("apiVersion: warp/v1alpha1\nkind: ModelProvider\nmetadata:\n  name: local\nspec:\n  type: ollama\n  defaultModels:\n    completion: sample\n  models:\n    - id: sample\n      capabilities:\n        completion: true\n        temperature: %t\n", supported)
 		if err := os.WriteFile(provider, []byte(content), 0o644); err != nil {
 			t.Fatal(err)
 		}

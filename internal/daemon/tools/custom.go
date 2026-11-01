@@ -68,7 +68,7 @@ func (c *container) buildCustomTool(wsTool *warp.Tool) (Tool, error) {
 
 	desc := wsTool.Spec.Instructions
 	if desc == "" {
-		desc = wsTool.Spec.Description
+		desc = wsTool.Metadata.Description
 	}
 	if desc == "" {
 		desc = fmt.Sprintf("Custom workspace tool %s", wsTool.Metadata.Name)

@@ -107,7 +107,7 @@ func TestIsConfigured_IsInitialized_Initialize_CopyConfig(t *testing.T) {
 		Provider:        "openai",
 		APIKey:          "sk-test-secret-123",
 		Endpoint:        "https://api.openai.com/v1",
-		DefaultModel:    "gpt-5.5",
+		DefaultModels:   map[warp.ModelRole]string{warp.ModelRoleCompletion: "gpt-5.5"},
 		DefaultAgent:    "main",
 		AuthorizedTools: []string{"ls", "view", "write"},
 	}
@@ -473,7 +473,6 @@ metadata:
 spec:
   type: openai
   endpoint: https://api.openai.com/v1
-  defaultModel: gpt-5.5
   defaultModels:
     completion: gpt-5.5
     embedding: text-embedding-3-large
@@ -558,7 +557,8 @@ metadata:
 spec:
   type: ollama
   endpoint: http://localhost:11234
-  defaultModel: qwen3.8
+  defaultModels:
+    completion: qwen3.8
   models:
     - id: ddalcu/Qwen3.8-27B-MLX-Serve-4bit
       name: qwen3.8-27b-mlx-serve-4bit
@@ -669,17 +669,14 @@ spec:
 ---
 Review PR #{{.pr_number}} on branch $branch (arg1=$1).
 `
-	// Toolkit and MCP manifests
-	toolkitManifest := `apiVersion: warp/v1alpha1
-kind: Toolkit
+	// Tool and MCP manifests
+	toolManifest := `apiVersion: warp/v1alpha1
+kind: Tool
 metadata:
-  name: dev-toolkit
-  description: Developer toolkit
+  name: lint
+  description: Run linter
 spec:
-  tools:
-    - name: lint
-      description: Run linter
-      command: ["golangci-lint", "run"]
+  command: ["golangci-lint", "run"]
 `
 	mcpManifest := `apiVersion: warp/v1alpha1
 kind: MCP
@@ -695,7 +692,7 @@ spec:
 		"custom-coder.agent.md": agentManifest,
 		"go-style.skill.md":     skillManifest,
 		"review.command.md":     cmdManifest,
-		"dev.toolkit.yaml":      toolkitManifest,
+		"lint.tool.yaml":        toolManifest,
 		"github.mcp.yaml":       mcpManifest,
 	}
 	for name, content := range files {
@@ -724,7 +721,7 @@ spec:
 		t.Errorf("expected review command to be loaded")
 	}
 	if _, ok := ws.Catalog().GetTool("lint"); !ok {
-		t.Errorf("expected inline tool 'lint' from dev-toolkit to be resolved via GetTool")
+		t.Errorf("expected tool 'lint' to be resolved via GetTool")
 	}
 
 	// Verify Render Workspace

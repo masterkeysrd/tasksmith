@@ -1,6 +1,6 @@
-# Tools, Toolkits & MCP Servers
+# Tools & MCP Servers
 
-TaskSmith provides a robust tool execution system that equips agents with capabilities to inspect files, execute commands, manipulate code, and integrate external services. You can extend this foundation with custom project tools, curated toolkits, and Model Context Protocol (MCP) servers.
+TaskSmith provides a robust tool execution system that equips agents with capabilities to inspect files, execute commands, manipulate code, and integrate external services. You can extend this foundation with custom project tools and Model Context Protocol (MCP) servers.
 
 ---
 
@@ -87,74 +87,6 @@ Always inspect logs before attempting to restart failing containers.
 - **`isReadOnly`**: Marks the tool as safe for read-only exploration modes (such as `plan` mode).
 - **`isDangerous`**: Flags potentially destructive tools, ensuring they trigger confirmation even in lenient permission modes.
 - **`userHint`**: Defines the prompt displayed to the user when requesting authorization in the CLI.
-
----
-
-## Grouping Tools with Toolkits (`*.toolkit.yaml`)
-
-Toolkits allow you to bundle related tools into reusable collections that agents can reference by a single identifier.
-
-### Where Toolkits Live
-
-- **Project Scope**: `.agents/toolkits/<name>.toolkit.yaml`
-- **Global User Scope**: `~/.config/tasksmith/toolkits/<name>.toolkit.yaml`
-
-### Defining a Toolkit
-
-Create `.agents/toolkits/database-ops.toolkit.yaml`:
-
-```yaml
-apiVersion: warp/v1alpha1
-kind: Toolkit
-metadata:
-  name: database-ops
-  displayName: Database Operations
-  description: Tools for database migration, inspection, and schema verification.
-spec:
-  tools:
-    # Reference existing workspace tools
-    - ref: docker-service-logs
-
-    # Define an inline tool directly in the bundle
-    - name: psql-query
-      description: Run a read-only SQL query against the local development database.
-      command:
-        - psql
-        - "-U"
-        - "postgres"
-        - "-d"
-        - "dev"
-        - "-c"
-        - "{{.query}}"
-      inputSchema:
-        type: object
-        properties:
-          query:
-            type: string
-            description: Read-only SQL query to execute.
-        required:
-          - query
-      annotations:
-        isReadOnly: true
-```
-
-### Referencing Toolkits in Agents
-
-Agents can authorize all tools in a toolkit using the `tools` list in their manifest:
-
-```markdown
----
-apiVersion: warp/v1alpha1
-kind: Agent
-metadata:
-  name: db-engineer
-spec:
-  tools:
-    - database-ops
-    - view
-    - edit
----
-```
 
 ---
 

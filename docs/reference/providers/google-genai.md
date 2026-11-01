@@ -36,7 +36,6 @@ metadata:
 spec:
   type: google-genai
   endpoint: https://generativelanguage.googleapis.com/v1beta
-  defaultModel: gemini-3.1-pro-preview
   defaultModels:
     completion: gemini-3.1-pro-preview
     embedding: text-embedding-004

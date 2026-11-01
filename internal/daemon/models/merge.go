@@ -175,7 +175,7 @@ func fromThinkingCapabilities(in []warp.ProviderModelThinkingCapability) []Think
 	}
 	out := make([]ThinkingOption, len(in))
 	for i, t := range in {
-		kind := strings.ToLower(strings.TrimSpace(t.Type))
+		kind := strings.ToLower(strings.TrimSpace(string(t.Type)))
 		if kind == "budget" {
 			kind = "budget_tokens"
 		}

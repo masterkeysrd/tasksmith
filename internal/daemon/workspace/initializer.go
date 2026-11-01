@@ -24,7 +24,6 @@ type InitOptions struct {
 	SelectedProvider string                    `json:"selected_provider,omitempty"`
 	APIKey           string                    `json:"api_key,omitempty"`
 	Endpoint         string                    `json:"endpoint,omitempty"`
-	DefaultModel     string                    `json:"default_model,omitempty"`
 	DefaultModels    map[warp.ModelRole]string `json:"default_models,omitempty"`
 	DefaultAgent     string                    `json:"default_agent,omitempty"`
 	AuthorizedTools  []string                  `json:"authorized_tools,omitempty"`
@@ -250,7 +249,6 @@ func Initialize(ctx context.Context, dir string, opts InitOptions) error {
 		Spec: warp.WorkspaceDefSpec{
 			Projects:        []string{"."},
 			DefaultProvider: provName,
-			DefaultModel:    opts.DefaultModel,
 			DefaultModels:   defaultModels,
 			DefaultAgent:    opts.DefaultAgent,
 			Policies:        policies,
@@ -282,9 +280,6 @@ func Initialize(ctx context.Context, dir string, opts InitOptions) error {
 
 		if opts.Endpoint != "" {
 			providerSpec.Endpoint = opts.Endpoint
-		}
-		if opts.DefaultModel != "" {
-			providerSpec.DefaultModel = opts.DefaultModel
 		}
 		if defaultModels != nil {
 			providerSpec.DefaultModels = defaultModels.DeepCopy()

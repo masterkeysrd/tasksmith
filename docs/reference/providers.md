@@ -38,9 +38,6 @@ spec:
   # Upstream API endpoint URL
   endpoint: https://api.openai.com/v1
 
-  # Default completion model if none specified
-  defaultModel: gpt-5.5
-
   # Role-based default models for this provider (completion, decision, embedding)
   defaultModels:
     completion: gpt-5.5

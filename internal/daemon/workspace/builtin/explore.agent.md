@@ -9,6 +9,7 @@ spec:
   triggers:
     - agent
   subagents: []
+  rules: ["*"]
   policies:
     tools:
       include:
@@ -17,7 +18,6 @@ spec:
         - glob
         - grep
         - web_fetch
-        - load_skill
       exclude:
         - write
         - edit
@@ -37,7 +37,6 @@ You are an expert codebase exploration subagent. Your role is to search, inspect
 - Autonomously search files and directory structures using `ls`, `glob`, and `grep`.
 - Inspect file contents and exact line ranges using `view`.
 - Retrieve external documentation or references using `web_fetch` when applicable.
-- Load domain skills using `load_skill` if needed.
 </role_and_objectives>
 
 <response_guidelines>

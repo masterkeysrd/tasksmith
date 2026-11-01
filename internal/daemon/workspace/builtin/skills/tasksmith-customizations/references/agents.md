@@ -33,14 +33,14 @@ WARP filters resolved subagents to those whose `triggers` are empty or include `
 
 1. Nonempty child `models`, `thinking`, and `triggers` replace the parent's values; a specified `temperature`, including `0.0`, replaces the parent's. Empty lists or maps for these override fields do not clear inherited values.
 2. Child `skills`, `commands`, `subagents`, and `rules` are appended to the parent lists. If a parent list is omitted and the child specifies one, the child list becomes the effective list; otherwise an empty child list does not clear the parent list. Referenced resources are resolved after merging.
-3. Tool policy booleans `allowDangerous` and `allowOpenWorld` override their parent values when specified. `include` and `exclude` lists are combined as a set union; exclusion remains effective even if a name is included.
+3. Tool policy actions `dangerous` and `openWorld` override their parent values when specified. `include` and `exclude` lists are combined as a set union; exclusion remains effective even if a name is included.
 4. Parent instructions precede child instructions, separated by a blank line when both are present. Circular chains, including self-extension, are rejected by WARP resolution.
 
 An inherited wildcard remains in an appended list and therefore continues to select all effective resources. Use a qualified parent when extending an agent with the same short name, to avoid resolving the child itself.
 
 ## Tool access and policies
 
-There is no top-level Agent `spec.tools` field. WARP gathers effective tools and toolkit entries, then filters them with the merged `spec.policies.tools`: a nonempty `include` must match, `exclude` takes precedence, and `allowDangerous: false` or `allowOpenWorld: false` filters tools with the corresponding annotations. TaskSmith uses the resulting tool names when constructing the session's tool container. Execution is also subject to workspace permissions and sandbox checks.
+There is no top-level Agent `spec.tools` field. WARP gathers effective tools, then filters them with the merged `spec.policies.tools`: a nonempty `include` must match, `exclude` takes precedence, and `dangerous: deny` or `openWorld: deny` filters tools with the corresponding annotations. TaskSmith uses the resulting tool names when constructing the session's tool container. Execution is also subject to workspace permissions and sandbox checks.
 
 **Current limitation:** if resolution returns no tools, the resulting list can be nil and TaskSmith treats a nil allowed-tool list as unrestricted during tool registration. Do not rely on an agent policy that filters out every tool as a deny-all security boundary. Workspace permissions and sandboxing are separate protections.
 

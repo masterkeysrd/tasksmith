@@ -376,7 +376,7 @@ func isAllowedByPolicy(plan *tools.Plan, policies *warp.Policies, ws *workspace.
 		}
 	}
 
-	if tp.AllowDangerous != nil && !*tp.AllowDangerous {
+	if tp.Dangerous == warp.ToolPolicyDeny {
 		isDangerous := plan.Safety == api.SafetyUnsafe || plan.Action == api.ActionDelete
 		if hasAnn && ann.IsDangerous {
 			isDangerous = true
@@ -386,7 +386,7 @@ func isAllowedByPolicy(plan *tools.Plan, policies *warp.Policies, ws *workspace.
 		}
 	}
 
-	if tp.AllowOpenWorld != nil && !*tp.AllowOpenWorld {
+	if tp.OpenWorld == warp.ToolPolicyDeny {
 		isOpenWorld := plan.Action == api.ActionNet
 		if hasAnn && ann.IsOpenWorld {
 			isOpenWorld = true

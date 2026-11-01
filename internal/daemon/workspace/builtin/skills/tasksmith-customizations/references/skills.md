@@ -19,7 +19,7 @@ A Skill has YAML frontmatter and a Markdown body. The body becomes `instructions
 | `metadata.name`, `description` | string | Identity and short description used for discovery. |
 | `spec.useWhen` | string | Guidance to the model about when the skill is relevant. |
 | `spec.keywords` | string[] | Semantic tags for discovery and prompting. |
-| `spec.tools` | string[] | Tool or Toolkit references associated with the skill. Declaring them does not itself grant tool access; agent policies and permissions still apply. |
+| `spec.tools` | string[] | Tool references associated with the skill. Declaring them does not itself grant tool access; agent policies and permissions still apply. |
 | `spec.argumentHint` | string | Single-line usage hint shown by the CLI. |
 | `spec.arguments` | object[] | Structured parameters available to the instruction template. |
 

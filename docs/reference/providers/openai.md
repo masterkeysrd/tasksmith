@@ -48,7 +48,8 @@ metadata:
 spec:
   type: openai
   endpoint: https://api.openai.com/v1
-  defaultModel: gpt-5.5
+  defaultModels:
+    completion: gpt-5.5
   config:
     # TaskSmith defaults to Zero Data Retention (store: false) on the Responses API
     store: false
@@ -273,7 +274,8 @@ metadata:
 spec:
   type: openai
   endpoint: https://openrouter.ai/api/v1
-  defaultModel: anthropic/claude-3.7-sonnet
+  defaultModels:
+    completion: anthropic/claude-3.7-sonnet
   config:
     apiMode: chat_completions
   headers:
@@ -313,7 +315,8 @@ metadata:
 spec:
   type: openai
   endpoint: http://10.0.0.50:8000/v1
-  defaultModel: qwen-2.5-coder-32b
+  defaultModels:
+    completion: qwen-2.5-coder-32b
   config:
     apiMode: chat_completions
   auth:

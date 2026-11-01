@@ -17,7 +17,7 @@ The Markdown body supplies the instructions. The following fields describe WARP'
 | `spec.triggers.globs` | Path patterns, including negated patterns such as `!**/vendor/**`. |
 | `spec.triggers.useWhen`, `keywords` | Semantic relevance cues. |
 | `spec.triggers.decision` | Reference to a Decision. |
-| `spec.triggers.tools` | Tool or Toolkit names associated with activation. |
+| `spec.triggers.tools` | Tool names associated with activation. |
 
 ```markdown
 ---

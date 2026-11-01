@@ -533,7 +533,7 @@ func DecidePermission(req api.PermissionRequest, dec api.PermissionDecision) {
 	sess := GetSession().Session
 	sessMu.Unlock()
 
-	if sess == nil || sess.ID == "" {
+	if c == nil || sess == nil || sess.ID == "" {
 		return
 	}
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"os"
@@ -196,7 +197,7 @@ func setupDaemonTest(t *testing.T, prov *fakeProvider) (*Daemon, *client.Client,
 	})
 
 	wsDir := shortTempDir(t)
-	manifest := "---\napiVersion: warp/v1alpha1\nkind: Workspace\nmetadata:\n  name: test\nspec:\n  defaultProvider: fake\n  defaultModel: fake-default-model\n---\n"
+	manifest := "---\napiVersion: warp/v1alpha1\nkind: Workspace\nmetadata:\n  name: test\nspec:\n  defaultProvider: fake\n  defaultModels:\n    completion: fake-default-model\n---\n"
 	if err := os.WriteFile(filepath.Join(wsDir, "WORKSPACE.md"), []byte(manifest), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -1104,7 +1105,7 @@ func TestSubdirectorySharesCanonicalWorkspaceRuntime(t *testing.T) {
 	_, cli, wsDir := setupDaemonTest(t, nil)
 
 	// Write a WORKSPACE.md sentinel in wsDir and create a nested subdirectory
-	wsManifest := "---\napiVersion: warp/v1alpha1\nkind: Workspace\nmetadata:\n  name: root-ws\nspec:\n  defaultProvider: fake\n  defaultModel: fake-default-model\n---\n"
+	wsManifest := "---\napiVersion: warp/v1alpha1\nkind: Workspace\nmetadata:\n  name: root-ws\nspec:\n  defaultProvider: fake\n  defaultModels:\n    completion: fake-default-model\n---\n"
 	if err := os.WriteFile(filepath.Join(wsDir, "WORKSPACE.md"), []byte(wsManifest), 0o644); err != nil {
 		t.Fatalf("WriteFile WORKSPACE.md: %v", err)
 	}
@@ -1377,7 +1378,8 @@ metadata:
   name: my-ollama
 spec:
   type: ollama
-  defaultModel: qwen3.8
+  defaultModels:
+    completion: qwen3.8
   models:
     - id: qwen3.8
       name: qwen3.8
@@ -1407,7 +1409,7 @@ spec:
     - my-ollama/qwen3.8
   thinking:
     type: effort
-    default: medium
+    effort: medium
 ---
 Custom agent instructions.
 `
@@ -1674,7 +1676,7 @@ metadata:
 spec:
   thinking:
     type: effort
-    default: high
+    effort: high
 ---
 Root agent instructions.
 `
@@ -1697,7 +1699,7 @@ metadata:
 spec:
   thinking:
     type: effort
-    default: low
+    effort: low
 ---
 Subproject agent instructions.
 `
@@ -1930,9 +1932,19 @@ func TestDaemonTasksEndpoints(t *testing.T) {
 
 	ready := make(chan struct{})
 	doneTurn := make(chan struct{})
+	var turnErr error
 	go func() {
 		for event, err := range cli.EventsWithReady(ctx, "", "", func(string) { close(ready) }, api.SessionStreamTopic(sess.ID)) {
 			if err != nil {
+				return
+			}
+			if event.Type == api.EventError {
+				if ev, ok := event.Payload.(api.ErrorEvent); ok {
+					turnErr = fmt.Errorf("stream error: %s", ev.Error)
+				} else {
+					turnErr = fmt.Errorf("stream error: unknown error payload")
+				}
+				close(doneTurn)
 				return
 			}
 			if event.Type == api.EventCompleted {
@@ -1944,6 +1956,8 @@ func TestDaemonTasksEndpoints(t *testing.T) {
 
 	select {
 	case <-ready:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for event stream ready")
 	case <-ctx.Done():
 		t.Fatal(ctx.Err())
 	}
@@ -1954,6 +1968,11 @@ func TestDaemonTasksEndpoints(t *testing.T) {
 
 	select {
 	case <-doneTurn:
+		if turnErr != nil {
+			t.Fatalf("turn failed: %v", turnErr)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for turn completion")
 	case <-ctx.Done():
 		t.Fatal(ctx.Err())
 	}

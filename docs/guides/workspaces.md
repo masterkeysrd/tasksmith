@@ -19,7 +19,6 @@ my-workspace/
 │   ├── decisions/               # Calibrated System 1 decision classifiers (*.decision.md)
 │   ├── providers/               # AI provider configurations (*.provider.yaml)
 │   ├── tools/                   # Custom script and HTTP tools (*.tool.md)
-│   ├── toolkits/                # Curated tool bundles (*.toolkit.yaml)
 │   └── mcps/                    # Model Context Protocol servers (*.mcp.yaml)
 └── packages/
     └── api/                     # Optional subproject in a monorepo

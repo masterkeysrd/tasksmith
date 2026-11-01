@@ -78,7 +78,7 @@ func TestThinkingDiagnostics(t *testing.T) {
 		t.Fatal(err)
 	}
 	manifest := "---\napiVersion: warp/v1alpha1\nkind: Agent\nmetadata:\n  name: thinker\n" +
-		"spec:\n  thinking:\n    effort: high\n---\nHelpful.\n"
+		"spec:\n  thinking:\n    type: effort\n    effort: high\n---\nHelpful.\n"
 	if err := os.WriteFile(filepath.Join(dir, "thinker.agent.md"), []byte(manifest), 0o644); err != nil {
 		t.Fatal(err)
 	}

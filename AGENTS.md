@@ -18,7 +18,7 @@ Whenever modifying code that alters user-facing behavior, configuration schemas,
 
 - **Manifest Specifications**:
   - Updates to `internal/daemon/workspace/types.go` or Warp schemas must update `docs/reference/manifests.md`.
-  - Every resource kind (`Workspace`, `Context`, `Agent`, `Skill`, `Command`, `Decision`, `Tool`, `Toolkit`, `MCP`) must have up-to-date schema tables and annotated examples.
+  - Every resource kind (`Workspace`, `Context`, `Agent`, `Skill`, `Command`, `Decision`, `Tool`, `MCP`) must have up-to-date schema tables and annotated examples.
 
 - **Model Providers & Gateways**:
   - Updates to `internal/daemon/gateway/` or provider presets must update `docs/reference/providers.md` and the appropriate guide in `docs/reference/providers/`.

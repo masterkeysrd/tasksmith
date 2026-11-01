@@ -10,7 +10,6 @@ TaskSmith ships provider presets as templates. A preset being present does not i
 | --- | --- | --- |
 | `spec.type` | string | Gateway driver; required by TaskSmith. |
 | `spec.endpoint` | string | API base endpoint; handling and defaults depend on the driver. |
-| `spec.defaultModel` | string | Default completion model. |
 | `spec.defaultModels` | object | Role-specific defaults: `completion`, `decision`, and `embedding`. |
 | `spec.auth` | object | Credential source and authentication scheme. |
 | `spec.headers` | map | Additional HTTP headers. |
@@ -21,7 +20,7 @@ Endpoint and configuration support varies by driver. For example, Ollama has a l
 
 ## Model resolution
 
-A model identifier commonly has the form `provider/model`. Workspace resolution considers explicit overrides, workspace role defaults, the configured default provider's role defaults, then other effective providers' defaults and capability matches. `defaultModel` is the completion fallback; `defaultModels` can separately select `completion`, `decision`, and `embedding`. The gateway also considers provider availability and authentication when resolving models. See `workspace-and-context.md` for workspace precedence.
+A model identifier commonly has the form `provider/model`. Workspace resolution considers explicit overrides, workspace role defaults, the configured default provider's role defaults, then other effective providers' defaults and capability matches. `defaultModels` can separately select `completion`, `decision`, and `embedding`. The gateway also considers provider availability and authentication when resolving models. See `workspace-and-context.md` for workspace precedence.
 
 ## Authentication and environment
 
@@ -77,7 +76,8 @@ metadata:
   description: Example OpenAI-compatible provider
 spec:
   type: openai
-  defaultModel: example-model
+  defaultModels:
+    completion: example-model
   auth:
     type: env
     env: OPENAI_API_KEY

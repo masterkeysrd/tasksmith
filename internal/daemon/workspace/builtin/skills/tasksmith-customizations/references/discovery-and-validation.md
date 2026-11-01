@@ -26,9 +26,9 @@ WARP exposes an explicit registry `Validate()` operation; TaskSmith's normal wor
 | Agents | Parent references and non-glob skill, command, subagent, and rule references must resolve to the expected kind; inheritance cycles fail. A declared model found in provider metadata must support completion. |
 | Workspace and providers | Checks default agent, default provider when providers exist, rule references, and declared model role capabilities. Project paths are checked during mapping. |
 | Decisions | Question names are nonempty and unique; types and probability bounds are valid; choices and scores have at least two named options or levels. A declared model found in provider metadata must support decisions. |
-| Rules | Decision and non-glob tool or toolkit trigger references must resolve. |
+| Rules | Decision and non-glob tool trigger references must resolve. |
 | Skills and commands | Non-glob tool references and command agent references must resolve; command context must be `inline`, `fork`, or `clean`. |
-| Toolkits and MCP | Toolkit references must resolve and inline entries need a name and command; MCP transport must be recognized and have its required command or endpoint. |
+| MCP | MCP transport must be recognized and have its required command or endpoint. |
 | Plugins and tools | Structural export patterns are rejected, and standalone tools are checked against workspace tool policy. |
 
 Glob selectors are generally skipped by reference validation rather than required to match. Model capability checks do not prove that an undeclared model exists or is available. Validation reports the first error and does not replace runtime permissions, sandboxing, or provider connectivity checks.

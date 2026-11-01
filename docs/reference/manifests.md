@@ -1,6 +1,6 @@
 # Resource Manifest Reference
 
-TaskSmith uses declarative YAML manifests and Markdown frontmatter to configure workspaces, projects, agents, skills, commands, decisions, tools, toolkits, and external MCP servers.
+TaskSmith uses declarative YAML manifests and Markdown frontmatter to configure workspaces, projects, agents, skills, commands, decisions, tools, and external MCP servers.
 
 Model `cost` pricing and tiers (`label`, `tier.type`, `tier.size`) drive the cost estimates recorded for every LLM call (shown by `/usage` and the status line); a model without `cost` and without a built-in profile price is recorded as unpriced.
 
@@ -60,7 +60,6 @@ spec:
     - packages/backend
     - packages/frontend
   defaultProvider: openai
-  defaultModel: gpt-5.5
   defaultModels:
     completion: openai/gpt-5.5
     decision: typesafe/jev-latest
@@ -72,8 +71,8 @@ spec:
         - "*"
       exclude:
         - "bash(rm -rf /*)"
-      allowDangerous: false
-      allowOpenWorld: true
+      dangerous: deny
+      openWorld: allow
 ---
 
 # Workspace Guidelines
@@ -88,13 +87,14 @@ Ensure error handling wraps sentinels using `%w`.
 | :--- | :--- | :--- |
 | `projects` | array of strings | Relative paths to registered subprojects or packages. |
 | `defaultProvider` | string | Default model provider name (e.g. `openai`, `ollama`). |
-| `defaultModel` | string | Default completion model ID. |
 | `defaultModels` | map[string]string | Role-based model assignments: `completion`, `decision`, `embedding`. |
 | `defaultAgent` | string | Persona activated for new sessions (defaults to `main`). |
 | `policies.tools.include` | array of strings | Tool grant glob patterns allowed in this workspace. |
 | `policies.tools.exclude` | array of strings | Tool denial glob patterns blocked in this workspace. |
-| `policies.tools.allowDangerous` | boolean | Set `false` to prevent dangerous tool calls without approval. |
-| `policies.tools.allowOpenWorld` | boolean | Set `false` to restrict open-world network or external tools. |
+| `policies.tools.dangerous` | string | Policy for `isDangerous` tools: `allow`, `ask`, or `deny` (default `ask`). |
+| `policies.tools.openWorld` | string | Policy for `isOpenWorld` tools: `allow`, `ask`, or `deny` (default `allow`). |
+| `policies.tools.readOnly` | boolean | When `true`, only `isReadOnly` tools are allowed. |
+| `policies.tools.ask` | array of strings | Tool glob patterns that require approval. |
 
 *The Markdown body below the frontmatter serves as workspace-level system instructions inherited by all agents.*
 
@@ -160,6 +160,7 @@ spec:
     - openai/o3
   temperature: 0.2
   thinking:
+    type: effort
     effort: high
   skills:
     - go-security
@@ -194,16 +195,15 @@ Never attempt to modify code directly; report your findings with precise line re
 | `triggers` | array of strings | Phrases or patterns that trigger automatic agent suggestion or routing. |
 | `models` | array of strings | Prioritized list of model identifiers to use for this agent. |
 | `temperature` | float | Sampling temperature (0.0 to 2.0). Sent when supported; omitted with a session warning when unsupported. |
-| `thinking.effort` | string | Model-supported effort level for the agent. |
-| `thinking.type` | string | `effort` when specifying the level through `thinking.default`. |
-| `thinking.default` | string | Default effort level when `thinking.type` is `effort`. |
-| `thinking.budget_tokens` | integer | Thinking token budget for models that support budgets. |
-| `thinking.enabled` | boolean | Thinking toggle for models that support it. |
+| `thinking.type` | string | Reasoning strategy: `toggle`, `effort`, `budget`, or `adaptive`. |
+| `thinking.effort` | string | Effort level for the `effort` strategy (e.g. `low`, `medium`, `high`). |
+| `thinking.budgetTokens` | integer | Thinking token budget for the `budget` strategy. |
+| `thinking.enabled` | boolean | Thinking toggle for the `toggle` strategy. |
 | `skills` | array of strings | Names of domain skills made available to this agent. |
 | `commands` | array of strings | Names of invokable slash commands made available to this agent. |
 | `subagents` | array of strings | Names of subagents this agent is permitted to invoke. |
 | `tools` | array of strings | Names of tools granted to this agent. |
-| `policies.tools` | object | Agent-level tool restrictions (`include`, `exclude`, `allowDangerous`). |
+| `policies.tools` | object | Agent-level tool restrictions (`include`, `exclude`, `dangerous`, `openWorld`, `readOnly`, `ask`). |
 
 *The Markdown body below the frontmatter contains the system persona prompt.*
 
@@ -465,45 +465,7 @@ Executes project linting rules and returns diagnostic reports.
 
 ---
 
-## 9. Toolkit Manifest (`*.toolkit.yaml`)
-
-Groups related tools into a single reusable bundle. Placed under `.agents/toolkits/<name>.toolkit.yaml`.
-
-### Syntax
-
-```yaml
-apiVersion: warp/v1alpha1
-kind: Toolkit
-metadata:
-  name: dev-tools
-  displayName: Development Tools
-  description: Essential developer inspection and execution tools
-spec:
-  tools:
-    - ref: view
-    - ref: edit
-    - ref: write
-    - ref: bash
-    - name: test-runner
-      description: Runs unit tests
-      command:
-        - go
-        - test
-        - ./...
-      annotations:
-        isReadOnly: true
-        isDangerous: false
-```
-
-### Spec Reference
-
-| Field | Type | Description |
-| :--- | :--- | :--- |
-| `tools` | array of objects | Tool entries, each containing either a `ref` string pointing to an existing tool, or an inline tool definition (`name`, `command`, `annotations`, `inputSchema`). |
-
----
-
-## 10. MCP Server Manifest (`*.mcp.yaml`)
+## 9. MCP Server Manifest (`*.mcp.yaml`)
 
 Configures an external Model Context Protocol (MCP) server integration. Placed under `.agents/mcps/<name>.mcp.yaml`.
 

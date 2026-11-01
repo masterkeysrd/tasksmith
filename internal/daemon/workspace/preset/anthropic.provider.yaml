@@ -5,7 +5,8 @@ metadata:
 spec:
   type: anthropic
   endpoint: https://api.anthropic.com
-  defaultModel: claude-sonnet-5
+  defaultModels:
+    completion: claude-sonnet-5
   auth:
     type: env
     env: ANTHROPIC_API_KEY

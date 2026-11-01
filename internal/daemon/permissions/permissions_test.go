@@ -445,14 +445,13 @@ func TestSessionManagerEvaluationModesAndPrecedence(t *testing.T) {
 		t.Fatalf("ApplyDecision unknown kind failed: %v", err)
 	}
 
-	// 8. Workspace policies: Exclude, Include, AllowDangerous, AllowOpenWorld
-	f := false
+	// 8. Workspace policies: Exclude, Include, Dangerous, OpenWorld
 	sess.SetPolicies(&warp.Policies{
 		Tools: &warp.ToolPolicies{
-			Exclude:        []string{"excluded_*"},
-			Include:        []string{"view", "write_file"},
-			AllowDangerous: &f,
-			AllowOpenWorld: &f,
+			Exclude:   []string{"excluded_*"},
+			Include:   []string{"view", "write_file"},
+			Dangerous: warp.ToolPolicyDeny,
+			OpenWorld: warp.ToolPolicyDeny,
 		},
 	})
 	if dec, _, _ := sess.Evaluate(&tools.Plan{ToolName: "excluded_tool"}); dec != tools.AccessDeny {
@@ -462,10 +461,10 @@ func TestSessionManagerEvaluationModesAndPrecedence(t *testing.T) {
 		t.Fatalf("expected unlisted tool to be denied, got %s", dec)
 	}
 	if dec, _, _ := sess.Evaluate(&tools.Plan{ToolName: "view", Safety: api.SafetyUnsafe}); dec != tools.AccessDeny {
-		t.Fatalf("expected dangerous plan to be denied when AllowDangerous=false, got %s", dec)
+		t.Fatalf("expected dangerous plan to be denied when dangerous=deny, got %s", dec)
 	}
 	if dec, _, _ := sess.Evaluate(&tools.Plan{ToolName: "view", Action: api.ActionNet}); dec != tools.AccessDeny {
-		t.Fatalf("expected ActionNet plan to be denied when AllowOpenWorld=false, got %s", dec)
+		t.Fatalf("expected ActionNet plan to be denied when openWorld=deny, got %s", dec)
 	}
 }
 

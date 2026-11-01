@@ -1,6 +1,6 @@
-# Tools, toolkits, and MCP
+# Tools and MCP
 
-Tools expose operations to an agent. TaskSmith has built-in tools and can register command-backed Tool resources. Toolkits group tool references or inline tool definitions. MCP resources describe external servers, but their discovery does not currently connect those servers in TaskSmith.
+Tools expose operations to an agent. TaskSmith has built-in tools and can register command-backed Tool resources. MCP resources describe external servers, but their discovery does not currently connect those servers in TaskSmith.
 
 ## Custom tools
 
@@ -13,10 +13,8 @@ Tool manifests are discovered in the usual resource scopes, commonly under `.age
 | `inputSchema` | object | JSON Schema for the arguments supplied by the model. |
 | `outputSchema` | object | JSON Schema describing the output in the tool definition. |
 | `annotations` | object | Safety and approval metadata described below. |
-| `description` | string | Description for YAML or inline definitions when metadata has no description. |
-| `name` | string | Tool name for an inline toolkit entry; standalone tools use `metadata.name`. |
 
-For a Markdown Tool, the body becomes its instructions and is used as the description presented to the model. If it is empty, the metadata description is used, with `spec.description` as a fallback; otherwise a generic description is generated.
+For a Markdown Tool, the body becomes its instructions and is used as the description presented to the model. If it is empty, the metadata description is used; otherwise a generic description is generated.
 
 A command is an executable followed by static arguments, not a shell command line. TaskSmith validates call arguments against the input schema and sends the JSON object to the process on standard input. Arguments are **not** automatically appended to the command line: the executable must read JSON from standard input if it needs them. A missing or unparseable input schema falls back to a generic object schema; an unresolvable schema also falls back for validation.
 
@@ -54,32 +52,6 @@ spec:
     isOpenWorld: false
 ---
 Run the project checks and report failures.
-```
-
-## Toolkits
-
-A `Toolkit` groups tools in its `spec.tools` array. Each entry is either a `$ref` to an existing Tool resource or an inline Tool definition with a `name`, `command`, and optional Tool fields such as `description`, schemas, `env`, and `annotations`. Inline tools inherit the toolkit's namespace and directory during WARP expansion. A reference groups an existing tool rather than creating another implementation; WARP expansion skips references that cannot be resolved to a Tool.
-
-TaskSmith exposes standalone tools and inline toolkit tools through its workspace tool list. A standalone tool shadows an inline tool with the same name. Inline command-backed tools are subject to the same registration, execution, and permission checks as standalone tools.
-
-The following example references the `project-check` Tool above, assuming both resources are in the `workspace` namespace, and adds an inline tool with no dynamic arguments:
-
-```yaml
-apiVersion: warp/v1alpha1
-kind: Toolkit
-metadata:
-  name: project-tools
-spec:
-  tools:
-    - $ref: workspace/Tool/project-check
-    - name: go-version
-      description: Show the installed Go version.
-      command: [go, version]
-      inputSchema:
-        type: object
-        properties: {}
-      annotations:
-        isReadOnly: true
 ```
 
 ## MCP definitions
