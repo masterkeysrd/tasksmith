@@ -4,7 +4,7 @@ A WARP Rule describes instructions and the conditions under which they are inten
 
 ## Discovery and runtime
 
-Rule manifests can be discovered recursively in user, workspace, and project resource directories, commonly as `.agents/rules/<name>.rule.md`. They participate in the normal kind/name and namespace hierarchy. WARP parses and stores these definitions, but TaskSmith currently does not resolve, activate, or inject Rule resources into agent prompts. A matching glob, an `always` trigger, or a reference in an Agent, Context, or Workspace therefore does not itself enforce the rule. Project `AGENTS.md` context is a separate mechanism; see `workspace-and-context.md`.
+Rule manifests can be discovered recursively in user, workspace, and project resource directories, commonly as `.agents/rules/<name>.rule.md`. They participate in the normal kind/name and namespace hierarchy. WARP parses and stores these definitions, but TaskSmith currently does not resolve, activate, or inject Rule resources into agent prompts. A matching glob, an `always` trigger, or a reference in an Agent or Command therefore does not itself enforce the rule. Project `AGENTS.md` context is a separate mechanism; see `workspace-and-context.md`.
 
 ## Definition
 

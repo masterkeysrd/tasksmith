@@ -1,6 +1,6 @@
 # Workspace and project context
 
-A Workspace defines the session's root, projects, defaults, policies, and shared guidance. A Context supplies guidance and optional resource references for a particular project. These files have special discovery behavior and are not ordinary resources found by scanning `.agents/`.
+A Workspace defines the session's root, projects, defaults, policies, and shared guidance. A Context supplies identity and guidance for a particular project. These files have special discovery behavior and are not ordinary resources found by scanning `.agents/`.
 
 ## Workspace discovery
 
@@ -20,9 +20,9 @@ A Workspace manifest has WARP YAML frontmatter and an optional Markdown body. It
 | `defaultAgent` | string | Default Agent when none is selected. |
 | `defaultProvider` | string | Provider reference, resolved by resource name or provider type. |
 | `defaultModels` | object | Role-specific model defaults for `completion`, `decision`, and `embedding`. |
+| `modelAliases` | object | Named model shorthands (`@<alias>`, `@default`, or `<provider>/@<alias>`) resolved to a canonical `<provider>/<model-id>`. |
 | `plugins` | object[] | External plugin resources to load into the workspace. |
 | `policies` | object | Workspace-wide tool execution restrictions. |
-| `rules` | string[] | WARP Rule references; TaskSmith does not currently activate Rule resources. |
 
 ### Model defaults
 
@@ -90,12 +90,14 @@ Shared analysis skills and commands.
 
 | Field | Type | Behavior |
 | --- | --- | --- |
-| `dangerous` | string | `deny` denies unsafe or delete plans and tools annotated dangerous. |
-| `openWorld` | string | `deny` denies network plans and tools annotated open-world. |
+| `dangerous` | string | `deny` denies unsafe or delete plans and tools annotated dangerous; `ask` requires approval. |
+| `openWorld` | string | `deny` denies network plans and tools annotated open-world; `ask` requires approval. |
+| `readOnly` | boolean | When `true`, only `isReadOnly` tools are allowed; non-read-only plans are denied. |
 | `include` | string[] | When nonempty, a tool name must match an included pattern. |
 | `exclude` | string[] | Matching tool names are denied, even if included. |
+| `ask` | string[] | Matching tool names require approval even when otherwise allowed. |
 
-TaskSmith checks these workspace patterns against the called tool name before permission modes and allow rules; passing the policy does not automatically grant execution. WARP's resource-level policy matcher additionally supports namespace/name and fully qualified tool patterns, but do not assume those forms are matched by TaskSmith's runtime workspace-policy check. Agent tool policies are resolved separately; see `agents.md`.
+TaskSmith evaluates these workspace patterns against the called tool before permission modes and allow rules using WARP's resource-level policy matcher, which supports short names, `namespace/name`, and fully qualified tool patterns as well as `readOnly`, `ask`, `dangerous`, and `openWorld` actions; passing the policy does not automatically grant execution. A workspace `ask` action forces approval unless a matching user allow rule grants the plan. Agent tool policies are resolved separately and combined with the workspace ceiling; see `agents.md`.
 
 ## Workspace example
 
@@ -125,9 +127,9 @@ The project directories and configured provider/models in this example are illus
 
 ## Project context
 
-WARP reads `AGENTS.md` at each mapped project root. It may be plain Markdown or a WARP `Context` manifest with frontmatter and a Markdown body. This is project context, not an automatic cascade of every ancestor directory's `AGENTS.md`. `spec.resources` lists paths to WARP files explicitly loaded into that project; `spec.rules` holds Rule references but does not activate them in TaskSmith.
+WARP reads `AGENTS.md` at each mapped project root. It may be plain Markdown or a WARP `Context` manifest with frontmatter and a Markdown body. This is project context, not an automatic cascade of every ancestor directory's `AGENTS.md`. A `Context` defines no YAML `spec` fields: its `spec.instructions` is populated automatically from the Markdown body below the closing `---`, and frontmatter is optional on `AGENTS.md` (when omitted, WARP infers `apiVersion`, `kind: Context`, and `metadata.name`).
 
-The workspace prompt and the selected agent prompt are rendered separately. The built-in main agent's template includes the current project's context instructions; a custom agent must include context in its own template if it needs that text. Context instructions are not automatically appended to every agent prompt.
+The workspace prompt and the selected agent prompt are rendered separately. The built-in `main`, `general`, and `explore` agents include the current project's context instructions (`{{.Context.Instructions}}` / `{{.Context.Path}}`); a custom agent that does not extend `main` can include `{{.Context.Instructions}}` in its own template. Context instructions are not automatically appended to every agent prompt.
 
 ```markdown
 ---
@@ -135,8 +137,6 @@ apiVersion: warp/v1alpha1
 kind: Context
 metadata:
   name: example-project
-spec:
-  resources: []
 ---
 # Project guidance
 Document verified build, test, and architecture conventions here.

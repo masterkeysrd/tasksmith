@@ -629,3 +629,205 @@ func TestApplyDecisionWithScopes(t *testing.T) {
 	}
 	_ = dir
 }
+
+// TestSessionManagerReadOnlyPolicy verifies that policies.tools.readOnly denies
+// runtime plans that are not read-only, while still permitting read-only plans.
+func TestSessionManagerReadOnlyPolicy(t *testing.T) {
+	_, ws := setupTestWorkspace(t)
+	mgr, err := permissions.New(permissions.Config{
+		Workspace:  ws,
+		GlobalPath: filepath.Join(t.TempDir(), "global.json"),
+	})
+	if err != nil {
+		t.Fatalf("permissions.New: %v", err)
+	}
+	sess := mgr.Attach(api.ModeDefault, api.Permissions{}, nil)
+
+	sess.SetPolicies(&warp.Policies{Tools: &warp.ToolPolicies{ReadOnly: true}})
+
+	// A non-read-only plan is denied by the readOnly ceiling even in ModeDefault.
+	if dec, req, _ := sess.Evaluate(&tools.Plan{ToolName: "write_file", Action: api.ActionWrite, Safety: api.SafetySafe, Target: "a.go", ReadOnly: false}); dec != tools.AccessDeny || req != nil {
+		t.Fatalf("expected readOnly ceiling to deny non-read-only plan, got %s, %+v", dec, req)
+	}
+
+	// A read-only, safe plan is still permitted.
+	if dec, _, _ := sess.Evaluate(&tools.Plan{ToolName: "view", Action: api.ActionRead, Safety: api.SafetySafe, Target: "README.md", ReadOnly: true}); dec != tools.AccessAllow {
+		t.Fatalf("expected readOnly ceiling to allow read-only safe plan, got %s", dec)
+	}
+}
+
+// TestSessionManagerAskPolicyForcesConfirmation verifies that policies.tools.ask
+// forces an AccessAsk on an otherwise auto-approvable plan until an explicit
+// allow rule is granted.
+func TestSessionManagerAskPolicyForcesConfirmation(t *testing.T) {
+	_, ws := setupTestWorkspace(t)
+	mgr, err := permissions.New(permissions.Config{
+		Workspace:  ws,
+		GlobalPath: filepath.Join(t.TempDir(), "global.json"),
+	})
+	if err != nil {
+		t.Fatalf("permissions.New: %v", err)
+	}
+	sess := mgr.Attach(api.ModeDefault, api.Permissions{}, nil)
+
+	sess.SetPolicies(&warp.Policies{Tools: &warp.ToolPolicies{Ask: []string{"view"}}})
+
+	plan := &tools.Plan{ToolName: "view", Action: api.ActionRead, Safety: api.SafetySafe, Target: "README.md", ReadOnly: true}
+
+	// The ask ceiling forces confirmation even though the plan is a safe read.
+	dec, req, err := sess.Evaluate(plan)
+	if err != nil || dec != tools.AccessAsk || req == nil {
+		t.Fatalf("expected ask ceiling to force AccessAsk, got %s, %+v, %v", dec, req, err)
+	}
+
+	// Granting an explicit allow rule satisfies the ask ceiling.
+	if err := sess.AddAllow("view(README.md)"); err != nil {
+		t.Fatalf("AddAllow: %v", err)
+	}
+	if dec, _, _ := sess.Evaluate(plan); dec != tools.AccessAllow {
+		t.Fatalf("expected AccessAllow after allow rule satisfies ask ceiling, got %s", dec)
+	}
+}
+
+// TestSessionManagerOpenWorldPolicy verifies that policies.tools.openWorld: ask
+// forces confirmation on network (ActionNet) plans.
+func TestSessionManagerOpenWorldPolicy(t *testing.T) {
+	_, ws := setupTestWorkspace(t)
+	mgr, err := permissions.New(permissions.Config{
+		Workspace:  ws,
+		GlobalPath: filepath.Join(t.TempDir(), "global.json"),
+	})
+	if err != nil {
+		t.Fatalf("permissions.New: %v", err)
+	}
+	sess := mgr.Attach(api.ModeDefault, api.Permissions{}, nil)
+
+	sess.SetPolicies(&warp.Policies{Tools: &warp.ToolPolicies{OpenWorld: warp.ToolPolicyAsk}})
+
+	plan := &tools.Plan{ToolName: "web_fetch", Action: api.ActionNet, Safety: api.SafetySafe, Target: "https://example.com", ReadOnly: true}
+
+	dec, req, err := sess.Evaluate(plan)
+	if err != nil || dec != tools.AccessAsk || req == nil {
+		t.Fatalf("expected openWorld:ask to force AccessAsk on ActionNet plan, got %s, %+v, %v", dec, req, err)
+	}
+
+	// An explicit allow rule satisfies the openWorld ask ceiling.
+	if err := sess.AddAllow("web_fetch(https://example.com)"); err != nil {
+		t.Fatalf("AddAllow: %v", err)
+	}
+	if dec, _, _ := sess.Evaluate(plan); dec != tools.AccessAllow {
+		t.Fatalf("expected AccessAllow after allow rule satisfies openWorld ask, got %s", dec)
+	}
+}
+
+// TestSessionManagerNamespaceQualifiedPatterns verifies that include, exclude,
+// and ask patterns match namespace-qualified names (namespace/name and
+// namespace/Kind/name), not just the bare short name.
+func TestSessionManagerNamespaceQualifiedPatterns(t *testing.T) {
+	xdg.SetTestEnv(t.TempDir(), "tasksmith-permissions-ns-test")
+	t.Cleanup(xdg.ClearCache)
+
+	dir := t.TempDir()
+	if realDir, err := filepath.EvalSymlinks(dir); err == nil {
+		dir = realDir
+	}
+
+	toolsDir := filepath.Join(dir, ".agents", "tools")
+	if err := os.MkdirAll(toolsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	toolManifest := "---\napiVersion: warp/v1alpha1\nkind: Tool\nmetadata:\n  name: lint\n  description: Run linter\nspec:\n  command: [\"golangci-lint\", \"run\"]\n---\nRun the linter.\n"
+	if err := os.WriteFile(filepath.Join(toolsDir, "lint.tool.md"), []byte(toolManifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	ws, err := workspace.Open(context.Background(), dir)
+	if err != nil {
+		t.Fatalf("workspace.Open: %v", err)
+	}
+
+	tool, ok := ws.Catalog().GetTool("lint")
+	if !ok {
+		t.Fatal("expected lint tool to be loaded into catalog")
+	}
+	nsName := tool.GetNamespace() + "/" + tool.GetName()
+	qualName := tool.QualifiedName()
+
+	mgr, err := permissions.New(permissions.Config{
+		Workspace:  ws,
+		GlobalPath: filepath.Join(t.TempDir(), "global.json"),
+	})
+	if err != nil {
+		t.Fatalf("permissions.New: %v", err)
+	}
+	sess := mgr.Attach(api.ModeDefault, api.Permissions{}, nil)
+
+	lintPlan := func() *tools.Plan {
+		return &tools.Plan{ToolName: "lint", Action: api.ActionExec, Safety: api.SafetySafe, Target: "lint", ReadOnly: false}
+	}
+
+	// Exclude via qualified name denies the tool.
+	sess.SetPolicies(&warp.Policies{Tools: &warp.ToolPolicies{Exclude: []string{qualName}}})
+	if dec, _, _ := sess.Evaluate(lintPlan()); dec != tools.AccessDeny {
+		t.Fatalf("expected qualified exclude %q to deny lint, got %s", qualName, dec)
+	}
+
+	// Ask via namespace name forces confirmation.
+	sess.SetPolicies(&warp.Policies{Tools: &warp.ToolPolicies{Ask: []string{nsName}}})
+	if dec, req, _ := sess.Evaluate(lintPlan()); dec != tools.AccessAsk || req == nil {
+		t.Fatalf("expected namespace-qualified ask %q to force AccessAsk on lint, got %s, %+v", nsName, dec, req)
+	}
+
+	// Include via qualified name: an unlisted tool is denied by the include
+	// filter, while lint is permitted once an allow rule is granted.
+	sess.SetPolicies(&warp.Policies{Tools: &warp.ToolPolicies{Include: []string{qualName}}})
+	if dec, _, _ := sess.Evaluate(&tools.Plan{ToolName: "other", Action: api.ActionExec, Safety: api.SafetySafe, Target: "other", ReadOnly: false}); dec != tools.AccessDeny {
+		t.Fatalf("expected unlisted tool to be denied by include filter, got %s", dec)
+	}
+	if err := sess.AddAllow("lint(*)"); err != nil {
+		t.Fatalf("AddAllow: %v", err)
+	}
+	if dec, _, _ := sess.Evaluate(lintPlan()); dec != tools.AccessAllow {
+		t.Fatalf("expected lint to be allowed via qualified include + allow rule, got %s", dec)
+	}
+}
+
+// TestSessionManagerAgentPolicyNarrowing verifies that the active agent's tool
+// policies narrow (but cannot widen) the workspace policy ceiling, following the
+// allow < ask < deny monotonic ordering.
+func TestSessionManagerAgentPolicyNarrowing(t *testing.T) {
+	_, ws := setupTestWorkspace(t)
+	mgr, err := permissions.New(permissions.Config{
+		Workspace:  ws,
+		GlobalPath: filepath.Join(t.TempDir(), "global.json"),
+	})
+	if err != nil {
+		t.Fatalf("permissions.New: %v", err)
+	}
+
+	dangerousPlan := &tools.Plan{ToolName: "bash", Action: api.ActionDelete, Safety: api.SafetyUnsafe, Target: ".git/config", ReadOnly: false}
+
+	// 1. Agent narrows a workspace "ask" ceiling to "deny".
+	sess := mgr.Attach(api.ModeDefault, api.Permissions{}, nil)
+	sess.SetPolicies(&warp.Policies{Tools: &warp.ToolPolicies{Dangerous: warp.ToolPolicyAsk}})
+	sess.SetAgentPolicies(&warp.Policies{Tools: &warp.ToolPolicies{Dangerous: warp.ToolPolicyDeny}})
+	if dec, _, _ := sess.Evaluate(dangerousPlan); dec != tools.AccessDeny {
+		t.Fatalf("expected agent deny to narrow workspace ask to deny, got %s", dec)
+	}
+
+	// 2. Agent cannot widen a workspace "deny" ceiling back to "ask".
+	sess = mgr.Attach(api.ModeDefault, api.Permissions{}, nil)
+	sess.SetPolicies(&warp.Policies{Tools: &warp.ToolPolicies{Dangerous: warp.ToolPolicyDeny}})
+	sess.SetAgentPolicies(&warp.Policies{Tools: &warp.ToolPolicies{Dangerous: warp.ToolPolicyAsk}})
+	if dec, _, _ := sess.Evaluate(dangerousPlan); dec != tools.AccessDeny {
+		t.Fatalf("expected agent to not widen workspace deny, got %s", dec)
+	}
+
+	// 3. Agent "allow" cannot widen a workspace "ask" ceiling to "allow".
+	sess = mgr.Attach(api.ModeDefault, api.Permissions{}, nil)
+	sess.SetPolicies(&warp.Policies{Tools: &warp.ToolPolicies{Dangerous: warp.ToolPolicyAsk}})
+	sess.SetAgentPolicies(&warp.Policies{Tools: &warp.ToolPolicies{Dangerous: warp.ToolPolicyAllow}})
+	if dec, req, _ := sess.Evaluate(dangerousPlan); dec != tools.AccessAsk || req == nil {
+		t.Fatalf("expected agent allow to not widen workspace ask, got %s, %+v", dec, req)
+	}
+}

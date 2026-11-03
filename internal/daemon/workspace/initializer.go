@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
 	"sort"
@@ -26,6 +27,7 @@ type InitOptions struct {
 	Endpoint         string                    `json:"endpoint,omitempty"`
 	DefaultModels    map[warp.ModelRole]string `json:"default_models,omitempty"`
 	DefaultAgent     string                    `json:"default_agent,omitempty"`
+	ModelAliases     map[string]string         `json:"model_aliases,omitempty"`
 	AuthorizedTools  []string                  `json:"authorized_tools,omitempty"`
 	TrustOnly        bool                      `json:"trust_only,omitempty"`
 	AuthType         string                    `json:"auth_type,omitempty"`
@@ -92,9 +94,10 @@ func IsInitialized(dir string) bool {
 	return false
 }
 
-// CopyConfig copies WORKSPACE.md, .agents/ (recursively), and .env (if present)
-// from srcDir into dstDir. It is used during bare-repository worktree promotion
-// flows (C3a/C3b) to transfer workspace configuration into a newly created worktree.
+// CopyConfig copies WORKSPACE.md, .agents/ (recursively), .env, and warp.lock
+// (each if present) from srcDir into dstDir. It is used during bare-repository
+// worktree promotion flows (C3a/C3b) to transfer workspace configuration into a
+// newly created worktree.
 func CopyConfig(srcDir, dstDir string) error {
 	if strings.TrimSpace(srcDir) == "" || strings.TrimSpace(dstDir) == "" {
 		return errors.New("workspace: source and destination directories must not be empty")
@@ -135,6 +138,15 @@ func CopyConfig(srcDir, dstDir string) error {
 	if info, err := os.Stat(srcEnv); err == nil && !info.IsDir() {
 		if err := copyFile(srcEnv, filepath.Join(dstAbs, ".env"), info.Mode().Perm()); err != nil {
 			return fmt.Errorf("workspace: copy .env: %w", err)
+		}
+	}
+
+	// 4. Copy warp.lock if present so a promoted worktree keeps the same
+	// verified plugin set (WARP verifies plugin hashes against warp.lock).
+	srcLock := filepath.Join(srcAbs, "warp.lock")
+	if info, err := os.Stat(srcLock); err == nil && !info.IsDir() {
+		if err := copyFile(srcLock, filepath.Join(dstAbs, "warp.lock"), info.Mode().Perm()); err != nil {
+			return fmt.Errorf("workspace: copy warp.lock: %w", err)
 		}
 	}
 
@@ -251,6 +263,7 @@ func Initialize(ctx context.Context, dir string, opts InitOptions) error {
 			DefaultProvider: provName,
 			DefaultModels:   defaultModels,
 			DefaultAgent:    opts.DefaultAgent,
+			ModelAliases:    maps.Clone(opts.ModelAliases),
 			Policies:        policies,
 		},
 	}

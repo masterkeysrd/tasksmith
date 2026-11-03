@@ -768,6 +768,19 @@ func (s *Session) configureHarness(ctx context.Context) error {
 		return err
 	}
 
+	// Propagate the active agent's tool policy ceiling to the permission gate so
+	// that agent-level restrictions narrow the workspace ceiling. Reset the
+	// ceiling unconditionally so that stale policies from a previously active
+	// agent cannot leak across agent changes when ResolveAgent fails or returns
+	// no agent.
+	if s.PermManager != nil {
+		var agentPolicies *warp.Policies
+		if resolved, rerr := s.workspace.Catalog().ResolveAgent(agentName); rerr == nil && resolved != nil && resolved.Agent != nil {
+			agentPolicies = resolved.Agent.Spec.Policies
+		}
+		s.PermManager.SetAgentPolicies(agentPolicies)
+	}
+
 	opts := harness.NodeOptions{
 		Model:        llmModel,
 		Tools:        container,

@@ -144,45 +144,53 @@ TaskSmith includes an interactive rule editor accessible via the `/permissions` 
 
 ## Workspace Declarative Policies (`WORKSPACE.md`)
 
-In addition to interactive rules, team-wide security baselines can be committed directly to version control in `WORKSPACE.md`:
+In addition to interactive rules, team-wide security baselines can be committed directly to version control in `WORKSPACE.md`. Policies are declared under `spec.policies.tools` and are enforced as a monotonic `allow < ask < deny` ceiling that is evaluated before permission modes and allow rules:
 
 ```markdown
 ---
-name: backend-service
-policies:
-  # Tools that execute automatically without prompting
-  allow_tools:
-    - view
-    - glob
-    - grep
-
-  # Tools that always prompt for developer approval
-  ask_tools:
-    - bash
-    - write
-    - edit
-    - web_fetch
-
-  # Tools that are completely disabled for all agents
-  deny_tools:
-    - download
+apiVersion: warp/v1alpha1
+kind: Workspace
+metadata:
+  name: backend-service
+spec:
+  policies:
+    tools:
+      # Tools that execute automatically without prompting
+      include:
+        - view
+        - glob
+        - grep
+      # Tools that always prompt for developer approval
+      ask:
+        - bash
+        - write
+        - edit
+        - web_fetch
+      # Tools that are completely disabled for all agents
+      exclude:
+        - download
 ---
 ```
 
-Or using fine-grained glob inclusion and exclusion under `policies.tools`:
+The `tools` ceiling also accepts the annotation-driven actions `dangerous` and `openWorld` (each `allow`, `ask`, or `deny`; defaulting to `ask` and `allow` respectively) and a boolean `readOnly` that restricts the workspace to `isReadOnly` tools:
 
 ```markdown
 ---
-policies:
-  tools:
-    include:
-      - "*"
-    exclude:
-      - download
-      - remove
+apiVersion: warp/v1alpha1
+kind: Workspace
+metadata:
+  name: backend-service
+spec:
+  policies:
+    tools:
+      readOnly: true
+      dangerous: deny
+      openWorld: ask
 ---
 ```
 
-When an agent requests a tool call, TaskSmith first verifies that the tool is permitted by workspace policies. Excluded or denied tools cannot be authorized by interactive prompts.
+`include`, `exclude`, and `ask` match a tool's short name, `namespace/name`, or fully-qualified `namespace/Kind/name` pattern. When an agent requests a tool call, TaskSmith first verifies that the tool is permitted by the workspace ceiling; excluded or denied tools cannot be authorized by interactive prompts, and an `ask` ceiling forces approval unless a matching user allow rule grants the plan.
+
+An active `Agent` manifest may further narrow this ceiling through its own `spec.policies.tools` (for example, excluding `write` or `edit`), but it can never widen it: the effective policy is the stricter of the workspace and agent ceilings (`allow < ask < deny`).
 
 For keyboard shortcuts and command syntax, see the [CLI Reference](../reference/cli.md). For the underlying security implementation, see the [Permissions Architecture](../architecture/permissions.md).

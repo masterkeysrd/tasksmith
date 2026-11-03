@@ -64,7 +64,20 @@ spec:
     completion: openai/gpt-5.5
     decision: typesafe/jev-latest
     embedding: openai/text-embedding-3-small
+  modelAliases:
+    fast: openai/gpt-5.5
+    default: openai/gpt-5.5
   defaultAgent: main
+  plugins:
+    - source: github.com/acme/shared
+      version: v1.2.0
+      namespace: acme
+      imports:
+        include:
+          - "agents/*"
+          - "skills/*"
+        exclude:
+          - "agents/experimental/*"
   policies:
     tools:
       include:
@@ -88,7 +101,9 @@ Ensure error handling wraps sentinels using `%w`.
 | `projects` | array of strings | Relative paths to registered subprojects or packages. |
 | `defaultProvider` | string | Default model provider name (e.g. `openai`, `ollama`). |
 | `defaultModels` | map[string]string | Role-based model assignments: `completion`, `decision`, `embedding`. |
+| `modelAliases` | map[string]string | Named model shorthands resolved to a canonical `<provider>/<model-id>`; referenced as `@<alias>`, `@default`, or `<provider>/@<alias>`. |
 | `defaultAgent` | string | Persona activated for new sessions (defaults to `main`). |
+| `plugins` | array of objects | External plugin resources to load: `source`, `version`, `namespace`, `imports.include`, `imports.exclude`. |
 | `policies.tools.include` | array of strings | Tool grant glob patterns allowed in this workspace. |
 | `policies.tools.exclude` | array of strings | Tool denial glob patterns blocked in this workspace. |
 | `policies.tools.dangerous` | string | Policy for `isDangerous` tools: `allow`, `ask`, or `deny` (default `ask`). |
@@ -102,7 +117,7 @@ Ensure error handling wraps sentinels using `%w`.
 
 ## 3. Project Context Manifest (`AGENTS.md`)
 
-Configures subproject-specific instructions and resource references in monorepos. Placed at `<subproject>/AGENTS.md`.
+Configures subproject-specific instructions in monorepos. Placed at `<subproject>/AGENTS.md`.
 
 ### Syntax
 
@@ -114,10 +129,6 @@ metadata:
   name: backend
   displayName: Backend Microservice
   description: Go gRPC microservice conventions
-spec:
-  resources:
-    - .agents/skills/proto.skill.md
-    - .agents/tools/migrate.tool.md
 ---
 
 # Backend Conventions
@@ -128,11 +139,7 @@ spec:
 
 ### Spec Reference
 
-| Field | Type | Description |
-| :--- | :--- | :--- |
-| `resources` | array of strings | Relative file paths to subproject-scoped agents, skills, or tools. |
-
-*The Markdown body below the frontmatter provides project-specific instructions injected into the context.*
+`Context` defines no YAML `spec` fields. Its `spec.instructions` is populated automatically from the Markdown body below the closing `---`, which becomes the project-specific instructions injected into the context. If `AGENTS.md` omits frontmatter, WARP infers `apiVersion`, `kind: Context`, and `metadata.name` automatically.
 
 ---
 

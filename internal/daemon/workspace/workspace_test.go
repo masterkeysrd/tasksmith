@@ -9,6 +9,7 @@ import (
 	"testing/fstest"
 
 	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/models"
 	"github.com/masterkeysrd/warp"
 )
 
@@ -195,6 +196,12 @@ func TestIsConfigured_IsInitialized_Initialize_CopyConfig(t *testing.T) {
 	}
 
 	// Test CopyConfig into a new worktree directory (C3a/C3b promotion flow)
+	// Write a warp.lock so we can verify it is promoted alongside WORKSPACE.md.
+	lockContent := "source: github.com/example/plugin\nversion: v1.2.3\nhash: abc123\n"
+	if err := os.WriteFile(filepath.Join(dir, "warp.lock"), []byte(lockContent), 0o644); err != nil {
+		t.Fatalf("write warp.lock: %v", err)
+	}
+
 	dstDir := t.TempDir()
 	if err := CopyConfig(dir, dstDir); err != nil {
 		t.Fatalf("CopyConfig error: %v", err)
@@ -202,10 +209,19 @@ func TestIsConfigured_IsInitialized_Initialize_CopyConfig(t *testing.T) {
 	if !IsConfigured(dstDir) {
 		t.Errorf("expected dstDir to be configured after CopyConfig")
 	}
-	for _, rel := range []string{"WORKSPACE.md", ".env", filepath.Join(".agents", "providers", "openai.yaml")} {
+	for _, rel := range []string{"WORKSPACE.md", ".env", "warp.lock", filepath.Join(".agents", "providers", "openai.yaml")} {
 		if _, err := os.Stat(filepath.Join(dstDir, rel)); err != nil {
 			t.Errorf("CopyConfig missing %s in dstDir: %v", rel, err)
 		}
+	}
+
+	// Verify warp.lock content was preserved byte-for-byte.
+	copiedLock, err := os.ReadFile(filepath.Join(dstDir, "warp.lock"))
+	if err != nil {
+		t.Fatalf("read copied warp.lock: %v", err)
+	}
+	if string(copiedLock) != lockContent {
+		t.Errorf("copied warp.lock content = %q, want %q", string(copiedLock), lockContent)
 	}
 }
 
@@ -823,5 +839,515 @@ func TestWorkspacePortablePath(t *testing.T) {
 	// 2. Empty path
 	if got := ws.PortablePath(""); got != "" {
 		t.Errorf("PortablePath empty = %q, want empty", got)
+	}
+}
+
+// warnContains reports whether any warning in warnings contains sub.
+func warnContains(warnings []string, sub string) bool {
+	for _, w := range warnings {
+		if strings.Contains(w, sub) {
+			return true
+		}
+	}
+	return false
+}
+
+// TestCatalogValidationWarnings verifies that warp.Registry.Validate() failures
+// are surfaced as non-fatal diagnostic warnings via Catalog.Warnings() instead
+// of crashing workspace.Open.
+func TestCatalogValidationWarnings(t *testing.T) {
+	setupTestXDG(t)
+	ctx := context.Background()
+
+	// 1. A valid workspace produces zero warnings.
+	t.Run("ValidWorkspaceZeroWarnings", func(t *testing.T) {
+		dir := t.TempDir()
+		manifest := `---
+apiVersion: warp/v1alpha1
+kind: Workspace
+metadata:
+  name: valid-ws
+spec:
+  defaultAgent: main
+---
+Valid workspace instructions.
+`
+		if err := os.WriteFile(filepath.Join(dir, "WORKSPACE.md"), []byte(manifest), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		ws, err := Open(ctx, dir)
+		if err != nil {
+			t.Fatalf("Open error: %v", err)
+		}
+		if got := ws.Catalog().Warnings(); len(got) != 0 {
+			t.Errorf("expected zero warnings for a valid workspace, got %v", got)
+		}
+	})
+
+	// 2. Invalid defaultAgent reference: Open succeeds and the message is surfaced.
+	t.Run("InvalidDefaultAgent", func(t *testing.T) {
+		dir := t.TempDir()
+		manifest := `---
+apiVersion: warp/v1alpha1
+kind: Workspace
+metadata:
+  name: bad-agent-ws
+spec:
+  defaultAgent: non-existent-agent
+---
+`
+		if err := os.WriteFile(filepath.Join(dir, "WORKSPACE.md"), []byte(manifest), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		ws, err := Open(ctx, dir)
+		if err != nil {
+			t.Fatalf("Open should not fail on an invalid defaultAgent, got: %v", err)
+		}
+		if got := ws.Catalog().Warnings(); !warnContains(got, "missing agent") {
+			t.Errorf("expected a warning about the missing defaultAgent, got %v", got)
+		}
+	})
+
+	// 3. Invalid defaultProvider reference (with a provider present): Open succeeds
+	// and the message is surfaced.
+	t.Run("InvalidDefaultProvider", func(t *testing.T) {
+		dir := t.TempDir()
+		manifest := `---
+apiVersion: warp/v1alpha1
+kind: Workspace
+metadata:
+  name: bad-provider-ws
+spec:
+  defaultAgent: main
+  defaultProvider: missing-provider
+---
+`
+		if err := os.WriteFile(filepath.Join(dir, "WORKSPACE.md"), []byte(manifest), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		provDir := filepath.Join(dir, ".agents", "providers")
+		if err := os.MkdirAll(provDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		openaiProvider := `apiVersion: warp/v1alpha1
+kind: ModelProvider
+metadata:
+  name: openai
+spec:
+  type: openai
+  endpoint: https://api.openai.com/v1
+  models:
+    - id: gpt-5.5
+      name: gpt-5.5
+      capabilities:
+        completion: true
+`
+		if err := os.WriteFile(filepath.Join(provDir, "openai.yaml"), []byte(openaiProvider), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		ws, err := Open(ctx, dir)
+		if err != nil {
+			t.Fatalf("Open should not fail on an invalid defaultProvider, got: %v", err)
+		}
+		if got := ws.Catalog().Warnings(); !warnContains(got, "missing provider") {
+			t.Errorf("expected a warning about the missing defaultProvider, got %v", got)
+		}
+	})
+
+	// 4. Invalid modelAliases (empty target): Open succeeds and the message is surfaced.
+	t.Run("InvalidModelAliases", func(t *testing.T) {
+		dir := t.TempDir()
+		manifest := `---
+apiVersion: warp/v1alpha1
+kind: Workspace
+metadata:
+  name: bad-alias-ws
+spec:
+  modelAliases:
+    fast: "   "
+---
+`
+		if err := os.WriteFile(filepath.Join(dir, "WORKSPACE.md"), []byte(manifest), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		ws, err := Open(ctx, dir)
+		if err != nil {
+			t.Fatalf("Open should not fail on invalid modelAliases, got: %v", err)
+		}
+		if got := ws.Catalog().Warnings(); !warnContains(got, "modelAliases") {
+			t.Errorf("expected a warning about invalid modelAliases, got %v", got)
+		}
+	})
+
+	// 5. Warnings() returns a defensive copy: mutating the returned slice must not
+	// affect the catalog's internal state.
+	t.Run("WarningsDefensiveCopy", func(t *testing.T) {
+		dir := t.TempDir()
+		manifest := `---
+apiVersion: warp/v1alpha1
+kind: Workspace
+metadata:
+  name: copy-ws
+spec:
+  defaultAgent: non-existent-agent
+---
+`
+		if err := os.WriteFile(filepath.Join(dir, "WORKSPACE.md"), []byte(manifest), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		ws, err := Open(ctx, dir)
+		if err != nil {
+			t.Fatalf("Open error: %v", err)
+		}
+
+		first := ws.Catalog().Warnings()
+		if len(first) == 0 {
+			t.Fatalf("expected at least one validation warning")
+		}
+		original := first[0]
+		first[0] = "MUTATED"
+
+		second := ws.Catalog().Warnings()
+		if len(second) != len(first) {
+			t.Fatalf("expected %d warnings on second call, got %d", len(first), len(second))
+		}
+		if second[0] == "MUTATED" {
+			t.Errorf("mutating the returned Warnings() slice affected internal state: %q", second[0])
+		}
+		if second[0] != original {
+			t.Errorf("expected second Warnings()[0] = %q, got %q", original, second[0])
+		}
+	})
+}
+
+// TestModelAliasesResolution verifies that workspace.spec.modelAliases and
+// provider/@alias shorthands resolve through ws.Catalog().ResolveModels as well
+// as through models.Catalog.Get and models.Catalog.Resolve.
+func TestModelAliasesResolution(t *testing.T) {
+	setupTestXDG(t)
+	ctx := context.Background()
+
+	wsDir := t.TempDir()
+	wsManifest := `---
+apiVersion: warp/v1alpha1
+kind: Workspace
+metadata:
+  name: alias-ws
+spec:
+  defaultProvider: openai
+  modelAliases:
+    fast: openai/gpt-5.5
+    default: openai/gpt-5.5
+---
+`
+	if err := os.WriteFile(filepath.Join(wsDir, "WORKSPACE.md"), []byte(wsManifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	provDir := filepath.Join(wsDir, ".agents", "providers")
+	if err := os.MkdirAll(provDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	openaiProvider := `apiVersion: warp/v1alpha1
+kind: ModelProvider
+metadata:
+  name: openai
+spec:
+  type: openai
+  endpoint: https://api.openai.com/v1
+  models:
+    - id: gpt-5.5
+      name: gpt-5.5
+      aliases:
+        - fast
+      capabilities:
+        completion: true
+`
+	if err := os.WriteFile(filepath.Join(provDir, "openai.yaml"), []byte(openaiProvider), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	ws, err := Open(ctx, wsDir)
+	if err != nil {
+		t.Fatalf("Open error: %v", err)
+	}
+
+	// 1. ws.Catalog().ResolveModels resolves workspace.spec.modelAliases and
+	// provider/@alias shorthands to the canonical provider/model-id qualified ID.
+	for _, ref := range []string{"@fast", "@default", "openai/@fast"} {
+		resolved := ws.Catalog().ResolveModels(warp.ModelRoleCompletion, ref)
+		if len(resolved) != 1 || resolved[0].QualifiedID != "openai/gpt-5.5" {
+			t.Errorf("ResolveModels(%q) = %v, want [openai/gpt-5.5]", ref, resolved)
+		}
+	}
+
+	// 2. models.Catalog.Get and Resolve delegate alias resolution to warp.
+	mc, err := models.Build(ws.Catalog(), nil)
+	if err != nil {
+		t.Fatalf("models.Build error: %v", err)
+	}
+	for _, ref := range []string{"@fast", "@default", "openai/@fast"} {
+		m, ok := mc.Get(models.ID(ref))
+		if !ok || m.ID != models.ID("openai/gpt-5.5") {
+			t.Errorf("models.Catalog.Get(%q) = %s, %v; want openai/gpt-5.5", ref, m.ID, ok)
+		}
+	}
+	if m, ok := mc.Resolve(models.RoleCompletion, "@fast"); !ok || m.ID != models.ID("openai/gpt-5.5") {
+		t.Errorf("models.Catalog.Resolve(@fast) = %s, %v; want openai/gpt-5.5", m.ID, ok)
+	}
+}
+
+// TestModelCatalogUnknownBareID verifies that a workspace with a defaultProvider
+// does not synthesize an unlisted model from an unknown bare ID, while declared
+// models and aliases still canonicalize to the provider/model-id.
+func TestModelCatalogUnknownBareID(t *testing.T) {
+	setupTestXDG(t)
+	ctx := context.Background()
+
+	wsDir := t.TempDir()
+	wsManifest := `---
+apiVersion: warp/v1alpha1
+kind: Workspace
+metadata:
+  name: unknown-bare-ws
+spec:
+  defaultProvider: openai
+  modelAliases:
+    fast: openai/gpt-5.5
+    default: openai/gpt-5.5
+---
+`
+	if err := os.WriteFile(filepath.Join(wsDir, "WORKSPACE.md"), []byte(wsManifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	provDir := filepath.Join(wsDir, ".agents", "providers")
+	if err := os.MkdirAll(provDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	openaiProvider := `apiVersion: warp/v1alpha1
+kind: ModelProvider
+metadata:
+  name: openai
+spec:
+  type: openai
+  endpoint: https://api.openai.com/v1
+  models:
+    - id: gpt-5.5
+      name: gpt-5.5
+      aliases:
+        - fast
+      capabilities:
+        completion: true
+`
+	if err := os.WriteFile(filepath.Join(provDir, "openai.yaml"), []byte(openaiProvider), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	ws, err := Open(ctx, wsDir)
+	if err != nil {
+		t.Fatalf("Open error: %v", err)
+	}
+
+	mc, err := models.Build(ws.Catalog(), nil)
+	if err != nil {
+		t.Fatalf("models.Build error: %v", err)
+	}
+
+	// An unknown bare ID must not be synthesized from defaultProvider.
+	if _, ok := mc.Get(models.ID("unknown-bare-id")); ok {
+		t.Errorf("Get(unknown-bare-id) should not resolve to a synthesized model")
+	}
+
+	// Aliases and a declared model still canonicalize to the provider/model-id.
+	for _, ref := range []string{"@fast", "@default", "gpt-5.5"} {
+		m, ok := mc.Get(models.ID(ref))
+		if !ok {
+			t.Errorf("Get(%q) not found", ref)
+			continue
+		}
+		if m.ID != models.ID("openai/gpt-5.5") {
+			t.Errorf("Get(%q) = %s, want openai/gpt-5.5", ref, m.ID)
+		}
+	}
+}
+
+// TestInitializeModelAliases verifies that InitOptions.ModelAliases is scaffolded
+// into WORKSPACE.md and resolves end-to-end after opening the workspace.
+func TestInitializeModelAliases(t *testing.T) {
+	setupTestXDG(t)
+	ctx := context.Background()
+
+	dir := t.TempDir()
+	opts := InitOptions{
+		ProjectName:  "alias-init-ws",
+		Provider:     "openai",
+		DefaultAgent: "main",
+		ModelAliases: map[string]string{
+			"fast":    "openai/gpt-5.5",
+			"default": "openai/gpt-5.5",
+		},
+	}
+	if err := Initialize(ctx, dir, opts); err != nil {
+		t.Fatalf("Initialize error: %v", err)
+	}
+
+	wsBytes, err := os.ReadFile(filepath.Join(dir, "WORKSPACE.md"))
+	if err != nil {
+		t.Fatalf("read WORKSPACE.md: %v", err)
+	}
+	if !strings.Contains(string(wsBytes), "modelAliases") {
+		t.Errorf("WORKSPACE.md missing modelAliases: %s", string(wsBytes))
+	}
+
+	ws, err := Open(ctx, dir)
+	if err != nil {
+		t.Fatalf("Open error: %v", err)
+	}
+	mc, err := models.Build(ws.Catalog(), nil)
+	if err != nil {
+		t.Fatalf("models.Build error: %v", err)
+	}
+	if m, ok := mc.Get(models.ID("@fast")); !ok || m.ID != models.ID("openai/gpt-5.5") {
+		t.Errorf("Get(@fast) = %s, %v; want openai/gpt-5.5", m.ID, ok)
+	}
+}
+
+// TestCatalogProjects verifies Catalog.Projects() returns all mapped projects
+// sorted by name and that Catalog.Project() resolves the cwd-scoped project
+// from the same set.
+func TestCatalogProjects(t *testing.T) {
+	setupTestXDG(t)
+	ctx := context.Background()
+
+	rootDir := t.TempDir()
+	subProjDir := filepath.Join(rootDir, "packages", "service")
+	if err := os.MkdirAll(subProjDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	wsManifest := `---
+apiVersion: warp/v1alpha1
+kind: Workspace
+metadata:
+  name: multi-project-ws
+spec:
+  projects: [".", "packages/service"]
+---
+Workspace root instructions.
+`
+	if err := os.WriteFile(filepath.Join(rootDir, "WORKSPACE.md"), []byte(wsManifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	ws, err := Open(ctx, rootDir)
+	if err != nil {
+		t.Fatalf("Open error: %v", err)
+	}
+
+	projects := ws.Catalog().Projects()
+	if len(projects) < 2 {
+		t.Fatalf("expected at least 2 mapped projects, got %d: %+v", len(projects), projects)
+	}
+
+	// Projects must be returned sorted by name.
+	for i := 1; i < len(projects); i++ {
+		if projects[i-1].Name > projects[i].Name {
+			t.Errorf("Projects() not sorted by name: %q precedes %q", projects[i].Name, projects[i-1].Name)
+		}
+	}
+
+	// The cwd-scoped project must be resolvable and present in the returned set.
+	current := ws.Catalog().Project()
+	if current == nil {
+		t.Fatalf("expected Project() to resolve the cwd-scoped project")
+	}
+	found := false
+	for _, p := range projects {
+		if p.Name == current.Name {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("cwd-scoped project %q not found in Projects()", current.Name)
+	}
+}
+
+// TestCatalogPlugins verifies Catalog.Plugins() returns a deep-copied slice of
+// the plugins declared in WORKSPACE.md and returns nil when the catalog has no
+// registry or no plugins are declared.
+func TestCatalogPlugins(t *testing.T) {
+	// A catalog with no registry yields nil projects and nil plugins.
+	empty := NewCatalog(nil, "", "")
+	if got := empty.Projects(); got != nil {
+		t.Errorf("expected nil Projects() for registry-less catalog, got %+v", got)
+	}
+	if got := empty.Plugins(); got != nil {
+		t.Errorf("expected nil Plugins() for registry-less catalog, got %+v", got)
+	}
+
+	// A registry whose workspace declares no plugins yields nil plugins.
+	emptyWS := &warp.Workspace{
+		Def: &warp.WorkspaceDef{
+			BaseResource: warp.BaseResource{
+				APIVersion: warp.APIVersion,
+				Kind:       warp.KindWorkspace,
+				Metadata:   warp.Metadata{Name: "no-plugin-ws"},
+			},
+		},
+	}
+	if got := NewCatalog(warp.NewRegistry(emptyWS), "", "").Plugins(); got != nil {
+		t.Errorf("expected nil Plugins() when no plugins declared, got %+v", got)
+	}
+
+	// A registry whose workspace declares plugins yields a deep copy.
+	ws := &warp.Workspace{
+		Def: &warp.WorkspaceDef{
+			BaseResource: warp.BaseResource{
+				APIVersion: warp.APIVersion,
+				Kind:       warp.KindWorkspace,
+				Metadata:   warp.Metadata{Name: "plugin-ws"},
+			},
+			Spec: warp.WorkspaceDefSpec{
+				Plugins: []warp.WorkspacePlugin{
+					{
+						Source:    "github.com/example/plugin",
+						Version:   "v1.2.3",
+						Namespace: "example",
+						Imports: &warp.ResourceFilter{
+							Include: []string{"agents/*"},
+							Exclude: []string{"agents/secret/*"},
+						},
+					},
+				},
+			},
+		},
+	}
+	cat := NewCatalog(warp.NewRegistry(ws), "", "")
+
+	plugins := cat.Plugins()
+	if len(plugins) != 1 {
+		t.Fatalf("expected 1 declared plugin, got %d: %+v", len(plugins), plugins)
+	}
+	if plugins[0].Source != "github.com/example/plugin" || plugins[0].Version != "v1.2.3" || plugins[0].Namespace != "example" {
+		t.Errorf("unexpected plugin fields: %+v", plugins[0])
+	}
+	if plugins[0].Imports == nil || len(plugins[0].Imports.Include) != 1 || plugins[0].Imports.Include[0] != "agents/*" {
+		t.Errorf("unexpected plugin imports: %+v", plugins[0].Imports)
+	}
+
+	// Mutating the returned slice must not affect the catalog's internal state.
+	plugins[0].Source = "MUTATED"
+	plugins[0].Imports.Include[0] = "MUTATED"
+	again := cat.Plugins()
+	if again[0].Source == "MUTATED" || again[0].Imports.Include[0] == "MUTATED" {
+		t.Errorf("mutating the returned Plugins() slice affected internal state: %+v", again)
 	}
 }

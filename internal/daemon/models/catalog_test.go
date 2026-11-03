@@ -296,3 +296,86 @@ func TestCatalogNilBase(t *testing.T) {
 		t.Fatalf("unknown with nil base: %+v ok=%v", m, ok)
 	}
 }
+
+// aliasStub is a WorkspaceCatalog that resolves aliases/shorthands to a canonical
+// provider/model-id qualified ID, mimicking warp's ResolveModels behavior.
+type aliasStub struct {
+	providers []*warp.ModelProvider
+	aliases   map[string]string
+}
+
+func (s *aliasStub) Providers() []*warp.ModelProvider {
+	return s.providers
+}
+
+func (s *aliasStub) ResolveModels(role warp.ModelRole, explicit ...string) []warp.ResolvedModel {
+	if len(explicit) > 0 && explicit[0] != "" {
+		ref := explicit[0]
+		if target, ok := s.aliases[ref]; ok {
+			return []warp.ResolvedModel{{QualifiedID: target}}
+		}
+		return []warp.ResolvedModel{{QualifiedID: ref}}
+	}
+	for _, p := range s.providers {
+		if def := p.Spec.DefaultModels.ForRole(role); def != "" {
+			return []warp.ResolvedModel{{QualifiedID: Normalize(p.Metadata.Name, def).String()}}
+		}
+		if len(p.Spec.Models) > 0 {
+			return []warp.ResolvedModel{{QualifiedID: Normalize(p.Metadata.Name, p.Spec.Models[0].ID).String()}}
+		}
+	}
+	return nil
+}
+
+// TestCatalogAliasResolution verifies that Get and Resolve delegate
+// alias/shorthand resolution ("@fast", "@default", "provider/@alias") to the
+// workspace catalog's ResolveModels instead of treating them as literal IDs.
+func TestCatalogAliasResolution(t *testing.T) {
+	prov := &warp.ModelProvider{
+		BaseResource: warp.BaseResource{
+			APIVersion: warp.APIVersion,
+			Kind:       warp.KindModelProvider,
+			Metadata:   warp.Metadata{Name: "openai"},
+		},
+		Spec: warp.ModelProviderSpec{
+			Type: "openai",
+			Models: []warp.ProviderModel{
+				{ID: "gpt-5.5", Name: "GPT 5.5", Aliases: []string{"fast"}, Limits: warp.ProviderModelLimits{Context: 128000}},
+			},
+		},
+	}
+	cat := &aliasStub{
+		providers: []*warp.ModelProvider{prov},
+		aliases: map[string]string{
+			"@fast":        "openai/gpt-5.5",
+			"@default":     "openai/gpt-5.5",
+			"openai/@fast": "openai/gpt-5.5",
+		},
+	}
+	c, err := Build(cat, &fakeBase{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Get canonicalizes each alias/shorthand to the provider/model-id qualified ID.
+	for _, ref := range []string{"@fast", "@default", "openai/@fast"} {
+		m, ok := c.Get(ID(ref))
+		if !ok {
+			t.Errorf("Get(%q) not found", ref)
+			continue
+		}
+		if m.ID != ID("openai/gpt-5.5") {
+			t.Errorf("Get(%q) = %s, want openai/gpt-5.5", ref, m.ID)
+		}
+	}
+
+	// Resolve also delegates alias resolution.
+	if m, ok := c.Resolve(RoleCompletion, "@fast"); !ok || m.ID != ID("openai/gpt-5.5") {
+		t.Errorf("Resolve(@fast) = %s, %v; want openai/gpt-5.5", m.ID, ok)
+	}
+
+	// A bare alias that warp cannot resolve is not accepted as a valid model.
+	if _, ok := c.Get(ID("@missing")); ok {
+		t.Errorf("Get(@missing) should not resolve")
+	}
+}

@@ -4234,6 +4234,80 @@ func TestDirectSessionPackageAPIs(t *testing.T) {
 	}
 }
 
+// TestPreviewResolvesModelAlias verifies that passing an alias or
+// provider/@alias shorthand in SessionConfig.Model resolves to the canonical
+// provider/model-id qualified ID through the session resolution path.
+func TestPreviewResolvesModelAlias(t *testing.T) {
+	ctx := context.Background()
+
+	xdgRoot := t.TempDir()
+	xdg.SetTestEnv(xdgRoot, "tasksmith-session-alias-test")
+	t.Cleanup(func() {
+		xdg.ClearCache()
+	})
+
+	wsDir := t.TempDir()
+	manifest := `---
+apiVersion: warp/v1alpha1
+kind: Workspace
+metadata:
+  name: alias-test
+spec:
+  defaultProvider: fake
+  modelAliases:
+    fast: fake/fake-default-model
+    default: fake/fake-default-model
+---
+`
+	if err := os.WriteFile(filepath.Join(wsDir, "WORKSPACE.md"), []byte(manifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	provDir := filepath.Join(wsDir, ".agents", "providers")
+	if err := os.MkdirAll(provDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	fakeProvider := `apiVersion: warp/v1alpha1
+kind: ModelProvider
+metadata:
+  name: fake
+spec:
+  type: fake
+  models:
+    - id: fake-default-model
+      name: fake-default-model
+      aliases:
+        - fast
+      capabilities:
+        completion: true
+`
+	if err := os.WriteFile(filepath.Join(provDir, "fake.yaml"), []byte(fakeProvider), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	ws, err := workspace.Open(ctx, wsDir, workspace.WithBuiltinFS(builtin.FS()))
+	if err != nil {
+		t.Fatalf("workspace.Open: %v", err)
+	}
+	catalog, err := models.Build(ws.Catalog(), nil)
+	if err != nil {
+		t.Fatalf("models.Build: %v", err)
+	}
+
+	for _, ref := range []string{"@fast", "@default", "fake/@fast"} {
+		cfg, model, _, found, err := Preview(ctx, ws, catalog, api.SessionConfig{Agent: "main", Model: ref})
+		if err != nil {
+			t.Fatalf("Preview(%q) error: %v", ref, err)
+		}
+		if !found || model.ID != "fake/fake-default-model" {
+			t.Errorf("Preview(%q) resolved model = %s, found=%v; want fake/fake-default-model", ref, model.ID, found)
+		}
+		if cfg.Model != "fake/fake-default-model" {
+			t.Errorf("Preview(%q) resolved config.Model = %q, want fake/fake-default-model", ref, cfg.Model)
+		}
+	}
+}
+
 func TestSessionSendValidation(t *testing.T) {
 	ctx := context.Background()
 	prov := &fakeProvider{}

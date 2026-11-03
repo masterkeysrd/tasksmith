@@ -46,9 +46,15 @@
 //
 // [SessionManager.Evaluate] resolves a [github.com/masterkeysrd/tasksmith/internal/daemon/tools.Plan]
 // through a fixed precedence:
-//  1. Workspace tool policies ([warp.Policies] include/exclude globs,
-//     allow-dangerous and allow-open-world flags, and tool annotations) — a
-//     policy violation denies outright.
+//  1. The tool policy ceiling is the stricter of the workspace tool policies
+//     ([SessionManager.SetPolicies], a [warp.Policies]) and the active agent's
+//     tool policies ([SessionManager.SetAgentPolicies]); the two are combined
+//     with [warp.StricterToolPolicyAction] into a monotonic `allow < ask < deny`
+//     ceiling. Each [warp.ToolPolicies] covers `readOnly`, `dangerous`,
+//     `openWorld`, `include`, `exclude`, and `ask` (the last three match short
+//     names, `namespace/name`, and fully-qualified tool patterns). A `deny`
+//     ceiling denies the plan outright; an `ask` ceiling forces approval unless a
+//     matching user allow rule grants it.
 //  2. Deny rules take precedence: any matching deny rule (session, project, or
 //     global) yields a denial.
 //  3. The active mode and matching allow rules decide auto-approval:

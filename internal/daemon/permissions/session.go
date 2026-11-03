@@ -7,7 +7,6 @@ import (
 	"sync"
 
 	"github.com/google/uuid"
-	"github.com/masterkeysrd/loom/tool"
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tools"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/workspace"
@@ -22,6 +21,8 @@ type SessionManager interface {
 	Permissions() api.Permissions
 	Policies() *warp.Policies
 	SetPolicies(p *warp.Policies)
+	AgentPolicies() *warp.Policies
+	SetAgentPolicies(p *warp.Policies)
 	AddAllow(rule string) error
 	AddDeny(rule string) error
 	Clear() error
@@ -30,13 +31,14 @@ type SessionManager interface {
 }
 
 type sessionManager struct {
-	mu          sync.RWMutex
-	manager     Manager
-	ws          *workspace.Workspace
-	mode        api.PermissionMode
-	permissions api.Permissions
-	policies    *warp.Policies
-	onUpdate    func(api.Permissions) error
+	mu            sync.RWMutex
+	manager       Manager
+	ws            *workspace.Workspace
+	mode          api.PermissionMode
+	permissions   api.Permissions
+	policies      *warp.Policies
+	agentPolicies *warp.Policies
+	onUpdate      func(api.Permissions) error
 }
 
 var _ SessionManager = (*sessionManager)(nil)
@@ -98,6 +100,20 @@ func (s *sessionManager) SetPolicies(p *warp.Policies) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.policies = p
+}
+
+// AgentPolicies returns the active agent's tool policies (ceiling) configured on s.
+func (s *sessionManager) AgentPolicies() *warp.Policies {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.agentPolicies
+}
+
+// SetAgentPolicies overrides the active agent's tool policies evaluated by s.
+func (s *sessionManager) SetAgentPolicies(p *warp.Policies) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.agentPolicies = p
 }
 
 func (s *sessionManager) addRule(effect api.PermissionEffect, rule string) error {
@@ -226,9 +242,9 @@ func (s *sessionManager) Evaluate(plan *tools.Plan) (tools.AccessDecision, *api.
 		return tools.AccessDeny, nil, fmt.Errorf("%w: plan cannot be nil", tools.ErrPermissionDenied)
 	}
 
-	// 1. Check workspace tool policies.
-	policies := s.Policies()
-	if !isAllowedByPolicy(plan, policies, s.ws) {
+	// 1. Evaluate the workspace and active-agent tool policy ceiling.
+	policyAction := evaluatePolicy(plan, s.Policies(), s.AgentPolicies(), s.ws)
+	if policyAction == warp.ToolPolicyDeny {
 		return tools.AccessDeny, nil, nil
 	}
 
@@ -285,32 +301,41 @@ func (s *sessionManager) Evaluate(plan *tools.Plan) (tools.AccessDecision, *api.
 	}
 
 	mode := s.Mode()
-	switch mode {
-	case api.ModePlan:
-		if !plan.ReadOnly {
-			return tools.AccessDeny, nil, nil
-		}
-		if plan.Safety == api.SafetySafe {
+
+	// Plan mode denies any plan that is not read-only.
+	if mode == api.ModePlan && !plan.ReadOnly {
+		return tools.AccessDeny, nil, nil
+	}
+
+	// A policy "ask" ceiling forces user confirmation unless the mode is auto or
+	// an explicit allow rule already matches the plan.
+	if policyAction == warp.ToolPolicyAsk && mode != api.ModeAuto && !hasMatchingAllow(plan) {
+		// Fall through to minting an AccessAsk request.
+	} else {
+		switch mode {
+		case api.ModePlan:
+			if plan.Safety == api.SafetySafe {
+				return tools.AccessAllow, nil, nil
+			}
+			if plan.Safety != api.SafetyUnsafe && hasMatchingAllow(plan) {
+				return tools.AccessAllow, nil, nil
+			}
+		case api.ModeAsk:
+			if plan.Safety != api.SafetyUnsafe && hasMatchingAllow(plan) {
+				return tools.AccessAllow, nil, nil
+			}
+		case api.ModeAuto:
 			return tools.AccessAllow, nil, nil
-		}
-		if plan.Safety != api.SafetyUnsafe && hasMatchingAllow(plan) {
-			return tools.AccessAllow, nil, nil
-		}
-	case api.ModeAsk:
-		if plan.Safety != api.SafetyUnsafe && hasMatchingAllow(plan) {
-			return tools.AccessAllow, nil, nil
-		}
-	case api.ModeAuto:
-		return tools.AccessAllow, nil, nil
-	default: // ModeDefault, ModeAcceptEdits
-		if plan.ReadOnly && plan.Safety == api.SafetySafe {
-			return tools.AccessAllow, nil, nil
-		}
-		if mode == api.ModeAcceptEdits && plan.Action == api.ActionWrite && plan.Safety != api.SafetyUnsafe {
-			return tools.AccessAllow, nil, nil
-		}
-		if plan.Safety != api.SafetyUnsafe && hasMatchingAllow(plan) {
-			return tools.AccessAllow, nil, nil
+		default: // ModeDefault, ModeAcceptEdits
+			if plan.ReadOnly && plan.Safety == api.SafetySafe {
+				return tools.AccessAllow, nil, nil
+			}
+			if mode == api.ModeAcceptEdits && plan.Action == api.ActionWrite && plan.Safety != api.SafetyUnsafe {
+				return tools.AccessAllow, nil, nil
+			}
+			if plan.Safety != api.SafetyUnsafe && hasMatchingAllow(plan) {
+				return tools.AccessAllow, nil, nil
+			}
 		}
 	}
 
@@ -334,67 +359,81 @@ func (s *sessionManager) Evaluate(plan *tools.Plan) (tools.AccessDecision, *api.
 	return tools.AccessAsk, req, nil
 }
 
-func isAllowedByPolicy(plan *tools.Plan, policies *warp.Policies, ws *workspace.Workspace) bool {
-	if policies == nil || policies.Tools == nil {
-		return true
-	}
-	tp := policies.Tools
-
-	// Exclude globs take precedence.
-	for _, pattern := range tp.Exclude {
-		if matchPattern(pattern, plan.ToolName) {
-			return false
-		}
-	}
-
-	// If Include is non-empty, ToolName must match at least one pattern.
-	if len(tp.Include) > 0 {
-		matched := false
-		for _, pattern := range tp.Include {
-			if matchPattern(pattern, plan.ToolName) {
-				matched = true
-				break
-			}
-		}
-		if !matched {
-			return false
-		}
-	}
-
-	var ann tool.Annotation
-	hasAnn := false
+// evaluatePolicy computes the effective [warp.ToolPolicyAction] for plan by
+// combining the workspace policy ceiling with the active agent's policy
+// ceiling, returning the stricter of the two (allow < ask < deny).
+func evaluatePolicy(plan *tools.Plan, wsPolicies, agentPolicies *warp.Policies, ws *workspace.Workspace) warp.ToolPolicyAction {
+	var wsTool *warp.Tool
 	if ws != nil && ws.Catalog() != nil {
-		if wsTool, ok := ws.Catalog().GetTool(plan.ToolName); ok && wsTool.Spec.Annotations != nil {
-			ann = tool.Annotation{
-				IsOpenWorld:  wsTool.Spec.Annotations.IsOpenWorld,
-				IsDangerous:  wsTool.Spec.Annotations.IsDangerous,
-				IsReadOnly:   wsTool.Spec.Annotations.IsReadOnly,
-				IsIdempotent: wsTool.Spec.Annotations.IsIdempotent,
-				UserHint:     wsTool.Spec.Annotations.UserHint,
-			}
-			hasAnn = true
+		if t, ok := ws.Catalog().GetTool(plan.ToolName); ok {
+			wsTool = t
 		}
 	}
 
-	if tp.Dangerous == warp.ToolPolicyDeny {
-		isDangerous := plan.Safety == api.SafetyUnsafe || plan.Action == api.ActionDelete
-		if hasAnn && ann.IsDangerous {
-			isDangerous = true
-		}
-		if isDangerous {
-			return false
+	wsAction := warp.ToolPolicyAllow
+	if wsPolicies != nil {
+		wsAction = evaluateToolPolicies(wsPolicies.Tools, plan, wsTool)
+	}
+
+	agentAction := warp.ToolPolicyAllow
+	if agentPolicies != nil {
+		agentAction = evaluateToolPolicies(agentPolicies.Tools, plan, wsTool)
+	}
+
+	return warp.StricterToolPolicyAction(wsAction, agentAction)
+}
+
+// evaluateToolPolicies evaluates a single [warp.ToolPolicies] against plan.
+//
+// When a catalog tool exists for plan.ToolName it is evaluated directly via
+// [warp.ToolPolicies.EvaluateTool], which natively handles ReadOnly, Include,
+// Exclude, Ask, Dangerous, OpenWorld, and qualified name patterns. Otherwise a
+// minimal [warp.Tool] is synthesized from the runtime plan so that dynamic
+// properties (which a static manifest may not capture, or may be absent) are
+// still honored.
+func evaluateToolPolicies(tp *warp.ToolPolicies, plan *tools.Plan, wsTool *warp.Tool) warp.ToolPolicyAction {
+	tool := wsTool
+	if tool == nil {
+		tool = &warp.Tool{
+			BaseResource: warp.BaseResource{
+				Metadata: warp.Metadata{Name: plan.ToolName},
+			},
+			Spec: warp.ToolSpec{
+				Annotations: &warp.ToolAnnotation{
+					IsReadOnly:  plan.ReadOnly,
+					IsDangerous: plan.Safety == api.SafetyUnsafe || plan.Action == api.ActionDelete,
+					IsOpenWorld: plan.Action == api.ActionNet,
+				},
+			},
 		}
 	}
 
-	if tp.OpenWorld == warp.ToolPolicyDeny {
-		isOpenWorld := plan.Action == api.ActionNet
-		if hasAnn && ann.IsOpenWorld {
-			isOpenWorld = true
+	action := warp.ToolPolicyAllow
+	if tp != nil {
+		action = tp.EvaluateTool(tool)
+	}
+
+	if tp == nil {
+		return action
+	}
+
+	// Layer dynamic runtime plan properties that a static manifest may not
+	// capture (or may not have at all).
+	if tp.ReadOnly && !plan.ReadOnly {
+		return warp.ToolPolicyDeny
+	}
+	if plan.Safety == api.SafetyUnsafe || plan.Action == api.ActionDelete {
+		dangerous := tp.Dangerous
+		if dangerous == "" {
+			dangerous = warp.ToolPolicyAsk
 		}
-		if isOpenWorld {
-			return false
+		action = warp.StricterToolPolicyAction(action, dangerous)
+	}
+	if plan.Action == api.ActionNet {
+		if tp.OpenWorld == warp.ToolPolicyDeny || tp.OpenWorld == warp.ToolPolicyAsk {
+			action = warp.StricterToolPolicyAction(action, tp.OpenWorld)
 		}
 	}
 
-	return true
+	return action
 }

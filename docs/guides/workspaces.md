@@ -65,28 +65,33 @@ Placed at the root of a repository or multi-project workspace, `WORKSPACE.md` co
 
 ```markdown
 ---
-name: acme-platform
-default_agent: main
-models:
-  completion:
-    - anthropic/claude-sonnet-4-5
-  decision:
-    - ollama/nimble-v3
-    - anthropic/claude-haiku-4-5
-  embedding:
-    - openai/text-embedding-3-small
-projects:
-  - packages/api
-  - packages/web
-policies:
-  allow_tools:
-    - view
-    - glob
-    - grep
-  ask_tools:
-    - bash
-    - write
-    - edit
+apiVersion: warp/v1alpha1
+kind: Workspace
+metadata:
+  name: acme-platform
+spec:
+  projects:
+    - packages/api
+    - packages/web
+  defaultProvider: anthropic
+  defaultModels:
+    completion: anthropic/claude-sonnet-4-5
+    decision: ollama/nimble-v3
+    embedding: openai/text-embedding-3-small
+  modelAliases:
+    fast: anthropic/claude-haiku-4-5
+    default: anthropic/claude-sonnet-4-5
+  defaultAgent: main
+  policies:
+    tools:
+      include:
+        - view
+        - glob
+        - grep
+      ask:
+        - bash
+        - write
+        - edit
 ---
 
 # Acme Platform Workspace
@@ -100,8 +105,12 @@ Placed in a standalone project root or inside a subproject of a monorepo, `AGENT
 
 ```markdown
 ---
-name: api-service
-default_agent: backend-engineer
+apiVersion: warp/v1alpha1
+kind: Context
+metadata:
+  name: api-service
+  displayName: API Service
+  description: Go API service conventions
 ---
 
 # API Service Conventions
@@ -122,12 +131,12 @@ TaskSmith routes AI workloads across three specialized cognitive roles:
 2. **Decision (`decision`)**: Fast, calibrated probabilistic classification and routing.
 3. **Embedding (`embedding`)**: Vector generation for semantic search and workspace indexing.
 
-When resolving which model to use for a given role, TaskSmith evaluates candidates in order of specificity:
+When resolving which model to use for a given role, TaskSmith evaluates candidates in order of specificity. Model identifiers may be fully qualified (`<provider>/<model-id>`) or shorthand aliases declared in `WORKSPACE.md` `modelAliases` (referenced as `@<alias>`, `@default`, or `<provider>/@<alias>`):
 
 ```mermaid
 flowchart TD
-    R1["1. Explicit Resource Model\n(Defined on the active Agent or Decision)"] --> R2["2. Project / Workspace Role Default\n(models.<role> in AGENTS.md or WORKSPACE.md)"]
-    R2 --> R3["3. Provider Role Default\n(default_models.<role> in *.provider.yaml)"]
+    R1["1. Explicit Model Reference\n(agent/decision model, or @alias / <provider>/@alias)"] --> R2["2. Project / Workspace Role Default\n(defaultModels.<role> in AGENTS.md or WORKSPACE.md)"]
+    R2 --> R3["3. Provider Role Default\n(defaultModels.<role> in *.provider.yaml)"]
     R3 --> R4["4. Catalog Capability Match\n(First registered model supporting the role)"]
 ```
 

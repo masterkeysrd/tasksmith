@@ -26,7 +26,7 @@ For a short name shared by the same kind, the higher visible tier wins:
 | 4 | System | Embedded built-ins |
 | 5 (lowest) | Plugin namespaces | Resources exported by declared plugins |
 
-TaskSmith searches upward from the starting directory for `WORKSPACE.md`; without one it creates a synthetic workspace. The workspace maps projects and their `AGENTS.md` context. Resource directories are scanned recursively. In a flat workspace whose only project is `.`, the root `.agents/` belongs to the project instead of being loaded twice as workspace and project. Declared workspace plugins and resources explicitly listed by a Context can also contribute definitions. A nested directory with its own `.agents/` may be loaded as the current project.
+TaskSmith searches upward from the starting directory for `WORKSPACE.md`; without one it creates a synthetic workspace. The workspace maps projects and their `AGENTS.md` context. Resource directories are scanned recursively. In a flat workspace whose only project is `.`, the root `.agents/` belongs to the project instead of being loaded twice as workspace and project. Declared workspace plugins can also contribute definitions. A nested directory with its own `.agents/` may be loaded as the current project.
 
 A qualified reference has the form `namespace/Kind/name`, for example `system/Agent/main`; it selects that namespace directly. `local/Kind/name` refers to the current project, with workspace fallback. Project namespaces use project slugs. Short names resolve among visible scopes according to the hierarchy, so a project can override a system skill without changing the system definition. Relative-path fallback and explicit validation have additional limitations; see `references/discovery-and-validation.md`.
 

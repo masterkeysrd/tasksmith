@@ -50,6 +50,11 @@ type Catalog struct {
 	workspaceTokens int
 	toolTokens      map[string]int
 
+	// validationWarnings holds non-fatal diagnostic messages produced by
+	// registry.Validate() (structural correctness and cross-reference checks
+	// across WORKSPACE.md and all loaded resources).
+	validationWarnings []string
+
 	agents    *memdb.DB[AgentSnapshot]
 	skills    *memdb.DB[SkillSnapshot]
 	commands  *memdb.DB[CommandSnapshot]
@@ -99,12 +104,44 @@ func (c *Catalog) Project() *warp.Project {
 	return nil
 }
 
-// Warnings returns non-fatal diagnostic warnings collected during registry loading.
-func (c *Catalog) Warnings() []string {
+// Projects returns all projects mapped into the workspace, sorted by project
+// name. It returns nil when the catalog has no registry.
+func (c *Catalog) Projects() []*warp.Project {
 	if c.registry == nil {
 		return nil
 	}
-	return cloneSlice(c.registry.Warnings())
+	return c.registry.ListProjects()
+}
+
+// Plugins returns a deep-copied slice of the plugins declared in WORKSPACE.md
+// (spec.plugins). It returns nil when the workspace spec or its definition is
+// unavailable so callers cannot mutate the catalog's internal state.
+func (c *Catalog) Plugins() []warp.WorkspacePlugin {
+	ws := c.WorkspaceSpec()
+	if ws == nil || ws.Def == nil {
+		return nil
+	}
+	plugins := ws.Def.Spec.Plugins
+	if len(plugins) == 0 {
+		return nil
+	}
+	out := make([]warp.WorkspacePlugin, len(plugins))
+	for i := range plugins {
+		out[i] = *plugins[i].DeepCopy()
+	}
+	return out
+}
+
+// Warnings returns non-fatal diagnostic warnings collected during registry
+// loading and structural validation. The returned slice is a defensive copy so
+// callers cannot mutate the catalog's internal state.
+func (c *Catalog) Warnings() []string {
+	combined := make([]string, 0, len(c.validationWarnings))
+	if c.registry != nil {
+		combined = append(combined, c.registry.Warnings()...)
+	}
+	combined = append(combined, c.validationWarnings...)
+	return combined
 }
 
 // DefaultAgentName returns the workspace's configured default agent name, or "main".
@@ -322,6 +359,15 @@ func (c *Catalog) populate() {
 		}
 	}
 	c.agents.Replace(agentList...)
+
+	// 6. Registry validation: surface cross-reference and structural issues
+	// (missing defaultAgent/defaultProvider, invalid modelAliases, bad
+	// policies.tools, dangling resource references) as non-fatal diagnostic
+	// warnings so workspace.Open stays resilient to typos in WORKSPACE.md or
+	// .agents/ instead of crashing.
+	if err := c.registry.Validate(); err != nil {
+		c.validationWarnings = append(c.validationWarnings, err.Error())
+	}
 }
 
 func (c *Catalog) calculateAgentContext(ag *warp.Agent, resolved *warp.ResolvedAgent) api.ContextBreakdown {

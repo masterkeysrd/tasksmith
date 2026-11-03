@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -276,6 +277,59 @@ func TestRenderSystemPromptSubagentContext(t *testing.T) {
 	}
 	if !strings.Contains(childPrompt, "explore") {
 		t.Errorf("child prompt should contain agent name 'explore'")
+	}
+}
+
+func TestRenderSystemPromptExploreProjectContext(t *testing.T) {
+	ctx := context.Background()
+	db, ws, gw, pub, mgr := setupTestEnv(t, nil)
+	t.Cleanup(func() { _ = mgr.Close() })
+
+	// A workspace with an AGENTS.md project context file whose Markdown body
+	// populates the Context instructions.
+	const agentsMd = "---\napiVersion: warp/v1alpha1\nkind: Context\nmetadata:\n  name: root-context\n---\nUse tabs for Go indentation and always run gofmt.\n"
+	if err := os.WriteFile(filepath.Join(ws.RootDir(), "AGENTS.md"), []byte(agentsMd), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := ws.Reload(ctx); err != nil {
+		t.Fatalf("ws.Reload: %v", err)
+	}
+
+	rootSess, err := New(ctx, Config{
+		ID:          uuid.NewString(),
+		Title:       "Root",
+		DB:          db,
+		Workspace:   ws,
+		Gateway:     func() gateway.Gateway { return gw },
+		Permissions: wsPermManager(t, ws),
+		Publisher:   pub,
+		Logger:      log.Default(),
+	})
+	if err != nil {
+		t.Fatalf("New root failed: %v", err)
+	}
+
+	childSess, err := New(ctx, Config{
+		ID:          uuid.NewString(),
+		Title:       "Delegated Task",
+		Parent:      rootSess,
+		DB:          db,
+		Workspace:   ws,
+		Gateway:     func() gateway.Gateway { return gw },
+		Permissions: wsPermManager(t, ws),
+		Publisher:   pub,
+		Logger:      log.Default(),
+	})
+	if err != nil {
+		t.Fatalf("New child failed: %v", err)
+	}
+
+	childPrompt := childSess.renderSystemPrompt("explore")
+	if !strings.Contains(childPrompt, "<project_context") {
+		t.Fatalf("explore prompt must contain <project_context> block, got:\n%s", childPrompt)
+	}
+	if !strings.Contains(childPrompt, "Use tabs for Go indentation and always run gofmt.") {
+		t.Errorf("explore prompt must contain AGENTS.md instructions, got:\n%s", childPrompt)
 	}
 }
 
