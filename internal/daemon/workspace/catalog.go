@@ -344,6 +344,11 @@ func (c *Catalog) populate() {
 				baseAgent = ag
 			}
 			ctxBreakdown := c.calculateAgentContext(baseAgent, resolved)
+			// Emit a diagnostic when the agent loads more than the recommended
+			// number of eager tools on the first request.
+			if partition := c.PartitionAgentTools(resolved); len(partition.Eager) > MaxRecommendedEagerTools {
+				c.validationWarnings = append(c.validationWarnings, fmt.Sprintf("Agent %q loads %d tools on the first request (recommended maximum is %d); consider reducing spec.tools to use deferred loading", baseAgent.Metadata.Name, len(partition.Eager), MaxRecommendedEagerTools))
+			}
 			agentList = append(agentList, AgentSnapshot{
 				Agent: api.Agent{
 					Name:        baseAgent.Metadata.Name,
@@ -369,6 +374,85 @@ func (c *Catalog) populate() {
 	if err := c.registry.Validate(); err != nil {
 		c.validationWarnings = append(c.validationWarnings, err.Error())
 	}
+}
+
+// MaxRecommendedEagerTools is the recommended maximum number of eager tools an
+// agent should load on the first request. Agents resolving to more than this
+// many eager tools emit a diagnostic advising the user to reduce spec.tools and
+// rely on deferred loading via tool_search.
+const MaxRecommendedEagerTools = 20
+
+// ToolPartition splits an agent's effective tools into eager tools (loaded on
+// the first request with DeferLoading: false) and deferred tools (discoverable
+// via tool_search with DeferLoading: true).
+type ToolPartition struct {
+	Eager    []string
+	Deferred []string
+}
+
+// PartitionAgentTools computes the eager/deferred tool partition for a resolved
+// agent. When resolved is nil (agentless workspace), every effective tool is
+// eager and nothing is deferred.
+//
+// Eager tools come from resolved.Tools (WARP-resolved from agent.spec.tools and
+// filtered by workspace and agent policies), excluding MCP tools (which are
+// deferred by default) and conditional built-in tools whose preconditions aren't
+// met (invoke_agent/manage_agents when the agent has no subagents, load_skill
+// when it has no skills). tool_search is eager only when explicitly listed.
+//
+// Deferred tools are every effective tool not already eager, not tool_search or
+// a conditional built-in whose precondition isn't met, and passing the agent's
+// policy ceiling (resolved.ToolAction != ToolPolicyDeny).
+func (c *Catalog) PartitionAgentTools(resolved *warp.ResolvedAgent) ToolPartition {
+	if resolved == nil {
+		return ToolPartition{Eager: c.ToolNames()}
+	}
+
+	hasSubagents := len(resolved.Subagents) > 0
+	hasSkills := len(resolved.Skills) > 0
+
+	eagerSet := make(map[string]bool)
+	var eager []string
+	for _, t := range resolved.Tools {
+		name := t.Metadata.Name
+		if _, _, isMCP := warp.ParseMCPToolName(name); isMCP {
+			continue
+		}
+		if (name == "invoke_agent" || name == "manage_agents") && !hasSubagents {
+			continue
+		}
+		if name == "load_skill" && !hasSkills {
+			continue
+		}
+		if eagerSet[name] {
+			continue
+		}
+		eagerSet[name] = true
+		eager = append(eager, name)
+	}
+
+	var deferred []string
+	for _, t := range c.Tools() {
+		name := t.Metadata.Name
+		if eagerSet[name] {
+			continue
+		}
+		if name == "tool_search" {
+			continue
+		}
+		if (name == "invoke_agent" || name == "manage_agents") && !hasSubagents {
+			continue
+		}
+		if name == "load_skill" && !hasSkills {
+			continue
+		}
+		if resolved.ToolAction(t) == warp.ToolPolicyDeny {
+			continue
+		}
+		deferred = append(deferred, name)
+	}
+
+	return ToolPartition{Eager: eager, Deferred: deferred}
 }
 
 func (c *Catalog) calculateAgentContext(ag *warp.Agent, resolved *warp.ResolvedAgent) api.ContextBreakdown {
@@ -420,19 +504,17 @@ func (c *Catalog) calculateAgentContext(ag *warp.Agent, resolved *warp.ResolvedA
 	systemPrompt := tokenizer.Estimate(strings.TrimSpace(agentPrompt))
 
 	var systemTools, customTools, mcpTools int
+	// Only eager tools are sent in the initial prompt; deferred tools are
+	// discovered via tool_search and excluded from the static breakdown.
+	partition := c.PartitionAgentTools(resolved)
+	eagerSet := make(map[string]bool, len(partition.Eager))
+	for _, name := range partition.Eager {
+		eagerSet[name] = true
+	}
 	toolsList := c.Tools()
 	for _, t := range toolsList {
-		if resolved != nil {
-			var found bool
-			for _, rt := range resolved.Tools {
-				if rt.Metadata.Name == t.Metadata.Name {
-					found = true
-					break
-				}
-			}
-			if !found {
-				continue
-			}
+		if resolved != nil && !eagerSet[t.Metadata.Name] {
+			continue
 		}
 
 		toolTokens, ok := c.toolTokens[t.Metadata.Name]

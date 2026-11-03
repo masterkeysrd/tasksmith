@@ -2,6 +2,7 @@ package workspace
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -852,6 +853,37 @@ func warnContains(warnings []string, sub string) bool {
 	return false
 }
 
+// builtinToolManifests returns a MapFS of minimal system-namespace tool
+// manifests for the given names, so that built-in agents whose spec.tools
+// reference them resolve without a "references missing tool" validation warning.
+func builtinToolManifests(names []string) fstest.MapFS {
+	m := fstest.MapFS{}
+	for _, name := range names {
+		m["tools/"+name+".tool.md"] = &fstest.MapFile{Data: []byte(fmt.Sprintf(`---
+apiVersion: warp/v1alpha1
+kind: Tool
+metadata:
+  name: %s
+  description: Builtin %s tool
+spec:
+  annotations:
+    isReadOnly: true
+    isIdempotent: true
+---
+Builtin %s tool.
+`, name, name, name))}
+	}
+	return m
+}
+
+// builtinToolNames is the set of built-in system tools referenced by the
+// embedded built-in agents' spec.tools.
+var builtinToolNames = []string{
+	"ask_question", "bash", "download", "edit", "glob", "grep", "invoke_agent",
+	"load_skill", "ls", "manage_agents", "remove", "tasks", "todos",
+	"tool_search", "view", "web_fetch", "write",
+}
+
 // TestCatalogValidationWarnings verifies that warp.Registry.Validate() failures
 // are surfaced as non-fatal diagnostic warnings via Catalog.Warnings() instead
 // of crashing workspace.Open.
@@ -876,7 +908,10 @@ Valid workspace instructions.
 			t.Fatal(err)
 		}
 
-		ws, err := Open(ctx, dir)
+		// Load the built-in tool manifests so the embedded built-in agents'
+		// spec.tools references resolve without "references missing tool"
+		// warnings.
+		ws, err := Open(ctx, dir, WithBuiltinFS(builtinToolManifests(builtinToolNames)))
 		if err != nil {
 			t.Fatalf("Open error: %v", err)
 		}
@@ -1022,6 +1057,70 @@ spec:
 		}
 		if second[0] != original {
 			t.Errorf("expected second Warnings()[0] = %q, got %q", original, second[0])
+		}
+	})
+
+	// 6. An agent that resolves to more than MaxRecommendedEagerTools eager tools
+	// produces a diagnostic warning advising the user to rely on deferred loading.
+	t.Run("TooManyEagerToolsWarning", func(t *testing.T) {
+		dir := t.TempDir()
+		manifest := `---
+apiVersion: warp/v1alpha1
+kind: Workspace
+metadata:
+  name: many-tools-ws
+spec:
+  defaultAgent: big
+---
+`
+		if err := os.WriteFile(filepath.Join(dir, "WORKSPACE.md"), []byte(manifest), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		// Inject 25 system-namespace tools so the agent resolves to more than
+		// MaxRecommendedEagerTools (20) eager tools.
+		mfs := builtinToolManifests(builtinToolNames)
+		for i := range 25 {
+			name := fmt.Sprintf("tool%02d", i)
+			mfs["tools/"+name+".tool.md"] = &fstest.MapFile{Data: []byte(fmt.Sprintf(`---
+apiVersion: warp/v1alpha1
+kind: Tool
+metadata:
+  name: %s
+  description: Builtin %s tool
+spec:
+  annotations:
+    isReadOnly: true
+---
+Builtin %s tool.
+`, name, name, name))}
+		}
+
+		agentsDir := filepath.Join(dir, ".agents")
+		if err := os.MkdirAll(agentsDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		bigAgent := `---
+apiVersion: warp/v1alpha1
+kind: Agent
+metadata:
+  name: big
+  description: Agent with many eager tools
+spec:
+  tools: ["*"]
+---
+Big agent instructions.
+`
+		if err := os.WriteFile(filepath.Join(agentsDir, "big.agent.md"), []byte(bigAgent), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		ws, err := Open(ctx, dir, WithBuiltinFS(mfs))
+		if err != nil {
+			t.Fatalf("Open error: %v", err)
+		}
+		if got := ws.Catalog().Warnings(); !warnContains(got, "consider reducing spec.tools to use deferred loading") {
+			t.Errorf("expected a too-many-eager-tools warning, got %v", got)
 		}
 	})
 }
@@ -1414,6 +1513,7 @@ metadata:
   name: deny-all
   description: Agent with no tools
 spec:
+  tools: ["*"]
   policies:
     tools:
       include: ["nonexistent-tool"]
@@ -1431,6 +1531,8 @@ kind: Agent
 metadata:
   name: full-access
   description: Agent with all tools
+spec:
+  tools: ["*"]
 ---
 Full-access agent instructions.
 `

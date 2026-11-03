@@ -175,6 +175,7 @@ func TestFSAndWorkspaceResolution(t *testing.T) {
 		builtin.ToolRemove,
 		builtin.ToolTasks,
 		builtin.ToolTodos,
+		builtin.ToolToolSearch,
 		builtin.ToolView,
 		builtin.ToolWebFetch,
 		builtin.ToolWrite,

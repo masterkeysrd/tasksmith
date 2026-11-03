@@ -8,6 +8,10 @@ spec:
   triggers:
     - system
   temperature: 0.1
+  policies:
+    tools:
+      exclude:
+        - "*"
 ---
 
 You will generate a short title based on the first message a user begins a conversation with.

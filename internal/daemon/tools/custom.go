@@ -157,6 +157,10 @@ func (ct *customTool) Definition() tool.Definition {
 	return ct.def
 }
 
+func (ct *customTool) SetDeferLoading(deferLoading bool) {
+	ct.def.DeferLoading = deferLoading
+}
+
 func (ct *customTool) validateArgs(args map[string]any) (map[string]any, error) {
 	if args == nil {
 		args = map[string]any{}

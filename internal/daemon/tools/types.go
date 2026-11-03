@@ -49,6 +49,9 @@ type Tool interface {
 	Definition() tool.Definition
 	Prepare(ctx context.Context, args map[string]any) (*Plan, error)
 	Execute(ctx context.Context, call *message.ToolCall) (*message.Tool, error)
+	// SetDeferLoading marks the tool for deferred loading. Deferred tools are
+	// withheld from the initial model context until discovered via tool_search.
+	SetDeferLoading(deferLoading bool)
 }
 
 // Handler is implemented by strongly typed tools with two-phase Prepare and
@@ -60,19 +63,21 @@ type Handler[In, Out any] interface {
 
 // Spec defines a strongly typed [Tool] backed by Go input and output types.
 type Spec[In, Out any] struct {
-	Name        string
-	Title       string
-	Description string
-	Annotation  tool.Annotation
-	Prepare     func(ctx context.Context, in In) (*Plan, error)
-	Execute     func(ctx context.Context, in In) (Out, error)
+	Name         string
+	Title        string
+	Description  string
+	Annotation   tool.Annotation
+	DeferLoading bool
+	Prepare      func(ctx context.Context, in In) (*Plan, error)
+	Execute      func(ctx context.Context, in In) (Out, error)
 }
 
 // Metadata provides display and permission metadata for a tool.
 type Metadata struct {
-	Title       string
-	Description string
-	Annotation  tool.Annotation
+	Title        string
+	Description  string
+	Annotation   tool.Annotation
+	DeferLoading bool
 }
 
 type typedTool[In, Out any] struct {
@@ -86,12 +91,13 @@ type typedTool[In, Out any] struct {
 // inferring its JSON schemas from In and Out.
 func NewHandler[In, Out any](name string, meta Metadata, h Handler[In, Out]) Tool {
 	t, err := New(Spec[In, Out]{
-		Name:        name,
-		Title:       meta.Title,
-		Description: meta.Description,
-		Annotation:  meta.Annotation,
-		Prepare:     h.Prepare,
-		Execute:     h.Execute,
+		Name:         name,
+		Title:        meta.Title,
+		Description:  meta.Description,
+		Annotation:   meta.Annotation,
+		DeferLoading: meta.DeferLoading,
+		Prepare:      h.Prepare,
+		Execute:      h.Execute,
 	})
 	if err != nil {
 		panic(err)
@@ -134,6 +140,7 @@ func New[In, Out any](spec Spec[In, Out]) (Tool, error) {
 			Title:        title,
 			Description:  spec.Description,
 			Annotation:   spec.Annotation,
+			DeferLoading: spec.DeferLoading,
 			InputSchema:  inputSchema,
 			OutputSchema: outputSchema,
 		},
@@ -149,6 +156,10 @@ func (t *typedTool[In, Out]) Name() string {
 
 func (t *typedTool[In, Out]) Definition() tool.Definition {
 	return t.def
+}
+
+func (t *typedTool[In, Out]) SetDeferLoading(deferLoading bool) {
+	t.def.DeferLoading = deferLoading
 }
 
 func (t *typedTool[In, Out]) decodeAndValidate(args map[string]any) (In, error) {

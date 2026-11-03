@@ -24,6 +24,7 @@ TaskSmith provides 15 core built-in system tools backed by virtualized OS sandbo
 | **`load_skill`** | `Session`, `Workspace` | Safe / Auto-allowed | Loads domain guidelines, coding conventions, or workflows for a specified skill on demand. |
 | **`invoke_agent`** | `Session` | Safe & Read-Only / Auto-allowed | Spawns a specialized subagent asynchronously in an isolated child session. |
 | **`manage_agents`** | `Session` | Safe / Auto-allowed for `list`/`status`, Prompts for `send`/`kill` | Lists subagents, checks subagent status, sends messages, or terminates running subagents. |
+| **`tool_search`** | `Session`, `Workspace` | Safe & Read-Only / Auto-allowed | Searches deferred (not eagerly loaded) tools by name, description, or parameters via BM25 and loads the matches into context. Auto-activated when the session has at least one deferred tool. |
 
 ---
 
@@ -43,7 +44,7 @@ Every built-in tool defines safety properties in its manifest:
 
 ### Behavior Across Permission Modes
 
-| Permission Mode | Safe Read-Only (`view`, `ls`, `glob`, `grep`, `todos`, `tasks`, `ask_question`, `load_skill`, `invoke_agent`) | Filesystem Writes (`write`, `edit`, `remove`) | Execution & Network (`bash`, `web_fetch`, `download`) |
+| Permission Mode | Safe Read-Only (`view`, `ls`, `glob`, `grep`, `todos`, `tasks`, `ask_question`, `load_skill`, `invoke_agent`, `tool_search`) | Filesystem Writes (`write`, `edit`, `remove`) | Execution & Network (`bash`, `web_fetch`, `download`) |
 | :--- | :--- | :--- | :--- |
 | **`default`** | Auto-allowed | Prompts user for approval | Prompts user for approval |
 | **`accept_edits`** | Auto-allowed | Auto-allowed (unified diff recorded) | Prompts user for approval |
@@ -668,5 +669,38 @@ Lists subagents, checks a subagent's status, sends a message to a subagent, or t
 {
   "action": "status",
   "session_id": "018f6e8b-9d41-7e8c-b631-c48f2195dfb0"
+}
+```
+
+---
+
+### `tool_search`
+
+Searches the workspace's deferred (not eagerly loaded) tools by name, description, or parameters using BM25 keyword matching and loads the best matches into the active toolset.
+
+**Activation**: `tool_search` is a built-in system tool that is automatically activated (`DeferLoading: false`) whenever the session resolves at least one deferred tool — that is, a policy-allowed built-in, custom (`*.tool.md`), or MCP tool that is not listed in the agent's `spec.tools`. When the session has zero deferred tools, `tool_search` is not registered.
+
+#### Safety Profile
+- **`isReadOnly`**: `true`
+- **`isIdempotent`**: `true`
+- **`isDangerous`**: `false`
+- **`isOpenWorld`**: `false`
+- **User Hint**: `"Search available tools"`
+
+#### Input Parameters
+
+| Parameter | Type | Required | Description |
+| :--- | :--- | :--- | :--- |
+| `query` | string | **Yes** | Search query terms to find relevant tools by name, description, or parameters. |
+
+#### Output Fields
+
+| Field | Type | Description |
+| :--- | :--- | :--- |
+| `tools` | array of strings | Names of matching tools loaded into context. |
+
+```json
+{
+  "query": "http download"
 }
 ```

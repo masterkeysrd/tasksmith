@@ -176,6 +176,8 @@ github.com/masterkeysrd/warp v0.0.7-0.20261029074357-d817526e40a5 h1:S2eF6ANcnqz
 github.com/masterkeysrd/warp v0.0.7-0.20261029074357-d817526e40a5/go.mod h1:6siby/YEZ/ltdHyABFT4mzecXRQcr2Vuye2okawDCQE=
 github.com/masterkeysrd/warp v0.0.7-0.20261101145605-0aceba023e5e h1:dTBSkhnltAzBtefgRvDJxNL9XsVrbbNMYtktwm0KBH4=
 github.com/masterkeysrd/warp v0.0.7-0.20261101145605-0aceba023e5e/go.mod h1:+gAWzS320jlO3Zr2y4jiR349JDvnCme77t/+ePg5mY0=
+github.com/masterkeysrd/warp v0.0.7-0.20261103050903-e94a854abfcd h1:pa8gTS6Igy3iCQH2At+yNZj1/+b8i3knUTgs59pLsqs=
+github.com/masterkeysrd/warp v0.0.7-0.20261103050903-e94a854abfcd/go.mod h1:+gAWzS320jlO3Zr2y4jiR349JDvnCme77t/+ePg5mY0=
 github.com/mattn/go-isatty v0.0.24 h1:tGZZoVgT/KiqK1c8ocVLeDS8BSWMRd47J3Lbz7vsReI=
 github.com/mattn/go-isatty v0.0.24/go.mod h1:nMCL3Zebbrt45jsMDgnfIwz6ydEQApk5oEI3HqDio6A=
 github.com/mattn/go-runewidth v0.0.31 h1:1oCV4ReTlosDBc6rYRw5cL8S/4y8iv5oRl4SJ5IBgwo=

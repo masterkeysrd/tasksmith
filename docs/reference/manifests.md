@@ -169,6 +169,10 @@ spec:
   thinking:
     type: effort
     effort: high
+  tools:
+    - view
+    - grep
+    - glob
   skills:
     - go-security
     - owasp-checklist
@@ -208,11 +212,12 @@ Never attempt to modify code directly; report your findings with precise line re
 | `thinking.effort` | string | Effort level for the `effort` strategy (e.g. `low`, `medium`, `high`). |
 | `thinking.budgetTokens` | integer | Thinking token budget for the `budget` strategy. |
 | `thinking.enabled` | boolean | Thinking toggle for the `toggle` strategy. |
+| `tools` | array of strings | Eager tools loaded on the first request (`*`, `!pattern`, or explicit tool names). Defaults to `[]` when omitted. Policy-allowed tools not listed in `spec.tools` (and MCP tools by default) are loaded as deferred tools discoverable via `tool_search`. Advising more than 20 eager tools emits a warning. |
 | `skills` | array of strings | Allowed skills (`*`, `!pattern`, or explicit skill names). |
 | `commands` | array of strings | Allowed slash commands (`*`, `!pattern`, or explicit command names). |
 | `subagents` | array of strings | Allowed subagents (`*`, `!pattern`, or explicit agent names). Only agents allowing the `agent` trigger can be invoked as subagents. |
 | `rules` | array of strings | Context rule selectors (`*`, `!pattern`, or explicit `AGENTS.md` / `.agents/rules/*.md` names). |
-| `policies.tools` | object | Tool visibility and execution policy (`include`, `exclude`, `dangerous`, `openWorld`, `readOnly`, `ask`). The resolved tool list is an explicit allowlist; an agent whose resolved tools are empty receives zero tools. |
+| `policies.tools` | object | Unbypassable security policy ceiling for eager tools, deferred tools (`tool_search`), and skill/command tools (`include`, `exclude`, `dangerous`, `openWorld`, `readOnly`, `ask`). The resolved tool list is an explicit allowlist; an agent whose resolved tools are empty receives zero tools. |
 
 *The Markdown body below the frontmatter contains the system persona prompt.*
 

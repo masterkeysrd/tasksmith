@@ -55,7 +55,12 @@ func validateRequest(prof models.Model, req *llm.Request) error {
 					return unsupported("text input", "choose a compatible model")
 				}
 				continue
-			case *message.ThinkingBlock, *message.ToolCall:
+			case *message.ToolReferenceBlock, *message.ToolDefinitionBlock:
+				if prof.Capabilities.Tools != nil && !*prof.Capabilities.Tools {
+					return unsupported("tool calling", "choose a model with tool calling support")
+				}
+				continue
+			case *message.ThinkingBlock, *message.ToolCall, *message.ServerToolCall, *message.ServerToolResult:
 				if msg.Role() != message.RoleAssistant {
 					return fmt.Errorf("%w: model %q cannot safely send message %d block %d (%T) in role %q", ErrUnsupportedCapability, req.Model, i, j, block, msg.Role())
 				}

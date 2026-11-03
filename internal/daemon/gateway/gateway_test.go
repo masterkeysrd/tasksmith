@@ -13,6 +13,7 @@ import (
 	"github.com/masterkeysrd/loom/message"
 	"github.com/masterkeysrd/loom/profile"
 	loomopenai "github.com/masterkeysrd/loom/providers/openai"
+	"github.com/masterkeysrd/loom/tool"
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/models"
 	"github.com/masterkeysrd/warp"
@@ -832,5 +833,110 @@ func TestModelResolutionWithSlashInModelID(t *testing.T) {
 
 	if _, err := gw.LLM(ctx, models.Model{ID: "unknown-prov/some-model"}, llm.ModelConfig{}); !errors.Is(err, ErrProviderNotFound) {
 		t.Fatalf("expected ErrProviderNotFound for unknown provider, got: %v", err)
+	}
+}
+
+// capturingProvider records the last request it receives so middleware
+// transformation can be asserted. It reports no native deferred/inline tool
+// support so the gateway's fallback middlewares are active.
+type capturingProvider struct {
+	llm.Provider
+	lastRequest *llm.Request
+}
+
+func (c *capturingProvider) Name() string { return "capture" }
+func (c *capturingProvider) Stream(ctx context.Context, req *llm.Request) (llm.StreamResponse, error) {
+	c.lastRequest = req
+	return func(yield func(message.AssistantChunk, error) bool) {
+		yield(message.AssistantChunk{Content: []message.Block{&message.TextBlock{Text: "ok"}}, Done: true}, nil)
+	}, nil
+}
+func (c *capturingProvider) GetProfile(string) (profile.Profile, bool) {
+	return profile.Profile{}, false
+}
+func (c *capturingProvider) SupportsDeferredTools(string) bool { return false }
+func (c *capturingProvider) SupportsInlineTools(string) bool   { return false }
+
+// TestValidateRequestToolBlocks verifies that validateRequest allows
+// *message.ToolReferenceBlock and *message.ToolDefinitionBlock on tool-capable
+// models but rejects them on models without tool support.
+func TestValidateRequestToolBlocks(t *testing.T) {
+	toolTrue, toolFalse := true, false
+
+	capable := models.Model{ID: "p/m", ProviderType: "openai", Capabilities: models.Capabilities{Tools: &toolTrue}}
+	incapable := models.Model{ID: "p/m", ProviderType: "openai", Capabilities: models.Capabilities{Tools: &toolFalse}}
+
+	req := &llm.Request{
+		Model: "m",
+		Messages: []message.Message{
+			message.NewUser(&message.ToolReferenceBlock{ToolName: "grep"}),
+			message.NewUser(&message.ToolDefinitionBlock{Name: "custom", Description: "x"}),
+		},
+	}
+
+	if err := validateRequest(capable, req); err != nil {
+		t.Fatalf("expected tool-capable model to allow tool reference/definition blocks, got %v", err)
+	}
+	if err := validateRequest(incapable, req); err == nil {
+		t.Fatalf("expected non-tool-capable model to reject tool reference blocks, got nil")
+	}
+}
+
+// TestGatewayDeferredAndInlineToolMiddleware verifies that the gateway wires
+// Loom's DeferredToolsMiddleware and InlineToolsMiddleware so that, for a
+// non-native provider, deferred tools are filtered from req.Tools and
+// ToolReferenceBlocks are expanded in place.
+func TestGatewayDeferredAndInlineToolMiddleware(t *testing.T) {
+	ctx := context.Background()
+
+	prov := &capturingProvider{}
+	gw := &gatewayImpl{
+		providers: map[string]*providerInstance{
+			"cap": {cfg: ProviderConfig{Name: "cap", Type: "openai"}, llmProv: prov},
+		},
+	}
+
+	toolTrue := true
+	model, err := gw.LLM(ctx, models.Model{ID: "cap/m", ProviderType: "openai", Capabilities: models.Capabilities{Tools: &toolTrue}}, llm.ModelConfig{})
+	if err != nil {
+		t.Fatalf("gw.LLM: %v", err)
+	}
+
+	// Bind one active tool and one deferred tool.
+	model = model.BindToolDefs(
+		tool.Definition{Name: "active_tool", Description: "An active tool"},
+		tool.Definition{Name: "deferred_tool", Description: "A deferred tool", DeferLoading: true},
+	)
+
+	_, err = model.Invoke(ctx, []message.Message{
+		message.NewUser(&message.ToolReferenceBlock{ToolName: "deferred_tool"}),
+	})
+	if err != nil {
+		t.Fatalf("model.Invoke: %v", err)
+	}
+	if prov.lastRequest == nil {
+		t.Fatal("provider did not receive a request")
+	}
+
+	// The deferred tool must be filtered out of req.Tools.
+	for _, d := range prov.lastRequest.Tools {
+		if d.Name == "deferred_tool" {
+			t.Errorf("expected deferred_tool to be filtered from req.Tools, got %v", prov.lastRequest.Tools)
+		}
+	}
+
+	// The tool reference must be expanded into a text block (not left as a
+	// ToolReferenceBlock) in the message the provider receives.
+	var expanded bool
+	for _, b := range prov.lastRequest.Messages[0].GetContent() {
+		if _, ok := b.(*message.ToolReferenceBlock); ok {
+			t.Errorf("expected ToolReferenceBlock to be expanded, but it is still present")
+		}
+		if _, ok := b.(*message.TextBlock); ok {
+			expanded = true
+		}
+	}
+	if !expanded {
+		t.Errorf("expected ToolReferenceBlock to be expanded into a text block, got %v", prov.lastRequest.Messages[0].GetContent())
 	}
 }

@@ -24,6 +24,16 @@ type Config struct {
 	Logger       log.Interface
 	Spiller      Spiller
 	AllowedTools []string
+	// DeferredTools is the set of tool names that should be withheld from the
+	// initial model context (DeferLoading: true) and instead discovered via
+	// tool_search. Deferred tools must also appear in AllowedTools so that they
+	// are constructed and registered in the container; they are merely held back
+	// from the first request's tool definitions.
+	DeferredTools []string
+	// ToolSearchFactory constructs the built-in tool_search tool from the
+	// deferred tools' definitions. It is invoked (and tool_search registered)
+	// only when there is at least one deferred tool.
+	ToolSearchFactory func(defs []tool.Definition) Tool
 }
 
 // Validate ensures that all required dependencies are non-nil. Zero silent
@@ -104,7 +114,49 @@ func NewContainer(cfg Config) (Container, error) {
 		return nil, err
 	}
 
+	if err := c.applyDeferredLoading(cfg); err != nil {
+		return nil, err
+	}
+
 	return c, nil
+}
+
+// applyDeferredLoading marks the configured deferred tools (DeferLoading: true)
+// and, when at least one deferred tool exists, constructs and registers the
+// built-in tool_search tool (DeferLoading: false) so the deferred tools can be
+// discovered and loaded into the active toolset.
+func (c *container) applyDeferredLoading(cfg Config) error {
+	if len(cfg.DeferredTools) == 0 {
+		return nil
+	}
+
+	var deferred []tool.Definition
+	for _, name := range cfg.DeferredTools {
+		t, ok := c.tools[name]
+		if !ok {
+			continue
+		}
+		// Mark the tool deferred; the mutation is reflected in Definition().
+		t.SetDeferLoading(true)
+		def := t.Definition()
+		def.DeferLoading = true
+		deferred = append(deferred, def)
+	}
+
+	if len(deferred) == 0 {
+		return nil
+	}
+
+	if cfg.ToolSearchFactory == nil {
+		return nil
+	}
+
+	searchTool := cfg.ToolSearchFactory(deferred)
+	if searchTool != nil {
+		searchTool.SetDeferLoading(false)
+		c.addTool(searchTool)
+	}
+	return nil
 }
 
 func (c *container) addTool(t Tool) {

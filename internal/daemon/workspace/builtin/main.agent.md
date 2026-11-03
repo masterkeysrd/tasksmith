@@ -8,6 +8,23 @@ spec:
   triggers:
     - human
   temperature: 0.7
+  tools:
+    - view
+    - ls
+    - glob
+    - grep
+    - write
+    - edit
+    - remove
+    - bash
+    - web_fetch
+    - download
+    - tasks
+    - todos
+    - ask_question
+    - load_skill
+    - invoke_agent
+    - manage_agents
   skills: ["*"]
   commands: ["*"]
   subagents: ["*"]

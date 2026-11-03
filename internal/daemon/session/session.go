@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/masterkeysrd/loom/tool"
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	"github.com/masterkeysrd/tasksmith/internal/core/ptr"
@@ -790,8 +791,18 @@ func (s *Session) configureHarness(ctx context.Context) error {
 	// no agent.
 	if s.PermManager != nil {
 		var agentPolicies *warp.Policies
+		var hasDeferred bool
 		if resolved, rerr := s.workspace.Catalog().ResolveAgent(agentName); rerr == nil && resolved != nil && resolved.Agent != nil {
 			agentPolicies = resolved.Agent.Spec.Policies
+			if partition := s.workspace.Catalog().PartitionAgentTools(resolved); len(partition.Deferred) > 0 {
+				hasDeferred = true
+			}
+		}
+		// When deferred tools exist, tool_search is auto-activated as an eager
+		// tool. Ensure the agent's policy ceiling permits it so the permission
+		// gate allows tool_search when the agent restricts tools via include.
+		if hasDeferred && agentPolicies != nil && agentPolicies.Tools != nil && len(agentPolicies.Tools.Include) > 0 {
+			agentPolicies = ensureToolSearchAllowed(agentPolicies)
 		}
 		s.PermManager.SetAgentPolicies(agentPolicies)
 	}
@@ -817,6 +828,24 @@ func (s *Session) outputsDir() string {
 	return filepath.Join(s.Root, "outputs")
 }
 
+// ensureToolSearchAllowed returns a deep copy of policies with tool_search added
+// to the tool include ceiling (when the ceiling restricts tools via include), so
+// that the auto-activated tool_search tool is permitted by the permission gate
+// when an agent has deferred tools.
+func ensureToolSearchAllowed(policies *warp.Policies) *warp.Policies {
+	clone := policies.DeepCopy()
+	if clone.Tools == nil {
+		clone.Tools = &warp.ToolPolicies{}
+	}
+	for _, name := range clone.Tools.Include {
+		if strings.EqualFold(name, builtin.ToolToolSearch) {
+			return clone
+		}
+	}
+	clone.Tools.Include = append(clone.Tools.Include, builtin.ToolToolSearch)
+	return clone
+}
+
 func (s *Session) buildToolsForAgent(agentName string) (tools.Container, error) {
 	cat := s.workspace.Catalog()
 	if agentName == "" {
@@ -824,6 +853,7 @@ func (s *Session) buildToolsForAgent(agentName string) (tools.Container, error) 
 	}
 
 	var allowedToolNames []string
+	var deferredToolNames []string
 	var skills []warp.Skill
 	var subagents []*warp.Agent
 
@@ -832,10 +862,11 @@ func (s *Session) buildToolsForAgent(agentName string) (tools.Container, error) 
 			// An agent's resolved tool list is an explicit allowlist. A nil or
 			// empty list (e.g. policies.tools deny ["*"] or allow ["nonexistent"])
 			// grants zero tools rather than all tools.
-			allowedToolNames = make([]string, 0, len(resolved.Tools))
-			for _, t := range resolved.Tools {
-				allowedToolNames = append(allowedToolNames, t.Metadata.Name)
-			}
+			partition := cat.PartitionAgentTools(resolved)
+			allowedToolNames = make([]string, 0, len(partition.Eager)+len(partition.Deferred))
+			allowedToolNames = append(allowedToolNames, partition.Eager...)
+			allowedToolNames = append(allowedToolNames, partition.Deferred...)
+			deferredToolNames = partition.Deferred
 			skills = resolved.Skills
 			subagents = resolved.Subagents
 		} else {
@@ -876,12 +907,16 @@ func (s *Session) buildToolsForAgent(agentName string) (tools.Container, error) 
 	}
 
 	container, err := tools.NewContainer(tools.Config{
-		Tools:        builtinTools,
-		Sandbox:      s.Sandbox,
-		Workspace:    s.workspace,
-		Logger:       s.logger,
-		Spiller:      s.spiller,
-		AllowedTools: allowedToolNames,
+		Tools:         builtinTools,
+		Sandbox:       s.Sandbox,
+		Workspace:     s.workspace,
+		Logger:        s.logger,
+		Spiller:       s.spiller,
+		AllowedTools:  allowedToolNames,
+		DeferredTools: deferredToolNames,
+		ToolSearchFactory: func(defs []tool.Definition) tools.Tool {
+			return builtin.NewToolSearch(defs, s.workspace)
+		},
 	})
 	if err != nil {
 		return nil, fmt.Errorf("session: initialize tools container: %w", err)

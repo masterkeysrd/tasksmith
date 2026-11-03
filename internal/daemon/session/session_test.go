@@ -38,6 +38,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/daemon/sandbox"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/std"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/timeline"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/tools"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tools/builtin"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/workspace"
 	"github.com/masterkeysrd/warp"
@@ -3952,6 +3953,11 @@ kind: Agent
 metadata:
   name: coder
 spec:
+  tools:
+    - view
+    - ls
+    - load_skill
+  skills: ["*"]
   policies:
     tools:
       include:
@@ -3972,6 +3978,8 @@ kind: Agent
 metadata:
   name: reviewer
 spec:
+  tools:
+    - view
   policies:
     tools:
       include:
@@ -4062,6 +4070,7 @@ kind: Agent
 metadata:
   name: deny-all
 spec:
+  tools: ["*"]
   policies:
     tools:
       include:
@@ -4079,6 +4088,8 @@ apiVersion: warp/v1alpha1
 kind: Agent
 metadata:
   name: full-access
+spec:
+  tools: ["*"]
 ---
 Full-access agent.
 `
@@ -4123,6 +4134,222 @@ Full-access agent.
 	}
 	if defs := sessFull.Tools.Definitions(); len(defs) == 0 {
 		t.Fatalf("expected >0 tools for full-access agent, got 0")
+	}
+}
+
+// TestSessionDeferredToolsAndToolSearch verifies eager vs. deferred tool
+// resolution, automatic tool_search activation, and the >20 eager-tools
+// diagnostic.
+func TestSessionDeferredToolsAndToolSearch(t *testing.T) {
+	ctx := context.Background()
+	prov := &fakeProvider{
+		handler: func(_ context.Context, _ *llm.Request) ([]string, string, error) {
+			return []string{"OK"}, uuid.NewString(), nil
+		},
+	}
+	_, ws, _, _, mgr := setupTestEnv(t, prov)
+
+	agentsDir := filepath.Join(ws.RootDir(), ".agents")
+	if err := os.MkdirAll(agentsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// all-eager: every policy-allowed tool is in spec.tools, so nothing is
+	// deferred and tool_search is not activated.
+	allEager := `---
+apiVersion: warp/v1alpha1
+kind: Agent
+metadata:
+  name: all-eager
+spec:
+  tools:
+    - view
+  policies:
+    tools:
+      include:
+        - view
+---
+All-eager agent.
+`
+	// some-deferred: view is eager; ls and grep are policy-allowed but not in
+	// spec.tools, so they load as deferred and tool_search is activated.
+	someDeferred := `---
+apiVersion: warp/v1alpha1
+kind: Agent
+metadata:
+  name: some-deferred
+spec:
+  tools:
+    - view
+  policies:
+    tools:
+      include:
+        - view
+        - ls
+        - grep
+---
+Some-deferred agent.
+`
+	// many-tools: loads every effective tool eagerly (> MaxRecommendedEagerTools).
+	manyTools := `---
+apiVersion: warp/v1alpha1
+kind: Agent
+metadata:
+  name: many-tools
+spec:
+  tools: ["*"]
+---
+Many-tools agent.
+`
+	for _, a := range []struct{ name, content string }{
+		{"all-eager", allEager},
+		{"some-deferred", someDeferred},
+		{"many-tools", manyTools},
+	} {
+		if err := os.WriteFile(filepath.Join(agentsDir, a.name+".agent.md"), []byte(a.content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Inject enough custom tools to push many-tools over the eager threshold.
+	toolsDir := filepath.Join(agentsDir, "tools")
+	if err := os.MkdirAll(toolsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for i := range 10 {
+		name := fmt.Sprintf("ctool%02d", i)
+		manifest := fmt.Sprintf(`---
+apiVersion: warp/v1alpha1
+kind: Tool
+metadata:
+  name: %s
+  description: Custom tool %s
+spec:
+  command: ["sh", "-c"]
+---
+Custom tool.
+`, name, name)
+		if err := os.WriteFile(filepath.Join(toolsDir, name+".tool.md"), []byte(manifest), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if err := ws.Reload(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	// 1. All policy-allowed tools eager => tool_search is not registered.
+	sessAll, _, err := mgr.Create(ctx, api.CreateSessionRequest{
+		Title:  "All Eager",
+		Config: api.SessionConfig{Agent: "all-eager"},
+	})
+	if err != nil {
+		t.Fatalf("mgr.Create (all-eager): %v", err)
+	}
+	if err := sessAll.Send(ctx, api.SendRequest{Content: "start"}); err != nil {
+		t.Fatalf("sessAll.Send: %v", err)
+	}
+	if err := sessAll.Wait(ctx); err != nil {
+		t.Fatalf("sessAll.Wait: %v", err)
+	}
+	for _, d := range sessAll.Tools.Definitions() {
+		if d.Name == "tool_search" {
+			t.Fatalf("expected tool_search NOT in all-eager definitions, got %v", sessAll.Tools.Definitions())
+		}
+	}
+
+	// 2. Deferred tools => tool_search is eager and discovers deferred tools.
+	sessDef, _, err := mgr.Create(ctx, api.CreateSessionRequest{
+		Title:  "Some Deferred",
+		Config: api.SessionConfig{Agent: "some-deferred"},
+	})
+	if err != nil {
+		t.Fatalf("mgr.Create (some-deferred): %v", err)
+	}
+	if err := sessDef.Send(ctx, api.SendRequest{Content: "start"}); err != nil {
+		t.Fatalf("sessDef.Send: %v", err)
+	}
+	if err := sessDef.Wait(ctx); err != nil {
+		t.Fatalf("sessDef.Wait: %v", err)
+	}
+
+	// view eager, tool_search eager, ls and grep deferred.
+	defs := sessDef.Tools.Definitions()
+	checkTool := func(name string, wantDefer bool) {
+		t.Helper()
+		var found bool
+		for _, d := range defs {
+			if d.Name == name {
+				found = true
+				if d.DeferLoading != wantDefer {
+					t.Errorf("tool %q: DeferLoading = %v, want %v", name, d.DeferLoading, wantDefer)
+				}
+				return
+			}
+		}
+		if !found {
+			t.Errorf("expected tool %q in definitions, got %v", name, defs)
+		}
+	}
+	checkTool("view", false)
+	checkTool("tool_search", false)
+	checkTool("ls", true)
+	checkTool("grep", true)
+
+	// tool_search.Prepare returns a non-nil, read-only safe plan and the
+	// permission gate allows it.
+	plan, err := sessDef.Tools.Prepare(ctx, &message.ToolCall{
+		Name: "tool_search",
+		Args: map[string]any{"query": "grep"},
+	})
+	if err != nil {
+		t.Fatalf("tool_search prepare: %v", err)
+	}
+	if plan == nil {
+		t.Fatalf("expected non-nil plan from tool_search prepare")
+	}
+	decision, _, err := sessDef.PermManager.Evaluate(plan)
+	if err != nil {
+		t.Fatalf("PermManager.Evaluate: %v", err)
+	}
+	if decision != tools.AccessAllow {
+		t.Errorf("expected tool_search plan to be allowed, got %v", decision)
+	}
+
+	// Executing tool_search with "grep" returns a reference to the grep tool.
+	res, err := sessDef.Tools.Execute(ctx, &message.ToolCall{
+		Name: "tool_search",
+		Args: map[string]any{"query": "grep"},
+	})
+	if err != nil {
+		t.Fatalf("tool_search execute: %v", err)
+	}
+	var foundGrep bool
+	for _, b := range res.Content {
+		if ref, ok := b.(*message.ToolReferenceBlock); ok && ref.ToolName == "grep" {
+			foundGrep = true
+		}
+	}
+	if !foundGrep {
+		t.Errorf("expected tool_search to return a ToolReferenceBlock for grep, got %+v", res.Content)
+	}
+
+	// 3. > 20 eager tools => too_many_eager_tools diagnostic.
+	sessMany, _, err := mgr.Create(ctx, api.CreateSessionRequest{
+		Title:  "Many Tools",
+		Config: api.SessionConfig{Agent: "many-tools"},
+	})
+	if err != nil {
+		t.Fatalf("mgr.Create (many-tools): %v", err)
+	}
+	var hasDiag bool
+	for _, d := range sessMany.Diagnostics {
+		if d.Code == "too_many_eager_tools" {
+			hasDiag = true
+		}
+	}
+	if !hasDiag {
+		t.Errorf("expected too_many_eager_tools diagnostic, got %+v", sessMany.Diagnostics)
 	}
 }
 

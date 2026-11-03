@@ -298,6 +298,16 @@ type TodosOutput struct {
 	Message    string     `json:"message" jsonschema:"Summary message describing the updated checklist state."`
 }
 
+// ToolSearchInput defines the input parameters for the tool_search tool.
+type ToolSearchInput struct {
+	Query string `json:"query" jsonschema:"Search query terms to find relevant tools by name, description, or parameters."`
+}
+
+// ToolSearchOutput defines the structured output of the tool_search tool.
+type ToolSearchOutput struct {
+	Tools []string `json:"tools" jsonschema:"Names of matching tools loaded into context."`
+}
+
 // ViewInput defines the input parameters for the view tool.
 type ViewInput struct {
 	Path   string `json:"path" jsonschema:"File path relative to the workspace root or an absolute path inside the workspace."`

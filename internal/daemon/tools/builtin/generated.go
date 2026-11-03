@@ -17,6 +17,7 @@ const (
 	ToolRemove       = "remove"
 	ToolTasks        = "tasks"
 	ToolTodos        = "todos"
+	ToolToolSearch   = "tool_search"
 	ToolView         = "view"
 	ToolWebFetch     = "web_fetch"
 	ToolWrite        = "write"

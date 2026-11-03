@@ -54,6 +54,12 @@ spec:
 Run the project checks and report failures.
 ```
 
+## Deferred tools and `tool_search`
+
+Custom and MCP tools are not listed in an agent's `spec.tools` by default, so they load as **deferred** tools (`DeferLoading: true`): they are registered in the session's tool container but withheld from the initial model context. When a session resolves at least one deferred tool, TaskSmith automatically activates the built-in `tool_search` tool as an eager tool. `tool_search` runs a BM25 keyword search over the deferred tools' names, descriptions, and parameters and returns the matching tool names, which then become available for direct invocation on subsequent turns. When a session has no deferred tools, `tool_search` is not registered.
+
+To make a custom or MCP tool eager instead of deferred, list its name in the agent's `spec.tools`.
+
 ## MCP definitions
 
 An `MCP` resource describes a Model Context Protocol server. TaskSmith discovers these definitions as workspace metadata, but **does not currently connect to the servers or load their tools, prompts, or resources**. The filters and annotation overrides below therefore do not enforce access restrictions in TaskSmith today.

@@ -10,6 +10,12 @@ spec:
     - agent
   subagents: []
   rules: ["*"]
+  tools:
+    - view
+    - ls
+    - glob
+    - grep
+    - web_fetch
   policies:
     tools:
       include:

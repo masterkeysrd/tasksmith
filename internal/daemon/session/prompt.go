@@ -378,6 +378,19 @@ func modelDiagnostics(ws *workspace.Workspace, catalog *models.Catalog, config a
 	if err != nil {
 		return []api.SessionDiagnostic{{Code: "model_config_unavailable", Message: fmt.Sprintf("Model configuration is unavailable: %v", err)}}
 	}
+	// Emit a diagnostic when the active agent loads more than the recommended
+	// number of eager tools on the first request.
+	if cat := ws.Catalog(); cat != nil {
+		agentName := config.Agent
+		if agentName == "" {
+			agentName = cat.DefaultAgentName()
+		}
+		if resolved, rerr := cat.ResolveAgent(agentName); rerr == nil && resolved != nil {
+			if partition := cat.PartitionAgentTools(resolved); len(partition.Eager) > workspace.MaxRecommendedEagerTools {
+				diagnostics = append(diagnostics, api.SessionDiagnostic{Code: "too_many_eager_tools", Setting: "tools", Message: fmt.Sprintf("Agent %q loads %d tools on the first request (recommended maximum is %d); consider reducing spec.tools to use deferred loading", agentName, len(partition.Eager), workspace.MaxRecommendedEagerTools)})
+			}
+		}
+	}
 	return diagnostics
 }
 

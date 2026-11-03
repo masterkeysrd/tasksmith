@@ -15,6 +15,7 @@ All `spec` fields are optional:
 | `models` | string[] | Prioritized model identifiers; an unspecified or empty list leaves model selection to defaults. |
 | `temperature` | float | Sampling temperature, conventionally `0.0`–`2.0`; when omitted it is unset rather than an explicit `0.0`. |
 | `thinking` | object | Extended-reasoning configuration. `type` accepts `toggle`, `effort`, `budget`, or `adaptive`; all four strategies are supported end-to-end. For example `type: effort` with `effort: high`. |
+| `tools` | string[] | Eager tools loaded on the first request (`*`, `!pattern`, or explicit tool names). When omitted, defaults to `[]`. Policy-allowed tools not listed here (and MCP tools by default) load as deferred tools discoverable via `tool_search`. Declaring more than 20 eager tools emits a warning. |
 | `skills` | string[] | Skill names, qualified references, paths, or patterns to resolve. |
 | `commands` | string[] | Command names, qualified references, paths, or patterns to resolve. |
 | `subagents` | string[] | Agent names, qualified references, paths, or patterns to resolve for delegation. |
@@ -32,7 +33,7 @@ WARP filters resolved subagents to those whose `triggers` are empty or include `
 `extends` recursively resolves the parent, including its own ancestors. WARP copies the resolved parent as the merge base and replaces its metadata, namespace, and directory with the child's. The merge rules are:
 
 1. Nonempty child `models`, `thinking`, and `triggers` replace the parent's values; a specified `temperature`, including `0.0`, replaces the parent's. Empty lists or maps for these override fields do not clear inherited values.
-2. Child `skills`, `commands`, `subagents`, and `rules` are appended to the parent lists. If a parent list is omitted and the child specifies one, the child list becomes the effective list; otherwise an empty child list does not clear the parent list. Referenced resources are resolved after merging.
+2. Child `tools`, `skills`, `commands`, `subagents`, and `rules` are appended to the parent lists. If a parent list is omitted and the child specifies one, the child list becomes the effective list; otherwise an empty child list does not clear the parent list. Referenced resources are resolved after merging.
 3. Tool policy actions `dangerous` and `openWorld` override their parent values when specified. `include` and `exclude` lists are combined as a set union; exclusion remains effective even if a name is included.
 4. Parent instructions precede child instructions, separated by a blank line when both are present. Circular chains, including self-extension, are rejected by WARP resolution.
 
@@ -40,7 +41,13 @@ An inherited wildcard remains in an appended list and therefore continues to sel
 
 ## Tool access and policies
 
-There is no top-level Agent `spec.tools` field. WARP gathers effective tools, then filters them with the merged `spec.policies.tools`: a nonempty `include` must match, `exclude` takes precedence, and `dangerous: deny` or `openWorld: deny` filters tools with the corresponding annotations. TaskSmith uses the resulting tool names as an explicit allowlist when constructing the session's tool container. The `readOnly` and `ask` policy actions are evaluated as permission ceilings during execution, alongside workspace permissions and sandbox checks.
+Agents declare their eager tools with the top-level `spec.tools` field (`*`, `!pattern`, or explicit tool names; `[]` when omitted). WARP resolves the agent's tools from `spec.tools`, then filters them with the merged `spec.policies.tools`: a nonempty `include` must match, `exclude` takes precedence, and `dangerous: deny` or `openWorld: deny` filters tools with the corresponding annotations. TaskSmith uses the resulting tool names as an explicit allowlist when constructing the session's tool container. The `readOnly` and `ask` policy actions are evaluated as permission ceilings during execution, alongside workspace permissions and sandbox checks.
+
+**Eager vs. deferred loading:** tools listed in `spec.tools` load eagerly on the first request (`DeferLoading: false`). Policy-allowed tools not listed in `spec.tools` — including custom `*.tool.md` tools and `*.mcp.yaml` MCP tools, which defer by default — load as deferred tools (`DeferLoading: true`), withheld from the initial model context and discoverable via the built-in `tool_search` tool. `tool_search` is automatically activated as an eager tool whenever the session resolves at least one deferred tool, and is not registered when there are none.
+
+**Eager tool threshold:** TaskSmith always respects `spec.tools`, but when an agent resolves to more than 20 eager tools (16 built-in baseline tools plus a 4-tool buffer), it emits a workspace and session warning diagnostic (`too_many_eager_tools`) advising the user to reduce `spec.tools` and rely on deferred loading.
+
+**Unbypassable policy ceiling:** `policies.tools` is the unbypassable security policy ceiling for eager tools, deferred tools (`tool_search`), and skill/command tools. An agent cannot grant itself any tool outside this ceiling; when deferred tools exist, `tool_search` is added to the agent's `include` ceiling so the permission gate permits it.
 
 **Fail-closed allowlisting:** the resolved tool list is an explicit allowlist. If resolution returns no tools (for example `include` matches nothing, or `exclude`, `dangerous`, or `openWorld` filter everything out), the agent receives zero tools rather than all tools. This makes an agent policy that filters out every tool a valid deny-all configuration. Workspace permissions and sandboxing are separate, additional protections.
 
