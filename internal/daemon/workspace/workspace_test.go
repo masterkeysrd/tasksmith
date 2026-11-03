@@ -1351,3 +1351,125 @@ func TestCatalogPlugins(t *testing.T) {
 		t.Errorf("mutating the returned Plugins() slice affected internal state: %+v", again)
 	}
 }
+
+func TestParseThinkingAdaptive(t *testing.T) {
+	got := ParseThinking(&warp.AgentThinking{Type: warp.ThinkingStrategyAdaptive})
+	if got == nil {
+		t.Fatal("ParseThinking(adaptive) returned nil, want non-nil")
+	}
+	if got.Type != "adaptive" {
+		t.Errorf("ParseThinking(adaptive).Type = %q, want %q", got.Type, "adaptive")
+	}
+	if !got.Enabled {
+		t.Errorf("ParseThinking(adaptive).Enabled = false, want true")
+	}
+}
+
+func TestDenyAllAgentResolvesZeroTools(t *testing.T) {
+	setupTestXDG(t)
+	ctx := context.Background()
+
+	// Inject a builtin tool manifest so the catalog has a tool to deny.
+	injectedFS := fstest.MapFS{
+		"tools/bash.tool.md": &fstest.MapFile{
+			Data: []byte(`---
+apiVersion: warp/v1alpha1
+kind: Tool
+metadata:
+  name: bash
+  description: System bash tool
+spec:
+  command: ["sh", "-c"]
+  annotations:
+    isDangerous: true
+---
+System bash instructions.
+`),
+		},
+	}
+
+	dir := t.TempDir()
+	wsManifest := `---
+apiVersion: warp/v1alpha1
+kind: Workspace
+metadata:
+  name: deny-all-ws
+---
+Workspace instructions.
+`
+	if err := os.WriteFile(filepath.Join(dir, "WORKSPACE.md"), []byte(wsManifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	agentsDir := filepath.Join(dir, ".agents")
+	if err := os.MkdirAll(agentsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// deny-all agent: include a non-existent tool so no tool matches the allowlist.
+	denyAllAgent := `---
+apiVersion: warp/v1alpha1
+kind: Agent
+metadata:
+  name: deny-all
+  description: Agent with no tools
+spec:
+  policies:
+    tools:
+      include: ["nonexistent-tool"]
+---
+Deny-all agent instructions.
+`
+	if err := os.WriteFile(filepath.Join(agentsDir, "deny-all.agent.md"), []byte(denyAllAgent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// full-access agent: no policies, so it should keep every workspace tool.
+	fullAccessAgent := `---
+apiVersion: warp/v1alpha1
+kind: Agent
+metadata:
+  name: full-access
+  description: Agent with all tools
+---
+Full-access agent instructions.
+`
+	if err := os.WriteFile(filepath.Join(agentsDir, "full-access.agent.md"), []byte(fullAccessAgent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	ws, err := Open(ctx, dir, WithBuiltinFS(injectedFS))
+	if err != nil {
+		t.Fatalf("Open error: %v", err)
+	}
+
+	// The catalog must expose the injected tool.
+	if _, ok := ws.Catalog().GetTool("bash"); !ok {
+		t.Fatal("expected injected bash tool to be resolved in catalog")
+	}
+
+	// The deny-all agent must resolve to zero tools (fail-closed allowlist).
+	resolved, err := ws.Catalog().ResolveAgent("deny-all")
+	if err != nil {
+		t.Fatalf("ResolveAgent(deny-all) error: %v", err)
+	}
+	if len(resolved.Tools) != 0 {
+		t.Fatalf("expected deny-all agent to resolve to 0 tools, got %d", len(resolved.Tools))
+	}
+
+	// The context breakdown must report zero tool tokens for the deny-all agent.
+	breakdown := ws.Catalog().AgentContext("deny-all")
+	if total := breakdown.SystemTools + breakdown.CustomTools + breakdown.MCPTools; total != 0 {
+		t.Errorf("expected 0 tool tokens for deny-all agent, got system=%d custom=%d mcp=%d",
+			breakdown.SystemTools, breakdown.CustomTools, breakdown.MCPTools)
+	}
+
+	// Regression: an agent with no policies still resolves to every workspace tool.
+	fullResolved, err := ws.Catalog().ResolveAgent("full-access")
+	if err != nil {
+		t.Fatalf("ResolveAgent(full-access) error: %v", err)
+	}
+	if len(fullResolved.Tools) == 0 {
+		t.Error("expected full-access agent to resolve to all workspace tools, got 0")
+	}
+}

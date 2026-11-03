@@ -120,10 +120,26 @@ func InitSession(ctx context.Context, c *client.Client, opts InitSessionOptions)
 	if skills, err := c.ListSkills(subCtx); err == nil {
 		SetWorkspaceSkills(skills)
 	}
+	var agents []api.Agent
+	if ags, err := c.ListAgents(subCtx); err == nil {
+		agents = ags
+		SetWorkspaceAgents(ags)
+	}
 
 	if sess == nil {
 		cfg := GetSession().Config
 		cfg.Agent, cfg.Model = opts.Agent, opts.Model
+		if agent := strings.TrimSpace(opts.Agent); agent != "" {
+			for _, ag := range agents {
+				if ag.Name == agent {
+					if !ag.CanHumanTrigger() {
+						AppendError("Error", fmt.Sprintf("Agent %q cannot be triggered by human (triggers: %s)", ag.Name, strings.Join(ag.Triggers, ", ")))
+						cfg.Agent = ""
+					}
+					break
+				}
+			}
+		}
 		session.Set(func(s SessionState) SessionState {
 			s.Config = cfg
 			return s
@@ -1087,10 +1103,11 @@ func StopDaemon(ctx context.Context) error {
 	ticker := time.NewTicker(40 * time.Millisecond)
 	defer ticker.Stop()
 
+loop:
 	for isDaemonHealthy(stopCtx, c) {
 		select {
 		case <-stopCtx.Done():
-			break
+			break loop
 		case <-ticker.C:
 		}
 	}
@@ -1119,10 +1136,11 @@ func RestartDaemon(ctx context.Context) (*api.HealthResponse, error) {
 		_ = c.Shutdown(ctx)
 		stopCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 		ticker := time.NewTicker(40 * time.Millisecond)
+	loop:
 		for isDaemonHealthy(stopCtx, c) {
 			select {
 			case <-stopCtx.Done():
-				break
+				break loop
 			case <-ticker.C:
 			}
 		}

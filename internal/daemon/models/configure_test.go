@@ -107,3 +107,76 @@ func TestConfigureAnthropicThinkingTemperatureConflict(t *testing.T) {
 		t.Fatalf("conflict: %+v diags=%+v", cfg, diags)
 	}
 }
+
+func TestConfigureAdaptiveThinking(t *testing.T) {
+	// A model whose profile advertises the "adaptive" reasoning option applies
+	// adaptive thinking end-to-end.
+	m := Model{
+		ID:           ID("provider/model"),
+		ProviderType: "ollama",
+		Limits:       Limits{Context: 4000, Output: 1000},
+		Capabilities: Capabilities{
+			Temperature: new(true),
+			Thinking:    []ThinkingOption{{Type: "adaptive"}},
+		},
+	}
+
+	cfg, _, err := m.Configure(Settings{Thinking: &api.ThinkingSetting{Type: "adaptive"}})
+	if err != nil {
+		t.Fatalf("adaptive thinking err: %v", err)
+	}
+	if cfg.Thinking == nil || !cfg.Thinking.Adaptive || !cfg.Thinking.Enabled {
+		t.Fatalf("expected adaptive thinking enabled, got %+v", cfg.Thinking)
+	}
+
+	// The same model with StrictThinking=true still applies adaptive thinking.
+	cfg, _, err = m.Configure(Settings{Thinking: &api.ThinkingSetting{Type: "adaptive"}, StrictThinking: true})
+	if err != nil {
+		t.Fatalf("strict adaptive thinking err: %v", err)
+	}
+	if cfg.Thinking == nil || !cfg.Thinking.Adaptive {
+		t.Fatalf("expected strict adaptive thinking enabled, got %+v", cfg.Thinking)
+	}
+
+	// A model without the adaptive option rejects strict adaptive thinking.
+	unsupported := Model{
+		ID:           ID("provider/model"),
+		ProviderType: "ollama",
+		Limits:       Limits{Context: 4000, Output: 1000},
+		Capabilities: Capabilities{
+			Temperature: new(true),
+			Thinking:    []ThinkingOption{{Type: "effort", Values: []string{"low"}}},
+		},
+	}
+	_, _, err = unsupported.Configure(Settings{Thinking: &api.ThinkingSetting{Type: "adaptive"}, StrictThinking: true})
+	if !errors.Is(err, ErrInvalidConfig) {
+		t.Fatalf("expected unsupported adaptive thinking to error, got %v", err)
+	}
+
+	// On Anthropic, adaptive thinking combined with temperature is a conflict:
+	// the temperature is dropped with a diagnostic.
+	anth := Model{
+		ID:           ID("anthropic/claude"),
+		ProviderType: "anthropic",
+		Limits:       Limits{Context: 4000, Output: 1000},
+		Capabilities: Capabilities{
+			Temperature: new(true),
+			Thinking:    []ThinkingOption{{Type: "adaptive"}},
+		},
+	}
+	v := float32(0.5)
+	cfg, diags, err := anth.Configure(Settings{
+		Temperature:    &v,
+		Thinking:       &api.ThinkingSetting{Type: "adaptive"},
+		StrictThinking: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Thinking == nil || !cfg.Thinking.Adaptive {
+		t.Fatalf("expected adaptive thinking enabled, got %+v", cfg.Thinking)
+	}
+	if cfg.Temperature != nil || len(diags) != 1 || diags[0].Code != "temperature_thinking_conflict" {
+		t.Fatalf("conflict: %+v diags=%+v", cfg, diags)
+	}
+}

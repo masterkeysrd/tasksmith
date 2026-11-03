@@ -11,10 +11,10 @@ All `spec` fields are optional:
 | Field | Type | Meaning |
 | --- | --- | --- |
 | `extends` | string | Parent Agent short name or qualified reference such as `system/Agent/main`. |
-| `triggers` | string[] | Intended invocation sources, such as `human`, `agent`, or `system`; an empty list means unrestricted in WARP. These are not natural-language trigger phrases. |
+| `triggers` | string[] | Allowed caller types: `human`, `agent`, or `system`. An empty list means unrestricted in WARP. All agents appear in `/agent` with a trigger badge, but human invocation (`--agent`, `/agent`, and human-initiated session creation or update) is restricted to agents that allow `human`. These are not natural-language trigger phrases. |
 | `models` | string[] | Prioritized model identifiers; an unspecified or empty list leaves model selection to defaults. |
 | `temperature` | float | Sampling temperature, conventionally `0.0`–`2.0`; when omitted it is unset rather than an explicit `0.0`. |
-| `thinking` | object | Extended-reasoning configuration, for example `type: effort` and `effort: high`. |
+| `thinking` | object | Extended-reasoning configuration. `type` accepts `toggle`, `effort`, `budget`, or `adaptive`; all four strategies are supported end-to-end. For example `type: effort` with `effort: high`. |
 | `skills` | string[] | Skill names, qualified references, paths, or patterns to resolve. |
 | `commands` | string[] | Command names, qualified references, paths, or patterns to resolve. |
 | `subagents` | string[] | Agent names, qualified references, paths, or patterns to resolve for delegation. |
@@ -40,9 +40,9 @@ An inherited wildcard remains in an appended list and therefore continues to sel
 
 ## Tool access and policies
 
-There is no top-level Agent `spec.tools` field. WARP gathers effective tools, then filters them with the merged `spec.policies.tools`: a nonempty `include` must match, `exclude` takes precedence, and `dangerous: deny` or `openWorld: deny` filters tools with the corresponding annotations. TaskSmith uses the resulting tool names when constructing the session's tool container. Execution is also subject to workspace permissions and sandbox checks.
+There is no top-level Agent `spec.tools` field. WARP gathers effective tools, then filters them with the merged `spec.policies.tools`: a nonempty `include` must match, `exclude` takes precedence, and `dangerous: deny` or `openWorld: deny` filters tools with the corresponding annotations. TaskSmith uses the resulting tool names as an explicit allowlist when constructing the session's tool container. The `readOnly` and `ask` policy actions are evaluated as permission ceilings during execution, alongside workspace permissions and sandbox checks.
 
-**Current limitation:** if resolution returns no tools, the resulting list can be nil and TaskSmith treats a nil allowed-tool list as unrestricted during tool registration. Do not rely on an agent policy that filters out every tool as a deny-all security boundary. Workspace permissions and sandboxing are separate protections.
+**Fail-closed allowlisting:** the resolved tool list is an explicit allowlist. If resolution returns no tools (for example `include` matches nothing, or `exclude`, `dangerous`, or `openWorld` filter everything out), the agent receives zero tools rather than all tools. This makes an agent policy that filters out every tool a valid deny-all configuration. Workspace permissions and sandboxing are separate, additional protections.
 
 ## User override example
 

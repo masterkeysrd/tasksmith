@@ -354,10 +354,11 @@ spec:
 	}
 
 	c, err := tools.NewContainer(tools.Config{
-		Tools:     []tools.Tool{mutTool},
-		Sandbox:   sb,
-		Workspace: ws,
-		Logger:    log.Default(),
+		Tools:        []tools.Tool{mutTool},
+		Sandbox:      sb,
+		Workspace:    ws,
+		Logger:       log.Default(),
+		AllowedTools: []string{"mutate", "custom_echo", "custom_fail"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -521,10 +522,11 @@ spec:
 	}
 
 	c, err := tools.NewContainer(tools.Config{
-		Sandbox:   sb,
-		Workspace: ws,
-		Logger:    log.Default(),
-		Spiller:   sp,
+		Sandbox:      sb,
+		Workspace:    ws,
+		Logger:       log.Default(),
+		Spiller:      sp,
+		AllowedTools: []string{"custom_spill"},
 	})
 	if err != nil {
 		t.Fatal(err)

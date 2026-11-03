@@ -160,8 +160,8 @@ metadata:
 spec:
   extends: main
   triggers:
-    - "audit security"
-    - "check vulnerabilities"
+    - human
+    - agent
   models:
     - anthropic/claude-opus-5
     - openai/o3
@@ -176,17 +176,19 @@ spec:
     - audit
   subagents:
     - code-searcher
-  tools:
-    - view
-    - grep
-    - glob
+  rules:
+    - go-conventions
   policies:
     tools:
+      include:
+        - view
+        - grep
+        - glob
       exclude:
-        - "write"
-        - "edit"
-        - "remove"
-        - "bash"
+        - write
+        - edit
+        - remove
+        - bash
 ---
 
 You are an expert application security auditor.
@@ -199,18 +201,18 @@ Never attempt to modify code directly; report your findings with precise line re
 | Field | Type | Description |
 | :--- | :--- | :--- |
 | `extends` | string | Qualified or short name of a base agent to inherit prompts and capabilities from. |
-| `triggers` | array of strings | Phrases or patterns that trigger automatic agent suggestion or routing. |
-| `models` | array of strings | Prioritized list of model identifiers to use for this agent. |
-| `temperature` | float | Sampling temperature (0.0 to 2.0). Sent when supported; omitted with a session warning when unsupported. |
+| `triggers` | array of strings | Allowed caller types (`human`, `agent`, `system`). Empty allows all callers. Agents without `human` cannot be selected by human users via `--agent` or `/agent`. |
+| `models` | array of strings | Ordered model preferences (`provider/model` or workspace model alias). |
+| `temperature` | float | Sampling temperature override (`0.0` to `2.0`). Sent when supported; omitted with a session warning when unsupported. |
 | `thinking.type` | string | Reasoning strategy: `toggle`, `effort`, `budget`, or `adaptive`. |
 | `thinking.effort` | string | Effort level for the `effort` strategy (e.g. `low`, `medium`, `high`). |
 | `thinking.budgetTokens` | integer | Thinking token budget for the `budget` strategy. |
 | `thinking.enabled` | boolean | Thinking toggle for the `toggle` strategy. |
-| `skills` | array of strings | Names of domain skills made available to this agent. |
-| `commands` | array of strings | Names of invokable slash commands made available to this agent. |
-| `subagents` | array of strings | Names of subagents this agent is permitted to invoke. |
-| `tools` | array of strings | Names of tools granted to this agent. |
-| `policies.tools` | object | Agent-level tool restrictions (`include`, `exclude`, `dangerous`, `openWorld`, `readOnly`, `ask`). |
+| `skills` | array of strings | Allowed skills (`*`, `!pattern`, or explicit skill names). |
+| `commands` | array of strings | Allowed slash commands (`*`, `!pattern`, or explicit command names). |
+| `subagents` | array of strings | Allowed subagents (`*`, `!pattern`, or explicit agent names). Only agents allowing the `agent` trigger can be invoked as subagents. |
+| `rules` | array of strings | Context rule selectors (`*`, `!pattern`, or explicit `AGENTS.md` / `.agents/rules/*.md` names). |
+| `policies.tools` | object | Tool visibility and execution policy (`include`, `exclude`, `dangerous`, `openWorld`, `readOnly`, `ask`). The resolved tool list is an explicit allowlist; an agent whose resolved tools are empty receives zero tools. |
 
 *The Markdown body below the frontmatter contains the system persona prompt.*
 

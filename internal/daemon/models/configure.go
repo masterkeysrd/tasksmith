@@ -109,7 +109,7 @@ func validateThinking(setting *api.ThinkingSetting, prof *profile.Profile) error
 			if setting.Budget <= 0 || setting.Budget > 2147483647 || (option.Min > 0 && setting.Budget < option.Min) || (option.Max > 0 && setting.Budget > option.Max) {
 				return fmt.Errorf("%w: thinking budget %d is outside the supported range (%d to %d tokens)", ErrInvalidConfig, setting.Budget, option.Min, option.Max)
 			}
-		case "toggle":
+		case "toggle", "adaptive":
 		default:
 			return fmt.Errorf("%w: unknown thinking mode %q", ErrInvalidConfig, setting.Type)
 		}
@@ -129,6 +129,8 @@ func thinkingConfig(setting *api.ThinkingSetting) *llm.ThinkingConfig {
 		return &llm.ThinkingConfig{Enabled: true, Budget: setting.Budget}
 	case "toggle":
 		return &llm.ThinkingConfig{Enabled: setting.Enabled}
+	case "adaptive":
+		return &llm.ThinkingConfig{Enabled: true, Adaptive: true}
 	}
 	return nil
 }

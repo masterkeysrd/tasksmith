@@ -349,6 +349,7 @@ func (c *Catalog) populate() {
 					Name:        baseAgent.Metadata.Name,
 					DisplayName: baseAgent.Metadata.DisplayName,
 					Description: baseAgent.Metadata.Description,
+					Triggers:    slices.Clone(baseAgent.Spec.Triggers),
 					Models:      slices.Clone(baseAgent.Spec.Models),
 					Thinking:    ParseThinking(baseAgent.Spec.Thinking),
 					Context:     ctxBreakdown,
@@ -379,7 +380,14 @@ func (c *Catalog) calculateAgentContext(ag *warp.Agent, resolved *warp.ResolvedA
 
 	globals := map[string]any{
 		"HasTool": func(toolName string) bool {
-			return true
+			if resolved != nil {
+				for _, t := range resolved.Tools {
+					if strings.EqualFold(t.Metadata.Name, toolName) {
+						return true
+					}
+				}
+			}
+			return false
 		},
 	}
 	agentPrompt, _ := ag.Render(&warp.AgentRenderOptions{
@@ -414,7 +422,7 @@ func (c *Catalog) calculateAgentContext(ag *warp.Agent, resolved *warp.ResolvedA
 	var systemTools, customTools, mcpTools int
 	toolsList := c.Tools()
 	for _, t := range toolsList {
-		if resolved != nil && len(resolved.Tools) > 0 {
+		if resolved != nil {
 			var found bool
 			for _, rt := range resolved.Tools {
 				if rt.Metadata.Name == t.Metadata.Name {
@@ -488,6 +496,7 @@ func (c *Catalog) GetAgent(name string) (AgentSnapshot, bool) {
 						Name:        baseAgent.Metadata.Name,
 						DisplayName: baseAgent.Metadata.DisplayName,
 						Description: baseAgent.Metadata.Description,
+						Triggers:    slices.Clone(baseAgent.Spec.Triggers),
 						Models:      slices.Clone(baseAgent.Spec.Models),
 						Thinking:    ParseThinking(baseAgent.Spec.Thinking),
 						Context:     ctxBreakdown,
@@ -601,6 +610,21 @@ func (c *Catalog) Tools() []*warp.Tool {
 	return c.tools.Snapshot().All()
 }
 
+// ToolNames returns the metadata names of all effective tools in scope, in the
+// same order as [Tools]. It is a convenience for callers that need an explicit
+// allowlist of every workspace tool.
+func (c *Catalog) ToolNames() []string {
+	tools := c.Tools()
+	if len(tools) == 0 {
+		return nil
+	}
+	names := make([]string, len(tools))
+	for i, t := range tools {
+		names[i] = t.Metadata.Name
+	}
+	return names
+}
+
 // GetTool resolves an effective tool by name or qualified name.
 func (c *Catalog) GetTool(name string) (*warp.Tool, bool) {
 	if t, ok := c.tools.Snapshot().Get(name); ok {
@@ -705,6 +729,8 @@ func ParseThinking(thinking *warp.AgentThinking) *api.ThinkingSetting {
 		if thinking.Enabled != nil {
 			return &api.ThinkingSetting{Type: "toggle", Enabled: *thinking.Enabled}
 		}
+	case warp.ThinkingStrategyAdaptive:
+		return &api.ThinkingSetting{Type: "adaptive", Enabled: true}
 	}
 	return nil
 }

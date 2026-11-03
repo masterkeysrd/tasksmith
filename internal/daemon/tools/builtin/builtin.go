@@ -59,8 +59,9 @@ func (c Config) Validate() error {
 }
 
 // New validates cfg and constructs the built-in system tools backed by
-// [std.Std], [shellguard.Guard], and [tasks.Store]. If [Config.AllowedTools]
-// is specified, only tools in that list are constructed.
+// [std.Std], [shellguard.Guard], and [tasks.Store]. [Config.AllowedTools] is
+// an explicit allowlist: only tools whose name appears in it are constructed.
+// A nil or empty allowlist constructs zero tools.
 func New(cfg Config) ([]tools.Tool, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
@@ -72,9 +73,6 @@ func New(cfg Config) ([]tools.Tool, error) {
 	}
 
 	isAllowed := func(name string) bool {
-		if cfg.AllowedTools == nil {
-			return true
-		}
 		for _, a := range cfg.AllowedTools {
 			if strings.EqualFold(a, name) {
 				return true

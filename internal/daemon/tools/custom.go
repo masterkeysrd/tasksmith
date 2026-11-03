@@ -35,17 +35,15 @@ func (c *container) registerCustomTools() error {
 		if len(wsTool.Spec.Command) == 0 {
 			continue
 		}
-		if c.allowedTools != nil {
-			var allowed bool
-			for _, a := range c.allowedTools {
-				if strings.EqualFold(a, wsTool.Metadata.Name) {
-					allowed = true
-					break
-				}
+		var allowed bool
+		for _, a := range c.allowedTools {
+			if strings.EqualFold(a, wsTool.Metadata.Name) {
+				allowed = true
+				break
 			}
-			if !allowed {
-				continue
-			}
+		}
+		if !allowed {
+			continue
 		}
 		if _, exists := c.tools[wsTool.Metadata.Name]; exists {
 			continue

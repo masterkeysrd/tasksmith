@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 )
 
@@ -56,9 +57,26 @@ type Agent struct {
 	Name        string           `json:"name"`
 	DisplayName string           `json:"display_name,omitempty"`
 	Description string           `json:"description,omitempty"`
+	Triggers    []string         `json:"triggers,omitempty"`
 	Models      []string         `json:"models,omitempty"`
 	Thinking    *ThinkingSetting `json:"thinking,omitempty"`
 	Context     ContextBreakdown `json:"context"`
+}
+
+// CanHumanTrigger reports whether a human caller (the --agent flag, the /agent
+// command, or human-initiated session creation) is allowed to invoke this agent.
+// An empty Triggers list means the agent is unrestricted and may be invoked by
+// any caller, including humans.
+func (a Agent) CanHumanTrigger() bool {
+	if len(a.Triggers) == 0 {
+		return true
+	}
+	for _, t := range a.Triggers {
+		if strings.EqualFold(t, "human") {
+			return true
+		}
+	}
+	return false
 }
 
 // Argument defines a structured parameter accepted by a command or skill.

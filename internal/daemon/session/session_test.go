@@ -4041,6 +4041,91 @@ Reviewer agent.
 	}
 }
 
+func TestSessionDenyAllAgentHasZeroTools(t *testing.T) {
+	ctx := context.Background()
+	prov := &fakeProvider{
+		handler: func(_ context.Context, _ *llm.Request) ([]string, string, error) {
+			return []string{"OK"}, uuid.NewString(), nil
+		},
+	}
+	_, ws, _, _, mgr := setupTestEnv(t, prov)
+
+	agentsDir := filepath.Join(ws.RootDir(), ".agents")
+	if err := os.MkdirAll(agentsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// deny-all agent: include a non-existent tool so no tool matches the allowlist.
+	denyAllContent := `---
+apiVersion: warp/v1alpha1
+kind: Agent
+metadata:
+  name: deny-all
+spec:
+  policies:
+    tools:
+      include:
+        - nonexistent-tool
+---
+Deny-all agent.
+`
+	if err := os.WriteFile(filepath.Join(agentsDir, "deny-all.agent.md"), []byte(denyAllContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// full-access agent: no policies, so it keeps every workspace tool.
+	fullAccessContent := `---
+apiVersion: warp/v1alpha1
+kind: Agent
+metadata:
+  name: full-access
+---
+Full-access agent.
+`
+	if err := os.WriteFile(filepath.Join(agentsDir, "full-access.agent.md"), []byte(fullAccessContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := ws.Reload(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	// 1. Deny-all agent must build a container with zero tools (fail-closed).
+	sessDeny, _, err := mgr.Create(ctx, api.CreateSessionRequest{
+		Title:  "Deny-All Session",
+		Config: api.SessionConfig{Agent: "deny-all"},
+	})
+	if err != nil {
+		t.Fatalf("mgr.Create (deny-all): %v", err)
+	}
+	if err := sessDeny.Send(ctx, api.SendRequest{Content: "start"}); err != nil {
+		t.Fatalf("sessDeny.Send: %v", err)
+	}
+	if err := sessDeny.Wait(ctx); err != nil {
+		t.Fatalf("sessDeny.Wait: %v", err)
+	}
+	if defs := sessDeny.Tools.Definitions(); len(defs) != 0 {
+		t.Fatalf("expected 0 tools for deny-all agent, got %d: %v", len(defs), defs)
+	}
+
+	// 2. Full-access agent must build a container with the default tool set.
+	sessFull, _, err := mgr.Create(ctx, api.CreateSessionRequest{
+		Title:  "Full-Access Session",
+		Config: api.SessionConfig{Agent: "full-access"},
+	})
+	if err != nil {
+		t.Fatalf("mgr.Create (full-access): %v", err)
+	}
+	if err := sessFull.Send(ctx, api.SendRequest{Content: "start"}); err != nil {
+		t.Fatalf("sessFull.Send: %v", err)
+	}
+	if err := sessFull.Wait(ctx); err != nil {
+		t.Fatalf("sessFull.Wait: %v", err)
+	}
+	if defs := sessFull.Tools.Definitions(); len(defs) == 0 {
+		t.Fatalf("expected >0 tools for full-access agent, got 0")
+	}
+}
+
 func TestSessionSlashCommandSkillResolution(t *testing.T) {
 	ctx := context.Background()
 	prov := &fakeProvider{
@@ -4397,5 +4482,78 @@ func TestSessionSendValidation(t *testing.T) {
 	}
 	if len(hist) < 1 || hist[0].GetID() != validID {
 		t.Errorf("expected first message ID %s, got %+v", validID, hist)
+	}
+}
+
+// TestHumanAgentTriggerEnforcement verifies that top-level human sessions may
+// not select or invoke agents whose triggers exclude "human" (such as the
+// built-in "explore" agent, which sets triggers: [agent]), while subagent
+// sessions are exempt from the restriction.
+func TestHumanAgentTriggerEnforcement(t *testing.T) {
+	ctx := context.Background()
+	_, ws, _, _, mgr := setupTestEnv(t, nil)
+	t.Cleanup(func() { _ = mgr.Close() })
+
+	// The built-in "explore" agent must be loaded and restricted to the
+	// "agent" trigger so the enforcement below is meaningful.
+	if snap, ok := ws.Catalog().GetAgent("explore"); ok {
+		if snap.Agent.CanHumanTrigger() {
+			t.Fatalf("expected built-in explore agent to exclude the human trigger, got triggers %v", snap.Agent.Triggers)
+		}
+	} else {
+		t.Fatalf("expected built-in explore agent to be present in the catalog")
+	}
+
+	// 1. Creating a top-level session with a restricted agent fails.
+	if _, _, err := mgr.Create(ctx, api.CreateSessionRequest{
+		Title:  "Restricted",
+		Config: api.SessionConfig{Agent: "explore"},
+	}); !errors.Is(err, ErrInvalidConfig) {
+		t.Errorf("Create with restricted agent err = %v, want ErrInvalidConfig", err)
+	}
+
+	// 2. Previewing a session with a restricted agent fails.
+	if _, _, _, _, err := mgr.Preview(ctx, api.SessionConfig{Agent: "explore"}); !errors.Is(err, ErrInvalidConfig) {
+		t.Errorf("Preview with restricted agent err = %v, want ErrInvalidConfig", err)
+	}
+
+	// 3. Updating an existing top-level session to a restricted agent fails.
+	sess, _, err := mgr.Create(ctx, api.CreateSessionRequest{Title: "Mutable"})
+	if err != nil {
+		t.Fatalf("Create base session err: %v", err)
+	}
+	if _, err := mgr.Update(ctx, sess.ID, api.UpdateSessionRequest{
+		Config: api.SessionConfig{Agent: "explore"},
+	}); !errors.Is(err, ErrInvalidConfig) {
+		t.Errorf("Update to restricted agent err = %v, want ErrInvalidConfig", err)
+	}
+	// The session agent must remain unchanged after the rejected update.
+	if got := sess.Config.Agent; got == "explore" {
+		t.Errorf("expected session agent to remain unchanged after rejected update, got %q", got)
+	}
+
+	// 4. Spawning "explore" as a subagent (with a parent) succeeds.
+	parent, _, err := mgr.Create(ctx, api.CreateSessionRequest{Title: "Parent"})
+	if err != nil {
+		t.Fatalf("Create parent session err: %v", err)
+	}
+	child, err := New(ctx, Config{
+		Title:       "Child",
+		ParentID:    parent.ID,
+		Parent:      parent,
+		Session:     api.SessionConfig{Agent: "explore"},
+		DB:          mgr.cfg.DB,
+		Workspace:   ws,
+		Gateway:     mgr.cfg.Gateway,
+		Permissions: mgr.cfg.Permissions,
+		Publisher:   mgr.cfg.Publisher,
+		Logger:      mgr.cfg.Logger,
+	})
+	if err != nil {
+		t.Fatalf("New subagent with restricted agent err = %v, want nil", err)
+	}
+	defer child.Close()
+	if child.Config.Agent != "explore" {
+		t.Errorf("expected subagent agent %q, got %q", "explore", child.Config.Agent)
 	}
 }

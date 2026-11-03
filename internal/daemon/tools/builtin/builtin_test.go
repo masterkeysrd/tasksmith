@@ -71,10 +71,11 @@ func setupBuiltinEnv(t *testing.T, allowLoopback bool) (string, tools.Container,
 	})
 
 	builtinTools, err := builtin.New(builtin.Config{
-		Std:       stdLib,
-		Sandbox:   sb,
-		Guard:     guard,
-		Workspace: ws,
+		Std:          stdLib,
+		Sandbox:      sb,
+		Guard:        guard,
+		Workspace:    ws,
+		AllowedTools: ws.Catalog().ToolNames(),
 	})
 	if err != nil {
 		t.Fatalf("builtin.New failed: %v", err)
@@ -88,11 +89,12 @@ func setupBuiltinEnv(t *testing.T, allowLoopback bool) (string, tools.Container,
 	}
 
 	container, err := tools.NewContainer(tools.Config{
-		Tools:     builtinTools,
-		Sandbox:   sb,
-		Workspace: ws,
-		Logger:    log.Default(),
-		Spiller:   sp,
+		Tools:        builtinTools,
+		Sandbox:      sb,
+		Workspace:    ws,
+		Logger:       log.Default(),
+		Spiller:      sp,
+		AllowedTools: ws.Catalog().ToolNames(),
 	})
 	if err != nil {
 		t.Fatalf("tools.NewContainer failed: %v", err)
@@ -144,6 +146,7 @@ func TestBuiltinConfigValidate(t *testing.T) {
 	}
 	cfgWithEmptyWS := valid
 	cfgWithEmptyWS.Workspace = emptyWS
+	cfgWithEmptyWS.AllowedTools = []string{builtin.ToolView}
 	if _, err := builtin.New(cfgWithEmptyWS); !errors.Is(err, tools.ErrToolNotFound) {
 		t.Fatalf("expected tools.ErrToolNotFound when workspace lacks built-in manifests, got %v", err)
 	}
@@ -818,10 +821,11 @@ func TestSessionOutputsAndOutsidePathOperations(t *testing.T) {
 	})
 
 	builtinTools, err := builtin.New(builtin.Config{
-		Std:       stdLib,
-		Sandbox:   sb,
-		Guard:     guard,
-		Workspace: ws,
+		Std:          stdLib,
+		Sandbox:      sb,
+		Guard:        guard,
+		Workspace:    ws,
+		AllowedTools: ws.Catalog().ToolNames(),
 	})
 	if err != nil {
 		t.Fatalf("builtin.New failed: %v", err)
@@ -835,11 +839,12 @@ func TestSessionOutputsAndOutsidePathOperations(t *testing.T) {
 	}
 
 	c, err := tools.NewContainer(tools.Config{
-		Tools:     builtinTools,
-		Sandbox:   sb,
-		Workspace: ws,
-		Logger:    log.Default(),
-		Spiller:   sp,
+		Tools:        builtinTools,
+		Sandbox:      sb,
+		Workspace:    ws,
+		Logger:       log.Default(),
+		Spiller:      sp,
+		AllowedTools: ws.Catalog().ToolNames(),
 	})
 	if err != nil {
 		t.Fatalf("tools.NewContainer failed: %v", err)
@@ -1254,11 +1259,11 @@ func TestBuiltinCustomizationSkillAndReference(t *testing.T) {
 		t.Fatal(err)
 	}
 	guard := shellguard.New(shellguard.Config{WorkspaceDir: dir, ReadDirs: []string{builtinDir}})
-	builtins, err := builtin.New(builtin.Config{Std: stdLib, Sandbox: sb, Guard: guard, Workspace: ws, Skills: resolved.Skills})
+	builtins, err := builtin.New(builtin.Config{Std: stdLib, Sandbox: sb, Guard: guard, Workspace: ws, Skills: resolved.Skills, AllowedTools: ws.Catalog().ToolNames()})
 	if err != nil {
 		t.Fatal(err)
 	}
-	container, err := tools.NewContainer(tools.Config{Tools: builtins, Sandbox: sb, Workspace: ws, Logger: log.Default()})
+	container, err := tools.NewContainer(tools.Config{Tools: builtins, Sandbox: sb, Workspace: ws, Logger: log.Default(), AllowedTools: ws.Catalog().ToolNames()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1331,20 +1336,22 @@ Deploying image {{.image}}:{{.tag}}
 	}
 	guard := shellguard.New(shellguard.Config{WorkspaceDir: dir})
 	mainTools, err := builtin.New(builtin.Config{
-		Std:       stdLib,
-		Sandbox:   sb,
-		Guard:     guard,
-		Workspace: ws,
-		Skills:    resolvedMain.Skills,
+		Std:          stdLib,
+		Sandbox:      sb,
+		Guard:        guard,
+		Workspace:    ws,
+		Skills:       resolvedMain.Skills,
+		AllowedTools: ws.Catalog().ToolNames(),
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	agentContainer, err := tools.NewContainer(tools.Config{
-		Tools:     mainTools,
-		Sandbox:   sb,
-		Workspace: ws,
-		Logger:    log.Default(),
+		Tools:        mainTools,
+		Sandbox:      sb,
+		Workspace:    ws,
+		Logger:       log.Default(),
+		AllowedTools: ws.Catalog().ToolNames(),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1449,20 +1456,22 @@ Restricted agent instructions.
 
 	guard = shellguard.New(shellguard.Config{WorkspaceDir: dir})
 	scopedTools, err := builtin.New(builtin.Config{
-		Std:       stdLib,
-		Sandbox:   sb,
-		Guard:     guard,
-		Workspace: ws,
-		Skills:    skills,
+		Std:          stdLib,
+		Sandbox:      sb,
+		Guard:        guard,
+		Workspace:    ws,
+		Skills:       skills,
+		AllowedTools: ws.Catalog().ToolNames(),
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	scopedContainer, err := tools.NewContainer(tools.Config{
-		Tools:     scopedTools,
-		Sandbox:   sb,
-		Workspace: ws,
-		Logger:    log.Default(),
+		Tools:        scopedTools,
+		Sandbox:      sb,
+		Workspace:    ws,
+		Logger:       log.Default(),
+		AllowedTools: ws.Catalog().ToolNames(),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1508,20 +1517,22 @@ Restricted agent instructions.
 		t.Fatal(err)
 	}
 	bigTools, err := builtin.New(builtin.Config{
-		Std:       stdLib,
-		Sandbox:   sb,
-		Guard:     guard,
-		Workspace: ws,
-		Skills:    resolvedBig.Skills,
+		Std:          stdLib,
+		Sandbox:      sb,
+		Guard:        guard,
+		Workspace:    ws,
+		Skills:       resolvedBig.Skills,
+		AllowedTools: ws.Catalog().ToolNames(),
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	bigContainer, err := tools.NewContainer(tools.Config{
-		Tools:     bigTools,
-		Sandbox:   sb,
-		Workspace: ws,
-		Logger:    log.Default(),
+		Tools:        bigTools,
+		Sandbox:      sb,
+		Workspace:    ws,
+		Logger:       log.Default(),
+		AllowedTools: ws.Catalog().ToolNames(),
 	})
 	if err != nil {
 		t.Fatal(err)

@@ -42,6 +42,8 @@ func thinkingDisplay(setting *api.ThinkingSetting) string {
 			return "thinking on"
 		}
 		return "thinking off"
+	case "adaptive":
+		return "adaptive"
 	}
 	return ThinkingProviderDefault
 }

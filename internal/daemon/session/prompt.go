@@ -476,6 +476,9 @@ func Preview(ctx context.Context, ws *workspace.Workspace, catalog *models.Catal
 	if err != nil {
 		return api.SessionConfig{}, models.Model{}, nil, false, err
 	}
+	if err := validateHumanAgentTrigger(ws, resolvedConfig.Agent); err != nil {
+		return api.SessionConfig{}, models.Model{}, nil, false, err
+	}
 	modelID := models.ID(resolvedConfig.Model)
 
 	diagnostics := modelDiagnostics(ws, catalog, resolvedConfig)
@@ -486,4 +489,18 @@ func Preview(ctx context.Context, ws *workspace.Workspace, catalog *models.Catal
 		resolvedModel, found = catalog.Get(modelID)
 	}
 	return resolvedConfig, resolvedModel, diagnostics, found, nil
+}
+
+// validateHumanAgentTrigger returns an error when a top-level human session
+// attempts to use an agent whose triggers exclude "human". Subagent sessions
+// (which set a Parent or ParentID) are not subject to this check.
+func validateHumanAgentTrigger(ws *workspace.Workspace, agentName string) error {
+	if ws == nil || ws.Catalog() == nil || strings.TrimSpace(agentName) == "" {
+		return nil
+	}
+	snap, ok := ws.Catalog().GetAgent(strings.TrimSpace(agentName))
+	if ok && !snap.Agent.CanHumanTrigger() {
+		return fmt.Errorf("%w: agent %q cannot be triggered by human (triggers: %s)", ErrInvalidConfig, snap.Agent.Name, strings.Join(snap.Agent.Triggers, ", "))
+	}
+	return nil
 }

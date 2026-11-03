@@ -13,8 +13,19 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/daemon/std"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tools"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tools/builtin"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/workspace"
 	"github.com/masterkeysrd/warp"
 )
+
+// subagentAllowedTools returns the full catalog tool names plus the dynamic
+// subagent tool names, so fail-closed allowlists can register subagent tools
+// in tests that previously relied on the nil-means-all semantics.
+func subagentAllowedTools(ws *workspace.Workspace) []string {
+	names := make([]string, 0, len(ws.Catalog().ToolNames())+2)
+	names = append(names, ws.Catalog().ToolNames()...)
+	names = append(names, builtin.ToolInvokeAgent, builtin.ToolManageAgents)
+	return names
+}
 
 type mockAgentManager struct {
 	invokeFunc func(ctx context.Context, in api.InvokeAgentInput) (api.InvokeAgentOutput, error)
@@ -47,10 +58,11 @@ func TestSubagentToolsRegistration(t *testing.T) {
 	guard := shellguard.New(shellguard.Config{WorkspaceDir: dir})
 
 	cfg := builtin.Config{
-		Std:       stdLib,
-		Sandbox:   sb,
-		Guard:     guard,
-		Workspace: ws,
+		Std:          stdLib,
+		Sandbox:      sb,
+		Guard:        guard,
+		Workspace:    ws,
+		AllowedTools: subagentAllowedTools(ws),
 	}
 
 	// Without Agents or Subagents, invoke_agent and manage_agents should NOT be present.
@@ -112,12 +124,13 @@ func TestInvokeAgentPrepareAndExecute(t *testing.T) {
 	}
 	mgr := &mockAgentManager{}
 	cfg := builtin.Config{
-		Std:       stdLib,
-		Sandbox:   sb,
-		Guard:     guard,
-		Workspace: ws,
-		Agents:    mgr,
-		Subagents: []*warp.Agent{exploreAgent},
+		Std:          stdLib,
+		Sandbox:      sb,
+		Guard:        guard,
+		Workspace:    ws,
+		Agents:       mgr,
+		Subagents:    []*warp.Agent{exploreAgent},
+		AllowedTools: subagentAllowedTools(ws),
 	}
 
 	builtinTools, err := builtin.New(cfg)
@@ -126,10 +139,11 @@ func TestInvokeAgentPrepareAndExecute(t *testing.T) {
 	}
 
 	container, err := tools.NewContainer(tools.Config{
-		Tools:     builtinTools,
-		Sandbox:   sb,
-		Workspace: ws,
-		Logger:    log.Default(),
+		Tools:        builtinTools,
+		Sandbox:      sb,
+		Workspace:    ws,
+		Logger:       log.Default(),
+		AllowedTools: subagentAllowedTools(ws),
 	})
 	if err != nil {
 		t.Fatalf("tools.NewContainer failed: %v", err)
@@ -247,12 +261,13 @@ func TestManageAgentsPrepareAndExecute(t *testing.T) {
 	}
 	mgr := &mockAgentManager{}
 	cfg := builtin.Config{
-		Std:       stdLib,
-		Sandbox:   sb,
-		Guard:     guard,
-		Workspace: ws,
-		Agents:    mgr,
-		Subagents: []*warp.Agent{generalAgent},
+		Std:          stdLib,
+		Sandbox:      sb,
+		Guard:        guard,
+		Workspace:    ws,
+		Agents:       mgr,
+		Subagents:    []*warp.Agent{generalAgent},
+		AllowedTools: subagentAllowedTools(ws),
 	}
 
 	builtinTools, err := builtin.New(cfg)
@@ -261,10 +276,11 @@ func TestManageAgentsPrepareAndExecute(t *testing.T) {
 	}
 
 	container, err := tools.NewContainer(tools.Config{
-		Tools:     builtinTools,
-		Sandbox:   sb,
-		Workspace: ws,
-		Logger:    log.Default(),
+		Tools:        builtinTools,
+		Sandbox:      sb,
+		Workspace:    ws,
+		Logger:       log.Default(),
+		AllowedTools: subagentAllowedTools(ws),
 	})
 	if err != nil {
 		t.Fatalf("tools.NewContainer failed: %v", err)

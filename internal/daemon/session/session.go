@@ -153,6 +153,15 @@ func New(ctx context.Context, cfg Config) (*Session, error) {
 		return nil, err
 	}
 
+	// A top-level human session (no parent) may only select agents that allow the
+	// "human" trigger. Subagent sessions inherit the caller's context and are
+	// exempt from this restriction.
+	if cfg.Parent == nil && strings.TrimSpace(cfg.ParentID) == "" {
+		if err := validateHumanAgentTrigger(cfg.Workspace, resolvedConfig.Agent); err != nil {
+			return nil, err
+		}
+	}
+
 	now := time.Now().UTC()
 	sess := &Session{
 		ID:        id,
@@ -568,6 +577,12 @@ func (s *Session) Update(ctx context.Context, req api.UpdateSessionRequest) erro
 	}
 	if agent := strings.TrimSpace(req.Config.Agent); agent != "" {
 		newConfig.Agent = agent
+		if s.ParentID == "" {
+			if err := validateHumanAgentTrigger(s.workspace, agent); err != nil {
+				s.Unlock()
+				return err
+			}
+		}
 	}
 	cat := s.catalog()
 	if model := models.ID(strings.TrimSpace(req.Config.Model)); model != "" {
@@ -814,14 +829,21 @@ func (s *Session) buildToolsForAgent(agentName string) (tools.Container, error) 
 
 	if agentName != "" {
 		if resolved, err := cat.ResolveAgent(agentName); err == nil && resolved != nil {
-			if resolved.Tools != nil {
-				allowedToolNames = make([]string, 0, len(resolved.Tools))
-				for _, t := range resolved.Tools {
-					allowedToolNames = append(allowedToolNames, t.Metadata.Name)
-				}
+			// An agent's resolved tool list is an explicit allowlist. A nil or
+			// empty list (e.g. policies.tools deny ["*"] or allow ["nonexistent"])
+			// grants zero tools rather than all tools.
+			allowedToolNames = make([]string, 0, len(resolved.Tools))
+			for _, t := range resolved.Tools {
+				allowedToolNames = append(allowedToolNames, t.Metadata.Name)
 			}
 			skills = resolved.Skills
 			subagents = resolved.Subagents
+		} else {
+			// No agent resolved (agentless workspace or unknown agent): fall back
+			// to every effective workspace tool.
+			for _, t := range cat.Tools() {
+				allowedToolNames = append(allowedToolNames, t.Metadata.Name)
+			}
 		}
 	}
 
