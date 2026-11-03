@@ -11,6 +11,7 @@ import (
 
 	"github.com/masterkeysrd/loom/llm"
 	"github.com/masterkeysrd/loom/message"
+	"github.com/masterkeysrd/loom/tool"
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
@@ -147,10 +148,18 @@ func (s *Session) resolveSlashCommand(msg message.Message) (message.Message, err
 
 	// 2. Try resolving as Skill
 	if sk, ok := cat.GetSkill(cmdKey); ok && sk.Def != nil {
+		// Resolve the active session agent so the skill template can reference
+		// {{.Agent.*}} fields.
+		var activeAgent *warp.Agent
+		if resolved, err := cat.ResolveAgent(s.Config.Agent); err == nil && resolved != nil {
+			activeAgent = resolved.Agent
+		}
+
 		positionalArgs, mergedGlobals := prepareSlashArgs(sk.Def.Spec.Arguments, rawArgs)
 		rendered, err := sk.Def.Render(&warp.SkillRenderOptions{
 			Workspace: cat.WorkspaceSpec(),
 			Project:   cat.Project(),
+			Agent:     activeAgent,
 			Args:      positionalArgs,
 			Globals:   mergedGlobals,
 		})
@@ -168,11 +177,35 @@ func (s *Session) resolveSlashCommand(msg message.Message) (message.Message, err
 
 		promptText := fmt.Sprintf("<embedded_skill name=%q%s>\n<instructions>\n%s\n</instructions>\n</embedded_skill>\n\nThe user invoked: %s%s\nFollow the skill instructions above.", sk.Name, pathAttr, rendered, text, pathNote)
 
-		newMsg := message.NewUserTextMeta(promptText, map[string]any{
-			"skill":   sk.Name,
-			"path":    skillPath,
-			"command": text,
-		})
+		// Activate the skill's policy-allowed deferred tools into the model's
+		// context by appending a tool-reference block for each deferred tool and
+		// an inline tool-definition block for any policy-allowed tool that is not
+		// registered in the session container.
+		skillTools, _ := cat.ToolsForSkill(s.Config.Agent, sk.Def.QualifiedName())
+		content := make(message.Content, 0, len(skillTools)+1)
+		content = append(content, &message.TextBlock{Text: promptText})
+		for _, wt := range skillTools {
+			if t, ok := s.Tools.Get(wt.Metadata.Name); ok {
+				// Eager tools are already in the model's context; only deferred
+				// tools need a reference block to be activated.
+				if t.Definition().DeferLoading {
+					content = append(content, &message.ToolReferenceBlock{ToolName: wt.Metadata.Name})
+				}
+				continue
+			}
+			if def, ok := cat.GetTool(wt.Metadata.Name); ok {
+				content = append(content, toolDefinitionBlock(def))
+			}
+		}
+
+		newMsg := &message.User{
+			Base: message.Base{Metadata: map[string]any{
+				"skill":   sk.Name,
+				"path":    skillPath,
+				"command": text,
+			}},
+			Content: content,
+		}
 		if msg.GetID() != "" {
 			newMsg.SetID(msg.GetID())
 		}
@@ -180,6 +213,20 @@ func (s *Session) resolveSlashCommand(msg message.Message) (message.Message, err
 	}
 
 	return msg, nil
+}
+
+// toolDefinitionBlock builds an inline tool-definition block for a warp.Tool that
+// is policy-allowed but not registered in the session container, so the model can
+// invoke it mid-conversation.
+func toolDefinitionBlock(wt *warp.Tool) *message.ToolDefinitionBlock {
+	def := tool.Definition{
+		Name:        wt.Metadata.Name,
+		Description: wt.Spec.Instructions,
+	}
+	if def.Description == "" {
+		def.Description = wt.Metadata.Description
+	}
+	return def.ToBlock()
 }
 
 func (s *Session) generateTitle(userText string) {

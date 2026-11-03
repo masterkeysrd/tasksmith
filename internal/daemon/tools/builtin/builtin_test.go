@@ -1561,6 +1561,416 @@ Restricted agent instructions.
 	}
 }
 
+// TestLoadSkillToolActivatesDeferredTools verifies that loading a skill whose
+// spec.tools are deferred activates them into the model's context via
+// tool-reference blocks, while omitting already-eager tools and policy-denied
+// tools.
+func TestLoadSkillToolActivatesDeferredTools(t *testing.T) {
+	ctx := context.Background()
+	dir, _, stdLib, sb, ws := setupBuiltinEnv(t, false)
+
+	// The skill declares view (deferred), load_skill (eager), and bash
+	// (policy-denied) so the result can be asserted precisely.
+	skillsDir := filepath.Join(dir, ".agents", "skills")
+	if err := os.MkdirAll(skillsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	skillContent := `---
+apiVersion: warp/v1alpha1
+kind: Skill
+metadata:
+  name: deferred-skill
+  description: Skill that activates deferred tools
+spec:
+  tools:
+    - view
+    - load_skill
+    - bash
+---
+Deferred skill instructions.`
+	if err := os.WriteFile(filepath.Join(skillsDir, "deferred-skill.skill.md"), []byte(skillContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Agent: load_skill is eager (in spec.tools); view is policy-allowed but not
+	// in spec.tools (deferred); bash is excluded by the agent policy ceiling.
+	agentsDir := filepath.Join(dir, ".agents")
+	if err := os.MkdirAll(agentsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	agentContent := `---
+apiVersion: warp/v1alpha1
+kind: Agent
+metadata:
+  name: skill-agent
+spec:
+  skills:
+    - deferred-skill
+  tools:
+    - load_skill
+  policies:
+    tools:
+      include:
+        - view
+        - load_skill
+      exclude:
+        - bash
+---
+Skill agent.`
+	if err := os.WriteFile(filepath.Join(agentsDir, "skill-agent.agent.md"), []byte(agentContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := ws.Reload(ctx); err != nil {
+		t.Fatalf("ws.Reload: %v", err)
+	}
+
+	resolved, err := ws.Catalog().ResolveAgent("skill-agent")
+	if err != nil {
+		t.Fatalf("ResolveAgent: %v", err)
+	}
+	partition := ws.Catalog().PartitionAgentTools(resolved)
+
+	// Sanity: view is deferred, load_skill is eager.
+	var viewDeferred, loadSkillEager bool
+	for _, name := range partition.Deferred {
+		if name == "view" {
+			viewDeferred = true
+		}
+	}
+	for _, name := range partition.Eager {
+		if name == "load_skill" {
+			loadSkillEager = true
+		}
+	}
+	if !viewDeferred {
+		t.Fatalf("expected view to be deferred, got deferred=%v", partition.Deferred)
+	}
+	if !loadSkillEager {
+		t.Fatalf("expected load_skill to be eager, got eager=%v", partition.Eager)
+	}
+
+	guard := shellguard.New(shellguard.Config{WorkspaceDir: dir})
+	allowed := append(append([]string{}, partition.Eager...), partition.Deferred...)
+	builtinTools, err := builtin.New(builtin.Config{
+		Std:           stdLib,
+		Sandbox:       sb,
+		Guard:         guard,
+		Workspace:     ws,
+		AllowedTools:  allowed,
+		DeferredTools: partition.Deferred,
+		Skills:        resolved.Skills,
+		AgentName:     "skill-agent",
+		Agent:         resolved.Agent,
+	})
+	if err != nil {
+		t.Fatalf("builtin.New: %v", err)
+	}
+	container, err := tools.NewContainer(tools.Config{
+		Tools:         builtinTools,
+		Sandbox:       sb,
+		Workspace:     ws,
+		Logger:        log.Default(),
+		AllowedTools:  allowed,
+		DeferredTools: partition.Deferred,
+	})
+	if err != nil {
+		t.Fatalf("tools.NewContainer: %v", err)
+	}
+
+	// view must be marked deferred in the container.
+	if vt, ok := container.Get("view"); ok && !vt.Definition().DeferLoading {
+		t.Fatalf("expected view to be marked DeferLoading in the container")
+	}
+
+	res, err := container.Execute(ctx, &message.ToolCall{
+		ID:   "call-load-deferred",
+		Name: builtin.ToolLoadSkill,
+		Args: map[string]any{"skill": "deferred-skill"},
+	})
+	if err != nil {
+		t.Fatalf("Execute load_skill: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("unexpected tool error: %s", res.Content.Text())
+	}
+
+	// The result must contain the skill's text instructions and a
+	// ToolReferenceBlock for the deferred view tool, but no reference for the
+	// eager load_skill or the policy-denied bash tool.
+	var hasText, hasViewRef, hasLoadSkillRef, hasBashRef bool
+	for _, b := range res.Content {
+		switch blk := b.(type) {
+		case *message.TextBlock:
+			if strings.Contains(blk.Text, "Deferred skill instructions.") {
+				hasText = true
+			}
+		case *message.ToolReferenceBlock:
+			switch blk.ToolName {
+			case "view":
+				hasViewRef = true
+			case "load_skill":
+				hasLoadSkillRef = true
+			case "bash":
+				hasBashRef = true
+			}
+		}
+	}
+	if !hasText {
+		t.Errorf("expected skill text instructions in result, got %+v", res.Content)
+	}
+	if !hasViewRef {
+		t.Errorf("expected ToolReferenceBlock for deferred view, got %+v", res.Content)
+	}
+	if hasLoadSkillRef {
+		t.Errorf("did not expect ToolReferenceBlock for eager load_skill, got %+v", res.Content)
+	}
+	if hasBashRef {
+		t.Errorf("did not expect ToolReferenceBlock for policy-denied bash, got %+v", res.Content)
+	}
+
+	// The structured output lists only the deferred view tool.
+	out, ok := res.StructuredContent.(api.LoadSkillOutput)
+	if !ok {
+		t.Fatalf("expected api.LoadSkillOutput, got %T", res.StructuredContent)
+	}
+	if !slices.Equal(out.Tools, []string{"view"}) {
+		t.Errorf("LoadSkillOutput.Tools = %v, want [view]", out.Tools)
+	}
+}
+
+// TestLoadSkillToolRendersAgentName verifies that a skill template referencing
+// {{.Agent.Name}} renders the active agent's name when the skill is loaded via
+// load_skill, because the invoking agent is injected into SkillRenderOptions.
+func TestLoadSkillToolRendersAgentName(t *testing.T) {
+	ctx := context.Background()
+	dir, _, stdLib, sb, ws := setupBuiltinEnv(t, false)
+
+	skillsDir := filepath.Join(dir, ".agents", "skills")
+	if err := os.MkdirAll(skillsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	skillContent := `---
+apiVersion: warp/v1alpha1
+kind: Skill
+metadata:
+  name: agent-name-skill
+  description: Skill that references the active agent
+spec:
+  tools:
+    - load_skill
+---
+Active agent is {{.Agent.Name}}.`
+	if err := os.WriteFile(filepath.Join(skillsDir, "agent-name-skill.skill.md"), []byte(skillContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	agentsDir := filepath.Join(dir, ".agents")
+	if err := os.MkdirAll(agentsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	agentContent := `---
+apiVersion: warp/v1alpha1
+kind: Agent
+metadata:
+  name: name-agent
+spec:
+  skills:
+    - agent-name-skill
+  tools:
+    - load_skill
+  policies:
+    tools:
+      include:
+        - load_skill
+---
+Name agent.`
+	if err := os.WriteFile(filepath.Join(agentsDir, "name-agent.agent.md"), []byte(agentContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := ws.Reload(ctx); err != nil {
+		t.Fatalf("ws.Reload: %v", err)
+	}
+
+	resolved, err := ws.Catalog().ResolveAgent("name-agent")
+	if err != nil {
+		t.Fatalf("ResolveAgent: %v", err)
+	}
+
+	guard := shellguard.New(shellguard.Config{WorkspaceDir: dir})
+	allowed := ws.Catalog().ToolNames()
+	builtinTools, err := builtin.New(builtin.Config{
+		Std:          stdLib,
+		Sandbox:      sb,
+		Guard:        guard,
+		Workspace:    ws,
+		AllowedTools: allowed,
+		Skills:       resolved.Skills,
+		AgentName:    "name-agent",
+		Agent:        resolved.Agent,
+	})
+	if err != nil {
+		t.Fatalf("builtin.New: %v", err)
+	}
+	container, err := tools.NewContainer(tools.Config{
+		Tools:        builtinTools,
+		Sandbox:      sb,
+		Workspace:    ws,
+		Logger:       log.Default(),
+		AllowedTools: allowed,
+	})
+	if err != nil {
+		t.Fatalf("tools.NewContainer: %v", err)
+	}
+
+	res, err := container.Execute(ctx, &message.ToolCall{
+		ID:   "call-load-agent-name",
+		Name: builtin.ToolLoadSkill,
+		Args: map[string]any{"skill": "agent-name-skill"},
+	})
+	if err != nil {
+		t.Fatalf("Execute load_skill: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("unexpected tool error: %s", res.Content.Text())
+	}
+	if !strings.Contains(res.Content.Text(), "Active agent is name-agent") {
+		t.Errorf("expected rendered skill to contain active agent name, got: %q", res.Content.Text())
+	}
+}
+
+// TestLoadSkillToolQualifiedNames verifies that load_skill resolves a skill by
+// its short name, its "namespace/name" shorthand, and its fully qualified
+// "namespace/Kind/name" reference, reporting the canonical short name in every
+// case.
+func TestLoadSkillToolQualifiedNames(t *testing.T) {
+	ctx := context.Background()
+	dir, _, stdLib, sb, ws := setupBuiltinEnv(t, false)
+
+	skillsDir := filepath.Join(dir, ".agents", "skills")
+	if err := os.MkdirAll(skillsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	skillContent := `---
+apiVersion: warp/v1alpha1
+kind: Skill
+metadata:
+  name: qualified-skill
+  description: Skill resolvable by qualified name
+spec:
+  tools:
+    - load_skill
+---
+Qualified skill loaded.`
+	if err := os.WriteFile(filepath.Join(skillsDir, "qualified-skill.skill.md"), []byte(skillContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	agentsDir := filepath.Join(dir, ".agents")
+	if err := os.MkdirAll(agentsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	agentContent := `---
+apiVersion: warp/v1alpha1
+kind: Agent
+metadata:
+  name: qualified-agent
+spec:
+  skills:
+    - qualified-skill
+  tools:
+    - load_skill
+  policies:
+    tools:
+      include:
+        - load_skill
+---
+Qualified agent.`
+	if err := os.WriteFile(filepath.Join(agentsDir, "qualified-agent.agent.md"), []byte(agentContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := ws.Reload(ctx); err != nil {
+		t.Fatalf("ws.Reload: %v", err)
+	}
+
+	resolved, err := ws.Catalog().ResolveAgent("qualified-agent")
+	if err != nil {
+		t.Fatalf("ResolveAgent: %v", err)
+	}
+
+	// Discover the resolved skill's namespace so the qualified references are
+	// asserted precisely rather than hardcoded.
+	var qualifiedName, namespace string
+	for _, sk := range resolved.Skills {
+		if sk.Metadata.Name == "qualified-skill" {
+			qualifiedName = sk.QualifiedName()
+			namespace = sk.Namespace
+		}
+	}
+	if qualifiedName == "" {
+		t.Fatalf("expected qualified-skill to be resolved with a qualified name")
+	}
+
+	guard := shellguard.New(shellguard.Config{WorkspaceDir: dir})
+	allowed := ws.Catalog().ToolNames()
+	builtinTools, err := builtin.New(builtin.Config{
+		Std:          stdLib,
+		Sandbox:      sb,
+		Guard:        guard,
+		Workspace:    ws,
+		AllowedTools: allowed,
+		Skills:       resolved.Skills,
+		AgentName:    "qualified-agent",
+		Agent:        resolved.Agent,
+	})
+	if err != nil {
+		t.Fatalf("builtin.New: %v", err)
+	}
+	container, err := tools.NewContainer(tools.Config{
+		Tools:        builtinTools,
+		Sandbox:      sb,
+		Workspace:    ws,
+		Logger:       log.Default(),
+		AllowedTools: allowed,
+	})
+	if err != nil {
+		t.Fatalf("tools.NewContainer: %v", err)
+	}
+
+	refs := []string{
+		"qualified-skill",
+		namespace + "/qualified-skill",
+		qualifiedName,
+	}
+	for i, ref := range refs {
+		res, err := container.Execute(ctx, &message.ToolCall{
+			ID:   fmt.Sprintf("call-load-qualified-%d", i),
+			Name: builtin.ToolLoadSkill,
+			Args: map[string]any{"skill": ref},
+		})
+		if err != nil {
+			t.Fatalf("Execute load_skill(%q): %v", ref, err)
+		}
+		if res.IsError {
+			t.Errorf("expected load_skill(%q) to resolve, got error: %s", ref, res.Content.Text())
+		}
+		if !strings.Contains(res.Content.Text(), "Qualified skill loaded.") {
+			t.Errorf("expected load_skill(%q) to render skill body, got: %q", ref, res.Content.Text())
+		}
+		// The canonical short name must be reported regardless of the reference
+		// form used to look the skill up.
+		out, ok := res.StructuredContent.(api.LoadSkillOutput)
+		if !ok {
+			t.Fatalf("expected api.LoadSkillOutput, got %T", res.StructuredContent)
+		}
+		if out.Skill != "qualified-skill" {
+			t.Errorf("load_skill(%q) reported Skill=%q, want qualified-skill", ref, out.Skill)
+		}
+	}
+}
+
 func TestWriteEditRemoveDiffCap(t *testing.T) {
 	ctx := context.Background()
 	_, c, _, _, _ := setupBuiltinEnv(t, false)

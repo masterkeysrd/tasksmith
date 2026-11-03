@@ -19,7 +19,7 @@ A Skill has YAML frontmatter and a Markdown body. The body becomes `instructions
 | `metadata.name`, `description` | string | Identity and short description used for discovery. |
 | `spec.useWhen` | string | Guidance to the model about when the skill is relevant. |
 | `spec.keywords` | string[] | Semantic tags for discovery and prompting. |
-| `spec.tools` | string[] | Tool references associated with the skill. Declaring them does not itself grant tool access; agent policies and permissions still apply. |
+| `spec.tools` | string[] | Tool references or glob patterns required or used by this skill. When the skill is loaded via `load_skill` or `/name`, deferred tools in this list are automatically activated into the model's context via tool references without a separate `tool_search` call; already-eager tools need no activation. Declaring a tool does not bypass policy: `workspace.spec.policies.tools` and `agent.spec.policies.tools` remain the strict security ceiling, so a tool denied by policy is never activated. |
 | `spec.argumentHint` | string | Single-line usage hint shown by the CLI. |
 | `spec.arguments` | object[] | Structured parameters available to the instruction template. |
 
@@ -35,6 +35,8 @@ A Skill has YAML frontmatter and a Markdown body. The body becomes `instructions
 A named argument such as `table` is available as `$table`, `${table}`, or `{{.table}}` in the body. Positional values can also be referenced as `$1`, `$2`, and so on. The renderer interprets these as template expressions; use `$$` for a literal dollar sign. Required arguments without a value or default cause rendering to fail; the CLI also validates required slash arguments before sending them.
 
 Slash arguments can be positional in declaration order or named as `table=users` or `--table=users`. Named values take precedence over the corresponding positional value. The daemon splits slash input on whitespace, so do not assume shell-style quoting preserves multiword values. The `load_skill` tool instead accepts an argument map keyed by name.
+
+Beyond declared arguments, the invoking context is available to the template: `{{.Agent.Name}}` and `{{.Agent.Description}}` describe the active agent, and `{{.Workspace.Dir}}` and `{{.Project.Dir}}` expose the workspace and project root directories.
 
 ## Example
 

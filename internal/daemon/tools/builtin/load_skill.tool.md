@@ -40,6 +40,11 @@ spec:
       truncated:
         type: boolean
         description: Whether the skill instructions exceeded limits and were truncated.
+      tools:
+        type: array
+        description: Names of deferred skill tools activated into context.
+        items:
+          type: string
     required:
       - skill
       - instructions

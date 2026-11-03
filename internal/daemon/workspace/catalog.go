@@ -320,6 +320,7 @@ func (c *Catalog) populate() {
 					Keywords:     slices.Clone(sk.Spec.Keywords),
 					ArgumentHint: sk.Spec.ArgumentHint,
 					Arguments:    ToAPIArguments(sk.Spec.Arguments),
+					Tools:        slices.Clone(sk.Spec.Tools),
 					Namespace:    scopeNamespace,
 					Scope:        FormatSkillScope(scopeNamespace),
 					Instructions: sk.Spec.Instructions,
@@ -637,6 +638,7 @@ func (c *Catalog) GetSkill(name string) (SkillSnapshot, bool) {
 						Keywords:     slices.Clone(sk.Spec.Keywords),
 						ArgumentHint: sk.Spec.ArgumentHint,
 						Arguments:    ToAPIArguments(sk.Spec.Arguments),
+						Tools:        slices.Clone(sk.Spec.Tools),
 						Namespace:    scopeNamespace,
 						Scope:        FormatSkillScope(scopeNamespace),
 						Instructions: sk.Spec.Instructions,
@@ -648,6 +650,39 @@ func (c *Catalog) GetSkill(name string) (SkillSnapshot, bool) {
 		}
 	}
 	return SkillSnapshot{}, false
+}
+
+// ToolsForSkill resolves the tools declared by the skill referenced by skillRef
+// for the named agent (or the workspace default agent when agentName is empty),
+// enforcing both the workspace tool policy ceiling and the agent's full policy
+// ceiling (include, exclude, dangerous, openWorld, readOnly). When no agent is
+// active (agentless workspace), it resolves the skill's tools against the
+// workspace policy ceiling only.
+func (c *Catalog) ToolsForSkill(agentName, skillRef string) ([]*warp.Tool, error) {
+	if c == nil {
+		return nil, fmt.Errorf("catalog: nil catalog")
+	}
+	resolver := c.resolver()
+	if resolver == nil {
+		return nil, fmt.Errorf("catalog: no resolver available")
+	}
+
+	if agentName == "" {
+		agentName = c.DefaultAgentName()
+	}
+	if agentName != "" {
+		if resolved, err := c.ResolveAgent(agentName); err == nil && resolved != nil {
+			return resolved.ToolsForSkill(resolver, skillRef)
+		}
+	}
+
+	switch r := resolver.(type) {
+	case *warp.ScopedRegistry:
+		return r.ToolsForSkill(skillRef)
+	case *warp.Registry:
+		return r.ToolsForSkill(skillRef)
+	}
+	return nil, fmt.Errorf("catalog: resolver does not support ToolsForSkill")
 }
 
 // Commands returns all effective command snapshots in scope, sorted by metadata name.

@@ -578,6 +578,7 @@ Loads and renders instructions, coding conventions, or runbooks for a specialize
 | `path` | string | Base directory where the skill is located on disk, for resolving relative assets (scripts, references). |
 | `instructions` | string | Rendered instructions and guidelines populated from the skill package. |
 | `truncated` | boolean | `true` if the skill instructions exceeded size limits (500 lines / 32 KB) and were truncated. |
+| `tools` | array of strings | Names of deferred skill tools activated into context when the skill is loaded. |
 
 ```json
 {

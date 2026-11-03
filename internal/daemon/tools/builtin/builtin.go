@@ -41,6 +41,17 @@ type Config struct {
 	Skills       []warp.Skill
 	Subagents    []*warp.Agent
 	Agents       AgentManager
+	// AgentName is the active agent's name, used to resolve a loaded skill's
+	// declared tools against the agent's policy ceiling. When empty, the
+	// workspace default agent is used.
+	AgentName string
+	// Agent is the active agent definition, injected into skill render options
+	// so skill templates can reference {{.Agent.*}} fields.
+	Agent *warp.Agent
+	// DeferredTools is the set of tool names withheld from the initial model
+	// context (DeferLoading: true). Skill tools in this set are activated into
+	// context via tool references when the skill is loaded.
+	DeferredTools []string
 }
 
 // Validate ensures that all required dependencies are non-nil. Zero silent
@@ -119,7 +130,7 @@ func New(cfg Config) ([]tools.Tool, error) {
 		{ToolTodos, func(m tools.Metadata) tools.Tool { return tools.NewHandler(ToolTodos, m, &todosTool{}) }},
 		{ToolAskQuestion, func(m tools.Metadata) tools.Tool { return tools.NewHandler(ToolAskQuestion, m, &askQuestionTool{}) }},
 		{ToolLoadSkill, func(m tools.Metadata) tools.Tool {
-			return tools.NewHandler(ToolLoadSkill, m, newLoadSkillTool(cfg.Skills, cfg.Workspace))
+			return tools.NewHandler(ToolLoadSkill, m, newLoadSkillTool(cfg.Skills, cfg.Workspace, cfg.AgentName, cfg.Agent, cfg.DeferredTools))
 		}},
 	}
 

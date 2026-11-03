@@ -4421,6 +4421,128 @@ Follow these instructions carefully.`
 	}
 }
 
+// TestSessionSlashCommandActivatesDeferredSkillTools verifies that invoking a
+// /skill-name slash command activates the skill's deferred tools into the
+// expanded user message via tool-reference blocks, while policy-denied tools are
+// not activated and remain denied by the permission gate.
+func TestSessionSlashCommandActivatesDeferredSkillTools(t *testing.T) {
+	ctx := context.Background()
+	prov := &fakeProvider{
+		handler: func(_ context.Context, _ *llm.Request) ([]string, string, error) {
+			return []string{"Skill acknowledged."}, uuid.NewString(), nil
+		},
+	}
+	_, ws, _, _, mgr := setupTestEnv(t, prov)
+
+	wsDir := ws.RootDir()
+	agentsDir := filepath.Join(wsDir, ".agents")
+	if err := os.MkdirAll(agentsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// The skill declares view (deferred) and bash (policy-denied).
+	skillDir := filepath.Join(agentsDir, "skills", "slash-skill")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	skillContent := `---
+apiVersion: warp/v1alpha1
+kind: Skill
+metadata:
+  name: slash-skill
+  description: A skill that activates deferred tools
+spec:
+  tools:
+    - view
+    - bash
+---
+Follow these skill instructions.`
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte(skillContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Agent: load_skill is eager (in spec.tools); view is policy-allowed but not
+	// in spec.tools (deferred); bash is excluded by the agent policy ceiling.
+	agentContent := `---
+apiVersion: warp/v1alpha1
+kind: Agent
+metadata:
+  name: slash-agent
+spec:
+  skills:
+    - slash-skill
+  tools:
+    - load_skill
+  policies:
+    tools:
+      include:
+        - view
+        - load_skill
+      exclude:
+        - bash
+---
+Slash agent.`
+	if err := os.WriteFile(filepath.Join(agentsDir, "slash-agent.agent.md"), []byte(agentContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := ws.Reload(ctx); err != nil {
+		t.Fatalf("ws.Reload: %v", err)
+	}
+
+	sess, _, err := mgr.Create(ctx, api.CreateSessionRequest{
+		Title:  "Slash Skill Deferred Tools",
+		Config: api.SessionConfig{Agent: "slash-agent"},
+	})
+	if err != nil {
+		t.Fatalf("mgr.Create: %v", err)
+	}
+
+	// Resolve the /slash-skill slash invocation.
+	rendered, err := sess.resolveSlashCommand(message.NewUserText("/slash-skill do something"))
+	if err != nil {
+		t.Fatalf("resolveSlashCommand: %v", err)
+	}
+
+	// The expanded user message must contain the skill text and a
+	// ToolReferenceBlock for the deferred view tool, but no reference for the
+	// policy-denied bash tool.
+	var hasText, hasViewRef, hasBashRef bool
+	for _, b := range rendered.GetContent() {
+		switch blk := b.(type) {
+		case *message.TextBlock:
+			if strings.Contains(blk.Text, "Follow these skill instructions.") {
+				hasText = true
+			}
+		case *message.ToolReferenceBlock:
+			switch blk.ToolName {
+			case "view":
+				hasViewRef = true
+			case "bash":
+				hasBashRef = true
+			}
+		}
+	}
+	if !hasText {
+		t.Errorf("expected skill text instructions in expanded message, got %+v", rendered.GetContent())
+	}
+	if !hasViewRef {
+		t.Errorf("expected ToolReferenceBlock for deferred view, got %+v", rendered.GetContent())
+	}
+	if hasBashRef {
+		t.Errorf("did not expect ToolReferenceBlock for policy-denied bash, got %+v", rendered.GetContent())
+	}
+
+	// The permission gate continues to deny the excluded bash tool.
+	decision, _, err := sess.PermManager.Evaluate(&tools.Plan{ToolName: "bash", Action: api.ActionExec, Safety: api.SafetyUnsafe})
+	if err != nil {
+		t.Fatalf("PermManager.Evaluate: %v", err)
+	}
+	if decision != tools.AccessDeny {
+		t.Errorf("expected PermManager to deny bash, got %v", decision)
+	}
+}
+
 func TestDirectSessionPackageAPIs(t *testing.T) {
 	ctx := context.Background()
 	db, ws, gw, pub, _ := setupTestEnv(t, nil)

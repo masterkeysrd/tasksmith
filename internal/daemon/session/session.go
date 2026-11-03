@@ -856,6 +856,7 @@ func (s *Session) buildToolsForAgent(agentName string) (tools.Container, error) 
 	var deferredToolNames []string
 	var skills []warp.Skill
 	var subagents []*warp.Agent
+	var activeAgent *warp.Agent
 
 	if agentName != "" {
 		if resolved, err := cat.ResolveAgent(agentName); err == nil && resolved != nil {
@@ -869,6 +870,7 @@ func (s *Session) buildToolsForAgent(agentName string) (tools.Container, error) 
 			deferredToolNames = partition.Deferred
 			skills = resolved.Skills
 			subagents = resolved.Subagents
+			activeAgent = resolved.Agent
 		} else {
 			// No agent resolved (agentless workspace or unknown agent): fall back
 			// to every effective workspace tool.
@@ -892,15 +894,18 @@ func (s *Session) buildToolsForAgent(agentName string) (tools.Container, error) 
 	})
 
 	builtinTools, err := builtin.New(builtin.Config{
-		Std:          s.Std,
-		Sandbox:      s.Sandbox,
-		Guard:        guardInst,
-		Tasks:        s.Tasks,
-		Workspace:    s.workspace,
-		AllowedTools: allowedToolNames,
-		Skills:       skills,
-		Subagents:    subagents,
-		Agents:       s,
+		Std:           s.Std,
+		Sandbox:       s.Sandbox,
+		Guard:         guardInst,
+		Tasks:         s.Tasks,
+		Workspace:     s.workspace,
+		AllowedTools:  allowedToolNames,
+		DeferredTools: deferredToolNames,
+		Skills:        skills,
+		Subagents:     subagents,
+		Agents:        s,
+		AgentName:     agentName,
+		Agent:         activeAgent,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("session: initialize builtin tools: %w", err)

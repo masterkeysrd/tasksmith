@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -1574,4 +1575,161 @@ Full-access agent instructions.
 	if len(fullResolved.Tools) == 0 {
 		t.Error("expected full-access agent to resolve to all workspace tools, got 0")
 	}
+}
+
+// TestCatalogToolsForSkill verifies that api.Skill.Tools is populated from
+// spec.tools and that Catalog.ToolsForSkill resolves a skill's declared tools
+// even when they are absent from the agent's ambient spec.tools, while strictly
+// enforcing the workspace and agent tool policy ceilings.
+func TestCatalogToolsForSkill(t *testing.T) {
+	// Workspace policy ceiling denies all dangerous tools.
+	ws := &warp.Workspace{
+		Def: &warp.WorkspaceDef{
+			BaseResource: warp.BaseResource{
+				APIVersion: warp.APIVersion,
+				Kind:       warp.KindWorkspace,
+				Metadata:   warp.Metadata{Name: "skill-tools-ws"},
+			},
+			Spec: warp.WorkspaceDefSpec{
+				DefaultAgent: "main",
+				Policies: &warp.Policies{
+					Tools: &warp.ToolPolicies{Dangerous: warp.ToolPolicyDeny},
+				},
+			},
+		},
+	}
+
+	mkTool := func(name string, ann *warp.ToolAnnotation) *warp.Tool {
+		return &warp.Tool{
+			BaseResource: warp.BaseResource{
+				APIVersion: warp.APIVersion,
+				Kind:       warp.KindTool,
+				Namespace:  warp.NamespaceWorkspace,
+				Metadata:   warp.Metadata{Name: name},
+			},
+			Spec: warp.ToolSpec{Annotations: ann},
+		}
+	}
+	readFile := mkTool("read-file", &warp.ToolAnnotation{IsReadOnly: true})
+	writeFile := mkTool("write-file", nil)
+	bashTool := mkTool("bash", &warp.ToolAnnotation{IsDangerous: true})
+	webSearch := mkTool("web-search", &warp.ToolAnnotation{IsOpenWorld: true})
+
+	// The skill declares all four tools; none are ambient on the agent.
+	attachedSkill := &warp.Skill{
+		BaseResource: warp.BaseResource{
+			APIVersion: warp.APIVersion,
+			Kind:       warp.KindSkill,
+			Namespace:  warp.NamespaceWorkspace,
+			Metadata:   warp.Metadata{Name: "data-analyst"},
+		},
+		Spec: warp.SkillSpec{Tools: []string{"read-file", "write-file", "bash", "web-search"}},
+	}
+	// orphanSkill is not attached to any agent.
+	orphanSkill := &warp.Skill{
+		BaseResource: warp.BaseResource{
+			APIVersion: warp.APIVersion,
+			Kind:       warp.KindSkill,
+			Namespace:  warp.NamespaceWorkspace,
+			Metadata:   warp.Metadata{Name: "orphan"},
+		},
+		Spec: warp.SkillSpec{Tools: []string{"read-file"}},
+	}
+
+	// Agent "main" attaches data-analyst and further restricts via policies.tools:
+	//   readOnly: true    -> denies write-file (not read-only)
+	//   openWorld: deny   -> denies web-search
+	//   exclude: [write-file]
+	// The workspace policy denies bash (dangerous: deny).
+	mainAgent := &warp.Agent{
+		BaseResource: warp.BaseResource{
+			APIVersion: warp.APIVersion,
+			Kind:       warp.KindAgent,
+			Namespace:  warp.NamespaceWorkspace,
+			Metadata:   warp.Metadata{Name: "main"},
+		},
+		Spec: warp.AgentSpec{
+			Skills: []string{"data-analyst"},
+			Policies: &warp.Policies{
+				Tools: &warp.ToolPolicies{
+					ReadOnly:  true,
+					OpenWorld: warp.ToolPolicyDeny,
+					Exclude:   []string{"write-file"},
+				},
+			},
+		},
+	}
+
+	reg := warp.NewRegistry(ws)
+	for _, res := range []warp.Resource{readFile, writeFile, bashTool, webSearch, attachedSkill, orphanSkill, mainAgent} {
+		reg.Set(res.QualifiedName(), res)
+	}
+	if err := reg.Validate(); err != nil {
+		t.Fatalf("registry validation failed: %v", err)
+	}
+
+	cat := NewCatalog(reg, "", "")
+
+	// 1. api.Skill.Tools is populated from spec.tools in Skills() and GetSkill().
+	wantTools := []string{"read-file", "write-file", "bash", "web-search"}
+	skills := cat.Skills()
+	var dataAnalyst *SkillSnapshot
+	for i := range skills {
+		if skills[i].Name == "data-analyst" {
+			dataAnalyst = &skills[i]
+		}
+	}
+	if dataAnalyst == nil {
+		t.Fatal("expected data-analyst skill in Skills()")
+	}
+	if !slices.Equal(dataAnalyst.Tools, wantTools) {
+		t.Errorf("Skills() data-analyst Tools = %v, want %v", dataAnalyst.Tools, wantTools)
+	}
+
+	got, ok := cat.GetSkill("data-analyst")
+	if !ok {
+		t.Fatal("GetSkill(data-analyst) not found")
+	}
+	if !slices.Equal(got.Tools, wantTools) {
+		t.Errorf("GetSkill(data-analyst).Tools = %v, want %v", got.Tools, wantTools)
+	}
+
+	// 2. ToolsForSkill resolves the skill's declared tools even though none are
+	//    ambient on the agent, but strictly filters out tools denied by the
+	//    workspace or agent policy ceiling.
+	tools, err := cat.ToolsForSkill("main", "data-analyst")
+	if err != nil {
+		t.Fatalf("ToolsForSkill(main, data-analyst) error: %v", err)
+	}
+	gotNames := toolNames(t, tools)
+	if !slices.Equal(gotNames, []string{"read-file"}) {
+		t.Errorf("ToolsForSkill(main, data-analyst) = %v, want [read-file] "+
+			"(write-file denied by readOnly/exclude, bash denied by workspace dangerous:deny, web-search denied by agent openWorld:deny)", gotNames)
+	}
+
+	// 2b. The workspace default agent is used when agentName is empty.
+	if _, err := cat.ToolsForSkill("", "data-analyst"); err != nil {
+		t.Errorf("ToolsForSkill(\"\", data-analyst) using default agent error: %v", err)
+	}
+
+	// 3. ToolsForSkill returns an error when the skill is not enabled for the agent.
+	if _, err := cat.ToolsForSkill("main", "orphan"); err == nil {
+		t.Error("expected error when requesting tools for a skill not enabled for the agent, got nil")
+	}
+
+	// 4. A registry-less catalog guards against a nil resolver.
+	if _, err := NewCatalog(nil, "", "").ToolsForSkill("main", "data-analyst"); err == nil {
+		t.Error("expected error from registry-less catalog ToolsForSkill, got nil")
+	}
+}
+
+// toolNames returns the metadata names of tools sorted deterministically.
+func toolNames(t *testing.T, tools []*warp.Tool) []string {
+	t.Helper()
+	names := make([]string, 0, len(tools))
+	for _, tl := range tools {
+		names = append(names, tl.Metadata.Name)
+	}
+	slices.Sort(names)
+	return names
 }

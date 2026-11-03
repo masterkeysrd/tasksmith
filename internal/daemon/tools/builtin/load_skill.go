@@ -14,20 +14,41 @@ import (
 )
 
 type loadSkillTool struct {
-	skills map[string]*warp.Skill
-	ws     *workspace.Workspace
+	skills      map[string]*warp.Skill
+	ws          *workspace.Workspace
+	agentName   string
+	agent       *warp.Agent
+	deferredSet map[string]bool
 }
 
-func newLoadSkillTool(skills []warp.Skill, ws *workspace.Workspace) *loadSkillTool {
-	allowed := make(map[string]*warp.Skill, len(skills))
+func newLoadSkillTool(skills []warp.Skill, ws *workspace.Workspace, agentName string, agent *warp.Agent, deferredTools []string) *loadSkillTool {
+	allowed := make(map[string]*warp.Skill, len(skills)*3)
 	for i := range skills {
 		sk := &skills[i]
+		// Index each skill by its short name, its fully qualified
+		// "namespace/Kind/name" reference, and the "namespace/name" shorthand so
+		// load_skill accepts any of the three forms. The short name is added
+		// last so it wins when a namespace collides with a short name.
+		if qualified := sk.QualifiedName(); qualified != "" {
+			allowed[strings.ToLower(qualified)] = sk
+		}
+		if sk.Namespace != "" {
+			allowed[strings.ToLower(sk.Namespace+"/"+sk.Metadata.Name)] = sk
+		}
 		allowed[strings.ToLower(sk.Metadata.Name)] = sk
 	}
 
+	deferredSet := make(map[string]bool, len(deferredTools))
+	for _, name := range deferredTools {
+		deferredSet[strings.ToLower(name)] = true
+	}
+
 	return &loadSkillTool{
-		skills: allowed,
-		ws:     ws,
+		skills:      allowed,
+		ws:          ws,
+		agentName:   agentName,
+		agent:       agent,
+		deferredSet: deferredSet,
 	}
 }
 
@@ -69,6 +90,7 @@ func (t *loadSkillTool) Execute(_ context.Context, in api.LoadSkillInput) (api.L
 	rendered, err := sk.Render(&warp.SkillRenderOptions{
 		Workspace: wsSpec,
 		Project:   project,
+		Agent:     t.agent,
 		Args:      positionalArgs,
 		Globals:   globals,
 	})
@@ -83,12 +105,75 @@ func (t *loadSkillTool) Execute(_ context.Context, in api.LoadSkillInput) (api.L
 
 	instructions, truncated := truncateSkillInstructions(rendered, skillPath)
 
-	return api.LoadSkillOutput{
-		Skill:        name,
+	out := api.LoadSkillOutput{
+		Skill:        sk.Metadata.Name,
 		Path:         skillPath,
 		Instructions: instructions,
 		Truncated:    truncated,
-	}, nil
+	}
+
+	// Resolve the skill's declared tools against the workspace and agent policy
+	// ceilings and activate the deferred ones into the model's context via
+	// tool-reference blocks (rendered by LoadSkillOutput.ToolContent).
+	if t.ws != nil && t.ws.Catalog() != nil {
+		skillRef := sk.QualifiedName()
+		if skillRef == "" {
+			skillRef = sk.Metadata.Name
+		}
+		if skillTools, err := t.ws.Catalog().ToolsForSkill(t.agentName, skillRef); err == nil {
+			out.Tools = t.deferredSkillToolNames(skillTools)
+		}
+	}
+
+	return out, nil
+}
+
+// deferredSkillToolNames returns the names of the policy-allowed skill tools that
+// are currently deferred (DeferLoading: true), deduplicated and in deterministic
+// order. When an explicit deferred set was configured, a tool is activated only
+// when it appears in that set; otherwise a tool is activated when it is not part
+// of the active agent's eager resolved tools.
+func (t *loadSkillTool) deferredSkillToolNames(skillTools []*warp.Tool) []string {
+	if len(skillTools) == 0 {
+		return nil
+	}
+
+	deferred := t.deferredSet
+	if len(deferred) == 0 {
+		deferred = t.derivedDeferredSet()
+	}
+	if len(deferred) == 0 {
+		return nil
+	}
+
+	var names []string
+	seen := make(map[string]bool)
+	for _, wt := range skillTools {
+		name := wt.Metadata.Name
+		if !deferred[strings.ToLower(name)] || seen[name] {
+			continue
+		}
+		seen[name] = true
+		names = append(names, name)
+	}
+	return names
+}
+
+// derivedDeferredSet computes the deferred tool set from the active agent's
+// partition when no explicit deferred set was configured on the tool.
+func (t *loadSkillTool) derivedDeferredSet() map[string]bool {
+	set := make(map[string]bool)
+	if t.ws == nil || t.ws.Catalog() == nil {
+		return set
+	}
+	resolved, err := t.ws.Catalog().ResolveAgent(t.agentName)
+	if err != nil || resolved == nil {
+		return set
+	}
+	for _, name := range t.ws.Catalog().PartitionAgentTools(resolved).Deferred {
+		set[strings.ToLower(name)] = true
+	}
+	return set
 }
 
 func truncateSkillInstructions(rendered, skillPath string) (string, bool) {

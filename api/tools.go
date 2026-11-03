@@ -171,10 +171,11 @@ type LoadSkillInput struct {
 
 // LoadSkillOutput defines the structured output of the load_skill tool.
 type LoadSkillOutput struct {
-	Skill        string `json:"skill" jsonschema:"Name of the skill that was loaded."`
-	Instructions string `json:"instructions" jsonschema:"Rendered instructions and domain guidelines for the skill."`
-	Path         string `json:"path,omitempty" jsonschema:"Base directory where the skill is located on disk, for resolving relative assets (scripts, references)."`
-	Truncated    bool   `json:"truncated,omitempty" jsonschema:"Whether the skill instructions exceeded limits and were truncated."`
+	Skill        string   `json:"skill" jsonschema:"Name of the skill that was loaded."`
+	Instructions string   `json:"instructions" jsonschema:"Rendered instructions and domain guidelines for the skill."`
+	Path         string   `json:"path,omitempty" jsonschema:"Base directory where the skill is located on disk, for resolving relative assets (scripts, references)."`
+	Tools        []string `json:"tools,omitempty" jsonschema:"Names of deferred skill tools activated into context."`
+	Truncated    bool     `json:"truncated,omitempty" jsonschema:"Whether the skill instructions exceeded limits and were truncated."`
 }
 
 // LsEntry represents an item in entries.

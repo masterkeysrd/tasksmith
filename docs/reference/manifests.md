@@ -250,6 +250,10 @@ spec:
       description: Target database table being modified
       required: false
       default: "users"
+  tools:
+    - view
+    - bash
+    - grep
 ---
 
 # PostgreSQL Migration Rules
@@ -267,6 +271,7 @@ spec:
 | `keywords` | array of strings | List of keywords that trigger skill discovery. |
 | `argumentHint` | string | Usage signature hint displayed during autocomplete and validation. |
 | `arguments` | array of objects | Structured parameter declarations accepted by this skill. |
+| `tools` | array of strings | Tool references or glob patterns required or used by this skill. Deferred tools in this list are automatically activated into context when the skill is loaded, subject to workspace and agent tool policy ceilings. |
 
 *The Markdown body below the frontmatter contains the domain instructions.*
 

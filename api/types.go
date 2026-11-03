@@ -108,6 +108,7 @@ type Skill struct {
 	Keywords     []string   `json:"keywords,omitempty"`
 	ArgumentHint string     `json:"argument_hint,omitempty"`
 	Arguments    []Argument `json:"arguments,omitempty"`
+	Tools        []string   `json:"tools,omitempty"`
 	Namespace    string     `json:"namespace,omitempty"`
 	Scope        string     `json:"scope,omitempty"`
 	Instructions string     `json:"instructions,omitempty"`
