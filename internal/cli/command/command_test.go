@@ -501,3 +501,48 @@ func TestWorkspaceCommandsAndSkillsSlashExecutionAndValidation(t *testing.T) {
 		t.Errorf("missing candidates: review=%v, git/review=%v, deploy=%v", foundReview, foundPluginReview, foundDeploy)
 	}
 }
+
+func TestAgentTriggerDisplayAndRestriction(t *testing.T) {
+	// 1. The trigger badge and agent description surface trigger info in the
+	// picker and autocomplete (both AgentPicker and completeAgents use these
+	// helpers to build their descriptions).
+	if got := triggerBadge(nil); got != "triggers: all" {
+		t.Errorf("triggerBadge(nil) = %q, want %q", got, "triggers: all")
+	}
+	if got := triggerBadge([]string{"agent"}); got != "triggers: agent" {
+		t.Errorf("triggerBadge([agent]) = %q, want %q", got, "triggers: agent")
+	}
+	if got := agentDescription(api.Agent{Name: "main", Description: "Default coding persona"}); got != "Default coding persona [triggers: all]" {
+		t.Errorf("agentDescription (unrestricted) = %q", got)
+	}
+	if got := agentDescription(api.Agent{Name: "explore", Description: "Fast read-only explorer", Triggers: []string{"agent"}}); got != "Fast read-only explorer [triggers: agent]" {
+		t.Errorf("agentDescription (restricted) = %q", got)
+	}
+	if got := agentDescription(api.Agent{Name: "x", Triggers: []string{"agent"}}); got != "[triggers: agent]" {
+		t.Errorf("agentDescription without description = %q", got)
+	}
+
+	// 2. /agent <restricted> is rejected when the agent excludes the human trigger.
+	store.ResetSession()
+	store.ResetApp()
+	defer store.ResetSession()
+	defer store.ResetApp()
+
+	store.SetWorkspaceAgents([]api.Agent{
+		{Name: "main", Description: "Default coding persona"},
+		{Name: "explore", Description: "Fast read-only explorer", Triggers: []string{"agent"}},
+	})
+
+	r := NewRegistry()
+	if err := r.Execute("/agent explore"); err == nil || !strings.Contains(err.Error(), "cannot be triggered by human") {
+		t.Fatalf("expected /agent explore to be rejected, got: %v", err)
+	}
+
+	// A human-triggerable agent is accepted and set on the draft session.
+	if err := r.Execute("/agent main"); err != nil {
+		t.Fatalf("expected /agent main to succeed, got: %v", err)
+	}
+	if store.GetSession().Config.Agent != "main" {
+		t.Errorf("expected agent main to be set, got %q", store.GetSession().Config.Agent)
+	}
+}

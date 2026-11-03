@@ -275,7 +275,18 @@ var ModelPicker = trail.FC("ModelPicker", func(slotID string) trail.Node {
 
 func handleAgent(args []string) error {
 	if len(args) > 0 && strings.TrimSpace(args[0]) != "" {
-		store.SetAgent(strings.TrimSpace(args[0]))
+		agentName := strings.TrimSpace(args[0])
+		if agents := store.GetApp().Agents; agents != nil {
+			for _, a := range *agents {
+				if a.Name == agentName {
+					if !a.CanHumanTrigger() {
+						return fmt.Errorf("agent %q cannot be triggered by human (triggers: %s)", a.Name, strings.Join(a.Triggers, ", "))
+					}
+					break
+				}
+			}
+		}
+		store.SetAgent(agentName)
 		return nil
 	}
 
@@ -284,6 +295,25 @@ func handleAgent(args []string) error {
 		Data: AgentPicker,
 	})
 	return nil
+}
+
+// triggerBadge formats the trigger badge shown alongside an agent so the picker
+// and autocomplete surface which caller types may invoke it. An empty trigger
+// list means the agent is unrestricted.
+func triggerBadge(triggers []string) string {
+	if len(triggers) == 0 {
+		return "triggers: all"
+	}
+	return "triggers: " + strings.Join(triggers, ", ")
+}
+
+// agentDescription formats an agent's description with a trigger badge.
+func agentDescription(a api.Agent) string {
+	badge := triggerBadge(a.Triggers)
+	if a.Description != "" {
+		return fmt.Sprintf("%s [%s]", a.Description, badge)
+	}
+	return "[" + badge + "]"
 }
 
 // AgentPicker renders an interactive agent picker querying daemon agents via wind.
@@ -335,13 +365,22 @@ var AgentPicker = trail.FC("AgentPicker", func(slotID string) trail.Node {
 		opts[i] = uicomponents.Option{
 			Value:       a.Name,
 			Label:       a.Name,
-			Description: a.Description,
+			Description: agentDescription(a),
 			Current:     a.Name == currentAgent,
 		}
 	}
 
 	picker := components.NewPicker("Select agent:", opts, func(opt uicomponents.Option) {
 		store.RemoveSlot(slotID)
+		for _, a := range result.Data {
+			if a.Name == opt.Value {
+				if !a.CanHumanTrigger() {
+					store.AppendError("Error", fmt.Sprintf("Agent %q cannot be triggered by human (triggers: %s)", a.Name, strings.Join(a.Triggers, ", ")))
+					return
+				}
+				break
+			}
+		}
 		store.SetAgent(opt.Value)
 	})
 	picker.Filterable = true

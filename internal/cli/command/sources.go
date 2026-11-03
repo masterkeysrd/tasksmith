@@ -141,7 +141,7 @@ func completeAgents(ctx context.Context, _ autocomplete.Request) ([]autocomplete
 		candidates[i] = autocomplete.Candidate{
 			Value:       a.Name,
 			Label:       a.Name,
-			Description: a.Description,
+			Description: agentDescription(a),
 		}
 	}
 	return candidates, nil
