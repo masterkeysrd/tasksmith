@@ -49,20 +49,7 @@ var tasksBar = trail.FC("TasksBar", func(props tasksBarProps) trail.Node {
 		if title == "" {
 			title = sub.ID
 		}
-		activity := strings.TrimSpace(strings.ReplaceAll(sub.Activity, "\n", " "))
-		if activity == "" {
-			if sub.Status == api.StatusWaitingPermission {
-				activity = "Waiting for permission"
-			} else if sub.Status == api.StatusWaitingQuestion {
-				activity = "Waiting for answer"
-			} else if sub.Status == api.StatusThinking {
-				activity = "Thinking..."
-			} else if sub.Status == api.StatusGenerating {
-				activity = "Generating"
-			} else if sub.Status != "" {
-				activity = string(sub.Status)
-			}
-		}
+		activity := subagentActivityText(sub)
 		if runes := []rune(activity); len(runes) > 60 {
 			activity = string(runes[:60]) + "..."
 		}
@@ -143,6 +130,34 @@ var tasksBar = trail.FC("TasksBar", func(props tasksBarProps) trail.Node {
 			Width(style.Percent(100)),
 	}, rows...)
 })
+
+// subagentActivityText describes what a running subagent is doing. The daemon
+// reports a live activity line while one is available; otherwise the status
+// alone is shown.
+func subagentActivityText(sub api.Session) string {
+	activity := strings.TrimSpace(strings.ReplaceAll(sub.Activity, "\n", " "))
+	if activity != "" {
+		return activity
+	}
+	switch sub.Status {
+	case api.StatusWaitingPermission:
+		return "Waiting for permission"
+	case api.StatusWaitingQuestion:
+		return "Waiting for answer"
+	case api.StatusThinking:
+		return "Thinking..."
+	case api.StatusGenerating:
+		return "Generating"
+	case api.StatusExecuting:
+		return "Executing"
+	case api.StatusCompacting:
+		return "Compacting"
+	case "":
+		return ""
+	default:
+		return string(sub.Status)
+	}
+}
 
 // Tasks renders an indicator list of active background tasks and running subagents.
 var Tasks = trail.SimpleFC("Tasks", func() trail.Node {

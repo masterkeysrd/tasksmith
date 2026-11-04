@@ -172,6 +172,185 @@ func TestConversationDraftAccumulationAndCompletion(t *testing.T) {
 	}
 }
 
+func TestConversationCompletedWithUnconfirmedPendingUserEndsTurn(t *testing.T) {
+	ResetStream()
+	ClearTranscript()
+	FreezeTranscript()
+	defer ResetStream()
+	defer ClearTranscript()
+
+	acc := newConversationAccumulator()
+	acc.setSessionID("sess-1")
+
+	// A slash command delegated to a subagent never echoes its user message
+	// back on this session's stream, so the optimistic message stays unconfirmed.
+	acc.addPendingUser("cmd-msg-1", "/commit")
+	if !GetStream().Streaming {
+		t.Fatal("expected Streaming to be true while the command runs")
+	}
+
+	acc.applyEvent(api.Event{
+		Type:    api.EventCompleted,
+		Payload: api.CompletedEvent{SessionID: "sess-1"},
+	})
+
+	st := GetStream()
+	if st.Streaming {
+		t.Fatal("expected Streaming to be false after completion with an unconfirmed pending user message")
+	}
+	if st.Status != api.StatusIdle {
+		t.Fatalf("expected StatusIdle after completion, got %q", st.Status)
+	}
+	if st.Messages != nil && len(*st.Messages) > 0 {
+		t.Fatalf("expected stream messages to be flushed on completion, got %d", len(*st.Messages))
+	}
+
+	tr := GetTranscript()
+	if tr.Items == nil {
+		t.Fatal("expected transcript items")
+	}
+	var flushed *Message
+	for i := range *tr.Items {
+		if msg, ok := (*tr.Items)[i].Data.(Message); ok && msg.Role == api.RoleUser {
+			flushed = &msg
+		}
+	}
+	if flushed == nil {
+		t.Fatalf("expected the unconfirmed user message to be flushed to the transcript, got %+v", *tr.Items)
+	}
+	if flushed.Parts[0].Text == nil || flushed.Parts[0].Text.Text != "/commit" {
+		t.Fatalf("unexpected flushed message: %+v", *flushed)
+	}
+}
+
+// A delegated command now records its invoking message on the parent timeline, so the
+// optimistic copy and the server copy can arrive in any order. Each ordering must leave
+// exactly one user message in the transcript.
+func TestConversationDelegatedCommandUserMessageRecordedOnce(t *testing.T) {
+	userEntry := func(id string) api.TimelineEntry {
+		return api.TimelineEntry{
+			ID:   "entry-" + id,
+			Kind: api.TimelineKindMessage,
+			Message: &api.Message{
+				ID:        id,
+				Role:      api.RoleUser,
+				CreatedAt: time.Now().UTC(),
+				Content:   []api.Block{{Type: api.BlockText, Text: "/commit"}},
+			},
+		}
+	}
+	completed := api.Event{Type: api.EventCompleted, Payload: api.CompletedEvent{SessionID: "sess-1"}}
+	entryAdded := func(id string) api.Event {
+		return api.Event{Type: api.EventEntryAdded, Payload: api.EntryAddedEvent{SessionID: "sess-1", Entry: userEntry(id)}}
+	}
+
+	userMessageCount := func() int {
+		count := 0
+		tr := GetTranscript()
+		if tr.Items != nil {
+			for _, item := range *tr.Items {
+				if msg, ok := item.Data.(Message); ok && msg.Role == api.RoleUser {
+					count++
+				}
+			}
+		}
+		if st := GetStream(); st.Messages != nil {
+			for _, msg := range *st.Messages {
+				if msg.Role == api.RoleUser {
+					count++
+				}
+			}
+		}
+		return count
+	}
+
+	t.Run("entry added before completion", func(t *testing.T) {
+		ResetStream()
+		ClearTranscript()
+		FreezeTranscript()
+		defer ResetStream()
+		defer ClearTranscript()
+
+		acc := newConversationAccumulator()
+		acc.setSessionID("sess-1")
+		acc.addPendingUser("cmd-msg-1", "/commit")
+		acc.applyEvent(entryAdded("cmd-msg-1"))
+		acc.applyEvent(completed)
+
+		if got := userMessageCount(); got != 1 {
+			t.Fatalf("expected 1 user message, got %d", got)
+		}
+		if GetStream().Streaming {
+			t.Fatal("expected Streaming to be false after completion")
+		}
+	})
+
+	t.Run("completion races ahead of entry added", func(t *testing.T) {
+		ResetStream()
+		ClearTranscript()
+		FreezeTranscript()
+		defer ResetStream()
+		defer ClearTranscript()
+
+		acc := newConversationAccumulator()
+		acc.setSessionID("sess-1")
+		acc.addPendingUser("cmd-msg-1", "/commit")
+		acc.applyEvent(completed)
+		acc.applyEvent(entryAdded("cmd-msg-1"))
+
+		if got := userMessageCount(); got != 1 {
+			t.Fatalf("expected 1 user message, got %d", got)
+		}
+		if GetStream().Streaming {
+			t.Fatal("expected Streaming to be false after completion")
+		}
+	})
+
+	t.Run("reload after delegation", func(t *testing.T) {
+		ResetStream()
+		ClearTranscript()
+		FreezeTranscript()
+		defer ResetStream()
+		defer ClearTranscript()
+
+		acc := newConversationAccumulator()
+		acc.setSessionID("sess-1")
+		acc.addPendingUser("cmd-msg-1", "/commit")
+		acc.applyEvent(completed)
+		acc.loadTimeline([]api.TimelineEntry{userEntry("cmd-msg-1")})
+
+		if got := userMessageCount(); got != 1 {
+			t.Fatalf("expected 1 user message after reload, got %d", got)
+		}
+	})
+}
+
+func TestConversationErrorWithUnconfirmedPendingUserEndsTurn(t *testing.T) {
+	ResetStream()
+	ClearTranscript()
+	FreezeTranscript()
+	defer ResetStream()
+	defer ClearTranscript()
+
+	acc := newConversationAccumulator()
+	acc.setSessionID("sess-1")
+
+	acc.addPendingUser("cmd-msg-err", "/commit")
+
+	acc.applyEvent(api.Event{
+		Type:    api.EventError,
+		Payload: api.ErrorEvent{SessionID: "sess-1", Error: "command dispatch failed"},
+	})
+
+	st := GetStream()
+	if st.Streaming {
+		t.Fatal("expected Streaming to be false after error with an unconfirmed pending user message")
+	}
+	if st.Messages != nil && len(*st.Messages) > 0 {
+		t.Fatalf("expected stream messages to be flushed on error, got %d", len(*st.Messages))
+	}
+}
+
 func TestConversationCancelPendingUser(t *testing.T) {
 	ResetStream()
 	ClearTranscript()
@@ -1231,5 +1410,216 @@ func TestDraftFirstMessagePreservesPendingUser(t *testing.T) {
 	msg, ok := userItem.Data.(Message)
 	if !ok || msg.Role != api.RoleUser || msg.Parts[0].Text.Text != "Check what changes are in progress" {
 		t.Fatalf("unexpected flushed user message: %+v", userItem.Data)
+	}
+}
+
+func runningSubagent(id, agent string) api.Session {
+	return api.Session{
+		ID:        id,
+		ParentID:  "sess-1",
+		Title:     "/commit",
+		Status:    api.StatusThinking,
+		Activity:  "Staging changes",
+		CreatedAt: time.Now(),
+		Config:    api.SessionConfig{Agent: agent},
+	}
+}
+
+func TestConversationDelegatedWhileWaitingOnSubagent(t *testing.T) {
+	ResetSession()
+	ResetStream()
+	ClearTranscript()
+	defer ResetSession()
+	defer ResetStream()
+	defer ClearTranscript()
+
+	acc := newConversationAccumulator()
+	acc.setSessionID("sess-1")
+
+	// A delegated command starts a child session and never starts a turn on this
+	// one, so the spinner must report the delegation rather than local thinking.
+	acc.applyEvent(childUpdated(runningSubagent("sub-1", "main")))
+
+	acc.addPendingUser("cmd-msg-1", "/commit")
+	if st := GetStream(); !st.Delegated {
+		t.Fatalf("expected Delegated while a subagent runs, got %+v", st)
+	}
+
+	// Once the last child settles, the delegation label must go away even though
+	// the parent still has a turn in flight to report the result.
+	idle := runningSubagent("sub-1", "main")
+	idle.Status = api.StatusIdle
+	idle.Activity = ""
+	acc.applyEvent(childUpdated(idle))
+
+	if st := GetStream(); st.Delegated {
+		t.Fatalf("expected Delegated to clear after the subagent finished, got %+v", st)
+	}
+	if !GetStream().Streaming {
+		t.Fatal("expected the parent turn to stay in flight after the child finished")
+	}
+}
+
+func childUpdated(sub api.Session) api.Event {
+	return api.Event{
+		Type:    api.EventSessionUpdated,
+		Payload: api.SessionUpdatedEvent{Session: sub},
+	}
+}
+
+// The workspace-wide session topic updates children without touching the
+// conversation stream, so the label must be republished from there too.
+func TestRefreshSubagentStateClearsDelegated(t *testing.T) {
+	ResetSession()
+	ResetStream()
+	ClearTranscript()
+	defer ResetSession()
+	defer ResetStream()
+	defer ClearTranscript()
+
+	globalConversation.setSessionID("sess-1")
+	UpsertSubagent(runningSubagent("sub-1", "main"))
+	globalConversation.addPendingUser("cmd-msg-1", "/commit")
+
+	if st := GetStream(); !st.Delegated {
+		t.Fatalf("expected Delegated while a subagent runs, got %+v", st)
+	}
+
+	UpsertSubagent(api.Session{ID: "sub-1", ParentID: "sess-1", Status: api.StatusIdle, Config: api.SessionConfig{Agent: "main"}})
+	refreshSubagentState()
+
+	if st := GetStream(); st.Delegated {
+		t.Fatalf("expected Delegated to clear from the session watcher path, got %+v", st)
+	}
+}
+
+func TestConversationNotDelegatedWithoutSubagents(t *testing.T) {
+	ResetSession()
+	ResetStream()
+	ClearTranscript()
+	defer ResetSession()
+	defer ResetStream()
+	defer ClearTranscript()
+
+	acc := newConversationAccumulator()
+	acc.setSessionID("sess-1")
+
+	acc.addPendingUser("msg-1", "hello")
+	if st := GetStream(); st.Delegated {
+		t.Fatalf("expected Delegated false for a plain message, got %+v", st)
+	}
+}
+
+func TestConversationParentTurnClearsDelegated(t *testing.T) {
+	ResetSession()
+	ResetStream()
+	ClearTranscript()
+	defer ResetSession()
+	defer ResetStream()
+	defer ClearTranscript()
+
+	acc := newConversationAccumulator()
+	acc.setSessionID("sess-1")
+
+	UpsertSubagent(runningSubagent("sub-1", "main"))
+	acc.addPendingUser("cmd-msg-1", "/commit")
+	if st := GetStream(); !st.Delegated {
+		t.Fatalf("expected Delegated before the parent starts its own turn, got %+v", st)
+	}
+
+	// The child finished and enqueued its result, so the parent now streams a
+	// turn of its own; that work must be labelled as the parent's again.
+	acc.applyEvent(api.Event{
+		Type: api.EventChunk,
+		Payload: api.ChunkEvent{
+			SessionID: "sess-1",
+			Chunk:     api.Chunk{ID: "asst-1", Content: []api.Block{{Type: api.BlockText, Text: "Committed."}}},
+		},
+	})
+
+	if st := GetStream(); st.Delegated {
+		t.Fatalf("expected Delegated false once the parent streams, got %+v", st)
+	}
+}
+
+func TestConversationDelegatedEchoDoesNotMarkParentTurn(t *testing.T) {
+	ResetSession()
+	ResetStream()
+	ClearTranscript()
+	defer ResetSession()
+	defer ResetStream()
+	defer ClearTranscript()
+
+	acc := newConversationAccumulator()
+	acc.setSessionID("sess-1")
+
+	acc.addPendingUser("cmd-msg-1", "/commit")
+	UpsertSubagent(runningSubagent("sub-1", "main"))
+
+	// The daemon records the invocation on the parent timeline before the child
+	// starts, so echoing it back must not be read as the parent doing work.
+	acc.applyEvent(api.Event{
+		Type: api.EventEntryAdded,
+		Payload: api.EntryAddedEvent{
+			SessionID: "sess-1",
+			Entry: api.TimelineEntry{
+				ID:   "entry-1",
+				Kind: api.TimelineKindMessage,
+				Message: &api.Message{
+					ID:        "cmd-msg-1",
+					Role:      api.RoleUser,
+					CreatedAt: time.Now().UTC(),
+					Content:   []api.Block{{Type: api.BlockText, Text: "/commit"}},
+				},
+			},
+		},
+	})
+
+	if st := GetStream(); !st.Delegated {
+		t.Fatalf("expected the invocation echo to keep Delegated true, got %+v", st)
+	}
+}
+
+// Resuming a session replays its whole timeline, which contains assistant
+// messages from turns that finished long ago. Replaying them must not be read as
+// the session working now, or every later delegated command would be labelled as
+// local thinking for the rest of the process.
+func TestConversationResumeHistoryDoesNotMarkParentTurn(t *testing.T) {
+	ResetSession()
+	ResetStream()
+	ClearTranscript()
+	defer ResetSession()
+	defer ResetStream()
+	defer ClearTranscript()
+
+	acc := newConversationAccumulator()
+	acc.setSessionID("sess-1")
+
+	acc.loadTimeline([]api.TimelineEntry{
+		{
+			ID:   "entry-old-user",
+			Kind: api.TimelineKindMessage,
+			Message: &api.Message{
+				ID: "old-user", Role: api.RoleUser, CreatedAt: time.Now().UTC(),
+				Content: []api.Block{{Type: api.BlockText, Text: "earlier request"}},
+			},
+		},
+		{
+			ID:   "entry-old-assistant",
+			Kind: api.TimelineKindMessage,
+			Message: &api.Message{
+				ID: "old-assistant", Role: api.RoleAssistant, CreatedAt: time.Now().UTC(),
+				Content: []api.Block{{Type: api.BlockText, Text: "earlier answer"}},
+			},
+		},
+	})
+
+	// Now delegate a command the way /commit does: a child starts, and the
+	// invoking message is recorded without a parent turn.
+	acc.applyEvent(childUpdated(runningSubagent("sub-1", "main")))
+	acc.addPendingUser("cmd-msg-1", "/commit")
+
+	if st := GetStream(); !st.Delegated {
+		t.Fatalf("expected Delegated after resuming history and delegating, got %+v", st)
 	}
 }

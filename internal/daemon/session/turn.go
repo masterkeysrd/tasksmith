@@ -118,8 +118,12 @@ func (s *Session) Send(ctx context.Context, req api.SendRequest) error {
 
 	// A command that requests a forked subagent (clean/fork context or a
 	// different target agent) executes in a child session rather than on the
-	// current thread, so the parent turn is not started.
+	// current thread. The invocation itself still belongs to this session's
+	// timeline, so record what the caller sent to keep the thread complete. It
+	// is best-effort on the daemon-owned context so a client disconnect can
+	// never prevent the command from running.
 	if exec != nil && exec.Subagent {
+		_ = s.appendTimeline(s.bgCtx, timeline.NewMessageEntry(msg))
 		return s.dispatchCommandSubagent(ctx, exec)
 	}
 

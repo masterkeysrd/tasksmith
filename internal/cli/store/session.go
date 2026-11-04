@@ -298,6 +298,7 @@ func startSessionsWatcher(ctx context.Context) {
 							showSessionDiagnostics(&sess, false)
 						} else if p.Session.ParentID != "" && p.Session.ParentID == curr.ID {
 							UpsertSubagent(p.Session)
+							refreshSubagentState()
 						}
 					}
 				}

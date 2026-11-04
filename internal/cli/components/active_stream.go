@@ -2,6 +2,7 @@ package components
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/masterkeysrd/kite/extras/trail"
@@ -11,11 +12,22 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/ui/theme"
 )
 
-// StreamingHint registers the streaming cancellation hint in the store while mounted.
-var StreamingHint = trail.SimpleFC("StreamingHint", func() trail.Node {
-	store.UseHint("streaming • esc to cancel")
+// StreamingHint registers the streaming cancellation hint in the store while
+// mounted. Delegated turns cancel a subagent rather than this session's own
+// work, so the hint says whose work esc interrupts.
+var StreamingHint = trail.FC("StreamingHint", func(props StreamingHintProps) trail.Node {
+	hint := "streaming • esc to cancel"
+	if props.Delegated {
+		hint = "subagent running • esc to cancel"
+	}
+	store.UseHint(hint)
 	return nil
 })
+
+// StreamingHintProps defines the properties for the streaming cancellation hint.
+type StreamingHintProps struct {
+	Delegated bool
+}
 
 // ActiveStream renders the in-flight conversation messages, animated spinner,
 // and pinned task checklist for the current active LLM turn.
@@ -34,6 +46,9 @@ var ActiveStream = trail.SimpleFC("ActiveStream", func() trail.Node {
 	status := store.UseStream(func(s store.StreamState) api.SessionStatus {
 		return s.Status
 	})
+	delegated := store.UseStream(func(s store.StreamState) bool {
+		return s.Delegated
+	})
 	pendingCmd := store.UseStream(func(s store.StreamState) string {
 		return s.PendingCommand
 	})
@@ -44,6 +59,7 @@ var ActiveStream = trail.SimpleFC("ActiveStream", func() trail.Node {
 		return turnStats{StartedAt: s.TurnStartedAt, BaseInput: s.BaseInput, BaseOutput: s.BaseOutput, CallInput: s.CallInput, CallOutput: s.CallOutput}
 	})
 	totals := store.UseUsageTotals()
+	runningSubs := store.UseRunningSubagents()
 
 	var msgs []store.Message
 	if msgsPtr != nil {
@@ -62,7 +78,7 @@ var ActiveStream = trail.SimpleFC("ActiveStream", func() trail.Node {
 
 	var children []trail.Node
 	if streaming && !waitingPerm {
-		children = append(children, StreamingHint())
+		children = append(children, StreamingHint(StreamingHintProps{Delegated: delegated}))
 	}
 
 	for _, msg := range msgs {
@@ -91,8 +107,12 @@ var ActiveStream = trail.SimpleFC("ActiveStream", func() trail.Node {
 	activeText := activeTodoText(todos)
 
 	if streaming && !waitingPerm {
+		var spinnerText string
+		if delegated {
+			spinnerText = delegatedSpinnerText(runningSubs, activeText)
+		}
 		spinnerBlock := []trail.Node{
-			Spinner(SpinnerProps{Status: status, ActiveText: activeText, StartedAt: turn.StartedAt, Input: turn.input(totals), Output: turn.output(totals)}),
+			Spinner(SpinnerProps{Text: spinnerText, Status: status, ActiveText: activeText, StartedAt: turn.StartedAt, Input: turn.input(totals), Output: turn.output(totals)}),
 		}
 		if hasIncomplete {
 			for i, item := range todos {
@@ -155,6 +175,44 @@ var ActiveStream = trail.SimpleFC("ActiveStream", func() trail.Node {
 			MinWidth(style.Cells(0)),
 	}, children...)
 })
+
+// delegatedSpinnerText labels the spinner while the session waits on its
+// subagents instead of running a turn of its own, so the elapsed spinner is not
+// mistaken for the main agent thinking. It names the persona and what that child
+// is doing, preferring the daemon's live activity line, then the parent's active
+// todo, then the child's bare status.
+func delegatedSpinnerText(subagents []api.Session, activeText string) string {
+	if len(subagents) == 0 {
+		return "Waiting on subagent..."
+	}
+	sub := subagents[0]
+	agent := strings.TrimSpace(sub.Config.Agent)
+	if agent == "" {
+		agent = "subagent"
+	}
+	activity := strings.TrimSpace(strings.ReplaceAll(sub.Activity, "\n", " "))
+	if activity == "" {
+		activity = strings.TrimSpace(activeText)
+	}
+	if activity == "" {
+		activity = subagentActivityText(sub)
+	}
+	if runes := []rune(activity); len(runes) > 48 {
+		activity = string(runes[:48]) + "..."
+	}
+
+	count := "subagent"
+	if len(subagents) > 1 {
+		count = fmt.Sprintf("%d subagents", len(subagents))
+	}
+	if activity != "" {
+		return fmt.Sprintf("Waiting on %s (%s: %s)", count, agent, activity)
+	}
+	if len(subagents) > 1 {
+		return fmt.Sprintf("Waiting on %s", count)
+	}
+	return fmt.Sprintf("Waiting on %s (%s)", count, agent)
+}
 
 func hasIncompleteTodos(todos []api.TodoItem) bool {
 	if len(todos) == 0 {

@@ -237,16 +237,17 @@ func (s *Session) dispatchCommandSubagent(ctx context.Context, exec *commandExec
 
 	// Rebuild the command message's tool blocks against the child's own tool
 	// container so deferred/eager tool activation matches targetAgent's partition.
-	cmdMsg := exec.Message
+	// The child runs its own conversation, so it gets a fresh message identity:
+	// the message the caller sent is already recorded on the parent's timeline,
+	// and timeline IDs are unique across sessions.
+	cmdMsg := message.CloneMessage(exec.Message)
+	cmdMsg.SetID(uuid.NewString())
 	if exec.Resolved != nil && len(exec.Resolved.Tools) > 0 {
 		content := make(message.Content, 0, len(exec.Resolved.Tools)+1)
 		content = append(content, &message.TextBlock{Text: exec.Message.GetContent().Text()})
 		content = appendCommandToolBlocks(content, child.Tools, s.workspace.Catalog(), exec.Resolved.Tools)
-		rebuilt := message.NewUser(content...)
-		if exec.Message.GetID() != "" {
-			rebuilt.SetID(exec.Message.GetID())
-		}
-		cmdMsg = rebuilt
+		cmdMsg = message.NewUser(content...)
+		cmdMsg.SetID(uuid.NewString())
 	}
 
 	// Apply a per-turn model override when the command declares a model that

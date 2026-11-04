@@ -5077,6 +5077,99 @@ Run in a clean subagent.`
 	}
 }
 
+// TestSessionCommandSubagentRecordsInvocationOnParent verifies that delegating a
+// slash command to a subagent still records the caller's message on the invoking
+// session's timeline, so the thread stays complete and clients can confirm the
+// message they sent. The child's copy of the prompt gets its own ID because
+// timeline IDs are unique across sessions.
+func TestSessionCommandSubagentRecordsInvocationOnParent(t *testing.T) {
+	ctx := context.Background()
+	prov := &fakeProvider{
+		handler: func(_ context.Context, _ *llm.Request) ([]string, string, error) {
+			return []string{"ok"}, uuid.NewString(), nil
+		},
+	}
+	_, ws, _, _, mgr := setupTestEnv(t, prov)
+	t.Cleanup(func() { _ = mgr.Close() })
+
+	agentsDir := filepath.Join(ws.RootDir(), ".agents")
+	if err := os.MkdirAll(filepath.Join(agentsDir, "commands"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	content := `---
+apiVersion: warp/v1alpha1
+kind: Command
+metadata:
+  name: record-cmd
+spec:
+  context: clean
+---
+Run in a clean subagent.`
+	if err := os.WriteFile(filepath.Join(agentsDir, "commands", "record-cmd.command.md"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := ws.Reload(ctx); err != nil {
+		t.Fatalf("ws.Reload: %v", err)
+	}
+
+	sess, _, err := mgr.Create(ctx, api.CreateSessionRequest{
+		Title:  "Delegating Parent",
+		Config: api.SessionConfig{Agent: "main"},
+	})
+	if err != nil {
+		t.Fatalf("mgr.Create: %v", err)
+	}
+
+	msgID := uuid.Must(uuid.NewV7()).String()
+	if err := sess.Send(ctx, api.SendRequest{ID: msgID, Content: "/record-cmd"}); err != nil {
+		t.Fatalf("sess.Send: %v", err)
+	}
+	if err := sess.Wait(ctx); err != nil {
+		t.Fatalf("parent sess.Wait: %v", err)
+	}
+
+	var child *Session
+	for _, c := range sess.Children() {
+		if c.ParentID == sess.ID {
+			child = c
+			break
+		}
+	}
+	if child == nil {
+		t.Fatal("expected a child subagent session for the delegated command")
+	}
+	if err := child.Wait(ctx); err != nil {
+		t.Fatalf("child.Wait: %v", err)
+	}
+
+	parentEntries, err := sess.Timeline.List(ctx)
+	if err != nil {
+		t.Fatalf("parent Timeline.List: %v", err)
+	}
+	var confirmed bool
+	for _, e := range parentEntries {
+		if e.Kind != api.TimelineKindMessage || e.Message == nil {
+			continue
+		}
+		if e.Message.Role() == message.RoleUser && e.Message.GetID() == msgID {
+			confirmed = true
+		}
+	}
+	if !confirmed {
+		t.Fatalf("expected the invoking message %q recorded on the parent timeline, got %d entries", msgID, len(parentEntries))
+	}
+
+	childEntries, err := child.Timeline.List(ctx)
+	if err != nil {
+		t.Fatalf("child Timeline.List: %v", err)
+	}
+	for _, e := range childEntries {
+		if e.Message != nil && e.Message.GetID() == msgID {
+			t.Fatalf("child reused the parent message ID %q; timeline IDs must stay unique across sessions", msgID)
+		}
+	}
+}
+
 // TestSessionCommandForkContextSpawnsSubagent verifies that a command declaring
 // context: fork runs in a child session pre-populated with the parent's prior
 // conversation history.

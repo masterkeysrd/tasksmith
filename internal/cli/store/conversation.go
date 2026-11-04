@@ -96,6 +96,11 @@ type StreamState struct {
 	Queue             *[]api.QueueItem
 	Todos             *[]api.TodoItem
 
+	// Delegated reports that this session is waiting on child subagents rather
+	// than running a turn of its own, so the work shown as in flight belongs to
+	// a subagent. It only applies while Streaming is true.
+	Delegated bool
+
 	// TurnStartedAt is when the current turn started streaming. BaseInput and
 	// BaseOutput are the session's token totals at that moment, and CallInput
 	// and CallOutput are the running totals of the LLM call in flight, so the
@@ -139,6 +144,25 @@ func ApplyEvent(event api.Event) {
 	globalConversation.applyEvent(event)
 }
 
+// refreshSubagentState republishes the stream so the delegated indicator follows
+// the children's status. Subagent updates mutate the session store rather than
+// the conversation accumulator, so without this the spinner would keep reporting
+// a delegation after the last child finished.
+func refreshSubagentState() {
+	globalConversation.mu.Lock()
+	defer globalConversation.mu.Unlock()
+	globalConversation.refreshSubagentStateLocked()
+}
+
+// refreshSubagentStateLocked republishes when the number of running children has
+// changed since the last publish. It must be called with acc.mu held.
+func (acc *conversationAccumulator) refreshSubagentStateLocked() {
+	if acc.runningSubagents == len(GetRunningSubagents()) {
+		return
+	}
+	acc.publishLocked()
+}
+
 type conversationMessage struct {
 	id      string
 	message api.Message
@@ -177,6 +201,8 @@ type conversationAccumulator struct {
 	pendingUser       *Message
 	pendingCommand    string
 	pendingCommandID  string
+	parentTurnActive  bool
+	runningSubagents  int
 	queue             []api.QueueItem
 	todos             []api.TodoItem
 	flushedIDs        map[string]bool
@@ -260,6 +286,7 @@ func newConversationAccumulator() *conversationAccumulator {
 				SetSession(&sess)
 			} else if sess.ParentID != "" && sess.ParentID == acc.sessionID {
 				UpsertSubagent(sess)
+				acc.refreshSubagentStateLocked()
 			}
 		},
 		onTimelineMetadata: func(entry api.TimelineEntry) {
@@ -343,6 +370,8 @@ func (acc *conversationAccumulator) reset() {
 	acc.pendingUser = nil
 	acc.pendingCommand = ""
 	acc.pendingCommandID = ""
+	acc.parentTurnActive = false
+	acc.runningSubagents = 0
 	acc.queue = nil
 	acc.todos = nil
 	acc.flushedIDs = make(map[string]bool)
@@ -354,9 +383,20 @@ func (acc *conversationAccumulator) reset() {
 // endTurnLocked clears the per-turn spinner statistics.
 func (acc *conversationAccumulator) endTurnLocked() {
 	acc.wasStreaming = false
+	acc.parentTurnActive = false
 	acc.turnStart = time.Time{}
 	acc.baseInput, acc.baseOutput, acc.baseCalls = 0, 0, 0
 	acc.callInput, acc.callOutput = 0, 0
+}
+
+// markParentTurnLocked records that this session produced evidence of a turn of
+// its own. While a subagent runs this is what separates "the parent is working"
+// from "the parent is merely waiting on its children", so the spinner can say
+// which one the user is watching. The caller's own message echo is deliberately
+// not evidence: a command delegated to a subagent records it before the parent
+// starts any turn.
+func (acc *conversationAccumulator) markParentTurnLocked() {
+	acc.parentTurnActive = true
 }
 
 func (acc *conversationAccumulator) setSessionID(id string) {
@@ -381,6 +421,21 @@ func (acc *conversationAccumulator) promotePendingUserLocked() {
 		CreatedAt: u.CreatedAt,
 		Content:   []api.Block{{Type: api.BlockText, Text: text}},
 	})
+}
+
+// resolvePendingUserLocked settles an optimistic user message when a turn ends
+// without the daemon ever confirming it. Commands delegated to a subagent run in
+// a child session, so the invoking message is never echoed back on this session's
+// stream; without this the spinner would keep running after the turn completed.
+func (acc *conversationAccumulator) resolvePendingUserLocked() {
+	if acc.pendingUser == nil {
+		return
+	}
+	if acc.pendingCommandID != "" && acc.pendingUser.SourceID == acc.pendingCommandID {
+		acc.pendingCommand = ""
+		acc.pendingCommandID = ""
+	}
+	acc.promotePendingUserLocked()
 }
 
 func (acc *conversationAccumulator) messageID(sourceID, draftID string) string {
@@ -583,6 +638,7 @@ func (acc *conversationAccumulator) applyEvent(event api.Event) {
 			acc.status = StreamIdle
 		default:
 			acc.status = StreamRunning
+			acc.markParentTurnLocked()
 		}
 		acc.publishLocked()
 
@@ -665,9 +721,15 @@ func (acc *conversationAccumulator) applyEvent(event api.Event) {
 
 		_ = acc.addMessageLocked(msg)
 		if msg.Role == api.RoleUser {
-			acc.status, acc.err = StreamRunning, nil
-			acc.sessionStatus = api.StatusThinking
+			// A delegated command echoes its invocation after the turn that carried
+			// it may already have ended, so a late confirmation must not restart the
+			// spinner or discard the turn's outcome.
+			if acc.status != StreamCompleted && acc.status != StreamFailed {
+				acc.status, acc.err = StreamRunning, nil
+				acc.sessionStatus = api.StatusThinking
+			}
 		} else if msg.Role == api.RoleAssistant {
+			acc.markParentTurnLocked()
 			hasToolCall := false
 			for _, b := range msg.Content {
 				if b.Type == api.BlockToolCall {
@@ -679,6 +741,7 @@ func (acc *conversationAccumulator) applyEvent(event api.Event) {
 				acc.sessionStatus = api.StatusExecuting
 			}
 		} else if msg.Role == api.RoleTool {
+			acc.markParentTurnLocked()
 			acc.sessionStatus = api.StatusThinking
 			if acc.status == StreamWaitingPermission && len(acc.permissions) == 0 {
 				acc.status = StreamRunning
@@ -699,6 +762,7 @@ func (acc *conversationAccumulator) applyEvent(event api.Event) {
 		}) {
 			return
 		}
+		acc.markParentTurnLocked()
 		acc.promotePendingUserLocked()
 		_ = acc.addChunkLocked(p.Chunk)
 		if p.Chunk.Usage != nil {
@@ -786,6 +850,7 @@ func (acc *conversationAccumulator) applyEvent(event api.Event) {
 		acc.queue = slices.DeleteFunc(acc.queue, func(item api.QueueItem) bool {
 			return item.ID == p.ID
 		})
+		acc.markParentTurnLocked()
 		acc.status = StreamRunning
 		acc.sessionStatus = api.StatusExecuting
 		acc.pendingCommandID = p.ID
@@ -815,6 +880,7 @@ func (acc *conversationAccumulator) applyEvent(event api.Event) {
 		acc.pendingCommandID = ""
 		acc.status, acc.err = StreamCompleted, nil
 		acc.sessionStatus = api.StatusIdle
+		acc.resolvePendingUserLocked()
 		acc.discardDraftLocked()
 		acc.clearPermissionsLocked()
 		acc.clearQuestionsLocked()
@@ -832,6 +898,7 @@ func (acc *conversationAccumulator) applyEvent(event api.Event) {
 		acc.pendingCommandID = ""
 		acc.status = StreamFailed
 		acc.sessionStatus = api.StatusIdle
+		acc.resolvePendingUserLocked()
 		if p.Error == "" {
 			acc.err = errors.New("server reported a failure without details")
 		} else {
@@ -1234,6 +1301,12 @@ func (acc *conversationAccumulator) publishLocked() {
 	}
 	acc.wasStreaming = isStreaming
 
+	// A session with running children but no turn of its own is waiting on them,
+	// which is a different thing to tell the user than "I am thinking".
+	running := len(GetRunningSubagents())
+	acc.runningSubagents = running
+	delegated := isStreaming && !acc.parentTurnActive && running > 0
+
 	turnStart, baseIn, baseOut, callIn, callOut := acc.turnStart, acc.baseInput, acc.baseOutput, acc.callInput, acc.callOutput
 	acc.publishStream(StreamState{
 		TurnStartedAt:     turnStart,
@@ -1249,6 +1322,7 @@ func (acc *conversationAccumulator) publishLocked() {
 		PendingCommand:    acc.pendingCommand,
 		Queue:             queuePtr,
 		Todos:             todosPtr,
+		Delegated:         delegated,
 	})
 }
 

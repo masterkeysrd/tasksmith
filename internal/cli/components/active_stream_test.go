@@ -395,3 +395,152 @@ func TestActiveStreamStreamingSpinnerWithActiveTextAndChecklist(t *testing.T) {
 		t.Fatalf("expected checklist row 2 underneath spinner, got %q", got)
 	}
 }
+
+func TestDelegatedSpinnerText(t *testing.T) {
+	running := api.Session{
+		ID:       "sub-1",
+		Status:   api.StatusThinking,
+		Activity: "Staging changes",
+		Config:   api.SessionConfig{Agent: "main"},
+	}
+	noActivity := api.Session{ID: "sub-2", Status: api.StatusThinking, Config: api.SessionConfig{Agent: "explore"}}
+	awaiting := api.Session{ID: "sub-3", Status: api.StatusWaitingPermission, Config: api.SessionConfig{Agent: "general"}}
+
+	tests := []struct {
+		name       string
+		subagents  []api.Session
+		activeText string
+		want       string
+	}{
+		{
+			name:      "activity wins",
+			subagents: []api.Session{running},
+			want:      "Waiting on subagent (main: Staging changes)",
+		},
+		{
+			name:       "active todo fills a quiet child",
+			subagents:  []api.Session{noActivity},
+			activeText: "Running unit tests",
+			want:       "Waiting on subagent (explore: Running unit tests)",
+		},
+		{
+			name:      "status is the last resort",
+			subagents: []api.Session{awaiting},
+			want:      "Waiting on subagent (general: Waiting for permission)",
+		},
+		{
+			name:      "multiple children count",
+			subagents: []api.Session{running, noActivity},
+			want:      "Waiting on 2 subagents (main: Staging changes)",
+		},
+		{
+			name:      "bare status is the fallback",
+			subagents: []api.Session{{ID: "sub-4", Status: api.StatusExecuting, Config: api.SessionConfig{Agent: "worker"}}},
+			want:      "Waiting on subagent (worker: Executing)",
+		},
+		{
+			name:      "unknown persona still reads naturally",
+			subagents: []api.Session{{ID: "sub-5", Status: api.StatusExecuting}},
+			want:      "Waiting on subagent (subagent: Executing)",
+		},
+		{
+			name:      "no children",
+			subagents: nil,
+			want:      "Waiting on subagent...",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := delegatedSpinnerText(tc.subagents, tc.activeText); got != tc.want {
+				t.Fatalf("delegatedSpinnerText() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestStreamingHintDelegatedWording(t *testing.T) {
+	store.ResetApp()
+	defer store.ResetApp()
+
+	render := renderComponent(t, 80)
+	render(StreamingHint(StreamingHintProps{Delegated: true}))
+
+	if got := store.GetApp().Hint; got != "subagent running • esc to cancel" {
+		t.Fatalf("expected delegated hint, got %q", got)
+	}
+}
+
+func TestStreamingHintDefaultWording(t *testing.T) {
+	store.ResetApp()
+	defer store.ResetApp()
+
+	render := renderComponent(t, 80)
+	render(StreamingHint(StreamingHintProps{}))
+
+	if got := store.GetApp().Hint; got != "streaming • esc to cancel" {
+		t.Fatalf("expected streaming hint, got %q", got)
+	}
+}
+
+// A delegated command must not render as the main agent thinking. In production
+// the daemon records the invocation on the parent timeline and starts no parent
+// turn, so a user timeline entry plus a running child is the real state.
+func TestActiveStreamDelegatedSpinnerLabel(t *testing.T) {
+	store.ResetApp()
+	store.ResetSession()
+	store.ResetStream()
+	defer store.ResetApp()
+	defer store.ResetSession()
+	defer store.ResetStream()
+
+	b := mock.New(100, 24)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	store.UpsertSubagent(api.Session{
+		ID:       "sub-1",
+		ParentID: "sess-1",
+		Title:    "/commit",
+		Status:   api.StatusThinking,
+		Activity: "Staging changes",
+		Config:   api.SessionConfig{Agent: "main"},
+	})
+
+	go func() {
+		_ = trail.Run(ctx, ActiveStream(), trail.WithBackend(b))
+	}()
+
+	store.ApplyEvent(api.Event{
+		Type: api.EventEntryAdded,
+		Payload: api.EntryAddedEvent{
+			SessionID: "sess-1",
+			Entry: api.TimelineEntry{
+				ID:   "entry-1",
+				Kind: api.TimelineKindMessage,
+				Message: &api.Message{
+					ID:        "cmd-msg-1",
+					Role:      api.RoleUser,
+					CreatedAt: time.Now().UTC(),
+					Content:   []api.Block{{Type: api.BlockText, Text: "/commit"}},
+				},
+			},
+		},
+	})
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if strings.Contains(surfaceText(b), "Waiting on subagent") {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	txt := surfaceText(b)
+	if !strings.Contains(txt, "Waiting on subagent (main: Staging changes)") {
+		t.Fatalf("expected delegated spinner label in frame, got: %q", txt)
+	}
+	if strings.Contains(txt, "Thinking...") {
+		t.Fatalf("delegated turn must not render as local thinking, got: %q", txt)
+	}
+}
