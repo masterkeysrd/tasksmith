@@ -92,10 +92,14 @@ type Command struct {
 	Name         string     `json:"name"`
 	DisplayName  string     `json:"display_name,omitempty"`
 	Description  string     `json:"description,omitempty"`
+	Agent        string     `json:"agent,omitempty"`
+	Context      string     `json:"context,omitempty"`
 	ArgumentHint string     `json:"argument_hint,omitempty"`
 	Arguments    []Argument `json:"arguments,omitempty"`
 	Models       []string   `json:"models,omitempty"`
 	Tools        []string   `json:"tools,omitempty"`
+	Skills       []string   `json:"skills,omitempty"`
+	Rules        []string   `json:"rules,omitempty"`
 	Namespace    string     `json:"namespace,omitempty"`
 }
 

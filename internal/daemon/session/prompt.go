@@ -18,6 +18,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/daemon/metrics"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/models"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/scope"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/tools"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/workspace"
 	"github.com/masterkeysrd/warp"
 )
@@ -33,21 +34,9 @@ func (s *Session) renderSystemPrompt(agentName string) string {
 		agentName = cat.DefaultAgentName()
 	}
 
-	globals := map[string]any{
-		"HasTool": func(toolName string) bool {
-			if resolved, err := cat.ResolveAgent(agentName); err == nil && resolved != nil {
-				for _, t := range resolved.Tools {
-					if strings.EqualFold(t.Metadata.Name, toolName) {
-						return true
-					}
-				}
-			}
-			return false
-		},
-	}
-
 	var agentPrompt string
 	if resolved, err := cat.ResolveAgent(agentName); err == nil && resolved != nil && resolved.Agent != nil {
+		globals := cat.AgentRenderGlobals(resolved)
 		agentPrompt, _ = resolved.Agent.Render(&warp.AgentRenderOptions{
 			Workspace: cat.WorkspaceSpec(),
 			Project:   cat.Project(),
@@ -106,19 +95,43 @@ func prepareSlashArgs(argsDef []warp.Argument, rawArgs []string) ([]string, map[
 	return positionalArgs, mergedGlobals
 }
 
-func (s *Session) resolveSlashCommand(msg message.Message) (message.Message, error) {
+// commandExecution is the resolved execution plan for a slash command. It
+// carries the rendered prompt message along with the lifecycle metadata needed
+// to decide whether the command runs inline on the current session or in a forked
+// subagent session.
+type commandExecution struct {
+	// Message is the rendered user message to feed into the target turn.
+	Message message.Message
+	// Name is the command's resource name, used to title forked subagents.
+	Name string
+	// Resolved is the fully resolved command (skills, rules, tools, agent).
+	Resolved *warp.ResolvedCommand
+	// ContextMode is the normalized execution context mode.
+	ContextMode warp.CommandContextMode
+	// TargetAgent is the agent that should execute the command.
+	TargetAgent string
+	// TargetModel is the resolved model ID for the command, or "" to keep the
+	// session's current model.
+	TargetModel string
+	// Subagent reports whether the command must run in a forked subagent session.
+	Subagent bool
+}
+
+// resolveCommandExecution resolves a slash command message into its execution
+// plan. It returns nil, nil for messages that are not slash commands.
+func (s *Session) resolveCommandExecution(msg message.Message) (*commandExecution, error) {
 	if msg == nil {
 		return nil, nil
 	}
 	cnt := msg.GetContent()
 	text := strings.TrimSpace(cnt.Text())
 	if !strings.HasPrefix(text, "/") || len(cnt) > 1 {
-		return msg, nil
+		return nil, nil
 	}
 
 	fields := strings.Fields(text)
 	if len(fields) == 0 {
-		return msg, nil
+		return nil, nil
 	}
 
 	rawKey := strings.TrimPrefix(fields[0], "/")
@@ -129,21 +142,115 @@ func (s *Session) resolveSlashCommand(msg message.Message) (message.Message, err
 
 	// 1. Try resolving as Command
 	if cmd, ok := cat.GetCommand(cmdKey); ok && cmd.Def != nil {
+		// Validate command enablement against the active agent and eagerly
+		// resolve its skills, rules, and policy-filtered effective tools.
+		cmdRef := cmd.Def.QualifiedName()
+		if cmdRef == "" {
+			cmdRef = cmd.Def.Metadata.Name
+		}
+		resolvedCmd, err := cat.ResolveCommand(s.Config.Agent, cmdRef)
+		if err != nil {
+			return nil, fmt.Errorf("failed to resolve command %q: %w", cmd.Name, err)
+		}
+
+		// Validate the declared context mode.
+		ctxMode, err := validateCommandContext(cmd.Def.Spec.Context)
+		if err != nil {
+			return nil, fmt.Errorf("failed to resolve command %q: %w", cmd.Name, err)
+		}
+
+		// Determine the executing agent: prefer the command's resolved agent,
+		// falling back to the session's active agent.
+		var activeAgent *warp.Agent
+		targetAgent := s.Config.Agent
+		if resolvedCmd != nil && resolvedCmd.Agent != nil && resolvedCmd.Agent.Agent != nil {
+			activeAgent = resolvedCmd.Agent.Agent
+			targetAgent = resolvedCmd.Agent.Agent.Metadata.Name
+		} else if resolved, rerr := cat.ResolveAgent(s.Config.Agent); rerr == nil && resolved != nil {
+			activeAgent = resolved.Agent
+		}
+
+		// Resolve the target model from the command's model preferences.
+		targetModel := s.resolveCommandModel(cmd.Def.Spec.Models)
+
+		// A command runs in a forked subagent when it requests clean/fork
+		// context, or when it targets a different agent than the session.
+		subagent := ctxMode == warp.CommandContextClean || ctxMode == warp.CommandContextFork ||
+			(cmd.Def.Spec.Agent != "" && !strings.EqualFold(cmd.Def.Spec.Agent, s.Config.Agent))
+
 		positionalArgs, mergedGlobals := prepareSlashArgs(cmd.Def.Spec.Arguments, rawArgs)
 		rendered, err := cmd.Def.Render(&warp.CommandRenderOptions{
 			Workspace: cat.WorkspaceSpec(),
 			Project:   cat.Project(),
+			Agent:     activeAgent,
+			Resolved:  resolvedCmd,
 			Args:      positionalArgs,
 			Globals:   mergedGlobals,
 		})
 		if err != nil {
-			return msg, fmt.Errorf("failed to render command %q: %w", cmd.Name, err)
+			return nil, fmt.Errorf("failed to render command %q: %w", cmd.Name, err)
 		}
-		newMsg := message.NewUser(&message.TextBlock{Text: rendered})
+
+		// Eagerly embed the command's declared skills and rules into the prompt
+		// text, prepending the rendered blocks ahead of the command body.
+		promptText := rendered
+		if resolvedCmd != nil && (len(resolvedCmd.Skills) > 0 || len(resolvedCmd.Rules) > 0) {
+			var b strings.Builder
+			for _, sk := range resolvedCmd.Skills {
+				skRendered, rerr := sk.Render(&warp.SkillRenderOptions{
+					Workspace: cat.WorkspaceSpec(),
+					Project:   cat.Project(),
+					Agent:     activeAgent,
+				})
+				if rerr != nil {
+					return nil, fmt.Errorf("failed to render skill %q for command %q: %w", sk.Metadata.Name, cmd.Name, rerr)
+				}
+				skillPath := s.workspace.PortablePath(sk.Directory)
+				b.WriteString(fmt.Sprintf("<embedded_skill name=%q path=%q>\n<instructions>\n%s\n</instructions>\n</embedded_skill>\n", sk.Metadata.Name, skillPath, skRendered))
+			}
+			for _, rl := range resolvedCmd.Rules {
+				rlRendered, rerr := rl.Render(&warp.RuleRenderOptions{
+					Workspace: cat.WorkspaceSpec(),
+					Project:   cat.Project(),
+					Agent:     activeAgent,
+				})
+				if rerr != nil {
+					return nil, fmt.Errorf("failed to render rule %q for command %q: %w", rl.Metadata.Name, cmd.Name, rerr)
+				}
+				rulePath := s.workspace.PortablePath(rl.GetPath())
+				if rulePath == "" {
+					rulePath = s.workspace.PortablePath(rl.Directory)
+				}
+				b.WriteString(fmt.Sprintf("<embedded_rule name=%q path=%q>\n<instructions>\n%s\n</instructions>\n</embedded_rule>\n", rl.Metadata.Name, rulePath, rlRendered))
+			}
+			promptText = b.String() + rendered
+		}
+
+		// Activate the command's policy-allowed deferred tools into the model's
+		// context via tool-reference blocks (deferred, registered tools) and
+		// inline tool-definition blocks (policy-allowed but unregistered tools).
+		var resolvedTools []*warp.Tool
+		if resolvedCmd != nil {
+			resolvedTools = resolvedCmd.Tools
+		}
+		content := make(message.Content, 0, len(resolvedTools)+1)
+		content = append(content, &message.TextBlock{Text: promptText})
+		content = appendCommandToolBlocks(content, s.Tools, cat, resolvedTools)
+
+		newMsg := message.NewUser(content...)
 		if msg.GetID() != "" {
 			newMsg.SetID(msg.GetID())
 		}
-		return newMsg, nil
+
+		return &commandExecution{
+			Message:     newMsg,
+			Name:        cmd.Name,
+			Resolved:    resolvedCmd,
+			ContextMode: ctxMode,
+			TargetAgent: targetAgent,
+			TargetModel: targetModel,
+			Subagent:    subagent,
+		}, nil
 	}
 
 	// 2. Try resolving as Skill
@@ -164,7 +271,7 @@ func (s *Session) resolveSlashCommand(msg message.Message) (message.Message, err
 			Globals:   mergedGlobals,
 		})
 		if err != nil {
-			return msg, fmt.Errorf("failed to render skill %q: %w", sk.Name, err)
+			return nil, fmt.Errorf("failed to render skill %q: %w", sk.Name, err)
 		}
 
 		skillPath := s.workspace.PortablePath(sk.Def.Directory)
@@ -209,10 +316,47 @@ func (s *Session) resolveSlashCommand(msg message.Message) (message.Message, err
 		if msg.GetID() != "" {
 			newMsg.SetID(msg.GetID())
 		}
-		return newMsg, nil
+		return &commandExecution{Message: newMsg}, nil
 	}
 
-	return msg, nil
+	return nil, nil
+}
+
+// validateCommandContext normalizes and validates a command's declared context
+// mode. An empty value defaults to inline.
+func validateCommandContext(mode warp.CommandContextMode) (warp.CommandContextMode, error) {
+	switch mode {
+	case "", warp.CommandContextInline:
+		return warp.CommandContextInline, nil
+	case warp.CommandContextFork, warp.CommandContextClean:
+		return mode, nil
+	default:
+		return "", fmt.Errorf("%w: unsupported command context mode %q", ErrInvalidConfig, string(mode))
+	}
+}
+
+// resolveCommandModel resolves the first available completion model from a
+// command's model preferences. It returns "" when no preference is declared or
+// none resolves, signalling that the session's current model should be kept.
+func (s *Session) resolveCommandModel(modelRefs []string) string {
+	if len(modelRefs) == 0 || s.catalog == nil {
+		return ""
+	}
+	if resolved, ok := s.catalog().Resolve(models.RoleCompletion, modelRefs...); ok {
+		return string(resolved.ID)
+	}
+	return ""
+}
+
+func (s *Session) resolveSlashCommand(msg message.Message) (message.Message, error) {
+	exec, err := s.resolveCommandExecution(msg)
+	if err != nil {
+		return msg, err
+	}
+	if exec == nil {
+		return msg, nil
+	}
+	return exec.Message, nil
 }
 
 // toolDefinitionBlock builds an inline tool-definition block for a warp.Tool that
@@ -227,6 +371,36 @@ func toolDefinitionBlock(wt *warp.Tool) *message.ToolDefinitionBlock {
 		def.Description = wt.Metadata.Description
 	}
 	return def.ToBlock()
+}
+
+// appendCommandToolBlocks activates a resolved command's effective tools into the
+// model's context by appending blocks to content: a ToolReferenceBlock for each
+// deferred tool already registered in toolsContainer, and an inline
+// ToolDefinitionBlock for any policy-allowed tool that is not registered in the
+// container. Tools are deduplicated by name.
+func appendCommandToolBlocks(content message.Content, toolsContainer tools.Container, cat *workspace.Catalog, resolvedTools []*warp.Tool) message.Content {
+	seen := make(map[string]bool, len(resolvedTools))
+	for _, wt := range resolvedTools {
+		if wt == nil || seen[wt.Metadata.Name] {
+			continue
+		}
+		seen[wt.Metadata.Name] = true
+
+		if toolsContainer != nil {
+			if t, ok := toolsContainer.Get(wt.Metadata.Name); ok {
+				// Eager tools are already in the model's context; only deferred
+				// tools need a reference block to be activated.
+				if t.Definition().DeferLoading {
+					content = append(content, &message.ToolReferenceBlock{ToolName: wt.Metadata.Name})
+				}
+				continue
+			}
+		}
+		if def, ok := cat.GetTool(wt.Metadata.Name); ok {
+			content = append(content, toolDefinitionBlock(def))
+		}
+	}
+	return content
 }
 
 func (s *Session) generateTitle(userText string) {

@@ -1733,3 +1733,455 @@ func toolNames(t *testing.T, tools []*warp.Tool) []string {
 	slices.Sort(names)
 	return names
 }
+
+// TestCatalogResolveCommand verifies that api.Command exposes the full command
+// schema (Agent, Context, Skills, Rules, Models, Tools) in Catalog.Commands()
+// and Catalog.GetCommand(), and that Catalog.ResolveCommand resolves the
+// executing agent, eagerly resolved skills and rules, and policy-filtered
+// effective tools (including tools declared by the command's skills), while
+// rejecting commands not enabled for the active agent unless the command
+// declares an explicit spec.agent override.
+func TestCatalogResolveCommand(t *testing.T) {
+	// Workspace policy ceiling denies all dangerous tools.
+	ws := &warp.Workspace{
+		Def: &warp.WorkspaceDef{
+			BaseResource: warp.BaseResource{
+				APIVersion: warp.APIVersion,
+				Kind:       warp.KindWorkspace,
+				Metadata:   warp.Metadata{Name: "resolve-cmd-ws"},
+			},
+			Spec: warp.WorkspaceDefSpec{
+				DefaultAgent: "strict-agent",
+				Policies: &warp.Policies{
+					Tools: &warp.ToolPolicies{Dangerous: warp.ToolPolicyDeny},
+				},
+			},
+		},
+	}
+
+	mkTool := func(name string, ann *warp.ToolAnnotation) *warp.Tool {
+		return &warp.Tool{
+			BaseResource: warp.BaseResource{
+				APIVersion: warp.APIVersion,
+				Kind:       warp.KindTool,
+				Namespace:  warp.NamespaceWorkspace,
+				Metadata:   warp.Metadata{Name: name},
+			},
+			Spec: warp.ToolSpec{Annotations: ann},
+		}
+	}
+	toolCmd := mkTool("tool-cmd", &warp.ToolAnnotation{IsReadOnly: true})
+	toolSkill := mkTool("tool-skill", &warp.ToolAnnotation{IsReadOnly: true})
+	toolDangerous := mkTool("tool-dangerous", &warp.ToolAnnotation{IsDangerous: true})
+	toolExcluded := mkTool("tool-excluded", nil)
+	toolUnlisted := mkTool("tool-unlisted", nil)
+
+	// doc-skill declares three tools: one unlocked via the command (tool-skill),
+	// one denied by the workspace policy (tool-dangerous), and one not in the
+	// agent's include allowlist (tool-unlisted).
+	docSkill := &warp.Skill{
+		BaseResource: warp.BaseResource{
+			APIVersion: warp.APIVersion,
+			Kind:       warp.KindSkill,
+			Namespace:  warp.NamespaceWorkspace,
+			Metadata:   warp.Metadata{Name: "doc-skill"},
+		},
+		Spec: warp.SkillSpec{Tools: []string{"tool-skill", "tool-dangerous", "tool-unlisted"}},
+	}
+
+	mkRule := func(name string, priority int) *warp.Rule {
+		return &warp.Rule{
+			BaseResource: warp.BaseResource{
+				APIVersion: warp.APIVersion,
+				Kind:       warp.KindRule,
+				Namespace:  warp.NamespaceWorkspace,
+				Metadata:   warp.Metadata{Name: name},
+			},
+			Spec: warp.RuleSpec{Priority: priority, Triggers: warp.RuleTriggers{Always: false}},
+		}
+	}
+	ruleLow := mkRule("rule-low", 10)
+	ruleHigh := mkRule("rule-high", 100)
+
+	// strict-agent enables agent-cmd and restricts tools via its policy ceiling:
+	//   include: [tool-cmd, tool-skill] -\u003e only these pass
+	//   exclude: [tool-excluded]
+	//   dangerous: deny
+	strictAgent := &warp.Agent{
+		BaseResource: warp.BaseResource{
+			APIVersion: warp.APIVersion,
+			Kind:       warp.KindAgent,
+			Namespace:  warp.NamespaceWorkspace,
+			Metadata:   warp.Metadata{Name: "strict-agent"},
+		},
+		Spec: warp.AgentSpec{
+			Commands: []string{"agent-cmd"},
+			Policies: &warp.Policies{
+				Tools: &warp.ToolPolicies{
+					Include:   []string{"tool-cmd", "tool-skill"},
+					Exclude:   []string{"tool-excluded"},
+					Dangerous: warp.ToolPolicyDeny,
+				},
+			},
+		},
+	}
+
+	// explicit-cmd declares an explicit agent override, so it resolves even
+	// though it is not listed in strict-agent's spec.commands.
+	explicitCmd := &warp.Command{
+		BaseResource: warp.BaseResource{
+			APIVersion: warp.APIVersion,
+			Kind:       warp.KindCommand,
+			Namespace:  warp.NamespaceWorkspace,
+			Metadata:   warp.Metadata{Name: "explicit-cmd"},
+		},
+		Spec: warp.CommandSpec{
+			Agent:   "strict-agent",
+			Context: warp.CommandContextFork,
+			Models:  []string{"gpt-5.5"},
+			Skills:  []string{"doc-skill"},
+			Rules:   []string{"rule-low", "rule-high"},
+			Tools:   []string{"tool-cmd", "tool-excluded", "tool-unlisted"},
+		},
+	}
+
+	// agent-cmd is enabled for strict-agent via its spec.commands list and
+	// declares no explicit agent override.
+	agentCmd := &warp.Command{
+		BaseResource: warp.BaseResource{
+			APIVersion: warp.APIVersion,
+			Kind:       warp.KindCommand,
+			Namespace:  warp.NamespaceWorkspace,
+			Metadata:   warp.Metadata{Name: "agent-cmd"},
+		},
+		Spec: warp.CommandSpec{
+			Skills: []string{"doc-skill"},
+			Tools:  []string{"tool-cmd"},
+		},
+	}
+
+	// unenabled-cmd is not enabled for any agent and declares no agent override.
+	unenabledCmd := &warp.Command{
+		BaseResource: warp.BaseResource{
+			APIVersion: warp.APIVersion,
+			Kind:       warp.KindCommand,
+			Namespace:  warp.NamespaceWorkspace,
+			Metadata:   warp.Metadata{Name: "unenabled-cmd"},
+		},
+	}
+
+	reg := warp.NewRegistry(ws)
+	for _, res := range []warp.Resource{
+		toolCmd, toolSkill, toolDangerous, toolExcluded, toolUnlisted,
+		docSkill, ruleLow, ruleHigh, strictAgent,
+		explicitCmd, agentCmd, unenabledCmd,
+	} {
+		reg.Set(res.QualifiedName(), res)
+	}
+	if err := reg.Validate(); err != nil {
+		t.Fatalf("registry validation failed: %v", err)
+	}
+
+	cat := NewCatalog(reg, "", "")
+
+	// 1. api.Command exposes the full schema in Commands() and GetCommand().
+	commands := cat.Commands()
+	var explicit *CommandSnapshot
+	for i := range commands {
+		if commands[i].Name == "explicit-cmd" {
+			explicit = &commands[i]
+		}
+	}
+	if explicit == nil {
+		t.Fatal("expected explicit-cmd in Commands()")
+	}
+	if explicit.Agent != "strict-agent" {
+		t.Errorf("Commands() explicit-cmd Agent = %q, want %q", explicit.Agent, "strict-agent")
+	}
+	if explicit.Context != string(warp.CommandContextFork) {
+		t.Errorf("Commands() explicit-cmd Context = %q, want %q", explicit.Context, string(warp.CommandContextFork))
+	}
+	if !slices.Equal(explicit.Skills, []string{"doc-skill"}) {
+		t.Errorf("Commands() explicit-cmd Skills = %v, want [doc-skill]", explicit.Skills)
+	}
+	if !slices.Equal(explicit.Rules, []string{"rule-low", "rule-high"}) {
+		t.Errorf("Commands() explicit-cmd Rules = %v, want [rule-low rule-high]", explicit.Rules)
+	}
+	if !slices.Equal(explicit.Models, []string{"gpt-5.5"}) {
+		t.Errorf("Commands() explicit-cmd Models = %v, want [gpt-5.5]", explicit.Models)
+	}
+	if !slices.Equal(explicit.Tools, []string{"tool-cmd", "tool-excluded", "tool-unlisted"}) {
+		t.Errorf("Commands() explicit-cmd Tools = %v, want [tool-cmd tool-excluded tool-unlisted]", explicit.Tools)
+	}
+
+	got, ok := cat.GetCommand("explicit-cmd")
+	if !ok {
+		t.Fatal("GetCommand(explicit-cmd) not found")
+	}
+	if got.Agent != "strict-agent" || got.Context != string(warp.CommandContextFork) {
+		t.Errorf("GetCommand(explicit-cmd) Agent/Context = %q/%q, want strict-agent/fork", got.Agent, got.Context)
+	}
+	if !slices.Equal(got.Skills, []string{"doc-skill"}) || !slices.Equal(got.Rules, []string{"rule-low", "rule-high"}) {
+		t.Errorf("GetCommand(explicit-cmd) Skills/Rules = %v/%v, want [doc-skill]/[rule-low rule-high]", got.Skills, got.Rules)
+	}
+	if !slices.Equal(got.Models, []string{"gpt-5.5"}) || !slices.Equal(got.Tools, []string{"tool-cmd", "tool-excluded", "tool-unlisted"}) {
+		t.Errorf("GetCommand(explicit-cmd) Models/Tools = %v/%v", got.Models, got.Tools)
+	}
+
+	// 2. ResolveCommand resolves the explicit-agent command (the override bypasses
+	//    the enablement check) with its executing agent, eager skills/rules, and
+	//    policy-filtered effective tools (including the skill's tool-skill).
+	resCmd, err := cat.ResolveCommand("strict-agent", "explicit-cmd")
+	if err != nil {
+		t.Fatalf("ResolveCommand(strict-agent, explicit-cmd) error: %v", err)
+	}
+	if resCmd.Command == nil || resCmd.Command.Metadata.Name != "explicit-cmd" {
+		t.Fatalf("expected resolved command explicit-cmd, got %+v", resCmd.Command)
+	}
+	if resCmd.Agent == nil || resCmd.Agent.Agent == nil || resCmd.Agent.Agent.Metadata.Name != "strict-agent" {
+		t.Errorf("expected executing agent strict-agent, got %+v", resCmd.Agent)
+	}
+	if len(resCmd.Skills) != 1 || resCmd.Skills[0].Metadata.Name != "doc-skill" {
+		t.Errorf("expected [doc-skill] eager skills, got %v", resCmd.Skills)
+	}
+	if len(resCmd.Rules) != 2 || resCmd.Rules[0].Metadata.Name != "rule-high" || resCmd.Rules[1].Metadata.Name != "rule-low" {
+		t.Errorf("expected rules sorted [rule-high, rule-low], got %v", resCmd.Rules)
+	}
+	if !resCmd.Rules[0].Spec.Triggers.Always || !resCmd.Rules[1].Spec.Triggers.Always {
+		t.Errorf("expected command eager rules to have Always=true, got %v, %v",
+			resCmd.Rules[0].Spec.Triggers.Always, resCmd.Rules[1].Spec.Triggers.Always)
+	}
+	// Effective tools: tool-cmd + tool-skill (from doc-skill); tool-dangerous is
+	// denied by the workspace dangerous:deny policy, tool-excluded is excluded by
+	// the agent, and tool-unlisted is not in the agent include allowlist.
+	if got := toolNames(t, resCmd.Tools); !slices.Equal(got, []string{"tool-cmd", "tool-skill"}) {
+		t.Errorf("ResolveCommand effective tools = %v, want [tool-cmd tool-skill]", got)
+	}
+
+	// 3. ResolveCommand resolves an agent-enabled command with the invoking agent.
+	agentResCmd, err := cat.ResolveCommand("strict-agent", "agent-cmd")
+	if err != nil {
+		t.Fatalf("ResolveCommand(strict-agent, agent-cmd) error: %v", err)
+	}
+	if agentResCmd.Agent == nil || agentResCmd.Agent.Agent == nil || agentResCmd.Agent.Agent.Metadata.Name != "strict-agent" {
+		t.Errorf("expected executing agent strict-agent for agent-cmd, got %+v", agentResCmd.Agent)
+	}
+
+	// 4. ResolveCommand rejects a command not enabled for the agent when it
+	//    declares no explicit agent override.
+	if _, err := cat.ResolveCommand("strict-agent", "unenabled-cmd"); err == nil {
+		t.Error("expected error resolving unenabled-cmd for strict-agent, got nil")
+	} else if !strings.Contains(err.Error(), "is not enabled for agent") {
+		t.Errorf("expected enablement error, got: %v", err)
+	}
+
+	// 5. A registry-less catalog guards against a nil resolver.
+	if _, err := NewCatalog(nil, "", "").ResolveCommand("strict-agent", "explicit-cmd"); err == nil {
+		t.Error("expected error from registry-less catalog ResolveCommand, got nil")
+	}
+}
+
+// TestBuildDeferredToolsCatalog verifies that BuildDeferredToolsCatalog groups a
+// resolved agent's deferred custom tools and deferred MCP tools into a compact
+// directory, and that AgentRenderGlobals exposes HasTool("tool_search") and the
+// DeferredTools directory.
+func TestBuildDeferredToolsCatalog(t *testing.T) {
+	setupTestXDG(t)
+	ctx := context.Background()
+
+	dir := t.TempDir()
+	agentsDir := filepath.Join(dir, ".agents")
+	if err := os.MkdirAll(filepath.Join(agentsDir, "tools"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// One eager custom tool, one deferred custom tool, and two deferred MCP tools.
+	tools := []struct {
+		file    string
+		content string
+	}{
+		{
+			"eager-tool.tool.md",
+			`---
+apiVersion: warp/v1alpha1
+kind: Tool
+metadata:
+  name: eager-tool
+  description: An eager tool
+spec:
+  command: ["sh", "-c"]
+---
+Eager tool.
+`,
+		},
+		{
+			"linter.tool.md",
+			`---
+apiVersion: warp/v1alpha1
+kind: Tool
+metadata:
+  name: linter
+  description: Run the linter
+spec:
+  command: ["golangci-lint", "run"]
+---
+Linter tool.
+`,
+		},
+		{
+			"gh-create.tool.md",
+			`---
+apiVersion: warp/v1alpha1
+kind: Tool
+metadata:
+  name: mcp__github__create_issue
+  description: Create a GitHub issue
+spec:
+  command: ["sh", "-c"]
+---
+Create issue.
+`,
+		},
+		{
+			"gh-list.tool.md",
+			`---
+apiVersion: warp/v1alpha1
+kind: Tool
+metadata:
+  name: mcp__github__list_prs
+  description: List GitHub pull requests
+spec:
+  command: ["sh", "-c"]
+---
+List PRs.
+`,
+		},
+	}
+	for _, tl := range tools {
+		if err := os.WriteFile(filepath.Join(agentsDir, "tools", tl.file), []byte(tl.content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// The agent loads eager-tool eagerly and defers linter + the two MCP tools.
+	agentContent := `---
+apiVersion: warp/v1alpha1
+kind: Agent
+metadata:
+  name: deferred-agent
+spec:
+  tools:
+    - eager-tool
+  policies:
+    tools:
+      include:
+        - eager-tool
+        - linter
+        - mcp__github__create_issue
+        - mcp__github__list_prs
+---
+Deferred agent.
+`
+	if err := os.WriteFile(filepath.Join(agentsDir, "deferred-agent.agent.md"), []byte(agentContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// The all-eager agent loads every custom tool eagerly and declares no MCP
+	// tools, so nothing is deferred.
+	allEagerContent := `---
+apiVersion: warp/v1alpha1
+kind: Agent
+metadata:
+  name: all-eager
+spec:
+  tools:
+    - eager-tool
+    - linter
+  policies:
+    tools:
+      include:
+        - eager-tool
+        - linter
+---
+All-eager agent.
+`
+	if err := os.WriteFile(filepath.Join(agentsDir, "all-eager.agent.md"), []byte(allEagerContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	ws, err := Open(ctx, dir)
+	if err != nil {
+		t.Fatalf("Open error: %v", err)
+	}
+	cat := ws.Catalog()
+
+	resolved, err := cat.ResolveAgent("deferred-agent")
+	if err != nil {
+		t.Fatalf("ResolveAgent: %v", err)
+	}
+
+	// 1. BuildDeferredToolsCatalog groups linter under Tools and the two MCP
+	//    tools under the github server.
+	dec := cat.BuildDeferredToolsCatalog(resolved)
+	if dec == nil {
+		t.Fatal("expected non-nil DeferredToolsCatalog")
+	}
+	if len(dec.Tools) != 1 || dec.Tools[0].Name != "linter" || dec.Tools[0].Description != "Run the linter" {
+		t.Errorf("unexpected deferred tools: %+v", dec.Tools)
+	}
+	if len(dec.MCPServers) != 1 {
+		t.Fatalf("expected 1 MCP server summary, got %d: %+v", len(dec.MCPServers), dec.MCPServers)
+	}
+	gh := dec.MCPServers[0]
+	if gh.Name != "github" || gh.Prefix != "mcp__github__*" {
+		t.Errorf("unexpected MCP server summary: %+v", gh)
+	}
+	foundCreate, foundList := false, false
+	for _, tn := range gh.Tools {
+		switch tn {
+		case "create_issue":
+			foundCreate = true
+		case "list_prs":
+			foundList = true
+		}
+	}
+	if !foundCreate || !foundList {
+		t.Errorf("expected github server tools [create_issue list_prs], got %v", gh.Tools)
+	}
+
+	// 2. AgentRenderGlobals exposes HasTool("tool_search") (deferred tools exist)
+	//    and the DeferredTools directory; deferred tools are not "has tool".
+	globals := cat.AgentRenderGlobals(resolved)
+	hasTool, ok := globals["HasTool"].(func(string) bool)
+	if !ok {
+		t.Fatalf("expected HasTool func, got %T", globals["HasTool"])
+	}
+	if !hasTool("tool_search") {
+		t.Error("expected HasTool(tool_search) true when deferred tools exist")
+	}
+	if !hasTool("eager-tool") {
+		t.Error("expected HasTool(eager-tool) true for eager tool")
+	}
+	if hasTool("linter") {
+		t.Error("expected HasTool(linter) false for deferred tool")
+	}
+	if _, ok := globals["DeferredTools"].(*DeferredToolsCatalog); !ok {
+		t.Errorf("expected DeferredTools *DeferredToolsCatalog, got %T", globals["DeferredTools"])
+	}
+
+	// 3. The all-eager agent has no deferred tools: BuildDeferredToolsCatalog is
+	//    nil and HasTool("tool_search") is false.
+	resolvedEager, err := cat.ResolveAgent("all-eager")
+	if err != nil {
+		t.Fatalf("ResolveAgent(all-eager): %v", err)
+	}
+	if dec := cat.BuildDeferredToolsCatalog(resolvedEager); dec != nil {
+		t.Errorf("expected nil DeferredToolsCatalog for all-eager agent, got %+v", dec)
+	}
+	globalsEager := cat.AgentRenderGlobals(resolvedEager)
+	if hasToolEager, ok := globalsEager["HasTool"].(func(string) bool); ok {
+		if hasToolEager("tool_search") {
+			t.Error("expected HasTool(tool_search) false when no deferred tools exist")
+		}
+	}
+}

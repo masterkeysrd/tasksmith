@@ -13,7 +13,9 @@ import (
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/core/uuid"
 	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/harness"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/std"
+	"github.com/masterkeysrd/warp"
 )
 
 // AddChild registers or updates a child session on this parent session.
@@ -165,6 +167,97 @@ func (s *Session) InvokeSubagent(ctx context.Context, in api.InvokeAgentInput) (
 		Status:    "running",
 		Message:   fmt.Sprintf("Subagent %s (%s) spawned asynchronously in %s", child.Config.Agent, child.ID, child.WorkDir),
 	}, nil
+}
+
+// dispatchCommandSubagent executes a slash command in a forked child session.
+// It is used when a command requests clean/fork context or targets a different
+// agent than the invoking session. The child inherits the parent's runtime
+// dependencies; for fork context the parent's conversation history is seeded
+// into the child's harness before the command turn starts.
+func (s *Session) dispatchCommandSubagent(ctx context.Context, exec *commandExecution) error {
+	if exec == nil || exec.Message == nil {
+		return nil
+	}
+
+	childID := uuid.NewString()
+	targetAgent := exec.TargetAgent
+	if targetAgent == "" {
+		targetAgent = s.Config.Agent
+	}
+	targetModel := exec.TargetModel
+
+	cfg := Config{
+		ID:          childID,
+		Title:       "/" + exec.Name,
+		ParentID:    s.ID,
+		WorkDir:     s.WorkDir,
+		Parent:      s,
+		Session:     api.SessionConfig{Agent: targetAgent, Model: targetModel, Mode: s.Config.Mode},
+		DB:          s.db,
+		Workspace:   s.workspace,
+		Gateway:     s.gateway,
+		Catalog:     s.catalog,
+		Permissions: s.permRoot,
+		Publisher:   s.publisher,
+		Logger:      s.logger,
+		Metrics:     s.metrics,
+		ReloadLock:  s.reloadLock,
+		Context:     s.bgCtx,
+		WaitGroup:   s.wg,
+		OnUpdate:    s.onUpdate,
+	}
+
+	child, err := New(ctx, cfg)
+	if err != nil {
+		return err
+	}
+
+	if s.onUpdate != nil {
+		if err := s.onUpdate(ctx, child); err != nil {
+			_ = child.Close()
+			return err
+		}
+	}
+	s.AddChild(child)
+
+	s.publisher.Publish(api.TopicSessions, api.SessionCreatedEvent{
+		Workspace: s.workspace.RootDir(),
+		Session:   ToAPISession(child),
+	})
+	child.notifyParentUpdate()
+
+	// For fork context, fork the child's checkpoint from the parent's latest
+	// checkpoint so the command runs with the parent's full state (all channels).
+	if exec.ContextMode == warp.CommandContextFork {
+		if err := child.Harness.ForkFrom(ctx, s.ID); err != nil {
+			_ = child.Close()
+			return err
+		}
+	}
+
+	// Rebuild the command message's tool blocks against the child's own tool
+	// container so deferred/eager tool activation matches targetAgent's partition.
+	cmdMsg := exec.Message
+	if exec.Resolved != nil && len(exec.Resolved.Tools) > 0 {
+		content := make(message.Content, 0, len(exec.Resolved.Tools)+1)
+		content = append(content, &message.TextBlock{Text: exec.Message.GetContent().Text()})
+		content = appendCommandToolBlocks(content, child.Tools, s.workspace.Catalog(), exec.Resolved.Tools)
+		rebuilt := message.NewUser(content...)
+		if exec.Message.GetID() != "" {
+			rebuilt.SetID(exec.Message.GetID())
+		}
+		cmdMsg = rebuilt
+	}
+
+	// Apply a per-turn model override when the command declares a model that
+	// differs from the child's configured model.
+	var hInput harness.Input
+	hInput.Message = cmdMsg
+	if targetModel != "" && !strings.EqualFold(targetModel, child.Config.Model) {
+		hInput.ModelOverride = targetModel
+	}
+
+	return child.startTurn(hInput)
 }
 
 // ManageSubagents handles management operations (list, status, send, kill) on child subagent sessions.

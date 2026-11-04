@@ -3,10 +3,13 @@ package harness
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"iter"
+	"slices"
 	"strings"
+	"time"
 
 	"github.com/masterkeysrd/loom/checkpoint/sqlite"
 	"github.com/masterkeysrd/loom/graph"
@@ -76,6 +79,10 @@ type Input struct {
 	Decisions map[string]api.PermissionDecision
 	Answers   map[string]api.QuestionResponse
 	Compact   *api.CompactRequest
+	// ModelOverride, when non-empty, temporarily overrides the session's model
+	// for the duration of this turn (used by commands declaring spec.models).
+	// The session restores its original model when the turn exits.
+	ModelOverride string
 }
 
 func (input Input) HasResponses() bool {
@@ -141,18 +148,23 @@ type Harness interface {
 	Stream(ctx context.Context, input Input) iter.Seq2[any, error]
 	LoadState(ctx context.Context) (State, error)
 	Configure(opts NodeOptions) error
+	// ForkFrom copies the latest checkpoint (all state channels) from
+	// parentThreadID into this harness's thread as its initial checkpoint,
+	// recording fork provenance in checkpoint metadata.
+	ForkFrom(ctx context.Context, parentThreadID string) error
 }
 
 type harness struct {
-	id     string
-	logger log.Interface
-	graph  *graph.Graph[State]
-	nodes  []Node
-	model  *llm.Model
-	tools  tools.Container
-	queue  Queue
-	static StaticContext
-	limits models.Limits
+	id           string
+	logger       log.Interface
+	graph        *graph.Graph[State]
+	nodes        []Node
+	model        *llm.Model
+	tools        tools.Container
+	queue        Queue
+	static       StaticContext
+	limits       models.Limits
+	checkpointer graph.Checkpointer
 }
 
 var _ Harness = (*harness)(nil)
@@ -184,11 +196,12 @@ func New(cfg Config) (Harness, error) {
 	}
 
 	return &harness{
-		id:     strings.TrimSpace(cfg.ID),
-		logger: logger,
-		graph:  g,
-		nodes:  nodes,
-		queue:  cfg.Queue,
+		id:           strings.TrimSpace(cfg.ID),
+		logger:       logger,
+		graph:        g,
+		nodes:        nodes,
+		queue:        cfg.Queue,
+		checkpointer: cp,
 	}, nil
 }
 
@@ -316,6 +329,7 @@ func prepareResponses(input Input, state State) (graph.Update[State], error) {
 
 func (h *harness) prepareMessage(msg message.Message, state State) (graph.Update[State], message.Message, error) {
 	in := message.CloneMessage(msg)
+	in, newTools := state.DeduplicateToolBlocks(in)
 	var inputMsg message.Message
 	_, _, unfulfilled, _ := state.ActiveToolCalls()
 	if len(unfulfilled) == 0 {
@@ -325,6 +339,7 @@ func (h *harness) prepareMessage(msg message.Message, state State) (graph.Update
 		inputMsg = message.CloneMessage(in)
 	}
 	return graph.Update[State](func(s State) State {
+		s = s.RecordLoadedTools(newTools...)
 		return s.AppendMessage(in, MessageUpdateOptions{Static: h.static, Limits: h.limits, SkipContextRecalculation: len(unfulfilled) > 0})
 	}), inputMsg, nil
 }
@@ -440,4 +455,57 @@ func (h *harness) LoadState(ctx context.Context) (State, error) {
 		return State{}, nil
 	}
 	return snap.State.Copy(), nil
+}
+
+// ForkFrom copies the latest checkpoint (all state channels) from
+// parentThreadID into this harness's thread as its initial checkpoint,
+// recording fork provenance in checkpoint metadata. It is used to fork a
+// parent session's full conversation and state into a child session so the
+// child begins with the parent's prior context.
+func (h *harness) ForkFrom(ctx context.Context, parentThreadID string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if h.checkpointer == nil {
+		return nil
+	}
+
+	parentThreadID = strings.TrimSpace(parentThreadID)
+	if parentThreadID == "" {
+		return nil
+	}
+
+	parentCP, err := h.checkpointer.Load(ctx, graph.Location{ThreadID: parentThreadID})
+	if err != nil {
+		if errors.Is(err, graph.ErrCheckpointNotFound) {
+			return nil
+		}
+		return fmt.Errorf("harness: load parent checkpoint %q: %w", parentThreadID, err)
+	}
+	if parentCP == nil || len(parentCP.State) == 0 {
+		return nil
+	}
+
+	clonedState := make(graph.StateMap, len(parentCP.State))
+	for channel, value := range parentCP.State {
+		clonedState[channel] = slices.Clone(value)
+	}
+
+	meta, _ := json.Marshal(map[string]any{
+		"source":               "fork",
+		"parent_thread_id":     parentCP.Location.ThreadID,
+		"parent_checkpoint_id": parentCP.Location.CheckpointID,
+	})
+
+	return h.checkpointer.Record(ctx, graph.Checkpoint{
+		Location: graph.Location{
+			ThreadID:     h.id,
+			CheckpointNS: parentCP.Location.CheckpointNS,
+			CheckpointID: uuid.NewString(),
+		},
+		State:     clonedState,
+		Next:      []string{graph.START},
+		Timestamp: time.Now().UTC(),
+		Metadata:  meta,
+	})
 }

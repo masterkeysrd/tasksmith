@@ -111,11 +111,21 @@ func (s *Session) Send(ctx context.Context, req api.SendRequest) error {
 		msg.SetID(id)
 	}
 
-	renderedMsg, err := s.resolveSlashCommand(msg)
+	exec, err := s.resolveCommandExecution(msg)
 	if err != nil {
 		return err
 	}
-	msg = renderedMsg
+
+	// A command that requests a forked subagent (clean/fork context or a
+	// different target agent) executes in a child session rather than on the
+	// current thread, so the parent turn is not started.
+	if exec != nil && exec.Subagent {
+		return s.dispatchCommandSubagent(ctx, exec)
+	}
+
+	if exec != nil {
+		msg = exec.Message
+	}
 
 	s.Lock()
 	if strings.TrimSpace(s.Title) == "" && !s.titleGenerating {
@@ -139,7 +149,13 @@ func (s *Session) Send(ctx context.Context, req api.SendRequest) error {
 		return nil
 	}
 
-	return s.startTurn(harness.Input{Message: msg})
+	var hInput harness.Input
+	hInput.Message = msg
+	if exec != nil && exec.TargetModel != "" && !strings.EqualFold(exec.TargetModel, s.Config.Model) {
+		hInput.ModelOverride = exec.TargetModel
+	}
+
+	return s.startTurn(hInput)
 }
 
 // Cancel interrupts any active conversational turn executing on this session.
@@ -370,6 +386,18 @@ func (s *Session) startTurn(hInput harness.Input) error {
 			cancel()
 			close(done)
 		}()
+
+		// Apply a per-turn model override (e.g. a command's spec.models) and
+		// restore the original model when the turn exits on any path.
+		if hInput.ModelOverride != "" {
+			origModel := s.Config.Model
+			s.setConfigModel(hInput.ModelOverride)
+			_ = s.configureHarness(runCtx)
+			defer func() {
+				s.setConfigModel(origModel)
+				_ = s.configureHarness(s.bgCtx)
+			}()
+		}
 
 		s.Lock()
 		hErr := s.harnessErr

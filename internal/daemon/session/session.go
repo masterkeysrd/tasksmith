@@ -738,6 +738,15 @@ func (s *Session) updateContextLimits(agentName, modelName string) (models.Limit
 	return limits, staticCtx
 }
 
+// setConfigModel updates the session's configured model under the session lock.
+// It is used to apply a per-turn model override and to restore the original
+// model when the turn exits.
+func (s *Session) setConfigModel(model string) {
+	s.Lock()
+	s.Config.Model = model
+	s.Unlock()
+}
+
 func (s *Session) configureHarness(ctx context.Context) error {
 	s.Lock()
 	config := s.Config

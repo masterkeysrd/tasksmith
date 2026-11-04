@@ -1,8 +1,10 @@
 package harness
 
 import (
+	"fmt"
 	"maps"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/masterkeysrd/loom/message"
@@ -47,6 +49,7 @@ type State struct {
 	PendingQuestions    []api.QuestionRequest             `json:"pending_questions,omitempty"`
 	QuestionResponses   map[string]api.QuestionResponse   `json:"question_responses,omitempty"`
 	Todos               []api.TodoItem                    `json:"todos,omitempty"`
+	LoadedTools         []string                          `json:"loaded_tools,omitempty"`
 	Context             api.ContextState                  `json:"context"`
 }
 
@@ -82,6 +85,11 @@ func (s State) Copy() State {
 		todos = slices.Clone(s.Todos)
 	}
 
+	var loadedTools []string
+	if len(s.LoadedTools) > 0 {
+		loadedTools = slices.Clone(s.LoadedTools)
+	}
+
 	var pendingCompact *api.CompactRequest
 	if s.PendingCompaction != nil {
 		pendingCompact = &api.CompactRequest{Focus: s.PendingCompaction.Focus}
@@ -95,6 +103,7 @@ func (s State) Copy() State {
 		PendingQuestions:    questions,
 		QuestionResponses:   responses,
 		Todos:               todos,
+		LoadedTools:         loadedTools,
 		Context:             s.Context,
 	}
 }
@@ -165,6 +174,7 @@ func (s State) ApplyCompaction(static StaticContext, limits models.Limits) State
 	s.Context.CachedTokens = 0
 	s.Context.Compactions++
 	s.Context.LastCompacted = time.Now().UTC()
+	s.LoadedTools = nil
 	s.Context = computeContextState(static, s, limits)
 	return s
 }
@@ -185,6 +195,114 @@ func (s State) AppendMessages(msgs message.MessageList, opts MessageUpdateOption
 	s.Messages = append(s.Messages, msgs...)
 	if !opts.SkipContextRecalculation {
 		s.Context = computeContextState(opts.Static, s, opts.Limits)
+	}
+	return s
+}
+
+// toolBlockName returns the tool name referenced by a tool reference/definition
+// block, or "" for any other block kind.
+func toolBlockName(b message.Block) string {
+	switch blk := b.(type) {
+	case *message.ToolReferenceBlock:
+		return blk.ToolName
+	case *message.ToolDefinitionBlock:
+		return blk.Name
+	default:
+		return ""
+	}
+}
+
+// DeduplicateToolBlocks filters *message.ToolReferenceBlock and
+// *message.ToolDefinitionBlock entries out of msg when they reference a tool that
+// is already present in s.LoadedTools (or already appears earlier in the same
+// message), returning the (possibly filtered) message and the names of the tools
+// newly activated by this message. Tool names are compared case-insensitively.
+//
+// If msg contains no tool reference/definition blocks, it is returned unchanged
+// with a nil slice. For a *message.Tool whose content becomes empty after
+// filtering (i.e. every tool reference was already loaded), a text block
+// informing the model that the tools are already active is appended so the tool
+// result message remains non-empty.
+func (s State) DeduplicateToolBlocks(msg message.Message) (message.Message, []string) {
+	if msg == nil {
+		return msg, nil
+	}
+
+	var content message.Content
+	switch m := msg.(type) {
+	case *message.User:
+		content = m.Content
+	case *message.Tool:
+		content = m.Content
+	default:
+		return msg, nil
+	}
+
+	// Fast path: no tool reference/definition blocks to deduplicate.
+	hasToolBlock := false
+	for _, b := range content {
+		if toolBlockName(b) != "" {
+			hasToolBlock = true
+			break
+		}
+	}
+	if !hasToolBlock {
+		return msg, nil
+	}
+
+	loaded := make(map[string]struct{}, len(s.LoadedTools))
+	for _, name := range s.LoadedTools {
+		loaded[strings.ToLower(name)] = struct{}{}
+	}
+
+	var newlyLoaded, alreadyLoaded []string
+	filtered := make(message.Content, 0, len(content))
+	for _, b := range content {
+		name := toolBlockName(b)
+		if name == "" {
+			filtered = append(filtered, b)
+			continue
+		}
+		key := strings.ToLower(name)
+		if _, ok := loaded[key]; ok {
+			alreadyLoaded = append(alreadyLoaded, name)
+			continue
+		}
+		loaded[key] = struct{}{}
+		newlyLoaded = append(newlyLoaded, name)
+		filtered = append(filtered, b)
+	}
+
+	cloned := message.CloneMessage(msg)
+	switch m := cloned.(type) {
+	case *message.User:
+		m.Content = filtered
+	case *message.Tool:
+		m.Content = filtered
+		if len(m.Content) == 0 {
+			m.Content = append(m.Content, &message.TextBlock{Text: fmt.Sprintf("Tools already loaded in context: %s", strings.Join(alreadyLoaded, ", "))})
+		}
+	}
+	return cloned, newlyLoaded
+}
+
+// RecordLoadedTools returns a copy of s with the given tool names appended to
+// LoadedTools, deduplicated case-insensitively against the existing entries.
+func (s State) RecordLoadedTools(names ...string) State {
+	if len(names) == 0 {
+		return s
+	}
+	seen := make(map[string]struct{}, len(s.LoadedTools)+len(names))
+	for _, name := range s.LoadedTools {
+		seen[strings.ToLower(name)] = struct{}{}
+	}
+	for _, name := range names {
+		key := strings.ToLower(name)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		s.LoadedTools = append(s.LoadedTools, name)
 	}
 	return s
 }

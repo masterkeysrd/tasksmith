@@ -417,19 +417,25 @@ func (n *InboxNode) Execute(ctx context.Context, state State) (graph.Command[Sta
 	}
 
 	drained := make(message.MessageList, 0, len(queued))
+	var newTools []string
+	tempState := state
 	for _, msg := range queued {
 		if msg == nil {
 			continue
 		}
 		cloned := message.CloneMessage(msg)
+		cloned, msgNewTools := tempState.DeduplicateToolBlocks(cloned)
 		if cloned.GetID() == "" || !uuid.Validate(cloned.GetID()) {
 			cloned.SetID(uuid.NewString())
 		}
+		tempState = tempState.RecordLoadedTools(msgNewTools...)
+		newTools = append(newTools, msgNewTools...)
 		emit(ctx, cloned)
 		drained = append(drained, cloned)
 	}
 
 	return graph.Update[State](func(s State) State {
+		s = s.RecordLoadedTools(newTools...)
 		s = s.AppendMessages(drained, MessageUpdateOptions{Static: n.static, Limits: n.limits})
 		emit(ctx, api.ContextUpdatedEvent{Context: s.Context})
 		return s
@@ -523,9 +529,9 @@ func (n *ToolsNode) Execute(ctx context.Context, state State) (graph.Command[Sta
 	ctx = scope.With(ctx, scope.Scope{TurnID: turnID, MessageID: asstMsgID})
 
 	if len(state.PendingPermissions) > 0 || len(state.PendingQuestions) > 0 {
-		return n.resumeCalls(ctx, unfulfilled, state.PendingPermissions, state.PermissionDecisions, state.PendingQuestions, state.QuestionResponses)
+		return n.resumeCalls(ctx, unfulfilled, state.PendingPermissions, state.PermissionDecisions, state.PendingQuestions, state.QuestionResponses, state.LoadedTools)
 	}
-	return n.evaluateCalls(ctx, unfulfilled)
+	return n.evaluateCalls(ctx, unfulfilled, state.LoadedTools)
 }
 
 func (n *ToolsNode) cancelCalls(ctx context.Context, asstIdx int, unfulfilled []*message.ToolCall, messages message.MessageList) (graph.Command[State], error) {
@@ -566,12 +572,15 @@ func (n *ToolsNode) cancelCalls(ctx context.Context, asstIdx int, unfulfilled []
 	}), nil
 }
 
-func (n *ToolsNode) evaluateCalls(ctx context.Context, unfulfilled []*message.ToolCall) (graph.Command[State], error) {
+func (n *ToolsNode) evaluateCalls(ctx context.Context, unfulfilled []*message.ToolCall, loadedTools []string) (graph.Command[State], error) {
 	toolMsgs := make(message.MessageList, 0, len(unfulfilled))
 	var pending []api.PermissionRequest
 	var questions []api.QuestionRequest
 	var updatedTodos []api.TodoItem
 	var hasTodos bool
+	var newTools []string
+
+	dedupState := State{LoadedTools: loadedTools}
 
 	for _, tc := range unfulfilled {
 		if tc.Name == "ask_question" {
@@ -620,12 +629,17 @@ func (n *ToolsNode) evaluateCalls(ctx context.Context, unfulfilled []*message.To
 			pending = append(pending, *req)
 			continue
 		}
-		emit(ctx, toolMsg)
-		toolMsgs = append(toolMsgs, toolMsg)
-		if todos, ok := extractTodos(toolMsg); ok {
-			updatedTodos = todos
-			hasTodos = true
-			emit(ctx, api.TodosUpdatedEvent{Todos: updatedTodos})
+		deduped, msgNewTools := dedupState.DeduplicateToolBlocks(toolMsg)
+		dedupState = dedupState.RecordLoadedTools(msgNewTools...)
+		newTools = append(newTools, msgNewTools...)
+		emit(ctx, deduped)
+		toolMsgs = append(toolMsgs, deduped)
+		if dedupedTool, ok := deduped.(*message.Tool); ok {
+			if todos, ok := extractTodos(dedupedTool); ok {
+				updatedTodos = todos
+				hasTodos = true
+				emit(ctx, api.TodosUpdatedEvent{Todos: updatedTodos})
+			}
 		}
 	}
 
@@ -639,13 +653,14 @@ func (n *ToolsNode) evaluateCalls(ctx context.Context, unfulfilled []*message.To
 			if hasTodos {
 				s.Todos = slices.Clone(updatedTodos)
 			}
+			s = s.RecordLoadedTools(newTools...)
 			s.Context = computeContextState(n.static, s, n.limits)
 			emit(ctx, api.ContextUpdatedEvent{Context: s.Context})
 			return s
 		}), nil
 	}
 
-	return n.appendToolMessagesUpdate(ctx, toolMsgs, updatedTodos, hasTodos), nil
+	return n.appendToolMessagesUpdate(ctx, toolMsgs, updatedTodos, hasTodos, newTools), nil
 }
 
 func newQuestionRequest(tc *message.ToolCall) (api.QuestionRequest, error) {
@@ -696,7 +711,7 @@ func (n *ToolsNode) evaluateSingleCall(ctx context.Context, tc *message.ToolCall
 	return msg, nil, nil
 }
 
-func (n *ToolsNode) resumeCalls(ctx context.Context, unfulfilled []*message.ToolCall, pending []api.PermissionRequest, decisions map[string]api.PermissionDecision, questions []api.QuestionRequest, answers map[string]api.QuestionResponse) (graph.Command[State], error) {
+func (n *ToolsNode) resumeCalls(ctx context.Context, unfulfilled []*message.ToolCall, pending []api.PermissionRequest, decisions map[string]api.PermissionDecision, questions []api.QuestionRequest, answers map[string]api.QuestionResponse, loadedTools []string) (graph.Command[State], error) {
 	pendingByCall := make(map[string]api.PermissionRequest, len(pending))
 	for _, req := range pending {
 		pendingByCall[req.ToolCallID] = req
@@ -710,6 +725,9 @@ func (n *ToolsNode) resumeCalls(ctx context.Context, unfulfilled []*message.Tool
 	var nextQuestions []api.QuestionRequest
 	var updatedTodos []api.TodoItem
 	var hasTodos bool
+	var newTools []string
+
+	dedupState := State{LoadedTools: loadedTools}
 
 	for _, tc := range unfulfilled {
 		if req, ok := questionsByCall[tc.ID]; ok {
@@ -798,23 +816,28 @@ func (n *ToolsNode) resumeCalls(ctx context.Context, unfulfilled []*message.Tool
 		if err != nil {
 			return nil, err
 		}
-		emit(ctx, toolMsg)
-		toolMsgs = append(toolMsgs, toolMsg)
-		if todos, ok := extractTodos(toolMsg); ok {
-			updatedTodos = todos
-			hasTodos = true
-			emit(ctx, api.TodosUpdatedEvent{Todos: updatedTodos})
+		deduped, msgNewTools := dedupState.DeduplicateToolBlocks(toolMsg)
+		dedupState = dedupState.RecordLoadedTools(msgNewTools...)
+		newTools = append(newTools, msgNewTools...)
+		emit(ctx, deduped)
+		toolMsgs = append(toolMsgs, deduped)
+		if dedupedTool, ok := deduped.(*message.Tool); ok {
+			if todos, ok := extractTodos(dedupedTool); ok {
+				updatedTodos = todos
+				hasTodos = true
+				emit(ctx, api.TodosUpdatedEvent{Todos: updatedTodos})
+			}
 		}
 	}
 
 	if len(nextQuestions) > 0 {
 		return graph.InterruptUpdate[State](func(s State) State {
-			s = n.appendToolMessagesUpdate(ctx, toolMsgs, updatedTodos, hasTodos)(s)
+			s = n.appendToolMessagesUpdate(ctx, toolMsgs, updatedTodos, hasTodos, newTools)(s)
 			s.PendingQuestions = cloneQuestionRequests(nextQuestions)
 			return s
 		}), nil
 	}
-	return n.appendToolMessagesUpdate(ctx, toolMsgs, updatedTodos, hasTodos), nil
+	return n.appendToolMessagesUpdate(ctx, toolMsgs, updatedTodos, hasTodos, newTools), nil
 }
 
 func (n *ToolsNode) resumeSingleCall(ctx context.Context, tc *message.ToolCall, req api.PermissionRequest, decisions map[string]api.PermissionDecision) (*message.Tool, error) {
@@ -854,7 +877,7 @@ func clearPermissionsUpdate() graph.Update[State] {
 	}
 }
 
-func (n *ToolsNode) appendToolMessagesUpdate(ctx context.Context, toolMsgs message.MessageList, todos []api.TodoItem, hasTodos bool) graph.Update[State] {
+func (n *ToolsNode) appendToolMessagesUpdate(ctx context.Context, toolMsgs message.MessageList, todos []api.TodoItem, hasTodos bool, newTools []string) graph.Update[State] {
 	return func(s State) State {
 		s = s.AppendMessages(toolMsgs, MessageUpdateOptions{Static: n.static, Limits: n.limits})
 		s.PendingPermissions = nil
@@ -864,6 +887,7 @@ func (n *ToolsNode) appendToolMessagesUpdate(ctx context.Context, toolMsgs messa
 		if hasTodos {
 			s.Todos = slices.Clone(todos)
 		}
+		s = s.RecordLoadedTools(newTools...)
 		emit(ctx, api.ContextUpdatedEvent{Context: s.Context})
 		return s
 	}

@@ -385,7 +385,7 @@ func TestQuestionResumeDuplicateText(t *testing.T) {
 		{Question: "Other?", Text: "detail"},
 	}}
 	node := &ToolsNode{}
-	cmd, err := node.resumeCalls(context.Background(), []*message.ToolCall{call}, nil, nil, []api.QuestionRequest{request}, map[string]api.QuestionResponse{request.ID: answers})
+	cmd, err := node.resumeCalls(context.Background(), []*message.ToolCall{call}, nil, nil, []api.QuestionRequest{request}, map[string]api.QuestionResponse{request.ID: answers}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

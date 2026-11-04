@@ -3,6 +3,7 @@ package harness
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -10,8 +11,10 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
+	"github.com/masterkeysrd/loom/checkpoint/sqlite"
 	"github.com/masterkeysrd/loom/graph"
 	"github.com/masterkeysrd/loom/llm"
 	"github.com/masterkeysrd/loom/message"
@@ -2253,6 +2256,156 @@ func TestTodosToolExecutionAndCheckpoint(t *testing.T) {
 	}
 }
 
+// TestForkFromCopiesAllChannelsAndRecordsMetadata verifies that ForkFrom copies
+// every checkpoint channel (Messages, Todos, Context) from the parent thread to
+// the child thread and records fork provenance in the child's checkpoint metadata.
+func TestForkFromCopiesAllChannelsAndRecordsMetadata(t *testing.T) {
+	ctx := context.Background()
+	db := openTestSQLite(t)
+	_, reg, perm := newTestToolsRegistry(t)
+
+	// Build a parent thread checkpoint carrying multiple state channels.
+	cp, err := sqlite.NewCheckpointer(db)
+	if err != nil {
+		t.Fatalf("sqlite.NewCheckpointer: %v", err)
+	}
+
+	parentState := State{
+		Messages: message.MessageList{
+			message.NewUserText("hello parent"),
+			message.NewAssistantText("hi there"),
+		},
+		Todos: []api.TodoItem{
+			{Content: "Step 1", ActiveText: "Doing step 1", Status: string(api.TodoStatusInProgress)},
+			{Content: "Step 2", ActiveText: "Queued step 2", Status: string(api.TodoStatusPending)},
+		},
+		Context: api.ContextState{UsedTokens: 42, MaxTokens: 1000},
+	}
+	parentMap, err := graph.DecomposeState(parentState)
+	if err != nil {
+		t.Fatalf("DecomposeState: %v", err)
+	}
+	if err := cp.Record(ctx, graph.Checkpoint{
+		Location:  graph.Location{ThreadID: "parent-thread", CheckpointID: "cp-parent-1"},
+		State:     parentMap,
+		Next:      []string{graph.END},
+		Timestamp: time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("Record parent checkpoint: %v", err)
+	}
+
+	// Fork into a child thread that shares the same database.
+	child, err := New(Config{
+		ID:          "child-thread",
+		DB:          db,
+		Bash:        &fakeBashRunner{},
+		Spiller:     newTestSpiller(t),
+		Permissions: perm,
+		Queue:       &fakeQueue{},
+		Logger:      log.Default(),
+	})
+	if err != nil {
+		t.Fatalf("New child error: %v", err)
+	}
+	child.Configure(NodeOptions{
+		Model: newTestModel(t, &fakeProvider{}),
+		Tools: reg,
+	})
+
+	if err := child.ForkFrom(ctx, "parent-thread"); err != nil {
+		t.Fatalf("ForkFrom: %v", err)
+	}
+
+	// The child's reconstructed state must carry every channel from the parent.
+	childState, err := child.LoadState(ctx)
+	if err != nil {
+		t.Fatalf("child.LoadState: %v", err)
+	}
+	if len(childState.Messages) != 2 {
+		t.Fatalf("expected 2 forked messages, got %d", len(childState.Messages))
+	}
+	if childState.Messages[0].Role() != message.RoleUser || msgText(childState.Messages[0]) != "hello parent" {
+		t.Errorf("forked messages[0] = (%s, %q), want (user, %q)", childState.Messages[0].Role(), msgText(childState.Messages[0]), "hello parent")
+	}
+	if childState.Messages[1].Role() != message.RoleAssistant || msgText(childState.Messages[1]) != "hi there" {
+		t.Errorf("forked messages[1] = (%s, %q), want (assistant, %q)", childState.Messages[1].Role(), msgText(childState.Messages[1]), "hi there")
+	}
+	if len(childState.Todos) != 2 {
+		t.Fatalf("expected 2 forked todos, got %d", len(childState.Todos))
+	}
+	if childState.Todos[0].Content != "Step 1" || childState.Todos[1].Status != string(api.TodoStatusPending) {
+		t.Errorf("unexpected forked todos: %+v", childState.Todos)
+	}
+	if childState.Context.UsedTokens != 42 || childState.Context.MaxTokens != 1000 {
+		t.Errorf("unexpected forked context: %+v", childState.Context)
+	}
+
+	// The forked checkpoint must record fork provenance metadata.
+	childCP, err := cp.Load(ctx, graph.Location{ThreadID: "child-thread"})
+	if err != nil {
+		t.Fatalf("load child checkpoint: %v", err)
+	}
+	if childCP == nil {
+		t.Fatal("expected a forked checkpoint on the child thread")
+	}
+	var meta map[string]any
+	if err := json.Unmarshal(childCP.Metadata, &meta); err != nil {
+		t.Fatalf("unmarshal fork metadata: %v", err)
+	}
+	if meta["source"] != "fork" {
+		t.Errorf("fork metadata source = %v, want %q", meta["source"], "fork")
+	}
+	if meta["parent_thread_id"] != "parent-thread" {
+		t.Errorf("fork metadata parent_thread_id = %v, want %q", meta["parent_thread_id"], "parent-thread")
+	}
+	if meta["parent_checkpoint_id"] != "cp-parent-1" {
+		t.Errorf("fork metadata parent_checkpoint_id = %v, want %q", meta["parent_checkpoint_id"], "cp-parent-1")
+	}
+}
+
+// TestForkFromNoParentCheckpointIsNoop verifies that forking from a thread with
+// no checkpoint, or an empty parent thread ID, is a no-op that leaves the child
+// thread with an empty state.
+func TestForkFromNoParentCheckpointIsNoop(t *testing.T) {
+	ctx := context.Background()
+	db := openTestSQLite(t)
+	_, reg, perm := newTestToolsRegistry(t)
+
+	child, err := New(Config{
+		ID:          "empty-child",
+		DB:          db,
+		Bash:        &fakeBashRunner{},
+		Spiller:     newTestSpiller(t),
+		Permissions: perm,
+		Queue:       &fakeQueue{},
+		Logger:      log.Default(),
+	})
+	if err != nil {
+		t.Fatalf("New child error: %v", err)
+	}
+	child.Configure(NodeOptions{
+		Model: newTestModel(t, &fakeProvider{}),
+		Tools: reg,
+	})
+
+	// Forking from a thread with no checkpoint is a no-op.
+	if err := child.ForkFrom(ctx, "missing-parent"); err != nil {
+		t.Fatalf("ForkFrom(missing) = %v, want nil", err)
+	}
+	// An empty parent thread ID is also a no-op.
+	if err := child.ForkFrom(ctx, "   "); err != nil {
+		t.Fatalf("ForkFrom(empty) = %v, want nil", err)
+	}
+
+	state, err := child.LoadState(ctx)
+	if err != nil {
+		t.Fatalf("LoadState: %v", err)
+	}
+	if len(state.Messages) != 0 {
+		t.Errorf("expected no messages after no-op fork, got %d", len(state.Messages))
+	}
+}
+
 func TestMessageUpdateContextOptions(t *testing.T) {
 	first := message.NewUserText("first")
 	second := message.NewUserText("second")
@@ -2745,5 +2898,135 @@ func TestHarnessConfigureHotSwap(t *testing.T) {
 	turns2 := prov2.recordedTurns()
 	if len(turns2) == 0 || turns2[len(turns2)-1].model != "model-2" {
 		t.Errorf("Turn 2 model = %+v, want 'model-2'", turns2)
+	}
+}
+
+// countToolRefBlocks returns the number of *message.ToolReferenceBlock entries in
+// the message's content.
+func countToolRefBlocks(msg message.Message) int {
+	var n int
+	for _, b := range msg.GetContent() {
+		if _, ok := b.(*message.ToolReferenceBlock); ok {
+			n++
+		}
+	}
+	return n
+}
+
+// TestDeduplicateToolBlocks verifies that DeduplicateToolBlocks keeps first-time
+// tool reference/definition blocks, strips duplicates already present in
+// LoadedTools (case-insensitively), and fills an emptied *message.Tool result
+// with an explanatory text block.
+func TestDeduplicateToolBlocks(t *testing.T) {
+	// First activation of a deferred tool keeps the reference and reports it as
+	// newly loaded.
+	empty := State{}
+	user := message.NewUser(&message.ToolReferenceBlock{ToolName: "view"})
+	out, newly := empty.DeduplicateToolBlocks(user)
+	if !reflect.DeepEqual(newly, []string{"view"}) {
+		t.Fatalf("newly loaded = %v, want [view]", newly)
+	}
+	if countToolRefBlocks(out) != 1 {
+		t.Errorf("expected 1 ToolReferenceBlock kept, got %d", countToolRefBlocks(out))
+	}
+
+	// A second activation of the same tool is stripped when it is already loaded.
+	loaded := State{LoadedTools: []string{"view"}}
+	secondOut, secondNewly := loaded.DeduplicateToolBlocks(message.NewUser(&message.ToolReferenceBlock{ToolName: "view"}))
+	if len(secondNewly) != 0 {
+		t.Fatalf("expected no newly loaded tools on duplicate, got %v", secondNewly)
+	}
+	if countToolRefBlocks(secondOut) != 0 {
+		t.Errorf("expected duplicate ToolReferenceBlock stripped, got %d", countToolRefBlocks(secondOut))
+	}
+
+	// Deduplication is case-insensitive.
+	loadedUpper := State{LoadedTools: []string{"VIEW"}}
+	if out, newly := loadedUpper.DeduplicateToolBlocks(message.NewUser(&message.ToolReferenceBlock{ToolName: "view"})); len(newly) != 0 || countToolRefBlocks(out) != 0 {
+		t.Errorf("case-insensitive dedup failed: newly=%v blocks=%d", newly, countToolRefBlocks(out))
+	}
+
+	// A non-tool message is returned unchanged with a nil newly-loaded slice.
+	plain := message.NewUserText("hello")
+	if out, newly := empty.DeduplicateToolBlocks(plain); newly != nil || out != plain {
+		t.Errorf("plain message dedup = (%v, %v), want (nil, same message)", newly, out)
+	}
+
+	// Mixed content keeps non-tool blocks while stripping an already-loaded ref.
+	mixed := message.NewUser(
+		&message.TextBlock{Text: "context text"},
+		&message.ToolReferenceBlock{ToolName: "view"},
+	)
+	out, newly = loaded.DeduplicateToolBlocks(mixed)
+	if len(newly) != 0 {
+		t.Errorf("expected no newly loaded tools, got %v", newly)
+	}
+	if countToolRefBlocks(out) != 0 {
+		t.Errorf("expected ToolReferenceBlock stripped from mixed content, got %d", countToolRefBlocks(out))
+	}
+	if extractBlocksText(out.GetContent()) != "context text" {
+		t.Errorf("expected text block preserved, got %q", extractBlocksText(out.GetContent()))
+	}
+
+	// A *message.Tool whose only content is an already-loaded reference is
+	// replaced with an explanatory text block so the result stays non-empty.
+	toolMsg := &message.Tool{
+		ToolCallID: "call-1",
+		Name:       "tool_search",
+		Content:    message.Content{&message.ToolReferenceBlock{ToolName: "view"}},
+	}
+	out, newly = loaded.DeduplicateToolBlocks(toolMsg)
+	if len(newly) != 0 {
+		t.Errorf("expected no newly loaded tools, got %v", newly)
+	}
+	toolOut, ok := out.(*message.Tool)
+	if !ok {
+		t.Fatalf("expected *message.Tool, got %T", out)
+	}
+	if got := extractBlocksText(toolOut.GetContent()); got != "Tools already loaded in context: view" {
+		t.Errorf("empty tool result text = %q, want %q", got, "Tools already loaded in context: view")
+	}
+
+	// A ToolDefinitionBlock is deduplicated the same way.
+	defMsg := message.NewUser(&message.ToolDefinitionBlock{Name: "custom_tool", Description: "x"})
+	out, newly = empty.DeduplicateToolBlocks(defMsg)
+	if !reflect.DeepEqual(newly, []string{"custom_tool"}) {
+		t.Errorf("ToolDefinitionBlock newly loaded = %v, want [custom_tool]", newly)
+	}
+}
+
+// TestRecordLoadedTools verifies that RecordLoadedTools appends new tool names
+// while deduplicating case-insensitively against existing entries.
+func TestRecordLoadedTools(t *testing.T) {
+	s := State{}.RecordLoadedTools("view", "grep")
+	if !reflect.DeepEqual(s.LoadedTools, []string{"view", "grep"}) {
+		t.Fatalf("LoadedTools = %v, want [view grep]", s.LoadedTools)
+	}
+
+	// Duplicate and case-insensitive duplicates are ignored.
+	s = s.RecordLoadedTools("grep", "VIEW", "glob")
+	if !reflect.DeepEqual(s.LoadedTools, []string{"view", "grep", "glob"}) {
+		t.Fatalf("LoadedTools = %v, want [view grep glob]", s.LoadedTools)
+	}
+
+	// Recording on an empty state with no names returns the state unchanged.
+	empty := State{}
+	if empty.RecordLoadedTools().LoadedTools != nil {
+		t.Errorf("expected nil LoadedTools when recording no names, got %v", empty.LoadedTools)
+	}
+}
+
+// TestApplyCompactionClearsLoadedTools verifies that a compaction epoch resets
+// LoadedTools so tools can be re-activated in the new epoch.
+func TestApplyCompactionClearsLoadedTools(t *testing.T) {
+	static := StaticContext{SystemPrompt: 100}
+	limits := models.Limits{Context: 128000, Output: 16384}
+
+	s := State{
+		LoadedTools: []string{"view", "grep", "glob"},
+	}
+	s = s.ApplyCompaction(static, limits)
+	if s.LoadedTools != nil {
+		t.Errorf("ApplyCompaction should reset LoadedTools to nil, got %v", s.LoadedTools)
 	}
 }

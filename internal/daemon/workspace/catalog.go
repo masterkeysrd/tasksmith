@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/masterkeysrd/tasksmith/api"
@@ -290,10 +291,14 @@ func (c *Catalog) populate() {
 					Name:         cmd.Metadata.Name,
 					DisplayName:  cmd.Metadata.DisplayName,
 					Description:  cmd.Metadata.Description,
+					Agent:        cmd.Spec.Agent,
+					Context:      string(cmd.Spec.Context),
 					ArgumentHint: cmd.Spec.ArgumentHint,
 					Arguments:    ToAPIArguments(cmd.Spec.Arguments),
 					Models:       slices.Clone(cmd.Spec.Models),
 					Tools:        slices.Clone(cmd.Spec.Tools),
+					Skills:       slices.Clone(cmd.Spec.Skills),
+					Rules:        slices.Clone(cmd.Spec.Rules),
 					Namespace:    cmd.Namespace,
 				},
 				Def: cmd,
@@ -456,6 +461,173 @@ func (c *Catalog) PartitionAgentTools(resolved *warp.ResolvedAgent) ToolPartitio
 	return ToolPartition{Eager: eager, Deferred: deferred}
 }
 
+// MaxListedMCPToolsPerServer caps how many deferred tool names are listed for a
+// single MCP server in the system prompt's <deferred_tools> directory.
+const MaxListedMCPToolsPerServer = 15
+
+// DeferredToolSummary describes a non-MCP deferred tool for system prompt discovery.
+type DeferredToolSummary struct {
+	Name        string
+	Description string
+}
+
+// DeferredMCPSummary describes an MCP server and its deferred tools for system
+// prompt discovery.
+type DeferredMCPSummary struct {
+	Name        string
+	Prefix      string // "mcp__<name>__*"
+	Description string
+	Tools       []string
+	ExtraCount  int
+	// ToolsText is the pre-rendered "tools: `a`, `b`, +N more" segment. It is
+	// computed in Go because the template shorthand preprocessor mangles named
+	// range variables ($i, $t) that would otherwise join the list.
+	ToolsText string
+}
+
+// DeferredToolsCatalog groups deferred custom/built-in tools and MCP servers.
+type DeferredToolsCatalog struct {
+	Tools      []DeferredToolSummary
+	MCPServers []DeferredMCPSummary
+}
+
+// oneLine returns the first non-empty line of s, trimmed.
+func oneLine(s string) string {
+	s = strings.TrimSpace(s)
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		s = s[:i]
+	}
+	return strings.TrimSpace(s)
+}
+
+// oneLineDescription returns a single-line trimmed description for a tool.
+func oneLineDescription(wt *warp.Tool) string {
+	if wt == nil {
+		return ""
+	}
+	return oneLine(wt.Metadata.Description)
+}
+
+// mcpDescription looks up a deferred MCP server's one-line description from the
+// resolved agent's MCP resources.
+func (c *Catalog) mcpDescription(resolved *warp.ResolvedAgent, serverName string) string {
+	if resolved == nil {
+		return ""
+	}
+	for _, m := range resolved.MCPs {
+		if m != nil && m.Metadata.Name == serverName {
+			return oneLine(m.Metadata.Description)
+		}
+	}
+	return ""
+}
+
+// BuildDeferredToolsCatalog groups a resolved agent's deferred tools into a
+// compact directory of custom/built-in tools and MCP servers for the system
+// prompt. It returns nil when the agent has no deferred tools.
+func (c *Catalog) BuildDeferredToolsCatalog(resolved *warp.ResolvedAgent) *DeferredToolsCatalog {
+	partition := c.PartitionAgentTools(resolved)
+	if len(partition.Deferred) == 0 {
+		return nil
+	}
+
+	cat := &DeferredToolsCatalog{}
+
+	// Preserve deterministic MCP server order and accumulate their tools.
+	var serverOrder []string
+	serverMap := make(map[string]*DeferredMCPSummary)
+
+	for _, name := range partition.Deferred {
+		// Strip the "mcp__" prefix so ParseMCPToolName yields the server name
+		// and the short tool name.
+		bare := name
+		if strings.HasPrefix(bare, "mcp__") {
+			bare = strings.TrimPrefix(bare, "mcp__")
+		}
+		serverName, shortToolName, isMCP := warp.ParseMCPToolName(bare)
+		if isMCP {
+			srv, ok := serverMap[serverName]
+			if !ok {
+				srv = &DeferredMCPSummary{
+					Name:        serverName,
+					Prefix:      "mcp__" + serverName + "__*",
+					Description: c.mcpDescription(resolved, serverName),
+				}
+				serverMap[serverName] = srv
+				serverOrder = append(serverOrder, serverName)
+			}
+			if len(srv.Tools) < MaxListedMCPToolsPerServer {
+				srv.Tools = append(srv.Tools, shortToolName)
+			} else {
+				srv.ExtraCount++
+			}
+			continue
+		}
+
+		wt, _ := c.GetTool(name)
+		cat.Tools = append(cat.Tools, DeferredToolSummary{
+			Name:        name,
+			Description: oneLineDescription(wt),
+		})
+	}
+
+	for _, name := range serverOrder {
+		srv := serverMap[name]
+		srv.ToolsText = renderMCPTools(srv.Tools, srv.ExtraCount)
+		cat.MCPServers = append(cat.MCPServers, *srv)
+	}
+
+	if len(cat.Tools) == 0 && len(cat.MCPServers) == 0 {
+		return nil
+	}
+	return cat
+}
+
+// renderMCPTools formats a deferred MCP server's tool list for the system prompt
+// as "tools: `a`, `b`, +N more". It is computed in Go because the template
+// shorthand preprocessor mangles the named range variables ($i, $t) that would
+// otherwise join the list.
+func renderMCPTools(tools []string, extra int) string {
+	var b strings.Builder
+	b.WriteString("tools: ")
+	for i, tn := range tools {
+		if i > 0 {
+			b.WriteString(", ")
+		}
+		b.WriteString("`")
+		b.WriteString(tn)
+		b.WriteString("`")
+	}
+	if extra > 0 {
+		b.WriteString(", +")
+		b.WriteString(strconv.Itoa(extra))
+		b.WriteString(" more")
+	}
+	return b.String()
+}
+
+// AgentRenderGlobals returns the template globals for rendering an agent's system
+// prompt: a HasTool predicate over the agent's eager tools (including tool_search
+// when the agent has deferred tools) and a compact DeferredTools directory for the
+// tool_search section.
+func (c *Catalog) AgentRenderGlobals(resolved *warp.ResolvedAgent) map[string]any {
+	partition := c.PartitionAgentTools(resolved)
+	eagerSet := make(map[string]bool, len(partition.Eager)+1)
+	for _, name := range partition.Eager {
+		eagerSet[strings.ToLower(name)] = true
+	}
+	if len(partition.Deferred) > 0 {
+		eagerSet["tool_search"] = true
+	}
+	hasTool := func(toolName string) bool {
+		return eagerSet[strings.ToLower(strings.TrimSpace(toolName))]
+	}
+	return map[string]any{
+		"HasTool":       hasTool,
+		"DeferredTools": c.BuildDeferredToolsCatalog(resolved),
+	}
+}
+
 func (c *Catalog) calculateAgentContext(ag *warp.Agent, resolved *warp.ResolvedAgent) api.ContextBreakdown {
 	contextFiles := c.workspaceTokens
 
@@ -463,18 +635,7 @@ func (c *Catalog) calculateAgentContext(ag *warp.Agent, resolved *warp.ResolvedA
 		return api.ContextBreakdown{ContextFiles: contextFiles}
 	}
 
-	globals := map[string]any{
-		"HasTool": func(toolName string) bool {
-			if resolved != nil {
-				for _, t := range resolved.Tools {
-					if strings.EqualFold(t.Metadata.Name, toolName) {
-						return true
-					}
-				}
-			}
-			return false
-		},
-	}
+	globals := c.AgentRenderGlobals(resolved)
 	agentPrompt, _ := ag.Render(&warp.AgentRenderOptions{
 		Workspace: c.WorkspaceSpec(),
 		Project:   c.Project(),
@@ -508,9 +669,14 @@ func (c *Catalog) calculateAgentContext(ag *warp.Agent, resolved *warp.ResolvedA
 	// Only eager tools are sent in the initial prompt; deferred tools are
 	// discovered via tool_search and excluded from the static breakdown.
 	partition := c.PartitionAgentTools(resolved)
-	eagerSet := make(map[string]bool, len(partition.Eager))
+	eagerSet := make(map[string]bool, len(partition.Eager)+1)
 	for _, name := range partition.Eager {
 		eagerSet[name] = true
+	}
+	// tool_search is auto-activated when the agent has deferred tools, so its
+	// token cost belongs in the eager system-tools breakdown.
+	if len(partition.Deferred) > 0 {
+		eagerSet["tool_search"] = true
 	}
 	toolsList := c.Tools()
 	for _, t := range toolsList {
@@ -708,10 +874,14 @@ func (c *Catalog) GetCommand(name string) (CommandSnapshot, bool) {
 						Name:         cmd.Metadata.Name,
 						DisplayName:  cmd.Metadata.DisplayName,
 						Description:  cmd.Metadata.Description,
+						Agent:        cmd.Spec.Agent,
+						Context:      string(cmd.Spec.Context),
 						ArgumentHint: cmd.Spec.ArgumentHint,
 						Arguments:    ToAPIArguments(cmd.Spec.Arguments),
 						Models:       slices.Clone(cmd.Spec.Models),
 						Tools:        slices.Clone(cmd.Spec.Tools),
+						Skills:       slices.Clone(cmd.Spec.Skills),
+						Rules:        slices.Clone(cmd.Spec.Rules),
 						Namespace:    cmd.Namespace,
 					},
 					Def: cmd,
@@ -720,6 +890,40 @@ func (c *Catalog) GetCommand(name string) (CommandSnapshot, bool) {
 		}
 	}
 	return CommandSnapshot{}, false
+}
+
+// ResolveCommand resolves the fully merged command for cmdRef for the named
+// agent (or the workspace default agent when agentName is empty). It verifies
+// command enablement against the agent's spec.commands (unless the command
+// declares an explicit spec.agent override) and eagerly resolves its skills,
+// rules, and effective tools against the workspace and agent tool policy
+// ceilings. When no agent is active (agentless workspace), it delegates to the
+// underlying registry's resolver.
+func (c *Catalog) ResolveCommand(agentName, cmdRef string) (*warp.ResolvedCommand, error) {
+	if c == nil {
+		return nil, fmt.Errorf("catalog: nil catalog")
+	}
+	resolver := c.resolver()
+	if resolver == nil {
+		return nil, fmt.Errorf("catalog: no resolver available")
+	}
+
+	if agentName == "" {
+		agentName = c.DefaultAgentName()
+	}
+	if agentName != "" {
+		if resolved, err := c.ResolveAgent(agentName); err == nil && resolved != nil {
+			return resolved.ResolveCommand(resolver, cmdRef)
+		}
+	}
+
+	switch r := resolver.(type) {
+	case *warp.ScopedRegistry:
+		return r.ResolveCommand(cmdRef)
+	case *warp.Registry:
+		return r.ResolveCommand(cmdRef)
+	}
+	return nil, fmt.Errorf("catalog: resolver does not support ResolveCommand")
 }
 
 // Tools returns all effective tools in scope, sorted by metadata name.

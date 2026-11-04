@@ -327,6 +327,20 @@ Use `manage_agents` to manage and monitor child subagents.
   - `'send'`: Sends a follow-up message to a subagent (requires `session_id` and `message`).
   - `'kill'`: Cancels and terminates a running subagent (requires `session_id`).
 {{end}}
+
+{{if call .HasTool "tool_search"}}
+### `tool_search` tool
+
+Additional tools are available via deferred loading. Before concluding that a tool or capability is unavailable, call `tool_search` with keywords matching the tool or MCP server below to load its schema into your active toolset.
+{{if .DeferredTools}}
+<deferred_tools>
+{{if .DeferredTools.Tools}}- **Deferred tools**:
+{{range .DeferredTools.Tools}}  - `{{.Name}}`{{if .Description}}: {{.Description}}{{end}}
+{{end}}{{end}}{{if .DeferredTools.MCPServers}}- **MCP servers**:
+{{range .DeferredTools.MCPServers}}  - `{{.Name}}` (`{{.Prefix}}`){{if .Description}}: {{.Description}}{{end}}{{if .ToolsText}} ({{.ToolsText}}){{end}}
+{{end}}{{end}}</deferred_tools>
+{{end}}
+{{end}}
 </tools_usage>
 {{else}}
 <tools_usage>

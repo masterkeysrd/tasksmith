@@ -292,8 +292,14 @@ metadata:
   displayName: Refactor Module
   description: Refactors a module for improved readability and modularity
 spec:
+  agent: main
+  context: inline
   models:
     - openai/gpt-5.5
+  skills:
+    - go-refactoring
+  rules:
+    - coding-standards
   tools:
     - view
     - edit
@@ -320,8 +326,12 @@ Please analyze the file {{$target_file}} focusing on {{$focus}}:
 
 | Field | Type | Description |
 | :--- | :--- | :--- |
-| `models` | array of strings | Preferred model identifiers for executing this command. |
-| `tools` | array of strings | Tools made accessible during command execution. |
+| `agent` | string | Preferred or required agent persona to execute this command. Spawns a delegated subagent session when different from the active session agent. |
+| `context` | string | Conversational execution mode: `inline` (default, runs in the current session), `clean` (runs in a subagent session with empty history), or `fork` (runs in a subagent session with a snapshot of the current history). |
+| `models` | array of strings | Prioritized model identifiers or aliases for executing this command. Overrides the active model for the duration of the command turn and restores the previous model afterward. |
+| `skills` | array of strings | Skill references or globs eagerly embedded into context when executing this command. |
+| `rules` | array of strings | Rule references or globs eagerly loaded (`always: true`) when executing this command. |
+| `tools` | array of strings | Tool references or globs required by this command. Deferred tools in this list (and in `spec.skills`) are automatically activated into context, subject to workspace and agent tool policy ceilings. |
 | `argumentHint` | string | Usage signature hint displayed during autocomplete and validation. |
 | `arguments` | array of objects | Structured parameter declarations accepted by this command. |
 

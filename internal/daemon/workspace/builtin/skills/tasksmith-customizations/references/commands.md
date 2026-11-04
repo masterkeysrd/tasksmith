@@ -6,7 +6,7 @@ A Command packages reusable instructions for a discrete operation. Its Markdown 
 
 Command manifests are commonly stored at `.agents/commands/<name>.command.md` in a workspace or project, or under `$XDG_CONFIG_HOME/tasksmith/agents/commands/` for a user. They follow the resource hierarchy and can also come from system resources or workspace plugins. The declared `metadata.name`, not the filename, is the slash-command name.
 
-TaskSmith exposes workspace Commands as `/name` entries in the CLI. For a slash input, the daemon looks up a Command before a Skill with the same name, renders its instructions with the arguments, and sends the result as a user message in the current conversation. Slash lookup uses the workspace, not the selected agent's resolved command list. CLI built-in slash commands are separate; registering a resource with the same name can replace a CLI registry entry, so avoid name collisions.
+TaskSmith exposes workspace Commands as `/name` entries in the CLI. For a slash input, the daemon looks up a Command before a Skill with the same name, validates it against the active agent, renders its instructions with the arguments, and runs the result either in the current conversation (inline) or in a spawned subagent session (`context: clean`/`fork`, or a `spec.agent` override). Slash lookup uses the workspace, not the selected agent's resolved command list. CLI built-in slash commands are separate; registering a resource with the same name can replace a CLI registry entry, so avoid name collisions.
 
 ## Definition
 
@@ -14,14 +14,22 @@ A Markdown manifest has WARP YAML frontmatter followed by the instruction body. 
 
 | Field | Type | WARP meaning |
 | --- | --- | --- |
-| `spec.agent` | string | Preferred or required Agent reference. |
+| `spec.agent` | string | Preferred or required Agent reference. Spawns a delegated subagent session when it names a different agent than the active session. |
 | `spec.context` | string | Conversation mode: `inline` (default), `fork`, or `clean`. |
-| `spec.models` | string[] | Preferred model identifiers intended to override agent defaults. |
-| `spec.tools` | string[] | Tool references intended to restrict execution. |
+| `spec.models` | string[] | Prioritized model identifiers or aliases that override the active model for the duration of the command turn. |
+| `spec.skills` | string[] | Skill references or globs eagerly embedded into context when the command runs. |
+| `spec.rules` | string[] | Rule references or globs eagerly loaded (`always: true`) when the command runs. |
+| `spec.tools` | string[] | Tool references or globs required by the command; deferred tools are activated into context. |
 | `spec.argumentHint` | string | Single-line usage hint shown by the CLI. |
 | `spec.arguments` | object[] | Structured argument definitions. |
 
-**TaskSmith runtime:** Slash-command execution currently renders the body in the existing conversation. It does not switch agents or models, create a forked or clean context, or apply command-specific tool restrictions from `agent`, `context`, `models`, or `tools`. These fields are manifest metadata, not security or execution guarantees in this path. Existing session tool policies, permissions, and sandbox checks still apply.
+**TaskSmith runtime:** Slash-command execution validates the command against the active agent's `spec.commands` (unless `spec.agent` names a different agent, which bypasses the enablement check) and resolves its `spec.skills`, `spec.rules`, and `spec.tools` against the workspace and agent tool policy ceilings.
+
+- **Inline execution** (`context: inline`, or an empty context with no `spec.agent` override) runs the command in the current session. When `spec.models` resolves to a model that differs from the session's active model, the turn temporarily uses that model and restores the previous model when the turn finishes, including on error or cancellation.
+- **Subagent execution** (`context: clean`, `context: fork`, or a `spec.agent` targeting a different agent) spawns a child subagent session to run the command. `clean` starts with an empty conversation history; `fork` seeds the child with a snapshot of the parent's current conversation messages before starting the turn. The child notifies the parent on completion via a `<subagent_completed ...>` message.
+- **Eager embedding and tool activation:** declared `spec.skills` are rendered and embedded as `<embedded_skill ...>` blocks, and declared `spec.rules` are rendered and embedded as `<embedded_rule ...>` blocks, both prepended to the command's prompt text. Deferred tools from `spec.tools` and from the declared skills' `spec.tools` are activated into context via tool-reference blocks, bounded by `workspace.spec.policies.tools` and `agent.spec.policies.tools`.
+
+The body is a Go template. It can reference a named argument as `$ticker`, `${ticker}`, or `{{.ticker}}`, and positional values as `$1`, `$2`, and so on. Command execution also exposes `{{.Agent.*}}` (the executing agent's `Name`, `Description`, `Dir`, `Path`) and `{{.Command.*}}` (the command's `Name`, `Dir`, `Path`, `Tools`, `Skills`, `Rules`, `Context`, `Agent`) alongside `{{.Workspace.*}}` and `{{.Project.*}}`. WARP interprets dollar shorthand; use `$$` for a literal dollar sign.
 
 ## Arguments and templates
 

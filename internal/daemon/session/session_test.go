@@ -810,6 +810,23 @@ func msgText(m message.Message) string {
 	return extractBlocksText(m.GetContent())
 }
 
+// countToolRefBlocks counts the ToolReferenceBlocks targeting toolName across the
+// given message list.
+func countToolRefBlocks(msgs message.MessageList, toolName string) int {
+	n := 0
+	for _, m := range msgs {
+		if m == nil {
+			continue
+		}
+		for _, b := range m.GetContent() {
+			if ref, ok := b.(*message.ToolReferenceBlock); ok && ref.ToolName == toolName {
+				n++
+			}
+		}
+	}
+	return n
+}
+
 func extractAPIBlocksText(blocks []api.Block) string {
 	var sb strings.Builder
 	for _, b := range blocks {
@@ -4543,6 +4560,984 @@ Slash agent.`
 	}
 }
 
+// TestSessionSlashCommandRichTemplate verifies that a /command template can
+// reference {{.Agent.*}}, {{.Command.Name}}, and {{len .Command.Tools}} and that
+// those values render accurately once the command is resolved through
+// Catalog.ResolveCommand.
+func TestSessionSlashCommandRichTemplate(t *testing.T) {
+	ctx := context.Background()
+	prov := &fakeProvider{
+		handler: func(_ context.Context, _ *llm.Request) ([]string, string, error) {
+			return []string{"ok"}, uuid.NewString(), nil
+		},
+	}
+	_, ws, _, _, mgr := setupTestEnv(t, prov)
+
+	wsDir := ws.RootDir()
+	agentsDir := filepath.Join(wsDir, ".agents")
+	if err := os.MkdirAll(filepath.Join(agentsDir, "commands"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// rich-agent enables rich-cmd and grants view + write.
+	agentContent := `---
+apiVersion: warp/v1alpha1
+kind: Agent
+metadata:
+  name: rich-agent
+spec:
+  commands:
+    - rich-cmd
+  tools:
+    - view
+    - write
+---
+Rich agent.`
+	if err := os.WriteFile(filepath.Join(agentsDir, "rich-agent.agent.md"), []byte(agentContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// rich-cmd references the executing agent, its own name, and the count of
+	// its resolved (policy-filtered) tools.
+	cmdContent := `---
+apiVersion: warp/v1alpha1
+kind: Command
+metadata:
+  name: rich-cmd
+  description: A rich command
+spec:
+  tools:
+    - view
+    - write
+---
+Agent: {{.Agent.Name}}, Command: {{.Command.Name}}, Tools: {{len .Command.Tools}}`
+	if err := os.WriteFile(filepath.Join(agentsDir, "commands", "rich-cmd.command.md"), []byte(cmdContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := ws.Reload(ctx); err != nil {
+		t.Fatalf("ws.Reload: %v", err)
+	}
+
+	sess, _, err := mgr.Create(ctx, api.CreateSessionRequest{
+		Title:  "Rich Template",
+		Config: api.SessionConfig{Agent: "rich-agent"},
+	})
+	if err != nil {
+		t.Fatalf("mgr.Create: %v", err)
+	}
+
+	rendered, err := sess.resolveSlashCommand(message.NewUserText("/rich-cmd"))
+	if err != nil {
+		t.Fatalf("resolveSlashCommand: %v", err)
+	}
+
+	text := msgText(rendered)
+	if !strings.Contains(text, "Agent: rich-agent") {
+		t.Errorf("expected {{.Agent.Name}} to render as rich-agent, got: %s", text)
+	}
+	if !strings.Contains(text, "Command: rich-cmd") {
+		t.Errorf("expected {{.Command.Name}} to render as rich-cmd, got: %s", text)
+	}
+	if !strings.Contains(text, "Tools: 2") {
+		t.Errorf("expected {{len .Command.Tools}} to render as 2, got: %s", text)
+	}
+}
+
+// TestSessionSlashCommandEmbedsSkillsAndActivatesTools verifies that a /command
+// declaring spec.skills, spec.rules, and spec.tools embeds the skill's and
+// rule's rendered instructions as <embedded_skill> and <embedded_rule> blocks and
+// activates the command's deferred tools via ToolReferenceBlocks (including tools
+// declared by the command's skills), while omitting tools denied by the agent's
+// policy ceiling.
+func TestSessionSlashCommandEmbedsSkillsAndActivatesTools(t *testing.T) {
+	ctx := context.Background()
+	prov := &fakeProvider{
+		handler: func(_ context.Context, _ *llm.Request) ([]string, string, error) {
+			return []string{"ok"}, uuid.NewString(), nil
+		},
+	}
+	_, ws, _, _, mgr := setupTestEnv(t, prov)
+
+	wsDir := ws.RootDir()
+	agentsDir := filepath.Join(wsDir, ".agents")
+	if err := os.MkdirAll(filepath.Join(agentsDir, "commands"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(agentsDir, "skills", "my-skill"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// my-skill declares view (deferred, policy-allowed) and bash (policy-denied).
+	skillContent := `---
+apiVersion: warp/v1alpha1
+kind: Skill
+metadata:
+  name: my-skill
+  description: A skill that activates deferred tools
+spec:
+  tools:
+    - view
+    - bash
+---
+Follow my-skill instructions.`
+	if err := os.WriteFile(filepath.Join(agentsDir, "skills", "my-skill", "SKILL.md"), []byte(skillContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// my-rule is eagerly embedded as a constraint when the command runs.
+	ruleContent := `---
+apiVersion: warp/v1alpha1
+kind: Rule
+metadata:
+  name: my-rule
+  description: A rule embedded by the command
+spec:
+  triggers:
+    always: true
+---
+Follow my-rule constraints.`
+	if err := os.MkdirAll(filepath.Join(agentsDir, "rules"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(agentsDir, "rules", "my-rule.rule.md"), []byte(ruleContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// cmd-embed enables my-skill and my-rule and declares view; the agent's
+	// policy allows view + load_skill but excludes bash.
+	cmdContent := `---
+apiVersion: warp/v1alpha1
+kind: Command
+metadata:
+  name: cmd-embed
+  description: A command that embeds a skill and a rule
+spec:
+  skills:
+    - my-skill
+  rules:
+    - my-rule
+  tools:
+    - view
+---
+Run the embedded skill.`
+	if err := os.WriteFile(filepath.Join(agentsDir, "commands", "cmd-embed.command.md"), []byte(cmdContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	agentContent := `---
+apiVersion: warp/v1alpha1
+kind: Agent
+metadata:
+  name: embed-agent
+spec:
+  skills:
+    - my-skill
+  commands:
+    - cmd-embed
+  tools:
+    - load_skill
+  policies:
+    tools:
+      include:
+        - view
+        - load_skill
+      exclude:
+        - bash
+---
+Embed agent.`
+	if err := os.WriteFile(filepath.Join(agentsDir, "embed-agent.agent.md"), []byte(agentContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := ws.Reload(ctx); err != nil {
+		t.Fatalf("ws.Reload: %v", err)
+	}
+
+	sess, _, err := mgr.Create(ctx, api.CreateSessionRequest{
+		Title:  "Embed Skills",
+		Config: api.SessionConfig{Agent: "embed-agent"},
+	})
+	if err != nil {
+		t.Fatalf("mgr.Create: %v", err)
+	}
+
+	rendered, err := sess.resolveSlashCommand(message.NewUserText("/cmd-embed do something"))
+	if err != nil {
+		t.Fatalf("resolveSlashCommand: %v", err)
+	}
+
+	// The expanded user message must embed the skill's and rule's instructions
+	// and activate the deferred view tool, but not the policy-denied bash tool.
+	var hasSkillEmbed, hasRuleEmbed, hasViewRef, hasBashRef bool
+	for _, b := range rendered.GetContent() {
+		switch blk := b.(type) {
+		case *message.TextBlock:
+			if strings.Contains(blk.Text, `<embedded_skill name="my-skill"`) {
+				hasSkillEmbed = true
+			}
+			if strings.Contains(blk.Text, `<embedded_rule name="my-rule"`) {
+				hasRuleEmbed = true
+			}
+		case *message.ToolReferenceBlock:
+			switch blk.ToolName {
+			case "view":
+				hasViewRef = true
+			case "bash":
+				hasBashRef = true
+			}
+		}
+	}
+	if !hasSkillEmbed {
+		t.Errorf("expected <embedded_skill name=\"my-skill\"...> in expanded message, got %+v", rendered.GetContent())
+	}
+	if !hasRuleEmbed {
+		t.Errorf("expected <embedded_rule name=\"my-rule\"...> in expanded message, got %+v", rendered.GetContent())
+	}
+	if !hasViewRef {
+		t.Errorf("expected ToolReferenceBlock for deferred view (from spec.tools + skill), got %+v", rendered.GetContent())
+	}
+	if hasBashRef {
+		t.Errorf("did not expect ToolReferenceBlock for policy-denied bash, got %+v", rendered.GetContent())
+	}
+}
+
+// TestSessionSlashCommandRejectsUnenabled verifies that a /command that is not
+// enabled for the active agent (and declares no explicit spec.agent override) is
+// rejected with an error by resolveSlashCommand.
+func TestSessionSlashCommandRejectsUnenabled(t *testing.T) {
+	ctx := context.Background()
+	prov := &fakeProvider{
+		handler: func(_ context.Context, _ *llm.Request) ([]string, string, error) {
+			return []string{"ok"}, uuid.NewString(), nil
+		},
+	}
+	_, ws, _, _, mgr := setupTestEnv(t, prov)
+
+	wsDir := ws.RootDir()
+	agentsDir := filepath.Join(wsDir, ".agents")
+	if err := os.MkdirAll(filepath.Join(agentsDir, "commands"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// restricted-agent enables only allowed-cmd.
+	agentContent := `---
+apiVersion: warp/v1alpha1
+kind: Agent
+metadata:
+  name: restricted-agent
+spec:
+  commands:
+    - allowed-cmd
+---
+Restricted agent.`
+	if err := os.WriteFile(filepath.Join(agentsDir, "restricted-agent.agent.md"), []byte(agentContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// allowed-cmd is enabled; forbidden-cmd is not and declares no agent override.
+	allowedContent := `---
+apiVersion: warp/v1alpha1
+kind: Command
+metadata:
+  name: allowed-cmd
+---
+Allowed.`
+	if err := os.WriteFile(filepath.Join(agentsDir, "commands", "allowed-cmd.command.md"), []byte(allowedContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	forbiddenContent := `---
+apiVersion: warp/v1alpha1
+kind: Command
+metadata:
+  name: forbidden-cmd
+---
+Forbidden.`
+	if err := os.WriteFile(filepath.Join(agentsDir, "commands", "forbidden-cmd.command.md"), []byte(forbiddenContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := ws.Reload(ctx); err != nil {
+		t.Fatalf("ws.Reload: %v", err)
+	}
+
+	sess, _, err := mgr.Create(ctx, api.CreateSessionRequest{
+		Title:  "Reject Unenabled",
+		Config: api.SessionConfig{Agent: "restricted-agent"},
+	})
+	if err != nil {
+		t.Fatalf("mgr.Create: %v", err)
+	}
+
+	if _, err := sess.resolveSlashCommand(message.NewUserText("/forbidden-cmd")); err == nil {
+		t.Fatal("expected error resolving command not enabled for the agent, got nil")
+	}
+}
+
+// setupTwoModelEnv writes a workspace with a fake provider exposing two
+// completion models (fake-default-model and fast-model) so that a command's
+// spec.models can select a model distinct from the session default.
+func setupTwoModelEnv(t *testing.T, prov *fakeProvider) (*sql.DB, *workspace.Workspace, *fakeGateway, *testPublisher, *testCoordinator) {
+	t.Helper()
+
+	db, ws, gw, pub, mgr := setupTestEnv(t, prov)
+
+	agentsDir := filepath.Join(ws.RootDir(), ".agents")
+	provDir := filepath.Join(agentsDir, "providers")
+	if err := os.MkdirAll(provDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	fakeProvider := `apiVersion: warp/v1alpha1
+kind: ModelProvider
+metadata:
+  name: fake
+spec:
+  type: fake
+  models:
+    - id: fake-default-model
+      name: fake-default-model
+      capabilities:
+        completion: true
+    - id: fast-model
+      name: fast-model
+      capabilities:
+        completion: true
+`
+	if err := os.WriteFile(filepath.Join(provDir, "fake.yaml"), []byte(fakeProvider), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := ws.Reload(context.Background()); err != nil {
+		t.Fatalf("ws.Reload: %v", err)
+	}
+	return db, ws, gw, pub, mgr
+}
+
+// TestSessionCommandInlineModelOverride verifies that a command declaring
+// spec.models runs its turn on the resolved model and restores the session's
+// original model when the turn exits.
+func TestSessionCommandInlineModelOverride(t *testing.T) {
+	ctx := context.Background()
+	prov := &fakeProvider{
+		handler: func(_ context.Context, _ *llm.Request) ([]string, string, error) {
+			return []string{"done"}, uuid.NewString(), nil
+		},
+	}
+	_, ws, _, _, mgr := setupTwoModelEnv(t, prov)
+	t.Cleanup(func() { _ = mgr.Close() })
+
+	agentsDir := filepath.Join(ws.RootDir(), ".agents")
+	if err := os.MkdirAll(filepath.Join(agentsDir, "commands"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// model-cmd runs inline but declares a distinct model via spec.models.
+	cmdContent := `---
+apiVersion: warp/v1alpha1
+kind: Command
+metadata:
+  name: model-cmd
+spec:
+  context: inline
+  models:
+    - fast-model
+---
+Run with the fast model.`
+	if err := os.WriteFile(filepath.Join(agentsDir, "commands", "model-cmd.command.md"), []byte(cmdContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := ws.Reload(ctx); err != nil {
+		t.Fatalf("ws.Reload: %v", err)
+	}
+
+	sess, _, err := mgr.Create(ctx, api.CreateSessionRequest{
+		Title:  "Model Override",
+		Config: api.SessionConfig{Agent: "main", Model: "fake/fake-default-model"},
+	})
+	if err != nil {
+		t.Fatalf("mgr.Create: %v", err)
+	}
+
+	if err := sess.Send(ctx, api.SendRequest{Content: "/model-cmd"}); err != nil {
+		t.Fatalf("sess.Send: %v", err)
+	}
+	if err := sess.Wait(ctx); err != nil {
+		t.Fatalf("sess.Wait: %v", err)
+	}
+
+	// The turn must have executed on the command's model.
+	turns := prov.recordedTurns()
+	if len(turns) == 0 {
+		t.Fatal("expected at least one recorded LLM turn")
+	}
+	if turns[len(turns)-1].model != "fake/fast-model" {
+		t.Errorf("expected turn to run on fake/fast-model, got %q", turns[len(turns)-1].model)
+	}
+
+	// The session's configured model must be restored after the turn exits.
+	sess.Lock()
+	restored := sess.Config.Model
+	sess.Unlock()
+	if restored != "fake/fake-default-model" {
+		t.Errorf("expected session model restored to fake/fake-default-model, got %q", restored)
+	}
+}
+
+// TestSessionCommandCleanContextSpawnsSubagent verifies that a command declaring
+// context: clean runs in a forked child session with an empty conversation
+// history and the parent's agent.
+func TestSessionCommandCleanContextSpawnsSubagent(t *testing.T) {
+	ctx := context.Background()
+	prov := &fakeProvider{
+		handler: func(_ context.Context, _ *llm.Request) ([]string, string, error) {
+			return []string{"ok"}, uuid.NewString(), nil
+		},
+	}
+	_, ws, _, _, mgr := setupTestEnv(t, prov)
+	t.Cleanup(func() { _ = mgr.Close() })
+
+	agentsDir := filepath.Join(ws.RootDir(), ".agents")
+	if err := os.MkdirAll(filepath.Join(agentsDir, "commands"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	cleanContent := `---
+apiVersion: warp/v1alpha1
+kind: Command
+metadata:
+  name: clean-cmd
+spec:
+  context: clean
+---
+Run in a clean subagent.`
+	if err := os.WriteFile(filepath.Join(agentsDir, "commands", "clean-cmd.command.md"), []byte(cleanContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := ws.Reload(ctx); err != nil {
+		t.Fatalf("ws.Reload: %v", err)
+	}
+
+	sess, _, err := mgr.Create(ctx, api.CreateSessionRequest{
+		Title:  "Clean Context",
+		Config: api.SessionConfig{Agent: "main"},
+	})
+	if err != nil {
+		t.Fatalf("mgr.Create: %v", err)
+	}
+
+	// Seed the parent with a prior conversation turn that must NOT leak into
+	// the clean child.
+	if err := sess.Send(ctx, api.SendRequest{Content: "hello parent"}); err != nil {
+		t.Fatalf("parent Send: %v", err)
+	}
+	if err := sess.Wait(ctx); err != nil {
+		t.Fatalf("parent Wait: %v", err)
+	}
+
+	if err := sess.Send(ctx, api.SendRequest{Content: "/clean-cmd"}); err != nil {
+		t.Fatalf("sess.Send: %v", err)
+	}
+
+	// The command runs in a child session; the parent itself should not have
+	// started a turn.
+	if err := sess.Wait(ctx); err != nil {
+		t.Fatalf("parent sess.Wait: %v", err)
+	}
+
+	var child *Session
+	for _, c := range sess.Children() {
+		if c.ParentID == sess.ID {
+			child = c
+			break
+		}
+	}
+	if child == nil {
+		t.Fatal("expected a child subagent session for context: clean command")
+	}
+
+	if err := child.Wait(ctx); err != nil {
+		t.Fatalf("child.Wait: %v", err)
+	}
+
+	// The child must start with an empty conversation history (clean slate):
+	// the only non-assistant message should be the command itself, with no
+	// trace of the parent's prior history.
+	state, err := child.Harness.LoadState(ctx)
+	if err != nil {
+		t.Fatalf("child.Harness.LoadState: %v", err)
+	}
+	for _, m := range state.Messages {
+		if m.Role() == message.RoleUser && msgText(m) == "hello parent" {
+			t.Fatalf("clean child leaked parent history message %q", msgText(m))
+		}
+	}
+	if child.Config.Agent != "main" {
+		t.Errorf("expected child agent to inherit main, got %q", child.Config.Agent)
+	}
+}
+
+// TestSessionCommandForkContextSpawnsSubagent verifies that a command declaring
+// context: fork runs in a child session pre-populated with the parent's prior
+// conversation history.
+func TestSessionCommandForkContextSpawnsSubagent(t *testing.T) {
+	ctx := context.Background()
+	prov := &fakeProvider{
+		handler: func(_ context.Context, _ *llm.Request) ([]string, string, error) {
+			return []string{"ok"}, uuid.NewString(), nil
+		},
+	}
+	_, ws, _, _, mgr := setupTestEnv(t, prov)
+	t.Cleanup(func() { _ = mgr.Close() })
+
+	agentsDir := filepath.Join(ws.RootDir(), ".agents")
+	if err := os.MkdirAll(filepath.Join(agentsDir, "commands"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	forkContent := `---
+apiVersion: warp/v1alpha1
+kind: Command
+metadata:
+  name: fork-cmd
+spec:
+  context: fork
+---
+Run in a forked subagent.`
+	if err := os.WriteFile(filepath.Join(agentsDir, "commands", "fork-cmd.command.md"), []byte(forkContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := ws.Reload(ctx); err != nil {
+		t.Fatalf("ws.Reload: %v", err)
+	}
+
+	sess, _, err := mgr.Create(ctx, api.CreateSessionRequest{
+		Title:  "Fork Context",
+		Config: api.SessionConfig{Agent: "main"},
+	})
+	if err != nil {
+		t.Fatalf("mgr.Create: %v", err)
+	}
+
+	// Seed the parent with a prior conversation turn.
+	if err := sess.Send(ctx, api.SendRequest{Content: "hello parent"}); err != nil {
+		t.Fatalf("parent Send: %v", err)
+	}
+	if err := sess.Wait(ctx); err != nil {
+		t.Fatalf("parent Wait: %v", err)
+	}
+
+	parentState, err := sess.Harness.LoadState(ctx)
+	if err != nil {
+		t.Fatalf("parent.Harness.LoadState: %v", err)
+	}
+	if len(parentState.Messages) == 0 {
+		t.Fatal("expected parent to have prior conversation history")
+	}
+
+	// Invoke the fork command.
+	if err := sess.Send(ctx, api.SendRequest{Content: "/fork-cmd"}); err != nil {
+		t.Fatalf("sess.Send: %v", err)
+	}
+	if err := sess.Wait(ctx); err != nil {
+		t.Fatalf("parent sess.Wait: %v", err)
+	}
+
+	var child *Session
+	for _, c := range sess.Children() {
+		if c.ParentID == sess.ID {
+			child = c
+			break
+		}
+	}
+	if child == nil {
+		t.Fatal("expected a child subagent session for context: fork command")
+	}
+
+	if err := child.Wait(ctx); err != nil {
+		t.Fatalf("child.Wait: %v", err)
+	}
+
+	// The child must be pre-populated with the parent's prior history plus the
+	// command message.
+	childState, err := child.Harness.LoadState(ctx)
+	if err != nil {
+		t.Fatalf("child.Harness.LoadState: %v", err)
+	}
+	if len(childState.Messages) < len(parentState.Messages)+1 {
+		t.Fatalf("expected child to have parent history + command (>= %d messages), got %d", len(parentState.Messages)+1, len(childState.Messages))
+	}
+	// The first message must be the parent's prior user message.
+	if childState.Messages[0].Role() != message.RoleUser || msgText(childState.Messages[0]) != "hello parent" {
+		t.Errorf("expected first child message to be parent's prior user message, got %s %q", childState.Messages[0].Role(), msgText(childState.Messages[0]))
+	}
+}
+
+// TestSessionCommandForkContextCopiesAllChannels verifies that a context: fork
+// command copies every checkpoint channel (Messages, Todos, Context) from the
+// parent session into the forked child, not just the conversation messages.
+func TestSessionCommandForkContextCopiesAllChannels(t *testing.T) {
+	ctx := context.Background()
+
+	var turn int
+	prov := &fakeProvider{
+		chunkHandler: func(_ context.Context, req *llm.Request) ([]message.AssistantChunk, error) {
+			turn++
+			// The first turn (the parent) produces a todos tool call so the
+			// parent's checkpoint carries a non-message channel.
+			if turn == 1 {
+				return []message.AssistantChunk{
+					{
+						BaseChunk: message.BaseChunk{ID: uuid.NewString()},
+						Model:     req.Model,
+						Content: []message.Block{
+							&message.ToolCall{
+								ID:   "call-todos-1",
+								Name: "todos",
+								Args: map[string]any{
+									"todos": []any{
+										map[string]any{
+											"content":     "Parent task",
+											"active_text": "Working on parent task",
+											"status":      "in_progress",
+										},
+									},
+								},
+							},
+						},
+						Done: true,
+					},
+				}, nil
+			}
+			// Subsequent turns (the todos follow-up and the child's command turn)
+			// produce a plain assistant reply without touching the todos channel.
+			return []message.AssistantChunk{
+				{
+					BaseChunk: message.BaseChunk{ID: uuid.NewString()},
+					Model:     req.Model,
+					Content: []message.Block{
+						&message.TextBlock{Text: "Done."},
+					},
+					Done: true,
+				},
+			}, nil
+		},
+	}
+	_, ws, _, _, mgr := setupTestEnv(t, prov)
+	t.Cleanup(func() { _ = mgr.Close() })
+
+	agentsDir := filepath.Join(ws.RootDir(), ".agents")
+	if err := os.MkdirAll(filepath.Join(agentsDir, "commands"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	forkContent := `---
+apiVersion: warp/v1alpha1
+kind: Command
+metadata:
+  name: fork-cmd
+spec:
+  context: fork
+---
+Run in a forked subagent.`
+	if err := os.WriteFile(filepath.Join(agentsDir, "commands", "fork-cmd.command.md"), []byte(forkContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := ws.Reload(ctx); err != nil {
+		t.Fatalf("ws.Reload: %v", err)
+	}
+
+	sess, _, err := mgr.Create(ctx, api.CreateSessionRequest{
+		Title:  "Fork All Channels",
+		Config: api.SessionConfig{Agent: "main"},
+	})
+	if err != nil {
+		t.Fatalf("mgr.Create: %v", err)
+	}
+
+	// Seed the parent with a turn that produces a todos channel.
+	if err := sess.Send(ctx, api.SendRequest{Content: "make checklist"}); err != nil {
+		t.Fatalf("parent Send: %v", err)
+	}
+	if err := sess.Wait(ctx); err != nil {
+		t.Fatalf("parent Wait: %v", err)
+	}
+
+	parentState, err := sess.Harness.LoadState(ctx)
+	if err != nil {
+		t.Fatalf("parent.Harness.LoadState: %v", err)
+	}
+	if len(parentState.Todos) == 0 {
+		t.Fatal("expected parent to have a non-empty Todos channel")
+	}
+
+	// Invoke the fork command.
+	if err := sess.Send(ctx, api.SendRequest{Content: "/fork-cmd"}); err != nil {
+		t.Fatalf("sess.Send: %v", err)
+	}
+	if err := sess.Wait(ctx); err != nil {
+		t.Fatalf("parent sess.Wait: %v", err)
+	}
+
+	var child *Session
+	for _, c := range sess.Children() {
+		if c.ParentID == sess.ID {
+			child = c
+			break
+		}
+	}
+	if child == nil {
+		t.Fatal("expected a child subagent session for context: fork command")
+	}
+
+	if err := child.Wait(ctx); err != nil {
+		t.Fatalf("child.Wait: %v", err)
+	}
+
+	// The child must inherit every channel from the parent, not just messages.
+	childState, err := child.Harness.LoadState(ctx)
+	if err != nil {
+		t.Fatalf("child.Harness.LoadState: %v", err)
+	}
+	if len(childState.Messages) < len(parentState.Messages)+1 {
+		t.Fatalf("expected child to have parent history + command (>= %d messages), got %d", len(parentState.Messages)+1, len(childState.Messages))
+	}
+	// The Todos channel must be copied from the parent and survive the child's
+	// command turn (which does not invoke the todos tool).
+	if len(childState.Todos) != 1 {
+		t.Fatalf("expected child to inherit 1 parent todo, got %d", len(childState.Todos))
+	}
+	if childState.Todos[0].Content != "Parent task" || childState.Todos[0].Status != string(api.TodoStatusInProgress) {
+		t.Errorf("unexpected forked todos: %+v", childState.Todos)
+	}
+	// The Context channel must also be inherited (non-zero token accounting).
+	if childState.Context.UsedTokens == 0 {
+		t.Errorf("expected child to inherit a non-zero Context channel, got %+v", childState.Context)
+	}
+}
+
+// TestSessionCommandDeduplicatesLoadedTools verifies that when the same command
+// activates the same deferred tool on the same thread twice, the second
+// ToolReferenceBlock is stripped from the message and the tool is not re-recorded
+// in the LoadedTools channel.
+func TestSessionCommandDeduplicatesLoadedTools(t *testing.T) {
+	ctx := context.Background()
+	prov := &fakeProvider{
+		handler: func(_ context.Context, _ *llm.Request) ([]string, string, error) {
+			return []string{"ok"}, uuid.NewString(), nil
+		},
+	}
+	_, ws, _, _, mgr := setupTestEnv(t, prov)
+	t.Cleanup(func() { _ = mgr.Close() })
+
+	agentsDir := filepath.Join(ws.RootDir(), ".agents")
+	if err := os.MkdirAll(filepath.Join(agentsDir, "commands"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Agent: view is policy-allowed but not in spec.tools, so it loads as a
+	// deferred tool. load_skill is eager. The agent enables dedup-cmd.
+	agentContent := `---
+apiVersion: warp/v1alpha1
+kind: Agent
+metadata:
+  name: dedup-agent
+spec:
+  commands:
+    - dedup-cmd
+  tools:
+    - load_skill
+  policies:
+    tools:
+      include:
+        - view
+        - load_skill
+---
+Dedup agent.`
+	if err := os.WriteFile(filepath.Join(agentsDir, "dedup-agent.agent.md"), []byte(agentContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Command: activates the deferred view tool. It declares no context mode and
+	// no agent override, so it runs on the session's own thread.
+	cmdContent := `---
+apiVersion: warp/v1alpha1
+kind: Command
+metadata:
+  name: dedup-cmd
+spec:
+  tools:
+    - view
+---
+Run the dedup command.`
+	if err := os.WriteFile(filepath.Join(agentsDir, "commands", "dedup-cmd.command.md"), []byte(cmdContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := ws.Reload(ctx); err != nil {
+		t.Fatalf("ws.Reload: %v", err)
+	}
+
+	sess, _, err := mgr.Create(ctx, api.CreateSessionRequest{
+		Title:  "Dedup Loaded Tools",
+		Config: api.SessionConfig{Agent: "dedup-agent"},
+	})
+	if err != nil {
+		t.Fatalf("mgr.Create: %v", err)
+	}
+
+	// The first invocation activates the deferred view tool.
+	if err := sess.Send(ctx, api.SendRequest{Content: "/dedup-cmd"}); err != nil {
+		t.Fatalf("first Send: %v", err)
+	}
+	if err := sess.Wait(ctx); err != nil {
+		t.Fatalf("first Wait: %v", err)
+	}
+
+	state, err := sess.Harness.LoadState(ctx)
+	if err != nil {
+		t.Fatalf("LoadState after first send: %v", err)
+	}
+	if !slices.Contains(state.LoadedTools, "view") {
+		t.Errorf("expected view recorded in LoadedTools after first send, got %v", state.LoadedTools)
+	}
+	if got := countToolRefBlocks(state.Messages, "view"); got != 1 {
+		t.Errorf("expected 1 view ToolReferenceBlock after first send, got %d", got)
+	}
+
+	// The second invocation must not re-activate view: the duplicate reference is
+	// stripped and view is not re-recorded.
+	if err := sess.Send(ctx, api.SendRequest{Content: "/dedup-cmd"}); err != nil {
+		t.Fatalf("second Send: %v", err)
+	}
+	if err := sess.Wait(ctx); err != nil {
+		t.Fatalf("second Wait: %v", err)
+	}
+
+	state, err = sess.Harness.LoadState(ctx)
+	if err != nil {
+		t.Fatalf("LoadState after second send: %v", err)
+	}
+	loadedCount := 0
+	for _, name := range state.LoadedTools {
+		if name == "view" {
+			loadedCount++
+		}
+	}
+	if got := loadedCount; got != 1 {
+		t.Errorf("expected view recorded exactly once in LoadedTools, got %d (%v)", got, state.LoadedTools)
+	}
+	if got := countToolRefBlocks(state.Messages, "view"); got != 1 {
+		t.Errorf("expected the duplicate view ToolReferenceBlock to be stripped, got %d total", got)
+	}
+}
+
+// TestSessionCommandAgentOverrideSpawnsSubagent verifies that a command declaring
+// spec.agent different from the session's agent runs in a forked child session
+// targeting that agent.
+func TestSessionCommandAgentOverrideSpawnsSubagent(t *testing.T) {
+	ctx := context.Background()
+	prov := &fakeProvider{
+		handler: func(_ context.Context, _ *llm.Request) ([]string, string, error) {
+			return []string{"ok"}, uuid.NewString(), nil
+		},
+	}
+	_, ws, _, _, mgr := setupTestEnv(t, prov)
+	t.Cleanup(func() { _ = mgr.Close() })
+
+	agentsDir := filepath.Join(ws.RootDir(), ".agents")
+	if err := os.MkdirAll(filepath.Join(agentsDir, "commands"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// explore is a builtin agent available to all sessions.
+	agentContent := `---
+apiVersion: warp/v1alpha1
+kind: Agent
+metadata:
+  name: explore
+spec:
+  commands:
+    - explore-cmd
+---
+Explore agent.`
+	if err := os.WriteFile(filepath.Join(agentsDir, "explore.agent.md"), []byte(agentContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	agentCmdContent := `---
+apiVersion: warp/v1alpha1
+kind: Command
+metadata:
+  name: explore-cmd
+spec:
+  agent: explore
+---
+Run on the explore agent.`
+	if err := os.WriteFile(filepath.Join(agentsDir, "commands", "explore-cmd.command.md"), []byte(agentCmdContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := ws.Reload(ctx); err != nil {
+		t.Fatalf("ws.Reload: %v", err)
+	}
+
+	sess, _, err := mgr.Create(ctx, api.CreateSessionRequest{
+		Title:  "Agent Override",
+		Config: api.SessionConfig{Agent: "main"},
+	})
+	if err != nil {
+		t.Fatalf("mgr.Create: %v", err)
+	}
+
+	// Seed the parent with a prior conversation turn that must NOT leak into
+	// the agent-override child.
+	if err := sess.Send(ctx, api.SendRequest{Content: "hello parent"}); err != nil {
+		t.Fatalf("parent Send: %v", err)
+	}
+	if err := sess.Wait(ctx); err != nil {
+		t.Fatalf("parent Wait: %v", err)
+	}
+
+	if err := sess.Send(ctx, api.SendRequest{Content: "/explore-cmd"}); err != nil {
+		t.Fatalf("sess.Send: %v", err)
+	}
+	if err := sess.Wait(ctx); err != nil {
+		t.Fatalf("parent sess.Wait: %v", err)
+	}
+
+	var child *Session
+	for _, c := range sess.Children() {
+		if c.ParentID == sess.ID {
+			child = c
+			break
+		}
+	}
+	if child == nil {
+		t.Fatal("expected a child subagent session for spec.agent override command")
+	}
+
+	if err := child.Wait(ctx); err != nil {
+		t.Fatalf("child.Wait: %v", err)
+	}
+
+	if child.Config.Agent != "explore" {
+		t.Errorf("expected child agent to be explore, got %q", child.Config.Agent)
+	}
+	// A spec.agent override runs on a clean slate (no fork of parent history).
+	state, err := child.Harness.LoadState(ctx)
+	if err != nil {
+		t.Fatalf("child.Harness.LoadState: %v", err)
+	}
+	for _, m := range state.Messages {
+		if m.Role() == message.RoleUser && msgText(m) == "hello parent" {
+			t.Fatalf("agent-override child leaked parent history message %q", msgText(m))
+		}
+	}
+}
+
 func TestDirectSessionPackageAPIs(t *testing.T) {
 	ctx := context.Background()
 	db, ws, gw, pub, _ := setupTestEnv(t, nil)
@@ -4904,5 +5899,187 @@ func TestHumanAgentTriggerEnforcement(t *testing.T) {
 	defer child.Close()
 	if child.Config.Agent != "explore" {
 		t.Errorf("expected subagent agent %q, got %q", "explore", child.Config.Agent)
+	}
+}
+
+// TestSessionRenderSystemPromptDeferredTools verifies that renderSystemPrompt
+// renders the tool_search section and <deferred_tools> directory when the agent
+// has deferred custom and MCP tools, and omits it when the agent has none.
+func TestSessionRenderSystemPromptDeferredTools(t *testing.T) {
+	ctx := context.Background()
+	db, ws, gw, pub, mgr := setupTestEnv(t, nil)
+	t.Cleanup(func() { _ = mgr.Close() })
+
+	agentsDir := filepath.Join(ws.RootDir(), ".agents")
+	if err := os.MkdirAll(filepath.Join(agentsDir, "tools"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// One eager custom tool, one deferred custom tool, and two deferred MCP tools.
+	tools := []struct {
+		file    string
+		content string
+	}{
+		{
+			"eager-tool.tool.md",
+			`---
+apiVersion: warp/v1alpha1
+kind: Tool
+metadata:
+  name: eager-tool
+  description: An eager tool
+spec:
+  command: ["sh", "-c"]
+---
+Eager tool.
+`,
+		},
+		{
+			"linter.tool.md",
+			`---
+apiVersion: warp/v1alpha1
+kind: Tool
+metadata:
+  name: linter
+  description: Run the linter
+spec:
+  command: ["golangci-lint", "run"]
+---
+Linter tool.
+`,
+		},
+		{
+			"gh-create.tool.md",
+			`---
+apiVersion: warp/v1alpha1
+kind: Tool
+metadata:
+  name: mcp__github__create_issue
+  description: Create a GitHub issue
+spec:
+  command: ["sh", "-c"]
+---
+Create issue.
+`,
+		},
+		{
+			"gh-list.tool.md",
+			`---
+apiVersion: warp/v1alpha1
+kind: Tool
+metadata:
+  name: mcp__github__list_prs
+  description: List GitHub pull requests
+spec:
+  command: ["sh", "-c"]
+---
+List PRs.
+`,
+		},
+	}
+	for _, tl := range tools {
+		if err := os.WriteFile(filepath.Join(agentsDir, "tools", tl.file), []byte(tl.content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// deferred-agent extends main so it renders the main template; eager-tool is
+	// eager while linter + the two MCP tools are deferred.
+	deferredAgent := `---
+apiVersion: warp/v1alpha1
+kind: Agent
+metadata:
+  name: deferred-agent
+spec:
+  extends: main
+  tools:
+    - eager-tool
+  policies:
+    tools:
+      include:
+        - eager-tool
+        - linter
+        - mcp__github__create_issue
+        - mcp__github__list_prs
+---
+Deferred agent.
+`
+	// all-eager-agent extends main but declares no MCP tools and loads every
+	// custom tool eagerly, so nothing is deferred.
+	allEagerAgent := `---
+apiVersion: warp/v1alpha1
+kind: Agent
+metadata:
+  name: all-eager-agent
+spec:
+  extends: main
+  tools:
+    - eager-tool
+    - linter
+  policies:
+    tools:
+      include:
+        - eager-tool
+        - linter
+---
+All-eager agent.
+`
+	for _, a := range []struct {
+		name    string
+		content string
+	}{
+		{"deferred-agent", deferredAgent},
+		{"all-eager-agent", allEagerAgent},
+	} {
+		if err := os.WriteFile(filepath.Join(agentsDir, a.name+".agent.md"), []byte(a.content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := ws.Reload(ctx); err != nil {
+		t.Fatalf("ws.Reload: %v", err)
+	}
+
+	sess, err := New(ctx, Config{
+		ID:          uuid.Must(uuid.NewV7()).String(),
+		Title:       "Deferred Tools",
+		DB:          db,
+		Workspace:   ws,
+		Gateway:     func() gateway.Gateway { return gw },
+		Permissions: wsPermManager(t, ws),
+		Publisher:   pub,
+		Logger:      log.Default(),
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer sess.Close()
+
+	// 1. The deferred agent renders the tool_search section and the
+	//    <deferred_tools> directory listing linter and the github MCP server.
+	prompt := sess.renderSystemPrompt("deferred-agent")
+	if !strings.Contains(prompt, "### `tool_search` tool") {
+		t.Errorf("expected tool_search section in prompt, got:\n%s", prompt)
+	}
+	if !strings.Contains(prompt, "<deferred_tools>") || !strings.Contains(prompt, "</deferred_tools>") {
+		t.Errorf("expected <deferred_tools> block in prompt, got:\n%s", prompt)
+	}
+	if !strings.Contains(prompt, "linter") {
+		t.Errorf("expected deferred tool 'linter' in prompt, got:\n%s", prompt)
+	}
+	if !strings.Contains(prompt, "github") || !strings.Contains(prompt, "mcp__github__*") {
+		t.Errorf("expected github MCP server summary (mcp__github__*) in prompt, got:\n%s", prompt)
+	}
+	if !strings.Contains(prompt, "create_issue") || !strings.Contains(prompt, "list_prs") {
+		t.Errorf("expected github short tool names in prompt, got:\n%s", prompt)
+	}
+
+	// 2. The all-eager agent has no deferred tools, so the tool_search section
+	//    and <deferred_tools> block are omitted.
+	eagerPrompt := sess.renderSystemPrompt("all-eager-agent")
+	if strings.Contains(eagerPrompt, "### `tool_search` tool") {
+		t.Errorf("did not expect tool_search section for all-eager agent, got:\n%s", eagerPrompt)
+	}
+	if strings.Contains(eagerPrompt, "<deferred_tools>") {
+		t.Errorf("did not expect <deferred_tools> for all-eager agent, got:\n%s", eagerPrompt)
 	}
 }
