@@ -17,6 +17,10 @@ func (r *Registry) Sources() []autocomplete.Source {
 		Name:      "commands",
 		Trigger:   "/",
 		StartOnly: true,
+	}, {
+		Name:     "rules",
+		Trigger:  "@rule:",
+		Complete: completeRules,
 	}}
 
 	for _, cmd := range commands {
@@ -143,6 +147,40 @@ func completeAgents(ctx context.Context, _ autocomplete.Request) ([]autocomplete
 			Label:       a.Name,
 			Description: agentDescription(a),
 		}
+	}
+	return candidates, nil
+}
+
+// completeRules suggests workspace rules for the @rule: attachment trigger,
+// inserting @rule:<name> so the agent auto-injects the rule's instructions.
+func completeRules(ctx context.Context, _ autocomplete.Request) ([]autocomplete.Candidate, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	c := store.Client()
+	if c == nil {
+		return nil, nil
+	}
+
+	rules, err := c.ListRules(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	candidates := make([]autocomplete.Candidate, 0, len(rules))
+	for _, r := range rules {
+		desc := r.Description
+		if desc == "" {
+			desc = r.Scope
+		}
+		candidates = append(candidates, autocomplete.Candidate{
+			Value:       r.Name,
+			Label:       r.Name,
+			Description: desc,
+			InsertText:  "@rule:" + r.Name + " ",
+			Data:        r,
+		})
 	}
 	return candidates, nil
 }

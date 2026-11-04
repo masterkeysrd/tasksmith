@@ -172,7 +172,7 @@ docs/
 │   └── permissions.md             # Security pipeline, shellguard AST, and path guard
 └── reference/                     # Formal specifications & schemas
     ├── providers.md               # ModelProvider manifest schema & role defaults
-    ├── manifests.md               # Warp resource specifications (Agent, Skill, Tool)
+    ├── manifests.md               # Warp resource specifications (Agent, Rule, Skill, Tool)
     ├── tools.md                   # Built-in tool parameter schemas
     ├── cli.md                     # Complete CLI flags and subcommand reference
     └── providers/                 # Upstream provider configuration guides

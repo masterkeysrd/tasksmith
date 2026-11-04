@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -23,6 +24,62 @@ import (
 	"github.com/masterkeysrd/warp"
 )
 
+// renderWorkspaceRules renders the always-active workspace rules into a
+// <workspace_rules> block, ordered by priority descending then name ascending
+// (WARP's resolution order). It returns an empty string when no non-empty
+// always-active rules exist.
+func renderWorkspaceRules(resolved *warp.ResolvedAgent, cat *workspace.Catalog, globals map[string]any) string {
+	type alwaysRule struct {
+		rl       *warp.Rule
+		rendered string
+	}
+
+	var active []alwaysRule
+	for i := range resolved.Rules {
+		rl := &resolved.Rules[i]
+		if !rl.Spec.Triggers.Always {
+			continue
+		}
+		rendered, err := rl.Render(&warp.RuleRenderOptions{
+			Workspace: cat.WorkspaceSpec(),
+			Project:   cat.Project(),
+			Agent:     resolved.Agent,
+			Globals:   globals,
+		})
+		if err != nil {
+			rendered = rl.Spec.Instructions
+		}
+		if strings.TrimSpace(rendered) == "" {
+			continue
+		}
+		active = append(active, alwaysRule{rl: rl, rendered: rendered})
+	}
+	if len(active) == 0 {
+		return ""
+	}
+
+	slices.SortFunc(active, func(a, b alwaysRule) int {
+		if a.rl.Spec.Priority != b.rl.Spec.Priority {
+			return b.rl.Spec.Priority - a.rl.Spec.Priority
+		}
+		if a.rl.Metadata.Name < b.rl.Metadata.Name {
+			return -1
+		}
+		if a.rl.Metadata.Name > b.rl.Metadata.Name {
+			return 1
+		}
+		return 0
+	})
+
+	var b strings.Builder
+	b.WriteString("<workspace_rules>\n")
+	for _, ar := range active {
+		fmt.Fprintf(&b, "<rule name=%q priority=\"%d\">\n%s\n</rule>\n", ar.rl.Metadata.Name, ar.rl.Spec.Priority, strings.TrimSpace(ar.rendered))
+	}
+	b.WriteString("</workspace_rules>")
+	return b.String()
+}
+
 func (s *Session) renderSystemPrompt(agentName string) string {
 	cat := s.workspace.Catalog()
 	var wsPrompt string
@@ -35,8 +92,11 @@ func (s *Session) renderSystemPrompt(agentName string) string {
 	}
 
 	var agentPrompt string
-	if resolved, err := cat.ResolveAgent(agentName); err == nil && resolved != nil && resolved.Agent != nil {
-		globals := cat.AgentRenderGlobals(resolved)
+	var resolved *warp.ResolvedAgent
+	var globals map[string]any
+	if r, err := cat.ResolveAgent(agentName); err == nil && r != nil && r.Agent != nil {
+		resolved = r
+		globals = cat.AgentRenderGlobals(resolved)
 		agentPrompt, _ = resolved.Agent.Render(&warp.AgentRenderOptions{
 			Workspace: cat.WorkspaceSpec(),
 			Project:   cat.Project(),
@@ -51,6 +111,19 @@ func (s *Session) renderSystemPrompt(agentName string) string {
 	}
 	if p := strings.TrimSpace(agentPrompt); p != "" {
 		parts = append(parts, p)
+	}
+
+	// Statically append the always-active workspace rules into a
+	// <workspace_rules> block. Conditional rules are surfaced for on-demand
+	// loading via <available_rules> instead, so they are not duplicated here.
+	// The agent template never emits a rendered block itself, so guard on the
+	// block signature (opening tag followed by a newline) to avoid clobbering a
+	// template that already renders one, without matching the prose mention of
+	// `<workspace_rules>` inside the rules_and_guidelines description.
+	if resolved != nil && len(resolved.Rules) > 0 && !strings.Contains(agentPrompt, "<workspace_rules>\n") {
+		if block := renderWorkspaceRules(resolved, cat, globals); block != "" {
+			parts = append(parts, block)
+		}
 	}
 	if s.ParentID != "" {
 		subPrompt := fmt.Sprintf(`<subagent_context>
@@ -206,7 +279,7 @@ func (s *Session) resolveCommandExecution(msg message.Message) (*commandExecutio
 					return nil, fmt.Errorf("failed to render skill %q for command %q: %w", sk.Metadata.Name, cmd.Name, rerr)
 				}
 				skillPath := s.workspace.PortablePath(sk.Directory)
-				b.WriteString(fmt.Sprintf("<embedded_skill name=%q path=%q>\n<instructions>\n%s\n</instructions>\n</embedded_skill>\n", sk.Metadata.Name, skillPath, skRendered))
+				fmt.Fprintf(&b, "<embedded_skill name=%q path=%q>\n<instructions>\n%s\n</instructions>\n</embedded_skill>\n", sk.Metadata.Name, skillPath, skRendered)
 			}
 			for _, rl := range resolvedCmd.Rules {
 				rlRendered, rerr := rl.Render(&warp.RuleRenderOptions{
@@ -221,7 +294,7 @@ func (s *Session) resolveCommandExecution(msg message.Message) (*commandExecutio
 				if rulePath == "" {
 					rulePath = s.workspace.PortablePath(rl.Directory)
 				}
-				b.WriteString(fmt.Sprintf("<embedded_rule name=%q path=%q>\n<instructions>\n%s\n</instructions>\n</embedded_rule>\n", rl.Metadata.Name, rulePath, rlRendered))
+				fmt.Fprintf(&b, "<embedded_rule name=%q path=%q>\n<instructions>\n%s\n</instructions>\n</embedded_rule>\n", rl.Metadata.Name, rulePath, rlRendered)
 			}
 			promptText = b.String() + rendered
 		}
@@ -733,8 +806,8 @@ func validateHumanAgentTrigger(ws *workspace.Workspace, agentName string) error 
 		return nil
 	}
 	snap, ok := ws.Catalog().GetAgent(strings.TrimSpace(agentName))
-	if ok && !snap.Agent.CanHumanTrigger() {
-		return fmt.Errorf("%w: agent %q cannot be triggered by human (triggers: %s)", ErrInvalidConfig, snap.Agent.Name, strings.Join(snap.Agent.Triggers, ", "))
+	if ok && !snap.CanHumanTrigger() {
+		return fmt.Errorf("%w: agent %q cannot be triggered by human (triggers: %s)", ErrInvalidConfig, snap.Name, strings.Join(snap.Triggers, ", "))
 	}
 	return nil
 }

@@ -163,6 +163,20 @@ type InvokeAgentOutput struct {
 	Message   string `json:"message" jsonschema:"Status message explaining that the subagent is running asynchronously."`
 }
 
+// LoadRuleInput defines the input parameters for the load_rule tool.
+type LoadRuleInput struct {
+	Rule string `json:"rule" jsonschema:"Name of the rule to load (e.g. 'go-error-handling', 'security-baseline')."`
+}
+
+// LoadRuleOutput defines the structured output of the load_rule tool.
+type LoadRuleOutput struct {
+	Rule         string `json:"rule" jsonschema:"Name of the rule that was loaded."`
+	Instructions string `json:"instructions" jsonschema:"Rendered instructions and constraints for the rule."`
+	Path         string `json:"path,omitempty" jsonschema:"Path to the rule manifest file on disk, relative to the workspace root."`
+	Priority     int    `json:"priority,omitempty" jsonschema:"Priority of the rule."`
+	Truncated    bool   `json:"truncated,omitempty" jsonschema:"Whether the rule instructions exceeded limits and were truncated."`
+}
+
 // LoadSkillInput defines the input parameters for the load_skill tool.
 type LoadSkillInput struct {
 	Skill     string            `json:"skill" jsonschema:"Name of the skill to load (e.g. 'postgres-migrations', 'git-release')."`

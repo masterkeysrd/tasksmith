@@ -43,6 +43,7 @@ var knownPrefixes = map[string]string{
 	"@file:":  "file",
 	"@sym:":   "sym",
 	"@skill:": "skill",
+	"@rule:":  "rule",
 }
 
 // attachmentRefParser is a goldmark inline parser that emits AttachmentRefNode
@@ -104,6 +105,8 @@ func labelFromValue(refType, value string, _ []byte) (label, symKind string) {
 			label = value
 		}
 	case "skill":
+		label = value
+	case "rule":
 		label = value
 	default:
 		label = value

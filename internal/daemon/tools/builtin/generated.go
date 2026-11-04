@@ -11,6 +11,7 @@ const (
 	ToolGlob         = "glob"
 	ToolGrep         = "grep"
 	ToolInvokeAgent  = "invoke_agent"
+	ToolLoadRule     = "load_rule"
 	ToolLoadSkill    = "load_skill"
 	ToolLS           = "ls"
 	ToolManageAgents = "manage_agents"

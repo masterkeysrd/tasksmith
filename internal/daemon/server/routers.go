@@ -207,6 +207,7 @@ func (w *workspaceRouter) initRoutes() {
 		GetRoute("/v1/commands/{name...}", w.getCommand),
 		GetRoute("/v1/skills", w.getSkillsList),
 		GetRoute("/v1/skills/{name...}", w.getSkill),
+		GetRoute("/v1/workspace/rules", w.listRules),
 		GetRoute("/v1/models", w.getModelsList),
 		GetRoute("/v1/models/{id...}", w.getModel),
 		GetRoute("/v1/permissions", w.getPermissions),
@@ -287,6 +288,15 @@ func (w *workspaceRouter) getSkill(rw http.ResponseWriter, r *http.Request) {
 		return
 	}
 	WriteJSON(rw, http.StatusOK, sk)
+}
+
+func (w *workspaceRouter) listRules(rw http.ResponseWriter, r *http.Request) {
+	rules, err := w.b.ListRules(r.Context(), RequestWorkspace(r))
+	if err != nil {
+		WriteError(rw, err)
+		return
+	}
+	WriteJSON(rw, http.StatusOK, rules)
 }
 
 func (w *workspaceRouter) getModelsList(rw http.ResponseWriter, r *http.Request) {

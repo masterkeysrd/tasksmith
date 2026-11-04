@@ -33,6 +33,8 @@ var MessageTool = trail.FC("MessageTool", func(props MessageToolProps) trail.Nod
 		return GrepToolRenderer(props.Tool)
 	case "load_skill":
 		return LoadSkillToolWidget(LoadSkillToolWidgetProps(props))
+	case "load_rule":
+		return LoadRuleToolWidget(LoadRuleToolWidgetProps(props))
 	case "write":
 		return WriteToolRenderer(props.Tool)
 	case "edit":

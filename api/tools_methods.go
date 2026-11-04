@@ -14,6 +14,14 @@ func (o LoadSkillOutput) TextContent() string {
 	return o.Instructions
 }
 
+// TextContent returns the rendered instructions for the loaded rule to provide to the LLM.
+func (o LoadRuleOutput) TextContent() string {
+	if o.Path != "" {
+		return fmt.Sprintf("Rule path: %s\n\n%s", o.Path, o.Instructions)
+	}
+	return o.Instructions
+}
+
 // ToolContent renders the loaded skill's instructions as a text block followed by
 // tool-reference blocks for each deferred skill tool, so the deferred tools are
 // activated into the model's active toolset when the skill is loaded. It keeps

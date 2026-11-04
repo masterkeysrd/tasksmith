@@ -45,6 +45,8 @@ type mockBackend struct {
 	skillsErr         error
 	skillResp         *api.Skill
 	skillErr          error
+	rulesResp         []api.Rule
+	rulesErr          error
 	modelsResp        []api.Model
 	modelsErr         error
 	modelResp         *api.Model
@@ -151,6 +153,10 @@ func (m *mockBackend) ListSkills(ctx context.Context, workspace string) ([]api.S
 
 func (m *mockBackend) GetSkill(ctx context.Context, workspace, name string) (*api.Skill, error) {
 	return m.skillResp, m.skillErr
+}
+
+func (m *mockBackend) ListRules(ctx context.Context, workspace string) ([]api.Rule, error) {
+	return m.rulesResp, m.rulesErr
 }
 
 func (m *mockBackend) ListModels(ctx context.Context, workspace string) ([]api.Model, error) {

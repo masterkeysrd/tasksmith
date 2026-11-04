@@ -881,7 +881,7 @@ Builtin %s tool.
 // embedded built-in agents' spec.tools.
 var builtinToolNames = []string{
 	"ask_question", "bash", "download", "edit", "glob", "grep", "invoke_agent",
-	"load_skill", "ls", "manage_agents", "remove", "tasks", "todos",
+	"load_rule", "load_skill", "ls", "manage_agents", "remove", "tasks", "todos",
 	"tool_search", "view", "web_fetch", "write",
 }
 

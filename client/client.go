@@ -264,6 +264,18 @@ func (c *Client) GetSkill(ctx context.Context, name string) (*api.Skill, error) 
 	return &out, nil
 }
 
+// ListRules returns all effective rule resources in the workspace.
+func (c *Client) ListRules(ctx context.Context) ([]api.Rule, error) {
+	if err := c.requireCWD(); err != nil {
+		return nil, err
+	}
+	var out []api.Rule
+	if err := c.doJSON(ctx, http.MethodGet, "/v1/workspace/rules", nil, nil, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // ListModels returns all resolved models across providers in the workspace.
 func (c *Client) ListModels(ctx context.Context) ([]api.Model, error) {
 	if err := c.requireCWD(); err != nil {

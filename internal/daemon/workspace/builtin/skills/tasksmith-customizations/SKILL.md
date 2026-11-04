@@ -48,4 +48,4 @@ Workspace built-ins are mirrored under `$XDG_DATA_HOME/tasksmith/builtin/` (norm
 | Plugins | `references/workspace-and-context.md` | Repository root `PLUGIN.md` or `PLUGIN.yaml` |
 | Workspace and project context | `references/workspace-and-context.md` | `WORKSPACE.md`, `AGENTS.md` |
 
-Discovery is not the same as execution: WARP can load Decision, Rule, and MCP definitions, but TaskSmith does not currently evaluate Decision resources, activate Rule resources, or connect MCP servers from those definitions. See the references for the actual runtime behavior and schemas.
+Discovery is not the same as execution: TaskSmith resolves and injects Rule resources, but it does not currently evaluate Decision resources or connect MCP servers from their definitions. See the references for the actual runtime behavior and schemas.

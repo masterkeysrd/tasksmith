@@ -22,8 +22,9 @@ Required sections:
 - Commands executed that succeeded or failed (and why)
 - Important constraints, rules, or environment details discovered
 
-## Recommended Skills
+## Recommended Skills & Rules
 - If applicable, any specific skill to load for the next steps.
+- If applicable, any workspace rule to load (via `load_rule`) for the next steps.
 
 ## Strategy & Exact Next Steps
 - Overall approach being taken and any blockers/risks identified

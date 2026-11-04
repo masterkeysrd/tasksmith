@@ -413,6 +413,12 @@ func renderAttachmentRefPill(node *AttachmentRefNode, t *theme.Scheme, onAttachm
 			Style: style.S().Foreground(iconColor),
 		}, icon.Plugin)
 		labelText = node.Label
+	case "rule":
+		iconColor = t.Color.Icon.Info
+		iconNode = kitex.Span(kitex.SpanProps{
+			Style: style.S().Foreground(iconColor),
+		}, icon.Shield)
+		labelText = node.Label
 	}
 
 	_ = iconColor // used for icon coloring above

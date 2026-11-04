@@ -39,6 +39,7 @@ type Config struct {
 	Workspace    *workspace.Workspace
 	AllowedTools []string
 	Skills       []warp.Skill
+	Rules        []warp.Rule
 	Subagents    []*warp.Agent
 	Agents       AgentManager
 	// AgentName is the active agent's name, used to resolve a loaded skill's
@@ -131,6 +132,9 @@ func New(cfg Config) ([]tools.Tool, error) {
 		{ToolAskQuestion, func(m tools.Metadata) tools.Tool { return tools.NewHandler(ToolAskQuestion, m, &askQuestionTool{}) }},
 		{ToolLoadSkill, func(m tools.Metadata) tools.Tool {
 			return tools.NewHandler(ToolLoadSkill, m, newLoadSkillTool(cfg.Skills, cfg.Workspace, cfg.AgentName, cfg.Agent, cfg.DeferredTools))
+		}},
+		{ToolLoadRule, func(m tools.Metadata) tools.Tool {
+			return tools.NewHandler(ToolLoadRule, m, newLoadRuleTool(cfg.Rules, cfg.Workspace, cfg.Agent))
 		}},
 	}
 

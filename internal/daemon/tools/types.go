@@ -37,9 +37,15 @@ type Plan struct {
 	Action     api.ActionType  `json:"action"`
 	Safety     api.SafetyLevel `json:"safety"`
 	Target     string          `json:"target,omitempty"`
-	Summary    string          `json:"summary"`
-	Diff       string          `json:"diff,omitempty"`
-	ReadOnly   bool            `json:"read_only,omitempty"`
+	// Paths holds the additional workspace-relative, slash-separated target paths
+	// touched by the invocation (e.g. a bash command's CWD and file operands, or
+	// the paths surfaced by a search/listing result). It is used by rule
+	// matching to evaluate triggers.globs against every path in play, not just
+	// the primary Target.
+	Paths    []string `json:"paths,omitempty"`
+	Summary  string   `json:"summary"`
+	Diff     string   `json:"diff,omitempty"`
+	ReadOnly bool     `json:"read_only,omitempty"`
 }
 
 // Tool is an executable LLM-callable tool with two-phase Prepare and Execute

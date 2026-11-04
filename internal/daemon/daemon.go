@@ -549,6 +549,23 @@ func (d *Daemon) GetSkill(ctx context.Context, rawWS, name string) (*api.Skill, 
 	return &res, nil
 }
 
+func (d *Daemon) ListRules(ctx context.Context, rawWS string) ([]api.Rule, error) {
+	rt, err := d.workspace(ctx, rawWS)
+	if err != nil {
+		return nil, err
+	}
+
+	ws := rt.Workspace()
+	rules := ws.Catalog().Rules()
+	out := make([]api.Rule, len(rules))
+	for i, rl := range rules {
+		r := rl.Rule
+		r.Path = ws.PortablePath(rl.Path)
+		out[i] = r
+	}
+	return out, nil
+}
+
 func (d *Daemon) ListModels(ctx context.Context, rawWS string) ([]api.Model, error) {
 	rt, err := d.workspace(ctx, rawWS)
 	if err != nil {

@@ -181,6 +181,22 @@ var TimelineEvent = trail.FC("TimelineEvent", func(entry api.TimelineEntry) trai
 			text = "Prompt cache miss"
 		}
 		return Notice(store.NoticeData{Text: text})
+	case api.TimelineKindRule:
+		if entry.Rule == nil {
+			return nil
+		}
+		rec := entry.Rule
+		switch rec.Trigger {
+		case "glob":
+			text = fmt.Sprintf("● Loaded Rule %s (matched %s)", rec.Rule, rec.Matched)
+		case "tool":
+			text = fmt.Sprintf("● Loaded Rule %s (tool: %s)", rec.Rule, rec.Matched)
+		case "manual":
+			text = fmt.Sprintf("● Loaded Rule %s (%s)", rec.Rule, rec.Matched)
+		default:
+			text = fmt.Sprintf("● Loaded Rule %s", rec.Rule)
+		}
+		return Notice(store.NoticeData{Text: text})
 	default:
 		text = "Timeline event: " + string(entry.Kind)
 	}

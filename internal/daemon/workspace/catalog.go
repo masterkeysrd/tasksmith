@@ -17,6 +17,7 @@ import (
 var (
 	reProjectContext = regexp.MustCompile(`(?s)<project_context\b[^>]*>.*?</project_context>`)
 	reSkillsSection  = regexp.MustCompile(`(?s)<skills_and_specialized_knowledge\b[^>]*>.*?</skills_and_specialized_knowledge>`)
+	reRulesSection   = regexp.MustCompile(`(?s)<rules_and_guidelines\b[^>]*>.*?</rules_and_guidelines>`)
 	reSubagentsSec   = regexp.MustCompile(`(?s)<subagents_and_delegation\b[^>]*>.*?</subagents_and_delegation>`)
 )
 
@@ -40,6 +41,12 @@ type CommandSnapshot struct {
 	Def *warp.Command
 }
 
+// RuleSnapshot pairs an API Rule presentation with its defining warp.Rule.
+type RuleSnapshot struct {
+	api.Rule
+	Def *warp.Rule
+}
+
 // Catalog acts as an in-memory query and resolution proxy over a warp.Registry
 // (and scoped registry when cwd is inside a subproject), exposing native warp
 // resource definitions pre-materialized in lock-free point-in-time memdb stores.
@@ -59,6 +66,7 @@ type Catalog struct {
 	agents    *memdb.DB[AgentSnapshot]
 	skills    *memdb.DB[SkillSnapshot]
 	commands  *memdb.DB[CommandSnapshot]
+	rules     *memdb.DB[RuleSnapshot]
 	tools     *memdb.DB[*warp.Tool]
 	providers *memdb.DB[*warp.ModelProvider]
 }
@@ -74,6 +82,7 @@ func NewCatalog(reg *warp.Registry, cwd, rootDir string) *Catalog {
 		agents:     memdb.New(func(a AgentSnapshot) string { return a.Name }),
 		skills:     memdb.New(func(s SkillSnapshot) string { return s.Name }),
 		commands:   memdb.New(func(cmd CommandSnapshot) string { return cmd.Name }),
+		rules:      memdb.New(func(r RuleSnapshot) string { return r.Name }),
 		tools:      memdb.New(func(t *warp.Tool) string { return t.Metadata.Name }),
 		providers:  memdb.New(func(p *warp.ModelProvider) string { return p.Metadata.Name }),
 	}
@@ -337,7 +346,47 @@ func (c *Catalog) populate() {
 	}
 	c.skills.Replace(skillList...)
 
-	// 5. Agents
+	// 5. Rules
+	var ruleList []RuleSnapshot
+	rawRules := resolver.ListResources(warp.QueryOptions{
+		Kinds:     []warp.Kind{warp.KindRule},
+		Effective: true,
+	})
+	for _, r := range rawRules {
+		if rl, ok := r.(*warp.Rule); ok {
+			scopeNamespace := c.ScopeNamespace(rl.BaseResource)
+			// triggers.decision is not yet supported; surface a non-fatal
+			// diagnostic so the user knows the condition is ignored.
+			if strings.TrimSpace(rl.Spec.Triggers.Decision) != "" {
+				c.validationWarnings = append(c.validationWarnings, fmt.Sprintf("Rule %q specifies unsupported triggers.decision %q; decision triggers are ignored", rl.Metadata.Name, rl.Spec.Triggers.Decision))
+			}
+			ruleList = append(ruleList, RuleSnapshot{
+				Rule: api.Rule{
+					Name:        rl.Metadata.Name,
+					DisplayName: rl.Metadata.DisplayName,
+					Description: rl.Metadata.Description,
+					Priority:    rl.Spec.Priority,
+					Triggers: api.RuleTriggers{
+						Always:   rl.Spec.Triggers.Always,
+						Globs:    slices.Clone(rl.Spec.Triggers.Globs),
+						UseWhen:  rl.Spec.Triggers.UseWhen,
+						Keywords: slices.Clone(rl.Spec.Triggers.Keywords),
+						Decision: rl.Spec.Triggers.Decision,
+						Tools:    slices.Clone(rl.Spec.Triggers.Tools),
+					},
+					Namespace:    scopeNamespace,
+					Scope:        FormatSkillScope(scopeNamespace),
+					Path:         rl.GetPath(),
+					Instructions: rl.Spec.Instructions,
+					Tokens:       tokenizer.Estimate(strings.TrimSpace(rl.Spec.Instructions)),
+				},
+				Def: rl,
+			})
+		}
+	}
+	c.rules.Replace(ruleList...)
+
+	// 6. Agents
 	var agentList []AgentSnapshot
 	rawAgents := resolver.ListResources(warp.QueryOptions{
 		Kinds:     []warp.Kind{warp.KindAgent},
@@ -372,7 +421,7 @@ func (c *Catalog) populate() {
 	}
 	c.agents.Replace(agentList...)
 
-	// 6. Registry validation: surface cross-reference and structural issues
+	// 7. Registry validation: surface cross-reference and structural issues
 	// (missing defaultAgent/defaultProvider, invalid modelAliases, bad
 	// policies.tools, dangling resource references) as non-fatal diagnostic
 	// warnings so workspace.Open stays resilient to typos in WORKSPACE.md or
@@ -416,6 +465,7 @@ func (c *Catalog) PartitionAgentTools(resolved *warp.ResolvedAgent) ToolPartitio
 
 	hasSubagents := len(resolved.Subagents) > 0
 	hasSkills := len(resolved.Skills) > 0
+	hasConditionalRules := c.HasConditionalRules(resolved)
 
 	eagerSet := make(map[string]bool)
 	var eager []string
@@ -430,11 +480,24 @@ func (c *Catalog) PartitionAgentTools(resolved *warp.ResolvedAgent) ToolPartitio
 		if name == "load_skill" && !hasSkills {
 			continue
 		}
+		if name == "load_rule" && !hasConditionalRules {
+			continue
+		}
 		if eagerSet[name] {
 			continue
 		}
 		eagerSet[name] = true
 		eager = append(eager, name)
+	}
+
+	// load_rule is always active (eager) when the agent has conditional rules,
+	// even if a custom agent omitted it from spec.tools, unless it is explicitly
+	// denied by the workspace or agent tool policy ceiling.
+	if hasConditionalRules && !eagerSet["load_rule"] {
+		if wt, ok := c.GetTool("load_rule"); ok && resolved.ToolAction(wt) != warp.ToolPolicyDeny {
+			eagerSet["load_rule"] = true
+			eager = append(eager, "load_rule")
+		}
 	}
 
 	var deferred []string
@@ -450,6 +513,11 @@ func (c *Catalog) PartitionAgentTools(resolved *warp.ResolvedAgent) ToolPartitio
 			continue
 		}
 		if name == "load_skill" && !hasSkills {
+			continue
+		}
+		// load_rule is never deferred: it is either eager (when conditional rules
+		// exist) or omitted entirely (when they don't).
+		if name == "load_rule" {
 			continue
 		}
 		if resolved.ToolAction(t) == warp.ToolPolicyDeny {
@@ -541,8 +609,8 @@ func (c *Catalog) BuildDeferredToolsCatalog(resolved *warp.ResolvedAgent) *Defer
 		// Strip the "mcp__" prefix so ParseMCPToolName yields the server name
 		// and the short tool name.
 		bare := name
-		if strings.HasPrefix(bare, "mcp__") {
-			bare = strings.TrimPrefix(bare, "mcp__")
+		if after, ok := strings.CutPrefix(bare, "mcp__"); ok {
+			bare = after
 		}
 		serverName, shortToolName, isMCP := warp.ParseMCPToolName(bare)
 		if isMCP {
@@ -623,8 +691,9 @@ func (c *Catalog) AgentRenderGlobals(resolved *warp.ResolvedAgent) map[string]an
 		return eagerSet[strings.ToLower(strings.TrimSpace(toolName))]
 	}
 	return map[string]any{
-		"HasTool":       hasTool,
-		"DeferredTools": c.BuildDeferredToolsCatalog(resolved),
+		"HasTool":          hasTool,
+		"DeferredTools":    c.BuildDeferredToolsCatalog(resolved),
+		"ConditionalRules": c.ConditionalTemplateRules(resolved),
 	}
 }
 
@@ -643,7 +712,7 @@ func (c *Catalog) calculateAgentContext(ag *warp.Agent, resolved *warp.ResolvedA
 		Globals:   globals,
 	})
 
-	var skills, subagents int
+	var skills, subagents, rules int
 
 	projMatches := reProjectContext.FindAllString(agentPrompt, -1)
 	for _, m := range projMatches {
@@ -656,6 +725,12 @@ func (c *Catalog) calculateAgentContext(ag *warp.Agent, resolved *warp.ResolvedA
 		skills += tokenizer.Estimate(m)
 	}
 	agentPrompt = reSkillsSection.ReplaceAllString(agentPrompt, "")
+
+	ruleMatches := reRulesSection.FindAllString(agentPrompt, -1)
+	for _, m := range ruleMatches {
+		rules += tokenizer.Estimate(m)
+	}
+	agentPrompt = reRulesSection.ReplaceAllString(agentPrompt, "")
 
 	subagentMatches := reSubagentsSec.FindAllString(agentPrompt, -1)
 	for _, m := range subagentMatches {
@@ -714,6 +789,7 @@ func (c *Catalog) calculateAgentContext(ag *warp.Agent, resolved *warp.ResolvedA
 		MCPTools:     mcpTools,
 		Skills:       skills,
 		Subagents:    subagents,
+		Rules:        rules,
 	}
 }
 
@@ -816,6 +892,139 @@ func (c *Catalog) GetSkill(name string) (SkillSnapshot, bool) {
 		}
 	}
 	return SkillSnapshot{}, false
+}
+
+// Rules returns all effective rule snapshots in scope, sorted by metadata name.
+func (c *Catalog) Rules() []RuleSnapshot {
+	return c.rules.Snapshot().All()
+}
+
+// GetRule resolves a rule snapshot by name or qualified name.
+func (c *Catalog) GetRule(name string) (RuleSnapshot, bool) {
+	if snap, ok := c.rules.Snapshot().Get(name); ok {
+		return snap, true
+	}
+	if strings.Contains(name, "/") {
+		for _, s := range c.rules.Snapshot().All() {
+			if s.Def != nil && s.Def.QualifiedName() == name {
+				return s, true
+			}
+		}
+		if res, ok := c.resolveByKind(warp.KindRule, name); ok {
+			if rl, ok := res.(*warp.Rule); ok {
+				scopeNamespace := c.ScopeNamespace(rl.BaseResource)
+				return RuleSnapshot{
+					Rule: api.Rule{
+						Name:        rl.Metadata.Name,
+						DisplayName: rl.Metadata.DisplayName,
+						Description: rl.Metadata.Description,
+						Priority:    rl.Spec.Priority,
+						Triggers: api.RuleTriggers{
+							Always:   rl.Spec.Triggers.Always,
+							Globs:    slices.Clone(rl.Spec.Triggers.Globs),
+							UseWhen:  rl.Spec.Triggers.UseWhen,
+							Keywords: slices.Clone(rl.Spec.Triggers.Keywords),
+							Decision: rl.Spec.Triggers.Decision,
+							Tools:    slices.Clone(rl.Spec.Triggers.Tools),
+						},
+						Namespace:    scopeNamespace,
+						Scope:        FormatSkillScope(scopeNamespace),
+						Path:         rl.GetPath(),
+						Instructions: rl.Spec.Instructions,
+						Tokens:       tokenizer.Estimate(strings.TrimSpace(rl.Spec.Instructions)),
+					},
+					Def: rl,
+				}, true
+			}
+		}
+	}
+	return RuleSnapshot{}, false
+}
+
+// HasConditionalRules reports whether the resolved agent has at least one rule
+// that is not unconditionally active (i.e. !triggers.always). Such rules are
+// surfaced to the agent via the load_rule tool and the <available_rules>
+// discovery directory rather than being statically injected into the system
+// prompt. It returns false when resolved is nil or all rules are always-active.
+func (c *Catalog) HasConditionalRules(resolved *warp.ResolvedAgent) bool {
+	if resolved == nil {
+		return false
+	}
+	for _, rl := range resolved.Rules {
+		if !rl.Spec.Triggers.Always {
+			return true
+		}
+	}
+	return false
+}
+
+// templateRule is the view model exposed to agent templates for a conditional
+// (non-always) workspace rule. It carries the rule's trigger fields and its
+// rendered instructions so the <available_rules> discovery directory can advise
+// the agent on when to load the rule via load_rule.
+type templateRule struct {
+	Name         string
+	Description  string
+	UseWhen      string
+	Keywords     []string
+	Globs        []string
+	Tools        []string
+	Always       bool
+	Priority     int
+	Instructions string
+}
+
+// ConditionalTemplateRules returns the view models for the resolved agent's
+// conditional (non-always) rules, sorted by priority descending then name
+// ascending. Always-active rules are excluded because they are statically
+// injected into <workspace_rules> instead of being surfaced for on-demand
+// loading.
+func (c *Catalog) ConditionalTemplateRules(resolved *warp.ResolvedAgent) []templateRule {
+	if resolved == nil {
+		return nil
+	}
+
+	var out []templateRule
+	for i := range resolved.Rules {
+		rl := &resolved.Rules[i]
+		if rl.Spec.Triggers.Always {
+			continue
+		}
+		rendered, err := rl.Render(&warp.RuleRenderOptions{
+			Workspace: c.WorkspaceSpec(),
+			Project:   c.Project(),
+			Agent:     resolved.Agent,
+		})
+		if err != nil {
+			rendered = rl.Spec.Instructions
+		}
+		out = append(out, templateRule{
+			Name:         rl.Metadata.Name,
+			Description:  rl.Metadata.Description,
+			UseWhen:      rl.Spec.Triggers.UseWhen,
+			Keywords:     slices.Clone(rl.Spec.Triggers.Keywords),
+			Globs:        slices.Clone(rl.Spec.Triggers.Globs),
+			Tools:        slices.Clone(rl.Spec.Triggers.Tools),
+			Always:       rl.Spec.Triggers.Always,
+			Priority:     rl.Spec.Priority,
+			Instructions: rendered,
+		})
+	}
+
+	slices.SortFunc(out, func(a, b templateRule) int {
+		if a.Priority != b.Priority {
+			return b.Priority - a.Priority
+		}
+		if a.Name < b.Name {
+			return -1
+		}
+		if a.Name > b.Name {
+			return 1
+		}
+		return 0
+	})
+
+	return out
 }
 
 // ToolsForSkill resolves the tools declared by the skill referenced by skillRef

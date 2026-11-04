@@ -174,6 +174,11 @@ func marshalPayload(entry *Entry) ([]byte, error) {
 			return nil, ErrInvalidEntry
 		}
 		src = entry.TurnCompleted
+	case api.TimelineKindRule:
+		if entry.Rule == nil {
+			return nil, ErrInvalidEntry
+		}
+		src = entry.Rule
 	case api.TimelineKindInterrupted:
 		return []byte("{}"), nil
 	default:
@@ -346,6 +351,9 @@ func scanEntry(r rowScanner) (*Entry, error) {
 	case api.TimelineKindTurnCompleted:
 		entry.TurnCompleted = new(api.TurnCompletedRecord)
 		dst = entry.TurnCompleted
+	case api.TimelineKindRule:
+		entry.Rule = new(api.RuleRecord)
+		dst = entry.Rule
 	case api.TimelineKindInterrupted:
 		return entry, nil
 	default:

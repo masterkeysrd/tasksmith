@@ -22,6 +22,7 @@ TaskSmith provides 15 core built-in system tools backed by virtualized OS sandbo
 | **`todos`** | `Session` | Safe / Auto-allowed | Manages the session progress checklist, tracking pending and completed items. |
 | **`ask_question`** | `Session` | Safe / Auto-allowed | Prompts the user with structured interactive questions (`single`, `multi`, `text`, `confirm`). |
 | **`load_skill`** | `Session`, `Workspace` | Safe / Auto-allowed | Loads domain guidelines, coding conventions, or workflows for a specified skill on demand. |
+| **`load_rule`** | `Session`, `Workspace` | Safe / Auto-allowed | Loads the full instructions of a conditional workspace rule by name. Auto-activated when the agent has at least one conditional rule. |
 | **`invoke_agent`** | `Session` | Safe & Read-Only / Auto-allowed | Spawns a specialized subagent asynchronously in an isolated child session. |
 | **`manage_agents`** | `Session` | Safe / Auto-allowed for `list`/`status`, Prompts for `send`/`kill` | Lists subagents, checks subagent status, sends messages, or terminates running subagents. |
 | **`tool_search`** | `Session`, `Workspace` | Safe & Read-Only / Auto-allowed | Searches deferred (not eagerly loaded) tools by name, description, or parameters via BM25 and loads the matches into context. Auto-activated when the session has at least one deferred tool. |
@@ -44,7 +45,7 @@ Every built-in tool defines safety properties in its manifest:
 
 ### Behavior Across Permission Modes
 
-| Permission Mode | Safe Read-Only (`view`, `ls`, `glob`, `grep`, `todos`, `tasks`, `ask_question`, `load_skill`, `invoke_agent`, `tool_search`) | Filesystem Writes (`write`, `edit`, `remove`) | Execution & Network (`bash`, `web_fetch`, `download`) |
+| Permission Mode | Safe Read-Only (`view`, `ls`, `glob`, `grep`, `todos`, `tasks`, `ask_question`, `load_skill`, `load_rule`, `invoke_agent`, `tool_search`) | Filesystem Writes (`write`, `edit`, `remove`) | Execution & Network (`bash`, `web_fetch`, `download`) |
 | :--- | :--- | :--- | :--- |
 | **`default`** | Auto-allowed | Prompts user for approval | Prompts user for approval |
 | **`accept_edits`** | Auto-allowed | Auto-allowed (unified diff recorded) | Prompts user for approval |
@@ -587,6 +588,49 @@ Loads and renders instructions, coding conventions, or runbooks for a specialize
     "image": "my-service",
     "tag": "v1.2.0"
   }
+}
+```
+
+---
+
+### `load_rule`
+
+Loads and renders the full instructions of a conditional workspace rule into the agent's context on demand. Conditional rules appear in the system prompt only as a name-and-trigger summary; this tool fetches the body. Always-on rules (`triggers.always: true`) are already in the prompt and never need to be loaded.
+
+The agent normally calls this after a keyword suggestion, but it may call it directly for any rule listed in `<available_rules>`. The harness records the rule as loaded so it is not injected twice by a later glob or tool trigger.
+
+#### Availability
+
+Registered when the active agent resolves at least one conditional rule and the workspace or agent tool policy does not deny it, so rule-free workspaces do not pay the schema cost. It is never deferred and never discoverable through `tool_search`: it is either eager or absent. It is also listed in the built-in `main` agent's eager tools.
+
+#### Safety Profile
+- **`isReadOnly`**: `true`
+- **`isIdempotent`**: `true`
+- **`isDangerous`**: `false`
+- **`isOpenWorld`**: `false`
+- **User Hint**: `"Load rule"`
+
+#### Input Parameters
+
+| Parameter | Type | Required | Description |
+| :--- | :--- | :--- | :--- |
+| `rule` | string | **Yes** | Rule name. Accepts the short name (`go-error-handling`), `namespace/name`, or the fully qualified `namespace/Rule/name` form; matching is case-insensitive. |
+
+#### Output Fields
+
+| Field | Type | Description |
+| :--- | :--- | :--- |
+| `rule` | string | Name of the rule that was loaded. |
+| `path` | string | Rule manifest path, relative to the workspace root. |
+| `priority` | integer | Rule `spec.priority` used for injection ordering. |
+| `instructions` | string | Rendered rule body. |
+| `truncated` | boolean | `true` if the instructions exceeded size limits (500 lines / 32 KB) and were truncated. |
+
+Loading a rule the agent cannot access returns an error rather than an empty result.
+
+```json
+{
+  "rule": "go-error-handling"
 }
 ```
 

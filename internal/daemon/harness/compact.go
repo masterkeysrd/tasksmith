@@ -34,11 +34,12 @@ type StaticContext struct {
 	MCPTools     int
 	Skills       int
 	Subagents    int
+	Rules        int
 }
 
 // Total returns the sum of all static context token buckets.
 func (s StaticContext) Total() int {
-	return s.SystemPrompt + s.ContextFiles + s.SystemTools + s.CustomTools + s.MCPTools + s.Skills + s.Subagents
+	return s.SystemPrompt + s.ContextFiles + s.SystemTools + s.CustomTools + s.MCPTools + s.Skills + s.Subagents + s.Rules
 }
 
 // Breakdown converts StaticContext into an api.ContextBreakdown.
@@ -51,6 +52,7 @@ func (s StaticContext) Breakdown() api.ContextBreakdown {
 		MCPTools:     s.MCPTools,
 		Skills:       s.Skills,
 		Subagents:    s.Subagents,
+		Rules:        s.Rules,
 	}
 }
 
@@ -64,6 +66,7 @@ func StaticContextFromBreakdown(b api.ContextBreakdown) StaticContext {
 		MCPTools:     b.MCPTools,
 		Skills:       b.Skills,
 		Subagents:    b.Subagents,
+		Rules:        b.Rules,
 	}
 }
 
@@ -244,6 +247,7 @@ func computeContextState(static StaticContext, state State, limits models.Limits
 		MCPTools:       static.MCPTools,
 		Skills:         static.Skills,
 		Subagents:      static.Subagents,
+		Rules:          static.Rules,
 		Summary:        summaryTokens,
 		UserMessages:   userTokens,
 		AgentResponses: agentTokens,

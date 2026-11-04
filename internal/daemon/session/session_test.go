@@ -6083,3 +6083,379 @@ All-eager agent.
 		t.Errorf("did not expect <deferred_tools> for all-eager agent, got:\n%s", eagerPrompt)
 	}
 }
+
+// TestSessionRenderSystemPromptRules verifies that renderSystemPrompt appends a
+// <workspace_rules> block for always-active rules and renders the
+// <available_rules> directory for conditional rules, and omits both when the
+// agent has no rules.
+func TestSessionRenderSystemPromptRules(t *testing.T) {
+	ctx := context.Background()
+	db, ws, gw, pub, mgr := setupTestEnv(t, nil)
+	t.Cleanup(func() { _ = mgr.Close() })
+
+	agentsDir := filepath.Join(ws.RootDir(), ".agents")
+	rulesDir := filepath.Join(agentsDir, "rules")
+	if err := os.MkdirAll(rulesDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// An always-active rule (injected into <workspace_rules>) and a conditional
+	// rule (surfaced in <available_rules> for on-demand loading).
+	rules := []struct {
+		file    string
+		content string
+	}{
+		{
+			"security-baseline.rule.md",
+			`---
+apiVersion: warp/v1alpha1
+kind: Rule
+metadata:
+  name: security-baseline
+  description: Security guardrails
+spec:
+  priority: 100
+  triggers:
+    always: true
+---
+Never log secrets or credentials.
+`,
+		},
+		{
+			"go-error-handling.rule.md",
+			`---
+apiVersion: warp/v1alpha1
+kind: Rule
+metadata:
+  name: go-error-handling
+  description: Go error handling
+spec:
+  priority: 50
+  triggers:
+    globs: ["**/*.go"]
+    keywords: ["error", "fmt"]
+---
+Always wrap and propagate errors in Go.
+`,
+		},
+	}
+	for _, r := range rules {
+		if err := os.WriteFile(filepath.Join(rulesDir, r.file), []byte(r.content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// rules-agent extends main so it renders the main template and resolves the
+	// workspace rules.
+	rulesAgent := `---
+apiVersion: warp/v1alpha1
+kind: Agent
+metadata:
+  name: rules-agent
+spec:
+  extends: main
+---
+Rules agent.
+`
+	if err := os.WriteFile(filepath.Join(agentsDir, "rules-agent.agent.md"), []byte(rulesAgent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := ws.Reload(ctx); err != nil {
+		t.Fatalf("ws.Reload: %v", err)
+	}
+
+	sess, err := New(ctx, Config{
+		ID:          uuid.Must(uuid.NewV7()).String(),
+		Title:       "Rules",
+		DB:          db,
+		Workspace:   ws,
+		Gateway:     func() gateway.Gateway { return gw },
+		Permissions: wsPermManager(t, ws),
+		Publisher:   pub,
+		Logger:      log.Default(),
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer func() { _ = sess.Close() }()
+
+	// 1. The always-active rule is statically appended in <workspace_rules>.
+	prompt := sess.renderSystemPrompt("rules-agent")
+	if !strings.Contains(prompt, "<workspace_rules>") || !strings.Contains(prompt, "</workspace_rules>") {
+		t.Errorf("expected <workspace_rules> block in prompt, got:\n%s", prompt)
+	}
+	if !strings.Contains(prompt, "security-baseline") || !strings.Contains(prompt, "Never log secrets") {
+		t.Errorf("expected always rule 'security-baseline' in <workspace_rules>, got:\n%s", prompt)
+	}
+
+	// 2. The conditional rule is surfaced in <available_rules>.
+	if !strings.Contains(prompt, "<available_rules>") || !strings.Contains(prompt, "</available_rules>") {
+		t.Errorf("expected <available_rules> block in prompt, got:\n%s", prompt)
+	}
+	if !strings.Contains(prompt, "go-error-handling") {
+		t.Errorf("expected conditional rule 'go-error-handling' in <available_rules>, got:\n%s", prompt)
+	}
+
+	// 3. The conditional rule must not be statically injected into
+	//    <workspace_rules> (only always-active rules belong there). The agent
+	//    template's rules_and_guidelines prose mentions `<workspace_rules>` in
+	//    backticks, so anchor on the rendered block signature (opening tag
+	//    followed by a newline) to isolate the appended block.
+	if wsStart := strings.Index(prompt, "<workspace_rules>\n"); wsStart >= 0 {
+		if wsEnd := strings.Index(prompt[wsStart:], "</workspace_rules>"); wsEnd >= 0 {
+			block := prompt[wsStart : wsStart+wsEnd]
+			if strings.Contains(block, "go-error-handling") {
+				t.Errorf("conditional rule 'go-error-handling' should not appear in <workspace_rules>: %q", block)
+			}
+		}
+	}
+
+	// 4. The "no blocks" case is covered by TestSessionRenderSystemPromptNoRules,
+	//    which uses a rule-free workspace. Always-active rules are attached to
+	//    every agent in scope regardless of the agent's `rules` field, so a
+	//    `rules: []` agent in this workspace would still receive the always-active
+	//    security-baseline rule.
+}
+
+// TestSessionRenderSystemPromptNoRules verifies that when a workspace has no
+// rules at all, the system prompt omits both the <workspace_rules> and
+// <available_rules> blocks.
+func TestSessionRenderSystemPromptNoRules(t *testing.T) {
+	ctx := context.Background()
+	db, ws, gw, pub, mgr := setupTestEnv(t, nil)
+	t.Cleanup(func() { _ = mgr.Close() })
+
+	sess, err := New(ctx, Config{
+		ID:          uuid.Must(uuid.NewV7()).String(),
+		Title:       "NoRules",
+		DB:          db,
+		Workspace:   ws,
+		Gateway:     func() gateway.Gateway { return gw },
+		Permissions: wsPermManager(t, ws),
+		Publisher:   pub,
+		Logger:      log.Default(),
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer func() { _ = sess.Close() }()
+
+	prompt := sess.renderSystemPrompt("")
+	if strings.Contains(prompt, "<workspace_rules>") {
+		t.Errorf("did not expect <workspace_rules> for rule-free workspace, got:\n%s", prompt)
+	}
+	if strings.Contains(prompt, "<available_rules>") {
+		t.Errorf("did not expect <available_rules> for rule-free workspace, got:\n%s", prompt)
+	}
+}
+
+// TestSessionRuleTimelineEntry verifies that a RuleLoaded event is persisted to
+// the session timeline as a TimelineKindRule entry and published as an
+// EntryAddedEvent carrying the RuleRecord. This exercises the exact
+// appendTimeline + publishEntryAdded path that the turn loop uses when it
+// receives a harness.RuleLoaded event.
+func TestSessionRuleTimelineEntry(t *testing.T) {
+	ctx := context.Background()
+	_, _, _, pub, mgr := setupTestEnv(t, nil)
+	t.Cleanup(func() { _ = mgr.Close() })
+
+	sess, _, err := mgr.Create(ctx, api.CreateSessionRequest{Title: "Rule Timeline"})
+	if err != nil {
+		t.Fatalf("mgr.Create: %v", err)
+	}
+	defer func() { _ = sess.Close() }()
+
+	pub.reset()
+
+	record := api.RuleRecord{
+		Rule:    "go-error-handling",
+		Trigger: "manual",
+		Matched: "@rule:go-error-handling",
+		Path:    ".agents/rules/go-error-handling.rule.md",
+	}
+	entry := timeline.NewRuleEntry(record)
+	if err := sess.appendTimeline(ctx, entry); err != nil {
+		t.Fatalf("appendTimeline: %v", err)
+	}
+
+	// Verify the timeline contains the entry.
+	entries, err := sess.Timeline.List(ctx)
+	if err != nil {
+		t.Fatalf("sess.Timeline.List: %v", err)
+	}
+	var found *timeline.Entry
+	for i := range entries {
+		if entries[i].Kind == api.TimelineKindRule {
+			found = &entries[i]
+			break
+		}
+	}
+	if found == nil {
+		t.Fatalf("expected a TimelineKindRule entry in the timeline, got %+v", entries)
+	}
+	if found.Rule == nil || found.Rule.Rule != "go-error-handling" || found.Rule.Trigger != "manual" || found.Rule.Matched != "@rule:go-error-handling" {
+		t.Fatalf("unexpected rule record: %+v", found.Rule)
+	}
+
+	// Verify the published EntryAddedEvent carries the Rule field.
+	var publishedRule *api.RuleRecord
+	for _, ev := range pub.recorded() {
+		if eae, ok := ev.(api.EntryAddedEvent); ok && eae.Entry.Kind == api.TimelineKindRule {
+			publishedRule = eae.Entry.Rule
+		}
+	}
+	if publishedRule == nil || publishedRule.Rule != "go-error-handling" || publishedRule.Trigger != "manual" {
+		t.Fatalf("expected a published EntryAddedEvent with Rule, got %+v", publishedRule)
+	}
+}
+
+// TestSessionRuleLoadedStreamIntegration drives a full turn where a tool call
+// touches a file matching a conditional rule, verifying the harness RuleLoaded
+// event is persisted as a TimelineKindRule entry, published as an
+// EntryAddedEvent, and that the injected <system_reminders> message reaches the
+// model without appearing as a timeline message entry.
+func TestSessionRuleLoadedStreamIntegration(t *testing.T) {
+	ctx := context.Background()
+
+	var turnCount int
+	prov := &fakeProvider{
+		chunkHandler: func(_ context.Context, req *llm.Request) ([]message.AssistantChunk, error) {
+			turnCount++
+			if turnCount == 1 {
+				return []message.AssistantChunk{
+					{
+						BaseChunk: message.BaseChunk{ID: uuid.NewString()},
+						Model:     req.Model,
+						Content: []message.Block{
+							&message.ToolCall{
+								ID:   "tc-rule-view",
+								Name: "view",
+								Args: map[string]any{"path": "main.go"},
+							},
+						},
+						Done: true,
+					},
+				}, nil
+			}
+			// Turn 2: the rule reminder must be visible to the model even though
+			// it never surfaces as a visible timeline message.
+			var sawReminder bool
+			for _, m := range req.Messages {
+				if u, ok := m.(*message.User); ok && strings.Contains(u.GetContent().Text(), "<system_reminders>") &&
+					strings.Contains(u.GetContent().Text(), "go-globs") {
+					sawReminder = true
+					break
+				}
+			}
+			if !sawReminder {
+				return nil, errors.New("expected <system_reminders> rule message in second LLM turn")
+			}
+			return []message.AssistantChunk{
+				{
+					BaseChunk: message.BaseChunk{ID: uuid.NewString()},
+					Model:     req.Model,
+					Content:   []message.Block{&message.TextBlock{Text: "Done."}},
+					Done:      true,
+				},
+			}, nil
+		},
+	}
+
+	_, ws, _, pub, mgr := setupTestEnv(t, prov)
+
+	if err := os.WriteFile(filepath.Join(ws.RootDir(), "main.go"), []byte("package main\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile main.go: %v", err)
+	}
+	rulesDir := filepath.Join(ws.RootDir(), ".agents", "rules")
+	if err := os.MkdirAll(rulesDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll rules: %v", err)
+	}
+	ruleManifest := `---
+apiVersion: warp/v1alpha1
+kind: Rule
+metadata:
+  name: go-globs
+  description: Go file conventions
+spec:
+  priority: 20
+  triggers:
+    globs: ["**/*.go"]
+---
+Always wrap and propagate errors in Go.
+`
+	if err := os.WriteFile(filepath.Join(rulesDir, "go-globs.rule.md"), []byte(ruleManifest), 0o644); err != nil {
+		t.Fatalf("WriteFile rule: %v", err)
+	}
+	if err := ws.Reload(ctx); err != nil {
+		t.Fatalf("ws.Reload: %v", err)
+	}
+
+	sess, _, err := mgr.Create(ctx, api.CreateSessionRequest{Title: "Rule Stream"})
+	if err != nil {
+		t.Fatalf("mgr.Create: %v", err)
+	}
+	defer func() { _ = sess.Close() }()
+
+	pub.reset()
+
+	if err := sess.Send(ctx, api.SendRequest{Content: "Read main.go"}); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	if err := sess.Wait(ctx); err != nil {
+		t.Fatalf("Wait: %v", err)
+	}
+
+	// 1. The timeline holds exactly one rule entry describing the glob trigger.
+	entries, err := sess.Timeline.List(ctx)
+	if err != nil {
+		t.Fatalf("Timeline.List: %v", err)
+	}
+	var ruleEntries []timeline.Entry
+	var messageEntries int
+	for _, e := range entries {
+		switch e.Kind {
+		case api.TimelineKindRule:
+			ruleEntries = append(ruleEntries, e)
+		case api.TimelineKindMessage:
+			messageEntries++
+		}
+	}
+	if len(ruleEntries) != 1 {
+		t.Fatalf("expected 1 TimelineKindRule entry, got %d (%+v)", len(ruleEntries), entries)
+	}
+	rec := ruleEntries[0].Rule
+	if rec == nil || rec.Rule != "go-globs" || rec.Trigger != "glob" || rec.Matched != "main.go" {
+		t.Fatalf("unexpected rule record: %+v", rec)
+	}
+
+	// 2. A matching EntryAddedEvent was published for the rule entry.
+	var sawPublished bool
+	for _, ev := range pub.recorded() {
+		if eae, ok := ev.(api.EntryAddedEvent); ok && eae.Entry.Kind == api.TimelineKindRule &&
+			eae.Entry.Rule != nil && eae.Entry.Rule.Rule == "go-globs" {
+			sawPublished = true
+			break
+		}
+	}
+	if !sawPublished {
+		t.Fatal("expected published EntryAddedEvent with go-globs rule record")
+	}
+
+	// 3. The hidden reminder must not leak into the visible timeline messages.
+	//    Expected visible messages: User, Assistant(ToolCall), Tool, Assistant.
+	history, err := sess.Timeline.Messages(ctx)
+	if err != nil {
+		t.Fatalf("Timeline.Messages: %v", err)
+	}
+	if len(history) != 4 {
+		t.Fatalf("expected 4 visible history messages, got %d: %+v", len(history), history)
+	}
+	for _, m := range history {
+		if u, ok := m.(*message.User); ok && harness.SystemKindOf(u) != "" {
+			t.Errorf("hidden %q reminder leaked into timeline messages", harness.SystemKindOf(u))
+		}
+	}
+	if messageEntries != 4 {
+		t.Errorf("expected 4 message timeline entries, got %d", messageEntries)
+	}
+}

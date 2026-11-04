@@ -28,7 +28,7 @@ var ContextUsage = trail.FC("ContextUsage", func(props store.ContextUsageData) t
 
 	staticTokens := ctx.Breakdown.SystemPrompt + ctx.Breakdown.ContextFiles +
 		ctx.Breakdown.SystemTools + ctx.Breakdown.CustomTools +
-		ctx.Breakdown.MCPTools + ctx.Breakdown.Skills + ctx.Breakdown.Subagents
+		ctx.Breakdown.MCPTools + ctx.Breakdown.Skills + ctx.Breakdown.Rules + ctx.Breakdown.Subagents
 	convTokens := ctx.Breakdown.Summary + ctx.Breakdown.UserMessages +
 		ctx.Breakdown.AgentResponses + ctx.Breakdown.ToolCalls
 	reserveTokens := ctx.ReserveTokens
@@ -148,6 +148,7 @@ var ContextUsage = trail.FC("ContextUsage", func(props store.ContextUsageData) t
 		{"⛁", func(s *theme.Scheme) color.Color { return s.Color.Agent.Thinking }, "Custom tools", ctx.Breakdown.CustomTools},
 		{"⛁", func(s *theme.Scheme) color.Color { return s.Color.Agent.Thinking }, "MCP tools", ctx.Breakdown.MCPTools},
 		{"⛁", func(s *theme.Scheme) color.Color { return s.Color.Agent.Thinking }, "Skills", ctx.Breakdown.Skills},
+		{"⛁", func(s *theme.Scheme) color.Color { return s.Color.Agent.Thinking }, "Rules", ctx.Breakdown.Rules},
 		{"⛁", func(s *theme.Scheme) color.Color { return s.Color.Agent.Thinking }, "Subagents", ctx.Breakdown.Subagents},
 		{"◉", func(s *theme.Scheme) color.Color { return s.Color.Agent.Generating }, "Compacted summary", ctx.Breakdown.Summary},
 		{"◉", func(s *theme.Scheme) color.Color { return s.Color.Agent.Generating }, "User messages", ctx.Breakdown.UserMessages},

@@ -19,6 +19,7 @@ const (
 	TimelineKindCompacted     TimelineKind = "compacted"
 	TimelineKindCacheBroken   TimelineKind = "cache_broken"
 	TimelineKindTurnCompleted TimelineKind = "turn_completed"
+	TimelineKindRule          TimelineKind = "rule"
 )
 
 // CommandRecord captures a direct user shell command (!) and its output.
@@ -87,6 +88,14 @@ type CacheBrokenRecord struct {
 	InputTokens int `json:"input_tokens,omitempty"`
 }
 
+// RuleRecord captures a workspace rule auto-injected by smart matching or @rule: attachment.
+type RuleRecord struct {
+	Rule    string `json:"rule"`
+	Trigger string `json:"trigger"` // "glob" | "tool" | "manual"
+	Matched string `json:"matched,omitempty"`
+	Path    string `json:"path,omitempty"`
+}
+
 // Turn completion statuses of a [TurnCompletedRecord].
 const (
 	TurnStatusDone     = "done"
@@ -126,4 +135,5 @@ type TimelineEntry struct {
 	Compacted     *CompactedRecord     `json:"compacted,omitempty"`
 	CacheBroken   *CacheBrokenRecord   `json:"cache_broken,omitempty"`
 	TurnCompleted *TurnCompletedRecord `json:"turn_completed,omitempty"`
+	Rule          *RuleRecord          `json:"rule,omitempty"`
 }

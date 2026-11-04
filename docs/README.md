@@ -13,7 +13,7 @@ Step-by-step guides for setting up workspaces, authoring agents, managing securi
 | [Workspaces & Projects](./guides/workspaces.md) | Multi-tier resource hierarchy (`WORKSPACE.md`, `AGENTS.md`), project discovery, and isolated `.env` secret layering. |
 | [CLI & Interactive Workflow](./guides/cli.md) | Terminal user interface, slash commands (`/effort`, `/mode`, `/revert`), interactive reviews, and keyboard shortcuts. |
 | [Security & Permissions](./guides/permissions.md) | Operational modes (`default`, `plan`, `auto`), rule matching (`deny`, `allow`, `ask`), and interactive approval scopes. |
-| [Customizations & Extensions](./guides/customizations.md) | Building custom agents (`*.agent.md`), skills (`*.skill.md`), commands (`*.command.md`), and decisions (`*.decision.md`). |
+| [Customizations & Extensions](./guides/customizations.md) | Building custom agents (`*.agent.md`), ambient rules (`*.rule.md`), skills (`*.skill.md`), commands (`*.command.md`), and decisions (`*.decision.md`). |
 | [Tools & MCP Servers](./guides/tools-and-mcp.md) | Using built-in tools (`view`, `edit`, `write`, `bash`), custom tools, and integrating Model Context Protocol (MCP) servers. |
 
 ---
@@ -25,7 +25,7 @@ Deep dives into the internal subsystems and design invariants of the TaskSmith e
 | Subsystem | Focus Area |
 | :--- | :--- |
 | [Daemon Architecture](./architecture/daemon.md) | Background service lifecycle, Unix domain socket IPC, SSE event multiplexing, and SQLite turn journaling. |
-| [Agent Execution Harness](./architecture/harness.md) | Directed execution graph, interactive mid-turn suspension, context compaction, and subagent delegation. |
+| [Agent Execution Harness](./architecture/harness.md) | Directed execution graph, interactive mid-turn suspension, context compaction, subagent delegation, and ambient rule/skill injection. |
 | [Provider Gateway](./architecture/gateway.md) | Content-addressable gateway pooling, role-based model routing (`completion`, `decision`, `embedding`), and lazy auth validation. |
 | [Virtualized Sandbox](./architecture/sandbox.md) | OS capability decomposition (`FS`, `Proc`, `Net`), local process groups, and native kernel isolation (Seatbelt/Bubblewrap). |
 | [Permission & Guard Engine](./architecture/permissions.md) | Multi-stage security pipeline, shell Abstract Syntax Tree (AST) inspection, and path confinement. |
@@ -39,8 +39,8 @@ Declarative manifest schemas, CLI command specifications, and provider configura
 | Reference | Description |
 | :--- | :--- |
 | [Providers Overview & Manifest Schema](./reference/providers.md) | General `kind: ModelProvider` Warp manifest schema, authentication schemes, and model capability properties. |
-| [Resource Manifest Reference](./reference/manifests.md) | Formal YAML frontmatter specifications for agents, skills, commands, and MCP manifests. |
-| [Built-in Tool Reference](./reference/tools.md) | Comprehensive parameter reference and output schemas for `view`, `write`, `edit`, `bash`, `glob`, `grep`, `web_fetch`, and `ask_question`. |
+| [Resource Manifest Reference](./reference/manifests.md) | Formal YAML frontmatter specifications for agents, rules, skills, commands, and MCP manifests. |
+| [Built-in Tool Reference](./reference/tools.md) | Comprehensive parameter reference and output schemas for `view`, `write`, `edit`, `bash`, `glob`, `grep`, `web_fetch`, `load_rule`, and `ask_question`. |
 | [CLI Command Reference](./reference/cli.md) | Command-line flags, startup arguments, daemon management subcommands, and environment variables. |
 
 ### Upstream Provider Guides (`docs/reference/providers/`)

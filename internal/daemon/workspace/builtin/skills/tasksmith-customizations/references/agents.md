@@ -19,7 +19,7 @@ All `spec` fields are optional:
 | `skills` | string[] | Skill names, qualified references, paths, or patterns to resolve. |
 | `commands` | string[] | Command names, qualified references, paths, or patterns to resolve. |
 | `subagents` | string[] | Agent names, qualified references, paths, or patterns to resolve for delegation. |
-| `rules` | string[] | WARP Rule references or patterns; TaskSmith does not currently activate Rule resources. |
+| `rules` | string[] | Rule names, qualified references, or patterns; each match attaches as an always-on rule for this agent. Rules with `triggers.always` attach regardless of this field, and `["*"]` also surfaces conditional rules for `load_rule`. See `rules.md`. |
 | `policies` | object | Security and access settings, including tool restrictions under `policies.tools`. |
 
 When a session has no explicit model, TaskSmith passes the agent's model list to model resolution and uses its first result; if nothing resolves, it falls back to the first listed identifier. An explicit session model takes precedence.

@@ -120,6 +120,9 @@ func InitSession(ctx context.Context, c *client.Client, opts InitSessionOptions)
 	if skills, err := c.ListSkills(subCtx); err == nil {
 		SetWorkspaceSkills(skills)
 	}
+	if rules, err := c.ListRules(subCtx); err == nil {
+		SetWorkspaceRules(rules)
+	}
 	var agents []api.Agent
 	if ags, err := c.ListAgents(subCtx); err == nil {
 		agents = ags
@@ -977,6 +980,9 @@ func resyncDaemonState(ctx context.Context, c *client.Client) {
 	if skills, err := c.ListSkills(ctx); err == nil {
 		SetWorkspaceSkills(skills)
 	}
+	if rules, err := c.ListRules(ctx); err == nil {
+		SetWorkspaceRules(rules)
+	}
 	if agents, err := c.ListAgents(ctx); err == nil {
 		SetWorkspaceAgents(agents)
 	}
@@ -1457,6 +1463,9 @@ func ReloadWorkspace(ctx context.Context) error {
 	}
 	if sks, err := c.ListSkills(ctx); err == nil {
 		SetWorkspaceSkills(sks)
+	}
+	if rules, err := c.ListRules(ctx); err == nil {
+		SetWorkspaceRules(rules)
 	}
 	if ags, err := c.ListAgents(ctx); err == nil {
 		SetWorkspaceAgents(ags)

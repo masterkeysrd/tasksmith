@@ -17,6 +17,10 @@ const (
 	MetaCompactionTrigger  = "tasksmith.compaction.trigger"
 	MetaCompactionFocus    = "tasksmith.compaction.focus"
 	MetaCompactionRequests = "tasksmith.compaction.requests"
+	// MetaRuleNames carries the list of rule names surfaced in a system reminder
+	// (either auto-loaded or suggested) so consumers can correlate reminders with
+	// the rules they reference.
+	MetaRuleNames = "tasksmith.rule.names"
 )
 
 const (
@@ -24,6 +28,9 @@ const (
 	SystemKindTask       = "task"
 	SystemKindCompaction = "compaction"
 	SystemKindSubagent   = "subagent"
+	// SystemKindReminder marks a synthetic user message that carries an active or
+	// suggested workspace rule inside <system_reminders>.
+	SystemKindReminder = "reminder"
 )
 
 // SystemKindOf returns the "tasksmith.system.kind" metadata value on msg, or "" if unset.
@@ -50,6 +57,8 @@ type State struct {
 	QuestionResponses   map[string]api.QuestionResponse   `json:"question_responses,omitempty"`
 	Todos               []api.TodoItem                    `json:"todos,omitempty"`
 	LoadedTools         []string                          `json:"loaded_tools,omitempty"`
+	LoadedRules         []string                          `json:"loaded_rules,omitempty"`
+	SuggestedRules      []string                          `json:"suggested_rules,omitempty"`
 	Context             api.ContextState                  `json:"context"`
 }
 
@@ -90,6 +99,16 @@ func (s State) Copy() State {
 		loadedTools = slices.Clone(s.LoadedTools)
 	}
 
+	var loadedRules []string
+	if len(s.LoadedRules) > 0 {
+		loadedRules = slices.Clone(s.LoadedRules)
+	}
+
+	var suggestedRules []string
+	if len(s.SuggestedRules) > 0 {
+		suggestedRules = slices.Clone(s.SuggestedRules)
+	}
+
 	var pendingCompact *api.CompactRequest
 	if s.PendingCompaction != nil {
 		pendingCompact = &api.CompactRequest{Focus: s.PendingCompaction.Focus}
@@ -104,6 +123,8 @@ func (s State) Copy() State {
 		QuestionResponses:   responses,
 		Todos:               todos,
 		LoadedTools:         loadedTools,
+		LoadedRules:         loadedRules,
+		SuggestedRules:      suggestedRules,
 		Context:             s.Context,
 	}
 }
@@ -175,6 +196,8 @@ func (s State) ApplyCompaction(static StaticContext, limits models.Limits) State
 	s.Context.Compactions++
 	s.Context.LastCompacted = time.Now().UTC()
 	s.LoadedTools = nil
+	s.LoadedRules = nil
+	s.SuggestedRules = nil
 	s.Context = computeContextState(static, s, limits)
 	return s
 }
@@ -303,6 +326,72 @@ func (s State) RecordLoadedTools(names ...string) State {
 		}
 		seen[key] = struct{}{}
 		s.LoadedTools = append(s.LoadedTools, name)
+	}
+	return s
+}
+
+// HasLoadedRule reports whether a rule with the given name is already in
+// LoadedRules (case-insensitive).
+func (s State) HasLoadedRule(name string) bool {
+	key := strings.ToLower(name)
+	for _, existing := range s.LoadedRules {
+		if strings.ToLower(existing) == key {
+			return true
+		}
+	}
+	return false
+}
+
+// RecordLoadedRules returns a copy of s with the given rule names appended to
+// LoadedRules, deduplicated case-insensitively against the existing entries.
+func (s State) RecordLoadedRules(names ...string) State {
+	if len(names) == 0 {
+		return s
+	}
+	seen := make(map[string]struct{}, len(s.LoadedRules)+len(names))
+	for _, name := range s.LoadedRules {
+		seen[strings.ToLower(name)] = struct{}{}
+	}
+	for _, name := range names {
+		key := strings.ToLower(name)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		s.LoadedRules = append(s.LoadedRules, name)
+	}
+	return s
+}
+
+// HasSuggestedRule reports whether a rule with the given name is already in
+// SuggestedRules (case-insensitive).
+func (s State) HasSuggestedRule(name string) bool {
+	key := strings.ToLower(name)
+	for _, existing := range s.SuggestedRules {
+		if strings.ToLower(existing) == key {
+			return true
+		}
+	}
+	return false
+}
+
+// RecordSuggestedRules returns a copy of s with the given rule names appended to
+// SuggestedRules, deduplicated case-insensitively against the existing entries.
+func (s State) RecordSuggestedRules(names ...string) State {
+	if len(names) == 0 {
+		return s
+	}
+	seen := make(map[string]struct{}, len(s.SuggestedRules)+len(names))
+	for _, name := range s.SuggestedRules {
+		seen[strings.ToLower(name)] = struct{}{}
+	}
+	for _, name := range names {
+		key := strings.ToLower(name)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		s.SuggestedRules = append(s.SuggestedRules, name)
 	}
 	return s
 }

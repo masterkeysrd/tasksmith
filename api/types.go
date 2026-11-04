@@ -29,6 +29,7 @@ type ContextBreakdown struct {
 	CustomTools    int `json:"custom_tools,omitempty"`
 	MCPTools       int `json:"mcp_tools,omitempty"`
 	Skills         int `json:"skills,omitempty"`
+	Rules          int `json:"rules,omitempty"`
 	Subagents      int `json:"subagents,omitempty"`
 	Summary        int `json:"summary,omitempty"`
 	UserMessages   int `json:"user_messages,omitempty"`
@@ -117,6 +118,30 @@ type Skill struct {
 	Scope        string     `json:"scope,omitempty"`
 	Instructions string     `json:"instructions,omitempty"`
 	Tokens       int        `json:"tokens,omitempty"`
+}
+
+// RuleTriggers defines the activation conditions for a workspace rule.
+type RuleTriggers struct {
+	Always   bool     `json:"always,omitempty"`
+	Globs    []string `json:"globs,omitempty"`
+	UseWhen  string   `json:"use_when,omitempty"`
+	Keywords []string `json:"keywords,omitempty"`
+	Decision string   `json:"decision,omitempty"`
+	Tools    []string `json:"tools,omitempty"`
+}
+
+// Rule describes an ambient coding standard, constraint, or guardrail in the workspace.
+type Rule struct {
+	Name         string       `json:"name"`
+	DisplayName  string       `json:"display_name,omitempty"`
+	Description  string       `json:"description,omitempty"`
+	Priority     int          `json:"priority,omitempty"`
+	Triggers     RuleTriggers `json:"triggers"`
+	Namespace    string       `json:"namespace,omitempty"`
+	Scope        string       `json:"scope,omitempty"`
+	Path         string       `json:"path,omitempty"`
+	Instructions string       `json:"instructions,omitempty"`
+	Tokens       int          `json:"tokens,omitempty"`
 }
 
 type ThinkingValue struct {

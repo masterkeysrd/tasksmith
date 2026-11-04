@@ -1,6 +1,6 @@
 # Resource Manifest Reference
 
-TaskSmith uses declarative YAML manifests and Markdown frontmatter to configure workspaces, projects, agents, skills, commands, decisions, tools, and external MCP servers.
+TaskSmith uses declarative YAML manifests and Markdown frontmatter to configure workspaces, projects, agents, rules, skills, commands, decisions, tools, and external MCP servers.
 
 Model `cost` pricing and tiers (`label`, `tier.type`, `tier.size`) drive the cost estimates recorded for every LLM call (shown by `/usage` and the status line); a model without `cost` and without a built-in profile price is recorded as unpriced.
 
@@ -216,14 +216,99 @@ Never attempt to modify code directly; report your findings with precise line re
 | `skills` | array of strings | Allowed skills (`*`, `!pattern`, or explicit skill names). |
 | `commands` | array of strings | Allowed slash commands (`*`, `!pattern`, or explicit command names). |
 | `subagents` | array of strings | Allowed subagents (`*`, `!pattern`, or explicit agent names). Only agents allowing the `agent` trigger can be invoked as subagents. |
-| `rules` | array of strings | Context rule selectors (`*`, `!pattern`, or explicit `AGENTS.md` / `.agents/rules/*.md` names). |
+| `rules` | array of strings | Rule references (`*`, qualified/short names, or globs). Each explicitly listed rule is attached as an always-on rule for this agent. Rules with `triggers.always: true` attach regardless of this field. `["*"]` also surfaces conditional rules for on-demand loading; omitted or `[]` attaches only always-on rules. |
 | `policies.tools` | object | Unbypassable security policy ceiling for eager tools, deferred tools (`tool_search`), and skill/command tools (`include`, `exclude`, `dangerous`, `openWorld`, `readOnly`, `ask`). The resolved tool list is an explicit allowlist; an agent whose resolved tools are empty receives zero tools. |
 
 *The Markdown body below the frontmatter contains the system persona prompt.*
 
 ---
 
-## 5. Skill Manifest (`*.skill.md` or `SKILL.md`)
+## 5. Rule Manifest (`*.rule.md`)
+
+Ambient constraints, coding standards, and tool/path guardrails that govern agent behavior. Placed under `.agents/rules/<name>.rule.md` (workspace) or `<subproject>/.agents/rules/<name>.rule.md` (project). A rule is a behavioral instruction, not a permission rule; enforcement of tool and file access still follows [Permissions](../architecture/permissions.md).
+
+### Injection Model
+
+| Rule kind | How it reaches the model |
+| :--- | :--- |
+| **Always-on** (`triggers.always: true`) | Rendered into a `<workspace_rules>` block in the static system prompt, so it stays in the cached prefix on every turn. |
+| **Conditional** (any trigger other than `always`) | Listed by name in an `<available_rules>` discovery block only. The agent loads the full body on demand with `load_rule`, or the harness auto-injects it when a trigger fires. |
+
+Conditional rules activate through three deterministic paths plus one advisory path, each injecting the full rendered body into a hidden `<system_reminders>` message and emitting a visible `● Loaded Rule …` timeline line:
+
+| Trigger | Evaluated when | Effect |
+| :--- | :--- | :--- |
+| `@rule:<name>` in a user prompt | Any user message | Loads the full rule immediately (`manual`). |
+| `triggers.tools` | A matching tool is invoked | Loads the full rule (`tool`). |
+| `triggers.globs` | A tool reads, writes, searches, or executes against a matching workspace-relative path | Loads the full rule (`glob`). |
+| `triggers.keywords` | A keyword appears in a user message | Advisory only: suggests the rule so the agent may call `load_rule`. |
+
+Each rule is injected at most once per compaction epoch; `LoadedRules` and `SuggestedRules` reset on compaction, so long sessions do not accumulate stale rule bodies.
+
+### Syntax
+
+```markdown
+---
+apiVersion: warp/v1alpha1
+kind: Rule
+metadata:
+  name: go-error-handling
+  displayName: Go Error Handling Conventions
+  description: Enforces sentinel error wrapping and prohibits panics in Go packages
+  labels:
+    category: backend
+spec:
+  priority: 10
+  triggers:
+    globs:
+      - "**/*.go"
+      - "!**/testdata/**"
+    tools:
+      - write
+      - edit
+    keywords:
+      - error
+      - sentinel
+      - panic
+    useWhen: "Writing, refactoring, or reviewing error handling logic in Go source files."
+---
+
+# Go Error Handling Rules
+
+1. Always wrap lower-level errors with `%w` and a package-prefixed context string.
+2. Define exported sentinel errors (`ErrInvalidConfig`, `ErrNotFound`) in `types.go` or `errors.go`.
+3. Never use `panic` for recoverable runtime errors.
+```
+
+### Spec Reference
+
+| Field | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `priority` | integer | `0` | Ordering when several rules resolve together; higher wins, ties break by `metadata.name`. |
+| `triggers.always` | boolean | `false` | Injects the full body into `<workspace_rules>` for every agent in scope. |
+| `triggers.globs` | array of strings | `nil` | Workspace-relative path patterns supporting `**` and `!` negation. A pathless pattern also matches on base name. |
+| `triggers.tools` | array of strings | `nil` | Tool names or glob patterns (`*`, `mcp__*`); matched case-insensitively, also against short names of qualified tools. |
+| `triggers.keywords` | array of strings | `nil` | Case-insensitive word-boundary keywords or phrases that produce a suggestion, never an automatic load. |
+| `triggers.useWhen` | string | `""` | Natural-language condition shown to the agent in `<available_rules>`. |
+| `triggers.decision` | string | `""` | **Unsupported.** Decision triggers are not evaluated for rules; setting this emits a startup warning that the reference is ignored. |
+
+*The Markdown body below the frontmatter contains the rule instructions. Unlike skills, rules declare no `spec.arguments`; the body renders only against resource-level template globals such as `{{.WorkspaceDir}}`, `{{.ProjectDir}}`, and `{{.Agent}}`.*
+
+### Attaching Rules to an Agent (`spec.rules`)
+
+`spec.rules` in an Agent manifest adds rules on top of always-on activation, and its behavior is frequently misunderstood:
+
+| `spec.rules` | Effect |
+| :--- | :--- |
+| Omitted or `[]` | Only rules with `triggers.always: true` apply. Conditional rules are not visible to the agent. |
+| Explicit names or globs | The matched rules are attached as always-on rules for this agent, in addition to any `triggers.always: true` rule. There is no way to opt out of an always-on rule. |
+| `["*"]` | Attaches every rule in scope. Always-on rules stay always-on; conditional rules are attached as conditional, so they appear in `<available_rules>` and can be loaded with `load_rule`. |
+
+Because a workspace-wide or user-wide `triggers.always: true` rule reaches every agent, reserve `always` for constraints that must never be skipped. Prefer conditional triggers for anything narrower, so the body only enters context when relevant.
+
+---
+
+## 6. Skill Manifest (`*.skill.md` or `SKILL.md`)
 
 Bundles domain expertise, procedural instructions, and reference patterns. Placed under `.agents/skills/<name>.skill.md` or `.agents/skills/<name>/SKILL.md`.
 
@@ -277,7 +362,7 @@ spec:
 
 ---
 
-## 6. Command Manifest (`*.command.md`)
+## 7. Command Manifest (`*.command.md`)
 
 Defines reusable command prompt templates invokable via `/name` or agent delegation. Placed under `.agents/commands/<name>.command.md`.
 
@@ -350,7 +435,7 @@ Every parameter declared in `spec.arguments` supports:
 
 ---
 
-## 7. Decision Manifest (`*.decision.md`)
+## 8. Decision Manifest (`*.decision.md`)
 
 Configures probabilistic System 1 decision classifiers for deterministic routing or rubric scoring. Placed under `.agents/decisions/<name>.decision.md`.
 
@@ -431,7 +516,7 @@ Evaluate the provided pull request diff against the defined criteria.
 
 ---
 
-## 8. Tool Manifest (`*.tool.md`)
+## 9. Tool Manifest (`*.tool.md`)
 
 Defines a custom CLI script or executable wrapper as a callable agent tool. Placed under `.agents/tools/<name>.tool.md`.
 
@@ -494,7 +579,7 @@ Executes project linting rules and returns diagnostic reports.
 
 ---
 
-## 9. MCP Server Manifest (`*.mcp.yaml`)
+## 10. MCP Server Manifest (`*.mcp.yaml`)
 
 Configures an external Model Context Protocol (MCP) server integration. Placed under `.agents/mcps/<name>.mcp.yaml`.
 

@@ -872,6 +872,20 @@ func (s *Session) send(ctx context.Context, stream iter.Seq2[any, error]) (*mess
 				return nil, err
 			}
 
+		case harness.RuleLoaded:
+			entry := timeline.NewRuleEntry(api.RuleRecord{
+				Rule:    ev.Rule,
+				Trigger: ev.Trigger,
+				Matched: ev.Matched,
+				Path:    ev.Path,
+			})
+			if ev.ID != "" && uuid.Validate(ev.ID) {
+				entry.ID = ev.ID
+			}
+			if err := s.appendTimeline(ctx, entry); err != nil {
+				return nil, err
+			}
+
 		case api.CacheBrokenRecord:
 			if err := s.appendTimeline(ctx, timeline.NewCacheBrokenEntry(ev)); err != nil {
 				return nil, err

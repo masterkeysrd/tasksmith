@@ -31,6 +31,9 @@ type NodeOptions struct {
 	SystemPrompt string
 	Limits       models.Limits
 	Static       StaticContext
+	// Rules, when non-nil, drives smart rule matching: it auto-injects active
+	// workspace rules into <system_reminders> and emits RuleLoaded events.
+	Rules *RuleMatcher
 }
 
 // Validate checks that required model and tools container dependencies are present.
@@ -201,6 +204,8 @@ func emit(ctx context.Context, ev any) {
 		name = "compaction_started"
 	case CompactionCompleted:
 		name = "compaction_completed"
+	case RuleLoaded:
+		name = "rule_loaded"
 	case api.CacheBrokenRecord:
 		name = "cache_broken"
 	case api.ContextUpdatedEvent:
@@ -390,6 +395,7 @@ type InboxNode struct {
 	queue  Queue
 	limits models.Limits
 	static StaticContext
+	rules  *RuleMatcher
 	logger log.Interface
 }
 
@@ -398,6 +404,7 @@ var _ Node = (*InboxNode)(nil)
 func (n *InboxNode) Configure(opts NodeOptions) {
 	n.limits = opts.Limits
 	n.static = opts.Static
+	n.rules = opts.Rules
 }
 
 // NewInboxNode constructs a new [InboxNode] bound to the queue and logger.
@@ -432,6 +439,19 @@ func (n *InboxNode) Execute(ctx context.Context, state State) (graph.Command[Sta
 		newTools = append(newTools, msgNewTools...)
 		emit(ctx, cloned)
 		drained = append(drained, cloned)
+
+		// Smart rule matching for genuine user messages: auto-load @rule:
+		// references and surface keyword-matched conditional rules as reminders.
+		if n.rules != nil {
+			if reminder, loaded, suggested := n.rules.MatchUserMessage(cloned, tempState); reminder != nil {
+				tempState = tempState.RecordLoadedRules(ruleLoadedNames(loaded)...)
+				tempState = tempState.RecordSuggestedRules(suggested...)
+				drained = append(drained, reminder)
+				for _, ev := range loaded {
+					emit(ctx, ev)
+				}
+			}
+		}
 	}
 
 	return graph.Update[State](func(s State) State {
@@ -450,6 +470,7 @@ type ToolsNode struct {
 	permissions permissions.SessionManager
 	limits      models.Limits
 	static      StaticContext
+	rules       *RuleMatcher
 	logger      log.Interface
 	metrics     metrics.Recorder
 }
@@ -460,6 +481,7 @@ func (n *ToolsNode) Configure(opts NodeOptions) {
 	n.tools = opts.Tools
 	n.limits = opts.Limits
 	n.static = opts.Static
+	n.rules = opts.Rules
 }
 
 // NewToolsNode constructs a new [ToolsNode] bound to the tool container, permission manager, and logger.
@@ -579,6 +601,7 @@ func (n *ToolsNode) evaluateCalls(ctx context.Context, unfulfilled []*message.To
 	var updatedTodos []api.TodoItem
 	var hasTodos bool
 	var newTools []string
+	plans := make(map[string]*tools.Plan)
 
 	dedupState := State{LoadedTools: loadedTools}
 
@@ -621,7 +644,7 @@ func (n *ToolsNode) evaluateCalls(ctx context.Context, unfulfilled []*message.To
 			questions = append(questions, question)
 			continue
 		}
-		toolMsg, req, err := n.evaluateSingleCall(ctx, tc)
+		toolMsg, req, err := n.evaluateSingleCall(ctx, tc, plans)
 		if err != nil {
 			return nil, err
 		}
@@ -660,7 +683,7 @@ func (n *ToolsNode) evaluateCalls(ctx context.Context, unfulfilled []*message.To
 		}), nil
 	}
 
-	return n.appendToolMessagesUpdate(ctx, toolMsgs, updatedTodos, hasTodos, newTools), nil
+	return n.appendToolMessagesUpdate(ctx, toolMsgs, unfulfilled, plans, updatedTodos, hasTodos, newTools), nil
 }
 
 func newQuestionRequest(tc *message.ToolCall) (api.QuestionRequest, error) {
@@ -681,12 +704,15 @@ func newQuestionRequest(tc *message.ToolCall) (api.QuestionRequest, error) {
 	}, nil
 }
 
-func (n *ToolsNode) evaluateSingleCall(ctx context.Context, tc *message.ToolCall) (*message.Tool, *api.PermissionRequest, error) {
+func (n *ToolsNode) evaluateSingleCall(ctx context.Context, tc *message.ToolCall, plans map[string]*tools.Plan) (*message.Tool, *api.PermissionRequest, error) {
 	plan, err := n.tools.Prepare(ctx, tc)
 	if err != nil {
 		n.recordFailure(ctx, tc, err)
 		msg, msgErr := newErrorToolMessage(tc, err.Error())
 		return msg, nil, msgErr
+	}
+	if plans != nil {
+		plans[tc.ID] = plan
 	}
 
 	access, req, err := n.permissions.Evaluate(plan)
@@ -726,6 +752,18 @@ func (n *ToolsNode) resumeCalls(ctx context.Context, unfulfilled []*message.Tool
 	var updatedTodos []api.TodoItem
 	var hasTodos bool
 	var newTools []string
+
+	// Re-prepare each resumed call so rule matching can read plan.Target/Paths.
+	// DryRun preparation is side-effect-free, so this is safe to repeat.
+	var plans map[string]*tools.Plan
+	if n.tools != nil {
+		plans = make(map[string]*tools.Plan, len(unfulfilled))
+		for _, tc := range unfulfilled {
+			if plan, err := n.tools.Prepare(ctx, tc); err == nil {
+				plans[tc.ID] = plan
+			}
+		}
+	}
 
 	dedupState := State{LoadedTools: loadedTools}
 
@@ -832,12 +870,12 @@ func (n *ToolsNode) resumeCalls(ctx context.Context, unfulfilled []*message.Tool
 
 	if len(nextQuestions) > 0 {
 		return graph.InterruptUpdate[State](func(s State) State {
-			s = n.appendToolMessagesUpdate(ctx, toolMsgs, updatedTodos, hasTodos, newTools)(s)
+			s = n.appendToolMessagesUpdate(ctx, toolMsgs, unfulfilled, plans, updatedTodos, hasTodos, newTools)(s)
 			s.PendingQuestions = cloneQuestionRequests(nextQuestions)
 			return s
 		}), nil
 	}
-	return n.appendToolMessagesUpdate(ctx, toolMsgs, updatedTodos, hasTodos, newTools), nil
+	return n.appendToolMessagesUpdate(ctx, toolMsgs, unfulfilled, plans, updatedTodos, hasTodos, newTools), nil
 }
 
 func (n *ToolsNode) resumeSingleCall(ctx context.Context, tc *message.ToolCall, req api.PermissionRequest, decisions map[string]api.PermissionDecision) (*message.Tool, error) {
@@ -877,7 +915,7 @@ func clearPermissionsUpdate() graph.Update[State] {
 	}
 }
 
-func (n *ToolsNode) appendToolMessagesUpdate(ctx context.Context, toolMsgs message.MessageList, todos []api.TodoItem, hasTodos bool, newTools []string) graph.Update[State] {
+func (n *ToolsNode) appendToolMessagesUpdate(ctx context.Context, toolMsgs message.MessageList, calls []*message.ToolCall, plans map[string]*tools.Plan, todos []api.TodoItem, hasTodos bool, newTools []string) graph.Update[State] {
 	return func(s State) State {
 		s = s.AppendMessages(toolMsgs, MessageUpdateOptions{Static: n.static, Limits: n.limits})
 		s.PendingPermissions = nil
@@ -888,9 +926,31 @@ func (n *ToolsNode) appendToolMessagesUpdate(ctx context.Context, toolMsgs messa
 			s.Todos = slices.Clone(todos)
 		}
 		s = s.RecordLoadedTools(newTools...)
+		// Smart rule matching after tool results are appended: tool-name and
+		// path triggers auto-inject matching conditional rules as reminders.
+		if n.rules != nil {
+			if reminder, loaded := n.rules.MatchToolBatch(calls, plans, toolToolMessages(toolMsgs), s); reminder != nil {
+				s = s.RecordLoadedRules(ruleLoadedNames(loaded)...)
+				s = s.AppendMessage(reminder, MessageUpdateOptions{Static: n.static, Limits: n.limits})
+				for _, ev := range loaded {
+					emit(ctx, ev)
+				}
+			}
+		}
 		emit(ctx, api.ContextUpdatedEvent{Context: s.Context})
 		return s
 	}
+}
+
+// toolToolMessages extracts the *message.Tool results from a mixed message list.
+func toolToolMessages(msgs message.MessageList) []*message.Tool {
+	var out []*message.Tool
+	for _, m := range msgs {
+		if t, ok := m.(*message.Tool); ok {
+			out = append(out, t)
+		}
+	}
+	return out
 }
 
 func lookupQuestionResponse(answers map[string]api.QuestionResponse, req api.QuestionRequest) (api.QuestionResponse, bool) {

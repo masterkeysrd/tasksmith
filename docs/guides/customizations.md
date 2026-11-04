@@ -1,6 +1,6 @@
-# Customizations: Agents, Skills, Commands & Decisions
+# Customizations: Agents, Rules, Skills, Commands & Decisions
 
-TaskSmith allows you to tailor your AI development environment by creating custom agent personas, reusable workflow skills, prompt slash commands, and calibrated decision classifiers. Customizations can be scoped locally to a single project in `.agents/` or stored globally in `~/.config/tasksmith/agents/`.
+TaskSmith allows you to tailor your AI development environment by creating custom agent personas, ambient workspace rules, reusable workflow skills, prompt slash commands, and calibrated decision classifiers. Customizations can be scoped locally to a single project in `.agents/` or stored globally in `~/.config/tasksmith/agents/`.
 
 ---
 
@@ -78,11 +78,72 @@ TaskSmith checks the agent's temperature and thinking settings against the selec
 ### Scoping Capabilities
 - **`tools`**: Restrict the agent's actions using `policies.tools.include` or `exclude`. For example, a code reviewer can be restricted to read-only tools (`view`, `grep`, `glob`).
 - **`skills`**: Explicitly list which domain skills this agent should load (`["owasp-top-10"]`), or use `["*"]` to allow all skills in the workspace.
+- **`rules`**: Attach additional rules as always-on constraints for this agent (see [Ambient Rules](#2-ambient-rules-rulemd)). Always-on rules apply to every agent regardless of this field.
 - **`subagents`**: Define which agents this persona is allowed to invoke for subtasks (e.g., built-in `explore` for read-only codebase research, `general` for general-purpose engineering tasks, or `["*"]` for all agent-triggerable personas). When `subagents` resolves to at least one target agent, TaskSmith automatically provides `invoke_agent` and `manage_agents` to the session. Set to `[]` to prevent recursive delegation.
 
 ---
 
-## 2. Reusable Skills (`*.skill.md` / `<name>/SKILL.md`)
+## 2. Ambient Rules (`*.rule.md`)
+
+Rules are standing instructions — coding standards, architectural invariants, and guardrails — that apply whenever their conditions match. Unlike a skill, which an agent deliberately loads as a runbook, a rule is expected to be obeyed, so it is written as constraints rather than procedure.
+
+### Where Rules Live
+
+- **Project Scope**: `<subproject>/.agents/rules/<name>.rule.md`
+- **Workspace Scope**: `.agents/rules/<name>.rule.md`
+- **Global User Scope**: `~/.config/tasksmith/agents/rules/<name>.rule.md`
+
+### Always-On vs. Conditional
+
+Choose the injection mode deliberately, because it determines what every turn costs:
+
+- **Always-on** (`triggers.always: true`) places the full body in the system prompt for every agent in scope, on every turn. Use it only for constraints that must never be skipped, and keep the body short.
+- **Conditional** (`globs`, `tools`, or `keywords`) lists just the rule's name and triggers up front, and brings the body into context only when a trigger fires or the agent calls `load_rule`.
+
+A path or tool trigger injects the rule automatically and deterministically. A `keywords` trigger is advisory only: it nudges the agent to consider the rule, which is the right choice for guidance you would not want enforced on a false positive.
+
+### Authoring a Rule
+
+```markdown
+---
+apiVersion: warp/v1alpha1
+kind: Rule
+metadata:
+  name: go-error-handling
+  description: Enforces sentinel error wrapping and prohibits panics in Go packages
+spec:
+  priority: 10
+  triggers:
+    globs:
+      - "**/*.go"
+      - "!**/testdata/**"
+    tools:
+      - write
+      - edit
+    keywords:
+      - error
+      - panic
+    useWhen: "Writing, refactoring, or reviewing error handling logic in Go source files."
+---
+
+# Go Error Handling Rules
+
+1. Always wrap lower-level errors with `%w` and a package-prefixed context string.
+2. Define exported sentinel errors in `types.go` or `errors.go`.
+3. Never use `panic` for recoverable runtime errors.
+```
+
+### Inspecting and Attaching Rules
+
+Run `/rules` to see every rule the workspace resolved with its status (`[Always]`, `[Loaded]`, `[Standby]`), scope, triggers, and token estimate. Press `i` to read a rule's full body and `r` to hot-reload rules edited on disk into the active session.
+
+To force a rule into the current turn, type `@rule:<name>` anywhere in your prompt; it loads immediately instead of waiting for a trigger. When a rule loads automatically, the transcript shows a single `● Loaded Rule <name> (matched <path>)` line rather than the raw injected text.
+
+Because an always-on rule reaches every agent and cannot be opted out of per agent, prefer conditional triggers for anything narrower than a workspace-wide mandate.
+
+---
+
+## 3. Reusable Skills (`*.skill.md` / `<name>/SKILL.md`)
 
 Skills are on-demand knowledge runbooks, coding conventions, and specialized domain workflows that agents load when relevant to a task.
 
@@ -169,7 +230,7 @@ Agents can read these supporting files using `view` or execute helper scripts us
 
 ---
 
-## 3. Custom Slash Commands (`*.command.md`)
+## 4. Custom Slash Commands (`*.command.md`)
 
 Commands provide reusable prompt templates that developers or agents can trigger directly in the CLI composer.
 
@@ -230,7 +291,7 @@ For commands contributed by plugins, use the namespaced syntax:
 
 ---
 
-## 4. System 1 Decisions (`*.decision.md`)
+## 5. System 1 Decisions (`*.decision.md`)
 
 Decisions represent calibrated, low-latency probabilistic gates used to evaluate conditions, route tasks, or triage pull requests without invoking a heavy multi-turn conversational model.
 
@@ -285,11 +346,9 @@ Focus strictly on production stability, backward compatibility, and customer imp
 
 ---
 
-## 5. Using the Built-in Customizations Skill
+## 6. Using the Built-in Customizations Skill
 
 Ask the active agent to create or update a TaskSmith resource. It can load `tasksmith-customizations` and consult its focused references for agents, skills, rules, tools, MCP servers, providers, and workspace context without switching personas. Built-in skill files are materialized under `$XDG_DATA_HOME/tasksmith/builtin/` (normally `~/.local/share/tasksmith/builtin/`) and can be read by the agent. If that directory cannot be written, TaskSmith falls back to embedded resources; supporting files may then be unavailable.
-
-Rule manifests can be authored using the skill, but automatic rule activation is not yet integrated into TaskSmith.
 
 ---
 

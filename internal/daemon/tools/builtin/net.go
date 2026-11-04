@@ -75,6 +75,7 @@ func (t *downloadTool) Prepare(ctx context.Context, in api.DownloadInput) (*tool
 		Action:   api.ActionWrite,
 		Safety:   safety,
 		Target:   res.Path,
+		Paths:    []string{res.Path},
 		Summary:  fmt.Sprintf("Download file: %s", res.Path),
 		ReadOnly: false,
 	}, nil

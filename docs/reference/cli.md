@@ -73,6 +73,7 @@ Inside the TaskSmith interactive REPL, slash commands provide instant control ov
 | **`/context`** | | *(none)* | Displays visual token usage grid and detailed context window breakdown by category. |
 | **`/usage`** | | `[session\|workspace\|global]` | Opens the usage browser slot on the Session, Workspace or Global tab (default: Session). See [Usage Browser](#usage-browser-usage). |
 | **`/skills`** | | *(none)* | Opens the interactive skills browser to inspect runbooks, token estimates, and reload workspace skills. |
+| **`/rules`** | | *(none)* | Opens the interactive rules browser to inspect rule status, scope, triggers, and token estimates, and to reload workspace rules. |
 | **`/workspace`** | `/ws` | `[reload]` | Reloads the active workspace resources from disk. With no subcommand, defaults to `reload`. |
 | **`/daemon`** | | `[status\|restart\|start\|stop]` | Inspects or manages the background Brain Daemon. With no subcommand, opens the interactive daemon browser. |
 
@@ -91,9 +92,32 @@ In addition to built-in commands, TaskSmith dynamically registers all workspace,
 - **Pre-Flight Validation**: Missing required parameters are caught immediately client-side before sending any network request.
 - **Automatic Default Population**: Arguments omitted by the user are automatically filled by the renderer from `spec.arguments[].default`.
 
-### Skill Loading in the Transcript
+### Skill & Rule Loading in the Transcript
 
 Agent calls to `load_skill` show the skill name and loading, loaded, or failed status. Failures include the first error line below the status. Skill arguments and rendered instructions are not displayed in the widget.
+
+Agent calls to `load_rule` render the same style of widget (`○ Loading Rule <name>` then `● Loaded Rule <name>`), with a truncation warning subline when the rule body exceeds size limits. When the harness injects a rule automatically, or a rule is attached with `@rule:`, a single muted transcript line is emitted instead:
+
+```text
+● Loaded Rule go-error-handling (matched internal/daemon/session/session.go)
+● Loaded Rule bash-safety (tool: bash)
+● Loaded Rule security-audit (@rule:security-audit)
+```
+
+The injected `<system_reminders>` body itself is never printed in the transcript.
+
+### Inline Attachment References
+
+Token prefixes typed anywhere in a prompt render as inline pill badges:
+
+| Syntax | Rendering | Functional today |
+| :--- | :--- | :--- |
+| `@rule:<name>` | Pill with shield icon | **Yes** — loads the rule, with `@rule:` autocomplete. |
+| `@file:<path>` | Pill with file/folder icon | Display only; no autocomplete or expansion yet (tracked in the deferred `@` context-file mentions item). |
+| `@sym:<name>` | Pill with symbol-kind icon | Display only. |
+| `@skill:<name>` | Pill with plugin icon | Display only; skills are invoked as `/skill <args>`. |
+
+Typing `@rule:` opens a completion popup listing available rules with their scope and description; selecting one inserts `@rule:<name> `. A rule referenced this way is injected immediately rather than suggested, so use it when you already know the rule applies. Unknown names are ignored, and a rule already loaded in the current compaction epoch is not injected twice.
 
 ---
 
@@ -192,6 +216,27 @@ TaskSmith uses structured modal keybindings across its terminal interface:
 | `x` | Daemon Browser | Gracefully stops the running daemon. |
 | `g` | Daemon Browser | Re-queries daemon health and refreshes status in-place. |
 | `Esc` / `q` | Daemon Browser | Closes the daemon browser and returns to composer. |
+
+### Rules Browser (`/rules`)
+
+| Keybinding | Scope | Action |
+| :--- | :--- | :--- |
+| `↑` / `↓` | Rules Browser | Moves the highlighted rule. |
+| `Enter` / `i` | Rules Browser | Opens the rule markdown inspector for the highlighted rule. |
+| `r` | Rules Browser | Reloads workspace resources from disk and refreshes the rule list. |
+| `Esc` | Rules Browser | Closes the rules browser and returns to composer. |
+
+Columns are Name, Status (`[Always]`, `[Loaded]`, or `[Standby]`), Scope (`[Workspace]`, `[Project]`, `[User]`, or `[Builtin]`), estimated tokens, and description. `[Loaded]` reflects rules injected in the current session, including `load_rule` calls.
+
+### Rule Inspector
+
+| Keybinding | Scope | Action |
+| :--- | :--- | :--- |
+| `↑` / `↓` or `k` / `j` | Rule Inspector | Scrolls the rule body by 1 line. |
+| `PgUp` / `PgDn` or `Ctrl+U` / `Ctrl+D` / `b` / `f` | Rule Inspector | Scrolls the rule body by 8 lines. |
+| `Home` / `End` or `g` / `G` | Rule Inspector | Scrolls to the top or bottom of the rule body. |
+| `Enter` | Rule Inspector | Closes the browser and submits `@rule:<name> ` to attach the rule to the next prompt. |
+| `Esc` | Rule Inspector | Returns to the rules list. |
 
 ---
 

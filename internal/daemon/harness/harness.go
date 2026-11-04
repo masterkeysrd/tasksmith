@@ -71,6 +71,17 @@ type Completed struct {
 	Message message.Message
 }
 
+// RuleLoaded is emitted when a conditional workspace rule is auto-injected into
+// <system_reminders> (via an @rule: reference, a keyword trigger, or a
+// tool/path trigger) or loaded on demand via the load_rule tool.
+type RuleLoaded struct {
+	ID      string `json:"id"`
+	Rule    string `json:"rule"`
+	Trigger string `json:"trigger"` // "glob" | "tool" | "manual"
+	Matched string `json:"matched,omitempty"`
+	Path    string `json:"path,omitempty"`
+}
+
 // Input represents the conversational input to [Harness.Stream].
 // It can provide either a new user message, resolved permission decisions and question answers,
 // or a compaction request.
@@ -165,6 +176,7 @@ type harness struct {
 	static       StaticContext
 	limits       models.Limits
 	checkpointer graph.Checkpointer
+	rules        *RuleMatcher
 }
 
 var _ Harness = (*harness)(nil)
@@ -215,6 +227,7 @@ func (h *harness) Configure(opts NodeOptions) error {
 	h.tools = opts.Tools
 	h.static = opts.Static
 	h.limits = opts.Limits
+	h.rules = opts.Rules
 	for _, n := range h.nodes {
 		n.Configure(opts)
 	}
@@ -340,7 +353,17 @@ func (h *harness) prepareMessage(msg message.Message, state State) (graph.Update
 	}
 	return graph.Update[State](func(s State) State {
 		s = s.RecordLoadedTools(newTools...)
-		return s.AppendMessage(in, MessageUpdateOptions{Static: h.static, Limits: h.limits, SkipContextRecalculation: len(unfulfilled) > 0})
+		s = s.AppendMessage(in, MessageUpdateOptions{Static: h.static, Limits: h.limits, SkipContextRecalculation: len(unfulfilled) > 0})
+		// Smart rule matching for genuine user messages: auto-load @rule:
+		// references and surface keyword-matched conditional rules as reminders.
+		if h.rules != nil {
+			if reminder, loaded, suggested := h.rules.MatchUserMessage(in, s); reminder != nil {
+				s = s.RecordLoadedRules(ruleLoadedNames(loaded)...)
+				s = s.RecordSuggestedRules(suggested...)
+				s = s.AppendMessage(reminder, MessageUpdateOptions{Static: h.static, Limits: h.limits, SkipContextRecalculation: len(unfulfilled) > 0})
+			}
+		}
+		return s
 	}), inputMsg, nil
 }
 
@@ -379,6 +402,7 @@ func (h *harness) consumeGraphStream(stream iter.Seq2[graph.StreamEvent, error],
 			api.TodosUpdatedEvent,
 			api.CompactionStartedEvent,
 			CompactionCompleted,
+			RuleLoaded,
 			api.CacheBrokenRecord,
 			api.ContextUpdatedEvent:
 			if !yield(custom, nil) {

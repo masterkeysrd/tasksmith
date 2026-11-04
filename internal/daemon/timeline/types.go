@@ -54,6 +54,7 @@ func (e Entry) Clone() Entry {
 	cp.Compacted = ptr.Clone(e.Compacted)
 	cp.CacheBroken = ptr.Clone(e.CacheBroken)
 	cp.TurnCompleted = ptr.Clone(e.TurnCompleted)
+	cp.Rule = ptr.Clone(e.Rule)
 	return cp
 }
 
@@ -190,6 +191,16 @@ func NewTurnCompletedEntry(rec api.TurnCompletedRecord) *Entry {
 		TimelineEntry: api.TimelineEntry{
 			Kind:          api.TimelineKindTurnCompleted,
 			TurnCompleted: &rec,
+		},
+	}
+}
+
+// NewRuleEntry creates an Entry initialized with a RuleRecord payload.
+func NewRuleEntry(rec api.RuleRecord) *Entry {
+	return &Entry{
+		TimelineEntry: api.TimelineEntry{
+			Kind: api.TimelineKindRule,
+			Rule: &rec,
 		},
 	}
 }

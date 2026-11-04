@@ -30,6 +30,7 @@ type WorkspaceBackend interface {
 	GetCommand(ctx context.Context, workspace, name string) (*api.Command, error)
 	ListSkills(ctx context.Context, workspace string) ([]api.Skill, error)
 	GetSkill(ctx context.Context, workspace, name string) (*api.Skill, error)
+	ListRules(ctx context.Context, workspace string) ([]api.Rule, error)
 	ListModels(ctx context.Context, workspace string) ([]api.Model, error)
 	GetModel(ctx context.Context, workspace, id string) (*api.Model, error)
 	GetPermissions(ctx context.Context, workspace string) (*api.PermissionsResponse, error)

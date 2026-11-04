@@ -35,6 +35,7 @@ type AppState struct {
 	Agents        *[]api.Agent
 	Commands      *[]api.Command
 	Skills        *[]api.Skill
+	Rules         *[]api.Rule
 	DaemonStatus  DaemonStatus
 }
 
@@ -161,6 +162,22 @@ func SetWorkspaceSkills(skills []api.Skill) {
 		}
 		sk := slices.Clone(skills)
 		s.Skills = &sk
+		return s
+	})
+}
+
+// SetWorkspaceRules updates the workspace rules in AppState.
+func SetWorkspaceRules(rules []api.Rule) {
+	app.Set(func(s AppState) AppState {
+		if len(rules) == 0 {
+			if s.Rules == nil {
+				return s
+			}
+			s.Rules = nil
+			return s
+		}
+		rl := slices.Clone(rules)
+		s.Rules = &rl
 		return s
 	})
 }

@@ -58,6 +58,7 @@ flowchart TD
 The harness structures agent turns as a directed execution graph built on Loom's graph runtime:
 - **Node Pipeline**: Inbound turns transition through dedicated graph nodes—`command` (slash command expansion), `inbox` (queued message assembly), `agent` (LLM invocation), and `tools` (tool execution).
 - **Autonomous Feedback Loop**: When the model emits tool calls, the `tools` node executes them inside the session's sandbox container, formats stdout/stderr and structured content, and feeds the outputs directly back into the `agent` node for subsequent reasoning steps. The loop continues autonomously until the model satisfies the objective or halts.
+- **Ambient Injection**: The `inbox` and `tools` nodes additionally resolve workspace rule triggers against incoming messages and executed tool batches, appending hidden system reminders to the history (see [Ambient Context Injection](#5-ambient-context-injection-rules-skills--system-reminders)).
 
 ### 2. Interactive Suspension & Resumption
 AI agents often encounter sensitive actions or require user clarification mid-turn:
@@ -162,3 +163,42 @@ Continue working on the latest user request above from the current state without
 Complex workflows frequently require delegation and parallel operations:
 - **Isolated Subagent Sessions**: Agents with resolved `subagents` receive `invoke_agent` and `manage_agents` tools. Each spawned subagent is a persistent child `Session` (`ParentID` linking to its parent session) with its own timeline, journal, and sandbox—inheriting the parent's working directory or running in an isolated Git worktree (`workspace: "worktree"` under `~/.local/share/tasksmith/workspaces/<hash>/trees/<child-id>`). When a subagent finishes its turn or fails, it enqueues a `<subagent_completed ...>` system notification into the parent session's message queue (`QueueKindSubagent`), waking the parent turn if idle.
 - **Asynchronous Task Runner**: Long-running background shell processes (such as compilers, test suites, or dev servers) run asynchronously under the session's `tasks.Store`, streaming updates via SSE and enqueuing `<background_task_completed ...>` (`QueueKindTask`) into the session queue when finished.
+
+### 5. Ambient Context Injection: Rules, Skills & System Reminders
+Workspace rules and skills must reach the model without paying for their full text on every turn. The harness resolves this with a two-tier delivery model plus one invisible message channel.
+
+#### 1. Two-Tier Delivery
+| Tier | Location | Contents | Cost |
+| --- | --- | --- | --- |
+| **Discovery** | System prompt (static prefix) | `<available_skills>` and `<available_rules>` indexes — name, description, trigger keywords, usage conditions — plus the full bodies of always-on rules rendered once into `<workspace_rules>` | Billed once for the prompt prefix; stable across turns, so it stays cache-friendly |
+| **Payload** | Message history (appended) | Full conditional-rule bodies inside a `<system_reminders>` message; skill bodies returned as `load_skill` tool results | Billed only for resources the current task actually needs |
+
+Because the discovery tier does not grow with usage, a workspace can declare many rules and skills while each turn pays only for the index.
+
+#### 2. Deterministic Push vs. Advisory Pull
+| Dimension | Rules (pushed) | Skills (pulled) |
+| --- | --- | --- |
+| **Selection authority** | Harness rule matcher | Model |
+| **Trigger evaluation** | `@rule:` references, `triggers.tools`, and `triggers.globs` inject automatically; `triggers.keywords` only *suggests* | No matcher exists — relevance is judged by the model |
+| **Body delivery** | Appended to history inside `<system_reminders>` | Returned as the `load_skill` tool result |
+| **Side effects** | Recorded in session state, journaled as a rule timeline entry, and announced via a `rule_loaded` stream event | Also activates the skill's deferred tools |
+| **Always-on form** | `triggers.always: true` bodies are rendered into the static prefix and cannot be opted out | Not applicable |
+
+Rules are the **push** channel: the `inbox` node inspects each genuine user message and the `tools` node inspects each completed tool batch (tool names plus the paths those tools touched), resolves triggers, and appends matching bodies without waiting for the model to ask. Keyword triggers are deliberately advisory — the harness surfaces name and description, and the model decides whether to call `load_rule`. Skills are the **pull** channel: they appear only in the static index, so nothing is injected on their behalf.
+
+When an agent resolves no conditional rules, the matcher is never constructed, and both injection points are nil-guarded — sessions that use no rules pay no matching cost.
+
+#### 3. The Hidden Reminder Contract
+Injected reminders are synthetic user messages. Three properties keep them safe:
+- **Tagged metadata.** Each reminder is built with `tasksmith.system.kind = reminder` (alongside the injected rule names), which makes it machine-distinguishable from a real user turn. The same tagging carries slash commands, compaction summaries, and subagent or background-task notifications.
+- **Hidden from the UI, visible to the model.** The graph's emit step discards any message carrying a system kind, so no message event or transcript entry is produced, yet the message remains in the harness message list and is sent to the provider. Users learn about injection through the dedicated `rule_loaded` event instead, which the CLI renders as a compact transcript notice rather than a duplicate blob of text.
+- **Append-only.** A reminder is appended once, immediately after the message that triggered it, and is never mutated or re-ordered. The prompt prefix therefore stays byte-identical across turns, preserving upstream prompt-cache hits.
+
+#### 4. Deduplication & Compaction Epochs
+- **Per-epoch deduplication:** session state tracks which rules were loaded and which were merely suggested (case-insensitively), so a rule is never injected twice and a suggestion is never repeated. Tool activation state is tracked the same way.
+- **Epoch reset:** compaction clears the loaded-rule, suggested-rule, and loaded-tool sets and zeroes cached tokens, allowing rules relevant to the summarized work to be re-injected against the fresh context.
+- **Awareness survives the reset:** the summarization template reserves a *Recommended Skills & Rules* section, so the distilled context tells the model what it was relying on and it can deliberately re-load rather than rediscover.
+
+---
+
+**See also:** [Rule manifest specification](../reference/manifests.md#5-rule-manifest-rulemd) · [`load_rule` tool contract](../reference/tools.md#load_rule) · [Ambient Rules authoring guide](../guides/customizations.md#2-ambient-rules-rulemd)

@@ -733,6 +733,7 @@ func (s *Session) updateContextLimits(agentName, modelName string) (models.Limit
 	s.Context.Breakdown.MCPTools = staticCtx.MCPTools
 	s.Context.Breakdown.Skills = staticCtx.Skills
 	s.Context.Breakdown.Subagents = staticCtx.Subagents
+	s.Context.Breakdown.Rules = staticCtx.Rules
 	s.Unlock()
 
 	return limits, staticCtx
@@ -793,6 +794,21 @@ func (s *Session) configureHarness(ctx context.Context) error {
 		return err
 	}
 
+	// Resolve the active agent once so both the permission ceiling and the rule
+	// matcher can share it.
+	cat := s.workspace.Catalog()
+	var resolved *warp.ResolvedAgent
+	if r, rerr := cat.ResolveAgent(agentName); rerr == nil && r != nil && r.Agent != nil {
+		resolved = r
+	}
+
+	// Build the smart rule matcher for the active agent. A nil matcher (rule-free
+	// agent) disables rule matching without a separate guard.
+	var ruleMatcher *harness.RuleMatcher
+	if resolved != nil {
+		ruleMatcher = harness.NewRuleMatcher(resolved, cat.WorkspaceSpec(), cat.Project(), cat.AgentRenderGlobals(resolved))
+	}
+
 	// Propagate the active agent's tool policy ceiling to the permission gate so
 	// that agent-level restrictions narrow the workspace ceiling. Reset the
 	// ceiling unconditionally so that stale policies from a previously active
@@ -801,17 +817,29 @@ func (s *Session) configureHarness(ctx context.Context) error {
 	if s.PermManager != nil {
 		var agentPolicies *warp.Policies
 		var hasDeferred bool
-		if resolved, rerr := s.workspace.Catalog().ResolveAgent(agentName); rerr == nil && resolved != nil && resolved.Agent != nil {
+		var hasConditionalRules bool
+		if resolved != nil {
 			agentPolicies = resolved.Agent.Spec.Policies
-			if partition := s.workspace.Catalog().PartitionAgentTools(resolved); len(partition.Deferred) > 0 {
+			if partition := cat.PartitionAgentTools(resolved); len(partition.Deferred) > 0 {
 				hasDeferred = true
 			}
+			hasConditionalRules = cat.HasConditionalRules(resolved)
 		}
 		// When deferred tools exist, tool_search is auto-activated as an eager
-		// tool. Ensure the agent's policy ceiling permits it so the permission
-		// gate allows tool_search when the agent restricts tools via include.
-		if hasDeferred && agentPolicies != nil && agentPolicies.Tools != nil && len(agentPolicies.Tools.Include) > 0 {
-			agentPolicies = ensureToolSearchAllowed(agentPolicies)
+		// tool, and when conditional rules exist, load_rule is auto-activated as
+		// an eager tool. Ensure the agent's policy ceiling permits each so the
+		// permission gate allows them when the agent restricts tools via include.
+		if agentPolicies != nil && agentPolicies.Tools != nil && len(agentPolicies.Tools.Include) > 0 {
+			var sysTools []string
+			if hasDeferred {
+				sysTools = append(sysTools, builtin.ToolToolSearch)
+			}
+			if hasConditionalRules {
+				sysTools = append(sysTools, builtin.ToolLoadRule)
+			}
+			if len(sysTools) > 0 {
+				agentPolicies = ensureSystemToolsAllowed(agentPolicies, sysTools...)
+			}
 		}
 		s.PermManager.SetAgentPolicies(agentPolicies)
 	}
@@ -822,6 +850,7 @@ func (s *Session) configureHarness(ctx context.Context) error {
 		SystemPrompt: systemPrompt,
 		Limits:       limits,
 		Static:       staticCtx,
+		Rules:        ruleMatcher,
 	}
 	err = s.Harness.Configure(opts)
 
@@ -837,21 +866,27 @@ func (s *Session) outputsDir() string {
 	return filepath.Join(s.Root, "outputs")
 }
 
-// ensureToolSearchAllowed returns a deep copy of policies with tool_search added
-// to the tool include ceiling (when the ceiling restricts tools via include), so
-// that the auto-activated tool_search tool is permitted by the permission gate
-// when an agent has deferred tools.
-func ensureToolSearchAllowed(policies *warp.Policies) *warp.Policies {
+// ensureSystemToolsAllowed returns a deep copy of policies with the given system
+// tool names added to the tool include ceiling (when the ceiling restricts tools
+// via include), so that auto-activated system tools (tool_search, load_rule) are
+// permitted by the permission gate.
+func ensureSystemToolsAllowed(policies *warp.Policies, names ...string) *warp.Policies {
 	clone := policies.DeepCopy()
 	if clone.Tools == nil {
 		clone.Tools = &warp.ToolPolicies{}
 	}
-	for _, name := range clone.Tools.Include {
-		if strings.EqualFold(name, builtin.ToolToolSearch) {
-			return clone
+	for _, want := range names {
+		found := false
+		for _, name := range clone.Tools.Include {
+			if strings.EqualFold(name, want) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			clone.Tools.Include = append(clone.Tools.Include, want)
 		}
 	}
-	clone.Tools.Include = append(clone.Tools.Include, builtin.ToolToolSearch)
 	return clone
 }
 
@@ -864,6 +899,7 @@ func (s *Session) buildToolsForAgent(agentName string) (tools.Container, error) 
 	var allowedToolNames []string
 	var deferredToolNames []string
 	var skills []warp.Skill
+	var rules []warp.Rule
 	var subagents []*warp.Agent
 	var activeAgent *warp.Agent
 
@@ -878,6 +914,7 @@ func (s *Session) buildToolsForAgent(agentName string) (tools.Container, error) 
 			allowedToolNames = append(allowedToolNames, partition.Deferred...)
 			deferredToolNames = partition.Deferred
 			skills = resolved.Skills
+			rules = resolved.Rules
 			subagents = resolved.Subagents
 			activeAgent = resolved.Agent
 		} else {
@@ -911,6 +948,7 @@ func (s *Session) buildToolsForAgent(agentName string) (tools.Container, error) 
 		AllowedTools:  allowedToolNames,
 		DeferredTools: deferredToolNames,
 		Skills:        skills,
+		Rules:         rules,
 		Subagents:     subagents,
 		Agents:        s,
 		AgentName:     agentName,

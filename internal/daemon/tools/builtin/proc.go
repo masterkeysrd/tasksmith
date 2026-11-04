@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -97,9 +98,46 @@ func (t *bashTool) Prepare(_ context.Context, in api.BashInput) (*tools.Plan, er
 		Action:   worstAction,
 		Safety:   worstSafety,
 		Target:   cmdStr,
+		Paths:    t.collectPaths(ops),
 		Summary:  summary,
 		ReadOnly: readOnly,
 	}, nil
+}
+
+// collectPaths gathers deduplicated, workspace-relative, slash-separated target
+// paths from the analyzed shell operations' CWD and file operands. These feed
+// rule glob matching so triggers.globs can match every path a command touches,
+// not just the primary command string.
+func (t *bashTool) collectPaths(ops []shellguard.Operation) []string {
+	if len(ops) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{})
+	var paths []string
+	add := func(p string) {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			return
+		}
+		rel := filepath.ToSlash(p)
+		if r, err := t.sandbox.FS().ResolvePath(p); err == nil {
+			rel = r
+		}
+		rel = strings.TrimSpace(rel)
+		if rel == "" {
+			return
+		}
+		if _, ok := seen[rel]; ok {
+			return
+		}
+		seen[rel] = struct{}{}
+		paths = append(paths, rel)
+	}
+	for _, op := range ops {
+		add(op.CWD)
+		add(op.Path)
+	}
+	return paths
 }
 
 func (t *bashTool) Execute(ctx context.Context, in api.BashInput) (api.BashOutput, error) {
