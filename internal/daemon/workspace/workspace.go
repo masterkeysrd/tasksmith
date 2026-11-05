@@ -37,13 +37,8 @@ const (
 
 // Builtin agent identifiers shipped in the system namespace.
 const (
-	AgentNameMain               = "main"
-	AgentNameAgentCreator       = "agent-creator"
-	AgentNameProjectInitializer = "project-initializer"
-	AgentNameProviderManager    = "provider-manager"
-	AgentNameSkillCreator       = "skill-creator"
-	AgentNameTitleGenerator     = "title-generator"
-	AgentNameToolCreator        = "tool-creator"
+	AgentNameMain           = "main"
+	AgentNameTitleGenerator = "title-generator"
 )
 
 // Option configures how a Workspace is opened.
