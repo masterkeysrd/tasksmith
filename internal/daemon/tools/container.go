@@ -14,6 +14,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/daemon/sandbox"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/scope"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/workspace"
+	"github.com/masterkeysrd/warp"
 )
 
 // Config holds the mandatory dependencies required to construct a [Container].
@@ -24,6 +25,11 @@ type Config struct {
 	Logger       log.Interface
 	Spiller      Spiller
 	AllowedTools []string
+	// Agent is the active agent definition, injected into custom tool render
+	// options so command and instruction templates can reference
+	// {{.Agent.Name}} and {{.Agent.Description}}. It may be nil for agentless
+	// sessions, in which case those template fields resolve to empty values.
+	Agent *warp.Agent
 	// DeferredTools is the set of tool names that should be withheld from the
 	// initial model context (DeferLoading: true) and instead discovered via
 	// tool_search. Deferred tools must also appear in AllowedTools so that they
@@ -69,6 +75,7 @@ type Container interface {
 type container struct {
 	sandbox      sandbox.Sandbox
 	workspace    *workspace.Workspace
+	agent        *warp.Agent
 	logger       log.Interface
 	spiller      Spiller
 	order        []string
@@ -99,6 +106,7 @@ func NewContainer(cfg Config) (Container, error) {
 	c := &container{
 		sandbox:      cfg.Sandbox,
 		workspace:    cfg.Workspace,
+		agent:        cfg.Agent,
 		logger:       cfg.Logger.ForComponent("tools"),
 		spiller:      sp,
 		tools:        make(map[string]Tool, len(cfg.Tools)),

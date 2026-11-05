@@ -16,9 +16,11 @@ Tool manifests are discovered in the usual resource scopes, commonly under `.age
 
 For a Markdown Tool, the body becomes its instructions and is used as the description presented to the model. If it is empty, the metadata description is used; otherwise a generic description is generated.
 
-A command is an executable followed by static arguments, not a shell command line. TaskSmith validates call arguments against the input schema and sends the JSON object to the process on standard input. Arguments are **not** automatically appended to the command line: the executable must read JSON from standard input if it needs them. A missing or unparseable input schema falls back to a generic object schema; an unresolvable schema also falls back for validation.
+A command is an executable followed by arguments, not a shell command line. TaskSmith validates call arguments against the input schema, then delivers them in exactly one of two ways: as rendered command-line arguments when the manifest interpolates them with `{{ … }}` templates, or as the complete JSON object on standard input when no command element consumes an argument. Arguments are never sent both ways. A missing or unparseable input schema falls back to a generic object schema; an unresolvable schema also falls back for validation.
 
 Standard output is returned as text. A nonzero exit reports standard error, standard output if standard error is empty, or the exit code if neither contains an error. The output schema is metadata, not output parsing or validation; an absent or unparseable schema defaults to a string schema. Execution is subject to the sandbox and permission system.
+
+For command templating references (`{{.Input.<field>}}`, `{{.Workspace.Dir}}`, `{{.Project.Dir}}`, `{{.Agent.Name}}`), schema authoring, and the eager/deferred partitioning rules, see [Custom tool manifests](tools.md).
 
 ### Safety annotations
 
@@ -58,7 +60,7 @@ Run the project checks and report failures.
 
 Custom and MCP tools are not listed in an agent's `spec.tools` by default, so they load as **deferred** tools (`DeferLoading: true`): they are registered in the session's tool container but withheld from the initial model context. When a session resolves at least one deferred tool, TaskSmith automatically activates the built-in `tool_search` tool as an eager tool. `tool_search` runs a BM25 keyword search over the deferred tools' names, descriptions, and parameters and returns the matching tool names, which then become available for direct invocation on subsequent turns. When a session has no deferred tools, `tool_search` is not registered.
 
-To make a custom or MCP tool eager instead of deferred, list its name in the agent's `spec.tools`.
+To make a custom or MCP tool eager instead of deferred, list its name in the agent's `spec.tools`. Run `/tools` in the CLI to see each tool's resolved status for the active agent (`[Eager]`, `[Deferred]`, `[Denied]`, `[Inactive]`) and to hot-reload manifests edited on disk.
 
 ## MCP definitions
 

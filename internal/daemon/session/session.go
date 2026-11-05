@@ -962,6 +962,7 @@ func (s *Session) buildToolsForAgent(agentName string) (tools.Container, error) 
 		Tools:         builtinTools,
 		Sandbox:       s.Sandbox,
 		Workspace:     s.workspace,
+		Agent:         activeAgent,
 		Logger:        s.logger,
 		Spiller:       s.spiller,
 		AllowedTools:  allowedToolNames,

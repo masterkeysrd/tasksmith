@@ -36,7 +36,15 @@ type AppState struct {
 	Commands      *[]api.Command
 	Skills        *[]api.Skill
 	Rules         *[]api.Rule
-	DaemonStatus  DaemonStatus
+	Tools         *[]api.Tool
+	// ToolsAgent is the agent the cached Tools statuses were classified for.
+	ToolsAgent string
+	// ToolsFetched records that a tool listing has been retrieved at least once,
+	// so an empty toolset is distinguishable from "never fetched" and does not
+	// re-trigger a fetch on every render.
+	ToolsFetched bool
+	DefaultAgent string
+	DaemonStatus DaemonStatus
 }
 
 var app = kites.Create(AppState{Hint: DefaultHint, DaemonStatus: DaemonConnected})
@@ -178,6 +186,38 @@ func SetWorkspaceRules(rules []api.Rule) {
 		}
 		rl := slices.Clone(rules)
 		s.Rules = &rl
+		return s
+	})
+}
+
+// SetDefaultAgent records the workspace's default agent name in AppState. It is
+// the agent used for tool status classification when the session has none.
+func SetDefaultAgent(agent string) {
+	app.Set(func(s AppState) AppState {
+		if s.DefaultAgent == agent {
+			return s
+		}
+		s.DefaultAgent = agent
+		return s
+	})
+}
+
+// SetWorkspaceTools updates the workspace tools in AppState along with the name
+// of the agent the tool statuses were classified for.
+func SetWorkspaceTools(tools []api.Tool, agent string) {
+	app.Set(func(s AppState) AppState {
+		s.ToolsFetched = true
+		if len(tools) == 0 {
+			if s.Tools == nil && s.ToolsAgent == agent {
+				return s
+			}
+			s.Tools = nil
+			s.ToolsAgent = agent
+			return s
+		}
+		tl := slices.Clone(tools)
+		s.Tools = &tl
+		s.ToolsAgent = agent
 		return s
 	})
 }

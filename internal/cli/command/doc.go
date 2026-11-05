@@ -29,6 +29,8 @@
 //   - Context: /compact and /context.
 //   - Usage: /usage.
 //   - Skills: /skills.
+//   - Rules: /rules.
+//   - Tools: /tools.
 //
 // Each command either mutates the store directly (for example /mode and /model)
 // or enqueues an interactive browser into the store's slot area.
@@ -37,9 +39,10 @@
 //
 // Several commands render interactive, slot-scoped views built as trail
 // functional components: [ChangesBrowser], [PermissionBrowser],
-// [SessionBrowser], [SkillsBrowser], [TasksBrowser], [ModelPicker], and
-// [AgentPicker]. Each view is enqueued into the store, reads live data from the
-// daemon client, and closes itself through the store when the user cancels.
+// [SessionBrowser], [SkillsBrowser], [RulesBrowser], [ToolsBrowser],
+// [TasksBrowser], [ModelPicker], and [AgentPicker]. Each view is enqueued into
+// the store, reads live data from the daemon client, and closes itself through
+// the store when the user cancels.
 //
 // # Workspace Commands and Skills
 //

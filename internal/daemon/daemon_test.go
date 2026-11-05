@@ -2260,6 +2260,155 @@ Deploying to environment {{.target}}.
 	}
 }
 
+func TestWorkspaceToolsEndpoint(t *testing.T) {
+	ctx := context.Background()
+	_, cli, wsDir := setupDaemonTest(t, nil)
+
+	toolsDir := filepath.Join(wsDir, ".agents", "tools")
+	if err := os.MkdirAll(toolsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	toolContent := `---
+apiVersion: warp/v1alpha1
+kind: Tool
+metadata:
+  name: linter
+  displayName: Workspace Linter
+  description: Lint the workspace sources
+spec:
+  command: ["golangci-lint", "run", "{{.Input.path}}"]
+  annotations:
+    isReadOnly: false
+    isDangerous: true
+    isOpenWorld: false
+    isIdempotent: true
+    userHint: "Lint %s"
+  inputSchema:
+    type: object
+    properties:
+      path:
+        type: string
+        description: Path to lint.
+    required:
+      - path
+  outputSchema:
+    type: string
+---
+Run the project linter over the requested path.
+`
+	if err := os.WriteFile(filepath.Join(toolsDir, "linter.tool.md"), []byte(toolContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	tools, err := cli.ListTools(ctx, "")
+	if err != nil {
+		t.Fatalf("ListTools: %v", err)
+	}
+
+	byName := make(map[string]api.Tool, len(tools))
+	for _, tl := range tools {
+		byName[tl.Name] = tl
+	}
+
+	// 1. Custom workspace tool round-trips with command, schemas, annotations,
+	// and its project scope.
+	linter, ok := byName["linter"]
+	if !ok {
+		t.Fatalf("custom tool missing from ListTools: %+v", tools)
+	}
+	if linter.DisplayName != "Workspace Linter" || linter.Description != "Lint the workspace sources" {
+		t.Errorf("linter metadata = %+v", linter)
+	}
+	if linter.Scope != "Project" {
+		t.Errorf("linter Scope = %q, want Project", linter.Scope)
+	}
+	if !slices.Equal(linter.Command, []string{"golangci-lint", "run", "{{.Input.path}}"}) {
+		t.Errorf("linter Command = %v", linter.Command)
+	}
+	if linter.InputSchema["type"] != "object" {
+		t.Errorf("linter InputSchema = %v, want object schema", linter.InputSchema)
+	}
+	if linter.OutputSchema["type"] != "string" {
+		t.Errorf("linter OutputSchema = %v, want string schema", linter.OutputSchema)
+	}
+	if !linter.Annotations.IsDangerous || !linter.Annotations.IsIdempotent || linter.Annotations.IsReadOnly {
+		t.Errorf("linter annotations = %+v", linter.Annotations)
+	}
+	if linter.Annotations.UserHint != "Lint %s" {
+		t.Errorf("linter annotations UserHint = %q", linter.Annotations.UserHint)
+	}
+	if linter.Tokens <= 0 {
+		t.Errorf("linter Tokens = %d, want > 0", linter.Tokens)
+	}
+
+	// 2. Built-in system tools are reported with the Builtin scope and their
+	// declarative safety annotations.
+	bash, ok := byName["bash"]
+	if !ok {
+		t.Fatalf("built-in tool bash missing from ListTools: %+v", tools)
+	}
+	if bash.Scope != "Builtin" {
+		t.Errorf("bash Scope = %q, want Builtin", bash.Scope)
+	}
+	if !bash.Annotations.IsDangerous || !bash.Annotations.IsOpenWorld || bash.Annotations.IsReadOnly {
+		t.Errorf("bash annotations = %+v", bash.Annotations)
+	}
+	if len(bash.Command) != 0 {
+		t.Errorf("bash Command = %v, want empty for host-native tool", bash.Command)
+	}
+	view, ok := byName["view"]
+	if !ok {
+		t.Fatalf("built-in tool view missing from ListTools: %+v", tools)
+	}
+	if !view.Annotations.IsReadOnly || !view.Annotations.IsIdempotent {
+		t.Errorf("view annotations = %+v", view.Annotations)
+	}
+	if view.Tokens <= 0 {
+		t.Errorf("view Tokens = %d, want > 0", view.Tokens)
+	}
+
+	// 3. Tools are returned sorted by name.
+	for i := 1; i < len(tools); i++ {
+		if tools[i-1].Name > tools[i].Name {
+			t.Fatalf("ListTools not sorted at index %d: %q before %q", i, tools[i-1].Name, tools[i].Name)
+		}
+	}
+
+	// 4. Scoping the listing to an agent classifies each tool's availability for
+	// that agent: the main agent lists view but not the custom linter, so the
+	// linter is deferred and tool_search is auto-activated to discover it.
+	scoped, err := cli.ListTools(ctx, "main")
+	if err != nil {
+		t.Fatalf("ListTools(main): %v", err)
+	}
+	scopedByName := make(map[string]api.Tool, len(scoped))
+	for _, tl := range scoped {
+		scopedByName[tl.Name] = tl
+	}
+	if got := scopedByName["view"].Status; got != api.ToolStatusEager {
+		t.Errorf("view status for main = %q, want %q", got, api.ToolStatusEager)
+	}
+	if got := scopedByName["linter"].Status; got != api.ToolStatusDeferred {
+		t.Errorf("linter status for main = %q, want %q", got, api.ToolStatusDeferred)
+	}
+	if got := scopedByName["tool_search"].Status; got != api.ToolStatusEager {
+		t.Errorf("tool_search status for main = %q, want %q", got, api.ToolStatusEager)
+	}
+	if got := scopedByName["invoke_agent"].Status; got != api.ToolStatusEager {
+		t.Errorf("invoke_agent status for main = %q, want %q", got, api.ToolStatusEager)
+	}
+
+	// 5. An unknown agent is rejected rather than silently unclassified.
+	if _, err := cli.ListTools(ctx, "no-such-agent"); err == nil {
+		t.Fatal("expected error listing tools for unknown agent")
+	} else {
+		var apiErr *api.APIError
+		if !errors.As(err, &apiErr) || apiErr.StatusCode != http.StatusNotFound {
+			t.Errorf("unknown agent error = %v, want 404 API error", err)
+		}
+	}
+}
+
 func TestSendWithClientSuppliedID(t *testing.T) {
 	ctx := context.Background()
 

@@ -144,6 +144,49 @@ type Rule struct {
 	Tokens       int          `json:"tokens,omitempty"`
 }
 
+// ToolAnnotation defines the safety profile and behavioral constraints for a tool.
+type ToolAnnotation struct {
+	IsOpenWorld  bool   `json:"is_open_world,omitempty"`
+	IsDangerous  bool   `json:"is_dangerous,omitempty"`
+	IsReadOnly   bool   `json:"is_read_only,omitempty"`
+	IsIdempotent bool   `json:"is_idempotent,omitempty"`
+	UserHint     string `json:"user_hint,omitempty"`
+}
+
+// ToolStatus classifies a tool's availability in an agent's active toolset.
+type ToolStatus string
+
+const (
+	// ToolStatusEager marks a tool loaded on the agent's first request.
+	ToolStatusEager ToolStatus = "eager"
+	// ToolStatusDeferred marks a policy-allowed tool held back from the initial
+	// context and discoverable via tool_search.
+	ToolStatusDeferred ToolStatus = "deferred"
+	// ToolStatusDenied marks a tool blocked by the workspace or agent tool policy.
+	ToolStatusDenied ToolStatus = "denied"
+	// ToolStatusInactive marks a tool that is not applicable to the agent at all
+	// (for example the subagent tools for an agent with no subagents), so it is
+	// neither loaded, deferred, nor explicitly denied.
+	ToolStatusInactive ToolStatus = "inactive"
+)
+
+// Tool describes an available built-in or custom executable tool in the workspace.
+type Tool struct {
+	Name         string         `json:"name"`
+	DisplayName  string         `json:"display_name,omitempty"`
+	Description  string         `json:"description,omitempty"`
+	Namespace    string         `json:"namespace,omitempty"`
+	Scope        string         `json:"scope,omitempty"`
+	Command      []string       `json:"command,omitempty"`
+	InputSchema  map[string]any `json:"input_schema,omitempty"`
+	OutputSchema map[string]any `json:"output_schema,omitempty"`
+	Annotations  ToolAnnotation `json:"annotations"`
+	Tokens       int            `json:"tokens,omitempty"`
+	// Status is the tool's availability for the agent the request was scoped to.
+	// It is empty when the listing was not scoped to an agent.
+	Status ToolStatus `json:"status,omitempty"`
+}
+
 type ThinkingValue struct {
 	Value       string `json:"value"`
 	Description string `json:"description,omitempty"`

@@ -1,6 +1,6 @@
 # Built-in Tools Reference
 
-TaskSmith provides 15 core built-in system tools backed by virtualized OS sandboxes, compare-and-swap filesystem mutators, background process managers, child subagent delegators, and interactive user prompts.
+TaskSmith provides 18 core built-in system tools backed by virtualized OS sandboxes, compare-and-swap filesystem mutators, background process managers, child subagent delegators, and interactive user prompts. Built-ins are documented below; command-backed custom tools declared as `*.tool.md` manifests share the same registry, safety annotations, and permission pipeline and are covered in [Custom Tool Execution Model](#4-custom-tool-execution-model).
 
 ---
 
@@ -751,3 +751,71 @@ Searches the workspace's deferred (not eagerly loaded) tools by name, descriptio
   "query": "http download"
 }
 ```
+
+---
+
+## 4. Custom Tool Execution Model
+
+Custom tools are command-backed tools declared as [`*.tool.md` manifests](manifests.md#9-tool-manifest-toolmd). They register into the same container as built-ins and are evaluated by the same permission pipeline, but their security posture is **declared, never inferred**.
+
+### Declarative Annotations As The Security Baseline
+
+The approval plan for a custom tool is derived strictly from `spec.annotations`. TaskSmith does not inspect argument values, guess file paths from argument key names, or pattern-match the command string to decide whether a call is safe:
+
+| Annotation state | Plan action | Safety | Read-only |
+| :--- | :--- | :--- | :--- |
+| `isDangerous: true` | `exec` | `unsafe` | `false` |
+| `isReadOnly: true` (and not `isOpenWorld`) | `read` | `safe` | `true` |
+| `isReadOnly: true` and `isOpenWorld: true` | `read` | `unknown` | `true` |
+| `isOpenWorld: true` only | `net` | `unknown` | `false` |
+| No annotations set | `exec` | `unknown` | `false` |
+
+Approval prompts show the rendered command line as the plan target, and `annotations.userHint` overrides the summary when set (`%s` is replaced with the rendered command line). Because safety defaults to `unknown`, an unannotated custom tool is never treated as auto-allowed safe; annotations must reflect real behavior and do not replace sandboxing or permission checks. See [Permission Modes & Safety Annotations](#2-permission-modes--safety-annotations) for how each mode resolves these plans.
+
+### Argument Delivery: Template Arguments Or Stdin JSON
+
+Arguments reach a custom tool's process in exactly one of two ways, never both:
+
+| Manifest authoring | Delivery |
+| :--- | :--- |
+| A `spec.command` element interpolates a supplied argument via `{{.Input.<field>}}` (or the `{{.<field>}}` shorthand) | The rendered argv is the only channel; standard input is left closed. |
+| No `spec.command` element consumes an argument | The validated arguments are marshalled as one JSON object on standard input. |
+
+Two consequences matter when authoring a manifest:
+
+- **Templates are opt-in.** An explicit `{{ … }}` action is what enables command rendering. A command containing only shell-style references (`$var`, `${var}`, `$1`) is executed verbatim, so conventional CLI scripts keep their own positional parameters instead of having them rewritten as templates.
+- **A template referencing an argument the model did not supply fails the call** as an argument validation error rather than executing with a literal `<no value>` placeholder, which the model can correct and retry.
+
+Full template reference and schema semantics live in the [Tool manifest reference](manifests.md#command-templating).
+
+### Execution And Output
+
+- Execution runs through the sandbox process API and is subject to the permission system. The process environment is the sandbox configuration plus `spec.env`; the host daemon environment is never inherited.
+- Standard output is returned to the model as text. When it exceeds the output limits, the full content is spilled to a file and the model receives a head-plus-tail preview pointing at that file.
+- A nonzero exit code reports standard error, then standard output if standard error is empty, then the exit code alone.
+- `spec.outputSchema` is advertised metadata. Output is not parsed or validated against it, and an absent or unparseable schema defaults to a string schema.
+
+---
+
+## 5. Tool Partitioning: Eager vs Deferred
+
+Every session partitions its policy-allowed toolset into an eager set and a deferred set. The partition is computed per agent, so the same tool can be eager for one agent and deferred for another.
+
+| Partition | Determined by | Model visibility |
+| :--- | :--- | :--- |
+| **Eager** | Named in the agent's `spec.tools` | Present in the initial tool context. |
+| **Deferred** | Policy-allowed but not named in `spec.tools` | Registered in the session container and withheld from the initial context. |
+| **Denied** | Blocked by workspace or agent tool policy | Not registered. |
+| **Inactive** | Neither loaded, deferred, nor denied (for example, a conditional built-in the session does not activate) | Not registered. |
+
+Custom (`*.tool.md`) and MCP tools are **deferred by default**, because they are not listed in an agent's `spec.tools` unless the author opts them in.
+
+### Activation Through `tool_search`
+
+When a session resolves at least one deferred tool, TaskSmith automatically activates the built-in [`tool_search`](#tool_search) tool as an eager tool and renders a `<deferred_tools>` directory in the system prompt. `tool_search` runs BM25 keyword matching over deferred tool names, descriptions, and parameters; matched tools become directly invocable on subsequent turns. When a session has no deferred tools, `tool_search` is not registered at all.
+
+Deferring a tool therefore trades first-turn availability for context cost: the tool's full schema is charged to the context only after the agent demonstrates it needs it.
+
+### Inspecting The Partition
+
+Run [`/tools`](cli.md#tools-browser-tools) in the CLI to browse every workspace and built-in tool with its resolved status (`[Eager]`, `[Deferred]`, `[Denied]`, `[Inactive]`), scope, safety annotations, and JSON schemas for the active agent.

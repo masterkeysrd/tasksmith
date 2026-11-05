@@ -3,6 +3,7 @@ package workspace
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"regexp"
 	"slices"
 	"strconv"
@@ -47,6 +48,12 @@ type RuleSnapshot struct {
 	Def *warp.Rule
 }
 
+// ToolSnapshot pairs an API Tool presentation with its defining warp.Tool.
+type ToolSnapshot struct {
+	api.Tool
+	Def *warp.Tool
+}
+
 // Catalog acts as an in-memory query and resolution proxy over a warp.Registry
 // (and scoped registry when cwd is inside a subproject), exposing native warp
 // resource definitions pre-materialized in lock-free point-in-time memdb stores.
@@ -67,7 +74,7 @@ type Catalog struct {
 	skills    *memdb.DB[SkillSnapshot]
 	commands  *memdb.DB[CommandSnapshot]
 	rules     *memdb.DB[RuleSnapshot]
-	tools     *memdb.DB[*warp.Tool]
+	tools     *memdb.DB[ToolSnapshot]
 	providers *memdb.DB[*warp.ModelProvider]
 }
 
@@ -83,7 +90,7 @@ func NewCatalog(reg *warp.Registry, cwd, rootDir string) *Catalog {
 		skills:     memdb.New(func(s SkillSnapshot) string { return s.Name }),
 		commands:   memdb.New(func(cmd CommandSnapshot) string { return cmd.Name }),
 		rules:      memdb.New(func(r RuleSnapshot) string { return r.Name }),
-		tools:      memdb.New(func(t *warp.Tool) string { return t.Metadata.Name }),
+		tools:      memdb.New(func(t ToolSnapshot) string { return t.Name }),
 		providers:  memdb.New(func(p *warp.ModelProvider) string { return p.Metadata.Name }),
 	}
 	c.populate()
@@ -261,18 +268,13 @@ func (c *Catalog) populate() {
 		}
 	}
 	c.toolTokens = make(map[string]int, len(toolsList))
+	toolSnapshots := make([]ToolSnapshot, 0, len(toolsList))
 	for _, t := range toolsList {
-		toolTokens := tokenizer.Estimate(t.Metadata.Name) +
-			tokenizer.Estimate(t.Metadata.Description) +
-			tokenizer.Estimate(t.Spec.Instructions)
-		if len(t.Spec.InputSchema) > 0 {
-			if data, err := json.Marshal(t.Spec.InputSchema); err == nil {
-				toolTokens += tokenizer.Estimate(string(data))
-			}
-		}
-		c.toolTokens[t.Metadata.Name] = toolTokens
+		snapshot := c.newToolSnapshot(t)
+		c.toolTokens[snapshot.Name] = snapshot.Tokens
+		toolSnapshots = append(toolSnapshots, snapshot)
 	}
-	c.tools.Replace(toolsList...)
+	c.tools.Replace(toolSnapshots...)
 
 	// 2. Providers
 	var provList []*warp.ModelProvider
@@ -527,6 +529,52 @@ func (c *Catalog) PartitionAgentTools(resolved *warp.ResolvedAgent) ToolPartitio
 	}
 
 	return ToolPartition{Eager: eager, Deferred: deferred}
+}
+
+// ToolStatuses classifies every effective tool for a resolved agent as eager,
+// deferred, denied, or inactive, sharing the partition's decision rules so an
+// interactive tool browser can report what the agent can actually reach.
+//
+// A nil resolved (agentless workspace) makes every effective tool eager,
+// mirroring [Catalog.PartitionAgentTools]. tool_search is eager whenever any
+// tool is deferred (the session auto-activates it) unless a policy denies it.
+// Tools that are neither eager nor deferred are denied when the workspace or
+// agent policy ceiling blocks them, and inactive otherwise (conditional
+// built-ins whose preconditions are unmet, for example).
+func (c *Catalog) ToolStatuses(resolved *warp.ResolvedAgent) map[string]api.ToolStatus {
+	tools := c.Tools()
+	statuses := make(map[string]api.ToolStatus, len(tools))
+	if resolved == nil {
+		for _, t := range tools {
+			statuses[t.Metadata.Name] = api.ToolStatusEager
+		}
+		return statuses
+	}
+
+	partition := c.PartitionAgentTools(resolved)
+	for _, name := range partition.Eager {
+		statuses[name] = api.ToolStatusEager
+	}
+	for _, name := range partition.Deferred {
+		statuses[name] = api.ToolStatusDeferred
+	}
+
+	hasDeferred := len(partition.Deferred) > 0
+	for _, t := range tools {
+		name := t.Metadata.Name
+		if _, ok := statuses[name]; ok {
+			continue
+		}
+		switch {
+		case name == "tool_search" && hasDeferred && resolved.ToolAction(t) != warp.ToolPolicyDeny:
+			statuses[name] = api.ToolStatusEager
+		case resolved.ToolAction(t) == warp.ToolPolicyDeny:
+			statuses[name] = api.ToolStatusDenied
+		default:
+			statuses[name] = api.ToolStatusInactive
+		}
+	}
+	return statuses
 }
 
 // MaxListedMCPToolsPerServer caps how many deferred tool names are listed for a
@@ -1135,9 +1183,63 @@ func (c *Catalog) ResolveCommand(agentName, cmdRef string) (*warp.ResolvedComman
 	return nil, fmt.Errorf("catalog: resolver does not support ResolveCommand")
 }
 
+// newToolSnapshot materializes the API presentation of an effective tool,
+// including its scope label, safety annotations, JSON schemas, and the token
+// cost of the catalog entry it contributes to an agent's context.
+func (c *Catalog) newToolSnapshot(t *warp.Tool) ToolSnapshot {
+	scopeNamespace := c.ScopeNamespace(t.BaseResource)
+
+	toolTokens := tokenizer.Estimate(t.Metadata.Name) +
+		tokenizer.Estimate(t.Metadata.Description) +
+		tokenizer.Estimate(t.Spec.Instructions)
+	if len(t.Spec.InputSchema) > 0 {
+		if data, err := json.Marshal(t.Spec.InputSchema); err == nil {
+			toolTokens += tokenizer.Estimate(string(data))
+		}
+	}
+
+	tool := api.Tool{
+		Name:         t.Metadata.Name,
+		DisplayName:  t.Metadata.DisplayName,
+		Description:  t.Metadata.Description,
+		Namespace:    scopeNamespace,
+		Scope:        FormatSkillScope(scopeNamespace),
+		Command:      slices.Clone(t.Spec.Command),
+		InputSchema:  maps.Clone(t.Spec.InputSchema),
+		OutputSchema: maps.Clone(t.Spec.OutputSchema),
+		Tokens:       toolTokens,
+	}
+	if t.Spec.Annotations != nil {
+		tool.Annotations = api.ToolAnnotation{
+			IsOpenWorld:  t.Spec.Annotations.IsOpenWorld,
+			IsDangerous:  t.Spec.Annotations.IsDangerous,
+			IsReadOnly:   t.Spec.Annotations.IsReadOnly,
+			IsIdempotent: t.Spec.Annotations.IsIdempotent,
+			UserHint:     t.Spec.Annotations.UserHint,
+		}
+	}
+	return ToolSnapshot{Tool: tool, Def: t}
+}
+
+// ToolSnapshots returns all effective tool snapshots in scope, sorted by
+// metadata name. Each snapshot carries the pre-materialized api.Tool
+// presentation (scope, schemas, annotations, and token cost) alongside the
+// defining warp.Tool.
+func (c *Catalog) ToolSnapshots() []ToolSnapshot {
+	return c.tools.Snapshot().All()
+}
+
 // Tools returns all effective tools in scope, sorted by metadata name.
 func (c *Catalog) Tools() []*warp.Tool {
-	return c.tools.Snapshot().All()
+	snaps := c.tools.Snapshot().All()
+	if len(snaps) == 0 {
+		return nil
+	}
+	out := make([]*warp.Tool, len(snaps))
+	for i, s := range snaps {
+		out[i] = s.Def
+	}
+	return out
 }
 
 // ToolNames returns the metadata names of all effective tools in scope, in the
@@ -1157,22 +1259,30 @@ func (c *Catalog) ToolNames() []string {
 
 // GetTool resolves an effective tool by name or qualified name.
 func (c *Catalog) GetTool(name string) (*warp.Tool, bool) {
-	if t, ok := c.tools.Snapshot().Get(name); ok {
-		return t, true
+	if snap, ok := c.GetToolSnapshot(name); ok {
+		return snap.Def, true
+	}
+	return nil, false
+}
+
+// GetToolSnapshot resolves an effective tool snapshot by name or qualified name.
+func (c *Catalog) GetToolSnapshot(name string) (ToolSnapshot, bool) {
+	if snap, ok := c.tools.Snapshot().Get(name); ok {
+		return snap, true
 	}
 	if strings.Contains(name, "/") {
-		for _, t := range c.tools.Snapshot().All() {
-			if t.QualifiedName() == name {
-				return t, true
+		for _, s := range c.tools.Snapshot().All() {
+			if s.Def != nil && s.Def.QualifiedName() == name {
+				return s, true
 			}
 		}
 		if res, ok := c.resolveByKind(warp.KindTool, name); ok {
 			if t, ok := res.(*warp.Tool); ok {
-				return t, true
+				return c.newToolSnapshot(t), true
 			}
 		}
 	}
-	return nil, false
+	return ToolSnapshot{}, false
 }
 
 // Providers returns all effective model providers in scope, sorted by metadata name.

@@ -88,6 +88,23 @@ Always inspect logs before attempting to restart failing containers.
 - **`isDangerous`**: Flags potentially destructive tools, ensuring they trigger confirmation even in lenient permission modes.
 - **`userHint`**: Defines the prompt displayed to the user when requesting authorization in the CLI.
 
+### How Arguments Reach Your Script
+
+A tool whose `spec.command` contains an explicit `{{ … }}` action is rendered per call. When at least one command element interpolates a supplied argument, the rendered argv is the only channel and standard input is left closed. When no command element consumes an argument, the validated arguments are sent as a single JSON object on standard input instead, so a plain CLI script can simply read and parse stdin:
+
+```markdown
+spec:
+  command: [python, scripts/format.py]
+```
+
+Templates are opt-in: a command containing only shell-style references (`$var`, `${var}`, `$1`) is executed verbatim, so conventional scripts keep their own positional parameters. A template that references an argument the model did not supply fails the call as an argument validation error rather than executing with a literal `<no value>` placeholder.
+
+The security posture of a custom tool comes strictly from its annotations — TaskSmith never infers risk from argument values or command strings — so an unannotated tool is never treated as auto-allowed safe. See [Custom Tool Execution Model](../reference/tools.md#4-custom-tool-execution-model) for the full annotation-to-permission mapping.
+
+### Checking What The Agent Actually Sees
+
+Run `/tools` to browse every built-in and custom tool with its status for the active agent. A tool that is `[Deferred]` is registered but withheld from the initial context until the agent finds it through `tool_search`; to make a custom tool `[Eager]`, list its name in the agent's `spec.tools`. `[Denied]` means a workspace or agent tool policy blocks it, and `[Inactive]` means the current session does not activate it at all. Press `i` in the browser to inspect a tool's rendered command, annotations, and JSON schemas.
+
 ---
 
 ## Connecting Model Context Protocol (MCP) Servers

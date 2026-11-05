@@ -566,6 +566,41 @@ func (d *Daemon) ListRules(ctx context.Context, rawWS string) ([]api.Rule, error
 	return out, nil
 }
 
+// ListTools returns every effective tool in the workspace. When agent is not
+// empty, each tool is also classified with its availability for that agent
+// (eager, deferred, denied, or inactive).
+func (d *Daemon) ListTools(ctx context.Context, rawWS, agent string) ([]api.Tool, error) {
+	rt, err := d.workspace(ctx, rawWS)
+	if err != nil {
+		return nil, err
+	}
+
+	cat := rt.Workspace().Catalog()
+	snapshots := cat.ToolSnapshots()
+	out := make([]api.Tool, len(snapshots))
+	for i, snap := range snapshots {
+		out[i] = snap.Tool
+	}
+
+	agent = strings.TrimSpace(agent)
+	if agent == "" {
+		return out, nil
+	}
+	resolved, err := cat.ResolveAgent(agent)
+	if err != nil {
+		return nil, &api.APIError{
+			StatusCode: http.StatusNotFound,
+			Code:       "not_found",
+			Message:    fmt.Sprintf("agent %q not found", agent),
+		}
+	}
+	statuses := cat.ToolStatuses(resolved)
+	for i := range out {
+		out[i].Status = statuses[out[i].Name]
+	}
+	return out, nil
+}
+
 func (d *Daemon) ListModels(ctx context.Context, rawWS string) ([]api.Model, error) {
 	rt, err := d.workspace(ctx, rawWS)
 	if err != nil {

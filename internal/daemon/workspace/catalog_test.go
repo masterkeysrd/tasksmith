@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/warp"
 )
 
@@ -187,6 +188,250 @@ func TestCatalogRules(t *testing.T) {
 	}
 	if cat.HasConditionalRules(nil) {
 		t.Error("HasConditionalRules(nil) = true, want false")
+	}
+}
+
+// TestCatalogToolSnapshots verifies that Catalog.ToolSnapshots() exposes the full
+// api.Tool schema (scope, command, JSON schemas, annotations, and token cost) for
+// both built-in and custom effective tools, and that GetToolSnapshot resolves by
+// short name and qualified name while GetTool keeps returning the warp definition.
+func TestCatalogToolSnapshots(t *testing.T) {
+	ws := &warp.Workspace{
+		Def: &warp.WorkspaceDef{
+			BaseResource: warp.BaseResource{
+				APIVersion: warp.APIVersion,
+				Kind:       warp.KindWorkspace,
+				Metadata:   warp.Metadata{Name: "tools-ws"},
+			},
+			Spec: warp.WorkspaceDefSpec{DefaultAgent: "main"},
+		},
+	}
+
+	builtinTool := &warp.Tool{
+		BaseResource: warp.BaseResource{
+			APIVersion: warp.APIVersion,
+			Kind:       warp.KindTool,
+			Namespace:  warp.NamespaceSystem,
+			Metadata:   warp.Metadata{Name: "view", DisplayName: "View File", Description: "read a file"},
+		},
+		Spec: warp.ToolSpec{
+			Instructions: "Read the contents of a text file.",
+			Annotations:  &warp.ToolAnnotation{IsReadOnly: true, IsIdempotent: true, UserHint: "Read file: %s"},
+			InputSchema:  map[string]any{"type": "object", "required": []any{"path"}},
+		},
+	}
+
+	customTool := &warp.Tool{
+		BaseResource: warp.BaseResource{
+			APIVersion: warp.APIVersion,
+			Kind:       warp.KindTool,
+			Namespace:  warp.NamespaceWorkspace,
+			Metadata:   warp.Metadata{Name: "linter", DisplayName: "Linter", Description: "lint the workspace"},
+		},
+		Spec: warp.ToolSpec{
+			Instructions: "Run the project linter.",
+			Command:      []string{"golangci-lint", "run"},
+			Annotations:  &warp.ToolAnnotation{IsDangerous: true, IsOpenWorld: true, UserHint: "Lint workspace"},
+			OutputSchema: map[string]any{"type": "string"},
+		},
+	}
+
+	mainAgent := &warp.Agent{
+		BaseResource: warp.BaseResource{
+			APIVersion: warp.APIVersion,
+			Kind:       warp.KindAgent,
+			Namespace:  warp.NamespaceWorkspace,
+			Metadata:   warp.Metadata{Name: "main"},
+		},
+		Spec: warp.AgentSpec{},
+	}
+
+	reg := warp.NewRegistry(ws)
+	for _, res := range []warp.Resource{builtinTool, customTool, mainAgent} {
+		reg.Set(res.QualifiedName(), res)
+	}
+	if err := reg.Validate(); err != nil {
+		t.Fatalf("registry validation failed: %v", err)
+	}
+
+	cat := NewCatalog(reg, "", "")
+
+	// 1. ToolSnapshots() returns every effective tool sorted by name.
+	snaps := cat.ToolSnapshots()
+	if len(snaps) != 2 {
+		t.Fatalf("ToolSnapshots() returned %d tools, want 2: %+v", len(snaps), snaps)
+	}
+	if snaps[0].Name != "linter" || snaps[1].Name != "view" {
+		t.Fatalf("ToolSnapshots() order = [%s %s], want [linter view]", snaps[0].Name, snaps[1].Name)
+	}
+
+	// 2. Custom workspace tool carries command, scope, schemas, and annotations.
+	linter := snaps[0]
+	if linter.DisplayName != "Linter" || linter.Description != "lint the workspace" {
+		t.Errorf("linter metadata = %+v", linter)
+	}
+	if linter.Namespace != warp.NamespaceWorkspace || linter.Scope != "Workspace" {
+		t.Errorf("linter scope = %q/%q, want workspace/Workspace", linter.Namespace, linter.Scope)
+	}
+	if !slices.Equal(linter.Command, []string{"golangci-lint", "run"}) {
+		t.Errorf("linter Command = %v, want [golangci-lint run]", linter.Command)
+	}
+	if linter.OutputSchema["type"] != "string" {
+		t.Errorf("linter OutputSchema = %v, want type string", linter.OutputSchema)
+	}
+	if !linter.Annotations.IsDangerous || !linter.Annotations.IsOpenWorld || linter.Annotations.IsReadOnly {
+		t.Errorf("linter annotations = %+v, want dangerous+openWorld only", linter.Annotations)
+	}
+	if linter.Annotations.UserHint != "Lint workspace" {
+		t.Errorf("linter annotations UserHint = %q", linter.Annotations.UserHint)
+	}
+	if linter.Tokens <= 0 {
+		t.Errorf("linter Tokens = %d, want > 0", linter.Tokens)
+	}
+
+	// 3. Built-in tool reports the Builtin scope and read-only annotations.
+	view := snaps[1]
+	if view.Namespace != warp.NamespaceSystem || view.Scope != "Builtin" {
+		t.Errorf("view scope = %q/%q, want system/Builtin", view.Namespace, view.Scope)
+	}
+	if !view.Annotations.IsReadOnly || !view.Annotations.IsIdempotent {
+		t.Errorf("view annotations = %+v, want readOnly+idempotent", view.Annotations)
+	}
+	if view.Annotations.UserHint != "Read file: %s" {
+		t.Errorf("view annotations UserHint = %q", view.Annotations.UserHint)
+	}
+	if len(view.InputSchema) == 0 || view.OutputSchema != nil {
+		t.Errorf("view schemas = in:%v out:%v", view.InputSchema, view.OutputSchema)
+	}
+	if len(view.Command) != 0 {
+		t.Errorf("view Command = %v, want empty for host-native tool", view.Command)
+	}
+	if view.Tokens <= 0 {
+		t.Errorf("view Tokens = %d, want > 0", view.Tokens)
+	}
+
+	// 4. Snapshots carry the defining warp.Tool, and lookups resolve by short
+	// name and qualified name.
+	if linter.Def != customTool {
+		t.Errorf("linter Def = %v, want the defining warp.Tool", linter.Def)
+	}
+	snap, ok := cat.GetToolSnapshot("view")
+	if !ok || snap.Name != "view" || snap.Scope != "Builtin" {
+		t.Errorf("GetToolSnapshot(view) = %+v, ok=%v", snap, ok)
+	}
+	if _, ok := cat.GetToolSnapshot(customTool.QualifiedName()); !ok {
+		t.Errorf("GetToolSnapshot(%q) not found", customTool.QualifiedName())
+	}
+	if _, ok := cat.GetToolSnapshot("does-not-exist"); ok {
+		t.Error("GetToolSnapshot(does-not-exist) unexpectedly found")
+	}
+
+	// 5. Tools()/GetTool still surface the warp definitions.
+	if defs := cat.Tools(); len(defs) != 2 || defs[0] != customTool || defs[1] != builtinTool {
+		t.Errorf("Tools() returned unexpected definitions: %+v", defs)
+	}
+	if def, ok := cat.GetTool("linter"); !ok || def != customTool {
+		t.Errorf("GetTool(linter) = %v, ok=%v", def, ok)
+	}
+	if names := cat.ToolNames(); !slices.Equal(names, []string{"linter", "view"}) {
+		t.Errorf("ToolNames() = %v, want [linter view]", names)
+	}
+}
+
+// TestCatalogToolStatuses verifies that ToolStatuses classifies every effective
+// tool for a resolved agent as eager, deferred, denied, or inactive, matching
+// what the session actually loads, and that an agentless workspace reports
+// every tool as eager.
+func TestCatalogToolStatuses(t *testing.T) {
+	ws := &warp.Workspace{
+		Def: &warp.WorkspaceDef{
+			BaseResource: warp.BaseResource{
+				APIVersion: warp.APIVersion,
+				Kind:       warp.KindWorkspace,
+				Metadata:   warp.Metadata{Name: "statuses-ws"},
+			},
+			Spec: warp.WorkspaceDefSpec{DefaultAgent: "main"},
+		},
+	}
+
+	mkTool := func(namespace, name string, annotations *warp.ToolAnnotation) *warp.Tool {
+		return &warp.Tool{
+			BaseResource: warp.BaseResource{
+				APIVersion: warp.APIVersion,
+				Kind:       warp.KindTool,
+				Namespace:  namespace,
+				Metadata:   warp.Metadata{Name: name, Description: "desc for " + name},
+			},
+			Spec: warp.ToolSpec{Annotations: annotations},
+		}
+	}
+
+	viewTool := mkTool(warp.NamespaceSystem, "view", &warp.ToolAnnotation{IsReadOnly: true})
+	linterTool := mkTool(warp.NamespaceWorkspace, "linter", &warp.ToolAnnotation{IsDangerous: true})
+	searchTool := mkTool(warp.NamespaceSystem, "tool_search", &warp.ToolAnnotation{IsReadOnly: true})
+	subagentTool := mkTool(warp.NamespaceSystem, "invoke_agent", &warp.ToolAnnotation{IsReadOnly: true})
+
+	agentNamed := func(name string, policies *warp.Policies) *warp.Agent {
+		return &warp.Agent{
+			BaseResource: warp.BaseResource{
+				APIVersion: warp.APIVersion,
+				Kind:       warp.KindAgent,
+				Namespace:  warp.NamespaceWorkspace,
+				Metadata:   warp.Metadata{Name: name},
+			},
+			Spec: warp.AgentSpec{Tools: []string{"view"}, Policies: policies},
+		}
+	}
+
+	reg := warp.NewRegistry(ws)
+	for _, res := range []warp.Resource{viewTool, linterTool, searchTool, subagentTool, agentNamed("main", nil)} {
+		reg.Set(res.QualifiedName(), res)
+	}
+	if err := reg.Validate(); err != nil {
+		t.Fatalf("registry validation failed: %v", err)
+	}
+
+	cat := NewCatalog(reg, "", "")
+
+	// 1. An agentless workspace loads every effective tool eagerly.
+	if statuses := cat.ToolStatuses(nil); len(statuses) != 4 {
+		t.Fatalf("ToolStatuses(nil) = %v, want 4 entries", statuses)
+	} else {
+		for name, status := range statuses {
+			if status != api.ToolStatusEager {
+				t.Errorf("agentless status for %q = %q, want eager", name, status)
+			}
+		}
+	}
+
+	// 2. Listed tools are eager, unlisted policy-allowed tools are deferred,
+	// tool_search is auto-activated while anything is deferred, and a
+	// conditional built-in whose precondition is unmet is neither.
+	resolved := &warp.ResolvedAgent{Agent: agentNamed("main", nil), Tools: []*warp.Tool{viewTool}}
+	statuses := cat.ToolStatuses(resolved)
+	want := map[string]api.ToolStatus{
+		"view":         api.ToolStatusEager,
+		"linter":       api.ToolStatusDeferred,
+		"tool_search":  api.ToolStatusEager,
+		"invoke_agent": api.ToolStatusInactive,
+	}
+	if len(statuses) != len(want) {
+		t.Fatalf("ToolStatuses returned %d entries, want %d: %v", len(statuses), len(want), statuses)
+	}
+	for name, wantStatus := range want {
+		if got := statuses[name]; got != wantStatus {
+			t.Errorf("status for %q = %q, want %q", name, got, wantStatus)
+		}
+	}
+
+	// 3. A policy ceiling denial surfaces as denied rather than deferred.
+	denyPolicies := &warp.Policies{Tools: &warp.ToolPolicies{Exclude: []string{"linter"}}}
+	denied := cat.ToolStatuses(&warp.ResolvedAgent{Agent: agentNamed("strict", denyPolicies), Tools: []*warp.Tool{viewTool}})
+	if got := denied["linter"]; got != api.ToolStatusDenied {
+		t.Errorf("excluded tool status = %q, want denied", got)
+	}
+	if got := denied["view"]; got != api.ToolStatusEager {
+		t.Errorf("listed tool status = %q, want eager", got)
 	}
 }
 

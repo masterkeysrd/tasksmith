@@ -128,6 +128,7 @@ Some built-in commands:
 | `/subagents` | `/subagents` (or `/subagent`) | Open the subagents browser and live session inspector. |
 | `/permissions` | `/permissions` | Open the interactive permission rules manager. |
 | `/rules` | `/rules` | Open the workspace rules browser to inspect rule status and triggers, or reload rules from disk. |
+| `/tools` | `/tools` | Open the workspace tools browser to inspect each tool's status for the active agent, its safety annotations and schemas, or reload tools from disk. |
 | `/theme` | `/theme [name]` | Switch the terminal color theme. |
 | `/clear` | `/clear` | Start a fresh session draft. |
 | `/compact` | `/compact [focus]` | Compact conversation history to free context window space, with optional focus instructions. |

@@ -213,6 +213,81 @@ func TestWireTypesJSONRoundTrip(t *testing.T) {
 	}
 }
 
+func TestToolWireTypesJSONRoundTrip(t *testing.T) {
+	custom := Tool{
+		Name:         "linter",
+		DisplayName:  "Linter",
+		Description:  "Lint the workspace",
+		Namespace:    "workspace",
+		Scope:        "Workspace",
+		Command:      []string{"golangci-lint", "run", "{{.Input.path}}"},
+		InputSchema:  map[string]any{"type": "object", "required": []any{"path"}},
+		OutputSchema: map[string]any{"type": "string"},
+		Annotations: ToolAnnotation{
+			IsOpenWorld:  true,
+			IsDangerous:  true,
+			IsIdempotent: true,
+			UserHint:     "Lint %s",
+		},
+		Tokens: 240,
+		Status: ToolStatusEager,
+	}
+	testJSONRoundTrip(t, custom)
+
+	raw, err := json.Marshal(custom)
+	if err != nil {
+		t.Fatalf("Marshal Tool: %v", err)
+	}
+	var fields map[string]any
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		t.Fatalf("Unmarshal Tool fields: %v", err)
+	}
+	for _, key := range []string{"name", "display_name", "description", "namespace", "scope", "command", "input_schema", "output_schema", "annotations", "tokens", "status"} {
+		if _, ok := fields[key]; !ok {
+			t.Errorf("serialized Tool missing wire key %q: %s", key, raw)
+		}
+	}
+	annotations, ok := fields["annotations"].(map[string]any)
+	if !ok {
+		t.Fatalf("annotations = %T, want object", fields["annotations"])
+	}
+	for _, key := range []string{"is_open_world", "is_dangerous", "is_idempotent", "user_hint"} {
+		if _, ok := annotations[key]; !ok {
+			t.Errorf("serialized ToolAnnotation missing wire key %q: %s", key, raw)
+		}
+	}
+	if _, ok := annotations["is_read_only"]; ok {
+		t.Errorf("serialized ToolAnnotation should omit false is_read_only: %s", raw)
+	}
+
+	// A built-in host-native tool omits command, schemas, and tokens, and always
+	// carries the annotations object.
+	builtin := Tool{
+		Name:        "view",
+		DisplayName: "View File",
+		Namespace:   "system",
+		Scope:       "Builtin",
+		Annotations: ToolAnnotation{IsReadOnly: true, IsIdempotent: true},
+	}
+	builtinRaw, err := json.Marshal(builtin)
+	if err != nil {
+		t.Fatalf("Marshal builtin Tool: %v", err)
+	}
+	var builtinFields map[string]any
+	if err := json.Unmarshal(builtinRaw, &builtinFields); err != nil {
+		t.Fatalf("Unmarshal builtin Tool fields: %v", err)
+	}
+	for _, key := range []string{"command", "input_schema", "output_schema", "tokens", "description", "status"} {
+		if _, ok := builtinFields[key]; ok {
+			t.Errorf("serialized builtin Tool should omit %q: %s", key, builtinRaw)
+		}
+	}
+	if _, ok := builtinFields["annotations"]; !ok {
+		t.Errorf("serialized builtin Tool should include annotations: %s", builtinRaw)
+	}
+	testJSONRoundTrip(t, builtin)
+}
+
 func testJSONRoundTrip[T any](t *testing.T, original T) {
 	t.Helper()
 	data, err := json.Marshal(original)

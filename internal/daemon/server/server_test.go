@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -47,6 +48,9 @@ type mockBackend struct {
 	skillErr          error
 	rulesResp         []api.Rule
 	rulesErr          error
+	toolsResp         []api.Tool
+	toolsErr          error
+	toolsAgent        string
 	modelsResp        []api.Model
 	modelsErr         error
 	modelResp         *api.Model
@@ -157,6 +161,11 @@ func (m *mockBackend) GetSkill(ctx context.Context, workspace, name string) (*ap
 
 func (m *mockBackend) ListRules(ctx context.Context, workspace string) ([]api.Rule, error) {
 	return m.rulesResp, m.rulesErr
+}
+
+func (m *mockBackend) ListTools(ctx context.Context, workspace, agent string) ([]api.Tool, error) {
+	m.toolsAgent = agent
+	return m.toolsResp, m.toolsErr
 }
 
 func (m *mockBackend) ListModels(ctx context.Context, workspace string) ([]api.Model, error) {
@@ -418,6 +427,72 @@ func TestWorkspaceRouterEndpoints(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("delete permission rule status = %d", rec.Code)
+	}
+}
+
+func TestWorkspaceRouterToolsEndpoint(t *testing.T) {
+	mock := &mockBackend{
+		toolsResp: []api.Tool{
+			{
+				Name:        "view",
+				DisplayName: "View File",
+				Namespace:   "system",
+				Scope:       "Builtin",
+				Annotations: api.ToolAnnotation{IsReadOnly: true, IsIdempotent: true},
+				Tokens:      180,
+			},
+			{
+				Name:        "linter",
+				Description: "Lint the workspace",
+				Namespace:   "workspace",
+				Scope:       "Workspace",
+				Command:     []string{"golangci-lint", "run"},
+				Annotations: api.ToolAnnotation{IsDangerous: true, UserHint: "Lint workspace"},
+				Status:      api.ToolStatusDeferred,
+			},
+		},
+	}
+	handler := setupTestServer(mock)
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/workspace/tools?agent=main", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list tools status = %d, want 200", rec.Code)
+	}
+	if mock.toolsAgent != "main" {
+		t.Errorf("agent query param = %q, want main", mock.toolsAgent)
+	}
+	var tools []api.Tool
+	if err := json.Unmarshal(rec.Body.Bytes(), &tools); err != nil {
+		t.Fatalf("unmarshal tools: %v", err)
+	}
+	if len(tools) != 2 || tools[0].Name != "view" || tools[1].Name != "linter" {
+		t.Fatalf("tools = %+v", tools)
+	}
+	if tools[0].Scope != "Builtin" || !tools[0].Annotations.IsReadOnly || tools[0].Tokens != 180 {
+		t.Errorf("tools[0] = %+v", tools[0])
+	}
+	if !slices.Equal(tools[1].Command, []string{"golangci-lint", "run"}) || !tools[1].Annotations.IsDangerous {
+		t.Errorf("tools[1] = %+v", tools[1])
+	}
+	if tools[1].Status != api.ToolStatusDeferred {
+		t.Errorf("tools[1].Status = %q, want %q", tools[1].Status, api.ToolStatusDeferred)
+	}
+
+	// Backend failures surface as an API error envelope.
+	mock.toolsErr = &api.APIError{StatusCode: http.StatusInternalServerError, Code: "internal", Message: "workspace unavailable"}
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/workspace/tools", nil))
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("list tools error status = %d, want 500", rec.Code)
+	}
+	var errResp api.ErrorResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &errResp); err != nil {
+		t.Fatalf("unmarshal error response: %v", err)
+	}
+	if errResp.Code != "internal" {
+		t.Errorf("error code = %q, want internal", errResp.Code)
 	}
 }
 

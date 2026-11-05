@@ -113,6 +113,7 @@ func InitSession(ctx context.Context, c *client.Client, opts InitSessionOptions)
 	if loaded, err := c.GetWorkspace(subCtx); err == nil {
 		ws = loaded
 		SetWorkspaceWarnings(ws.Warnings)
+		SetDefaultAgent(strings.TrimSpace(ws.DefaultAgent))
 	}
 	if cmds, err := c.ListCommands(subCtx); err == nil {
 		SetWorkspaceCommands(cmds)
@@ -155,6 +156,10 @@ func InitSession(ctx context.Context, c *client.Client, opts InitSessionOptions)
 			updateDraftModel(subCtx, c, cfg)
 		}
 	}
+
+	// Tool statuses depend on the effective agent, which is only known once the
+	// session config and workspace default agent are resolved.
+	refreshWorkspaceTools(subCtx, c, effectiveToolAgent())
 
 	if sid != "" && sess != nil {
 		FreezeTranscript()
@@ -968,12 +973,66 @@ func isDaemonHealthy(ctx context.Context, c *client.Client) bool {
 	return err == nil
 }
 
+// effectiveToolAgent returns the agent whose tool statuses should be cached:
+// the active session's agent, falling back to the draft config agent and then
+// the workspace default agent.
+func effectiveToolAgent() string {
+	st := GetSession()
+	if agent := strings.TrimSpace(st.Config.Agent); agent != "" {
+		return agent
+	}
+	return strings.TrimSpace(GetApp().DefaultAgent)
+}
+
+// RefreshWorkspaceTools fetches the workspace tools classified for agent using
+// the active client and caches them in AppState. It returns the number of
+// cached tools, and is a no-op when the cache already holds tools for that
+// agent.
+func RefreshWorkspaceTools(ctx context.Context, agent string) (int, error) {
+	return refreshWorkspaceToolsForce(ctx, Client(), agent, false)
+}
+
+// refreshWorkspaceTools fetches the workspace tools classified for agent and
+// caches them in AppState. The fetch is skipped when the cache already holds
+// tools for the same agent, unless force is true.
+func refreshWorkspaceTools(ctx context.Context, c *client.Client, agent string) {
+	_, _ = refreshWorkspaceToolsForce(ctx, c, agent, false)
+}
+
+func refreshWorkspaceToolsForce(ctx context.Context, c *client.Client, agent string, force bool) (int, error) {
+	if c == nil {
+		return 0, errors.New("no daemon connection")
+	}
+	// The recorded agent plus the fetched flag form the freshness key: an empty
+	// toolset is a valid cached result and must not trigger a re-fetch.
+	if appState := GetApp(); !force && appState.ToolsFetched && appState.ToolsAgent == agent {
+		return 0, nil
+	}
+	tools, err := c.ListTools(ctx, agent)
+	if err != nil {
+		if agent == "" {
+			return 0, err
+		}
+		// An agent the daemon no longer resolves would otherwise leave the tool
+		// browser empty, so fall back to the unclassified workspace listing while
+		// still marking the cache as belonging to the requested agent.
+		unscoped, fallbackErr := c.ListTools(ctx, "")
+		if fallbackErr != nil {
+			return 0, err
+		}
+		tools = unscoped
+	}
+	SetWorkspaceTools(tools, agent)
+	return len(tools), nil
+}
+
 func resyncDaemonState(ctx context.Context, c *client.Client) {
 	if c == nil {
 		return
 	}
 	if ws, err := c.GetWorkspace(ctx); err == nil && ws != nil {
 		SetWorkspaceWarnings(ws.Warnings)
+		SetDefaultAgent(strings.TrimSpace(ws.DefaultAgent))
 	}
 	if cmds, err := c.ListCommands(ctx); err == nil {
 		SetWorkspaceCommands(cmds)
@@ -987,6 +1046,7 @@ func resyncDaemonState(ctx context.Context, c *client.Client) {
 	if agents, err := c.ListAgents(ctx); err == nil {
 		SetWorkspaceAgents(agents)
 	}
+	refreshWorkspaceTools(ctx, c, effectiveToolAgent())
 
 	sessMu.Lock()
 	sess := GetSession().Session
@@ -1476,6 +1536,7 @@ func ReloadWorkspace(ctx context.Context) error {
 	}
 	if ws, err := c.GetWorkspace(ctx); err == nil {
 		SetWorkspaceWarnings(ws.Warnings)
+		SetDefaultAgent(strings.TrimSpace(ws.DefaultAgent))
 	}
 	state := GetSession()
 	if state.Session == nil {
@@ -1483,5 +1544,6 @@ func ReloadWorkspace(ctx context.Context) error {
 	} else if updated, err := c.GetSession(ctx, state.Session.ID); err == nil && updated != nil {
 		SetSession(updated)
 	}
+	_, _ = refreshWorkspaceToolsForce(ctx, c, effectiveToolAgent(), true)
 	return nil
 }

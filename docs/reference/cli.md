@@ -74,6 +74,7 @@ Inside the TaskSmith interactive REPL, slash commands provide instant control ov
 | **`/usage`** | | `[session\|workspace\|global]` | Opens the usage browser slot on the Session, Workspace or Global tab (default: Session). See [Usage Browser](#usage-browser-usage). |
 | **`/skills`** | | *(none)* | Opens the interactive skills browser to inspect runbooks, token estimates, and reload workspace skills. |
 | **`/rules`** | | *(none)* | Opens the interactive rules browser to inspect rule status, scope, triggers, and token estimates, and to reload workspace rules. |
+| **`/tools`** | | *(none)* | Opens the interactive tools browser to inspect tool status, scope, safety annotations, and JSON schemas, and to reload workspace tools. See [Tools Browser](#tools-browser-tools). |
 | **`/workspace`** | `/ws` | `[reload]` | Reloads the active workspace resources from disk. With no subcommand, defaults to `reload`. |
 | **`/daemon`** | | `[status\|restart\|start\|stop]` | Inspects or manages the background Brain Daemon. With no subcommand, opens the interactive daemon browser. |
 
@@ -237,6 +238,30 @@ Columns are Name, Status (`[Always]`, `[Loaded]`, or `[Standby]`), Scope (`[Work
 | `Home` / `End` or `g` / `G` | Rule Inspector | Scrolls to the top or bottom of the rule body. |
 | `Enter` | Rule Inspector | Closes the browser and submits `@rule:<name> ` to attach the rule to the next prompt. |
 | `Esc` | Rule Inspector | Returns to the rules list. |
+
+### Tools Browser (`/tools`)
+
+| Keybinding | Scope | Action |
+| :--- | :--- | :--- |
+| `↑` / `↓` or `k` / `j` | Tools Browser | Moves the highlighted tool. |
+| `Enter` / `i` | Tools Browser | Opens the tool inspector for the highlighted tool. |
+| `r` | Tools Browser | Reloads workspace resources from disk and refreshes the tool list. |
+| `Esc` | Tools Browser | Closes the tools browser and returns to composer. |
+
+Columns are Name, Status (`[Eager]`, `[Deferred]`, `[Denied]`, `[Inactive]`, or `[—]`), Scope (`[Workspace]`, `[Project]`, `[User]`, or `[Builtin]`), safety annotations (`[ReadOnly]`, `[Dangerous]`, `[OpenWorld]`), and description. Statuses are resolved for the active agent — falling back to the workspace default agent — so the same tool can be `[Eager]` for one agent and `[Deferred]` for another. `[—]` is shown when the daemon could not classify tools for an agent and the unclassified workspace listing is displayed instead. See [Tool Partitioning](tools.md#5-tool-partitioning-eager-vs-deferred) for what each status means.
+
+`/tools` takes no arguments; passing any is rejected before the browser opens.
+
+### Tool Inspector
+
+| Keybinding | Scope | Action |
+| :--- | :--- | :--- |
+| `↑` / `↓` or `k` / `j` | Tool Inspector | Scrolls the tool detail by 1 line. |
+| `PgUp` / `PgDn` or `Ctrl+U` / `Ctrl+D` / `b` / `f` | Tool Inspector | Scrolls the tool detail by 8 lines. |
+| `Home` / `End` or `g` / `G` | Tool Inspector | Scrolls to the top or bottom of the tool detail. |
+| `Esc` | Tool Inspector | Returns to the tools list. |
+
+The inspector shows the tool name with its scope, status, and estimated token cost, followed by its description, `Command` (rendered argv, or `—` when the tool declares no command), `Annotations` (including `[Idempotent]` and the approval `userHint`), and pretty-printed `inputSchema` / `outputSchema` JSON blocks (`— (no schema declared)` when absent).
 
 ---
 

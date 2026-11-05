@@ -711,3 +711,88 @@ func TestSessionContextStateAndHelpers(t *testing.T) {
 		t.Errorf("expected 'Nothing to compact' notice, got %+v", lastItem.Data)
 	}
 }
+
+// The tool cache is keyed on the agent the statuses were classified for, and an
+// agent-scoped listing that the daemon cannot serve must still leave the browser
+// usable instead of retry-looping.
+func TestRefreshWorkspaceToolsCachingAndFallback(t *testing.T) {
+	ResetApp()
+	t.Cleanup(ResetApp)
+
+	var requests []string
+	newClient := func(t *testing.T, scopedOK bool) *client.Client {
+		t.Helper()
+		rt := &mockSessionRoundTripper{handler: func(req *http.Request) (*http.Response, error) {
+			if req.URL.Path != "/v1/workspace/tools" {
+				t.Fatalf("unexpected request path: %s", req.URL.Path)
+			}
+			agent := req.URL.Query().Get("agent")
+			requests = append(requests, agent)
+			if agent != "" && !scopedOK {
+				return &http.Response{
+					StatusCode: http.StatusNotFound,
+					Body:       io.NopCloser(strings.NewReader(`{"error":{"code":"not_found","message":"agent not found"}}`)),
+					Header:     make(http.Header),
+				}, nil
+			}
+			payload, _ := json.Marshal([]api.Tool{{Name: "view", Status: api.ToolStatusEager}})
+			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(bytes.NewReader(payload)), Header: make(http.Header)}, nil
+		}}
+		c, err := client.New("/tmp/dummy.sock", client.WithCWD("/workspace"), client.WithHTTPClient(&http.Client{Transport: rt}))
+		if err != nil {
+			t.Fatalf("client.New: %v", err)
+		}
+		return c
+	}
+
+	// A fresh cache for the requested agent skips the fetch entirely.
+	SetWorkspaceTools([]api.Tool{{Name: "cached"}}, "main")
+	if count, err := refreshWorkspaceToolsForce(context.Background(), newClient(t, true), "main", false); err != nil || count != 0 {
+		t.Fatalf("fresh cache refresh = (%d, %v), want (0, nil)", count, err)
+	}
+	if len(requests) != 0 {
+		t.Fatalf("fresh cache triggered %d requests, want none", len(requests))
+	}
+
+	// A different agent triggers a scoped fetch that replaces the cache.
+	count, err := refreshWorkspaceToolsForce(context.Background(), newClient(t, true), "reviewer", false)
+	if err != nil || count != 1 {
+		t.Fatalf("agent refresh = (%d, %v), want (1, nil)", count, err)
+	}
+	app := GetApp()
+	if app.ToolsAgent != "reviewer" || app.Tools == nil || len(*app.Tools) != 1 {
+		t.Fatalf("unexpected cache after scoped fetch: agent=%q tools=%v", app.ToolsAgent, app.Tools)
+	}
+
+	// An unresolvable agent falls back to the unscoped catalog but keeps the
+	// requested agent as the cache label so the browser stops retrying.
+	ResetApp()
+	count, err = refreshWorkspaceToolsForce(context.Background(), newClient(t, false), "ghost", false)
+	if err != nil {
+		t.Fatalf("fallback refresh: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("fallback refresh count = %d, want 1", count)
+	}
+	app = GetApp()
+	if app.ToolsAgent != "ghost" || app.Tools == nil || len(*app.Tools) != 1 {
+		t.Fatalf("unexpected cache after fallback: agent=%q tools=%v", app.ToolsAgent, app.Tools)
+	}
+	if !app.ToolsFetched {
+		t.Fatal("expected fallback to mark the tools as fetched")
+	}
+
+	// Forcing a refresh bypasses the fresh-cache check.
+	before := len(requests)
+	if _, err := refreshWorkspaceToolsForce(context.Background(), newClient(t, true), "ghost", true); err != nil {
+		t.Fatalf("forced refresh: %v", err)
+	}
+	if len(requests) <= before {
+		t.Fatal("forced refresh did not hit the daemon")
+	}
+
+	// Without a client the refresh reports the missing connection.
+	if _, err := refreshWorkspaceToolsForce(context.Background(), nil, "main", true); err == nil {
+		t.Fatal("expected error when no daemon connection is available")
+	}
+}

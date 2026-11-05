@@ -6,7 +6,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"maps"
+	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/google/jsonschema-go/jsonschema"
@@ -14,15 +17,27 @@ import (
 	"github.com/masterkeysrd/loom/tool"
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/sandbox"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/workspace"
 	"github.com/masterkeysrd/warp"
 )
 
+// reTemplateAction matches an explicit Go template action ({{ ... }}) authored in
+// a custom tool's spec.command element.
+var reTemplateAction = regexp.MustCompile(`\{\{[^{}]*\}\}`)
+
+// customTool executes a custom workspace tool declared as a warp.Tool carrying a
+// spec.command. It is deliberately a black box: its security posture comes only
+// from the manifest's declarative spec.annotations, and its arguments reach the
+// process either as rendered command-line templates or as JSON on stdin.
 type customTool struct {
 	def                 tool.Definition
 	resolvedInputSchema *jsonschema.Resolved
 	command             []string
 	env                 map[string]string
 	sandbox             sandbox.Sandbox
+	wsTool              *warp.Tool
+	workspace           *workspace.Workspace
+	agent               *warp.Agent
 }
 
 func (c *container) registerCustomTools() error {
@@ -62,14 +77,6 @@ func (c *container) buildCustomTool(wsTool *warp.Tool) (Tool, error) {
 	title := wsTool.Metadata.DisplayName
 	if title == "" {
 		title = wsTool.Metadata.Name
-	}
-
-	desc := wsTool.Spec.Instructions
-	if desc == "" {
-		desc = wsTool.Metadata.Description
-	}
-	if desc == "" {
-		desc = fmt.Sprintf("Custom workspace tool %s", wsTool.Metadata.Name)
 	}
 
 	var ann tool.Annotation
@@ -133,20 +140,33 @@ func (c *container) buildCustomTool(wsTool *warp.Tool) (Tool, error) {
 		envMap = maps.Clone(wsTool.Spec.Env)
 	}
 
-	return &customTool{
-		def: tool.Definition{
-			Name:         wsTool.Metadata.Name,
-			Title:        title,
-			Description:  desc,
-			Annotation:   ann,
-			InputSchema:  inputSchema,
-			OutputSchema: outputSchema,
-		},
+	ct := &customTool{
 		resolvedInputSchema: resolvedInput,
 		command:             cmdSlice,
 		env:                 envMap,
 		sandbox:             c.sandbox,
-	}, nil
+		wsTool:              wsTool,
+		workspace:           c.workspace,
+		agent:               c.agent,
+	}
+
+	desc := ct.renderInstructions()
+	if desc == "" {
+		desc = wsTool.Metadata.Description
+	}
+	if desc == "" {
+		desc = fmt.Sprintf("Custom workspace tool %s", wsTool.Metadata.Name)
+	}
+
+	ct.def = tool.Definition{
+		Name:         wsTool.Metadata.Name,
+		Title:        title,
+		Description:  desc,
+		Annotation:   ann,
+		InputSchema:  inputSchema,
+		OutputSchema: outputSchema,
+	}
+	return ct, nil
 }
 
 func (ct *customTool) Name() string {
@@ -159,6 +179,102 @@ func (ct *customTool) Definition() tool.Definition {
 
 func (ct *customTool) SetDeferLoading(deferLoading bool) {
 	ct.def.DeferLoading = deferLoading
+}
+
+// renderOptions builds the WARP render context from the active workspace, its
+// project scope, the invoking agent, and the current call arguments under Input.
+func (ct *customTool) renderOptions(args map[string]any) *warp.ToolRenderOptions {
+	opts := &warp.ToolRenderOptions{Agent: ct.agent, Input: args}
+	if ct.workspace != nil {
+		if cat := ct.workspace.Catalog(); cat != nil {
+			opts.Workspace = cat.WorkspaceSpec()
+			opts.Project = cat.Project()
+		}
+	}
+	return opts
+}
+
+// renderInstructions renders the manifest body so instruction templates can
+// reference the workspace, project, and invoking agent. Instructions that
+// interpolate per-call arguments are left raw, because the definition is built
+// once per session rather than per call. A template failure degrades to the raw
+// instructions rather than dropping the tool.
+func (ct *customTool) renderInstructions() string {
+	if ct.wsTool == nil {
+		return ""
+	}
+	raw := strings.TrimSpace(ct.wsTool.Spec.Instructions)
+	if raw == "" || !commandUsesTemplates([]string{raw}) {
+		return raw
+	}
+	rendered, err := ct.wsTool.Render(ct.renderOptions(nil))
+	if err != nil || strings.Contains(rendered, "<no value>") {
+		return raw
+	}
+	return strings.TrimSpace(rendered)
+}
+
+// commandUsesTemplates reports whether the manifest authored an explicit Go
+// template action in any command element. Shell-style $VAR references alone are
+// not templates, so ordinary CLI scripts keep receiving their own environment.
+func commandUsesTemplates(command []string) bool {
+	return slices.ContainsFunc(command, func(part string) bool {
+		return strings.Contains(part, "{{")
+	})
+}
+
+// commandConsumesArgs reports whether a call argument is consumed as a command
+// template parameter, either through {{.Input.<field>}} or through the top-level
+// {{.<field>}} shorthand WARP exposes for the same values. When no argument is
+// consumed, the arguments are piped as JSON on stdin instead.
+func commandConsumesArgs(command []string, args map[string]any) bool {
+	for _, part := range command {
+		for _, action := range reTemplateAction.FindAllString(part, -1) {
+			if strings.Contains(action, ".Input") {
+				return true
+			}
+			for key := range args {
+				if key != "" && strings.Contains(action, "."+key) {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+// renderCommand resolves the argv to execute for args. It also reports whether an
+// argument was consumed as a template parameter, which decides how the arguments
+// are delivered to the process.
+func (ct *customTool) renderCommand(args map[string]any) ([]string, bool, error) {
+	if len(ct.command) == 0 {
+		return nil, false, fmt.Errorf("tools: custom tool %q declares no spec.command", ct.def.Name)
+	}
+
+	consumesArgs := commandConsumesArgs(ct.command, args)
+	if ct.wsTool == nil || !commandUsesTemplates(ct.command) {
+		return slices.Clone(ct.command), consumesArgs, nil
+	}
+
+	rendered, err := ct.wsTool.RenderCommand(ct.renderOptions(args))
+	if err != nil {
+		return nil, false, fmt.Errorf("tools: render custom tool %q command: %w", ct.def.Name, err)
+	}
+	if len(rendered) == 0 || strings.TrimSpace(rendered[0]) == "" {
+		return nil, false, fmt.Errorf("tools: custom tool %q rendered an empty executable", ct.def.Name)
+	}
+	// WARP renders a missing template value as a placeholder instead of failing.
+	// Passing that placeholder through would hand the CLI a bogus literal, so it
+	// is surfaced as a validation error the model can correct and retry.
+	for _, part := range rendered {
+		if strings.Contains(part, "<no value>") {
+			return nil, false, &tool.ValidationError{
+				ToolName: ct.def.Name,
+				Err:      errors.New("command template referenced an argument that was not provided"),
+			}
+		}
+	}
+	return rendered, consumesArgs, nil
 }
 
 func (ct *customTool) validateArgs(args map[string]any) (map[string]any, error) {
@@ -177,30 +293,38 @@ func (ct *customTool) Prepare(ctx context.Context, args map[string]any) (*Plan, 
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if _, err := ct.validateArgs(args); err != nil {
+	validated, err := ct.validateArgs(args)
+	if err != nil {
 		return nil, err
 	}
 
+	argv, _, err := ct.renderCommand(validated)
+	if err != nil {
+		return nil, err
+	}
+
+	// The security posture is taken verbatim from the manifest annotations; no
+	// path or risk is guessed from argument key names.
 	action := api.ActionExec
 	safety := api.SafetyUnknown
 	readOnly := false
 
 	ann := ct.def.Annotation
-	if ann.IsReadOnly {
+	switch {
+	case ann.IsDangerous:
+		action = api.ActionExec
+		safety = api.SafetyUnsafe
+	case ann.IsReadOnly:
 		action = api.ActionRead
 		readOnly = true
-		if !ann.IsOpenWorld && !ann.IsDangerous {
+		if !ann.IsOpenWorld {
 			safety = api.SafetySafe
 		}
-	} else if ann.IsOpenWorld && !ann.IsDangerous {
+	case ann.IsOpenWorld:
 		action = api.ActionNet
 	}
-	if ann.IsDangerous {
-		safety = api.SafetyUnsafe
-		readOnly = false
-	}
 
-	target := strings.Join(ct.command, " ")
+	target := strings.Join(argv, " ")
 	summary := fmt.Sprintf("Run custom tool: %s", ct.def.Name)
 	if ann.UserHint != "" {
 		if strings.Contains(ann.UserHint, "%s") {
@@ -242,19 +366,31 @@ func (ct *customTool) Execute(ctx context.Context, call *message.ToolCall) (*mes
 		return nil, err
 	}
 
-	inputBytes, err := json.Marshal(args)
+	argv, consumesArgs, err := ct.renderCommand(args)
 	if err != nil {
-		return nil, fmt.Errorf("marshal custom tool args: %w", err)
+		return nil, err
+	}
+
+	// Arguments reach the process in exactly one way: as rendered command-line
+	// arguments when the author embedded them in spec.command, or as the complete
+	// JSON payload on stdin for plain CLI scripts.
+	var stdin io.Reader
+	if !consumesArgs {
+		inputBytes, err := json.Marshal(args)
+		if err != nil {
+			return nil, fmt.Errorf("marshal custom tool args: %w", err)
+		}
+		stdin = bytes.NewReader(inputBytes)
 	}
 
 	w := NewSpillWriter(ctx)
 	defer w.Close()
 
 	cmd := sandbox.Command{
-		Name:   ct.command[0],
-		Args:   ct.command[1:],
+		Name:   argv[0],
+		Args:   argv[1:],
 		Env:    ct.env,
-		Stdin:  bytes.NewReader(inputBytes),
+		Stdin:  stdin,
 		Stdout: w,
 	}
 

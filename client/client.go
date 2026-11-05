@@ -276,6 +276,24 @@ func (c *Client) ListRules(ctx context.Context) ([]api.Rule, error) {
 	return out, nil
 }
 
+// ListTools returns all effective built-in and custom tool resources in the
+// workspace. When agent is not empty, each tool's Status is classified for that
+// agent (eager, deferred, denied, or inactive).
+func (c *Client) ListTools(ctx context.Context, agent string) ([]api.Tool, error) {
+	if err := c.requireCWD(); err != nil {
+		return nil, err
+	}
+	path := "/v1/workspace/tools"
+	if agent = strings.TrimSpace(agent); agent != "" {
+		path += "?agent=" + url.QueryEscape(agent)
+	}
+	var out []api.Tool
+	if err := c.doJSON(ctx, http.MethodGet, path, nil, nil, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // ListModels returns all resolved models across providers in the workspace.
 func (c *Client) ListModels(ctx context.Context) ([]api.Model, error) {
 	if err := c.requireCWD(); err != nil {
