@@ -236,10 +236,12 @@ func (m *manager) Attach(mode api.PermissionMode, initial api.Permissions, onUpd
 		mode = api.ModeDefault
 	}
 	return &sessionManager{
-		manager:     m,
-		ws:          m.ws,
-		mode:        mode,
-		permissions: initial.Clone(),
-		onUpdate:    onUpdate,
+		sessionState: &sessionState{
+			manager:     m,
+			ws:          m.ws,
+			mode:        mode,
+			permissions: initial.Clone(),
+			onUpdate:    onUpdate,
+		},
 	}
 }

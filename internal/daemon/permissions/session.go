@@ -23,6 +23,7 @@ type SessionManager interface {
 	SetPolicies(p *warp.Policies)
 	AgentPolicies() *warp.Policies
 	SetAgentPolicies(p *warp.Policies)
+	ForSubagent() SessionManager
 	AddAllow(rule string) error
 	AddDeny(rule string) error
 	Clear() error
@@ -30,15 +31,20 @@ type SessionManager interface {
 	Evaluate(plan *tools.Plan) (tools.AccessDecision, *api.PermissionRequest, error)
 }
 
+type sessionState struct {
+	mu          sync.RWMutex
+	manager     Manager
+	ws          *workspace.Workspace
+	mode        api.PermissionMode
+	permissions api.Permissions
+	policies    *warp.Policies
+	onUpdate    func(api.Permissions) error
+}
+
 type sessionManager struct {
-	mu            sync.RWMutex
-	manager       Manager
-	ws            *workspace.Workspace
-	mode          api.PermissionMode
-	permissions   api.Permissions
-	policies      *warp.Policies
+	*sessionState
+	agentMu       sync.RWMutex
 	agentPolicies *warp.Policies
-	onUpdate      func(api.Permissions) error
 }
 
 var _ SessionManager = (*sessionManager)(nil)
@@ -49,9 +55,11 @@ func NewSession(mode api.PermissionMode, initial api.Permissions, onUpdate func(
 		mode = api.ModeDefault
 	}
 	return &sessionManager{
-		mode:        mode,
-		permissions: initial.Clone(),
-		onUpdate:    onUpdate,
+		sessionState: &sessionState{
+			mode:        mode,
+			permissions: initial.Clone(),
+			onUpdate:    onUpdate,
+		},
 	}
 }
 
@@ -104,16 +112,25 @@ func (s *sessionManager) SetPolicies(p *warp.Policies) {
 
 // AgentPolicies returns the active agent's tool policies (ceiling) configured on s.
 func (s *sessionManager) AgentPolicies() *warp.Policies {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	s.agentMu.RLock()
+	defer s.agentMu.RUnlock()
 	return s.agentPolicies
 }
 
 // SetAgentPolicies overrides the active agent's tool policies evaluated by s.
 func (s *sessionManager) SetAgentPolicies(p *warp.Policies) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.agentMu.Lock()
+	defer s.agentMu.Unlock()
 	s.agentPolicies = p
+}
+
+// ForSubagent returns a child [SessionManager] that shares the receiver's
+// permission mode, workspace policies, and session-scoped allow/deny rules
+// while isolating its active agent tool policy ceiling.
+func (s *sessionManager) ForSubagent() SessionManager {
+	return &sessionManager{
+		sessionState: s.sessionState,
+	}
 }
 
 func (s *sessionManager) addRule(effect api.PermissionEffect, rule string) error {

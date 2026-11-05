@@ -79,7 +79,9 @@
 // # Integration
 //
 // [github.com/masterkeysrd/tasksmith/internal/daemon/session.Session] holds a
-// [Manager] and attaches a [SessionManager] per session (via [Manager.Attach]),
-// which the [github.com/masterkeysrd/tasksmith/internal/daemon/harness] graph
-// consumes as its permission gate through [SessionManager.Evaluate].
+// [Manager] and attaches a [SessionManager] per root session (via [Manager.Attach],
+// or derives an isolated agent-policy view for delegated subagents via
+// [SessionManager.ForSubagent]), which the
+// [github.com/masterkeysrd/tasksmith/internal/daemon/harness] graph consumes as
+// its permission gate through [SessionManager.Evaluate].
 package permissions

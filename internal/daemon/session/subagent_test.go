@@ -18,6 +18,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/daemon/gateway"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/harness"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/permissions"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/tools"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/workspace"
 )
 
@@ -152,9 +153,18 @@ func TestSessionChildManagement(t *testing.T) {
 		t.Fatalf("New child1 failed: %v", err)
 	}
 
-	// Check shared PermManager
-	if child1.PermManager != parent.PermManager {
-		t.Errorf("child.PermManager (%v) != parent.PermManager (%v)", child1.PermManager, parent.PermManager)
+	// Check shared PermManager state with isolated AgentPolicies view.
+	if child1.PermManager == nil {
+		t.Fatalf("expected non-nil child.PermManager")
+	}
+	if child1.PermManager == parent.PermManager {
+		t.Errorf("expected child.PermManager to be a scoped ForSubagent view, got identical pointer")
+	}
+	if err := parent.PermManager.AddAllow("bash(go test *)"); err != nil {
+		t.Fatalf("parent.PermManager.AddAllow: %v", err)
+	}
+	if got := child1.PermManager.Permissions().Allow; len(got) != 1 || got[0] != "bash(go test *)" {
+		t.Errorf("expected child.PermManager to share session allow rules with parent, got %v", got)
 	}
 
 	parent.AddChild(child1)
@@ -740,5 +750,69 @@ func TestUpdateActivityFromThoughtAndGenerating(t *testing.T) {
 	child.Unlock()
 	if genAct != "Generating" {
 		t.Fatalf("expected child Activity 'Generating', got %q", genAct)
+	}
+}
+
+func TestInvokeSubagentDoesNotLeakAgentPoliciesToParent(t *testing.T) {
+	ctx := context.Background()
+	prov := &fakeProvider{
+		handler: func(_ context.Context, _ *llm.Request) ([]string, string, error) {
+			return []string{"Exploration finished"}, uuid.NewString(), nil
+		},
+	}
+
+	db, ws, gw, pub, mgr := setupTestEnv(t, prov)
+	t.Cleanup(func() { _ = mgr.Close() })
+
+	parent, err := New(ctx, Config{
+		ID:          uuid.NewString(),
+		Title:       "Main Parent Session",
+		Session:     api.SessionConfig{Agent: "main", Mode: api.ModeAuto},
+		DB:          db,
+		Workspace:   ws,
+		Gateway:     func() gateway.Gateway { return gw },
+		Permissions: wsPermManager(t, ws),
+		Publisher:   pub,
+		Logger:      log.Default(),
+	})
+	if err != nil {
+		t.Fatalf("New parent failed: %v", err)
+	}
+	defer func() { _ = parent.Close() }()
+
+	bashPlan := &tools.Plan{ToolName: "bash", Action: api.ActionExec, Safety: api.SafetySafe, Target: "go version"}
+	invokePlan := &tools.Plan{ToolName: "invoke_agent", Action: api.ActionRead, Safety: api.SafetySafe, Target: "general", ReadOnly: true}
+
+	if dec, _, err := parent.PermManager.Evaluate(bashPlan); err != nil || dec != tools.AccessAllow {
+		t.Fatalf("expected parent to allow bash before spawning explore, got %v (err=%v)", dec, err)
+	}
+
+	out, err := parent.InvokeSubagent(ctx, api.InvokeAgentInput{
+		Agent:  "explore",
+		Title:  "Explore workspace",
+		Prompt: "Inspect files",
+	})
+	if err != nil {
+		t.Fatalf("InvokeSubagent failed: %v", err)
+	}
+
+	child, ok := parent.Child(out.SessionID)
+	if !ok {
+		t.Fatalf("child session %q not found", out.SessionID)
+	}
+	_ = child.Wait(ctx)
+	_ = parent.Wait(ctx)
+
+	// Child (explore) must deny bash due to explore's agent policy ceiling.
+	if dec, _, err := child.PermManager.Evaluate(bashPlan); err != nil || dec != tools.AccessDeny {
+		t.Fatalf("expected explore child to deny bash, got %v (err=%v)", dec, err)
+	}
+
+	// Parent (main) must still allow bash and invoke_agent after spawning explore.
+	if dec, _, err := parent.PermManager.Evaluate(bashPlan); err != nil || dec != tools.AccessAllow {
+		t.Fatalf("expected parent to still allow bash after spawning explore, got %v (err=%v)", dec, err)
+	}
+	if dec, _, err := parent.PermManager.Evaluate(invokePlan); err != nil || dec != tools.AccessAllow {
+		t.Fatalf("expected parent to still allow invoke_agent after spawning explore, got %v (err=%v)", dec, err)
 	}
 }

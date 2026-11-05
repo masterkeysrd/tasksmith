@@ -831,3 +831,60 @@ func TestSessionManagerAgentPolicyNarrowing(t *testing.T) {
 		t.Fatalf("expected agent allow to not widen workspace ask, got %s, %+v", dec, req)
 	}
 }
+
+// TestSessionManagerForSubagentIsolatesAgentPolicies verifies that ForSubagent
+// shares session mode, workspace policies, and allow/deny rules with the parent
+// SessionManager while isolating SetAgentPolicies per subagent.
+func TestSessionManagerForSubagentIsolatesAgentPolicies(t *testing.T) {
+	_, ws := setupTestWorkspace(t)
+	mgr, err := permissions.New(permissions.Config{
+		Workspace:  ws,
+		GlobalPath: filepath.Join(t.TempDir(), "global.json"),
+	})
+	if err != nil {
+		t.Fatalf("permissions.New: %v", err)
+	}
+
+	parent := mgr.Attach(api.ModeAuto, api.Permissions{}, nil)
+	child := parent.ForSubagent()
+
+	// Child restricts tools to view only (excluding bash), simulating explore.
+	child.SetAgentPolicies(&warp.Policies{
+		Tools: &warp.ToolPolicies{
+			Include: []string{"view"},
+			Exclude: []string{"bash"},
+		},
+	})
+
+	bashPlan := &tools.Plan{ToolName: "bash", Action: api.ActionExec, Safety: api.SafetySafe, Target: "go version"}
+	viewPlan := &tools.Plan{ToolName: "view", Action: api.ActionRead, Safety: api.SafetySafe, Target: "README.md", ReadOnly: true}
+
+	// Child denies bash and allows view.
+	if dec, _, _ := child.Evaluate(bashPlan); dec != tools.AccessDeny {
+		t.Fatalf("expected child to deny bash under explore agent policies, got %s", dec)
+	}
+	if dec, _, _ := child.Evaluate(viewPlan); dec != tools.AccessAllow {
+		t.Fatalf("expected child to allow view, got %s", dec)
+	}
+
+	// Parent must still allow bash because its agentPolicies were not mutated by child.
+	if parent.AgentPolicies() != nil {
+		t.Fatalf("expected parent AgentPolicies to remain nil, got %+v", parent.AgentPolicies())
+	}
+	if dec, _, _ := parent.Evaluate(bashPlan); dec != tools.AccessAllow {
+		t.Fatalf("expected parent to still allow bash in ModeAuto, got %s", dec)
+	}
+
+	// Session-scoped rules and mode changes remain shared between parent and child.
+	if err := child.AddAllow("view(README.md)"); err != nil {
+		t.Fatalf("child.AddAllow: %v", err)
+	}
+	if got := parent.Permissions().Allow; len(got) != 1 || got[0] != "view(README.md)" {
+		t.Fatalf("expected parent to see shared allow rule from child, got %v", got)
+	}
+
+	parent.SetMode(api.ModeAsk)
+	if got := child.Mode(); got != api.ModeAsk {
+		t.Fatalf("expected child mode to reflect parent SetMode, got %q", got)
+	}
+}

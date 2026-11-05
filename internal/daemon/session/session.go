@@ -487,8 +487,8 @@ func (s *Session) initSubsystems(ctx context.Context, db *sql.DB) error {
 	}
 	s.Tools = container
 
-	if s.parent != nil {
-		s.PermManager = s.parent.PermManager
+	if s.parent != nil && s.parent.PermManager != nil {
+		s.PermManager = s.parent.PermManager.ForSubagent()
 	} else {
 		s.PermManager = s.permRoot.Attach(s.Config.Mode, s.Permissions, func(p api.Permissions) error {
 			s.Lock()
