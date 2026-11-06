@@ -101,15 +101,22 @@ var appContent = trail.SimpleFC("AppContent", func() trail.Node {
 			Autocomplete:    engine,
 			CompletionViews: views,
 			OnSubmit: func(text string) {
-				if strings.HasPrefix(text, "/") {
+				if strings.HasPrefix(text, "/") && !strings.HasPrefix(text, command.MCPRefPrefix) {
 					if err := registry.Execute(text); err != nil {
 						store.AppendError("Error", err.Error())
 					}
-				} else if after, ok := strings.CutPrefix(text, "!"); ok {
-					store.SendCommand(strings.TrimSpace(after))
-				} else {
-					store.Send(text)
+					return
 				}
+				if strings.HasPrefix(text, "!") {
+					store.SendCommand(strings.TrimSpace(text[1:]))
+					return
+				}
+				// An MCP reference runs or attaches the referenced item instead of
+				// being forwarded to the model as a bare token.
+				if command.SubmitMCPReference(text) {
+					return
+				}
+				store.Send(text)
 			},
 			OnCancel:    store.Cancel,
 			OnCycleMode: func() { _ = store.CycleMode() },

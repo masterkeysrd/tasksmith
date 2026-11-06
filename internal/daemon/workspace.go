@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log/slog"
 	"path/filepath"
 	"sort"
 	"sync"
@@ -16,11 +17,13 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/gateway"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/journal"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/mcp"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/metrics"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/models"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/permissions"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/session"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/timeline"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/tools"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tools/builtin"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/workspace"
 	"github.com/masterkeysrd/warp"
@@ -79,6 +82,10 @@ type workspaceRuntime struct {
 	publisher    session.Publisher
 	logger       log.Interface
 	db           *sql.DB
+	// mcpManager owns the workspace's live MCP connections. It is created once per
+	// workspace root and shared with sibling worktrees, which resolve MCP servers
+	// through the root workspace that the manager is attached to.
+	mcpManager *mcp.Manager
 }
 
 func (r *workspaceRuntime) Dir() string                       { return r.dir }
@@ -87,6 +94,49 @@ func (r *workspaceRuntime) Gateway() gateway.Gateway          { return r.gw.get(
 func (r *workspaceRuntime) Catalog() *models.Catalog          { return r.catalog.get() }
 func (r *workspaceRuntime) Permissions() permissions.Manager  { return r.perms }
 func (r *workspaceRuntime) SessionRuntime() *workspaceRuntime { return r.sessionOwner }
+
+// MCPRuntime returns the MCP runtime connected to this workspace's root, or nil
+// when the root declares no MCP servers. Sibling worktrees share the root's
+// manager because agent tools are registered against the root's tool registry.
+func (r *workspaceRuntime) MCPRuntime() workspace.MCPService {
+	if root := r.RootWorkspace(); root != nil {
+		return root.MCP()
+	}
+	return nil
+}
+
+// MCPCaller returns this workspace's MCP manager as the narrow contract a session's
+// tool container needs to invoke MCP tools and read resources, or nil when no
+// manager is attached. The nil check is explicit because a typed nil *mcp.Manager
+// would otherwise satisfy the interface and fail only when something calls it.
+func (r *workspaceRuntime) MCPCaller() tools.MCPCaller {
+	if r == nil {
+		return nil
+	}
+	owner := r.sessionOwner
+	if owner == nil {
+		owner = r
+	}
+	caller := mcp.NewToolRuntime(owner.mcpManager)
+	if caller == nil {
+		return nil
+	}
+	return caller
+}
+
+// RootWorkspace returns the workspace at the repository root. Requests that
+// concern MCP servers resolve definitions and manifest paths there, since that is
+// where the MCP manager registers the tools it discovers.
+func (r *workspaceRuntime) RootWorkspace() *workspace.Workspace {
+	if r == nil {
+		return nil
+	}
+	owner := r.sessionOwner
+	if owner == nil {
+		owner = r
+	}
+	return owner.ws
+}
 
 func (r *workspaceRuntime) Reload(ctx context.Context) error {
 	r.reloadMu.Lock()
@@ -130,8 +180,25 @@ func (r *workspaceRuntime) Reload(ctx context.Context) error {
 	if r.sessionOwner != r {
 		r.sessionOwner.catalog.set(sessionCatalog)
 	}
+	r.reloadMCP(ctx, sessionWorkspace)
 	r.RefreshSessions()
 	return nil
+}
+
+// reloadMCP reconfigures the root workspace's MCP manager with the reloaded
+// environment and render context, then reconciles connections with the manifests
+// now on disk. Reloading replaces the tool registry, so the reconciliation also
+// re-registers the tools of servers that stayed connected.
+func (r *workspaceRuntime) reloadMCP(ctx context.Context, rootWorkspace *workspace.Workspace) {
+	owner := r.sessionOwner
+	if owner == nil {
+		owner = r
+	}
+	if owner.mcpManager == nil {
+		return
+	}
+	owner.mcpManager.SetRuntimeContext(rootWorkspace.Env(), rootWorkspace.RenderOptions())
+	owner.mcpManager.Sync(ctx)
 }
 
 func (r *workspaceRuntime) Close() error {
@@ -147,6 +214,14 @@ func (r *workspaceRuntime) Close() error {
 		}
 	}
 	r.wg.Wait()
+	if r.ws != nil {
+		r.ws.SetMCPService(nil)
+	}
+	if r.mcpManager != nil {
+		if err := r.mcpManager.Close(); err != nil {
+			slog.Warn("daemon: close MCP manager", "workspace", r.dir, "error", err)
+		}
+	}
 	var dbErr error
 	if r.db != nil {
 		dbErr = r.db.Close()
@@ -270,6 +345,36 @@ func (d *Daemon) workspace(ctx context.Context, dir string) (*workspaceRuntime, 
 		owner.publisher = d.broker
 		owner.logger = d.logger
 		owner.metrics = d.usage
+
+		// The manager begins connecting in the background so opening a workspace is
+		// never blocked by a slow or unreachable MCP server.
+		mgr, err := mcp.New(mcp.Options{
+			Definer:         ws,
+			Syncer:          ws,
+			ReloadWorkspace: func(ctx context.Context) error { return owner.Reload(ctx) },
+			Env:             ws.Env(),
+			RenderOptions:   ws.RenderOptions(),
+			AutoConnect:     !d.cfg.DisableMCPAutoConnect,
+			// A server finishing its background connect makes new tools callable, while
+			// open sessions hold a container built before that happened. Rebuilding them
+			// here is what makes "the server is up" and "the agent can call it" the same
+			// moment. The write lock mirrors what a workspace reload holds while
+			// refreshing sessions, so a refresh never swaps a session's tooling out from
+			// under a turn in flight.
+			OnDiscover: func() {
+				owner.reloadMu.Lock()
+				defer owner.reloadMu.Unlock()
+				owner.RefreshSessions()
+			},
+		})
+		if err != nil {
+			_ = db.Close()
+			d.wsMu.Unlock()
+			return nil, fmt.Errorf("daemon: initialize MCP manager for %q: %w", rootDir, err)
+		}
+		owner.mcpManager = mgr
+		ws.SetMCPService(mgr)
+		mgr.Sync(context.WithoutCancel(ctx))
 	}
 
 	catalog, err := models.Build(ws.Catalog(), owner.gw.get())

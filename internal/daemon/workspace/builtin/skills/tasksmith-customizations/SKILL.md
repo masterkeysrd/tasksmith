@@ -32,6 +32,12 @@ A qualified reference has the form `namespace/Kind/name`, for example `system/Ag
 
 Workspace built-ins are mirrored under `$XDG_DATA_HOME/tasksmith/builtin/` (normally `~/.local/share/tasksmith/builtin/`); embedded resources remain available if the mirror cannot be used. Supporting files live alongside the skill and are read relative to the directory returned by `load_skill`.
 
+## Choosing an authoring scope
+
+Tier order decides which definition wins; it does not decide where a new resource belongs. Project scope is committed and shared with everyone who clones the repository, user scope is private to one machine and applies to every project, and workspace scope sits between them for a multi-project workspace. When the requesting user has not named a scope, ask before writing: sharing an internal endpoint, credential reference, or personal workflow with a repository is a product decision, not a default.
+
+Never move a credential out of another tool's store, such as a CLI keyring, into a manifest, `.env`, or any other plaintext file without explicit approval. Reference it through `auth.env` or `auth.file` and let the user supply the value.
+
 ## Resource references
 
 | Resource | Reference | Common location beneath a resource directory |
@@ -49,4 +55,4 @@ Workspace built-ins are mirrored under `$XDG_DATA_HOME/tasksmith/builtin/` (norm
 | Plugins | `references/workspace-and-context.md` | Repository root `PLUGIN.md` or `PLUGIN.yaml` |
 | Workspace and project context | `references/workspace-and-context.md` | `WORKSPACE.md`, `AGENTS.md` |
 
-Discovery is not the same as execution: TaskSmith resolves and injects Rule resources, but it does not currently evaluate Decision resources or connect MCP servers from their definitions. See the references for the actual runtime behavior and schemas.
+Discovery is not the same as execution: TaskSmith resolves and injects Rule resources and connects the MCP servers its definitions declare, but it does not currently evaluate Decision resources. See the references for the actual runtime behavior and schemas.

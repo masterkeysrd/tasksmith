@@ -2,12 +2,15 @@ package workspace
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"maps"
 	"regexp"
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/core/memdb"
@@ -54,6 +57,28 @@ type ToolSnapshot struct {
 	Def *warp.Tool
 }
 
+// MCPSnapshot pairs an API MCPServer presentation with its defining warp.MCP.
+// The presentation carries only what the manifest declares; live connection
+// state and discovered tools, prompts, and resources are overlaid by the
+// workspace's MCPService.
+type MCPSnapshot struct {
+	api.MCPServer
+	Def *warp.MCP
+}
+
+// catalogState holds the precomputed values a Catalog publishes alongside its
+// snapshot stores. It is replaced as one unit after populate() rebuilds every
+// store, so a refresh never exposes a torn mix of old and old-and-new values.
+type catalogState struct {
+	workspaceTokens int
+	toolTokens      map[string]int
+
+	// validationWarnings holds non-fatal diagnostic messages produced by
+	// registry.Validate() (structural correctness and cross-reference checks
+	// across WORKSPACE.md and all loaded resources).
+	validationWarnings []string
+}
+
 // Catalog acts as an in-memory query and resolution proxy over a warp.Registry
 // (and scoped registry when cwd is inside a subproject), exposing native warp
 // resource definitions pre-materialized in lock-free point-in-time memdb stores.
@@ -62,20 +87,33 @@ type Catalog struct {
 	cwd      string
 	rootDir  string
 
-	workspaceTokens int
-	toolTokens      map[string]int
-
-	// validationWarnings holds non-fatal diagnostic messages produced by
-	// registry.Validate() (structural correctness and cross-reference checks
-	// across WORKSPACE.md and all loaded resources).
-	validationWarnings []string
+	// populateMu serializes rebuilds. Each rebuild assembles its state locally and
+	// publishes it through state, so concurrent readers observe either the full old
+	// snapshot or the full new one.
+	populateMu sync.Mutex
+	state      atomic.Pointer[catalogState]
 
 	agents    *memdb.DB[AgentSnapshot]
 	skills    *memdb.DB[SkillSnapshot]
 	commands  *memdb.DB[CommandSnapshot]
 	rules     *memdb.DB[RuleSnapshot]
 	tools     *memdb.DB[ToolSnapshot]
+	mcps      *memdb.DB[MCPSnapshot]
 	providers *memdb.DB[*warp.ModelProvider]
+
+	// deniedMCPTools holds tools discovered on MCP servers that spec.policies
+	// prohibits. They are deliberately absent from tools so they can never be
+	// registered as callable, yet /tools must still show them as blocked.
+	deniedMu   sync.Mutex
+	deniedKeys map[string][]string
+	denied     *memdb.DB[ToolSnapshot]
+
+	// mcpResources probes whether the workspace's MCP runtime currently exposes a
+	// resource that spec.policies permits, which decides whether the
+	// resource-reading built-in tool is worth loading. It is a function rather
+	// than a manager reference so the catalog keeps no dependency on the MCP
+	// implementation, and it is safe to evaluate during a rebuild.
+	mcpResources atomic.Pointer[func() bool]
 }
 
 // NewCatalog constructs a Catalog proxying reg for the given cwd and rootDir,
@@ -85,14 +123,17 @@ func NewCatalog(reg *warp.Registry, cwd, rootDir string) *Catalog {
 		registry:   reg,
 		cwd:        cwd,
 		rootDir:    rootDir,
-		toolTokens: make(map[string]int),
 		agents:     memdb.New(func(a AgentSnapshot) string { return a.Name }),
 		skills:     memdb.New(func(s SkillSnapshot) string { return s.Name }),
 		commands:   memdb.New(func(cmd CommandSnapshot) string { return cmd.Name }),
 		rules:      memdb.New(func(r RuleSnapshot) string { return r.Name }),
 		tools:      memdb.New(func(t ToolSnapshot) string { return t.Name }),
+		mcps:       memdb.New(func(m MCPSnapshot) string { return m.Name }),
 		providers:  memdb.New(func(p *warp.ModelProvider) string { return p.Metadata.Name }),
+		deniedKeys: make(map[string][]string),
+		denied:     memdb.New(func(t ToolSnapshot) string { return t.Name }),
 	}
+	c.state.Store(&catalogState{toolTokens: make(map[string]int)})
 	c.populate()
 	return c
 }
@@ -100,6 +141,29 @@ func NewCatalog(reg *warp.Registry, cwd, rootDir string) *Catalog {
 // Registry returns the underlying warp.Registry instance.
 func (c *Catalog) Registry() *warp.Registry {
 	return c.registry
+}
+
+// Refresh re-materializes every snapshot store from the current registry state.
+// It exists for registry mutations that happen after the catalog was built, such
+// as an MCP server's discovered tools being registered at runtime, so tool lists,
+// agent partitions, and token counts reflect what the registry now holds. Readers
+// keep seeing a consistent point-in-time view because each store and the
+// precomputed state are published atomically.
+func (c *Catalog) Refresh() error {
+	if c == nil {
+		return errors.New("workspace: catalog is nil")
+	}
+	c.populate()
+	return nil
+}
+
+// snapshot returns the currently published precomputed state, which is never nil
+// once the catalog is constructed.
+func (c *Catalog) snapshot() *catalogState {
+	if s := c.state.Load(); s != nil {
+		return s
+	}
+	return &catalogState{toolTokens: make(map[string]int)}
 }
 
 // WorkspaceSpec returns the workspace specification resource from WORKSPACE.md.
@@ -153,11 +217,12 @@ func (c *Catalog) Plugins() []warp.WorkspacePlugin {
 // loading and structural validation. The returned slice is a defensive copy so
 // callers cannot mutate the catalog's internal state.
 func (c *Catalog) Warnings() []string {
-	combined := make([]string, 0, len(c.validationWarnings))
+	state := c.snapshot()
+	combined := make([]string, 0, len(state.validationWarnings))
 	if c.registry != nil {
 		combined = append(combined, c.registry.Warnings()...)
 	}
-	combined = append(combined, c.validationWarnings...)
+	combined = append(combined, state.validationWarnings...)
 	return combined
 }
 
@@ -241,6 +306,9 @@ func (c *Catalog) resolveWarpAgent(name string) (*warp.Agent, *warp.ResolvedAgen
 	return baseAgent, nil, true
 }
 
+// populate rebuilds every snapshot store from the registry. It computes into a
+// scratch state and publishes immutable copies, so a refresh racing a reader
+// exposes either the complete previous state or the complete new one, never a mix.
 func (c *Catalog) populate() {
 	if c.registry == nil {
 		return
@@ -250,10 +318,14 @@ func (c *Catalog) populate() {
 		return
 	}
 
+	c.populateMu.Lock()
+	defer c.populateMu.Unlock()
+	st := &catalogState{toolTokens: make(map[string]int)}
+
 	// 0. Workspace prompt tokens pre-computed once
 	if wsSpec := c.registry.WorkspaceSpec(); wsSpec != nil {
 		wsPrompt, _ := wsSpec.Render(&warp.WorkspaceRenderOptions{})
-		c.workspaceTokens = tokenizer.Estimate(wsPrompt)
+		st.workspaceTokens = tokenizer.Estimate(wsPrompt)
 	}
 
 	// 1. Tools
@@ -267,11 +339,10 @@ func (c *Catalog) populate() {
 			toolsList = append(toolsList, t)
 		}
 	}
-	c.toolTokens = make(map[string]int, len(toolsList))
 	toolSnapshots := make([]ToolSnapshot, 0, len(toolsList))
 	for _, t := range toolsList {
 		snapshot := c.newToolSnapshot(t)
-		c.toolTokens[snapshot.Name] = snapshot.Tokens
+		st.toolTokens[snapshot.Name] = snapshot.Tokens
 		toolSnapshots = append(toolSnapshots, snapshot)
 	}
 	c.tools.Replace(toolSnapshots...)
@@ -360,7 +431,7 @@ func (c *Catalog) populate() {
 			// triggers.decision is not yet supported; surface a non-fatal
 			// diagnostic so the user knows the condition is ignored.
 			if strings.TrimSpace(rl.Spec.Triggers.Decision) != "" {
-				c.validationWarnings = append(c.validationWarnings, fmt.Sprintf("Rule %q specifies unsupported triggers.decision %q; decision triggers are ignored", rl.Metadata.Name, rl.Spec.Triggers.Decision))
+				st.validationWarnings = append(st.validationWarnings, fmt.Sprintf("Rule %q specifies unsupported triggers.decision %q; decision triggers are ignored", rl.Metadata.Name, rl.Spec.Triggers.Decision))
 			}
 			ruleList = append(ruleList, RuleSnapshot{
 				Rule: api.Rule{
@@ -388,6 +459,11 @@ func (c *Catalog) populate() {
 	}
 	c.rules.Replace(ruleList...)
 
+	// Publish token counts before computing per-agent context breakdowns, which
+	// read them back through the published state. The copy keeps the scratch state
+	// safe to keep mutating while readers hold this snapshot.
+	c.state.Store(st.clone())
+
 	// 6. Agents
 	var agentList []AgentSnapshot
 	rawAgents := resolver.ListResources(warp.QueryOptions{
@@ -404,7 +480,7 @@ func (c *Catalog) populate() {
 			// Emit a diagnostic when the agent loads more than the recommended
 			// number of eager tools on the first request.
 			if partition := c.PartitionAgentTools(resolved); len(partition.Eager) > MaxRecommendedEagerTools {
-				c.validationWarnings = append(c.validationWarnings, fmt.Sprintf("Agent %q loads %d tools on the first request (recommended maximum is %d); consider reducing spec.tools to use deferred loading", baseAgent.Metadata.Name, len(partition.Eager), MaxRecommendedEagerTools))
+				st.validationWarnings = append(st.validationWarnings, fmt.Sprintf("Agent %q loads %d tools on the first request (recommended maximum is %d); consider reducing spec.tools to use deferred loading", baseAgent.Metadata.Name, len(partition.Eager), MaxRecommendedEagerTools))
 			}
 			agentList = append(agentList, AgentSnapshot{
 				Agent: api.Agent{
@@ -423,14 +499,146 @@ func (c *Catalog) populate() {
 	}
 	c.agents.Replace(agentList...)
 
-	// 7. Registry validation: surface cross-reference and structural issues
+	// 7. MCP servers
+	var mcpList []MCPSnapshot
+	rawMCPs := resolver.ListResources(warp.QueryOptions{
+		Kinds:     []warp.Kind{warp.KindMCP},
+		Effective: true,
+	})
+	for _, r := range rawMCPs {
+		if m, ok := r.(*warp.MCP); ok {
+			mcpList = append(mcpList, c.newMCPSnapshot(m))
+		}
+	}
+	c.mcps.Replace(mcpList...)
+
+	// 8. Registry validation: surface cross-reference and structural issues
 	// (missing defaultAgent/defaultProvider, invalid modelAliases, bad
 	// policies.tools, dangling resource references) as non-fatal diagnostic
 	// warnings so workspace.Open stays resilient to typos in WORKSPACE.md or
 	// .agents/ instead of crashing.
 	if err := c.registry.Validate(); err != nil {
-		c.validationWarnings = append(c.validationWarnings, err.Error())
+		st.validationWarnings = append(st.validationWarnings, err.Error())
 	}
+
+	c.state.Store(st.clone())
+}
+
+// clone returns a defensive copy so a published state is never mutated afterwards.
+func (s *catalogState) clone() *catalogState {
+	if s == nil {
+		return &catalogState{toolTokens: make(map[string]int)}
+	}
+	out := &catalogState{
+		workspaceTokens: s.workspaceTokens,
+		toolTokens:      make(map[string]int, len(s.toolTokens)),
+	}
+	maps.Copy(out.toolTokens, s.toolTokens)
+	if len(s.validationWarnings) > 0 {
+		out.validationWarnings = slices.Clone(s.validationWarnings)
+	}
+	return out
+}
+
+// explicitlyNamedAgentTools returns the tool names an agent lists outright in
+// spec.tools, normalized so an MCP tool written as "mcp__<server>__<tool>" also
+// matches the name it materializes under, "<server>__<tool>".
+func (c *Catalog) explicitlyNamedAgentTools(resolved *warp.ResolvedAgent) map[string]bool {
+	names := make(map[string]bool)
+	if resolved == nil || resolved.Agent == nil {
+		return names
+	}
+	for _, entry := range resolved.Agent.Spec.Tools {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			continue
+		}
+		names[entry] = true
+		if bare, ok := strings.CutPrefix(entry, mcpToolNamePrefix); ok {
+			names[bare] = true
+		}
+	}
+	return names
+}
+
+// mcpToolNamePrefix is the optional prefix users may write in spec.tools and the
+// deferred-tools directory before an MCP tool's "<server>__<tool>" name.
+const mcpToolNamePrefix = "mcp__"
+
+// SetDeniedMCPTools records the tools discovered on one MCP server that
+// spec.policies prohibits, replacing any previously recorded set for that server.
+// They stay out of the effective tool list so they can never be called, while
+// still appearing in tool listings as blocked by policy.
+func (c *Catalog) SetDeniedMCPTools(def *warp.MCP, raw []*warp.Tool) {
+	if def == nil || strings.TrimSpace(def.Metadata.Name) == "" {
+		return
+	}
+	serverName := def.Metadata.Name
+	snaps := make([]ToolSnapshot, 0, len(raw))
+	for _, t := range raw {
+		if t == nil {
+			continue
+		}
+		snap := c.newToolSnapshot(t)
+		// A discovered raw tool carries no namespace of its own, so report the
+		// namespace of the server that exposed it.
+		if ns := def.GetNamespace(); ns != "" {
+			snap.Namespace = ns
+		}
+		snap.Status = api.ToolStatusDenied
+		snaps = append(snaps, snap)
+	}
+
+	c.deniedMu.Lock()
+	defer c.deniedMu.Unlock()
+	if c.deniedKeys == nil {
+		c.deniedKeys = make(map[string][]string)
+	}
+	for _, name := range c.deniedKeys[serverName] {
+		c.denied.Delete(name)
+	}
+	if len(snaps) == 0 {
+		delete(c.deniedKeys, serverName)
+		return
+	}
+	keys := make([]string, 0, len(snaps))
+	for _, snap := range snaps {
+		keys = append(keys, snap.Name)
+	}
+	slices.Sort(keys)
+	c.denied.Save(snaps...)
+	c.deniedKeys[serverName] = keys
+}
+
+// DeniedMCPToolSnapshots returns the discovered MCP tools that policy prohibits,
+// sorted by name.
+func (c *Catalog) DeniedMCPToolSnapshots() []ToolSnapshot {
+	snaps := c.denied.Snapshot().All()
+	slices.SortFunc(snaps, func(a, b ToolSnapshot) int { return strings.Compare(a.Name, b.Name) })
+	return snaps
+}
+
+// SetMCPResourceProbe installs the predicate that decides whether the
+// resource-reading built-in tool is worth loading. Passing nil clears it, which
+// makes the tool inactive. The probe is consulted on every rebuild, because MCP
+// resources appear only once a server has connected in the background.
+func (c *Catalog) SetMCPResourceProbe(probe func() bool) {
+	if probe == nil {
+		c.mcpResources.Store(nil)
+		return
+	}
+	c.mcpResources.Store(&probe)
+}
+
+// HasAllowedMCPResources reports whether the workspace's MCP runtime exposes a
+// policy-permitted MCP resource. With no runtime probe installed it reports false,
+// so a workspace without an MCP runtime never loads the resource-reading tool.
+func (c *Catalog) HasAllowedMCPResources() bool {
+	probe := c.mcpResources.Load()
+	if probe == nil || *probe == nil {
+		return false
+	}
+	return (*probe)()
 }
 
 // MaxRecommendedEagerTools is the recommended maximum number of eager tools an
@@ -438,6 +646,11 @@ func (c *Catalog) populate() {
 // many eager tools emit a diagnostic advising the user to reduce spec.tools and
 // rely on deferred loading via tool_search.
 const MaxRecommendedEagerTools = 20
+
+// builtinToolReadMCPResource names the built-in tool that reads a resource from an
+// MCP server. It is conditional: it costs context only when the workspace actually
+// has a readable MCP resource, so the catalog owns its activation.
+const builtinToolReadMCPResource = "read_mcp_resource"
 
 // ToolPartition splits an agent's effective tools into eager tools (loaded on
 // the first request with DeferLoading: false) and deferred tools (discoverable
@@ -452,10 +665,13 @@ type ToolPartition struct {
 // eager and nothing is deferred.
 //
 // Eager tools come from resolved.Tools (WARP-resolved from agent.spec.tools and
-// filtered by workspace and agent policies), excluding MCP tools (which are
-// deferred by default) and conditional built-in tools whose preconditions aren't
-// met (invoke_agent/manage_agents when the agent has no subagents, load_skill
-// when it has no skills). tool_search is eager only when explicitly listed.
+// filtered by workspace and agent policies), excluding MCP tools — which are
+// deferred by default because they are discovered at runtime and can be numerous —
+// unless the agent names one outright in spec.tools, and excluding conditional
+// built-in tools whose preconditions aren't met (invoke_agent/manage_agents when
+// the agent has no subagents, load_skill when it has no skills, read_mcp_resource
+// when no server exposes a permitted resource). tool_search is
+// eager only when explicitly listed.
 //
 // Deferred tools are every effective tool not already eager, not tool_search or
 // a conditional built-in whose precondition isn't met, and passing the agent's
@@ -468,12 +684,16 @@ func (c *Catalog) PartitionAgentTools(resolved *warp.ResolvedAgent) ToolPartitio
 	hasSubagents := len(resolved.Subagents) > 0
 	hasSkills := len(resolved.Skills) > 0
 	hasConditionalRules := c.HasConditionalRules(resolved)
+	hasMCPResources := c.HasAllowedMCPResources()
 
 	eagerSet := make(map[string]bool)
 	var eager []string
+	explicitlyNamed := c.explicitlyNamedAgentTools(resolved)
 	for _, t := range resolved.Tools {
 		name := t.Metadata.Name
-		if _, _, isMCP := warp.ParseMCPToolName(name); isMCP {
+		// MCP tools are discovered at runtime and can be numerous, so they stay
+		// deferred unless the agent names one outright in spec.tools.
+		if _, _, isMCP := warp.ParseMCPToolName(name); isMCP && !explicitlyNamed[name] {
 			continue
 		}
 		if (name == "invoke_agent" || name == "manage_agents") && !hasSubagents {
@@ -483,6 +703,9 @@ func (c *Catalog) PartitionAgentTools(resolved *warp.ResolvedAgent) ToolPartitio
 			continue
 		}
 		if name == "load_rule" && !hasConditionalRules {
+			continue
+		}
+		if name == builtinToolReadMCPResource && !hasMCPResources {
 			continue
 		}
 		if eagerSet[name] {
@@ -502,6 +725,16 @@ func (c *Catalog) PartitionAgentTools(resolved *warp.ResolvedAgent) ToolPartitio
 		}
 	}
 
+	// read_mcp_resource is likewise always active once the workspace actually has a
+	// readable MCP resource, since an agent author cannot know at authoring time
+	// whether the servers it talks to expose resources.
+	if hasMCPResources && !eagerSet[builtinToolReadMCPResource] {
+		if wt, ok := c.GetTool(builtinToolReadMCPResource); ok && resolved.ToolAction(wt) != warp.ToolPolicyDeny {
+			eagerSet[builtinToolReadMCPResource] = true
+			eager = append(eager, builtinToolReadMCPResource)
+		}
+	}
+
 	var deferred []string
 	for _, t := range c.Tools() {
 		name := t.Metadata.Name
@@ -517,9 +750,11 @@ func (c *Catalog) PartitionAgentTools(resolved *warp.ResolvedAgent) ToolPartitio
 		if name == "load_skill" && !hasSkills {
 			continue
 		}
-		// load_rule is never deferred: it is either eager (when conditional rules
-		// exist) or omitted entirely (when they don't).
-		if name == "load_rule" {
+		// load_rule and read_mcp_resource are never deferred: each is either eager
+		// (when its precondition is met) or omitted entirely (when it isn't). A
+		// tool_search lookup for a tool that depends on a live MCP connection would
+		// otherwise surface something that may not be callable.
+		if name == "load_rule" || name == builtinToolReadMCPResource {
 			continue
 		}
 		if resolved.ToolAction(t) == warp.ToolPolicyDeny {
@@ -544,9 +779,15 @@ func (c *Catalog) PartitionAgentTools(resolved *warp.ResolvedAgent) ToolPartitio
 func (c *Catalog) ToolStatuses(resolved *warp.ResolvedAgent) map[string]api.ToolStatus {
 	tools := c.Tools()
 	statuses := make(map[string]api.ToolStatus, len(tools))
+	// Policy-prohibited MCP tools are not in the effective list, so classify them
+	// directly; they are blocked regardless of the agent's own policy.
+	denied := c.DeniedMCPToolSnapshots()
 	if resolved == nil {
 		for _, t := range tools {
 			statuses[t.Metadata.Name] = api.ToolStatusEager
+		}
+		for _, snap := range denied {
+			statuses[snap.Name] = api.ToolStatusDenied
 		}
 		return statuses
 	}
@@ -573,6 +814,9 @@ func (c *Catalog) ToolStatuses(resolved *warp.ResolvedAgent) map[string]api.Tool
 		default:
 			statuses[name] = api.ToolStatusInactive
 		}
+	}
+	for _, snap := range denied {
+		statuses[snap.Name] = api.ToolStatusDenied
 	}
 	return statuses
 }
@@ -746,7 +990,8 @@ func (c *Catalog) AgentRenderGlobals(resolved *warp.ResolvedAgent) map[string]an
 }
 
 func (c *Catalog) calculateAgentContext(ag *warp.Agent, resolved *warp.ResolvedAgent) api.ContextBreakdown {
-	contextFiles := c.workspaceTokens
+	state := c.snapshot()
+	contextFiles := state.workspaceTokens
 
 	if ag == nil {
 		return api.ContextBreakdown{ContextFiles: contextFiles}
@@ -807,7 +1052,7 @@ func (c *Catalog) calculateAgentContext(ag *warp.Agent, resolved *warp.ResolvedA
 			continue
 		}
 
-		toolTokens, ok := c.toolTokens[t.Metadata.Name]
+		toolTokens, ok := state.toolTokens[t.Metadata.Name]
 		if !ok {
 			toolTokens = tokenizer.Estimate(t.Metadata.Name) +
 				tokenizer.Estimate(t.Metadata.Description) +
@@ -819,11 +1064,15 @@ func (c *Catalog) calculateAgentContext(ag *warp.Agent, resolved *warp.ResolvedA
 			}
 		}
 
+		// MCP tools carry the namespace of the manifest that declares the server,
+		// so membership is decided by the server name embedded in the tool name.
+		if c.mcpServerForTool(t) != nil {
+			mcpTools += toolTokens
+			continue
+		}
 		ns := strings.ToLower(t.Namespace)
 		if ns == warp.NamespaceSystem || ns == "system" || ns == "" {
 			systemTools += toolTokens
-		} else if ns == "mcp" || strings.HasPrefix(t.Metadata.Name, "mcp__") {
-			mcpTools += toolTokens
 		} else {
 			customTools += toolTokens
 		}
@@ -1198,12 +1447,17 @@ func (c *Catalog) newToolSnapshot(t *warp.Tool) ToolSnapshot {
 		}
 	}
 
+	scope := FormatSkillScope(scopeNamespace)
+	if server := c.mcpServerForTool(t); server != nil {
+		scope = "MCP (" + server.Metadata.Name + ")"
+	}
+
 	tool := api.Tool{
 		Name:         t.Metadata.Name,
 		DisplayName:  t.Metadata.DisplayName,
 		Description:  t.Metadata.Description,
 		Namespace:    scopeNamespace,
-		Scope:        FormatSkillScope(scopeNamespace),
+		Scope:        scope,
 		Command:      slices.Clone(t.Spec.Command),
 		InputSchema:  maps.Clone(t.Spec.InputSchema),
 		OutputSchema: maps.Clone(t.Spec.OutputSchema),
@@ -1219,6 +1473,40 @@ func (c *Catalog) newToolSnapshot(t *warp.Tool) ToolSnapshot {
 		}
 	}
 	return ToolSnapshot{Tool: tool, Def: t}
+}
+
+// mcpServerForTool reports the MCP server a tool was discovered from, or nil when
+// the tool is a regular manifest tool. MCP tools are materialized as
+// "<server>__<tool>", so a tool is attributed to a server only when a server with
+// that name exists and produced exactly this tool name.
+func (c *Catalog) mcpServerForTool(t *warp.Tool) *warp.MCP {
+	if t == nil {
+		return nil
+	}
+	serverName, rawName, ok := warp.ParseMCPToolName(t.Metadata.Name)
+	if !ok {
+		return nil
+	}
+	res, ok := c.resolveByKind(warp.KindMCP, serverName)
+	if !ok {
+		return nil
+	}
+	server, ok := res.(*warp.MCP)
+	if !ok || server == nil {
+		return nil
+	}
+	if server.ToolName(rawName) != t.Metadata.Name {
+		return nil
+	}
+	return server
+}
+
+// MCPServerForTool reports the MCP server a tool was discovered from, or nil when
+// the tool is a regular manifest tool. It is the exported form of the attribution
+// used to give MCP tools their scope label, so a tool container can register MCP
+// tools without duplicating the naming rules.
+func (c *Catalog) MCPServerForTool(t *warp.Tool) *warp.MCP {
+	return c.mcpServerForTool(t)
 }
 
 // ToolSnapshots returns all effective tool snapshots in scope, sorted by
@@ -1285,6 +1573,91 @@ func (c *Catalog) GetToolSnapshot(name string) (ToolSnapshot, bool) {
 	return ToolSnapshot{}, false
 }
 
+// newMCPSnapshot materializes the API presentation of an effective MCP server
+// from what its manifest declares: scope, transport, rendered command or
+// endpoint, and authentication scheme. Live connection state and discovered
+// tools, prompts, and resources are overlaid by the workspace's MCPService.
+func (c *Catalog) newMCPSnapshot(m *warp.MCP) MCPSnapshot {
+	if m == nil {
+		return MCPSnapshot{}
+	}
+	scopeNamespace := c.ScopeNamespace(m.BaseResource)
+	transport := strings.TrimSpace(string(m.Spec.Type))
+	if transport == "" {
+		transport = string(warp.MCPTransportStdio)
+	}
+	server := api.MCPServer{
+		Name:        m.Metadata.Name,
+		DisplayName: m.Metadata.DisplayName,
+		Description: m.Metadata.Description,
+		Namespace:   scopeNamespace,
+		Scope:       FormatSkillScope(scopeNamespace),
+		Path:        m.GetPath(),
+		Transport:   transport,
+		Command:     slices.Clone(m.Spec.Command),
+		Endpoint:    m.Spec.Endpoint,
+		Status:      api.MCPStatusDisconnected,
+	}
+	if m.Spec.Auth != nil {
+		server.AuthType = strings.TrimSpace(m.Spec.Auth.Type)
+	}
+	return MCPSnapshot{MCPServer: server, Def: m}
+}
+
+// MCPSnapshots returns all effective MCP server snapshots in scope, sorted by
+// metadata name. Each snapshot carries the manifest-derived api.MCPServer
+// presentation alongside the defining warp.MCP.
+func (c *Catalog) MCPSnapshots() []MCPSnapshot {
+	return c.mcps.Snapshot().All()
+}
+
+// MCPs returns all effective MCP server definitions in scope, sorted by metadata
+// name.
+func (c *Catalog) MCPs() []*warp.MCP {
+	snaps := c.mcps.Snapshot().All()
+	if len(snaps) == 0 {
+		return nil
+	}
+	out := make([]*warp.MCP, len(snaps))
+	for i, s := range snaps {
+		out[i] = s.Def
+	}
+	return out
+}
+
+// GetMCPSnapshot resolves an effective MCP server snapshot by name or qualified
+// name.
+func (c *Catalog) GetMCPSnapshot(name string) (MCPSnapshot, bool) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return MCPSnapshot{}, false
+	}
+	if snap, ok := c.mcps.Snapshot().Get(name); ok {
+		return snap, true
+	}
+	if strings.Contains(name, "/") {
+		for _, s := range c.mcps.Snapshot().All() {
+			if s.Def != nil && s.Def.QualifiedName() == name {
+				return s, true
+			}
+		}
+		if res, ok := c.resolveByKind(warp.KindMCP, name); ok {
+			if m, ok := res.(*warp.MCP); ok {
+				return c.newMCPSnapshot(m), true
+			}
+		}
+	}
+	return MCPSnapshot{}, false
+}
+
+// GetMCP resolves an effective MCP server definition by name or qualified name.
+func (c *Catalog) GetMCP(name string) (*warp.MCP, bool) {
+	if snap, ok := c.GetMCPSnapshot(name); ok {
+		return snap.Def, true
+	}
+	return nil, false
+}
+
 // Providers returns all effective model providers in scope, sorted by metadata name.
 func (c *Catalog) Providers() []*warp.ModelProvider {
 	return c.providers.Snapshot().All()
@@ -1336,7 +1709,7 @@ func (c *Catalog) AgentContext(name string) api.ContextBreakdown {
 	if snap, ok := c.GetAgent(name); ok {
 		return snap.Context
 	}
-	return api.ContextBreakdown{ContextFiles: c.workspaceTokens}
+	return api.ContextBreakdown{ContextFiles: c.snapshot().workspaceTokens}
 }
 
 // ScopeNamespace normalizes a project-slug namespace to warp.NamespaceLocal

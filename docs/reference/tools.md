@@ -1,6 +1,6 @@
 # Built-in Tools Reference
 
-TaskSmith provides 18 core built-in system tools backed by virtualized OS sandboxes, compare-and-swap filesystem mutators, background process managers, child subagent delegators, and interactive user prompts. Built-ins are documented below; command-backed custom tools declared as `*.tool.md` manifests share the same registry, safety annotations, and permission pipeline and are covered in [Custom Tool Execution Model](#4-custom-tool-execution-model).
+TaskSmith provides 19 core built-in system tools backed by virtualized OS sandboxes, compare-and-swap filesystem mutators, background process managers, child subagent delegators, and interactive user prompts. Built-ins are documented below; command-backed custom tools declared as `*.tool.md` manifests and tools discovered from [MCP](manifests.md#10-mcp-server-manifest-mcpyaml) servers share the same registry, safety annotations, and permission pipeline, and are covered in [Custom Tool Execution Model](#4-custom-tool-execution-model) and [MCP Tool Execution Model](#6-mcp-tool-execution-model).
 
 ---
 
@@ -23,6 +23,7 @@ TaskSmith provides 18 core built-in system tools backed by virtualized OS sandbo
 | **`ask_question`** | `Session` | Safe / Auto-allowed | Prompts the user with structured interactive questions (`single`, `multi`, `text`, `confirm`). |
 | **`load_skill`** | `Session`, `Workspace` | Safe / Auto-allowed | Loads domain guidelines, coding conventions, or workflows for a specified skill on demand. |
 | **`load_rule`** | `Session`, `Workspace` | Safe / Auto-allowed | Loads the full instructions of a conditional workspace rule by name. Auto-activated when the agent has at least one conditional rule. |
+| **`read_mcp_resource`** | `Net`, `Workspace` | Safe & Read-Only / Auto-allowed | Reads one resource URI from a configured MCP server. Auto-activated when a connected server exposes a permitted resource. |
 | **`invoke_agent`** | `Session` | Safe & Read-Only / Auto-allowed | Spawns a specialized subagent asynchronously in an isolated child session. |
 | **`manage_agents`** | `Session` | Safe / Auto-allowed for `list`/`status`, Prompts for `send`/`kill` | Lists subagents, checks subagent status, sends messages, or terminates running subagents. |
 | **`tool_search`** | `Session`, `Workspace` | Safe & Read-Only / Auto-allowed | Searches deferred (not eagerly loaded) tools by name, description, or parameters via BM25 and loads the matches into context. Auto-activated when the session has at least one deferred tool. |
@@ -45,7 +46,7 @@ Every built-in tool defines safety properties in its manifest:
 
 ### Behavior Across Permission Modes
 
-| Permission Mode | Safe Read-Only (`view`, `ls`, `glob`, `grep`, `todos`, `tasks`, `ask_question`, `load_skill`, `load_rule`, `invoke_agent`, `tool_search`) | Filesystem Writes (`write`, `edit`, `remove`) | Execution & Network (`bash`, `web_fetch`, `download`) |
+| Permission Mode | Safe Read-Only (`view`, `ls`, `glob`, `grep`, `todos`, `tasks`, `ask_question`, `load_skill`, `load_rule`, `read_mcp_resource`, `invoke_agent`, `tool_search`) | Filesystem Writes (`write`, `edit`, `remove`) | Execution & Network (`bash`, `web_fetch`, `download`) |
 | :--- | :--- | :--- | :--- |
 | **`default`** | Auto-allowed | Prompts user for approval | Prompts user for approval |
 | **`accept_edits`** | Auto-allowed | Auto-allowed (unified diff recorded) | Prompts user for approval |
@@ -636,6 +637,53 @@ Loading a rule the agent cannot access returns an error rather than an empty res
 
 ---
 
+### `read_mcp_resource`
+
+Reads one resource URI from a configured [MCP server](manifests.md#10-mcp-server-manifest-mcpyaml) and returns its text content. Resources are content a server chooses to publish (documentation, templates, indexes), which is distinct from workspace files — use [`view`](#view) and [`grep`](#grep) for the repository itself.
+
+#### Availability
+
+Registered only while the workspace has an MCP runtime attached **and** at least one connected server exposes a resource its own `spec.policies.resources` permits. It is activated automatically once that is true, even when an agent omits it from `spec.tools`, because no agent author can know at authoring time whether the servers it talks to publish resources. Like [`load_rule`](#load_rule), it is never deferred and never discoverable through `tool_search`: it is either eager or absent. A tool policy that excludes it is respected, so an agent can still deny it.
+
+#### Safety Profile
+- **`isReadOnly`**: `true`
+- **`isIdempotent`**: `true`
+- **`isDangerous`**: `false`
+- **`isOpenWorld`**: `false`
+- **User Hint**: `"Read MCP resource: %s"`
+
+The approval plan target is `<server>/<uri>`, so granting approval can be scoped to a single resource or, with a trailing glob, to one server's resources.
+
+#### Input Parameters
+
+| Parameter | Type | Required | Description |
+| :--- | :--- | :--- | :--- |
+| `server` | string | **Yes** | Name of the configured MCP server to read from. |
+| `uri` | string | **Yes** | Resource URI exactly as the server advertises it. |
+
+#### Output Fields
+
+| Field | Type | Description |
+| :--- | :--- | :--- |
+| `server` | string | Name of the MCP server the resource was read from. |
+| `uri` | string | Resource URI that was read. |
+| `text` | string | Text content of the resource, or a head-plus-tail preview when it exceeded output limits. |
+| `mime_type` | string | MIME type the server declared for the resource, when known. |
+| `truncated` | boolean | `true` if the resource text exceeded output limits and was spilled to disk. |
+
+```json
+{
+  "server": "notes",
+  "uri": "notes://specs/spec-1"
+}
+```
+
+#### Prohibited Resources
+
+A resource the server manifest blocks under `spec.policies.resources` is rejected before the request leaves TaskSmith, with an error naming the section and the manifest path relative to the workspace root. Only a user acting interactively may authorize a single prohibited read — through the `/mcp` confirmation or via `allowProhibited` on the [MCP HTTP endpoints](cli.md#mcp-http-endpoints); this tool never sets that flag, so an agent cannot escalate its own access. See [Scoping MCP resources](../guides/tools-and-mcp.md#scoping-mcp-resources).
+
+---
+
 ### `invoke_agent`
 
 Spawns a specialized subagent asynchronously in an isolated child session.
@@ -760,7 +808,7 @@ Custom tools are command-backed tools declared as [`*.tool.md` manifests](manife
 
 ### Declarative Annotations As The Security Baseline
 
-The approval plan for a custom tool is derived strictly from `spec.annotations`. TaskSmith does not inspect argument values, guess file paths from argument key names, or pattern-match the command string to decide whether a call is safe:
+The approval plan for a custom tool is derived strictly from `spec.annotations`. TaskSmith does not inspect argument values, guess file paths from argument key names, or pattern-match the command string to decide whether a call is safe. The same mapping drives [MCP tools](#6-mcp-tool-execution-model), which carry annotations instead of a command:
 
 | Annotation state | Plan action | Safety | Read-only |
 | :--- | :--- | :--- | :--- |
@@ -805,10 +853,29 @@ Every session partitions its policy-allowed toolset into an eager set and a defe
 | :--- | :--- | :--- |
 | **Eager** | Named in the agent's `spec.tools` | Present in the initial tool context. |
 | **Deferred** | Policy-allowed but not named in `spec.tools` | Registered in the session container and withheld from the initial context. |
-| **Denied** | Blocked by workspace or agent tool policy | Not registered. |
+| **Denied** | Blocked by workspace, agent, or MCP server tool policy | Not registered. |
 | **Inactive** | Neither loaded, deferred, nor denied (for example, a conditional built-in the session does not activate) | Not registered. |
 
-Custom (`*.tool.md`) and MCP tools are **deferred by default**, because they are not listed in an agent's `spec.tools` unless the author opts them in.
+Custom (`*.tool.md`) and MCP tools are **deferred by default**, because they are not listed in an agent's `spec.tools` unless the author opts them in. The three conditional built-ins — `tool_search`, `load_rule`, and `read_mcp_resource` — are the exception: TaskSmith activates them itself when the workspace gives them something to do, so they may be eager without appearing in `spec.tools`.
+
+### MCP Tools
+
+Tools discovered from a connected [MCP server](manifests.md#10-mcp-server-manifest-mcpyaml) are named `<server>__<tool>` and are attributed to that server in listings, whose scope reads `MCP (<server>)`.
+
+They stay deferred even when an agent lists `spec.tools: ["*"]`, because a server can expose dozens of tools and their schemas are large. To load one on the first request, name it outright, either as `<server>__<tool>` or with the `mcp__` prefix used in the deferred-tools directory (`mcp__<server>__<tool>`):
+
+```yaml
+spec:
+  tools:
+    - "*"
+    - mcp__github__get_issue
+```
+
+A tool the server's own `spec.policies.tools` prohibits is never registered and reports status `denied`, so it stays visible in [`/tools`](cli.md#tools-browser-tools) with an explanation rather than disappearing. See [Scoping MCP resources](../guides/tools-and-mcp.md#scoping-mcp-resources).
+
+Discovery is asynchronous, so a server that is still `connecting` when a session starts contributes no tools to its partition. When the connection completes, open sessions re-run the partition and the server's tools become invocable without a restart or a model change; the same refresh activates [`read_mcp_resource`](#read_mcp_resource) if the server publishes a permitted resource.
+
+How a discovered tool is executed and how its annotations drive approvals is covered in [MCP Tool Execution Model](#6-mcp-tool-execution-model).
 
 ### Activation Through `tool_search`
 
@@ -819,3 +886,47 @@ Deferring a tool therefore trades first-turn availability for context cost: the 
 ### Inspecting The Partition
 
 Run [`/tools`](cli.md#tools-browser-tools) in the CLI to browse every workspace and built-in tool with its resolved status (`[Eager]`, `[Deferred]`, `[Denied]`, `[Inactive]`), scope, safety annotations, and JSON schemas for the active agent.
+
+---
+
+## 6. MCP Tool Execution Model
+
+Every tool a connected [MCP server](manifests.md#10-mcp-server-manifest-mcpyaml) advertises is registered as a first-class tool in the same container as built-ins and custom tools, under the name `<server>__<tool>`. It is validated, permission-checked, and output-truncated by the same pipeline; what differs is where its definition and its safety posture come from.
+
+### Definition Sources
+
+| Facet | Source |
+| :--- | :--- |
+| Name | `<server>__<raw tool name>`, so two servers exposing the same tool name never collide. |
+| Description | The description the server sent during discovery; a tool that sends none gets a synthesized fallback naming the server and the tool. An MCP manifest cannot supply a per-tool description — its `metadata.description` describes the server, not its tools. |
+| Input schema | The JSON schema the server advertised; call arguments are validated against it before the request is sent. A tool whose schema is absent or unparseable is advertised as taking an arbitrary object, so it stays callable rather than dropping out of the catalog. |
+| Output schema | The schema the server advertised, else a string schema. Output is not validated against it. |
+| Safety annotations | The server manifest's `overrides` entry for the tool, else its `annotations`, else what the server itself reported during discovery — so an author can raise or lower what a server claims. See [MCP Server Manifest](manifests.md#10-mcp-server-manifest-mcpyaml). |
+
+### Approval Plans
+
+The plan is derived from the resolved annotations through the [same mapping as custom tools](#declarative-annotations-as-the-security-baseline), so a tool declared read-only and not open-world auto-allows in `default` mode while an unannotated tool surfaces a prompt. Declaring a tool read-only is not on its own enough to be auto-allowed: a tool that is also open-world keeps `unknown` safety and still prompts. Two details differ:
+
+| Aspect | Custom tool | MCP tool |
+| :--- | :--- | :--- |
+| Plan target | Rendered command line | `<server>/<raw tool name>` |
+| Default summary | `Run custom tool: <name>` | `Run MCP tool: <name>` |
+
+Keying the target on the server name means an approval granted to one server's tools can never cover a same-named tool on another server, and a grant can be scoped to a single server with a trailing glob.
+
+### Prohibited Tools Are A Hard Block
+
+A tool the server manifest blocks under `spec.policies.tools` is rejected before the request leaves TaskSmith, with an error naming the policy section and the manifest path relative to the workspace root. The check runs against the live workspace catalog on every call rather than against a snapshot taken when the container was built, so a reload that tightens `spec.policies` takes effect immediately for sessions that already hold the tool. There is no per-call override for a prohibited tool: widening access means editing `spec.policies.tools`. The `allowProhibited` escape hatch covers prompts and resource reads only — available to a user through the `/mcp` confirmation or the [MCP HTTP endpoints](cli.md#mcp-http-endpoints) — and the agent-facing tool path never sets it, so an agent cannot escalate its own access. See [Scoping MCP resources](../guides/tools-and-mcp.md#scoping-mcp-resources).
+
+### Result Aggregation
+
+An MCP call streams content back as chunks, which TaskSmith flattens into a single tool result:
+
+| Chunk content | Handling |
+| :--- | :--- |
+| Text | Appended to the result text; the whole is spilled to a file when it exceeds output limits, leaving the model a head-plus-tail preview. |
+| Image, audio, video, document | Passed through to the model unmodified, since re-truncating binary payloads would corrupt them. |
+| Structured content | The last non-empty value is retained. When the server returned only structured content, it is serialized as JSON in the result text. |
+| Chunk flagged `isError` | Marks the whole result as a tool error, so the model sees the server's own failure message instead of a transport exception. |
+
+A transport failure is reported the same way — as an error result carrying the failure text — so a broken server never surfaces as an empty successful result. A call that yields nothing at all still returns a result rather than silence: `MCP tool returned no content`, or `MCP tool reported an error` when the server flagged the chunk as an error without sending text.

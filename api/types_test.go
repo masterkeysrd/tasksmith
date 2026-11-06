@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -1125,5 +1126,209 @@ func TestContextAndCompactionTypes(t *testing.T) {
 	}
 	if cbDecoded.CacheBroken.PrevCached != 50000 || cbDecoded.CacheBroken.CurrCached != 0 || cbDecoded.CacheBroken.InputTokens != 55000 {
 		t.Errorf("CacheBrokenRecord fields mismatch: %+v", cbDecoded.CacheBroken)
+	}
+}
+
+func sortedFieldNames(fields map[string]json.RawMessage) []string {
+	names := make([]string, 0, len(fields))
+	for name := range fields {
+		names = append(names, name)
+	}
+	slices.Sort(names)
+	return names
+}
+
+func TestMCPServerJSONRoundTrip(t *testing.T) {
+	server := MCPServer{
+		Name:        "github",
+		DisplayName: "GitHub",
+		Description: "GitHub MCP server",
+		Namespace:   "workspace",
+		Scope:       "Workspace",
+		Path:        ".agents/github.mcp.yaml",
+		Transport:   "stdio",
+		Command:     []string{"npx", "-y", "@modelcontextprotocol/server-github"},
+		AuthType:    "oauth2",
+		Status:      MCPStatusAuthRequired,
+		AuthURL:     "https://github.com/login/oauth/authorize?state=abc",
+		Tools: []MCPToolSummary{
+			{
+				Name:        "github__create_issue",
+				RawName:     "create_issue",
+				Description: "Create an issue",
+				Allowed:     true,
+				Annotations: ToolAnnotation{IsReadOnly: false, IsDangerous: true, UserHint: "Create issue"},
+				InputSchema: map[string]any{"type": "object"},
+			},
+			{
+				Name:    "github__delete_repo",
+				RawName: "delete_repo",
+				Allowed: false,
+			},
+		},
+		Prompts: []MCPPromptSummary{
+			{
+				Name:        "review-pr",
+				Description: "Review a pull request",
+				Arguments:   []MCPPromptArgument{{Name: "pr", Title: "PR", Description: "PR number", Required: true}},
+				Allowed:     true,
+			},
+		},
+		Resources: []MCPResourceSummary{
+			{Name: "contributing", Title: "Contributing", URI: "file://CONTRIBUTING.md", MIMEType: "text/markdown", Size: 2048, Allowed: false},
+		},
+	}
+
+	data, err := json.Marshal(server)
+	if err != nil {
+		t.Fatalf("Marshal MCPServer: %v", err)
+	}
+
+	var decoded MCPServer
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("Unmarshal MCPServer: %v", err)
+	}
+	if decoded.Status != MCPStatusAuthRequired || decoded.AuthURL != server.AuthURL {
+		t.Errorf("status/authUrl mismatch: %+v", decoded)
+	}
+	if len(decoded.Tools) != 2 || decoded.Tools[0].Name != "github__create_issue" || !decoded.Tools[0].Allowed {
+		t.Errorf("tools mismatch: %+v", decoded.Tools)
+	}
+	if decoded.Tools[1].Allowed {
+		t.Errorf("prohibited tool must round-trip with allowed=false: %+v", decoded.Tools[1])
+	}
+	if decoded.Tools[0].Annotations.UserHint != "Create issue" || !decoded.Tools[0].Annotations.IsDangerous {
+		t.Errorf("annotations mismatch: %+v", decoded.Tools[0].Annotations)
+	}
+	if len(decoded.Prompts) != 1 || len(decoded.Prompts[0].Arguments) != 1 || !decoded.Prompts[0].Arguments[0].Required {
+		t.Errorf("prompts mismatch: %+v", decoded.Prompts)
+	}
+	if len(decoded.Resources) != 1 || decoded.Resources[0].URI != "file://CONTRIBUTING.md" || decoded.Resources[0].Size != 2048 {
+		t.Errorf("resources mismatch: %+v", decoded.Resources)
+	}
+
+	// Required fields are always present; optional ones are omitted when empty.
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		t.Fatalf("unmarshal MCPServer into field map: %v", err)
+	}
+	for _, required := range []string{"name", "transport", "status"} {
+		if _, ok := fields[required]; !ok {
+			t.Errorf("expected required JSON field %q, got fields %v", required, sortedFieldNames(fields))
+		}
+	}
+	for _, optional := range []string{"endpoint", "error"} {
+		if _, ok := fields[optional]; ok {
+			t.Errorf("expected empty optional JSON field %q to be omitted", optional)
+		}
+	}
+
+	// A disconnected server with nothing discovered reports an empty tool list.
+	empty, err := json.Marshal(MCPServer{Name: "offline", Transport: "stdio", Status: MCPStatusDisconnected})
+	if err != nil {
+		t.Fatalf("Marshal empty MCPServer: %v", err)
+	}
+	for _, field := range []string{"tools", "prompts", "resources", "command"} {
+		if strings.Contains(string(empty), `"`+field+`"`) {
+			t.Errorf("expected empty discovery field %q to be omitted, got %s", field, empty)
+		}
+	}
+}
+
+func TestMCPStatusValues(t *testing.T) {
+	want := []MCPStatus{
+		MCPStatusDisconnected,
+		MCPStatusConnecting,
+		MCPStatusConnected,
+		MCPStatusAuthRequired,
+		MCPStatusError,
+	}
+	for i, status := range want {
+		if string(status) == "" {
+			t.Fatalf("MCPStatus at index %d is empty", i)
+		}
+	}
+	if got := []string{
+		string(MCPStatusDisconnected),
+		string(MCPStatusConnecting),
+		string(MCPStatusConnected),
+		string(MCPStatusAuthRequired),
+		string(MCPStatusError),
+	}; !reflect.DeepEqual(got, []string{"disconnected", "connecting", "connected", "auth_required", "error"}) {
+		t.Errorf("MCPStatus wire values = %v", got)
+	}
+}
+
+func TestMCPOperationRequestResponseJSON(t *testing.T) {
+	authData, err := json.Marshal(MCPAuthResponse{AuthURL: "https://example.com/authorize", Status: MCPStatusAuthRequired})
+	if err != nil {
+		t.Fatalf("Marshal MCPAuthResponse: %v", err)
+	}
+	if !strings.Contains(string(authData), `"authUrl":"https://example.com/authorize"`) {
+		t.Errorf("MCPAuthResponse JSON = %s", authData)
+	}
+
+	promptReq := MCPPromptRequest{Args: map[string]string{"pr": "42"}, AllowProhibited: true}
+	promptReqData, err := json.Marshal(promptReq)
+	if err != nil {
+		t.Fatalf("Marshal MCPPromptRequest: %v", err)
+	}
+	var decodedPromptReq MCPPromptRequest
+	if err := json.Unmarshal(promptReqData, &decodedPromptReq); err != nil {
+		t.Fatalf("Unmarshal MCPPromptRequest: %v", err)
+	}
+	if decodedPromptReq.Args["pr"] != "42" || !decodedPromptReq.AllowProhibited {
+		t.Errorf("MCPPromptRequest round-trip = %+v (json %s)", decodedPromptReq, promptReqData)
+	}
+
+	promptRespData, err := json.Marshal(MCPPromptResponse{
+		Description: "Review a pull request",
+		Messages:    []MCPPromptMessage{{Role: RoleUser, Text: "Review PR 42"}},
+	})
+	if err != nil {
+		t.Fatalf("Marshal MCPPromptResponse: %v", err)
+	}
+	var decodedPromptResp MCPPromptResponse
+	if err := json.Unmarshal(promptRespData, &decodedPromptResp); err != nil {
+		t.Fatalf("Unmarshal MCPPromptResponse: %v", err)
+	}
+	if len(decodedPromptResp.Messages) != 1 || decodedPromptResp.Messages[0].Role != RoleUser {
+		t.Errorf("MCPPromptResponse round-trip = %+v", decodedPromptResp)
+	}
+
+	resourceReqData, err := json.Marshal(MCPResourceRequest{URI: "file://CONTRIBUTING.md"})
+	if err != nil {
+		t.Fatalf("Marshal MCPResourceRequest: %v", err)
+	}
+	if strings.Contains(string(resourceReqData), "allowProhibited") {
+		t.Errorf("expected allowProhibited to be omitted when false, got %s", resourceReqData)
+	}
+	var decodedResourceReq MCPResourceRequest
+	if err := json.Unmarshal(resourceReqData, &decodedResourceReq); err != nil {
+		t.Fatalf("Unmarshal MCPResourceRequest: %v", err)
+	}
+	if decodedResourceReq.URI != "file://CONTRIBUTING.md" || decodedResourceReq.AllowProhibited {
+		t.Errorf("MCPResourceRequest round-trip = %+v", decodedResourceReq)
+	}
+
+	resourceResp := MCPResourceResponse{URI: "file://CONTRIBUTING.md", MIMEType: "text/markdown", Text: "# Contributing"}
+	resourceRespData, err := json.Marshal(resourceResp)
+	if err != nil {
+		t.Fatalf("Marshal MCPResourceResponse: %v", err)
+	}
+	var decodedResourceResp MCPResourceResponse
+	if err := json.Unmarshal(resourceRespData, &decodedResourceResp); err != nil {
+		t.Fatalf("Unmarshal MCPResourceResponse: %v", err)
+	}
+	if decodedResourceResp != resourceResp {
+		t.Errorf("MCPResourceResponse round-trip = %+v, want %+v", decodedResourceResp, resourceResp)
+	}
+
+	allowReqData, err := json.Marshal(MCPAllowPolicyRequest{Kind: MCPAllowPolicyKindResource, Value: "file://CONTRIBUTING.md"})
+	if err != nil {
+		t.Fatalf("Marshal MCPAllowPolicyRequest: %v", err)
+	}
+	if !strings.Contains(string(allowReqData), `"kind":"resource"`) {
+		t.Errorf("MCPAllowPolicyRequest JSON = %s", allowReqData)
 	}
 }

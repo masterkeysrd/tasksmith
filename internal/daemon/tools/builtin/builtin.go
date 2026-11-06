@@ -53,6 +53,10 @@ type Config struct {
 	// context (DeferLoading: true). Skill tools in this set are activated into
 	// context via tool references when the skill is loaded.
 	DeferredTools []string
+	// MCPCaller is the MCP runtime backing the resource-reading built-in tool. When
+	// nil, that tool is not constructed: with no runtime attached there is nothing
+	// for it to read, and offering it would only invite failed calls.
+	MCPCaller tools.MCPCaller
 }
 
 // Validate ensures that all required dependencies are non-nil. Zero silent
@@ -136,6 +140,20 @@ func New(cfg Config) ([]tools.Tool, error) {
 		{ToolLoadRule, func(m tools.Metadata) tools.Tool {
 			return tools.NewHandler(ToolLoadRule, m, newLoadRuleTool(cfg.Rules, cfg.Workspace, cfg.Agent))
 		}},
+	}
+
+	// read_mcp_resource needs a live MCP runtime to read from, so it is offered only
+	// when one is attached. The catalog independently keeps it out of every agent's
+	// tool list until a server actually exposes a permitted resource.
+	if cfg.MCPCaller != nil {
+		toolEntries = append(toolEntries, struct {
+			name    string
+			factory func(meta tools.Metadata) tools.Tool
+		}{
+			ToolReadMCPResource, func(m tools.Metadata) tools.Tool {
+				return tools.NewHandler(ToolReadMCPResource, m, newReadMCPResourceTool(cfg.Workspace, cfg.MCPCaller, m.Annotation))
+			},
+		})
 	}
 
 	if cfg.Agents != nil && len(cfg.Subagents) > 0 {

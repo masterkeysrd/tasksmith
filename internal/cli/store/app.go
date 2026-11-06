@@ -2,6 +2,7 @@ package store
 
 import (
 	"slices"
+	"sync"
 
 	"github.com/masterkeysrd/kite/extras/kites"
 	"github.com/masterkeysrd/kite/extras/trail"
@@ -37,6 +38,9 @@ type AppState struct {
 	Skills        *[]api.Skill
 	Rules         *[]api.Rule
 	Tools         *[]api.Tool
+	// MCPServers holds the last retrieved MCP server listing, including live
+	// connection status and everything discovered on each server.
+	MCPServers *[]api.MCPServer
 	// ToolsAgent is the agent the cached Tools statuses were classified for.
 	ToolsAgent string
 	// ToolsFetched records that a tool listing has been retrieved at least once,
@@ -106,8 +110,31 @@ func UseHint(hint string) {
 	}, []any{hint})
 }
 
-// SetWorkspaceWarnings updates the workspace warnings in AppState.
+// SetWorkspaceWarnings records the warnings the daemon reported for the workspace
+// and refreshes what the header shows. These are the workspace's own problems —
+// a provider missing an API key, a manifest that failed to parse — which stay true
+// until the workspace is fetched again. MCP server health is deliberately not part
+// of this: it changes while the session runs, and holding it in the header made the
+// startup banner jump and keep stale state. See SetWorkspaceMCPServers.
 func SetWorkspaceWarnings(warnings []string) {
+	setHeaderWarnings(dedupeWarnings(warnings))
+}
+
+func dedupeWarnings(warnings []string) []string {
+	merged := make([]string, 0, len(warnings))
+	for _, warning := range warnings {
+		if !slices.Contains(merged, warning) {
+			merged = append(merged, warning)
+		}
+	}
+	if len(merged) == 0 {
+		return nil
+	}
+	return merged
+}
+
+// setHeaderWarnings writes the composed warnings into AppState.
+func setHeaderWarnings(warnings []string) {
 	app.Set(func(s AppState) AppState {
 		if len(warnings) == 0 {
 			if s.Warnings == nil {
@@ -190,6 +217,90 @@ func SetWorkspaceRules(rules []api.Rule) {
 	})
 }
 
+// SetWorkspaceMCPServers updates the cached MCP server listing in AppState. The
+// listing carries live connection status, so it is replaced wholesale rather than
+// merged; an empty listing clears the cache so a later fetch re-runs.
+//
+// A server that has settled into needing authentication or failing to connect is
+// announced once in the conversation timeline rather than pinned to the header: the
+// listing is polled, so the header would jitter, and a warning that disappears when
+// the server connects cannot be read afterwards. Each distinct problem is announced
+// once, and a server whose problem changes — a new failure reason, or an
+// authentication request that turns into a connection error — is announced again.
+func SetWorkspaceMCPServers(servers []api.MCPServer) {
+	setWorkspaceMCPServersState(servers)
+	announceMCPServerWarnings(servers, true)
+}
+
+// SetWorkspaceMCPServersSilent updates the cached MCP server listing and marks any
+// current server warnings as already seen without appending a timeline warning. Use
+// this after an explicit user action (such as /mcp auth or /mcp restart) that
+// already writes its own outcome to the timeline so the same failure is not
+// reported twice.
+func SetWorkspaceMCPServersSilent(servers []api.MCPServer) {
+	setWorkspaceMCPServersState(servers)
+	announceMCPServerWarnings(servers, false)
+}
+
+func setWorkspaceMCPServersState(servers []api.MCPServer) {
+	app.Set(func(s AppState) AppState {
+		if len(servers) == 0 {
+			if s.MCPServers == nil {
+				return s
+			}
+			s.MCPServers = nil
+			return s
+		}
+		sm := slices.Clone(servers)
+		s.MCPServers = &sm
+		return s
+	})
+}
+
+// mcpWarned tracks which MCP server problems the timeline has already announced,
+// keyed by server name. A connected or still-connecting server drops its entry, so
+// a server that breaks again is reported again.
+var mcpWarned sync.Map
+
+// announceMCPServerWarnings writes a timeline warning for every server that has
+// settled into an unhealthy state and has not been announced with this exact
+// problem yet. Servers that are no longer in the listing are forgotten, so a
+// re-added server reporting the same problem is reported again.
+func announceMCPServerWarnings(servers []api.MCPServer, emit bool) {
+	present := make(map[string]struct{}, len(servers))
+	for _, server := range servers {
+		present[server.Name] = struct{}{}
+		warning := api.MCPServerWarning(server)
+		if warning == "" {
+			mcpWarned.Delete(server.Name)
+			continue
+		}
+		if previous, ok := mcpWarned.Load(server.Name); ok && previous == warning {
+			continue
+		}
+		mcpWarned.Store(server.Name, warning)
+		if emit {
+			AppendWarning(warning)
+		}
+	}
+	mcpWarned.Range(func(name, _ any) bool {
+		if _, ok := present[name.(string)]; !ok {
+			mcpWarned.Delete(name)
+		}
+		return true
+	})
+}
+
+// ClearMCPWarningAnnouncements forgets which MCP server problems were announced.
+// Starting a session in a different workspace, or fetching a listing that is now
+// empty, means the next unhealthy reading deserves to be said again.
+func ClearMCPWarningAnnouncements() {
+	mcpWarned.Range(func(name, _ any) bool {
+		mcpWarned.Delete(name)
+		return true
+	})
+}
+
 // SetDefaultAgent records the workspace's default agent name in AppState. It is
 // the agent used for tool status classification when the session has none.
 func SetDefaultAgent(agent string) {
@@ -239,6 +350,9 @@ func UseDaemonStatus() DaemonStatus {
 
 // ResetApp resets AppState to its default values while preserving version, workspace, and warnings.
 func ResetApp() {
+	// The cached MCP listing is dropped below, so forget what the timeline already
+	// announced about it; the next listing deserves to speak for itself.
+	ClearMCPWarningAnnouncements()
 	app.Set(func(s AppState) AppState {
 		return AppState{
 			Hint:         DefaultHint,

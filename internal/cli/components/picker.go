@@ -53,12 +53,16 @@ type pickerModalState struct {
 
 // PickerProps defines the properties for the interactive Picker component.
 type PickerProps struct {
-	Title          string
-	Header         trail.Node // Optional custom header row (e.g. column headers)
-	Options        []components.Option
-	MaxVisible     int                     // Max visible options before scrolling (defaults to components.DefaultPickerMaxVisible)
-	Columns        []components.Column     // Column specifications forwarded to OptionList
-	Bindings       []components.KeyBinding // Optional navigation shortcuts rendered inline via KeyboardHint
+	Title      string
+	Subtitle   string // Optional muted line under the title (e.g. an item count)
+	Header     trail.Node
+	Options    []components.Option
+	MaxVisible int                     // Max visible options before scrolling (defaults to components.DefaultPickerMaxVisible)
+	Columns    []components.Column     // Column specifications forwarded to OptionList
+	Bindings   []components.KeyBinding // Optional navigation shortcuts rendered inline via KeyboardHint
+	// GroupLabel is forwarded to OptionList to render a muted heading whenever the
+	// grouping changes between adjacent options.
+	GroupLabel     func(opt components.Option) string
 	Filterable     bool
 	OnOpen         func()
 	OnSelect       func(opt components.Option)
@@ -283,6 +287,21 @@ var Picker = trail.FC("Picker", func(props PickerProps) trail.Node {
 		}, trail.Text(props.Title))))
 	}
 
+	// Subtitle
+	if props.Subtitle != "" {
+		subtitleStyle := style.S().Foreground(scheme.Color.Text.Muted)
+		// A listing with no filter row needs its own breath below the count line.
+		subtitleMargin := style.S().FlexDirection(style.FlexRow)
+		if !props.Filterable {
+			subtitleMargin = subtitleMargin.Margin(0, 0, 1, 0)
+		}
+		rows = append(rows, trail.Box(trail.BoxProps{
+			Style: subtitleMargin,
+		}, trail.Span(trail.SpanProps{
+			Style: subtitleStyle,
+		}, trail.Text(props.Subtitle))))
+	}
+
 	// Filter input row
 	if props.Filterable && st.mode == pickerModeBrowse {
 		filterPromptStyle := style.S().Bold(true).Margin(0, 1, 0, 0).Flex(0, 0).WhiteSpace(style.WhiteSpacePre).Foreground(scheme.Color.Text.Primary)
@@ -340,6 +359,7 @@ var Picker = trail.FC("Picker", func(props PickerProps) trail.Node {
 		MaxVisible: maxVis,
 		Columns:    props.Columns,
 		Styles:     optionStyles,
+		GroupLabel: props.GroupLabel,
 	}))
 
 	// Inline prompt mode (confirm or input)

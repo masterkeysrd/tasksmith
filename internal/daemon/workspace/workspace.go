@@ -116,6 +116,7 @@ type Workspace struct {
 	registry *warp.Registry
 	env      map[string]string
 	catalog  *Catalog
+	mcp      MCPService
 }
 
 // Open discovers and loads the workspace for dir, applying the 4-tier resource
@@ -157,7 +158,7 @@ func Open(ctx context.Context, dir string, opts ...Option) (*Workspace, error) {
 // current instance until the returned commit function is invoked.
 func (w *Workspace) PrepareReload(ctx context.Context) (*Workspace, func(), error) {
 	w.mu.RLock()
-	next := &Workspace{cwd: w.cwd, rootDir: w.rootDir, opts: w.opts}
+	next := &Workspace{cwd: w.cwd, rootDir: w.rootDir, opts: w.opts, mcp: w.mcp}
 	w.mu.RUnlock()
 	if err := next.Reload(ctx); err != nil {
 		return nil, nil, err
@@ -169,6 +170,7 @@ func (w *Workspace) PrepareReload(ctx context.Context) (*Workspace, func(), erro
 		w.rootDir = next.rootDir
 		w.env = next.env
 		w.catalog = next.catalog
+		w.mcp = next.mcp
 	}
 	return next, commit, nil
 }
@@ -243,6 +245,10 @@ func (w *Workspace) Reload(ctx context.Context) error {
 	w.rootDir = rootDir
 	w.env = loadedEnv
 	w.catalog = NewCatalog(reg, w.cwd, rootDir)
+	// The catalog is freshly built, so it carries no resource probe; re-install it
+	// against the runtime this workspace already has attached. The caller holds the
+	// workspace write lock, so w.mcp is read directly rather than through MCP().
+	w.setMCPResourceProbe(w.catalog, w.mcp)
 	return nil
 }
 

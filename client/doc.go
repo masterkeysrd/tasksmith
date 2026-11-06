@@ -9,6 +9,19 @@
 //   - [Client.Cancel],
 //     and file mutation journal methods ([Client.Changes], [Client.DiffChange], [Client.Revert]).
 //
+// # MCP Server Operations
+//
+// Configured MCP servers are inspected and driven through the workspace-scoped
+// `/v1/workspace/mcps` routes:
+//   - [Client.ListMCPs]: lists each server's resolved transport, live status, and
+//     discovered tools, prompts, and resources ([api.MCPServer]).
+//   - [Client.RestartMCP] and [Client.AuthenticateMCP]: reconnect a server or start
+//     its interactive authorization flow.
+//   - [Client.GetMCPPrompt] and [Client.ReadMCPResource]: render a prompt or read a
+//     resource; items blocked by a server manifest's policies are rejected unless
+//     the request opts into a single user-authorized use.
+//   - [Client.AllowMCPPolicy]: permit a blocked item by updating the manifest.
+//
 // # Real-Time Server-Sent Events (SSE)
 //
 // Clients stream typed real-time notifications ([api.Event]) from the daemon's internal event broker:

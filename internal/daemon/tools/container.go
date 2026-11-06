@@ -40,6 +40,10 @@ type Config struct {
 	// deferred tools' definitions. It is invoked (and tool_search registered)
 	// only when there is at least one deferred tool.
 	ToolSearchFactory func(defs []tool.Definition) Tool
+	// MCPCaller is the MCP runtime used to execute tools discovered on MCP
+	// servers. When nil, no MCP tool is registered: the servers stay discoverable
+	// in listings but nothing can invoke their tools.
+	MCPCaller MCPCaller
 }
 
 // Validate ensures that all required dependencies are non-nil. Zero silent
@@ -78,6 +82,7 @@ type container struct {
 	agent        *warp.Agent
 	logger       log.Interface
 	spiller      Spiller
+	mcpCaller    MCPCaller
 	order        []string
 	tools        map[string]Tool
 	locksMu      sync.Mutex
@@ -109,6 +114,7 @@ func NewContainer(cfg Config) (Container, error) {
 		agent:        cfg.Agent,
 		logger:       cfg.Logger.ForComponent("tools"),
 		spiller:      sp,
+		mcpCaller:    cfg.MCPCaller,
 		tools:        make(map[string]Tool, len(cfg.Tools)),
 		pathLocks:    make(map[string]*sync.Mutex),
 		allowedTools: cfg.AllowedTools,
@@ -119,6 +125,10 @@ func NewContainer(cfg Config) (Container, error) {
 	}
 
 	if err := c.registerCustomTools(); err != nil {
+		return nil, err
+	}
+
+	if err := c.registerMCPTools(); err != nil {
 		return nil, err
 	}
 

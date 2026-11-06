@@ -115,6 +115,14 @@ func InitSession(ctx context.Context, c *client.Client, opts InitSessionOptions)
 		SetWorkspaceWarnings(ws.Warnings)
 		SetDefaultAgent(strings.TrimSpace(ws.DefaultAgent))
 	}
+	// MCP servers connect in the background when the workspace opens, so the
+	// workspace payload fetched above can still describe them as connecting. Cache
+	// the listing now and keep watching briefly so a server that needs a login or
+	// failed to start reports itself in the timeline instead of staying invisible.
+	if servers, err := c.ListMCPs(subCtx); err == nil {
+		SetWorkspaceMCPServers(servers)
+		watchMCPSettlement(subCtx, c, servers)
+	}
 	if cmds, err := c.ListCommands(subCtx); err == nil {
 		SetWorkspaceCommands(cmds)
 	}
@@ -1034,6 +1042,12 @@ func resyncDaemonState(ctx context.Context, c *client.Client) {
 		SetWorkspaceWarnings(ws.Warnings)
 		SetDefaultAgent(strings.TrimSpace(ws.DefaultAgent))
 	}
+	// A resync follows a daemon restart, so MCP connections are starting over and
+	// the cached health is stale; re-list and keep watching while they settle.
+	if servers, err := c.ListMCPs(ctx); err == nil {
+		SetWorkspaceMCPServers(servers)
+		watchMCPSettlement(ctx, c, servers)
+	}
 	if cmds, err := c.ListCommands(ctx); err == nil {
 		SetWorkspaceCommands(cmds)
 	}
@@ -1095,6 +1109,52 @@ func resyncDaemonState(ctx context.Context, c *client.Client) {
 		showSessionDiagnostics(sess, false)
 		startSessionStreamWatcher(pCtx, sess.ID)
 	}
+}
+
+// mcpSettleInterval and mcpSettleTimeout bound the background poll that waits for
+// MCP servers still connecting when a session initializes. They are variables so
+// tests can watch a whole settle without waiting out a real connect budget.
+var (
+	mcpSettleInterval = 400 * time.Millisecond
+	mcpSettleTimeout  = 10 * time.Second
+)
+
+// watchMCPSettlement refreshes the cached MCP listing in the background until no
+// server is still connecting, the wait expires, or the session context ends. A
+// server that settles into auth_required or error is announced in the timeline
+// only once its status is known, so this is what makes the announcement appear
+// for servers that were still connecting when the CLI started.
+func watchMCPSettlement(ctx context.Context, c *client.Client, servers []api.MCPServer) {
+	if !hasConnectingMCP(servers) {
+		return
+	}
+	go func() {
+		deadline := time.Now().Add(mcpSettleTimeout)
+		ticker := time.NewTicker(mcpSettleInterval)
+		defer ticker.Stop()
+		for time.Now().Before(deadline) {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+			}
+			updated, err := c.ListMCPs(ctx)
+			if err != nil {
+				return
+			}
+			SetWorkspaceMCPServers(updated)
+			if !hasConnectingMCP(updated) {
+				return
+			}
+		}
+	}()
+}
+
+// hasConnectingMCP reports whether any server in the listing is still connecting.
+func hasConnectingMCP(servers []api.MCPServer) bool {
+	return slices.ContainsFunc(servers, func(server api.MCPServer) bool {
+		return server.Status == api.MCPStatusConnecting
+	})
 }
 
 // StartDaemon ensures the background Brain Daemon is running.
@@ -1537,6 +1597,11 @@ func ReloadWorkspace(ctx context.Context) error {
 	if ws, err := c.GetWorkspace(ctx); err == nil {
 		SetWorkspaceWarnings(ws.Warnings)
 		SetDefaultAgent(strings.TrimSpace(ws.DefaultAgent))
+	}
+	// A reload re-syncs MCP connections, so health captured before it is stale.
+	if servers, err := c.ListMCPs(ctx); err == nil {
+		SetWorkspaceMCPServers(servers)
+		watchMCPSettlement(ctx, c, servers)
 	}
 	state := GetSession()
 	if state.Session == nil {

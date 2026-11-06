@@ -370,9 +370,14 @@ func sanitizeDescription(desc string) string {
 	return desc
 }
 
+// knownAcronyms maps a lowercased name segment to the Go-initialism spelling used
+// in generated identifiers, so a manifest property such as "uri" yields URI rather
+// than Uri and a tool named read_mcp_resource yields ReadMCPResource.
 var knownAcronyms = map[string]string{
 	"id":  "ID",
 	"url": "URL",
+	"uri": "URI",
+	"mcp": "MCP",
 }
 
 func toPascal(s string) string {
@@ -385,6 +390,10 @@ func toPascal(s string) string {
 			continue
 		}
 		lower := strings.ToLower(p)
+		if acr, ok := knownAcronyms[lower]; ok {
+			sb.WriteString(acr)
+			continue
+		}
 		sb.WriteString(strings.ToUpper(lower[:1]))
 		sb.WriteString(lower[1:])
 	}

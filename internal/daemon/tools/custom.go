@@ -305,11 +305,29 @@ func (ct *customTool) Prepare(ctx context.Context, args map[string]any) (*Plan, 
 
 	// The security posture is taken verbatim from the manifest annotations; no
 	// path or risk is guessed from argument key names.
+	return customPlanFromAnnotation(ct.def.Name, ct.def.Annotation, strings.Join(argv, " "),
+		fmt.Sprintf("Run custom tool: %s", ct.def.Name)), nil
+}
+
+// PlanFromAnnotation derives a [Plan] from a manifest's safety annotations and the
+// invocation's target. It is exported so built-in tools whose effect depends on an
+// external server can share the exact mapping command-backed and MCP tools use,
+// instead of restating the annotation precedence.
+func PlanFromAnnotation(name string, ann tool.Annotation, target, defaultSummary string) *Plan {
+	return customPlanFromAnnotation(name, ann, target, defaultSummary)
+}
+
+// customPlanFromAnnotation derives a [Plan] from a manifest's safety annotations.
+// It is the single mapping shared by command-backed custom tools and tools
+// discovered on MCP servers, so an annotation produces identical permission-plan
+// semantics regardless of where the tool came from. Nothing is inferred from
+// argument values: unannotated tools stay unknown-safety and non-read-only, which
+// makes the permission gate ask rather than silently allow.
+func customPlanFromAnnotation(name string, ann tool.Annotation, target, defaultSummary string) *Plan {
 	action := api.ActionExec
 	safety := api.SafetyUnknown
 	readOnly := false
 
-	ann := ct.def.Annotation
 	switch {
 	case ann.IsDangerous:
 		action = api.ActionExec
@@ -324,8 +342,7 @@ func (ct *customTool) Prepare(ctx context.Context, args map[string]any) (*Plan, 
 		action = api.ActionNet
 	}
 
-	target := strings.Join(argv, " ")
-	summary := fmt.Sprintf("Run custom tool: %s", ct.def.Name)
+	summary := defaultSummary
 	if ann.UserHint != "" {
 		if strings.Contains(ann.UserHint, "%s") {
 			summary = fmt.Sprintf(ann.UserHint, target)
@@ -335,13 +352,13 @@ func (ct *customTool) Prepare(ctx context.Context, args map[string]any) (*Plan, 
 	}
 
 	return &Plan{
-		ToolName: ct.def.Name,
+		ToolName: name,
 		Action:   action,
 		Safety:   safety,
 		Target:   target,
 		Summary:  summary,
 		ReadOnly: readOnly,
-	}, nil
+	}
 }
 
 func (ct *customTool) Execute(ctx context.Context, call *message.ToolCall) (*message.Tool, error) {

@@ -41,6 +41,9 @@ func (r *workspaceRuntime) loadOrCacheSession(ctx context.Context, dbSess *sessi
 		ReloadLock:  r.reloadMu,
 		Context:     r.bgCtx,
 		WaitGroup:   &r.wg,
+		// Restored sessions need the caller too, or a session resumed after a
+		// daemon restart would silently lose every MCP tool.
+		MCPCaller: r.MCPCaller,
 		OnUpdate: func(ctx context.Context, s *session.Session) error {
 			if err := s.CheckpointTo(ctx, r.sessionStore); err != nil {
 				return err
@@ -123,6 +126,7 @@ func (r *workspaceRuntime) CreateSession(ctx context.Context, req api.CreateSess
 		ReloadLock:  r.reloadMu,
 		Context:     r.bgCtx,
 		WaitGroup:   &r.wg,
+		MCPCaller:   r.MCPCaller,
 		OnUpdate: func(ctx context.Context, s *session.Session) error {
 			if err := s.CheckpointTo(ctx, r.sessionStore); err != nil {
 				return err

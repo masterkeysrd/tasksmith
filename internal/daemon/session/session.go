@@ -55,6 +55,11 @@ type Config struct {
 	Context     context.Context
 	WaitGroup   *sync.WaitGroup
 	OnUpdate    func(ctx context.Context, s *Session) error
+	// MCPCaller resolves the MCP runtime for this session's workspace, or nil when
+	// no MCP manager is attached. It is a function rather than a value because a
+	// workspace reload replaces the runtime's context while sessions stay alive, so
+	// each rebuild of the session's tool container must resolve the current one.
+	MCPCaller func() tools.MCPCaller
 }
 
 // Validate checks that all required configuration dependencies are non-nil.
@@ -118,6 +123,7 @@ func initSession(ctx context.Context, sess *Session, cfg Config) error {
 	sess.bgCtx = cfg.Context
 	sess.wg = cfg.WaitGroup
 	sess.onUpdate = cfg.OnUpdate
+	sess.mcpCaller = cfg.MCPCaller
 	sess.db = cfg.DB
 	sess.parent = cfg.Parent
 	if sess.parent != nil {
@@ -299,6 +305,7 @@ type Session struct {
 	gateway    func() gateway.Gateway `json:"-"`
 	catalog    func() *models.Catalog `json:"-"`
 	metrics    metrics.Service        `json:"-"`
+	mcpCaller  func() tools.MCPCaller `json:"-"`
 	reloadLock *sync.RWMutex          `json:"-"`
 	publisher  Publisher              `json:"-"`
 	logger     log.Interface          `json:"-"`
@@ -818,12 +825,14 @@ func (s *Session) configureHarness(ctx context.Context) error {
 		var agentPolicies *warp.Policies
 		var hasDeferred bool
 		var hasConditionalRules bool
+		var hasMCPResources bool
 		if resolved != nil {
 			agentPolicies = resolved.Agent.Spec.Policies
 			if partition := cat.PartitionAgentTools(resolved); len(partition.Deferred) > 0 {
 				hasDeferred = true
 			}
 			hasConditionalRules = cat.HasConditionalRules(resolved)
+			hasMCPResources = cat.HasAllowedMCPResources()
 		}
 		// When deferred tools exist, tool_search is auto-activated as an eager
 		// tool, and when conditional rules exist, load_rule is auto-activated as
@@ -836,6 +845,11 @@ func (s *Session) configureHarness(ctx context.Context) error {
 			}
 			if hasConditionalRules {
 				sysTools = append(sysTools, builtin.ToolLoadRule)
+			}
+			// read_mcp_resource is likewise activated by the catalog once a server
+			// offers a readable resource, which no agent author anticipated.
+			if hasMCPResources {
+				sysTools = append(sysTools, builtin.ToolReadMCPResource)
 			}
 			if len(sysTools) > 0 {
 				agentPolicies = ensureSystemToolsAllowed(agentPolicies, sysTools...)
@@ -939,6 +953,14 @@ func (s *Session) buildToolsForAgent(agentName string) (tools.Container, error) 
 		ReadDirs:     readDirs,
 	})
 
+	// The MCP runtime is resolved per build so a reload that replaced the manager is
+	// picked up by the next container instead of leaving a session calling through a
+	// closed one.
+	var mcpCaller tools.MCPCaller
+	if s.mcpCaller != nil {
+		mcpCaller = s.mcpCaller()
+	}
+
 	builtinTools, err := builtin.New(builtin.Config{
 		Std:           s.Std,
 		Sandbox:       s.Sandbox,
@@ -953,6 +975,7 @@ func (s *Session) buildToolsForAgent(agentName string) (tools.Container, error) 
 		Agents:        s,
 		AgentName:     agentName,
 		Agent:         activeAgent,
+		MCPCaller:     mcpCaller,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("session: initialize builtin tools: %w", err)
@@ -967,6 +990,7 @@ func (s *Session) buildToolsForAgent(agentName string) (tools.Container, error) 
 		Spiller:       s.spiller,
 		AllowedTools:  allowedToolNames,
 		DeferredTools: deferredToolNames,
+		MCPCaller:     mcpCaller,
 		ToolSearchFactory: func(defs []tool.Definition) tools.Tool {
 			return builtin.NewToolSearch(defs, s.workspace)
 		},

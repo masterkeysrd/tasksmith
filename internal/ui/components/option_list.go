@@ -3,6 +3,7 @@ package components
 import (
 	"fmt"
 	"slices"
+	"strings"
 
 	"github.com/masterkeysrd/kite/extras/kitex"
 	"github.com/masterkeysrd/kite/extras/trail"
@@ -32,6 +33,9 @@ type Option struct {
 	Cells       []string
 	CellNodes   []trail.Node
 	Current     bool
+	// Icon renders in the cursor gutter between the selection marker and the first
+	// cell, so a row can carry a status glyph without spending a column on it.
+	Icon trail.Node
 }
 
 // OptionListProps defines the properties for the OptionList component.
@@ -42,6 +46,10 @@ type OptionListProps struct {
 	MaxVisible int      // max number of rows visible simultaneously before sliding-window pagination
 	Columns    []Column // column specifications (width, alignment, style override)
 	Styles     *OptionListStyles
+	// GroupLabel returns the heading a row belongs under. A muted heading row is
+	// rendered whenever it changes, which keeps a listing scannable without
+	// spending a column on the grouping.
+	GroupLabel func(opt Option) string
 }
 
 // OptionListStyles optionally overrides the theme's list styles.
@@ -62,6 +70,54 @@ func withCurrentSuffix(text string, current bool) string {
 	return "current"
 }
 
+// groupOf returns the heading an option belongs under, or "" when the listing is
+// ungrouped or the accessor is unset.
+func (p OptionListProps) groupOf(opt Option) string {
+	if p.GroupLabel == nil {
+		return ""
+	}
+	return strings.TrimSpace(p.GroupLabel(opt))
+}
+
+// optionSectionRow renders one muted group heading. It spans the table's columns
+// so the heading sits at the listing's left edge instead of inside the first
+// column, which carries the cursor gutter. The heading lines up with a row's
+// status glyph, and it gets a blank line above it so adjacent groups read as
+// separate blocks. The listing's very first row keeps that line for whatever the
+// caller already printed above the table, such as a title or count.
+func optionSectionRow(label string, numCols int, first bool, sty style.Style) trail.Node {
+	top := 0
+	if !first {
+		top = 1
+	}
+	return kitex.TR(kitex.TRProps{}, kitex.TD(kitex.TDProps{
+		Style:   style.S().Padding(top, 0, 0, 2),
+		ColSpan: numCols,
+	}, trail.Span(trail.SpanProps{
+		Style: sty.WhiteSpace(style.WhiteSpacePre),
+	}, trail.Text(label))))
+}
+
+// optionIconRow renders the first cell of a row that carries a status glyph: the
+// cursor gutter, the glyph (already styled by the caller), then the cell's own
+// content, which keeps its row styling.
+func optionIconRow(prefix string, icon trail.Node, cell string, sty style.Style) trail.Node {
+	children := []trail.Node{trail.Span(trail.SpanProps{
+		Style: style.S().WhiteSpace(style.WhiteSpacePre),
+	}, trail.Text(prefix))}
+	if icon != nil {
+		children = append(children, icon)
+	}
+	if cell != "" {
+		children = append(children, trail.Span(trail.SpanProps{
+			Style: sty,
+		}, trail.Text(" "+cell)))
+	}
+	return trail.Box(trail.BoxProps{
+		Style: style.S().FlexDirection(style.FlexRow).MinWidth(style.Cells(0)),
+	}, children...)
+}
+
 // OptionList is a trail functional component rendering a selectable or informational list of options as a table.
 var OptionList = trail.FC("OptionList", func(props OptionListProps) trail.Node {
 	offset, setOffset := kitex.UseState(0)
@@ -74,6 +130,9 @@ var OptionList = trail.FC("OptionList", func(props OptionListProps) trail.Node {
 	if props.Styles != nil {
 		styles = *props.Styles
 	}
+	// Group headings read as chrome rather than content, so they always take the
+	// muted heading style no matter which option styles a caller overrode.
+	sectionStyle := style.S().Bold(true).Foreground(scheme.Color.Text.Muted)
 
 	start := 0
 	end := len(props.Options)
@@ -123,6 +182,11 @@ var OptionList = trail.FC("OptionList", func(props OptionListProps) trail.Node {
 	visibleOpts := props.Options[start:end]
 	hasCells := len(visibleOpts[0].Cells) > 0
 	trs := make([]trail.Node, 0, len(visibleOpts))
+	numCols := max(len(props.Columns), 1)
+	previousGroup := ""
+	if start > 0 {
+		previousGroup = props.groupOf(props.Options[start-1])
+	}
 
 	for relIdx, opt := range visibleOpts {
 		origIdx := start + relIdx
@@ -134,6 +198,12 @@ var OptionList = trail.FC("OptionList", func(props OptionListProps) trail.Node {
 			rowStyle = styles.Selected
 			prefix = "❯ "
 		}
+
+		group := props.groupOf(opt)
+		if group != "" && group != previousGroup {
+			trs = append(trs, optionSectionRow(group, numCols, len(trs) == 0, sectionStyle))
+		}
+		previousGroup = group
 
 		var tds []trail.Node
 		if hasCells && len(opt.Cells) > 0 {
@@ -175,7 +245,11 @@ var OptionList = trail.FC("OptionList", func(props OptionListProps) trail.Node {
 						spanStyle = rowStyle.Merge(colSpec.Style)
 					}
 				}
-				if colIdx < len(opt.CellNodes) && opt.CellNodes[colIdx] != nil {
+				if colIdx == 0 && opt.Icon != nil {
+					tds = append(tds, kitex.TD(kitex.TDProps{
+						Style: tdStyle,
+					}, optionIconRow(prefix, opt.Icon, cell, spanStyle)))
+				} else if colIdx < len(opt.CellNodes) && opt.CellNodes[colIdx] != nil {
 					tds = append(tds, kitex.TD(kitex.TDProps{
 						Style: tdStyle,
 					}, opt.CellNodes[colIdx]))
@@ -187,12 +261,16 @@ var OptionList = trail.FC("OptionList", func(props OptionListProps) trail.Node {
 			}
 		} else {
 			desc := format.CompactSingleLine(opt.Description, 60)
+			labelCell := trail.Span(trail.SpanProps{
+				Style: rowStyle.WhiteSpace(style.WhiteSpacePre),
+			}, trail.Text(prefix+opt.Label))
+			if opt.Icon != nil {
+				labelCell = optionIconRow(prefix, opt.Icon, opt.Label, rowStyle.WhiteSpace(style.WhiteSpacePre))
+			}
 			tds = []trail.Node{
 				kitex.TD(kitex.TDProps{
 					Style: style.S().Padding(0, 2, 0, 0).WhiteSpace(style.WhiteSpacePre),
-				}, trail.Span(trail.SpanProps{
-					Style: rowStyle.WhiteSpace(style.WhiteSpacePre),
-				}, trail.Text(prefix+opt.Label))),
+				}, labelCell),
 				kitex.TD(kitex.TDProps{
 					Style: style.S(),
 				}, trail.Span(trail.SpanProps{

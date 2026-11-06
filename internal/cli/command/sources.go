@@ -21,6 +21,16 @@ func (r *Registry) Sources() []autocomplete.Source {
 		Name:     "rules",
 		Trigger:  "@rule:",
 		Complete: completeRules,
+	}, {
+		// MCP prompts and resources are invoked by reference, so their trigger
+		// includes the leading character and candidates insert only the body.
+		Name:     "mcp-prompts",
+		Trigger:  "/mcp:",
+		Complete: completeMCPPrompts,
+	}, {
+		Name:     "mcp-resources",
+		Trigger:  "@mcp:",
+		Complete: completeMCPResources,
 	}}
 
 	for _, cmd := range commands {
@@ -61,6 +71,10 @@ func (r *Registry) Sources() []autocomplete.Source {
 			})
 		}
 	}
+
+	// The /mcp subcommands take a server name as their second argument, which the
+	// command's own "/mcp " trigger cannot reach, so they register their own.
+	sources = append(sources, mcpServerNameSources()...)
 
 	candidates := make([]autocomplete.Candidate, 0, len(commands))
 	for i := 0; i < len(commandCandidates) || i < len(skillCandidates); i++ {

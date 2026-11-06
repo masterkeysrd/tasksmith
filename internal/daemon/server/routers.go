@@ -365,6 +365,131 @@ func (w *workspaceRouter) deletePermissionRule(rw http.ResponseWriter, r *http.R
 	WriteJSON(rw, http.StatusOK, perms)
 }
 
+type mcpRouter struct {
+	b      MCPBackend
+	routes []Route
+}
+
+// NewMCPRouter constructs the router exposing the workspace's configured MCP
+// servers: discovery listings, restart, interactive authorization, prompt
+// rendering, resource reads, and manifest policy updates.
+func NewMCPRouter(b MCPBackend) Router {
+	r := &mcpRouter{b: b}
+	r.initRoutes()
+	return r
+}
+
+func (m *mcpRouter) Routes() []Route {
+	return m.routes
+}
+
+func (m *mcpRouter) initRoutes() {
+	m.routes = []Route{
+		GetRoute("/v1/workspace/mcps", m.listMCPs),
+		PostRoute("/v1/workspace/mcps/{name}/restart", m.postRestart),
+		PostRoute("/v1/workspace/mcps/{name}/auth", m.postAuth),
+		PostRoute("/v1/workspace/mcps/{name}/auth/callback", m.postAuthCallback),
+		PostRoute("/v1/workspace/mcps/{name}/prompts/{prompt}", m.postPrompt),
+		PostRoute("/v1/workspace/mcps/{name}/resources", m.postResource),
+		PostRoute("/v1/workspace/mcps/{name}/policies/allow", m.postPolicyAllow),
+	}
+}
+
+func (m *mcpRouter) listMCPs(rw http.ResponseWriter, r *http.Request) {
+	mcps, err := m.b.ListMCPs(r.Context(), RequestWorkspace(r))
+	if err != nil {
+		WriteError(rw, err)
+		return
+	}
+	if mcps == nil {
+		mcps = []api.MCPServer{}
+	}
+	WriteJSON(rw, http.StatusOK, mcps)
+}
+
+func (m *mcpRouter) postRestart(rw http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	server, err := m.b.RestartMCP(r.Context(), RequestWorkspace(r), name)
+	if err != nil {
+		WriteError(rw, err)
+		return
+	}
+	WriteJSON(rw, http.StatusOK, server)
+}
+
+func (m *mcpRouter) postAuth(rw http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	resp, err := m.b.AuthenticateMCP(r.Context(), RequestWorkspace(r), name)
+	if err != nil {
+		WriteError(rw, err)
+		return
+	}
+	WriteJSON(rw, http.StatusOK, resp)
+}
+
+// postAuthCallback completes an in-flight authorization with a redirect URL the
+// user copied out of their browser, which is the only option when the browser
+// cannot reach the daemon's loopback callback listener.
+func (m *mcpRouter) postAuthCallback(rw http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	req, err := DecodeJSON[api.MCPAuthCallbackRequest](r)
+	if err != nil {
+		WriteBadRequest(rw, err.Error())
+		return
+	}
+	if err := m.b.CompleteMCPAuth(r.Context(), RequestWorkspace(r), name, req); err != nil {
+		WriteError(rw, err)
+		return
+	}
+	rw.WriteHeader(http.StatusNoContent)
+}
+
+func (m *mcpRouter) postPrompt(rw http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	prompt := r.PathValue("prompt")
+	req, err := DecodeOptionalJSON[api.MCPPromptRequest](r)
+	if err != nil {
+		WriteBadRequest(rw, err.Error())
+		return
+	}
+	resp, err := m.b.GetMCPPrompt(r.Context(), RequestWorkspace(r), name, prompt, req)
+	if err != nil {
+		WriteError(rw, err)
+		return
+	}
+	WriteJSON(rw, http.StatusOK, resp)
+}
+
+func (m *mcpRouter) postResource(rw http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	req, err := DecodeJSON[api.MCPResourceRequest](r)
+	if err != nil {
+		WriteBadRequest(rw, err.Error())
+		return
+	}
+	resp, err := m.b.ReadMCPResource(r.Context(), RequestWorkspace(r), name, req)
+	if err != nil {
+		WriteError(rw, err)
+		return
+	}
+	WriteJSON(rw, http.StatusOK, resp)
+}
+
+func (m *mcpRouter) postPolicyAllow(rw http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	req, err := DecodeJSON[api.MCPAllowPolicyRequest](r)
+	if err != nil {
+		WriteBadRequest(rw, err.Error())
+		return
+	}
+	server, err := m.b.AllowMCPPolicy(r.Context(), RequestWorkspace(r), name, req)
+	if err != nil {
+		WriteError(rw, err)
+		return
+	}
+	WriteJSON(rw, http.StatusOK, server)
+}
+
 type sessionRouter struct {
 	b      SessionBackend
 	routes []Route

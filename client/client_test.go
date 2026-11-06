@@ -66,6 +66,24 @@ func TestNewAndValidation(t *testing.T) {
 	if _, err := emptyCWDClient.ListModels(ctx); !errors.Is(err, ErrEmptyWorkspace) {
 		t.Errorf("ListModels empty CWD error = %v, want %v", err, ErrEmptyWorkspace)
 	}
+	if _, err := emptyCWDClient.ListMCPs(ctx); !errors.Is(err, ErrEmptyWorkspace) {
+		t.Errorf("ListMCPs empty CWD error = %v, want %v", err, ErrEmptyWorkspace)
+	}
+	if _, err := emptyCWDClient.RestartMCP(ctx, "github"); !errors.Is(err, ErrEmptyWorkspace) {
+		t.Errorf("RestartMCP empty CWD error = %v, want %v", err, ErrEmptyWorkspace)
+	}
+	if _, err := emptyCWDClient.AuthenticateMCP(ctx, "github"); !errors.Is(err, ErrEmptyWorkspace) {
+		t.Errorf("AuthenticateMCP empty CWD error = %v, want %v", err, ErrEmptyWorkspace)
+	}
+	if err := emptyCWDClient.CompleteMCPAuth(ctx, "github", api.MCPAuthCallbackRequest{CallbackURL: "code=abc"}); !errors.Is(err, ErrEmptyWorkspace) {
+		t.Errorf("CompleteMCPAuth empty CWD error = %v, want %v", err, ErrEmptyWorkspace)
+	}
+	if _, err := emptyCWDClient.ReadMCPResource(ctx, "github", api.MCPResourceRequest{URI: "file://a"}); !errors.Is(err, ErrEmptyWorkspace) {
+		t.Errorf("ReadMCPResource empty CWD error = %v, want %v", err, ErrEmptyWorkspace)
+	}
+	if _, err := emptyCWDClient.AllowMCPPolicy(ctx, "github", api.MCPAllowPolicyRequest{}); !errors.Is(err, ErrEmptyWorkspace) {
+		t.Errorf("AllowMCPPolicy empty CWD error = %v, want %v", err, ErrEmptyWorkspace)
+	}
 	if _, err := emptyCWDClient.GetModel(ctx, "m1"); !errors.Is(err, ErrEmptyWorkspace) {
 		t.Errorf("GetModel empty CWD error = %v, want %v", err, ErrEmptyWorkspace)
 	}
@@ -92,6 +110,12 @@ func TestNewAndValidation(t *testing.T) {
 	}
 	if _, err := withCWD.GetModel(ctx, ""); err == nil {
 		t.Errorf("GetModel empty ID expected error, got nil")
+	}
+	if _, err := withCWD.RestartMCP(ctx, "  "); err == nil {
+		t.Errorf("RestartMCP empty server name expected error, got nil")
+	}
+	if _, err := withCWD.GetMCPPrompt(ctx, "github", "", api.MCPPromptRequest{}); err == nil {
+		t.Errorf("GetMCPPrompt empty prompt name expected error, got nil")
 	}
 	if _, err := withCWD.GetSession(ctx, ""); !errors.Is(err, ErrEmptySessionID) {
 		t.Errorf("GetSession empty sessionID error = %v, want %v", err, ErrEmptySessionID)
@@ -795,4 +819,279 @@ func TestNeedSyncAndCursorHelpers(t *testing.T) {
 	if !IsNeedSync(apiErr) {
 		t.Error("IsNeedSync(apiErr) = false, want true")
 	}
+}
+
+func TestClientMCPOperationsOverUnixSocket(t *testing.T) {
+	dir, err := os.MkdirTemp("/tmp", "tsc-mcp-*")
+	if err != nil {
+		t.Fatalf("MkdirTemp: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	sockPath := filepath.Join(dir, "test.sock")
+
+	ln, err := net.Listen("unix", sockPath)
+	if err != nil {
+		t.Fatalf("net.Listen unix: %v", err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+
+	var lastBody map[string]any
+	mux := http.NewServeMux()
+	requireWS := func(r *http.Request) bool { return r.Header.Get(api.HeaderCWD) == "/ws" }
+	decode := func(r *http.Request) {
+		lastBody = nil
+		_ = json.NewDecoder(r.Body).Decode(&lastBody)
+	}
+
+	mux.HandleFunc("GET /v1/workspace/mcps", func(w http.ResponseWriter, r *http.Request) {
+		if !requireWS(r) {
+			http.Error(w, "bad header", http.StatusBadRequest)
+			return
+		}
+		_ = json.NewEncoder(w).Encode([]api.MCPServer{
+			{
+				Name:      "github",
+				Scope:     "Project",
+				Path:      ".agents/github.mcp.yaml",
+				Transport: "stdio",
+				AuthType:  "oauth2",
+				Status:    api.MCPStatusAuthRequired,
+				AuthURL:   "https://example.com/authorize",
+				Tools: []api.MCPToolSummary{
+					{Name: "github__create_issue", RawName: "create_issue", Allowed: true},
+					{Name: "github__delete_repo", RawName: "delete_repo"},
+				},
+			},
+		})
+	})
+	mux.HandleFunc("POST /v1/workspace/mcps/{name}/restart", func(w http.ResponseWriter, r *http.Request) {
+		if !requireWS(r) {
+			http.Error(w, "bad header", http.StatusBadRequest)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(api.MCPServer{
+			Name:      r.PathValue("name"),
+			Transport: "stdio",
+			Status:    api.MCPStatusConnected,
+		})
+	})
+	mux.HandleFunc("POST /v1/workspace/mcps/{name}/auth", func(w http.ResponseWriter, r *http.Request) {
+		if !requireWS(r) {
+			http.Error(w, "bad header", http.StatusBadRequest)
+			return
+		}
+		if r.PathValue("name") == "local" {
+			_ = json.NewEncoder(w).Encode(api.MCPAuthResponse{Status: api.MCPStatusConnected})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(api.MCPAuthResponse{
+			AuthURL: "https://example.com/authorize",
+			Status:  api.MCPStatusAuthRequired,
+		})
+	})
+	mux.HandleFunc("POST /v1/workspace/mcps/{name}/auth/callback", func(w http.ResponseWriter, r *http.Request) {
+		if !requireWS(r) {
+			http.Error(w, "bad header", http.StatusBadRequest)
+			return
+		}
+		decode(r)
+		callbackURL, _ := lastBody["callbackUrl"].(string)
+		if callbackURL == "" || r.PathValue("name") == "expired" {
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(api.ErrorResponse{
+				Code:    "bad_request",
+				Message: "no authorization is in progress for " + r.PathValue("name"),
+			})
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+	mux.HandleFunc("POST /v1/workspace/mcps/{name}/prompts/{prompt}", func(w http.ResponseWriter, r *http.Request) {
+		if !requireWS(r) {
+			http.Error(w, "bad header", http.StatusBadRequest)
+			return
+		}
+		decode(r)
+		if r.PathValue("prompt") == "danger" {
+			allowed, _ := lastBody["allowProhibited"].(bool)
+			if !allowed {
+				w.WriteHeader(http.StatusForbidden)
+				_ = json.NewEncoder(w).Encode(api.ErrorResponse{
+					Code:    "mcp_policy_prohibited",
+					Message: `MCP prompt "danger" is prohibited by spec.policies.prompts in .agents/github.mcp.yaml`,
+				})
+				return
+			}
+		}
+		_ = json.NewEncoder(w).Encode(api.MCPPromptResponse{
+			Description: "Review a pull request",
+			Messages:    []api.MCPPromptMessage{{Role: api.RoleUser, Text: "Review PR " + fmt.Sprint(argValue(lastBody, "pr"))}},
+		})
+	})
+	mux.HandleFunc("POST /v1/workspace/mcps/{name}/resources", func(w http.ResponseWriter, r *http.Request) {
+		if !requireWS(r) {
+			http.Error(w, "bad header", http.StatusBadRequest)
+			return
+		}
+		decode(r)
+		uri, _ := lastBody["uri"].(string)
+		if strings.HasPrefix(uri, "file://.env") {
+			w.WriteHeader(http.StatusForbidden)
+			_ = json.NewEncoder(w).Encode(api.ErrorResponse{
+				Code:    "mcp_policy_prohibited",
+				Message: "MCP resource is prohibited by spec.policies.resources in .agents/github.mcp.yaml",
+			})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(api.MCPResourceResponse{URI: uri, MIMEType: "text/markdown", Text: "# Contributing"})
+	})
+	mux.HandleFunc("POST /v1/workspace/mcps/{name}/policies/allow", func(w http.ResponseWriter, r *http.Request) {
+		if !requireWS(r) {
+			http.Error(w, "bad header", http.StatusBadRequest)
+			return
+		}
+		decode(r)
+		kind, _ := lastBody["kind"].(string)
+		value, _ := lastBody["value"].(string)
+		if kind != api.MCPAllowPolicyKindResource {
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(api.ErrorResponse{Code: "bad_request", Message: "unsupported policy kind"})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(api.MCPServer{
+			Name:      r.PathValue("name"),
+			Transport: "stdio",
+			Status:    api.MCPStatusConnected,
+			Resources: []api.MCPResourceSummary{{URI: value, Allowed: true}},
+		})
+	})
+
+	srv := &http.Server{Handler: mux}
+	go func() { _ = srv.Serve(ln) }()
+	t.Cleanup(func() { _ = srv.Close() })
+
+	c, err := New(sockPath, WithCWD("/ws"))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	ctx := context.Background()
+
+	mcps, err := c.ListMCPs(ctx)
+	if err != nil {
+		t.Fatalf("ListMCPs: %v", err)
+	}
+	if len(mcps) != 1 || mcps[0].Name != "github" || mcps[0].Status != api.MCPStatusAuthRequired {
+		t.Fatalf("ListMCPs = %+v", mcps)
+	}
+	if len(mcps[0].Tools) != 2 || !mcps[0].Tools[0].Allowed || mcps[0].Tools[1].Allowed {
+		t.Errorf("ListMCPs tools = %+v", mcps[0].Tools)
+	}
+
+	restarted, err := c.RestartMCP(ctx, "github")
+	if err != nil {
+		t.Fatalf("RestartMCP: %v", err)
+	}
+	if restarted.Name != "github" || restarted.Status != api.MCPStatusConnected {
+		t.Errorf("RestartMCP = %+v", restarted)
+	}
+
+	auth, err := c.AuthenticateMCP(ctx, "github")
+	if err != nil {
+		t.Fatalf("AuthenticateMCP: %v", err)
+	}
+	if auth.AuthURL != "https://example.com/authorize" || auth.Status != api.MCPStatusAuthRequired {
+		t.Errorf("AuthenticateMCP = %+v", auth)
+	}
+	localAuth, err := c.AuthenticateMCP(ctx, "local")
+	if err != nil {
+		t.Fatalf("AuthenticateMCP(local): %v", err)
+	}
+	if localAuth.AuthURL != "" || localAuth.Status != api.MCPStatusConnected {
+		t.Errorf("AuthenticateMCP(local) = %+v", localAuth)
+	}
+
+	// A pasted redirect reaches the daemon as callbackUrl and answers with no body.
+	pasted := "http://localhost:56014/callback?code=abc123&state=xyz"
+	if err := c.CompleteMCPAuth(ctx, "github", api.MCPAuthCallbackRequest{CallbackURL: pasted}); err != nil {
+		t.Fatalf("CompleteMCPAuth: %v", err)
+	}
+	if got, _ := lastBody["callbackUrl"].(string); got != pasted {
+		t.Errorf("CompleteMCPAuth body callbackUrl = %q, want %q", got, pasted)
+	}
+
+	// The daemon's rejection of a paste that reached no waiting flow is returned.
+	if err := c.CompleteMCPAuth(ctx, "expired", api.MCPAuthCallbackRequest{CallbackURL: "code=abc"}); err == nil {
+		t.Error("expected CompleteMCPAuth with no flow in progress to fail")
+	} else {
+		var callbackErr *api.APIError
+		if !errors.As(err, &callbackErr) || callbackErr.StatusCode != http.StatusBadRequest {
+			t.Errorf("CompleteMCPAuth rejection = %v, want a 400 APIError", err)
+		}
+	}
+
+	// An empty paste is rejected before a request is made.
+	if err := c.CompleteMCPAuth(ctx, "github", api.MCPAuthCallbackRequest{CallbackURL: "  "}); err == nil {
+		t.Error("expected CompleteMCPAuth with an empty callback URL to fail")
+	}
+
+	prompt, err := c.GetMCPPrompt(ctx, "github", "review-pr", api.MCPPromptRequest{Args: map[string]string{"pr": "42"}})
+	if err != nil {
+		t.Fatalf("GetMCPPrompt: %v", err)
+	}
+	if len(prompt.Messages) != 1 || prompt.Messages[0].Text != "Review PR 42" {
+		t.Errorf("GetMCPPrompt = %+v", prompt)
+	}
+
+	// A prohibited prompt surfaces the daemon's structured 403.
+	_, err = c.GetMCPPrompt(ctx, "github", "danger", api.MCPPromptRequest{})
+	var apiErr *api.APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("expected APIError for prohibited prompt, got %v", err)
+	}
+	if apiErr.StatusCode != http.StatusForbidden || apiErr.Code != "mcp_policy_prohibited" {
+		t.Errorf("prohibited prompt error = %+v", apiErr)
+	}
+
+	// The user may authorize a single prohibited use.
+	if _, err := c.GetMCPPrompt(ctx, "github", "danger", api.MCPPromptRequest{AllowProhibited: true}); err != nil {
+		t.Errorf("GetMCPPrompt(allowProhibited) = %v", err)
+	}
+
+	resource, err := c.ReadMCPResource(ctx, "github", api.MCPResourceRequest{URI: "file://CONTRIBUTING.md"})
+	if err != nil {
+		t.Fatalf("ReadMCPResource: %v", err)
+	}
+	if resource.Text != "# Contributing" || resource.MIMEType != "text/markdown" {
+		t.Errorf("ReadMCPResource = %+v", resource)
+	}
+
+	if _, err := c.ReadMCPResource(ctx, "github", api.MCPResourceRequest{URI: "file://.env.local"}); err == nil {
+		t.Errorf("expected prohibited resource read to fail")
+	} else if !errors.As(err, &apiErr) || apiErr.StatusCode != http.StatusForbidden {
+		t.Errorf("prohibited resource error = %v", err)
+	}
+
+	allowed, err := c.AllowMCPPolicy(ctx, "github", api.MCPAllowPolicyRequest{
+		Kind:  api.MCPAllowPolicyKindResource,
+		Value: "file://.env.local",
+	})
+	if err != nil {
+		t.Fatalf("AllowMCPPolicy: %v", err)
+	}
+	if len(allowed.Resources) != 1 || !allowed.Resources[0].Allowed {
+		t.Errorf("AllowMCPPolicy = %+v", allowed)
+	}
+
+	if _, err := c.AllowMCPPolicy(ctx, "github", api.MCPAllowPolicyRequest{Kind: "widget", Value: "x"}); err == nil {
+		t.Errorf("expected unsupported policy kind to fail")
+	}
+}
+
+// argValue reads a value from the decoded "args" object of a recorded request body.
+func argValue(body map[string]any, key string) any {
+	args, ok := body["args"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	return args[key]
 }

@@ -75,6 +75,7 @@ Inside the TaskSmith interactive REPL, slash commands provide instant control ov
 | **`/skills`** | | *(none)* | Opens the interactive skills browser to inspect runbooks, token estimates, and reload workspace skills. |
 | **`/rules`** | | *(none)* | Opens the interactive rules browser to inspect rule status, scope, triggers, and token estimates, and to reload workspace rules. |
 | **`/tools`** | | *(none)* | Opens the interactive tools browser to inspect tool status, scope, safety annotations, and JSON schemas, and to reload workspace tools. See [Tools Browser](#tools-browser-tools). |
+| **`/mcp`** | `/mcps` | `[auth <name>\|restart <name>]` | With no subcommand, opens the interactive MCP browser to inspect servers, run prompts, attach resources, authorize, and restart. `auth` and `restart` act on one named server after a confirmation. See [MCP Browser](#mcp-browser-mcp). |
 | **`/workspace`** | `/ws` | `[reload]` | Reloads the active workspace resources from disk. With no subcommand, defaults to `reload`. |
 | **`/daemon`** | | `[status\|restart\|start\|stop]` | Inspects or manages the background Brain Daemon. With no subcommand, opens the interactive daemon browser. |
 
@@ -119,6 +120,159 @@ Token prefixes typed anywhere in a prompt render as inline pill badges:
 | `@skill:<name>` | Pill with plugin icon | Display only; skills are invoked as `/skill <args>`. |
 
 Typing `@rule:` opens a completion popup listing available rules with their scope and description; selecting one inserts `@rule:<name> `. A rule referenced this way is injected immediately rather than suggested, so use it when you already know the rule applies. Unknown names are ignored, and a rule already loaded in the current compaction epoch is not injected twice.
+
+### MCP References (`/mcp:`, `@mcp:`)
+
+Discovered MCP prompts and resources are invokable from the composer:
+
+| Syntax | Autocomplete | Effect |
+| :--- | :--- | :--- |
+| `/mcp:<server>:<prompt>` | `/` slash menu | Renders the prompt on that server and submits the rendered messages as your turn. |
+| `@mcp:<server>:<uri>` | `@` mention menu | Reads the resource and attaches its body to your turn, prefixed with a line naming the URI, server, and MIME type. |
+
+- **Position**: A reference is recognized anywhere in the message at a token boundary, so `explain @mcp:notes:notes://spec-1 briefly` works and the surrounding text is kept.
+- **One per message**: A message containing two references is rejected with an error naming the count, because which one to run would be a guess.
+- **Unknown server**: Left as ordinary text and sent to the agent, so prose that happens to start with `/mcp:` is never hijacked. An unknown prompt or URI on a *known* server is an error pointing at `/mcp`.
+- **Prohibited items**: Completion lists them labeled `[Prohibited]`. Invoking one opens the confirmation described in [MCP Item Confirmation](#mcp-item-confirmation); see [Tools & MCP Servers](../guides/tools-and-mcp.md) for what a policy prohibits.
+- **Arguments**: A prompt that declares arguments collects them first in an `Arguments for /mcp:<server>:<prompt>` input prefilled with a JSON object template. A prompt with exactly one declared argument also accepts a bare value.
+
+### MCP Browser (`/mcp`)
+
+The browser opens as `Manage MCP servers` with a `<N> server` / `<N> servers` count line, then one muted heading per scope that has servers — `Project MCPs`, `Workspace MCPs`, `User MCPs`, `Builtin MCPs` — each naming the directory its manifests live in (for example `Workspace MCPs (.agents/mcps)` or `User MCPs (~/.config/tasksmith/agents/mcps)`). Servers are listed by scope tier, closest to the repository first, then by name. The list is deliberately not filterable, so the single-letter actions below always reach the highlighted server instead of typing into a search box.
+
+| Keybinding | Scope | Action |
+| :--- | :--- | :--- |
+| `↑` / `↓` | MCP Browser | Moves the highlighted server. |
+| `Enter` / `i` | MCP Browser | Opens the overview for the highlighted server. |
+| `a` | MCP Browser | Opens the [authorization screen](#mcp-authentication) for the highlighted server. |
+| `r` | MCP Browser | Restarts (reconnects) the highlighted server. |
+| `R` / `Ctrl+R` | MCP Browser | Reloads workspace resources from disk and refreshes the server list. |
+| `Esc` | MCP Browser | Closes the browser and leaves `Exited /mcp command` in the transcript. |
+
+Each row shows a status glyph in the cursor gutter, the server name, and a right-hand status summary:
+
+| Status | Glyph | Right-hand summary |
+| :--- | :--- | :--- |
+| `connected` | `✔` green | Capability counts, e.g. `25 tools · 2 prompts · 3 resources` — `connected` when nothing was discovered, and `25 tools (24 allowed)` when a policy blocks some items. |
+| `auth_required` | `⚠` yellow | `needs authentication` |
+| `error` | `✘` red | `failed to connect`, or `failed to connect (<reason>)` with transport plumbing trimmed so the reason reads cleanly. |
+| `connecting` | `⟳` cyan | `connecting…` |
+| `disconnected` | `○` muted | `disconnected` |
+
+With nothing configured, the view offers `R` / `Ctrl+R` to reload, which is what you need right after adding a manifest.
+
+`/mcp auth <name>` and `/mcp restart <name>` run the same actions as `a` and `r` with no confirmation step: naming the server in the composer is already the decision. `/mcp auth <name>` opens the browser directly on that server's [authorization screen](#mcp-authentication); `/mcp restart <name>` opens nothing and reports in the conversation timeline, like `/daemon restart` and `/workspace reload`. A server that authenticates with static credentials instead of an authorization redirect gets a message naming the credential to provide — the environment variable, header, or credential file — because there is no browser flow to open; set it and run `/mcp restart <name>`.
+
+### MCP Server Overview
+
+Pressing `Enter` or `i` on a server replaces the list with that server's overview: a title line, aligned `Key: Value` metadata, and a numbered action menu.
+
+| Keybinding | Scope | Action |
+| :--- | :--- | :--- |
+| `↑` / `↓` | MCP Overview | Moves the menu cursor. |
+| `Enter` | MCP Overview | Runs the highlighted menu entry. |
+| `1` – `9` | MCP Overview | Runs the menu entry printed with that number. |
+| `PgUp` / `PgDn` or `Ctrl+U` / `Ctrl+D` | MCP Overview | Scrolls the card by 8 lines. |
+| `g` / `G` | MCP Overview | Scrolls the card to the top or bottom. |
+| `p` | MCP Overview | Opens the prompt picker (same entry as `Run prompt`). |
+| `u` | MCP Overview | Opens the resource picker (same entry as `Attach resource`). |
+| `a` | MCP Overview | Opens the [authorization screen](#mcp-authentication) for this server, whenever the menu offers `Authenticate`. |
+| `r` | MCP Overview | Restarts (reconnects) this server. |
+| `Esc` | MCP Overview | Returns to the server list. |
+
+Only the shortcuts that exist for the current server are advertised in the hint row, and letter shortcuts drop off that row when the terminal is too narrow to show all of them; they keep working either way, and the menu lists them.
+
+The card shows a field only when it says something — a `stdio` server has no `URL`, a server with no authentication has no `Auth` row, and a server that connected cleanly has no `Error` row. A value too long for the terminal wraps under its own label instead of being clipped.
+
+| Field | Value |
+| :--- | :--- |
+| `Status` | `✔ connected`, `⚠ needs authentication`, `✘ failed to connect`, `⟳ connecting…`, or `○ disconnected`, in the matching color. |
+| `Auth` | Shown when the server declares an auth scheme or an authorization is outstanding: `✘ not authenticated (<authType>)`, `✔ authenticated (<authType>)`, or the bare `<authType>` for a static scheme. |
+| `Command` / `URL` | The launch command, or the endpoint for a remote server. |
+| `Transport` | `stdio`, `sse`, `http`, or `streamable-http`. |
+| `Config location` | Home-shortened manifest path plus the scope badge, e.g. `~/.config/tasksmith/agents/mcps/github.mcp.yaml [User]`. |
+| `Capabilities` | The kinds actually discovered (`tools · prompts · resources`), or `none`. |
+| `Tools` / `Prompts` / `Resources` | Counts, calling out the split when a policy blocks some items, e.g. `25 tools (24 allowed, 1 prohibited)`. |
+| `Authorize at` | The outstanding authorization URL, only while one is waiting. |
+| `Error` | The failure reason with transport plumbing trimmed, so the row reads `connection refused` rather than the whole call chain. |
+
+The menu is context-aware, so its first entry answers the most urgent question about the server:
+
+| Server state | Menu entries |
+| :--- | :--- |
+| `auth_required` | `Authenticate`, `Reconnect`, `Back to servers` |
+| `connected` or items discovered | `View tools (<N>)`, `Run prompt (<N>)`, `Attach resource (<N>)` — each shown only when that kind has items — then `Authenticate` for an OAuth server, then `Reconnect` |
+| Failed with nothing discovered | `Reconnect` |
+
+### MCP Tool Drill-Down
+
+| Keybinding | Scope | Action |
+| :--- | :--- | :--- |
+| `↑` / `↓` | Tool List | Moves the selection. |
+| any text | Tool List | Filters tools by name. |
+| `Enter` | Tool List | Opens the highlighted tool's detail. |
+| `Esc` | Tool List | Returns to the overview. |
+| `↑` / `↓` | Tool Detail | Scrolls. |
+| `PgUp` / `PgDn` or `Ctrl+U` / `Ctrl+D` | Tool Detail | Scrolls by 8 lines. |
+| `g` / `G` | Tool Detail | Scrolls to the top or bottom. |
+| `e` | Tool Detail | Permits this tool in its manifest, shown only for a prohibited tool whose manifest can be rewritten. |
+| `Esc` | Tool Detail | Returns to the tool list. |
+
+`View tools` opens a filterable list titled `<server> — tools (<N>)`, one row per tool with a `✔` or `✘` policy glyph, the tool's own name, its badges, and a compact description. `Enter` on a tool opens its detail: `Tool name`, `Full name` (the qualified name the agent calls it by), and `Policy` — the verdict with its badges inline, e.g. `✔ Allowed · [ReadOnly]` or `✘ Prohibited · [Dangerous]` — followed by a `Description:` section and a `Parameters:` section read from the tool's input schema, required parameters first, then optional ones alphabetically.
+
+A prohibited tool offers `e` (`Enable in manifest`) exactly when pressing it would change something — the tool is blocked and its manifest can be rewritten — and the outcome is reported in this view: on success the policy row flips to `✔ Allowed` and the shortcut disappears, on failure the reason is printed in full. `Esc` steps back one screen at a time — detail to list, list to overview, overview to the server list.
+
+The scroll region is sized from the terminal, so a long failure reason stays readable instead of pushing the menu away, and every pane tracks the listing as it refreshes underneath, so a policy change made elsewhere is visible without leaving the view.
+
+### MCP Authentication
+
+`Authenticate` on the overview, `a` in the server list, and `/mcp auth <name>` all open the same screen rather than asking for confirmation first. It shows what is happening and keeps both ways of finishing a login on screen:
+
+```text
+Authenticating with sentry…
+
+✻ A browser window will open for authentication
+
+If your browser doesn't open automatically, copy this URL manually (c to copy)
+https://auth.example.com/authorize?client_id=…&redirect_uri=http%3A%2F%2Flocalhost%3A56014%2Fcallback…
+
+If the redirect page shows a connection error, paste the URL from your browser's address bar:
+URL >
+
+Return here after authenticating in your browser. Press Esc to go back.
+```
+
+| Keybinding | Scope | Action |
+| :--- | :--- | :--- |
+| `c` | MCP Authorization | Copies the authorization URL, shown as `Copied authorization URL to clipboard.` Works while the paste field is empty; `Ctrl+Y` copies at any time. |
+| `Ctrl+Y` | MCP Authorization | Copies the authorization URL regardless of what the paste field holds. |
+| `Enter` | MCP Authorization | Submits whatever the paste field holds to the waiting authorization. |
+| `Esc` | MCP Authorization | Stops reporting on the flow and returns to the server list, or closes the browser when `/mcp auth <name>` opened it. |
+
+The paste field is the escape hatch for a browser that cannot reach the daemon's loopback callback — a browser on another machine, a blocked `localhost`, or a redirect page that simply failed to load. It accepts the full address-bar URL, a bare query string, or an authorization code alone, and the waiting flow receives the code exactly as if the browser had reached the daemon.
+
+The browser itself is answered with a self-contained TaskSmith page, not plain text: the authorization page shows a green `Authentication Complete` card naming the connected server, and a rejected login shows a red `Authentication Failed` card with the OAuth `error` and `error_description`. Both carry the TaskSmith mark inline and as the tab icon, need no network access, and offer a `Close Window` button.
+
+When the authorization settles, the screen closes and the outcome is left in the conversation timeline where it can still be read and copied:
+
+```text
+> /mcp
+  ⎿  Authentication successful. Connected to sentry.
+```
+
+A failure — a rejected consent screen, an unsupported Dynamic Client Registration, a token exchange that failed, or a paste the daemon refused — is recorded as an error naming the reason instead. Leaving the screen with `Esc` does not cancel the login: the daemon keeps its callback listener open on a timer of its own, so finishing in the browser afterwards still connects the server.
+
+### MCP Item Confirmation
+
+Allowed prompts and resources run immediately. A prohibited one opens `Prohibited MCP item` with the reason naming the item, the policy section (`spec.policies.prompts` or `spec.policies.resources`), and the manifest path. Choices:
+
+| Choice | Effect |
+| :--- | :--- |
+| **`Cancel`** *(default)* | Aborts and changes nothing. `Enter` lands here, so an accidental keypress is safe. |
+| **`Use once`** | Runs this single request with `allowProhibited`, never editing the manifest. |
+| **`Enable in manifest`** | Permits the item in the manifest, refreshes the server, then runs it as an allowed item. |
+
+`Enable in manifest` is offered only when the manifest path is known and the server comes from workspace or project scope; a user- or builtin-scope server shows `Use once` alone, since rewriting it would edit files outside the project. Prohibited **tools** have no per-call override in either direction — the agent cannot be talked into one, and the CLI offers no `Use once` for them; only the manifest changes what tools a server exposes, which is why widening a tool happens from its [detail view](#mcp-tool-drill-down) rather than from this prompt. See [Tools & MCP Servers](../guides/tools-and-mcp.md#scoping-mcp-resources).
 
 ---
 
@@ -325,3 +479,19 @@ All usage endpoints are read-only.
 | `GET` | `/v1/sessions/{id}/usage` | `SessionUsage` for one session (including child sessions): totals, breakdowns by model, pricing tier, purpose and tool (calls, errors, denied, canceled, total and slowest duration, lines changed), code changes, prompt cache statistics, and first and last activity time. |
 | `GET` | `/v1/usage` | Usage summary (totals, groups, sessions count, top sessions, tools, code changes, previous-period totals, and per-workspace groups for global scope). Query params: `scope=workspace\|global` (default `workspace`, resolved from `X-TaskSmith-CWD`), `since` and `until` (RFC 3339 or `YYYY-MM-DD`; `since` defaults to 30 days ago), `group_by=model\|provider\|agent\|purpose\|tier\|day` (default `model`). |
 | `POST` | `/v1/metrics/query` | Runs a generic metrics query (`kind`, `aggregates`, `group_by`, `bucket`, `filter`, `since`, `until`) and returns grouped rows. |
+
+## MCP HTTP Endpoints
+
+MCP endpoints act on the workspace resolved from the `X-TaskSmith-CWD` header. Servers are addressed by manifest name, or by qualified name (`<slug>/MCP/<name>`) when a global and a project server share a name. Every endpoint returns `404` `not_found` for an unknown server, and `503` `mcp_unavailable` for operations needing a live connection while the workspace has no MCP runtime attached.
+
+| Method | Path | Description |
+| :--- | :--- | :--- |
+| `GET` | `/v1/workspace/mcps` | Lists configured MCP servers as `MCPServer`: manifest `name`, `displayName`, `description`, `namespace`, `scope`, portable manifest `path`, `transport` (as declared: `stdio`, `sse`, `http`, or `streamable-http`; defaults to `stdio`), resolved `command` or `endpoint`, `authType`, live `status` (`disconnected`, `connecting`, `connected`, `auth_required`, or `error`), `authUrl` and `error` when set, plus discovered `tools`, `prompts`, and `resources`. Items excluded by manifest policies are still listed with `allowed: false`. Servers with no live connection report `status: disconnected`. |
+| `POST` | `/v1/workspace/mcps/{name}/restart` | Reconnects one server and returns its refreshed `MCPServer`. |
+| `POST` | `/v1/workspace/mcps/{name}/auth` | Starts or resumes authorization for one server and returns `MCPAuthResponse` (`authUrl`, `status`). |
+| `POST` | `/v1/workspace/mcps/{name}/auth/callback` | Completes the authorization in progress with a redirect URL the user copied from their browser. Body: `callbackUrl` — the full address-bar URL, a bare query string, or an authorization code alone. Answers `204` with no body, since the flow continues on its own; `400` `bad_request` when the paste is empty or no authorization is open for the server. |
+| `POST` | `/v1/workspace/mcps/{name}/prompts/{prompt}` | Renders one discovered prompt with optional `args` (string key to string value) and returns `MCPPromptResponse` (`description`, `messages` with `role` and `text`). |
+| `POST` | `/v1/workspace/mcps/{name}/resources` | Reads one resource by `uri` and returns `MCPResourceResponse` (`uri`, `mimeType`, `text`). |
+| `POST` | `/v1/workspace/mcps/{name}/policies/allow` | Permits one item in the server manifest. Body: `kind` (`tool`, `prompt`, or `resource`) and `value` (raw tool name, prompt name, or resource URI). Returns the updated `MCPServer`. |
+
+Prompt rendering and resource reads reject anything the server manifest's `policies` prohibit with `403` `mcp_policy_prohibited`; the rejection message names the prohibited item, the policy section it is excluded from (`policies.tools`, `policies.prompts`, or `policies.resources`), and the manifest path. Pass `allowProhibited: true` in the prompt or resource body to permit a single prohibited use without editing the manifest. See [Tools & MCP Servers](../guides/tools-and-mcp.md) for manifest authoring and [Manifests](./manifests.md) for the `MCP` schema.

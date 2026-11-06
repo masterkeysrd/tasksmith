@@ -34,6 +34,32 @@ func TestFilterOptions(t *testing.T) {
 	}
 }
 
+// TestPickerSubtitleAndGroups renders a picker with a subtitle line and grouped
+// options, which is how the MCP server browser presents its listing.
+func TestPickerSubtitleAndGroups(t *testing.T) {
+	render := renderComponent(t, 80)
+	out := render(Picker(PickerProps{
+		Title:    "Manage MCP servers",
+		Subtitle: "2 servers",
+		Options: []uicomponents.Option{
+			{Value: "notes", Label: "notes", Cells: []string{"notes", "2 tools"}},
+			{Value: "sentry", Label: "sentry", Cells: []string{"sentry", "needs authentication"}},
+		},
+		Columns: []uicomponents.Column{{Width: 20}, {Width: 0}},
+		GroupLabel: func(opt uicomponents.Option) string {
+			return "Workspace MCPs (.agents/mcps)"
+		},
+	}))
+	for _, want := range []string{"Manage MCP servers", "2 servers", "Workspace MCPs (.agents/mcps)", "notes", "sentry"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("picker output missing %q:\n%s", want, out)
+		}
+	}
+	if n := strings.Count(out, "Workspace MCPs (.agents/mcps)"); n != 1 {
+		t.Errorf("group heading rendered %d times, want 1:\n%s", n, out)
+	}
+}
+
 func TestPickerComponentAndKeyboardHint(t *testing.T) {
 	opts := []uicomponents.Option{
 		{Value: "opt1", Label: "Option One", Description: "First option", Current: true},

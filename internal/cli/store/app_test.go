@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -256,4 +257,205 @@ func TestUseHintMountUnmount(t *testing.T) {
 	if GetApp().Hint != DefaultHint {
 		t.Fatalf("expected hint to be restored to %q on child unmount, got %q", DefaultHint, GetApp().Hint)
 	}
+}
+
+func TestSetWorkspaceMCPServersAnnouncesTimelineWarnings(t *testing.T) {
+	ClearTranscript()
+	SetWorkspaceWarnings(nil)
+	ClearMCPWarningAnnouncements()
+	ResetApp()
+	defer func() {
+		SetWorkspaceMCPServers(nil)
+		SetWorkspaceWarnings(nil)
+		ClearTranscript()
+		ResetApp()
+	}()
+
+	unhealthy := []api.MCPServer{
+		{Name: "notes", Status: api.MCPStatusConnected},
+		{Name: "github", Status: api.MCPStatusAuthRequired, Error: `missing credential environment variable "GITHUB_TOKEN"`},
+		{Name: "search", Status: api.MCPStatusError, Error: `connect MCP server "search": calling "initialize": connection refused`},
+	}
+	SetWorkspaceMCPServers(unhealthy)
+
+	warnings := transcriptWarnings(t)
+	if len(warnings) != 2 {
+		t.Fatalf("expected a warning per unhealthy server, got %v", warnings)
+	}
+	if !strings.Contains(warnings[0], "github") || !strings.Contains(warnings[0], "requires authentication") {
+		t.Errorf("unexpected auth warning: %q", warnings[0])
+	}
+	if !strings.Contains(warnings[0], "GITHUB_TOKEN") {
+		t.Errorf("auth warning should name the missing credential: %q", warnings[0])
+	}
+	if !strings.Contains(warnings[1], "search") || !strings.Contains(warnings[1], "connection refused") {
+		t.Errorf("unexpected connect warning: %q", warnings[1])
+	}
+	if strings.Contains(warnings[1], "connect MCP server") {
+		t.Errorf("warning leaked transport wrappers: %q", warnings[1])
+	}
+}
+
+func TestMCPServerWarningsStayOutOfTheHeader(t *testing.T) {
+	ClearTranscript()
+	SetWorkspaceWarnings(nil)
+	ClearMCPWarningAnnouncements()
+	ResetApp()
+	defer func() {
+		SetWorkspaceMCPServers(nil)
+		SetWorkspaceWarnings(nil)
+		ClearTranscript()
+		ResetApp()
+	}()
+
+	// The startup banner freezes once the timeline starts, so MCP health that
+	// lands there both jitters the banner and goes stale. Workspace warnings are
+	// the only thing the header may show.
+	SetWorkspaceWarnings([]string{"provider warning"})
+	SetWorkspaceMCPServers([]api.MCPServer{
+		{Name: "github", Status: api.MCPStatusAuthRequired},
+		{Name: "search", Status: api.MCPStatusError, Error: "connection refused"},
+	})
+
+	got := CurrentHeaderData().Warnings
+	if len(got) != 1 || got[0] != "provider warning" {
+		t.Fatalf("expected only the workspace warning in the header, got %v", got)
+	}
+	if len(transcriptWarnings(t)) != 2 {
+		t.Errorf("expected both MCP problems in the timeline, got %v", transcriptWarnings(t))
+	}
+
+	// Re-fetching the workspace must leave the header alone apart from its own
+	// warnings, and must not duplicate a warning the daemon happens to report.
+	SetWorkspaceWarnings([]string{"provider warning", "provider warning"})
+	if got := CurrentHeaderData().Warnings; len(got) != 1 || got[0] != "provider warning" {
+		t.Fatalf("expected duplicates to collapse, got %v", got)
+	}
+
+	// Connecting a server must not disturb the header either.
+	SetWorkspaceMCPServers([]api.MCPServer{{Name: "github", Status: api.MCPStatusConnected}})
+	if got := CurrentHeaderData().Warnings; len(got) != 1 || got[0] != "provider warning" {
+		t.Fatalf("expected the header to be unchanged after connect, got %v", got)
+	}
+
+	SetWorkspaceMCPServers(nil)
+	if got := CurrentHeaderData().Warnings; len(got) != 1 || got[0] != "provider warning" {
+		t.Fatalf("expected the header to be unchanged once the listing clears, got %v", got)
+	}
+}
+
+func TestMCPServerWarningsAnnounceOncePerProblem(t *testing.T) {
+	ClearTranscript()
+	SetWorkspaceWarnings(nil)
+	ClearMCPWarningAnnouncements()
+	ResetApp()
+	defer func() {
+		SetWorkspaceMCPServers(nil)
+		SetWorkspaceWarnings(nil)
+		ClearTranscript()
+		ResetApp()
+	}()
+
+	broken := []api.MCPServer{{Name: "search", Status: api.MCPStatusError, Error: "connection refused"}}
+
+	// The listing is polled while servers settle and whenever /mcp is opened, so
+	// the same problem must be said once no matter how often it is read.
+	SetWorkspaceMCPServers(broken)
+	SetWorkspaceMCPServers(broken)
+	SetWorkspaceMCPServers(broken)
+	if warnings := transcriptWarnings(t); len(warnings) != 1 {
+		t.Fatalf("expected repeated identical listings to announce once, got %v", warnings)
+	}
+
+	// A new failure reason is new information and deserves to be said again.
+	SetWorkspaceMCPServers([]api.MCPServer{{Name: "search", Status: api.MCPStatusError, Error: "server exited"}})
+	warnings := transcriptWarnings(t)
+	if len(warnings) != 2 || !strings.Contains(warnings[1], "server exited") {
+		t.Fatalf("expected the new failure reason to be announced, got %v", warnings)
+	}
+
+	// A problem that turns into a different problem is also new information.
+	SetWorkspaceMCPServers([]api.MCPServer{{Name: "search", Status: api.MCPStatusAuthRequired}})
+	warnings = transcriptWarnings(t)
+	if len(warnings) != 3 || !strings.Contains(warnings[2], "requires authentication") {
+		t.Fatalf("expected the auth requirement to be announced, got %v", warnings)
+	}
+}
+
+func TestMCPServerWarningsSilenceOnceHealthy(t *testing.T) {
+	ClearTranscript()
+	SetWorkspaceWarnings(nil)
+	ClearMCPWarningAnnouncements()
+	ResetApp()
+	defer func() {
+		SetWorkspaceMCPServers(nil)
+		SetWorkspaceWarnings(nil)
+		ClearTranscript()
+		ResetApp()
+	}()
+
+	SetWorkspaceMCPServers([]api.MCPServer{{Name: "github", Status: api.MCPStatusAuthRequired}})
+	SetWorkspaceMCPServers([]api.MCPServer{{Name: "github", Status: api.MCPStatusConnected}})
+	SetWorkspaceMCPServers([]api.MCPServer{{Name: "github", Status: api.MCPStatusConnecting}})
+	if warnings := transcriptWarnings(t); len(warnings) != 1 {
+		t.Fatalf("expected a healthy or still-connecting server to stay silent, got %v", warnings)
+	}
+
+	// A server that breaks again after connecting is worth reporting again.
+	SetWorkspaceMCPServers([]api.MCPServer{{Name: "github", Status: api.MCPStatusAuthRequired}})
+	if warnings := transcriptWarnings(t); len(warnings) != 2 {
+		t.Fatalf("expected a server that breaks again to be announced again, got %v", warnings)
+	}
+}
+
+func TestMCPServerWarningsReannouncedForANewListing(t *testing.T) {
+	ClearTranscript()
+	SetWorkspaceWarnings(nil)
+	ClearMCPWarningAnnouncements()
+	ResetApp()
+	defer func() {
+		SetWorkspaceMCPServers(nil)
+		SetWorkspaceWarnings(nil)
+		ClearTranscript()
+		ResetApp()
+	}()
+
+	broken := []api.MCPServer{{Name: "github", Status: api.MCPStatusAuthRequired}}
+	SetWorkspaceMCPServers(broken)
+
+	// A listing that no longer contains the server forgets its history, so
+	// re-adding it — or starting over in another workspace — reports it again.
+	SetWorkspaceMCPServers(nil)
+	SetWorkspaceMCPServers(broken)
+	if warnings := transcriptWarnings(t); len(warnings) != 2 {
+		t.Fatalf("expected the server to be announced again after leaving the listing, got %v", warnings)
+	}
+
+	ClearTranscript()
+	ClearMCPWarningAnnouncements()
+	SetWorkspaceMCPServers(broken)
+	SetWorkspaceMCPServers(broken)
+	if warnings := transcriptWarnings(t); len(warnings) != 1 {
+		t.Fatalf("expected clearing announcements to reset the dedup memory, got %v", warnings)
+	}
+}
+
+func transcriptWarnings(t *testing.T) []string {
+	t.Helper()
+	var warnings []string
+	state := GetTranscript()
+	if state.Items == nil {
+		return nil
+	}
+	for _, item := range *state.Items {
+		if item.Kind != TranscriptKindNotice {
+			continue
+		}
+		notice, ok := item.Data.(NoticeData)
+		if !ok || notice.Severity != NoticeSeverityWarning {
+			continue
+		}
+		warnings = append(warnings, notice.Text)
+	}
+	return warnings
 }

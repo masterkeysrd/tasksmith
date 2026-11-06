@@ -246,6 +246,21 @@ type ManageAgentsOutput struct {
 	WorkDir   string              `json:"work_dir,omitempty" jsonschema:"Working directory of the target subagent."`
 }
 
+// ReadMCPResourceInput defines the input parameters for the read_mcp_resource tool.
+type ReadMCPResourceInput struct {
+	Server string `json:"server" jsonschema:"Name of the configured MCP server to read from."`
+	URI    string `json:"uri" jsonschema:"Resource URI exactly as the server advertises it."`
+}
+
+// ReadMCPResourceOutput defines the structured output of the read_mcp_resource tool.
+type ReadMCPResourceOutput struct {
+	Server    string `json:"server" jsonschema:"Name of the MCP server the resource was read from."`
+	URI       string `json:"uri" jsonschema:"Resource URI that was read."`
+	Text      string `json:"text" jsonschema:"Text content of the resource, truncated with a path to the full output when it exceeded output limits."`
+	MimeType  string `json:"mime_type,omitempty" jsonschema:"MIME type the server declared for the resource, when known."`
+	Truncated bool   `json:"truncated,omitempty" jsonschema:"Whether the resource text exceeded output limits and was spilled to disk."`
+}
+
 // RemoveInput defines the input parameters for the remove tool.
 type RemoveInput struct {
 	Path  string `json:"path" jsonschema:"Target file path within the workspace to remove."`

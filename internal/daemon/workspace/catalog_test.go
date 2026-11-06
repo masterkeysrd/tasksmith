@@ -644,3 +644,523 @@ func TestConditionalTemplateRules(t *testing.T) {
 		t.Errorf("ConditionalTemplateRules(nil) = %v, want nil", got)
 	}
 }
+
+// TestCatalogMCPSnapshots verifies that Catalog.MCPSnapshots(), Catalog.MCPs(),
+// and Catalog.GetMCPSnapshot()/GetMCP() expose the manifest-derived api.MCPServer
+// presentation (scope, transport, command or endpoint, auth type, portable path)
+// for every effective MCP server, defaulting an unset transport to stdio and
+// reporting a disconnected status until an MCP runtime is attached.
+func TestCatalogMCPSnapshots(t *testing.T) {
+	ws := &warp.Workspace{
+		Def: &warp.WorkspaceDef{
+			BaseResource: warp.BaseResource{
+				APIVersion: warp.APIVersion,
+				Kind:       warp.KindWorkspace,
+				Metadata:   warp.Metadata{Name: "mcp-ws"},
+			},
+			Spec: warp.WorkspaceDefSpec{DefaultAgent: "main"},
+		},
+	}
+
+	mainAgent := &warp.Agent{
+		BaseResource: warp.BaseResource{
+			APIVersion: warp.APIVersion,
+			Kind:       warp.KindAgent,
+			Namespace:  warp.NamespaceWorkspace,
+			Metadata:   warp.Metadata{Name: "main"},
+		},
+		Spec: warp.AgentSpec{},
+	}
+
+	stdioMCP := &warp.MCP{
+		BaseResource: warp.BaseResource{
+			APIVersion: warp.APIVersion,
+			Kind:       warp.KindMCP,
+			Namespace:  warp.NamespaceWorkspace,
+			Metadata:   warp.Metadata{Name: "github", DisplayName: "GitHub", Description: "GitHub MCP server"},
+			Path:       "/ws/.agents/github.mcp.yaml",
+		},
+		Spec: warp.MCPSpec{
+			Command: []string{"npx", "-y", "@modelcontextprotocol/server-github"},
+		},
+	}
+
+	httpMCP := &warp.MCP{
+		BaseResource: warp.BaseResource{
+			APIVersion: warp.APIVersion,
+			Kind:       warp.KindMCP,
+			Namespace:  warp.NamespaceWorkspace,
+			Metadata:   warp.Metadata{Name: "linear", Description: "Linear MCP server"},
+		},
+		Spec: warp.MCPSpec{
+			Type:     warp.MCPTransportHTTP,
+			Endpoint: "https://mcp.linear.app/sse",
+			Auth:     &warp.ProviderAuth{Type: "oauth2"},
+		},
+	}
+
+	reg := warp.NewRegistry(ws)
+	for _, res := range []warp.Resource{mainAgent, stdioMCP, httpMCP} {
+		reg.Set(res.QualifiedName(), res)
+	}
+	if err := reg.Validate(); err != nil {
+		t.Fatalf("registry validation failed: %v", err)
+	}
+
+	cat := NewCatalog(reg, "/ws", "/ws")
+
+	snaps := cat.MCPs()
+	if len(snaps) != 2 {
+		t.Fatalf("MCPs() returned %d servers, want 2", len(snaps))
+	}
+
+	listed := cat.MCPSnapshots()
+	if len(listed) != 2 || listed[0].Name != "github" || listed[1].Name != "linear" {
+		t.Fatalf("MCPSnapshots() = %+v", listed)
+	}
+
+	github := listed[0]
+	if github.Transport != string(warp.MCPTransportStdio) {
+		t.Errorf("github transport = %q, want stdio default", github.Transport)
+	}
+	if !slices.Equal(github.Command, []string{"npx", "-y", "@modelcontextprotocol/server-github"}) {
+		t.Errorf("github command = %v", github.Command)
+	}
+	if github.Status != api.MCPStatusDisconnected {
+		t.Errorf("github status = %q, want %q", github.Status, api.MCPStatusDisconnected)
+	}
+	if github.Scope != "Workspace" || github.Namespace != warp.NamespaceWorkspace {
+		t.Errorf("github scope/namespace = %q/%q", github.Scope, github.Namespace)
+	}
+	if github.DisplayName != "GitHub" || github.Description != "GitHub MCP server" {
+		t.Errorf("github metadata = %+v", github)
+	}
+	if github.AuthType != "" {
+		t.Errorf("github authType = %q, want empty", github.AuthType)
+	}
+	if github.Endpoint != "" {
+		t.Errorf("github endpoint = %q, want empty", github.Endpoint)
+	}
+	if github.Def != stdioMCP {
+		t.Errorf("github snapshot must carry its warp.MCP definition")
+	}
+
+	linear := listed[1]
+	if linear.Transport != string(warp.MCPTransportHTTP) || linear.Endpoint != "https://mcp.linear.app/sse" {
+		t.Errorf("linear transport/endpoint = %q %q", linear.Transport, linear.Endpoint)
+	}
+	if linear.AuthType != "oauth2" {
+		t.Errorf("linear authType = %q, want oauth2", linear.AuthType)
+	}
+	if len(linear.Command) != 0 {
+		t.Errorf("expected no command for an HTTP server, got %v", linear.Command)
+	}
+
+	// Lookups resolve by short name and qualified name; unknown names miss.
+	if byQ, ok := cat.GetMCPSnapshot(stdioMCP.QualifiedName()); !ok || byQ.Name != "github" {
+		t.Errorf("GetMCPSnapshot(qualified) = (%+v, %v)", byQ, ok)
+	}
+	if def, ok := cat.GetMCP("linear"); !ok || def != httpMCP {
+		t.Errorf("GetMCP(linear) = (%v, %v)", def, ok)
+	}
+	if _, ok := cat.GetMCPSnapshot("missing"); ok {
+		t.Errorf("expected unknown MCP name to miss")
+	}
+	if _, ok := cat.GetMCPSnapshot("   "); ok {
+		t.Errorf("expected blank MCP name to miss")
+	}
+	if _, ok := cat.GetMCP(stdioMCP.QualifiedName()); !ok {
+		t.Errorf("expected GetMCP to resolve qualified names")
+	}
+}
+
+// mcpCatalogFixture builds a workspace holding one stdio MCP server, one plain
+// workspace tool, and agents exercising MCP tool loading, then simulates runtime
+// discovery so the catalog holds the server's materialized tools.
+type mcpCatalogFixture struct {
+	catalog *Catalog
+	mcp     *warp.MCP
+	echo    *warp.Tool
+	blocked *warp.Tool
+}
+
+func newMCPCatalog(t *testing.T, policies *warp.MCPPolicies, agentTools ...[]string) *mcpCatalogFixture {
+	t.Helper()
+
+	ws := &warp.Workspace{
+		Def: &warp.WorkspaceDef{
+			BaseResource: warp.BaseResource{
+				APIVersion: warp.APIVersion,
+				Kind:       warp.KindWorkspace,
+				Metadata:   warp.Metadata{Name: "mcp-tools-ws"},
+			},
+			Spec: warp.WorkspaceDefSpec{DefaultAgent: "main"},
+		},
+	}
+
+	server := &warp.MCP{
+		BaseResource: warp.BaseResource{
+			APIVersion: warp.APIVersion,
+			Kind:       warp.KindMCP,
+			Namespace:  warp.NamespaceWorkspace,
+			Metadata:   warp.Metadata{Name: "notes", Description: "Notes MCP server"},
+			Path:       "/ws/.agents/notes.mcp.yaml",
+		},
+		Spec: warp.MCPSpec{
+			Command:  []string{"notes-mcp"},
+			Policies: policies,
+		},
+	}
+
+	bashTool := &warp.Tool{
+		BaseResource: warp.BaseResource{
+			APIVersion: warp.APIVersion,
+			Kind:       warp.KindTool,
+			Namespace:  warp.NamespaceWorkspace,
+			Metadata:   warp.Metadata{Name: "bash", Description: "run shell commands"},
+		},
+		Spec: warp.ToolSpec{Annotations: &warp.ToolAnnotation{IsReadOnly: false}},
+	}
+
+	resources := []warp.Resource{server, bashTool}
+	// One agent per spec.tools list, named main, explicit, and prefixed in order.
+	names := []string{"main", "explicit", "prefixed"}
+	for i, tools := range agentTools {
+		resources = append(resources, &warp.Agent{
+			BaseResource: warp.BaseResource{
+				APIVersion: warp.APIVersion,
+				Kind:       warp.KindAgent,
+				Namespace:  warp.NamespaceWorkspace,
+				Metadata:   warp.Metadata{Name: names[i]},
+			},
+			Spec: warp.AgentSpec{Tools: tools},
+		})
+	}
+
+	// Discovery reports the materialized names the manager publishes, matching
+	// what the registry expects for a live server.
+	echo := &warp.Tool{
+		BaseResource: warp.BaseResource{
+			APIVersion: warp.APIVersion,
+			Kind:       warp.KindTool,
+			Metadata:   warp.Metadata{Name: "notes__echo", Description: "Echo text back"},
+		},
+		Spec: warp.ToolSpec{
+			InputSchema: map[string]any{"type": "object"},
+			Annotations: &warp.ToolAnnotation{IsReadOnly: true},
+		},
+	}
+	destructive := &warp.Tool{
+		BaseResource: warp.BaseResource{
+			APIVersion: warp.APIVersion,
+			Kind:       warp.KindTool,
+			Metadata:   warp.Metadata{Name: "notes__delete_everything", Description: "Delete everything"},
+		},
+	}
+
+	reg := warp.NewRegistry(ws)
+	for _, res := range resources {
+		reg.Set(res.QualifiedName(), res)
+	}
+	// Registering discovery before validation mirrors a workspace reload that
+	// happens after a server has already connected.
+	if err := reg.SetMCPTools(server.QualifiedName(), []*warp.Tool{echo, destructive}); err != nil {
+		t.Fatalf("register discovered MCP tools: %v", err)
+	}
+	// Validation failures stay non-fatal here, exactly as Catalog.populate treats
+	// them: an agent naming a tool as "mcp__<server>__<tool>" is reported as a
+	// dangling reference by warp because only the materialized name is registered,
+	// yet the workspace must still open and the alias must still select the tool.
+	if err := reg.Validate(); err != nil && !strings.Contains(err.Error(), "mcp__notes__echo") {
+		t.Fatalf("registry validation failed: %v", err)
+	}
+
+	cat := NewCatalog(reg, "/ws", "/ws")
+	if err := cat.Refresh(); err != nil {
+		t.Fatalf("catalog refresh: %v", err)
+	}
+	return &mcpCatalogFixture{catalog: cat, mcp: server, echo: echo, blocked: destructive}
+}
+
+// TestCatalogMCPSnapshotScope verifies a discovered MCP tool is listed with the
+// server it came from as its scope and the declaring manifest's namespace, while a
+// regular workspace tool keeps the plain workspace scope.
+func TestCatalogMCPSnapshotScope(t *testing.T) {
+	f := newMCPCatalog(t, nil, []string{"*"})
+
+	snap, ok := f.catalog.GetToolSnapshot("notes__echo")
+	if !ok {
+		t.Fatalf("discovered MCP tool missing from catalog: %+v", f.catalog.ToolNames())
+	}
+	if snap.Scope != "MCP (notes)" {
+		t.Errorf("MCP tool scope = %q, want %q", snap.Scope, "MCP (notes)")
+	}
+	if snap.Namespace != warp.NamespaceWorkspace {
+		t.Errorf("MCP tool namespace = %q, want %q", snap.Namespace, warp.NamespaceWorkspace)
+	}
+	if !snap.Annotations.IsReadOnly {
+		t.Errorf("discovery annotations must be carried: %+v", snap.Annotations)
+	}
+
+	bash, ok := f.catalog.GetToolSnapshot("bash")
+	if !ok {
+		t.Fatalf("workspace tool missing from catalog")
+	}
+	if bash.Scope == "MCP (notes)" || bash.Scope == "" {
+		t.Errorf("regular tool scope = %q, want a non-MCP scope", bash.Scope)
+	}
+}
+
+// TestPartitionAgentToolsMCPDeferral verifies MCP tools stay deferred under a
+// wildcard spec.tools so they do not crowd out the initial prompt, and become
+// eager only when the agent names one outright, written either as
+// "<server>__<tool>" or with the optional "mcp__" prefix.
+func TestPartitionAgentToolsMCPDeferral(t *testing.T) {
+	f := newMCPCatalog(t, nil,
+		[]string{"*"},
+		[]string{"bash", "notes__echo"},
+		[]string{"*", "mcp__notes__echo"},
+	)
+
+	// 1. Wildcard: bash is eager, MCP tools are deferred but still reachable.
+	wildcard, err := f.catalog.ResolveAgent("main")
+	if err != nil {
+		t.Fatalf("ResolveAgent(main): %v", err)
+	}
+	part := f.catalog.PartitionAgentTools(wildcard)
+	if slices.Contains(part.Eager, "notes__echo") {
+		t.Errorf("MCP tool must not be eager under a wildcard: Eager = %v", part.Eager)
+	}
+	if !slices.Contains(part.Deferred, "notes__echo") {
+		t.Errorf("MCP tool must be deferred so tool_search can find it: Deferred = %v", part.Deferred)
+	}
+	if !slices.Contains(part.Eager, "bash") {
+		t.Errorf("regular tool should stay eager under a wildcard: Eager = %v", part.Eager)
+	}
+
+	// 2. Naming the materialized name promotes it to eager.
+	named, err := f.catalog.ResolveAgent("explicit")
+	if err != nil {
+		t.Fatalf("ResolveAgent(explicit): %v", err)
+	}
+	partNamed := f.catalog.PartitionAgentTools(named)
+	if !slices.Contains(partNamed.Eager, "notes__echo") {
+		t.Errorf("explicitly named MCP tool must be eager: Eager = %v", partNamed.Eager)
+	}
+	if slices.Contains(partNamed.Deferred, "notes__echo") {
+		t.Errorf("an eager tool must not also be deferred: Deferred = %v", partNamed.Deferred)
+	}
+	if slices.Contains(partNamed.Eager, "notes__delete_everything") {
+		t.Errorf("an unnamed sibling MCP tool must stay deferred: Eager = %v", partNamed.Eager)
+	}
+
+	// 3. The "mcp__" prefix form users write in the directory also promotes it.
+	prefixed, err := f.catalog.ResolveAgent("prefixed")
+	if err != nil {
+		t.Fatalf("ResolveAgent(prefixed): %v", err)
+	}
+	partPrefixed := f.catalog.PartitionAgentTools(prefixed)
+	if !slices.Contains(partPrefixed.Eager, "notes__echo") {
+		t.Errorf("mcp__-prefixed tool name must match the materialized name: Eager = %v", partPrefixed.Eager)
+	}
+}
+
+// TestCatalogDeniedMCPTools verifies tools the server exposes but spec.policies
+// prohibits are recorded as policy-blocked, reported with a denied status, and
+// replaced rather than accumulated when a server re-discovers.
+func TestCatalogDeniedMCPTools(t *testing.T) {
+	f := newMCPCatalog(t,
+		&warp.MCPPolicies{Tools: &warp.ResourceFilter{Exclude: []string{"delete_*"}}},
+		[]string{"*"},
+	)
+
+	f.catalog.SetDeniedMCPTools(f.mcp, []*warp.Tool{f.blocked})
+
+	denied := f.catalog.DeniedMCPToolSnapshots()
+	if len(denied) != 1 || denied[0].Name != "notes__delete_everything" {
+		t.Fatalf("DeniedMCPToolSnapshots() = %+v", denied)
+	}
+	if denied[0].Status != api.ToolStatusDenied {
+		t.Errorf("denied status = %q, want %q", denied[0].Status, api.ToolStatusDenied)
+	}
+	if denied[0].Namespace != warp.NamespaceWorkspace {
+		t.Errorf("denied namespace = %q, want the declaring manifest's namespace", denied[0].Namespace)
+	}
+	if denied[0].Scope != "MCP (notes)" {
+		t.Errorf("denied scope = %q, want %q", denied[0].Scope, "MCP (notes)")
+	}
+
+	// A blocked tool must never appear among the effective, callable tools.
+	if slices.Contains(f.catalog.ToolNames(), "notes__delete_everything") {
+		t.Errorf("a policy-blocked tool must not be effective: %v", f.catalog.ToolNames())
+	}
+	// ...but it must be visible as denied so the UI can explain the restriction.
+	resolved, err := f.catalog.ResolveAgent("main")
+	if err != nil {
+		t.Fatalf("ResolveAgent(main): %v", err)
+	}
+	statuses := f.catalog.ToolStatuses(resolved)
+	if statuses["notes__delete_everything"] != api.ToolStatusDenied {
+		t.Errorf("blocked MCP tool status = %q, want %q",
+			statuses["notes__delete_everything"], api.ToolStatusDenied)
+	}
+	if statuses["notes__echo"] != api.ToolStatusDeferred {
+		t.Errorf("permitted MCP tool status = %q, want %q",
+			statuses["notes__echo"], api.ToolStatusDeferred)
+	}
+
+	// Re-discovery without the blocked tool must clear the stale entry.
+	f.catalog.SetDeniedMCPTools(f.mcp, nil)
+	if got := f.catalog.DeniedMCPToolSnapshots(); len(got) != 0 {
+		t.Errorf("clearing a server's blocked tools left %+v", got)
+	}
+}
+
+// TestCatalogAgentContextMCPToolTokens verifies an eager MCP tool's token cost is
+// attributed to the MCP bucket instead of the system or custom tool buckets.
+func TestCatalogAgentContextMCPToolTokens(t *testing.T) {
+	f := newMCPCatalog(t, nil, []string{"bash", "notes__echo"})
+
+	echo, ok := f.catalog.GetToolSnapshot("notes__echo")
+	if !ok {
+		t.Fatalf("MCP tool missing from catalog")
+	}
+	bash, ok := f.catalog.GetToolSnapshot("bash")
+	if !ok {
+		t.Fatalf("workspace tool missing from catalog")
+	}
+	if echo.Tokens <= 0 || bash.Tokens <= 0 {
+		t.Fatalf("tool snapshots must carry token costs: mcp=%d bash=%d", echo.Tokens, bash.Tokens)
+	}
+
+	breakdown := f.catalog.AgentContext("main")
+	if breakdown.MCPTools != echo.Tokens {
+		t.Errorf("MCP bucket = %d, want the eager MCP tool's %d tokens", breakdown.MCPTools, echo.Tokens)
+	}
+	// The deferred sibling must not be counted at all, and the MCP tool's cost must
+	// not leak into the custom bucket alongside the plain workspace tool.
+	if breakdown.CustomTools != bash.Tokens {
+		t.Errorf("custom bucket = %d, want only the workspace tool's %d tokens", breakdown.CustomTools, bash.Tokens)
+	}
+}
+
+// TestPartitionAgentToolsReadMCPResource verifies read_mcp_resource is activated
+// only while the workspace actually exposes a readable MCP resource: it is eager
+// even when the agent omits it, never deferred, omitted while no resource is
+// readable, and never overrides an agent that denies it.
+func TestPartitionAgentToolsReadMCPResource(t *testing.T) {
+	ws := &warp.Workspace{
+		Def: &warp.WorkspaceDef{
+			BaseResource: warp.BaseResource{
+				APIVersion: warp.APIVersion,
+				Kind:       warp.KindWorkspace,
+				Metadata:   warp.Metadata{Name: "read-resource-ws"},
+			},
+			Spec: warp.WorkspaceDefSpec{DefaultAgent: "main"},
+		},
+	}
+
+	resourceTool := &warp.Tool{
+		BaseResource: warp.BaseResource{
+			APIVersion: warp.APIVersion,
+			Kind:       warp.KindTool,
+			Namespace:  warp.NamespaceSystem,
+			Metadata:   warp.Metadata{Name: "read_mcp_resource", Description: "read an MCP resource"},
+		},
+		Spec: warp.ToolSpec{Annotations: &warp.ToolAnnotation{IsReadOnly: true}},
+	}
+	bashTool := &warp.Tool{
+		BaseResource: warp.BaseResource{
+			APIVersion: warp.APIVersion,
+			Kind:       warp.KindTool,
+			Namespace:  warp.NamespaceWorkspace,
+			Metadata:   warp.Metadata{Name: "bash", Description: "run shell commands"},
+		},
+		Spec: warp.ToolSpec{Annotations: &warp.ToolAnnotation{IsReadOnly: false}},
+	}
+
+	// main omits read_mcp_resource from spec.tools, as every shipped agent does:
+	// no agent author can know whether the servers it talks to expose resources.
+	mainAgent := &warp.Agent{
+		BaseResource: warp.BaseResource{
+			APIVersion: warp.APIVersion,
+			Kind:       warp.KindAgent,
+			Namespace:  warp.NamespaceWorkspace,
+			Metadata:   warp.Metadata{Name: "main"},
+		},
+		Spec: warp.AgentSpec{Tools: []string{"bash"}},
+	}
+	denyAgent := &warp.Agent{
+		BaseResource: warp.BaseResource{
+			APIVersion: warp.APIVersion,
+			Kind:       warp.KindAgent,
+			Namespace:  warp.NamespaceWorkspace,
+			Metadata:   warp.Metadata{Name: "deny"},
+		},
+		Spec: warp.AgentSpec{
+			Tools:    []string{"bash"},
+			Policies: &warp.Policies{Tools: &warp.ToolPolicies{Exclude: []string{"read_mcp_resource"}}},
+		},
+	}
+
+	reg := warp.NewRegistry(ws)
+	for _, res := range []warp.Resource{resourceTool, bashTool, mainAgent, denyAgent} {
+		reg.Set(res.QualifiedName(), res)
+	}
+	if err := reg.Validate(); err != nil {
+		t.Fatalf("registry validation failed: %v", err)
+	}
+	cat := NewCatalog(reg, "", "")
+
+	// 1. No runtime probe installed: a workspace without an MCP runtime must not
+	// spend context on a tool with nothing to read.
+	partNone := cat.PartitionAgentTools(&warp.ResolvedAgent{Agent: mainAgent, Tools: []*warp.Tool{bashTool}})
+	if slices.Contains(partNone.Eager, "read_mcp_resource") {
+		t.Errorf("no readable resource: read_mcp_resource unexpectedly in Eager = %v", partNone.Eager)
+	}
+	if slices.Contains(partNone.Deferred, "read_mcp_resource") {
+		t.Errorf("read_mcp_resource must never be deferred, got Deferred = %v", partNone.Deferred)
+	}
+	if statuses := cat.ToolStatuses(&warp.ResolvedAgent{Agent: mainAgent, Tools: []*warp.Tool{bashTool}}); statuses["read_mcp_resource"] != api.ToolStatusInactive {
+		t.Errorf("no readable resource: status = %q, want inactive", statuses["read_mcp_resource"])
+	}
+
+	// 2. A readable resource appears: the tool becomes eager without any manifest
+	// edit, because discovery is what makes it useful.
+	readable := false
+	cat.SetMCPResourceProbe(func() bool { return readable })
+	if cat.HasAllowedMCPResources() {
+		t.Fatal("HasAllowedMCPResources = true while the probe reports false")
+	}
+	readable = true
+	if !cat.HasAllowedMCPResources() {
+		t.Fatal("HasAllowedMCPResources = false while the probe reports true")
+	}
+	resolved := &warp.ResolvedAgent{Agent: mainAgent, Tools: []*warp.Tool{bashTool}}
+	partReadable := cat.PartitionAgentTools(resolved)
+	if !slices.Contains(partReadable.Eager, "read_mcp_resource") {
+		t.Errorf("readable resource: read_mcp_resource missing from Eager = %v", partReadable.Eager)
+	}
+	if slices.Contains(partReadable.Deferred, "read_mcp_resource") {
+		t.Errorf("read_mcp_resource must never be deferred, got Deferred = %v", partReadable.Deferred)
+	}
+	if statuses := cat.ToolStatuses(resolved); statuses["read_mcp_resource"] != api.ToolStatusEager {
+		t.Errorf("readable resource: status = %q, want eager", statuses["read_mcp_resource"])
+	}
+
+	// 3. An agent that denies it stays denied; activation never overrides policy.
+	partDeny := cat.PartitionAgentTools(&warp.ResolvedAgent{Agent: denyAgent, Tools: []*warp.Tool{bashTool}})
+	if slices.Contains(partDeny.Eager, "read_mcp_resource") {
+		t.Errorf("excluded read_mcp_resource: unexpectedly in Eager = %v", partDeny.Eager)
+	}
+	if slices.Contains(partDeny.Deferred, "read_mcp_resource") {
+		t.Errorf("excluded read_mcp_resource: unexpectedly in Deferred = %v", partDeny.Deferred)
+	}
+
+	// 4. Clearing the probe (detaching the runtime) deactivates it again.
+	cat.SetMCPResourceProbe(nil)
+	partCleared := cat.PartitionAgentTools(resolved)
+	if slices.Contains(partCleared.Eager, "read_mcp_resource") {
+		t.Errorf("cleared probe: read_mcp_resource unexpectedly in Eager = %v", partCleared.Eager)
+	}
+}

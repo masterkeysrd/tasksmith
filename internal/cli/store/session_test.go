@@ -796,3 +796,163 @@ func TestRefreshWorkspaceToolsCachingAndFallback(t *testing.T) {
 		t.Fatal("expected error when no daemon connection is available")
 	}
 }
+
+// mcpInitHandler serves a workspace listing plus an MCP listing whose status can
+// change between calls, so a test can watch servers settle while a session
+// initializes.
+type mcpInitHandler struct {
+	mu       sync.Mutex
+	servers  []api.MCPServer
+	warnings []string
+	lists    int
+	// startConnecting reports every server as connecting on the first listing,
+	// mirroring the background connect a workspace starts when it opens.
+	startConnecting bool
+}
+
+func (h *mcpInitHandler) RoundTrip(req *http.Request) (*http.Response, error) {
+	switch {
+	case req.Method == http.MethodGet && req.URL.Path == "/v1/workspace":
+		return sessionJSONResponse(api.Workspace{Name: "test-ws", RootDir: "/workspace", Warnings: h.currentWarnings()})
+	case req.Method == http.MethodGet && req.URL.Path == "/v1/workspace/mcps":
+		return sessionJSONResponse(h.nextServers())
+	default:
+		return sessionJSONResponse(map[string]any{})
+	}
+}
+
+func (h *mcpInitHandler) currentWarnings() []string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.warnings
+}
+
+// nextServers returns the current listing and advances it, reporting servers as
+// still connecting on the first look when startConnecting is set.
+func (h *mcpInitHandler) nextServers() []api.MCPServer {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	current := h.servers
+	h.lists++
+	if h.startConnecting && h.lists == 1 && len(h.servers) > 0 {
+		connecting := make([]api.MCPServer, len(h.servers))
+		copy(connecting, h.servers)
+		for i := range connecting {
+			connecting[i].Status = api.MCPStatusConnecting
+		}
+		current = connecting
+	}
+	return current
+}
+
+func sessionJSONResponse(payload any) (*http.Response, error) {
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Body:       io.NopCloser(bytes.NewReader(data)),
+		Header:     make(http.Header),
+	}
+	resp.Header.Set("Content-Type", "application/json")
+	return resp, nil
+}
+
+// TestInitSessionAnnouncesMCPServerWarnings checks that servers the daemon reports
+// as needing authentication or failing to connect are announced in the timeline
+// immediately, while the header keeps only the workspace's own durable warnings.
+func TestInitSessionAnnouncesMCPServerWarnings(t *testing.T) {
+	ResetApp()
+	defer ResetApp()
+	ResetSession()
+	defer ResetSession()
+	ClearTranscript()
+	defer ClearTranscript()
+	defer SetWorkspaceWarnings(nil)
+	defer SetWorkspaceMCPServers(nil)
+
+	handler := &mcpInitHandler{
+		warnings: []string{"provider warning"},
+		servers: []api.MCPServer{
+			{Name: "healthy", Status: api.MCPStatusConnected},
+			{Name: "github", Status: api.MCPStatusAuthRequired},
+			{Name: "search", Status: api.MCPStatusError, Error: "connection refused"},
+		},
+	}
+	c, err := client.New("/tmp/dummy.sock", client.WithCWD("/workspace"), client.WithHTTPClient(&http.Client{Transport: handler}))
+	if err != nil {
+		t.Fatalf("client.New: %v", err)
+	}
+
+	InitSession(context.Background(), c, InitSessionOptions{Agent: "test-agent", Model: "test-model"})
+
+	if warnings := CurrentHeaderData().Warnings; len(warnings) != 1 || warnings[0] != "provider warning" {
+		t.Fatalf("expected the header to carry only the workspace warning, got %v", warnings)
+	}
+
+	warnings := transcriptWarnings(t)
+	if len(warnings) != 2 {
+		t.Fatalf("expected one timeline warning per unhealthy server, got %v", warnings)
+	}
+	if !strings.Contains(warnings[0], "github") || !strings.Contains(warnings[1], "search") {
+		t.Errorf("unexpected MCP warnings: %v", warnings)
+	}
+}
+
+// TestInitSessionAnnouncesAfterServersSettle covers the ordering problem: MCP
+// servers connect in the background, so they are still reported as connecting when
+// the session initializes. The timeline must gain the announcement once they settle
+// rather than never saying anything at all.
+func TestInitSessionAnnouncesAfterServersSettle(t *testing.T) {
+	ResetApp()
+	defer ResetApp()
+	ResetSession()
+	defer ResetSession()
+	ClearTranscript()
+	defer ClearTranscript()
+	defer SetWorkspaceWarnings(nil)
+	defer SetWorkspaceMCPServers(nil)
+
+	origInterval, origTimeout := mcpSettleInterval, mcpSettleTimeout
+	// The interval stays longer than the synchronous part of InitSession so the
+	// test can assert nothing is announced while a server is still connecting.
+	mcpSettleInterval = 50 * time.Millisecond
+	mcpSettleTimeout = 2 * time.Second
+	t.Cleanup(func() {
+		mcpSettleInterval = origInterval
+		mcpSettleTimeout = origTimeout
+	})
+
+	handler := &mcpInitHandler{
+		startConnecting: true,
+		servers: []api.MCPServer{
+			{Name: "linear", Status: api.MCPStatusAuthRequired, AuthType: "oauth2"},
+		},
+	}
+	c, err := client.New("/tmp/dummy.sock", client.WithCWD("/workspace"), client.WithHTTPClient(&http.Client{Transport: handler}))
+	if err != nil {
+		t.Fatalf("client.New: %v", err)
+	}
+
+	InitSession(context.Background(), c, InitSessionOptions{Agent: "test-agent", Model: "test-model"})
+
+	if warnings := transcriptWarnings(t); len(warnings) != 0 {
+		t.Fatalf("a connecting server must not be announced yet, got %v", warnings)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if warnings := transcriptWarnings(t); len(warnings) == 1 {
+			if !strings.Contains(warnings[0], "linear") || !strings.Contains(warnings[0], "requires authentication") {
+				t.Fatalf("unexpected announcement after settling: %q", warnings[0])
+			}
+			if header := CurrentHeaderData().Warnings; len(header) != 0 {
+				t.Fatalf("MCP health must never reach the header, got %v", header)
+			}
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("announcement never appeared after the server settled: %+v", transcriptWarnings(t))
+}

@@ -22,6 +22,7 @@ flowchart TD
             Timeline["Timeline & Snapshot Engine\n(Unified Diffs & Reverts)"]
             Journal["Durable SQLite Journal\n(Event Log & Turn History)"]
             PermMgr["Permission & Guard Manager\n(AST & Path Policies)"]
+            MCPMgr["MCP Manager\n(Per-Workspace Connections & OAuth)"]
         end
 
         Gateways["Pooled Provider Gateways\n(Shared by Fingerprint)"]
@@ -49,6 +50,7 @@ The daemon maintains a pool of active workspace runtimes indexed by canonical ro
 - **Workspace Isolation**: Each workspace executes inside its own runtime directly coordinating its session store, active sessions, timeline tracker, permission evaluator, and tool container.
 - **Zero-Downtime Hot Reloading**: Changes to `.agents/`, `.env`, or workspace configurations trigger automatic in-memory reloads without terminating active sessions.
 - **Model Catalog**: Each workspace builds its model catalog at load time by merging workspace model manifests with provider profiles into an in-memory snapshot. Reload replaces the catalog atomically; existing model snapshots remain unchanged.
+- **MCP Connections**: Each runtime owns one MCP manager for its declared servers, attached to the workspace so MCP endpoints and tools share the same live connections. Opening a workspace starts connections in the background, so a slow or unreachable server never delays session start; a server that cannot authenticate parks in `auth_required` rather than failing — with its authorization URL when an interactive flow is available, and with the rejected or missing static credential otherwise. Per-server health is served from the MCP listing rather than the workspace view, because it keeps changing while a session runs; the CLI reports it in the transcript as it polls. Reload re-connects servers whose definition, workspace environment, or render context changed and re-publishes the discovered tools of servers that stayed the same, since reload replaces the tool registry. A server that advertises list-change notifications re-syncs itself, and a re-list that fails leaves the previously discovered tools in place rather than dropping them. Discovery completing after a session already started triggers a session refresh, so open sessions activate the newly discovered tools and any conditional built-in they unlock without a restart. Closing the runtime disconnects every server and closes the manager, and sibling worktrees resolve MCP servers through the root workspace.
 - **Resource De-duplication**: Sibling Git worktrees and independent workspaces sharing identical provider setups automatically share underlying connection pools in the content-addressable Gateway Pool.
 
 ### 3. Session State Machine & Durable Journal

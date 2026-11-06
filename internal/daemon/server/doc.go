@@ -9,15 +9,16 @@
 // management, session lifecycle, and gateway orchestration) via composed
 // backend interfaces:
 //
-//   - Backend Abstraction: Business logic access is factored into four cohesive
-//     interfaces ([SystemBackend], [EventBackend], [WorkspaceBackend], and
-//     [SessionBackend]), composed into [Backend]. This allows routers to be
-//     tested independently with mock implementations.
+//   - Backend Abstraction: Business logic access is factored into cohesive
+//     interfaces ([SystemBackend], [EventBackend], [WorkspaceBackend],
+//     [MCPBackend], [SessionBackend], and [MetricsBackend]), composed into
+//     [Backend]. This allows routers to be tested independently with mock
+//     implementations.
 //
-//   - Modular Routers: Route declarations are grouped logically into four router
+//   - Modular Routers: Route declarations are grouped logically into router
 //     constructors ([NewSystemRouter], [NewEventRouter], [NewWorkspaceRouter],
-//     and [NewSessionRouter]). Each produces a [Router] containing declared
-//     [Route] definitions.
+//     [NewMCPRouter], [NewSessionRouter], and [NewMetricsRouter]). Each produces
+//     a [Router] containing declared [Route] definitions.
 //
 //   - Go 1.22+ Multiplexing: [Server.CreateMux] combines routers onto an
 //     [http.ServeMux] using Go 1.22+ method-and-path patterns (e.g.
@@ -47,6 +48,12 @@
 //   - `GET  /v1/agents/{name}`               – Fetch a single agent.
 //   - `GET  /v1/models`                      – List available models.
 //   - `GET  /v1/models/{id...}`              – Fetch a single model.
+//   - `GET  /v1/workspace/mcps`              – List configured MCP servers with status and discoveries.
+//   - `POST /v1/workspace/mcps/{name}/restart` – Reconnect an MCP server and re-discover its items.
+//   - `POST /v1/workspace/mcps/{name}/auth`  – Start or resume an MCP server's authorization flow.
+//   - `POST /v1/workspace/mcps/{name}/prompts/{prompt}` – Render an MCP prompt.
+//   - `POST /v1/workspace/mcps/{name}/resources` – Read an MCP resource.
+//   - `POST /v1/workspace/mcps/{name}/policies/allow` – Permit an MCP item in the server manifest.
 //   - `POST /v1/sessions`                    – Create or idempotently ensure a session.
 //   - `POST /v1/sessions/preview`            – Preview draft session model resolution and diagnostics.
 //   - `GET  /v1/sessions`                    – List sessions.

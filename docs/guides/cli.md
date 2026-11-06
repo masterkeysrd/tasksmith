@@ -80,7 +80,7 @@ The top banner displays:
 - **Logo & Version**: Current TaskSmith build version (e.g., `v0.2.0`).
 - **Active Model & Reasoning Effort**: The daemon-resolved model and current reasoning effort tier (e.g., `anthropic/claude-sonnet-4-5 with auto effort`). Draft selections are resolved by the daemon; context usage is available after the session is created.
 - **Workspace Path**: The normalized workspace path (shortening the user home directory to `~`).
-- **Status & Warning Indicators**: If a provider lacks an API key, or if a configuration file contains an issue, a yellow warning banner (`⚠`) highlights the problem with troubleshooting instructions.
+- **Status & Warning Indicators**: If a provider lacks an API key or a configuration file contains an issue, a yellow warning banner (`⚠`) highlights the problem with troubleshooting instructions. Only problems that stay true until the workspace is re-read appear here; MCP server health is reported in the transcript instead, because it changes while you work.
 
 ### 2. Streaming Transcript
 
@@ -91,7 +91,7 @@ As the agent works, the transcript streams live updates directly into your termi
   - **Action Verb & Target**: Clearly labeled operations such as `Read internal/config.go`, `Write src/util.ts`, `Bash go test ./...`, or `Fetch api.github.com`.
   - **Metrics & Timing**: Execution duration in milliseconds or seconds, bytes transferred, and unified line change statistics (`+14/-2`).
   - **Diff Previews**: Inline unified diffs for `edit` and `write` tools showing exact additions and deletions in color.
-- **Warnings**: Model configuration warnings appear in the transcript with a colored left border. Use `/clear` to dismiss them.
+- **Warnings**: Model configuration warnings and MCP server health — a server that needs `/mcp auth <name>` or failed to connect — appear in the transcript with a colored left border. Use `/clear` to dismiss them.
 - **Markdown Rendering**: Agent responses render GitHub-flavored Markdown with bold text, lists, syntax-highlighted code blocks, and formatted tables.
 
 ### 3. Multi-Line Composer
@@ -129,6 +129,7 @@ Some built-in commands:
 | `/permissions` | `/permissions` | Open the interactive permission rules manager. |
 | `/rules` | `/rules` | Open the workspace rules browser to inspect rule status and triggers, or reload rules from disk. |
 | `/tools` | `/tools` | Open the workspace tools browser to inspect each tool's status for the active agent, its safety annotations and schemas, or reload tools from disk. |
+| `/mcp` | `/mcp` (or `/mcps`), `/mcp auth <name>`, `/mcp restart <name>` | Open the MCP browser to inspect servers and everything they offer, authorize or restart one, and run prompts or attach resources. |
 | `/theme` | `/theme [name]` | Switch the terminal color theme. |
 | `/clear` | `/clear` | Start a fresh session draft. |
 | `/compact` | `/compact [focus]` | Compact conversation history to free context window space, with optional focus instructions. |

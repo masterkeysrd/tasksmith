@@ -294,6 +294,120 @@ func (c *Client) ListTools(ctx context.Context, agent string) ([]api.Tool, error
 	return out, nil
 }
 
+// ListMCPs returns every MCP server configured in the workspace sorted by name,
+// including each server's live connection status and the tools, prompts, and
+// resources discovered on it. Items blocked by a server manifest's policies are
+// included with Allowed set to false.
+func (c *Client) ListMCPs(ctx context.Context) ([]api.MCPServer, error) {
+	if err := c.requireCWD(); err != nil {
+		return nil, err
+	}
+	var out []api.MCPServer
+	if err := c.doJSON(ctx, http.MethodGet, "/v1/workspace/mcps", nil, nil, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// RestartMCP reconnects the named MCP server and re-discovers its tools,
+// prompts, and resources, returning the updated server state.
+func (c *Client) RestartMCP(ctx context.Context, name string) (api.MCPServer, error) {
+	path, err := c.mcpEndpoint(name, "/restart")
+	if err != nil {
+		return api.MCPServer{}, err
+	}
+	var out api.MCPServer
+	if err := c.doJSON(ctx, http.MethodPost, path, nil, nil, &out); err != nil {
+		return api.MCPServer{}, err
+	}
+	return out, nil
+}
+
+// AuthenticateMCP starts or resumes the interactive authorization flow for the
+// named MCP server and returns the URL the user should open in a browser.
+func (c *Client) AuthenticateMCP(ctx context.Context, name string) (api.MCPAuthResponse, error) {
+	path, err := c.mcpEndpoint(name, "/auth")
+	if err != nil {
+		return api.MCPAuthResponse{}, err
+	}
+	var out api.MCPAuthResponse
+	if err := c.doJSON(ctx, http.MethodPost, path, nil, nil, &out); err != nil {
+		return api.MCPAuthResponse{}, err
+	}
+	return out, nil
+}
+
+// CompleteMCPAuth hands a redirect URL copied from the user's browser to the
+// authorization flow in progress for the named MCP server. It is the fallback for
+// browsers that cannot reach the daemon's loopback callback listener.
+func (c *Client) CompleteMCPAuth(ctx context.Context, name string, req api.MCPAuthCallbackRequest) error {
+	if strings.TrimSpace(req.CallbackURL) == "" {
+		return errors.New("client: MCP callback URL must not be empty")
+	}
+	path, err := c.mcpEndpoint(name, "/auth/callback")
+	if err != nil {
+		return err
+	}
+	return c.doJSON(ctx, http.MethodPost, path, nil, req, nil)
+}
+
+// GetMCPPrompt renders a prompt discovered on an MCP server. Prohibited prompts
+// are rejected by the daemon unless req.AllowProhibited is set.
+func (c *Client) GetMCPPrompt(ctx context.Context, server, prompt string, req api.MCPPromptRequest) (api.MCPPromptResponse, error) {
+	prompt = strings.TrimSpace(prompt)
+	if prompt == "" {
+		return api.MCPPromptResponse{}, errors.New("client: MCP prompt name must not be empty")
+	}
+	path, err := c.mcpEndpoint(server, "/prompts/"+url.PathEscape(prompt))
+	if err != nil {
+		return api.MCPPromptResponse{}, err
+	}
+	var out api.MCPPromptResponse
+	if err := c.doJSON(ctx, http.MethodPost, path, nil, req, &out); err != nil {
+		return api.MCPPromptResponse{}, err
+	}
+	return out, nil
+}
+
+// ReadMCPResource reads a resource URI from an MCP server. Prohibited resources
+// are rejected by the daemon unless req.AllowProhibited is set.
+func (c *Client) ReadMCPResource(ctx context.Context, server string, req api.MCPResourceRequest) (api.MCPResourceResponse, error) {
+	path, err := c.mcpEndpoint(server, "/resources")
+	if err != nil {
+		return api.MCPResourceResponse{}, err
+	}
+	var out api.MCPResourceResponse
+	if err := c.doJSON(ctx, http.MethodPost, path, nil, req, &out); err != nil {
+		return api.MCPResourceResponse{}, err
+	}
+	return out, nil
+}
+
+// AllowMCPPolicy updates the named server's manifest on disk so req.Value is
+// permitted, reloads the server, and returns the updated state.
+func (c *Client) AllowMCPPolicy(ctx context.Context, server string, req api.MCPAllowPolicyRequest) (api.MCPServer, error) {
+	path, err := c.mcpEndpoint(server, "/policies/allow")
+	if err != nil {
+		return api.MCPServer{}, err
+	}
+	var out api.MCPServer
+	if err := c.doJSON(ctx, http.MethodPost, path, nil, req, &out); err != nil {
+		return api.MCPServer{}, err
+	}
+	return out, nil
+}
+
+func (c *Client) mcpEndpoint(name, suffix string) (string, error) {
+	if err := c.requireCWD(); err != nil {
+		return "", err
+	}
+	server := strings.TrimSpace(name)
+	if server == "" {
+		return "", errors.New("client: MCP server name must not be empty")
+	}
+	return "/v1/workspace/mcps/" + url.PathEscape(server) + suffix, nil
+}
+
 // ListModels returns all resolved models across providers in the workspace.
 func (c *Client) ListModels(ctx context.Context) ([]api.Model, error) {
 	if err := c.requireCWD(); err != nil {

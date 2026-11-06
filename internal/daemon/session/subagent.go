@@ -134,6 +134,7 @@ func (s *Session) InvokeSubagent(ctx context.Context, in api.InvokeAgentInput) (
 		Context:     s.bgCtx,
 		WaitGroup:   s.wg,
 		OnUpdate:    s.onUpdate,
+		MCPCaller:   s.mcpCaller,
 	}
 
 	child, err := New(ctx, cfg)
@@ -205,6 +206,7 @@ func (s *Session) dispatchCommandSubagent(ctx context.Context, exec *commandExec
 		Context:     s.bgCtx,
 		WaitGroup:   s.wg,
 		OnUpdate:    s.onUpdate,
+		MCPCaller:   s.mcpCaller,
 	}
 
 	child, err := New(ctx, cfg)

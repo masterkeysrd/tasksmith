@@ -221,6 +221,8 @@ Never attempt to modify code directly; report your findings with precise line re
 
 *The Markdown body below the frontmatter contains the system persona prompt.*
 
+Three built-ins are activated automatically when the workspace gives them something to do, so they may appear in the model's context without being listed in `spec.tools`: `tool_search` when any tool is deferred, `load_rule` when the agent resolves at least one conditional rule, and `read_mcp_resource` when a connected MCP server publishes a permitted resource. `policies.tools` still governs them, so denying one removes it.
+
 ---
 
 ## 5. Rule Manifest (`*.rule.md`)
@@ -633,10 +635,10 @@ Whether a tool is visible to the model is decided per session from the agent's t
 | :--- | :--- |
 | `eager` | Listed in the agent's `spec.tools`; present in the initial model context. |
 | `deferred` | Registered in the session but withheld from the initial context; activated by a `tool_search` match on a previous turn. |
-| `denied` | Blocked by workspace or agent tool policy. |
+| `denied` | Blocked by workspace, agent, or MCP server tool policy. |
 | `inactive` | Neither loaded, deferred, nor denied (for example, a conditional built-in that the current session does not activate). |
 
-Custom and MCP tools are deferred by default. To load one eagerly, list its name in the agent's `spec.tools`. Inspect the resolved status of every tool in a session with the [`/tools` browser](cli.md#tools-browser-tools).
+Custom and MCP tools are deferred by default. MCP tools stay deferred even under `spec.tools: ["*"]`; to load one eagerly, name it outright as `<server>__<tool>` or `mcp__<server>__<tool>`. Inspect the resolved status of every tool in a session with the [`/tools` browser](cli.md#tools-browser-tools).
 
 ---
 
@@ -702,3 +704,5 @@ spec:
 | `policies.prompts` | object | Inclusion/exclusion filter globs for exported prompts. |
 | `policies.resources` | object | Inclusion/exclusion filter globs for exported resources. |
 | `overrides` | map of objects | Per-tool safety annotation overrides keyed by tool name. |
+
+A `policies` filter is enforced as a hard block against the agent: a prohibited tool is never registered and reports status `denied`, while a prohibited prompt or resource read is rejected with `403` `mcp_policy_prohibited` naming the item, the policy section, and the manifest path. Tightening a filter takes effect immediately, including for sessions that already discovered the tool. Only a user may authorize a single prohibited prompt or resource read with `allowProhibited` — through the [`/mcp`](cli.md#mcp-item-confirmation) confirmation or the [MCP HTTP endpoints](cli.md#mcp-http-endpoints) — and only a user editing the manifest can permit a prohibited tool. See [MCP Tool Execution Model](tools.md#6-mcp-tool-execution-model).

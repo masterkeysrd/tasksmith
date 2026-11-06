@@ -818,3 +818,148 @@ type RevertRequest struct {
 	Before  bool   `json:"before,omitempty"`
 	Force   bool   `json:"force,omitempty"`
 }
+
+// MCPStatus describes the live connection state of an MCP server.
+type MCPStatus string
+
+const (
+	// MCPStatusDisconnected marks a server with no active connection.
+	MCPStatusDisconnected MCPStatus = "disconnected"
+	// MCPStatusConnecting marks a server whose connection is in progress.
+	MCPStatusConnecting MCPStatus = "connecting"
+	// MCPStatusConnected marks a server that is connected and discovered.
+	MCPStatusConnected MCPStatus = "connected"
+	// MCPStatusAuthRequired marks a server waiting for the user to finish an
+	// interactive authorization flow.
+	MCPStatusAuthRequired MCPStatus = "auth_required"
+	// MCPStatusError marks a server whose last connection or discovery failed.
+	MCPStatusError MCPStatus = "error"
+)
+
+// MCPToolSummary describes one tool discovered on an MCP server.
+type MCPToolSummary struct {
+	Name         string         `json:"name"`    // "<server>__<rawName>"
+	RawName      string         `json:"rawName"` // "<rawName>"
+	Description  string         `json:"description,omitempty"`
+	Allowed      bool           `json:"allowed"`
+	Annotations  ToolAnnotation `json:"annotations"`
+	InputSchema  map[string]any `json:"inputSchema,omitempty"`
+	OutputSchema map[string]any `json:"outputSchema,omitempty"`
+}
+
+// MCPPromptArgument describes one argument accepted by an MCP prompt.
+type MCPPromptArgument struct {
+	Name        string `json:"name"`
+	Title       string `json:"title,omitempty"`
+	Description string `json:"description,omitempty"`
+	Required    bool   `json:"required,omitempty"`
+}
+
+// MCPPromptSummary describes one prompt discovered on an MCP server.
+type MCPPromptSummary struct {
+	Name        string              `json:"name"`
+	Title       string              `json:"title,omitempty"`
+	Description string              `json:"description,omitempty"`
+	Arguments   []MCPPromptArgument `json:"arguments,omitempty"`
+	Allowed     bool                `json:"allowed"`
+}
+
+// MCPResourceSummary describes one resource discovered on an MCP server.
+type MCPResourceSummary struct {
+	Name        string `json:"name"`
+	Title       string `json:"title,omitempty"`
+	URI         string `json:"uri"`
+	Description string `json:"description,omitempty"`
+	MIMEType    string `json:"mimeType,omitempty"`
+	Size        int64  `json:"size,omitempty"`
+	Allowed     bool   `json:"allowed"`
+}
+
+// MCPServer describes a configured MCP server, its resolved transport and
+// authentication configuration, its live connection state, and everything
+// discovered on it. Items excluded by the server manifest's policies are still
+// listed with Allowed set to false so callers can show what a server offers and
+// why an item is restricted.
+type MCPServer struct {
+	Name        string               `json:"name"`
+	DisplayName string               `json:"displayName,omitempty"`
+	Description string               `json:"description,omitempty"`
+	Namespace   string               `json:"namespace,omitempty"`
+	Scope       string               `json:"scope,omitempty"`
+	Path        string               `json:"path,omitempty"`
+	Transport   string               `json:"transport"`
+	Command     []string             `json:"command,omitempty"`
+	Endpoint    string               `json:"endpoint,omitempty"`
+	AuthType    string               `json:"authType,omitempty"`
+	Status      MCPStatus            `json:"status"`
+	AuthURL     string               `json:"authUrl,omitempty"`
+	Error       string               `json:"error,omitempty"`
+	Tools       []MCPToolSummary     `json:"tools,omitempty"`
+	Prompts     []MCPPromptSummary   `json:"prompts,omitempty"`
+	Resources   []MCPResourceSummary `json:"resources,omitempty"`
+}
+
+// MCPAuthResponse reports how a user should authorize an MCP server.
+type MCPAuthResponse struct {
+	AuthURL string    `json:"authUrl,omitempty"`
+	Status  MCPStatus `json:"status"`
+}
+
+// MCPAuthCallbackRequest carries a redirect URL the user pasted by hand so a
+// waiting authorization flow can complete without the browser ever reaching the
+// daemon's loopback listener.
+type MCPAuthCallbackRequest struct {
+	CallbackURL string `json:"callbackUrl"`
+}
+
+// MCPPromptRequest renders a prompt discovered on an MCP server. Prompts
+// blocked by the server manifest's policies are rejected unless the caller is a
+// user explicitly authorizing one prohibited use with AllowProhibited.
+type MCPPromptRequest struct {
+	Args            map[string]string `json:"args,omitempty"`
+	AllowProhibited bool              `json:"allowProhibited,omitempty"`
+}
+
+// MCPPromptMessage is one rendered message of an MCP prompt.
+type MCPPromptMessage struct {
+	Role Role   `json:"role"`
+	Text string `json:"text,omitempty"`
+}
+
+// MCPPromptResponse carries the rendered messages of an MCP prompt.
+type MCPPromptResponse struct {
+	Description string             `json:"description,omitempty"`
+	Messages    []MCPPromptMessage `json:"messages,omitempty"`
+}
+
+// MCPResourceRequest reads one resource from an MCP server. Resources blocked by
+// the server manifest's policies are rejected unless the caller is a user
+// explicitly authorizing one prohibited read with AllowProhibited.
+type MCPResourceRequest struct {
+	URI             string `json:"uri"`
+	AllowProhibited bool   `json:"allowProhibited,omitempty"`
+}
+
+// MCPResourceResponse carries the text content of a read MCP resource.
+type MCPResourceResponse struct {
+	URI      string `json:"uri"`
+	MIMEType string `json:"mimeType,omitempty"`
+	Text     string `json:"text,omitempty"`
+}
+
+// MCP policy item kinds accepted by MCPAllowPolicyRequest and named in policy
+// rejection messages.
+const (
+	MCPAllowPolicyKindTool     = "tool"
+	MCPAllowPolicyKindPrompt   = "prompt"
+	MCPAllowPolicyKindResource = "resource"
+)
+
+// MCPAllowPolicyRequest names one MCP item to permit in the server's manifest.
+// Kind is one of [MCPAllowPolicyKindTool], [MCPAllowPolicyKindPrompt], or
+// [MCPAllowPolicyKindResource], and Value is the raw tool name, prompt name, or
+// resource URI.
+type MCPAllowPolicyRequest struct {
+	Kind  string `json:"kind"`
+	Value string `json:"value"`
+}

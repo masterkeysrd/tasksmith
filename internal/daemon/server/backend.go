@@ -39,6 +39,21 @@ type WorkspaceBackend interface {
 	RemovePermissionRule(ctx context.Context, workspace string, req api.PermissionRuleRequest) (*api.PermissionsResponse, error)
 }
 
+// MCPBackend serves the workspace's configured MCP servers: their discovered
+// tools, prompts, and resources, plus restart, interactive authorization,
+// prompt rendering, resource reads, and manifest policy updates.
+type MCPBackend interface {
+	ListMCPs(ctx context.Context, workspace string) ([]api.MCPServer, error)
+	RestartMCP(ctx context.Context, workspace, name string) (api.MCPServer, error)
+	AuthenticateMCP(ctx context.Context, workspace, name string) (api.MCPAuthResponse, error)
+	// CompleteMCPAuth feeds a redirect URL the user copied from their browser to
+	// the authorization flow in progress for a server.
+	CompleteMCPAuth(ctx context.Context, workspace, name string, req api.MCPAuthCallbackRequest) error
+	GetMCPPrompt(ctx context.Context, workspace, name, prompt string, req api.MCPPromptRequest) (api.MCPPromptResponse, error)
+	ReadMCPResource(ctx context.Context, workspace, name string, req api.MCPResourceRequest) (api.MCPResourceResponse, error)
+	AllowMCPPolicy(ctx context.Context, workspace, name string, req api.MCPAllowPolicyRequest) (api.MCPServer, error)
+}
+
 type SessionBackend interface {
 	CreateSession(ctx context.Context, workspace string, req api.CreateSessionRequest) (*api.Session, bool, error)
 	PreviewSession(ctx context.Context, workspace string, req api.PreviewSessionRequest) (*api.SessionPreview, error)
@@ -70,6 +85,7 @@ type Backend interface {
 	SystemBackend
 	EventBackend
 	WorkspaceBackend
+	MCPBackend
 	SessionBackend
 	MetricsBackend
 }

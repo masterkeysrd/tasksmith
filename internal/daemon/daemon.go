@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -54,6 +55,10 @@ type Config struct {
 	LockPath    string
 	GatewayPool gateway.Pool
 	Logger      log.Interface
+	// DisableMCPAutoConnect keeps a workspace's MCP servers disconnected until an
+	// MCP operation asks for them. It exists for tests, which must not launch the
+	// commands or reach the endpoints a workspace's manifests declare.
+	DisableMCPAutoConnect bool
 }
 
 // Validate checks that all required fields in [Config] are provided with zero
@@ -163,6 +168,7 @@ func New(cfg Config) (*Daemon, error) {
 		server.NewSystemRouter(d),
 		server.NewEventRouter(d),
 		server.NewWorkspaceRouter(d),
+		server.NewMCPRouter(d),
 		server.NewSessionRouter(d),
 		server.NewMetricsRouter(d),
 	)
@@ -413,6 +419,10 @@ func (d *Daemon) GetWorkspace(ctx context.Context, rawWS string) (*api.Workspace
 
 	cleanDir, _ := fsutils.CleanPath(rawWS)
 
+	// Workspace warnings are the durable, startup-time problems a user has to fix
+	// before the session is useful. MCP server health is not one of them: it changes
+	// while the session runs, so the CLI reports it in the timeline as the listing is
+	// polled. See store.SetWorkspaceMCPServers.
 	var warnings []string
 	if wsWarnings := rt.Workspace().Catalog().Warnings(); len(wsWarnings) > 0 {
 		warnings = append(warnings, wsWarnings...)
@@ -577,10 +587,17 @@ func (d *Daemon) ListTools(ctx context.Context, rawWS, agent string) ([]api.Tool
 
 	cat := rt.Workspace().Catalog()
 	snapshots := cat.ToolSnapshots()
-	out := make([]api.Tool, len(snapshots))
-	for i, snap := range snapshots {
-		out[i] = snap.Tool
+	// Tools discovered on an MCP server but prohibited by its policy are never
+	// registered as callable, so they are listed separately with a denied status.
+	denied := cat.DeniedMCPToolSnapshots()
+	out := make([]api.Tool, 0, len(snapshots)+len(denied))
+	for _, snap := range snapshots {
+		out = append(out, snap.Tool)
 	}
+	for _, snap := range denied {
+		out = append(out, snap.Tool)
+	}
+	slices.SortFunc(out, func(a, b api.Tool) int { return strings.Compare(a.Name, b.Name) })
 
 	agent = strings.TrimSpace(agent)
 	if agent == "" {
@@ -596,7 +613,9 @@ func (d *Daemon) ListTools(ctx context.Context, rawWS, agent string) ([]api.Tool
 	}
 	statuses := cat.ToolStatuses(resolved)
 	for i := range out {
-		out[i].Status = statuses[out[i].Name]
+		if status, ok := statuses[out[i].Name]; ok {
+			out[i].Status = status
+		}
 	}
 	return out, nil
 }

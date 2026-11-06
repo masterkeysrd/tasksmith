@@ -184,6 +184,9 @@ func setupDaemonTest(t *testing.T, prov *fakeProvider) (*Daemon, *client.Client,
 		LockPath:    lockPath,
 		GatewayPool: newFakeGatewayPool(prov),
 		Logger:      log.Default(),
+		// Workspace manifests in these tests declare real MCP commands and
+		// endpoints; connecting them would spawn processes and reach the network.
+		DisableMCPAutoConnect: true,
 	})
 	if err != nil {
 		t.Fatalf("daemon.New: %v", err)

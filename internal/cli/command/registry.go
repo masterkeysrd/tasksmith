@@ -274,5 +274,6 @@ func (r *Registry) registerBuiltins() {
 	r.registerSkillCommands()
 	r.registerRuleCommands()
 	r.registerToolCommands()
+	r.registerMCPCommands()
 	r.registerWorkspaceCommands()
 }
