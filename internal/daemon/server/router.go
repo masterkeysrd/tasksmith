@@ -3,10 +3,11 @@ package server
 import (
 	"encoding/json"
 	"errors"
-	"github.com/masterkeysrd/tasksmith/internal/daemon/metrics"
 	"io"
 	"net/http"
 	"strings"
+
+	"github.com/masterkeysrd/tasksmith/internal/daemon/metrics"
 
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/broker"

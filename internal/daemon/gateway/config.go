@@ -5,10 +5,11 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"github.com/masterkeysrd/tasksmith/internal/daemon/metrics"
 	"os"
 	"sort"
 	"strings"
+
+	"github.com/masterkeysrd/tasksmith/internal/daemon/metrics"
 )
 
 // Config represents the complete in-memory configuration passed to the Gateway.
