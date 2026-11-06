@@ -12,7 +12,9 @@ import (
 
 func renderNode(t *testing.T, node trail.Node) string {
 	t.Helper()
-	return testutils.StartApp(t, node, 80, 24).AwaitFrame(testutils.DefaultWaitTimeout)
+	app := testutils.StartApp(t, node, 80, 24)
+	defer app.Stop()
+	return app.AwaitFrame(testutils.DefaultWaitTimeout)
 }
 
 func TestHintSegment(t *testing.T) {

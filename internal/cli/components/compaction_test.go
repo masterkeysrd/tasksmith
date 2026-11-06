@@ -13,7 +13,9 @@ import (
 
 func renderTestNode(t *testing.T, node trail.Node, width, height int, check func(string) bool) string {
 	t.Helper()
-	return testutils.StartApp(t, node, width, height).WaitUntil(check, testutils.DefaultWaitTimeout)
+	app := testutils.StartApp(t, node, width, height)
+	defer app.Stop()
+	return app.WaitUntil(check, testutils.DefaultWaitTimeout)
 }
 
 func TestFormatTokens(t *testing.T) {

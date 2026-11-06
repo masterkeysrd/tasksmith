@@ -119,6 +119,7 @@ type App struct {
 	t *testing.T
 	*trail.Instance
 	Backend *mock.Backend
+	stop    func()
 }
 
 // NewApp boots node in a trail instance of the given size, renders one frame, and
@@ -173,7 +174,17 @@ func StartApp(t *testing.T, node trail.Node, width, height int) *App {
 	go func() {
 		_ = trail.Run(ctx, node, trail.WithBackend(b))
 	}()
-	return &App{t: t, Backend: b}
+	return &App{t: t, Backend: b, stop: cancel}
+}
+
+// Stop tears down a [StartApp] runtime. Call it when the helper returns so the
+// engine's goroutine does not outlive the render, which keeps a single test from
+// running several live engines at once. Safe to call more than once; a [NewApp]
+// instance is unmounted by the test cleanup and does not need this.
+func (a *App) Stop() {
+	if a.stop != nil {
+		a.stop()
+	}
 }
 
 // HasFrame reports whether the backend has painted a frame yet.
