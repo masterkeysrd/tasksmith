@@ -10,6 +10,7 @@ import (
 	"github.com/masterkeysrd/kite/extras/trail"
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/cli/store"
+	"github.com/masterkeysrd/tasksmith/internal/tui/testutils"
 )
 
 func TestActiveStreamNilWhenIdle(t *testing.T) {
@@ -74,14 +75,14 @@ func TestActiveStreamStreamingAndHint(t *testing.T) {
 
 	// Wait for frame to contain assistant message and spinner
 	for time.Now().Before(deadline) {
-		txt := surfaceText(b)
+		txt := testutils.SurfaceText(b)
 		if strings.Contains(txt, "Explain goroutines") && strings.Contains(txt, "Generating...") {
 			break
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
 
-	txt := surfaceText(b)
+	txt := testutils.SurfaceText(b)
 	if !strings.Contains(txt, "Explain goroutines") {
 		t.Fatalf("expected message in frame, got: %q", txt)
 	}
@@ -136,13 +137,13 @@ func TestActiveStreamWaitingPermissionHidesSpinner(t *testing.T) {
 
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		txt := surfaceText(b)
+		txt := testutils.SurfaceText(b)
 		if strings.Contains(txt, "Generating...") {
 			break
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
-	txt := surfaceText(b)
+	txt := testutils.SurfaceText(b)
 	if !strings.Contains(txt, "Generating...") {
 		t.Fatalf("expected Generating... while streaming, got %q", txt)
 	}
@@ -163,14 +164,14 @@ func TestActiveStreamWaitingPermissionHidesSpinner(t *testing.T) {
 	})
 
 	for time.Now().Before(deadline) {
-		txt = surfaceText(b)
+		txt = testutils.SurfaceText(b)
 		if !strings.Contains(txt, "Generating...") {
 			break
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
 
-	txt = surfaceText(b)
+	txt = testutils.SurfaceText(b)
 	if strings.Contains(txt, "Generating...") {
 		t.Fatalf("expected Generating... spinner to be hidden when WaitingPermission is true, got %q", txt)
 	}
@@ -208,13 +209,13 @@ func TestActiveStreamSpinnerStates(t *testing.T) {
 
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		txt := surfaceText(b)
+		txt := testutils.SurfaceText(b)
 		if strings.Contains(txt, "Thinking...") {
 			break
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
-	txt := surfaceText(b)
+	txt := testutils.SurfaceText(b)
 	if !strings.Contains(txt, "Thinking...") {
 		t.Fatalf("expected Thinking... spinner, got %q", txt)
 	}
@@ -233,13 +234,13 @@ func TestActiveStreamSpinnerStates(t *testing.T) {
 	})
 
 	for time.Now().Before(deadline) {
-		txt = surfaceText(b)
+		txt = testutils.SurfaceText(b)
 		if strings.Contains(txt, "Generating...") {
 			break
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
-	txt = surfaceText(b)
+	txt = testutils.SurfaceText(b)
 	if !strings.Contains(txt, "Generating...") {
 		t.Fatalf("expected Generating... spinner, got %q", txt)
 	}
@@ -253,13 +254,13 @@ func TestActiveStreamSpinnerStates(t *testing.T) {
 	})
 
 	for time.Now().Before(deadline) {
-		txt = surfaceText(b)
+		txt = testutils.SurfaceText(b)
 		if strings.Contains(txt, "Executing...") {
 			break
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
-	txt = surfaceText(b)
+	txt = testutils.SurfaceText(b)
 	if !strings.Contains(txt, "Executing...") {
 		t.Fatalf("expected Executing... spinner, got %q", txt)
 	}
@@ -273,13 +274,13 @@ func TestActiveStreamSpinnerStates(t *testing.T) {
 	})
 
 	for time.Now().Before(deadline) {
-		txt = surfaceText(b)
+		txt = testutils.SurfaceText(b)
 		if strings.Contains(txt, "Thinking...") {
 			break
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
-	txt = surfaceText(b)
+	txt = testutils.SurfaceText(b)
 	if !strings.Contains(txt, "Thinking...") {
 		t.Fatalf("expected Thinking... spinner after tool completion, got %q", txt)
 	}
@@ -530,13 +531,13 @@ func TestActiveStreamDelegatedSpinnerLabel(t *testing.T) {
 
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		if strings.Contains(surfaceText(b), "Waiting on subagent") {
+		if strings.Contains(testutils.SurfaceText(b), "Waiting on subagent") {
 			break
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
 
-	txt := surfaceText(b)
+	txt := testutils.SurfaceText(b)
 	if !strings.Contains(txt, "Waiting on subagent (main: Staging changes)") {
 		t.Fatalf("expected delegated spinner label in frame, got: %q", txt)
 	}

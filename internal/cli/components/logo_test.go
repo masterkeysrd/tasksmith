@@ -8,6 +8,8 @@ import (
 
 	"github.com/masterkeysrd/kite/backend/mock"
 	"github.com/masterkeysrd/kite/extras/trail"
+
+	"github.com/masterkeysrd/tasksmith/internal/tui/testutils"
 )
 
 func TestLogoRender(t *testing.T) {
@@ -22,7 +24,7 @@ func TestLogoRender(t *testing.T) {
 	var text string
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		text = surfaceText(b)
+		text = testutils.SurfaceText(b)
 		if strings.Contains(text, "◥██████████◣") {
 			break
 		}

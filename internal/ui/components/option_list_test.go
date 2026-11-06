@@ -4,11 +4,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/masterkeysrd/kite/element"
-	"github.com/masterkeysrd/kite/extras/kitex"
 	"github.com/masterkeysrd/kite/extras/trail"
 	"github.com/masterkeysrd/kite/style"
-	"github.com/masterkeysrd/kite/testenv"
+	"github.com/masterkeysrd/tasksmith/internal/tui/testutils"
 	"github.com/masterkeysrd/tasksmith/internal/ui/theme"
 )
 
@@ -16,13 +14,7 @@ import (
 // assertions can read what a user would see.
 func renderOptionList(t *testing.T, node trail.Node) string {
 	t.Helper()
-	env := testenv.Default(80, 24)
-	t.Cleanup(env.Close)
-	container := element.NewBox(env.Document())
-	env.Mount(container)
-	kitex.Render(node, container)
-	env.Flush()
-	return strings.TrimSpace(env.DumpText())
+	return testutils.Render(t, node, 80, 24)
 }
 
 // trimmedLines splits rendered text into lines with their trailing padding

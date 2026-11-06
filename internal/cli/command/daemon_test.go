@@ -14,6 +14,7 @@ import (
 	"github.com/masterkeysrd/kite/key"
 	"github.com/masterkeysrd/tasksmith/client"
 	"github.com/masterkeysrd/tasksmith/internal/cli/store"
+	"github.com/masterkeysrd/tasksmith/internal/tui/testutils"
 	"github.com/masterkeysrd/tasksmith/internal/ui/autocomplete"
 )
 
@@ -258,7 +259,7 @@ func TestDaemonBrowserKeybindingsClose(t *testing.T) {
 
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		if strings.Contains(surfaceText(b), "Brain Daemon") {
+		if strings.Contains(testutils.SurfaceTextKeepBlanks(b), "Brain Daemon") {
 			break
 		}
 		time.Sleep(5 * time.Millisecond)

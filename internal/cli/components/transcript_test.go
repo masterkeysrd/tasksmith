@@ -11,6 +11,7 @@ import (
 	"github.com/masterkeysrd/kite/extras/trail"
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/cli/store"
+	"github.com/masterkeysrd/tasksmith/internal/tui/testutils"
 )
 
 func insertedAboveText(b *mock.Backend) string {
@@ -37,7 +38,7 @@ func insertedAboveText(b *mock.Backend) string {
 }
 
 func allText(b *mock.Backend) string {
-	return insertedAboveText(b) + surfaceText(b)
+	return insertedAboveText(b) + testutils.SurfaceText(b)
 }
 
 func TestTranscriptRendersHeaderAndRemountsOnReset(t *testing.T) {
@@ -237,13 +238,13 @@ func TestTranscriptLiveDraftAndFreezeOnSubmit(t *testing.T) {
 	// 1. Initial render: Header is live on surface, scrollback (InsertedAbove) is empty
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		if strings.Contains(surfaceText(b), "model-alpha with low effort") {
+		if strings.Contains(testutils.SurfaceText(b), "model-alpha with low effort") {
 			break
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
-	if !strings.Contains(surfaceText(b), "model-alpha with low effort") {
-		t.Fatalf("expected live header on surface, got:\n%s", surfaceText(b))
+	if !strings.Contains(testutils.SurfaceText(b), "model-alpha with low effort") {
+		t.Fatalf("expected live header on surface, got:\n%s", testutils.SurfaceText(b))
 	}
 	if len(b.InsertedAbove) != 0 {
 		t.Fatalf("expected InsertedAbove to be empty in draft mode, got %d buffers", len(b.InsertedAbove))
@@ -253,13 +254,13 @@ func TestTranscriptLiveDraftAndFreezeOnSubmit(t *testing.T) {
 	store.AppendCommandOutput("/model model-alpha", "Model set to model-alpha")
 	deadline = time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		if strings.Contains(surfaceText(b), "Model set to model-alpha") {
+		if strings.Contains(testutils.SurfaceText(b), "Model set to model-alpha") {
 			break
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
-	if !strings.Contains(surfaceText(b), "Model set to model-alpha") {
-		t.Fatalf("expected command output live on surface, got:\n%s", surfaceText(b))
+	if !strings.Contains(testutils.SurfaceText(b), "Model set to model-alpha") {
+		t.Fatalf("expected command output live on surface, got:\n%s", testutils.SurfaceText(b))
 	}
 	if len(b.InsertedAbove) != 0 {
 		t.Fatalf("expected InsertedAbove to remain empty while in draft mode, got %d buffers", len(b.InsertedAbove))
@@ -269,13 +270,13 @@ func TestTranscriptLiveDraftAndFreezeOnSubmit(t *testing.T) {
 	store.SetModelInfo("model-beta", "high")
 	deadline = time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		if strings.Contains(surfaceText(b), "model-beta with high effort") {
+		if strings.Contains(testutils.SurfaceText(b), "model-beta with high effort") {
 			break
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
-	if !strings.Contains(surfaceText(b), "model-beta with high effort") {
-		t.Fatalf("expected live header to update model info in place, got:\n%s", surfaceText(b))
+	if !strings.Contains(testutils.SurfaceText(b), "model-beta with high effort") {
+		t.Fatalf("expected live header to update model info in place, got:\n%s", testutils.SurfaceText(b))
 	}
 	if len(b.InsertedAbove) != 0 {
 		t.Fatalf("expected InsertedAbove to remain empty after model update, got %d buffers", len(b.InsertedAbove))

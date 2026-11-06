@@ -11,6 +11,7 @@ import (
 	"github.com/masterkeysrd/kite/key"
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/cli/store"
+	"github.com/masterkeysrd/tasksmith/internal/tui/testutils"
 )
 
 func TestPermissionConfigEditorScreen1Scope(t *testing.T) {
@@ -38,7 +39,7 @@ func TestPermissionConfigEditorScreen1Scope(t *testing.T) {
 	defer inst.Unmount()
 	inst.Frame()
 
-	out := surfaceText(b)
+	out := testutils.SurfaceText(b)
 	if !strings.Contains(out, "Permission Config Editor") {
 		t.Errorf("expected title in output: %s", out)
 	}
@@ -58,7 +59,7 @@ func TestPermissionConfigEditorScreen1Scope(t *testing.T) {
 	// Press Down -> Global selected, description updates
 	inst.Engine().ProcessRawEvent(&backend.RawKeyEvent{Key: key.Key{Code: key.KeyDown}})
 	inst.Frame()
-	out = surfaceText(b)
+	out = testutils.SurfaceText(b)
 	if !strings.Contains(out, "❯ Global") {
 		t.Errorf("expected Global selected after Down: %s", out)
 	}
@@ -69,7 +70,7 @@ func TestPermissionConfigEditorScreen1Scope(t *testing.T) {
 	// Press Up -> Project selected again
 	inst.Engine().ProcessRawEvent(&backend.RawKeyEvent{Key: key.Key{Code: key.KeyUp}})
 	inst.Frame()
-	out = surfaceText(b)
+	out = testutils.SurfaceText(b)
 	if !strings.Contains(out, "❯ Project") {
 		t.Errorf("expected Project selected after Up: %s", out)
 	}
@@ -118,7 +119,7 @@ func TestPermissionConfigEditorScreen2RulesAndTabs(t *testing.T) {
 	inst.Engine().ProcessRawEvent(&backend.RawKeyEvent{Key: key.Key{Code: key.KeyEnter}})
 	inst.Frame()
 
-	out := surfaceText(b)
+	out := testutils.SurfaceText(b)
 	if !strings.Contains(out, "Permissions — Project") {
 		t.Errorf("expected Permissions — Project header: %s", out)
 	}
@@ -135,7 +136,7 @@ func TestPermissionConfigEditorScreen2RulesAndTabs(t *testing.T) {
 	// Switch tabs with Right -> denylist
 	inst.Engine().ProcessRawEvent(&backend.RawKeyEvent{Key: key.Key{Code: key.KeyRight}})
 	inst.Frame()
-	out = surfaceText(b)
+	out = testutils.SurfaceText(b)
 	if !strings.Contains(out, "bash(rm *)") {
 		t.Errorf("expected denylist rules: %s", out)
 	}
@@ -143,7 +144,7 @@ func TestPermissionConfigEditorScreen2RulesAndTabs(t *testing.T) {
 	// Switch tabs back with Left -> allowlist
 	inst.Engine().ProcessRawEvent(&backend.RawKeyEvent{Key: key.Key{Code: key.KeyLeft}})
 	inst.Frame()
-	out = surfaceText(b)
+	out = testutils.SurfaceText(b)
 	if !strings.Contains(out, "bash(go *)") {
 		t.Errorf("expected allowlist rules again: %s", out)
 	}
@@ -158,7 +159,7 @@ func TestPermissionConfigEditorScreen2RulesAndTabs(t *testing.T) {
 	// Esc returns to Screen 1
 	inst.Engine().ProcessRawEvent(&backend.RawKeyEvent{Key: key.Key{Code: key.KeyEscape}})
 	inst.Frame()
-	out = surfaceText(b)
+	out = testutils.SurfaceText(b)
 	if !strings.Contains(out, "Permission Config Editor") {
 		t.Errorf("expected Screen 1 after Esc: %s", out)
 	}
@@ -213,7 +214,7 @@ func TestPermissionConfigEditorScreen3AddAndEditRule(t *testing.T) {
 	inst.Engine().ProcessRawEvent(&backend.RawKeyEvent{Key: key.Key{Code: 'a', Text: "a"}})
 	inst.Frame()
 
-	out := surfaceText(b)
+	out := testutils.SurfaceText(b)
 	if !strings.Contains(out, "Add Rule — Project — allowlist") {
 		t.Errorf("expected Add Rule title: %s", out)
 	}
@@ -230,7 +231,7 @@ func TestPermissionConfigEditorScreen3AddAndEditRule(t *testing.T) {
 	// Press Enter without text -> validation error
 	inst.Engine().ProcessRawEvent(&backend.RawKeyEvent{Key: key.Key{Code: key.KeyEnter}})
 	inst.Frame()
-	out = surfaceText(b)
+	out = testutils.SurfaceText(b)
 	if !strings.Contains(out, "Rule must not be empty") {
 		t.Errorf("expected empty rule error: %s", out)
 	}
@@ -242,7 +243,7 @@ func TestPermissionConfigEditorScreen3AddAndEditRule(t *testing.T) {
 	inst.Frame()
 	inst.Engine().ProcessRawEvent(&backend.RawKeyEvent{Key: key.Key{Code: key.KeyEnter}})
 	inst.Frame()
-	out = surfaceText(b)
+	out = testutils.SurfaceText(b)
 	if !strings.Contains(out, "Invalid rule format: expected tool(pattern)") {
 		t.Errorf("expected invalid format error: %s", out)
 	}
@@ -251,7 +252,7 @@ func TestPermissionConfigEditorScreen3AddAndEditRule(t *testing.T) {
 	// First Esc to cancel back to Screen 2
 	inst.Engine().ProcessRawEvent(&backend.RawKeyEvent{Key: key.Key{Code: key.KeyEscape}})
 	inst.Frame()
-	out = surfaceText(b)
+	out = testutils.SurfaceText(b)
 	if !strings.Contains(out, "Permissions — Project") {
 		t.Errorf("expected return to Screen 2: %s", out)
 	}
@@ -269,7 +270,7 @@ func TestPermissionConfigEditorScreen3AddAndEditRule(t *testing.T) {
 	if addedScope != api.ScopeProject || addedEffect != api.EffectAllow || addedRule != "bash(test *)" {
 		t.Errorf("expected OnAddRule called, got scope=%s effect=%s rule=%s", addedScope, addedEffect, addedRule)
 	}
-	out = surfaceText(b)
+	out = testutils.SurfaceText(b)
 	if !strings.Contains(out, "Permissions — Project") {
 		t.Errorf("expected return to Screen 2 after add: %s", out)
 	}
@@ -277,7 +278,7 @@ func TestPermissionConfigEditorScreen3AddAndEditRule(t *testing.T) {
 	// Press 'e' on the existing rule "bash(go *)" to enter Edit Mode
 	inst.Engine().ProcessRawEvent(&backend.RawKeyEvent{Key: key.Key{Code: 'e', Text: "e"}})
 	inst.Frame()
-	out = surfaceText(b)
+	out = testutils.SurfaceText(b)
 	if !strings.Contains(out, "Edit Rule — Project — allowlist") {
 		t.Errorf("expected Edit Rule title: %s", out)
 	}
@@ -288,7 +289,7 @@ func TestPermissionConfigEditorScreen3AddAndEditRule(t *testing.T) {
 	// Esc back to Screen 2
 	inst.Engine().ProcessRawEvent(&backend.RawKeyEvent{Key: key.Key{Code: key.KeyEscape}})
 	inst.Frame()
-	out = surfaceText(b)
+	out = testutils.SurfaceText(b)
 	if !strings.Contains(out, "Permissions — Project") {
 		t.Errorf("expected return to Screen 2 after Edit Esc: %s", out)
 	}

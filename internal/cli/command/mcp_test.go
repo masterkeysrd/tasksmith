@@ -27,6 +27,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/client"
 	"github.com/masterkeysrd/tasksmith/internal/cli/components"
 	"github.com/masterkeysrd/tasksmith/internal/cli/store"
+	"github.com/masterkeysrd/tasksmith/internal/tui/testutils"
 	"github.com/masterkeysrd/tasksmith/internal/ui/autocomplete"
 	"github.com/masterkeysrd/tasksmith/internal/ui/theme"
 )
@@ -383,19 +384,6 @@ func allContain(text string, needles []string) bool {
 		}
 	}
 	return true
-}
-
-// renderTestNodeSized renders a node in a terminal of the given size, for views
-// whose layout adapts to the window.
-func renderTestNodeSized(t *testing.T, node trail.Node, width, height int) string {
-	t.Helper()
-	env := testenv.Default(width, height)
-	t.Cleanup(env.Close)
-	container := element.NewBox(env.Document())
-	env.Mount(container)
-	kitex.Render(node, container)
-	env.Flush()
-	return strings.TrimSpace(env.DumpText())
 }
 
 // mcpTestServers is one connected server with a prohibited prompt and resource,
@@ -775,7 +763,7 @@ func TestMCPCardLabelAlignment(t *testing.T) {
 	scheme := theme.Get()
 	connected := mcpTestServers()[0]
 
-	out := renderTestNodeSized(t, trail.Box(trail.BoxProps{}, mcpCardRows(scheme, connected, 100)...), 100, 40)
+	out := testutils.Render(t, trail.Box(trail.BoxProps{}, mcpCardRows(scheme, connected, 100)...), 100, 40)
 
 	// Every value must start in the same column: the card indent plus room for the
 	// longest label, so the card reads as a table.
@@ -1318,7 +1306,7 @@ func TestMCPPromptCompletionInsertsReference(t *testing.T) {
 func TestMCPBrowserRendersListAndInspector(t *testing.T) {
 	newMCPFixture(t, mcpTestServers())
 
-	out := renderTestNodeSized(t, mcpBrowser(mcpBrowserProps{slotID: "slot-list"}), 100, 40)
+	out := testutils.Render(t, mcpBrowser(mcpBrowserProps{slotID: "slot-list"}), 100, 40)
 	for _, want := range []string{
 		"Manage MCP servers",
 		"2 servers",
@@ -1351,7 +1339,7 @@ func TestMCPBrowserRendersListAndInspector(t *testing.T) {
 func TestMCPBrowserServerListHasNoFilterInput(t *testing.T) {
 	newMCPFixture(t, mcpTestServers())
 
-	out := renderTestNodeSized(t, mcpBrowser(mcpBrowserProps{slotID: "slot-no-filter"}), 100, 40)
+	out := testutils.Render(t, mcpBrowser(mcpBrowserProps{slotID: "slot-no-filter"}), 100, 40)
 	if strings.Contains(out, "Filter:") {
 		t.Errorf("server list must not offer a filter input, it steals the action keys:\n%s", out)
 	}
@@ -1369,7 +1357,7 @@ func TestMCPBrowserBindingsFitNarrowTerminal(t *testing.T) {
 	newMCPFixture(t, mcpTestServers())
 
 	const width = 72
-	out := renderTestNodeSized(t, mcpBrowser(mcpBrowserProps{slotID: "slot-hint-width"}), width, 40)
+	out := testutils.Render(t, mcpBrowser(mcpBrowserProps{slotID: "slot-hint-width"}), width, 40)
 	var hint string
 	for line := range strings.SplitSeq(out, "\n") {
 		if trimmed := strings.TrimRight(line, " "); strings.HasPrefix(trimmed, "Keyboard:") {
@@ -1397,7 +1385,7 @@ func TestMCPBrowserGroupsServersByScope(t *testing.T) {
 		{Name: "api-local", Scope: "Project", Path: "packages/api/.agents/mcps/api-local.mcp.yaml", Status: api.MCPStatusConnected},
 	})
 
-	out := renderTestNodeSized(t, mcpBrowser(mcpBrowserProps{slotID: "slot-groups"}), 100, 40)
+	out := testutils.Render(t, mcpBrowser(mcpBrowserProps{slotID: "slot-groups"}), 100, 40)
 	order := []string{
 		"Project MCPs (packages/api/.agents/mcps)", "api-local",
 		"Workspace MCPs (.agents/mcps)", "notes",
@@ -1422,7 +1410,7 @@ func TestMCPBrowserGroupsServersByScope(t *testing.T) {
 func TestMCPBrowserNoticeReplacesSubtitleTitle(t *testing.T) {
 	newMCPFixture(t, mcpTestServers())
 
-	out := renderTestNodeSized(t, mcpBrowser(mcpBrowserProps{
+	out := testutils.Render(t, mcpBrowser(mcpBrowserProps{
 		slotID:        "slot-notice",
 		initialNotice: "Restarting notes…",
 	}), 100, 40)
@@ -1450,7 +1438,7 @@ func TestMCPInspectorShowsProhibitedItems(t *testing.T) {
 	store.SetWorkspaceMCPServers(mcpTestServers())
 
 	servers := mcpTestServers()
-	out := renderTestNodeSized(t, mcpInspector(mcpInspectorProps{server: servers[0]}), 100, 40)
+	out := testutils.Render(t, mcpInspector(mcpInspectorProps{server: servers[0]}), 100, 40)
 	for _, want := range []string{
 		"notes MCP Server",
 		"Status:           ✔ connected",
@@ -1480,7 +1468,7 @@ func TestMCPInspectorShowsProhibitedItems(t *testing.T) {
 		t.Errorf("connected server with no pending authorization should not show an authorize URL:\n%s", out)
 	}
 	// The sentry server is pending authorization with an OAuth type.
-	out = renderTestNodeSized(t, mcpInspector(mcpInspectorProps{server: servers[1]}), 100, 40)
+	out = testutils.Render(t, mcpInspector(mcpInspectorProps{server: servers[1]}), 100, 40)
 	for _, want := range []string{
 		"Auth:             ✘ not authenticated (oauth2)",
 		"URL:              https://mcp.example.test/sse",
@@ -1703,7 +1691,7 @@ func TestMCPToolListViewAndDetail(t *testing.T) {
 		}
 	}
 
-	detail := renderTestNodeSized(t, mcpToolDetailView(mcpToolDetailProps{
+	detail := testutils.Render(t, mcpToolDetailView(mcpToolDetailProps{
 		server: server,
 		tool:   server.Tools[0],
 	}), 100, 40)
@@ -1839,7 +1827,7 @@ func TestMCPToolDetailWithholdsEnableWhenItCannotWork(t *testing.T) {
 
 	server := mcpToolDetailServer()
 
-	allowed := renderTestNodeSized(t, mcpToolDetailView(mcpToolDetailProps{
+	allowed := testutils.Render(t, mcpToolDetailView(mcpToolDetailProps{
 		server: server,
 		tool:   server.Tools[0],
 	}), 100, 40)
@@ -1851,7 +1839,7 @@ func TestMCPToolDetailWithholdsEnableWhenItCannotWork(t *testing.T) {
 	// files outside the project, so the offer is withheld.
 	userScope := server
 	userScope.Scope = "User"
-	prohibited := renderTestNodeSized(t, mcpToolDetailView(mcpToolDetailProps{
+	prohibited := testutils.Render(t, mcpToolDetailView(mcpToolDetailProps{
 		server: userScope,
 		tool:   userScope.Tools[1],
 	}), 100, 40)
@@ -2031,7 +2019,7 @@ func TestMCPMenuDigit(t *testing.T) {
 // readable, because the hint row clips rather than wraps.
 func TestMCPInspectorHintRowFitsNarrowTerminal(t *testing.T) {
 	for _, width := range []int{100, 80, 72, 60} {
-		out := renderTestNodeSized(t, mcpInspector(mcpInspectorProps{server: mcpTestServers()[0]}), width, 40)
+		out := testutils.Render(t, mcpInspector(mcpInspectorProps{server: mcpTestServers()[0]}), width, 40)
 		var hint string
 		for line := range strings.SplitSeq(out, "\n") {
 			if trimmed := strings.TrimRight(line, " "); strings.HasPrefix(trimmed, "Keyboard:") {
@@ -3254,7 +3242,7 @@ func TestMCPAuthScreenWaitsForTheURLBeforeItArrives(t *testing.T) {
 		server: "sentry",
 		state:  kites.Create(mcpAuthState{server: "sentry"}),
 	})
-	out := renderTestNodeSized(t, node, 100, 30)
+	out := testutils.Render(t, node, 100, 30)
 	if !strings.Contains(out, "Waiting for the authorization URL…") {
 		t.Fatalf("expected the waiting notice, got:\n%s", out)
 	}

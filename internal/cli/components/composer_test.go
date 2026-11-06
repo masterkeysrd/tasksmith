@@ -14,6 +14,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/cli/store"
 	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
+	"github.com/masterkeysrd/tasksmith/internal/tui/testutils"
 	"github.com/masterkeysrd/tasksmith/internal/ui/autocomplete"
 )
 
@@ -62,16 +63,16 @@ func TestComposerEnterSubmitsAndClears(t *testing.T) {
 	})
 
 	typeText(inst, "hello world")
-	if !strings.Contains(surfaceText(b), "> hello world") {
-		t.Fatalf("expected typed text on surface, got:\n%s", surfaceText(b))
+	if !strings.Contains(testutils.SurfaceText(b), "> hello world") {
+		t.Fatalf("expected typed text on surface, got:\n%s", testutils.SurfaceText(b))
 	}
 
 	pressKey(inst, key.KeyEnter, 0)
 	if submitted != "hello world" {
 		t.Fatalf("expected submitted 'hello world', got %q", submitted)
 	}
-	if strings.Contains(surfaceText(b), "hello world") {
-		t.Fatalf("expected input to be cleared after submit, got:\n%s", surfaceText(b))
+	if strings.Contains(testutils.SurfaceText(b), "hello world") {
+		t.Fatalf("expected input to be cleared after submit, got:\n%s", testutils.SurfaceText(b))
 	}
 }
 
@@ -96,7 +97,7 @@ func TestComposerShiftEnterInsertsNewline(t *testing.T) {
 		t.Fatalf("shift+enter should not submit, got %q", submitted)
 	}
 
-	out := surfaceText(b)
+	out := testutils.SurfaceText(b)
 	if !strings.Contains(out, "line 1") || !strings.Contains(out, "line 2") {
 		t.Fatalf("expected multiline input on surface, got:\n%s", out)
 	}
@@ -134,26 +135,26 @@ func TestComposerHistoryNavigation(t *testing.T) {
 
 	// Press Up -> should show "cmd 2"
 	pressKey(inst, key.KeyUp, 0)
-	if !strings.Contains(surfaceText(b), "> cmd 2") {
-		t.Fatalf("expected 'cmd 2' on Up, got:\n%s", surfaceText(b))
+	if !strings.Contains(testutils.SurfaceText(b), "> cmd 2") {
+		t.Fatalf("expected 'cmd 2' on Up, got:\n%s", testutils.SurfaceText(b))
 	}
 
 	// Press Up -> should show "cmd 1"
 	pressKey(inst, key.KeyUp, 0)
-	if !strings.Contains(surfaceText(b), "> cmd 1") {
-		t.Fatalf("expected 'cmd 1' on second Up, got:\n%s", surfaceText(b))
+	if !strings.Contains(testutils.SurfaceText(b), "> cmd 1") {
+		t.Fatalf("expected 'cmd 1' on second Up, got:\n%s", testutils.SurfaceText(b))
 	}
 
 	// Press Down -> should show "cmd 2"
 	pressKey(inst, key.KeyDown, 0)
-	if !strings.Contains(surfaceText(b), "> cmd 2") {
-		t.Fatalf("expected 'cmd 2' on Down, got:\n%s", surfaceText(b))
+	if !strings.Contains(testutils.SurfaceText(b), "> cmd 2") {
+		t.Fatalf("expected 'cmd 2' on Down, got:\n%s", testutils.SurfaceText(b))
 	}
 
 	// Press Down -> should restore "unsent draft"
 	pressKey(inst, key.KeyDown, 0)
-	if !strings.Contains(surfaceText(b), "> unsent draft") {
-		t.Fatalf("expected 'unsent draft' restored, got:\n%s", surfaceText(b))
+	if !strings.Contains(testutils.SurfaceText(b), "> unsent draft") {
+		t.Fatalf("expected 'unsent draft' restored, got:\n%s", testutils.SurfaceText(b))
 	}
 }
 
@@ -224,8 +225,8 @@ func TestComposerHidesWhenSlotEnqueuedAndRestoresDraft(t *testing.T) {
 
 	// Type draft
 	typeText(inst, "preserve this draft")
-	if !strings.Contains(surfaceText(b), "> preserve this draft") {
-		t.Fatalf("expected draft on surface, got:\n%s", surfaceText(b))
+	if !strings.Contains(testutils.SurfaceText(b), "> preserve this draft") {
+		t.Fatalf("expected draft on surface, got:\n%s", testutils.SurfaceText(b))
 	}
 
 	// Enqueue a slot item that hides the composer (e.g. Permission)
@@ -237,16 +238,16 @@ func TestComposerHidesWhenSlotEnqueuedAndRestoresDraft(t *testing.T) {
 	inst.Frame()
 
 	// Composer should now be hidden (DisplayNone)
-	if strings.Contains(surfaceText(b), "preserve this draft") {
-		t.Fatalf("expected composer to be hidden when slot active, got:\n%s", surfaceText(b))
+	if strings.Contains(testutils.SurfaceText(b), "preserve this draft") {
+		t.Fatalf("expected composer to be hidden when slot active, got:\n%s", testutils.SurfaceText(b))
 	}
 
 	// Dequeue slot -> Composer should reappear with draft intact
 	store.DequeueSlot()
 	inst.Frame()
 
-	if !strings.Contains(surfaceText(b), "> preserve this draft") {
-		t.Fatalf("expected preserved draft after slot dequeue, got:\n%s", surfaceText(b))
+	if !strings.Contains(testutils.SurfaceText(b), "> preserve this draft") {
+		t.Fatalf("expected preserved draft after slot dequeue, got:\n%s", testutils.SurfaceText(b))
 	}
 }
 
@@ -259,16 +260,16 @@ func TestComposerCtrlCClearsDraft(t *testing.T) {
 	inst, b := createComposerInstance(t, ComposerProps{})
 
 	typeText(inst, "abandon this draft")
-	if !strings.Contains(surfaceText(b), "> abandon this draft") {
-		t.Fatalf("expected draft on surface, got:\n%s", surfaceText(b))
+	if !strings.Contains(testutils.SurfaceText(b), "> abandon this draft") {
+		t.Fatalf("expected draft on surface, got:\n%s", testutils.SurfaceText(b))
 	}
 
 	// Set CtrlCPending -> clears draft
 	store.SetCtrlCPending(true)
 	inst.Frame()
 
-	if strings.Contains(surfaceText(b), "abandon this draft") {
-		t.Fatalf("expected draft to be cleared on CtrlCPending, got:\n%s", surfaceText(b))
+	if strings.Contains(testutils.SurfaceText(b), "abandon this draft") {
+		t.Fatalf("expected draft to be cleared on CtrlCPending, got:\n%s", testutils.SurfaceText(b))
 	}
 }
 
@@ -295,8 +296,8 @@ func TestComposerHistoryPersistsToDisk(t *testing.T) {
 	// Instance 2: should load "persisted prompt" from disk on mount.
 	inst2, b2 := createComposerInstance(t, ComposerProps{})
 	pressKey(inst2, key.KeyUp, 0)
-	if !strings.Contains(surfaceText(b2), "persisted prompt") {
-		t.Fatalf("expected 'persisted prompt' in new instance, got:\n%s", surfaceText(b2))
+	if !strings.Contains(testutils.SurfaceText(b2), "persisted prompt") {
+		t.Fatalf("expected 'persisted prompt' in new instance, got:\n%s", testutils.SurfaceText(b2))
 	}
 }
 
@@ -326,7 +327,7 @@ func TestComposerHistoryMultiLineRoundTrip(t *testing.T) {
 	// Instance 2: navigate to find the multi-line prompt intact.
 	inst2, b2 := createComposerInstance(t, ComposerProps{})
 	pressKey(inst2, key.KeyUp, 0)
-	out := surfaceText(b2)
+	out := testutils.SurfaceText(b2)
 	if !strings.Contains(out, "first line") || !strings.Contains(out, "second line") {
 		t.Fatalf("expected multi-line prompt in new instance, got:\n%s", out)
 	}
@@ -400,8 +401,8 @@ func TestComposerBashModeActivationAndCancellation(t *testing.T) {
 	inst, b := createComposerInstance(t, ComposerProps{})
 
 	// Initially, prompt is ">" and hint is DefaultHint.
-	if !strings.Contains(surfaceText(b), ">") {
-		t.Fatalf("expected initial prompt '>', got:\n%s", surfaceText(b))
+	if !strings.Contains(testutils.SurfaceText(b), ">") {
+		t.Fatalf("expected initial prompt '>', got:\n%s", testutils.SurfaceText(b))
 	}
 	if store.GetApp().Hint != store.DefaultHint {
 		t.Fatalf("expected hint %q, got %q", store.DefaultHint, store.GetApp().Hint)
@@ -409,7 +410,7 @@ func TestComposerBashModeActivationAndCancellation(t *testing.T) {
 
 	// 1. Press '!' on empty draft -> activates bash mode.
 	typeText(inst, "!")
-	out := surfaceText(b)
+	out := testutils.SurfaceText(b)
 	if !strings.Contains(out, "!") {
 		t.Fatalf("expected prompt '!' in bash mode, got:\n%s", out)
 	}
@@ -422,7 +423,7 @@ func TestComposerBashModeActivationAndCancellation(t *testing.T) {
 
 	// 2. Press backspace on empty draft in bash mode -> exits bash mode.
 	pressKey(inst, key.KeyBackspace, 0)
-	out = surfaceText(b)
+	out = testutils.SurfaceText(b)
 	if !strings.Contains(out, ">") {
 		t.Fatalf("expected prompt restored to '>', got:\n%s", out)
 	}
@@ -436,7 +437,7 @@ func TestComposerBashModeActivationAndCancellation(t *testing.T) {
 		t.Fatalf("expected hint %q after reactivating bash mode, got %q", BashModeHint, store.GetApp().Hint)
 	}
 	pressKey(inst, key.KeyEscape, 0)
-	out = surfaceText(b)
+	out = testutils.SurfaceText(b)
 	if !strings.Contains(out, ">") {
 		t.Fatalf("expected prompt restored to '>' after esc, got:\n%s", out)
 	}
@@ -465,7 +466,7 @@ func TestComposerBashModeSubmitAndHistory(t *testing.T) {
 	typeText(inst, "!")
 	typeText(inst, "git status")
 
-	out := surfaceText(b)
+	out := testutils.SurfaceText(b)
 	if !strings.Contains(out, "! git status") {
 		t.Fatalf("expected '! git status' on surface in bash mode, got:\n%s", out)
 	}
@@ -478,7 +479,7 @@ func TestComposerBashModeSubmitAndHistory(t *testing.T) {
 	}
 
 	// Exits bash mode and restores prompt and default hint
-	out = surfaceText(b)
+	out = testutils.SurfaceText(b)
 	if strings.Contains(out, "git status") {
 		t.Fatalf("expected input cleared after submit, got:\n%s", out)
 	}
@@ -491,7 +492,7 @@ func TestComposerBashModeSubmitAndHistory(t *testing.T) {
 
 	// Up arrow should recall "!git status" and put composer back in bash mode
 	pressKey(inst, key.KeyUp, 0)
-	out = surfaceText(b)
+	out = testutils.SurfaceText(b)
 	if !strings.Contains(out, "! git status") {
 		t.Fatalf("expected recalled '! git status' on Up, got:\n%s", out)
 	}
@@ -554,19 +555,19 @@ func TestComposerAutocompleteShowsKeyboardHintAndCtrlN(t *testing.T) {
 
 	typeText(inst, "@")
 	waitForAutocomplete(t, inst, func() bool {
-		out := surfaceText(b)
+		out := testutils.SurfaceText(b)
 		return strings.Contains(out, "alpha") && strings.Contains(out, "Keyboard:")
 	}, "autocomplete menu with keyboard hint")
 
 	// The keyboard hint is rendered in the autocomplete and advertises Ctrl+P/Ctrl+N.
-	if out := surfaceText(b); !strings.Contains(out, "Ctrl+P/Ctrl+N") {
+	if out := testutils.SurfaceText(b); !strings.Contains(out, "Ctrl+P/Ctrl+N") {
 		t.Fatalf("expected Ctrl+P/Ctrl+N in the keyboard hint, got:\n%s", out)
 	}
 
 	// Ctrl+N navigates down to the second candidate; Tab accepts it.
 	pressKey(inst, 'n', key.ModCtrl)
 	pressKey(inst, key.KeyTab, 0)
-	if out := surfaceText(b); !strings.Contains(out, "@alpine") {
+	if out := testutils.SurfaceText(b); !strings.Contains(out, "@alpine") {
 		t.Fatalf("expected Ctrl+N to move to 'alpine', got:\n%s", out)
 	}
 }
@@ -582,7 +583,7 @@ func TestComposerAutocompleteCtrlPNavigatesUp(t *testing.T) {
 
 	typeText(inst, "@")
 	waitForAutocomplete(t, inst, func() bool {
-		out := surfaceText(b)
+		out := testutils.SurfaceText(b)
 		return strings.Contains(out, "alpha") && strings.Contains(out, "Keyboard:")
 	}, "autocomplete menu with keyboard hint")
 
@@ -591,7 +592,7 @@ func TestComposerAutocompleteCtrlPNavigatesUp(t *testing.T) {
 	pressKey(inst, 'n', key.ModCtrl)
 	pressKey(inst, 'p', key.ModCtrl)
 	pressKey(inst, key.KeyTab, 0)
-	if out := surfaceText(b); !strings.Contains(out, "@alpine") {
+	if out := testutils.SurfaceText(b); !strings.Contains(out, "@alpine") {
 		t.Fatalf("expected Ctrl+P to move back to 'alpine', got:\n%s", out)
 	}
 }

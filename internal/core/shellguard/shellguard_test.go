@@ -2,10 +2,11 @@ package shellguard
 
 import (
 	"fmt"
-	"github.com/masterkeysrd/tasksmith/api"
 	"path/filepath"
 	"reflect"
 	"testing"
+
+	"github.com/masterkeysrd/tasksmith/api"
 )
 
 func TestBasicCommand(t *testing.T) {

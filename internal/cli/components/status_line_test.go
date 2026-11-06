@@ -1,35 +1,18 @@
 package components
 
 import (
-	"context"
 	"strings"
 	"testing"
-	"time"
 
-	"github.com/masterkeysrd/kite/backend/mock"
 	"github.com/masterkeysrd/kite/extras/trail"
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/cli/store"
+	"github.com/masterkeysrd/tasksmith/internal/tui/testutils"
 )
 
 func renderNode(t *testing.T, node trail.Node) string {
 	t.Helper()
-	b := mock.New(80, 24)
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-
-	go func() {
-		_ = trail.Run(ctx, node, trail.WithBackend(b))
-	}()
-
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		if b.LastFrame().Surface != nil {
-			break
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-	return surfaceText(b)
+	return testutils.StartApp(t, node, 80, 24).AwaitFrame(testutils.DefaultWaitTimeout)
 }
 
 func TestHintSegment(t *testing.T) {

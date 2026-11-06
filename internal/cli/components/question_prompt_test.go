@@ -11,6 +11,7 @@ import (
 	"github.com/masterkeysrd/kite/extras/trail"
 	"github.com/masterkeysrd/kite/key"
 	"github.com/masterkeysrd/tasksmith/api"
+	"github.com/masterkeysrd/tasksmith/internal/tui/testutils"
 	"github.com/masterkeysrd/tasksmith/internal/ui/theme"
 )
 
@@ -45,7 +46,7 @@ func questionCell(t *testing.T, b *mock.Backend, text string) (backend.Cell, int
 			return frame.CellAt(positions[index], y), y
 		}
 	}
-	t.Fatalf("missing %q in surface:\n%s", text, surfaceText(b))
+	t.Fatalf("missing %q in surface:\n%s", text, testutils.SurfaceText(b))
 	return backend.Cell{}, 0
 }
 
@@ -66,12 +67,12 @@ func TestQuestionPresentation(t *testing.T) {
 	if questionY-tabY < 2 {
 		t.Fatalf("question needs space below tabs: tab=%d question=%d", tabY, questionY)
 	}
-	if !strings.Contains(surfaceText(b), "[ ] GitHub") {
-		t.Fatalf("missing unselected checkbox: %s", surfaceText(b))
+	if !strings.Contains(testutils.SurfaceText(b), "[ ] GitHub") {
+		t.Fatalf("missing unselected checkbox: %s", testutils.SurfaceText(b))
 	}
 	pressKey(inst, key.KeySpace, 0)
-	if !strings.Contains(surfaceText(b), "[x] GitHub") {
-		t.Fatalf("missing selected checkbox: %s", surfaceText(b))
+	if !strings.Contains(testutils.SurfaceText(b), "[x] GitHub") {
+		t.Fatalf("missing selected checkbox: %s", testutils.SurfaceText(b))
 	}
 	pressKey(inst, key.KeyEnter, 0)
 	activeNext, _ := questionCell(t, b, "[2 Ready]")
@@ -103,7 +104,7 @@ func TestQuestionMultiWriteInAndReview(t *testing.T) {
 	}}
 	var got api.QuestionResponse
 	inst, b := createQuestionInstance(t, QuestionPromptProps{Request: req, OnSubmit: func(_ api.QuestionRequest, response api.QuestionResponse, done func(error)) { got = response }})
-	if text := surfaceText(b); !strings.Contains(text, "Configure") || !strings.Contains(text, "Select providers") {
+	if text := testutils.SurfaceText(b); !strings.Contains(text, "Configure") || !strings.Contains(text, "Select providers") {
 		t.Fatalf("missing question: %s", text)
 	}
 	pressKey(inst, key.KeySpace, 0)
@@ -115,7 +116,7 @@ func TestQuestionMultiWriteInAndReview(t *testing.T) {
 	pressKey(inst, key.KeyEnter, 0)
 	pressKey(inst, key.KeyDown, 0)
 	pressKey(inst, key.KeyEnter, 0)
-	if text := surfaceText(b); !strings.Contains(text, "Review your answers") || !strings.Contains(text, "GitHub, GitLab") || !strings.Contains(text, "No") {
+	if text := testutils.SurfaceText(b); !strings.Contains(text, "Review your answers") || !strings.Contains(text, "GitHub, GitLab") || !strings.Contains(text, "No") {
 		t.Fatalf("unexpected review: %s", text)
 	}
 	pressKey(inst, key.KeyEnter, 0)
@@ -132,16 +133,16 @@ func TestQuestionSingleRetryAndCancel(t *testing.T) {
 		done(errors.New("send failed"))
 	}})
 	pressKey(inst, key.KeyEnter, 0)
-	if !strings.Contains(surfaceText(b), "send failed") {
-		t.Fatalf("missing error: %s", surfaceText(b))
+	if !strings.Contains(testutils.SurfaceText(b), "send failed") {
+		t.Fatalf("missing error: %s", testutils.SurfaceText(b))
 	}
 	pressKey(inst, key.KeyEnter, 0)
 	if len(responses) != 2 || responses[1].Answers[0].Selected[0] != "a" {
 		t.Fatalf("retry lost answer: %+v", responses)
 	}
 	pressKey(inst, key.KeyEsc, 0)
-	if !strings.Contains(surfaceText(b), "Cancel this question?") {
-		t.Fatalf("missing cancellation confirmation: %s", surfaceText(b))
+	if !strings.Contains(testutils.SurfaceText(b), "Cancel this question?") {
+		t.Fatalf("missing cancellation confirmation: %s", testutils.SurfaceText(b))
 	}
 	pressKey(inst, key.KeyEnter, 0)
 	if len(responses) != 3 || !responses[2].Canceled {
@@ -169,12 +170,12 @@ func TestQuestionBackFromText(t *testing.T) {
 	pressKey(inst, key.KeyEnter, 0)
 	typeText(inst, "draft")
 	pressKey(inst, key.KeyTab, key.ModShift)
-	if !strings.Contains(surfaceText(b), "Proceed?") {
-		t.Fatalf("did not navigate back: %s", surfaceText(b))
+	if !strings.Contains(testutils.SurfaceText(b), "Proceed?") {
+		t.Fatalf("did not navigate back: %s", testutils.SurfaceText(b))
 	}
 	pressKey(inst, key.KeyEnter, 0)
-	if !strings.Contains(surfaceText(b), "draft") {
-		t.Fatalf("lost draft: %s", surfaceText(b))
+	if !strings.Contains(testutils.SurfaceText(b), "draft") {
+		t.Fatalf("lost draft: %s", testutils.SurfaceText(b))
 	}
 }
 
@@ -186,20 +187,20 @@ func TestQuestionNavigationPreservesAnswers(t *testing.T) {
 	var got api.QuestionResponse
 	inst, b := createQuestionInstance(t, QuestionPromptProps{Request: req, OnSubmit: func(_ api.QuestionRequest, response api.QuestionResponse, _ func(error)) { got = response }})
 	pressKey(inst, key.KeyTab, 0)
-	if !strings.Contains(surfaceText(b), "Answer this question") {
-		t.Fatalf("unanswered question skipped: %s", surfaceText(b))
+	if !strings.Contains(testutils.SurfaceText(b), "Answer this question") {
+		t.Fatalf("unanswered question skipped: %s", testutils.SurfaceText(b))
 	}
 	pressKey(inst, key.KeyDown, 0)
 	pressKey(inst, key.KeyEnter, 0)
 	typeText(inst, "Reason")
 	pressKey(inst, key.KeyTab, key.ModShift)
 	pressKey(inst, key.KeyRight, 0)
-	if !strings.Contains(surfaceText(b), "Reason") {
-		t.Fatalf("text draft lost: %s", surfaceText(b))
+	if !strings.Contains(testutils.SurfaceText(b), "Reason") {
+		t.Fatalf("text draft lost: %s", testutils.SurfaceText(b))
 	}
 	pressKey(inst, key.KeyTab, 0)
-	if !strings.Contains(surfaceText(b), "Review your answers") {
-		t.Fatalf("tab did not advance: %s", surfaceText(b))
+	if !strings.Contains(testutils.SurfaceText(b), "Review your answers") {
+		t.Fatalf("tab did not advance: %s", testutils.SurfaceText(b))
 	}
 	pressKey(inst, key.KeyLeft, 0)
 	pressKey(inst, key.KeyTab, key.ModShift)
@@ -219,8 +220,8 @@ func TestQuestionMultiOtherEnter(t *testing.T) {
 	pressKey(inst, key.KeyDown, 0)
 	pressKey(inst, key.KeyDown, 0)
 	pressKey(inst, key.KeyEnter, 0)
-	if !strings.Contains(surfaceText(b), "Answer:") {
-		t.Fatalf("custom input not opened: %s", surfaceText(b))
+	if !strings.Contains(testutils.SurfaceText(b), "Answer:") {
+		t.Fatalf("custom input not opened: %s", testutils.SurfaceText(b))
 	}
 	typeText(inst, "Custom")
 	pressKey(inst, key.KeyEnter, 0)

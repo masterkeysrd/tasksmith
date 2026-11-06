@@ -11,6 +11,7 @@ import (
 	"github.com/masterkeysrd/kite/extras/trail"
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/cli/store"
+	"github.com/masterkeysrd/tasksmith/internal/tui/testutils"
 	"github.com/masterkeysrd/tasksmith/internal/ui/autocomplete"
 )
 
@@ -415,7 +416,7 @@ func TestToolsBrowserRowsDoNotWrap(t *testing.T) {
 	}
 	defer inst.Unmount()
 	inst.Frame()
-	surf := surfaceText(backend)
+	surf := testutils.SurfaceTextKeepBlanks(backend)
 
 	lines := strings.Split(surf, "\n")
 	linterLineIdx := -1

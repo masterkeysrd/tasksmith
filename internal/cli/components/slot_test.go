@@ -9,6 +9,7 @@ import (
 	"github.com/masterkeysrd/kite/extras/trail"
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/cli/store"
+	"github.com/masterkeysrd/tasksmith/internal/tui/testutils"
 )
 
 func TestSlotRender(t *testing.T) {
@@ -77,7 +78,7 @@ func TestSlotRendersPermissionPrompt(t *testing.T) {
 	defer inst.Unmount()
 	inst.Frame()
 
-	out := surfaceText(b)
+	out := testutils.SurfaceText(b)
 	if !strings.Contains(out, "Permission required") {
 		t.Errorf("expected 'Permission required' in rendered Slot output, got:\n%s", out)
 	}

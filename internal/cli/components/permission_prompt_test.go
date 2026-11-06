@@ -11,6 +11,7 @@ import (
 	"github.com/masterkeysrd/kite/key"
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/cli/store"
+	"github.com/masterkeysrd/tasksmith/internal/tui/testutils"
 )
 
 func TestPermissionPromptRendering(t *testing.T) {
@@ -43,7 +44,7 @@ func TestPermissionPromptRendering(t *testing.T) {
 	defer inst.Unmount()
 	inst.Frame()
 
-	out := surfaceText(b)
+	out := testutils.SurfaceText(b)
 
 	// Check title and subtitle
 	if !strings.Contains(out, "Permission required") {
@@ -104,7 +105,7 @@ func TestPermissionPromptTabScopeCycle(t *testing.T) {
 	inst.Frame()
 
 	// Initial scope: session
-	out := surfaceText(b)
+	out := testutils.SurfaceText(b)
 	if !strings.Contains(out, "[session]") {
 		t.Errorf("expected [session] initially, got:\n%s", out)
 	}
@@ -112,7 +113,7 @@ func TestPermissionPromptTabScopeCycle(t *testing.T) {
 	// Press Tab -> project
 	inst.Engine().ProcessRawEvent(&backend.RawKeyEvent{Key: key.Key{Code: key.KeyTab}})
 	inst.Frame()
-	out = surfaceText(b)
+	out = testutils.SurfaceText(b)
 	if !strings.Contains(out, "[project]") {
 		t.Errorf("expected [project] after first Tab, got:\n%s", out)
 	}
@@ -120,7 +121,7 @@ func TestPermissionPromptTabScopeCycle(t *testing.T) {
 	// Press Tab -> global
 	inst.Engine().ProcessRawEvent(&backend.RawKeyEvent{Key: key.Key{Code: key.KeyTab}})
 	inst.Frame()
-	out = surfaceText(b)
+	out = testutils.SurfaceText(b)
 	if !strings.Contains(out, "[global]") {
 		t.Errorf("expected [global] after second Tab, got:\n%s", out)
 	}
@@ -128,7 +129,7 @@ func TestPermissionPromptTabScopeCycle(t *testing.T) {
 	// Press Tab -> session
 	inst.Engine().ProcessRawEvent(&backend.RawKeyEvent{Key: key.Key{Code: key.KeyTab}})
 	inst.Frame()
-	out = surfaceText(b)
+	out = testutils.SurfaceText(b)
 	if !strings.Contains(out, "[session]") {
 		t.Errorf("expected [session] after third Tab, got:\n%s", out)
 	}
@@ -296,7 +297,7 @@ func TestPermissionPromptFeedbackMode(t *testing.T) {
 	inst.Frame()
 
 	// Initially feedback mode is closed
-	if strings.Contains(surfaceText(b), "Feedback:") {
+	if strings.Contains(testutils.SurfaceText(b), "Feedback:") {
 		t.Errorf("did not expect Feedback: input initially")
 	}
 
@@ -304,7 +305,7 @@ func TestPermissionPromptFeedbackMode(t *testing.T) {
 	inst.Engine().ProcessRawEvent(&backend.RawKeyEvent{Key: key.Key{Code: 'r', Text: "r"}})
 	inst.Frame()
 
-	txt := surfaceText(b)
+	txt := testutils.SurfaceText(b)
 	if !strings.Contains(txt, "Feedback:") {
 		t.Errorf("expected Feedback: input on surface after 'r', got:\n%s", txt)
 	}
@@ -316,7 +317,7 @@ func TestPermissionPromptFeedbackMode(t *testing.T) {
 	inst.Engine().ProcessRawEvent(&backend.RawKeyEvent{Key: key.Key{Code: key.KeyEscape}})
 	inst.Frame()
 
-	txt = surfaceText(b)
+	txt = testutils.SurfaceText(b)
 	if strings.Contains(txt, "Feedback:") {
 		t.Errorf("expected Feedback: input to be dismissed after Escape, got:\n%s", txt)
 	}
@@ -375,7 +376,7 @@ func TestPermissionPromptMultilineTargetAndLongPattern(t *testing.T) {
 	defer inst.Unmount()
 	inst.Frame()
 
-	out := surfaceText(b)
+	out := testutils.SurfaceText(b)
 
 	// Subtitle should contain compacted target (with newlines replaced by space) and truncated at 80 runes with "…"
 	expectedTargetSub := compactSingleLine(multiLineTarget, 80)

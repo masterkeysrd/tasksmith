@@ -7,24 +7,16 @@ import (
 
 	"github.com/masterkeysrd/kite/backend"
 	"github.com/masterkeysrd/kite/backend/mock"
-	"github.com/masterkeysrd/kite/element"
-	"github.com/masterkeysrd/kite/extras/kitex"
 	"github.com/masterkeysrd/kite/extras/trail"
 	"github.com/masterkeysrd/kite/key"
-	"github.com/masterkeysrd/kite/testenv"
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/cli/store"
+	"github.com/masterkeysrd/tasksmith/internal/tui/testutils"
 )
 
 func renderTestNode(t *testing.T, node trail.Node) string {
 	t.Helper()
-	env := testenv.Default(100, 24)
-	t.Cleanup(env.Close)
-	container := element.NewBox(env.Document())
-	env.Mount(container)
-	kitex.Render(node, container)
-	env.Flush()
-	return strings.TrimSpace(env.DumpText())
+	return testutils.Render(t, node, 100, 24)
 }
 
 func TestSkillsCommandArgsValidation(t *testing.T) {
@@ -211,7 +203,7 @@ func TestSkillMarkdownViewerKeyboardScrolling(t *testing.T) {
 	inst.Frame()
 
 	// Initial render
-	initial := surfaceText(b)
+	initial := testutils.SurfaceTextKeepBlanks(b)
 	if !strings.Contains(initial, "Skill: long-runbook") {
 		t.Fatalf("expected header in surface, got:\n%s", initial)
 	}
@@ -219,7 +211,7 @@ func TestSkillMarkdownViewerKeyboardScrolling(t *testing.T) {
 	// 1. Scroll down 1 line with 'j'
 	inst.Engine().ProcessRawEvent(&backend.RawKeyEvent{Key: key.Key{Code: 'j', Text: "j"}})
 	inst.Frame()
-	afterJ := surfaceText(b)
+	afterJ := testutils.SurfaceTextKeepBlanks(b)
 	if !strings.Contains(afterJ, "line +1") {
 		t.Fatalf("expected 'line +1' after pressing j, got:\n%s", afterJ)
 	}
@@ -227,7 +219,7 @@ func TestSkillMarkdownViewerKeyboardScrolling(t *testing.T) {
 	// 2. Scroll down 8 lines with pgdown
 	inst.Engine().ProcessRawEvent(&backend.RawKeyEvent{Key: key.Key{Code: key.KeyPgDown}})
 	inst.Frame()
-	afterPgDown := surfaceText(b)
+	afterPgDown := testutils.SurfaceTextKeepBlanks(b)
 	if !strings.Contains(afterPgDown, "line +9") {
 		t.Fatalf("expected 'line +9' after pressing pgdown, got:\n%s", afterPgDown)
 	}
@@ -235,7 +227,7 @@ func TestSkillMarkdownViewerKeyboardScrolling(t *testing.T) {
 	// 3. Scroll up 1 line with 'k'
 	inst.Engine().ProcessRawEvent(&backend.RawKeyEvent{Key: key.Key{Code: 'k', Text: "k"}})
 	inst.Frame()
-	afterK := surfaceText(b)
+	afterK := testutils.SurfaceTextKeepBlanks(b)
 	if !strings.Contains(afterK, "line +8") {
 		t.Fatalf("expected 'line +8' after pressing k, got:\n%s", afterK)
 	}
@@ -243,7 +235,7 @@ func TestSkillMarkdownViewerKeyboardScrolling(t *testing.T) {
 	// 4. Scroll to top with 'home'
 	inst.Engine().ProcessRawEvent(&backend.RawKeyEvent{Key: key.Key{Code: key.KeyHome}})
 	inst.Frame()
-	afterHome := surfaceText(b)
+	afterHome := testutils.SurfaceTextKeepBlanks(b)
 	if strings.Contains(afterHome, "line +") {
 		t.Fatalf("expected scroll indicator to disappear at top, got:\n%s", afterHome)
 	}
@@ -280,7 +272,7 @@ func TestSkillsBrowserDescriptionTruncationToSingleLine(t *testing.T) {
 	}
 	defer instWide.Unmount()
 	instWide.Frame()
-	surfWide := surfaceText(bWide)
+	surfWide := testutils.SurfaceTextKeepBlanks(bWide)
 	if !strings.Contains(surfWide, "…") {
 		t.Fatalf("expected ellipsis '…' in 130-col surface, got:\n%s", surfWide)
 	}
@@ -298,7 +290,7 @@ func TestSkillsBrowserDescriptionTruncationToSingleLine(t *testing.T) {
 	}
 	defer inst.Unmount()
 	inst.Frame()
-	surf := surfaceText(b)
+	surf := testutils.SurfaceTextKeepBlanks(b)
 
 	// Ensure each skill name appears on its own line and neither wraps onto subsequent lines
 	lines := strings.Split(surf, "\n")

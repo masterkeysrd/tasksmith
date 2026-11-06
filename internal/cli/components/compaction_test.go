@@ -1,38 +1,19 @@
 package components
 
 import (
-	"context"
 	"strings"
 	"testing"
-	"time"
 
-	"github.com/masterkeysrd/kite/backend/mock"
 	"github.com/masterkeysrd/kite/extras/trail"
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/cli/store"
+	"github.com/masterkeysrd/tasksmith/internal/tui/testutils"
 	"github.com/masterkeysrd/tasksmith/internal/ui/format"
 )
 
 func renderTestNode(t *testing.T, node trail.Node, width, height int, check func(string) bool) string {
 	t.Helper()
-	b := mock.New(width, height)
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-
-	go func() {
-		_ = trail.Run(ctx, node, trail.WithBackend(b))
-	}()
-
-	var text string
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		text = surfaceText(b)
-		if check(text) {
-			return text
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-	return text
+	return testutils.StartApp(t, node, width, height).WaitUntil(check, testutils.DefaultWaitTimeout)
 }
 
 func TestFormatTokens(t *testing.T) {

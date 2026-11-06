@@ -15,35 +15,11 @@ import (
 	"github.com/masterkeysrd/tasksmith/client"
 	"github.com/masterkeysrd/tasksmith/internal/cli/store"
 	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
+	"github.com/masterkeysrd/tasksmith/internal/tui/testutils"
 )
 
 func TestMain(m *testing.M) {
 	xdg.RunWithTestEnv(m, "tasksmith-cli-test")
-}
-
-func surfaceText(b *mock.Backend) string {
-	frame := b.LastFrame().Surface
-	if frame == nil {
-		return ""
-	}
-	var sb strings.Builder
-	for y := 0; y < frame.Height; y++ {
-		var line strings.Builder
-		for x := 0; x < frame.Width; x++ {
-			c := frame.CellAt(x, y)
-			if c.Content != "" {
-				line.WriteString(c.Content)
-			} else {
-				line.WriteByte(' ')
-			}
-		}
-		trimmed := strings.TrimRight(line.String(), " ")
-		if trimmed != "" {
-			sb.WriteString(trimmed)
-			sb.WriteString("\n")
-		}
-	}
-	return sb.String()
 }
 
 func allText(b *mock.Backend) string {
@@ -66,7 +42,7 @@ func allText(b *mock.Backend) string {
 			}
 		}
 	}
-	sb.WriteString(surfaceText(b))
+	sb.WriteString(testutils.SurfaceText(b))
 	return sb.String()
 }
 
@@ -106,12 +82,12 @@ func TestBuiltinSkillAutocomplete(t *testing.T) {
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		inst.Frame()
-		if strings.Contains(surfaceText(b), "/tasksmith-customizations") {
+		if strings.Contains(testutils.SurfaceText(b), "/tasksmith-customizations") {
 			return
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
-	t.Fatalf("built-in skill missing from autocomplete:\n%s", surfaceText(b))
+	t.Fatalf("built-in skill missing from autocomplete:\n%s", testutils.SurfaceText(b))
 }
 
 func TestOptionsValidate(t *testing.T) {
@@ -198,7 +174,7 @@ func TestRunCtrlCDoublePressExits(t *testing.T) {
 
 	// Verify store.GetApp().CtrlCPending becomes true and screen contains "Press Ctrl+C again to exit"
 	waitFor(t, func() bool {
-		return store.GetApp().CtrlCPending && strings.Contains(surfaceText(b), "Press Ctrl+C again to exit")
+		return store.GetApp().CtrlCPending && strings.Contains(testutils.SurfaceText(b), "Press Ctrl+C again to exit")
 	}, 2*time.Second, "CtrlCPending and screen update on first Ctrl+C")
 
 	// Verify Run is still running
@@ -261,7 +237,7 @@ func TestRunCtrlCDisarmedByOtherKey(t *testing.T) {
 	})
 
 	waitFor(t, func() bool {
-		return !store.GetApp().CtrlCPending && !strings.Contains(surfaceText(b), "Press Ctrl+C again to exit")
+		return !store.GetApp().CtrlCPending && !strings.Contains(testutils.SurfaceText(b), "Press Ctrl+C again to exit")
 	}, 2*time.Second, "CtrlCPending to be disarmed by other key")
 
 	// 3. Send third Ctrl+C (only re-arms)
@@ -270,7 +246,7 @@ func TestRunCtrlCDisarmedByOtherKey(t *testing.T) {
 	})
 
 	waitFor(t, func() bool {
-		return store.GetApp().CtrlCPending && strings.Contains(surfaceText(b), "Press Ctrl+C again to exit")
+		return store.GetApp().CtrlCPending && strings.Contains(testutils.SurfaceText(b), "Press Ctrl+C again to exit")
 	}, 2*time.Second, "CtrlCPending to re-arm")
 
 	// Verify Run is still running
@@ -387,9 +363,9 @@ func TestRunStartupHeader(t *testing.T) {
 
 	// The startup banner is initially rendered live on the surface (not in static scrollback)
 	waitFor(t, func() bool {
-		return strings.Contains(surfaceText(b), "TaskSmith v0.2.0") &&
-			strings.Contains(surfaceText(b), "default · provider default") &&
-			strings.Contains(surfaceText(b), "/tmp/ws")
+		return strings.Contains(testutils.SurfaceText(b), "TaskSmith v0.2.0") &&
+			strings.Contains(testutils.SurfaceText(b), "default · provider default") &&
+			strings.Contains(testutils.SurfaceText(b), "/tmp/ws")
 	}, 2*time.Second, "live startup banner on screen surface")
 
 	if len(b.InsertedAbove) != 0 {
@@ -397,7 +373,7 @@ func TestRunStartupHeader(t *testing.T) {
 	}
 
 	waitFor(t, func() bool {
-		return strings.Contains(surfaceText(b), "shift+tab cycle mode")
+		return strings.Contains(testutils.SurfaceText(b), "shift+tab cycle mode")
 	}, 2*time.Second, "default hint on status line")
 }
 
@@ -426,7 +402,7 @@ func TestRunShiftTabCyclesPermissionMode(t *testing.T) {
 
 	// Wait for initial render where ModeDefault is hidden
 	waitFor(t, func() bool {
-		return b.LastFrame().Surface != nil && strings.Contains(surfaceText(b), ">")
+		return b.LastFrame().Surface != nil && strings.Contains(testutils.SurfaceText(b), ">")
 	}, 2*time.Second, "initial composer render")
 
 	if store.GetSession().Config.Mode != api.ModeDefault {
@@ -440,7 +416,7 @@ func TestRunShiftTabCyclesPermissionMode(t *testing.T) {
 
 	waitFor(t, func() bool {
 		return store.GetSession().Config.Mode == api.ModeAcceptEdits &&
-			strings.Contains(surfaceText(b), "accept_edits")
+			strings.Contains(testutils.SurfaceText(b), "accept_edits")
 	}, 2*time.Second, "status line to show accept_edits mode")
 
 	// Press Shift+Tab again -> cycles to plan
@@ -450,7 +426,7 @@ func TestRunShiftTabCyclesPermissionMode(t *testing.T) {
 
 	waitFor(t, func() bool {
 		return store.GetSession().Config.Mode == api.ModePlan &&
-			strings.Contains(surfaceText(b), "plan")
+			strings.Contains(testutils.SurfaceText(b), "plan")
 	}, 2*time.Second, "status line to show plan mode")
 }
 
@@ -475,7 +451,7 @@ func TestRunSubmitPromptAndActiveStream(t *testing.T) {
 	}()
 
 	waitFor(t, func() bool {
-		return b.LastFrame().Surface != nil && strings.Contains(surfaceText(b), ">")
+		return b.LastFrame().Surface != nil && strings.Contains(testutils.SurfaceText(b), ">")
 	}, 2*time.Second, "initial composer render")
 
 	// Type "Hello Tasksmith" into Composer
@@ -486,7 +462,7 @@ func TestRunSubmitPromptAndActiveStream(t *testing.T) {
 	}
 
 	waitFor(t, func() bool {
-		return strings.Contains(surfaceText(b), "Hello Tasksmith")
+		return strings.Contains(testutils.SurfaceText(b), "Hello Tasksmith")
 	}, 2*time.Second, "typed text in composer")
 
 	// Press Enter
@@ -500,7 +476,7 @@ func TestRunSubmitPromptAndActiveStream(t *testing.T) {
 		st.mu.Lock()
 		sentCount := len(st.sent)
 		st.mu.Unlock()
-		txt := surfaceText(b)
+		txt := testutils.SurfaceText(b)
 		return sentCount > 0 &&
 			strings.Contains(txt, "Hello Tasksmith") &&
 			(strings.Contains(txt, "Thinking...") || strings.Contains(txt, "streaming • esc to cancel"))
@@ -533,7 +509,7 @@ func TestRunSubmitPromptAndActiveStream(t *testing.T) {
 	}, 2*time.Second, "cancel request delivered to daemon")
 
 	waitFor(t, func() bool {
-		txt := surfaceText(b)
+		txt := testutils.SurfaceText(b)
 		return !store.GetStream().Streaming &&
 			!strings.Contains(txt, "Thinking...") &&
 			!strings.Contains(txt, "streaming • esc to cancel") &&
@@ -559,7 +535,7 @@ func TestRunSlashCommandModeAndExit(t *testing.T) {
 	}()
 
 	waitFor(t, func() bool {
-		return b.LastFrame().Surface != nil && strings.Contains(surfaceText(b), ">")
+		return b.LastFrame().Surface != nil && strings.Contains(testutils.SurfaceText(b), ">")
 	}, 2*time.Second, "initial composer render")
 
 	// Type "/mode auto"
@@ -617,7 +593,7 @@ func TestAppSlashCommandHelpAndEscapeRestoresComposerFocus(t *testing.T) {
 	}()
 
 	waitFor(t, func() bool {
-		return b.LastFrame().Surface != nil && strings.Contains(surfaceText(b), ">")
+		return b.LastFrame().Surface != nil && strings.Contains(testutils.SurfaceText(b), ">")
 	}, 2*time.Second, "initial composer render")
 
 	// 1. Type "/help" and press Enter
@@ -629,7 +605,7 @@ func TestAppSlashCommandHelpAndEscapeRestoresComposerFocus(t *testing.T) {
 	b.PostEvent(&backend.RawKeyEvent{Key: key.Key{Code: key.KeyEnter}})
 
 	waitFor(t, func() bool {
-		txt := surfaceText(b)
+		txt := testutils.SurfaceText(b)
 		return store.GetSlot().Active != nil &&
 			strings.Contains(txt, "Available commands:") &&
 			strings.Contains(txt, "Filter:")
@@ -642,7 +618,7 @@ func TestAppSlashCommandHelpAndEscapeRestoresComposerFocus(t *testing.T) {
 		txt := allText(b)
 		return store.GetSlot().Active == nil &&
 			strings.Contains(txt, "Exited /help command") &&
-			strings.Contains(surfaceText(b), ">")
+			strings.Contains(testutils.SurfaceText(b), ">")
 	}, 2*time.Second, "help picker to close and exit notice to appear")
 
 	// 3. Immediately type "/mode" and press Enter
@@ -654,7 +630,7 @@ func TestAppSlashCommandHelpAndEscapeRestoresComposerFocus(t *testing.T) {
 	b.PostEvent(&backend.RawKeyEvent{Key: key.Key{Code: key.KeyEnter}})
 
 	waitFor(t, func() bool {
-		txt := surfaceText(b)
+		txt := testutils.SurfaceText(b)
 		return store.GetSlot().Active != nil &&
 			strings.Contains(txt, "Select permission mode:")
 	}, 2*time.Second, "mode picker to open in slot")
@@ -666,7 +642,7 @@ func TestAppSlashCommandHelpAndEscapeRestoresComposerFocus(t *testing.T) {
 		txt := allText(b)
 		return store.GetSlot().Active == nil &&
 			strings.Contains(txt, "Exited /mode command") &&
-			strings.Contains(surfaceText(b), ">")
+			strings.Contains(testutils.SurfaceText(b), ">")
 	}, 2*time.Second, "mode picker to close and exit notice to appear")
 
 	// 5. Verify Composer can be typed into again
@@ -676,7 +652,7 @@ func TestAppSlashCommandHelpAndEscapeRestoresComposerFocus(t *testing.T) {
 		})
 	}
 	waitFor(t, func() bool {
-		return strings.Contains(surfaceText(b), "echo test")
+		return strings.Contains(testutils.SurfaceText(b), "echo test")
 	}, 2*time.Second, "typed text in composer after mode picker closed")
 
 	// 5. Verify Composer can be typed into again
@@ -686,7 +662,7 @@ func TestAppSlashCommandHelpAndEscapeRestoresComposerFocus(t *testing.T) {
 		})
 	}
 	waitFor(t, func() bool {
-		return strings.Contains(surfaceText(b), "echo test")
+		return strings.Contains(testutils.SurfaceText(b), "echo test")
 	}, 2*time.Second, "typed text in composer after mode picker closed")
 }
 
@@ -744,7 +720,7 @@ func TestRunResumeSessionHeaderIsItem0(t *testing.T) {
 	}()
 
 	waitFor(t, func() bool {
-		return b.LastFrame().Surface != nil && strings.Contains(surfaceText(b), ">")
+		return b.LastFrame().Surface != nil && strings.Contains(testutils.SurfaceText(b), ">")
 	}, 2*time.Second, "initial composer render")
 
 	waitFor(t, func() bool {
@@ -802,7 +778,7 @@ func TestRunClearReprintHeader(t *testing.T) {
 	}()
 
 	waitFor(t, func() bool {
-		return b.LastFrame().Surface != nil && strings.Contains(surfaceText(b.Backend), ">")
+		return b.LastFrame().Surface != nil && strings.Contains(testutils.SurfaceText(b.Backend), ">")
 	}, 2*time.Second, "initial composer render")
 
 	// Wait for initial header to be printed into InsertedAbove
@@ -828,7 +804,7 @@ func TestRunClearReprintHeader(t *testing.T) {
 	})
 
 	waitFor(t, func() bool {
-		return !strings.Contains(surfaceText(b.Backend), "old notice that must be cleared") && strings.Contains(surfaceText(b.Backend), "TaskSmith v0.1.0")
+		return !strings.Contains(testutils.SurfaceText(b.Backend), "old notice that must be cleared") && strings.Contains(testutils.SurfaceText(b.Backend), "TaskSmith v0.1.0")
 	}, 2*time.Second, "draft notice cleared from surface")
 
 	// Now test frozen mode: freeze transcript, append notice, and /clear should wipe backend

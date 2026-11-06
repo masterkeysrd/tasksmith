@@ -10,6 +10,7 @@ import (
 	"github.com/masterkeysrd/kite/extras/trail"
 	"github.com/masterkeysrd/kite/key"
 	"github.com/masterkeysrd/tasksmith/internal/cli/store"
+	"github.com/masterkeysrd/tasksmith/internal/tui/testutils"
 	uicomponents "github.com/masterkeysrd/tasksmith/internal/ui/components"
 )
 
@@ -118,7 +119,7 @@ func TestPickerComponentAndKeyboardHint(t *testing.T) {
 		t.Errorf("expected OnOpen to be called on mount")
 	}
 
-	out := surfaceText(b)
+	out := testutils.SurfaceText(b)
 	if !strings.Contains(out, "Select an option:") {
 		t.Errorf("expected title in output: %s", out)
 	}
@@ -134,7 +135,7 @@ func TestPickerComponentAndKeyboardHint(t *testing.T) {
 	// 2. Trigger Confirm mode via 'd'
 	inst.Engine().ProcessRawEvent(&backend.RawKeyEvent{Key: key.Key{Code: 'd', Text: "d"}})
 	inst.Frame()
-	out = surfaceText(b)
+	out = testutils.SurfaceText(b)
 	if !strings.Contains(out, "Delete Option One?") {
 		t.Errorf("expected confirm prompt in output: %s", out)
 	}
@@ -148,7 +149,7 @@ func TestPickerComponentAndKeyboardHint(t *testing.T) {
 	// 3. Trigger Input mode via 'r'
 	inst.Engine().ProcessRawEvent(&backend.RawKeyEvent{Key: key.Key{Code: 'r', Text: "r"}})
 	inst.Frame()
-	out = surfaceText(b)
+	out = testutils.SurfaceText(b)
 	if !strings.Contains(out, "Rename:") {
 		t.Errorf("expected input prompt in output: %s", out)
 	}
@@ -211,7 +212,7 @@ func TestSlotRendersPickerAndRemovesOnAction(t *testing.T) {
 		t.Fatalf("expected active slot %s", slotID)
 	}
 
-	out := surfaceText(b)
+	out := testutils.SurfaceText(b)
 	if !strings.Contains(out, "Choose") || !strings.Contains(out, "Alpha") {
 		t.Fatalf("expected picker rendered in slot: %s", out)
 	}
@@ -311,7 +312,7 @@ func TestPickerDisabledReasonNotice(t *testing.T) {
 	defer inst.Unmount()
 	inst.Frame()
 
-	out := surfaceText(b)
+	out := testutils.SurfaceText(b)
 	if strings.Contains(out, "Task is already completed.") {
 		t.Errorf("notice should not be visible initially")
 	}
@@ -319,7 +320,7 @@ func TestPickerDisabledReasonNotice(t *testing.T) {
 	// Press 'x' on opt1 (which has disabled reason)
 	inst.Engine().ProcessRawEvent(&backend.RawKeyEvent{Key: key.Key{Code: 'x', Text: "x"}})
 	inst.Frame()
-	out = surfaceText(b)
+	out = testutils.SurfaceText(b)
 	if !strings.Contains(out, "Task is already completed.") {
 		t.Errorf("expected notice in output after pressing x: %s", out)
 	}
@@ -327,7 +328,7 @@ func TestPickerDisabledReasonNotice(t *testing.T) {
 	// Press 'down' (or any key) to navigate and clear notice
 	inst.Engine().ProcessRawEvent(&backend.RawKeyEvent{Key: key.Key{Code: key.KeyDown}})
 	inst.Frame()
-	out = surfaceText(b)
+	out = testutils.SurfaceText(b)
 	if strings.Contains(out, "Task is already completed.") {
 		t.Errorf("notice should be cleared after pressing down: %s", out)
 	}
@@ -335,7 +336,7 @@ func TestPickerDisabledReasonNotice(t *testing.T) {
 	// On opt2, DisabledReason returns "", so 'x' enters confirm mode
 	inst.Engine().ProcessRawEvent(&backend.RawKeyEvent{Key: key.Key{Code: 'x', Text: "x"}})
 	inst.Frame()
-	out = surfaceText(b)
+	out = testutils.SurfaceText(b)
 	if !strings.Contains(out, "Kill task Option Two?") {
 		t.Errorf("expected confirm prompt for opt2: %s", out)
 	}

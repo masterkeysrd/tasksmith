@@ -4,6 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
+	"slices"
+	"strings"
+	"sync"
+	"testing"
+
 	"github.com/masterkeysrd/loom/message"
 	"github.com/masterkeysrd/loom/tool"
 	"github.com/masterkeysrd/tasksmith/api"
@@ -13,12 +20,6 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/daemon/scope"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tools"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/workspace"
-	"os"
-	"path/filepath"
-	"slices"
-	"strings"
-	"sync"
-	"testing"
 )
 
 type sampleIn struct {

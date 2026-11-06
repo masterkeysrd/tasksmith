@@ -12,33 +12,9 @@ import (
 	"github.com/masterkeysrd/kite/extras/trail"
 	"github.com/masterkeysrd/tasksmith/internal/cli/store"
 	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
+	"github.com/masterkeysrd/tasksmith/internal/tui/testutils"
 	"github.com/masterkeysrd/tasksmith/internal/ui/theme"
 )
-
-func surfaceText(b *mock.Backend) string {
-	frame := b.LastFrame().Surface
-	if frame == nil {
-		return ""
-	}
-	var sb strings.Builder
-	for y := 0; y < frame.Height; y++ {
-		var line strings.Builder
-		for x := 0; x < frame.Width; x++ {
-			c := frame.CellAt(x, y)
-			if c.Content != "" {
-				line.WriteString(c.Content)
-			} else {
-				line.WriteByte(' ')
-			}
-		}
-		trimmed := strings.TrimRight(line.String(), " ")
-		if trimmed != "" {
-			sb.WriteString(trimmed)
-			sb.WriteString("\n")
-		}
-	}
-	return sb.String()
-}
 
 func TestNormalizeVersion(t *testing.T) {
 	tests := []struct {
@@ -94,7 +70,7 @@ func TestHeaderRender(t *testing.T) {
 	var text string
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		text = surfaceText(b)
+		text = testutils.SurfaceText(b)
 		if strings.Contains(text, "TaskSmith") {
 			break
 		}
@@ -131,7 +107,7 @@ func TestHeaderDefaults(t *testing.T) {
 	var text string
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		text = surfaceText(b)
+		text = testutils.SurfaceText(b)
 		if strings.Contains(text, "TaskSmith") {
 			break
 		}
@@ -175,7 +151,7 @@ func TestHeaderWithWarnings(t *testing.T) {
 	var text string
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		text = surfaceText(b)
+		text = testutils.SurfaceText(b)
 		if strings.Contains(text, "Agent configuration missing tools") {
 			break
 		}
@@ -293,7 +269,7 @@ func testHeaderThemeSwitching(t *testing.T) {
 		}
 	}
 	if textX == -1 {
-		t.Fatalf("expected 'T' in rendered surface, got surface:\n%s", surfaceText(b))
+		t.Fatalf("expected 'T' in rendered surface, got surface:\n%s", testutils.SurfaceText(b))
 	}
 
 	// Switch theme to "github-dark"
