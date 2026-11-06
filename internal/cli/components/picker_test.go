@@ -35,6 +35,44 @@ func TestFilterOptions(t *testing.T) {
 	}
 }
 
+// TestPickerOnOpenFiresOncePerMount guards the mount effect's dependency list.
+// A nil deps slice re-runs the effect after every render, so a picker whose
+// options change underneath it would notify its caller that it opened again.
+func TestPickerOnOpenFiresOncePerMount(t *testing.T) {
+	var opens int
+	b := mock.New(80, 24)
+	app := trail.FC("OptionsHost", func(opts []uicomponents.Option) kitex.Node {
+		return Picker(PickerProps{
+			Title:   "Pick",
+			Options: opts,
+			OnOpen:  func() { opens++ },
+		})
+	})
+
+	inst, err := trail.New(app([]uicomponents.Option{{Value: "a", Label: "Alpha"}}), trail.WithBackend(b))
+	if err != nil {
+		t.Fatalf("trail.New: %v", err)
+	}
+	defer inst.Unmount()
+	inst.Frame()
+
+	if opens != 1 {
+		t.Fatalf("expected OnOpen once on mount, got %d", opens)
+	}
+
+	// Re-render with a different option list: the picker updates, but it is the
+	// same mounted picker, so it did not open again.
+	inst.Rerender(app([]uicomponents.Option{
+		{Value: "a", Label: "Alpha"},
+		{Value: "b", Label: "Beta"},
+	}))
+	inst.Frame()
+
+	if opens != 1 {
+		t.Fatalf("expected OnOpen to stay at 1 across re-renders, got %d", opens)
+	}
+}
+
 // TestPickerSubtitleAndGroups renders a picker with a subtitle line and grouped
 // options, which is how the MCP server browser presents its listing.
 func TestPickerSubtitleAndGroups(t *testing.T) {

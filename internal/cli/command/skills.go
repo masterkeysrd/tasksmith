@@ -255,18 +255,19 @@ var SkillsBrowser = trail.FC("SkillsBrowser", func(slotID string) trail.Node {
 		skills = *skillsPtr
 	}
 
-	// Fetch skills on mount if store has none yet
+	// Fetch skills on mount if the store has none yet. Client availability is an
+	// explicit dependency so the fetch retries once a daemon client exists, without
+	// re-running on every render the way a nil deps slice would.
+	c := store.Client()
 	kitex.UseEffect(func() {
-		if skillsPtr == nil {
-			if c := store.Client(); c != nil {
-				go func() {
-					if sks, err := c.ListSkills(context.Background()); err == nil {
-						store.SetWorkspaceSkills(sks)
-					}
-				}()
-			}
+		if skillsPtr == nil && c != nil {
+			go func() {
+				if sks, err := c.ListSkills(context.Background()); err == nil {
+					store.SetWorkspaceSkills(sks)
+				}
+			}()
 		}
-	}, nil)
+	}, []any{skillsPtr == nil, c == nil})
 
 	doReload := func() {
 		if isReloading() {

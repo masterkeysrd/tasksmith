@@ -342,18 +342,19 @@ var RulesBrowser = trail.FC("RulesBrowser", func(slotID string) trail.Node {
 		rules = *rulesPtr
 	}
 
-	// Fetch rules on mount if store has none yet
+	// Fetch rules on mount if the store has none yet. Client availability is an
+	// explicit dependency so the fetch retries once a daemon client exists, without
+	// re-running on every render the way a nil deps slice would.
+	c := store.Client()
 	kitex.UseEffect(func() {
-		if rulesPtr == nil {
-			if c := store.Client(); c != nil {
-				go func() {
-					if rls, err := c.ListRules(context.Background()); err == nil {
-						store.SetWorkspaceRules(rls)
-					}
-				}()
-			}
+		if rulesPtr == nil && c != nil {
+			go func() {
+				if rls, err := c.ListRules(context.Background()); err == nil {
+					store.SetWorkspaceRules(rls)
+				}
+			}()
 		}
-	}, nil)
+	}, []any{rulesPtr == nil, c == nil})
 
 	doReload := func() {
 		if isReloading() {

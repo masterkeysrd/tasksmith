@@ -131,11 +131,13 @@ var Picker = trail.FC("Picker", func(props PickerProps) trail.Node {
 	filterInputRef := kitex.UseRef[dom.Element](nil)
 	actionInputRef := kitex.UseRef[dom.Element](nil)
 
+	// []any{} (not nil) so this fires once when the picker opens. A nil deps slice
+	// makes the effect re-run after every render, which re-fires OnOpen.
 	kitex.UseEffect(func() {
 		if props.OnOpen != nil {
 			props.OnOpen()
 		}
-	}, nil)
+	}, []any{})
 
 	st := modal()
 	trail.UseFocus(filterInputRef, trail.FocusOptions{

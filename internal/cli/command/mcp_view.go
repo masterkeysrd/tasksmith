@@ -1450,12 +1450,15 @@ var mcpBrowser = trail.FC("MCPBrowser", func(props mcpBrowserProps) trail.Node {
 
 	// A server connects in the background, so the listing goes stale while the
 	// browser is open. Fetch on mount, then poll only while a connection is still
-	// in progress, which is when the view changes on its own.
+	// in progress, which is when the view changes on its own. Client availability is
+	// a dependency so the initial fetch retries once a daemon connection exists; a nil
+	// deps slice would instead re-fetch on every render.
+	clientReady := store.Client() != nil
 	kitex.UseEffect(func() {
 		if _, err := refreshMCPServers(context.Background()); err != nil {
 			setNotice("Failed to load MCP servers: " + err.Error())
 		}
-	}, nil)
+	}, []any{clientReady})
 
 	var servers []api.MCPServer
 	if serversPtr != nil {
