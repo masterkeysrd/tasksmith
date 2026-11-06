@@ -8,6 +8,7 @@ import (
 	"iter"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -27,13 +28,35 @@ type SessionState struct {
 	Context    api.ContextState
 	Usage      api.SessionUsage
 	ModelLabel string
-	Thinking   string
-	Tasks      *[]api.Task
-	Subagents  *[]api.Session
-	Ready      bool
+	// ModelID is the identifier of the model ModelLabel was derived from. A
+	// session with no explicit model selection still resolves to one (agent or
+	// workspace default), so this is what identifies the active model when
+	// Config.Model is empty or an alias.
+	ModelID   string
+	Thinking  string
+	Tasks     *[]api.Task
+	Subagents *[]api.Session
+	Ready     bool
 }
 
 var session = kites.Create(SessionState{Config: api.SessionConfig{Mode: api.ModeDefault}})
+
+// ActiveModelID reports which model the session actually runs on. A draft
+// session selects none explicitly — the daemon resolves it to the agent or
+// workspace default — and an explicit selection may be an alias, so the
+// resolved identifier takes precedence over the raw configuration values.
+func (s SessionState) ActiveModelID() string {
+	if id := strings.TrimSpace(s.ModelID); id != "" {
+		return id
+	}
+	if s.Session != nil {
+		if id := modelIdentifier(s.Session.Model); id != "" {
+			return id
+		}
+		return strings.TrimSpace(s.Session.Config.Model)
+	}
+	return strings.TrimSpace(s.Config.Model)
+}
 
 var (
 	sessMu               sync.Mutex
@@ -158,8 +181,7 @@ func InitSession(ctx context.Context, c *client.Client, opts InitSessionOptions)
 		})
 
 		if ws != nil && strings.TrimSpace(cfg.Agent) == "" && strings.TrimSpace(cfg.Model) == "" {
-			label, thinking := modelDisplay(ws.DefaultModel, cfg.Thinking)
-			SetModelInfo(label, thinking)
+			SetSessionModelInfo(ws.DefaultModel, cfg.Thinking)
 		} else {
 			updateDraftModel(subCtx, c, cfg)
 		}
@@ -655,6 +677,7 @@ func SetSession(sess *api.Session) {
 		}
 		s.Session = sess
 		if sess != nil {
+			s.ModelID = modelIdentifier(sess.Model)
 			s.ModelLabel, s.Thinking = modelDisplay(sess.Model, sess.Config.Thinking)
 			s.Ready = true
 			s.Context = sess.Context
@@ -943,6 +966,36 @@ func SetModelInfo(label, thinking string) {
 	})
 }
 
+// SetSessionModelInfo records a resolved model: its identifier, display label,
+// and reasoning effort. The identifier is what lets `/model` highlight the
+// active row even when no model was selected explicitly.
+func SetSessionModelInfo(model *api.Model, setting *api.ThinkingSetting) {
+	label, thinking := modelDisplay(model, setting)
+	session.Set(func(s SessionState) SessionState {
+		s.ModelID = modelIdentifier(model)
+		s.ModelLabel = label
+		s.Thinking = thinking
+		s.Ready = true
+		return s
+	})
+}
+
+// SetActiveModelID records the identifier of the model the current label refers
+// to, for updates that carry an identifier but no model description.
+func SetActiveModelID(id string) {
+	session.Set(func(s SessionState) SessionState {
+		s.ModelID = strings.TrimSpace(id)
+		return s
+	})
+}
+
+func modelIdentifier(model *api.Model) string {
+	if model == nil {
+		return ""
+	}
+	return strings.TrimSpace(model.ID)
+}
+
 // SetSessionAgent updates the active agent name in SessionState.
 func SetSessionAgent(agent string) {
 	session.Set(func(s SessionState) SessionState {
@@ -1082,8 +1135,7 @@ func resyncDaemonState(ctx context.Context, c *client.Client) {
 
 		ws, _ := c.GetWorkspace(ctx)
 		if ws != nil && strings.TrimSpace(cfg.Agent) == "" && strings.TrimSpace(cfg.Model) == "" {
-			label, thinking := modelDisplay(ws.DefaultModel, cfg.Thinking)
-			SetModelInfo(label, thinking)
+			SetSessionModelInfo(ws.DefaultModel, cfg.Thinking)
 		} else {
 			updateDraftModel(ctx, c, cfg)
 		}
@@ -1542,20 +1594,61 @@ func modelDisplay(model *api.Model, setting *api.ThinkingSetting) (string, strin
 	label, thinking := "default", ThinkingProviderDefault
 	if model != nil {
 		label = cmp.Or(strings.TrimSpace(model.Label), strings.TrimSpace(model.Name), strings.TrimSpace(model.ID), label)
-		for _, option := range model.Thinking {
-			if option.Type == "effort" && option.Default != "" {
-				thinking = option.Default
-				break
-			}
-		}
-		if model.ThinkingDefault != nil {
-			thinking = thinkingDisplay(model.ThinkingDefault)
+		if resolved := ModelThinkingDefault(model); resolved != nil {
+			thinking = thinkingDisplay(resolved)
 		}
 	}
 	if setting != nil {
 		thinking = thinkingDisplay(setting)
 	}
 	return label, thinking
+}
+
+// ModelThinkingDefault reports the thinking a model applies without any session
+// or agent override. The daemon resolves this into ThinkingDefault; the scan of
+// declared capabilities keeps the status line correct when it does not.
+func ModelThinkingDefault(model *api.Model) *api.ThinkingSetting {
+	if model.ThinkingDefault != nil {
+		return model.ThinkingDefault
+	}
+	for _, option := range model.Thinking {
+		if option.IsDefault {
+			return thinkingCapabilityDefault(option)
+		}
+	}
+	for _, option := range model.Thinking {
+		if option.Type == "effort" && option.Default != "" {
+			return &api.ThinkingSetting{Type: "effort", Effort: option.Default}
+		}
+	}
+	return nil
+}
+
+func thinkingCapabilityDefault(option api.ThinkingCapability) *api.ThinkingSetting {
+	switch option.Type {
+	case "effort":
+		if option.Default == "" {
+			return nil
+		}
+		return &api.ThinkingSetting{Type: "effort", Effort: option.Default}
+	case "budget", "budget_tokens":
+		budget, err := strconv.Atoi(option.Default)
+		if err != nil || budget <= 0 {
+			budget = option.Min
+		}
+		if budget <= 0 {
+			return nil
+		}
+		return &api.ThinkingSetting{Type: "budget", Budget: budget}
+	case "toggle":
+		if option.Default == "false" {
+			return nil
+		}
+		return &api.ThinkingSetting{Type: "toggle", Enabled: true}
+	case "adaptive":
+		return &api.ThinkingSetting{Type: "adaptive"}
+	}
+	return nil
 }
 
 func updateDraftModel(ctx context.Context, c *client.Client, cfg api.SessionConfig) {
@@ -1568,6 +1661,7 @@ func updateDraftModel(ctx context.Context, c *client.Client, cfg api.SessionConf
 	label, thinking := modelDisplay(model, cfg.Thinking)
 	session.Set(func(s SessionState) SessionState {
 		if s.Session == nil && s.Config.Agent == cfg.Agent && s.Config.Model == cfg.Model && reflect.DeepEqual(s.Config.Thinking, cfg.Thinking) {
+			s.ModelID = modelIdentifier(model)
 			s.ModelLabel, s.Thinking = label, thinking
 			s.Context = api.ContextState{}
 		}

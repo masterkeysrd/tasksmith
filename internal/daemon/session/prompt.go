@@ -735,9 +735,23 @@ func resolveAgentModel(ws *workspace.Workspace, catalog *models.Catalog, agent s
 	if catalog != nil {
 		if resolved, ok := catalog.Resolve(models.RoleCompletion, explicit...); ok {
 			model = resolved.ID
+		} else if model != "" {
+			if resolved, ok := catalog.Get(model); ok {
+				model = resolved.ID
+			}
 		}
 	}
 	return agent, model
+}
+
+// validateCompletionModel verifies that the resolved model supports chat completion.
+func validateCompletionModel(catalog *models.Catalog, modelID models.ID) error {
+	if modelID.Valid() && catalog != nil {
+		if resolved, ok := catalog.Get(modelID); ok && !resolved.SupportsCompletion() {
+			return fmt.Errorf("%w: model %q does not support chat completion", ErrInvalidConfig, modelID)
+		}
+	}
+	return nil
 }
 
 // validateThinking validates that the model supports the given thinking settings.
@@ -762,6 +776,9 @@ func resolveConfig(ws *workspace.Workspace, catalog *models.Catalog, config api.
 	}
 
 	agent, modelID := resolveAgentModel(ws, catalog, config.Agent, models.ID(config.Model))
+	if err := validateCompletionModel(catalog, modelID); err != nil {
+		return api.SessionConfig{}, err
+	}
 	if config.Thinking != nil {
 		if err := validateThinking(catalog, modelID, config.Thinking); err != nil {
 			return api.SessionConfig{}, fmt.Errorf("%w: %v", ErrInvalidConfig, err)

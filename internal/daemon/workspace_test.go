@@ -12,6 +12,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/gateway"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/models"
+	"github.com/masterkeysrd/warp"
 )
 
 func newTestDaemon(t *testing.T, pool gateway.Pool) *Daemon {
@@ -261,5 +262,68 @@ func TestReloadRefreshesModelDiagnostics(t *testing.T) {
 	}
 	if err := <-results; err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestToGatewayProviderExpandsCredentialFilePath(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	providerDir := filepath.Join(home, "projects", "app", ".agents", "providers")
+
+	provider := &warp.ModelProvider{
+		Spec: warp.ModelProviderSpec{
+			Type: "openai",
+			Auth: &warp.ProviderAuth{Type: "bearer", File: "~/secrets/token"},
+		},
+	}
+	provider.Directory = providerDir
+
+	got := toGatewayProvider(provider)
+	if got.Auth == nil {
+		t.Fatal("expected auth config to be carried over")
+	}
+	want := filepath.Join(home, "secrets", "token")
+	if got.Auth.File != want {
+		t.Fatalf("auth file = %q, want %q", got.Auth.File, want)
+	}
+}
+
+func TestToGatewayProviderResolvesRelativeCredentialFileNextToManifest(t *testing.T) {
+	providerDir := filepath.Join(string(filepath.Separator), "workspace", "app", ".agents", "providers")
+
+	provider := &warp.ModelProvider{
+		Spec: warp.ModelProviderSpec{
+			Type: "openai",
+			Auth: &warp.ProviderAuth{Type: "bearer", File: "./tokens/upstream"},
+		},
+	}
+	provider.Directory = providerDir
+
+	got := toGatewayProvider(provider)
+	want := filepath.Join(providerDir, "tokens", "upstream")
+	if got.Auth.File != want {
+		t.Fatalf("auth file = %q, want %q", got.Auth.File, want)
+	}
+}
+
+func TestToGatewayProviderKeepsAbsolutePathAndEmptyFile(t *testing.T) {
+	absolute := filepath.Join(string(filepath.Separator), "etc", "tasksmith", "token")
+
+	provider := &warp.ModelProvider{
+		Spec: warp.ModelProviderSpec{
+			Type: "openai",
+			Auth: &warp.ProviderAuth{Type: "bearer", File: absolute},
+		},
+	}
+	provider.Directory = "/workspace/app/.agents/providers"
+
+	if got := toGatewayProvider(provider); got.Auth.File != absolute {
+		t.Fatalf("absolute auth file was rewritten: %q", got.Auth.File)
+	}
+
+	provider.Spec.Auth.File = "   "
+	if got := toGatewayProvider(provider); got.Auth.File != "" {
+		t.Fatalf("blank auth file = %q, want empty", got.Auth.File)
 	}
 }

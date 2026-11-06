@@ -1,6 +1,8 @@
 package models
 
 import (
+	"reflect"
+	"slices"
 	"testing"
 
 	"github.com/masterkeysrd/loom/profile"
@@ -76,6 +78,56 @@ func TestMergeListsReplaced(t *testing.T) {
 	}
 }
 
+func TestMergeThinkingDefaultsPreserved(t *testing.T) {
+	manifest := &warp.ProviderModel{ID: "m", Capabilities: &warp.ProviderModelCapabilities{
+		Thinking: []warp.ProviderModelThinkingCapability{
+			{Type: "effort", AllowedEfforts: []string{"low", "high"}, Default: "high"},
+			{Type: "budget", MaxBudgetTokens: 16000, Default: 4096, IsDefault: true},
+			{Type: "toggle", Default: true},
+			{Type: "adaptive"},
+		},
+	}}
+	m := Merge(ID("p/m"), "anthropic", manifest, nil)
+	want := []ThinkingOption{
+		{Type: "effort", Values: []string{"low", "high"}, Default: "high"},
+		{Type: "budget_tokens", Default: "4096", Max: 16000, IsDefault: true},
+		{Type: "toggle", Default: "true"},
+		{Type: "adaptive"},
+	}
+	if !reflect.DeepEqual(m.Capabilities.Thinking, want) {
+		t.Fatalf("thinking capabilities: %+v", m.Capabilities.Thinking)
+	}
+}
+
+func TestMergeThinkingDefaultScalarKinds(t *testing.T) {
+	// yaml.v3 decodes an unquoted default into whichever scalar kind fits, so
+	// none of them may collapse to an empty default.
+	for _, tc := range []struct {
+		name string
+		in   any
+		want string
+	}{
+		{"string", "medium", "medium"},
+		{"bool true", true, "true"},
+		{"bool false", false, "false"},
+		{"int", 4096, "4096"},
+		{"int64", int64(8192), "8192"},
+		{"uint64", uint64(2048), "2048"},
+		{"integral float", float64(4096), "4096"},
+		{"fractional float", 1.5, "1.5"},
+		{"nil", nil, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := Merge(ID("p/m"), "ollama", &warp.ProviderModel{ID: "m", Capabilities: &warp.ProviderModelCapabilities{
+				Thinking: []warp.ProviderModelThinkingCapability{{Type: "budget", Default: tc.in}},
+			}}, nil)
+			if got := m.Capabilities.Thinking[0].Default; got != tc.want {
+				t.Fatalf("default %#v: got %q want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestMergePricingWholeObject(t *testing.T) {
 	// Base pricing with tiers; manifest pricing without. Manifest wins whole.
 	base := &profile.Profile{Pricing: profile.Pricing{
@@ -132,6 +184,46 @@ func TestMergeNamePrecedence(t *testing.T) {
 	}
 	if m := Merge(ID("p/m"), "ollama", nil, nil); m.Name != "m" {
 		t.Fatalf("id name should fill: %q", m.Name)
+	}
+}
+
+func TestMergeNameIgnoresSlugDuplicate(t *testing.T) {
+	// WARP defaults a model's short Name to its ID, so a manifest that repeats
+	// the slug as Name must not shadow Loom's human-readable profile name.
+	base := &profile.Profile{Name: "Claude Sonnet 4.6"}
+	manifest := &warp.ProviderModel{ID: "claude-sonnet-4-6", Name: "claude-sonnet-4-6"}
+	if m := Merge(ID("anthropic/claude-sonnet-4-6"), "anthropic", manifest, base); m.Name != "Claude Sonnet 4.6" {
+		t.Fatalf("slug Name shadowed built-in name: %q", m.Name)
+	}
+	// A deliberately different Name is a real display override and still wins.
+	renamed := &warp.ProviderModel{ID: "claude-sonnet-4-6", Name: "Sonnet (workspace)"}
+	if m := Merge(ID("anthropic/claude-sonnet-4-6"), "anthropic", renamed, base); m.Name != "Sonnet (workspace)" {
+		t.Fatalf("explicit Name should win: %q", m.Name)
+	}
+	// Label still outranks the built-in name.
+	labeled := &warp.ProviderModel{ID: "claude-sonnet-4-6", Label: "Claude Sonnet 4.6 (team)"}
+	m := Merge(ID("anthropic/claude-sonnet-4-6"), "anthropic", labeled, base)
+	if m.Name != "Claude Sonnet 4.6 (team)" {
+		t.Fatalf("label should fill name: %q", m.Name)
+	}
+	if m.ToAPI().Label != "Claude Sonnet 4.6 (team)" {
+		t.Fatalf("api label: %q", m.ToAPI().Label)
+	}
+}
+
+func TestMergeAliases(t *testing.T) {
+	manifest := &warp.ProviderModel{ID: "m", Aliases: []string{"fast", "@also-fast", "fast", " ", "slow"}}
+	m := Merge(ID("p/m"), "ollama", manifest, nil)
+	want := []string{"fast", "also-fast", "slow"}
+	if !slices.Equal(m.Aliases, want) {
+		t.Fatalf("aliases = %v, want %v", m.Aliases, want)
+	}
+	if got := m.ToAPI(); !slices.Equal(got.Aliases, want) {
+		t.Fatalf("api aliases = %v, want %v", got.Aliases, want)
+	}
+	// Without manifest aliases the field stays nil rather than empty.
+	if m := Merge(ID("p/m"), "ollama", &warp.ProviderModel{ID: "m"}, nil); m.Aliases != nil {
+		t.Fatalf("expected nil aliases, got %v", m.Aliases)
 	}
 }
 

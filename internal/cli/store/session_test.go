@@ -114,6 +114,33 @@ func TestResolvedSessionModelDisplay(t *testing.T) {
 	}
 }
 
+func TestModelDisplayThinkingCapabilityFallback(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		thinking []api.ThinkingCapability
+		want     string
+	}{
+		{"none", nil, ThinkingProviderDefault},
+		{"effort default", []api.ThinkingCapability{{Type: "effort", Default: "high"}}, "high"},
+		{"isDefault budget", []api.ThinkingCapability{{Type: "budget_tokens", Default: "4096", IsDefault: true}}, "budget 4096 tokens"},
+		{"isDefault toggle", []api.ThinkingCapability{{Type: "toggle", IsDefault: true}}, "thinking on"},
+		{"isDefault adaptive", []api.ThinkingCapability{{Type: "adaptive", IsDefault: true}}, "adaptive"},
+		// An isDefault strategy with nothing usable to apply means thinking stays
+		// unset, so no other strategy's default is reported in its place.
+		{"isDefault budget without range", []api.ThinkingCapability{
+			{Type: "budget_tokens", Max: 8000, IsDefault: true},
+			{Type: "effort", Default: "low"},
+		}, ThinkingProviderDefault},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, thinking := modelDisplay(&api.Model{ID: "provider/model", Thinking: tc.thinking}, nil)
+			if thinking != tc.want {
+				t.Fatalf("thinking = %q, want %q", thinking, tc.want)
+			}
+		})
+	}
+}
+
 func TestModelDisplayWithoutModel(t *testing.T) {
 	label, thinking := modelDisplay(nil, nil)
 	if label != "default" || thinking != ThinkingProviderDefault {
@@ -955,4 +982,58 @@ func TestInitSessionAnnouncesAfterServersSettle(t *testing.T) {
 		time.Sleep(5 * time.Millisecond)
 	}
 	t.Fatalf("announcement never appeared after the server settled: %+v", transcriptWarnings(t))
+}
+
+func TestActiveModelIDPrefersResolvedModel(t *testing.T) {
+	ResetSession()
+	defer ResetSession()
+
+	if got := GetSession().ActiveModelID(); got != "" {
+		t.Fatalf("unknown active model = %q, want empty", got)
+	}
+
+	session.Set(func(s SessionState) SessionState {
+		s.Config = api.SessionConfig{Model: "@fast"}
+		return s
+	})
+	if got := GetSession().ActiveModelID(); got != "@fast" {
+		t.Fatalf("draft active model = %q, want the draft setting", got)
+	}
+
+	SetSession(&api.Session{Config: api.SessionConfig{Model: "@fast"}})
+	if got := GetSession().ActiveModelID(); got != "@fast" {
+		t.Fatalf("session active model = %q, want the configured identifier", got)
+	}
+
+	SetSession(&api.Session{
+		Config: api.SessionConfig{Model: "@fast"},
+		Model:  &api.Model{ID: "openai/gpt-5.5"},
+	})
+	if got := GetSession().ActiveModelID(); got != "openai/gpt-5.5" {
+		t.Fatalf("session active model = %q, want the resolved model id", got)
+	}
+
+	SetSessionModelInfo(&api.Model{ID: "anthropic/claude"}, nil)
+	if got := GetSession().ActiveModelID(); got != "anthropic/claude" {
+		t.Fatalf("previewed active model = %q, want the previewed model id", got)
+	}
+	if got := GetSession().ModelLabel; got != "anthropic/claude" {
+		t.Fatalf("model label = %q, want the previewed model label", got)
+	}
+
+	SetSessionModelInfo(nil, nil)
+	if got := GetSession().ActiveModelID(); got != "openai/gpt-5.5" {
+		t.Fatalf("active model after an empty preview = %q, want the session model kept", got)
+	}
+}
+
+func TestActiveModelIDFollowsResolvedModelChanges(t *testing.T) {
+	ResetSession()
+	defer ResetSession()
+
+	SetSession(&api.Session{Config: api.SessionConfig{Model: "openai/gpt-5.5"}})
+	SetActiveModelID("anthropic/claude")
+	if got := GetSession().ActiveModelID(); got != "anthropic/claude" {
+		t.Fatalf("active model = %q, want the model the session last switched to", got)
+	}
 }

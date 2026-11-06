@@ -62,8 +62,7 @@ func ApplyThinkingChange(setting *api.ThinkingSetting) {
 	if setting == nil {
 		state := GetSession()
 		if state.Session != nil {
-			label, value := modelDisplay(state.Session.Model, nil)
-			SetModelInfo(label, value)
+			SetSessionModelInfo(state.Session.Model, nil)
 		} else {
 			updateDraftModel(context.Background(), Client(), state.Config)
 		}

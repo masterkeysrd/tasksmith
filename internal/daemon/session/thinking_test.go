@@ -183,6 +183,103 @@ func TestThinkingDiagnostics(t *testing.T) {
 	}
 }
 
+func TestSessionModelDefaultThinkingReachesProvider(t *testing.T) {
+	ctx := context.Background()
+	requests := make(chan map[string]any, 4)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if r.URL.Path != "/api/chat" {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{}`))
+			return
+		}
+		requests <- body
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"model":"test-model","message":{"role":"assistant","content":"done"},"done":true}` + "\n"))
+	}))
+	defer server.Close()
+	db, ws, _, pub, _ := setupTestEnv(t, nil)
+	gw, err := gateway.New(ctx, gateway.Config{Providers: []gateway.ProviderConfig{{
+		Name: "local", Type: "ollama", Endpoint: server.URL,
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = gw.Close() }()
+	perms, err := permissions.New(permissions.Config{Workspace: ws})
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalog := testCatalog(t, ws, warp.ProviderModel{
+		ID: "test-model",
+		Capabilities: &warp.ProviderModelCapabilities{
+			Thinking: []warp.ProviderModelThinkingCapability{
+				{Type: "effort", AllowedEfforts: []string{"low", "medium", "high"}, Default: "medium", IsDefault: true},
+			},
+		},
+	})
+	mgr, err := newTestCoordinator(Config{
+		DB:          db,
+		Workspace:   ws,
+		Gateway:     func() gateway.Gateway { return gw },
+		Publisher:   pub,
+		Logger:      log.Default(),
+		Permissions: perms,
+		Catalog:     catalog,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = mgr.Close() }()
+
+	// The session declares no thinking override, so the model's declared default
+	// must reach the provider instead of leaving thinking unset.
+	sess, _, err := mgr.Create(ctx, api.CreateSessionRequest{Title: "test", Config: api.SessionConfig{Model: "local/test-model"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sess.Send(ctx, api.SendRequest{Content: "hello"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := sess.Wait(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := (<-requests)["think"]; got != "medium" {
+		t.Fatalf("model default thinking request: %#v", got)
+	}
+
+	// The resolved model reports the effective default so the CLI status line can
+	// show it without a second round trip.
+	resolved := ToAPISession(sess)
+	if resolved.Model == nil || resolved.Model.ThinkingDefault == nil ||
+		resolved.Model.ThinkingDefault.Type != "effort" || resolved.Model.ThinkingDefault.Effort != "medium" {
+		t.Fatalf("resolved model thinking default: %+v", resolved.Model)
+	}
+	if len(resolved.Model.Thinking) != 1 || !resolved.Model.Thinking[0].IsDefault || resolved.Model.Thinking[0].Default != "medium" {
+		t.Fatalf("thinking capability default: %+v", resolved.Model.Thinking)
+	}
+
+	// A session override still beats the model default.
+	if _, err := mgr.Update(ctx, sess.ID, api.UpdateSessionRequest{
+		Config: api.SessionConfig{Thinking: &api.ThinkingSetting{Type: "effort", Effort: "low"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := sess.Send(ctx, api.SendRequest{Content: "hello"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := sess.Wait(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := (<-requests)["think"]; got != "low" {
+		t.Fatalf("session override should win: %#v", got)
+	}
+}
+
 func TestSessionThinkingEndToEnd(t *testing.T) {
 	ctx := context.Background()
 	requests := make(chan map[string]any, 4)

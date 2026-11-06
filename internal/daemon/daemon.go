@@ -411,9 +411,11 @@ func (d *Daemon) GetWorkspace(ctx context.Context, rawWS string) (*api.Workspace
 	}
 	if model, ok := owner.Catalog().Resolve(models.RoleCompletion, candidates...); ok {
 		converted := model.ToAPI()
+		var agentThinking *api.ThinkingSetting
 		if ag, ok := cat.GetAgent(defaultAgent); ok {
-			converted.ThinkingDefault = ag.Thinking
+			agentThinking = ag.Thinking
 		}
+		converted.ThinkingDefault = model.EffectiveThinking(nil, agentThinking)
 		resolvedDefault = &converted
 	}
 
@@ -741,9 +743,11 @@ func (d *Daemon) PreviewSession(ctx context.Context, rawWS string, req api.Previ
 	var resolvedModel *api.Model
 	if hasModel {
 		converted := model.ToAPI()
+		var agentThinking *api.ThinkingSetting
 		if ag, ok := rt.SessionRuntime().Workspace().Catalog().GetAgent(cfg.Agent); ok {
-			converted.ThinkingDefault = ag.Thinking
+			agentThinking = ag.Thinking
 		}
+		converted.ThinkingDefault = model.EffectiveThinking(cfg.Thinking, agentThinking)
 		resolvedModel = &converted
 	}
 

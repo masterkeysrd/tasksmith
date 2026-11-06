@@ -98,6 +98,19 @@ Gemini models feature large context windows, ideal for repository-wide refactori
 
 For the complete schema of capability flags and token limits, see the [Providers Overview](../providers.md).
 
+### Custom Endpoints and Proxies
+
+`spec.endpoint` overrides the Google endpoint, which lets an authenticating proxy or self-hosted gateway front Gemini traffic. A trailing API version segment is read as the API version rather than repeated, so both forms below request `…/v1beta/models/…`:
+
+```yaml
+spec:
+  type: google-genai
+  endpoint: https://proxy.example.com/v1beta   # version read from the path
+  # endpoint: https://proxy.example.com        # or keep the SDK default v1beta
+```
+
+When the proxy authenticates requests itself, set `auth.type: none` to send no credential, or point `auth.header` at the header the proxy expects; the SDK's own `x-goog-api-key` header is dropped in both cases.
+
 ---
 
 ## Related Documentation

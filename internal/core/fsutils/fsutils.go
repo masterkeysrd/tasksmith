@@ -3,6 +3,7 @@ package fsutils
 import (
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 )
@@ -45,6 +46,21 @@ func ExpandAndCleanPath(targetPath, baseDir, homeDir string) string {
 		return filepath.Clean(p)
 	}
 	return filepath.Clean(filepath.Join(baseDir, p))
+}
+
+// ResolveConfigPath expands a leading "~" or "~/" in targetPath using the
+// current user's home directory, then resolves the result against baseDir when
+// targetPath is relative and baseDir is non-empty. It is meant for paths authored
+// in configuration files, where both "~" and a path relative to the declaring
+// file are natural to write. Failing to determine the home directory leaves "~"
+// untouched rather than failing the caller.
+func ResolveConfigPath(targetPath, baseDir string) string {
+	p := strings.TrimSpace(targetPath)
+	home, err := os.UserHomeDir()
+	if err != nil {
+		home = ""
+	}
+	return ExpandAndCleanPath(p, baseDir, home)
 }
 
 // IsInsideDir reports whether targetPath is equal to or located within dir.

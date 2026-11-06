@@ -26,12 +26,14 @@ A model identifier commonly has the form `provider/model`. Workspace resolution 
 
 | `spec.auth` field | Type | Meaning |
 | --- | --- | --- |
-| `type` | string | HTTP scheme such as `bearer`, `api-key`, or `basic`; an empty type uses bearer for the gateway's HTTP transport. |
+| `type` | string | HTTP scheme: `env` (default), `bearer`, `api-key`, `basic`, or `none`; matching is case-insensitive. |
 | `header` | string | Optional authentication header name; defaults to `Authorization` in that transport. |
 | `env` | string | Environment variable containing the credential. |
-| `file` | string | Path to a file containing the credential. |
+| `file` | string | Path to a file containing the credential; `~/…` and paths relative to the manifest are expanded. |
 
-When `env` is set, the gateway reads the workspace environment and falls back to the host environment; a missing or empty value produces a credential error. If both `env` and `file` are set, `env` is used and a missing value does not fall back to the file. File credentials must be readable and nonempty. Provider SDKs may also handle the resolved token using their own authentication conventions; shipped presets use `type: env` with an environment variable.
+`env` sends `Authorization: Bearer <credential>`, `api-key` sends the credential un-prefixed, `basic` sends `Basic base64(<credential>)`, and `none` reads and sends no credential. When `header` replaces `Authorization`, the gateway also removes the credential header a provider SDK would add on its own, so only the configured header is sent.
+
+When `env` is set, the gateway reads the workspace environment and falls back to the host environment; a missing or empty value produces a credential error. If both `env` and `file` are set, `env` is used and a missing value does not fall back to the file. File credentials must be readable and nonempty. Rotating a credential value or file changes the gateway fingerprint and rebuilds provider connections. Shipped presets use `type: env` with an environment variable.
 
 TaskSmith builds its workspace environment from the process environment and `.env` files: user configuration first, applicable ancestor files from outer to inner, workspace root, then current directory. Later layers override earlier values. Reference secrets through environment variables or files instead of embedding them in manifests or headers.
 
@@ -41,9 +43,12 @@ TaskSmith builds its workspace environment from the process environment and `.en
 | --- | --- | --- |
 | `id` | string | Model identifier used in `provider/model` references. |
 | `name`, `label` | string | Model name and human-readable label. |
+| `aliases` | string[] | Additional `@`-reference names for the model. |
 | `limits` | object | Token and embedding-vector limits. |
 | `capabilities` | object | Supported roles, features, and configuration boundaries. |
 | `cost` | object | Pricing metadata and conditional tiers. |
+
+`name` is commonly repeated from `id`; because that adds no display information, it does not change the displayed name — use `label` for that. Workspace `spec.modelAliases` targets and model `aliases` are equivalent `@`-reference names, stored without the `@`.
 
 `limits.context` is the context token limit, `limits.output` the output token limit, and `limits.dimensions` the default or maximum embedding vector size. Supply values matching the actual provider; a manifest does not make an unsupported model available.
 
@@ -58,9 +63,9 @@ TaskSmith builds its workspace environment from the process environment and `.en
 | `modalities` | object | `input` and `output` arrays of modality names such as `text` and `image`. |
 | `thinking` | object[] | Supported reasoning strategies. |
 
-A thinking entry has `type` (`toggle`, `effort`, `budget`, or `adaptive`), optional `isDefault`, `allowedEfforts`, `maxBudgetTokens`, and a strategy-specific `default`. Omitted optional feature flags are unspecified metadata, not proof of support.
+A thinking entry has `type` (`toggle`, `effort`, `budget`, or `adaptive`), optional `isDefault`, `allowedEfforts`, `maxBudgetTokens`, and a strategy-specific `default` (a string, an integer token budget, or a boolean). Omitted optional feature flags are unspecified metadata, not proof of support.
 
-The workspace preserves all these schema fields. Gateway conversion forwards completion, decision, embedding, attachment, tools, temperature, dimensions, and selected thinking details. Explicit temperature capability values override the provider profile; if neither source specifies support, it is unknown. The gateway does not forward `structuredOutput`, `modalities`, or the thinking `isDefault` flag to the gateway model configuration. The actual provider and model still determine supported features.
+The workspace preserves all these schema fields. Gateway conversion forwards completion, decision, embedding, attachment, tools, temperature, dimensions, and selected thinking details. Explicit temperature capability values override the provider profile; if neither source specifies support, it is unknown. The `isDefault` flag is not forwarded as a field; instead it selects the thinking setting applied when neither the session nor the active agent overrides thinking. The gateway does not forward `structuredOutput` or `modalities` to the gateway model configuration. The actual provider and model still determine supported features.
 
 ### Cost metadata
 

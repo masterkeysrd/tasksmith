@@ -122,19 +122,25 @@ func completeModels(ctx context.Context, _ autocomplete.Request) ([]autocomplete
 		return nil, err
 	}
 
-	candidates := make([]autocomplete.Candidate, len(models))
-	for i, m := range models {
+	candidates := make([]autocomplete.Candidate, 0, len(models))
+	for _, m := range models {
+		if !m.Capabilities.SupportsCompletion() {
+			continue
+		}
 		label := m.ID
 		if m.Label != "" {
 			label = m.Label
 		} else if m.Name != "" {
 			label = m.Name
 		}
-		candidates[i] = autocomplete.Candidate{
+		candidates = append(candidates, autocomplete.Candidate{
 			Value:       m.ID,
 			Label:       label,
 			Description: m.Provider,
-		}
+			// Aliases answer to the name users actually type ("@fast") while the
+			// canonical model id is what gets inserted.
+			Aliases: modelAliasRefs(m.Aliases),
+		})
 	}
 	return candidates, nil
 }
@@ -218,6 +224,30 @@ func completeEffort(ctx context.Context, _ autocomplete.Request) ([]autocomplete
 		}
 	}
 	return candidates, nil
+}
+
+// completeThinking offers the thinking strategies the active model declares, so
+// an adaptive-only model does not suggest on/off and vice versa.
+func completeThinking(ctx context.Context, _ autocomplete.Request) ([]autocomplete.Candidate, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	model, err := newThinkingModel(ctx)
+	if err != nil {
+		return nil, nil
+	}
+	var candidates []autocomplete.Candidate
+	if _, ok := model.capability("toggle"); ok {
+		candidates = append(candidates,
+			autocomplete.Candidate{Value: "on", Label: "on", Description: "Enable thinking"},
+			autocomplete.Candidate{Value: "off", Label: "off", Description: "Disable thinking"},
+		)
+	}
+	if _, ok := model.capability("adaptive"); ok {
+		candidates = append(candidates, autocomplete.Candidate{Value: "adaptive", Label: "adaptive", Description: "Let the model decide"})
+	}
+	return append(candidates, autocomplete.Candidate{Value: "default", Label: "default"}), nil
 }
 
 func completeThemes(ctx context.Context, _ autocomplete.Request) ([]autocomplete.Candidate, error) {

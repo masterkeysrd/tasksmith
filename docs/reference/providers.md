@@ -46,14 +46,15 @@ spec:
 
   # Authentication configuration
   auth:
-    # Scheme: env (default) | bearer | api-key | basic
+    # Scheme: env (default) | bearer | api-key | basic | none
     type: env
     # Environment variable holding the secret (resolved from .env or os.Getenv)
     env: OPENAI_API_KEY
     # Custom header name (defaults to "Authorization")
     header: Authorization
     # Or read secret from an explicit file path on disk
-    # file: /path/to/token
+    # ("~/…" and paths relative to this manifest are expanded)
+    # file: ./tokens/openai
 
   # Static HTTP headers attached to all requests from this provider
   headers:
@@ -70,6 +71,7 @@ spec:
     - id: gpt-5.5
       name: gpt-5.5
       label: GPT-5.5
+      aliases: [fast]            # Additional @-reference names for this model
       limits:
         context: 1050000     # Input context window in tokens
         output: 128000       # Maximum output tokens
@@ -83,7 +85,7 @@ spec:
         structuredOutput: true # Supports strict JSON Schema enforcement
         temperature: true    # Supports temperature sampling
         thinking:            # Reasoning configuration strategies
-          - type: effort     # "effort" | "budget"
+          - type: effort     # "toggle" | "effort" | "budget" | "adaptive"
             default: medium
             isDefault: true
             allowedEfforts: [low, medium, high]
@@ -102,9 +104,39 @@ Explicit model `capabilities.temperature` overrides the provider profile. An age
 Requests requiring tools, tool history, media, or a response schema fail when the model is known not to support them. Workspace capability declarations override provider profiles. Requests with an unknown structured-output capability are forwarded to Loom; media is rejected if the provider adapter cannot preserve it. Start a new session or choose a compatible model when existing history is incompatible. The send API accepts text blocks in user messages; other, unrecognized, or invalid blocks are rejected.
 
 > [!NOTE]
-> Thinking capabilities come from provider model profiles or workspace model declarations. Declared strategies replace profile strategies for that model. `/effort`, `/budget`, and `/thinking` report when the resolved model does not support the requested strategy. `default` clears the session thinking override and restores the agent or provider default.
+> Thinking capabilities come from provider model profiles or workspace model declarations. Declared strategies replace profile strategies for that model. `/effort`, `/budget`, and `/thinking` report when the resolved model does not support the requested strategy; `/thinking` accepts `on`/`off` for a `toggle` strategy and `adaptive` for an `adaptive` one. `default` clears the session thinking override and restores the agent or model default.
 
-The model endpoints (`GET /v1/models` and `GET /v1/models/{id}`) return effective `capabilities`, limits, and optional `pricing` in USD per million tokens. `GET /v1/workspace` includes the resolved default model as `default_model` when available, and session responses include their resolved `model`. `POST /v1/sessions/preview` accepts proposed session configuration (`agent`, `model`, `thinking`, `mode`) and returns the effective configuration, resolved model, and diagnostics without creating or persisting a session. Agent preferences skip providers that are not configured; an explicit model override takes precedence. Manifest values override built-in profile values; pricing, including tiers, comes entirely from the manifest when `cost` is present. Missing context and output limits fall back to 128000 and 16384 tokens. `thinking[].values` contains objects with a required `value` and optional `description`. Common effort levels receive general hints; model-specific values may have no description. Descriptions are informational and do not change the supported values.
+### Authentication Schemes
+
+`spec.auth.type` selects how the resolved credential is put on the wire. Matching is case-insensitive.
+
+| `type` | Request header | Notes |
+| :--- | :--- | :--- |
+| `env` (default) | `Authorization: Bearer <credential>` | Default when `type` is omitted. |
+| `bearer` | `Authorization: Bearer <credential>` | Same header as `env`. |
+| `api-key` | `Authorization: <credential>` | Sends the credential un-prefixed. |
+| `basic` | `Authorization: Basic base64(<credential>)` | Credential is usually `user:pass`. |
+| `none` | — | No credential is read or sent; use for unauthenticated or proxy-fronted upstreams. |
+
+`auth.header` replaces `Authorization` for any scheme except `none`. When it does, the gateway removes the vendor credential header a provider SDK would otherwise add (`X-Api-Key`, `x-goog-api-key`, or its own `Authorization`), so exactly the configured header is sent.
+
+Credential lookup order is `auth.env` then `auth.file`; declaring both uses `env`. `auth.file` accepts `~/…` and paths relative to the manifest declaring it, so a token can live next to the provider definition. Rotating a credential — a new environment value or new file contents — changes the gateway fingerprint and rebuilds provider connections.
+
+### Thinking Capability Fields
+
+Each entry under a model's `capabilities.thinking` declares one reasoning strategy and optionally the value to use when nothing overrides it.
+
+| Field | Type | Description |
+| :--- | :--- | :--- |
+| `type` | string | Strategy: `toggle`, `effort`, `budget`, or `adaptive`. |
+| `isDefault` | boolean | Marks this strategy as the model's primary default. |
+| `default` | string, integer, or boolean | Value applied when nothing overrides it (for example `high`, `4096`, or `true`). |
+| `allowedEfforts` | array of strings | Permitted effort levels for `type: effort`. |
+| `maxBudgetTokens` | integer | Upper bound for `type: budget`. |
+
+Effective thinking resolves in this order: the session override (`/effort`, `/budget`, `/thinking`), then the active agent's `spec.thinking`, then the model's own default. The model default is the strategy marked `isDefault`, or the first strategy declaring a usable `default`. A `default` that the model cannot honor is ignored, leaving thinking unset.
+
+The model endpoints (`GET /v1/models` and `GET /v1/models/{id}`) return effective `capabilities`, limits, optional `pricing` in USD per million tokens, and the model's `aliases`. `GET /v1/workspace` includes the resolved default model as `default_model` when available, and session responses include their resolved `model`. Both report each strategy's `is_default` flag and a `thinking_default` setting holding the effective default. `POST /v1/sessions/preview` accepts proposed session configuration (`agent`, `model`, `thinking`, `mode`) and returns the effective configuration, resolved model, and diagnostics without creating or persisting a session. Agent preferences skip providers that are not configured; an explicit model override takes precedence. Manifest values override built-in profile values; pricing, including tiers, comes entirely from the manifest when `cost` is present. Missing context and output limits fall back to 128000 and 16384 tokens. `thinking[].values` contains objects with a required `value` and optional `description`. Common effort levels receive general hints; model-specific values may have no description. Descriptions are informational and do not change the supported values.
 
 ```json
 {"type":"effort","values":[{"value":"low","description":"Less reasoning; potentially faster."},{"value":"custom"}]}
@@ -124,13 +156,24 @@ When configuring an agent, tool, or decision manifest, reference models using ei
   model: anthropic/claude-sonnet-5
   ```
   Unambiguously resolves the model from the specified provider manifest.
+- **Short Name (`<provider>/<name>`)**:
+  ```yaml
+  model: anthropic/claude-3-7-sonnet
+  ```
+  Resolves to the model declaring that `name`, and reports the canonical wire `id`.
 - **Bare Model ID (`<model-id>`)**:
   ```yaml
   model: gpt-5.5
   ```
   Searches all registered providers in precedence order for a model matching `id`.
+- **Model Alias (`@<alias>` or `<provider>/@<alias>`)**:
+  Resolves to a model's `aliases` entry or a workspace `modelAliases` target. Aliases are stored without their `@` prefix, so `fast` and `@fast` are equivalent.
 - **Role Identifier (`completion`, `decision`, `embedding`)**:
   Resolves against the workspace or provider defaults configured in `WORKSPACE.md`.
+
+References to a model declared in a provider manifest match case-insensitively, so `Anthropic/Claude-Sonnet-5` resolves to the declared `anthropic/claude-sonnet-5` with its limits, capabilities, and pricing intact. Identifiers for models not listed in any manifest are matched exactly and passed through to the provider.
+
+A model's `name` is its WARP resource name used for referencing, and `label` is the human-readable display value. Provider manifests commonly repeat the `id` as `name`; because that carries no display information, it does not override the display name from the built-in provider profile. Set `label` (or a `name` distinct from `id`) to change what the CLI and `/model` picker show.
 
 ---
 

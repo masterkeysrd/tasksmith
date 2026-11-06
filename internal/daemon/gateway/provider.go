@@ -75,7 +75,7 @@ func initProvider(ctx context.Context, cfg ProviderConfig, env map[string]string
 		return nil, fmt.Errorf("provider %q auth error: %w", cfg.Name, err)
 	}
 
-	transport := buildHTTPTransport(nil, cfg.Auth, token, cfg.Headers)
+	transport := buildHTTPTransport(nil, cfg.Auth, token, cfg.Headers, cfg.Type)
 	httpClient := &http.Client{Transport: transport}
 
 	switch cfg.Type {
@@ -113,8 +113,14 @@ func initProvider(ctx context.Context, cfg ProviderConfig, env map[string]string
 	case "anthropic":
 		var opts []anthropicopt.RequestOption
 		opts = append(opts, anthropicopt.WithHTTPClient(httpClient))
-		if token != "" {
-			opts = append(opts, anthropicopt.WithAPIKey(token))
+		// Anthropic's SDK blocks any request that carries no credential of its own,
+		// so a placeholder stands in when the upstream needs none (auth.type "none").
+		anthropicKey := token
+		if anthropicKey == "" && cfg.Auth.scheme() == AuthTypeNone {
+			anthropicKey = placeholderSDKCredential
+		}
+		if anthropicKey != "" {
+			opts = append(opts, anthropicopt.WithAPIKey(anthropicKey))
 		}
 		if cfg.Endpoint != "" {
 			opts = append(opts, anthropicopt.WithBaseURL(cfg.Endpoint))
@@ -143,6 +149,16 @@ func initProvider(ctx context.Context, cfg ProviderConfig, env map[string]string
 			APIKey:     token,
 			Backend:    genai.BackendGeminiAPI,
 			HTTPClient: httpClient,
+		}
+		// The SDK requires a non-empty key for the Gemini backend even when an
+		// authenticating proxy fronts the endpoint. Declaring auth.type "none"
+		// substitutes a placeholder that the transport strips before the wire.
+		if clientCfg.APIKey == "" && cfg.Auth.scheme() == AuthTypeNone {
+			clientCfg.APIKey = placeholderSDKCredential
+		}
+		if endpoint, apiVersion := splitGenAIEndpoint(cfg.Endpoint); endpoint != "" {
+			clientCfg.HTTPOptions.BaseURL = endpoint
+			clientCfg.HTTPOptions.APIVersion = apiVersion
 		}
 		genaiProv, err := loomgenai.NewProvider(ctx, clientCfg)
 		if err != nil {
@@ -260,6 +276,29 @@ func parseOpenAIConfig(provName string, raw map[string]any) ([]loomopenai.Option
 	}
 
 	return loomOpts, respOpts, nil
+}
+
+// genaiAPIVersions are the Google Generative Language API version segments that
+// may already be part of a configured endpoint.
+var genaiAPIVersions = []string{"v1alpha", "v1beta", "v1"}
+
+// splitGenAIEndpoint separates a trailing API version segment from a configured
+// Google GenAI endpoint. The SDK appends its own version segment to the base URL,
+// so an endpoint authored as "https://proxy.example.com/v1beta" must become base
+// "https://proxy.example.com" plus version "v1beta" instead of requesting
+// "/v1beta/v1beta/models/...". An endpoint without a version segment keeps an
+// empty version, letting the SDK apply its default.
+func splitGenAIEndpoint(endpoint string) (baseURL, apiVersion string) {
+	trimmed := strings.TrimRight(strings.TrimSpace(endpoint), "/")
+	if trimmed == "" {
+		return "", ""
+	}
+	for _, version := range genaiAPIVersions {
+		if before, ok := strings.CutSuffix(trimmed, "/"+version); ok {
+			return before, version
+		}
+	}
+	return trimmed, ""
 }
 
 func getMapValue(m map[string]any, camel, snake string) (any, bool) {

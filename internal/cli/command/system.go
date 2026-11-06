@@ -62,9 +62,10 @@ func (r *Registry) registerSystemCommands() {
 	})
 	r.Register(Command{
 		Name:        "thinking",
-		Usage:       "/thinking [on|off|default]",
-		Description: "Toggle thinking for supported models",
+		Usage:       "/thinking [on|off|adaptive|default]",
+		Description: "Choose the thinking strategy for supported models",
 		Handler:     handleThinking,
+		Complete:    completeThinking,
 	})
 	r.Register(Command{
 		Name:        "theme",
@@ -205,9 +206,48 @@ var loadingHint = trail.FC("LoadingHint", func(text string) trail.Node {
 	return nil
 })
 
+// modelPickerOptions builds the /model rows from the daemon's model listing.
+// Only models that can serve chat completion are offered, since a session cannot
+// converse with an embedding-only model. Aliases are folded into the description
+// so they both inform the user and answer to the picker's search box.
+func modelPickerOptions(models []api.Model, currentID string) []uicomponents.Option {
+	opts := make([]uicomponents.Option, 0, len(models))
+	for _, m := range models {
+		if !m.Capabilities.SupportsCompletion() {
+			continue
+		}
+		label := cmp.Or(m.Label, m.Name, m.ID)
+		description := strings.TrimSpace(m.Provider)
+		if aliases := modelAliasRefs(m.Aliases); len(aliases) > 0 {
+			description = strings.Join([]string{description, strings.Join(aliases, ", ")}, " · ")
+		}
+		opts = append(opts, uicomponents.Option{
+			Value:       m.ID,
+			Label:       label,
+			Description: strings.TrimSpace(description),
+			Current:     m.ID == currentID,
+		})
+	}
+	return opts
+}
+
+// modelAliasRefs renders aliases the way they are typed: with the "@" prefix the
+// resolver accepts.
+func modelAliasRefs(aliases []string) []string {
+	refs := make([]string, 0, len(aliases))
+	for _, alias := range aliases {
+		if alias = strings.TrimSpace(alias); alias != "" {
+			refs = append(refs, "@"+strings.TrimPrefix(alias, "@"))
+		}
+	}
+	return refs
+}
+
 // ModelPicker renders an interactive model picker querying daemon models via wind.
 var ModelPicker = trail.FC("ModelPicker", func(slotID string) trail.Node {
 	c := store.Client()
+
+	currentModel := store.UseSession(store.SessionState.ActiveModelID)
 
 	result := wind.Use("models", promise.WrapWithProps(func(ctx context.Context, _ string) ([]api.Model, error) {
 		if c == nil {
@@ -215,6 +255,8 @@ var ModelPicker = trail.FC("ModelPicker", func(slotID string) trail.Node {
 		}
 		return c.ListModels(ctx)
 	}), wind.Options{Enabled: c != nil})
+
+	opts := modelPickerOptions(result.Data, currentModel)
 
 	kitex.UseEffect(func() {
 		if c == nil {
@@ -225,14 +267,18 @@ var ModelPicker = trail.FC("ModelPicker", func(slotID string) trail.Node {
 		if result.IsLoading {
 			return
 		}
-		if result.IsError {
+		switch {
+		case result.IsError:
 			store.RemoveSlot(slotID)
 			store.AppendError("Error", result.Error.Error())
-		} else if len(result.Data) == 0 {
+		case len(result.Data) == 0:
 			store.RemoveSlot(slotID)
 			store.AppendNotice("No models available.")
+		case len(opts) == 0:
+			store.RemoveSlot(slotID)
+			store.AppendNotice("No chat-capable models available.")
 		}
-	}, []any{c == nil, result.IsLoading, result.IsError, result.Error, len(result.Data)})
+	}, []any{c == nil, result.IsLoading, result.IsError, result.Error, len(result.Data), len(opts)})
 
 	if c == nil {
 		return nil
@@ -240,24 +286,8 @@ var ModelPicker = trail.FC("ModelPicker", func(slotID string) trail.Node {
 	if result.IsLoading {
 		return loadingHint("Loading models...")
 	}
-	if result.IsError || len(result.Data) == 0 {
+	if result.IsError || len(result.Data) == 0 || len(opts) == 0 {
 		return nil
-	}
-
-	currentModel := store.GetSession().Config.Model
-	if store.GetSession().Session != nil {
-		currentModel = store.GetSession().Session.Config.Model
-	}
-
-	opts := make([]uicomponents.Option, len(result.Data))
-	for i, m := range result.Data {
-		label := cmp.Or(m.Label, m.Name, m.ID)
-		opts[i] = uicomponents.Option{
-			Value:       m.ID,
-			Label:       label,
-			Description: m.Provider,
-			Current:     m.ID == currentModel,
-		}
 	}
 
 	picker := components.NewPicker("Select model:", opts, func(opt uicomponents.Option) {
@@ -393,7 +423,11 @@ var AgentPicker = trail.FC("AgentPicker", func(slotID string) trail.Node {
 })
 
 func handleEffort(args []string) error {
-	capability, err := thinkingCapability("effort")
+	model, err := currentThinkingModel()
+	if err != nil {
+		return err
+	}
+	capability, err := model.requireCapability("effort")
 	if err != nil {
 		return err
 	}

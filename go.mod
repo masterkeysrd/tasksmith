@@ -9,9 +9,9 @@ require (
 	github.com/google/jsonschema-go v0.4.3
 	github.com/google/uuid v1.6.0
 	github.com/lrstanley/go-nf v0.0.0-20260418212552-215ab243b591
-	github.com/masterkeysrd/kite v0.0.6-0.20261022053628-4a0d9aff0b59
-	github.com/masterkeysrd/loom v0.0.9-0.20261103051010-4b6d93bfc814
-	github.com/masterkeysrd/warp v0.0.7-0.20261103050903-e94a854abfcd
+	github.com/masterkeysrd/kite v0.0.6
+	github.com/masterkeysrd/loom v0.0.9-0.20261104235925-1b9eaa2633a9
+	github.com/masterkeysrd/warp v0.0.7-0.20261104235639-05b5acbc6fde
 	github.com/modelcontextprotocol/go-sdk v1.8.0
 	github.com/ollama/ollama v0.40.8
 	github.com/openai/openai-go/v3 v3.79.0
@@ -88,7 +88,7 @@ require (
 	github.com/tidwall/sjson v1.2.5 // indirect
 	github.com/wk8/go-ordered-map/v2 v2.1.8 // indirect
 	github.com/xanzy/ssh-agent v0.3.3 // indirect
-	github.com/xo/terminfo v1.3.0 // indirect
+	github.com/xo/terminfo v1.3.1 // indirect
 	github.com/yosida95/uritemplate/v3 v3.0.2 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.72.0 // indirect
@@ -118,7 +118,3 @@ require (
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.12.1 // indirect
 )
-
-replace github.com/masterkeysrd/kite => ../kite
-
-replace github.com/masterkeysrd/loom => ../loom

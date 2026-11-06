@@ -298,6 +298,7 @@ func newConversationAccumulator() *conversationAccumulator {
 			case api.TimelineKindModel:
 				if entry.Model != nil && entry.Model.To != "" {
 					SetModelInfo(entry.Model.To, GetSession().Thinking)
+					SetActiveModelID(entry.Model.To)
 				}
 			case api.TimelineKindAgent:
 				if entry.Agent != nil && entry.Agent.To != "" {

@@ -425,13 +425,11 @@ func (s *Session) ResolvedModel() (models.Model, *api.ThinkingSetting, bool) {
 	if !ok {
 		return models.Model{}, nil, false
 	}
-	thinking := s.Config.Thinking
-	if thinking == nil {
-		if agent, found := s.workspace.Catalog().GetAgent(s.Config.Agent); found {
-			thinking = agent.Thinking
-		}
+	var agentThinking *api.ThinkingSetting
+	if agent, found := s.workspace.Catalog().GetAgent(s.Config.Agent); found {
+		agentThinking = agent.Thinking
 	}
-	return m, thinking, true
+	return m, m.EffectiveThinking(s.Config.Thinking, agentThinking), true
 }
 
 func (s *Session) initSubsystems(ctx context.Context, db *sql.DB) error {
@@ -595,9 +593,17 @@ func (s *Session) Update(ctx context.Context, req api.UpdateSessionRequest) erro
 	cat := s.catalog()
 	if model := models.ID(strings.TrimSpace(req.Config.Model)); model != "" {
 		_, resolved := resolveAgentModel(s.workspace, cat, newConfig.Agent, model)
+		if err := validateCompletionModel(cat, resolved); err != nil {
+			s.Unlock()
+			return err
+		}
 		newConfig.Model = string(resolved)
 	} else if strings.TrimSpace(req.Config.Agent) != "" && s.Config.Model == "" {
 		_, resolved := resolveAgentModel(s.workspace, cat, newConfig.Agent, "")
+		if err := validateCompletionModel(cat, resolved); err != nil {
+			s.Unlock()
+			return err
+		}
 		newConfig.Model = string(resolved)
 	}
 	if (oldConfig.Model != newConfig.Model || oldConfig.Agent != newConfig.Agent) && newConfig.Thinking != nil {

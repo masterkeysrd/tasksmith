@@ -1,6 +1,7 @@
 package models
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/masterkeysrd/loom/profile"
@@ -14,6 +15,8 @@ type stubCatalog struct {
 func (s *stubCatalog) Providers() []*warp.ModelProvider {
 	return s.providers
 }
+
+func (s *stubCatalog) WorkspaceSpec() *warp.Workspace { return nil }
 
 func (s *stubCatalog) ResolveModels(role warp.ModelRole, explicit ...string) []warp.ResolvedModel {
 	if len(explicit) > 0 && explicit[0] != "" {
@@ -302,11 +305,14 @@ func TestCatalogNilBase(t *testing.T) {
 type aliasStub struct {
 	providers []*warp.ModelProvider
 	aliases   map[string]string
+	workspace *warp.Workspace
 }
 
 func (s *aliasStub) Providers() []*warp.ModelProvider {
 	return s.providers
 }
+
+func (s *aliasStub) WorkspaceSpec() *warp.Workspace { return s.workspace }
 
 func (s *aliasStub) ResolveModels(role warp.ModelRole, explicit ...string) []warp.ResolvedModel {
 	if len(explicit) > 0 && explicit[0] != "" {
@@ -377,5 +383,155 @@ func TestCatalogAliasResolution(t *testing.T) {
 	// A bare alias that warp cannot resolve is not accepted as a valid model.
 	if _, ok := c.Get(ID("@missing")); ok {
 		t.Errorf("Get(@missing) should not resolve")
+	}
+}
+
+// TestCatalogCaseInsensitiveResolution verifies a reference that differs from a
+// listed model only in casing resolves to the declared model instead of
+// synthesizing an unlisted one and discarding its limits and pricing.
+func TestCatalogCaseInsensitiveResolution(t *testing.T) {
+	prov := &warp.ModelProvider{
+		BaseResource: warp.BaseResource{
+			APIVersion: warp.APIVersion,
+			Kind:       warp.KindModelProvider,
+			Metadata:   warp.Metadata{Name: "anthropic"},
+		},
+		Spec: warp.ModelProviderSpec{
+			Type: "anthropic",
+			Models: []warp.ProviderModel{
+				{
+					ID:     "claude-sonnet-4-6",
+					Name:   "claude-sonnet-4-6",
+					Limits: warp.ProviderModelLimits{Context: 200000, Output: 64000},
+					Cost:   &warp.ProviderModelCost{Input: 3, Output: 15},
+				},
+			},
+		},
+	}
+	c, err := Build(testCatalogFromProviders(prov), &fakeBase{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, ref := range []string{
+		"anthropic/claude-sonnet-4-6",
+		"Anthropic/Claude-Sonnet-4-6",
+		"ANTHROPIC/CLAUDE-SONNET-4-6",
+	} {
+		m, ok := c.Get(ID(ref))
+		if !ok {
+			t.Errorf("Get(%q) not found", ref)
+			continue
+		}
+		if m.ID != ID("anthropic/claude-sonnet-4-6") {
+			t.Errorf("Get(%q) = %s, want canonical anthropic/claude-sonnet-4-6", ref, m.ID)
+		}
+		if m.Limits.Context != 200000 || m.Pricing == nil {
+			t.Errorf("Get(%q) lost declared metadata: ctx=%d pricing=%v", ref, m.Limits.Context, m.Pricing)
+		}
+	}
+}
+
+// TestCatalogShortNameResolution verifies a model referenced by its WARP short
+// Name resolves to the canonical wire ID with the declared metadata intact.
+func TestCatalogShortNameResolution(t *testing.T) {
+	prov := &warp.ModelProvider{
+		BaseResource: warp.BaseResource{
+			APIVersion: warp.APIVersion,
+			Kind:       warp.KindModelProvider,
+			Metadata:   warp.Metadata{Name: "anthropic"},
+		},
+		Spec: warp.ModelProviderSpec{
+			Type: "anthropic",
+			Models: []warp.ProviderModel{
+				{
+					ID:      "claude-3-7-sonnet-20250219",
+					Name:    "claude-3-7-sonnet",
+					Aliases: []string{"sonnet", "@alias-form"},
+					Limits:  warp.ProviderModelLimits{Context: 200000},
+				},
+			},
+		},
+	}
+	c, err := Build(testCatalogFromProviders(prov), &fakeBase{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, ref := range []string{
+		"anthropic/claude-3-7-sonnet",
+		"anthropic/claude-3-7-sonnet-20250219",
+		"Anthropic/Claude-3-7-Sonnet",
+	} {
+		m, ok := c.Get(ID(ref))
+		if !ok {
+			t.Errorf("Get(%q) not found", ref)
+			continue
+		}
+		if m.ID != ID("anthropic/claude-3-7-sonnet-20250219") {
+			t.Errorf("Get(%q) = %s, want canonical wire ID", ref, m.ID)
+		}
+		if m.Limits.Context != 200000 {
+			t.Errorf("Get(%q) lost declared limits: %+v", ref, m.Limits)
+		}
+	}
+	// Manifest aliases reach both the catalog model and its API projection.
+	m, ok := c.Get(ID("anthropic/claude-3-7-sonnet-20250219"))
+	if !ok {
+		t.Fatal("canonical model unavailable")
+	}
+	want := []string{"sonnet", "alias-form"}
+	if !slices.Equal(m.Aliases, want) {
+		t.Errorf("manifest aliases = %v, want %v", m.Aliases, want)
+	}
+	if got := m.ToAPI(); !slices.Equal(got.Aliases, want) {
+		t.Errorf("api aliases = %v, want %v", got.Aliases, want)
+	}
+	// Mutating a returned copy must not corrupt the catalog.
+	m.Aliases[0] = "clobbered"
+	if again, _ := c.Get(ID("anthropic/claude-3-7-sonnet-20250219")); again.Aliases[0] != "sonnet" {
+		t.Errorf("catalog aliases mutated: %v", again.Aliases)
+	}
+}
+
+// TestCatalogWorkspaceAliases verifies workspace.spec.modelAliases are attached
+// to the models they resolve to, alongside any manifest aliases.
+func TestCatalogWorkspaceAliases(t *testing.T) {
+	prov := &warp.ModelProvider{
+		BaseResource: warp.BaseResource{
+			APIVersion: warp.APIVersion,
+			Kind:       warp.KindModelProvider,
+			Metadata:   warp.Metadata{Name: "openai"},
+		},
+		Spec: warp.ModelProviderSpec{
+			Type:   "openai",
+			Models: []warp.ProviderModel{{ID: "gpt-5.5", Aliases: []string{"fast"}}},
+		},
+	}
+	ws := &warp.Workspace{Def: &warp.WorkspaceDef{
+		BaseResource: warp.BaseResource{APIVersion: warp.APIVersion, Kind: warp.KindWorkspace},
+		Spec: warp.WorkspaceDefSpec{ModelAliases: map[string]string{
+			"quick":    "openai/gpt-5.5",
+			"@named":   "openai/gpt-5.5",
+			"dangling": "missing/model",
+		}},
+	}}
+	cat := &aliasStub{
+		providers: []*warp.ModelProvider{prov},
+		workspace: ws,
+		aliases: map[string]string{
+			"@quick":    "openai/gpt-5.5",
+			"@named":    "openai/gpt-5.5",
+			"@dangling": "missing/model",
+		},
+	}
+	c, err := Build(cat, &fakeBase{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, ok := c.Get(ID("openai/gpt-5.5"))
+	if !ok {
+		t.Fatal("model unavailable")
+	}
+	if want := []string{"fast", "named", "quick"}; !slices.Equal(m.Aliases, want) {
+		t.Errorf("merged aliases = %v, want %v", m.Aliases, want)
 	}
 }

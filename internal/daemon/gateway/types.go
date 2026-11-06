@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"errors"
+	"strings"
 
 	"github.com/masterkeysrd/loom/decision"
 	"github.com/masterkeysrd/loom/embedding"
@@ -25,10 +26,29 @@ var (
 type AuthType string
 
 const (
+	// AuthTypeEnv reads the credential and sends it as "Authorization: Bearer <token>".
+	// It is the default scheme when auth.type is omitted.
+	AuthTypeEnv AuthType = "env"
+	// AuthTypeBearer sends "Authorization: Bearer <token>".
 	AuthTypeBearer AuthType = "bearer"
+	// AuthTypeAPIKey sends the raw token, un-prefixed.
 	AuthTypeAPIKey AuthType = "api-key"
-	AuthTypeBasic  AuthType = "basic"
+	// AuthTypeBasic sends "Basic base64(<token>)", where the token is typically "user:pass".
+	AuthTypeBasic AuthType = "basic"
+	// AuthTypeNone disables credential lookup and authentication headers entirely.
+	AuthTypeNone AuthType = "none"
 )
+
+// normalized returns the canonical, lower-cased scheme. An empty scheme maps to
+// the default "env" scheme; any other unknown value is returned as-is so
+// callers can ignore it rather than guess an intent.
+func (t AuthType) normalized() AuthType {
+	scheme := AuthType(strings.ToLower(strings.TrimSpace(string(t))))
+	if scheme == "" {
+		return AuthTypeEnv
+	}
+	return scheme
+}
 
 // AuthConfig defines authentication parameters for a provider.
 type AuthConfig struct {

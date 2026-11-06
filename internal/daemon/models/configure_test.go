@@ -2,6 +2,7 @@ package models
 
 import (
 	"errors"
+	"reflect"
 	"testing"
 
 	"github.com/masterkeysrd/tasksmith/api"
@@ -79,6 +80,129 @@ func TestConfigureThinking(t *testing.T) {
 	cfg, _, err = m.Configure(Settings{Thinking: &api.ThinkingSetting{Type: "effort", Effort: "low"}, StrictThinking: true})
 	if err != nil || cfg.Thinking == nil || cfg.Thinking.Effort != "low" {
 		t.Fatalf("session override: %+v err=%v", cfg, err)
+	}
+}
+
+func TestDefaultThinking(t *testing.T) {
+	think := func(opts ...ThinkingOption) Model {
+		return Model{ID: ID("provider/model"), ProviderType: "ollama", Capabilities: Capabilities{Thinking: opts}}
+	}
+	for _, tc := range []struct {
+		name  string
+		model Model
+		want  *api.ThinkingSetting
+	}{
+		{"none", think(), nil},
+		{"effort default", think(ThinkingOption{Type: "effort", Values: []string{"low", "high"}, Default: "high"}), &api.ThinkingSetting{Type: "effort", Effort: "high"}},
+		{"isDefault wins over earlier option", think(
+			ThinkingOption{Type: "effort", Default: "low"},
+			ThinkingOption{Type: "budget_tokens", Default: "4096", IsDefault: true},
+		), &api.ThinkingSetting{Type: "budget", Budget: 4096}},
+		{"isDefault effort without default falls back to first value", think(ThinkingOption{Type: "effort", Values: []string{"minimal", "low"}, IsDefault: true}), &api.ThinkingSetting{Type: "effort", Effort: "minimal"}},
+		{"isDefault budget without default falls back to min", think(ThinkingOption{Type: "budget_tokens", Min: 1024, Max: 16000, IsDefault: true}), &api.ThinkingSetting{Type: "budget", Budget: 1024}},
+		{"budget without usable default", think(ThinkingOption{Type: "budget_tokens", Max: 16000, IsDefault: true}), nil},
+		{"toggle true", think(ThinkingOption{Type: "toggle", Default: "true"}), &api.ThinkingSetting{Type: "toggle", Enabled: true}},
+		{"toggle isDefault without default", think(ThinkingOption{Type: "toggle", IsDefault: true}), &api.ThinkingSetting{Type: "toggle", Enabled: true}},
+		{"toggle false stays unset", think(ThinkingOption{Type: "toggle", Default: "false"}), nil},
+		{"adaptive isDefault", think(ThinkingOption{Type: "adaptive", IsDefault: true}), &api.ThinkingSetting{Type: "adaptive"}},
+		{"adaptive without isDefault", think(ThinkingOption{Type: "adaptive"}), nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := tc.model.DefaultThinking()
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("DefaultThinking() = %+v, want %+v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestConfigureAppliesModelDefaultThinking(t *testing.T) {
+	m := Model{
+		ID:           ID("provider/model"),
+		ProviderType: "ollama",
+		Limits:       Limits{Context: 4000, Output: 1000},
+		Capabilities: Capabilities{
+			Temperature: new(true),
+			Thinking: []ThinkingOption{
+				{Type: "effort", Values: []string{"low", "medium", "high"}, Default: "medium", IsDefault: true},
+			},
+		},
+	}
+
+	// No session or agent setting: the model's declared default is applied.
+	cfg, diags, err := m.Configure(Settings{})
+	if err != nil || len(diags) != 0 {
+		t.Fatalf("model default: diags=%+v err=%v", diags, err)
+	}
+	if cfg.Thinking == nil || cfg.Thinking.Effort != "medium" {
+		t.Fatalf("model default thinking: %+v", cfg.Thinking)
+	}
+
+	// A session override wins over the model default.
+	cfg, _, err = m.Configure(Settings{Thinking: &api.ThinkingSetting{Type: "effort", Effort: "low"}, StrictThinking: true})
+	if err != nil || cfg.Thinking == nil || cfg.Thinking.Effort != "low" {
+		t.Fatalf("session override over model default: %+v err=%v", cfg, err)
+	}
+
+	// A default the model cannot honor is ignored silently instead of failing
+	// the turn or warning about an override the user never set.
+	broken := m
+	broken.Capabilities.Thinking = []ThinkingOption{{Type: "effort", Values: []string{"low"}, Default: "unheard-of", IsDefault: true}}
+	cfg, diags, err = broken.Configure(Settings{})
+	if err != nil || len(diags) != 0 || cfg.Thinking != nil {
+		t.Fatalf("unusable model default: cfg=%+v diags=%+v err=%v", cfg, diags, err)
+	}
+
+	// Temperature still conflicts with the model default on Anthropic.
+	anth := Model{
+		ID:           ID("anthropic/claude"),
+		ProviderType: "anthropic",
+		Limits:       Limits{Context: 4000, Output: 1000},
+		Capabilities: Capabilities{
+			Temperature: new(true),
+			Thinking:    []ThinkingOption{{Type: "budget_tokens", Min: 1024, Default: "2048", IsDefault: true}},
+		},
+	}
+	v := float32(0.5)
+	cfg, diags, err = anth.Configure(Settings{Temperature: &v})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Thinking == nil || cfg.Temperature != nil || len(diags) != 1 || diags[0].Code != "temperature_thinking_conflict" {
+		t.Fatalf("model default vs temperature: %+v diags=%+v", cfg, diags)
+	}
+}
+
+func TestEffectiveThinkingPrecedence(t *testing.T) {
+	m := Model{
+		ID:           ID("provider/model"),
+		ProviderType: "ollama",
+		Capabilities: Capabilities{
+			Thinking: []ThinkingOption{{Type: "effort", Values: []string{"low", "high"}, Default: "high", IsDefault: true}},
+		},
+	}
+	modelDefault := &api.ThinkingSetting{Type: "effort", Effort: "high"}
+	agent := &api.ThinkingSetting{Type: "effort", Effort: "low"}
+	session := &api.ThinkingSetting{Type: "effort", Effort: "high"}
+
+	if got := m.EffectiveThinking(nil, nil); !reflect.DeepEqual(got, modelDefault) {
+		t.Fatalf("model default: %+v", got)
+	}
+	if got := m.EffectiveThinking(nil, agent); !reflect.DeepEqual(got, agent) {
+		t.Fatalf("agent default: %+v", got)
+	}
+	if got := m.EffectiveThinking(session, agent); !reflect.DeepEqual(got, session) {
+		t.Fatalf("session override: %+v", got)
+	}
+	// A "default" setting means "no override", so the model default applies.
+	if got := m.EffectiveThinking(&api.ThinkingSetting{Type: "default"}, agent); !reflect.DeepEqual(got, agent) {
+		t.Fatalf("default setting: %+v", got)
+	}
+	// An agent default the model cannot honor leaves thinking unset, matching
+	// what Configure sends to the provider.
+	unsupported := &api.ThinkingSetting{Type: "budget", Budget: 512}
+	if got := m.EffectiveThinking(nil, unsupported); got != nil {
+		t.Fatalf("unsupported agent default: %+v", got)
 	}
 }
 

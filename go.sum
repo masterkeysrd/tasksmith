@@ -166,8 +166,12 @@ github.com/lucasb-eyer/go-colorful v1.4.1 h1:1EO+WB73+EH8EVbzlrG3KLAfEypQWVHIBql
 github.com/lucasb-eyer/go-colorful v1.4.1/go.mod h1:R4dSotOR9KMtayYi1e77YzuveK+i7ruzyGqttikkLy0=
 github.com/mailru/easyjson v0.9.2 h1:dX8U45hQsZpxd80nLvDGihsQ/OxlvTkVUXH2r/8cb2M=
 github.com/mailru/easyjson v0.9.2/go.mod h1:1+xMtQp2MRNVL/V1bOzuP3aP8VNwRW55fQUto+XFtTU=
-github.com/masterkeysrd/warp v0.0.7-0.20261103050903-e94a854abfcd h1:pa8gTS6Igy3iCQH2At+yNZj1/+b8i3knUTgs59pLsqs=
-github.com/masterkeysrd/warp v0.0.7-0.20261103050903-e94a854abfcd/go.mod h1:+gAWzS320jlO3Zr2y4jiR349JDvnCme77t/+ePg5mY0=
+github.com/masterkeysrd/kite v0.0.6 h1:1J4O+ju8tfSF0SZ5ZC5O4Pm/4be9r5aZ3PLPULBFmP4=
+github.com/masterkeysrd/kite v0.0.6/go.mod h1:GQbBqo4ofIefIcd7xpmcq3wAPNioL7dGVkG3Z7kopGg=
+github.com/masterkeysrd/loom v0.0.9-0.20261104235925-1b9eaa2633a9 h1:U67xYGOHVxmxbl27MaJQgQLsg6R+yrO3CQuF8lpYTX4=
+github.com/masterkeysrd/loom v0.0.9-0.20261104235925-1b9eaa2633a9/go.mod h1:iyosTFy9p/G/fyxmnWD1be4UL0Inuj1cycbOha0JlXw=
+github.com/masterkeysrd/warp v0.0.7-0.20261104235639-05b5acbc6fde h1:eAu6rW0Rt0NThZra5CHlq/4jF+62StFYfSH30/wDN6I=
+github.com/masterkeysrd/warp v0.0.7-0.20261104235639-05b5acbc6fde/go.mod h1:+gAWzS320jlO3Zr2y4jiR349JDvnCme77t/+ePg5mY0=
 github.com/mattn/go-isatty v0.0.24 h1:tGZZoVgT/KiqK1c8ocVLeDS8BSWMRd47J3Lbz7vsReI=
 github.com/mattn/go-isatty v0.0.24/go.mod h1:nMCL3Zebbrt45jsMDgnfIwz6ydEQApk5oEI3HqDio6A=
 github.com/mattn/go-runewidth v0.0.31 h1:1oCV4ReTlosDBc6rYRw5cL8S/4y8iv5oRl4SJ5IBgwo=
@@ -235,8 +239,8 @@ github.com/wk8/go-ordered-map/v2 v2.1.8 h1:5h/BUHu93oj4gIdvHHHGsScSTMijfx5PeYkE/
 github.com/wk8/go-ordered-map/v2 v2.1.8/go.mod h1:5nJHM5DyteebpVlHnWMV0rPz6Zp7+xBAnxjb1X5vnTw=
 github.com/xanzy/ssh-agent v0.3.3 h1:+/15pJfg/RsTxqYcX6fHqOXZwwMP+2VyYWJeWM2qQFM=
 github.com/xanzy/ssh-agent v0.3.3/go.mod h1:6dzNDKs0J9rVPHPhaGCukekBHKqfl+L3KghI1Bc68Uw=
-github.com/xo/terminfo v1.3.0 h1:KstyePbNW6UaLq9y12+544VK4aTP3Eku/sym3a9+UgQ=
-github.com/xo/terminfo v1.3.0/go.mod h1:lGzkSo8Fe7IRh/w+Gqz7n5mDog4FVXCj3gy/DYTBqio=
+github.com/xo/terminfo v1.3.1 h1:4ZwPCuu4PEFw0PkNp3Hv/x3gqvgLCzYhurszsj101cM=
+github.com/xo/terminfo v1.3.1/go.mod h1:lGzkSo8Fe7IRh/w+Gqz7n5mDog4FVXCj3gy/DYTBqio=
 github.com/yosida95/uritemplate/v3 v3.0.2 h1:Ed3Oyj9yrmi9087+NczuL5BwkIc4wvTb5zIM+UJPGz4=
 github.com/yosida95/uritemplate/v3 v3.0.2/go.mod h1:ILOh0sOhIJR3+L/8afwt/kE++YT040gmv5BQTMR2HP4=
 github.com/yuin/goldmark v1.8.6 h1:d0VcaP1sx9GkFVkoW+KtggpGi2KZ965i14b0+bDQST4=

@@ -48,17 +48,17 @@ The following flags apply to `tasksmith`, `tasksmith repl`, and `tasksmith daemo
 
 ## 2. Interactive Slash Commands
 
-Inside the TaskSmith interactive REPL, slash commands provide instant control over session state, permission modes, thinking, and resource inspection. The session status shows the model resolved by the daemon. When no thinking default is known, the UI shows `provider default` and leaves the choice to the provider:
+Inside the TaskSmith interactive REPL, slash commands provide instant control over session state, permission modes, thinking, and resource inspection. The session status shows the model resolved by the daemon and the thinking that model will apply when nothing overrides it. When no thinking default is known, the UI shows `provider default` and leaves the choice to the provider:
 
 | Slash Command | Aliases | Arguments | Description |
 | :--- | :--- | :--- | :--- |
 | **`/help`** | `/h`, `/?` | *(none)* | Opens the interactive slash command browser and help viewer. |
 | **`/mode`** | | `[mode]` (`default`, `accept_edits`, `plan`, `ask`, `auto`) | Inspects current permission mode or switches to the specified mode. |
-| **`/model`** | | `[model_id]` | Displays active model, switches to `model_id`, or opens the interactive model picker if no argument is provided. |
+| **`/model`** | | `[model_id]` | Switches to `model_id`, or opens the interactive model picker if no argument is provided. See [Model Picker](#model-picker-model). |
 | **`/agent`** | | `[agent_name]` | Displays active agent, switches to `agent_name`, or opens the interactive agent picker if no argument is provided. |
 | **`/effort`** | | `[level\|default]` | Set an allowed model-specific effort or open the picker, which shows available descriptions. |
 | **`/budget`** | | `[tokens\|default]` | Show or set a supported thinking token budget. |
-| **`/thinking`** | | `[on\|off\|default]` | Show or set a supported thinking toggle. |
+| **`/thinking`** | | `[on\|off\|adaptive\|default]` | Show or set a supported thinking toggle or adaptive strategy. |
 | **`/theme`** | | `[theme_name]` | Changes terminal UI color theme, or opens the interactive theme picker if no argument is provided. |
 | **`/clear`** | | *(none)* | Creates and transitions to a fresh draft session. |
 | **`/exit`** | `/quit`, `/q` | *(none)* | Gracefully terminates and exits the interactive REPL. |
@@ -78,6 +78,36 @@ Inside the TaskSmith interactive REPL, slash commands provide instant control ov
 | **`/mcp`** | `/mcps` | `[auth <name>\|restart <name>]` | With no subcommand, opens the interactive MCP browser to inspect servers, run prompts, attach resources, authorize, and restart. `auth` and `restart` act on one named server after a confirmation. See [MCP Browser](#mcp-browser-mcp). |
 | **`/workspace`** | `/ws` | `[reload]` | Reloads the active workspace resources from disk. With no subcommand, defaults to `reload`. |
 | **`/daemon`** | | `[status\|restart\|start\|stop]` | Inspects or manages the background Brain Daemon. With no subcommand, opens the interactive daemon browser. |
+
+### Model Picker (`/model`)
+
+The picker lists the models the daemon reports as able to serve chat completion. Models that declare `completion: false` — embeddings, moderation, and similar — are left out, and the daemon rejects them for a session with `model "<id>" does not support chat completion`, so a session can never end up on a model it cannot converse with. A model that reports no completion capability at all is treated as chat-capable.
+
+Each row shows:
+
+| Column | Content |
+| :--- | :--- |
+| Label | Model label, falling back to its name and then its id. |
+| Description | Provider, then the model's workspace aliases rendered as `@name`. |
+| Current | The row of the model the session is actually running is suffixed `current`. |
+
+- **Active model before a choice**: a fresh draft session has no model of its own, yet it already resolves to the workspace or agent default. That resolved model is marked `current`, and a session configured with an alias is marked on the model the alias resolves to.
+- **Search**: the filter box matches the label, description, and id, so typing an alias name narrows the list to the model it names. `/model` argument autocomplete matches aliases the same way and inserts the canonical model id.
+- **Nothing chat-capable**: the picker closes and reports `No chat-capable models available.`
+
+### Thinking Controls (`/effort`, `/budget`, `/thinking`)
+
+Each command is available only when the resolved model declares the strategy it needs, so the same command can be usable on one model and refuse on another.
+
+| Command | Requires |
+| :--- | :--- |
+| `/effort [level\|default]` | An `effort` strategy. |
+| `/budget [tokens\|default]` | A `budget` strategy. |
+| `/thinking [on\|off\|adaptive\|default]` | A `toggle` strategy for `on`/`off`, or an `adaptive` strategy for `adaptive`. The command needs at least one of the two. |
+
+- **State without an argument** reports the session override if there is one, then the model's own default as `default (<strategy>)`, then `provider default` when nothing declares a default. `/budget` adds the range it accepts, e.g. `Thinking budget: default (500 tokens) — range 100–1000`.
+- **Suggestions** list only the arguments the active model accepts, so an adaptive-only model never offers `on`/`off`.
+- `default` clears the session override and returns to the agent or model default. Setting any control replaces the previous thinking override. See [Providers](providers.md#thinking-capability-fields) for how strategies and defaults are declared.
 
 ### Workspace Commands, Skills & Plugin Extensions
 

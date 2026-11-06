@@ -1,8 +1,8 @@
 package models
 
 import (
-	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/masterkeysrd/loom/profile"
@@ -101,6 +101,9 @@ func mergeModel(layers ...Model) Model {
 		if out.Pricing == nil {
 			out.Pricing = l.Pricing
 		}
+		if out.Aliases == nil {
+			out.Aliases = l.Aliases
+		}
 
 		out.Source.BuiltIn = out.Source.BuiltIn || l.Source.BuiltIn
 		out.Source.Manifest = out.Source.Manifest || l.Source.Manifest
@@ -117,11 +120,19 @@ func fromManifest(manifest *warp.ProviderModel, id ID, providerType string) Mode
 		return m
 	}
 	m.Source.Manifest = true
-	m.Name = manifest.Name
-	m.Label = manifest.Label
-	if m.Name == "" {
+	// Manifests routinely repeat the slug as `name`, which adds no display
+	// information. Leaving it unset lets the built-in profile's human-readable
+	// name ("Claude Sonnet 4.6") win the merge, with Merge's identifier
+	// fallback restoring the slug when no profile supplies a name. A `name`
+	// that differs from the id is a deliberate display override.
+	switch {
+	case manifest.Name == "":
 		m.Name = manifest.Label
+	case manifest.Name != manifest.ID:
+		m.Name = manifest.Name
 	}
+	m.Label = manifest.Label
+	m.Aliases = dedupeAliases(manifest.Aliases)
 	m.Limits = Limits{
 		Context:    manifest.Limits.Context,
 		Output:     manifest.Limits.Output,
@@ -179,18 +190,66 @@ func fromThinkingCapabilities(in []warp.ProviderModelThinkingCapability) []Think
 		if kind == "budget" {
 			kind = "budget_tokens"
 		}
-		def := ""
-		if t.Default != nil {
-			def = fmt.Sprint(t.Default)
-		}
 		out[i] = ThinkingOption{
-			Type:    kind,
-			Values:  slices.Clone(t.AllowedEfforts),
-			Default: def,
-			Max:     t.MaxBudgetTokens,
+			Type:      kind,
+			Values:    slices.Clone(t.AllowedEfforts),
+			Default:   thinkingDefaultString(t.Default),
+			Max:       t.MaxBudgetTokens,
+			IsDefault: t.IsDefault,
 		}
 	}
 	return out
+}
+
+// thinkingDefaultString renders a manifest thinking default, which YAML decodes
+// into any of the scalar kinds below. A budget default such as `default: 4096`
+// arrives as an integer, so it must not be dropped the way a bare type
+// assertion on a string would drop it.
+func thinkingDefaultString(value any) string {
+	switch v := value.(type) {
+	case string:
+		return v
+	case bool:
+		return strconv.FormatBool(v)
+	case int:
+		return strconv.Itoa(v)
+	case int64:
+		return strconv.FormatInt(v, 10)
+	case uint64:
+		return strconv.FormatUint(v, 10)
+	case float64:
+		if v == float64(int64(v)) {
+			return strconv.FormatInt(int64(v), 10)
+		}
+		return strconv.FormatFloat(v, 'f', -1, 64)
+	}
+	return ""
+}
+
+// dedupeAliases returns the manifest aliases normalized to bare names (WARP
+// matches "@fast" and "fast" alike), with duplicates and blanks removed and
+// declaration order preserved.
+func dedupeAliases(in []string) []string {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(in))
+	for _, a := range in {
+		out = appendUnique(out, strings.TrimPrefix(strings.TrimSpace(a), "@"))
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// appendUnique appends value to out unless an equal entry is already present,
+// preserving the order in which names were first seen.
+func appendUnique(out []string, value string) []string {
+	if value == "" || slices.Contains(out, value) {
+		return out
+	}
+	return append(out, value)
 }
 
 func firstNonEmptyID(a, b ID) ID {

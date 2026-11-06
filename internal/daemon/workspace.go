@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 
 	"github.com/masterkeysrd/tasksmith/internal/core/fsutils"
@@ -490,7 +491,7 @@ func toGatewayProvider(p *warp.ModelProvider) gateway.ProviderConfig {
 			Type:   gateway.AuthType(p.Spec.Auth.Type),
 			Header: p.Spec.Auth.Header,
 			Env:    p.Spec.Auth.Env,
-			File:   p.Spec.Auth.File,
+			File:   resolveCredentialFilePath(p.Spec.Auth.File, p.GetDir()),
 		}
 	}
 
@@ -502,6 +503,17 @@ func toGatewayProvider(p *warp.ModelProvider) gateway.ProviderConfig {
 		Headers:  p.Spec.Headers,
 		Config:   p.Spec.Config,
 	}
+}
+
+// resolveCredentialFilePath turns a manifest auth.file value into an absolute
+// path: "~" expands to the home directory, and a relative path is resolved next
+// to the directory the provider manifest lives in, so "file: ./token" reads the
+// token shipped alongside that manifest.
+func resolveCredentialFilePath(file, providerDir string) string {
+	if strings.TrimSpace(file) == "" {
+		return ""
+	}
+	return fsutils.ResolveConfigPath(file, providerDir)
 }
 
 func recorderOf(s metrics.Service) metrics.Recorder {

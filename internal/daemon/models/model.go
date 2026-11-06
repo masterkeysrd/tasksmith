@@ -29,8 +29,18 @@ type Model struct {
 	Modalities Modalities
 	// Pricing is the per-million-token pricing. nil means unpriced.
 	Pricing *api.ModelPricing
+	// Aliases lists the alternate names this model answers to, from the
+	// manifest's `aliases` and the workspace's `spec.modelAliases`.
+	Aliases []string
 	// Source records where the model's data came from.
 	Source Source
+}
+
+// SupportsCompletion reports whether the model can serve chat completion. An
+// unreported capability counts as supported, matching how provider profiles
+// default it, so only a model that explicitly opts out is excluded.
+func (m Model) SupportsCompletion() bool {
+	return m.Capabilities.SupportsCompletion()
 }
 
 // Clone returns a deep copy of m.
@@ -53,6 +63,7 @@ func (m Model) Clone() Model {
 	}
 	m.Modalities.Input = slices.Clone(m.Modalities.Input)
 	m.Modalities.Output = slices.Clone(m.Modalities.Output)
+	m.Aliases = slices.Clone(m.Aliases)
 	if m.Pricing != nil {
 		pricing := *m.Pricing
 		pricing.Tiers = slices.Clone(pricing.Tiers)
@@ -83,15 +94,18 @@ func (m Model) ToAPI() api.Model {
 			OutputModalities: slices.Clone(m.Modalities.Output),
 		},
 	}
+	out.Aliases = slices.Clone(m.Aliases)
 	for _, o := range m.Capabilities.Thinking {
 		out.Thinking = append(out.Thinking, api.ThinkingCapability{
-			Type:    o.Type,
-			Values:  ToAPIThinkingValues(o.Type, o.Values),
-			Default: o.Default,
-			Min:     o.Min,
-			Max:     o.Max,
+			Type:      o.Type,
+			Values:    ToAPIThinkingValues(o.Type, o.Values),
+			Default:   o.Default,
+			Min:       o.Min,
+			Max:       o.Max,
+			IsDefault: o.IsDefault,
 		})
 	}
+	out.ThinkingDefault = m.DefaultThinking()
 	if p := m.Pricing; p != nil {
 		pricing := *p
 		pricing.Tiers = slices.Clone(p.Tiers)
@@ -202,6 +216,8 @@ type ThinkingOption struct {
 	Min int
 	// Max is the maximum budget (for budget_tokens).
 	Max int
+	// IsDefault marks this option as the model's primary thinking strategy.
+	IsDefault bool
 }
 
 // Modalities lists the supported input and output data modalities of a model.

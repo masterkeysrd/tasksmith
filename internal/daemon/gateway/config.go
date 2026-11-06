@@ -34,15 +34,24 @@ func (c *Config) Fingerprint() string {
 		return "nil"
 	}
 
-	// 1. Collect only the env keys referenced by any provider's Auth.Env
+	// 1. Collect only the env keys referenced by any provider's Auth.Env, and a
+	// content digest for each provider reading its credential from a file, so
+	// rotating an on-disk token rebuilds the gateway instead of reusing a stale one.
 	relevantEnv := make(map[string]string)
+	relevantFiles := make(map[string]string)
 	for _, p := range c.Providers {
-		if p.Auth != nil && p.Auth.Env != "" {
+		if p.Auth == nil {
+			continue
+		}
+		if p.Auth.Env != "" {
 			if val := strings.TrimSpace(c.Env[p.Auth.Env]); val != "" {
 				relevantEnv[p.Auth.Env] = c.Env[p.Auth.Env]
 			} else {
 				relevantEnv[p.Auth.Env] = os.Getenv(p.Auth.Env)
 			}
+		}
+		if p.Auth.File != "" {
+			relevantFiles[p.Name] = credentialDigest(p.Auth.File)
 		}
 	}
 
@@ -57,11 +66,13 @@ func (c *Config) Fingerprint() string {
 
 	// 3. Build canonical structure for JSON marshaling
 	canonical := struct {
-		Providers   []ProviderConfig  `json:"providers"`
-		RelevantEnv map[string]string `json:"relevant_env,omitempty"`
+		Providers     []ProviderConfig  `json:"providers"`
+		RelevantEnv   map[string]string `json:"relevant_env,omitempty"`
+		RelevantFiles map[string]string `json:"relevant_files,omitempty"`
 	}{
-		Providers:   normalizedProviders,
-		RelevantEnv: relevantEnv,
+		Providers:     normalizedProviders,
+		RelevantEnv:   relevantEnv,
+		RelevantFiles: relevantFiles,
 	}
 
 	data, err := json.Marshal(canonical)
@@ -95,6 +106,15 @@ func (c *Config) Validate() error {
 		pType := strings.TrimSpace(p.Type)
 		if pType == "" {
 			return fmt.Errorf("%w: provider %q is missing a type", ErrInvalidConfig, name)
+		}
+
+		if p.Auth != nil {
+			switch p.Auth.scheme() {
+			case AuthTypeEnv, AuthTypeBearer, AuthTypeAPIKey, AuthTypeBasic, AuthTypeNone:
+			default:
+				return fmt.Errorf("%w: provider %q has unknown auth type %q (expected env, bearer, api-key, basic, or none)",
+					ErrInvalidConfig, name, p.Auth.Type)
+			}
 		}
 	}
 

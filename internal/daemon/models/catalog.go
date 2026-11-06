@@ -1,6 +1,7 @@
 package models
 
 import (
+	"slices"
 	"strings"
 
 	"github.com/masterkeysrd/loom/profile"
@@ -27,6 +28,7 @@ func (r Role) warp() warp.ModelRole { return warp.ModelRole(r) }
 type WorkspaceCatalog interface {
 	Providers() []*warp.ModelProvider
 	ResolveModels(role warp.ModelRole, explicit ...string) []warp.ResolvedModel
+	WorkspaceSpec() *warp.Workspace
 }
 
 // Catalog holds the built models of one workspace. It is safe for concurrent use.
@@ -37,6 +39,10 @@ type Catalog struct {
 
 	listed *memdb.DB[Model]
 	built  *memdb.DB[Model]
+	// fold maps a lowercased qualified ID or WARP short name to the canonical
+	// ID of a listed model, so references differing only in casing resolve to
+	// the declared model instead of synthesizing an unlisted one.
+	fold map[string]ID
 }
 
 // Build constructs a Catalog using cat for manifest models and profiles for fallback definitions.
@@ -47,6 +53,7 @@ func Build(cat WorkspaceCatalog, profiles profile.Provider) (*Catalog, error) {
 		providers: make(map[string]string),
 		listed:    memdb.New(func(m Model) string { return string(m.ID) }),
 		built:     memdb.New(func(m Model) string { return string(m.ID) }),
+		fold:      make(map[string]ID),
 	}
 	if cat != nil {
 		var listedModels []Model
@@ -62,12 +69,61 @@ func Build(cat WorkspaceCatalog, profiles profile.Provider) (*Catalog, error) {
 				}
 				merged := Merge(id, p.Spec.Type, &m, base)
 				listedModels = append(listedModels, merged)
+				c.fold[strings.ToLower(string(id))] = id
 			}
 		}
+		// Short names are indexed after canonical IDs so an ID always wins a
+		// collision with another model's short name.
+		for _, p := range cat.Providers() {
+			for _, m := range p.Spec.Models {
+				if m.Name == "" || m.Name == m.ID {
+					continue
+				}
+				key := strings.ToLower(Normalize(p.Metadata.Name, m.Name).String())
+				if _, exists := c.fold[key]; !exists {
+					c.fold[key] = Normalize(p.Metadata.Name, m.ID)
+				}
+			}
+		}
+		c.applyWorkspaceAliases(listedModels)
 		c.listed.Replace(listedModels...)
 		c.built.Replace(listedModels...)
 	}
 	return c, nil
+}
+
+// applyWorkspaceAliases attaches workspace.spec.modelAliases to the models they
+// resolve to. Resolution is delegated to the workspace catalog so chained
+// aliases ("@fast") and bare targets follow the same rules as everywhere else.
+func (c *Catalog) applyWorkspaceAliases(models []Model) {
+	ws := c.cat.WorkspaceSpec()
+	if ws == nil || ws.Def == nil || len(ws.Def.Spec.ModelAliases) == 0 {
+		return
+	}
+	byID := make(map[ID]int, len(models))
+	for i, m := range models {
+		byID[m.ID] = i
+	}
+	names := make([]string, 0, len(ws.Def.Spec.ModelAliases))
+	for name := range ws.Def.Spec.ModelAliases {
+		names = append(names, name)
+	}
+	slices.Sort(names)
+	for _, name := range names {
+		alias := strings.TrimPrefix(name, "@")
+		if alias == "" {
+			continue
+		}
+		id, ok := c.resolveAliasID(ID("@" + alias))
+		if !ok {
+			continue
+		}
+		i, ok := byID[id]
+		if !ok {
+			continue
+		}
+		models[i].Aliases = appendUnique(models[i].Aliases, alias)
+	}
 }
 
 // Get returns the model for id, building it on first use when id names a
@@ -76,6 +132,10 @@ func Build(cat WorkspaceCatalog, profiles profile.Provider) (*Catalog, error) {
 // Aliases and shorthands ("@fast", "@default", "provider/@alias", and
 // workspace.spec.modelAliases) are canonicalized by delegating to the workspace
 // catalog's ResolveModels rather than re-implementing alias rules here.
+//
+// A reference naming a listed model — by canonical id, WARP short name, or any
+// casing of either — always resolves to that declared model, so its limits,
+// capabilities, and pricing are never discarded.
 func (c *Catalog) Get(id ID) (Model, bool) {
 	// Canonicalize aliases/shorthands through warp before the validity check and
 	// the built lookup so bare aliases (which are not valid IDs) still resolve.
@@ -90,6 +150,14 @@ func (c *Catalog) Get(id ID) (Model, bool) {
 	}
 	if m, ok := c.built.Snapshot().Get(string(id)); ok {
 		return m.Clone(), true
+	}
+	// A reference that differs from a listed model only in casing would
+	// otherwise synthesize an unlisted model and discard every declared limit,
+	// capability, and price.
+	if canonical, ok := c.fold[strings.ToLower(string(id))]; ok {
+		if m, ok := c.built.Snapshot().Get(string(canonical)); ok {
+			return m.Clone(), true
+		}
 	}
 	var base *profile.Profile
 	if c.profiles != nil {
@@ -132,23 +200,25 @@ func (c *Catalog) shouldResolveAlias(id ID) bool {
 func (c *Catalog) resolveAliasID(id ID) (ID, bool) {
 	s := string(id)
 	isAlias := strings.HasPrefix(s, "@") || strings.Contains(s, "/@")
-	for _, candidate := range c.cat.ResolveModels(warp.ModelRoleCompletion, s) {
-		if candidate.QualifiedID == "" {
-			continue
-		}
-		if !isAlias && candidate.Model == nil {
-			continue
-		}
-		qid := ID(candidate.QualifiedID)
-		if !qid.Valid() {
-			continue
-		}
-		if len(c.providers) > 0 {
-			if _, ok := c.providers[qid.Provider()]; !ok {
+	for _, role := range []warp.ModelRole{warp.ModelRoleCompletion, warp.ModelRoleDecision, warp.ModelRoleEmbedding} {
+		for _, candidate := range c.cat.ResolveModels(role, s) {
+			if candidate.QualifiedID == "" {
 				continue
 			}
+			if !isAlias && candidate.Model == nil {
+				continue
+			}
+			qid := ID(candidate.QualifiedID)
+			if !qid.Valid() {
+				continue
+			}
+			if len(c.providers) > 0 {
+				if _, ok := c.providers[qid.Provider()]; !ok {
+					continue
+				}
+			}
+			return qid, true
 		}
-		return qid, true
 	}
 	return ID(""), false
 }

@@ -193,11 +193,12 @@ type ThinkingValue struct {
 }
 
 type ThinkingCapability struct {
-	Type    string          `json:"type"`
-	Values  []ThinkingValue `json:"values,omitempty"`
-	Default string          `json:"default,omitempty"`
-	Min     int             `json:"min,omitempty"`
-	Max     int             `json:"max,omitempty"`
+	Type      string          `json:"type"`
+	Values    []ThinkingValue `json:"values,omitempty"`
+	Default   string          `json:"default,omitempty"`
+	Min       int             `json:"min,omitempty"`
+	Max       int             `json:"max,omitempty"`
+	IsDefault bool            `json:"is_default,omitempty"`
 }
 
 type ThinkingSetting struct {
@@ -218,6 +219,14 @@ type ModelCapabilities struct {
 	Dimensions       []int    `json:"dimensions,omitempty"`
 	InputModalities  []string `json:"input_modalities,omitempty"`
 	OutputModalities []string `json:"output_modalities,omitempty"`
+}
+
+// SupportsCompletion reports whether a model can serve chat completion. A nil
+// flag means the capability was never reported, which counts as supported, the
+// same default the daemon applies. Clients use it to keep embedding-only models
+// out of model pickers.
+func (c ModelCapabilities) SupportsCompletion() bool {
+	return c.Completion == nil || *c.Completion
 }
 
 type ModelPricing struct {
@@ -246,6 +255,7 @@ type Model struct {
 	Provider        string               `json:"provider,omitempty"`
 	Name            string               `json:"name"`
 	Label           string               `json:"label,omitempty"`
+	Aliases         []string             `json:"aliases,omitempty"`
 	Thinking        []ThinkingCapability `json:"thinking,omitempty"`
 	ThinkingDefault *ThinkingSetting     `json:"thinking_default,omitempty"`
 	ContextLimit    int                  `json:"context_limit,omitempty"`
