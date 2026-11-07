@@ -531,6 +531,19 @@ type usageRange struct {
 	Key   string
 	Label string
 	Span  time.Duration // zero means all time
+	// Since overrides the window start. It is set for ranges that cannot be
+	// expressed as a fixed span, such as Today, whose start is local midnight.
+	Since func(now time.Time) time.Time
+}
+
+func (r usageRange) since(now time.Time) time.Time {
+	if r.Since != nil {
+		return r.Since(now)
+	}
+	if r.Span == 0 {
+		return time.Unix(0, 0).UTC()
+	}
+	return now.Add(-r.Span)
 }
 
 var usageRanges = []usageRange{
@@ -540,11 +553,17 @@ var usageRanges = []usageRange{
 	{Key: "all", Label: "All time"},
 }
 
-func (r usageRange) since(now time.Time) time.Time {
-	if r.Span == 0 {
-		return time.Unix(0, 0).UTC()
-	}
-	return now.Add(-r.Span)
+// statsRanges are the periods /stats offers. It opens on Today instead of
+// reusing usageRanges, whose default is Last 30 days; changing that default
+// for /usage would be an unrequested behaviour change.
+var statsRanges = []usageRange{
+	{Key: "today", Label: "Today", Since: func(now time.Time) time.Time {
+		y, m, d := now.Local().Date()
+		return time.Date(y, m, d, 0, 0, 0, 0, now.Local().Location())
+	}},
+	{Key: "7d", Label: "Last 7 days", Span: 7 * 24 * time.Hour},
+	{Key: "30d", Label: "Last 30 days", Span: 30 * 24 * time.Hour},
+	{Key: "all", Label: "All time"},
 }
 
 // usageGroupKeys maps the group-by hotkeys to dimensions, in display order.

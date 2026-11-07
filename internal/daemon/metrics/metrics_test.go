@@ -129,7 +129,7 @@ func TestQueryGroupingAndFilters(t *testing.T) {
 
 	res, err := s.Query(ctx, api.MetricsQuery{
 		Kind:       string(metrics.KindLLMCall),
-		Aggregates: []api.MetricsAggregate{{Metric: string(metrics.CostTotal), Func: string(metrics.AggSum)}, {Metric: string(metrics.CostTotal), Func: string(metrics.AggMax)}},
+		Aggregates: []api.MetricsAggregate{{Metric: string(metrics.CostTotal), Func: string(metrics.AggSum)}},
 		GroupBy:    []string{"attr.model"},
 		Bucket:     string(metrics.BucketDay),
 		Filter:     api.MetricsFilter{WorkspaceRoot: "/ws", Attrs: map[string]string{"provider": "p"}},
@@ -142,8 +142,48 @@ func TestQueryGroupingAndFilters(t *testing.T) {
 		t.Fatalf("rows = %+v", res.Rows)
 	}
 	first := res.Rows[0]
-	if first.Group["attr.model"] != "m1" || first.Count != 2 || first.Values[string(metrics.CostTotal)] != 300 || first.Bucket.IsZero() {
+	if first.Group["attr.model"] != "m1" || first.Count != 2 || first.Values[string(metrics.CostTotal)] != 400 || first.Bucket.IsZero() {
 		t.Fatalf("first row = %+v", first)
+	}
+
+	maxRes, err := s.Query(ctx, api.MetricsQuery{
+		Kind:       string(metrics.KindLLMCall),
+		Aggregates: []api.MetricsAggregate{{Metric: string(metrics.CostTotal), Func: string(metrics.AggMax)}},
+		GroupBy:    []string{"attr.model"},
+		Filter:     api.MetricsFilter{WorkspaceRoot: "/ws", Attrs: map[string]string{"provider": "p"}},
+		Since:      time.Now().Add(-time.Hour),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(maxRes.Rows) != 2 || maxRes.Rows[0].Values[string(metrics.CostTotal)] != 300 {
+		t.Fatalf("max rows = %+v", maxRes.Rows)
+	}
+
+	countRes, err := s.Query(ctx, api.MetricsQuery{
+		Kind:       string(metrics.KindLLMCall),
+		Aggregates: []api.MetricsAggregate{{Metric: string(metrics.LatencyTTFT), Func: string(metrics.AggCount)}},
+		Filter:     api.MetricsFilter{WorkspaceRoot: "/ws"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The three calls above recorded a duration but no time to first token, so
+	// the per-metric count is zero while the record count is three.
+	if len(countRes.Rows) != 1 || countRes.Rows[0].Count != 3 || countRes.Rows[0].Values[string(metrics.LatencyTTFT)] != 0 {
+		t.Fatalf("count rows = %+v", countRes.Rows)
+	}
+
+	durRes, err := s.Query(ctx, api.MetricsQuery{
+		Kind:       string(metrics.KindLLMCall),
+		Aggregates: []api.MetricsAggregate{{Metric: string(metrics.LatencyDuration), Func: string(metrics.AggCount)}},
+		Filter:     api.MetricsFilter{WorkspaceRoot: "/ws"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(durRes.Rows) != 1 || durRes.Rows[0].Values[string(metrics.LatencyDuration)] != 3 {
+		t.Fatalf("duration count rows = %+v", durRes.Rows)
 	}
 
 	one, err := s.Query(ctx, api.MetricsQuery{
@@ -161,6 +201,10 @@ func TestQueryRejectsUnsafeIdentifiers(t *testing.T) {
 		{GroupBy: []string{"not_a_column"}},
 		{Filter: api.MetricsFilter{Attrs: map[string]string{"a'b": "x"}}},
 		{Aggregates: []api.MetricsAggregate{{Metric: "x'; --"}}},
+		{Aggregates: []api.MetricsAggregate{
+			{Metric: "cost.total", Func: "sum"},
+			{Metric: "cost.total", Func: "max"},
+		}},
 		{Bucket: "year"},
 	} {
 		if _, _, err := metrics.BuildSQL(q); err == nil {

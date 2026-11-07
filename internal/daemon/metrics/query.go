@@ -16,11 +16,14 @@ import (
 // AggFunc is an aggregate function over a metric.
 type AggFunc string
 
-// Aggregate functions.
+// Aggregate functions. COUNT is per-metric: it counts only records that
+// recorded the metric, so sum/COUNT is the mean over the calls that measured
+// it rather than over all calls.
 const (
-	AggSum AggFunc = "sum"
-	AggMin AggFunc = "min"
-	AggMax AggFunc = "max"
+	AggSum   AggFunc = "sum"
+	AggMin   AggFunc = "min"
+	AggMax   AggFunc = "max"
+	AggCount AggFunc = "count"
 )
 
 // Bucket is a time bucket size.
@@ -109,22 +112,32 @@ func BuildSQL(q api.MetricsQuery) (string, []any, error) {
 		groups = append(groups, fmt.Sprintf("g%d", i))
 	}
 	selects = append(selects, "COUNT(DISTINCT r.id) AS cnt")
+	seen := make(map[string]bool, len(q.Aggregates))
 	for _, a := range q.Aggregates {
 		if !metricRe.MatchString(a.Metric) {
 			return "", nil, fmt.Errorf("%w: invalid metric %q", ErrInvalidQuery, a.Metric)
 		}
-		var fn string
+		// Values are keyed by metric name, so two functions over one metric
+		// would silently overwrite each other. Callers issue one query per
+		// function instead.
+		if seen[a.Metric] {
+			return "", nil, fmt.Errorf("%w: duplicate metric %q", ErrInvalidQuery, a.Metric)
+		}
+		seen[a.Metric] = true
 		switch AggFunc(a.Func) {
 		case AggSum, "":
-			fn = "SUM"
+			selects = append(selects, "COALESCE(SUM(CASE WHEN m.metric = ? THEN m.value END), 0)")
 		case AggMin:
-			fn = "MIN"
+			selects = append(selects, "COALESCE(MIN(CASE WHEN m.metric = ? THEN m.value END), 0)")
 		case AggMax:
-			fn = "MAX"
+			selects = append(selects, "COALESCE(MAX(CASE WHEN m.metric = ? THEN m.value END), 0)")
+		case AggCount:
+			// COUNT over a CASE yields the records that recorded the metric,
+			// which is the denominator a mean needs.
+			selects = append(selects, "COUNT(CASE WHEN m.metric = ? THEN 1 END)")
 		default:
 			return "", nil, fmt.Errorf("%w: unknown aggregate %q", ErrInvalidQuery, a.Func)
 		}
-		selects = append(selects, fmt.Sprintf("COALESCE(%s(CASE WHEN m.metric = ? THEN m.value END), 0)", fn))
 		args = append(args, a.Metric)
 	}
 
@@ -184,13 +197,18 @@ func BuildSQL(q api.MetricsQuery) (string, []any, error) {
 	}
 
 	var sb strings.Builder
-	sb.WriteString("SELECT " + strings.Join(selects, ", "))
+	sb.WriteString("SELECT ")
+	sb.WriteString(strings.Join(selects, ", "))
 	sb.WriteString(" FROM metrics_records r LEFT JOIN metrics_measurements m ON m.record_id = r.id")
 	if len(where) > 0 {
-		sb.WriteString(" WHERE " + strings.Join(where, " AND "))
+		sb.WriteString(" WHERE ")
+		sb.WriteString(strings.Join(where, " AND "))
 	}
 	if len(groups) > 0 {
-		sb.WriteString(" GROUP BY " + strings.Join(groups, ", ") + " ORDER BY " + strings.Join(groups, ", "))
+		sb.WriteString(" GROUP BY ")
+		sb.WriteString(strings.Join(groups, ", "))
+		sb.WriteString(" ORDER BY ")
+		sb.WriteString(strings.Join(groups, ", "))
 	}
 	return sb.String(), args, nil
 }

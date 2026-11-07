@@ -135,6 +135,7 @@ Some built-in commands:
 | `/compact` | `/compact [focus]` | Compact conversation history to free context window space, with optional focus instructions. |
 | `/context` | `/context` | Show visual token usage grid and context window breakdown by category. |
 | `/usage` | `/usage [session\|workspace\|global]` | Open the usage browser for the session, the workspace, or all workspaces. |
+| `/stats` | `/stats [session\|workspace\|global]` | Open the inference speed browser: prompt processing and token generation rates per model. |
 | `/workspace` | `/workspace [reload]` | Reload the active workspace resources from disk. |
 | `/exit` | `/exit` (or `/quit`, `/q`) | Exit the REPL. |
 
@@ -256,6 +257,38 @@ Tool calls:            41 total · 38 ok · 1 error · 2 denied · 0 canceled
 - **Insights** such as "40% of cost came from calls above 150k context" or "`bash` failed 40% of its calls" appear only when they apply, each with a short hint.
 
 Input tokens are shown split into **uncached**, **cache read** and **cache write**, so the three never overlap. Cost is estimated from the model's `cost` pricing when the call is made and then frozen, so later price changes don't rewrite history. If a model has no pricing, its calls are **unpriced**: they still count toward calls and tokens, but their cost is unknown, so totals are shown as a lower bound (for example `≥ $1.23`) with a note. Usage survives session deletion.
+
+---
+
+## Inference Speed (`/stats`)
+
+Where `/usage` reports what a session cost, `/stats` reports how fast the models behind it were. It reads the same recorded calls, counting chat calls only: compaction re-reads an entire context and title generation is a tiny call, so either one would distort prompt speed.
+
+```text
+Stats
+[1 Session]  2 Workspace  3 Global    range: today
+
+Throughput:
+Prompt processing:     1255 tok/s  uncached input
+Token generation:      63.8 tok/s
+Time to first token:   1.3s avg  3.1s worst
+End to end:            4.9s avg  21s worst
+
+Per model:
+  MODEL                       REQ    PROMPT   OUTPUT    CACHED     TOTAL    TOK/S
+  anthropic/claude-sonnet      42     52.3k     9.1k    260.1k    321.5k  70.0 tok/s
+  openai/gpt-5.2               17     82.0k     3.4k      6.0k     91.4k  51.5 tok/s
+
+Cost:                  $5.02
+Timing coverage: processing 54 of 59 calls.
+Chat calls only; compaction and title calls are excluded.
+```
+
+- **Prompt processing** divides uncached input by time spent processing the prompt, so cached tokens don't inflate the number. **Token generation** divides output tokens by generation time.
+- **Tabs and ranges** work as in `/usage`. `/stats` opens on **today**, which begins at local midnight; `t` cycles today, 7 days, 30 days and all time.
+- **Averages cover only the calls that recorded that timing.** A figure shown as `—` was never measured rather than being slow.
+- **Speeds prefixed with `~` are inferred.** Providers speaking the OpenAI protocol return no prompt-eval/eval timing split, so prompt processing is bounded by time to first token and generation by total duration minus time to first token. The footnote says which speeds were inferred. Ollama reports the split directly, so its speeds carry no prefix.
+- **The Session tab refreshes itself** every 15 seconds while it is open; press `r` to re-scan the Workspace and Global tabs.
 
 ---
 

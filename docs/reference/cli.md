@@ -72,6 +72,7 @@ Inside the TaskSmith interactive REPL, slash commands provide instant control ov
 | **`/compact`** | | `[focus]` | Compacts conversation history to free context window space, with optional focus instructions. Requires pending permissions and questions to be resolved first. |
 | **`/context`** | | *(none)* | Displays visual token usage grid and detailed context window breakdown by category. |
 | **`/usage`** | | `[session\|workspace\|global]` | Opens the usage browser slot on the Session, Workspace or Global tab (default: Session). See [Usage Browser](#usage-browser-usage). |
+| **`/stats`** | | `[session\|workspace\|global]` | Opens the inference speed browser slot on the Session, Workspace or Global tab (default: Session). See [Stats Browser](#stats-browser-stats). |
 | **`/skills`** | | *(none)* | Opens the interactive skills browser to inspect runbooks, token estimates, and reload workspace skills. |
 | **`/rules`** | | *(none)* | Opens the interactive rules browser to inspect rule status, scope, triggers, and token estimates, and to reload workspace rules. |
 | **`/tools`** | | *(none)* | Opens the interactive tools browser to inspect tool status, scope, safety annotations, and JSON schemas, and to reload workspace tools. See [Tools Browser](#tools-browser-tools). |
@@ -500,6 +501,30 @@ The REPL status line shows, from left to right: the shortcut hint, the permissio
 
 Input tokens are shown as uncached, cache read and cache write, which do not overlap. A cost prefixed with `≥` is a lower bound because some calls had no pricing. Insights (large-context share, cache write share, cache misses, compaction share, idle sessions, unpriced models, provider failure rates, tool error, denial and slow-tool rates, spend trend) appear only when a fixed threshold is met. A cache miss is a drop in cache read versus the previous chat call; calls after a compaction are counted as expected rebuilds. The cause of a miss is not guessed: the view shows the time since the previous call.
 
+## Stats Browser (`/stats`)
+
+`/stats` answers how fast inference is, where `/usage` answers how much it cost. It reads the same metrics records and covers chat calls only: compaction re-reads a whole context and title generation is a tiny call, so including either would distort prompt speed.
+
+| Section | Content |
+| :--- | :--- |
+| **Throughput** | Prompt processing in tokens per second over uncached input, token generation in tokens per second over output, time to first token and end-to-end latency as an average plus the slowest call. |
+| **Per model** | One row per model with requests, prompt tokens (uncached input), output tokens, cached tokens, total tokens, and generation speed in tokens per second, ordered by total tokens. |
+| **Footnote** | Cost for the range (or `not priced` when no call had pricing), which speeds were inferred and from what, or how many calls carried timing, and a note that only chat calls are counted. |
+
+| Key | Action |
+| :--- | :--- |
+| `←` / `→` / `Tab` / `Shift+Tab` / `1` `2` `3` | Switch tab. |
+| `↑` / `↓` / `Ctrl+P` / `Ctrl+N` / `PgUp` / `PgDn` / `Ctrl+B` / `Ctrl+F` | Scroll long views. |
+| `t` | Cycle the range: today, last 7 days, last 30 days, all time (default today). |
+| `r` | Refresh. |
+| `Esc` / `q` | Close. |
+
+The Session tab re-reads its own metrics every 15 seconds while it is open; Workspace and Global are scanned on demand with `r`, because those ranges grow with history and gain nothing from a background query.
+
+**Reported vs inferred speeds.** Only providers that return a per-call timing split (Ollama reports prompt-eval and eval durations) let `/stats` divide tokens by the exact phase that moved them. Providers speaking the OpenAI protocol return no such split, so both speeds are derived from the timings that do exist and are prefixed with `~`: prompt processing uses time to first token, since no token can arrive before the prompt has been read, and token generation uses total duration minus time to first token. Because time to first token also carries queueing and network overhead, the derived prompt speed is a floor rather than an estimate of the true rate. Deriving generation requires both timings to cover the same calls; when they do not, the figure stays `—` rather than inventing a number. A speed whose timing covers fewer calls than the range contains is also marked `~`, because it divides every call's tokens by part of the time. The footnote names whichever speeds were inferred.
+
+Averages are taken over the calls that recorded the relevant timing, so a speed is never diluted by calls that measured nothing. A figure shown as `—` was not measured at all rather than being zero. Today begins at local midnight. A cost prefixed with `≥` is a lower bound because some calls had no pricing; a model with no pricing at all reads `not priced` rather than `≥ $0.00`.
+
 ## Usage HTTP Endpoints
 
 All usage endpoints are read-only.
@@ -508,7 +533,7 @@ All usage endpoints are read-only.
 | :--- | :--- | :--- |
 | `GET` | `/v1/sessions/{id}/usage` | `SessionUsage` for one session (including child sessions): totals, breakdowns by model, pricing tier, purpose and tool (calls, errors, denied, canceled, total and slowest duration, lines changed), code changes, prompt cache statistics, and first and last activity time. |
 | `GET` | `/v1/usage` | Usage summary (totals, groups, sessions count, top sessions, tools, code changes, previous-period totals, and per-workspace groups for global scope). Query params: `scope=workspace\|global` (default `workspace`, resolved from `X-TaskSmith-CWD`), `since` and `until` (RFC 3339 or `YYYY-MM-DD`; `since` defaults to 30 days ago), `group_by=model\|provider\|agent\|purpose\|tier\|day` (default `model`). |
-| `POST` | `/v1/metrics/query` | Runs a generic metrics query (`kind`, `aggregates`, `group_by`, `bucket`, `filter`, `since`, `until`) and returns grouped rows. |
+| `POST` | `/v1/metrics/query` | Runs a generic metrics query (`kind`, `aggregates`, `group_by`, `bucket`, `filter`, `since`, `until`) and returns grouped rows. Aggregate functions are `sum`, `min`, `max` and `count`; `count` counts only the records that measured that metric, so `sum/count` is a mean over measured records. Rows report one value per metric name, so a query listing one metric twice is rejected with `400`; request one function per metric. |
 
 ## MCP HTTP Endpoints
 
