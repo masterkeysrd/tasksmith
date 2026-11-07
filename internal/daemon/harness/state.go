@@ -192,6 +192,10 @@ type MessageUpdateOptions struct {
 
 func (s State) ApplyCompaction(static StaticContext, limits models.Limits) State {
 	s.PendingCompaction = nil
+	// The messages these counts describe were just replaced by the summary, so
+	// drop them: computeContextState treats a higher tracked count as evidence it
+	// is undercounting, and after compaction that prior value is no longer true.
+	s.Context.UsedTokens = 0
 	s.Context.CachedTokens = 0
 	s.Context.Compactions++
 	s.Context.LastCompacted = time.Now().UTC()

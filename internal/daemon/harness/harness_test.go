@@ -2784,6 +2784,69 @@ func TestManualCompactionDoesNotStreamSummaryChunks(t *testing.T) {
 	}
 }
 
+// TestCompactionCompletedReportsRealTokenReduction guards the "Context compacted
+// (222.8k -> 222.8k)" timeline report end to end: the emitted record must show a
+// genuine reduction and agree with the recomputed state, not repeat the
+// pre-compaction count for both sides.
+func TestCompactionCompletedReportsRealTokenReduction(t *testing.T) {
+	ctx := context.Background()
+	_, reg, perm := newTestToolsRegistry(t)
+	provider := &fakeProvider{
+		stepHandler: func(_ context.Context, _ *llm.Request, turn int) ([]message.AssistantChunk, error) {
+			text := "answer"
+			if turn == 1 {
+				text = strings.Repeat("detail ", 3000)
+			}
+			if turn == 2 {
+				text = "brief summary"
+			}
+			return []message.AssistantChunk{{Content: []message.Block{&message.TextBlock{Text: text}}, Done: true}}, nil
+		},
+	}
+	h, err := New(Config{
+		ID: "compact-token-report", DB: openTestSQLite(t),
+		Permissions: perm, Queue: &fakeQueue{}, Bash: &fakeBashRunner{},
+		Spiller: newTestSpiller(t), Logger: log.Default(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.Configure(NodeOptions{Model: newTestModel(t, provider), Tools: reg}); err != nil {
+		t.Fatal(err)
+	}
+	for _, err := range h.Stream(ctx, Input{Message: message.NewUserText("long request")}) {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	var record api.CompactedRecord
+	completions := 0
+	for event, err := range h.Stream(ctx, Input{Compact: &api.CompactRequest{Focus: "focus"}}) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		if ev, ok := event.(CompactionCompleted); ok {
+			record = ev.CompactedRecord
+			completions++
+		}
+	}
+	if completions != 1 {
+		t.Fatalf("expected 1 completion event, got %d", completions)
+	}
+
+	state, err := h.LoadState(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.AfterTokens != state.Context.UsedTokens {
+		t.Errorf("event AfterTokens = %d, want recomputed state UsedTokens = %d", record.AfterTokens, state.Context.UsedTokens)
+	}
+	if record.BeforeTokens <= record.AfterTokens {
+		t.Errorf("expected token reduction, got %d -> %d", record.BeforeTokens, record.AfterTokens)
+	}
+}
+
 func TestConsumeGraphStreamFiltersNonAgentChunks(t *testing.T) {
 	chunk := message.AssistantChunk{Content: []message.Block{&message.TextBlock{Text: "text"}}}
 	events := []graph.StreamEvent{

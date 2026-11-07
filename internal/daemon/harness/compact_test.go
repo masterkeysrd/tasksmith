@@ -631,6 +631,43 @@ func TestStateMethodsAndMutators(t *testing.T) {
 	}
 }
 
+// TestApplyCompactionRecomputesUsedTokens guards the compaction reporting bug
+// where the timeline showed "Context compacted (222.8k -> 222.8k)". After
+// compaction only the summary message remains and no assistant message carries
+// token metrics, so UsedTokens must be recomputed from the surviving messages
+// instead of being held at the pre-compaction value.
+func TestApplyCompactionRecomputesUsedTokens(t *testing.T) {
+	static := StaticContext{SystemPrompt: 100, SystemTools: 500}
+	limits := models.Limits{Context: 128000, Output: 16384}
+
+	before := 50000
+	s := State{
+		Messages: message.MessageList{
+			message.NewUserText("long conversation that filled the window"),
+			message.NewAssistantText("long reply that filled the window"),
+		},
+		Context: api.ContextState{UsedTokens: before, CachedTokens: before - 1000},
+	}
+
+	summary := buildContextSummaryMessage([]string{"prompt one"}, nil, "Summary text", "auto", "", false)
+	s.Messages = message.MessageList{}
+	s = s.PrependMessage(summary, MessageUpdateOptions{SkipContextRecalculation: true})
+	s = s.ApplyCompaction(static, limits)
+
+	want := static.Total() + estimateMessageTokens(summary)
+	if s.Context.UsedTokens != want {
+		t.Errorf("UsedTokens after compaction = %d, want %d (static %d + summary estimate); stale pre-compaction count leaked in",
+			s.Context.UsedTokens, want, static.Total())
+	}
+	if s.Context.UsedTokens >= before {
+		t.Errorf("UsedTokens (%d) did not drop below pre-compaction %d; compaction would report no savings",
+			s.Context.UsedTokens, before)
+	}
+	if s.Context.CachedTokens != 0 {
+		t.Errorf("CachedTokens = %d, want 0 after compaction", s.Context.CachedTokens)
+	}
+}
+
 func TestStateCopyPreservesAssistantMetricsAndCompactionTrigger(t *testing.T) {
 	limits := models.Limits{Context: 262144, Output: 32768}
 	_, trigger := CompactionTriggerTokens(limits) // 222144
