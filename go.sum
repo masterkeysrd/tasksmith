@@ -166,8 +166,10 @@ github.com/lucasb-eyer/go-colorful v1.4.1 h1:1EO+WB73+EH8EVbzlrG3KLAfEypQWVHIBql
 github.com/lucasb-eyer/go-colorful v1.4.1/go.mod h1:R4dSotOR9KMtayYi1e77YzuveK+i7ruzyGqttikkLy0=
 github.com/mailru/easyjson v0.9.2 h1:dX8U45hQsZpxd80nLvDGihsQ/OxlvTkVUXH2r/8cb2M=
 github.com/mailru/easyjson v0.9.2/go.mod h1:1+xMtQp2MRNVL/V1bOzuP3aP8VNwRW55fQUto+XFtTU=
-github.com/masterkeysrd/kite v0.0.6 h1:1J4O+ju8tfSF0SZ5ZC5O4Pm/4be9r5aZ3PLPULBFmP4=
-github.com/masterkeysrd/kite v0.0.6/go.mod h1:GQbBqo4ofIefIcd7xpmcq3wAPNioL7dGVkG3Z7kopGg=
+github.com/masterkeysrd/kite v0.0.7-0.20261106220157-ba943d02b069 h1:0iLBhiB/SnQaiqq8EZHEy/HwS3/MH+areAxIgpkPfTs=
+github.com/masterkeysrd/kite v0.0.7-0.20261106220157-ba943d02b069/go.mod h1:GQbBqo4ofIefIcd7xpmcq3wAPNioL7dGVkG3Z7kopGg=
+github.com/masterkeysrd/kite v0.0.7-0.20261107034218-fde6c587a1eb h1:F0xqw+9pdm4izFuVk/rKplB1gvzcg/H+AkEohgB48vg=
+github.com/masterkeysrd/kite v0.0.7-0.20261107034218-fde6c587a1eb/go.mod h1:GQbBqo4ofIefIcd7xpmcq3wAPNioL7dGVkG3Z7kopGg=
 github.com/masterkeysrd/loom v0.0.9-0.20261104235925-1b9eaa2633a9 h1:U67xYGOHVxmxbl27MaJQgQLsg6R+yrO3CQuF8lpYTX4=
 github.com/masterkeysrd/loom v0.0.9-0.20261104235925-1b9eaa2633a9/go.mod h1:iyosTFy9p/G/fyxmnWD1be4UL0Inuj1cycbOha0JlXw=
 github.com/masterkeysrd/warp v0.0.7-0.20261104235639-05b5acbc6fde h1:eAu6rW0Rt0NThZra5CHlq/4jF+62StFYfSH30/wDN6I=

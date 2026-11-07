@@ -334,8 +334,8 @@ func TestREPLPromptAndSlashCommands(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("repl resume failed: %v", err)
 	}
-	if len(b2.InsertedAbove) == 0 {
-		t.Errorf("resumed session missing header banner in InsertedAbove")
+	if b2.InsertedAboveCount() == 0 {
+		t.Errorf("resumed session missing header banner in scrollback")
 	}
 
 	// Verify model and title were mutated on resume

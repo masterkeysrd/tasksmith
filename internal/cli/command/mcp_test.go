@@ -888,7 +888,7 @@ func TestMCPWrapText(t *testing.T) {
 func TestMCPOverviewTracksLiveListing(t *testing.T) {
 	fixture := newMCPFixture(t, []api.MCPServer{mcpToolDetailServer()})
 
-	env := testenv.Default(100, 40)
+	env := testenv.New(t, 100, 40)
 	defer func() {
 		mcpBackground.Wait()
 		env.Close()
@@ -1519,7 +1519,7 @@ func TestMCPInspectorNavigation(t *testing.T) {
 
 	servers := mcpTestServers()
 	var back, tools, prompts, resources, auth, restart int
-	env := testenv.Default(100, 30)
+	env := testenv.New(t, 100, 30)
 	defer func() {
 		mcpBackground.Wait()
 		env.Close()
@@ -1569,7 +1569,7 @@ func TestMCPInspectorMenuSelectsByDigitAndEnter(t *testing.T) {
 
 	servers := mcpTestServers()
 	var back, tools, prompts, resources, restart int
-	env := testenv.Default(100, 30)
+	env := testenv.New(t, 100, 30)
 	defer func() {
 		mcpBackground.Wait()
 		env.Close()
@@ -1764,7 +1764,7 @@ func TestMCPToolPolicyLine(t *testing.T) {
 func TestMCPToolDetailEnablesProhibitedTool(t *testing.T) {
 	fixture := newMCPFixture(t, []api.MCPServer{mcpToolDetailServer()})
 
-	env := testenv.Default(100, 40)
+	env := testenv.New(t, 100, 40)
 	defer func() {
 		mcpBackground.Wait()
 		env.Close()
@@ -1857,7 +1857,7 @@ func TestMCPToolDetailReportsEnableFailureInPlace(t *testing.T) {
 	fixture := newMCPFixture(t, []api.MCPServer{mcpToolDetailServer()})
 	fixture.failPolicyAllow = "read-only manifest"
 
-	env := testenv.Default(100, 40)
+	env := testenv.New(t, 100, 40)
 	defer func() {
 		mcpBackground.Wait()
 		env.Close()
@@ -1936,7 +1936,7 @@ func TestMCPToolParametersSorting(t *testing.T) {
 func TestMCPBrowserOpensToolDetailView(t *testing.T) {
 	newMCPFixture(t, mcpTestServers())
 
-	env := testenv.Default(100, 40)
+	env := testenv.New(t, 100, 40)
 	defer func() {
 		mcpBackground.Wait()
 		env.Close()
@@ -2816,7 +2816,7 @@ func TestMCPItemCellShowsResourceURI(t *testing.T) {
 func TestMCPBrowserSurvivesPaneSwitches(t *testing.T) {
 	fixture := newMCPFixture(t, nil)
 
-	env := testenv.Default(100, 40)
+	env := testenv.New(t, 100, 40)
 	// Close only after background actions finish, so an action cannot report
 	// progress into an environment that is already gone.
 	defer func() {
@@ -2875,7 +2875,7 @@ func TestMCPReloadWorkspaceKey(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			fixture := newMCPFixture(t, mcpTestServers())
-			env := testenv.Default(100, 40)
+			env := testenv.New(t, 100, 40)
 			defer func() {
 				mcpBackground.Wait()
 				env.Close()
@@ -2910,7 +2910,7 @@ func TestMCPReloadFromEmptyNotice(t *testing.T) {
 	store.ClearSlot()
 	defer store.ClearSlot()
 
-	env := testenv.Default(100, 30)
+	env := testenv.New(t, 100, 30)
 	defer func() {
 		mcpBackground.Wait()
 		env.Close()
@@ -2956,7 +2956,7 @@ func TestMCPBrowserActionKeys(t *testing.T) {
 			store.ClearSlot()
 			defer store.ClearSlot()
 
-			env := testenv.Default(100, 40)
+			env := testenv.New(t, 100, 40)
 			defer func() {
 				mcpBackground.Wait()
 				env.Close()
@@ -3152,7 +3152,7 @@ func mcpMountActiveSlot(t *testing.T) *testenv.Environment {
 		t.Fatalf("slot data = %T, want a renderer function", item.Data)
 	}
 
-	env := testenv.Default(100, 40)
+	env := testenv.New(t, 100, 40)
 	t.Cleanup(func() {
 		mcpBackground.Wait()
 		env.Close()

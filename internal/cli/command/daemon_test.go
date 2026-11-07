@@ -250,30 +250,19 @@ func TestDaemonBrowserKeybindingsClose(t *testing.T) {
 	}
 
 	b := mock.New(100, 24)
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
+	inst, err := trail.New(DaemonBrowser("slot-close-test"), trail.WithBackend(b))
+	if err != nil {
+		t.Fatalf("trail.New: %v", err)
+	}
+	defer inst.Unmount()
+	inst.Frame()
 
-	go func() {
-		_ = trail.Run(ctx, DaemonBrowser("slot-close-test"), trail.WithBackend(b))
-	}()
-
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		if strings.Contains(testutils.SurfaceTextKeepBlanks(b), "Brain Daemon") {
-			break
-		}
-		time.Sleep(5 * time.Millisecond)
+	if !strings.Contains(testutils.SurfaceTextKeepBlanks(b), "Brain Daemon") {
+		t.Fatalf("expected daemon browser to render:\n%s", testutils.SurfaceTextKeepBlanks(b))
 	}
 
-	b.PostEvent(&backend.RawKeyEvent{Key: key.Key{Code: key.KeyEscape}})
-
-	deadline = time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		if store.GetSlot().Active == nil {
-			break
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
+	inst.Engine().ProcessRawEvent(&backend.RawKeyEvent{Key: key.Key{Code: key.KeyEscape}})
+	inst.Frame()
 
 	if store.GetSlot().Active != nil {
 		t.Fatal("expected slot removed after Escape")

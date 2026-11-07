@@ -149,7 +149,7 @@ func TestWarningNoticeStyle(t *testing.T) {
 		{name: "notice"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			env := testenv.Default(40, 12)
+			env := testenv.New(t, 40, 12)
 			defer env.Close()
 			container := element.NewBox(env.Document())
 			env.Mount(container)

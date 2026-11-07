@@ -154,7 +154,7 @@ func TestMarkdownRender_LongUnbreakableWordWraps(t *testing.T) {
 func renderMarkdownEnv(t *testing.T, width, height int, source string) *testenv.Environment {
 	t.Helper()
 
-	env := testenv.Default(width, height)
+	env := testenv.New(t, width, height)
 	container := element.NewBox(env.Document())
 	env.Mount(container)
 

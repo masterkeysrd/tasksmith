@@ -1,14 +1,12 @@
 package store
 
 import (
-	"context"
 	"reflect"
 	"testing"
-	"time"
 
-	"github.com/masterkeysrd/kite/backend/mock"
 	"github.com/masterkeysrd/kite/extras/trail"
 	"github.com/masterkeysrd/tasksmith/api"
+	"github.com/masterkeysrd/tasksmith/internal/tui/testutils"
 )
 
 func TestTranscriptBasic(t *testing.T) {
@@ -304,35 +302,20 @@ func TestUseHeaderData(t *testing.T) {
 		return trail.Text("ok")
 	})
 
-	b := mock.New(80, 24)
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
+	env := testutils.NewEnv(t, 80, 24)
+	env.Render(Comp())
 
-	go func() {
-		_ = trail.Run(ctx, Comp(), trail.WithBackend(b))
-	}()
-
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		if lastHeader.Version == "v1.0.0" {
-			break
-		}
-		time.Sleep(5 * time.Millisecond)
+	if lastHeader.Version != "v1.0.0" {
+		t.Fatalf("expected rendered header version v1.0.0, got %q", lastHeader.Version)
 	}
-
 	if len(lastHeader.Warnings) != 0 {
 		t.Fatalf("expected 0 warnings initially, got %v", lastHeader.Warnings)
 	}
 
-	// Update warnings reactively
+	// Update warnings reactively: publishing store state marks the component
+	// dirty, and the next flushed frame re-renders it.
 	SetWorkspaceWarnings([]string{"dyn warning"})
-	deadline = time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		if len(lastHeader.Warnings) == 1 {
-			break
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
+	env.Flush()
 
 	if len(lastHeader.Warnings) != 1 || lastHeader.Warnings[0] != "dyn warning" {
 		t.Fatalf("expected reactive update of warnings, got %v", lastHeader.Warnings)
@@ -453,34 +436,16 @@ func TestUseTranscript(t *testing.T) {
 		return trail.Text("ok")
 	})
 
-	b := mock.New(80, 24)
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-
-	go func() {
-		_ = trail.Run(ctx, Comp(), trail.WithBackend(b))
-	}()
-
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		if b.LastFrame().Surface != nil {
-			break
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
+	env := testutils.NewEnv(t, 80, 24)
+	env.Render(Comp())
 
 	if renderedEpoch != 0 {
 		t.Fatalf("expected renderedEpoch 0, got %d", renderedEpoch)
 	}
 
 	ResetTranscript()
-	deadline = time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		if renderedEpoch == 1 {
-			break
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
+	env.Flush()
+
 	if renderedEpoch != 1 {
 		t.Fatalf("expected renderedEpoch to update to 1, got %d", renderedEpoch)
 	}

@@ -6,40 +6,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/masterkeysrd/kite/backend"
 	"github.com/masterkeysrd/kite/backend/mock"
 	"github.com/masterkeysrd/kite/extras/trail"
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/cli/store"
 	"github.com/masterkeysrd/tasksmith/internal/tui/testutils"
 )
-
-func insertedAboveText(b *mock.Backend) string {
-	var sb strings.Builder
-	for _, buf := range b.InsertedAbove {
-		for y := 0; y < buf.Height; y++ {
-			var line strings.Builder
-			for x := 0; x < buf.Width; x++ {
-				c := buf.CellAt(x, y)
-				if c.Content == "" {
-					line.WriteByte(' ')
-				} else {
-					line.WriteString(c.Content)
-				}
-			}
-			trimmed := strings.TrimRight(line.String(), " ")
-			if trimmed != "" {
-				sb.WriteString(trimmed)
-				sb.WriteString("\n")
-			}
-		}
-	}
-	return sb.String()
-}
-
-func allText(b *mock.Backend) string {
-	return insertedAboveText(b) + testutils.SurfaceText(b)
-}
 
 func TestTranscriptRendersHeaderAndRemountsOnReset(t *testing.T) {
 	store.ClearTranscript()
@@ -65,7 +37,7 @@ func TestTranscriptRendersHeaderAndRemountsOnReset(t *testing.T) {
 	var initialText string
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		initialText = insertedAboveText(b)
+		initialText = testutils.ScrollbackText(b)
 		if strings.Contains(initialText, "TaskSmith v1.0.0") {
 			break
 		}
@@ -98,7 +70,7 @@ func TestTranscriptRendersHeaderAndRemountsOnReset(t *testing.T) {
 	var postResetText string
 	deadline = time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		postResetText = insertedAboveText(b)
+		postResetText = testutils.ScrollbackText(b)
 		if strings.Contains(postResetText, "TaskSmith v2.0.0") {
 			break
 		}
@@ -148,19 +120,6 @@ func TestTranscriptPlaceholderKinds(t *testing.T) {
 	}
 }
 
-type clearMockBackend struct {
-	*mock.Backend
-}
-
-func (c *clearMockBackend) Clear() {
-	c.Backend.Clear()
-	c.InsertedAbove = nil
-}
-
-func (c *clearMockBackend) InsertAbove(buf *backend.Buffer) {
-	c.Backend.InsertAbove(buf)
-}
-
 func TestTranscriptClearReprintHeader(t *testing.T) {
 	store.ClearTranscript()
 	defer store.ClearTranscript()
@@ -170,8 +129,7 @@ func TestTranscriptClearReprintHeader(t *testing.T) {
 	store.FreezeTranscript()
 	store.AppendWarning("old message that should be cleared")
 
-	rawBackend := mock.New(80, 24)
-	b := &clearMockBackend{Backend: rawBackend}
+	b := testutils.NewClearingBackend(mock.New(80, 24))
 
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
@@ -180,11 +138,11 @@ func TestTranscriptClearReprintHeader(t *testing.T) {
 		_ = trail.Run(ctx, Transcript(), trail.WithBackend(b))
 	}()
 
-	// Wait for initial header and notice to be committed to InsertedAbove
+	// Wait for initial header and notice to be committed to scrollback
 	var initialText string
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		initialText = insertedAboveText(b.Backend)
+		initialText = b.ScrollbackText()
 		if strings.Contains(initialText, "TaskSmith v1.0.0") && strings.Contains(initialText, "old message that should be cleared") {
 			break
 		}
@@ -198,19 +156,19 @@ func TestTranscriptClearReprintHeader(t *testing.T) {
 	// Trigger ClearScreen on frozen dirty transcript
 	store.ClearScreen()
 
-	// Wait for clear to take effect and snapshot header to be reprinted in InsertedAbove
+	// Wait for clear to take effect and snapshot header to be reprinted in scrollback
 	var postClearText string
 	deadline = time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		postClearText = allText(b.Backend)
-		if b.ClearCalls > 0 && strings.Contains(postClearText, "TaskSmith v1.0.0") {
+		postClearText = b.AllText()
+		if b.ClearCount() > 0 && strings.Contains(postClearText, "TaskSmith v1.0.0") {
 			break
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
 
-	if b.ClearCalls < 1 {
-		t.Fatalf("expected backend Clear() to have been called at least once, got %d", b.ClearCalls)
+	if b.ClearCount() < 1 {
+		t.Fatalf("expected backend Clear() to have been called at least once, got %d", b.ClearCount())
 	}
 	if !strings.Contains(postClearText, "TaskSmith v1.0.0") {
 		t.Fatalf("expected Header after clear on screen, got:\n%s", postClearText)
@@ -246,8 +204,8 @@ func TestTranscriptLiveDraftAndFreezeOnSubmit(t *testing.T) {
 	if !strings.Contains(testutils.SurfaceText(b), "model-alpha with low effort") {
 		t.Fatalf("expected live header on surface, got:\n%s", testutils.SurfaceText(b))
 	}
-	if len(b.InsertedAbove) != 0 {
-		t.Fatalf("expected InsertedAbove to be empty in draft mode, got %d buffers", len(b.InsertedAbove))
+	if b.InsertedAboveCount() != 0 {
+		t.Fatalf("expected InsertedAbove to be empty in draft mode, got %d buffers", b.InsertedAboveCount())
 	}
 
 	// 2. Append command output in draft mode: remains live on surface, NOT in InsertedAbove
@@ -262,8 +220,8 @@ func TestTranscriptLiveDraftAndFreezeOnSubmit(t *testing.T) {
 	if !strings.Contains(testutils.SurfaceText(b), "Model set to model-alpha") {
 		t.Fatalf("expected command output live on surface, got:\n%s", testutils.SurfaceText(b))
 	}
-	if len(b.InsertedAbove) != 0 {
-		t.Fatalf("expected InsertedAbove to remain empty while in draft mode, got %d buffers", len(b.InsertedAbove))
+	if b.InsertedAboveCount() != 0 {
+		t.Fatalf("expected InsertedAbove to remain empty while in draft mode, got %d buffers", b.InsertedAboveCount())
 	}
 
 	// 3. Reactively update model info in place: live header updates even after command outputs
@@ -278,20 +236,20 @@ func TestTranscriptLiveDraftAndFreezeOnSubmit(t *testing.T) {
 	if !strings.Contains(testutils.SurfaceText(b), "model-beta with high effort") {
 		t.Fatalf("expected live header to update model info in place, got:\n%s", testutils.SurfaceText(b))
 	}
-	if len(b.InsertedAbove) != 0 {
-		t.Fatalf("expected InsertedAbove to remain empty after model update, got %d buffers", len(b.InsertedAbove))
+	if b.InsertedAboveCount() != 0 {
+		t.Fatalf("expected InsertedAbove to remain empty after model update, got %d buffers", b.InsertedAboveCount())
 	}
 
 	// 4. Freeze transcript (e.g. on first prompt send): freezes snapshot header and draft items into InsertedAbove
 	store.FreezeTranscript()
 	deadline = time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		if strings.Contains(insertedAboveText(b), "Model set to model-alpha") {
+		if strings.Contains(testutils.ScrollbackText(b), "Model set to model-alpha") {
 			break
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
-	aboveText := insertedAboveText(b)
+	aboveText := testutils.ScrollbackText(b)
 	if !strings.Contains(aboveText, "model-beta with high effort") {
 		t.Fatalf("expected frozen header in InsertedAbove after FreezeTranscript, got:\n%s", aboveText)
 	}
@@ -324,13 +282,13 @@ func TestTranscriptSessionSwitch(t *testing.T) {
 
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		if strings.Contains(insertedAboveText(b), "resumed-model with high effort") {
+		if strings.Contains(testutils.ScrollbackText(b), "resumed-model with high effort") {
 			break
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
 
-	aboveText := insertedAboveText(b)
+	aboveText := testutils.ScrollbackText(b)
 	if !strings.Contains(aboveText, "TaskSmith v1.0.0") || !strings.Contains(aboveText, "resumed-model with high effort") {
 		t.Fatalf("expected resumed session header in InsertedAbove, got:\n%s", aboveText)
 	}

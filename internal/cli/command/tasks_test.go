@@ -1,7 +1,6 @@
 package command
 
 import (
-	"context"
 	"strings"
 	"testing"
 	"time"
@@ -195,52 +194,38 @@ func TestTasksBrowserViewerStaysOpenWhenTaskCompletes(t *testing.T) {
 	store.UpsertTask(task)
 
 	b := mock.New(100, 24)
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-
-	go func() {
-		_ = trail.Run(ctx, TasksBrowser("slot-1"), trail.WithBackend(b))
-	}()
-
-	// Wait for running task to appear in list
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		if strings.Contains(testutils.SurfaceTextKeepBlanks(b), "Build Job") {
-			break
-		}
-		time.Sleep(5 * time.Millisecond)
+	inst, err := trail.New(TasksBrowser("slot-1"), trail.WithBackend(b))
+	if err != nil {
+		t.Fatalf("trail.New: %v", err)
 	}
-	if !strings.Contains(testutils.SurfaceTextKeepBlanks(b), "Build Job") {
-		t.Fatalf("expected running task in list: %s", testutils.SurfaceTextKeepBlanks(b))
+	defer inst.Unmount()
+	inst.Frame()
+
+	press := func(k key.Key) string {
+		t.Helper()
+		inst.Engine().ProcessRawEvent(&backend.RawKeyEvent{Key: k})
+		inst.Frame()
+		return testutils.SurfaceTextKeepBlanks(b)
+	}
+
+	out := testutils.SurfaceTextKeepBlanks(b)
+	if !strings.Contains(out, "Build Job") {
+		t.Fatalf("expected running task in list: %s", out)
 	}
 
 	// Press enter to view output
-	b.PostEvent(&backend.RawKeyEvent{Key: key.Key{Code: key.KeyEnter}})
-
-	deadline = time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		if strings.Contains(testutils.SurfaceTextKeepBlanks(b), "Build Job (running):") {
-			break
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-	if !strings.Contains(testutils.SurfaceTextKeepBlanks(b), "Build Job (running):") {
-		t.Fatalf("expected taskOutputViewer to open: %s", testutils.SurfaceTextKeepBlanks(b))
+	out = press(key.Key{Code: key.KeyEnter})
+	if !strings.Contains(out, "Build Job (running):") {
+		t.Fatalf("expected taskOutputViewer to open: %s", out)
 	}
 
 	// Task completes in the background (visibleTasks becomes empty since showAll is false)
 	task.Status = api.TaskStatusCompleted
 	task.FinishedAt = time.Now()
 	store.UpsertTask(task)
+	inst.Frame()
 
-	deadline = time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		if strings.Contains(testutils.SurfaceTextKeepBlanks(b), "Build Job (completed):") {
-			break
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-	out := testutils.SurfaceTextKeepBlanks(b)
+	out = testutils.SurfaceTextKeepBlanks(b)
 	if !strings.Contains(out, "Build Job (completed):") {
 		t.Fatalf("expected taskOutputViewer to stay open when task finishes: %s", out)
 	}
@@ -249,16 +234,8 @@ func TestTasksBrowserViewerStaysOpenWhenTaskCompletes(t *testing.T) {
 	}
 
 	// Press esc to return to tasks list
-	b.PostEvent(&backend.RawKeyEvent{Key: key.Key{Code: key.KeyEscape}})
-
-	deadline = time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		if strings.Contains(testutils.SurfaceTextKeepBlanks(b), "No running background tasks.") {
-			break
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-	if !strings.Contains(testutils.SurfaceTextKeepBlanks(b), "No running background tasks.") {
-		t.Fatalf("expected empty view after esc: %s", testutils.SurfaceTextKeepBlanks(b))
+	out = press(key.Key{Code: key.KeyEscape})
+	if !strings.Contains(out, "No running background tasks.") {
+		t.Fatalf("expected empty view after esc: %s", out)
 	}
 }

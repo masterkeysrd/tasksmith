@@ -1,15 +1,11 @@
 package components
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
-	"github.com/masterkeysrd/kite/backend/mock"
-	"github.com/masterkeysrd/kite/extras/trail"
 	"github.com/masterkeysrd/tasksmith/internal/cli/store"
 	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
 	"github.com/masterkeysrd/tasksmith/internal/tui/testutils"
@@ -52,30 +48,13 @@ func TestShortenHomePath(t *testing.T) {
 }
 
 func TestHeaderRender(t *testing.T) {
-	b := mock.New(80, 24)
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-
-	node := Header(store.HeaderData{
+	env := testutils.NewEnv(t, 80, 24)
+	text := env.Render(Header(store.HeaderData{
 		Version:   "0.1.0",
 		Model:     "Claude 3.7 Sonnet",
 		Thinking:  "high",
 		Workspace: "/workspace/project",
-	})
-
-	go func() {
-		_ = trail.Run(ctx, node, trail.WithBackend(b))
-	}()
-
-	var text string
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		text = testutils.SurfaceText(b)
-		if strings.Contains(text, "TaskSmith") {
-			break
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
+	}))
 
 	for _, want := range []string{
 		"◥██████████◣",
@@ -92,27 +71,10 @@ func TestHeaderRender(t *testing.T) {
 }
 
 func TestHeaderDefaults(t *testing.T) {
-	b := mock.New(80, 24)
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-
-	node := Header(store.HeaderData{
+	env := testutils.NewEnv(t, 80, 24)
+	text := env.Render(Header(store.HeaderData{
 		Workspace: "/work",
-	})
-
-	go func() {
-		_ = trail.Run(ctx, node, trail.WithBackend(b))
-	}()
-
-	var text string
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		text = testutils.SurfaceText(b)
-		if strings.Contains(text, "TaskSmith") {
-			break
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
+	}))
 
 	for _, want := range []string{
 		"◥██████████◣",
@@ -129,11 +91,8 @@ func TestHeaderDefaults(t *testing.T) {
 }
 
 func TestHeaderWithWarnings(t *testing.T) {
-	b := mock.New(80, 24)
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-
-	node := Header(store.HeaderData{
+	env := testutils.NewEnv(t, 80, 24)
+	text := env.Render(Header(store.HeaderData{
 		Version:   "0.2.0",
 		Model:     "Claude 3.7 Sonnet",
 		Thinking:  "high",
@@ -142,21 +101,7 @@ func TestHeaderWithWarnings(t *testing.T) {
 			"Agent configuration missing tools",
 			"Workspace config overrides default model",
 		},
-	})
-
-	go func() {
-		_ = trail.Run(ctx, node, trail.WithBackend(b))
-	}()
-
-	var text string
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		text = testutils.SurfaceText(b)
-		if strings.Contains(text, "Agent configuration missing tools") {
-			break
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
+	}))
 
 	for _, want := range []string{
 		"TaskSmith v0.2.0",
@@ -181,7 +126,7 @@ func TestHeaderWithWarnings(t *testing.T) {
 		t.Errorf("expected warning 2 to appear after warning 1 (warn1=%d, warn2=%d)", warn1Idx, warn2Idx)
 	}
 
-	frame := b.LastFrame().Surface
+	frame := env.Backend.LastFrame().Surface
 	if frame == nil {
 		t.Fatal("expected rendered surface")
 	}
@@ -227,28 +172,15 @@ func testHeaderThemeSwitching(t *testing.T) {
 
 	_ = theme.Set("dark")
 
-	b := mock.New(80, 24)
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
+	env := testutils.NewEnv(t, 80, 24)
+	env.Render(Header(store.HeaderData{
+		Version:   "1.0.0",
+		Model:     "default",
+		Thinking:  "auto",
+		Workspace: "/ws",
+	}))
 
-	go func() {
-		_ = trail.Run(ctx, Header(store.HeaderData{
-			Version:   "1.0.0",
-			Model:     "default",
-			Thinking:  "auto",
-			Workspace: "/ws",
-		}), trail.WithBackend(b))
-	}()
-
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		if b.LastFrame().Surface != nil {
-			break
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-
-	frame := b.LastFrame().Surface
+	frame := env.Backend.LastFrame().Surface
 	if frame == nil {
 		t.Fatal("expected rendered surface")
 	}
@@ -269,28 +201,21 @@ func testHeaderThemeSwitching(t *testing.T) {
 		}
 	}
 	if textX == -1 {
-		t.Fatalf("expected 'T' in rendered surface, got surface:\n%s", testutils.SurfaceText(b))
+		t.Fatalf("expected 'T' in rendered surface, got surface:\n%s", env.Text())
 	}
 
-	// Switch theme to "github-dark"
+	// Switching the theme publishes new scheme state, which re-renders on the
+	// next flushed frame.
 	if err := theme.Set("github-dark"); err != nil {
 		t.Fatalf("failed to set theme: %v", err)
 	}
+	env.Flush()
 
-	// Wait for rerender with new color
-	var updatedFg any
-	deadline = time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		frame = b.LastFrame().Surface
-		if frame != nil {
-			c := frame.CellAt(textX, textY)
-			if c.Fg != initialFg {
-				updatedFg = c.Fg
-				break
-			}
-		}
-		time.Sleep(5 * time.Millisecond)
+	frame = env.Backend.LastFrame().Surface
+	if frame == nil {
+		t.Fatal("expected rendered surface after theme switch")
 	}
+	updatedFg := frame.CellAt(textX, textY).Fg
 
 	if updatedFg == nil || updatedFg == initialFg {
 		t.Fatalf("expected foreground color to change after theme switch, initial=%v, updated=%v", initialFg, updatedFg)
@@ -330,29 +255,15 @@ func TestHeaderCustomRegisteredTheme(t *testing.T) {
 		t.Fatalf("failed to set custom theme: %v", err)
 	}
 
-	b := mock.New(80, 24)
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
+	env := testutils.NewEnv(t, 80, 24)
+	env.Render(Header(store.HeaderData{
+		Version:   "1.0.0",
+		Model:     "default",
+		Thinking:  "auto",
+		Workspace: "/ws",
+	}))
 
-	go func() {
-		_ = trail.Run(ctx, Header(store.HeaderData{
-			Version:   "1.0.0",
-			Model:     "default",
-			Thinking:  "auto",
-			Workspace: "/ws",
-		}), trail.WithBackend(b))
-	}()
-
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		if b.LastFrame().Surface != nil {
-			break
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-
-	frame := b.LastFrame().Surface
-	if frame == nil {
+	if env.Backend.LastFrame().Surface == nil {
 		t.Fatal("expected rendered surface")
 	}
 }

@@ -178,7 +178,9 @@ A UI change is not done until `go test -count=1 ./...` passes **and** the change
 renders it. Do not regenerate or hand-edit a golden/snapshot file to make a failure disappear.
 Full gate: `go-verification-gate`.
 
-If `kite`'s API is unclear, read the sibling checkout rather than guessing: the module is pinned
-in `go.mod` with `replace github.com/masterkeysrd/kite => ../kite`, so
-`../kite/extras/trail/README.md` and `../kite/extras/kitex/README.md` describe the code actually
-being compiled. Cite the pinned package, not a remembered API.
+If `kite`'s API is unclear, read the code that actually compiles rather than guessing. Check `go.mod`
+first: a `replace github.com/masterkeysrd/kite => <path>` line means the sibling checkout at that path
+is what builds, so read it directly. Without a `replace`, the `require` pseudo-version is authoritative
+and the compiled code lives at `$(go env GOMODCACHE)/github.com/masterkeysrd/kite@<version>/`.
+A `replace` is a local convenience, not a pin — never treat green tests as proof the `require` version
+is sound while one is in effect. Cite the package you actually read, not a remembered API.

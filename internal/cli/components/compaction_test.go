@@ -4,19 +4,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/masterkeysrd/kite/extras/trail"
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/cli/store"
 	"github.com/masterkeysrd/tasksmith/internal/tui/testutils"
 	"github.com/masterkeysrd/tasksmith/internal/ui/format"
 )
-
-func renderTestNode(t *testing.T, node trail.Node, width, height int, check func(string) bool) string {
-	t.Helper()
-	app := testutils.StartApp(t, node, width, height)
-	defer app.Stop()
-	return app.WaitUntil(check, testutils.DefaultWaitTimeout)
-}
 
 func TestFormatTokens(t *testing.T) {
 	tests := []struct {
@@ -50,9 +42,7 @@ func TestTimelineEventCompactedAndCacheBroken(t *testing.T) {
 			AfterTokens:  3400,
 		},
 	}
-	text := renderTestNode(t, TimelineEvent(compEntry), 80, 24, func(s string) bool {
-		return strings.Contains(s, "Context compacted (148.2k → 3.4k)")
-	})
+	text := testutils.Render(t, TimelineEvent(compEntry), 80, 24)
 	if !strings.Contains(text, "Context compacted (148.2k → 3.4k)") {
 		t.Fatalf("expected compacted notice text with tokens, got:\n%s", text)
 	}
@@ -62,9 +52,7 @@ func TestTimelineEventCompactedAndCacheBroken(t *testing.T) {
 		ID:   "tl-c-2",
 		Kind: api.TimelineKindCompacted,
 	}
-	text = renderTestNode(t, TimelineEvent(compEntryNoTokens), 80, 24, func(s string) bool {
-		return strings.Contains(s, "Context compacted")
-	})
+	text = testutils.Render(t, TimelineEvent(compEntryNoTokens), 80, 24)
 	if !strings.Contains(text, "Context compacted") {
 		t.Fatalf("expected compacted notice text, got:\n%s", text)
 	}
@@ -78,9 +66,7 @@ func TestTimelineEventCompactedAndCacheBroken(t *testing.T) {
 			CurrCached: 0,
 		},
 	}
-	text = renderTestNode(t, TimelineEvent(cbEntry), 80, 24, func(s string) bool {
-		return strings.Contains(s, "Prompt cache miss (94.2k → 0 cached tokens)")
-	})
+	text = testutils.Render(t, TimelineEvent(cbEntry), 80, 24)
 	if !strings.Contains(text, "Prompt cache miss (94.2k → 0 cached tokens)") {
 		t.Fatalf("expected cache broken notice text with tokens, got:\n%s", text)
 	}
@@ -90,18 +76,16 @@ func TestTimelineEventCompactedAndCacheBroken(t *testing.T) {
 		ID:   "tl-cb-2",
 		Kind: api.TimelineKindCacheBroken,
 	}
-	text = renderTestNode(t, TimelineEvent(cbEntryNoTokens), 80, 24, func(s string) bool {
-		return strings.Contains(s, "Prompt cache miss")
-	})
+	text = testutils.Render(t, TimelineEvent(cbEntryNoTokens), 80, 24)
 	if !strings.Contains(text, "Prompt cache miss") {
 		t.Fatalf("expected cache broken notice text, got:\n%s", text)
 	}
 }
 
 func TestSpinnerCompacting(t *testing.T) {
-	text := renderTestNode(t, Spinner(SpinnerProps{Status: api.StatusCompacting}), 80, 24, func(s string) bool {
-		return strings.Contains(s, "Compacting...")
-	})
+	// The assertion is on the rendered status label, not the animation frame,
+	// which has no scheduler in a headless environment.
+	text := testutils.Render(t, Spinner(SpinnerProps{Status: api.StatusCompacting}), 80, 24)
 	if !strings.Contains(text, "Compacting...") {
 		t.Fatalf("expected Compacting... in spinner, got:\n%s", text)
 	}
@@ -130,9 +114,7 @@ func TestContextUsageRender(t *testing.T) {
 		},
 	}
 
-	text := renderTestNode(t, ContextUsage(data), 120, 30, func(s string) bool {
-		return strings.Contains(s, "Token usage by category")
-	})
+	text := testutils.Render(t, ContextUsage(data), 120, 30)
 
 	// Ensure no adjacent glyphs are jammed together without whitespace.
 	for _, bad := range []string{"⛁◉", "◉⛶", "⛶⛝", "⛁⛶", "◉⛝"} {
@@ -175,9 +157,7 @@ func TestContextUsageEstimatedHeader(t *testing.T) {
 		},
 	}
 
-	text := renderTestNode(t, ContextUsage(data), 120, 30, func(s string) bool {
-		return strings.Contains(s, "Estimated usage by category (awaiting generation)")
-	})
+	text := testutils.Render(t, ContextUsage(data), 120, 30)
 	if !strings.Contains(text, "Estimated usage by category (awaiting generation)") {
 		t.Fatalf("expected estimated header, got:\n%s", text)
 	}

@@ -1,14 +1,12 @@
 package store
 
 import (
-	"context"
 	"strings"
 	"testing"
-	"time"
 
-	"github.com/masterkeysrd/kite/backend/mock"
 	"github.com/masterkeysrd/kite/extras/trail"
 	"github.com/masterkeysrd/tasksmith/api"
+	"github.com/masterkeysrd/tasksmith/internal/tui/testutils"
 )
 
 func TestStoreApp(t *testing.T) {
@@ -222,22 +220,8 @@ func TestUseHintMountUnmount(t *testing.T) {
 		return trail.Text("no child")
 	})
 
-	b := mock.New(80, 24)
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-
-	go func() {
-		_ = trail.Run(ctx, Parent(), trail.WithBackend(b))
-	}()
-
-	// Wait for child to mount and set hint
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		if GetApp().Hint == "child hint" {
-			break
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
+	env := testutils.NewEnv(t, 80, 24)
+	env.Render(Parent())
 
 	if GetApp().Hint != "child hint" {
 		t.Fatalf("expected hint to be %q while child mounted, got %q", "child hint", GetApp().Hint)
@@ -245,14 +229,7 @@ func TestUseHintMountUnmount(t *testing.T) {
 
 	// Trigger unmount of child by changing CtrlCPending
 	SetCtrlCPending(true)
-
-	deadline = time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		if GetApp().Hint == DefaultHint {
-			break
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
+	env.Flush()
 
 	if GetApp().Hint != DefaultHint {
 		t.Fatalf("expected hint to be restored to %q on child unmount, got %q", DefaultHint, GetApp().Hint)

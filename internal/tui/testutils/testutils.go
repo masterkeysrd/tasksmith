@@ -17,6 +17,7 @@ package testutils
 import (
 	"context"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -47,10 +48,12 @@ type Env struct {
 }
 
 // NewEnv returns a headless environment of the given size, closed with the test.
+//
+// Closing also unmounts and destroys the mounted tree, so nothing this test
+// rendered leaks into the next one via kitex's process-global component state.
 func NewEnv(t *testing.T, width, height int) *Env {
 	t.Helper()
-	env := testenv.Default(width, height)
-	t.Cleanup(env.Close)
+	env := testenv.New(t, width, height)
 	container := element.NewBox(env.Document())
 	env.Mount(container)
 	return &Env{t: t, Environment: env, container: container}
@@ -290,6 +293,95 @@ func surfaceLine(frame *backend.Buffer, y int) string {
 		}
 	}
 	return line.String()
+}
+
+// ScrollbackSource is the read-only view of a mock backend that the scrollback
+// text helpers need. *mock.Backend satisfies it, and so does [ClearingBackend],
+// which reports a filtered scrollback.
+type ScrollbackSource interface {
+	AllInsertedAbove() []*backend.Buffer
+}
+
+// ScrollbackText renders buffers committed above the live viewport, oldest
+// first. It goes through the backend accessors rather than reading exported
+// fields, so it stays race-free while an engine goroutine appends scrollback.
+func ScrollbackText(b ScrollbackSource) string {
+	var sb strings.Builder
+	for _, buf := range b.AllInsertedAbove() {
+		if buf == nil {
+			continue
+		}
+		for y := 0; y < buf.Height; y++ {
+			if trimmed := strings.TrimRight(surfaceLine(buf, y), " "); trimmed != "" {
+				sb.WriteString(trimmed)
+				sb.WriteString("\n")
+			}
+		}
+	}
+	return sb.String()
+}
+
+// AllText returns committed scrollback followed by the last rendered frame,
+// which is the full text a user would see in the terminal.
+func AllText(b *mock.Backend) string {
+	return ScrollbackText(b) + SurfaceText(b)
+}
+
+// ClearingBackend wraps a mock backend for apps that call Clear to redraw a
+// clean screen. Clear only wipes the live viewport, so scrollback committed
+// before it would otherwise leak into later assertions and let a test pass on
+// output the app no longer shows. The wrapper records how much scrollback
+// existed at each Clear and reports only what was committed after the last one.
+//
+// Clear runs on the engine goroutine while tests read the counter from the
+// test goroutine, so it is guarded separately from the backend's own lock.
+type ClearingBackend struct {
+	*mock.Backend
+
+	mu      sync.Mutex
+	dropped int
+}
+
+// NewClearingBackend wraps b so scrollback assertions ignore anything
+// committed before the most recent Clear.
+func NewClearingBackend(b *mock.Backend) *ClearingBackend {
+	return &ClearingBackend{Backend: b}
+}
+
+// Clear marks the current scrollback as discarded, then clears the viewport.
+func (c *ClearingBackend) Clear() {
+	c.Backend.Clear()
+	c.mu.Lock()
+	c.dropped = c.InsertedAboveCount()
+	c.mu.Unlock()
+}
+
+// AllInsertedAbove returns the buffers committed since the last Clear.
+func (c *ClearingBackend) AllInsertedAbove() []*backend.Buffer {
+	c.mu.Lock()
+	dropped := c.dropped
+	c.mu.Unlock()
+	all := c.Backend.AllInsertedAbove()
+	if dropped >= len(all) {
+		return nil
+	}
+	return all[dropped:]
+}
+
+// ClearCount reports how many times Clear ran.
+func (c *ClearingBackend) ClearCount() int {
+	_, _, _, clear := c.Counts()
+	return clear
+}
+
+// ScrollbackText renders the scrollback that survived the last Clear.
+func (c *ClearingBackend) ScrollbackText() string {
+	return ScrollbackText(c)
+}
+
+// AllText returns the surviving scrollback followed by the last rendered frame.
+func (c *ClearingBackend) AllText() string {
+	return ScrollbackText(c) + SurfaceText(c.Backend)
 }
 
 // Lines splits rendered text into lines.

@@ -9,7 +9,7 @@ require (
 	github.com/google/jsonschema-go v0.4.3
 	github.com/google/uuid v1.6.0
 	github.com/lrstanley/go-nf v0.0.0-20260418212552-215ab243b591
-	github.com/masterkeysrd/kite v0.0.6
+	github.com/masterkeysrd/kite v0.0.7-0.20261107034218-fde6c587a1eb
 	github.com/masterkeysrd/loom v0.0.9-0.20261104235925-1b9eaa2633a9
 	github.com/masterkeysrd/warp v0.0.7-0.20261104235639-05b5acbc6fde
 	github.com/modelcontextprotocol/go-sdk v1.8.0

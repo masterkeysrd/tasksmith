@@ -22,30 +22,6 @@ func TestMain(m *testing.M) {
 	xdg.RunWithTestEnv(m, "tasksmith-cli-test")
 }
 
-func allText(b *mock.Backend) string {
-	var sb strings.Builder
-	for _, buf := range b.InsertedAbove {
-		for y := 0; y < buf.Height; y++ {
-			var line strings.Builder
-			for x := 0; x < buf.Width; x++ {
-				c := buf.CellAt(x, y)
-				if c.Content != "" {
-					line.WriteString(c.Content)
-				} else {
-					line.WriteByte(' ')
-				}
-			}
-			trimmed := strings.TrimRight(line.String(), " ")
-			if trimmed != "" {
-				sb.WriteString(trimmed)
-				sb.WriteString("\n")
-			}
-		}
-	}
-	sb.WriteString(testutils.SurfaceText(b))
-	return sb.String()
-}
-
 func waitFor(t *testing.T, condition func() bool, timeout time.Duration, msg string) {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
@@ -368,8 +344,8 @@ func TestRunStartupHeader(t *testing.T) {
 			strings.Contains(testutils.SurfaceText(b), "/tmp/ws")
 	}, 2*time.Second, "live startup banner on screen surface")
 
-	if len(b.InsertedAbove) != 0 {
-		t.Fatalf("expected 0 scrollback buffers while transcript is clean, got %d", len(b.InsertedAbove))
+	if b.InsertedAboveCount() != 0 {
+		t.Fatalf("expected 0 scrollback buffers while transcript is clean, got %d", b.InsertedAboveCount())
 	}
 
 	waitFor(t, func() bool {
@@ -615,7 +591,7 @@ func TestAppSlashCommandHelpAndEscapeRestoresComposerFocus(t *testing.T) {
 	b.PostEvent(&backend.RawKeyEvent{Key: key.Key{Code: key.KeyEscape}})
 
 	waitFor(t, func() bool {
-		txt := allText(b)
+		txt := testutils.AllText(b)
 		return store.GetSlot().Active == nil &&
 			strings.Contains(txt, "Exited /help command") &&
 			strings.Contains(testutils.SurfaceText(b), ">")
@@ -639,7 +615,7 @@ func TestAppSlashCommandHelpAndEscapeRestoresComposerFocus(t *testing.T) {
 	b.PostEvent(&backend.RawKeyEvent{Key: key.Key{Code: key.KeyEscape}})
 
 	waitFor(t, func() bool {
-		txt := allText(b)
+		txt := testutils.AllText(b)
 		return store.GetSlot().Active == nil &&
 			strings.Contains(txt, "Exited /mode command") &&
 			strings.Contains(testutils.SurfaceText(b), ">")
@@ -743,23 +719,13 @@ func TestRunResumeSessionHeaderIsItem0(t *testing.T) {
 	}
 }
 
-type clearMockBackend struct {
-	*mock.Backend
-}
-
-func (c *clearMockBackend) Clear() {
-	c.Backend.Clear()
-	c.InsertedAbove = nil
-}
-
 func TestRunClearReprintHeader(t *testing.T) {
 	store.ClearTranscript()
 	store.ClearSlot()
 	defer store.ClearTranscript()
 	defer store.ClearSlot()
 
-	rawBackend := mock.New(80, 24)
-	b := &clearMockBackend{Backend: rawBackend}
+	b := testutils.NewClearingBackend(mock.New(80, 24))
 	c, _ := startTestUnixDaemon(t)
 
 	ctx, cancel := context.WithCancel(t.Context())
@@ -783,14 +749,14 @@ func TestRunClearReprintHeader(t *testing.T) {
 
 	// Wait for initial header to be printed into InsertedAbove
 	waitFor(t, func() bool {
-		return strings.Contains(allText(b.Backend), "TaskSmith v0.1.0")
+		return strings.Contains(b.AllText(), "TaskSmith v0.1.0")
 	}, 2*time.Second, "initial header in InsertedAbove")
 
 	// Append a notice to make transcript dirty
 	store.AppendNotice("old notice that must be cleared")
 
 	waitFor(t, func() bool {
-		return strings.Contains(allText(b.Backend), "old notice that must be cleared")
+		return strings.Contains(b.AllText(), "old notice that must be cleared")
 	}, 2*time.Second, "dirty notice in InsertedAbove")
 
 	// Type /clear in draft mode: clears draft items from surface without calling Clear()
@@ -812,7 +778,7 @@ func TestRunClearReprintHeader(t *testing.T) {
 	store.AppendNotice("frozen notice to be cleared")
 
 	waitFor(t, func() bool {
-		return strings.Contains(allText(b.Backend), "frozen notice to be cleared")
+		return strings.Contains(b.AllText(), "frozen notice to be cleared")
 	}, 2*time.Second, "frozen notice in scrollback")
 
 	for _, ch := range "/clear" {
@@ -826,10 +792,10 @@ func TestRunClearReprintHeader(t *testing.T) {
 
 	// Wait for /clear to execute in frozen mode, clearing backend and reprinting Header
 	waitFor(t, func() bool {
-		return b.ClearCalls >= 1 && strings.Contains(allText(b.Backend), "TaskSmith v0.1.0")
+		return b.ClearCount() >= 1 && strings.Contains(b.AllText(), "TaskSmith v0.1.0")
 	}, 2*time.Second, "Clear() called and header reprinted")
 
-	txt := allText(b.Backend)
+	txt := b.AllText()
 	if !strings.Contains(txt, "TaskSmith v0.1.0") {
 		t.Fatalf("expected header to be reprinted after /clear, got:\n%s", txt)
 	}

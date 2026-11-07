@@ -1,35 +1,15 @@
 package components
 
 import (
-	"context"
 	"strings"
 	"testing"
-	"time"
-
-	"github.com/masterkeysrd/kite/backend/mock"
-	"github.com/masterkeysrd/kite/extras/trail"
 
 	"github.com/masterkeysrd/tasksmith/internal/tui/testutils"
 )
 
 func TestLogoRender(t *testing.T) {
-	b := mock.New(80, 24)
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-
-	go func() {
-		_ = trail.Run(ctx, Logo(), trail.WithBackend(b))
-	}()
-
-	var text string
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		text = testutils.SurfaceText(b)
-		if strings.Contains(text, "◥██████████◣") {
-			break
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
+	env := testutils.NewEnv(t, 80, 24)
+	text := env.Render(Logo())
 
 	for _, want := range []string{
 		"◥██████████◣",
@@ -41,7 +21,7 @@ func TestLogoRender(t *testing.T) {
 		}
 	}
 
-	frame := b.LastFrame().Surface
+	frame := env.Backend.LastFrame().Surface
 	if frame == nil {
 		t.Fatal("expected rendered surface")
 	}

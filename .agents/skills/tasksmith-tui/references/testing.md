@@ -152,6 +152,18 @@ test about the contract the view exposes.
 - A view that fetches on mount must not hit the network in tests — inject a stub client or seed
   the store before rendering.
 
+## Reading a mock backend that a live loop is writing
+
+When a test asserts against a backend an engine goroutine is still writing, read it only through the
+mock's accessors — `LastFrame()`, `AllInsertedAbove()`, `InsertedAboveCount()`, `Counts()` — never its
+exported fields. `testutils.ScrollbackText` / `testutils.AllText` already do this, so prefer them over
+hand-rolling a buffer-to-text loop.
+
+For an app that clears the screen and redraws, wrap the backend in `testutils.NewClearingBackend`
+instead of writing your own fake. `Clear` only wipes the live viewport, so scrollback committed before
+it would otherwise keep satisfying assertions against output the app no longer shows; the wrapper
+reports only what was committed after the last clear.
+
 ## What to cover for any UI change
 
 1. Happy-path render (text present, correctly ordered).
