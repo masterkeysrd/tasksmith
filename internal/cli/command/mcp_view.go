@@ -850,23 +850,23 @@ var mcpInspector = trail.FC("MCPServerInspector", func(props mcpInspectorProps) 
 		switch {
 		case k.MatchString("esc", "escape"):
 			actions.run(mcpMenuBack)
-		case k.MatchString("up"):
+		case k.MatchString("up", "ctrl+p"):
 			if current > 0 {
 				setCursor(current - 1)
 			}
-		case k.MatchString("down"):
+		case k.MatchString("down", "ctrl+n"):
 			if current < len(items)-1 {
 				setCursor(current + 1)
 			}
 		case k.MatchString("enter"):
 			selectItem(current)
-		case k.MatchString("pgup", "ctrl+u"):
+		case k.MatchString("pgup", "ctrl+u", "ctrl+b"):
 			if cur := scrollPos(); cur > 8 {
 				setScrollPos(cur - 8)
 			} else {
 				setScrollPos(0)
 			}
-		case k.MatchString("pgdown", "ctrl+d"):
+		case k.MatchString("pgdown", "ctrl+d", "ctrl+f"):
 			setScrollPos(scrollPos() + 8)
 		case k.MatchString("g"):
 			setScrollPos(0)

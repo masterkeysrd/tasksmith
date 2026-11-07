@@ -241,12 +241,12 @@ var QuestionPrompt = trail.FC("QuestionPrompt", func(props QuestionPromptProps) 
 			rows = 2
 		}
 		switch {
-		case k.MatchString("up", "k"):
+		case k.MatchString("up", "k", "ctrl+p"):
 			if n.cursor > 0 {
 				n.cursor--
 			}
 			update(n)
-		case k.MatchString("down", "j"):
+		case k.MatchString("down", "j", "ctrl+n"):
 			if n.cursor < rows-1 {
 				n.cursor++
 			}

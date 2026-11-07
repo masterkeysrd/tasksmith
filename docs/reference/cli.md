@@ -172,7 +172,7 @@ The browser opens as `Manage MCP servers` with a `<N> server` / `<N> servers` co
 
 | Keybinding | Scope | Action |
 | :--- | :--- | :--- |
-| `↑` / `↓` | MCP Browser | Moves the highlighted server. |
+| `↑` / `↓` or `Ctrl+P` / `Ctrl+N` | MCP Browser | Moves the highlighted server. |
 | `Enter` / `i` | MCP Browser | Opens the overview for the highlighted server. |
 | `a` | MCP Browser | Opens the [authorization screen](#mcp-authentication) for the highlighted server. |
 | `r` | MCP Browser | Restarts (reconnects) the highlighted server. |
@@ -199,10 +199,10 @@ Pressing `Enter` or `i` on a server replaces the list with that server's overvie
 
 | Keybinding | Scope | Action |
 | :--- | :--- | :--- |
-| `↑` / `↓` | MCP Overview | Moves the menu cursor. |
+| `↑` / `↓` or `Ctrl+P` / `Ctrl+N` | MCP Overview | Moves the menu cursor. |
 | `Enter` | MCP Overview | Runs the highlighted menu entry. |
 | `1` – `9` | MCP Overview | Runs the menu entry printed with that number. |
-| `PgUp` / `PgDn` or `Ctrl+U` / `Ctrl+D` | MCP Overview | Scrolls the card by 8 lines. |
+| `PgUp` / `PgDn` or `Ctrl+U` / `Ctrl+D` or `Ctrl+B` / `Ctrl+F` | MCP Overview | Scrolls the card by 8 lines. |
 | `g` / `G` | MCP Overview | Scrolls the card to the top or bottom. |
 | `p` | MCP Overview | Opens the prompt picker (same entry as `Run prompt`). |
 | `u` | MCP Overview | Opens the resource picker (same entry as `Attach resource`). |
@@ -238,12 +238,12 @@ The menu is context-aware, so its first entry answers the most urgent question a
 
 | Keybinding | Scope | Action |
 | :--- | :--- | :--- |
-| `↑` / `↓` | Tool List | Moves the selection. |
+| `↑` / `↓` or `Ctrl+P` / `Ctrl+N` | Tool List | Moves the selection. |
 | any text | Tool List | Filters tools by name. |
 | `Enter` | Tool List | Opens the highlighted tool's detail. |
 | `Esc` | Tool List | Returns to the overview. |
-| `↑` / `↓` | Tool Detail | Scrolls. |
-| `PgUp` / `PgDn` or `Ctrl+U` / `Ctrl+D` | Tool Detail | Scrolls by 8 lines. |
+| `↑` / `↓` or `Ctrl+P` / `Ctrl+N` | Tool Detail | Scrolls. |
+| `PgUp` / `PgDn` or `Ctrl+U` / `Ctrl+D` or `Ctrl+B` / `Ctrl+F` | Tool Detail | Scrolls by 8 lines. |
 | `g` / `G` | Tool Detail | Scrolls to the top or bottom. |
 | `e` | Tool Detail | Permits this tool in its manifest, shown only for a prohibited tool whose manifest can be rewritten. |
 | `Esc` | Tool Detail | Returns to the tool list. |
@@ -336,14 +336,14 @@ TaskSmith uses structured modal keybindings across its terminal interface:
 | `Tab` | Autocomplete | Inserts or completes the currently highlighted autocomplete suggestion. |
 | `↑` / `↓` | Autocomplete | Navigates candidate suggestions up and down when the autocomplete menu is visible. |
 | `Ctrl+P` / `Ctrl+N` | Autocomplete | Navigates candidate suggestions up and down, mirroring `↑` / `↓`. |
-| `↑` / `↓` | Composer | Cycles backward and forward through prompt history when autocomplete is inactive. |
+| `↑` / `↓` / `Ctrl+P` / `Ctrl+N` | Composer | Cycles backward and forward through prompt history when autocomplete is inactive. |
 
 ### Modals & Pickers (General)
 
 | Keybinding | Scope | Action |
 | :--- | :--- | :--- |
-| `↑` / `k` | Modals & Pickers | Move selection cursor up. |
-| `↓` / `j` | Modals & Pickers | Move selection cursor down. |
+| `↑` / `k` / `Ctrl+P` | Modals & Pickers | Move selection cursor up. |
+| `↓` / `j` / `Ctrl+N` | Modals & Pickers | Move selection cursor down. |
 | `Enter` | Modals & Pickers | Confirm and activate highlighted item. |
 | `Esc` | Modals & Pickers | Dismiss and close modal without applying changes. |
 | *Character keys* | Modals & Pickers | Dynamically filter list items with live search. |
@@ -386,8 +386,8 @@ TaskSmith uses structured modal keybindings across its terminal interface:
 
 | Keybinding | Scope | Action |
 | :--- | :--- | :--- |
-| `↑` / `↓` or `k` / `j` | Subagent Viewer | Scrolls the live chat view up or down by 1 line. |
-| `PgUp` / `PgDn` or `Ctrl+U` / `Ctrl+D` / `b` / `f` | Subagent Viewer | Scrolls the live chat view up or down by 8 lines. |
+| `↑` / `↓` or `k` / `j` or `Ctrl+P` / `Ctrl+N` | Subagent Viewer | Scrolls the live chat view up or down by 1 line. |
+| `PgUp` / `PgDn` or `Ctrl+U` / `Ctrl+D` or `Ctrl+B` / `Ctrl+F` or `b` / `f` | Subagent Viewer | Scrolls the live chat view up or down by 8 lines. |
 | `Home` / `End` or `g` / `G` | Subagent Viewer | Scrolls directly to the top or bottom of the live chat view. |
 | `x` | Subagent Viewer | Sends cancel signal to terminate the subagent if currently active. |
 | `Esc` | Subagent Viewer | Returns to the subagents browser or dismisses the viewer. |
@@ -406,7 +406,7 @@ TaskSmith uses structured modal keybindings across its terminal interface:
 
 | Keybinding | Scope | Action |
 | :--- | :--- | :--- |
-| `↑` / `↓` | Rules Browser | Moves the highlighted rule. |
+| `↑` / `↓` or `Ctrl+P` / `Ctrl+N` | Rules Browser | Moves the highlighted rule. |
 | `Enter` / `i` | Rules Browser | Opens the rule markdown inspector for the highlighted rule. |
 | `r` | Rules Browser | Reloads workspace resources from disk and refreshes the rule list. |
 | `Esc` | Rules Browser | Closes the rules browser and returns to composer. |
@@ -417,8 +417,8 @@ Columns are Name, Status (`[Always]`, `[Loaded]`, or `[Standby]`), Scope (`[Work
 
 | Keybinding | Scope | Action |
 | :--- | :--- | :--- |
-| `↑` / `↓` or `k` / `j` | Rule Inspector | Scrolls the rule body by 1 line. |
-| `PgUp` / `PgDn` or `Ctrl+U` / `Ctrl+D` / `b` / `f` | Rule Inspector | Scrolls the rule body by 8 lines. |
+| `↑` / `↓` or `k` / `j` or `Ctrl+P` / `Ctrl+N` | Rule Inspector | Scrolls the rule body by 1 line. |
+| `PgUp` / `PgDn` or `Ctrl+U` / `Ctrl+D` or `Ctrl+B` / `Ctrl+F` or `b` / `f` | Rule Inspector | Scrolls the rule body by 8 lines. |
 | `Home` / `End` or `g` / `G` | Rule Inspector | Scrolls to the top or bottom of the rule body. |
 | `Enter` | Rule Inspector | Closes the browser and submits `@rule:<name> ` to attach the rule to the next prompt. |
 | `Esc` | Rule Inspector | Returns to the rules list. |
@@ -427,7 +427,7 @@ Columns are Name, Status (`[Always]`, `[Loaded]`, or `[Standby]`), Scope (`[Work
 
 | Keybinding | Scope | Action |
 | :--- | :--- | :--- |
-| `↑` / `↓` or `k` / `j` | Tools Browser | Moves the highlighted tool. |
+| `↑` / `↓` or `k` / `j` or `Ctrl+P` / `Ctrl+N` | Tools Browser | Moves the highlighted tool. |
 | `Enter` / `i` | Tools Browser | Opens the tool inspector for the highlighted tool. |
 | `r` | Tools Browser | Reloads workspace resources from disk and refreshes the tool list. |
 | `Esc` | Tools Browser | Closes the tools browser and returns to composer. |
@@ -440,8 +440,8 @@ Columns are Name, Status (`[Eager]`, `[Deferred]`, `[Denied]`, `[Inactive]`, or 
 
 | Keybinding | Scope | Action |
 | :--- | :--- | :--- |
-| `↑` / `↓` or `k` / `j` | Tool Inspector | Scrolls the tool detail by 1 line. |
-| `PgUp` / `PgDn` or `Ctrl+U` / `Ctrl+D` / `b` / `f` | Tool Inspector | Scrolls the tool detail by 8 lines. |
+| `↑` / `↓` or `k` / `j` or `Ctrl+P` / `Ctrl+N` | Tool Inspector | Scrolls the tool detail by 1 line. |
+| `PgUp` / `PgDn` or `Ctrl+U` / `Ctrl+D` or `Ctrl+B` / `Ctrl+F` or `b` / `f` | Tool Inspector | Scrolls the tool detail by 8 lines. |
 | `Home` / `End` or `g` / `G` | Tool Inspector | Scrolls to the top or bottom of the tool detail. |
 | `Esc` | Tool Inspector | Returns to the tools list. |
 
@@ -492,7 +492,7 @@ The REPL status line shows, from left to right: the shortcut hint, the permissio
 | Key | Action |
 | :--- | :--- |
 | `←` / `→` / `Tab` / `Shift+Tab` / `1` `2` `3` | Switch tab. |
-| `↑` / `↓` / `PgUp` / `PgDn` | Scroll long views. |
+| `↑` / `↓` / `Ctrl+P` / `Ctrl+N` / `PgUp` / `PgDn` / `Ctrl+B` / `Ctrl+F` | Scroll long views. |
 | `m` `p` `a` `u` `i` `d` | Group Workspace and Global tabs by model, provider, agent, purpose, pricing tier, or day (the busiest day is marked with `*`). |
 | `t` | Cycle the range: last 24 hours, 7 days, 30 days, all time (default 30 days). |
 | `r` | Refresh. |

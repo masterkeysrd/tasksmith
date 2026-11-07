@@ -239,6 +239,34 @@ func TestSkillMarkdownViewerKeyboardScrolling(t *testing.T) {
 	if strings.Contains(afterHome, "line +") {
 		t.Fatalf("expected scroll indicator to disappear at top, got:\n%s", afterHome)
 	}
+
+	// 5. Ctrl+N and Ctrl+P mirror 'j' and 'k' so scrolling stays on the home row.
+	inst.Engine().ProcessRawEvent(&backend.RawKeyEvent{Key: key.Key{Code: 'n', Text: "n", Mod: key.ModCtrl}})
+	inst.Frame()
+	afterCtrlN := testutils.SurfaceTextKeepBlanks(b)
+	if !strings.Contains(afterCtrlN, "line +1") {
+		t.Fatalf("expected 'line +1' after pressing ctrl+n, got:\n%s", afterCtrlN)
+	}
+	inst.Engine().ProcessRawEvent(&backend.RawKeyEvent{Key: key.Key{Code: 'p', Text: "p", Mod: key.ModCtrl}})
+	inst.Frame()
+	afterCtrlP := testutils.SurfaceTextKeepBlanks(b)
+	if strings.Contains(afterCtrlP, "line +") {
+		t.Fatalf("expected ctrl+p to scroll back to the top, got:\n%s", afterCtrlP)
+	}
+
+	// 6. Ctrl+F and Ctrl+B mirror PgDn and PgUp.
+	inst.Engine().ProcessRawEvent(&backend.RawKeyEvent{Key: key.Key{Code: 'f', Text: "f", Mod: key.ModCtrl}})
+	inst.Frame()
+	afterCtrlF := testutils.SurfaceTextKeepBlanks(b)
+	if !strings.Contains(afterCtrlF, "line +8") {
+		t.Fatalf("expected 'line +8' after pressing ctrl+f, got:\n%s", afterCtrlF)
+	}
+	inst.Engine().ProcessRawEvent(&backend.RawKeyEvent{Key: key.Key{Code: 'b', Text: "b", Mod: key.ModCtrl}})
+	inst.Frame()
+	afterCtrlB := testutils.SurfaceTextKeepBlanks(b)
+	if strings.Contains(afterCtrlB, "line +") {
+		t.Fatalf("expected ctrl+b to scroll back to the top, got:\n%s", afterCtrlB)
+	}
 }
 
 func TestSkillsBrowserDescriptionTruncationToSingleLine(t *testing.T) {

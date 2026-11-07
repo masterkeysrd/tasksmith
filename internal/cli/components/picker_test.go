@@ -215,6 +215,50 @@ func TestPickerComponentAndKeyboardHint(t *testing.T) {
 	_ = submittedVal
 }
 
+// TestPickerCtrlNavigationMovesCursor covers the readline-style aliases: Ctrl+P
+// and Ctrl+N have to move the cursor exactly like the arrow keys do.
+func TestPickerCtrlNavigationMovesCursor(t *testing.T) {
+	opts := []uicomponents.Option{
+		{Value: "opt1", Label: "Option One"},
+		{Value: "opt2", Label: "Option Two"},
+		{Value: "opt3", Label: "Option Three"},
+	}
+
+	var selected []string
+	b := mock.New(80, 24)
+	app := trail.SimpleFC("TestApp", func() kitex.Node {
+		return Picker(PickerProps{
+			Title:   "Select an option:",
+			Options: opts,
+			OnSelect: func(opt uicomponents.Option) {
+				selected = append(selected, opt.Value)
+			},
+		})
+	})
+
+	inst, err := trail.New(app(), trail.WithBackend(b))
+	if err != nil {
+		t.Fatalf("trail.New: %v", err)
+	}
+	defer inst.Unmount()
+	inst.Frame()
+
+	press := func(code rune, text string, mod key.Mod) {
+		inst.Engine().ProcessRawEvent(&backend.RawKeyEvent{Key: key.Key{Code: code, Text: text, Mod: mod}})
+		inst.Frame()
+	}
+
+	press('n', "n", key.ModCtrl)
+	press('n', "n", key.ModCtrl)
+	press(key.KeyEnter, "\n", 0)
+	press('p', "p", key.ModCtrl)
+	press(key.KeyEnter, "\n", 0)
+
+	if strings.Join(selected, ",") != "opt3,opt2" {
+		t.Errorf("expected ctrl+n/ctrl+p to move the cursor, got %v", selected)
+	}
+}
+
 func TestSlotRendersPickerAndRemovesOnAction(t *testing.T) {
 	store.ClearSlot()
 	defer store.ClearSlot()

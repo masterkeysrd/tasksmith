@@ -88,12 +88,12 @@ var PermissionPrompt = trail.FC("PermissionPrompt", func(props PermissionPromptP
 				setScope(api.ScopeSession)
 			}
 
-		case k.MatchString("up", "k"):
+		case k.MatchString("up", "k", "ctrl+p"):
 			if cur > 0 {
 				setCursor(cur - 1)
 			}
 
-		case k.MatchString("down", "j"):
+		case k.MatchString("down", "j", "ctrl+n"):
 			if cur < totalRows-1 {
 				setCursor(cur + 1)
 			}

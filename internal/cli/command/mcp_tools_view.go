@@ -162,19 +162,19 @@ var mcpToolDetailView = trail.FC("MCPToolDetail", func(props mcpToolDetailProps)
 			if props.onBack != nil {
 				props.onBack()
 			}
-		case k.MatchString("up"):
+		case k.MatchString("up", "ctrl+p"):
 			if cur := scrollPos(); cur > 0 {
 				setScrollPos(cur - 1)
 			}
-		case k.MatchString("down"):
+		case k.MatchString("down", "ctrl+n"):
 			setScrollPos(scrollPos() + 1)
-		case k.MatchString("pgup", "ctrl+u"):
+		case k.MatchString("pgup", "ctrl+u", "ctrl+b"):
 			if cur := scrollPos(); cur > 8 {
 				setScrollPos(cur - 8)
 			} else {
 				setScrollPos(0)
 			}
-		case k.MatchString("pgdown", "ctrl+d"):
+		case k.MatchString("pgdown", "ctrl+d", "ctrl+f"):
 			setScrollPos(scrollPos() + 8)
 		case k.MatchString("g"):
 			setScrollPos(0)

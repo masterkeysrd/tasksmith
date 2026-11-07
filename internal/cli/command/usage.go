@@ -165,13 +165,13 @@ var usageBrowser = trail.FC("UsageBrowser", func(props usageBrowserProps) trail.
 			setOffset(0)
 		case k.MatchString("r"):
 			setTick(tick() + 1)
-		case k.MatchString("up", "k"):
+		case k.MatchString("up", "k", "ctrl+p"):
 			setOffset(max(0, pos-1))
-		case k.MatchString("down", "j"):
+		case k.MatchString("down", "j", "ctrl+n"):
 			setOffset(min(maxOffset, pos+1))
-		case k.MatchString("pgup", "b", "ctrl+u"):
+		case k.MatchString("pgup", "b", "ctrl+u", "ctrl+b"):
 			setOffset(max(0, pos-usageViewRows))
-		case k.MatchString("pgdown", "space", "f", "ctrl+d"):
+		case k.MatchString("pgdown", "space", "f", "ctrl+d", "ctrl+f"):
 			setOffset(min(maxOffset, pos+usageViewRows))
 		default:
 			if tab() == usageTabSession {

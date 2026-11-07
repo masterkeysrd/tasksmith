@@ -86,11 +86,11 @@ var PermissionConfigEditor = trail.FC("PermissionConfigEditor", func(props Permi
 		switch step() {
 		case stepScope:
 			switch {
-			case k.MatchString("up", "k"):
+			case k.MatchString("up", "k", "ctrl+p"):
 				if scopeIndex() > 0 {
 					setScopeIndex(0)
 				}
-			case k.MatchString("down", "j"):
+			case k.MatchString("down", "j", "ctrl+n"):
 				if scopeIndex() < 1 {
 					setScopeIndex(1)
 				}
@@ -130,12 +130,12 @@ var PermissionConfigEditor = trail.FC("PermissionConfigEditor", func(props Permi
 					props.OnClearError()
 				}
 
-			case k.MatchString("up", "k"):
+			case k.MatchString("up", "k", "ctrl+p"):
 				if curRule > 0 {
 					setRuleCursor(curRule - 1)
 				}
 
-			case k.MatchString("down", "j"):
+			case k.MatchString("down", "j", "ctrl+n"):
 				if curRule < len(rules)-1 {
 					setRuleCursor(curRule + 1)
 				}

@@ -152,6 +152,8 @@ For a complete reference of flags, keybindings, and autocomplete shortcuts, see 
 
 When TaskSmith needs user interaction—such as requesting permission, answering agent questions, browsing sessions, or inspecting diffs—it mounts a dedicated modal inside the `<Slot />` viewport directly above the status line.
 
+Every modal and browser moves its cursor with `↑` / `↓`, and each accepts the readline-style `Ctrl+P` / `Ctrl+N` equivalents too, so you can scroll without leaving the home row. Page-wise scrolling works with `PgUp` / `PgDn` or `Ctrl+B` / `Ctrl+F`. Where a view also lists `k` / `j`, those keep working.
+
 ### Permission Approval Prompts
 
 When an agent invokes a tool that requires user consent (such as executing an unsanctioned `bash` command, modifying a file outside allow rules, or fetching an external URL), the TUI suspends tool execution and displays an authorization card:
@@ -291,4 +293,4 @@ When an agent delegates work using `invoke_agent`, TaskSmith spawns an asynchron
   - Press `Ctrl+Y` to approve the pending permission request (`allow_once`) immediately without leaving the composer.
   - Press `Ctrl+G` to open the waiting subagent's live view inside `<Slot />` to inspect full details, choose a broader permission scope, or answer a questionnaire.
 - **Subagents Browser (`/subagents`)**: Run `/subagents` (or `/subagent`) to list active child subagents (or press `a` to toggle completed/idle subagents), inspect their live conversation (`Enter`), or terminate a running subagent (`x`).
-- **Live Navigable Subagent Viewer**: Selecting a subagent opens its live streaming chat view inside `<Slot />`, complete with inline permission/question prompts and keyboard scrolling (`↑`/`↓` or `j`/`k`, `PgUp`/`PgDn` or `Ctrl+U`/`Ctrl+D`, `g`/`G` for top/bottom, `x` to kill, and `Esc` to return).
+- **Live Navigable Subagent Viewer**: Selecting a subagent opens its live streaming chat view inside `<Slot />`, complete with inline permission/question prompts and keyboard scrolling (`↑`/`↓` or `j`/`k` or `Ctrl+P`/`Ctrl+N`, `PgUp`/`PgDn` or `Ctrl+U`/`Ctrl+D` or `Ctrl+B`/`Ctrl+F`, `g`/`G` for top/bottom, `x` to kill, and `Esc` to return).

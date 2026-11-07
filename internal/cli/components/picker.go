@@ -182,13 +182,13 @@ var Picker = trail.FC("Picker", func(props PickerProps) trail.Node {
 			setNotice("")
 		}
 		switch {
-		case ke.MatchString("up", "k"):
+		case ke.MatchString("up", "k", "ctrl+p"):
 			if cur > 0 {
 				setCursor(cur - 1)
 			}
 			return true
 
-		case ke.MatchString("down", "j"):
+		case ke.MatchString("down", "j", "ctrl+n"):
 			if cur < len(filtered)-1 {
 				setCursor(cur + 1)
 			}

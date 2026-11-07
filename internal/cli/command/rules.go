@@ -129,21 +129,21 @@ var ruleMarkdownViewer = trail.FC("RuleMarkdownViewer", func(props ruleMarkdownP
 		case k.MatchString("enter"):
 			store.RemoveSlot(props.slotID)
 			store.Send("@rule:" + props.rule.Name + " ")
-		case k.MatchString("up", "k"):
+		case k.MatchString("up", "k", "ctrl+p"):
 			cur := scrollPos()
 			if cur > 0 {
 				setScrollPos(cur - 1)
 			}
-		case k.MatchString("down", "j"):
+		case k.MatchString("down", "j", "ctrl+n"):
 			setScrollPos(scrollPos() + 1)
-		case k.MatchString("pgup", "b", "ctrl+u"):
+		case k.MatchString("pgup", "b", "ctrl+u", "ctrl+b"):
 			cur := scrollPos()
 			if cur > 8 {
 				setScrollPos(cur - 8)
 			} else {
 				setScrollPos(0)
 			}
-		case k.MatchString("pgdown", "space", "f", "ctrl+d"):
+		case k.MatchString("pgdown", "space", "f", "ctrl+d", "ctrl+f"):
 			setScrollPos(scrollPos() + 8)
 		case k.MatchString("home", "g"):
 			setScrollPos(0)

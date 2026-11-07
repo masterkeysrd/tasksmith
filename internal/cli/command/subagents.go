@@ -174,7 +174,7 @@ var SubagentViewer = trail.FC("SubagentViewer", func(props SubagentViewerProps) 
 			return
 		}
 
-		if k.MatchString("pgup", "ctrl+u", "b") {
+		if k.MatchString("pgup", "ctrl+u", "b", "ctrl+b") {
 			setAutoScroll(false)
 			cur := scrollPos()
 			if cur > 8 {
@@ -184,20 +184,20 @@ var SubagentViewer = trail.FC("SubagentViewer", func(props SubagentViewerProps) 
 			}
 			return
 		}
-		if k.MatchString("pgdown", "ctrl+d", "f") {
+		if k.MatchString("pgdown", "ctrl+d", "f", "ctrl+f") {
 			setScrollPos(scrollPos() + 8)
 			return
 		}
 
 		if !hasPrompt {
 			switch {
-			case k.MatchString("up", "k"):
+			case k.MatchString("up", "k", "ctrl+p"):
 				setAutoScroll(false)
 				cur := scrollPos()
 				if cur > 0 {
 					setScrollPos(cur - 1)
 				}
-			case k.MatchString("down", "j"):
+			case k.MatchString("down", "j", "ctrl+n"):
 				setScrollPos(scrollPos() + 1)
 			case k.MatchString("space"):
 				setScrollPos(scrollPos() + 8)
