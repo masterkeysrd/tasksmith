@@ -57,6 +57,8 @@ var MessageTool = trail.FC("MessageTool", func(props MessageToolProps) trail.Nod
 		return TodosToolRenderer(props.Tool)
 	case "ask_question":
 		return QuestionToolRenderer(props.Tool)
+	case "tool_search":
+		return ToolSearchToolRenderer(props.Tool)
 	default:
 		return DefaultToolRenderer(props.Tool)
 	}
