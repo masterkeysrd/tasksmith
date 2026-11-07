@@ -172,6 +172,8 @@ github.com/masterkeysrd/kite v0.0.7-0.20261107034218-fde6c587a1eb h1:F0xqw+9pdm4
 github.com/masterkeysrd/kite v0.0.7-0.20261107034218-fde6c587a1eb/go.mod h1:GQbBqo4ofIefIcd7xpmcq3wAPNioL7dGVkG3Z7kopGg=
 github.com/masterkeysrd/loom v0.0.9-0.20261104235925-1b9eaa2633a9 h1:U67xYGOHVxmxbl27MaJQgQLsg6R+yrO3CQuF8lpYTX4=
 github.com/masterkeysrd/loom v0.0.9-0.20261104235925-1b9eaa2633a9/go.mod h1:iyosTFy9p/G/fyxmnWD1be4UL0Inuj1cycbOha0JlXw=
+github.com/masterkeysrd/loom v0.0.9-0.20261107051712-b5006f55a76e h1:VYnSUSYVZBxqqHMLlnuuw9Wa0jXT6q3Ptv9GR8p1J70=
+github.com/masterkeysrd/loom v0.0.9-0.20261107051712-b5006f55a76e/go.mod h1:iyosTFy9p/G/fyxmnWD1be4UL0Inuj1cycbOha0JlXw=
 github.com/masterkeysrd/warp v0.0.7-0.20261104235639-05b5acbc6fde h1:eAu6rW0Rt0NThZra5CHlq/4jF+62StFYfSH30/wDN6I=
 github.com/masterkeysrd/warp v0.0.7-0.20261104235639-05b5acbc6fde/go.mod h1:+gAWzS320jlO3Zr2y4jiR349JDvnCme77t/+ePg5mY0=
 github.com/mattn/go-isatty v0.0.24 h1:tGZZoVgT/KiqK1c8ocVLeDS8BSWMRd47J3Lbz7vsReI=

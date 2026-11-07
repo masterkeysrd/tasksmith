@@ -11,6 +11,7 @@ import (
 
 	"github.com/anthropics/anthropic-sdk-go"
 	anthropicopt "github.com/anthropics/anthropic-sdk-go/option"
+	"github.com/masterkeysrd/loom/auth"
 	"github.com/masterkeysrd/loom/decision"
 	"github.com/masterkeysrd/loom/embedding"
 	"github.com/masterkeysrd/loom/llm"
@@ -168,11 +169,11 @@ func initProvider(ctx context.Context, cfg ProviderConfig, env map[string]string
 		inst.embeddingProv = genaiProv
 
 	case "antigravity":
-		tp := loomantigravity.StaticToken(token)
+		ts := auth.StaticTokenSource(token)
 		antigravityProv, err := loomantigravity.NewProvider(&loomantigravity.Config{
-			TokenProvider: tp,
-			BaseURL:       cfg.Endpoint,
-			HTTPClient:    httpClient,
+			TokenSource: ts,
+			BaseURL:     cfg.Endpoint,
+			HTTPClient:  httpClient,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("gateway: antigravity provider error: %w", err)
