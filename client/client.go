@@ -157,6 +157,67 @@ func (c *Client) GetWorkspace(ctx context.Context) (*api.Workspace, error) {
 	return &out, nil
 }
 
+// GetTrustStatus checks the trust and executable configuration status for the workspace.
+func (c *Client) GetTrustStatus(ctx context.Context) (*api.TrustStatus, error) {
+	if err := c.requireCWD(); err != nil {
+		return nil, err
+	}
+	var out api.TrustStatus
+	if err := c.doJSON(ctx, http.MethodGet, "/v1/workspace/trust", nil, nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// TrustWorkspace records a trust decision for the workspace.
+func (c *Client) TrustWorkspace(ctx context.Context, scope string) error {
+	if err := c.requireCWD(); err != nil {
+		return err
+	}
+	req := api.TrustFolderRequest{Path: c.CWD(), Scope: scope}
+	return c.doJSON(ctx, http.MethodPost, "/v1/workspace/trust", nil, req, nil)
+}
+
+// RevokeTrust removes the workspace from the trust store.
+func (c *Client) RevokeTrust(ctx context.Context) error {
+	if err := c.requireCWD(); err != nil {
+		return err
+	}
+	return c.doJSON(ctx, http.MethodDelete, "/v1/workspace/trust", nil, nil, nil)
+}
+
+// GetWorkspaceStatus returns the onboarding, trust, and configuration status of the workspace.
+func (c *Client) GetWorkspaceStatus(ctx context.Context) (*api.WorkspaceStatus, error) {
+	if err := c.requireCWD(); err != nil {
+		return nil, err
+	}
+	var out api.WorkspaceStatus
+	if err := c.doJSON(ctx, http.MethodGet, "/v1/workspace/status", nil, nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// InitWorkspace initializes a workspace according to req.
+func (c *Client) InitWorkspace(ctx context.Context, req api.InitWorkspaceRequest) error {
+	if err := c.requireCWD(); err != nil {
+		return err
+	}
+	if req.CWD == "" {
+		req.CWD = c.CWD()
+	}
+	return c.doJSON(ctx, http.MethodPost, "/v1/workspace/init", nil, req, nil)
+}
+
+// VerifyProvider tests credentials or endpoint reachability for a provider.
+func (c *Client) VerifyProvider(ctx context.Context, req api.VerifyProviderRequest) (*api.VerifyProviderResponse, error) {
+	var out api.VerifyProviderResponse
+	if err := c.doJSON(ctx, http.MethodPost, "/v1/providers/verify", nil, req, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 // PreviewSession resolves a proposed draft session configuration without creating it.
 func (c *Client) PreviewSession(ctx context.Context, req api.PreviewSessionRequest) (*api.SessionPreview, error) {
 	if err := c.requireCWD(); err != nil {

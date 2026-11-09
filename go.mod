@@ -17,6 +17,7 @@ require (
 	github.com/openai/openai-go/v3 v3.79.0
 	github.com/spf13/cobra v1.10.2
 	github.com/yuin/goldmark v1.8.6
+	golang.org/x/mod v0.42.0
 	golang.org/x/oauth2 v0.37.0
 	google.golang.org/genai v1.75.0
 	gopkg.in/yaml.v3 v3.0.1

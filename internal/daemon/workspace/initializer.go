@@ -2,7 +2,6 @@ package workspace
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -11,15 +10,17 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"time"
 
 	"github.com/masterkeysrd/tasksmith/internal/core/env"
+	"github.com/masterkeysrd/tasksmith/internal/core/fsutils"
 	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
+	"github.com/masterkeysrd/tasksmith/internal/version"
 	"github.com/masterkeysrd/warp"
 )
 
 // InitOptions configures the initialization of a workspace directory.
 type InitOptions struct {
+	Scope            string                    `json:"scope,omitempty"` // "user", "workspace", "project"
 	ProjectName      string                    `json:"project_name,omitempty"`
 	Provider         string                    `json:"provider,omitempty"`
 	SelectedProvider string                    `json:"selected_provider,omitempty"`
@@ -28,6 +29,8 @@ type InitOptions struct {
 	DefaultModels    map[warp.ModelRole]string `json:"default_models,omitempty"`
 	DefaultAgent     string                    `json:"default_agent,omitempty"`
 	ModelAliases     map[string]string         `json:"model_aliases,omitempty"`
+	DisabledTools    []string                  `json:"disabled_tools,omitempty"`
+	DisabledMCPs     []string                  `json:"disabled_mcps,omitempty"`
 	AuthorizedTools  []string                  `json:"authorized_tools,omitempty"`
 	TrustOnly        bool                      `json:"trust_only,omitempty"`
 	AuthType         string                    `json:"auth_type,omitempty"`
@@ -67,14 +70,18 @@ func IsConfigured(dir string) bool {
 }
 
 // IsInitialized reports whether dir is already configured on disk (via WORKSPACE.md
-// or .agents/) or has a setup.json sentinel in its XDG workspace data directory.
+// or .agents/) or has a workspace.json (or legacy setup.json) sentinel in its
+// XDG workspace data directory.
 func IsInitialized(dir string) bool {
 	if strings.TrimSpace(dir) == "" {
 		return false
 	}
-	absDir, err := filepath.Abs(dir)
+	absDir, err := fsutils.CleanPath(dir)
 	if err != nil {
-		absDir = dir
+		absDir, err = filepath.Abs(dir)
+		if err != nil {
+			absDir = dir
+		}
 	}
 
 	if IsConfigured(absDir) {
@@ -86,7 +93,12 @@ func IsInitialized(dir string) bool {
 		return false
 	}
 
-	sentinelPath := filepath.Join(wsDir, "setup.json")
+	metaPath := filepath.Join(wsDir, WorkspaceMetadataFile)
+	if info, err := os.Stat(metaPath); err == nil && !info.IsDir() {
+		return true
+	}
+
+	sentinelPath := filepath.Join(wsDir, legacySetupFile)
 	if info, err := os.Stat(sentinelPath); err == nil && !info.IsDir() {
 		return true
 	}
@@ -174,31 +186,74 @@ func Initialize(ctx context.Context, dir string, opts InitOptions) error {
 		return fmt.Errorf("workspace: ensure directory %q: %w", absDir, err)
 	}
 
-	// 1. Write setup.json sentinel in XDG workspace directory
-	wsDir, err := xdg.WorkspaceDir(absDir)
-	if err != nil {
-		return fmt.Errorf("workspace: get XDG workspace dir: %w", err)
-	}
-	if err := os.MkdirAll(wsDir, 0o755); err != nil {
-		return fmt.Errorf("workspace: create XDG workspace dir: %w", err)
-	}
-
-	sentinelPath := filepath.Join(wsDir, "setup.json")
-	sentinelData := map[string]any{
-		"version":        "1.0.0",
-		"initialized_at": time.Now().UTC().Format(time.RFC3339),
-		"workspace_path": absDir,
-	}
-	sentinelBytes, err := json.MarshalIndent(sentinelData, "", "  ")
-	if err != nil {
-		return fmt.Errorf("workspace: marshal setup.json: %w", err)
-	}
-	if err := os.WriteFile(sentinelPath, append(sentinelBytes, '\n'), 0o644); err != nil {
-		return fmt.Errorf("workspace: write setup.json: %w", err)
+	// 1. Write workspace.json metadata in XDG workspace directory
+	if err := WriteMetadata(absDir, Metadata{
+		Schema:  WorkspaceMetadataSchema,
+		Version: version.Get(),
+	}); err != nil {
+		return fmt.Errorf("workspace: write %s: %w", WorkspaceMetadataFile, err)
 	}
 
 	provName := opts.providerName()
 	baseProvider := findWarpPreset(provName)
+
+	// If provider scope is "user" (global), write to ~/.config/tasksmith/ and omit repo config.
+	if opts.Scope == "user" {
+		if opts.APIKey != "" {
+			envVarName := "API_KEY"
+			if opts.AuthEnv != "" {
+				envVarName = opts.AuthEnv
+			} else if baseProvider != nil && baseProvider.Spec.Auth != nil && baseProvider.Spec.Auth.Env != "" {
+				envVarName = baseProvider.Spec.Auth.Env
+			}
+			cfgDir, err := xdg.SubConfigDir()
+			if err != nil {
+				return fmt.Errorf("workspace: get user config dir: %w", err)
+			}
+			envPath := filepath.Join(cfgDir, ".env")
+			if err := env.SetInFile(envPath, envVarName, opts.APIKey); err != nil {
+				return fmt.Errorf("workspace: write user .env: %w", err)
+			}
+		}
+
+		if provName != "" {
+			userProvidersDir, err := xdg.SubConfigDir("agents/providers")
+			if err != nil {
+				return fmt.Errorf("workspace: get user providers dir: %w", err)
+			}
+			if err := os.MkdirAll(userProvidersDir, 0o755); err != nil {
+				return fmt.Errorf("workspace: create user providers dir: %w", err)
+			}
+			targetFile := filepath.Join(userProvidersDir, provName+".provider.yaml")
+			if _, err := os.Stat(targetFile); os.IsNotExist(err) {
+				var providerSpec warp.ModelProviderSpec
+				if baseProvider != nil {
+					providerSpec = *baseProvider.Spec.DeepCopy()
+				} else {
+					providerSpec.Type = provName
+				}
+				if opts.Endpoint != "" {
+					providerSpec.Endpoint = opts.Endpoint
+				}
+				provDef := &warp.ModelProvider{
+					BaseResource: warp.BaseResource{
+						APIVersion: warp.APIVersion,
+						Kind:       warp.KindModelProvider,
+						Metadata: warp.Metadata{
+							Name: provName,
+						},
+					},
+					Spec: providerSpec,
+				}
+				provData, err := warp.Format(provDef)
+				if err == nil {
+					_ = os.WriteFile(targetFile, provData, 0o644)
+				}
+			}
+		}
+
+		return nil
+	}
 
 	// 2. Persist API key in <dir>/.env and ensure .env is in <dir>/.gitignore
 	if opts.APIKey != "" {
@@ -231,7 +286,15 @@ func Initialize(ctx context.Context, dir string, opts InitOptions) error {
 	}
 
 	var policies *warp.Policies
-	if len(opts.AuthorizedTools) > 0 {
+	if len(opts.DisabledTools) > 0 {
+		excluded := cloneSlice(opts.DisabledTools)
+		sort.Strings(excluded)
+		policies = &warp.Policies{
+			Tools: &warp.ToolPolicies{
+				Exclude: excluded,
+			},
+		}
+	} else if len(opts.AuthorizedTools) > 0 {
 		allowed := cloneSlice(opts.AuthorizedTools)
 		sort.Strings(allowed)
 		policies = &warp.Policies{

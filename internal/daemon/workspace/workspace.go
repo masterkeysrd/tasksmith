@@ -18,6 +18,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/core/env"
 	"github.com/masterkeysrd/tasksmith/internal/core/fsutils"
 	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
+	"github.com/masterkeysrd/tasksmith/internal/version"
 	"github.com/masterkeysrd/warp"
 )
 
@@ -45,7 +46,18 @@ const (
 type Option func(*openOptions)
 
 type openOptions struct {
-	builtinFS []fs.FS
+	builtinFS  []fs.FS
+	restricted bool
+}
+
+// WithRestrictedMode opens the workspace in restricted mode:
+// local project and workspace .env files are ignored, and workspace/project-scoped
+// custom tools and MCP servers are stripped from the registry so only system/user
+// tools remain available.
+func WithRestrictedMode(restricted bool) Option {
+	return func(o *openOptions) {
+		o.restricted = restricted
+	}
 }
 
 // WithBuiltinFS registers additional embedded or virtual filesystems (such as
@@ -151,6 +163,12 @@ func Open(ctx context.Context, dir string, opts ...Option) (*Workspace, error) {
 		return nil, err
 	}
 
+	if IsConfigured(absDir) {
+		if err := RunMigrations(ctx, absDir, version.Get()); err != nil {
+			slog.Warn("workspace: migrations encountered an error", "dir", absDir, "error", err)
+		}
+	}
+
 	return w, nil
 }
 
@@ -236,7 +254,19 @@ func (w *Workspace) Reload(ctx context.Context) error {
 		}
 	}
 
-	loadedEnv, err := loadIsolatedEnv(w.cwd, rootDir)
+	if w.opts.restricted {
+		// Strip workspace and project-scoped executable resources (tools, mcps)
+		for _, res := range reg.Resources() {
+			if res.GetKind() == warp.KindTool || res.GetKind() == warp.KindMCP {
+				ns := strings.ToLower(res.GetNamespace())
+				if ns == warp.NamespaceWorkspace || ns == "workspace" || (ns != warp.NamespaceSystem && ns != warp.NamespaceUser && ns != "system" && ns != "user") {
+					reg.Delete(res.QualifiedName())
+				}
+			}
+		}
+	}
+
+	loadedEnv, err := loadIsolatedEnv(w.cwd, rootDir, w.opts.restricted)
 	if err != nil {
 		return err
 	}
@@ -307,7 +337,7 @@ func ensureSubprojectLoaded(ctx context.Context, reg *warp.Registry, rootDir, cw
 	return nil
 }
 
-func loadIsolatedEnv(cwd, rootDir string) (map[string]string, error) {
+func loadIsolatedEnv(cwd, rootDir string, restricted bool) (map[string]string, error) {
 	var layers []map[string]string
 
 	hostEnv := make(map[string]string)
@@ -324,6 +354,10 @@ func loadIsolatedEnv(cwd, rootDir string) (map[string]string, error) {
 			return nil, fmt.Errorf("workspace: load user .env: %w", loadErr)
 		}
 		layers = append(layers, m)
+	}
+
+	if restricted {
+		return env.Merge(layers...), nil
 	}
 
 	var climbPaths []string
@@ -395,7 +429,12 @@ func loadIsolatedEnv(cwd, rootDir string) (map[string]string, error) {
 	return env.Merge(layers...), nil
 }
 
-// RootDir returns the absolute path to the discovered workspace root directory.
+// IsRestricted reports whether the workspace was opened in restricted mode.
+func (w *Workspace) IsRestricted() bool {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	return w.opts.restricted
+}
 func (w *Workspace) RootDir() string {
 	w.mu.RLock()
 	defer w.mu.RUnlock()

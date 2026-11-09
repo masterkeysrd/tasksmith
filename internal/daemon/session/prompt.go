@@ -771,6 +771,9 @@ func validateThinking(catalog *models.Catalog, model models.ID, setting *api.Thi
 // the permission mode. A "default" thinking setting is normalized to nil.
 func resolveConfig(ws *workspace.Workspace, catalog *models.Catalog, config api.SessionConfig) (api.SessionConfig, error) {
 	mode := cmp.Or(config.Mode, api.ModeDefault)
+	if ws != nil && ws.IsRestricted() {
+		mode = api.ModePlan
+	}
 	if !mode.IsValid() {
 		return api.SessionConfig{}, fmt.Errorf("%w: unsupported permission mode %q", ErrInvalidConfig, config.Mode)
 	}

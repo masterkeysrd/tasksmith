@@ -155,6 +155,12 @@ func New(ctx context.Context, cfg Config) (*Session, error) {
 		return nil, err
 	}
 
+	if cfg.Session.Mode == "" && cfg.Permissions != nil {
+		if eff, err := cfg.Permissions.Effective(); err == nil && eff.DefaultMode != "" {
+			cfg.Session.Mode = eff.DefaultMode
+		}
+	}
+
 	resolvedConfig, err := resolveConfig(cfg.Workspace, cfg.Catalog(), cfg.Session)
 	if err != nil {
 		return nil, err
@@ -626,7 +632,11 @@ func (s *Session) Update(ctx context.Context, req api.UpdateSessionRequest) erro
 		}
 	}
 	if req.Config.Mode != "" {
-		newConfig.Mode = req.Config.Mode
+		if s.workspace != nil && s.workspace.IsRestricted() {
+			newConfig.Mode = api.ModePlan
+		} else {
+			newConfig.Mode = req.Config.Mode
+		}
 	}
 
 	updatedAt := time.Now().UTC()
@@ -942,6 +952,35 @@ func (s *Session) buildToolsForAgent(agentName string) (tools.Container, error) 
 			// to every effective workspace tool.
 			for _, t := range cat.Tools() {
 				allowedToolNames = append(allowedToolNames, t.Metadata.Name)
+			}
+		}
+	}
+
+	if s.permRoot != nil {
+		if eff, err := s.permRoot.Effective(); err == nil {
+			if len(eff.DisabledTools) > 0 || len(eff.DisabledMCPs) > 0 {
+				disabledSet := make(map[string]struct{}, len(eff.DisabledTools))
+				for _, dt := range eff.DisabledTools {
+					disabledSet[dt] = struct{}{}
+				}
+				disabledMcps := make(map[string]struct{}, len(eff.DisabledMCPs))
+				for _, dm := range eff.DisabledMCPs {
+					disabledMcps[dm] = struct{}{}
+				}
+				filtered := allowedToolNames[:0]
+				for _, name := range allowedToolNames {
+					if _, ok := disabledSet[name]; ok {
+						continue
+					}
+					parts := strings.SplitN(name, "__", 2)
+					if len(parts) == 2 {
+						if _, ok := disabledMcps[parts[0]]; ok {
+							continue
+						}
+					}
+					filtered = append(filtered, name)
+				}
+				allowedToolNames = filtered
 			}
 		}
 	}

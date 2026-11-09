@@ -1007,6 +1007,13 @@ func SetSessionAgent(agent string) {
 	})
 }
 
+// SetClient sets the active daemon client in the session store.
+func SetClient(c *client.Client) {
+	sessMu.Lock()
+	defer sessMu.Unlock()
+	activeClient = c
+}
+
 // Client returns the currently active daemon client, if any.
 func Client() *client.Client {
 	sessMu.Lock()

@@ -10,11 +10,13 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"sort"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/masterkeysrd/tasksmith/api"
+	"github.com/masterkeysrd/tasksmith/internal/core/env"
 	"github.com/masterkeysrd/tasksmith/internal/core/fsutils"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	"github.com/masterkeysrd/tasksmith/internal/core/sqlite"
@@ -25,9 +27,12 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/daemon/gateway"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/metrics"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/models"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/permissions"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/server"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/session"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tasks"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/workspace"
+	"github.com/masterkeysrd/warp"
 )
 
 // Sentinel errors returned by the daemon package.
@@ -444,6 +449,7 @@ func (d *Daemon) GetWorkspace(ctx context.Context, rawWS string) (*api.Workspace
 		DefaultAgent: owner.Workspace().Catalog().DefaultAgentName(),
 		DefaultModel: resolvedDefault,
 		Warnings:     warnings,
+		IsRestricted: rt.Workspace().IsRestricted(),
 	}, nil
 }
 
@@ -710,6 +716,328 @@ func (d *Daemon) RemovePermissionRule(ctx context.Context, rawWS string, req api
 	}
 
 	return d.GetPermissions(ctx, rawWS)
+}
+
+func (d *Daemon) GetTrustStatus(ctx context.Context, rawWS string) (*api.TrustStatus, error) {
+	cleanDir, err := fsutils.CleanPath(rawWS)
+	if err != nil {
+		return nil, err
+	}
+
+	isTrusted, fpChanged, err := workspace.IsTrusted(cleanDir)
+	if err != nil {
+		return nil, err
+	}
+
+	summary, err := workspace.ScanExecutableConfig(cleanDir)
+	if err != nil {
+		return nil, err
+	}
+
+	return &api.TrustStatus{
+		Path:               cleanDir,
+		IsTrusted:          isTrusted,
+		FingerprintChanged: fpChanged,
+		Executables: api.ExecutableConfigSummary{
+			MCPServers:  summary.MCPServers,
+			CustomTools: summary.CustomTools,
+			HasEnv:      summary.HasEnv,
+		},
+	}, nil
+}
+
+func (d *Daemon) TrustWorkspace(ctx context.Context, req api.TrustFolderRequest) error {
+	cleanDir, err := fsutils.CleanPath(req.Path)
+	if err != nil {
+		return err
+	}
+	scope := workspace.TrustScope(req.Scope)
+	if scope == "" {
+		scope = workspace.TrustScopeFolder
+	}
+	return workspace.TrustFolder(cleanDir, scope)
+}
+
+func (d *Daemon) RevokeTrust(ctx context.Context, rawWS string) error {
+	cleanDir, err := fsutils.CleanPath(rawWS)
+	if err != nil {
+		return err
+	}
+	return workspace.RevokeTrust(cleanDir)
+}
+
+func (d *Daemon) GetWorkspaceStatus(ctx context.Context, rawWS string) (*api.WorkspaceStatus, error) {
+	cleanDir, err := fsutils.CleanPath(rawWS)
+	if err != nil {
+		return nil, err
+	}
+
+	isTrusted, fpChanged, err := workspace.IsTrusted(cleanDir)
+	if err != nil {
+		return nil, err
+	}
+
+	summary, err := workspace.ScanExecutableConfig(cleanDir)
+	if err != nil {
+		return nil, err
+	}
+
+	isConfigured := workspace.IsConfigured(cleanDir)
+	_, errAgents := os.Stat(filepath.Join(cleanDir, "AGENTS.md"))
+	hasAgentsMD := (errAgents == nil)
+
+	globalProviders := d.scanGlobalProviders()
+	globalMCPs := d.scanGlobalMCPs()
+
+	var missingCredentials []string
+	if isConfigured {
+		missingCredentials = d.checkMissingCredentials(cleanDir)
+	}
+
+	needsOnboarding := (!isTrusted || fpChanged || !isConfigured || len(missingCredentials) > 0)
+
+	return &api.WorkspaceStatus{
+		Path:               cleanDir,
+		IsTrusted:          isTrusted,
+		FingerprintChanged: fpChanged,
+		IsConfigured:       isConfigured,
+		HasAgentsMD:        hasAgentsMD,
+		Executables: api.ExecutableConfigSummary{
+			MCPServers:  summary.MCPServers,
+			CustomTools: summary.CustomTools,
+			HasEnv:      summary.HasEnv,
+		},
+		GlobalProviders:    globalProviders,
+		GlobalMCPs:         globalMCPs,
+		MissingCredentials: missingCredentials,
+		NeedsOnboarding:    needsOnboarding,
+	}, nil
+}
+
+func (d *Daemon) scanGlobalProviders() []api.ProviderSummary {
+	var userEnv map[string]string
+	if cfgDir, err := xdg.SubConfigDir(); err == nil {
+		userEnvPath := filepath.Join(cfgDir, ".env")
+		userEnv, _ = env.LoadFile(userEnvPath)
+	}
+
+	presets := workspace.Presets()
+	var summaries []api.ProviderSummary
+
+	for _, p := range presets {
+		authEnv := ""
+		if p.Spec.Auth != nil && p.Spec.Auth.Env != "" {
+			authEnv = p.Spec.Auth.Env
+		}
+
+		hasKey := false
+		if authEnv != "" {
+			val := os.Getenv(authEnv)
+			if strings.TrimSpace(val) == "" && userEnv != nil {
+				val = userEnv[authEnv]
+			}
+			hasKey = strings.TrimSpace(val) != ""
+		}
+
+		status := ""
+		if p.Metadata.Name == "ollama" {
+			status = "local"
+		} else if hasKey {
+			status = fmt.Sprintf("✓ %s detected", authEnv)
+		}
+
+		var modelNames []string
+		for _, m := range p.Spec.Models {
+			modelNames = append(modelNames, m.ID)
+		}
+
+		defaultModel := ""
+		if p.Spec.DefaultModels != nil {
+			defaultModel = p.Spec.DefaultModels.Completion
+		}
+
+		summaries = append(summaries, api.ProviderSummary{
+			Name:         p.Metadata.Name,
+			DisplayName:  p.Metadata.Name,
+			Status:       status,
+			HasKey:       hasKey,
+			AuthEnv:      authEnv,
+			DefaultModel: defaultModel,
+			Models:       modelNames,
+			Scope:        "system",
+		})
+	}
+
+	return summaries
+}
+
+func (d *Daemon) scanGlobalMCPs() []string {
+	var mcps []string
+	if userMcpsDir, err := xdg.SubConfigDir("agents/mcps"); err == nil {
+		if entries, err := os.ReadDir(userMcpsDir); err == nil {
+			for _, entry := range entries {
+				if entry.IsDir() {
+					continue
+				}
+				name := entry.Name()
+				if strings.HasSuffix(name, ".mcp.yaml") || strings.HasSuffix(name, ".yaml") {
+					cleanName := strings.TrimSuffix(strings.TrimSuffix(name, ".mcp.yaml"), ".yaml")
+					mcps = append(mcps, cleanName)
+				}
+			}
+		}
+	}
+	sort.Strings(mcps)
+	return mcps
+}
+
+func (d *Daemon) checkMissingCredentials(cleanDir string) []string {
+	var missing []string
+	localEnvPath := filepath.Join(cleanDir, ".env")
+	localEnv, _ := env.LoadFile(localEnvPath)
+
+	var userEnv map[string]string
+	if cfgDir, err := xdg.SubConfigDir(); err == nil {
+		userEnvPath := filepath.Join(cfgDir, ".env")
+		userEnv, _ = env.LoadFile(userEnvPath)
+	}
+
+	wsFile := filepath.Join(cleanDir, warp.WorkspaceFileName)
+	if data, err := os.ReadFile(wsFile); err == nil {
+		res, err := warp.Parse(wsFile, string(data))
+		if err == nil {
+			if wsDef, ok := res.Resource.(*warp.WorkspaceDef); ok && wsDef.Spec.DefaultProvider != "" {
+				provName := wsDef.Spec.DefaultProvider
+				preset := workspace.Presets()
+				for _, p := range preset {
+					if p.Metadata.Name == provName && p.Spec.Auth != nil && p.Spec.Auth.Env != "" {
+						envVar := p.Spec.Auth.Env
+						val := os.Getenv(envVar)
+						if strings.TrimSpace(val) == "" && localEnv != nil {
+							val = localEnv[envVar]
+						}
+						if strings.TrimSpace(val) == "" && userEnv != nil {
+							val = userEnv[envVar]
+						}
+						if strings.TrimSpace(val) == "" {
+							missing = append(missing, envVar)
+						}
+						break
+					}
+				}
+			}
+		}
+	}
+
+	return missing
+}
+
+func (d *Daemon) InitWorkspace(ctx context.Context, req api.InitWorkspaceRequest) error {
+	cleanDir, err := fsutils.CleanPath(req.CWD)
+	if err != nil {
+		return err
+	}
+
+	var defaultModels map[warp.ModelRole]string
+	if len(req.DefaultModels) > 0 {
+		defaultModels = make(map[warp.ModelRole]string)
+		for k, v := range req.DefaultModels {
+			defaultModels[warp.ModelRole(k)] = v
+		}
+	}
+
+	opts := workspace.InitOptions{
+		Scope:         req.Scope,
+		ProjectName:   req.ProjectName,
+		Provider:      req.Provider,
+		APIKey:        req.APIKey,
+		Endpoint:      req.Endpoint,
+		AuthType:      req.AuthType,
+		AuthEnv:       req.AuthEnv,
+		DefaultModels: defaultModels,
+		DisabledTools: req.DisabledTools,
+		DisabledMCPs:  req.DisabledMCPs,
+	}
+
+	if err := workspace.Initialize(ctx, cleanDir, opts); err != nil {
+		return err
+	}
+
+	if req.DefaultMode != "" || len(req.DisabledTools) > 0 || len(req.DisabledMCPs) > 0 {
+		if req.Scope == "user" {
+			_ = permissions.UpdateGlobal(req.DefaultMode, req.DisabledTools, req.DisabledMCPs)
+		} else {
+			if req.DefaultMode != "" || len(req.DisabledMCPs) > 0 {
+				_ = permissions.UpdateGlobal(req.DefaultMode, nil, req.DisabledMCPs)
+			}
+		}
+	}
+
+	return nil
+}
+
+func (d *Daemon) VerifyProvider(ctx context.Context, req api.VerifyProviderRequest) (*api.VerifyProviderResponse, error) {
+	provName := strings.TrimSpace(req.Provider)
+	if provName == "" {
+		return &api.VerifyProviderResponse{
+			Valid:        false,
+			ErrorMessage: "provider name is required",
+		}, nil
+	}
+
+	presets := workspace.Presets()
+	var foundPreset *warp.ModelProvider
+	for _, p := range presets {
+		if p.Metadata.Name == provName {
+			foundPreset = p
+			break
+		}
+	}
+
+	apiKey := strings.TrimSpace(req.APIKey)
+	if apiKey == "" && req.AuthEnv != "" {
+		apiKey = strings.TrimSpace(os.Getenv(req.AuthEnv))
+	}
+	if apiKey == "" && foundPreset != nil && foundPreset.Spec.Auth != nil && foundPreset.Spec.Auth.Env != "" {
+		apiKey = strings.TrimSpace(os.Getenv(foundPreset.Spec.Auth.Env))
+	}
+
+	if provName == "ollama" {
+		endpoint := req.Endpoint
+		if endpoint == "" {
+			endpoint = "http://localhost:11434"
+		}
+		client := &http.Client{Timeout: 3 * time.Second}
+		resp, err := client.Get(endpoint + "/api/tags")
+		if err != nil {
+			return &api.VerifyProviderResponse{
+				Valid:        false,
+				ErrorMessage: fmt.Sprintf("failed to reach Ollama at %s: %v", endpoint, err),
+			}, nil
+		}
+		_ = resp.Body.Close()
+		return &api.VerifyProviderResponse{
+			Valid:       true,
+			ModelsCount: 1,
+		}, nil
+	}
+
+	if apiKey == "" && (foundPreset != nil && foundPreset.Spec.Auth != nil && foundPreset.Spec.Auth.Type != "none") {
+		return &api.VerifyProviderResponse{
+			Valid:        false,
+			ErrorMessage: fmt.Sprintf("API key or token is required for %s", provName),
+		}, nil
+	}
+
+	modelsCount := 1
+	if foundPreset != nil && len(foundPreset.Spec.Models) > 0 {
+		modelsCount = len(foundPreset.Spec.Models)
+	}
+
+	return &api.VerifyProviderResponse{
+		Valid:       true,
+		ModelsCount: modelsCount,
+	}, nil
 }
 
 // SessionBackend implementation

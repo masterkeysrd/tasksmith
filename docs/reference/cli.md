@@ -77,6 +77,8 @@ Inside the TaskSmith interactive REPL, slash commands provide instant control ov
 | **`/rules`** | | *(none)* | Opens the interactive rules browser to inspect rule status, scope, triggers, and token estimates, and to reload workspace rules. |
 | **`/tools`** | | *(none)* | Opens the interactive tools browser to inspect tool status, scope, safety annotations, and JSON schemas, and to reload workspace tools. See [Tools Browser](#tools-browser-tools). |
 | **`/mcp`** | `/mcps` | `[auth <name>\|restart <name>]` | With no subcommand, opens the interactive MCP browser to inspect servers, run prompts, attach resources, authorize, and restart. `auth` and `restart` act on one named server after a confirmation. See [MCP Browser](#mcp-browser-mcp). |
+| **`/setup`** | | *(none)* | Opens the interactive workspace onboarding and configuration wizard to reconfigure providers, scopes, permissions, tools, or MCP servers. |
+| **`/init`** | | *(none)* | Invokes the built-in `system:init` command to inspect codebase conventions and interactively generate or update `AGENTS.md`. |
 | **`/workspace`** | `/ws` | `[reload]` | Reloads the active workspace resources from disk. With no subcommand, defaults to `reload`. |
 | **`/daemon`** | | `[status\|restart\|start\|stop]` | Inspects or manages the background Brain Daemon. With no subcommand, opens the interactive daemon browser. |
 
@@ -448,6 +450,26 @@ Columns are Name, Status (`[Eager]`, `[Deferred]`, `[Denied]`, `[Inactive]`, or 
 
 The inspector shows the tool name with its scope, status, and estimated token cost, followed by its description, `Command` (rendered argv, or `—` when the tool declares no command), `Annotations` (including `[Idempotent]` and the approval `userHint`), and pretty-printed `inputSchema` / `outputSchema` JSON blocks (`— (no schema declared)` when absent).
 
+### Onboarding & Setup Wizard (`/setup`)
+
+When TaskSmith is launched for the first time in an unconfigured directory, or when explicitly invoking `/setup`, the interactive wizard guides configuration across seven focused screens:
+
+1. **Trust Prompt**: Review detected executable configurations (`.agents/tools/`, `.agents/mcps/`, `.env`) and grant folder or parent trust, or proceed in restricted mode.
+2. **Provider Source**: Choose whether to reuse machine-wide global providers or configure project-specific credentials.
+3. **Provider & Scope**: Select upstream AI provider preset and target configuration scope (`User`, `Workspace`, or `Project`).
+4. **Credentials**: Enter and verify provider API keys, test endpoints, or local connection settings with real-time verification.
+5. **Default Mode**: Choose the initial permission mode (`default`, `accept_edits`, `plan`, `ask`, `auto`).
+6. **Tools & MCPs**: Selectively enable or disable built-in tools and global MCP servers.
+7. **Review & Write**: Review configured settings, write out manifests, and optionally offer `/init`.
+
+| Keybinding | Scope | Action |
+| :--- | :--- | :--- |
+| `↑` / `↓` or `k` / `j` | Setup Wizard | Navigates between selectable options, list items, or menu entries. |
+| `Enter` | Setup Wizard | Selects current option, confirms input, verifies credentials, or advances to the next step. |
+| `Tab` | Setup Wizard | Toggles between options (such as trust scope `Folder` vs `Parent`, or provider scope `User` vs `Workspace`). |
+| `Space` | Setup Wizard | Toggles selection checkbox for individual tools or MCP servers on the tools screen. |
+| `Esc` | Setup Wizard | Navigates back to the previous screen or exits the setup wizard. |
+
 ---
 
 ## 4. State, Log, & Socket Locations
@@ -461,6 +483,8 @@ TaskSmith adheres to the XDG Base Directory Specification for state persistence,
 | **Global Providers** | `~/.config/tasksmith/providers/*.yaml` | User-tier model provider manifests available across all workspaces. | Permanent |
 | **Global Agents** | `~/.config/tasksmith/agents/*.agent.md` | User-tier custom agent personas and instructions. | Permanent |
 | **Global Rules** | `~/.config/tasksmith/permissions.json` | Persistent machine-wide permission allow and deny rules. | Permanent |
+| **Trust Store** | `~/.local/share/tasksmith/trust.json` | Machine-wide trusted directories registry, trust scopes (`folder` / `parent`), and executable fingerprints (`$XDG_DATA_HOME`). | Permanent |
+| **Workspace Metadata** | `~/.local/share/tasksmith/workspaces/<hash>/workspace.json` | Workspace schema version and binary version for automated upgrade migrations. | Permanent |
 | **Workspace DB** | `~/.local/share/tasksmith/workspaces/<hash>/tasksmith.db` | SQLite database storing turn journals, messages, and session state (`$XDG_DATA_HOME`). | Permanent |
 | **Project Rules** | `~/.local/share/tasksmith/workspaces/<hash>/permissions.json` | Project-scoped persistent permission allow and deny rules. | Permanent |
 | **Fallback Socket** | `~/.local/share/tasksmith/daemon.sock` | Fallback Unix domain socket path when `/tmp` runtime dir is unavailable. | Ephemeral |
@@ -550,3 +574,16 @@ MCP endpoints act on the workspace resolved from the `X-TaskSmith-CWD` header. S
 | `POST` | `/v1/workspace/mcps/{name}/policies/allow` | Permits one item in the server manifest. Body: `kind` (`tool`, `prompt`, or `resource`) and `value` (raw tool name, prompt name, or resource URI). Returns the updated `MCPServer`. |
 
 Prompt rendering and resource reads reject anything the server manifest's `policies` prohibit with `403` `mcp_policy_prohibited`; the rejection message names the prohibited item, the policy section it is excluded from (`policies.tools`, `policies.prompts`, or `policies.resources`), and the manifest path. Pass `allowProhibited: true` in the prompt or resource body to permit a single prohibited use without editing the manifest. See [Tools & MCP Servers](../guides/tools-and-mcp.md) for manifest authoring and [Manifests](./manifests.md) for the `MCP` schema.
+
+## Workspace Onboarding & Trust HTTP Endpoints
+
+All onboarding and trust endpoints operate on the workspace directory resolved from the `X-TaskSmith-CWD` header.
+
+| Method | Path | Description |
+| :--- | :--- | :--- |
+| `GET` | `/v1/workspace/status` | Returns `WorkspaceStatus` containing trust state (`isTrusted`, `fingerprintChanged`), executable scan summary, configuration flags, available global providers/MCPs, missing credentials, and whether the workspace requires first-run onboarding (`needsOnboarding`). |
+| `GET` | `/v1/workspace/trust` | Returns `TrustStatus` for the current workspace, including detected MCP configs, custom tools, and local `.env` existence. |
+| `POST` | `/v1/workspace/trust` | Records trust for a workspace directory. Body: `path` (absolute path) and `scope` (`folder` or `parent`). |
+| `DELETE` | `/v1/workspace/trust` | Revokes trust for the current workspace directory, returning it to restricted mode. |
+| `POST` | `/v1/providers/verify` | Validates API credentials or endpoint reachability against upstream model provider. Body: `name`, `apiKey`, optional `endpoint`, and `scope` (`user` or `workspace`). Returns success status, latency, or validation error. |
+| `POST` | `/v1/workspace/init` | Initializes workspace configuration and applies user choices. Body: `InitWorkspaceRequest` (`scope`, `provider`, `apiKey`, `endpoint`, `defaultMode`, `disabledTools`, `disabledMcps`). Writes configuration files and initial `workspace.json` metadata. |

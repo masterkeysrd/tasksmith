@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"strings"
 	"time"
 
@@ -35,6 +36,33 @@ var appContent = trail.SimpleFC("AppContent", func() trail.Node {
 			app.Exit(nil)
 		}
 	}, []any{exitRequested})
+
+	onboardingActive := store.UseOnboarding(func(s store.OnboardingState) bool { return s.Active })
+	if onboardingActive {
+		return trail.Box(trail.BoxProps{
+			Style: style.S().
+				FlexDirection(style.FlexColumn).
+				Width(style.Percent(100)),
+		},
+			components.OnboardingWizard(components.OnboardingWizardProps{
+				Client: store.Client(),
+				OnFinish: func() {
+					store.CloseOnboarding()
+					if store.GetOnboarding().OfferInit {
+						store.AppendNotice("Workspace ready. No AGENTS.md found — generate one with /init.")
+					}
+					if store.GetSession().Session == nil && store.Client() != nil {
+						store.InitSession(context.Background(), store.Client(), store.InitSessionOptions{})
+					}
+				},
+				OnExit: func() {
+					if app != nil {
+						app.Exit(nil)
+					}
+				},
+			}),
+		)
+	}
 
 	mode := store.UseSession(func(s store.SessionState) api.PermissionMode {
 		return s.Config.Mode

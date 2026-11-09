@@ -163,35 +163,96 @@ For detailed information on authentication schemes, provider manifests, and lazy
 
 ---
 
+## First-Run Onboarding & Trust Model
+
+When TaskSmith is launched in a directory for the first time, it performs a deterministic security check before creating any session or accessing repository configuration:
+
+```mermaid
+flowchart TD
+    A["Launch tasksmith in directory"] --> T{"Trusted in trust.json?"}
+    T -->|"No / Changed"| TS["1. Trust Prompt"]
+    T -->|"Yes"| C{"WORKSPACE.md / .agents present?"}
+    TS -->|"Trust"| C
+    TS -->|"Restricted"| R["Restricted Session\n(Read-only, no project tools/MCPs/.env)"]
+    TS -->|"Exit"| X["Exit CLI"]
+    C -->|"Yes (Team Config)"| V{"Credentials Resolvable?"}
+    V -->|"Yes"| H["Session Home"]
+    V -->|"No"| CR["Credentials Only"] --> H
+    C -->|"No (Unconfigured)"| G{"Global Providers Available?"}
+    G -->|"Yes"| PS["2. Provider Source\n(Reuse Global or Configure Workspace)"]
+    G -->|"No"| PP["2b. Provider & Scope"]
+    PS -->|"Global"| MD["4. Default Mode"]
+    PS -->|"Workspace"| PP
+    PP --> CRD["3. Credentials\n(Real-time verification)"] --> MD
+    MD --> TL["5. Tools & MCPs\n(Exclude tools / global MCPs)"]
+    TL --> RV["6. Review & Write\n(Review manifests and write configuration)"]
+    RV --> I{"AGENTS.md Exists?"}
+    I -->|"No"| OI["Offer /init\n(Run system:init to scaffold instructions)"] --> H
+    I -->|"Yes"| H
+```
+
+### 1. Trust Model (`trust.json`)
+
+To protect your system from executing untrusted scripts, MCP servers, or environment files from arbitrary repositories, TaskSmith requires an explicit trust decision before executing project code:
+
+- **Location**: Stored machine-wide at `~/.local/share/tasksmith/trust.json` (`$XDG_DATA_HOME/tasksmith/trust.json`).
+- **Trust Scopes**:
+  - **Folder Scope**: Grants trust only to the specific directory path.
+  - **Parent Scope**: Grants trust to the directory and all of its subdirectories (ideal for workspaces grouped under a shared directory like `~/Projects/`).
+- **Fingerprint Change Detection**: TaskSmith records a cryptographic hash of executable definitions (`.agents/tools/`, `.agents/mcps/`, `.env`). If an untrusted git pull or checkout introduces new or modified executable configurations, TaskSmith detects the fingerprint divergence and re-prompts for trust.
+- **Restricted Mode**: If trust is declined, TaskSmith opens a safe restricted session:
+  - Project-level tools (`.agents/tools/`) and project MCP servers (`.agents/mcps/`) are disabled.
+  - Local repository `.env` files are ignored (only global `$XDG_CONFIG_HOME/tasksmith/.env` applies).
+  - Mutating operations require explicit user approval.
+
+### 2. Interactive Setup Wizard (`/setup`)
+
+The setup wizard can be re-run at any time using the `/setup` slash command. It provides a cohesive configuration hub:
+
+1. **Provider Source**: Choose whether to inherit shared model providers from `~/.config/tasksmith/` or configure project-specific settings.
+2. **Provider & Scope**: Select provider preset (e.g., Anthropic, OpenAI, Ollama, Gemini) and target persistence scope:
+   - **User Scope**: Persists credentials in `~/.config/tasksmith/.env` and provider definition in `~/.config/tasksmith/agents/providers/<name>.yaml`, leaving the repository untouched.
+   - **Workspace Scope**: Commits `WORKSPACE.md` policies and repository configuration while keeping secrets in git-ignored `<workspace-root>/.env`.
+   - **Project Scope**: Writes project overrides in `<subproject>/AGENTS.md`.
+3. **Real-Time Credential Verification**: Tests upstream API keys and custom endpoints live before writing configuration files to disk.
+4. **Permission Mode & Tool Toggles**: Set default session permission mode and selectively exclude built-in tools or global MCP servers.
+5. **Review & Write**: Summarizes planned filesystem mutations and offers to run `/init` if `AGENTS.md` is not yet present.
+
+---
+
+## Workspace Metadata & Version Migrations (`workspace.json`)
+
+TaskSmith tracks workspace state and engine versioning using an isolated metadata file:
+
+- **Path**: `~/.local/share/tasksmith/workspaces/<hash>/workspace.json`
+- **Schema**:
+  ```json
+  {
+    "schema": 1,
+    "version": "0.1.0"
+  }
+  ```
+
+### Automated Migration Pipeline
+
+When opening a workspace, the Brain daemon checks the stored `version` against the running binary version:
+
+1. **Ascending Semver Execution**: If the running version is newer than the recorded `version`, TaskSmith executes all registered migration actions in strict ascending semver order.
+2. **Atomic Version Updates**: After all migrations succeed, `workspace.json` is updated to the running version. If a migration fails, execution halts immediately and the version remains at the last successfully applied step, allowing clean retries on subsequent runs.
+3. **Downgrade Safety**: If a workspace was previously opened with a newer TaskSmith binary, the daemon skips migrations, leaves the file untouched, and logs a downgrade notice.
+4. **Development Builds**: Non-semver development versions skip automated migrations to avoid corrupting workspace metadata.
+5. **Committed Files Guard**: Migrations that alter version-controlled files (`WORKSPACE.md` or `.agents/`) are never applied silently in the background; they surface as "Upgrade available" in `/setup` and require explicit user review.
+
+---
+
 ## Repository Topologies & Startup Flows
 
 TaskSmith works seamlessly across plain directories, standard Git repositories, linked Git worktrees, and bare-repository worktree hubs (`.bare`):
 
-```mermaid
-flowchart TD
-    Start["Open Directory in TaskSmith"] --> Topology{"Repository Topology"}
+### 1. Plain Directory or Standard Repository
+When opened, TaskSmith verifies directory trust and checks for workspace configuration. If uninitialized, it presents the first-run onboarding wizard. Once configured, subsequent launches immediately open the interactive session.
 
-    Topology -->|"Standard Repo / Linked Worktree / Plain Directory"| IsInit{"Configured or Previously Initialized?"}
-    IsInit -->|"No"| Setup["Launch Interactive Setup Wizard\nConfigure provider, API key (.env), and WORKSPACE.md"]
-    IsInit -->|"Yes"| Home["Open Workspace Home"]
-    Setup --> Home
-
-    Topology -->|"Bare Repository / Worktree Hub (.bare)"| BranchPrompt["Select or Create Branch Worktree"]
-    BranchPrompt --> HasConfig{"Branch Has WORKSPACE.md / .agents/?"}
-    HasConfig -->|"Yes"| PromoteOrUse["Use Branch Configuration Directly\nor Copy Configuration to Hub Root"]
-    HasConfig -->|"No"| SetupAndPromote["Run Setup Wizard &\nPromote Configuration to Main / Hub Root"]
-    PromoteOrUse & SetupAndPromote --> Home
-```
-
-### 1. Uninitialized Repository or Directory
-When launched in a standard Git repository or plain directory that has no `WORKSPACE.md`, `.agents/`, or prior trust record, TaskSmith opens the interactive **Setup Wizard** to select a provider preset, configure credentials, and scaffold initial workspace files (or mark the directory as trusted using global settings).
-
-### 2. Initialized Repository or Linked Worktree
-When launched in a directory that already contains `WORKSPACE.md` / `.agents/` or has completed initial setup, TaskSmith loads the four-tier resource hierarchy and opens the **Home** view immediately.
-
-### 3. Bare Repositories & Worktree Hubs (`.bare`)
-For developers who organize projects around a bare Git repository with sibling branch worktrees:
-- **Branch Selection**: Opening the bare repository root prompts you to check out an existing branch worktree or create a new one.
-- **Configuration Sharing**:
-  - If the selected branch worktree already contains `WORKSPACE.md` or `.agents/`, TaskSmith asks whether to copy the configuration to the hub root (so all sibling worktrees share it) or use it directly from the branch worktree.
-  - If neither the hub root nor the branch worktree is configured yet, TaskSmith runs the Setup Wizard and promotes the generated configuration to the hub root / `main` branch.
+### 2. Bare Repositories & Worktree Hubs (`.bare`)
+For developers who organize repositories with sibling branch worktrees:
+- **Branch Selection**: Opening the hub directory prompts to select or create a branch worktree.
+- **Configuration Sharing**: When a branch worktree contains configuration, TaskSmith prompts whether to share it across all sibling worktrees at the hub root or keep it scoped to that specific branch.

@@ -142,6 +142,48 @@ TaskSmith includes an interactive rule editor accessible via the `/permissions` 
 
 ---
 
+## Persistent Configuration Schema (`permissions.json`)
+
+TaskSmith stores persistent permission settings in `permissions.json` across two scopes:
+- **Global Configuration**: `~/.config/tasksmith/permissions.json` (`$XDG_CONFIG_HOME/tasksmith/permissions.json`)
+- **Project Configuration**: `~/.local/share/tasksmith/workspaces/<hash>/permissions.json` (`$XDG_DATA_HOME/tasksmith/workspaces/<hash>/permissions.json`)
+
+### Schema Specification
+
+```json
+{
+  "schema": 1,
+  "defaultMode": "default",
+  "disabledTools": ["download"],
+  "disabledMcps": ["linear"],
+  "allow": [
+    "bash(go test *)",
+    "write(internal/**)"
+  ],
+  "deny": [
+    "bash(rm -rf *)"
+  ]
+}
+```
+
+### Hierarchy & Merge Semantics
+
+When evaluating effective permissions for a session, TaskSmith merges global and project-level settings using deterministic rules:
+
+| Field | Type | Merge Semantics | Description |
+| :--- | :--- | :--- | :--- |
+| `schema` | integer | — | Schema format version for format migrations. |
+| `defaultMode` | string | **Project overrides Global** | Default session permission mode (`default`, `accept_edits`, `plan`, `ask`, `auto`). Setting `/mode` or pressing `Shift+Tab` overrides both for the current session only. |
+| `disabledTools` | array of strings | **Monotonic Union** | Combined list of disabled tool names. Restrictions are monotonic: any tool disabled in either global or project scope is completely excluded from the agent's model context up front. |
+| `disabledMcps` | array of strings | **Monotonic Union** | Combined list of disabled MCP server names. Servers disabled in either global or project scope will not be exposed or queried. |
+| `allow` | array of strings | **Union** | Normalized `tool(pattern)` rules that auto-approve matching actions. |
+| `deny` | array of strings | **Union (Strict Priority)** | Normalized `tool(pattern)` rules that unconditionally reject matching actions. |
+
+> [!NOTE]
+> Disabled tools and MCP servers are not merely rejected at runtime; they are stripped from the model's active tool manifests when constructing conversation prompts. The agent never sees disabled tools, eliminating hallucinations and unnecessary permission prompts.
+
+---
+
 ## Workspace Declarative Policies (`WORKSPACE.md`)
 
 In addition to interactive rules, team-wide security baselines can be committed directly to version control in `WORKSPACE.md`. Policies are declared under `spec.policies.tools` and are enforced as a monotonic `allow < ask < deny` ceiling that is evaluated before permission modes and allow rules:

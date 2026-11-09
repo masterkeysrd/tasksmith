@@ -19,6 +19,87 @@ type Workspace struct {
 	DefaultAgent string   `json:"default_agent"`
 	DefaultModel *Model   `json:"default_model,omitempty"`
 	Warnings     []string `json:"warnings,omitempty"`
+	IsRestricted bool     `json:"is_restricted,omitempty"`
+}
+
+// TrustStatus summarizes trust and executable configuration status for a directory.
+type TrustStatus struct {
+	Path               string                  `json:"path"`
+	IsTrusted          bool                    `json:"is_trusted"`
+	FingerprintChanged bool                    `json:"fingerprint_changed,omitempty"`
+	Executables        ExecutableConfigSummary `json:"executables"`
+}
+
+// ExecutableConfigSummary summarizes the executable configurations in a project.
+type ExecutableConfigSummary struct {
+	MCPServers  []string `json:"mcp_servers,omitempty"`
+	CustomTools []string `json:"custom_tools,omitempty"`
+	HasEnv      bool     `json:"has_env,omitempty"`
+}
+
+// TrustFolderRequest configures a directory trust action.
+type TrustFolderRequest struct {
+	Path  string `json:"path"`
+	Scope string `json:"scope,omitempty"` // "folder" or "parent"
+}
+
+// WorkspaceStatus summarizes the onboarding and configuration state of a workspace directory.
+type WorkspaceStatus struct {
+	Path               string                  `json:"path"`
+	IsTrusted          bool                    `json:"is_trusted"`
+	FingerprintChanged bool                    `json:"fingerprint_changed,omitempty"`
+	IsConfigured       bool                    `json:"is_configured"`
+	HasAgentsMD        bool                    `json:"has_agents_md"`
+	Executables        ExecutableConfigSummary `json:"executables"`
+	GlobalProviders    []ProviderSummary       `json:"global_providers,omitempty"`
+	GlobalMCPs         []string                `json:"global_mcps,omitempty"`
+	MissingCredentials []string                `json:"missing_credentials,omitempty"`
+	NeedsOnboarding    bool                    `json:"needs_onboarding"`
+}
+
+// ProviderSummary summarizes an available or configured model provider.
+type ProviderSummary struct {
+	Name         string   `json:"name"`
+	DisplayName  string   `json:"display_name,omitempty"`
+	Status       string   `json:"status,omitempty"` // e.g. "✓ key", "✓ local", "needs key", "sign-in"
+	HasKey       bool     `json:"has_key"`
+	AuthEnv      string   `json:"auth_env,omitempty"`
+	DefaultModel string   `json:"default_model,omitempty"`
+	Models       []string `json:"models,omitempty"`
+	Scope        string   `json:"scope,omitempty"` // "system", "user", "workspace", "project"
+}
+
+// VerifyProviderRequest requests verification of a provider's credentials or endpoint.
+type VerifyProviderRequest struct {
+	Provider string `json:"provider"`
+	APIKey   string `json:"api_key,omitempty"`
+	Endpoint string `json:"endpoint,omitempty"`
+	AuthType string `json:"auth_type,omitempty"`
+	AuthEnv  string `json:"auth_env,omitempty"`
+}
+
+// VerifyProviderResponse returns the verification outcome for a provider.
+type VerifyProviderResponse struct {
+	Valid        bool   `json:"valid"`
+	ModelsCount  int    `json:"models_count,omitempty"`
+	ErrorMessage string `json:"error_message,omitempty"`
+	Warning      string `json:"warning,omitempty"`
+}
+
+// InitWorkspaceRequest represents the payload for POST /v1/workspace/init.
+type InitWorkspaceRequest struct {
+	CWD           string            `json:"cwd"`
+	Scope         string            `json:"scope,omitempty"` // "user", "workspace", "project"
+	ProjectName   string            `json:"project_name,omitempty"`
+	Provider      string            `json:"provider,omitempty"`
+	APIKey        string            `json:"api_key,omitempty"`
+	Endpoint      string            `json:"endpoint,omitempty"`
+	AuthType      string            `json:"auth_type,omitempty"`
+	AuthEnv       string            `json:"auth_env,omitempty"`
+	DefaultModels map[string]string `json:"default_models,omitempty"`
+	DefaultMode   PermissionMode    `json:"default_mode,omitempty"`
+	DisabledTools []string          `json:"disabled_tools,omitempty"`
+	DisabledMCPs  []string          `json:"disabled_mcps,omitempty"`
 }
 
 // ContextBreakdown categorizes token usage within the context window.
@@ -721,17 +802,25 @@ const (
 	EffectDeny  PermissionEffect = "deny"
 )
 
-// Permissions holds allow and deny rules for a single scope.
+// Permissions holds allow and deny rules, default mode, and disabled tools/mcps for a single scope.
 type Permissions struct {
-	Allow []string `json:"allow,omitempty"`
-	Deny  []string `json:"deny,omitempty"`
+	Schema        int            `json:"schema,omitempty"`
+	DefaultMode   PermissionMode `json:"defaultMode,omitempty"`
+	DisabledTools []string       `json:"disabledTools,omitempty"`
+	DisabledMCPs  []string       `json:"disabledMcps,omitempty"`
+	Allow         []string       `json:"allow,omitempty"`
+	Deny          []string       `json:"deny,omitempty"`
 }
 
 // Clone returns a deep copy of Permissions.
 func (p Permissions) Clone() Permissions {
 	return Permissions{
-		Allow: slices.Clone(p.Allow),
-		Deny:  slices.Clone(p.Deny),
+		Schema:        p.Schema,
+		DefaultMode:   p.DefaultMode,
+		DisabledTools: slices.Clone(p.DisabledTools),
+		DisabledMCPs:  slices.Clone(p.DisabledMCPs),
+		Allow:         slices.Clone(p.Allow),
+		Deny:          slices.Clone(p.Deny),
 	}
 }
 

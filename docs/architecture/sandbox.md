@@ -71,3 +71,9 @@ Tools given the `FS` capability can never reference paths outside the sandbox ro
 Each active session owns its Sandbox instance:
 - All background and streaming processes started through `Proc` are tracked in an active session registry under isolated process groups.
 - When the session finishes or is canceled, closing the sandbox terminates all active process trees, closes idle network connections, and releases underlying filesystem handles—guaranteeing zero leaked background processes across turns.
+
+### 6. Trust Boundary & Restricted Execution
+When a workspace operates in **Restricted Mode** (untrusted repository or unconfirmed trust prompt), the sandbox tightens capability boundaries:
+- **Environment Isolation**: Workspace-level `.env` files are not loaded into the sandbox environment map, preventing untrusted repositories from accessing or exfiltrating sensitive environment keys.
+- **Process & Tool Restriction**: Custom project tools (`.agents/tools/`) and project MCP server processes (`.agents/mcps/`) are not initialized or spawned in the process manager.
+- **Audited Filesystem Access**: Mutating filesystem operations require explicit user authorization, preventing unvetted scripts from altering project code without inspection.

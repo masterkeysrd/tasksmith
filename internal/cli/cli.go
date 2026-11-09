@@ -60,14 +60,20 @@ func Run(ctx context.Context, opts Options) error {
 	store.ResetStream()
 
 	store.SetHeaderMeta(opts.Version, opts.Workspace)
+	store.SetClient(opts.Client)
 
-	store.InitSession(ctx, opts.Client, store.InitSessionOptions{
-		SessionID:   opts.SessionID,
-		Agent:       opts.Agent,
-		Model:       opts.Model,
-		Title:       opts.Title,
-		StartDaemon: opts.StartDaemon,
-	})
+	status, err := opts.Client.GetWorkspaceStatus(ctx)
+	if err == nil && status != nil && status.NeedsOnboarding && opts.SessionID == "" {
+		store.StartOnboarding(opts.Workspace, *status, false)
+	} else {
+		store.InitSession(ctx, opts.Client, store.InitSessionOptions{
+			SessionID:   opts.SessionID,
+			Agent:       opts.Agent,
+			Model:       opts.Model,
+			Title:       opts.Title,
+			StartDaemon: opts.StartDaemon,
+		})
+	}
 
 	trailOpts := []trail.Option{trail.WithCtrlCExit(false)}
 	if opts.Backend != nil {

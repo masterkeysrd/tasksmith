@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime/debug"
 	"strings"
 
 	"github.com/masterkeysrd/kite/extras/trail"
@@ -13,22 +12,12 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/cli/store"
 	"github.com/masterkeysrd/tasksmith/internal/ui/components/icon"
 	"github.com/masterkeysrd/tasksmith/internal/ui/theme"
+	tsversion "github.com/masterkeysrd/tasksmith/internal/version"
 )
 
 // NormalizeVersion ensures a version string starts with 'v' and defaults to build info or "v0.0.0-dev".
 func NormalizeVersion(version string) string {
-	version = strings.TrimSpace(version)
-	if version == "" {
-		if info, ok := debug.ReadBuildInfo(); ok && info.Main.Version != "" && info.Main.Version != "(devel)" {
-			version = info.Main.Version
-		} else {
-			return "v0.0.0-dev"
-		}
-	}
-	if !strings.HasPrefix(version, "v") {
-		return "v" + version
-	}
-	return version
+	return tsversion.Normalize(version)
 }
 
 // ShortenHomePath replaces a leading user home directory with "~".

@@ -30,6 +30,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/daemon/models"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/session"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/timeline"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/workspace"
 )
 
 type fakeProvider struct {
@@ -200,6 +201,9 @@ func setupDaemonTest(t *testing.T, prov *fakeProvider) (*Daemon, *client.Client,
 	})
 
 	wsDir := shortTempDir(t)
+	if err := workspace.TrustFolder(wsDir, workspace.TrustScopeFolder); err != nil {
+		t.Fatal(err)
+	}
 	manifest := "---\napiVersion: warp/v1alpha1\nkind: Workspace\nmetadata:\n  name: test\nspec:\n  defaultProvider: fake\n  defaultModels:\n    completion: fake-default-model\n---\n"
 	if err := os.WriteFile(filepath.Join(wsDir, "WORKSPACE.md"), []byte(manifest), 0o644); err != nil {
 		t.Fatal(err)
@@ -2186,11 +2190,18 @@ Deploying to environment {{.target}}.
 	if err != nil {
 		t.Fatalf("ListCommands: %v", err)
 	}
-	if len(commands) != 1 || commands[0].Name != "review" {
-		t.Fatalf("unexpected ListCommands: %+v", commands)
+	var reviewCmd *api.Command
+	for i := range commands {
+		if commands[i].Name == "review" {
+			reviewCmd = &commands[i]
+			break
+		}
 	}
-	if len(commands[0].Arguments) != 2 || commands[0].Arguments[0].Name != "pr_number" || !commands[0].Arguments[0].Required {
-		t.Errorf("unexpected command arguments: %+v", commands[0].Arguments)
+	if reviewCmd == nil {
+		t.Fatalf("expected review command in ListCommands: %+v", commands)
+	}
+	if len(reviewCmd.Arguments) != 2 || reviewCmd.Arguments[0].Name != "pr_number" || !reviewCmd.Arguments[0].Required {
+		t.Errorf("unexpected command arguments: %+v", reviewCmd.Arguments)
 	}
 
 	// 2. GetCommand (found & 404)
@@ -2265,7 +2276,7 @@ Deploying to environment {{.target}}.
 
 func TestWorkspaceToolsEndpoint(t *testing.T) {
 	ctx := context.Background()
-	_, cli, wsDir := setupDaemonTest(t, nil)
+	srv, cli, wsDir := setupDaemonTest(t, nil)
 
 	toolsDir := filepath.Join(wsDir, ".agents", "tools")
 	if err := os.MkdirAll(toolsDir, 0o755); err != nil {
@@ -2301,6 +2312,12 @@ Run the project linter over the requested path.
 `
 	if err := os.WriteFile(filepath.Join(toolsDir, "linter.tool.md"), []byte(toolContent), 0o644); err != nil {
 		t.Fatal(err)
+	}
+	if err := workspace.TrustFolder(wsDir, workspace.TrustScopeFolder); err != nil {
+		t.Fatal(err)
+	}
+	if err := srv.ReloadWorkspace(ctx, wsDir); err != nil {
+		t.Fatalf("ReloadWorkspace: %v", err)
 	}
 
 	tools, err := cli.ListTools(ctx, "")
@@ -2606,5 +2623,56 @@ func TestCreateSessionIDErrors(t *testing.T) {
 		if !errors.As(err, &apiErr) || apiErr.StatusCode != tc.code {
 			t.Errorf("%s: err = %v, want API error with status %d", name, err, tc.code)
 		}
+	}
+}
+
+func TestWorkspaceStatusInitAndVerifyProvider(t *testing.T) {
+	ctx := context.Background()
+	_, cli, _ := setupDaemonTest(t, nil)
+
+	// 1. GetWorkspaceStatus
+	status, err := cli.GetWorkspaceStatus(ctx)
+	if err != nil {
+		t.Fatalf("GetWorkspaceStatus error: %v", err)
+	}
+	if !status.IsTrusted {
+		t.Errorf("expected test workspace to be trusted, got %+v", status)
+	}
+	if len(status.GlobalProviders) == 0 {
+		t.Errorf("expected global providers to include presets, got 0")
+	}
+
+	// 2. VerifyProvider
+	verifyResp, err := cli.VerifyProvider(ctx, api.VerifyProviderRequest{
+		Provider: "anthropic",
+		APIKey:   "sk-ant-test-1234",
+	})
+	if err != nil {
+		t.Fatalf("VerifyProvider error: %v", err)
+	}
+	if !verifyResp.Valid {
+		t.Fatalf("expected valid provider verification, got %+v", verifyResp)
+	}
+
+	// 3. InitWorkspace
+	initReq := api.InitWorkspaceRequest{
+		CWD:           cli.CWD(),
+		Scope:         "workspace",
+		Provider:      "anthropic",
+		APIKey:        "sk-ant-test-1234",
+		DefaultMode:   api.ModeDefault,
+		DisabledTools: []string{"download"},
+	}
+	if err := cli.InitWorkspace(ctx, initReq); err != nil {
+		t.Fatalf("InitWorkspace error: %v", err)
+	}
+
+	// Status should now show configured
+	statusAfter, err := cli.GetWorkspaceStatus(ctx)
+	if err != nil {
+		t.Fatalf("GetWorkspaceStatus after init error: %v", err)
+	}
+	if !statusAfter.IsConfigured {
+		t.Errorf("expected workspace to be configured after InitWorkspace, got %+v", statusAfter)
 	}
 }

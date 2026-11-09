@@ -435,6 +435,12 @@ Every parameter declared in `spec.arguments` supports:
 
 *The Markdown body below the frontmatter contains the execution instructions.*
 
+### Built-in System Commands
+
+TaskSmith embeds system-tier command manifests directly within the binary. These commands are universally available across all workspaces unless shadowed by a higher-priority definition:
+
+- **`system:init` (`/init`)**: Built-in command that inspects the workspace codebase structure (languages, frameworks, build systems, test runners, and style rules) and interactively generates or updates `AGENTS.md`. Employs `inline` context, activates the `tasksmith-customizations` skill, and requests safe read/inspection tools (`view`, `glob`, `grep`), interactive input (`ask_question`), and file modification tools (`write`, `edit`).
+
 ---
 
 ## 8. Decision Manifest (`*.decision.md`)

@@ -272,6 +272,70 @@ func TestManagerGlobalAndProjectPersistence(t *testing.T) {
 	}
 }
 
+func TestEffectivePermissions(t *testing.T) {
+	_, ws := setupTestWorkspace(t)
+	globalPath := filepath.Join(t.TempDir(), "global.json")
+
+	mgr, err := permissions.New(permissions.Config{
+		Workspace:  ws,
+		GlobalPath: globalPath,
+	})
+	if err != nil {
+		t.Fatalf("permissions.New: %v", err)
+	}
+
+	// 1. Set global permissions with defaultMode and disabled items
+	if err := mgr.Set(api.ScopeGlobal, api.Permissions{
+		DefaultMode:   api.ModeDefault,
+		DisabledTools: []string{"download", "bash"},
+		DisabledMCPs:  []string{"linear"},
+		Allow:         []string{"view(*)"},
+	}); err != nil {
+		t.Fatalf("Set global: %v", err)
+	}
+
+	eff, err := mgr.Effective()
+	if err != nil {
+		t.Fatalf("Effective: %v", err)
+	}
+	if eff.DefaultMode != api.ModeDefault {
+		t.Fatalf("expected DefaultMode default, got %v", eff.DefaultMode)
+	}
+	if len(eff.DisabledTools) != 2 || len(eff.DisabledMCPs) != 1 {
+		t.Fatalf("unexpected disabled lists: %+v", eff)
+	}
+
+	// 2. Set project permissions overriding defaultMode and adding to disabled lists
+	if err := mgr.Set(api.ScopeProject, api.Permissions{
+		DefaultMode:   api.ModeAcceptEdits,
+		DisabledTools: []string{"bash", "remove"},
+		DisabledMCPs:  []string{"github"},
+		Allow:         []string{"edit(src/**)"},
+	}); err != nil {
+		t.Fatalf("Set project: %v", err)
+	}
+
+	eff2, err := mgr.Effective()
+	if err != nil {
+		t.Fatalf("Effective: %v", err)
+	}
+	if eff2.DefaultMode != api.ModeAcceptEdits {
+		t.Fatalf("expected project DefaultMode accept-edits override, got %v", eff2.DefaultMode)
+	}
+	// DisabledTools union: download, bash, remove
+	if len(eff2.DisabledTools) != 3 {
+		t.Fatalf("expected 3 disabled tools in union, got %v", eff2.DisabledTools)
+	}
+	// DisabledMCPs union: linear, github
+	if len(eff2.DisabledMCPs) != 2 {
+		t.Fatalf("expected 2 disabled MCPs in union, got %v", eff2.DisabledMCPs)
+	}
+	// Allow union: view(*), edit(src/**)
+	if len(eff2.Allow) != 2 {
+		t.Fatalf("expected 2 allow rules in union, got %v", eff2.Allow)
+	}
+}
+
 func TestSessionManagerEvaluationModesAndPrecedence(t *testing.T) {
 	_, ws := setupTestWorkspace(t)
 	globalPath := filepath.Join(t.TempDir(), "global.json")

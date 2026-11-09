@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/masterkeysrd/tasksmith/api"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/workspace"
 )
 
 const mcpManifestWithPolicies = `---
@@ -129,6 +130,9 @@ func setupMCPDaemon(t *testing.T, manifests map[string]string) (*Daemon, *worksp
 	t.Helper()
 	srv, _, wsDir := setupDaemonTest(t, nil)
 	writeMCPScripts(t, wsDir, manifests)
+	if err := workspace.TrustFolder(wsDir, workspace.TrustScopeFolder); err != nil {
+		t.Fatal(err)
+	}
 
 	rt, err := srv.workspace(context.Background(), wsDir)
 	if err != nil {

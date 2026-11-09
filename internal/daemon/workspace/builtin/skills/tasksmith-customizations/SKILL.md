@@ -54,5 +54,6 @@ Never move a credential out of another tool's store, such as a CLI keyring, into
 | Model providers | `references/providers.md` | `providers/<name>.provider.yaml` |
 | Plugins | `references/workspace-and-context.md` | Repository root `PLUGIN.md` or `PLUGIN.yaml` |
 | Workspace and project context | `references/workspace-and-context.md` | `WORKSPACE.md`, `AGENTS.md` |
+| AGENTS.md authoring | `references/agents-md.md` | Repository root or project `AGENTS.md` |
 
 Discovery is not the same as execution: TaskSmith resolves and injects Rule resources and connects the MCP servers its definitions declare, but it does not currently evaluate Decision resources. See the references for the actual runtime behavior and schemas.

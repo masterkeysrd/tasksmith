@@ -28,6 +28,8 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/daemon"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/gateway"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/models"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/workspace"
+	"github.com/masterkeysrd/tasksmith/internal/version"
 	"github.com/spf13/cobra"
 )
 
@@ -165,6 +167,16 @@ func setupCLITestDaemon(t *testing.T, prov *fakeProvider) (*daemon.Daemon, strin
 	wsDir := filepath.Join(shortTmp, "ws")
 	if err := os.MkdirAll(wsDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll wsDir: %v", err)
+	}
+	if err := workspace.TrustFolder(wsDir, workspace.TrustScopeFolder); err != nil {
+		t.Fatalf("TrustFolder: %v", err)
+	}
+	wsFile := filepath.Join(wsDir, "WORKSPACE.md")
+	if err := os.WriteFile(wsFile, []byte("# Test Workspace\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile WORKSPACE.md: %v", err)
+	}
+	if _, err := workspace.EnsureMetadata(wsDir, version.Get()); err != nil {
+		t.Fatalf("EnsureMetadata: %v", err)
 	}
 
 	return srv, sockPath, wsDir

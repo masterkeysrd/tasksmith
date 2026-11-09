@@ -26,6 +26,7 @@ type Config struct {
 type Manager interface {
 	Get(scope api.PermissionScope) (api.Permissions, error)
 	Set(scope api.PermissionScope, perms api.Permissions) error
+	Effective() (api.Permissions, error)
 	AddRule(scope api.PermissionScope, effect api.PermissionEffect, rule string) error
 	RemoveRule(scope api.PermissionScope, effect api.PermissionEffect, rule string) error
 	Attach(mode api.PermissionMode, initial api.Permissions, onUpdate func(api.Permissions) error) SessionManager
@@ -118,8 +119,13 @@ func (m *manager) writeToFile(path string, perms api.Permissions) error {
 	if err := ValidatePermissions(perms); err != nil {
 		return err
 	}
+	if perms.Schema == 0 {
+		perms.Schema = 1
+	}
 	perms.Allow = deduplicateRules(perms.Allow)
 	perms.Deny = deduplicateRules(perms.Deny)
+	perms.DisabledTools = deduplicateRules(perms.DisabledTools)
+	perms.DisabledMCPs = deduplicateRules(perms.DisabledMCPs)
 
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return fmt.Errorf("permissions: create directory: %w", err)
@@ -135,6 +141,35 @@ func (m *manager) writeToFile(path string, perms api.Permissions) error {
 		return fmt.Errorf("permissions: write %q: %w", path, err)
 	}
 	return nil
+}
+
+// Effective returns the merged permissions across global and project scopes matching §2.3.
+func (m *manager) Effective() (api.Permissions, error) {
+	global, err := m.Get(api.ScopeGlobal)
+	if err != nil {
+		return api.Permissions{}, err
+	}
+	project, err := m.Get(api.ScopeProject)
+	if err != nil {
+		return api.Permissions{}, err
+	}
+
+	mode := global.DefaultMode
+	if project.DefaultMode != "" {
+		mode = project.DefaultMode
+	}
+
+	disabledTools := deduplicateRules(append(slices.Clone(global.DisabledTools), project.DisabledTools...))
+	disabledMcps := deduplicateRules(append(slices.Clone(global.DisabledMCPs), project.DisabledMCPs...))
+
+	return api.Permissions{
+		Schema:        1,
+		DefaultMode:   mode,
+		DisabledTools: disabledTools,
+		DisabledMCPs:  disabledMcps,
+		Allow:         deduplicateRules(append(slices.Clone(global.Allow), project.Allow...)),
+		Deny:          deduplicateRules(append(slices.Clone(global.Deny), project.Deny...)),
+	}, nil
 }
 
 // Get returns the stored [api.Permissions] for ScopeProject or ScopeGlobal.
@@ -244,4 +279,34 @@ func (m *manager) Attach(mode api.PermissionMode, initial api.Permissions, onUpd
 			onUpdate:    onUpdate,
 		},
 	}
+}
+
+// UpdateGlobal updates user global permissions with default mode, disabled tools, and disabled mcps.
+func UpdateGlobal(defaultMode api.PermissionMode, disabledTools, disabledMcps []string) error {
+	globalPath, err := xdg.SubConfigDir("permissions.json")
+	if err != nil {
+		return err
+	}
+	var perms api.Permissions
+	if data, err := os.ReadFile(globalPath); err == nil {
+		_ = json.Unmarshal(data, &perms)
+	}
+	perms.Schema = 1
+	if defaultMode != "" {
+		perms.DefaultMode = defaultMode
+	}
+	if len(disabledTools) > 0 {
+		perms.DisabledTools = deduplicateRules(append(perms.DisabledTools, disabledTools...))
+	}
+	if len(disabledMcps) > 0 {
+		perms.DisabledMCPs = deduplicateRules(append(perms.DisabledMCPs, disabledMcps...))
+	}
+	if err := os.MkdirAll(filepath.Dir(globalPath), 0o755); err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(perms, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(globalPath, append(data, '\n'), 0o644)
 }

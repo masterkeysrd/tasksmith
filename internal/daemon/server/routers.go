@@ -214,7 +214,88 @@ func (w *workspaceRouter) initRoutes() {
 		GetRoute("/v1/permissions", w.getPermissions),
 		PostRoute("/v1/permissions", w.postPermissionRule),
 		DeleteRoute("/v1/permissions", w.deletePermissionRule),
+		GetRoute("/v1/workspace/trust", w.getTrustStatus),
+		PostRoute("/v1/workspace/trust", w.postTrustFolder),
+		DeleteRoute("/v1/workspace/trust", w.deleteTrustFolder),
+		GetRoute("/v1/workspace/status", w.getWorkspaceStatus),
+		PostRoute("/v1/workspace/init", w.postWorkspaceInit),
+		PostRoute("/v1/providers/verify", w.postVerifyProvider),
 	}
+}
+
+func (w *workspaceRouter) getWorkspaceStatus(rw http.ResponseWriter, r *http.Request) {
+	wsDir := RequestWorkspace(r)
+	status, err := w.b.GetWorkspaceStatus(r.Context(), wsDir)
+	if err != nil {
+		WriteError(rw, err)
+		return
+	}
+	WriteJSON(rw, http.StatusOK, status)
+}
+
+func (w *workspaceRouter) postWorkspaceInit(rw http.ResponseWriter, r *http.Request) {
+	req, err := DecodeJSON[api.InitWorkspaceRequest](r)
+	if err != nil {
+		WriteError(rw, err)
+		return
+	}
+	if strings.TrimSpace(req.CWD) == "" {
+		req.CWD = RequestWorkspace(r)
+	}
+	if err := w.b.InitWorkspace(r.Context(), req); err != nil {
+		WriteError(rw, err)
+		return
+	}
+	WriteJSON(rw, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (w *workspaceRouter) postVerifyProvider(rw http.ResponseWriter, r *http.Request) {
+	req, err := DecodeJSON[api.VerifyProviderRequest](r)
+	if err != nil {
+		WriteError(rw, err)
+		return
+	}
+	resp, err := w.b.VerifyProvider(r.Context(), req)
+	if err != nil {
+		WriteError(rw, err)
+		return
+	}
+	WriteJSON(rw, http.StatusOK, resp)
+}
+
+func (w *workspaceRouter) getTrustStatus(rw http.ResponseWriter, r *http.Request) {
+	wsDir := RequestWorkspace(r)
+	status, err := w.b.GetTrustStatus(r.Context(), wsDir)
+	if err != nil {
+		WriteError(rw, err)
+		return
+	}
+	WriteJSON(rw, http.StatusOK, status)
+}
+
+func (w *workspaceRouter) postTrustFolder(rw http.ResponseWriter, r *http.Request) {
+	req, err := DecodeJSON[api.TrustFolderRequest](r)
+	if err != nil {
+		WriteError(rw, err)
+		return
+	}
+	if strings.TrimSpace(req.Path) == "" {
+		req.Path = RequestWorkspace(r)
+	}
+	if err := w.b.TrustWorkspace(r.Context(), req); err != nil {
+		WriteError(rw, err)
+		return
+	}
+	WriteJSON(rw, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (w *workspaceRouter) deleteTrustFolder(rw http.ResponseWriter, r *http.Request) {
+	wsDir := RequestWorkspace(r)
+	if err := w.b.RevokeTrust(r.Context(), wsDir); err != nil {
+		WriteError(rw, err)
+		return
+	}
+	WriteJSON(rw, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 func (w *workspaceRouter) getWorkspace(rw http.ResponseWriter, r *http.Request) {

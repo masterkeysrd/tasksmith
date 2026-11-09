@@ -250,7 +250,13 @@ func (d *Daemon) workspace(ctx context.Context, dir string) (*workspaceRuntime, 
 	}
 	d.wsMu.Unlock()
 
-	ws, err := workspace.Open(ctx, cleanDir, workspace.WithBuiltinFS(builtin.FS()))
+	trusted, fpChanged, _ := workspace.IsTrusted(cleanDir)
+	openOpts := []workspace.Option{workspace.WithBuiltinFS(builtin.FS())}
+	if !trusted || fpChanged {
+		openOpts = append(openOpts, workspace.WithRestrictedMode(true))
+	}
+
+	ws, err := workspace.Open(ctx, cleanDir, openOpts...)
 	if err != nil {
 		return nil, fmt.Errorf("daemon: open workspace %q: %w", cleanDir, err)
 	}

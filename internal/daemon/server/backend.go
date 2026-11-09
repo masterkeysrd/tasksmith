@@ -37,6 +37,12 @@ type WorkspaceBackend interface {
 	GetPermissions(ctx context.Context, workspace string) (*api.PermissionsResponse, error)
 	AddPermissionRule(ctx context.Context, workspace string, req api.PermissionRuleRequest) (*api.PermissionsResponse, error)
 	RemovePermissionRule(ctx context.Context, workspace string, req api.PermissionRuleRequest) (*api.PermissionsResponse, error)
+	GetTrustStatus(ctx context.Context, workspace string) (*api.TrustStatus, error)
+	TrustWorkspace(ctx context.Context, req api.TrustFolderRequest) error
+	RevokeTrust(ctx context.Context, workspace string) error
+	GetWorkspaceStatus(ctx context.Context, workspace string) (*api.WorkspaceStatus, error)
+	InitWorkspace(ctx context.Context, req api.InitWorkspaceRequest) error
+	VerifyProvider(ctx context.Context, req api.VerifyProviderRequest) (*api.VerifyProviderResponse, error)
 }
 
 // MCPBackend serves the workspace's configured MCP servers: their discovered

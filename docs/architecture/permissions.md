@@ -70,3 +70,17 @@ When a tool invocation requires explicit user approval, the interactive prompt a
 - **`session`**: Stored in-memory for the duration of the active CLI session, auto-approving matching invocations until exit.
 - **`workspace`**: Persisted to the workspace's local state directory (`~/.local/share/tasksmith/workspaces/<hash>/permissions.json`), automatically allowing matching operations in future sessions for that project.
 - **`global`**: Configured globally in `~/.config/tasksmith/permissions.json` across all projects on the workstation.
+
+### 5. Trust Gate & Restricted Mode Boundary
+Before any session initializes or executes agent instructions, the directory passes through the **Trust Gate**:
+- **Trust Verification (`trust.json`)**: Machine-wide trust records are evaluated from `~/.local/share/tasksmith/trust.json`. Trust can be granted with `folder` scope (exact directory) or `parent` scope (all subdirectories).
+- **Executable Configuration Fingerprinting**: TaskSmith computes an SHA-256 digest over executable configuration files (`.agents/tools/*.tool.md`, `.agents/mcps/*.mcp.yaml`, and `.env`). If an upstream checkout modifies these definitions, the fingerprint mismatch invalidates trust and triggers an interactive trust re-prompt.
+- **Restricted Mode**: When trust has not been granted or is declined:
+  - Custom project tools and project MCP servers are omitted from the agent catalog.
+  - Workspace `.env` files are ignored, preventing untrusted repositories from harvesting or exfiltrating local environment variables.
+  - All file mutations require interactive authorization, and shell execution is strictly restricted.
+
+### 6. Monotonic Context Exclusion
+Persistent permission settings in `permissions.json` (`disabledTools` and `disabledMcps`) form a monotonic union across global and project configurations:
+- Disabled tools and MCP servers are pruned directly from the agent's tool definitions during turn assembly.
+- Because disabled tools never enter the model's token context, the model cannot attempt to invoke them, eliminating hallucinated calls and execution denials.
