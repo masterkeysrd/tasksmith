@@ -8,6 +8,18 @@ spec:
   defaultModels:
     completion: qwen3.8
   models:
+    - id: mimo-v2.6
+      name: mimo-v2.6
+      label: MiMo v2.6
+      limits:
+        context: 262144
+        output: 32768
+    - id: flint
+      name: flint
+      label: Flint
+      limits:
+        context: 262144
+        output: 32768
     - id: qwen3.8
       name: qwen3.8
       label: Qwen 3.8
@@ -20,33 +32,33 @@ spec:
       limits:
         context: 262144
         output: 32768
-    - id: gemma4
-      name: gemma4
-      label: Gemma 4
+    - id: ornith-1.5
+      name: ornith-1.5
+      label: Ornith 1.5
       limits:
-        context: 8192
-        output: 4096
-    - id: mistral
-      name: mistral
-      label: Mistral
+        context: 262144
+        output: 32768
+    - id: muse-glimmer
+      name: muse-glimmer
+      label: Muse Glimmer
       limits:
-        context: 32768
-        output: 4096
-    - id: llama
-      name: llama
-      label: Llama
+        context: 262144
+        output: 32768
+    - id: qwen3.8-flash-next
+      name: qwen3.8-flash-next
+      label: Qwen 3.8 Flash Next
       limits:
-        context: 8192
-        output: 4096
-    - id: llama3.3
-      name: llama3.3
-      label: Llama 3.3
+        context: 262144
+        output: 32768
+    - id: laguna-s-2.1
+      name: laguna-s-2.1
+      label: Laguna S 2.1
       limits:
-        context: 128000
-        output: 4096
-    - id: phi4
-      name: phi4
-      label: Phi 4
+        context: 262144
+        output: 32768
+    - id: laguna-xs-2.1
+      name: laguna-xs-2.1
+      label: Laguna XS 2.1
       limits:
-        context: 32768
-        output: 4096
+        context: 262144
+        output: 32768

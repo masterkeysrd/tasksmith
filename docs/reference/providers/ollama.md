@@ -7,7 +7,7 @@ The **Ollama** provider enables completely local, private, and offline AI worklo
 ## 1. Overview & Capabilities
 
 Ollama requires zero external network egress, charges zero API token fees, and runs entirely on local hardware across all three architectural roles:
-- **Completion (`completion` — System 2)**: Local conversational reasoning and tool execution using models like `qwen3.8`, `nemotron-3.5-lightning`, `gemma4`, and `llama3.3`.
+- **Completion (`completion` — System 2)**: Local conversational reasoning and tool execution using models like `qwen3.8`, `nemotron-3.5-lightning`, `mimo-v2.6`, and `laguna-s-2.1`.
 - **Decision (`decision` — System 1)**: Native probabilistic decision evaluation using specialized weights (`nimble-v3`) or completion fallback.
 - **Embedding (`embedding` — System 3)**: Fast local dense vector generation using dedicated embedding weights (`nomic-embed-text`, `bge-m3`) for codebase indexing.
 

@@ -47,9 +47,9 @@ Declarative manifest schemas, CLI command specifications, and provider configura
 
 Detailed guides for configuring and connecting upstream model providers:
 
-- [OpenAI](./reference/providers/openai.md) — Frontier reasoning (`gpt-5.5`, `o3`), Chat Completions vs Responses API (`apiMode`), Zero Data Retention (`store: false`), and compatible endpoints.
-- [Anthropic](./reference/providers/anthropic.md) — Claude 4.5 & 5 models (`claude-sonnet-5`, `claude-opus-5`), extended thinking, and prompt caching.
+- [OpenAI](./reference/providers/openai.md) — Frontier reasoning (`gpt-6.1-sol`, `gpt-6-astra`), Chat Completions vs Responses API (`apiMode`), Zero Data Retention (`store: false`), and compatible endpoints.
+- [Anthropic](./reference/providers/anthropic.md) — Claude 5.5 models (`claude-sonnet-5-5`, `claude-opus-5-5`), extended thinking, and prompt caching.
 - [Ollama](./reference/providers/ollama.md) — 100% offline local inference (`qwen3.8`, `nimble-v3`, `nomic-embed-text`), zero data egress, and remote clusters.
-- [Google GenAI](./reference/providers/google-genai.md) — Gemini models (`gemini-3.1-pro-preview`, `gemini-3.8-flash`), 1M+ token context windows, multimodal analysis, and embeddings.
+- [Google GenAI](./reference/providers/google-genai.md) — Gemini models (`gemini-4-carbon`, `gemini-4-argon`), 1M+ token context windows, multimodal analysis, and embeddings.
 - [TypeSafe](./reference/providers/typesafe.md) — Native System 1 probabilistic decision engine (`jev-latest`) for sub-50ms structured classifications.
 - [Antigravity](./reference/providers/antigravity.md) — Enterprise model gateway with managed thinking effort tiers.

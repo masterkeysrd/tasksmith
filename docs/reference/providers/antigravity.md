@@ -7,7 +7,7 @@ The **Antigravity** provider connects TaskSmith to the Antigravity developer pla
 ## 1. Overview & Capabilities
 
 Designed for enterprise environments and Google internal developer workflows, the Antigravity provider provides authenticated model access with managed thinking effort:
-- **Completion (`completion` — System 2)**: Conversational reasoning, software engineering workflows, and tool execution using `gemini-3.8-flash`, `gemini-3.7-flash`, and `gemini-2.5-pro`.
+- **Completion (`completion` — System 2)**: Conversational reasoning, software engineering workflows, and tool execution using `gemini-4-carbon`, `gemini-4-argon`, and `gemini-3.8-flash`.
 - **Decision (`decision` — System 1)**: Evaluates structured decisions via TaskSmith's completion fallback adapter.
 - **Managed Reasoning & Effort**: Integrated support for low, medium, and high thinking effort tiers.
 
@@ -59,44 +59,44 @@ spec:
   type: antigravity
   endpoint: https://daily-cloudcode-pa.googleapis.com
   defaultModels:
-    completion: gemini-3.8-flash
+    completion: gemini-4-carbon
   auth:
     type: oauth2
     env: ANTIGRAVITY_TOKEN
   models:
+    - id: gemini-4-carbon
+      name: gemini-4-carbon
+      label: Gemini 4 Carbon
+      limits:
+        context: 1048576
+        output: 65536
+      capabilities:
+        completion: true
+        tools: true
+        temperature: true
+        thinking:
+          - type: effort
+            default: high
+            isDefault: true
+            allowedEfforts: [low, medium, high]
+    - id: gemini-4-argon
+      name: gemini-4-argon
+      label: Gemini 4 Argon
+      limits:
+        context: 1048576
+        output: 65536
+      capabilities:
+        completion: true
+        tools: true
+        temperature: true
+        thinking:
+          - type: effort
+            default: high
+            isDefault: true
+            allowedEfforts: [low, medium, high]
     - id: gemini-3.8-flash
       name: gemini-3.8-flash
       label: Gemini 3.8 Flash
-      limits:
-        context: 1048576
-        output: 65536
-      capabilities:
-        completion: true
-        tools: true
-        temperature: true
-        thinking:
-          - type: effort
-            default: high
-            isDefault: true
-            allowedEfforts: [low, medium, high]
-    - id: gemini-3.7-flash
-      name: gemini-3.7-flash
-      label: Gemini 3.7 Flash
-      limits:
-        context: 1048576
-        output: 65536
-      capabilities:
-        completion: true
-        tools: true
-        temperature: true
-        thinking:
-          - type: effort
-            default: high
-            isDefault: true
-            allowedEfforts: [low, medium, high]
-    - id: gemini-2.5-pro
-      name: gemini-2.5-pro
-      label: Gemini 2.5 Pro
       limits:
         context: 1048576
         output: 65536

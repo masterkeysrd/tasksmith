@@ -8,7 +8,7 @@ The **OpenAI** provider connects TaskSmith to OpenAI's frontier reasoning and co
 
 TaskSmith's OpenAI provider integrates with both the traditional **Chat Completions API** (`/v1/chat/completions`) and the stateful **Responses API** (`/v1/responses`). It covers all three cognitive workload roles:
 
-- **Completion (`completion` — System 2)**: Multi-turn conversational reasoning, code generation, and function/tool execution using models such as `gpt-5.5`, `gpt-5.5-pro`, `gpt-5-codex`, and `o3`.
+- **Completion (`completion` — System 2)**: Multi-turn conversational reasoning, code generation, and function/tool execution using models such as `gpt-6.1-sol`, `gpt-6.1-terra`, and `gpt-6-luna`.
 - **Decision (`decision` — System 1)**: Calibrated probabilistic classification and routing, either via native decision models or via the gateway's automatic structured-output completion fallback adapter.
 - **Embedding (`embedding` — System 3)**: High-throughput dense vector embedding generation using `text-embedding-3-small` and `text-embedding-3-large`.
 
@@ -49,7 +49,7 @@ spec:
   type: openai
   endpoint: https://api.openai.com/v1
   defaultModels:
-    completion: gpt-5.5
+    completion: gpt-6.1-sol
   config:
     # TaskSmith defaults to Zero Data Retention (store: false) on the Responses API
     store: false
@@ -57,9 +57,9 @@ spec:
     type: env
     env: OPENAI_API_KEY
   models:
-    - id: gpt-5.5
-      name: gpt-5.5
-      label: GPT-5.5
+    - id: gpt-6.1-sol
+      name: gpt-6.1-sol
+      label: GPT-6.1 Sol
       limits:
         context: 1050000
         output: 128000
@@ -72,30 +72,30 @@ spec:
             default: medium
             isDefault: true
             allowedEfforts: [low, medium, high]
-    - id: gpt-5.5-pro
-      name: gpt-5.5-pro
-      label: GPT-5.5 Pro
+    - id: gpt-6.1-terra
+      name: gpt-6.1-terra
+      label: GPT-6.1 Terra
       limits:
         context: 1050000
         output: 128000
       capabilities:
         completion: true
         tools: true
-    - id: gpt-5-codex
-      name: gpt-5-codex
-      label: GPT-5 Codex
+    - id: gpt-6-astra
+      name: gpt-6-astra
+      label: GPT-6 Astra
       limits:
         context: 1050000
         output: 128000
       capabilities:
         completion: true
         tools: true
-    - id: o3
-      name: o3
-      label: o3
+    - id: gpt-6-luna
+      name: gpt-6-luna
+      label: GPT-6 Luna
       limits:
-        context: 200000
-        output: 100000
+        context: 1050000
+        output: 128000
       capabilities:
         completion: true
         tools: true

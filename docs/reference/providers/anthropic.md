@@ -7,7 +7,7 @@ The **Anthropic** provider connects TaskSmith to Anthropic's Claude family of mo
 ## 1. Overview & Capabilities
 
 Anthropic models serve as primary System 2 reasoning and conversational agents in TaskSmith:
-- **Completion (`completion` — System 2)**: Multi-turn reasoning, coding, and tool execution using models such as `claude-sonnet-5`, `claude-opus-5`, and `claude-haiku-4-5`.
+- **Completion (`completion` — System 2)**: Multi-turn reasoning, coding, and tool execution using models such as `claude-sonnet-5-5`, `claude-opus-5-5`, and `claude-haiku-5-5`.
 - **Decision (`decision` — System 1)**: Evaluates classification and routing via TaskSmith's completion fallback adapter, wrapping Claude with structured output schemas.
 - **Extended Thinking & Prompt Caching**: Natively supports thinking effort levels (`thinking.type: effort`) and automatic prompt prefix caching for reduced latency and token cost.
 
@@ -36,14 +36,14 @@ spec:
   type: anthropic
   endpoint: https://api.anthropic.com
   defaultModels:
-    completion: claude-sonnet-5
+    completion: claude-sonnet-5-5
   auth:
     type: env
     env: ANTHROPIC_API_KEY
   models:
-    - id: claude-sonnet-5
-      name: claude-sonnet-5
-      label: Claude 5 Sonnet
+    - id: claude-sonnet-5-5
+      name: claude-sonnet-5-5
+      label: Claude 5.5 Sonnet
       limits:
         context: 1000000
         output: 128000
@@ -61,9 +61,9 @@ spec:
         output: 0.000015
         cacheRead: 0.0000003
         cacheWrite: 0.00000375
-    - id: claude-opus-5
-      name: claude-opus-5
-      label: Claude 5 Opus
+    - id: claude-opus-5-5
+      name: claude-opus-5-5
+      label: Claude 5.5 Opus
       limits:
         context: 1000000
         output: 128000
@@ -75,9 +75,9 @@ spec:
             default: high
             isDefault: true
             allowedEfforts: [low, medium, high]
-    - id: claude-haiku-4-5
-      name: claude-haiku-4-5
-      label: Claude 4.5 Haiku
+    - id: claude-haiku-5-5
+      name: claude-haiku-5-5
+      label: Claude 5.5 Haiku
       limits:
         context: 200000
         output: 64000

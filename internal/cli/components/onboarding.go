@@ -242,9 +242,9 @@ func renderProviderPickStep(props OnboardingWizardProps, state store.OnboardingS
 		name string
 		desc string
 	}{
-		{"anthropic", "claude-sonnet-5, opus-5, haiku-4-5"},
-		{"openai", "gpt-5.5, gpt-5-codex"},
-		{"google-genai", "gemini-3.8-flash, 3.1-pro"},
+		{"anthropic", "claude-sonnet-5-5, opus-5-5, haiku-5-5"},
+		{"openai", "gpt-6.1-sol, gpt-6-luna"},
+		{"google-genai", "gemini-4-carbon, 4-argon"},
 		{"antigravity", "gemini via Cloud Code"},
 		{"ollama", "local models (http://localhost:11434)"},
 		{"typesafe", "jev-latest"},
