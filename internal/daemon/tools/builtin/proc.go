@@ -6,7 +6,6 @@ import (
 	"io"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/masterkeysrd/tasksmith/api"
@@ -16,27 +15,6 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tasks"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tools"
 )
-
-type safeWriter struct {
-	mu     sync.Mutex
-	closed bool
-	w      io.Writer
-}
-
-func (sw *safeWriter) Write(p []byte) (int, error) {
-	sw.mu.Lock()
-	defer sw.mu.Unlock()
-	if sw.closed || sw.w == nil {
-		return len(p), nil
-	}
-	return sw.w.Write(p)
-}
-
-func (sw *safeWriter) Close() {
-	sw.mu.Lock()
-	defer sw.mu.Unlock()
-	sw.closed = true
-}
 
 type bashTool struct {
 	std     *std.Std
@@ -152,7 +130,7 @@ func (t *bashTool) Execute(ctx context.Context, in api.BashInput) (api.BashOutpu
 	w := tools.NewSpillWriter(ctx)
 	defer w.Close()
 
-	sw := &safeWriter{w: w}
+	sw := tools.NewSafeWriter(w)
 	defer sw.Close()
 
 	title := strings.TrimSpace(in.Description)

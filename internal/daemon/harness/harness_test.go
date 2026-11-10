@@ -28,6 +28,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/daemon/sandbox"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/scope"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/std"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/tasks"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tools"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tools/builtin"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/workspace"
@@ -221,12 +222,17 @@ func newTestToolsRegistry(t *testing.T) (string, tools.Container, permissions.Se
 		t.Fatalf("builtin.New: %v", err)
 	}
 
+	taskStore := tasks.New(tasks.Config{Context: context.Background()})
+	t.Cleanup(func() { _ = taskStore.Close() })
+
 	container, err := tools.NewContainer(tools.Config{
-		Tools:        builtinTools,
-		Sandbox:      sb,
-		Workspace:    ws,
-		Logger:       log.Default(),
-		AllowedTools: ws.Catalog().ToolNames(),
+		Tools:         builtinTools,
+		Sandbox:       sb,
+		Workspace:     ws,
+		Logger:        log.Default(),
+		AllowedTools:  ws.Catalog().ToolNames(),
+		CommandRunner: stdLib,
+		Tasks:         taskStore,
 	})
 	if err != nil {
 		t.Fatalf("tools.NewContainer: %v", err)

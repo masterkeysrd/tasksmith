@@ -18,6 +18,8 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/sandbox"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/scope"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/std"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/tasks"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tools"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/workspace"
 )
@@ -90,6 +92,27 @@ func setupToolsEnv(t *testing.T) (string, sandbox.Sandbox, *workspace.Workspace)
 	return dir, sb, ws
 }
 
+// withExecDeps fills the container's required execution dependencies for tests
+// that do not exercise custom tools: a Std over the config's own sandbox with
+// an in-memory tracker, and a task store whose logs land under the test's XDG
+// temporary environment.
+func withExecDeps(t *testing.T, cfg tools.Config) tools.Config {
+	t.Helper()
+	stdLib, err := std.New(std.Config{
+		Sandbox: cfg.Sandbox,
+		Tracker: std.NewMemoryTracker(),
+		Logger:  cfg.Logger,
+	})
+	if err != nil {
+		t.Fatalf("std.New: %v", err)
+	}
+	store := tasks.New(tasks.Config{Context: context.Background()})
+	t.Cleanup(func() { _ = store.Close() })
+	cfg.CommandRunner = stdLib
+	cfg.Tasks = store
+	return cfg
+}
+
 func TestConfigValidateAndNewContainer(t *testing.T) {
 	_, sb, ws := setupToolsEnv(t)
 	logger := log.Default()
@@ -113,6 +136,7 @@ func TestConfigValidateAndNewContainer(t *testing.T) {
 		Workspace: ws,
 		Logger:    logger,
 	}
+	valid = withExecDeps(t, valid)
 	if err := valid.Validate(); err != nil {
 		t.Fatalf("expected valid config, got %v", err)
 	}
@@ -125,6 +149,8 @@ func TestConfigValidateAndNewContainer(t *testing.T) {
 		{"nil Workspace", func(c *tools.Config) { c.Workspace = nil }},
 		{"nil Logger", func(c *tools.Config) { c.Logger = nil }},
 		{"nil Tool element", func(c *tools.Config) { c.Tools = []tools.Tool{nil} }},
+		{"nil CommandRunner", func(c *tools.Config) { c.CommandRunner = nil }},
+		{"nil Tasks", func(c *tools.Config) { c.Tasks = nil }},
 	}
 
 	for _, tc := range cases {
@@ -354,13 +380,13 @@ spec:
 		t.Fatal(err)
 	}
 
-	c, err := tools.NewContainer(tools.Config{
+	c, err := tools.NewContainer(withExecDeps(t, tools.Config{
 		Tools:        []tools.Tool{mutTool},
 		Sandbox:      sb,
 		Workspace:    ws,
 		Logger:       log.Default(),
 		AllowedTools: []string{"mutate", "custom_echo", "custom_fail"},
-	})
+	}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -522,13 +548,13 @@ spec:
 		t.Fatal(err)
 	}
 
-	c, err := tools.NewContainer(tools.Config{
+	c, err := tools.NewContainer(withExecDeps(t, tools.Config{
 		Sandbox:      sb,
 		Workspace:    ws,
 		Logger:       log.Default(),
 		Spiller:      sp,
 		AllowedTools: []string{"custom_spill"},
-	})
+	}))
 	if err != nil {
 		t.Fatal(err)
 	}

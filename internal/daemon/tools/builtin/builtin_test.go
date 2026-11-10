@@ -23,6 +23,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/daemon/sandbox"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/scope"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/std"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/tasks"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tools"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tools/builtin"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/workspace"
@@ -88,19 +89,40 @@ func setupBuiltinEnv(t *testing.T, allowLoopback bool) (string, tools.Container,
 		t.Fatalf("tools.NewSpiller failed: %v", err)
 	}
 
-	container, err := tools.NewContainer(tools.Config{
+	container, err := tools.NewContainer(withExecDeps(t, tools.Config{
 		Tools:        builtinTools,
 		Sandbox:      sb,
 		Workspace:    ws,
 		Logger:       log.Default(),
 		Spiller:      sp,
 		AllowedTools: ws.Catalog().ToolNames(),
-	})
+	}))
 	if err != nil {
 		t.Fatalf("tools.NewContainer failed: %v", err)
 	}
 
 	return dir, container, stdLib, sb, ws
+}
+
+// withExecDeps fills the tool container's required execution dependencies for
+// tests that do not exercise custom tools: a Std over the config's own sandbox
+// with an in-memory tracker, and a task store whose logs land under the test's
+// XDG temporary environment.
+func withExecDeps(t *testing.T, cfg tools.Config) tools.Config {
+	t.Helper()
+	stdLib, err := std.New(std.Config{
+		Sandbox: cfg.Sandbox,
+		Tracker: std.NewMemoryTracker(),
+		Logger:  cfg.Logger,
+	})
+	if err != nil {
+		t.Fatalf("std.New: %v", err)
+	}
+	store := tasks.New(tasks.Config{Context: context.Background()})
+	t.Cleanup(func() { _ = store.Close() })
+	cfg.CommandRunner = stdLib
+	cfg.Tasks = store
+	return cfg
 }
 
 func TestBuiltinConfigValidate(t *testing.T) {
@@ -841,14 +863,14 @@ func TestSessionOutputsAndOutsidePathOperations(t *testing.T) {
 		t.Fatalf("tools.NewSpiller failed: %v", err)
 	}
 
-	c, err := tools.NewContainer(tools.Config{
+	c, err := tools.NewContainer(withExecDeps(t, tools.Config{
 		Tools:        builtinTools,
 		Sandbox:      sb,
 		Workspace:    ws,
 		Logger:       log.Default(),
 		Spiller:      sp,
 		AllowedTools: ws.Catalog().ToolNames(),
-	})
+	}))
 	if err != nil {
 		t.Fatalf("tools.NewContainer failed: %v", err)
 	}
@@ -1266,7 +1288,7 @@ func TestBuiltinCustomizationSkillAndReference(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	container, err := tools.NewContainer(tools.Config{Tools: builtins, Sandbox: sb, Workspace: ws, Logger: log.Default(), AllowedTools: ws.Catalog().ToolNames()})
+	container, err := tools.NewContainer(withExecDeps(t, tools.Config{Tools: builtins, Sandbox: sb, Workspace: ws, Logger: log.Default(), AllowedTools: ws.Catalog().ToolNames()}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1349,13 +1371,13 @@ Deploying image {{.image}}:{{.tag}}
 	if err != nil {
 		t.Fatal(err)
 	}
-	agentContainer, err := tools.NewContainer(tools.Config{
+	agentContainer, err := tools.NewContainer(withExecDeps(t, tools.Config{
 		Tools:        mainTools,
 		Sandbox:      sb,
 		Workspace:    ws,
 		Logger:       log.Default(),
 		AllowedTools: ws.Catalog().ToolNames(),
-	})
+	}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1469,13 +1491,13 @@ Restricted agent instructions.
 	if err != nil {
 		t.Fatal(err)
 	}
-	scopedContainer, err := tools.NewContainer(tools.Config{
+	scopedContainer, err := tools.NewContainer(withExecDeps(t, tools.Config{
 		Tools:        scopedTools,
 		Sandbox:      sb,
 		Workspace:    ws,
 		Logger:       log.Default(),
 		AllowedTools: ws.Catalog().ToolNames(),
-	})
+	}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1530,13 +1552,13 @@ Restricted agent instructions.
 	if err != nil {
 		t.Fatal(err)
 	}
-	bigContainer, err := tools.NewContainer(tools.Config{
+	bigContainer, err := tools.NewContainer(withExecDeps(t, tools.Config{
 		Tools:        bigTools,
 		Sandbox:      sb,
 		Workspace:    ws,
 		Logger:       log.Default(),
 		AllowedTools: ws.Catalog().ToolNames(),
-	})
+	}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1668,14 +1690,14 @@ Skill agent.`
 	if err != nil {
 		t.Fatalf("builtin.New: %v", err)
 	}
-	container, err := tools.NewContainer(tools.Config{
+	container, err := tools.NewContainer(withExecDeps(t, tools.Config{
 		Tools:         builtinTools,
 		Sandbox:       sb,
 		Workspace:     ws,
 		Logger:        log.Default(),
 		AllowedTools:  allowed,
 		DeferredTools: partition.Deferred,
-	})
+	}))
 	if err != nil {
 		t.Fatalf("tools.NewContainer: %v", err)
 	}
@@ -1815,13 +1837,13 @@ Name agent.`
 	if err != nil {
 		t.Fatalf("builtin.New: %v", err)
 	}
-	container, err := tools.NewContainer(tools.Config{
+	container, err := tools.NewContainer(withExecDeps(t, tools.Config{
 		Tools:        builtinTools,
 		Sandbox:      sb,
 		Workspace:    ws,
 		Logger:       log.Default(),
 		AllowedTools: allowed,
-	})
+	}))
 	if err != nil {
 		t.Fatalf("tools.NewContainer: %v", err)
 	}
@@ -1930,13 +1952,13 @@ Qualified agent.`
 	if err != nil {
 		t.Fatalf("builtin.New: %v", err)
 	}
-	container, err := tools.NewContainer(tools.Config{
+	container, err := tools.NewContainer(withExecDeps(t, tools.Config{
 		Tools:        builtinTools,
 		Sandbox:      sb,
 		Workspace:    ws,
 		Logger:       log.Default(),
 		AllowedTools: allowed,
-	})
+	}))
 	if err != nil {
 		t.Fatalf("tools.NewContainer: %v", err)
 	}

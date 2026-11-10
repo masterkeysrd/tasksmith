@@ -152,6 +152,42 @@ func NewSpillWriter(ctx context.Context) SpillWriter {
 	return &nopSpillWriter{}
 }
 
+// SafeWriter guards an [io.WriteCloser] against writes that race a late Close:
+// backgrounded tasks can still be flushing process output when the tool call
+// that launched them finishes and closes the underlying spill writer. Writes
+// after Close are counted but discarded instead of failing or panicking.
+type SafeWriter struct {
+	mu     sync.Mutex
+	closed bool
+	w      io.WriteCloser
+}
+
+// NewSafeWriter wraps a spill writer so task goroutines can keep writing after
+// the owning tool call closes it.
+func NewSafeWriter(w io.WriteCloser) *SafeWriter {
+	return &SafeWriter{w: w}
+}
+
+func (sw *SafeWriter) Write(p []byte) (int, error) {
+	sw.mu.Lock()
+	defer sw.mu.Unlock()
+	if sw.closed || sw.w == nil {
+		return len(p), nil
+	}
+	return sw.w.Write(p)
+}
+
+func (sw *SafeWriter) Close() {
+	sw.mu.Lock()
+	w := sw.w
+	sw.closed = true
+	sw.w = nil
+	sw.mu.Unlock()
+	if w != nil {
+		_ = w.Close()
+	}
+}
+
 type nopSpillWriter struct {
 	mu     sync.Mutex
 	buf    bytes.Buffer

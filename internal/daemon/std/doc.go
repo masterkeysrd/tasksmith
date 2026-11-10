@@ -9,7 +9,7 @@
 //   - Filesystem operations ([Std.View], [Std.List], [Std.Glob], [Std.Grep],
 //     [Std.Write], [Std.Edit], [Std.Remove], [Std.SyncExternalChanges]) execute
 //     exclusively through [sandbox.Sandbox.FS].
-//   - Process execution ([Std.Bash]) runs exclusively through
+//   - Process execution ([Std.Bash] and [Std.Exec]) runs exclusively through
 //     [sandbox.Sandbox.Proc] and automatically synchronizes any external file
 //     mutations made by the command upon completion.
 //   - Network operations ([Std.Fetch], [Std.Download]) execute exclusively
@@ -34,5 +34,5 @@
 //     [Std.Remove], or [Std.Download].
 //   - [github.com/masterkeysrd/tasksmith/api.SourceExternal]: Mutations detected on disk when re-reading a tracked
 //     file in [Std.View] or scanning tracked paths in [Std.SyncExternalChanges]
-//     (including after [Std.Bash] command execution).
+//     (including after [Std.Bash] or [Std.Exec] command execution).
 package std

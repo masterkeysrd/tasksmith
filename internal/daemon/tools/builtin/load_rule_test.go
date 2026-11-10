@@ -67,13 +67,13 @@ Always wrap and propagate errors in Go.
 	if err != nil {
 		t.Fatal(err)
 	}
-	agentContainer, err := tools.NewContainer(tools.Config{
+	agentContainer, err := tools.NewContainer(withExecDeps(t, tools.Config{
 		Tools:        mainTools,
 		Sandbox:      sb,
 		Workspace:    ws,
 		Logger:       log.Default(),
 		AllowedTools: ws.Catalog().ToolNames(),
-	})
+	}))
 	if err != nil {
 		t.Fatal(err)
 	}

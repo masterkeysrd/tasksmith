@@ -312,6 +312,42 @@ type BashResult struct {
 	ExternalChanges []FileChange  `json:"external_changes,omitempty"`
 }
 
+// ExecRequest configures a direct program execution via [Std.Exec]. Unlike
+// [BashRequest], the program runs without shell interpretation, so argument
+// values are delivered to the process verbatim.
+type ExecRequest struct {
+	// Name is the executable to run, resolved through the sandbox PATH.
+	Name string `json:"name"`
+
+	// Args holds the program arguments, delivered without shell parsing.
+	Args []string `json:"args,omitempty"`
+
+	// Dir is the optional working directory relative to the sandbox root.
+	Dir string `json:"dir,omitempty"`
+
+	// Env specifies optional per-command environment variable overrides.
+	Env map[string]string `json:"env,omitempty"`
+
+	// Stdin provides optional standard input to the program.
+	Stdin io.Reader `json:"-"`
+
+	// Output optionally receives combined stdout and stderr from the program.
+	Output io.Writer `json:"-"`
+
+	// Timeout overrides the sandbox's default execution timeout.
+	Timeout time.Duration `json:"timeout,omitempty"`
+}
+
+// ExecResult contains the program output, exit status, and any external file
+// changes detected after [Std.Exec] finishes.
+type ExecResult struct {
+	Stdout          string        `json:"stdout"`
+	Stderr          string        `json:"stderr"`
+	ExitCode        int           `json:"exit_code"`
+	Duration        time.Duration `json:"duration"`
+	ExternalChanges []FileChange  `json:"external_changes,omitempty"`
+}
+
 // FetchRequest configures an outbound HTTP request via [Std.Fetch].
 type FetchRequest struct {
 	// URL is the target HTTP or HTTPS URL.

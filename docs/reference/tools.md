@@ -839,6 +839,8 @@ Full template reference and schema semantics live in the [Tool manifest referenc
 ### Execution And Output
 
 - Execution runs through the sandbox process API and is subject to the permission system. The process environment is the sandbox configuration plus `spec.env`; the host daemon environment is never inherited.
+- A custom tool call blocks for the same 60-second wait window the built-in `bash` tool uses. A tool still running when the window elapses is moved to the background like a bash task: the call returns a `<background_task>` notice with a `task_id`, the process keeps running killable through the [`tasks`](#tasks) tool, and the agent is woken with a completion notification when it finishes. A hung tool therefore no longer blocks its turn indefinitely.
+- Because execution shares the standard operations path with `bash`, tracked files a custom tool modifies or deletes are detected and recorded in the session change journal as external changes, reviewable through [`/changes`](cli.md#changes-browser-changes) and revertible through `/revert`.
 - Standard output is returned to the model as text. When it exceeds the output limits, the full content is spilled to a file and the model receives a head-plus-tail preview pointing at that file.
 - A nonzero exit code reports standard error, then standard output if standard error is empty, then the exit code alone.
 - `spec.outputSchema` is advertised metadata. Output is not parsed or validated against it, and an absent or unparseable schema defaults to a string schema.

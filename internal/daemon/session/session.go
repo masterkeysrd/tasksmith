@@ -1036,6 +1036,8 @@ func (s *Session) buildToolsForAgent(agentName string) (tools.Container, error) 
 		AllowedTools:  allowedToolNames,
 		DeferredTools: deferredToolNames,
 		MCPCaller:     mcpCaller,
+		CommandRunner: s.Std,
+		Tasks:         s.Tasks,
 		ToolSearchFactory: func(defs []tool.Definition) tools.Tool {
 			return builtin.NewToolSearch(defs, s.workspace)
 		},

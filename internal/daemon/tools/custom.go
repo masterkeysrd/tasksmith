@@ -11,12 +11,14 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/masterkeysrd/loom/message"
 	"github.com/masterkeysrd/loom/tool"
 	"github.com/masterkeysrd/tasksmith/api"
-	"github.com/masterkeysrd/tasksmith/internal/daemon/sandbox"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/std"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/tasks"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/workspace"
 	"github.com/masterkeysrd/warp"
 )
@@ -24,6 +26,13 @@ import (
 // reTemplateAction matches an explicit Go template action ({{ ... }}) authored in
 // a custom tool's spec.command element.
 var reTemplateAction = regexp.MustCompile(`\{\{[^{}]*\}\}`)
+
+// customToolWait is how long a custom tool call blocks before its process is
+// backgrounded, matching the built-in bash tool's synchronous wait window. A
+// tool that needs longer keeps running as a killable background task and wakes
+// the agent on completion instead of pinning the turn indefinitely. It is a
+// variable so tests can exercise backgrounding without a real-minute wait.
+var customToolWait = 60 * time.Second
 
 // customTool executes a custom workspace tool declared as a warp.Tool carrying a
 // spec.command. It is deliberately a black box: its security posture comes only
@@ -34,7 +43,8 @@ type customTool struct {
 	resolvedInputSchema *jsonschema.Resolved
 	command             []string
 	env                 map[string]string
-	sandbox             sandbox.Sandbox
+	runner              CommandRunner
+	tasks               tasks.Store
 	wsTool              *warp.Tool
 	workspace           *workspace.Workspace
 	agent               *warp.Agent
@@ -144,7 +154,8 @@ func (c *container) buildCustomTool(wsTool *warp.Tool) (Tool, error) {
 		resolvedInputSchema: resolvedInput,
 		command:             cmdSlice,
 		env:                 envMap,
-		sandbox:             c.sandbox,
+		runner:              c.commandRunner,
+		tasks:               c.tasks,
 		wsTool:              wsTool,
 		workspace:           c.workspace,
 		agent:               c.agent,
@@ -400,37 +411,87 @@ func (ct *customTool) Execute(ctx context.Context, call *message.ToolCall) (*mes
 		stdin = bytes.NewReader(inputBytes)
 	}
 
-	w := NewSpillWriter(ctx)
-	defer w.Close()
+	return ct.executeAsTask(ctx, callID, name, argv, stdin)
+}
 
-	cmd := sandbox.Command{
-		Name:   argv[0],
-		Args:   argv[1:],
-		Env:    ct.env,
-		Stdin:  stdin,
-		Stdout: w,
+// executeAsTask runs the tool through the session's background task registry,
+// the same pipeline the built-in bash tool uses: the call blocks for the wait
+// window, and a still-running process is backgrounded instead of pinning the
+// turn, remaining killable via the tasks tool and waking the agent with a
+// completion notification. Execution goes through [CommandRunner.Exec], which
+// synchronizes tracked-file mutations into the change journal afterwards.
+func (ct *customTool) executeAsTask(ctx context.Context, callID, name string, argv []string, payload io.Reader) (*message.Tool, error) {
+	w := NewSpillWriter(ctx)
+	defer func() { _ = w.Close() }()
+
+	sw := NewSafeWriter(w)
+	defer sw.Close()
+
+	task := &tasks.Task{
+		Kind:    "custom_tool",
+		Title:   fmt.Sprintf("Custom tool: %s", ct.def.Name),
+		Command: strings.Join(argv, " "),
+		Wait:    customToolWait,
+		Fn: func(taskCtx context.Context, out io.Writer, _ io.Reader) (int, error) {
+			res, err := ct.runner.Exec(taskCtx, std.ExecRequest{
+				Name:   argv[0],
+				Args:   argv[1:],
+				Env:    ct.env,
+				Stdin:  payload,
+				Output: io.MultiWriter(out, sw),
+			})
+			if err != nil {
+				return -1, err
+			}
+			return res.ExitCode, nil
+		},
 	}
 
-	res, err := ct.sandbox.Proc().Exec(ctx, cmd)
-	if err != nil {
+	if err := ct.tasks.Add(task); err != nil {
 		return nil, err
 	}
-	if res.ExitCode != 0 {
-		errMsg := strings.TrimSpace(string(res.Stderr))
-		if errMsg == "" {
-			errMsg = strings.TrimSpace(w.String())
+	runErr := task.Run(ctx)
+	sw.Close()
+
+	if task.Backgrounded() {
+		bgNotice := fmt.Sprintf("<background_task task_id=%q status=%q log_path=%q>\nCustom tool %q is still running and has been moved to the background. You do not need to poll this task's status — the system will automatically notify and wake you up when it finishes execution. Use the `tasks` tool to check intermediate logs, send input, or kill the task.\n</background_task>", task.ID, task.Status(), task.LogPath(), ct.def.Name)
+		initial := strings.TrimSpace(w.String())
+		outStr := bgNotice
+		if initial != "" {
+			outStr = initial + "\n\n" + bgNotice
 		}
-		if errMsg == "" {
-			return nil, fmt.Errorf("custom tool %q exited with code %d", ct.def.Name, res.ExitCode)
-		}
-		return nil, errors.New(errMsg)
+		return ct.toolResult(callID, name, outStr), nil
 	}
 
-	out := w.String()
+	if runErr != nil {
+		return nil, ct.runError(runErr, w)
+	}
+	if task.ExitCode() != 0 {
+		return nil, ct.exitError(task.ExitCode(), w)
+	}
+	return ct.toolResult(callID, name, w.String()), nil
+}
+
+func (ct *customTool) toolResult(callID, name, out string) *message.Tool {
 	return &message.Tool{
 		ToolCallID:        callID,
 		Name:              name,
 		Content:           message.Content{&message.TextBlock{Text: out}},
 		StructuredContent: out,
-	}, nil
+	}
+}
+
+func (ct *customTool) runError(runErr error, w SpillWriter) error {
+	if msg := strings.TrimSpace(w.String()); msg != "" {
+		return fmt.Errorf("custom tool %q: %w: %s", ct.def.Name, runErr, msg)
+	}
+	return fmt.Errorf("custom tool %q: %w", ct.def.Name, runErr)
+}
+
+func (ct *customTool) exitError(exitCode int, w SpillWriter) error {
+	errMsg := strings.TrimSpace(w.String())
+	if errMsg == "" {
+		return fmt.Errorf("custom tool %q exited with code %d", ct.def.Name, exitCode)
+	}
+	return errors.New(errMsg)
 }

@@ -146,13 +146,13 @@ func (f *mcpFixture) publish(t *testing.T, discovered ...*warp.Tool) {
 // container builds a tool container granting the named tools.
 func (f *mcpFixture) container(t *testing.T, allowed ...string) tools.Container {
 	t.Helper()
-	c, err := tools.NewContainer(tools.Config{
+	c, err := tools.NewContainer(withExecDeps(t, tools.Config{
 		Sandbox:      f.sb,
 		Workspace:    f.ws,
 		Logger:       log.Default(),
 		AllowedTools: allowed,
 		MCPCaller:    f.caller,
-	})
+	}))
 	if err != nil {
 		t.Fatalf("tools.NewContainer: %v", err)
 	}
@@ -475,14 +475,14 @@ func TestMCPToolOutputSpilling(t *testing.T) {
 		t.Fatalf("NewSpiller: %v", err)
 	}
 
-	c, err := tools.NewContainer(tools.Config{
+	c, err := tools.NewContainer(withExecDeps(t, tools.Config{
 		Sandbox:      f.sb,
 		Workspace:    f.ws,
 		Logger:       log.Default(),
 		Spiller:      spiller,
 		AllowedTools: []string{"notes__echo"},
 		MCPCaller:    f.caller,
-	})
+	}))
 	if err != nil {
 		t.Fatalf("tools.NewContainer: %v", err)
 	}
@@ -581,12 +581,12 @@ func TestRegisterMCPToolsGating(t *testing.T) {
 
 	// Without a runtime, nothing can invoke the server's tools, so they must not be
 	// offered at all rather than failing at call time.
-	noRuntime, err := tools.NewContainer(tools.Config{
+	noRuntime, err := tools.NewContainer(withExecDeps(t, tools.Config{
 		Sandbox:      f.sb,
 		Workspace:    f.ws,
 		Logger:       log.Default(),
 		AllowedTools: []string{"notes__echo"},
-	})
+	}))
 	if err != nil {
 		t.Fatalf("tools.NewContainer without a caller: %v", err)
 	}

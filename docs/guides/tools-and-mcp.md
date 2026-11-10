@@ -101,6 +101,8 @@ Templates are opt-in: a command containing only shell-style references (`$var`, 
 
 The security posture of a custom tool comes strictly from its annotations — TaskSmith never infers risk from argument values or command strings — so an unannotated tool is never treated as auto-allowed safe. See [Custom Tool Execution Model](../reference/tools.md#4-custom-tool-execution-model) for the full annotation-to-permission mapping.
 
+Long-running tools behave like background bash commands: a call that outlives the 60-second wait window is moved to the background, stays killable through the `tasks` tool, and wakes the agent with a completion notification — so a slow formatter or deploy script never blocks the turn, and a hung one never wedges it.
+
 ### Checking What The Agent Actually Sees
 
 Run `/tools` to browse every built-in and custom tool with its status for the active agent. A tool that is `[Deferred]` is registered but withheld from the initial context until the agent finds it through `tool_search`; to make a custom tool `[Eager]`, list its name in the agent's `spec.tools`. `[Denied]` means a workspace or agent tool policy blocks it, and `[Inactive]` means the current session does not activate it at all. Press `i` in the browser to inspect a tool's rendered command, annotations, and JSON schemas.

@@ -138,13 +138,13 @@ func TestInvokeAgentPrepareAndExecute(t *testing.T) {
 		t.Fatalf("builtin.New failed: %v", err)
 	}
 
-	container, err := tools.NewContainer(tools.Config{
+	container, err := tools.NewContainer(withExecDeps(t, tools.Config{
 		Tools:        builtinTools,
 		Sandbox:      sb,
 		Workspace:    ws,
 		Logger:       log.Default(),
 		AllowedTools: subagentAllowedTools(ws),
-	})
+	}))
 	if err != nil {
 		t.Fatalf("tools.NewContainer failed: %v", err)
 	}
@@ -275,13 +275,13 @@ func TestManageAgentsPrepareAndExecute(t *testing.T) {
 		t.Fatalf("builtin.New failed: %v", err)
 	}
 
-	container, err := tools.NewContainer(tools.Config{
+	container, err := tools.NewContainer(withExecDeps(t, tools.Config{
 		Tools:        builtinTools,
 		Sandbox:      sb,
 		Workspace:    ws,
 		Logger:       log.Default(),
 		AllowedTools: subagentAllowedTools(ws),
-	})
+	}))
 	if err != nil {
 		t.Fatalf("tools.NewContainer failed: %v", err)
 	}

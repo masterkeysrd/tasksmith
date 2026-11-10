@@ -13,9 +13,19 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/sandbox"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/scope"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/std"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/tasks"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/workspace"
 	"github.com/masterkeysrd/warp"
 )
+
+// CommandRunner executes a program inside the session environment without
+// shell interpretation and synchronizes external file changes afterwards.
+// Satisfied by *std.Std, mirroring how the harness narrows Std.Bash behind
+// BashRunner; custom tools depend only on this seam.
+type CommandRunner interface {
+	Exec(ctx context.Context, req std.ExecRequest) (*std.ExecResult, error)
+}
 
 // Config holds the mandatory dependencies required to construct a [Container].
 type Config struct {
@@ -44,6 +54,15 @@ type Config struct {
 	// servers. When nil, no MCP tool is registered: the servers stay discoverable
 	// in listings but nothing can invoke their tools.
 	MCPCaller MCPCaller
+	// CommandRunner is the execution surface command-backed custom tools run
+	// through (satisfied by the session's *std.Std), so process output
+	// synchronizes external file changes into the change journal like the
+	// built-in bash tool.
+	CommandRunner CommandRunner
+	// Tasks is the session's background task registry. Command-backed custom
+	// tools run as tasks so a slow tool auto-backgrounds at the wait window
+	// instead of blocking the turn indefinitely.
+	Tasks tasks.Store
 }
 
 // Validate ensures that all required dependencies are non-nil. Zero silent
@@ -57,6 +76,12 @@ func (c Config) Validate() error {
 	}
 	if c.Logger == nil {
 		return fmt.Errorf("%w: logger is required", ErrInvalidConfig)
+	}
+	if c.CommandRunner == nil {
+		return fmt.Errorf("%w: command runner is required", ErrInvalidConfig)
+	}
+	if c.Tasks == nil {
+		return fmt.Errorf("%w: task store is required", ErrInvalidConfig)
 	}
 	for i, t := range c.Tools {
 		if t == nil {
@@ -77,17 +102,19 @@ type Container interface {
 }
 
 type container struct {
-	sandbox      sandbox.Sandbox
-	workspace    *workspace.Workspace
-	agent        *warp.Agent
-	logger       log.Interface
-	spiller      Spiller
-	mcpCaller    MCPCaller
-	order        []string
-	tools        map[string]Tool
-	locksMu      sync.Mutex
-	pathLocks    map[string]*sync.Mutex
-	allowedTools []string
+	sandbox       sandbox.Sandbox
+	workspace     *workspace.Workspace
+	agent         *warp.Agent
+	logger        log.Interface
+	spiller       Spiller
+	mcpCaller     MCPCaller
+	commandRunner CommandRunner
+	tasks         tasks.Store
+	order         []string
+	tools         map[string]Tool
+	locksMu       sync.Mutex
+	pathLocks     map[string]*sync.Mutex
+	allowedTools  []string
 }
 
 var _ Container = (*container)(nil)
@@ -109,15 +136,17 @@ func NewContainer(cfg Config) (Container, error) {
 	}
 
 	c := &container{
-		sandbox:      cfg.Sandbox,
-		workspace:    cfg.Workspace,
-		agent:        cfg.Agent,
-		logger:       cfg.Logger.ForComponent("tools"),
-		spiller:      sp,
-		mcpCaller:    cfg.MCPCaller,
-		tools:        make(map[string]Tool, len(cfg.Tools)),
-		pathLocks:    make(map[string]*sync.Mutex),
-		allowedTools: cfg.AllowedTools,
+		sandbox:       cfg.Sandbox,
+		workspace:     cfg.Workspace,
+		agent:         cfg.Agent,
+		logger:        cfg.Logger.ForComponent("tools"),
+		spiller:       sp,
+		mcpCaller:     cfg.MCPCaller,
+		commandRunner: cfg.CommandRunner,
+		tasks:         cfg.Tasks,
+		tools:         make(map[string]Tool, len(cfg.Tools)),
+		pathLocks:     make(map[string]*sync.Mutex),
+		allowedTools:  cfg.AllowedTools,
 	}
 
 	for _, t := range cfg.Tools {

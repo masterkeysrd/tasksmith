@@ -135,7 +135,7 @@ spec:
 		t.Fatalf("tools.NewSpiller: %v", err)
 	}
 
-	c, err := tools.NewContainer(tools.Config{
+	c, err := tools.NewContainer(withExecDeps(t, tools.Config{
 		Tools:        builtinTools,
 		Sandbox:      sb,
 		Workspace:    ws,
@@ -143,7 +143,7 @@ spec:
 		Spiller:      spiller,
 		AllowedTools: allowed,
 		MCPCaller:    reader,
-	})
+	}))
 	if err != nil {
 		t.Fatalf("tools.NewContainer: %v", err)
 	}

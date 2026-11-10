@@ -2,6 +2,8 @@ package tools_test
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"os"
@@ -16,6 +18,8 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/sandbox"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/std"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/tasks"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tools"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/workspace"
 	"github.com/masterkeysrd/warp"
@@ -73,12 +77,21 @@ func customToolFixture(t *testing.T, manifests map[string]string, agent *warp.Ag
 		allowed = append(allowed, strings.TrimSuffix(strings.TrimSuffix(name, ".tool.md"), ".tool.yaml"))
 	}
 
+	stdLib, err := std.New(std.Config{Sandbox: sb, Tracker: std.NewMemoryTracker(), Logger: log.Default()})
+	if err != nil {
+		t.Fatalf("new std: %v", err)
+	}
+	taskStore := tasks.New(tasks.Config{Context: context.Background()})
+	t.Cleanup(func() { _ = taskStore.Close() })
+
 	c, err := tools.NewContainer(tools.Config{
-		Sandbox:      sb,
-		Workspace:    ws,
-		Agent:        agent,
-		Logger:       log.Default(),
-		AllowedTools: allowed,
+		Sandbox:       sb,
+		Workspace:     ws,
+		Agent:         agent,
+		CommandRunner: stdLib,
+		Tasks:         taskStore,
+		Logger:        log.Default(),
+		AllowedTools:  allowed,
 	})
 	if err != nil {
 		t.Fatalf("tools.NewContainer: %v", err)
@@ -567,4 +580,107 @@ spec:
 	if _, ok := errors.AsType[*tool.ValidationError](err); ok {
 		t.Errorf("Prepare(broken_tool) error = %v, want a render error rather than validation", err)
 	}
+}
+
+// TestCustomToolSyncsTrackedFileChanges verifies that a mutation made by an
+// executed custom tool is detected against the change tracker the same way the
+// built-in bash tool detects it: a file the agent authored through Std is
+// rewritten by the tool, and the sync afterwards records an external
+// modification. Without the Std execution path nothing is recorded.
+func TestCustomToolSyncsTrackedFileChanges(t *testing.T) {
+	manifests := map[string]string{
+		"rewrite.tool.md": `---
+apiVersion: warp/v1alpha1
+kind: Tool
+metadata:
+  name: rewrite
+  description: Overwrites notes.txt.
+spec:
+  command: ["sh", "-c", "printf 'rewritten\\n' > notes.txt"]
+  annotations:
+    isReadOnly: false
+---
+`,
+	}
+
+	xdg.SetTestEnv(t.TempDir(), "tasksmith-custom-sync-test")
+	t.Cleanup(xdg.ClearCache)
+
+	dir := t.TempDir()
+	if realDir, err := filepath.EvalSymlinks(dir); err == nil {
+		dir = realDir
+	}
+	toolsDir := filepath.Join(dir, ".agents", "tools")
+	if err := os.MkdirAll(toolsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for name, content := range manifests {
+		if err := os.WriteFile(filepath.Join(toolsDir, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	ws, err := workspace.Open(context.Background(), dir)
+	if err != nil {
+		t.Fatalf("workspace.Open: %v", err)
+	}
+	sb, err := sandbox.New(sandbox.Config{Mode: sandbox.ModeLocal, WorkDir: dir})
+	if err != nil {
+		t.Fatalf("sandbox.New: %v", err)
+	}
+	t.Cleanup(func() { _ = sb.Close() })
+
+	tracker := std.NewMemoryTracker()
+	stdLib, err := std.New(std.Config{Sandbox: sb, Tracker: tracker, Logger: log.Default()})
+	if err != nil {
+		t.Fatalf("std.New: %v", err)
+	}
+	store := tasks.New(tasks.Config{Context: context.Background()})
+	t.Cleanup(func() { _ = store.Close() })
+
+	// Writing through Std puts the file under tracking, as it does in a real
+	// session where the agent authored a file before a tool rewrites it.
+	if _, err := stdLib.Write(context.Background(), std.WriteRequest{Path: "notes.txt", Content: "original\n", Force: true}); err != nil {
+		t.Fatalf("Std.Write: %v", err)
+	}
+
+	c, err := tools.NewContainer(tools.Config{
+		Sandbox:       sb,
+		Workspace:     ws,
+		Logger:        log.Default(),
+		AllowedTools:  []string{"rewrite"},
+		CommandRunner: stdLib,
+		Tasks:         store,
+	})
+	if err != nil {
+		t.Fatalf("tools.NewContainer: %v", err)
+	}
+
+	if out := mustExec(t, c, "rewrite", nil); strings.Contains(out, "original") {
+		t.Fatalf("unexpected output %q", out)
+	}
+
+	var sawExternal bool
+	for _, ch := range tracker.Changes() {
+		if ch.Path == "notes.txt" && ch.Source == api.SourceExternal && ch.Kind == api.KindModified {
+			sawExternal = true
+		}
+	}
+	if !sawExternal {
+		t.Fatalf("expected an external modification of notes.txt recorded after custom tool execution, got %+v", tracker.Changes())
+	}
+
+	hash, ok := tracker.LastHash("notes.txt")
+	if !ok {
+		t.Fatal("expected notes.txt to remain tracked after custom tool execution")
+	}
+	want := sha256Hex("rewritten\n")
+	if hash != want {
+		t.Fatalf("tracker hash = %q, want post-write hash %q (external change was not synced)", hash, want)
+	}
+}
+
+func sha256Hex(s string) string {
+	sum := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(sum[:])
 }
