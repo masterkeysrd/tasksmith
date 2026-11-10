@@ -100,7 +100,7 @@ Manage and monitor background tasks in the current session.
 - `list`: List background tasks in the session along with their status, duration, and log file paths.
 - `status`: Retrieve the current execution state, exit code, `log_path`, and the last `limit` lines (default 100) of output for `task_id`. You can also use `view` (with `offset` and `limit`) or `grep` directly on `log_path` to search large logs.
 - `kill`: Terminate a running background task (`task_id`).
-- `send_input`: Write `input` to the standard input (`stdin`) of a running task (`task_id`).
+- `send_input`: Write `input` to the standard input (`stdin`) of a running task (`task_id`). Only tasks that read stdin interactively (background bash commands) accept data; tasks whose input is fixed at launch (such as custom tools) report that input is unsupported.
 </actions>
 
 <guidelines>

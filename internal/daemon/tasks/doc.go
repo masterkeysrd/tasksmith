@@ -52,8 +52,12 @@
 //
 // # Input & Cancellation
 //
-// Each running task is given a stdin pipe. [Task.WriteInput] streams data into
-// that pipe while the task is running, returning [ErrNotRunning] otherwise.
+// Each running task is given a stdin pipe, but only tasks declaring
+// [Task.AcceptsInput] — whose workload actually reads that pipe — accept
+// interactive data. [Task.WriteInput] streams data into the pipe while such a
+// task is running, returns [ErrInputUnsupported] for tasks that fixed their
+// standard input at launch (for example custom tools, which receive a JSON
+// payload or nothing), and [ErrNotRunning] for tasks that are not running.
 // [Task.Cancel] closes the stdin pipe and cancels the task's context;
 // [Task.Kill] validates that the task is currently running or pending before canceling;
 // and [Store.Close] cancels every tracked task.

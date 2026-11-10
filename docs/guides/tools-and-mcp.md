@@ -101,7 +101,7 @@ Templates are opt-in: a command containing only shell-style references (`$var`, 
 
 The security posture of a custom tool comes strictly from its annotations — TaskSmith never infers risk from argument values or command strings — so an unannotated tool is never treated as auto-allowed safe. See [Custom Tool Execution Model](../reference/tools.md#4-custom-tool-execution-model) for the full annotation-to-permission mapping.
 
-Long-running tools behave like background bash commands: a call that outlives the 60-second wait window is moved to the background, stays killable through the `tasks` tool, and wakes the agent with a completion notification — so a slow formatter or deploy script never blocks the turn, and a hung one never wedges it.
+Long-running tools behave like background bash commands: a call that outlives the 60-second wait window is moved to the background, stays killable through the `tasks` tool, and wakes the agent with a completion notification — so a slow formatter or deploy script never blocks the turn, and a hung one never wedges it. One difference from bash: a backgrounded custom tool does not take interactive input, because its standard input is fixed when the tool launches (the JSON payload, or closed when the command used templated arguments).
 
 ### Checking What The Agent Actually Sees
 

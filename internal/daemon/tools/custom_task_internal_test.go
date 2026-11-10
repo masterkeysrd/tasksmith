@@ -134,6 +134,9 @@ func TestCustomToolAutoBackgroundsAtWaitWindow(t *testing.T) {
 	if !strings.Contains(text, "<background_task") {
 		t.Fatalf("expected background_task notice, got %q", text)
 	}
+	if !strings.Contains(text, "do not accept interactive input") {
+		t.Fatalf("expected notice to state interactive input is unsupported, got %q", text)
+	}
 	if elapsed > 5*time.Second {
 		t.Fatalf("Execute blocked for %v; expected return at the wait window", elapsed)
 	}

@@ -20,8 +20,9 @@ import (
 )
 
 var (
-	ErrTaskNotFound = errors.New("tasks: task not found")
-	ErrNotRunning   = errors.New("tasks: task is not running")
+	ErrTaskNotFound     = errors.New("tasks: task not found")
+	ErrNotRunning       = errors.New("tasks: task is not running")
+	ErrInputUnsupported = errors.New("tasks: task does not read standard input")
 )
 
 const (
@@ -40,6 +41,12 @@ type Task struct {
 	Command string
 	Wait    time.Duration
 	Fn      Func
+	// AcceptsInput declares that the task's workload consumes its stdin
+	// reader interactively, so [Task.WriteInput] may feed it data. Tasks
+	// that fix their standard input at launch (a payload, or nothing)
+	// leave it false, and WriteInput rejects them instead of writing into
+	// a pipe no one reads.
+	AcceptsInput bool
 
 	mu           sync.Mutex
 	status       api.TaskStatus
@@ -185,6 +192,10 @@ func (t *Task) WriteInput(data string) error {
 	if t.status != api.TaskStatusRunning || t.stdinW == nil {
 		t.mu.Unlock()
 		return ErrNotRunning
+	}
+	if !t.AcceptsInput {
+		t.mu.Unlock()
+		return fmt.Errorf("%w: task %s (%s)", ErrInputUnsupported, t.ID, t.Kind)
 	}
 	w := t.stdinW
 	t.mu.Unlock()

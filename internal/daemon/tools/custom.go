@@ -454,7 +454,7 @@ func (ct *customTool) executeAsTask(ctx context.Context, callID, name string, ar
 	sw.Close()
 
 	if task.Backgrounded() {
-		bgNotice := fmt.Sprintf("<background_task task_id=%q status=%q log_path=%q>\nCustom tool %q is still running and has been moved to the background. You do not need to poll this task's status — the system will automatically notify and wake you up when it finishes execution. Use the `tasks` tool to check intermediate logs, send input, or kill the task.\n</background_task>", task.ID, task.Status(), task.LogPath(), ct.def.Name)
+		bgNotice := fmt.Sprintf("<background_task task_id=%q status=%q log_path=%q>\nCustom tool %q is still running and has been moved to the background. You do not need to poll this task's status — the system will automatically notify and wake you up when it finishes execution. Use the `tasks` tool to check intermediate logs or kill the task; unlike background bash commands, custom tools do not accept interactive input.\n</background_task>", task.ID, task.Status(), task.LogPath(), ct.def.Name)
 		initial := strings.TrimSpace(w.String())
 		outStr := bgNotice
 		if initial != "" {

@@ -139,10 +139,11 @@ func (t *bashTool) Execute(ctx context.Context, in api.BashInput) (api.BashOutpu
 	}
 
 	task := &tasks.Task{
-		Kind:    "bash",
-		Title:   title,
-		Command: in.Command,
-		Wait:    wait,
+		Kind:         "bash",
+		Title:        title,
+		Command:      in.Command,
+		Wait:         wait,
+		AcceptsInput: true,
 		Fn: func(taskCtx context.Context, out io.Writer, stdin io.Reader) (int, error) {
 			mw := io.MultiWriter(out, sw)
 			res, err := t.std.Bash(taskCtx, std.BashRequest{

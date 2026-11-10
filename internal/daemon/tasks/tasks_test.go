@@ -201,9 +201,10 @@ func TestWriteInputTailAndSubscribeOutput(t *testing.T) {
 
 	inputReceived := make(chan string, 1)
 	task := &Task{
-		Kind:  "custom",
-		Title: "interactive task",
-		Wait:  0, // immediate background
+		Kind:         "custom",
+		Title:        "interactive task",
+		Wait:         0, // immediate background
+		AcceptsInput: true,
 		Fn: func(ctx context.Context, output io.Writer, stdin io.Reader) (int, error) {
 			_, _ = output.Write([]byte("line 1\n"))
 			_, _ = output.Write([]byte("line 2\n"))
@@ -275,6 +276,35 @@ func TestWriteInputTailAndSubscribeOutput(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("expected chunks channel to close")
 	}
+}
+
+func TestWriteInputRejectsTasksWithoutAcceptsInput(t *testing.T) {
+	mgr := New(Config{})
+	defer func() { _ = mgr.Close() }()
+
+	unblock := make(chan struct{})
+	task := &Task{
+		Kind:  "custom_tool",
+		Title: "fixed stdin tool",
+		Wait:  0,
+		Fn: func(ctx context.Context, output io.Writer, stdin io.Reader) (int, error) {
+			<-unblock
+			return 0, nil
+		},
+	}
+	if err := mgr.Add(task); err != nil {
+		t.Fatalf("Add failed: %v", err)
+	}
+	if err := task.Run(context.Background()); err != nil {
+		t.Fatalf("Run failed: %v", err)
+	}
+
+	err := task.WriteInput("ignored")
+	if !errors.Is(err, ErrInputUnsupported) {
+		t.Fatalf("expected ErrInputUnsupported, got %v", err)
+	}
+	close(unblock)
+	<-task.Done()
 }
 
 func TestKillRunningBackgroundTask(t *testing.T) {
