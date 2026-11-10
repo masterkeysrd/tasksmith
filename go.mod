@@ -1,27 +1,27 @@
 module github.com/masterkeysrd/tasksmith
 
-go 1.26.4
+go 1.26.10
 
 require (
 	github.com/alecthomas/chroma/v2 v2.27.0
-	github.com/anthropics/anthropic-sdk-go v1.82.0
+	github.com/anthropics/anthropic-sdk-go v1.84.0
 	github.com/dustin/go-humanize v1.1.0
 	github.com/google/jsonschema-go v0.4.3
 	github.com/google/uuid v1.6.0
 	github.com/lrstanley/go-nf v0.0.0-20260418212552-215ab243b591
 	github.com/masterkeysrd/kite v0.0.7-0.20261107034218-fde6c587a1eb
-	github.com/masterkeysrd/loom v0.0.9-0.20261107051712-b5006f55a76e
+	github.com/masterkeysrd/loom v0.0.9-0.20261110205535-2c5a56ffb692
 	github.com/masterkeysrd/warp v0.0.7-0.20261104235639-05b5acbc6fde
 	github.com/modelcontextprotocol/go-sdk v1.8.0
-	github.com/ollama/ollama v0.40.8
-	github.com/openai/openai-go/v3 v3.79.0
+	github.com/ollama/ollama v0.40.15
+	github.com/openai/openai-go/v3 v3.96.0
 	github.com/spf13/cobra v1.10.2
 	github.com/yuin/goldmark v1.8.6
 	golang.org/x/mod v0.42.0
-	golang.org/x/oauth2 v0.37.0
-	google.golang.org/genai v1.75.0
+	golang.org/x/oauth2 v0.38.0
+	google.golang.org/genai v1.77.0
 	gopkg.in/yaml.v3 v3.0.1
-	modernc.org/sqlite v1.60.1
+	modernc.org/sqlite v1.62.0
 	mvdan.cc/sh/v3 v3.14.0
 )
 
@@ -83,7 +83,7 @@ require (
 	github.com/skeema/knownhosts v1.3.3 // indirect
 	github.com/spf13/pflag v1.0.9 // indirect
 	github.com/standard-webhooks/standard-webhooks/libraries v0.0.1 // indirect
-	github.com/tidwall/gjson v1.20.0 // indirect
+	github.com/tidwall/gjson v1.20.1 // indirect
 	github.com/tidwall/match v1.2.0 // indirect
 	github.com/tidwall/pretty v1.2.2 // indirect
 	github.com/tidwall/sjson v1.2.5 // indirect
@@ -112,10 +112,10 @@ require (
 	google.golang.org/api v0.304.0 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20261012220534-4341edf3f941 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20261012220534-4341edf3f941 // indirect
-	google.golang.org/grpc v1.84.0 // indirect
+	google.golang.org/grpc v1.85.0 // indirect
 	google.golang.org/protobuf v1.36.12 // indirect
 	gopkg.in/warnings.v0 v0.1.2 // indirect
-	modernc.org/libc v1.79.0 // indirect
+	modernc.org/libc v1.80.1 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.12.1 // indirect
 )
