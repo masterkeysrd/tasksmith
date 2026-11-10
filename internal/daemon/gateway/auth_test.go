@@ -153,6 +153,13 @@ func TestTransportAuthSchemes(t *testing.T) {
 			wantHeader: "Authorization",
 			wantValue:  "Bearer tok",
 		},
+		{
+			name:       "oauth2 with explicit token defaults to bearer authorization",
+			auth:       &AuthConfig{Type: AuthTypeOAuth2},
+			token:      "tok",
+			wantHeader: "Authorization",
+			wantValue:  "Bearer tok",
+		},
 	}
 
 	for _, tc := range tests {
@@ -203,6 +210,7 @@ func TestTransportDropsRedundantSDKHeaders(t *testing.T) {
 	tests := []struct {
 		name         string
 		auth         *AuthConfig
+		emptyToken   bool
 		providerType string
 		sdkHeaders   map[string]string
 		wantKept     []string
@@ -232,6 +240,15 @@ func TestTransportDropsRedundantSDKHeaders(t *testing.T) {
 			wantKept:     nil,
 			wantDropped:  []string{"x-goog-api-key"},
 		},
+		{
+			name:         "oauth2 keeps sdk bearer authorization header",
+			auth:         &AuthConfig{Type: AuthTypeOAuth2},
+			emptyToken:   true,
+			providerType: "antigravity",
+			sdkHeaders:   map[string]string{"Authorization": "Bearer dynamic-oauth-token"},
+			wantKept:     []string{"Authorization"},
+			wantDropped:  nil,
+		},
 	}
 
 	for _, tc := range tests {
@@ -244,7 +261,11 @@ func TestTransportDropsRedundantSDKHeaders(t *testing.T) {
 			}))
 			defer srv.Close()
 
-			transport := buildHTTPTransport(nil, tc.auth, "tok", nil, tc.providerType)
+			token := "tok"
+			if tc.emptyToken {
+				token = ""
+			}
+			transport := buildHTTPTransport(nil, tc.auth, token, nil, tc.providerType)
 			req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, srv.URL, nil)
 			if err != nil {
 				t.Fatalf("build request: %v", err)
@@ -337,19 +358,20 @@ func TestValidateRejectsUnknownAuthScheme(t *testing.T) {
 		{Name: "a", Type: "openai", Auth: &AuthConfig{Type: "  BEARER "}},
 		{Name: "b", Type: "openai", Auth: &AuthConfig{Type: AuthTypeNone}},
 		{Name: "c", Type: "ollama"},
+		{Name: "d", Type: "antigravity", Auth: &AuthConfig{Type: AuthTypeOAuth2}},
 	}}
 	if err := valid.Validate(); err != nil {
 		t.Fatalf("expected normalized and missing auth schemes to validate, got: %v", err)
 	}
 
 	invalid := Config{Providers: []ProviderConfig{
-		{Name: "a", Type: "openai", Auth: &AuthConfig{Type: "oauth2"}},
+		{Name: "a", Type: "openai", Auth: &AuthConfig{Type: "unknown_scheme"}},
 	}}
 	err := invalid.Validate()
 	if err == nil {
 		t.Fatal("expected unknown auth scheme to fail validation")
 	}
-	if !strings.Contains(err.Error(), "oauth2") {
+	if !strings.Contains(err.Error(), "unknown_scheme") {
 		t.Fatalf("error should name the offending scheme, got: %v", err)
 	}
 }

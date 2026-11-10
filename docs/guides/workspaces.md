@@ -214,7 +214,7 @@ The setup wizard can be re-run at any time using the `/setup` slash command. It 
    - **User Scope**: Persists credentials in `~/.config/tasksmith/.env` and provider definition in `~/.config/tasksmith/agents/providers/<name>.yaml`, leaving the repository untouched.
    - **Workspace Scope**: Commits `WORKSPACE.md` policies and repository configuration while keeping secrets in git-ignored `<workspace-root>/.env`.
    - **Project Scope**: Writes project overrides in `<subproject>/AGENTS.md`.
-3. **Real-Time Credential Verification**: Tests upstream API keys and custom endpoints live before writing configuration files to disk.
+3. **Real-Time Credential Verification**: Tests upstream API keys, connects via interactive browser OAuth (e.g., Antigravity/Google Cloud Code), and validates custom endpoints live before writing configuration files to disk.
 4. **Permission Mode & Tool Toggles**: Set default session permission mode and selectively exclude built-in tools or global MCP servers.
 5. **Review & Write**: Summarizes planned filesystem mutations and offers to run `/init` if `AGENTS.md` is not yet present.
 

@@ -218,6 +218,26 @@ func (c *Client) VerifyProvider(ctx context.Context, req api.VerifyProviderReque
 	return &out, nil
 }
 
+// StartProviderAuth initiates interactive OAuth for a provider.
+func (c *Client) StartProviderAuth(ctx context.Context, provider string) (*api.ProviderAuthResponse, error) {
+	var out api.ProviderAuthResponse
+	path := fmt.Sprintf("/v1/providers/%s/auth", url.PathEscape(provider))
+	if err := c.doJSON(ctx, http.MethodPost, path, nil, nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// GetProviderAuthStatus checks the status of an ongoing or completed interactive OAuth flow.
+func (c *Client) GetProviderAuthStatus(ctx context.Context, provider string) (*api.ProviderAuthResponse, error) {
+	var out api.ProviderAuthResponse
+	path := fmt.Sprintf("/v1/providers/%s/auth", url.PathEscape(provider))
+	if err := c.doJSON(ctx, http.MethodGet, path, nil, nil, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 // PreviewSession resolves a proposed draft session configuration without creating it.
 func (c *Client) PreviewSession(ctx context.Context, req api.PreviewSessionRequest) (*api.SessionPreview, error) {
 	if err := c.requireCWD(); err != nil {

@@ -37,6 +37,8 @@ const (
 	AuthTypeBasic AuthType = "basic"
 	// AuthTypeNone disables credential lookup and authentication headers entirely.
 	AuthTypeNone AuthType = "none"
+	// AuthTypeOAuth2 indicates an interactive OAuth2 flow (e.g. Antigravity PKCE).
+	AuthTypeOAuth2 AuthType = "oauth2"
 )
 
 // normalized returns the canonical, lower-cased scheme. An empty scheme maps to

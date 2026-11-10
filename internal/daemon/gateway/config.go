@@ -110,9 +110,9 @@ func (c *Config) Validate() error {
 
 		if p.Auth != nil {
 			switch p.Auth.scheme() {
-			case AuthTypeEnv, AuthTypeBearer, AuthTypeAPIKey, AuthTypeBasic, AuthTypeNone:
+			case AuthTypeEnv, AuthTypeBearer, AuthTypeAPIKey, AuthTypeBasic, AuthTypeNone, AuthTypeOAuth2:
 			default:
-				return fmt.Errorf("%w: provider %q has unknown auth type %q (expected env, bearer, api-key, basic, or none)",
+				return fmt.Errorf("%w: provider %q has unknown auth type %q (expected env, bearer, api-key, basic, none, or oauth2)",
 					ErrInvalidConfig, name, p.Auth.Type)
 			}
 		}

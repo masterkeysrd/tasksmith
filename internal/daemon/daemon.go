@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/masterkeysrd/loom/auth"
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/core/env"
 	"github.com/masterkeysrd/tasksmith/internal/core/fsutils"
@@ -109,6 +110,19 @@ type Daemon struct {
 	closeOnce    sync.Once
 	closeErr     error
 	serveErrCh   chan error
+
+	providerAuthMu sync.Mutex
+	providerAuths  map[string]*providerAuthFlow
+}
+
+type providerAuthFlow struct {
+	mu       sync.Mutex
+	provider string
+	status   string
+	authURL  string
+	account  string
+	err      string
+	cancel   context.CancelFunc
 }
 
 var _ server.Backend = (*Daemon)(nil)
@@ -154,18 +168,19 @@ func New(cfg Config) (*Daemon, error) {
 	})
 
 	d := &Daemon{
-		db:           db,
-		metricsStore: store,
-		usage:        usage,
-		cfg:          cfg,
-		logger:       daemonLogger,
-		startedAt:    time.Now().UTC(),
-		broker:       b,
-		srv:          server.NewServer(serverLogger),
-		workspaces:   make(map[string]*workspaceRuntime),
-		dirToRoot:    make(map[string]string),
-		shutdownCh:   make(chan struct{}),
-		serveErrCh:   make(chan error, 1),
+		db:            db,
+		metricsStore:  store,
+		usage:         usage,
+		cfg:           cfg,
+		logger:        daemonLogger,
+		startedAt:     time.Now().UTC(),
+		broker:        b,
+		srv:           server.NewServer(serverLogger),
+		workspaces:    make(map[string]*workspaceRuntime),
+		dirToRoot:     make(map[string]string),
+		providerAuths: make(map[string]*providerAuthFlow),
+		shutdownCh:    make(chan struct{}),
+		serveErrCh:    make(chan error, 1),
 	}
 
 	mux := d.srv.CreateMux(
@@ -830,20 +845,40 @@ func (d *Daemon) scanGlobalProviders() []api.ProviderSummary {
 			authEnv = p.Spec.Auth.Env
 		}
 
+		authType := "env"
+		if p.Spec.Auth != nil && p.Spec.Auth.Type != "" {
+			authType = string(p.Spec.Auth.Type)
+		}
+
 		hasKey := false
-		if authEnv != "" {
+		account := ""
+		status := ""
+
+		if authType == "oauth2" {
+			if tok, accountEmail, err := gateway.LoadProviderToken(p.Metadata.Name); err == nil && tok != nil {
+				hasKey = true
+				account = accountEmail
+				if accountEmail != "" {
+					status = fmt.Sprintf("✓ %s (OAuth)", accountEmail)
+				} else {
+					status = "✓ OAuth authenticated"
+				}
+			}
+		}
+
+		if !hasKey && authEnv != "" {
 			val := os.Getenv(authEnv)
 			if strings.TrimSpace(val) == "" && userEnv != nil {
 				val = userEnv[authEnv]
 			}
 			hasKey = strings.TrimSpace(val) != ""
+			if hasKey {
+				status = fmt.Sprintf("✓ %s detected", authEnv)
+			}
 		}
 
-		status := ""
 		if p.Metadata.Name == "ollama" {
 			status = "local"
-		} else if hasKey {
-			status = fmt.Sprintf("✓ %s detected", authEnv)
 		}
 
 		var modelNames []string
@@ -861,7 +896,9 @@ func (d *Daemon) scanGlobalProviders() []api.ProviderSummary {
 			DisplayName:  p.Metadata.Name,
 			Status:       status,
 			HasKey:       hasKey,
+			AuthType:     authType,
 			AuthEnv:      authEnv,
+			Account:      account,
 			DefaultModel: defaultModel,
 			Models:       modelNames,
 			Scope:        "system",
@@ -910,17 +947,24 @@ func (d *Daemon) checkMissingCredentials(cleanDir string) []string {
 				provName := wsDef.Spec.DefaultProvider
 				preset := workspace.Presets()
 				for _, p := range preset {
-					if p.Metadata.Name == provName && p.Spec.Auth != nil && p.Spec.Auth.Env != "" {
-						envVar := p.Spec.Auth.Env
-						val := os.Getenv(envVar)
-						if strings.TrimSpace(val) == "" && localEnv != nil {
-							val = localEnv[envVar]
+					if p.Metadata.Name == provName {
+						if p.Spec.Auth != nil && p.Spec.Auth.Type == "oauth2" {
+							if tok, _, err := gateway.LoadProviderToken(provName); err == nil && tok != nil {
+								break
+							}
 						}
-						if strings.TrimSpace(val) == "" && userEnv != nil {
-							val = userEnv[envVar]
-						}
-						if strings.TrimSpace(val) == "" {
-							missing = append(missing, envVar)
+						if p.Spec.Auth != nil && p.Spec.Auth.Env != "" {
+							envVar := p.Spec.Auth.Env
+							val := os.Getenv(envVar)
+							if strings.TrimSpace(val) == "" && localEnv != nil {
+								val = localEnv[envVar]
+							}
+							if strings.TrimSpace(val) == "" && userEnv != nil {
+								val = userEnv[envVar]
+							}
+							if strings.TrimSpace(val) == "" {
+								missing = append(missing, envVar)
+							}
 						}
 						break
 					}
@@ -1022,6 +1066,33 @@ func (d *Daemon) VerifyProvider(ctx context.Context, req api.VerifyProviderReque
 		}, nil
 	}
 
+	if foundPreset != nil && foundPreset.Spec.Auth != nil && foundPreset.Spec.Auth.Type == "oauth2" {
+		modelsCount := 1
+		if len(foundPreset.Spec.Models) > 0 {
+			modelsCount = len(foundPreset.Spec.Models)
+		}
+		if apiKey != "" {
+			return &api.VerifyProviderResponse{
+				Valid:       true,
+				ModelsCount: modelsCount,
+			}, nil
+		}
+		if tok, _, err := gateway.LoadProviderToken(provName); err == nil && tok != nil {
+			return &api.VerifyProviderResponse{
+				Valid:       true,
+				ModelsCount: modelsCount,
+			}, nil
+		}
+		envFallback := ""
+		if foundPreset.Spec.Auth.Env != "" {
+			envFallback = fmt.Sprintf(" (or %s)", foundPreset.Spec.Auth.Env)
+		}
+		return &api.VerifyProviderResponse{
+			Valid:        false,
+			ErrorMessage: fmt.Sprintf("%s requires OAuth authentication%s", provName, envFallback),
+		}, nil
+	}
+
 	if apiKey == "" && (foundPreset != nil && foundPreset.Spec.Auth != nil && foundPreset.Spec.Auth.Type != "none") {
 		return &api.VerifyProviderResponse{
 			Valid:        false,
@@ -1037,6 +1108,132 @@ func (d *Daemon) VerifyProvider(ctx context.Context, req api.VerifyProviderReque
 	return &api.VerifyProviderResponse{
 		Valid:       true,
 		ModelsCount: modelsCount,
+	}, nil
+}
+
+func (d *Daemon) StartProviderAuth(ctx context.Context, provider string) (*api.ProviderAuthResponse, error) {
+	prov := strings.TrimSpace(strings.ToLower(provider))
+	driver, ok := gateway.GetOAuthDriver(prov)
+	if !ok {
+		return nil, fmt.Errorf("oauth not supported for provider %q", provider)
+	}
+
+	d.providerAuthMu.Lock()
+	if existing, ok := d.providerAuths[prov]; ok && existing != nil {
+		existing.mu.Lock()
+		if existing.cancel != nil {
+			existing.cancel()
+		}
+		existing.mu.Unlock()
+	}
+
+	flowCtx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	flow := &providerAuthFlow{
+		provider: prov,
+		status:   "authorizing",
+		cancel:   cancel,
+	}
+	d.providerAuths[prov] = flow
+	d.providerAuthMu.Unlock()
+
+	oauthCfg := driver.OAuthConfig()
+	session, err := auth.BeginAuth(oauthCfg)
+	if err != nil {
+		flow.mu.Lock()
+		flow.status = "error"
+		flow.err = err.Error()
+		flow.mu.Unlock()
+		return nil, fmt.Errorf("begin oauth: %w", err)
+	}
+
+	flow.mu.Lock()
+	flow.authURL = session.AuthURL
+	flow.mu.Unlock()
+
+	go func() {
+		defer cancel()
+		res, err := auth.ReceiveCallback(flowCtx, oauthCfg.RedirectURL, session.AuthURL, auth.LoopbackOptions{
+			Template: oauthCallbackTemplate,
+		})
+		if err != nil {
+			flow.mu.Lock()
+			flow.status = "error"
+			flow.err = err.Error()
+			flow.mu.Unlock()
+			return
+		}
+
+		tok, err := auth.CompleteAuth(flowCtx, oauthCfg, session, res.Code, res.State)
+		if err != nil {
+			flow.mu.Lock()
+			flow.status = "error"
+			flow.err = err.Error()
+			flow.mu.Unlock()
+			return
+		}
+
+		account := driver.ExtractAccount(tok)
+		if err := gateway.SaveProviderToken(prov, tok, account); err != nil {
+			flow.mu.Lock()
+			flow.status = "error"
+			flow.err = err.Error()
+			flow.mu.Unlock()
+			return
+		}
+
+		flow.mu.Lock()
+		flow.status = "authenticated"
+		flow.account = account
+		flow.mu.Unlock()
+	}()
+
+	return &api.ProviderAuthResponse{
+		Provider: prov,
+		AuthURL:  session.AuthURL,
+		Status:   "authorizing",
+	}, nil
+}
+
+func (d *Daemon) GetProviderAuthStatus(ctx context.Context, provider string) (*api.ProviderAuthResponse, error) {
+	prov := strings.TrimSpace(strings.ToLower(provider))
+	if !gateway.HasOAuthDriver(prov) {
+		return nil, fmt.Errorf("oauth not supported for provider %q", provider)
+	}
+
+	d.providerAuthMu.Lock()
+	flow, ok := d.providerAuths[prov]
+	d.providerAuthMu.Unlock()
+
+	if ok && flow != nil {
+		flow.mu.Lock()
+		status := flow.status
+		authURL := flow.authURL
+		account := flow.account
+		errMsg := flow.err
+		flow.mu.Unlock()
+
+		if status == "authorizing" || status == "error" || (status == "authenticated" && errMsg == "") {
+			return &api.ProviderAuthResponse{
+				Provider: prov,
+				AuthURL:  authURL,
+				Status:   status,
+				Account:  account,
+				Error:    errMsg,
+			}, nil
+		}
+	}
+
+	if tok, email, err := gateway.LoadProviderToken(prov); err == nil && tok != nil {
+		return &api.ProviderAuthResponse{
+			Provider: prov,
+			Status:   "authenticated",
+			Account:  email,
+		}, nil
+	}
+
+	return &api.ProviderAuthResponse{
+		Provider: prov,
+		Status:   "idle",
 	}, nil
 }
 

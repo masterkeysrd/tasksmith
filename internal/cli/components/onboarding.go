@@ -4,9 +4,12 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
+	"github.com/masterkeysrd/kite/extras/kitex"
 	"github.com/masterkeysrd/kite/extras/trail"
 	"github.com/masterkeysrd/kite/style"
+	"github.com/masterkeysrd/loom/auth"
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/client"
 	"github.com/masterkeysrd/tasksmith/internal/cli/store"
@@ -23,6 +26,7 @@ type OnboardingWizardProps struct {
 
 // OnboardingWizard renders the multi-step onboarding/setup wizard matching §4.
 var OnboardingWizard = trail.FC("OnboardingWizard", func(props OnboardingWizardProps) trail.Node {
+	_ = store.UseOnboarding(func(s store.OnboardingState) int { return s.Revision })
 	step := store.UseOnboarding(func(s store.OnboardingState) store.OnboardingStep { return s.Step })
 	active := store.UseOnboarding(func(s store.OnboardingState) bool { return s.Active })
 	state := store.GetOnboarding()
@@ -252,6 +256,13 @@ func renderProviderPickStep(props OnboardingWizardProps, state store.OnboardingS
 		status := ""
 		if summary := state.ProviderSummary(p.name); summary != nil && summary.HasKey {
 			status = "✓ key detected"
+			if summary.AuthType == "oauth2" {
+				if summary.Account != "" {
+					status = fmt.Sprintf("✓ %s", summary.Account)
+				} else {
+					status = "✓ OAuth authenticated"
+				}
+			}
 		} else if p.name == "ollama" {
 			status = "✓ running"
 		}
@@ -293,7 +304,9 @@ func renderProviderPickStep(props OnboardingWizardProps, state store.OnboardingS
 		},
 		OnSelect: func(opt uicomponents.Option) {
 			store.SetOnboardingProvider(opt.Value)
-			if opt.Value == "ollama" || state.IsProviderConfigured(opt.Value) {
+			summary := state.ProviderSummary(opt.Value)
+			isOAuth := (summary != nil && summary.AuthType == "oauth2") || (state.AuthType == "oauth2")
+			if opt.Value == "ollama" || (state.IsProviderConfigured(opt.Value) && !isOAuth) {
 				store.GoToStep(store.StepMode)
 			} else {
 				store.GoToStep(store.StepCredentials)
@@ -311,6 +324,11 @@ func renderCredentialsStep(props OnboardingWizardProps, state store.OnboardingSt
 	prov := state.SelectedProvider
 	if prov == "" && len(state.Status.MissingCredentials) > 0 {
 		prov = state.Status.MissingCredentials[0]
+	}
+
+	summary := state.ProviderSummary(prov)
+	if state.AuthType == "oauth2" || (summary != nil && summary.AuthType == "oauth2") {
+		return renderOAuthCredentialsStep(props, state, scheme)
 	}
 
 	options := []uicomponents.Option{
@@ -351,6 +369,217 @@ func renderCredentialsStep(props OnboardingWizardProps, state store.OnboardingSt
 				}
 			}
 			store.GoToStep(store.StepMode)
+		},
+		OnCancel: func() {
+			if !store.GoBack() && props.OnExit != nil {
+				props.OnExit()
+			}
+		},
+	})
+}
+
+type oauthWaiterProps struct {
+	Client       *client.Client
+	Provider     string
+	OAuthAuthURL string
+}
+
+var oauthWaiter = trail.FC("OAuthWaiter", func(props oauthWaiterProps) trail.Node {
+	kitex.UseInterval(func() {
+		resp, err := props.Client.GetProviderAuthStatus(context.Background(), props.Provider)
+		if err == nil && resp != nil {
+			switch resp.Status {
+			case "authenticated":
+				store.SetOnboardingOAuth("authenticated", "", resp.Account, "")
+				store.GoToStep(store.StepMode)
+			case "error":
+				store.SetOnboardingOAuth("error", "", "", resp.Error)
+			}
+		}
+	}, 500*time.Millisecond, []any{})
+
+	options := []uicomponents.Option{
+		{
+			Value:       "cancel",
+			Label:       "Cancel authorization",
+			Description: "Abort browser login and return to provider options",
+		},
+	}
+
+	titleName := props.Provider
+	if len(titleName) > 0 {
+		titleName = strings.ToUpper(titleName[:1]) + titleName[1:]
+	}
+
+	subtitle := fmt.Sprintf("Waiting for %s authorization on http://localhost:51121...", titleName)
+	if props.OAuthAuthURL != "" {
+		subtitle = fmt.Sprintf("Waiting on localhost:51121. If browser did not open, visit:\n%s", props.OAuthAuthURL)
+	}
+
+	return Picker(PickerProps{
+		Title:    fmt.Sprintf("Authenticating with %s", titleName),
+		Subtitle: subtitle,
+		Options:  options,
+		OnSelect: func(_ uicomponents.Option) {
+			store.SetOnboardingOAuth("idle", "", "", "")
+		},
+		OnCancel: func() {
+			store.SetOnboardingOAuth("idle", "", "", "")
+		},
+	})
+})
+
+func renderOAuthCredentialsStep(props OnboardingWizardProps, state store.OnboardingState, scheme *theme.Scheme) trail.Node {
+	prov := state.SelectedProvider
+	if prov == "" && len(state.Status.MissingCredentials) > 0 {
+		prov = state.Status.MissingCredentials[0]
+	}
+
+	titleName := prov
+	if len(titleName) > 0 {
+		titleName = strings.ToUpper(titleName[:1]) + titleName[1:]
+	}
+
+	envVar := state.AuthEnv
+	if envVar == "" {
+		envVar = strings.ToUpper(prov) + "_TOKEN"
+	}
+
+	if state.OAuthStatus == "authorizing" {
+		return oauthWaiter(oauthWaiterProps{
+			Client:       props.Client,
+			Provider:     prov,
+			OAuthAuthURL: state.OAuthAuthURL,
+		})
+	}
+
+	summary := state.ProviderSummary(prov)
+	isAuthenticated := (summary != nil && summary.HasKey) || state.OAuthStatus == "authenticated"
+	currentAccount := ""
+	if summary != nil && summary.Account != "" {
+		currentAccount = summary.Account
+	} else if state.OAuthAccount != "" {
+		currentAccount = state.OAuthAccount
+	}
+
+	if isAuthenticated {
+		accountDesc := fmt.Sprintf("Authenticated via %s OAuth", titleName)
+		if currentAccount != "" {
+			accountDesc = fmt.Sprintf("Active Account: %s", currentAccount)
+		}
+
+		options := []uicomponents.Option{
+			{
+				Value:       "continue",
+				Label:       "Continue with active account",
+				Description: accountDesc,
+			},
+			{
+				Value:       "reauth",
+				Label:       "Switch account / Re-authenticate",
+				Description: "Opens browser to log in with a different account",
+			},
+			{
+				Value:       "env",
+				Label:       fmt.Sprintf("Use %s", envVar),
+				Description: "Provide an explicit static token",
+			},
+		}
+
+		return Picker(PickerProps{
+			Title:    fmt.Sprintf("%s Credentials", titleName),
+			Subtitle: fmt.Sprintf("✓ %s", accountDesc),
+			Options:  options,
+			InputActions: map[string]InputAction{
+				"env": {
+					Prompt: fmt.Sprintf("%s: ", envVar),
+					OnSubmit: func(_ uicomponents.Option, val string) {
+						store.SetOnboardingCredentials(val, state.Endpoint, "oauth2", envVar)
+						store.GoToStep(store.StepMode)
+					},
+				},
+			},
+			OnSelect: func(opt uicomponents.Option) {
+				switch opt.Value {
+				case "continue":
+					store.GoToStep(store.StepMode)
+				case "reauth":
+					store.SetOnboardingOAuth("authorizing", "", "", "")
+					go func() {
+						ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+						defer cancel()
+						resp, err := props.Client.StartProviderAuth(ctx, prov)
+						if err == nil && resp != nil {
+							store.SetOnboardingOAuth("authorizing", resp.AuthURL, "", "")
+							_ = auth.OpenBrowser(resp.AuthURL)
+						} else if err != nil {
+							store.SetOnboardingOAuth("error", "", "", err.Error())
+						}
+					}()
+				}
+			},
+			OnCancel: func() {
+				if !store.GoBack() && props.OnExit != nil {
+					props.OnExit()
+				}
+			},
+		})
+	}
+
+	options := []uicomponents.Option{
+		{
+			Value:       "login",
+			Label:       fmt.Sprintf("Log in with %s (Browser)", titleName),
+			Description: fmt.Sprintf("Opens your browser to sign in with %s OAuth (PKCE)", titleName),
+		},
+		{
+			Value:       "env",
+			Label:       fmt.Sprintf("Use %s", envVar),
+			Description: "Provide an explicit static environment token",
+		},
+		{
+			Value:       "skip",
+			Label:       "Skip for now",
+			Description: fmt.Sprintf("Configure %s credentials later", titleName),
+		},
+	}
+
+	subtitle := fmt.Sprintf("Authenticate with %s to access its models.", titleName)
+	if state.OAuthError != "" {
+		subtitle = fmt.Sprintf("Authentication error: %s. Try again:", state.OAuthError)
+	}
+
+	return Picker(PickerProps{
+		Title:    fmt.Sprintf("Configure %s Credentials", titleName),
+		Subtitle: subtitle,
+		Options:  options,
+		InputActions: map[string]InputAction{
+			"env": {
+				Prompt: fmt.Sprintf("%s: ", envVar),
+				OnSubmit: func(_ uicomponents.Option, val string) {
+					store.SetOnboardingCredentials(val, state.Endpoint, "oauth2", envVar)
+					store.GoToStep(store.StepMode)
+				},
+			},
+		},
+		OnSelect: func(opt uicomponents.Option) {
+			switch opt.Value {
+			case "login":
+				store.SetOnboardingOAuth("authorizing", "", "", "")
+				go func() {
+					ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+					defer cancel()
+					resp, err := props.Client.StartProviderAuth(ctx, prov)
+					if err == nil && resp != nil {
+						store.SetOnboardingOAuth("authorizing", resp.AuthURL, "", "")
+						_ = auth.OpenBrowser(resp.AuthURL)
+					} else if err != nil {
+						store.SetOnboardingOAuth("error", "", "", err.Error())
+					}
+				}()
+			case "skip":
+				store.GoToStep(store.StepMode)
+			}
 		},
 		OnCancel: func() {
 			if !store.GoBack() && props.OnExit != nil {

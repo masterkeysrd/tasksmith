@@ -31,6 +31,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/daemon/session"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/timeline"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/workspace"
+	"golang.org/x/oauth2"
 )
 
 type fakeProvider struct {
@@ -2674,5 +2675,85 @@ func TestWorkspaceStatusInitAndVerifyProvider(t *testing.T) {
 	}
 	if !statusAfter.IsConfigured {
 		t.Errorf("expected workspace to be configured after InitWorkspace, got %+v", statusAfter)
+	}
+}
+
+func TestAntigravityOAuthEndpointsAndStatus(t *testing.T) {
+	_, cli, _ := setupDaemonTest(t, nil)
+	ctx := context.Background()
+
+	// 1. Initial status: idle / no credentials
+	status1, err := cli.GetProviderAuthStatus(ctx, "antigravity")
+	if err != nil {
+		t.Fatalf("GetProviderAuthStatus idle error: %v", err)
+	}
+	if status1.Status != "idle" {
+		t.Errorf("expected status idle, got %q", status1.Status)
+	}
+
+	// 2. VerifyProvider fails when no token exists
+	verifyBefore, err := cli.VerifyProvider(ctx, api.VerifyProviderRequest{
+		Provider: "antigravity",
+	})
+	if err != nil {
+		t.Fatalf("VerifyProvider error: %v", err)
+	}
+	if verifyBefore.Valid {
+		t.Errorf("expected invalid verify before auth, got valid")
+	}
+
+	// 3. Save a token and verify authenticated status
+	tok := &oauth2.Token{
+		AccessToken:  "mock-access-token",
+		RefreshToken: "mock-refresh-token",
+		TokenType:    "Bearer",
+		Expiry:       time.Now().Add(1 * time.Hour),
+	}
+	if err := gateway.SaveAntigravityToken(tok, "developer@google.com"); err != nil {
+		t.Fatalf("SaveAntigravityToken error: %v", err)
+	}
+
+	status2, err := cli.GetProviderAuthStatus(ctx, "antigravity")
+	if err != nil {
+		t.Fatalf("GetProviderAuthStatus authenticated error: %v", err)
+	}
+	if status2.Status != "authenticated" || status2.Account != "developer@google.com" {
+		t.Errorf("unexpected status2: %+v", status2)
+	}
+
+	// 4. VerifyProvider succeeds with on-disk token
+	verifyAfter, err := cli.VerifyProvider(ctx, api.VerifyProviderRequest{
+		Provider: "antigravity",
+	})
+	if err != nil {
+		t.Fatalf("VerifyProvider after auth error: %v", err)
+	}
+	if !verifyAfter.Valid {
+		t.Errorf("expected valid verify after auth, got invalid: %s", verifyAfter.ErrorMessage)
+	}
+
+	// 5. GetWorkspaceStatus reflects OAuth status
+	wsStatus, err := cli.GetWorkspaceStatus(ctx)
+	if err != nil {
+		t.Fatalf("GetWorkspaceStatus error: %v", err)
+	}
+	found := false
+	for _, p := range wsStatus.GlobalProviders {
+		if p.Name == "antigravity" {
+			found = true
+			if !p.HasKey {
+				t.Errorf("expected antigravity to have key")
+			}
+			if p.AuthType != "oauth2" {
+				t.Errorf("expected antigravity AuthType oauth2, got %q", p.AuthType)
+			}
+			if p.Account != "developer@google.com" {
+				t.Errorf("expected account developer@google.com, got %q", p.Account)
+			}
+			break
+		}
+	}
+	if !found {
+		t.Errorf("antigravity provider not found in GlobalProviders")
 	}
 }

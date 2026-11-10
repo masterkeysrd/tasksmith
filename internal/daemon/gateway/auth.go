@@ -24,6 +24,19 @@ func resolveCredential(auth *AuthConfig, env map[string]string) (string, error) 
 		return "", nil
 	}
 
+	if auth.Type.normalized() == AuthTypeOAuth2 {
+		if auth.Env != "" {
+			val, ok := env[auth.Env]
+			if !ok || strings.TrimSpace(val) == "" {
+				val = os.Getenv(auth.Env)
+			}
+			if strings.TrimSpace(val) != "" {
+				return strings.TrimSpace(val), nil
+			}
+		}
+		return "", nil
+	}
+
 	if auth.Env != "" {
 		val, ok := env[auth.Env]
 		if !ok || strings.TrimSpace(val) == "" {
@@ -117,8 +130,9 @@ func redundantSDKAuthHeaders(auth *AuthConfig, providerType string, configured m
 		return nil
 	}
 
+	norm := auth.Type.normalized()
 	customHeader := strings.TrimSpace(auth.Header) != ""
-	if auth.Type.normalized() == AuthTypeEnv && !customHeader {
+	if (norm == AuthTypeEnv || norm == AuthTypeOAuth2) && !customHeader {
 		return nil
 	}
 
@@ -150,7 +164,7 @@ func buildHTTPTransport(base http.RoundTripper, auth *AuthConfig, token string, 
 	if token != "" && auth != nil {
 		headerName := http.CanonicalHeaderKey(authHeaderName(auth))
 		switch auth.Type.normalized() {
-		case AuthTypeEnv, AuthTypeBearer:
+		case AuthTypeEnv, AuthTypeBearer, AuthTypeOAuth2:
 			headers[headerName] = "Bearer " + token
 		case AuthTypeAPIKey:
 			headers[headerName] = token

@@ -24,6 +24,7 @@ import (
 	"github.com/ollama/ollama/api"
 	"github.com/openai/openai-go/v3"
 	openaiopt "github.com/openai/openai-go/v3/option"
+	"golang.org/x/oauth2"
 	"google.golang.org/genai"
 )
 
@@ -169,7 +170,26 @@ func initProvider(ctx context.Context, cfg ProviderConfig, env map[string]string
 		inst.embeddingProv = genaiProv
 
 	case "antigravity":
-		ts := auth.StaticTokenSource(token)
+		var ts oauth2.TokenSource
+		if strings.TrimSpace(token) != "" {
+			ts = auth.StaticTokenSource(token)
+		} else {
+			driver, ok := GetOAuthDriver(cfg.Type)
+			if !ok {
+				return nil, fmt.Errorf("gateway: no oauth driver registered for %q", cfg.Type)
+			}
+			var err error
+			ts, err = NewProviderTokenSource(ctx, cfg.Name, driver)
+			if err != nil {
+				return nil, fmt.Errorf("gateway: token source error: %w", err)
+			}
+
+			if !HasProviderToken(cfg.Name) {
+				inst.authErr = fmt.Errorf("%w: provider %q requires OAuth login (or %s)", ErrMissingCredential, cfg.Name, cfg.Auth.Env)
+				inst.warning = fmt.Sprintf("provider %q: authentication required (run /setup to log in)", cfg.Name)
+			}
+		}
+
 		antigravityProv, err := loomantigravity.NewProvider(&loomantigravity.Config{
 			TokenSource: ts,
 			BaseURL:     cfg.Endpoint,

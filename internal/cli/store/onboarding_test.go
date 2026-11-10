@@ -103,3 +103,29 @@ func TestOnboardingNavigationAndToggles(t *testing.T) {
 		t.Fatal("expected github MCP to be disabled")
 	}
 }
+
+func TestSetOnboardingOAuth(t *testing.T) {
+	status := api.WorkspaceStatus{
+		Path:      "/workspace/test",
+		IsTrusted: true,
+	}
+	StartOnboarding("/workspace/test", status, false)
+
+	SetOnboardingOAuth("authorizing", "https://accounts.google.com/o/oauth2/v2/auth?client_id=xyz", "", "")
+	s := GetOnboarding()
+	if s.OAuthStatus != "authorizing" || s.OAuthAuthURL == "" {
+		t.Fatalf("expected authorizing status, got %+v", s)
+	}
+
+	SetOnboardingOAuth("authenticated", "", "developer@example.com", "")
+	s = GetOnboarding()
+	if s.OAuthStatus != "authenticated" || s.OAuthAccount != "developer@example.com" {
+		t.Fatalf("expected authenticated with account, got %+v", s)
+	}
+
+	SetOnboardingOAuth("error", "", "", "auth failed")
+	s = GetOnboarding()
+	if s.OAuthStatus != "error" || s.OAuthError != "auth failed" {
+		t.Fatalf("expected error status, got %+v", s)
+	}
+}

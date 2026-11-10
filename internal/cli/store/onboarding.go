@@ -26,6 +26,7 @@ const (
 
 // OnboardingState encapsulates the mutable draft state of the onboarding wizard.
 type OnboardingState struct {
+	Revision         int
 	Active           bool
 	IsSetupCmd       bool
 	Step             OnboardingStep
@@ -43,6 +44,10 @@ type OnboardingState struct {
 	DisabledMCPs     map[string]bool
 	Verifying        bool
 	VerifyError      string
+	OAuthAuthURL     string
+	OAuthStatus      string // "idle", "authorizing", "authenticated", "error"
+	OAuthAccount     string
+	OAuthError       string
 	OfferInit        bool
 	Completed        bool
 }
@@ -64,6 +69,13 @@ func GetOnboarding() OnboardingState {
 	return onboarding.Get()
 }
 
+func updateOnboarding(fn func(s *OnboardingState)) {
+	onboarding.Update(func(s *OnboardingState) {
+		s.Revision++
+		fn(s)
+	})
+}
+
 // StartOnboarding initializes the wizard with the workspace status.
 func StartOnboarding(wsPath string, status api.WorkspaceStatus, isSetupCmd bool) {
 	scope := "workspace"
@@ -80,8 +92,9 @@ func StartOnboarding(wsPath string, status api.WorkspaceStatus, isSetupCmd bool)
 		firstStep = StepProviderSrc
 	}
 
-	onboarding.Set(func(OnboardingState) OnboardingState {
+	onboarding.Set(func(prev OnboardingState) OnboardingState {
 		return OnboardingState{
+			Revision:         prev.Revision + 1,
 			Active:           true,
 			IsSetupCmd:       isSetupCmd,
 			Step:             firstStep,
@@ -111,21 +124,21 @@ func defaultProviderFromStatus(status api.WorkspaceStatus) string {
 
 // SetOnboardingScope updates the draft provider scope ("user", "workspace", "project").
 func SetOnboardingScope(scope string) {
-	onboarding.Update(func(s *OnboardingState) {
+	updateOnboarding(func(s *OnboardingState) {
 		s.Scope = scope
 	})
 }
 
 // SetOnboardingProvider selects a provider for the draft.
 func SetOnboardingProvider(provider string) {
-	onboarding.Update(func(s *OnboardingState) {
+	updateOnboarding(func(s *OnboardingState) {
 		s.SelectedProvider = provider
 	})
 }
 
 // SetOnboardingCredentials updates the API key / endpoint for the draft.
 func SetOnboardingCredentials(apiKey, endpoint, authType, authEnv string) {
-	onboarding.Update(func(s *OnboardingState) {
+	updateOnboarding(func(s *OnboardingState) {
 		s.APIKey = apiKey
 		s.Endpoint = endpoint
 		s.AuthType = authType
@@ -134,16 +147,26 @@ func SetOnboardingCredentials(apiKey, endpoint, authType, authEnv string) {
 	})
 }
 
+// SetOnboardingOAuth updates interactive OAuth progress in the store.
+func SetOnboardingOAuth(status, authURL, account, errMsg string) {
+	updateOnboarding(func(s *OnboardingState) {
+		s.OAuthStatus = status
+		s.OAuthAuthURL = authURL
+		s.OAuthAccount = account
+		s.OAuthError = errMsg
+	})
+}
+
 // SetOnboardingMode updates the default permission mode.
 func SetOnboardingMode(mode api.PermissionMode) {
-	onboarding.Update(func(s *OnboardingState) {
+	updateOnboarding(func(s *OnboardingState) {
 		s.DefaultMode = mode
 	})
 }
 
 // ToggleOnboardingTool toggles a tool between enabled and disabled.
 func ToggleOnboardingTool(tool string) {
-	onboarding.Update(func(s *OnboardingState) {
+	updateOnboarding(func(s *OnboardingState) {
 		if s.DisabledTools == nil {
 			s.DisabledTools = make(map[string]bool)
 		}
@@ -157,7 +180,7 @@ func ToggleOnboardingTool(tool string) {
 
 // ToggleOnboardingMCP toggles a global MCP server between enabled and disabled.
 func ToggleOnboardingMCP(mcp string) {
-	onboarding.Update(func(s *OnboardingState) {
+	updateOnboarding(func(s *OnboardingState) {
 		if s.DisabledMCPs == nil {
 			s.DisabledMCPs = make(map[string]bool)
 		}
@@ -171,7 +194,7 @@ func ToggleOnboardingMCP(mcp string) {
 
 // GoToStep transitions directly to targetStep while recording current step in history.
 func GoToStep(targetStep OnboardingStep) {
-	onboarding.Update(func(s *OnboardingState) {
+	updateOnboarding(func(s *OnboardingState) {
 		if s.Step != targetStep {
 			s.History = append(s.History, s.Step)
 			s.Step = targetStep
@@ -186,7 +209,7 @@ func GoBack() bool {
 		return false
 	}
 	prev := state.History[len(state.History)-1]
-	onboarding.Update(func(s *OnboardingState) {
+	updateOnboarding(func(s *OnboardingState) {
 		s.History = s.History[:len(s.History)-1]
 		s.Step = prev
 	})
@@ -230,7 +253,7 @@ func FinishOnboarding(ctx context.Context, c *client.Client) error {
 		return err
 	}
 
-	onboarding.Update(func(s *OnboardingState) {
+	updateOnboarding(func(s *OnboardingState) {
 		s.Step = StepDone
 		s.Active = false
 		s.Completed = true
@@ -242,7 +265,7 @@ func FinishOnboarding(ctx context.Context, c *client.Client) error {
 
 // CloseOnboarding closes the wizard without writing.
 func CloseOnboarding() {
-	onboarding.Update(func(s *OnboardingState) {
+	updateOnboarding(func(s *OnboardingState) {
 		s.Active = false
 		s.Step = StepNone
 	})

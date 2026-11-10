@@ -13,17 +13,40 @@ Designed for enterprise environments and Google internal developer workflows, th
 
 ---
 
-## 2. Quick Start
+## 2. Authentication & Quick Start
 
-### Step 1: Set Your Auth Token
+The Antigravity provider supports both interactive OAuth 2.0 PKCE authentication and static environment token fallback.
 
-Define `ANTIGRAVITY_TOKEN` in your environment:
+### Option A: Interactive Browser OAuth (Recommended)
+
+Run the interactive setup wizard in TaskSmith:
+
+```bash
+tasksmith
+# Then run:
+/setup
+```
+
+Select **Antigravity** as your provider and choose **Log in with Google (Browser)**:
+1. TaskSmith opens your browser to sign in with your Google account.
+2. The authorization flow uses PKCE on `http://localhost:51121/callback`.
+3. Tokens are securely persisted with `0600` permissions at `~/.local/share/tasksmith/credentials/antigravity.json`.
+4. Token expiration is handled automatically via background refresh.
+5. Your authenticated Google account email is detected and surfaced in the setup wizard and daemon status. You can switch accounts or re-authenticate at any time.
+
+### Option B: Static Environment Variable
+
+Alternatively, define `ANTIGRAVITY_TOKEN` in your environment or workspace `.env` file:
 
 ```bash
 ANTIGRAVITY_TOKEN=ya29.a0AfH6...
 ```
 
-### Step 2: Configure Provider Manifest
+When set, `ANTIGRAVITY_TOKEN` overrides any on-disk OAuth token for headless environments or automated CI pipelines.
+
+---
+
+## 3. Provider Manifest
 
 Create `.agents/providers/antigravity.yaml`:
 
@@ -38,7 +61,7 @@ spec:
   defaultModels:
     completion: gemini-3.8-flash
   auth:
-    type: env
+    type: oauth2
     env: ANTIGRAVITY_TOKEN
   models:
     - id: gemini-3.8-flash
@@ -90,7 +113,7 @@ spec:
 
 ---
 
-## 3. Reasoning & Effort Levels
+## 4. Reasoning & Effort Levels
 
 Models may declare thinking capabilities. Use `/effort` or `/budget` when supported, or set thinking defaults in agent definitions.
 

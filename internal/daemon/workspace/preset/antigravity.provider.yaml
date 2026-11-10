@@ -8,7 +8,7 @@ spec:
   defaultModels:
     completion: gemini-3.8-flash
   auth:
-    type: env
+    type: oauth2
     env: ANTIGRAVITY_TOKEN
   models:
     - id: gemini-3.8-flash

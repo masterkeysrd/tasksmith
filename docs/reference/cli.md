@@ -457,7 +457,7 @@ When TaskSmith is launched for the first time in an unconfigured directory, or w
 1. **Trust Prompt**: Review detected executable configurations (`.agents/tools/`, `.agents/mcps/`, `.env`) and grant folder or parent trust, or proceed in restricted mode.
 2. **Provider Source**: Choose whether to reuse machine-wide global providers or configure project-specific credentials.
 3. **Provider & Scope**: Select upstream AI provider preset and target configuration scope (`User`, `Workspace`, or `Project`).
-4. **Credentials**: Enter and verify provider API keys, test endpoints, or local connection settings with real-time verification.
+4. **Credentials**: Enter and verify provider API keys, authenticate via browser OAuth (e.g. Google Cloud Code for Antigravity), or configure custom endpoints with real-time verification.
 5. **Default Mode**: Choose the initial permission mode (`default`, `accept_edits`, `plan`, `ask`, `auto`).
 6. **Tools & MCPs**: Selectively enable or disable built-in tools and global MCP servers.
 7. **Review & Write**: Review configured settings, write out manifests, and optionally offer `/init`.
@@ -483,6 +483,7 @@ TaskSmith adheres to the XDG Base Directory Specification for state persistence,
 | **Global Providers** | `~/.config/tasksmith/providers/*.yaml` | User-tier model provider manifests available across all workspaces. | Permanent |
 | **Global Agents** | `~/.config/tasksmith/agents/*.agent.md` | User-tier custom agent personas and instructions. | Permanent |
 | **Global Rules** | `~/.config/tasksmith/permissions.json` | Persistent machine-wide permission allow and deny rules. | Permanent |
+| **Provider Credentials** | `~/.local/share/tasksmith/credentials/*.json` | OAuth 2.0 PKCE tokens (e.g. `antigravity.json`) with restricted permissions (`0600`). | Permanent |
 | **Trust Store** | `~/.local/share/tasksmith/trust.json` | Machine-wide trusted directories registry, trust scopes (`folder` / `parent`), and executable fingerprints (`$XDG_DATA_HOME`). | Permanent |
 | **Workspace Metadata** | `~/.local/share/tasksmith/workspaces/<hash>/workspace.json` | Workspace schema version and binary version for automated upgrade migrations. | Permanent |
 | **Workspace DB** | `~/.local/share/tasksmith/workspaces/<hash>/tasksmith.db` | SQLite database storing turn journals, messages, and session state (`$XDG_DATA_HOME`). | Permanent |

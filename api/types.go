@@ -63,10 +63,26 @@ type ProviderSummary struct {
 	DisplayName  string   `json:"display_name,omitempty"`
 	Status       string   `json:"status,omitempty"` // e.g. "✓ key", "✓ local", "needs key", "sign-in"
 	HasKey       bool     `json:"has_key"`
+	AuthType     string   `json:"auth_type,omitempty"` // "env", "bearer", "oauth2", etc.
 	AuthEnv      string   `json:"auth_env,omitempty"`
+	Account      string   `json:"account,omitempty"` // Authenticated account email if OAuth
 	DefaultModel string   `json:"default_model,omitempty"`
 	Models       []string `json:"models,omitempty"`
 	Scope        string   `json:"scope,omitempty"` // "system", "user", "workspace", "project"
+}
+
+// ProviderAuthRequest initiates interactive OAuth for a provider.
+type ProviderAuthRequest struct {
+	Provider string `json:"provider"`
+}
+
+// ProviderAuthResponse returns the authorization URL and status for an interactive OAuth flow.
+type ProviderAuthResponse struct {
+	Provider string `json:"provider"`
+	AuthURL  string `json:"auth_url,omitempty"`
+	Status   string `json:"status"` // "idle", "authorizing", "authenticated", "error"
+	Account  string `json:"account,omitempty"`
+	Error    string `json:"error,omitempty"`
 }
 
 // VerifyProviderRequest requests verification of a provider's credentials or endpoint.

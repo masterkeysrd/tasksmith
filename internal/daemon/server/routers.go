@@ -220,7 +220,29 @@ func (w *workspaceRouter) initRoutes() {
 		GetRoute("/v1/workspace/status", w.getWorkspaceStatus),
 		PostRoute("/v1/workspace/init", w.postWorkspaceInit),
 		PostRoute("/v1/providers/verify", w.postVerifyProvider),
+		PostRoute("/v1/providers/{name}/auth", w.postProviderAuth),
+		GetRoute("/v1/providers/{name}/auth", w.getProviderAuthStatus),
 	}
+}
+
+func (w *workspaceRouter) postProviderAuth(rw http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	resp, err := w.b.StartProviderAuth(r.Context(), name)
+	if err != nil {
+		WriteError(rw, err)
+		return
+	}
+	WriteJSON(rw, http.StatusOK, resp)
+}
+
+func (w *workspaceRouter) getProviderAuthStatus(rw http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	resp, err := w.b.GetProviderAuthStatus(r.Context(), name)
+	if err != nil {
+		WriteError(rw, err)
+		return
+	}
+	WriteJSON(rw, http.StatusOK, resp)
 }
 
 func (w *workspaceRouter) getWorkspaceStatus(rw http.ResponseWriter, r *http.Request) {

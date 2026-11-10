@@ -43,6 +43,8 @@ type WorkspaceBackend interface {
 	GetWorkspaceStatus(ctx context.Context, workspace string) (*api.WorkspaceStatus, error)
 	InitWorkspace(ctx context.Context, req api.InitWorkspaceRequest) error
 	VerifyProvider(ctx context.Context, req api.VerifyProviderRequest) (*api.VerifyProviderResponse, error)
+	StartProviderAuth(ctx context.Context, provider string) (*api.ProviderAuthResponse, error)
+	GetProviderAuthStatus(ctx context.Context, provider string) (*api.ProviderAuthResponse, error)
 }
 
 // MCPBackend serves the workspace's configured MCP servers: their discovered
