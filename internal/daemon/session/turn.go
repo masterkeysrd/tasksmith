@@ -407,7 +407,7 @@ func (s *Session) startTurn(hInput harness.Input) error {
 		hErr := s.harnessErr
 		s.Unlock()
 		if hErr != nil {
-			s.handleAsyncError(hErr)
+			s.handleAsyncError(runCtx, hErr)
 			return
 		}
 
@@ -423,7 +423,7 @@ func (s *Session) startTurn(hInput harness.Input) error {
 		var lastReply *message.Assistant
 		reply, err := s.send(sCtx, s.Harness.Stream(sCtx, hInput))
 		if err != nil {
-			s.handleAsyncError(err)
+			s.handleAsyncError(runCtx, err)
 			return
 		}
 		if reply != nil {
@@ -441,7 +441,7 @@ func (s *Session) startTurn(hInput harness.Input) error {
 
 			reply, err := s.send(sCtx, s.Harness.Stream(sCtx, harness.Input{}))
 			if err != nil {
-				s.handleAsyncError(err)
+				s.handleAsyncError(runCtx, err)
 				return
 			}
 			if reply != nil {
@@ -683,7 +683,13 @@ func (s *Session) recordQuestion(ctx context.Context, response api.QuestionRespo
 	return ready, nil
 }
 
-func (s *Session) handleAsyncError(err error) {
+func isTurnCanceled(runCtx context.Context, err error) bool {
+	return errors.Is(runCtx.Err(), context.Canceled) && errors.Is(err, context.Canceled)
+}
+
+func (s *Session) handleAsyncError(runCtx context.Context, err error) {
+	canceled := isTurnCanceled(runCtx, err)
+
 	s.Lock()
 	s.Running = false
 	s.PendingPermissions = nil
@@ -692,7 +698,7 @@ func (s *Session) handleAsyncError(err error) {
 	s.Status = api.StatusIdle
 	s.FinishedAt = time.Now().UTC()
 	s.err = err
-	if !errors.Is(err, context.Canceled) {
+	if !canceled {
 		s.Error = err.Error()
 	}
 	s.Unlock()
@@ -703,12 +709,12 @@ func (s *Session) handleAsyncError(err error) {
 	})
 
 	status := api.TurnStatusFailed
-	if errors.Is(err, context.Canceled) {
+	if canceled {
 		status = api.TurnStatusCanceled
 	}
 	defer s.finishTurn(status)
 
-	if errors.Is(err, context.Canceled) {
+	if canceled {
 		_ = s.appendTimeline(s.bgCtx, timeline.NewInterruptedEntry())
 	} else {
 		s.logger.Error("session turn failed", log.String("session_id", s.ID), log.String("error", err.Error()))
@@ -718,7 +724,7 @@ func (s *Session) handleAsyncError(err error) {
 		})
 	}
 	s.notifyParentUpdate()
-	if s.parent != nil && !errors.Is(err, context.Canceled) {
+	if s.parent != nil && !canceled {
 		text := fmt.Sprintf("<subagent_completed session_id=%q agent=%q title=%q status=\"failed\" error=%q work_dir=%q>\n</subagent_completed>",
 			s.ID, s.Config.Agent, s.Title, err.Error(), s.WorkDir)
 		s.parent.Enqueue(message.NewUserTextMeta(text, map[string]any{harness.MetaSystemKind: harness.SystemKindSubagent}))
@@ -733,7 +739,7 @@ func (s *Session) send(ctx context.Context, stream iter.Seq2[any, error]) (*mess
 
 	for raw, err := range stream {
 		if err != nil {
-			if errors.Is(err, context.Canceled) {
+			if isTurnCanceled(ctx, err) {
 				partialMsg, buildErr := agg.Build()
 				if buildErr == nil && partialMsg != nil && len(partialMsg.Content) > 0 {
 					if partialMsg.GetID() == "" || !uuid.Validate(partialMsg.GetID()) {

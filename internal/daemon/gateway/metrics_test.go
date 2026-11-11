@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -116,6 +117,16 @@ func TestMetricsMiddlewareUnpricedAndErrors(t *testing.T) {
 	}
 	if r := rec.records[2]; r.Status != metrics.StatusCanceled {
 		t.Fatalf("canceled record = %+v", r)
+	}
+
+	upstreamCanceled := func(context.Context, *llm.Request) (llm.StreamResponse, error) {
+		return nil, fmt.Errorf("acquire token: %w", context.Canceled)
+	}
+	if err := drain(t, mw(upstreamCanceled), context.Background()); err == nil {
+		t.Fatal("expected error")
+	}
+	if r := rec.records[3]; r.Status != metrics.StatusError {
+		t.Fatalf("upstream context.Canceled with active ctx should record StatusError, got %+v", r)
 	}
 }
 

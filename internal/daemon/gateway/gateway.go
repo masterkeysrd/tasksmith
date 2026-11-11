@@ -15,21 +15,30 @@ import (
 type gatewayImpl struct {
 	cfg       Config
 	providers map[string]*providerInstance
+	bgCancel  context.CancelFunc
 	mu        sync.RWMutex
 	closed    bool
 }
 
 // New constructs and initializes a new Gateway from the provided configuration.
 func New(ctx context.Context, cfg Config) (Gateway, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
 
+	// Providers outlive the caller's request context (e.g. a cached GatewayPool
+	// entry initialized during an HTTP call), so long-lived background helpers
+	// such as OAuth token refreshers bind to a gateway-owned lifecycle context.
+	bgCtx, bgCancel := context.WithCancel(context.Background())
 	providers := make(map[string]*providerInstance, len(cfg.Providers))
 
 	for _, pCfg := range cfg.Providers {
-		inst, err := initProvider(ctx, pCfg, cfg.Env)
+		inst, err := initProvider(bgCtx, pCfg, cfg.Env)
 		if err != nil {
+			bgCancel()
 			return nil, fmt.Errorf("gateway: failed to initialize provider %q: %w", pCfg.Name, err)
 		}
 		providers[pCfg.Name] = inst
@@ -38,6 +47,7 @@ func New(ctx context.Context, cfg Config) (Gateway, error) {
 	return &gatewayImpl{
 		cfg:       cfg,
 		providers: providers,
+		bgCancel:  bgCancel,
 	}, nil
 }
 
@@ -49,6 +59,9 @@ func (g *gatewayImpl) Close() error {
 		return nil
 	}
 	g.closed = true
+	if g.bgCancel != nil {
+		g.bgCancel()
+	}
 	return nil
 }
 

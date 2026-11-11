@@ -8,14 +8,17 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/masterkeysrd/loom/embedding"
 	"github.com/masterkeysrd/loom/llm"
 	"github.com/masterkeysrd/loom/message"
 	loomantigravity "github.com/masterkeysrd/loom/providers/antigravity"
+	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/metrics"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/models"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/scope"
+	"golang.org/x/oauth2"
 )
 
 // captureUpstream serves a canned non-streaming chat completion and records the
@@ -496,5 +499,121 @@ func TestAntigravitySessionAffinityMiddleware(t *testing.T) {
 	}
 	if gotUserPromptID != "custom-prompt" {
 		t.Errorf("override user_prompt_id = %q, want %q", gotUserPromptID, "custom-prompt")
+	}
+}
+
+type testOAuthDriver struct {
+	tokenURL string
+}
+
+func (d testOAuthDriver) OAuthConfig() *oauth2.Config {
+	return &oauth2.Config{
+		ClientID:     "test-client-id",
+		ClientSecret: "test-client-secret",
+		Endpoint: oauth2.Endpoint{
+			TokenURL:  d.tokenURL,
+			AuthStyle: oauth2.AuthStyleInParams,
+		},
+	}
+}
+
+func (d testOAuthDriver) ExtractAccount(*oauth2.Token) string {
+	return "alice@example.com"
+}
+
+func TestAntigravityOAuthRefreshOutlivesInitContext(t *testing.T) {
+	xdg.SetTestEnv(t.TempDir(), "tasksmith-test")
+	t.Cleanup(xdg.ClearCache)
+
+	var (
+		refreshHits int
+		gotAuthHdr  string
+	)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/token":
+			refreshHits++
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"access_token":  "refreshed-access-token",
+				"refresh_token": "refresh-token-123",
+				"token_type":    "Bearer",
+				"expires_in":    3600,
+			})
+		case "/v1internal:fetchAvailableModels":
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"models": map[string]any{
+					"gemini-3.8-flash": map[string]any{
+						"displayName":     "Gemini 3.8 Flash",
+						"maxTokens":       1048576,
+						"maxOutputTokens": 65536,
+					},
+				},
+			})
+		case "/v1internal:streamGenerateContent":
+			gotAuthHdr = r.Header.Get("Authorization")
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = w.Write([]byte("data: {\"response\":{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"ok\"}]},\"finishReason\":\"STOP\"}]}}\n\n"))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	origDriver, _ := GetOAuthDriver("antigravity")
+	RegisterOAuthDriver("antigravity", testOAuthDriver{tokenURL: srv.URL + "/token"})
+	t.Cleanup(func() {
+		RegisterOAuthDriver("antigravity", origDriver)
+	})
+
+	// Persist an already-expired access token on disk so the first turn after
+	// gateway initialization must refresh against /token.
+	if err := SaveProviderToken("antigravity", &oauth2.Token{
+		AccessToken:  "expired-access-token",
+		RefreshToken: "refresh-token-123",
+		TokenType:    "Bearer",
+		Expiry:       time.Now().Add(-time.Hour).UTC(),
+	}, "alice@example.com"); err != nil {
+		t.Fatalf("SaveProviderToken: %v", err)
+	}
+
+	// Simulate an HTTP request context (e.g. GET /v1/workspace) that initializes
+	// the pooled Gateway and is canceled immediately once that HTTP call returns.
+	initCtx, cancelInit := context.WithCancel(context.Background())
+	gw, err := New(initCtx, Config{
+		Providers: []ProviderConfig{{
+			Name:     "antigravity",
+			Type:     "antigravity",
+			Endpoint: srv.URL,
+			Auth:     &AuthConfig{Type: AuthTypeOAuth2},
+			Config:   map[string]any{"companionProject": "companion-proj-123"},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer func() { _ = gw.Close() }()
+	cancelInit()
+
+	completion := true
+	llmModel, err := gw.LLM(context.Background(), models.Model{
+		ID:           "antigravity/gemini-3.8-flash",
+		ProviderType: "antigravity",
+		Capabilities: models.Capabilities{Completion: &completion},
+	}, llm.ModelConfig{})
+	if err != nil {
+		t.Fatalf("gw.LLM: %v", err)
+	}
+
+	if _, err := llmModel.Invoke(context.Background(), []message.Message{message.NewUserText("start")}); err != nil {
+		t.Fatalf("Invoke after initCtx cancel failed: %v", err)
+	}
+	if refreshHits != 1 {
+		t.Errorf("refreshHits = %d, want 1", refreshHits)
+	}
+	if gotAuthHdr != "Bearer refreshed-access-token" {
+		t.Errorf("Authorization = %q, want %q", gotAuthHdr, "Bearer refreshed-access-token")
 	}
 }

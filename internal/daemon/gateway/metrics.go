@@ -39,7 +39,7 @@ func metricsLLMMiddleware(m models.Model, rec metrics.Recorder) llm.Middleware {
 					TTFT:     ttft,
 				}
 				switch {
-				case errors.Is(ctx.Err(), context.Canceled) || errors.Is(streamE, context.Canceled):
+				case errors.Is(ctx.Err(), context.Canceled):
 					call.Status = metrics.StatusCanceled
 				case streamE != nil:
 					call.Status = metrics.StatusError
