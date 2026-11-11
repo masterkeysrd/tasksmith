@@ -1017,6 +1017,7 @@ func (d *Daemon) InitWorkspace(ctx context.Context, req api.InitWorkspaceRequest
 		}
 	}
 
+	d.reloadAllWorkspaces(ctx)
 	return nil
 }
 
@@ -1180,6 +1181,8 @@ func (d *Daemon) StartProviderAuth(ctx context.Context, provider string) (*api.P
 			flow.mu.Unlock()
 			return
 		}
+
+		d.reloadAllWorkspaces(flowCtx)
 
 		flow.mu.Lock()
 		flow.status = "authenticated"

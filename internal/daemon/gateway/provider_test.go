@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -11,7 +12,10 @@ import (
 	"github.com/masterkeysrd/loom/embedding"
 	"github.com/masterkeysrd/loom/llm"
 	"github.com/masterkeysrd/loom/message"
+	loomantigravity "github.com/masterkeysrd/loom/providers/antigravity"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/metrics"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/models"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/scope"
 )
 
 // captureUpstream serves a canned non-streaming chat completion and records the
@@ -260,5 +264,237 @@ func TestProviderMissingCredentialWarningNamesFile(t *testing.T) {
 
 	if _, err := gw.LLM(context.Background(), models.Model{ID: "internal/gpt-5.5", ProviderType: "openai"}, llm.ModelConfig{}); err == nil {
 		t.Fatal("expected LLM resolution to fail for a provider without credentials")
+	}
+}
+
+func TestAntigravityProviderConfigEndToEnd(t *testing.T) {
+	ctx := context.Background()
+	t.Setenv("AG_TEST_TOKEN", "test-ag-token")
+
+	var (
+		gotUserAgentHeader  string
+		gotBillingProject   string
+		gotEnvelopeProject  string
+		gotEnvelopeModel    string
+		gotEnvelopeAgentStr string
+	)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1internal:fetchAvailableModels":
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"models": map[string]any{
+					"gemini-4-carbon-high": map[string]any{
+						"displayName":      "Gemini 4 Carbon (High)",
+						"maxTokens":        1048576,
+						"maxOutputTokens":  65536,
+						"supportsThinking": true,
+					},
+				},
+			})
+		case "/v1internal:streamGenerateContent":
+			gotUserAgentHeader = r.Header.Get("User-Agent")
+			gotBillingProject = r.Header.Get("X-Goog-User-Project")
+			var env struct {
+				Project   string `json:"project"`
+				Model     string `json:"model"`
+				UserAgent string `json:"userAgent"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&env)
+			gotEnvelopeProject = env.Project
+			gotEnvelopeModel = env.Model
+			gotEnvelopeAgentStr = env.UserAgent
+
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = w.Write([]byte("data: {\"response\":{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"ok\"}]},\"finishReason\":\"STOP\"}]}}\n\n"))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	gw, err := New(ctx, Config{
+		Providers: []ProviderConfig{{
+			Name:     "antigravity",
+			Type:     "antigravity",
+			Endpoint: srv.URL,
+			Auth:     &AuthConfig{Type: AuthTypeOAuth2, Env: "AG_TEST_TOKEN"},
+			Headers:  map[string]string{"User-Agent": "antigravity/cli/9.9.9 (test)"},
+			Config: map[string]any{
+				"companionProject": "companion-proj-123",
+				"projectId":        "billing-proj-456",
+				"aliases": map[string]any{
+					"carbon": "gemini-4-carbon-high",
+				},
+			},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer func() { _ = gw.Close() }()
+
+	// Verify compacted canonical profile resolves from per-effort backend endpoint.
+	prof, ok := gw.GetProfile("antigravity/gemini-4-carbon")
+	if !ok {
+		t.Fatal("expected GetProfile(antigravity/gemini-4-carbon) to succeed")
+	}
+	if prof.Limits.Context != 1048576 {
+		t.Fatalf("profile context = %d, want 1048576", prof.Limits.Context)
+	}
+
+	inst := gw.(*gatewayImpl).providers["antigravity"]
+	stream, err := inst.llmProv.Stream(ctx, &llm.Request{
+		Model:    "carbon",
+		Messages: []message.Message{message.NewUserText("ping")},
+	})
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	for _, sErr := range stream {
+		if sErr != nil {
+			t.Fatalf("stream chunk error: %v", sErr)
+		}
+	}
+
+	if gotUserAgentHeader != "antigravity/cli/9.9.9 (test)" {
+		t.Errorf("User-Agent header = %q, want %q", gotUserAgentHeader, "antigravity/cli/9.9.9 (test)")
+	}
+	if gotEnvelopeAgentStr != "antigravity/cli/9.9.9 (test)" {
+		t.Errorf("envelope userAgent = %q, want %q", gotEnvelopeAgentStr, "antigravity/cli/9.9.9 (test)")
+	}
+	if gotBillingProject != "billing-proj-456" {
+		t.Errorf("X-Goog-User-Project = %q, want %q", gotBillingProject, "billing-proj-456")
+	}
+	if gotEnvelopeProject != "companion-proj-123" {
+		t.Errorf("envelope project = %q, want %q", gotEnvelopeProject, "companion-proj-123")
+	}
+	if gotEnvelopeModel != "gemini-4-carbon-high" {
+		t.Errorf("envelope model = %q, want %q", gotEnvelopeModel, "gemini-4-carbon-high")
+	}
+
+	// Invalid config field type should fail fast at gateway creation.
+	if _, err := New(ctx, Config{
+		Providers: []ProviderConfig{{
+			Name:   "antigravity",
+			Type:   "antigravity",
+			Config: map[string]any{"companionProject": 123},
+		}},
+	}); err == nil {
+		t.Fatal("expected invalid companionProject type to fail")
+	}
+}
+
+func TestAntigravitySessionAffinityMiddleware(t *testing.T) {
+	ctx := context.Background()
+	t.Setenv("AG_TEST_TOKEN", "test-ag-token")
+
+	var (
+		gotUserPromptID string
+		gotSessionID    string
+	)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1internal:fetchAvailableModels":
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"models": map[string]any{
+					"gemini-4-carbon": map[string]any{
+						"displayName":     "Gemini 4 Carbon",
+						"maxTokens":       1048576,
+						"maxOutputTokens": 65536,
+					},
+				},
+			})
+		case "/v1internal:streamGenerateContent":
+			var env struct {
+				UserPromptID string `json:"user_prompt_id"`
+				Request      struct {
+					SessionID string `json:"session_id"`
+				} `json:"request"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&env)
+			gotUserPromptID = env.UserPromptID
+			gotSessionID = env.Request.SessionID
+
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = w.Write([]byte("data: {\"response\":{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"ok\"}]},\"finishReason\":\"STOP\"}]}}\n\n"))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	gw, err := New(ctx, Config{
+		Providers: []ProviderConfig{{
+			Name:     "antigravity",
+			Type:     "antigravity",
+			Endpoint: srv.URL,
+			Auth:     &AuthConfig{Type: AuthTypeOAuth2, Env: "AG_TEST_TOKEN"},
+			Config:   map[string]any{"companionProject": "companion-proj-123"},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer func() { _ = gw.Close() }()
+
+	completion := true
+	llmModel, err := gw.LLM(ctx, models.Model{
+		ID:           "antigravity/gemini-4-carbon",
+		ProviderType: "antigravity",
+		Capabilities: models.Capabilities{Completion: &completion},
+	}, llm.ModelConfig{})
+	if err != nil {
+		t.Fatalf("gw.LLM: %v", err)
+	}
+
+	// 1. Chat turn injects SessionID and TurnID from daemon scope.
+	chatCtx := scope.With(ctx, scope.Scope{
+		SessionID: "sess-abc-123",
+		TurnID:    "turn-xyz-456",
+		Purpose:   string(metrics.PurposeChat),
+	})
+	if _, err := llmModel.Invoke(chatCtx, []message.Message{message.NewUserText("hello")}); err != nil {
+		t.Fatalf("Invoke(chat): %v", err)
+	}
+	if gotSessionID != "sess-abc-123" {
+		t.Errorf("chat request.session_id = %q, want %q", gotSessionID, "sess-abc-123")
+	}
+	if gotUserPromptID != "turn-xyz-456" {
+		t.Errorf("chat user_prompt_id = %q, want %q", gotUserPromptID, "turn-xyz-456")
+	}
+
+	// 2. Background title generation does not pin the chat SessionID so concurrent
+	// title prompts never collide with the session's sticky KV-cache slot.
+	titleCtx := scope.With(ctx, scope.Scope{
+		SessionID: "sess-abc-123",
+		Purpose:   string(metrics.PurposeTitle),
+	})
+	if _, err := llmModel.Invoke(titleCtx, []message.Message{message.NewUserText("title")}); err != nil {
+		t.Fatalf("Invoke(title): %v", err)
+	}
+	if gotSessionID != "" {
+		t.Errorf("title request.session_id = %q, want empty", gotSessionID)
+	}
+	if gotUserPromptID != "" {
+		t.Errorf("title user_prompt_id = %q, want empty", gotUserPromptID)
+	}
+
+	// 3. Explicit per-call Session extension takes precedence over scope defaults.
+	if _, err := llmModel.Invoke(
+		chatCtx,
+		[]message.Message{message.NewUserText("override")},
+		llm.WithExtensionOption(loomantigravity.Session{ID: "custom-sess", UserPromptID: "custom-prompt"}),
+	); err != nil {
+		t.Fatalf("Invoke(override): %v", err)
+	}
+	if gotSessionID != "custom-sess" {
+		t.Errorf("override request.session_id = %q, want %q", gotSessionID, "custom-sess")
+	}
+	if gotUserPromptID != "custom-prompt" {
+		t.Errorf("override user_prompt_id = %q, want %q", gotUserPromptID, "custom-prompt")
 	}
 }

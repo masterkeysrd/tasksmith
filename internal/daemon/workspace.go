@@ -448,6 +448,28 @@ func (d *Daemon) Workspaces() []string {
 	return roots
 }
 
+func (d *Daemon) reloadAllWorkspaces(ctx context.Context) {
+	d.wsMu.Lock()
+	seen := make(map[*workspaceRuntime]struct{}, len(d.workspaces))
+	runtimes := make([]*workspaceRuntime, 0, len(d.workspaces))
+	for _, rt := range d.workspaces {
+		if _, ok := seen[rt]; !ok {
+			seen[rt] = struct{}{}
+			runtimes = append(runtimes, rt)
+		}
+	}
+	d.wsMu.Unlock()
+
+	for _, rt := range runtimes {
+		if err := rt.Reload(ctx); err != nil {
+			d.logger.Warn("failed to reload workspace after provider update",
+				log.String("workspace", rt.dir),
+				log.String("error", err.Error()),
+			)
+		}
+	}
+}
+
 func (d *Daemon) closeWorkspaces() error {
 	d.wsMu.Lock()
 	runtimes := make([]*workspaceRuntime, 0, len(d.workspaces))

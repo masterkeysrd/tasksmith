@@ -10,7 +10,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/lrstanley/go-nf v0.0.0-20260418212552-215ab243b591
 	github.com/masterkeysrd/kite v0.0.7-0.20261107034218-fde6c587a1eb
-	github.com/masterkeysrd/loom v0.0.9-0.20261110205535-2c5a56ffb692
+	github.com/masterkeysrd/loom v0.0.9-0.20261111024205-b647234c1c5c
 	github.com/masterkeysrd/warp v0.0.7-0.20261104235639-05b5acbc6fde
 	github.com/modelcontextprotocol/go-sdk v1.8.0
 	github.com/ollama/ollama v0.40.15

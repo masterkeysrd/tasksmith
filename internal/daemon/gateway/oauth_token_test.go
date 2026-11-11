@@ -127,3 +127,65 @@ func TestOAuthDriverRegistry(t *testing.T) {
 		t.Fatalf("expected valid oauth config from antigravity driver, got %+v", cfg)
 	}
 }
+
+func TestOAuthConfigFingerprintTracksAccountIdentity(t *testing.T) {
+	xdg.SetTestEnv(t.TempDir(), "tasksmith-test")
+
+	gwCfg := Config{
+		Providers: []ProviderConfig{{
+			Name: "antigravity",
+			Type: "antigravity",
+			Auth: &AuthConfig{Type: AuthTypeOAuth2, Env: "ANTIGRAVITY_TEST_TOKEN"},
+		}},
+	}
+
+	fpMissing := gwCfg.Fingerprint()
+
+	tokAlice := &oauth2.Token{
+		AccessToken:  "access-v1",
+		RefreshToken: "refresh-alice",
+		Expiry:       time.Now().Add(time.Hour).UTC(),
+	}
+	if err := SaveProviderToken("antigravity", tokAlice, "alice@example.com"); err != nil {
+		t.Fatalf("SaveProviderToken(alice): %v", err)
+	}
+	fpAliceV1 := gwCfg.Fingerprint()
+	if fpAliceV1 == fpMissing {
+		t.Fatal("expected fingerprint to change after initial OAuth sign-in")
+	}
+
+	// Background access-token refresh with the same account + refresh token must
+	// keep the fingerprint stable so pooled gateways are not needlessly rebuilt.
+	tokAliceRefreshed := &oauth2.Token{
+		AccessToken:  "access-v2",
+		RefreshToken: "refresh-alice",
+		Expiry:       time.Now().Add(2 * time.Hour).UTC(),
+	}
+	if err := SaveProviderToken("antigravity", tokAliceRefreshed, "alice@example.com"); err != nil {
+		t.Fatalf("SaveProviderToken(alice refreshed): %v", err)
+	}
+	if fpAliceV2 := gwCfg.Fingerprint(); fpAliceV2 != fpAliceV1 {
+		t.Fatalf("expected fingerprint to stay stable across access-token refresh: %s != %s", fpAliceV2, fpAliceV1)
+	}
+
+	// Signing in as or switching to another account must change the fingerprint.
+	tokBob := &oauth2.Token{
+		AccessToken:  "access-bob",
+		RefreshToken: "refresh-bob",
+		Expiry:       time.Now().Add(time.Hour).UTC(),
+	}
+	if err := SaveProviderToken("antigravity", tokBob, "bob@example.com"); err != nil {
+		t.Fatalf("SaveProviderToken(bob): %v", err)
+	}
+	fpBob := gwCfg.Fingerprint()
+	if fpBob == fpAliceV1 {
+		t.Fatal("expected fingerprint to change when active OAuth account changes")
+	}
+
+	if err := SwitchProviderAccount("antigravity", "alice@example.com"); err != nil {
+		t.Fatalf("SwitchProviderAccount(alice): %v", err)
+	}
+	if fpSwitched := gwCfg.Fingerprint(); fpSwitched != fpAliceV1 {
+		t.Fatalf("expected fingerprint after switching back to alice to match alice's fingerprint: %s != %s", fpSwitched, fpAliceV1)
+	}
+}

@@ -1,7 +1,9 @@
 package gateway
 
 import (
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -233,6 +235,46 @@ func SwitchProviderAccount(provider string, account string) error {
 func HasProviderToken(provider string) bool {
 	tok, _, err := LoadProviderToken(provider)
 	return err == nil && tok != nil && (tok.AccessToken != "" || tok.RefreshToken != "")
+}
+
+// oauthCredentialDigest returns a stable hex digest of the stored OAuth identity
+// for provider so Config.Fingerprint changes on sign-in, sign-out, or account
+// switch without rebuilding pooled gateways on routine access-token refreshes.
+func oauthCredentialDigest(provider string) string {
+	tokenPath, err := ProviderTokenPath(provider)
+	if err != nil {
+		return "invalid-provider"
+	}
+
+	tokenStoreMu.RLock()
+	data, err := os.ReadFile(tokenPath)
+	tokenStoreMu.RUnlock()
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "missing"
+		}
+		return "unreadable"
+	}
+
+	var stored OAuthToken
+	if err := json.Unmarshal(data, &stored); err != nil {
+		return "corrupt"
+	}
+	if stored.AccessToken == "" && stored.RefreshToken == "" {
+		return "empty"
+	}
+
+	// Key on (email, refresh_token) when a refresh token is present so background
+	// access-token rotation keeps the same gateway instance; fall back to
+	// access_token only for static/non-refreshable tokens.
+	identity := stored.RefreshToken
+	if identity == "" {
+		identity = stored.AccessToken
+	}
+	payload := fmt.Sprintf("email=%s\ncredential=%s\nhas_access=%t",
+		stored.Email, identity, stored.AccessToken != "")
+	sum := sha256.Sum256([]byte(payload))
+	return hex.EncodeToString(sum[:])
 }
 
 // Antigravity backwards compatibility helpers:

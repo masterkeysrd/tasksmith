@@ -26,6 +26,9 @@ import (
 	openaiopt "github.com/openai/openai-go/v3/option"
 	"golang.org/x/oauth2"
 	"google.golang.org/genai"
+
+	"github.com/masterkeysrd/tasksmith/internal/daemon/metrics"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/scope"
 )
 
 type providerInstance struct {
@@ -56,7 +59,11 @@ func initProvider(ctx context.Context, cfg ProviderConfig, env map[string]string
 			return nil, err
 		}
 		inst.openaiResponsesOpts = respOpts
-	case "anthropic", "typesafe", "genai", "google-genai", "gemini", "antigravity":
+	case "antigravity":
+		if _, err := parseAntigravityConfig(cfg.Name, cfg.Config, cfg.Headers); err != nil {
+			return nil, err
+		}
+	case "anthropic", "typesafe", "genai", "google-genai", "gemini":
 		// valid provider types
 	default:
 		return nil, fmt.Errorf("%w: unknown provider type %q", ErrInvalidConfig, cfg.Type)
@@ -190,11 +197,15 @@ func initProvider(ctx context.Context, cfg ProviderConfig, env map[string]string
 			}
 		}
 
-		antigravityProv, err := loomantigravity.NewProvider(&loomantigravity.Config{
-			TokenSource: ts,
-			BaseURL:     cfg.Endpoint,
-			HTTPClient:  httpClient,
-		})
+		agCfg, err := parseAntigravityConfig(cfg.Name, cfg.Config, cfg.Headers)
+		if err != nil {
+			return nil, err
+		}
+		agCfg.TokenSource = ts
+		agCfg.BaseURL = cfg.Endpoint
+		agCfg.HTTPClient = httpClient
+
+		antigravityProv, err := loomantigravity.NewProvider(agCfg)
 		if err != nil {
 			return nil, fmt.Errorf("gateway: antigravity provider error: %w", err)
 		}
@@ -299,6 +310,71 @@ func parseOpenAIConfig(provName string, raw map[string]any) ([]loomopenai.Option
 	return loomOpts, respOpts, nil
 }
 
+func parseAntigravityConfig(provName string, raw map[string]any, headers map[string]string) (*loomantigravity.Config, error) {
+	out := &loomantigravity.Config{}
+
+	if v, ok := getMapValue(raw, "projectId", "project_id"); ok {
+		s, ok := v.(string)
+		if !ok {
+			return nil, fmt.Errorf("gateway: provider %q: invalid antigravity projectId %v (must be a string)", provName, v)
+		}
+		out.ProjectID = strings.TrimSpace(s)
+	}
+
+	if v, ok := getMapValue(raw, "companionProject", "companion_project"); ok {
+		s, ok := v.(string)
+		if !ok {
+			return nil, fmt.Errorf("gateway: provider %q: invalid antigravity companionProject %v (must be a string)", provName, v)
+		}
+		out.CompanionProject = strings.TrimSpace(s)
+	}
+
+	// Sync a custom User-Agent HTTP header into RequestEnvelope.UserAgent unless
+	// config.userAgent explicitly overrides it.
+	for k, v := range headers {
+		if http.CanonicalHeaderKey(strings.TrimSpace(k)) == "User-Agent" && strings.TrimSpace(v) != "" {
+			out.UserAgent = strings.TrimSpace(v)
+		}
+	}
+
+	if v, ok := getMapValue(raw, "userAgent", "user_agent"); ok {
+		s, ok := v.(string)
+		if !ok {
+			return nil, fmt.Errorf("gateway: provider %q: invalid antigravity userAgent %v (must be a string)", provName, v)
+		}
+		out.UserAgent = strings.TrimSpace(s)
+	}
+
+	if v, ok := getMapValue(raw, "aliases", "aliases"); ok {
+		switch m := v.(type) {
+		case map[string]string:
+			out.Aliases = make(map[string]string, len(m))
+			for k, target := range m {
+				key, val := strings.TrimSpace(k), strings.TrimSpace(target)
+				if key != "" && val != "" {
+					out.Aliases[key] = val
+				}
+			}
+		case map[string]any:
+			out.Aliases = make(map[string]string, len(m))
+			for k, rawTarget := range m {
+				target, ok := rawTarget.(string)
+				if !ok {
+					return nil, fmt.Errorf("gateway: provider %q: invalid antigravity alias %q target %v (must be a string)", provName, k, rawTarget)
+				}
+				key, val := strings.TrimSpace(k), strings.TrimSpace(target)
+				if key != "" && val != "" {
+					out.Aliases[key] = val
+				}
+			}
+		default:
+			return nil, fmt.Errorf("gateway: provider %q: invalid antigravity aliases %v (must be a map of strings)", provName, v)
+		}
+	}
+
+	return out, nil
+}
+
 // genaiAPIVersions are the Google Generative Language API version segments that
 // may already be part of a configured endpoint.
 var genaiAPIVersions = []string{"v1alpha", "v1beta", "v1"}
@@ -379,6 +455,44 @@ func openAIResponsesOptionsMiddleware(defaults *loomopenai.ResponsesOptions) llm
 				reqCopy := *req
 				reqCopy.Extensions = extensions
 				req = &reqCopy
+			}
+			return next(ctx, req)
+		}
+	}
+}
+
+func antigravitySessionMiddleware() llm.Middleware {
+	return func(next llm.Streamer) llm.Streamer {
+		return func(ctx context.Context, req *llm.Request) (llm.StreamResponse, error) {
+			if req != nil {
+				sc, ok := scope.From(ctx)
+				if ok && sc.Purpose != string(metrics.PurposeTitle) && (sc.SessionID != "" || sc.TurnID != "") {
+					extensions := make(map[string]llm.Extension, len(req.Extensions)+1)
+					maps.Copy(extensions, req.Extensions)
+
+					var sess loomantigravity.Session
+					if ext, exists := extensions[loomantigravity.SessionExtensionID]; exists {
+						switch v := ext.(type) {
+						case loomantigravity.Session:
+							sess = v
+						case *loomantigravity.Session:
+							if v != nil {
+								sess = *v
+							}
+						}
+					}
+					if sess.ID == "" {
+						sess.ID = sc.SessionID
+					}
+					if sess.UserPromptID == "" {
+						sess.UserPromptID = sc.TurnID
+					}
+					extensions[loomantigravity.SessionExtensionID] = sess
+
+					reqCopy := *req
+					reqCopy.Extensions = extensions
+					req = &reqCopy
+				}
 			}
 			return next(ctx, req)
 		}

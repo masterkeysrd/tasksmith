@@ -10,6 +10,7 @@ Designed for enterprise environments and Google internal developer workflows, th
 - **Completion (`completion` — System 2)**: Conversational reasoning, software engineering workflows, and tool execution using `gemini-4-carbon`, `gemini-4-argon`, and `gemini-3.8-flash`.
 - **Decision (`decision` — System 1)**: Evaluates structured decisions via TaskSmith's completion fallback adapter.
 - **Managed Reasoning & Effort**: Integrated support for low, medium, and high thinking effort tiers.
+- **Sticky Session Prompt Caching**: Automatically pins `request.session_id` and `user_prompt_id` on conversational and compaction turns so sequential requests route to the same backend replica and hit its implicit KV prefix cache.
 
 ---
 
@@ -113,7 +114,20 @@ spec:
 
 ---
 
-## 4. Reasoning & Effort Levels
+## 4. Provider Configuration (`spec.config`)
+
+All `spec.config` fields are optional. By default, TaskSmith sends a versioned Antigravity CLI `User-Agent` and automatically discovers your account's Cloud AI Companion project via `/v1internal:loadCodeAssist`.
+
+| Key | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `companionProject` | string | *(auto-discovered)* | Explicit Cloud AI Companion project ID sent in the JSON request body (`project` field), bypassing `/v1internal:loadCodeAssist` discovery without setting `X-Goog-User-Project`. |
+| `projectId` | string | `""` | Explicit Google Cloud billing project ID sent in the `X-Goog-User-Project` HTTP header. Leave unset for standard Antigravity accounts. |
+| `userAgent` | string | `antigravity/cli/2.0.0 (<os>/<arch>)` | Custom `User-Agent` applied to both the HTTP header and `RequestEnvelope.userAgent` (takes precedence over `spec.headers["User-Agent"]`). |
+| `aliases` | map of strings | `{}` | Provider-level model aliases mapping custom identifiers to backend model IDs (for example `fast: gemini-3.8-flash-low`). |
+
+---
+
+## 5. Reasoning & Effort Levels
 
 Models may declare thinking capabilities. Use `/effort` or `/budget` when supported, or set thinking defaults in agent definitions.
 

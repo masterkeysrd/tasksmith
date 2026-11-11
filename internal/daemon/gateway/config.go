@@ -35,10 +35,12 @@ func (c *Config) Fingerprint() string {
 	}
 
 	// 1. Collect only the env keys referenced by any provider's Auth.Env, and a
-	// content digest for each provider reading its credential from a file, so
-	// rotating an on-disk token rebuilds the gateway instead of reusing a stale one.
+	// content digest for each provider reading its credential from a file or
+	// OAuth token store, so rotating credentials or signing in rebuilds the
+	// gateway instead of reusing a stale one.
 	relevantEnv := make(map[string]string)
 	relevantFiles := make(map[string]string)
+	relevantOAuth := make(map[string]string)
 	for _, p := range c.Providers {
 		if p.Auth == nil {
 			continue
@@ -52,6 +54,9 @@ func (c *Config) Fingerprint() string {
 		}
 		if p.Auth.File != "" {
 			relevantFiles[p.Name] = credentialDigest(p.Auth.File)
+		}
+		if p.Auth.scheme() == AuthTypeOAuth2 {
+			relevantOAuth[p.Name] = oauthCredentialDigest(p.Name)
 		}
 	}
 
@@ -69,10 +74,12 @@ func (c *Config) Fingerprint() string {
 		Providers     []ProviderConfig  `json:"providers"`
 		RelevantEnv   map[string]string `json:"relevant_env,omitempty"`
 		RelevantFiles map[string]string `json:"relevant_files,omitempty"`
+		RelevantOAuth map[string]string `json:"relevant_oauth,omitempty"`
 	}{
 		Providers:     normalizedProviders,
 		RelevantEnv:   relevantEnv,
 		RelevantFiles: relevantFiles,
+		RelevantOAuth: relevantOAuth,
 	}
 
 	data, err := json.Marshal(canonical)

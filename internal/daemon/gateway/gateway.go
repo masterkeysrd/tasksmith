@@ -102,6 +102,9 @@ func (g *gatewayImpl) LLM(ctx context.Context, m models.Model, cfg llm.ModelConf
 	if mw := openAIResponsesOptionsMiddleware(inst.openaiResponsesOpts); mw != nil {
 		model = model.WithMiddleware(mw)
 	}
+	if inst.cfg.Type == "antigravity" {
+		model = model.WithMiddleware(antigravitySessionMiddleware())
+	}
 	model = model.WithMiddleware(validateRequestMiddleware(m))
 	model = model.WithMiddleware(llm.DeferredToolsMiddleware(nil), llm.InlineToolsMiddleware(nil))
 	model = model.WithMiddleware(metricsLLMMiddleware(m, g.cfg.Metrics))

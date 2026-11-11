@@ -121,7 +121,7 @@ Requests requiring tools, tool history, media, or a response schema fail when th
 
 `auth.header` replaces `Authorization` for any scheme except `none`. When it does, the gateway removes the vendor credential header a provider SDK would otherwise add (`X-Api-Key`, `x-goog-api-key`, or its own `Authorization`), so exactly the configured header is sent.
 
-Credential lookup order is `auth.env` then `auth.file`; declaring both uses `env`. `auth.file` accepts `~/…` and paths relative to the manifest declaring it, so a token can live next to the provider definition. Rotating a credential — a new environment value or new file contents — changes the gateway fingerprint and rebuilds provider connections.
+Credential lookup order is `auth.env` then `auth.file`; declaring both uses `env`. `auth.file` accepts `~/…` and paths relative to the manifest declaring it, so a token can live next to the provider definition. Rotating a credential — a new environment value, new file contents, or signing in or switching accounts on an `oauth2` provider — changes the gateway fingerprint and rebuilds provider connections.
 
 ### Thinking Capability Fields
 
@@ -144,7 +144,7 @@ The model endpoints (`GET /v1/models` and `GET /v1/models/{id}`) return effectiv
 ```
 
 > [!NOTE]
-> Detailed vendor-specific engine parameters (such as `apiMode`, `store: false`, and built-in server tools) are documented in the [OpenAI Provider Guide](./providers/openai.md).
+> Detailed vendor-specific `spec.config` parameters are documented in the [OpenAI Provider Guide](./providers/openai.md) and [Antigravity Provider Guide](./providers/antigravity.md).
 
 ---
 
