@@ -373,7 +373,7 @@ func (n *AgentNode) Execute(ctx context.Context, state State) (graph.Command[Sta
 	if resp.Metrics != nil {
 		prevCached := state.Context.CachedTokens
 		currCached := resp.Metrics.Tokens.CacheRead
-		if prevCached > 0 && currCached < prevCached {
+		if isCacheBroken(prevCached, currCached) {
 			emit(ctx, api.CacheBrokenRecord{
 				PrevCached:  prevCached,
 				CurrCached:  currCached,
@@ -387,6 +387,18 @@ func (n *AgentNode) Execute(ctx context.Context, state State) (graph.Command[Sta
 		emit(ctx, api.ContextUpdatedEvent{Context: s.Context})
 		return s
 	}), nil
+}
+
+// cacheDropThresholdPct is the minimum relative drop in cached tokens (3%)
+// required to report a prompt cache miss, ignoring minor prefix-boundary jitter.
+const cacheDropThresholdPct = 3
+
+func isCacheBroken(prevCached, currCached int) bool {
+	if prevCached <= 0 || currCached >= prevCached {
+		return false
+	}
+	drop := int64(prevCached - currCached)
+	return drop*100 >= int64(prevCached)*cacheDropThresholdPct
 }
 
 // InboxNode drains messages from the session queue and injects them into the conversation state.

@@ -2525,6 +2525,61 @@ func TestCacheBrokenRequiresReportedMetrics(t *testing.T) {
 	}
 }
 
+func TestCacheBrokenIgnoresMinorDropBelowThreshold(t *testing.T) {
+	ctx := context.Background()
+	_, reg, perm := newTestToolsRegistry(t)
+	provider := &fakeProvider{stepHandler: func(_ context.Context, _ *llm.Request, turn int) ([]message.AssistantChunk, error) {
+		var m *message.TokenMetrics
+		switch turn {
+		case 1:
+			m = &message.TokenMetrics{TotalTokens: 72000, Tokens: message.TokenDetails{Input: 71000, Output: 1000, CacheRead: 69681}}
+		case 2:
+			// 31-token jitter (~0.044% drop, well below 3%): must not fire CacheBrokenRecord.
+			m = &message.TokenMetrics{TotalTokens: 73000, Tokens: message.TokenDetails{Input: 72663, Output: 337, CacheRead: 69650}}
+		case 3:
+			// ~3.8% drop (69650 -> 67000): exceeds 3% threshold and must emit CacheBrokenRecord.
+			m = &message.TokenMetrics{TotalTokens: 74000, Tokens: message.TokenDetails{Input: 73500, Output: 500, CacheRead: 67000}}
+		}
+		return []message.AssistantChunk{{Content: []message.Block{&message.TextBlock{Text: "answer"}}, Metrics: m, Done: true}}, nil
+	}}
+	h, err := New(Config{ID: "cache-threshold", DB: openTestSQLite(t), Permissions: perm, Queue: &fakeQueue{}, Bash: &fakeBashRunner{}, Spiller: newTestSpiller(t), Logger: log.Default()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.Configure(NodeOptions{
+		Model: newTestModel(t, provider),
+		Tools: reg,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	for turn := 1; turn <= 3; turn++ {
+		var events []api.CacheBrokenRecord
+		for event, err := range h.Stream(ctx, Input{Message: message.NewUserText("request")}) {
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cb, ok := event.(api.CacheBrokenRecord); ok {
+				events = append(events, cb)
+			}
+		}
+		if turn < 3 && len(events) != 0 {
+			t.Fatalf("turn %d: unexpected cache broken events on <3%% jitter: %+v", turn, events)
+		}
+		if turn == 3 && (len(events) != 1 || events[0] != (api.CacheBrokenRecord{PrevCached: 69650, CurrCached: 67000, InputTokens: 73500})) {
+			t.Fatalf("turn %d: expected >=3%% cache drop event, got %+v", turn, events)
+		}
+	}
+
+	// Boundary checks on the 3% predicate directly (2.9% false, 3.0% true).
+	if isCacheBroken(1000, 971) {
+		t.Error("expected 2.9% drop (1000 -> 971) not to trigger cache broken")
+	}
+	if !isCacheBroken(1000, 970) {
+		t.Error("expected 3.0% drop (1000 -> 970) to trigger cache broken")
+	}
+}
+
 func TestIncomingMessageUpdatesContextBeforeRouting(t *testing.T) {
 	ctx := context.Background()
 	_, reg, perm := newTestToolsRegistry(t)
