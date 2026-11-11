@@ -339,7 +339,11 @@ TaskSmith uses structured modal keybindings across its terminal interface:
 | `Tab` | Autocomplete | Inserts or completes the currently highlighted autocomplete suggestion. |
 | `↑` / `↓` | Autocomplete | Navigates candidate suggestions up and down when the autocomplete menu is visible. |
 | `Ctrl+P` / `Ctrl+N` | Autocomplete | Navigates candidate suggestions up and down, mirroring `↑` / `↓`. |
-| `↑` / `↓` / `Ctrl+P` / `Ctrl+N` | Composer | Cycles backward and forward through prompt history when autocomplete is inactive. |
+| `↑` / `↓` / `Ctrl+P` / `Ctrl+N` | Composer | Cycles backward and forward through prompt history. Autocomplete is suppressed while browsing, so recalling a `/command` or `@` mention keeps navigating instead of opening the menu. |
+| `Esc` | Composer (history browsing) | Abandons browsing and restores the draft you were typing before you pressed `↑`. |
+| Any edit key | Composer (history browsing) | Exits browsing mode and keeps the edited entry as your draft; autocomplete resumes. |
+
+While browsing history, the composer's bottom border is replaced by a centered rule reading `───── history (<n>/<total>) ─────`, and the status line hint reads `prompt history · enter to send · esc to cancel`.
 
 ### Modals & Pickers (General)
 

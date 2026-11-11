@@ -2,6 +2,7 @@ package components
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -26,6 +27,9 @@ const maxHistoryEntries = 500
 // BashModeHint is the status line hint shown when interactive bash mode is active.
 const BashModeHint = "activated bash mode · esc to cancel"
 
+// HistoryModeHint is the status line hint shown while browsing prompt history.
+const HistoryModeHint = "prompt history · enter to send · esc to cancel"
+
 // ComposerProps defines the properties for the Composer functional component.
 type ComposerProps struct {
 	Disabled        bool
@@ -44,9 +48,12 @@ type PromptHistory struct {
 	History    []string
 	HistoryIdx int
 	Draft      string
+	Browsing   func() bool
 	Up         func(currentValue string) (string, bool)
 	Down       func() (string, bool)
 	Add        func(text string)
+	Cancel     func() string
+	Exit       func(value string)
 }
 
 // usePromptHistory manages input prompt history navigation, draft preservation,
@@ -55,6 +62,7 @@ func usePromptHistory() PromptHistory {
 	history, setHistory := kitex.UseState([]string(nil))
 	historyIdx, setHistoryIdx := kitex.UseState(0)
 	draft, setDraft := kitex.UseState("")
+	browsing, setBrowsing := kitex.UseState(false)
 
 	// Load persisted history from disk on first mount.
 	kitex.UseLayoutEffect(func() {
@@ -74,10 +82,12 @@ func usePromptHistory() PromptHistory {
 			setDraft(currentValue)
 			newIdx := len(hist) - 1
 			setHistoryIdx(newIdx)
+			setBrowsing(true)
 			return hist[newIdx], true
 		} else if hIdx > 0 {
 			newIdx := hIdx - 1
 			setHistoryIdx(newIdx)
+			setBrowsing(true)
 			return hist[newIdx], true
 		}
 		return "", false
@@ -92,9 +102,11 @@ func usePromptHistory() PromptHistory {
 		if hIdx < len(hist)-1 {
 			newIdx := hIdx + 1
 			setHistoryIdx(newIdx)
+			setBrowsing(true)
 			return hist[newIdx], true
 		} else if hIdx == len(hist)-1 {
 			setHistoryIdx(len(hist))
+			setBrowsing(false)
 			return draft(), true
 		}
 		return "", false
@@ -106,6 +118,7 @@ func usePromptHistory() PromptHistory {
 		if len(hist) > 0 && hist[len(hist)-1] == text {
 			setHistoryIdx(len(hist))
 			setDraft("")
+			setBrowsing(false)
 			return
 		}
 		hist = append(hist, text)
@@ -116,17 +129,37 @@ func usePromptHistory() PromptHistory {
 		setHistory(hist)
 		setHistoryIdx(len(hist))
 		setDraft("")
+		setBrowsing(false)
 		// Fail-safe: disk errors must not crash the REPL.
 		_ = persistHistory(hist)
+	}
+
+	// cancel abandons browsing and restores the pre-navigation draft.
+	cancel := func() string {
+		restored := draft()
+		setHistoryIdx(len(history()))
+		setBrowsing(false)
+		return restored
+	}
+
+	// exit leaves browsing mode after active editing, adopting the edited
+	// text as the new working draft.
+	exit := func(value string) {
+		setHistoryIdx(len(history()))
+		setDraft(value)
+		setBrowsing(false)
 	}
 
 	return PromptHistory{
 		History:    history(),
 		HistoryIdx: historyIdx(),
 		Draft:      draft(),
+		Browsing:   browsing,
 		Up:         up,
 		Down:       down,
 		Add:        add,
+		Cancel:     cancel,
+		Exit:       exit,
 	}
 }
 
@@ -195,17 +228,19 @@ var Composer = trail.FC("Composer", func(props ComposerProps) trail.Node {
 		return s.CtrlCPending
 	})
 	scheme := theme.UseTheme()
+	winSize := trail.UseWindowSize()
 
 	draft, setDraft := kitex.UseState(DraftEdit{})
 	bashMode, setBashMode := kitex.UseState(false)
 	history := usePromptHistory()
 
 	disabled := props.Disabled || hide
+	browsing := history.Browsing()
 	auto := uicomponents.UseAutocomplete(uicomponents.AutocompleteOptions{
 		Engine:   props.Autocomplete,
 		Value:    draft().Value,
 		Cursor:   draft().Cursor,
-		Disabled: disabled || bashMode(),
+		Disabled: disabled || bashMode() || browsing,
 	})
 
 	inputRef := kitex.UseRef[dom.Element](nil)
@@ -230,8 +265,13 @@ var Composer = trail.FC("Composer", func(props ComposerProps) trail.Node {
 		}
 		return draft()
 	}
+	navValue := kitex.UseRef("")
 	syncDraft := func() {
-		if next := readDraft(); next != draft() {
+		next := readDraft()
+		if history.Browsing() && next.Value != navValue.Current {
+			history.Exit(next.Value)
+		}
+		if next != draft() {
 			setDraft(next)
 		}
 	}
@@ -240,7 +280,24 @@ var Composer = trail.FC("Composer", func(props ComposerProps) trail.Node {
 			input.SetValue(next.Value)
 			input.SetSelectionRange(next.Cursor, next.Cursor)
 		}
+		navValue.Current = next.Value
 		setDraft(next)
+	}
+	// recall renders a history entry, entering or leaving bash mode to match
+	// the entry's "!" prefix. The hint follows via the browsing effect.
+	recall := func(value string) {
+		if strings.HasPrefix(value, "!") {
+			if !bashMode() {
+				setBashMode(true)
+			}
+			stripped := strings.TrimPrefix(value, "!")
+			replaceDraft(DraftEdit{Value: stripped, Cursor: len(stripped)})
+			return
+		}
+		if bashMode() {
+			setBashMode(false)
+		}
+		replaceDraft(DraftEdit{Value: value, Cursor: len(value)})
 	}
 
 	// First Ctrl+C clears the current input
@@ -251,8 +308,29 @@ var Composer = trail.FC("Composer", func(props ComposerProps) trail.Node {
 				setBashMode(false)
 				store.SetHint(store.DefaultHint)
 			}
+			if history.Browsing() {
+				history.Exit("")
+			}
 		}
 	}, []any{ctrlCPending})
+
+	// Entering history browsing shows the history hint; leaving it restores
+	// the default hint unless another mode (bash) owns it. Bash mode keeps
+	// its own hint even while browsing. The first run is skipped so mounting
+	// never overwrites a slot view's hint.
+	wasBrowsing := kitex.UseRef(false)
+	kitex.UseEffect(func() {
+		prev := wasBrowsing.Current
+		wasBrowsing.Current = browsing
+		switch {
+		case bashMode():
+			store.SetHint(BashModeHint)
+		case browsing:
+			store.SetHint(HistoryModeHint)
+		case prev:
+			store.SetHint(store.DefaultHint)
+		}
+	}, []any{browsing, bashMode()})
 
 	handleKeyDown := func(e event.Event) {
 		ke, ok := e.(*event.KeyEvent)
@@ -307,6 +385,10 @@ var Composer = trail.FC("Composer", func(props ComposerProps) trail.Node {
 				store.SetHint(store.DefaultHint)
 				return
 			}
+			if browsing {
+				recall(history.Cancel())
+				return
+			}
 			if auto.Dismiss() {
 				return
 			}
@@ -335,7 +417,7 @@ var Composer = trail.FC("Composer", func(props ComposerProps) trail.Node {
 			}
 
 		case ke.MatchString("up", "ctrl+p"):
-			if isCurrent && auto.Up() {
+			if !browsing && isCurrent && auto.Up() {
 				e.PreventDefault()
 				e.StopPropagation()
 				return
@@ -352,24 +434,11 @@ var Composer = trail.FC("Composer", func(props ComposerProps) trail.Node {
 				valToPass = "!" + current.Value
 			}
 			if prevVal, ok := history.Up(valToPass); ok {
-				if strings.HasPrefix(prevVal, "!") {
-					if !bashMode() {
-						setBashMode(true)
-						store.SetHint(BashModeHint)
-					}
-					stripped := strings.TrimPrefix(prevVal, "!")
-					replaceDraft(DraftEdit{Value: stripped, Cursor: len(stripped)})
-				} else {
-					if bashMode() {
-						setBashMode(false)
-						store.SetHint(store.DefaultHint)
-					}
-					replaceDraft(DraftEdit{Value: prevVal, Cursor: len(prevVal)})
-				}
+				recall(prevVal)
 			}
 
 		case ke.MatchString("down", "ctrl+n"):
-			if isCurrent && auto.Down() {
+			if !browsing && isCurrent && auto.Down() {
 				e.PreventDefault()
 				e.StopPropagation()
 				return
@@ -383,20 +452,7 @@ var Composer = trail.FC("Composer", func(props ComposerProps) trail.Node {
 			e.PreventDefault()
 			e.StopPropagation()
 			if nextVal, ok := history.Down(); ok {
-				if strings.HasPrefix(nextVal, "!") {
-					if !bashMode() {
-						setBashMode(true)
-						store.SetHint(BashModeHint)
-					}
-					stripped := strings.TrimPrefix(nextVal, "!")
-					replaceDraft(DraftEdit{Value: stripped, Cursor: len(stripped)})
-				} else {
-					if bashMode() {
-						setBashMode(false)
-						store.SetHint(store.DefaultHint)
-					}
-					replaceDraft(DraftEdit{Value: nextVal, Cursor: len(nextVal)})
-				}
+				recall(nextVal)
 			}
 
 		case ke.MatchString("shift+enter", "alt+enter"):
@@ -468,7 +524,11 @@ var Composer = trail.FC("Composer", func(props ComposerProps) trail.Node {
 		return nil
 	}, []any{})
 
-	border := style.SingleBorder().Top(true).Bottom(true).Left(false).Right(false).Color(scheme.Color.Border.Default)
+	borderCol := scheme.Color.Border.Focus
+	if disabled {
+		borderCol = scheme.Color.Border.Default
+	}
+	border := style.SingleBorder().Top(true).Bottom(!browsing).Left(false).Right(false).Color(borderCol)
 
 	composerStyle := style.S().
 		Border(border).
@@ -516,6 +576,20 @@ var Composer = trail.FC("Composer", func(props ComposerProps) trail.Node {
 				OnChange: func(event.Event) { syncDraft() },
 			}),
 		),
+		kitex.If(browsing, func() trail.Node {
+			label := fmt.Sprintf(" history (%d/%d) ", history.HistoryIdx+1, len(history.History))
+			width := winSize.Width
+			if width <= 0 {
+				width = 40
+			}
+			side := max(1, (width-len(label))/2)
+			rule := strings.Repeat("─", side) + label + strings.Repeat("─", side)
+			return trail.Box(trail.BoxProps{
+				Style: style.S().Width(style.Percent(100)),
+			}, trail.Span(trail.SpanProps{
+				Style: style.S().Foreground(borderCol).WhiteSpace(style.WhiteSpacePre),
+			}, trail.Text(rule)))
+		}),
 		uicomponents.Autocomplete(uicomponents.AutocompleteProps{
 			State: auto,
 			Views: props.CompletionViews,

@@ -501,6 +501,195 @@ func TestComposerBashModeSubmitAndHistory(t *testing.T) {
 	}
 }
 
+func TestComposerHistoryPositionIndicator(t *testing.T) {
+	xdg.SetTestEnv(t.TempDir(), "tasksmith")
+	defer xdg.ClearCache()
+	store.ClearSlot()
+	store.ResetApp()
+	defer store.ClearSlot()
+	defer store.ResetApp()
+
+	if err := persistHistory([]string{"cmd 1", "cmd 2"}); err != nil {
+		t.Fatalf("persistHistory: %v", err)
+	}
+
+	inst, b := createComposerInstance(t, ComposerProps{})
+
+	// Before browsing, no indicator and the default hint.
+	if out := testutils.SurfaceText(b); strings.Contains(out, "history (") {
+		t.Fatalf("expected no indicator before browsing, got:\n%s", out)
+	}
+	if store.GetApp().Hint != store.DefaultHint {
+		t.Fatalf("expected hint %q, got %q", store.DefaultHint, store.GetApp().Hint)
+	}
+
+	// First Up recalls the most recent entry with its position.
+	pressKey(inst, key.KeyUp, 0)
+	out := testutils.SurfaceText(b)
+	if !strings.Contains(out, "cmd 2") || !strings.Contains(out, "history (2/2)") {
+		t.Fatalf("expected 'cmd 2' with indicator (2/2), got:\n%s", out)
+	}
+	if !strings.Contains(out, "───── history (2/2) ─────") {
+		t.Fatalf("expected rule-style indicator, got:\n%s", out)
+	}
+	if store.GetApp().Hint != HistoryModeHint {
+		t.Fatalf("expected hint %q while browsing, got %q", HistoryModeHint, store.GetApp().Hint)
+	}
+
+	// Second Up moves to the oldest entry.
+	pressKey(inst, key.KeyUp, 0)
+	if out := testutils.SurfaceText(b); !strings.Contains(out, "history (1/2)") {
+		t.Fatalf("expected indicator (1/2), got:\n%s", out)
+	}
+
+	// Down back to the newest, then Down past the end exits browsing.
+	pressKey(inst, key.KeyDown, 0)
+	if out := testutils.SurfaceText(b); !strings.Contains(out, "history (2/2)") {
+		t.Fatalf("expected indicator (2/2) after Down, got:\n%s", out)
+	}
+	pressKey(inst, key.KeyDown, 0)
+	if out := testutils.SurfaceText(b); strings.Contains(out, "history (") {
+		t.Fatalf("expected indicator gone after leaving history, got:\n%s", out)
+	}
+	if store.GetApp().Hint != store.DefaultHint {
+		t.Fatalf("expected hint restored to %q, got %q", store.DefaultHint, store.GetApp().Hint)
+	}
+}
+
+func TestComposerHistoryBrowsingSuppressesAutocomplete(t *testing.T) {
+	xdg.SetTestEnv(t.TempDir(), "tasksmith")
+	defer xdg.ClearCache()
+	store.ClearSlot()
+	store.ResetApp()
+	defer store.ClearSlot()
+	defer store.ResetApp()
+
+	// Seed history with entries that would trigger the "@" autocomplete source.
+	if err := persistHistory([]string{"@alpha", "@apex"}); err != nil {
+		t.Fatalf("persistHistory: %v", err)
+	}
+
+	engine := autocomplete.New()
+	if err := engine.Register(autocomplete.Source{
+		Name:    "refs",
+		Trigger: "@",
+		Complete: autocomplete.Static(
+			autocomplete.Candidate{Value: "alpha"},
+			autocomplete.Candidate{Value: "alpine"},
+			autocomplete.Candidate{Value: "apex"},
+		),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var submitted string
+	inst, b := createComposerInstance(t, ComposerProps{
+		Autocomplete: engine,
+		OnSubmit:     func(text string) { submitted = text },
+	})
+
+	// Navigate to "@apex": the popup must not steal navigation.
+	pressKey(inst, key.KeyUp, 0)
+	waitForAutocomplete(t, inst, func() bool {
+		out := testutils.SurfaceText(b)
+		return strings.Contains(out, "@apex") && strings.Contains(out, "history (2/2)")
+	}, "recalled '@apex' with indicator")
+
+	// Give any (incorrectly) triggered completion query time to render.
+	for range 10 {
+		inst.Frame()
+	}
+	if out := testutils.SurfaceText(b); strings.Contains(out, "Keyboard:") || strings.Contains(out, "alpine") {
+		t.Fatalf("expected autocomplete suppressed while browsing history, got:\n%s", out)
+	}
+
+	// Up continues history navigation instead of moving the popup selection.
+	pressKey(inst, key.KeyUp, 0)
+	if out := testutils.SurfaceText(b); !strings.Contains(out, "history (1/2)") || !strings.Contains(out, "@alpha") {
+		t.Fatalf("expected '@alpha' with indicator (1/2), got:\n%s", out)
+	}
+
+	// Enter submits the recalled entry rather than accepting a completion.
+	pressKey(inst, key.KeyEnter, 0)
+	if submitted != "@alpha" {
+		t.Fatalf("expected submitted '@alpha', got %q", submitted)
+	}
+}
+
+func TestComposerHistoryEscRestoresDraft(t *testing.T) {
+	xdg.SetTestEnv(t.TempDir(), "tasksmith")
+	defer xdg.ClearCache()
+	store.ClearSlot()
+	store.ResetApp()
+	defer store.ClearSlot()
+	defer store.ResetApp()
+
+	if err := persistHistory([]string{"cmd 1"}); err != nil {
+		t.Fatalf("persistHistory: %v", err)
+	}
+
+	inst, b := createComposerInstance(t, ComposerProps{})
+
+	typeText(inst, "wip draft")
+	pressKey(inst, key.KeyUp, 0)
+	if out := testutils.SurfaceText(b); !strings.Contains(out, "cmd 1") {
+		t.Fatalf("expected recalled 'cmd 1', got:\n%s", out)
+	}
+
+	// Esc abandons browsing and restores the pre-navigation draft.
+	pressKey(inst, key.KeyEsc, 0)
+	out := testutils.SurfaceText(b)
+	if !strings.Contains(out, "wip draft") {
+		t.Fatalf("expected draft 'wip draft' restored, got:\n%s", out)
+	}
+	if strings.Contains(out, "history (") {
+		t.Fatalf("expected indicator gone after esc, got:\n%s", out)
+	}
+	if store.GetApp().Hint != store.DefaultHint {
+		t.Fatalf("expected hint restored to %q, got %q", store.DefaultHint, store.GetApp().Hint)
+	}
+}
+
+func TestComposerHistoryEditExitsBrowsing(t *testing.T) {
+	xdg.SetTestEnv(t.TempDir(), "tasksmith")
+	defer xdg.ClearCache()
+	store.ClearSlot()
+	store.ResetApp()
+	defer store.ClearSlot()
+	defer store.ResetApp()
+
+	if err := persistHistory([]string{"first", "second"}); err != nil {
+		t.Fatalf("persistHistory: %v", err)
+	}
+
+	inst, b := createComposerInstance(t, ComposerProps{})
+
+	pressKey(inst, key.KeyUp, 0)
+	if out := testutils.SurfaceText(b); !strings.Contains(out, "second") {
+		t.Fatalf("expected recalled 'second', got:\n%s", out)
+	}
+
+	// Editing the recalled entry exits browsing mode and keeps the edit.
+	typeText(inst, "!")
+	inst.Frame()
+	out := testutils.SurfaceText(b)
+	if !strings.Contains(out, "second!") {
+		t.Fatalf("expected edited 'second!' to be kept, got:\n%s", out)
+	}
+	if strings.Contains(out, "history (") {
+		t.Fatalf("expected indicator gone after editing, got:\n%s", out)
+	}
+	if store.GetApp().Hint != store.DefaultHint {
+		t.Fatalf("expected hint restored to %q after edit, got %q", store.DefaultHint, store.GetApp().Hint)
+	}
+
+	// Up after editing starts a fresh browse from the end of history.
+	pressKey(inst, key.KeyUp, 0)
+	if out := testutils.SurfaceText(b); !strings.Contains(out, "history (2/2)") {
+		t.Fatalf("expected indicator (2/2) on fresh browse, got:\n%s", out)
+	}
+}
+
 // waitForAutocomplete drives frames until cond holds or the deadline elapses.
 func waitForAutocomplete(t *testing.T, inst *trail.Instance, cond func() bool, msg string) {
 	t.Helper()

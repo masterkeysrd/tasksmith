@@ -98,7 +98,7 @@ As the agent works, the transcript streams live updates directly into your termi
 
 The bottom composer is your command center:
 - **Multi-line Input**: Type naturally. Press `Shift+Enter` (or `Alt+Enter`) to insert a new line. Press `Enter` to submit your prompt.
-- **Prompt History**: Press `Up` or `Down` at the beginning/end of your input to cycle through previous prompts. History is persisted across sessions in `~/.local/state/tasksmith/repl.jsonl`.
+- **Prompt History**: Press `Up` or `Down` at the beginning/end of your input to cycle through previous prompts. While browsing, the composer's bottom border becomes a position rule (`───── history (3/42) ─────`) and autocomplete stays closed, so recalling a `/command` or `@` mention won't pop the completion menu. Press `Esc` to abandon browsing and get back the draft you were typing, or just start typing to keep the recalled entry as your new draft. History is persisted across sessions in `~/.local/state/tasksmith/repl.jsonl`.
 - **Instant Bash Mode**: Type `!` as the first character on an empty composer line to enter interactive bash mode. The prompt updates to `! ` with a hint (`activated bash mode · esc to cancel`), allowing you to run shell commands directly through the daemon.
 - **Permission Mode Cycling**: Press `Shift+Tab` to instantly cycle the active permission mode (`default` $\to$ `accept_edits` $\to$ `plan` $\to$ `ask` $\to$ `auto`).
 - **Interrupt / Cancel**: Press `Esc` while an agent is streaming to immediately halt generation and cancel running tools. Press `Ctrl+C` once to clear input, or twice within 2 seconds to exit the TUI.
