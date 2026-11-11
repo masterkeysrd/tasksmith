@@ -162,3 +162,60 @@ func TestBuiltinSkillDiscoveryAndFallback(t *testing.T) {
 		t.Fatalf("fallback render: %v", err)
 	}
 }
+
+// TestBuiltinInitCommandResolves guards the /init slash command end-to-end on
+// the daemon side: the built-in command must be listed for the CLI registry,
+// resolve for the main agent, and carry the AGENTS.md authoring skill.
+func TestBuiltinInitCommandResolves(t *testing.T) {
+	setupTestXDG(t)
+	ws, err := Open(context.Background(), t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	cat := ws.Catalog()
+
+	cmd, ok := cat.GetCommand("init")
+	if !ok {
+		t.Fatal("built-in init command missing")
+	}
+	if cmd.Namespace != warp.NamespaceSystem {
+		t.Fatalf("init namespace = %q, want %q", cmd.Namespace, warp.NamespaceSystem)
+	}
+	found := false
+	for _, listed := range cat.Commands() {
+		if listed.Name == "init" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("init command not listed for CLI registration")
+	}
+
+	ref := cmd.Def.QualifiedName()
+	if ref == "" {
+		ref = cmd.Def.Metadata.Name
+	}
+	resolved, err := cat.ResolveCommand("main", ref)
+	if err != nil {
+		t.Fatalf("resolve init for main agent: %v", err)
+	}
+	if resolved.Agent == nil {
+		t.Fatal("init resolved without an agent")
+	}
+	skillFound := false
+	for _, sk := range resolved.Skills {
+		if sk.Metadata.Name == "tasksmith-customizations" {
+			skillFound = true
+		}
+	}
+	if !skillFound {
+		t.Fatal("init command does not carry the tasksmith-customizations skill")
+	}
+	builtinDir, err := EnsureBuiltinDir()
+	if err != nil {
+		t.Fatalf("EnsureBuiltinDir: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(builtinDir, "skills", "tasksmith-customizations", "references", "agents-md.md")); err != nil {
+		t.Fatalf("agents-md reference missing: %v", err)
+	}
+}
