@@ -5,9 +5,10 @@ import (
 	"strings"
 )
 
-// Version holds the application version string. It can be overridden at build
-// time using -ldflags="-X github.com/masterkeysrd/tasksmith/internal/version.Version=vX.Y.Z".
-var Version = "v0.1.0"
+// Version holds the application version string. Release builds stamp it via
+// -ldflags="-X github.com/masterkeysrd/tasksmith/internal/version.Version=vX.Y.Z"
+// (see .goreleaser.yaml); the default marks unreleased development builds.
+var Version = "v0.0.3-dev"
 
 // Get returns the running version of TaskSmith, normalized to include the 'v' prefix.
 func Get() string {

@@ -1,2 +1,4 @@
 # Environment variables and secrets
 env.sh
+# Added by goreleaser init:
+dist/
