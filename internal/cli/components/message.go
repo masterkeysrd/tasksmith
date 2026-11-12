@@ -8,6 +8,7 @@ import (
 	"github.com/masterkeysrd/kite/style"
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/cli/store"
+	uicomponents "github.com/masterkeysrd/tasksmith/internal/ui/components"
 	"github.com/masterkeysrd/tasksmith/internal/ui/theme"
 )
 
@@ -113,6 +114,16 @@ func messageParts(message store.Message) []trail.Node {
 							Style: style.S().Bold(true).Foreground(scheme.Color.Text.Secondary),
 						}, trail.Text(fmt.Sprintf("[Skill: %s]", skillName))),
 					)
+				} else if len(message.Attachments) > 0 {
+					node = uicomponents.Markdown(uicomponents.MarkdownProps{
+						Source:      text,
+						Attachments: message.Attachments,
+						Style: style.S().
+							WhiteSpace(style.WhiteSpacePreWrap).
+							OverflowWrap(style.OverflowWrapAnywhere).
+							Bold(true).
+							Foreground(scheme.Color.Icon.Primary),
+					})
 				} else {
 					node = trail.Span(trail.SpanProps{
 						Style: style.S().

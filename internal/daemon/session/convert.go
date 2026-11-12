@@ -8,6 +8,7 @@ import (
 	"github.com/masterkeysrd/loom/message"
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/core/uuid"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/harness"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/timeline"
 )
 
@@ -173,6 +174,10 @@ func ToAPIMessage(msg message.Message) (*api.Message, error) {
 			}
 			out.StructuredContent = data
 		}
+	}
+
+	if atts := harness.AttachmentsOf(msg); len(atts) > 0 {
+		out.Attachments = slices.Clone(atts)
 	}
 
 	return out, nil

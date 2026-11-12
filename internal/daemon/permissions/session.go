@@ -376,9 +376,13 @@ func (s *sessionManager) Evaluate(plan *tools.Plan) (tools.AccessDecision, *api.
 	return tools.AccessAsk, req, nil
 }
 
-// evaluatePolicy computes the effective [warp.ToolPolicyAction] for plan by
+// EvaluatePolicy computes the effective [warp.ToolPolicyAction] for plan by
 // combining the workspace policy ceiling with the active agent's policy
 // ceiling, returning the stricter of the two (allow < ask < deny).
+func EvaluatePolicy(plan *tools.Plan, wsPolicies, agentPolicies *warp.Policies, ws *workspace.Workspace) warp.ToolPolicyAction {
+	return evaluatePolicy(plan, wsPolicies, agentPolicies, ws)
+}
+
 func evaluatePolicy(plan *tools.Plan, wsPolicies, agentPolicies *warp.Policies, ws *workspace.Workspace) warp.ToolPolicyAction {
 	var wsTool *warp.Tool
 	if ws != nil && ws.Catalog() != nil {

@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	"github.com/masterkeysrd/tasksmith/api"
-	"github.com/masterkeysrd/tasksmith/internal/core/strutils"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/std"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tools"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/workspace"
@@ -103,7 +102,7 @@ func (t *loadSkillTool) Execute(_ context.Context, in api.LoadSkillInput) (api.L
 		skillPath = t.ws.PortablePath(sk.Directory)
 	}
 
-	instructions, truncated := truncateSkillInstructions(rendered, skillPath)
+	instructions, truncated := tools.TruncateSkillInstructions(rendered, skillPath)
 
 	out := api.LoadSkillOutput{
 		Skill:        sk.Metadata.Name,
@@ -174,16 +173,4 @@ func (t *loadSkillTool) derivedDeferredSet() map[string]bool {
 		set[strings.ToLower(name)] = true
 	}
 	return set
-}
-
-func truncateSkillInstructions(rendered, skillPath string) (string, bool) {
-	head, truncated := strutils.TruncateHead(rendered, tools.DefaultSpillMaxLines, tools.DefaultSpillMaxBytes)
-	if !truncated {
-		return rendered, false
-	}
-
-	if strings.TrimSpace(skillPath) != "" {
-		return fmt.Sprintf("%s\n... [skill instructions truncated — use `ls`, `glob`, `grep`, and `view` (with offset) in %s to inspect the skill files and remaining content] ...", head, skillPath), true
-	}
-	return fmt.Sprintf("%s\n... [skill instructions truncated — use `ls`, `glob`, `grep`, and `view` (with offset) to inspect the skill files and remaining content] ...", head), true
 }

@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"sync/atomic"
 )
 
@@ -28,6 +29,8 @@ type session struct {
 	procCap     *sandboxProc
 	netCap      *sandboxNet
 	closed      atomic.Bool
+	watchersMu  sync.Mutex
+	watchers    map[*sandboxWatcher]struct{}
 }
 
 // New validates cfg and initializes a new confined Sandbox instance.
@@ -101,6 +104,7 @@ func New(cfg Config) (Sandbox, error) {
 		realTempDir: realTempDir,
 		cfg:         cfg,
 		root:        root,
+		watchers:    make(map[*sandboxWatcher]struct{}),
 	}
 
 	s.fsCap = newSandboxFS(s)
@@ -360,13 +364,15 @@ func (s *session) downloadFile(ctx context.Context, relSrc, hostDst string, perm
 	return closeErr
 }
 
-// Close terminates all active child processes and closes the os.Root handle.
+// Close terminates all active child processes, stops all active watchers,
+// and closes the os.Root handle.
 // Calling Close multiple times is safe and idempotent.
 func (s *session) Close() error {
 	if !s.closed.CompareAndSwap(false, true) {
 		return nil
 	}
 
+	s.closeWatchers()
 	s.netCap.closeIdleConnections()
 	procErr := s.procCap.closeAll()
 	rootErr := s.root.Close()
@@ -381,4 +387,39 @@ func (s *session) Close() error {
 		tempErr = os.RemoveAll(s.tempDir)
 	}
 	return errors.Join(procErr, rootErr, tempErr)
+}
+
+func (s *session) registerWatcher(w *sandboxWatcher) bool {
+	if s.closed.Load() {
+		return false
+	}
+	s.watchersMu.Lock()
+	defer s.watchersMu.Unlock()
+	if s.closed.Load() || s.watchers == nil {
+		return false
+	}
+	s.watchers[w] = struct{}{}
+	return true
+}
+
+func (s *session) unregisterWatcher(w *sandboxWatcher) {
+	s.watchersMu.Lock()
+	defer s.watchersMu.Unlock()
+	if s.watchers != nil {
+		delete(s.watchers, w)
+	}
+}
+
+func (s *session) closeWatchers() {
+	s.watchersMu.Lock()
+	active := make([]*sandboxWatcher, 0, len(s.watchers))
+	for w := range s.watchers {
+		active = append(active, w)
+	}
+	s.watchers = nil
+	s.watchersMu.Unlock()
+
+	for _, w := range active {
+		_ = w.Close()
+	}
 }

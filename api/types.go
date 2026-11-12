@@ -22,6 +22,46 @@ type Workspace struct {
 	IsRestricted bool     `json:"is_restricted,omitempty"`
 }
 
+// WorkspaceFile describes a file or directory in the workspace available for context mention.
+type WorkspaceFile struct {
+	Path      string `json:"path"`                 // Workspace-relative slash path; directories do NOT need trailing slash here (note: @file:<dir>/ uses trailing slash in prompt tokens!)
+	ShortPath string `json:"short_path,omitempty"` // Shortest unique slash-delimited suffix across the workspace (directories end with "/")
+	Name      string `json:"name"`                 // Basename
+	Dir       string `json:"dir,omitempty"`        // Parent directory ("" for root items)
+	IsDir     bool   `json:"is_dir,omitempty"`     // True when entry is a directory
+	Recent    bool   `json:"recent,omitempty"`     // True when recently read/modified in the session
+	Allowed   bool   `json:"allowed"`              // False when blocked by explicit workspace/agent policies or deny rules
+}
+
+// AttachmentKind discriminates the resource kind of an [Attachment].
+type AttachmentKind string
+
+const (
+	AttachmentFile   AttachmentKind = "file"
+	AttachmentRule   AttachmentKind = "rule"
+	AttachmentMCP    AttachmentKind = "mcp"
+	AttachmentSymbol AttachmentKind = "symbol"
+	AttachmentSkill  AttachmentKind = "skill"
+)
+
+// Attachment binds an inline reference token in a user message to its canonical workspace target.
+type Attachment struct {
+	Kind            AttachmentKind `json:"kind"`
+	Ref             string         `json:"ref,omitempty"`              // Token in user text, e.g. "@composer.go", "@rule:go-verification-gate", "@mcp:notes:notes://spec-1"
+	Target          string         `json:"target"`                     // Canonical workspace-relative path (trailing "/" for dirs), rule name, "<server>:<uri>", etc.
+	StartLine       int            `json:"start_line,omitempty"`       // Optional 1-based start line for file/symbol slices
+	EndLine         int            `json:"end_line,omitempty"`         // Optional 1-based end line for file/symbol slices
+	AllowProhibited bool           `json:"allow_prohibited,omitempty"` // True when an interactive user explicitly confirmed a prohibited MCP resource once
+}
+
+// ListFilesRequest configures a workspace file search or listing.
+type ListFilesRequest struct {
+	Query         string `json:"query,omitempty"`
+	SessionID     string `json:"session_id,omitempty"`
+	Limit         int    `json:"limit,omitempty"`
+	IncludeHidden *bool  `json:"include_hidden,omitempty"` // Defaults to true (excluding .git and .env secrets)
+}
+
 // TrustStatus summarizes trust and executable configuration status for a directory.
 type TrustStatus struct {
 	Path               string                  `json:"path"`
@@ -644,6 +684,7 @@ type Message struct {
 	Name              string          `json:"name,omitempty"`
 	IsError           bool            `json:"is_error,omitempty"`
 	CreatedAt         time.Time       `json:"created_at,omitzero"`
+	Attachments       []Attachment    `json:"attachments,omitempty"`
 }
 
 // Chunk represents an incremental streaming assistant delta.
@@ -670,13 +711,14 @@ type CompactRequest struct {
 
 // SendRequest specifies the user message payload or permission decision to submit to the session.
 type SendRequest struct {
-	ID       string              `json:"id,omitempty"`
-	Content  string              `json:"content,omitempty"`
-	Blocks   []Block             `json:"blocks,omitempty"`
-	Command  string              `json:"command,omitempty"`
-	Decision *PermissionDecision `json:"decision,omitempty"`
-	Question *QuestionResponse   `json:"question,omitempty"`
-	Compact  *CompactRequest     `json:"compact,omitempty"`
+	ID          string              `json:"id,omitempty"`
+	Content     string              `json:"content,omitempty"`
+	Blocks      []Block             `json:"blocks,omitempty"`
+	Command     string              `json:"command,omitempty"`
+	Decision    *PermissionDecision `json:"decision,omitempty"`
+	Question    *QuestionResponse   `json:"question,omitempty"`
+	Compact     *CompactRequest     `json:"compact,omitempty"`
+	Attachments []Attachment        `json:"attachments,omitempty"`
 }
 
 // PermissionMode controls the session-wide tool approval policy.

@@ -216,6 +216,16 @@ func TestClientAllMethodsOverUnixSocket(t *testing.T) {
 		}
 		_ = json.NewEncoder(w).Encode(api.Agent{Name: r.PathValue("name"), Thinking: &api.ThinkingSetting{Type: "effort", Effort: "high"}})
 	})
+	mux.HandleFunc("GET /v1/workspace/files", func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get(api.HeaderCWD) != "/ws" {
+			http.Error(w, "bad header", http.StatusBadRequest)
+			return
+		}
+		q := r.URL.Query().Get("q")
+		_ = json.NewEncoder(w).Encode([]api.WorkspaceFile{
+			{Path: "main.go", Name: "main.go", IsDir: false, Allowed: true, Recent: q == "recent"},
+		})
+	})
 	mux.HandleFunc("GET /v1/models", func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get(api.HeaderCWD) != "/ws" {
 			http.Error(w, "bad header", http.StatusBadRequest)
@@ -435,6 +445,11 @@ func TestClientAllMethodsOverUnixSocket(t *testing.T) {
 	perms, err := c.Permissions(ctx)
 	if err != nil || len(perms.Project.Allow) != 1 || perms.Project.Allow[0] != "bash(go *)" {
 		t.Errorf("Permissions = (%+v, %v)", perms, err)
+	}
+
+	files, err := c.ListWorkspaceFiles(ctx, api.ListFilesRequest{Query: "recent", Limit: 10})
+	if err != nil || len(files) != 1 || files[0].Path != "main.go" || !files[0].Recent {
+		t.Errorf("ListWorkspaceFiles = (%+v, %v)", files, err)
 	}
 
 	addResp, err := c.AddPermissionRule(ctx, api.PermissionRuleRequest{

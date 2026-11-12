@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os/exec"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -305,6 +306,10 @@ type mcpTarget struct {
 	allowed bool
 	// args carries rendered prompt arguments when the target is submitted.
 	args map[string]string
+	// rawText preserves the original user message when attaching an @mcp: resource.
+	rawText string
+	// attachments carries composer attachment bindings typed alongside the MCP ref.
+	attachments []api.Attachment
 }
 
 // ref renders the composer reference for the target, e.g.
@@ -461,13 +466,49 @@ func resolveMCPSubmission(text string) (target mcpTarget, remainder string, refe
 	if len(spans) == 0 {
 		return mcpTarget{}, "", false, nil
 	}
-	if len(spans) > 1 {
-		return mcpTarget{}, "", true, fmt.Errorf("run one MCP reference at a time (found %d in this message)", len(spans))
-	}
 	var servers []api.MCPServer
 	if cached := store.GetApp().MCPServers; cached != nil {
 		servers = *cached
 	}
+
+	if len(spans) > 1 {
+		// Multiple references are permitted only when every reference on a known
+		// server is an allowed @mcp: resource (which requires no interactive prompt
+		// or confirmation and binds cleanly as AttachmentMCP).
+		var knownAllowed int
+		for _, sp := range spans {
+			sName, kind, item, _, ok := parseMCPRef(text[sp.start:sp.end])
+			if !ok {
+				continue
+			}
+			known := false
+			for _, srv := range servers {
+				if strings.EqualFold(srv.Name, sName) {
+					known = true
+					break
+				}
+			}
+			if !known {
+				continue
+			}
+			if kind != mcpTargetResource {
+				return mcpTarget{}, "", true, fmt.Errorf("run one MCP reference at a time (found %d in this message)", len(spans))
+			}
+			resTarget, found := mcpTargetFor(servers, sName, kind, item)
+			if !found {
+				return mcpTarget{}, "", true, fmt.Errorf("MCP resource %q was not found on server %q (run /mcp to inspect it)", item, sName)
+			}
+			if !resTarget.allowed {
+				return mcpTarget{}, "", true, fmt.Errorf("run one MCP reference at a time (found %d in this message)", len(spans))
+			}
+			knownAllowed++
+		}
+		if knownAllowed == 0 {
+			return mcpTarget{}, "", false, nil
+		}
+		return mcpTarget{kind: mcpTargetResource, allowed: true, rawText: text}, text, true, nil
+	}
+
 	span := spans[0]
 	serverName, kind, item, _, ok := parseMCPRef(text[span.start:span.end])
 	if !ok {
@@ -493,6 +534,7 @@ func resolveMCPSubmission(text string) (target mcpTarget, remainder string, refe
 		}
 		return mcpTarget{}, "", true, fmt.Errorf("MCP %s %q was not found on server %q (run /mcp to inspect it)", noun, item, serverName)
 	}
+	target.rawText = text
 	remainder = strings.TrimSpace(strings.Join([]string{
 		strings.TrimSpace(text[:span.start]),
 		strings.TrimSpace(text[span.end:]),
@@ -504,7 +546,7 @@ func resolveMCPSubmission(text string) (target mcpTarget, remainder string, refe
 // reference. Allowed items run immediately; prohibited ones present the Option B
 // confirmation. It reports whether the line was handled, so the caller only
 // forwards an ordinary message when this returns false.
-func SubmitMCPReference(text string) bool {
+func SubmitMCPReference(text string, attachments ...api.Attachment) bool {
 	target, remainder, referenced, err := resolveMCPSubmission(text)
 	if err != nil {
 		store.AppendError("MCP", err.Error())
@@ -513,6 +555,7 @@ func SubmitMCPReference(text string) bool {
 	if !referenced {
 		return false
 	}
+	target.attachments = attachments
 	confirmMCPSubmission(target, remainder)
 	return true
 }
@@ -659,39 +702,38 @@ func submitMCPPrompt(target mcpTarget, suffix string) {
 		if trimmed := strings.TrimSpace(suffix); trimmed != "" {
 			text += "\n\n" + trimmed
 		}
-		store.Send(text)
+		store.SendWithUserText(text, suffix, target.attachments...)
 	})
 }
 
-// attachMCPResource reads an MCP resource and submits its content as the user's
-// turn alongside any text the user typed after the reference.
-func attachMCPResource(target mcpTarget, suffix string) {
-	c := store.Client()
-	if c == nil {
-		store.AppendError("MCP", "No daemon connection; cannot read MCP resource "+target.ref())
-		return
+// attachMCPResource binds an MCP resource as a structured AttachmentMCP on the
+// user's turn so the daemon resolves and injects it into <system_reminders>
+// while preserving the inline @mcp: reference in the transcript.
+func attachMCPResource(target mcpTarget, _ string) {
+	msgText := strings.TrimSpace(target.rawText)
+	if msgText == "" {
+		msgText = target.ref()
 	}
-	goMCPBackground(func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		resp, err := c.ReadMCPResource(ctx, target.server.Name, api.MCPResourceRequest{
-			URI:             target.uri,
+	atts := slices.Clone(target.attachments)
+	if target.server.Name != "" && target.uri != "" {
+		att := api.Attachment{
+			Kind:            api.AttachmentMCP,
+			Ref:             target.ref(),
+			Target:          target.server.Name + ":" + target.uri,
 			AllowProhibited: !target.allowed,
-		})
-		if err != nil {
-			store.AppendError("MCP", "Failed to read "+target.ref()+": "+err.Error())
-			return
 		}
-		header := fmt.Sprintf("MCP resource %s from server %q", target.uri, target.server.Name)
-		if resp.MIMEType != "" {
-			header += " (" + resp.MIMEType + ")"
+		replaced := false
+		for i := range atts {
+			if atts[i].Kind == api.AttachmentMCP && (atts[i].Ref == att.Ref || strings.EqualFold(atts[i].Target, att.Target)) {
+				atts[i] = att
+				replaced = true
+			}
 		}
-		text := header + ":\n\n" + resp.Text
-		if trimmed := strings.TrimSpace(suffix); trimmed != "" {
-			text = trimmed + "\n\n" + text
+		if !replaced {
+			atts = append(atts, att)
 		}
-		store.Send(text)
-	})
+	}
+	store.Send(msgText, atts...)
 }
 
 // confirmMCPSubmission presents the Option B flow for a prohibited item: cancel

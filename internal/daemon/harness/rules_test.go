@@ -47,8 +47,8 @@ func newTestMatcher(t *testing.T, rules ...*warp.Rule) *RuleMatcher {
 
 func TestRuleMatcherNilIsNoOp(t *testing.T) {
 	var m *RuleMatcher
-	if r, _, _ := m.MatchUserMessage(message.NewUserText("hello"), State{}); r != nil {
-		t.Error("nil matcher should return nil reminder")
+	if sec, suggested := m.SuggestUserRules(message.NewUserText("hello"), State{}); sec != "" || suggested != nil {
+		t.Error("nil matcher should return empty suggestions")
 	}
 	if _, loaded := m.MatchToolBatch(nil, nil, nil, State{}); loaded != nil {
 		t.Error("nil matcher should return nil loaded")
@@ -65,37 +65,6 @@ func TestRuleMatcherNewRuleMatcherRuleFreeIsNil(t *testing.T) {
 	}
 }
 
-func TestRuleMatcherUserMessageExplicitRef(t *testing.T) {
-	rule := mkTestRule("go-error-handling", 50, warp.RuleTriggers{
-		Keywords: []string{"error"},
-		Globs:    []string{"**/*.go"},
-		Tools:    []string{"bash"},
-		UseWhen:  "When editing Go source files.",
-	}, "Always wrap and propagate errors in Go.")
-	m := newTestMatcher(t, rule)
-
-	msg := message.NewUserText("Please apply @rule:go-error-handling to this file.")
-	reminder, loaded, suggested := m.MatchUserMessage(msg, State{})
-	if reminder == nil {
-		t.Fatalf("expected a reminder for explicit @rule: reference")
-	}
-	if SystemKindOf(reminder) != SystemKindReminder {
-		t.Errorf("reminder SystemKind = %q, want %q", SystemKindOf(reminder), SystemKindReminder)
-	}
-	if !strings.Contains(reminder.GetContent().Text(), "go-error-handling") {
-		t.Errorf("reminder missing rule name, got:\n%s", reminder.GetContent().Text())
-	}
-	if !strings.Contains(reminder.GetContent().Text(), "Always wrap and propagate errors") {
-		t.Errorf("reminder missing rendered instructions, got:\n%s", reminder.GetContent().Text())
-	}
-	if len(loaded) != 1 || loaded[0].Rule != "go-error-handling" || loaded[0].Trigger != "manual" {
-		t.Errorf("unexpected loaded events: %+v", loaded)
-	}
-	if len(suggested) != 0 {
-		t.Errorf("expected no suggestions for explicit ref, got %v", suggested)
-	}
-}
-
 func TestRuleMatcherUserMessageKeywordSuggests(t *testing.T) {
 	rule := mkTestRule("go-error-handling", 50, warp.RuleTriggers{
 		Keywords: []string{"error", "fmt"},
@@ -104,18 +73,15 @@ func TestRuleMatcherUserMessageKeywordSuggests(t *testing.T) {
 	m := newTestMatcher(t, rule)
 
 	// "error" appears as a whole word; keyword matching is case-insensitive.
-	reminder, loaded, suggested := m.MatchUserMessage(message.NewUserText("I need to fix the ERROR handling here."), State{})
-	if reminder == nil {
-		t.Fatalf("expected a suggestion reminder for keyword match")
-	}
-	if len(loaded) != 0 {
-		t.Errorf("keyword match should only suggest, not load; got loaded=%+v", loaded)
+	section, suggested := m.SuggestUserRules(message.NewUserText("I need to fix the ERROR handling here."), State{})
+	if section == "" {
+		t.Fatalf("expected a suggestion section for keyword match")
 	}
 	if len(suggested) != 1 || suggested[0] != "go-error-handling" {
 		t.Errorf("unexpected suggestions: %v", suggested)
 	}
-	if !strings.Contains(reminder.GetContent().Text(), "go-error-handling") {
-		t.Errorf("suggestion reminder missing rule name, got:\n%s", reminder.GetContent().Text())
+	if !strings.Contains(section, "go-error-handling") {
+		t.Errorf("suggestion section missing rule name, got:\n%s", section)
 	}
 }
 
@@ -127,7 +93,7 @@ func TestRuleMatcherKeywordWordBoundary(t *testing.T) {
 
 	// "error" is a substring of "errorless" but not a whole word, so it must
 	// not match.
-	_, _, suggested := m.MatchUserMessage(message.NewUserText("This is an errorless design."), State{})
+	_, suggested := m.SuggestUserRules(message.NewUserText("This is an errorless design."), State{})
 	if len(suggested) != 0 {
 		t.Errorf("substring should not match on word boundary; got %v", suggested)
 	}
@@ -315,11 +281,15 @@ func TestRuleMatcherLoadRuleMarksWithoutReminder(t *testing.T) {
 func TestRuleMatcherCompactionResetsRules(t *testing.T) {
 	state := State{
 		LoadedRules:    []string{"go-error-handling"},
+		LoadedSkills:   []string{"release-runbook"},
 		SuggestedRules: []string{"bash-guard"},
 	}
 	reset := state.ApplyCompaction(StaticContext{}, models.Limits{})
 	if reset.LoadedRules != nil {
 		t.Errorf("compaction should reset LoadedRules, got %v", reset.LoadedRules)
+	}
+	if reset.LoadedSkills != nil {
+		t.Errorf("compaction should reset LoadedSkills, got %v", reset.LoadedSkills)
 	}
 	if reset.SuggestedRules != nil {
 		t.Errorf("compaction should reset SuggestedRules, got %v", reset.SuggestedRules)
@@ -398,11 +368,11 @@ func TestRuleMatcherGenuineUserOnly(t *testing.T) {
 
 	// A synthetic reminder message (SystemKindOf != "") must be ignored.
 	reminder := message.NewUserTextMeta("error", map[string]any{MetaSystemKind: SystemKindReminder})
-	if r, _, _ := m.MatchUserMessage(reminder, State{}); r != nil {
+	if sec, _ := m.SuggestUserRules(reminder, State{}); sec != "" {
 		t.Error("synthetic reminder should not be re-matched")
 	}
 	// A non-user message must be ignored.
-	if r, _, _ := m.MatchUserMessage(&message.Assistant{Content: message.Content{&message.TextBlock{Text: "error"}}}, State{}); r != nil {
+	if sec, _ := m.SuggestUserRules(&message.Assistant{Content: message.Content{&message.TextBlock{Text: "error"}}}, State{}); sec != "" {
 		t.Error("non-user message should not be matched")
 	}
 }

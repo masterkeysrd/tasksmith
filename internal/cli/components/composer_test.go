@@ -2,6 +2,8 @@ package components
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -57,7 +59,7 @@ func TestComposerEnterSubmitsAndClears(t *testing.T) {
 
 	var submitted string
 	inst, b := createComposerInstance(t, ComposerProps{
-		OnSubmit: func(text string) {
+		OnSubmit: func(text string, _ []api.Attachment) {
 			submitted = text
 		},
 	})
@@ -84,7 +86,7 @@ func TestComposerShiftEnterInsertsNewline(t *testing.T) {
 
 	var submitted string
 	inst, b := createComposerInstance(t, ComposerProps{
-		OnSubmit: func(text string) {
+		OnSubmit: func(text string, _ []api.Attachment) {
 			submitted = text
 		},
 	})
@@ -114,7 +116,7 @@ func TestComposerHistoryNavigation(t *testing.T) {
 
 	var submitted []string
 	inst, b := createComposerInstance(t, ComposerProps{
-		OnSubmit: func(text string) {
+		OnSubmit: func(text string, _ []api.Attachment) {
 			submitted = append(submitted, text)
 		},
 	})
@@ -284,7 +286,7 @@ func TestComposerHistoryPersistsToDisk(t *testing.T) {
 	// Instance 1: submit a prompt which is persisted to disk.
 	var submitted []string
 	inst1, _ := createComposerInstance(t, ComposerProps{
-		OnSubmit: func(text string) { submitted = append(submitted, text) },
+		OnSubmit: func(text string, _ []api.Attachment) { submitted = append(submitted, text) },
 	})
 	typeText(inst1, "persisted prompt")
 	pressKey(inst1, key.KeyEnter, 0)
@@ -312,7 +314,7 @@ func TestComposerHistoryMultiLineRoundTrip(t *testing.T) {
 	// Instance 1: submit a multi-line prompt via Shift+Enter.
 	var submitted string
 	inst1, _ := createComposerInstance(t, ComposerProps{
-		OnSubmit: func(text string) { submitted = text },
+		OnSubmit: func(text string, _ []api.Attachment) { submitted = text },
 	})
 	typeText(inst1, "first line")
 	pressKey(inst1, key.KeyEnter, key.ModShift)
@@ -358,8 +360,8 @@ func TestComposerHistoryDeduplication(t *testing.T) {
 	if len(entries) != 1 {
 		t.Fatalf("expected 1 entry after dedup, got %d: %v", len(entries), entries)
 	}
-	if entries[0] != "hello" {
-		t.Fatalf("expected 'hello', got %q", entries[0])
+	if entries[0].Text != "hello" {
+		t.Fatalf("expected 'hello', got %q", entries[0].Text)
 	}
 }
 
@@ -368,9 +370,9 @@ func TestComposerHistoryCap500(t *testing.T) {
 	defer xdg.ClearCache()
 
 	// Write 600 entries directly, then verify loadHistoryFromFile caps at 500.
-	entries := make([]string, 0, 600)
+	entries := make([]HistoryEntry, 0, 600)
 	for i := range 600 {
-		entries = append(entries, fmt.Sprintf("entry-%d", i))
+		entries = append(entries, HistoryEntry{Text: fmt.Sprintf("entry-%d", i)})
 	}
 	if err := persistHistory(entries); err != nil {
 		t.Fatalf("persistHistory: %v", err)
@@ -381,11 +383,11 @@ func TestComposerHistoryCap500(t *testing.T) {
 		t.Fatalf("expected 500 entries after cap, got %d", len(loaded))
 	}
 	// The most recent 500 are entries[100:600].
-	if loaded[0] != "entry-100" {
-		t.Fatalf("expected first entry to be 'entry-100', got %q", loaded[0])
+	if loaded[0].Text != "entry-100" {
+		t.Fatalf("expected first entry to be 'entry-100', got %q", loaded[0].Text)
 	}
-	if loaded[499] != "entry-599" {
-		t.Fatalf("expected last entry to be 'entry-599', got %q", loaded[499])
+	if loaded[499].Text != "entry-599" {
+		t.Fatalf("expected last entry to be 'entry-599', got %q", loaded[499].Text)
 	}
 }
 
@@ -457,7 +459,7 @@ func TestComposerBashModeSubmitAndHistory(t *testing.T) {
 
 	var submitted string
 	inst, b := createComposerInstance(t, ComposerProps{
-		OnSubmit: func(text string) {
+		OnSubmit: func(text string, _ []api.Attachment) {
 			submitted = text
 		},
 	})
@@ -509,7 +511,7 @@ func TestComposerHistoryPositionIndicator(t *testing.T) {
 	defer store.ClearSlot()
 	defer store.ResetApp()
 
-	if err := persistHistory([]string{"cmd 1", "cmd 2"}); err != nil {
+	if err := persistHistory([]HistoryEntry{{Text: "cmd 1"}, {Text: "cmd 2"}}); err != nil {
 		t.Fatalf("persistHistory: %v", err)
 	}
 
@@ -565,7 +567,7 @@ func TestComposerHistoryBrowsingSuppressesAutocomplete(t *testing.T) {
 	defer store.ResetApp()
 
 	// Seed history with entries that would trigger the "@" autocomplete source.
-	if err := persistHistory([]string{"@alpha", "@apex"}); err != nil {
+	if err := persistHistory([]HistoryEntry{{Text: "@alpha"}, {Text: "@apex"}}); err != nil {
 		t.Fatalf("persistHistory: %v", err)
 	}
 
@@ -585,7 +587,7 @@ func TestComposerHistoryBrowsingSuppressesAutocomplete(t *testing.T) {
 	var submitted string
 	inst, b := createComposerInstance(t, ComposerProps{
 		Autocomplete: engine,
-		OnSubmit:     func(text string) { submitted = text },
+		OnSubmit:     func(text string, _ []api.Attachment) { submitted = text },
 	})
 
 	// Navigate to "@apex": the popup must not steal navigation.
@@ -624,7 +626,7 @@ func TestComposerHistoryEscRestoresDraft(t *testing.T) {
 	defer store.ClearSlot()
 	defer store.ResetApp()
 
-	if err := persistHistory([]string{"cmd 1"}); err != nil {
+	if err := persistHistory([]HistoryEntry{{Text: "cmd 1"}}); err != nil {
 		t.Fatalf("persistHistory: %v", err)
 	}
 
@@ -658,7 +660,7 @@ func TestComposerHistoryEditExitsBrowsing(t *testing.T) {
 	defer store.ClearSlot()
 	defer store.ResetApp()
 
-	if err := persistHistory([]string{"first", "second"}); err != nil {
+	if err := persistHistory([]HistoryEntry{{Text: "first"}, {Text: "second"}}); err != nil {
 		t.Fatalf("persistHistory: %v", err)
 	}
 
@@ -783,5 +785,128 @@ func TestComposerAutocompleteCtrlPNavigatesUp(t *testing.T) {
 	pressKey(inst, key.KeyTab, 0)
 	if out := testutils.SurfaceText(b); !strings.Contains(out, "@alpine") {
 		t.Fatalf("expected Ctrl+P to move back to 'alpine', got:\n%s", out)
+	}
+}
+
+func TestComposerHistoryLegacyJSONL(t *testing.T) {
+	xdg.SetTestEnv(t.TempDir(), "tasksmith")
+	defer xdg.ClearCache()
+
+	// Write mixed legacy strings and rich HistoryEntry objects
+	p, err := xdg.HistoryFilePath("repl.jsonl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	content := `"legacy prompt 1"` + "\n" +
+		`{"text":"rich prompt 2","attachments":[{"kind":"file","ref":"@app.go","target":"internal/cli/app.go"}]}` + "\n" +
+		`"legacy prompt 3"` + "\n"
+	if err := os.WriteFile(p, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	loaded := loadHistoryFromFile()
+	if len(loaded) != 3 {
+		t.Fatalf("expected 3 entries, got %d", len(loaded))
+	}
+	if loaded[0].Text != "legacy prompt 1" || len(loaded[0].Attachments) != 0 {
+		t.Fatalf("unexpected entry 0: %+v", loaded[0])
+	}
+	if loaded[1].Text != "rich prompt 2" || len(loaded[1].Attachments) != 1 || loaded[1].Attachments[0].Target != "internal/cli/app.go" {
+		t.Fatalf("unexpected entry 1: %+v", loaded[1])
+	}
+	if loaded[2].Text != "legacy prompt 3" || len(loaded[2].Attachments) != 0 {
+		t.Fatalf("unexpected entry 2: %+v", loaded[2])
+	}
+}
+
+func TestComposerAutocompleteAttachmentTrackingAndHistory(t *testing.T) {
+	xdg.SetTestEnv(t.TempDir(), "tasksmith")
+	defer xdg.ClearCache()
+	store.ClearSlot()
+	store.ResetApp()
+	defer store.ClearSlot()
+	defer store.ResetApp()
+
+	engine := autocomplete.New()
+	if err := engine.Register(autocomplete.Source{
+		Name:    "files",
+		Trigger: "@",
+		Complete: autocomplete.Static(
+			autocomplete.Candidate{
+				Value:      "internal/cli/components/composer.go",
+				InsertText: "composer.go ",
+				Data: api.WorkspaceFile{
+					Path:      "internal/cli/components/composer.go",
+					ShortPath: "composer.go",
+				},
+			},
+		),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	b := mock.New(80, 24)
+	var submittedText string
+	var submittedAtts []api.Attachment
+
+	qc := wind.NewClient()
+	app := trail.SimpleFC("ComposerAttachmentTest", func() trail.Node {
+		return wind.Provider(wind.ProviderProps{Client: qc}, Composer(ComposerProps{
+			Autocomplete: engine,
+			OnSubmit: func(text string, atts []api.Attachment) {
+				submittedText = text
+				submittedAtts = atts
+			},
+		}))
+	})
+	inst, err := trail.New(app(), trail.WithBackend(b))
+	if err != nil {
+		t.Fatalf("trail.New: %v", err)
+	}
+	defer inst.Unmount()
+	inst.Frame()
+
+	// Type "@" and accept candidate via Tab
+	typeText(inst, "@")
+	waitForAutocomplete(t, inst, func() bool {
+		out := testutils.SurfaceText(b)
+		return strings.Contains(out, "composer.go")
+	}, "autocomplete menu with composer.go")
+
+	pressKey(inst, key.KeyTab, 0)
+	inst.Frame()
+
+	// Submit via Enter
+	pressKey(inst, key.KeyEnter, 0)
+	inst.Frame()
+
+	if submittedText != "@composer.go" {
+		t.Fatalf("expected submittedText '@composer.go', got %q", submittedText)
+	}
+	if len(submittedAtts) != 1 {
+		t.Fatalf("expected 1 submitted attachment, got %+v", submittedAtts)
+	}
+	if submittedAtts[0].Kind != api.AttachmentFile || submittedAtts[0].Target != "internal/cli/components/composer.go" {
+		t.Fatalf("unexpected attachment: %+v", submittedAtts[0])
+	}
+
+	// Press Up to recall from history
+	pressKey(inst, key.KeyUp, 0)
+	inst.Frame()
+
+	// Submit recalled entry again and verify attachments restored
+	submittedText = ""
+	submittedAtts = nil
+	pressKey(inst, key.KeyEnter, 0)
+	inst.Frame()
+
+	if submittedText != "@composer.go" {
+		t.Fatalf("expected recalled submittedText '@composer.go', got %q", submittedText)
+	}
+	if len(submittedAtts) != 1 || submittedAtts[0].Target != "internal/cli/components/composer.go" {
+		t.Fatalf("expected restored attachments from history, got %+v", submittedAtts)
 	}
 }

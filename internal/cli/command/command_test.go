@@ -1,13 +1,18 @@
 package command
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"io"
+	"net/http"
 	"strings"
 	"testing"
 
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/client"
 	"github.com/masterkeysrd/tasksmith/internal/cli/store"
+	"github.com/masterkeysrd/tasksmith/internal/tui/testutils"
 	"github.com/masterkeysrd/tasksmith/internal/ui/autocomplete"
 )
 
@@ -544,5 +549,212 @@ func TestAgentTriggerDisplayAndRestriction(t *testing.T) {
 	}
 	if store.GetSession().Config.Agent != "main" {
 		t.Errorf("expected agent main to be set, got %q", store.GetSession().Config.Agent)
+	}
+}
+
+type roundTripperFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripperFunc) RoundTrip(r *http.Request) (*http.Response, error) {
+	return f(r)
+}
+
+func TestRuleAndFileAutocomplete(t *testing.T) {
+	store.SetWorkspaceRules(nil)
+	store.ResetSession()
+	defer store.SetWorkspaceRules(nil)
+	defer store.ResetSession()
+
+	var lastFileQuery string
+	mockHC := &http.Client{
+		Transport: roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+			if strings.HasPrefix(req.URL.Path, "/v1/workspace/rules") {
+				rules := []api.Rule{
+					{Name: "commit-hygiene", Description: "Strict commit rules"},
+				}
+				data, _ := json.Marshal(rules)
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(bytes.NewReader(data)),
+					Header:     make(http.Header),
+				}, nil
+			}
+			if strings.HasPrefix(req.URL.Path, "/v1/skills") {
+				skills := []api.Skill{
+					{Name: "release-runbook", Description: "Step-by-step release procedure"},
+				}
+				data, _ := json.Marshal(skills)
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(bytes.NewReader(data)),
+					Header:     make(http.Header),
+				}, nil
+			}
+			if strings.HasPrefix(req.URL.Path, "/v1/workspace/files") {
+				lastFileQuery = req.URL.Query().Get("q")
+				files := []api.WorkspaceFile{
+					{
+						Path:      "internal/cli/app.go",
+						ShortPath: "cli/app.go",
+						Name:      "app.go",
+						Dir:       "internal/cli",
+						IsDir:     false,
+						Recent:    true,
+						Allowed:   true,
+					},
+					{
+						Path:      "internal/daemon/",
+						ShortPath: "daemon/",
+						Name:      "daemon",
+						Dir:       "internal",
+						IsDir:     true,
+						Recent:    false,
+						Allowed:   true,
+					},
+					{
+						Path:      "secret.key",
+						ShortPath: "secret.key",
+						Name:      "secret.key",
+						Dir:       "",
+						IsDir:     false,
+						Recent:    false,
+						Allowed:   false,
+					},
+				}
+				data, _ := json.Marshal(files)
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(bytes.NewReader(data)),
+					Header:     make(http.Header),
+				}, nil
+			}
+			return &http.Response{
+				StatusCode: http.StatusNotFound,
+				Body:       io.NopCloser(strings.NewReader("not found")),
+				Header:     make(http.Header),
+			}, nil
+		}),
+	}
+	testClient, err := client.New("/tmp/test.sock", client.WithHTTPClient(mockHC), client.WithCWD("/test/ws"))
+	if err != nil {
+		t.Fatalf("New client: %v", err)
+	}
+	store.SetClient(testClient)
+
+	r := NewRegistry()
+	engine := autocomplete.New()
+	for _, source := range r.Sources() {
+		if err := engine.Register(source); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// 1. Test @rule: autocomplete
+	input := "@rule:commit"
+	res, err := engine.Complete(context.Background(), input, len(input))
+	if err != nil {
+		t.Fatalf("Complete @rule: error: %v", err)
+	}
+	if res.Source != "rules" {
+		t.Fatalf("expected source rules, got %q", res.Source)
+	}
+	if len(res.Candidates) != 1 {
+		t.Fatalf("expected 1 candidate, got %d", len(res.Candidates))
+	}
+	if res.Candidates[0].InsertText != "commit-hygiene " {
+		t.Errorf("expected InsertText %q, got %q", "commit-hygiene ", res.Candidates[0].InsertText)
+	}
+	finalText, _, err := res.Apply(0)
+	if err != nil {
+		t.Fatalf("Apply error: %v", err)
+	}
+	if finalText != "@rule:commit-hygiene " {
+		t.Errorf("expected final text %q, got %q", "@rule:commit-hygiene ", finalText)
+	}
+
+	// 1b. Test @skill: autocomplete
+	skillInput := "@skill:release"
+	skillRes, err := engine.Complete(context.Background(), skillInput, len(skillInput))
+	if err != nil {
+		t.Fatalf("Complete @skill: error: %v", err)
+	}
+	if skillRes.Source != "skills" {
+		t.Fatalf("expected source skills, got %q", skillRes.Source)
+	}
+	if len(skillRes.Candidates) != 1 || skillRes.Candidates[0].InsertText != "release-runbook " {
+		t.Fatalf("unexpected @skill: candidates: %+v", skillRes.Candidates)
+	}
+	skillFinalText, _, err := skillRes.Apply(0)
+	if err != nil {
+		t.Fatalf("Apply @skill: error: %v", err)
+	}
+	if skillFinalText != "@skill:release-runbook " {
+		t.Errorf("expected final skill text %q, got %q", "@skill:release-runbook ", skillFinalText)
+	}
+
+	// 2. Test @ file autocomplete
+	fileInput := "@app"
+	fileRes, err := engine.Complete(context.Background(), fileInput, len(fileInput))
+	if err != nil {
+		t.Fatalf("Complete @app error: %v", err)
+	}
+	if fileRes.Source != "files" {
+		t.Fatalf("expected source files, got %q", fileRes.Source)
+	}
+	if len(fileRes.Candidates) != 3 {
+		t.Fatalf("expected 3 candidates, got %d", len(fileRes.Candidates))
+	}
+	// Check first candidate (app.go)
+	if fileRes.Candidates[0].InsertText != "cli/app.go " {
+		t.Errorf("expected InsertText %q, got %q", "cli/app.go ", fileRes.Candidates[0].InsertText)
+	}
+	if !strings.Contains(fileRes.Candidates[0].Description, "recent") {
+		t.Errorf("expected recent in description, got %q", fileRes.Candidates[0].Description)
+	}
+	// Check directory candidate
+	if fileRes.Candidates[1].InsertText != "daemon/ " {
+		t.Errorf("expected directory InsertText %q, got %q", "daemon/ ", fileRes.Candidates[1].InsertText)
+	}
+	// Check prohibited candidate
+	if !strings.Contains(fileRes.Candidates[2].Label, "[Prohibited]") {
+		t.Errorf("expected [Prohibited] label, got %q", fileRes.Candidates[2].Label)
+	}
+
+	// Apply first candidate
+	fileFinalText, _, err := fileRes.Apply(0)
+	if err != nil {
+		t.Fatalf("Apply error: %v", err)
+	}
+	if fileFinalText != "@cli/app.go " {
+		t.Errorf("expected final file text %q, got %q", "@cli/app.go ", fileFinalText)
+	}
+
+	// 3. Editing an already-inserted @file:... token strips the "file:" prefix when querying
+	editInput := "@file:internal/cli/ap"
+	editRes, err := engine.Complete(context.Background(), editInput, len(editInput))
+	if err != nil {
+		t.Fatalf("Complete @file: error: %v", err)
+	}
+	if lastFileQuery != "internal/cli/ap" {
+		t.Errorf("expected query %q, got %q", "internal/cli/ap", lastFileQuery)
+	}
+	editedText, _, err := editRes.Apply(0)
+	if err != nil {
+		t.Fatalf("Apply edited error: %v", err)
+	}
+	if editedText != "@cli/app.go " {
+		t.Errorf("expected edited text %q, got %q", "@cli/app.go ", editedText)
+	}
+
+	// 4. Render CompletionViews["files"] via testutils.Render
+	views := CompletionViews(api.ModeDefault)
+	fileView, ok := views["files"]
+	if !ok {
+		t.Fatalf("expected files view in CompletionViews")
+	}
+	rendered := testutils.Render(t, fileView(fileRes, 0), 100, 20)
+	for _, want := range []string{"app.go", "internal/cli · recent", "daemon/", "secret.key [Prohibited]"} {
+		if !strings.Contains(rendered, want) {
+			t.Errorf("expected rendered file completion view to contain %q, got:\n%s", want, rendered)
+		}
 	}
 }

@@ -36,6 +36,7 @@ type sqliteJournal struct {
 	sessionID string
 	blobsDir  string
 	files     map[string]fileState
+	recent    []string
 	metrics   metrics.Recorder
 }
 
@@ -108,6 +109,7 @@ func New(ctx context.Context, db *sql.DB, sessionID, blobsDir string, opts ...Op
 	}
 	defer entryRows.Close()
 
+	var recent []string
 	for entryRows.Next() {
 		var p, kind, afterHash string
 		if err := entryRows.Scan(&p, &kind, &afterHash); err != nil {
@@ -122,6 +124,7 @@ func New(ctx context.Context, db *sql.DB, sessionID, blobsDir string, opts ...Op
 			hash:    h,
 			changed: true,
 		}
+		recent = updateJournalMRU(recent, normP)
 	}
 	if err := entryRows.Err(); err != nil {
 		return nil, fmt.Errorf("journal: iterate entries: %w", err)
@@ -132,6 +135,7 @@ func New(ctx context.Context, db *sql.DB, sessionID, blobsDir string, opts ...Op
 		sessionID: sessionID,
 		blobsDir:  blobsDir,
 		files:     files,
+		recent:    recent,
 	}
 	for _, opt := range opts {
 		opt(j)
@@ -160,6 +164,7 @@ func (j *sqliteJournal) Delete(ctx context.Context) error {
 	}
 	j.mu.Lock()
 	clear(j.files)
+	j.recent = nil
 	j.mu.Unlock()
 	return nil
 }
@@ -212,6 +217,34 @@ func (j *sqliteJournal) TrackedPaths() []string {
 	return paths
 }
 
+// RecentPaths returns the most recently read or modified file paths in MRU order.
+func (j *sqliteJournal) RecentPaths() []string {
+	j.mu.RLock()
+	defer j.mu.RUnlock()
+	out := make([]string, len(j.recent))
+	copy(out, j.recent)
+	return out
+}
+
+const maxRecentPaths = 100
+
+func updateJournalMRU(recent []string, path string) []string {
+	if path == "" || path == "." {
+		return recent
+	}
+	out := make([]string, 0, min(len(recent)+1, maxRecentPaths))
+	out = append(out, path)
+	for _, p := range recent {
+		if p != path {
+			out = append(out, p)
+			if len(out) >= maxRecentPaths {
+				break
+			}
+		}
+	}
+	return out
+}
+
 // RecordRead records the observed SHA-256 hash of path in memory for
 // Read-Before-Overwrite and Compare-And-Swap verification without persisting to SQLite.
 func (j *sqliteJournal) RecordRead(ctx context.Context, path, hash string) error {
@@ -225,6 +258,7 @@ func (j *sqliteJournal) RecordRead(ctx context.Context, path, hash string) error
 	st := j.files[normPath]
 	st.hash = hash
 	j.files[normPath] = st
+	j.recent = updateJournalMRU(j.recent, normPath)
 	j.mu.Unlock()
 	return nil
 }
@@ -344,6 +378,7 @@ INSERT INTO journal_entries (
 		hash:    afterHash,
 		changed: true,
 	}
+	j.recent = updateJournalMRU(j.recent, normPath)
 	j.mu.Unlock()
 
 	{

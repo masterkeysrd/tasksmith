@@ -31,9 +31,11 @@ type NodeOptions struct {
 	SystemPrompt string
 	Limits       models.Limits
 	Static       StaticContext
-	// Rules, when non-nil, drives smart rule matching: it auto-injects active
-	// workspace rules into <system_reminders> and emits RuleLoaded events.
+	// Rules, when non-nil, drives smart rule matching on tool executions.
 	Rules *RuleMatcher
+	// Attachments, when non-nil, resolves all user-message attachments (files,
+	// directories, rules, skills, MCP resources) and rule triggers into <system_reminders>.
+	Attachments *AttachmentResolver
 }
 
 // Validate checks that required model and tools container dependencies are present.
@@ -404,11 +406,11 @@ func isCacheBroken(prevCached, currCached int) bool {
 // InboxNode drains messages from the session queue and injects them into the conversation state.
 // It implements [github.com/masterkeysrd/loom/graph.Node].
 type InboxNode struct {
-	queue  Queue
-	limits models.Limits
-	static StaticContext
-	rules  *RuleMatcher
-	logger log.Interface
+	queue       Queue
+	limits      models.Limits
+	static      StaticContext
+	attachments *AttachmentResolver
+	logger      log.Interface
 }
 
 var _ Node = (*InboxNode)(nil)
@@ -416,7 +418,7 @@ var _ Node = (*InboxNode)(nil)
 func (n *InboxNode) Configure(opts NodeOptions) {
 	n.limits = opts.Limits
 	n.static = opts.Static
-	n.rules = opts.Rules
+	n.attachments = opts.Attachments
 }
 
 // NewInboxNode constructs a new [InboxNode] bound to the queue and logger.
@@ -436,7 +438,6 @@ func (n *InboxNode) Execute(ctx context.Context, state State) (graph.Command[Sta
 	}
 
 	drained := make(message.MessageList, 0, len(queued))
-	var newTools []string
 	tempState := state
 	for _, msg := range queued {
 		if msg == nil {
@@ -448,26 +449,27 @@ func (n *InboxNode) Execute(ctx context.Context, state State) (graph.Command[Sta
 			cloned.SetID(uuid.NewString())
 		}
 		tempState = tempState.RecordLoadedTools(msgNewTools...)
-		newTools = append(newTools, msgNewTools...)
 		emit(ctx, cloned)
 		drained = append(drained, cloned)
 
-		// Smart rule matching for genuine user messages: auto-load @rule:
-		// references and surface keyword-matched conditional rules as reminders.
-		if n.rules != nil {
-			if reminder, loaded, suggested := n.rules.MatchUserMessage(cloned, tempState); reminder != nil {
-				tempState = tempState.RecordLoadedRules(ruleLoadedNames(loaded)...)
-				tempState = tempState.RecordSuggestedRules(suggested...)
+		if n.attachments != nil {
+			var reminder *message.User
+			var loaded []RuleLoaded
+			tempState, reminder, loaded = n.attachments.ResolveUserMessage(ctx, cloned, tempState)
+			if reminder != nil {
 				drained = append(drained, reminder)
-				for _, ev := range loaded {
-					emit(ctx, ev)
-				}
+			}
+			for _, ev := range loaded {
+				emit(ctx, ev)
 			}
 		}
 	}
 
 	return graph.Update[State](func(s State) State {
-		s = s.RecordLoadedTools(newTools...)
+		s = s.RecordLoadedTools(tempState.LoadedTools...)
+		s = s.RecordLoadedRules(tempState.LoadedRules...)
+		s = s.RecordLoadedSkills(tempState.LoadedSkills...)
+		s = s.RecordSuggestedRules(tempState.SuggestedRules...)
 		s = s.AppendMessages(drained, MessageUpdateOptions{Static: n.static, Limits: n.limits})
 		emit(ctx, api.ContextUpdatedEvent{Context: s.Context})
 		return s
@@ -580,15 +582,19 @@ func (n *ToolsNode) cancelCalls(ctx context.Context, asstIdx int, unfulfilled []
 		canceledMsgs = append(canceledMsgs, toolMsg)
 	}
 
-	trailingUser := message.CloneMessage(messages[len(messages)-1])
+	trailingIdx := len(messages) - 1
+	for trailingIdx > asstIdx && SystemKindOf(messages[trailingIdx]) != "" {
+		trailingIdx--
+	}
+	trailingUser := message.CloneMessage(messages[trailingIdx])
 	if strings.TrimSpace(trailingUser.GetID()) == "" {
 		trailingUser.SetID(uuid.NewString())
 	}
 	emit(ctx, trailingUser)
 
 	return graph.Update[State](func(s State) State {
-		if len(s.Messages) > 0 {
-			s.Messages[len(s.Messages)-1].SetID(trailingUser.GetID())
+		if trailingIdx >= 0 && trailingIdx < len(s.Messages) {
+			s.Messages[trailingIdx].SetID(trailingUser.GetID())
 		}
 		insertIdx := firstNonToolIndex(s.Messages, asstIdx+1)
 		updated := make(message.MessageList, 0, len(s.Messages)+len(canceledMsgs))
@@ -938,20 +944,40 @@ func (n *ToolsNode) appendToolMessagesUpdate(ctx context.Context, toolMsgs messa
 			s.Todos = slices.Clone(todos)
 		}
 		s = s.RecordLoadedTools(newTools...)
+		toolResults := toolToolMessages(toolMsgs)
+		s = s.RecordLoadedSkills(loadedSkillsFromToolResults(toolResults)...)
 		// Smart rule matching after tool results are appended: tool-name and
 		// path triggers auto-inject matching conditional rules as reminders.
 		if n.rules != nil {
-			if reminder, loaded := n.rules.MatchToolBatch(calls, plans, toolToolMessages(toolMsgs), s); reminder != nil {
+			reminder, loaded := n.rules.MatchToolBatch(calls, plans, toolResults, s)
+			if len(loaded) > 0 {
 				s = s.RecordLoadedRules(ruleLoadedNames(loaded)...)
+			}
+			if reminder != nil {
 				s = s.AppendMessage(reminder, MessageUpdateOptions{Static: n.static, Limits: n.limits})
 				for _, ev := range loaded {
-					emit(ctx, ev)
+					if ev.Trigger != "manual" {
+						emit(ctx, ev)
+					}
 				}
 			}
 		}
 		emit(ctx, api.ContextUpdatedEvent{Context: s.Context})
 		return s
 	}
+}
+
+func loadedSkillsFromToolResults(results []*message.Tool) []string {
+	var names []string
+	for _, res := range results {
+		if res == nil || res.IsError || res.Name != "load_skill" {
+			continue
+		}
+		if out, ok := res.StructuredContent.(api.LoadSkillOutput); ok && strings.TrimSpace(out.Skill) != "" {
+			names = append(names, strings.TrimSpace(out.Skill))
+		}
+	}
+	return names
 }
 
 // toolToolMessages extracts the *message.Tool results from a mixed message list.

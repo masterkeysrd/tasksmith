@@ -22,7 +22,9 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/daemon/metrics"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/models"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/permissions"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/sandbox"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/session"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/std"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/timeline"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tools"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tools/builtin"
@@ -86,7 +88,10 @@ type workspaceRuntime struct {
 	// mcpManager owns the workspace's live MCP connections. It is created once per
 	// workspace root and shared with sibling worktrees, which resolve MCP servers
 	// through the root workspace that the manager is attached to.
-	mcpManager *mcp.Manager
+	mcpManager  *mcp.Manager
+	fileIndexMu sync.Mutex
+	fileIndex   *std.FileIndex
+	indexSbx    sandbox.Sandbox
 }
 
 func (r *workspaceRuntime) Dir() string                       { return r.dir }
@@ -183,6 +188,12 @@ func (r *workspaceRuntime) Reload(ctx context.Context) error {
 	}
 	r.reloadMCP(ctx, sessionWorkspace)
 	r.RefreshSessions()
+	r.fileIndexMu.Lock()
+	if r.fileIndex != nil {
+		r.fileIndex.SetAllowExec(r.ws != nil && !r.ws.IsRestricted())
+		r.fileIndex.Invalidate()
+	}
+	r.fileIndexMu.Unlock()
 	return nil
 }
 
@@ -223,11 +234,63 @@ func (r *workspaceRuntime) Close() error {
 			slog.Warn("daemon: close MCP manager", "workspace", r.dir, "error", err)
 		}
 	}
+	r.fileIndexMu.Lock()
+	if r.fileIndex != nil {
+		_ = r.fileIndex.Close()
+		r.fileIndex = nil
+	}
+	if r.indexSbx != nil {
+		_ = r.indexSbx.Close()
+		r.indexSbx = nil
+	}
+	r.fileIndexMu.Unlock()
 	var dbErr error
 	if r.db != nil {
 		dbErr = r.db.Close()
 	}
 	return dbErr
+}
+
+func (r *workspaceRuntime) getFileIndex(ctx context.Context) (*std.FileIndex, error) {
+	r.fileIndexMu.Lock()
+	defer r.fileIndexMu.Unlock()
+	if r.fileIndex != nil {
+		r.fileIndex.SetAllowExec(r.ws != nil && !r.ws.IsRestricted())
+		return r.fileIndex, nil
+	}
+
+	sbx, err := sandbox.New(sandbox.Config{
+		WorkDir:  r.dir,
+		ReadOnly: true,
+		Network:  sandbox.NetworkPolicy{Disabled: true},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("daemon: create workspace sandbox for indexing: %w", err)
+	}
+
+	stdInst, err := std.New(std.Config{
+		Sandbox: sbx,
+		Tracker: std.NewMemoryTracker(),
+		Logger:  r.logger,
+	})
+	if err != nil {
+		_ = sbx.Close()
+		return nil, fmt.Errorf("daemon: create workspace std for indexing: %w", err)
+	}
+
+	idx, err := std.NewFileIndex(std.FileIndexOptions{
+		Std:       stdInst,
+		AllowExec: r.ws != nil && !r.ws.IsRestricted(),
+		Lifecycle: r.bgCtx,
+	})
+	if err != nil {
+		_ = sbx.Close()
+		return nil, fmt.Errorf("daemon: create workspace file index: %w", err)
+	}
+
+	r.indexSbx = sbx
+	r.fileIndex = idx
+	return idx, nil
 }
 
 func (d *Daemon) workspace(ctx context.Context, dir string) (*workspaceRuntime, error) {

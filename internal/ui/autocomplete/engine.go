@@ -108,6 +108,9 @@ func (e *Engine) Complete(ctx context.Context, input string, cursor int) (Result
 	if err := validateCandidates(items, source.CaseSensitive); err != nil {
 		return Result{}, fmt.Errorf("autocomplete: source %q: %w", source.Name, err)
 	}
+	if source.Passthrough {
+		return Result{Request: req, Candidates: items}, nil
+	}
 	return Result{Request: req, Candidates: filter(items, req.Query, source.CaseSensitive)}, nil
 }
 
@@ -157,7 +160,7 @@ func (r Result) Apply(index int) (string, int, error) {
 	candidate := r.Candidates[index]
 	text := candidate.InsertText
 	if text == "" {
-		text = quote(candidate.Value)
+		text = Quote(candidate.Value)
 	}
 	if candidate.Value == "" || !utf8.ValidString(text) {
 		return "", 0, ErrInvalidCandidates
@@ -354,7 +357,9 @@ func decode(input string) string {
 	return out.String()
 }
 
-func quote(value string) string {
+// Quote wraps value in double quotes (escaping inner quotes and backslashes)
+// when value contains whitespace, quotes, or backslashes.
+func Quote(value string) string {
 	if strings.IndexFunc(value, unicode.IsSpace) < 0 && !strings.ContainsAny(value, `"'\\`) {
 		return value
 	}

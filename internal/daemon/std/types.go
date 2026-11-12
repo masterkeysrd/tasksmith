@@ -35,6 +35,7 @@ type FileTracker interface {
 	LastHash(path string) (hash string, ok bool)
 	LastContent(path string) (content []byte, ok bool)
 	TrackedPaths() []string
+	RecentPaths() []string
 	RecordRead(ctx context.Context, path, hash string) error
 	RecordChange(ctx context.Context, change *FileChange) error
 }
@@ -275,6 +276,21 @@ type RemoveResult struct {
 	Diff       string `json:"diff,omitempty"`
 	BeforeHash string `json:"before_hash"`
 	DryRun     bool   `json:"dry_run,omitempty"`
+}
+
+// WatchRequest configures a filesystem watcher via [Std.Watch].
+type WatchRequest struct {
+	// Path is the directory path relative to the sandbox root.
+	Path string `json:"path"`
+
+	// Recursive monitors subdirectories recursively when true.
+	Recursive bool `json:"recursive,omitempty"`
+
+	// Ignore specifies additional directory names or patterns to ignore.
+	Ignore []string `json:"ignore,omitempty"`
+
+	// MaxDirs is the maximum number of directories to watch.
+	MaxDirs int `json:"max_dirs,omitempty"`
 }
 
 // BashRequest configures a shell command execution via [Std.Bash].

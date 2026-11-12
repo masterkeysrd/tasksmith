@@ -102,6 +102,9 @@ type mockBackend struct {
 	diffResp          *api.DiffResponse
 	diffErr           error
 	revertErr         error
+	filesResp         []api.WorkspaceFile
+	filesErr          error
+	filesReq          api.ListFilesRequest
 }
 
 func (m *mockBackend) Health(ctx context.Context) (*api.HealthResponse, error) {
@@ -293,6 +296,11 @@ func (m *mockBackend) Diff(ctx context.Context, workspace, id, path, entryID str
 
 func (m *mockBackend) Revert(ctx context.Context, workspace, id string, req api.RevertRequest) error {
 	return m.revertErr
+}
+
+func (m *mockBackend) ListWorkspaceFiles(ctx context.Context, workspace string, req api.ListFilesRequest) ([]api.WorkspaceFile, error) {
+	m.filesReq = req
+	return m.filesResp, m.filesErr
 }
 
 func setupTestServer(mock *mockBackend) http.Handler {
@@ -905,5 +913,44 @@ func TestMCPRouterEmptyListSerializesAsArray(t *testing.T) {
 	}
 	if body := strings.TrimSpace(rec.Body.String()); body != "[]" {
 		t.Errorf("empty MCP list body = %q, want []", body)
+	}
+}
+
+func TestWorkspaceFilesEndpoint(t *testing.T) {
+	mock := &mockBackend{
+		filesResp: []api.WorkspaceFile{
+			{Path: "app.go", Name: "app.go", IsDir: false, Allowed: true},
+		},
+	}
+	handler := setupTestServer(mock)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/v1/workspace/files?q=app&session_id=sess-123&limit=10&hidden=false", nil)
+	req.Header.Set("X-TaskSmith-CWD", "/test/workspace")
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body: %s)", rec.Code, rec.Body.String())
+	}
+
+	if mock.filesReq.Query != "app" {
+		t.Errorf("filesReq.Query = %q, want 'app'", mock.filesReq.Query)
+	}
+	if mock.filesReq.SessionID != "sess-123" {
+		t.Errorf("filesReq.SessionID = %q, want 'sess-123'", mock.filesReq.SessionID)
+	}
+	if mock.filesReq.Limit != 10 {
+		t.Errorf("filesReq.Limit = %d, want 10", mock.filesReq.Limit)
+	}
+	if mock.filesReq.IncludeHidden == nil || *mock.filesReq.IncludeHidden != false {
+		t.Errorf("filesReq.IncludeHidden = %v, want false", mock.filesReq.IncludeHidden)
+	}
+
+	var files []api.WorkspaceFile
+	if err := json.Unmarshal(rec.Body.Bytes(), &files); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	if len(files) != 1 || files[0].Path != "app.go" {
+		t.Errorf("files = %+v", files)
 	}
 }

@@ -1,6 +1,7 @@
 package harness
 
 import (
+	"encoding/json"
 	"fmt"
 	"maps"
 	"slices"
@@ -20,8 +21,57 @@ const (
 	// MetaRuleNames carries the list of rule names surfaced in a system reminder
 	// (either auto-loaded or suggested) so consumers can correlate reminders with
 	// the rules they reference.
-	MetaRuleNames = "tasksmith.rule.names"
+	MetaRuleNames   = "tasksmith.rule.names"
+	MetaAttachments = "tasksmith.attachments"
 )
+
+// SetAttachments attaches structured api.Attachment references to a user message.
+func SetAttachments(msg *message.User, atts []api.Attachment) {
+	if msg == nil {
+		return
+	}
+	meta := msg.GetMetadata()
+	if len(atts) == 0 {
+		delete(meta, MetaAttachments)
+		return
+	}
+	if meta == nil {
+		meta = make(map[string]any)
+	}
+	meta[MetaAttachments] = slices.Clone(atts)
+	msg.SetMetadata(meta)
+}
+
+// AttachmentsOf retrieves structured api.Attachment references from a message,
+// handling both in-memory []api.Attachment and JSON-deserialized []any (from SQLite journal/timeline).
+func AttachmentsOf(msg message.Message) []api.Attachment {
+	if msg == nil {
+		return nil
+	}
+	raw, ok := msg.GetMetadata()[MetaAttachments]
+	if !ok || raw == nil {
+		return nil
+	}
+	switch v := raw.(type) {
+	case []api.Attachment:
+		return slices.Clone(v)
+	case []any:
+		if len(v) == 0 {
+			return nil
+		}
+		b, err := json.Marshal(v)
+		if err != nil {
+			return nil
+		}
+		var out []api.Attachment
+		if err := json.Unmarshal(b, &out); err != nil {
+			return nil
+		}
+		return out
+	default:
+		return nil
+	}
+}
 
 const (
 	SystemKindCommand    = "command"
@@ -58,6 +108,7 @@ type State struct {
 	Todos               []api.TodoItem                    `json:"todos,omitempty"`
 	LoadedTools         []string                          `json:"loaded_tools,omitempty"`
 	LoadedRules         []string                          `json:"loaded_rules,omitempty"`
+	LoadedSkills        []string                          `json:"loaded_skills,omitempty"`
 	SuggestedRules      []string                          `json:"suggested_rules,omitempty"`
 	Context             api.ContextState                  `json:"context"`
 }
@@ -104,6 +155,11 @@ func (s State) Copy() State {
 		loadedRules = slices.Clone(s.LoadedRules)
 	}
 
+	var loadedSkills []string
+	if len(s.LoadedSkills) > 0 {
+		loadedSkills = slices.Clone(s.LoadedSkills)
+	}
+
 	var suggestedRules []string
 	if len(s.SuggestedRules) > 0 {
 		suggestedRules = slices.Clone(s.SuggestedRules)
@@ -124,6 +180,7 @@ func (s State) Copy() State {
 		Todos:               todos,
 		LoadedTools:         loadedTools,
 		LoadedRules:         loadedRules,
+		LoadedSkills:        loadedSkills,
 		SuggestedRules:      suggestedRules,
 		Context:             s.Context,
 	}
@@ -174,10 +231,10 @@ func (s State) ShouldWakeAgent() bool {
 	return SystemKindOf(last) != SystemKindCommand
 }
 
-// LastUserMessageID returns the ID of the latest [*message.User] message, or "" if none.
+// LastUserMessageID returns the ID of the latest genuine [*message.User] message, or "" if none.
 func (s State) LastUserMessageID() string {
 	for _, m := range slices.Backward(s.Messages) {
-		if u, ok := m.(*message.User); ok && u != nil {
+		if u, ok := m.(*message.User); ok && u != nil && SystemKindOf(u) != SystemKindReminder && u.GetID() != "" {
 			return u.GetID()
 		}
 	}
@@ -201,6 +258,7 @@ func (s State) ApplyCompaction(static StaticContext, limits models.Limits) State
 	s.Context.LastCompacted = time.Now().UTC()
 	s.LoadedTools = nil
 	s.LoadedRules = nil
+	s.LoadedSkills = nil
 	s.SuggestedRules = nil
 	s.Context = computeContextState(static, s, limits)
 	return s
@@ -363,6 +421,39 @@ func (s State) RecordLoadedRules(names ...string) State {
 		}
 		seen[key] = struct{}{}
 		s.LoadedRules = append(s.LoadedRules, name)
+	}
+	return s
+}
+
+// HasLoadedSkill reports whether a skill with the given name is already in
+// LoadedSkills (case-insensitive).
+func (s State) HasLoadedSkill(name string) bool {
+	key := strings.ToLower(name)
+	for _, existing := range s.LoadedSkills {
+		if strings.ToLower(existing) == key {
+			return true
+		}
+	}
+	return false
+}
+
+// RecordLoadedSkills returns a copy of s with the given skill names appended to
+// LoadedSkills, deduplicated case-insensitively against the existing entries.
+func (s State) RecordLoadedSkills(names ...string) State {
+	if len(names) == 0 {
+		return s
+	}
+	seen := make(map[string]struct{}, len(s.LoadedSkills)+len(names))
+	for _, name := range s.LoadedSkills {
+		seen[strings.ToLower(name)] = struct{}{}
+	}
+	for _, name := range names {
+		key := strings.ToLower(name)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		s.LoadedSkills = append(s.LoadedSkills, name)
 	}
 	return s
 }

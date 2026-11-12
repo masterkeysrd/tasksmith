@@ -106,14 +106,36 @@ func (s *Session) Send(ctx context.Context, req api.SendRequest) error {
 		return ErrEmptyMessage
 	}
 
-	var msg message.Message = message.NewUser(blocks...)
+	userMsg := message.NewUser(blocks...)
 	if id != "" {
-		msg.SetID(id)
+		userMsg.SetID(id)
 	}
+
+	s.Lock()
+	attResolver := s.attachments
+	s.Unlock()
+	normalizedAtts, err := attResolver.Validate(ctx, req.Attachments)
+	if err != nil {
+		if errors.Is(err, harness.ErrInvalidConfig) {
+			return fmt.Errorf("%w: %v", ErrInvalidConfig, err)
+		}
+		return err
+	}
+	if len(normalizedAtts) > 0 {
+		harness.SetAttachments(userMsg, normalizedAtts)
+	}
+
+	var msg message.Message = userMsg
 
 	exec, err := s.resolveCommandExecution(msg)
 	if err != nil {
 		return err
+	}
+
+	if exec != nil && exec.Message != nil {
+		if execUser, ok := exec.Message.(*message.User); ok && len(normalizedAtts) > 0 {
+			harness.SetAttachments(execUser, normalizedAtts)
+		}
 	}
 
 	// A command that requests a forked subagent (clean/fork context or a

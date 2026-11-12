@@ -13,6 +13,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/google/uuid"
+	"github.com/masterkeysrd/tasksmith/internal/core/strutils"
 	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/scope"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/workspace"
@@ -544,4 +545,18 @@ func (w *spillWriter) String() string {
 			omittedBytes, totalLines)
 	}
 	return headBytes + notice + tailBytes
+}
+
+// TruncateSkillInstructions caps rendered skill instructions at the default
+// spill line/byte budget and appends navigational guidance when truncated.
+func TruncateSkillInstructions(rendered, skillPath string) (string, bool) {
+	head, truncated := strutils.TruncateHead(rendered, DefaultSpillMaxLines, DefaultSpillMaxBytes)
+	if !truncated {
+		return rendered, false
+	}
+
+	if strings.TrimSpace(skillPath) != "" {
+		return fmt.Sprintf("%s\n... [skill instructions truncated — use `ls`, `glob`, `grep`, and `view` (with offset) in %s to inspect the skill files and remaining content] ...", head, skillPath), true
+	}
+	return fmt.Sprintf("%s\n... [skill instructions truncated — use `ls`, `glob`, `grep`, and `view` (with offset) to inspect the skill files and remaining content] ...", head), true
 }

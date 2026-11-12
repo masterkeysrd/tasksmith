@@ -51,6 +51,9 @@ type Source struct {
 	StartOnly bool
 	// CaseSensitive applies to trigger, value, label, and alias matching.
 	CaseSensitive bool
+	// Passthrough disables prefix filtering in Engine.Complete, returning
+	// candidates in the exact order supplied by Complete.
+	Passthrough bool
 }
 
 // Result contains the active completion context and matching candidates.

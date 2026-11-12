@@ -1,10 +1,12 @@
 package components
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/masterkeysrd/kite/dom"
@@ -14,6 +16,7 @@ import (
 	"github.com/masterkeysrd/kite/extras/trail"
 	"github.com/masterkeysrd/kite/style"
 	"github.com/masterkeysrd/tasksmith/api"
+	"github.com/masterkeysrd/tasksmith/internal/cli/mentions"
 	"github.com/masterkeysrd/tasksmith/internal/cli/store"
 	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
 	"github.com/masterkeysrd/tasksmith/internal/ui/autocomplete"
@@ -30,10 +33,17 @@ const BashModeHint = "activated bash mode · esc to cancel"
 // HistoryModeHint is the status line hint shown while browsing prompt history.
 const HistoryModeHint = "prompt history · enter to send · esc to cancel"
 
+var composerAutocompleteBindings = []uicomponents.KeyBinding{
+	{Key: "↑/↓", Label: "Navigate"},
+	{Key: "Ctrl+P/Ctrl+N", Label: "Navigate"},
+	{Key: "Tab", Label: "Select"},
+	{Key: "Esc", Label: "Dismiss"},
+}
+
 // ComposerProps defines the properties for the Composer functional component.
 type ComposerProps struct {
 	Disabled        bool
-	OnSubmit        func(text string)
+	OnSubmit        func(text string, attachments []api.Attachment)
 	OnCycleMode     func()
 	OnCancel        func()
 	Autocomplete    *autocomplete.Engine
@@ -43,25 +53,52 @@ type ComposerProps struct {
 // DraftEdit holds the current draft value and cursor offset.
 type DraftEdit = uicomponents.AutocompleteEdit
 
+// HistoryEntry holds a prompt's text and its structured attachments.
+type HistoryEntry struct {
+	Text        string           `json:"text"`
+	Attachments []api.Attachment `json:"attachments,omitempty"`
+}
+
+// UnmarshalJSON unmarshals either a rich HistoryEntry object or a legacy JSON string.
+func (h *HistoryEntry) UnmarshalJSON(data []byte) error {
+	trimmed := bytes.TrimSpace(data)
+	if len(trimmed) > 0 && trimmed[0] == '"' {
+		var s string
+		if err := json.Unmarshal(trimmed, &s); err != nil {
+			return err
+		}
+		h.Text = s
+		h.Attachments = nil
+		return nil
+	}
+	type rawEntry HistoryEntry
+	var raw rawEntry
+	if err := json.Unmarshal(trimmed, &raw); err != nil {
+		return err
+	}
+	*h = HistoryEntry(raw)
+	return nil
+}
+
 // PromptHistory holds state and operations for traversing input prompt history.
 type PromptHistory struct {
-	History    []string
+	History    []HistoryEntry
 	HistoryIdx int
-	Draft      string
+	Draft      HistoryEntry
 	Browsing   func() bool
-	Up         func(currentValue string) (string, bool)
-	Down       func() (string, bool)
-	Add        func(text string)
-	Cancel     func() string
-	Exit       func(value string)
+	Up         func(current HistoryEntry) (HistoryEntry, bool)
+	Down       func() (HistoryEntry, bool)
+	Add        func(entry HistoryEntry)
+	Cancel     func() HistoryEntry
+	Exit       func(entry HistoryEntry)
 }
 
 // usePromptHistory manages input prompt history navigation, draft preservation,
 // and disk persistence of submitted prompts.
 func usePromptHistory() PromptHistory {
-	history, setHistory := kitex.UseState([]string(nil))
+	history, setHistory := kitex.UseState([]HistoryEntry(nil))
 	historyIdx, setHistoryIdx := kitex.UseState(0)
-	draft, setDraft := kitex.UseState("")
+	draft, setDraft := kitex.UseState(HistoryEntry{})
 	browsing, setBrowsing := kitex.UseState(false)
 
 	// Load persisted history from disk on first mount.
@@ -72,14 +109,14 @@ func usePromptHistory() PromptHistory {
 		}
 	}, []any{})
 
-	up := func(currentValue string) (string, bool) {
+	up := func(current HistoryEntry) (HistoryEntry, bool) {
 		hist := history()
 		if len(hist) == 0 {
-			return "", false
+			return HistoryEntry{}, false
 		}
 		hIdx := historyIdx()
 		if hIdx >= len(hist) {
-			setDraft(currentValue)
+			setDraft(current)
 			newIdx := len(hist) - 1
 			setHistoryIdx(newIdx)
 			setBrowsing(true)
@@ -90,13 +127,13 @@ func usePromptHistory() PromptHistory {
 			setBrowsing(true)
 			return hist[newIdx], true
 		}
-		return "", false
+		return HistoryEntry{}, false
 	}
 
-	down := func() (string, bool) {
+	down := func() (HistoryEntry, bool) {
 		hist := history()
 		if len(hist) == 0 {
-			return "", false
+			return HistoryEntry{}, false
 		}
 		hIdx := historyIdx()
 		if hIdx < len(hist)-1 {
@@ -109,33 +146,33 @@ func usePromptHistory() PromptHistory {
 			setBrowsing(false)
 			return draft(), true
 		}
-		return "", false
+		return HistoryEntry{}, false
 	}
 
-	add := func(text string) {
+	add := func(entry HistoryEntry) {
 		hist := history()
-		// Skip consecutive duplicates.
-		if len(hist) > 0 && hist[len(hist)-1] == text {
+		// Skip consecutive duplicates (by text).
+		if len(hist) > 0 && hist[len(hist)-1].Text == entry.Text {
 			setHistoryIdx(len(hist))
-			setDraft("")
+			setDraft(HistoryEntry{})
 			setBrowsing(false)
 			return
 		}
-		hist = append(hist, text)
+		hist = append(hist, entry)
 		// Cap at maxHistoryEntries (keep most recent).
 		if len(hist) > maxHistoryEntries {
 			hist = hist[len(hist)-maxHistoryEntries:]
 		}
 		setHistory(hist)
 		setHistoryIdx(len(hist))
-		setDraft("")
+		setDraft(HistoryEntry{})
 		setBrowsing(false)
 		// Fail-safe: disk errors must not crash the REPL.
 		_ = persistHistory(hist)
 	}
 
 	// cancel abandons browsing and restores the pre-navigation draft.
-	cancel := func() string {
+	cancel := func() HistoryEntry {
 		restored := draft()
 		setHistoryIdx(len(history()))
 		setBrowsing(false)
@@ -143,10 +180,10 @@ func usePromptHistory() PromptHistory {
 	}
 
 	// exit leaves browsing mode after active editing, adopting the edited
-	// text as the new working draft.
-	exit := func(value string) {
+	// entry as the new working draft.
+	exit := func(entry HistoryEntry) {
 		setHistoryIdx(len(history()))
-		setDraft(value)
+		setDraft(entry)
 		setBrowsing(false)
 	}
 
@@ -165,7 +202,7 @@ func usePromptHistory() PromptHistory {
 
 // loadHistoryFromFile reads persisted prompt history from disk.
 // Returns nil on any error (including missing file).
-func loadHistoryFromFile() []string {
+func loadHistoryFromFile() []HistoryEntry {
 	path, err := xdg.HistoryFilePath("repl.jsonl")
 	if err != nil {
 		return nil
@@ -174,13 +211,13 @@ func loadHistoryFromFile() []string {
 	if err != nil {
 		return nil // gracefully handle missing file
 	}
-	var entries []string
+	var entries []HistoryEntry
 	for line := range strings.SplitSeq(string(data), "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
 		}
-		var entry string
+		var entry HistoryEntry
 		if err := json.Unmarshal([]byte(line), &entry); err == nil {
 			entries = append(entries, entry)
 		}
@@ -192,8 +229,8 @@ func loadHistoryFromFile() []string {
 }
 
 // persistHistory writes the given entries to the history file in JSONL format.
-// Each entry is encoded as a JSON string on its own line.
-func persistHistory(entries []string) error {
+// Each entry is encoded as a JSON object on its own line.
+func persistHistory(entries []HistoryEntry) error {
 	path, err := xdg.HistoryFilePath("repl.jsonl")
 	if err != nil {
 		return err
@@ -231,6 +268,7 @@ var Composer = trail.FC("Composer", func(props ComposerProps) trail.Node {
 	winSize := trail.UseWindowSize()
 
 	draft, setDraft := kitex.UseState(DraftEdit{})
+	attachments, setAttachments := kitex.UseState([]api.Attachment(nil))
 	bashMode, setBashMode := kitex.UseState(false)
 	history := usePromptHistory()
 
@@ -259,6 +297,25 @@ var Composer = trail.FC("Composer", func(props ComposerProps) trail.Node {
 		}
 	}, []any{disabled})
 
+	recordCandidate := func(idx int) []api.Attachment {
+		currentAtts := attachments()
+		if idx < 0 || idx >= len(auto.Result.Candidates) {
+			return currentAtts
+		}
+		newAtt, ok := candidateAttachment(auto.Result.Candidates[idx])
+		if !ok {
+			return currentAtts
+		}
+		next := slices.Clone(currentAtts)
+		if attIdx := slices.IndexFunc(next, func(a api.Attachment) bool { return a.Ref == newAtt.Ref }); attIdx >= 0 {
+			next[attIdx] = newAtt
+		} else {
+			next = append(next, newAtt)
+		}
+		setAttachments(next)
+		return next
+	}
+
 	readDraft := func() DraftEdit {
 		if input, ok := inputRef.Current.(*element.TextAreaElement); ok {
 			return DraftEdit{Value: input.TextContent(), Cursor: input.Buffer().ByteOffset()}
@@ -269,7 +326,7 @@ var Composer = trail.FC("Composer", func(props ComposerProps) trail.Node {
 	syncDraft := func() {
 		next := readDraft()
 		if history.Browsing() && next.Value != navValue.Current {
-			history.Exit(next.Value)
+			history.Exit(HistoryEntry{Text: next.Value, Attachments: slices.Clone(attachments())})
 		}
 		if next != draft() {
 			setDraft(next)
@@ -285,7 +342,9 @@ var Composer = trail.FC("Composer", func(props ComposerProps) trail.Node {
 	}
 	// recall renders a history entry, entering or leaving bash mode to match
 	// the entry's "!" prefix. The hint follows via the browsing effect.
-	recall := func(value string) {
+	recall := func(entry HistoryEntry) {
+		setAttachments(slices.Clone(entry.Attachments))
+		value := entry.Text
 		if strings.HasPrefix(value, "!") {
 			if !bashMode() {
 				setBashMode(true)
@@ -304,12 +363,13 @@ var Composer = trail.FC("Composer", func(props ComposerProps) trail.Node {
 	kitex.UseLayoutEffect(func() {
 		if ctrlCPending {
 			replaceDraft(DraftEdit{})
+			setAttachments(nil)
 			if bashMode() {
 				setBashMode(false)
 				store.SetHint(store.DefaultHint)
 			}
 			if history.Browsing() {
-				history.Exit("")
+				history.Exit(HistoryEntry{})
 			}
 		}
 	}, []any{ctrlCPending})
@@ -410,7 +470,9 @@ var Composer = trail.FC("Composer", func(props ComposerProps) trail.Node {
 				e.PreventDefault()
 				e.StopPropagation()
 				if !auto.IsLoading && auto.Error == nil && len(auto.Result.Candidates) > 0 {
+					candIdx := auto.Selected
 					if edit, err := auto.Accept(); err == nil {
+						recordCandidate(candIdx)
 						replaceDraft(edit)
 					}
 				}
@@ -433,8 +495,12 @@ var Composer = trail.FC("Composer", func(props ComposerProps) trail.Node {
 			if bashMode() && current.Value != "" {
 				valToPass = "!" + current.Value
 			}
-			if prevVal, ok := history.Up(valToPass); ok {
-				recall(prevVal)
+			entryToPass := HistoryEntry{
+				Text:        valToPass,
+				Attachments: slices.Clone(attachments()),
+			}
+			if prevEntry, ok := history.Up(entryToPass); ok {
+				recall(prevEntry)
 			}
 
 		case ke.MatchString("down", "ctrl+n"):
@@ -451,8 +517,8 @@ var Composer = trail.FC("Composer", func(props ComposerProps) trail.Node {
 			}
 			e.PreventDefault()
 			e.StopPropagation()
-			if nextVal, ok := history.Down(); ok {
-				recall(nextVal)
+			if nextEntry, ok := history.Down(); ok {
+				recall(nextEntry)
 			}
 
 		case ke.MatchString("shift+enter", "alt+enter"):
@@ -473,34 +539,41 @@ var Composer = trail.FC("Composer", func(props ComposerProps) trail.Node {
 			if bashMode() {
 				text := strings.TrimSpace(current.Value)
 				replaceDraft(DraftEdit{})
+				setAttachments(nil)
 				setBashMode(false)
 				store.SetHint(store.DefaultHint)
 				if text != "" {
-					history.Add("!" + text)
+					history.Add(HistoryEntry{Text: "!" + text})
 					if props.OnSubmit != nil {
-						props.OnSubmit("!" + text)
+						props.OnSubmit("!"+text, nil)
 					}
 				}
 				return
 			}
+			activeAtts := attachments()
 			if isCurrent && auto.IsOpen {
 				if auto.IsLoading || auto.Error != nil || len(auto.Result.Candidates) == 0 {
 					return
 				}
 				if !selectionMatchesQuery(auto) {
+					candIdx := auto.Selected
 					if edit, err := auto.Accept(); err == nil {
+						recordCandidate(candIdx)
 						replaceDraft(edit)
 					}
 					return
 				}
+				activeAtts = recordCandidate(auto.Selected)
 			}
 
 			text := strings.TrimSpace(current.Value)
+			reconciled := mentions.Resolve(text, activeAtts, nil)
 			replaceDraft(DraftEdit{})
+			setAttachments(nil)
 			if text != "" {
-				history.Add(text)
+				history.Add(HistoryEntry{Text: text, Attachments: reconciled})
 				if props.OnSubmit != nil {
-					props.OnSubmit(text)
+					props.OnSubmit(text, reconciled)
 				}
 			}
 		}
@@ -591,17 +664,41 @@ var Composer = trail.FC("Composer", func(props ComposerProps) trail.Node {
 			}, trail.Text(rule)))
 		}),
 		uicomponents.Autocomplete(uicomponents.AutocompleteProps{
-			State: auto,
-			Views: props.CompletionViews,
-			Bindings: []uicomponents.KeyBinding{
-				{Key: "↑/↓", Label: "Navigate"},
-				{Key: "Ctrl+P/Ctrl+N", Label: "Navigate"},
-				{Key: "Tab", Label: "Select"},
-				{Key: "Esc", Label: "Dismiss"},
-			},
+			State:    auto,
+			Views:    props.CompletionViews,
+			Bindings: composerAutocompleteBindings,
 		}),
 	)
 })
+
+func candidateAttachment(cand autocomplete.Candidate) (api.Attachment, bool) {
+	switch data := cand.Data.(type) {
+	case api.WorkspaceFile:
+		target := data.Path
+		if data.IsDir && !strings.HasSuffix(target, "/") {
+			target += "/"
+		}
+		return api.Attachment{
+			Kind:   api.AttachmentFile,
+			Ref:    "@" + strings.TrimSpace(cand.InsertText),
+			Target: target,
+		}, true
+	case api.Rule:
+		return api.Attachment{
+			Kind:   api.AttachmentRule,
+			Ref:    "@rule:" + data.Name,
+			Target: data.Name,
+		}, true
+	case api.Skill:
+		return api.Attachment{
+			Kind:   api.AttachmentSkill,
+			Ref:    "@skill:" + data.Name,
+			Target: data.Name,
+		}, true
+	default:
+		return api.Attachment{}, false
+	}
+}
 
 func selectionMatchesQuery(auto uicomponents.AutocompleteState) bool {
 	candidates := auto.Result.Candidates
@@ -609,6 +706,26 @@ func selectionMatchesQuery(auto uicomponents.AutocompleteState) bool {
 		return false
 	}
 	candidate := candidates[auto.Selected]
+	if auto.Result.Source == "files" {
+		raw, _ := strings.CutPrefix(auto.Result.Query, "file:")
+		raw = strings.Trim(raw, "\"'")
+		if raw == "" {
+			return false
+		}
+		if wf, ok := candidate.Data.(api.WorkspaceFile); ok {
+			if wf.ShortPath != "" && raw == wf.ShortPath {
+				return true
+			}
+			target := wf.Path
+			if wf.IsDir && !strings.HasSuffix(target, "/") {
+				target += "/"
+			}
+			if raw == target || raw == wf.Path {
+				return true
+			}
+		}
+		return raw == candidate.Value || strings.TrimSuffix(raw, "/") == strings.TrimSuffix(candidate.Value, "/")
+	}
 	if strings.EqualFold(auto.Result.Query, candidate.Value) {
 		return true
 	}

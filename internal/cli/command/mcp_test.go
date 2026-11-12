@@ -226,6 +226,9 @@ func (f *mcpFixture) RoundTrip(req *http.Request) (*http.Response, error) {
 			Text:     "resource body for " + uri,
 		})
 
+	case req.Method == http.MethodPost && strings.HasPrefix(req.URL.Path, "/v1/sessions/"):
+		return mcpNoContentResponse()
+
 	case req.Method == http.MethodPost && req.URL.Path == "/v1/workspace/reload":
 		return mcpJSONResponse(http.StatusOK, map[string]any{"ok": true})
 
@@ -2245,16 +2248,60 @@ func TestMCPAllowedItemRunsImmediately(t *testing.T) {
 func TestMCPResourceSubmissionAttachesBody(t *testing.T) {
 	fixture := newMCPFixture(t, mcpTestServers())
 	store.SetWorkspaceMCPServers(mcpTestServers())
+	store.ClearSlot()
+	defer store.ClearSlot()
 
 	if !SubmitMCPReference("summarize @mcp:notes:notes://specs/spec-1") {
 		t.Fatal("expected the reference to be handled")
 	}
-	if !waitFor(t, func() bool { return len(fixture.pathCalls("/resources")) > 0 }) {
-		t.Fatal("expected the resource to be read")
+	if !waitFor(t, func() bool { return len(fixture.pathCalls("/v1/sessions/sess-mcp")) > 0 }) {
+		t.Fatal("expected turn submission with structured MCP attachment")
 	}
-	calls := fixture.pathCalls("/resources")
-	if calls[0].body["uri"] != "notes://specs/spec-1" {
-		t.Fatalf("unexpected uri: %+v", calls[0].body)
+	if got := len(fixture.pathCalls("/resources")); got != 0 {
+		t.Fatalf("client must not pre-fetch allowed MCP resources; saw %d /resources calls", got)
+	}
+	sendCall := fixture.pathCalls("/v1/sessions/sess-mcp")[0]
+	if sendCall.body["content"] != "summarize @mcp:notes:notes://specs/spec-1" {
+		t.Fatalf("expected original user text preserved, got %+v", sendCall.body["content"])
+	}
+	rawAtts, _ := sendCall.body["attachments"].([]any)
+	if len(rawAtts) != 1 {
+		t.Fatalf("expected 1 structured attachment, got %+v", sendCall.body["attachments"])
+	}
+	att, _ := rawAtts[0].(map[string]any)
+	if att["kind"] != string(api.AttachmentMCP) || att["target"] != "notes:notes://specs/spec-1" {
+		t.Fatalf("unexpected MCP attachment payload: %+v", att)
+	}
+
+	// Prohibited resource prompts Option B confirmation and sets allow_prohibited=true on "Use once".
+	if !SubmitMCPReference("explain @mcp:notes:notes://secret please") {
+		t.Fatal("expected prohibited resource reference to be handled")
+	}
+	active := store.GetSlot().Active
+	if active == nil {
+		t.Fatal("expected Option B confirmation slot for prohibited resource")
+	}
+	props, ok := active.Data.(components.PickerProps)
+	if !ok {
+		t.Fatalf("expected PickerProps, got %T", active.Data)
+	}
+	store.ClearSlot()
+	for _, opt := range props.Options {
+		if opt.Value == "once" {
+			props.OnSelect(opt)
+		}
+	}
+	if !waitFor(t, func() bool { return len(fixture.pathCalls("/v1/sessions/sess-mcp")) >= 2 }) {
+		t.Fatal("expected turn submission after confirming prohibited resource once")
+	}
+	prohibitedCall := fixture.pathCalls("/v1/sessions/sess-mcp")[1]
+	prohibitedAtts, _ := prohibitedCall.body["attachments"].([]any)
+	if len(prohibitedAtts) != 1 {
+		t.Fatalf("expected 1 attachment on prohibited send, got %+v", prohibitedCall.body)
+	}
+	pAtt, _ := prohibitedAtts[0].(map[string]any)
+	if pAtt["kind"] != string(api.AttachmentMCP) || pAtt["target"] != "notes:notes://secret" || pAtt["allow_prohibited"] != true {
+		t.Fatalf("expected allow_prohibited=true on MCP attachment, got %+v", pAtt)
 	}
 }
 

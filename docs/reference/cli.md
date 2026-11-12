@@ -148,12 +148,14 @@ Token prefixes typed anywhere in a prompt render as inline pill badges:
 
 | Syntax | Rendering | Functional today |
 | :--- | :--- | :--- |
+| `@<token>` / `@file:<path>` | Pill with file/folder icon | **Yes** — triggers `@` autocomplete, inserts shortest unique workspace suffix (or explicit path), expands file or directory into `<system_reminders>`, supports optional `#L<start>[-L<end>]` line ranges. |
 | `@rule:<name>` | Pill with shield icon | **Yes** — loads the rule, with `@rule:` autocomplete. |
-| `@file:<path>` | Pill with file/folder icon | Display only; no autocomplete or expansion yet (tracked in the deferred `@` context-file mentions item). |
 | `@sym:<name>` | Pill with symbol-kind icon | Display only. |
-| `@skill:<name>` | Pill with plugin icon | Display only; skills are invoked as `/skill <args>`. |
+| `@skill:<name>` | Pill with plugin icon | **Yes** — loads the skill into `<system_reminders>` and activates its deferred tools, with `@skill:` autocomplete (skills with arguments can also be invoked as `/skill <args>`). |
 
-Typing `@rule:` opens a completion popup listing available rules with their scope and description; selecting one inserts `@rule:<name> `. A rule referenced this way is injected immediately rather than suggested, so use it when you already know the rule applies. Unknown names are ignored, and a rule already loaded in the current compaction epoch is not injected twice.
+Typing `@` in the composer opens a fuzzy file and directory completion popup backed by the daemon's sandbox file index. Matching candidates display Nerd Font file/directory icons, parent directories, and `· recent` badges for session-accessed paths. Prohibited files (such as secret `.env` files or paths denied by permissions/policy) display a `[Prohibited]` badge; sending a prompt containing a prohibited or path-escaping mention is rejected with HTTP 403 Forbidden. Selecting a file or directory inserts its shortest unique slash-delimited workspace suffix (e.g. `@composer.go `, `@cli/app.go `, or `@docs/ `), quoting if the path contains whitespace. Explicit `@file:<path>` syntax is also supported. You can optionally specify a 1-based line range (e.g. `@composer.go#L10-L20` or `#L42`). During turn execution, the harness reads the file or directory via `std.View` / `std.List`, automatically tracks CAS reads, and injects the formatted contents into `<system_reminders>`. Raw prompt prose without attachments (e.g. pasted logs referencing `.env`) is never falsely rejected.
+
+Typing `@rule:` or `@skill:` opens a completion popup listing available workspace rules or skills with their scope and description; selecting one inserts `@rule:<name> ` or `@skill:<name> `. Referenced rules and skills are injected immediately into `<system_reminders>` (and attached skills activate any policy-allowed deferred tools they declare); unknown names are ignored, and neither is injected twice within the same compaction epoch.
 
 ### MCP References (`/mcp:`, `@mcp:`)
 
@@ -162,10 +164,10 @@ Discovered MCP prompts and resources are invokable from the composer:
 | Syntax | Autocomplete | Effect |
 | :--- | :--- | :--- |
 | `/mcp:<server>:<prompt>` | `/` slash menu | Renders the prompt on that server and submits the rendered messages as your turn. |
-| `@mcp:<server>:<uri>` | `@` mention menu | Reads the resource and attaches its body to your turn, prefixed with a line naming the URI, server, and MIME type. |
+| `@mcp:<server>:<uri>` | `@` mention menu | Binds the resource as a structured attachment; the daemon reads it on turn execution and injects `<context_resource>` into `<system_reminders>` while keeping the `@mcp:` pill in your message. |
 
 - **Position**: A reference is recognized anywhere in the message at a token boundary, so `explain @mcp:notes:notes://spec-1 briefly` works and the surrounding text is kept.
-- **One per message**: A message containing two references is rejected with an error naming the count, because which one to run would be a guess.
+- **Multiple references**: Multiple allowed `@mcp:` resources can be attached in a single message (including alongside `@` file and `@rule:` mentions). Invoking more than one `/mcp:` prompt (or mixing interactive MCP prompts/confirmations) in one message is rejected with an error naming the count.
 - **Unknown server**: Left as ordinary text and sent to the agent, so prose that happens to start with `/mcp:` is never hijacked. An unknown prompt or URI on a *known* server is an error pointing at `/mcp`.
 - **Prohibited items**: Completion lists them labeled `[Prohibited]`. Invoking one opens the confirmation described in [MCP Item Confirmation](#mcp-item-confirmation); see [Tools & MCP Servers](../guides/tools-and-mcp.md) for what a policy prohibits.
 - **Arguments**: A prompt that declares arguments collects them first in an `Arguments for /mcp:<server>:<prompt>` input prefilled with a JSON object template. A prompt with exactly one declared argument also accepts a bare value.

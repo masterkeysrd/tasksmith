@@ -1043,3 +1043,32 @@ func TestTimelineEventBashCommand(t *testing.T) {
 		}
 	})
 }
+
+func TestMessageUserWithAttachmentsRendersPills(t *testing.T) {
+	render := renderComponent(t, 100)
+	msg := store.Message{
+		ID:   "user-with-atts",
+		Role: api.RoleUser,
+		Parts: []store.MessagePart{
+			{
+				ID:   "text-1",
+				Type: store.PartText,
+				Text: &store.TextPart{Text: "Inspect @composer.go please"},
+			},
+		},
+		Attachments: []api.Attachment{
+			{
+				Kind:   api.AttachmentFile,
+				Ref:    "@composer.go",
+				Target: "internal/cli/components/composer.go",
+			},
+		},
+	}
+	got := render(Message(MessageProps{Message: msg}))
+	if !strings.Contains(got, "composer.go") {
+		t.Fatalf("expected rendered attachment pill label 'composer.go', got %q", got)
+	}
+	if strings.Contains(got, "@composer.go") {
+		t.Fatalf("expected raw @composer.go to be replaced with pill in %q", got)
+	}
+}

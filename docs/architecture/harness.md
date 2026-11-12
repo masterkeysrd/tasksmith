@@ -171,7 +171,7 @@ Workspace rules and skills must reach the model without paying for their full te
 | Tier | Location | Contents | Cost |
 | --- | --- | --- | --- |
 | **Discovery** | System prompt (static prefix) | `<available_skills>` and `<available_rules>` indexes — name, description, trigger keywords, usage conditions — plus the full bodies of always-on rules rendered once into `<workspace_rules>` | Billed once for the prompt prefix; stable across turns, so it stays cache-friendly |
-| **Payload** | Message history (appended) | Full conditional-rule bodies inside a `<system_reminders>` message; skill bodies returned as `load_skill` tool results | Billed only for resources the current task actually needs |
+| **Payload** | Message history (appended) | Full conditional-rule and user-attached (`@rule:`, `@skill:`, `@<file>`, `@mcp:`) bodies inside a `<system_reminders>` message; model-pulled skill bodies returned as `load_skill` tool results | Billed only for resources the current task actually needs |
 
 Because the discovery tier does not grow with usage, a workspace can declare many rules and skills while each turn pays only for the index.
 
@@ -179,8 +179,8 @@ Because the discovery tier does not grow with usage, a workspace can declare man
 | Dimension | Rules (pushed) | Skills (pulled) |
 | --- | --- | --- |
 | **Selection authority** | Harness rule matcher | Model |
-| **Trigger evaluation** | `@rule:` references, `triggers.tools`, and `triggers.globs` inject automatically; `triggers.keywords` only *suggests* | No matcher exists — relevance is judged by the model |
-| **Body delivery** | Appended to history inside `<system_reminders>` | Returned as the `load_skill` tool result |
+| **Trigger evaluation** | `@rule:` attachments, `triggers.tools`, and `triggers.globs` inject automatically; `triggers.keywords` only *suggests* | Explicit `@skill:` attachments inject on user request; otherwise relevance is judged by the model |
+| **Body delivery** | Appended to history inside `<system_reminders>` | Returned as the `load_skill` tool result (or inside `<system_reminders>` when attached via `@skill:`) |
 | **Side effects** | Recorded in session state, journaled as a rule timeline entry, and announced via a `rule_loaded` stream event | Also activates the skill's deferred tools |
 | **Always-on form** | `triggers.always: true` bodies are rendered into the static prefix and cannot be opted out | Not applicable |
 
@@ -195,8 +195,8 @@ Injected reminders are synthetic user messages. Three properties keep them safe:
 - **Append-only.** A reminder is appended once, immediately after the message that triggered it, and is never mutated or re-ordered. The prompt prefix therefore stays byte-identical across turns, preserving upstream prompt-cache hits.
 
 #### 4. Deduplication & Compaction Epochs
-- **Per-epoch deduplication:** session state tracks which rules were loaded and which were merely suggested (case-insensitively), so a rule is never injected twice and a suggestion is never repeated. Tool activation state is tracked the same way.
-- **Epoch reset:** compaction clears the loaded-rule, suggested-rule, and loaded-tool sets and zeroes cached tokens, allowing rules relevant to the summarized work to be re-injected against the fresh context.
+- **Per-epoch deduplication:** session state tracks which rules and skills were loaded and which rules were merely suggested (case-insensitively), so neither is injected twice and a suggestion is never repeated. Tool activation state is tracked the same way.
+- **Epoch reset:** compaction clears the loaded-rule, loaded-skill, suggested-rule, and loaded-tool sets and zeroes cached tokens, allowing rules and skills relevant to the summarized work to be re-injected against the fresh context.
 - **Awareness survives the reset:** the summarization template reserves a *Recommended Skills & Rules* section, so the distilled context tells the model what it was relying on and it can deliberately re-load rather than rediscover.
 
 ---

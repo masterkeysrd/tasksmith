@@ -31,6 +31,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/daemon/permissions"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/server"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/session"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/std"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tasks"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/workspace"
 	"github.com/masterkeysrd/warp"
@@ -641,6 +642,66 @@ func (d *Daemon) ListTools(ctx context.Context, rawWS, agent string) ([]api.Tool
 		}
 	}
 	return out, nil
+}
+
+// ListWorkspaceFiles searches and ranks workspace files and directories for context mentions.
+func (d *Daemon) ListWorkspaceFiles(ctx context.Context, rawWS string, req api.ListFilesRequest) ([]api.WorkspaceFile, error) {
+	rt, err := d.workspace(ctx, rawWS)
+	if err != nil {
+		return nil, err
+	}
+
+	var idx *std.FileIndex
+	var recentPaths []string
+	var sessPerms permissions.SessionManager
+
+	workDir := rt.Dir()
+
+	if strings.TrimSpace(req.SessionID) != "" {
+		sess, err := rt.getLiveSession(ctx, req.SessionID)
+		if err == nil && sess != nil {
+			idx, err = sess.GetFileIndex()
+			if err != nil {
+				return nil, err
+			}
+			if sess.Journal != nil {
+				recentPaths = sess.Journal.RecentPaths()
+			}
+			sessPerms = sess.PermManager
+			if sess.WorkDir != "" {
+				workDir = sess.WorkDir
+			}
+		}
+	}
+
+	if idx == nil {
+		idx, err = rt.getFileIndex(ctx)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	files, err := idx.Search(ctx, std.SearchOptions{
+		Query:         req.Query,
+		Limit:         req.Limit,
+		RecentPaths:   recentPaths,
+		IncludeHidden: req.IncludeHidden,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	checker := permissions.NewFileAccessChecker(permissions.FileAccessConfig{
+		WorkDir:   workDir,
+		Workspace: rt.Workspace(),
+		Manager:   rt.perms,
+		Session:   sessPerms,
+	})
+	for i := range files {
+		files[i].Allowed = checker.Check(files[i].Path, files[i].Path, files[i].IsDir) == nil
+	}
+
+	return files, nil
 }
 
 func (d *Daemon) ListModels(ctx context.Context, rawWS string) ([]api.Model, error) {

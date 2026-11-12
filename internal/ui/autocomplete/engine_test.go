@@ -572,6 +572,38 @@ func FuzzComplete(f *testing.F) {
 	})
 }
 
+func TestEnginePassthrough(t *testing.T) {
+	engine := New()
+	err := engine.Register(Source{
+		Name:        "passthrough-files",
+		Trigger:     "@",
+		Passthrough: true,
+		Complete: func(ctx context.Context, req Request) ([]Candidate, error) {
+			// Returns candidates that do NOT have prefix "app"
+			return []Candidate{
+				{Value: "internal/cli/app.go", Label: "app.go"},
+				{Value: "pkg/other.go", Label: "other.go"},
+			}, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("Register failed: %v", err)
+	}
+
+	res, err := engine.Complete(context.Background(), "@app", 4)
+	if err != nil {
+		t.Fatalf("Complete failed: %v", err)
+	}
+
+	// Because Passthrough is true, all candidates returned by Complete are preserved without HasPrefix filtering
+	if len(res.Candidates) != 2 {
+		t.Fatalf("got %d candidates, want 2", len(res.Candidates))
+	}
+	if res.Candidates[0].Value != "internal/cli/app.go" || res.Candidates[1].Value != "pkg/other.go" {
+		t.Errorf("candidates = %+v", res.Candidates)
+	}
+}
+
 func ExampleEngine_Complete() {
 	engine := New()
 	for _, source := range []Source{

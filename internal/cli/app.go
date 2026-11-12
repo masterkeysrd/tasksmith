@@ -128,7 +128,7 @@ var appContent = trail.SimpleFC("AppContent", func() trail.Node {
 		components.Composer(components.ComposerProps{
 			Autocomplete:    engine,
 			CompletionViews: views,
-			OnSubmit: func(text string) {
+			OnSubmit: func(text string, attachments []api.Attachment) {
 				if strings.HasPrefix(text, "/") && !strings.HasPrefix(text, command.MCPRefPrefix) {
 					if err := registry.Execute(text); err != nil {
 						store.AppendError("Error", err.Error())
@@ -141,10 +141,10 @@ var appContent = trail.SimpleFC("AppContent", func() trail.Node {
 				}
 				// An MCP reference runs or attaches the referenced item instead of
 				// being forwarded to the model as a bare token.
-				if command.SubmitMCPReference(text) {
+				if command.SubmitMCPReference(text, attachments...) {
 					return
 				}
-				store.Send(text)
+				store.Send(text, attachments...)
 			},
 			OnCancel:    store.Cancel,
 			OnCycleMode: func() { _ = store.CycleMode() },

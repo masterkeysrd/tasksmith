@@ -15,6 +15,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/harness"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/std"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/tools"
 	"github.com/masterkeysrd/warp"
 )
 
@@ -247,7 +248,7 @@ func (s *Session) dispatchCommandSubagent(ctx context.Context, exec *commandExec
 	if exec.Resolved != nil && len(exec.Resolved.Tools) > 0 {
 		content := make(message.Content, 0, len(exec.Resolved.Tools)+1)
 		content = append(content, &message.TextBlock{Text: exec.Message.GetContent().Text()})
-		content = appendCommandToolBlocks(content, child.Tools, s.workspace.Catalog(), exec.Resolved.Tools)
+		content = append(content, tools.ActivationBlocks(child.Tools, s.workspace.Catalog(), exec.Resolved.Tools)...)
 		cmdMsg = message.NewUser(content...)
 		cmdMsg.SetID(uuid.NewString())
 	}

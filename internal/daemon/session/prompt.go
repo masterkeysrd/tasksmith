@@ -12,7 +12,6 @@ import (
 
 	"github.com/masterkeysrd/loom/llm"
 	"github.com/masterkeysrd/loom/message"
-	"github.com/masterkeysrd/loom/tool"
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
@@ -308,7 +307,7 @@ func (s *Session) resolveCommandExecution(msg message.Message) (*commandExecutio
 		}
 		content := make(message.Content, 0, len(resolvedTools)+1)
 		content = append(content, &message.TextBlock{Text: promptText})
-		content = appendCommandToolBlocks(content, s.Tools, cat, resolvedTools)
+		content = append(content, tools.ActivationBlocks(s.Tools, cat, resolvedTools)...)
 
 		newMsg := message.NewUser(content...)
 		if msg.GetID() != "" {
@@ -364,19 +363,7 @@ func (s *Session) resolveCommandExecution(msg message.Message) (*commandExecutio
 		skillTools, _ := cat.ToolsForSkill(s.Config.Agent, sk.Def.QualifiedName())
 		content := make(message.Content, 0, len(skillTools)+1)
 		content = append(content, &message.TextBlock{Text: promptText})
-		for _, wt := range skillTools {
-			if t, ok := s.Tools.Get(wt.Metadata.Name); ok {
-				// Eager tools are already in the model's context; only deferred
-				// tools need a reference block to be activated.
-				if t.Definition().DeferLoading {
-					content = append(content, &message.ToolReferenceBlock{ToolName: wt.Metadata.Name})
-				}
-				continue
-			}
-			if def, ok := cat.GetTool(wt.Metadata.Name); ok {
-				content = append(content, toolDefinitionBlock(def))
-			}
-		}
+		content = append(content, tools.ActivationBlocks(s.Tools, cat, skillTools)...)
 
 		newMsg := &message.User{
 			Base: message.Base{Metadata: map[string]any{
@@ -430,50 +417,6 @@ func (s *Session) resolveSlashCommand(msg message.Message) (message.Message, err
 		return msg, nil
 	}
 	return exec.Message, nil
-}
-
-// toolDefinitionBlock builds an inline tool-definition block for a warp.Tool that
-// is policy-allowed but not registered in the session container, so the model can
-// invoke it mid-conversation.
-func toolDefinitionBlock(wt *warp.Tool) *message.ToolDefinitionBlock {
-	def := tool.Definition{
-		Name:        wt.Metadata.Name,
-		Description: wt.Spec.Instructions,
-	}
-	if def.Description == "" {
-		def.Description = wt.Metadata.Description
-	}
-	return def.ToBlock()
-}
-
-// appendCommandToolBlocks activates a resolved command's effective tools into the
-// model's context by appending blocks to content: a ToolReferenceBlock for each
-// deferred tool already registered in toolsContainer, and an inline
-// ToolDefinitionBlock for any policy-allowed tool that is not registered in the
-// container. Tools are deduplicated by name.
-func appendCommandToolBlocks(content message.Content, toolsContainer tools.Container, cat *workspace.Catalog, resolvedTools []*warp.Tool) message.Content {
-	seen := make(map[string]bool, len(resolvedTools))
-	for _, wt := range resolvedTools {
-		if wt == nil || seen[wt.Metadata.Name] {
-			continue
-		}
-		seen[wt.Metadata.Name] = true
-
-		if toolsContainer != nil {
-			if t, ok := toolsContainer.Get(wt.Metadata.Name); ok {
-				// Eager tools are already in the model's context; only deferred
-				// tools need a reference block to be activated.
-				if t.Definition().DeferLoading {
-					content = append(content, &message.ToolReferenceBlock{ToolName: wt.Metadata.Name})
-				}
-				continue
-			}
-		}
-		if def, ok := cat.GetTool(wt.Metadata.Name); ok {
-			content = append(content, toolDefinitionBlock(def))
-		}
-	}
-	return content
 }
 
 func (s *Session) generateTitle(userText string) {

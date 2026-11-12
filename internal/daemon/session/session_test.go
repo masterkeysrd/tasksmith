@@ -5922,6 +5922,160 @@ func TestSessionSendValidation(t *testing.T) {
 	}
 }
 
+func TestSessionSendFileMentionAccess(t *testing.T) {
+	ctx := context.Background()
+	prov := &fakeProvider{}
+	db, ws, gw, pub, mgr := setupTestEnv(t, prov)
+	t.Cleanup(func() { _ = mgr.Close() })
+
+	sess, _, err := mgr.Create(ctx, api.CreateSessionRequest{Title: "File Mention Test"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	// 1. Pasted prose containing @file:.env in SendRequest.Content WITHOUT Attachments succeeds as ordinary text and does NOT 403!
+	err = sess.Send(ctx, api.SendRequest{Content: "Here is a log with @file:.env embedded in text."})
+	if err != nil {
+		t.Fatalf("expected prose containing @file:.env without Attachments to succeed, got: %v", err)
+	}
+	if err := sess.Wait(ctx); err != nil {
+		t.Fatalf("Wait err: %v", err)
+	}
+
+	// 2. Structured SendRequest.Attachments targeting .env returns 403 Forbidden
+	err = sess.Send(ctx, api.SendRequest{
+		Content: "Please review",
+		Attachments: []api.Attachment{
+			{Kind: api.AttachmentFile, Ref: "@file:.env", Target: ".env"},
+		},
+	})
+	var apiErr *api.APIError
+	if !errors.As(err, &apiErr) || apiErr.StatusCode != http.StatusForbidden {
+		t.Fatalf("expected 403 APIError for .env attachment, got: %v", err)
+	}
+
+	// 3. Structured SendRequest.Attachments targeting escaping path returns 403 Forbidden
+	err = sess.Send(ctx, api.SendRequest{
+		Content: "Read outside",
+		Attachments: []api.Attachment{
+			{Kind: api.AttachmentFile, Ref: "@../outside.txt", Target: "../outside.txt"},
+		},
+	})
+	if !errors.As(err, &apiErr) || apiErr.StatusCode != http.StatusForbidden {
+		t.Fatalf("expected 403 APIError for ../outside.txt attachment, got: %v", err)
+	}
+
+	// 4. Structured SendRequest.Attachments targeting repo internal returns 403 Forbidden
+	err = sess.Send(ctx, api.SendRequest{
+		Content: "Read git config",
+		Attachments: []api.Attachment{
+			{Kind: api.AttachmentFile, Ref: "@.git/config", Target: ".git/config"},
+		},
+	})
+	if !errors.As(err, &apiErr) || apiErr.StatusCode != http.StatusForbidden {
+		t.Fatalf("expected 403 APIError for .git/config attachment, got: %v", err)
+	}
+
+	// 5. Valid structured Attachments succeed and round-trip through timeline (SQLite)
+	testAtts := []api.Attachment{
+		{Kind: api.AttachmentFile, Ref: "@app.go", Target: "app.go", StartLine: 10, EndLine: 20},
+		{Kind: api.AttachmentRule, Ref: "@rule:test-rule", Target: "test-rule"},
+	}
+	err = sess.Send(ctx, api.SendRequest{
+		Content:     "Check @app.go#L10-L20 and @rule:test-rule",
+		Attachments: testAtts,
+	})
+	if err != nil {
+		t.Fatalf("expected valid SendRequest with Attachments to succeed, got: %v", err)
+	}
+	if err := sess.Wait(ctx); err != nil {
+		t.Fatalf("Wait err: %v", err)
+	}
+
+	// 6. Timeline reload preserves Message.Attachments after SQLite round-trip
+	entries, err := sess.Timeline.List(ctx)
+	if err != nil {
+		t.Fatalf("Timeline.List: %v", err)
+	}
+	var foundMsgEntry *timeline.Entry
+	for i := range entries {
+		if entries[i].Kind == api.TimelineKindMessage && entries[i].Message != nil && entries[i].Message.Role() == "user" {
+			text := entries[i].Message.GetContent().Text()
+			if strings.Contains(text, "Check @app.go#L10-L20") {
+				foundMsgEntry = &entries[i]
+				break
+			}
+		}
+	}
+	if foundMsgEntry == nil {
+		t.Fatalf("expected to find timeline message entry for user prompt")
+	}
+
+	apiEntry, err := ToAPITimelineEntry(*foundMsgEntry)
+	if err != nil {
+		t.Fatalf("ToAPITimelineEntry: %v", err)
+	}
+	if apiEntry.Message == nil {
+		t.Fatalf("expected non-nil apiEntry.Message")
+	}
+	if len(apiEntry.Message.Attachments) != 2 {
+		t.Fatalf("expected 2 attachments preserved after SQLite round-trip, got %d: %+v", len(apiEntry.Message.Attachments), apiEntry.Message.Attachments)
+	}
+	if apiEntry.Message.Attachments[0].Ref != "@app.go" || apiEntry.Message.Attachments[0].StartLine != 10 {
+		t.Errorf("attachment 0 mismatch: %+v", apiEntry.Message.Attachments[0])
+	}
+	if apiEntry.Message.Attachments[1].Target != "test-rule" {
+		t.Errorf("attachment 1 mismatch: %+v", apiEntry.Message.Attachments[1])
+	}
+
+	// Also verify re-opening session coordinator against the same DB preserves Message.Attachments
+	permMgr, err := permissions.New(permissions.Config{Workspace: ws})
+	if err != nil {
+		t.Fatalf("permissions.New: %v", err)
+	}
+	mgr2, err := newTestCoordinator(Config{
+		DB:          db,
+		Workspace:   ws,
+		Gateway:     func() gateway.Gateway { return gw },
+		Publisher:   pub,
+		Logger:      log.Default(),
+		Permissions: permMgr,
+	})
+	if err != nil {
+		t.Fatalf("newTestCoordinator (reopen): %v", err)
+	}
+	t.Cleanup(func() { _ = mgr2.Close() })
+
+	reopenedSess, err := mgr2.Get(ctx, sess.ID)
+	if err != nil {
+		t.Fatalf("mgr2.Get: %v", err)
+	}
+	reopenedEntries, err := reopenedSess.Timeline.List(ctx)
+	if err != nil {
+		t.Fatalf("reopened Timeline.List: %v", err)
+	}
+	var foundReopened *timeline.Entry
+	for i := range reopenedEntries {
+		if reopenedEntries[i].Kind == api.TimelineKindMessage && reopenedEntries[i].Message != nil && reopenedEntries[i].Message.Role() == "user" {
+			text := reopenedEntries[i].Message.GetContent().Text()
+			if strings.Contains(text, "Check @app.go#L10-L20") {
+				foundReopened = &reopenedEntries[i]
+				break
+			}
+		}
+	}
+	if foundReopened == nil {
+		t.Fatalf("expected to find reopened timeline message entry")
+	}
+	reopenedAPIEntry, err := ToAPITimelineEntry(*foundReopened)
+	if err != nil {
+		t.Fatalf("ToAPITimelineEntry on reopened: %v", err)
+	}
+	if len(reopenedAPIEntry.Message.Attachments) != 2 {
+		t.Fatalf("expected 2 attachments in reopened session, got %d", len(reopenedAPIEntry.Message.Attachments))
+	}
+}
+
 // TestHumanAgentTriggerEnforcement verifies that top-level human sessions may
 // not select or invoke agents whose triggers exclude "human" (such as the
 // built-in "explore" agent, which sets triggers: [agent]), while subagent

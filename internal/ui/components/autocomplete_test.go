@@ -307,3 +307,130 @@ func TestAutocompletePresentation(t *testing.T) {
 		})
 	}
 }
+
+func TestUseAutocompleteNoFlickerWhileRefining(t *testing.T) {
+	gate := make(chan struct{})
+	inFlight := make(chan struct{}, 2)
+	engine := autocomplete.New()
+	if err := engine.Register(autocomplete.Source{
+		Name:        "files",
+		Trigger:     "@",
+		Passthrough: true,
+		Complete: func(_ context.Context, req autocomplete.Request) ([]autocomplete.Candidate, error) {
+			switch req.Query {
+			case "a":
+				return []autocomplete.Candidate{{Value: "alpha.go"}, {Value: "alpine.go"}}, nil
+			case "ap":
+				inFlight <- struct{}{}
+				<-gate
+				return []autocomplete.Candidate{{Value: "alpine.go"}}, nil
+			case "z":
+				return nil, nil
+			case "zz":
+				inFlight <- struct{}{}
+				<-gate
+				return nil, nil
+			default:
+				return nil, nil
+			}
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		select {
+		case <-gate:
+		default:
+			close(gate)
+		}
+	})
+
+	var renders atomic.Int32
+	var latest AutocompleteState
+	var update func(AutocompleteOptions)
+	backend := mock.New(80, 24)
+	component := trail.SimpleFC("NoFlickerTest", func() trail.Node {
+		renders.Add(1)
+		opts, setOpts := kitex.UseState(AutocompleteOptions{Engine: engine, Value: "h", Cursor: 1})
+		update = setOpts
+		latest = UseAutocomplete(opts())
+		return Autocomplete(AutocompleteProps{State: latest})
+	})
+	cache := wind.NewClient()
+	inst, err := trail.New(
+		wind.Provider(wind.ProviderProps{Client: cache}, component()),
+		trail.WithBackend(backend),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(inst.Unmount)
+	inst.Frame()
+
+	surfaceString := func() string {
+		var out strings.Builder
+		frame := backend.LastFrame().Surface
+		if frame != nil {
+			for y := 0; y < frame.Height; y++ {
+				for x := 0; x < frame.Width; x++ {
+					out.WriteString(frame.CellAt(x, y).Content)
+				}
+			}
+		}
+		return out.String()
+	}
+
+	// 1. Typing ordinary text triggers a single render per edit with no extra effect re-render.
+	before := renders.Load()
+	update(AutocompleteOptions{Engine: engine, Value: "he", Cursor: 2})
+	inst.Frame()
+	if got := renders.Load() - before; got != 1 {
+		t.Fatalf("ordinary text edit caused %d renders, want 1", got)
+	}
+
+	// 2. Resolve "@a" first so candidates are visible.
+	update(AutocompleteOptions{Engine: engine, Value: "@a", Cursor: 2})
+	awaitCompletion(t, inst, func() bool { return latest.IsOpen && !latest.IsLoading })
+	if s := surfaceString(); !strings.Contains(s, "alpha.go") {
+		t.Fatalf("expected alpha.go in initial completion, got %q", s)
+	}
+
+	// 3. Refine to "@ap" (blocked in flight): previous candidates stay mounted with no "Completing..." flash.
+	update(AutocompleteOptions{Engine: engine, Value: "@ap", Cursor: 3})
+	awaitCompletion(t, inst, func() bool { return len(inFlight) > 0 })
+	<-inFlight
+	inst.Frame()
+	mid := surfaceString()
+	if strings.Contains(mid, "Completing...") {
+		t.Fatalf("autocomplete flashed Completing... while refining search: %q", mid)
+	}
+	if !strings.Contains(mid, "alpha.go") || !strings.Contains(mid, "alpine.go") {
+		t.Fatalf("previous candidates disappeared while refining search: %q", mid)
+	}
+
+	// Release "@ap" and verify updated candidates take over cleanly.
+	close(gate)
+	awaitCompletion(t, inst, func() bool { return !latest.IsLoading && len(latest.Result.Candidates) == 1 })
+	inst.Frame()
+	if after := surfaceString(); strings.Contains(after, "alpha.go") || !strings.Contains(after, "alpine.go") {
+		t.Fatalf("updated candidates did not render cleanly: %q", after)
+	}
+
+	// 4. After "@z" resolves to 0 matches (closed), typing "@zz" stays closed while in flight.
+	gate = make(chan struct{})
+	update(AutocompleteOptions{Engine: engine, Value: "@z", Cursor: 2})
+	awaitCompletion(t, inst, func() bool { return !latest.IsLoading })
+	if latest.IsOpen {
+		t.Fatalf("expected @z with 0 matches to close autocomplete")
+	}
+
+	update(AutocompleteOptions{Engine: engine, Value: "@zz", Cursor: 3})
+	awaitCompletion(t, inst, func() bool { return len(inFlight) > 0 })
+	<-inFlight
+	inst.Frame()
+	if latest.IsOpen || strings.Contains(surfaceString(), "Completing...") {
+		t.Fatalf("0-match refinement popped open Completing... flash")
+	}
+	close(gate)
+	awaitCompletion(t, inst, func() bool { return !latest.IsLoading })
+}

@@ -290,16 +290,18 @@ type Session struct {
 	PermManager permissions.SessionManager `json:"-"`
 	permRoot    permissions.Manager        `json:"-"`
 
-	Root       string            `json:"-"` // Path to <WorkspaceDir>/sessions/<id>
-	Sandbox    sandbox.Sandbox   `json:"-"`
-	Timeline   timeline.Timeline `json:"-"`
-	Journal    journal.Journal   `json:"-"`
-	Tools      tools.Container   `json:"-"`
-	Tasks      tasks.Store       `json:"-"`
-	Harness    harness.Harness   `json:"-"`
-	Std        *std.Std          `json:"-"`
-	spiller    tools.Spiller     `json:"-"`
-	harnessErr error
+	Root        string            `json:"-"` // Path to <WorkspaceDir>/sessions/<id>
+	Sandbox     sandbox.Sandbox   `json:"-"`
+	Timeline    timeline.Timeline `json:"-"`
+	Journal     journal.Journal   `json:"-"`
+	Tools       tools.Container   `json:"-"`
+	Tasks       tasks.Store       `json:"-"`
+	Harness     harness.Harness   `json:"-"`
+	Std         *std.Std          `json:"-"`
+	FileIndex   *std.FileIndex    `json:"-"`
+	attachments *harness.AttachmentResolver
+	spiller     tools.Spiller `json:"-"`
+	harnessErr  error
 
 	// turnIDs and turnStart track the turn in progress: the user messages that
 	// started it and when the first of them was recorded. Guarded by the
@@ -509,6 +511,22 @@ func (s *Session) initSubsystems(ctx context.Context, db *sql.DB) error {
 		})
 	}
 
+	attResolver, err := harness.NewAttachmentResolver(harness.AttachmentResolverConfig{
+		AgentName:   s.Config.Agent,
+		Workspace:   s.workspace,
+		Tools:       s.Tools,
+		Std:         s.Std,
+		Sandbox:     s.Sandbox,
+		Permissions: s.PermManager,
+		WorkDir:     s.WorkDir,
+		MCPCaller:   s.mcpCaller,
+		Logger:      s.logger,
+	})
+	if err != nil {
+		return fmt.Errorf("session: initialize attachment resolver: %w", err)
+	}
+	s.attachments = attResolver
+
 	h, err := harness.New(harness.Config{
 		ID:          s.ID,
 		DB:          db,
@@ -558,6 +576,10 @@ func (s *Session) Matches(req api.CreateSessionRequest) error {
 func (s *Session) Refresh(ctx context.Context) {
 	s.Lock()
 	s.Diagnostics = s.modelDiagnostics(s.Config)
+	if s.FileIndex != nil {
+		s.FileIndex.SetAllowExec(s.workspace != nil && !s.workspace.IsRestricted())
+		s.FileIndex.Invalidate()
+	}
 	s.Unlock()
 	_ = s.configureHarness(ctx)
 	s.publisher.Publish(api.TopicSessions, api.SessionUpdatedEvent{
@@ -722,6 +744,10 @@ func (s *Session) Close() error {
 	}
 	s.Lock()
 	defer s.Unlock()
+	if s.FileIndex != nil {
+		_ = s.FileIndex.Close()
+		s.FileIndex = nil
+	}
 	if s.Tasks != nil {
 		_ = s.Tasks.Close()
 		s.Tasks = nil
@@ -732,6 +758,29 @@ func (s *Session) Close() error {
 		return err
 	}
 	return nil
+}
+
+// GetFileIndex returns the session's FileIndex, creating it lazily if needed.
+func (s *Session) GetFileIndex() (*std.FileIndex, error) {
+	s.Lock()
+	defer s.Unlock()
+	if s.FileIndex != nil {
+		s.FileIndex.SetAllowExec(s.workspace != nil && !s.workspace.IsRestricted())
+		return s.FileIndex, nil
+	}
+	if s.Std == nil {
+		return nil, errors.New("session: std uninitialized")
+	}
+	idx, err := std.NewFileIndex(std.FileIndexOptions{
+		Std:       s.Std,
+		AllowExec: s.workspace != nil && !s.workspace.IsRestricted(),
+		Lifecycle: s.bgCtx,
+	})
+	if err != nil {
+		return nil, err
+	}
+	s.FileIndex = idx
+	return idx, nil
 }
 
 func (s *Session) updateContextLimits(agentName, modelName string) (models.Limits, harness.StaticContext) {
@@ -828,8 +877,10 @@ func (s *Session) configureHarness(ctx context.Context) error {
 	// Build the smart rule matcher for the active agent. A nil matcher (rule-free
 	// agent) disables rule matching without a separate guard.
 	var ruleMatcher *harness.RuleMatcher
+	var renderGlobals map[string]any
 	if resolved != nil {
-		ruleMatcher = harness.NewRuleMatcher(resolved, cat.WorkspaceSpec(), cat.Project(), cat.AgentRenderGlobals(resolved))
+		renderGlobals = cat.AgentRenderGlobals(resolved)
+		ruleMatcher = harness.NewRuleMatcher(resolved, cat.WorkspaceSpec(), cat.Project(), renderGlobals)
 	}
 
 	// Propagate the active agent's tool policy ceiling to the permission gate so
@@ -874,6 +925,25 @@ func (s *Session) configureHarness(ctx context.Context) error {
 		s.PermManager.SetAgentPolicies(agentPolicies)
 	}
 
+	attachmentResolver, err := harness.NewAttachmentResolver(harness.AttachmentResolverConfig{
+		AgentName:   agentName,
+		Workspace:   s.workspace,
+		Tools:       container,
+		Rules:       ruleMatcher,
+		Std:         s.Std,
+		Sandbox:     s.Sandbox,
+		Permissions: s.PermManager,
+		WorkDir:     s.WorkDir,
+		MCPCaller:   s.mcpCaller,
+		Logger:      s.logger,
+	})
+	if err != nil {
+		s.Lock()
+		s.harnessErr = err
+		s.Unlock()
+		return err
+	}
+
 	opts := harness.NodeOptions{
 		Model:        llmModel,
 		Tools:        container,
@@ -881,11 +951,13 @@ func (s *Session) configureHarness(ctx context.Context) error {
 		Limits:       limits,
 		Static:       staticCtx,
 		Rules:        ruleMatcher,
+		Attachments:  attachmentResolver,
 	}
 	err = s.Harness.Configure(opts)
 
 	s.Lock()
 	s.Tools = container
+	s.attachments = attachmentResolver
 	s.harnessErr = err
 	s.Unlock()
 

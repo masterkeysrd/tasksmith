@@ -1,12 +1,13 @@
 package components
 
 import (
+	"cmp"
 	"fmt"
-	"image/color"
 	"strings"
 
 	"github.com/masterkeysrd/kite/extras/kitex"
 	"github.com/masterkeysrd/kite/style"
+	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/ui/components/icon"
 	"github.com/masterkeysrd/tasksmith/internal/ui/theme"
 	"github.com/yuin/goldmark"
@@ -23,6 +24,7 @@ type MarkdownProps struct {
 	Source          string
 	Style           style.Style
 	PlainCodeBlocks bool
+	Attachments     []api.Attachment
 	// OnAttachmentClick is called when a @file:, @sym:, or @skill: pill is clicked.
 	// Receives the ref type ("file", "sym", "skill") and the raw value from the token.
 	// If nil, pills are rendered as static badges.
@@ -40,12 +42,19 @@ var Markdown = kitex.FC("Markdown", func(props MarkdownProps) kitex.Node {
 			return nil
 		}
 
+		attMap := make(map[string]api.Attachment, len(props.Attachments))
+		for _, att := range props.Attachments {
+			if att.Ref != "" {
+				attMap[att.Ref] = att
+			}
+		}
+
 		src := []byte(props.Source)
 		md := goldmark.New(
 			goldmark.WithExtensions(extension.Table),
 			goldmark.WithParserOptions(
 				parser.WithInlineParsers(
-					util.Prioritized(&attachmentRefParser{}, 999),
+					util.Prioritized(&attachmentRefParser{attachments: attMap}, 999),
 				),
 			),
 		)
@@ -371,7 +380,7 @@ var Markdown = kitex.FC("Markdown", func(props MarkdownProps) kitex.Node {
 		}
 
 		return renderBlock(doc)
-	}, []any{t, props.Source, props.Style, props.PlainCodeBlocks})
+	}, []any{t, props.Source, props.Style, props.PlainCodeBlocks, props.Attachments})
 
 	return node
 })
@@ -397,7 +406,7 @@ func renderAttachmentRefPill(node *AttachmentRefNode, t *theme.Scheme, onAttachm
 				Style: style.S().Foreground(iconColor),
 			}, icon.Directory)
 		} else {
-			iconNode = icon.FileIcon(icon.FileIconProps{Path: node.Label})
+			iconNode = icon.FileIcon(icon.FileIconProps{Path: cmp.Or(node.Target, node.Label)})
 		}
 		labelText = node.Label
 	case "sym":
@@ -419,6 +428,12 @@ func renderAttachmentRefPill(node *AttachmentRefNode, t *theme.Scheme, onAttachm
 			Style: style.S().Foreground(iconColor),
 		}, icon.Shield)
 		labelText = node.Label
+	case "mcp":
+		iconColor = t.Color.Icon.Info
+		iconNode = kitex.Span(kitex.SpanProps{
+			Style: style.S().Foreground(iconColor),
+		}, icon.Network)
+		labelText = node.Label
 	}
 
 	_ = iconColor // used for icon coloring above
@@ -436,7 +451,7 @@ func renderAttachmentRefPill(node *AttachmentRefNode, t *theme.Scheme, onAttachm
 	labelNode := kitex.Span(kitex.SpanProps{
 		Style: style.S().
 			Bold(true).
-			Foreground(color.RGBA{255, 255, 255, 255}),
+			Foreground(t.Color.Text.Primary),
 	}, kitex.Text(labelText))
 
 	var contentNode kitex.Node

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -23,6 +24,7 @@ var (
 	ErrLoopbackBlocked   = errors.New("sandbox: loopback address access is blocked by policy")
 	ErrInvalidURL        = errors.New("sandbox: invalid http/https url")
 	ErrNativeUnavailable = errors.New("sandbox: native OS sandbox backend is unavailable")
+	ErrWatchUnsupported  = errors.New("sandbox: watching filesystem is unsupported")
 )
 
 // Mode defines the isolation backend used by a Sandbox.
@@ -145,6 +147,63 @@ type FS interface {
 	// ResolvePath validates path and returns a clean, slash-separated path
 	// relative to the sandbox root, or ErrPathEscape if path escapes WorkDir.
 	ResolvePath(path string) (string, error)
+
+	// Watch monitors the directory at path (relative to WorkDir) for filesystem changes.
+	Watch(ctx context.Context, path string, opts WatchOptions) (Watcher, error)
+}
+
+// WatchOp represents a bitmask of filesystem change operations.
+type WatchOp uint32
+
+const (
+	WatchCreate WatchOp = 1 << iota
+	WatchWrite
+	WatchRemove
+	WatchRename
+	WatchChmod
+)
+
+func (op WatchOp) String() string {
+	if op == 0 {
+		return "none"
+	}
+	var ops []string
+	if op&WatchCreate != 0 {
+		ops = append(ops, "create")
+	}
+	if op&WatchWrite != 0 {
+		ops = append(ops, "write")
+	}
+	if op&WatchRemove != 0 {
+		ops = append(ops, "remove")
+	}
+	if op&WatchRename != 0 {
+		ops = append(ops, "rename")
+	}
+	if op&WatchChmod != 0 {
+		ops = append(ops, "chmod")
+	}
+	return strings.Join(ops, "|")
+}
+
+// WatchEvent describes a filesystem mutation event within the sandbox.
+type WatchEvent struct {
+	Path string  // Clean, slash-separated sandbox-relative path
+	Op   WatchOp // Bitmask of operations
+}
+
+// WatchOptions configures filesystem watching.
+type WatchOptions struct {
+	Recursive bool     // Watch directory and all subdirectories recursively
+	Ignore    []string // Additional directory names or patterns to ignore (always includes .git, .bare)
+	MaxDirs   int      // Maximum directories to watch (defaults to 1024 when <= 0)
+}
+
+// Watcher provides streaming notifications of filesystem events within the sandbox.
+type Watcher interface {
+	Events() <-chan WatchEvent
+	Errors() <-chan error
+	Close() error
 }
 
 // Command specifies the parameters for executing a child process inside the sandbox.

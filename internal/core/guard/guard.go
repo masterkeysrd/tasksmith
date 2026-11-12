@@ -38,6 +38,21 @@ var DefaultSensitiveHomeDirs = []string{
 	".netrc",
 }
 
+// IsSecretEnvFile reports whether name (a file's base name) is a dotenv secret file
+// (such as ".env" or ".env.local") while allowing safe template suffixes
+// (".example", ".sample", ".template").
+func IsSecretEnvFile(name string) bool {
+	if name == ".env" || strings.HasPrefix(name, ".env.") {
+		if strings.HasSuffix(name, ".example") ||
+			strings.HasSuffix(name, ".sample") ||
+			strings.HasSuffix(name, ".template") {
+			return false
+		}
+		return true
+	}
+	return false
+}
+
 // IsProtectedPath reports whether targetPath (either workspace-relative or
 // absolute within workspaceDir) resides inside any of the specified protected
 // directories. If protectedDirs is empty, DefaultProtectedDirs is used.

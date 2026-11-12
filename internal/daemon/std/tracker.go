@@ -27,6 +27,7 @@ type MemoryTracker struct {
 	mu      sync.RWMutex
 	files   map[string]trackedState
 	changes []FileChange
+	recent  []string
 }
 
 var _ FileTracker = (*MemoryTracker)(nil)
@@ -96,6 +97,34 @@ func (t *MemoryTracker) TrackedPaths() []string {
 	return paths
 }
 
+// RecentPaths returns the most recently read or modified file paths in MRU order.
+func (t *MemoryTracker) RecentPaths() []string {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	out := make([]string, len(t.recent))
+	copy(out, t.recent)
+	return out
+}
+
+const maxRecentPaths = 100
+
+func updateMRU(recent []string, path string) []string {
+	if path == "" || path == "." {
+		return recent
+	}
+	out := make([]string, 0, min(len(recent)+1, maxRecentPaths))
+	out = append(out, path)
+	for _, p := range recent {
+		if p != path {
+			out = append(out, p)
+			if len(out) >= maxRecentPaths {
+				break
+			}
+		}
+	}
+	return out
+}
+
 // RecordRead records the latest observed SHA-256 hash for path without storing
 // file content snapshots.
 func (t *MemoryTracker) RecordRead(ctx context.Context, path, hash string) error {
@@ -109,6 +138,7 @@ func (t *MemoryTracker) RecordRead(ctx context.Context, path, hash string) error
 	state := t.files[key]
 	state.hash = hash
 	t.files[key] = state
+	t.recent = updateMRU(t.recent, key)
 	t.mu.Unlock()
 	return nil
 }
@@ -173,6 +203,7 @@ func (t *MemoryTracker) RecordChange(ctx context.Context, change *FileChange) er
 			changed: true,
 		}
 	}
+	t.recent = updateMRU(t.recent, key)
 	t.mu.Unlock()
 	return nil
 }

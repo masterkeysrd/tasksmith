@@ -13,15 +13,11 @@ import (
 	"github.com/masterkeysrd/warp"
 )
 
-// ruleRefRe matches explicit @rule:<name> references in user messages. The name
-// is a run of identifier characters, dots, dashes, underscores, and slashes
-// (the last of which allows a qualified "namespace/name" reference).
-var ruleRefRe = regexp.MustCompile(`@rule:([A-Za-z0-9][A-Za-z0-9._/-]*)`)
-
-// RuleMatcher drives smart rule matching for the active agent. It auto-injects
-// active workspace rules into <system_reminders> (via @rule: references, keyword
-// triggers, and tool/path triggers) and produces RuleLoaded events. A nil
-// RuleMatcher (or one built from a rule-free agent) is a no-op.
+// RuleMatcher drives smart conditional rule matching for the active agent. It
+// surfaces keyword-matched rule suggestions on user messages, auto-injects
+// tool/path-triggered rules into <system_reminders>, and produces RuleLoaded
+// events. Explicit @rule: and AttachmentRule resolution lives in [AttachmentResolver].
+// A nil RuleMatcher (or one built from a rule-free agent) is a no-op.
 type RuleMatcher struct {
 	resolved  *warp.ResolvedAgent
 	workspace *warp.Workspace
@@ -39,17 +35,15 @@ func NewRuleMatcher(resolved *warp.ResolvedAgent, workspace *warp.Workspace, pro
 	return &RuleMatcher{resolved: resolved, workspace: workspace, project: project, globals: globals}
 }
 
-// render renders a rule's instructions as a template, falling back to the raw
-// instructions on error.
-func (m *RuleMatcher) render(rl *warp.Rule) string {
+func renderWarpRule(rl *warp.Rule, ws *warp.Workspace, project *warp.Project, agent *warp.Agent, globals map[string]any) string {
 	if rl == nil {
 		return ""
 	}
 	rendered, err := rl.Render(&warp.RuleRenderOptions{
-		Workspace: m.workspace,
-		Project:   m.project,
-		Agent:     m.resolved.Agent,
-		Globals:   m.globals,
+		Workspace: ws,
+		Project:   project,
+		Agent:     agent,
+		Globals:   globals,
 	})
 	if err != nil {
 		return strings.TrimSpace(rl.Spec.Instructions)
@@ -57,83 +51,74 @@ func (m *RuleMatcher) render(rl *warp.Rule) string {
 	return strings.TrimSpace(rendered)
 }
 
-// rulePath returns the workspace-relative manifest path for a rule, or "".
-func (m *RuleMatcher) rulePath(rl *warp.Rule) string {
-	if rl == nil {
-		return ""
+func matchWarpResourceKey(res warp.Resource, namespace, lowerKey string) bool {
+	if res == nil || lowerKey == "" {
+		return false
 	}
-	return strings.TrimSpace(rl.GetPath())
+	name := res.GetName()
+	if strings.EqualFold(name, lowerKey) {
+		return true
+	}
+	if namespace != "" && strings.EqualFold(namespace+"/"+name, lowerKey) {
+		return true
+	}
+	if ns := res.GetNamespace(); ns != "" && strings.EqualFold(ns+"/"+name, lowerKey) {
+		return true
+	}
+	if q := res.QualifiedName(); q != "" && strings.EqualFold(q, lowerKey) {
+		return true
+	}
+	return false
+}
+
+// render renders a rule's instructions as a template, falling back to the raw
+// instructions on error.
+func (m *RuleMatcher) render(rl *warp.Rule) string {
+	if m == nil {
+		return renderWarpRule(rl, nil, nil, nil, nil)
+	}
+	return renderWarpRule(rl, m.workspace, m.project, m.resolved.Agent, m.globals)
 }
 
 // lookupRule resolves a rule by its short or qualified name (case-insensitive).
 func (m *RuleMatcher) lookupRule(name string) (*warp.Rule, bool) {
+	if m == nil || m.resolved == nil {
+		return nil, false
+	}
 	key := strings.ToLower(strings.TrimSpace(name))
 	if key == "" {
 		return nil, false
 	}
 	for i := range m.resolved.Rules {
 		rl := &m.resolved.Rules[i]
-		if strings.ToLower(rl.Metadata.Name) == key {
-			return rl, true
-		}
-		if rl.Namespace != "" && strings.ToLower(rl.Namespace+"/"+rl.Metadata.Name) == key {
+		if matchWarpResourceKey(rl, rl.Namespace, key) {
 			return rl, true
 		}
 	}
 	return nil, false
 }
 
-// MatchUserMessage inspects a genuine user message for explicit @rule:
-// references and keyword triggers, returning a <system_reminders> message (when
-// anything matched), the rules that were loaded, and the rules that were
-// suggested.
-func (m *RuleMatcher) MatchUserMessage(msg message.Message, state State) (*message.User, []RuleLoaded, []string) {
+// SuggestUserRules inspects a genuine user message for keyword triggers on the
+// agent's conditional rules, returning a formatted suggestion section (when any
+// rule matched) and the names of the newly suggested rules.
+func (m *RuleMatcher) SuggestUserRules(msg message.Message, state State) (string, []string) {
 	if m == nil {
-		return nil, nil, nil
+		return "", nil
 	}
 	user, ok := msg.(*message.User)
 	if !ok || user == nil || SystemKindOf(user) != "" {
-		return nil, nil, nil
+		return "", nil
 	}
 	text := user.GetContent().Text()
 	if strings.TrimSpace(text) == "" {
-		return nil, nil, nil
+		return "", nil
 	}
 
-	var loaded []RuleLoaded
 	var suggested []string
-	var ruleBlocks []string
 	var bullets []string
-	seenLoaded := make(map[string]struct{})
 	seenSuggested := make(map[string]struct{})
-
-	// 1. Explicit @rule:<name> references auto-load matching rules.
-	for _, ref := range ruleRefRe.FindAllStringSubmatch(text, -1) {
-		rl, ok := m.lookupRule(ref[1])
-		if !ok {
-			continue
-		}
-		key := strings.ToLower(rl.Metadata.Name)
-		if state.HasLoadedRule(rl.Metadata.Name) {
-			continue
-		}
-		if _, dup := seenLoaded[key]; dup {
-			continue
-		}
-		seenLoaded[key] = struct{}{}
-		path := m.rulePath(rl)
-		ruleBlocks = append(ruleBlocks, fmt.Sprintf("<rule name=%q path=%q>\n%s\n</rule>", rl.Metadata.Name, path, m.render(rl)))
-		loaded = append(loaded, RuleLoaded{
-			ID:      uuid.NewString(),
-			Rule:    rl.Metadata.Name,
-			Trigger: "manual",
-			Matched: "@rule:" + rl.Metadata.Name,
-			Path:    path,
-		})
-	}
-
-	// 2. Keyword triggers surface matching conditional rules as suggestions.
 	lower := strings.ToLower(text)
+
 	for i := range m.resolved.Rules {
 		rl := &m.resolved.Rules[i]
 		if rl.Spec.Triggers.Always || len(rl.Spec.Triggers.Keywords) == 0 {
@@ -141,13 +126,7 @@ func (m *RuleMatcher) MatchUserMessage(msg message.Message, state State) (*messa
 		}
 		name := rl.Metadata.Name
 		key := strings.ToLower(name)
-		if state.HasLoadedRule(name) {
-			continue
-		}
-		if _, dup := seenLoaded[key]; dup {
-			continue
-		}
-		if state.HasSuggestedRule(name) {
+		if state.HasLoadedRule(name) || state.HasSuggestedRule(name) {
 			continue
 		}
 		if _, dup := seenSuggested[key]; dup {
@@ -165,34 +144,11 @@ func (m *RuleMatcher) MatchUserMessage(msg message.Message, state State) (*messa
 		suggested = append(suggested, name)
 	}
 
-	if len(ruleBlocks) == 0 && len(bullets) == 0 {
-		return nil, loaded, suggested
+	if len(bullets) == 0 {
+		return "", nil
 	}
-
-	var sb strings.Builder
-	sb.WriteString("<system_reminders>\n")
-	if len(ruleBlocks) > 0 {
-		sb.WriteString(strings.Join(ruleBlocks, "\n\n"))
-		sb.WriteString("\n\n")
-	}
-	if len(bullets) > 0 {
-		sb.WriteString("The following workspace rules may be relevant to your current task. Call load_rule to apply any that match:\n")
-		sb.WriteString(strings.Join(bullets, "\n"))
-		sb.WriteString("\n")
-	}
-	sb.WriteString("</system_reminders>")
-
-	names := make([]string, 0, len(loaded)+len(suggested))
-	for _, ev := range loaded {
-		names = append(names, ev.Rule)
-	}
-	names = append(names, suggested...)
-
-	reminder := message.NewUserTextMeta(sb.String(), map[string]any{
-		MetaSystemKind: SystemKindReminder,
-		MetaRuleNames:  names,
-	})
-	return reminder, loaded, suggested
+	section := "The following workspace rules may be relevant to your current task. Call load_rule to apply any that match:\n" + strings.Join(bullets, "\n")
+	return section, suggested
 }
 
 // MatchToolBatch inspects a batch of executed tool calls and their results for

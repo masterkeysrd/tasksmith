@@ -4,6 +4,7 @@ import (
 	"context"
 	"reflect"
 	"sync/atomic"
+	"time"
 
 	"github.com/masterkeysrd/kite/extras/kitex"
 	"github.com/masterkeysrd/kite/extras/wind"
@@ -11,10 +12,30 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/ui/autocomplete"
 )
 
+const autocompleteCacheStaleTime = 2 * time.Second
+
 type completionKey struct {
 	Engine uintptr
 	Value  string
 	Cursor int
+}
+
+type completionSpan struct {
+	Engine  uintptr
+	Source  string
+	Trigger string
+	Start   int
+}
+
+type activeCompletionSession struct {
+	ID   uint64
+	Span completionSpan
+}
+
+type lastCompletion struct {
+	Valid      bool
+	Span       completionSpan
+	Candidates []autocomplete.Candidate
 }
 
 type completionScope struct {
@@ -88,6 +109,8 @@ func UseAutocomplete(opts AutocompleteOptions) AutocompleteState {
 	selection, setSelection := kitex.UseState(completionSelection{})
 	dismissal, setDismissal := kitex.UseState(completionDismissal{})
 	applyError, setApplyError := kitex.UseState(completionError{})
+	sessionRef := kitex.UseRef(activeCompletionSession{})
+	lastResolved := kitex.UseRef(lastCompletion{})
 
 	var request autocomplete.Request
 	var matchErr error
@@ -96,6 +119,30 @@ func UseAutocomplete(opts AutocompleteOptions) AutocompleteState {
 	}
 	dismissed := dismissal().Active && dismissal().Key == key
 	enabled := request.Source != "" && matchErr == nil && !dismissed
+
+	var span completionSpan
+	var activeKey completionKey
+	var queryKey completionQueryKey
+	if enabled {
+		span = completionSpan{
+			Engine:  engineID,
+			Source:  request.Source,
+			Trigger: request.Trigger,
+			Start:   request.Range.Start,
+		}
+		if sessionRef.Current.ID == 0 || sessionRef.Current.Span != span {
+			sessionRef.Current = activeCompletionSession{
+				ID:   completionSequence.Add(1),
+				Span: span,
+			}
+		}
+		activeKey = key
+		queryKey = completionQueryKey{completionKey: activeKey, Scope: sessionRef.Current.ID}
+	} else {
+		sessionRef.Current = activeCompletionSession{}
+		lastResolved.Current = lastCompletion{}
+	}
+
 	scope := kitex.UseMemo(func() *completionScope {
 		ctx, cancel := context.WithCancel(context.Background())
 		return &completionScope{
@@ -103,22 +150,21 @@ func UseAutocomplete(opts AutocompleteOptions) AutocompleteState {
 			Context: ctx,
 			Cancel:  cancel,
 		}
-	}, []any{key, enabled})
+	}, []any{activeKey, enabled})
 
 	kitex.UseEffectCleanup(func() func() {
 		return scope.Cancel
 	}, []any{scope.ID})
 
 	kitex.UseEffect(func() {
-		if selection().Key != key {
-			setSelection(completionSelection{Key: key})
+		if selection().Index != 0 && selection().Key != key {
+			setSelection(completionSelection{})
 		}
 		if dismissal().Active && dismissal().Key != key {
 			setDismissal(completionDismissal{})
 		}
 	}, []any{key})
 
-	queryKey := completionQueryKey{completionKey: key, Scope: scope.ID}
 	query := wind.Use(queryKey, func(ctx context.Context, key completionQueryKey) *promise.Promise[completionResponse] {
 		return promise.Wrap(func(ctx context.Context) (completionResponse, error) {
 			ctx, cancel := context.WithCancel(ctx)
@@ -128,11 +174,25 @@ func UseAutocomplete(opts AutocompleteOptions) AutocompleteState {
 			result, err := opts.Engine.Complete(ctx, key.Value, key.Cursor)
 			return completionResponse{Key: key, Result: result}, err
 		})(ctx)
-	}, wind.Options{Enabled: enabled})
+	}, wind.Options{Enabled: enabled, StaleTime: autocompleteCacheStaleTime})
 
+	loading := enabled && (query.IsLoading || query.IsFetching || query.Data.Key != queryKey && query.Error == nil)
 	result := query.Data.Result
-	if query.Data.Key != queryKey {
+	hasPriorInSpan := false
+	if enabled && query.Data.Key == queryKey && !loading && query.Error == nil {
+		lastResolved.Current = lastCompletion{
+			Valid:      true,
+			Span:       span,
+			Candidates: result.Candidates,
+		}
+	} else if query.Data.Key != queryKey {
 		result = autocomplete.Result{Request: request}
+		if prev := lastResolved.Current; enabled && matchErr == nil && query.Error == nil && prev.Valid && prev.Span == span {
+			hasPriorInSpan = true
+			if len(prev.Candidates) > 0 {
+				result.Candidates = prev.Candidates
+			}
+		}
 	}
 	count := len(result.Candidates)
 	selected := 0
@@ -147,8 +207,8 @@ func UseAutocomplete(opts AutocompleteOptions) AutocompleteState {
 		err = local.Err
 	}
 
-	loading := enabled && (query.IsLoading || query.IsFetching || query.Data.Key != queryKey && query.Error == nil)
-	open := !opts.Disabled && !dismissed && (err != nil || enabled && (loading || count > 0))
+	showLoading := loading && !hasPriorInSpan
+	open := !opts.Disabled && !dismissed && (err != nil || enabled && (showLoading || count > 0))
 
 	move := func(delta int) bool {
 		if !open || count == 0 || loading || err != nil {

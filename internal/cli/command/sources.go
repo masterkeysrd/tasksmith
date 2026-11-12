@@ -1,7 +1,9 @@
 package command
 
 import (
+	"cmp"
 	"context"
+	"strings"
 
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/cli/store"
@@ -18,9 +20,18 @@ func (r *Registry) Sources() []autocomplete.Source {
 		Trigger:   "/",
 		StartOnly: true,
 	}, {
+		Name:        "files",
+		Trigger:     "@",
+		Passthrough: true,
+		Complete:    completeFiles,
+	}, {
 		Name:     "rules",
 		Trigger:  "@rule:",
 		Complete: completeRules,
+	}, {
+		Name:     "skills",
+		Trigger:  "@skill:",
+		Complete: completeSkills,
 	}, {
 		// MCP prompts and resources are invoked by reference, so their trigger
 		// includes the leading character and candidates insert only the body.
@@ -190,16 +201,108 @@ func completeRules(ctx context.Context, _ autocomplete.Request) ([]autocomplete.
 
 	candidates := make([]autocomplete.Candidate, 0, len(rules))
 	for _, r := range rules {
-		desc := r.Description
-		if desc == "" {
-			desc = r.Scope
-		}
 		candidates = append(candidates, autocomplete.Candidate{
 			Value:       r.Name,
 			Label:       r.Name,
-			Description: desc,
-			InsertText:  "@rule:" + r.Name + " ",
+			Description: cmp.Or(r.Description, r.Scope),
+			InsertText:  r.Name + " ",
 			Data:        r,
+		})
+	}
+	return candidates, nil
+}
+
+// completeSkills suggests workspace skills for the @skill: attachment trigger,
+// inserting @skill:<name> so the agent auto-injects the skill's instructions.
+func completeSkills(ctx context.Context, _ autocomplete.Request) ([]autocomplete.Candidate, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	c := store.Client()
+	if c == nil {
+		return nil, nil
+	}
+
+	skills, err := c.ListSkills(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	candidates := make([]autocomplete.Candidate, 0, len(skills))
+	for _, sk := range skills {
+		candidates = append(candidates, autocomplete.Candidate{
+			Value:       sk.Name,
+			Label:       sk.Name,
+			Description: cmp.Or(sk.Description, sk.Scope),
+			InsertText:  sk.Name + " ",
+			Data:        sk,
+		})
+	}
+	return candidates, nil
+}
+
+// completeFiles suggests workspace files and directories for the @ attachment trigger.
+func completeFiles(ctx context.Context, req autocomplete.Request) ([]autocomplete.Candidate, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	c := store.Client()
+	if c == nil {
+		return nil, nil
+	}
+
+	var sessionID string
+	if sessState := store.GetSession(); sessState.Session != nil {
+		sessionID = sessState.Session.ID
+	}
+
+	query := strings.TrimPrefix(req.Query, "file:")
+	query = strings.Trim(query, "\"'")
+
+	files, err := c.ListWorkspaceFiles(ctx, api.ListFilesRequest{
+		Query:     query,
+		SessionID: sessionID,
+		Limit:     50,
+	})
+	if err != nil {
+		return nil, nil
+	}
+
+	candidates := make([]autocomplete.Candidate, 0, len(files))
+	for _, f := range files {
+		label := f.Name
+		if f.IsDir {
+			label = strings.TrimSuffix(label, "/") + "/"
+		}
+		if !f.Allowed {
+			label += " [Prohibited]"
+		}
+
+		desc := f.Dir
+		if f.Recent {
+			if desc != "" {
+				desc += " · recent"
+			} else {
+				desc = "· recent"
+			}
+		}
+
+		short := f.ShortPath
+		if short == "" {
+			short = f.Path
+			if f.IsDir && !strings.HasSuffix(short, "/") {
+				short += "/"
+			}
+		}
+
+		candidates = append(candidates, autocomplete.Candidate{
+			Value:       f.Path,
+			Label:       label,
+			Description: desc,
+			InsertText:  autocomplete.Quote(short) + " ",
+			Data:        f,
 		})
 	}
 	return candidates, nil

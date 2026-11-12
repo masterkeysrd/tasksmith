@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -352,6 +353,31 @@ func (c *Client) ListRules(ctx context.Context) ([]api.Rule, error) {
 	}
 	var out []api.Rule
 	if err := c.doJSON(ctx, http.MethodGet, "/v1/workspace/rules", nil, nil, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// ListWorkspaceFiles lists and searches files and directories in the workspace.
+func (c *Client) ListWorkspaceFiles(ctx context.Context, req api.ListFilesRequest) ([]api.WorkspaceFile, error) {
+	if err := c.requireCWD(); err != nil {
+		return nil, err
+	}
+	query := make(url.Values)
+	if req.Query != "" {
+		query.Set("q", req.Query)
+	}
+	if req.SessionID != "" {
+		query.Set("session_id", req.SessionID)
+	}
+	if req.Limit > 0 {
+		query.Set("limit", strconv.Itoa(req.Limit))
+	}
+	if req.IncludeHidden != nil {
+		query.Set("hidden", strconv.FormatBool(*req.IncludeHidden))
+	}
+	var out []api.WorkspaceFile
+	if err := c.doJSON(ctx, http.MethodGet, "/v1/workspace/files", query, nil, &out); err != nil {
 		return nil, err
 	}
 	return out, nil

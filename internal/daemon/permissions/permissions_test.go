@@ -952,3 +952,97 @@ func TestSessionManagerForSubagentIsolatesAgentPolicies(t *testing.T) {
 		t.Fatalf("expected child mode to reflect parent SetMode, got %q", got)
 	}
 }
+
+func TestFileAccessChecker(t *testing.T) {
+	dir, ws := setupTestWorkspace(t)
+	mgr, err := permissions.New(permissions.Config{
+		Workspace:  ws,
+		GlobalPath: filepath.Join(t.TempDir(), "global.json"),
+	})
+	if err != nil {
+		t.Fatalf("permissions.New: %v", err)
+	}
+
+	if err := os.WriteFile(filepath.Join(dir, "main.go"), []byte("package main\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".env"), []byte("SECRET=1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".env.example"), []byte("SECRET=\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "docs"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Project-scoped deny rule must apply even when evaluating through an attached SessionManager.
+	if err := mgr.AddRule(api.ScopeProject, api.EffectDeny, "view(secret.txt)"); err != nil {
+		t.Fatalf("AddRule project deny: %v", err)
+	}
+	sess := mgr.Attach(api.ModeAuto, api.Permissions{}, nil)
+	if err := sess.AddDeny("ls(docs)"); err != nil {
+		t.Fatalf("AddDeny session: %v", err)
+	}
+
+	checker := permissions.NewFileAccessChecker(permissions.FileAccessConfig{
+		WorkDir: dir,
+		Session: sess,
+	})
+
+	if err := checker.Check("main.go", "main.go", false); err != nil {
+		t.Errorf("expected main.go allowed, got %v", err)
+	}
+	if err := checker.Check(".env.example", ".env.example", false); err != nil {
+		t.Errorf("expected .env.example allowed, got %v", err)
+	}
+	if err := checker.Check(".env", ".env", false); err == nil {
+		t.Errorf("expected .env prohibited, got nil")
+	}
+	if err := checker.Check(".git/config", ".git/config", false); err == nil {
+		t.Errorf("expected .git/config prohibited, got nil")
+	}
+	if err := checker.Check(".ssh/id_rsa", ".ssh/id_rsa", false); err == nil {
+		t.Errorf("expected .ssh/id_rsa prohibited, got nil")
+	}
+	if err := checker.Check("../outside.txt", "../outside.txt", false); err == nil {
+		t.Errorf("expected escaping path prohibited, got nil")
+	}
+	if err := checker.Check("secret.txt", "secret.txt", false); err == nil {
+		t.Errorf("expected project-denied secret.txt prohibited, got nil")
+	}
+	if err := checker.Check("docs/", "docs/", true); err == nil {
+		t.Errorf("expected session-denied docs/ prohibited, got nil")
+	}
+
+	// Symlink to .env inside workspace and symlink escaping workspace must both be rejected.
+	if err := os.Symlink(filepath.Join(dir, ".env"), filepath.Join(dir, "env_link.txt")); err != nil {
+		t.Fatal(err)
+	}
+	if err := checker.Check("env_link.txt", "env_link.txt", false); err == nil {
+		t.Errorf("expected symlink to .env prohibited, got nil")
+	}
+
+	outsideFile := filepath.Join(t.TempDir(), "outside.txt")
+	if err := os.WriteFile(outsideFile, []byte("out\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outsideFile, filepath.Join(dir, "escape_link.txt")); err != nil {
+		t.Fatal(err)
+	}
+	if err := checker.Check("escape_link.txt", "escape_link.txt", false); err == nil {
+		t.Errorf("expected symlink outside workspace prohibited, got nil")
+	}
+
+	// Policy ceiling excluding view must reject files.
+	sess.SetAgentPolicies(&warp.Policies{
+		Tools: &warp.ToolPolicies{Exclude: []string{"view"}},
+	})
+	restrictedChecker := permissions.NewFileAccessChecker(permissions.FileAccessConfig{
+		WorkDir: dir,
+		Session: sess,
+	})
+	if err := restrictedChecker.Check("main.go", "main.go", false); err == nil {
+		t.Errorf("expected agent-policy-excluded view prohibited, got nil")
+	}
+}

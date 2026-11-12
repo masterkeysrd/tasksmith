@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -209,6 +210,7 @@ func (w *workspaceRouter) initRoutes() {
 		GetRoute("/v1/skills/{name...}", w.getSkill),
 		GetRoute("/v1/workspace/rules", w.listRules),
 		GetRoute("/v1/workspace/tools", w.listTools),
+		GetRoute("/v1/workspace/files", w.getWorkspaceFiles),
 		GetRoute("/v1/models", w.getModelsList),
 		GetRoute("/v1/models/{id...}", w.getModel),
 		GetRoute("/v1/permissions", w.getPermissions),
@@ -410,6 +412,40 @@ func (w *workspaceRouter) listTools(rw http.ResponseWriter, r *http.Request) {
 		return
 	}
 	WriteJSON(rw, http.StatusOK, tools)
+}
+
+func (w *workspaceRouter) getWorkspaceFiles(rw http.ResponseWriter, r *http.Request) {
+	wsDir := RequestWorkspace(r)
+	q := r.URL.Query().Get("q")
+	sessionID := r.URL.Query().Get("session_id")
+	limitStr := r.URL.Query().Get("limit")
+	hiddenStr := r.URL.Query().Get("hidden")
+
+	var limit int
+	if limitStr != "" {
+		if parsed, err := strconv.Atoi(limitStr); err == nil && parsed > 0 {
+			limit = parsed
+		}
+	}
+
+	var includeHidden *bool
+	if hiddenStr != "" {
+		if parsed, err := strconv.ParseBool(hiddenStr); err == nil {
+			includeHidden = &parsed
+		}
+	}
+
+	files, err := w.b.ListWorkspaceFiles(r.Context(), wsDir, api.ListFilesRequest{
+		Query:         q,
+		SessionID:     sessionID,
+		Limit:         limit,
+		IncludeHidden: includeHidden,
+	})
+	if err != nil {
+		WriteError(rw, err)
+		return
+	}
+	WriteJSON(rw, http.StatusOK, files)
 }
 
 func (w *workspaceRouter) getModelsList(rw http.ResponseWriter, r *http.Request) {

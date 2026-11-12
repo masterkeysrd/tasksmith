@@ -17,6 +17,7 @@ import (
 	"github.com/masterkeysrd/kite/extras/kites"
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/client"
+	"github.com/masterkeysrd/tasksmith/internal/cli/mentions"
 	"github.com/masterkeysrd/tasksmith/internal/daemon"
 )
 
@@ -387,14 +388,22 @@ func getOrCreateSession(ctx context.Context) (*api.Session, error) {
 
 // Send sends a user prompt message to the active session. If no session exists yet,
 // one is created lazily.
-func Send(text string) {
+func Send(text string, attachments ...api.Attachment) {
+	SendWithUserText(text, text, attachments...)
+}
+
+// SendWithUserText sends text to the active session while scanning only userText
+// (rather than any server-rendered prompt or MCP resource body in text) for
+// structured @-mention reconciliation and 3.4 fallback lookup.
+func SendWithUserText(text, userText string, attachments ...api.Attachment) {
 	trimmed := strings.TrimSpace(text)
 	if trimmed == "" {
 		return
 	}
+	reconciled := mentions.Resolve(userText, attachments, nil)
 	FreezeTranscript()
 	msgID := uuid.Must(uuid.NewV7()).String()
-	globalConversation.addPendingUser(msgID, text)
+	globalConversation.addPendingUser(msgID, text, reconciled)
 
 	if status := GetApp().DaemonStatus; status == DaemonDisconnected || status == DaemonRestarting {
 		globalConversation.cancelPendingUser(msgID, errors.New("daemon is not running (run /daemon start or /daemon restart)"))
@@ -422,9 +431,41 @@ func Send(text string) {
 			return
 		}
 
+		finalAttachments := mentions.Resolve(userText, reconciled, func(cand string) (string, bool) {
+			q := strings.TrimSuffix(cand, "/")
+			files, err := c.ListWorkspaceFiles(ctx, api.ListFilesRequest{
+				Query:     q,
+				SessionID: sess.ID,
+				Limit:     50,
+			})
+			if err != nil {
+				return "", false
+			}
+			var matched *api.WorkspaceFile
+			for i := range files {
+				if files[i].ShortPath == cand || files[i].Path == q {
+					if matched != nil {
+						return "", false
+					}
+					matched = &files[i]
+				}
+			}
+			if matched == nil {
+				return "", false
+			}
+			if matched.IsDir && !strings.HasSuffix(matched.Path, "/") {
+				return matched.Path + "/", true
+			}
+			return matched.Path, true
+		})
+		if len(finalAttachments) > len(reconciled) {
+			globalConversation.setPendingUserAttachments(msgID, finalAttachments)
+		}
+
 		err = c.Send(ctx, sess.ID, api.SendRequest{
-			ID:      msgID,
-			Content: text,
+			ID:          msgID,
+			Content:     text,
+			Attachments: finalAttachments,
 		})
 		if err != nil {
 			globalConversation.cancelPendingUser(msgID, err)

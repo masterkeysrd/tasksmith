@@ -366,3 +366,47 @@ func (c *container) mutatingPathForTool(t Tool, args map[string]any) (string, bo
 	}
 	return strings.TrimSpace(raw), true
 }
+
+// ActivationBlocks activates a command or skill's policy-allowed tools into
+// the model's context: a ToolReferenceBlock for each deferred tool registered
+// in container, and an inline ToolDefinitionBlock for any policy-allowed tool
+// in cat that is not registered in container. Tools are deduplicated by name.
+func ActivationBlocks(container Container, cat *workspace.Catalog, resolvedTools []*warp.Tool) []message.Block {
+	if len(resolvedTools) == 0 {
+		return nil
+	}
+	seen := make(map[string]bool, len(resolvedTools))
+	var blocks []message.Block
+	for _, wt := range resolvedTools {
+		if wt == nil || seen[wt.Metadata.Name] {
+			continue
+		}
+		seen[wt.Metadata.Name] = true
+
+		if container != nil {
+			if t, ok := container.Get(wt.Metadata.Name); ok {
+				if t.Definition().DeferLoading {
+					blocks = append(blocks, &message.ToolReferenceBlock{ToolName: wt.Metadata.Name})
+				}
+				continue
+			}
+		}
+		if cat != nil {
+			if def, ok := cat.GetTool(wt.Metadata.Name); ok {
+				blocks = append(blocks, warpToolDefinitionBlock(def))
+			}
+		}
+	}
+	return blocks
+}
+
+func warpToolDefinitionBlock(wt *warp.Tool) *message.ToolDefinitionBlock {
+	def := tool.Definition{
+		Name:        wt.Metadata.Name,
+		Description: wt.Spec.Instructions,
+	}
+	if def.Description == "" {
+		def.Description = wt.Metadata.Description
+	}
+	return def.ToBlock()
+}

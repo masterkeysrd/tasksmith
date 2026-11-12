@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/masterkeysrd/tasksmith/internal/core/fsutils"
@@ -135,6 +136,42 @@ func (s *Std) Sandbox() sandbox.Sandbox {
 // Tracker returns the [FileTracker] bound to s.
 func (s *Std) Tracker() FileTracker {
 	return s.tracker
+}
+
+// DefaultWatchIgnoreDirs lists standard ignore directories for filesystem watching.
+var DefaultWatchIgnoreDirs = []string{
+	".git", ".bare", "node_modules", "vendor", "dist", "target", ".venv", "__pycache__", ".next", ".cache",
+}
+
+// Watch monitors path for filesystem mutations inside the sandbox.
+func (s *Std) Watch(ctx context.Context, req WatchRequest) (sandbox.Watcher, error) {
+	if s.sandbox == nil {
+		return nil, sandbox.ErrSandboxClosed
+	}
+
+	normPath := s.normalizePath(req.Path)
+	if normPath == "" {
+		normPath = "."
+	}
+
+	ignoreSet := make(map[string]struct{}, len(DefaultWatchIgnoreDirs)+len(req.Ignore))
+	var mergedIgnore []string
+	for _, ign := range slices.Concat(DefaultWatchIgnoreDirs, req.Ignore) {
+		ign = strings.TrimSpace(ign)
+		if ign == "" {
+			continue
+		}
+		if _, seen := ignoreSet[ign]; !seen {
+			ignoreSet[ign] = struct{}{}
+			mergedIgnore = append(mergedIgnore, ign)
+		}
+	}
+
+	return s.sandbox.FS().Watch(ctx, normPath, sandbox.WatchOptions{
+		Recursive: req.Recursive,
+		Ignore:    mergedIgnore,
+		MaxDirs:   req.MaxDirs,
+	})
 }
 
 // normalizePath delegates path normalization to s.sandbox.FS().ResolvePath

@@ -176,7 +176,7 @@ type harness struct {
 	static       StaticContext
 	limits       models.Limits
 	checkpointer graph.Checkpointer
-	rules        *RuleMatcher
+	attachments  *AttachmentResolver
 }
 
 var _ Harness = (*harness)(nil)
@@ -227,7 +227,7 @@ func (h *harness) Configure(opts NodeOptions) error {
 	h.tools = opts.Tools
 	h.static = opts.Static
 	h.limits = opts.Limits
-	h.rules = opts.Rules
+	h.attachments = opts.Attachments
 	for _, n := range h.nodes {
 		n.Configure(opts)
 	}
@@ -253,13 +253,18 @@ func (h *harness) Stream(ctx context.Context, input Input) iter.Seq2[any, error]
 			return
 		}
 
-		update, inputMsg, err := h.prepareInput(input, state)
+		update, inputMsg, loadedRules, err := h.prepareInput(ctx, input, state)
 		if err != nil {
 			yield(nil, err)
 			return
 		}
 		if inputMsg != nil && !yield(inputMsg, nil) {
 			return
+		}
+		for _, ev := range loadedRules {
+			if !yield(ev, nil) {
+				return
+			}
 		}
 
 		runCtx := scope.With(ctx, scope.Scope{SessionID: h.id})
@@ -273,27 +278,27 @@ func (h *harness) Stream(ctx context.Context, input Input) iter.Seq2[any, error]
 	}
 }
 
-func (h *harness) prepareInput(input Input, state State) (graph.Update[State], message.Message, error) {
+func (h *harness) prepareInput(ctx context.Context, input Input, state State) (graph.Update[State], message.Message, []RuleLoaded, error) {
 	if !input.HasInteractiveContent() {
 		if len(state.PendingPermissions) > 0 {
-			return nil, nil, ErrPendingPermissionsUnresolved
+			return nil, nil, nil, ErrPendingPermissionsUnresolved
 		}
 		if len(state.PendingQuestions) > 0 {
-			return nil, nil, ErrPendingQuestionsUnresolved
+			return nil, nil, nil, ErrPendingQuestionsUnresolved
 		}
 		if input.Compact != nil {
-			return prepareCompaction(input.Compact), nil, nil
+			return prepareCompaction(input.Compact), nil, nil, nil
 		}
 		if !h.queue.HasItems() {
-			return nil, nil, ErrNilMessage
+			return nil, nil, nil, ErrNilMessage
 		}
-		return graph.Update[State](func(s State) State { return s }), nil, nil
+		return graph.Update[State](func(s State) State { return s }), nil, nil, nil
 	}
 	if input.HasResponses() {
 		update, err := prepareResponses(input, state)
-		return update, nil, err
+		return update, nil, nil, err
 	}
-	return h.prepareMessage(input.Message, state)
+	return h.prepareMessage(ctx, input.Message, state)
 }
 
 func prepareCompaction(input *api.CompactRequest) graph.Update[State] {
@@ -340,7 +345,7 @@ func prepareResponses(input Input, state State) (graph.Update[State], error) {
 	}), nil
 }
 
-func (h *harness) prepareMessage(msg message.Message, state State) (graph.Update[State], message.Message, error) {
+func (h *harness) prepareMessage(ctx context.Context, msg message.Message, state State) (graph.Update[State], message.Message, []RuleLoaded, error) {
 	in := message.CloneMessage(msg)
 	in, newTools := state.DeduplicateToolBlocks(in)
 	var inputMsg message.Message
@@ -351,20 +356,25 @@ func (h *harness) prepareMessage(msg message.Message, state State) (graph.Update
 		}
 		inputMsg = message.CloneMessage(in)
 	}
+
+	nextState := state.RecordLoadedTools(newTools...)
+	var reminder *message.User
+	var loadedRules []RuleLoaded
+	if h.attachments != nil {
+		nextState, reminder, loadedRules = h.attachments.ResolveUserMessage(ctx, in, nextState)
+	}
+
 	return graph.Update[State](func(s State) State {
-		s = s.RecordLoadedTools(newTools...)
+		s = s.RecordLoadedTools(nextState.LoadedTools...)
 		s = s.AppendMessage(in, MessageUpdateOptions{Static: h.static, Limits: h.limits, SkipContextRecalculation: len(unfulfilled) > 0})
-		// Smart rule matching for genuine user messages: auto-load @rule:
-		// references and surface keyword-matched conditional rules as reminders.
-		if h.rules != nil {
-			if reminder, loaded, suggested := h.rules.MatchUserMessage(in, s); reminder != nil {
-				s = s.RecordLoadedRules(ruleLoadedNames(loaded)...)
-				s = s.RecordSuggestedRules(suggested...)
-				s = s.AppendMessage(reminder, MessageUpdateOptions{Static: h.static, Limits: h.limits, SkipContextRecalculation: len(unfulfilled) > 0})
-			}
+		s = s.RecordLoadedRules(nextState.LoadedRules...)
+		s = s.RecordLoadedSkills(nextState.LoadedSkills...)
+		s = s.RecordSuggestedRules(nextState.SuggestedRules...)
+		if reminder != nil {
+			s = s.AppendMessage(reminder, MessageUpdateOptions{Static: h.static, Limits: h.limits, SkipContextRecalculation: len(unfulfilled) > 0})
 		}
 		return s
-	}), inputMsg, nil
+	}), inputMsg, loadedRules, nil
 }
 
 func (h *harness) consumeGraphStream(stream iter.Seq2[graph.StreamEvent, error], yield func(any, error) bool) {

@@ -38,7 +38,7 @@ var Autocomplete = trail.FC("Autocomplete", func(props AutocompleteProps) trail.
 			Style: style.S().Foreground(scheme.Color.Text.Error),
 		}, trail.Text(fmt.Sprintf("Autocomplete: %v", state.Error)))
 	}
-	if state.IsLoading {
+	if state.IsLoading && len(state.Result.Candidates) == 0 {
 		return trail.Text("Completing...")
 	}
 

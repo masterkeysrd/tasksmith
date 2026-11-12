@@ -17,12 +17,13 @@ import (
 // Message preserves the order of its parts. ID is a stable view identity;
 // SourceID is the persisted message ID.
 type Message struct {
-	ID        string
-	SourceID  string
-	Role      api.Role
-	Parts     []MessagePart
-	CreatedAt time.Time
-	Streaming bool
+	ID          string
+	SourceID    string
+	Role        api.Role
+	Parts       []MessagePart
+	CreatedAt   time.Time
+	Streaming   bool
+	Attachments []api.Attachment
 }
 
 type MessagePartType string
@@ -423,10 +424,11 @@ func (acc *conversationAccumulator) promotePendingUserLocked() {
 		text = u.Parts[0].Text.Text
 	}
 	_ = acc.addMessageLocked(api.Message{
-		ID:        u.ID,
-		Role:      api.RoleUser,
-		CreatedAt: u.CreatedAt,
-		Content:   []api.Block{{Type: api.BlockText, Text: text}},
+		ID:          u.ID,
+		Role:        api.RoleUser,
+		CreatedAt:   u.CreatedAt,
+		Content:     []api.Block{{Type: api.BlockText, Text: text}},
+		Attachments: slices.Clone(u.Attachments),
 	})
 }
 
@@ -460,18 +462,23 @@ func (acc *conversationAccumulator) messageID(sourceID, draftID string) string {
 	return draftID
 }
 
-func (acc *conversationAccumulator) addPendingUser(id, text string) {
+func (acc *conversationAccumulator) addPendingUser(id, text string, atts ...[]api.Attachment) {
 	acc.mu.Lock()
 	defer acc.mu.Unlock()
+	var attachments []api.Attachment
+	if len(atts) > 0 && len(atts[0]) > 0 {
+		attachments = slices.Clone(atts[0])
+	}
 	if acc.status == StreamRunning || acc.status == StreamWaitingPermission || acc.status == StreamWaitingQuestion {
 		if !slices.ContainsFunc(acc.queue, func(item api.QueueItem) bool { return item.ID == id }) {
 			acc.queue = append(acc.queue, api.QueueItem{
 				ID:   id,
 				Kind: api.QueueKindMessage,
 				Message: &api.Message{
-					ID:        id,
-					Role:      api.RoleUser,
-					CreatedAt: time.Now().UTC(),
+					ID:          id,
+					Role:        api.RoleUser,
+					CreatedAt:   time.Now().UTC(),
+					Attachments: slices.Clone(attachments),
 					Content: []api.Block{
 						{
 							Type: api.BlockText,
@@ -488,10 +495,11 @@ func (acc *conversationAccumulator) addPendingUser(id, text string) {
 	acc.status = StreamRunning
 	acc.sessionStatus = api.StatusThinking
 	acc.pendingUser = &Message{
-		ID:        id,
-		SourceID:  id,
-		Role:      api.RoleUser,
-		CreatedAt: time.Now(),
+		ID:          id,
+		SourceID:    id,
+		Role:        api.RoleUser,
+		CreatedAt:   time.Now(),
+		Attachments: slices.Clone(attachments),
 		Parts: []MessagePart{
 			{
 				ID:   id + ":0",
@@ -501,6 +509,23 @@ func (acc *conversationAccumulator) addPendingUser(id, text string) {
 		},
 	}
 	acc.publishLocked()
+}
+
+func (acc *conversationAccumulator) setPendingUserAttachments(id string, atts []api.Attachment) {
+	acc.mu.Lock()
+	defer acc.mu.Unlock()
+	if acc.pendingUser != nil && acc.pendingUser.ID == id {
+		acc.pendingUser.Attachments = slices.Clone(atts)
+		acc.publishLocked()
+		return
+	}
+	for i := range acc.queue {
+		if acc.queue[i].ID == id && acc.queue[i].Message != nil {
+			acc.queue[i].Message.Attachments = slices.Clone(atts)
+			acc.publishLocked()
+			return
+		}
+	}
 }
 
 func (acc *conversationAccumulator) addPendingCommand(id, cmd string) {
@@ -1341,8 +1366,9 @@ func (acc *conversationAccumulator) projectLocked() (history []Message, streamMs
 	for i, record := range acc.messages {
 		message := Message{
 			ID: record.id, SourceID: record.message.ID, Role: record.message.Role,
-			CreatedAt: record.message.CreatedAt,
-			Streaming: record.draft && acc.status == StreamRunning && !record.done,
+			CreatedAt:   record.message.CreatedAt,
+			Streaming:   record.draft && acc.status == StreamRunning && !record.done,
+			Attachments: slices.Clone(record.message.Attachments),
 		}
 		if message.Role != api.RoleTool {
 			for _, block := range record.message.Content {
@@ -1506,6 +1532,7 @@ func appendConversationBlock(blocks []api.Block, block api.Block) []api.Block {
 func cloneConversationMessage(message api.Message) api.Message {
 	message.Content = slices.Clone(message.Content)
 	message.StructuredContent = slices.Clone(message.StructuredContent)
+	message.Attachments = slices.Clone(message.Attachments)
 	for i := range message.Content {
 		if call := message.Content[i].ToolCall; call != nil {
 			cloned := *call
