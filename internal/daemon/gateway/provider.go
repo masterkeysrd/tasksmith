@@ -507,3 +507,32 @@ func antigravitySessionMiddleware() llm.Middleware {
 		}
 	}
 }
+
+// anthropicCachingMiddleware attaches Anthropic's automatic prompt-caching
+// extension to every session turn so the API places its cache breakpoint on
+// the last cacheable block of the request. Anthropic only caches explicitly
+// marked prefixes, so without this extension multi-turn sessions re-bill the
+// entire prompt on every call. Title-generation calls are skipped because
+// their one-shot prompts can never produce a cache hit worth the write cost.
+func anthropicCachingMiddleware() llm.Middleware {
+	return func(next llm.Streamer) llm.Streamer {
+		return func(ctx context.Context, req *llm.Request) (llm.StreamResponse, error) {
+			if req != nil {
+				skip := false
+				if sc, ok := scope.From(ctx); ok && sc.Purpose == string(metrics.PurposeTitle) {
+					skip = true
+				}
+				if !skip {
+					if _, exists := req.Extensions[loomanthropic.PromptCaching{}.ExtensionID()]; !exists {
+						reqCopy := *req
+						reqCopy.Extensions = make(map[string]llm.Extension, len(req.Extensions)+1)
+						maps.Copy(reqCopy.Extensions, req.Extensions)
+						reqCopy.Extensions[loomanthropic.PromptCaching{}.ExtensionID()] = loomanthropic.PromptCaching{Auto: true}
+						req = &reqCopy
+					}
+				}
+			}
+			return next(ctx, req)
+		}
+	}
+}

@@ -12,10 +12,13 @@ import (
 	"github.com/masterkeysrd/loom/llm"
 	"github.com/masterkeysrd/loom/message"
 	"github.com/masterkeysrd/loom/profile"
+	loomanthropic "github.com/masterkeysrd/loom/providers/anthropic"
 	loomopenai "github.com/masterkeysrd/loom/providers/openai"
 	"github.com/masterkeysrd/loom/tool"
 	"github.com/masterkeysrd/tasksmith/api"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/metrics"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/models"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/scope"
 	"github.com/masterkeysrd/warp"
 	"github.com/openai/openai-go/v3"
 )
@@ -458,6 +461,81 @@ func (m *mockCapturingProvider) Stream(ctx context.Context, req *llm.Request) (l
 	return func(yield func(message.AssistantChunk, error) bool) {
 		yield(message.AssistantChunk{Done: true}, nil)
 	}, nil
+}
+
+func TestAnthropicCachingMiddleware_AutoBreakpoint(t *testing.T) {
+	ctx := context.Background()
+
+	mock := &mockCapturingProvider{}
+	gw := &gatewayImpl{
+		providers: map[string]*providerInstance{
+			"anthropic": {
+				cfg:     ProviderConfig{Name: "anthropic", Type: "anthropic"},
+				llmProv: mock,
+			},
+		},
+	}
+
+	model, err := gw.LLM(ctx, models.Model{ID: "anthropic/claude-sonnet-5-5", ProviderType: "anthropic"}, llm.ModelConfig{})
+	if err != nil {
+		t.Fatalf("ResolveLLM failed: %v", err)
+	}
+
+	_, err = model.Invoke(ctx, []message.Message{message.NewUserText("Hello")})
+	if err != nil {
+		t.Fatalf("Invoke failed: %v", err)
+	}
+
+	if mock.lastReq == nil {
+		t.Fatal("expected request to be captured by mock provider")
+	}
+
+	ext, ok := mock.lastReq.Extensions[loomanthropic.PromptCaching{}.ExtensionID()]
+	if !ok {
+		t.Fatalf("expected extension %q to be set", loomanthropic.PromptCaching{}.ExtensionID())
+	}
+
+	pc, ok := ext.(loomanthropic.PromptCaching)
+	if !ok {
+		t.Fatalf("expected extension to be of type loomanthropic.PromptCaching, got %T", ext)
+	}
+	if !pc.Auto {
+		t.Errorf("expected PromptCaching.Auto == true, got %+v", pc)
+	}
+	if pc.CacheHeader {
+		t.Errorf("expected PromptCaching.CacheHeader == false (Auto-only mode), got %+v", pc)
+	}
+}
+
+func TestAnthropicCachingMiddleware_SkipsTitleCalls(t *testing.T) {
+	ctx := scope.With(context.Background(), scope.Scope{Purpose: string(metrics.PurposeTitle)})
+
+	mock := &mockCapturingProvider{}
+	gw := &gatewayImpl{
+		providers: map[string]*providerInstance{
+			"anthropic": {
+				cfg:     ProviderConfig{Name: "anthropic", Type: "anthropic"},
+				llmProv: mock,
+			},
+		},
+	}
+
+	model, err := gw.LLM(ctx, models.Model{ID: "anthropic/claude-sonnet-5-5", ProviderType: "anthropic"}, llm.ModelConfig{})
+	if err != nil {
+		t.Fatalf("ResolveLLM failed: %v", err)
+	}
+
+	_, err = model.Invoke(ctx, []message.Message{message.NewUserText("Hello")})
+	if err != nil {
+		t.Fatalf("Invoke failed: %v", err)
+	}
+
+	if mock.lastReq == nil {
+		t.Fatal("expected request to be captured by mock provider")
+	}
+	if _, ok := mock.lastReq.Extensions[loomanthropic.PromptCaching{}.ExtensionID()]; ok {
+		t.Errorf("expected no prompt caching extension on title-generation calls")
+	}
 }
 
 func TestOpenAIResponsesOptionsMiddleware_Defaults(t *testing.T) {

@@ -126,6 +126,9 @@ func (g *gatewayImpl) LLM(ctx context.Context, m models.Model, cfg llm.ModelConf
 	if inst.cfg.Type == "antigravity" {
 		model = model.WithMiddleware(antigravitySessionMiddleware())
 	}
+	if inst.cfg.Type == "anthropic" {
+		model = model.WithMiddleware(anthropicCachingMiddleware())
+	}
 	model = model.WithMiddleware(validateRequestMiddleware(m))
 	model = model.WithMiddleware(llm.DeferredToolsMiddleware(nil), llm.InlineToolsMiddleware(nil))
 	model = model.WithMiddleware(metricsLLMMiddleware(m, g.cfg.Metrics))

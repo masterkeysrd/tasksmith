@@ -91,7 +91,7 @@ spec:
 ## 3. Extended Thinking & Prompt Caching
 
 - **Thinking**: Use `/effort` for model-supported effort levels or `/budget` for supported token budgets. Available values depend on the resolved model profile. When budgeted or adaptive extended thinking is active, TaskSmith omits configured temperature and displays a session warning.
-- **Prompt Caching**: Claude models automatically cache system prompts and conversation history. Declare `cost.cacheRead` and `cost.cacheWrite` to track savings in session metrics.
+- **Prompt Caching**: TaskSmith enables Anthropic's *automatic* prompt caching on every session turn: each request carries a top-level `cache_control` marker, so Anthropic caches everything up to the last cacheable block (system prompt, tools, and conversation history) and serves the previously-sent prefix as cache reads on later turns. Title-generation calls skip caching, since their one-shot prompts can never produce a hit worth the write cost. Prefixes below Anthropic's minimum cacheable size (1024 tokens on current Claude models) are simply billed normally. Declare `cost.cacheRead` and `cost.cacheWrite` to track savings in session metrics.
 
 For the complete manifest schema and capability properties, see the [Providers Overview](../providers.md).
 
