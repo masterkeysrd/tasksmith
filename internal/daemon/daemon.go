@@ -34,6 +34,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/daemon/std"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tasks"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/workspace"
+	"github.com/masterkeysrd/tasksmith/internal/version"
 	"github.com/masterkeysrd/warp"
 )
 
@@ -335,6 +336,7 @@ func (d *Daemon) Close(ctx context.Context) error {
 func (d *Daemon) Health(_ context.Context) (*api.HealthResponse, error) {
 	return &api.HealthResponse{
 		PID:        os.Getpid(),
+		Version:    version.Get(),
 		StartedAt:  d.startedAt,
 		Workspaces: d.Workspaces(),
 	}, nil

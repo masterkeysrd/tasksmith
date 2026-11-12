@@ -354,6 +354,38 @@ func TestRunStartupHeader(t *testing.T) {
 	}, 2*time.Second, "default hint on status line")
 }
 
+func TestRunStartupNoticesRenderAsWarnings(t *testing.T) {
+	b := mock.New(200, 24)
+	c, err := client.New("/tmp/mock.sock")
+	if err != nil {
+		t.Fatalf("failed to create client: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	opts := Options{
+		Client:    c,
+		Workspace: "/tmp/ws",
+		Version:   "0.2.0",
+		Backend:   b,
+		StartupNotices: []string{
+			"Daemon version v0.0.1 differs from TaskSmith v0.0.3. Restart the daemon when it is safe to update it: run `tasksmith daemon stop` or press r in /daemon.",
+		},
+	}
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- Run(ctx, opts)
+	}()
+
+	waitFor(t, func() bool {
+		frame := testutils.SurfaceText(b)
+		return strings.Contains(frame, "Daemon version v0.0.1 differs from TaskSmith v0.0.3") &&
+			strings.Contains(frame, "tasksmith daemon stop")
+	}, 2*time.Second, "startup skew warning notice on screen")
+}
+
 func TestRunShiftTabCyclesPermissionMode(t *testing.T) {
 	b := mock.New(80, 24)
 	c, err := client.New("/tmp/mock.sock")

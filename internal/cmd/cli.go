@@ -13,6 +13,7 @@ import (
 
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/cli"
+	"github.com/masterkeysrd/tasksmith/internal/version"
 )
 
 type replOptions struct {
@@ -57,19 +58,21 @@ func runREPL(cmd *cobra.Command, rootOpts *rootOptions, opts *replOptions) error
 		return err
 	}
 
-	c, err := connectOrStart(ctx, sockPath)
+	c, notices, err := connectOrStart(ctx, sockPath)
 	if err != nil {
 		return fmt.Errorf("connect to daemon: %w", err)
 	}
 
 	if err := cli.Run(ctx, cli.Options{
-		Client:    c,
-		Workspace: wsDir,
-		SessionID: strings.TrimSpace(opts.sessionID),
-		Agent:     strings.TrimSpace(opts.agent),
-		Model:     strings.TrimSpace(opts.model),
-		Title:     strings.TrimSpace(opts.title),
-		Backend:   opts.backend,
+		Client:         c,
+		Workspace:      wsDir,
+		Version:        version.Get(),
+		SessionID:      strings.TrimSpace(opts.sessionID),
+		Agent:          strings.TrimSpace(opts.agent),
+		Model:          strings.TrimSpace(opts.model),
+		Title:          strings.TrimSpace(opts.title),
+		Backend:        opts.backend,
+		StartupNotices: notices,
 	}); err != nil {
 		return err
 	}

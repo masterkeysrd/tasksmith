@@ -285,6 +285,7 @@ var DaemonBrowser = trail.FC("DaemonBrowser", func(slotID string) trail.Node {
 
 		runningChildren := []trail.Node{
 			kvRow("  Status:      ", "● Running", scheme.Color.Text.Success),
+			kvRow("  Version:     ", daemonDisplayVersion(h), scheme.Color.Text.Primary),
 			kvRow("  PID:         ", fmt.Sprintf("%d", h.PID), scheme.Color.Text.Primary),
 			kvRow("  Uptime:      ", fmt.Sprintf("%s (started %s)", durationStr, timeStr), scheme.Color.Text.Primary),
 			kvRow("  Socket:      ", sockPath, scheme.Color.Text.Primary),
@@ -329,3 +330,12 @@ var DaemonBrowser = trail.FC("DaemonBrowser", func(slotID string) trail.Node {
 
 	return trail.Box(trail.BoxProps{Style: boxStyle}, children...)
 })
+
+// daemonDisplayVersion renders the daemon build version from a health
+// response, tolerating daemons that predate version reporting.
+func daemonDisplayVersion(h *api.HealthResponse) string {
+	if h == nil || strings.TrimSpace(h.Version) == "" {
+		return "unknown"
+	}
+	return h.Version
+}

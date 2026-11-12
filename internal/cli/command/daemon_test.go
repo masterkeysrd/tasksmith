@@ -189,7 +189,7 @@ func TestDaemonBrowserRenderingRunning(t *testing.T) {
 	rt := &mockDaemonRoundTripper{
 		handler: func(req *http.Request) (*http.Response, error) {
 			if req.URL.Path == "/v1/health" {
-				resp := `{"pid":4242,"started_at":"2026-01-01T00:00:00Z","workspaces":["/test-workspace"]}`
+				resp := `{"pid":4242,"version":"v9.9.9-test","started_at":"2026-01-01T00:00:00Z","workspaces":["/test-workspace"]}`
 				return &http.Response{
 					StatusCode: http.StatusOK,
 					Body:       io.NopCloser(strings.NewReader(resp)),
@@ -221,6 +221,9 @@ func TestDaemonBrowserRenderingRunning(t *testing.T) {
 	}
 	if !strings.Contains(out, "4242") {
 		t.Fatalf("expected PID 4242, got:\n%s", out)
+	}
+	if !strings.Contains(out, "Version:") || !strings.Contains(out, "v9.9.9-test") {
+		t.Fatalf("expected Version row with daemon version, got:\n%s", out)
 	}
 	if !strings.Contains(out, "Uptime:") {
 		t.Fatalf("expected Uptime row, got:\n%s", out)

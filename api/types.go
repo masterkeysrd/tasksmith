@@ -413,10 +413,11 @@ type ModelQuota struct {
 	Account string `json:"account,omitempty"`
 }
 
-// HealthResponse reports the daemon's process identity, startup timestamp,
-// and currently initialized workspace directories.
+// HealthResponse reports the daemon's process identity, build version,
+// startup timestamp, and currently initialized workspace directories.
 type HealthResponse struct {
 	PID        int       `json:"pid"`
+	Version    string    `json:"version,omitempty"`
 	StartedAt  time.Time `json:"started_at"`
 	Workspaces []string  `json:"workspaces,omitempty"`
 }

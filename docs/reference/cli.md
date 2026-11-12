@@ -22,7 +22,8 @@ tasksmith [flags]
 | **`daemon serve`** | `tasksmith daemon serve [flags]` | Runs the Brain daemon server in the foreground. |
 | **`daemon start`** | `tasksmith daemon start` | Spawns and detaches the Brain daemon process in the background. |
 | **`daemon stop`** | `tasksmith daemon stop` | Gracefully terminates a running Brain daemon via SIGTERM / shutdown API. |
-| **`daemon status`** | `tasksmith daemon status` | Checks daemon process health, IPC socket connectivity, and active workspace runtimes. |
+| **`daemon status`** | `tasksmith daemon status` | Checks daemon process health, build version, IPC socket connectivity, and active workspace runtimes. |
+| **`version`** | `tasksmith version` | Prints the client build version and, when reachable without spawning, the running daemon's version. |
 
 ### Global Flags
 
@@ -36,6 +37,7 @@ The following flags apply to `tasksmith`, `tasksmith repl`, and `tasksmith daemo
 | `--agent <name>` | | `main` | Default agent persona to activate for newly initialized sessions. |
 | `--model <id>` | | Provider default | Upstream model identifier (e.g., `openai/gpt-5.5` or `ollama/qwen3.8`). |
 | `--title <title>` | | *(none)* | Optional human-readable title assigned to a newly created session. |
+| `--version` | | | Print the client build version and exit. |
 | `--help` | `-h` | | Print help and usage information for any command. |
 
 ### Daemon Flags
@@ -411,6 +413,8 @@ While browsing history, the composer's bottom border is replaced by a centered r
 | `x` | Daemon Browser | Gracefully stops the running daemon. |
 | `g` | Daemon Browser | Re-queries daemon health and refreshes status in-place. |
 | `Esc` / `q` | Daemon Browser | Closes the daemon browser and returns to composer. |
+
+The connected view reports Status, Version (daemon build; `unknown` for daemons that predate version reporting), PID, Uptime, Socket, and open Workspaces. When a client launches against a daemon built from a different version, the daemon is restarted automatically only when every session is confirmed idle; otherwise the REPL opens with a warning notice telling the user how to restart the daemon (`tasksmith daemon stop` or `/daemon` → `r`) when it is safe, and plain commands print the same warning to stderr.
 
 ### Rules Browser (`/rules`)
 

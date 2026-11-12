@@ -31,6 +31,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/daemon/session"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/timeline"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/workspace"
+	"github.com/masterkeysrd/tasksmith/internal/version"
 	"golang.org/x/oauth2"
 )
 
@@ -357,6 +358,9 @@ func TestHealthAndSessionCRUD(t *testing.T) {
 	}
 	if health1.PID != os.Getpid() {
 		t.Errorf("Health PID = %d, want %d", health1.PID, os.Getpid())
+	}
+	if health1.Version != version.Get() {
+		t.Errorf("Health Version = %q, want %q", health1.Version, version.Get())
 	}
 	if len(health1.Workspaces) != 0 {
 		t.Errorf("expected 0 open workspaces initially, got %v", health1.Workspaces)

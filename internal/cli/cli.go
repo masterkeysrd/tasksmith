@@ -28,6 +28,10 @@ type Options struct {
 	Title       string
 	Backend     backend.Backend
 	StartDaemon func(ctx context.Context, socketPath string) error
+
+	// StartupNotices are appended to the transcript as warning notices once
+	// the REPL boots (e.g. a daemon version skew the user should act on).
+	StartupNotices []string
 }
 
 // Validate checks that all required fields in [Options] are provided.
@@ -61,6 +65,10 @@ func Run(ctx context.Context, opts Options) error {
 
 	store.SetHeaderMeta(opts.Version, opts.Workspace)
 	store.SetClient(opts.Client)
+
+	for _, notice := range opts.StartupNotices {
+		store.AppendWarning(notice)
+	}
 
 	status, err := opts.Client.GetWorkspaceStatus(ctx)
 	if err == nil && status != nil && status.NeedsOnboarding && opts.SessionID == "" {
