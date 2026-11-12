@@ -19,6 +19,14 @@ const (
 	logoLine3 = "    ◢████◣   "
 )
 
+// LogoLines returns the ASCII brand mark rows paired with their per-row colors
+// for callers rendering the mark outside the component tree, such as the
+// post-REPL exit summary.
+func LogoLines() ([]string, []color.Color) {
+	return []string{logoLine1, logoLine2, logoLine3},
+		[]color.Color{logoColorTop, logoColorCenter, logoColorBase}
+}
+
 // Logo renders the 3-line ASCII brand logo with distinct colors for the top bar,
 // center pillar, and flared base.
 var Logo = trail.SimpleFC("Logo", func() trail.Node {

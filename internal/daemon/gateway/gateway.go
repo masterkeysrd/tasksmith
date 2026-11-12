@@ -9,6 +9,7 @@ import (
 	"github.com/masterkeysrd/loom/embedding"
 	"github.com/masterkeysrd/loom/llm"
 	"github.com/masterkeysrd/loom/profile"
+	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/models"
 )
 
@@ -91,6 +92,50 @@ func (g *gatewayImpl) ListProviders() []ProviderInfo {
 		})
 	}
 	return res
+}
+
+// Quota projects loom's llm.QuotaProvider onto a TaskSmith catalog model.
+// Providers that do not implement QuotaProvider, or that have no quota data
+// for the model, yield (nil, nil) rather than an error: quota is optional
+// metadata, and a missing answer must not fail the caller's flow.
+func (g *gatewayImpl) Quota(ctx context.Context, m models.Model) (*api.ModelQuota, error) {
+	g.mu.RLock()
+	if g.closed {
+		g.mu.RUnlock()
+		return nil, ErrGatewayClosed
+	}
+	inst, ok := g.providers[m.ID.Provider()]
+	g.mu.RUnlock()
+	if !ok {
+		return nil, fmt.Errorf("%w: %q", ErrProviderNotFound, m.ID.Provider())
+	}
+	if inst.authErr != nil {
+		return nil, inst.authErr
+	}
+
+	qp, ok := inst.llmProv.(llm.QuotaProvider)
+	if !ok || inst.llmProv == nil {
+		return nil, nil
+	}
+	info, found, err := qp.GetQuota(ctx, m.ID.Name())
+	if err != nil {
+		return nil, err
+	}
+	if !found {
+		return nil, nil
+	}
+
+	q := &api.ModelQuota{
+		Model:             string(m.ID),
+		RemainingFraction: info.RemainingFraction,
+	}
+	if reset, perr := info.ParsedResetTime(); perr == nil && !reset.IsZero() {
+		q.ResetAt = reset
+	}
+	if _, account, terr := LoadProviderToken(inst.cfg.Name); terr == nil && account != "" {
+		q.Account = account
+	}
+	return q, nil
 }
 
 func (g *gatewayImpl) LLM(ctx context.Context, m models.Model, cfg llm.ModelConfig) (*llm.Model, error) {

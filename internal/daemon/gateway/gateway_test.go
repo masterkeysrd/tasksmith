@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/masterkeysrd/loom/llm"
@@ -934,6 +935,71 @@ func (c *capturingProvider) GetProfile(string) (profile.Profile, bool) {
 }
 func (c *capturingProvider) SupportsDeferredTools(string) bool { return false }
 func (c *capturingProvider) SupportsInlineTools(string) bool   { return false }
+
+type quotaCapableProvider struct {
+	capturingProvider
+	quota llm.QuotaInfo
+	found bool
+}
+
+func (q *quotaCapableProvider) GetQuota(context.Context, string) (llm.QuotaInfo, bool, error) {
+	return q.quota, q.found, nil
+}
+
+func (q *quotaCapableProvider) ListQuotas(context.Context) (map[string]llm.QuotaInfo, error) {
+	if !q.found {
+		return nil, nil
+	}
+	return map[string]llm.QuotaInfo{"gemini-pro": q.quota}, nil
+}
+
+func TestGatewayQuota(t *testing.T) {
+	ctx := context.Background()
+	reset := time.Now().Add(2 * time.Hour).UTC().Truncate(time.Second)
+
+	t.Run("quota provider reports", func(t *testing.T) {
+		prov := &quotaCapableProvider{
+			quota: llm.QuotaInfo{RemainingFraction: 0.42, ResetTime: reset.Format(time.RFC3339)},
+			found: true,
+		}
+		gw := &gatewayImpl{providers: map[string]*providerInstance{
+			"antigravity": {cfg: ProviderConfig{Name: "antigravity", Type: "antigravity"}, llmProv: prov},
+		}}
+		q, err := gw.Quota(ctx, models.Model{ID: "antigravity/gemini-pro"})
+		if err != nil {
+			t.Fatalf("Quota failed: %v", err)
+		}
+		if q == nil {
+			t.Fatal("expected quota payload, got nil")
+		}
+		if q.RemainingFraction != 0.42 {
+			t.Errorf("RemainingFraction = %v, want 0.42", q.RemainingFraction)
+		}
+		if !q.ResetAt.Equal(reset) {
+			t.Errorf("ResetAt = %v, want %v", q.ResetAt, reset)
+		}
+	})
+
+	t.Run("non-quota provider yields nil", func(t *testing.T) {
+		gw := &gatewayImpl{providers: map[string]*providerInstance{
+			"openai": {cfg: ProviderConfig{Name: "openai", Type: "openai"}, llmProv: &capturingProvider{}},
+		}}
+		q, err := gw.Quota(ctx, models.Model{ID: "openai/gpt-5.5"})
+		if err != nil {
+			t.Fatalf("Quota failed: %v", err)
+		}
+		if q != nil {
+			t.Errorf("expected nil quota for non-quota provider, got %+v", q)
+		}
+	})
+
+	t.Run("unknown provider errors", func(t *testing.T) {
+		gw := &gatewayImpl{providers: map[string]*providerInstance{}}
+		if _, err := gw.Quota(ctx, models.Model{ID: "missing/model"}); !errors.Is(err, ErrProviderNotFound) {
+			t.Errorf("expected ErrProviderNotFound, got %v", err)
+		}
+	})
+}
 
 // TestValidateRequestToolBlocks verifies that validateRequest allows
 // *message.ToolReferenceBlock and *message.ToolDefinitionBlock on tool-capable

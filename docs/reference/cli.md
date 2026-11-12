@@ -604,6 +604,12 @@ All usage endpoints are read-only.
 | `GET` | `/v1/usage` | Usage summary (totals, groups, sessions count, top sessions, tools, code changes, previous-period totals, and per-workspace groups for global scope). Query params: `scope=workspace\|global` (default `workspace`, resolved from `X-TaskSmith-CWD`), `since` and `until` (RFC 3339 or `YYYY-MM-DD`; `since` defaults to 30 days ago), `group_by=model\|provider\|agent\|purpose\|tier\|day` (default `model`). |
 | `POST` | `/v1/metrics/query` | Runs a generic metrics query (`kind`, `aggregates`, `group_by`, `bucket`, `filter`, `since`, `until`) and returns grouped rows. Aggregate functions are `sum`, `min`, `max` and `count`; `count` counts only the records that measured that metric, so `sum/count` is a mean over measured records. Rows report one value per metric name, so a query listing one metric twice is rejected with `400`; request one function per metric. |
 
+## Model Quota HTTP Endpoint
+
+| Method | Path | Description |
+| :--- | :--- | :--- |
+| `GET` | `/v1/quotas?model=<id>` | `ModelQuota` (`model`, `remaining_fraction` 0–1, optional `reset_at` RFC 3339, optional `account`) for quota-billed providers. Returns `204 No Content` when the model's provider does not report quotas; `400` when `model` is missing. |
+
 ## MCP HTTP Endpoints
 
 MCP endpoints act on the workspace resolved from the `X-TaskSmith-CWD` header. Servers are addressed by manifest name, or by qualified name (`<slug>/MCP/<name>`) when a global and a project server share a name. Every endpoint returns `404` `not_found` for an unknown server, and `503` `mcp_unavailable` for operations needing a live connection while the workspace has no MCP runtime attached.

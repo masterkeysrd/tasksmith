@@ -317,6 +317,27 @@ func (c *Client) GetCommand(ctx context.Context, name string) (*api.Command, err
 	return &out, nil
 }
 
+// GetModelQuota reports the remaining quota for a quota-billed model. It
+// returns (nil, nil) when the model's provider does not report quotas.
+func (c *Client) GetModelQuota(ctx context.Context, model string) (*api.ModelQuota, error) {
+	if err := c.requireCWD(); err != nil {
+		return nil, err
+	}
+	model = strings.TrimSpace(model)
+	if model == "" {
+		return nil, errors.New("client: model ID must not be empty")
+	}
+	query := url.Values{"model": []string{model}}
+	var out api.ModelQuota
+	if err := c.doJSON(ctx, http.MethodGet, "/v1/quotas", query, nil, &out); err != nil {
+		return nil, err
+	}
+	if out.Model == "" {
+		return nil, nil
+	}
+	return &out, nil
+}
+
 // ListSkills returns all effective skill resources in the workspace.
 func (c *Client) ListSkills(ctx context.Context) ([]api.Skill, error) {
 	if err := c.requireCWD(); err != nil {

@@ -37,12 +37,16 @@ To reconnect to an existing session, supply the `--session` flag:
 tasksmith --session 018f3a52-9b24-7800-842a-594247e62a1c
 ```
 
-When you exit a session, TaskSmith prints the exact command needed to resume where you left off:
+When you exit a session, TaskSmith prints a goodbye block pairing the brand mark with the session's changes, cost (or remaining quota for subscription-billed providers), token totals, and the exact command needed to resume where you left off:
 
 ```text
-Resume this session with:
-    tasksmith --session 018f3a52-9b24-7800-842a-594247e62a1c
+ ◥██████████◣   Changes    +42 -11 (5 files)
+     ▐██▌       Cost       $0.18 (1m 02s)
+    ◢████◣      Tokens     ↑ 25.1k (21.4k cached, 300 written) • ↓ 1.2k
+                Resume     tasksmith --session 018f3a52-9b24-7800-842a-594247e62a1c
 ```
+
+The `Cost` row reads `—` when calls have no pricing data, and switches to a `Quota` row (remaining `%` plus the reset countdown) when the session model is billed by quota. Colors render only on an interactive terminal; `NO_COLOR` and piped output stay plain.
 
 You can also browse and switch between past sessions interactively at any time using the `/sessions` slash command.
 

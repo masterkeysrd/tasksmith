@@ -1,12 +1,18 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
+	"os"
 	"strings"
+	"time"
 
 	"github.com/masterkeysrd/kite/backend"
-	"github.com/masterkeysrd/tasksmith/internal/cli"
+	"github.com/mattn/go-isatty"
 	"github.com/spf13/cobra"
+
+	"github.com/masterkeysrd/tasksmith/api"
+	"github.com/masterkeysrd/tasksmith/internal/cli"
 )
 
 type replOptions struct {
@@ -69,8 +75,31 @@ func runREPL(cmd *cobra.Command, rootOpts *rootOptions, opts *replOptions) error
 	}
 
 	if sess := cli.ActiveSession(); sess != nil && sess.ID != "" {
-		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "\n\n\nResume this session with:\n    tasksmith --session %s\n", sess.ID)
+		usage := cli.ActiveUsage()
+		var quota *api.ModelQuota
+		if sess.Model != nil {
+			qctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
+			quota, _ = c.GetModelQuota(qctx, sess.Model.ID)
+			cancel()
+		}
+		summary := cli.FormatExitSummary(cli.ExitSummaryInput{
+			SessionID: sess.ID,
+			Usage:     usage,
+			Quota:     quota,
+			Color:     exitSummaryColors(cmd),
+		})
+		_, _ = fmt.Fprintf(cmd.OutOrStdout(), "\n\n\n%s\n\n", summary)
 	}
 
 	return nil
+}
+
+// exitSummaryColors enables ANSI colors only for an interactive color-capable
+// TTY, honoring NO_COLOR.
+func exitSummaryColors(cmd *cobra.Command) bool {
+	if os.Getenv("NO_COLOR") != "" {
+		return false
+	}
+	f, ok := cmd.OutOrStdout().(*os.File)
+	return ok && isatty.IsTerminal(f.Fd())
 }

@@ -34,6 +34,9 @@ type WorkspaceBackend interface {
 	ListTools(ctx context.Context, workspace, agent string) ([]api.Tool, error)
 	ListModels(ctx context.Context, workspace string) ([]api.Model, error)
 	GetModel(ctx context.Context, workspace, id string) (*api.Model, error)
+	// GetModelQuota returns a nil payload when the model's provider does not
+	// report quotas; the router renders that as HTTP 204.
+	GetModelQuota(ctx context.Context, workspace, id string) (*api.ModelQuota, error)
 	GetPermissions(ctx context.Context, workspace string) (*api.PermissionsResponse, error)
 	AddPermissionRule(ctx context.Context, workspace string, req api.PermissionRuleRequest) (*api.PermissionsResponse, error)
 	RemovePermissionRule(ctx context.Context, workspace string, req api.PermissionRuleRequest) (*api.PermissionsResponse, error)

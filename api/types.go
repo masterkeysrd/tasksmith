@@ -401,6 +401,18 @@ type Model struct {
 	Pricing         *ModelPricing        `json:"pricing,omitempty"`
 }
 
+// ModelQuota reports the remaining subscription/quota capacity for a model.
+// It is only returned for providers that bill by quota rather than per token.
+type ModelQuota struct {
+	Model string `json:"model"`
+	// RemainingFraction is the available capacity between 0.0 and 1.0.
+	RemainingFraction float64 `json:"remaining_fraction"`
+	// ResetAt is when the quota window resets; zero when unknown.
+	ResetAt time.Time `json:"reset_at"`
+	// Account is the authenticated account identity when known (e.g. OAuth email).
+	Account string `json:"account,omitempty"`
+}
+
 // HealthResponse reports the daemon's process identity, startup timestamp,
 // and currently initialized workspace directories.
 type HealthResponse struct {

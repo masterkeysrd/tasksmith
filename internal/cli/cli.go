@@ -90,3 +90,9 @@ func Run(ctx context.Context, opts Options) error {
 func ActiveSession() *api.Session {
 	return store.GetSession().Session
 }
+
+// ActiveUsage returns the active session's usage snapshot; it is empty for
+// draft sessions that never recorded calls.
+func ActiveUsage() api.SessionUsage {
+	return store.GetUsage()
+}

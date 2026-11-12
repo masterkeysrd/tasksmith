@@ -102,6 +102,10 @@ func (g *fakeGateway) GetProfile(qualifiedID string) (profile.Profile, bool) {
 	return profile.Profile{}, false
 }
 
+func (g *fakeGateway) Quota(context.Context, models.Model) (*api.ModelQuota, error) {
+	return nil, nil
+}
+
 func (g *fakeGateway) Close() error { return nil }
 
 type fakeGatewayPool struct {
@@ -381,9 +385,14 @@ func TestREPLPromptAndSlashCommands(t *testing.T) {
 	if err := runREPL(cmdActive, rootOpts, &replOptions{sessionID: sess.ID, backend: b3}); err != nil {
 		t.Fatalf("runREPL active session: %v", err)
 	}
-	expectedMsg := fmt.Sprintf("Resume this session with:\n    tasksmith --session %s", sess.ID)
-	if !strings.Contains(bufActive.String(), expectedMsg) {
-		t.Errorf("expected stdout to contain %q, got:\n%s", expectedMsg, bufActive.String())
+	exitOut := bufActive.String()
+	if !strings.Contains(exitOut, fmt.Sprintf("tasksmith --session %s", sess.ID)) {
+		t.Errorf("expected exit summary to contain resume command, got:\n%s", exitOut)
+	}
+	for _, row := range []string{"Changes", "Cost", "Tokens", "Resume"} {
+		if !strings.Contains(exitOut, row) {
+			t.Errorf("expected exit summary to contain %q row, got:\n%s", row, exitOut)
+		}
 	}
 
 	var bufDraft bytes.Buffer
@@ -396,7 +405,7 @@ func TestREPLPromptAndSlashCommands(t *testing.T) {
 	if err := runREPL(cmdDraft, rootOpts, &replOptions{backend: b4}); err != nil {
 		t.Fatalf("runREPL draft session: %v", err)
 	}
-	if strings.Contains(bufDraft.String(), "Resume this session with:") {
+	if strings.Contains(bufDraft.String(), "tasksmith --session") {
 		t.Errorf("expected no resume message on draft session exit, got:\n%s", bufDraft.String())
 	}
 }

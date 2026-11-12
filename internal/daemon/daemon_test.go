@@ -126,6 +126,10 @@ func (g *fakeGateway) GetProfile(qualifiedID string) (profile.Profile, bool) {
 	return profile.Profile{}, false
 }
 
+func (g *fakeGateway) Quota(context.Context, models.Model) (*api.ModelQuota, error) {
+	return nil, nil
+}
+
 func (g *fakeGateway) Close() error { return nil }
 
 type fakeGatewayPool struct {

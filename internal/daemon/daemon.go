@@ -747,6 +747,43 @@ func (d *Daemon) GetModel(ctx context.Context, rawWS, id string) (*api.Model, er
 	return &m, nil
 }
 
+// GetModelQuota reports the remaining quota of a quota-billed model. It
+// returns a nil payload (HTTP 204 semantics handled by the router) when the
+// model is unknown, has no provider gateway, or its provider does not report
+// quotas.
+func (d *Daemon) GetModelQuota(ctx context.Context, rawWS, id string) (*api.ModelQuota, error) {
+	rt, err := d.workspace(ctx, rawWS)
+	if err != nil {
+		return nil, err
+	}
+
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return nil, &api.APIError{
+			StatusCode: http.StatusBadRequest,
+			Code:       "bad_request",
+			Message:    "model ID must not be empty",
+		}
+	}
+
+	var model models.Model
+	var ok bool
+	if models.ID(id).Valid() {
+		model, ok = rt.Catalog().Get(models.ID(id))
+	} else {
+		model, ok = rt.Catalog().Resolve(models.RoleCompletion, id)
+	}
+	if !ok {
+		return nil, nil
+	}
+
+	gw := rt.Gateway()
+	if gw == nil {
+		return nil, nil
+	}
+	return gw.Quota(ctx, model)
+}
+
 func (d *Daemon) GetPermissions(ctx context.Context, rawWS string) (*api.PermissionsResponse, error) {
 	rt, err := d.workspace(ctx, rawWS)
 	if err != nil {

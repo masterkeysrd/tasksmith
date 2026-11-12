@@ -213,6 +213,7 @@ func (w *workspaceRouter) initRoutes() {
 		GetRoute("/v1/workspace/files", w.getWorkspaceFiles),
 		GetRoute("/v1/models", w.getModelsList),
 		GetRoute("/v1/models/{id...}", w.getModel),
+		GetRoute("/v1/quotas", w.getModelQuota),
 		GetRoute("/v1/permissions", w.getPermissions),
 		PostRoute("/v1/permissions", w.postPermissionRule),
 		DeleteRoute("/v1/permissions", w.deletePermissionRule),
@@ -465,6 +466,24 @@ func (w *workspaceRouter) getModel(rw http.ResponseWriter, r *http.Request) {
 		return
 	}
 	WriteJSON(rw, http.StatusOK, model)
+}
+
+func (w *workspaceRouter) getModelQuota(rw http.ResponseWriter, r *http.Request) {
+	id := strings.TrimSpace(r.URL.Query().Get("model"))
+	if id == "" {
+		WriteBadRequest(rw, "model query parameter must not be empty")
+		return
+	}
+	quota, err := w.b.GetModelQuota(r.Context(), RequestWorkspace(r), id)
+	if err != nil {
+		WriteError(rw, err)
+		return
+	}
+	if quota == nil {
+		rw.WriteHeader(http.StatusNoContent)
+		return
+	}
+	WriteJSON(rw, http.StatusOK, quota)
 }
 
 func (w *workspaceRouter) getPermissions(rw http.ResponseWriter, r *http.Request) {

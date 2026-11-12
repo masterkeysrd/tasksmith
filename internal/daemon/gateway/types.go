@@ -9,6 +9,7 @@ import (
 	"github.com/masterkeysrd/loom/embedding"
 	"github.com/masterkeysrd/loom/llm"
 	"github.com/masterkeysrd/loom/profile"
+	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/models"
 )
 
@@ -86,6 +87,10 @@ type Gateway interface {
 	ListProviders() []ProviderInfo
 
 	GetProfile(id string) (profile.Profile, bool)
+
+	// Quota returns the remaining quota for a quota-billed model, or (nil, nil)
+	// when the model's provider does not report quotas or has no quota data.
+	Quota(ctx context.Context, model models.Model) (*api.ModelQuota, error)
 
 	// Close releases all client resources and connections.
 	Close() error

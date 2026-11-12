@@ -79,6 +79,8 @@ type mockBackend struct {
 	modelsErr         error
 	modelResp         *api.Model
 	modelErr          error
+	modelQuotaResp    *api.ModelQuota
+	modelQuotaErr     error
 	permsResp         *api.PermissionsResponse
 	permsErr          error
 	createSessResp    *api.Session
@@ -242,6 +244,10 @@ func (m *mockBackend) GetModel(ctx context.Context, workspace, id string) (*api.
 	return m.modelResp, m.modelErr
 }
 
+func (m *mockBackend) GetModelQuota(ctx context.Context, workspace, id string) (*api.ModelQuota, error) {
+	return m.modelQuotaResp, m.modelQuotaErr
+}
+
 func (m *mockBackend) GetPermissions(ctx context.Context, workspace string) (*api.PermissionsResponse, error) {
 	return m.permsResp, m.permsErr
 }
@@ -313,6 +319,58 @@ func setupTestServer(mock *mockBackend) http.Handler {
 		server.NewMCPRouter(mock),
 		server.NewSessionRouter(mock),
 	)
+}
+
+func TestQuotaRoute(t *testing.T) {
+	reset := time.Now().Add(time.Hour).UTC().Truncate(time.Second)
+
+	t.Run("reports quota", func(t *testing.T) {
+		mock := &mockBackend{modelQuotaResp: &api.ModelQuota{
+			Model:             "antigravity/gemini-pro",
+			RemainingFraction: 0.75,
+			ResetAt:           reset,
+		}}
+		handler := setupTestServer(mock)
+
+		req := httptest.NewRequest(http.MethodGet, "/v1/quotas?model=antigravity/gemini-pro", nil)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("quota status = %d, want 200", rec.Code)
+		}
+		var quota api.ModelQuota
+		if err := json.Unmarshal(rec.Body.Bytes(), &quota); err != nil {
+			t.Fatalf("unmarshal quota: %v", err)
+		}
+		if quota.RemainingFraction != 0.75 {
+			t.Errorf("RemainingFraction = %v, want 0.75", quota.RemainingFraction)
+		}
+	})
+
+	t.Run("no content without quota", func(t *testing.T) {
+		handler := setupTestServer(&mockBackend{})
+
+		req := httptest.NewRequest(http.MethodGet, "/v1/quotas?model=openai/gpt-5.5", nil)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusNoContent {
+			t.Fatalf("quota status = %d, want 204", rec.Code)
+		}
+	})
+
+	t.Run("missing model parameter", func(t *testing.T) {
+		handler := setupTestServer(&mockBackend{})
+
+		req := httptest.NewRequest(http.MethodGet, "/v1/quotas", nil)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("quota status = %d, want 400", rec.Code)
+		}
+	})
 }
 
 func TestMuxFallbackRouteNotFound(t *testing.T) {
