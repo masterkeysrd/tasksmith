@@ -16,6 +16,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/cli/store"
 	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
 	"github.com/masterkeysrd/tasksmith/internal/tui/testutils"
+	"github.com/masterkeysrd/tasksmith/internal/ui/theme"
 )
 
 func TestMain(m *testing.M) {
@@ -801,5 +802,83 @@ func TestRunClearReprintHeader(t *testing.T) {
 	}
 	if strings.Contains(txt, "frozen notice to be cleared") {
 		t.Fatalf("expected frozen notice to be cleared from scrollback, got:\n%s", txt)
+	}
+}
+
+func TestStatusLineCommandDoesNotCorruptLayoutOrSegments(t *testing.T) {
+	xdg.SetTestEnv(t.TempDir(), "tasksmith")
+	defer xdg.ClearCache()
+	theme.SetClient(theme.ClientCLI)
+	store.ResetApp()
+	defer store.ResetApp()
+	store.ResetSession()
+	defer store.ResetSession()
+	store.ClearTranscript()
+	defer store.ClearTranscript()
+	store.ClearSlot()
+	defer store.ClearSlot()
+
+	store.SetSession(&api.Session{
+		ID:      "sess-1",
+		Context: api.ContextState{UsedTokens: 99400, MaxTokens: 262100},
+	})
+	store.SetModelInfo("Qwen3.8 Flash Next oQ4e-mtp", "medium")
+	store.SetMode(api.ModeAuto)
+	store.SetUsage(api.SessionUsage{
+		SessionID: "sess-1",
+		Totals: api.UsageGroup{
+			Calls:         10,
+			UnpricedCalls: 10,
+			Tokens: api.UsageTokens{
+				Input:  42_700_000,
+				Output: 329_200,
+			},
+		},
+	})
+
+	app := testutils.NewApp(t, App(), 100, 30)
+
+	initial := app.Text()
+	if !strings.Contains(initial, store.DefaultHint) {
+		t.Fatalf("expected initial statusline to contain hint %q, got:\n%s", store.DefaultHint, initial)
+	}
+	if !strings.Contains(initial, "auto · 99.4k/262.1k (37%) · ≥ $0.00 · ↑42.7M ↓329.2k") {
+		t.Fatalf("expected initial statusline segments with separators, got:\n%s", initial)
+	}
+
+	// Type /statusline and press Enter. The slash-command completion popup
+	// resolves asynchronously and swallows Enter while still loading, so wait
+	// for the settled candidate before submitting.
+	for _, ch := range "/statusline" {
+		app.Press(key.Key{Code: ch, Text: string(ch)})
+	}
+	app.WaitFor(func(text string) bool {
+		return strings.Contains(text, "Configure the REPL status line segments")
+	})
+	app.Press(key.Key{Code: key.KeyEnter})
+
+	after := app.Text()
+	if !strings.Contains(after, "Status line configuration") {
+		t.Fatalf("expected /statusline editor to open, got:\n%s", after)
+	}
+	// Verify preview status line is not corrupted or concatenated without separators
+	if strings.Contains(after, "auto99.4k") {
+		t.Fatalf("statusline layout corrupted with missing separators: got 'auto99.4k' in:\n%s", after)
+	}
+	if !strings.Contains(after, "auto · 99.4k/262.1k (37%) · ≥ $0.00 · ↑42.7M ↓329.2k · Qwen3.8 Flash Next oQ4e-mtp · medium") {
+		t.Fatalf("expected statusline preview to contain clean separated segments, got:\n%s", after)
+	}
+
+	// Press Esc to exit the editor
+	app.Press(key.Key{Code: key.KeyEscape})
+	afterEsc := app.Text()
+	if strings.Contains(afterEsc, "Status line configuration") {
+		t.Fatalf("expected /statusline editor to close on Esc, got:\n%s", afterEsc)
+	}
+	if !strings.Contains(afterEsc, store.DefaultHint) {
+		t.Fatalf("expected hint to restore after closing editor, got:\n%s", afterEsc)
+	}
+	if !strings.Contains(afterEsc, "auto · 99.4k/262.1k (37%) · ≥ $0.00 · ↑42.7M ↓329.2k") {
+		t.Fatalf("expected statusline segments to restore cleanly after Esc, got:\n%s", afterEsc)
 	}
 }

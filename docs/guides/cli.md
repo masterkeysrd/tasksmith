@@ -103,6 +103,13 @@ The bottom composer is your command center:
 - **Permission Mode Cycling**: Press `Shift+Tab` to instantly cycle the active permission mode (`default` $\to$ `accept_edits` $\to$ `plan` $\to$ `ask` $\to$ `auto`).
 - **Interrupt / Cancel**: Press `Esc` while an agent is streaming to immediately halt generation and cancel running tools. Press `Ctrl+C` once to clear input, or twice within 2 seconds to exit the TUI.
 
+### 4. Status Line
+
+The status line under the composer shows configurable segments: the shortcut hint, the permission mode badge, context window usage, session cost/tokens, and the model with its thinking effort. The first enabled segment sits on the left, the rest on the right.
+
+- **Configure it**: Run `/statusline` to open an editor with a live preview — toggle segments (`Space`), reorder them (`←`/`→`), switch compact mode (`c`), then save (`s`) or discard (`Esc`). The composition persists to `~/.config/tasksmith/statusline.json`, which you (or the agent) can also edit directly; file edits apply on the next REPL start.
+- **Narrow terminals**: When the window is too narrow, segments shrink or hide in a fixed order (model, then usage, then hint, then context). The permission mode badge is never hidden, because it is safety-relevant.
+
 ---
 
 ## Slash Commands & Configuration

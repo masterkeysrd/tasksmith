@@ -78,6 +78,7 @@ Inside the TaskSmith interactive REPL, slash commands provide instant control ov
 | **`/tools`** | | *(none)* | Opens the interactive tools browser to inspect tool status, scope, safety annotations, and JSON schemas, and to reload workspace tools. See [Tools Browser](#tools-browser-tools). |
 | **`/mcp`** | `/mcps` | `[auth <name>\|restart <name>]` | With no subcommand, opens the interactive MCP browser to inspect servers, run prompts, attach resources, authorize, and restart. `auth` and `restart` act on one named server after a confirmation. See [MCP Browser](#mcp-browser-mcp). |
 | **`/setup`** | | *(none)* | Opens the interactive workspace onboarding and configuration wizard to reconfigure providers, scopes, permissions, tools, or MCP servers. |
+| **`/statusline`** | `/status` | *(none)* | Opens the interactive status line editor to toggle, reorder, and compact the status line segments with a live preview; saves to `statusline.json`. See [Status Line Fields](#status-line-fields). |
 | **`/init`** | | *(none)* | Invokes the built-in `system:init` command to inspect codebase conventions and interactively generate or update `AGENTS.md`. |
 | **`/workspace`** | `/ws` | `[reload]` | Reloads the active workspace resources from disk. With no subcommand, defaults to `reload`. |
 | **`/daemon`** | | `[status\|restart\|start\|stop]` | Inspects or manages the background Brain Daemon. With no subcommand, opens the interactive daemon browser. |
@@ -502,7 +503,44 @@ TaskSmith adheres to the XDG Base Directory Specification for state persistence,
 
 ## Status Line Fields
 
-The REPL status line shows, from left to right: the shortcut hint, the permission mode (non-default only), context window usage, session usage, and the model with its thinking effort. Session usage is rendered as `<cost> · ↑<input> ↓<output>` (for example `$0.42 · ↑128.4k ↓8.3k`) once the session has recorded an LLM call, and updates live from `usage_updated` events. `↑` is the total prompt size (including cached tokens) and `↓` is output tokens. A leading `≥` on the cost means some calls had no pricing data.
+The status line composition is user-configurable via `/statusline` (or by editing
+`~/.config/tasksmith/statusline.json` directly, which takes effect on the next REPL start). The
+default composition, from left to right, is: the shortcut hint, the permission mode, context
+window usage, session usage, and the model with its thinking effort. The first enabled segment
+renders on the left of the line, the remaining ones on the right separated by ` · `.
+
+| Segment ID | Renders | Compact form |
+| :--- | :--- | :--- |
+| `hint` | Shortcut hint or the Ctrl+C cancel prompt | — |
+| `mode` | Permission mode badge | — |
+| `context` | Context window usage, e.g. `109.5k/400.0k (27%)` | `27%` |
+| `usage` | Session usage as `<cost> · ↑<input> ↓<output>` (for example `$0.42 · ↑128.4k ↓8.3k`) once the session has recorded an LLM call; updates live from `usage_updated` events. `↑` is the total prompt size (including cached tokens) and `↓` is output tokens. A leading `≥` on the cost means some calls had no pricing data. | — |
+| `model` | Model and thinking effort, e.g. `gpt-5 · high` | model name only |
+
+Unknown segment IDs in the config file are dropped and reported; duplicates collapse; an empty
+result falls back to the default composition.
+
+### Status Line Editor (`/statusline`)
+
+The editor lists enabled segments (numbered, in layout order) followed by disabled ones, and
+previews every edit live in the real status line.
+
+| Key | Action |
+| :--- | :--- |
+| `↑` / `↓` (or `k` / `j`) | Move the cursor between rows. |
+| `Space` / `Enter` / `t` | Toggle the segment under the cursor (at least one segment must stay enabled). |
+| `←` / `→` (or `h` / `l`) | Reorder the enabled segment (its layout position). |
+| `c` | Toggle compact mode. |
+| `s` | Save the composition to `~/.config/tasksmith/statusline.json` and exit. |
+| `Esc` | Discard the draft, restore the previous composition, and exit. |
+
+### Responsive Narrowing
+
+When the terminal is too narrow for the configured composition, segments shrink or hide in a
+fixed ladder regardless of their layout order: `model` compacts then hides, `usage` compacts then
+hides, `hint` is ellipsized to the available room then hides, and `context` compacts then hides.
+The `mode` badge is safety-relevant and is never hidden by narrowing — only removing it from the
+composition hides it.
 
 ## Turn Spinner and Summary
 

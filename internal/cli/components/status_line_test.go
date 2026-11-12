@@ -1,12 +1,14 @@
 package components
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/masterkeysrd/kite/extras/trail"
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/cli/store"
+	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
 	"github.com/masterkeysrd/tasksmith/internal/tui/testutils"
 )
 
@@ -134,6 +136,153 @@ func TestDefaultStatusLine(t *testing.T) {
 	}
 	if !strings.Contains(out, "plan · TestModel · medium") {
 		t.Fatalf("expected 'plan · TestModel · medium' in status line, got:\n%s", out)
+	}
+}
+
+func TestDefaultStatusLineWithActiveSlot(t *testing.T) {
+	store.ResetApp()
+	store.ResetSession()
+	defer store.ResetApp()
+	defer store.ResetSession()
+
+	store.SetMode(api.ModePlan)
+	store.SetModelInfo("TestModel", "medium")
+
+	// Activate a slot
+	store.EnqueueSlot(store.SlotItem{ID: "slot-1", Kind: store.SlotKindPicker})
+	defer store.ClearSlot()
+
+	out := renderNode(t, DefaultStatusLine())
+	if strings.Contains(out, store.DefaultHint) {
+		t.Fatalf("hint must not render when slot is active, got:\n%s", out)
+	}
+	if !strings.Contains(out, "plan · TestModel · medium") {
+		t.Fatalf("expected right segments with separator when slot is active, got:\n%s", out)
+	}
+}
+
+func TestPlanStatusLine(t *testing.T) {
+	all := []store.StatusLineSegmentID{store.StatusLineHint, store.StatusLineMode, store.StatusLineContext, store.StatusLineUsage, store.StatusLineModel}
+	const (
+		hint    = "shift+tab cycle mode - /help commands"
+		mode    = "plan"
+		ctxFull = "109.5k/400.0k (27%)"
+		ctxPct  = "27%"
+		usage   = "$0.42 - up128.4k down8.3k"
+		mFull   = "Qwen 3.8 DFlash2 NVFP4 - high"
+		mComp   = "Qwen 3.8 DFlash2 NVFP4"
+	)
+
+	t.Run("width zero keeps everything", func(t *testing.T) {
+		plan := planStatusLine(0, false, all, hint, mode, ctxFull, ctxPct, usage, mFull, mComp)
+		if plan.Texts[store.StatusLineUsage] != usage || plan.Texts[store.StatusLineModel] != mFull {
+			t.Fatalf("expected full texts at width 0, got %v", plan.Texts)
+		}
+	})
+
+	t.Run("wide fits unchanged", func(t *testing.T) {
+		plan := planStatusLine(200, false, all, hint, mode, ctxFull, ctxPct, usage, mFull, mComp)
+		if plan.Texts[store.StatusLineModel] != mFull || plan.Texts[store.StatusLineUsage] != usage {
+			t.Fatalf("expected no changes at width 200, got %v", plan.Texts)
+		}
+	})
+
+	t.Run("ladder compacts model before dropping usage", func(t *testing.T) {
+		// Wide enough for everything except the model suffix.
+		need := len([]rune(hint)) + len([]rune(mode)) + len([]rune(ctxFull)) + len([]rune(usage)) + len([]rune(mComp)) + 4*len([]rune(" · "))
+		plan := planStatusLine(need, false, all, hint, mode, ctxFull, ctxPct, usage, mFull, mComp)
+		if plan.Texts[store.StatusLineModel] != mComp {
+			t.Fatalf("expected compact model, got %q", plan.Texts[store.StatusLineModel])
+		}
+		if plan.Texts[store.StatusLineUsage] != usage {
+			t.Fatalf("usage should survive model compaction, got %q", plan.Texts[store.StatusLineUsage])
+		}
+	})
+
+	t.Run("usage dropped before hint", func(t *testing.T) {
+		need := len([]rune(hint)) + len([]rune(mode)) + len([]rune(ctxFull)) + len([]rune(mComp)) + 3*len([]rune(" · "))
+		plan := planStatusLine(need, false, all, hint, mode, ctxFull, ctxPct, usage, mFull, mComp)
+		if plan.Texts[store.StatusLineUsage] != "" {
+			t.Fatalf("expected usage hidden, got %q", plan.Texts[store.StatusLineUsage])
+		}
+		if plan.Texts[store.StatusLineHint] != hint {
+			t.Fatalf("expected hint kept, got %q", plan.Texts[store.StatusLineHint])
+		}
+	})
+
+	t.Run("mode never hidden", func(t *testing.T) {
+		plan := planStatusLine(4, false, all, hint, mode, ctxFull, ctxPct, usage, mFull, mComp)
+		if plan.Texts[store.StatusLineMode] != mode {
+			t.Fatalf("expected mode kept at width 4, got %q", plan.Texts[store.StatusLineMode])
+		}
+		if plan.Texts[store.StatusLineHint] != "" || plan.Texts[store.StatusLineUsage] != "" ||
+			plan.Texts[store.StatusLineContext] != "" || plan.Texts[store.StatusLineModel] != "" {
+			t.Fatalf("expected expendable segments hidden at width 4, got %v", plan.Texts)
+		}
+	})
+
+	t.Run("unconfigured segments excluded", func(t *testing.T) {
+		plan := planStatusLine(20, false, []store.StatusLineSegmentID{store.StatusLineMode}, hint, mode, ctxFull, ctxPct, usage, mFull, mComp)
+		if _, ok := plan.Texts[store.StatusLineHint]; ok {
+			t.Fatalf("hint must not appear when unconfigured: %v", plan.Texts)
+		}
+		if plan.Texts[store.StatusLineMode] != mode {
+			t.Fatalf("expected mode, got %v", plan.Texts)
+		}
+	})
+
+	t.Run("compact starts from compact variants", func(t *testing.T) {
+		plan := planStatusLine(200, true, all, hint, mode, ctxFull, ctxPct, usage, mFull, mComp)
+		if plan.Texts[store.StatusLineContext] != ctxPct || plan.Texts[store.StatusLineModel] != mComp {
+			t.Fatalf("expected compact variants, got %v", plan.Texts)
+		}
+	})
+}
+
+func TestDefaultStatusLineResponsive(t *testing.T) {
+	xdg.SetTestEnv(t.TempDir(), "tasksmith")
+	defer xdg.ClearCache()
+	store.ResetApp()
+	store.ResetSession()
+	defer store.ResetApp()
+	defer store.ResetSession()
+
+	store.SetSession(&api.Session{
+		ID:      "sess-status",
+		Context: api.ContextState{UsedTokens: 109500, MaxTokens: 400000, TriggerTokens: 356000},
+	})
+	store.SetModelInfo("Qwen 3.8 DFlash2 NVFP4", "high")
+	store.SetMode(api.ModePlan)
+	_, _ = store.SaveStatusLine(store.StatusLineConfig{Segments: slices.Clone(store.DefaultStatusLineSegments)})
+
+	// Wide terminal: model with thinking effort visible.
+	out := testutils.Render(t, DefaultStatusLine(), 120, 4)
+	if !strings.Contains(out, "Qwen 3.8 DFlash2 NVFP4") || !strings.Contains(out, "plan") {
+		t.Fatalf("expected full status line at width 120, got:\n%s", out)
+	}
+
+	// Narrow terminal: segments must not collide; expendable ones disappear.
+	out = testutils.Render(t, DefaultStatusLine(), 24, 4)
+	for line := range strings.SplitSeq(out, "\n") {
+		if len([]rune(strings.TrimRight(line, " "))) > 24 {
+			t.Fatalf("line exceeds terminal width at 24 cols:\n%q", line)
+		}
+	}
+	if !strings.Contains(out, "plan") {
+		t.Fatalf("expected mode badge to survive at width 24, got:\n%s", out)
+	}
+
+	// Config without usage/model drops them even on a wide terminal.
+	_, _ = store.SaveStatusLine(store.StatusLineConfig{Segments: []store.StatusLineSegmentID{store.StatusLineMode, store.StatusLineContext}})
+	defer func() {
+		_, _ = store.SaveStatusLine(store.StatusLineConfig{Segments: slices.Clone(store.DefaultStatusLineSegments)})
+	}()
+	out = testutils.Render(t, DefaultStatusLine(), 120, 4)
+	if !strings.Contains(out, "plan") || !strings.Contains(out, "109.5k/400.0k") {
+		t.Fatalf("expected configured mode+context, got:\n%s", out)
+	}
+	if strings.Contains(out, "Qwen") || strings.Contains(out, store.DefaultHint) {
+		t.Fatalf("unconfigured segments must not render, got:\n%s", out)
 	}
 }
 
