@@ -161,5 +161,11 @@ var App = trail.SimpleFC("App", func() trail.Node {
 		return wind.NewClient()
 	}, nil)
 
-	return wind.Provider(wind.ProviderProps{Client: queryClient}, appContent())
+	// TerminalStatus mounts beside the app rather than inside it because the
+	// onboarding wizard swaps the whole content subtree, and terminal status
+	// reporting must survive that swap.
+	return kitex.Fragment(
+		wind.Provider(wind.ProviderProps{Client: queryClient}, appContent()),
+		components.TerminalStatus(),
+	)
 })

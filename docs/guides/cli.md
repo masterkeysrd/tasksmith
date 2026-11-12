@@ -110,6 +110,16 @@ The status line under the composer shows configurable segments: the shortcut hin
 - **Configure it**: Run `/statusline` to open an editor with a live preview — toggle segments (`Space`), reorder them (`←`/`→`), switch compact mode (`c`), then save (`s`) or discard (`Esc`). The composition persists to `~/.config/tasksmith/statusline.json`, which you (or the agent) can also edit directly; file edits apply on the next REPL start.
 - **Narrow terminals**: When the window is too narrow, segments shrink or hide in a fixed order (model, then usage, then hint, then context). The permission mode badge is never hidden, because it is safety-relevant.
 
+### 5. Terminal Window Status
+
+TaskSmith also reports the session's live state to the terminal itself, so background tabs, taskbars, and multiplexers stay informative without looking at the pane:
+
+- **Window/tab title**: the session title once the daemon has generated one, falling back to the workspace directory name — with no `TaskSmith` prefix, so narrow tab bars show as much of the real label as possible.
+- **Native progress bar**: Terminals that support the OSC 9;4 progress sequence show an indeterminate bar while the agent works, a paused bar when it is waiting on you (a permission prompt or an agent question), and an error bar when a turn fails.
+- **Program status**: Terminals that speak the Program Status Protocol (OSC 7501) receive a structured record (`working`, `blocked` with the reason — permission, question, or auth — `done`, `error`, or `idle`), which is what powers richer tab badges and notifications.
+
+Everything is capability-probed: a terminal that does not support one of these sequences simply never receives it. The title and status are cleared when the REPL exits, so your shell tab never keeps a stale TaskSmith state.
+
 ---
 
 ## Slash Commands & Configuration

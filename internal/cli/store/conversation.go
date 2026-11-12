@@ -101,6 +101,12 @@ type StreamState struct {
 	// a subagent. It only applies while Streaming is true.
 	Delegated bool
 
+	// TurnFailed reports that the turn that just ended ended in failure. The
+	// stream settles back to idle immediately, so without this flag a failed
+	// turn and a finished one are indistinguishable after the fact, and the
+	// terminal status indicators could not show the failure at all.
+	TurnFailed bool
+
 	// TurnStartedAt is when the current turn started streaming. BaseInput and
 	// BaseOutput are the session's token totals at that moment, and CallInput
 	// and CallOutput are the running totals of the LLM call in flight, so the
@@ -1324,6 +1330,7 @@ func (acc *conversationAccumulator) publishLocked() {
 		Queue:             queuePtr,
 		Todos:             todosPtr,
 		Delegated:         delegated,
+		TurnFailed:        acc.status == StreamFailed && acc.err != nil,
 	})
 }
 
