@@ -149,7 +149,9 @@ func initProvider(ctx context.Context, cfg ProviderConfig, env map[string]string
 		opts = append(opts, loomtypesafe.WithHTTPClient(httpClient))
 		typesafeProv, err := loomtypesafe.NewProvider(opts...)
 		if err != nil {
-			return nil, fmt.Errorf("gateway: typesafe provider error: %w", err)
+			inst.authErr = fmt.Errorf("gateway: typesafe provider error: %w", err)
+			inst.warning = inst.authErr.Error()
+			return inst, nil
 		}
 		inst.decisionProv = typesafeProv
 
@@ -165,13 +167,20 @@ func initProvider(ctx context.Context, cfg ProviderConfig, env map[string]string
 		if clientCfg.APIKey == "" && cfg.Auth.scheme() == AuthTypeNone {
 			clientCfg.APIKey = placeholderSDKCredential
 		}
+		if clientCfg.APIKey == "" {
+			inst.authErr = fmt.Errorf("%w: provider %q requires an API key", ErrMissingCredential, cfg.Name)
+			inst.warning = inst.authErr.Error()
+			return inst, nil
+		}
 		if endpoint, apiVersion := splitGenAIEndpoint(cfg.Endpoint); endpoint != "" {
 			clientCfg.HTTPOptions.BaseURL = endpoint
 			clientCfg.HTTPOptions.APIVersion = apiVersion
 		}
 		genaiProv, err := loomgenai.NewProvider(ctx, clientCfg)
 		if err != nil {
-			return nil, fmt.Errorf("gateway: genai provider error: %w", err)
+			inst.authErr = fmt.Errorf("gateway: genai provider error: %w", err)
+			inst.warning = inst.authErr.Error()
+			return inst, nil
 		}
 		inst.llmProv = genaiProv
 		inst.embeddingProv = genaiProv

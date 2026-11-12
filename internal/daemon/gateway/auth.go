@@ -61,6 +61,10 @@ func resolveCredential(auth *AuthConfig, env map[string]string) (string, error) 
 		return token, nil
 	}
 
+	if auth.Type.normalized() == AuthTypeEnv {
+		return "", fmt.Errorf("%w: auth type %q requires an environment variable (auth.env) or credential file (auth.file)", ErrMissingCredential, auth.Type)
+	}
+
 	return "", nil
 }
 

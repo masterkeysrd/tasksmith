@@ -38,8 +38,16 @@ func New(ctx context.Context, cfg Config) (Gateway, error) {
 	for _, pCfg := range cfg.Providers {
 		inst, err := initProvider(bgCtx, pCfg, cfg.Env)
 		if err != nil {
-			bgCancel()
-			return nil, fmt.Errorf("gateway: failed to initialize provider %q: %w", pCfg.Name, err)
+			if len(cfg.Providers) > 1 {
+				inst = &providerInstance{
+					cfg:     pCfg,
+					authErr: err,
+					warning: fmt.Sprintf("provider %q disabled: %v", pCfg.Name, err),
+				}
+			} else {
+				bgCancel()
+				return nil, fmt.Errorf("gateway: failed to initialize provider %q: %w", pCfg.Name, err)
+			}
 		}
 		providers[pCfg.Name] = inst
 	}

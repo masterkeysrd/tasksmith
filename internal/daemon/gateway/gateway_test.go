@@ -940,3 +940,130 @@ func TestGatewayDeferredAndInlineToolMiddleware(t *testing.T) {
 		t.Errorf("expected ToolReferenceBlock to be expanded into a text block, got %v", prov.lastRequest.Messages[0].GetContent())
 	}
 }
+
+func TestProviderGracefulDegradation(t *testing.T) {
+	ctx := context.Background()
+
+	cfg := Config{
+		Providers: []ProviderConfig{
+			{
+				Name:     "healthy-ollama",
+				Type:     "ollama",
+				Endpoint: "http://127.0.0.1:11434",
+			},
+			{
+				Name:     "broken-endpoint",
+				Type:     "ollama",
+				Endpoint: "://invalid-url-with-no-scheme",
+			},
+			{
+				Name: "genai-missing-key",
+				Type: "genai",
+				Auth: &AuthConfig{Type: AuthTypeEnv, Env: "NONEXISTENT_GOOGLE_API_KEY"},
+			},
+			{
+				Name: "genai-no-env-field",
+				Type: "genai",
+				Auth: &AuthConfig{Type: AuthTypeEnv},
+			},
+		},
+		Env: map[string]string{},
+	}
+
+	gw, err := New(ctx, cfg)
+	if err != nil {
+		t.Fatalf("expected New() to succeed with graceful degradation, got: %v", err)
+	}
+	t.Cleanup(func() { _ = gw.Close() })
+
+	providers := gw.ListProviders()
+	if len(providers) != 4 {
+		t.Fatalf("expected 4 providers in ListProviders(), got %d", len(providers))
+	}
+
+	warningByName := make(map[string]string)
+	for _, p := range providers {
+		warningByName[p.Name] = p.Warning
+	}
+
+	if warningByName["healthy-ollama"] != "" {
+		t.Errorf("expected healthy-ollama to have empty warning, got: %q", warningByName["healthy-ollama"])
+	}
+	if !strings.Contains(warningByName["broken-endpoint"], "disabled") {
+		t.Errorf("expected broken-endpoint warning to contain 'disabled', got: %q", warningByName["broken-endpoint"])
+	}
+	if !strings.Contains(warningByName["genai-missing-key"], "NONEXISTENT_GOOGLE_API_KEY") {
+		t.Errorf("expected genai-missing-key warning to mention env var, got: %q", warningByName["genai-missing-key"])
+	}
+	if !strings.Contains(warningByName["genai-no-env-field"], "requires an environment variable") {
+		t.Errorf("expected genai-no-env-field warning to mention env requirement, got: %q", warningByName["genai-no-env-field"])
+	}
+
+	// Healthy provider LLM works
+	healthyModel, err := gw.LLM(ctx, models.Model{ID: "healthy-ollama/llama3.2", ProviderType: "ollama"}, llm.ModelConfig{})
+	if err != nil {
+		t.Fatalf("expected healthy-ollama LLM to succeed, got: %v", err)
+	}
+	if healthyModel.Name() != "llama3.2" {
+		t.Errorf("expected model name 'llama3.2', got %q", healthyModel.Name())
+	}
+
+	// Broken provider LLM returns initialization error
+	_, err = gw.LLM(ctx, models.Model{ID: "broken-endpoint/llama3.2", ProviderType: "ollama"}, llm.ModelConfig{})
+	if err == nil {
+		t.Fatal("expected broken-endpoint LLM to fail, got nil")
+	}
+	if !strings.Contains(err.Error(), "invalid ollama endpoint") {
+		t.Errorf("expected broken-endpoint error to mention invalid ollama endpoint, got: %v", err)
+	}
+
+	// GenAI with missing env returns ErrMissingCredential
+	_, err = gw.LLM(ctx, models.Model{ID: "genai-missing-key/gemini-2.0-flash", ProviderType: "genai"}, llm.ModelConfig{})
+	if !errors.Is(err, ErrMissingCredential) {
+		t.Fatalf("expected ErrMissingCredential for genai-missing-key, got: %v", err)
+	}
+
+	// GenAI without env field returns ErrMissingCredential
+	_, err = gw.LLM(ctx, models.Model{ID: "genai-no-env-field/gemini-2.0-flash", ProviderType: "genai"}, llm.ModelConfig{})
+	if !errors.Is(err, ErrMissingCredential) {
+		t.Fatalf("expected ErrMissingCredential for genai-no-env-field, got: %v", err)
+	}
+
+	t.Run("single provider missing credential succeeds lazily", func(t *testing.T) {
+		singleCfg := Config{
+			Providers: []ProviderConfig{
+				{
+					Name: "genai",
+					Type: "genai",
+					Auth: &AuthConfig{Type: AuthTypeEnv, Env: "GOOGLE_API_KEY"},
+				},
+			},
+		}
+		singleGW, err := New(ctx, singleCfg)
+		if err != nil {
+			t.Fatalf("expected single provider with missing key to succeed lazily, got: %v", err)
+		}
+		t.Cleanup(func() { _ = singleGW.Close() })
+
+		provs := singleGW.ListProviders()
+		if len(provs) != 1 || provs[0].Warning == "" {
+			t.Fatalf("expected warning on single unauthenticated provider, got: %+v", provs)
+		}
+	})
+
+	t.Run("single provider invalid config fails fast", func(t *testing.T) {
+		singleCfg := Config{
+			Providers: []ProviderConfig{
+				{
+					Name:     "broken-ollama",
+					Type:     "ollama",
+					Endpoint: "://invalid-url",
+				},
+			},
+		}
+		_, err := New(ctx, singleCfg)
+		if err == nil {
+			t.Fatal("expected single provider with broken endpoint to fail fast, got nil")
+		}
+	})
+}
