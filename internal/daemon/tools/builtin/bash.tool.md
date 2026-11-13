@@ -30,6 +30,9 @@ spec:
       wait_ms:
         type: integer
         description: Milliseconds to wait for synchronous completion before transitioning the command to a background task. Defaults to 60000 (1 minute), or 500 when run_in_background is true.
+      bypass_sandbox:
+        type: boolean
+        description: Run this single command directly on the host without the OS sandbox. Requires explicit user approval and is only for commands that genuinely fail because of kernel sandbox restrictions (GPG commit signing, SSH push, Docker daemon socket).
     required:
       - command
   outputSchema:
@@ -66,6 +69,14 @@ Execute shell commands in the workspace sandbox.
 4. Auto-Backgrounding: Commands running longer than `wait_ms` (default 60000ms / 1 minute) or explicitly launched with `run_in_background: true` automatically transition into a background task and return a `task_id`.
 5. Output Processing: Output exceeding 500 lines or 32 KB is automatically truncated, keeping the first 100 lines and last 100 lines. The truncation notice includes the saved file path holding the complete output — inspect it with `view` (using `offset` and `limit`) or `grep` when the omitted middle matters instead of re-running the command.
 </execution_steps>
+
+<unsandboxed_execution>
+Commands normally run inside the OS sandbox. Some commands genuinely need host access the sandbox withholds: `git commit` with GPG signing (needs `~/.gnupg`), `git push` over SSH (needs `~/.ssh`), or tools talking to a host daemon socket (Docker). For those:
+- ALWAYS attempt the command normally inside the sandbox first.
+- Only set `bypass_sandbox: true` when the command actually failed and the failure is clearly caused by kernel sandbox restrictions, and explain the reason in `description`. The user must explicitly approve every unsandboxed run unless they pre-authorized a `bash_unsandboxed(...)` rule.
+- NEVER silently work around a sandbox failure by weakening the command (e.g., `git commit --no-gpg-sign`) — that changes what the user asked for. Ask or surface the failure instead.
+- `excludedCommands` in sandbox.json may pre-exempt trusted command patterns; those still flow through normal permission rules.
+</unsandboxed_execution>
 
 <usage_notes>
 - `command` is required; `description` (recommend 3-6 words describing what the command does for UI display) and `dir` (working directory relative to workspace root, defaults to current directory) are optional.

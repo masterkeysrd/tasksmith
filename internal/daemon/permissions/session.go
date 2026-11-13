@@ -23,12 +23,31 @@ type SessionManager interface {
 	SetPolicies(p *warp.Policies)
 	AgentPolicies() *warp.Policies
 	SetAgentPolicies(p *warp.Policies)
+	// SetRuntimePolicy installs the live sandbox posture consulted while
+	// evaluating bash plans (autoAllowBash). A nil policy clears it, which
+	// disables autoAllowBash widening.
+	SetRuntimePolicy(p *RuntimePolicy)
+	// RuntimePolicy returns the live sandbox posture, or nil when unset.
+	RuntimePolicy() *RuntimePolicy
 	ForSubagent() SessionManager
 	AddAllow(rule string) error
 	AddDeny(rule string) error
 	Clear() error
 	ApplyDecision(req *api.PermissionRequest, decision api.PermissionDecision) error
 	Evaluate(plan *tools.Plan) (tools.AccessDecision, *api.PermissionRequest, error)
+}
+
+// RuntimePolicy carries the live, per-session posture the permission engine
+// consults beyond static permission files. It is refreshed whenever sandbox
+// settings change so edits apply to running sessions without recreation.
+type RuntimePolicy struct {
+	// AutoAllowBash auto-approves safe, sandboxed bash plans in default and
+	// accept_edits modes. It never widens plan/ask modes, unsandboxed plans,
+	// or anything unsafe, outside, denied, or rule-asked.
+	AutoAllowBash bool
+	// SandboxNative reports whether the session's enforced backend is the
+	// kernel sandbox; autoAllowBash only applies when it is.
+	SandboxNative bool
 }
 
 type sessionState struct {
@@ -38,6 +57,7 @@ type sessionState struct {
 	mode        api.PermissionMode
 	permissions api.Permissions
 	policies    *warp.Policies
+	runtime     *RuntimePolicy
 	onUpdate    func(api.Permissions) error
 }
 
@@ -124,6 +144,37 @@ func (s *sessionManager) SetAgentPolicies(p *warp.Policies) {
 	s.agentPolicies = p
 }
 
+// SetRuntimePolicy installs the live sandbox posture consulted while
+// evaluating bash plans. Subagents share the session state, so the posture
+// applies to the whole session tree.
+func (s *sessionManager) SetRuntimePolicy(p *RuntimePolicy) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if p == nil {
+		s.runtime = nil
+		return
+	}
+	copied := *p
+	s.runtime = &copied
+}
+
+// runtimePolicy returns a copy of the live runtime posture, or nil when unset.
+func (s *sessionState) runtimePolicy() *RuntimePolicy {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.runtime == nil {
+		return nil
+	}
+	copied := *s.runtime
+	return &copied
+}
+
+// RuntimePolicy returns a copy of the live sandbox posture consulted while
+// evaluating bash plans, or nil when unset.
+func (s *sessionManager) RuntimePolicy() *RuntimePolicy {
+	return s.runtimePolicy()
+}
+
 // ForSubagent returns a child [SessionManager] that shares the receiver's
 // permission mode, workspace policies, and session-scoped allow/deny rules
 // while isolating its active agent tool policy ceiling.
@@ -197,22 +248,44 @@ func (s *sessionManager) ApplyDecision(req *api.PermissionRequest, decision api.
 		return nil
 	case api.DecisionAllowSession:
 		if req != nil {
+			// Only an explicit bypass request grants into the
+			// tool_unsandboxed(...) namespace; an excludedCommands match
+			// keeps granting ordinary tool(...) rules.
+			grantTool := req.ToolName
+			if req.BypassSandbox {
+				grantTool = UnsandboxedToolName(req.ToolName)
+			}
 			raw := strings.TrimSpace(decision.GrantPattern)
 			var rule string
 			if raw == "" {
 				if len(req.GrantPatterns) > 0 {
 					rule = req.GrantPatterns[0]
 				} else if req.Target != "" {
-					rule = FormatRule(req.ToolName, req.Target)
+					rule = FormatRule(grantTool, req.Target)
 				} else {
-					rule = FormatRule(req.ToolName, "*")
+					rule = FormatRule(grantTool, "*")
 				}
-			} else {
-				if _, _, err := ParseRule(raw); err != nil {
-					rule = FormatRule(req.ToolName, raw)
-				} else {
+			} else if toolName, pattern, err := ParseRule(raw); err != nil {
+				rule = FormatRule(grantTool, raw)
+			} else if req.BypassSandbox {
+				// A bypass grant must never widen the sandboxed namespace:
+				// keep wildcard/unsandboxed rules verbatim, re-key plain
+				// same-tool rules into the unsandboxed namespace, and reject
+				// patterns for unrelated tools.
+				switch toolName {
+				case "*", UnsandboxedToolName(req.ToolName):
 					rule = raw
+				case req.ToolName:
+					rule = FormatRule(grantTool, pattern)
+				default:
+					return fmt.Errorf("%w: grant pattern %q does not apply to unsandboxed %s requests", ErrInvalidRule, raw, req.ToolName)
 				}
+			} else if IsUnsandboxedToolName(toolName) {
+				// A sandboxed or excludedCommands request must never mint an
+				// unsandboxed-namespace rule behind the user's back.
+				return fmt.Errorf("%w: grant pattern %q requires an unsandboxed bypass request", ErrInvalidRule, raw)
+			} else {
+				rule = raw
 			}
 			scope := api.PermissionScope(strings.TrimSpace(string(decision.Scope)))
 			if scope == "" {
@@ -252,6 +325,33 @@ func (s *sessionManager) ApplyDecision(req *api.PermissionRequest, decision api.
 	}
 }
 
+// matchDenyRule checks whether a deny rule covers plan. Unlike allow
+// matching, deny applies across both rule namespaces: bash(git *) denies
+// sandboxed and unsandboxed git commands alike, while bash_unsandboxed(git *)
+// denies only the variant that skips the kernel sandbox (an explicit bypass or
+// an excluded-command match).
+func matchDenyRule(rule string, plan *tools.Plan) bool {
+	if plan == nil {
+		return false
+	}
+	if !plan.Unsandboxed && !plan.BypassSandbox {
+		return MatchRule(rule, plan)
+	}
+	toolName, _, err := ParseRule(rule)
+	if err != nil {
+		return false
+	}
+	if IsUnsandboxedToolName(toolName) {
+		probe := *plan
+		probe.BypassSandbox = true
+		return MatchRule(rule, &probe)
+	}
+	probe := *plan
+	probe.BypassSandbox = false
+	probe.Unsandboxed = false
+	return MatchRule(rule, &probe)
+}
+
 // Evaluate checks plan against workspace policies, active permission mode,
 // safety classification, and deny/allow permission rules.
 func (s *sessionManager) Evaluate(plan *tools.Plan) (tools.AccessDecision, *api.PermissionRequest, error) {
@@ -281,18 +381,19 @@ func (s *sessionManager) Evaluate(plan *tools.Plan) (tools.AccessDecision, *api.
 	}
 
 	// 3. Deny check first: if any deny rule matches, return AccessDeny.
+	// Deny spans both namespaces (see matchDenyRule).
 	for _, r := range sessPerms.Deny {
-		if MatchRule(r, plan) {
+		if matchDenyRule(r, plan) {
 			return tools.AccessDeny, nil, nil
 		}
 	}
 	for _, r := range projPerms.Deny {
-		if MatchRule(r, plan) {
+		if matchDenyRule(r, plan) {
 			return tools.AccessDeny, nil, nil
 		}
 	}
 	for _, r := range globPerms.Deny {
-		if MatchRule(r, plan) {
+		if matchDenyRule(r, plan) {
 			return tools.AccessDeny, nil, nil
 		}
 	}
@@ -328,6 +429,14 @@ func (s *sessionManager) Evaluate(plan *tools.Plan) (tools.AccessDecision, *api.
 	// an explicit allow rule already matches the plan.
 	if policyAction == warp.ToolPolicyAsk && mode != api.ModeAuto && !hasMatchingAllow(plan) {
 		// Fall through to minting an AccessAsk request.
+	} else if plan.BypassSandbox {
+		// An unsandboxed bypass retry lives in its own rule namespace: only a
+		// matching bash_unsandboxed(...) (or wildcard) allow rule can approve
+		// it, and every other mode — including auto and accept_edits — still
+		// prompts, because the kernel boundary disappears for this command.
+		if hasMatchingAllow(plan) {
+			return tools.AccessAllow, nil, nil
+		}
 	} else {
 		switch mode {
 		case api.ModePlan:
@@ -350,6 +459,14 @@ func (s *sessionManager) Evaluate(plan *tools.Plan) (tools.AccessDecision, *api.
 			if mode == api.ModeAcceptEdits && plan.Action == api.ActionWrite && plan.Safety != api.SafetyUnsafe {
 				return tools.AccessAllow, nil, nil
 			}
+			// autoAllowBash widens exactly one case: a safe, sandboxed bash
+			// command inside a native kernel sandbox. Unsafe, outside,
+			// unsandboxed, denied, and policy-asked plans still prompt, and
+			// plan/ask modes are untouched above.
+			if rt := s.runtimePolicy(); rt != nil && rt.AutoAllowBash && rt.SandboxNative &&
+				plan.ToolName == "bash" && !plan.Unsandboxed && plan.Safety == api.SafetySafe {
+				return tools.AccessAllow, nil, nil
+			}
 			if plan.Safety != api.SafetyUnsafe && hasMatchingAllow(plan) {
 				return tools.AccessAllow, nil, nil
 			}
@@ -362,6 +479,12 @@ func (s *sessionManager) Evaluate(plan *tools.Plan) (tools.AccessDecision, *api.
 		return tools.AccessDeny, nil, fmt.Errorf("permissions: generate request id: %w", err)
 	}
 
+	grantToolName := plan.ToolName
+	if plan.BypassSandbox {
+		// Granting an unsandboxed approval persists a bash_unsandboxed(...)
+		// rule so the regular sandboxed namespace is never widened.
+		grantToolName = UnsandboxedToolName(plan.ToolName)
+	}
 	req := &api.PermissionRequest{
 		ID:            id.String(),
 		ToolCallID:    plan.ToolCallID,
@@ -371,7 +494,9 @@ func (s *sessionManager) Evaluate(plan *tools.Plan) (tools.AccessDecision, *api.
 		Target:        plan.Target,
 		Summary:       plan.Summary,
 		Diff:          plan.Diff,
-		GrantPatterns: DeriveGrantRules(plan.ToolName, plan.Action, plan.Target),
+		GrantPatterns: DeriveGrantRules(grantToolName, plan.Action, plan.Target),
+		Unsandboxed:   plan.Unsandboxed,
+		BypassSandbox: plan.BypassSandbox,
 	}
 	return tools.AccessAsk, req, nil
 }

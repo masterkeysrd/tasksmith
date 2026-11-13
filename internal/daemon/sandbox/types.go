@@ -270,6 +270,15 @@ type Command struct {
 	// dedicated temp directory for this process only. It has no effect in
 	// ModeLocal, which has no kernel enforcement.
 	ReadOnly bool
+
+	// Unsandboxed runs this single command directly on the host, skipping the
+	// kernel wrapper in ModeNative while keeping process-group tracking, the
+	// session environment scrubbing, and lifecycle teardown. The command
+	// inherits the host temp/cache directories instead of the sandbox temp
+	// dir. Combining Unsandboxed with a read-only session or ReadOnly command
+	// is rejected with ErrReadOnly. It has no effect in ModeLocal, which
+	// already runs processes without a kernel wrapper.
+	Unsandboxed bool
 }
 
 // ExecResult contains the captured output and exit metadata of a completed process.

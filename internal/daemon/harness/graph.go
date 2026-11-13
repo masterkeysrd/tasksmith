@@ -511,10 +511,12 @@ func NewToolsNode(cfg ToolsNodeConfig) *ToolsNode {
 // covers execution only; permission and question waits happen before it.
 // When planReadOnly is true, the context is tagged so execution-capable tools
 // apply a per-command read-only kernel profile inside native sandboxes even
-// though the sandbox itself may be writable.
-func (n *ToolsNode) executeTool(ctx context.Context, tc *message.ToolCall, planReadOnly bool) (*message.Tool, error) {
+// though the sandbox itself may be writable. When planUnsandboxed is true, the
+// context is tagged so those tools skip the kernel wrapper for this call's
+// child process — the permission engine already approved that posture.
+func (n *ToolsNode) executeTool(ctx context.Context, tc *message.ToolCall, planReadOnly, planUnsandboxed bool) (*message.Tool, error) {
 	start := time.Now()
-	msg, err := n.tools.Execute(tools.WithReadOnlyExecution(ctx, planReadOnly), tc)
+	msg, err := n.tools.Execute(tools.WithUnsandboxedExecution(tools.WithReadOnlyExecution(ctx, planReadOnly), planUnsandboxed), tc)
 	dur := time.Since(start)
 	switch {
 	case errors.Is(ctx.Err(), context.Canceled):
@@ -751,7 +753,7 @@ func (n *ToolsNode) evaluateSingleCall(ctx context.Context, tc *message.ToolCall
 		return msg, nil, msgErr
 	}
 
-	msg, execErr := n.executeTool(ctx, tc, plan.ReadOnly)
+	msg, execErr := n.executeTool(ctx, tc, plan.ReadOnly, plan.Unsandboxed)
 	if execErr != nil {
 		return nil, nil, fmt.Errorf("harness: execute tool %q: %w", tc.Name, execErr)
 	}
@@ -912,7 +914,9 @@ func (n *ToolsNode) resumeSingleCall(ctx context.Context, tc *message.ToolCall, 
 		n.recordFailure(ctx, tc, err)
 		return newErrorToolMessage(tc, err.Error())
 	}
-	toolMsg, err := n.executeTool(ctx, tc, planReadOnly)
+	// The pending request carries the exact posture the user was shown and
+	// approved, so resume execution re-applies it instead of re-deriving.
+	toolMsg, err := n.executeTool(ctx, tc, planReadOnly, req.Unsandboxed)
 	if err != nil {
 		return nil, fmt.Errorf("harness: execute tool %q: %w", tc.Name, err)
 	}

@@ -493,6 +493,58 @@ func TestProcExecEnvIsolationAndConfinement(t *testing.T) {
 	}
 }
 
+func TestProcUnsandboxedReadOnlyGuards(t *testing.T) {
+	ctx := context.Background()
+	workDir := t.TempDir()
+
+	sbx, err := New(Config{WorkDir: workDir})
+	if err != nil {
+		t.Fatalf("New sandbox: %v", err)
+	}
+	defer func() { _ = sbx.Close() }()
+
+	// A per-command read-only flag combined with unsandboxed execution is
+	// rejected: bypassing the kernel wrapper would silently drop the
+	// read-only enforcement the command promised.
+	if _, err := sbx.Proc().Exec(ctx, Command{
+		Name:        "sh",
+		Args:        []string{"-c", "true"},
+		Unsandboxed: true,
+		ReadOnly:    true,
+	}); !errors.Is(err, ErrReadOnly) {
+		t.Fatalf("expected ErrReadOnly for unsandboxed read-only command, got %v", err)
+	}
+
+	// A session-wide read-only posture rejects unsandboxed commands too.
+	sbx.SetReadOnly(true)
+	if _, err := sbx.Proc().Exec(ctx, Command{
+		Name:        "sh",
+		Args:        []string{"-c", "true"},
+		Unsandboxed: true,
+	}); !errors.Is(err, ErrReadOnly) {
+		t.Fatalf("expected ErrReadOnly for unsandboxed command in read-only session, got %v", err)
+	}
+
+	// Sandboxed commands still work under read-only (read-only enforcement
+	// itself is unchanged).
+	res, err := sbx.Proc().Exec(ctx, Command{Name: "sh", Args: []string{"-c", "echo ok"}})
+	if err != nil || res.ExitCode != 0 {
+		t.Fatalf("expected sandboxed command to still run, got %v (%+v)", err, res)
+	}
+	sbx.SetReadOnly(false)
+
+	// With the guards lifted, an unsandboxed command runs to completion (in
+	// local mode the flag is a no-op, so this proves the guard does not
+	// reject valid unsandboxed execution).
+	if _, err := sbx.Proc().Exec(ctx, Command{
+		Name:        "sh",
+		Args:        []string{"-c", "echo done"},
+		Unsandboxed: true,
+	}); err != nil {
+		t.Fatalf("expected unsandboxed command to run once guards lifted, got %v", err)
+	}
+}
+
 func TestProcStartStreamingAndCloseCleanup(t *testing.T) {
 	ctx := context.Background()
 	workDir := t.TempDir()

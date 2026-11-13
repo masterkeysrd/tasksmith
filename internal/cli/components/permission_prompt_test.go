@@ -326,6 +326,59 @@ func TestPermissionPromptFeedbackMode(t *testing.T) {
 	}
 }
 
+func TestPermissionPromptUnsandboxedBadge(t *testing.T) {
+	store.ResetApp()
+	defer store.ResetApp()
+
+	req := api.PermissionRequest{
+		ID:            "req-unsandboxed",
+		ToolCallID:    "call-1",
+		ToolName:      "bash",
+		Action:        api.ActionExec,
+		Target:        "git commit -m release",
+		Unsandboxed:   true,
+		GrantPatterns: []string{"bash_unsandboxed(git commit *)"},
+	}
+
+	b := mock.New(100, 24)
+	app := trail.SimpleFC("TestPromptApp", func() kitex.Node {
+		return PermissionPrompt(PermissionPromptProps{
+			Request: req,
+		})
+	})
+
+	inst, err := trail.New(app(), trail.WithBackend(b))
+	if err != nil {
+		t.Fatalf("trail.New: %v", err)
+	}
+	defer inst.Unmount()
+	inst.Frame()
+
+	out := testutils.SurfaceText(b)
+	if !strings.Contains(out, "UNSANDBOXED") {
+		t.Errorf("expected UNSANDBOXED badge in output, got:\n%s", out)
+	}
+
+	// A sandboxed request must not show the badge.
+	req.Unsandboxed = false
+	b2 := mock.New(100, 24)
+	app2 := trail.SimpleFC("TestPromptApp2", func() kitex.Node {
+		return PermissionPrompt(PermissionPromptProps{
+			Request: req,
+		})
+	})
+	inst2, err := trail.New(app2(), trail.WithBackend(b2))
+	if err != nil {
+		t.Fatalf("trail.New: %v", err)
+	}
+	defer inst2.Unmount()
+	inst2.Frame()
+
+	if out2 := testutils.SurfaceText(b2); strings.Contains(out2, "UNSANDBOXED") {
+		t.Errorf("did not expect UNSANDBOXED badge for sandboxed request, got:\n%s", out2)
+	}
+}
+
 func TestCompactSingleLine(t *testing.T) {
 	cases := []struct {
 		input    string

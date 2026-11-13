@@ -9,6 +9,7 @@ import (
 	"github.com/masterkeysrd/loom/tool"
 	"github.com/masterkeysrd/tasksmith/internal/core/shellguard"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/sandbox"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/sandboxcfg"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/std"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tasks"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tools"
@@ -42,6 +43,10 @@ type Config struct {
 	Rules        []warp.Rule
 	Subagents    []*warp.Agent
 	Agents       AgentManager
+	// SandboxSettings is the workspace's live sandbox.json manager. The bash
+	// tool consults it for excludedCommands matching and the allowUnsandboxed
+	// lock; when nil, bypass_sandbox is rejected and exclusion is disabled.
+	SandboxSettings sandboxcfg.Manager
 	// AgentName is the active agent's name, used to resolve a loaded skill's
 	// declared tools against the agent's policy ceiling. When empty, the
 	// workspace default agent is used.
@@ -123,7 +128,7 @@ func New(cfg Config) ([]tools.Tool, error) {
 			return tools.NewHandler(ToolRemove, m, &removeTool{std: cfg.Std, guard: cfg.Guard})
 		}},
 		{ToolBash, func(m tools.Metadata) tools.Tool {
-			return tools.NewHandler(ToolBash, m, &bashTool{std: cfg.Std, sandbox: cfg.Sandbox, guard: cfg.Guard, tasks: tasksMgr})
+			return tools.NewHandler(ToolBash, m, &bashTool{std: cfg.Std, sandbox: cfg.Sandbox, guard: cfg.Guard, tasks: tasksMgr, sandboxCfg: cfg.SandboxSettings})
 		}},
 		{ToolWebFetch, func(m tools.Metadata) tools.Tool {
 			return tools.NewHandler(ToolWebFetch, m, &webFetchTool{std: cfg.Std})

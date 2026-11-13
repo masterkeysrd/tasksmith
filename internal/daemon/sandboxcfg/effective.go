@@ -231,9 +231,11 @@ func (m *manager) effective(global, project api.SandboxSettings, restricted bool
 	autoAllowBash := boolOverride(project.AutoAllowBash, global.AutoAllowBash, false)
 
 	excluded := unionDedup(global.ExcludedCommands, project.ExcludedCommands)
-	if restricted {
-		// A freshly cloned repository can never exempt commands from the
-		// sandbox; excludedCommands only apply once the workspace is trusted.
+	if !allowUnsandboxed {
+		// excludedCommands is another route onto the host without the kernel
+		// wrapper, so it shares the allowUnsandboxed lock: a restricted
+		// workspace or any scope pinning allowUnsandboxed false disables
+		// exclusions entirely.
 		excluded = nil
 	}
 

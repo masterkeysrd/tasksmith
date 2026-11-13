@@ -51,7 +51,9 @@ func (p *sandboxProc) resolveWorkDir(dir string) (string, error) {
 
 // buildEnv constructs a deterministic environment slice strictly from
 // Config.Env and Command.Env without ever inspecting os.Environ() or os.Getenv().
-func (p *sandboxProc) buildEnv(cmdEnv map[string]string, workDir string) ([]string, string) {
+// An unsandboxed command runs directly on the host, so it keeps host HOME and
+// temp/cache semantics like ModeLocal instead of the confined sandbox temp dir.
+func (p *sandboxProc) buildEnv(cmdEnv map[string]string, workDir string, unsandboxed bool) ([]string, string) {
 	p.s.envMu.RLock()
 	merged := make(map[string]string, len(p.s.cfg.Env)+len(cmdEnv)+8)
 	maps.Copy(merged, p.s.cfg.Env)
@@ -61,7 +63,7 @@ func (p *sandboxProc) buildEnv(cmdEnv map[string]string, workDir string) ([]stri
 		merged["PATH"] = defaultSafePath
 	}
 	if _, ok := merged["HOME"]; !ok {
-		if p.s.mode == ModeNative && p.s.tempDir != "" {
+		if p.s.mode == ModeNative && p.s.tempDir != "" && !unsandboxed {
 			merged["HOME"] = filepath.Join(p.s.tempDir, "home")
 		} else {
 			home, err := os.UserHomeDir()
@@ -75,7 +77,7 @@ func (p *sandboxProc) buildEnv(cmdEnv map[string]string, workDir string) ([]stri
 		merged["PWD"] = workDir
 	}
 
-	if p.s.mode == ModeNative && p.s.tempDir != "" {
+	if p.s.mode == ModeNative && p.s.tempDir != "" && !unsandboxed {
 		// The kernel profile only allows writes inside WorkDir and the sandbox
 		// temp dir, so a host TMPDIR inherited from the base environment would
 		// point at a directory child processes cannot write to. Always redirect.
@@ -141,13 +143,18 @@ func (p *sandboxProc) prepareExecCmd(cmd Command) (*exec.Cmd, error) {
 	if p.s.isClosed() {
 		return nil, ErrSandboxClosed
 	}
+	if cmd.Unsandboxed {
+		if cmd.ReadOnly || p.s.readOnly.Load() {
+			return nil, fmt.Errorf("%w: unsandboxed execution of a read-only command is not allowed", ErrReadOnly)
+		}
+	}
 
 	targetDir, err := p.resolveWorkDir(cmd.Dir)
 	if err != nil {
 		return nil, err
 	}
 
-	envSlice, pathEnv := p.buildEnv(cmd.Env, targetDir)
+	envSlice, pathEnv := p.buildEnv(cmd.Env, targetDir, cmd.Unsandboxed)
 	resolvedBin, err := resolveExecutable(cmd.Name, pathEnv, targetDir)
 	if err != nil {
 		return nil, err
@@ -156,7 +163,7 @@ func (p *sandboxProc) prepareExecCmd(cmd Command) (*exec.Cmd, error) {
 	bin := resolvedBin
 	args := append([]string(nil), cmd.Args...)
 
-	if p.s.mode == ModeNative {
+	if p.s.mode == ModeNative && !cmd.Unsandboxed {
 		var wrapErr error
 		bin, args, wrapErr = wrapNativeCommand(p.s, targetDir, resolvedBin, args, cmd.ReadOnly)
 		if wrapErr != nil {

@@ -195,6 +195,13 @@ var PermissionPrompt = trail.FC("PermissionPrompt", func(props PermissionPromptP
 		Style: style.S().FlexDirection(style.FlexRow),
 	}, trail.Span(trail.SpanProps{Style: titleStyle}, trail.Text("Permission required"))))
 
+	if perm.Unsandboxed {
+		badgeStyle := style.S().Bold(true).WhiteSpace(style.WhiteSpacePre).Foreground(scheme.Color.Text.Error)
+		boxChildren = append(boxChildren, trail.Box(trail.BoxProps{
+			Style: style.S().FlexDirection(style.FlexRow),
+		}, trail.Span(trail.SpanProps{Style: badgeStyle}, trail.Text("⚠ UNSANDBOXED — runs directly on the host, outside the OS sandbox"))))
+	}
+
 	// Row 2 (Subtitle / Target)
 	targetText := strings.TrimSpace(perm.Target)
 	if targetText == "" {

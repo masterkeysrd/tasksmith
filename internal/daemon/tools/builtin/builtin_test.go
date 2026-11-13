@@ -21,6 +21,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/permissions"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/sandbox"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/sandboxcfg"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/scope"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/std"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tasks"
@@ -1177,6 +1178,305 @@ func TestBashBackgroundAndTasksManagement(t *testing.T) {
 	statusHangOut := statusHangRes.StructuredContent.(api.TasksOutput)
 	if statusHangOut.Status != "canceled" {
 		t.Fatalf("expected status 'canceled', got %q", statusHangOut.Status)
+	}
+}
+
+// setupUnsandboxedEnv builds a bash tool container over a sandboxcfg manager
+// seeded with the given project settings.
+func setupUnsandboxedEnv(t *testing.T, settings api.SandboxSettings, restricted bool) (tools.Container, sandbox.Sandbox) {
+	t.Helper()
+	xdg.SetTestEnv(t.TempDir(), "tasksmith-unsandboxed-test")
+	t.Cleanup(xdg.ClearCache)
+	ctx := context.Background()
+	dir := t.TempDir()
+	if realDir, err := filepath.EvalSymlinks(dir); err == nil {
+		dir = realDir
+	}
+
+	ws, err := workspace.Open(ctx, dir, workspace.WithBuiltinFS(builtin.FS()))
+	if err != nil {
+		t.Fatalf("workspace.Open: %v", err)
+	}
+	sb, err := sandbox.New(sandbox.Config{Mode: sandbox.ModeLocal, WorkDir: dir})
+	if err != nil {
+		t.Fatalf("sandbox.New: %v", err)
+	}
+	t.Cleanup(func() { _ = sb.Close() })
+
+	stdLib, err := std.New(std.Config{Sandbox: sb, Tracker: std.NewMemoryTracker(), Logger: log.Default()})
+	if err != nil {
+		t.Fatalf("std.New: %v", err)
+	}
+
+	cfgMgr, err := sandboxcfg.New(sandboxcfg.Config{
+		WorkDir:     dir,
+		Restricted:  restricted,
+		GlobalPath:  filepath.Join(t.TempDir(), "global", "sandbox.json"),
+		ProjectPath: filepath.Join(dir, "sandbox.json"),
+	})
+	if err != nil {
+		t.Fatalf("sandboxcfg.New: %v", err)
+	}
+	if err := cfgMgr.Set(api.ScopeProject, settings); err != nil {
+		t.Fatalf("sandboxcfg.Set: %v", err)
+	}
+
+	guard := shellguard.New(shellguard.Config{WorkspaceDir: dir})
+	builtinTools, err := builtin.New(builtin.Config{
+		Std:             stdLib,
+		Sandbox:         sb,
+		SandboxSettings: cfgMgr,
+		Guard:           guard,
+		Workspace:       ws,
+		AllowedTools:    ws.Catalog().ToolNames(),
+	})
+	if err != nil {
+		t.Fatalf("builtin.New: %v", err)
+	}
+	container, err := tools.NewContainer(withExecDeps(t, tools.Config{
+		Tools:        builtinTools,
+		Sandbox:      sb,
+		Workspace:    ws,
+		Logger:       log.Default(),
+		AllowedTools: ws.Catalog().ToolNames(),
+	}))
+	if err != nil {
+		t.Fatalf("tools.NewContainer: %v", err)
+	}
+	return container, sb
+}
+
+func TestBashBypassSandboxPlan(t *testing.T) {
+	ctx := context.Background()
+
+	// Denied posture: allowUnsandboxed false in the project settings.
+	denied, _ := setupUnsandboxedEnv(t, api.SandboxSettings{
+		AllowUnsandboxed: new(false),
+	}, false)
+	_, err := denied.Prepare(ctx, &message.ToolCall{
+		ID:   "call-deny",
+		Name: builtin.ToolBash,
+		Args: map[string]any{"command": "git commit -m x", "bypass_sandbox": true},
+	})
+	if err == nil {
+		t.Fatal("expected bypass_sandbox rejection when allowUnsandboxed is false")
+	}
+	if !strings.Contains(err.Error(), "nsandboxed") {
+		t.Errorf("expected clear unsandboxed message, got %v", err)
+	}
+
+	// Allowed posture (default true in a trusted workspace).
+	allowed, _ := setupUnsandboxedEnv(t, api.SandboxSettings{}, false)
+	plan, err := allowed.Prepare(ctx, &message.ToolCall{
+		ID:   "call-allow",
+		Name: builtin.ToolBash,
+		Args: map[string]any{"command": "git commit -m x", "bypass_sandbox": true},
+	})
+	if err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+	if !plan.Unsandboxed || !plan.BypassSandbox {
+		t.Errorf("expected Unsandboxed+BypassSandbox plan, got %+v", plan)
+	}
+	if plan.Safety != api.SafetyUnsafe {
+		t.Errorf("expected bypass plan marked unsafe, got %s", plan.Safety)
+	}
+	if !strings.Contains(plan.Summary, "UNSANDBOXED") {
+		t.Errorf("expected UNSANDBOXED summary, got %q", plan.Summary)
+	}
+
+	// Restricted workspaces always reject bypass.
+	restricted, _ := setupUnsandboxedEnv(t, api.SandboxSettings{}, true)
+	if _, err := restricted.Prepare(ctx, &message.ToolCall{
+		ID:   "call-restricted",
+		Name: builtin.ToolBash,
+		Args: map[string]any{"command": "git commit -m x", "bypass_sandbox": true},
+	}); err == nil {
+		t.Error("expected bypass rejection in a restricted workspace")
+	}
+}
+
+// TestBashBypassUnanalyzableCommand verifies an unanalyzable command still
+// flows through the read-only ceiling and bypass handling instead of being
+// short-circuited around them.
+func TestBashBypassUnanalyzableCommand(t *testing.T) {
+	ctx := context.Background()
+
+	// Allowed posture: the bypass must survive the analysis failure and be
+	// routed into the unsandboxed plan shape.
+	allowed, _ := setupUnsandboxedEnv(t, api.SandboxSettings{}, false)
+	plan, err := allowed.Prepare(ctx, &message.ToolCall{
+		ID:   "call-unanalyzable",
+		Name: builtin.ToolBash,
+		Args: map[string]any{"command": "echo 'unterminated", "bypass_sandbox": true},
+	})
+	if err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+	if !plan.Unsandboxed || !plan.BypassSandbox || plan.Safety != api.SafetyUnsafe {
+		t.Errorf("expected bypass plan for unanalyzable command, got %+v", plan)
+	}
+
+	// Read-only posture: the bypass must be rejected, not silently dropped.
+	// Prepare consults the sandbox's read-only flag live, so flipping it on
+	// the shared sandbox after construction is enough.
+	roContainer, roSandbox := setupUnsandboxedEnv(t, api.SandboxSettings{}, false)
+	roSandbox.SetReadOnly(true)
+	if _, err := roContainer.Prepare(ctx, &message.ToolCall{
+		ID:   "call-unanalyzable-ro",
+		Name: builtin.ToolBash,
+		Args: map[string]any{"command": "echo 'unterminated", "bypass_sandbox": true},
+	}); err == nil {
+		t.Error("expected bypass rejection for unanalyzable command in a read-only session")
+	}
+}
+
+// TestBashUnsandboxedNativeExecution exercises the real kernel profile: a
+// DeniedReadPaths-masked secret stays unreadable through the sandboxed path,
+// becomes readable when the tool-execution context is tagged unsandboxed, and
+// the child environment still comes strictly from Config.Env (never the host
+// process environment).
+func TestBashUnsandboxedNativeExecution(t *testing.T) {
+	if err := sandbox.NativeAvailable(); err != nil {
+		t.Skipf("skipping live ModeNative test: %v", err)
+	}
+	xdg.SetTestEnv(t.TempDir(), "tasksmith-unsandboxed-native-test")
+	t.Cleanup(xdg.ClearCache)
+	ctx := context.Background()
+	dir := t.TempDir()
+	if realDir, err := filepath.EvalSymlinks(dir); err == nil {
+		dir = realDir
+	}
+
+	secretHome := t.TempDir()
+	secretFile := filepath.Join(secretHome, ".gnupg", "secring")
+	if err := os.MkdirAll(filepath.Dir(secretFile), 0o700); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(secretFile, []byte("TOP-SECRET-KEYBLOCK"), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	ws, err := workspace.Open(ctx, dir, workspace.WithBuiltinFS(builtin.FS()))
+	if err != nil {
+		t.Fatalf("workspace.Open: %v", err)
+	}
+	sb, err := sandbox.New(sandbox.Config{
+		Mode:    sandbox.ModeNative,
+		WorkDir: dir,
+		Env:     map[string]string{"SCRUB_PROBE": "from_config"},
+		Filesystem: sandbox.FilesystemPolicy{
+			DeniedReadPaths: []string{secretHome},
+		},
+	})
+	if err != nil {
+		t.Fatalf("sandbox.New (native): %v", err)
+	}
+	t.Cleanup(func() { _ = sb.Close() })
+
+	stdLib, err := std.New(std.Config{Sandbox: sb, Tracker: std.NewMemoryTracker(), Logger: log.Default()})
+	if err != nil {
+		t.Fatalf("std.New: %v", err)
+	}
+	builtinTools, err := builtin.New(builtin.Config{
+		Std:          stdLib,
+		Sandbox:      sb,
+		Guard:        shellguard.New(shellguard.Config{WorkspaceDir: dir}),
+		Workspace:    ws,
+		AllowedTools: ws.Catalog().ToolNames(),
+	})
+	if err != nil {
+		t.Fatalf("builtin.New: %v", err)
+	}
+	container, err := tools.NewContainer(withExecDeps(t, tools.Config{
+		Tools:        builtinTools,
+		Sandbox:      sb,
+		Workspace:    ws,
+		Logger:       log.Default(),
+		AllowedTools: ws.Catalog().ToolNames(),
+	}))
+	if err != nil {
+		t.Fatalf("tools.NewContainer: %v", err)
+	}
+
+	// A host-only variable must never leak into sandboxed or unsandboxed
+	// children: both paths build the environment from Config.Env.
+	t.Setenv("TASKSMITH_NATIVE_TEST_HOST_ONLY", "leaked")
+	readProbe := `cat ` + secretFile + ` ; printf "|%s|%s|" "$SCRUB_PROBE" "$TASKSMITH_NATIVE_TEST_HOST_ONLY"`
+
+	// Sandboxed: the kernel profile masks the secret store.
+	sbOut := runNativeProbe(t, container, ctx, "call-native-masked", readProbe)
+	if strings.Contains(sbOut, "TOP-SECRET-KEYBLOCK") {
+		t.Fatalf("expected kernel mask to block the secret, got output %q", sbOut)
+	}
+	if !strings.Contains(sbOut, "|from_config||") {
+		t.Errorf("expected Config.Env scrubbing sandboxed (SCRUB_PROBE set, host var absent), got %q", sbOut)
+	}
+
+	// Unsandboxed (context-tagged, as the permission flow does after
+	// approval): the secret is readable and scrubbing still holds.
+	unsandboxedCtx := tools.WithUnsandboxedExecution(ctx, true)
+	unOut := runNativeProbe(t, container, unsandboxedCtx, "call-native-unsandboxed", readProbe)
+	if !strings.Contains(unOut, "TOP-SECRET-KEYBLOCK") {
+		t.Fatalf("expected unsandboxed run to read the host secret, got output %q", unOut)
+	}
+	if !strings.Contains(unOut, "|from_config||") {
+		t.Errorf("expected Config.Env scrubbing unsandboxed too, got %q", unOut)
+	}
+}
+
+// runNativeProbe executes a bash tool call and returns its combined output.
+func runNativeProbe(t *testing.T, c tools.Container, ctx context.Context, id, command string) string {
+	t.Helper()
+	res, err := c.Execute(ctx, &message.ToolCall{
+		ID:   id,
+		Name: builtin.ToolBash,
+		Args: map[string]any{"command": command},
+	})
+	if err != nil {
+		t.Fatalf("Execute(%s): %v", id, err)
+	}
+	out, ok := res.StructuredContent.(api.BashOutput)
+	if !ok {
+		t.Fatalf("Execute(%s): unexpected structured content %T", id, res.StructuredContent)
+	}
+	return out.Output
+}
+
+func TestBashExcludedCommandsPlan(t *testing.T) {
+	ctx := context.Background()
+	c, _ := setupUnsandboxedEnv(t, api.SandboxSettings{
+		ExcludedCommands: []string{"git commit *"},
+	}, false)
+
+	matched, err := c.Prepare(ctx, &message.ToolCall{
+		ID:   "call-excluded",
+		Name: builtin.ToolBash,
+		Args: map[string]any{"command": "git commit -m release"},
+	})
+	if err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+	if !matched.Unsandboxed {
+		t.Error("expected excluded command plan marked Unsandboxed")
+	}
+	if matched.BypassSandbox {
+		t.Error("excluded-command match must not set BypassSandbox (normal bash rules still apply)")
+	}
+	if strings.Contains(matched.Summary, "UNSANDBOXED") {
+		t.Errorf("excluded plan keeps its ordinary summary, got %q", matched.Summary)
+	}
+
+	unmatched, err := c.Prepare(ctx, &message.ToolCall{
+		ID:   "call-plain",
+		Name: builtin.ToolBash,
+		Args: map[string]any{"command": "go test ./..."},
+	})
+	if err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+	if unmatched.Unsandboxed || unmatched.BypassSandbox {
+		t.Errorf("non-matching command must stay sandboxed, got %+v", unmatched)
 	}
 }
 

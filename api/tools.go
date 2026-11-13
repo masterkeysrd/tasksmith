@@ -42,6 +42,7 @@ type AskQuestionOutput struct {
 // BashInput defines the input parameters for the bash tool.
 type BashInput struct {
 	Command         string `json:"command" jsonschema:"Shell command string passed to sh -c."`
+	BypassSandbox   bool   `json:"bypass_sandbox,omitempty" jsonschema:"Run this single command directly on the host without the OS sandbox. Requires explicit user approval and is only for commands that genuinely fail because of kernel sandbox restrictions (GPG commit signing, SSH push, Docker daemon socket)."`
 	Description     string `json:"description,omitempty" jsonschema:"Clear, concise description of what this command does (recommend 3-6 words for UI display)."`
 	Dir             string `json:"dir,omitempty" jsonschema:"Optional working directory relative to the sandbox root."`
 	RunInBackground bool   `json:"run_in_background,omitempty" jsonschema:"Set to true to run long-running commands, servers, or watchers in the background and return a task_id immediately."`

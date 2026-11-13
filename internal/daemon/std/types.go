@@ -321,6 +321,14 @@ type BashRequest struct {
 	// the sandbox itself is writable. It is enforced only by native OS
 	// sandboxes; local sandboxes ignore it.
 	ReadOnly bool `json:"read_only,omitempty"`
+
+	// Unsandboxed runs this command directly on the host without the kernel
+	// sandbox wrapper, for commands that genuinely need host credentials or
+	// sockets (GPG signing, SSH push, a Docker daemon socket). Process-group
+	// tracking, teardown, and environment scrubbing still apply. The sandbox
+	// rejects it while read-only, and it is only ever set after the
+	// permission engine approved an unsandboxed plan.
+	Unsandboxed bool `json:"unsandboxed,omitempty"`
 }
 
 // BashResult contains the process output, exit status, and any external file

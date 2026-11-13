@@ -46,6 +46,21 @@ func FormatRule(toolName, pattern string) string {
 	return fmt.Sprintf("%s(%s)", toolName, pattern)
 }
 
+// UnsandboxedToolName maps a regular tool name to the rule namespace its
+// unsandboxed bypass plans are matched and granted under. Keeping unsandboxed
+// execution in a separate namespace means a regular bash(git *) allow rule can
+// never auto-approve a bypass_sandbox retry; users must grant
+// bash_unsandboxed(git *) explicitly.
+func UnsandboxedToolName(toolName string) string {
+	return toolName + "_unsandboxed"
+}
+
+// IsUnsandboxedToolName reports whether rule tool names target the
+// unsandboxed execution namespace.
+func IsUnsandboxedToolName(name string) bool {
+	return strings.HasSuffix(name, "_unsandboxed")
+}
+
 // MatchRule checks whether rule matches the planned tool invocation.
 func MatchRule(rule string, plan *tools.Plan) bool {
 	if plan == nil {
@@ -53,6 +68,21 @@ func MatchRule(rule string, plan *tools.Plan) bool {
 	}
 	toolName, pattern, err := ParseRule(rule)
 	if err != nil {
+		return false
+	}
+
+	if plan.BypassSandbox {
+		// A bypass plan only matches rules in its own unsandboxed namespace;
+		// the wildcard rule matches everything, as elsewhere.
+		if toolName != "*" && toolName != UnsandboxedToolName(plan.ToolName) {
+			return false
+		}
+		return matchTarget(pattern, plan.Target)
+	}
+
+	// A sandboxed plan never matches an unsandboxed-namespace rule: granting
+	// bash_unsandboxed(...) must not silently widen sandboxed approvals.
+	if IsUnsandboxedToolName(toolName) {
 		return false
 	}
 

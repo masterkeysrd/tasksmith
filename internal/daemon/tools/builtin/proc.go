@@ -11,16 +11,24 @@ import (
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/core/shellguard"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/sandbox"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/sandboxcfg"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/std"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tasks"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tools"
 )
 
 type bashTool struct {
-	std     *std.Std
-	sandbox sandbox.Sandbox
-	guard   *shellguard.Guard
-	tasks   tasks.Store
+	std        *std.Std
+	sandbox    sandbox.Sandbox
+	guard      *shellguard.Guard
+	tasks      tasks.Store
+	sandboxCfg sandboxcfg.Manager
+}
+
+// unsandboxedSummary prefixes a plan summary so every UI surface shows the
+// missing kernel boundary before the user approves.
+func unsandboxedSummary(summary string) string {
+	return "Run UNSANDBOXED on host: " + summary
 }
 
 func (t *bashTool) Prepare(_ context.Context, in api.BashInput) (*tools.Plan, error) {
@@ -44,34 +52,36 @@ func (t *bashTool) Prepare(_ context.Context, in api.BashInput) (*tools.Plan, er
 	}
 
 	ops, analyzeErr := t.guard.Analyze(analysisCmd)
-	if analyzeErr != nil {
-		return &tools.Plan{
-			ToolName: ToolBash,
-			Action:   api.ActionExec,
-			Safety:   api.SafetyUnsafe,
-			Target:   cmdStr,
-			Summary:  summary,
-			ReadOnly: false,
-		}, nil
-	}
 
-	worstAction := api.ActionRead
-	worstSafety := api.SafetySafe
-	for _, op := range ops {
-		if op.Action.Severity() > worstAction.Severity() {
-			worstAction = op.Action
-		}
-		if op.Safety.Severity() > worstSafety.Severity() {
-			worstSafety = op.Safety
-		}
-	}
-	if worstAction == api.ActionUnknown {
+	var worstAction api.ActionType
+	var worstSafety api.SafetyLevel
+	if analyzeErr != nil {
+		// An unanalyzable command is treated as unsafe execution, but it must
+		// still flow through the read-only ceiling and bypass handling below
+		// so bypass_sandbox cannot slip past them; only excludedCommands
+		// matching (which needs the analyzed AST posture) is skipped.
 		worstAction = api.ActionExec
+		worstSafety = api.SafetyUnsafe
+		ops = nil
+	} else {
+		worstAction = api.ActionRead
+		worstSafety = api.SafetySafe
+		for _, op := range ops {
+			if op.Action.Severity() > worstAction.Severity() {
+				worstAction = op.Action
+			}
+			if op.Safety.Severity() > worstSafety.Severity() {
+				worstSafety = op.Safety
+			}
+		}
+		if worstAction == api.ActionUnknown {
+			worstAction = api.ActionExec
+		}
 	}
 
 	readOnly := worstAction == api.ActionRead && worstSafety == api.SafetySafe
 
-	return &tools.Plan{
+	plan := &tools.Plan{
 		ToolName: ToolBash,
 		Action:   worstAction,
 		Safety:   worstSafety,
@@ -79,7 +89,48 @@ func (t *bashTool) Prepare(_ context.Context, in api.BashInput) (*tools.Plan, er
 		Paths:    t.collectPaths(ops),
 		Summary:  summary,
 		ReadOnly: readOnly,
-	}, nil
+	}
+
+	// A read-only session or read-only plan classification is a ceiling the
+	// unsandboxed path can never cross, so skip both bypass and exclusion.
+	if t.sandbox.ReadOnly() {
+		if in.BypassSandbox {
+			return nil, fmt.Errorf("%w: bypass_sandbox is not allowed while the session is read-only", std.ErrInvalidArgument)
+		}
+		return plan, nil
+	}
+
+	eff, effErr := t.effectiveSandbox()
+	if in.BypassSandbox {
+		if effErr != nil || !eff.AllowUnsandboxed {
+			reason := "sandbox.json could not be read"
+			if effErr == nil {
+				reason = "allowUnsandboxed is disabled (restricted workspace or sandbox.json lock)"
+			}
+			return nil, fmt.Errorf("%w: bypass_sandbox rejected: %s", std.ErrInvalidArgument, reason)
+		}
+		plan.Unsandboxed = true
+		plan.BypassSandbox = true
+		plan.Safety = api.SafetyUnsafe
+		plan.ReadOnly = false
+		plan.Summary = unsandboxedSummary(summary)
+		return plan, nil
+	}
+
+	// Trusted excludedCommands patterns exempt matching commands from the
+	// kernel sandbox while normal bash(...) rules and modes still decide.
+	if analyzeErr == nil && effErr == nil && len(eff.ExcludedCommands) > 0 && !readOnly &&
+		shellguard.MatchExcludedCommand(cmdStr, eff.ExcludedCommands) {
+		plan.Unsandboxed = true
+	}
+	return plan, nil
+}
+
+func (t *bashTool) effectiveSandbox() (sandboxcfg.Effective, error) {
+	if t.sandboxCfg == nil {
+		return sandboxcfg.Effective{}, fmt.Errorf("sandbox settings unavailable")
+	}
+	return t.sandboxCfg.EffectiveFor(t.sandbox.Platform().WorkDir)
 }
 
 // collectPaths gathers deduplicated, workspace-relative, slash-separated target
@@ -139,9 +190,10 @@ func (t *bashTool) Execute(ctx context.Context, in api.BashInput) (api.BashOutpu
 	}
 
 	// The tasks store runs Fn under its own background context, so the
-	// per-command read-only tag is captured here from the tool-execution
-	// context and passed explicitly.
+	// per-command read-only and unsandboxed tags are captured here from the
+	// tool-execution context and passed explicitly.
 	readOnlyExec := tools.ReadOnlyExecutionFromContext(ctx)
+	unsandboxedExec := tools.UnsandboxedExecutionFromContext(ctx)
 
 	task := &tasks.Task{
 		Kind:         "bash",
@@ -157,6 +209,7 @@ func (t *bashTool) Execute(ctx context.Context, in api.BashInput) (api.BashOutpu
 				StdinReader: stdin,
 				Output:      mw,
 				ReadOnly:    readOnlyExec,
+				Unsandboxed: unsandboxedExec,
 			})
 			if err != nil {
 				return -1, err

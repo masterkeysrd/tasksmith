@@ -174,6 +174,63 @@ func TestMatchRule(t *testing.T) {
 	}
 }
 
+// attachTestSession wires a fresh global permissions file and returns a
+// session manager attached in the given mode.
+func attachTestSession(t *testing.T, mode api.PermissionMode) permissions.SessionManager {
+	t.Helper()
+	_, ws := setupTestWorkspace(t)
+	mgr, err := permissions.New(permissions.Config{
+		Workspace:  ws,
+		GlobalPath: filepath.Join(t.TempDir(), "global.json"),
+	})
+	if err != nil {
+		t.Fatalf("permissions.New: %v", err)
+	}
+	return mgr.Attach(mode, api.Permissions{}, nil)
+}
+
+func bypassBashPlan(target string) *tools.Plan {
+	return &tools.Plan{
+		ToolName:      "bash",
+		Action:        api.ActionExec,
+		Safety:        api.SafetyUnsafe,
+		Target:        target,
+		ReadOnly:      false,
+		Unsandboxed:   true,
+		BypassSandbox: true,
+	}
+}
+
+func excludedBashPlan(target string) *tools.Plan {
+	return &tools.Plan{ToolName: "bash", Action: api.ActionExec, Safety: api.SafetySafe, Target: target, Unsandboxed: true}
+}
+
+func sandboxedBashPlan(target string) *tools.Plan {
+	return &tools.Plan{ToolName: "bash", Action: api.ActionExec, Safety: api.SafetySafe, Target: target}
+}
+
+func TestMatchRuleUnsandboxedNamespace(t *testing.T) {
+	bypass := bypassBashPlan("git commit -m x")
+	sandboxed := sandboxedBashPlan("git commit -m x")
+
+	cases := []struct {
+		rule  string
+		plan  *tools.Plan
+		match bool
+	}{
+		{"bash(git *)", bypass, false},
+		{"bash_unsandboxed(git commit *)", bypass, true},
+		{"bash_unsandboxed(git *)", sandboxed, false},
+		{"bash(git *)", sandboxed, true},
+		{"*(*)", bypass, true},
+	}
+	for _, tc := range cases {
+		got := permissions.MatchRule(tc.rule, tc.plan)
+		if got != tc.match {
+			t.Errorf("MatchRule(%q, unsandboxed=%v bypass=%v): got %v, want %v", tc.rule, tc.plan.Unsandboxed, tc.plan.BypassSandbox, got, tc.match)
+		}
+	}
+}
 func TestManagerGlobalAndProjectPersistence(t *testing.T) {
 	_, ws := setupTestWorkspace(t)
 	globalPath := filepath.Join(t.TempDir(), "global_permissions.json")
@@ -532,6 +589,158 @@ func TestSessionManagerEvaluationModesAndPrecedence(t *testing.T) {
 	}
 }
 
+func TestSessionManagerUnsandboxedDeniesSpanNamespaces(t *testing.T) {
+	// A plain bash(git *) deny covers sandboxed, bypass, and excluded plans.
+	for _, plan := range []*tools.Plan{sandboxedBashPlan("git commit -m x"), bypassBashPlan("git commit -m x"), excludedBashPlan("git commit -m x")} {
+		sess := attachTestSession(t, api.ModeAuto)
+		if err := sess.AddDeny("bash(git *)"); err != nil {
+			t.Fatalf("AddDeny: %v", err)
+		}
+		if dec, _, _ := sess.Evaluate(plan); dec != tools.AccessDeny {
+			t.Errorf("bash(git *) deny (unsandboxed=%v bypass=%v): got %s, want deny", plan.Unsandboxed, plan.BypassSandbox, dec)
+		}
+	}
+
+	// bash_unsandboxed(git *) denies only the kernel-bypassing variants.
+	sess := attachTestSession(t, api.ModeAuto)
+	if err := sess.AddDeny("bash_unsandboxed(git *)"); err != nil {
+		t.Fatalf("AddDeny: %v", err)
+	}
+	if dec, _, _ := sess.Evaluate(bypassBashPlan("git commit -m x")); dec != tools.AccessDeny {
+		t.Errorf("expected bash_unsandboxed deny to cover bypass plan, got %s", dec)
+	}
+	if dec, _, _ := sess.Evaluate(excludedBashPlan("git commit -m x")); dec != tools.AccessDeny {
+		t.Errorf("expected bash_unsandboxed deny to cover excluded plan, got %s", dec)
+	}
+	if dec, _, _ := sess.Evaluate(sandboxedBashPlan("git commit -m x")); dec == tools.AccessDeny {
+		t.Error("bash_unsandboxed deny must not cover a sandboxed plan")
+	}
+}
+
+func TestSessionManagerBypassSandboxEvaluation(t *testing.T) {
+	for _, mode := range []api.PermissionMode{api.ModeDefault, api.ModeAcceptEdits, api.ModeAuto} {
+		sess := attachTestSession(t, mode)
+		if err := sess.AddAllow("bash(git commit *)"); err != nil {
+			t.Fatalf("AddAllow: %v", err)
+		}
+		dec, req, err := sess.Evaluate(bypassBashPlan("git commit -m x"))
+		if err != nil {
+			t.Fatalf("Evaluate(%s): %v", mode, err)
+		}
+		if dec != tools.AccessAsk || req == nil {
+			t.Fatalf("mode %s: expected AccessAsk despite sandboxed allow rule, got %s", mode, dec)
+		}
+		if !req.Unsandboxed || !req.BypassSandbox {
+			t.Errorf("mode %s: expected request flagged Unsandboxed+BypassSandbox, got %+v", mode, req)
+		}
+		for _, p := range req.GrantPatterns {
+			if !strings.HasPrefix(p, "bash_unsandboxed(") {
+				t.Errorf("mode %s: expected grant pattern in bash_unsandboxed namespace, got %q", mode, p)
+			}
+		}
+
+		// Granting the session decision must not widen the sandboxed namespace.
+		if err := sess.ApplyDecision(req, api.PermissionDecision{Kind: api.DecisionAllowSession, GrantPattern: req.GrantPatterns[0]}); err != nil {
+			t.Fatalf("ApplyDecision: %v", err)
+		}
+		if dec, _, _ := sess.Evaluate(bypassBashPlan("git commit -m x")); dec != tools.AccessAllow {
+			t.Errorf("mode %s: expected AccessAllow after bash_unsandboxed grant, got %s", mode, dec)
+		}
+		// A sandboxed plan is unaffected by the unsandboxed grant: it keeps
+		// its ordinary mode-based outcome (ask in default/accept_edits,
+		// auto-allow in auto) and is never flagged unsandboxed.
+		wantSandboxed := tools.AccessAsk
+		if mode == api.ModeAuto {
+			wantSandboxed = tools.AccessAllow
+		}
+		if dec, req2, _ := sess.Evaluate(sandboxedBashPlan("git status")); dec != wantSandboxed {
+			t.Errorf("mode %s: sandboxed plan unexpectedly %s (%+v)", mode, dec, req2)
+		} else if req2 != nil && req2.Unsandboxed {
+			t.Errorf("mode %s: sandboxed plan request marked unsandboxed: %+v", mode, req2)
+		}
+	}
+
+	// Plan mode denies any non-read-only plan, including bypass plans.
+	sess := attachTestSession(t, api.ModePlan)
+	if err := sess.AddAllow("bash_unsandboxed(git commit *)"); err != nil {
+		t.Fatalf("AddAllow: %v", err)
+	}
+	if dec, _, _ := sess.Evaluate(bypassBashPlan("git commit -m x")); dec != tools.AccessDeny {
+		t.Errorf("expected plan mode to deny bypass plan, got %s", dec)
+	}
+}
+
+func TestSessionManagerAutoAllowBashMatrix(t *testing.T) {
+	safeBash := sandboxedBashPlan("go test ./...")
+
+	// Widened case: default mode, native backend, safe sandboxed bash.
+	sess := attachTestSession(t, api.ModeDefault)
+	sess.SetRuntimePolicy(&permissions.RuntimePolicy{AutoAllowBash: true, SandboxNative: true})
+	if dec, _, _ := sess.Evaluate(safeBash); dec != tools.AccessAllow {
+		t.Errorf("expected autoAllowBash to allow safe sandboxed bash, got %s", dec)
+	}
+
+	// Unsafe or outside bash stays prompted.
+	if dec, _, _ := sess.Evaluate(&tools.Plan{ToolName: "bash", Action: api.ActionExec, Safety: api.SafetyUnsafe, Target: "rm -rf build"}); dec != tools.AccessAsk {
+		t.Errorf("expected unsafe bash to still prompt, got %s", dec)
+	}
+	if dec, _, _ := sess.Evaluate(&tools.Plan{ToolName: "bash", Action: api.ActionExec, Safety: api.SafetyOutside, Target: "curl https://example.com"}); dec != tools.AccessAsk {
+		t.Errorf("expected outside-safety bash to still prompt, got %s", dec)
+	}
+
+	// Unsandboxed (excluded-command) plans are never auto-allowed.
+	if dec, _, _ := sess.Evaluate(excludedBashPlan("git commit -m x")); dec != tools.AccessAsk {
+		t.Errorf("expected unsandboxed excluded plan to still prompt, got %s", dec)
+	}
+
+	// Other tools are unaffected.
+	if dec, _, _ := sess.Evaluate(&tools.Plan{ToolName: "web_fetch", Action: api.ActionNet, Safety: api.SafetySafe, Target: "https://example.com"}); dec != tools.AccessAsk {
+		t.Errorf("expected non-bash tool to still prompt, got %s", dec)
+	}
+
+	// Local backend disables widening.
+	sess.SetRuntimePolicy(&permissions.RuntimePolicy{AutoAllowBash: true, SandboxNative: false})
+	if dec, _, _ := sess.Evaluate(safeBash); dec != tools.AccessAsk {
+		t.Errorf("expected no widening on non-native backend, got %s", dec)
+	}
+
+	// Nil policy clears widening.
+	sess.SetRuntimePolicy(nil)
+	if dec, _, _ := sess.Evaluate(safeBash); dec != tools.AccessAsk {
+		t.Errorf("expected nil runtime policy to disable widening, got %s", dec)
+	}
+
+	// Plan mode still denies; ask mode still prompts.
+	plan := attachTestSession(t, api.ModePlan)
+	plan.SetRuntimePolicy(&permissions.RuntimePolicy{AutoAllowBash: true, SandboxNative: true})
+	if dec, _, _ := plan.Evaluate(safeBash); dec != tools.AccessDeny {
+		t.Errorf("expected plan mode to deny, got %s", dec)
+	}
+	ask := attachTestSession(t, api.ModeAsk)
+	ask.SetRuntimePolicy(&permissions.RuntimePolicy{AutoAllowBash: true, SandboxNative: true})
+	if dec, _, _ := ask.Evaluate(safeBash); dec != tools.AccessAsk {
+		t.Errorf("expected ask mode to prompt, got %s", dec)
+	}
+
+	// accept_edits widens too.
+	edits := attachTestSession(t, api.ModeAcceptEdits)
+	edits.SetRuntimePolicy(&permissions.RuntimePolicy{AutoAllowBash: true, SandboxNative: true})
+	if dec, _, _ := edits.Evaluate(safeBash); dec != tools.AccessAllow {
+		t.Errorf("expected accept_edits widening, got %s", dec)
+	}
+
+	// RuntimePolicy round-trips a copy.
+	got := edits.RuntimePolicy()
+	if got == nil || !got.AutoAllowBash || !got.SandboxNative {
+		t.Errorf("expected RuntimePolicy round-trip, got %+v", got)
+	}
+	if got != nil {
+		got.AutoAllowBash = false
+		if again := edits.RuntimePolicy(); again == nil || !again.AutoAllowBash {
+			t.Error("RuntimePolicy() must return a copy, not the live state")
+		}
+	}
+}
 func TestEvaluateMalformedPermissionsFile(t *testing.T) {
 	dir, ws := setupTestWorkspace(t)
 	globalPath := filepath.Join(t.TempDir(), "global.json")
@@ -692,6 +901,60 @@ func TestApplyDecisionWithScopes(t *testing.T) {
 		t.Fatalf("expected ErrInvalidConfig when manager is nil, got %v", err)
 	}
 	_ = dir
+}
+
+// TestApplyDecisionUnsandboxedGrantNamespaces verifies grants key into the
+// correct rule namespace: only bypass requests mint bash_unsandboxed rules,
+// bypass grants re-key plain patterns instead of widening the sandboxed
+// namespace, and non-bypass requests can never mint unsandboxed rules.
+func TestApplyDecisionUnsandboxedGrantNamespaces(t *testing.T) {
+	// Bypass request: a plain bash(...) grant pattern must be re-keyed into
+	// the unsandboxed namespace.
+	sess := attachTestSession(t, api.ModeDefault)
+	bypassReq := &api.PermissionRequest{
+		ID: "req-bypass", ToolName: "bash", Action: api.ActionExec,
+		Target: "git commit -m x", Unsandboxed: true, BypassSandbox: true,
+		GrantPatterns: []string{"bash_unsandboxed(git commit *)"},
+	}
+	if err := sess.ApplyDecision(bypassReq, api.PermissionDecision{
+		Kind: api.DecisionAllowSession, GrantPattern: "bash(git *)",
+	}); err != nil {
+		t.Fatalf("ApplyDecision(bypass, plain pattern): %v", err)
+	}
+	if dec, _, _ := sess.Evaluate(bypassBashPlan("git commit -m x")); dec != tools.AccessAllow {
+		t.Errorf("expected re-keyed bash_unsandboxed(git *) grant to approve bypass plan, got %s", dec)
+	}
+	if dec, _, _ := sess.Evaluate(sandboxedBashPlan("git status")); dec != tools.AccessAsk {
+		t.Errorf("bypass grant must not widen the sandboxed namespace, got %s", dec)
+	}
+
+	// Bypass request: a pattern for an unrelated tool is rejected.
+	if err := sess.ApplyDecision(bypassReq, api.PermissionDecision{
+		Kind: api.DecisionAllowSession, GrantPattern: "write(src/**)",
+	}); err == nil {
+		t.Error("expected rejection of unrelated grant pattern on bypass request")
+	}
+
+	// ExcludedCommands request (Unsandboxed but not BypassSandbox): granting
+	// mints an ordinary bash(...) rule that covers the next excluded run, and
+	// an explicit unsandboxed-namespace pattern is rejected.
+	sess = attachTestSession(t, api.ModeDefault)
+	excludedReq := &api.PermissionRequest{
+		ID: "req-excluded", ToolName: "bash", Action: api.ActionExec,
+		Target: "git commit -m x", Unsandboxed: true,
+		GrantPatterns: []string{"bash(git commit *)", "bash(git *)"},
+	}
+	if err := sess.ApplyDecision(excludedReq, api.PermissionDecision{Kind: api.DecisionAllowSession}); err != nil {
+		t.Fatalf("ApplyDecision(excluded, default pattern): %v", err)
+	}
+	if dec, _, _ := sess.Evaluate(excludedBashPlan("git commit -m y")); dec != tools.AccessAllow {
+		t.Errorf("expected bash(git commit *) grant to cover the next excluded run, got %s", dec)
+	}
+	if err := sess.ApplyDecision(excludedReq, api.PermissionDecision{
+		Kind: api.DecisionAllowSession, GrantPattern: "bash_unsandboxed(git *)",
+	}); err == nil {
+		t.Error("expected rejection of unsandboxed grant pattern on non-bypass request")
+	}
 }
 
 // TestSessionManagerReadOnlyPolicy verifies that policies.tools.readOnly denies

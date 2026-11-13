@@ -219,11 +219,30 @@ While `permissions.json` decides *whether* a tool call needs your approval, `san
 | `failIfUnavailable` | **Monotonic lock (OR)** | When any scope enables it, sessions requiring `native` fail loudly on hosts without kernel sandboxing instead of quietly falling back to `local`. |
 | `allowUnsandboxed` | **Monotonic lock (AND)** | Gates per-command unsandboxed execution. Any scope setting it `false` locks the hatch off; restricted (untrusted) workspaces always force it `false`. |
 | `autoAllowBash` | **Project overrides Global** | Auto-approves safe, sandboxed shell plans in `default`/`accept_edits` modes. |
-| `excludedCommands` | **Union** | Command patterns exempt from the kernel sandbox. Only honored in trusted workspaces. |
+| `excludedCommands` | **Union (locked by `allowUnsandboxed`)** | Command patterns exempt from the kernel sandbox. Cleared entirely in restricted workspaces or whenever any scope pins `allowUnsandboxed` false. |
 | `filesystem.*` | **Union with fixed precedence** | Extra writable directories (`allowWrite`), additional read-only paths (`denyWrite`), read masks (`denyRead`), and narrower re-opens inside a mask (`allowRead`). Project-relative paths resolve against the workspace root; `~` expands to your home. Built-in protected paths (agent resources, Git hooks/config, TaskSmith's own stores) can never be made writable, and TaskSmith's secret stores can never be re-opened. |
 | `network.*` | **Union** | Stored subprocess network posture (`open`, `allowlist`, or `disabled`) with domain allow/deny lists (exact hosts or `*.domain` wildcards). Kernel-level domain filtering is enforced in a later sandbox rollout; today `native` sandboxes keep loopback networking. |
 
 Both files are written atomically with owner-only (`0600`) permissions, and TaskSmith refuses to let tools or sandboxed commands modify them — a sandboxed process can never loosen its own next invocation. Edits apply to running sessions on the next workspace reload (`/workspace reload`). Repository-committed manifests (`WORKSPACE.md`, `.agents/`) may only narrow these settings, never widen them.
+
+### Unsandboxed Command Execution
+
+Some commands genuinely need host access the kernel sandbox withholds — `git commit` with GPG signing (needs `~/.gnupg`), `git push` over SSH (needs `~/.ssh`), or a client talking to the Docker daemon socket. TaskSmith offers three controlled ways across that boundary, all gated by `allowUnsandboxed` (default `true` in trusted workspaces, always `false` in restricted ones) and never available in read-only sessions:
+
+- **Agent bypass requests** (`bypass_sandbox`). The agent may retry a command that demonstrably failed due to sandbox restrictions without the kernel wrapper. Every such request prompts in **every permission mode** — including `auto` — and shows an `UNSANDBOXED` warning in the approval modal. Approving it grants a rule in a dedicated namespace, so ordinary `bash(...)` approvals never cover unsandboxed runs:
+
+  ```text
+  bash_unsandboxed(git commit *)      # Pre-approve unsandboxed git commits
+  bash_unsandboxed(ssh *)             # Pre-approve unsandboxed ssh
+  ```
+
+  A plain `bash(git *)` **deny** rule still blocks both variants; `bash_unsandboxed(git *)` denies only the unsandboxed variant.
+
+- **Trusted command exclusions** (`excludedCommands`). Patterns like `"git commit *"` pre-exempt matching commands from the kernel wrapper. Matching is strict AST analysis: a command with any redirection, command substitution, variable-expanded argument, subshell, environment prefix, `cd`, `eval`, or background operator is *not* excluded and stays sandboxed. Excluded commands still flow through ordinary `bash(...)` rules and modes — only the kernel boundary is skipped.
+
+- **Direct `!` commands**. Commands you run yourself from the REPL execute unsandboxed in trusted workspaces when `allowUnsandboxed` is enabled, since they are explicit, human-initiated host actions.
+
+Additionally, `autoAllowBash: true` auto-approves *safe, sandboxed* shell commands in `default`/`accept_edits` modes (native backend only). It never widens `plan`/`ask` modes, unsafe or network-opening commands, or anything unsandboxed.
 
 See [Sandbox Architecture](../architecture/sandbox.md) for how the merged posture is enforced by the kernel.
 

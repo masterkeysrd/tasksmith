@@ -28,6 +28,12 @@ var (
 // command physically cannot mutate disk under a native kernel sandbox.
 type readOnlyExecKey struct{}
 
+// unsandboxedExecKey tags a tool-execution context whose permission plan was
+// explicitly approved to run outside the kernel sandbox (bypass_sandbox, an
+// excludedCommands match, or a direct user shell command), so execution-
+// capable tools skip the native wrapper for that single process.
+type unsandboxedExecKey struct{}
+
 // WithReadOnlyExecution marks ctx so tools that spawn child processes request
 // a per-command read-only kernel profile. Passing false returns ctx unchanged.
 func WithReadOnlyExecution(ctx context.Context, readOnly bool) context.Context {
@@ -41,6 +47,25 @@ func WithReadOnlyExecution(ctx context.Context, readOnly bool) context.Context {
 // child-process execution.
 func ReadOnlyExecutionFromContext(ctx context.Context) bool {
 	v, _ := ctx.Value(readOnlyExecKey{}).(bool)
+	return v
+}
+
+// WithUnsandboxedExecution marks ctx so execution-capable tools skip the
+// kernel sandbox wrapper for the child process of this tool call. Passing
+// false returns ctx unchanged. The harness tags this only from a plan the
+// permission engine approved as unsandboxed (bypass_sandbox, an
+// excludedCommands match, or a direct user shell command).
+func WithUnsandboxedExecution(ctx context.Context, unsandboxed bool) context.Context {
+	if !unsandboxed {
+		return ctx
+	}
+	return context.WithValue(ctx, unsandboxedExecKey{}, true)
+}
+
+// UnsandboxedExecutionFromContext reports whether ctx was tagged for
+// unsandboxed child-process execution.
+func UnsandboxedExecutionFromContext(ctx context.Context) bool {
+	v, _ := ctx.Value(unsandboxedExecKey{}).(bool)
 	return v
 }
 
@@ -70,6 +95,17 @@ type Plan struct {
 	Summary  string   `json:"summary"`
 	Diff     string   `json:"diff,omitempty"`
 	ReadOnly bool     `json:"read_only,omitempty"`
+	// Unsandboxed marks a plan whose child process runs directly on the host
+	// instead of inside the kernel sandbox (bash bypass_sandbox or an
+	// excludedCommands match). The harness tags their execution context
+	// accordingly.
+	Unsandboxed bool `json:"unsandboxed,omitempty"`
+	// BypassSandbox distinguishes a model-requested bypass_sandbox plan from
+	// a trusted excludedCommands match: bypass plans are isolated into the
+	// bash_unsandboxed(...) rule namespace so regular bash(...) allow rules
+	// can never auto-approve an unsandboxed retry, while excluded matches
+	// flow through normal bash(...) rules and modes.
+	BypassSandbox bool `json:"bypass_sandbox,omitempty"`
 }
 
 // Tool is an executable LLM-callable tool with two-phase Prepare and Execute

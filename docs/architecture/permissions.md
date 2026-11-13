@@ -84,3 +84,10 @@ Before any session initializes or executes agent instructions, the directory pas
 Persistent permission settings in `permissions.json` (`disabledTools` and `disabledMcps`) form a monotonic union across global and project configurations:
 - Disabled tools and MCP servers are pruned directly from the agent's tool definitions during turn assembly.
 - Because disabled tools never enter the model's token context, the model cannot attempt to invoke them, eliminating hallucinated calls and execution denials.
+
+### 7. Unsandboxed Execution Namespace
+Per-command kernel-sandbox bypasses live in a dedicated permission namespace so ordinary approvals can never authorize them:
+- **Namespace isolation**: an unsandboxed bypass plan only matches `bash_unsandboxed(...)` allow rules (or the `*` catch-all); sandboxed plans never match `*_unsandboxed` rules, so granting one variant never widens the other. Deny rules span both namespaces: `bash(git *)` blocks sandboxed and unsandboxed git alike, while `bash_unsandboxed(git *)` denies only the kernel-bypassing variant.
+- **Prompt-always**: bypass plans require an explicit matching allow rule in every permission mode, including `auto`; mode-based auto-approval never covers them, and the sandbox backend rejects them outright in read-only posture (`ErrReadOnly`).
+- **Excluded commands** (`sandbox.json` `excludedCommands`) take the opposite route: strict AST matching (rejecting redirections, substitutions, dynamic arguments, subshells, `cd`/`eval`, and background operators) marks a plan unsandboxed at execution time while ordinary `bash(...)` rules and modes still decide approval.
+- **Runtime posture**: the session pushes a live `RuntimePolicy` (autoAllowBash plus whether the enforced backend is native) into the permission engine on startup and workspace reload, so `autoAllowBash` widens exactly safe, sandboxed bash plans in `default`/`accept_edits` and nothing else.

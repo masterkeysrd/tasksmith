@@ -210,10 +210,16 @@ func TestMonotonicLocks(t *testing.T) {
 
 	t.Run("global allowUnsandboxed false cannot be re-opened", func(t *testing.T) {
 		mgr, _ := testManager(t, false)
-		if err := mgr.Set(api.ScopeGlobal, api.SandboxSettings{AllowUnsandboxed: new(false)}); err != nil {
+		if err := mgr.Set(api.ScopeGlobal, api.SandboxSettings{
+			AllowUnsandboxed: new(false),
+			ExcludedCommands: []string{"git push *"},
+		}); err != nil {
 			t.Fatal(err)
 		}
-		if err := mgr.Set(api.ScopeProject, api.SandboxSettings{AllowUnsandboxed: new(true)}); err != nil {
+		if err := mgr.Set(api.ScopeProject, api.SandboxSettings{
+			AllowUnsandboxed: new(true),
+			ExcludedCommands: []string{"git commit *"},
+		}); err != nil {
 			t.Fatal(err)
 		}
 		eff, err := mgr.Effective()
@@ -222,6 +228,29 @@ func TestMonotonicLocks(t *testing.T) {
 		}
 		if eff.AllowUnsandboxed {
 			t.Error("allowUnsandboxed = true, want global false lock to hold")
+		}
+		if len(eff.ExcludedCommands) != 0 {
+			t.Errorf("excludedCommands = %v, want cleared while the unsandboxed hatch is locked off", eff.ExcludedCommands)
+		}
+	})
+
+	t.Run("project allowUnsandboxed false clears exclusions", func(t *testing.T) {
+		mgr, _ := testManager(t, false)
+		if err := mgr.Set(api.ScopeProject, api.SandboxSettings{
+			AllowUnsandboxed: new(false),
+			ExcludedCommands: []string{"git commit *"},
+		}); err != nil {
+			t.Fatal(err)
+		}
+		eff, err := mgr.Effective()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if eff.AllowUnsandboxed {
+			t.Error("allowUnsandboxed = true, want project false to hold")
+		}
+		if len(eff.ExcludedCommands) != 0 {
+			t.Errorf("excludedCommands = %v, want cleared while the unsandboxed hatch is locked off", eff.ExcludedCommands)
 		}
 	})
 }

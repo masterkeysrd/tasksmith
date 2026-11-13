@@ -1095,6 +1095,15 @@ type PermissionRequest struct {
 	Summary       string      `json:"summary"`
 	Diff          string      `json:"diff,omitempty"`
 	GrantPatterns []string    `json:"grant_patterns,omitempty"`
+	// Unsandboxed marks a request whose approved execution runs directly on
+	// the host instead of inside the kernel sandbox; clients must surface
+	// this unmistakably before the user can approve.
+	Unsandboxed bool `json:"unsandboxed,omitempty"`
+	// BypassSandbox distinguishes an explicit kernel-bypass retry (which is
+	// approved through the tool_unsandboxed(...) rule namespace) from a
+	// trusted excludedCommands match (which keeps ordinary tool(...) rules).
+	// Both variants set Unsandboxed so the UI warning badge shows for either.
+	BypassSandbox bool `json:"bypass_sandbox,omitempty"`
 }
 
 // PermissionDecision submits a user's resolution for a pending [PermissionRequest].

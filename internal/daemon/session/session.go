@@ -307,6 +307,15 @@ type Session struct {
 
 	sandboxCfg sandboxcfg.Manager `json:"-"`
 
+	// sandboxNative records whether the active backend enforces the kernel
+	// sandbox; allowUnsandboxed, autoAllowBash, and excludedCommands snapshot
+	// the live sandbox posture for the permission engine and direct `!`
+	// commands. Guarded by the session lock.
+	sandboxNative    bool
+	allowUnsandboxed bool
+	autoAllowBash    bool
+	excludedCommands []string
+
 	Root        string          `json:"-"` // Path to <WorkspaceDir>/sessions/<id>
 	Sandbox     sandbox.Sandbox `json:"-"`
 	sbxPolicy   sandbox.FilesystemPolicy
@@ -518,6 +527,70 @@ func (s *Session) applyReadOnlyPolicy() {
 	s.Sandbox.SetReadOnly(readOnly)
 }
 
+// publishSandboxPosture snapshots the resolved isolation backend and the
+// effective sandbox.json posture (unsandboxed execution, auto-allow, and
+// command exclusions) on the session so the permission engine and direct `!`
+// commands can consult it without re-reading sandbox.json. Callers must not
+// hold the session lock.
+func (s *Session) publishSandboxPosture(mode sandbox.Mode, eff *sandboxcfg.Effective) {
+	s.Lock()
+	defer s.Unlock()
+	s.sandboxNative = mode == sandbox.ModeNative
+	if eff != nil {
+		s.allowUnsandboxed = eff.AllowUnsandboxed
+		s.autoAllowBash = eff.AutoAllowBash
+		s.excludedCommands = eff.ExcludedCommands
+	} else {
+		s.allowUnsandboxed = false
+		s.autoAllowBash = false
+		s.excludedCommands = nil
+	}
+}
+
+// pushRuntimePolicy forwards the live sandbox posture snapshot to the
+// permission engine so mode-based decisions (autoAllowBash) reflect the
+// current sandbox.json settings and enforced backend.
+func (s *Session) pushRuntimePolicy() {
+	if s.PermManager == nil {
+		return
+	}
+	s.Lock()
+	policy := &permissions.RuntimePolicy{
+		AutoAllowBash: s.autoAllowBash,
+		SandboxNative: s.sandboxNative,
+	}
+	s.Unlock()
+	s.PermManager.SetRuntimePolicy(policy)
+}
+
+// allowUnsandboxedCommands reports whether commands may currently bypass the
+// kernel sandbox: the workspace settings must explicitly permit it, the
+// session must not be in read-only posture, and the backend must be native
+// (where bypass is a meaningful distinction).
+func (s *Session) allowUnsandboxedCommands() bool {
+	s.Lock()
+	defer s.Unlock()
+	if !s.allowUnsandboxed || !s.sandboxNative {
+		return false
+	}
+	if s.Sandbox == nil || s.Sandbox.ReadOnly() {
+		return false
+	}
+	return true
+}
+
+// commandBashRunner adapts the session's std tools for the harness command
+// node, stamping direct `!` commands as unsandboxed when the live sandbox
+// posture allows it (sandbox.md §2.5).
+type commandBashRunner struct {
+	session *Session
+}
+
+func (r commandBashRunner) Bash(ctx context.Context, req std.BashRequest) (*std.BashResult, error) {
+	req.Unsandboxed = r.session.allowUnsandboxedCommands()
+	return r.session.Std.Bash(ctx, req)
+}
+
 func (s *Session) initSubsystems(ctx context.Context, db *sql.DB) error {
 	tl, err := timeline.New(ctx, db, s.ID)
 	if err != nil {
@@ -579,6 +652,7 @@ func (s *Session) initSubsystems(ctx context.Context, db *sql.DB) error {
 	}
 	s.Sandbox = sb
 	s.sbxPolicy = sbPolicy
+	s.publishSandboxPosture(mode, sandboxEff)
 	s.applyReadOnlyPolicy()
 
 	s.Tasks = tasks.New(tasks.Config{
@@ -623,6 +697,7 @@ func (s *Session) initSubsystems(ctx context.Context, db *sql.DB) error {
 			return s.checkpoint(s.bgCtx)
 		})
 	}
+	s.pushRuntimePolicy()
 
 	attResolver, err := harness.NewAttachmentResolver(harness.AttachmentResolverConfig{
 		AgentName:   s.Config.Agent,
@@ -643,7 +718,7 @@ func (s *Session) initSubsystems(ctx context.Context, db *sql.DB) error {
 	h, err := harness.New(harness.Config{
 		ID:          s.ID,
 		DB:          db,
-		Bash:        s.Std,
+		Bash:        commandBashRunner{session: s},
 		Spiller:     s.spiller,
 		Permissions: s.PermManager,
 		Queue:       s,
@@ -720,9 +795,11 @@ func (s *Session) refreshSandboxPolicy(_ context.Context) {
 		return
 	}
 	policy := sandboxFilesystemPolicy(workDir)
+	var eff *sandboxcfg.Effective
 	if cfgMgr != nil {
-		if eff, err := cfgMgr.EffectiveFor(workDir); err == nil {
-			policy = eff.Overlay(policy)
+		if e, err := cfgMgr.EffectiveFor(workDir); err == nil {
+			policy = e.Overlay(policy)
+			eff = &e
 		} else {
 			s.logger.Warn("session: refresh effective sandbox settings failed",
 				log.String("session", s.ID), log.String("error", err.Error()))
@@ -732,6 +809,8 @@ func (s *Session) refreshSandboxPolicy(_ context.Context) {
 	s.sbxPolicy = policy
 	s.Unlock()
 	sbx.SetFilesystemPolicy(policy)
+	s.publishSandboxPosture(sbx.Mode(), eff)
+	s.pushRuntimePolicy()
 }
 
 // Update updates the session title or configuration, persisting changes and reconfiguring runtime harnesses.
@@ -1249,20 +1328,21 @@ func (s *Session) buildToolsForAgent(agentName string) (tools.Container, error) 
 	}
 
 	builtinTools, err := builtin.New(builtin.Config{
-		Std:           s.Std,
-		Sandbox:       s.Sandbox,
-		Guard:         guardInst,
-		Tasks:         s.Tasks,
-		Workspace:     s.workspace,
-		AllowedTools:  allowedToolNames,
-		DeferredTools: deferredToolNames,
-		Skills:        skills,
-		Rules:         rules,
-		Subagents:     subagents,
-		Agents:        s,
-		AgentName:     agentName,
-		Agent:         activeAgent,
-		MCPCaller:     mcpCaller,
+		Std:             s.Std,
+		Sandbox:         s.Sandbox,
+		SandboxSettings: s.sandboxCfg,
+		Guard:           guardInst,
+		Tasks:           s.Tasks,
+		Workspace:       s.workspace,
+		AllowedTools:    allowedToolNames,
+		DeferredTools:   deferredToolNames,
+		Skills:          skills,
+		Rules:           rules,
+		Subagents:       subagents,
+		Agents:          s,
+		AgentName:       agentName,
+		Agent:           activeAgent,
+		MCPCaller:       mcpCaller,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("session: initialize builtin tools: %w", err)
