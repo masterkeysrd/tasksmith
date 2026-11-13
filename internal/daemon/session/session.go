@@ -14,7 +14,6 @@ import (
 
 	"github.com/masterkeysrd/loom/tool"
 	"github.com/masterkeysrd/tasksmith/api"
-	"github.com/masterkeysrd/tasksmith/internal/core/guard"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	"github.com/masterkeysrd/tasksmith/internal/core/ptr"
 	"github.com/masterkeysrd/tasksmith/internal/core/shellguard"
@@ -27,6 +26,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/daemon/models"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/permissions"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/sandbox"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/sandboxcfg"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/std"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/tasks"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/timeline"
@@ -49,13 +49,19 @@ type Config struct {
 	Gateway     func() gateway.Gateway
 	Catalog     func() *models.Catalog
 	Permissions permissions.Manager
-	Publisher   Publisher
-	Logger      log.Interface
-	Metrics     metrics.Service
-	ReloadLock  *sync.RWMutex
-	Context     context.Context
-	WaitGroup   *sync.WaitGroup
-	OnUpdate    func(ctx context.Context, s *Session) error
+	// SandboxSettings optionally carries the workspace's sandbox.json manager
+	// (nil keeps the built-in defaults: DefaultMode backend and the built-in
+	// policy floor only). It supplies the effective default backend, the
+	// failIfUnavailable lock, and user path overrides layered over the
+	// built-in security floor.
+	SandboxSettings sandboxcfg.Manager
+	Publisher       Publisher
+	Logger          log.Interface
+	Metrics         metrics.Service
+	ReloadLock      *sync.RWMutex
+	Context         context.Context
+	WaitGroup       *sync.WaitGroup
+	OnUpdate        func(ctx context.Context, s *Session) error
 	// MCPCaller resolves the MCP runtime for this session's workspace, or nil when
 	// no MCP manager is attached. It is a function rather than a value because a
 	// workspace reload replaces the runtime's context while sessions stay alive, so
@@ -113,6 +119,7 @@ func initSession(ctx context.Context, sess *Session, cfg Config) error {
 	}
 	sess.State = NewState()
 	sess.permRoot = cfg.Permissions
+	sess.sandboxCfg = cfg.SandboxSettings
 	sess.Root = dir
 	sess.workspace = cfg.Workspace
 	sess.gateway = cfg.Gateway
@@ -159,6 +166,13 @@ func New(ctx context.Context, cfg Config) (*Session, error) {
 	if cfg.Session.Mode == "" && cfg.Permissions != nil {
 		if eff, err := cfg.Permissions.Effective(); err == nil && eff.DefaultMode != "" {
 			cfg.Session.Mode = eff.DefaultMode
+		}
+	}
+	if cfg.Session.Sandbox == "" && cfg.SandboxSettings != nil {
+		// A session that does not request a backend inherits the workspace's
+		// configured default from sandbox.json (global then project scope).
+		if eff, err := cfg.SandboxSettings.Effective(); err == nil && eff.Mode != "" {
+			cfg.Session.Sandbox = eff.Mode
 		}
 	}
 
@@ -291,8 +305,11 @@ type Session struct {
 	PermManager permissions.SessionManager `json:"-"`
 	permRoot    permissions.Manager        `json:"-"`
 
-	Root        string            `json:"-"` // Path to <WorkspaceDir>/sessions/<id>
-	Sandbox     sandbox.Sandbox   `json:"-"`
+	sandboxCfg sandboxcfg.Manager `json:"-"`
+
+	Root        string          `json:"-"` // Path to <WorkspaceDir>/sessions/<id>
+	Sandbox     sandbox.Sandbox `json:"-"`
+	sbxPolicy   sandbox.FilesystemPolicy
 	Timeline    timeline.Timeline `json:"-"`
 	Journal     journal.Journal   `json:"-"`
 	Tools       tools.Container   `json:"-"`
@@ -351,8 +368,10 @@ func (s *Session) Clone() *Session {
 		Permissions: s.Permissions.Clone(),
 		PermManager: s.PermManager,
 		permRoot:    s.permRoot,
+		sandboxCfg:  s.sandboxCfg,
 		Root:        s.Root,
 		Sandbox:     s.Sandbox,
+		sbxPolicy:   s.sbxPolicy,
 		Timeline:    s.Timeline,
 		Journal:     s.Journal,
 		Tools:       s.Tools,
@@ -513,17 +532,44 @@ func (s *Session) initSubsystems(ctx context.Context, db *sql.DB) error {
 	}
 	s.Journal = jr
 
+	// The effective posture resolves project-relative rules and the built-in
+	// floor against this session's own work directory (a subagent's worktree
+	// root, not just the main checkout), and is computed once for both the
+	// backend resolution and the path overlay.
+	var sandboxEff *sandboxcfg.Effective
+	if s.sandboxCfg != nil {
+		eff, err := s.sandboxCfg.EffectiveFor(s.WorkDir)
+		if err != nil {
+			return fmt.Errorf("session: resolve effective sandbox settings: %w", err)
+		}
+		sandboxEff = &eff
+	}
+
 	mode := sandbox.ResolveMode(s.Config.Sandbox)
 	if s.parent != nil && s.parent.Sandbox != nil {
 		// A subagent inherits its parent's enforced isolation backend.
 		mode = s.parent.Sandbox.Mode()
+	} else if sandboxEff != nil {
+		// A top-level session resolves its backend through the workspace's
+		// sandbox.json settings: the request still wins, then the configured
+		// default, and failIfUnavailable turns native-unavailable into a hard
+		// session-creation error instead of a silent local fallback.
+		resolved, err := sandboxEff.ResolveMode(s.Config.Sandbox)
+		if err != nil {
+			return err
+		}
+		mode = resolved
+	}
+	sbPolicy := sandboxFilesystemPolicy(s.WorkDir)
+	if sandboxEff != nil {
+		sbPolicy = sandboxEff.Overlay(sbPolicy)
 	}
 	sb, err := sandbox.New(sandbox.Config{
-		ID:          s.ID,
-		WorkDir:     s.WorkDir,
-		Mode:        mode,
-		Env:         s.workspace.SubprocessEnv(),
-		DeniedPaths: guard.HostCredentialPaths(s.WorkDir),
+		ID:         s.ID,
+		WorkDir:    s.WorkDir,
+		Mode:       mode,
+		Env:        s.workspace.SubprocessEnv(),
+		Filesystem: sbPolicy,
 		Network: sandbox.NetworkPolicy{
 			AllowLoopback: true,
 		},
@@ -532,6 +578,7 @@ func (s *Session) initSubsystems(ctx context.Context, db *sql.DB) error {
 		return fmt.Errorf("session: initialize sandbox: %w", err)
 	}
 	s.Sandbox = sb
+	s.sbxPolicy = sbPolicy
 	s.applyReadOnlyPolicy()
 
 	s.Tasks = tasks.New(tasks.Config{
@@ -650,11 +697,41 @@ func (s *Session) Refresh(ctx context.Context) {
 		s.FileIndex.Invalidate()
 	}
 	s.Unlock()
+	s.refreshSandboxPolicy(ctx)
 	_ = s.configureHarness(ctx)
 	s.publisher.Publish(api.TopicSessions, api.SessionUpdatedEvent{
 		Workspace: s.workspace.RootDir(),
 		Session:   ToAPISession(s),
 	})
+}
+
+// refreshSandboxPolicy recomputes the kernel path policy (built-in floor plus
+// the current sandbox.json overlay) and live-swaps it into the session's
+// sandbox, so edits to sandbox.json apply to running sessions on the next
+// workspace reload without recreating the sandbox. The backend itself is
+// chosen at creation and never changes here.
+func (s *Session) refreshSandboxPolicy(_ context.Context) {
+	s.Lock()
+	sbx := s.Sandbox
+	cfgMgr := s.sandboxCfg
+	workDir := s.WorkDir
+	s.Unlock()
+	if sbx == nil {
+		return
+	}
+	policy := sandboxFilesystemPolicy(workDir)
+	if cfgMgr != nil {
+		if eff, err := cfgMgr.EffectiveFor(workDir); err == nil {
+			policy = eff.Overlay(policy)
+		} else {
+			s.logger.Warn("session: refresh effective sandbox settings failed",
+				log.String("session", s.ID), log.String("error", err.Error()))
+		}
+	}
+	s.Lock()
+	s.sbxPolicy = policy
+	s.Unlock()
+	sbx.SetFilesystemPolicy(policy)
 }
 
 // Update updates the session title or configuration, persisting changes and reconfiguring runtime harnesses.
@@ -910,6 +987,7 @@ func (s *Session) setConfigModel(model string) {
 func (s *Session) configureHarness(ctx context.Context) error {
 	if s.Sandbox != nil && s.workspace != nil {
 		s.Sandbox.SetEnv(s.workspace.SubprocessEnv())
+		s.Sandbox.SetFilesystemPolicy(s.sbxPolicy)
 		s.applyReadOnlyPolicy()
 	}
 

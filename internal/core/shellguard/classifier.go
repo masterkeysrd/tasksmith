@@ -553,7 +553,7 @@ func (g *Guard) determineOperation(cmd ParsedCommand, state *trackerState) Opera
 				safety = api.SafetyUnsafe
 				if !state.isCWDUnknown && !check.isDynamic && check.path != "" {
 					resolved = g.resolveTarget(check.path, state.virtualCWD)
-					if g.IsInWriteDirs(resolved) && !guard.IsSensitivePath(resolved, g.homeDir) {
+					if g.IsInWriteDirs(resolved) && !guard.IsSensitiveWritePath(resolved, g.homeDir) {
 						safety = api.SafetySafe
 					}
 				}

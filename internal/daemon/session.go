@@ -30,17 +30,18 @@ func (r *workspaceRuntime) loadOrCacheSession(ctx context.Context, dbSess *sessi
 	}
 
 	cfg := session.Config{
-		DB:          r.db,
-		Workspace:   r.ws,
-		Gateway:     r.Gateway,
-		Catalog:     r.Catalog,
-		Permissions: r.perms,
-		Publisher:   r.publisher,
-		Logger:      r.logger,
-		Metrics:     r.metrics,
-		ReloadLock:  r.reloadMu,
-		Context:     r.bgCtx,
-		WaitGroup:   &r.wg,
+		DB:              r.db,
+		Workspace:       r.ws,
+		Gateway:         r.Gateway,
+		Catalog:         r.Catalog,
+		Permissions:     r.perms,
+		SandboxSettings: r.SandboxConfig(),
+		Publisher:       r.publisher,
+		Logger:          r.logger,
+		Metrics:         r.metrics,
+		ReloadLock:      r.reloadMu,
+		Context:         r.bgCtx,
+		WaitGroup:       &r.wg,
 		// Restored sessions need the caller too, or a session resumed after a
 		// daemon restart would silently lose every MCP tool.
 		MCPCaller: r.MCPCaller,
@@ -112,21 +113,22 @@ func (r *workspaceRuntime) CreateSession(ctx context.Context, req api.CreateSess
 	}
 
 	cfg := session.Config{
-		ID:          id,
-		Title:       req.Title,
-		Session:     req.Config,
-		DB:          r.db,
-		Workspace:   r.ws,
-		Gateway:     r.Gateway,
-		Catalog:     r.Catalog,
-		Permissions: r.perms,
-		Publisher:   r.publisher,
-		Logger:      r.logger,
-		Metrics:     r.metrics,
-		ReloadLock:  r.reloadMu,
-		Context:     r.bgCtx,
-		WaitGroup:   &r.wg,
-		MCPCaller:   r.MCPCaller,
+		ID:              id,
+		Title:           req.Title,
+		Session:         req.Config,
+		DB:              r.db,
+		Workspace:       r.ws,
+		Gateway:         r.Gateway,
+		Catalog:         r.Catalog,
+		Permissions:     r.perms,
+		SandboxSettings: r.SandboxConfig(),
+		Publisher:       r.publisher,
+		Logger:          r.logger,
+		Metrics:         r.metrics,
+		ReloadLock:      r.reloadMu,
+		Context:         r.bgCtx,
+		WaitGroup:       &r.wg,
+		MCPCaller:       r.MCPCaller,
 		OnUpdate: func(ctx context.Context, s *session.Session) error {
 			if err := s.CheckpointTo(ctx, r.sessionStore); err != nil {
 				return err

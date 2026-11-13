@@ -450,8 +450,29 @@ func (d *Daemon) GetWorkspace(ctx context.Context, rawWS string) (*api.Workspace
 	// while the session runs, so the CLI reports it in the timeline as the listing is
 	// polled. See store.SetWorkspaceMCPServers.
 	var warnings []string
-	if err := sandbox.NativeAvailable(); err != nil {
-		warnings = append(warnings, fmt.Sprintf("Kernel sandboxing is unavailable on this host (%v); new sessions fall back to in-process (local) isolation.", err))
+
+	// The effective sandbox posture comes from sandbox.json (global + project
+	// scopes); a manager failure degrades to the platform default rather than
+	// failing the whole workspace read, but the read failure itself is surfaced
+	// as a warning so a malformed file is never silent.
+	sandboxMode := sandbox.DefaultMode()
+	if cfgMgr := rt.SandboxConfig(); cfgMgr != nil {
+		if eff, err := cfgMgr.Effective(); err == nil {
+			if resolved, err := eff.ResolveMode(""); err == nil {
+				sandboxMode = resolved
+			}
+			if availErr := sandbox.NativeAvailable(); availErr != nil {
+				// Without an explicit mode the user has not opted into local
+				// isolation, so tell them kernel sandboxing is off by default
+				// here; an explicit native request on such a host always
+				// deserves the warning too.
+				if eff.Mode == "" || eff.Mode == api.SandboxNative {
+					warnings = append(warnings, "Kernel sandboxing is unavailable on this host ("+availErr.Error()+"); sessions fall back to in-process (local) isolation, or fail when failIfUnavailable is enabled.")
+				}
+			}
+		} else {
+			warnings = append(warnings, "sandbox.json could not be read ("+err.Error()+"); falling back to the default sandbox posture — check the global and project sandbox.json files for syntax errors.")
+		}
 	}
 	if wsWarnings := rt.Workspace().Catalog().Warnings(); len(wsWarnings) > 0 {
 		warnings = append(warnings, wsWarnings...)
@@ -472,7 +493,7 @@ func (d *Daemon) GetWorkspace(ctx context.Context, rawWS string) (*api.Workspace
 		DefaultModel: resolvedDefault,
 		Warnings:     warnings,
 		IsRestricted: rt.Workspace().IsRestricted(),
-		SandboxMode:  sandbox.DefaultMode(),
+		SandboxMode:  sandboxMode,
 	}, nil
 }
 

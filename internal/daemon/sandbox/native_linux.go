@@ -58,56 +58,94 @@ func findLinuxBwrap() (string, error) {
 	return "", fmt.Errorf("%w: bubblewrap (bwrap) binary not found in standard system paths or PATH", ErrNativeUnavailable)
 }
 
+// bwrapParams carries the resolved confinement inputs for [buildBwrapArgs].
+type bwrapParams struct {
+	WorkDir         string
+	RealWorkDir     string
+	TempDir         string
+	RealTempDir     string
+	TargetDir       string
+	ReadOnly        bool
+	NetworkDisabled bool
+	Filesystem      FilesystemPolicy
+	ResolvedBin     string
+	Args            []string
+}
+
 // wrapNativeCommand wraps a resolved command invocation in Linux Bubblewrap (bwrap).
 func wrapNativeCommand(s *session, targetDir, resolvedBin string, args []string, cmdReadOnly bool) (string, []string, error) {
 	bwrapBin, err := findLinuxBwrap()
 	if err != nil {
 		return "", nil, err
 	}
-	wrappedArgs := buildBwrapArgs(s.workDir, s.realWorkDir, s.tempDir, s.realTempDir, targetDir,
-		s.readOnly.Load() || cmdReadOnly, s.cfg.Network.Disabled, s.deniedPaths, resolvedBin, args)
+	p := s.fsPolicy.Load()
+	policy := FilesystemPolicy{}
+	if p != nil {
+		policy = *p
+	}
+	wrappedArgs := buildBwrapArgs(bwrapParams{
+		WorkDir:         s.workDir,
+		RealWorkDir:     s.realWorkDir,
+		TempDir:         s.tempDir,
+		RealTempDir:     s.realTempDir,
+		TargetDir:       targetDir,
+		ReadOnly:        s.readOnly.Load() || cmdReadOnly,
+		NetworkDisabled: s.cfg.Network.Disabled,
+		Filesystem:      policy,
+		ResolvedBin:     resolvedBin,
+		Args:            args,
+	})
 	return bwrapBin, wrappedArgs, nil
 }
 
 // buildBwrapArgs constructs arguments for Linux Bubblewrap (bwrap).
 //
-// The host filesystem is mounted read-only at / with writable binds for
-// WorkDir (unless readOnly) and the sandbox temp directory. Each path in
-// deniedPaths (credential files and directories outside WorkDir) is masked
-// with an empty tmpfs so child processes can neither read nor write it.
-func buildBwrapArgs(workDir, realWorkDir, tempDir, realTempDir, targetDir string, readOnly, networkDisabled bool, deniedPaths []string, resolvedBin string, args []string) []string {
+// The host filesystem is mounted read-only at /, then a single breadth-sorted
+// mount plan (see planMountSteps) is emitted: read masks (an empty tmpfs over
+// directories, a /dev/null read-only bind over single files) for
+// DeniedReadPaths, read-only re-opens for AllowReadPaths, writable binds for
+// the sandbox's own roots (work dir unless readOnly, temp dir, existing
+// ExtraWritePaths entries) so a broad denyRead like "~" can never wipe out the
+// workspace or temp mounts, and read-only overlays for existing
+// DeniedWritePaths entries so protected paths stay read-only inside every
+// writable bind that covers them. Because bwrap resolves mounts in argument
+// order — later mounts overlay earlier ones — the plan's broadest-first,
+// writable-after-allow, deny-write-last ordering makes the narrowest matching
+// operation win at every path.
+func buildBwrapArgs(params bwrapParams) []string {
 	out := []string{
 		"--ro-bind", "/", "/",
 	}
-	if !readOnly {
-		out = append(out, "--bind", workDir, workDir)
-		if realWorkDir != "" && realWorkDir != workDir {
-			out = append(out, "--bind", realWorkDir, realWorkDir)
-		}
-	}
-	if tempDir != "" {
-		out = append(out, "--bind", tempDir, tempDir)
-		if realTempDir != "" && realTempDir != tempDir {
-			out = append(out, "--bind", realTempDir, realTempDir)
-		}
-	}
-	for _, denied := range deniedPaths {
-		denied = strings.TrimSpace(denied)
-		if denied == "" {
-			continue
-		}
-		denied = filepath.Clean(denied)
-		info, err := os.Stat(denied)
-		if err != nil {
-			continue // nothing to mask when the path does not exist on this host
-		}
-		if !info.IsDir() {
+	for _, step := range planMountSteps(mountPlanInput{
+		WorkDir:     params.WorkDir,
+		RealWorkDir: params.RealWorkDir,
+		TempDir:     params.TempDir,
+		RealTempDir: params.RealTempDir,
+		ReadOnly:    params.ReadOnly,
+		Filesystem:  params.Filesystem,
+	}) {
+		switch step.Kind {
+		case mountAllowRead:
+			out = append(out, "--ro-bind", step.Path, step.Path)
+		case mountWritable:
+			out = append(out, "--bind", step.Path, step.Path)
+		case mountDenyRead:
 			// bwrap --tmpfs only mounts over directories; mask a single
 			// sensitive file by covering it with an empty read-only file.
-			out = append(out, "--ro-bind", "/dev/null", denied)
-			continue
+			// The planner already dropped non-existent paths, but the
+			// file/dir decision needs a fresh stat.
+			info, err := os.Stat(step.Path)
+			if err != nil {
+				continue
+			}
+			if !info.IsDir() {
+				out = append(out, "--ro-bind", "/dev/null", step.Path)
+				continue
+			}
+			out = append(out, "--tmpfs", step.Path)
+		case mountDenyWrite:
+			out = append(out, "--ro-bind", step.Path, step.Path)
 		}
-		out = append(out, "--tmpfs", denied)
 	}
 	out = append(out,
 		"--dev", "/dev",
@@ -115,10 +153,10 @@ func buildBwrapArgs(workDir, realWorkDir, tempDir, realTempDir, targetDir string
 		"--unshare-pid",
 		"--die-with-parent",
 	)
-	if networkDisabled {
+	if params.NetworkDisabled {
 		out = append(out, "--unshare-net")
 	}
-	out = append(out, "--chdir", targetDir, "--", resolvedBin)
-	out = append(out, args...)
+	out = append(out, "--chdir", params.TargetDir, "--", params.ResolvedBin)
+	out = append(out, params.Args...)
 	return out
 }

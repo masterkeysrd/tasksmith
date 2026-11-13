@@ -288,6 +288,46 @@ func TestHostCredentialPathsSkipsSymlinkedCredentialIntoWorkspace(t *testing.T) 
 	}
 }
 
+func TestProtectedWorkspaceWritePaths(t *testing.T) {
+	xdgRoot := t.TempDir()
+	xdg.SetTestEnv(xdgRoot, "tasksmith-guard-protected-write-test")
+	t.Cleanup(xdg.ClearCache)
+
+	configDir, err := xdg.Home(xdg.VarTypeConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dataDir, err := xdg.Home(xdg.VarTypeData)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	workDir := t.TempDir()
+	got := ProtectedWorkspaceWritePaths(workDir)
+
+	want := []string{
+		filepath.Join(workDir, ".agents"),
+		filepath.Join(workDir, "WORKSPACE.md"),
+		filepath.Join(workDir, ".git", "hooks"),
+		filepath.Join(workDir, ".git", "config"),
+		configDir,
+		dataDir,
+	}
+	for _, name := range ProtectedWorkspaceWriteFiles {
+		want = append(want, filepath.Join(workDir, name))
+	}
+	for _, w := range want {
+		if !containsPath(got, w) {
+			t.Errorf("ProtectedWorkspaceWritePaths missing %q, got %v", w, got)
+		}
+	}
+	for _, p := range got {
+		if !filepath.IsAbs(p) {
+			t.Errorf("protected write path must be absolute: %q", p)
+		}
+	}
+}
+
 func containsPath(paths []string, want string) bool {
 	want = fsutils.ResolveDeepestExisting(want)
 	for _, p := range paths {
@@ -296,4 +336,63 @@ func containsPath(paths []string, want string) bool {
 		}
 	}
 	return false
+}
+
+func TestTasksmithConfigPathsSensitiveForWrites(t *testing.T) {
+	xdgRoot := t.TempDir()
+	xdg.SetTestEnv(xdgRoot, "tasksmith-guard-sandbox-cfg")
+	t.Cleanup(xdg.ClearCache)
+
+	configDir, err := xdg.Home(xdg.VarTypeConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dataDir, err := xdg.Home(xdg.VarTypeData)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	sandboxJSON := filepath.Join(configDir, "sandbox.json")
+	workspaces := filepath.Join(dataDir, "workspaces")
+	nested := filepath.Join(dataDir, "workspaces", "abc123", "permissions.json")
+
+	cfgPaths := TasksmithConfigPaths()
+	for _, want := range []string{sandboxJSON, workspaces} {
+		found := false
+		for _, p := range cfgPaths {
+			if filepath.Clean(p) == filepath.Clean(want) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("TasksmithConfigPaths = %v, want %q present", cfgPaths, want)
+		}
+	}
+
+	for _, p := range []string{sandboxJSON, workspaces, nested} {
+		if !IsSensitiveWritePath(p, "") {
+			t.Errorf("IsSensitiveWritePath(%q) = false, want true", p)
+		}
+		if IsSensitivePath(p, "") {
+			t.Errorf("IsSensitivePath(%q) = true, want false (reads must stay permitted)", p)
+		}
+	}
+
+	ordinary := filepath.Join(t.TempDir(), "main.go")
+	if IsSensitiveWritePath(ordinary, "") {
+		t.Errorf("IsSensitiveWritePath(%q) = true, want false for ordinary paths", ordinary)
+	}
+
+	for _, action := range []api.ActionType{api.ActionWrite, api.ActionDelete} {
+		if _, safety := EvaluatePathWithConfig(sandboxJSON, action, PathConfig{}); safety != api.SafetyUnsafe {
+			t.Errorf("EvaluatePathWithConfig(sandbox.json, %v) = %v, want SafetyUnsafe", action, safety)
+		}
+		if _, safety := EvaluatePathWithConfig(nested, action, PathConfig{}); safety != api.SafetyUnsafe {
+			t.Errorf("EvaluatePathWithConfig(workspaces nested, %v) = %v, want SafetyUnsafe", action, safety)
+		}
+	}
+	if _, safety := EvaluatePathWithConfig(sandboxJSON, api.ActionRead, PathConfig{}); safety == api.SafetyUnsafe {
+		t.Errorf("EvaluatePathWithConfig(sandbox.json, read) = SafetyUnsafe, want reads permitted")
+	}
 }

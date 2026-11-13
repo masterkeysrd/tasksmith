@@ -8,10 +8,56 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 )
+
+// FilesystemPolicy describes the canonical path lists a native OS sandbox
+// profile enforces beyond the sandbox work directory itself. All entries must
+// be absolute host paths; relative or blank entries are dropped during
+// normalization.
+type FilesystemPolicy struct {
+	// DeniedReadPaths lists host paths (typically credential directories)
+	// that child processes must not read even though the profile allows
+	// broad file reads.
+	DeniedReadPaths []string `json:"denied_read_paths,omitempty"`
+
+	// AllowReadPaths lists subpaths inside a DeniedReadPaths entry that
+	// should remain readable. A narrower AllowReadPaths entry re-opens a
+	// subtree masked by a broader DeniedReadPaths entry.
+	AllowReadPaths []string `json:"allow_read_paths,omitempty"`
+
+	// ExtraWritePaths lists additional writable directories outside WorkDir
+	// (such as a linked git worktree's shared .git directory) that child
+	// processes may write to.
+	ExtraWritePaths []string `json:"extra_write_paths,omitempty"`
+
+	// DeniedWritePaths lists paths inside WorkDir or ExtraWritePaths that
+	// must stay read-only at the kernel level (such as .agents,
+	// WORKSPACE.md, and .git/hooks), overriding the broad write allow.
+	DeniedWritePaths []string `json:"denied_write_paths,omitempty"`
+}
+
+// IsZero reports whether the policy carries no path restrictions.
+func (p *FilesystemPolicy) IsZero() bool {
+	return len(p.DeniedReadPaths) == 0 &&
+		len(p.AllowReadPaths) == 0 &&
+		len(p.ExtraWritePaths) == 0 &&
+		len(p.DeniedWritePaths) == 0
+}
+
+// Clone returns a deep copy of the policy so callers can extend a shared
+// baseline (e.g. layering user sandbox.json overrides onto the built-in
+// floor) without mutating the original lists.
+func (p FilesystemPolicy) Clone() FilesystemPolicy {
+	return FilesystemPolicy{
+		DeniedReadPaths:  slices.Clone(p.DeniedReadPaths),
+		AllowReadPaths:   slices.Clone(p.AllowReadPaths),
+		ExtraWritePaths:  slices.Clone(p.ExtraWritePaths),
+		DeniedWritePaths: slices.Clone(p.DeniedWritePaths),
+	}
+}
 
 // Config defines the configuration for instantiating a [Sandbox].
 type Config struct {
@@ -37,11 +83,11 @@ type Config struct {
 	// Network configures outbound network restrictions.
 	Network NetworkPolicy `json:"network,omitzero"`
 
-	// DeniedPaths lists additional absolute host paths (such as credential
-	// directories outside WorkDir) that native OS sandbox profiles must block
-	// child processes from reading. It has no effect in ModeLocal, where reads
-	// are already confined to WorkDir by the os.Root handle.
-	DeniedPaths []string `json:"denied_paths,omitempty"`
+	// Filesystem carries the structured read/write path lists native OS
+	// sandbox profiles enforce in addition to the WorkDir confinement. It has
+	// no effect in ModeLocal, where reads and writes are already confined to
+	// WorkDir by the os.Root handle.
+	Filesystem FilesystemPolicy `json:"filesystem,omitzero"`
 
 	// DefaultTimeout sets the fallback execution timeout for Proc.Exec when
 	// Command.Timeout is zero.
@@ -104,22 +150,25 @@ func (c *Config) Fingerprint() string {
 	for i, h := range c.Network.AllowedHosts {
 		allowed[i] = strings.ToLower(strings.TrimSpace(h))
 	}
-	sort.Strings(allowed)
+	slices.Sort(allowed)
 
 	blocked := make([]string, len(c.Network.BlockedHosts))
 	for i, h := range c.Network.BlockedHosts {
 		blocked[i] = strings.ToLower(strings.TrimSpace(h))
 	}
-	sort.Strings(blocked)
+	slices.Sort(blocked)
 
 	envCopy := make(map[string]string, len(c.Env))
 	maps.Copy(envCopy, c.Env)
 
-	denied := make([]string, len(c.DeniedPaths))
-	for i, p := range c.DeniedPaths {
-		denied[i] = filepath.Clean(strings.TrimSpace(p))
+	canonicalPaths := func(paths []string) []string {
+		out := make([]string, len(paths))
+		for i, p := range paths {
+			out[i] = filepath.Clean(strings.TrimSpace(p))
+		}
+		slices.Sort(out)
+		return out
 	}
-	sort.Strings(denied)
 
 	canonical := struct {
 		Mode           Mode              `json:"mode"`
@@ -127,14 +176,19 @@ func (c *Config) Fingerprint() string {
 		ReadOnly       bool              `json:"read_only"`
 		Env            map[string]string `json:"env,omitempty"`
 		Network        NetworkPolicy     `json:"network"`
-		DeniedPaths    []string          `json:"denied_paths,omitempty"`
+		Filesystem     FilesystemPolicy  `json:"filesystem"`
 		DefaultTimeout time.Duration     `json:"default_timeout,omitempty"`
 	}{
-		Mode:        mode,
-		WorkDir:     workDir,
-		ReadOnly:    c.ReadOnly,
-		Env:         envCopy,
-		DeniedPaths: denied,
+		Mode:     mode,
+		WorkDir:  workDir,
+		ReadOnly: c.ReadOnly,
+		Env:      envCopy,
+		Filesystem: FilesystemPolicy{
+			DeniedReadPaths:  canonicalPaths(c.Filesystem.DeniedReadPaths),
+			AllowReadPaths:   canonicalPaths(c.Filesystem.AllowReadPaths),
+			ExtraWritePaths:  canonicalPaths(c.Filesystem.ExtraWritePaths),
+			DeniedWritePaths: canonicalPaths(c.Filesystem.DeniedWritePaths),
+		},
 		Network: NetworkPolicy{
 			Disabled:      c.Network.Disabled,
 			AllowedHosts:  allowed,

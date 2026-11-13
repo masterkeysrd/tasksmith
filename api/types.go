@@ -483,6 +483,140 @@ func (m SandboxMode) IsValid() bool {
 	}
 }
 
+// SandboxNetworkMode identifies the subprocess network posture enforced on
+// child processes inside a native sandbox.
+type SandboxNetworkMode string
+
+const (
+	// SandboxNetworkOpen grants child processes direct network access.
+	SandboxNetworkOpen SandboxNetworkMode = "open"
+	// SandboxNetworkAllowlist routes child process traffic through the
+	// daemon's domain-allowlisting proxy.
+	SandboxNetworkAllowlist SandboxNetworkMode = "allowlist"
+	// SandboxNetworkDisabled removes child process networking entirely.
+	SandboxNetworkDisabled SandboxNetworkMode = "disabled"
+)
+
+func (m SandboxNetworkMode) String() string {
+	return string(m)
+}
+
+func (m SandboxNetworkMode) IsValid() bool {
+	switch m {
+	case SandboxNetworkOpen, SandboxNetworkAllowlist, SandboxNetworkDisabled:
+		return true
+	default:
+		return false
+	}
+}
+
+// SandboxFilesystemSettings carries user-configurable filesystem overrides in
+// sandbox.json. Paths may be absolute or start with "~"; project-scope entries
+// may additionally be relative to the workspace root.
+type SandboxFilesystemSettings struct {
+	AllowWrite []string `json:"allowWrite,omitempty"`
+	DenyWrite  []string `json:"denyWrite,omitempty"`
+	DenyRead   []string `json:"denyRead,omitempty"`
+	AllowRead  []string `json:"allowRead,omitempty"`
+}
+
+// Clone returns a deep copy of SandboxFilesystemSettings.
+func (s SandboxFilesystemSettings) Clone() SandboxFilesystemSettings {
+	return SandboxFilesystemSettings{
+		AllowWrite: slices.Clone(s.AllowWrite),
+		DenyWrite:  slices.Clone(s.DenyWrite),
+		DenyRead:   slices.Clone(s.DenyRead),
+		AllowRead:  slices.Clone(s.AllowRead),
+	}
+}
+
+// SandboxNetworkSettings carries user-configurable network overrides in
+// sandbox.json.
+type SandboxNetworkSettings struct {
+	Mode           SandboxNetworkMode `json:"mode,omitempty"`
+	AllowedDomains []string           `json:"allowedDomains,omitempty"`
+	DeniedDomains  []string           `json:"deniedDomains,omitempty"`
+}
+
+// Clone returns a deep copy of SandboxNetworkSettings.
+func (s SandboxNetworkSettings) Clone() SandboxNetworkSettings {
+	return SandboxNetworkSettings{
+		Mode:           s.Mode,
+		AllowedDomains: slices.Clone(s.AllowedDomains),
+		DeniedDomains:  slices.Clone(s.DeniedDomains),
+	}
+}
+
+func cloneBoolPtr(v *bool) *bool {
+	if v == nil {
+		return nil
+	}
+	c := *v
+	return &c
+}
+
+// SandboxSettings mirrors one scope's sandbox.json document. Boolean knobs are
+// pointers so an omitted key in project scope inherits from global instead of
+// overwriting it with false.
+type SandboxSettings struct {
+	Schema            int                       `json:"schema,omitempty"`
+	Mode              SandboxMode               `json:"mode,omitempty"`
+	FailIfUnavailable *bool                     `json:"failIfUnavailable,omitempty"`
+	AllowUnsandboxed  *bool                     `json:"allowUnsandboxed,omitempty"`
+	AutoAllowBash     *bool                     `json:"autoAllowBash,omitempty"`
+	ExcludedCommands  []string                  `json:"excludedCommands,omitempty"`
+	Filesystem        SandboxFilesystemSettings `json:"filesystem,omitzero"`
+	Network           SandboxNetworkSettings    `json:"network,omitzero"`
+}
+
+// Clone returns a deep copy of SandboxSettings.
+func (s SandboxSettings) Clone() SandboxSettings {
+	return SandboxSettings{
+		Schema:            s.Schema,
+		Mode:              s.Mode,
+		FailIfUnavailable: cloneBoolPtr(s.FailIfUnavailable),
+		AllowUnsandboxed:  cloneBoolPtr(s.AllowUnsandboxed),
+		AutoAllowBash:     cloneBoolPtr(s.AutoAllowBash),
+		ExcludedCommands:  slices.Clone(s.ExcludedCommands),
+		Filesystem:        s.Filesystem.Clone(),
+		Network:           s.Network.Clone(),
+	}
+}
+
+// SandboxAvailability reports the host kernel sandbox backend's health.
+type SandboxAvailability struct {
+	Available   bool   `json:"available"`
+	Backend     string `json:"backend,omitempty"` // "seatbelt", "bubblewrap", or ""
+	Error       string `json:"error,omitempty"`
+	Remediation string `json:"remediation,omitempty"`
+}
+
+// SandboxResolvedPaths exposes the effective canonical kernel path rules for
+// transparent inspection in clients.
+type SandboxResolvedPaths struct {
+	WorkDir    string   `json:"workDir,omitempty"`
+	AllowWrite []string `json:"allowWrite,omitempty"`
+	DenyWrite  []string `json:"denyWrite,omitempty"`
+	DenyRead   []string `json:"denyRead,omitempty"`
+	AllowRead  []string `json:"allowRead,omitempty"`
+}
+
+// SandboxResponse returns the stored sandbox settings per scope plus the
+// effective merge and host diagnostics.
+type SandboxResponse struct {
+	Global        SandboxSettings      `json:"global"`
+	Project       SandboxSettings      `json:"project"`
+	Effective     SandboxSettings      `json:"effective"`
+	Availability  SandboxAvailability  `json:"availability"`
+	ResolvedPaths SandboxResolvedPaths `json:"resolvedPaths"`
+}
+
+// UpdateSandboxRequest overwrites one scope's sandbox settings.
+type UpdateSandboxRequest struct {
+	Scope    PermissionScope `json:"scope"`
+	Settings SandboxSettings `json:"settings"`
+}
+
 // SessionConfig holds configurable runtime settings for a [Session].
 type SessionConfig struct {
 	Agent    string           `json:"agent,omitempty"`

@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"syscall"
@@ -90,6 +91,36 @@ func TestConfigValidateAndFingerprint(t *testing.T) {
 	}
 	if cfgA.Fingerprint() != cfgB.Fingerprint() {
 		t.Fatalf("expected identical fingerprints, got %s vs %s", cfgA.Fingerprint(), cfgB.Fingerprint())
+	}
+
+	cfgPathsA := Config{
+		Mode:    ModeLocal,
+		WorkDir: tmpDir,
+		Filesystem: FilesystemPolicy{
+			DeniedReadPaths:  []string{"/tmp/fake-home/u/.ssh", "/tmp/fake-home/u/.aws"},
+			DeniedWritePaths: []string{"/ws/.agents", "/ws/.git/hooks"},
+		},
+	}
+	cfgPathsB := Config{
+		Mode:    ModeLocal,
+		WorkDir: tmpDir,
+		Filesystem: FilesystemPolicy{
+			DeniedReadPaths:  []string{"/tmp/fake-home/u/.aws", "/tmp/fake-home/u/.ssh"},
+			DeniedWritePaths: []string{"/ws/.git/hooks", "/ws/.agents"},
+		},
+	}
+	cfgPathsDifferent := Config{
+		Mode:    ModeLocal,
+		WorkDir: tmpDir,
+		Filesystem: FilesystemPolicy{
+			DeniedReadPaths: []string{"/tmp/fake-home/u/.gnupg"},
+		},
+	}
+	if cfgPathsA.Fingerprint() != cfgPathsB.Fingerprint() {
+		t.Fatalf("filesystem policy order must not change fingerprint")
+	}
+	if cfgPathsA.Fingerprint() == cfgPathsDifferent.Fingerprint() {
+		t.Fatalf("different filesystem policies must produce different fingerprints")
 	}
 }
 
@@ -796,6 +827,48 @@ func TestSandboxSetEnv(t *testing.T) {
 	}
 }
 
+func TestSandboxFilesystemPolicyAccessors(t *testing.T) {
+	workDir := t.TempDir()
+	sbx, err := New(Config{
+		WorkDir: workDir,
+		Filesystem: FilesystemPolicy{
+			DeniedReadPaths: []string{"/tmp/fake-home/u/.ssh"},
+			ExtraWritePaths: []string{"/tmp/extra"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("New sandbox: %v", err)
+	}
+	defer func() { _ = sbx.Close() }()
+
+	got := sbx.Filesystem()
+	if len(got.DeniedReadPaths) != 1 || len(got.ExtraWritePaths) != 1 || len(got.DeniedWritePaths) != 0 {
+		t.Fatalf("Filesystem() did not reflect config: %+v", got)
+	}
+	got.DeniedReadPaths[0] = "mutated"
+	if again := sbx.Filesystem(); again.DeniedReadPaths[0] == "mutated" {
+		t.Fatalf("Filesystem() must return a defensive copy")
+	}
+
+	policy := FilesystemPolicy{
+		DeniedWritePaths: []string{filepath.Join(workDir, ".agents"), "  "},
+		AllowReadPaths:   []string{"/tmp/fake-home/u/.ssh/keys"},
+	}
+	sbx.SetFilesystemPolicy(policy)
+	policy.DeniedWritePaths[0] = "mutated"
+
+	updated := sbx.Filesystem()
+	if len(updated.DeniedWritePaths) != 1 || updated.DeniedWritePaths[0] == "mutated" {
+		t.Fatalf("SetFilesystemPolicy must clone and drop blank entries: %+v", updated)
+	}
+	if len(updated.DeniedReadPaths) != 0 || len(updated.ExtraWritePaths) != 0 {
+		t.Fatalf("SetFilesystemPolicy must replace the whole policy: %+v", updated)
+	}
+	if len(updated.AllowReadPaths) != 1 {
+		t.Fatalf("SetFilesystemPolicy lost AllowReadPaths: %+v", updated)
+	}
+}
+
 func TestSandboxSetReadOnly(t *testing.T) {
 	ctx := context.Background()
 	workDir := t.TempDir()
@@ -907,9 +980,11 @@ func TestModeNativeDeniesCredentialPaths(t *testing.T) {
 	}
 
 	sbx, err := New(Config{
-		Mode:        ModeNative,
-		WorkDir:     workDir,
-		DeniedPaths: []string{secretDir},
+		Mode:    ModeNative,
+		WorkDir: workDir,
+		Filesystem: FilesystemPolicy{
+			DeniedReadPaths: []string{secretDir},
+		},
 	})
 	if err != nil {
 		t.Fatalf("New ModeNative sandbox with denied paths: %v", err)
@@ -933,5 +1008,211 @@ func TestModeNativeDeniesCredentialPaths(t *testing.T) {
 	})
 	if err != nil || resVisible.ExitCode != 0 || string(resVisible.Stdout) != "workspace data" {
 		t.Fatalf("workspace read must stay allowed: err=%v exit=%d stdout=%q", err, resVisible.ExitCode, string(resVisible.Stdout))
+	}
+}
+
+// nativeGitEnv carries deterministic identity, config isolation, and signing
+// opt-out so kernel sandboxed git commands never depend on the host user's
+// configuration or GPG keychain.
+var nativeGitEnv = map[string]string{
+	"GIT_CONFIG_NOSYSTEM": "1",
+	"GIT_CONFIG_GLOBAL":   "/dev/null",
+	"GIT_TERMINAL_PROMPT": "0",
+	"GIT_CONFIG_COUNT":    "4",
+	"GIT_CONFIG_KEY_0":    "user.name",
+	"GIT_CONFIG_VALUE_0":  "TaskSmith Test",
+	"GIT_CONFIG_KEY_1":    "user.email",
+	"GIT_CONFIG_VALUE_1":  "test@tasksmith.local",
+	"GIT_CONFIG_KEY_2":    "commit.gpgsign",
+	"GIT_CONFIG_VALUE_2":  "false",
+	"GIT_CONFIG_KEY_3":    "tag.gpgsign",
+	"GIT_CONFIG_VALUE_3":  "false",
+}
+
+// nativeGitEnvSlice renders nativeGitEnv for direct exec.Command usage.
+var nativeGitEnvSlice = func() []string {
+	out := make([]string, 0, len(nativeGitEnv))
+	for k, v := range nativeGitEnv {
+		out = append(out, k+"="+v)
+	}
+	return out
+}()
+
+func runHostGit(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skipf("git not available: %v", err)
+	}
+	cmdArgs := append([]string{"-C", dir}, args...)
+	cmd := exec.Command("git", cmdArgs...)
+	cmd.Env = append(os.Environ(), nativeGitEnvSlice...)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("host git %v: %v: %s", args, err, out)
+	}
+}
+
+func TestModeNativeProtectedWritePathsAndExtraWrite(t *testing.T) {
+	if err := checkNativeAvailable(); err != nil {
+		t.Skipf("skipping live ModeNative test: %v", err)
+	}
+
+	ctx := context.Background()
+	workDir := t.TempDir()
+	extraDir := t.TempDir()
+
+	if err := os.MkdirAll(filepath.Join(workDir, ".agents", "rules"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workDir, "WORKSPACE.md"), []byte("# Workspace\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(workDir, ".git", "hooks"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	sbx, err := New(Config{
+		Mode:    ModeNative,
+		WorkDir: workDir,
+		Filesystem: FilesystemPolicy{
+			ExtraWritePaths:  []string{extraDir},
+			DeniedWritePaths: []string{filepath.Join(workDir, ".agents"), filepath.Join(workDir, "WORKSPACE.md"), filepath.Join(workDir, ".git", "hooks")},
+		},
+	})
+	if err != nil {
+		t.Fatalf("New ModeNative sandbox with protected paths: %v", err)
+	}
+	defer func() { _ = sbx.Close() }()
+
+	// Normal workspace writes stay allowed.
+	resNormal, err := sbx.Proc().Exec(ctx, Command{
+		Name: "sh",
+		Args: []string{"-c", "echo ok > normal.txt"},
+	})
+	if err != nil || resNormal.ExitCode != 0 {
+		t.Fatalf("normal workspace write failed: err=%v exit=%d stderr=%s", err, resNormal.ExitCode, resNormal.Stderr)
+	}
+
+	// Writes into ExtraWritePaths outside WorkDir must succeed.
+	extraTarget := filepath.Join(extraDir, "artifact.txt")
+	resExtra, err := sbx.Proc().Exec(ctx, Command{
+		Name: "sh",
+		Args: []string{"-c", "echo artifact > " + extraTarget},
+	})
+	if err != nil || resExtra.ExitCode != 0 {
+		t.Fatalf("extra write path write failed: err=%v exit=%d stderr=%s", err, resExtra.ExitCode, resExtra.Stderr)
+	}
+	if data, readErr := os.ReadFile(extraTarget); readErr != nil || strings.TrimSpace(string(data)) != "artifact" {
+		t.Fatalf("extra write path content missing: err=%v data=%q", readErr, data)
+	}
+
+	// Protected paths inside WorkDir must stay read-only at the kernel level.
+	for name, script := range map[string]string{
+		".agents":      "echo pwned > .agents/rules/evil.rule.md",
+		"WORKSPACE.md": "echo pwned > WORKSPACE.md",
+		".git/hooks":   "echo pwned > .git/hooks/pre-commit",
+	} {
+		res, execErr := sbx.Proc().Exec(ctx, Command{
+			Name: "sh",
+			Args: []string{"-c", script},
+		})
+		if execErr != nil {
+			t.Fatalf("Exec protected write %s: %v", name, execErr)
+		}
+		if res.ExitCode == 0 {
+			t.Fatalf("expected kernel-protected %s write to be blocked, stderr=%s", name, res.Stderr)
+		}
+	}
+
+	// Live policy update: a newly granted ExtraWritePath takes effect on the
+	// very next command without recreating the sandbox.
+	secondExtra := t.TempDir()
+	sbx.SetFilesystemPolicy(FilesystemPolicy{
+		ExtraWritePaths:  []string{extraDir, secondExtra},
+		DeniedWritePaths: []string{filepath.Join(workDir, ".agents"), filepath.Join(workDir, "WORKSPACE.md"), filepath.Join(workDir, ".git", "hooks")},
+	})
+	secondTarget := filepath.Join(secondExtra, "live.txt")
+	resLive, err := sbx.Proc().Exec(ctx, Command{
+		Name: "sh",
+		Args: []string{"-c", "echo live > " + secondTarget},
+	})
+	if err != nil || resLive.ExitCode != 0 {
+		t.Fatalf("SetFilesystemPolicy must widen writes for subsequent commands: err=%v exit=%d stderr=%s", err, resLive.ExitCode, resLive.Stderr)
+	}
+}
+
+func TestModeNativeLinkedGitWorktreeCommit(t *testing.T) {
+	if err := checkNativeAvailable(); err != nil {
+		t.Skipf("skipping live ModeNative test: %v", err)
+	}
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skipf("git not available: %v", err)
+	}
+
+	ctx := context.Background()
+	repoDir := t.TempDir()
+	runHostGit(t, repoDir, "init", "-b", "main")
+	if err := os.WriteFile(filepath.Join(repoDir, "README.md"), []byte("# Repo\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runHostGit(t, repoDir, "add", "README.md")
+	runHostGit(t, repoDir, "commit", "-m", "initial")
+
+	wtDir := filepath.Join(t.TempDir(), "wt-agent")
+	runHostGit(t, repoDir, "worktree", "add", "--detach", wtDir, "HEAD")
+
+	commonGitDir := filepath.Join(repoDir, ".git")
+	sbx, err := New(Config{
+		Mode:    ModeNative,
+		WorkDir: wtDir,
+		Env:     nativeGitEnv,
+		Filesystem: FilesystemPolicy{
+			ExtraWritePaths:  []string{commonGitDir},
+			DeniedWritePaths: []string{filepath.Join(commonGitDir, "hooks"), filepath.Join(commonGitDir, "config")},
+		},
+	})
+	if err != nil {
+		t.Fatalf("New ModeNative worktree sandbox: %v", err)
+	}
+	defer func() { _ = sbx.Close() }()
+
+	if err := os.WriteFile(filepath.Join(wtDir, "feature.txt"), []byte("worktree feature\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	resAdd, err := sbx.Proc().Exec(ctx, Command{
+		Name: "git",
+		Args: []string{"add", "feature.txt"},
+	})
+	if err != nil || resAdd.ExitCode != 0 {
+		t.Fatalf("git add inside linked worktree failed: err=%v exit=%d stderr=%s", err, resAdd.ExitCode, resAdd.Stderr)
+	}
+
+	resCommit, err := sbx.Proc().Exec(ctx, Command{
+		Name: "git",
+		Args: []string{"commit", "-m", "sandboxed worktree commit"},
+	})
+	if err != nil || resCommit.ExitCode != 0 {
+		t.Fatalf("git commit inside linked worktree failed: err=%v exit=%d stderr=%s", err, resCommit.ExitCode, resCommit.Stderr)
+	}
+
+	resLog, err := sbx.Proc().Exec(ctx, Command{
+		Name: "git",
+		Args: []string{"log", "--oneline"},
+	})
+	if err != nil || resLog.ExitCode != 0 || !strings.Contains(string(resLog.Stdout), "sandboxed worktree commit") {
+		t.Fatalf("committed worktree history missing: err=%v exit=%d stdout=%s", err, resLog.ExitCode, resLog.Stdout)
+	}
+
+	// The shared repository config must stay tamper-proof even though the
+	// common git dir is writable.
+	resConfig, err := sbx.Proc().Exec(ctx, Command{
+		Name: "sh",
+		Args: []string{"-c", "echo pwned > " + filepath.Join(commonGitDir, "config")},
+	})
+	if err != nil {
+		t.Fatalf("Exec worktree config write: %v", err)
+	}
+	if resConfig.ExitCode == 0 {
+		t.Fatalf("expected <main-repo>/.git/config write to be blocked, stderr=%s", resConfig.Stderr)
 	}
 }

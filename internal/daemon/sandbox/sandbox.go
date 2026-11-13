@@ -13,8 +13,6 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
-
-	"github.com/masterkeysrd/tasksmith/internal/core/fsutils"
 )
 
 // session is the concrete implementation of the Sandbox interface.
@@ -25,7 +23,7 @@ type session struct {
 	realWorkDir string
 	tempDir     string
 	realTempDir string
-	deniedPaths []string
+	fsPolicy    atomic.Pointer[FilesystemPolicy]
 	envMu       sync.RWMutex
 	cfg         Config
 	readOnly    atomic.Bool
@@ -99,16 +97,6 @@ func New(cfg Config) (Sandbox, error) {
 	cfg.Env = envCopy
 	cfg.Mode = mode
 	cfg.WorkDir = cleanWorkDir
-	deniedPaths := make([]string, 0, len(cfg.DeniedPaths))
-	for _, p := range cfg.DeniedPaths {
-		if p = strings.TrimSpace(p); p == "" {
-			continue
-		}
-		// Kernel profiles match on resolved paths, so a denied path behind a
-		// symlink (e.g. /var -> /private/var on macOS) must be expanded even
-		// when the leaf does not exist yet.
-		deniedPaths = append(deniedPaths, fsutils.ResolveDeepestExisting(p))
-	}
 
 	s := &session{
 		id:          id,
@@ -118,11 +106,11 @@ func New(cfg Config) (Sandbox, error) {
 		tempDir:     tempDir,
 		realTempDir: realTempDir,
 		cfg:         cfg,
-		deniedPaths: deniedPaths,
 		root:        root,
 		watchers:    make(map[*sandboxWatcher]struct{}),
 	}
 	s.readOnly.Store(cfg.ReadOnly)
+	s.fsPolicy.Store(normalizeFilesystemPolicy(cfg.Filesystem))
 
 	s.fsCap = newSandboxFS(s)
 	s.procCap = newSandboxProc(s)
@@ -208,6 +196,67 @@ func (s *session) SetEnv(env map[string]string) {
 	s.envMu.Lock()
 	s.cfg.Env = cloned
 	s.envMu.Unlock()
+}
+
+// normalizeFilesystemPolicy defensively clones policy, dropping blank entries
+// and cleaning every path. Logical paths are preserved deliberately: resolving
+// a leaf symlink here (e.g. a repository-planted .git/hooks -> ../.githooks)
+// would anchor rules only on the target and leave the symlink entry itself
+// writable, so a sandboxed process could unlink and replace it. Profile
+// builders emit rules for both the logical entry and its deepest-existing
+// resolved variant via withCanonicalVariants, so confinement still anchors on
+// the kernel's canonical vnode path.
+func normalizeFilesystemPolicy(policy FilesystemPolicy) *FilesystemPolicy {
+	normalizeList := func(paths []string) []string {
+		if len(paths) == 0 {
+			return nil
+		}
+		out := make([]string, 0, len(paths))
+		for _, p := range paths {
+			if p = strings.TrimSpace(p); p == "" {
+				continue
+			}
+			out = append(out, filepath.Clean(p))
+		}
+		if len(out) == 0 {
+			return nil
+		}
+		return out
+	}
+	return &FilesystemPolicy{
+		DeniedReadPaths:  normalizeList(policy.DeniedReadPaths),
+		AllowReadPaths:   normalizeList(policy.AllowReadPaths),
+		ExtraWritePaths:  normalizeList(policy.ExtraWritePaths),
+		DeniedWritePaths: normalizeList(policy.DeniedWritePaths),
+	}
+}
+
+// Filesystem returns a defensive copy of the sandbox's current native
+// filesystem path policy.
+func (s *session) Filesystem() FilesystemPolicy {
+	p := s.fsPolicy.Load()
+	if p == nil {
+		return FilesystemPolicy{}
+	}
+	cloneList := func(paths []string) []string {
+		if len(paths) == 0 {
+			return nil
+		}
+		return append([]string(nil), paths...)
+	}
+	return FilesystemPolicy{
+		DeniedReadPaths:  cloneList(p.DeniedReadPaths),
+		AllowReadPaths:   cloneList(p.AllowReadPaths),
+		ExtraWritePaths:  cloneList(p.ExtraWritePaths),
+		DeniedWritePaths: cloneList(p.DeniedWritePaths),
+	}
+}
+
+// SetFilesystemPolicy atomically replaces the native filesystem path policy
+// for future child processes. Already-running children keep the profile they
+// started with; subsequent executions observe the new rules immediately.
+func (s *session) SetFilesystemPolicy(policy FilesystemPolicy) {
+	s.fsPolicy.Store(normalizeFilesystemPolicy(policy))
 }
 
 func (s *session) FS() FS {

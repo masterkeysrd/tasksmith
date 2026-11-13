@@ -108,6 +108,17 @@ type Sandbox interface {
 	// sandbox.
 	SetEnv(env map[string]string)
 
+	// Filesystem returns a defensive copy of the sandbox's current native
+	// filesystem path policy.
+	Filesystem() FilesystemPolicy
+
+	// SetFilesystemPolicy atomically replaces the native filesystem path
+	// policy for future child processes, defensively cloning policy so
+	// external mutations cannot affect the sandbox. Already-running child
+	// processes keep the kernel profile they started with. It has no effect
+	// in ModeLocal.
+	SetFilesystemPolicy(policy FilesystemPolicy)
+
 	// FS returns the confined filesystem capability rooted at WorkDir.
 	FS() FS
 

@@ -184,6 +184,51 @@ When evaluating effective permissions for a session, TaskSmith merges global and
 
 ---
 
+## Isolation Settings (`sandbox.json`)
+
+While `permissions.json` decides *whether* a tool call needs your approval, `sandbox.json` decides *what the operating-system isolation itself permits* once a command runs. It lives in the same two scopes:
+
+- **Global Configuration**: `~/.config/tasksmith/sandbox.json` (`$XDG_CONFIG_HOME/tasksmith/sandbox.json`)
+- **Project Configuration**: `~/.local/share/tasksmith/workspaces/<hash>/sandbox.json` (`$XDG_DATA_HOME/tasksmith/workspaces/<hash>/sandbox.json`) — never committed to git.
+
+```json
+{
+  "schema": 1,
+  "mode": "native",
+  "failIfUnavailable": false,
+  "allowUnsandboxed": true,
+  "autoAllowBash": false,
+  "excludedCommands": ["git commit *"],
+  "filesystem": {
+    "allowWrite": ["~/.kube"],
+    "denyWrite": ["./vendor"],
+    "denyRead": ["~/Secrets"],
+    "allowRead": ["~/Secrets/pub"]
+  },
+  "network": {
+    "mode": "allowlist",
+    "allowedDomains": ["*.example.com"],
+    "deniedDomains": []
+  }
+}
+```
+
+| Key | Merge Semantics | Description |
+| :--- | :--- | :--- |
+| `mode` | **Project overrides Global** | Default isolation backend for new sessions (`native` or `local`). A session flag or explicit request still wins over both. |
+| `failIfUnavailable` | **Monotonic lock (OR)** | When any scope enables it, sessions requiring `native` fail loudly on hosts without kernel sandboxing instead of quietly falling back to `local`. |
+| `allowUnsandboxed` | **Monotonic lock (AND)** | Gates per-command unsandboxed execution. Any scope setting it `false` locks the hatch off; restricted (untrusted) workspaces always force it `false`. |
+| `autoAllowBash` | **Project overrides Global** | Auto-approves safe, sandboxed shell plans in `default`/`accept_edits` modes. |
+| `excludedCommands` | **Union** | Command patterns exempt from the kernel sandbox. Only honored in trusted workspaces. |
+| `filesystem.*` | **Union with fixed precedence** | Extra writable directories (`allowWrite`), additional read-only paths (`denyWrite`), read masks (`denyRead`), and narrower re-opens inside a mask (`allowRead`). Project-relative paths resolve against the workspace root; `~` expands to your home. Built-in protected paths (agent resources, Git hooks/config, TaskSmith's own stores) can never be made writable, and TaskSmith's secret stores can never be re-opened. |
+| `network.*` | **Union** | Stored subprocess network posture (`open`, `allowlist`, or `disabled`) with domain allow/deny lists (exact hosts or `*.domain` wildcards). Kernel-level domain filtering is enforced in a later sandbox rollout; today `native` sandboxes keep loopback networking. |
+
+Both files are written atomically with owner-only (`0600`) permissions, and TaskSmith refuses to let tools or sandboxed commands modify them — a sandboxed process can never loosen its own next invocation. Edits apply to running sessions on the next workspace reload (`/workspace reload`). Repository-committed manifests (`WORKSPACE.md`, `.agents/`) may only narrow these settings, never widen them.
+
+See [Sandbox Architecture](../architecture/sandbox.md) for how the merged posture is enforced by the kernel.
+
+---
+
 ## Workspace Declarative Policies (`WORKSPACE.md`)
 
 In addition to interactive rules, team-wide security baselines can be committed directly to version control in `WORKSPACE.md`. Policies are declared under `spec.policies.tools` and are enforced as a monotonic `allow < ask < deny` ceiling that is evaluated before permission modes and allow rules:

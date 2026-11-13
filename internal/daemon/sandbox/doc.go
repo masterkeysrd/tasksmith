@@ -42,6 +42,11 @@
 //   - Read-Only Enforcement: When [Config.ReadOnly] is enabled, mutating filesystem
 //     calls return [ErrReadOnly] immediately, and native OS profiles disallow writes
 //     to the working directory.
+//   - Protected Write Paths: Callers may supply a [FilesystemPolicy] whose
+//     DeniedWritePaths stay read-only at the kernel level even inside the
+//     writable [Config.WorkDir] or [FilesystemPolicy.ExtraWritePaths];
+//     [Sandbox.SetFilesystemPolicy] swaps the policy live so subsequent child
+//     processes observe updated rules without recreating the sandbox.
 //   - Process Group Lifecycle: Every spawned process runs in its own process group.
 //     Killing a process or closing the sandbox terminates the entire process tree,
 //     preventing orphan background processes.

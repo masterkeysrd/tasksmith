@@ -24,6 +24,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/daemon/models"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/permissions"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/sandbox"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/sandboxcfg"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/session"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/std"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/timeline"
@@ -77,6 +78,7 @@ type workspaceRuntime struct {
 	pool         gateway.Pool
 	metrics      metrics.Service
 	perms        permissions.Manager
+	sandboxCfg   sandboxcfg.Manager
 	sessionStore session.Store
 	sessions     *memdb.DB[*session.Session]
 	bgCtx        context.Context
@@ -100,6 +102,7 @@ func (r *workspaceRuntime) Workspace() *workspace.Workspace   { return r.ws }
 func (r *workspaceRuntime) Gateway() gateway.Gateway          { return r.gw.get() }
 func (r *workspaceRuntime) Catalog() *models.Catalog          { return r.catalog.get() }
 func (r *workspaceRuntime) Permissions() permissions.Manager  { return r.perms }
+func (r *workspaceRuntime) SandboxConfig() sandboxcfg.Manager { return r.sandboxCfg }
 func (r *workspaceRuntime) SessionRuntime() *workspaceRuntime { return r.sessionOwner }
 
 // MCPRuntime returns the MCP runtime connected to this workspace's root, or nil
@@ -188,6 +191,13 @@ func (r *workspaceRuntime) Reload(ctx context.Context) error {
 		r.sessionOwner.catalog.set(sessionCatalog)
 	}
 	r.reloadMCP(ctx, sessionWorkspace)
+	owner := r.sessionOwner
+	if owner == nil {
+		owner = r
+	}
+	if owner.sandboxCfg != nil {
+		owner.sandboxCfg.SetRestricted(sessionWorkspace.IsRestricted())
+	}
 	r.RefreshSessions()
 	r.fileIndexMu.Lock()
 	if r.fileIndex != nil {
@@ -261,13 +271,31 @@ func (r *workspaceRuntime) getFileIndex() (*std.FileIndex, error) {
 	}
 
 	// The indexer executes git/rg inside the repository, so it gets the same
-	// kernel backend and credential masking as sessions.
+	// kernel backend, credential masking, and protected-path rules as sessions,
+	// plus the user's configured read posture so rg/git indexing never reads
+	// what a session is forbidden to read. Write lists are skipped: the indexer
+	// runs read-only.
+	fsPolicy := sandbox.FilesystemPolicy{
+		DeniedReadPaths:  guard.HostCredentialPaths(r.dir),
+		DeniedWritePaths: guard.ProtectedWorkspaceWritePaths(r.dir),
+	}
+	if cfgMgr := r.sandboxCfg; cfgMgr != nil {
+		if eff, err := cfgMgr.EffectiveFor(r.dir); err == nil {
+			fsPolicy.DeniedReadPaths = append(fsPolicy.DeniedReadPaths, eff.DeniedReadPaths...)
+			fsPolicy.AllowReadPaths = eff.AllowReadPaths
+		} else {
+			r.logger.Warn("workspace: effective sandbox settings for indexing failed",
+				log.String("work_dir", r.dir),
+				log.String("error", err.Error()),
+			)
+		}
+	}
 	sbx, err := sandbox.New(sandbox.Config{
-		WorkDir:     r.dir,
-		Mode:        sandbox.DefaultMode(),
-		ReadOnly:    true,
-		DeniedPaths: guard.HostCredentialPaths(r.dir),
-		Network:     sandbox.NetworkPolicy{Disabled: true},
+		WorkDir:    r.dir,
+		Mode:       sandbox.DefaultMode(),
+		ReadOnly:   true,
+		Filesystem: fsPolicy,
+		Network:    sandbox.NetworkPolicy{Disabled: true},
 	})
 	if err != nil {
 		return nil, fmt.Errorf("daemon: create workspace sandbox for indexing: %w", err)
@@ -343,12 +371,14 @@ func (d *Daemon) workspace(ctx context.Context, dir string) (*workspaceRuntime, 
 
 	var db *sql.DB
 	var permMgr permissions.Manager
+	var sandboxMgr sandboxcfg.Manager
 	owner := &workspaceRuntime{catalog: &catalogSlot{}, gw: &gatewaySlot{}}
 	reloadMu := &sync.RWMutex{}
 	for _, existing := range d.workspaces {
 		if existing.ws.RootDir() == rootDir {
 			db = existing.db
 			permMgr = existing.perms
+			sandboxMgr = existing.sessionOwner.sandboxCfg
 			owner = existing.sessionOwner
 			reloadMu = existing.reloadMu
 			break
@@ -400,6 +430,16 @@ func (d *Daemon) workspace(ctx context.Context, dir string) (*workspaceRuntime, 
 			return nil, fmt.Errorf("daemon: initialize permissions manager for %q: %w", rootDir, err)
 		}
 
+		sandboxMgr, err = sandboxcfg.New(sandboxcfg.Config{
+			WorkDir:    rootDir,
+			Restricted: ws.IsRestricted(),
+		})
+		if err != nil {
+			_ = db.Close()
+			d.wsMu.Unlock()
+			return nil, fmt.Errorf("daemon: initialize sandbox settings manager for %q: %w", rootDir, err)
+		}
+
 		sessionStore, err := session.NewStore(ctx, db)
 		if err != nil {
 			_ = db.Close()
@@ -416,6 +456,7 @@ func (d *Daemon) workspace(ctx context.Context, dir string) (*workspaceRuntime, 
 		owner.bgCtx = bgCtx
 		owner.bgCancel = bgCancel
 		owner.perms = permMgr
+		owner.sandboxCfg = sandboxMgr
 		owner.reloadMu = reloadMu
 		owner.publisher = d.broker
 		owner.logger = d.logger
@@ -470,6 +511,7 @@ func (d *Daemon) workspace(ctx context.Context, dir string) (*workspaceRuntime, 
 			pool:         d.cfg.GatewayPool,
 			metrics:      d.usage,
 			perms:        permMgr,
+			sandboxCfg:   sandboxMgr,
 			publisher:    d.broker,
 			logger:       d.logger,
 			db:           db,
@@ -483,6 +525,7 @@ func (d *Daemon) workspace(ctx context.Context, dir string) (*workspaceRuntime, 
 		rt.pool = d.cfg.GatewayPool
 		rt.metrics = d.usage
 		rt.perms = permMgr
+		rt.sandboxCfg = sandboxMgr
 		rt.sessionStore = owner.sessionStore
 		rt.sessions = owner.sessions
 		rt.bgCtx = owner.bgCtx
