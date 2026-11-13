@@ -15,9 +15,9 @@ TaskSmith includes built-in drivers and presets for the following providers:
 | **OpenAI** | `openai` | `completion`, `decision`, `embedding` | Frontier reasoning (`gpt-6.1-sol`, `gpt-6-astra`), Responses API tools, embeddings | [OpenAI Guide](./providers/openai.md) |
 | **Anthropic** | `anthropic` | `completion`, `decision` (fallback) | Extended thinking, deep reasoning (`claude-sonnet-5-5`, `claude-opus-5-5`), prompt caching | [Anthropic Guide](./providers/anthropic.md) |
 | **Ollama** | `ollama` | `completion`, `decision`, `embedding` | 100% offline local inference (`qwen3.8`, `nimble-v3`, `nomic-embed-text`), zero data egress | [Ollama Guide](./providers/ollama.md) |
-| **Google GenAI** | `google-genai`, `genai`, `gemini` | `completion`, `embedding` | Massive 1M+ context window (`gemini-4-carbon`, `gemini-4-argon`), multimodal inputs | [Google GenAI Guide](./providers/google-genai.md) |
+| **Google GenAI** | `google-genai`, `genai`, `gemini` | `completion`, `embedding` | Massive 1M+ context window (`gemini-4-hydrogen`, `gemini-4-carbon`), multimodal inputs | [Google GenAI Guide](./providers/google-genai.md) |
 | **TypeSafe** | `typesafe` | `decision` | Ultra-fast native System 1 decisions (`jev-latest`), sub-50ms deterministic classifications | [TypeSafe Guide](./providers/typesafe.md) |
-| **Antigravity** | `antigravity` | `completion` | Enterprise model gateway with managed thinking effort tiers (`gemini-4-carbon`, `gemini-3.8-flash`) | [Antigravity Guide](./providers/antigravity.md) |
+| **Antigravity** | `antigravity` | `completion` | Enterprise model gateway with managed thinking effort tiers (`gemini-4-hydrogen`, `gemini-3.8-flash`) | [Antigravity Guide](./providers/antigravity.md) |
 
 ---
 

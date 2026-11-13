@@ -7,9 +7,9 @@ The **Antigravity** provider connects TaskSmith to the Antigravity developer pla
 ## 1. Overview & Capabilities
 
 Designed for enterprise environments and Google internal developer workflows, the Antigravity provider provides authenticated model access with managed thinking effort:
-- **Completion (`completion` — System 2)**: Conversational reasoning, software engineering workflows, and tool execution using `gemini-4-carbon`, `gemini-4-argon`, and `gemini-3.8-flash`.
+- **Completion (`completion` — System 2)**: Conversational reasoning, software engineering workflows, and tool execution using `gemini-4-hydrogen`, `gemini-4-carbon`, `gemini-4-argon`, and `gemini-3.8-flash`.
 - **Decision (`decision` — System 1)**: Evaluates structured decisions via TaskSmith's completion fallback adapter.
-- **Managed Reasoning & Effort**: Integrated support for low, medium, and high thinking effort tiers.
+- **Managed Reasoning & Effort**: Integrated support for low, medium, and high thinking effort tiers, plus `xhigh` on `gemini-4-hydrogen`.
 - **Sticky Session Prompt Caching**: Automatically pins `request.session_id` and `user_prompt_id` on conversational and compaction turns so sequential requests route to the same backend replica and hit its implicit KV prefix cache.
 
 ---
@@ -60,11 +60,26 @@ spec:
   type: antigravity
   endpoint: https://daily-cloudcode-pa.googleapis.com
   defaultModels:
-    completion: gemini-4-carbon
+    completion: gemini-4-hydrogen
   auth:
     type: oauth2
     env: ANTIGRAVITY_TOKEN
   models:
+    - id: gemini-4-hydrogen
+      name: gemini-4-hydrogen
+      label: Gemini 4 Hydrogen
+      limits:
+        context: 1048576
+        output: 65536
+      capabilities:
+        completion: true
+        tools: true
+        temperature: true
+        thinking:
+          - type: effort
+            default: high
+            isDefault: true
+            allowedEfforts: [low, medium, high, xhigh]
     - id: gemini-4-carbon
       name: gemini-4-carbon
       label: Gemini 4 Carbon

@@ -6,11 +6,17 @@ spec:
   type: google-genai
   endpoint: https://generativelanguage.googleapis.com/v1beta
   defaultModels:
-    completion: gemini-4-carbon
+    completion: gemini-4-hydrogen
   auth:
     type: env
     env: GOOGLE_API_KEY
   models:
+    - id: gemini-4-hydrogen
+      name: gemini-4-hydrogen
+      label: Gemini 4 Hydrogen
+      limits:
+        context: 1048576
+        output: 65536
     - id: gemini-4-carbon
       name: gemini-4-carbon
       label: Gemini 4 Carbon

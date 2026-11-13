@@ -7,7 +7,7 @@ The **Google GenAI** provider connects TaskSmith to Google's Gemini family of mo
 ## 1. Overview & Capabilities
 
 Google GenAI models offer 1M+ token context windows, native multimodal inputs, and high-speed vector embeddings:
-- **Completion (`completion` — System 2)**: Massive context ingestion, conversational reasoning, and tool execution using `gemini-4-carbon`, `gemini-4-argon`, and `gemini-3.8-flash`.
+- **Completion (`completion` — System 2)**: Massive context ingestion, conversational reasoning, and tool execution using `gemini-4-hydrogen`, `gemini-4-carbon`, `gemini-4-argon`, and `gemini-3.8-flash`.
 - **Decision (`decision` — System 1)**: Evaluates structured decision prompts via TaskSmith's completion fallback adapter.
 - **Embedding (`embedding` — System 3)**: Fast semantic vector generation using `text-embedding-004` (768 dimensions).
 - **Type Aliases**: TaskSmith accepts `type: google-genai`, `type: genai`, and `type: gemini` as equivalent aliases in manifests.
@@ -37,12 +37,30 @@ spec:
   type: google-genai
   endpoint: https://generativelanguage.googleapis.com/v1beta
   defaultModels:
-    completion: gemini-4-carbon
+    completion: gemini-4-hydrogen
     embedding: text-embedding-004
   auth:
     type: env
     env: GOOGLE_API_KEY
   models:
+    - id: gemini-4-hydrogen
+      name: gemini-4-hydrogen
+      label: Gemini 4 Hydrogen
+      limits:
+        context: 1048576
+        output: 65536
+      capabilities:
+        completion: true
+        tools: true
+        attachment: true
+        thinking:
+          - type: effort
+            default: high
+            isDefault: true
+            allowedEfforts: [low, medium, high, xhigh]
+        modalities:
+          input: [text, image, audio, video]
+          output: [text]
     - id: gemini-4-carbon
       name: gemini-4-carbon
       label: Gemini 4 Carbon

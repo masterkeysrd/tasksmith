@@ -41,17 +41,17 @@ var OnboardingWizard = trail.FC("OnboardingWizard", func(props OnboardingWizardP
 	var content trail.Node
 	switch step {
 	case store.StepTrust:
-		content = renderTrustStep(props, state, scheme)
+		content = renderTrustStep(props, state)
 	case store.StepProviderSrc:
-		content = renderProviderSrcStep(props, state, scheme)
+		content = renderProviderSrcStep(props)
 	case store.StepProviderPick:
-		content = renderProviderPickStep(props, state, scheme)
+		content = renderProviderPickStep(props, state)
 	case store.StepCredentials:
-		content = renderCredentialsStep(props, state, scheme)
+		content = renderCredentialsStep(props, state)
 	case store.StepMode:
-		content = renderModeStep(props, state, scheme)
+		content = renderModeStep(props)
 	case store.StepTools:
-		content = renderToolsStep(props, state, scheme)
+		content = renderToolsStep(props, state)
 	case store.StepReview:
 		content = renderReviewStep(props, state, scheme)
 	default:
@@ -143,7 +143,7 @@ func renderWizardHeader(wsPath string, step store.OnboardingStep, scheme *theme.
 	)
 }
 
-func renderTrustStep(props OnboardingWizardProps, state store.OnboardingState, scheme *theme.Scheme) trail.Node {
+func renderTrustStep(props OnboardingWizardProps, state store.OnboardingState) trail.Node {
 	return TrustPrompt(TrustPromptProps{
 		Status: toTrustStatus(state.Status),
 		OnSelect: func(decision TrustDecision) {
@@ -188,7 +188,7 @@ func nextStepAfterTrust(state store.OnboardingState) {
 	}
 }
 
-func renderProviderSrcStep(props OnboardingWizardProps, state store.OnboardingState, scheme *theme.Scheme) trail.Node {
+func renderProviderSrcStep(props OnboardingWizardProps) trail.Node {
 	options := []uicomponents.Option{
 		{
 			Value:       "global",
@@ -237,14 +237,14 @@ func renderProviderSrcStep(props OnboardingWizardProps, state store.OnboardingSt
 	})
 }
 
-func renderProviderPickStep(props OnboardingWizardProps, state store.OnboardingState, scheme *theme.Scheme) trail.Node {
+func renderProviderPickStep(props OnboardingWizardProps, state store.OnboardingState) trail.Node {
 	presetList := []struct {
 		name string
 		desc string
 	}{
 		{"anthropic", "claude-sonnet-5-5, opus-5-5, haiku-5-5"},
 		{"openai", "gpt-6.1-sol, gpt-6-luna"},
-		{"google-genai", "gemini-4-carbon, 4-argon"},
+		{"google-genai", "hydrogen, carbon, argon"},
 		{"antigravity", "gemini via Cloud Code"},
 		{"ollama", "local models (http://localhost:11434)"},
 		{"typesafe", "jev-latest"},
@@ -320,7 +320,7 @@ func renderProviderPickStep(props OnboardingWizardProps, state store.OnboardingS
 	})
 }
 
-func renderCredentialsStep(props OnboardingWizardProps, state store.OnboardingState, scheme *theme.Scheme) trail.Node {
+func renderCredentialsStep(props OnboardingWizardProps, state store.OnboardingState) trail.Node {
 	prov := state.SelectedProvider
 	if prov == "" && len(state.Status.MissingCredentials) > 0 {
 		prov = state.Status.MissingCredentials[0]
@@ -328,7 +328,7 @@ func renderCredentialsStep(props OnboardingWizardProps, state store.OnboardingSt
 
 	summary := state.ProviderSummary(prov)
 	if state.AuthType == "oauth2" || (summary != nil && summary.AuthType == "oauth2") {
-		return renderOAuthCredentialsStep(props, state, scheme)
+		return renderOAuthCredentialsStep(props, state)
 	}
 
 	options := []uicomponents.Option{
@@ -429,7 +429,7 @@ var oauthWaiter = trail.FC("OAuthWaiter", func(props oauthWaiterProps) trail.Nod
 	})
 })
 
-func renderOAuthCredentialsStep(props OnboardingWizardProps, state store.OnboardingState, scheme *theme.Scheme) trail.Node {
+func renderOAuthCredentialsStep(props OnboardingWizardProps, state store.OnboardingState) trail.Node {
 	prov := state.SelectedProvider
 	if prov == "" && len(state.Status.MissingCredentials) > 0 {
 		prov = state.Status.MissingCredentials[0]
@@ -589,7 +589,7 @@ func renderOAuthCredentialsStep(props OnboardingWizardProps, state store.Onboard
 	})
 }
 
-func renderModeStep(props OnboardingWizardProps, state store.OnboardingState, scheme *theme.Scheme) trail.Node {
+func renderModeStep(props OnboardingWizardProps) trail.Node {
 	options := []uicomponents.Option{
 		{
 			Value:       string(api.ModeDefault),
@@ -634,7 +634,7 @@ func renderModeStep(props OnboardingWizardProps, state store.OnboardingState, sc
 	})
 }
 
-func renderToolsStep(props OnboardingWizardProps, state store.OnboardingState, scheme *theme.Scheme) trail.Node {
+func renderToolsStep(props OnboardingWizardProps, state store.OnboardingState) trail.Node {
 	availableTools := []struct {
 		name  string
 		group string
