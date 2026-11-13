@@ -135,3 +135,39 @@ func TestRestartDaemonStopsHealthyDaemon(t *testing.T) {
 		t.Error("timed out waiting for Serve to return after shutdown")
 	}
 }
+
+func TestDaemonCommandsRejectSandboxFlag(t *testing.T) {
+	_, _, err := execCLI(t, "", "daemon", "serve", "--sandbox", "local")
+	if err == nil || !strings.Contains(err.Error(), "unknown flag") {
+		t.Errorf("daemon serve --sandbox error = %v, want unknown flag rejection", err)
+	}
+}
+
+func TestResolveSandboxModeValidation(t *testing.T) {
+	for _, tc := range []struct {
+		input   string
+		want    api.SandboxMode
+		wantErr bool
+	}{
+		{input: "", want: ""},
+		{input: "native", want: api.SandboxNative},
+		{input: "Local", want: api.SandboxLocal},
+		{input: " native ", want: api.SandboxNative},
+		{input: "docker", wantErr: true},
+	} {
+		got, err := (&replOptions{sandboxMode: tc.input}).resolveSandboxMode()
+		if tc.wantErr {
+			if err == nil {
+				t.Errorf("resolveSandboxMode(%q) error = nil, want error", tc.input)
+			}
+			continue
+		}
+		if err != nil {
+			t.Errorf("resolveSandboxMode(%q): %v", tc.input, err)
+			continue
+		}
+		if got != tc.want {
+			t.Errorf("resolveSandboxMode(%q) = %q, want %q", tc.input, got, tc.want)
+		}
+	}
+}

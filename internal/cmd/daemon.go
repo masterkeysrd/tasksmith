@@ -261,7 +261,7 @@ func ConnectOrStart(ctx context.Context, socketPath string, spawnArgs ...string)
 	h, healthy := healthDaemon(ctx, c)
 	if healthy {
 		if !daemonVersionSkewed(h) {
-			return c, nil, nil
+			return c, notices, nil
 		}
 		sessions, err := c.ListSessions(ctx)
 		if err != nil || hasActiveSessions(sessions) {

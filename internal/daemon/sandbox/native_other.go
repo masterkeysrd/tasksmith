@@ -13,6 +13,6 @@ func checkNativeAvailable() error {
 }
 
 // wrapNativeCommand always returns ErrNativeUnavailable on unsupported platforms.
-func wrapNativeCommand(_ *session, _, _ string, _ []string) (string, []string, error) {
+func wrapNativeCommand(_ *session, _, _ string, _ []string, _ bool) (string, []string, error) {
 	return "", nil, fmt.Errorf("%w: native sandbox mode is not supported on OS %q", ErrNativeUnavailable, runtime.GOOS)
 }

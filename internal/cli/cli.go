@@ -29,6 +29,11 @@ type Options struct {
 	Backend     backend.Backend
 	StartDaemon func(ctx context.Context, socketPath string) error
 
+	// Sandbox is the requested sandbox isolation backend ("native" or
+	// "local") for sessions this REPL creates. Empty means the daemon
+	// resolves the host default (native when available).
+	Sandbox api.SandboxMode
+
 	// StartupNotices are appended to the transcript as warning notices once
 	// the REPL boots (e.g. a daemon version skew the user should act on).
 	StartupNotices []string
@@ -79,6 +84,7 @@ func Run(ctx context.Context, opts Options) error {
 			Agent:       opts.Agent,
 			Model:       opts.Model,
 			Title:       opts.Title,
+			Sandbox:     opts.Sandbox,
 			StartDaemon: opts.StartDaemon,
 		})
 	}

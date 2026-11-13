@@ -509,9 +509,12 @@ func NewToolsNode(cfg ToolsNodeConfig) *ToolsNode {
 
 // executeTool runs the tool and records a tool_call metric. The duration
 // covers execution only; permission and question waits happen before it.
-func (n *ToolsNode) executeTool(ctx context.Context, tc *message.ToolCall) (*message.Tool, error) {
+// When planReadOnly is true, the context is tagged so execution-capable tools
+// apply a per-command read-only kernel profile inside native sandboxes even
+// though the sandbox itself may be writable.
+func (n *ToolsNode) executeTool(ctx context.Context, tc *message.ToolCall, planReadOnly bool) (*message.Tool, error) {
 	start := time.Now()
-	msg, err := n.tools.Execute(ctx, tc)
+	msg, err := n.tools.Execute(tools.WithReadOnlyExecution(ctx, planReadOnly), tc)
 	dur := time.Since(start)
 	switch {
 	case errors.Is(ctx.Err(), context.Canceled):
@@ -748,7 +751,7 @@ func (n *ToolsNode) evaluateSingleCall(ctx context.Context, tc *message.ToolCall
 		return msg, nil, msgErr
 	}
 
-	msg, execErr := n.executeTool(ctx, tc)
+	msg, execErr := n.executeTool(ctx, tc, plan.ReadOnly)
 	if execErr != nil {
 		return nil, nil, fmt.Errorf("harness: execute tool %q: %w", tc.Name, execErr)
 	}
@@ -868,7 +871,11 @@ func (n *ToolsNode) resumeCalls(ctx context.Context, unfulfilled []*message.Tool
 			nextQuestions = append(nextQuestions, question)
 			continue
 		}
-		toolMsg, err := n.resumeSingleCall(ctx, tc, req, decisions)
+		var planReadOnly bool
+		if p, ok := plans[tc.ID]; ok && p != nil {
+			planReadOnly = p.ReadOnly
+		}
+		toolMsg, err := n.resumeSingleCall(ctx, tc, req, decisions, planReadOnly)
 		if err != nil {
 			return nil, err
 		}
@@ -896,7 +903,7 @@ func (n *ToolsNode) resumeCalls(ctx context.Context, unfulfilled []*message.Tool
 	return n.appendToolMessagesUpdate(ctx, toolMsgs, unfulfilled, plans, updatedTodos, hasTodos, newTools), nil
 }
 
-func (n *ToolsNode) resumeSingleCall(ctx context.Context, tc *message.ToolCall, req api.PermissionRequest, decisions map[string]api.PermissionDecision) (*message.Tool, error) {
+func (n *ToolsNode) resumeSingleCall(ctx context.Context, tc *message.ToolCall, req api.PermissionRequest, decisions map[string]api.PermissionDecision, planReadOnly bool) (*message.Tool, error) {
 	dec, ok := lookupDecision(decisions, req)
 	if !ok {
 		return nil, ErrPendingPermissionsUnresolved
@@ -905,7 +912,7 @@ func (n *ToolsNode) resumeSingleCall(ctx context.Context, tc *message.ToolCall, 
 		n.recordFailure(ctx, tc, err)
 		return newErrorToolMessage(tc, err.Error())
 	}
-	toolMsg, err := n.executeTool(ctx, tc)
+	toolMsg, err := n.executeTool(ctx, tc, planReadOnly)
 	if err != nil {
 		return nil, fmt.Errorf("harness: execute tool %q: %w", tc.Name, err)
 	}

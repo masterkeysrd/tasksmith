@@ -27,18 +27,26 @@ tasksmith [flags]
 
 ### Global Flags
 
-The following flags apply to `tasksmith`, `tasksmith repl`, and `tasksmith daemon`:
+The following flags apply to `tasksmith` and all of its subcommands:
 
 | Flag | Short | Default | Description |
 | :--- | :--- | :--- | :--- |
 | `--workspace <path>` | `-w` | `.` (current directory) | Path to the target workspace root directory. Discovers `WORKSPACE.md` and `.agents/`. |
 | `--socket <path>` | | `/tmp/tsd-<uid>/b.sock` | Explicit path to the Brain daemon Unix domain socket. |
+| `--version` | | | Print the client build version and exit. |
+| `--help` | `-h` | | Print help and usage information for any command. |
+
+### REPL Session Flags
+
+The following flags are accepted by `tasksmith` and `tasksmith repl` only — `tasksmith daemon` subcommands reject them:
+
+| Flag | Short | Default | Description |
+| :--- | :--- | :--- | :--- |
 | `--session <id>` | | *(none)* | UUIDv7 of an existing session to resume immediately. |
 | `--agent <name>` | | `main` | Default agent persona to activate for newly initialized sessions. |
 | `--model <id>` | | Provider default | Upstream model identifier (e.g., `openai/gpt-5.5` or `ollama/qwen3.8`). |
 | `--title <title>` | | *(none)* | Optional human-readable title assigned to a newly created session. |
-| `--version` | | | Print the client build version and exit. |
-| `--help` | `-h` | | Print help and usage information for any command. |
+| `--sandbox <mode>` | | `native` when available | Sandbox isolation backend for sessions this client creates: `native` (OS kernel sandboxes) or `local` (in-process confinement). The mode is resolved per session at creation — one daemon can serve native and local sessions side by side — and cannot be changed afterwards (resuming an existing session with a differing request surfaces a warning instead). `native` requests degrade to `local` with a warning when a host probe shows kernel sandboxing is unusable (`sandbox-exec`/`bwrap` missing, restricted containers, nested sandboxes). |
 
 ### Daemon Flags
 
@@ -414,7 +422,7 @@ While browsing history, the composer's bottom border is replaced by a centered r
 | `g` | Daemon Browser | Re-queries daemon health and refreshes status in-place. |
 | `Esc` / `q` | Daemon Browser | Closes the daemon browser and returns to composer. |
 
-The connected view reports Status, Version (daemon build; `unknown` for daemons that predate version reporting), PID, Uptime, Socket, and open Workspaces. When a client launches against a daemon built from a different version, the daemon is restarted automatically only when every session is confirmed idle; otherwise the REPL opens with a warning notice telling the user how to restart the daemon (`tasksmith daemon stop` or `/daemon` → `r`) when it is safe, and plain commands print the same warning to stderr.
+The connected view reports Status, Version (daemon build; `unknown` for daemons that predate version reporting), PID, Uptime, Socket, and open Workspaces. When a client launches against a daemon built from a different version, the daemon is restarted automatically only when every session is confirmed idle; otherwise the REPL opens with a warning notice telling the user how to restart the daemon (`tasksmith daemon stop` or `/daemon` → `r`) when it is safe, and plain commands print the same warning to stderr. The session sandbox backend is per-session state rather than daemon state: the REPL header shows the active session's backend next to the workspace path (`· native sandbox` / `· local sandbox`), and a workspace warning appears when kernel sandboxing is unavailable on the host and new sessions fall back to `local` isolation.
 
 ### Rules Browser (`/rules`)
 

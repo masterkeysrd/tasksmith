@@ -316,6 +316,11 @@ type BashRequest struct {
 
 	// Timeout overrides the sandbox's default execution timeout.
 	Timeout time.Duration `json:"timeout,omitempty"`
+
+	// ReadOnly requests a read-only kernel profile for this command even when
+	// the sandbox itself is writable. It is enforced only by native OS
+	// sandboxes; local sandboxes ignore it.
+	ReadOnly bool `json:"read_only,omitempty"`
 }
 
 // BashResult contains the process output, exit status, and any external file
@@ -352,6 +357,11 @@ type ExecRequest struct {
 
 	// Timeout overrides the sandbox's default execution timeout.
 	Timeout time.Duration `json:"timeout,omitempty"`
+
+	// ReadOnly requests a read-only kernel profile for this program even when
+	// the sandbox itself is writable. It is enforced only by native OS
+	// sandboxes; local sandboxes ignore it.
+	ReadOnly bool `json:"read_only,omitempty"`
 }
 
 // ExecResult contains the program output, exit status, and any external file

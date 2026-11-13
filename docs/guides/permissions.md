@@ -235,4 +235,13 @@ spec:
 
 An active `Agent` manifest may further narrow this ceiling through its own `spec.policies.tools` (for example, excluding `write` or `edit`), but it can never widen it: the effective policy is the stricter of the workspace and agent ceilings (`allow < ask < deny`).
 
+### Kernel Read-Only Enforcement
+
+Permission gates decide *whether* a tool call may run; the OS kernel sandbox independently decides what a running process can touch. Read-only kernel enforcement is deliberately decoupled from permission modes and operates on two levels:
+
+- **Session level**: When the workspace is restricted (untrusted repository) or the effective workspace/agent `policies.tools.readOnly` policy is true, the session's sandbox enforces the workspace root as read-only at the kernel level — even while the session runs in `default` mode.
+- **Per-command**: Whenever an authorized plan is classified `ReadOnly` — in any mode — the individual `bash` or custom-tool process runs under a read-only kernel profile. If `shellguard` or an `isReadOnly` annotation misclassifies a mutating command, the kernel still blocks the write.
+
+Kernel enforcement requires the native sandbox backend (Apple Seatbelt on macOS, Bubblewrap on Linux); sessions fall back to in-process confinement with a startup notice when it is unavailable. See [Sandbox Architecture](../architecture/sandbox.md) for the profile details, including host credential paths (`~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.kube`, `~/.docker`, `~/.netrc`, and TaskSmith's own config/data secrets) shared with `shellguard` and masked from child processes.
+
 For keyboard shortcuts and command syntax, see the [CLI Reference](../reference/cli.md). For the underlying security implementation, see the [Permissions Architecture](../architecture/permissions.md).

@@ -6830,3 +6830,361 @@ spec:
 		t.Errorf("refreshed sandbox env did not pick up updated project .env: %q", refreshed["APP_FIXTURE_SECRET"])
 	}
 }
+
+// newSandboxPolicyCoordinator builds an isolated workspace/coordinator whose
+// WORKSPACE.md optionally declares workspace-level policies.tools.readOnly and
+// whose .agents directory optionally carries a strict-agent with the same
+// policy, so tests can create sessions under each read-only trigger.
+func newSandboxPolicyCoordinator(t *testing.T, wsPolicies string, restricted bool) *testCoordinator {
+	t.Helper()
+
+	xdgRoot := t.TempDir()
+	xdg.SetTestEnv(xdgRoot, "tasksmith-session-sandbox-policy-test")
+	t.Cleanup(func() {
+		xdg.ClearCache()
+	})
+
+	dbPath := filepath.Join(t.TempDir(), "sandbox-policy.db")
+	db, err := sqlite.Open(context.Background(), dbPath)
+	if err != nil {
+		t.Fatalf("sqlite.Open: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = db.Close()
+	})
+
+	wsDir := t.TempDir()
+	manifest := "---\napiVersion: warp/v1alpha1\nkind: Workspace\nmetadata:\n  name: sandbox-policy\nspec:\n  defaultProvider: fake\n  defaultModels:\n    completion: fake-default-model\n" + wsPolicies + "---\n"
+	if err := os.WriteFile(filepath.Join(wsDir, "WORKSPACE.md"), []byte(manifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	agentsDir := filepath.Join(wsDir, ".agents")
+	if err := os.MkdirAll(agentsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	strictAgent := "---\napiVersion: warp/v1alpha1\nkind: Agent\nmetadata:\n  name: strict-agent\n  description: Read-only agent\nspec:\n  triggers:\n    - human\n  subagents:\n    - child-agent\n  policies:\n    tools:\n      readOnly: true\n---\nSTRICT_AGENT_PROMPT_MARKER\n"
+	if err := os.WriteFile(filepath.Join(agentsDir, "strict-agent.agent.md"), []byte(strictAgent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	plainAgent := "---\napiVersion: warp/v1alpha1\nkind: Agent\nmetadata:\n  name: plain-agent\n  description: Plain agent\nspec:\n  triggers:\n    - human\n  subagents:\n    - child-agent\n---\nPLAIN_AGENT_PROMPT_MARKER\n"
+	if err := os.WriteFile(filepath.Join(agentsDir, "plain-agent.agent.md"), []byte(plainAgent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	childAgent := "---\napiVersion: warp/v1alpha1\nkind: Agent\nmetadata:\n  name: child-agent\n  description: Subagent without explicit policies\nspec:\n  triggers:\n    - subagent\n---\nCHILD_AGENT_PROMPT_MARKER\n"
+	if err := os.WriteFile(filepath.Join(agentsDir, "child-agent.agent.md"), []byte(childAgent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	ws, err := workspace.Open(context.Background(), wsDir,
+		workspace.WithBuiltinFS(builtin.FS()),
+		workspace.WithRestrictedMode(restricted),
+	)
+	if err != nil {
+		t.Fatalf("workspace.Open: %v", err)
+	}
+
+	permMgr, err := permissions.New(permissions.Config{Workspace: ws})
+	if err != nil {
+		t.Fatalf("permissions.New: %v", err)
+	}
+
+	mgr, err := newTestCoordinator(Config{
+		DB:          db,
+		Workspace:   ws,
+		Gateway:     func() gateway.Gateway { return newFakeGateway(&fakeProvider{}) },
+		Publisher:   &testPublisher{},
+		Logger:      log.Default(),
+		Permissions: permMgr,
+	})
+	if err != nil {
+		t.Fatalf("newTestCoordinator: %v", err)
+	}
+	return mgr
+}
+
+func TestSessionSandboxModeSelection(t *testing.T) {
+	ctx := context.Background()
+	wantNative := sandbox.DefaultMode()
+
+	_, _, _, _, mgr := setupTestEnv(t, &fakeProvider{})
+
+	sessDefault, _, err := mgr.Create(ctx, api.CreateSessionRequest{Title: "default sandbox"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if sessDefault.Sandbox.Mode() != wantNative {
+		t.Errorf("default session sandbox mode = %v, want %v", sessDefault.Sandbox.Mode(), wantNative)
+	}
+
+	sessLocal, _, err := mgr.Create(ctx, api.CreateSessionRequest{
+		Title:  "local sandbox",
+		Config: api.SessionConfig{Sandbox: "local"},
+	})
+	if err != nil {
+		t.Fatalf("Create local: %v", err)
+	}
+	if sessLocal.Sandbox.Mode() != sandbox.ModeLocal {
+		t.Errorf("explicit local request sandbox mode = %v, want %v", sessLocal.Sandbox.Mode(), sandbox.ModeLocal)
+	}
+
+	sessNative, _, err := mgr.Create(ctx, api.CreateSessionRequest{
+		Title:  "native sandbox",
+		Config: api.SessionConfig{Sandbox: "native"},
+	})
+	if err != nil {
+		t.Fatalf("Create native: %v", err)
+	}
+	if sessNative.Sandbox.Mode() != wantNative {
+		t.Errorf("native request sandbox mode = %v, want %v", sessNative.Sandbox.Mode(), wantNative)
+	}
+
+	if _, _, err := mgr.Create(ctx, api.CreateSessionRequest{
+		Title:  "invalid sandbox",
+		Config: api.SessionConfig{Sandbox: "docker"},
+	}); err == nil {
+		t.Error("Create with unknown sandbox backend should error")
+	}
+}
+
+func TestSessionSandboxModeImmutableAndReported(t *testing.T) {
+	ctx := context.Background()
+	wantNative := sandbox.DefaultMode()
+
+	_, _, _, _, mgr := setupTestEnv(t, &fakeProvider{})
+
+	sess, _, err := mgr.Create(ctx, api.CreateSessionRequest{
+		Title:  "reported sandbox",
+		Config: api.SessionConfig{Sandbox: "local"},
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if sess.Sandbox.Mode() != sandbox.ModeLocal {
+		t.Errorf("session sandbox mode = %v, want %v", sess.Sandbox.Mode(), sandbox.ModeLocal)
+	}
+	if apiSess := ToAPISession(sess); apiSess.SandboxMode != sandbox.ModeLocal {
+		t.Errorf("api.Session.SandboxMode = %q, want %q", apiSess.SandboxMode, sandbox.ModeLocal)
+	}
+
+	other, _, err := mgr.Create(ctx, api.CreateSessionRequest{
+		Title:  "reported sandbox",
+		Config: api.SessionConfig{Sandbox: "native"},
+	})
+	if err != nil {
+		t.Fatalf("Create conflicting sandbox request: %v", err)
+	}
+	if other.ID == sess.ID {
+		t.Error("differing sandbox requests must not reuse the same session")
+	}
+	if other.Sandbox.Mode() != wantNative {
+		t.Errorf("native request sandbox mode = %v, want %v", other.Sandbox.Mode(), wantNative)
+	}
+
+	if err := sess.Update(ctx, api.UpdateSessionRequest{
+		Config: api.SessionConfig{Sandbox: "native"},
+	}); !errors.Is(err, ErrInvalidConfig) {
+		t.Errorf("Update sandbox backend error = %v, want ErrInvalidConfig", err)
+	}
+	if sess.Sandbox.Mode() != sandbox.ModeLocal {
+		t.Errorf("session sandbox mode changed after rejected update: %v", sess.Sandbox.Mode())
+	}
+
+	if err := sess.Update(ctx, api.UpdateSessionRequest{
+		Config: api.SessionConfig{Sandbox: "local"},
+	}); err != nil {
+		t.Errorf("idempotent local update should succeed, got %v", err)
+	}
+
+	implicit, _, err := mgr.Create(ctx, api.CreateSessionRequest{Title: "implicit sandbox"})
+	if err != nil {
+		t.Fatalf("Create implicit: %v", err)
+	}
+	if err := implicit.Update(ctx, api.UpdateSessionRequest{
+		Config: api.SessionConfig{Sandbox: wantNative},
+	}); err != nil {
+		t.Errorf("update matching the effective backend should be a no-op, got %v", err)
+	}
+	if err := implicit.Update(ctx, api.UpdateSessionRequest{
+		Config: api.SessionConfig{Sandbox: "docker"},
+	}); !errors.Is(err, ErrInvalidConfig) {
+		t.Errorf("Update with unknown backend error = %v, want ErrInvalidConfig", err)
+	}
+}
+
+func TestSubagentSandboxModePersistsAcrossRestore(t *testing.T) {
+	ctx := context.Background()
+	prov := &fakeProvider{
+		handler: func(_ context.Context, _ *llm.Request) ([]string, string, error) {
+			return []string{"Subagent answer"}, uuid.NewString(), nil
+		},
+	}
+
+	db, ws, gw, pub, mgr := setupTestEnv(t, prov)
+	t.Cleanup(func() { _ = mgr.Close() })
+
+	parent, err := New(ctx, Config{
+		ID:          uuid.Must(uuid.NewV7()).String(),
+		Title:       "Local parent",
+		Session:     api.SessionConfig{Sandbox: "local"},
+		DB:          db,
+		Workspace:   ws,
+		Gateway:     func() gateway.Gateway { return gw },
+		Permissions: wsPermManager(t, ws),
+		Publisher:   pub,
+		Logger:      log.Default(),
+	})
+	if err != nil {
+		t.Fatalf("New parent: %v", err)
+	}
+	t.Cleanup(func() { _ = parent.Close() })
+
+	out, err := parent.InvokeSubagent(ctx, api.InvokeAgentInput{
+		Agent:     "explore",
+		Title:     "Persisted sandbox child",
+		Prompt:    "Find all interfaces",
+		Workspace: "inherit",
+	})
+	if err != nil {
+		t.Fatalf("InvokeSubagent: %v", err)
+	}
+	children := parent.Children()
+	if len(children) != 1 || children[0].ID != out.SessionID {
+		t.Fatalf("expected one registered child, got %+v", children)
+	}
+	child := children[0]
+	t.Cleanup(func() { _ = child.Close() })
+
+	if child.Config.Sandbox != sandbox.ModeLocal {
+		t.Errorf("child persisted Sandbox = %q, want %q", child.Config.Sandbox, sandbox.ModeLocal)
+	}
+
+	restored, err := Open(ctx, &Session{ID: child.ID, Title: child.Title, Config: child.Config}, Config{
+		DB:          db,
+		Workspace:   ws,
+		Gateway:     func() gateway.Gateway { return gw },
+		Permissions: wsPermManager(t, ws),
+		Publisher:   pub,
+		Logger:      log.Default(),
+	})
+	if err != nil {
+		t.Fatalf("Open restored child: %v", err)
+	}
+	t.Cleanup(func() { _ = restored.Close() })
+
+	if restored.Sandbox.Mode() != sandbox.ModeLocal {
+		t.Errorf("restored child sandbox mode = %v, want %v (parent link absent on restore)", restored.Sandbox.Mode(), sandbox.ModeLocal)
+	}
+}
+
+func TestSessionReadOnlyPolicyEnforcement(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("plain workspace stays writable", func(t *testing.T) {
+		mgr := newSandboxPolicyCoordinator(t, "", false)
+		sess, _, err := mgr.Create(ctx, api.CreateSessionRequest{Title: "plain"})
+		if err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+		if sess.Sandbox.ReadOnly() {
+			t.Error("plain workspace session sandbox should not be read-only")
+		}
+	})
+
+	t.Run("restricted workspace is read-only", func(t *testing.T) {
+		mgr := newSandboxPolicyCoordinator(t, "", true)
+		sess, _, err := mgr.Create(ctx, api.CreateSessionRequest{Title: "restricted"})
+		if err != nil {
+			t.Fatalf("Create restricted: %v", err)
+		}
+		if !sess.Sandbox.ReadOnly() {
+			t.Error("restricted workspace session sandbox should be read-only")
+		}
+	})
+
+	t.Run("workspace policies.tools.readOnly is enforced", func(t *testing.T) {
+		mgr := newSandboxPolicyCoordinator(t, "  policies:\n    tools:\n      readOnly: true\n", false)
+		sess, _, err := mgr.Create(ctx, api.CreateSessionRequest{Title: "ws readonly"})
+		if err != nil {
+			t.Fatalf("Create ws readonly: %v", err)
+		}
+		if !sess.Sandbox.ReadOnly() {
+			t.Error("workspace policies.tools.readOnly should make session sandbox read-only")
+		}
+	})
+
+	t.Run("agent policies.tools.readOnly is enforced", func(t *testing.T) {
+		mgr := newSandboxPolicyCoordinator(t, "", false)
+		sess, _, err := mgr.Create(ctx, api.CreateSessionRequest{
+			Title:  "agent readonly",
+			Config: api.SessionConfig{Agent: "strict-agent"},
+		})
+		if err != nil {
+			t.Fatalf("Create agent readonly: %v", err)
+		}
+		if !sess.Sandbox.ReadOnly() {
+			t.Error("agent policies.tools.readOnly should make session sandbox read-only")
+		}
+	})
+}
+
+func TestSessionReadOnlyPolicySubagentInheritance(t *testing.T) {
+	ctx := context.Background()
+
+	newChild := func(t *testing.T, mgr *testCoordinator, parent *Session, agent string) *Session {
+		t.Helper()
+		child, err := New(ctx, Config{
+			Title:       "child " + agent,
+			Parent:      parent,
+			Session:     api.SessionConfig{Agent: agent, Sandbox: "local"},
+			DB:          mgr.cfg.DB,
+			Workspace:   mgr.cfg.Workspace,
+			Gateway:     mgr.cfg.Gateway,
+			Catalog:     mgr.cfg.Catalog,
+			Permissions: mgr.cfg.Permissions,
+			Publisher:   &testPublisher{},
+			Logger:      log.Default(),
+		})
+		if err != nil {
+			t.Fatalf("New child: %v", err)
+		}
+		t.Cleanup(func() { _ = child.Close() })
+		return child
+	}
+
+	t.Run("child of read-only parent inherits read-only", func(t *testing.T) {
+		mgr := newSandboxPolicyCoordinator(t, "", false)
+		parent, _, err := mgr.Create(ctx, api.CreateSessionRequest{
+			Title:  "strict parent",
+			Config: api.SessionConfig{Agent: "strict-agent"},
+		})
+		if err != nil {
+			t.Fatalf("Create parent: %v", err)
+		}
+		if !parent.Sandbox.ReadOnly() {
+			t.Fatal("strict-agent parent sandbox must be read-only")
+		}
+		child := newChild(t, mgr, parent, "child-agent")
+		if !child.Sandbox.ReadOnly() {
+			t.Error("subagent must inherit parent read-only kernel ceiling")
+		}
+	})
+
+	t.Run("child of writable parent stays writable", func(t *testing.T) {
+		mgr := newSandboxPolicyCoordinator(t, "", false)
+		parent, _, err := mgr.Create(ctx, api.CreateSessionRequest{
+			Title:  "plain parent",
+			Config: api.SessionConfig{Agent: "plain-agent"},
+		})
+		if err != nil {
+			t.Fatalf("Create parent: %v", err)
+		}
+		if parent.Sandbox.ReadOnly() {
+			t.Fatal("plain-agent parent sandbox must be writable")
+		}
+		child := newChild(t, mgr, parent, "child-agent")
+		if child.Sandbox.ReadOnly() {
+			t.Error("subagent of writable parent must stay writable")
+		}
+	})
+}

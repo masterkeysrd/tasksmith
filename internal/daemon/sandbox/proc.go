@@ -76,9 +76,10 @@ func (p *sandboxProc) buildEnv(cmdEnv map[string]string, workDir string) ([]stri
 	}
 
 	if p.s.mode == ModeNative && p.s.tempDir != "" {
-		if _, ok := merged["TMPDIR"]; !ok {
-			merged["TMPDIR"] = filepath.Join(p.s.tempDir, "tmp")
-		}
+		// The kernel profile only allows writes inside WorkDir and the sandbox
+		// temp dir, so a host TMPDIR inherited from the base environment would
+		// point at a directory child processes cannot write to. Always redirect.
+		merged["TMPDIR"] = filepath.Join(p.s.tempDir, "tmp")
 		if _, ok := merged["XDG_CACHE_HOME"]; !ok {
 			merged["XDG_CACHE_HOME"] = filepath.Join(p.s.tempDir, "cache")
 		}
@@ -157,7 +158,7 @@ func (p *sandboxProc) prepareExecCmd(cmd Command) (*exec.Cmd, error) {
 
 	if p.s.mode == ModeNative {
 		var wrapErr error
-		bin, args, wrapErr = wrapNativeCommand(p.s, targetDir, resolvedBin, args)
+		bin, args, wrapErr = wrapNativeCommand(p.s, targetDir, resolvedBin, args, cmd.ReadOnly)
 		if wrapErr != nil {
 			return nil, wrapErr
 		}

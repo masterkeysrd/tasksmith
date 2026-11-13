@@ -37,6 +37,12 @@ type Config struct {
 	// Network configures outbound network restrictions.
 	Network NetworkPolicy `json:"network,omitzero"`
 
+	// DeniedPaths lists additional absolute host paths (such as credential
+	// directories outside WorkDir) that native OS sandbox profiles must block
+	// child processes from reading. It has no effect in ModeLocal, where reads
+	// are already confined to WorkDir by the os.Root handle.
+	DeniedPaths []string `json:"denied_paths,omitempty"`
+
 	// DefaultTimeout sets the fallback execution timeout for Proc.Exec when
 	// Command.Timeout is zero.
 	DefaultTimeout time.Duration `json:"default_timeout,omitempty"`
@@ -53,9 +59,7 @@ func (c *Config) Validate() error {
 	if mode == "" {
 		mode = ModeLocal
 	}
-	switch mode {
-	case ModeLocal, ModeNative:
-	default:
+	if !mode.IsValid() {
 		return fmt.Errorf("%w: unsupported mode %q", ErrInvalidConfig, mode)
 	}
 
@@ -111,18 +115,26 @@ func (c *Config) Fingerprint() string {
 	envCopy := make(map[string]string, len(c.Env))
 	maps.Copy(envCopy, c.Env)
 
+	denied := make([]string, len(c.DeniedPaths))
+	for i, p := range c.DeniedPaths {
+		denied[i] = filepath.Clean(strings.TrimSpace(p))
+	}
+	sort.Strings(denied)
+
 	canonical := struct {
 		Mode           Mode              `json:"mode"`
 		WorkDir        string            `json:"work_dir"`
 		ReadOnly       bool              `json:"read_only"`
 		Env            map[string]string `json:"env,omitempty"`
 		Network        NetworkPolicy     `json:"network"`
+		DeniedPaths    []string          `json:"denied_paths,omitempty"`
 		DefaultTimeout time.Duration     `json:"default_timeout,omitempty"`
 	}{
-		Mode:     mode,
-		WorkDir:  workDir,
-		ReadOnly: c.ReadOnly,
-		Env:      envCopy,
+		Mode:        mode,
+		WorkDir:     workDir,
+		ReadOnly:    c.ReadOnly,
+		Env:         envCopy,
+		DeniedPaths: denied,
 		Network: NetworkPolicy{
 			Disabled:      c.Network.Disabled,
 			AllowedHosts:  allowed,

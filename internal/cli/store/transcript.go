@@ -26,11 +26,12 @@ type ContextUsageData struct {
 
 // HeaderData holds the data for the startup banner.
 type HeaderData struct {
-	Version   string
-	Model     string
-	Thinking  string
-	Workspace string
-	Warnings  []string
+	Version     string
+	Model       string
+	Thinking    string
+	Workspace   string
+	SandboxMode api.SandboxMode
+	Warnings    []string
 }
 
 type NoticeSeverity string
@@ -82,11 +83,12 @@ func CurrentHeaderData() HeaderData {
 		copy(warnings, *appState.Warnings)
 	}
 	return HeaderData{
-		Version:   appState.Version,
-		Workspace: appState.Workspace,
-		Model:     sess.ModelLabel,
-		Thinking:  sess.Thinking,
-		Warnings:  warnings,
+		Version:     appState.Version,
+		Workspace:   appState.Workspace,
+		Model:       sess.ModelLabel,
+		Thinking:    sess.Thinking,
+		SandboxMode: sess.SandboxMode,
+		Warnings:    warnings,
 	}
 }
 
@@ -96,8 +98,14 @@ type headerAppMeta struct {
 	warnings  *[]string
 }
 
+type headerSessionMeta struct {
+	model       string
+	thinking    string
+	sandboxMode api.SandboxMode
+}
+
 // UseHeaderData returns reactive HeaderData subscribed to changes in AppState metadata,
-// ModelLabel, and Thinking effort.
+// ModelLabel, Thinking effort, and the session's sandbox backend.
 func UseHeaderData() HeaderData {
 	appMeta := UseApp(func(s AppState) headerAppMeta {
 		return headerAppMeta{
@@ -106,8 +114,12 @@ func UseHeaderData() HeaderData {
 			warnings:  s.Warnings,
 		}
 	})
-	sessionInfo := UseSession(func(s SessionState) [2]string {
-		return [2]string{s.ModelLabel, s.Thinking}
+	sessionInfo := UseSession(func(s SessionState) headerSessionMeta {
+		return headerSessionMeta{
+			model:       s.ModelLabel,
+			thinking:    s.Thinking,
+			sandboxMode: s.SandboxMode,
+		}
 	})
 
 	var warnings []string
@@ -117,11 +129,12 @@ func UseHeaderData() HeaderData {
 	}
 
 	return HeaderData{
-		Version:   appMeta.version,
-		Workspace: appMeta.workspace,
-		Model:     sessionInfo[0],
-		Thinking:  sessionInfo[1],
-		Warnings:  warnings,
+		Version:     appMeta.version,
+		Workspace:   appMeta.workspace,
+		Model:       sessionInfo.model,
+		Thinking:    sessionInfo.thinking,
+		SandboxMode: sessionInfo.sandboxMode,
+		Warnings:    warnings,
 	}
 }
 

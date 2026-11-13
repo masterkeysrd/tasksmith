@@ -17,11 +17,24 @@ import (
 )
 
 type replOptions struct {
-	sessionID string
-	agent     string
-	model     string
-	title     string
-	backend   backend.Backend
+	sessionID   string
+	agent       string
+	model       string
+	title       string
+	sandboxMode string
+	backend     backend.Backend
+}
+
+// resolveSandboxMode returns the normalized --sandbox request ("native" or
+// "local"); empty means the session default (native when the host provides a
+// kernel backend). The request applies to sessions created by the REPL, not to
+// the daemon process itself.
+func (o *replOptions) resolveSandboxMode() (api.SandboxMode, error) {
+	mode := api.SandboxMode(strings.ToLower(strings.TrimSpace(o.sandboxMode)))
+	if mode == "" || mode.IsValid() {
+		return mode, nil
+	}
+	return "", fmt.Errorf("invalid --sandbox value %q (want %q or %q)", o.sandboxMode, api.SandboxNative, api.SandboxLocal)
 }
 
 func bindREPLFlags(cmd *cobra.Command, opts *replOptions) {
@@ -29,6 +42,7 @@ func bindREPLFlags(cmd *cobra.Command, opts *replOptions) {
 	cmd.Flags().StringVar(&opts.agent, "agent", "", "Agent name when creating a new session")
 	cmd.Flags().StringVar(&opts.model, "model", "", "Model identifier when creating a new session")
 	cmd.Flags().StringVar(&opts.title, "title", "", "Session title when creating a new session")
+	cmd.Flags().StringVar(&opts.sandboxMode, "sandbox", "", "Sandbox isolation backend for new sessions: \"native\" (OS kernel sandboxes) or \"local\" (in-process confinement)")
 }
 
 func newREPLCmd(rootOpts *rootOptions) *cobra.Command {
@@ -55,6 +69,11 @@ func runREPL(cmd *cobra.Command, rootOpts *rootOptions, opts *replOptions) error
 
 	sockPath, err := rootOpts.resolveSocket()
 	if err != nil {
+		return fmt.Errorf("resolve socket path: %w", err)
+	}
+
+	sandboxMode, err := opts.resolveSandboxMode()
+	if err != nil {
 		return err
 	}
 
@@ -72,6 +91,7 @@ func runREPL(cmd *cobra.Command, rootOpts *rootOptions, opts *replOptions) error
 		Model:          strings.TrimSpace(opts.model),
 		Title:          strings.TrimSpace(opts.title),
 		Backend:        opts.backend,
+		Sandbox:        sandboxMode,
 		StartupNotices: notices,
 	}); err != nil {
 		return err

@@ -91,7 +91,7 @@ func (f *sandboxFS) checkPreconditions(ctx context.Context, writeOp bool) error 
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if writeOp && f.s.cfg.ReadOnly {
+	if writeOp && f.s.readOnly.Load() {
 		return ErrReadOnly
 	}
 	return nil
@@ -187,13 +187,13 @@ func (f *sandboxFS) OpenFile(ctx context.Context, path string, flag int, perm fs
 		if err != nil {
 			return nil, wrapRootError(err)
 		}
-		return &sandboxFile{File: file, readOnly: f.s.cfg.ReadOnly || !isWrite}, nil
+		return &sandboxFile{File: file, readOnly: f.s.readOnly.Load() || !isWrite}, nil
 	}
 	file, err := os.OpenFile(target.abs, flag, perm)
 	if err != nil {
 		return nil, err
 	}
-	return &sandboxFile{File: file, readOnly: f.s.cfg.ReadOnly || !isWrite}, nil
+	return &sandboxFile{File: file, readOnly: f.s.readOnly.Load() || !isWrite}, nil
 }
 
 func (f *sandboxFS) Stat(ctx context.Context, path string) (fs.FileInfo, error) {

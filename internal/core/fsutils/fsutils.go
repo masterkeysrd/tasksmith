@@ -100,3 +100,32 @@ func PortablePath(targetPath, rootDir, homeDir string) string {
 	}
 	return cleanTarget
 }
+
+// ResolveDeepestExisting canonicalizes p by evaluating symlinks on p if it
+// exists, or on its deepest existing ancestor while appending the remaining
+// (not-yet-created) path components lexically. This keeps path confinement and
+// OS kernel sandbox rules anchored to canonical vnode paths even when a parent
+// directory is a symlink (e.g. /var -> /private/var on macOS) and the leaf
+// does not exist yet.
+func ResolveDeepestExisting(p string) string {
+	p = filepath.Clean(strings.TrimSpace(p))
+	if p == "" {
+		return p
+	}
+	if resolved, err := filepath.EvalSymlinks(p); err == nil {
+		return filepath.Clean(resolved)
+	}
+	var rest []string
+	cur := p
+	for {
+		parent := filepath.Dir(cur)
+		if parent == cur {
+			return p
+		}
+		rest = append([]string{filepath.Base(cur)}, rest...)
+		cur = parent
+		if resolved, err := filepath.EvalSymlinks(cur); err == nil {
+			return filepath.Clean(filepath.Join(append([]string{resolved}, rest...)...))
+		}
+	}
+}

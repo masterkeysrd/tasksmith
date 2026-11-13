@@ -3,25 +3,44 @@
 package sandbox
 
 import (
+	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"strings"
+	"time"
 )
 
 const darwinSandboxExecBin = "/usr/bin/sandbox-exec"
 
-// checkNativeAvailable verifies that the macOS Seatbelt binary exists on disk.
+// checkNativeAvailable verifies that the macOS Seatbelt binary exists and can
+// actually apply a sandbox profile in this environment. A parent process that
+// is itself Seatbelt-sandboxed (IDE/CI runners) or otherwise restricted keeps
+// sandbox-exec on disk yet fails every sandbox_apply, so a trivial probe run
+// decides availability instead of a bare stat.
 func checkNativeAvailable() error {
 	info, err := os.Stat(darwinSandboxExecBin)
 	if err != nil || info.IsDir() {
 		return fmt.Errorf("%w: %s not found on darwin host", ErrNativeUnavailable, darwinSandboxExecBin)
 	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	probe := exec.CommandContext(ctx, darwinSandboxExecBin, "-p", "(version 1)\n(allow default)\n", "/usr/bin/true")
+	if out, err := probe.CombinedOutput(); err != nil {
+		detail := strings.TrimSpace(string(out))
+		if detail == "" {
+			detail = err.Error()
+		}
+		return fmt.Errorf("%w: %s cannot apply a sandbox profile: %s", ErrNativeUnavailable, darwinSandboxExecBin, detail)
+	}
 	return nil
 }
 
 // wrapNativeCommand wraps a resolved command invocation in macOS Seatbelt (sandbox-exec).
-func wrapNativeCommand(s *session, _ string, resolvedBin string, args []string) (string, []string, error) {
-	profile := buildSeatbeltProfile(s.workDir, s.realWorkDir, s.tempDir, s.realTempDir, s.cfg.ReadOnly, s.cfg.Network.Disabled)
+func wrapNativeCommand(s *session, _ string, resolvedBin string, args []string, cmdReadOnly bool) (string, []string, error) {
+	profile := buildSeatbeltProfile(s.workDir, s.realWorkDir, s.tempDir, s.realTempDir,
+		s.readOnly.Load() || cmdReadOnly, s.cfg.Network.Disabled, s.deniedPaths)
 	wrappedArgs := make([]string, 0, 4+len(args))
 	wrappedArgs = append(wrappedArgs, "-p", profile, "--", resolvedBin)
 	wrappedArgs = append(wrappedArgs, args...)
@@ -35,7 +54,10 @@ func wrapNativeCommand(s *session, _ string, resolvedBin string, args []string) 
 // such as /private/var/folders/... on macOS) and the dedicated temp directory
 // when ReadOnly is false, or denying writes to WorkDir when ReadOnly is true.
 // Outbound/inbound network access is omitted when networkDisabled is true.
-func buildSeatbeltProfile(workDir, realWorkDir, tempDir, realTempDir string, readOnly, networkDisabled bool) string {
+// Each path in deniedPaths (credential directories outside WorkDir) is emitted
+// as a trailing file-read deny so it wins over the blanket read allow, which
+// Seatbelt resolves by last-match.
+func buildSeatbeltProfile(workDir, realWorkDir, tempDir, realTempDir string, readOnly, networkDisabled bool, deniedPaths []string) string {
 	var b strings.Builder
 	b.WriteString("(version 1)\n")
 	b.WriteString("(deny default)\n")
@@ -76,6 +98,13 @@ func buildSeatbeltProfile(workDir, realWorkDir, tempDir, realTempDir string, rea
 
 	if !networkDisabled {
 		b.WriteString("(allow network*)\n")
+	}
+
+	for _, denied := range deniedPaths {
+		if strings.TrimSpace(denied) == "" {
+			continue
+		}
+		fmt.Fprintf(&b, "(deny file-read* (subpath \"%s\"))\n", escapeSeatbeltString(denied))
 	}
 
 	return b.String()

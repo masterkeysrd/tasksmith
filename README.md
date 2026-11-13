@@ -51,7 +51,7 @@ Built-in driver support and presets include:
 ### 🛡️ Capability-Isolated Sandbox & Shell AST Inspection
 - **Least-Privilege Capability Decomposition**: Tools receive only the specific capabilities they require—Filesystem (`FS`), Process (`Proc`), or Network (`Net`).
 - **Path Confinement**: The filesystem capability is strictly jailed to the workspace root directory, resolving symlinks and blocking directory traversal attacks (`../`).
-- **OS Kernel Sandboxing**: Process execution can be confined using native kernel sandboxes (Apple Seatbelt on macOS, Bubblewrap namespaces on Linux) to prevent unauthorized host modifications.
+- **OS Kernel Sandboxing**: Session child processes run inside native kernel sandboxes by default (Apple Seatbelt on macOS, Bubblewrap namespaces on Linux), confining writes to the workspace and masking host credential directories such as `~/.ssh` from agent commands.
 - **Shell AST Inspection (`shellguard`)**: Commands executed via `bash` are parsed into an Abstract Syntax Tree (AST) to unpack compound pipelines, subshells, command substitutions, and redirections, blocking destructive commands and smuggling techniques before execution.
 
 ### ⏪ Transactional Timeline & Instant Revert

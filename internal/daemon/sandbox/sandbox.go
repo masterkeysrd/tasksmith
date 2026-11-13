@@ -13,6 +13,8 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+
+	"github.com/masterkeysrd/tasksmith/internal/core/fsutils"
 )
 
 // session is the concrete implementation of the Sandbox interface.
@@ -23,8 +25,10 @@ type session struct {
 	realWorkDir string
 	tempDir     string
 	realTempDir string
+	deniedPaths []string
 	envMu       sync.RWMutex
 	cfg         Config
+	readOnly    atomic.Bool
 	root        *os.Root
 	fsCap       *sandboxFS
 	procCap     *sandboxProc
@@ -63,7 +67,7 @@ func New(cfg Config) (Sandbox, error) {
 
 	var tempDir, realTempDir string
 	if mode == ModeNative {
-		if err := checkNativeAvailable(); err != nil {
+		if err := NativeAvailable(); err != nil {
 			return nil, err
 		}
 		td, err := os.MkdirTemp("", "tasksmith-sbx-"+id+"-")
@@ -95,6 +99,16 @@ func New(cfg Config) (Sandbox, error) {
 	cfg.Env = envCopy
 	cfg.Mode = mode
 	cfg.WorkDir = cleanWorkDir
+	deniedPaths := make([]string, 0, len(cfg.DeniedPaths))
+	for _, p := range cfg.DeniedPaths {
+		if p = strings.TrimSpace(p); p == "" {
+			continue
+		}
+		// Kernel profiles match on resolved paths, so a denied path behind a
+		// symlink (e.g. /var -> /private/var on macOS) must be expanded even
+		// when the leaf does not exist yet.
+		deniedPaths = append(deniedPaths, fsutils.ResolveDeepestExisting(p))
+	}
 
 	s := &session{
 		id:          id,
@@ -104,9 +118,11 @@ func New(cfg Config) (Sandbox, error) {
 		tempDir:     tempDir,
 		realTempDir: realTempDir,
 		cfg:         cfg,
+		deniedPaths: deniedPaths,
 		root:        root,
 		watchers:    make(map[*sandboxWatcher]struct{}),
 	}
+	s.readOnly.Store(cfg.ReadOnly)
 
 	s.fsCap = newSandboxFS(s)
 	s.procCap = newSandboxProc(s)
@@ -121,6 +137,53 @@ func (s *session) ID() string {
 
 func (s *session) Mode() Mode {
 	return s.mode
+}
+
+// ReadOnly reports whether the sandbox currently enforces read-only
+// filesystem semantics.
+func (s *session) ReadOnly() bool {
+	return s.readOnly.Load()
+}
+
+// SetReadOnly toggles read-only enforcement. Subsequent confined filesystem
+// mutations fail with ErrReadOnly, and subsequent ModeNative child processes
+// receive kernel profiles that deny writes inside WorkDir. Already-running
+// child processes keep the profile they started with.
+func (s *session) SetReadOnly(readOnly bool) {
+	s.readOnly.Store(readOnly)
+}
+
+// nativeAvailable caches the kernel sandbox probe for the lifetime of the
+// process: whether host policy permits sandboxing does not change while the
+// daemon runs, and the probe spawns a child process.
+var nativeAvailable = sync.OnceValue(checkNativeAvailable)
+
+// NativeAvailable reports whether the OS-native kernel sandbox backend
+// (Seatbelt on macOS, Bubblewrap on Linux) is usable on this host. The check
+// actually probes sandbox creation (cached), not just binary presence, so
+// restricted containers and nested-sandbox hosts degrade to local isolation.
+func NativeAvailable() error {
+	return nativeAvailable()
+}
+
+// DefaultMode returns ModeNative when the OS kernel sandbox backend is usable
+// on this host, falling back to ModeLocal otherwise.
+func DefaultMode() Mode {
+	if NativeAvailable() != nil {
+		return ModeLocal
+	}
+	return ModeNative
+}
+
+// ResolveMode maps a requested sandbox backend onto the mode this host can
+// enforce: explicit ModeLocal selects ModeLocal, while empty or ModeNative
+// prefers ModeNative and degrades to ModeLocal when the kernel backend is
+// unavailable.
+func ResolveMode(requested Mode) Mode {
+	if Mode(strings.ToLower(strings.TrimSpace(string(requested)))) == ModeLocal {
+		return ModeLocal
+	}
+	return DefaultMode()
 }
 
 func (s *session) Platform() Platform {
@@ -172,7 +235,7 @@ func (s *session) Upload(ctx context.Context, hostSrc, sandboxDst string) error 
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if s.cfg.ReadOnly {
+	if s.readOnly.Load() {
 		return ErrReadOnly
 	}
 

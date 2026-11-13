@@ -59,6 +59,10 @@ func ToAPISession(sess *Session) api.Session {
 	} else if status == api.StatusGenerating && activity == "" {
 		activity = "Generating"
 	}
+	var sandboxMode api.SandboxMode
+	if sess.Sandbox != nil {
+		sandboxMode = sess.Sandbox.Mode()
+	}
 	return api.Session{
 		Model:              resolvedModel,
 		ID:                 sess.ID,
@@ -76,6 +80,7 @@ func ToAPISession(sess *Session) api.Session {
 		WorkDir:            sess.WorkDir,
 		Subagents:          subagents,
 		Activity:           activity,
+		SandboxMode:        sandboxMode,
 		CreatedAt:          sess.CreatedAt,
 		UpdatedAt:          sess.UpdatedAt,
 	}

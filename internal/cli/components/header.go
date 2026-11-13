@@ -9,6 +9,7 @@ import (
 
 	"github.com/masterkeysrd/kite/extras/trail"
 	"github.com/masterkeysrd/kite/style"
+	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/cli/store"
 	"github.com/masterkeysrd/tasksmith/internal/ui/components/icon"
 	"github.com/masterkeysrd/tasksmith/internal/ui/theme"
@@ -37,6 +38,20 @@ func ShortenHomePath(path string) string {
 	return path
 }
 
+// sandboxBannerSuffix renders the sandbox backend badge shown next to the
+// workspace path in the banner. Native isolation is highlighted, an explicit
+// local fallback is dimmed, and no badge is shown before a session exists.
+func sandboxBannerSuffix(scheme *theme.Scheme, mode api.SandboxMode) (string, style.Style) {
+	switch api.SandboxMode(strings.ToLower(strings.TrimSpace(string(mode)))) {
+	case api.SandboxNative:
+		return " · native sandbox", style.S().WhiteSpace(style.WhiteSpacePre).Foreground(scheme.Color.Text.Secondary)
+	case api.SandboxLocal:
+		return " · local sandbox", style.S().WhiteSpace(style.WhiteSpacePre).Foreground(scheme.Color.Text.Muted)
+	default:
+		return "", style.S()
+	}
+}
+
 // Header is a trail functional component rendering the startup banner:
 // Left: 3-line ASCII brand Logo
 // Right: 3 session info lines:
@@ -59,6 +74,14 @@ var Header = trail.FC("Header", func(props store.HeaderData) trail.Node {
 		modelThinking = fmt.Sprintf("%s · %s", model, thinking)
 	}
 	workspace := ShortenHomePath(props.Workspace)
+	sandboxLabel, sandboxStyle := sandboxBannerSuffix(scheme, props.SandboxMode)
+
+	line3 := []trail.Node{
+		trail.Span(trail.SpanProps{Style: dimStyle}, trail.Text(workspace)),
+	}
+	if sandboxLabel != "" {
+		line3 = append(line3, trail.Span(trail.SpanProps{Style: sandboxStyle}, trail.Text(sandboxLabel)))
+	}
 
 	bannerContent := []trail.Node{
 		Logo(),
@@ -90,16 +113,12 @@ var Header = trail.FC("Header", func(props store.HeaderData) trail.Node {
 					Style: metaStyle,
 				}, trail.Text(modelThinking)),
 			),
-			// Line 3: <shortened workspace path> (tertiary)
+			// Line 3: <shortened workspace path> (tertiary) + sandbox backend
 			trail.Box(trail.BoxProps{
 				Style: style.S().
 					Display(style.DisplayFlex).
 					FlexDirection(style.FlexRow),
-			},
-				trail.Span(trail.SpanProps{
-					Style: dimStyle,
-				}, trail.Text(workspace)),
-			),
+			}, line3...),
 		),
 	}
 

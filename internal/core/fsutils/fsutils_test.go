@@ -44,8 +44,8 @@ func TestCleanPathValid(t *testing.T) {
 }
 
 func TestExpandAndCleanPath(t *testing.T) {
-	home := "/Users/testuser"
-	base := "/Users/testuser/project"
+	home := filepath.Join(string(filepath.Separator), "mock", "home", "testuser")
+	base := filepath.Join(home, "project")
 
 	tests := []struct {
 		target   string
@@ -56,13 +56,13 @@ func TestExpandAndCleanPath(t *testing.T) {
 		{"", base, home, base},
 		{"~", base, home, home},
 		{"~/", base, home, home},
-		{"~/docs", base, home, "/Users/testuser/docs"},
-		{"file.txt", base, home, "/Users/testuser/project/file.txt"},
-		{"./sub/file.txt", base, home, "/Users/testuser/project/sub/file.txt"},
-		{"../other.txt", base, home, "/Users/testuser/other.txt"},
+		{"~/docs", base, home, filepath.Join(home, "docs")},
+		{"file.txt", base, home, filepath.Join(base, "file.txt")},
+		{"./sub/file.txt", base, home, filepath.Join(base, "sub", "file.txt")},
+		{"../other.txt", base, home, filepath.Join(home, "other.txt")},
 		{"/abs/path.txt", base, home, "/abs/path.txt"},
 		{"relative.txt", "", home, "relative.txt"},
-		{"~/file.txt", base, "", "/Users/testuser/project/~/file.txt"},
+		{"~/file.txt", base, "", filepath.Join(base, "~", "file.txt")},
 	}
 
 	for _, tt := range tests {
@@ -121,5 +121,34 @@ func TestPortablePath(t *testing.T) {
 		if got != tt.expected {
 			t.Errorf("PortablePath(%q, %q, %q) = %q, want %q", tt.target, tt.rootDir, tt.homeDir, got, tt.expected)
 		}
+	}
+}
+
+func TestResolveDeepestExisting(t *testing.T) {
+	base := t.TempDir()
+	realDir := filepath.Join(base, "real")
+	if err := os.MkdirAll(filepath.Join(realDir, "nested"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(base, "link")
+	if err := os.Symlink(realDir, link); err != nil {
+		t.Skipf("symlinks unsupported: %v", err)
+	}
+	realBase, err := filepath.EvalSymlinks(realDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	realBase = filepath.Clean(realBase)
+
+	if got := ResolveDeepestExisting(filepath.Join(link, "nested")); got != filepath.Join(realBase, "nested") {
+		t.Errorf("existing leaf = %q, want %q", got, filepath.Join(realBase, "nested"))
+	}
+	missing := filepath.Join(link, "nested", "future.env")
+	if got := ResolveDeepestExisting(missing); got != filepath.Join(realBase, "nested", "future.env") {
+		t.Errorf("missing leaf = %q, want ancestor-resolved %q", got, filepath.Join(realBase, "nested", "future.env"))
+	}
+	deepMissing := filepath.Join(link, "nope", "still-nope")
+	if got := ResolveDeepestExisting(deepMissing); got != filepath.Join(realBase, "nope", "still-nope") {
+		t.Errorf("deep missing chain = %q, want %q", got, filepath.Join(realBase, "nope", "still-nope"))
 	}
 }

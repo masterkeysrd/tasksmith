@@ -17,11 +17,12 @@ func (s *Std) Bash(ctx context.Context, req BashRequest) (*BashResult, error) {
 	}
 
 	cmd := sandbox.Command{
-		Name:    "sh",
-		Args:    []string{"-c", req.Command},
-		Dir:     req.Dir,
-		Env:     req.Env,
-		Timeout: req.Timeout,
+		Name:     "sh",
+		Args:     []string{"-c", req.Command},
+		Dir:      req.Dir,
+		Env:      req.Env,
+		Timeout:  req.Timeout,
+		ReadOnly: req.ReadOnly,
 	}
 	if req.StdinReader != nil {
 		cmd.Stdin = req.StdinReader
@@ -66,12 +67,13 @@ func (s *Std) Exec(ctx context.Context, req ExecRequest) (*ExecResult, error) {
 	}
 
 	cmd := sandbox.Command{
-		Name:    req.Name,
-		Args:    req.Args,
-		Dir:     req.Dir,
-		Env:     req.Env,
-		Stdin:   req.Stdin,
-		Timeout: req.Timeout,
+		Name:     req.Name,
+		Args:     req.Args,
+		Dir:      req.Dir,
+		Env:      req.Env,
+		Stdin:    req.Stdin,
+		Timeout:  req.Timeout,
+		ReadOnly: req.ReadOnly,
 	}
 	if req.Output != nil {
 		cmd.Stdout = req.Output

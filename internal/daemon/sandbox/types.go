@@ -11,6 +11,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"github.com/masterkeysrd/tasksmith/api"
 )
 
 // Sentinel errors returned by the sandbox package.
@@ -28,17 +30,17 @@ var (
 )
 
 // Mode defines the isolation backend used by a Sandbox.
-type Mode string
+type Mode = api.SandboxMode
 
 const (
 	// ModeLocal confines operations to the host working directory using os.Root,
 	// process group lifecycle management, and in-process network policy dialers.
-	ModeLocal Mode = "local"
+	ModeLocal Mode = api.SandboxLocal
 
 	// ModeNative wraps child process execution in OS-level kernel sandboxes
 	// (macOS Seatbelt sandbox-exec or Linux Bubblewrap bwrap) in addition to
 	// ModeLocal's os.Root and Net enforcement.
-	ModeNative Mode = "native"
+	ModeNative Mode = api.SandboxNative
 )
 
 // Platform describes the target operating system, architecture, and root path
@@ -84,6 +86,16 @@ type Sandbox interface {
 
 	// Mode returns the active isolation mode (ModeLocal or ModeNative).
 	Mode() Mode
+
+	// ReadOnly reports whether the sandbox currently enforces read-only
+	// filesystem semantics.
+	ReadOnly() bool
+
+	// SetReadOnly toggles read-only enforcement for future filesystem
+	// operations and native OS sandbox profiles. Toggling to true does not
+	// terminate already-running child processes; it affects subsequent
+	// executions and confined FS operations.
+	SetReadOnly(readOnly bool)
 
 	// Platform returns the OS, architecture, and canonical root directory.
 	Platform() Platform
@@ -240,6 +252,13 @@ type Command struct {
 
 	// Timeout overrides the sandbox's DefaultTimeout for Proc.Exec.
 	Timeout time.Duration
+
+	// ReadOnly requests a read-only kernel profile for this individual
+	// command even when the sandbox itself is writable. In ModeNative the
+	// generated Seatbelt/Bubblewrap profile denies all file writes outside the
+	// dedicated temp directory for this process only. It has no effect in
+	// ModeLocal, which has no kernel enforcement.
+	ReadOnly bool
 }
 
 // ExecResult contains the captured output and exit metadata of a completed process.

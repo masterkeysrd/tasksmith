@@ -20,6 +20,9 @@ type Workspace struct {
 	DefaultModel *Model   `json:"default_model,omitempty"`
 	Warnings     []string `json:"warnings,omitempty"`
 	IsRestricted bool     `json:"is_restricted,omitempty"`
+	// SandboxMode reports the sandbox isolation backend new sessions in this
+	// workspace get by default ("native" or "local").
+	SandboxMode SandboxMode `json:"sandbox_mode,omitempty"`
 }
 
 // WorkspaceFile describes a file or directory in the workspace available for context mention.
@@ -459,12 +462,39 @@ const (
 	StatusWaitingQuestion   SessionStatus = "waiting_question"
 )
 
+// SandboxMode identifies the OS isolation backend enforced by a session sandbox.
+type SandboxMode string
+
+const (
+	SandboxNative SandboxMode = "native"
+	SandboxLocal  SandboxMode = "local"
+)
+
+func (m SandboxMode) String() string {
+	return string(m)
+}
+
+func (m SandboxMode) IsValid() bool {
+	switch m {
+	case SandboxNative, SandboxLocal:
+		return true
+	default:
+		return false
+	}
+}
+
 // SessionConfig holds configurable runtime settings for a [Session].
 type SessionConfig struct {
 	Agent    string           `json:"agent,omitempty"`
 	Model    string           `json:"model,omitempty"`
 	Thinking *ThinkingSetting `json:"thinking,omitempty"`
 	Mode     PermissionMode   `json:"mode,omitempty"`
+	// Sandbox requests a sandbox isolation backend for the session:
+	// "native" (OS kernel sandboxes) or "local" (in-process confinement).
+	// Empty applies the default (native when the host provides a kernel
+	// backend, local otherwise). The backend is fixed at session creation;
+	// the effective mode is reported on Session.SandboxMode.
+	Sandbox SandboxMode `json:"sandbox,omitempty"`
 }
 
 // TaskStatus describes the operational state of a background task.
@@ -619,8 +649,11 @@ type Session struct {
 	WorkDir            string              `json:"work_dir,omitempty"`
 	Subagents          []Session           `json:"subagents,omitempty"`
 	Activity           string              `json:"activity,omitempty"`
-	CreatedAt          time.Time           `json:"created_at"`
-	UpdatedAt          time.Time           `json:"updated_at"`
+	// SandboxMode reports the effective sandbox isolation backend this
+	// session enforces ("native" or "local").
+	SandboxMode SandboxMode `json:"sandbox_mode,omitempty"`
+	CreatedAt   time.Time   `json:"created_at"`
+	UpdatedAt   time.Time   `json:"updated_at"`
 }
 
 // CreateSessionRequest holds optional parameters for creating a new session.

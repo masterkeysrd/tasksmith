@@ -1332,3 +1332,19 @@ func TestMCPOperationRequestResponseJSON(t *testing.T) {
 		t.Errorf("MCPAllowPolicyRequest JSON = %s", allowReqData)
 	}
 }
+
+func TestSandboxModeIsValid(t *testing.T) {
+	for _, m := range []SandboxMode{SandboxNative, SandboxLocal} {
+		if !m.IsValid() {
+			t.Errorf("%q.IsValid() = false, want true", m)
+		}
+		if m.String() != string(m) {
+			t.Errorf("%q.String() = %q", m, m.String())
+		}
+	}
+	for _, m := range []SandboxMode{"", "docker", "NATIVE"} {
+		if m.IsValid() {
+			t.Errorf("%q.IsValid() = true, want false", m)
+		}
+	}
+}

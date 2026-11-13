@@ -20,6 +20,30 @@ var (
 	ErrPermissionDenied = errors.New("tools: permission denied")
 )
 
+// readOnlyExecKey tags a tool-execution context whose permission plan was
+// authorized as read-only, so execution-capable tools (bash, command-backed
+// custom tools) request a read-only kernel profile for the child process even
+// when the sandbox itself is writable. This is defense-in-depth against
+// shellguard or annotation misclassification: an auto-allowed "read-only"
+// command physically cannot mutate disk under a native kernel sandbox.
+type readOnlyExecKey struct{}
+
+// WithReadOnlyExecution marks ctx so tools that spawn child processes request
+// a per-command read-only kernel profile. Passing false returns ctx unchanged.
+func WithReadOnlyExecution(ctx context.Context, readOnly bool) context.Context {
+	if !readOnly {
+		return ctx
+	}
+	return context.WithValue(ctx, readOnlyExecKey{}, true)
+}
+
+// ReadOnlyExecutionFromContext reports whether ctx was tagged for read-only
+// child-process execution.
+func ReadOnlyExecutionFromContext(ctx context.Context) bool {
+	v, _ := ctx.Value(readOnlyExecKey{}).(bool)
+	return v
+}
+
 // AccessDecision represents the policy evaluation outcome.
 type AccessDecision string
 

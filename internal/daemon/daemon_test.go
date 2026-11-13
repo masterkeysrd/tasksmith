@@ -1212,6 +1212,9 @@ func TestWorkspaceAgentsModelsEndpoints(t *testing.T) {
 	if ws.DefaultAgent == "" {
 		t.Errorf("ws.DefaultAgent should not be empty")
 	}
+	if !ws.SandboxMode.IsValid() {
+		t.Errorf("ws.SandboxMode = %q, want native or local", ws.SandboxMode)
+	}
 
 	// 2. ListAgents
 	agents, err := cli.ListAgents(ctx)

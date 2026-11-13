@@ -733,7 +733,11 @@ func resolveConfig(ws *workspace.Workspace, catalog *models.Catalog, config api.
 			config.Thinking = nil
 		}
 	}
-	return api.SessionConfig{Agent: agent, Model: string(modelID), Thinking: config.Thinking, Mode: mode}, nil
+	sandboxMode := api.SandboxMode(strings.ToLower(strings.TrimSpace(string(config.Sandbox))))
+	if sandboxMode != "" && !sandboxMode.IsValid() {
+		return api.SessionConfig{}, fmt.Errorf("%w: unsupported sandbox mode %q (want %q or %q)", ErrInvalidConfig, config.Sandbox, api.SandboxNative, api.SandboxLocal)
+	}
+	return api.SessionConfig{Agent: agent, Model: string(modelID), Thinking: config.Thinking, Mode: mode, Sandbox: sandboxMode}, nil
 }
 
 // Preview computes the resolved session configuration, model details, and diagnostics

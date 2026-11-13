@@ -795,3 +795,143 @@ func TestSandboxSetEnv(t *testing.T) {
 		t.Fatalf("Proc.Exec stdout = %q, want %q", got, "beta|gamma|missing")
 	}
 }
+
+func TestSandboxSetReadOnly(t *testing.T) {
+	ctx := context.Background()
+	workDir := t.TempDir()
+
+	sbx, err := New(Config{WorkDir: workDir})
+	if err != nil {
+		t.Fatalf("New sandbox: %v", err)
+	}
+	defer func() { _ = sbx.Close() }()
+
+	if sbx.ReadOnly() {
+		t.Fatalf("fresh sandbox must be writable")
+	}
+	if err := sbx.FS().WriteFile(ctx, "before.txt", []byte("ok"), 0o644); err != nil {
+		t.Fatalf("WriteFile on writable sandbox: %v", err)
+	}
+
+	sbx.SetReadOnly(true)
+	if !sbx.ReadOnly() {
+		t.Fatalf("SetReadOnly(true) not reflected by ReadOnly()")
+	}
+	if err := sbx.FS().WriteFile(ctx, "after.txt", []byte("nope"), 0o644); !errors.Is(err, ErrReadOnly) {
+		t.Fatalf("WriteFile after SetReadOnly(true) = %v, want ErrReadOnly", err)
+	}
+	if err := sbx.Upload(ctx, filepath.Join(workDir, "before.txt"), "copy.txt"); !errors.Is(err, ErrReadOnly) {
+		t.Fatalf("Upload after SetReadOnly(true) = %v, want ErrReadOnly", err)
+	}
+
+	sbx.SetReadOnly(false)
+	if err := sbx.FS().WriteFile(ctx, "after.txt", []byte("ok again"), 0o644); err != nil {
+		t.Fatalf("WriteFile after SetReadOnly(false): %v", err)
+	}
+}
+
+func TestModeNativePerCommandReadOnly(t *testing.T) {
+	if err := checkNativeAvailable(); err != nil {
+		t.Skipf("skipping live ModeNative test: %v", err)
+	}
+
+	ctx := context.Background()
+	workDir := t.TempDir()
+
+	sbx, err := New(Config{Mode: ModeNative, WorkDir: workDir})
+	if err != nil {
+		t.Fatalf("New ModeNative sandbox: %v", err)
+	}
+	defer func() { _ = sbx.Close() }()
+
+	// The sandbox itself is writable: a normal command may write inside WorkDir.
+	resWritable, err := sbx.Proc().Exec(ctx, Command{
+		Name: "sh",
+		Args: []string{"-c", "echo allowed > writable.txt"},
+	})
+	if err != nil || resWritable.ExitCode != 0 {
+		t.Fatalf("writable command failed: err=%v exit=%d stderr=%s", err, resWritable.ExitCode, string(resWritable.Stderr))
+	}
+
+	// A per-command read-only request must block writes inside WorkDir even
+	// though the sandbox itself is writable.
+	resRO, err := sbx.Proc().Exec(ctx, Command{
+		Name:     "sh",
+		Args:     []string{"-c", "echo forbidden > readonly_attempt.txt"},
+		ReadOnly: true,
+	})
+	if err != nil {
+		t.Fatalf("per-command read-only Exec: %v", err)
+	}
+	if resRO.ExitCode == 0 {
+		t.Fatalf("expected per-command ReadOnly to block write inside WorkDir")
+	}
+	if _, statErr := os.Stat(filepath.Join(workDir, "readonly_attempt.txt")); !os.IsNotExist(statErr) {
+		t.Fatalf("per-command ReadOnly write leaked to disk: statErr=%v", statErr)
+	}
+
+	// SetReadOnly on a live native sandbox affects subsequent executions.
+	sbx.SetReadOnly(true)
+	resLive, err := sbx.Proc().Exec(ctx, Command{
+		Name: "sh",
+		Args: []string{"-c", "echo forbidden > live_ro_attempt.txt"},
+	})
+	if err != nil {
+		t.Fatalf("Exec after SetReadOnly: %v", err)
+	}
+	if resLive.ExitCode == 0 {
+		t.Fatalf("expected SetReadOnly(true) to block writes for subsequent native commands")
+	}
+}
+
+func TestModeNativeDeniesCredentialPaths(t *testing.T) {
+	if err := checkNativeAvailable(); err != nil {
+		t.Skipf("skipping live ModeNative test: %v", err)
+	}
+
+	ctx := context.Background()
+	workDir := t.TempDir()
+	home := t.TempDir()
+
+	secretDir := filepath.Join(home, ".ssh")
+	if err := os.MkdirAll(secretDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	secretFile := filepath.Join(secretDir, "id_ed25519")
+	if err := os.WriteFile(secretFile, []byte("PRIVATE KEY MATERIAL"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	visible := filepath.Join(workDir, "visible.txt")
+	if err := os.WriteFile(visible, []byte("workspace data"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	sbx, err := New(Config{
+		Mode:        ModeNative,
+		WorkDir:     workDir,
+		DeniedPaths: []string{secretDir},
+	})
+	if err != nil {
+		t.Fatalf("New ModeNative sandbox with denied paths: %v", err)
+	}
+	defer func() { _ = sbx.Close() }()
+
+	resDenied, err := sbx.Proc().Exec(ctx, Command{
+		Name: "sh",
+		Args: []string{"-c", "cat " + secretFile},
+	})
+	if err != nil {
+		t.Fatalf("Exec denied read: %v", err)
+	}
+	if resDenied.ExitCode == 0 || strings.Contains(string(resDenied.Stdout), "PRIVATE KEY MATERIAL") {
+		t.Fatalf("expected denied credential read to fail, exit=%d stdout=%q", resDenied.ExitCode, string(resDenied.Stdout))
+	}
+
+	resVisible, err := sbx.Proc().Exec(ctx, Command{
+		Name: "sh",
+		Args: []string{"-c", "cat " + visible},
+	})
+	if err != nil || resVisible.ExitCode != 0 || string(resVisible.Stdout) != "workspace data" {
+		t.Fatalf("workspace read must stay allowed: err=%v exit=%d stdout=%q", err, resVisible.ExitCode, string(resVisible.Stdout))
+	}
+}

@@ -3,9 +3,12 @@ package guard
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/masterkeysrd/tasksmith/api"
+	"github.com/masterkeysrd/tasksmith/internal/core/fsutils"
+	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
 )
 
 func TestReadDirSymlinkBoundaries(t *testing.T) {
@@ -117,8 +120,21 @@ func TestIsProtectedPath(t *testing.T) {
 }
 
 func TestIsSensitivePathAndEvaluatePath(t *testing.T) {
+	xdgRoot := t.TempDir()
+	xdg.SetTestEnv(xdgRoot, "tasksmith-guard-test")
+	t.Cleanup(xdg.ClearCache)
+
+	configDir, err := xdg.Home(xdg.VarTypeConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dataDir, err := xdg.Home(xdg.VarTypeData)
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	ws := "/tmp/workspace"
-	home := "/Users/tester"
+	home := filepath.Join(string(filepath.Separator), "mock", "home", "tester")
 
 	sensitiveCases := []struct {
 		path string
@@ -130,8 +146,15 @@ func TestIsSensitivePathAndEvaluatePath(t *testing.T) {
 		{"/proc/self/environ", true},
 		{"/dev/sda", true},
 		{"~/.ssh/id_rsa", true},
-		{"/Users/tester/.ssh/id_rsa", true},
-		{"/Users/tester/.aws/credentials", true},
+		{filepath.Join(home, ".ssh", "id_rsa"), true},
+		{filepath.Join(home, ".aws", "credentials"), true},
+		{filepath.Join(home, ".kube", "config"), true},
+		{filepath.Join(home, ".docker", "config.json"), true},
+		{filepath.Join(home, ".netrc"), true},
+		{filepath.Join(configDir, ".env"), true},
+		{filepath.Join(dataDir, "credentials", "openai.json"), true},
+		{filepath.Join(dataDir, "mcp", "tokens.json"), true},
+		{filepath.Join(configDir, "settings.yaml"), false},
 		{"/tmp/somefile.txt", false},
 		{"/tmp/workspace/file.txt", false},
 	}
@@ -155,8 +178,10 @@ func TestIsSensitivePathAndEvaluatePath(t *testing.T) {
 		{"../somefile.txt", api.ActionRead, "/tmp/somefile.txt", api.SafetyOutside},
 		{"../somefile.txt", api.ActionWrite, "/tmp/somefile.txt", api.SafetyUnsafe},
 		{"/etc/hosts", api.ActionRead, "/etc/hosts", api.SafetyUnsafe},
-		{"~/.ssh/id_rsa", api.ActionRead, "/Users/tester/.ssh/id_rsa", api.SafetyUnsafe},
-		{"~", api.ActionRead, "/Users/tester", api.SafetyOutside},
+		{"~/.ssh/id_rsa", api.ActionRead, filepath.Join(home, ".ssh", "id_rsa"), api.SafetyUnsafe},
+		{filepath.Join(configDir, ".env"), api.ActionRead, filepath.Join(configDir, ".env"), api.SafetyUnsafe},
+		{filepath.Join(dataDir, "credentials", "token.json"), api.ActionRead, filepath.Join(dataDir, "credentials", "token.json"), api.SafetyUnsafe},
+		{"~", api.ActionRead, home, api.SafetyOutside},
 	}
 
 	for _, tc := range evalCases {
@@ -166,4 +191,109 @@ func TestIsSensitivePathAndEvaluatePath(t *testing.T) {
 				tc.target, tc.action, gotPath, gotSafety, tc.wantPath, tc.wantSafety)
 		}
 	}
+}
+
+func TestHostCredentialPaths(t *testing.T) {
+	xdgRoot := t.TempDir()
+	fakeHome := t.TempDir()
+	t.Setenv("HOME", fakeHome)
+	xdg.SetTestEnv(xdgRoot, "tasksmith-guard-creds-test")
+	t.Cleanup(xdg.ClearCache)
+
+	configDir, err := xdg.Home(xdg.VarTypeConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dataDir, err := xdg.Home(xdg.VarTypeData)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(fakeHome, ".ssh"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(configDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(configDir, ".env"), []byte("GLOBAL=1"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	workDir := t.TempDir()
+	got := HostCredentialPaths(workDir)
+
+	var want []string
+	for _, name := range DefaultSensitiveHomeDirs {
+		want = append(want, filepath.Join(fakeHome, name))
+	}
+	want = append(want,
+		filepath.Join(configDir, ".env"),
+		filepath.Join(dataDir, "credentials"),
+		filepath.Join(dataDir, "mcp"),
+	)
+	for _, w := range want {
+		if !containsPath(got, w) {
+			t.Errorf("HostCredentialPaths missing %q, got %v", w, got)
+		}
+	}
+	for _, p := range got {
+		if !filepath.IsAbs(p) {
+			t.Errorf("denied path must be absolute: %q", p)
+		}
+	}
+}
+
+func TestHostCredentialPathsSkipsWorkspaceOverlaps(t *testing.T) {
+	xdgRoot := t.TempDir()
+	fakeHome := t.TempDir()
+	t.Setenv("HOME", fakeHome)
+	xdg.SetTestEnv(xdgRoot, "tasksmith-guard-creds-overlap")
+	t.Cleanup(xdg.ClearCache)
+
+	sshDir := filepath.Join(fakeHome, ".ssh")
+	if err := os.MkdirAll(sshDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := HostCredentialPaths(sshDir); containsPath(got, sshDir) {
+		t.Errorf("workspace inside denied dir must be exempt: %v", got)
+	}
+	if got := HostCredentialPaths(fakeHome); containsPath(got, sshDir) {
+		t.Errorf("credential dir inside workspace must be exempt: %v", got)
+	}
+}
+
+func TestHostCredentialPathsSkipsSymlinkedCredentialIntoWorkspace(t *testing.T) {
+	xdgRoot := t.TempDir()
+	fakeHome := t.TempDir()
+	t.Setenv("HOME", fakeHome)
+	xdg.SetTestEnv(xdgRoot, "tasksmith-guard-creds-symlink")
+	t.Cleanup(xdg.ClearCache)
+
+	workDir := t.TempDir()
+	realKeys := filepath.Join(workDir, "ssh-keys")
+	if err := os.MkdirAll(realKeys, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	sshLink := filepath.Join(fakeHome, ".ssh")
+	if err := os.Symlink(realKeys, sshLink); err != nil {
+		t.Skipf("symlinks unsupported: %v", err)
+	}
+
+	if got := HostCredentialPaths(workDir); containsPath(got, sshLink) {
+		t.Errorf("~/.ssh symlinked into the workspace must stay readable: %v", got)
+	}
+	other := t.TempDir()
+	if got := HostCredentialPaths(other); !containsPath(got, sshLink) {
+		t.Errorf("~/.ssh symlink must be masked for unrelated workspaces: %v", got)
+	}
+}
+
+func containsPath(paths []string, want string) bool {
+	want = fsutils.ResolveDeepestExisting(want)
+	for _, p := range paths {
+		if strings.EqualFold(filepath.Clean(p), want) {
+			return true
+		}
+	}
+	return false
 }

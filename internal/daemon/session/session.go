@@ -14,6 +14,7 @@ import (
 
 	"github.com/masterkeysrd/loom/tool"
 	"github.com/masterkeysrd/tasksmith/api"
+	"github.com/masterkeysrd/tasksmith/internal/core/guard"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	"github.com/masterkeysrd/tasksmith/internal/core/ptr"
 	"github.com/masterkeysrd/tasksmith/internal/core/shellguard"
@@ -440,6 +441,64 @@ func (s *Session) ResolvedModel() (models.Model, *api.ThinkingSetting, bool) {
 	return m, m.EffectiveThinking(s.Config.Thinking, agentThinking), true
 }
 
+func isReadOnlyPolicy(p *warp.Policies) bool {
+	return p != nil && p.Tools != nil && p.Tools.ReadOnly
+}
+
+// effectiveReadOnlyPolicy reports whether the workspace, the session's
+// effective agent policies, or the parent session demand a read-only tool
+// sandbox (policies.tools.readOnly). It is deliberately decoupled from the
+// session's permission mode: an untrusted (restricted) workspace or a
+// readOnly policy blocks all side effects while the session still runs in
+// `default` mode.
+func (s *Session) effectiveReadOnlyPolicy() bool {
+	if s.workspace == nil {
+		return false
+	}
+	if s.workspace.IsRestricted() {
+		return true
+	}
+	// A subagent inherits its parent's kernel read-only ceiling: a child
+	// spawned under a readOnly agent must not regain write access just
+	// because its own manifest omits the policy.
+	if s.parent != nil && s.parent.Sandbox != nil && s.parent.Sandbox.ReadOnly() {
+		return true
+	}
+	cat := s.workspace.Catalog()
+	if cat == nil {
+		return false
+	}
+	if isReadOnlyPolicy(cat.Policies()) {
+		return true
+	}
+	if agentName := strings.TrimSpace(s.Config.Agent); agentName != "" {
+		// Evaluate the *resolved* agent so policies inherited through skills
+		// and agent resolution (the same view the permission ceiling uses)
+		// also gate the kernel sandbox.
+		if resolved, err := cat.ResolveAgent(agentName); err == nil && resolved != nil {
+			if resolved.WorkspacePolicy != nil && resolved.WorkspacePolicy.ReadOnly {
+				return true
+			}
+			if resolved.Agent != nil && isReadOnlyPolicy(resolved.Agent.Spec.Policies) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// applyReadOnlyPolicy syncs the sandbox's read-only enforcement with the
+// effective workspace/agent policy. Callers must not hold the session lock.
+func (s *Session) applyReadOnlyPolicy() {
+	if s.Sandbox == nil {
+		return
+	}
+	s.Lock()
+	readOnly := s.effectiveReadOnlyPolicy()
+	s.Unlock()
+	s.Sandbox.SetReadOnly(readOnly)
+}
+
 func (s *Session) initSubsystems(ctx context.Context, db *sql.DB) error {
 	tl, err := timeline.New(ctx, db, s.ID)
 	if err != nil {
@@ -454,11 +513,17 @@ func (s *Session) initSubsystems(ctx context.Context, db *sql.DB) error {
 	}
 	s.Journal = jr
 
+	mode := sandbox.ResolveMode(s.Config.Sandbox)
+	if s.parent != nil && s.parent.Sandbox != nil {
+		// A subagent inherits its parent's enforced isolation backend.
+		mode = s.parent.Sandbox.Mode()
+	}
 	sb, err := sandbox.New(sandbox.Config{
-		ID:      s.ID,
-		WorkDir: s.WorkDir,
-		Mode:    sandbox.ModeLocal,
-		Env:     s.workspace.SubprocessEnv(),
+		ID:          s.ID,
+		WorkDir:     s.WorkDir,
+		Mode:        mode,
+		Env:         s.workspace.SubprocessEnv(),
+		DeniedPaths: guard.HostCredentialPaths(s.WorkDir),
 		Network: sandbox.NetworkPolicy{
 			AllowLoopback: true,
 		},
@@ -467,6 +532,7 @@ func (s *Session) initSubsystems(ctx context.Context, db *sql.DB) error {
 		return fmt.Errorf("session: initialize sandbox: %w", err)
 	}
 	s.Sandbox = sb
+	s.applyReadOnlyPolicy()
 
 	s.Tasks = tasks.New(tasks.Config{
 		Context:    s.bgCtx,
@@ -568,6 +634,9 @@ func (s *Session) Matches(req api.CreateSessionRequest) error {
 	if wantMode != "" && s.Config.Mode != wantMode {
 		return ErrSessionConflict
 	}
+	if wantSandbox := api.SandboxMode(strings.ToLower(strings.TrimSpace(string(req.Config.Sandbox)))); wantSandbox != "" && s.Config.Sandbox != wantSandbox {
+		return ErrSessionConflict
+	}
 	return nil
 }
 
@@ -601,6 +670,24 @@ func (s *Session) Update(ctx context.Context, req api.UpdateSessionRequest) erro
 	}
 
 	s.Lock()
+	// The sandbox backend is chosen at session creation; swapping it would
+	// mean replacing the live sandbox under std, tools, and running children.
+	// A request that matches the effective backend (or the persisted request)
+	// is an idempotent no-op, not a change.
+	if wantSandbox := api.SandboxMode(strings.ToLower(strings.TrimSpace(string(req.Config.Sandbox)))); wantSandbox != "" {
+		if !wantSandbox.IsValid() {
+			s.Unlock()
+			return fmt.Errorf("%w: unsupported sandbox backend %q", ErrInvalidConfig, req.Config.Sandbox)
+		}
+		var activeMode api.SandboxMode
+		if s.Sandbox != nil {
+			activeMode = s.Sandbox.Mode()
+		}
+		if wantSandbox != s.Config.Sandbox && wantSandbox != activeMode {
+			s.Unlock()
+			return fmt.Errorf("%w: a session's sandbox backend cannot be changed after creation", ErrInvalidConfig)
+		}
+	}
 	oldConfig := s.Config
 	newConfig := s.Config
 	newTitle := s.Title
@@ -823,6 +910,7 @@ func (s *Session) setConfigModel(model string) {
 func (s *Session) configureHarness(ctx context.Context) error {
 	if s.Sandbox != nil && s.workspace != nil {
 		s.Sandbox.SetEnv(s.workspace.SubprocessEnv())
+		s.applyReadOnlyPolicy()
 	}
 
 	s.Lock()

@@ -38,6 +38,10 @@ type SessionState struct {
 	Tasks     *[]api.Task
 	Subagents *[]api.Session
 	Ready     bool
+
+	// SandboxMode is the sandbox isolation backend the active or draft session
+	// runs under ("native" or "local").
+	SandboxMode api.SandboxMode
 }
 
 var session = kites.Create(SessionState{Config: api.SessionConfig{Mode: api.ModeDefault}})
@@ -68,6 +72,7 @@ var (
 	streamCancel         context.CancelFunc
 	modeDebounceTimer    *time.Timer
 	modeDebounceDelay    = 500 * time.Millisecond
+	workspaceSandboxMode api.SandboxMode
 	diagnosticSession    string
 	diagnosticConfig     api.SessionConfig
 	displayedDiagnostics []api.SessionDiagnostic
@@ -82,10 +87,15 @@ func cancelModeDebounceLocked() {
 
 // InitSessionOptions specifies options for initializing or connecting to a session.
 type InitSessionOptions struct {
-	SessionID   string
-	Agent       string
-	Model       string
-	Title       string
+	SessionID string
+	Agent     string
+	Model     string
+	Title     string
+
+	// Sandbox is the requested sandbox isolation backend ("native" or
+	// "local") for sessions this REPL creates; empty lets the daemon
+	// resolve the host default.
+	Sandbox     api.SandboxMode
 	StartDaemon func(ctx context.Context, socketPath string) error
 }
 
@@ -106,6 +116,7 @@ func InitSession(ctx context.Context, c *client.Client, opts InitSessionOptions)
 	activeCancel = cancel
 	activeClient = c
 	activeOpts = opts
+	workspaceSandboxMode = ""
 	sessMu.Unlock()
 
 	var sess *api.Session
@@ -127,6 +138,11 @@ func InitSession(ctx context.Context, c *client.Client, opts InitSessionOptions)
 					sess = updated
 				}
 			}
+			requested := api.SandboxMode(strings.ToLower(strings.TrimSpace(string(opts.Sandbox))))
+			active := api.SandboxMode(strings.ToLower(string(sess.SandboxMode)))
+			if requested != "" && active != "" && requested != active {
+				AppendWarning(fmt.Sprintf("Session %s already runs under the %s sandbox backend; the --sandbox %s request cannot be applied to an existing session.", sid, sess.SandboxMode, requested))
+			}
 			SetSession(sess)
 			globalConversation.reset()
 			globalConversation.setSessionID(sid)
@@ -137,6 +153,9 @@ func InitSession(ctx context.Context, c *client.Client, opts InitSessionOptions)
 	if loaded, err := c.GetWorkspace(subCtx); err == nil {
 		ws = loaded
 		SetWorkspaceWarnings(ws.Warnings)
+		sessMu.Lock()
+		workspaceSandboxMode = api.SandboxMode(strings.ToLower(strings.TrimSpace(string(ws.SandboxMode))))
+		sessMu.Unlock()
 		SetDefaultAgent(strings.TrimSpace(ws.DefaultAgent))
 	}
 	// MCP servers connect in the background when the workspace opens, so the
@@ -178,6 +197,7 @@ func InitSession(ctx context.Context, c *client.Client, opts InitSessionOptions)
 		}
 		session.Set(func(s SessionState) SessionState {
 			s.Config = cfg
+			s.SandboxMode = draftSandboxMode()
 			return s
 		})
 
@@ -348,6 +368,23 @@ func startSessionsWatcher(ctx context.Context) {
 	}()
 }
 
+// draftSandboxMode predicts the sandbox backend a draft session will get:
+// an explicit local request is always honored, otherwise the workspace's
+// host default (native when the kernel backend is available).
+func draftSandboxMode() api.SandboxMode {
+	sessMu.Lock()
+	requested := api.SandboxMode(strings.ToLower(strings.TrimSpace(string(activeOpts.Sandbox))))
+	wsMode := workspaceSandboxMode
+	sessMu.Unlock()
+	if requested == api.SandboxLocal {
+		return api.SandboxLocal
+	}
+	if wsMode != "" {
+		return wsMode
+	}
+	return api.SandboxNative
+}
+
 func getOrCreateSession(ctx context.Context) (*api.Session, error) {
 	sessMu.Lock()
 	sess := GetSession().Session
@@ -363,6 +400,7 @@ func getOrCreateSession(ctx context.Context) (*api.Session, error) {
 	c := activeClient
 	agent := activeOpts.Agent
 	model := activeOpts.Model
+	sandbox := activeOpts.Sandbox
 	cfg := GetSession().Config
 	mode := cfg.Mode
 	sessMu.Unlock()
@@ -374,6 +412,7 @@ func getOrCreateSession(ctx context.Context) (*api.Session, error) {
 			Model:    cmp.Or(cfg.Model, model),
 			Thinking: cfg.Thinking,
 			Mode:     mode,
+			Sandbox:  sandbox,
 		},
 	})
 	if err != nil {
@@ -720,6 +759,7 @@ func SetSession(sess *api.Session) {
 		if sess != nil {
 			s.ModelID = modelIdentifier(sess.Model)
 			s.ModelLabel, s.Thinking = modelDisplay(sess.Model, sess.Config.Thinking)
+			s.SandboxMode = sess.SandboxMode
 			s.Ready = true
 			s.Context = sess.Context
 			s.Config = sess.Config
@@ -746,6 +786,7 @@ func SetSession(sess *api.Session) {
 		} else {
 			s.Tasks = nil
 			s.Subagents = nil
+			s.SandboxMode = ""
 		}
 		return s
 	})
@@ -1141,6 +1182,9 @@ func resyncDaemonState(ctx context.Context, c *client.Client) {
 	}
 	if ws, err := c.GetWorkspace(ctx); err == nil && ws != nil {
 		SetWorkspaceWarnings(ws.Warnings)
+		sessMu.Lock()
+		workspaceSandboxMode = api.SandboxMode(strings.ToLower(strings.TrimSpace(string(ws.SandboxMode))))
+		sessMu.Unlock()
 		SetDefaultAgent(strings.TrimSpace(ws.DefaultAgent))
 	}
 	// A resync follows a daemon restart, so MCP connections are starting over and
@@ -1178,6 +1222,7 @@ func resyncDaemonState(ctx context.Context, c *client.Client) {
 		cfg.Agent, cfg.Model = opts.Agent, opts.Model
 		session.Set(func(s SessionState) SessionState {
 			s.Config = cfg
+			s.SandboxMode = draftSandboxMode()
 			return s
 		})
 
@@ -1459,6 +1504,7 @@ func NewDraftSession(modelOverride string) {
 		s.Tasks = nil
 		s.Subagents = nil
 		s.Usage = api.SessionUsage{}
+		s.SandboxMode = draftSandboxMode()
 		return s
 	})
 
@@ -1628,6 +1674,7 @@ func ResetSession() {
 	activeClient = nil
 	activeOpts = InitSessionOptions{}
 	activeCtx = nil
+	workspaceSandboxMode = ""
 	diagnosticSession = ""
 	diagnosticConfig = api.SessionConfig{}
 	displayedDiagnostics = nil
@@ -1738,6 +1785,9 @@ func ReloadWorkspace(ctx context.Context) error {
 	}
 	if ws, err := c.GetWorkspace(ctx); err == nil {
 		SetWorkspaceWarnings(ws.Warnings)
+		sessMu.Lock()
+		workspaceSandboxMode = api.SandboxMode(strings.ToLower(strings.TrimSpace(string(ws.SandboxMode))))
+		sessMu.Unlock()
 		SetDefaultAgent(strings.TrimSpace(ws.DefaultAgent))
 	}
 	// A reload re-syncs MCP connections, so health captured before it is stale.

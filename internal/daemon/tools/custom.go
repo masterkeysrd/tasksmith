@@ -411,7 +411,12 @@ func (ct *customTool) Execute(ctx context.Context, call *message.ToolCall) (*mes
 		stdin = bytes.NewReader(inputBytes)
 	}
 
-	return ct.executeAsTask(ctx, callID, name, argv, stdin)
+	// A tool whose manifest declares isReadOnly always runs under a read-only
+	// kernel profile; the context tag additionally covers plans the permission
+	// gate authorized as read-only under any mode.
+	readOnlyExec := ReadOnlyExecutionFromContext(ctx) || ct.def.Annotation.IsReadOnly
+
+	return ct.executeAsTask(ctx, callID, name, argv, stdin, readOnlyExec)
 }
 
 // executeAsTask runs the tool through the session's background task registry,
@@ -420,7 +425,7 @@ func (ct *customTool) Execute(ctx context.Context, call *message.ToolCall) (*mes
 // turn, remaining killable via the tasks tool and waking the agent with a
 // completion notification. Execution goes through [CommandRunner.Exec], which
 // synchronizes tracked-file mutations into the change journal afterwards.
-func (ct *customTool) executeAsTask(ctx context.Context, callID, name string, argv []string, payload io.Reader) (*message.Tool, error) {
+func (ct *customTool) executeAsTask(ctx context.Context, callID, name string, argv []string, payload io.Reader, readOnly bool) (*message.Tool, error) {
 	w := NewSpillWriter(ctx)
 	defer func() { _ = w.Close() }()
 
@@ -434,11 +439,12 @@ func (ct *customTool) executeAsTask(ctx context.Context, callID, name string, ar
 		Wait:    customToolWait,
 		Fn: func(taskCtx context.Context, out io.Writer, _ io.Reader) (int, error) {
 			res, err := ct.runner.Exec(taskCtx, std.ExecRequest{
-				Name:   argv[0],
-				Args:   argv[1:],
-				Env:    ct.env,
-				Stdin:  payload,
-				Output: io.MultiWriter(out, sw),
+				Name:     argv[0],
+				Args:     argv[1:],
+				Env:      ct.env,
+				Stdin:    payload,
+				Output:   io.MultiWriter(out, sw),
+				ReadOnly: readOnly,
 			})
 			if err != nil {
 				return -1, err

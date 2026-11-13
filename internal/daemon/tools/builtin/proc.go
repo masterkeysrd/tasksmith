@@ -138,6 +138,11 @@ func (t *bashTool) Execute(ctx context.Context, in api.BashInput) (api.BashOutpu
 		title = strings.TrimSpace(in.Command)
 	}
 
+	// The tasks store runs Fn under its own background context, so the
+	// per-command read-only tag is captured here from the tool-execution
+	// context and passed explicitly.
+	readOnlyExec := tools.ReadOnlyExecutionFromContext(ctx)
+
 	task := &tasks.Task{
 		Kind:         "bash",
 		Title:        title,
@@ -151,6 +156,7 @@ func (t *bashTool) Execute(ctx context.Context, in api.BashInput) (api.BashOutpu
 				Dir:         in.Dir,
 				StdinReader: stdin,
 				Output:      mw,
+				ReadOnly:    readOnlyExec,
 			})
 			if err != nil {
 				return -1, err

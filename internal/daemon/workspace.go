@@ -12,6 +12,7 @@ import (
 	"sync"
 
 	"github.com/masterkeysrd/tasksmith/internal/core/fsutils"
+	"github.com/masterkeysrd/tasksmith/internal/core/guard"
 	"github.com/masterkeysrd/tasksmith/internal/core/log"
 	"github.com/masterkeysrd/tasksmith/internal/core/memdb"
 	"github.com/masterkeysrd/tasksmith/internal/core/sqlite"
@@ -251,7 +252,7 @@ func (r *workspaceRuntime) Close() error {
 	return dbErr
 }
 
-func (r *workspaceRuntime) getFileIndex(ctx context.Context) (*std.FileIndex, error) {
+func (r *workspaceRuntime) getFileIndex() (*std.FileIndex, error) {
 	r.fileIndexMu.Lock()
 	defer r.fileIndexMu.Unlock()
 	if r.fileIndex != nil {
@@ -259,10 +260,14 @@ func (r *workspaceRuntime) getFileIndex(ctx context.Context) (*std.FileIndex, er
 		return r.fileIndex, nil
 	}
 
+	// The indexer executes git/rg inside the repository, so it gets the same
+	// kernel backend and credential masking as sessions.
 	sbx, err := sandbox.New(sandbox.Config{
-		WorkDir:  r.dir,
-		ReadOnly: true,
-		Network:  sandbox.NetworkPolicy{Disabled: true},
+		WorkDir:     r.dir,
+		Mode:        sandbox.DefaultMode(),
+		ReadOnly:    true,
+		DeniedPaths: guard.HostCredentialPaths(r.dir),
+		Network:     sandbox.NetworkPolicy{Disabled: true},
 	})
 	if err != nil {
 		return nil, fmt.Errorf("daemon: create workspace sandbox for indexing: %w", err)

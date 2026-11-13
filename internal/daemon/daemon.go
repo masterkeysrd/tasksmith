@@ -29,6 +29,7 @@ import (
 	"github.com/masterkeysrd/tasksmith/internal/daemon/metrics"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/models"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/permissions"
+	"github.com/masterkeysrd/tasksmith/internal/daemon/sandbox"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/server"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/session"
 	"github.com/masterkeysrd/tasksmith/internal/daemon/std"
@@ -449,6 +450,9 @@ func (d *Daemon) GetWorkspace(ctx context.Context, rawWS string) (*api.Workspace
 	// while the session runs, so the CLI reports it in the timeline as the listing is
 	// polled. See store.SetWorkspaceMCPServers.
 	var warnings []string
+	if err := sandbox.NativeAvailable(); err != nil {
+		warnings = append(warnings, fmt.Sprintf("Kernel sandboxing is unavailable on this host (%v); new sessions fall back to in-process (local) isolation.", err))
+	}
 	if wsWarnings := rt.Workspace().Catalog().Warnings(); len(wsWarnings) > 0 {
 		warnings = append(warnings, wsWarnings...)
 	}
@@ -468,6 +472,7 @@ func (d *Daemon) GetWorkspace(ctx context.Context, rawWS string) (*api.Workspace
 		DefaultModel: resolvedDefault,
 		Warnings:     warnings,
 		IsRestricted: rt.Workspace().IsRestricted(),
+		SandboxMode:  sandbox.DefaultMode(),
 	}, nil
 }
 
@@ -677,7 +682,7 @@ func (d *Daemon) ListWorkspaceFiles(ctx context.Context, rawWS string, req api.L
 	}
 
 	if idx == nil {
-		idx, err = rt.getFileIndex(ctx)
+		idx, err = rt.getFileIndex()
 		if err != nil {
 			return nil, err
 		}

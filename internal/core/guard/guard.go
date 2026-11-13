@@ -1,12 +1,14 @@
 package guard
 
 import (
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 
 	"github.com/masterkeysrd/tasksmith/api"
 	"github.com/masterkeysrd/tasksmith/internal/core/fsutils"
+	"github.com/masterkeysrd/tasksmith/internal/core/xdg"
 )
 
 // DefaultProtectedDirs is the default list of protected workspace directories
@@ -76,21 +78,37 @@ func IsProtectedPath(targetPath, workspaceDir string, protectedDirs ...string) b
 	return false
 }
 
+// tasksmithSecretPaths returns TaskSmith's own global secret locations under
+// XDG config and data directories ($XDG_CONFIG_HOME/tasksmith/.env,
+// $XDG_DATA_HOME/tasksmith/credentials, and $XDG_DATA_HOME/tasksmith/mcp).
+func tasksmithSecretPaths() []string {
+	var paths []string
+	if configDir, err := xdg.Home(xdg.VarTypeConfig); err == nil && strings.TrimSpace(configDir) != "" {
+		paths = append(paths, filepath.Join(configDir, ".env"))
+	}
+	if dataDir, err := xdg.Home(xdg.VarTypeData); err == nil && strings.TrimSpace(dataDir) != "" {
+		paths = append(paths,
+			filepath.Join(dataDir, "credentials"),
+			filepath.Join(dataDir, "mcp"),
+		)
+	}
+	return paths
+}
+
 // IsSensitivePath reports whether targetPath points to a sensitive system path
-// (e.g. /etc, /proc, /dev) or user credential path (e.g. ~/.ssh, ~/.aws).
+// (e.g. /etc, /proc, /dev), user credential path (e.g. ~/.ssh, ~/.aws), or
+// TaskSmith's own global XDG secret stores.
 func IsSensitivePath(targetPath, homeDir string) bool {
 	cleaned := fsutils.ExpandAndCleanPath(targetPath, "", homeDir)
 	for _, sp := range DefaultSensitivePaths {
-		spClean := filepath.Clean(sp)
-		if cleaned == spClean || strings.HasPrefix(cleaned, spClean+string(filepath.Separator)) {
+		if fsutils.IsInsideDir(cleaned, sp) {
 			return true
 		}
 	}
 	if homeDir != "" {
 		homeClean := filepath.Clean(homeDir)
 		for _, dir := range DefaultSensitiveHomeDirs {
-			full := filepath.Join(homeClean, dir)
-			if cleaned == full || strings.HasPrefix(cleaned, full+string(filepath.Separator)) {
+			if fsutils.IsInsideDir(cleaned, filepath.Join(homeClean, dir)) {
 				return true
 			}
 		}
@@ -100,7 +118,67 @@ func IsSensitivePath(targetPath, homeDir string) bool {
 			return true
 		}
 	}
+	canonical := cleaned
+	if filepath.IsAbs(cleaned) {
+		canonical = fsutils.ResolveDeepestExisting(cleaned)
+	}
+	for _, sp := range tasksmithSecretPaths() {
+		spClean := filepath.Clean(sp)
+		if fsutils.IsInsideDir(cleaned, spClean) {
+			return true
+		}
+		if filepath.IsAbs(spClean) && filepath.IsAbs(canonical) {
+			if fsutils.IsInsideDir(canonical, fsutils.ResolveDeepestExisting(spClean)) {
+				return true
+			}
+		}
+	}
 	return false
+}
+
+// HostCredentialPaths returns canonical absolute host paths holding user or
+// TaskSmith secrets that native OS sandbox profiles must block child processes
+// from reading: every entry in DefaultSensitiveHomeDirs under the user's home
+// directory plus TaskSmith's XDG secret stores.
+//
+// Candidates are returned even when they do not exist yet so secrets created
+// mid-session (e.g. an OAuth login or /setup writing the credential store) land
+// behind an already-active kernel rule. Each candidate is canonicalized via
+// fsutils.ResolveDeepestExisting before overlap detection so a dotfiles
+// workspace whose ~/.ssh symlinks into workDir stays readable while unrelated
+// workspaces mask the resolved target.
+func HostCredentialPaths(workDir string) []string {
+	var candidates []string
+	if home, err := os.UserHomeDir(); err == nil && strings.TrimSpace(home) != "" {
+		for _, name := range DefaultSensitiveHomeDirs {
+			candidates = append(candidates, filepath.Join(home, name))
+		}
+	}
+	candidates = append(candidates, tasksmithSecretPaths()...)
+
+	root := fsutils.ResolveDeepestExisting(strings.TrimSpace(workDir))
+	var paths []string
+	seen := make(map[string]struct{}, len(candidates))
+	for _, p := range candidates {
+		if strings.TrimSpace(p) == "" {
+			continue
+		}
+		p = fsutils.ResolveDeepestExisting(p)
+		if _, dup := seen[p]; dup {
+			continue
+		}
+		seen[p] = struct{}{}
+		if pathOverlapsWorkspace(p, root) {
+			continue
+		}
+		paths = append(paths, p)
+	}
+	return paths
+}
+
+func pathOverlapsWorkspace(denied, workDir string) bool {
+	return workDir == "." || workDir == string(filepath.Separator) ||
+		fsutils.IsInsideDir(workDir, denied) || fsutils.IsInsideDir(denied, workDir)
 }
 
 // PathConfig encapsulates the path configuration used by EvaluatePathWithConfig.

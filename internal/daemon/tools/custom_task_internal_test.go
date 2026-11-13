@@ -254,3 +254,21 @@ func TestCustomToolTaskPathExitCodeError(t *testing.T) {
 		t.Fatalf("error should carry process output, got %v", err)
 	}
 }
+
+func TestReadOnlyExecutionContextTag(t *testing.T) {
+	ctx := context.Background()
+	if ReadOnlyExecutionFromContext(ctx) {
+		t.Error("plain context should not report read-only execution")
+	}
+	noOp := WithReadOnlyExecution(ctx, false)
+	if ReadOnlyExecutionFromContext(noOp) {
+		t.Error("WithReadOnlyExecution(false) must not mark context read-only")
+	}
+	ro := WithReadOnlyExecution(ctx, true)
+	if !ReadOnlyExecutionFromContext(ro) {
+		t.Error("WithReadOnlyExecution(true) must mark context read-only")
+	}
+	if ReadOnlyExecutionFromContext(ctx) {
+		t.Error("parent context must be unaffected")
+	}
+}

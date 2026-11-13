@@ -256,6 +256,56 @@ func TestInitSessionWithWorkspaceWarnings(t *testing.T) {
 	}
 }
 
+func TestInitSessionDraftSandboxBadge(t *testing.T) {
+	newClient := func(defaultMode api.SandboxMode) *client.Client {
+		rt := &mockSessionRoundTripper{
+			handler: func(req *http.Request) (*http.Response, error) {
+				if req.Method == http.MethodGet && req.URL.Path == "/v1/workspace" {
+					ws := api.Workspace{Name: "test-ws", RootDir: "/workspace", SandboxMode: defaultMode}
+					data, _ := json.Marshal(ws)
+					resp := &http.Response{
+						StatusCode: http.StatusOK,
+						Body:       io.NopCloser(bytes.NewReader(data)),
+						Header:     make(http.Header),
+					}
+					resp.Header.Set("Content-Type", "application/json")
+					return resp, nil
+				}
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader(`{}`)),
+					Header:     make(http.Header),
+				}, nil
+			},
+		}
+		c, err := client.New("/tmp/dummy.sock", client.WithCWD("/workspace"), client.WithHTTPClient(&http.Client{Transport: rt}))
+		if err != nil {
+			t.Fatalf("client.New: %v", err)
+		}
+		return c
+	}
+
+	ResetApp()
+	defer ResetApp()
+	ResetSession()
+	defer ResetSession()
+
+	InitSession(context.Background(), newClient("native"), InitSessionOptions{Agent: "test-agent", Model: "test-model"})
+	if got := GetSession().SandboxMode; got != "native" {
+		t.Errorf("draft SandboxMode = %q, want workspace default %q", got, "native")
+	}
+
+	InitSession(context.Background(), newClient("local"), InitSessionOptions{Agent: "test-agent", Model: "test-model"})
+	if got := GetSession().SandboxMode; got != "local" {
+		t.Errorf("draft SandboxMode = %q, want workspace default %q", got, "local")
+	}
+
+	InitSession(context.Background(), newClient("native"), InitSessionOptions{Agent: "test-agent", Model: "test-model", Sandbox: "local"})
+	if got := GetSession().SandboxMode; got != "local" {
+		t.Errorf("draft SandboxMode = %q, want explicit request %q", got, "local")
+	}
+}
+
 func TestNextPermissionMode(t *testing.T) {
 	tests := []struct {
 		current api.PermissionMode
